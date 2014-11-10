@@ -686,8 +686,7 @@ pci_msi_get_nintrs(dev_info_t *rdip, int type, int *nintrs)
 		*nintrs = 1 << ((msi_ctrl & PCI_MSI_MMC_MASK) >>
 		    PCI_MSI_MMC_SHIFT);
 	} else if (type == DDI_INTR_TYPE_MSIX) {
-		if (msi_ctrl &  PCI_MSIX_TBL_SIZE_MASK)
-			*nintrs = (msi_ctrl & PCI_MSIX_TBL_SIZE_MASK) + 1;
+		*nintrs = (msi_ctrl & PCI_MSIX_TBL_SIZE_MASK) + 1;
 	}
 
 	DDI_INTR_NEXDBG((CE_CONT, "pci_msi_get_nintrs: "
@@ -879,7 +878,7 @@ pci_msix_init(dev_info_t *rdip)
 
 	msix_p->msix_pba_offset = msix_p->msix_pba_offset &
 	    ~PCI_MSIX_PBA_BIR_MASK;
-	pba_tbl_size = ((msix_ctrl & PCI_MSIX_TBL_SIZE_MASK) + 1)/8;
+	pba_tbl_size = ((msix_ctrl & PCI_MSIX_TBL_SIZE_MASK) + 64) / 64 * 8;
 
 	DDI_INTR_NEXDBG((CE_CONT, "pci_msix_init: PBA table offset 0x%x "
 	    "breg 0x%x size 0x%lx\n", msix_p->msix_pba_offset, breg,

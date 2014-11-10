@@ -757,7 +757,7 @@ fipe_ioat_alloc(void *arg)
 	}
 
 	/* Allocate IOAT channel. */
-	rc = dcopy_alloc(DCOPY_NOSLEEP, &handle);
+	rc = dcopy_alloc(DCOPY_NOSLEEP, DCOPY_ANY_ROOT, &handle);
 	if (rc == DCOPY_NORESOURCES) {
 		/* Resource temporarily not available, keep trying. */
 		goto out_error;

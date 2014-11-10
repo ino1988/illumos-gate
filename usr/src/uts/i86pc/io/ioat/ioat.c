@@ -22,6 +22,8 @@
 /*
  * Copyright 2008 Sun Microsystems, Inc.  All rights reserved.
  * Use is subject to license terms.
+ *
+ * Copyright (c) 2014, Tegile Systems, Inc. All rights reserved.
  */
 
 #include <sys/errno.h>
@@ -29,6 +31,8 @@
 #include <sys/conf.h>
 #include <sys/kmem.h>
 #include <sys/ddi.h>
+#include <sys/pci.h>
+#include <sys/pci_cap.h>
 #include <sys/stat.h>
 #include <sys/sunddi.h>
 #include <sys/file.h>
@@ -105,6 +109,10 @@ static void ioat_intr_enable(ioat_state_t *state);
 static void ioat_intr_disable(ioat_state_t *state);
 void ioat_detach_finish(ioat_state_t *state);
 
+static void ioat_msi_interrupt_fini(ioat_state_t *);
+static uint_t ioat_msix(caddr_t, caddr_t);
+static void ioat_msi_enable(ioat_state_t *state);
+static void ioat_msi_disable(ioat_state_t *state);
 
 ddi_device_acc_attr_t ioat_acc_attr = {
 	DDI_DEVICE_ATTR_V0,		/* devacc_attr_version */
@@ -219,6 +227,7 @@ ioat_attach(dev_info_t *dip, ddi_attach_cmd_t cmd)
 
 	state->is_dip = dip;
 	state->is_instance = instance;
+	state->is_root_dip = dcopy_get_root_complex(dip);
 
 	/* setup the registers, save away some device info */
 	e = ioat_chip_init(state);
@@ -239,7 +248,6 @@ ioat_attach(dev_info_t *dip, ddi_attach_cmd_t cmd)
 		goto attachfail_minor_node;
 	}
 
-	/* Enable device interrupts */
 	ioat_intr_enable(state);
 
 	/* Report that driver was loaded */
@@ -394,6 +402,7 @@ static int
 ioat_chip_init(ioat_state_t *state)
 {
 	ddi_device_acc_attr_t attr;
+	uint8_t major_cbver;
 	int e;
 
 
@@ -432,10 +441,13 @@ ioat_chip_init(ioat_state_t *state)
 	state->is_capabilities = (uint_t)ddi_get32(state->is_reg_handle,
 	    (uint32_t *)&state->is_genregs[IOAT_DMACAPABILITY]);
 
-	if (state->is_cbver & 0x10) {
+	major_cbver = IOAT_MAJOR_CBVER(state->is_cbver);
+	if (major_cbver == 1) {
 		state->is_ver = IOAT_CBv1;
-	} else if (state->is_cbver & 0x20) {
+	} else if (major_cbver == 2) {
 		state->is_ver = IOAT_CBv2;
+	} else if (major_cbver == 3) {
+		state->is_ver = IOAT_CBv3;
 	} else {
 		goto chipinitfail_version;
 	}
@@ -459,6 +471,104 @@ ioat_chip_fini(ioat_state_t *state)
 	ddi_regs_map_free(&state->is_reg_handle);
 }
 
+static int
+ioat_fixed_interrupt_init(ioat_state_t *state)
+{
+	if (ddi_intr_hilevel(state->is_dip, 0) != 0) {
+		cmn_err(CE_WARN, "hilevel interrupt not supported\n");
+		return (DDI_FAILURE);
+	}
+
+	/* we don't support MSIs for v2 yet */
+	if (ddi_add_intr(state->is_dip, 0, NULL, NULL, ioat_isr,
+	    (caddr_t)state) != DDI_SUCCESS) {
+		return (DDI_FAILURE);
+	}
+
+	return (ddi_get_iblock_cookie(state->is_dip, 0,
+	    &state->is_iblock_cookie));
+}
+
+static void
+ioat_fixed_interrupt_fini(ioat_state_t *state)
+{
+	if (state->is_iblock_cookie)
+		ddi_remove_intr(state->is_dip, 0, state->is_iblock_cookie);
+}
+
+static int
+ioat_msi_interrupt_init(ioat_state_t *state)
+{
+	int count, nintrs, rv, i;
+
+	if (ddi_intr_get_nintrs(state->is_dip, DDI_INTR_TYPE_MSIX, &nintrs)
+	    != DDI_SUCCESS || nintrs <= 0) {
+		cmn_err(CE_WARN, "failed to determine nintrs (%x) for MSI-X",
+		    nintrs);
+		return (DDI_FAILURE);
+	}
+
+	state->is_msi_size = sizeof (*state->is_msi_handles) * nintrs;
+	state->is_msi_handles = kmem_zalloc(state->is_msi_size, KM_SLEEP);
+
+	if (ddi_intr_alloc(state->is_dip, state->is_msi_handles,
+	    state->is_intr_type, 0, nintrs, &count, DDI_INTR_ALLOC_NORMAL) !=
+	    DDI_SUCCESS) {
+		cmn_err(CE_WARN, "failed to allocate MSI-X interrupts");
+		goto fail;
+	}
+
+	state->is_msi_count = count;
+
+	if (ddi_intr_get_pri(state->is_msi_handles[0], &state->is_msi_priority)
+	    != DDI_SUCCESS) {
+		cmn_err(CE_WARN, "failed to get MSI-X priorities");
+		goto fail;
+	}
+
+	for (i = 0; i < state->is_msi_count; i++) {
+		rv = ddi_intr_add_handler(state->is_msi_handles[i], ioat_msix,
+		    (caddr_t)state, (caddr_t)(uintptr_t)i);
+
+		if (rv != DDI_SUCCESS) {
+			state->is_msi_added = i;
+			cmn_err(CE_WARN, "failed to add MSI-X %d", i);
+			goto fail;
+		}
+	}
+
+	state->is_msi_added = state->is_msi_count;
+
+	if (ddi_intr_get_cap(state->is_msi_handles[0], &state->is_msi_cap) !=
+	    DDI_SUCCESS) {
+		cmn_err(CE_WARN, "failed to get MSI-X capabilities");
+		goto fail;
+	}
+
+	return (DDI_SUCCESS);
+
+fail:
+	ioat_msi_interrupt_fini(state);
+	return (DDI_FAILURE);
+}
+
+static void
+ioat_msi_interrupt_fini(ioat_state_t *state)
+{
+	int i;
+
+	for (i = 0; i < state->is_msi_count; i++) {
+		if (i < state->is_msi_added)
+			(void) ddi_intr_remove_handler(
+			    state->is_msi_handles[i]);
+
+		(void) ddi_intr_free(state->is_msi_handles[i]);
+	}
+
+	if (state->is_msi_size > 0)
+		kmem_free(state->is_msi_handles, state->is_msi_size);
+}
+
 
 /*
  * ioat_drv_init()
@@ -467,7 +577,8 @@ static int
 ioat_drv_init(ioat_state_t *state)
 {
 	ddi_acc_handle_t handle;
-	int e;
+	uint16_t ctl;
+	int e, intr_type;
 
 
 	mutex_init(&state->is_mutex, NULL, MUTEX_DRIVER, NULL);
@@ -482,35 +593,47 @@ ioat_drv_init(ioat_state_t *state)
 	if (e != DDI_SUCCESS) {
 		goto drvinitfail_config_setup;
 	}
+	state->is_handle = handle;
+
+	/* set bus mastering and memory space enabled */
+	ctl = pci_config_get16(handle, PCI_CONF_COMM);
+	pci_config_put16(handle, PCI_CONF_COMM,
+	    ctl | PCI_COMM_MAE | PCI_COMM_ME);
 
 	/* read in Vendor ID */
-	state->is_deviceinfo.di_id = (uint64_t)pci_config_get16(handle, 0);
+	state->is_deviceinfo.di_id = (uint64_t)pci_config_get16(handle,
+	    PCI_CONF_VENID);
 	state->is_deviceinfo.di_id = state->is_deviceinfo.di_id << 16;
 
 	/* read in Device ID */
-	state->is_deviceinfo.di_id |= (uint64_t)pci_config_get16(handle, 2);
+	state->is_deviceinfo.di_id |= (uint64_t)pci_config_get16(handle,
+	    PCI_CONF_DEVID);
 	state->is_deviceinfo.di_id = state->is_deviceinfo.di_id << 32;
 
 	/* Add in chipset version */
 	state->is_deviceinfo.di_id |= (uint64_t)state->is_cbver;
-	pci_config_teardown(&handle);
 
-	e = ddi_intr_hilevel(state->is_dip, 0);
-	if (e != 0) {
-		cmn_err(CE_WARN, "hilevel interrupt not supported\n");
-		goto drvinitfail_hilevel;
+	if (ddi_intr_get_supported_types(state->is_dip, &intr_type) !=
+	    DDI_SUCCESS) {
+		cmn_err(CE_WARN, "Failed to get supported interrupt types");
+		goto drvinitfail_config_setup;
 	}
 
-	/* we don't support MSIs for v2 yet */
-	e = ddi_add_intr(state->is_dip, 0, NULL, NULL, ioat_isr,
-	    (caddr_t)state);
-	if (e != DDI_SUCCESS) {
-		goto drvinitfail_add_intr;
-	}
+	if ((intr_type & DDI_INTR_TYPE_MSIX)) {
+		state->is_intr_type = DDI_INTR_TYPE_MSIX;
+		if (ioat_msi_interrupt_init(state) != DDI_SUCCESS)
+			goto drvinitfail_config_setup;
 
-	e = ddi_get_iblock_cookie(state->is_dip, 0, &state->is_iblock_cookie);
-	if (e != DDI_SUCCESS) {
-		goto drvinitfail_iblock_cookie;
+		state->is_mutex_prio = DDI_INTR_PRI(state->is_msi_priority);
+	} else if ((intr_type & DDI_INTR_TYPE_FIXED)) {
+		state->is_intr_type = DDI_INTR_TYPE_FIXED;
+		if (ioat_fixed_interrupt_init(state) != DDI_SUCCESS)
+			goto drvinitfail_config_setup;
+
+		state->is_mutex_prio = state->is_iblock_cookie;
+	} else {
+		cmn_err(CE_WARN, "Unsupported interrupt type");
+		goto drvinitfail_config_setup;
 	}
 
 	e = ioat_channel_init(state);
@@ -521,10 +644,12 @@ ioat_drv_init(ioat_state_t *state)
 	return (DDI_SUCCESS);
 
 drvinitfail_channel_init:
-drvinitfail_iblock_cookie:
-	ddi_remove_intr(state->is_dip, 0, state->is_iblock_cookie);
-drvinitfail_add_intr:
-drvinitfail_hilevel:
+	if (state->is_intr_type == DDI_INTR_TYPE_FIXED) {
+		ioat_fixed_interrupt_fini(state);
+	} else {
+		ioat_msi_interrupt_fini(state);
+	}
+
 drvinitfail_config_setup:
 	mutex_destroy(&state->is_mutex);
 
@@ -539,7 +664,15 @@ static void
 ioat_drv_fini(ioat_state_t *state)
 {
 	ioat_channel_fini(state);
-	ddi_remove_intr(state->is_dip, 0, state->is_iblock_cookie);
+
+	if (state->is_intr_type == DDI_INTR_TYPE_FIXED) {
+		ioat_fixed_interrupt_fini(state);
+	} else {
+		ioat_msi_interrupt_fini(state);
+	}
+
+	pci_config_teardown(&state->is_handle);
+
 	mutex_destroy(&state->is_mutex);
 }
 
@@ -588,6 +721,11 @@ ioat_intr_enable(ioat_state_t *state)
 	uint32_t intr_status;
 
 
+	if (state->is_intr_type == DDI_INTR_TYPE_MSIX) {
+		ioat_msi_enable(state);
+		return;
+	}
+
 	/* Clear any pending interrupts */
 	intr_status = ddi_get32(state->is_reg_handle,
 	    (uint32_t *)&state->is_genregs[IOAT_ATTNSTATUS]);
@@ -609,12 +747,35 @@ ioat_intr_enable(ioat_state_t *state)
 static void
 ioat_intr_disable(ioat_state_t *state)
 {
+	if (state->is_intr_type == DDI_INTR_TYPE_MSIX) {
+		ioat_msi_disable(state);
+		return;
+	}
+
 	/*
 	 * disable interrupts on the device. A read of the interrupt control
 	 * register clears the enable bit.
 	 */
 	(void) ddi_get8(state->is_reg_handle,
 	    &state->is_genregs[IOAT_INTRCTL]);
+}
+
+static void
+ioat_msi_enable(ioat_state_t *state)
+{
+	int i;
+
+	for (i = 0; i < state->is_msi_count; i++)
+		(void) ddi_intr_enable(state->is_msi_handles[i]);
+}
+
+static void
+ioat_msi_disable(ioat_state_t *state)
+{
+	int i;
+
+	for (i = 0; i < state->is_msi_count; i++)
+		(void) ddi_intr_disable(state->is_msi_handles[i]);
 }
 
 
@@ -655,8 +816,10 @@ ioat_isr(caddr_t parm)
 	chan = 1;
 	for (i = 0; i < state->is_num_channels; i++) {
 		if (intr_status & chan) {
-			ioat_channel_intr(&state->is_channel[i]);
-			r = DDI_INTR_CLAIMED;
+			if (ioat_channel_intr(&state->is_channel[i]) ==
+			    DDI_INTR_CLAIMED) {
+				r = DDI_INTR_CLAIMED;
+			}
 		}
 		chan = chan << 1;
 	}
@@ -674,6 +837,16 @@ ioat_isr(caddr_t parm)
 	return (r);
 }
 
+/*ARGSUSED*/
+static uint_t
+ioat_msix(caddr_t arg1, caddr_t arg2)
+{
+	ioat_state_t *state = (ioat_state_t *)arg1;
+	int chan = (int)(uintptr_t)arg2;
+
+	return (ioat_channel_intr(&state->is_channel[chan]));
+}
+
 static int
 ioat_quiesce(dev_info_t *dip)
 {
@@ -687,6 +860,7 @@ ioat_quiesce(dev_info_t *dip)
 	}
 
 	ioat_intr_disable(state);
+
 	ioat_channel_quiesce(state);
 
 	return (DDI_SUCCESS);

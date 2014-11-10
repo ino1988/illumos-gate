@@ -22,6 +22,8 @@
 /*
  * Copyright 2008 Sun Microsystems, Inc.  All rights reserved.
  * Use is subject to license terms.
+ *
+ * Copyright (c) 2014, Tegile Systems, Inc. All rights reserved.
  */
 
 /*
@@ -101,6 +103,9 @@ struct dcopy_channel_s {
 	/* state for if channel needs to be removed when ch_ref_cnt gets to 0 */
 	boolean_t		ch_removing;
 
+	/* B_TRUE if the channel is reserved for exclusive use */
+	boolean_t		ch_exclusive;
+
 	list_node_t		ch_devchan_list_node;
 	list_node_t		ch_globalchan_list_node;
 
@@ -129,6 +134,7 @@ typedef struct dcopy_state_s {
 } dcopy_state_t;
 dcopy_state_t *dcopy_statep;
 
+static dcopy_handle_t next_channel;
 
 /* Module Driver Info */
 static struct modlmisc dcopy_modlmisc = {
@@ -150,7 +156,9 @@ static int dcopy_list_init(dcopy_list_t *list, size_t node_size,
     offset_t link_offset);
 static void dcopy_list_fini(dcopy_list_t *list);
 static void dcopy_list_push(dcopy_list_t *list, void *list_node);
+static void dcopy_list_remove(dcopy_list_t *list, void *list_node);
 static void *dcopy_list_pop(dcopy_list_t *list);
+static void *dcopy_list_next(list_t *list, void *item);
 
 static void dcopy_device_cleanup(dcopy_device_handle_t device,
     boolean_t do_callback);
@@ -233,8 +241,6 @@ dcopy_init()
 
 	return (0);
 
-dcopyinitfail_cback:
-	dcopy_list_fini(&dcopy_statep->d_globalchan_list);
 dcopyinitfail_global:
 	dcopy_list_fini(&dcopy_statep->d_device_list);
 dcopyinitfail_device:
@@ -280,10 +286,11 @@ dcopy_query(dcopy_query_t *query)
  */
 /*ARGSUSED*/
 int
-dcopy_alloc(int flags, dcopy_handle_t *handle)
+dcopy_alloc(int flags, dev_info_t *root, dcopy_handle_t *handle)
 {
 	dcopy_handle_t channel;
 	dcopy_list_t *list;
+	boolean_t found;
 
 
 	/*
@@ -294,24 +301,55 @@ dcopy_alloc(int flags, dcopy_handle_t *handle)
 	list = &dcopy_statep->d_globalchan_list;
 
 	/*
-	 * if nothing is on the channel list, return DCOPY_NORESOURCES. This
-	 * can happen if there aren't any DMA device registered.
+	 * if nothing is on the channel list, or not enough channels to
+	 * allocate an exclusive channel then return DCOPY_NORESOURCES
 	 */
 	mutex_enter(&list->dl_mutex);
-	channel = list_head(&list->dl_list);
-	if (channel == NULL) {
+	if (list_is_empty(&list->dl_list) || (list->dl_cnt <= 1 &&
+	    (flags & DCOPY_EXCLUSIVE))) {
+		/* Always leave one channel for shared use */
+		mutex_exit(&list->dl_mutex);
+		return (DCOPY_NORESOURCES);
+	}
+
+	ASSERT(next_channel != NULL);
+
+	found = B_FALSE;
+	channel = next_channel;
+	do {
+		if ((root == DCOPY_ANY_ROOT ||
+		    channel->ch_info.qc_root_dip == root) &&
+		    ((flags & DCOPY_EXCLUSIVE) == 0 ||
+		    channel->ch_ref_cnt == 0)) {
+			found = B_TRUE;
+			break;
+		}
+
+		channel = dcopy_list_next(&list->dl_list, channel);
+	} while (channel != next_channel);
+
+	if (!found) {
 		mutex_exit(&list->dl_mutex);
 		return (DCOPY_NORESOURCES);
 	}
 
 	/*
-	 * increment the reference count, and pop the channel off the head and
-	 * push it on the tail. This ensures we rotate through the channels.
-	 * DMA channels are shared.
+	 * move the next_channel along and increment the reference count
+	 * of the one selected
 	 */
+	next_channel = dcopy_list_next(&list->dl_list, channel);
 	channel->ch_ref_cnt++;
-	list_remove(&list->dl_list, channel);
-	list_insert_tail(&list->dl_list, channel);
+
+	if ((flags & DCOPY_EXCLUSIVE)) {
+		/*
+		 * We are requesting a channel for exclusive use, take it off
+		 * the globalchan list
+		 */
+		list_remove(&list->dl_list, channel);
+		list->dl_cnt--;
+		channel->ch_exclusive = B_TRUE;
+	}
+
 	mutex_exit(&list->dl_mutex);
 
 	*handle = (dcopy_handle_t)channel;
@@ -339,6 +377,19 @@ dcopy_free(dcopy_handle_t *channel)
 	list = &dcopy_statep->d_globalchan_list;
 	mutex_enter(&list->dl_mutex);
 	(*channel)->ch_ref_cnt--;
+
+	if ((*channel)->ch_exclusive) {
+		/*
+		 * Put the exclusive channel back on the globalchan_list
+		 * if it is not pending removal
+		 */
+		ASSERT((*channel)->ch_ref_cnt == 0);
+		(*channel)->ch_exclusive = B_FALSE;
+		if (!(*channel)->ch_removing) {
+			list_insert_tail(&list->dl_list, *channel);
+			list->dl_cnt++;
+		}
+	}
 
 	/*
 	 * if we need to remove this channel, and the reference count is down
@@ -380,6 +431,33 @@ dcopy_query_channel(dcopy_handle_t channel, dcopy_query_channel_t *query)
 
 
 /*
+ * called from the cmd constructor of ioat to initialise private state
+ */
+void
+dcopy_cmd_init(dcopy_cmd_t cmd)
+{
+	dcopy_cmd_priv_t priv = cmd->dp_private;
+
+	list_link_init(&priv->pr_poll_list_node);
+	mutex_init(&priv->pr_mutex, NULL, MUTEX_DRIVER, NULL);
+	cv_init(&priv->pr_cv, NULL, CV_DRIVER, NULL);
+	priv->pr_cmd = cmd;
+	priv->pr_channel = NULL;
+}
+
+/*
+ * called from the cmd destructor of ioat to destroy private state
+ */
+void
+dcopy_cmd_fini(dcopy_cmd_t cmd)
+{
+	dcopy_cmd_priv_t priv = cmd->dp_private;
+
+	cv_destroy(&priv->pr_cv);
+	mutex_destroy(&priv->pr_mutex);
+}
+
+/*
  * dcopy_cmd_alloc()
  */
 int
@@ -398,11 +476,7 @@ dcopy_cmd_alloc(dcopy_handle_t handle, int flags, dcopy_cmd_t *cmd)
 	if (e == DCOPY_SUCCESS) {
 		priv = (*cmd)->dp_private;
 		priv->pr_channel = channel;
-		/*
-		 * we won't initialize the blocking state until we actually
-		 * need to block.
-		 */
-		priv->pr_block_init = B_FALSE;
+		priv->pr_poll_err = DCOPY_FAILURE;
 	}
 
 	return (e);
@@ -424,15 +498,21 @@ dcopy_cmd_free(dcopy_cmd_t *cmd)
 	priv = (*cmd)->dp_private;
 	channel = priv->pr_channel;
 
-	/* if we initialized the blocking state, clean it up too */
-	if (priv->pr_block_init) {
-		cv_destroy(&priv->pr_cv);
-		mutex_destroy(&priv->pr_mutex);
-	}
-
 	channel->ch_cb->cb_cmd_free(channel->ch_channel_private, cmd);
 }
 
+/*
+ * Called just before the cmd is returned to the memory cache, allows
+ * us to clean up
+ */
+void
+dcopy_cmd_freed(dcopy_cmd_t cmd)
+{
+	dcopy_cmd_priv_t priv = cmd->dp_private;
+
+	if (priv->pr_channel)
+		dcopy_list_remove(&priv->pr_channel->ch_poll_list, priv);
+}
 
 /*
  * dcopy_cmd_post()
@@ -451,6 +531,7 @@ dcopy_cmd_post(dcopy_cmd_t cmd)
 		atomic_add_64(&channel->ch_stat.cs_bytes_xfer.value.ui64,
 		    cmd->dp.copy.cc_size);
 	}
+
 	e = channel->ch_cb->cb_cmd_post(channel->ch_channel_private, cmd);
 	if (e != DCOPY_SUCCESS) {
 		return (e);
@@ -459,6 +540,24 @@ dcopy_cmd_post(dcopy_cmd_t cmd)
 	return (DCOPY_SUCCESS);
 }
 
+/*
+ * Called when the cmd has been posted in the ioat ring, but before the
+ * ring is given a kick to make it process the cmd
+ */
+void
+dcopy_cmd_posted(dcopy_cmd_t cmd)
+{
+	dcopy_handle_t channel;
+
+	channel = cmd->dp_private->pr_channel;
+
+	/*
+	 * If the cmd has the intr flag set, put it on the poll list
+	 * so it can be later waited for.
+	 */
+	if ((cmd->dp_flags & DCOPY_CMD_INTR))
+		dcopy_list_push(&channel->ch_poll_list, cmd->dp_private);
+}
 
 /*
  * dcopy_cmd_poll()
@@ -468,11 +567,13 @@ dcopy_cmd_poll(dcopy_cmd_t cmd, int flags)
 {
 	dcopy_handle_t channel;
 	dcopy_cmd_priv_t priv;
+	dcopy_device_cb_t *ch_cb;
 	int e;
 
 
 	priv = cmd->dp_private;
 	channel = priv->pr_channel;
+	ch_cb = channel->ch_cb;
 
 	/*
 	 * if the caller is trying to block, they needed to post the
@@ -484,51 +585,47 @@ dcopy_cmd_poll(dcopy_cmd_t cmd, int flags)
 
 	atomic_inc_64(&channel->ch_stat.cs_cmd_poll.value.ui64);
 
-repoll:
-	e = channel->ch_cb->cb_cmd_poll(channel->ch_channel_private, cmd);
-	if (e == DCOPY_PENDING) {
+	mutex_enter(&priv->pr_mutex);
+	e = ch_cb->cb_cmd_poll(channel->ch_channel_private, cmd);
+	if (e == DCOPY_PENDING && (flags & DCOPY_POLL_BLOCK)) {
 		/*
 		 * if the command is still active, and the blocking flag
 		 * is set.
 		 */
-		if (flags & DCOPY_POLL_BLOCK) {
+		priv->pr_wait = B_TRUE;
+		while (priv->pr_wait)
+			cv_wait(&priv->pr_cv, &priv->pr_mutex);
+		e = priv->pr_poll_err;
+	}
+	mutex_exit(&priv->pr_mutex);
 
-			/*
-			 * if we haven't initialized the state, do it now. A
-			 * command can be re-used, so it's possible it's
-			 * already been initialized.
-			 */
-			if (!priv->pr_block_init) {
-				priv->pr_block_init = B_TRUE;
-				mutex_init(&priv->pr_mutex, NULL, MUTEX_DRIVER,
-				    NULL);
-				cv_init(&priv->pr_cv, NULL, CV_DRIVER, NULL);
-				priv->pr_cmd = cmd;
-			}
+	return (e);
+}
 
-			/* push it on the list for blocking commands */
-			priv->pr_wait = B_TRUE;
-			dcopy_list_push(&channel->ch_poll_list, priv);
+/*
+ * Given a dev_info_t pointer, work up the device tree to get the dev_info_t
+ * of the root complex it is under
+ */
+dev_info_t *
+dcopy_get_root_complex(dev_info_t *dip)
+{
+	dev_info_t *pdip;
+	char **prop_val;
+	uint_t prop_len;
+	int i;
 
-			mutex_enter(&priv->pr_mutex);
-			/*
-			 * it's possible we already cleared pr_wait before we
-			 * grabbed the mutex.
-			 */
-			if (priv->pr_wait) {
-				cv_wait(&priv->pr_cv, &priv->pr_mutex);
-			}
-			mutex_exit(&priv->pr_mutex);
+	for (pdip = ddi_get_parent(dip); pdip; pdip = ddi_get_parent(pdip)) {
+		if (ddi_prop_lookup_string_array(DDI_DEV_T_ANY, pdip, 0,
+		    "compatible", &prop_val, &prop_len) != DDI_SUCCESS)
+			continue;
 
-			/*
-			 * the command has completed, go back and poll so we
-			 * get the status.
-			 */
-			goto repoll;
+		for (i = 0; i < prop_len; i++) {
+			if (strcmp(prop_val[i], "pciex_root_complex") == 0)
+				return (pdip);
 		}
 	}
 
-	return (e);
+	return (NULL);
 }
 
 /* *** END OF EXTERNAL INTERFACE *** */
@@ -570,7 +667,6 @@ dcopy_list_push(dcopy_list_t *list, void *list_node)
 	mutex_exit(&list->dl_mutex);
 }
 
-
 /*
  * dcopy_list_pop()
  */
@@ -592,6 +688,29 @@ dcopy_list_pop(dcopy_list_t *list)
 	return (list_node);
 }
 
+static void
+dcopy_list_remove(dcopy_list_t *list, void *list_node)
+{
+	mutex_enter(&list->dl_mutex);
+	if (list_link_active(list_node)) {
+		list_remove(&list->dl_list, list_node);
+		list->dl_cnt--;
+	}
+	mutex_exit(&list->dl_mutex);
+}
+
+/*
+ * get the next item in the list, but treat it as circular
+ */
+static void *
+dcopy_list_next(list_t *list, void *item)
+{
+	item = list_next(list, item);
+	if (item == NULL)
+		item = list_head(list);
+
+	return (item);
+}
 
 /* *** DEVICE INTERFACE *** */
 /*
@@ -683,6 +802,11 @@ dcopy_device_register(void *device_private, dcopy_device_info_t *info,
 		channel = list_next(&device->dc_devchan_list.dl_list, channel);
 	}
 	mutex_exit(&dcopy_statep->d_device_list.dl_mutex);
+
+	if (next_channel == NULL)
+		next_channel = list_head(
+		    &dcopy_statep->d_globalchan_list.dl_list);
+
 	mutex_exit(&dcopy_statep->d_globalchan_list.dl_mutex);
 
 	*handle = device;
@@ -722,10 +846,7 @@ dcopy_device_unregister(dcopy_device_handle_t *handle)
 {
 	struct dcopy_channel_s *channel;
 	dcopy_device_handle_t device;
-	boolean_t device_busy;
-
-	/* first call-back into kernel for dcopy KAPI disable */
-	uioa_dcopy_disable();
+	boolean_t device_busy, list_empty;
 
 	device = *handle;
 	device_busy = B_FALSE;
@@ -739,6 +860,16 @@ dcopy_device_unregister(dcopy_device_handle_t *handle)
 	channel = list_head(&device->dc_devchan_list.dl_list);
 	while (channel != NULL) {
 		/*
+		 * If the channel has already been marked for removing
+		 */
+		if (channel->ch_removing) {
+			channel = list_next(&device->dc_devchan_list.dl_list,
+			    channel);
+			device_busy = B_TRUE;
+			continue;
+		}
+
+		/*
 		 * if the channel has outstanding allocs, mark it as having
 		 * to be removed and increment the number of channels which
 		 * need to be removed in the device state too.
@@ -748,12 +879,35 @@ dcopy_device_unregister(dcopy_device_handle_t *handle)
 			device_busy = B_TRUE;
 			device->dc_removing_cnt++;
 		}
-		dcopy_statep->d_globalchan_list.dl_cnt--;
-		list_remove(&dcopy_statep->d_globalchan_list.dl_list, channel);
+
+		if (list_link_active(&channel->ch_globalchan_list_node) &&
+		    !channel->ch_exclusive) {
+			if (channel == next_channel) {
+				/*
+				 * the channel being removed is also the next
+				 * one to be allocated, bump next_channel along
+				 */
+				next_channel = dcopy_list_next(
+				    &dcopy_statep->d_globalchan_list.dl_list,
+				    next_channel);
+			}
+
+			dcopy_statep->d_globalchan_list.dl_cnt--;
+			list_remove(&dcopy_statep->d_globalchan_list.dl_list,
+			    channel);
+		}
 		channel = list_next(&device->dc_devchan_list.dl_list, channel);
 	}
 	mutex_exit(&device->dc_devchan_list.dl_mutex);
-	mutex_exit(&dcopy_statep->d_globalchan_list.dl_mutex);
+	list_empty = !!list_is_empty(&dcopy_statep->d_globalchan_list.dl_list);
+	if (list_empty) {
+		next_channel = NULL;
+		mutex_exit(&dcopy_statep->d_globalchan_list.dl_mutex);
+
+		uioa_dcopy_disable();
+	} else {
+		mutex_exit(&dcopy_statep->d_globalchan_list.dl_mutex);
+	}
 
 	/*
 	 * if there are channels which still need to be removed, we will clean
@@ -777,6 +931,7 @@ static void
 dcopy_device_cleanup(dcopy_device_handle_t device, boolean_t do_callback)
 {
 	struct dcopy_channel_s *channel;
+	boolean_t list_empty;
 
 	/*
 	 * remove all the channels in the device list, free them, and clean up
@@ -810,6 +965,15 @@ dcopy_device_cleanup(dcopy_device_handle_t device, boolean_t do_callback)
 
 	dcopy_list_fini(&device->dc_devchan_list);
 	kmem_free(device, sizeof (*device));
+
+	mutex_enter(&dcopy_statep->d_globalchan_list.dl_mutex);
+	list_empty = !!list_is_empty(&dcopy_statep->d_globalchan_list.dl_list);
+	mutex_exit(&dcopy_statep->d_globalchan_list.dl_mutex);
+	/*
+	 * no more channels so disanle uiao KAPI
+	 */
+	if (list_empty)
+		uioa_dcopy_disable();
 }
 
 
@@ -822,7 +986,7 @@ dcopy_device_channel_notify(dcopy_handle_t handle, int status)
 {
 	struct dcopy_channel_s *channel;
 	dcopy_list_t *poll_list;
-	dcopy_cmd_priv_t priv;
+	dcopy_cmd_priv_t priv, next;
 	int e;
 
 
@@ -839,30 +1003,31 @@ dcopy_device_channel_notify(dcopy_handle_t handle, int status)
 	 * polling since commands in a channel complete in order.
 	 */
 	mutex_enter(&poll_list->dl_mutex);
-	if (poll_list->dl_cnt != 0) {
-		priv = list_head(&poll_list->dl_list);
-		while (priv != NULL) {
-			atomic_inc_64(&channel->
-			    ch_stat.cs_notify_poll.value.ui64);
-			e = channel->ch_cb->cb_cmd_poll(
-			    channel->ch_channel_private,
-			    priv->pr_cmd);
-			if (e == DCOPY_PENDING) {
-				atomic_inc_64(&channel->
-				    ch_stat.cs_notify_pending.value.ui64);
-				break;
-			}
+	for (priv = list_head(&poll_list->dl_list); priv; priv = next) {
+		next = list_next(&poll_list->dl_list, priv);
 
-			poll_list->dl_cnt--;
-			list_remove(&poll_list->dl_list, priv);
+		atomic_inc_64(&channel->ch_stat.cs_notify_poll.value.ui64);
 
-			mutex_enter(&priv->pr_mutex);
-			priv->pr_wait = B_FALSE;
-			cv_signal(&priv->pr_cv);
+		mutex_enter(&priv->pr_mutex);
+		e = channel->ch_cb->cb_cmd_poll(channel->ch_channel_private,
+		    priv->pr_cmd);
+
+		if (e == DCOPY_PENDING) {
 			mutex_exit(&priv->pr_mutex);
-
-			priv = list_head(&poll_list->dl_list);
+			atomic_inc_64(&channel->
+			    ch_stat.cs_notify_pending.value.ui64);
+			break;
 		}
+
+		poll_list->dl_cnt--;
+		list_remove(&poll_list->dl_list, priv);
+
+		if (priv->pr_wait) {
+			priv->pr_wait = B_FALSE;
+			priv->pr_poll_err = e;
+			cv_signal(&priv->pr_cv);
+		}
+		mutex_exit(&priv->pr_mutex);
 	}
 
 	mutex_exit(&poll_list->dl_mutex);

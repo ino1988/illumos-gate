@@ -22,6 +22,8 @@
 /*
  * Copyright 2008 Sun Microsystems, Inc.  All rights reserved.
  * Use is subject to license terms.
+ *
+ * Copyright (c) 2014, Tegile Systems, Inc. All rights reserved.
  */
 
 #pragma ident	"%Z%%M%	%I%	%E% SMI"
@@ -102,7 +104,7 @@ ioat_rs_init(ioat_state_t *state, uint_t min_val, uint_t max_val,
 	rstruct->rs_last = min_val;
 	rstruct->rs_max = max_val;
 	mutex_init(&rstruct->rs_mutex, NULL, MUTEX_DRIVER,
-	    state->is_iblock_cookie);
+	    state->is_mutex_prio);
 
 	/* Mark all resources as free */
 	array_size = rstruct->rs_free_size >> 3;

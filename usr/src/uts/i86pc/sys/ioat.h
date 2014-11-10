@@ -22,6 +22,8 @@
 /*
  * Copyright 2009 Sun Microsystems, Inc.  All rights reserved.
  * Use is subject to license terms.
+ *
+ * Copyright (c) 2014, Tegile Systems, Inc. All rights reserved.
  */
 
 #ifndef _SYS_IOAT_H
@@ -55,6 +57,9 @@ typedef ioat_ioctl_reg_t ioat_ioctl_rdreg_t;
 #ifdef _KERNEL
 /* *** Driver Private Below *** */
 
+/* IOAT PCI space registers */
+#define	IOAT_CHANERR_INT	0x180
+
 /* IOAT_DMACAPABILITY flags */
 #define	IOAT_DMACAP_PAGEBREAK	0x1
 #define	IOAT_DMACAP_CRC		0x2
@@ -77,6 +82,8 @@ typedef ioat_ioctl_reg_t ioat_ioctl_rdreg_t;
 #define	IOAT_INTRDELAY		0xC	/* 16-bit */
 #define	IOAT_CSSTATUS		0xE	/* 16-bit */
 #define	IOAT_DMACAPABILITY	0x10	/* 32-bit */
+
+#define	IOAT_MAJOR_CBVER(x)	((x) >> 4)
 
 #define	IOAT_CHANNELREG_OFFSET	0x80
 
@@ -102,14 +109,17 @@ typedef ioat_ioctl_reg_t ioat_ioctl_rdreg_t;
 #define	IOAT_V2_CHAN_ADDR_LO	0x10	/* 32-bit */
 #define	IOAT_V2_CHAN_ADDR_HI	0x14	/* 32-bit */
 
+#define	IOTA_CHAN_CTL_INT_DIS		(1 << 0)
 #define	IOAT_CHAN_STS_ADDR_MASK		0xFFFFFFFFFFFFFFC0
 #define	IOAT_CHAN_STS_XFER_MASK		0x3F
 #define	IOAT_CHAN_STS_FAIL_MASK		0x6
+#define	IOAT_CHAN_STS_STATE_MASK	0x7
+#define	IOAT_CHAN_STS_STATE_ABORT	0x3
 #define	IOAT_CMPL_INDEX(channel)	\
-	(((*channel->ic_cmpl & IOAT_CHAN_STS_ADDR_MASK) - \
+	(((channel->ic_cmpl_last & IOAT_CHAN_STS_ADDR_MASK) - \
 	ring->cr_phys_desc) >> 6)
 #define	IOAT_CMPL_FAILED(channel)	\
-	(*channel->ic_cmpl & IOAT_CHAN_STS_FAIL_MASK)
+	(channel->ic_cmpl_last & IOAT_CHAN_STS_FAIL_MASK)
 
 
 typedef struct ioat_chan_desc_s {
@@ -147,6 +157,12 @@ typedef struct ioat_chan_dca_desc_s {
 #define	IOAT_DESC_CTRL_NODSTSNP	0x4
 #define	IOAT_DESC_CTRL_NOSRCSNP	0x2
 #define	IOAT_DESC_CTRL_INTR	0x1
+
+/*
+ * Even when IOAT_DESC_DMACTRL_NULL, a null descriptor cannot have zero size
+ */
+#define	IOAT_DESC_NULL_SIZE	1
+
 typedef struct ioat_chan_dma_desc_s {
 	uint32_t	dd_size;
 	uint32_t	dd_ctrl;
@@ -162,7 +178,8 @@ typedef struct ioat_chan_dma_desc_s {
 
 typedef enum {
 	IOAT_CBv1,
-	IOAT_CBv2
+	IOAT_CBv2,
+	IOAT_CBv3
 } ioat_version_t;
 
 /* ioat private data per command */
@@ -251,7 +268,8 @@ struct ioat_channel_s {
 	dcopy_handle_t		ic_dcopy_handle;
 
 	/* location in memory where completions are DMA'ed into */
-	volatile uint64_t	*ic_cmpl;
+	uint64_t		*ic_cmpl;
+	volatile uint64_t	ic_cmpl_last;
 
 	/* channel specific registers */
 	uint8_t			*ic_regs;
@@ -267,6 +285,9 @@ struct ioat_channel_s {
 
 	/* number of descriptors in ring */
 	uint_t			ic_chan_desc_cnt;
+
+	/* max bytes a single descriptor can transfer */
+	uint_t			ic_max_desc_xfer;
 
 	/* descriptor ring alloc state */
 	ddi_dma_handle_t	ic_desc_dma_handle;
@@ -293,7 +314,9 @@ typedef struct ioat_rs_s *ioat_rs_hdl_t;
 /* driver state */
 typedef struct ioat_state_s {
 	dev_info_t		*is_dip;
+	dev_info_t		*is_root_dip;
 	int			is_instance;
+	ddi_acc_handle_t	is_handle;
 
 	kmutex_t		is_mutex;
 
@@ -301,7 +324,7 @@ typedef struct ioat_state_s {
 	ddi_acc_handle_t	is_reg_handle;
 	uint8_t			*is_genregs;
 
-	/* IOAT_CBv1 || IOAT_CBv2 */
+	/* IOAT_CBv1 || IOAT_CBv2 || IOAT_CBv3 */
 	ioat_version_t		is_ver;
 
 	/* channel state */
@@ -309,7 +332,17 @@ typedef struct ioat_state_s {
 	size_t			is_chansize;
 	ioat_rs_hdl_t		is_channel_rs;
 
+	void			*is_mutex_prio;
+	int			is_intr_type;
 	ddi_iblock_cookie_t	is_iblock_cookie;
+
+	/* MSI */
+	ddi_intr_handle_t	*is_msi_handles;
+	int			is_msi_size;
+	int			is_msi_count;
+	int			is_msi_added;
+	uint_t			is_msi_priority;
+	int			is_msi_cap;
 
 	/* device info */
 	uint_t			is_chanoff;
@@ -344,7 +377,7 @@ void ioat_channel_quiesce(ioat_state_t *);
 int ioat_channel_alloc(void *device_private, dcopy_handle_t handle, int flags,
     uint_t size, dcopy_query_channel_t *info, void *channel_private);
 void ioat_channel_free(void *channel_private);
-void ioat_channel_intr(ioat_channel_t channel);
+int ioat_channel_intr(ioat_channel_t channel);
 int ioat_cmd_alloc(void *channel, int flags, dcopy_cmd_t *cmd);
 void ioat_cmd_free(void *channel, dcopy_cmd_t *cmd);
 int ioat_cmd_post(void *channel, dcopy_cmd_t cmd);

@@ -22,6 +22,8 @@
 /*
  * Copyright 2009 Sun Microsystems, Inc.  All rights reserved.
  * Use is subject to license terms.
+ *
+ * Copyright (c) 2014, Tegile Systems, Inc. All rights reserved.
  */
 
 #ifndef _SYS_DCOPY_H
@@ -32,6 +34,7 @@ extern "C" {
 #endif
 
 #include <sys/types.h>
+#include <sys/dditypes.h>
 
 /*
  * *** This interface is for private use by the IP stack only ***
@@ -70,15 +73,21 @@ typedef struct dcopy_channel_s *dcopy_handle_t;
 #define	DCOPY_SLEEP	(0)
 #define	DCOPY_NOSLEEP	(1 << 0)
 
+#define	DCOPY_EXCLUSIVE	(1 << 1)	/* request channel for exclusive use */
+
+#define	DCOPY_ANY_ROOT	NULL
+
 /*
  * dcopy_alloc()
  *   Allocate a DMA channel which is used for posting DMA requests. Note: this
  *   does not give the caller exclusive access to the DMA engine. Commands
  *   posted to a channel will complete in order.
  *     flags - (DCOPY_SLEEP, DCOPY_NOSLEEP)
+ *     rdip - select a channel which is attached to this root complex, or
+ *            DCOPY_ANY_ROOT for next channel.
  *     returns => DCOPY_FAILURE, DCOPY_SUCCESS, DCOPY_NORESOURCES
  */
-int dcopy_alloc(int flags, dcopy_handle_t *handle);
+int dcopy_alloc(int flags, dev_info_t *rdip, dcopy_handle_t *handle);
 
 /*
  * dcopy_free()
@@ -110,6 +119,9 @@ typedef struct dcopy_query_channel_s {
 
 	/* DMA channel number within the device. Not unique across devices */
 	uint64_t	qc_chan_num;
+
+	/* The dev_info of the root complex this channel is on */
+	dev_info_t	*qc_root_dip;
 } dcopy_query_channel_t;
 
 /*
@@ -154,6 +166,10 @@ void dcopy_query_channel(dcopy_handle_t handle, dcopy_query_channel_t *query);
  *    Disable destination cache snooping.
  * DCOPY_CMD_LOOP
  *    For CBv1, generate a loop descriptor list, used to support FIPE driver.
+ * DCOPY_CMD_CONTIG
+ *    The source and destination are known to be in contiguous physical
+ *    pages, thus the ioat engine does not need to split the request into
+ *    page size descriptors.
  * DCOPY_CMD_SYNC
  *    Reserved for internal use.
  */
@@ -166,6 +182,7 @@ void dcopy_query_channel(dcopy_handle_t handle, dcopy_query_channel_t *query);
 #define	DCOPY_CMD_NOSRCSNP	(1 << 5)
 #define	DCOPY_CMD_NODSTSNP	(1 << 6)
 #define	DCOPY_CMD_LOOP		(1 << 7)
+#define	DCOPY_CMD_CONTIG_MEM	(1 << 8)
 #define	DCOPY_CMD_SYNC		(1 << 30)
 
 typedef struct dcopy_cmd_copy_s {
@@ -190,6 +207,16 @@ struct dcopy_cmd_s {
 };
 typedef struct dcopy_cmd_s *dcopy_cmd_t;
 
+/*
+ * dcopy_cmd_init() should be called to initialise private state in the
+ * dcop_cmd_s struct. Eg fron a constructor.
+ */
+void dcopy_cmd_init(dcopy_cmd_t);
+
+/*
+ * dcopy_cmd_fini() is the converse of dcopy_cmd_init()
+ */
+void dcopy_cmd_fini(dcopy_cmd_t);
 
 /*
  * dcopy_cmd_alloc() specific flags
@@ -244,6 +271,11 @@ int dcopy_cmd_post(dcopy_cmd_t cmd);
  */
 int dcopy_cmd_poll(dcopy_cmd_t cmd, int flags);
 
+
+/*
+ * Utility function for fing which root complex a device is attached to
+ */
+dev_info_t *dcopy_get_root_complex(dev_info_t *);
 
 #ifdef __cplusplus
 }

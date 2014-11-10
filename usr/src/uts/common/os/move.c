@@ -593,7 +593,7 @@ uioainit(uio_t *uiop, uioa_t *uioap)
 		return (EINVAL);
 	}
 
-	error = dcopy_alloc(DCOPY_NOSLEEP, &channel);
+	error = dcopy_alloc(DCOPY_NOSLEEP, DCOPY_ANY_ROOT, &channel);
 	if (error == DCOPY_NORESOURCES) {
 		/* Turn off uioa */
 		uioasync.enabled = B_FALSE;

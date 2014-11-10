@@ -29,6 +29,10 @@
  * All rights reserved.
  */
 
+/*
+ * Copyright (c) 2014, Tegile Systems, Inc. All rights reserved.
+ */
+
 #include <sys/errno.h>
 #include <sys/types.h>
 #include <sys/conf.h>
@@ -47,6 +51,7 @@
 #ifdef __xpv
 #include <sys/hypervisor.h>
 #endif
+#include <sys/sdt.h>
 
 #include <sys/ioat.h>
 
@@ -140,6 +145,39 @@ ioat_channel_fini(ioat_state_t *state)
 	kmem_free(state->is_channel, state->is_chansize);
 }
 
+/*
+ * constructor for cmd cache
+ */
+/*ARGSUSED*/
+static int
+ioat_cmd_constructor(void *obj, void *arg, int kmflags)
+{
+	dcopy_cmd_t cmd = obj;
+
+	/* setup the dcopy and ioat private state pointers */
+	cmd->dp_version = DCOPY_CMD_V0;
+	cmd->dp_private = (struct dcopy_cmd_priv_s *)
+	    ((uintptr_t)cmd + sizeof (struct dcopy_cmd_s));
+	cmd->dp_private->pr_device_cmd_private =
+	    (struct ioat_cmd_private_s *)((uintptr_t)cmd->dp_private +
+	    sizeof (struct dcopy_cmd_priv_s));
+
+	dcopy_cmd_init(cmd);
+
+	return (0);
+}
+
+/*
+ * destructor for cmd cache
+ */
+/*ARGSUSED*/
+static void
+ioat_cmd_destructor(void *obj, void *arg)
+{
+	dcopy_cmd_t cmd = obj;
+
+	dcopy_cmd_fini(cmd);
+}
 
 /*
  * ioat_channel_alloc()
@@ -178,6 +216,7 @@ ioat_channel_alloc(void *device_private, dcopy_handle_t handle, int flags,
 	channel->ic_dca_active = B_FALSE;
 	channel->ic_channel_state = IOAT_CHANNEL_OK;
 	channel->ic_dcopy_handle = handle;
+	channel->ic_max_desc_xfer = 1 << state->is_maxxfer;
 
 #ifdef	DEBUG
 	{
@@ -187,6 +226,12 @@ ioat_channel_alloc(void *device_private, dcopy_handle_t handle, int flags,
 			reg = ddi_get16(state->is_reg_handle,
 			    (uint16_t *)&channel->ic_regs[IOAT_CHAN_COMP]);
 			ASSERT(reg & 0x2);
+		}
+		/* if we're v3 verify v2 and v3 bits */
+		if (channel->ic_ver == IOAT_CBv3) {
+			reg = ddi_get16(state->is_reg_handle,
+			    (uint16_t *)&channel->ic_regs[IOAT_CHAN_COMP]);
+			ASSERT(reg & 0x6);
 		}
 	}
 #endif
@@ -232,7 +277,7 @@ ioat_channel_alloc(void *device_private, dcopy_handle_t handle, int flags,
 	(void) snprintf(chanstr, CHANSTRSIZE, "ioat%dchan%dcmd",
 	    state->is_instance, channel->ic_chan_num);
 	channel->ic_cmd_cache = kmem_cache_create(chanstr, cmd_size, 64,
-	    NULL, NULL, NULL, NULL, NULL, 0);
+	    ioat_cmd_constructor, ioat_cmd_destructor, NULL, NULL, NULL, 0);
 	if (channel->ic_cmd_cache == NULL) {
 		goto chinitfail_kmem_cache;
 	}
@@ -246,6 +291,7 @@ ioat_channel_alloc(void *device_private, dcopy_handle_t handle, int flags,
 	info->qc_capabilities = (uint64_t)state->is_capabilities;
 	info->qc_channel_size = (uint64_t)size;
 	info->qc_chan_num = (uint64_t)channel->ic_chan_num;
+	info->qc_root_dip = state->is_root_dip;
 	if (channel->ic_ver == IOAT_CBv1) {
 		info->qc_dca_supported = B_FALSE;
 	} else {
@@ -340,7 +386,6 @@ ioat_channel_resume(ioat_state_t *state)
 			    (uint32_t *)&channel->ic_regs[IOAT_V1_CHAN_ADDR_HI],
 			    (uint32_t)(ring->cr_phys_desc >> 32));
 		} else {
-			ASSERT(channel->ic_ver == IOAT_CBv2);
 			ddi_put32(state->is_reg_handle,
 			    (uint32_t *)&channel->ic_regs[IOAT_V2_CHAN_ADDR_LO],
 			    (uint32_t)(ring->cr_phys_desc & 0xffffffff));
@@ -445,22 +490,32 @@ ioat_channel_free(void *channel_private)
 /*
  * ioat_channel_intr()
  */
-void
+int
 ioat_channel_intr(ioat_channel_t channel)
 {
 	ioat_state_t *state;
 	uint16_t chanctrl;
-	uint32_t chanerr;
+	uint32_t chanerr, chanerr_int;
 	uint32_t status;
 
 
 	state = channel->ic_state;
 
+	chanctrl = ddi_get16(state->is_reg_handle,
+	    (uint16_t *)&channel->ic_regs[IOAT_CHAN_CTL]);
+
+	/*
+	 * If INTP_DIS is _only_ asserted when there is a pending
+	 * interrupt for this channel
+	 */
+	if (!(chanctrl & IOTA_CHAN_CTL_INT_DIS))
+		return (DDI_INTR_UNCLAIMED);
+
 	if (channel->ic_ver == IOAT_CBv1) {
 		status = ddi_get32(state->is_reg_handle,
 		    (uint32_t *)&channel->ic_regs[IOAT_V1_CHAN_STS_LO]);
 	} else {
-		ASSERT(channel->ic_ver == IOAT_CBv2);
+		/* V2 and V3 have the same processing */
 		status = ddi_get32(state->is_reg_handle,
 		    (uint32_t *)&channel->ic_regs[IOAT_V2_CHAN_STS_LO]);
 	}
@@ -469,28 +524,38 @@ ioat_channel_intr(ioat_channel_t channel)
 	if (status & IOAT_CHAN_STS_FAIL_MASK) {
 		chanerr = ddi_get32(state->is_reg_handle,
 		    (uint32_t *)&channel->ic_regs[IOAT_CHAN_ERR]);
+		ddi_put32(state->is_reg_handle,
+		    (uint32_t *)&channel->ic_regs[IOAT_CHAN_ERR], chanerr);
+		chanerr_int = pci_config_get32(state->is_handle,
+		    IOAT_CHANERR_INT);
+		pci_config_put32(state->is_handle, IOAT_CHANERR_INT,
+		    chanerr_int);
 		cmn_err(CE_WARN, "channel(%d) fatal failure! "
-		    "chanstat_lo=0x%X; chanerr=0x%X\n",
-		    channel->ic_chan_num, status, chanerr);
+		    "chanstat_lo=0x%X; chanerr=0x%X; chanerr_int=0x%X\n",
+		    channel->ic_chan_num, status, chanerr, chanerr_int);
+		DTRACE_PROBE3(channel_intr_error, ioat_channel_t, channel,
+		    uint32_t, chanerr, uint32_t, chanerr_int);
 		channel->ic_channel_state = IOAT_CHANNEL_IN_FAILURE;
 		ioat_channel_reset(channel);
 
-		return;
+		return (DDI_INTR_CLAIMED);
 	}
 
 	/*
-	 * clear interrupt disable bit if set (it's a RW1C). Read it back to
+	 * clear interrupt disable bit (it's a RW1C). Read it back to
 	 * ensure the write completes.
 	 */
-	chanctrl = ddi_get16(state->is_reg_handle,
-	    (uint16_t *)&channel->ic_regs[IOAT_CHAN_CTL]);
 	ddi_put16(state->is_reg_handle,
 	    (uint16_t *)&channel->ic_regs[IOAT_CHAN_CTL], chanctrl);
 	(void) ddi_get16(state->is_reg_handle,
 	    (uint16_t *)&channel->ic_regs[IOAT_CHAN_CTL]);
 
+	DTRACE_PROBE1(stat, uint32_t, status);
+
 	/* tell dcopy we have seen a completion on this channel */
 	dcopy_device_channel_notify(channel->ic_dcopy_handle, DCOPY_COMPLETION);
+
+	return (DDI_INTR_CLAIMED);
 }
 
 
@@ -504,7 +569,7 @@ ioat_channel_start(ioat_channel_t channel)
 
 	/* set the first descriptor up as a NULL descriptor */
 	bzero(&desc, sizeof (desc));
-	desc.dd_size = 0;
+	desc.dd_size = IOAT_DESC_NULL_SIZE;
 	desc.dd_ctrl = IOAT_DESC_CTRL_OP_DMA | IOAT_DESC_DMACTRL_NULL |
 	    IOAT_DESC_CTRL_CMPL;
 	desc.dd_next_desc = 0x0;
@@ -529,7 +594,6 @@ ioat_channel_reset(ioat_channel_t channel)
 		ddi_put8(state->is_reg_handle,
 		    &channel->ic_regs[IOAT_V1_CHAN_CMD], 0x20);
 	} else {
-		ASSERT(channel->ic_ver == IOAT_CBv2);
 		ddi_put8(state->is_reg_handle,
 		    &channel->ic_regs[IOAT_V2_CHAN_CMD], 0x20);
 	}
@@ -643,9 +707,9 @@ ioat_ring_alloc(ioat_channel_t channel, uint_t desc_cnt)
 	ring->cr_post_cnt = 0;
 
 	mutex_init(&ring->cr_cmpl_mutex, NULL, MUTEX_DRIVER,
-	    channel->ic_state->is_iblock_cookie);
+	    channel->ic_state->is_mutex_prio);
 	mutex_init(&ring->cr_desc_mutex, NULL, MUTEX_DRIVER,
-	    channel->ic_state->is_iblock_cookie);
+	    channel->ic_state->is_mutex_prio);
 
 	/*
 	 * allocate memory for the ring, zero it out, and get the paddr.
@@ -694,7 +758,6 @@ ioat_ring_alloc(ioat_channel_t channel, uint_t desc_cnt)
 		    (uint32_t *)&channel->ic_regs[IOAT_V1_CHAN_ADDR_HI],
 		    (uint32_t)(ring->cr_phys_desc >> 32));
 	} else {
-		ASSERT(channel->ic_ver == IOAT_CBv2);
 		ddi_put32(state->is_reg_handle,
 		    (uint32_t *)&channel->ic_regs[IOAT_V2_CHAN_ADDR_LO],
 		    (uint32_t)(ring->cr_phys_desc & 0xffffffff));
@@ -736,7 +799,6 @@ ioat_ring_free(ioat_channel_t channel)
 		ddi_put32(state->is_reg_handle,
 		    (uint32_t *)&channel->ic_regs[IOAT_V1_CHAN_ADDR_HI], 0x0);
 	} else {
-		ASSERT(channel->ic_ver == IOAT_CBv2);
 		ddi_put32(state->is_reg_handle,
 		    (uint32_t *)&channel->ic_regs[IOAT_V2_CHAN_ADDR_LO], 0x0);
 		ddi_put32(state->is_reg_handle,
@@ -788,16 +850,16 @@ ioat_ring_seed(ioat_channel_t channel, ioat_chan_dma_desc_t *in_desc)
 		    &channel->ic_regs[IOAT_V1_CHAN_CMD], 0x1);
 	} else {
 		/*
-		 * if this is CBv2, link the descriptor to an empty
+		 * if this is CBv2/3, link the descriptor to an empty
 		 * descriptor
 		 */
-		ASSERT(ring->cr_chan->ic_ver == IOAT_CBv2);
 		desc = (ioat_chan_dma_desc_t *)
 		    &ring->cr_desc[ring->cr_desc_next];
 		prev = (ioat_chan_dma_desc_t *)
 		    &ring->cr_desc[ring->cr_desc_prev];
 
-		desc->dd_ctrl = 0;
+		desc->dd_ctrl = IOAT_DESC_CTRL_OP_DMA | IOAT_DESC_DMACTRL_NULL;
+		desc->dd_size = IOAT_DESC_NULL_SIZE;
 		desc->dd_next_desc = 0x0;
 
 		prev->dd_next_desc = ring->cr_phys_desc +
@@ -898,14 +960,7 @@ ioat_cmd_alloc(void *private, int flags, dcopy_cmd_t *cmd)
 		return (DCOPY_NORESOURCES);
 	}
 
-	/* setup the dcopy and ioat private state pointers */
-	(*cmd)->dp_version = DCOPY_CMD_V0;
 	(*cmd)->dp_cmd = 0;
-	(*cmd)->dp_private = (struct dcopy_cmd_priv_s *)
-	    ((uintptr_t)(*cmd) + sizeof (struct dcopy_cmd_s));
-	(*cmd)->dp_private->pr_device_cmd_private =
-	    (struct ioat_cmd_private_s *)((uintptr_t)(*cmd)->dp_private +
-	    sizeof (struct dcopy_cmd_priv_s));
 
 	/*
 	 * if DCOPY_ALLOC_LINK is set, link the old command to the new one
@@ -944,6 +999,7 @@ ioat_cmd_free(void *private, dcopy_cmd_t *cmdp)
 	while (cmd != NULL) {
 		priv = cmd->dp_private->pr_device_cmd_private;
 		next = priv->ip_next;
+		dcopy_cmd_freed(cmd);
 		kmem_cache_free(channel->ic_cmd_cache, cmd);
 		cmd = next;
 	}
@@ -1014,7 +1070,7 @@ ioat_cmd_post(void *private, dcopy_cmd_t cmd)
 	}
 
 	/* if we support DCA, and the DCA flag is set, post a DCA desc */
-	if ((channel->ic_ver == IOAT_CBv2) &&
+	if ((channel->ic_ver == IOAT_CBv2 || channel->ic_ver == IOAT_CBv3) &&
 	    (cmd->dp_flags & DCOPY_CMD_DCA)) {
 		ioat_cmd_post_dca(ring, cmd->dp_dca_id);
 	}
@@ -1030,24 +1086,38 @@ ioat_cmd_post(void *private, dcopy_cmd_t cmd)
 	size = cmd->dp.copy.cc_size;
 	priv->ip_start = ring->cr_desc_next;
 	while (size > 0) {
-		src_paddr = pa_to_ma(src_addr);
-		dest_paddr = pa_to_ma(dest_addr);
-
-		/* adjust for any offset into the page */
-		if ((src_addr & PAGEOFFSET) == 0) {
-			src_size = PAGESIZE;
+		if (cmd->dp_flags & DCOPY_CMD_CONTIG_MEM) {
+			/*
+			 * A contiguous chunk of physical memory, split
+			 * into max per descriptor xfer size.
+			 */
+			src_paddr = src_addr;
+			dest_paddr = dest_addr;
+			xfer_size = size > channel->ic_max_desc_xfer ?
+			    channel->ic_max_desc_xfer : size;
 		} else {
-			src_size = PAGESIZE - (src_addr & PAGEOFFSET);
-		}
-		if ((dest_addr & PAGEOFFSET) == 0) {
-			dest_size = PAGESIZE;
-		} else {
-			dest_size = PAGESIZE - (dest_addr & PAGEOFFSET);
-		}
+			/*
+			 * Non-continuous, split it pages or part of pages
+			 */
+			src_paddr = pa_to_ma(src_addr);
+			dest_paddr = pa_to_ma(dest_addr);
 
-		/* take the smallest of the three */
-		xfer_size = MIN(src_size, dest_size);
-		xfer_size = MIN(xfer_size, size);
+			/* adjust for any offset into the page */
+			if ((src_addr & PAGEOFFSET) == 0) {
+				src_size = PAGESIZE;
+			} else {
+				src_size = PAGESIZE - (src_addr & PAGEOFFSET);
+			}
+			if ((dest_addr & PAGEOFFSET) == 0) {
+				dest_size = PAGESIZE;
+			} else {
+				dest_size = PAGESIZE - (dest_addr & PAGEOFFSET);
+			}
+
+			/* take the smallest of the three */
+			xfer_size = MIN(src_size, dest_size);
+			xfer_size = MIN(xfer_size, size);
+		}
 
 		/*
 		 * if this is the last descriptor, and we are supposed to
@@ -1083,6 +1153,9 @@ ioat_cmd_post(void *private, dcopy_cmd_t cmd)
 	priv->ip_generation = ring->cr_desc_gen_prev;
 	priv->ip_index = ring->cr_desc_prev;
 
+	/* Tell dcopy the cmd has been posted */
+	dcopy_cmd_posted(cmd);
+
 	/* if queue not defined, tell the DMA engine about it */
 	if (!(cmd->dp_flags & DCOPY_CMD_QUEUE)) {
 		/*
@@ -1101,7 +1174,6 @@ ioat_cmd_post(void *private, dcopy_cmd_t cmd)
 			    (uint8_t *)&channel->ic_regs[IOAT_V1_CHAN_CMD],
 			    0x2);
 		} else {
-			ASSERT(channel->ic_ver == IOAT_CBv2);
 			ddi_put16(state->is_reg_handle,
 			    (uint16_t *)&channel->ic_regs[IOAT_V2_CHAN_CNT],
 			    (uint16_t)(ring->cr_post_cnt & 0xFFFF));
@@ -1172,10 +1244,11 @@ ioat_cmd_post_dca(ioat_channel_ring_t *ring, uint32_t dca_id)
 	}
 
 	/*
-	 * if this is CBv2, link the descriptor to an empty descriptor. Since
+	 * if this is CBv2/3, link the descriptor to an empty descriptor. Since
 	 * we always leave on desc empty to detect full, this works out.
 	 */
-	if (ring->cr_chan->ic_ver == IOAT_CBv2) {
+	if (ring->cr_chan->ic_ver == IOAT_CBv2 ||
+	    ring->cr_chan->ic_ver == IOAT_CBv3) {
 		desc = (ioat_chan_dca_desc_t *)
 		    &ring->cr_desc[ring->cr_desc_next];
 		prev = (ioat_chan_dca_desc_t *)
@@ -1189,7 +1262,6 @@ ioat_cmd_post_dca(ioat_channel_ring_t *ring, uint32_t dca_id)
 	}
 
 	/* Put the descriptors physical address in the previous descriptor */
-	/*LINTED:E_TRUE_LOGICAL_EXPR*/
 	ASSERT(sizeof (ioat_chan_dca_desc_t) == 64);
 
 	/* sync the current desc */
@@ -1255,16 +1327,17 @@ ioat_cmd_post_copy(ioat_channel_ring_t *ring, uint64_t src_addr,
 	}
 
 	/*
-	 * if this is CBv2, link the descriptor to an empty descriptor. Since
+	 * if this is CBv2/3, link the descriptor to an empty descriptor. Since
 	 * we always leave on desc empty to detect full, this works out.
 	 */
-	if (ring->cr_chan->ic_ver == IOAT_CBv2) {
+	if (ring->cr_chan->ic_ver == IOAT_CBv2 ||
+	    ring->cr_chan->ic_ver == IOAT_CBv3) {
 		desc = (ioat_chan_dma_desc_t *)
 		    &ring->cr_desc[ring->cr_desc_next];
 		prev = (ioat_chan_dma_desc_t *)
 		    &ring->cr_desc[ring->cr_desc_prev];
-		desc->dd_size = 0;
-		desc->dd_ctrl = 0;
+		desc->dd_ctrl = IOAT_DESC_CTRL_OP_DMA | IOAT_DESC_DMACTRL_NULL;
+		desc->dd_size = IOAT_DESC_NULL_SIZE;
 		desc->dd_next_desc = 0x0;
 		(void) ddi_dma_sync(channel->ic_desc_dma_handle,
 		    ring->cr_desc_next << 6, 64, DDI_DMA_SYNC_FORDEV);
@@ -1273,7 +1346,6 @@ ioat_cmd_post_copy(ioat_channel_ring_t *ring, uint64_t src_addr,
 	}
 
 	/* Put the descriptors physical address in the previous descriptor */
-	/*LINTED:E_TRUE_LOGICAL_EXPR*/
 	ASSERT(sizeof (ioat_chan_dma_desc_t) == 64);
 
 	/* sync the current desc */
@@ -1306,6 +1378,8 @@ ioat_cmd_poll(void *private, dcopy_cmd_t cmd)
 	ring = channel->ic_ring;
 	ASSERT(ring != NULL);
 
+	DTRACE_PROBE1(channel_addr, ioat_channel_t, channel);
+
 	if ((cmd->dp_flags & DCOPY_CMD_NOWAIT) == 0) {
 		mutex_enter(&ring->cr_cmpl_mutex);
 
@@ -1317,9 +1391,22 @@ ioat_cmd_poll(void *private, dcopy_cmd_t cmd)
 		return (DCOPY_FAILURE);
 	}
 
+	(void) ddi_dma_sync(channel->ic_cmpl_dma_handle, 0, 0,
+	    DDI_DMA_SYNC_FORCPU);
+
+	channel->ic_cmpl_last = *channel->ic_cmpl;
+	membar_producer();
+
 	/* if the channel had a fatal failure, fail all polls */
 	if ((channel->ic_channel_state == IOAT_CHANNEL_IN_FAILURE) ||
 	    IOAT_CMPL_FAILED(channel)) {
+		ioat_state_t *state = channel->ic_state;
+		uint32_t estat;
+
+		estat = ddi_get32(state->is_reg_handle,
+		    (uint32_t *)&channel->ic_regs[IOAT_CHAN_ERR]);
+		DTRACE_PROBE2(channel_error, uint64_t, *channel->ic_cmpl,
+		    uint32_t, estat);
 		mutex_exit(&ring->cr_cmpl_mutex);
 		return (DCOPY_FAILURE);
 	}
@@ -1330,9 +1417,11 @@ ioat_cmd_poll(void *private, dcopy_cmd_t cmd)
 	 * as indexes into the ring since post uses VAs and the H/W returns
 	 * PAs. We grab a snapshot of generation and last_cmpl in the mutex.
 	 */
-	(void) ddi_dma_sync(channel->ic_cmpl_dma_handle, 0, 0,
-	    DDI_DMA_SYNC_FORCPU);
 	last_cmpl = IOAT_CMPL_INDEX(channel);
+
+	DTRACE_PROBE3(cmpl, uint64_t, ring->cr_cmpl_last, uint64_t,
+	    last_cmpl, uint64_t, ring->cr_cmpl_gen);
+
 	if (last_cmpl != ring->cr_cmpl_last) {
 		/*
 		 * if we wrapped the ring, increment the generation. Store
@@ -1365,6 +1454,9 @@ ioat_cmd_poll(void *private, dcopy_cmd_t cmd)
 	 * and if the post is before or = to the last completion processed,
 	 * the post has completed.
 	 */
+	DTRACE_PROBE2(priv, uint64_t, priv->ip_generation, uint64_t,
+	    priv->ip_index);
+
 	if (priv->ip_generation < generation) {
 		return (DCOPY_COMPLETED);
 	} else if ((priv->ip_generation == generation) &&
@@ -1399,7 +1491,7 @@ ioat_ring_reserve(ioat_channel_t channel, ioat_channel_ring_t *ring,
 	 * desc and multiple desc for a dma copy.
 	 */
 	num_desc = 0;
-	if ((channel->ic_ver == IOAT_CBv2) &&
+	if ((channel->ic_ver == IOAT_CBv2 || channel->ic_ver == IOAT_CBv3) &&
 	    (cmd->dp_flags & DCOPY_CMD_DCA)) {
 		num_desc++;
 	}

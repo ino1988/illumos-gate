@@ -22,6 +22,8 @@
 /*
  * Copyright 2008 Sun Microsystems, Inc.  All rights reserved.
  * Use is subject to license terms.
+ *
+ * Copyright (c) 2014, Tegile Systems, Inc. All rights reserved.
  */
 
 #ifndef _SYS_DCOPY_DEVICE_H
@@ -44,18 +46,12 @@ extern "C" {
  * is a private pointer for the DMA engine to use.
  */
 struct dcopy_cmd_priv_s {
-	/*
-	 * we only init the state used to track a command which blocks when it
-	 * actually blocks. pr_block_init tells us when we need to clean it
-	 * up during a cmd_free.
-	 */
-	boolean_t		pr_block_init;
-
 	/* dcopy_poll blocking state */
 	list_node_t		pr_poll_list_node;
 	volatile boolean_t	pr_wait;
 	kmutex_t		pr_mutex;
 	kcondvar_t		pr_cv;
+	int			pr_poll_err;
 
 	/* back pointer to the command */
 	dcopy_cmd_t		pr_cmd;
@@ -146,6 +142,9 @@ int dcopy_device_unregister(dcopy_device_handle_t *handle);
  *     status => DCOPY_COMPLETION
  */
 void dcopy_device_channel_notify(dcopy_handle_t handle, int status);
+
+void dcopy_cmd_posted(dcopy_cmd_t);
+void dcopy_cmd_freed(dcopy_cmd_t);
 
 #ifdef __cplusplus
 }

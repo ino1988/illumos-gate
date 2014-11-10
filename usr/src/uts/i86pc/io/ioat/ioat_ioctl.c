@@ -22,6 +22,8 @@
 /*
  * Copyright 2008 Sun Microsystems, Inc.  All rights reserved.
  * Use is subject to license terms.
+ *
+ * Copyright (c) 2014, Tegile Systems, Inc. All rights reserved.
  */
 
 #pragma ident	"%Z%%M%	%I%	%E% SMI"
@@ -229,7 +231,7 @@ ioat_ioctl_test(ioat_state_t *state, void *arg, int mode)
 	}
 
 	/* allocate a DMA channel */
-	e = dcopy_alloc(DCOPY_SLEEP, &channel);
+	e = dcopy_alloc(DCOPY_SLEEP, DCOPY_ANY_ROOT, &channel);
 	if (e != DCOPY_SUCCESS) {
 		cmn_err(CE_CONT, "dcopy_alloc() failed\n");
 		goto testfail_alloc;
