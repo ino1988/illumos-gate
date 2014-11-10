@@ -114,7 +114,19 @@ $(OBJS_DIR)/%.o:		$(UTSBASE)/i86pc/io/dr/%.c
 	$(COMPILE.c) -o $@ $<
 	$(CTFCONVERT_O)
 
+$(OBJS_DIR)/%.o:		$(UTSBASE)/i86pc/io/i2c/nexus/%.c
+	$(COMPILE.c) -o $@ $<
+	$(CTFCONVERT_O)
+
+$(OBJS_DIR)/%.o:		$(UTSBASE)/i86pc/io/i2c/clients/%.c
+	$(COMPILE.c) -o $@ $<
+	$(CTFCONVERT_O)
+
 $(OBJS_DIR)/%.o:		$(UTSBASE)/i86pc/io/ioat/%.c
+	$(COMPILE.c) -o $@ $<
+	$(CTFCONVERT_O)
+
+$(OBJS_DIR)/%.o:		$(UTSBASE)/i86pc/io/imc_pcu/%.c
 	$(COMPILE.c) -o $@ $<
 	$(CTFCONVERT_O)
 
@@ -355,7 +367,16 @@ $(LINTS_DIR)/%.ln:              $(UTSBASE)/i86pc/io/amd_iommu/%.c
 $(LINTS_DIR)/%.ln:		$(UTSBASE)/i86pc/io/dr/%.c
 	@($(LHEAD) $(LINT.c) $< $(LTAIL))
 
+$(LINTS_DIR)/%.ln:		$(UTSBASE)/i86pc/io/i2c/nexus/%.c
+	@($(LHEAD) $(LINT.c) $< $(LTAIL))
+
+$(LINTS_DIR)/%.ln:		$(UTSBASE)/i86pc/io/i2c/clients/%.c
+	@($(LHEAD) $(LINT.c) $< $(LTAIL))
+
 $(LINTS_DIR)/%.ln:		$(UTSBASE)/i86pc/io/ioat/%.c
+	@($(LHEAD) $(LINT.c) $< $(LTAIL))
+
+$(LINTS_DIR)/%.ln:		$(UTSBASE)/i86pc/io/imc_pcu/%.c
 	@($(LHEAD) $(LINT.c) $< $(LTAIL))
 
 $(LINTS_DIR)/%.ln:		$(UTSBASE)/i86pc/io/pci/%.c

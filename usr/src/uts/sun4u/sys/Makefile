@@ -96,7 +96,7 @@ HDRS=	\
 	todmostek.h		\
 	traptrace.h
 
-I2CHDRS =	clients/max1617.h misc/i2c_svc.h clients/i2c_client.h	\
+I2CHDRS =	clients/max1617.h clients/i2c_client.h	\
 		clients/hpc3130.h clients/lm75.h	\
 		clients/pcf8591.h clients/ssc050.h
 

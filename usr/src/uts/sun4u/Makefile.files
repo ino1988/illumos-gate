@@ -112,7 +112,6 @@ BBC_OBJS	+= bbc_beep.o
 TDA8444_OBJS    += tda8444.o
 MAX1617_OBJS    += max1617.o
 SEEPROM_OBJS	+= seeprom.o
-I2C_SVC_OBJS	+= i2c_svc.o
 SMBUS_OBJS      += smbus.o
 SCHPPM_OBJS	+= schppm.o
 MC_OBJS		+= mc-us3.o mc-us3_asm.o

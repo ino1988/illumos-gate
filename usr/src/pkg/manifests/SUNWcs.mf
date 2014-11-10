@@ -1391,6 +1391,7 @@ file path=usr/sbin/sharectl mode=0555
 file path=usr/sbin/sharemgr mode=0555
 file path=usr/sbin/shutdown group=sys mode=0755
 file path=usr/sbin/smbios mode=0555
+$(i386_ONLY)file path=usr/sbin/spd mode=0755
 file path=usr/sbin/stmsboot mode=0555
 file path=usr/sbin/strace group=sys mode=0555
 file path=usr/sbin/strclean group=sys mode=0555

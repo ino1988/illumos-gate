@@ -66,6 +66,16 @@ HDRS=  \
 	xc_levels.h	\
 	xsvc.h
 
+I2CHDRS=		\
+	clients/spd.h	\
+	nexus/imc.h
+
+I2C_DIRS=	clients nexus
+USR_ISYS_I2C_ROOT=	$(ROOT)/usr/include/sys/i2c
+USR_ISYS_I2C_DIRS=	$(USR_ISYS_I2C_ROOT)	\
+			$(I2C_DIRS:%=$(USR_ISYS_I2C_ROOT)/%)
+ROOTI2CHDRS=		$(I2CHDRS:%=$(USR_ISYS_I2C_ROOT)/%)
+
 ROOTHDRS=	$(HDRS:%=$(USR_PSM_ISYS_DIR)/%)
 
 ROOTDIR=	$(ROOT)/usr/share/src
@@ -80,12 +90,23 @@ CHECKHDRS=	$(HDRS:%.h=%.check)
 
 .PARALLEL:	$(CHECKHDRS) $(ROOTHDRS)
 
-install_h:	$(ROOTDIRS) .WAIT $(ROOTHDRS) $(ROOTLINK)
+install_h:	$(ROOTDIRS)		\
+		$(USR_ISYS_I2C_DIRS)	\
+		.WAIT			\
+		$(ROOTHDRS)		\
+		$(ROOTI2CHDRS)		\
+		$(ROOTLINK)
 
 check:		$(CHECKHDRS)
 
 $(ROOTDIRS):
 	$(INS.dir)
+
+$(USR_ISYS_I2C_DIRS):
+	$(INS.dir)
+
+$(USR_ISYS_I2C_ROOT)/%:	i2c/%
+	$(INS.file)
 
 $(ROOTLINK):	$(ROOTDIRS)
 	-$(RM) -r $@; $(SYMLINK) $(LINKDEST) $@

@@ -184,6 +184,9 @@ DBOOT_OBJS +=			\
 GFX_PRIVATE_OBJS	+= gfx_private.o gfxp_pci.o gfxp_segmap.o \
 			   gfxp_devmap.o gfxp_vgatext.o gfxp_vm.o vgasubr.o
 FIPE_OBJS += fipe_drv.o fipe_pm.o
+IMC_OBJS += imc.o
+PCU_OBJS += imc_pcu.o
+SPD_OBJS += spd.o
 IOAT_OBJS += ioat.o ioat_rs.o ioat_ioctl.o ioat_chan.o
 ISANEXUS_OBJS += isa.o dma_engine.o i8237A.o
 PCIE_MISC_OBJS += pcie_acpi.o pciehpc_acpi.o pcie_x86.o

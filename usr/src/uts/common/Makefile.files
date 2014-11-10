@@ -482,6 +482,8 @@ CONSKBD_OBJS += conskbd.o
 
 CONSMS_OBJS +=	consms.o
 
+I2C_SVC_OBJS +=	i2c_svc.o
+
 OLDPTY_OBJS +=	tty_ptyconf.o
 
 PTC_OBJS +=	tty_pty.o

@@ -1142,6 +1142,16 @@ NXGEHDRS=			\
 	nxge_virtual.h		\
 	nxge_espc.h
 
+I2CHDRS=			\
+	misc/i2c_svc.h
+
+I2C_DIRS=	clients misc
+USR_ISYS_I2C_ROOT=	$(ROOT)/usr/include/sys/i2c
+USR_ISYS_I2C_DIRS=	$(USR_ISYS_I2C_ROOT) \
+			$(I2C_DIRS:%=$(USR_ISYS_I2C_ROOT)/%)
+
+ROOTI2CHDRS=		$(I2CHDRS:%=$(USR_ISYS_I2C_ROOT)/%)
+
 include Makefile.syshdrs
 
 dcam/%.check:	dcam/%.h
@@ -1286,6 +1296,7 @@ CHECKHDRS=						\
 
 install_h:			\
 	$(ROOTDIRS)		\
+	$(USR_ISYS_I2C_DIRS)	\
 	LVMDERIVED_H		\
 	.WAIT			\
 	$(ROOTHDRS)		\
@@ -1293,6 +1304,7 @@ install_h:			\
 	$(ROOTAVHDRS)		\
 	$(ROOTCRYPTOHDRS)	\
 	$(ROOTDCAMHDRS)		\
+	$(ROOTI2CHDRS)		\
 	$(ROOTISOHDRS)		\
 	$(ROOTIDMHDRS)		\
 	$(ROOTISCSIHDRS)	\
@@ -1365,6 +1377,9 @@ usb/usbdevs.h: $(USBDEVS_AWK) $(USBDEVS_DATA)
 
 LVMDERIVED_H:
 	cd $(SRC)/uts/common/sys/lvm; pwd; $(MAKE) all_h
+
+$(USR_ISYS_I2C_DIRS):
+	$(INS.dir)
 
 clean:
 	$(RM) $(GENHDRS)

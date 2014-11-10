@@ -263,6 +263,9 @@ DRV_KMODS	+= acpinex
 DRV_KMODS	+= amd_iommu
 DRV_KMODS	+= dr
 DRV_KMODS	+= ioat
+DRV_KMODS	+= imc
+DRV_KMODS	+= imc_pcu
+DRV_KMODS	+= spd
 DRV_KMODS	+= fipe
 
 DRV_KMODS	+= cpudrv

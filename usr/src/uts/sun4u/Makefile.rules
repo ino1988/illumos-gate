@@ -70,10 +70,6 @@ $(OBJS_DIR)/%.o:		$(UTSBASE)/sun4u/io/i2c/clients/%.c
 	$(COMPILE.c) -o $@ $<
 	$(CTFCONVERT_O)
 
-$(OBJS_DIR)/%.o:		$(UTSBASE)/sun4u/io/i2c/misc/%.c
-	$(COMPILE.c) -o $@ $<
-	$(CTFCONVERT_O)
-
 $(OBJS_DIR)/%.o:		$(UTSBASE)/sun4u/io/i2c/nexus/%.c
 	$(COMPILE.c) -o $@ $<
 	$(CTFCONVERT_O)
@@ -199,9 +195,6 @@ $(LINTS_DIR)/%.ln:		$(UTSBASE)/sun4u/io/%.s
 	@($(LHEAD) $(LINT.s) $< $(LTAIL))
 
 $(LINTS_DIR)/%.ln:		$(UTSBASE)/sun4u/io/i2c/clients/%.c
-	@($(LHEAD) $(LINT.c) $< $(LTAIL))
-
-$(LINTS_DIR)/%.ln:		$(UTSBASE)/sun4u/io/i2c/misc/%.c
 	@($(LHEAD) $(LINT.c) $< $(LTAIL))
 
 $(LINTS_DIR)/%.ln:		$(UTSBASE)/sun4u/io/i2c/nexus/%.c

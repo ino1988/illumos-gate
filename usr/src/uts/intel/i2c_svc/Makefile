@@ -21,7 +21,7 @@ ROOTMODULE	= $(ROOT_MISC_DIR)/$(MODULE)
 #
 #	Include common rules.
 #
-include $(UTSBASE)/sun4u/Makefile.sun4u
+include $(UTSBASE)/intel/Makefile.intel
 
 # 
 # lint pass one enforcement 
@@ -58,7 +58,7 @@ install:	$(INSTALL_DEPS)
 #
 #	Include common targets.
 #
-include $(UTSBASE)/sun4u/Makefile.targ
+include $(UTSBASE)/intel/Makefile.targ
 
 #
 #	Defines for local commands.

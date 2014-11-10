@@ -583,6 +583,7 @@ MISC_KMODS	+= gld
 MISC_KMODS	+= hidparser
 MISC_KMODS	+= hook
 MISC_KMODS	+= hpcsvc
+MISC_KMODS	+= i2c_svc
 MISC_KMODS	+= ibcm
 MISC_KMODS	+= ibdm
 MISC_KMODS	+= ibdma

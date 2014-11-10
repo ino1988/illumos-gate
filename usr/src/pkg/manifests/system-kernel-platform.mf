@@ -427,6 +427,8 @@ $(sparc_ONLY)driver name=hpc3130 perms="* 0644 root sys" \
     alias=i2c-hpc3130
 $(sparc_ONLY)driver name=i2bsc alias=SUNW,i2bsc
 $(sparc_ONLY)driver name=ics951601 alias=i2c-ics951601
+$(i386_ONLY)driver name=imc alias=pci8086,3ca8
+$(i386_ONLY)driver name=imc_pcu alias=pci8086,3cc0
 $(sparc_ONLY)driver name=iosram
 $(i386_ONLY)driver name=isa alias=pciclass,060100 class=sysbus
 $(sparc_ONLY)driver name=isadma
@@ -518,6 +520,8 @@ $(sparc_ONLY)driver name=simba alias=pci108e,5000 class=pci
 $(sparc_ONLY)driver name=simmstat alias=simm-status
 $(sparc_ONLY)driver name=smbus alias=i2c-smbus
 $(sparc_ONLY)driver name=smbus_ara alias=i2c-smbus-ara
+$(i386_ONLY)driver name=spd alias=spd,dimm \
+    devlink=type=ddi_pseudo;name=spd;minor=dimm\tspd/dimm\N0
 $(sparc_ONLY)driver name=sram
 $(sparc_ONLY)driver name=ssc050 alias=i2c-ssc050 perms="* 0644 root sys"
 $(sparc_ONLY)driver name=ssc100 alias=i2c-ssc100 perms="* 0644 root sys"
@@ -840,18 +844,24 @@ $(i386_ONLY)file path=platform/i86pc/kernel/drv/$(ARCH64)/acpinex group=sys
 $(i386_ONLY)file path=platform/i86pc/kernel/drv/$(ARCH64)/acpippm group=sys
 $(i386_ONLY)file path=platform/i86pc/kernel/drv/$(ARCH64)/amd_iommu group=sys
 $(i386_ONLY)file path=platform/i86pc/kernel/drv/$(ARCH64)/cpudrv group=sys
+$(i386_ONLY)file path=platform/i86pc/kernel/drv/$(ARCH64)/imc group=sys
+$(i386_ONLY)file path=platform/i86pc/kernel/drv/$(ARCH64)/imc_pcu group=sys
 $(i386_ONLY)file path=platform/i86pc/kernel/drv/$(ARCH64)/isa group=sys
 $(i386_ONLY)file path=platform/i86pc/kernel/drv/$(ARCH64)/npe group=sys
 $(i386_ONLY)file path=platform/i86pc/kernel/drv/$(ARCH64)/pci group=sys
 $(i386_ONLY)file path=platform/i86pc/kernel/drv/$(ARCH64)/pit_beep group=sys
 $(i386_ONLY)file path=platform/i86pc/kernel/drv/$(ARCH64)/ppm group=sys
 $(i386_ONLY)file path=platform/i86pc/kernel/drv/$(ARCH64)/rootnex group=sys
+$(i386_ONLY)file path=platform/i86pc/kernel/drv/$(ARCH64)/spd group=sys
 $(i386_ONLY)file path=platform/i86pc/kernel/drv/acpinex group=sys
 $(i386_ONLY)file path=platform/i86pc/kernel/drv/acpippm group=sys
 $(i386_ONLY)file path=platform/i86pc/kernel/drv/acpippm.conf group=sys
 $(i386_ONLY)file path=platform/i86pc/kernel/drv/amd_iommu group=sys
 $(i386_ONLY)file path=platform/i86pc/kernel/drv/amd_iommu.conf group=sys
 $(i386_ONLY)file path=platform/i86pc/kernel/drv/cpudrv group=sys
+$(i386_ONLY)file path=platform/i86pc/kernel/drv/imc group=sys
+$(i386_ONLY)file path=platform/i86pc/kernel/drv/imc.conf group=sys
+$(i386_ONLY)file path=platform/i86pc/kernel/drv/imc_pcu group=sys
 $(i386_ONLY)file path=platform/i86pc/kernel/drv/isa group=sys
 $(i386_ONLY)file path=platform/i86pc/kernel/drv/npe group=sys
 $(i386_ONLY)file path=platform/i86pc/kernel/drv/pci group=sys
@@ -861,6 +871,7 @@ $(i386_ONLY)file path=platform/i86pc/kernel/drv/ppm group=sys
 $(i386_ONLY)file path=platform/i86pc/kernel/drv/ppm.conf group=sys
 $(i386_ONLY)file path=platform/i86pc/kernel/drv/rootnex group=sys
 $(i386_ONLY)file path=platform/i86pc/kernel/drv/rootnex.conf group=sys
+$(i386_ONLY)file path=platform/i86pc/kernel/drv/spd group=sys
 $(i386_ONLY)file path=platform/i86pc/kernel/mach/$(ARCH64)/apix group=sys \
     mode=0755
 $(i386_ONLY)file path=platform/i86pc/kernel/mach/$(ARCH64)/pcplusmp group=sys \
@@ -1065,8 +1076,6 @@ $(sparc_ONLY)file path=platform/sun4u/kernel/misc/$(ARCH64)/bootdev group=sys \
     mode=0755
 $(sparc_ONLY)file path=platform/sun4u/kernel/misc/$(ARCH64)/forthdebug \
     group=sys mode=0755
-$(sparc_ONLY)file path=platform/sun4u/kernel/misc/$(ARCH64)/i2c_svc group=sys \
-    mode=0755
 $(sparc_ONLY)file path=platform/sun4u/kernel/misc/$(ARCH64)/kmdbmod group=sys \
     mode=0755
 $(sparc_ONLY)file path=platform/sun4u/kernel/misc/$(ARCH64)/obpsym group=sys \

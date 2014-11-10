@@ -479,6 +479,7 @@ i386_SUBDIRS=		\
 	diskscan	\
 	lms		\
 	rtc		\
+	spd		\
 	ucodeadm	\
 	xvm
 

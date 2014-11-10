@@ -654,6 +654,7 @@ file path=kernel/misc/$(ARCH64)/fssnap_if group=sys mode=0755
 file path=kernel/misc/$(ARCH64)/gld group=sys mode=0755
 file path=kernel/misc/$(ARCH64)/hook group=sys mode=0755
 file path=kernel/misc/$(ARCH64)/hpcsvc group=sys mode=0755
+file path=kernel/misc/$(ARCH64)/i2c_svc group=sys mode=0755
 file path=kernel/misc/$(ARCH64)/idmap group=sys mode=0755
 $(i386_ONLY)file path=kernel/misc/$(ARCH64)/iommulib group=sys mode=0755
 file path=kernel/misc/$(ARCH64)/ipc group=sys mode=0755
@@ -691,6 +692,7 @@ $(i386_ONLY)file path=kernel/misc/fssnap_if group=sys mode=0755
 $(i386_ONLY)file path=kernel/misc/gld group=sys mode=0755
 $(i386_ONLY)file path=kernel/misc/hook group=sys mode=0755
 $(i386_ONLY)file path=kernel/misc/hpcsvc group=sys mode=0755
+$(i386_ONLY)file path=kernel/misc/i2c_svc group=sys mode=0755
 $(i386_ONLY)file path=kernel/misc/idmap group=sys mode=0755
 $(i386_ONLY)file path=kernel/misc/iommulib group=sys mode=0755
 $(i386_ONLY)file path=kernel/misc/ipc group=sys mode=0755

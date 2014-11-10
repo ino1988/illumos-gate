@@ -252,6 +252,7 @@ pci_check_bios(void)
 	struct bop_regs regs;
 	uint32_t	carryflag;
 	uint16_t	ax, dx;
+	u_longlong_t	cnt;
 
 	bzero(&regs, sizeof (regs));
 	regs.eax.word.ax = (PCI_FUNCTION_ID << 8) | PCI_BIOS_PRESENT;
@@ -274,7 +275,10 @@ pci_check_bios(void)
 
 	pci_bios_mech = (ax & 0x3);
 	pci_bios_vers = regs.ebx.word.bx;
-	pci_bios_maxbus = (regs.ecx.word.cx & 0xff);
+	if (bootprop_getval("pci-buses", &cnt) == 0 && cnt <= 0xff)
+		pci_bios_maxbus = cnt;
+	else
+		pci_bios_maxbus = (regs.ecx.word.cx & 0xff);
 
 	switch (pci_bios_mech) {
 	default:	/* ?!? */
