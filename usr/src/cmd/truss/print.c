@@ -21,10 +21,11 @@
 
 /*
  * Copyright (c) 1989, 2010, Oracle and/or its affiliates. All rights reserved.
+ * Copyright 2020 Joyent, Inc.
  */
 
 /*	Copyright (c) 1984, 1986, 1987, 1988, 1989 AT&T	*/
-/*	  All Rights Reserved  	*/
+/*	  All Rights Reserved	*/
 
 /* Copyright (c) 2013, OmniTI Computer Consulting, Inc. All rights reserved. */
 
@@ -66,6 +67,7 @@
 #include <sys/rtpriocntl.h>
 #include <sys/fsspriocntl.h>
 #include <sys/fxpriocntl.h>
+#include <sys/proc.h>
 #include <netdb.h>
 #include <nss_dbdefs.h>
 #include <sys/socketvar.h>
@@ -82,6 +84,7 @@
 #include <sys/rctl_impl.h>
 #include <sys/fork.h>
 #include <sys/task.h>
+#include <sys/random.h>
 #include "ramdata.h"
 #include "print.h"
 #include "proto.h"
@@ -843,6 +846,7 @@ prt_mad(private_t *pri, int raw, long val)	/* print madvise() argument */
 		case MADV_ACCESS_DEFAULT: s = "MADV_ACCESS_DEFAULT";	break;
 		case MADV_ACCESS_LWP:	s = "MADV_ACCESS_LWP";	break;
 		case MADV_ACCESS_MANY:	s = "MADV_ACCESS_MANY";	break;
+		case MADV_PURGE:	s = "MADV_PURGE";	break;
 		}
 	}
 
@@ -1486,7 +1490,7 @@ print_pck(private_t *pri, int raw, long val)
 		return;
 	}
 
-	if (pri->sys_args[3] == NULL) {
+	if (pri->sys_args[3] == 0) {
 		if (val == PC_KY_CLNAME) {
 			s = "PC_KY_CLNAME";
 			outstring(pri, s);
@@ -1502,20 +1506,20 @@ print_pck(private_t *pri, int raw, long val)
 
 	if (strcmp(clname, "TS") == 0) {
 		switch (val) {
-		case TS_KY_UPRILIM: 	s = "TS_KY_UPRILIM";	break;
+		case TS_KY_UPRILIM:	s = "TS_KY_UPRILIM";	break;
 		case TS_KY_UPRI:	s = "TS_KY_UPRI";	break;
 		default:					break;
 		}
 	} else if (strcmp(clname, "IA") == 0) {
 		switch (val) {
-		case IA_KY_UPRILIM: 	s = "IA_KY_UPRILIM";	break;
+		case IA_KY_UPRILIM:	s = "IA_KY_UPRILIM";	break;
 		case IA_KY_UPRI:	s = "IA_KY_UPRI";	break;
 		case IA_KY_MODE:	s = "IA_KY_MODE";	break;
 		default:					break;
 		}
 	} else if (strcmp(clname, "RT") == 0) {
 		switch (val) {
-		case RT_KY_PRI: 	s = "RT_KY_PRI";	break;
+		case RT_KY_PRI:		s = "RT_KY_PRI";	break;
 		case RT_KY_TQSECS:	s = "RT_KY_TQSECS";	break;
 		case RT_KY_TQNSECS:	s = "RT_KY_TQNSECS";	break;
 		case RT_KY_TQSIG:	s = "RT_KY_TQSIG";	break;
@@ -1523,13 +1527,13 @@ print_pck(private_t *pri, int raw, long val)
 		}
 	} else if (strcmp(clname, "FSS") == 0) {
 		switch (val) {
-		case FSS_KY_UPRILIM: 	s = "FSS_KY_UPRILIM";	break;
+		case FSS_KY_UPRILIM:	s = "FSS_KY_UPRILIM";	break;
 		case FSS_KY_UPRI:	s = "FSS_KY_UPRI";	break;
 		default:					break;
 		}
 	} else if (strcmp(clname, "FX") == 0) {
 		switch (val) {
-		case FX_KY_UPRILIM: 	s = "FX_KY_UPRILIM";	break;
+		case FX_KY_UPRILIM:	s = "FX_KY_UPRILIM";	break;
 		case FX_KY_UPRI:	s = "FX_KY_UPRI";	break;
 		case FX_KY_TQSECS:	s = "FX_KY_TQSECS";	break;
 		case FX_KY_TQNSECS:	s = "FX_KY_TQNSECS";	break;
@@ -1595,6 +1599,103 @@ prt_pc5(private_t *pri, int raw, long val)
 	}
 
 	prt_dec(pri, 0, PC_KY_NULL);
+}
+
+
+void
+prt_psflags(private_t *pri, secflagset_t val)
+{
+	size_t len;
+	char *ptr;
+	char str[1024];
+
+	if (val == 0) {
+		outstring(pri, "0x0");
+		return;
+	}
+
+	*str = '\0';
+	if (secflag_isset(val, PROC_SEC_ASLR)) {
+		(void) strlcat(str, "|PROC_SEC_ASLR", sizeof (str));
+		secflag_clear(&val, PROC_SEC_ASLR);
+	}
+	if (secflag_isset(val, PROC_SEC_FORBIDNULLMAP)) {
+		(void) strlcat(str, "|PROC_SEC_FORBIDNULLMAP",
+		    sizeof (str));
+		secflag_clear(&val, PROC_SEC_FORBIDNULLMAP);
+	}
+	if (secflag_isset(val, PROC_SEC_NOEXECSTACK)) {
+		(void) strlcat(str, "|PROC_SEC_NOEXECSTACK",
+		    sizeof (str));
+		secflag_clear(&val, PROC_SEC_NOEXECSTACK);
+	}
+
+	if (val != 0) {
+		len = strlen(str);
+		ptr = str + len;
+		(void) snprintf(ptr, sizeof (str) - len, "|%#x", val);
+	}
+
+	outstring(pri, str + 1);
+}
+
+/*
+ * Print a psecflags(2) delta
+ */
+void
+prt_psdelta(private_t *pri, int raw, long value)
+{
+	secflagdelta_t psd;
+
+	if ((raw != 0) ||
+	    (Pread(Proc, &psd, sizeof (psd), value) != sizeof (psd))) {
+		prt_hex(pri, 0, value);
+		return;
+	}
+	outstring(pri, "{ ");
+	prt_psflags(pri, psd.psd_add);
+	outstring(pri, ", ");
+	prt_psflags(pri, psd.psd_rem);
+	outstring(pri, ", ");
+	prt_psflags(pri, psd.psd_assign);
+	outstring(pri, ", ");
+	outstring(pri, psd.psd_ass_active ? "B_TRUE" : "B_FALSE");
+	outstring(pri, " }");
+}
+
+/*
+ * Print a psecflagswhich_t
+ */
+void
+prt_psfw(private_t *pri, int raw, long value)
+{
+	psecflagwhich_t which = (psecflagwhich_t)value;
+	char *s;
+
+	if (raw != 0) {
+		prt_dec(pri, 0, value);
+		return;
+	}
+
+	switch (which) {
+	case PSF_EFFECTIVE:
+		s = "PSF_EFFECTIVE";
+		break;
+	case PSF_INHERIT:
+		s = "PSF_INHERIT";
+		break;
+	case PSF_LOWER:
+		s = "PSF_LOWER";
+		break;
+	case PSF_UPPER:
+		s = "PSF_UPPER";
+		break;
+	}
+
+	if (s == NULL)
+		prt_dec(pri, 0, value);
+	else
+		outstring(pri, s);
 }
 
 /*
@@ -1940,6 +2041,10 @@ tcp_optname(private_t *pri, long val)
 	case TCP_RTO_MIN:		return ("TCP_RTO_MIN");
 	case TCP_RTO_MAX:		return ("TCP_RTO_MAX");
 	case TCP_LINGER2:		return ("TCP_LINGER2");
+	case TCP_KEEPIDLE:		return ("TCP_KEEPIDLE");
+	case TCP_KEEPCNT:		return ("TCP_KEEPCNT");
+	case TCP_KEEPINTVL:		return ("TCP_KEEPINTVL");
+	case TCP_CONGESTION:		return ("TCP_CONGESTION");
 
 	default:			(void) snprintf(pri->code_buf,
 					    sizeof (pri->code_buf),
@@ -2741,6 +2846,27 @@ prt_snf(private_t *pri, int raw, long val)
 		prt_hex(pri, 0, val);
 }
 
+void
+prt_grf(private_t *pri, int raw, long val)
+{
+	int first = 1;
+
+	if (raw != 0 || val == 0 ||
+	    (val & ~(GRND_NONBLOCK | GRND_RANDOM)) != 0) {
+		outstring(pri, "0");
+		return;
+	}
+
+	if (val & GRND_NONBLOCK) {
+		outstring(pri, "|GRND_NONBLOCK" + first);
+		first = 0;
+	}
+	if (val & GRND_RANDOM) {
+		outstring(pri, "|GRND_RANDOM" + first);
+		first = 0;
+	}
+}
+
 /*
  * Array of pointers to print functions, one for each format.
  */
@@ -2846,5 +2972,8 @@ void (* const Print[])() = {
 	prt_skc,	/* SKC -- print sockconfig() subcode */
 	prt_acf,	/* ACF -- print accept4 flags */
 	prt_pfd,	/* PFD -- print pipe fds */
+	prt_grf,	/* GRF -- print getrandom flags */
+	prt_psdelta,	/* PSDLT -- print psecflags(2) delta */
+	prt_psfw,	/* PSFW -- print psecflags(2) set */
 	prt_dec,	/* HID -- hidden argument, make this the last one */
 };

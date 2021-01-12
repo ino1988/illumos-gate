@@ -22,9 +22,11 @@
 # Copyright 2010 Sun Microsystems, Inc.  All rights reserved.
 # Use is subject to license terms.
 #
+# Copyright 2019 Joyent, Inc.
+#
 
 PROG= profile .login ksh.kshrc system
-PROGSKEL= local.login local.profile local.cshrc .profile
+PROGSKEL= .profile .kshrc
 PROGROOT= .profile .bashrc
 
 include ../Makefile.cmd
@@ -32,13 +34,15 @@ include ../Makefile.cmd
 ROOTROOT= $(ROOT)/root
 ROOTETCSKEL= $(ROOTETC)/skel
 ROOTETCSKELPROG= $(PROGSKEL:%=$(ROOTETCSKEL)/%)
+ROOTETCVERSIONS= $(ROOTETC)/versions
+ROOTETCVERSIONSPROG= $(ROOTETCVERSIONS)/build
 ROOTROOTPROG= $(PROGROOT:%=$(ROOTROOT)/%)
 FILEMODE= 0644
 
-CLOBBERFILES = profile .bashrc .profile .login
+CLOBBERFILES = profile .bashrc .profile .login .kshrc
 
 .login: login.csh
-	$(RM) .login; 
+	$(RM) .login
 	$(CP) login.csh .login
 
 profile: etc-profile.sh
@@ -48,6 +52,10 @@ profile: etc-profile.sh
 .profile: dot-profile.sh
 	$(RM) .profile
 	$(CP) dot-profile.sh $@
+
+.kshrc: dot-kshrc.sh
+	$(RM) .kshrc
+	$(CP) dot-kshrc.sh $@
 
 .bashrc: bashrc.sh
 	$(RM) .bashrc
@@ -62,14 +70,23 @@ $(ROOTETCSKEL)/%: %
 	$(INS.file)
 
 $(ROOTROOT) \
+$(ROOTETCVERSIONS) \
 $(ROOTETCSKEL):
 	$(INS.dir)
 
-install: all $(ROOTETCSKEL) $(ROOTETCPROG) $(ROOTETCSKELPROG) $(ROOTROOTPROG)
+$(ROOTETCVERSIONSPROG): $(ROOTETCVERSIONS) FRC
+	if [[ -n "$$BUILDVERSION_EXEC" ]]; then \
+		$$BUILDVERSION_EXEC >$(ROOTETCVERSIONSPROG) ; \
+	else \
+		touch $(ROOTETCVERSIONSPROG) ; \
+	fi
+
+install: all $(ROOTETCSKEL) $(ROOTETCPROG) \
+    $(ROOTETCSKELPROG) $(ROOTROOTPROG) $(ROOTETCVERSIONSPROG)
 
 clean:
 
 clobber:
 	$(RM) $(CLOBBERFILES)
 
-lint:
+FRC:

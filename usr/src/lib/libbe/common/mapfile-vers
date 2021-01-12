@@ -20,6 +20,7 @@
 #
 #
 # Copyright (c) 2010, Oracle and/or its affiliates. All rights reserved.
+# Copyright 2016 Toomas Soome <tsoome@me.com>
 #
 
 #
@@ -47,11 +48,14 @@ SYMBOL_VERSION SUNWprivate_1.1 {
 	be_destroy_snapshot;
 	be_err_to_str;
 	be_free_list;
+	be_get_boot_args;
 	be_init;
+	be_installboot;
 	be_list;
 	be_mount;
 	be_rename;
 	be_rollback;
+	be_sort;
 	be_unmount;
 	be_valid_be_name;
 	libbe_print_errors;

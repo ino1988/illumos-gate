@@ -22,6 +22,8 @@
 #
 # Copyright (c) 1997, 2010, Oracle and/or its affiliates. All rights reserved.
 # Copyright 2012 DEY Storage Systems, Inc.  All rights reserved.
+# Copyright 2018 Joyent, Inc.
+# Copyright 2020 OmniOS Community Edition (OmniOSce) Association.
 #
 
 @ _START_
@@ -36,7 +38,7 @@
 			 [-N name] [-O osabi] [-T type] [-p | -w outfile] \
 			 file...\n"
 @ MSG_USAGE_DETAIL1	"\t[-c]\t\tdump section header information\n"
-@ MSG_USAGE_DETAIL2	"\t[-C]\t\tdemangle C++ symbol names\n"
+@ MSG_USAGE_DETAIL2	"\t[-C]\t\tdemangle symbol names\n"
 @ MSG_USAGE_DETAIL3	"\t[-d]\t\tdump the contents of the .dynamic section\n"
 @ MSG_USAGE_DETAIL4	"\t[-e]\t\tdump the elf header\n"
 @ MSG_USAGE_DETAIL5	"\t[-g]\t\tdump the contents of the .group sections\n"
@@ -132,6 +134,7 @@
 			 version definitions available: 0-%d\n"
 @ MSG_ERR_NOTSTRTAB	"%s: section[%d] is not a string table as expected \
 			 by section[%d]\n";
+@ MSG_ERR_BADCHAINIDX	"%s: %s: invalid chain index %d for bucket %d (max %d)\n"
 
 @ MSG_ERR_LDYNNOTADJ	"%s: bad dynamic symbol table layout: %s and %s \
 			 sections are not adjacent\n"
@@ -161,6 +164,7 @@
 			 range (0 - %d): %d\n";
 @ MSG_ERR_BADSIDYNTAG	"%s: [%d: %s][%d]: dynamic element \
 			 [%d: %s][%d] should have type %s: %s\n";
+@ MSG_ERR_BADCIEFDELEN	"%s: %s: invalid CIE/FDE length: %#llx at %#llx\n"
 
 
 @ MSG_WARN_INVINTERP1	"%s: PT_INTERP header has no associated section\n"
@@ -180,6 +184,10 @@
 
 @ MSG_INFO_LINUXOSABI	"%s: %s object has Linux .note.ABI-tag section. \
 			Assuming %s\n"
+
+@ MSG_ERR_DWOVRFLW	"%s: %s: encoded DWARF data exceeds section size\n"
+@ MSG_ERR_DWBADENC	"%s: %s: bad DWARF encoding: %#x\n"
+@ MSG_ERR_DWNOCIE	"%s: %s: no CIE prior to FDE\n"
 
 # exception_range_entry table entries.
 # TRANSLATION_NOTE - the following entries provide for a series of one or more
@@ -303,6 +311,10 @@
 			 architecture: %s\n"
 @ MSG_NOTE_BADCOREDATA	"%s: elfdump core file note data truncated or \
 			 otherwise malformed\n"
+@ MSG_NOTE_BADCORETYPE	"%s: unknown note type %#x\n"
+
+@ MSG_NOTE_BAD_SECFLAGS_VER	"unknown prsecflags_t version: "
+@ MSG_NOTE_BAD_UPANIC_VER	"unknown prupanic_t version: "
 
 @ _END_
 
@@ -396,7 +408,7 @@
 @ MSG_UNW_CIECALGN	" codealign: %#llx  dataalign: %lld  \
 			  retaddr: %d"
 @ MSG_UNW_CIEAXVAL	" Augmentation Data:"
-@ MSG_UNW_CIEAXSIZ	"   size: %d"
+@ MSG_UNW_CIEAXSIZ	"   size: %lld"
 @ MSG_UNW_CIEAXPERS	"   personality:"
 @ MSG_UNW_CIEAXPERSENC	"       encoding: 0x%02x %s"
 @ MSG_UNW_CIEAXPERSRTN	"       routine:  %#08llx"
@@ -458,8 +470,10 @@
 @ MSG_CNOTE_DESC_PSINFO_T		"desc: (psinfo_t)"
 @ MSG_CNOTE_DESC_PSTATUS_T		"desc: (pstatus_t)"
 @ MSG_CNOTE_DESC_STRUCT_UTSNAME		"desc: (struct utsname)"
-@ MSG_CNOTE_DESC_PRFDINFO_T		"desc: (prfdinfo_t)"
-
+@ MSG_CNOTE_DESC_PRFDINFO_T		"desc: (prfdinfo_core_t)"
+@ MSG_CNOTE_DESC_PRSECFLAGS_T		"desc: (prsecflags_t)"
+@ MSG_CNOTE_DESC_PRLWPNAME_T		"desc: (prlwpname_t)"
+@ MSG_CNOTE_DESC_PRUPANIC_T		"desc: (prupanic_t)"
 
 @ MSG_CNOTE_FMT_LINE		"%*s%-*s%s"
 @ MSG_CNOTE_FMT_LINE_2UP	"%*s%-*s%-*s%-*s%s"
@@ -526,6 +540,7 @@
 @ MSG_CNOTE_T_PR_LWP			"pr_lwp:"
 @ MSG_CNOTE_T_PR_LWPHOLD		"pr_lwphold:"
 @ MSG_CNOTE_T_PR_LWPID			"pr_lwpid:"
+@ MSG_CNOTE_T_PR_LWPNAME		"pr_lwpname:"
 @ MSG_CNOTE_T_PR_LWPPEND		"pr_lwppend:"
 @ MSG_CNOTE_T_PR_NAME			"pr_name:"
 @ MSG_CNOTE_T_PR_NGROUPS		"pr_ngroups:"
@@ -589,6 +604,11 @@
 @ MSG_CNOTE_T_PR_WSTAT			"pr_wstat:"
 @ MSG_CNOTE_T_PR_ZOMB			"pr_zomb:"
 @ MSG_CNOTE_T_PR_ZONEID			"pr_zoneid:"
+@ MSG_CNOTE_T_PR_EFFECTIVE		"pr_effective:"
+@ MSG_CNOTE_T_PR_INHERIT		"pr_inherit:"
+@ MSG_CNOTE_T_PR_LOWER			"pr_lower:"
+@ MSG_CNOTE_T_PR_UPPER			"pr_upper:"
+@ MSG_CNOTE_T_PR_VERSION		"pr_version:"
 @ MSG_CNOTE_T_SA_FLAGS			"sa_flags:"
 @ MSG_CNOTE_T_SA_HANDLER		"sa_handler:"
 @ MSG_CNOTE_T_SA_MASK			"sa_mask:"
@@ -628,6 +648,9 @@
 @ MSG_CNOTE_T_PR_INO			"pr_ino:"
 @ MSG_CNOTE_T_PR_FILEFLAGS		"pr_fileflags:"
 @ MSG_CNOTE_T_PR_FDFLAGS		"pr_fdflags:"
+@ MSG_CNOTE_T_PRU_VERSION		"pru_version:"
+@ MSG_CNOTE_T_PRU_FLAGS			"pru_flags:"
+@ MSG_CNOTE_T_PRU_DATA			"pru_data:"
 
 
 # Names of fake sections generated from program header data

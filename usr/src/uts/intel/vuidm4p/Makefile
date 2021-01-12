@@ -24,6 +24,7 @@
 # Copyright 2008 Sun Microsystems, Inc.  All rights reserved.
 # Use is subject to license terms.
 #
+# Copyright (c) 2018, Joyent, Inc.
 
 #
 #	This makefile drives the production of the vuidm4p streams kernel
@@ -42,7 +43,6 @@ UTSBASE	= ../..
 #
 MODULE		= vuidm4p
 OBJECTS		= $(VUIDM4P_OBJS:%=$(OBJS_DIR)/%)
-LINTS		= $(VUIDM4P_OBJS:%.o=$(LINTS_DIR)/%.ln)
 ROOTMODULE	= $(ROOT_STRMOD_DIR)/$(MODULE)
 
 #
@@ -54,7 +54,6 @@ include $(UTSBASE)/intel/Makefile.intel
 #	Define targets
 #
 ALL_TARGET	= $(BINARY)
-LINT_TARGET	= $(MODULE).lint
 INSTALL_TARGET	= $(BINARY) $(ROOTMODULE)
 
 #
@@ -62,7 +61,10 @@ INSTALL_TARGET	= $(BINARY) $(ROOTMODULE)
 #
 ALL_DEFS	+= -DVUIDM4P
 
-CERRWARN	+= -_gcc=-Wno-uninitialized
+CERRWARN	+= $(CNOWARN_UNINIT)
+
+# needs work
+SMOFF += deref_check
 
 #
 #	Default build targets.
@@ -76,12 +78,6 @@ all:		$(ALL_DEPS)
 clean:		$(CLEAN_DEPS)
 
 clobber:	$(CLOBBER_DEPS)
-
-lint:		$(LINT_DEPS)
-
-modlintlib:	$(MODLINTLIB_DEPS)
-
-clean.lint:	$(CLEAN_LINT_DEPS)
 
 install:	$(INSTALL_DEPS)
 

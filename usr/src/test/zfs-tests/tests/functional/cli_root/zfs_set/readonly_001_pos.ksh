@@ -25,6 +25,10 @@
 # Use is subject to license terms.
 #
 
+#
+# Copyright (c) 2014, 2016 by Delphix. All rights reserved.
+#
+
 . $STF_SUITE/tests/functional/cli_root/zfs_set/zfs_set_common.kshlib
 
 #
@@ -44,7 +48,7 @@ function cleanup
 {
 	for dataset in $TESTPOOL/$TESTFS $TESTPOOL/$TESTVOL ; do
 		snapexists ${dataset}@$TESTSNAP && \
-			log_must $ZFS destroy -R ${dataset}@$TESTSNAP
+			log_must zfs destroy -R ${dataset}@$TESTSNAP
 	done
 }
 
@@ -56,8 +60,8 @@ function initial_dataset # $1 dataset
 
 	if [[ $fstype == "filesystem" ]] ; then
 		typeset mtpt=$(get_prop mountpoint $dataset)
-		log_must $TOUCH $mtpt/$TESTFILE0
-		log_must $MKDIR -p $mtpt/$TESTDIR0
+		log_must touch $mtpt/$TESTFILE0
+		log_must mkdir -p $mtpt/$TESTDIR0
 	fi
 }
 
@@ -70,8 +74,8 @@ function cleanup_dataset # $1 dataset
 
 	if [[ $fstype == "filesystem" ]] ; then
 		typeset mtpt=$(get_prop mountpoint $dataset)
-		log_must $RM -f $mtpt/$TESTFILE0
-		log_must $RM -rf $mtpt/$TESTDIR0
+		log_must rm -f $mtpt/$TESTFILE0
+		log_must rm -rf $mtpt/$TESTDIR0
 	fi
 }
 
@@ -81,7 +85,7 @@ function verify_readonly # $1 dataset, $2 on|off
 	typeset value=$2
 
 	if datasetnonexists $dataset ; then
-		log_note "$dataset not exist!"
+		log_note "$dataset does not exist!"
 		return 1
 	fi
 
@@ -96,20 +100,21 @@ function verify_readonly # $1 dataset, $2 on|off
 	case $fstype in
 		filesystem)
 			typeset mtpt=$(get_prop mountpoint $dataset)
-			$expect $TOUCH $mtpt/$TESTFILE1
-			$expect $MKDIR -p $mtpt/$TESTDIR1
-			$expect $ECHO 'y' | $RM $mtpt/$TESTFILE0
-			$expect $RMDIR $mtpt/$TESTDIR0
+			$expect touch $mtpt/$TESTFILE1
+			$expect mkdir -p $mtpt/$TESTDIR1
+			$expect eval "echo 'y' | rm $mtpt/$TESTFILE0"
+			$expect rmdir $mtpt/$TESTDIR0
 
 			if [[ $expect == "log_must" ]] ; then
-				log_must $ECHO 'y' | $RM $mtpt/$TESTFILE1
-				log_must $RMDIR $mtpt/$TESTDIR1
-				log_must $TOUCH $mtpt/$TESTFILE0
-				log_must $MKDIR -p $mtpt/$TESTDIR0
+				log_must eval "echo 'y' | rm $mtpt/$TESTFILE1"
+				log_must rmdir $mtpt/$TESTDIR1
+				log_must touch $mtpt/$TESTFILE0
+				log_must mkdir -p $mtpt/$TESTDIR0
 			fi
 			;;
 		volume)
-			$expect eval "$ECHO 'y' | $NEWFS /dev/zvol/dsk/$dataset > /dev/null 2>&1"
+			$expect eval "echo 'y' | newfs \
+			    /dev/zvol/dsk/$dataset > /dev/null 2>&1"
 			;;
 		*)
 			;;
@@ -124,15 +129,16 @@ log_assert "Setting a valid readonly property on a dataset succeeds."
 
 typeset all_datasets
 
-log_must $ZFS mount -a
+log_must zfs mount -a
 
-log_must $ZFS snapshot $TESTPOOL/$TESTFS@$TESTSNAP
-log_must $ZFS clone $TESTPOOL/$TESTFS@$TESTSNAP $TESTPOOL/$TESTCLONE
+log_must zfs snapshot $TESTPOOL/$TESTFS@$TESTSNAP
+log_must zfs clone $TESTPOOL/$TESTFS@$TESTSNAP $TESTPOOL/$TESTCLONE
 
 if is_global_zone ; then
-	log_must $ZFS snapshot $TESTPOOL/$TESTVOL@$TESTSNAP
-	log_must $ZFS clone $TESTPOOL/$TESTVOL@$TESTSNAP $TESTPOOL/$TESTCLONE1
-	all_datasets="$TESTPOOL $TESTPOOL/$TESTFS $TESTPOOL/$TESTVOL $TESTPOOL/$TESTCLONE $TESTPOOL/$TESTCLONE1"
+	log_must zfs snapshot $TESTPOOL/$TESTVOL@$TESTSNAP
+	log_must zfs clone $TESTPOOL/$TESTVOL@$TESTSNAP $TESTPOOL/$TESTCLONE1
+	all_datasets="$TESTPOOL $TESTPOOL/$TESTFS $TESTPOOL/$TESTVOL "
+	all_datasets+="$TESTPOOL/$TESTCLONE $TESTPOOL/$TESTCLONE1"
 else
 	all_datasets="$TESTPOOL $TESTPOOL/$TESTFS $TESTPOOL/$TESTCLONE"
 fi

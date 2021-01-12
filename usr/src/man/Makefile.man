@@ -11,7 +11,7 @@
 
 #
 # Copyright 2011, Richard Lowe
-# Copyright 2014 Nexenta Systems, Inc.  All rights reserved.
+# Copyright 2017 Nexenta Systems, Inc.
 #
 
 MANDOC=		$(ONBLD_TOOLS)/bin/${MACH}/mandoc
@@ -25,10 +25,16 @@ FILEMODE=	0444
 # MANSECT=
 
 MANCHECKS=	$(MANFILES:%=%.check)
-ROOTMANFILES= 	$(MANFILES:%=$(ROOTMAN)/man$(MANSECT)/%)
+ROOTMANFILES=	$(MANFILES:%=$(ROOTMAN)/man$(MANSECT)/%)
 ROOTMANLINKS=	$(MANLINKS:%=$(ROOTMAN)/man$(MANSECT)/%)
 
-$(ROOTMAN)/man$(MANSECT)/% $(ROOTHASMAN)/man$(MANSECT)/%: %
+$(ROOTMAN)/man$(MANSECT) $(ROOTHASMAN)/man$(MANSECT):
+		$(INS.dir)
+
+$(ROOTHASMAN)/man$(MANSECT)/%: % $(ROOTHASMAN)/man$(MANSECT)
+		$(INS.file)
+
+$(ROOTMAN)/man$(MANSECT)/% : % $(ROOTMAN)/man$(MANSECT)
 		$(INS.file)
 
 #
@@ -38,14 +44,17 @@ $(ROOTMAN)/man$(MANSECT)/% $(ROOTHASMAN)/man$(MANSECT)/%: %
 # manually when editing (git pbchk will do so for you.)
 #
 $(MANCHECKS):
-		@$(EGREP) -q "^.TH" $(@:%.check=%) || \
-		( $(ECHO) "checking $(@:%.check=%)"; \
-		$(MANDOC) -Tlint $(@:%.check=%) )
+		@$(ECHO) "checking $(@:%.check=%)"; \
+		if $(EGREP) -q "^.TH" $(@:%.check=%); then \
+		$(MANDOC) -Tlint -Werror $(@:%.check=%); \
+		else; \
+		$(MANDOC) -Tlint -Wwarning $(@:%.check=%); \
+		fi
 
 $(MANLINKS):
 		$(RM) $@; $(SYMLINK) $(LINKSRC) $@
 
-$(ROOTMANLINKS): $(MANLINKS)
+$(ROOTMANLINKS): $(MANLINKS) $(ROOTMAN)/man$(MANSECT)
 		$(RM) $@; $(CP) -RP $(@F) $(@D)
 
 all:

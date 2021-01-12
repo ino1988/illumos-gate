@@ -18,27 +18,34 @@
  *
  * CDDL HEADER END
  */
-/*	Copyright (c) 1984, 1986, 1987, 1988, 1989 AT&T	*/
-/*	  All Rights Reserved  	*/
 
+/*	Copyright (c) 1984, 1986, 1987, 1988, 1989 AT&T	*/
+/*	  All Rights Reserved	*/
 
 /*
  * Copyright 2010 Sun Microsystems, Inc.  All rights reserved.
  * Use is subject to license terms.
+ * Copyright 2016 Nexenta Systems, Inc.
  */
 
 #ifndef _SYS_SYSTM_H
 #define	_SYS_SYSTM_H
 
+#if defined(_STANDALONE)
+#include <sys/cdefs.h>
+#include <string.h>
+#else
 #include <sys/types.h>
 #include <sys/t_lock.h>
 #include <sys/proc.h>
 #include <sys/dditypes.h>
+#endif
 
 #ifdef	__cplusplus
 extern "C" {
 #endif
 
+#if !defined(_STANDALONE)
 /*
  * The pc_t is the type of the kernel's program counter.  In general, a
  * pc_t is a uintptr_t -- except for a sparcv9 kernel, in which case all
@@ -54,7 +61,8 @@ typedef uintptr_t pc_t;
  * Random set of variables used by more than one routine.
  */
 
-#ifdef _KERNEL
+#if defined(_KERNEL) || defined(_FAKE_KERNEL)
+#include <sys/types32.h>
 #include <sys/varargs.h>
 #include <sys/uadmin.h>
 
@@ -86,7 +94,6 @@ extern pgcnt_t	freemem;	/* Current free memory.			*/
 
 extern dev_t	rootdev;	/* device of the root */
 extern struct vnode *rootvp;	/* vnode of root device */
-extern boolean_t root_is_svm;		/* root is a mirrored device flag */
 extern boolean_t root_is_ramdisk;	/* root is boot_archive ramdisk */
 extern uint32_t  ramdisk_size;		/* (KB) set only for sparc netboots */
 extern char *volatile panicstr;	/* panic string pointer */
@@ -193,7 +200,10 @@ int strident_valid(const char *);
 void strident_canon(char *, size_t);
 int getsubopt(char **optionsp, char * const *tokens, char **valuep);
 char *append_subopt(const char *, size_t, char *, const char *);
+#ifndef	_FAKE_KERNEL
+/* conflicts with libc definition */
 int ffs(uintmax_t);
+#endif
 int copyin(const void *, void *, size_t);
 void copyin_noerr(const void *, void *, size_t);
 int xcopyin(const void *, void *, size_t);
@@ -246,7 +256,8 @@ int suword64(void *, uint64_t);
 void suword64_noerr(void *, uint64_t);
 #endif
 
-#if !defined(_BOOT)
+#if !defined(_BOOT) && !defined(_FAKE_KERNEL)
+/* conflicts with libc definition */
 int setjmp(label_t *) __RETURNS_TWICE;
 extern void longjmp(label_t *)
 	__NORETURN;
@@ -316,11 +327,11 @@ extern void param_check(void);
 /*
  * Structure of the system-entry table.
  *
- * 	Changes to struct sysent should maintain binary compatibility with
+ *	Changes to struct sysent should maintain binary compatibility with
  *	loadable system calls, although the interface is currently private.
  *
  *	This means it should only be expanded on the end, and flag values
- * 	should not be reused.
+ *	should not be reused.
  *
  *	It is desirable to keep the size of this struct a power of 2 for quick
  *	indexing.
@@ -344,14 +355,14 @@ extern struct sysent	sysent32[];
 
 extern struct sysent	nosys_ent;	/* entry for invalid system call */
 
-#define	NSYSCALL 	256		/* number of system calls */
+#define	NSYSCALL	256		/* number of system calls */
 
 #define	LOADABLE_SYSCALL(s)	(s->sy_flags & SE_LOADABLE)
 #define	LOADED_SYSCALL(s)	(s->sy_flags & SE_LOADED)
 
 /*
  * sy_flags values
- * 	Values 1, 2, and 4 were used previously for SETJUMP, ASYNC, and IOSYS.
+ *	Values 1, 2, and 4 were used previously for SETJUMP, ASYNC, and IOSYS.
  */
 #define	SE_32RVAL1	0x0		/* handler returns int32_t in rval1 */
 #define	SE_32RVAL2	0x1		/* handler returns int32_t in rval2 */
@@ -382,7 +393,7 @@ union rval {
 
 typedef union rval rval_t;
 
-#ifdef	_KERNEL
+#if defined(_KERNEL) || defined(_FAKE_KERNEL)
 
 extern void reset_syscall_args(void);
 extern int save_syscall_args(void);
@@ -397,6 +408,7 @@ extern uint_t set_errno(uint_t error);
 extern int64_t syscall_ap(void);
 extern int64_t loadable_syscall(long, long, long, long, long, long, long, long);
 extern int64_t nosys(void);
+extern int nosys32(void);
 
 extern void swtch(void);
 
@@ -421,7 +433,7 @@ extern int start_init_common(void);
 
 #endif	/* _KERNEL */
 
-#if defined(_KERNEL) || defined(_BOOT)
+#if defined(_KERNEL) || defined(_FAKE_KERNEL) || defined(_BOOT)
 
 size_t strlcat(char *, const char *, size_t);
 size_t strlen(const char *) __PURE;
@@ -429,6 +441,13 @@ char *strcat(char *, const char *);
 char *strncat(char *, const char *, size_t);
 char *strcpy(char *, const char *);
 char *strncpy(char *, const char *, size_t);
+
+extern size_t strlcpy(char *, const char *, size_t);
+extern size_t strspn(const char *, const char *);
+extern size_t strcspn(const char *, const char *);
+extern char *strdup(const char *);
+extern void strfree(char *);
+
 /* Need to be consistent with <string.h> C++ definitions */
 #if __cplusplus >= 199711L
 extern const char *strchr(const char *, int);
@@ -496,6 +515,7 @@ extern	int	__lintzero;	/* for spoofing lint */
 #define	__lintzero 0
 #endif	/* __lint */
 #endif /* _KERNEL || _BOOT */
+#endif /* !_STANDALONE */
 
 #ifdef	__cplusplus
 }

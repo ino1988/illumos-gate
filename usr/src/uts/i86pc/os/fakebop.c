@@ -22,10 +22,11 @@
 /*
  * Copyright 2010 Sun Microsystems, Inc.  All rights reserved.
  * Use is subject to license terms.
- */
-/*
+ *
  * Copyright (c) 2010, Intel Corporation.
  * All rights reserved.
+ *
+ * Copyright 2020 Joyent, Inc.
  */
 
 /*
@@ -39,6 +40,8 @@
 #include <sys/bootsvcs.h>
 #include <sys/bootinfo.h>
 #include <sys/multiboot.h>
+#include <sys/multiboot2.h>
+#include <sys/multiboot2_impl.h>
 #include <sys/bootvfs.h>
 #include <sys/bootprops.h>
 #include <sys/varargs.h>
@@ -47,6 +50,7 @@
 #include <sys/machsystm.h>
 #include <sys/archsystm.h>
 #include <sys/boot_console.h>
+#include <sys/framebuffer.h>
 #include <sys/cmn_err.h>
 #include <sys/systm.h>
 #include <sys/promif.h>
@@ -66,7 +70,10 @@
 #include <sys/kobj.h>
 #include <sys/kobj_lex.h>
 #include <sys/pci_cfgspace_impl.h>
-#include "acpi_fw.h"
+#include <sys/fastboot_impl.h>
+#include <sys/acpi/acconfig.h>
+#include <sys/acpi/acpi.h>
+#include <sys/ddipropdefs.h>	/* For DDI prop types */
 
 static int have_console = 0;	/* set once primitive console is initialized */
 static char *boot_args = "";
@@ -86,10 +93,17 @@ static uint_t kbm_debug = 0;
 		bcons_putchar(*cp);		\
 	}
 
-struct xboot_info *xbootp;	/* boot info from "glue" code in low memory */
+/* callback to boot_fb to set shadow frame buffer */
+extern void boot_fb_shadow_init(bootops_t *);
+
 bootops_t bootop;	/* simple bootops we'll pass on to kernel */
 struct bsys_mem bm;
 
+/*
+ * Boot info from "glue" code in low memory. xbootp is used by:
+ *	do_bop_phys_alloc(), do_bsys_alloc() and read_bootenvrc().
+ */
+static struct xboot_info *xbootp;
 static uintptr_t next_virt;	/* next available virtual address */
 static paddr_t next_phys;	/* next available physical address from dboot */
 static paddr_t high_phys = -(paddr_t)1;	/* last used physical address */
@@ -97,15 +111,17 @@ static paddr_t high_phys = -(paddr_t)1;	/* last used physical address */
 /*
  * buffer for vsnprintf for console I/O
  */
-#define	BUFFERSIZE	256
+#define	BUFFERSIZE	512
 static char buffer[BUFFERSIZE];
+
 /*
  * stuff to store/report/manipulate boot property settings.
  */
 typedef struct bootprop {
 	struct bootprop *bp_next;
 	char *bp_name;
-	uint_t bp_vlen;
+	int bp_flags;			/* DDI prop type */
+	uint_t bp_vlen;			/* 0 for boolean */
 	char *bp_value;
 } bootprop_t;
 
@@ -124,7 +140,7 @@ shared_info_t *HYPERVISOR_shared_info;
 static ulong_t total_bop_alloc_scratch = 0;
 static ulong_t total_bop_alloc_kernel = 0;
 
-static void build_firmware_properties(void);
+static void build_firmware_properties(struct xboot_info *);
 
 static int early_allocation = 1;
 
@@ -160,9 +176,19 @@ static const char fastreboot_onpanic_args[] = " -B fastreboot_onpanic=0";
  * Information Table (SLIT) and Maximum System Capability Table (MSCT)
  * are mapped into virtual memory
  */
-struct srat	*srat_ptr = NULL;
-struct slit	*slit_ptr = NULL;
-struct msct	*msct_ptr = NULL;
+ACPI_TABLE_SRAT	*srat_ptr = NULL;
+ACPI_TABLE_SLIT	*slit_ptr = NULL;
+ACPI_TABLE_MSCT	*msct_ptr = NULL;
+
+/*
+ * Arbitrary limit on number of localities we handle; if
+ * this limit is raised to more than UINT16_MAX, make sure
+ * process_slit() knows how to handle it.
+ */
+#define	SLIT_LOCALITIES_MAX	(4096)
+
+#define	SLIT_NUM_PROPNAME	"acpi-slit-localities"
+#define	SLIT_PROPNAME		"acpi-slit"
 
 /*
  * Allocate aligned physical memory at boot time. This allocator allocates
@@ -185,15 +211,6 @@ do_bop_phys_alloc(uint64_t size, uint64_t align)
 	 */
 	if (physmem != 0 && high_phys > pfn_to_pa(physmem))
 		high_phys = pfn_to_pa(physmem);
-
-	/*
-	 * find the lowest or highest available memory in physinstalled
-	 * On 32 bit avoid physmem above 4Gig if PAE isn't enabled
-	 */
-#if defined(__i386)
-	if (xbootp->bi_use_pae == 0 && high_phys > FOUR_GIG)
-		high_phys = FOUR_GIG;
-#endif
 
 	/*
 	 * find the highest available memory in physinstalled
@@ -332,12 +349,8 @@ do_bsys_free(bootops_t *bop, caddr_t virt, size_t size)
  */
 /*ARGSUSED*/
 static caddr_t
-do_bsys_ealloc(
-	bootops_t *bop,
-	caddr_t virthint,
-	size_t size,
-	int align,
-	int flags)
+do_bsys_ealloc(bootops_t *bop, caddr_t virthint, size_t size,
+    int align, int flags)
 {
 	prom_panic("unsupported call to BOP_EALLOC()\n");
 	return (0);
@@ -345,7 +358,7 @@ do_bsys_ealloc(
 
 
 static void
-bsetprop(char *name, int nlen, void *value, int vlen)
+bsetprop(int flags, char *name, int nlen, void *value, int vlen)
 {
 	uint_t size;
 	uint_t need_size;
@@ -381,6 +394,11 @@ bsetprop(char *name, int nlen, void *value, int vlen)
 	curr_space -= nlen + 1;
 
 	/*
+	 * set the property type
+	 */
+	b->bp_flags = flags & DDI_PROP_TYPE_MASK;
+
+	/*
 	 * copy in value, but no ending zero byte
 	 */
 	b->bp_value = curr_page;
@@ -403,13 +421,22 @@ bsetprop(char *name, int nlen, void *value, int vlen)
 static void
 bsetprops(char *name, char *value)
 {
-	bsetprop(name, strlen(name), value, strlen(value) + 1);
+	bsetprop(DDI_PROP_TYPE_STRING, name, strlen(name),
+	    value, strlen(value) + 1);
+}
+
+static void
+bsetprop32(char *name, uint32_t value)
+{
+	bsetprop(DDI_PROP_TYPE_INT, name, strlen(name),
+	    (void *)&value, sizeof (value));
 }
 
 static void
 bsetprop64(char *name, uint64_t value)
 {
-	bsetprop(name, strlen(name), (void *)&value, sizeof (value));
+	bsetprop(DDI_PROP_TYPE_INT64, name, strlen(name),
+	    (void *)&value, sizeof (value));
 }
 
 static void
@@ -419,6 +446,23 @@ bsetpropsi(char *name, int value)
 
 	(void) snprintf(prop_val, sizeof (prop_val), "%d", value);
 	bsetprops(name, prop_val);
+}
+
+/*
+ * to find the type of the value associated with this name
+ */
+/*ARGSUSED*/
+int
+do_bsys_getproptype(bootops_t *bop, const char *name)
+{
+	bootprop_t *b;
+
+	for (b = bprops; b != NULL; b = b->bp_next) {
+		if (strcmp(name, b->bp_name) != 0)
+			continue;
+		return (b->bp_flags);
+	}
+	return (-1);
 }
 
 /*
@@ -534,6 +578,84 @@ parse_value(char *p, uint64_t *retval)
 	return (0);
 }
 
+static boolean_t
+unprintable(char *value, int size)
+{
+	int i;
+
+	if (size <= 0 || value[0] == '\0')
+		return (B_TRUE);
+
+	for (i = 0; i < size; i++) {
+		if (value[i] == '\0')
+			return (i != (size - 1));
+
+		if (!isprint(value[i]))
+			return (B_TRUE);
+	}
+	return (B_FALSE);
+}
+
+/*
+ * Print out information about all boot properties.
+ * buffer is pointer to pre-allocated space to be used as temporary
+ * space for property values.
+ */
+static void
+boot_prop_display(char *buffer)
+{
+	char *name = "";
+	int i, len, flags, *buf32;
+	int64_t *buf64;
+
+	bop_printf(NULL, "\nBoot properties:\n");
+
+	while ((name = do_bsys_nextprop(NULL, name)) != NULL) {
+		bop_printf(NULL, "\t0x%p %s = ", (void *)name, name);
+		(void) do_bsys_getprop(NULL, name, buffer);
+		len = do_bsys_getproplen(NULL, name);
+		flags = do_bsys_getproptype(NULL, name);
+		bop_printf(NULL, "len=%d ", len);
+
+		switch (flags) {
+		case DDI_PROP_TYPE_INT:
+			len = len / sizeof (int);
+			buf32 = (int *)buffer;
+			for (i = 0; i < len; i++) {
+				bop_printf(NULL, "%08x", buf32[i]);
+				if (i < len - 1)
+					bop_printf(NULL, ".");
+			}
+			break;
+		case DDI_PROP_TYPE_STRING:
+			bop_printf(NULL, "%s", buffer);
+			break;
+		case DDI_PROP_TYPE_INT64:
+			len = len / sizeof (int64_t);
+			buf64 = (int64_t *)buffer;
+			for (i = 0; i < len; i++) {
+				bop_printf(NULL, "%016" PRIx64, buf64[i]);
+				if (i < len - 1)
+					bop_printf(NULL, ".");
+			}
+			break;
+		default:
+			if (!unprintable(buffer, len)) {
+				buffer[len] = 0;
+				bop_printf(NULL, "%s", buffer);
+				break;
+			}
+			for (i = 0; i < len; i++) {
+				bop_printf(NULL, "%02x", buffer[i] & 0xff);
+				if (i < len - 1)
+					bop_printf(NULL, ".");
+			}
+			break;
+		}
+		bop_printf(NULL, "\n");
+	}
+}
+
 /*
  * 2nd part of building the table of boot properties. This includes:
  * - values from /boot/solaris/bootenv.rc (ie. eeprom(1m) values)
@@ -548,7 +670,7 @@ parse_value(char *p, uint64_t *retval)
  * we do single character I/O since this is really just looking at memory
  */
 void
-boot_prop_finish(void)
+read_bootenvrc(void)
 {
 	int fd;
 	char *line;
@@ -563,6 +685,7 @@ boot_prop_finish(void)
 	char *consoledev;
 	uint64_t lvalue;
 	int use_xencons = 0;
+	extern int bootrd_debug;
 
 #ifdef __xpv
 	if (!DOMAIN_IS_INITDOMAIN(xen_info))
@@ -655,16 +778,31 @@ boot_prop_finish(void)
 
 		/*
 		 * If a property was explicitly set on the command line
-		 * it will override a setting in bootenv.rc
+		 * it will override a setting in bootenv.rc. We make an
+		 * exception for a property from the bootloader such as:
+		 *
+		 * console="text,ttya,ttyb,ttyc,ttyd"
+		 *
+		 * In such a case, picking the first value here (as
+		 * lookup_console_devices() does) is at best a guess; if
+		 * bootenv.rc has a value, it's probably better.
 		 */
-		if (do_bsys_getproplen(NULL, name) > 0)
-			continue;
+		if (strcmp(name, "console") == 0) {
+			char propval[BP_MAX_STRLEN] = "";
 
-		bsetprop(name, n_len, value, v_len + 1);
+			if (do_bsys_getprop(NULL, name, propval) == -1 ||
+			    strchr(propval, ',') != NULL)
+				bsetprops(name, value);
+			continue;
+		}
+
+		if (do_bsys_getproplen(NULL, name) == -1)
+			bsetprops(name, value);
 	}
 done:
 	if (fd >= 0)
-		BRD_CLOSE(bfs_ops, fd);
+		(void) BRD_CLOSE(bfs_ops, fd);
+
 
 	/*
 	 * Check if we have to limit the boot time allocator
@@ -678,6 +816,12 @@ done:
 		}
 	}
 	early_allocation = 0;
+
+	/*
+	 * Check for bootrd_debug.
+	 */
+	if (find_boot_prop("bootrd_debug"))
+		bootrd_debug = 1;
 
 	/*
 	 * check to see if we have to override the default value of the console
@@ -714,7 +858,7 @@ done:
 			v_len = 0;
 		}
 		consoledev[v_len] = 0;
-		bcons_init2(inputdev, outputdev, consoledev);
+		bcons_post_bootenvrc(inputdev, outputdev, consoledev);
 	} else {
 		/*
 		 * Ensure console property exists
@@ -724,41 +868,36 @@ done:
 		if (v_len < 0)
 			bsetprops("console", "hypervisor");
 		inputdev = outputdev = consoledev = "hypervisor";
-		bcons_init2(inputdev, outputdev, consoledev);
+		bcons_post_bootenvrc(inputdev, outputdev, consoledev);
 	}
 
-	if (strstr((char *)xbootp->bi_cmdline, "prom_debug") || kbm_debug) {
-		value = line;
-		bop_printf(NULL, "\nBoot properties:\n");
-		name = "";
-		while ((name = do_bsys_nextprop(NULL, name)) != NULL) {
-			bop_printf(NULL, "\t0x%p %s = ", (void *)name, name);
-			(void) do_bsys_getprop(NULL, name, value);
-			v_len = do_bsys_getproplen(NULL, name);
-			bop_printf(NULL, "len=%d ", v_len);
-			value[v_len] = 0;
-			bop_printf(NULL, "%s\n", value);
-		}
-	}
+	if (find_boot_prop("prom_debug") || kbm_debug)
+		boot_prop_display(line);
 }
 
 /*
  * print formatted output
  */
-/*PRINTFLIKE2*/
 /*ARGSUSED*/
 void
-bop_printf(bootops_t *bop, const char *fmt, ...)
+vbop_printf(void *ptr, const char *fmt, va_list ap)
 {
-	va_list	ap;
-
 	if (have_console == 0)
 		return;
 
-	va_start(ap, fmt);
 	(void) vsnprintf(buffer, BUFFERSIZE, fmt, ap);
-	va_end(ap);
 	PUT_STRING(buffer);
+}
+
+/*PRINTFLIKE2*/
+void
+bop_printf(void *bop, const char *fmt, ...)
+{
+	va_list	ap;
+
+	va_start(ap, fmt);
+	vbop_printf(bop, fmt, ap);
+	va_end(ap);
 }
 
 /*
@@ -799,6 +938,12 @@ do_bsys_doint(bootops_t *bop, int intnum, struct bop_regs *rp)
 	static int firsttime = 1;
 	bios_func_t bios_func = (bios_func_t)(void *)(uintptr_t)0x5000;
 	bios_regs_t br;
+
+	/*
+	 * We're about to disable paging; we shouldn't be PCID enabled.
+	 */
+	if (getcr4() & CR4_PCIDE)
+		prom_panic("do_bsys_doint() with PCID enabled\n");
 
 	/*
 	 * The first time we do this, we have to copy the pre-packaged
@@ -863,11 +1008,11 @@ xen_parse_props(char *s, char *prop_map[], int n_prop)
 
 	do {
 		scp = cp;
-		while ((*cp != NULL) && (*cp != ':'))
+		while ((*cp != '\0') && (*cp != ':'))
 			cp++;
 
 		if ((scp != cp) && (*prop_name != NULL)) {
-			*cp = NULL;
+			*cp = '\0';
 			bsetprops(*prop_name, scp);
 		}
 
@@ -894,6 +1039,7 @@ xen_vbdroot_props(char *s)
 	short minor;
 	long addr = 0;
 
+	mi = '\0';
 	pnp = vbdpath + strlen(vbdpath);
 	prop_p = s + strlen(lnamefix);
 	while ((*prop_p != '\0') && (*prop_p != 's') && (*prop_p != 'p'))
@@ -945,7 +1091,7 @@ xen_nfsroot_props(char *s)
 	};
 	int n_prop = sizeof (prop_map) / sizeof (prop_map[0]);
 
-	bsetprop("fstype", 6, "nfs", 4);
+	bsetprops("fstype", "nfs");
 
 	xen_parse_props(s, prop_map, n_prop);
 
@@ -1077,18 +1223,19 @@ build_panic_cmdline(const char *cmd, int cmdlen)
 
 #ifndef	__xpv
 /*
- * Construct boot command line for Fast Reboot
+ * Construct boot command line for Fast Reboot. The saved_cmdline
+ * is also reported by "eeprom bootcmd".
  */
 static void
-build_fastboot_cmdline(void)
+build_fastboot_cmdline(struct xboot_info *xbp)
 {
-	saved_cmdline_len =  strlen(xbootp->bi_cmdline) + 1;
+	saved_cmdline_len =  strlen(xbp->bi_cmdline) + 1;
 	if (saved_cmdline_len > FASTBOOT_SAVED_CMDLINE_LEN) {
 		DBG(saved_cmdline_len);
 		DBG_MSG("Command line too long: clearing fastreboot_capable\n");
 		fastreboot_capable = 0;
 	} else {
-		bcopy((void *)(xbootp->bi_cmdline), (void *)saved_cmdline,
+		bcopy((void *)(xbp->bi_cmdline), (void *)saved_cmdline,
 		    saved_cmdline_len);
 		saved_cmdline[saved_cmdline_len - 1] = '\0';
 		build_panic_cmdline(saved_cmdline, saved_cmdline_len - 1);
@@ -1100,8 +1247,9 @@ build_fastboot_cmdline(void)
  * Fast Reboot.
  */
 static void
-save_boot_info(multiboot_info_t *mbi, struct xboot_info *xbi)
+save_boot_info(struct xboot_info *xbi)
 {
+	multiboot_info_t *mbi = xbi->bi_mb_info;
 	struct boot_modules *modp;
 	int i;
 
@@ -1127,7 +1275,7 @@ save_boot_info(multiboot_info_t *mbi, struct xboot_info *xbi)
 		}
 	} else {
 		saved_mbi.drives_length = 0;
-		saved_mbi.drives_addr = NULL;
+		saved_mbi.drives_addr = 0;
 	}
 
 	/*
@@ -1145,11 +1293,177 @@ save_boot_info(multiboot_info_t *mbi, struct xboot_info *xbi)
 }
 #endif	/* __xpv */
 
+/*
+ * Import boot environment module variables as properties, applying
+ * blacklist filter for variables we know we will not use.
+ *
+ * Since the environment can be relatively large, containing many variables
+ * used only for boot loader purposes, we will use a blacklist based filter.
+ * To keep the blacklist from growing too large, we use prefix based filtering.
+ * This is possible because in many cases, the loader variable names are
+ * using a structured layout.
+ *
+ * We will not overwrite already set properties.
+ *
+ * Note that the menu items in particular can contain characters not
+ * well-handled as bootparams, such as spaces, brackets, and the like, so that's
+ * another reason.
+ */
+static struct bop_blacklist {
+	const char *bl_name;
+	int bl_name_len;
+} bop_prop_blacklist[] = {
+	{ "ISADIR", sizeof ("ISADIR") },
+	{ "acpi", sizeof ("acpi") },
+	{ "autoboot_delay", sizeof ("autoboot_delay") },
+	{ "beansi_", sizeof ("beansi_") },
+	{ "beastie", sizeof ("beastie") },
+	{ "bemenu", sizeof ("bemenu") },
+	{ "boot.", sizeof ("boot.") },
+	{ "bootenv", sizeof ("bootenv") },
+	{ "currdev", sizeof ("currdev") },
+	{ "dhcp.", sizeof ("dhcp.") },
+	{ "interpret", sizeof ("interpret") },
+	{ "kernel", sizeof ("kernel") },
+	{ "loaddev", sizeof ("loaddev") },
+	{ "loader_", sizeof ("loader_") },
+	{ "mainansi_", sizeof ("mainansi_") },
+	{ "mainmenu_", sizeof ("mainmenu_") },
+	{ "maintoggled_", sizeof ("maintoggled_") },
+	{ "menu_timeout_command", sizeof ("menu_timeout_command") },
+	{ "menuset_", sizeof ("menuset_") },
+	{ "module_path", sizeof ("module_path") },
+	{ "nfs.", sizeof ("nfs.") },
+	{ "optionsansi_", sizeof ("optionsansi_") },
+	{ "optionsmenu_", sizeof ("optionsmenu_") },
+	{ "optionstoggled_", sizeof ("optionstoggled_") },
+	{ "pcibios", sizeof ("pcibios") },
+	{ "prompt", sizeof ("prompt") },
+	{ "smbios", sizeof ("smbios") },
+	{ "tem", sizeof ("tem") },
+	{ "twiddle_divisor", sizeof ("twiddle_divisor") },
+	{ "zfs_be", sizeof ("zfs_be") },
+};
+
+/*
+ * Match the name against prefixes in above blacklist. If the match was
+ * found, this name is blacklisted.
+ */
+static boolean_t
+name_is_blacklisted(const char *name)
+{
+	int i, n;
+
+	n = sizeof (bop_prop_blacklist) / sizeof (bop_prop_blacklist[0]);
+	for (i = 0; i < n; i++) {
+		if (strncmp(bop_prop_blacklist[i].bl_name, name,
+		    bop_prop_blacklist[i].bl_name_len - 1) == 0) {
+			return (B_TRUE);
+		}
+	}
+	return (B_FALSE);
+}
+
+static void
+process_boot_environment(struct boot_modules *benv)
+{
+	char *env, *ptr, *name, *value;
+	uint32_t size, name_len, value_len;
+
+	if (benv == NULL || benv->bm_type != BMT_ENV)
+		return;
+	ptr = env = benv->bm_addr;
+	size = benv->bm_size;
+	do {
+		name = ptr;
+		/* find '=' */
+		while (*ptr != '=') {
+			ptr++;
+			if (ptr > env + size) /* Something is very wrong. */
+				return;
+		}
+		name_len = ptr - name;
+		if (sizeof (buffer) <= name_len)
+			continue;
+
+		(void) strncpy(buffer, name, sizeof (buffer));
+		buffer[name_len] = '\0';
+		name = buffer;
+
+		value_len = 0;
+		value = ++ptr;
+		while ((uintptr_t)ptr - (uintptr_t)env < size) {
+			if (*ptr == '\0') {
+				ptr++;
+				value_len = (uintptr_t)ptr - (uintptr_t)env;
+				break;
+			}
+			ptr++;
+		}
+
+		/* Did we reach the end of the module? */
+		if (value_len == 0)
+			return;
+
+		if (*value == '\0')
+			continue;
+
+		/* Is this property already set? */
+		if (do_bsys_getproplen(NULL, name) >= 0)
+			continue;
+
+		/* Translate netboot variables */
+		if (strcmp(name, "boot.netif.gateway") == 0) {
+			bsetprops(BP_ROUTER_IP, value);
+			continue;
+		}
+		if (strcmp(name, "boot.netif.hwaddr") == 0) {
+			bsetprops(BP_BOOT_MAC, value);
+			continue;
+		}
+		if (strcmp(name, "boot.netif.ip") == 0) {
+			bsetprops(BP_HOST_IP, value);
+			continue;
+		}
+		if (strcmp(name, "boot.netif.netmask") == 0) {
+			bsetprops(BP_SUBNET_MASK, value);
+			continue;
+		}
+		if (strcmp(name, "boot.netif.server") == 0) {
+			bsetprops(BP_SERVER_IP, value);
+			continue;
+		}
+		if (strcmp(name, "boot.netif.server") == 0) {
+			if (do_bsys_getproplen(NULL, BP_SERVER_IP) < 0)
+				bsetprops(BP_SERVER_IP, value);
+			continue;
+		}
+		if (strcmp(name, "boot.nfsroot.server") == 0) {
+			if (do_bsys_getproplen(NULL, BP_SERVER_IP) < 0)
+				bsetprops(BP_SERVER_IP, value);
+			continue;
+		}
+		if (strcmp(name, "boot.nfsroot.path") == 0) {
+			bsetprops(BP_SERVER_PATH, value);
+			continue;
+		}
+
+		if (name_is_blacklisted(name) == B_TRUE)
+			continue;
+
+		/* Create new property. */
+		bsetprops(name, value);
+
+		/* Avoid reading past the module end. */
+		if (size <= (uintptr_t)ptr - (uintptr_t)env)
+			return;
+	} while (*ptr != '\0');
+}
 
 /*
  * 1st pass at building the table of boot properties. This includes:
  * - values set on the command line: -B a=x,b=y,c=z ....
- * - known values we just compute (ie. from xbootp)
+ * - known values we just compute (ie. from xbp)
  * - values from /boot/solaris/bootenv.rc (ie. eeprom(1m) values)
  *
  * the grub command line looked like:
@@ -1158,23 +1472,22 @@ save_boot_info(multiboot_info_t *mbi, struct xboot_info *xbi)
  * whoami is the same as boot-file
  */
 static void
-build_boot_properties(void)
+build_boot_properties(struct xboot_info *xbp)
 {
 	char *name;
 	int name_len;
 	char *value;
 	int value_len;
-	struct boot_modules *bm;
+	struct boot_modules *bm, *rdbm, *benv = NULL;
 	char *propbuf;
 	int quoted = 0;
 	int boot_arg_len;
+	uint_t i, midx;
+	char modid[32];
 #ifndef __xpv
 	static int stdout_val = 0;
 	uchar_t boot_device;
 	char str[3];
-	multiboot_info_t *mbi;
-	int netboot;
-	struct sol_netinfo *sip;
 #endif
 
 	/*
@@ -1183,20 +1496,73 @@ build_boot_properties(void)
 	DBG_MSG("Building boot properties\n");
 	propbuf = do_bsys_alloc(NULL, NULL, MMU_PAGESIZE, 0);
 	DBG((uintptr_t)propbuf);
-	if (xbootp->bi_module_cnt > 0) {
-		bm = xbootp->bi_modules;
-		bsetprop64("ramdisk_start", (uint64_t)(uintptr_t)bm->bm_addr);
-		bsetprop64("ramdisk_end", (uint64_t)(uintptr_t)bm->bm_addr +
-		    bm->bm_size);
+	if (xbp->bi_module_cnt > 0) {
+		bm = xbp->bi_modules;
+		rdbm = NULL;
+		for (midx = i = 0; i < xbp->bi_module_cnt; i++) {
+			if (bm[i].bm_type == BMT_ROOTFS) {
+				rdbm = &bm[i];
+				continue;
+			}
+			if (bm[i].bm_type == BMT_HASH ||
+			    bm[i].bm_type == BMT_FONT ||
+			    bm[i].bm_name == NULL)
+				continue;
+
+			if (bm[i].bm_type == BMT_ENV) {
+				if (benv == NULL)
+					benv = &bm[i];
+				else
+					continue;
+			}
+
+			(void) snprintf(modid, sizeof (modid),
+			    "module-name-%u", midx);
+			bsetprops(modid, (char *)bm[i].bm_name);
+			(void) snprintf(modid, sizeof (modid),
+			    "module-addr-%u", midx);
+			bsetprop64(modid, (uint64_t)(uintptr_t)bm[i].bm_addr);
+			(void) snprintf(modid, sizeof (modid),
+			    "module-size-%u", midx);
+			bsetprop64(modid, (uint64_t)bm[i].bm_size);
+			++midx;
+		}
+		if (rdbm != NULL) {
+			bsetprop64("ramdisk_start",
+			    (uint64_t)(uintptr_t)rdbm->bm_addr);
+			bsetprop64("ramdisk_end",
+			    (uint64_t)(uintptr_t)rdbm->bm_addr + rdbm->bm_size);
+		}
 	}
 
+	/*
+	 * If there are any boot time modules or hashes present, then disable
+	 * fast reboot.
+	 */
+	if (xbp->bi_module_cnt > 1) {
+		fastreboot_disable(FBNS_BOOTMOD);
+	}
+
+#ifndef __xpv
+	/*
+	 * Disable fast reboot if we're using the Multiboot 2 boot protocol,
+	 * since we don't currently support MB2 info and module relocation.
+	 * Note that fast reboot will have already been disabled if multiple
+	 * modules are present, since the current implementation assumes that
+	 * we only have a single module, the boot_archive.
+	 */
+	if (xbp->bi_mb_version != 1) {
+		fastreboot_disable(FBNS_MULTIBOOT2);
+	}
+#endif
+
 	DBG_MSG("Parsing command line for boot properties\n");
-	value = xbootp->bi_cmdline;
+	value = xbp->bi_cmdline;
 
 	/*
 	 * allocate memory to collect boot_args into
 	 */
-	boot_arg_len = strlen(xbootp->bi_cmdline) + 1;
+	boot_arg_len = strlen(xbp->bi_cmdline) + 1;
 	boot_args = do_bsys_alloc(NULL, NULL, boot_arg_len, MMU_PAGESIZE);
 	boot_args[0] = 0;
 	boot_arg_len = 0;
@@ -1355,7 +1721,8 @@ build_boot_properties(void)
 			}
 
 			if (value_len == 0) {
-				bsetprop(name, name_len, "true", 5);
+				bsetprop(DDI_PROP_TYPE_ANY, name, name_len,
+				    NULL, 0);
 			} else {
 				char *v = value;
 				int l = value_len;
@@ -1366,8 +1733,8 @@ build_boot_properties(void)
 				}
 				bcopy(v, propbuf, l);
 				propbuf[l] = '\0';
-				bsetprop(name, name_len, propbuf,
-				    l + 1);
+				bsetprop(DDI_PROP_TYPE_STRING, name, name_len,
+				    propbuf, l + 1);
 			}
 			name = value + value_len;
 			while (*name == ',')
@@ -1383,50 +1750,86 @@ build_boot_properties(void)
 	bsetprops("boot-args", boot_args);
 	bsetprops("bootargs", boot_args);
 
-#ifndef __xpv
-	/*
-	 * set the BIOS boot device from GRUB
-	 */
-	netboot = 0;
-	mbi = xbootp->bi_mb_info;
+	process_boot_environment(benv);
 
+#ifndef __xpv
 	/*
 	 * Build boot command line for Fast Reboot
 	 */
-	build_fastboot_cmdline();
+	build_fastboot_cmdline(xbp);
 
-	/*
-	 * Save various boot information for Fast Reboot
-	 */
-	save_boot_info(mbi, xbootp);
+	if (xbp->bi_mb_version == 1) {
+		multiboot_info_t *mbi = xbp->bi_mb_info;
+		int netboot;
+		struct sol_netinfo *sip;
 
-	if (mbi != NULL && mbi->flags & MB_INFO_BOOTDEV) {
-		boot_device = mbi->boot_device >> 24;
-		if (boot_device == 0x20)
-			netboot++;
-		str[0] = (boot_device >> 4) + '0';
-		str[1] = (boot_device & 0xf) + '0';
-		str[2] = 0;
-		bsetprops("bios-boot-device", str);
+		/*
+		 * set the BIOS boot device from GRUB
+		 */
+		netboot = 0;
+
+		/*
+		 * Save various boot information for Fast Reboot
+		 */
+		save_boot_info(xbp);
+
+		if (mbi != NULL && mbi->flags & MB_INFO_BOOTDEV) {
+			boot_device = mbi->boot_device >> 24;
+			if (boot_device == 0x20)
+				netboot++;
+			str[0] = (boot_device >> 4) + '0';
+			str[1] = (boot_device & 0xf) + '0';
+			str[2] = 0;
+			bsetprops("bios-boot-device", str);
+		} else {
+			netboot = 1;
+		}
+
+		/*
+		 * In the netboot case, drives_info is overloaded with the
+		 * dhcp ack. This is not multiboot compliant and requires
+		 * special pxegrub!
+		 */
+		if (netboot && mbi->drives_length != 0) {
+			sip = (struct sol_netinfo *)(uintptr_t)mbi->drives_addr;
+			if (sip->sn_infotype == SN_TYPE_BOOTP)
+				bsetprop(DDI_PROP_TYPE_BYTE,
+				    "bootp-response",
+				    sizeof ("bootp-response"),
+				    (void *)(uintptr_t)mbi->drives_addr,
+				    mbi->drives_length);
+			else if (sip->sn_infotype == SN_TYPE_RARP)
+				setup_rarp_props(sip);
+		}
 	} else {
-		netboot = 1;
+		multiboot2_info_header_t *mbi = xbp->bi_mb_info;
+		multiboot_tag_bootdev_t *bootdev = NULL;
+		multiboot_tag_network_t *netdev = NULL;
+
+		if (mbi != NULL) {
+			bootdev = dboot_multiboot2_find_tag(mbi,
+			    MULTIBOOT_TAG_TYPE_BOOTDEV);
+			netdev = dboot_multiboot2_find_tag(mbi,
+			    MULTIBOOT_TAG_TYPE_NETWORK);
+		}
+		if (bootdev != NULL) {
+			DBG(bootdev->mb_biosdev);
+			boot_device = bootdev->mb_biosdev;
+			str[0] = (boot_device >> 4) + '0';
+			str[1] = (boot_device & 0xf) + '0';
+			str[2] = 0;
+			bsetprops("bios-boot-device", str);
+		}
+		if (netdev != NULL) {
+			bsetprop(DDI_PROP_TYPE_BYTE,
+			    "bootp-response", sizeof ("bootp-response"),
+			    (void *)(uintptr_t)netdev->mb_dhcpack,
+			    netdev->mb_size -
+			    sizeof (multiboot_tag_network_t));
+		}
 	}
 
-	/*
-	 * In the netboot case, drives_info is overloaded with the dhcp ack.
-	 * This is not multiboot compliant and requires special pxegrub!
-	 */
-	if (netboot && mbi->drives_length != 0) {
-		sip = (struct sol_netinfo *)(uintptr_t)mbi->drives_addr;
-		if (sip->sn_infotype == SN_TYPE_BOOTP)
-			bsetprop("bootp-response", sizeof ("bootp-response"),
-			    (void *)(uintptr_t)mbi->drives_addr,
-			    mbi->drives_length);
-		else if (sip->sn_infotype == SN_TYPE_RARP)
-			setup_rarp_props(sip);
-	}
-	bsetprop("stdout", strlen("stdout"),
-	    &stdout_val, sizeof (stdout_val));
+	bsetprop32("stdout", stdout_val);
 #endif /* __xpv */
 
 	/*
@@ -1443,7 +1846,7 @@ build_boot_properties(void)
 	/*
 	 * Build firmware-provided system properties
 	 */
-	build_firmware_properties();
+	build_firmware_properties(xbp);
 
 	/*
 	 * XXPV
@@ -1471,10 +1874,10 @@ build_boot_properties(void)
  */
 #define	PFN_2GIG	0x80000
 static void
-relocate_boot_archive(void)
+relocate_boot_archive(struct xboot_info *xbp)
 {
 	mfn_t max_mfn = HYPERVISOR_memory_op(XENMEM_maximum_ram_page, NULL);
-	struct boot_modules *bm = xbootp->bi_modules;
+	struct boot_modules *bm = xbp->bi_modules;
 	uintptr_t va;
 	pfn_t va_pfn;
 	mfn_t va_mfn;
@@ -1494,7 +1897,7 @@ relocate_boot_archive(void)
 	 */
 	if (max_mfn < PFN_2GIG)
 		return;
-	if (xbootp->bi_module_cnt < 1) {
+	if (xbp->bi_module_cnt < 1) {
 		DBG_MSG("no boot_archive!");
 		return;
 	}
@@ -1556,17 +1959,6 @@ relocate_boot_archive(void)
 
 #if !defined(__xpv)
 /*
- * Install a temporary IDT that lets us catch errors in the boot time code.
- * We shouldn't get any faults at all while this is installed, so we'll
- * just generate a traceback and exit.
- */
-#ifdef __amd64
-static const int bcode_sel = B64CODE_SEL;
-#else
-static const int bcode_sel = B32CODE_SEL;
-#endif
-
-/*
  * simple description of a stack frame (args are 32 bit only currently)
  */
 typedef struct bop_frame {
@@ -1582,9 +1974,6 @@ bop_traceback(bop_frame_t *frame)
 	int cnt;
 	char *ksym;
 	ulong_t off;
-#if defined(__i386)
-	int a;
-#endif
 
 	bop_printf(NULL, "Stack traceback:\n");
 	for (cnt = 0; cnt < 30; ++cnt) {	/* up to 30 frames */
@@ -1602,18 +1991,6 @@ bop_traceback(bop_frame_t *frame)
 			bop_printf(NULL, "\n");
 			break;
 		}
-#if defined(__i386)
-		for (a = 0; a < 6; ++a) {	/* try for 6 args */
-			if ((void *)&frame->arg[a] == (void *)frame->old_frame)
-				break;
-			if (a == 0)
-				bop_printf(NULL, "(");
-			else
-				bop_printf(NULL, ",");
-			bop_printf(NULL, "0x%lx", frame->arg[a]);
-		}
-		bop_printf(NULL, ")");
-#endif
 		bop_printf(NULL, "\n");
 	}
 }
@@ -1623,10 +2000,8 @@ struct trapframe {
 	ulong_t inst_ptr;
 	ulong_t code_seg;
 	ulong_t flags_reg;
-#ifdef __amd64
 	ulong_t stk_ptr;
 	ulong_t stk_seg;
-#endif
 };
 
 void
@@ -1647,7 +2022,7 @@ bop_trap(ulong_t *tfp)
 	/*
 	 * adjust the tf for optional error_code by detecting the code selector
 	 */
-	if (tf->code_seg != bcode_sel)
+	if (tf->code_seg != B64CODE_SEL)
 		tf = (struct trapframe *)(tfp - 1);
 	else
 		bop_printf(NULL, "error code           0x%lx\n",
@@ -1656,10 +2031,9 @@ bop_trap(ulong_t *tfp)
 	bop_printf(NULL, "instruction pointer  0x%lx\n", tf->inst_ptr);
 	bop_printf(NULL, "code segment         0x%lx\n", tf->code_seg & 0xffff);
 	bop_printf(NULL, "flags register       0x%lx\n", tf->flags_reg);
-#ifdef __amd64
 	bop_printf(NULL, "return %%rsp          0x%lx\n", tf->stk_ptr);
 	bop_printf(NULL, "return %%ss           0x%lx\n", tf->stk_seg & 0xffff);
-#endif
+	bop_printf(NULL, "%%cr2			0x%lx\n", getcr2());
 
 	/* grab %[er]bp pushed by our code from the stack */
 	fakeframe.old_frame = (bop_frame_t *)*(tfp - 3);
@@ -1675,6 +2049,11 @@ static gate_desc_t *bop_idt;
 
 static desctbr_t bop_idt_info;
 
+/*
+ * Install a temporary IDT that lets us catch errors in the boot time code.
+ * We shouldn't get any faults at all while this is installed, so we'll
+ * just generate a traceback and exit.
+ */
 static void
 bop_idt_init(void)
 {
@@ -1686,10 +2065,9 @@ bop_idt_init(void)
 	for (t = 0; t < NIDT; ++t) {
 		/*
 		 * Note that since boot runs without a TSS, the
-		 * double fault handler cannot use an alternate stack
-		 * (64-bit) or a task gate (32-bit).
+		 * double fault handler cannot use an alternate stack (64-bit).
 		 */
-		set_gatesegd(&bop_idt[t], &bop_trap_handler, bcode_sel,
+		set_gatesegd(&bop_idt[t], &bop_trap_handler, B64CODE_SEL,
 		    SDT_SYSIGT, TRP_KPL, 0);
 	}
 	bop_idt_info.dtr_limit = (NIDT * sizeof (gate_desc_t)) - 1;
@@ -1713,8 +2091,8 @@ _start(struct xboot_info *xbp)
 	 */
 	xbootp = xbp;
 #ifdef __xpv
-	HYPERVISOR_shared_info = (void *)xbootp->bi_shared_info;
-	xen_info = xbootp->bi_xen_start_info;
+	HYPERVISOR_shared_info = (void *)xbp->bi_shared_info;
+	xen_info = xbp->bi_xen_start_info;
 #endif
 
 #ifndef __xpv
@@ -1725,17 +2103,17 @@ _start(struct xboot_info *xbp)
 	}
 #endif
 
-	bcons_init((void *)xbootp->bi_cmdline);
+	bcons_init(xbp);
 	have_console = 1;
 
 	/*
 	 * enable debugging
 	 */
-	if (strstr((char *)xbootp->bi_cmdline, "kbm_debug"))
+	if (find_boot_prop("kbm_debug") != NULL)
 		kbm_debug = 1;
 
 	DBG_MSG("\n\n*** Entered Solaris in _start() cmdline is: ");
-	DBG_MSG((char *)xbootp->bi_cmdline);
+	DBG_MSG((char *)xbp->bi_cmdline);
 	DBG_MSG("\n\n\n");
 
 	/*
@@ -1749,9 +2127,9 @@ _start(struct xboot_info *xbp)
 	/*
 	 * initialize the boot time allocator
 	 */
-	next_phys = xbootp->bi_next_paddr;
+	next_phys = xbp->bi_next_paddr;
 	DBG(next_phys);
-	next_virt = (uintptr_t)xbootp->bi_next_vaddr;
+	next_virt = (uintptr_t)xbp->bi_next_vaddr;
 	DBG(next_virt);
 	DBG_MSG("Initializing boot time memory management...");
 #ifdef __xpv
@@ -1764,7 +2142,7 @@ _start(struct xboot_info *xbp)
 		DBG(xen_virt_start);
 	}
 #endif
-	kbm_init(xbootp);
+	kbm_init(xbp);
 	DBG_MSG("done\n");
 
 	/*
@@ -1793,7 +2171,7 @@ _start(struct xboot_info *xbp)
 	 * pages to high PFN memory.
 	 */
 	if (DOMAIN_IS_INITDOMAIN(xen_info))
-		relocate_boot_archive();
+		relocate_boot_archive(xbp);
 #endif
 
 #ifndef __xpv
@@ -1803,36 +2181,20 @@ _start(struct xboot_info *xbp)
 	 */
 	bop_idt_init();
 #endif
+	/* Set up the shadow fb for framebuffer console */
+	boot_fb_shadow_init(bops);
 
 	/*
 	 * Start building the boot properties from the command line
 	 */
 	DBG_MSG("Initializing boot properties:\n");
-	build_boot_properties();
+	build_boot_properties(xbp);
 
-	if (strstr((char *)xbootp->bi_cmdline, "prom_debug") || kbm_debug) {
-		char *name;
+	if (find_boot_prop("prom_debug") || kbm_debug) {
 		char *value;
-		char *cp;
-		int len;
 
 		value = do_bsys_alloc(NULL, NULL, MMU_PAGESIZE, MMU_PAGESIZE);
-		bop_printf(NULL, "\nBoot properties:\n");
-		name = "";
-		while ((name = do_bsys_nextprop(NULL, name)) != NULL) {
-			bop_printf(NULL, "\t0x%p %s = ", (void *)name, name);
-			(void) do_bsys_getprop(NULL, name, value);
-			len = do_bsys_getproplen(NULL, name);
-			bop_printf(NULL, "len=%d ", len);
-			value[len] = 0;
-			for (cp = value; *cp; ++cp) {
-				if (' ' <= *cp && *cp <= '~')
-					bop_printf(NULL, "%c", *cp);
-				else
-					bop_printf(NULL, "-0x%x-", *cp);
-			}
-			bop_printf(NULL, "\n");
-		}
+		boot_prop_display(value);
 	}
 
 	/*
@@ -1902,19 +2264,19 @@ checksum_table(uint8_t *tp, size_t len)
 }
 
 static int
-valid_rsdp(struct rsdp *rp)
+valid_rsdp(ACPI_TABLE_RSDP *rp)
 {
 
 	/* validate the V1.x checksum */
-	if (checksum_table((uint8_t *)&rp->v1, sizeof (struct rsdp_v1)) != 0)
+	if (checksum_table((uint8_t *)rp, ACPI_RSDP_CHECKSUM_LENGTH) != 0)
 		return (0);
 
 	/* If pre-ACPI 2.0, this is a valid RSDP */
-	if (rp->v1.revision < 2)
+	if (rp->Revision < 2)
 		return (1);
 
 	/* validate the V2.x checksum */
-	if (checksum_table((uint8_t *)rp, sizeof (struct rsdp)) != 0)
+	if (checksum_table((uint8_t *)rp, ACPI_RSDP_XCHECKSUM_LENGTH) != 0)
 		return (0);
 
 	return (1);
@@ -1924,73 +2286,121 @@ valid_rsdp(struct rsdp *rp)
  * Scan memory range for an RSDP;
  * see ACPI 3.0 Spec, 5.2.5.1
  */
-static struct rsdp *
-scan_rsdp(paddr_t start, paddr_t end)
+static ACPI_TABLE_RSDP *
+scan_rsdp(paddr_t *paddrp, size_t len)
 {
-	size_t len  = end - start + 1;
+	paddr_t paddr = *paddrp;
 	caddr_t ptr;
 
-	ptr = vmap_phys(len, start);
+	ptr = vmap_phys(len, paddr);
+
 	while (len > 0) {
-		if (strncmp(ptr, ACPI_RSDP_SIG, ACPI_RSDP_SIG_LEN) == 0)
-			if (valid_rsdp((struct rsdp *)ptr))
-				return ((struct rsdp *)ptr);
-		ptr += 16;
-		len -= 16;
+		if (strncmp(ptr, ACPI_SIG_RSDP, strlen(ACPI_SIG_RSDP)) == 0 &&
+		    valid_rsdp((ACPI_TABLE_RSDP *)ptr)) {
+			*paddrp = paddr;
+			return ((ACPI_TABLE_RSDP *)ptr);
+		}
+
+		ptr += ACPI_RSDP_SCAN_STEP;
+		paddr += ACPI_RSDP_SCAN_STEP;
+		len -= ACPI_RSDP_SCAN_STEP;
 	}
 
 	return (NULL);
 }
 
 /*
- * Refer to ACPI 3.0 Spec, section 5.2.5.1 to understand this function
+ * Locate the ACPI RSDP.  We search in a particular order:
+ *
+ * - If the bootloader told us the location of the RSDP (via the EFI system
+ *   table), try that first.
+ * - Otherwise, look in the EBDA and BIOS memory as per ACPI 5.2.5.1 (legacy
+ *   case).
+ * - Finally, our bootloader may have a copy of the RSDP in its info: this might
+ *   get freed after boot, so we always prefer to find the original RSDP first.
+ *
+ * Once found, we set acpi-root-tab property (a physical address) for the
+ * benefit of acpica, acpidump etc.
  */
-static struct rsdp *
-find_rsdp() {
-	struct rsdp *rsdp;
-	uint16_t *ebda_seg;
-	paddr_t  ebda_addr;
 
-	/*
-	 * Get the EBDA segment and scan the first 1K
-	 */
-	ebda_seg = (uint16_t *)vmap_phys(sizeof (uint16_t), ACPI_EBDA_SEG_ADDR);
-	ebda_addr = *ebda_seg << 4;
-	rsdp = scan_rsdp(ebda_addr, ebda_addr + ACPI_EBDA_LEN - 1);
-	if (rsdp == NULL)
-		/* if EBDA doesn't contain RSDP, look in BIOS memory */
-		rsdp = scan_rsdp(0xe0000, 0xfffff);
+static ACPI_TABLE_RSDP *
+find_rsdp(struct xboot_info *xbp)
+{
+	ACPI_TABLE_RSDP *rsdp = NULL;
+	paddr_t paddr = 0;
+
+	if (do_bsys_getproplen(NULL, "acpi-root-tab") == sizeof (uint64_t)) {
+		(void) do_bsys_getprop(NULL, "acpi-root-tab", &paddr);
+		rsdp = scan_rsdp(&paddr, sizeof (*rsdp));
+	}
+
+#ifndef __xpv
+	if (rsdp == NULL && xbp->bi_acpi_rsdp != NULL) {
+		paddr = (uintptr_t)xbp->bi_acpi_rsdp;
+		rsdp = scan_rsdp(&paddr, sizeof (*rsdp));
+	}
+#endif
+
+	if (rsdp == NULL) {
+		uint16_t *ebda_seg = (uint16_t *)vmap_phys(sizeof (uint16_t),
+		    ACPI_EBDA_PTR_LOCATION);
+		paddr = *ebda_seg << 4;
+		rsdp = scan_rsdp(&paddr, ACPI_EBDA_WINDOW_SIZE);
+	}
+
+	if (rsdp == NULL) {
+		paddr = ACPI_HI_RSDP_WINDOW_BASE;
+		rsdp = scan_rsdp(&paddr, ACPI_HI_RSDP_WINDOW_SIZE);
+	}
+
+#ifndef __xpv
+	if (rsdp == NULL && xbp->bi_acpi_rsdp_copy != NULL) {
+		paddr = (uintptr_t)xbp->bi_acpi_rsdp_copy;
+		rsdp = scan_rsdp(&paddr, sizeof (*rsdp));
+	}
+#endif
+
+	if (rsdp == NULL) {
+		bop_printf(NULL, "no RSDP found!\n");
+		return (NULL);
+	}
+
+	if (kbm_debug)
+		bop_printf(NULL, "RSDP found at physical 0x%lx\n", paddr);
+
+	if (do_bsys_getproplen(NULL, "acpi-root-tab") != sizeof (uint64_t))
+		bsetprop64("acpi-root-tab", paddr);
+
 	return (rsdp);
 }
 
-static struct table_header *
+static ACPI_TABLE_HEADER *
 map_fw_table(paddr_t table_addr)
 {
-	struct table_header *tp;
-	size_t len = MAX(sizeof (struct table_header), MMU_PAGESIZE);
+	ACPI_TABLE_HEADER *tp;
+	size_t len = MAX(sizeof (*tp), MMU_PAGESIZE);
 
 	/*
 	 * Map at least a page; if the table is larger than this, remap it
 	 */
-	tp = (struct table_header *)vmap_phys(len, table_addr);
-	if (tp->len > len)
-		tp = (struct table_header *)vmap_phys(tp->len, table_addr);
+	tp = (ACPI_TABLE_HEADER *)vmap_phys(len, table_addr);
+	if (tp->Length > len)
+		tp = (ACPI_TABLE_HEADER *)vmap_phys(tp->Length, table_addr);
 	return (tp);
 }
 
-static struct table_header *
-find_fw_table(char *signature)
+static ACPI_TABLE_HEADER *
+find_fw_table(ACPI_TABLE_RSDP *rsdp, char *signature)
 {
 	static int revision = 0;
-	static struct xsdt *xsdt;
+	static ACPI_TABLE_XSDT *xsdt;
 	static int len;
 	paddr_t xsdt_addr;
-	struct rsdp *rsdp;
-	struct table_header *tp;
+	ACPI_TABLE_HEADER *tp;
 	paddr_t table_addr;
 	int	n;
 
-	if (strlen(signature) != ACPI_TABLE_SIG_LEN)
+	if (strlen(signature) != ACPI_NAME_SIZE)
 		return (NULL);
 
 	/*
@@ -2002,40 +2412,50 @@ find_fw_table(char *signature)
 	 * use the XSDT.  If the XSDT address is 0, though, fall back to
 	 * revision 1 and use the RSDT.
 	 */
+	xsdt_addr = 0;
 	if (revision == 0) {
-		if ((rsdp = (struct rsdp *)find_rsdp()) != NULL) {
-			revision = rsdp->v1.revision;
-			switch (revision) {
-			case 2:
-				/*
-				 * Use the XSDT unless BIOS is buggy and
-				 * claims to be rev 2 but has a null XSDT
-				 * address
-				 */
-				xsdt_addr = rsdp->xsdt;
-				if (xsdt_addr != 0)
-					break;
-				/* FALLTHROUGH */
-			case 0:
-				/* treat RSDP rev 0 as revision 1 internally */
-				revision = 1;
-				/* FALLTHROUGH */
-			case 1:
-				/* use the RSDT for rev 0/1 */
-				xsdt_addr = rsdp->v1.rsdt;
+		if (rsdp == NULL)
+			return (NULL);
+
+		revision = rsdp->Revision;
+		/*
+		 * ACPI 6.0 states that current revision is 2
+		 * from acpi_table_rsdp definition:
+		 * Must be (0) for ACPI 1.0 or (2) for ACPI 2.0+
+		 */
+		if (revision > 2)
+			revision = 2;
+		switch (revision) {
+		case 2:
+			/*
+			 * Use the XSDT unless BIOS is buggy and
+			 * claims to be rev 2 but has a null XSDT
+			 * address
+			 */
+			xsdt_addr = rsdp->XsdtPhysicalAddress;
+			if (xsdt_addr != 0)
 				break;
-			default:
-				/* unknown revision */
-				revision = 0;
-				break;
-			}
+			/* FALLTHROUGH */
+		case 0:
+			/* treat RSDP rev 0 as revision 1 internally */
+			revision = 1;
+			/* FALLTHROUGH */
+		case 1:
+			/* use the RSDT for rev 0/1 */
+			xsdt_addr = rsdp->RsdtPhysicalAddress;
+			break;
+		default:
+			/* unknown revision */
+			revision = 0;
+			break;
 		}
+
 		if (revision == 0)
 			return (NULL);
 
 		/* cache the XSDT info */
-		xsdt = (struct xsdt *)map_fw_table(xsdt_addr);
-		len = (xsdt->hdr.len - sizeof (xsdt->hdr)) /
+		xsdt = (ACPI_TABLE_XSDT *)map_fw_table(xsdt_addr);
+		len = (xsdt->Header.Length - sizeof (xsdt->Header)) /
 		    ((revision == 1) ? sizeof (uint32_t) : sizeof (uint64_t));
 	}
 
@@ -2043,11 +2463,14 @@ find_fw_table(char *signature)
 	 * Scan the table headers looking for a signature match
 	 */
 	for (n = 0; n < len; n++) {
-		table_addr = (revision == 1) ? xsdt->p.r[n] : xsdt->p.x[n];
+		ACPI_TABLE_RSDT *rsdt = (ACPI_TABLE_RSDT *)xsdt;
+		table_addr = (revision == 1) ? rsdt->TableOffsetEntry[n] :
+		    xsdt->TableOffsetEntry[n];
+
 		if (table_addr == 0)
 			continue;
 		tp = map_fw_table(table_addr);
-		if (strncmp(tp->sig, signature, ACPI_TABLE_SIG_LEN) == 0) {
+		if (strncmp(tp->Signature, signature, ACPI_NAME_SIZE) == 0) {
 			return (tp);
 		}
 	}
@@ -2055,21 +2478,22 @@ find_fw_table(char *signature)
 }
 
 static void
-process_mcfg(struct mcfg *tp)
+process_mcfg(ACPI_TABLE_MCFG *tp)
 {
-	struct cfg_base_addr_alloc *cfg_baap;
+	ACPI_MCFG_ALLOCATION *cfg_baap;
 	char *cfg_baa_endp;
 	int64_t ecfginfo[4];
 
-	cfg_baap = tp->CfgBaseAddrAllocList;
-	cfg_baa_endp = ((char *)tp) + tp->Length;
+	cfg_baap = (ACPI_MCFG_ALLOCATION *)((uintptr_t)tp + sizeof (*tp));
+	cfg_baa_endp = ((char *)tp) + tp->Header.Length;
 	while ((char *)cfg_baap < cfg_baa_endp) {
-		if (cfg_baap->base_addr != 0 && cfg_baap->segment == 0) {
-			ecfginfo[0] = cfg_baap->base_addr;
-			ecfginfo[1] = cfg_baap->segment;
-			ecfginfo[2] = cfg_baap->start_bno;
-			ecfginfo[3] = cfg_baap->end_bno;
-			bsetprop(MCFG_PROPNAME, strlen(MCFG_PROPNAME),
+		if (cfg_baap->Address != 0 && cfg_baap->PciSegment == 0) {
+			ecfginfo[0] = cfg_baap->Address;
+			ecfginfo[1] = cfg_baap->PciSegment;
+			ecfginfo[2] = cfg_baap->StartBusNumber;
+			ecfginfo[3] = cfg_baap->EndBusNumber;
+			bsetprop(DDI_PROP_TYPE_INT64,
+			    MCFG_PROPNAME, strlen(MCFG_PROPNAME),
 			    ecfginfo, sizeof (ecfginfo));
 			break;
 		}
@@ -2079,45 +2503,91 @@ process_mcfg(struct mcfg *tp)
 
 #ifndef __xpv
 static void
-process_madt(struct madt *tp)
+process_madt_entries(ACPI_TABLE_MADT *tp, uint32_t *cpu_countp,
+    uint32_t *cpu_possible_countp, uint32_t *cpu_apicid_array)
 {
-	struct madt_processor *cpu, *end;
+	ACPI_SUBTABLE_HEADER *item, *end;
 	uint32_t cpu_count = 0;
 	uint32_t cpu_possible_count = 0;
-	uint8_t cpu_apicid_array[UINT8_MAX + 1];
+
+	/*
+	 * Determine number of CPUs and keep track of "final" APIC ID
+	 * for each CPU by walking through ACPI MADT processor list
+	 */
+	end = (ACPI_SUBTABLE_HEADER *)(tp->Header.Length + (uintptr_t)tp);
+	item = (ACPI_SUBTABLE_HEADER *)((uintptr_t)tp + sizeof (*tp));
+
+	while (item < end) {
+		switch (item->Type) {
+		case ACPI_MADT_TYPE_LOCAL_APIC: {
+			ACPI_MADT_LOCAL_APIC *cpu =
+			    (ACPI_MADT_LOCAL_APIC *) item;
+
+			if (cpu->LapicFlags & ACPI_MADT_ENABLED) {
+				if (cpu_apicid_array != NULL)
+					cpu_apicid_array[cpu_count] = cpu->Id;
+				cpu_count++;
+			}
+			cpu_possible_count++;
+			break;
+		}
+		case ACPI_MADT_TYPE_LOCAL_X2APIC: {
+			ACPI_MADT_LOCAL_X2APIC *cpu =
+			    (ACPI_MADT_LOCAL_X2APIC *) item;
+
+			if (cpu->LapicFlags & ACPI_MADT_ENABLED) {
+				if (cpu_apicid_array != NULL)
+					cpu_apicid_array[cpu_count] =
+					    cpu->LocalApicId;
+				cpu_count++;
+			}
+			cpu_possible_count++;
+			break;
+		}
+		default:
+			if (kbm_debug)
+				bop_printf(NULL, "MADT type %d\n", item->Type);
+			break;
+		}
+
+		item = (ACPI_SUBTABLE_HEADER *)((uintptr_t)item + item->Length);
+	}
+	if (cpu_countp)
+		*cpu_countp = cpu_count;
+	if (cpu_possible_countp)
+		*cpu_possible_countp = cpu_possible_count;
+}
+
+static void
+process_madt(ACPI_TABLE_MADT *tp)
+{
+	uint32_t cpu_count = 0;
+	uint32_t cpu_possible_count = 0;
+	uint32_t *cpu_apicid_array; /* x2APIC ID is 32bit! */
 
 	if (tp != NULL) {
-		/*
-		 * Determine number of CPUs and keep track of "final" APIC ID
-		 * for each CPU by walking through ACPI MADT processor list
-		 */
-		end = (struct madt_processor *)(tp->hdr.len + (uintptr_t)tp);
-		cpu = tp->list;
-		while (cpu < end) {
-			if (cpu->type == MADT_PROCESSOR) {
-				if (cpu->flags & 1) {
-					if (cpu_count < UINT8_MAX)
-						cpu_apicid_array[cpu_count] =
-						    cpu->apic_id;
-					cpu_count++;
-				}
-				cpu_possible_count++;
-			}
+		/* count cpu's */
+		process_madt_entries(tp, &cpu_count, &cpu_possible_count, NULL);
 
-			cpu = (struct madt_processor *)
-			    (cpu->len + (uintptr_t)cpu);
-		}
+		cpu_apicid_array = (uint32_t *)do_bsys_alloc(NULL, NULL,
+		    cpu_count * sizeof (*cpu_apicid_array), MMU_PAGESIZE);
+		if (cpu_apicid_array == NULL)
+			bop_panic("Not enough memory for APIC ID array");
+
+		/* copy IDs */
+		process_madt_entries(tp, NULL, NULL, cpu_apicid_array);
 
 		/*
 		 * Make boot property for array of "final" APIC IDs for each
 		 * CPU
 		 */
-		bsetprop(BP_CPU_APICID_ARRAY, strlen(BP_CPU_APICID_ARRAY),
-		    cpu_apicid_array, cpu_count * sizeof (uint8_t));
+		bsetprop(DDI_PROP_TYPE_INT,
+		    BP_CPU_APICID_ARRAY, strlen(BP_CPU_APICID_ARRAY),
+		    cpu_apicid_array, cpu_count * sizeof (*cpu_apicid_array));
 	}
 
 	/*
-	 * Check whehter property plat-max-ncpus is already set.
+	 * Check whether property plat-max-ncpus is already set.
 	 */
 	if (do_bsys_getproplen(NULL, PLAT_MAX_NCPUS_NAME) < 0) {
 		/*
@@ -2158,9 +2628,9 @@ process_madt(struct madt *tp)
 }
 
 static void
-process_srat(struct srat *tp)
+process_srat(ACPI_TABLE_SRAT *tp)
 {
-	struct srat_item *item, *end;
+	ACPI_SUBTABLE_HEADER *item, *end;
 	int i;
 	int proc_num, mem_num;
 #pragma pack(1)
@@ -2187,57 +2657,76 @@ process_srat(struct srat *tp)
 		return;
 
 	proc_num = mem_num = 0;
-	end = (struct srat_item *)(tp->hdr.len + (uintptr_t)tp);
-	item = tp->list;
+	end = (ACPI_SUBTABLE_HEADER *)(tp->Header.Length + (uintptr_t)tp);
+	item = (ACPI_SUBTABLE_HEADER *)((uintptr_t)tp + sizeof (*tp));
 	while (item < end) {
-		switch (item->type) {
-		case SRAT_PROCESSOR:
-			if (!(item->i.p.flags & SRAT_ENABLED))
+		switch (item->Type) {
+		case ACPI_SRAT_TYPE_CPU_AFFINITY: {
+			ACPI_SRAT_CPU_AFFINITY *cpu =
+			    (ACPI_SRAT_CPU_AFFINITY *) item;
+
+			if (!(cpu->Flags & ACPI_SRAT_CPU_ENABLED))
 				break;
-			processor.domain = item->i.p.domain1;
+			processor.domain = cpu->ProximityDomainLo;
 			for (i = 0; i < 3; i++)
 				processor.domain +=
-				    item->i.p.domain2[i] << ((i + 1) * 8);
-			processor.apic_id = item->i.p.apic_id;
-			processor.sapic_id = item->i.p.local_sapic_eid;
+				    cpu->ProximityDomainHi[i] << ((i + 1) * 8);
+			processor.apic_id = cpu->ApicId;
+			processor.sapic_id = cpu->LocalSapicEid;
 			(void) snprintf(prop_name, 30, "acpi-srat-processor-%d",
 			    proc_num);
-			bsetprop(prop_name, strlen(prop_name), &processor,
+			bsetprop(DDI_PROP_TYPE_INT,
+			    prop_name, strlen(prop_name), &processor,
 			    sizeof (processor));
 			proc_num++;
 			break;
-		case SRAT_MEMORY:
-			if (!(item->i.m.flags & SRAT_ENABLED))
+		}
+		case ACPI_SRAT_TYPE_MEMORY_AFFINITY: {
+			ACPI_SRAT_MEM_AFFINITY *mem =
+			    (ACPI_SRAT_MEM_AFFINITY *)item;
+
+			if (!(mem->Flags & ACPI_SRAT_MEM_ENABLED))
 				break;
-			memory.domain = item->i.m.domain;
-			memory.addr = item->i.m.base_addr;
-			memory.length = item->i.m.len;
-			memory.flags = item->i.m.flags;
+			memory.domain = mem->ProximityDomain;
+			memory.addr = mem->BaseAddress;
+			memory.length = mem->Length;
+			memory.flags = mem->Flags;
 			(void) snprintf(prop_name, 30, "acpi-srat-memory-%d",
 			    mem_num);
-			bsetprop(prop_name, strlen(prop_name), &memory,
+			bsetprop(DDI_PROP_TYPE_INT,
+			    prop_name, strlen(prop_name), &memory,
 			    sizeof (memory));
-			if ((item->i.m.flags & SRAT_HOT_PLUG) &&
+			if ((mem->Flags & ACPI_SRAT_MEM_HOT_PLUGGABLE) &&
 			    (memory.addr + memory.length > maxmem)) {
 				maxmem = memory.addr + memory.length;
 			}
 			mem_num++;
 			break;
-		case SRAT_X2APIC:
-			if (!(item->i.xp.flags & SRAT_ENABLED))
+		}
+		case ACPI_SRAT_TYPE_X2APIC_CPU_AFFINITY: {
+			ACPI_SRAT_X2APIC_CPU_AFFINITY *x2cpu =
+			    (ACPI_SRAT_X2APIC_CPU_AFFINITY *) item;
+
+			if (!(x2cpu->Flags & ACPI_SRAT_CPU_ENABLED))
 				break;
-			x2apic.domain = item->i.xp.domain;
-			x2apic.x2apic_id = item->i.xp.x2apic_id;
+			x2apic.domain = x2cpu->ProximityDomain;
+			x2apic.x2apic_id = x2cpu->ApicId;
 			(void) snprintf(prop_name, 30, "acpi-srat-processor-%d",
 			    proc_num);
-			bsetprop(prop_name, strlen(prop_name), &x2apic,
+			bsetprop(DDI_PROP_TYPE_INT,
+			    prop_name, strlen(prop_name), &x2apic,
 			    sizeof (x2apic));
 			proc_num++;
 			break;
 		}
+		default:
+			if (kbm_debug)
+				bop_printf(NULL, "SRAT type %d\n", item->Type);
+			break;
+		}
 
-		item = (struct srat_item *)
-		    (item->len + (caddr_t)item);
+		item = (ACPI_SUBTABLE_HEADER *)
+		    (item->Length + (uintptr_t)item);
 	}
 
 	/*
@@ -2250,7 +2739,7 @@ process_srat(struct srat *tp)
 }
 
 static void
-process_slit(struct slit *tp)
+process_slit(ACPI_TABLE_SLIT *tp)
 {
 
 	/*
@@ -2263,47 +2752,47 @@ process_slit(struct slit *tp)
 	 * UINT16_MAX, the table size may overflow an int when being
 	 * passed to bsetprop() below.
 	 */
-	if (tp->number >= SLIT_LOCALITIES_MAX)
+	if (tp->LocalityCount >= SLIT_LOCALITIES_MAX)
 		return;
 
-	bsetprop(SLIT_NUM_PROPNAME, strlen(SLIT_NUM_PROPNAME), &tp->number,
-	    sizeof (tp->number));
-	bsetprop(SLIT_PROPNAME, strlen(SLIT_PROPNAME), &tp->entry,
-	    tp->number * tp->number);
+	bsetprop64(SLIT_NUM_PROPNAME, tp->LocalityCount);
+	bsetprop(DDI_PROP_TYPE_BYTE,
+	    SLIT_PROPNAME, strlen(SLIT_PROPNAME), &tp->Entry,
+	    tp->LocalityCount * tp->LocalityCount);
 }
 
-static struct msct *
-process_msct(struct msct *tp)
+static ACPI_TABLE_MSCT *
+process_msct(ACPI_TABLE_MSCT *tp)
 {
 	int last_seen = 0;
 	int proc_num = 0;
-	struct msct_proximity_domain *item, *end;
+	ACPI_MSCT_PROXIMITY *item, *end;
 	extern uint64_t plat_dr_options;
 
 	ASSERT(tp != NULL);
 
-	end = (void *)(tp->hdr.len + (uintptr_t)tp);
-	for (item = (void *)((uintptr_t)tp + tp->proximity_domain_offset);
+	end = (ACPI_MSCT_PROXIMITY *)(tp->Header.Length + (uintptr_t)tp);
+	for (item = (void *)((uintptr_t)tp + tp->ProximityOffset);
 	    item < end;
-	    item = (void *)(item->length + (uintptr_t)item)) {
+	    item = (void *)(item->Length + (uintptr_t)item)) {
 		/*
 		 * Sanity check according to section 5.2.19.1 of ACPI 4.0.
-		 * Revision 	1
+		 * Revision	1
 		 * Length	22
 		 */
-		if (item->revision != 1 || item->length != 22) {
+		if (item->Revision != 1 || item->Length != 22) {
 			cmn_err(CE_CONT,
 			    "?boot: unknown proximity domain structure in MSCT "
-			    "with rev(%d), len(%d).\n",
-			    (int)item->revision, (int)item->length);
+			    "with Revision(%d), Length(%d).\n",
+			    (int)item->Revision, (int)item->Length);
 			return (NULL);
-		} else if (item->domain_min > item->domain_max) {
+		} else if (item->RangeStart > item->RangeEnd) {
 			cmn_err(CE_CONT,
 			    "?boot: invalid proximity domain structure in MSCT "
-			    "with domain_min(%u), domain_max(%u).\n",
-			    item->domain_min, item->domain_max);
+			    "with RangeStart(%u), RangeEnd(%u).\n",
+			    item->RangeStart, item->RangeEnd);
 			return (NULL);
-		} else if (item->domain_min != last_seen) {
+		} else if (item->RangeStart != last_seen) {
 			/*
 			 * Items must be organized in ascending order of the
 			 * proximity domain enumerations.
@@ -2315,24 +2804,24 @@ process_msct(struct msct *tp)
 		}
 
 		/*
-		 * If processor_max is 0 then there would be no CPUs in this
+		 * If ProcessorCapacity is 0 then there would be no CPUs in this
 		 * domain.
 		 */
-		if (item->processor_max != 0) {
-			proc_num += (item->domain_max - item->domain_min + 1) *
-			    item->processor_max;
+		if (item->ProcessorCapacity != 0) {
+			proc_num += (item->RangeEnd - item->RangeStart + 1) *
+			    item->ProcessorCapacity;
 		}
 
-		last_seen = item->domain_max - item->domain_min + 1;
+		last_seen = item->RangeEnd - item->RangeStart + 1;
 		/*
 		 * Break out if all proximity domains have been processed.
 		 * Some BIOSes may have unused items at the end of MSCT table.
 		 */
-		if (last_seen > tp->maximum_proximity_domains) {
+		if (last_seen > tp->MaxProximityDomains) {
 			break;
 		}
 	}
-	if (last_seen != tp->maximum_proximity_domains + 1) {
+	if (last_seen != tp->MaxProximityDomains + 1) {
 		cmn_err(CE_CONT,
 		    "?boot: invalid proximity domain structure in MSCT, "
 		    "proximity domain count doesn't match.\n");
@@ -2353,7 +2842,7 @@ process_msct(struct msct *tp)
 	 * memory hot-adding by default. It may be overridden by value from
 	 * the SRAT table or the "plat-dr-physmax" boot option.
 	 */
-	plat_dr_physmax = btop(tp->maximum_physical_address + 1);
+	plat_dr_physmax = btop(tp->MaxAddress + 1);
 
 	/*
 	 * Existence of MSCT implies CPU/memory hotplug-capability for the
@@ -2392,32 +2881,60 @@ enumerate_xen_cpus()
 }
 #endif /* __xpv */
 
+/*ARGSUSED*/
 static void
-build_firmware_properties(void)
+build_firmware_properties(struct xboot_info *xbp)
 {
-	struct table_header *tp = NULL;
+	ACPI_TABLE_HEADER *tp = NULL;
+	ACPI_TABLE_RSDP *rsdp;
 
 #ifndef __xpv
-	if ((msct_ptr = (struct msct *)find_fw_table("MSCT")) != NULL)
-		msct_ptr = process_msct(msct_ptr);
+	if (xbp->bi_uefi_arch == XBI_UEFI_ARCH_64) {
+		bsetprops("efi-systype", "64");
+		bsetprop64("efi-systab",
+		    (uint64_t)(uintptr_t)xbp->bi_uefi_systab);
+		if (kbm_debug)
+			bop_printf(NULL, "64-bit UEFI detected.\n");
+	} else if (xbp->bi_uefi_arch == XBI_UEFI_ARCH_32) {
+		bsetprops("efi-systype", "32");
+		bsetprop64("efi-systab",
+		    (uint64_t)(uintptr_t)xbp->bi_uefi_systab);
+		if (kbm_debug)
+			bop_printf(NULL, "32-bit UEFI detected.\n");
+	}
 
-	if ((tp = find_fw_table("APIC")) != NULL)
-		process_madt((struct madt *)tp);
+	if (xbp->bi_smbios != NULL) {
+		bsetprop64("smbios-address",
+		    (uint64_t)(uintptr_t)xbp->bi_smbios);
+	}
 
-	if ((srat_ptr = (struct srat *)find_fw_table("SRAT")) != NULL)
+	rsdp = find_rsdp(xbp);
+
+	if ((tp = find_fw_table(rsdp, ACPI_SIG_MSCT)) != NULL)
+		msct_ptr = process_msct((ACPI_TABLE_MSCT *)tp);
+	else
+		msct_ptr = NULL;
+
+	if ((tp = find_fw_table(rsdp, ACPI_SIG_MADT)) != NULL)
+		process_madt((ACPI_TABLE_MADT *)tp);
+
+	if ((srat_ptr = (ACPI_TABLE_SRAT *)
+	    find_fw_table(rsdp, ACPI_SIG_SRAT)) != NULL)
 		process_srat(srat_ptr);
 
-	if (slit_ptr = (struct slit *)find_fw_table("SLIT"))
+	if (slit_ptr = (ACPI_TABLE_SLIT *)find_fw_table(rsdp, ACPI_SIG_SLIT))
 		process_slit(slit_ptr);
 
-	tp = find_fw_table("MCFG");
+	tp = find_fw_table(rsdp, ACPI_SIG_MCFG);
 #else /* __xpv */
 	enumerate_xen_cpus();
-	if (DOMAIN_IS_INITDOMAIN(xen_info))
-		tp = find_fw_table("MCFG");
+	if (DOMAIN_IS_INITDOMAIN(xen_info)) {
+		rsdp = find_rsdp(xbp);
+		tp = find_fw_table(rsdp, ACPI_SIG_MCFG);
+	}
 #endif /* __xpv */
 	if (tp != NULL)
-		process_mcfg((struct mcfg *)tp);
+		process_mcfg((ACPI_TABLE_MCFG *)tp);
 }
 
 /*
@@ -2432,8 +2949,7 @@ defcons_init(size_t size)
 
 	p = do_bsys_alloc(NULL, NULL, size, MMU_PAGESIZE);
 	*p = 0;
-	bsetprop("deferred-console-buf", strlen("deferred-console-buf") + 1,
-	    &p, sizeof (p));
+	bsetprop32("deferred-console-buf", (uint32_t)((uintptr_t)&p));
 	return (p);
 }
 
@@ -2446,10 +2962,8 @@ boot_compinfo(int fd, struct compinfo *cbp)
 	return (0);
 }
 
-#define	BP_MAX_STRLEN	32
-
 /*
- * Get value for given boot property
+ * Get an integer value for given boot property
  */
 int
 bootprop_getval(const char *prop_name, u_longlong_t *prop_value)
@@ -2459,13 +2973,25 @@ bootprop_getval(const char *prop_name, u_longlong_t *prop_value)
 	u_longlong_t	value;
 
 	boot_prop_len = BOP_GETPROPLEN(bootops, prop_name);
-	if (boot_prop_len < 0 || boot_prop_len > sizeof (str) ||
+	if (boot_prop_len < 0 || boot_prop_len >= sizeof (str) ||
 	    BOP_GETPROP(bootops, prop_name, str) < 0 ||
 	    kobj_getvalue(str, &value) == -1)
 		return (-1);
 
 	if (prop_value)
 		*prop_value = value;
+
+	return (0);
+}
+
+int
+bootprop_getstr(const char *prop_name, char *buf, size_t buflen)
+{
+	int boot_prop_len = BOP_GETPROPLEN(bootops, prop_name);
+
+	if (boot_prop_len < 0 || boot_prop_len >= buflen ||
+	    BOP_GETPROP(bootops, prop_name, buf) < 0)
+		return (-1);
 
 	return (0);
 }

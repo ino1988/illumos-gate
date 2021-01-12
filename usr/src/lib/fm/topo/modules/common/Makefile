@@ -22,14 +22,19 @@
 #
 # Copyright 2008 Sun Microsystems, Inc.  All rights reserved.
 # Use is subject to license terms.
+# Copyright (c) 2018, Joyent, Inc.
 #
 
 SUBDIRS =		\
 	disk		\
+	fac_prov_ahci	\
 	fac_prov_ipmi	\
 	fac_prov_mptsas	\
 	ipmi		\
+	nic		\
 	ses		\
+	smbios		\
+	usb		\
 	xfp
 
 ses:	disk

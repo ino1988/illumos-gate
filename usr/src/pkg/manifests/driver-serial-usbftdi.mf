@@ -41,6 +41,7 @@ dir path=usr/share/man
 dir path=usr/share/man/man7d
 driver name=usbftdi perms="* 0666 root sys" \
     alias=usb403,6001 \
+    alias=usb403,6015 \
     alias=usb403,cc48 \
     alias=usb403,cc49 \
     alias=usb403,cc4a \
@@ -67,7 +68,6 @@ driver name=usbftdi perms="* 0666 root sys" \
     alias=usbif403,6010.config1.1 \
     alias=usbif9e88,9e8f.config1.1
 file path=kernel/drv/$(ARCH64)/usbftdi group=sys
-$(i386_ONLY)file path=kernel/drv/usbftdi group=sys
 file path=kernel/drv/usbftdi.conf group=sys \
     original_name=SUNWuftdi:kernel/drv/usbftdi.conf preserve=true
 file path=usr/share/man/man7d/usbftdi.7d

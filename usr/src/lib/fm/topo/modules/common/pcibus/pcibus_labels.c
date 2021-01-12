@@ -21,6 +21,7 @@
 
 /*
  * Copyright (c) 2006, 2010, Oracle and/or its affiliates. All rights reserved.
+ * Copyright 2019 Joyent, Inc.
  */
 
 #include <alloca.h>
@@ -126,7 +127,7 @@ pci_label_slotname_lookup(topo_mod_t *mod, char *platform,
 					topo_mod_dprintf(mod,
 					    "%s: calling test function=%p\n",
 					    __func__, rw.srw_test);
-					if (ret = rw.srw_test(mod, dp))
+					if ((ret = rw.srw_test(mod, dp)) != 0)
 						rlabel = rw.srw_new;
 					topo_mod_dprintf(mod,
 					    "%s: test function return=%d\n",
@@ -191,7 +192,7 @@ pci_label_missing_lookup(topo_mod_t *mod, char *platform, did_t *dp)
 					topo_mod_dprintf(mod,
 					    "%s: calling test function=%p\n",
 					    __func__, m.dl_test);
-					if (ret = m.dl_test(mod, dp))
+					if ((ret = m.dl_test(mod, dp)) != 0)
 						rlabel = m.dl_label;
 					topo_mod_dprintf(mod,
 					    "%s: test function return=%d\n",
@@ -221,7 +222,7 @@ pci_slot_label_lookup(topo_mod_t *mod, tnode_t *node, did_t *dp, did_t *pdp)
 {
 	tnode_t *anode, *apnode;
 	did_t *adp, *apdp;
-	char *plat, *pp, *l, *ancestor_l = NULL, *new_l = NULL;
+	char *plat, *pp, *l = NULL, *ancestor_l = NULL, *new_l = NULL;
 	int err, b, d, f, done = 0;
 	size_t len;
 
@@ -245,7 +246,7 @@ pci_slot_label_lookup(topo_mod_t *mod, tnode_t *node, did_t *dp, did_t *pdp)
 	 * of a slot while the child contains the label.
 	 *
 	 * Note that this algorithm only applies to nodes which have
-	 * a physcal slot number. (i.e. PCIE devices or PCI/PCIX
+	 * a physical slot number. (i.e. PCIE devices or PCI/PCIX
 	 * devices off of a PCIE to PCIX switch)
 	 */
 	if (did_physlot(pdp) >= 0) {
@@ -258,7 +259,6 @@ pci_slot_label_lookup(topo_mod_t *mod, tnode_t *node, did_t *dp, did_t *pdp)
 		 * Get this device's physical slot name.
 		 */
 		l = (char *)did_physlot_name(pdp, d);
-
 		anode = topo_node_parent(node);
 
 		/*
@@ -386,7 +386,7 @@ pci_slot_label_lookup(topo_mod_t *mod, tnode_t *node, did_t *dp, did_t *pdp)
 		 */
 		if ((l = (char *)pci_label_physlot_lookup(mod, pp, pdp))
 		    == NULL) {
-			if ((l = (char *)did_physlot_name(pdp, d)) != NULL) {
+			if ((l = (char *)did_physlot_name(dp, d)) != NULL) {
 				l = (char *)
 				    pci_label_slotname_lookup(mod, pp, l, dp);
 			}

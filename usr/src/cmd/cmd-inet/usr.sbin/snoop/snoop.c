@@ -527,8 +527,7 @@ static int tone[] = {
  * an 8k read sounds like a "WHAAAARP".
  */
 void
-click(len)
-	int len;
+click(int len)
 {
 	len /= 8;
 	len = len ? len : 4;
@@ -559,10 +558,8 @@ show_count()
  * line display.
  */
 void
-show_pktinfo(flags, num, src, dst, ptvp, tvp, drops, len)
-	int flags, num, drops, len;
-	char *src, *dst;
-	struct timeval *ptvp, *tvp;
+show_pktinfo(int flags, int num, char *src, char *dst, struct timeval *ptvp,
+    struct timeval *tvp, int drops, int len)
 {
 	struct tm *tm;
 	static struct timeval tvp0;
@@ -578,9 +575,9 @@ show_pktinfo(flags, num, src, dst, ptvp, tvp, drops, len)
 
 	if (flags & F_TIME) {
 		if (flags & F_ATIME) {
-			(void) sprintf(lp, "%d:%02d:%d.%05d ",
-				tm->tm_hour, tm->tm_min, tm->tm_sec,
-				(int)tvp->tv_usec / 10);
+			(void) sprintf(lp, "%02d:%02d:%02d.%05d ",
+			    tm->tm_hour, tm->tm_min, tm->tm_sec,
+			    (int)tvp->tv_usec / 10);
 			lp += strlen(lp);
 		} else {
 			if (flags & F_RTIME) {
@@ -629,7 +626,7 @@ show_pktinfo(flags, num, src, dst, ptvp, tvp, drops, len)
 		(void) sprintf(encap, "  (%d encap)", total_encap_levels - 1);
 		(void) printf("%s%s%s\n", line, sumline[start],
 		    ((flags & F_ALLSUM) || (total_encap_levels == 1)) ? "" :
-			encap);
+		    encap);
 
 		for (i = start + 1; i < sumcount; i++)
 			(void) printf("%s%s\n", line, sumline[i]);
@@ -669,8 +666,7 @@ get_sum_line()
 
 /*ARGSUSED*/
 char *
-get_detail_line(off, len)
-	int off, len;
+get_detail_line(int off, int len)
 {
 	if (detail_line[0]) {
 		(void) printf("%s\n", detail_line);
@@ -776,45 +772,45 @@ usage(void)
 {
 	(void) fprintf(stderr, "\nUsage:  snoop\n");
 	(void) fprintf(stderr,
-	"\t[ -a ]			# Listen to packets on audio\n");
+	"\t[ -a ]                       # Listen to packets on audio\n");
 	(void) fprintf(stderr,
-	"\t[ -d link ]		# Listen on named link\n");
+	"\t[ -d link ]                  # Listen on named link\n");
 	(void) fprintf(stderr,
-	"\t[ -s snaplen ]		# Truncate packets\n");
+	"\t[ -s snaplen ]               # Truncate packets\n");
 	(void) fprintf(stderr,
-	"\t[ -I IP interface ]		# Listen on named IP interface\n");
+	"\t[ -I IP interface ]          # Listen on named IP interface\n");
 	(void) fprintf(stderr,
-	"\t[ -c count ]		# Quit after count packets\n");
+	"\t[ -c count ]                 # Quit after count packets\n");
 	(void) fprintf(stderr,
-	"\t[ -P ]			# Turn OFF promiscuous mode\n");
+	"\t[ -P ]                       # Turn OFF promiscuous mode\n");
 	(void) fprintf(stderr,
-	"\t[ -D ]			# Report dropped packets\n");
+	"\t[ -D ]                       # Report dropped packets\n");
 	(void) fprintf(stderr,
-	"\t[ -S ]			# Report packet size\n");
+	"\t[ -S ]                       # Report packet size\n");
 	(void) fprintf(stderr,
-	"\t[ -i file ]		# Read previously captured packets\n");
+	"\t[ -i file ]                  # Read previously captured packets\n");
 	(void) fprintf(stderr,
-	"\t[ -o file ]		# Capture packets in file\n");
+	"\t[ -o file ]                  # Capture packets in file\n");
 	(void) fprintf(stderr,
-	"\t[ -n file ]		# Load addr-to-name table from file\n");
+	"\t[ -n file ]                  # Load addr-to-name table from file\n");
 	(void) fprintf(stderr,
-	"\t[ -N ]			# Create addr-to-name table\n");
+	"\t[ -N ]                       # Create addr-to-name table\n");
 	(void) fprintf(stderr,
-	"\t[ -t  r|a|d ]		# Time: Relative, Absolute or Delta\n");
+	"\t[ -t  r|a|d ]                # Time: Relative, Absolute or Delta\n");
 	(void) fprintf(stderr,
-	"\t[ -v ]			# Verbose packet display\n");
+	"\t[ -v ]                       # Verbose packet display\n");
 	(void) fprintf(stderr,
-	"\t[ -V ]			# Show all summary lines\n");
+	"\t[ -V ]                       # Show all summary lines\n");
 	(void) fprintf(stderr,
-	"\t[ -p first[,last] ]	# Select packet(s) to display\n");
+	"\t[ -p first[,last] ]          # Select packet(s) to display\n");
 	(void) fprintf(stderr,
-	"\t[ -x offset[,length] ]	# Hex dump from offset for length\n");
+	"\t[ -x offset[,length] ]       # Hex dump from offset for length\n");
 	(void) fprintf(stderr,
-	"\t[ -C ]			# Print packet filter code\n");
+	"\t[ -C ]                       # Print packet filter code\n");
 	(void) fprintf(stderr,
-	"\t[ -q ]			# Suppress printing packet count\n");
+	"\t[ -q ]                       # Suppress printing packet count\n");
 	(void) fprintf(stderr,
-	"\t[ -r ]			# Do not resolve address to name\n");
+	"\t[ -r ]                       # Do not resolve address to name\n");
 	(void) fprintf(stderr,
 	"\n\t[ filter expression ]\n");
 	(void) fprintf(stderr, "\nExample:\n");

@@ -26,6 +26,8 @@
 /*
  * Copyright (c) 2008, 2010, Oracle and/or its affiliates. All rights reserved.
  * Copyright 2012 Nexenta Systems, Inc. All rights reserved.
+ * Copyright 2016 OmniTI Computer Consulting, Inc. All rights reserved.
+ * Copyright 2017 Joyent, Inc.
  */
 
 #include "ixgbe_sw.h"
@@ -105,8 +107,10 @@ ixgbe_ring_tx(void *arg, mblk_t *mp)
 	if ((ixgbe->ixgbe_state & IXGBE_SUSPENDED) ||
 	    (ixgbe->ixgbe_state & IXGBE_ERROR) ||
 	    (ixgbe->ixgbe_state & IXGBE_OVERTEMP) ||
-	    !(ixgbe->ixgbe_state & IXGBE_STARTED)) {
-		return (mp);
+	    !(ixgbe->ixgbe_state & IXGBE_STARTED) ||
+	    ixgbe->link_state != LINK_STATE_UP) {
+		freemsg(mp);
+		return (NULL);
 	}
 
 	copy_thresh = ixgbe->tx_copy_thresh;
@@ -160,7 +164,7 @@ ixgbe_ring_tx(void *arg, mblk_t *mp)
 	 */
 	if (tx_ring->tbd_free < ixgbe->tx_overload_thresh) {
 		tx_ring->reschedule = B_TRUE;
-		IXGBE_DEBUG_STAT(tx_ring->stat_overload);
+		tx_ring->stat_overload++;
 		return (mp);
 	}
 
@@ -210,13 +214,13 @@ ixgbe_ring_tx(void *arg, mblk_t *mp)
 		if ((hdr_nmp != mp) ||
 		    (P2NPHASE((uintptr_t)hdr_nmp->b_rptr, ixgbe->sys_page_size)
 		    < hdr_len)) {
-			IXGBE_DEBUG_STAT(tx_ring->stat_lso_header_fail);
+			tx_ring->stat_lso_header_fail++;
 			/*
 			 * reallocate the mblk for the last header fragment,
 			 * expect to bcopy into pre-allocated page-aligned
 			 * buffer
 			 */
-			hdr_new_mp = allocb(hdr_frag_len, NULL);
+			hdr_new_mp = allocb(hdr_frag_len, 0);
 			if (!hdr_new_mp)
 				return (mp);
 			bcopy(hdr_nmp->b_rptr, hdr_new_mp->b_rptr,
@@ -292,7 +296,7 @@ adjust_threshold:
 			tcb = ixgbe_get_free_list(tx_ring);
 
 			if (tcb == NULL) {
-				IXGBE_DEBUG_STAT(tx_ring->stat_fail_no_tcb);
+				tx_ring->stat_fail_no_tcb++;
 				goto tx_failure;
 			}
 
@@ -389,7 +393,7 @@ adjust_threshold:
 	 * descriptors is needed.
 	 */
 	if (desc_total + 1 > IXGBE_TX_DESC_LIMIT) {
-		IXGBE_DEBUG_STAT(tx_ring->stat_break_tbd_limit);
+		tx_ring->stat_break_tbd_limit++;
 
 		/*
 		 * Discard the mblk and free the used resources
@@ -444,7 +448,7 @@ adjust_threshold:
 
 			tcb = ixgbe_get_free_list(tx_ring);
 			if (tcb == NULL) {
-				IXGBE_DEBUG_STAT(tx_ring->stat_fail_no_tcb);
+				tx_ring->stat_fail_no_tcb++;
 				goto tx_failure;
 			}
 			desc_num = ixgbe_tx_copy(tx_ring, tcb, pull_mp,
@@ -457,7 +461,7 @@ adjust_threshold:
 
 		tcb = ixgbe_get_free_list(tx_ring);
 		if (tcb == NULL) {
-			IXGBE_DEBUG_STAT(tx_ring->stat_fail_no_tcb);
+			tx_ring->stat_fail_no_tcb++;
 			goto tx_failure;
 		}
 		if ((ctx != NULL) && ctx->lso_flag) {
@@ -497,7 +501,7 @@ adjust_threshold:
 	 * parallel.
 	 */
 	if (tx_ring->tbd_free <= (desc_total + 1)) {
-		IXGBE_DEBUG_STAT(tx_ring->stat_fail_no_tbd);
+		tx_ring->stat_fail_no_tbd++;
 		mutex_exit(&tx_ring->tx_lock);
 		goto tx_failure;
 	}
@@ -652,7 +656,7 @@ ixgbe_tx_bind(ixgbe_tx_ring_t *tx_ring, tx_control_block_t *tcb, mblk_t *mp,
 	    0, &dma_cookie, &ncookies);
 
 	if (status != DDI_DMA_MAPPED) {
-		IXGBE_DEBUG_STAT(tx_ring->stat_fail_dma_bind);
+		tx_ring->stat_fail_dma_bind++;
 		return (-1);
 	}
 
@@ -693,6 +697,7 @@ ixgbe_get_context(mblk_t *mp, ixgbe_tx_context_t *ctx)
 	uint32_t start;
 	uint32_t hckflags;
 	uint32_t lsoflags;
+	uint32_t lsocksum;
 	uint32_t mss;
 	uint32_t len;
 	uint32_t size;
@@ -717,19 +722,6 @@ ixgbe_get_context(mblk_t *mp, ixgbe_tx_context_t *ctx)
 	mac_lso_get(mp, &mss, &lsoflags);
 	ctx->mss = mss;
 	ctx->lso_flag = (lsoflags == HW_LSO);
-
-	/*
-	 * LSO relies on tx h/w checksum, so here will drop the package
-	 * if h/w checksum flag is not declared.
-	 */
-	if (ctx->lso_flag) {
-		if (!((ctx->hcksum_flags & HCK_PARTIALCKSUM) &&
-		    (ctx->hcksum_flags & HCK_IPV4_HDRCKSUM))) {
-			IXGBE_DEBUGLOG_0(NULL, "ixgbe_tx: h/w "
-			    "checksum flags are not specified when doing LSO");
-			return (-1);
-		}
-	}
 
 	etype = 0;
 	mac_hdr_len = 0;
@@ -775,6 +767,8 @@ ixgbe_get_context(mblk_t *mp, ixgbe_tx_context_t *ctx)
 	 * Here we don't assume the IP(V6) header is fully included in
 	 * one mblk fragment.
 	 */
+	lsocksum = HCK_PARTIALCKSUM;
+	ctx->l3_proto = etype;
 	switch (etype) {
 	case ETHERTYPE_IP:
 		if (ctx->lso_flag) {
@@ -806,6 +800,7 @@ ixgbe_get_context(mblk_t *mp, ixgbe_tx_context_t *ctx)
 			 * (ip_source_addr, ip_destination_addr, l4_proto)
 			 * Currently the tcp/ip stack has done it.
 			 */
+			lsocksum |= HCK_IPV4_HDRCKSUM;
 		}
 
 		offset = offsetof(ipha_t, ipha_protocol) + mac_hdr_len;
@@ -820,6 +815,21 @@ ixgbe_get_context(mblk_t *mp, ixgbe_tx_context_t *ctx)
 		l4_proto = *(uint8_t *)pos;
 		break;
 	case ETHERTYPE_IPV6:
+		/*
+		 * We need to zero out the length in the header.
+		 */
+		if (ctx->lso_flag) {
+			offset = offsetof(ip6_t, ip6_plen) + mac_hdr_len;
+			while (size <= offset) {
+				mp = mp->b_cont;
+				ASSERT(mp != NULL);
+				len = MBLKL(mp);
+				size += len;
+			}
+			pos = mp->b_rptr + offset + len - size;
+			*((uint16_t *)(uintptr_t)(pos)) = 0;
+		}
+
 		offset = offsetof(ip6_t, ip6_nxt) + mac_hdr_len;
 		while (size <= offset) {
 			mp = mp->b_cont;
@@ -838,6 +848,18 @@ ixgbe_get_context(mblk_t *mp, ixgbe_tx_context_t *ctx)
 	}
 
 	if (ctx->lso_flag) {
+		/*
+		 * LSO relies on tx h/w checksum, so here will drop the packet
+		 * if h/w checksum flag is not declared.
+		 */
+		if ((ctx->hcksum_flags & lsocksum) != lsocksum) {
+			IXGBE_DEBUGLOG_2(NULL, "ixgbe_tx: h/w checksum flags "
+			    "are not set for LSO, found 0x%x, needed bits 0x%x",
+			    ctx->hcksum_flags, lsocksum);
+			return (-1);
+		}
+
+
 		offset = mac_hdr_len + start;
 		while (size <= offset) {
 			mp = mp->b_cont;
@@ -894,6 +916,7 @@ ixgbe_check_context(ixgbe_tx_ring_t *tx_ring, ixgbe_tx_context_t *ctx)
 
 	if ((ctx->hcksum_flags != last->hcksum_flags) ||
 	    (ctx->l4_proto != last->l4_proto) ||
+	    (ctx->l3_proto != last->l3_proto) ||
 	    (ctx->mac_hdr_len != last->mac_hdr_len) ||
 	    (ctx->ip_hdr_len != last->ip_hdr_len) ||
 	    (ctx->lso_flag != last->lso_flag) ||
@@ -924,11 +947,19 @@ ixgbe_fill_context(struct ixgbe_adv_tx_context_desc *ctx_tbd,
 
 	ctx_tbd->type_tucmd_mlhl =
 	    IXGBE_ADVTXD_DCMD_DEXT | IXGBE_ADVTXD_DTYP_CTXT;
+	/*
+	 * When we have a TX context set up, we enforce that the ethertype is
+	 * either IPv4 or IPv6 in ixgbe_get_tx_context().
+	 */
+	if (ctx->lso_flag || ctx->hcksum_flags & HCK_IPV4_HDRCKSUM) {
+		if (ctx->l3_proto == ETHERTYPE_IP) {
+			ctx_tbd->type_tucmd_mlhl |= IXGBE_ADVTXD_TUCMD_IPV4;
+		} else {
+			ctx_tbd->type_tucmd_mlhl |= IXGBE_ADVTXD_TUCMD_IPV6;
+		}
+	}
 
-	if (ctx->hcksum_flags & HCK_IPV4_HDRCKSUM)
-		ctx_tbd->type_tucmd_mlhl |= IXGBE_ADVTXD_TUCMD_IPV4;
-
-	if (ctx->hcksum_flags & HCK_PARTIALCKSUM) {
+	if (ctx->lso_flag || ctx->hcksum_flags & HCK_PARTIALCKSUM) {
 		switch (ctx->l4_proto) {
 		case IPPROTO_TCP:
 			ctx_tbd->type_tucmd_mlhl |= IXGBE_ADVTXD_TUCMD_L4T_TCP;
@@ -1079,8 +1110,8 @@ ixgbe_tx_fill_ring(ixgbe_tx_ring_t *tx_ring, link_list_t *pending_list,
 	 * The Insert Ethernet CRC (IFCS) bit and the checksum fields are only
 	 * valid in the first descriptor of the packet.
 	 * Setting paylen in every first_tbd for all parts.
-	 * 82599 and X540 require the packet length in paylen field with or
-	 * without LSO and 82598 will ignore it in non-LSO mode.
+	 * 82599, X540 and X550 require the packet length in paylen field
+	 * with or without LSO and 82598 will ignore it in non-LSO mode.
 	 */
 	ASSERT(first_tbd != NULL);
 	first_tbd->read.cmd_type_len |= IXGBE_ADVTXD_DCMD_IFCS;
@@ -1097,6 +1128,9 @@ ixgbe_tx_fill_ring(ixgbe_tx_ring_t *tx_ring, link_list_t *pending_list,
 
 	case ixgbe_mac_82599EB:
 	case ixgbe_mac_X540:
+	case ixgbe_mac_X550:
+	case ixgbe_mac_X550EM_x:
+	case ixgbe_mac_X550EM_a:
 		if (ctx != NULL && ctx->lso_flag) {
 			first_tbd->read.cmd_type_len |= IXGBE_ADVTXD_DCMD_TSE;
 			first_tbd->read.olinfo_status |=

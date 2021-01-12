@@ -26,7 +26,8 @@
 #
 
 #
-# Copyright (c) 2012 by Delphix. All rights reserved.
+# Copyright (c) 2012, 2016 by Delphix. All rights reserved.
+# Copyright 2019 Joyent, Inc.
 #
 
 . $STF_SUITE/include/libtest.shlib
@@ -49,11 +50,13 @@ function cleanup
 	if poolexists $TESTPOOL ; then
                 destroy_pool $TESTPOOL
         fi
-	if [ -d ${TESTPOOL}.root ]
+	if [ -d $TESTPOOL_DIR ]
 	then
-		log_must $RMDIR ${TESTPOOL}.root
+		log_must rmdir $TESTPOOL_DIR
 	fi
 }
+
+TESTPOOL_DIR=/${TESTPOOL}.root
 
 log_onexit cleanup
 
@@ -65,44 +68,44 @@ else
 	disk=$DISK0
 fi
 
-log_must $MKDIR /${TESTPOOL}.root
-log_must $ZPOOL create -R /${TESTPOOL}.root $TESTPOOL $disk
-if [ ! -d /${TESTPOOL}.root ]
+log_must mkdir $TESTPOOL_DIR
+log_must zpool create -R $TESTPOOL_DIR $TESTPOOL $disk
+if [ ! -d $TESTPOOL_DIR ]
 then
-	log_fail "Mountpoint was not create when using zpool with -R flag!"
+	log_fail "Mountpoint was not created when using zpool with -R flag!"
 fi
 
-FS=$($ZFS list $TESTPOOL)
+FS=$(zfs list $TESTPOOL)
 if [ -z "$FS" ]
 then
-	log_fail "Mounted filesystem at /${TESTPOOL}.root isn't ZFS!"
+	log_fail "Mounted filesystem at $TESTPOOL_DIR isn't ZFS!"
 fi
 
-log_must $ZPOOL get all $TESTPOOL
-$ZPOOL get all $TESTPOOL > /tmp/values.$$
+log_must zpool get all $TESTPOOL
+zpool get all $TESTPOOL > /tmp/values.$$
 
 # check for the cachefile property, verifying that it's set to 'none'
-$GREP "$TESTPOOL[ ]*cachefile[ ]*none" /tmp/values.$$ > /dev/null 2>&1
+grep "$TESTPOOL[ ]*cachefile[ ]*none" /tmp/values.$$ > /dev/null 2>&1
 if [ $? -ne 0 ]
 then
 	log_fail "zpool property \'cachefile\' was not set to \'none\'."
 fi
 
 # check that the root = /mountpoint property is set correctly
-$GREP "$TESTPOOL[ ]*altroot[ ]*/${TESTPOOL}.root" /tmp/values.$$ > /dev/null 2>&1
+grep "$TESTPOOL[ ]*altroot[ ]*$TESTPOOL_DIR" /tmp/values.$$ > /dev/null 2>&1
 if [ $? -ne 0 ]
 then
 	log_fail "zpool property root was not found in pool output."
 fi
 
-$RM /tmp/values.$$
+rm /tmp/values.$$
 
 # finally, check that the pool has no reference in /etc/zfs/zpool.cache
 if [[ -f /etc/zfs/zpool.cache ]] ; then
-	REF=$($STRINGS /etc/zfs/zpool.cache | $GREP ${TESTPOOL})
+	REF=$(strings /etc/zfs/zpool.cache | grep ${TESTPOOL})
 	if [ ! -z "$REF" ]
 	then
-		$STRINGS /etc/zfs/zpool.cache
+		strings /etc/zfs/zpool.cache
 		log_fail "/etc/zfs/zpool.cache appears to have a reference to $TESTPOOL"
 	fi
 fi

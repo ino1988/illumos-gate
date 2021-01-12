@@ -22,6 +22,10 @@
 /*
  * Copyright 2010 Sun Microsystems, Inc.  All rights reserved.
  * Use is subject to license terms.
+ *
+ * Copyright 2015 PALO, Richard
+ *
+ * Copyright (c) 2018, Joyent, Inc.
  */
 
 #include <stdio.h>
@@ -56,6 +60,10 @@ parse_exception_line(char *line, elem_list *list)
 	}
 
 	e = (elem *) malloc(sizeof (elem));
+	if (e == NULL) {
+		perror("malloc");
+		exit(1);
+	}
 
 	e->inode = 0;
 	e->perm = 0;
@@ -68,8 +76,9 @@ parse_exception_line(char *line, elem_list *list)
 	e->symsrc = NULL;
 	e->file_type = DIR_T;
 
-	while ((e->arch = assign_arch(arch)) == NULL) {
+	while ((e->arch = assign_arch(arch)) == 0) {
 		if ((arch = strtok(NULL, FS)) == NULL) {
+			free(e);
 			return (0);
 		}
 	}

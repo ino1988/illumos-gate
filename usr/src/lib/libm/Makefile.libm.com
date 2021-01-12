@@ -11,6 +11,7 @@
 
 #
 # Copyright 2011 Nexenta Systems, Inc.  All rights reserved.
+# Copyright (c) 2019, Joyent, Inc.
 #
 
 LIBMDIR		= $(SRC)/lib/libm
@@ -23,15 +24,21 @@ ASSUFFIX_sparc	= S
 ASSUFFIX_i386	= s
 ASSUFFIX	= $(ASSUFFIX_$(MACH))
 
-# C99MODE of neither enabled nor disabled is "no_lib", whereby we expect
-# C99-the-language, but don't modify the behaviour of library routines.  This
-# is VERY IMPORTANT, as -xc99=%all, for instance, would link us with
+# With studio CSTD of neither enabled nor disabled is "no_lib", whereby we
+# expect C99-the-language, but don't modify the behaviour of library routines.
+# This is VERY IMPORTANT, as $(CSTD_GNU99), for instance, would link us with
 # values-xpg6, which would introduce an __xpg6 to our object with the C99
 # flags set, causing us to default C99 libm behaviour on, breaking
 # compatibility.
-C99MODE		=
+#
+# We must then, unfortunately, defeat the GNU compiler _defaulting_ to C99, by
+# in that case setting it back to gnu89, which _also_ accepts C99 syntax as
+# far as is important.
+CSTD		=
+CFLAGS		+= -_gcc=-std=gnu89
+CFLAGS64	+= -_gcc=-std=gnu89
 
-M4FLAGS		= -D__STDC__ -DELFOBJ -DPIC
+M4FLAGS		= -D__STDC__ -DPIC
 
 LDBLDIR_sparc	= Q
 LDBLDIR_i386	= LD
@@ -39,19 +46,17 @@ LDBLDIR		= $(LDBLDIR_$(MACH))
 
 LM_IL		= $(LIBMDIR)/$(TARGET_ARCH)/src/locallibm.il
 
-CFLAGS		+= $(C_PICFLAGS) -D__INLINE $(XSTRCONST) $(LM_IL)
-CFLAGS64	+= $(C_PICFLAGS) -D__INLINE $(XSTRCONST) $(LM_IL)
+CFLAGS		+= $(C_PICFLAGS) $(XSTRCONST) $(LM_IL)
+CFLAGS64	+= $(C_PICFLAGS) $(XSTRCONST) $(LM_IL)
 sparc_CFLAGS	+= -Wa,-xarch=v8plus
 
-CPPFLAGS	+= -DELFOBJ \
-		-DLIBM_MT_FEX_SYNC \
-		-I$(LIBMSRC)/C \
+CPPFLAGS	+= -I$(LIBMSRC)/C \
 		-I$(LIBMSRC)/$(LDBLDIR) -I$(LIBMDIR)/$(TARGET_ARCH)/src
 
 # GCC needs __C99FEATURES__ such that the implementations of isunordered,
 # isgreaterequal, islessequal, etc, exist.  This is basically equivalent to
 # providing no -xc99 to Studio, in that it gets us the C99 language features,
-# but not values-xpg6, the reason for which is outline with C99MODE.
+# but not values-xpg6, the reason for which is outlined with CSTD.
 CFLAGS		+= -_gcc=-D__C99FEATURES__
 CFLAGS64	+= -_gcc=-D__C99FEATURES__
 
@@ -59,11 +64,14 @@ CFLAGS64	+= -_gcc=-D__C99FEATURES__
 CFLAGS		+= -_gcc=-fno-strict-overflow
 CFLAGS64	+= -_gcc=-fno-strict-overflow
 
-$(DYNLIB) 	:= LDLIBS += -lc
+# sparse currently has no _Complex support
+CFLAGS		+= -_smatch=off
+CFLAGS64	+= -_smatch=off
 
-$(LINTLIB) 	:= SRCS = $(LIBMSRC)/$(LINTSRC)
+$(DYNLIB)	:= LDLIBS += -lc
 
-CLEANFILES 	+= pics/*.s pics/*.S
+
+CLEANFILES	+= pics/*.s pics/*.S
 
 FPDEF_amd64	= -DARCH_amd64
 FPDEF_sparc	= -DCG89 -DARCH_v8plus -DFPADD_TRAPS_INCOMPLETE_ON_NAN
@@ -80,7 +88,7 @@ XARCH		= $(XARCH_$(TARGET_ARCH))
 
 ASOPT_sparc	= -xarch=$(XARCH) $(AS_PICFLAGS)
 ASOPT_sparcv9	= -xarch=$(XARCH) $(AS_PICFLAGS)
-ASOPT_i386	= 
+ASOPT_i386	=
 ASOPT_amd64	= -xarch=$(XARCH) $(AS_PICFLAGS)
 ASOPT		= $(ASOPT_$(TARGET_ARCH))
 

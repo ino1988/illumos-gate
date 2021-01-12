@@ -20,7 +20,8 @@
  */
 /*
  * Copyright (c) 2003, 2010, Oracle and/or its affiliates. All rights reserved.
- * Copyright 2013, Joyent, Inc. All rights reserved.
+ * Copyright 2016 Joyent, Inc.
+ * Copyright (c) 2016 by Delphix. All rights reserved.
  */
 
 #include <sys/types.h>
@@ -866,8 +867,8 @@ secpolicy_fs_unmount(cred_t *cr, struct vfs *vfsp)
 }
 
 /*
- * Quotas are a resource, but if one has the ability to mount a filesystem, he
- * should be able to modify quotas on it.
+ * Quotas are a resource, but if one has the ability to mount a filesystem,
+ * they should be able to modify quotas on it.
  */
 int
 secpolicy_fs_quota(const cred_t *cr, const vfs_t *vfsp)
@@ -1363,7 +1364,7 @@ secpolicy_xvattr(xvattr_t *xvap, uid_t owner, cred_t *cr, vtype_t vtype)
  * this is required because vop_access function should lock the
  * node for reading.  A three argument function should be defined
  * which accepts the following argument:
- * 	A pointer to the internal "node" type (inode *)
+ *	A pointer to the internal "node" type (inode *)
  *	vnode access bits (VREAD|VWRITE|VEXEC)
  *	a pointer to the credential
  *
@@ -1384,9 +1385,9 @@ secpolicy_xvattr(xvattr_t *xvap, uid_t owner, cred_t *cr, vtype_t vtype)
 
 int
 secpolicy_vnode_setattr(cred_t *cr, struct vnode *vp, struct vattr *vap,
-	const struct vattr *ovap, int flags,
-	int unlocked_access(void *, int, cred_t *),
-	void *node)
+    const struct vattr *ovap, int flags,
+    int unlocked_access(void *, int, cred_t *),
+    void *node)
 {
 	int mask = vap->va_mask;
 	int error = 0;
@@ -1435,8 +1436,8 @@ secpolicy_vnode_setattr(cred_t *cr, struct vnode *vp, struct vattr *vap,
 		 *
 		 * If you are the file owner:
 		 *	chown to other uid		FILE_CHOWN_SELF
-		 *	chown to gid (non-member) 	FILE_CHOWN_SELF
-		 *	chown to gid (member) 		<none>
+		 *	chown to gid (non-member)	FILE_CHOWN_SELF
+		 *	chown to gid (member)		<none>
 		 *
 		 * Instead of PRIV_FILE_CHOWN_SELF, FILE_CHOWN is also
 		 * acceptable but the first one is reported when debugging.
@@ -1726,6 +1727,19 @@ int
 secpolicy_pset(const cred_t *cr)
 {
 	return (PRIV_POLICY(cr, PRIV_SYS_RES_CONFIG, B_FALSE, EPERM, NULL));
+}
+
+/* Process security flags */
+int
+secpolicy_psecflags(const cred_t *cr, proc_t *tp, proc_t *sp)
+{
+	if (PRIV_POLICY(cr, PRIV_PROC_SECFLAGS, B_FALSE, EPERM, NULL) != 0)
+		return (EPERM);
+
+	if (!prochasprocperm(tp, sp, cr))
+		return (EPERM);
+
+	return (0);
 }
 
 /*
@@ -2056,7 +2070,7 @@ secpolicy_rpcmod_open(const cred_t *cr)
 	if (PRIV_POLICY_ONLY(cr, PRIV_SYS_NFS, B_FALSE))
 		return (secpolicy_nfs(cr));
 	else
-		return (secpolicy_net_config(cr, NULL));
+		return (secpolicy_net_config(cr, B_FALSE));
 }
 
 int
@@ -2069,6 +2083,12 @@ int
 secpolicy_tasksys(const cred_t *cr)
 {
 	return (PRIV_POLICY(cr, PRIV_PROC_TASKID, B_FALSE, EPERM, NULL));
+}
+
+int
+secpolicy_meminfo(const cred_t *cr)
+{
+	return (PRIV_POLICY(cr, PRIV_PROC_MEMINFO, B_FALSE, EPERM, NULL));
 }
 
 int
@@ -2386,6 +2406,19 @@ secpolicy_gart_map(const cred_t *cr)
 		return (PRIV_POLICY(cr, PRIV_GRAPHICS_MAP, B_FALSE, EPERM,
 		    NULL));
 	}
+}
+
+/*
+ * secpolicy_hwmanip
+ *
+ * Determine if the subject can observe and manipulate a hardware device with a
+ * dangerous blunt hammer, often suggests they can do something destructive.
+ * Requires all privileges.
+ */
+int
+secpolicy_hwmanip(const cred_t *cr)
+{
+	return (secpolicy_require_set(cr, PRIV_FULLSET, NULL, KLPDARG_NONE));
 }
 
 /*

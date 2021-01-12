@@ -21,6 +21,9 @@
 /*
  * Copyright 2009 Sun Microsystems, Inc.  All rights reserved.
  * Use is subject to license terms.
+ *
+ * Copyright 2016 Syneto S.R.L. All rights reserved.
+ * Copyright 2017 Nexenta Systems, Inc.  All rights reserved.
  */
 
 /*
@@ -40,8 +43,6 @@
 #include <smbsrv/smb_fsops.h>
 
 
-static void smb_flush_file(struct smb_request *sr, struct smb_ofile *ofile);
-
 /*
  * smb_com_flush
  *
@@ -60,7 +61,7 @@ smb_pre_flush(smb_request_t *sr)
 
 	rc = smbsr_decode_vwv(sr, "w", &sr->smb_fid);
 
-	DTRACE_SMB_1(op__Flush__start, smb_request_t *, sr);
+	DTRACE_SMB_START(op__Flush, smb_request_t *, sr);
 
 	return ((rc == 0) ? SDRC_SUCCESS : SDRC_ERROR);
 }
@@ -68,7 +69,7 @@ smb_pre_flush(smb_request_t *sr)
 void
 smb_post_flush(smb_request_t *sr)
 {
-	DTRACE_SMB_1(op__Flush__done, smb_request_t *, sr);
+	DTRACE_SMB_DONE(op__Flush, smb_request_t *, sr);
 }
 
 smb_sdrc_t
@@ -90,15 +91,14 @@ smb_com_flush(smb_request_t *sr)
 			    ERRDOS, ERRbadfid);
 			return (SDRC_ERROR);
 		}
-
-		smb_flush_file(sr, sr->fid_ofile);
+		smb_ofile_flush(sr, sr->fid_ofile);
 	} else {
 		flist = &sr->tid_tree->t_ofile_list;
 		smb_llist_enter(flist, RW_READER);
 		file = smb_llist_head(flist);
 		while (file) {
 			mutex_enter(&file->f_mutex);
-			smb_flush_file(sr, file);
+			smb_ofile_flush(sr, file);
 			mutex_exit(&file->f_mutex);
 			file = smb_llist_next(flist, file);
 		}
@@ -107,20 +107,4 @@ smb_com_flush(smb_request_t *sr)
 
 	rc = smbsr_encode_empty_result(sr);
 	return ((rc == 0) ? SDRC_SUCCESS : SDRC_ERROR);
-}
-
-
-/*
- * smb_flush_file
- *
- * If writes on this file are not synchronous, flush it using the NFSv3
- * commit interface.
- */
-static void
-smb_flush_file(struct smb_request *sr, struct smb_ofile *ofile)
-{
-	sr->user_cr = smb_ofile_getcred(ofile);
-
-	if ((ofile->f_node->flags & NODE_FLAGS_WRITE_THROUGH) == 0)
-		(void) smb_fsop_commit(sr, sr->user_cr, ofile->f_node);
 }

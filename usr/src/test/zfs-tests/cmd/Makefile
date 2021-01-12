@@ -10,25 +10,8 @@
 #
 
 #
-# Copyright (c) 2012 by Delphix. All rights reserved.
+# Copyright (c) 2012, 2016 by Delphix. All rights reserved.
 #
 
-.PARALLEL: $(SUBDIRS)
-
-SUBDIRS = chg_usr_exec \
-	devname2devid \
-	dir_rd_update \
-	file_check \
-	file_trunc \
-	file_write \
-	largest_file \
-	mkbusy \
-	mktree \
-	mmapwrite \
-	randfree_file \
-	readmmap \
-	rename_dir \
-	rm_lnkcnt_zero_file \
-	scripts
-
+include $(SRC)/test/zfs-tests/Makefile.com
 include $(SRC)/test/Makefile.com

@@ -410,7 +410,7 @@ tsalarm_attach(dev_info_t *dip, ddi_attach_cmd_t cmd)
 		 * the device's softc, is used to direct peculiar behavior.
 		 */
 		if (ddi_create_minor_node(dip, "lom", S_IFCHR, 0,
-		    DDI_PSEUDO, NULL) == DDI_FAILURE) {
+		    DDI_PSEUDO, 0) == DDI_FAILURE) {
 			goto attach_failed;
 		}
 
@@ -544,7 +544,7 @@ FAIL:
 	if (rv != 0) {
 		if (softc->flags & TSAL_OPENED)
 			(void) ldi_close(softc->lh, FREAD|FWRITE, credp);
-		if (softc->flags * TSAL_IDENTED)
+		if (softc->flags & TSAL_IDENTED)
 			(void) ldi_ident_release(softc->li);
 		softc->flags &= ~(TSAL_OPENED | TSAL_IDENTED);
 		if (softc->req_ptr != NULL)
@@ -638,7 +638,7 @@ tsalarm_close(dev_t dev, int flag, int otyp, cred_t *credp)
 /* ARGSUSED */
 static int
 tsalarm_ioctl(dev_t dev, int cmd, intptr_t arg, int mode,
-		cred_t *credp, int *rvalp)
+    cred_t *credp, int *rvalp)
 {
 	int		inst = getminor(dev);
 	struct tsalarm_softc *softc;
@@ -749,7 +749,7 @@ glvc_alarm_get(int alarm_type, int *alarm_state, tsalarm_softc_t *sc)
 	req_ptr->alarm_id = alarm_type;
 
 	send_msg.msg_type = PCP_ALARM_CONTROL;
-	send_msg.sub_type = NULL;
+	send_msg.sub_type = 0;
 	send_msg.msg_len = sizeof (tsal_pcp_alarm_req_t);
 	send_msg.msg_data = (uint8_t *)req_ptr;
 
@@ -824,7 +824,7 @@ glvc_alarm_set(int alarm_type, int new_state, tsalarm_softc_t *sc)
 	req_ptr->alarm_id = alarm_type;
 
 	send_msg.msg_type = PCP_ALARM_CONTROL;
-	send_msg.sub_type = NULL;
+	send_msg.sub_type = 0;
 	send_msg.msg_len = sizeof (tsal_pcp_alarm_req_t);
 	send_msg.msg_data = (uint8_t *)req_ptr;
 
@@ -888,12 +888,12 @@ alarm_return:
  * tsal_pcp_msg_t *resp_msg - Response Message to be received.
  * uint32_t timeout    - timeout field when waiting for data from channel.
  * Returns:
- * 	0    - success (TSAL_PCP_OK).
- * 	(-1) - failure (TSAL_PCP_ERROR).
+ *	0    - success (TSAL_PCP_OK).
+ *	(-1) - failure (TSAL_PCP_ERROR).
  */
 static int
 tsal_pcp_send_recv(tsalarm_softc_t *sc, tsal_pcp_msg_t *req_msg,
-			tsal_pcp_msg_t *resp_msg, uint32_t timeout)
+    tsal_pcp_msg_t *resp_msg, uint32_t timeout)
 {
 	void		*datap;
 	void		*resp_msg_data = NULL;
@@ -1004,7 +1004,7 @@ tsal_pcp_send_recv(tsalarm_softc_t *sc, tsal_pcp_msg_t *req_msg,
 	}
 
 	/*
-	 * check status field for any channel protocol errrors
+	 * check status field for any channel protocol errors
 	 * This field signifies something happend during request
 	 * message trasmission. This field is set by the receiver.
 	 */
@@ -1382,7 +1382,7 @@ tsal_pcp_send_req_msg_hdr(tsalarm_softc_t *sc, tsal_pcp_req_msg_hdr_t *req_hdr)
  */
 static int
 tsal_pcp_recv_resp_msg_hdr(tsalarm_softc_t *sc,
-				tsal_pcp_resp_msg_hdr_t *resp_hdr)
+    tsal_pcp_resp_msg_hdr_t *resp_hdr)
 {
 	uint32_t	magic_num;
 	uint8_t		proto_ver;
@@ -1595,7 +1595,7 @@ tsal_pcp_frame_error_handle(tsalarm_softc_t *sc)
  */
 static int
 check_magic_byte_presence(tsalarm_softc_t *sc,
-		int byte_cnt, uint8_t *byte_seq, int *ispresent)
+    int byte_cnt, uint8_t *byte_seq, int *ispresent)
 {
 	int		ret, i;
 	uint8_t		buf[4];

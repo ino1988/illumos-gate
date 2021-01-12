@@ -21,6 +21,7 @@
 /*
  * Copyright 2009 Sun Microsystems, Inc.  All rights reserved.
  * Use is subject to license terms.
+ * Copyright 2016 Nexenta Systems, Inc. All rights reserved.
  */
 
 #include <stdio.h>			/* Standard */
@@ -124,10 +125,12 @@ static char *power_button_cmd[] = {
 	"-h", "-d", ":0", NULL
 };
 
+#ifdef __x86
 static char *autoS3_cmd[] = {
 	"/usr/bin/sys-suspend",
 	"-n", "-d", ":0", NULL
 };
+#endif
 
 static char pidpath[] = PIDPATH;
 static char scratch[PATH_MAX];
@@ -146,12 +149,14 @@ static void set_alarm(time_t);
 static int poweroff(const char *, char **);
 static int is_ok2shutdown(time_t *);
 static int get_prom(int, prom_node_t, char *, char *, size_t);
-static void power_button_monitor(void *);
+static void *power_button_monitor(void *);
 static int open_pidfile(char *);
 static int write_pidfile(int, pid_t);
 static int read_cpr_config(void);
-static void system_activity_monitor(void);
-static void autos3_monitor(void);
+static void *system_activity_monitor(void *);
+#ifdef __x86
+static void *autos3_monitor(void *);
+#endif
 static void do_attach(void);
 static void *attach_devices(void *);
 static int powerd_debug;
@@ -303,8 +308,7 @@ main(int argc, char *argv[])
 	if ((pb_fd = open(PB, O_RDONLY)) != -1) {
 		if (powerd_debug)
 			logerror("powerd starting power button monitor.");
-		if (thr_create(NULL, NULL,
-		    (void *(*)(void *))power_button_monitor, NULL,
+		if (thr_create(NULL, 0, power_button_monitor, NULL,
 		    THR_DAEMON, NULL) != 0) {
 			logerror("Unable to monitor system's power button.");
 		}
@@ -318,21 +322,22 @@ main(int argc, char *argv[])
 	 */
 	if (powerd_debug)
 		logerror("powerd starting system activity monitor.");
-	if (thr_create(NULL, NULL,
-	    (void *(*)(void *))system_activity_monitor, NULL,
+	if (thr_create(NULL, 0, system_activity_monitor, NULL,
 	    THR_DAEMON, NULL) != 0) {
 		logerror("Unable to create thread to monitor system activity.");
 	}
 
+#ifdef __x86
 	/*
 	 * Create a new thread to handle autos3 trigger
 	 */
 	if (powerd_debug)
 		logerror("powerd starting autos3 monitor.");
-	if (thr_create(NULL, NULL,
-	    (void *(*)(void *))autos3_monitor, NULL, THR_DAEMON, NULL) != 0) {
+	if (thr_create(NULL, 0, autos3_monitor, NULL, THR_DAEMON,
+	    NULL) != 0) {
 		logerror("Unable to create thread to monitor autos3 activity.");
 	}
+#endif
 
 	/*
 	 * Block until we receive an explicit terminate signal
@@ -342,8 +347,8 @@ main(int argc, char *argv[])
 	return (1);
 }
 
-static void
-system_activity_monitor(void)
+static void *
+system_activity_monitor(void *arg __unused)
 {
 	struct sigaction act;
 	sigset_t sigmask;
@@ -385,10 +390,12 @@ system_activity_monitor(void)
 	do {
 		(void) sigsuspend(&sigmask);
 	} while (errno == EINTR);
+	return (NULL);
 }
 
-static void
-autos3_monitor(void)
+#ifdef __x86
+static void *
+autos3_monitor(void *arg __unused)
 {
 	struct pollfd poll_fd;
 	srn_event_info_t srn_event;		/* contains suspend type */
@@ -397,7 +404,7 @@ autos3_monitor(void)
 	fd = open(SRN, O_RDWR|O_EXCL|O_NDELAY);
 	if (fd == -1) {
 		logerror("Unable to open %s: %s", SRN, strerror(errno));
-		thr_exit((void *) errno);
+		thr_exit((void *)(intptr_t)errno);
 	}
 
 	/*
@@ -407,7 +414,7 @@ autos3_monitor(void)
 	if (ret == -1) {
 		logerror("Ioctl SRN_IOC_AUTOSX failed: %s", strerror(errno));
 		(void) close(fd);
-		thr_exit((void *) errno);
+		thr_exit((void *)(intptr_t)errno);
 	}
 	poll_fd.fd = fd;
 	/*CONSTCOND*/
@@ -422,7 +429,7 @@ autos3_monitor(void)
 			default:
 				logerror("Poll error: %s", strerror(errno));
 				(void) close(fd);
-				thr_exit((void *) errno);
+				thr_exit((void *)(intptr_t)errno);
 			}
 		}
 
@@ -430,7 +437,7 @@ autos3_monitor(void)
 		if (ret == -1) {
 			logerror("ioctl error: %s", strerror(errno));
 			(void) close(fd);
-			thr_exit((void *) errno);
+			thr_exit((void *)(intptr_t)errno);
 		}
 		switch (srn_event.ae_type) {
 		case 3:			/* S3 */
@@ -446,7 +453,9 @@ autos3_monitor(void)
 		(void) poweroff("AutoS3", autoS3_cmd);
 		continue;
 	}
+	return (NULL);
 }
+#endif
 
 static int
 read_cpr_config(void)
@@ -1083,7 +1092,7 @@ poweroff(const char *msg, char **cmd_argv)
  */
 static int
 get_prom(int prom_fd, prom_node_t node_name,
-	char *property_name, char *property_value, size_t len)
+    char *property_name, char *property_value, size_t len)
 {
 	union {
 		char buf[PBUFSIZE + sizeof (uint_t)];
@@ -1160,7 +1169,7 @@ get_prom(int prom_fd, prom_node_t node_name,
 #define	iseol(ch)	((ch) == '\n' || (ch) == '\r' || (ch) == '\f')
 
 /*ARGSUSED*/
-static void
+static void *
 power_button_monitor(void *arg)
 {
 	struct pollfd pfd;
@@ -1219,6 +1228,7 @@ power_button_monitor(void *arg)
 			thr_exit((void *) 0);
 		}
 	}
+	return (NULL);
 }
 
 static void
@@ -1237,7 +1247,7 @@ do_attach(void)
 	    (estar_v3_prop && strcmp(asinfo.apm_behavior, "default") == 0)) {
 		if (powerd_debug)
 			logerror("powerd starting device attach thread.");
-		if (thr_create(NULL, NULL, attach_devices, NULL,
+		if (thr_create(NULL, 0, attach_devices, NULL,
 		    THR_DAEMON, NULL) != 0) {
 			logerror("Unable to create thread to attach devices.");
 		}

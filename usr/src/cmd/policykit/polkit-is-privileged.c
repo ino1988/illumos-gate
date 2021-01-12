@@ -21,6 +21,9 @@
  *
  **************************************************************************/
 
+/*
+ * Copyright (c) 2018, Joyent, Inc.
+ */
 
 #ifdef HAVE_CONFIG_H
 #  include <config.h>
@@ -181,6 +184,7 @@ main (int argc, char *argv[])
 
 	case LIBPOLKIT_RESULT_NOT_PRIVILEGED:
 		g_print ("Not privileged.\n");
+		goto out;
 
 	case LIBPOLKIT_RESULT_NO_SUCH_PRIVILEGE:
 		g_print ("No such privilege '%s'.\n", privilege);
@@ -198,7 +202,7 @@ main (int argc, char *argv[])
 
 out:
 	if (ctx != NULL)
-		libpolkit_free_context (ctx);
+		(void) libpolkit_free_context (ctx);
 
 	return rc;
 }

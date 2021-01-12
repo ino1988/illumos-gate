@@ -18,6 +18,11 @@
  *
  * CDDL HEADER END
  */
+
+/*
+ * Copyright 2015 Nexenta Systems, Inc.  All rights reserved.
+ */
+
 /*
  * Copyright 2009 Sun Microsystems, Inc.  All rights reserved.
  * Use is subject to license terms.
@@ -681,7 +686,7 @@ static char *acemask4_names[] = {
 /*ARGSUSED*/
 void
 interpret_nfs4_cb(int flags, int type, int xid, int vers, int proc,
-		char *data, int len)
+    char *data, int len)
 {
 	char *line = NULL;
 
@@ -747,7 +752,7 @@ interpret_nfs4_cb(int flags, int type, int xid, int vers, int proc,
 /*ARGSUSED*/
 void
 interpret_nfs4(int flags, int type, int xid, int vers, int proc,
-		char *data, int len)
+    char *data, int len)
 {
 	char *line = NULL;
 
@@ -1152,7 +1157,7 @@ component_name(component4 *cp)
 static char *
 linktext_name(linktext4 *lp)
 {
-	return (utf8localize(lp));
+	return (utf8localize((utf8string *)lp));
 }
 
 /*
@@ -1313,7 +1318,7 @@ sum_lock_denied(LOCK4denied *denied)
 {
 	static char buf[64];
 
-	sprintf(buf, "%s %llu %llu LO=%04X",
+	sprintf(buf, "%s %llu:%llu LO=%04X",
 	    sum_lock_type_name(denied->locktype),
 	    denied->offset, denied->length,
 	    owner_hash(&denied->owner.owner));
@@ -1388,7 +1393,7 @@ detail_createtype4(createtype4 *crtp)
 	switch (crtp->type) {
 	case NF4LNK:
 		sprintf(get_line(0, 0), "Linkdata = %s",
-		    utf8localize(&crtp->createtype4_u.linkdata));
+		    utf8localize((utf8string *)&crtp->createtype4_u.linkdata));
 		break;
 	case NF4BLK:
 	case NF4CHR:
@@ -1827,7 +1832,8 @@ sumarg_lockt(char *buf, size_t buflen, void *obj)
 {
 	LOCKT4args *args = (LOCKT4args *)obj;
 
-	snprintf(buf, buflen, "R=%llu:%llu",
+	snprintf(buf, buflen, "%s %llu:%llu",
+	    sum_lock_type_name(args->locktype),
 	    args->offset, args->length);
 }
 
@@ -1847,7 +1853,7 @@ sumarg_locku(char *buf, size_t buflen, void *obj)
 {
 	LOCKU4args *args = (LOCKU4args *)obj;
 
-	snprintf(buf, buflen, "R=%llu:%llu LSQ=%u %s",
+	snprintf(buf, buflen, "%llu:%llu LSQ=%u %s",
 	    args->offset, args->length, args->seqid,
 	    sum_lock_stateid(&args->lock_stateid));
 }
@@ -1933,7 +1939,6 @@ dtlarg_release_lkown(void *obj)
 
 static void
 sumarg_release_lkown(char *buf, size_t buflen, void *obj)
-
 {
 	RELEASE_LOCKOWNER4args *args = (RELEASE_LOCKOWNER4args *)obj;
 
@@ -2976,9 +2981,11 @@ static void
 sumres_setattr(char *buf, size_t buflen, void *obj)
 {
 	SETATTR4res *res = (SETATTR4res *)obj;
+	size_t len;
 
-	strncpy(buf, status_name(res->status), buflen);
-	sum_attr_bitmap(buf, buflen, &res->attrsset);
+	(void) snprintf(buf, buflen, "%s ", status_name(res->status));
+	len = strlen(buf);
+	sum_attr_bitmap(buf + len, buflen - len, &res->attrsset);
 }
 
 static void
@@ -3670,7 +3677,7 @@ sum_type_name(nfs_ftype4 type)
 
 static char *
 get_flags(uint_t flag, ftype_names_t *names, uint_t num_flags, int shortname,
-	char *prefix)
+    char *prefix)
 {
 	static char buf[200];
 	char *bp = buf, *str;

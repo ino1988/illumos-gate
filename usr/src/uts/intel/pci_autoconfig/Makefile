@@ -23,6 +23,9 @@
 # Copyright 2009 Sun Microsystems, Inc.  All rights reserved.
 # Use is subject to license terms.
 #
+# Copyright 2016 Joyent, Inc.
+# Copyright 2020 OmniOS Community Edition (OmniOSce) Association.
+#
 #	This makefile drives the production of the PCI autoconfiguration
 #	kernel module.
 #
@@ -39,7 +42,6 @@ UTSBASE	= ../..
 #
 MODULE		= pci_autoconfig
 OBJECTS		= $(PCI_AUTOCONFIG_OBJS:%=$(OBJS_DIR)/%)
-LINTS		= $(PCI_AUTOCONFIG_OBJS:%.o=$(LINTS_DIR)/%.ln)
 ROOTMODULE	= $(ROOT_MISC_DIR)/$(MODULE)
 INC_PATH	+= -I$(UTSBASE)/i86pc
 
@@ -52,23 +54,12 @@ include $(UTSBASE)/intel/Makefile.intel
 #	Define targets
 #
 ALL_TARGET	= $(BINARY)
-LINT_TARGET	= $(MODULE).lint
 INSTALL_TARGET	= $(BINARY) $(ROOTMODULE)
 
 #
 # Depends on acpica ACPI CA interpreter and PCI-E framework
 #
 LDFLAGS		+= -dy -Nmisc/acpica -Nmisc/pcie
-
-#
-# For now, disable these lint checks; maintainers should endeavor
-# to investigate and remove these for maximum lint coverage.
-# Please do not carry these forward to new Makefiles.
-#
-LINTTAGS	+= -erroff=E_BAD_PTR_CAST_ALIGN
-LINTTAGS	+= -erroff=E_ASSIGN_NARROW_CONV
-
-CERRWARN	+= -_gcc=-Wno-parentheses
 
 #
 #	Default build targets.
@@ -82,12 +73,6 @@ all:		$(ALL_DEPS)
 clean:		$(CLEAN_DEPS)
 
 clobber:	$(CLOBBER_DEPS)
-
-lint:		$(LINT_DEPS)
-
-modlintlib:	$(MODLINTLIB_DEPS)
-
-clean.lint:	$(CLEAN_LINT_DEPS)
 
 install:	$(INSTALL_DEPS)
 

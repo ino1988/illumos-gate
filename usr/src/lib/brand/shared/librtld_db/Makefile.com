@@ -21,6 +21,7 @@
 #
 # Copyright (c) 2010, Oracle and/or its affiliates. All rights reserved.
 #
+# Copyright (c) 2018, Joyent, Inc.
 
 include $(SRC)/lib/Makefile.lib
 
@@ -43,7 +44,7 @@ UTSBASE	=	$(SRC)/uts
 #	brand plugin library can use to access a target process are the
 #	proc_service(3PROC) apis.
 #
-DYNFLAGS +=	$(VERSREF) -M$(BRAND_SHARED)/librtld_db/common/mapfile-vers
+DYNFLAGS +=	$(VERSREF) -Wl,-M$(BRAND_SHARED)/librtld_db/common/mapfile-vers
 LIBS =		$(DYNLIB)
 LDLIBS +=	-lc -lrtld_db
 CFLAGS +=	$(CCVERBOSE)
@@ -51,6 +52,9 @@ CPPFLAGS +=	-D_REENTRANT \
 			-I$(SRC)/cmd/sgs/librtld_db/common \
 			-I$(SRC)/cmd/sgs/include \
 			-I$(SRC)/cmd/sgs/include/$(MACH)
+
+# not linted
+SMATCH=off
 
 ROOTLIBDIR =	$(ROOT)/usr/lib/brand/$(BRAND)
 ROOTLIBDIR64 =	$(ROOT)/usr/lib/brand/$(BRAND)/$(MACH64)
@@ -67,7 +71,6 @@ DTEXTDOM =
 
 all: $(LIBS)
 
-lint: lintcheck
 
 pics/%64.o:	$(BRAND_SHARED)/librtld_db/common/%.c
 		$(COMPILE.c) -D_ELF64 $(PICFLAGS) -o $@ $<

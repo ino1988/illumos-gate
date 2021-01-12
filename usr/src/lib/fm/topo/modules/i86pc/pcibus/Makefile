@@ -21,6 +21,7 @@
 
 #
 # Copyright (c) 2006, 2010, Oracle and/or its affiliates. All rights reserved.
+# Copyright (c) 2018, Joyent, Inc.
 #
 
 MODULE = pcibus
@@ -28,13 +29,21 @@ ARCH = i86pc
 CLASS = arch
 UTILDIR = ../../common/pcibus
 HBDIR = ../../common/hostbridge
+NICDIR = ../../common/nic
+USBDIR = ../../common/usb
+SHAREDDIR = ../../common/shared
 UTILSRCS = did.c did_hash.c did_props.c util.c
-PCISRCS = pcibus.c pcibus_labels.c pcibus_hba.c
+PCISRCS = pcibus.c pcibus_labels.c pcibus_hba.c pci_sensor.c
+SHAREDSRCS = topo_sensor.c
 
 MODULESRCS = $(UTILSRCS) $(PCISRCS) pci_i86pc.c
 
 include ../../Makefile.plugin
 
-LDLIBS += -ldevinfo -lsmbios
+LDLIBS += -ldevinfo -lsmbios -lpcidb
 
-CPPFLAGS += -I$(UTILDIR) -I$(HBDIR)
+CPPFLAGS += -I$(UTILDIR) -I$(HBDIR) -I$(NICDIR) -I$(USBDIR) -I$(SHAREDDIR)
+
+%.o: $(SHAREDDIR)/%.c
+	$(COMPILE.c) -o $@ $<
+	$(CTFCONVERT_O)

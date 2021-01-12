@@ -23,10 +23,7 @@
 # Copyright 2009 Sun Microsystems, Inc.  All rights reserved.
 # Use is subject to license terms.
 #
-#
-#	This makefile drives the production of the Neterion Xframe
-#	10G Ethernet (XGE) driver module in x86 systems
-#
+# Copyright (c) 2018, Joyent, Inc.
 
 #
 #	Paths to the base of the uts directory trees
@@ -38,7 +35,6 @@ UTSBASE   = ../..
 #
 MODULE		= ntxn
 OBJECTS		= $(NTXN_OBJS:%=$(OBJS_DIR)/%)
-LINTS		= $(NTXN_OBJS:%.o=$(LINTS_DIR)/%.ln)
 ROOTMODULE	= $(ROOT_DRV_DIR)/$(MODULE)
 CONF_SRCDIR	= $(UTSBASE)/common/io/ntxn
 
@@ -51,7 +47,6 @@ include $(UTSBASE)/intel/Makefile.intel
 #	Define targets
 #
 ALL_TARGET	= $(BINARY) $(SRC_CONFILE)
-LINT_TARGET	= $(MODULE).lint
 INSTALL_TARGET	= $(BINARY) $(ROOTMODULE) $(ROOT_CONFFILE)
 
 INC_PATH	+= -I$(CONF_SRCDIR)
@@ -64,14 +59,17 @@ CFLAGS64	+=  -DSOLARIS11 -xO -I./
 #
 LDFLAGS		+=  -dy -N misc/mac -N drv/ip
 
-#	Lint flag
 #
-LINTFLAGS	+= $(NTXN_DFLAGS) $(NTXN_KFLAGS)
-LINTFLAGS	+= -DSOLARIS11
-
+# For now, disable these warnings; maintainers should endeavor
+# to investigate and remove these for maximum coverage.
+# Please do not carry these forward to new Makefiles.
+#
 CERRWARN	+= -_gcc=-Wno-parentheses
 CERRWARN	+= -_gcc=-Wno-unused-label
 CERRWARN	+= -_gcc=-Wno-type-limits
+
+# needs work
+SMOFF += all_func_returns
 
 #
 #
@@ -86,12 +84,6 @@ all:		$(ALL_DEPS)
 clean:		$(CLEAN_DEPS)
 
 clobber:	$(CLOBBER_DEPS)
-
-lint:		$(LINT_DEPS)
-
-modlintlib:	$(MODLINTLIB_DEPS)
-
-clean.lint:	$(CLEAN_LINT_DEPS)
 
 install:	$(INSTALL_DEPS)
 

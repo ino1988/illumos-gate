@@ -490,7 +490,7 @@ static Shnode_t	*sh_cmd(Lex_t *lexp, register int sym, int flag)
 	{
 	    case COOPSYM:		/* set up a cooperating process */
 		type |= (FPIN|FPOU|FPCL|FCOOP);
-		/* FALL THRU */		
+		/* FALLTHROUGH */
 	    case '&':
 		if(left)
 		{
@@ -499,7 +499,7 @@ static Shnode_t	*sh_cmd(Lex_t *lexp, register int sym, int flag)
 				left = left->par.partre;
 			left = makeparent(lexp,TFORK|type, left);
 		}
-		/* FALL THRU */		
+		/* FALLTHROUGH */
 	    case ';':
 		if(!left)
 			sh_syntax(lexp);
@@ -509,6 +509,7 @@ static Shnode_t	*sh_cmd(Lex_t *lexp, register int sym, int flag)
 	    case EOFSYM:
 		if(sym==NL)
 			break;
+		/* FALLTHROUGH */
 	    default:
 		if(sym && sym!=lexp->token)
 		{
@@ -1225,6 +1226,7 @@ static Shnode_t	*item(Lex_t *lexp,int flag)
 	    default:
 		if(io==0)
 			return(0);
+		/* FALLTHROUGH */
 
 	    case ';':
 		if(io==0)
@@ -1235,7 +1237,7 @@ static Shnode_t	*item(Lex_t *lexp,int flag)
 				sh_syntax(lexp);
 			showme =  FSHOWME;
 		}
-	    /* simple command */
+		/* FALLTHROUGH */
 	    case 0:
 		t = (Shnode_t*)simple(lexp,flag,io);
 		if(t->com.comarg && lexp->intypeset && (lexp->sh->shcomp || sh_isoption(SH_NOEXEC) || sh.dot_depth))
@@ -1285,7 +1287,7 @@ static Shnode_t *simple(Lex_t *lexp,int flag, struct ionod *io)
 	struct argnod	**argtail;
 	struct argnod	**settail;
 	int	cmdarg=0;
-	int	argno = 0, argmax=0;
+	int	argno = 0;
 	int	assignment = 0;
 	int	key_on = (!(flag&SH_NOIO) && sh_isoption(SH_KEYWORD));
 	int	associative=0;
@@ -1347,8 +1349,6 @@ static Shnode_t *simple(Lex_t *lexp,int flag, struct ionod *io)
 		{
 			if(!(argp->argflag&ARG_RAW))
 			{
-				if(argno>0)
-					argmax = argno;
 				argno = -1;
 			}
 			if(argno>=0 && argno++==cmdarg && !(flag&SH_ARRAY) && *argp->argval!='/')
@@ -1388,7 +1388,6 @@ static Shnode_t *simple(Lex_t *lexp,int flag, struct ionod *io)
 		if((tok==IPROCSYM || tok==OPROCSYM))
 		{
 			argp = process_sub(lexp,tok);
-			argmax = 0;
 			argno = -1;
 			*argtail = argp;
 			argtail = &(argp->argnxt.ap);
@@ -1445,8 +1444,6 @@ static Shnode_t *simple(Lex_t *lexp,int flag, struct ionod *io)
 		}
 	}
 	*argtail = 0;
-	if(argno>0)
-		argmax = argno;
 	t->comtyp = TCOM;
 #if SHOPT_KIA
 	if(lexp->kiafile && !(flag&SH_NOIO))

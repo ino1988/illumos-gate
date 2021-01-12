@@ -26,7 +26,8 @@
 #
 
 #
-# Copyright (c) 2013 by Delphix. All rights reserved.
+# Copyright (c) 2013, 2016 by Delphix. All rights reserved.
+# Copyright 2016 Nexenta Systems, Inc.
 #
 
 . $STF_SUITE/include/libtest.shlib
@@ -43,15 +44,18 @@
 
 verify_runnable "global"
 
+volsize=$(zfs get -H -o value volsize $TESTPOOL/$TESTVOL)
+
 function cleanup
 {
 	snapexists $TESTPOOL/$TESTVOL@snap && \
-		$ZFS destroy $TESTPOOL/$TESTVOL@snap
+		zfs destroy $TESTPOOL/$TESTVOL@snap
 
 	ismounted $TESTDIR ufs
-	(( $? == 0 )) && log_must $UMOUNT $TESTDIR
+	(( $? == 0 )) && log_must umount $TESTDIR
 
-	[[ -e $TESTDIR ]] && $RM -rf $TESTDIR
+	[[ -e $TESTDIR ]] && rm -rf $TESTDIR
+	zfs set volsize=$volsize $TESTPOOL/$TESTVOL
 }
 
 log_assert "Verify that ZFS volume snapshot could be fscked"
@@ -61,31 +65,32 @@ TESTVOL='testvol'
 BLOCKSZ=$(( 1024 * 1024 ))
 NUM_WRITES=40
 
-$ECHO "y" | $NEWFS -v /dev/zvol/rdsk/$TESTPOOL/$TESTVOL >/dev/null 2>&1
+log_must zfs set volsize=128m $TESTPOOL/$TESTVOL
+
+echo "y" | newfs -v /dev/zvol/rdsk/$TESTPOOL/$TESTVOL >/dev/null 2>&1
 (( $? != 0 )) && log_fail "Unable to newfs(1M) $TESTPOOL/$TESTVOL"
 
-log_must $MKDIR $TESTDIR
-log_must $MOUNT /dev/zvol/dsk/$TESTPOOL/$TESTVOL $TESTDIR
+log_must mkdir $TESTDIR
+log_must mount /dev/zvol/dsk/$TESTPOOL/$TESTVOL $TESTDIR
 
 typeset -i fn=0
 typeset -i retval=0
 
 while (( 1 )); do
-        $FILE_WRITE -o create -f $TESTDIR/testfile$$.$fn \
-            -b $BLOCKSZ -c $NUM_WRITES
-        retval=$?
-        if (( $retval != 0 )); then
-                break
-        fi
-
-        (( fn = fn + 1 ))
+	file_write -o create -f $TESTDIR/testfile$$.$fn \
+	    -b $BLOCKSZ -c $NUM_WRITES
+	retval=$?
+	if (( $retval != 0 )); then
+		break
+	fi
+	(( fn = fn + 1 ))
 done
 
-log_must $LOCKFS -f $TESTDIR
-log_must $ZFS snapshot $TESTPOOL/$TESTVOL@snap
+log_must lockfs -f $TESTDIR
+log_must zfs snapshot $TESTPOOL/$TESTVOL@snap
 
-$FSCK -n /dev/zvol/rdsk/$TESTPOOL/$TESTVOL@snap >/dev/null 2>&1
+fsck -n /dev/zvol/rdsk/$TESTPOOL/$TESTVOL@snap >/dev/null 2>&1
 retval=$?
-(( $retval == 39 )) || log_fail "$FSCK exited with wrong value $retval "
+(( $retval == 39 )) || log_fail "fsck exited with wrong value $retval "
 
 log_pass "Verify that ZFS volume snapshot could be fscked"

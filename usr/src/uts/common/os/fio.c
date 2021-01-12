@@ -21,7 +21,7 @@
 
 /*
  * Copyright (c) 1989, 2010, Oracle and/or its affiliates. All rights reserved.
- * Copyright (c) 2012, Joyent Inc. All rights reserved.
+ * Copyright 2015, Joyent Inc.
  */
 
 /*	Copyright (c) 1984, 1986, 1987, 1988, 1989 AT&T	*/
@@ -40,6 +40,7 @@
 #include <sys/vnode.h>
 #include <sys/pathname.h>
 #include <sys/file.h>
+#include <sys/flock.h>
 #include <sys/proc.h>
 #include <sys/var.h>
 #include <sys/cpuvar.h>
@@ -385,6 +386,7 @@ flist_grow(int maxfd)
 		dst->uf_flag = src->uf_flag;
 		dst->uf_busy = src->uf_busy;
 		dst->uf_portfd = src->uf_portfd;
+		dst->uf_gen = src->uf_gen;
 	}
 
 	/*
@@ -574,13 +576,12 @@ is_active_fd(kthread_t *t, int fd)
 }
 
 /*
- * Convert a user supplied file descriptor into a pointer to a file
- * structure.  Only task is to check range of the descriptor (soft
- * resource limit was enforced at open time and shouldn't be checked
- * here).
+ * Convert a user supplied file descriptor into a pointer to a file structure.
+ * Only task is to check range of the descriptor (soft resource limit was
+ * enforced at open time and shouldn't be checked here).
  */
 file_t *
-getf(int fd)
+getf_gen(int fd, uf_entry_gen_t *genp)
 {
 	uf_info_t *fip = P_FINFO(curproc);
 	uf_entry_t *ufp;
@@ -606,12 +607,21 @@ getf(int fd)
 		return (NULL);
 	}
 	ufp->uf_refcnt++;
+	if (genp != NULL) {
+		*genp = ufp->uf_gen;
+	}
 
 	set_active_fd(fd);	/* record the active file descriptor */
 
 	UF_EXIT(ufp);
 
 	return (fp);
+}
+
+file_t *
+getf(int fd)
+{
+	return (getf_gen(fd, NULL));
 }
 
 /*
@@ -666,6 +676,7 @@ closeandsetf(int fd, file_t *newfp)
 			ASSERT(ufp->uf_flag == 0);
 			fd_reserve(fip, fd, 1);
 			ufp->uf_file = newfp;
+			ufp->uf_gen++;
 			UF_EXIT(ufp);
 			mutex_exit(&fip->fi_lock);
 			return (0);
@@ -851,7 +862,8 @@ flist_fork(uf_info_t *pfip, uf_info_t *cfip)
 	 */
 	cfip->fi_nfiles = nfiles = flist_minsize(pfip);
 
-	cfip->fi_list = kmem_zalloc(nfiles * sizeof (uf_entry_t), KM_SLEEP);
+	cfip->fi_list = nfiles == 0 ? NULL :
+	    kmem_zalloc(nfiles * sizeof (uf_entry_t), KM_SLEEP);
 
 	for (fd = 0, pufp = pfip->fi_list, cufp = cfip->fi_list; fd < nfiles;
 	    fd++, pufp++, cufp++) {
@@ -859,6 +871,7 @@ flist_fork(uf_info_t *pfip, uf_info_t *cfip)
 		cufp->uf_alloc = pufp->uf_alloc;
 		cufp->uf_flag = pufp->uf_flag;
 		cufp->uf_busy = pufp->uf_busy;
+		cufp->uf_gen = pufp->uf_gen;
 		if (pufp->uf_file == NULL) {
 			ASSERT(pufp->uf_flag == 0);
 			if (pufp->uf_busy) {
@@ -952,6 +965,8 @@ closef(file_t *fp)
 		return (error);
 	}
 	ASSERT(fp->f_count == 0);
+	/* Last reference, remove any OFD style lock for the file_t */
+	ofdcleanlock(fp);
 	mutex_exit(&fp->f_tlock);
 
 	/*
@@ -1025,6 +1040,9 @@ ufalloc_file(int start, file_t *fp)
 	fd_reserve(fip, fd, 1);
 	ASSERT(ufp->uf_file == NULL);
 	ufp->uf_file = fp;
+	if (fp != NULL) {
+		ufp->uf_gen++;
+	}
 	UF_EXIT(ufp);
 	mutex_exit(&fip->fi_lock);
 	return (fd);
@@ -1180,6 +1198,7 @@ setf(int fd, file_t *fp)
 	} else {
 		UF_ENTER(ufp, fip, fd);
 		ASSERT(ufp->uf_busy);
+		ufp->uf_gen++;
 	}
 	ASSERT(ufp->uf_fpollinfo == NULL);
 	ASSERT(ufp->uf_flag == 0);
@@ -1488,8 +1507,8 @@ int
 fgetstartvp(int fd, char *path, vnode_t **startvpp)
 {
 	vnode_t		*startvp;
-	file_t 		*startfp;
-	char 		startchar;
+	file_t		*startfp;
+	char		startchar;
 
 	if (fd == AT_FDCWD && path == NULL)
 		return (EFAULT);
@@ -1535,7 +1554,7 @@ fsetattrat(int fd, char *path, int flags, struct vattr *vap)
 {
 	vnode_t		*startvp;
 	vnode_t		*vp;
-	int 		error;
+	int		error;
 
 	/*
 	 * Since we are never called to set the size of a file, we don't

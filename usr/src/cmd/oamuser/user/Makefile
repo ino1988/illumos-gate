@@ -23,8 +23,7 @@
 # Copyright (c) 2013 RackTop Systems.
 # Copyright (c) 2013 Gary Mills
 #
-# cmd/oamuser/user/Makefile
-#
+# Copyright (c) 2018, Joyent, Inc.
 
 DEFAULTFILES= useradd.dfl
 
@@ -50,11 +49,11 @@ ADD_OBJ=	useradd.o     homedir.o        groups.o     call_pass.o \
 		userdefs.o    messages.o       val_lgrp.o   funcs.o \
 		val_lprj.o    proj.o
 
-DEL_OBJ=	userdel.o     call_pass.o      rmfiles.o    isbusy.o \
+DEL_OBJ=	userdel.o     call_pass.o      homedir.o    isbusy.o \
 		groups.o      messages.o       funcs.o      proj.o
 
-MOD_OBJ=	usermod.o     movedir.o        groups.o     rmfiles.o \
-		call_pass.o   isbusy.o         homedir.o    userdefs.o \
+MOD_OBJ=	usermod.o     movedir.o        groups.o     homedir.o \
+		call_pass.o   isbusy.o         userdefs.o \
 		messages.o    val_lgrp.o       funcs.o      val_lprj.o \
 		proj.o
 
@@ -76,6 +75,9 @@ INSSKELFILE=	$(SKELFILE:%=$(ROOTSKEL)/%)
 CPPFLAGS=	-I$(HERE) -I$(LOCAL) $(CPPFLAGS.master)
 CERRWARN +=	-_gcc=-Wno-implicit-function-declaration
 
+# not linted
+SMATCH=off
+
 $(INSSBINPROG)  := FILEMODE = 0555
 $(INSSYSADMPROG):= FILEMODE = 0500
 $(INSSKELFILE)  := FILEMODE = 0644
@@ -90,11 +92,11 @@ $(USERDEL) :=	LIBS = $(LIBUSRGRP)
 $(USERMOD) :=	OBJS = $(MOD_OBJ)
 $(USERMOD) :=	LIBS = $(LIBUSRGRP)
 
-LDLIBS +=	-lbsm -lnsl -lsecdb -lproject -ltsol
+LDLIBS +=	-lbsm -lnsl -lsecdb -lproject -lzfs -ltsol
 
 .PARALLEL: $(OBJECTS)
 
-all: 		$(PRODUCT)
+all:	$(PRODUCT)
 
 $(PROG):	$$(OBJS) $$(LIBS)
 	$(LINK.c) $(OBJS) -o $@ $(LIBS) $(LDLIBS)

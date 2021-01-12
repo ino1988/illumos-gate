@@ -21,6 +21,7 @@
 
 /*
  * Copyright 2014 Nexenta Systems, Inc.  All rights reserved.
+ * Copyright 2017 Joyent Inc
  */
 
 /*
@@ -65,9 +66,6 @@ extern "C" {
 /* gids compose part of a credential; there may not be more than 16 of them */
 #define	 NGRPS 16
 
-/* gids compose part of a credential */
-#define	 NGRPS_LOOPBACK NGROUPS_UMAX
-
 /*
  * "sys" (Old UNIX) style credentials.
  */
@@ -82,12 +80,21 @@ struct authsys_parms {
 /* For backward compatibility */
 #define	 authunix_parms authsys_parms
 
+/*
+ * Ideally, we would like this to be NGROUPS_UMAX, but the RFC mandates that
+ * auth sections must not exceed 400 bytes. For AUTH_LOOPBACK, that means the
+ * largest number of groups we can have without breaking RFC compat is 92
+ * groups.
+ *
+ * NOTE: changing this value changes the size of authlpbk_area in
+ * svc_auth_loopb.c, which means RQCRED_SIZE *must* be updated!
+ */
+#define	 NGRPS_LOOPBACK 92
+
 #ifdef __STDC__
 extern bool_t xdr_authsys_parms(XDR *, struct authsys_parms *);
-extern bool_t xdr_authloopback_parms(XDR *, struct authsys_parms *);
 #else
 extern bool_t xdr_authsys_parms();
-extern bool_t xdr_authloopback_parms();
 #endif
 
 
@@ -109,8 +116,8 @@ extern bool_t xdr_gid_t(XDR *, gid_t *);
 extern bool_t xdr_uid_t(XDR *, uid_t *);
 
 #ifdef _KERNEL
-extern bool_t xdr_authkern(XDR *);
-extern bool_t xdr_authloopback(XDR *);
+extern bool_t xdr_authkern(XDR *, cred_t *);
+extern bool_t xdr_authloopback(XDR *, cred_t *);
 extern enum auth_stat _svcauth_unix(struct svc_req *, struct rpc_msg *);
 extern enum auth_stat _svcauth_short(struct svc_req *, struct rpc_msg *);
 #endif

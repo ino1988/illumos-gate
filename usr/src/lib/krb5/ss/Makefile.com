@@ -22,6 +22,7 @@
 # Copyright 2008 Sun Microsystems, Inc.  All rights reserved.
 # Use is subject to license terms.
 #
+# Copyright (c) 2018, Joyent, Inc.
 
 LIBRARY= libss.a
 VERS= .1
@@ -69,6 +70,8 @@ CFLAGS +=	$(CCVERBOSE) -I..
 CERRWARN +=	-_gcc=-Wno-switch
 CERRWARN +=	-_gcc=-Wno-unused-variable
 
+SMOFF += all_func_returns
+
 DYNFLAGS +=	$(KRUNPATH) $(KMECHLIB) $(ZIGNORE)
 
 LDLIBS +=	-lc -ltecla
@@ -79,7 +82,6 @@ $(PICS) :=      CFLAGS += $(XFFLAG)
 
 all:	$(LIBS)
 
-lint: lintcheck
 
 # include library targets
 include ../../Makefile.targ

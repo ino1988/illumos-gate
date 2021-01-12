@@ -21,6 +21,8 @@
 # Copyright 2007 Sun Microsystems, Inc.  All rights reserved.
 # Use is subject to license terms.
 #
+# Copyright (c) 2019, Joyent, Inc.
+#
 
 $(NOT_NATIVE)NATIVE_BUILD = $(POUND_SIGN)
 
@@ -73,34 +75,36 @@ ROOTDIRS64=	$(ROOTLIB)/iconv/$(MACH64)
 ROOTITM32 =	$(ROOTDIRS32)/$(ITM)
 ROOTITM64 =	$(ROOTDIRS64)/$(ITM)
 
-#
-# definition for some useful target like clean, 
+# defined for some useful targets like clean,
 OBJS	= $(SRCSC1:%.c=%.o) $(YTABC:.c=.o) $(LEXYY:.c=.o)
 
 CHECKHDRS = $(HDRS%.h=%.check)
 
 CLOBBERFILES=	$(ITM) $(SRCYC)
-CLEANFILES = 	$(OBJS) $(YTABC) $(YTABH) $(LEXYY) $(YOUT) \
+CLEANFILES =	$(OBJS) $(YTABC) $(YTABH) $(LEXYY) $(YOUT) \
 		$(POFILES) $(POFILE)
 
 CPPFLAGS	+= -I. -I..
-CERRWARN	+= -_gcc=-Wno-uninitialized
+CERRWARN	+= $(CNOWARN_UNINIT)
 CERRWARN	+= -_gcc=-Wno-unused-label
 CERRWARN	+= -_gcc=-Wno-switch
 CERRWARN	+= -_gcc=-Wno-unused-variable
 CERRWARN	+= -_gcc=-Wno-implicit-function-declaration
 YFLAGS		+= -d -v
-CFLAGS 		+= -D_FILE_OFFSET_BITS=64
+CFLAGS		+= -D_FILE_OFFSET_BITS=64
 
-$(ITM) :=	CFLAGS += $(GSHARED) $(C_PICFLAGS) $(ZTEXT) -h $@
-$(ITM) :=	CPPFLAGS += -D_REENTRANT 
+# dump_expr() is too hairy
+SMATCH=off
+
+$(ITM) :=	CFLAGS += $(GSHARED) $(C_PICFLAGS) $(ZTEXT) -h$@
+$(ITM) :=	CPPFLAGS += -D_REENTRANT
 $(ITM) :=	sparc_CFLAGS += -xregs=no%appl
 $(ITM) :=	sparcv9_CFLAGS += -xregs=no%appl
 
 LDLIBS += -lgen
 
 MY_NATIVE_CPPFLAGS = -D_FILE_OFFSET_BITS=64 -I. -I..
-MY_NATIVE_LDFLAGS = $(MAPFILE.NES:%=-M%) $(MAPFILE.PGA:%=-M%) $(MAPFILE.NED:%=-M%)
+MY_NATIVE_LDFLAGS = $(MAPFILE.NES:%=-Wl,-M%) $(MAPFILE.PGA:%=-Wl,-M%) $(MAPFILE.NED:%=-Wl,-M%) $(ZDIRECT) $(ZLAZYLOAD)
 MY_NATIVE_LDLIBS = -lgen
 
 #
@@ -124,7 +128,7 @@ $(PROG): $(OBJS)
 	$(POST_PROCESS)
 
 $(ITM): $(SRCI)
-	$(CC) $(CFLAGS) $(CPPFLAGS) -M$(MAPFILE) -o $@ $(SRCI) $(LDLIBS)
+	$(CC) $(CFLAGS) $(CPPFLAGS) -Wl,-M$(MAPFILE) -o $@ $(SRCI) $(LDLIBS)
 	$(POST_PROCESS_SO)
 
 $(YTABC) $(YTABH): $(SRCY)
@@ -147,18 +151,6 @@ $(POFILES): $(SRCSC) $(SRCI) $(SRCY) $(SRCL)
 	$(COMPILE.cpp) $<  > $<.i
 	$(BUILD.po)
 
-
-lint : lint_SRCS1  lint_SRCS2
-
-
-lint_SRCS1: $(SRCS)
-	$(LINT.c) $(SRCS) $(LDLIBS)
-
-lint_SRCS2: $(SRCI)
-	$(LINT.c) $(SRCI) $(LDLIBS)
-
-
-
 hdrchk: $(HDRCHECKS)
 
 cstyle: $(SRCS)
@@ -167,20 +159,13 @@ cstyle: $(SRCS)
 clean:
 	$(RM) $(CLEANFILES)
 
-debug:
-	$(MAKE)	all COPTFLAG='' COPTFLAG64='' CFLAGS='-g -DDEBUG'
-
-
-%.o:	%.c 
+%.o:	%.c
 	$(COMPILE.c) $<
 
 %.o:	../%.c
 	$(COMPILE.c) $<
 
-
-
 # install rule
-# 
 $(ROOTDIRS32)/%: $(ROOTDIRS32) %
 	-$(INS.file)
 
@@ -197,4 +182,3 @@ $(ROOTLIB) $(ROOTBIN):
 	-$(INS.dir)
 
 include ../../Makefile.targ
-

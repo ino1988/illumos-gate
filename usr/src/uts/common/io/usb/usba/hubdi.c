@@ -22,6 +22,7 @@
  * Copyright (c) 1998, 2010, Oracle and/or its affiliates. All rights reserved.
  * Copyright 2012 Garrett D'Amore <garrett@damore.org>.  All rights reserved.
  * Copyright 2014 Nexenta Systems, Inc.  All rights reserved.
+ * Copyright 2019, Joyent, Inc.
  */
 
 /*
@@ -54,48 +55,45 @@ extern boolean_t consconfig_console_is_ready(void);
 /*
  * Prototypes for static functions
  */
-static	int	usba_hubdi_bus_ctl(
-			dev_info_t		*dip,
-			dev_info_t		*rdip,
-			ddi_ctl_enum_t		op,
-			void			*arg,
-			void			*result);
+static	int	usba_hubdi_bus_ctl(dev_info_t *dip,
+    dev_info_t *rdip,
+    ddi_ctl_enum_t op,
+    void *arg,
+    void *result);
 
-static int	usba_hubdi_map_fault(
-			dev_info_t		*dip,
-			dev_info_t		*rdip,
-			struct hat		*hat,
-			struct seg		*seg,
-			caddr_t 		addr,
-			struct devpage		*dp,
-			pfn_t			pfn,
-			uint_t			prot,
-			uint_t			lock);
+static int	usba_hubdi_map_fault(dev_info_t *dip,
+    dev_info_t *rdip,
+    struct hat *hat,
+    struct seg *seg,
+    caddr_t addr,
+    struct devpage *dp,
+    pfn_t pfn,
+    uint_t prot,
+    uint_t lock);
 
 static int hubd_busop_get_eventcookie(dev_info_t *dip,
-			dev_info_t *rdip,
-			char *eventname,
-			ddi_eventcookie_t *cookie);
+    dev_info_t *rdip,
+    char *eventname,
+    ddi_eventcookie_t *cookie);
 static int hubd_busop_add_eventcall(dev_info_t *dip,
-			dev_info_t *rdip,
-			ddi_eventcookie_t cookie,
-			void (*callback)(dev_info_t *dip,
-				ddi_eventcookie_t cookie, void *arg,
-				void *bus_impldata),
-			void *arg, ddi_callback_id_t *cb_id);
+    dev_info_t *rdip,
+    ddi_eventcookie_t cookie,
+    void (*callback)(dev_info_t *dip, ddi_eventcookie_t cookie, void *arg,
+	void *bus_impldata),
+    void *arg, ddi_callback_id_t *cb_id);
 static int hubd_busop_remove_eventcall(dev_info_t *dip,
-			ddi_callback_id_t cb_id);
+    ddi_callback_id_t cb_id);
 static int hubd_bus_config(dev_info_t *dip,
-			uint_t flag,
-			ddi_bus_config_op_t op,
-			void *arg,
-			dev_info_t **child);
+    uint_t flag,
+    ddi_bus_config_op_t op,
+    void *arg,
+    dev_info_t **child);
 static int hubd_bus_unconfig(dev_info_t *dip,
-			uint_t flag,
-			ddi_bus_config_op_t op,
-			void *arg);
+    uint_t flag,
+    ddi_bus_config_op_t op,
+    void *arg);
 static int hubd_bus_power(dev_info_t *dip, void *impl_arg,
-			pm_bus_power_op_t op, void *arg, void *result);
+    pm_bus_power_op_t op, void *arg, void *result);
 
 static usb_port_t  hubd_get_port_num(hubd_t *, struct devctl_iocdata *);
 static dev_info_t *hubd_get_child_dip(hubd_t *, usb_port_t);
@@ -193,8 +191,7 @@ usba_hubdi_destroy()
  *	to calling this	interface
  */
 int
-usba_hubdi_register(dev_info_t	*dip,
-		uint_t		flags)
+usba_hubdi_register(dev_info_t	*dip, uint_t flags)
 {
 	usba_hubdi_t *hubdi = kmem_zalloc(sizeof (usba_hubdi_t), KM_SLEEP);
 	usba_device_t *usba_device = usba_get_usba_device(dip);
@@ -251,14 +248,14 @@ usba_hubdi_unregister(dev_info_t *dip)
 /*ARGSUSED*/
 static int
 usba_hubdi_map_fault(dev_info_t *dip,
-	dev_info_t	*rdip,
-	struct hat	*hat,
-	struct seg	*seg,
-	caddr_t 	addr,
-	struct devpage	*dp,
-	pfn_t		pfn,
-	uint_t		prot,
-	uint_t		lock)
+    dev_info_t	*rdip,
+    struct hat	*hat,
+    struct seg	*seg,
+    caddr_t	addr,
+    struct devpage	*dp,
+    pfn_t		pfn,
+    uint_t		prot,
+    uint_t		lock)
 {
 	return (DDI_FAILURE);
 }
@@ -269,9 +266,9 @@ usba_hubdi_map_fault(dev_info_t *dip,
  */
 int
 usba_hubdi_bind_root_hub(dev_info_t *dip,
-	uchar_t	*root_hub_config_descriptor,
-	size_t config_length,
-	usb_dev_descr_t *root_hub_device_descriptor)
+    uchar_t	*root_hub_config_descriptor,
+    size_t config_length,
+    usb_dev_descr_t *root_hub_device_descriptor)
 {
 	usba_device_t *usba_device;
 	usba_hcdi_t *hcdi = usba_hcdi_get_hcdi(dip);
@@ -333,9 +330,11 @@ usba_hubdi_bind_root_hub(dev_info_t *dip,
 
 	/*
 	 * The bDeviceProtocol field of root hub device specifies,
-	 * whether root hub is a High or Full speed usb device.
+	 * whether root hub is a Super, High, or Full speed usb device.
 	 */
-	if (root_hub_device_descriptor->bDeviceProtocol) {
+	if (root_hub_device_descriptor->bDeviceProtocol >= 0x3) {
+		usba_device->usb_port_status = USBA_SUPER_SPEED_DEV;
+	} else if (root_hub_device_descriptor->bDeviceProtocol > 0) {
 		usba_device->usb_port_status = USBA_HIGH_SPEED_DEV;
 	} else {
 		usba_device->usb_port_status = USBA_FULL_SPEED_DEV;
@@ -373,10 +372,6 @@ usba_hubdi_bind_root_hub(dev_info_t *dip,
 	return (USB_SUCCESS);
 
 fail:
-	(void) ndi_prop_remove(DDI_DEV_T_NONE, dip, "root-hub");
-
-	usba_rem_root_hub(dip);
-
 	if (ph) {
 		usb_pipe_close(dip, ph,
 		    USB_FLAGS_SLEEP | USBA_FLAGS_PRIVILEGED, NULL, NULL);
@@ -392,9 +387,14 @@ fail:
 	usba_free_usba_device(usba_device);
 
 	usba_set_usba_device(dip, NULL);
+
 	if (root_hubd) {
 		kmem_free(root_hubd, sizeof (hubd_t));
 	}
+
+	(void) ndi_prop_remove(DDI_DEV_T_NONE, dip, "root-hub");
+
+	usba_rem_root_hub(dip);
 
 	return (USB_FAILURE);
 }
@@ -523,6 +523,8 @@ static int hubd_delete_child(hubd_t *hubd, usb_port_t port, uint_t flag,
 
 static int hubd_get_hub_descriptor(hubd_t *hubd);
 
+static int hubd_set_hub_depth(hubd_t *hubd);
+
 static int hubd_get_hub_status_words(hubd_t *hubd, uint16_t *status);
 
 static int hubd_reset_port(hubd_t *hubd, usb_port_t port);
@@ -537,7 +539,8 @@ static int hubd_enable_port(hubd_t *hubd, usb_port_t port);
 static int hubd_recover_disabled_port(hubd_t *hubd, usb_port_t port);
 
 static int hubd_determine_port_status(hubd_t *hubd, usb_port_t port,
-	uint16_t *status, uint16_t *change, uint_t ack_flag);
+	uint16_t *status, uint16_t *change, usb_port_status_t *speed,
+	uint_t ack_flag);
 
 static int hubd_enable_all_port_power(hubd_t *hubd);
 static int hubd_disable_all_port_power(hubd_t *hubd);
@@ -597,21 +600,15 @@ static usb_event_t hubd_events = {
 
 /*
  * hubd_get_soft_state() returns the hubd soft state
- *
- * WUSB support extends this function to support wire adapter class
- * devices. The hubd soft state for the wire adapter class device
- * would be stored in usb_root_hubd field of the usba_device structure,
- * just as the USB host controller drivers do.
  */
 hubd_t *
 hubd_get_soft_state(dev_info_t *dip)
 {
 	if (dip == NULL) {
-
 		return (NULL);
 	}
 
-	if (usba_is_root_hub(dip) || usba_is_wa(dip)) {
+	if (usba_is_root_hub(dip)) {
 		usba_device_t *usba_device = usba_get_usba_device(dip);
 
 		return (usba_device->usb_root_hubd);
@@ -682,7 +679,7 @@ hubd_set_child_pwrlvl(hubd_t *hubd, usb_port_t port, uint8_t power)
 	hubpm = hubd->h_hubpm;
 
 	old_power = 0;
-	for (portno = 1; portno <= hubd->h_hub_descr.bNbrPorts; portno++) {
+	for (portno = 1; portno <= hubd->h_nports; portno++) {
 		old_power += hubpm->hubp_child_pwrstate[portno];
 	}
 
@@ -715,13 +712,13 @@ hubd_child_dip2port(hubd_t *hubd, dev_info_t *dip)
 	usb_port_t	port;
 
 	mutex_enter(HUBD_MUTEX(hubd));
-	for (port = 1; port <= hubd->h_hub_descr.bNbrPorts; port++) {
+	for (port = 1; port <= hubd->h_nports; port++) {
 		if (hubd->h_children_dips[port] == dip) {
 
 			break;
 		}
 	}
-	ASSERT(port <= hubd->h_hub_descr.bNbrPorts);
+	ASSERT(port <= hubd->h_nports);
 	mutex_exit(HUBD_MUTEX(hubd));
 
 	return (port);
@@ -757,7 +754,7 @@ hubd_can_suspend(hubd_t *hubd)
 	}
 
 	for (port = 1; (total_power == 0) &&
-	    (port <= hubd->h_hub_descr.bNbrPorts); port++) {
+	    (port <= hubd->h_nports); port++) {
 		total_power += hubpm->hubp_child_pwrstate[port];
 	}
 
@@ -824,7 +821,7 @@ hubd_resume_port(hubd_t *hubd, usb_port_t port)
 
 		/* either way ack changes on the port */
 		(void) hubd_determine_port_status(hubd, port,
-		    &status, &change, PORT_CHANGE_PSSC);
+		    &status, &change, NULL, PORT_CHANGE_PSSC);
 		retval = USB_SUCCESS;
 
 		break;
@@ -884,7 +881,7 @@ hubd_resume_port(hubd_t *hubd, usb_port_t port)
 				delay(drv_usectohz(40000));
 				mutex_enter(HUBD_MUTEX(hubd));
 				(void) hubd_determine_port_status(hubd, port,
-				    &status, &change, PORT_CHANGE_PSSC);
+				    &status, &change, NULL, PORT_CHANGE_PSSC);
 
 				if ((status & PORT_STATUS_PSS) == 0) {
 					/* the port did finally resume */
@@ -988,7 +985,7 @@ hubd_suspend_port(hubd_t *hubd, usb_port_t port)
 			/* either ways ack changes on the port */
 			mutex_enter(HUBD_MUTEX(hubd));
 			(void) hubd_determine_port_status(hubd, port,
-			    &status, &change, PORT_CHANGE_PSSC);
+			    &status, &change, NULL, PORT_CHANGE_PSSC);
 			if (status & PORT_STATUS_PSS) {
 				/* the port is indeed suspended */
 				retval = USB_SUCCESS;
@@ -1145,10 +1142,10 @@ hubd_post_power(hubd_t *hubd, usb_port_t port, pm_bp_child_pwrchg_t *bpc,
  */
 static int
 usba_hubdi_bus_ctl(dev_info_t *dip,
-	dev_info_t	*rdip,
-	ddi_ctl_enum_t	op,
-	void		*arg,
-	void		*result)
+    dev_info_t	*rdip,
+    ddi_ctl_enum_t	op,
+    void		*arg,
+    void		*result)
 {
 	usba_device_t *hub_usba_device = usba_get_usba_device(rdip);
 	dev_info_t *root_hub_dip = hub_usba_device->usb_root_hub_dip;
@@ -1294,13 +1291,12 @@ usba_hubdi_bus_ctl(dev_info_t *dip,
 
 /*
  * hubd_config_one:
- * 	enumerate one child according to 'port'
+ *	enumerate one child according to 'port'
  */
 
 static boolean_t
 hubd_config_one(hubd_t *hubd, int port)
 {
-	uint16_t	status, change;
 	dev_info_t	*hdip = hubd->h_dip;
 	dev_info_t	*rh_dip = hubd->h_usba_device->usb_root_hub_dip;
 	boolean_t	online_child = B_FALSE, found = B_FALSE;
@@ -1326,9 +1322,10 @@ hubd_config_one(hubd_t *hubd, int port)
 	hubd_pm_busy_component(hubd, hubd->h_dip, 0);
 
 	if (!hubd->h_children_dips[port]) {
+		uint16_t	status, change;
 
 		(void) hubd_determine_port_status(hubd, port,
-		    &status, &change, HUBD_ACK_ALL_CHANGES);
+		    &status, &change, NULL, HUBD_ACK_ALL_CHANGES);
 
 		if (status & PORT_STATUS_CCS) {
 			online_child |=	(hubd_handle_port_connect(hubd,
@@ -1444,7 +1441,7 @@ hubd_bus_unconfig(dev_info_t *dip, uint_t flag, ddi_bus_config_op_t op,
 
 	/* logically zap children's list */
 	mutex_enter(HUBD_MUTEX(hubd));
-	for (port = 1; port <= hubd->h_hub_descr.bNbrPorts; port++) {
+	for (port = 1; port <= hubd->h_nports; port++) {
 		hubd->h_port_state[port] |= HUBD_CHILD_ZAP;
 	}
 	mutex_exit(HUBD_MUTEX(hubd));
@@ -1467,7 +1464,7 @@ hubd_bus_unconfig(dev_info_t *dip, uint_t flag, ddi_bus_config_op_t op,
 
 	/* physically zap the children we didn't find */
 	mutex_enter(HUBD_MUTEX(hubd));
-	for (port = 1; port <= hubd->h_hub_descr.bNbrPorts; port++) {
+	for (port = 1; port <= hubd->h_nports; port++) {
 		if (hubd->h_port_state[port] &	HUBD_CHILD_ZAP) {
 			/* zap the dip and usba_device structure as well */
 			hubd_free_usba_device(hubd, hubd->h_usba_devices[port]);
@@ -1797,6 +1794,10 @@ usba_hubdi_power(dev_info_t *dip, int comp, int level)
 		retval = hubd_pwrlvl3(hubd);
 
 		break;
+	default:
+		retval = USB_FAILURE;
+
+		break;
 	}
 	mutex_exit(HUBD_MUTEX(hubd));
 
@@ -1857,7 +1858,9 @@ usba_hubdi_attach(dev_info_t *dip, ddi_attach_cmd_t cmd)
 
 		/* generate readable labels for different root hubs */
 		root_hub_drvname = ddi_driver_name(dip);
-		if (strcmp(root_hub_drvname, "ehci") == 0) {
+		if (strcmp(root_hub_drvname, "xhci") == 0) {
+			log_name = "xusb";
+		} else if (strcmp(root_hub_drvname, "ehci") == 0) {
 			log_name = "eusb";
 		} else if (strcmp(root_hub_drvname, "uhci") == 0) {
 			log_name = "uusb";
@@ -1896,10 +1899,10 @@ usba_hubdi_attach(dev_info_t *dip, ddi_attach_cmd_t cmd)
 	mutex_exit(&child_ud->usb_mutex);
 
 	if ((child_port_status == USBA_FULL_SPEED_DEV) &&
-	    (parent_port_status == USBA_HIGH_SPEED_DEV) &&
+	    (parent_port_status >= USBA_HIGH_SPEED_DEV) &&
 	    (usb_dev_descr->bcdUSB == 0x100)) {
 		USB_DPRINTF_L0(DPRINT_MASK_ATTA, hubd->h_log_handle,
-		    "Use of a USB1.0 hub behind a high speed port may "
+		    "Use of a USB1.0 hub behind a higher speed port may "
 		    "cause unexpected failures");
 	}
 
@@ -1930,7 +1933,11 @@ usba_hubdi_attach(dev_info_t *dip, ddi_attach_cmd_t cmd)
 		goto fail;
 	}
 
-	hubd->h_ep1_descr = ep_data->ep_descr;
+	if (usb_ep_xdescr_fill(USB_EP_XDESCR_CURRENT_VERSION, dip, ep_data,
+	    &hubd->h_ep1_xdescr) != USB_SUCCESS) {
+		goto fail;
+	}
+
 	hubd->h_default_pipe = hubd->h_dev_data->dev_default_ph;
 
 	mutex_init(HUBD_MUTEX(hubd), NULL, MUTEX_DRIVER,
@@ -1988,8 +1995,38 @@ usba_hubdi_attach(dev_info_t *dip, ddi_attach_cmd_t cmd)
 	mutex_enter(HUBD_MUTEX(hubd));
 	hubd->h_init_state |= HUBD_EVENTS_REGISTERED;
 
-	if ((hubd_get_hub_descriptor(hubd)) != USB_SUCCESS) {
+	if (hubd_get_hub_descriptor(hubd) != USB_SUCCESS) {
 		mutex_exit(HUBD_MUTEX(hubd));
+
+		goto fail;
+	}
+
+	/*
+	 * Now that we have our descriptors, we need to give the host controller
+	 * a chance to properly configure the device if needed (this is required
+	 * for xHCI).
+	 *
+	 * Note, if anyone ever adds support for using the Multi TT mode for USB
+	 * 2 High speed Hubs, the xhci driver will need to be updated and that
+	 * will need to be done before this is called.
+	 */
+	if (hubd->h_usba_device->usb_hcdi_ops->usba_hcdi_hub_update != NULL &&
+	    !usba_is_root_hub(dip)) {
+		int ret;
+		uint8_t chars;
+		usba_device_t *ud = hubd->h_usba_device;
+
+		chars = (hubd->h_hub_chars & HUB_CHARS_TT_THINK_TIME) >>
+		    HUB_CHARS_TT_SHIFT;
+		ret = ud->usb_hcdi_ops->usba_hcdi_hub_update(ud,
+		    hubd->h_nports, chars);
+		if (ret != USB_SUCCESS) {
+			mutex_exit(HUBD_MUTEX(hubd));
+			goto fail;
+		}
+	}
+
+	if (hubd_set_hub_depth(hubd) != USB_SUCCESS) {
 
 		goto fail;
 	}
@@ -2027,9 +2064,9 @@ usba_hubdi_attach(dev_info_t *dip, ddi_attach_cmd_t cmd)
 	hubd_get_ancestry_str(hubd);
 
 	USB_DPRINTF_L4(DPRINT_MASK_ATTA, hubd->h_log_handle,
-	    "#ports=0x%x", hubd->h_hub_descr.bNbrPorts);
+	    "#ports=0x%x", hubd->h_nports);
 
-	for (i = 1; i <= hubd->h_hub_descr.bNbrPorts; i++) {
+	for (i = 1; i <= hubd->h_nports; i++) {
 		char ap_name[HUBD_APID_NAMELEN];
 
 		(void) snprintf(ap_name, HUBD_APID_NAMELEN, "%s%d",
@@ -2048,7 +2085,7 @@ usba_hubdi_attach(dev_info_t *dip, ddi_attach_cmd_t cmd)
 		}
 	}
 
-	ports_count = hubd->h_hub_descr.bNbrPorts;
+	ports_count = hubd->h_nports;
 	mutex_exit(HUBD_MUTEX(hubd));
 
 	/* create minor nodes */
@@ -2097,11 +2134,11 @@ fail:
 		kmem_free(pathname, MAXPATHLEN);
 	}
 
-	mutex_enter(HUBD_MUTEX(hubd));
-	hubd_pm_idle_component(hubd, dip, 0);
-	mutex_exit(HUBD_MUTEX(hubd));
+	if (hubd != NULL) {
+		mutex_enter(HUBD_MUTEX(hubd));
+		hubd_pm_idle_component(hubd, dip, 0);
+		mutex_exit(HUBD_MUTEX(hubd));
 
-	if (hubd) {
 		rval = hubd_cleanup(dip, hubd);
 		if (rval != USB_SUCCESS) {
 			USB_DPRINTF_L2(DPRINT_MASK_ATTA, hubdi_log_handle,
@@ -2144,7 +2181,7 @@ usba_hubdi_detach(dev_info_t *dip, ddi_detach_cmd_t cmd)
 static int
 hubd_setdevaddr(hubd_t *hubd, usb_port_t port)
 {
-	int		rval;
+	int		rval = USB_FAILURE;
 	usb_cr_t	completion_reason;
 	usb_cb_flags_t	cb_flags;
 	usb_pipe_handle_t ph;
@@ -2171,6 +2208,20 @@ hubd_setdevaddr(hubd_t *hubd, usb_port_t port)
 	mutex_enter(HUBD_MUTEX(hubd));
 
 	/*
+	 * If the host controller is in charge of addressing, have it do that
+	 * now and skip everything else.
+	 */
+	if (usba_device->usb_hcdi_ops->usba_hcdi_device_address != NULL) {
+		mutex_exit(HUBD_MUTEX(hubd));
+		rval = usba_device->usb_hcdi_ops->usba_hcdi_device_address(
+		    usba_device);
+		mutex_enter(HUBD_MUTEX(hubd));
+
+		usba_clear_data_toggle(usba_device);
+		return (rval);
+	}
+
+	/*
 	 * As this device has been reset, temporarily
 	 * assign the default address
 	 */
@@ -2185,8 +2236,8 @@ hubd_setdevaddr(hubd_t *hubd, usb_port_t port)
 	for (retry = 0; retry < hubd_retry_enumerate; retry++) {
 
 		/* open child's default pipe with USBA_DEFAULT_ADDR */
-		if (usb_pipe_open(child_dip, NULL, NULL,
-		    USB_FLAGS_SLEEP | USBA_FLAGS_PRIVILEGED, &ph) !=
+		if ((rval = usb_pipe_open(child_dip, NULL, NULL,
+		    USB_FLAGS_SLEEP | USBA_FLAGS_PRIVILEGED, &ph)) !=
 		    USB_SUCCESS) {
 			USB_DPRINTF_L2(DPRINT_MASK_ATTA, hubd->h_log_handle,
 			    "hubd_setdevaddr: Unable to open default pipe");
@@ -2336,7 +2387,7 @@ hubd_check_disconnected_ports(dev_info_t *dip, void *arg)
 	if (ddi_driver_major(dip) != hwahc_major) {
 		/* for normal usb hub or root hub */
 		mutex_enter(HUBD_MUTEX(hubd));
-		for (port = 1; port <= hubd->h_hub_descr.bNbrPorts; port++) {
+		for (port = 1; port <= hubd->h_nports; port++) {
 			dev_info_t *cdip = hubd->h_children_dips[port];
 
 			if (cdip == NULL || DEVI_IS_DEVICE_REMOVED(cdip) == 0) {
@@ -2571,8 +2622,7 @@ hubd_restore_device_state(dev_info_t *dip, hubd_t *hubd)
 
 	/*
 	 * wait at least 3 frames before accessing devices
-	 * (note that delay's minimal time is one clock tick which
-	 * is 10ms unless hires_tick has been changed)
+	 * (note that delay's minimal time is one clock tick).
 	 */
 	mutex_exit(HUBD_MUTEX(hubd));
 	delay(drv_usectohz(10000));
@@ -2580,7 +2630,7 @@ hubd_restore_device_state(dev_info_t *dip, hubd_t *hubd)
 
 	hubd->h_dev_state = USB_DEV_HUB_STATE_RECOVER;
 
-	for (port = 1; port <= hubd->h_hub_descr.bNbrPorts; port++) {
+	for (port = 1; port <= hubd->h_nports; port++) {
 		USB_DPRINTF_L3(DPRINT_MASK_ATTA, hubd->h_log_handle,
 		    "hubd_restore_device_state: port=%d", port);
 
@@ -2593,7 +2643,7 @@ hubd_restore_device_state(dev_info_t *dip, hubd_t *hubd)
 		if (ch_dip) {
 			/* get port status */
 			(void) hubd_determine_port_status(hubd, port,
-			    &status, &change, PORT_CHANGE_CSC);
+			    &status, &change, NULL, PORT_CHANGE_CSC);
 
 			/* check if it is truly connected */
 			if (status & PORT_STATUS_CCS) {
@@ -2670,7 +2720,7 @@ hubd_restore_device_state(dev_info_t *dip, hubd_t *hubd)
 		} else if (ehci_root_hub) {
 			/* get port status */
 			(void) hubd_determine_port_status(hubd, port,
-			    &status, &change, PORT_CHANGE_CSC);
+			    &status, &change, NULL, PORT_CHANGE_CSC);
 
 			/* check if it is truly connected */
 			if (status & PORT_STATUS_CCS) {
@@ -2684,7 +2734,7 @@ hubd_restore_device_state(dev_info_t *dip, hubd_t *hubd)
 				(void) hubd_reset_port(hubd, port);
 
 				(void) hubd_determine_port_status(hubd, port,
-				    &status, &change, PORT_CHANGE_CSC);
+				    &status, &change, NULL, PORT_CHANGE_CSC);
 
 				if (status &
 				    (PORT_STATUS_CCS | PORT_STATUS_HSDA)) {
@@ -2834,7 +2884,7 @@ hubd_cleanup(dev_info_t *dip, hubd_t *hubd)
 
 	if (hubd->h_init_state & HUBD_CHILDREN_CREATED) {
 #ifdef DEBUG
-		for (port = 1; port <= hubd->h_hub_descr.bNbrPorts; port++) {
+		for (port = 1; port <= hubd->h_nports; port++) {
 			ASSERT(hubd->h_usba_devices[port] == NULL);
 			ASSERT(hubd->h_children_dips[port] == NULL);
 		}
@@ -2951,19 +3001,16 @@ static usb_port_mask_t
 hubd_determine_port_connection(hubd_t	*hubd)
 {
 	usb_port_t	port;
-	usb_hub_descr_t	*hub_descr;
 	uint16_t	status;
 	uint16_t	change;
 	usb_port_mask_t	port_change = 0;
 
 	ASSERT(mutex_owned(HUBD_MUTEX(hubd)));
 
-	hub_descr = &hubd->h_hub_descr;
-
-	for (port = 1; port <= hub_descr->bNbrPorts; port++) {
+	for (port = 1; port <= hubd->h_nports; port++) {
 
 		(void) hubd_determine_port_status(hubd, port, &status,
-		    &change, 0);
+		    &change, NULL, 0);
 
 		/* Check if port is in connect status */
 		if (!(status & PORT_STATUS_CCS)) {
@@ -3047,7 +3094,7 @@ hubd_check_ports(hubd_t  *hubd)
 	 * ports go from 1 - n, allocate 1 more entry
 	 */
 	hubd->h_cd_list_length =
-	    (sizeof (dev_info_t **)) * (hubd->h_hub_descr.bNbrPorts + 1);
+	    (sizeof (dev_info_t **)) * (hubd->h_nports + 1);
 
 	hubd->h_children_dips = (dev_info_t **)kmem_zalloc(
 	    hubd->h_cd_list_length, KM_SLEEP);
@@ -3081,7 +3128,7 @@ hubd_check_ports(hubd_t  *hubd)
 	 */
 	port_change = hubd_determine_port_connection(hubd);
 
-	if (port_change) {
+	if (port_change != 0 || hubd->h_port_change != 0) {
 		hubd_pm_busy_component(hubd, hubd->h_dip, 0);
 
 		arg->hubd = hubd;
@@ -3117,11 +3164,10 @@ hubd_check_ports(hubd_t  *hubd)
 static int
 hubd_get_hub_descriptor(hubd_t *hubd)
 {
-	usb_hub_descr_t	*hub_descr = &hubd->h_hub_descr;
 	mblk_t		*data = NULL;
 	usb_cr_t	completion_reason;
 	usb_cb_flags_t	cb_flags;
-	uint16_t	length;
+	uint16_t	length, wValue;
 	int		rval;
 	usb_req_attrs_t attr = 0;
 
@@ -3136,14 +3182,30 @@ hubd_get_hub_descriptor(hubd_t *hubd)
 	ASSERT(mutex_owned(HUBD_MUTEX(hubd)));
 	ASSERT(hubd->h_default_pipe != 0);
 
-	/* get hub descriptor length first by requesting 8 bytes only */
 	mutex_exit(HUBD_MUTEX(hubd));
 
+	/*
+	 * The contents of wValue change depending on whether this is a USB 2 or
+	 * USB 3 device. SuperSpeed Hubs have different descriptors and you
+	 * cannot ask them for the traditional USB 2 descriptor.
+	 */
+	if (hubd->h_usba_device->usb_port_status >= USBA_SUPER_SPEED_DEV) {
+		wValue = USB_DESCR_TYPE_SS_HUB << 8 | HUBD_DEFAULT_DESC_INDEX;
+	} else {
+		wValue = USB_DESCR_TYPE_HUB << 8 | HUBD_DEFAULT_DESC_INDEX;
+	}
+
+	/*
+	 * The hub descriptor length varies in various versions of USB. For
+	 * example, in USB 2 it's at least 9 bytes long. To start with, we
+	 * always get the first 8 bytes so we can figure out how long it
+	 * actually is.
+	 */
 	if ((rval = usb_pipe_sync_ctrl_xfer(hubd->h_dip,
 	    hubd->h_default_pipe,
 	    HUB_CLASS_REQ_TYPE,
 	    USB_REQ_GET_DESCR,		/* bRequest */
-	    USB_DESCR_TYPE_SETUP_HUB,	/* wValue */
+	    wValue,			/* wValue */
 	    0,				/* wIndex */
 	    8,				/* wLength */
 	    &data, 0,
@@ -3168,7 +3230,7 @@ hubd_get_hub_descriptor(hubd_t *hubd)
 		    hubd->h_default_pipe,
 		    HUB_CLASS_REQ_TYPE,
 		    USB_REQ_GET_DESCR,		/* bRequest */
-		    USB_DESCR_TYPE_SETUP_HUB,	/* wValue */
+		    wValue,			/* wValue */
 		    0,				/* wIndex */
 		    length,			/* wLength */
 		    &data, attr,
@@ -3193,18 +3255,50 @@ hubd_get_hub_descriptor(hubd_t *hubd)
 
 	mutex_enter(HUBD_MUTEX(hubd));
 
-	/* parse the hub descriptor */
-	/* only 32 ports are supported at present */
-	ASSERT(*(data->b_rptr + 2) <= 32);
-	if (usb_parse_CV_descr("cccscccccc",
-	    data->b_rptr, MBLKL(data),
-	    (void *)hub_descr, sizeof (usb_hub_descr_t)) == 0) {
-		USB_DPRINTF_L2(DPRINT_MASK_ATTA, hubd->h_log_handle,
-		    "parsing hub descriptor failed");
+	/*
+	 * Parse the hub descriptor. Note that the format of the descriptor
+	 * itself depends on the USB version. We handle the different ones and
+	 * transform it into a single uniform view.
+	 */
 
-		freemsg(data);
+	ASSERT(*(data->b_rptr + 2) <= (MAX_PORTS + 1));
+	if (hubd->h_usba_device->usb_port_status >= USBA_SUPER_SPEED_DEV) {
+		usb_ss_hub_descr_t hub_descr;
+		char *desc = "cccscccs";
+		ASSERT(*(data->b_rptr + 1) == ROOT_HUB_SS_DESCRIPTOR_TYPE);
 
-		return (USB_FAILURE);
+		/*
+		 * Note many hubs may support less than the 255 devices that the
+		 * USB specification allows for. In those cases, we'll simply
+		 * read less and it should be okay.
+		 */
+		if (usb_parse_CV_descr(desc, data->b_rptr, MBLKL(data),
+		    (void *)&hub_descr, sizeof (hub_descr)) == 0) {
+			USB_DPRINTF_L2(DPRINT_MASK_ATTA, hubd->h_log_handle,
+			    "parsing hub descriptor failed");
+			freemsg(data);
+			return (USB_FAILURE);
+		}
+
+		hubd->h_nports = hub_descr.bNbrPorts;
+		hubd->h_hub_chars = hub_descr.wHubCharacteristics;
+		hubd->h_power_good = hub_descr.bPwrOn2PwrGood;
+		hubd->h_current = hub_descr.bHubContrCurrent;
+	} else {
+		usb_hub_descr_t hub_descr;
+		if (usb_parse_CV_descr("cccscccccc",
+		    data->b_rptr, MBLKL(data),
+		    (void *)&hub_descr, sizeof (usb_hub_descr_t)) == 0) {
+			USB_DPRINTF_L2(DPRINT_MASK_ATTA, hubd->h_log_handle,
+			    "parsing hub descriptor failed");
+			freemsg(data);
+			return (USB_FAILURE);
+		}
+
+		hubd->h_nports = hub_descr.bNbrPorts;
+		hubd->h_hub_chars = hub_descr.wHubCharacteristics;
+		hubd->h_power_good = hub_descr.bPwrOn2PwrGood;
+		hubd->h_current = hub_descr.bHubContrCurrent;
 	}
 
 	freemsg(data);
@@ -3212,21 +3306,86 @@ hubd_get_hub_descriptor(hubd_t *hubd)
 	USB_DPRINTF_L4(DPRINT_MASK_ATTA, hubd->h_log_handle,
 	    "rval=0x%x bNbrPorts=0x%x wHubChars=0x%x "
 	    "PwrOn2PwrGood=0x%x HubContrCurrent=%dmA", rval,
-	    hub_descr->bNbrPorts, hub_descr->wHubCharacteristics,
-	    hub_descr->bPwrOn2PwrGood, hub_descr->bHubContrCurrent);
+	    hubd->h_nports, hubd->h_hub_chars,
+	    hubd->h_power_good, hubd->h_current);
 
-	if (hub_descr->bNbrPorts > MAX_PORTS) {
+	if (hubd->h_nports > MAX_PORTS) {
 		USB_DPRINTF_L0(DPRINT_MASK_ATTA, hubd->h_log_handle,
 		    "Hub driver supports max of %d ports on hub. "
 		    "Hence using the first %d port of %d ports available",
-		    MAX_PORTS, MAX_PORTS, hub_descr->bNbrPorts);
+		    MAX_PORTS, MAX_PORTS, hubd->h_nports);
 
-		hub_descr->bNbrPorts = MAX_PORTS;
+		hubd->h_nports = MAX_PORTS;
 	}
 
 	return (USB_SUCCESS);
 }
 
+static int
+hubd_set_hub_depth(hubd_t *hubd)
+{
+	int rval;
+	usb_cr_t	completion_reason;
+	usb_cb_flags_t	cb_flags;
+	usba_device_t	*ud;
+	uint16_t	depth;
+
+	/*
+	 * We only need to set the hub depth devices for hubs that are at least
+	 * SuperSpeed devices. This didn't exist for USB 2.0 and older hubs.
+	 * There's also no need to call this on the root hub.
+	 */
+	if (hubd->h_usba_device->usb_port_status < USBA_SUPER_SPEED_DEV ||
+	    usba_is_root_hub(hubd->h_dip))
+		return (USB_SUCCESS);
+
+	depth = 0;
+	ud = hubd->h_usba_device;
+	while (ud->usb_parent_hub != NULL) {
+		depth++;
+		ud = ud->usb_parent_hub;
+	}
+	ASSERT(depth > 0);
+
+	if (depth > HUBD_SS_MAX_DEPTH) {
+		const char *mfg, *prod;
+
+		ud = hubd->h_usba_device;
+		prod = ud->usb_product_str;
+		if (prod == NULL)
+			prod = "Unknown Device";
+		mfg = ud->usb_mfg_str;
+		if (mfg == NULL)
+			mfg = "Unknown Manufacturer";
+		cmn_err(CE_WARN, "Unable to attach USB 3.x hub %s %s. A "
+		    "maximum of %d hubs may be cascaded", mfg, prod,
+		    HUBD_SS_MAX_DEPTH);
+		return (USB_FAILURE);
+	}
+
+	/*
+	 * When making the HUB_REQ_SET_HUB_DEPTH request, a hub connected to a
+	 * root port is considered to have a hub depth of zero whereas we
+	 * consider having a hub depth of one above.
+	 */
+	depth--;
+
+	if ((rval = usb_pipe_sync_ctrl_xfer(hubd->h_dip,
+	    hubd->h_default_pipe,
+	    HUB_SET_HUB_DEPTH_TYPE,
+	    HUB_REQ_SET_HUB_DEPTH,	/* bRequest */
+	    depth,			/* wValue */
+	    0,				/* wIndex */
+	    0,				/* wLength */
+	    NULL, 0,
+	    &completion_reason, &cb_flags, 0)) != USB_SUCCESS) {
+		USB_DPRINTF_L2(DPRINT_MASK_HUB, hubd->h_log_handle,
+		    "get set hub depth failed: cr=%d cb=0x%x",
+		    completion_reason, cb_flags);
+	}
+
+	return (rval);
+}
 
 /*
  * hubd_get_hub_status_words:
@@ -3295,8 +3454,8 @@ hubd_open_intr_pipe(hubd_t	*hubd)
 	hubd->h_intr_pipe_state = HUBD_INTR_PIPE_OPENING;
 	mutex_exit(HUBD_MUTEX(hubd));
 
-	if ((rval = usb_pipe_open(hubd->h_dip,
-	    &hubd->h_ep1_descr, &hubd->h_pipe_policy,
+	if ((rval = usb_pipe_xopen(hubd->h_dip,
+	    &hubd->h_ep1_xdescr, &hubd->h_pipe_policy,
 	    0, &hubd->h_ep1_ph)) != USB_SUCCESS) {
 		USB_DPRINTF_L2(DPRINT_MASK_HUB, hubd->h_log_handle,
 		    "open intr pipe failed (%d)", rval);
@@ -3350,7 +3509,7 @@ hubd_start_polling(hubd_t *hubd, int always)
 		reqp->intr_client_private = (usb_opaque_t)hubd;
 		reqp->intr_attributes = USB_ATTRS_SHORT_XFER_OK |
 		    USB_ATTRS_AUTOCLEARING;
-		reqp->intr_len = hubd->h_ep1_descr.wMaxPacketSize;
+		reqp->intr_len = hubd->h_ep1_xdescr.uex_ep.wMaxPacketSize;
 		reqp->intr_cb = hubd_read_cb;
 		reqp->intr_exc_cb = hubd_exception_cb;
 		mutex_exit(HUBD_MUTEX(hubd));
@@ -3748,7 +3907,7 @@ hubd_hotplug_thread(void *arg)
 
 	ASSERT(hubd->h_intr_pipe_state == HUBD_INTR_PIPE_ACTIVE);
 
-	nports = hubd->h_hub_descr.bNbrPorts;
+	nports = hubd->h_nports;
 
 	hubd_stop_polling(hubd);
 
@@ -3802,7 +3961,7 @@ hubd_hotplug_thread(void *arg)
 
 			/* ack all changes */
 			(void) hubd_determine_port_status(hubd, port,
-			    &status, &change, HUBD_ACK_ALL_CHANGES);
+			    &status, &change, NULL, HUBD_ACK_ALL_CHANGES);
 
 			USB_DPRINTF_L3(DPRINT_MASK_HOTPLUG, hubd->h_log_handle,
 			    "handle port %d:\n\t"
@@ -4094,6 +4253,7 @@ hubd_handle_port_connect(hubd_t *hubd, usb_port_t port)
 	long			settling_time;
 	uint16_t		status;
 	uint16_t		change;
+	usb_port_status_t	speed;
 	usb_addr_t		hubd_usb_addr;
 	usba_device_t		*usba_device;
 	usb_port_status_t	port_status = 0;
@@ -4138,7 +4298,7 @@ hubd_handle_port_connect(hubd_t *hubd, usb_port_t port)
 
 		if ((rval = hubd_reset_port(hubd, port)) != USB_SUCCESS) {
 			(void) hubd_determine_port_status(hubd,
-			    port, &status, &change, 0);
+			    port, &status, &change, &speed, 0);
 
 			/* continue only if port is still connected */
 			if (status & PORT_STATUS_CCS) {
@@ -4181,7 +4341,7 @@ hubd_handle_port_connect(hubd_t *hubd, usb_port_t port)
 		}
 
 		if ((rval = hubd_determine_port_status(hubd, port, &status,
-		    &change, 0)) != USB_SUCCESS) {
+		    &change, &speed, 0)) != USB_SUCCESS) {
 
 			USB_DPRINTF_L2(DPRINT_MASK_HOTPLUG, hubd->h_log_handle,
 			    "getting status failed (%d)", rval);
@@ -4199,7 +4359,7 @@ hubd_handle_port_connect(hubd_t *hubd, usb_port_t port)
 
 			/* ack changes */
 			(void) hubd_determine_port_status(hubd,
-			    port, &status, &change, PORT_CHANGE_OCIC);
+			    port, &status, &change, &speed, PORT_CHANGE_OCIC);
 
 			continue;
 		}
@@ -4218,18 +4378,7 @@ hubd_handle_port_connect(hubd_t *hubd, usb_port_t port)
 				break;
 			}
 		} else {
-			/*
-			 * Determine if the device is high or full
-			 * or low speed.
-			 */
-			if (status & PORT_STATUS_LSDA) {
-				port_status = USBA_LOW_SPEED_DEV;
-			} else if (status & PORT_STATUS_HSDA) {
-				port_status = USBA_HIGH_SPEED_DEV;
-			} else {
-				port_status = USBA_FULL_SPEED_DEV;
-			}
-
+			port_status = speed;
 			USB_DPRINTF_L3(DPRINT_MASK_HOTPLUG, hubd->h_log_handle,
 			    "creating child port%d, status=0x%x "
 			    "port status=0x%x",
@@ -4359,7 +4508,7 @@ hubd_handle_port_connect(hubd_t *hubd, usb_port_t port)
 		 * Host Controller. In this case, USB 2.0 Host Controller
 		 * will transfer the ownership of this port to USB 1.1
 		 * Host Controller. So don't display any error message on
-		 * the console.
+		 * the console. Note, this isn't the case for USB 3.x.
 		 */
 		if ((hubd_usb_addr == ROOT_HUB_ADDR) &&
 		    (hub_port_status == USBA_HIGH_SPEED_DEV) &&
@@ -4388,7 +4537,7 @@ hubd_handle_port_connect(hubd_t *hubd, usb_port_t port)
 
 		/* ack all changes because we disabled this port */
 		(void) hubd_determine_port_status(hubd,
-		    port, &status, &change, HUBD_ACK_ALL_CHANGES);
+		    port, &status, &change, NULL, HUBD_ACK_ALL_CHANGES);
 
 	}
 
@@ -4412,7 +4561,6 @@ hubd_get_hub_status(hubd_t *hubd)
 	size_t		cfg_length;
 	uchar_t		*usb_cfg;
 	uint8_t		MaxPower;
-	usb_hub_descr_t	*hub_descr;
 	usb_port_t	port;
 
 	USB_DPRINTF_L4(DPRINT_MASK_HOTPLUG, hubd->h_log_handle,
@@ -4576,18 +4724,13 @@ hubd_get_hub_status(hubd_t *hubd)
 			 * since all port power status should be the same.
 			 */
 			(void) hubd_determine_port_status(hubd, 1, &status,
-			    &change, 0);
+			    &change, NULL, 0);
 
 			if (status & PORT_STATUS_PPS) {
-
 				return (USB_SUCCESS);
 			}
 
-			hub_descr = &hubd->h_hub_descr;
-
-			for (port = 1; port <= hub_descr->bNbrPorts;
-			    port++) {
-
+			for (port = 1; port <= hubd->h_nports; port++) {
 				(void) hubd_enable_port_power(hubd, port);
 			}
 
@@ -4606,9 +4749,68 @@ hubd_get_hub_status(hubd_t *hubd)
 	return (USB_SUCCESS);
 }
 
+/*
+ * Convert a series of USB status requests from USB 2 and USB 3 into a single
+ * uniform type. We separate out the speed into its own value from both USB 2
+ * and USB 3 and from there we transform the status to look like a USB 2 one.
+ */
+static void
+hubd_status_uniform(hubd_t *hubd, usb_port_t port, uint16_t *status,
+    usb_port_status_t *speed)
+{
+	uint16_t os = *status;
+
+	hubd->h_port_raw[port] = os;
+
+	if (hubd->h_usba_device->usb_port_status >= USBA_SUPER_SPEED_DEV) {
+		/*
+		 * USB 3 devices are always at super speed when plugged into a
+		 * super speed hub. However, this is only true if we're talking
+		 * about actual hubs. This doesn't hold for the root hub, which
+		 * can support USB 3.x, USB 2.x, and USB 1.x devices operating
+		 * at different speeds. To handle this, the USB 3 HCD driver
+		 * (xhci) uses some of the extra status bits to stash the
+		 * current device's detected speed.
+		 */
+		if (usba_is_root_hub(hubd->h_dip)) {
+			if (speed != NULL) {
+				*speed = (os & PORT_STATUS_SPMASK_SS) >>
+				    PORT_STATUS_SPSHIFT_SS;
+			}
+		} else {
+			if (speed != NULL)
+				*speed = USBA_SUPER_SPEED_DEV;
+		}
+
+		if (os & PORT_STATUS_PPS_SS) {
+			os &= ~PORT_STATUS_PPS_SS;
+			os |= PORT_STATUS_PPS;
+			*status = os;
+		}
+	} else {
+		/*
+		 * For USB 2, the only thing we need to do is transform the
+		 * speed.
+		 */
+		if (speed == NULL)
+			return;
+
+		if (os & PORT_STATUS_HSDA)
+			*speed = USBA_HIGH_SPEED_DEV;
+		else if (os & PORT_STATUS_LSDA)
+			*speed = USBA_LOW_SPEED_DEV;
+		else
+			*speed = USBA_FULL_SPEED_DEV;
+	}
+}
+
 
 /*
- * hubd_reset_port:
+ * Attempt to reset a port. This feels a bit more complicated than it should be
+ * in part due to how HCD, change status notifications, and the hotplug thread
+ * might interact. Basically we try to block port changes by using the
+ * h_port_reset_wait which says we should get signalled rather than kicking off
+ * the hotplug thread. We'll give this a shot for about 100ms at best.
  */
 static int
 hubd_reset_port(hubd_t *hubd, usb_port_t port)
@@ -4620,8 +4822,8 @@ hubd_reset_port(hubd_t *hubd, usb_port_t port)
 	mblk_t	*data;
 	uint16_t status;
 	uint16_t change;
-	int	i;
 	clock_t	delta;
+	boolean_t first;
 
 	USB_DPRINTF_L4(DPRINT_MASK_PORT, hubd->h_log_handle,
 	    "hubd_reset_port: port=%d", port);
@@ -4659,37 +4861,29 @@ hubd_reset_port(hubd_t *hubd, usb_port_t port)
 	 * wait for port status change event
 	 */
 	delta = drv_usectohz(hubd_device_delay / 10);
-	for (i = 0; i < hubd_retry_enumerate; i++) {
-		/*
-		 * start polling ep1 for receiving notification on
-		 * reset completion
-		 */
+
+	first = B_TRUE;
+	for (;;) {
+		if (delta < 0) {
+			rval = USB_FAILURE;
+			break;
+		}
+
+		if (first == B_FALSE)
+			hubd->h_port_reset_wait |= port_mask;
+		else
+			first = B_FALSE;
+
 		hubd_start_polling(hubd, HUBD_ALWAYS_START_POLLING);
 
 		/*
-		 * sleep a max of 100ms for reset completion
-		 * notification to be received
+		 * Regardless of the status, we always check to see if the port
+		 * has been reset.
 		 */
-		if (hubd->h_port_reset_wait & port_mask) {
-			rval = cv_reltimedwait(&hubd->h_cv_reset_port,
-			    &hubd->h_mutex, delta, TR_CLOCK_TICK);
-			if ((rval <= 0) &&
-			    (hubd->h_port_reset_wait & port_mask)) {
-				/* we got woken up because of a timeout */
-				USB_DPRINTF_L2(DPRINT_MASK_PORT,
-				    hubd->h_log_handle,
-				    "timeout: reset port=%d failed", port);
-
-				hubd->h_port_reset_wait &=  ~port_mask;
-
-				hubd_stop_polling(hubd);
-
-				return (USB_FAILURE);
-			}
-		}
-
-		USB_DPRINTF_L4(DPRINT_MASK_PORT, hubd->h_log_handle,
-		    "reset completion received");
+		delta = cv_reltimedwait(&hubd->h_cv_reset_port,
+		    &hubd->h_mutex, delta, TR_CLOCK_TICK);
+		if (delta < 0)
+			hubd->h_port_reset_wait &= ~port_mask;
 
 		hubd_stop_polling(hubd);
 
@@ -4725,11 +4919,13 @@ hubd_reset_port(hubd_t *hubd, usb_port_t port)
 
 		freemsg(data);
 
+		hubd_status_uniform(hubd, port, &status, NULL);
+
 		/* continue only if port is still connected */
 		if (!(status & PORT_STATUS_CCS)) {
 
 			/* lost connection, set exit condition */
-			i = hubd_retry_enumerate;
+			delta = -1;
 
 			mutex_enter(HUBD_MUTEX(hubd));
 
@@ -4767,14 +4963,36 @@ hubd_reset_port(hubd_t *hubd, usb_port_t port)
 				    port, completion_reason, cb_flags, rval);
 			}
 		}
+
+		/*
+		 * In addition to a normal reset, a warm reset may have
+		 * happened. Acknowledge that as well.
+		 */
+		if (change & PORT_CHANGE_BHPR) {
+			USB_DPRINTF_L3(DPRINT_MASK_PORT, hubd->h_log_handle,
+			    "clearing feature CFS_C_BH_PORT_RESET");
+
+			if (usb_pipe_sync_ctrl_xfer(hubd->h_dip,
+			    hubd->h_default_pipe,
+			    HUB_HANDLE_PORT_FEATURE_TYPE,
+			    USB_REQ_CLEAR_FEATURE,
+			    CFS_C_BH_PORT_RESET,
+			    port,
+			    0,
+			    NULL, 0,
+			    &completion_reason, &cb_flags, 0) != USB_SUCCESS) {
+				USB_DPRINTF_L2(DPRINT_MASK_PORT,
+				    hubd->h_log_handle,
+				    "clear feature CFS_C_BH_PORT_RESET"
+				    " port%d failed (%d 0x%x %d)",
+				    port, completion_reason, cb_flags, rval);
+			}
+		}
+
+		rval = USB_SUCCESS;
 		mutex_enter(HUBD_MUTEX(hubd));
 
 		break;
-	}
-
-	if (i >= hubd_retry_enumerate) {
-		/* port reset has failed */
-		rval = USB_FAILURE;
 	}
 
 	return (rval);
@@ -4896,13 +5114,25 @@ hubd_disable_port(hubd_t *hubd, usb_port_t port)
  * hubd_determine_port_status:
  */
 static int
-hubd_determine_port_status(hubd_t *hubd, usb_port_t port,
-		uint16_t *status, uint16_t *change, uint_t ack_flag)
+hubd_determine_port_status(hubd_t *hubd, usb_port_t port, uint16_t *status,
+    uint16_t *change, usb_port_status_t *speed, uint_t ack_flag)
 {
 	int rval;
 	mblk_t	*data = NULL;
 	usb_cr_t completion_reason;
 	usb_cb_flags_t cb_flags;
+	uint16_t st, ch;
+	usb_port_status_t sp;
+
+	if (status == NULL)
+		status = &st;
+	if (change == NULL)
+		change = &ch;
+	if (speed == NULL)
+		speed = &sp;
+
+	*status = *change = 0;
+	*speed = 0;
 
 	USB_DPRINTF_L4(DPRINT_MASK_PORT, hubd->h_log_handle,
 	    "hubd_determine_port_status: port=%d, state=0x%x ack=0x%x", port,
@@ -4929,7 +5159,6 @@ hubd_determine_port_status(hubd_t *hubd, usb_port_t port,
 			freemsg(data);
 		}
 
-		*status = *change = 0;
 		mutex_enter(HUBD_MUTEX(hubd));
 
 		return (rval);
@@ -4941,7 +5170,6 @@ hubd_determine_port_status(hubd_t *hubd, usb_port_t port,
 		    "port %d: length incorrect %ld",
 		    port, MBLKL(data));
 		freemsg(data);
-		*status = *change = 0;
 
 		return (rval);
 	}
@@ -4949,6 +5177,7 @@ hubd_determine_port_status(hubd_t *hubd, usb_port_t port,
 
 	*status = (*(data->b_rptr + 1) << 8) | *(data->b_rptr);
 	*change = (*(data->b_rptr + 3) << 8) | *(data->b_rptr + 2);
+	hubd_status_uniform(hubd, port, status, speed);
 
 	USB_DPRINTF_L3(DPRINT_MASK_PORT, hubd->h_log_handle,
 	    "port%d status=0x%x, change=0x%x", port, *status, *change);
@@ -5032,29 +5261,6 @@ hubd_determine_port_status(hubd_t *hubd, usb_port_t port,
 		    "port%d power off", port);
 
 		hubd->h_port_state[port] &= ~(PORT_STATUS_PPS & ack_flag);
-	}
-	if (*status & PORT_STATUS_LSDA) {
-		USB_DPRINTF_L3(DPRINT_MASK_PORT, hubd->h_log_handle,
-		    "port%d low speed", port);
-
-		hubd->h_port_state[port] |= (PORT_STATUS_LSDA & ack_flag);
-	} else {
-		hubd->h_port_state[port] &= ~(PORT_STATUS_LSDA & ack_flag);
-		if (*status & PORT_STATUS_HSDA) {
-			USB_DPRINTF_L3(DPRINT_MASK_PORT,
-			    hubd->h_log_handle, "port%d "
-			    "high speed", port);
-
-			hubd->h_port_state[port] |=
-			    (PORT_STATUS_HSDA & ack_flag);
-		} else {
-			USB_DPRINTF_L3(DPRINT_MASK_PORT,
-			    hubd->h_log_handle, "port%d "
-			    "full speed", port);
-
-			hubd->h_port_state[port] &=
-			    ~(PORT_STATUS_HSDA & ack_flag);
-		}
 	}
 
 	/*
@@ -5159,6 +5365,63 @@ hubd_determine_port_status(hubd_t *hubd, usb_port_t port,
 				    port, completion_reason, cb_flags, rval);
 			}
 		}
+		if (*change & PORT_CHANGE_BHPR & ack_flag) {
+			USB_DPRINTF_L3(DPRINT_MASK_PORT, hubd->h_log_handle,
+			    "clearing feature CFS_C_BH_PORT_RESET");
+			if ((rval = usb_pipe_sync_ctrl_xfer(hubd->h_dip,
+			    hubd->h_default_pipe,
+			    HUB_HANDLE_PORT_FEATURE_TYPE,
+			    USB_REQ_CLEAR_FEATURE,
+			    CFS_C_BH_PORT_RESET,
+			    port,
+			    0, NULL, 0,
+			    &completion_reason, &cb_flags, 0)) !=
+			    USB_SUCCESS) {
+				USB_DPRINTF_L2(DPRINT_MASK_PORT,
+				    hubd->h_log_handle,
+				    "clear feature CFS_C_BH_PORT_RESET"
+				    " port%d failed (%d 0x%x %d)",
+				    port, completion_reason, cb_flags, rval);
+			}
+		}
+		if (*change & PORT_CHANGE_PLSC & ack_flag) {
+			USB_DPRINTF_L3(DPRINT_MASK_PORT, hubd->h_log_handle,
+			    "clearing feature CFS_C_PORT_LINK_STATE");
+			if ((rval = usb_pipe_sync_ctrl_xfer(hubd->h_dip,
+			    hubd->h_default_pipe,
+			    HUB_HANDLE_PORT_FEATURE_TYPE,
+			    USB_REQ_CLEAR_FEATURE,
+			    CFS_C_PORT_LINK_STATE,
+			    port,
+			    0, NULL, 0,
+			    &completion_reason, &cb_flags, 0)) !=
+			    USB_SUCCESS) {
+				USB_DPRINTF_L2(DPRINT_MASK_PORT,
+				    hubd->h_log_handle,
+				    "clear feature CFS_C_PORT_LINK_STATE"
+				    " port%d failed (%d 0x%x %d)",
+				    port, completion_reason, cb_flags, rval);
+			}
+		}
+		if (*change & PORT_CHANGE_PCE & ack_flag) {
+			USB_DPRINTF_L3(DPRINT_MASK_PORT, hubd->h_log_handle,
+			    "clearing feature CFS_C_PORT_CONFIG_ERROR");
+			if ((rval = usb_pipe_sync_ctrl_xfer(hubd->h_dip,
+			    hubd->h_default_pipe,
+			    HUB_HANDLE_PORT_FEATURE_TYPE,
+			    USB_REQ_CLEAR_FEATURE,
+			    CFS_C_PORT_CONFIG_ERROR,
+			    port,
+			    0, NULL, 0,
+			    &completion_reason, &cb_flags, 0)) !=
+			    USB_SUCCESS) {
+				USB_DPRINTF_L2(DPRINT_MASK_PORT,
+				    hubd->h_log_handle,
+				    "clear feature CFS_C_PORT_CONFIG_ERROR"
+				    " port%d failed (%d 0x%x %d)",
+				    port, completion_reason, cb_flags, rval);
+			}
+		}
 		mutex_enter(HUBD_MUTEX(hubd));
 	}
 
@@ -5187,7 +5450,7 @@ hubd_recover_disabled_port(hubd_t *hubd, usb_port_t port)
 	(void) hubd_enable_port(hubd, port);
 
 	/* read the port status */
-	(void) hubd_determine_port_status(hubd, port, &status, &change,
+	(void) hubd_determine_port_status(hubd, port, &status, &change, NULL,
 	    PORT_CHANGE_PESC);
 
 	if (status & PORT_STATUS_PES) {
@@ -5216,7 +5479,6 @@ hubd_recover_disabled_port(hubd_t *hubd, usb_port_t port)
 static int
 hubd_enable_all_port_power(hubd_t *hubd)
 {
-	usb_hub_descr_t	*hub_descr;
 	int		wait;
 	usb_port_t	port;
 	uint_t		retry;
@@ -5228,33 +5490,32 @@ hubd_enable_all_port_power(hubd_t *hubd)
 
 	ASSERT(mutex_owned(HUBD_MUTEX(hubd)));
 
-	hub_descr = &hubd->h_hub_descr;
-
 	/*
 	 * According to section 11.11 of USB, for hubs with no power
 	 * switches, bPwrOn2PwrGood is zero. But we wait for some
 	 * arbitrary time to enable power to become stable.
 	 *
 	 * If an hub supports port power switching, we need to wait
-	 * at least 20ms before accessing corresponding usb port.
+	 * at least 20ms before accessing corresponding usb port. Note,
+	 * this member is stored in the h_power_good member.
 	 */
-	if ((hub_descr->wHubCharacteristics &
-	    HUB_CHARS_NO_POWER_SWITCHING) || (!hub_descr->bPwrOn2PwrGood)) {
+	if ((hubd->h_hub_chars & HUB_CHARS_NO_POWER_SWITCHING) ||
+	    (hubd->h_power_good == 0)) {
 		wait = hubd_device_delay / 10;
 	} else {
 		wait = max(HUB_DEFAULT_POPG,
-		    hub_descr->bPwrOn2PwrGood) * 2 * 1000;
+		    hubd->h_power_good) * 2 * 1000;
 	}
 
 	USB_DPRINTF_L4(DPRINT_MASK_PORT, hubd->h_log_handle,
 	    "hubd_enable_all_port_power: popg=%d wait=%d",
-	    hub_descr->bPwrOn2PwrGood, wait);
+	    hubd->h_power_good, wait);
 
 	/*
 	 * Enable power per port. we ignore gang power and power mask
 	 * and always enable all ports one by one.
 	 */
-	for (port = 1; port <= hub_descr->bNbrPorts; port++) {
+	for (port = 1; port <= hubd->h_nports; port++) {
 		/*
 		 * Transition the port from the Powered Off to the
 		 * Disconnected state by supplying power to the port.
@@ -5274,11 +5535,11 @@ hubd_enable_all_port_power(hubd_t *hubd)
 	wait = max(wait, hubd_device_delay / 10);
 
 	/* Check each port power status for a given usb hub */
-	for (port = 1; port <= hub_descr->bNbrPorts; port++) {
+	for (port = 1; port <= hubd->h_nports; port++) {
 
 		/* Get port status */
 		(void) hubd_determine_port_status(hubd, port,
-		    &status, &change, 0);
+		    &status, &change, NULL, 0);
 
 		for (retry = 0; ((!(status & PORT_STATUS_PPS)) &&
 		    (retry < HUBD_PORT_RETRY)); retry++) {
@@ -5295,7 +5556,7 @@ hubd_enable_all_port_power(hubd_t *hubd)
 
 			/* Get port status */
 			(void) hubd_determine_port_status(hubd, port,
-			    &status, &change, 0);
+			    &status, &change, NULL, 0);
 		}
 
 		/* Print warning message if port has no power */
@@ -5369,7 +5630,7 @@ hubd_disable_all_port_power(hubd_t *hubd)
 	/*
 	 * disable power per port, ignore gang power and power mask
 	 */
-	for (port = 1; port <= hubd->h_hub_descr.bNbrPorts; port++) {
+	for (port = 1; port <= hubd->h_nports; port++) {
 		(void) hubd_disable_port_power(hubd, port);
 	}
 
@@ -5427,7 +5688,7 @@ hubd_disable_port_power(hubd_t *hubd, usb_port_t port)
  */
 int
 hubd_select_device_configuration(hubd_t *hubd, usb_port_t port,
-	dev_info_t *child_dip, usba_device_t *child_ud)
+    dev_info_t *child_dip, usba_device_t *child_ud)
 {
 	char		*pathname = NULL;
 	char		*tmp_path = NULL;
@@ -5503,7 +5764,7 @@ hubd_select_device_configuration(hubd_t *hubd, usb_port_t port,
  */
 int
 hubd_get_this_config_cloud(hubd_t *hubd, dev_info_t *dip,
-	usba_device_t *child_ud, uint16_t conf_index)
+    usba_device_t *child_ud, uint16_t conf_index)
 {
 	usb_cfg_descr_t	*confdescr;
 	mblk_t		*pdata = NULL;
@@ -5690,7 +5951,7 @@ done:
  */
 int
 hubd_get_all_device_config_cloud(hubd_t *hubd, dev_info_t *dip,
-	usba_device_t *child_ud)
+    usba_device_t *child_ud)
 {
 	int		rval = USB_SUCCESS;
 	int		ncfgs;
@@ -5779,7 +6040,7 @@ hubd_ready_device(hubd_t *hubd, dev_info_t *child_dip, usba_device_t *child_ud,
 	child_ud->usb_active_cfg_ndx	= config_index;
 	child_ud->usb_cfg		= child_ud->usb_cfg_array[config_index];
 	child_ud->usb_cfg_length	= config_descriptor.wTotalLength;
-	child_ud->usb_cfg_value 	= config_descriptor.bConfigurationValue;
+	child_ud->usb_cfg_value		= config_descriptor.bConfigurationValue;
 	child_ud->usb_n_ifs		= config_descriptor.bNumInterfaces;
 	child_ud->usb_dip		= child_dip;
 
@@ -5810,7 +6071,6 @@ hubd_ready_device(hubd_t *hubd, dev_info_t *child_dip, usba_device_t *child_ud,
 	return (child_dip);
 }
 
-
 /*
  * hubd_create_child
  *	- create child dip
@@ -5825,11 +6085,11 @@ hubd_ready_device(hubd_t *hubd, dev_info_t *child_dip, usba_device_t *child_ud,
  */
 static int
 hubd_create_child(dev_info_t *dip,
-		hubd_t		*hubd,
-		usba_device_t	*hubd_ud,
-		usb_port_status_t port_status,
-		usb_port_t	port,
-		int		iteration)
+    hubd_t		*hubd,
+    usba_device_t	*hubd_ud,
+    usb_port_status_t port_status,
+    usb_port_t	port,
+    int		iteration)
 {
 	dev_info_t		*child_dip = NULL;
 	usb_dev_descr_t	usb_dev_descr;
@@ -5849,6 +6109,7 @@ hubd_create_child(dev_info_t *dip,
 	usb_port_t		parent_usb_port;
 	usba_device_t		*parent_usba_dev;
 	usb_port_status_t	parent_port_status;
+	boolean_t		hcd_called = B_FALSE;
 
 	USB_DPRINTF_L4(DPRINT_MASK_HOTPLUG, hubd->h_log_handle,
 	    "hubd_create_child: port=%d", port);
@@ -5886,8 +6147,9 @@ hubd_create_child(dev_info_t *dip,
 	parent_port_status = parent_ud->usb_port_status;
 
 	/*
-	 * To support split transactions, update address and port
-	 * of high speed hub to which given device is connected.
+	 * To support split transactions, update address and port of high speed
+	 * hub to which given device is connected.  Note, split transactions
+	 * only exist for high speed devices.
 	 */
 	if (parent_port_status == USBA_HIGH_SPEED_DEV) {
 		parent_usba_dev = parent_ud;
@@ -5906,15 +6168,54 @@ hubd_create_child(dev_info_t *dip,
 	child_ud->usb_dev_descr = kmem_alloc(sizeof (usb_dev_descr_t),
 	    KM_SLEEP);
 	bzero(&usb_dev_descr, sizeof (usb_dev_descr_t));
-	usb_dev_descr.bMaxPacketSize0 =
-	    (port_status == USBA_LOW_SPEED_DEV) ? 8 : 64;
+
+	switch (port_status) {
+	case USBA_SUPER_SPEED_DEV:
+		usb_dev_descr.bMaxPacketSize0 = 9;
+		break;
+	case USBA_LOW_SPEED_DEV:
+		usb_dev_descr.bMaxPacketSize0 = 8;
+		break;
+	default:
+		usb_dev_descr.bMaxPacketSize0 = 64;
+		break;
+	}
 	bcopy(&usb_dev_descr, child_ud->usb_dev_descr,
 	    sizeof (usb_dev_descr_t));
 	child_ud->usb_port = port;
+
+	/*
+	 * The parent hub always keeps track of the hub this device is connected
+	 * to; however, the hs_hub_* variables are only keeping track of the
+	 * closest high speed hub. Unfortunately, we need both.
+	 */
+	child_ud->usb_parent_hub = parent_ud;
 	child_ud->usb_hs_hub_usba_dev = parent_usba_dev;
 	child_ud->usb_hs_hub_addr = parent_usb_addr;
 	child_ud->usb_hs_hub_port = parent_usb_port;
 	mutex_exit(&child_ud->usb_mutex);
+
+	/*
+	 * Before we open up the default pipe, give the HCD a chance to do
+	 * something here.
+	 */
+	if (child_ud->usb_hcdi_ops->usba_hcdi_device_init != NULL) {
+		int rval;
+		void *priv = NULL;
+
+		rval = child_ud->usb_hcdi_ops->usba_hcdi_device_init(child_ud,
+		    port, &priv);
+		if (rval != USB_SUCCESS) {
+			USB_DPRINTF_L2(DPRINT_MASK_HOTPLUG, hubd->h_log_handle,
+			    "HCD usba_hcdi_Device_init failed (%d)", rval);
+			goto fail_cleanup;
+		}
+
+		child_ud->usb_hcd_private = priv;
+		hcd_called = B_TRUE;
+	}
+
+
 
 	/* Open the default pipe */
 	if ((rval = usb_pipe_open(child_dip, NULL, NULL,
@@ -5939,6 +6240,11 @@ hubd_create_child(dev_info_t *dip,
 	    64,					/* wLength */
 	    &pdata, USB_ATTRS_SHORT_XFER_OK,
 	    &completion_reason, &cb_flags, 0);
+
+	/*
+	 * If this is a full speed device, we cannot assume that its default
+	 * packet size is 64 bytes, it may be 8 bytes.
+	 */
 
 	if ((rval != USB_SUCCESS) &&
 	    (!((completion_reason == USB_CR_DATA_OVERRUN) && pdata))) {
@@ -6002,23 +6308,30 @@ hubd_create_child(dev_info_t *dip,
 		goto fail_cleanup;
 	}
 
-	/* Set the address of the device */
-	if ((rval = usb_pipe_sync_ctrl_xfer(child_dip, ph,
-	    USB_DEV_REQ_HOST_TO_DEV,
-	    USB_REQ_SET_ADDRESS,	/* bRequest */
-	    address,			/* wValue */
-	    0,				/* wIndex */
-	    0,				/* wLength */
-	    NULL, 0,
-	    &completion_reason, &cb_flags, 0)) != USB_SUCCESS) {
-		char buffer[64];
-		USB_DPRINTF_L2(DPRINT_MASK_HOTPLUG, hubd->h_log_handle,
-		    "setting address failed (cr=%s cb_flags=%s rval=%d)",
-		    usb_str_cr(completion_reason),
-		    usb_str_cb_flags(cb_flags, buffer, sizeof (buffer)),
-		    rval);
+	if (child_ud->usb_hcdi_ops->usba_hcdi_device_address != NULL) {
+		rval = child_ud->usb_hcdi_ops->usba_hcdi_device_address(
+		    child_ud);
+		if (rval != USB_SUCCESS)
+			goto fail_cleanup;
+	} else {
+		/* Set the address of the device */
+		if ((rval = usb_pipe_sync_ctrl_xfer(child_dip, ph,
+		    USB_DEV_REQ_HOST_TO_DEV,
+		    USB_REQ_SET_ADDRESS,	/* bRequest */
+		    address,			/* wValue */
+		    0,				/* wIndex */
+		    0,				/* wLength */
+		    NULL, 0,
+		    &completion_reason, &cb_flags, 0)) != USB_SUCCESS) {
+			char buffer[64];
+			USB_DPRINTF_L2(DPRINT_MASK_HOTPLUG, hubd->h_log_handle,
+			    "setting address failed (cr=%s cb_flags=%s "
+			    "rval=%d)", usb_str_cr(completion_reason),
+			    usb_str_cb_flags(cb_flags, buffer, sizeof (buffer)),
+			    rval);
 
-		goto fail_cleanup;
+			goto fail_cleanup;
+		}
 	}
 
 	USB_DPRINTF_L3(DPRINT_MASK_HOTPLUG, hubd->h_log_handle,
@@ -6166,6 +6479,8 @@ hubd_create_child(dev_info_t *dip,
 		goto fail_cleanup;
 	}
 
+	/* Read the BOS data */
+	usba_get_binary_object_store(child_dip, child_ud);
 
 	/* get the device string descriptor(s) */
 	usba_get_dev_string_descrs(child_dip, child_ud);
@@ -6200,7 +6515,7 @@ hubd_create_child(dev_info_t *dip,
 	/*
 	 * Warn users of a performance hit if connecting a
 	 * High Speed behind a 1.1 hub, which is behind a
-	 * 2.0 port.
+	 * 2.0 port. Don't worry about this for USB 3.x for now.
 	 */
 	if ((parent_port_status != USBA_HIGH_SPEED_DEV) &&
 	    !(usba_is_root_hub(parent_ud->usb_dip)) &&
@@ -6401,6 +6716,14 @@ fail_cleanup:
 		    USB_FLAGS_SLEEP | USBA_FLAGS_PRIVILEGED, NULL, NULL);
 	}
 
+	if (child_ud != NULL && hcd_called == B_TRUE &&
+	    child_ud->usb_hcdi_ops->usba_hcdi_device_fini != NULL) {
+		child_ud->usb_hcdi_ops->usba_hcdi_device_fini(child_ud,
+		    child_ud->usb_hcd_private);
+		child_ud->usb_hcd_private = NULL;
+	}
+
+
 	if (child_dip) {
 		int rval = usba_destroy_child_devi(child_dip,
 		    NDI_DEVI_REMOVE);
@@ -6464,20 +6787,8 @@ hubd_delete_child(hubd_t *hubd, usb_port_t port, uint_t flag, boolean_t retry)
 			usba_hubdi_incr_power_budget(hubd->h_dip, usba_device);
 		}
 
-		rval = usba_destroy_child_devi(child_dip, flag);
 
-		if ((rval != USB_SUCCESS) && usba_is_hwa(child_dip)) {
-			/*
-			 * This is only useful for HWA device node.
-			 * Since hwahc interface must hold hwarc interface
-			 * open until hwahc is detached, the first call to
-			 * ndi_devi_unconfig_one() can only offline hwahc
-			 * driver but not hwarc driver. Need to make a second
-			 * call to ndi_devi_unconfig_one() to make the hwarc
-			 * driver detach.
-			 */
-			rval = usba_destroy_child_devi(child_dip, flag);
-		}
+		rval = usba_destroy_child_devi(child_dip, flag);
 
 		if ((rval == USB_SUCCESS) && (flag & NDI_DEVI_REMOVE)) {
 			/*
@@ -6489,7 +6800,7 @@ hubd_delete_child(hubd_t *hubd, usb_port_t port, uint_t flag, boolean_t retry)
 			if (hubd->h_children_dips[port] == child_dip) {
 				usba_device_t *ud =
 				    hubd->h_usba_devices[port];
-					hubd->h_children_dips[port] = NULL;
+				hubd->h_children_dips[port] = NULL;
 				if (ud) {
 					mutex_exit(HUBD_MUTEX(hubd));
 
@@ -6537,7 +6848,6 @@ hubd_free_usba_device(hubd_t *hubd, usba_device_t *usba_device)
 			ASSERT(i_ddi_node_state(dip) < DS_INITIALIZED);
 		}
 #endif
-
 		port = usba_device->usb_port;
 		hubd->h_usba_devices[port] = NULL;
 
@@ -6555,9 +6865,9 @@ hubd_free_usba_device(hubd_t *hubd, usba_device_t *usba_device)
  */
 static int
 hubd_busop_get_eventcookie(dev_info_t *dip,
-	dev_info_t	*rdip,
-	char		*eventname,
-	ddi_eventcookie_t *cookie)
+    dev_info_t	*rdip,
+    char		*eventname,
+    ddi_eventcookie_t *cookie)
 {
 	hubd_t	*hubd = (hubd_t *)hubd_get_soft_state(dip);
 
@@ -6577,12 +6887,11 @@ hubd_busop_get_eventcookie(dev_info_t *dip,
 
 static int
 hubd_busop_add_eventcall(dev_info_t *dip,
-	dev_info_t	*rdip,
-	ddi_eventcookie_t cookie,
-	void		(*callback)(dev_info_t *dip,
-			ddi_eventcookie_t cookie, void *arg,
-			void *bus_impldata),
-	void *arg, ddi_callback_id_t *cb_id)
+    dev_info_t	*rdip,
+    ddi_eventcookie_t cookie,
+    void (*callback)(dev_info_t *dip, ddi_eventcookie_t cookie, void *arg,
+	void *bus_impldata),
+    void *arg, ddi_callback_id_t *cb_id)
 {
 	hubd_t	*hubd = (hubd_t *)hubd_get_soft_state(dip);
 	usb_port_t port = hubd_child_dip2port(hubd, rdip);
@@ -6674,7 +6983,7 @@ hubd_run_callbacks(hubd_t *hubd, usba_event_t type)
 	    "hubd_run_callbacks");
 
 	mutex_enter(HUBD_MUTEX(hubd));
-	for (port = 1; port <= hubd->h_hub_descr.bNbrPorts; port++) {
+	for (port = 1; port <= hubd->h_nports; port++) {
 		/*
 		 * the childen_dips list may have dips that have been
 		 * already deallocated. we only get a post_detach notification
@@ -6873,7 +7182,7 @@ hubd_disconnect_event_cb(dev_info_t *dip)
 		mutex_enter(HUBD_MUTEX(hubd));
 
 		/* close all the open pipes of our children */
-		nports = hubd->h_hub_descr.bNbrPorts;
+		nports = hubd->h_nports;
 		for (port = 1; port <= nports; port++) {
 			usba_dev = hubd->h_usba_devices[port];
 			if (usba_dev != NULL) {
@@ -7010,7 +7319,7 @@ hubd_cpr_suspend(hubd_t *hubd)
 	case USB_DEV_PWRED_DOWN:
 	case USB_DEV_DISCONNECTED:
 		/* find out if all our children have been quiesced */
-		nports = hubd->h_hub_descr.bNbrPorts;
+		nports = hubd->h_nports;
 		for (port = 1; (no_cpr == 0) && (port <= nports); port++) {
 			usba_dev = hubd->h_usba_devices[port];
 			if (usba_dev != NULL) {
@@ -7323,7 +7632,7 @@ hubd_create_pm_components(dev_info_t *dip, hubd_t *hubd)
 /* ARGSUSED */
 int
 usba_hubdi_open(dev_info_t *dip, dev_t *devp, int flags, int otyp,
-	cred_t *credp)
+    cred_t *credp)
 {
 	hubd_t *hubd;
 
@@ -7357,7 +7666,7 @@ usba_hubdi_open(dev_info_t *dip, dev_t *devp, int flags, int otyp,
 /* ARGSUSED */
 int
 usba_hubdi_close(dev_info_t *dip, dev_t dev, int flag, int otyp,
-	cred_t *credp)
+    cred_t *credp)
 {
 	hubd_t *hubd;
 
@@ -7389,7 +7698,7 @@ usba_hubdi_close(dev_info_t *dip, dev_t dev, int flag, int otyp,
 /* ARGSUSED */
 int
 usba_hubdi_ioctl(dev_info_t *self, dev_t dev, int cmd, intptr_t arg,
-	int mode, cred_t *credp, int *rvalp)
+    int mode, cred_t *credp, int *rvalp)
 {
 	int			rv = 0;
 	char			*msg;	/* for messages */
@@ -8193,7 +8502,6 @@ hubd_cfgadm_state(hubd_t *hubd, usb_port_t port)
 static int
 hubd_toggle_port(hubd_t *hubd, usb_port_t port)
 {
-	usb_hub_descr_t	*hub_descr;
 	int		wait;
 	uint_t		retry;
 	uint16_t	status;
@@ -8215,27 +8523,26 @@ hubd_toggle_port(hubd_t *hubd, usb_port_t port)
 	delay(drv_usectohz(hubd_device_delay / 10));
 	mutex_enter(HUBD_MUTEX(hubd));
 
-	hub_descr = &hubd->h_hub_descr;
-
 	/*
 	 * According to section 11.11 of USB, for hubs with no power
 	 * switches, bPwrOn2PwrGood is zero. But we wait for some
 	 * arbitrary time to enable power to become stable.
 	 *
 	 * If an hub supports port power swicthing, we need to wait
-	 * at least 20ms before accesing corresonding usb port.
+	 * at least 20ms before accesing corresonding usb port. Note
+	 * this member is stored in the h_power_good member.
 	 */
-	if ((hub_descr->wHubCharacteristics &
-	    HUB_CHARS_NO_POWER_SWITCHING) || (!hub_descr->bPwrOn2PwrGood)) {
+	if ((hubd->h_hub_chars & HUB_CHARS_NO_POWER_SWITCHING) ||
+	    (hubd->h_power_good == 0)) {
 		wait = hubd_device_delay / 10;
 	} else {
 		wait = max(HUB_DEFAULT_POPG,
-		    hub_descr->bPwrOn2PwrGood) * 2 * 1000;
+		    hubd->h_power_good) * 2 * 1000;
 	}
 
 	USB_DPRINTF_L3(DPRINT_MASK_PORT, hubd->h_log_handle,
 	    "hubd_toggle_port: popg=%d wait=%d",
-	    hub_descr->bPwrOn2PwrGood, wait);
+	    hubd->h_power_good, wait);
 
 	retry = 0;
 
@@ -8248,7 +8555,7 @@ hubd_toggle_port(hubd_t *hubd, usb_port_t port)
 
 		/* Get port status */
 		(void) hubd_determine_port_status(hubd, port,
-		    &status, &change, 0);
+		    &status, &change, NULL, 0);
 
 		/* For retry if any, use some extra delay */
 		wait = max(wait, hubd_device_delay / 10);
@@ -8397,9 +8704,7 @@ hubd_init_power_budget(hubd_t *hubd)
 		 * and get the power that can be supplied to
 		 * downstream ports
 		 */
-		hubd->h_pwr_left -=
-		    hubd->h_hub_descr.bHubContrCurrent /
-		    USB_CFG_DESCR_PWR_UNIT;
+		hubd->h_pwr_left -= hubd->h_current / USB_CFG_DESCR_PWR_UNIT;
 		if (hubd->h_pwr_left < 0) {
 			USB_DPRINTF_L2(DPRINT_MASK_HUB, hubd->h_log_handle,
 			    "hubd->h_pwr_left is less than bHubContrCurrent, "
@@ -8420,7 +8725,7 @@ hubd_init_power_budget(hubd_t *hubd)
  */
 int
 usba_hubdi_check_power_budget(dev_info_t *dip, usba_device_t *child_ud,
-	uint_t config_index)
+    uint_t config_index)
 {
 	int16_t		pwr_left, pwr_limit, pwr_required;
 	size_t		size;
@@ -8798,7 +9103,7 @@ hubd_reset_thread(void *arg)
 			mutex_enter(HUBD_MUTEX(hubd));
 		} else {
 			(void) hubd_determine_port_status(hubd, reset_port,
-			    &status, &change, HUBD_ACK_ALL_CHANGES);
+			    &status, &change, NULL, HUBD_ACK_ALL_CHANGES);
 
 			/* Reset the parent hubd port and create new child */
 			if (status & PORT_STATUS_CCS) {
@@ -8893,7 +9198,7 @@ usba_hubdi_reset_device(dev_info_t *dip, usb_dev_reset_lvl_t reset_level)
 	usb_port_t		port = 0;
 	dev_info_t		*hdip;
 	usb_pipe_state_t	prev_pipe_state = 0;
-	usba_device_t		*usba_device;
+	usba_device_t		*usba_device = NULL;
 	hubd_reset_arg_t	*arg;
 	int			i, ph_open_cnt;
 	int			rval = USB_FAILURE;
@@ -9067,6 +9372,7 @@ usba_hubdi_reset_device(dev_info_t *dip, usb_dev_reset_lvl_t reset_level)
 		    == USB_SUCCESS) {
 			mutex_exit(HUBD_MUTEX(hubd));
 			/* re-open the default pipe */
+			ASSERT3P(usba_device, !=, NULL);
 			rval = usba_persistent_pipe_open(usba_device);
 			mutex_enter(HUBD_MUTEX(hubd));
 			if (rval != USB_SUCCESS) {

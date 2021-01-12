@@ -22,6 +22,8 @@
 # Copyright 2008 Sun Microsystems, Inc.  All rights reserved.
 # Use is subject to license terms.
 #
+# Copyright (c) 2018, Joyent, Inc.
+
 #
 # Path to the base of the uts directory tree (usually /usr/src/uts).
 #
@@ -32,7 +34,6 @@ UTSBASE	= ../..
 #
 MODULE		= vnic
 OBJECTS		= $(VNIC_OBJS:%=$(OBJS_DIR)/%)
-LINTS		= $(VNIC_OBJS:%.o=$(LINTS_DIR)/%.ln)
 ROOTMODULE	= $(ROOT_DRV_DIR)/$(MODULE)
 CONF_SRCDIR	= $(UTSBASE)/common/io/vnic
 
@@ -45,7 +46,6 @@ include $(UTSBASE)/intel/Makefile.intel
 # Define targets
 #
 ALL_TARGET	= $(BINARY) $(SRC_CONFILE)
-LINT_TARGET	= $(MODULE).lint
 INSTALL_TARGET	= $(BINARY) $(ROOTMODULE) $(ROOT_CONFFILE)
 
 #
@@ -55,7 +55,10 @@ CFLAGS		+= $(CCVERBOSE)
 LDFLAGS		+= -dy -Ndrv/dld -Nmisc/mac -Nmisc/dls
 
 CERRWARN	+= -_gcc=-Wno-switch
-CERRWARN	+= -_gcc=-Wno-uninitialized
+CERRWARN	+= $(CNOWARN_UNINIT)
+
+# needs work
+SMOFF += deref_check
 
 #
 #	Default build targets.
@@ -69,12 +72,6 @@ all:		$(ALL_DEPS)
 clean:		$(CLEAN_DEPS)
 
 clobber:	$(CLOBBER_DEPS)
-
-lint:		$(LINT_DEPS)
-
-modlintlib:	$(MODLINTLIB_DEPS)
-
-clean.lint:	$(CLEAN_LINT_DEPS)
 
 install:	$(INSTALL_DEPS)
 

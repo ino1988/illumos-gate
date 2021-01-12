@@ -25,12 +25,15 @@
 # Use is subject to license terms.
 #
 
+#
+# Copyright 2016 Nexenta Systems, Inc.
+#
+
 . $STF_SUITE/tests/functional/acl/acl_common.kshlib
 
-#
 # DESCRIPTION:
-#	Verify that the combined delete_child/delete permission for
-#	owner/group/everyone are correct.
+# Verify that the combined delete_child/delete permission for
+# owner/group/everyone are correct.
 #
 #        -------------------------------------------------------
 #        |   Parent Dir  |           Target Object Permissions |
@@ -39,20 +42,13 @@
 #        |               | ACL Allows | ACL Denies| Delete     |
 #        |               |  Delete    |  Delete   | unspecified|
 #        -------------------------------------------------------
-#        |  ACL Allows   | Permit     | Permit    | Permit     |
-#        |  DELETE_CHILD |                                     |
+#        | ACL Denies    | Permit     | Deny      | Deny       |
+#        | DELETE_CHILD  |            |           |            |
+#        | or WRITE_DATA |            |           |            |
 #        -------------------------------------------------------
-#        |  ACL Denies   | Permit     | Deny      | Deny       |
-#        |  DELETE_CHILD |            |           |            |
-#        -------------------------------------------------------
-#        | ACL specifies |            |           |            |
-#        | only allows   | Permit     | Permit    | Permit     |
-#        | write and     |            |           |            |
-#        | execute       |            |           |            |
-#        -------------------------------------------------------
-#        | ACL denies    |            |           |            |
-#        | write and     | Permit     | Deny      | Deny       |
-#        | execute       |            |           |            |
+#        | ACL Allows    | Permit     | Deny      | Permit     |
+#        | DELETE_CHILD  |            |           |            |
+#        | or WRITE_DATA |            |           |            |
 #        -------------------------------------------------------
 #
 # STRATEGY:
@@ -60,20 +56,19 @@
 # 2. Set special ACE combination to the file and directory
 # 3. Try to remove the file
 # 4. Verify that combined permissions for owner/group/everyone are correct.
-#
 
 verify_runnable "both"
 
 function cleanup
 {
 	if [[ ! -e $target ]]; then
-		log_must $TAR xpf $TESTDIR/$ARCHIVEFILE
+		log_must tar xpf $TESTDIR/$ARCHIVEFILE
 	fi
 
 	(( ${#cwd} != 0 )) && cd $cwd
 	cleanup_test_files $TESTDIR/basedir
 	if [[ -e $TESTDIR/$ARCHIVEFILE ]]; then
-		log_must $RM -f $TESTDIR/$ARCHIVEFILE
+		log_must rm -f $TESTDIR/$ARCHIVEFILE
 	fi
 	return 0
 }
@@ -99,7 +94,7 @@ set -A access_target \
 set -A a_flag "owner@" "group@" "everyone@" "user:$ZFS_ACL_STAFF1"
 
 log_assert "Verify that the combined delete_child/delete permission for" \
-	"owner/group/everyone are correct."
+    "owner/group/everyone are correct."
 log_onexit cleanup
 
 function operate_node #user node
@@ -112,9 +107,9 @@ function operate_node #user node
 		log_fail "user, node are not defined."
 	fi
 	if [[ -d $node ]]; then
-		chgusr_exec $user $RM -rf $node ; ret=$?
+		chgusr_exec $user rm -rf $node ; ret=$?
 	else
-		chgusr_exec $user $RM -f $node ; ret=$?
+		chgusr_exec $user rm -f $node ; ret=$?
 	fi
 
 	if [[ -e $node ]]; then
@@ -123,7 +118,7 @@ function operate_node #user node
 			return 1
 		fi
 	else
-		log_must $TAR xpf $TESTDIR/$ARCHIVEFILE
+		log_must tar xpf $TESTDIR/$ARCHIVEFILE
 		if [[ $ret -ne 0 ]]; then
 			log_note "$node removed, but return code is $ret."
 			return 1
@@ -139,20 +134,25 @@ function logname #acl_parent acl_target user
 	typeset user=$3
 
 	# To super user, read and write deny permission was override.
-	if [[ $user == root || $acl_target == *:allow ]]; then
+	if [[ $user == "root" || $acl_target == *":allow"* ]]; then
 		print "log_must"
-	elif [[ $acl_parent == *"delete_child"* ]]; then
-		if [[ $acl_parent == *"delete_child:allow"* ]]; then
-			print "log_must"
-		else
-			print "log_mustnot"
-		fi
-	elif [[ $acl_parent == *"write_data"* ]]; then
-		if [[ $acl_parent == *"write_data:allow"* ]]; then
-			print "log_must"
-		else
-			print "log_mustnot"
-		fi
+	# If target ACL has an ACE deny'ing delete, DENY
+	elif [[ $acl_target == *"delete:deny"* ]]; then
+		print "log_mustnot"
+	# If target ACL has an ACE allow'ing delete, ALLOW
+	elif [[ $acl_target == *"delete:allow"* ]]; then
+		print "log_must"
+	# If container ACL has an ACE deny'ing delete_child or
+	# write_data, DENY
+	elif [[ $acl_parent == *"delete_child:deny"* ||
+	    $acl_parent == *"write_data:deny"* ]]; then
+		print "log_mustnot"
+	# If container ACL has an ACE allow'ing delete_child or
+	# write_data, ALLOW
+	elif [[ $acl_parent == *"delete_child:allow"* ||
+	    $acl_parent == *"write_data:allow"* ]]; then
+		print "log_must"
+	# Otherwise, DENY
 	else
 		print "log_mustnot"
 	fi
@@ -206,25 +206,25 @@ function test_chmod_basic_access #node g_usr o_usr
 	for acl_p in "${access_parent[@]}"; do
 		i=0
 		for acl in $acl_p ; do
-			log_must usr_exec $CHMOD A+$flag:$acl $parent
+			log_must usr_exec chmod A+$flag:$acl $parent
 			(( i = i + 1))
 		done
 
 		for acl_t in "${access_target[@]}"; do
 			[[ -n $acl_t ]] && \
-				log_must usr_exec $CHMOD A+$flag:$acl_t $node
+				log_must usr_exec chmod A+$flag:$acl_t $node
 
-			log_must $TAR cpf $TESTDIR/$ARCHIVEFILE basedir
+			log_must tar cpf $TESTDIR/$ARCHIVEFILE basedir
 
 			check_chmod_results "$node" "$flag" \
 				 "$acl_p" "$acl_t" "$g_usr" "$o_usr"
 
 			[[ -n $acl_t ]] && \
-				log_must usr_exec $CHMOD A0- $node
+				log_must usr_exec chmod A0- $node
 		done
 
 		while (( i > 0 )); do
-			log_must usr_exec $CHMOD A0- $parent
+			log_must usr_exec chmod A0- $parent
 			(( i = i - 1 ))
 		done
 	done
@@ -239,8 +239,8 @@ function setup_test_files #base_node user group
 
 	cleanup_test_files $base_node
 
-	log_must $MKDIR -p $base_node
-	log_must $CHOWN $user:$group $base_node
+	log_must mkdir -p $base_node
+	log_must chown $user:$group $base_node
 
 	log_must set_cur_usr $user
 
@@ -248,13 +248,13 @@ function setup_test_files #base_node user group
 	file0=$base_node/testfile_rm
 	dir0=$base_node/testdir_rm
 
-	log_must usr_exec $TOUCH $file0
-	log_must usr_exec $CHMOD 444 $file0
+	log_must usr_exec touch $file0
+	log_must usr_exec chmod 444 $file0
 
-	log_must usr_exec $MKDIR -p $dir0
-	log_must usr_exec $CHMOD 444 $dir0
+	log_must usr_exec mkdir -p $dir0
+	log_must usr_exec chmod 444 $dir0
 
-	log_must usr_exec $CHMOD 555 $base_node
+	log_must usr_exec chmod 555 $base_node
 	return 0
 }
 
@@ -263,9 +263,9 @@ function cleanup_test_files #base_node
 	typeset base_node=$1
 
 	if [[ -d $base_node ]]; then
-		log_must $RM -rf $base_node
+		log_must rm -rf $base_node
 	elif [[ -e $base_node ]]; then
-		log_must $RM -f $base_node
+		log_must rm -f $base_node
 	fi
 
 	return 0
@@ -298,4 +298,4 @@ while (( i < ${#users[@]} )); do
 done
 
 log_pass "Verify that the combined delete_child/delete permission for" \
-	"owner/group/everyone are correct."
+    "owner/group/everyone are correct."

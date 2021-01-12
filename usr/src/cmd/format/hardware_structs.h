@@ -21,6 +21,8 @@
 /*
  * Copyright 2009 Sun Microsystems, Inc.  All rights reserved.
  * Use is subject to license terms.
+ * Copyright 2015 Nexenta Systems, Inc. All rights reserved.
+ * Copyright (c) 2016 by Delphix. All rights reserved.
  */
 
 #ifndef	_HARDWARE_STRUCTS_H
@@ -111,16 +113,16 @@ struct disk_type {
 	char	*dtype_filename;		/* filename where defined */
 	int	dtype_lineno;			/* line number in file */
 
-	char		vendor[9];
-	char		product[17];
-	char		revision[5];
+	char		*vendor;
+	char		*product;
+	char		*revision;
 	uint64_t	capacity;
 };
 
 struct efi_info {
-	char		vendor[9];
-	char		product[17];
-	char		revision[5];
+	char		*vendor;
+	char		*product;
+	char		*revision;
 	uint64_t	capacity;
 	struct dk_gpt	*e_parts;
 };
@@ -174,7 +176,7 @@ struct ctlr_ops {
 
 /*
  * This structure describes a specific partition layout.  It is malloc'd
- * when the data file is read and whenever the user creates his own
+ * when the data file is read and whenever the user creates their own
  * partition layout.  The link is used to make a list of possible
  * partition layouts for each drive type.
  */

@@ -27,7 +27,7 @@
  */
 
 /*	Copyright (c) 1983, 1984, 1985, 1986, 1987, 1988, 1989 AT&T	*/
-/*	  All Rights Reserved  	*/
+/*	  All Rights Reserved	*/
 
 /*
  * Portions of this source code were derived from Berkeley 4.3 BSD
@@ -58,7 +58,7 @@ extern "C" {
  */
 #if !defined(_XPG4_2) || defined(__EXTENSIONS__)
 extern int inet_net_pton(int, const char *, void *, size_t);
-extern boolean_t inet_matchaddr(const void *, const char *);
+extern int inet_matchaddr(const void *, const char *);
 #endif /* !defined(_XPG4_2) || defined(__EXTENSIONS__) */
 
 #if !defined(_XPG4_2) || defined(_XPG6) || defined(__EXTENSIONS__)

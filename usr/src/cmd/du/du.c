@@ -19,18 +19,18 @@
  * CDDL HEADER END
  */
 /*
+ * Copyright 2017 OmniTI Computer Consulting, Inc.  All rights reserved.
  * Copyright 2007 Sun Microsystems, Inc.  All rights reserved.
  * Use is subject to license terms.
+ * Copyright 2017 Jason King
  */
 
 /*	Copyright (c) 1984, 1986, 1987, 1988, 1989 AT&T	*/
 /*	  All Rights Reserved  	*/
 
-#pragma ident	"%Z%%M%	%I%	%E% SMI"
-
 /*
  * du -- summarize disk usage
- *	du [-dorx] [-a|-s] [-h|-k|-m] [-H|-L] [file...]
+ *	du [-Adorx] [-a|-s] [-h|-k|-m] [-H|-L] [file...]
  */
 
 #include <sys/types.h>
@@ -55,6 +55,7 @@ static int		mflg = 0;
 static int		oflg = 0;
 static int		dflg = 0;
 static int		hflg = 0;
+static int		Aflg = 0;
 static int		Hflg = 0;
 static int		Lflg = 0;
 static int		cmdarg = 0;	/* Command line argument */
@@ -66,11 +67,8 @@ static char		*name;
 static size_t		base_len = PATH_MAX + 1;    /* # of chars for base */
 static size_t		name_len = PATH_MAX + 1;    /* # of chars for name */
 
-#define	NUMBER_WIDTH	64
-typedef char		numbuf_t[NUMBER_WIDTH];
-
 /*
- * Output formats.  Solaris uses a tab as separator, XPG4 a space.
+ * Output formats. illumos uses a tab as separator, XPG4 a space.
  */
 #ifdef XPG4
 #define	FORMAT1	"%s %s\n"
@@ -117,7 +115,7 @@ main(int argc, char **argv)
 	rflg++;		/* "-r" is not an option but ON always */
 #endif
 
-	while ((c = getopt(argc, argv, "adhHkLmorsx")) != EOF)
+	while ((c = getopt(argc, argv, "aAdhHkLmorsx")) != EOF)
 		switch (c) {
 
 		case 'a':
@@ -162,6 +160,10 @@ main(int argc, char **argv)
 			dflg++;
 			continue;
 
+		case 'A':
+			Aflg++;
+			continue;
+
 		case 'H':
 			Hflg++;
 			/* -H and -L are mutually exclusive */
@@ -177,7 +179,7 @@ main(int argc, char **argv)
 			continue;
 		case '?':
 			(void) fprintf(stderr, gettext(
-			    "usage: du [-dorx] [-a|-s] [-h|-k|-m] [-H|-L] "
+			    "usage: du [-Adorx] [-a|-s] [-h|-k|-m] [-H|-L] "
 			    "[file...]\n"));
 			exit(2);
 		}
@@ -379,7 +381,8 @@ descend(char *curname, int curfd, int *retcode, dev_t device)
 			}
 		}
 	}
-	blocks = stb.st_blocks;
+	blocks = Aflg ? stb.st_size : stb.st_blocks;
+
 	/*
 	 * If there are extended attributes on the current file, add their
 	 * block usage onto the block count.  Note: Since pathconf() always
@@ -523,84 +526,18 @@ descend(char *curname, int curfd, int *retcode, dev_t device)
 		return (blocks);
 }
 
-/*
- * Convert an unsigned long long to a string representation and place the
- * result in the caller-supplied buffer.
- * The given number is in units of "unit_from" size,
- * this will first be converted to a number in 1024 or 1000 byte size,
- * depending on the scaling factor.
- * Then the number is scaled down until it is small enough to be in a good
- * human readable format i.e. in the range 0 thru scale-1.
- * If it's smaller than 10 there's room enough to provide one decimal place.
- * The value "(unsigned long long)-1" is a special case and is always
- * converted to "-1".
- * Returns a pointer to the caller-supplied buffer.
- */
-static char *
-number_to_scaled_string(
-	numbuf_t buf,			/* put the result here */
-	unsigned long long number,	/* convert this number */
-	unsigned long long unit_from,	/* number of bytes per input unit */
-	unsigned long long scale)	/* 1024 (-h)  or 1000 (-H) */
-{
-	unsigned long long save = 0;
-	char *M = "KMGTPE"; /* Measurement: kilo, mega, giga, tera, peta, exa */
-	char *uom = M;    /* unit of measurement, initially 'K' (=M[0]) */
-
-	if ((long long)number == (long long)-1) {
-		(void) strcpy(buf, "-1");
-		return (buf);
-	}
-
-	/*
-	 * Convert number from unit_from to given scale (1024 or 1000)
-	 * This means multiply number with unit_from and divide by scale.
-	 * if number is large enough, we first divide and then multiply
-	 * 	to avoid an overflow
-	 * 	(large enough here means 100 (rather arbitrary value)
-	 *	times scale in order to reduce rounding errors)
-	 * otherwise, we first multiply and then divide
-	 * 	to avoid an underflow
-	 */
-	if (number >= 100L * scale) {
-		number = number / scale;
-		number = number * unit_from;
-	} else {
-		number = number * unit_from;
-		number = number / scale;
-	}
-
-	/*
-	 * Now we have number as a count of scale units.
-	 * Stop scaling when we reached exa bytes, then something is
-	 * probably wrong with our number.
-	 */
-	while ((number >= scale) && (*uom != 'E')) {
-		uom++; /* next unit of measurement */
-		save = number;
-		number = (number + (scale / 2)) / scale;
-	}
-
-	/* check if we should output a decimal place after the point */
-	if (save && ((save / scale) < 10)) {
-		/* sprintf() will round for us */
-		float fnum = (float)save / scale;
-		(void) sprintf(buf, "%4.1f%c", fnum, *uom);
-	} else {
-		(void) sprintf(buf, "%4llu%c", number, *uom);
-	}
-	return (buf);
-}
-
 static void
 printsize(blkcnt_t blocks, char *path)
 {
+	u_longlong_t bsize;
+
+	bsize = Aflg ? 1 : DEV_BSIZE;
+
 	if (hflg) {
-		numbuf_t numbuf;
-		unsigned long long scale = 1024L;
-		(void) printf(FORMAT1,
-		    number_to_scaled_string(numbuf, blocks, DEV_BSIZE, scale),
-		    path);
+	char buf[NN_NUMBUF_SZ] = { 0 };
+
+	nicenum_scale(blocks, bsize, buf, sizeof (buf), 0);
+	(void) printf(FORMAT1, buf, path);
 	} else if (kflg) {
 		(void) printf(FORMAT2, (long long)kb(blocks), path);
 	} else if (mflg) {

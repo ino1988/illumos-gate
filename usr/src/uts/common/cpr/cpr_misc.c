@@ -21,6 +21,8 @@
 /*
  * Copyright 2010 Sun Microsystems, Inc.  All rights reserved.
  * Use is subject to license terms.
+ * Copyright 2015 Nexenta Systems, Inc. All rights reserved.
+ * Copyright 2019 Joyent, Inc.
  */
 
 #include <sys/types.h>
@@ -702,7 +704,7 @@ cpr_statefile_ok(vnode_t *vp, int alloc_retry)
 		 * Estimate space needed for the state file.
 		 *
 		 * State file size in bytes:
-		 * 	kernel size + non-cache pte seg +
+		 *	kernel size + non-cache pte seg +
 		 *	bitmap size + cpr state file headers size
 		 * (round up to fs->fs_bsize)
 		 */
@@ -995,7 +997,7 @@ cpr_p_online(cpu_t *cp, int state)
 
 	switch (state) {
 	case CPU_CPR_ONLINE:
-		rc = cpu_online(cp);
+		rc = cpu_online(cp, 0);
 		break;
 	case CPU_CPR_OFFLINE:
 		rc = cpu_offline(cp, CPU_FORCED);
@@ -1085,7 +1087,7 @@ cpr_is_zfs(struct vfs *vfsp)
  * This is a list of file systems that are allowed to be writeable when a
  * reusable statefile checkpoint is taken.  They must not have any state that
  * cannot be restored to consistency by simply rebooting using the checkpoint.
- * (In contrast to ufs, cachefs and pcfs which have disk state that could get
+ * (In contrast to ufs and pcfs which have disk state that could get
  * out of sync with the in-kernel data).
  */
 int

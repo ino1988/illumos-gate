@@ -21,14 +21,14 @@
 
 /*
  * Copyright (c) 1989, 2010, Oracle and/or its affiliates. All rights reserved.
- * Copyright (c) 2013 by Delphix. All rights reserved.
+ * Copyright (c) 2011, 2017 by Delphix. All rights reserved.
  * Copyright 2011 Nexenta Systems, Inc. All rights reserved.
- * Copyright (c) 2012, Joyent, Inc. All rights reserved.
+ * Copyright 2020 Joyent, Inc.
  * Copyright (c) 2014, OmniTI Computer Consulting, Inc. All rights reserved.
  */
 
 /*	Copyright (c) 1984, 1986, 1987, 1988, 1989 AT&T	*/
-/*	  All Rights Reserved  	*/
+/*	  All Rights Reserved	*/
 
 
 #include <stdio.h>
@@ -103,12 +103,13 @@
 #include <sys/usb/clients/hid/hid.h>
 #include <sys/pm.h>
 #include <sys/soundcard.h>
+#include <sys/cpuid_drv.h>
 
 #include "ramdata.h"
 #include "proto.h"
 
 #define	FCNTLMIN	F_DUPFD
-#define	FCNTLMAX	F_BADFD
+#define	FCNTLMAX	F_FLOCKW
 const char *const FCNTLname[] = {
 	"F_DUPFD",
 	"F_GETFD",
@@ -156,7 +157,15 @@ const char *const FCNTLname[] = {
 	"F_SHARE_NBMAND",
 	"F_SETLK64_NBMAND",
 	NULL,		/* 45 */
-	"F_BADFD"
+	"F_BADFD",
+	"F_OFD_GETLK",
+	"F_OFD_SETLK",
+	"F_OFD_SETLKW",
+	NULL,		/* 50 */
+	NULL,		/* 51 */
+	NULL,		/* 52 */
+	"F_FLOCK",
+	"F_FLOCKW"
 };
 
 #define	SYSFSMIN	GETFSIND
@@ -703,6 +712,8 @@ const struct ioc {
 	/* /dev/poll ioctl() control codes */
 	{ (uint_t)DP_POLL,	"DP_POLL",	NULL },
 	{ (uint_t)DP_ISPOLLED,	"DP_ISPOLLED",	NULL },
+	{ (uint_t)DP_PPOLL,	"DP_PPOLL",	NULL },
+	{ (uint_t)DP_EPOLLCOMPAT, "DP_EPOLLCOMPAT",	NULL },
 	/* the old /proc ioctl() control codes */
 #define	PIOC	('q'<<8)
 	{ (uint_t)(PIOC|1),	"PIOCSTATUS",	NULL },
@@ -860,7 +871,7 @@ const struct ioc {
 	{ (uint_t)SIOCGLIFGROUPINFO,	"SIOCGLIFGROUPINFO", "lifgroupinfo" },
 	{ (uint_t)SIOCGDSTINFO,		"SIOCGDSTINFO",		NULL },
 	{ (uint_t)SIOCGIP6ADDRPOLICY,	"SIOCGIP6ADDRPOLICY",	NULL },
-	{ (uint_t)SIOCSIP6ADDRPOLICY,	"SIOCSIP6ADDRPOLICY", 	NULL },
+	{ (uint_t)SIOCSIP6ADDRPOLICY,	"SIOCSIP6ADDRPOLICY",	NULL },
 	{ (uint_t)SIOCSXARP,		"SIOCSXARP",		"xarpreq" },
 	{ (uint_t)SIOCGXARP,		"SIOCGXARP",		"xarpreq" },
 	{ (uint_t)SIOCDXARP,		"SIOCDXARP",		"xarpreq" },
@@ -883,15 +894,15 @@ const struct ioc {
 	{ (uint_t)SIOCGLIFHWADDR,	"SIOCGLIFHWADDR",	"lifreq" },
 
 	/* DES encryption */
-	{ (uint_t)DESIOCBLOCK,	"DESIOCBLOCK", 	"desparams" },
-	{ (uint_t)DESIOCQUICK,	"DESIOCQUICK", 	"desparams" },
+	{ (uint_t)DESIOCBLOCK,	"DESIOCBLOCK",	"desparams" },
+	{ (uint_t)DESIOCQUICK,	"DESIOCQUICK",	"desparams" },
 
 	/* Printing system */
-	{ (uint_t)PRNIOC_GET_IFCAP,	"PRNIOC_GET_IFCAP", 	NULL },
-	{ (uint_t)PRNIOC_SET_IFCAP,	"PRNIOC_SET_IFCAP", 	NULL },
+	{ (uint_t)PRNIOC_GET_IFCAP,	"PRNIOC_GET_IFCAP",	NULL },
+	{ (uint_t)PRNIOC_SET_IFCAP,	"PRNIOC_SET_IFCAP",	NULL },
 	{ (uint_t)PRNIOC_GET_IFINFO,	"PRNIOC_GET_IFINFO",
 	    "prn_interface_info" },
-	{ (uint_t)PRNIOC_GET_STATUS,	"PRNIOC_GET_STATUS", 	NULL },
+	{ (uint_t)PRNIOC_GET_STATUS,	"PRNIOC_GET_STATUS",	NULL },
 	{ (uint_t)PRNIOC_GET_1284_DEVID,	"PRNIOC_GET_1284_DEVID",
 	    "prn_1284_device_id" },
 	{ (uint_t)PRNIOC_GET_1284_STATUS,
@@ -900,7 +911,7 @@ const struct ioc {
 	    "prn_timeouts" },
 	{ (uint_t)PRNIOC_SET_TIMEOUTS,	"PRNIOC_SET_TIMEOUTS",
 	    "prn_timeouts" },
-	{ (uint_t)PRNIOC_RESET,	"PRNIOC_RESET", 	NULL },
+	{ (uint_t)PRNIOC_RESET,	"PRNIOC_RESET",	NULL },
 
 	/* DTrace */
 	{ (uint_t)DTRACEIOC_PROVIDER,	"DTRACEIOC_PROVIDER",	NULL },
@@ -1060,6 +1071,8 @@ const struct ioc {
 	{ (uint_t)KIOCSLAYOUT,		"KIOCSLAYOUT",	NULL },
 	{ (uint_t)KIOCLAYOUT,		"KIOCLAYOUT",	NULL },
 	{ (uint_t)KIOCSKABORTEN,	"KIOCSKABORTEN",	NULL },
+	{ (uint_t)KIOCGRPTCOUNT,	"KIOCGRPTCOUNT",	NULL },
+	{ (uint_t)KIOCSRPTCOUNT,	"KIOCSRPTCOUNT",	NULL },
 	{ (uint_t)KIOCGRPTDELAY,	"KIOCGRPTDELAY",	NULL },
 	{ (uint_t)KIOCSRPTDELAY,	"KIOCSRPTDELAY",	NULL },
 	{ (uint_t)KIOCGRPTRATE,		"KIOCGRPTRATE",	NULL },
@@ -1154,6 +1167,10 @@ const struct ioc {
 		"zfs_cmd_t" },
 	{ (uint_t)ZFS_IOC_POOL_GET_HISTORY,	"ZFS_IOC_POOL_GET_HISTORY",
 		"zfs_cmd_t" },
+	{ (uint_t)ZFS_IOC_POOL_CHECKPOINT,	"ZFS_IOC_POOL_CHECKPOINT",
+		"zfs_cmd_t" },
+	{ (uint_t)ZFS_IOC_POOL_DISCARD_CHECKPOINT,
+		"ZFS_IOC_POOL_DISCARD_CHECKPOINT", "zfs_cmd_t" },
 	{ (uint_t)ZFS_IOC_VDEV_ADD,		"ZFS_IOC_VDEV_ADD",
 		"zfs_cmd_t" },
 	{ (uint_t)ZFS_IOC_VDEV_REMOVE,		"ZFS_IOC_VDEV_REMOVE",
@@ -1264,11 +1281,29 @@ const struct ioc {
 		"zfs_cmd_t" },
 	{ (uint_t)ZFS_IOC_CLONE,		"ZFS_IOC_CLONE",
 		"zfs_cmd_t" },
+	{ (uint_t)ZFS_IOC_REMAP,		"ZFS_IOC_REMAP",
+		"zfs_cmd_t" },
 	{ (uint_t)ZFS_IOC_BOOKMARK,		"ZFS_IOC_BOOKMARK",
 		"zfs_cmd_t" },
 	{ (uint_t)ZFS_IOC_GET_BOOKMARKS,	"ZFS_IOC_GET_BOOKMARKS",
 		"zfs_cmd_t" },
 	{ (uint_t)ZFS_IOC_DESTROY_BOOKMARKS,	"ZFS_IOC_DESTROY_BOOKMARKS",
+		"zfs_cmd_t" },
+	{ (uint_t)ZFS_IOC_CHANNEL_PROGRAM,	"ZFS_IOC_CHANNEL_PROGRAM",
+		"zfs_cmd_t" },
+	{ (uint_t)ZFS_IOC_POOL_INITIALIZE,	"ZFS_IOC_POOL_INITIALIZE",
+		"zfs_cmd_t" },
+	{ (uint_t)ZFS_IOC_POOL_SYNC,		"ZFS_IOC_POOL_SYNC",
+		"zfs_cmd_t" },
+	{ (uint_t)ZFS_IOC_LOAD_KEY,		"ZFS_IOC_LOAD_KEY",
+		"zfs_cmd_t" },
+	{ (uint_t)ZFS_IOC_UNLOAD_KEY,		"ZFS_IOC_UNLOAD_KEY",
+		"zfs_cmd_t" },
+	{ (uint_t)ZFS_IOC_CHANGE_KEY,		"ZFS_IOC_CHANGE_KEY",
+		"zfs_cmd_t" },
+	{ (uint_t)ZFS_IOC_SET_BOOTENV,		"ZFS_IOC_SET_BOOTENV",
+		"zfs_cmd_t" },
+	{ (uint_t)ZFS_IOC_GET_BOOTENV,		"ZFS_IOC_GET_BOOTENV",
 		"zfs_cmd_t" },
 
 	/* kssl ioctls */
@@ -1349,6 +1384,10 @@ const struct ioc {
 	{ (uint_t)DKIOCDUMPFINI,	"DKIOCDUMPFINI",
 		NULL},
 	{ (uint_t)DKIOCREADONLY,	"DKIOCREADONLY",
+		NULL},
+	{ (uint_t)DKIOCFREE,		"DKIOCFREE",
+		NULL},
+	{ (uint_t)DKIOC_CANFREE,	"DKIOC_CANFREE",
 		NULL},
 
 	/* disk ioctls - (0x04 << 8) - fdio.h */
@@ -1636,6 +1675,12 @@ const struct ioc {
 		"pm_searchargs_t" },
 #endif /* _SYSCALL */
 
+	/* cpuid ioctls */
+	{ (uint_t)CPUID_GET_HWCAP,		"CPUID_GET_HWCAP", NULL },
+#if defined(__i386) || defined(__amd64)
+	{ (uint_t)CPUID_RDMSR,			"CPUID_RDMSR", NULL },
+#endif
+
 	{ (uint_t)0, NULL, NULL	}
 };
 
@@ -1783,7 +1828,7 @@ si86name(int code)
 	case SI86DELMEM:	str = "SI86DELMEM";	break;
 	case SI86ADDMEM:	str = "SI86ADDMEM";	break;
 /* 71 through 74 reserved for VPIX */
-	case SI86V86: 		str = "SI86V86";	break;
+	case SI86V86:		str = "SI86V86";	break;
 	case SI86SLTIME:	str = "SI86SLTIME";	break;
 	case SI86DSCR:		str = "SI86DSCR";	break;
 	case RDUBLK:		str = "RDUBLK";		break;
@@ -1792,7 +1837,7 @@ si86name(int code)
 	case SI86VM86:		str = "SI86VM86";	break;
 	case SI86VMENABLE:	str = "SI86VMENABLE";	break;
 	case SI86LIMUSER:	str = "SI86LIMUSER";	break;
-	case SI86RDID: 		str = "SI86RDID";	break;
+	case SI86RDID:		str = "SI86RDID";	break;
 	case SI86RDBOOT:	str = "SI86RDBOOT";	break;
 /* Merged Product defines */
 	case SI86SHFIL:		str = "SI86SHFIL";	break;
@@ -1800,7 +1845,7 @@ si86name(int code)
 	case SI86BADVISE:	str = "SI86BADVISE";	break;
 	case SI86SHRGN:		str = "SI86SHRGN";	break;
 	case SI86CHIDT:		str = "SI86CHIDT";	break;
-	case SI86EMULRDA: 	str = "SI86EMULRDA";	break;
+	case SI86EMULRDA:	str = "SI86EMULRDA";	break;
 /* RTC commands */
 	case WTODC:		str = "WTODC";		break;
 	case SGMTL:		str = "SGMTL";		break;
@@ -1921,7 +1966,7 @@ pathconfname(int code)
 #define	ALL_O_FLAGS \
 	(O_NDELAY|O_APPEND|O_SYNC|O_DSYNC|O_NONBLOCK|O_CREAT|O_TRUNC\
 	|O_EXCL|O_NOCTTY|O_LARGEFILE|O_RSYNC|O_XATTR|O_NOFOLLOW|O_NOLINKS\
-	|O_CLOEXEC|FXATTRDIROPEN)
+	|O_CLOEXEC|O_DIRECTORY|O_DIRECT|FXATTRDIROPEN)
 
 const char *
 openarg(private_t *pri, int arg)
@@ -1981,6 +2026,10 @@ openarg(private_t *pri, int arg)
 		(void) strlcat(str, "|O_NOLINKS", sizeof (pri->code_buf));
 	if (arg & O_CLOEXEC)
 		(void) strlcat(str, "|O_CLOEXEC", sizeof (pri->code_buf));
+	if (arg & O_DIRECTORY)
+		(void) strlcat(str, "|O_DIRECTORY", sizeof (pri->code_buf));
+	if (arg & O_DIRECT)
+		(void) strlcat(str, "|O_DIRECT", sizeof (pri->code_buf));
 	if (arg & FXATTRDIROPEN)
 		(void) strlcat(str, "|FXATTRDIROPEN", sizeof (pri->code_buf));
 

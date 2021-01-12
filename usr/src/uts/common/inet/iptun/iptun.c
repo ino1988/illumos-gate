@@ -20,6 +20,7 @@
  */
 /*
  * Copyright (c) 2005, 2010, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2016, Joyent, Inc. All rights reserved.
  */
 
 /*
@@ -1355,6 +1356,7 @@ iptun_free(iptun_t *iptun)
 		iptun->iptun_connp = NULL;
 	}
 
+	netstack_rele(iptun->iptun_ns);
 	kmem_cache_free(iptun_cache, iptun);
 	atomic_dec_32(&iptun_tunnelcount);
 }
@@ -2627,8 +2629,8 @@ iptun_input_icmp_v6(iptun_t *iptun, mblk_t *data_mp, icmp6_t *icmp6h,
 			iptun_drop_pkt(data_mp, &iptun->iptun_oerrors);
 			return;
 		}
-		/* FALLTHRU */
 	}
+	/* FALLTHROUGH */
 	case ICMP6_TIME_EXCEEDED:
 	case ICMP6_DST_UNREACH:
 		type = (inner4 != NULL ? ICMP_DEST_UNREACHABLE :

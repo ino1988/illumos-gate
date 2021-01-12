@@ -23,7 +23,7 @@
 # Copyright 2008 Sun Microsystems, Inc.  All rights reserved.
 # Use is subject to license terms.
 #
-# ident	"%Z%%M%	%I%	%E% SMI"
+# Copyright (c) 2018, Joyent, Inc.
 #
 #	This makefile drives the production of the xpv_uppc mach
 #	kernel module.
@@ -41,7 +41,6 @@ UTSBASE	= ../..
 #
 MODULE		= xpv_uppc
 OBJECTS		= $(XPV_UPPC_OBJS:%=$(OBJS_DIR)/%)
-LINTS		= $(XPV_UPPC_OBJS:%.o=$(LINTS_DIR)/%.ln)
 ROOTMODULE	= $(ROOT_PSM_MACH_DIR)/$(MODULE)
 
 #
@@ -53,7 +52,6 @@ include $(UTSBASE)/i86xpv/Makefile.i86xpv
 #	Define targets
 #
 ALL_TARGET	= $(BINARY)
-LINT_TARGET	= $(MODULE).lint
 INSTALL_TARGET	= $(BINARY) $(ROOTMODULE)
 
 #
@@ -62,16 +60,17 @@ INSTALL_TARGET	= $(BINARY) $(ROOTMODULE)
 DEBUG_FLGS	=
 DEBUG_DEFS	+= $(DEBUG_FLGS)
 
+CERRWARN	+= -_gcc=-Wno-unused-function
+
+# needs work
+$(OBJS_DIR)/psm_common.o := SMOFF += deref_check
+
 #
 #
 # Depends on ACPI CA interpreter
 #
 LDFLAGS		+= -dy -N misc/acpica
 
-LINTTAGS	+= -erroff=E_ASSIGN_NARROW_CONV
-LINTTAGS	+= -erroff=E_SUPPRESSION_DIRECTIVE_UNUSED
-LINTTAGS	+= -erroff=E_BAD_PTR_CAST_ALIGN
-LINTTAGS	+= -erroff=E_SUSPICIOUS_COMPARISON
 
 #	Default build targets.
 #
@@ -84,12 +83,6 @@ all:		$(ALL_DEPS)
 clean:		$(CLEAN_DEPS)
 
 clobber:	$(CLOBBER_DEPS)
-
-lint:		$(LINT_DEPS)
-
-modlintlib:	$(MODLINTLIB_DEPS)
-
-clean.lint:	$(CLEAN_LINT_DEPS)
 
 install:	$(INSTALL_DEPS)
 

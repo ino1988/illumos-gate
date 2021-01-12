@@ -24,9 +24,9 @@
  */
 
 /*	Copyright (c) 1984, 1986, 1987, 1988, 1989 AT&T	*/
-/*	  All Rights Reserved  	*/
+/*	   All Rights Reserved	*/
 /*
- * Copyright (c) 2013, Joyent, Inc.  All rights reserved.
+ * Copyright (c) 2019, Joyent, Inc.
  */
 
 #include <sys/types.h>
@@ -42,6 +42,7 @@
 #include <sys/kmem.h>
 #include <sys/proc.h>
 #include <sys/pathname.h>
+#include <sys/policy.h>
 #include <sys/cmn_err.h>
 #include <sys/systm.h>
 #include <sys/elf.h>
@@ -65,8 +66,16 @@
 #include "elf_impl.h"
 #include <sys/sdt.h>
 #include <sys/siginfo.h>
+#include <sys/random.h>
+
+#if defined(__x86)
+#include <sys/comm_page_util.h>
+#include <sys/fp.h>
+#endif /* defined(__x86) */
+
 
 extern int at_flags;
+extern volatile size_t aslr_max_brk_skew;
 
 #define	ORIGIN_STR	"ORIGIN"
 #define	ORIGIN_STR_SIZE	6
@@ -162,6 +171,41 @@ dtrace_safe_phdr(Phdr *phdrp, struct uarg *args, uintptr_t base)
 	return (0);
 }
 
+static int
+handle_secflag_dt(proc_t *p, uint_t dt, uint_t val)
+{
+	uint_t flag;
+
+	switch (dt) {
+	case DT_SUNW_ASLR:
+		flag = PROC_SEC_ASLR;
+		break;
+	default:
+		return (EINVAL);
+	}
+
+	if (val == 0) {
+		if (secflag_isset(p->p_secflags.psf_lower, flag))
+			return (EPERM);
+		if ((secpolicy_psecflags(CRED(), p, p) != 0) &&
+		    secflag_isset(p->p_secflags.psf_inherit, flag))
+			return (EPERM);
+
+		secflag_clear(&p->p_secflags.psf_effective, flag);
+	} else {
+		if (!secflag_isset(p->p_secflags.psf_upper, flag))
+			return (EPERM);
+
+		if ((secpolicy_psecflags(CRED(), p, p) != 0) &&
+		    !secflag_isset(p->p_secflags.psf_inherit, flag))
+			return (EPERM);
+
+		secflag_set(&p->p_secflags.psf_effective, flag);
+	}
+
+	return (0);
+}
+
 /*
  * Map in the executable pointed to by vp. Returns 0 on success.
  */
@@ -185,7 +229,7 @@ mapexec_brand(vnode_t *vp, uarg_t *args, Ehdr *ehdr, Addr *uphdr_vaddr,
 	intptr_t	minaddr;
 
 	if (lddatap != NULL)
-		*lddatap = NULL;
+		*lddatap = 0;
 
 	if (error = execpermissions(vp, &vat, args)) {
 		uprintf("%s: Cannot execute %s\n", exec_file, args->pathname);
@@ -246,8 +290,8 @@ elfexec(vnode_t *vp, execa_t *uap, uarg_t *args, intpdata_t *idatap,
     int brand_action)
 {
 	caddr_t		phdrbase = NULL;
-	caddr_t 	bssbase = 0;
-	caddr_t 	brkbase = 0;
+	caddr_t		bssbase = 0;
+	caddr_t		brkbase = 0;
 	size_t		brksize = 0;
 	ssize_t		dlnsize;
 	aux_entry_t	*aux;
@@ -255,14 +299,16 @@ elfexec(vnode_t *vp, execa_t *uap, uarg_t *args, intpdata_t *idatap,
 	ssize_t		resid;
 	int		fd = -1;
 	intptr_t	voffset;
-	Phdr		*dyphdr = NULL;
+	Phdr		*intphdr = NULL;
+	Phdr		*dynamicphdr = NULL;
 	Phdr		*stphdr = NULL;
 	Phdr		*uphdr = NULL;
 	Phdr		*junk = NULL;
 	size_t		len;
+	size_t		i;
 	ssize_t		phdrsize;
 	int		postfixsize = 0;
-	int		i, hsize;
+	int		hsize;
 	Phdr		*phdrp;
 	Phdr		*dataphdrp = NULL;
 	Phdr		*dtrphdr;
@@ -271,7 +317,7 @@ elfexec(vnode_t *vp, execa_t *uap, uarg_t *args, intpdata_t *idatap,
 	ssize_t		capsize;
 	int		hasu = 0;
 	int		hasauxv = 0;
-	int		hasdy = 0;
+	int		hasintp = 0;
 	int		branded = 0;
 
 	struct proc *p = ttoproc(curthread);
@@ -344,8 +390,14 @@ elfexec(vnode_t *vp, execa_t *uap, uarg_t *args, intpdata_t *idatap,
 	 * We do this because now the brand library can just check
 	 * args->to_model to see if the target is 32-bit or 64-bit without
 	 * having do duplicate all the code above.
+	 *
+	 * The level checks associated with brand handling below are used to
+	 * prevent a loop since the brand elfexec function typically comes back
+	 * through this function. We must check <= here since the nested
+	 * handling in the #! interpreter code will increment the level before
+	 * calling gexec to run the final elfexec interpreter.
 	 */
-	if ((level < 2) &&
+	if ((level <= INTP_MAXDEPTH) &&
 	    (brand_action != EBA_NATIVE) && (PROC_IS_BRANDED(p))) {
 		error = BROP(p)->b_elfexec(vp, uap, args,
 		    idatap, level + 1, execsz, setid, exec_file, cred,
@@ -364,7 +416,7 @@ elfexec(vnode_t *vp, execa_t *uap, uarg_t *args, intpdata_t *idatap,
 	for (i = nphdrs; i > 0; i--) {
 		switch (phdrp->p_type) {
 		case PT_INTERP:
-			hasauxv = hasdy = 1;
+			hasauxv = hasintp = 1;
 			break;
 		case PT_PHDR:
 			hasu = 1;
@@ -383,6 +435,9 @@ elfexec(vnode_t *vp, execa_t *uap, uarg_t *args, intpdata_t *idatap,
 			break;
 		case PT_SUNWCAP:
 			capphdr = phdrp;
+			break;
+		case PT_DYNAMIC:
+			dynamicphdr = phdrp;
 			break;
 		}
 		phdrp = (Phdr *)((caddr_t)phdrp + hsize);
@@ -417,16 +472,16 @@ elfexec(vnode_t *vp, execa_t *uap, uarg_t *args, intpdata_t *idatap,
 		 *	AT_BASE
 		 *	AT_FLAGS
 		 *	AT_PAGESZ
-		 *	AT_SUN_LDSECURE
+		 *	AT_SUN_AUXFLAGS
 		 *	AT_SUN_HWCAP
 		 *	AT_SUN_HWCAP2
-		 *	AT_SUN_PLATFORM
-		 *	AT_SUN_EXECNAME
+		 *	AT_SUN_PLATFORM (added in stk_copyout)
+		 *	AT_SUN_EXECNAME (added in stk_copyout)
 		 *	AT_NULL
 		 *
 		 * total == 9
 		 */
-		if (hasdy && hasu) {
+		if (hasintp && hasu) {
 			/*
 			 * Has PT_INTERP & PT_PHDR - the auxvectors that
 			 * will be built are:
@@ -440,7 +495,7 @@ elfexec(vnode_t *vp, execa_t *uap, uarg_t *args, intpdata_t *idatap,
 			 * total = 5
 			 */
 			args->auxsize = (9 + 5) * sizeof (aux_entry_t);
-		} else if (hasdy) {
+		} else if (hasintp) {
 			/*
 			 * Has PT_INTERP but no PT_PHDR
 			 *
@@ -464,6 +519,18 @@ elfexec(vnode_t *vp, execa_t *uap, uarg_t *args, intpdata_t *idatap,
 	if (args->emulator != NULL)
 		args->auxsize += sizeof (aux_entry_t);
 
+	/*
+	 * On supported kernels (x86_64) make room in the auxv for the
+	 * AT_SUN_COMMPAGE entry.  This will go unpopulated on i86xpv systems
+	 * which do not provide such functionality.
+	 *
+	 * Additionally cover the floating point information AT_SUN_FPSIZE and
+	 * AT_SUN_FPTYPE.
+	 */
+#if defined(__amd64)
+	args->auxsize += 3 * sizeof (aux_entry_t);
+#endif /* defined(__amd64) */
+
 	if ((brand_action != EBA_NATIVE) && (PROC_IS_BRANDED(p))) {
 		branded = 1;
 		/*
@@ -471,6 +538,56 @@ elfexec(vnode_t *vp, execa_t *uap, uarg_t *args, intpdata_t *idatap,
 		 * the the brandname and 3 for the brand specific aux vectors.
 		 */
 		args->auxsize += 4 * sizeof (aux_entry_t);
+	}
+
+	/* If the binary has an explicit ASLR flag, it must be honoured */
+	if ((dynamicphdr != NULL) && (dynamicphdr->p_filesz > 0)) {
+		const size_t dynfilesz = dynamicphdr->p_filesz;
+		const size_t dynoffset = dynamicphdr->p_offset;
+		Dyn *dyn, *dp;
+
+		if (dynoffset > MAXOFFSET_T ||
+		    dynfilesz > MAXOFFSET_T ||
+		    dynoffset + dynfilesz > MAXOFFSET_T) {
+			uprintf("%s: cannot read full .dynamic section\n",
+			    exec_file);
+			error = EINVAL;
+			goto out;
+		}
+
+#define	DYN_STRIDE	100
+		for (i = 0; i < dynfilesz; i += sizeof (*dyn) * DYN_STRIDE) {
+			const size_t remdyns = (dynfilesz - i) / sizeof (*dyn);
+			const size_t ndyns = MIN(DYN_STRIDE, remdyns);
+			const size_t dynsize = ndyns * sizeof (*dyn);
+
+			dyn = kmem_alloc(dynsize, KM_SLEEP);
+
+			if ((error = vn_rdwr(UIO_READ, vp, (caddr_t)dyn,
+			    (ssize_t)dynsize, (offset_t)(dynoffset + i),
+			    UIO_SYSSPACE, 0, (rlim64_t)0,
+			    CRED(), &resid)) != 0) {
+				uprintf("%s: cannot read .dynamic section\n",
+				    exec_file);
+				goto out;
+			}
+
+			for (dp = dyn; dp < (dyn + ndyns); dp++) {
+				if (dp->d_tag == DT_SUNW_ASLR) {
+					if ((error = handle_secflag_dt(p,
+					    DT_SUNW_ASLR,
+					    dp->d_un.d_val)) != 0) {
+						uprintf("%s: error setting "
+						    "security-flag from "
+						    "DT_SUNW_ASLR: %d\n",
+						    exec_file, error);
+						goto out;
+					}
+				}
+			}
+
+			kmem_free(dyn, dynsize);
+		}
 	}
 
 	/* Hardware/Software capabilities */
@@ -501,6 +618,7 @@ elfexec(vnode_t *vp, execa_t *uap, uarg_t *args, intpdata_t *idatap,
 	aux = bigwad->elfargs;
 	/*
 	 * Move args to the user's stack.
+	 * This can fill in the AT_SUN_PLATFORM and AT_SUN_EXECNAME aux entries.
 	 */
 	if ((error = exec_args(uap, args, idatap, (void **)&aux)) != 0) {
 		if (error == -1) {
@@ -522,12 +640,12 @@ elfexec(vnode_t *vp, execa_t *uap, uarg_t *args, intpdata_t *idatap,
 
 	dtrphdr = NULL;
 
-	if ((error = mapelfexec(vp, ehdrp, nphdrs, phdrbase, &uphdr, &dyphdr,
+	if ((error = mapelfexec(vp, ehdrp, nphdrs, phdrbase, &uphdr, &intphdr,
 	    &stphdr, &dtrphdr, dataphdrp, &bssbase, &brkbase, &voffset, NULL,
 	    len, execsz, &brksize)) != 0)
 		goto bad;
 
-	if (uphdr != NULL && dyphdr == NULL)
+	if (uphdr != NULL && intphdr == NULL)
 		goto bad;
 
 	if (dtrphdr != NULL && dtrace_safe_phdr(dtrphdr, args, voffset) != 0) {
@@ -535,13 +653,13 @@ elfexec(vnode_t *vp, execa_t *uap, uarg_t *args, intpdata_t *idatap,
 		goto bad;
 	}
 
-	if (dyphdr != NULL) {
+	if (intphdr != NULL) {
 		size_t		len;
 		uintptr_t	lddata;
 		char		*p;
 		struct vnode	*nvp;
 
-		dlnsize = dyphdr->p_filesz;
+		dlnsize = intphdr->p_filesz;
 
 		if (dlnsize > MAXPATHLEN || dlnsize <= 0)
 			goto bad;
@@ -549,8 +667,8 @@ elfexec(vnode_t *vp, execa_t *uap, uarg_t *args, intpdata_t *idatap,
 		/*
 		 * Read in "interpreter" pathname.
 		 */
-		if ((error = vn_rdwr(UIO_READ, vp, dlnp, dyphdr->p_filesz,
-		    (offset_t)dyphdr->p_offset, UIO_SYSSPACE, 0, (rlim64_t)0,
+		if ((error = vn_rdwr(UIO_READ, vp, dlnp, intphdr->p_filesz,
+		    (offset_t)intphdr->p_offset, UIO_SYSSPACE, 0, (rlim64_t)0,
 		    CRED(), &resid)) != 0) {
 			uprintf("%s: Cannot obtain interpreter pathname\n",
 			    exec_file);
@@ -570,6 +688,15 @@ elfexec(vnode_t *vp, execa_t *uap, uarg_t *args, intpdata_t *idatap,
 
 			if (strncmp(++p, ORIGIN_STR, ORIGIN_STR_SIZE))
 				continue;
+
+			/*
+			 * We don't support $ORIGIN on setid programs to close
+			 * a potential attack vector.
+			 */
+			if ((setid & EXECSETID_SETID) != 0) {
+				error = ENOEXEC;
+				goto bad;
+			}
 
 			curlen = 0;
 			len = p - dlnp - 1;
@@ -716,8 +843,14 @@ elfexec(vnode_t *vp, execa_t *uap, uarg_t *args, intpdata_t *idatap,
 
 	if (hasauxv) {
 		int auxf = AF_SUN_HWCAPVERIFY;
+#if defined(__amd64)
+		size_t fpsize;
+		int fptype;
+#endif /* defined(__amd64) */
+
 		/*
-		 * Note: AT_SUN_PLATFORM was filled in via exec_args()
+		 * Note: AT_SUN_PLATFORM and AT_SUN_EXECNAME were filled in via
+		 * exec_args()
 		 */
 		ADDAUX(aux, AT_BASE, voffset)
 		ADDAUX(aux, AT_FLAGS, at_flags)
@@ -758,6 +891,7 @@ elfexec(vnode_t *vp, execa_t *uap, uarg_t *args, intpdata_t *idatap,
 		    ((char *)&aux->a_type -
 		    (char *)bigwad->elfargs));
 		ADDAUX(aux, AT_SUN_AUXFLAGS, auxf);
+
 		/*
 		 * Hardware capability flag word (performance hints)
 		 * Used for choosing faster library routines.
@@ -789,9 +923,50 @@ elfexec(vnode_t *vp, execa_t *uap, uarg_t *args, intpdata_t *idatap,
 			ADDAUX(aux, AT_SUN_BRAND_AUX3, 0)
 		}
 
+		/*
+		 * Add the comm page auxv entry, mapping it in if needed. Also
+		 * take care of the FPU entries.
+		 */
+#if defined(__amd64)
+		if (args->commpage != (uintptr_t)NULL ||
+		    (args->commpage = (uintptr_t)comm_page_mapin()) !=
+		    (uintptr_t)NULL) {
+			ADDAUX(aux, AT_SUN_COMMPAGE, args->commpage)
+		} else {
+			/*
+			 * If the comm page cannot be mapped, pad out the auxv
+			 * to satisfy later size checks.
+			 */
+			ADDAUX(aux, AT_NULL, 0)
+		}
+
+		fptype = AT_386_FPINFO_NONE;
+		fpu_auxv_info(&fptype, &fpsize);
+		if (fptype != AT_386_FPINFO_NONE) {
+			ADDAUX(aux, AT_SUN_FPTYPE, fptype)
+			ADDAUX(aux, AT_SUN_FPSIZE, fpsize)
+		} else {
+			ADDAUX(aux, AT_NULL, 0)
+			ADDAUX(aux, AT_NULL, 0)
+		}
+#endif /* defined(__amd64) */
+
 		ADDAUX(aux, AT_NULL, 0)
 		postfixsize = (char *)aux - (char *)bigwad->elfargs;
-		ASSERT(postfixsize == args->auxsize);
+
+		/*
+		 * We make assumptions above when we determine how many aux
+		 * vector entries we will be adding. However, if we have an
+		 * invalid elf file, it is possible that mapelfexec might
+		 * behave differently (but not return an error), in which case
+		 * the number of aux entries we actually add will be different.
+		 * We detect that now and error out.
+		 */
+		if (postfixsize != args->auxsize) {
+			DTRACE_PROBE2(elfexec_badaux, int, postfixsize,
+			    int, args->auxsize);
+			goto bad;
+		}
 		ASSERT(postfixsize <= __KERN_NAUXV_IMPL * sizeof (aux_entry_t));
 	}
 
@@ -815,6 +990,7 @@ elfexec(vnode_t *vp, execa_t *uap, uarg_t *args, intpdata_t *idatap,
 	}
 
 	bzero(up->u_auxv, sizeof (up->u_auxv));
+	up->u_commpagep = args->commpage;
 	if (postfixsize) {
 		int num_auxv;
 
@@ -1154,7 +1330,7 @@ mapelfexec(
 	int nphdrs,
 	caddr_t phdrbase,
 	Phdr **uphdr,
-	Phdr **dyphdr,
+	Phdr **intphdr,
 	Phdr **stphdr,
 	Phdr **dtphdr,
 	Phdr *dataphdrp,
@@ -1178,11 +1354,15 @@ mapelfexec(
 	extern int use_brk_lpg;
 
 	if (ehdr->e_type == ET_DYN) {
+		secflagset_t flags = 0;
 		/*
 		 * Obtain the virtual address of a hole in the
 		 * address space to map the "interpreter".
 		 */
-		map_addr(&addr, len, (offset_t)0, 1, 0);
+		if (secflag_enabled(curproc, PROC_SEC_ASLR))
+			flags |= _MAP_RANDOMIZE;
+
+		map_addr(&addr, len, (offset_t)0, 1, flags);
 		if (addr == NULL)
 			return (ENOMEM);
 		*voffset = (intptr_t)addr;
@@ -1209,7 +1389,7 @@ mapelfexec(
 	for (i = nphdrs; i > 0; i--) {
 		switch (phdr->p_type) {
 		case PT_LOAD:
-			if ((*dyphdr != NULL) && (*uphdr == NULL))
+			if ((*intphdr != NULL) && (*uphdr == NULL))
 				return (0);
 
 			ptload = 1;
@@ -1264,6 +1444,13 @@ mapelfexec(
 				uint_t	szc = curproc->p_brkpageszc;
 				size_t pgsz = page_get_pagesize(szc);
 				caddr_t ebss = addr + phdr->p_memsz;
+				/*
+				 * If we need extra space to keep the BSS an
+				 * integral number of pages in size, some of
+				 * that space may fall beyond p_brkbase, so we
+				 * need to set p_brksize to account for it
+				 * being (logically) part of the brk.
+				 */
 				size_t extra_zfodsz;
 
 				ASSERT(pgsz > PAGESIZE);
@@ -1296,7 +1483,7 @@ mapelfexec(
 		case PT_INTERP:
 			if (ptload)
 				goto bad;
-			*dyphdr = phdr;
+			*intphdr = phdr;
 			break;
 
 		case PT_SHLIB:
@@ -1328,6 +1515,31 @@ mapelfexec(
 	if (minaddr != NULL) {
 		ASSERT(mintmp != (caddr_t)-1);
 		*minaddr = (intptr_t)mintmp;
+	}
+
+	if (brkbase != NULL && secflag_enabled(curproc, PROC_SEC_ASLR)) {
+		size_t off;
+		uintptr_t base = (uintptr_t)*brkbase;
+		uintptr_t oend = base + *brksize;
+
+		ASSERT(ISP2(aslr_max_brk_skew));
+
+		(void) random_get_pseudo_bytes((uint8_t *)&off, sizeof (off));
+		base += P2PHASE(off, aslr_max_brk_skew);
+		base = P2ROUNDUP(base, PAGESIZE);
+		*brkbase = (caddr_t)base;
+		/*
+		 * Above, we set *brksize to account for the possibility we
+		 * had to grow the 'brk' in padding out the BSS to a page
+		 * boundary.
+		 *
+		 * We now need to adjust that based on where we now are
+		 * actually putting the brk.
+		 */
+		if (oend > base)
+			*brksize = oend - base;
+		else
+			*brksize = 0;
 	}
 
 	return (0);
@@ -1737,7 +1949,7 @@ top:
 	ASSERT(p == ttoproc(curthread));
 	prstop(0, 0);
 
-	AS_LOCK_ENTER(as, &as->a_lock, RW_WRITER);
+	AS_LOCK_ENTER(as, RW_WRITER);
 	nphdrs = prnsegs(as, 0) + 2;		/* two CORE note sections */
 
 	/*
@@ -1745,10 +1957,10 @@ top:
 	 */
 	nshdrs = 0;
 	if (content & (CC_CONTENT_CTF | CC_CONTENT_SYMTAB)) {
-		(void) process_scns(content, p, credp, NULL, NULL, NULL, 0,
+		(void) process_scns(content, p, credp, NULL, NULL, 0, 0,
 		    NULL, &nshdrs);
 	}
-	AS_LOCK_EXIT(as, &as->a_lock);
+	AS_LOCK_EXIT(as);
 
 	ASSERT(nshdrs == 0 || nshdrs > 1);
 
@@ -1864,13 +2076,17 @@ top:
 
 	mutex_exit(&p->p_lock);
 
-	AS_LOCK_ENTER(as, &as->a_lock, RW_WRITER);
+	AS_LOCK_ENTER(as, RW_WRITER);
 	i = 2;
 	for (seg = AS_SEGFIRST(as); seg != NULL; seg = AS_SEGNEXT(as, seg)) {
 		caddr_t eaddr = seg->s_base + pr_getsegsize(seg, 0);
 		caddr_t saddr, naddr;
 		void *tmp = NULL;
 		extern struct seg_ops segspt_shmops;
+
+		if ((seg->s_flags & S_HOLE) != 0) {
+			continue;
+		}
 
 		for (saddr = seg->s_base; saddr < eaddr; saddr = naddr) {
 			uint_t prot;
@@ -1964,7 +2180,7 @@ exclude:
 		}
 		ASSERT(tmp == NULL);
 	}
-	AS_LOCK_EXIT(as, &as->a_lock);
+	AS_LOCK_EXIT(as);
 
 	if (overflow || i != nphdrs) {
 		if (ntries++ == 0) {
@@ -2113,14 +2329,14 @@ exclude:
 			bigwad->shdr[0].sh_info = nphdrs;
 
 		if (nshdrs > 1) {
-			AS_LOCK_ENTER(as, &as->a_lock, RW_WRITER);
+			AS_LOCK_ENTER(as, RW_WRITER);
 			if ((error = process_scns(content, p, credp, vp,
 			    &bigwad->shdr[0], nshdrs, rlimit, &doffset,
 			    NULL)) != 0) {
-				AS_LOCK_EXIT(as, &as->a_lock);
+				AS_LOCK_EXIT(as);
 				goto done;
 			}
-			AS_LOCK_EXIT(as, &as->a_lock);
+			AS_LOCK_EXIT(as);
 		}
 
 		if ((error = core_write(vp, UIO_SYSSPACE, soffset,

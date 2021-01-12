@@ -24,8 +24,7 @@
 # Copyright 2010 Sun Microsystems, Inc.  All rights reserved.
 # Use is subject to license terms.
 #
-#	This makefile drives the production of the mii support module.
-#
+# Copyright (c) 2018, Joyent, Inc.
 
 #
 #	Path to the base of the uts directory tree (usually /usr/src/uts).
@@ -37,11 +36,7 @@ UTSBASE = ../..
 #
 MODULE		= mii
 OBJECTS		= $(MII_OBJS:%=$(OBJS_DIR)/%)
-LINTS		= $(MII_OBJS:%.o=$(LINTS_DIR)/%.ln)
 ROOTMODULE	= $(ROOT_MISC_DIR)/$(MODULE)
-WARLOCK_OUT	= $(MII_OBJS:%.o=%.ll)
-WARLOCK_OK	= $(MODULE).ok
-WLCMD_DIR	= $(UTSBASE)/common/io/warlock
 
 #
 #	Include common rules.
@@ -52,13 +47,15 @@ include $(UTSBASE)/intel/Makefile.intel
 #	Define targets
 #
 ALL_TARGET	= $(BINARY)
-LINT_TARGET	= $(MODULE).lint
 INSTALL_TARGET	= $(BINARY) $(ROOTMODULE)
 
 LDFLAGS		+= -dy -N misc/mac
 
 CERRWARN	+= -_gcc=-Wno-switch
-CERRWARN	+= -_gcc=-Wno-uninitialized
+CERRWARN	+= $(CNOWARN_UNINIT)
+
+# needs work
+SMOFF += all_func_returns
 
 #
 #	Default build targets.
@@ -70,16 +67,8 @@ def:		$(DEF_DEPS)
 all:		$(ALL_DEPS)
 
 clean:		$(CLEAN_DEPS)
-		$(RM) $(WARLOCK_OUT) $(WARLOCK_OK)
 
 clobber:	$(CLOBBER_DEPS)
-		$(RM) $(WARLOCK_OUT) $(WARLOCK_OK)
-
-lint:		$(LINT_DEPS)
-
-modlintlib:	$(MODLINTLIB_DEPS)
-
-clean.lint:	$(CLEAN_LINT_DEPS)
 
 install:	$(INSTALL_DEPS)
 

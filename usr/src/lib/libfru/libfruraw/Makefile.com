@@ -22,6 +22,7 @@
 # Copyright 2009 Sun Microsystems, Inc.  All rights reserved.
 # Use is subject to license terms.
 #
+# Copyright (c) 2018, Joyent, Inc.
 
 LIBRARY=	libfruraw.a
 VERS=		.1
@@ -37,25 +38,17 @@ LIBS =		$(DYNLIB)
 
 MAPFILES =
 
-LINTFLAGS =	-uxn
-LINTFLAGS64 =	$(LINTFLAGS) -m64
-LINTOUT=	lint.out
-LINTSRC =       $(LINTLIB:%.ln=%)
-ROOTLINTDIR =   $(ROOTLIBDIR)
-ROOTLINT =      $(LINTSRC:%=$(ROOTLINTDIR)/%)
-
-CLEANFILES=	$(LINTOUT)
-
 CPPFLAGS +=	-I.. \
 		-I$(SRC)/lib/libfru/include \
 		-I$(SRC)/lib/libfruutils
-CPPFLAGS += 	-D_REENTRANT
+CPPFLAGS +=	-D_REENTRANT
 CFLAGS +=	$(CCVERBOSE)
 
-CERRWARN +=	-_gcc=-Wno-uninitialized
+CERRWARN +=	$(CNOWARN_UNINIT)
 
-$(LINTLIB) :=	LINTFLAGS = -nvx -I..
-$(LINTLIB) :=	LINTFLAGS64 = -nvx -m64 -I..
+# not linted
+SMATCH=off
+
 
 XGETFLAGS += -a
 POFILE=	picl.po
@@ -64,8 +57,6 @@ POFILE=	picl.po
 
 all : $(LIBS)
 	chmod 755 $(DYNLIB)
-
-lint :	lintcheck
 
 %.po:	../%.c
 	$(CP) $< $<.i
@@ -81,6 +72,3 @@ include $(SRC)/lib/Makefile.targ
 pics/%.o:	../%.c
 	$(COMPILE.c) -o $@ $<
 	$(POST_PROCESS_O)
-
-$(ROOTLINTDIR)/%: ../%
-	$(INS.file)

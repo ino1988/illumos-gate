@@ -27,7 +27,8 @@
  * Copyright (c) 2008, 2010, Oracle and/or its affiliates. All rights reserved.
  */
 /*
- * Copyright (c) 2012, Joyent, Inc. All rights reserved.
+ * Copyright (c) 2017, Joyent, Inc.
+ * Copyright 2016 OmniTI Computer Consulting, Inc. All rights reserved.
  */
 
 #ifndef	_IXGBE_OSDEP_H
@@ -58,12 +59,13 @@ extern "C" {
 #include "ixgbe_debug.h"
 
 /* Cheesy hack for EWARN() */
-#define	EWARN(H, W, S) cmn_err(CE_NOTE, W)
+#define	EWARN(H, W) cmn_err(CE_NOTE, W)
 
 /* function declarations */
 struct ixgbe_hw;
 uint16_t ixgbe_read_pci_cfg(struct ixgbe_hw *, uint32_t);
 void ixgbe_write_pci_cfg(struct ixgbe_hw *, uint32_t, uint32_t);
+boolean_t ixgbe_removed(struct ixgbe_hw *);
 
 #define	usec_delay(x)		drv_usecwait(x)
 #define	msec_delay(x)		drv_usecwait(x * 1000)
@@ -75,12 +77,14 @@ void ixgbe_write_pci_cfg(struct ixgbe_hw *, uint32_t, uint32_t);
 #define	FALSE		B_FALSE
 #define	TRUE		B_TRUE
 
-#define	IXGBE_READ_PCIE_WORD 	ixgbe_read_pci_cfg
-#define	IXGBE_WRITE_PCIE_WORD 	ixgbe_write_pci_cfg
+#define	IXGBE_READ_PCIE_WORD	ixgbe_read_pci_cfg
+#define	IXGBE_WRITE_PCIE_WORD	ixgbe_write_pci_cfg
 #define	CMD_MEM_WRT_INVALIDATE	0x0010	/* BIT_4 */
 #define	PCI_COMMAND_REGISTER	0x04
 #define	PCI_EX_CONF_CAP		0xE0
 #define	SPEED_10GB		10000
+#define	SPEED_5GB		5000
+#define	SPEED_2_5GB		2500
 #define	SPEED_1GB		1000
 #define	SPEED_100		100
 #define	FULL_DUPLEX		2
@@ -107,30 +111,47 @@ void ixgbe_write_pci_cfg(struct ixgbe_hw *, uint32_t, uint32_t);
 #define	IXGBE_NTOHS	ntohs
 
 #ifdef _BIG_ENDIAN
-#define IXGBE_CPU_TO_LE32	BSWAP_32
-#define IXGBE_LE32_TO_CPUS 	BSWAP_32
+#define	IXGBE_CPU_TO_LE16	BSWAP_16
+#define	IXGBE_CPU_TO_LE32	BSWAP_32
+#define	IXGBE_LE32_TO_CPUS(x)	*(x) = BSWAP_32(*(x))
+#define	IXGBE_CPU_TO_BE16(x)	(x)
+#define	IXGBE_CPU_TO_BE32(x)	(x)
+#define	IXGBE_BE32_TO_CPU(x)	(x)
 #else
-#define IXGBE_CPU_TO_LE32(x)	(x)
-#define IXGBE_LE32_TO_CPUS(x)	(x)
-#endif	/* _BIG_ENDIAN */
+#define	IXGBE_CPU_TO_LE16(x)	(x)
+#define	IXGBE_CPU_TO_LE32(x)	(x)
+#define	IXGBE_LE32_TO_CPUS(x)	(x)
+#define	IXGBE_CPU_TO_BE16	BSWAP_16
+#define	IXGBE_CPU_TO_BE32	BSWAP_32
+#define	IXGBE_BE32_TO_CPU	BSWAP_32
+#endif /* _BIG_ENDIAN */
 
 #define	UNREFERENCED_PARAMETER(x)		_NOTE(ARGUNUSED(x))
-#define UNREFERENCED_1PARAMETER(_p)		UNREFERENCED_PARAMETER(_p)
-#define UNREFERENCED_2PARAMETER(_p, _q)		_NOTE(ARGUNUSED(_p, _q))
-#define UNREFERENCED_3PARAMETER(_p, _q, _r)	_NOTE(ARGUNUSED(_p, _q, _r))
-#define UNREFERENCED_4PARAMETER(_p, _q, _r, _s)	_NOTE(ARGUNUSED(_p, _q,_r, _s))
+#define	UNREFERENCED_1PARAMETER(_p)		UNREFERENCED_PARAMETER(_p)
+#define	UNREFERENCED_2PARAMETER(_p, _q)		_NOTE(ARGUNUSED(_p, _q))
+#define	UNREFERENCED_3PARAMETER(_p, _q, _r)	_NOTE(ARGUNUSED(_p, _q, _r))
+#define	UNREFERENCED_4PARAMETER(_p, _q, _r, _s)	_NOTE(ARGUNUSED(_p, _q,_r, _s))
 
 
+#define	IXGBE_REMOVED(hw) ixgbe_removed(hw)
 
 typedef	int8_t		s8;
 typedef	int16_t		s16;
 typedef	int32_t		s32;
 typedef	int64_t		s64;
-typedef uint8_t		u8;
-typedef	uint16_t 	u16;
+typedef	uint8_t		u8;
+typedef	uint16_t	u16;
 typedef	uint32_t	u32;
 typedef	uint64_t	u64;
-typedef boolean_t	bool;
+typedef	boolean_t	bool;
+
+/* shared code requires this */
+#define	__le16  u16
+#define	__le32  u32
+#define	__le64  u64
+#define	__be16  u16
+#define	__be32  u32
+#define	__be64  u64
 
 struct ixgbe_osdep {
 	ddi_acc_handle_t reg_handle;

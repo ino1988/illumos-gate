@@ -23,22 +23,24 @@
 # Copyright 2010 Sun Microsystems, Inc.  All rights reserved.
 # Use is subject to license terms.
 #
-#
-# cmd/cmd-inet/usr.sbin/nwamadm/Makefile
+# Copyright (c) 2018, Joyent, Inc.
 
 PROG= nwamadm
 
 include ../../../Makefile.cmd
 
 XGETFLAGS +=	-a -x $(PROG).xcl
-LDLIBS +=	-linetutil -lnsl -lnwam -lumem -lscf
+LDLIBS +=	-lofmt -linetutil -lnsl -lnwam -lumem -lscf
 
 CERRWARN += -_gcc=-Wno-switch
-CERRWARN += -_gcc=-Wno-uninitialized
+CERRWARN += $(CNOWARN_UNINIT)
+
+# not linted
+SMATCH=off
 
 .KEEP_STATE:
 
-all: $(PROG) 
+all: $(PROG)
 
 install: all $(ROOTUSRSBINPROG)
 

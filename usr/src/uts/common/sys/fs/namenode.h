@@ -19,11 +19,15 @@
  * CDDL HEADER END
  */
 /*	Copyright (c) 1984, 1986, 1987, 1988, 1989 AT&T	*/
-/*	  All Rights Reserved  	*/
+/*	  All Rights Reserved	*/
 
 /*
  * Copyright 2009 Sun Microsystems, Inc.  All rights reserved.
  * Use is subject to license terms.
+ */
+
+/*
+ * Copyright 2020 OmniOS Community Edition (OmniOSce) Association.
  */
 
 #ifndef	_SYS_FS_NAMENODE_H
@@ -92,6 +96,10 @@ extern void namenodeno_free(uint64_t);
 extern struct vnodeops *nm_vnodeops;
 extern const struct fs_operation_def nm_vnodeops_template[];
 extern kmutex_t ntable_lock;
+
+typedef int nm_walk_mounts_f(const struct namenode *, cred_t *, void *);
+extern int nm_walk_mounts(const vnode_t *, nm_walk_mounts_f *, cred_t *,
+    void *);
 
 #endif /* _KERNEL */
 

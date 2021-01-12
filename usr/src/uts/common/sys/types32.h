@@ -21,12 +21,11 @@
 /*
  * Copyright 2007 Sun Microsystems, Inc.  All rights reserved.
  * Use is subject to license terms.
+ * Copyright 2015 Nexenta Systems, Inc.
  */
 
 #ifndef _SYS_TYPES32_H
 #define	_SYS_TYPES32_H
-
-#pragma ident	"%Z%%M%	%I%	%E% SMI"
 
 #include <sys/int_types.h>
 
@@ -66,6 +65,8 @@ typedef	uint32_t	size32_t;
 typedef	int32_t		ssize32_t;
 typedef	int32_t		time32_t;
 typedef	int32_t		clock32_t;
+typedef	uint32_t	uintptr32_t;
+typedef	int32_t		intptr32_t;
 
 struct timeval32 {
 	time32_t	tv_sec;		/* seconds */

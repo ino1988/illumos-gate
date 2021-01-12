@@ -21,6 +21,9 @@
 
 /*
  * Copyright (c) 2003, 2010, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2016 by Delphix. All rights reserved.
+ * Copyright 2018 Joyent, Inc.
+ * Copyright 2019 Peter Tribble.
  */
 
 #include <sys/machsystm.h>
@@ -272,13 +275,6 @@ static caddr_t hblk_base;
 uint_t hblk_alloc_dynamic = 0;
 uint_t hblk1_min = H1MIN;
 
-
-/*
- * Hooks for unsupported platforms and down-rev firmware
- */
-int iam_positron(void);
-#pragma weak iam_positron
-static void do_prom_version_check(void);
 
 /*
  * After receiving a thermal interrupt, this is the number of seconds
@@ -611,7 +607,7 @@ uint64_t sync_tt;
 void
 sync_handler(void)
 {
-	struct  panic_trap_info 	ti;
+	struct  panic_trap_info	ti;
 	int i;
 
 	/*
@@ -683,7 +679,7 @@ startup_init(void)
 	 * 20 == num of %p substrings
 	 * 16 == max num of chars %p will expand to.
 	 */
-	char 		bp[sizeof (sync_str) + 16 * 20];
+	char		bp[sizeof (sync_str) + 16 * 20];
 
 	/*
 	 * Initialize ptl1 stack for the 1st CPU.
@@ -866,7 +862,7 @@ static size_t boot_physinstalled_len, boot_physavail_len, boot_virtavail_len;
  *
  * pseudo code:
  * if (context != 0) {
- * 	return false
+ *	return false
  * } else if (miss_va in range[kmem64_base, kmem64_end)) {
  *	tte = tte_template +
  *		(((miss_va & pagemask) - kmem64_base));
@@ -975,8 +971,8 @@ startup_memlist(void)
 	 * We're loaded by boot with the following configuration (as
 	 * specified in the sun4u/conf/Mapfile):
 	 *
-	 * 	text:		4 MB chunk aligned on a 4MB boundary
-	 * 	data & bss:	4 MB chunk aligned on a 4MB boundary
+	 *	text:		4 MB chunk aligned on a 4MB boundary
+	 *	data & bss:	4 MB chunk aligned on a 4MB boundary
 	 *
 	 * These two chunks will eventually be mapped by 2 locked 4MB
 	 * ttes and will represent the nucleus of the kernel.  This gives
@@ -1517,28 +1513,6 @@ startup_modules(void)
 	mod_setup();
 
 	/*
-	 * If this is a positron, complain and halt.
-	 */
-	if (&iam_positron && iam_positron()) {
-		cmn_err(CE_WARN, "This hardware platform is not supported"
-		    " by this release of Solaris.\n");
-#ifdef DEBUG
-		prom_enter_mon();	/* Type 'go' to resume */
-		cmn_err(CE_WARN, "Booting an unsupported platform.\n");
-		cmn_err(CE_WARN, "Booting with down-rev firmware.\n");
-
-#else /* DEBUG */
-		halt(0);
-#endif /* DEBUG */
-	}
-
-	/*
-	 * If we are running firmware that isn't 64-bit ready
-	 * then complain and halt.
-	 */
-	do_prom_version_check();
-
-	/*
 	 * Initialize system parameters
 	 */
 	param_init();
@@ -2053,7 +2027,7 @@ startup_vm(void)
 
 		(void) seg_attach(&kas, segzio_base, mmu_ptob(segziosize),
 		    &kzioseg);
-		(void) segkmem_zio_create(&kzioseg);
+		(void) segkmem_create(&kzioseg);
 
 		/* create zio area covering new segment */
 		segkmem_zio_init(segzio_base, mmu_ptob(segziosize));
@@ -2437,7 +2411,7 @@ memlist_new(uint64_t start, uint64_t len, struct memlist **memlistp)
  */
 static void
 memlist_add(uint64_t start, uint64_t len, struct memlist **memlistp,
-	struct memlist **curmemlistp)
+    struct memlist **curmemlistp)
 {
 	struct memlist *new = *memlistp;
 
@@ -2904,19 +2878,19 @@ char obp_tte_str[] =
 	"      dup HMEBLK_ENDPA <> if     ( sfmmup hmeblkp ) ( r: hblktag ) "
 	"         dup hmeblk_tag + phys-x@ r@ = if ( sfmmup hmeblkp )	  "
 	"	     dup hmeblk_tag + 8 + phys-x@ 2 pick = if		  "
-	"		  true 	( sfmmup hmeblkp true ) ( r: hblktag )	  "
+	"		  true	( sfmmup hmeblkp true ) ( r: hblktag )	  "
 	"	     else						  "
-	"	     	  hmeblk_next + phys-x@ false 			  "
+	"		  hmeblk_next + phys-x@ false			  "
 	"			( sfmmup hmeblkp false ) ( r: hblktag )   "
-	"	     then  						  "
+	"	     then						  "
 	"	  else							  "
-	"	     hmeblk_next + phys-x@ false 			  "
+	"	     hmeblk_next + phys-x@ false			  "
 	"			( sfmmup hmeblkp false ) ( r: hblktag )   "
-	"	  then 							  "
+	"	  then							  "
 	"      else							  "
-	"         drop 0 true 						  "
-	"      then  							  "
-	"   until r> drop 						  "
+	"         drop 0 true						  "
+	"      then							  "
+	"   until r> drop						  "
 	"; "
 
 	": HME_HASH_TAG ( sfmmup rehash addr -- hblktag ) "
@@ -3017,7 +2991,7 @@ void
 install_va_to_tte(void)
 {
 	/*
-	 * advise prom that he can use unix-tte
+	 * advise prom that it can use unix-tte
 	 */
 	prom_interpret("' unix-tte is va>tte-data", 0, 0, 0, 0, 0);
 }
@@ -3102,43 +3076,6 @@ static void
 startup_create_io_node(void)
 {
 	prom_interpret(create_node, 0, 0, 0, 0, 0);
-}
-
-
-static void
-do_prom_version_check(void)
-{
-	int i;
-	pnode_t node;
-	char buf[64];
-	static char drev[] = "Down-rev firmware detected%s\n"
-	    "\tPlease upgrade to the following minimum version:\n"
-	    "\t\t%s\n";
-
-	i = prom_version_check(buf, sizeof (buf), &node);
-
-	if (i == PROM_VER64_OK)
-		return;
-
-	if (i == PROM_VER64_UPGRADE) {
-		cmn_err(CE_WARN, drev, "", buf);
-
-#ifdef	DEBUG
-		prom_enter_mon();	/* Type 'go' to continue */
-		cmn_err(CE_WARN, "Booting with down-rev firmware\n");
-		return;
-#else
-		halt(0);
-#endif
-	}
-
-	/*
-	 * The other possibility is that this is a server running
-	 * good firmware, but down-rev firmware was detected on at
-	 * least one other cpu board. We just complain if we see
-	 * that.
-	 */
-	cmn_err(CE_WARN, drev, " on one or more CPU boards", buf);
 }
 
 

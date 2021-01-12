@@ -25,6 +25,9 @@
  *
  * Copyright (c) 1992, 2010, Oracle and/or its affiliates. All rights reserved.
  * Copyright 2012 DEY Storage Systems, Inc.  All rights reserved.
+ * Copyright (c) 2018, Joyent, Inc.
+ * Copyright 2016 RackTop Systems.
+ * Copyright 2020 Oxide Computer Company
  */
 
 #ifndef	_CONV_H
@@ -40,6 +43,7 @@
 #include <libld.h>
 #include <sgs.h>
 #include <sgsmsg.h>
+#include <sys/secflags.h>
 
 #ifdef	__cplusplus
 extern "C" {
@@ -165,7 +169,7 @@ typedef union {
 	char				buf[CONV_CAP_VAL_HW1_BUFSIZE];
 } Conv_cap_val_hw1_buf_t;
 
-#define	CONV_CAP_VAL_HW2_BUFSIZE	CONV_INV_BUFSIZE	/* for now */
+#define	CONV_CAP_VAL_HW2_BUFSIZE	350
 typedef union {
 	Conv_inv_buf_t			inv_buf;
 	char				buf[CONV_CAP_VAL_HW2_BUFSIZE];
@@ -325,6 +329,19 @@ typedef union {
 	char				buf[CONV_CNOTE_PROC_FLAG_BUFSIZE];
 } Conv_cnote_proc_flag_buf_t;
 
+/* conv_prsecflags() */
+#define	CONV_PRSECFLAGS_BUFSIZE		57
+typedef union {
+	Conv_inv_buf_t			inv_buf;
+	char				buf[CONV_PRSECFLAGS_BUFSIZE];
+} Conv_secflags_buf_t;
+
+/* conv_prupanic() */
+#define	CONV_PRUPANIC_BUFSIZE		56
+typedef union {
+	Conv_inv_buf_t			inv_buf;
+	char				buf[CONV_PRUPANIC_BUFSIZE];
+} Conv_upanic_buf_t;
 
 /* conv_cnote_sigset() */
 #define	CONV_CNOTE_SIGSET_BUFSIZE	639
@@ -341,7 +358,7 @@ typedef union {
 } Conv_cnote_fltset_buf_t;
 
 /* conv_cnote_sysset() */
-#define	CONV_CNOTE_SYSSET_BUFSIZE	3195
+#define	CONV_CNOTE_SYSSET_BUFSIZE	3227
 typedef union {
 	Conv_inv_buf_t			inv_buf;
 	char				buf[CONV_CNOTE_SYSSET_BUFSIZE];
@@ -578,7 +595,7 @@ typedef enum {
 } conv_ds_type_t;
 
 #define	CONV_DS_COMMON_FIELDS \
-	conv_ds_type_t	ds_type;   	/* Type of data structure used */ \
+	conv_ds_type_t	ds_type;	/* Type of data structure used */ \
 	uint32_t	ds_baseval;	/* Value of first item */	\
 	uint32_t	ds_topval	/* Value of last item */
 
@@ -822,6 +839,10 @@ extern	const char	*conv_cnote_pr_why(short, Conv_fmt_flags_t,
 			    Conv_inv_buf_t *);
 extern	const char	*conv_cnote_priv(int, Conv_fmt_flags_t,
 			    Conv_inv_buf_t *);
+extern	const char	*conv_prsecflags(secflagset_t, Conv_fmt_flags_t,
+			    Conv_secflags_buf_t *);
+extern	const char	*conv_prupanic(uint32_t, Conv_fmt_flags_t,
+			    Conv_upanic_buf_t *);
 extern	const char	*conv_cnote_psetid(int, Conv_fmt_flags_t,
 			    Conv_inv_buf_t *);
 extern	const char	*conv_cnote_sa_flags(int, Conv_fmt_flags_t,

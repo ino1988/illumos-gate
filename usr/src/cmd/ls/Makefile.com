@@ -22,7 +22,7 @@
 # Copyright 2009 Sun Microsystems, Inc.  All rights reserved.
 # Use is subject to license terms.
 #
-# cmd/ls/Makefile.com
+# Copyright 2019 Joyent, Inc.
 #
 
 PROG=		ls
@@ -35,8 +35,6 @@ include ../../Makefile.cmd
 
 LDLIBS += -lsec -lnvpair -lcmdutils -lcurses
 CFLAGS	+=	$(CCVERBOSE)
-CERRWARN +=	-_gcc=-Wno-parentheses
-CERRWARN +=	-_gcc=-Wno-uninitialized
 $(XPG4) := CFLAGS += -DXPG4
 
 # Include all XPG4 changes in the XPG6 version
@@ -45,13 +43,13 @@ $(XPG6) := CFLAGS64 += -DXPG4 -DXPG6
 
 CFLAGS64 +=	$(CCVERBOSE)
 CPPFLAGS += -D_FILE_OFFSET_BITS=64
-LINTFLAGS64 +=	-errchk=longptr64
+
+# main() can be too hairy
+SMATCH=off
 
 .KEEP_STATE:
 
 all:	$(PROG) $(XPG4) $(XPG6)
-
-lint:	lint_SRCS
 
 clean:
 	$(RM) $(CLEANFILES)
@@ -63,7 +61,7 @@ include ../../Makefile.targ
 	$(POST_PROCESS)
 
 %.xpg6: ../%.c
-	$(LINK.c) -o $@ $< $(LDLIBS) 
+	$(LINK.c) -o $@ $< $(LDLIBS)
 	$(POST_PROCESS)
 
 %: ../%.c

@@ -22,10 +22,8 @@
 # Copyright 2009 Sun Microsystems, Inc.  All rights reserved.
 # Use is subject to license terms.
 #
-#
-#	This makefile drives the production of the mac driver 
-#	kernel module.
-#
+# Copyright 2019 Joyent, Inc.
+
 #
 #	Path to the base of the uts directory tree (usually /usr/src/uts).
 #
@@ -36,7 +34,6 @@ UTSBASE	= ../..
 #
 MODULE		= mac
 OBJECTS		= $(MAC_OBJS:%=$(OBJS_DIR)/%)
-LINTS		= $(MAC_OBJS:%.o=$(LINTS_DIR)/%.ln)
 ROOTMODULE	= $(ROOT_MISC_DIR)/$(MODULE)
 
 #
@@ -48,7 +45,6 @@ include $(UTSBASE)/intel/Makefile.intel
 #	Define targets
 #
 ALL_TARGET	= $(BINARY)
-LINT_TARGET	= $(MODULE).lint
 INSTALL_TARGET	= $(BINARY) $(ROOTMODULE)
 
 #
@@ -58,15 +54,16 @@ CFLAGS		+= $(CCVERBOSE)
 LDFLAGS		+= -dy
 INC_PATH	+= -I$(UTSBASE)/common/io/bpf
 
-LINTTAGS	+= -erroff=E_PTRDIFF_OVERFLOW
-LINTTAGS	+= -erroff=E_BAD_PTR_CAST_ALIGN
 
 CERRWARN	+= -_gcc=-Wno-unused-label
-CERRWARN	+= -_gcc=-Wno-uninitialized
-CERRWARN	+= -_gcc=-Wno-parentheses
+CERRWARN	+= $(CNOWARN_UNINIT)
 CERRWARN	+= -_gcc=-Wno-type-limits
 CERRWARN	+= -_gcc=-Wno-switch
 CERRWARN	+= -_gcc=-Wno-unused-variable
+
+# needs work
+SMOFF += all_func_returns
+$(OBJS_DIR)/mac_util.o := SMOFF += signed
 
 #
 #	Default build targets.
@@ -80,12 +77,6 @@ all:		$(ALL_DEPS)
 clean:		$(CLEAN_DEPS)
 
 clobber:	$(CLOBBER_DEPS)
-
-lint:		$(LINT_DEPS)
-
-modlintlib:	$(MODLINTLIB_DEPS)
-
-clean.lint:	$(CLEAN_LINT_DEPS)
 
 install:	$(INSTALL_DEPS)
 

@@ -22,6 +22,7 @@
 /*
  * Copyright 2006 Sun Microsystems, Inc.  All rights reserved.
  * Use is subject to license terms.
+ * Copyright (c) 2016 by Delphix. All rights reserved.
  */
 
 /*	Copyright (c) 1984, 1986, 1987, 1988, 1989 AT&T	*/
@@ -36,8 +37,6 @@
  * software developed by the University of California, Berkeley, and its
  * contributors.
  */
-
-#pragma ident	"%Z%%M%	%I%	%E% SMI"
 
 #include "rcv.h"
 #ifndef preSVr4
@@ -58,7 +57,7 @@ static jmp_buf	hdrjmp;
 const char *const version = "mailx version 5.0";
 
 /*
- * Find out who the user is, copy his mail file (if exists) into
+ * Find out who the user is, copy their mail file (if exists) into
  * /tmp/Rxxxxx and set up the message pointers.  Then, print out the
  * message headers and read user commands.
  *
@@ -70,7 +69,7 @@ const char *const version = "mailx version 5.0";
  * and a bunch of other options.
  */
 
-int 
+int
 main(int argc, char **argv)
 {
 	register char *ef;
@@ -104,7 +103,6 @@ main(int argc, char **argv)
 	progname = argv[0];
 	if (progname[strlen(progname) - 1] != 'x') {
 		assign("bsdcompat", "");
-		assign("escapeok", "");		/* XXX */
 	}
 	myegid = getegid();
 	myrgid = getgid();
@@ -247,8 +245,8 @@ main(int argc, char **argv)
 			/*
 			 * User is specifying file to "edit" with mailx,
 			 * as opposed to reading system mailbox.
-			 * If no argument is given after -f, we read his/her
-			 * $MBOX file or mbox in his/her home directory.
+			 * If no argument is given after -f, we read their
+			 * $MBOX file or mbox in their home directory.
 			 */
 			ef = (argc == optind || *argv[optind] == '-')
 				? "" : argv[optind++];
@@ -447,7 +445,7 @@ gettext("Usage: %s -eiIUdFntBNHvV~ -T FILE -u USER -h hops -r address\n"),
 /*
  * Interrupt printing of the headers.
  */
-static void 
+static void
 #ifdef	__cplusplus
 hdrstop(int)
 #else

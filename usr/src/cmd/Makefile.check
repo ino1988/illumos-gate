@@ -19,8 +19,12 @@
 # CDDL HEADER END
 #
 
+#
 # Copyright (c) 2009, 2010, Oracle and/or its affiliates. All rights reserved.
 # Copyright 2014 Garrett D'Amore <garrett@damore.org>
+# Copyright 2017 Nexenta Systems, Inc.
+# Copyright 2019 Peter Tribble
+#
 
 include ../Makefile.master
 
@@ -35,7 +39,6 @@ MANIFEST_TOPDIRS=			\
 	consadm				\
 	coreadm				\
 	cron				\
-	cvcd				\
 	dispadmin			\
 	drd				\
 	dumpadm				\
@@ -50,14 +53,12 @@ MANIFEST_TOPDIRS=			\
 	keyserv				\
 	ldapcachemgr			\
 	ldmad				\
-	lms				\
 	dlmgmtd				\
 	ndmpd				\
 	nscd				\
 	oplhpd				\
 	pools				\
 	power				\
-	rexd				\
 	rmvolmgr			\
 	rpcbind				\
 	rpcsvc				\
@@ -118,12 +119,6 @@ MANIFEST_SUBDIRS=			\
 	krb5/kwarn			\
 	krb5/slave			\
 	lp/cmd/lpsched			\
-	lvm/rpc.mdcommd			\
-	lvm/rpc.metad			\
-	lvm/rpc.metamedd		\
-	lvm/rpc.metamhd			\
-	lvm/md_monitord			\
-	lvm/util			\
 	picl/picld			\
 	pools/poold			\
 	print/bsd-sysv-commands		\

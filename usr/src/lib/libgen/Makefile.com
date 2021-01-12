@@ -21,6 +21,7 @@
 #
 # Copyright (c) 1997, 2010, Oracle and/or its affiliates. All rights reserved.
 #
+# Copyright (c) 2018, Joyent, Inc.
 
 LIBRARY =	libgen.a
 VERS =		.1
@@ -33,23 +34,31 @@ include ../../Makefile.lib
 # install this library in the root filesystem
 include ../../Makefile.rootfs
 
-LIBS =		$(DYNLIB) $(LINTLIB)
+LIBS =		$(DYNLIB)
 LDLIBS +=	-lc
 
 SRCDIR =	../common
-$(LINTLIB) :=	SRCS = $(SRCDIR)/$(LINTSRC)
 
 CFLAGS +=	$(CCVERBOSE)
 CPPFLAGS +=	-D_REENTRANT -D_LARGEFILE64_SOURCE -I../inc -I../../common/inc
 
 CERRWARN +=	-_gcc=-Wno-parentheses
 CERRWARN +=	-_gcc=-Wno-char-subscripts
-CERRWARN +=	-_gcc=-Wno-uninitialized
+CERRWARN +=	$(CNOWARN_UNINIT)
+
+# not linted
+SMATCH=off
+
+COMPATLINKS +=		usr/ccs/lib/libgen.so
+COMPATLINKS64 +=	usr/ccs/lib/$(MACH64)/libgen.so
+
+$(ROOT)/usr/ccs/lib/libgen.so := COMPATLINKTARGET=../../../lib/libgen.so.1
+$(ROOT)/usr/ccs/lib/$(MACH64)/libgen.so:= \
+	COMPATLINKTARGET=../../../../lib/$(MACH64)/libgen.so.1
 
 .KEEP_STATE:
 
 all: $(LIBS)
 
-lint:	lintcheck
 
 include ../../Makefile.targ

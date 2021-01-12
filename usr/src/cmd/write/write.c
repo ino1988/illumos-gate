@@ -26,6 +26,8 @@
 /*
  * Copyright 2004 Sun Microsystems, Inc.  All rights reserved.
  * Use is subject to license terms.
+ * Copyright (c) 2016 by Delphix. All rights reserved.
+ * Copyright (c) 2018, Joyent, Inc.
  */
 
 #pragma ident	"%Z%%M%	%I%	%E% SMI"
@@ -232,7 +234,7 @@ main(int argc, char **argv)
 
 /*	If this is the second terminal, print out the first.  In all	*/
 /*	cases of multiple terminals, list out all the other terminals	*/
-/*	so the user can restart knowing what her/his choices are.	*/
+/*	so the user can restart knowing what their choices are.		*/
 
 			else if (terminal == NULL) {
 			    if (count == 1 && bad == 0) {
@@ -273,9 +275,9 @@ main(int argc, char **argv)
 			    (void) fprintf(stderr,
 				gettext("Cannot determine who you are.\n"));
 			    exit(1);
-		    }
-		    (void) strlcpy(&ownname[0], &passptr->pw_name[0],
-			sizeof (ownname));
+			}
+			(void) strlcpy(&ownname[0], &passptr->pw_name[0],
+			    sizeof (ownname));
 		} else {
 			(void) strlcpy(&ownname[0], self.ut_user,
 			    sizeof (self.ut_user));
@@ -515,7 +517,7 @@ eof()
 
 /*
  * permit: check mode of terminal - if not writable by all disallow writing to
- * (even the user him/herself cannot therefore write to their own tty)
+ * (even the user cannot therefore write to their own tty)
  */
 
 static int
@@ -546,7 +548,7 @@ char *term;
 
 /*
  * permit1: check mode of terminal - if not writable by all disallow writing
- * to (even the user him/herself cannot therefore write to their own tty)
+ * to (even the user themself cannot therefore write to their own tty)
  */
 
 /* this is used with fstat (which is faster than stat) where possible */

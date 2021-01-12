@@ -38,10 +38,7 @@ UTSBASE	= ../..
 #
 MODULE		= ibdma
 OBJECTS		= $(IBDMA_OBJS:%=$(OBJS_DIR)/%)
-LINTS		= $(IBDMA_OBJS:%.o=$(LINTS_DIR)/%.ln)
 ROOTMODULE	= $(ROOT_MISC_DIR)/$(MODULE)
-WARLOCK_OUT	= $(IBDMA_OBJS:%.o=%.ll)
-WARLOCK_OK	= $(MODULE).ok
 
 #
 #	Include common rules.
@@ -52,30 +49,18 @@ include $(UTSBASE)/intel/Makefile.intel
 #	Define targets
 #
 ALL_TARGET	= $(BINARY)
-LINT_TARGET	= $(MODULE).lint
 INSTALL_TARGET	= $(BINARY) $(ROOTMODULE)
 
 #
 #	Overrides.
 #
 
-# 
-# lint pass one enforcement 
-# 
 CFLAGS += $(CCVERBOSE)
 
 #
 #	depends on misc/ibtl, drv/ib and misc/ibmf
 #
 LDFLAGS	+= -dy -Nmisc/ibtl -Nmisc/ibmf
-
-#
-# For now, disable these lint checks; maintainers should endeavor
-# to investigate and remove these for maximum lint coverage.
-# Please do not carry these forward to new Makefiles.
-#
-LINTTAGS	+= -erroff=E_STATIC_UNUSED
-LINTTAGS	+= -erroff=E_BAD_PTR_CAST_ALIGN
 
 #
 #	Default build targets.
@@ -87,16 +72,8 @@ def:		$(DEF_DEPS)
 all:		$(ALL_DEPS)
 
 clean:		$(CLEAN_DEPS)
-		$(RM) $(WARLOCK_OUT) $(WARLOCK_OK)
 
 clobber:	$(CLOBBER_DEPS)
-		$(RM) $(WARLOCK_OUT) $(WARLOCK_OK)
-
-lint:		$(LINT_DEPS)
-
-modlintlib:	$(MODLINTLIB_DEPS)
-
-clean.lint:	$(CLEAN_LINT_DEPS)
 
 install:	$(INSTALL_DEPS)
 
@@ -104,23 +81,3 @@ install:	$(INSTALL_DEPS)
 #	Include common targets.
 #
 include $(UTSBASE)/intel/Makefile.targ
-
-
-#
-#	Defines for local commands.
-#
-WARLOCK		= warlock
-WLCC		= wlcc
-TOUCH		= touch
-TEST		= test
-
-warlock: $(WARLOCK_OK)
-
-
-$(WARLOCK_OK): $(WARLOCK_OUT) 
-	$(TOUCH) $@
-
-%.ll: $(UTSBASE)/common/io/ib/mgt/ibdma/%.c \
-		$(UTSBASE)/common/sys/ib/mgt/ibdma/ibdma_impl.h \
-		$(UTSBASE)/common/sys/ib/mgt/ibdma/ibdma.h
-	$(WLCC)  $(CPPFLAGS) -DDEBUG -o $@ $<

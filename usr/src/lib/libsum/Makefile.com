@@ -23,6 +23,7 @@
 # Copyright 2009 Sun Microsystems, Inc.  All rights reserved.
 # Use is subject to license terms.
 #
+# Copyright (c) 2018, Joyent, Inc.
 
 SHELL=/usr/bin/ksh93
 
@@ -43,14 +44,13 @@ MAPFILES=       ../mapfile-vers
 # Set common AST build flags (e.g. C99/XPG6, needed to support the math stuff)
 include ../../../Makefile.ast
 
-LIBS =		$(DYNLIB) $(LINTLIB)
+LIBS =		$(DYNLIB)
 
 LDLIBS += \
 		-last \
 		-lmd \
 		-lc
 
-$(LINTLIB) :=	SRCS = $(SRCDIR)/$(LINTSRC)
 
 SRCDIR =	../common
 
@@ -76,6 +76,8 @@ CFLAGS64 += \
 
 CERRWARN	+= -_gcc=-Wno-parentheses
 
+SMOFF += all_func_returns
+
 # This codepath is performance-critical
 sparc_COPTFLAG=-xO5 -_cc=-xprefetch=auto,explicit
 sparcv9_COPTFLAG=-xO5 -_cc=-xprefetch=auto,explicit
@@ -89,13 +91,5 @@ pics/sumlib.o	:= CERRWARN += -erroff=E_CONST_PROMOTED_UNSIGNED_LONG
 .KEEP_STATE:
 
 all: $(LIBS)
-
-#
-# libsum is not lint-clean yet; fake up a target.  (You can use
-# "make lintcheck" to actually run lint; please send all lint fixes
-# upstream (to AT&T) so the next update will pull them into ON.)
-#
-lint:
-	@ print "usr/src/lib/libsum is not lint-clean: skipping"
 
 include ../../Makefile.targ

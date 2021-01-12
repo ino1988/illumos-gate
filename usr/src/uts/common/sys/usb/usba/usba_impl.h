@@ -21,6 +21,9 @@
 /*
  * Copyright 2009 Sun Microsystems, Inc.  All rights reserved.
  * Use is subject to license terms.
+ *
+ * Copyright 2014 Garrett D'Amore <garrett@damore.org>
+ * Copyright 2019, Joyent, Inc.
  */
 
 #ifndef	_SYS_USB_USBA_USBA_IMPL_H
@@ -32,6 +35,7 @@
 #include <sys/usb/usba/hubdi.h>
 #include <sys/usb/usba/usba_private.h>
 #include <sys/usb/usba/usba_types.h>
+#include <sys/usb/usba/bos.h>
 #include <sys/taskq.h>
 #include <sys/disp.h>
 
@@ -237,7 +241,6 @@ typedef  struct usba_hubdi {
 /*
  * usba_get_mfg_prod_sn_str:
  *	Return a string containing mfg, product, serial number strings.
- *	Remove duplicates if some strings are the same.
  */
 char	*usba_get_mfg_prod_sn_str(dev_info_t *, char *, int);
 
@@ -265,15 +268,9 @@ void	usba_devdb_destroy();
 int	usba_hubdi_register(dev_info_t	*, uint_t);
 int	usba_hubdi_unregister(dev_info_t *);
 
-void	usba_whcdi_initialization();
-void	usba_whcdi_destroy();
-
 int	usba_is_root_hub(dev_info_t *dip);
-int	usba_is_wa(dev_info_t *dip);
-int	usba_is_hwa(dev_info_t *dip);
 
 usba_device_t *usba_alloc_usba_device(dev_info_t *);
-void	usba_free_wireless_data(usba_wireless_data_t *wireless_data);
 void	usba_free_usba_device(usba_device_t *usba_device_t);
 void	usba_clear_data_toggle(usba_device_t *usba_device);
 
@@ -304,6 +301,13 @@ void usba_rem_root_hub(dev_info_t *dip);
  * number
  */
 void usba_get_dev_string_descrs(dev_info_t *, usba_device_t *);
+
+/*
+ * Retrieve the binary object store for the device.
+ */
+void usba_get_binary_object_store(dev_info_t *, usba_device_t *);
+void usba_add_binary_object_store_props(dev_info_t *, usba_device_t *);
+void usba_free_binary_object_store(usba_device_t *);
 
 /*
  * Check if we are not in interrupt context and have

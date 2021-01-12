@@ -43,6 +43,12 @@
 #include "isns_obj.h"
 #include "isns_log.h"
 
+#if LIBXML_VERSION >= 20904
+#define	XMLSTRING_CAST (const char *)
+#else
+#define	XMLSTRING_CAST (const xmlChar *)
+#endif
+
 /*
  * external variables
  */
@@ -362,7 +368,7 @@ convert_attr2xml(
 		case 'u':
 			/* 4-bytes non-negative integer */
 			if (xmlStrPrintf(buff, sizeof (buff),
-			    (const unsigned char *)"%u",
+			    XMLSTRING_CAST "%u",
 			    attr->value.ui) > 0) {
 				value = (xmlChar *)&buff;
 			}
@@ -404,7 +410,7 @@ convert_attr2xml(
 			} else {
 				node = child;
 			}
-			/* LINTED E_CASE_FALLTHRU */
+			/* FALLTHROUGH */
 		case 3: /* set content */
 			if (node) {
 				xmlNodeSetContent(node, value);
@@ -645,7 +651,7 @@ locate_xml_node(
 	*context = xmlXPathNewContext(doc);
 
 	if (*context &&
-	    xmlStrPrintf(&expr[2], 30, (const unsigned char *)"%s",
+	    xmlStrPrintf(&expr[2], 30, XMLSTRING_CAST "%s",
 	    xmlTag[i]) != -1) {
 		*result = xmlXPathEvalExpression(expr, *context);
 		if (*result) {

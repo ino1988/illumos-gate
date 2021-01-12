@@ -20,8 +20,11 @@
  */
 /*
  * Copyright (c) 2012 Gary Mills
+ * Copyright 2016 PALO, Richard.
  *
  * Copyright (c) 2010, Oracle and/or its affiliates. All rights reserved.
+ *
+ * Copyright 2018 Joyent, Inc.
  */
 
 #include <sys/types.h>
@@ -173,7 +176,7 @@ xpv_panic_map(int level, pfn_t pfn)
 		*(x86pte32_t *)pteptr = pte;
 	XPV_DISALLOW_PAGETABLE_UPDATES();
 
-	mmu_tlbflush_entry(PWIN_VA(level));
+	mmu_flush_tlb_page((uintptr_t)PWIN_VA(level));
 }
 
 /*
@@ -192,6 +195,7 @@ xpv_va_walk(uintptr_t *vaddr)
 	static pfn_t toplevel_pfn;
 	static uintptr_t lastva;
 
+	pte = 0;
 	/*
 	 * If we do anything other than a simple scan through memory, don't
 	 * trust the mapped page tables.
@@ -912,7 +916,7 @@ init_xen_module()
 		 * Xen marks its text section as writable, so we need to
 		 * look for the name - not just the flag.
 		 */
-		if ((strcmp(&names[shp->sh_name], ".text") != NULL) &&
+		if ((strcmp(&names[shp->sh_name], ".text") != 0) &&
 		    (shp->sh_flags & SHF_WRITE) != 0) {
 			if (shp->sh_addralign > data_align)
 				data_align = shp->sh_addralign;

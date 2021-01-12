@@ -25,6 +25,9 @@
 
 /*
  * Copyright 2013 Nexenta Systems, Inc. All rights reserved.
+ * Copyright 2016 Toomas Soome <tsoome@me.com>
+ * Copyright 2015 Gary Mills
+ * Copyright 2018 OmniOS Community Edition (OmniOSce) Association.
  */
 
 #ifndef _LIBBE_H
@@ -40,6 +43,7 @@ extern "C" {
 
 #define	BE_ATTR_ORIG_BE_NAME	"orig_be_name"
 #define	BE_ATTR_ORIG_BE_POOL	"orig_be_pool"
+#define	BE_ATTR_ORIG_BE_ROOT	"orig_be_root"
 #define	BE_ATTR_SNAP_NAME	"snap_name"
 
 #define	BE_ATTR_NEW_BE_NAME	"new_be_name"
@@ -57,11 +61,13 @@ extern "C" {
 #define	BE_ATTR_MOUNT_FLAGS	"mount_flags"
 #define	BE_ATTR_UNMOUNT_FLAGS	"unmount_flags"
 #define	BE_ATTR_DESTROY_FLAGS	"destroy_flags"
+#define	BE_ATTR_INSTALL_FLAGS	"install_flags"
 #define	BE_ATTR_ROOT_DS		"root_ds"
 #define	BE_ATTR_UUID_STR	"uuid_str"
 
 #define	BE_ATTR_ACTIVE		"active"
 #define	BE_ATTR_ACTIVE_ON_BOOT	"active_boot"
+#define	BE_ATTR_ACTIVE_NEXTBOOT	"active_nextboot"
 #define	BE_ATTR_GLOBAL_ACTIVE	"global_active"
 #define	BE_ATTR_SPACE		"space_used"
 #define	BE_ATTR_DATASET		"dataset"
@@ -76,7 +82,7 @@ extern "C" {
  *       in sync please make sure to add any new error messages at the end
  *       of this enumeration.
  */
-enum {
+typedef enum {
 	BE_SUCCESS = 0,
 	BE_ERR_ACCESS = 4000,	/* permission denied */
 	BE_ERR_ACTIVATE_CURR,	/* Activation of current BE failed */
@@ -99,7 +105,7 @@ enum {
 	BE_ERR_INVALMOUNTPOINT,	/* Unexpected mountpoint */
 	BE_ERR_MOUNT,		/* mount failed */
 	BE_ERR_MOUNTED,		/* already mounted */
-	BE_ERR_NAMETOOLONG, 	/* name > BUFSIZ */
+	BE_ERR_NAMETOOLONG,	/* name > BUFSIZ */
 	BE_ERR_NOENT,		/* Doesn't exist */
 	BE_ERR_POOL_NOENT,	/* No such pool */
 	BE_ERR_NODEV,		/* No such device */
@@ -169,6 +175,7 @@ typedef struct be_snapshot_list {
 
 typedef struct be_node_list {
 	boolean_t be_mounted;		/* is BE currently mounted */
+	boolean_t be_active_next;	/* is this BE active on next boot */
 	boolean_t be_active_on_boot;	/* is this BE active on boot */
 	boolean_t be_active;		/* is this BE active currently */
 	boolean_t be_global_active;	/* is zone's BE associated with */
@@ -203,6 +210,30 @@ typedef struct be_node_list {
 #define	BE_DESTROY_FLAG_SNAPSHOTS	0x00000001
 #define	BE_DESTROY_FLAG_FORCE_UNMOUNT	0x00000002
 
+/* Flags for installboot */
+#define	BE_INSTALLBOOT_FLAG_NULL	0x00000000
+#define	BE_INSTALLBOOT_FLAG_MBR		0x00000001
+#define	BE_INSTALLBOOT_FLAG_FORCE	0x00000002
+#define	BE_INSTALLBOOT_FLAG_VERBOSE	0x00000004
+
+/* Flags for be_list() */
+#define	BE_LIST_DEFAULT			0x00000000
+#define	BE_LIST_SNAPSHOTS		0x00000001
+#define	BE_LIST_ALL			BE_LIST_SNAPSHOTS
+
+/* sort rules for be_sort() */
+typedef enum {
+	BE_SORT_UNSPECIFIED = -1,
+	BE_SORT_DATE = 0,
+	BE_SORT_DATE_REV,
+	BE_SORT_NAME,
+	BE_SORT_NAME_REV,
+	BE_SORT_SPACE,
+	BE_SORT_SPACE_REV
+} be_sort_t;
+
+/* for fastboot arguments */
+#define	BE_ENTRY_DEFAULT	(-1)
 /*
  * BE functions
  */
@@ -224,10 +255,16 @@ int be_rollback(nvlist_t *);
 /*
  * Functions for listing and getting information about existing BEs.
  */
-int be_list(char *, be_node_list_t **);
+int be_list(char *, be_node_list_t **, uint64_t);
 void be_free_list(be_node_list_t *);
 int be_max_avail(char *, uint64_t *);
 char *be_err_to_str(int);
+int be_sort(be_node_list_t **, int);
+int be_get_boot_args(char **, int);
+/*
+ * Installboot support
+ */
+int be_installboot(nvlist_t *);
 
 /*
  * Library functions

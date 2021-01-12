@@ -21,6 +21,9 @@
 /*
  * Copyright 2009 Sun Microsystems, Inc.  All rights reserved.
  * Use is subject to license terms.
+ *
+ * Copyright 2015 Garrett D'Amore <garret@damore.org>
+ * Copyright 2016 Joyent, Inc.
  */
 
 #include <sys/types.h>
@@ -129,11 +132,35 @@ static i_softmac_stat_info_t	i_softmac_ether_si[] = {
 	{ ETHER_STAT_JABBER_ERRORS,	"jabber_errors",	NULL },
 	{ ETHER_STAT_CAP_100T4,		"cap_100T4",		NULL },
 	{ ETHER_STAT_ADV_CAP_100T4,	"adv_cap_100T4",	NULL },
-	{ ETHER_STAT_LP_CAP_100T4,	"lp_cap_100T4", 	NULL },
+	{ ETHER_STAT_LP_CAP_100T4,	"lp_cap_100T4",		NULL },
 
 	{ ETHER_STAT_CAP_10GFDX,	"cap_10gfdx",		NULL },
 	{ ETHER_STAT_ADV_CAP_10GFDX,	"adv_cap_10gfdx",	NULL },
-	{ ETHER_STAT_LP_CAP_1000FDX,	"lp_cap_10gfdx",	NULL }
+	{ ETHER_STAT_LP_CAP_1000FDX,	"lp_cap_10gfdx",	NULL },
+
+	{ ETHER_STAT_CAP_40GFDX,	"cap_40gfdx",		NULL },
+	{ ETHER_STAT_ADV_CAP_40GFDX,	"adv_cap_40gfdx",	NULL },
+	{ ETHER_STAT_LP_CAP_40GFDX,	"lp_cap_40gfdx",	NULL },
+
+	{ ETHER_STAT_CAP_100GFDX,	"cap_100gfdx",		NULL },
+	{ ETHER_STAT_ADV_CAP_100GFDX,	"adv_cap_100gfdx",	NULL },
+	{ ETHER_STAT_LP_CAP_100GFDX,	"lp_cap_100gfdx",	NULL },
+
+	{ ETHER_STAT_CAP_2500FDX,	"cap_2500fdx",		NULL },
+	{ ETHER_STAT_ADV_CAP_2500FDX,	"adv_cap_2500fdx",	NULL },
+	{ ETHER_STAT_LP_CAP_2500FDX,	"lp_cap_2500fdx",	NULL },
+
+	{ ETHER_STAT_CAP_5000FDX,	"cap_5000fdx",		NULL },
+	{ ETHER_STAT_ADV_CAP_5000FDX,	"adv_cap_5000fdx",	NULL },
+	{ ETHER_STAT_LP_CAP_5000FDX,	"lp_cap_5000fdx",	NULL },
+
+	{ ETHER_STAT_CAP_25GFDX,	"cap_25gfdx",		NULL },
+	{ ETHER_STAT_ADV_CAP_25GFDX,	"adv_cap_25gfdx",	NULL },
+	{ ETHER_STAT_LP_CAP_25GFDX,	"lp_cap_25gfdx",	NULL },
+
+	{ ETHER_STAT_CAP_50GFDX,	"cap_50gfdx",		NULL },
+	{ ETHER_STAT_ADV_CAP_50GFDX,	"adv_cap_50gfdx",	NULL },
+	{ ETHER_STAT_LP_CAP_50GFDX,	"lp_cap_50gfdx",	NULL },
 };
 
 #define	SOFTMAC_ETHER_SI_SZ						\

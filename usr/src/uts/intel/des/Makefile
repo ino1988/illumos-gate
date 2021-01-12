@@ -21,6 +21,8 @@
 #
 # uts/intel/des/Makefile
 #
+# Copyright 2014 Garrett D'Amore <garrett@damore.org>
+#
 # Copyright 2008 Sun Microsystems, Inc.  All rights reserved.
 # Use is subject to license terms.
 #
@@ -42,7 +44,6 @@ COM_DIR = $(COMMONBASE)/crypto
 #
 MODULE		= des
 OBJECTS		= $(DES_OBJS:%=$(OBJS_DIR)/%)
-LINTS		= $(DES_OBJS:%.o=$(LINTS_DIR)/%.ln)
 ROOTMODULE	= $(ROOT_CRYPTO_DIR)/$(MODULE)
 ROOTLINK	= $(ROOT_MISC_DIR)/$(MODULE)
 TARGET_32	= ../../kernel/crypto/$(MODULE)
@@ -54,14 +55,10 @@ LINK_TARGET	= $(TARGET_$(CLASS))
 #
 include $(UTSBASE)/intel/Makefile.intel
 
-#	set signing mode
-ELFSIGN_MOD	= $(ELFSIGN_CRYPTO)
-
 #
 #	Define targets
 #
 ALL_TARGET	= $(BINARY)
-LINT_TARGET	= $(MODULE).lint
 INSTALL_TARGET	= $(BINARY) $(ROOTMODULE) $(ROOTLINK)
 
 #
@@ -72,16 +69,13 @@ LDFLAGS		+= -dy -Nmisc/kcf
 CPPFLAGS	+= -I$(COM_DIR)
 
 #
-# For now, disable these lint checks; maintainers should endeavor
-# to investigate and remove these for maximum lint coverage.
+# For now, disable these warnings; maintainers should endeavor
+# to investigate and remove these for maximum coverage.
 # Please do not carry these forward to new Makefiles.
 #
-LINTTAGS	+= -erroff=E_BAD_PTR_CAST_ALIGN
-LINTTAGS	+= -erroff=E_SUPPRESSION_DIRECTIVE_UNUSED
-LINTTAGS	+= -erroff=E_ASSIGN_NARROW_CONV
 
 CERRWARN	+= -_gcc=-Wno-parentheses
-CERRWARN	+= -_gcc=-Wno-uninitialized
+CERRWARN	+= $(CNOWARN_UNINIT)
 
 #
 #	Default build targets.
@@ -95,12 +89,6 @@ all:		$(ALL_DEPS)
 clean:		$(CLEAN_DEPS)
 
 clobber:	$(CLOBBER_DEPS)
-
-lint:		$(LINT_DEPS)
-
-modlintlib:	$(MODLINTLIB_DEPS)
-
-clean.lint:	$(CLEAN_LINT_DEPS)
 
 install:	$(INSTALL_DEPS)
 

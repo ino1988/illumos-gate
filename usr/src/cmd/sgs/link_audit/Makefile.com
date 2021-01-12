@@ -21,14 +21,13 @@
 
 #
 # Copyright (c) 1996, 2010, Oracle and/or its affiliates. All rights reserved.
+# Copyright 2019 OmniOS Community Edition (OmniOSce) Association.
 #
 
 include		../../../../lib/Makefile.lib
 include		../../Makefile.com
 
 NO_ASM_WARN=	-erroff=E_ASM_DISABLES_OPTIMIZATION
-
-SGSPROTO=	../../proto/$(MACH)
 
 TRUSSLIB=	truss.so.1
 TRUSSSRC=	truss.c
@@ -51,7 +50,7 @@ ONLIBS=		$(SYMBINDREP) $(PERFLIB) $(BINDLIB)
 
 USRSCRIPTS=	sotruss whocalls
 CCSLIBS=	$(TRUSSLIB) $(WHOLIB)
- 
+
 PICDIR=		pics
 OBJDIR=		objs
 
@@ -63,7 +62,7 @@ BINDPICS=	$(BINDSRC:%.c=$(PICDIR)/%.o) $(PICDIR)/env.o
 
 $(WHOPICS):=	SEMANTICCHK=
 
-LDLIBS +=	$(CONVLIBDIR) $(CONV_LIB)
+LDLIBS +=	$(CONVLIBDIR) -lconv
 
 $(TRUSSLIB):=	PICS = $(TRUSSPICS)
 $(PERFLIB):=	PICS = $(PERFPICS)
@@ -89,16 +88,14 @@ $(WHOLIB):=	MAPFILES = ../common/mapfile-vers-who
 $(SYMBINDREP):=	MAPFILES = ../common/mapfile-vers-symbindrep
 $(BINDLIB):=	MAPFILES = ../common/mapfile-vers-bindings
 
+$(ONPROGS):=	LDFLAGS += $(LDLIBS.cmd) $(BDIRECT)
+
 $(ROOTCCSLIB) :=	DIRMODE =	755
 
 CPPFLAGS +=	-D_REENTRANT
-LDFLAGS +=	$(CC_USE_PROTO)
 DYNFLAGS +=	$(VERSREF)
 
-LINTFLAGS +=	-uaxs $(LDLIBS)
-LINTFLAGS64 +=	-uaxs $(LDLIBS)
-
-CLEANFILES +=	$(LINTOUT) $(OBJDIR)/* $(PICDIR)/*
+CLEANFILES +=	$(OBJDIR)/* $(PICDIR)/*
 CLOBBERFILES +=	$(ONSCRIPTS) $(ONPROGS) $(ONLIBS) $(CCSLIBS) $(USRSCRIPTS)
 
 ROOTONLDLIB=		$(ROOT)/opt/SUNWonld/lib

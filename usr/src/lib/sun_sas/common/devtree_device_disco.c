@@ -22,6 +22,8 @@
 /*
  * Copyright 2009 Sun Microsystems, Inc.  All rights reserved.
  * Use is subject to license terms.
+ * Copyright 2015 Nexenta Systems, Inc.  All rights reserved.
+ * Copyright 2019 Joyent, Inc.
  */
 
 #include	<sun_sas.h>
@@ -83,8 +85,8 @@ get_minor(char *devpath, char *minor)
 static void
 free_attached_port(struct sun_sas_port *port_ptr)
 {
-	struct sun_sas_port 	*tgt_port, *last_tgt_port;
-	struct ScsiEntryList	*scsi_info = NULL, *last_scsi_info = NULL;
+	struct sun_sas_port *tgt_port, *last_tgt_port;
+	struct ScsiEntryList *scsi_info = NULL, *last_scsi_info = NULL;
 
 	tgt_port = port_ptr->first_attached_port;
 	while (tgt_port != NULL) {
@@ -227,6 +229,7 @@ get_attached_devices_info(di_node_t node, struct sun_sas_port *port_ptr)
 	char			    *devpath, link[MAXNAMELEN];
 	char			    fullpath[MAXPATHLEN+1];
 	char			    minorname[MAXNAMELEN+1];
+	SMHBA_PORTATTRIBUTES	    *portattrs;
 	struct ScsiEntryList	    *mapping_ptr;
 	HBA_WWN			    SASAddress, AttachedSASAddress;
 	struct sun_sas_port	    *disco_port_ptr;
@@ -487,11 +490,11 @@ get_attached_devices_info(di_node_t node, struct sun_sas_port *port_ptr)
 		}
 
 		/* SMP device was handled already */
-		if (disco_port_ptr->port_attributes.OSDeviceName[0] == '\0') {
-		/* indentation change due to ctysle check on sizeof. */
-		size = sizeof (disco_port_ptr->port_attributes.OSDeviceName);
-			(void) strlcpy(disco_port_ptr->port_attributes.
-			    OSDeviceName, fullpath, size);
+		portattrs = &disco_port_ptr->port_attributes;
+		if (portattrs->OSDeviceName[0] == '\0') {
+			size = sizeof (portattrs->OSDeviceName);
+			(void) strlcpy(portattrs->OSDeviceName,
+			    fullpath, size);
 		}
 
 		/* add new discovered port into the list */
@@ -587,19 +590,22 @@ get_attached_devices_info(di_node_t node, struct sun_sas_port *port_ptr)
 			guidStr = devid_to_guid(devid);
 			if (guidStr != NULL) {
 				(void) strlcpy(mapping_ptr->entry.LUID.buffer,
-				    guidStr, 256);
+				    guidStr,
+				    sizeof (mapping_ptr->entry.LUID.buffer));
 				devid_free_guid(guidStr);
 			} else {
 				/*
 				 * Note:
 				 * if logical unit associated page 83 id
 				 * descriptor is not avaialble for the device
-				 * devid_to_guid returns NULl with errno 0.
+				 * devid_to_guid returns NULL with errno 0.
 				 */
 				log(LOG_DEBUG, ROUTINE,
 				    "failed to get devid guid on (%s) : %s",
 				    devpath, strerror(errno));
 			}
+
+			devid_free(devid);
 		} else {
 			/*
 			 * device may not support proper page 83 id descriptor.
@@ -647,6 +653,7 @@ get_attached_paths_info(di_path_t path, struct sun_sas_port *port_ptr)
 	char			    *pathdevpath = NULL;
 	char			    fullpath[MAXPATHLEN+1];
 	char			    minorname[MAXNAMELEN+1];
+	SMHBA_PORTATTRIBUTES	    *portattrs;
 	struct ScsiEntryList	    *mapping_ptr;
 	HBA_WWN			    SASAddress, AttachedSASAddress;
 	struct sun_sas_port	    *disco_port_ptr;
@@ -674,7 +681,7 @@ get_attached_paths_info(di_path_t path, struct sun_sas_port *port_ptr)
 		port_state = HBA_PORTSTATE_OFFLINE;
 	}
 
-	if (clientnode = di_path_client_node(path)) {
+	if ((clientnode = di_path_client_node(path)) != DI_NODE_NIL) {
 		if (di_retired(clientnode)) {
 			log(LOG_DEBUG, ROUTINE,
 			    "client node of path (%s) is retired. Skipping.",
@@ -714,7 +721,7 @@ get_attached_paths_info(di_path_t path, struct sun_sas_port *port_ptr)
 				break;
 			}
 		}
-		if (charptr != '\0') {
+		if (*charptr != '\0') {
 			tmpAddr = htonll(strtoll(charptr, NULL, 16));
 			(void) memcpy(&SASAddress.wwn[0], &tmpAddr, 8);
 		} else {
@@ -900,12 +907,12 @@ get_attached_paths_info(di_path_t path, struct sun_sas_port *port_ptr)
 			    SASPort->PortProtocol = HBA_SASPORTPROTOCOL_SSP;
 		}
 
-		if (disco_port_ptr->port_attributes.OSDeviceName[0] == '\0') {
-		/* indentation change due to ctysle check on sizeof. */
-		size = sizeof (disco_port_ptr->port_attributes.OSDeviceName);
+		portattrs = &disco_port_ptr->port_attributes;
+		if (portattrs->OSDeviceName[0] == '\0') {
+			size = sizeof (portattrs->OSDeviceName);
 			if (pathdevpath != NULL) {
-				(void) strlcpy(disco_port_ptr->port_attributes.
-				    OSDeviceName, pathdevpath, size);
+				(void) strlcpy(portattrs->OSDeviceName,
+				    pathdevpath, size);
 			}
 		}
 
@@ -1005,7 +1012,7 @@ get_attached_paths_info(di_path_t path, struct sun_sas_port *port_ptr)
 				 * Note:
 				 * if logical unit associated page 83 id
 				 * descriptor is not avaialble for the device
-				 * devid_to_guid returns NULl with errno 0.
+				 * devid_to_guid returns NULL with errno 0.
 				 */
 				log(LOG_DEBUG, ROUTINE,
 				    "failed to get devid guid on (%s)",
@@ -1015,6 +1022,8 @@ get_attached_paths_info(di_path_t path, struct sun_sas_port *port_ptr)
 				    "(missing device path)",
 				    strerror(errno));
 			}
+
+			devid_free(devid);
 		} else {
 			/*
 			 * device may not support proper page 83 id descriptor.

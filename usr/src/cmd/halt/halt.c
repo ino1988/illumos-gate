@@ -24,6 +24,9 @@
  */
 /*
  * Copyright (c) 2013, Joyent, Inc. All rights reserved.
+ * Copyright (c) 2015 by Delphix. All rights reserved.
+ * Copyright 2016 Toomas Soome <tsoome@me.com>
+ * Copyright 2018 OmniOS Community Edition (OmniOSce) Association.
  */
 
 /*	Copyright (c) 1984, 1986, 1987, 1988, 1989 AT&T	*/
@@ -83,8 +86,8 @@
 #include <spawn.h>
 
 #include <libzfs.h>
-#if defined(__i386)
-#include <libgrubmgmt.h>
+#if defined(__x86)
+#include <libbe.h>
 #endif
 
 #if !defined(TEXT_DOMAIN)
@@ -93,7 +96,7 @@
 
 #if defined(__sparc)
 #define	CUR_ELFDATA	ELFDATA2MSB
-#elif defined(__i386)
+#elif defined(__x86)
 #define	CUR_ELFDATA	ELFDATA2LSB
 #endif
 
@@ -134,11 +137,11 @@ static ctid_t startdct = -1;
  */
 static char	fastboot_mounted[MAXPATHLEN];
 
-#if defined(__i386)
-static grub_boot_args_t	fbarg;
-static grub_boot_args_t	*fbarg_used;
-static int fbarg_entnum = GRUB_ENTRY_DEFAULT;
-#endif	/* __i386 */
+#if defined(__x86)
+static char *fbarg;
+static char *fbarg_used;
+static int fbarg_entnum = BE_ENTRY_DEFAULT;
+#endif	/* __x86 */
 
 static int validate_ufs_disk(char *, char *);
 static int validate_zfs_pool(char *, char *);
@@ -642,6 +645,19 @@ validate_disk(char *arg, char *mountpoint)
 	if (rc != 0)
 		return (rc);
 
+	/*
+	 * Check for the usual case: 64-bit kernel
+	 */
+	(void) snprintf(kernpath, MAXPATHLEN,
+	    "%s/platform/i86pc/kernel/amd64/unix", mountpoint);
+	if (stat64(kernpath, &statbuf) == 0)
+		return (0);
+
+	/*
+	 * We no longer build 32-bit kernel but in a case we are trying to boot
+	 * some ancient filesystem with 32-bit only kernel we should be able to
+	 * proceed too
+	 */
 	(void) snprintf(kernpath, MAXPATHLEN, "%s/platform/i86pc/kernel/unix",
 	    mountpoint);
 
@@ -719,7 +735,7 @@ validate_zfs_err_out:
  */
 static int
 get_zfs_bootfs_arg(const char *arg, const char ** fpth, int *is_zfs,
-		char *bootfs_arg)
+    char *bootfs_arg)
 {
 	zfs_handle_t *zhp = NULL;
 	zpool_handle_t *zpoolp = NULL;
@@ -727,8 +743,8 @@ get_zfs_bootfs_arg(const char *arg, const char ** fpth, int *is_zfs,
 	struct mnttab mnt;
 	char *poolname = NULL;
 	char physpath[MAXPATHLEN];
-	char mntsp[ZPOOL_MAXNAMELEN];
-	char bootfs[ZPOOL_MAXNAMELEN];
+	char mntsp[ZFS_MAX_DATASET_NAME_LEN];
+	char bootfs[ZFS_MAX_DATASET_NAME_LEN];
 	int rc = 0;
 	size_t mntlen = 0;
 	size_t msz;
@@ -1044,49 +1060,47 @@ parse_fastboot_args(char *bootargs_buf, size_t buf_size,
 	if (*is_dryrun)
 		return (rc);
 
-#if defined(__i386)
-	/* Read boot args from GRUB menu */
+#if defined(__x86)
+	/* Read boot args from Boot Environment */
 	if ((bootargs_buf[0] == 0 || isdigit(bootargs_buf[0])) &&
 	    bename == NULL) {
 		/*
-		 * If no boot arguments are given, or a GRUB menu entry
-		 * number is provided, process the GRUB menu.
+		 * If no boot arguments are given, or a BE entry
+		 * number is provided, process the boot arguments from BE.
 		 */
 		int entnum;
 		if (bootargs_buf[0] == 0)
-			entnum = GRUB_ENTRY_DEFAULT;
+			entnum = BE_ENTRY_DEFAULT;
 		else {
 			errno = 0;
 			entnum = strtoul(bootargs_buf, NULL, 10);
 			rc = errno;
 		}
 
-		if (rc == 0 && (rc = grub_get_boot_args(&fbarg, NULL,
-		    entnum)) == 0) {
-			if (strlcpy(bootargs_buf, fbarg.gba_bootargs,
+		if (rc == 0 && (rc = be_get_boot_args(&fbarg, entnum)) == 0) {
+			if (strlcpy(bootargs_buf, fbarg,
 			    buf_size) >= buf_size) {
-				grub_cleanup_boot_args(&fbarg);
+				free(fbarg);
 				bcopy(bootargs_saved, bootargs_buf, buf_size);
 				rc = E2BIG;
 			}
 		}
-		/* Failed to read GRUB menu, fall back to normal reboot */
+		/* Failed to read FB args, fall back to normal reboot */
 		if (rc != 0) {
 			(void) fprintf(stderr,
-			    gettext("%s: Failed to process GRUB menu "
-			    "entry for fast reboot.\n\t%s\n"),
-			    cmdname, grub_strerror(rc));
+			    gettext("%s: Failed to process boot "
+			    "arguments from Boot Environment.\n"), cmdname);
 			(void) fprintf(stderr,
 			    gettext("%s: Falling back to regular reboot.\n"),
 			    cmdname);
 			return (-1);
 		}
 		/* No need to process further */
-		fbarg_used = &fbarg;
+		fbarg_used = fbarg;
 		fbarg_entnum = entnum;
 		return (0);
 	}
-#endif	/* __i386 */
+#endif	/* __x86 */
 
 	/* Zero out the boot argument buffer as we will reconstruct it */
 	bzero(bootargs_buf, buf_size);
@@ -1149,7 +1163,7 @@ parse_fastboot_args(char *bootargs_buf, size_t buf_size,
 	} else if (mplen != 0) {
 		/*
 		 * No unix argument, but mountpoint is not empty, use
-		 * /platform/i86pc/$ISADIR/kernel/unix as default.
+		 * /platform/i86pc/kernel/$ISADIR/unix as default.
 		 */
 		char isa[20];
 
@@ -1210,8 +1224,13 @@ parse_fastboot_args(char *bootargs_buf, size_t buf_size,
 	}
 
 	if (is_zfs && (buflen != 0 || bename != NULL))	{
-		/* LINTED E_SEC_SPRINTF_UNBOUNDED_COPY */
-		off += sprintf(bootargs_buf + off, "%s ", bootfs_arg);
+		/* do not copy existing zfs boot args */
+		if (strstr(&bootargs_saved[rootlen], "-B") == NULL ||
+		    strstr(&bootargs_saved[rootlen], "zfs-bootfs=") == NULL ||
+		    (strstr(&bootargs_saved[rootlen], "bootpath=") == NULL &&
+		    strstr(&bootargs_saved[rootlen], "diskdevid=") == NULL))
+			/* LINTED E_SEC_SPRINTF_UNBOUNDED_COPY */
+			off += sprintf(bootargs_buf + off, "%s ", bootfs_arg);
 	}
 
 	/*
@@ -1257,7 +1276,7 @@ main(int argc, char *argv[])
 	int qflag = 0, needlog = 1, nosync = 0;
 	int fast_reboot = 0;
 	int prom_reboot = 0;
-	uintptr_t mdep = NULL;
+	uintptr_t mdep = 0;
 	int cmd, fcn, c, aval, r;
 	const char *usage;
 	const char *optstring;
@@ -1288,7 +1307,7 @@ main(int argc, char *argv[])
 		fcn = AD_POWEROFF;
 	} else if (strcmp(cmdname, "reboot") == 0) {
 		(void) audit_reboot_setup();
-#if defined(__i386)
+#if defined(__x86)
 		optstring = "dlnqpfe:";
 		usage = gettext("usage: %s [ -dlnq(p|fe:) ] [ boot args ]\n");
 #else
@@ -1335,7 +1354,7 @@ main(int argc, char *argv[])
 		case 'p':
 			prom_reboot = 1;
 			break;
-#if defined(__i386)
+#if defined(__x86)
 		case 'e':
 			bename = optarg;
 			break;
@@ -1496,14 +1515,14 @@ main(int argc, char *argv[])
 		need_check_zones = halt_zones();
 	}
 
-#if defined(__i386)
+#if defined(__x86)
 	/* set new default entry in the GRUB entry */
-	if (fbarg_entnum != GRUB_ENTRY_DEFAULT) {
+	if (fbarg_entnum != BE_ENTRY_DEFAULT) {
 		char buf[32];
 		(void) snprintf(buf, sizeof (buf), "default=%u", fbarg_entnum);
 		(void) halt_exec(BOOTADM_PROG, "set-menu", buf, NULL);
 	}
-#endif	/* __i386 */
+#endif	/* __x86 */
 
 	/* if we're dumping, do the archive update here and don't defer it */
 	if (cmd == A_DUMP && zoneid == GLOBAL_ZONEID && !nosync)
@@ -1577,18 +1596,10 @@ main(int argc, char *argv[])
 	 * handle a SIGTERM and clean up properly.
 	 */
 	if (cmd != A_DUMP) {
-		int	start, end, delta;
-
-		(void) kill(-1, SIGTERM);
-		start = time(NULL);
-
 		if (zoneid == GLOBAL_ZONEID && !nosync)
 			do_archives_update(fast_reboot);
-
-		end = time(NULL);
-		delta = end - start;
-		if (delta < 5)
-			(void) sleep(5 - delta);
+		(void) kill(-1, SIGTERM);
+		(void) sleep(5);
 	}
 
 	(void) signal(SIGINT, SIG_IGN);
@@ -1610,7 +1621,7 @@ main(int argc, char *argv[])
 	}
 
 	if (cmd == A_DUMP && nosync != 0)
-		(void) uadmin(A_DUMP, AD_NOSYNC, NULL);
+		(void) uadmin(A_DUMP, AD_NOSYNC, 0);
 
 	if (fast_reboot)
 		fcn = AD_FASTREBOOT;
@@ -1657,10 +1668,10 @@ fail:
 
 		} else if (strlen(fastboot_mounted) != 0) {
 			(void) umount(fastboot_mounted);
-#if defined(__i386)
-		} else if (fbarg_used != NULL) {
-			grub_cleanup_boot_args(fbarg_used);
-#endif	/* __i386 */
+#if defined(__x86)
+		} else {
+			free(fbarg_used);
+#endif	/* __x86 */
 		}
 	}
 

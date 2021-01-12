@@ -22,13 +22,7 @@
 # Copyright 2008 Sun Microsystems, Inc.  All rights reserved.
 # Use is subject to license terms.
 #
-# uts/intel/e1000g/Makefile
-#
-#	This makefile drives the production of the iprb
-#	network driver kernel module.
-#
-#	intel architecture dependent
-#
+# Copyright (c) 2018, Joyent, Inc.
 
 #
 #	Paths to the base of the uts directory trees
@@ -41,7 +35,6 @@ UTSBASE = ../..
 MODULE		= e1000g
 OBJECTS		= $(E1000G_OBJS:%=$(OBJS_DIR)/%)
 OBJECTS		+= $(E1000API_OBJS:%=$(OBJS_DIR)/%)
-LINTS		= $(E1000G_OBJS:%.o=$(LINTS_DIR)/%.ln)
 ROOTMODULE	= $(ROOT_DRV_DIR)/$(MODULE)
 CONF_SRCDIR	= $(UTSBASE)/common/io/e1000g
 
@@ -56,32 +49,31 @@ CFLAGS += -D_KERNEL -Di386   -DNEWSTAT -DNOMUT -DRCVWORKAROUND \
 	  -DTANAX_WORKAROUND -I$(UTSBASE)/common/io/e1000g \
 	  -I$(UTSBASE)/common/io/e1000api
 
-LINTFLAGS += \
-	-I$(UTSBASE)/common/io/e1000g \
-	-I$(UTSBASE)/common/io/e1000api
-
 CFLAGS_CPP_COMMENTS = -xCC
 
 CFLAGS += $(CFLAGS_CPP_COMMENTS)
 
-CERRWARN	+= -_gcc=-Wno-uninitialized
+CERRWARN	+= $(CNOWARN_UNINIT)
 CERRWARN	+= -_gcc=-Wno-parentheses
 CERRWARN	+= -_gcc=-Wno-switch
 CERRWARN	+= -_gcc=-Wno-unused-label
 CERRWARN	+= -_gcc=-Wno-unused-variable
 CERRWARN	+= -_cc=-erroff=E_STATEMENT_NOT_REACHED
 
+SMOFF += all_func_returns,indenting,shift_to_zero
+
+
 #
 #	Define targets
 #
 ALL_TARGET	= $(BINARY) $(CONFMOD)
-LINT_TARGET	= $(MODULE).lint
 INSTALL_TARGET	= $(BINARY) $(ROOTMODULE) $(ROOT_CONFFILE)
 
 #
 # Driver depends on MAC
 #
 LDFLAGS		+= -dy -N misc/mac
+MAPFILES	+= ddi mac
 
 #
 #	Default build targets.
@@ -97,15 +89,11 @@ clean:		$(CLEAN_DEPS)
 clobber:	$(CLOBBER_DEPS)
 
 
-lint:		$(LINT_DEPS)
-
-modlintlib:	$(MODLINTLIB_DEPS)
-
-clean.lint:	$(CLEAN_LINT_DEPS)
 
 install:	$(INSTALL_DEPS)
 
 #
 #	Include common targets.
 #
+include $(UTSBASE)/Makefile.mapfile
 include $(UTSBASE)/intel/Makefile.targ

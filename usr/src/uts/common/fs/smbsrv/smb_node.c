@@ -20,7 +20,7 @@
  */
 /*
  * Copyright (c) 2007, 2010, Oracle and/or its affiliates. All rights reserved.
- * Copyright 2012 Nexenta Systems, Inc.  All rights reserved.
+ * Copyright 2019 Nexenta Systems, Inc.  All rights reserved.
  */
 /*
  * SMB Node State Machine
@@ -88,16 +88,17 @@
  *    course the state of the node should be tested/updated under the
  *    protection of the mutex).
  */
-#include <smbsrv/smb_kproto.h>
+#include <smbsrv/smb2_kproto.h>
 #include <smbsrv/smb_fsops.h>
 #include <smbsrv/smb_kstat.h>
+#include <sys/ddi.h>
+#include <sys/extdirent.h>
 #include <sys/pathname.h>
 #include <sys/sdt.h>
 #include <sys/nbmlock.h>
 #include <fs/fs_reparse.h>
 
 uint32_t smb_is_executable(char *);
-static void smb_node_delete_on_close(smb_node_t *);
 static void smb_node_create_audit_buf(smb_node_t *, int);
 static void smb_node_destroy_audit_buf(smb_node_t *);
 static void smb_node_audit(smb_node_t *);
@@ -107,18 +108,6 @@ static int smb_node_constructor(void *, void *, int);
 static void smb_node_destructor(void *, void *);
 static smb_llist_t *smb_node_get_hash(fsid_t *, smb_attr_t *, uint32_t *);
 
-static void smb_node_init_cached_data(smb_node_t *);
-static void smb_node_clear_cached_data(smb_node_t *);
-
-static void smb_node_init_cached_timestamps(smb_node_t *, smb_attr_t *);
-static void smb_node_clear_cached_timestamps(smb_node_t *);
-static void smb_node_get_cached_timestamps(smb_node_t *, smb_attr_t *);
-static void smb_node_set_cached_timestamps(smb_node_t *, smb_attr_t *);
-
-static void smb_node_init_cached_allocsz(smb_node_t *, smb_attr_t *);
-static void smb_node_clear_cached_allocsz(smb_node_t *);
-static void smb_node_get_cached_allocsz(smb_node_t *, smb_attr_t *);
-static void smb_node_set_cached_allocsz(smb_node_t *, smb_attr_t *);
 static void smb_node_init_reparse(smb_node_t *, smb_attr_t *);
 static void smb_node_init_system(smb_node_t *);
 
@@ -131,8 +120,8 @@ static void smb_node_init_system(smb_node_t *);
 #define	SMB_ALLOCSZ(sz)	(((sz) + DEV_BSIZE-1) & ~(DEV_BSIZE-1))
 
 static kmem_cache_t	*smb_node_cache = NULL;
-static boolean_t	smb_node_initialized = B_FALSE;
 static smb_llist_t	smb_node_hash_table[SMBND_HASH_MASK+1];
+static smb_node_t	*smb_root_node;
 
 /*
  * smb_node_init
@@ -142,13 +131,18 @@ static smb_llist_t	smb_node_hash_table[SMBND_HASH_MASK+1];
  * This function is not multi-thread safe. The caller must make sure only one
  * thread makes the call.
  */
-int
+void
 smb_node_init(void)
 {
-	int	i;
+	smb_attr_t	attr;
+	smb_llist_t	*node_hdr;
+	smb_node_t	*node;
+	uint32_t	hashkey;
+	int		i;
 
-	if (smb_node_initialized)
-		return (0);
+	if (smb_node_cache != NULL)
+		return;
+
 	smb_node_cache = kmem_cache_create(SMBSRV_KSTAT_NODE_CACHE,
 	    sizeof (smb_node_t), 8, smb_node_constructor, smb_node_destructor,
 	    NULL, NULL, NULL, 0);
@@ -157,8 +151,21 @@ smb_node_init(void)
 		smb_llist_constructor(&smb_node_hash_table[i],
 		    sizeof (smb_node_t), offsetof(smb_node_t, n_lnd));
 	}
-	smb_node_initialized = B_TRUE;
-	return (0);
+
+	/*
+	 * The node cache is shared by all zones, so the smb_root_node
+	 * must represent the real (global zone) rootdir.
+	 * Note intentional use of kcred here.
+	 */
+	attr.sa_mask = SMB_AT_ALL;
+	VERIFY0(smb_vop_getattr(rootdir, NULL, &attr, 0, kcred));
+	node_hdr = smb_node_get_hash(&rootdir->v_vfsp->vfs_fsid, &attr,
+	    &hashkey);
+	node = smb_node_alloc("/", rootdir, node_hdr, hashkey);
+	smb_llist_enter(node_hdr, RW_WRITER);
+	smb_llist_insert_head(node_hdr, node);
+	smb_llist_exit(node_hdr);
+	smb_root_node = node;	/* smb_node_release in smb_node_fini */
 }
 
 /*
@@ -172,11 +179,17 @@ smb_node_fini(void)
 {
 	int	i;
 
-	if (!smb_node_initialized)
+	if (smb_root_node != NULL) {
+		smb_node_release(smb_root_node);
+		smb_root_node = NULL;
+	}
+
+	if (smb_node_cache == NULL)
 		return;
 
 #ifdef DEBUG
 	for (i = 0; i <= SMBND_HASH_MASK; i++) {
+		smb_llist_t	*bucket;
 		smb_node_t	*node;
 
 		/*
@@ -192,8 +205,13 @@ smb_node_fini(void)
 		 * smb_node_lookup() and smb_node_release(). You must track that
 		 * down.
 		 */
-		node = smb_llist_head(&smb_node_hash_table[i]);
-		ASSERT(node == NULL);
+		bucket = &smb_node_hash_table[i];
+		node = smb_llist_head(bucket);
+		while (node != NULL) {
+			cmn_err(CE_NOTE, "leaked node: 0x%p %s",
+			    (void *)node, node->od_name);
+			node = smb_llist_next(bucket, node);
+		}
 	}
 #endif
 
@@ -202,7 +220,6 @@ smb_node_fini(void)
 	}
 	kmem_cache_destroy(smb_node_cache);
 	smb_node_cache = NULL;
-	smb_node_initialized = B_FALSE;
 }
 
 /*
@@ -260,7 +277,7 @@ smb_node_lookup(
 	 * that's why kcred is used not the user's cred
 	 */
 	attr.sa_mask = SMB_AT_ALL;
-	error = smb_vop_getattr(vp, unnamed_vp, &attr, 0, kcred);
+	error = smb_vop_getattr(vp, unnamed_vp, &attr, 0, zone_kcred());
 	if (error)
 		return (NULL);
 
@@ -470,7 +487,9 @@ smb_node_release(smb_node_t *node)
 			/*
 			 * Check if the file was deleted
 			 */
-			smb_node_delete_on_close(node);
+			if (node->flags & NODE_FLAGS_DELETE_ON_CLOSE) {
+				smb_node_delete_on_close(node);
+			}
 
 			if (node->n_dnode) {
 				ASSERT(node->n_dnode->n_magic ==
@@ -495,7 +514,7 @@ smb_node_release(smb_node_t *node)
 	mutex_exit(&node->n_mutex);
 }
 
-static void
+void
 smb_node_delete_on_close(smb_node_t *node)
 {
 	smb_node_t	*d_snode;
@@ -503,19 +522,23 @@ smb_node_delete_on_close(smb_node_t *node)
 	uint32_t	flags = 0;
 
 	d_snode = node->n_dnode;
-	if (node->flags & NODE_FLAGS_DELETE_ON_CLOSE) {
-		node->flags &= ~NODE_FLAGS_DELETE_ON_CLOSE;
-		flags = node->n_delete_on_close_flags;
-		ASSERT(node->od_name != NULL);
 
-		if (smb_node_is_dir(node))
-			rc = smb_fsop_rmdir(0, node->delete_on_close_cred,
-			    d_snode, node->od_name, flags);
-		else
-			rc = smb_fsop_remove(0, node->delete_on_close_cred,
-			    d_snode, node->od_name, flags);
-		crfree(node->delete_on_close_cred);
-	}
+	ASSERT((node->flags & NODE_FLAGS_DELETE_ON_CLOSE) != 0);
+
+	node->flags &= ~NODE_FLAGS_DELETE_ON_CLOSE;
+	node->flags |= NODE_FLAGS_DELETE_COMMITTED;
+	flags = node->n_delete_on_close_flags;
+	ASSERT(node->od_name != NULL);
+
+	if (smb_node_is_dir(node))
+		rc = smb_fsop_rmdir(0, node->delete_on_close_cred,
+		    d_snode, node->od_name, flags);
+	else
+		rc = smb_fsop_remove(0, node->delete_on_close_cred,
+		    d_snode, node->od_name, flags);
+	crfree(node->delete_on_close_cred);
+	node->delete_on_close_cred = NULL;
+
 	if (rc != 0)
 		cmn_err(CE_WARN, "File %s could not be removed, rc=%d\n",
 		    node->od_name, rc);
@@ -557,33 +580,78 @@ smb_node_rename(
 	}
 }
 
+/*
+ * Find/create an SMB node for the root of this zone and store it
+ * in *svrootp.  Also create nodes leading to this directory.
+ */
 int
-smb_node_root_init(vnode_t *vp, smb_server_t *sv, smb_node_t **root)
+smb_node_root_init(smb_server_t *sv, smb_node_t **svrootp)
 {
-	smb_attr_t	attr;
+	zone_t		*zone = curzone;
 	int		error;
-	uint32_t	hashkey;
-	smb_llist_t	*node_hdr;
-	smb_node_t	*node;
 
-	attr.sa_mask = SMB_AT_ALL;
-	error = smb_vop_getattr(vp, NULL, &attr, 0, kcred);
-	if (error) {
-		VN_RELE(vp);
-		return (error);
+	ASSERT(zone->zone_id == sv->sv_zid);
+	if (smb_root_node == NULL)
+		return (ENOENT);
+
+	/*
+	 * We're getting smb nodes below the zone root here,
+	 * so need to use kcred, not zone_kcred().
+	 */
+	error = smb_pathname(NULL, zone->zone_rootpath, 0,
+	    smb_root_node, smb_root_node, NULL, svrootp, kcred, NULL);
+
+	return (error);
+}
+
+/*
+ * Helper function for smb_node_set_delete_on_close(). Assumes node is a dir.
+ * Return 0 if this is an empty dir. Otherwise return a NT_STATUS code.
+ * Unfortunately, to find out if a directory is empty, we have to read it
+ * and check for anything other than "." or ".." in the readdir buf.
+ */
+static uint32_t
+smb_rmdir_possible(smb_node_t *n)
+{
+	ASSERT(n->vp->v_type == VDIR);
+	char *buf;
+	char *bufptr;
+	struct dirent64	*dp;
+	uint32_t status = NT_STATUS_SUCCESS;
+	int bsize = SMB_ODIR_BUFSIZE;
+	int eof = 0;
+
+	buf = kmem_alloc(SMB_ODIR_BUFSIZE, KM_SLEEP);
+
+	/* Flags zero: no edirent, no ABE wanted here */
+	if (smb_vop_readdir(n->vp, 0, buf, &bsize, &eof, 0, zone_kcred())) {
+		status = NT_STATUS_INTERNAL_ERROR;
+		goto out;
 	}
 
-	node_hdr = smb_node_get_hash(&vp->v_vfsp->vfs_fsid, &attr, &hashkey);
+	bufptr = buf;
+	while (bsize > 0) {
+		/* LINTED pointer alignment */
+		dp = (struct dirent64 *)bufptr;
 
-	node = smb_node_alloc(ROOTVOL, vp, node_hdr, hashkey);
+		bufptr += dp->d_reclen;
+		bsize  -= dp->d_reclen;
+		if (bsize < 0) {
+			/* partial record */
+			status = NT_STATUS_DIRECTORY_NOT_EMPTY;
+			break;
+		}
 
-	sv->si_root_smb_node = node;
-	smb_node_audit(node);
-	smb_llist_enter(node_hdr, RW_WRITER);
-	smb_llist_insert_head(node_hdr, node);
-	smb_llist_exit(node_hdr);
-	*root = node;
-	return (0);
+		if (strcmp(dp->d_name, ".") != 0 &&
+		    strcmp(dp->d_name, "..") != 0) {
+			status = NT_STATUS_DIRECTORY_NOT_EMPTY;
+			break;
+		}
+	}
+
+out:
+	kmem_free(buf, SMB_ODIR_BUFSIZE);
+	return (status);
 }
 
 /*
@@ -597,35 +665,52 @@ smb_node_root_init(vnode_t *vp, smb_server_t *sv, smb_node_t **root)
  * whichever the first file handle is closed will trigger the node to be
  * marked as delete-on-close. The credentials of that ofile will be used
  * as the delete-on-close credentials of the node.
+ *
+ * Note that "read-only" tests have already happened before this call.
  */
-int
+uint32_t
 smb_node_set_delete_on_close(smb_node_t *node, cred_t *cr, uint32_t flags)
 {
-	int rc = 0;
-	smb_attr_t attr;
+	uint32_t status;
 
-	if (node->readonly_creator)
-		return (-1);
+	/*
+	 * If the directory is not empty we should fail setting del-on-close
+	 * with STATUS_DIRECTORY_NOT_EMPTY. see MS's
+	 * "File System Behavior Overview" doc section 4.3.2
+	 */
+	if (smb_node_is_dir(node)) {
+		status = smb_rmdir_possible(node);
+		if (status != 0) {
+			return (status);
+		}
+	}
 
-	bzero(&attr, sizeof (smb_attr_t));
-	attr.sa_mask = SMB_AT_DOSATTR;
-	rc = smb_fsop_getattr(NULL, kcred, node, &attr);
-	if ((rc != 0) || (attr.sa_dosattr & FILE_ATTRIBUTE_READONLY)) {
-		return (-1);
+	/* Dataset roots can't be deleted, so don't set DOC */
+	if ((node->flags & NODE_FLAGS_VFSROOT) != 0) {
+		return (NT_STATUS_CANNOT_DELETE);
 	}
 
 	mutex_enter(&node->n_mutex);
 	if (node->flags & NODE_FLAGS_DELETE_ON_CLOSE) {
-		rc = -1;
-	} else {
-		crhold(cr);
-		node->delete_on_close_cred = cr;
-		node->n_delete_on_close_flags = flags;
-		node->flags |= NODE_FLAGS_DELETE_ON_CLOSE;
-		rc = 0;
+		/* It was already marked.  We're done. */
+		mutex_exit(&node->n_mutex);
+		return (NT_STATUS_SUCCESS);
 	}
+
+	crhold(cr);
+	node->delete_on_close_cred = cr;
+	node->n_delete_on_close_flags = flags;
+	node->flags |= NODE_FLAGS_DELETE_ON_CLOSE;
 	mutex_exit(&node->n_mutex);
-	return (rc);
+
+	/*
+	 * Tell any change notify calls to close their handles
+	 * and get out of the way.  FILE_ACTION_DELETE_PENDING
+	 * is a special, internal-only action for this purpose.
+	 */
+	smb_node_notify_change(node, FILE_ACTION_DELETE_PENDING, NULL);
+
+	return (NT_STATUS_SUCCESS);
 }
 
 void
@@ -671,6 +756,10 @@ smb_node_open_check(smb_node_t *node, uint32_t desired_access,
 			break;
 		default:
 			ASSERT(status == NT_STATUS_SHARING_VIOLATION);
+			DTRACE_PROBE3(conflict3,
+			    smb_ofile_t, of,
+			    uint32_t, desired_access,
+			    uint32_t, share_access);
 			smb_llist_exit(&node->n_ofile_list);
 			return (status);
 		}
@@ -703,19 +792,13 @@ smb_node_rename_check(smb_node_t *node)
 			break;
 		default:
 			ASSERT(status == NT_STATUS_SHARING_VIOLATION);
+			DTRACE_PROBE1(conflict1, smb_ofile_t, of);
 			smb_llist_exit(&node->n_ofile_list);
 			return (status);
 		}
 	}
 	smb_llist_exit(&node->n_ofile_list);
-
-	/*
-	 * system-wide share check
-	 */
-	if (nbl_share_conflict(node->vp, NBL_RENAME, NULL))
-		return (NT_STATUS_SHARING_VIOLATION);
-	else
-		return (NT_STATUS_SUCCESS);
+	return (NT_STATUS_SUCCESS);
 }
 
 uint32_t
@@ -747,19 +830,13 @@ smb_node_delete_check(smb_node_t *node)
 			break;
 		default:
 			ASSERT(status == NT_STATUS_SHARING_VIOLATION);
+			DTRACE_PROBE1(conflict1, smb_ofile_t, of);
 			smb_llist_exit(&node->n_ofile_list);
 			return (status);
 		}
 	}
 	smb_llist_exit(&node->n_ofile_list);
-
-	/*
-	 * system-wide share check
-	 */
-	if (nbl_share_conflict(node->vp, NBL_REMOVE, NULL))
-		return (NT_STATUS_SHARING_VIOLATION);
-	else
-		return (NT_STATUS_SUCCESS);
+	return (NT_STATUS_SUCCESS);
 }
 
 /*
@@ -790,73 +867,86 @@ smb_node_share_check(smb_node_t *node)
  */
 
 void
-smb_node_fcn_subscribe(smb_node_t *node, smb_request_t *sr)
+smb_node_fcn_subscribe(smb_node_t *node)
 {
-	smb_node_fcn_t		*fcn = &node->n_fcn;
 
-	mutex_enter(&fcn->fcn_mutex);
-	if (fcn->fcn_count == 0)
-		smb_fem_fcn_install(node);
-	fcn->fcn_count++;
-	list_insert_tail(&fcn->fcn_watchers, sr);
-	mutex_exit(&fcn->fcn_mutex);
+	mutex_enter(&node->n_mutex);
+	if (node->n_fcn_count == 0)
+		(void) smb_fem_fcn_install(node);
+	node->n_fcn_count++;
+	mutex_exit(&node->n_mutex);
 }
 
 void
-smb_node_fcn_unsubscribe(smb_node_t *node, smb_request_t *sr)
+smb_node_fcn_unsubscribe(smb_node_t *node)
 {
-	smb_node_fcn_t		*fcn = &node->n_fcn;
 
-	mutex_enter(&fcn->fcn_mutex);
-	list_remove(&fcn->fcn_watchers, sr);
-	fcn->fcn_count--;
-	if (fcn->fcn_count == 0)
+	mutex_enter(&node->n_mutex);
+	node->n_fcn_count--;
+	if (node->n_fcn_count == 0)
 		smb_fem_fcn_uninstall(node);
-	mutex_exit(&fcn->fcn_mutex);
+	mutex_exit(&node->n_mutex);
 }
 
 void
 smb_node_notify_change(smb_node_t *node, uint_t action, const char *name)
 {
+	smb_ofile_t	*of;
+
 	SMB_NODE_VALID(node);
 
-	smb_notify_event(node, action, name);
+	smb_llist_enter(&node->n_ofile_list, RW_READER);
+	of = smb_llist_head(&node->n_ofile_list);
+	while (of) {
+		/*
+		 * We'd rather deliver events only to ofiles that have
+		 * subscribed.  There's no explicit synchronization with
+		 * where this flag is set, but other actions cause this
+		 * value to reach visibility soon enough for events to
+		 * start arriving by the time we need them to start.
+		 * Once nc_subscribed is set, it stays set for the
+		 * life of the ofile.
+		 */
+		if (of->f_notify.nc_subscribed)
+			smb_notify_ofile(of, action, name);
+		of = smb_llist_next(&node->n_ofile_list, of);
+	}
+	smb_llist_exit(&node->n_ofile_list);
 
 	/*
-	 * These two events come as a pair:
-	 *   FILE_ACTION_RENAMED_OLD_NAME
-	 *   FILE_ACTION_RENAMED_NEW_NAME
-	 * Only do the parent notify for "new".
+	 * After changes that add or remove a name,
+	 * we know the directory attributes changed,
+	 * and we can tell the immediate parent.
 	 */
-	if (action == FILE_ACTION_RENAMED_OLD_NAME)
-		return;
-
-	smb_node_notify_parents(node);
-}
-
-/*
- * smb_node_notify_parents
- *
- * Iterate up the directory tree notifying any parent
- * directories that are being watched for changes in
- * their sub directories.
- * Stop at the root node, which has a NULL parent node.
- */
-void
-smb_node_notify_parents(smb_node_t *dnode)
-{
-	smb_node_t *pnode;	/* parent */
-
-	SMB_NODE_VALID(dnode);
-	pnode = dnode->n_dnode;
-
-	while (pnode != NULL) {
-		SMB_NODE_VALID(pnode);
-		smb_notify_event(pnode, 0, dnode->od_name);
-		/* cd .. */
-		dnode = pnode;
-		pnode = dnode->n_dnode;
+	switch (action) {
+	case FILE_ACTION_ADDED:
+	case FILE_ACTION_REMOVED:
+	case FILE_ACTION_RENAMED_NEW_NAME:
+		/*
+		 * Note: FILE_ACTION_RENAMED_OLD_NAME is intentionally
+		 * omitted, because it's always followed by another
+		 * event with FILE_ACTION_RENAMED_NEW_NAME posted to
+		 * the same directory, and we only need/want one.
+		 */
+		if (node->n_dnode != NULL) {
+			smb_node_notify_change(node->n_dnode,
+			    FILE_ACTION_MODIFIED, node->od_name);
+		}
+		break;
 	}
+
+	/*
+	 * If we wanted to support recursive notify events
+	 * (where a notify call on some directory receives
+	 * events from all objects below that directory),
+	 * we might deliver _SUBDIR_CHANGED to all our
+	 * parents, grandparents etc, here.  However, we
+	 * don't currently subscribe to changes on all the
+	 * child (and grandchild) objects that would be
+	 * needed to make that work. It's prohibitively
+	 * expensive to do that, and support for recursive
+	 * notify is optional anyway, so don't bother.
+	 */
 }
 
 /*
@@ -935,27 +1025,18 @@ void
 smb_node_inc_open_ofiles(smb_node_t *node)
 {
 	SMB_NODE_VALID(node);
-
-	mutex_enter(&node->n_mutex);
-	node->n_open_count++;
-	mutex_exit(&node->n_mutex);
-
-	smb_node_init_cached_data(node);
+	atomic_inc_32(&node->n_open_count);
 }
 
 /*
  * smb_node_dec_open_ofiles
+ * returns new value
  */
-void
+uint32_t
 smb_node_dec_open_ofiles(smb_node_t *node)
 {
 	SMB_NODE_VALID(node);
-
-	mutex_enter(&node->n_mutex);
-	node->n_open_count--;
-	mutex_exit(&node->n_mutex);
-
-	smb_node_clear_cached_data(node);
+	return (atomic_dec_32_nv(&node->n_open_count));
 }
 
 /*
@@ -965,9 +1046,7 @@ void
 smb_node_inc_opening_count(smb_node_t *node)
 {
 	SMB_NODE_VALID(node);
-	mutex_enter(&node->n_mutex);
-	node->n_opening_count++;
-	mutex_exit(&node->n_mutex);
+	atomic_inc_32(&node->n_opening_count);
 }
 
 /*
@@ -977,10 +1056,7 @@ void
 smb_node_dec_opening_count(smb_node_t *node)
 {
 	SMB_NODE_VALID(node);
-	mutex_enter(&node->n_mutex);
-	ASSERT(node->n_opening_count > 0);
-	node->n_opening_count--;
-	mutex_exit(&node->n_mutex);
+	atomic_dec_32(&node->n_opening_count);
 }
 
 /*
@@ -1006,7 +1082,7 @@ smb_node_getmntpath(smb_node_t *node, char *buf, uint32_t buflen)
 	VN_HOLD(vp);
 
 	/* NULL is passed in as we want to start at "/" */
-	err = vnodetopath(NULL, root_vp, buf, buflen, kcred);
+	err = vnodetopath(NULL, root_vp, buf, buflen, zone_kcred());
 
 	VN_RELE(vp);
 	VN_RELE(root_vp);
@@ -1055,6 +1131,7 @@ smb_node_getpath(smb_node_t *node, vnode_t *rootvp, char *buf, uint32_t buflen)
 	int rc;
 	vnode_t *vp;
 	smb_node_t *unode, *dnode;
+	cred_t *kcr = zone_kcred();
 
 	unode = (SMB_IS_STREAM(node)) ? node->n_unode : node;
 	dnode = (smb_node_is_dir(unode)) ? unode : unode->n_dnode;
@@ -1064,10 +1141,10 @@ smb_node_getpath(smb_node_t *node, vnode_t *rootvp, char *buf, uint32_t buflen)
 	VN_HOLD(vp);
 	if (rootvp) {
 		VN_HOLD(rootvp);
-		rc = vnodetopath(rootvp, vp, buf, buflen, kcred);
+		rc = vnodetopath(rootvp, vp, buf, buflen, kcr);
 		VN_RELE(rootvp);
 	} else {
-		rc = vnodetopath(NULL, vp, buf, buflen, kcred);
+		rc = vnodetopath(NULL, vp, buf, buflen, kcr);
 	}
 	VN_RELE(vp);
 
@@ -1112,17 +1189,13 @@ smb_node_alloc(
 	node->n_refcnt = 1;
 	node->n_hash_bucket = bucket;
 	node->n_hashkey = hashkey;
-	node->readonly_creator = NULL;
-	node->waiting_event = 0;
 	node->n_open_count = 0;
+	node->n_allocsz = 0;
 	node->n_dnode = NULL;
 	node->n_unode = NULL;
 	node->delete_on_close_cred = NULL;
 	node->n_delete_on_close_flags = 0;
 	node->n_oplock.ol_fem = B_FALSE;
-	node->n_oplock.ol_xthread = NULL;
-	node->n_oplock.ol_count = 0;
-	node->n_oplock.ol_break = SMB_OPLOCK_NO_BREAK;
 
 	(void) strlcpy(node->od_name, od_name, sizeof (node->od_name));
 	if (strcmp(od_name, XATTR_DIR) == 0)
@@ -1151,11 +1224,10 @@ smb_node_free(smb_node_t *node)
 	node->n_magic = 0;
 	VERIFY(!list_link_active(&node->n_lnd));
 	VERIFY(node->n_lock_list.ll_count == 0);
+	VERIFY(node->n_wlock_list.ll_count == 0);
 	VERIFY(node->n_ofile_list.ll_count == 0);
-	VERIFY(node->n_oplock.ol_count == 0);
-	VERIFY(node->n_oplock.ol_xthread == NULL);
 	VERIFY(node->n_oplock.ol_fem == B_FALSE);
-	VERIFY(mutex_owner(&node->n_mutex) == NULL);
+	VERIFY(MUTEX_NOT_HELD(&node->n_mutex));
 	VERIFY(!RW_LOCK_HELD(&node->n_lock));
 	VN_RELE(node->vp);
 	kmem_cache_free(smb_node_cache, node);
@@ -1174,16 +1246,13 @@ smb_node_constructor(void *buf, void *un, int kmflags)
 	bzero(node, sizeof (smb_node_t));
 
 	smb_llist_constructor(&node->n_ofile_list, sizeof (smb_ofile_t),
-	    offsetof(smb_ofile_t, f_nnd));
+	    offsetof(smb_ofile_t, f_node_lnd));
 	smb_llist_constructor(&node->n_lock_list, sizeof (smb_lock_t),
 	    offsetof(smb_lock_t, l_lnd));
-	mutex_init(&node->n_fcn.fcn_mutex, NULL, MUTEX_DEFAULT, NULL);
-	list_create(&node->n_fcn.fcn_watchers, sizeof (smb_request_t),
-	    offsetof(smb_request_t, sr_ncr.nc_lnd));
-	cv_init(&node->n_oplock.ol_cv, NULL, CV_DEFAULT, NULL);
+	smb_llist_constructor(&node->n_wlock_list, sizeof (smb_lock_t),
+	    offsetof(smb_lock_t, l_lnd));
 	mutex_init(&node->n_oplock.ol_mutex, NULL, MUTEX_DEFAULT, NULL);
-	list_create(&node->n_oplock.ol_grants, sizeof (smb_oplock_grant_t),
-	    offsetof(smb_oplock_grant_t, og_lnd));
+	cv_init(&node->n_oplock.WaitingOpenCV, NULL, CV_DEFAULT, NULL);
 	rw_init(&node->n_lock, NULL, RW_DEFAULT, NULL);
 	mutex_init(&node->n_mutex, NULL, MUTEX_DEFAULT, NULL);
 	smb_node_create_audit_buf(node, kmflags);
@@ -1203,13 +1272,11 @@ smb_node_destructor(void *buf, void *un)
 	smb_node_destroy_audit_buf(node);
 	mutex_destroy(&node->n_mutex);
 	rw_destroy(&node->n_lock);
-	cv_destroy(&node->n_oplock.ol_cv);
+	cv_destroy(&node->n_oplock.WaitingOpenCV);
 	mutex_destroy(&node->n_oplock.ol_mutex);
-	list_destroy(&node->n_fcn.fcn_watchers);
-	mutex_destroy(&node->n_fcn.fcn_mutex);
 	smb_llist_destructor(&node->n_lock_list);
+	smb_llist_destructor(&node->n_wlock_list);
 	smb_llist_destructor(&node->n_ofile_list);
-	list_destroy(&node->n_oplock.ol_grants);
 }
 
 /*
@@ -1248,6 +1315,7 @@ smb_node_destroy_audit_buf(smb_node_t *node)
 static void
 smb_node_audit(smb_node_t *node)
 {
+#ifdef	_KERNEL
 	smb_audit_buf_node_t	*abn;
 	smb_audit_record_node_t	*anr;
 
@@ -1261,6 +1329,9 @@ smb_node_audit(smb_node_t *node)
 		anr->anr_depth = getpcstack(anr->anr_stack,
 		    SMB_AUDIT_STACK_DEPTH);
 	}
+#else	/* _KERNEL */
+	_NOTE(ARGUNUSED(node))
+#endif	/* _KERNEL */
 }
 
 static smb_llist_t *
@@ -1331,9 +1402,9 @@ smb_node_is_system(smb_node_t *node)
  * smb_node_file_is_readonly
  *
  * Checks if the file (which node represents) is marked readonly
- * in the filesystem. No account is taken of any pending readonly
- * in the node, which must be handled by the callers.
- * (See SMB_OFILE_IS_READONLY and SMB_PATHFILE_IS_READONLY)
+ * in the filesystem.  Note that there may be handles open with
+ * modify rights, and those continue to allow access even after
+ * the DOS read-only flag has been set in the file system.
  */
 boolean_t
 smb_node_file_is_readonly(smb_node_t *node)
@@ -1341,11 +1412,11 @@ smb_node_file_is_readonly(smb_node_t *node)
 	smb_attr_t attr;
 
 	if (node == NULL)
-		return (B_FALSE);
+		return (B_FALSE);	/* pipes */
 
 	bzero(&attr, sizeof (smb_attr_t));
 	attr.sa_mask = SMB_AT_DOSATTR;
-	(void) smb_fsop_getattr(NULL, kcred, node, &attr);
+	(void) smb_fsop_getattr(NULL, zone_kcred(), node, &attr);
 	return ((attr.sa_dosattr & FILE_ATTRIBUTE_READONLY) != 0);
 }
 
@@ -1356,114 +1427,192 @@ smb_node_file_is_readonly(smb_node_t *node)
  * The ofile may be NULL, for example when a client request
  * specifies the file by pathname.
  *
+ * Returns: errno
+ *
  * Timestamps
- * When attributes are set on an ofile, any pending timestamps
- * from a write request on the ofile are implicitly set to "now".
- * For compatibility with windows the following timestamps are
- * also implicitly set to now:
- * - if any attribute is being explicitly set, set ctime to now
- * - if file size is being explicitly set, set atime & ctime to now
  *
- * Any timestamp that is being explicitly set, or has previously
- * been explicitly set on the ofile, is excluded from implicit
- * (now) setting.
+ * Windows and Unix have different models for timestamp updates.
+ * [MS-FSA 2.1.5.14 Server Requests Setting of File Information]
  *
- * Updates the node's cached timestamp values.
- * Updates the ofile's explicit times flag.
+ * An open "handle" in Windows can control whether and when
+ * any timestamp updates happen for that handle.  For example,
+ * timestamps set via some handle are no longer updated by I/O
+ * operations on that handle.  In Unix we don't really have any
+ * way to avoid the timestamp updates that the file system does.
+ * Therefore, we need to make some compromises, and simulate the
+ * more important parts of the Windows file system semantics.
  *
- * File allocation size
+ * For example, when an SMB client sets file times, set those
+ * times in the file system (so the change will be visible to
+ * other clients, at least until they change again) but we also
+ * make those times "sticky" in our open handle, and reapply
+ * those times when the handle is closed.  That reapply on close
+ * simulates the Windows behavior where the timestamp updates
+ * would be discontinued after they were set.  These "sticky"
+ * attributes are returned in any query on the handle where
+ * they are stored.
+ *
+ * Other than the above, the file system layer takes care of the
+ * normal time stamp updates, such as updating the mtime after a
+ * write, and ctime after an attribute change.
+ *
+ * Dos Attributes are stored persistently, but with a twist:
+ * In Windows, when you set the "read-only" bit on some file,
+ * existing writable handles to that file continue to have
+ * write access.  (because access check happens at open)
+ * If we were to set the read-only bit directly, we would
+ * cause errors in subsequent writes on any of our open
+ * (and writable) file handles.  So here too, we have to
+ * simulate the Windows behavior.  We keep the read-only
+ * bit "pending" in the smb_node (so it will be visible in
+ * any new opens of the file) and apply it on close.
+ *
+ * File allocation size is also simulated, and not persistent.
  * When the file allocation size is set it is first rounded up
  * to block size. If the file size is smaller than the allocation
  * size the file is truncated by setting the filesize to allocsz.
- * If there are open ofiles, the allocsz is cached on the node.
- *
- * Updates the node's cached allocsz value.
- *
- * Returns: errno
  */
 int
 smb_node_setattr(smb_request_t *sr, smb_node_t *node,
     cred_t *cr, smb_ofile_t *of, smb_attr_t *attr)
 {
 	int rc;
-	uint32_t pending_times = 0;
-	uint32_t explicit_times = 0;
-	timestruc_t now;
+	uint_t times_mask;
 	smb_attr_t tmp_attr;
 
-	ASSERT(attr);
 	SMB_NODE_VALID(node);
 
 	/* set attributes specified in attr */
-	if (attr->sa_mask != 0) {
-		/* if allocation size is < file size, truncate the file */
-		if (attr->sa_mask & SMB_AT_ALLOCSZ) {
-			attr->sa_allocsz = SMB_ALLOCSZ(attr->sa_allocsz);
+	if (attr->sa_mask == 0)
+		return (0);  /* nothing to do (caller bug?) */
 
-			bzero(&tmp_attr, sizeof (smb_attr_t));
-			tmp_attr.sa_mask = SMB_AT_SIZE;
-			(void) smb_fsop_getattr(NULL, kcred, node, &tmp_attr);
+	/*
+	 * Allocation size and EOF position interact.
+	 * We don't persistently store the allocation size
+	 * but make it look like we do while there are opens.
+	 * Note: We update the caller's attr in the cases
+	 * where they're setting only one of allocsz|size.
+	 */
+	switch (attr->sa_mask & (SMB_AT_ALLOCSZ | SMB_AT_SIZE)) {
 
-			if (tmp_attr.sa_vattr.va_size > attr->sa_allocsz) {
-				attr->sa_vattr.va_size = attr->sa_allocsz;
-				attr->sa_mask |= SMB_AT_SIZE;
-			}
-		}
-
-		rc = smb_fsop_setattr(sr, cr, node, attr);
+	case SMB_AT_ALLOCSZ:
+		/*
+		 * Setting the allocation size but not EOF position.
+		 * Get the current EOF in tmp_attr and (if necessary)
+		 * truncate to the (rounded up) allocation size.
+		 * Using kcred here because if we don't have access,
+		 * we want to fail at setattr below and not here.
+		 */
+		bzero(&tmp_attr, sizeof (smb_attr_t));
+		tmp_attr.sa_mask = SMB_AT_SIZE;
+		rc = smb_fsop_getattr(NULL, zone_kcred(), node, &tmp_attr);
 		if (rc != 0)
 			return (rc);
-
-		smb_node_set_cached_allocsz(node, attr);
-		smb_node_set_cached_timestamps(node, attr);
-		if (of) {
-			smb_ofile_set_explicit_times(of,
-			    (attr->sa_mask & SMB_AT_TIMES));
+		attr->sa_allocsz = SMB_ALLOCSZ(attr->sa_allocsz);
+		if (tmp_attr.sa_vattr.va_size > attr->sa_allocsz) {
+			/* truncate the file to allocsz */
+			attr->sa_vattr.va_size = attr->sa_allocsz;
+			attr->sa_mask |= SMB_AT_SIZE;
 		}
+		break;
+
+	case SMB_AT_SIZE:
+		/*
+		 * Setting the EOF position but not allocation size.
+		 * If the new EOF position would be greater than
+		 * the allocation size, increase the latter.
+		 */
+		if (node->n_allocsz < attr->sa_vattr.va_size) {
+			attr->sa_mask |= SMB_AT_ALLOCSZ;
+			attr->sa_allocsz =
+			    SMB_ALLOCSZ(attr->sa_vattr.va_size);
+		}
+		break;
+
+	case SMB_AT_ALLOCSZ | SMB_AT_SIZE:
+		/*
+		 * Setting both.  Increase alloc size if needed.
+		 */
+		if (attr->sa_allocsz < attr->sa_vattr.va_size)
+			attr->sa_allocsz =
+			    SMB_ALLOCSZ(attr->sa_vattr.va_size);
+		break;
+
+	default:
+		break;
 	}
 
 	/*
-	 * Determine which timestamps to implicitly set to "now".
-	 * Don't overwrite timestamps already explicitly set.
+	 * If we have an open file, and we set the size,
+	 * then set the "written" flag so that at close,
+	 * we can force an mtime update.
 	 */
-	bzero(&tmp_attr, sizeof (smb_attr_t));
-	gethrestime(&now);
-	tmp_attr.sa_vattr.va_atime = now;
-	tmp_attr.sa_vattr.va_mtime = now;
-	tmp_attr.sa_vattr.va_ctime = now;
+	if (of != NULL && (attr->sa_mask & SMB_AT_SIZE) != 0)
+		of->f_written = B_TRUE;
 
-	/* pending write timestamps */
-	if (of) {
-		if (smb_ofile_write_time_pending(of)) {
-			pending_times |=
-			    (SMB_AT_MTIME | SMB_AT_CTIME | SMB_AT_ATIME);
+	/*
+	 * When operating on an open file, some settable attributes
+	 * become "sticky" in the open file object until close.
+	 * (see above re. timestamps)
+	 */
+	times_mask = attr->sa_mask & SMB_AT_TIMES;
+	if (of != NULL && times_mask != 0) {
+		smb_attr_t *pa;
+
+		SMB_OFILE_VALID(of);
+		mutex_enter(&of->f_mutex);
+		pa = &of->f_pending_attr;
+
+		pa->sa_mask |= times_mask;
+
+		if (times_mask & SMB_AT_ATIME)
+			pa->sa_vattr.va_atime =
+			    attr->sa_vattr.va_atime;
+		if (times_mask & SMB_AT_MTIME)
+			pa->sa_vattr.va_mtime =
+			    attr->sa_vattr.va_mtime;
+		if (times_mask & SMB_AT_CTIME)
+			pa->sa_vattr.va_ctime =
+			    attr->sa_vattr.va_ctime;
+		if (times_mask & SMB_AT_CRTIME)
+			pa->sa_crtime =
+			    attr->sa_crtime;
+
+		mutex_exit(&of->f_mutex);
+
+		/*
+		 * The f_pending_attr times are reapplied in
+		 * smb_ofile_close().
+		 */
+
+		/*
+		 * If this change is coming directly from a client
+		 * (sr != NULL) and it's a persistent handle, save
+		 * the "sticky times" in the handle.
+		 */
+		if (sr != NULL && of->dh_persist) {
+			smb2_dh_update_times(sr, of, attr);
 		}
-		explicit_times |= (smb_ofile_explicit_times(of));
-	}
-	explicit_times |= (attr->sa_mask & SMB_AT_TIMES);
-	pending_times &= ~explicit_times;
-
-	if (pending_times) {
-		tmp_attr.sa_mask = pending_times;
-		(void) smb_fsop_setattr(NULL, kcred, node, &tmp_attr);
 	}
 
-	/* additional timestamps to update in cache */
-	if (attr->sa_mask)
-		tmp_attr.sa_mask |= SMB_AT_CTIME;
-	if (attr->sa_mask & (SMB_AT_SIZE | SMB_AT_ALLOCSZ))
-		tmp_attr.sa_mask |= SMB_AT_MTIME;
-	tmp_attr.sa_mask &= ~explicit_times;
+	if ((attr->sa_mask & SMB_AT_ALLOCSZ) != 0) {
+		mutex_enter(&node->n_mutex);
+		/*
+		 * Simulate n_allocsz persistence only while
+		 * there are opens.  See smb_node_getattr
+		 */
+		if (node->n_open_count != 0)
+			node->n_allocsz = attr->sa_allocsz;
+		mutex_exit(&node->n_mutex);
+	}
 
-	if (tmp_attr.sa_mask)
-		smb_node_set_cached_timestamps(node, &tmp_attr);
+	rc = smb_fsop_setattr(sr, cr, node, attr);
+	if (rc != 0)
+		return (rc);
 
-	if ((tmp_attr.sa_mask & SMB_AT_MTIME) ||
-	    (explicit_times & SMB_AT_MTIME)) {
-		if (node->n_dnode != NULL) {
-			smb_node_notify_change(node->n_dnode,
-			    FILE_ACTION_MODIFIED, node->od_name);
-		}
+	if (node->n_dnode != NULL) {
+		smb_node_notify_change(node->n_dnode,
+		    FILE_ACTION_MODIFIED, node->od_name);
 	}
 
 	return (0);
@@ -1475,278 +1624,113 @@ smb_node_setattr(smb_request_t *sr, smb_node_t *node,
  * Get attributes from the file system and apply any smb-specific
  * overrides for size, dos attributes and timestamps
  *
- * node->readonly_creator reflects whether a readonly set is pending
- * from a readonly create. The readonly attribute should be visible to
- * all clients even though the readonly creator fid is immune to the
- * readonly bit until close.
+ * When node->n_pending_readonly is set on a node, pretend that
+ * we've already set this node readonly at the filesystem level.
+ * We can't actually do that until all writable handles are closed
+ * or those writable handles would suddenly loose their access.
  *
  * Returns: errno
  */
 int
-smb_node_getattr(smb_request_t *sr, smb_node_t *node, smb_attr_t *attr)
+smb_node_getattr(smb_request_t *sr, smb_node_t *node, cred_t *cr,
+    smb_ofile_t *of, smb_attr_t *attr)
 {
 	int rc;
+	uint_t want_mask, pend_mask;
+	boolean_t isdir;
 
 	SMB_NODE_VALID(node);
 
-	bzero(attr, sizeof (smb_attr_t));
-	attr->sa_mask = SMB_AT_ALL;
-	rc = smb_fsop_getattr(sr, kcred, node, attr);
+	/* Deal with some interdependencies */
+	if (attr->sa_mask & SMB_AT_ALLOCSZ)
+		attr->sa_mask |= SMB_AT_SIZE;
+	if (attr->sa_mask & SMB_AT_DOSATTR)
+		attr->sa_mask |= SMB_AT_TYPE;
+
+	rc = smb_fsop_getattr(sr, cr, node, attr);
 	if (rc != 0)
 		return (rc);
 
+	isdir = smb_node_is_dir(node);
+
 	mutex_enter(&node->n_mutex);
 
-	if (smb_node_is_dir(node)) {
-		attr->sa_vattr.va_size = 0;
-		attr->sa_allocsz = 0;
-		attr->sa_vattr.va_nlink = 1;
+	if (attr->sa_mask & SMB_AT_DOSATTR) {
+		if (attr->sa_dosattr == 0) {
+			attr->sa_dosattr = (isdir) ?
+			    FILE_ATTRIBUTE_DIRECTORY:
+			    FILE_ATTRIBUTE_NORMAL;
+		}
 	}
 
-	if (node->readonly_creator)
-		attr->sa_dosattr |= FILE_ATTRIBUTE_READONLY;
-	if (attr->sa_dosattr == 0)
-		attr->sa_dosattr = FILE_ATTRIBUTE_NORMAL;
-
+	/*
+	 * Also fix-up sa_allocsz, which is not persistent.
+	 * When there are no open files, allocsz is faked.
+	 * While there are open files, we pretend we have a
+	 * persistent allocation size in n_allocsz, and
+	 * keep that up-to-date here, increasing it when
+	 * we see the file size grow past it.
+	 */
+	if (attr->sa_mask & SMB_AT_ALLOCSZ) {
+		if (isdir) {
+			attr->sa_allocsz = 0;
+		} else if (node->n_open_count == 0) {
+			attr->sa_allocsz =
+			    SMB_ALLOCSZ(attr->sa_vattr.va_size);
+		} else {
+			if (node->n_allocsz < attr->sa_vattr.va_size)
+				node->n_allocsz =
+				    SMB_ALLOCSZ(attr->sa_vattr.va_size);
+			attr->sa_allocsz = node->n_allocsz;
+		}
+	}
 
 	mutex_exit(&node->n_mutex);
 
-	smb_node_get_cached_allocsz(node, attr);
-	smb_node_get_cached_timestamps(node, attr);
+	if (isdir) {
+		attr->sa_vattr.va_size = 0;
+		attr->sa_vattr.va_nlink = 1;
+	}
+
+	/*
+	 * getattr with an ofile gets any "pending" times that
+	 * might have been previously set via this ofile.
+	 * This is what makes these times "sticky".
+	 */
+	want_mask = attr->sa_mask & SMB_AT_TIMES;
+	if (of != NULL && want_mask != 0) {
+		smb_attr_t *pa;
+
+		SMB_OFILE_VALID(of);
+		mutex_enter(&of->f_mutex);
+		pa = &of->f_pending_attr;
+
+		pend_mask = pa->sa_mask;
+
+		if (want_mask & pend_mask & SMB_AT_ATIME)
+			attr->sa_vattr.va_atime =
+			    pa->sa_vattr.va_atime;
+		if (want_mask & pend_mask & SMB_AT_MTIME)
+			attr->sa_vattr.va_mtime =
+			    pa->sa_vattr.va_mtime;
+		if (want_mask & pend_mask & SMB_AT_CTIME)
+			attr->sa_vattr.va_ctime =
+			    pa->sa_vattr.va_ctime;
+		if (want_mask & pend_mask & SMB_AT_CRTIME)
+			attr->sa_crtime =
+			    pa->sa_crtime;
+
+		mutex_exit(&of->f_mutex);
+	}
+
 
 	return (0);
 }
 
-/*
- * smb_node_init_cached_data
- */
-static void
-smb_node_init_cached_data(smb_node_t *node)
-{
-	smb_attr_t attr;
 
-	bzero(&attr, sizeof (smb_attr_t));
-	attr.sa_mask = SMB_AT_ALL;
-	(void) smb_fsop_getattr(NULL, kcred, node, &attr);
-
-	smb_node_init_cached_allocsz(node, &attr);
-	smb_node_init_cached_timestamps(node, &attr);
-}
-
-/*
- * smb_node_clear_cached_data
- */
-static void
-smb_node_clear_cached_data(smb_node_t *node)
-{
-	smb_node_clear_cached_allocsz(node);
-	smb_node_clear_cached_timestamps(node);
-}
-
-/*
- * File allocation size (allocsz) caching
- *
- * When there are open ofiles on the node, the file allocsz is cached.
- * The cached value (n_allocsz) is initialized when the first ofile is
- * opened and cleared when the last is closed. Allocsz calculated from
- * the filesize (rounded up to block size).
- * When the allocation size is queried, if the cached allocsz is less
- * than the filesize, it is recalculated from the filesize.
- */
-
-/*
- * smb_node_init_cached_allocsz
- *
- * If there are open ofiles, cache the allocsz in the node.
- * Calculate the allocsz from the filesizes.
- * block size).
- */
-static void
-smb_node_init_cached_allocsz(smb_node_t *node, smb_attr_t *attr)
-{
-	mutex_enter(&node->n_mutex);
-	if (node->n_open_count == 1)
-		node->n_allocsz = SMB_ALLOCSZ(attr->sa_vattr.va_size);
-	mutex_exit(&node->n_mutex);
-}
-
-/*
- * smb_node_clear_cached_allocsz
- */
-static void
-smb_node_clear_cached_allocsz(smb_node_t *node)
-{
-	mutex_enter(&node->n_mutex);
-	if (node->n_open_count == 0)
-		node->n_allocsz = 0;
-	mutex_exit(&node->n_mutex);
-}
-
-/*
- * smb_node_get_cached_allocsz
- *
- * If there is no cached allocsz (no open files), calculate
- * allocsz from the filesize.
- * If the allocsz is cached but is smaller than the filesize
- * recalculate the cached allocsz from the filesize.
- *
- * Return allocs in attr->sa_allocsz.
- */
-static void
-smb_node_get_cached_allocsz(smb_node_t *node, smb_attr_t *attr)
-{
-	if (smb_node_is_dir(node))
-		return;
-
-	mutex_enter(&node->n_mutex);
-	if (node->n_open_count == 0) {
-		attr->sa_allocsz = SMB_ALLOCSZ(attr->sa_vattr.va_size);
-	} else {
-		if (node->n_allocsz < attr->sa_vattr.va_size)
-			node->n_allocsz = SMB_ALLOCSZ(attr->sa_vattr.va_size);
-		attr->sa_allocsz = node->n_allocsz;
-	}
-	mutex_exit(&node->n_mutex);
-}
-
-/*
- * smb_node_set_cached_allocsz
- *
- * attr->sa_allocsz has already been rounded to block size by
- * the caller.
- */
-static void
-smb_node_set_cached_allocsz(smb_node_t *node, smb_attr_t *attr)
-{
-	mutex_enter(&node->n_mutex);
-	if (attr->sa_mask & SMB_AT_ALLOCSZ) {
-		if (node->n_open_count > 0)
-			node->n_allocsz = attr->sa_allocsz;
-	}
-	mutex_exit(&node->n_mutex);
-}
-
-
-/*
- * Timestamp caching
- *
- * Solaris file systems handle timestamps different from NTFS. For
- * example when file data is written NTFS doesn't update the timestamps
- * until the file is closed, and then only if they haven't been explicity
- * set via a set attribute request. In order to provide a more similar
- * view of an open file's timestamps, we cache the timestamps in the
- * node and manipulate them in a manner more consistent with windows.
- * (See handling of explicit times and pending timestamps from a write
- * request in smb_node_getattr and smb_node_setattr above.)
- * Timestamps remain cached while there are open ofiles for the node.
- * This includes open ofiles for named streams.
- * n_ofile_list cannot be used as this doesn't include ofiles opened
- * for the node's named streams. Thus n_timestamps contains a count
- * of open ofiles (t_open_ofiles), including named streams' ofiles,
- * to be used to control timestamp caching.
- *
- * If a node represents a named stream the associated unnamed streams
- * cached timestamps are used instead.
- */
-
-/*
- * smb_node_init_cached_timestamps
- *
- * Increment count of open ofiles which are using the cached timestamps.
- * If this is the first open ofile, init the cached timestamps from the
- * file system values.
- */
-static void
-smb_node_init_cached_timestamps(smb_node_t *node, smb_attr_t *attr)
-{
-	smb_node_t *unode;
-
-	if ((unode = SMB_IS_STREAM(node)) != NULL)
-		node = unode;
-
-	mutex_enter(&node->n_mutex);
-	++(node->n_timestamps.t_open_ofiles);
-	if (node->n_timestamps.t_open_ofiles == 1) {
-		node->n_timestamps.t_mtime = attr->sa_vattr.va_mtime;
-		node->n_timestamps.t_atime = attr->sa_vattr.va_atime;
-		node->n_timestamps.t_ctime = attr->sa_vattr.va_ctime;
-		node->n_timestamps.t_crtime = attr->sa_crtime;
-		node->n_timestamps.t_cached = B_TRUE;
-	}
-	mutex_exit(&node->n_mutex);
-}
-
-/*
- * smb_node_clear_cached_timestamps
- *
- * Decrement count of open ofiles using the cached timestamps.
- * If the decremented count is zero, clear the cached timestamps.
- */
-static void
-smb_node_clear_cached_timestamps(smb_node_t *node)
-{
-	smb_node_t *unode;
-
-	if ((unode = SMB_IS_STREAM(node)) != NULL)
-		node = unode;
-
-	mutex_enter(&node->n_mutex);
-	ASSERT(node->n_timestamps.t_open_ofiles > 0);
-	--(node->n_timestamps.t_open_ofiles);
-	if (node->n_timestamps.t_open_ofiles == 0)
-		bzero(&node->n_timestamps, sizeof (smb_times_t));
-	mutex_exit(&node->n_mutex);
-}
-
-/*
- * smb_node_get_cached_timestamps
- *
- * Overwrite timestamps in attr with those cached in node.
- */
-static void
-smb_node_get_cached_timestamps(smb_node_t *node, smb_attr_t *attr)
-{
-	smb_node_t *unode;
-
-	if ((unode = SMB_IS_STREAM(node)) != NULL)
-		node = unode;
-
-	mutex_enter(&node->n_mutex);
-	if (node->n_timestamps.t_cached) {
-		attr->sa_vattr.va_mtime = node->n_timestamps.t_mtime;
-		attr->sa_vattr.va_atime = node->n_timestamps.t_atime;
-		attr->sa_vattr.va_ctime = node->n_timestamps.t_ctime;
-		attr->sa_crtime = node->n_timestamps.t_crtime;
-	}
-	mutex_exit(&node->n_mutex);
-}
-
-/*
- * smb_node_set_cached_timestamps
- *
- * Update the node's cached timestamps with values from attr.
- */
-static void
-smb_node_set_cached_timestamps(smb_node_t *node, smb_attr_t *attr)
-{
-	smb_node_t *unode;
-
-	if ((unode = SMB_IS_STREAM(node)) != NULL)
-		node = unode;
-
-	mutex_enter(&node->n_mutex);
-	if (node->n_timestamps.t_cached) {
-		if (attr->sa_mask & SMB_AT_MTIME)
-			node->n_timestamps.t_mtime = attr->sa_vattr.va_mtime;
-		if (attr->sa_mask & SMB_AT_ATIME)
-			node->n_timestamps.t_atime = attr->sa_vattr.va_atime;
-		if (attr->sa_mask & SMB_AT_CTIME)
-			node->n_timestamps.t_ctime = attr->sa_vattr.va_ctime;
-		if (attr->sa_mask & SMB_AT_CRTIME)
-			node->n_timestamps.t_crtime = attr->sa_crtime;
-	}
-	mutex_exit(&node->n_mutex);
-}
+#ifndef	_KERNEL
+extern int reparse_vnode_parse(vnode_t *vp, nvlist_t *nvl);
+#endif	/* _KERNEL */
 
 /*
  * Check to see if the node represents a reparse point.

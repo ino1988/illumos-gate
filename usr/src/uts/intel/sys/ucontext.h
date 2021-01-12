@@ -20,12 +20,14 @@
  */
 
 /*
+ * Copyright 2015 Nexenta Systems, Inc.  All rights reserved.
+ *
  * Copyright 2010 Sun Microsystems, Inc.  All rights reserved.
  * Use is subject to license terms.
  */
 
 /*	Copyright (c) 1984, 1986, 1987, 1988, 1989 AT&T	*/
-/*	  All Rights Reserved  	*/
+/*	  All Rights Reserved	*/
 
 #ifndef _SYS_UCONTEXT_H
 #define	_SYS_UCONTEXT_H
@@ -33,7 +35,7 @@
 #include <sys/feature_tests.h>
 
 #include <sys/types.h>
-#include <sys/regset.h>
+#include <sys/mcontext.h>
 #if !defined(_XPG4_2) || defined(__EXTENSIONS__)
 #include <sys/signal.h>
 #endif

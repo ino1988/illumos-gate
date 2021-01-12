@@ -53,7 +53,7 @@ typedef struct _sema {
 	uint16_t	type;
 	uint16_t	magic;
 	upad64_t	pad1[3];	/* reserved for a mutex_t */
-	upad64_t 	pad2[2];	/* reserved for a cond_t */
+	upad64_t	pad2[2];	/* reserved for a cond_t */
 } sema_t;
 
 /*
@@ -210,6 +210,12 @@ int _mutex_held(void *);		/* mutex_t or pthread_mutex_t */
 void smt_pause(void);
 
 #endif /* _ASM */
+
+/*
+ * Panicking versions of our favorite friends.
+ */
+void mutex_enter(mutex_t *);
+void mutex_exit(mutex_t *);
 
 #ifdef	__cplusplus
 }

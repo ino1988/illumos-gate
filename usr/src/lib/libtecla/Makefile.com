@@ -22,6 +22,7 @@
 # Copyright 2006 Sun Microsystems, Inc.  All rights reserved.
 # Use is subject to license terms.
 #
+# Copyright (c) 2018, Joyent, Inc.
 
 LIBRARY=	libtecla.a
 VERS=		.1
@@ -32,7 +33,7 @@ OBJECTS=	getline.o keytab.o freelist.o strngmem.o hash.o history.o \
 include ../../Makefile.lib
 
 SRCDIR =	../common
-LIBS =		$(DYNLIB) $(LINTLIB)
+LIBS =		$(DYNLIB)
 LDLIBS +=	-lc
 $(DYNLIB) :=	LDLIBS += -lcurses
 CPPFLAGS +=	-I$(SRCDIR) -DSTDC_HEADERS=1 -DHAVE_SYS_TYPES_H=1 \
@@ -42,14 +43,15 @@ CPPFLAGS +=	-I$(SRCDIR) -DSTDC_HEADERS=1 -DHAVE_SYS_TYPES_H=1 \
 	-DHAVE_TERM_H=1 -DHAVE_SYS_SELECT_H=1 -DHAVE_SELECT=1 \
 	-DHAVE_SYSV_PTY=1 -D__EXTENSIONS__=1 -D_POSIX_C_SOURCE=199506L \
 	-DPREFER_REENTRANT
-$(LINTLIB) := SRCS=	$(SRCDIR)/$(LINTSRC)
 
 CERRWARN +=	-_gcc=-Wno-type-limits
+
+# not linted
+SMATCH=off
 
 .KEEP_STATE:
 
 all:	$(LIBS)
 
-lint:	lintcheck
 
 include ../../Makefile.targ

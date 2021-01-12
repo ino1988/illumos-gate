@@ -21,7 +21,7 @@
 
 /*
  * Copyright (c) 2004, 2010, Oracle and/or its affiliates. All rights reserved.
- * Copyright (c) 2012, Joyent, Inc. All rights reserved.
+ * Copyright 2019, Joyent, Inc.
  */
 
 /* LINTLIBRARY */
@@ -315,6 +315,114 @@ static const elfcap_desc_t hw2_386[ELFCAP_NUM_HW2_386] = {
 	{						/* 0x00000002 */
 		AV_386_2_RDRAND, STRDESC("AV_386_2_RDRAND"),
 		STRDESC("RDRAND"), STRDESC("rdrand"),
+	},
+	{						/* 0x00000004 */
+		AV_386_2_BMI1, STRDESC("AV_386_2_BMI1"),
+		STRDESC("BMI1"), STRDESC("bmi1"),
+	},
+	{						/* 0x00000008 */
+		AV_386_2_BMI2, STRDESC("AV_386_2_BMI2"),
+		STRDESC("BMI2"), STRDESC("bmi2"),
+	},
+	{						/* 0x00000010 */
+		AV_386_2_FMA, STRDESC("AV_386_2_FMA"),
+		STRDESC("FMA"), STRDESC("fma"),
+	},
+	{						/* 0x00000020 */
+		AV_386_2_AVX2, STRDESC("AV_386_2_AVX2"),
+		STRDESC("AVX2"), STRDESC("avx2"),
+	},
+	{						/* 0x00000040 */
+		AV_386_2_ADX, STRDESC("AV_386_2_ADX"),
+		STRDESC("ADX"), STRDESC("adx"),
+	},
+	{						/* 0x00000080 */
+		AV_386_2_RDSEED, STRDESC("AV_386_2_RDSEED"),
+		STRDESC("RDSEED"), STRDESC("rdseed"),
+	},
+	{						/* 0x00000100 */
+		AV_386_2_AVX512F, STRDESC("AV_386_2_AVX512F"),
+		STRDESC("AVX512F"), STRDESC("avx512f"),
+	},
+	{						/* 0x00000200 */
+		AV_386_2_AVX512DQ, STRDESC("AV_386_2_AVX512DQ"),
+		STRDESC("AVX512DQ"), STRDESC("avx512dq"),
+	},
+	{						/* 0x00000400 */
+		AV_386_2_AVX512IFMA, STRDESC("AV_386_2_AVX512IFMA"),
+		STRDESC("AVX512IFMA"), STRDESC("avx512ifma"),
+	},
+	{						/* 0x00000800 */
+		AV_386_2_AVX512PF, STRDESC("AV_386_2_AVX512PF"),
+		STRDESC("AVX512PF"), STRDESC("avx512pf"),
+	},
+	{						/* 0x00001000 */
+		AV_386_2_AVX512ER, STRDESC("AV_386_2_AVX512ER"),
+		STRDESC("AVX512ER"), STRDESC("avx512er"),
+	},
+	{						/* 0x00002000 */
+		AV_386_2_AVX512CD, STRDESC("AV_386_2_AVX512CD"),
+		STRDESC("AVX512CD"), STRDESC("avx512cd"),
+	},
+	{						/* 0x00004000 */
+		AV_386_2_AVX512BW, STRDESC("AV_386_2_AVX512BW"),
+		STRDESC("AVX512BW"), STRDESC("avx512bw"),
+	},
+	{						/* 0x00008000 */
+		AV_386_2_AVX512VL, STRDESC("AV_386_2_AVX512VL"),
+		STRDESC("AVX512VL"), STRDESC("avx512vl"),
+	},
+	{						/* 0x00010000 */
+		AV_386_2_AVX512VBMI, STRDESC("AV_386_2_AVX512VBMI"),
+		STRDESC("AVX512VBMI"), STRDESC("avx512vbmi"),
+	},
+	{						/* 0x00020000 */
+		AV_386_2_AVX512VPOPCDQ, STRDESC("AV_386_2_AVX512_VPOPCDQ"),
+		STRDESC("AVX512_VPOPCDQ"), STRDESC("avx512_vpopcntdq"),
+	},
+	{						/* 0x00040000 */
+		AV_386_2_AVX512_4NNIW, STRDESC("AV_386_2_AVX512_4NNIW"),
+		STRDESC("AVX512_4NNIW"), STRDESC("avx512_4nniw"),
+	},
+	{						/* 0x00080000 */
+		AV_386_2_AVX512_4FMAPS, STRDESC("AV_386_2_AVX512_4FMAPS"),
+		STRDESC("AVX512_4FMAPS"), STRDESC("avx512_4fmaps"),
+	},
+	{						/* 0x00100000 */
+		AV_386_2_SHA, STRDESC("AV_386_2_SHA"),
+		STRDESC("SHA"), STRDESC("sha"),
+	},
+	{						/* 0x00200000 */
+		AV_386_2_FSGSBASE, STRDESC("AV_386_2_FSGSBASE"),
+		STRDESC("FSGSBASE"), STRDESC("fsgsbase")
+	},
+	{						/* 0x00400000 */
+		AV_386_2_CLFLUSHOPT, STRDESC("AV_386_2_CLFLUSHOPT"),
+		STRDESC("CLFLUSHOPT"), STRDESC("clflushopt")
+	},
+	{						/* 0x00800000 */
+		AV_386_2_CLWB, STRDESC("AV_386_2_CLWB"),
+		STRDESC("CLWB"), STRDESC("clwb")
+	},
+	{						/* 0x01000000 */
+		AV_386_2_MONITORX, STRDESC("AV_386_2_MONITORX"),
+		STRDESC("MONITORX"), STRDESC("monitorx")
+	},
+	{						/* 0x02000000 */
+		AV_386_2_CLZERO, STRDESC("AV_386_2_CLZERO"),
+		STRDESC("CLZERO"), STRDESC("clzero")
+	},
+	{						/* 0x04000000 */
+		AV_386_2_AVX512_VNNI, STRDESC("AV_386_2_AVX512_VNNI"),
+		STRDESC("AVX512_VNNI"), STRDESC("avx512_vnni")
+	},
+	{						/* 0x08000000 */
+		AV_386_2_VPCLMULQDQ, STRDESC("AV_386_2_VPCLMULQDQ"),
+		STRDESC("VPCLMULQDQ"), STRDESC("vpclmulqdq")
+	},
+	{						/* 0x10000000 */
+		AV_386_2_VAES, STRDESC("AV_386_2_VAES"),
+		STRDESC("VAES"), STRDESC("vaes")
 	}
 };
 

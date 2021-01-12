@@ -22,6 +22,8 @@
 /*
  * Copyright 2005 Sun Microsystems, Inc.  All rights reserved.
  * Use is subject to license terms.
+ *
+ * Copyright 2018 Joyent, Inc.
  */
 
 #ifndef	_MDB_TARGET_H
@@ -62,6 +64,9 @@ extern int mdb_kvm_tgt_create(mdb_tgt_t *, int, const char *[]);
 extern int mdb_proc_tgt_create(mdb_tgt_t *, int, const char *[]);
 extern int mdb_kproc_tgt_create(mdb_tgt_t *, int, const char *[]);
 extern int mdb_rawfile_tgt_create(mdb_tgt_t *, int, const char *[]);
+#ifdef __amd64
+extern int mdb_bhyve_tgt_create(mdb_tgt_t *, int, const char *[]);
+#endif
 #else
 extern int kmdb_kvm_create(mdb_tgt_t *, int, const char *[]);
 #endif
@@ -79,13 +84,12 @@ extern int kmdb_kvm_create(mdb_tgt_t *, int, const char *[]);
 #define	MDB_TGT_F_NOSTOP	0x0020	/* Do not stop target on attach */
 #define	MDB_TGT_F_STEP		0x0040	/* Single-step is pending */
 #define	MDB_TGT_F_STEP_OUT	0x0080	/* Step-out is pending */
-#define	MDB_TGT_F_STEP_BRANCH	0x0100	/* Step-branch is pending */
-#define	MDB_TGT_F_NEXT		0x0200	/* Step-over is pending */
-#define	MDB_TGT_F_CONT		0x0400	/* Continue is pending */
-#define	MDB_TGT_F_BUSY		0x0800	/* Target is busy executing */
-#define	MDB_TGT_F_ASIO		0x1000	/* Use t_aread and t_awrite for i/o */
-#define	MDB_TGT_F_UNLOAD	0x2000	/* Unload has been requested */
-#define	MDB_TGT_F_ALL		0x3fff	/* Mask of all valid flags */
+#define	MDB_TGT_F_NEXT		0x0100	/* Step-over is pending */
+#define	MDB_TGT_F_CONT		0x0200	/* Continue is pending */
+#define	MDB_TGT_F_BUSY		0x0400	/* Target is busy executing */
+#define	MDB_TGT_F_ASIO		0x0800	/* Use t_aread and t_awrite for i/o */
+#define	MDB_TGT_F_UNLOAD	0x1000	/* Unload has been requested */
+#define	MDB_TGT_F_ALL		0x1fff	/* Mask of all valid flags */
 
 typedef int mdb_tgt_ctor_f(mdb_tgt_t *, int, const char *[]);
 
@@ -138,10 +142,12 @@ typedef void *		mdb_tgt_as_t;		/* Opaque address space id */
 typedef uint64_t	mdb_tgt_addr_t;		/* Generic unsigned address */
 typedef uint64_t	physaddr_t;		/* Physical memory address */
 
-#define	MDB_TGT_AS_VIRT	((mdb_tgt_as_t)-1L)	/* Virtual address space */
-#define	MDB_TGT_AS_PHYS	((mdb_tgt_as_t)-2L)	/* Physical address space */
-#define	MDB_TGT_AS_FILE	((mdb_tgt_as_t)-3L)	/* Object file address space */
-#define	MDB_TGT_AS_IO	((mdb_tgt_as_t)-4L)	/* I/o address space */
+#define	MDB_TGT_AS_VIRT	((mdb_tgt_as_t)-1L)	/* Virtual address space: */
+#define	MDB_TGT_AS_VIRT_I ((mdb_tgt_as_t)-2L)	/*   special case for code */
+#define	MDB_TGT_AS_VIRT_S ((mdb_tgt_as_t)-3L)	/*   special case for stack */
+#define	MDB_TGT_AS_PHYS	((mdb_tgt_as_t)-4L)	/* Physical address space */
+#define	MDB_TGT_AS_FILE	((mdb_tgt_as_t)-5L)	/* Object file address space */
+#define	MDB_TGT_AS_IO	((mdb_tgt_as_t)-6L)	/* I/o address space */
 
 extern ssize_t mdb_tgt_aread(mdb_tgt_t *, mdb_tgt_as_t,
 	void *, size_t, mdb_tgt_addr_t);
@@ -352,7 +358,6 @@ extern int mdb_tgt_status(mdb_tgt_t *, mdb_tgt_status_t *);
 extern int mdb_tgt_run(mdb_tgt_t *, int, const struct mdb_arg *);
 extern int mdb_tgt_step(mdb_tgt_t *, mdb_tgt_status_t *);
 extern int mdb_tgt_step_out(mdb_tgt_t *, mdb_tgt_status_t *);
-extern int mdb_tgt_step_branch(mdb_tgt_t *, mdb_tgt_status_t *);
 extern int mdb_tgt_next(mdb_tgt_t *, mdb_tgt_status_t *);
 extern int mdb_tgt_continue(mdb_tgt_t *, mdb_tgt_status_t *);
 extern int mdb_tgt_signal(mdb_tgt_t *, int);

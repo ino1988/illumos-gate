@@ -30,8 +30,6 @@
 #ifndef _SYS_TZFILE_H
 #define	_SYS_TZFILE_H
 
-#pragma ident	"%Z%%M%	%I%	%E% SMI"
-
 #ifdef	__cplusplus
 extern "C" {
 #endif
@@ -139,7 +137,7 @@ struct tzhead {
  * that will probably do.
  */
 
-#define	isleap(y) (((y) % 4) == 0 && ((y) % 100) != 0 || ((y) % 400) == 0)
+#define	isleap(y) ((((y) % 4) == 0 && ((y) % 100) != 0) || ((y) % 400) == 0)
 
 /*
  * Use of the underscored variants may cause problems if you move your code to

@@ -22,23 +22,22 @@
 # Copyright (c) 2003, 2010, Oracle and/or its affiliates. All rights reserved.
 #
 # Copyright 2010 Nexenta Systems, Inc.  All rights reserved.
-#
-# lib/pkcs11/pkcs11_softtoken/Makefile.com
+# Copyright 2020 Joyent, Inc.
 #
 
 LIBRARY = pkcs11_softtoken.a
 VERS= .1
 
 LCL_OBJECTS = \
-	softGeneral.o 		\
-	softSlotToken.o 	\
-	softSession.o 		\
-	softObject.o 		\
-	softDigest.o	 	\
-	softSign.o 		\
-	softVerify.o 		\
-	softDualCrypt.o 	\
-	softKeys.o 		\
+	softGeneral.o		\
+	softSlotToken.o	\
+	softSession.o		\
+	softObject.o		\
+	softDigest.o		\
+	softSign.o		\
+	softVerify.o		\
+	softDualCrypt.o	\
+	softKeys.o		\
 	softRand.o		\
 	softSessionUtil.o	\
 	softDigestUtil.o	\
@@ -121,16 +120,21 @@ SRCS =	\
 
 # libelfsign needs a static pkcs11_softtoken
 LIBS    =       $(DYNLIB)
-LDLIBS  +=      -lc -lmd -lcryptoutil -lsoftcrypto -lgen
+LDLIBS  +=      -lc -lmd -lcryptoutil -lsoftcrypto -lgen -lavl
 
-CFLAGS 	+=      $(CCVERBOSE)
+CSTD =	$(CSTD_GNU99)
+
+CFLAGS	+=      $(CCVERBOSE)
 
 CERRWARN +=	-_gcc=-Wno-unused-label
 CERRWARN +=	-_gcc=-Wno-parentheses
-CERRWARN +=	-_gcc=-Wno-uninitialized
+CERRWARN +=	$(CNOWARN_UNINIT)
 CERRWARN +=	-_gcc=-Wno-type-limits
 CERRWARN +=	-_gcc=-Wno-unused-variable
 CERRWARN +=	-_gcc=-Wno-empty-body
+
+# not linted
+SMATCH=off
 
 CPPFLAGS += -I$(AESDIR) -I$(BLOWFISHDIR) -I$(ARCFOURDIR) -I$(DESDIR) \
 	    -I$(DHDIR) -I$(DSADIR) -I$(ECCDIR) -I$(SRC)/common/crypto \
@@ -139,21 +143,14 @@ CPPFLAGS += -I$(AESDIR) -I$(BLOWFISHDIR) -I$(ARCFOURDIR) -I$(DESDIR) \
 	    -I$(BIGNUMDIR) -I$(PADDIR) -D_POSIX_PTHREAD_SEMANTICS \
 	    -DMP_API_COMPATIBLE -DNSS_ECC_MORE_THAN_SUITE_B
 
-LINTFLAGS64 += -errchk=longptr64
 
 ROOTLIBDIR=     $(ROOT)/usr/lib/security
 ROOTLIBDIR64=   $(ROOT)/usr/lib/security/$(MACH64)
-
-LINTSRC = \
-	$(LCL_OBJECTS:%.o=$(SRCDIR)/%.c) \
-	$(RNG_COBJECTS:%.o=$(RNGDIR)/%.c)
 
 .KEEP_STATE:
 
 all:	$(LIBS)
 
-lint:	$$(LINTSRC)
-	$(LINT.c) $(LINTCHECKFLAGS) $(LINTSRC) $(LDLIBS)
 
 pics/%.o:	$(BERDIR)/%.c
 	$(COMPILE.c) -o $@ $< -D_SOLARIS_SDK -I$(BERDIR) \

@@ -24,23 +24,29 @@
 # Copyright 2005 Sun Microsystems, Inc.  All rights reserved.
 # Use is subject to license terms.
 #
+# Copyright 2020 Joyent, Inc.
 
-# NOTE: awk is oawk.
+# NOTE: awk is now nawk.
 
 PROG= nawk
+LINKPROG= awk
 
-OBJ1= b.o lib.o main.o parse.o proctab.o run.o tran.o
-OBJ2= awk.g.o awk.lx.o
+OBJ1= b.o lib.o main.o parse.o proctab.o run.o tran.o lex.o
+OBJ2= awk.g.o
 OBJS= $(OBJ2) $(OBJ1)
 SRCS= $(OBJ1:%.o=%.c)
 
 include ../Makefile.cmd
 
-CERRWARN += -_gcc=-Wno-implicit-function-declaration
+ROOTLINK =	$(LINKPROG:%=$(ROOTBIN)/%)
+
 CERRWARN += -_gcc=-Wno-unused-label
 CERRWARN += -_gcc=-Wno-parentheses
 CERRWARN += -_gcc=-Wno-unused-variable
-CERRWARN += -_gcc=-Wno-uninitialized
+CERRWARN += $(CNOWARN_UNINIT)
+
+# not linted
+SMATCH=off
 
 #
 # Message catalog
@@ -52,17 +58,20 @@ XGETFLAGS += -a -x awk.xcl
 
 CPPFLAGS += -D_FILE_OFFSET_BITS=64
 YFLAGS += -d
-LDLIBS += -lm
+LDLIBS += -lm -lumem
 LINTFLAGS += -u
-CLEANFILES= maketab proctab.c awk.g.c awk.lx.c y.tab.h
+CLEANFILES= maketab proctab.c awk.g.c y.tab.h
 
 .KEEP_STATE:
 
-all: $(PROG) 
+all: $(PROG) $(ROOTLINK)
 
 $(PROG): $(OBJS)
 	$(LINK.c) $(OBJS) -o $@ $(LDLIBS)
 	$(POST_PROCESS)
+
+$(ROOTLINK):	$(ROOTPROG)
+	$(RM) $@; $(LN) $(ROOTPROG) $@
 
 #
 # message catalog
@@ -77,20 +86,16 @@ proctab.c: maketab
 	rm -f $@; ./maketab > $@
 
 maketab: maketab.c
-	$(NATIVECC) -O maketab.c -o $@ $(LDLIBS)
+	$(NATIVECC) $(NATIVE_CFLAGS) maketab.c -o $@ $(LDLIBS)
 
 install: all $(ROOTPROG) $(ROOTLINK)
 
 clean:
 	$(RM) $(OBJS) $(CLEANFILES)
 
-lint: awk.g.c lint_SRCS
-
 awk.g.c + y.tab.h: awk.g.y
 
 awk.g.o: awk.g.c
-
-awk.lx.c: awk.lx.l
 
 proctab.o: proctab.c
 	$(COMPILE.c) proctab.c

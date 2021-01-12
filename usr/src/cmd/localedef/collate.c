@@ -10,7 +10,7 @@
  */
 
 /*
- * Copyright 2010 Nexenta Systems, Inc.  All rights reserved.
+ * Copyright 2017 Nexenta Systems, Inc.
  */
 
 /*
@@ -30,7 +30,7 @@
 #include <limits.h>
 #include "localedef.h"
 #include "parser.tab.h"
-#include "collate.h"
+#include "collatefile.h"
 
 /*
  * Design notes.
@@ -465,7 +465,7 @@ define_collsym(char *name)
 	collsym_t	*sym;
 	avl_index_t	where;
 
-	if ((sym = calloc(sizeof (*sym), 1)) == NULL) {
+	if ((sym = calloc(1, sizeof (*sym))) == NULL) {
 		errf(_("out of memory"));
 		return;
 	}
@@ -477,6 +477,7 @@ define_collsym(char *name)
 		 * This should never happen because we are only called
 		 * for undefined symbols.
 		 */
+		free(sym);
 		INTERR;
 		return;
 	}
@@ -511,9 +512,10 @@ get_collundef(char *name)
 
 	srch.name = name;
 	if ((ud = avl_find(&collundefs, &srch, &where)) == NULL) {
-		if (((ud = calloc(sizeof (*ud), 1)) == NULL) ||
+		if (((ud = calloc(1, sizeof (*ud))) == NULL) ||
 		    ((ud->name = strdup(name)) == NULL)) {
 			errf(_("out of memory"));
+			free(ud);
 			return (NULL);
 		}
 		for (i = 0; i < NUM_WT; i++) {
@@ -536,7 +538,7 @@ get_collchar(wchar_t wc, int create)
 	srch.wc = wc;
 	cc = avl_find(&collchars, &srch, &where);
 	if ((cc == NULL) && create) {
-		if ((cc = calloc(sizeof (*cc), 1)) == NULL) {
+		if ((cc = calloc(1, sizeof (*cc))) == NULL) {
 			errf(_("out of memory"));
 			return (NULL);
 		}
@@ -723,7 +725,7 @@ start_order_char(wchar_t wc)
 				} else {
 					set_pri(cc->ref[i], ref, REFER);
 				}
-				ellipsis_weights[i] = NULL;
+				ellipsis_weights[i] = 0;
 			}
 			ellipsis_start++;
 			nextpri++;
@@ -770,7 +772,7 @@ define_collelem(char *name, wchar_t *wcs)
 		return;
 	}
 
-	if ((e = calloc(sizeof (*e), 1)) == NULL) {
+	if ((e = calloc(1, sizeof (*e))) == NULL) {
 		errf(_("out of memory"));
 		return;
 	}
@@ -791,6 +793,7 @@ define_collelem(char *name, wchar_t *wcs)
 	if ((avl_find(&elem_by_symbol, e, &where1) != NULL) ||
 	    (avl_find(&elem_by_expand, e, &where2) != NULL)) {
 		errf(_("duplicate collating element definition"));
+		free(e);
 		return;
 	}
 	avl_insert(&elem_by_symbol, e, where1);
@@ -884,8 +887,8 @@ add_order_symbol(char *sym)
 void
 add_order_ellipsis(void)
 {
-	/* special NULL value indicates self reference */
-	add_order_pri(NULL);
+	/* special 0 value indicates self reference */
+	add_order_pri(0);
 }
 
 void
@@ -904,7 +907,7 @@ add_order_subst(void)
 	s = avl_find(&substs_ref[curr_weight], &srch, &where);
 
 	if (s == NULL) {
-		if ((s = calloc(sizeof (*s), 1)) == NULL) {
+		if ((s = calloc(1, sizeof (*s))) == NULL) {
 			errf(_("out of memory"));
 			return;
 		}
@@ -1013,7 +1016,7 @@ add_weight(int32_t ref, int pass)
 	if (avl_find(&weights[pass], &srch, &where) != NULL)
 		return;
 
-	if ((w = calloc(sizeof (*w), 1)) == NULL) {
+	if ((w = calloc(1, sizeof (*w))) == NULL) {
 		errf(_("out of memory"));
 		return;
 	}
@@ -1069,7 +1072,7 @@ dump_collate(void)
 	collate_chain_t		*chain;
 
 	/*
-	 * We have to run throught a preliminary pass to identify all the
+	 * We have to run through a preliminary pass to identify all the
 	 * weights that we use for each sorting level.
 	 */
 	for (i = 0; i < NUM_WT; i++) {
@@ -1155,7 +1158,7 @@ dump_collate(void)
 	for (i = 0; i < NUM_WT; i++) {
 		collate_subst_t *st = NULL;
 		n = collinfo.subst_count[i] = avl_numnodes(&substs[i]);
-		if ((st = calloc(sizeof (collate_subst_t) * n, 1)) == NULL) {
+		if ((st = calloc(n, sizeof (collate_subst_t))) == NULL) {
 			errf(_("out of memory"));
 			return;
 		}
@@ -1184,7 +1187,7 @@ dump_collate(void)
 	 * Chains, i.e. collating elements
 	 */
 	collinfo.chain_count = avl_numnodes(&elem_by_expand);
-	chain = calloc(sizeof (collate_chain_t), collinfo.chain_count);
+	chain = calloc(collinfo.chain_count, sizeof (collate_chain_t));
 	if (chain == NULL) {
 		errf(_("out of memory"));
 		return;
@@ -1203,7 +1206,7 @@ dump_collate(void)
 	/*
 	 * Large (> UCHAR_MAX) character priorities
 	 */
-	large = calloc(sizeof (collate_large_t) * avl_numnodes(&collchars), 1);
+	large = calloc(avl_numnodes(&collchars), sizeof (collate_large_t));
 	if (large == NULL) {
 		errf(_("out of memory"));
 		return;
@@ -1241,21 +1244,25 @@ dump_collate(void)
 	if ((wr_category(vers, COLLATE_STR_LEN, f) < 0) ||
 	    (wr_category(&collinfo, sizeof (collinfo), f) < 0) ||
 	    (wr_category(&chars, sizeof (chars), f) < 0)) {
+		delete_category(f);
 		return;
 	}
 
 	for (i = 0; i < NUM_WT; i++) {
 		sz =  sizeof (collate_subst_t) * collinfo.subst_count[i];
 		if (wr_category(subst[i], sz, f) < 0) {
+			delete_category(f);
 			return;
 		}
 	}
 	sz = sizeof (collate_chain_t) * collinfo.chain_count;
 	if (wr_category(chain, sz, f) < 0) {
+		delete_category(f);
 		return;
 	}
 	sz = sizeof (collate_large_t) * collinfo.large_count;
 	if (wr_category(large, sz, f) < 0) {
+		delete_category(f);
 		return;
 	}
 

@@ -25,6 +25,7 @@
  */
 /*
  * Copyright 2014 Garrett D'Amore <garrett@damore.org>
+ * Copyright (c) 2016 by Delphix. All rights reserved.
  */
 
 /*
@@ -1001,7 +1002,7 @@ i_ddi_check_cache_attr(uint_t flags)
 	 * the attributes leads to a failure.
 	 */
 	uint_t cache_attr = IOMEM_CACHE_ATTR(flags);
-	if ((cache_attr != 0) && ((cache_attr & (cache_attr - 1)) != 0))
+	if ((cache_attr != 0) && !ISP2(cache_attr))
 		return (B_FALSE);
 
 	/*
@@ -1143,14 +1144,14 @@ i_ddi_iomin(dev_info_t *a, int i, int stream)
 	/*
 	 * Make sure that the initial value is sane
 	 */
-	if (i & (i - 1))
+	if (!ISP2(i))
 		return (0);
 	if (i == 0)
 		i = (stream) ? 4 : 1;
 
 	r = ddi_ctlops(a, a,
 	    DDI_CTLOPS_IOMIN, (void *)(uintptr_t)stream, (void *)&i);
-	if (r != DDI_SUCCESS || (i & (i - 1)))
+	if (r != DDI_SUCCESS || !ISP2(i))
 		return (0);
 	return (i);
 }
@@ -1177,8 +1178,7 @@ i_ddi_mem_alloc(dev_info_t *dip, ddi_dma_attr_t *attr,
 	}
 
 	if (attr->dma_attr_minxfer == 0 || attr->dma_attr_align == 0 ||
-	    (attr->dma_attr_align & (attr->dma_attr_align - 1)) ||
-	    (attr->dma_attr_minxfer & (attr->dma_attr_minxfer - 1))) {
+	    !ISP2(attr->dma_attr_align) || !ISP2(attr->dma_attr_minxfer)) {
 		return (DDI_FAILURE);
 	}
 
@@ -1196,7 +1196,7 @@ i_ddi_mem_alloc(dev_info_t *dip, ddi_dma_attr_t *attr,
 	iomin = (attr->dma_attr_burstsizes & 0xffff) |
 	    ((attr->dma_attr_burstsizes >> 16) & 0xffff);
 	/*
-	 * If a driver set burtsizes to 0, we give him byte alignment.
+	 * If a driver set burtsizes to 0, we give it byte alignment.
 	 * Otherwise align at the burtsizes boundary.
 	 */
 	if (iomin == 0)

@@ -40,7 +40,7 @@ pthread_mutexattr_init(pthread_mutexattr_t *attr)
 
 	if ((ap = lmalloc(sizeof (mattr_t))) == NULL)
 		return (ENOMEM);
-	ap->pshared = DEFAULT_TYPE;
+	ap->pshared = PTHREAD_PROCESS_PRIVATE;
 	ap->type = PTHREAD_MUTEX_DEFAULT;
 	ap->protocol = PTHREAD_PRIO_NONE;
 	ap->robustness = PTHREAD_MUTEX_STALLED;
@@ -222,8 +222,25 @@ pthread_mutex_init(pthread_mutex_t *_RESTRICT_KYWD mutex,
 		if (ap->protocol == PTHREAD_PRIO_PROTECT)
 			prioceiling = ap->prioceiling;
 	} else {
-		type = DEFAULT_TYPE | PTHREAD_MUTEX_DEFAULT |
+		type = PTHREAD_PROCESS_PRIVATE | PTHREAD_MUTEX_DEFAULT |
 		    PTHREAD_PRIO_NONE | PTHREAD_MUTEX_STALLED;
+	}
+
+	/*
+	 * POSIX mutexes (this interface) make no guarantee about the state of
+	 * the mutex before pthread_mutex_init(3C) is called.  Sun mutexes, upon
+	 * which these are built and which mutex_init(3C) below represents
+	 * require that a robust mutex be initialized to all 0s _prior_ to
+	 * mutex_init() being called, and that mutex_init() of an initialized
+	 * mutex return EBUSY.
+	 *
+	 * We respect both these behaviors by zeroing the mutex here in the
+	 * POSIX implementation if and only if the mutex magic is incorrect,
+	 * and the mutex is robust.
+	 */
+	if (((type & PTHREAD_MUTEX_ROBUST) != 0) &&
+	    (((mutex_t *)mutex)->mutex_magic != MUTEX_MAGIC)) {
+		(void) memset(mutex, 0, sizeof (*mutex));
 	}
 
 	return (mutex_init((mutex_t *)mutex, type, &prioceiling));

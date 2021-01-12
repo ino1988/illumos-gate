@@ -20,11 +20,10 @@
  * CDDL HEADER END
  */
 /*
+ * Copyright 2015 Gary Mills
  * Copyright (c) 2001 by Sun Microsystems, Inc.
  * All rights reserved.
  */
-
-#pragma ident	"%Z%%M%	%I%	%E% SMI"
 
 #include <string.h>
 #include <sys/syslog.h>
@@ -38,7 +37,7 @@
 #include "ldap_xdr.h"
 #include "ldap_util.h"
 
-extern bool_t xdr_nis_object();
+#include "nis_clnt.h"
 
 /*
  * In order not to change the on-disk NIS+ DB format, we need make sure
@@ -118,7 +117,7 @@ xdr_nis_name_abbrev(
 		tmp = buf;
 		if (!xdr_nis_name(xdrs, &tmp))
 		    return (FALSE);
-		if ((buf[0] == NULL) || buf[strlen(buf) - 1] == '.') {
+		if ((buf[0] == '\0') || buf[strlen(buf) - 1] == '.') {
 			/* It is either a FQN or a NULL string */
 			if (*namep) {
 				strcpy(*namep, buf);

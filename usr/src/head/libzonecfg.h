@@ -184,7 +184,7 @@ typedef struct zone_fsopt {
 } zone_fsopt_t;
 
 struct zone_fstab {
-	char		zone_fs_special[MAXPATHLEN]; 	/* special file */
+	char		zone_fs_special[MAXPATHLEN];	/* special file */
 	char		zone_fs_dir[MAXPATHLEN];	/* mount point */
 	char		zone_fs_type[FSTYPSZ];		/* e.g. ufs */
 	zone_fsopt_t   *zone_fs_options;		/* mount options */
@@ -250,6 +250,13 @@ struct zone_devpermtab {
 struct zone_admintab {
 	char	zone_admin_user[MAXUSERNAME];
 	char	zone_admin_auths[MAXAUTHS];
+};
+
+#define	ZONECFG_SECFLAGS_MAX	1024
+struct zone_secflagstab {
+	char zone_secflags_lower[ZONECFG_SECFLAGS_MAX];
+	char zone_secflags_upper[ZONECFG_SECFLAGS_MAX];
+	char zone_secflags_default[ZONECFG_SECFLAGS_MAX];
 };
 
 typedef struct zone_userauths {
@@ -337,7 +344,7 @@ extern	int	zonecfg_lookup_filesystem(zone_dochandle_t,
 extern	int	zonecfg_add_fs_option(struct zone_fstab *, char *);
 extern	int	zonecfg_remove_fs_option(struct zone_fstab *, char *);
 extern	void	zonecfg_free_fs_option_list(zone_fsopt_t *);
-extern	int 	zonecfg_find_mounts(char *, int(*)(const struct mnttab *,
+extern	int	zonecfg_find_mounts(char *, int(*)(const struct mnttab *,
     void *), void *);
 
 /*
@@ -428,6 +435,16 @@ extern	int	zonecfg_delete_mcap(zone_dochandle_t);
 extern	int	zonecfg_modify_mcap(zone_dochandle_t, struct zone_mcaptab *);
 extern	int	zonecfg_lookup_mcap(zone_dochandle_t, struct zone_mcaptab *);
 
+/* security-flags configuration */
+extern	int	zonecfg_add_secflags(zone_dochandle_t,
+    struct zone_secflagstab *);
+extern	int	zonecfg_delete_secflags(zone_dochandle_t,
+    struct zone_secflagstab *);
+extern	int	zonecfg_modify_secflags(zone_dochandle_t,
+    struct zone_secflagstab *, struct zone_secflagstab *);
+extern	int	zonecfg_lookup_secflags(zone_dochandle_t,
+    struct zone_secflagstab *);
+
 /*
  * Temporary pool support functions.
  */
@@ -495,6 +512,8 @@ extern	int	zonecfg_enddevperment(zone_dochandle_t);
 extern	int	zonecfg_setadminent(zone_dochandle_t);
 extern	int	zonecfg_getadminent(zone_dochandle_t, struct zone_admintab *);
 extern	int	zonecfg_endadminent(zone_dochandle_t);
+extern	int	zonecfg_getsecflagsent(zone_dochandle_t,
+    struct zone_secflagstab *);
 
 /*
  * Privilege-related functions.

@@ -22,6 +22,10 @@
  * Copyright 2009 Sun Microsystems, Inc.  All rights reserved.
  * Use is subject to license terms.
  */
+/*
+ * Copyright (c) 2013, 2015 by Delphix. All rights reserved.
+ * Copyright 2019 OmniOS Community Edition (OmniOSce) Association.
+ */
 
 #ifndef	_DHCPAGENT_IPC_H
 #define	_DHCPAGENT_IPC_H
@@ -89,7 +93,7 @@ typedef enum {
 
 typedef enum {
 	DHCP_DROP,	DHCP_EXTEND,  DHCP_PING,    DHCP_RELEASE,
-	DHCP_START,  	DHCP_STATUS,  DHCP_INFORM,  DHCP_GET_TAG,
+	DHCP_START,	DHCP_STATUS,  DHCP_INFORM,  DHCP_GET_TAG,
 	DHCP_NIPC,	/* number of supported requests */
 	DHCP_PRIMARY = 0x100,
 	DHCP_V6 = 0x200
@@ -216,10 +220,16 @@ typedef struct dhcp_status {
 	char		if_name[LIFNAMSIZ];
 	DHCPSTATE	if_state;	/* state of interface; see above */
 
-	time_t		if_began;	/* time lease began (absolute) */
-	time_t		if_t1;		/* renewing time (absolute) */
-	time_t		if_t2;		/* rebinding time (absolute) */
-	time_t		if_lease;	/* lease expiration time (absolute) */
+	/*
+	 * We use int64_t here so that the structure is the same in both
+	 * 32 and 64-bit, since it is passed via IPC.
+	 * Once everything that uses this is 64-bit, these could be changed
+	 * to time_t.
+	 */
+	int64_t		if_began;	/* time lease began (absolute) */
+	int64_t		if_t1;		/* renewing time (absolute) */
+	int64_t		if_t2;		/* rebinding time (absolute) */
+	int64_t		if_lease;	/* lease expiration time (absolute) */
 
 	uint16_t	if_dflags;	/* DHCP flags on this if; see above */
 
@@ -255,7 +265,12 @@ typedef hrtime_t dhcp_ipc_id_t;
 /*
  * note: the first 4 fields of the dhcp_ipc_request_t and dhcp_ipc_reply_t
  *	 are intentionally identical; code in dhcpagent_ipc.c counts on it!
+ *
+ * we pack these structs to ensure that their lengths will be identical between
+ * 32-bit and 64-bit executables.
  */
+
+#pragma pack(4)
 
 struct	dhcp_ipc_request {
 	dhcp_ipc_type_t  message_type;	/* type of request */
@@ -276,13 +291,10 @@ struct	dhcp_ipc_reply {
 	uchar_t		 buffer[1];	/* dynamically extended */
 };
 
-/*
- * since ansi c won't let us define arrays with 0 elements, the
- * size of the ipc request/reply structures is off-by-1; use macros.
- */
+#pragma pack()
 
-#define	DHCP_IPC_REPLY_SIZE	(sizeof (dhcp_ipc_reply_t) - 1)
-#define	DHCP_IPC_REQUEST_SIZE	(sizeof (dhcp_ipc_request_t) - 1)
+#define	DHCP_IPC_REPLY_SIZE	offsetof(dhcp_ipc_reply_t, buffer)
+#define	DHCP_IPC_REQUEST_SIZE	offsetof(dhcp_ipc_request_t, buffer)
 
 #define	DHCP_IPC_DEFAULT_WAIT	120	/* seconds */
 

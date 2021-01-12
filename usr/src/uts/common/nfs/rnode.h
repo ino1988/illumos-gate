@@ -24,7 +24,7 @@
  */
 
 /*	Copyright (c) 1983, 1984, 1985, 1986, 1987, 1988, 1989 AT&T	*/
-/*	  All Rights Reserved  	*/
+/*	  All Rights Reserved	*/
 
 #ifndef	_NFS_RNODE_H
 #define	_NFS_RNODE_H
@@ -164,7 +164,7 @@ typedef struct lock_manager_pid_list {
  * A homegrown reader/writer lock implementation.  It addresses
  * two requirements not addressed by the system primitives.  They
  * are that the `enter" operation is optionally interruptible and
- * that that they can be re`enter'ed by writers without deadlock.
+ * that they can be re`enter'ed by writers without deadlock.
  */
 typedef struct nfs_rwlock {
 	int count;
@@ -172,6 +172,7 @@ typedef struct nfs_rwlock {
 	kthread_t *owner;
 	kmutex_t lock;
 	kcondvar_t cv;
+	kcondvar_t cv_rd;
 } nfs_rwlock_t;
 
 /*
@@ -302,6 +303,8 @@ typedef struct rnode {
 	kthread_t	*r_serial;	/* id of purging thread */
 	list_t		r_indelmap;	/* list of delmap callers */
 	uint_t		r_inmap;	/* to serialize read/write and mmap */
+	list_node_t	r_mi_link;	/* linkage into list of rnodes for */
+					/* this mntinfo */
 } rnode_t;
 #endif /* _KERNEL */
 

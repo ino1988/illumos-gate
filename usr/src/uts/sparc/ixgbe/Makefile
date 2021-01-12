@@ -21,6 +21,7 @@
 #
 # Copyright 2009 Sun Microsystems, Inc.  All rights reserved.
 # Use is subject to license terms.
+# Copyright 2016 OmniTI Computer Consulting, Inc.  All rights reserved.
 #
 # uts/sparc/ixgbe/Makefile
 #
@@ -40,7 +41,7 @@ UTSBASE	= ../..
 #
 MODULE		= ixgbe
 OBJECTS		= $(IXGBE_OBJS:%=$(OBJS_DIR)/%)
-LINTS		= $(IXGBE_OBJS:%.o=$(LINTS_DIR)/%.ln)
+OBJECTS		+= $(IXGBE_INTC_OBJS:%=$(OBJS_DIR)/%)
 ROOTMODULE	= $(ROOT_DRV_DIR)/$(MODULE)
 CONF_SRCDIR	= $(UTSBASE)/common/io/ixgbe
 
@@ -49,15 +50,13 @@ CONF_SRCDIR	= $(UTSBASE)/common/io/ixgbe
 #
 include $(UTSBASE)/sparc/Makefile.sparc
 
-CERRWARN	+= -_gcc=-Wno-parentheses
-CERRWARN	+= -_gcc=-Wno-switch
-CERRWARN	+= -_gcc=-Wno-uninitialized
+INC_PATH	+= -I$(UTSBASE)/common/io/ixgbe
+INC_PATH	+= -I$(UTSBASE)/common/io/ixgbe/core
 
 #
 #	Define targets
 #
 ALL_TARGET	= $(BINARY) $(SRC_CONFFILE)
-LINT_TARGET	= $(MODULE).lint
 INSTALL_TARGET	= $(BINARY) $(ROOTMODULE) $(ROOT_CONFFILE)
 
 #
@@ -66,9 +65,16 @@ INSTALL_TARGET	= $(BINARY) $(ROOTMODULE) $(ROOT_CONFFILE)
 INC_PATH	+= -I$(CONF_SRCDIR)
 
 #
-# lint pass one enforcement
+# For now, disable these warnings; maintainers should endeavor
+# to investigate and remove these for maximum coverage.
+# Please do not carry these forward to new Makefiles.
 #
 CFLAGS          += $(CCVERBOSE)
+CERRWARN	+= -_gcc=-Wno-parentheses
+CERRWARN	+= -_gcc=-Wno-switch
+CERRWARN	+= $(CNOWARN_UNINIT)
+CERRWARN	+= -_gcc=-Wno-unused-value
+CERRWARN	+= -_cc=-erroff=E_STATEMENT_NOT_REACHED
 
 #
 # Turn on doubleword alignment for 64 bit registers
@@ -92,12 +98,6 @@ all:		$(ALL_DEPS)
 clean:		$(CLEAN_DEPS)
 
 clobber:	$(CLOBBER_DEPS)
-
-lint:		$(LINT_DEPS)
-
-modlintlib:	$(MODLINTLIB_DEPS)
-
-clean.lint:	$(CLEAN_LINT_DEPS)
 
 install:	$(INSTALL_DEPS)
 

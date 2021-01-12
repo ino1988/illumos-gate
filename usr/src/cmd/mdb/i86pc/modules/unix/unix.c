@@ -20,10 +20,13 @@
  */
 /*
  * Copyright (c) 1999, 2010, Oracle and/or its affiliates. All rights reserved.
+ * Copyright 2018 OmniOS Community Edition (OmniOSce) Association.
+ * Copyright 2019 Joyent, Inc.
  */
 
 #include <mdb/mdb_modapi.h>
 #include <mdb/mdb_ctf.h>
+#include <mdb/mdb_x86util.h>
 #include <sys/cpuvar.h>
 #include <sys/systm.h>
 #include <sys/traptrace.h>
@@ -35,7 +38,11 @@
 #include <sys/mutex.h>
 #include <sys/mutex_impl.h>
 #include "i86mmu.h"
+#include "unix_sup.h"
 #include <sys/apix.h>
+#include <sys/x86_archext.h>
+#include <sys/bitmap.h>
+#include <sys/controlregs.h>
 
 #define	TT_HDLR_WIDTH	17
 
@@ -85,7 +92,7 @@ ttrace_walk_init(mdb_walk_state_t *wsp)
 
 	ttcp = mdb_zalloc(ttc_size, UM_SLEEP);
 
-	if (wsp->walk_addr != NULL) {
+	if (wsp->walk_addr != 0) {
 		mdb_warn("ttrace only supports global walks\n");
 		return (WALK_ERR);
 	}
@@ -108,7 +115,7 @@ ttrace_walk_init(mdb_walk_state_t *wsp)
 	for (i = 0; i < NCPU; i++) {
 		trap_trace_ctl_t *ttc = &ttcp[i];
 
-		if (ttc->ttc_first == NULL)
+		if (ttc->ttc_first == 0)
 			continue;
 
 		/*
@@ -139,7 +146,7 @@ ttrace_walk_step(mdb_walk_state_t *wsp)
 	for (i = 0; i < NCPU; i++) {
 		ttc = &ttcp[i];
 
-		if (ttc->ttc_current == NULL)
+		if (ttc->ttc_current == 0)
 			continue;
 
 		if (ttc->ttc_current < ttc->ttc_first)
@@ -169,7 +176,7 @@ ttrace_walk_step(mdb_walk_state_t *wsp)
 	rval = wsp->walk_callback(ttc->ttc_current, &rec, wsp->walk_cbdata);
 
 	if (ttc->ttc_current == ttc->ttc_next)
-		ttc->ttc_current = NULL;
+		ttc->ttc_current = 0;
 	else
 		ttc->ttc_current -= sizeof (trap_trace_rec_t);
 
@@ -404,6 +411,7 @@ static struct {
 typedef struct ttrace_dcmd {
 	processorid_t ttd_cpu;
 	uint_t ttd_extended;
+	uintptr_t ttd_kthread;
 	trap_trace_ctl_t ttd_ttc[NCPU];
 } ttrace_dcmd_t;
 
@@ -426,6 +434,9 @@ ttrace_dumpregs(trap_trace_rec_t *rec)
 	mdb_printf(THREEREGS, DUMP(gs), "trp", regs->r_trapno, DUMP(err));
 	mdb_printf(THREEREGS, DUMP(rip), DUMP(cs), DUMP(rfl));
 	mdb_printf(THREEREGS, DUMP(rsp), DUMP(ss), "cr2", rec->ttr_cr2);
+	mdb_printf("         %3s: %16lx %3s: %16lx\n",
+	    "fsb", regs->__r_fsbase,
+	    "gsb", regs->__r_gsbase);
 	mdb_printf("\n");
 }
 
@@ -471,6 +482,10 @@ ttrace_walk(uintptr_t addr, trap_trace_rec_t *rec, ttrace_dcmd_t *dcmd)
 	}
 
 	if (dcmd->ttd_cpu != -1 && cpu != dcmd->ttd_cpu)
+		return (WALK_NEXT);
+
+	if (dcmd->ttd_kthread != 0 &&
+	    dcmd->ttd_kthread != rec->ttr_curthread)
 		return (WALK_NEXT);
 
 	mdb_printf("%3d %15llx ", cpu, rec->ttr_stamp);
@@ -532,7 +547,8 @@ ttrace(uintptr_t addr, uint_t flags, int argc, const mdb_arg_t *argv)
 	}
 
 	if (mdb_getopts(argc, argv,
-	    'x', MDB_OPT_SETBITS, TRUE, &dcmd.ttd_extended, NULL) != argc)
+	    'x', MDB_OPT_SETBITS, TRUE, &dcmd.ttd_extended,
+	    't', MDB_OPT_UINTPTR, &dcmd.ttd_kthread, NULL) != argc)
 		return (DCMD_USAGE);
 
 	if (DCMD_HDRSPEC(flags)) {
@@ -600,7 +616,7 @@ mutex_owner_step(mdb_walk_state_t *wsp)
 	if (!MUTEX_TYPE_ADAPTIVE(&mtx))
 		return (WALK_DONE);
 
-	if ((owner = (uintptr_t)MUTEX_OWNER(&mtx)) == NULL)
+	if ((owner = (uintptr_t)MUTEX_OWNER(&mtx)) == 0)
 		return (WALK_DONE);
 
 	if (mdb_vread(&thr, sizeof (thr), owner) != -1)
@@ -742,13 +758,243 @@ ptable_help(void)
 	    "Given a PFN holding a page table, print its contents, and\n"
 	    "the address of the corresponding htable structure.\n"
 	    "\n"
-	    "-m Interpret the PFN as an MFN (machine frame number)\n");
+	    "-m Interpret the PFN as an MFN (machine frame number)\n"
+	    "-l force page table level (3 is top)\n");
 }
+
+static void
+ptmap_help(void)
+{
+	mdb_printf(
+	    "Report all mappings represented by the page table hierarchy\n"
+	    "rooted at the given cr3 value / physical address.\n"
+	    "\n"
+	    "-w run ::whatis on mapping start addresses\n");
+}
+
+static const char *const scalehrtime_desc =
+	"Scales a timestamp from ticks to nanoseconds. Unscaled timestamps\n"
+	"are used as both a quick way of accumulating relative time (as for\n"
+	"usage) and as a quick way of getting the absolute current time.\n"
+	"These uses require slightly different scaling algorithms. By\n"
+	"default, if a specified time is greater than half of the unscaled\n"
+	"time at the last tick (that is, if the unscaled time represents\n"
+	"more than half the time since boot), the timestamp is assumed to\n"
+	"be absolute, and the scaling algorithm used mimics that which the\n"
+	"kernel uses in gethrtime(). Otherwise, the timestamp is assumed to\n"
+	"be relative, and the algorithm mimics scalehrtime(). This behavior\n"
+	"can be overridden by forcing the unscaled time to be interpreted\n"
+	"as relative (via -r) or absolute (via -a).\n";
+
+static void
+scalehrtime_help(void)
+{
+	mdb_printf("%s", scalehrtime_desc);
+}
+
+/*
+ * NSEC_SHIFT is replicated here (it is not defined in a header file),
+ * but for amusement, the reader is directed to the comment that explains
+ * the rationale for this particular value on x86.  Spoiler:  the value is
+ * selected to accommodate 60 MHz Pentiums!  (And a confession:  if the voice
+ * in that comment sounds too familiar, it's because your author also wrote
+ * that code -- some fifteen years prior to this writing in 2011...)
+ */
+#define	NSEC_SHIFT 5
+
+/*ARGSUSED*/
+static int
+scalehrtime_dcmd(uintptr_t addr, uint_t flags, int argc, const mdb_arg_t *argv)
+{
+	uint32_t nsec_scale;
+	hrtime_t tsc = addr, hrt, tsc_last, base, mult = 1;
+	unsigned int *tscp = (unsigned int *)&tsc;
+	uintptr_t scalehrtimef;
+	uint64_t scale;
+	GElf_Sym sym;
+	int expected = !(flags & DCMD_ADDRSPEC);
+	uint_t absolute = FALSE, relative = FALSE;
+
+	if (mdb_getopts(argc, argv,
+	    'a', MDB_OPT_SETBITS, TRUE, &absolute,
+	    'r', MDB_OPT_SETBITS, TRUE, &relative, NULL) != argc - expected)
+		return (DCMD_USAGE);
+
+	if (absolute && relative) {
+		mdb_warn("can't specify both -a and -r\n");
+		return (DCMD_USAGE);
+	}
+
+	if (expected == 1) {
+		switch (argv[argc - 1].a_type) {
+		case MDB_TYPE_STRING:
+			tsc = mdb_strtoull(argv[argc - 1].a_un.a_str);
+			break;
+		case MDB_TYPE_IMMEDIATE:
+			tsc = argv[argc - 1].a_un.a_val;
+			break;
+		default:
+			return (DCMD_USAGE);
+		}
+	}
+
+	if (mdb_readsym(&scalehrtimef,
+	    sizeof (scalehrtimef), "scalehrtimef") == -1) {
+		mdb_warn("couldn't read 'scalehrtimef'");
+		return (DCMD_ERR);
+	}
+
+	if (mdb_lookup_by_name("tsc_scalehrtime", &sym) == -1) {
+		mdb_warn("couldn't find 'tsc_scalehrtime'");
+		return (DCMD_ERR);
+	}
+
+	if (sym.st_value != scalehrtimef) {
+		mdb_warn("::scalehrtime requires that scalehrtimef "
+		    "be set to tsc_scalehrtime\n");
+		return (DCMD_ERR);
+	}
+
+	if (mdb_readsym(&nsec_scale, sizeof (nsec_scale), "nsec_scale") == -1) {
+		mdb_warn("couldn't read 'nsec_scale'");
+		return (DCMD_ERR);
+	}
+
+	if (mdb_readsym(&tsc_last, sizeof (tsc_last), "tsc_last") == -1) {
+		mdb_warn("couldn't read 'tsc_last'");
+		return (DCMD_ERR);
+	}
+
+	if (mdb_readsym(&base, sizeof (base), "tsc_hrtime_base") == -1) {
+		mdb_warn("couldn't read 'tsc_hrtime_base'");
+		return (DCMD_ERR);
+	}
+
+	/*
+	 * If our time is greater than half of tsc_last, we will take our
+	 * delta against tsc_last, convert it, and add that to (or subtract it
+	 * from) tsc_hrtime_base.  This mimics what the kernel actually does
+	 * in gethrtime() (modulo the tsc_sync_tick_delta) and gets us a much
+	 * higher precision result than trying to convert a large tsc value.
+	 */
+	if (absolute || (tsc > (tsc_last >> 1) && !relative)) {
+		if (tsc > tsc_last) {
+			tsc = tsc - tsc_last;
+		} else {
+			tsc = tsc_last - tsc;
+			mult = -1;
+		}
+	} else {
+		base = 0;
+	}
+
+	scale = (uint64_t)nsec_scale;
+
+	hrt = ((uint64_t)tscp[1] * scale) << NSEC_SHIFT;
+	hrt += ((uint64_t)tscp[0] * scale) >> (32 - NSEC_SHIFT);
+
+	mdb_printf("0x%llx\n", base + (hrt * mult));
+
+	return (DCMD_OK);
+}
+
+/*
+ * The x86 feature set is implemented as a bitmap array. That bitmap array is
+ * stored across a number of uchars based on the BT_SIZEOFMAP(NUM_X86_FEATURES)
+ * macro. We have the names for each of these features in unix's text segment
+ * so we do not have to duplicate them and instead just look them up.
+ */
+/*ARGSUSED*/
+static int
+x86_featureset_dcmd(uintptr_t addr, uint_t flags, int argc,
+    const mdb_arg_t *argv)
+{
+	void *fset;
+	GElf_Sym sym;
+	uintptr_t nptr;
+	char name[128];
+	int ii;
+
+	size_t sz = sizeof (uchar_t) * BT_SIZEOFMAP(NUM_X86_FEATURES);
+
+	if (argc != 0)
+		return (DCMD_USAGE);
+
+	if (mdb_lookup_by_name("x86_feature_names", &sym) == -1) {
+		mdb_warn("couldn't find x86_feature_names");
+		return (DCMD_ERR);
+	}
+
+	fset = mdb_zalloc(sz, UM_NOSLEEP);
+	if (fset == NULL) {
+		mdb_warn("failed to allocate memory for x86_featureset");
+		return (DCMD_ERR);
+	}
+
+	if (mdb_readvar(fset, "x86_featureset") != sz) {
+		mdb_warn("failed to read x86_featureset");
+		mdb_free(fset, sz);
+		return (DCMD_ERR);
+	}
+
+	for (ii = 0; ii < NUM_X86_FEATURES; ii++) {
+		if (!BT_TEST((ulong_t *)fset, ii))
+			continue;
+
+		if (mdb_vread(&nptr, sizeof (char *), sym.st_value +
+		    sizeof (void *) * ii) != sizeof (char *)) {
+			mdb_warn("failed to read feature array %d", ii);
+			mdb_free(fset, sz);
+			return (DCMD_ERR);
+		}
+
+		if (mdb_readstr(name, sizeof (name), nptr) == -1) {
+			mdb_warn("failed to read feature %d", ii);
+			mdb_free(fset, sz);
+			return (DCMD_ERR);
+		}
+		mdb_printf("%s\n", name);
+	}
+
+	mdb_free(fset, sz);
+	return (DCMD_OK);
+}
+
+#ifdef _KMDB
+/* ARGSUSED */
+static int
+sysregs_dcmd(uintptr_t addr, uint_t flags, int argc, const mdb_arg_t *argv)
+{
+	struct sysregs sregs = { 0 };
+	desctbr_t gdtr;
+	boolean_t longmode = B_FALSE;
+
+#ifdef __amd64
+	longmode = B_TRUE;
+#endif
+
+	sregs.sr_cr0 = kmdb_unix_getcr0();
+	sregs.sr_cr2 = kmdb_unix_getcr2();
+	sregs.sr_cr3 = kmdb_unix_getcr3();
+	sregs.sr_cr4 = kmdb_unix_getcr4();
+
+	kmdb_unix_getgdtr(&gdtr);
+	sregs.sr_gdtr.d_base = gdtr.dtr_base;
+	sregs.sr_gdtr.d_lim = gdtr.dtr_limit;
+
+	mdb_x86_print_sysregs(&sregs, longmode);
+
+	return (DCMD_OK);
+}
+#endif
+
+extern void xcall_help(void);
+extern int xcall_dcmd(uintptr_t, uint_t, int, const mdb_arg_t *);
 
 static const mdb_dcmd_t dcmds[] = {
 	{ "gate_desc", ":", "dump a gate descriptor", gate_desc },
 	{ "idt", ":[-v]", "dump an IDT", idt },
-	{ "ttrace", "[-x]", "dump trap trace buffers", ttrace },
+	{ "ttrace", "[-x] [-t kthread]", "dump trap trace buffers", ttrace },
 	{ "vatopfn", ":[-a as]", "translate address to physical page",
 	    va2pfn_dcmd },
 	{ "report_maps", ":[-m]",
@@ -756,15 +1002,25 @@ static const mdb_dcmd_t dcmds[] = {
 	    report_maps_dcmd, report_maps_help },
 	{ "htables", "", "Given hat_t *, lists all its htable_t * values",
 	    htables_dcmd, htables_help },
-	{ "ptable", ":[-m]", "Given PFN, dump contents of a page table",
+	{ "ptable", ":[-lm]", "Given PFN, dump contents of a page table",
 	    ptable_dcmd, ptable_help },
-	{ "pte", ":[-p XXXXX] [-l N]", "print human readable page table entry",
+	{ "ptmap", ":", "Given a cr3 value, dump all mappings",
+	    ptmap_dcmd, ptmap_help },
+	{ "pte", ":[-l N]", "print human readable page table entry",
 	    pte_dcmd },
 	{ "pfntomfn", ":", "convert physical page to hypervisor machine page",
 	    pfntomfn_dcmd },
 	{ "mfntopfn", ":", "convert hypervisor machine page to physical page",
 	    mfntopfn_dcmd },
 	{ "memseg_list", ":", "show memseg list", memseg_list },
+	{ "scalehrtime", ":[-a|-r]", "scale an unscaled high-res time",
+	    scalehrtime_dcmd, scalehrtime_help },
+	{ "x86_featureset", NULL, "dump the x86_featureset vector",
+		x86_featureset_dcmd },
+	{ "xcall", ":", "print CPU cross-call state", xcall_dcmd, xcall_help },
+#ifdef _KMDB
+	{ "sysregs", NULL, "dump system registers", sysregs_dcmd },
+#endif
 	{ NULL }
 };
 

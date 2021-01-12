@@ -25,6 +25,9 @@
 /*
  * Copyright (c) 2013 RackTop Systems.
  */
+/*
+ * Copyright 2019 Joyent, Inc.
+ */
 
 /*
  * Declarations for the functions in libcmdutils.
@@ -32,6 +35,11 @@
 
 #ifndef	_LIBCMDUTILS_H
 #define	_LIBCMDUTILS_H
+
+#if !defined(_LP64) && \
+	!((_FILE_OFFSET_BITS == 64) || defined(_LARGEFILE64_SOURCE))
+#error "libcmdutils.h can only be used in a largefile compilation environment"
+#endif
 
 /*
  * This is a private header file.  Applications should not directly include
@@ -41,6 +49,7 @@
 #include <stdio.h>
 #include <unistd.h>
 #include <stdlib.h>
+#include <stdarg.h>
 #include <errno.h>
 #include <fcntl.h>
 #include <limits.h>
@@ -65,18 +74,22 @@ extern "C" {
 
 #define	MAXMAPSIZE	(1024*1024*8)	/* map at most 8MB */
 #define	SMALLFILESIZE	(32*1024)	/* don't use mmap on little file */
-#define	ISREG(A)	(((A).st_mode & S_IFMT) == S_IFREG)
-
-/* avltree */
-#define	OFFSETOF(s, m)	((size_t)(&(((s *)0)->m)))
 
 /* Type used for a node containing a device id and inode number */
+
+#if defined(_LP64) || (_FILE_OFFSET_BITS == 64)
 typedef struct tree_node {
 	dev_t		node_dev;
 	ino_t		node_ino;
 	avl_node_t	avl_link;
 } tree_node_t;
-
+#else
+typedef struct tree_node {
+	dev_t		node_dev;
+	ino64_t		node_ino;
+	avl_node_t	avl_link;
+} tree_node_t;
+#endif
 
 		/* extended system attribute support */
 
@@ -87,8 +100,13 @@ extern int sysattr_type(char *);
 extern int sysattr_support(char *, int);
 
 /* Copies the content of the source file to the target file */
+#if defined(_LP64) || (_FILE_OFFSET_BITS == 64)
 extern int writefile(int, int, char *, char *, char *, char *,
-struct stat *, struct stat *);
+	struct stat *, struct stat *);
+#else
+extern int writefile(int, int, char *, char *, char *, char *,
+	struct stat64 *, struct stat64 *);
+#endif
 
 /* Gets file descriptors of the source and target attribute files */
 extern int get_attrdirs(int, int, char *, int *, int *);
@@ -117,7 +135,11 @@ extern int tnode_compare(const void *, const void *);
  * application must set the tree pointer to NULL before calling
  * add_tnode() for the first time.
  */
+#if defined(_LP64) || (_FILE_OFFSET_BITS == 64)
 extern int add_tnode(avl_tree_t **, dev_t, ino_t);
+#else
+extern int add_tnode(avl_tree_t **, dev_t, ino64_t);
+#endif
 
 /*
  * Used to destroy a whole tree (all nodes) without rebalancing.
@@ -139,6 +161,15 @@ extern int findnextuid(uid_t, uid_t, uid_t *);
  * Used to get the next available group id in given range.
  */
 extern int findnextgid(gid_t, gid_t, gid_t *);
+
+#define	NN_DIVISOR_1000		(1U << 0)
+#define	NN_UNIT_SPACE		(1U << 1)
+
+/* Minimum size for the output of nicenum, including NULL */
+#define	NN_NUMBUF_SZ		(6)
+
+void nicenum(uint64_t, char *, size_t);
+void nicenum_scale(uint64_t, size_t, char *, size_t, uint32_t);
 
 #ifdef	__cplusplus
 }

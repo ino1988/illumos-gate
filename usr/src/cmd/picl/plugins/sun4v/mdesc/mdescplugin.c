@@ -22,6 +22,8 @@
 /*
  * Copyright 2009 Sun Microsystems, Inc.  All rights reserved.
  * Use is subject to license terms.
+ *
+ * Copyright 2019 Peter Tribble.
  */
 
 /*
@@ -110,7 +112,7 @@ dr_handler(const char *ename, const void *earg, size_t size, void *cookie)
 		return;
 	}
 
-	if (nvlist_unpack((char *)earg, size, &nvlp, NULL)) {
+	if (nvlist_unpack((char *)earg, size, &nvlp, 0)) {
 		return;
 	}
 
@@ -174,13 +176,13 @@ dsc_handler(const char *ename, const void *earg, size_t size, void *cookie)
 	 * retrieve the device's physical path from the event arg
 	 * and determine which disk (if any) we are working with
 	 */
-	if (nvlist_unpack((char *)earg, size, &nvlp, NULL))
+	if (nvlist_unpack((char *)earg, size, &nvlp, 0))
 		return;
 	if (nvlist_lookup_string(nvlp, "devfs-path", &path))
 		return;
 
 	lookup.path = strdup(path);
-	lookup.disk = NULL;
+	lookup.disk = 0;
 	lookup.result = DISK_NOT_FOUND;
 
 	status = ptree_walk_tree_by_class(root_node, "disk", (void *)&lookup,
@@ -216,15 +218,11 @@ signal_devtree(void)
 	size_t nvl_size;
 	int status;
 
-	if (nvlist_alloc(&nvl, NV_UNIQUE_NAME_TYPE, NULL) != 0)
+	if (nvlist_alloc(&nvl, NV_UNIQUE_NAME_TYPE, 0) != 0)
 		return;
 
 	/*
-	 * Right now (Aug. 2007) snowbird is the only other platform
-	 * which uses this event.  Since that's a sun4u platform and
-	 * this is sun4v we do not have to worry about possible confusion
-	 * or interference between the two by grabbing this event for
-	 * our own use here.  This event is consumed by the devtree
+	 * This event is consumed by the devtree
 	 * plug-in.  The event signals the plug-in to re-run its
 	 * cpu initialization function, which will cause it to add
 	 * additional information to the cpu devtree nodes (particularly,

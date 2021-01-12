@@ -20,6 +20,7 @@
  */
 /*
  * Copyright (c) 2001, 2010, Oracle and/or its affiliates. All rights reserved.
+ * Copyright 2019 Joyent, Inc.
  */
 
 #include <mdb/mdb_param.h>
@@ -39,6 +40,7 @@
 #include <sys/vnode.h>
 #include <vm/seg_map.h>
 #include <vm/seg_vn.h>
+#include <vm/seg_hole.h>
 #if defined(__i386) || defined(__amd64)
 #include <sys/balloon_impl.h>
 #endif
@@ -81,7 +83,7 @@ page_walk_init(mdb_walk_state_t *wsp)
 	size_t	hashsz;
 	vnode_t	vn;
 
-	if (wsp->walk_addr == NULL) {
+	if (wsp->walk_addr == 0) {
 
 		/*
 		 * Walk all pages
@@ -155,7 +157,7 @@ page_walk_step(mdb_walk_state_t *wsp)
 		 * back around to the first one (we finished), or we
 		 * can't read the page we're looking at, we are done.
 		 */
-		if (pp == NULL || pp == pwd->pw_first)
+		if (pp == 0 || pp == pwd->pw_first)
 			return (WALK_DONE);
 		if (mdb_vread(&page, sizeof (page_t), pp) == -1) {
 			mdb_warn("unable to read page_t at %#lx", pp);
@@ -168,7 +170,7 @@ page_walk_step(mdb_walk_state_t *wsp)
 		 * first page), set it.
 		 */
 		wsp->walk_addr = (uintptr_t)page.p_vpnext;
-		if (pwd->pw_first == NULL)
+		if (pwd->pw_first == 0)
 			pwd->pw_first = pp;
 
 	} else if (pwd->pw_hashleft > 0) {
@@ -179,7 +181,7 @@ page_walk_step(mdb_walk_state_t *wsp)
 		 * If pp (the walk address) is NULL, we scan through
 		 * the page hash table until we find a page.
 		 */
-		if (pp == NULL) {
+		if (pp == 0) {
 
 			/*
 			 * Iterate through the page hash table until we
@@ -194,12 +196,12 @@ page_walk_step(mdb_walk_state_t *wsp)
 				}
 				pwd->pw_hashleft--;
 				pwd->pw_hashloc++;
-			} while (pwd->pw_hashleft && (pp == NULL));
+			} while (pwd->pw_hashleft && (pp == 0));
 
 			/*
 			 * We've reached the end; exit.
 			 */
-			if (pp == NULL)
+			if (pp == 0)
 				return (WALK_DONE);
 		}
 
@@ -441,25 +443,23 @@ vn_get(vn_htable_t *hp, struct vnode *vp, uintptr_t ptr)
 
 /* Summary statistics of pages */
 typedef struct memstat {
-	struct vnode    *ms_kvp;	/* Cached address of kernel vnode */
 	struct vnode    *ms_unused_vp;	/* Unused pages vnode pointer	  */
-	struct vnode    *ms_zvp;	/* Cached address of zio vnode    */
+	struct vnode    *ms_kvps;	/* Cached address of vnode array  */
 	uint64_t	ms_kmem;	/* Pages of kernel memory	  */
 	uint64_t	ms_zfs_data;	/* Pages of zfs data		  */
+	uint64_t	ms_vmm_mem;	/* Pages of VMM mem		  */
 	uint64_t	ms_anon;	/* Pages of anonymous memory	  */
 	uint64_t	ms_vnode;	/* Pages of named (vnode) memory  */
 	uint64_t	ms_exec;	/* Pages of exec/library memory	  */
 	uint64_t	ms_cachelist;	/* Pages on the cachelist (free)  */
+	uint64_t	ms_bootpages;	/* Pages on the bootpages list    */
 	uint64_t	ms_total;	/* Pages on page hash		  */
 	vn_htable_t	*ms_vn_htable;	/* Pointer to hash table	  */
 	struct vnode	ms_vn;		/* vnode buffer			  */
 } memstat_t;
 
-#define	MS_PP_ISKAS(pp, stats)				\
-	((pp)->p_vnode == (stats)->ms_kvp)
-
-#define	MS_PP_ISZFS_DATA(pp, stats)			\
-	(((stats)->ms_zvp != NULL) && ((pp)->p_vnode == (stats)->ms_zvp))
+#define	MS_PP_ISTYPE(pp, stats, index) \
+	((pp)->p_vnode == &(stats->ms_kvps[index]))
 
 /*
  * Summarize pages by type and update stat information
@@ -471,12 +471,16 @@ memstat_callback(page_t *page, page_t *pp, memstat_t *stats)
 {
 	struct vnode *vp = &stats->ms_vn;
 
-	if (pp->p_vnode == NULL || pp->p_vnode == stats->ms_unused_vp)
+	if (PP_ISBOOTPAGES(pp))
+		stats->ms_bootpages++;
+	else if (pp->p_vnode == NULL || pp->p_vnode == stats->ms_unused_vp)
 		return (WALK_NEXT);
-	else if (MS_PP_ISKAS(pp, stats))
+	else if (MS_PP_ISTYPE(pp, stats, KV_KVP))
 		stats->ms_kmem++;
-	else if (MS_PP_ISZFS_DATA(pp, stats))
+	else if (MS_PP_ISTYPE(pp, stats, KV_ZVP))
 		stats->ms_zfs_data++;
+	else if (MS_PP_ISTYPE(pp, stats, KV_VVP))
+		stats->ms_vmm_mem++;
 	else if (PP_ISFREE(pp))
 		stats->ms_cachelist++;
 	else if (vn_get(stats->ms_vn_htable, vp, (uintptr_t)pp->p_vnode))
@@ -502,7 +506,6 @@ memstat(uintptr_t addr, uint_t flags, int argc, const mdb_arg_t *argv)
 	memstat_t stats;
 	GElf_Sym sym;
 	vn_htable_t ht;
-	struct vnode *kvps;
 	uintptr_t vn_size = 0;
 #if defined(__i386) || defined(__amd64)
 	bln_stats_t bln_stats;
@@ -543,16 +546,10 @@ memstat(uintptr_t addr, uint_t flags, int argc, const mdb_arg_t *argv)
 	/* read kernel vnode array pointer */
 	if (mdb_lookup_by_obj(MDB_OBJ_EXEC, "kvps",
 	    (GElf_Sym *)&sym) == -1) {
-		mdb_warn("unable to read kvps");
+		mdb_warn("unable to look up kvps");
 		return (DCMD_ERR);
 	}
-	kvps = (struct vnode *)(uintptr_t)sym.st_value;
-	stats.ms_kvp =  &kvps[KV_KVP];
-
-	/*
-	 * Read the zio vnode pointer.
-	 */
-	stats.ms_zvp = &kvps[KV_ZVP];
+	stats.ms_kvps = (struct vnode *)(uintptr_t)sym.st_value;
 
 	/*
 	 * If physmem != total_pages, then the administrator has limited the
@@ -568,7 +565,7 @@ memstat(uintptr_t addr, uint_t flags, int argc, const mdb_arg_t *argv)
 	stats.ms_unused_vp = (struct vnode *)(uintptr_t)sym.st_value;
 
 	/* walk all pages, collect statistics */
-	if (mdb_walk("allpages", (mdb_walk_cb_t)memstat_callback,
+	if (mdb_walk("allpages", (mdb_walk_cb_t)(uintptr_t)memstat_callback,
 	    &stats) == -1) {
 		mdb_warn("can't walk memseg");
 		return (DCMD_ERR);
@@ -586,11 +583,26 @@ memstat(uintptr_t addr, uint_t flags, int argc, const mdb_arg_t *argv)
 	    (uint64_t)stats.ms_kmem * PAGESIZE / (1024 * 1024),
 	    MS_PCT_TOTAL(stats.ms_kmem));
 
-	if (stats.ms_zfs_data != 0)
+	if (stats.ms_bootpages != 0) {
+		mdb_printf("Boot pages       %16llu  %16llu  %3lu%%\n",
+		    stats.ms_bootpages,
+		    (uint64_t)stats.ms_bootpages * PAGESIZE / (1024 * 1024),
+		    MS_PCT_TOTAL(stats.ms_bootpages));
+	}
+
+	if (stats.ms_zfs_data != 0) {
 		mdb_printf("ZFS File Data    %16llu  %16llu  %3lu%%\n",
 		    stats.ms_zfs_data,
 		    (uint64_t)stats.ms_zfs_data * PAGESIZE / (1024 * 1024),
 		    MS_PCT_TOTAL(stats.ms_zfs_data));
+	}
+
+	if (stats.ms_vmm_mem != 0) {
+		mdb_printf("VMM Memory       %16llu  %16llu  %3lu%%\n",
+		    stats.ms_vmm_mem,
+		    (uint64_t)stats.ms_vmm_mem * PAGESIZE / (1024 * 1024),
+		    MS_PCT_TOTAL(stats.ms_vmm_mem));
+	}
 
 	mdb_printf("Anon             %16llu  %16llu  %3lu%%\n",
 	    stats.ms_anon,
@@ -683,7 +695,7 @@ pagelookup(uintptr_t addr, uint_t flags, int argc, const mdb_arg_t *argv)
 	if (mdb_getopts(argc, argv,
 	    'v', MDB_OPT_UINTPTR, &vp,
 	    'o', MDB_OPT_UINT64, &offset,
-	    0) != argc) {
+	    NULL) != argc) {
 		return (DCMD_USAGE);
 	}
 
@@ -799,7 +811,7 @@ swap_walk_step(mdb_walk_state_t *wsp)
 
 	sip = wsp->walk_addr;
 
-	if (sip == NULL)
+	if (sip == 0)
 		return (WALK_DONE);
 
 	if (mdb_vread(&si, sizeof (struct swapinfo), sip) == -1) {
@@ -854,7 +866,7 @@ memlist_walk_step(mdb_walk_state_t *wsp)
 
 	mlp = wsp->walk_addr;
 
-	if (mlp == NULL)
+	if (mlp == 0)
 		return (WALK_DONE);
 
 	if (mdb_vread(&ml, sizeof (struct memlist), mlp) == -1) {
@@ -895,7 +907,7 @@ memlist(uintptr_t addr, uint_t flags, int argc, const mdb_arg_t *argv)
 			if (!(list & 1))
 				continue;
 			if ((mdb_readvar(&ptr, lists[i]) == -1) ||
-			    (ptr == NULL)) {
+			    (ptr == 0)) {
 				mdb_warn("%s not found or invalid", lists[i]);
 				return (DCMD_ERR);
 			}
@@ -926,7 +938,7 @@ memlist(uintptr_t addr, uint_t flags, int argc, const mdb_arg_t *argv)
 int
 seg_walk_init(mdb_walk_state_t *wsp)
 {
-	if (wsp->walk_addr == NULL) {
+	if (wsp->walk_addr == 0) {
 		mdb_warn("seg walk must begin at struct as *\n");
 		return (WALK_ERR);
 	}
@@ -963,6 +975,11 @@ seg(uintptr_t addr, uint_t flags, int argc, const mdb_arg_t *argv)
 	return (DCMD_OK);
 }
 
+typedef struct pmap_walk_types {
+	uintptr_t pwt_segvn;
+	uintptr_t pwt_seghole;
+} pmap_walk_types_t;
+
 /*ARGSUSED*/
 static int
 pmap_walk_count_pages(uintptr_t addr, const void *data, void *out)
@@ -975,12 +992,14 @@ pmap_walk_count_pages(uintptr_t addr, const void *data, void *out)
 }
 
 static int
-pmap_walk_seg(uintptr_t addr, const struct seg *seg, uintptr_t segvn)
+pmap_walk_seg(uintptr_t addr, const struct seg *seg,
+    const pmap_walk_types_t *types)
 {
+	const uintptr_t ops = (uintptr_t)seg->s_ops;
 
 	mdb_printf("%0?p %0?p %7dk", addr, seg->s_base, seg->s_size / 1024);
 
-	if (segvn == (uintptr_t)seg->s_ops && seg->s_data != NULL) {
+	if (ops == types->pwt_segvn && seg->s_data != NULL) {
 		struct segvn_data svn;
 		pgcnt_t nres = 0;
 
@@ -1006,6 +1025,18 @@ pmap_walk_seg(uintptr_t addr, const struct seg *seg, uintptr_t segvn)
 		} else {
 			mdb_printf(" [ anon ]");
 		}
+	} else if (ops == types->pwt_seghole && seg->s_data != NULL) {
+		seghole_data_t shd;
+		char name[16];
+
+		(void) mdb_vread(&shd, sizeof (shd), (uintptr_t)seg->s_data);
+		if (shd.shd_name == NULL || mdb_readstr(name, sizeof (name),
+		    (uintptr_t)shd.shd_name) == 0) {
+			name[0] = '\0';
+		}
+
+		mdb_printf(" %8s [ hole%s%s ]", "-",
+		    name[0] == '0' ? "" : ":", name);
 	} else {
 		mdb_printf(" %8s [ &%a ]", "?", seg->s_ops);
 	}
@@ -1015,11 +1046,14 @@ pmap_walk_seg(uintptr_t addr, const struct seg *seg, uintptr_t segvn)
 }
 
 static int
-pmap_walk_seg_quick(uintptr_t addr, const struct seg *seg, uintptr_t segvn)
+pmap_walk_seg_quick(uintptr_t addr, const struct seg *seg,
+    const pmap_walk_types_t *types)
 {
+	const uintptr_t ops = (uintptr_t)seg->s_ops;
+
 	mdb_printf("%0?p %0?p %7dk", addr, seg->s_base, seg->s_size / 1024);
 
-	if (segvn == (uintptr_t)seg->s_ops && seg->s_data != NULL) {
+	if (ops == types->pwt_segvn && seg->s_data != NULL) {
 		struct segvn_data svn;
 
 		svn.vp = NULL;
@@ -1042,10 +1076,10 @@ pmap_walk_seg_quick(uintptr_t addr, const struct seg *seg, uintptr_t segvn)
 int
 pmap(uintptr_t addr, uint_t flags, int argc, const mdb_arg_t *argv)
 {
-	uintptr_t segvn;
 	proc_t proc;
 	uint_t quick = FALSE;
 	mdb_walk_cb_t cb = (mdb_walk_cb_t)pmap_walk_seg;
+	pmap_walk_types_t wtypes = { 0 };
 
 	GElf_Sym sym;
 
@@ -1062,9 +1096,9 @@ pmap(uintptr_t addr, uint_t flags, int argc, const mdb_arg_t *argv)
 	}
 
 	if (mdb_lookup_by_name("segvn_ops", &sym) == 0)
-		segvn = (uintptr_t)sym.st_value;
-	else
-		segvn = NULL;
+		wtypes.pwt_segvn = (uintptr_t)sym.st_value;
+	if (mdb_lookup_by_name("seghole_ops", &sym) == 0)
+		wtypes.pwt_seghole = (uintptr_t)sym.st_value;
 
 	mdb_printf("%?s %?s %8s ", "SEG", "BASE", "SIZE");
 
@@ -1075,7 +1109,7 @@ pmap(uintptr_t addr, uint_t flags, int argc, const mdb_arg_t *argv)
 		mdb_printf("%8s %s\n", "RES", "PATH");
 	}
 
-	if (mdb_pwalk("seg", cb, (void *)segvn, (uintptr_t)proc.p_as) == -1) {
+	if (mdb_pwalk("seg", cb, (void *)&wtypes, (uintptr_t)proc.p_as) == -1) {
 		mdb_warn("failed to walk segments of as %p", proc.p_as);
 		return (DCMD_ERR);
 	}
@@ -1102,7 +1136,7 @@ anon_walk_init_common(mdb_walk_state_t *wsp, ulong_t minslot, ulong_t maxslot)
 {
 	anon_walk_data_t *aw;
 
-	if (wsp->walk_addr == NULL) {
+	if (wsp->walk_addr == 0) {
 		mdb_warn("anon walk doesn't support global walks\n");
 		return (WALK_ERR);
 	}
@@ -1188,7 +1222,7 @@ anon_walk_step(mdb_walk_state_t *wsp)
 
 			levtwoptr = (uintptr_t)aw->aw_levone[aw->aw_levone_ndx];
 
-			if (levtwoptr == NULL) {
+			if (levtwoptr == 0) {
 				if (!aw->aw_all) {
 					aw->aw_levtwo_ndx = 0;
 					aw->aw_levone_ndx++;
@@ -1223,12 +1257,12 @@ anon_walk_step(mdb_walk_state_t *wsp)
 		}
 	}
 
-	if (anonptr != NULL) {
+	if (anonptr != 0) {
 		mdb_vread(&anon, sizeof (anon), anonptr);
 		return (wsp->walk_callback(anonptr, &anon, wsp->walk_cbdata));
 	}
 	if (aw->aw_all) {
-		return (wsp->walk_callback(NULL, NULL, wsp->walk_cbdata));
+		return (wsp->walk_callback(0, NULL, wsp->walk_cbdata));
 	}
 	return (WALK_NEXT);
 }
@@ -1261,7 +1295,7 @@ segvn_anon_walk_init(mdb_walk_state_t *wsp)
 	struct anon_map		amp;
 	struct seg		seg;
 
-	if (svd_addr == NULL) {
+	if (svd_addr == 0) {
 		mdb_warn("segvn_anon walk doesn't support global walks\n");
 		return (WALK_ERR);
 	}
@@ -1370,7 +1404,7 @@ segvn_pages_walk_init(mdb_walk_state_t *wsp)
 	segvn_walk_data_t	*svw;
 	struct segvn_data	*svd;
 
-	if (wsp->walk_addr == NULL) {
+	if (wsp->walk_addr == 0) {
 		mdb_warn("segvn walk doesn't support global walks\n");
 		return (WALK_ERR);
 	}
@@ -1479,7 +1513,7 @@ segvn_pages_walk_step(mdb_walk_state_t *wsp)
 		u_offset_t off;
 
 		if (svw->svw_sparse_idx >= svw->svw_sparse_count) {
-			pp = NULL;
+			pp = 0;
 			if (!svw->svw_all) {
 				return (WALK_DONE);
 			}
@@ -1488,14 +1522,14 @@ segvn_pages_walk_step(mdb_walk_state_t *wsp)
 			    &svw->svw_sparse[svw->svw_sparse_idx];
 			off = svs->svs_offset - svd->offset;
 			if (svw->svw_all && svw->svw_walkoff != off) {
-				pp = NULL;
+				pp = 0;
 			} else {
 				pp = svs->svs_page;
 				svw->svw_sparse_idx++;
 			}
 		}
 
-	} else if (svd->amp == NULL || wsp->walk_addr == NULL) {
+	} else if (svd->amp == NULL || wsp->walk_addr == 0) {
 		/*
 		 * If there's no anon, or the anon slot is NULL, look up
 		 * <vp, offset>.
@@ -1504,7 +1538,7 @@ segvn_pages_walk_step(mdb_walk_state_t *wsp)
 			pp = mdb_page_lookup((uintptr_t)svd->vp,
 			    svd->offset + svw->svw_walkoff);
 		} else {
-			pp = NULL;
+			pp = 0;
 		}
 
 	} else {
@@ -1528,12 +1562,12 @@ segvn_pages_walk_step(mdb_walk_state_t *wsp)
 				mdb_warn("walk segvn_pages: useless struct "
 				    "anon at %p\n", wsp->walk_addr);
 			}
-			pp = NULL;	/* nothing at this offset */
+			pp = 0;	/* nothing at this offset */
 		}
 	}
 
 	svw->svw_walkoff += PAGESIZE;	/* Update for the next call */
-	if (pp != NULL) {
+	if (pp != 0) {
 		if (mdb_vread(&page, sizeof (page_t), pp) == -1) {
 			mdb_warn("unable to read page_t at %#lx", pp);
 			return (WALK_ERR);
@@ -1541,7 +1575,7 @@ segvn_pages_walk_step(mdb_walk_state_t *wsp)
 		return (wsp->walk_callback(pp, &page, wsp->walk_cbdata));
 	}
 	if (svw->svw_all) {
-		return (wsp->walk_callback(NULL, NULL, wsp->walk_cbdata));
+		return (wsp->walk_callback(0, NULL, wsp->walk_cbdata));
 	}
 	return (WALK_NEXT);
 }
@@ -1636,7 +1670,7 @@ vnode2smap(uintptr_t addr, uint_t flags, int argc, const mdb_arg_t *argv)
 		}
 
 		saddr = (uintptr_t)smp.sm_hash;
-	} while (saddr != NULL);
+	} while (saddr != 0);
 
 	mdb_printf("no smap for vnode %p, offs %p\n", addr, offset);
 	return (DCMD_OK);

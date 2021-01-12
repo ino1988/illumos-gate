@@ -195,11 +195,11 @@ static const wchar_t widenullstr[] = L"(null)";
 #define	CHAR    0x2000	/* hh for char */
 
 #ifdef	_WIDE
-static wchar_t *
-insert_thousands_sep(wchar_t *bp, wchar_t *ep);
+static wchar_t *insert_decimal_point(wchar_t *ep);
+static wchar_t *insert_thousands_sep(wchar_t *bp, wchar_t *ep);
 #else  /* _WIDE */
-static char *
-insert_thousands_sep(char *bp, char *ep);
+static char *insert_decimal_point(char *ep);
+static char *insert_thousands_sep(char *bp, char *ep);
 #endif /* _WIDE */
 
 static int	_rec_scrswidth(wchar_t *, ssize_t);
@@ -449,7 +449,6 @@ _ndoprnt(const char *format, va_list in_args, FILE *iop, int prflag)
 	size_t bpsize;
 	wchar_t	*p;
 	char	*cbp;
-	char	*cp;
 
 #else  /* _WIDE */
 	/* Starting and ending points for value to be printed */
@@ -460,7 +459,6 @@ _ndoprnt(const char *format, va_list in_args, FILE *iop, int prflag)
 	int	prec = 0;
 	ssize_t width;
 	ssize_t num;
-	ssize_t sec_display;
 	wchar_t *wp;
 	ssize_t preco;
 	ssize_t wcount = 0;
@@ -470,13 +468,13 @@ _ndoprnt(const char *format, va_list in_args, FILE *iop, int prflag)
 	int quote;		/* ' */
 	int	retcode;
 
-
 #ifdef	_WIDE
 	/* Format code */
 	wchar_t	fcode;
 #else  /* _WIDE */
 	/* Format code */
 	char	fcode;
+	ssize_t sec_display;
 #endif /* _WIDE */
 
 	/* Number of padding zeroes required on the left and right */
@@ -573,8 +571,6 @@ _ndoprnt(const char *format, va_list in_args, FILE *iop, int prflag)
 					/* arglst[1] is the second arg, etc */
 
 	int	starflg = 0;	/* set to 1 if * format specifier seen */
-	struct lconv *locptr = localeconv();
-	char	decimal_point = *locptr->decimal_point;
 
 	/*
 	 * Initialize args and sargs to the start of the argument list.
@@ -714,8 +710,10 @@ _ndoprnt(const char *format, va_list in_args, FILE *iop, int prflag)
 		format++;
 		wflag = 0;
 		lflag = 0;
-		sec_display = 0;
 		quote = 0;
+#ifndef	_WIDE
+		sec_display = 0;
+#endif
 
 	charswitch:
 
@@ -1344,11 +1342,11 @@ _ndoprnt(const char *format, va_list in_args, FILE *iop, int prflag)
 			p = &buf[0];
 			*p++ = (*bp != '\0') ? *bp++ : '0';
 
-			/* put in a decimal point if needed */
+			/* Put in a decimal point if needed */
 			if (prec != 0 || (flagword & FSHARP))
-				*p++ = decimal_point;
+				p = insert_decimal_point(p);
 
-			/* create the rest of the mantissa */
+			/* Create the rest of the mantissa */
 			rz = prec;
 			if (fcode == 'A') {
 				for (; rz > 0 && *bp != '\0'; --rz) {
@@ -1452,7 +1450,7 @@ _ndoprnt(const char *format, va_list in_args, FILE *iop, int prflag)
 
 			/* Put in a decimal point if needed */
 			if (prec != 0 || (flagword & FSHARP))
-				*p++ = decimal_point;
+				p = insert_decimal_point(p);
 
 			/* Create the rest of the mantissa */
 			rz = prec;
@@ -1575,9 +1573,9 @@ _ndoprnt(const char *format, va_list in_args, FILE *iop, int prflag)
 				if (quote)
 					p = insert_thousands_sep(buf, p);
 
-				/* Decide whether we need a decimal point */
-				if ((flagword & FSHARP) || prec > 0)
-					*p++ = decimal_point;
+				/* Put in a decimal point if needed */
+				if (prec > 0 || (flagword & FSHARP))
+					p = insert_decimal_point(p);
 
 				/* Digits (if any) after the decimal point */
 				nn = min(prec, MAXFCVT);
@@ -1840,7 +1838,6 @@ wide_S:
 						return (EOF);
 					}
 					nwc = mbstowcs(wstr, cbp, nwc);
-					cp = cbp + strlen(cbp);
 					wcount = nwc;
 					bp = wstr;
 					p = wstr + nwc;
@@ -1907,7 +1904,7 @@ wide_S:
 						 * wbuff, allocate larger buffer
 						 */
 						if ((nwc =
-						    mbstowcs(NULL, bp, NULL)) ==
+						    mbstowcs(NULL, bp, 0)) ==
 						    (size_t)-1) {
 							sec_display =
 							    strlen(bp);
@@ -2661,6 +2658,28 @@ insert_thousands_sep(char *bp, char *ep)
 	while (buf <= bufptr)
 		*obp++ = *bufptr--;
 	return (ep);
+}
+
+#ifdef _WIDE
+static wchar_t *
+insert_decimal_point(wchar_t *ep)
+#else
+static char *
+insert_decimal_point(char *ep)
+#endif
+{
+	struct lconv *locptr = localeconv();
+	char	*dp = locptr->decimal_point;
+#ifdef _WIDE
+	wchar_t wdp;
+
+	(void) mbtowc(&wdp, dp, MB_CUR_MAX);
+	*ep = wdp;
+	return (ep + 1);
+#else
+	(void) memcpy(ep, dp, strlen(dp));
+	return (ep + strlen(dp));
+#endif
 }
 
 

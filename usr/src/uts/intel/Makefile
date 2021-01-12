@@ -21,6 +21,7 @@
 # uts/intel/Makefile
 #
 # Copyright (c) 1999, 2010, Oracle and/or its affiliates. All rights reserved.
+# Copyright 2015 Igor Kozhukhov <ikozhukhov@gmail.com>
 #
 #	This makefile drives the production of all implementation architecture
 #	independent modules for Intel processors.
@@ -29,11 +30,9 @@ UTSBASE = ..
 
 include Makefile.intel
 
-LINT_KMODS_X1	= $(LINT_KMODS:nsmb=)
-LINT_KMODS_X2	= $(LINT_KMODS_X1:smbfs=)
-LINT_KMODLIBS	= $(LINT_KMODS_X2:e1000g=)
-LINT_LIBS	= $(LINT_LIB) $(GEN_LINT_LIB) \
-		  $(LINT_KMODLIBS:%=$(LINT_LIB_DIR)/llib-l%.ln)
+# Unset BINARY for clobber.targ because otherwise it will try to remove
+# a directory under uts/intel.
+BINARY=
 
 #
 # dprov is delivered in the SUNWcryptoint package.
@@ -47,22 +46,18 @@ def.prereq	:=	TARGET= def
 all		:=	TARGET= all
 all.prereq	:=	TARGET= all
 install		:=	TARGET= install
-install.prereq	:=	TARGET= all
+install.prereq	:=	TARGET= install
 clean		:=	TARGET= clean
 clobber		:=	TARGET= clobber
-lint		:=	TARGET= lint
-lint.prereq	:=	TARGET= lint
-modlintlib	:=	TARGET= modlintlib
 modlist		:=	TARGET= modlist
 modlist		:=	NO_STATE= -K $$MODSTATE$$$$
-clean.lint	:=	TARGET= clean.lint
 check		:=	TARGET= check
 install_h	:=	TARGET= install_h
 install_h.prereq	:=	TARGET= install_h
 
 .KEEP_STATE:
 
-.PARALLEL:	$(PARALLEL_KMODS) $(XMODS) config $(LINT_DEPS)
+.PARALLEL:	$(PARALLEL_KMODS) $(XMODS) config
 
 def all install clean clobber modlist: $(KMODS) $(XMODS) config
 
@@ -78,7 +73,7 @@ clobber: clobber.targ
 PRIVS_C = $(SRC)/uts/common/os/priv_const.c
 
 $(PRIVS_C): $(PRIVS_AWK) $(PRIVS_DEF)
-	$(NAWK) -f $(PRIVS_AWK) < $(PRIVS_DEF) cfile=$@
+	$(AWK) -f $(PRIVS_AWK) < $(PRIVS_DEF) cfile=$@
 
 CLOBBERFILES += $(PRIVS_C)
 
@@ -110,19 +105,11 @@ all.prereq install.prereq def.prereq: genunix FRC
 	@cd ../i86pc/genassym; pwd; $(MAKE) $(@:%.prereq=%)
 
 #
-# i86pc lint libraries should be built first
-#
-lint.prereq: FRC
-	@cd ../i86pc; pwd; $(MAKE) $(NO_STATE) lint
-
-#
 # Nothing to do for any other prerequisite targets.
 #
 %.prereq:
 
 genunix: $(PRIVS_C)
-
-modlintlib clean.lint: $(LINT_KMODS) $(XMODS)
 
 $(KMODS) $(SUBDIRS) config:	FRC
 	@cd $@; pwd; $(MAKE) $(NO_STATE) $(TARGET)
@@ -139,25 +126,5 @@ install_h check:	FRC
 	@cd asm; pwd; $(MAKE) $(TARGET)
 	@cd ia32/sys; pwd; $(MAKE) $(TARGET)
 	@cd amd64/sys; pwd; $(MAKE) $(TARGET)
-
-#
-# Work-around to disable acpica global crosscheck lint warnings
-#
-LGREP.intel =	grep -v 'intel/io/acpica'
-
-#
-#	Full kernel lint target.
-#
-LINT_TARGET	= globallint
-
-# workaround for multiply defined errors
-globallint := LINTFLAGS += -erroff=E_NAME_MULTIPLY_DEF2
-
-globallint:
-	@pwd
-	@-$(ECHO) "\nFULL KERNEL: global crosschecks:"
-	@-$(LINT) $(LINTFLAGS) $(LINT_LIBS) 2>&1 | $(LGREP.intel) | $(LGREP.2)
-
-lint:	modlintlib .WAIT $(LINT_DEPS)
 
 include ../Makefile.targ

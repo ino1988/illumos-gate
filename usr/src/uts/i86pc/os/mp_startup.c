@@ -27,8 +27,9 @@
  * All rights reserved.
  */
 /*
- * Copyright (c) 2012, Joyent, Inc.  All rights reserved.
+ * Copyright 2020 Joyent, Inc.
  * Copyright 2013 Nexenta Systems, Inc.  All rights reserved.
+ * Copyright 2018 OmniOS Community Edition (OmniOSce) Association.
  */
 
 #include <sys/types.h>
@@ -76,14 +77,16 @@
 #include <sys/sysmacros.h>
 #if defined(__xpv)
 #include <sys/hypervisor.h>
+#else
+#include <sys/hma.h>
 #endif
 #include <sys/cpu_module.h>
 #include <sys/ontrap.h>
 
-struct cpu	cpus[1];			/* CPU data */
-struct cpu	*cpu[NCPU] = {&cpus[0]};	/* pointers to all CPUs */
-struct cpu	*cpu_free_list;			/* list for released CPUs */
-cpu_core_t	cpu_core[NCPU];			/* cpu_core structures */
+struct cpu	cpus[1] __aligned(MMU_PAGESIZE);
+struct cpu	*cpu[NCPU] = {&cpus[0]};
+struct cpu	*cpu_free_list;
+cpu_core_t	cpu_core[NCPU];
 
 #define	cpu_next_free	cpu_prev
 
@@ -168,20 +171,21 @@ init_cpu_syscall(struct cpu *cp)
 {
 	kpreempt_disable();
 
-#if defined(__amd64)
 	if (is_x86_feature(x86_featureset, X86FSET_MSR) &&
 	    is_x86_feature(x86_featureset, X86FSET_ASYSC)) {
+		uint64_t flags;
 
-#if !defined(__lint)
+#if !defined(__xpv)
 		/*
 		 * The syscall instruction imposes a certain ordering on
 		 * segment selectors, so we double-check that ordering
 		 * here.
 		 */
-		ASSERT(KDS_SEL == KCS_SEL + 8);
-		ASSERT(UDS_SEL == U32CS_SEL + 8);
-		ASSERT(UCS_SEL == U32CS_SEL + 16);
+		CTASSERT(KDS_SEL == KCS_SEL + 8);
+		CTASSERT(UDS_SEL == U32CS_SEL + 8);
+		CTASSERT(UCS_SEL == U32CS_SEL + 16);
 #endif
+
 		/*
 		 * Turn syscall/sysret extensions on.
 		 */
@@ -192,28 +196,36 @@ init_cpu_syscall(struct cpu *cp)
 		 */
 		wrmsr(MSR_AMD_STAR,
 		    ((uint64_t)(U32CS_SEL << 16 | KCS_SEL)) << 32);
-		wrmsr(MSR_AMD_LSTAR, (uint64_t)(uintptr_t)sys_syscall);
-		wrmsr(MSR_AMD_CSTAR, (uint64_t)(uintptr_t)sys_syscall32);
+		if (kpti_enable == 1) {
+			wrmsr(MSR_AMD_LSTAR,
+			    (uint64_t)(uintptr_t)tr_sys_syscall);
+			wrmsr(MSR_AMD_CSTAR,
+			    (uint64_t)(uintptr_t)tr_sys_syscall32);
+		} else {
+			wrmsr(MSR_AMD_LSTAR,
+			    (uint64_t)(uintptr_t)sys_syscall);
+			wrmsr(MSR_AMD_CSTAR,
+			    (uint64_t)(uintptr_t)sys_syscall32);
+		}
 
 		/*
 		 * This list of flags is masked off the incoming
 		 * %rfl when we enter the kernel.
 		 */
-		wrmsr(MSR_AMD_SFMASK, (uint64_t)(uintptr_t)(PS_IE | PS_T));
+		flags = PS_IE | PS_T;
+		if (is_x86_feature(x86_featureset, X86FSET_SMAP) == B_TRUE)
+			flags |= PS_ACHK;
+		wrmsr(MSR_AMD_SFMASK, flags);
 	}
-#endif
 
 	/*
-	 * On 32-bit kernels, we use sysenter/sysexit because it's too
-	 * hard to use syscall/sysret, and it is more portable anyway.
-	 *
 	 * On 64-bit kernels on Nocona machines, the 32-bit syscall
 	 * variant isn't available to 32-bit applications, but sysenter is.
 	 */
 	if (is_x86_feature(x86_featureset, X86FSET_MSR) &&
 	    is_x86_feature(x86_featureset, X86FSET_SEP)) {
 
-#if !defined(__lint)
+#if !defined(__xpv)
 		/*
 		 * The sysenter instruction imposes a certain ordering on
 		 * segment selectors, so we double-check that ordering
@@ -221,13 +233,10 @@ init_cpu_syscall(struct cpu *cp)
 		 * Intel Architecture Software Developer's Manual Volume 2:
 		 * Instruction Set Reference"
 		 */
-		ASSERT(KDS_SEL == KCS_SEL + 8);
+		CTASSERT(KDS_SEL == KCS_SEL + 8);
 
-		ASSERT32(UCS_SEL == ((KCS_SEL + 16) | 3));
-		ASSERT32(UDS_SEL == UCS_SEL + 8);
-
-		ASSERT64(U32CS_SEL == ((KCS_SEL + 16) | 3));
-		ASSERT64(UDS_SEL == U32CS_SEL + 8);
+		CTASSERT(U32CS_SEL == ((KCS_SEL + 16) | 3));
+		CTASSERT(UDS_SEL == U32CS_SEL + 8);
 #endif
 
 		cpu_sep_enable();
@@ -237,11 +246,36 @@ init_cpu_syscall(struct cpu *cp)
 		 * via a context handler.
 		 */
 		wrmsr(MSR_INTC_SEP_ESP, 0);
-		wrmsr(MSR_INTC_SEP_EIP, (uint64_t)(uintptr_t)sys_sysenter);
+
+		if (kpti_enable == 1) {
+			wrmsr(MSR_INTC_SEP_EIP,
+			    (uint64_t)(uintptr_t)tr_sys_sysenter);
+		} else {
+			wrmsr(MSR_INTC_SEP_EIP,
+			    (uint64_t)(uintptr_t)sys_sysenter);
+		}
 	}
 
 	kpreempt_enable();
 }
+
+#if !defined(__xpv)
+/*
+ * Configure per-cpu ID GDT
+ */
+static void
+init_cpu_id_gdt(struct cpu *cp)
+{
+	/* Write cpu_id into limit field of GDT for usermode retrieval */
+#if defined(__amd64)
+	set_usegd(&cp->cpu_gdt[GDT_CPUID], SDP_SHORT, NULL, cp->cpu_id,
+	    SDT_MEMRODA, SEL_UPL, SDP_BYTES, SDP_OP32);
+#elif defined(__i386)
+	set_usegd(&cp->cpu_gdt[GDT_CPUID], NULL, cp->cpu_id, SDT_MEMRODA,
+	    SEL_UPL, SDP_BYTES, SDP_OP32);
+#endif
+}
+#endif /* !defined(__xpv) */
 
 /*
  * Multiprocessor initialization.
@@ -396,20 +430,20 @@ mp_cpu_configure_common(int cpun, boolean_t boot)
 #endif
 
 	/*
-	 * If we have more than one node, each cpu gets a copy of IDT
-	 * local to its node. If this is a Pentium box, we use cpu 0's
-	 * IDT. cpu 0's IDT has been made read-only to workaround the
-	 * cmpxchgl register bug
+	 * Allocate pages for the CPU LDT.
 	 */
-	if (system_hardware.hd_nodes && x86_type != X86_TYPE_P5) {
+	cp->cpu_m.mcpu_ldt = kmem_zalloc(LDT_CPU_SIZE, KM_SLEEP);
+	cp->cpu_m.mcpu_ldt_len = 0;
+
+	/*
+	 * Allocate a per-CPU IDT and initialize the new IDT to the currently
+	 * runing CPU.
+	 */
 #if !defined(__lint)
-		ASSERT((sizeof (*CPU->cpu_idt) * NIDT) <= PAGESIZE);
+	ASSERT((sizeof (*CPU->cpu_idt) * NIDT) <= PAGESIZE);
 #endif
-		cp->cpu_idt = kmem_zalloc(PAGESIZE, KM_SLEEP);
-		bcopy(CPU->cpu_idt, cp->cpu_idt, PAGESIZE);
-	} else {
-		cp->cpu_idt = CPU->cpu_idt;
-	}
+	cp->cpu_idt = kmem_alloc(PAGESIZE, KM_SLEEP);
+	bcopy(CPU->cpu_idt, cp->cpu_idt, PAGESIZE);
 
 	/*
 	 * alloc space for cpuid info
@@ -425,6 +459,10 @@ mp_cpu_configure_common(int cpun, boolean_t boot)
 		cp->cpu_m.mcpu_idle_cpu = cpu_idle;
 
 	init_cpu_info(cp);
+
+#if !defined(__xpv)
+	init_cpu_id_gdt(cp);
+#endif
 
 	/*
 	 * alloc space for ucode_info
@@ -513,7 +551,7 @@ mp_cpu_unconfigure_common(struct cpu *cp, int error)
 		trap_trace_ctl_t *ttc = &trap_trace_ctl[cp->cpu_id];
 
 		kmem_free((void *)ttc->ttc_first, trap_trace_bufsize);
-		ttc->ttc_first = NULL;
+		ttc->ttc_first = (uintptr_t)NULL;
 	}
 #endif
 
@@ -542,6 +580,10 @@ mp_cpu_unconfigure_common(struct cpu *cp, int error)
 	if (cp->cpu_idt != CPU->cpu_idt)
 		kmem_free(cp->cpu_idt, PAGESIZE);
 	cp->cpu_idt = NULL;
+
+	kmem_free(cp->cpu_m.mcpu_ldt, LDT_CPU_SIZE);
+	cp->cpu_m.mcpu_ldt = NULL;
+	cp->cpu_m.mcpu_ldt_len = 0;
 
 	kmem_free(cp->cpu_gdt, PAGESIZE);
 	cp->cpu_gdt = NULL;
@@ -1081,6 +1123,9 @@ workaround_errata(struct cpu *cpu)
 	/*
 	 * This isn't really an erratum, but for convenience the
 	 * detection/workaround code lives here and in cpuid_opteron_erratum.
+	 * Note, the technique only is valid on families before 12h and
+	 * certainly doesn't work when we're virtualized. This is checked for in
+	 * the erratum workaround.
 	 */
 	if (cpuid_opteron_erratum(cpu, 6336786) > 0) {
 #if defined(OPTERON_WORKAROUND_6336786)
@@ -1131,7 +1176,9 @@ workaround_errata(struct cpu *cpu)
 
 	/*LINTED*/
 	/*
-	 * Mutex primitives don't work as expected.
+	 * Mutex primitives don't work as expected. This is erratum #147 from
+	 * 'Revision Guide for AMD Athlon 64 and AMD Opteron Processors'
+	 * document 25759.
 	 */
 	if (cpuid_opteron_erratum(cpu, 6323525) > 0) {
 #if defined(OPTERON_WORKAROUND_6323525)
@@ -1482,8 +1529,25 @@ start_other_cpus(int cprboot)
 	 */
 	init_cpu_info(CPU);
 
+#if !defined(__xpv)
+	init_cpu_id_gdt(CPU);
+#endif
+
 	cmn_err(CE_CONT, "?cpu%d: %s\n", CPU->cpu_id, CPU->cpu_idstr);
 	cmn_err(CE_CONT, "?cpu%d: %s\n", CPU->cpu_id, CPU->cpu_brandstr);
+
+	/*
+	 * KPTI initialisation happens very early in boot, before logging is
+	 * set up. Output a status message now as the boot CPU comes online.
+	 */
+	cmn_err(CE_CONT, "?KPTI %s (PCID %s, INVPCID %s)\n",
+	    kpti_enable ? "enabled" : "disabled",
+	    x86_use_pcid == 1 ? "in use" :
+	    (is_x86_feature(x86_featureset, X86FSET_PCID) ? "disabled" :
+	    "not supported"),
+	    x86_use_pcid == 1 && x86_use_invpcid == 1 ? "in use" :
+	    (is_x86_feature(x86_featureset, X86FSET_INVPCID) ? "disabled" :
+	    "not supported"));
 
 	/*
 	 * Initialize our syscall handlers
@@ -1552,6 +1616,14 @@ done:
 	if (get_hwenv() == HW_NATIVE)
 		workaround_errata_end();
 	cmi_post_mpstartup();
+
+#if !defined(__xpv)
+	/*
+	 * Once other CPUs have completed startup procedures, perform
+	 * initialization of hypervisor resources for HMA.
+	 */
+	hma_init();
+#endif
 
 	if (use_mp && ncpus != boot_max_ncpus) {
 		cmn_err(CE_NOTE,
@@ -1671,8 +1743,7 @@ mp_startup_common(boolean_t boot)
 	/*
 	 * Program this cpu's PAT
 	 */
-	if (is_x86_feature(x86_featureset, X86FSET_PAT))
-		pat_sync();
+	pat_sync();
 #endif
 
 	/*
@@ -1699,28 +1770,23 @@ mp_startup_common(boolean_t boot)
 	sti();
 
 	/*
-	 * Do a sanity check to make sure this new CPU is a sane thing
-	 * to add to the collection of processors running this system.
+	 * There exists a small subset of systems which expose differing
+	 * MWAIT/MONITOR support between CPUs.  If MWAIT support is absent from
+	 * the boot CPU, but is found on a later CPU, the system continues to
+	 * operate as if no MWAIT support is available.
 	 *
-	 * XXX	Clearly this needs to get more sophisticated, if x86
-	 * systems start to get built out of heterogenous CPUs; as is
-	 * likely to happen once the number of processors in a configuration
-	 * gets large enough.
-	 */
-	if (compare_x86_featureset(x86_featureset, new_x86_featureset) ==
-	    B_FALSE) {
-		cmn_err(CE_CONT, "cpu%d: featureset\n", cp->cpu_id);
-		print_x86_featureset(new_x86_featureset);
-		cmn_err(CE_WARN, "cpu%d feature mismatch", cp->cpu_id);
-	}
-
-	/*
-	 * We do not support cpus with mixed monitor/mwait support if the
-	 * boot cpu supports monitor/mwait.
+	 * The reverse case, where MWAIT is available on the boot CPU but not
+	 * on a subsequently initialized CPU, is not presently allowed and will
+	 * result in a panic.
 	 */
 	if (is_x86_feature(x86_featureset, X86FSET_MWAIT) !=
-	    is_x86_feature(new_x86_featureset, X86FSET_MWAIT))
-		panic("unsupported mixed cpu monitor/mwait support detected");
+	    is_x86_feature(new_x86_featureset, X86FSET_MWAIT)) {
+		if (!is_x86_feature(x86_featureset, X86FSET_MWAIT)) {
+			remove_x86_feature(new_x86_featureset, X86FSET_MWAIT);
+		} else {
+			panic("unsupported mixed cpu mwait support detected");
+		}
+	}
 
 	/*
 	 * We could be more sophisticated here, and just mark the CPU
@@ -1742,6 +1808,8 @@ mp_startup_common(boolean_t boot)
 	 * again if it's switched away with CPU_QUIESCED set.
 	 */
 	cp->cpu_flags &= ~(CPU_POWEROFF | CPU_QUIESCED);
+
+	enable_pcid();
 
 	/*
 	 * Setup this processor for XSAVE.
@@ -1803,9 +1871,28 @@ mp_startup_common(boolean_t boot)
 	(void) spl0();
 
 	/*
-	 * Fill out cpu_ucode_info.  Update microcode if necessary.
+	 * Fill out cpu_ucode_info.  Update microcode if necessary. Note that
+	 * this is done after pass1 on the boot CPU, but it needs to be later on
+	 * for the other CPUs.
 	 */
 	ucode_check(cp);
+	cpuid_pass_ucode(cp, new_x86_featureset);
+
+	/*
+	 * Do a sanity check to make sure this new CPU is a sane thing
+	 * to add to the collection of processors running this system.
+	 *
+	 * XXX	Clearly this needs to get more sophisticated, if x86
+	 * systems start to get built out of heterogenous CPUs; as is
+	 * likely to happen once the number of processors in a configuration
+	 * gets large enough.
+	 */
+	if (compare_x86_featureset(x86_featureset, new_x86_featureset) ==
+	    B_FALSE) {
+		cmn_err(CE_CONT, "cpu%d: featureset\n", cp->cpu_id);
+		print_x86_featureset(new_x86_featureset);
+		cmn_err(CE_WARN, "cpu%d feature mismatch", cp->cpu_id);
+	}
 
 #ifndef __xpv
 	{
@@ -1830,14 +1917,14 @@ mp_startup_common(boolean_t boot)
 	if (boothowto & RB_DEBUG)
 		kdi_cpu_init();
 
+	(void) mach_cpu_create_device_node(cp, NULL);
+
 	/*
 	 * Setting the bit in cpu_ready_set must be the last operation in
 	 * processor initialization; the boot CPU will continue to boot once
 	 * it sees this bit set for all active CPUs.
 	 */
 	CPUSET_ATOMIC_ADD(cpu_ready_set, cp->cpu_id);
-
-	(void) mach_cpu_create_device_node(cp, NULL);
 
 	cmn_err(CE_CONT, "?cpu%d: %s\n", cp->cpu_id, cp->cpu_idstr);
 	cmn_err(CE_CONT, "?cpu%d: %s\n", cp->cpu_id, cp->cpu_brandstr);
@@ -1848,7 +1935,6 @@ mp_startup_common(boolean_t boot)
 	 * Now we are done with the startup thread, so free it up.
 	 */
 	thread_exit();
-	panic("mp_startup: cannot return");
 	/*NOTREACHED*/
 }
 
@@ -1911,6 +1997,10 @@ mp_cpu_stop(struct cpu *cp)
 
 /*
  * Take the specified CPU out of participation in interrupts.
+ *
+ * Usually, we hold cpu_lock. But we cannot assert as such due to the
+ * exception - i_cpr_save_context() - where we have mutual exclusion via a
+ * separate mechanism.
  */
 int
 cpu_disable_intr(struct cpu *cp)
@@ -1919,6 +2009,7 @@ cpu_disable_intr(struct cpu *cp)
 		return (EBUSY);
 
 	cp->cpu_flags &= ~CPU_ENABLE;
+	ncpus_intr_enabled--;
 	return (0);
 }
 
@@ -1930,6 +2021,7 @@ cpu_enable_intr(struct cpu *cp)
 {
 	ASSERT(MUTEX_HELD(&cpu_lock));
 	cp->cpu_flags |= CPU_ENABLE;
+	ncpus_intr_enabled++;
 	psm_enable_intr(cp->cpu_id);
 }
 
@@ -1985,9 +2077,8 @@ mp_cpu_faulted_exit(struct cpu *cp)
  * syscall features.
  */
 
-/*ARGSUSED*/
 void
-cpu_fast_syscall_disable(void *arg)
+cpu_fast_syscall_disable(void)
 {
 	if (is_x86_feature(x86_featureset, X86FSET_MSR) &&
 	    is_x86_feature(x86_featureset, X86FSET_SEP))
@@ -1997,9 +2088,8 @@ cpu_fast_syscall_disable(void *arg)
 		cpu_asysc_disable();
 }
 
-/*ARGSUSED*/
 void
-cpu_fast_syscall_enable(void *arg)
+cpu_fast_syscall_enable(void)
 {
 	if (is_x86_feature(x86_featureset, X86FSET_MSR) &&
 	    is_x86_feature(x86_featureset, X86FSET_SEP))
@@ -2016,6 +2106,8 @@ cpu_sep_enable(void)
 	ASSERT(curthread->t_preempt || getpil() >= LOCK_LEVEL);
 
 	wrmsr(MSR_INTC_SEP_CS, (uint64_t)(uintptr_t)KCS_SEL);
+
+	CPU->cpu_m.mcpu_fast_syscall_state |= FSS_SEP_ENABLED;
 }
 
 static void
@@ -2029,6 +2121,8 @@ cpu_sep_disable(void)
 	 * the sysenter or sysexit instruction to trigger a #gp fault.
 	 */
 	wrmsr(MSR_INTC_SEP_CS, 0);
+
+	CPU->cpu_m.mcpu_fast_syscall_state &= ~FSS_SEP_ENABLED;
 }
 
 static void
@@ -2039,6 +2133,8 @@ cpu_asysc_enable(void)
 
 	wrmsr(MSR_AMD_EFER, rdmsr(MSR_AMD_EFER) |
 	    (uint64_t)(uintptr_t)AMD_EFER_SCE);
+
+	CPU->cpu_m.mcpu_fast_syscall_state |= FSS_ASYSC_ENABLED;
 }
 
 static void
@@ -2053,4 +2149,6 @@ cpu_asysc_disable(void)
 	 */
 	wrmsr(MSR_AMD_EFER, rdmsr(MSR_AMD_EFER) &
 	    ~((uint64_t)(uintptr_t)AMD_EFER_SCE));
+
+	CPU->cpu_m.mcpu_fast_syscall_state &= ~FSS_ASYSC_ENABLED;
 }

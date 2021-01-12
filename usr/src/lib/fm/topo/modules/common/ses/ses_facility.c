@@ -25,37 +25,45 @@
  */
 
 /*
+ * Copyright 2015 Nexenta Systems, Inc.  All rights reserved.
+ */
+
+/*
+ * Copyright (c) 2018, Joyent, Inc.
+ */
+
+/*
  * Facility node support for SES enclosures.  We support the following facility
  * nodes, based on the node type:
  *
- * 	bay
- * 		indicator=ident
- * 		indicator=fail
- * 		indicator=ok2rm
- * 		sensor=fault
+ *      bay
+ *              indicator=ident
+ *              indicator=fail
+ *              indicator=ok2rm
+ *              sensor=fault
  *
- * 	controller
- * 		indicator=ident
- * 		indicator=fail
+ *      controller
+ *              indicator=ident
+ *              indicator=fail
  *
- * 	fan
- * 		indicator=ident
- * 		indicator=fail
- * 		sensor=speed
- * 		sensor=fault
+ *      fan
+ *              indicator=ident
+ *              indicator=fail
+ *              sensor=speed
+ *              sensor=fault
  *
- * 	psu
- * 		indicator=ident
- * 		indicator=fail
- * 		sensor=status
+ *      psu
+ *              indicator=ident
+ *              indicator=fail
+ *              sensor=status
  *
- * 	ses-enclosure
- * 		indicator=ident
- * 		indicator=fail
- * 		sensor=fault
- * 		sensor=<name>	(temperature)
- * 		sensor=<name>	(voltage)
- * 		sensor=<name>	(current)
+ *      ses-enclosure
+ *              indicator=ident
+ *              indicator=fail
+ *              sensor=fault
+ *              sensor=<name>   (temperature)
+ *              sensor=<name>   (voltage)
+ *              sensor=<name>   (current)
  *
  * Most of these are handled by a single method that supports getting and
  * setting boolean properties on the node.  The fan speed sensor requires a
@@ -105,7 +113,8 @@ typedef struct ses_sensor_desc {
 static const topo_method_t ses_indicator_methods[] = {
 	{ "ses_indicator_mode", TOPO_PROP_METH_DESC,
 	    TOPO_METH_SES_MODE_VERSION, TOPO_STABILITY_INTERNAL,
-	    ses_indicator_mode }
+	    ses_indicator_mode },
+	{ NULL }
 };
 
 static const topo_method_t ses_sensor_methods[] = {
@@ -118,6 +127,7 @@ static const topo_method_t ses_sensor_methods[] = {
 	{ "ses_psu_state", TOPO_PROP_METH_DESC,
 	    TOPO_METH_SES_PSU_VERSION, TOPO_STABILITY_INTERNAL,
 	    ses_psu_state },
+	{ NULL }
 };
 
 /*
@@ -816,7 +826,7 @@ ses_node_enum_facility(topo_mod_t *mod, tnode_t *tn, topo_version_t vers,
 		    "fail", SES_PROP_FAIL, NULL) != 0 ||
 		    ses_add_sensor(mod, tn, nodeid, "speed", &sd) != 0 ||
 		    ses_add_discrete(mod, tn, nodeid, "fault",
-		    SES_PROP_OFF) != 0)
+		    SES_PROP_FAIL) != 0)
 			goto error;
 		break;
 
@@ -926,7 +936,7 @@ ses_add_enclosure_sensors(topo_mod_t *mod, tnode_t *tn, ses_node_t *agg,
 			    "%.*s %llu", len, desc, index);
 		}
 
-		if ((name = disk_auth_clean(mod, rawname)) == NULL)
+		if ((name = topo_mod_clean_str(mod, rawname)) == NULL)
 			return (-1);
 
 		if (ses_add_sensor(mod, tn, nodeid, name, &sd) != 0) {

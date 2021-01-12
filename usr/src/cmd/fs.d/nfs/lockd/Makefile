@@ -21,6 +21,7 @@
 #
 # Copyright (c) 1990, 2010, Oracle and/or its affiliates. All rights reserved.
 # Copyright (c) 2012 by Delphix. All rights reserved.
+# Copyright (c) 2018, Joyent, Inc.
 #
 
 FSTYPE	  =	nfs
@@ -38,12 +39,16 @@ SRCS	  =	$(LOCAL:%.o=%.c) ../lib/daemon.c ../lib/nfs_tbind.c \
 		../lib/smfcfg.c ../lib/thrpool.c
 LDLIBS	 +=	-lnsl -lscf
 CPPFLAGS +=	-I../lib
-C99MODE	  =	$(C99_ENABLE)
+CSTD	  =	$(CSTD_GNU99)
 
 CERRWARN += -_gcc=-Wno-parentheses
 CERRWARN += -_gcc=-Wno-switch
 CERRWARN += -_gcc=-Wno-unused-variable
-CERRWARN += -_gcc=-Wno-uninitialized
+CERRWARN += $(CNOWARN_UNINIT)
+
+# not linted
+SMATCH=off
+
 
 $(TYPEPROG):	$(OBJS)
 		$(LINK.c) -o $@ $(OBJS) $(LDLIBS)

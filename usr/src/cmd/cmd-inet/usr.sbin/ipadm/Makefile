@@ -22,36 +22,32 @@
 # Copyright 2010 Sun Microsystems, Inc.  All rights reserved.
 # Use is subject to license terms.
 #
-#
+# Copyright 2020 Joyent, Inc.
 
 PROG =		ipadm
 ROOTFS_PROG =	$(PROG)
 LOCALOBJS=	ipadm.o
-COMMONOBJS=	
+COMMONOBJS=
 OBJS=		$(LOCALOBJS) $(COMMONOBJS)
 
 include ../../../Makefile.cmd
 include ../../Makefile.cmd-inet
 
-XGETFLAGS += 	-a -x $(PROG).xcl
+XGETFLAGS +=	-a -x $(PROG).xcl
 LOCALSRCS=	$(LOCALOBJS:%.o=%.c)
 COMMONSRCS=	$(CMDINETCOMMONDIR)/$(COMMONOBJS:%.o=%.c)
 SRCS=		$(LOCALSRCS) $(COMMONSRCS)
 
 CPPFLAGS +=	-I$(CMDINETCOMMONDIR)
-CERRWARN +=	-_gcc=-Wno-unused-label
-CERRWARN +=	-_gcc=-Wno-uninitialized
-LDLIBS +=       -linetutil -lipadm -lnvpair
+LDLIBS +=       -lofmt -linetutil -lipadm -lnvpair
 LINTFLAGS +=	-m
 
 ROOTUSRSBINLINKS = $(PROG:%=$(ROOTUSRSBIN)/%)
 
 # ipadm uses the ancillary data feature which is available only through
 # UNIX 98 standards version of Socket interface. This interface is supposed to
-# be accessed by -lxnet. In addition -lsocket is used to capture new
-# not-yet-standard interfaces. Someday -lxnet alone should be enough when IPv6
-# inspired new interfaces are part of standards.
-LDLIBS +=	-lxnet -lsocket
+# be accessed by -lxnet.
+LDLIBS +=	-lxnet
 
 # these #defines are required to use UNIX 98 interfaces
 _D_UNIX98_EXTN= -D_XOPEN_SOURCE=500 -D__EXTENSIONS__

@@ -11,7 +11,9 @@
 
 #
 # Copyright 2011, Richard Lowe
-# Copyright 2013 Nexenta Systems, Inc.  All rights reserved.
+# Copyright 2015, Joyent, Inc.
+# Copyright 2018 Nexenta Systems, Inc.
+# Copyright 2018 Gary Mills
 #
 
 include		$(SRC)/Makefile.master
@@ -27,9 +29,7 @@ _MANFILES=	Intro.4				\
 		au.4				\
 		audit.log.4			\
 		audit_class.4			\
-		audit_control.4			\
 		audit_event.4			\
-		audit_user.4			\
 		auth_attr.4			\
 		autofs.4			\
 		bart_manifest.4			\
@@ -60,7 +60,6 @@ _MANFILES=	Intro.4				\
 		dialups.4			\
 		dir_ufs.4			\
 		driver.conf.4			\
-		ds.log.4			\
 		ethers.4			\
 		exec_attr.4			\
 		fdi.4				\
@@ -82,6 +81,10 @@ _MANFILES=	Intro.4				\
 		ib.4				\
 		ike.config.4			\
 		ike.preshared.4			\
+		ipf.4				\
+		ipmon.4				\
+		ipnat.4				\
+		ippool.4			\
 		inet_type.4			\
 		inetd.conf.4			\
 		init.4				\
@@ -102,12 +105,8 @@ _MANFILES=	Intro.4				\
 		loginlog.4			\
 		magic.4				\
 		mailer.conf.4			\
-		md.tab.4			\
-		mddb.cf.4			\
 		mech.4				\
-		meddb.4				\
 		mnttab.4			\
-		mod_ipp.4			\
 		mpapi.conf.4			\
 		nca.if.4			\
 		ncad_addr.4			\
@@ -157,7 +156,6 @@ _MANFILES=	Intro.4				\
 		publickey.4			\
 		queuedefs.4			\
 		rcmscript.4			\
-		rdc.cf.4			\
 		remote.4			\
 		resolv.conf.4			\
 		rmtab.4				\
@@ -166,7 +164,6 @@ _MANFILES=	Intro.4				\
 		sasl_appname.conf.4		\
 		scsi.4				\
 		securenets.4			\
-		sel_config.4			\
 		sendmail.4			\
 		service_bundle.4		\
 		service_provider.conf.4		\
@@ -179,11 +176,8 @@ _MANFILES=	Intro.4				\
 		smb.4				\
 		smbautohome.4			\
 		smhba.conf.4			\
-		sndr.4				\
 		sock2path.d.4			\
 		space.4				\
-		ssh_config.4			\
-		sshd_config.4			\
 		sulog.4				\
 		syslog.conf.4			\
 		system.4			\
@@ -200,9 +194,6 @@ _MANFILES=	Intro.4				\
 		utmp.4				\
 		utmpx.4				\
 		vfstab.4			\
-		volume-config.4			\
-		volume-request.4		\
-		wanboot.conf.4			\
 		warn.conf.4			\
 		ypfiles.4			\
 		yppasswdd.4			\
@@ -211,7 +202,8 @@ _MANFILES=	Intro.4				\
 
 sparc_MANFILES=	sbus.4
 
-i386_MANFILES=	sysbus.4
+i386_MANFILES=	loader.conf.4			\
+		sysbus.4
 
 _MANLINKS=	addresses.4			\
 		devid_cache.4			\
@@ -224,7 +216,11 @@ _MANLINKS=	addresses.4			\
 		hosts.allow.4			\
 		hosts.deny.4			\
 		intro.4				\
-		md.cf.4				\
+		ipf.conf.4			\
+		ipf6.conf.4			\
+		ipmon.conf.4			\
+		ipnat.conf.4			\
+		ippool.conf.4			\
 		mdi_ib_cache.4			\
 		mdi_scsi_vhci_cache.4		\
 		pci_unitaddr_persistent.4	\
@@ -234,7 +230,6 @@ _MANLINKS=	addresses.4			\
 		sendmail.cf.4			\
 		snapshot_cache.4		\
 		submit.cf.4			\
-		volume-defaults.4		\
 		wtmp.4				\
 		wtmpx.4
 
@@ -264,9 +259,16 @@ rhosts.4			:= LINKSRC = hosts.equiv.4
 hosts.allow.4			:= LINKSRC = hosts_access.4
 hosts.deny.4			:= LINKSRC = hosts_access.4
 
-fbtab.4				:= LINKSRC = logindevperm.4
+ipf.conf.4			:= LINKSRC = ipf.4
+ipf6.conf.4			:= LINKSRC = ipf.4
 
-md.cf.4				:= LINKSRC = md.tab.4
+ipmon.conf.4			:= LINKSRC = ipmon.4
+
+ipnat.conf.4			:= LINKSRC = ipnat.4
+
+ippool.conf.4			:= LINKSRC = ippool.4
+
+fbtab.4				:= LINKSRC = logindevperm.4
 
 qop.4				:= LINKSRC = mech.4
 
@@ -282,8 +284,6 @@ dumpdates.4			:= LINKSRC = ufsdump.4
 wtmp.4				:= LINKSRC = utmp.4
 
 wtmpx.4				:= LINKSRC = utmpx.4
-
-volume-defaults.4		:= LINKSRC = volume-request.4
 
 .KEEP_STATE:
 

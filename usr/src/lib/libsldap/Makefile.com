@@ -22,6 +22,7 @@
 # Copyright 2008 Sun Microsystems, Inc.  All rights reserved.
 # Use is subject to license terms.
 #
+# Copyright (c) 2018, Joyent, Inc.
 
 LIBRARY= libsldap.a
 VERS= .1
@@ -38,8 +39,7 @@ OBJECTS=	$(SLDAPOBJ)
 include ../../Makefile.lib
 
 SRCS =		$(SLDAPOBJ:%.o=../common/%.c)
-LIBS =		$(DYNLIB) $(LINTLIB)
-$(LINTLIB):= 	SRCS=../common/llib-lsldap
+LIBS =		$(DYNLIB)
 LDLIBS +=	-lnsl -lldap -lscf -lc
 
 SRCDIR =	../common
@@ -48,17 +48,17 @@ CFLAGS +=	$(CCVERBOSE)
 LOCFLAGS +=	-D_REENTRANT -DSUNW_OPTIONS
 CPPFLAGS +=	-I../common -I$(SRC)/lib/libldap5/include/ldap \
 		-I$(ADJUNCT_PROTO)/usr/include/mps $(LOCFLAGS)
-LINTFLAGS +=	-erroff=E_BAD_PTR_CAST_ALIGN
-LINTFLAGS64 +=	-erroff=E_BAD_PTR_CAST_ALIGN
 
 CERRWARN +=	-_gcc=-Wno-parentheses
 CERRWARN +=	-_gcc=-Wno-switch
-CERRWARN +=	-_gcc=-Wno-uninitialized
+CERRWARN +=	$(CNOWARN_UNINIT)
+
+# not linted
+SMATCH=off
 
 .KEEP_STATE:
 
 all: $(LIBS)
 
-lint: lintcheck
 
 include ../../Makefile.targ

@@ -21,6 +21,7 @@
 /*
  * Copyright 2010 Sun Microsystems, Inc.  All rights reserved.
  * Use is subject to license terms.
+ * Copyright 2019 Peter Tribble.
  */
 
 /*
@@ -53,7 +54,6 @@
 #include <sys/promif.h>
 #include <sys/sysmacros.h>	/* offsetof */
 #include <sys/nvpair.h>
-#include <sys/wanboot_impl.h>
 #include <sys/zone.h>
 #include <sys/consplat.h>
 #include <sys/bootconf.h>
@@ -222,7 +222,7 @@ opattach(dev_info_t *dip, ddi_attach_cmd_t cmd)
 		opdip = dip;
 
 		if (ddi_create_minor_node(dip, "openprom", S_IFCHR,
-		    0, DDI_PSEUDO, NULL) == DDI_FAILURE) {
+		    0, DDI_PSEUDO, 0) == DDI_FAILURE) {
 			return (DDI_FAILURE);
 		}
 
@@ -363,7 +363,7 @@ opromioctl_cb(void *avp, int has_changed)
 	char *valbuf;
 	int error = 0;
 	uint_t userbufsize;
-	pnode_t node_id;
+	pnode_t node_id = OBP_NONODE;
 	char propname[OBP_MAXPROPNAME];
 
 	st = argp->st;
@@ -491,19 +491,11 @@ opromioctl_cb(void *avp, int has_changed)
 #if !defined(__i386) && !defined(__amd64)
 	case OPROMGETFBNAME:
 	case OPROMDEV2PROMNAME:
-	case OPROMREADY64:
 #endif	/* !__i386 && !__amd64 */
 		if ((mode & FREAD) == 0) {
 			return (EPERM);
 		}
 		break;
-
-#if !defined(__i386) && !defined(__amd64)
-	case WANBOOT_SETKEY:
-		if (!(mode & FWRITE))
-			return (EPERM);
-		break;
-#endif	/* !__i386 && !defined(__amd64) */
 
 	default:
 		return (EINVAL);
@@ -985,100 +977,6 @@ opromioctl_cb(void *avp, int has_changed)
 
 		break;
 	}
-
-	case OPROMREADY64: {
-		struct openprom_opr64 *opr =
-		    (struct openprom_opr64 *)opp->oprom_array;
-		int i;
-		pnode_t id;
-
-		if (userbufsize < sizeof (*opr)) {
-			error = EINVAL;
-			break;
-		}
-
-		valsize = userbufsize -
-		    offsetof(struct openprom_opr64, message);
-
-		i = prom_version_check(opr->message, valsize, &id);
-		opr->return_code = i;
-		opr->nodeid = (int)id;
-
-		valsize = offsetof(struct openprom_opr64, message);
-		valsize += strlen(opr->message) + 1;
-
-		/*
-		 * copyout only the part of the user buffer we need to.
-		 */
-		if (copyout(opp, (void *)arg,
-		    (size_t)(min((uint_t)valsize, userbufsize) +
-		    sizeof (uint_t))) != 0)
-			error = EFAULT;
-		break;
-
-	}	/* case OPROMREADY64 */
-
-	case WANBOOT_SETKEY: {
-		struct wankeyio *wp;
-		int reslen;
-		int status;
-		int rv;
-		int i;
-
-		/*
-		 * The argument is a struct wankeyio.  Validate it as best
-		 * we can.
-		 */
-		if (userbufsize != (sizeof (struct wankeyio))) {
-			error = EINVAL;
-			break;
-		}
-		if (copyin(((caddr_t)arg + sizeof (uint_t)),
-		    opp->oprom_array, sizeof (struct wankeyio)) != 0) {
-			error = EFAULT;
-			break;
-		}
-		wp = (struct wankeyio *)opp->oprom_array;
-
-		/* check for key name and key size overflow */
-		for (i = 0; i < WANBOOT_MAXKEYNAMELEN; i++)
-			if (wp->wk_keyname[i] == '\0')
-				break;
-		if ((i == WANBOOT_MAXKEYNAMELEN) ||
-		    (wp->wk_keysize > WANBOOT_MAXKEYLEN)) {
-			error = EINVAL;
-			break;
-		}
-
-		rv = prom_set_security_key(wp->wk_keyname, wp->wk_u.key,
-		    wp->wk_keysize, &reslen, &status);
-		if (rv)
-			error = EIO;
-		else
-			switch (status) {
-				case 0:
-					error = 0;
-					break;
-
-				case -2:	/* out of key storage space */
-					error = ENOSPC;
-					break;
-
-				case -3:	/* key name or value too long */
-					error = EINVAL;
-					break;
-
-				case -4:	/* can't delete:  no such key */
-					error = ENOENT;
-					break;
-
-				case -1:	/* unspecified error */
-				default:	/* this should not happen */
-					error = EIO;
-					break;
-			}
-		break;
-	}	/* case WANBOOT_SETKEY */
 #endif	/* !__i386 && !__amd64 */
 	}	/* switch (cmd)	*/
 
@@ -1089,7 +987,7 @@ opromioctl_cb(void *avp, int has_changed)
 /*ARGSUSED*/
 static int
 opromioctl(dev_t dev, int cmd, intptr_t arg, int mode,
-	cred_t *credp, int *rvalp)
+    cred_t *credp, int *rvalp)
 {
 	struct oprom_state *st;
 	struct opromioctl_args arg_block;

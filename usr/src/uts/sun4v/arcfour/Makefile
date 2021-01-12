@@ -21,6 +21,8 @@
 #
 # uts/sun4v/arcfour/Makefile
 #
+# Copyright 2014 Garrett D'Amore <garrett@damore.org>
+#
 # Copyright 2009 Sun Microsystems, Inc.  All rights reserved.
 # Use is subject to license terms.
 #
@@ -40,7 +42,6 @@ COM_DIR = $(COMMONBASE)/crypto/arcfour
 #
 MODULE		= arcfour
 OBJECTS		= $(ARCFOUR_OBJS:%=$(OBJS_DIR)/%)
-LINTS		= $(ARCFOUR_OBJS:%.o=$(LINTS_DIR)/%.ln)
 ROOTMODULE	= $(ROOT_PSM_CRYPTO_DIR)/$(MODULE)
 
 #
@@ -48,21 +49,13 @@ ROOTMODULE	= $(ROOT_PSM_CRYPTO_DIR)/$(MODULE)
 #
 include $(UTSBASE)/sun4v/Makefile.sun4v
 
-#	set signing mode
-ELFSIGN_MOD	= $(ELFSIGN_CRYPTO)
-
 #
 #	Define targets
 #
 ALL_TARGET	= $(BINARY)
-LINT_TARGET	= $(MODULE).lint
 INSTALL_TARGET	= $(BINARY) $(ROOTMODULE)
 
-#
-# lint pass one enforcement
-#
 CFLAGS		+= $(CCVERBOSE) -I$(COM_DIR)
-LINTFLAGS	+= -I$(COM_DIR)
 
 #
 # Turn on doubleword alignment for 64 bit registers
@@ -91,12 +84,6 @@ all:		$(ALL_DEPS)
 clean:		$(CLEAN_DEPS)
 
 clobber:	$(CLOBBER_DEPS)
-
-lint:		$(LINT_DEPS)
-
-modlintlib:	$(MODLINTLIB_DEPS)
-
-clean.lint:	$(CLEAN_LINT_DEPS)
 
 install:	$(INSTALL_DEPS)
 

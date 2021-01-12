@@ -23,7 +23,6 @@
 # Copyright 2008 Sun Microsystems, Inc.  All rights reserved.
 # Use is subject to license terms.
 #
-#ident	"%Z%%M%	%I%	%E% SMI"
 
 include $(SRC)/Makefile.master
 
@@ -56,13 +55,10 @@ clobber: clean
 
 all: default
 
-lint:
-
 install: all $(PROTO_TEST_JAR)
 
-JFLAGS= -g -cp $(CLASSPATH) -d $(CLASSDIR) -deprecation
-JFLAGS += -target 1.5
-JFLAGS += -Xlint
+JFLAGS= -g -cp $(CLASSPATH) -d $(CLASSDIR)
+JFLAGS += -source 7 -target 7 -Xlint:all,-deprecation,-options,-rawtypes
 COMPILE.java=$(JAVAC) $(JFLAGS)
 
 $(TEST_JAR): $(SRCDIR)/*.java

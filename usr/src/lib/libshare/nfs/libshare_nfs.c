@@ -21,18 +21,19 @@
 
 /*
  * Copyright (c) 2006, 2010, Oracle and/or its affiliates. All rights reserved.
- * Copyright 2014 Nexenta Systems, Inc.  All rights reserved.
+ * Copyright (c) 2014, 2016 by Delphix. All rights reserved.
+ * Copyright 2018 Nexenta Systems, Inc.
  */
 
 /*
  * NFS specific functions
  */
+
 #include <stdio.h>
 #include <string.h>
 #include <ctype.h>
 #include <stdlib.h>
 #include <unistd.h>
-#include <zone.h>
 #include <errno.h>
 #include <locale.h>
 #include <signal.h>
@@ -51,6 +52,7 @@
 #include "libshare_nfs.h"
 #include <nfs/nfs.h>
 #include <nfs/nfssys.h>
+#include <netconfig.h>
 #include "smfcfg.h"
 
 /* should really be in some global place */
@@ -172,8 +174,10 @@ struct option_defs optdefs[] = {
 	{SHOPT_UIDMAP, OPT_UIDMAP, OPT_TYPE_MAPPING},
 #define	OPT_GIDMAP	19
 	{SHOPT_GIDMAP, OPT_GIDMAP, OPT_TYPE_MAPPING},
+#define	OPT_NOHIDE	20
+	{SHOPT_NOHIDE, OPT_NOHIDE, OPT_TYPE_BOOLEAN},
 #ifdef VOLATILE_FH_TEST	/* XXX added for testing volatile fh's only */
-#define	OPT_VOLFH	20
+#define	OPT_VOLFH	21
 	{SHOPT_VOLFH, OPT_VOLFH},
 #endif /* VOLATILE_FH_TEST */
 	NULL
@@ -449,7 +453,7 @@ nfs_alistcat(char *str1, char *str2, char sep)
 
 static int
 add_security_prop(struct securities *sec, char *name, char *value,
-			int persist, int iszfs)
+    int persist, int iszfs)
 {
 	sa_property_t prop;
 	int ret = SA_OK;
@@ -894,10 +898,8 @@ out:
 
 err:
 	if (error != 0) {
-		if (exp->ex_flags != NULL)
-			free(exp->ex_tag);
-		if (exp->ex_log_buffer != NULL)
-			free(exp->ex_log_buffer);
+		free(exp->ex_tag);
+		free(exp->ex_log_buffer);
 		(void) fprintf(stderr,
 		    dgettext(TEXT_DOMAIN, "Cannot set log configuration: %s\n"),
 		    strerror(error));
@@ -1027,6 +1029,14 @@ fill_export_from_optionset(struct exportdata *export, sa_optionset_t optionset)
 			else
 				export->ex_flags &= ~EX_NOACLFAB;
 			break;
+		case OPT_NOHIDE:
+			if (value != NULL && (strcasecmp(value, "true") == 0 ||
+			    strcmp(value, "1") == 0))
+				export->ex_flags |= EX_NOHIDE;
+			else
+				export->ex_flags &= ~EX_NOHIDE;
+
+			break;
 		default:
 			/* have a syntactic error */
 			(void) printf(dgettext(TEXT_DOMAIN,
@@ -1096,6 +1106,7 @@ get_rootnames(seconfig_t *sec, char *list, int *count)
 	if (a == NULL) {
 		(void) printf(dgettext(TEXT_DOMAIN,
 		    "get_rootnames: no memory\n"));
+		*count = 0;
 	} else {
 		for (i = 0; i < c; i++) {
 			host = strtok(list, ":");
@@ -1104,6 +1115,7 @@ get_rootnames(seconfig_t *sec, char *list, int *count)
 					free(a[--i]);
 				free(a);
 				a = NULL;
+				*count = 0;
 				break;
 			}
 			list = NULL;
@@ -1260,7 +1272,7 @@ printarg(char *path, struct exportdata *ep)
 		(void) printf("LOG_ALLOPS ");
 	if (ep->ex_flags == 0)
 		(void) printf("(none)");
-	(void) 	printf("\n");
+	(void) printf("\n");
 	if (ep->ex_flags & EX_LOG) {
 		(void) printf("\tex_log_buffer = %s\n",
 		    (ep->ex_log_buffer ? ep->ex_log_buffer : "(NULL)"));
@@ -1328,7 +1340,7 @@ count_security(sa_optionset_t opts)
 
 static int
 nfs_sprint_option(char **rbuff, size_t *rbuffsize, size_t incr,
-			sa_property_t prop, int sep)
+    sa_property_t prop, int sep)
 {
 	char *name;
 	char *value;
@@ -1557,8 +1569,7 @@ err:
  * Append an entry to the nfslogtab file
  */
 static int
-nfslogtab_add(dir, buffer, tag)
-	char *dir, *buffer, *tag;
+nfslogtab_add(char *dir, char *buffer, char *tag)
 {
 	FILE *f;
 	struct logtab_ent lep;
@@ -1640,8 +1651,7 @@ out:
  * Deactivate an entry from the nfslogtab file
  */
 static int
-nfslogtab_deactivate(path)
-	char *path;
+nfslogtab_deactivate(char *path)
 {
 	FILE *f;
 	int error = 0;
@@ -1895,12 +1905,7 @@ nfs_enable_share(sa_share_t share)
 				sa_free_attr_string(sectype);
 		}
 	}
-	/*
-	 * when we get here, we can do the exportfs system call and
-	 * initiate things. We probably want to enable the nfs.server
-	 * service first if it isn't running within SMF.
-	 */
-	/* check nfs.server status and start if needed */
+
 	/* now add the share to the internal tables */
 	printarg(path, &export);
 	/*
@@ -1910,52 +1915,17 @@ nfs_enable_share(sa_share_t share)
 	if (iszfs) {
 		struct exportfs_args ea;
 		share_t sh;
-		char *str;
-		priv_set_t *priv_effective;
-		int privileged;
 
-		/*
-		 * If we aren't a privileged user
-		 * and NFS server service isn't running
-		 * then print out an error message
-		 * and return EPERM
-		 */
+		ea.dname = path;
+		ea.uex = &export;
 
-		priv_effective = priv_allocset();
-		(void) getppriv(PRIV_EFFECTIVE, priv_effective);
-
-		privileged = (priv_isfullset(priv_effective) == B_TRUE);
-		priv_freeset(priv_effective);
-
-		if (!privileged &&
-		    (str = smf_get_state(NFS_SERVER_SVC)) != NULL) {
-			err = 0;
-			if (strcmp(str, SCF_STATE_STRING_ONLINE) != 0) {
-				(void) printf(dgettext(TEXT_DOMAIN,
-				    "NFS: Cannot share remote "
-				    "filesystem: %s\n"), path);
-				(void) printf(dgettext(TEXT_DOMAIN,
-				    "NFS: Service needs to be enabled "
-				    "by a privileged user\n"));
-				err = SA_SYSTEM_ERR;
-				errno = EPERM;
-			}
-			free(str);
+		(void) sa_sharetab_fill_zfs(share, &sh, "nfs");
+		err = sa_share_zfs(share, NULL, path, &sh, &ea, ZFS_SHARE_NFS);
+		if (err != SA_OK) {
+			errno = err;
+			err = -1;
 		}
-
-		if (err == 0) {
-			ea.dname = path;
-			ea.uex = &export;
-
-			(void) sa_sharetab_fill_zfs(share, &sh, "nfs");
-			err = sa_share_zfs(share, NULL, path, &sh,
-			    &ea, ZFS_SHARE_NFS);
-			if (err != SA_OK) {
-				errno = err;
-				err = -1;
-			}
-			sa_emptyshare(&sh);
-		}
+		sa_emptyshare(&sh);
 	} else {
 		err = exportfs(path, &export);
 	}
@@ -1963,20 +1933,7 @@ nfs_enable_share(sa_share_t share)
 	if (err < 0) {
 		err = SA_SYSTEM_ERR;
 		switch (errno) {
-		case EREMOTE:
-			(void) printf(dgettext(TEXT_DOMAIN,
-			    "NFS: Cannot share filesystems "
-			    "in non-global zones: %s\n"), path);
-			err = SA_NOT_SUPPORTED;
-			break;
 		case EPERM:
-			if (getzoneid() != GLOBAL_ZONEID) {
-				(void) printf(dgettext(TEXT_DOMAIN,
-				    "NFS: Cannot share file systems "
-				    "in non-global zones: %s\n"), path);
-				err = SA_NOT_SUPPORTED;
-				break;
-			}
 			err = SA_NO_PERMISSION;
 			break;
 		case EEXIST:
@@ -2088,9 +2045,6 @@ nfs_disable_share(sa_share_t share, char *path)
 		case EPERM:
 		case EACCES:
 			ret = SA_NO_PERMISSION;
-			if (getzoneid() != GLOBAL_ZONEID) {
-				ret = SA_NOT_SUPPORTED;
-			}
 			break;
 		case EINVAL:
 		case ENOENT:
@@ -2493,7 +2447,7 @@ struct proto_option_defs {
 } proto_options[] = {
 #define	PROTO_OPT_NFSD_SERVERS			0
 	{"nfsd_servers",
-	    "servers", PROTO_OPT_NFSD_SERVERS, OPT_TYPE_NUMBER, 16, SVC_NFSD,
+	    "servers", PROTO_OPT_NFSD_SERVERS, OPT_TYPE_NUMBER, 1024, SVC_NFSD,
 	    1, INT32_MAX},
 #define	PROTO_OPT_LOCKD_LISTEN_BACKLOG		1
 	{"lockd_listen_backlog",
@@ -2501,7 +2455,7 @@ struct proto_option_defs {
 	    OPT_TYPE_NUMBER, 32, SVC_LOCKD, 32, INT32_MAX},
 #define	PROTO_OPT_LOCKD_SERVERS			2
 	{"lockd_servers",
-	    "lockd_servers", PROTO_OPT_LOCKD_SERVERS, OPT_TYPE_NUMBER, 20,
+	    "lockd_servers", PROTO_OPT_LOCKD_SERVERS, OPT_TYPE_NUMBER, 256,
 	    SVC_LOCKD, 1, INT32_MAX},
 #define	PROTO_OPT_LOCKD_RETRANSMIT_TIMEOUT	3
 	{"lockd_retransmit_timeout",
@@ -2538,7 +2492,7 @@ struct proto_option_defs {
 #define	PROTO_OPT_NFSMAPID_DOMAIN		10
 	{"nfsmapid_domain",
 	    "nfsmapid_domain", PROTO_OPT_NFSMAPID_DOMAIN, OPT_TYPE_DOMAIN,
-	    NULL, SVC_NFSMAPID, 0, 0},
+	    0, SVC_NFSMAPID, 0, 0},
 #define	PROTO_OPT_NFSD_MAX_CONNECTIONS		11
 	{"nfsd_max_connections",
 	    "max_connections", PROTO_OPT_NFSD_MAX_CONNECTIONS,
@@ -2554,7 +2508,7 @@ struct proto_option_defs {
 #define	PROTO_OPT_NFSD_DEVICE			14
 	{"nfsd_device",
 	    "device", PROTO_OPT_NFSD_DEVICE,
-	    OPT_TYPE_STRING, NULL, SVC_NFSD, 0, 0},
+	    OPT_TYPE_STRING, 0, SVC_NFSD, 0, 0},
 #define	PROTO_OPT_MOUNTD_LISTEN_BACKLOG		15
 	{"mountd_listen_backlog",
 	    "mountd_listen_backlog", PROTO_OPT_MOUNTD_LISTEN_BACKLOG,
@@ -2563,6 +2517,14 @@ struct proto_option_defs {
 	{"mountd_max_threads",
 	    "mountd_max_threads", PROTO_OPT_MOUNTD_MAX_THREADS,
 	    OPT_TYPE_NUMBER, 16, SVC_NFSD|SVC_MOUNTD, 1, INT32_MAX},
+#define	PROTO_OPT_MOUNTD_PORT			17
+	{"mountd_port",
+	    "mountd_port", PROTO_OPT_MOUNTD_PORT,
+	    OPT_TYPE_NUMBER, 0, SVC_MOUNTD, 1, UINT16_MAX},
+#define	PROTO_OPT_STATD_PORT			18
+	{"statd_port",
+	    "statd_port", PROTO_OPT_STATD_PORT,
+	    OPT_TYPE_NUMBER, 0, SVC_STATD, 1, UINT16_MAX},
 	{NULL}
 };
 
@@ -3097,13 +3059,31 @@ nfs_validate_proto_prop(int index, char *name, char *value)
 		}
 		break;
 
-	case OPT_TYPE_PROTOCOL:
-		if (strlen(value) != 0 &&
-		    strcasecmp(value, "all") != 0 &&
-		    strcasecmp(value, "tcp") != 0 &&
-		    strcasecmp(value, "udp") != 0)
+	case OPT_TYPE_PROTOCOL: {
+		struct netconfig *nconf;
+		void *nc;
+		boolean_t pfound = B_FALSE;
+
+		if (strcasecmp(value, "all") == 0)
+			break;
+
+		if ((nc = setnetconfig()) == NULL) {
+			(void) fprintf(stderr, dgettext(TEXT_DOMAIN,
+			    "setnetconfig failed: %s\n"), strerror(errno));
+		} else {
+			while ((nconf = getnetconfig(nc)) != NULL) {
+				if (strcmp(nconf->nc_proto, value) == 0) {
+					pfound = B_TRUE;
+					break;
+				}
+			}
+			(void) endnetconfig(nc);
+		}
+
+		if (!pfound)
 			ret = SA_BAD_VALUE;
 		break;
+	}
 
 	default:
 		/* treat as a string */

@@ -21,10 +21,7 @@
 # Copyright 2009 Sun Microsystems, Inc.  All rights reserved.
 # Use is subject to license terms.
 #
-#	This makefile drives the production of the mpt_sas driver kernel module.
-#
-#	intel architecture dependent
-#
+# Copyright (c) 2018, Joyent, Inc.
 
 #
 #	Paths to the base of the uts directory trees
@@ -36,23 +33,18 @@ UTSBASE   = ../../../../src/uts
 #
 MODULE		= mpt_sas
 OBJECTS		= $(MPTSAS_OBJS:%=$(OBJS_DIR)/%)
-LINTS		= $(MPTSAS_OBJS:%.o=$(LINTS_DIR)/%.ln)
 ROOTMODULE	= $(ROOT_DRV_DIR)/$(MODULE)
 CONF_SRCDIR	= $(UTSBASE)/common/io/scsi/adapters/mpt_sas/
-WARLOCK_OUT     = $(MPTSAS_OBJS:%.o=%.ll)
-WARLOCK_OK      = $(MODULE).ok
-WLCMD_DIR       = $(UTSBASE)/common/io/warlock
 
 #
 #	Kernel Module Dependencies
 #
-LDFLAGS += -dy -Nmisc/scsi -Ndrv/scsi_vhci
+LDFLAGS += -dy -Nmisc/scsi -Ndrv/scsi_vhci -Nmisc/sata
 
 #
 #	Define targets
 #
 ALL_TARGET	= $(BINARY) $(CONFMOD)
-LINT_TARGET	= $(MODULE).lint
 INSTALL_TARGET	= $(BINARY) $(ROOTMODULE) $(ROOT_CONFFILE)
 
 #
@@ -60,9 +52,11 @@ INSTALL_TARGET	= $(BINARY) $(ROOTMODULE) $(ROOT_CONFFILE)
 #
 include $(UTSBASE)/intel/Makefile.intel
 
-CERRWARN	+= -_gcc=-Wno-parentheses
-CERRWARN	+= -_gcc=-Wno-uninitialized
-CERRWARN	+= -_gcc=-Wno-switch
+CERRWARN	+= $(CNOWARN_UNINIT)
+
+# needs work
+$(OBJS_DIR)/mptsas_raid.o := SMOFF += index_overflow
+$(OBJS_DIR)/mptsas.o := SMOFF += deref_check
 
 #
 #	Default build targets.
@@ -74,16 +68,8 @@ all:		$(ALL_DEPS)
 def:		$(DEF_DEPS)
 
 clean:		$(CLEAN_DEPS)
-		$(RM) $(WARLOCK_OUT) $(WARLOCK_OK)
 
 clobber:	$(CLOBBER_DEPS)
-		$(RM) $(WARLOCK_OUT) $(WARLOCK_OK)
-
-lint:		$(LINT_DEPS)
-
-modlintlib:	$(MODLINTLIB_DEPS)
-
-clean.lint:	$(CLEAN_LINT_DEPS)
 
 install:	$(INSTALL_DEPS)
 
@@ -91,36 +77,3 @@ install:	$(INSTALL_DEPS)
 #	Include common targets.
 #
 include $(UTSBASE)/intel/Makefile.targ
-
-#
-#	Defines for local commands.
-#
-WARLOCK		= warlock
-WLCC		= wlcc
-TOUCH		= touch
-TEST		= test
-
-#
-#	lock_lint rules
-#
-SCSI_FILES = $(SCSI_OBJS:%.o= -l $(UTSBASE)/intel/scsi/%.ll)
-
-warlock: $(WARLOCK_OK)
-
-$(WARLOCK_OK): $(WARLOCK_OUT) warlock_ddi.files scsi.files \
-	$(WLCMD_DIR)/mptsas.wlcmd
-	$(WARLOCK) -c $(WLCMD_DIR)/mptsas.wlcmd $(WARLOCK_OUT) \
-	$(SCSI_FILES) \
-	$(UTSBASE)/intel/warlock/scsi.ll \
-	-l $(UTSBASE)/intel/warlock/ddi_dki_impl.ll
-	$(TOUCH) $@
-
-%.ll: $(UTSBASE)/common/io/scsi/adapters/mpt_sas/%.c
-	$(WLCC) $(CPPFLAGS) -DDEBUG -o $@ $<
-
-warlock_ddi.files:
-	@cd $(UTSBASE)/intel/warlock; pwd; $(MAKE) warlock
-
-scsi.files:
-	@cd $(UTSBASE)/intel/scsi; pwd; $(MAKE) warlock
-

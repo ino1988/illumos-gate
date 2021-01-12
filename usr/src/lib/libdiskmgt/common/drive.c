@@ -18,9 +18,14 @@
  *
  * CDDL HEADER END
  */
+
 /*
  * Copyright 2006 Sun Microsystems, Inc.  All rights reserved.
  * Use is subject to license terms.
+ */
+
+/*
+ * Copyright 2017 Nexenta Systems, Inc.
  */
 
 #include <fcntl.h>
@@ -930,12 +935,6 @@ get_attrs(disk_t *diskp, int fd, char *opath, nvlist_t *attrs)
 	    }
 	}
 
-	if (diskp->aliases != NULL && diskp->aliases->cluster) {
-	    if (nvlist_add_boolean(attrs, DM_CLUSTERED) != 0) {
-		return (ENOMEM);
-	    }
-	}
-
 	if (strlen(opath) > 0) {
 	    if (nvlist_add_string(attrs, DM_OPATH, opath) != 0) {
 		return (ENOMEM);
@@ -974,7 +973,7 @@ get_disk_kstats(kstat_ctl_t *kc, char *diskname, char *classname,
 		while (*ename && *ename != ',') {
 		    *dname++ = *ename++;
 		}
-		*dname = NULL;
+		*dname = '\0';
 
 		if (libdiskmgt_str_eq(diskname, kstat_name)) {
 		    (void) kstat_read(kc, ksp, NULL);

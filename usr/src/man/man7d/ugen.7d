@@ -1,9 +1,10 @@
 '\" te
+.\" Copyright 2017 Peter Tribble
 .\" Copyright (c) 2007, Sun Microsystems, Inc.  All Rights Reserved
 .\" The contents of this file are subject to the terms of the Common Development and Distribution License (the "License").  You may not use this file except in compliance with the License.
 .\" You can obtain a copy of the license at usr/src/OPENSOLARIS.LICENSE or http://www.opensolaris.org/os/licensing.  See the License for the specific language governing permissions and limitations under the License.
 .\" When distributing Covered Code, include this CDDL HEADER in each file and include the License file at usr/src/OPENSOLARIS.LICENSE.  If applicable, add the following below this CDDL HEADER, with the fields enclosed by brackets "[]" replaced with your own identifying information: Portions Copyright [yyyy] [name of copyright owner]
-.TH UGEN 7D "Sep 10, 2013"
+.TH UGEN 7D "May 13, 2017"
 .SH NAME
 ugen \- USB generic driver
 .SH SYNOPSIS
@@ -18,23 +19,20 @@ ugen \- USB generic driver
 .fi
 
 .SH DESCRIPTION
-.sp
 .LP
 \fBugen\fR is a generic USBA (Solaris USB Architecture) compliant client
 character driver that presents USB devices to applications through a standard
 \fBopen\fR(2), \fBclose\fR(2), \fBread\fR(2), \fBwrite\fR(2),
 \fBaioread\fR(3C), \fBaiowrite\fR(3C) Unix interface. Uninterpreted raw data
-are transfered to and from the device via file descriptors created for each USB
+are transferred to and from the device via file descriptors created for each USB
 endpoint. Status is obtained by reading file descriptors created for endpoint
 and full device status.
 .sp
 .LP
-\fBugen\fR supports control, bulk, isochronous and interrupt (in and  out)
-transfers. \fBlibusb\fR(3LIB) uses \fBugen\fR to access devices that do not
-contain drivers (such as digital cameras and PDAs). Refer to
-\fB/usr/sfw/share/doc/libusb/libusb.txt\fR for details.
+\fBugen\fR supports control, bulk, isochronous and interrupt (in and out)
+transfers. libusb uses \fBugen\fR to access devices that do not
+contain drivers (such as digital cameras and PDAs).
 .SH BINDING
-.sp
 .LP
 In general, no explicit binding of the \fBugen\fR driver is necessary because
 \fBusb_mid\fR(7D) is the default driver for devices without a class or vendor
@@ -66,11 +64,12 @@ USB 2.0 device (usb<vid>,<pid>)...
 
 .sp
 .LP
-where vid is the USB vendor identifier in hex and pid is the  product
-identifier in hex supplied by the device  descriptor \fBusb_dev_descr\fR(9S).
+where vid is the USB vendor identifier in hex and pid is the product
+identifier in hex supplied by the device descriptor \fBusb_dev_descr\fR(9S).
+Note, the USB device version may vary depending on the device.
 .sp
 .LP
-When using ugen for the first time, you must add the  driver utilizing
+When using ugen for the first time, you must add the driver utilizing
 \fBadd_drv\fR(1M), using a command of the following form:
 .sp
 .in +2
@@ -123,7 +122,7 @@ where cfg value is the value of bConfigurationValue in the configuration
 descriptor (\fBusb_cfg_descr\fR(9S)). For example "usbif1234,4567.config1.0."
 .sp
 .LP
-Note that you can use update_drv to  also  remove  bindings. Please see
+Note that you can use update_drv to also remove bindings. Please see
 \fBupdate_drv\fR(1M) for more information.
 .sp
 .LP
@@ -144,25 +143,11 @@ update_drv -a -m '* 0666 root sys'
 
 .sp
 .LP
-Note that you can completely uninstall the \fBugen\fR driver and delete it from
-the system by doing:
-.sp
-.in +2
-.nf
-pkgrm SUNWugen
-.fi
-.in -2
-
-.sp
-.LP
-Any \fBpkgadd\fR of SUNWugen after the \fBpkgrm\fR reactivates any pre-existing
-ugen driver device-bindings.
-.sp
-.LP
-Any pre-existing ugen driver device-bindings are preserved across operating
-system upgrades.
+Note that if you uninstall the \fBugen\fR driver, and later reinstall it,
+any pre-existing ugen driver device-bindings will be reactivated. Likewise,
+any pre-existing ugen driver device-bindings are preserved across operating
+system updates or upgrades.
 .SH LOGICAL DEVICE NAME FORMAT
-.sp
 .LP
 For each device or child device it manages, \fBugen\fR creates one logical
 device name for device-wide status and one logical device name for endpoint 0.
@@ -184,7 +169,7 @@ first interface and as \fBif1devstat\fR to the second interface.
 .sp
 .LP
 Any \fBugen\fR logical device name can be held open by only one user at a time,
-regardless of whether the\fB O_EXCL\fR flag passed to \fBopen\fR(2). When a
+regardless of whether the \fBO_EXCL\fR flag passed to \fBopen\fR(2). When a
 single pipe or data source is shared by multiple logical device names, such as
 if[0,1]cntrl0 or if[0,1]devstat above, more than one logical device name
 sharing the pipe or data source can be open at a time.  However, only one user
@@ -305,7 +290,6 @@ alternate interface. A configuration change is prohibited when any non-zero
 endpoint device nodes are open. An alternate interface switch is prohibited if
 any endpoint in the same interface is open.
 .SH HOT-PLUGGING
-.sp
 .LP
 A device may be hot-removed at any time. Following hot-removal, the device
 status changes to USB_DEV_STAT_DISCONNECTED, the status of open endpoints
@@ -314,7 +298,6 @@ transfer requests fail. Endpoints are reactivated by first reinserting the
 device and then closing and reopening all endpoints that were open when the
 device was disconnected.
 .SH CPR (CHECKPOINT/RESUME)
-.sp
 .LP
 CPR (Checkpoint/Resume) may be initiated at any time and is treated similarly
 to a hot-removal. Upon successful suspend and resume, all subsequent transfer
@@ -323,19 +306,17 @@ should close and reopen all endpoints to reinstate them. All endpoint and
 device status on Resume (before close and reopen) is USB_LC_STAT_SUSPENDED. A
 system suspend will fail while \fBugen\fR is performing a transfer.
 .SH DEVICE POWER MANAGEMENT
-.sp
 .LP
 Devices which support remote wakeup can be power managed when they have no open
 logical device nodes. When an application opens the first logical device node
 of a device, that application should assume that a reinitialization of device
 state is required.
 .SH DEVICE STATUS MANAGEMENT
-.sp
 .LP
 Applications can monitor device status changes by reading the device status
 from the device status logical name. When opened without O_NONBLOCK and
-O_NDELAY, all reads from that file descriptor (with the exception of the the
-intial read that follows the open) block until a device status change occurs.
+O_NDELAY, all reads from that file descriptor (with the exception of the
+initial read that follows the open) block until a device status change occurs.
 Calls to read will always return immediately if opened with \fBO_NONBLOCK\fR or
 \fBO_NDELAY\fR. Nonblocking calls to read which have no data to return, return
 no error and zero bytes read.
@@ -425,7 +406,6 @@ device status logical names.  Poll indicates when reading a logical name would
 return data. See \fBpoll\fR(2) for details. Calls to read may be done whether
 or not they follow calls to poll.
 .SH ENDPOINT STATUS MANAGEMENT
-.sp
 .LP
 Each data endpoint has a corresponding status logical name. Use the status
 logical name to retrieve the state of the data endpoint, including detail on
@@ -459,7 +439,7 @@ if (ep1_stat_fd < 0) {
 
 data_xfered = write(ep1_data_fd, request, sizeof (request));
 
-/* An error occured during the data transfer. */
+/* An error occurred during the data transfer. */
 if (data_xfered != sizeof (request)) {
 
         /* Read status file descriptor for details on failure. */
@@ -477,12 +457,11 @@ if (data_xfered != sizeof (request)) {
                 ...
         }
 
-   }
+}
 .fi
 .in -2
 
 .SH CONTROL TRANSFERS
-.sp
 .LP
 The control endpoint is typically used to set up the device and to query device
 status or configuration.
@@ -539,7 +518,7 @@ void init_cntrl_req(
         req[5] = 0xFF & (wIndex >> 8);
         req[6] = 0xFF & wLength;
         req[7] = 0xFF & (wLength >> 8);
- }
+}
 
  ....
 
@@ -690,7 +669,7 @@ configuration.  For sake of brevity, uninteresting parts are omitted.
    init_cntrl_req(&setup_data, USB_DEV_REQ_DEV_TO_HOST, USB_REQ_GET_DESCR,
                    USB_DESCR_TYPE_SETUP_CFG, 0, totalLength);
 
-   count = write(ctrl_fd, &setup_data, sizeof (setup_data));                                                                                          	
+   count = write(ctrl_fd, &setup_data, sizeof (setup_data));
    if (count != sizeof (setup_data)) {
            /* Error recovery. */
    } else {
@@ -760,7 +739,6 @@ configuration.  For sake of brevity, uninteresting parts are omitted.
 .in -2
 
 .SH INTERRUPT-IN TRANSFERS
-.sp
 .LP
 Applications requiring data from an interrupt-IN endpoint should open the
 corresponding logical device name and use \fBread\fR(2), \fBaioread\fR(3C) and
@@ -894,15 +872,14 @@ interrupt-IN data endpoints, not their status endpoints.)
 You can monitor the device status endpoint via \fBpoll\fR(2) concurrently with
 the multiple interrupt-IN endpoints.  Simply add another pollfd element to the
 pfd array in the previous code example, and initialize the new element's
-\fBfd\fR field with the file  descriptor  of the device status endpoint (opened
-without O_NONBLOCK  or  O_NDELAY).  Set the new element's event field to POLLIN
+\fBfd\fR field with the file descriptor of the device status endpoint (opened
+without O_NONBLOCK or O_NDELAY).  Set the new element's event field to POLLIN
 like the other elements. Note that only interrupt-IN endpoints and the device
 status endpoint can be monitored using \fBpoll\fR(2).
 .SH INTERRUPT-OUT TRANSFERS
-.sp
 .LP
 Applications requiring output on an interrupt-OUT endpoint can open the
-corresponding  logical  device name and perform regular UNIX I/O  system calls
+corresponding logical device name and perform regular UNIX I/O system calls
 such as \fBwrite\fR(2) and \fBaiowrite\fR(3C).
 .sp
 .LP
@@ -932,7 +909,6 @@ Data can be written to an interrupt-OUT endpoint as follows:
 .in -2
 
 .SH BULK TRANSFERS
-.sp
 .LP
 Applications requiring I/O on a bulk endpoint can open the corresponding
 logical device name and perform regular UNIX I/O system calls. For example:
@@ -977,7 +953,6 @@ Data can be read from a bulk-IN endpoint as follows:
 .in -2
 
 .SH ISOCHRONOUS TRANSFERS
-.sp
 .LP
 Applications requiring I/O on an isochronous endpoint can open the
 corresponding logical device name and perform regular UNIX I/O system calls
@@ -1086,7 +1061,7 @@ The following example shows how to read an isochronous-IN endpoint:
 		char rdbuf[5000];
 
 		pktcnt = 4; /* 4 packets in this request */
- 	
+
 		len = sizeof(int) +
 			sizeof(ugen_isoc_pkt_descr_t) * pktcount;
 
@@ -1160,7 +1135,7 @@ The following example shows how to read an isochronous-IN endpoint:
 .sp
 .LP
 For an isochronous-OUT endpoint, applications use the same packet descriptor
-and request structures to write request   information to the \fBugen\fR node.
+and request structures to write request information to the \fBugen\fR node.
 Following the packet request head information is the packet payload data. Upon
 successful return of \fBwrite\fR(2), applications can \fBread\fR(2) the same
 \fBugen\fR file immediately to retrieve the individual packet transfer status
@@ -1191,13 +1166,13 @@ endpoint:
 
 		len = sizeof(int) +
 			sizeof(ugen_isoc_pkt_descr_t) * pktcount;
- 	
+
 		len += pktlen * pktcnt;
 
 		buf = malloc(len);
 		if (!buf) {
 			/* Error recovery. */
- 	    }
+		}
 
 		req = (ugen_isoc_req_head_t *)buf;
 		req->req_isoc_pkts_count = pktcnt;
@@ -1209,8 +1184,8 @@ endpoint:
 			pktdesc[i].dsc_isoc_pkt_len = pktlen;
 			pktdesc[i].dsc_isoc_pkt_actual_len = 0;
 			pktdesc[i].dsc_isoc_pkt_status = 0;
- 	    }
- 	
+		}
+
 		/* moving to beginning of payload data */
 		p = buf + sizeof(int) + sizeof(*pktdesc) * pktcnt;
 		for (i = 0; i < pktcnt; i++) {
@@ -1218,17 +1193,17 @@ endpoint:
 			/* fill in the data buffer */
 
 			p += pktlen;
-     }
+		}
 
 		/*
-		* write packet request information and data to ugen driver
-		*
-		* len should be the exact value of sizeof(int) +
-		*    sizeof(ugen_isoc_pkt_descr_t) * pktcnt + payload length
-		*/
+		 * write packet request information and data to ugen driver
+		 *
+		 * len should be the exact value of sizeof(int) +
+		 *    sizeof(ugen_isoc_pkt_descr_t) * pktcnt + payload length
+		 */
 		if (write(fd, buf, len) < 0) {
 			/* Error recovery. */
- 	    }
+		}
 
 		/* read packet status */
 		if (read(fd, rdbuf, sizeof(*pktdesc) * pktcnt) < 0) {
@@ -1239,12 +1214,11 @@ endpoint:
 
 			/* Parse every packet's transfer status */
 
-  	    }
+		}
 .fi
 .in -2
 
 .SH ERRORS
-.sp
 .LP
 The following statuses are returned by endpoint status device logical names:
 .sp
@@ -1444,7 +1418,7 @@ Device was disconnected.
 .ad
 .sp .6
 .RS 4n
-Polling was stopped as the interrupt-IN data buffer was full. Buffer is  now
+Polling was stopped as the interrupt-IN data buffer was full. Buffer is now
 empty and polling has been resumed.
 .RE
 
@@ -1596,49 +1570,73 @@ No memory for the allocation of internal structures.
 .RE
 
 .SH FILES
-.sp
-.in +2
-.nf
-        /kernel/drv/ugen   32 bit ELF kernel module (x86 platform only)
-        /kernel/drv/sparcv9/ugen   64 bit ELF kernel module
-
-        /dev/usb/<vid>.<pid>/<N>/cntrl0
-        /dev/usb/<vid>.<pid>/<N>/cntrl0stat
-
-        /dev/usb/<vid>.<pid>/<N>/if<interface#>
-                                <in|out|cntrl><endpoint#>
-        /dev/usb/<vid>.<pid>/<N>/if<interface#>
-                                <in|out|cntrl><endpoint#>stat
-
-        /dev/usb/<vid>.<pid>/<N>/if<interface#>.
-                                <alternate><in|out|cntrl<endpoint#>
-        /dev/usb/<vid>.<pid>/<N>/if<interface#>.
-                                <alternate><in|out|cntrl><endpoint#>stat
-
-        /dev/usb/<vid>.<pid>/<N>/cfg<value>if<interface#>
-                                <in|out|cntrl><endpoint#>
-        /dev/usb/<vid>.<pid>/<N>/cfg<value>if<interface#>
-                                <in|out|cntrl<endpoint#stat>
-
-        /dev/usb/<vid>.<pid>/<N>/cfg<value>if<interface#>.
-                                <alternate><in|out|cntrl><endpoint#>
-        /dev/usb/<vid>.<pid>/<N>/cfg<value>if<interface#>.
-                                <alternate><in|out|cntrl><endpoint#>stat
-
-
-        /dev/usb/<vid>.<pid>/<N>/devstat
-
-        /dev/usb/<vid>.<pid>/<N>/if<interface#>cntrl0
-        /dev/usb/<vid>.<pid>/<N>/if<interface#>cntrl0stat
-.fi
-.in -2
+.ne 2
+.na
+\fB\fB/kernel/drv/ugen\fR\fR
+.ad
+.sp .6
+.RS 4n
+32-bit ELF kernel module. (x86).
+.RE
 
 .sp
-.LP
+.ne 2
+.na
+\fB\fB/kernel/drv/amd64/ugen\fR\fR
+.ad
+.sp .6
+.RS 4n
+64-bit ELF kernel module. (x86).
+.RE
+
+.sp
+.ne 2
+.na
+\fB\fB/kernel/drv/sparcv9/ugen\fR\fR
+.ad
+.sp .6
+.RS 4n
+64-bit ELF kernel module. (SPARC).
+.RE
+
+.sp
+.ne 2
+.na
+/dev/usb/<vid>.<pid>/<N>/cntrl0
+/dev/usb/<vid>.<pid>/<N>/cntrl0stat
+
+/dev/usb/<vid>.<pid>/<N>/if<interface#>
+                        <in|out|cntrl><endpoint#>
+/dev/usb/<vid>.<pid>/<N>/if<interface#>
+                        <in|out|cntrl><endpoint#>stat
+
+/dev/usb/<vid>.<pid>/<N>/if<interface#>.
+                        <alternate><in|out|cntrl<endpoint#>
+/dev/usb/<vid>.<pid>/<N>/if<interface#>.
+                        <alternate><in|out|cntrl><endpoint#>stat
+
+/dev/usb/<vid>.<pid>/<N>/cfg<value>if<interface#>
+                        <in|out|cntrl><endpoint#>
+/dev/usb/<vid>.<pid>/<N>/cfg<value>if<interface#>
+                        <in|out|cntrl<endpoint#stat>
+
+/dev/usb/<vid>.<pid>/<N>/cfg<value>if<interface#>.
+                        <alternate><in|out|cntrl><endpoint#>
+/dev/usb/<vid>.<pid>/<N>/cfg<value>if<interface#>.
+                        <alternate><in|out|cntrl><endpoint#>stat
+
+/dev/usb/<vid>.<pid>/<N>/devstat
+
+/dev/usb/<vid>.<pid>/<N>/if<interface#>cntrl0
+/dev/usb/<vid>.<pid>/<N>/if<interface#>cntrl0stat
+.ad
+.sp .6
+.RS 4n
 where \fIN\fR is an integer representing the instance number of this type of
 device. (All logical device names for a single device share the same \fIN\fR.)
+.RE
+
 .SH ATTRIBUTES
-.sp
 .LP
 See \fBattributes\fR(5) for descriptions of the following attributes:
 .sp
@@ -1650,17 +1648,15 @@ c | c
 l | l .
 ATTRIBUTE TYPE	ATTRIBUTE VALUE
 _
-Architecture	PCI-based  SPARC
+Architecture	SPARC & x86, PCI-based systems
 .TE
 
 .SH SEE ALSO
-.sp
 .LP
-\fBlibusb\fR(3LIB), \fBclose\fR(2), \fBpoll\fR(2), \fBread\fR(2),
+\fBclose\fR(2), \fBpoll\fR(2), \fBread\fR(2),
 \fBwrite\fR(2), \fBaioread\fR(3C), \fBaiowrite\fR(3C), \fBusba\fR(7D),
-\fBusb_dev_descr\fR(9S).
+\fBusb_dev_descr\fR(9S)
 .SH DIAGNOSTICS
-.sp
 .LP
 In addition to being logged, the following messages may appear on the system
 console. All messages are formatted in the following manner:
@@ -1717,7 +1713,6 @@ to identify the original device with a name string.
 .RE
 
 .SH NOTES
-.sp
 .LP
 \fBugen\fR returns \fB-1\fR for all commands and sets \fBerrno\fR to
 \fBENODEV\fR when device has been hot-removed or resumed from a suspend. The

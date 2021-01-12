@@ -22,6 +22,7 @@
 /*
  * Copyright 2008 Sun Microsystems, Inc.  All rights reserved.
  * Use is subject to license terms.
+ * Copyright 2018 Joyent, Inc.
  */
 
 #define	PSMI_1_7
@@ -649,7 +650,7 @@ xen_uppc_acpi_translate_pci_irq(dev_info_t *dip, int busid, int devid,
 	if (status == ACPI_PSM_SUCCESS) {
 		acpi_new_irq_cache_ent(busid, devid, ipin, *pci_irqp,
 		    intr_flagp, &acpipsmlnk);
-		psm_set_elcr(*pci_irqp, 1); 	/* set IRQ to PCI mode */
+		psm_set_elcr(*pci_irqp, 1);	/* set IRQ to PCI mode */
 
 		XEN_UPPC_VERBOSE_IRQ((CE_CONT, "!xVM_uppc: [ACPI] "
 		    "new irq %d for device %s, instance #%d\n",
@@ -737,7 +738,7 @@ xen_uppc_translate_irq(dev_info_t *dip, int irqno)
 		/* FALLTHRU to common case - returning irqno */
 	} else {
 		/* non-PCI; assumes ISA-style edge-triggered */
-		psm_set_elcr(irqno, 0); 	/* set IRQ to ISA mode */
+		psm_set_elcr(irqno, 0);		/* set IRQ to ISA mode */
 
 		XEN_UPPC_VERBOSE_IRQ((CE_CONT, "!xVM_uppc: non-pci,"
 		    "irqno %d device %s instance %d\n", irqno,
@@ -892,7 +893,11 @@ static struct psm_ops xen_uppc_ops = {
 	(int (*)(dev_info_t *, ddi_intr_handle_impl_t *,
 	    psm_intr_op_t, int *))NULL,		/* psm_intr_ops		*/
 	(int (*)(psm_state_request_t *))NULL,	/* psm_state		*/
-	(int (*)(psm_cpu_request_t *))NULL	/* psm_cpu_ops		*/
+	(int (*)(psm_cpu_request_t *))NULL,	/* psm_cpu_ops		*/
+
+	(int (*)(void))NULL,			/* psm_get_pir_ipivect	*/
+	(void (*)(processorid_t))NULL,		/* psm_send_pir_ipi	*/
+	(void (*)(processorid_t, boolean_t))NULL	/* psm_cmci_setup */
 };
 
 static struct psm_info xen_uppc_info = {

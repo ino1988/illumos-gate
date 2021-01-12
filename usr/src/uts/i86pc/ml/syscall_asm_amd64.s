@@ -20,7 +20,8 @@
  */
 /*
  * Copyright (c) 2004, 2010, Oracle and/or its affiliates. All rights reserved.
- * Copyright (c) 2012, Joyent, Inc.  All rights reserved.
+ * Copyright 2019 Joyent, Inc.
+ * Copyright (c) 2016 by Delphix. All rights reserved.
  */
 
 #include <sys/asm_linkage.h>
@@ -29,14 +30,6 @@
 #include <sys/privregs.h>
 #include <sys/psw.h>
 #include <sys/machbrand.h>
-
-#if defined(__lint)
-
-#include <sys/types.h>
-#include <sys/thread.h>
-#include <sys/systm.h>
-
-#else	/* __lint */
 
 #include <sys/segments.h>
 #include <sys/pcb.h>
@@ -52,8 +45,6 @@
 #endif
 
 #include "assym.h"
-
-#endif	/* __lint */
 
 /*
  * We implement five flavours of system call entry points
@@ -198,7 +189,8 @@
 	je	1f							   ;\
 	movq	%r15, 16(%rsp)		/* save the callback pointer	*/ ;\
 	push_userland_ret		/* push the return address	*/ ;\
-	call	*24(%rsp)		/* call callback		*/ ;\
+	movq	24(%rsp), %r15		/* load callback pointer	*/ ;\
+	INDIRECT_CALL_REG(r15)		/* call callback		*/ ;\
 1:	movq	%gs:CPU_RTMP_R15, %r15	/* restore %r15			*/ ;\
 	movq	%gs:CPU_RTMP_RSP, %rsp	/* restore the stack pointer	*/
 
@@ -227,7 +219,7 @@
 	ORL_SYSCALLTRACE(rtmp);				\
 	orl	T_POST_SYS_AST(t), rtmp;		\
 	cmpl	$0, rtmp
-	
+
 /*
  * Fix up the lwp, thread, and eflags for a successful return
  *
@@ -270,10 +262,19 @@
  * between entering privileged mode and performing the assertion,
  * otherwise we may perform a context switch on the thread, which
  * will end up setting pcb_rupdate to 1 again.
+ *
+ * ASSERT(%cr0 & CR0_TS == 0);
+ * Preconditions:
+ *	(%rsp is ready for normal call sequence)
+ * Postconditions (if assertion is true):
+ *      (specified register is clobbered)
+ *
+ * Check to make sure that we are returning to user land and that CR0.TS
+ * is not set. This is required as part of the eager FPU (see
+ * uts/intel/ia32/os/fpu.c for more information).
  */
-#if defined(DEBUG)
 
-#if !defined(__lint)
+#if defined(DEBUG)
 
 __lwptoregs_msg:
 	.string	"syscall_asm_amd64.s:%d lwptoregs(%p) [%p] != rp [%p]"
@@ -284,7 +285,8 @@ __codesel_msg:
 __no_rupdate_msg:
 	.string	"syscall_asm_amd64.s:%d lwp %p, pcb_rupdate != 0"
 
-#endif	/* !__lint */
+__bad_ts_msg:
+	.string "syscall_asm_amd64.s:%d CR0.TS set on user return"
 
 #define	ASSERT_LWPTOREGS(lwp, rp)			\
 	movq	LWP_REGS(lwp), %r11;			\
@@ -309,17 +311,28 @@ __no_rupdate_msg:
 	call	panic;					\
 8:
 
+#define	ASSERT_CR0TS_ZERO(reg)				\
+	movq	%cr0, reg;				\
+	testq	$CR0_TS, reg;				\
+	jz	9f;					\
+	leaq	__bad_ts_msg(%rip), %rdi;		\
+	movl	$__LINE__, %esi;			\
+	xorl	%eax, %eax;				\
+	call	panic;					\
+9:
+
 #else
 #define	ASSERT_LWPTOREGS(lwp, rp)
 #define	ASSERT_NO_RUPDATE_PENDING(lwp)
+#define	ASSERT_CR0TS_ZERO(reg)
 #endif
 
 /*
  * Do the traptrace thing and restore any registers we used
  * in situ.  Assumes that %rsp is pointing at the base of
  * the struct regs, obviously ..
- */	
-#ifdef TRAPTRACE	
+ */
+#ifdef TRAPTRACE
 #define	SYSCALL_TRAPTRACE(ttype)				\
 	TRACE_PTR(%rdi, %rbx, %ebx, %rcx, ttype);		\
 	TRACE_REGS(%rdi, %rsp, %rbx, %rcx);			\
@@ -338,10 +351,10 @@ __no_rupdate_msg:
 	orl	%ebx, %ebx;					\
 	orl	%ecx, %ecx;					\
 	orl	%edx, %edx;					\
-	orl	%edi, %edi	
+	orl	%edi, %edi
 #else	/* TRAPTRACE */
 #define	SYSCALL_TRAPTRACE(ttype)
-#define	SYSCALL_TRAPTRACE32(ttype)	
+#define	SYSCALL_TRAPTRACE32(ttype)
 #endif	/* TRAPTRACE */
 
 /*
@@ -362,7 +375,7 @@ __no_rupdate_msg:
  *	%r12-%r15 contain caller state
  *
  * The syscall instruction arranges that:
- *	
+ *
  *	%rcx contains the return %rip
  *	%r11d contains bottom 32-bits of %rflags
  *	%rflags is masked (as determined by the SFMASK msr)
@@ -405,21 +418,6 @@ __no_rupdate_msg:
 #else
 #define	XPV_SYSCALL_PROD /* nothing */
 #endif
-
-#if defined(__lint)
-
-/*ARGSUSED*/
-void
-sys_syscall()
-{}
-
-void
-_allsyscalls()
-{}
-
-size_t _allsyscalls_size;
-
-#else	/* __lint */
 
 	ENTRY_NP2(brand_sys_syscall,_allsyscalls)
 	SWAPGS				/* kernel gsbase */
@@ -490,6 +488,20 @@ noprod_sys_syscall:
 	movq	%rbx, REGOFF_GS(%rsp)
 
 	/*
+	 * If we're trying to use TRAPTRACE though, I take that back: we're
+	 * probably debugging some problem in the SWAPGS logic and want to know
+	 * what the incoming gsbase was.
+	 *
+	 * Since we already did SWAPGS, record the KGSBASE.
+	 */
+#if defined(DEBUG) && defined(TRAPTRACE) && !defined(__xpv)
+	movl	$MSR_AMD_KGSBASE, %ecx
+	rdmsr
+	movl	%eax, REGOFF_GSBASE(%rsp)
+	movl	%edx, REGOFF_GSBASE+4(%rsp)
+#endif
+
+	/*
 	 * Machine state saved in the regs structure on the stack
 	 * First six args in %rdi, %rsi, %rdx, %rcx, %r8, %r9
 	 * %eax is the syscall number
@@ -500,7 +512,7 @@ noprod_sys_syscall:
 	SYSCALL_TRAPTRACE($TT_SYSC64)
 
 	movq	%rsp, %rbp
-	
+
 	movq	T_LWP(%r15), %r14
 	ASSERT_NO_RUPDATE_PENDING(%r14)
 	ENABLE_INTR_FLAGS
@@ -531,11 +543,12 @@ _syscall_invoke:
 	movq	REGOFF_R9(%rbp), %r9
 
 	cmpl	$NSYSCALL, %eax
-	jae	_syscall_ill	
+	jae	_syscall_ill
 	shll	$SYSENT_SIZE_SHIFT, %eax
 	leaq	sysent(%rax), %rbx
 
-	call	*SY_CALLC(%rbx)
+	movq	SY_CALLC(%rbx), %rax
+	INDIRECT_CALL_REG(rax)
 
 	movq	%rax, %r12
 	movq	%rdx, %r13
@@ -575,7 +588,7 @@ _syscall_invoke:
 	 * find a non-canonical %rip, we opt to go through the full
 	 * _syscall_post path which takes us into an iretq which is not
 	 * susceptible to the same problems sysret is.
-	 * 
+	 *
 	 * We're checking for a canonical address by first doing an arithmetic
 	 * shift. This will fill in the remaining bits with the value of bit 63.
 	 * If the address were canonical, the register would now have either all
@@ -599,6 +612,21 @@ _syscall_invoke:
 	movq	%r13, REGOFF_RDX(%rsp)
 
 	/*
+	 * Clobber %r11 as we check CR0.TS.
+	 */
+	ASSERT_CR0TS_ZERO(%r11)
+
+	/*
+	 * Unlike other cases, because we need to restore the user stack pointer
+	 * before exiting the kernel we must clear the microarch state before
+	 * getting here. This should be safe because it means that the only
+	 * values on the bus after this are based on the user's registers and
+	 * potentially the addresses where we stored them. Given the constraints
+	 * of sysret, that's how it has to be.
+	 */
+	call	x86_md_clear
+
+	/*
 	 * To get back to userland, we need the return %rip in %rcx and
 	 * the return %rfl in %r11d.  The sysretq instruction also arranges
 	 * to fix up %cs and %ss; everything else is our responsibility.
@@ -613,7 +641,7 @@ _syscall_invoke:
 	movq	REGOFF_RAX(%rsp), %rax
 	movq	REGOFF_RBX(%rsp), %rbx
 
-	movq	REGOFF_RBP(%rsp), %rbp	
+	movq	REGOFF_RBP(%rsp), %rbp
 	movq	REGOFF_R10(%rsp), %r10
 	/* %r11 used to restore %rfl value */
 	movq	REGOFF_R12(%rsp), %r12
@@ -622,7 +650,7 @@ _syscall_invoke:
 	movq	REGOFF_R14(%rsp), %r14
 	movq	REGOFF_R15(%rsp), %r15
 
-	movq	REGOFF_RIP(%rsp), %rcx	
+	movq	REGOFF_RIP(%rsp), %rcx
 	movl	REGOFF_RFL(%rsp), %r11d
 
 #if defined(__xpv)
@@ -670,8 +698,7 @@ _syscall_invoke:
 	SYSRETQ
 #else
         ALTENTRY(nopop_sys_syscall_swapgs_sysretq)
-	SWAPGS				/* user gsbase */
-	SYSRETQ
+	jmp	tr_sysretq
 #endif
         /*NOTREACHED*/
         SET_SIZE(nopop_sys_syscall_swapgs_sysretq)
@@ -684,7 +711,7 @@ _syscall_pre:
 	/*
 	 * Didn't abort, so reload the syscall args and invoke the handler.
 	 */
-	movzwl	T_SYSNUM(%r15), %eax	
+	movzwl	T_SYSNUM(%r15), %eax
 	jmp	_syscall_invoke
 
 _syscall_ill:
@@ -708,17 +735,6 @@ _syscall_post_call:
 	jmp	_sys_rtt
 	SET_SIZE(sys_syscall)
 	SET_SIZE(brand_sys_syscall)
-
-#endif	/* __lint */
-
-#if defined(__lint)
-
-/*ARGSUSED*/
-void
-sys_syscall32()
-{}
-
-#else	/* __lint */
 
 	ENTRY_NP(brand_sys_syscall32)
 	SWAPGS				/* kernel gsbase */
@@ -770,6 +786,20 @@ _syscall32_save:
 	movq	%rbx, REGOFF_FS(%rsp)
 	movw	%gs, %bx
 	movq	%rbx, REGOFF_GS(%rsp)
+
+	/*
+	 * If we're trying to use TRAPTRACE though, I take that back: we're
+	 * probably debugging some problem in the SWAPGS logic and want to know
+	 * what the incoming gsbase was.
+	 *
+	 * Since we already did SWAPGS, record the KGSBASE.
+	 */
+#if defined(DEBUG) && defined(TRAPTRACE) && !defined(__xpv)
+	movl	$MSR_AMD_KGSBASE, %ecx
+	rdmsr
+	movl	%eax, REGOFF_GSBASE(%rsp)
+	movl	%edx, REGOFF_GSBASE+4(%rsp)
+#endif
 
 	/*
 	 * Application state saved in the regs structure on the stack
@@ -834,7 +864,8 @@ _syscall32_save:
 	movl	0x20(%rsp), %r8d
 	movl	0x28(%rsp), %r9d
 
-	call	*SY_CALLC(%rbx)
+	movq	SY_CALLC(%rbx), %rax
+	INDIRECT_CALL_REG(rax)
 
 	movq	%rbp, %rsp	/* pop the args */
 
@@ -869,6 +900,21 @@ _syscall32_save:
 	SIMPLE_SYSCALL_POSTSYS(%r15, %r14, %bx)
 
 	/*
+	 * Clobber %r11 as we check CR0.TS.
+	 */
+	ASSERT_CR0TS_ZERO(%r11)
+
+	/*
+	 * Unlike other cases, because we need to restore the user stack pointer
+	 * before exiting the kernel we must clear the microarch state before
+	 * getting here. This should be safe because it means that the only
+	 * values on the bus after this are based on the user's registers and
+	 * potentially the addresses where we stored them. Given the constraints
+	 * of sysret, that's how it has to be.
+	 */
+	call	x86_md_clear
+
+	/*
 	 * To get back to userland, we need to put the return %rip in %rcx and
 	 * the return %rfl in %r11d.  The sysret instruction also arranges
 	 * to fix up %cs and %ss; everything else is our responsibility.
@@ -888,8 +934,7 @@ _syscall32_save:
 
 	ASSERT_UPCALL_MASK_IS_SET
         ALTENTRY(nopop_sys_syscall32_swapgs_sysretl)
-	SWAPGS				/* user gsbase */
-	SYSRETL
+	jmp	tr_sysretl
         SET_SIZE(nopop_sys_syscall32_swapgs_sysretl)
 	/*NOTREACHED*/
 
@@ -908,8 +953,6 @@ _full_syscall_postsys32:
 	jmp	_sys_rtt
 	SET_SIZE(sys_syscall32)
 	SET_SIZE(brand_sys_syscall32)
-
-#endif	/* __lint */
 
 /*
  * System call handler via the sysenter instruction
@@ -934,35 +977,28 @@ _full_syscall_postsys32:
  * this call, as %edx is used by the sysexit instruction.
  *
  * One final complication in this routine is its interaction with
- * single-stepping in a debugger.  For most of the system call mechanisms,
- * the CPU automatically clears the single-step flag before we enter the
- * kernel.  The sysenter mechanism does not clear the flag, so a user
- * single-stepping through a libc routine may suddenly find him/herself
- * single-stepping through the kernel.  To detect this, kmdb compares the
- * trap %pc to the [brand_]sys_enter addresses on each single-step trap.
- * If it finds that we have single-stepped to a sysenter entry point, it
- * explicitly clears the flag and executes the sys_sysenter routine.
+ * single-stepping in a debugger.  For most of the system call mechanisms, the
+ * CPU automatically clears the single-step flag before we enter the kernel.
+ * The sysenter mechanism does not clear the flag, so a user single-stepping
+ * through a libc routine may suddenly find themself single-stepping through the
+ * kernel.  To detect this, kmdb and trap() both compare the trap %pc to the
+ * [brand_]sys_enter addresses on each single-step trap.  If it finds that we
+ * have single-stepped to a sysenter entry point, it explicitly clears the flag
+ * and executes the sys_sysenter routine.
  *
- * One final complication in this final complication is the fact that we
- * have two different entry points for sysenter: brand_sys_sysenter and
- * sys_sysenter.  If we enter at brand_sys_sysenter and start single-stepping
- * through the kernel with kmdb, we will eventually hit the instruction at
- * sys_sysenter.  kmdb cannot distinguish between that valid single-step
- * and the undesirable one mentioned above.  To avoid this situation, we
- * simply add a jump over the instruction at sys_sysenter to make it
- * impossible to single-step to it.
+ * One final complication in this final complication is the fact that we have
+ * two different entry points for sysenter: brand_sys_sysenter and sys_sysenter.
+ * If we enter at brand_sys_sysenter and start single-stepping through the
+ * kernel with kmdb, we will eventually hit the instruction at sys_sysenter.
+ * kmdb cannot distinguish between that valid single-step and the undesirable
+ * one mentioned above.  To avoid this situation, we simply add a jump over the
+ * instruction at sys_sysenter to make it impossible to single-step to it.
  */
-#if defined(__lint)
-
-void
-sys_sysenter()
-{}
-
-#else	/* __lint */
 
 	ENTRY_NP(brand_sys_sysenter)
 	SWAPGS				/* kernel gsbase */
 	ALTENTRY(_brand_sys_sysenter_post_swapgs)
+
 	BRAND_CALLBACK(BRAND_CB_SYSENTER, BRAND_URET_FROM_REG(%rdx))
 	/*
 	 * Jump over sys_sysenter to allow single-stepping as described
@@ -972,13 +1008,17 @@ sys_sysenter()
 
 	ALTENTRY(sys_sysenter)
 	SWAPGS				/* kernel gsbase */
-
 	ALTENTRY(_sys_sysenter_post_swapgs)
+
 	movq	%gs:CPU_THREAD, %r15
 
 	movl	$U32CS_SEL, REGOFF_CS(%rsp)
 	movl	%ecx, REGOFF_RSP(%rsp)		/* wrapper: %esp -> %ecx */
 	movl	%edx, REGOFF_RIP(%rsp)		/* wrapper: %eip -> %edx */
+	/*
+	 * NOTE: none of the instructions that run before we get here should
+	 * clobber bits in (R)FLAGS! This includes the kpti trampoline.
+	 */
 	pushfq
 	popq	%r10
 	movl	$UDS_SEL, REGOFF_SS(%rsp)
@@ -1018,6 +1058,20 @@ sys_sysenter()
 	movq	%rbx, REGOFF_FS(%rsp)
 	movw	%gs, %bx
 	movq	%rbx, REGOFF_GS(%rsp)
+
+	/*
+	 * If we're trying to use TRAPTRACE though, I take that back: we're
+	 * probably debugging some problem in the SWAPGS logic and want to know
+	 * what the incoming gsbase was.
+	 *
+	 * Since we already did SWAPGS, record the KGSBASE.
+	 */
+#if defined(DEBUG) && defined(TRAPTRACE) && !defined(__xpv)
+	movl	$MSR_AMD_KGSBASE, %ecx
+	rdmsr
+	movl	%eax, REGOFF_GSBASE(%rsp)
+	movl	%edx, REGOFF_GSBASE+4(%rsp)
+#endif
 
 	/*
 	 * Application state saved in the regs structure on the stack
@@ -1089,7 +1143,8 @@ sys_sysenter()
 	movl	0x20(%rsp), %r8d
 	movl	0x28(%rsp), %r9d
 
-	call	*SY_CALLC(%rbx)
+	movq	SY_CALLC(%rbx), %rax
+	INDIRECT_CALL_REG(rax)
 
 	movq	%rbp, %rsp	/* pop the args */
 
@@ -1117,6 +1172,8 @@ sys_sysenter()
 	 * If we were, and we ended up on another cpu, or another
 	 * lwp got int ahead of us, it could change the segment
 	 * registers without us noticing before we return to userland.
+	 *
+	 * This cli is undone in the tr_sysexit trampoline code.
 	 */
 	cli
 	CHECK_POSTSYS_NE(%r15, %r14, %ebx)
@@ -1136,6 +1193,11 @@ sys_sysenter()
 	andq	$_BITNOT(PS_IE), REGOFF_RFL(%rsp)
 
 	/*
+	 * Clobber %r11 as we check CR0.TS.
+	 */
+	ASSERT_CR0TS_ZERO(%r11)
+
+	/*
 	 * (There's no point in loading up %edx because the sysexit
 	 * mechanism smashes it.)
 	 */
@@ -1150,39 +1212,30 @@ sys_sysenter()
 	popfq
 	movl	REGOFF_RSP(%rsp), %ecx	/* sysexit: %ecx -> %esp */
         ALTENTRY(sys_sysenter_swapgs_sysexit)
-	swapgs
-	sti
-	sysexit
+	call	x86_md_clear
+	jmp	tr_sysexit
 	SET_SIZE(sys_sysenter_swapgs_sysexit)
 	SET_SIZE(sys_sysenter)
 	SET_SIZE(_sys_sysenter_post_swapgs)
 	SET_SIZE(brand_sys_sysenter)
-
-#endif	/* __lint */
 
 /*
  * This is the destination of the "int $T_SYSCALLINT" interrupt gate, used by
  * the generic i386 libc to do system calls. We do a small amount of setup
  * before jumping into the existing sys_syscall32 path.
  */
-#if defined(__lint)
-
-/*ARGSUSED*/
-void
-sys_syscall_int()
-{}
-
-#else	/* __lint */
 
 	ENTRY_NP(brand_sys_syscall_int)
 	SWAPGS				/* kernel gsbase */
 	XPV_TRAP_POP
+	call	smap_enable
 	BRAND_CALLBACK(BRAND_CB_INT91, BRAND_URET_FROM_INTR_STACK())
 	jmp	nopop_syscall_int
 
 	ALTENTRY(sys_syscall_int)
 	SWAPGS				/* kernel gsbase */
 	XPV_TRAP_POP
+	call	smap_enable
 
 nopop_syscall_int:
 	movq	%gs:CPU_THREAD, %r15
@@ -1201,17 +1254,19 @@ nopop_syscall_int:
 	 * or we could end up breaking branded zone support. See the usage of
 	 * this label in lx_brand_int80_callback and sn1_brand_int91_callback
 	 * for examples.
+	 *
+	 * We want to swapgs to maintain the invariant that all entries into
+	 * tr_iret_user are done on the user gsbase.
 	 */
-        ALTENTRY(sys_sysint_swapgs_iret)
-	SWAPGS				/* user gsbase */
-	IRET
+	ALTENTRY(sys_sysint_swapgs_iret)
+	call	x86_md_clear
+	SWAPGS
+	jmp	tr_iret_user
 	/*NOTREACHED*/
 	SET_SIZE(sys_sysint_swapgs_iret)
 	SET_SIZE(sys_syscall_int)
 	SET_SIZE(brand_sys_syscall_int)
 
-#endif	/* __lint */
-	
 /*
  * Legacy 32-bit applications and old libc implementations do lcalls;
  * we should never get here because the LDT entry containing the syscall
@@ -1226,15 +1281,6 @@ nopop_syscall_int:
  * instruction of this handler being either swapgs or cli.
  */
 
-#if defined(__lint)
-
-/*ARGSUSED*/
-void
-sys_lcall32()
-{}
-
-#else	/* __lint */
-
 	ENTRY_NP(sys_lcall32)
 	SWAPGS				/* kernel gsbase */
 	pushq	$0
@@ -1245,7 +1291,7 @@ sys_lcall32()
 	call	panic
 	SET_SIZE(sys_lcall32)
 
-__lcall_panic_str:	
+__lcall_panic_str:
 	.string	"sys_lcall32: shouldn't be here!"
 
 /*
@@ -1259,25 +1305,9 @@ _allsyscalls_size:
 	.NWORD	. - _allsyscalls
 	SET_SIZE(_allsyscalls_size)
 
-#endif	/* __lint */
-
 /*
  * These are the thread context handlers for lwps using sysenter/sysexit.
  */
-
-#if defined(__lint)
-
-/*ARGSUSED*/
-void
-sep_save(void *ksp)
-{}
-
-/*ARGSUSED*/
-void
-sep_restore(void *ksp)
-{}
-
-#else	/* __lint */
 
 	/*
 	 * setting this value to zero as we switch away causes the
@@ -1305,4 +1335,3 @@ sep_restore(void *ksp)
 	ret
 	SET_SIZE(sep_restore)
 
-#endif	/* __lint */

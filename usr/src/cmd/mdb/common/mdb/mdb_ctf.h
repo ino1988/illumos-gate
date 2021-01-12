@@ -23,8 +23,8 @@
  * Use is subject to license terms.
  */
 /*
- * Copyright (c) 2013 by Delphix. All rights reserved.
- * Copyright (c) 2013, Joyent, Inc.  All rights reserved.
+ * Copyright (c) 2013, 2015 by Delphix. All rights reserved.
+ * Copyright 2018 Joyent, Inc.
  */
 
 #ifndef	_MDB_CTF_H
@@ -35,6 +35,7 @@
 
 #ifdef _MDB
 #include <sys/machelf.h>
+#include <mdb/mdb_modapi.h>
 #endif
 
 /*
@@ -136,11 +137,13 @@ extern int mdb_ctf_member_info(mdb_ctf_id_t, const char *,
 extern int mdb_ctf_offsetof(mdb_ctf_id_t, const char *, ulong_t *);
 extern int mdb_ctf_num_members(mdb_ctf_id_t);
 extern int mdb_ctf_offsetof_by_name(const char *, const char *);
+extern ssize_t mdb_ctf_sizeof_by_name(const char *);
 
 extern ssize_t mdb_ctf_offset_to_name(mdb_ctf_id_t, ulong_t, char *, size_t,
     int, mdb_ctf_id_t *, ulong_t *);
 
 #define	MDB_CTF_VREAD_QUIET		0x100
+#define	MDB_CTF_VREAD_IGNORE_ABSENT	0x200
 
 extern int mdb_ctf_vread(void *, const char *, const char *,
     uintptr_t, uint_t);
@@ -151,10 +154,14 @@ extern int mdb_ctf_readsym(void *, const char *, const char *, uint_t);
 extern ctf_file_t *mdb_ctf_open(const char *, int *);		/* Internal */
 extern ctf_file_t *mdb_ctf_bufopen(const void *, size_t,	/* Internal */
     const void *, Shdr *, const void *, Shdr *, int *);
+extern int mdb_ctf_write(const char *, ctf_file_t *fp);		/* Internal */
 extern void mdb_ctf_close(ctf_file_t *fp);			/* Internal */
 extern int mdb_ctf_synthetics_init(void);			/* Internal */
 extern void mdb_ctf_synthetics_fini(void);			/* Internal */
 extern int mdb_ctf_synthetics_from_file(const char *);		/* Internal */
+extern int mdb_ctf_synthetics_to_file(const char *);		/* Internal */
+extern int cmd_typelist(uintptr_t, uint_t, int,			/* Internal */
+    const mdb_arg_t *);
 
 #endif
 

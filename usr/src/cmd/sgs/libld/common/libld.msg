@@ -25,6 +25,7 @@
 
 #
 # Copyright (c) 2012, Joyent, Inc.  All rights reserved.
+# Copyright 2017 RackTop Systems.
 #
 
 @ _START_
@@ -35,7 +36,7 @@
 
 #
 # TRANSLATION_NOTE -- Beginning of USAGE message
-# 	The following messages are the usage messages for the ld command.
+#	The following messages are the usage messages for the ld command.
 #	Tab characters (\t) are used to align the messages.
 #
 #	Each usage message starts with \t, and if the message has more than one
@@ -53,9 +54,9 @@
 #	In C locale, the first 3 messages would look like the following:
 #
 #	usage: ld [-6:abc:.....] file(s)
-#        	[-a]            create an absolute file
-#        	[-b]            do not do special PIC relocations in a.out
-#        	[-c file]       record configuration 'file'
+#		[-a]		create an absolute file
+#		[-b]		do not do special PIC relocations in a.out
+#		[-c file]	record configuration 'file'
 #
 @ MSG_ARG_USAGE		"usage: ld [-%s] file(s)\n"
 @ MSG_ARG_DETAIL_3	"\t[-32]\t\tenforce a 32-bit link-edit\n"
@@ -250,6 +251,8 @@
 			 text\n"
 @ MSG_ARG_DETAIL_ZTW	"\t[-z textwarn]\twarn if there are relocations \
 			 against text\n"
+@ MSG_ARG_DETAIL_ZTY	"\t[-z type=type]\tspecify the type of object \
+			 (exec, kmod, reloc, shared)\n"
 @ MSG_ARG_DETAIL_ZWRAP	"\t[-z wrap=symbol], [-wrap=symbol], [--wrap=symbol]\n\
 			 \t\t\twrap symbol references\n"
 @ MSG_ARG_DETAIL_ZVER	"\t[-z verbose]\t\
@@ -260,7 +263,6 @@
 #
 @ MSG_GRP_INVALNDX	"file %s: group section [%u]%s: entry %d: \
 			 invalid section index: %d"
-@ MSG_GRP_INVALSYM	"file %s: group section [%u]%s: invalid group symbol %s"
 
 # Relocation processing messages (some of these are required to satisfy
 # do_reloc(), which is common code used by cmd/sgs/rtld - make sure both
@@ -353,13 +355,13 @@
 
 #
 # TRANSLATION_NOTE
-# 	The following 7 messages are the message to print the
+#	The following 7 messages are the message to print the
 #	following example messages.
 #
 #Text relocation remains		      referenced
 #    against symbol		    offset	in file
-#str                                 0x14      	main.o
-#printf                              0x1c      	main.o
+#str				     0x14	main.o
+#printf				     0x1c	main.o
 #
 #	The first two lines are the header, and the next msgid
 #	is the format string for the header.
@@ -474,6 +476,10 @@
 @ MSG_SCN_MULTICOMDAT	"file %s: section [%u]%s: cannot be susceptible to multiple \
 			 COMDAT mechanisms: %s"
 
+@ MSG_SCN_DWFOVRFLW	"%s: section %s: encoded DWARF data exceeds \
+			 section size"
+@ MSG_SCN_DWFBADENC	"%s: section %s: invalid DWARF encoding: %#x"
+
 # Symbol processing errors
 
 @ MSG_SYM_NOSECDEF	"symbol '%s' in file %s has no section definition"
@@ -539,11 +545,11 @@
 
 #
 # TRANSLATION_NOTE
-# 	The following 7 messages are the message to print the
+#	The following 7 messages are the message to print the
 #	following example messages.
 #
 #Undefined			first referenced
-# symbol  			    in file
+# symbol			    in file
 #inquire                            halt_hold.o
 #
 @ MSG_SYM_FMT_UNDEF	"%s\t\t\t%s\
@@ -690,6 +696,7 @@
 @ MSG_REJ_HWCAP_2	"file %s: hardware capability (CA_SUNW_HW_2) \
 			 unsupported: %s"
 @ MSG_REJ_ARCHIVE	"file %s: invalid archive use"
+@ MSG_REJ_KMOD		"file %s: kernel modules can't be link-edit input"
 
 # Guidance messages
 @ MSG_GUIDE_SUMMARY	"see ld(1) -z guidance for more information"
@@ -727,6 +734,7 @@
 @ MSG_QSTR_STAR		"'*'"
 @ MSG_STR_DOT		"."
 @ MSG_STR_SLASH		"/"
+@ MSG_STR_COMMA		","
 @ MSG_STR_DYNAMIC	"(.dynamic)"
 @ MSG_STR_ORIGIN	"$ORIGIN"
 @ MSG_STR_MACHINE	"$MACHINE"
@@ -874,6 +882,9 @@
 @ MSG_SYM_L_START	"START_"
 @ MSG_SYM_L_START_U	"_START_"
 
+@ MSG_SYM_SECBOUND_START "__start_"
+@ MSG_SYM_SECBOUND_STOP "__stop_"
+
 # Support functions
 
 @ MSG_SUP_VERSION	"ld_version"
@@ -893,10 +904,10 @@
 @ MSG_SUP_INSEC		"ld_input_section"
 @ MSG_SUP_SEC		"ld_section"
 
-# 
+#
 # Message previously in 'ld'
 #
-# 
+#
 @ _START_
 
 # System error messages
@@ -957,11 +968,13 @@
 @ MSG_MARG_FILTER_AUX	"auxiliary filter option (-f, --auxiliary)"
 @ MSG_MARG_FILTER	"filter option (-F, --filter)"
 @ MSG_MARG_OUTFILE	"output object option (-o, --output)"
-@ MSG_MARG_REL		"relocatable object option (-r, --relocatable)"
+@ MSG_MARG_REL		"relocatable object option (-r, --relocatable, \
+			-z type=reloc)"
 @ MSG_MARG_RPATH	"runpath option (-R, -rpath)"
-@ MSG_MARG_SO		"shared object option (-G, -shared)"
+@ MSG_MARG_SO		"shared object option (-G, -shared, -z type=shared)"
 @ MSG_MARG_SONAME	"soname option (-h, --soname)"
 @ MSG_MARG_STRIP	"strip option (-s, --strip-all)"
+@ MSG_MARG_TYPE_KMOD	"-z type=kmod"
 
 # Entrance criteria messages
 
@@ -974,7 +987,7 @@
 # The next message is a format string for a title. The title is composed of
 # two lines. In C locale, it would look like:
 #
-# 	output		input		new
+#	output		input		new
 #	section		section		displacement	size
 #
 # The \t characters are used for alignment.  (output section), (input section),
@@ -1302,7 +1315,7 @@
 @ MSG_STR_PATH		"%s/%s"
 @ MSG_STR_STRNL		"%s\n"
 @ MSG_STR_NL		"\n"
-@ MSG_STR_CAPGROUPID 	"CAP_GROUP_%d"
+@ MSG_STR_CAPGROUPID	"CAP_GROUP_%d"
 
 @ MSG_STR_LD_DYNAMIC	"dynamic"
 @ MSG_STR_SYMBOLIC	"symbolic"
@@ -1354,6 +1367,7 @@
 @ MSG_ARG_CYU		"-YU"
 @ MSG_ARG_Z		"-z"
 @ MSG_ARG_ZDEFNODEF	"-z[defs|nodefs]"
+@ MSG_ARG_ZASLR		"-zaslr"
 @ MSG_ARG_ZGUIDE	"-zguidance"
 @ MSG_ARG_ZNODEF	"-znodefs"
 @ MSG_ARG_ZNOINTERP	"-znointerp"
@@ -1370,6 +1384,7 @@
 
 @ MSG_ARG_ABSEXEC	"absexec"
 @ MSG_ARG_ALTEXEC64	"altexec64"
+@ MSG_ARG_ASLR		"aslr"
 @ MSG_ARG_NOCOMPSTRTAB	"nocompstrtab"
 @ MSG_ARG_GROUPPERM	"groupperm"
 @ MSG_ARG_NOGROUPPERM	"nogroupperm"
@@ -1436,6 +1451,7 @@
 @ MSG_ARG_DEFERRED	"deferred"
 @ MSG_ARG_NODEFERRED	"nodeferred"
 @ MSG_ARG_ASSDEFLIB	"assert-deflib"
+@ MSG_ARG_TYPE		"type"
 
 @ MSG_ARG_LCOM		"L,"
 @ MSG_ARG_PCOM		"P,"
@@ -1470,6 +1486,11 @@
 @ MSG_ARG_T_OPAR	"("
 @ MSG_ARG_T_CPAR	")"
 
+@ MSG_ARG_ENABLED	"enabled"
+@ MSG_ARG_DISABLED	"disabled"
+@ MSG_ARG_ENABLE	"enable"
+@ MSG_ARG_DISABLE	"disable"
+
 # -z guidance=item strings
 @ MSG_ARG_GUIDE_DELIM		",: \t"
 @ MSG_ARG_GUIDE_NO_ALL		"noall"
@@ -1479,6 +1500,12 @@
 @ MSG_ARG_GUIDE_NO_MAPFILE	"nomapfile"
 @ MSG_ARG_GUIDE_NO_TEXT		"notext"
 @ MSG_ARG_GUIDE_NO_UNUSED	"nounused"
+
+# -z type= strings
+@ MSG_ARG_TYPE_RELOC	"reloc"
+@ MSG_ARG_TYPE_EXEC	"exec"
+@ MSG_ARG_TYPE_SHARED	"shared"
+@ MSG_ARG_TYPE_KMOD	"kmod"
 
 # Environment variable strings
 

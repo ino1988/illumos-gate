@@ -22,6 +22,7 @@
 # Copyright 2009 Sun Microsystems, Inc.  All rights reserved.
 # Use is subject to license terms.
 #
+# Copyright (c) 2018, Joyent, Inc.
 
 PROG = fsstat
 OBJS = fsstat.o
@@ -33,12 +34,14 @@ include $(SRC)/cmd/stat/Makefile.stat
 COMMON_OBJS = common.o timestamp.o
 COMMON_SRCS = $(COMMON_OBJS:%.o=$(STATCOMMONDIR)/%.c)
 
-LDLIBS += -lkstat
+LDLIBS += -lkstat -lcmdutils
 CFLAGS += $(CCVERBOSE) -I${STATCOMMONDIR}
 CERRWARN += -_gcc=-Wno-parentheses
 FILEMODE= 0555
 
 lint := LINTFLAGS = -muxs -I$(STATCOMMONDIR)
+
+SMOFF += signed
 
 .KEEP_STATE:
 

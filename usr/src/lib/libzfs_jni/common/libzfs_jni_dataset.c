@@ -24,7 +24,9 @@
  * Use is subject to license terms.
  */
 
-#pragma ident	"%Z%%M%	%I%	%E% SMI"
+/*
+ * Copyright (c) 2015 by Delphix. All rights reserved.
+ */
 
 #include "libzfs_jni_util.h"
 #include "libzfs_jni_dataset.h"
@@ -380,7 +382,7 @@ populate_PoolBean(JNIEnv *env, zpool_handle_t *zphp, zfs_handle_t *zhp,
 		(*env)->CallVoidMethod(env, object->object,
 		    pool_stats->method_setPoolStatus,
 		    zjni_pool_status_to_obj(env,
-		    zpool_get_status(zphp, &msgid)));
+		    zpool_get_status(zphp, &msgid, NULL)));
 
 		(*env)->CallVoidMethod(env, object->object,
 		    pool_stats->method_setPoolVersion,
@@ -568,7 +570,7 @@ create_DatasetBean(JNIEnv *env, zfs_handle_t *zhp)
 static int
 is_fs_snapshot(zfs_handle_t *zhp)
 {
-	char parent[ZFS_MAXNAMELEN];
+	char parent[ZFS_MAX_DATASET_NAME_LEN];
 	zfs_handle_t *parent_zhp;
 	int isfs;
 

@@ -21,8 +21,8 @@
 
 /*
  * Copyright (c) 2009, 2010, Oracle and/or its affiliates. All rights reserved.
- * Copyright 2014 Nexenta Systems, Inc. All rights reserved.
- * Copyright (c) 2013, Joyent, Inc. All rights reserved.
+ * Copyright 2015 Nexenta Systems, Inc. All rights reserved.
+ * Copyright 2019 Joyent, Inc.
  * Copyright (c) 2014, Tegile Systems Inc. All rights reserved.
  */
 
@@ -61,6 +61,7 @@
 #include <sys/isa_defs.h>
 #include <sys/sunmdi.h>
 #include <sys/mdi_impldefs.h>
+#include <sys/ddi_ufm.h>
 #include <sys/scsi/adapters/mpt_sas/mptsas_hash.h>
 #include <sys/scsi/adapters/mpt_sas/mptsas_ioctl.h>
 #include <sys/scsi/adapters/mpt_sas/mpi/mpi2_tool.h>
@@ -79,15 +80,13 @@ extern "C" {
 
 #define	MPTSAS_INITIAL_SOFT_SPACE	4
 
-#define	MAX_MPI_PORTS		16
-
 /*
  * Note below macro definition and data type definition
  * are used for phy mask handling, it should be changed
  * simultaneously.
  */
-#define	MPTSAS_MAX_PHYS		16
-typedef uint16_t		mptsas_phymask_t;
+#define	MPTSAS_MAX_PHYS		24
+typedef uint32_t		mptsas_phymask_t;
 
 #define	MPTSAS_INVALID_DEVHDL	0xffff
 #define	MPTSAS_SATA_GUID	"sata-guid"
@@ -100,6 +99,7 @@ typedef uint16_t		mptsas_phymask_t;
  */
 #define	MPTSAS_SMP_BUCKET_COUNT		23
 #define	MPTSAS_TARGET_BUCKET_COUNT	97
+#define	MPTSAS_TMP_TARGET_BUCKET_COUNT	13
 
 /*
  * MPT HW defines
@@ -231,9 +231,6 @@ typedef	struct mptsas_target {
 		uint16_t		m_enclosure;
 		uint16_t		m_slot_num;
 		uint32_t		m_tgt_unconfigured;
-		uint8_t			m_led_status;
-		uint8_t			m_scsi_req_desc_type;
-
 } mptsas_target_t;
 
 /*
@@ -249,11 +246,24 @@ typedef struct mptsas_smp {
 	uint32_t		m_pdevinfo;
 } mptsas_smp_t;
 
+/*
+ * This represents a single enclosure. Targets point to an enclosure through
+ * their m_enclosure member.
+ */
+typedef struct mptsas_enclosure {
+	list_node_t	me_link;
+	uint16_t	me_enchdl;
+	uint16_t	me_flags;
+	uint16_t	me_nslots;
+	uint16_t	me_fslot;
+	uint8_t		*me_slotleds;
+} mptsas_enclosure_t;
+
 typedef struct mptsas_cache_frames {
 	ddi_dma_handle_t m_dma_hdl;
 	ddi_acc_handle_t m_acc_hdl;
 	caddr_t m_frames_addr;
-	uint32_t m_phys_addr;
+	uint64_t m_phys_addr;
 } mptsas_cache_frames_t;
 
 typedef struct	mptsas_cmd {
@@ -267,13 +277,7 @@ typedef struct	mptsas_cmd {
 	off_t			cmd_dma_offset;
 	size_t			cmd_dma_len;
 	uint32_t		cmd_totaldmacount;
-
-	ddi_dma_handle_t	cmd_arqhandle;	/* dma arq handle */
-	ddi_dma_cookie_t	cmd_arqcookie;
-	struct buf		*cmd_arq_buf;
-	ddi_dma_handle_t	cmd_ext_arqhandle; /* dma extern arq handle */
-	ddi_dma_cookie_t	cmd_ext_arqcookie;
-	struct buf		*cmd_ext_arq_buf;
+	caddr_t			cmd_arq_buf;
 
 	int			cmd_pkt_flags;
 
@@ -286,6 +290,9 @@ typedef struct	mptsas_cmd {
 	uchar_t			cmd_cdblen;	/* length of cdb */
 	uchar_t			cmd_rqslen;	/* len of requested rqsense */
 	uchar_t			cmd_privlen;
+	uint16_t		cmd_extrqslen;	/* len of extended rqsense */
+	uint16_t		cmd_extrqschunks; /* len in map chunks */
+	uint16_t		cmd_extrqsidx;	/* Index into map */
 	uint_t			cmd_scblen;
 	uint32_t		cmd_dmacount;
 	uint64_t		cmd_dma_addr;
@@ -333,7 +340,6 @@ typedef struct	mptsas_cmd {
 #define	CFLAG_PMM_RECEIVED	0x200000 /* use cmd_pmm* for saving pointers */
 #define	CFLAG_RETRY		0x400000 /* cmd has been retried */
 #define	CFLAG_CMDIOC		0x800000 /* cmd is just for for ioc, no io */
-#define	CFLAG_EXTARQBUFVALID	0x1000000 /* extern arq buf handle is valid */
 #define	CFLAG_PASSTHRU		0x2000000 /* cmd is a passthrough command */
 #define	CFLAG_XARQ		0x4000000 /* cmd requests for extra sense */
 #define	CFLAG_CMDACK		0x8000000 /* cmd for event ack */
@@ -561,6 +567,7 @@ _NOTE(DATA_READABLE_WITHOUT_LOCK(mptsas_topo_change_list_t::flags))
 #define	DEV_INFO_WRONG_DEVICE_TYPE	0x2
 #define	DEV_INFO_PHYS_DISK		0x3
 #define	DEV_INFO_FAIL_ALLOC		0x4
+#define	DEV_INFO_FAIL_GUID		0x5
 
 /*
  * mpt hotplug event defines
@@ -703,6 +710,8 @@ typedef struct mptsas {
 
 	refhash_t	*m_targets;
 	refhash_t	*m_smp_targets;
+	list_t		m_enclosures;
+	refhash_t	*m_tmp_targets;
 
 	m_raidconfig_t	m_raidconfig[MPTSAS_MAX_RAIDCONFIGS];
 	uint8_t		m_num_raid_configs;
@@ -750,6 +759,8 @@ typedef struct mptsas {
 
 	ddi_dma_handle_t m_dma_req_frame_hdl;
 	ddi_acc_handle_t m_acc_req_frame_hdl;
+	ddi_dma_handle_t m_dma_req_sense_hdl;
+	ddi_acc_handle_t m_acc_req_sense_hdl;
 	ddi_dma_handle_t m_dma_reply_frame_hdl;
 	ddi_acc_handle_t m_acc_reply_frame_hdl;
 	ddi_dma_handle_t m_dma_free_queue_hdl;
@@ -805,17 +816,24 @@ typedef struct mptsas {
 	 */
 	caddr_t		m_req_frame;
 	uint64_t	m_req_frame_dma_addr;
+	caddr_t		m_req_sense;
+	caddr_t		m_extreq_sense;
+	uint_t		m_extreq_sense_refcount;
+	kcondvar_t	m_extreq_sense_refcount_cv;
+	uint64_t	m_req_sense_dma_addr;
 	caddr_t		m_reply_frame;
 	uint64_t	m_reply_frame_dma_addr;
 	caddr_t		m_free_queue;
 	uint64_t	m_free_queue_dma_addr;
 	caddr_t		m_post_queue;
 	uint64_t	m_post_queue_dma_addr;
+	struct map	*m_erqsense_map;
 
 	m_replyh_arg_t *m_replyh_args;
 
 	uint16_t	m_max_requests;
 	uint16_t	m_req_frame_size;
+	uint16_t	m_req_sense_size;
 
 	/*
 	 * Max frames per request reprted in IOC Facts
@@ -892,9 +910,13 @@ typedef struct mptsas {
 	int			m_mpxio_enable;
 	uint8_t			m_done_traverse_dev;
 	uint8_t			m_done_traverse_smp;
+	uint8_t			m_done_traverse_enc;
 	int			m_diag_action_in_progress;
 	uint16_t		m_dev_handle;
 	uint16_t		m_smp_devhdl;
+
+	/* DDI UFM Handle */
+	ddi_ufm_handle_t	*m_ufmh;
 
 	/*
 	 * Event recording
@@ -1125,11 +1147,11 @@ _NOTE(DATA_READABLE_WITHOUT_LOCK(mptsas::m_instance))
 			(uint32_t *)(mpt->m_devaddr + NREG_DSPS)))
 
 
-#define	MPTSAS_START_CMD(mpt, req_desc_lo, req_desc_hi) \
-	ddi_put32(mpt->m_datap, &mpt->m_reg->RequestDescriptorPostLow,\
-	    req_desc_lo);\
-	ddi_put32(mpt->m_datap, &mpt->m_reg->RequestDescriptorPostHigh,\
-	    req_desc_hi);
+#define	MPTSAS_START_CMD(mpt, req_desc) \
+	ddi_put32(mpt->m_datap, &mpt->m_reg->RequestDescriptorPostLow,	\
+	    req_desc & 0xffffffffu);					\
+	ddi_put32(mpt->m_datap, &mpt->m_reg->RequestDescriptorPostHigh,	\
+	    (req_desc >> 32) & 0xffffffffu);
 
 #define	INTPENDING(mpt) \
 	(MPTSAS_GET_ISTAT(mpt) & MPI2_HIS_REPLY_DESCRIPTOR_INTERRUPT)
@@ -1272,14 +1294,6 @@ void mptsas_waitq_add(mptsas_t *mpt, mptsas_cmd_t *cmd);
 void mptsas_log(struct mptsas *mpt, int level, char *fmt, ...);
 int mptsas_poll(mptsas_t *mpt, mptsas_cmd_t *poll_cmd, int polltime);
 int mptsas_do_dma(mptsas_t *mpt, uint32_t size, int var, int (*callback)());
-int mptsas_send_config_request_msg(mptsas_t *mpt, uint8_t action,
-	uint8_t pagetype, uint32_t pageaddress, uint8_t pagenumber,
-	uint8_t pageversion, uint8_t pagelength, uint32_t
-	SGEflagslength, uint32_t SGEaddress32);
-int mptsas_send_extended_config_request_msg(mptsas_t *mpt, uint8_t action,
-	uint8_t extpagetype, uint32_t pageaddress, uint8_t pagenumber,
-	uint8_t pageversion, uint16_t extpagelength,
-	uint32_t SGEflagslength, uint32_t SGEaddress32);
 int mptsas_update_flash(mptsas_t *mpt, caddr_t ptrbuffer, uint32_t size,
 	uint8_t type, int mode);
 int mptsas_check_flash(mptsas_t *mpt, caddr_t origfile, uint32_t size,
@@ -1311,11 +1325,11 @@ int mptsas_get_handshake_msg(mptsas_t *mpt, caddr_t memp, int numbytes,
 int mptsas_send_config_request_msg(mptsas_t *mpt, uint8_t action,
     uint8_t pagetype, uint32_t pageaddress, uint8_t pagenumber,
     uint8_t pageversion, uint8_t pagelength, uint32_t SGEflagslength,
-    uint32_t SGEaddress32);
+    uint64_t SGEaddress);
 int mptsas_send_extended_config_request_msg(mptsas_t *mpt, uint8_t action,
     uint8_t extpagetype, uint32_t pageaddress, uint8_t pagenumber,
     uint8_t pageversion, uint16_t extpagelength,
-    uint32_t SGEflagslength, uint32_t SGEaddress32);
+    uint32_t SGEflagslength, uint64_t SGEaddress);
 
 int mptsas_request_from_pool(mptsas_t *mpt, mptsas_cmd_t **cmd,
     struct scsi_pkt **pkt);
@@ -1361,16 +1375,14 @@ int mptsas_get_manufacture_page5(mptsas_t *mpt);
 int mptsas_get_sas_port_page0(mptsas_t *mpt, uint32_t page_address,
     uint64_t *sas_wwn, uint8_t *portwidth);
 int mptsas_get_bios_page3(mptsas_t *mpt,  uint32_t *bios_version);
-int
-mptsas_get_sas_phy_page0(mptsas_t *mpt, uint32_t page_address,
+int mptsas_get_sas_phy_page0(mptsas_t *mpt, uint32_t page_address,
     smhba_info_t *info);
-int
-mptsas_get_sas_phy_page1(mptsas_t *mpt, uint32_t page_address,
+int mptsas_get_sas_phy_page1(mptsas_t *mpt, uint32_t page_address,
     smhba_info_t *info);
-int
-mptsas_get_manufacture_page0(mptsas_t *mpt);
-void
-mptsas_create_phy_stats(mptsas_t *mpt, char *iport, dev_info_t *dip);
+int mptsas_get_manufacture_page0(mptsas_t *mpt);
+int mptsas_get_enclosure_page0(mptsas_t *mpt, uint32_t page_address,
+    mptsas_enclosure_t *mpe);
+void mptsas_create_phy_stats(mptsas_t *mpt, char *iport, dev_info_t *dip);
 void mptsas_destroy_phy_stats(mptsas_t *mpt);
 int mptsas_smhba_phy_init(mptsas_t *mpt);
 /*
@@ -1442,7 +1454,7 @@ void mptsas_debug_log(char *fmt, ...);
 #define	NDBG24(args)	MPTSAS_DBGPR(0x1000000, args)	/* capabilities */
 #define	NDBG25(args)	MPTSAS_DBGPR(0x2000000, args)	/* flushing */
 #define	NDBG26(args)	MPTSAS_DBGPR(0x4000000, args)
-#define	NDBG27(args)	MPTSAS_DBGPR(0x8000000, args)
+#define	NDBG27(args)	MPTSAS_DBGPR(0x8000000, args)	/* passthrough */
 
 #define	NDBG28(args)	MPTSAS_DBGPR(0x10000000, args)	/* hotplug */
 #define	NDBG29(args)	MPTSAS_DBGPR(0x20000000, args)	/* timeouts */

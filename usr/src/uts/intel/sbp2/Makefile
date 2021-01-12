@@ -37,11 +37,7 @@ UTSBASE	= ../..
 #
 MODULE		= sbp2
 OBJECTS		= $(SBP2_OBJS:%=$(OBJS_DIR)/%)
-LINTS		= $(SBP2_OBJS:%.o=$(LINTS_DIR)/%.ln)
 ROOTMODULE	= $(ROOT_MISC_DIR)/$(MODULE)
-WARLOCK_OUT     = $(SBP2_OBJS:%.o=%.ll)
-WARLOCK_OK      = $(MODULE).ok
-WLCMD_DIR	= $(UTSBASE)/common/io/warlock
 
 #
 #	Include common rules.
@@ -52,18 +48,13 @@ include $(UTSBASE)/intel/Makefile.intel
 #	Define targets
 #
 ALL_TARGET	= $(BINARY)
-LINT_TARGET	= $(MODULE).lint
 INSTALL_TARGET	= $(BINARY) $(ROOTMODULE)
 
 #
-# For now, disable these lint checks; maintainers should endeavor
-# to investigate and remove these for maximum lint coverage.
+# For now, disable these warnings; maintainers should endeavor
+# to investigate and remove these for maximum coverage.
 # Please do not carry these forward to new Makefiles.
 #
-LINTTAGS	+= -erroff=E_BAD_PTR_CAST_ALIGN
-LINTTAGS	+= -erroff=E_STATIC_UNUSED
-LINTTAGS	+= -erroff=E_PTRDIFF_OVERFLOW
-LINTTAGS	+= -erroff=E_ASSIGN_NARROW_CONV
 
 CERRWARN	+= -_gcc=-Wno-unused-function
 
@@ -74,16 +65,8 @@ def:		$(DEF_DEPS)
 all:		$(ALL_DEPS)
 
 clean:		$(CLEAN_DEPS)
-		$(RM) $(WARLOCK_OUT) $(WARLOCK_OK)
 
 clobber:	$(CLOBBER_DEPS)
-		$(RM) $(WARLOCK_OUT) $(WARLOCK_OK)
-
-lint:		$(LINT_DEPS)
-
-modlintlib:	$(MODLINTLIB_DEPS)
-
-clean.lint:	$(CLEAN_LINT_DEPS)
 
 install:	$(INSTALL_DEPS)
 
@@ -91,25 +74,3 @@ install:	$(INSTALL_DEPS)
 #	Include common targets.
 #
 include $(UTSBASE)/intel/Makefile.targ
-
-#
-#	Defines for local commands.
-#
-WLCC		= wlcc
-TOUCH		= touch
-WARLOCK		= warlock
-
-#
-#	Warlock
-#
-WARLOCK_CMD	= $(WLCMD_DIR)/$(MODULE).wlcmd
-
-warlock: $(WARLOCK_OK)
-
-$(WARLOCK_OK):	$(WARLOCK_OUT) $(WARLOCK_CMD)
-	$(WARLOCK) -c $(WARLOCK_CMD) $(WARLOCK_OUT) \
-		-l ../warlock/ddi_dki_impl.ll
-	$(TOUCH) $@
-
-%.ll: $(UTSBASE)/common/io/sbp2/%.c
-	$(WLCC) $(CPPFLAGS) -DDEBUG -o $@ $<

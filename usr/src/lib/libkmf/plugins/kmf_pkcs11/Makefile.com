@@ -21,8 +21,7 @@
 # Copyright 2009 Sun Microsystems, Inc.  All rights reserved.
 # Use is subject to license terms.
 #
-# Makefile for KMF Plugins
-#
+# Copyright (c) 2018, Joyent, Inc.
 
 LIBRARY=	kmf_pkcs11.a
 VERS=		.1
@@ -51,9 +50,11 @@ SRCS =  \
 CFLAGS		+=	$(CCVERBOSE)
 CPPFLAGS	+=	-D_REENTRANT $(KMFINC) -I$(INCDIR) \
 			-I$(ADJUNCT_PROTO)/usr/include/libxml2 -I$(BIGNUMDIR)
-LINTFLAGS64	+=	-errchk=longptr64
 
 CERRWARN	+=	-_gcc=-Wno-unused-label
+
+# not linted
+SMATCH=off
 
 PICS=	$(OBJECTS:%=pics/%)
 
@@ -66,9 +67,8 @@ ROOTLIBDIR64=	$(ROOTFS_LIBDIR)/crypto/$(MACH64)
 
 LIBS	=	$(DYNLIB)
 
-all:	$(LIBS) $(LINTLIB)
+all:	$(LIBS)
 
-lint: lintcheck
 
 FRC:
 

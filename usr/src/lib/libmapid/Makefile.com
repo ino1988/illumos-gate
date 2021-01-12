@@ -21,7 +21,7 @@
 #
 # Copyright (c) 2006, 2010, Oracle and/or its affiliates. All rights reserved.
 #
-#
+# Copyright (c) 2018, Joyent, Inc.
 
 LIBRARY =	libmapid.a
 VERS	=	.1
@@ -33,7 +33,7 @@ OBJECTS =	$(LIBOBJS) $(OTHOBJS)
 
 include $(SRC)/lib/Makefile.lib
 
-LIBS	=	$(DYNLIB) $(LINTLIB)
+LIBS	=	$(DYNLIB)
 
 #
 # This library will be installed w/all other nfs
@@ -46,8 +46,6 @@ ROOTLIBDIR   =	$(ROOT)/usr/lib/nfs
 #
 SRCDIR	=	../common
 LIBSRCS	= $(LIBOBJS:%.o=$(SRCDIR)/%.c)
-$(LINTLIB) := SRCS = $(LINTSRC:%=$(SRCDIR)/%)
-lintcheck  :=	SRCS = $(LIBSRCS)
 
 LDLIBS	+=	-lresolv -lc -lscf
 
@@ -56,7 +54,9 @@ CPPFLAGS +=	-I$(SRCDIR) -I$(SMF_DIR) -D_REENTRANT
 
 CERRWARN +=	-_gcc=-Wno-switch
 CERRWARN +=	-_gcc=-Wno-unused-variable
-CERRWARN +=	-_gcc=-Wno-uninitialized
+CERRWARN +=	$(CNOWARN_UNINIT)
+
+SMOFF += all_func_returns
 
 .KEEP_STATE:
 
@@ -64,7 +64,6 @@ all:  $(LIBS)
 
 install: $(ROOTLIBDIR) all
 
-lint:	$(LINTLIB) lintcheck
 
 pics/%.o:	$(SMF_DIR)/%.c
 	$(COMPILE.c) -o $@ $<

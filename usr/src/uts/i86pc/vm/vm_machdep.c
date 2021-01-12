@@ -24,6 +24,7 @@
 /*
  * Copyright (c) 2010, Intel Corporation.
  * All rights reserved.
+ * Copyright 2019, Joyent, Inc.
  */
 
 /* Copyright (c) 1984, 1986, 1987, 1988, 1989 AT&T */
@@ -59,6 +60,7 @@
 #include <sys/vmsystm.h>
 #include <sys/swap.h>
 #include <sys/dumphdr.h>
+#include <sys/random.h>
 
 #include <vm/hat.h>
 #include <vm/as.h>
@@ -80,6 +82,7 @@
 #include <sys/cmn_err.h>
 #include <sys/archsystm.h>
 #include <sys/machsystm.h>
+#include <sys/secflags.h>
 
 #include <sys/vtrace.h>
 #include <sys/ddidmareq.h>
@@ -157,7 +160,7 @@ typedef struct {
 		pgcnt_t	mnr_mts_pgcnt;
 		int	mnr_mts_colors;
 		pgcnt_t *mnr_mtsc_pgcnt;
-	} 	*mnr_mts;
+	}	*mnr_mts;
 #endif
 } mnoderange_t;
 
@@ -199,11 +202,11 @@ int nranges = NUM_MEM_RANGES;
  * This combines mem_node_config and memranges into one data
  * structure to be used for page list management.
  */
-mnoderange_t	*mnoderanges;
-int		mnoderangecnt;
-int		mtype4g;
-int		mtype16m;
-int		mtypetop;	/* index of highest pfn'ed mnoderange */
+static mnoderange_t *mnoderanges;
+static int mnoderangecnt;
+static int mtype4g;
+static int mtype16m;
+static int mtypetop;
 
 /*
  * 4g memory management variables for systems with more than 4g of memory:
@@ -259,9 +262,9 @@ static int	desfree4gshift = 4;	/* maxmem4g shift to derive DESFREE4G */
 
 #define	FREEMEM16M	MTYPE_FREEMEM(mtype16m)
 #define	DESFREE16M	desfree16m
-#define	RESTRICT16M_ALLOC(freemem, pgcnt, flags)		\
-	((freemem != 0) && ((flags & PG_PANIC) == 0) &&		\
-	    ((freemem >= (FREEMEM16M)) ||			\
+#define	RESTRICT16M_ALLOC(freemem, pgcnt, flags) \
+	(mtype16m != -1 && (freemem != 0) && ((flags & PG_PANIC) == 0) && \
+	    ((freemem >= (FREEMEM16M)) || \
 	    (FREEMEM16M  < (DESFREE16M + pgcnt))))
 
 static pgcnt_t	desfree16m = 0x380;
@@ -360,6 +363,91 @@ static kmutex_t	contig_lock;
 #define	CONTIG_UNLOCK()	mutex_exit(&contig_lock);
 
 #define	PFN_16M		(mmu_btop((uint64_t)0x1000000))
+
+caddr_t
+i86devmap(pfn_t pf, pgcnt_t pgcnt, uint_t prot)
+{
+	caddr_t addr;
+	caddr_t addr1;
+	page_t *pp;
+
+	addr1 = addr = vmem_alloc(heap_arena, mmu_ptob(pgcnt), VM_SLEEP);
+
+	for (; pgcnt != 0; addr += MMU_PAGESIZE, ++pf, --pgcnt) {
+		pp = page_numtopp_nolock(pf);
+		if (pp == NULL) {
+			hat_devload(kas.a_hat, addr, MMU_PAGESIZE, pf,
+			    prot | HAT_NOSYNC, HAT_LOAD_LOCK);
+		} else {
+			hat_memload(kas.a_hat, addr, pp,
+			    prot | HAT_NOSYNC, HAT_LOAD_LOCK);
+		}
+	}
+
+	return (addr1);
+}
+
+/*
+ * This routine is like page_numtopp, but accepts only free pages, which
+ * it allocates (unfrees) and returns with the exclusive lock held.
+ * It is used by machdep.c/dma_init() to find contiguous free pages.
+ */
+page_t *
+page_numtopp_alloc(pfn_t pfnum)
+{
+	page_t *pp;
+
+retry:
+	pp = page_numtopp_nolock(pfnum);
+	if (pp == NULL) {
+		return (NULL);
+	}
+
+	if (!page_trylock(pp, SE_EXCL)) {
+		return (NULL);
+	}
+
+	if (page_pptonum(pp) != pfnum) {
+		page_unlock(pp);
+		goto retry;
+	}
+
+	if (!PP_ISFREE(pp)) {
+		page_unlock(pp);
+		return (NULL);
+	}
+	if (pp->p_szc) {
+		page_demote_free_pages(pp);
+		page_unlock(pp);
+		goto retry;
+	}
+
+	/* If associated with a vnode, destroy mappings */
+
+	if (pp->p_vnode) {
+
+		page_destroy_free(pp);
+
+		if (!page_lock(pp, SE_EXCL, (kmutex_t *)NULL, P_NO_RECLAIM)) {
+			return (NULL);
+		}
+
+		if (page_pptonum(pp) != pfnum) {
+			page_unlock(pp);
+			goto retry;
+		}
+	}
+
+	if (!PP_ISFREE(pp)) {
+		page_unlock(pp);
+		return (NULL);
+	}
+
+	if (!page_reclaim(pp, (kmutex_t *)NULL))
+		return (NULL);
+
+	return (pp);
+}
 
 /*
  * Return the optimum page size for a given mapping
@@ -637,6 +725,13 @@ map_addr_vacalign_check(caddr_t addr, u_offset_t off)
 }
 
 /*
+ * The maximum amount a randomized mapping will be slewed.  We should perhaps
+ * arrange things so these tunables can be separate for mmap, mmapobj, and
+ * ld.so
+ */
+size_t aslr_max_map_skew = 256 * 1024 * 1024; /* 256MB */
+
+/*
  * map_addr_proc() is the routine called when the system is to
  * choose an address for the user.  We will pick an address
  * range which is the highest available below userlimit.
@@ -681,9 +776,6 @@ map_addr_proc(
 
 	base = p->p_brkbase;
 #if defined(__amd64)
-	/*
-	 * XX64 Yes, this needs more work.
-	 */
 	if (p->p_model == DATAMODEL_NATIVE) {
 		if (userlimit < as->a_userlimit) {
 			/*
@@ -703,16 +795,24 @@ map_addr_proc(
 			}
 		} else {
 			/*
-			 * XX64 This layout is probably wrong .. but in
-			 * the event we make the amd64 address space look
-			 * like sparcv9 i.e. with the stack -above- the
-			 * heap, this bit of code might even be correct.
+			 * With the stack positioned at a higher address than
+			 * the heap for 64-bit processes, it is necessary to be
+			 * mindful of its location and potential size.
+			 *
+			 * Unallocated space above the top of the stack (that
+			 * is, at a lower address) but still within the bounds
+			 * of the stack limit should be considered unavailable.
+			 *
+			 * As the 64-bit stack guard is mapped in immediately
+			 * adjacent to the stack limit boundary, this prevents
+			 * new mappings from having accidentally dangerous
+			 * proximity to the stack.
 			 */
 			slen = p->p_usrstack - base -
 			    ((p->p_stk_ctl + PAGEOFFSET) & PAGEMASK);
 		}
 	} else
-#endif
+#endif /* defined(__amd64) */
 		slen = userlimit - base;
 
 	/* Make len be a multiple of PAGESIZE */
@@ -752,6 +852,7 @@ map_addr_proc(
 	ASSERT(align_amount == 0 || align_amount >= PAGESIZE);
 
 	off = off & (align_amount - 1);
+
 	/*
 	 * Look for a large enough hole starting below userlimit.
 	 * After finding it, use the upper part.
@@ -777,6 +878,20 @@ map_addr_proc(
 		addr += (uintptr_t)off;
 		if (addr > as_addr) {
 			addr -= align_amount;
+		}
+
+		/*
+		 * If randomization is requested, slew the allocation
+		 * backwards, within the same gap, by a random amount.
+		 */
+		if (flags & _MAP_RANDOMIZE) {
+			uint32_t slew;
+
+			(void) random_get_pseudo_bytes((uint8_t *)&slew,
+			    sizeof (slew));
+
+			slew = slew % MIN(aslr_max_map_skew, (addr - base));
+			addr -= P2ALIGN(slew, align_amount);
 		}
 
 		ASSERT(addr > base);
@@ -904,6 +1019,13 @@ valid_va_range(caddr_t *basep, size_t *lenp, size_t minlen, int dir)
 }
 
 /*
+ * Default to forbidding the first 64k of address space.  This protects most
+ * reasonably sized structures from dereferences through NULL:
+ *     ((foo_t *)0)->bar
+ */
+uintptr_t forbidden_null_mapping_sz = 0x10000;
+
+/*
  * Determine whether [addr, addr+len] are valid user addresses.
  */
 /*ARGSUSED*/
@@ -914,6 +1036,11 @@ valid_usr_range(caddr_t addr, size_t len, uint_t prot, struct as *as,
 	caddr_t eaddr = addr + len;
 
 	if (eaddr <= addr || addr >= userlimit || eaddr > userlimit)
+		return (RANGE_BADADDR);
+
+	if ((addr <= (caddr_t)forbidden_null_mapping_sz) &&
+	    as->a_proc != NULL &&
+	    secflag_enabled(as->a_proc, PROC_SEC_FORBIDNULLMAP))
 		return (RANGE_BADADDR);
 
 #if defined(__amd64)
@@ -1262,39 +1389,46 @@ mnode_range_cnt(int mnode)
 #endif	/* __xpv */
 }
 
-/*
- * mnode_range_setup() initializes mnoderanges.
- */
+static int
+mnoderange_cmp(const void *v1, const void *v2)
+{
+	const mnoderange_t *m1 = v1;
+	const mnoderange_t *m2 = v2;
+
+	if (m1->mnr_pfnlo < m2->mnr_pfnlo)
+		return (-1);
+	return (m1->mnr_pfnlo > m2->mnr_pfnlo);
+}
+
 void
 mnode_range_setup(mnoderange_t *mnoderanges)
 {
-	mnoderange_t *mp = mnoderanges;
-	int	mnode, mri;
-	int	mindex = 0;	/* current index into mnoderanges array */
-	int	i, j;
-	pfn_t	hipfn;
-	int	last, hi;
+	mnoderange_t *mp;
+	size_t nr_ranges;
+	size_t mnode;
 
-	for (mnode = 0; mnode < max_mem_nodes; mnode++) {
+	for (mnode = 0, nr_ranges = 0, mp = mnoderanges;
+	    mnode < max_mem_nodes; mnode++) {
+		size_t mri = nranges - 1;
+
 		if (mem_node_config[mnode].exists == 0)
 			continue;
-
-		mri = nranges - 1;
 
 		while (MEMRANGEHI(mri) < mem_node_config[mnode].physbase)
 			mri--;
 
 		while (mri >= 0 && mem_node_config[mnode].physmax >=
 		    MEMRANGELO(mri)) {
-			mnoderanges->mnr_pfnlo = MAX(MEMRANGELO(mri),
+			mp->mnr_pfnlo = MAX(MEMRANGELO(mri),
 			    mem_node_config[mnode].physbase);
-			mnoderanges->mnr_pfnhi = MIN(MEMRANGEHI(mri),
+			mp->mnr_pfnhi = MIN(MEMRANGEHI(mri),
 			    mem_node_config[mnode].physmax);
-			mnoderanges->mnr_mnode = mnode;
-			mnoderanges->mnr_memrange = mri;
-			mnoderanges->mnr_exists = 1;
-			mnoderanges++;
-			mindex++;
+			mp->mnr_mnode = mnode;
+			mp->mnr_memrange = mri;
+			mp->mnr_next = -1;
+			mp->mnr_exists = 1;
+			mp++;
+			nr_ranges++;
 			if (mem_node_config[mnode].physmax > MEMRANGEHI(mri))
 				mri--;
 			else
@@ -1303,33 +1437,26 @@ mnode_range_setup(mnoderange_t *mnoderanges)
 	}
 
 	/*
-	 * For now do a simple sort of the mnoderanges array to fill in
-	 * the mnr_next fields.  Since mindex is expected to be relatively
-	 * small, using a simple O(N^2) algorithm.
+	 * mnoderangecnt can be larger than nr_ranges when memory DR is
+	 * supposedly supported.
 	 */
-	for (i = 0; i < mindex; i++) {
-		if (mp[i].mnr_pfnlo == 0)	/* find lowest */
-			break;
-	}
-	ASSERT(i < mindex);
-	last = i;
-	mtype16m = last;
-	mp[last].mnr_next = -1;
-	for (i = 0; i < mindex - 1; i++) {
-		hipfn = (pfn_t)(-1);
-		hi = -1;
-		/* find next highest mnode range */
-		for (j = 0; j < mindex; j++) {
-			if (mp[j].mnr_pfnlo > mp[last].mnr_pfnlo &&
-			    mp[j].mnr_pfnlo < hipfn) {
-				hipfn = mp[j].mnr_pfnlo;
-				hi = j;
-			}
-		}
-		mp[hi].mnr_next = last;
-		last = hi;
-	}
-	mtypetop = last;
+	VERIFY3U(nr_ranges, <=, mnoderangecnt);
+
+	qsort(mnoderanges, nr_ranges, sizeof (mnoderange_t), mnoderange_cmp);
+
+	/*
+	 * If some intrepid soul takes the axe to the memory DR code, we can
+	 * remove ->mnr_next altogether, as we just sorted by ->mnr_pfnlo order.
+	 *
+	 * The VERIFY3U() above can be "==" then too.
+	 */
+	for (size_t i = 1; i < nr_ranges; i++)
+		mnoderanges[i].mnr_next = i - 1;
+
+	mtypetop = nr_ranges - 1;
+	mtype16m = pfn_2_mtype(PFN_16MEG - 1); /* Can be -1 ... */
+	if (physmax4g)
+		mtype4g = pfn_2_mtype(0xfffff);
 }
 
 #ifndef	__xpv
@@ -1494,7 +1621,7 @@ mtype_init(vnode_t *vp, caddr_t vaddr, uint_t *flags, size_t pgsz)
 /* mtype init for page_get_replacement_page */
 /*ARGSUSED*/
 int
-mtype_pgr_init(int *flags, page_t *pp, int mnode, pgcnt_t pgcnt)
+mtype_pgr_init(int *flags, page_t *pp, pgcnt_t pgcnt)
 {
 	int mtype = mtypetop;
 #if !defined(__xpv)
@@ -1851,9 +1978,6 @@ page_coloring_setup(caddr_t pcmemaddr)
 
 	mnode_range_setup(mnoderanges);
 
-	if (physmax4g)
-		mtype4g = pfn_2_mtype(0xfffff);
-
 	for (k = 0; k < NPC_MUTEX; k++) {
 		fpc_mutex[k] = (kmutex_t *)addr;
 		addr += (max_mem_nodes * sizeof (kmutex_t));
@@ -2158,7 +2282,7 @@ create_contig_pfnlist(uint_t flags)
 		 */
 		if (!create_contig_pending) {
 			if (taskq_dispatch(system_taskq, call_create_contiglist,
-			    NULL, TQ_NOSLEEP) != NULL)
+			    NULL, TQ_NOSLEEP) != TASKQID_INVALID)
 				create_contig_pending = 1;
 		}
 		contig_pfnlist_buildfailed++;	/* count list build failures */
@@ -2669,6 +2793,7 @@ page_swap_with_hypervisor(struct vnode *vp, u_offset_t off, caddr_t vaddr,
 	page_t *pp, *expp, *pp_first, **pplist = NULL;
 	mfn_t *mfnlist = NULL;
 
+	extra = 0;
 	contig = flags & PG_PHYSCONTIG;
 	if (minctg == 1)
 		contig = 0;
@@ -3925,12 +4050,6 @@ teardown_vaddr_for_ppcopy(struct cpu *cpup)
 void
 dcache_flushall()
 {}
-
-size_t
-exec_get_spslew(void)
-{
-	return (0);
-}
 
 /*
  * Allocate a memory page.  The argument 'seed' can be any pseudo-random

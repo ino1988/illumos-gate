@@ -61,7 +61,6 @@ int biosdebug = 0;
 #endif
 
 biosdev_data_t biosdev_info[BIOSDEV_NUM]; /* from 0x80 to 0x87 */
-int dobiosdev = 1;
 
 
 static int bios_check_extension_present(uchar_t);
@@ -71,6 +70,7 @@ static int drive_present(uchar_t drivenum);
 static void reset_disk(uchar_t drivenum);
 static int is_eltorito(uchar_t drivenum);
 
+#if !defined(__xpv)
 void
 startup_bios_disk()
 {
@@ -80,14 +80,6 @@ startup_bios_disk()
 	uchar_t	name[20];
 	dev_info_t	*devi;
 	int extensions;
-
-#if defined(__xpv)
-	if (!DOMAIN_IS_INITDOMAIN(xen_info))
-		return;
-#endif
-
-	if (dobiosdev == 0)
-		return;
 
 	for (drivenum = 0x80; drivenum < (0x80 + BIOSDEV_NUM); drivenum++) {
 
@@ -124,6 +116,7 @@ startup_bios_disk()
 		}
 	}
 }
+#endif
 
 static int
 bios_check_extension_present(uchar_t drivenum)

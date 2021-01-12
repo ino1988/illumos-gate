@@ -22,7 +22,8 @@
 /*
  * Copyright 2009 Sun Microsystems, Inc.  All rights reserved.
  * Use is subject to license terms.
- * Copyright 2011 Joyent, Inc.  All rights reserved.
+ * Copyright 2018 Joyent, Inc.
+ * Copyright 2019 Western Digital Corporation
  */
 /*
  * Copyright (c) 2009-2010, Intel Corporation.
@@ -229,11 +230,11 @@ AcpiOsGetRootPointer()
 	 * The boot code process the table and put the physical address
 	 * in the acpi-root-tab property.
 	 */
-	Address = ddi_prop_get_int(DDI_DEV_T_ANY, ddi_root_node(),
-	    DDI_PROP_DONTPASS, "acpi-root-tab", NULL);
+	Address = ddi_prop_get_int64(DDI_DEV_T_ANY, ddi_root_node(),
+	    DDI_PROP_DONTPASS, "acpi-root-tab", 0);
 
-	if ((Address == NULL) && ACPI_FAILURE(AcpiFindRootPointer(&Address)))
-		Address = NULL;
+	if ((Address == 0) && ACPI_FAILURE(AcpiFindRootPointer(&Address)))
+		Address = 0;
 
 	return (Address);
 }
@@ -241,7 +242,7 @@ AcpiOsGetRootPointer()
 /*ARGSUSED*/
 ACPI_STATUS
 AcpiOsPredefinedOverride(const ACPI_PREDEFINED_NAMES *InitVal,
-				ACPI_STRING *NewVal)
+    ACPI_STRING *NewVal)
 {
 
 	*NewVal = 0;
@@ -260,7 +261,7 @@ acpica_strncpy(char *dest, const char *src, int len)
 
 ACPI_STATUS
 AcpiOsTableOverride(ACPI_TABLE_HEADER *ExistingTable,
-			ACPI_TABLE_HEADER **NewTable)
+    ACPI_TABLE_HEADER **NewTable)
 {
 	char signature[5];
 	char oemid[7];
@@ -273,13 +274,6 @@ AcpiOsTableOverride(ACPI_TABLE_HEADER *ExistingTable,
 	acpica_strncpy(signature, ExistingTable->Signature, 4);
 	acpica_strncpy(oemid, ExistingTable->OemId, 6);
 	acpica_strncpy(oemtableid, ExistingTable->OemTableId, 8);
-
-#ifdef	DEBUG
-	cmn_err(CE_NOTE, "!acpica: table [%s] v%d OEM ID [%s]"
-	    " OEM TABLE ID [%s] OEM rev %x",
-	    signature, ExistingTable->Revision, oemid, oemtableid,
-	    ExistingTable->OemRevision);
-#endif
 
 	/* File name format is "signature_oemid_oemtableid.dat" */
 	(void) strcpy(acpi_table_loc, acpi_table_path);
@@ -315,6 +309,12 @@ AcpiOsTableOverride(ACPI_TABLE_HEADER *ExistingTable,
 	return (AE_OK);
 }
 
+ACPI_STATUS
+AcpiOsPhysicalTableOverride(ACPI_TABLE_HEADER *ExistingTable,
+    ACPI_PHYSICAL_ADDRESS *NewAddress, UINT32 *NewTableLength)
+{
+	return (AE_SUPPORT);
+}
 
 /*
  * ACPI semaphore implementation
@@ -419,7 +419,7 @@ acpi_sema_v(acpi_sema_t *sp, unsigned count)
 
 ACPI_STATUS
 AcpiOsCreateSemaphore(UINT32 MaxUnits, UINT32 InitialUnits,
-ACPI_HANDLE *OutHandle)
+    ACPI_HANDLE *OutHandle)
 {
 	acpi_sema_t *sp;
 
@@ -623,7 +623,7 @@ AcpiOsUnmapMemory(void *LogicalAddress, ACPI_SIZE Size)
 /*ARGSUSED*/
 ACPI_STATUS
 AcpiOsGetPhysicalAddress(void *LogicalAddress,
-			ACPI_PHYSICAL_ADDRESS *PhysicalAddress)
+    ACPI_PHYSICAL_ADDRESS *PhysicalAddress)
 {
 
 	/* UNIMPLEMENTED: not invoked by ACPI CA code */
@@ -635,7 +635,7 @@ ACPI_OSD_HANDLER acpi_isr;
 void *acpi_isr_context;
 
 uint_t
-acpi_wrapper_isr(char *arg)
+acpi_wrapper_isr(char *arg, char *arg1 __unused)
 {
 	_NOTE(ARGUNUSED(arg))
 
@@ -654,8 +654,8 @@ static int acpi_intr_hooked = 0;
 
 ACPI_STATUS
 AcpiOsInstallInterruptHandler(UINT32 InterruptNumber,
-		ACPI_OSD_HANDLER ServiceRoutine,
-		void *Context)
+    ACPI_OSD_HANDLER ServiceRoutine,
+    void *Context)
 {
 	_NOTE(ARGUNUSED(InterruptNumber))
 
@@ -677,7 +677,7 @@ AcpiOsInstallInterruptHandler(UINT32 InterruptNumber,
 	cmn_err(CE_NOTE, "!acpica: attaching SCI %d", sci_vect);
 #endif
 
-	retval = add_avintr(NULL, SCI_IPL, (avfunc)acpi_wrapper_isr,
+	retval = add_avintr(NULL, SCI_IPL, acpi_wrapper_isr,
 	    "ACPI SCI", sci_vect, NULL, NULL, NULL, NULL);
 	if (retval) {
 		acpi_intr_hooked = 1;
@@ -688,7 +688,7 @@ AcpiOsInstallInterruptHandler(UINT32 InterruptNumber,
 
 ACPI_STATUS
 AcpiOsRemoveInterruptHandler(UINT32 InterruptNumber,
-			ACPI_OSD_HANDLER ServiceRoutine)
+    ACPI_OSD_HANDLER ServiceRoutine)
 {
 	_NOTE(ARGUNUSED(ServiceRoutine))
 
@@ -696,7 +696,7 @@ AcpiOsRemoveInterruptHandler(UINT32 InterruptNumber,
 	cmn_err(CE_NOTE, "!acpica: detaching SCI %d", InterruptNumber);
 #endif
 	if (acpi_intr_hooked) {
-		rem_avintr(NULL, LOCK_LEVEL - 1, (avfunc)acpi_wrapper_isr,
+		rem_avintr(NULL, LOCK_LEVEL - 1, acpi_wrapper_isr,
 		    InterruptNumber);
 		acpi_intr_hooked = 0;
 	}
@@ -741,6 +741,22 @@ AcpiOsExecute(ACPI_EXECUTE_TYPE Type, ACPI_OSD_EXEC_CALLBACK  Function,
 	}
 	return (AE_OK);
 
+}
+
+
+void
+AcpiOsWaitEventsComplete(void)
+{
+	int	i;
+
+	/*
+	 * Wait for event queues to be empty.
+	 */
+	for (i = OSL_GLOBAL_LOCK_HANDLER; i <= OSL_EC_BURST_HANDLER; i++) {
+		if (osl_eventq[i] != NULL) {
+			ddi_taskq_wait(osl_eventq[i]);
+		}
+	}
 }
 
 void
@@ -883,7 +899,7 @@ AcpiOsWritePort(ACPI_IO_ADDRESS Address, UINT32 Value, UINT32 Width)
 
 
 static void
-osl_rw_memory(ACPI_PHYSICAL_ADDRESS Address, UINT32 *Value,
+osl_rw_memory(ACPI_PHYSICAL_ADDRESS Address, UINT64 *Value,
     UINT32 Width, int write)
 {
 	size_t	maplen = Width / 8;
@@ -902,6 +918,9 @@ osl_rw_memory(ACPI_PHYSICAL_ADDRESS Address, UINT32 *Value,
 	case 4:
 		OSL_RW(ptr, Value, uint32_t, write);
 		break;
+	case 8:
+		OSL_RW(ptr, Value, uint64_t, write);
+		break;
 	default:
 		cmn_err(CE_WARN, "!osl_rw_memory: invalid size %d",
 		    Width);
@@ -913,7 +932,7 @@ osl_rw_memory(ACPI_PHYSICAL_ADDRESS Address, UINT32 *Value,
 
 ACPI_STATUS
 AcpiOsReadMemory(ACPI_PHYSICAL_ADDRESS Address,
-		UINT32 *Value, UINT32 Width)
+    UINT64 *Value, UINT32 Width)
 {
 	osl_rw_memory(Address, Value, Width, 0);
 	return (AE_OK);
@@ -921,7 +940,7 @@ AcpiOsReadMemory(ACPI_PHYSICAL_ADDRESS Address,
 
 ACPI_STATUS
 AcpiOsWriteMemory(ACPI_PHYSICAL_ADDRESS Address,
-		UINT32 Value, UINT32 Width)
+    UINT64 Value, UINT32 Width)
 {
 	osl_rw_memory(Address, &Value, Width, 1);
 	return (AE_OK);
@@ -930,7 +949,7 @@ AcpiOsWriteMemory(ACPI_PHYSICAL_ADDRESS Address,
 
 ACPI_STATUS
 AcpiOsReadPciConfiguration(ACPI_PCI_ID *PciId, UINT32 Reg,
-		UINT64 *Value, UINT32 Width)
+    UINT64 *Value, UINT32 Width)
 {
 
 	switch (Width) {
@@ -962,7 +981,7 @@ int acpica_write_pci_config_ok = 1;
 
 ACPI_STATUS
 AcpiOsWritePciConfiguration(ACPI_PCI_ID *PciId, UINT32 Reg,
-		UINT64 Value, UINT32 Width)
+    UINT64 Value, UINT32 Width)
 {
 
 	if (!acpica_write_pci_config_ok) {
@@ -1016,7 +1035,7 @@ AcpiOsWritePciConfiguration(ACPI_PCI_ID *PciId, UINT32 Reg,
  */
 void
 AcpiOsDerivePciId(ACPI_HANDLE rhandle, ACPI_HANDLE chandle,
-		ACPI_PCI_ID **PciId)
+    ACPI_PCI_ID **PciId)
 {
 	ACPI_HANDLE handle;
 	dev_info_t *dip;
@@ -1134,6 +1153,13 @@ AcpiOsPrintf(const char *Format, ...)
 	va_end(ap);
 }
 
+/*ARGSUSED*/
+ACPI_STATUS
+AcpiOsEnterSleep(UINT8 SleepState, UINT32 Rega, UINT32 Regb)
+{
+	return (AE_OK);
+}
+
 /*
  * When != 0, sends output to console
  * Patchable with kmdb or /etc/system.
@@ -1234,6 +1260,73 @@ AcpiOsGetLine(char *Buffer, UINT32 len, UINT32 *BytesRead)
 	return (0);
 }
 
+static ACPI_STATUS
+acpica_crs_cb(ACPI_RESOURCE *rp, void *context)
+{
+	int	*busno = context;
+
+	if (rp->Data.Address.ProducerConsumer == 1)
+		return (AE_OK);
+
+	switch (rp->Type) {
+	case ACPI_RESOURCE_TYPE_ADDRESS16:
+		if (rp->Data.Address16.Address.AddressLength == 0)
+			break;
+		if (rp->Data.Address16.ResourceType != ACPI_BUS_NUMBER_RANGE)
+			break;
+
+		*busno = rp->Data.Address16.Address.Minimum;
+		break;
+
+	case ACPI_RESOURCE_TYPE_ADDRESS32:
+		if (rp->Data.Address32.Address.AddressLength == 0)
+			break;
+		if (rp->Data.Address32.ResourceType != ACPI_BUS_NUMBER_RANGE)
+			break;
+
+		*busno = rp->Data.Address32.Address.Minimum;
+		break;
+
+	case ACPI_RESOURCE_TYPE_ADDRESS64:
+		if (rp->Data.Address64.Address.AddressLength == 0)
+			break;
+		if (rp->Data.Address64.ResourceType != ACPI_BUS_NUMBER_RANGE)
+			break;
+
+		*busno = (int)rp->Data.Address64.Address.Minimum;
+		break;
+
+	default:
+		break;
+	}
+
+	return (AE_OK);
+}
+
+/*
+ * Retrieve the bus number for a root bus.
+ *
+ * _CRS (Current Resource Setting) holds the bus number as set in
+ * PCI configuration, this may differ from _BBN and is a more reliable
+ * indicator of what the bus number is.
+ */
+ACPI_STATUS
+acpica_get_busno(ACPI_HANDLE hdl, int *busno)
+{
+	ACPI_STATUS	rv;
+	int		bus = -1;
+	int		bbn;
+
+	if (ACPI_FAILURE(rv = acpica_eval_int(hdl, "_BBN", &bbn)))
+		return (rv);
+
+	(void) AcpiWalkResources(hdl, "_CRS", acpica_crs_cb, &bus);
+
+	*busno = bus == -1 ? bbn : bus;
+
+	return (AE_OK);
+}
+
 /*
  * Device tree binding
  */
@@ -1279,7 +1372,7 @@ acpica_find_pcibus_walker(ACPI_HANDLE hdl, UINT32 lvl, void *ctxp, void **rvpp)
 			*hdlp = hdl;
 			return (AE_CTRL_TERMINATE);
 		}
-	} else if (ACPI_SUCCESS(acpica_eval_int(hdl, "_BBN", &bbn))) {
+	} else if (ACPI_SUCCESS(acpica_get_busno(hdl, &bbn))) {
 		if (bbn == busno) {
 			*hdlp = hdl;
 			return (AE_CTRL_TERMINATE);
@@ -2340,4 +2433,56 @@ acpica_write_cpupm_capabilities(boolean_t pstates, boolean_t cstates)
 	if (cstates && AcpiGbl_FADT.CstControl != 0)
 		(void) AcpiHwRegisterWrite(ACPI_REGISTER_SMI_COMMAND_BLOCK,
 		    AcpiGbl_FADT.CstControl);
+}
+
+uint32_t
+acpi_strtoul(const char *str, char **ep, int base)
+{
+	ulong_t v;
+
+	if (ddi_strtoul(str, ep, base, &v) != 0 || v > ACPI_UINT32_MAX) {
+		return (ACPI_UINT32_MAX);
+	}
+
+	return ((uint32_t)v);
+}
+
+/*
+ * In prior versions of ACPI, the AcpiGetObjectInfo() function would provide
+ * information about the status of the object via the _STA method. This has been
+ * removed and this function is used to replace.
+ *
+ * Not every ACPI object has a _STA method. In cases where it is not found, then
+ * the OSPM (aka us) is supposed to interpret that as though it indicates that
+ * the device is present, enabled, shown in the UI, and functioning. This is the
+ * value 0xF.
+ */
+ACPI_STATUS
+acpica_get_object_status(ACPI_HANDLE obj, int *statusp)
+{
+	ACPI_STATUS status;
+	int ival;
+
+	status = acpica_eval_int(obj, METHOD_NAME__STA, &ival);
+	if (ACPI_FAILURE(status)) {
+		if (status == AE_NOT_FOUND) {
+			*statusp = 0xf;
+			return (AE_OK);
+		}
+
+		return (status);
+	}
+
+	/*
+	 * This should not be a negative value. However, firmware is often the
+	 * enemy. If it does, complain and treat that as a hard failure.
+	 */
+	if (ival < 0) {
+		cmn_err(CE_WARN, "!acpica_get_object_status: encountered "
+		    "negative _STA value on obj %p", obj);
+		return (AE_ERROR);
+	}
+
+	*statusp = ival;
+	return (AE_OK);
 }

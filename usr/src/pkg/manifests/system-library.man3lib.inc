@@ -12,10 +12,12 @@
 #
 # Copyright 2011, Richard Lowe
 # Copyright 2012 Nexenta Systems, Inc. All rights reserved.
+# Copyright 2020 Joyent, Inc.
 #
 
 file path=usr/share/man/man3lib/libadm.3lib
 file path=usr/share/man/man3lib/libaio.3lib
+file path=usr/share/man/man3lib/libavl.3lib
 file path=usr/share/man/man3lib/libbsdmalloc.3lib
 file path=usr/share/man/man3lib/libbsm.3lib
 file path=usr/share/man/man3lib/libc.3lib
@@ -42,6 +44,7 @@ file path=usr/share/man/man3lib/libkstat.3lib
 file path=usr/share/man/man3lib/libkvm.3lib
 file path=usr/share/man/man3lib/libl.3lib
 file path=usr/share/man/man3lib/liblgrp.3lib
+file path=usr/share/man/man3lib/libm.3lib
 file path=usr/share/man/man3lib/libmail.3lib
 file path=usr/share/man/man3lib/libmalloc.3lib
 file path=usr/share/man/man3lib/libmapmalloc.3lib
@@ -50,12 +53,14 @@ file path=usr/share/man/man3lib/libmd5.3lib
 file path=usr/share/man/man3lib/libmenu.3lib
 file path=usr/share/man/man3lib/libmp.3lib
 file path=usr/share/man/man3lib/libmtmalloc.3lib
+file path=usr/share/man/man3lib/libmvec.3lib
 file path=usr/share/man/man3lib/libnls.3lib
 file path=usr/share/man/man3lib/libnsl.3lib
 file path=usr/share/man/man3lib/libnvpair.3lib
 file path=usr/share/man/man3lib/libpam.3lib
 file path=usr/share/man/man3lib/libpanel.3lib
 file path=usr/share/man/man3lib/libpkcs11.3lib
+file path=usr/share/man/man3lib/libproc.3lib
 file path=usr/share/man/man3lib/libproject.3lib
 file path=usr/share/man/man3lib/libpthread.3lib
 file path=usr/share/man/man3lib/libresolv.3lib
@@ -69,7 +74,6 @@ file path=usr/share/man/man3lib/libsecdb.3lib
 file path=usr/share/man/man3lib/libsendfile.3lib
 file path=usr/share/man/man3lib/libsip.3lib
 file path=usr/share/man/man3lib/libsocket.3lib
-file path=usr/share/man/man3lib/libsys.3lib
 file path=usr/share/man/man3lib/libsysevent.3lib
 file path=usr/share/man/man3lib/libthread.3lib
 file path=usr/share/man/man3lib/libtsnet.3lib

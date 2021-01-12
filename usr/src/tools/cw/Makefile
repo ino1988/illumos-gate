@@ -22,46 +22,54 @@
 # Copyright 2007 Sun Microsystems, Inc.  All rights reserved.
 # Use is subject to license terms.
 #
+# Copyright 2018 Joyent, Inc.
 
 PROG	= cw
 
-MAN1FILES=	cw.1
+MAN1ONBLDFILES=	cw.1onbld
 
 include ../Makefile.tools
 
 # Bootstrap problem -- we have to build cw before we can use it
 i386_CC=		$(SPRO_VROOT)/bin/cc
 sparc_CC=		$(SPRO_VROOT)/bin/cc
-$(__GNUC)i386_CC=	$(GCC_ROOT)/bin/gcc
-$(__GNUC)sparc_CC=	$(GCC_ROOT)/bin/gcc
+$(__GNUC)i386_CC=	$(GNUC_ROOT)/bin/gcc
+$(__GNUC)sparc_CC=	$(GNUC_ROOT)/bin/gcc
 
 CFLAGS += $(CCVERBOSE)
 
 # Override CFLAGS.  This is needed only for bootstrap of cw.
 $(__GNUC)CFLAGS=	-O -D__sun -Wall -Wno-unknown-pragmas -Werror \
-			-std=gnu89 -nodefaultlibs
-$(__SUNC)CFLAGS=	-xspace -Xa  -xildoff -errtags=yes -errwarn=%all \
-			-xc99=%none    -W0,-xglobalstatic -v
+			-std=gnu99 -nodefaultlibs
+$(__SUNC)CFLAGS=	-xspace -Xa -xildoff -errtags=yes -errwarn=%all \
+			-xc99=%all -W0,-xglobalstatic -v
 
+$(__GNUC)LDLIBS +=	-Wl,-zassert-deflib=libc.so -lc
+$(__GNUC)LDFLAGS=	$(MAPFILE.NES:%=-Wl,-M%)
+$(__GNUC)ZASSERTDEFLIB = -Wl,-zassert-deflib
+$(__GNUC)ZFATALWARNINGS = -Wl,-zfatal-warnings
+$(__GNUC)ZGUIDANCE = -Wl,-zguidance
+LDFLAGS += -Wl,$(ZDIRECT)
 
-$(__GNUC)LDLIBS +=	-lc
-$(__GNUC)LDFLAGS= 	$(MAPFILE.NES:%=-Wl,-M%)
+$(ROOTONBLDMAN1ONBLDFILES) := FILEMODE=      644
+CSTD=	$(CSTD_GNU99)
 
-CPPFLAGS += -DDEFAULT_CC_DIR='"$(SPRO_VROOT)/bin"'
-CPPFLAGS += -DDEFAULT_GCC_DIR='"$(GCC_ROOT)/bin"'
-CPPFLAGS += -DDEFAULT_CPLUSPLUS_DIR='"$(SPRO_VROOT)/bin"'
-CPPFLAGS += -DDEFAULT_GPLUSPLUS_DIR='"$(GCC_ROOT)/bin"'
-
-$(ROOTONBLDMAN1FILES) := FILEMODE=      644
+# Assume we don't have the install.bin available yet
+INS.file=	$(RM) $@; $(CP) $< $(@D); $(CHMOD) $(FILEMODE) $@
 
 .KEEP_STATE:
 
-all: $(PROG) $(MAN1FILES)
+all: $(PROG) $(MAN1ONBLDFILES)
 
-install: all .WAIT $(ROOTONBLDMACHPROG) $(ROOTONBLDMAN1FILES)
+install: all .WAIT $(ROOTONBLDMACHPROG) $(ROOTONBLDMAN1ONBLDFILES)
 
 lint: lint_PROG
 
 clean:
+
+#
+# Not run by default: bootstrap...
+check:
+	$(ROOTONBLDBINMACH)/mandoc -Tlint -Wwarning $(MAN1ONBLDFILES)
 
 include ../Makefile.targ

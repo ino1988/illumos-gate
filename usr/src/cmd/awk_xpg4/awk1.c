@@ -27,8 +27,6 @@
  * Copyright 1986, 1994 by Mortice Kern Systems Inc.  All rights reserved.
  */
 
-#pragma ident	"%Z%%M%	%I%	%E% SMI"
-
 /*
  * awk -- mainline, yylex, etc.
  *
@@ -69,7 +67,7 @@ static void	awkvarinit(void);
 static wint_t	lexgetc(void);
 static void	lexungetc(wint_t c);
 static size_t	lexescape(wint_t endc, int regx, int cmd_line_operand);
-static void	awkierr(int perr, char *fmt, va_list ap);
+static void	awkierr(int perr, char *fmt, va_list ap) __NORETURN;
 static int	usage(void);
 void		strescape(wchar_t *str);
 static const char	*toprint(wint_t);
@@ -372,17 +370,6 @@ uexit(NODE *np)
  */
 int
 yylex()
-#ifdef	DEBUG
-{
-	int l;
-
-	l = yyhex();
-	if (dflag)
-		(void) printf("%d\n", l);
-	return (l);
-}
-yyhex()
-#endif
 {
 	wint_t c, c1;
 	int i;
@@ -413,7 +400,8 @@ yyhex()
 		redelim = 0;
 		catterm = 0;
 		savetoken = c;
-		return (lexlast = lexregexp(c));
+		c = lexlast = lexregexp(c);
+		goto out;
 	} else while ((c = lexgetc()) != WEOF) {
 		if (iswalpha(c) || c == '_') {
 			c = lexid(c);
@@ -556,7 +544,7 @@ yyhex()
 					c = ';';
 					break;
 				}
-			/*FALLTHRU*/
+			/* FALLTHROUGH */
 			case AND:
 			case OR:
 			case COMMA:
@@ -569,6 +557,7 @@ yyhex()
 			case '}':
 				if (nbrace != 0)
 					continue;
+				/* FALLTHROUGH */
 
 			default:
 				c = ';';
@@ -690,7 +679,7 @@ yyhex()
 		if (!catterm || lexlast != CONSTANT || wasfield)
 			break;
 
-	/*FALLTHRU*/
+	/* FALLTHROUGH */
 	case UFUNC:
 	case FUNC:
 	case GETLINE:
@@ -704,13 +693,13 @@ yyhex()
 		}
 		break;
 
-	/* { */ case '}':
+	case '}':
 		if (nbrace == 0)
 			savetoken = ';';
-	/*FALLTHRU*/
+	/* FALLTHROUGH */
 	case ';':
 		inprint = 0;
-	/*FALLTHRU*/
+	/* FALLTHROUGH */
 	default:
 		if (c == DEFFUNC)
 			isfuncdef = 1;
@@ -727,6 +716,11 @@ yyhex()
 			c = ctosym[i].sym;
 			break;
 		}
+out:
+#ifdef DEBUG
+	if (dflag)
+		(void) printf("%d\n", (int)c);
+#endif
 	return ((int)c);
 }
 
@@ -802,6 +796,7 @@ lexid(wint_t c)
 		case PRINT:
 		case PRINTF:
 			++inprint;
+			/* FALLTHROUGH */
 		default:
 			return ((int)np->n_keywtype);
 		}
@@ -838,7 +833,7 @@ do_funparm:
 			needsplit = 1;
 		} else if (np == varENVIRON)
 			needenviron = 1;
-	/*FALLTHRU*/
+	/* FALLTHROUGH */
 	case PARM:
 		return (VAR);
 
@@ -847,7 +842,7 @@ do_funparm:
 		 * It is ok to redefine functions as parameters
 		 */
 		if (funparm) goto do_funparm;
-	/*FALLTHRU*/
+	/* FALLTHROUGH */
 	case FUNC:
 	case GETLINE:
 		/*
@@ -1093,12 +1088,13 @@ lexgetc()
 			else
 				c = *progptr++;
 		} else {
-			if (progfp != FNULL)
+			if (progfp != FNULL) {
 				if (progfp != stdin)
 					(void) fclose(progfp);
 				else
 					clearerr(progfp);
 				progfp = FNULL;
+			}
 			if (files < progfilep) {
 				filename = *files++;
 				lineno = 1;
@@ -1298,8 +1294,7 @@ mbunconvert(wchar_t *str)
  */
 
 wchar_t *
-mbstowcsdup(s)
-char *s;
+mbstowcsdup(char *s)
 {
 	int n;
 	wchar_t *w;
@@ -1365,8 +1360,7 @@ static const char *const upe_ctrls[] =
  * string.  Otherwise, return an octal escape sequence.
  */
 static const char *
-toprint(c)
-wchar_t c;
+toprint(wchar_t c)
 {
 	int n, len;
 	unsigned char *ptr;
@@ -1566,10 +1560,10 @@ int_regwerror(int errcode, REGEXP r, char *errbuf, size_t bufsiz)
 
 int
 int_regwexec(REGEXP r,		/* compiled RE */
-	const wchar_t *astring,	/* subject string */
-	size_t nsub,		/* number of subexpressions */
-	int_regwmatch_t *sub,	/* subexpression pointers */
-	int flags)
+    const wchar_t *astring,	/* subject string */
+    size_t nsub,		/* number of subexpressions */
+    int_regwmatch_t *sub,	/* subexpression pointers */
+    int flags)
 {
 	char *mbs;
 	regmatch_t *mbsub = NULL;
@@ -1614,12 +1608,12 @@ int_regwexec(REGEXP r,		/* compiled RE */
 }
 
 int
-int_regwdosuba(REGEXP rp,		/* compiled RE: Pattern */
-	const wchar_t *rpl,		/* replacement string: /rpl/ */
-	const wchar_t *src,		/* source string */
-	wchar_t **dstp,			/* destination string */
-	int len,			/* destination length */
-	int *globp)	/* IN: occurence, 0 for all; OUT: substitutions */
+int_regwdosuba(REGEXP rp,	/* compiled RE: Pattern */
+    const wchar_t *rpl,		/* replacement string: /rpl/ */
+    const wchar_t *src,		/* source string */
+    wchar_t **dstp,		/* destination string */
+    int len,			/* destination length */
+    int *globp)		/* IN: occurence, 0 for all; OUT: substitutions */
 {
 	wchar_t *dst, *odst;
 	const wchar_t *ip, *xp;

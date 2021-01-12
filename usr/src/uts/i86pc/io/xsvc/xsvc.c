@@ -22,6 +22,8 @@
 /*
  * Copyright 2009 Sun Microsystems, Inc.  All rights reserved.
  * Use is subject to license terms.
+ *
+ * Copyright 2016 Joyent, Inc.
  */
 
 #include <sys/errno.h>
@@ -63,7 +65,7 @@ static int xsvc_detach(dev_info_t *devi, ddi_detach_cmd_t cmd);
 static int xsvc_getinfo(dev_info_t *dip, ddi_info_cmd_t cmd, void *arg,
     void **result);
 
-static 	struct cb_ops xsvc_cb_ops = {
+static struct cb_ops xsvc_cb_ops = {
 	xsvc_open,		/* cb_open */
 	xsvc_close,		/* cb_close */
 	nodev,			/* cb_strategy */
@@ -466,7 +468,6 @@ xsvc_ioctl_alloc_memory(xsvc_state_t *state, void *arg, int mode)
 	int err;
 	int i;
 
-
 	/* Copy in the params, then get the size and key */
 	if (ddi_model_convert_from(mode & FMODELS) == DDI_MODEL_ILP32) {
 		err = ddi_copyin(arg, &params32, sizeof (xsvc_mem_req_32),
@@ -523,6 +524,7 @@ xsvc_ioctl_alloc_memory(xsvc_state_t *state, void *arg, int mode)
 		usgl32 = (xsvc_mloc_32 *)(uintptr_t)params32.xsvc_sg_list;
 		mp->xm_dma_attr.dma_attr_align = P2ROUNDUP(
 		    params32.xsvc_mem_align, PAGESIZE);
+		usgl = NULL;
 	} else {
 		mp->xm_dma_attr.dma_attr_addr_lo = params.xsvc_mem_addr_lo;
 		mp->xm_dma_attr.dma_attr_addr_hi = params.xsvc_mem_addr_hi;
@@ -530,6 +532,7 @@ xsvc_ioctl_alloc_memory(xsvc_state_t *state, void *arg, int mode)
 		usgl = (xsvc_mloc *)(uintptr_t)params.xsvc_sg_list;
 		mp->xm_dma_attr.dma_attr_align = P2ROUNDUP(
 		    params.xsvc_mem_align, PAGESIZE);
+		usgl32 = NULL;
 	}
 
 	mp->xm_device_attr = xsvc_device_attr;
@@ -807,7 +810,7 @@ xsvc_mnode_key_compare(const void *q, const void *e)
 /*ARGSUSED*/
 static int
 xsvc_devmap(dev_t dev, devmap_cookie_t dhp, offset_t off, size_t len,
-		size_t *maplen, uint_t model)
+    size_t *maplen, uint_t model)
 {
 	ddi_umem_cookie_t cookie;
 	xsvc_state_t *state;
@@ -874,6 +877,19 @@ xsvc_devmap(dev_t dev, devmap_cookie_t dhp, offset_t off, size_t len,
 
 		kvai = kva;
 		for (i = 0; i < npages; i++) {
+			page_t *pp = page_numtopp_nolock(pfn);
+
+			/*
+			 * Preemptively check for panic conditions from
+			 * hat_devload and error out instead.
+			 */
+			if (pp != NULL && (PP_ISFREE(pp) ||
+			    (!PAGE_LOCKED(pp) && !PP_ISNORELOC(pp)))) {
+				err = DDI_FAILURE;
+				npages = i;
+				goto devmapfail_cookie_alloc;
+			}
+
 			hat_devload(kas.a_hat, kvai, PAGESIZE, pfn,
 			    PROT_READ | PROT_WRITE, HAT_LOAD_LOCK);
 			pfn++;

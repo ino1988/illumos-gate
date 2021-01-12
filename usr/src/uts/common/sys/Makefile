@@ -18,10 +18,17 @@
 #
 # CDDL HEADER END
 #
+
 #
 # Copyright (c) 1989, 2010, Oracle and/or its affiliates. All rights reserved.
-# Copyright 2013, Joyent, Inc. All rights reserved.
+# Copyright 2019 Joyent, Inc.
 # Copyright 2013 Garrett D'Amore <garrett@damore.org>
+# Copyright 2013 Saso Kiselkov. All rights reserved.
+# Copyright 2015 Igor Kozhukhov <ikozhukhov@gmail.com>
+# Copyright 2017 Nexenta Systems, Inc.
+# Copyright 2016 Hans Rosenfeld <rosenfeld@grumpf.hope-2000.org>
+# Copyright 2019 Peter Tribble.
+# Copyright 2015, Joyent, Inc. All rights reserved.
 #
 
 include $(SRC)/uts/Makefile.uts
@@ -33,23 +40,21 @@ FILEMODE=644
 #	neither installed or shipped as part of the product:
 #		cpuid_drv.h:		Private interface for cpuid consumers
 #		unix_bb_info.h:		Private interface to kcov
+#		nvme.h			Private interface to nvme
 #
 
 i386_HDRS=			\
-	agp/agpamd64gart_io.h	\
-	agp/agpdefs.h		\
-	agp/agpgart_impl.h	\
-	agp/agpmaster_io.h	\
-	agp/agptarget_io.h	\
-	agpgart.h		\
 	asy.h			\
 	fd_debug.h		\
 	fdc.h			\
 	fdmedia.h		\
+	firmload.h		\
+	gfx_private.h		\
 	mouse.h			\
+	nvme.h			\
 	ucode.h
 
-sparc_HDRS= 			\
+sparc_HDRS=			\
 	mouse.h			\
 	scsi/targets/ssddef.h	\
 	$(MDESCHDRS)
@@ -91,6 +96,7 @@ CHKHDRS=			\
 	bofi.h			\
 	bofi_impl.h		\
 	bpp_io.h		\
+	bootbanner.h		\
 	bootstat.h		\
 	brand.h			\
 	buf.h			\
@@ -120,6 +126,7 @@ CHKHDRS=			\
 	vt.h			\
 	vtdaemon.h		\
 	kd.h			\
+	containerof.h		\
 	contract.h		\
 	contract_impl.h		\
 	copyops.h		\
@@ -128,6 +135,7 @@ CHKHDRS=			\
 	cpc_impl.h		\
 	cpc_pcbe.h		\
 	cpr.h			\
+	cpu_uarray.h		\
 	cpupart.h		\
 	cpuvar.h		\
 	crc32.h			\
@@ -159,6 +167,8 @@ CHKHDRS=			\
 	ddi_implfuncs.h		\
 	ddi_obsolete.h		\
 	ddi_periodic.h		\
+	ddi_ufm.h		\
+	ddi_ufm_impl.h		\
 	ddidevmap.h		\
 	ddidmareq.h		\
 	ddimapreq.h		\
@@ -179,6 +189,7 @@ CHKHDRS=			\
 	disp.h			\
 	dkbad.h			\
 	dkio.h			\
+	dkioc_free_util.h	\
 	dklabel.h		\
 	dl.h			\
 	dlpi.h			\
@@ -201,6 +212,7 @@ CHKHDRS=			\
 	ecppio.h		\
 	ecppreg.h		\
 	ecppvar.h		\
+	edonr.h			\
 	efi_partition.h		\
 	elf.h			\
 	elf_386.h		\
@@ -212,6 +224,7 @@ CHKHDRS=			\
 	emul64cmd.h		\
 	emul64var.h		\
 	epm.h			\
+	epoll.h			\
 	errno.h			\
 	errorq.h		\
 	errorq_impl.h		\
@@ -219,6 +232,7 @@ CHKHDRS=			\
 	ethernet.h		\
 	euc.h			\
 	eucioctl.h		\
+	eventfd.h		\
 	exacct.h		\
 	exacct_catalog.h	\
 	exacct_impl.h		\
@@ -265,7 +279,7 @@ CHKHDRS=			\
 	iapriocntl.h		\
 	ibpart.h		\
 	id32.h			\
-	idmap.h 		\
+	idmap.h			\
 	ieeefp.h		\
 	id_space.h		\
 	instance.h		\
@@ -336,7 +350,9 @@ CHKHDRS=			\
 	lgrp.h			\
 	lgrp_user.h		\
 	libc_kernel.h		\
+	limits.h		\
 	link.h			\
+	linker_set.h		\
 	list.h			\
 	list_impl.h		\
 	llc1.h			\
@@ -345,6 +361,7 @@ CHKHDRS=			\
 	lockfs.h		\
 	lockstat.h		\
 	lofi.h			\
+	lofi_impl.h		\
 	log.h			\
 	logindmux.h		\
 	logindmux_impl.h	\
@@ -401,6 +418,7 @@ CHKHDRS=			\
 	ndifm.h			\
 	ndi_impldefs.h		\
 	net80211.h		\
+	net80211_amrr.h		\
 	net80211_crypto.h	\
 	net80211_ht.h		\
 	net80211_proto.h	\
@@ -409,6 +427,8 @@ CHKHDRS=			\
 	netstack.h		\
 	nexusdefs.h		\
 	note.h			\
+	null.h			\
+	nvme.h			\
 	nvpair.h		\
 	nvpair_impl.h		\
 	objfs.h			\
@@ -485,12 +505,14 @@ CHKHDRS=			\
 	sad.h			\
 	schedctl.h		\
 	sdt.h			\
+	secflags.h		\
 	select.h		\
 	sem.h			\
 	sem_impl.h		\
 	sema_impl.h		\
 	semaphore.h		\
 	sendfile.h		\
+	sensors.h		\
 	ser_sync.h		\
 	session.h		\
 	sha1.h			\
@@ -503,6 +525,8 @@ CHKHDRS=			\
 	sid.h			\
 	siginfo.h		\
 	signal.h		\
+	signalfd.h		\
+	skein.h			\
 	sleepq.h		\
 	smbios.h		\
 	smbios_impl.h		\
@@ -522,6 +546,7 @@ CHKHDRS=			\
 	statfs.h		\
 	statvfs.h		\
 	stdbool.h		\
+	stddef.h		\
 	stdint.h		\
 	stermio.h		\
 	stmf.h			\
@@ -581,6 +606,7 @@ CHKHDRS=			\
 	time_std_impl.h		\
 	timeb.h			\
 	timer.h			\
+	timerfd.h		\
 	times.h			\
 	timex.h			\
 	timod.h			\
@@ -648,7 +674,6 @@ CHKHDRS=			\
 	vuid_store.h		\
 	wait.h			\
 	waitq.h			\
-	wanboot_impl.h		\
 	watchpoint.h		\
 	winlockio.h		\
 	zcons.h			\
@@ -672,17 +697,13 @@ AUDIOHDRS=			\
 AVHDRS=				\
 	iec61883.h
 
-BSCHDRS=			\
-	bscbus.h		\
-	bscv_impl.h		\
-	lom_ebuscodes.h		\
+LOMHDRS=			\
 	lom_io.h		\
-	lom_priv.h		\
 	lombus.h
 
 MDESCHDRS=			\
 	mdesc.h			\
-	mdesc_impl.h		
+	mdesc_impl.h
 
 CPUDRVHDRS=			\
 	cpudrv.h
@@ -745,8 +766,8 @@ RDMAHDRS=		\
 	ib_user_mad.h	\
 	ib_user_sa.h	\
 	ib_user_verbs.h \
-	ib_verbs.h 	\
-	rdma_cm.h 	\
+	ib_verbs.h	\
+	rdma_cm.h	\
 	rdma_user_cm.h
 
 SOL_UVERBSHDRS=		\
@@ -798,34 +819,6 @@ ISCSITHDRS=		\
 ISOHDRS=			\
 	signal_iso.h
 
-DERIVED_LVMHDRS=	\
-	md_mdiox.h		\
-	md_basic.h		\
-	mdmed.h			\
-	md_mhdx.h		\
-	mdmn_commd.h
-
-LVMHDRS=			\
-	md_convert.h		\
-	md_crc.h		\
-	md_hotspares.h		\
-	md_mddb.h		\
-	md_mirror.h		\
-	md_mirror_shared.h	\
-	md_names.h		\
-	md_notify.h		\
-	md_raid.h		\
-	md_rename.h		\
-	md_sp.h			\
-	md_stripe.h		\
-	md_trans.h		\
-	mdio.h			\
-	mdvar.h			
-
-ALL_LVMHDRS=			\
-	$(LVMHDRS)		\
-	$(DERIVED_LVMHDRS)
-
 FMHDRS=				\
 	protocol.h		\
 	util.h
@@ -843,16 +836,10 @@ FMIOHDRS=			\
 
 FSHDRS=				\
 	autofs.h		\
-	cachefs_dir.h		\
-	cachefs_dlog.h		\
-	cachefs_filegrp.h	\
-	cachefs_fs.h		\
-	cachefs_fscache.h	\
-	cachefs_ioctl.h		\
-	cachefs_log.h		\
 	decomp.h		\
 	dv_node.h		\
 	sdev_impl.h		\
+	sdev_plugin.h		\
 	fifonode.h		\
 	hsfs_isospec.h		\
 	hsfs_node.h		\
@@ -896,6 +883,7 @@ SCSIHDRS=		\
 	scsi_address.h	\
 	scsi_ctl.h	\
 	scsi_fm.h	\
+	scsi_names.h	\
 	scsi_params.h	\
 	scsi_pkt.h	\
 	scsi_resource.h	\
@@ -991,6 +979,7 @@ SATAGENHDRS=		\
 
 SYSEVENTHDRS=		\
 	ap_driver.h     \
+	datalink.h	\
 	dev.h		\
 	domain.h        \
 	dr.h            \
@@ -998,7 +987,6 @@ SYSEVENTHDRS=		\
 	eventdefs.h	\
 	ipmp.h		\
 	pwrctl.h	\
-	svm.h		\
 	vrrp.h
 
 CONTRACTHDRS=		\
@@ -1011,13 +999,6 @@ USBHDRS=	\
 	usba.h	\
 	usbai.h
 
-UWBHDRS=	\
-	uwb.h	\
-	uwbai.h
-
-UWBAHDRS=	\
-	uwba.h
-
 USBAUDHDRS=           \
 	usb_audio.h
 
@@ -1027,9 +1008,6 @@ USBHUBDHDRS=		\
 
 USBHIDHDRS=		\
 	hid.h
-
-USBHWARCHDRS=		\
-	hwarc.h
 
 USBMSHDRS=		\
 	usb_bulkonly.h	\
@@ -1049,6 +1027,10 @@ USBWCMHDRS=		\
 
 UGENHDRS=           \
 	usb_ugen.h
+
+USBCCIDHDRS = \
+	ccid.h \
+	uccid.h
 
 HOTPLUGHDRS=	\
 	hpcsvc.h	\
@@ -1151,7 +1133,7 @@ CHECKHDRS=						\
 	$($(MACH)_HDRS:%.h=%.check)			\
 	$(AUDIOHDRS:%.h=audio/%.check)			\
 	$(AVHDRS:%.h=av/%.check)			\
-	$(BSCHDRS:%.h=%.check)				\
+	$(LOMHDRS:%.h=%.check)				\
 	$(CHKHDRS:%.h=%.check)				\
 	$(CPUDRVHDRS:%.h=%.check)			\
 	$(CRYPTOHDRS:%.h=crypto/%.check)		\
@@ -1183,7 +1165,6 @@ CHECKHDRS=						\
 	$(FMFSHDRS:%.h=fm/fs/%.check)			\
 	$(FMIOHDRS:%.h=fm/io/%.check)			\
 	$(FSHDRS:%.h=fs/%.check)			\
-	$(LVMHDRS:%.h=lvm/%.check)			\
 	$(SCSIHDRS:%.h=scsi/%.check)			\
 	$(SCSIADHDRS:%.h=scsi/adapters/%.check)		\
 	$(SCSICONFHDRS:%.h=scsi/conf/%.check)		\
@@ -1197,9 +1178,9 @@ CHECKHDRS=						\
 	$(SYSEVENTHDRS:%.h=sysevent/%.check)            \
 	$(CONTRACTHDRS:%.h=contract/%.check)            \
 	$(USBAUDHDRS:%.h=usb/clients/audio/%.check)   \
+	$(USBCCIDHDRS:%.h=usb/clients/ccid/%.check)	\
 	$(USBHUBDHDRS:%.h=usb/hubd/%.check)		\
 	$(USBHIDHDRS:%.h=usb/clients/hid/%.check)	\
-	$(USBHWARCHDRS:%.h=usb/clients/hwarc/%.check)	\
 	$(USBMSHDRS:%.h=usb/clients/mass_storage/%.check)	\
 	$(USBPRNHDRS:%.h=usb/clients/printer/%.check)   \
 	$(USBCDCHDRS:%.h=usb/clients/usbcdc/%.check)	\
@@ -1207,8 +1188,6 @@ CHECKHDRS=						\
 	$(USBWCMHDRS:%.h=usb/clients/usbinput/usbwcm/%.check)	\
 	$(UGENHDRS:%.h=usb/clients/ugen/%.check)   \
 	$(USBHDRS:%.h=usb/%.check)                      \
-	$(UWBHDRS:%.h=uwb/%.check)                      \
-	$(UWBAHDRS:%.h=uwb/uwba/%.check)                      \
 	$(I1394HDRS:%.h=1394/%.check)			\
 	$(RSMHDRS:%.h=rsm/%.check)			\
 	$(TSOLHDRS:%.h=tsol/%.check)			\
@@ -1252,7 +1231,6 @@ CHECKHDRS=						\
 	$(ROOTTAVORHDRS)	\
 	$(ROOTHERMONHDRS)	\
 	$(ROOTMLNXHDRS)		\
-	$(ROOTLVMHDRS)		\
 	$(ROOTSCSIHDRS)		\
 	$(ROOTSCSIADHDRS)	\
 	$(ROOTSCSICONFHDRS)	\
@@ -1275,6 +1253,7 @@ CHECKHDRS=						\
 	$(ROOTUSBCDCHDRS)       \
 	$(ROOTUSBVIDHDRS)       \
 	$(ROOTUSBWCMHDRS)	\
+	$(ROOTUSBCCIDHDRS)	\
 	$(ROOTUGENHDRS)		\
 	$(ROOT1394HDRS)         \
 	$(ROOTHOTPLUGHDRS)	\
@@ -1286,7 +1265,6 @@ CHECKHDRS=						\
 
 install_h:			\
 	$(ROOTDIRS)		\
-	LVMDERIVED_H		\
 	.WAIT			\
 	$(ROOTHDRS)		\
 	$(ROOTAUDHDRS)		\
@@ -1321,7 +1299,6 @@ install_h:			\
 	$(ROOTTAVORHDRS)	\
 	$(ROOTHERMONHDRS)	\
 	$(ROOTMLNXHDRS)		\
-	$(ROOTLVMHDRS)		\
 	$(ROOTSCSIHDRS)		\
 	$(ROOTSCSIADHDRS)	\
 	$(ROOTSCSIISCSIHDRS)	\
@@ -1335,6 +1312,7 @@ install_h:			\
 	$(ROOTUWBHDRS)		\
 	$(ROOTUWBAHDRS)		\
 	$(ROOTUSBHDRS)		\
+	$(ROOTUSBCCIDHDRS)	\
 	$(ROOTUSBAUDHDRS)	\
 	$(ROOTUSBHUBDHDRS)	\
 	$(ROOTUSBHIDHDRS)	\
@@ -1355,22 +1333,18 @@ install_h:			\
 all_h: $(GENHDRS)
 
 priv_const.h: $(PRIVS_AWK) $(PRIVS_DEF)
-	$(NAWK) -f $(PRIVS_AWK) < $(PRIVS_DEF) -v privhfile=$@
+	$(AWK) -f $(PRIVS_AWK) < $(PRIVS_DEF) -v privhfile=$@
 
 priv_names.h: $(PRIVS_AWK) $(PRIVS_DEF)
-	$(NAWK) -f $(PRIVS_AWK) < $(PRIVS_DEF) -v pubhfile=$@
+	$(AWK) -f $(PRIVS_AWK) < $(PRIVS_DEF) -v pubhfile=$@
 
 usb/usbdevs.h: $(USBDEVS_AWK) $(USBDEVS_DATA)
-	$(NAWK) -f $(USBDEVS_AWK) $(USBDEVS_DATA) -H > $@
-
-LVMDERIVED_H:
-	cd $(SRC)/uts/common/sys/lvm; pwd; $(MAKE) all_h
+	$(AWK) -f $(USBDEVS_AWK) $(USBDEVS_DATA) -H > $@
 
 clean:
 	$(RM) $(GENHDRS)
 
 clobber: clean
-	cd $(SRC)/uts/common/sys/lvm; pwd; $(MAKE) clobber
 
 check:	$(CHECKHDRS)
 

@@ -32,6 +32,10 @@
 /*	  All Rights Reserved  	*/
 
 /*
+ * Copyright (c) 2018, Joyent, Inc.
+ */
+
+/*
  * University Copyright- Copyright (c) 1982, 1986, 1988
  * The Regents of the University of California
  * All Rights Reserved
@@ -1354,14 +1358,16 @@ static int
 chg_time(char *to, struct stat ss)
 {
 	struct timespec times[2];
+#ifdef XPG4
 	int rc;
+#endif
 
 	times[0] = ss.st_atim;
 	times[1] = ss.st_mtim;
 
+#ifdef XPG4
 	rc = utimensat(AT_FDCWD, to, times,
 	    ISLNK(s1) ? AT_SYMLINK_NOFOLLOW : 0);
-#ifdef XPG4
 	if ((pflg || mve) && rc != 0) {
 		(void) fprintf(stderr,
 		    gettext("%s: cannot set times for %s: "), cmd, to);
@@ -1369,6 +1375,9 @@ chg_time(char *to, struct stat ss)
 		if (pflg)
 			return (1);
 	}
+#else
+	(void) utimensat(AT_FDCWD, to, times,
+	    ISLNK(s1) ? AT_SYMLINK_NOFOLLOW : 0);
 #endif
 
 	return (0);
@@ -1934,33 +1943,31 @@ copy_sysattr(char *source, char *target)
 			 * the defaults set when its created and thus  no need
 			 * to copy the defaults.
 			 */
-			if (dp->d_name != NULL) {
-				res = sysattr_list(cmd, srcattrfd, dp->d_name);
-				if (res == NULL)
-					goto next;
+			res = sysattr_list(cmd, srcattrfd, dp->d_name);
+			if (res == NULL)
+				goto next;
 
 			/*
 			 * Copy non default extended system attributes of named
 			 * attribute file.
 			 */
-				if (fsetattr(targattrfd,
-				    XATTR_VIEW_READWRITE, res) != 0) {
-					++error;
-					(void) fprintf(stderr, gettext("%s: "
-					    "Failed to copy extended system "
-					    "attributes from attribute file "
-					    "%s of %s to %s\n"), cmd,
-					    dp->d_name, source, target);
-				}
+			if (fsetattr(targattrfd,
+			    XATTR_VIEW_READWRITE, res) != 0) {
+				++error;
+				(void) fprintf(stderr, gettext("%s: "
+				    "Failed to copy extended system "
+				    "attributes from attribute file "
+				    "%s of %s to %s\n"), cmd,
+				    dp->d_name, source, target);
 			}
+
 next:
 			if (srcattrfd != -1)
 				(void) close(srcattrfd);
 			if (targattrfd != -1)
 				(void) close(targattrfd);
 			srcattrfd = targattrfd = -1;
-			if (res != NULL)
-				nvlist_free(res);
+			nvlist_free(res);
 		}
 	}
 	/* Copy source file non default extended system attributes to target */
@@ -1972,8 +1979,7 @@ next:
 		    "%s to %s\n"), cmd, source, target);
 	}
 out:
-	if (response != NULL)
-		nvlist_free(response);
+	nvlist_free(response);
 	close_all();
 	return (error == 0 ? 0 : 1);
 }

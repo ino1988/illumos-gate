@@ -22,6 +22,7 @@
 # Copyright 2006 Sun Microsystems, Inc.  All rights reserved.
 # Use is subject to license terms.
 #
+# Copyright (c) 2019, Joyent, Inc.
 
 LIBRARY=	libtnfctl.a
 VERS=		.1
@@ -65,20 +66,20 @@ HDRS=		tnfctl.h
 ROOTHDRDIR=	$(ROOT)/usr/include/tnf
 ROOTHDRS=	$(HDRS:%=$(ROOTHDRDIR)/%)
 CHECKHDRS=	$(HDRS:%.h=%.check)
-$(ROOTHDRS) := 	FILEMODE = 0644
+$(ROOTHDRS) :=	FILEMODE = 0644
 CHECKHDRS =	$(HDRS:%.h=%.check)
 
 LDLIBS +=	-lc -lelf
 
-# Uncomment the following line for a debug build
-# COPTFLAG =	-g -DDEBUG $(CCVERBOSE)
 CPPFLAGS +=	-I$(SRC)/lib/libtnfprobe -D_REENTRANT -I$(SRC)/cmd/sgs/include
 
-LINTFLAGS +=	-y
 
-CERRWARN +=	-_gcc=-Wno-uninitialized
+CERRWARN +=	$(CNOWARN_UNINIT)
 CERRWARN +=	-_gcc=-Wno-empty-body
 CERRWARN +=	-_gcc=-Wno-parentheses
+
+# not linted
+SMATCH=off
 
 ASFLAGS +=	-P
 
@@ -90,8 +91,6 @@ all: $(LIBS)
 
 install_h: $(ROOTHDRDIR) $(ROOTHDRS)
 
-lint:
-	$(LINT.c) $(SRCS)
 
 check: $(CHECKHDRS)
 
@@ -105,7 +104,7 @@ BUILD.s=	$(AS) $< -o $@
 
 objs/%.o pics/%.o: ../%.s
 	$(COMPILE.s) -o $@ $<
-	$(POST_PROCESS_O)
+	$(POST_PROCESS_S_O)
 
 objs/%.o pics/%.o: ../%.c
 	$(COMPILE.c) -o $@ $<
@@ -115,13 +114,5 @@ objs/%.o pics/%.o: ../%.c
 %.o:		../%.c
 	$(COMPILE.c) -o $@ $<
 	$(POST_PROCESS_O)
-
-WARLOCK_FILES= $(OBJECTS.c:%.o=%.ll)
-CLEANFILES= $(WARLOCK_FILES)
-warlock_files:	$(WARLOCK_FILES)
-%.ll:		../%.c
-		wlcc $(CFLAGS) $(CPPFLAGS) -o $@ $<
-warlock:	warlock_files
-		warlock -c wlcmd $(WARLOCK_FILES)
 
 include ../../Makefile.targ

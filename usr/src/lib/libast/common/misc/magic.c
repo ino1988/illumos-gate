@@ -1145,24 +1145,24 @@ cklang(register Magic_t* mp, const char* file, char* buf, struct stat* st)
 									mp->multi['X']++;
 								break;
 							}
-							if (!mp->idtab)
-							{
-								if (mp->idtab = dtnew(mp->vm, &mp->dtdisc, Dthash))
-									for (q = 0; q < elementsof(dict); q++)
-										dtinsert(mp->idtab, &dict[q]);
-								else if (mp->disc->errorf)
-									(*mp->disc->errorf)(mp, mp->disc, 3, "out of space");
-								q = 0;
-							}
-							if (mp->idtab)
-							{
-								*(b - 1) = 0;
-								if (ip = (Info_t*)dtmatch(mp->idtab, s))
-									mp->identifier[ip->value]++;
-								*(b - 1) = c;
-							}
-							s = 0;
+						if (!mp->idtab)
+						{
+							if (mp->idtab = dtnew(mp->vm, &mp->dtdisc, Dthash))
+								for (q = 0; q < elementsof(dict); q++)
+									dtinsert(mp->idtab, &dict[q]);
+							else if (mp->disc->errorf)
+								(*mp->disc->errorf)(mp, mp->disc, 3, "out of space");
+							q = 0;
 						}
+						if (mp->idtab)
+						{
+							*(b - 1) = 0;
+							if (ip = (Info_t*)dtmatch(mp->idtab, s))
+								mp->identifier[ip->value]++;
+							*(b - 1) = c;
+						}
+						s = 0;
+					}
 					switch (c)
 					{
 					case '\t':
@@ -1424,13 +1424,16 @@ cklang(register Magic_t* mp, const char* file, char* buf, struct stat* st)
 			case 4:
 				if (b < e && (*b++ & 0xc0) != 0x80)
 					break;
+				/* FALLTHROUGH */
 			case 3:
 				if (b < e && (*b++ & 0xc0) != 0x80)
 					break;
+				/* FALLTHROUGH */
 			case 2:
 				if (b < e && (*b++ & 0xc0) != 0x80)
 					break;
 				n = 1;
+				/* FALLTHROUGH */
 			case 0:
 				if (b >= e)
 				{

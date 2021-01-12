@@ -21,8 +21,8 @@
 
 /*
  * Copyright (c) 2009, 2010, Oracle and/or its affiliates. All rights reserved.
- * Copyright 2014 Nexenta Systems, Inc. All rights reserved.
- * Copyright (c) 2014, Joyent, Inc. All rights reserved.
+ * Copyright 2016 Nexenta Systems, Inc. All rights reserved.
+ * Copyright 2019 Joyent, Inc.
  * Copyright 2014 OmniTI Computer Consulting, Inc. All rights reserved.
  * Copyright (c) 2014, Tegile Systems Inc. All rights reserved.
  */
@@ -76,6 +76,7 @@
 #include <sys/sysevent/eventdefs.h>
 #include <sys/sysevent/dr.h>
 #include <sys/sata/sata_defs.h>
+#include <sys/sata/sata_hba.h>
 #include <sys/scsi/generic/sas.h>
 #include <sys/scsi/impl/scsi_sas.h>
 
@@ -130,7 +131,17 @@ static int mptsas_quiesce(dev_info_t *devi);
 #endif	/* __sparc */
 
 /*
- * Resource initilaization for hardware
+ * ddi_ufm_ops
+ */
+static int mptsas_ufm_fill_image(ddi_ufm_handle_t *ufmh, void *arg,
+    uint_t imgno, ddi_ufm_image_t *img);
+static int mptsas_ufm_fill_slot(ddi_ufm_handle_t *ufmh, void *arg,
+    uint_t imgno, uint_t slotno, ddi_ufm_slot_t *slot);
+static int mptsas_ufm_getcaps(ddi_ufm_handle_t *ufmh, void *arg,
+    ddi_ufm_cap_t *caps);
+
+/*
+ * Resource initialization for hardware
  */
 static void mptsas_setup_cmd_reg(mptsas_t *mpt);
 static void mptsas_disable_bus_master(mptsas_t *mpt);
@@ -143,9 +154,12 @@ static void mptsas_config_space_fini(mptsas_t *mpt);
 static void mptsas_iport_register(mptsas_t *mpt);
 static int mptsas_smp_setup(mptsas_t *mpt);
 static void mptsas_smp_teardown(mptsas_t *mpt);
+static int mptsas_enc_setup(mptsas_t *mpt);
+static void mptsas_enc_teardown(mptsas_t *mpt);
 static int mptsas_cache_create(mptsas_t *mpt);
 static void mptsas_cache_destroy(mptsas_t *mpt);
 static int mptsas_alloc_request_frames(mptsas_t *mpt);
+static int mptsas_alloc_sense_bufs(mptsas_t *mpt);
 static int mptsas_alloc_reply_frames(mptsas_t *mpt);
 static int mptsas_alloc_free_queue(mptsas_t *mpt);
 static int mptsas_alloc_post_queue(mptsas_t *mpt);
@@ -153,6 +167,7 @@ static void mptsas_alloc_reply_args(mptsas_t *mpt);
 static int mptsas_alloc_extra_sgl_frame(mptsas_t *mpt, mptsas_cmd_t *cmd);
 static void mptsas_free_extra_sgl_frame(mptsas_t *mpt, mptsas_cmd_t *cmd);
 static int mptsas_init_chip(mptsas_t *mpt, int first_time);
+static void mptsas_update_hashtab(mptsas_t *mpt);
 
 /*
  * SCSA function prototypes
@@ -352,13 +367,14 @@ static int mptsas_get_target_device_info(mptsas_t *mpt, uint32_t page_address,
     uint16_t *handle, mptsas_target_t **pptgt);
 static void mptsas_update_phymask(mptsas_t *mpt);
 
-static int mptsas_send_sep(mptsas_t *mpt, mptsas_target_t *ptgt,
+static int mptsas_flush_led_status(mptsas_t *mpt, mptsas_enclosure_t *mep,
+    uint16_t idx);
+static int mptsas_send_sep(mptsas_t *mpt, mptsas_enclosure_t *mep, uint16_t idx,
     uint32_t *status, uint8_t cmd);
 static dev_info_t *mptsas_get_dip_from_dev(dev_t dev,
     mptsas_phymask_t *phymask);
 static mptsas_target_t *mptsas_addr_to_ptgt(mptsas_t *mpt, char *addr,
     mptsas_phymask_t phymask);
-static int mptsas_flush_led_status(mptsas_t *mpt, mptsas_target_t *ptgt);
 
 
 /*
@@ -409,7 +425,7 @@ static void mptsas_record_event(void *args);
 static int mptsas_reg_access(mptsas_t *mpt, mptsas_reg_access_t *data,
     int mode);
 
-mptsas_target_t *mptsas_tgt_alloc(mptsas_t *, uint16_t, uint64_t,
+mptsas_target_t *mptsas_tgt_alloc(refhash_t *, uint16_t, uint64_t,
     uint32_t, mptsas_phymask_t, uint8_t);
 static mptsas_smp_t *mptsas_smp_alloc(mptsas_t *, mptsas_smp_t *);
 static int mptsas_online_smp(dev_info_t *pdip, mptsas_smp_t *smp_node,
@@ -499,7 +515,7 @@ ddi_dma_attr_t mptsas_dma_attrs64 = {
 	0xffffffffull,	/* max segment size (DMA boundary)	*/
 	MPTSAS_MAX_DMA_SEGS, /* scatter/gather list length	*/
 	512,		/* granularity - device transfer size	*/
-	DDI_DMA_RELAXED_ORDERING	/* flags, enable relaxed ordering */
+	0		/* flags, set to 0 */
 };
 
 ddi_device_acc_attr_t mptsas_dev_attr = {
@@ -553,6 +569,12 @@ static struct dev_ops mptsas_ops = {
 #endif	/* __sparc */
 };
 
+static ddi_ufm_ops_t mptsas_ufm_ops = {
+	NULL,
+	mptsas_ufm_fill_image,
+	mptsas_ufm_fill_slot,
+	mptsas_ufm_getcaps
+};
 
 #define	MPTSAS_MOD_STRING "MPTSAS HBA Driver 00.00.00.24"
 
@@ -601,6 +623,27 @@ static clock_t mptsas_tick;
 static timeout_id_t mptsas_reset_watch;
 static timeout_id_t mptsas_timeout_id;
 static int mptsas_timeouts_enabled = 0;
+
+/*
+ * Default length for extended auto request sense buffers.
+ * All sense buffers need to be under the same alloc because there
+ * is only one common top 32bits (of 64bits) address register.
+ * Most requests only require 32 bytes, but some request >256.
+ * We use rmalloc()/rmfree() on this additional memory to manage the
+ * "extended" requests.
+ */
+int mptsas_extreq_sense_bufsize = 256*64;
+
+/*
+ * We believe that all software resrictions of having to run with DMA
+ * attributes to limit allocation to the first 4G are removed.
+ * However, this flag remains to enable quick switchback should suspicious
+ * problems emerge.
+ * Note that scsi_alloc_consistent_buf() does still adhere to allocating
+ * 32 bit addressable memory, but we can cope if that is changed now.
+ */
+int mptsas_use_64bit_msgaddr = 1;
+
 /*
  * warlock directives
  */
@@ -706,18 +749,6 @@ mptsas_target_eval_devhdl(const void *op, void *arg)
 }
 
 static int
-mptsas_target_eval_slot(const void *op, void *arg)
-{
-	mptsas_led_control_t *lcp = arg;
-	const mptsas_target_t *tp = op;
-
-	if (tp->m_enclosure != lcp->Enclosure)
-		return ((int)tp->m_enclosure - (int)lcp->Enclosure);
-
-	return ((int)tp->m_slot_num - (int)lcp->Slot);
-}
-
-static int
 mptsas_target_eval_nowwn(const void *op, void *arg)
 {
 	uint8_t phy = *(uint8_t *)arg;
@@ -760,6 +791,23 @@ mptsas_target_addr_cmp(const void *a, const void *b)
 	return ((int)bap->mta_phymask - (int)aap->mta_phymask);
 }
 
+static uint64_t
+mptsas_tmp_target_hash(const void *tp)
+{
+	return ((uint64_t)(uintptr_t)tp);
+}
+
+static int
+mptsas_tmp_target_cmp(const void *a, const void *b)
+{
+	if (a > b)
+		return (1);
+	if (b < a)
+		return (-1);
+
+	return (0);
+}
+
 static void
 mptsas_target_free(void *op)
 {
@@ -786,6 +834,7 @@ mptsas_destroy_hashes(mptsas_t *mpt)
 	    sp = refhash_next(mpt->m_smp_targets, sp)) {
 		refhash_remove(mpt->m_smp_targets, sp);
 	}
+	refhash_destroy(mpt->m_tmp_targets);
 	refhash_destroy(mpt->m_targets);
 	refhash_destroy(mpt->m_smp_targets);
 	mpt->m_targets = NULL;
@@ -1039,6 +1088,7 @@ mptsas_attach(dev_info_t *dip, ddi_attach_cmd_t cmd)
 	char			config_setup = 0;
 	char			hba_attach_setup = 0;
 	char			smp_attach_setup = 0;
+	char			enc_attach_setup = 0;
 	char			mutex_init_done = 0;
 	char			event_taskq_create = 0;
 	char			dr_taskq_create = 0;
@@ -1180,9 +1230,18 @@ mptsas_attach(dev_info_t *dip, ddi_attach_cmd_t cmd)
 
 	/* Make a per-instance copy of the structures */
 	mpt->m_io_dma_attr = mptsas_dma_attrs64;
-	mpt->m_msg_dma_attr = mptsas_dma_attrs;
+	if (mptsas_use_64bit_msgaddr) {
+		mpt->m_msg_dma_attr = mptsas_dma_attrs64;
+	} else {
+		mpt->m_msg_dma_attr = mptsas_dma_attrs;
+	}
 	mpt->m_reg_acc_attr = mptsas_dev_attr;
 	mpt->m_dev_acc_attr = mptsas_dev_attr;
+
+	/*
+	 * Size of individual request sense buffer
+	 */
+	mpt->m_req_sense_size = EXTCMDS_STATUS_SIZE;
 
 	/*
 	 * Initialize FMA
@@ -1193,6 +1252,15 @@ mptsas_attach(dev_info_t *dip, ddi_attach_cmd_t cmd)
 	    DDI_FM_DMACHK_CAPABLE | DDI_FM_ERRCB_CAPABLE);
 
 	mptsas_fm_init(mpt);
+
+	/*
+	 * Initialize us with the UFM subsystem
+	 */
+	if (ddi_ufm_init(dip, DDI_UFM_CURRENT_VERSION, &mptsas_ufm_ops,
+	    &mpt->m_ufmh, mpt) != 0) {
+		mptsas_log(mpt, CE_WARN, "failed to initialize UFM subsystem");
+		goto fail;
+	}
 
 	if (mptsas_alloc_handshake_msg(mpt,
 	    sizeof (Mpi2SCSITaskManagementRequest_t)) == DDI_FAILURE) {
@@ -1302,6 +1370,7 @@ mptsas_attach(dev_info_t *dip, ddi_attach_cmd_t cmd)
 	cv_init(&mpt->m_fw_cv, NULL, CV_DRIVER, NULL);
 	cv_init(&mpt->m_config_cv, NULL, CV_DRIVER, NULL);
 	cv_init(&mpt->m_fw_diag_cv, NULL, CV_DRIVER, NULL);
+	cv_init(&mpt->m_extreq_sense_refcount_cv, NULL, CV_DRIVER, NULL);
 	mutex_init_done++;
 
 	mutex_enter(&mpt->m_mutex);
@@ -1326,6 +1395,22 @@ mptsas_attach(dev_info_t *dip, ddi_attach_cmd_t cmd)
 		mptsas_log(mpt, CE_WARN, "mptsas chip initialization failed");
 		goto fail;
 	}
+
+	mpt->m_targets = refhash_create(MPTSAS_TARGET_BUCKET_COUNT,
+	    mptsas_target_addr_hash, mptsas_target_addr_cmp,
+	    mptsas_target_free, sizeof (mptsas_target_t),
+	    offsetof(mptsas_target_t, m_link),
+	    offsetof(mptsas_target_t, m_addr), KM_SLEEP);
+
+	/*
+	 * The refhash for temporary targets uses the address of the target
+	 * struct itself as tag, so the tag offset is 0. See the implementation
+	 * of mptsas_tmp_target_hash() and mptsas_tmp_target_cmp().
+	 */
+	mpt->m_tmp_targets = refhash_create(MPTSAS_TMP_TARGET_BUCKET_COUNT,
+	    mptsas_tmp_target_hash, mptsas_tmp_target_cmp,
+	    mptsas_target_free, sizeof (mptsas_target_t),
+	    offsetof(mptsas_target_t, m_link), 0, KM_SLEEP);
 
 	/*
 	 * Fill in the phy_info structure and get the base WWID
@@ -1365,6 +1450,10 @@ mptsas_attach(dev_info_t *dip, ddi_attach_cmd_t cmd)
 	if (mptsas_smp_setup(mpt) == FALSE)
 		goto fail;
 	smp_attach_setup++;
+
+	if (mptsas_enc_setup(mpt) == FALSE)
+		goto fail;
+	enc_attach_setup++;
 
 	if (mptsas_cache_create(mpt) == FALSE)
 		goto fail;
@@ -1437,6 +1526,8 @@ mptsas_attach(dev_info_t *dip, ddi_attach_cmd_t cmd)
 	/* Check all dma handles allocated in attach */
 	if ((mptsas_check_dma_handle(mpt->m_dma_req_frame_hdl)
 	    != DDI_SUCCESS) ||
+	    (mptsas_check_dma_handle(mpt->m_dma_req_sense_hdl)
+	    != DDI_SUCCESS) ||
 	    (mptsas_check_dma_handle(mpt->m_dma_reply_frame_hdl)
 	    != DDI_SUCCESS) ||
 	    (mptsas_check_dma_handle(mpt->m_dma_free_queue_hdl)
@@ -1451,6 +1542,8 @@ mptsas_attach(dev_info_t *dip, ddi_attach_cmd_t cmd)
 	/* Check all acc handles allocated in attach */
 	if ((mptsas_check_acc_handle(mpt->m_datap) != DDI_SUCCESS) ||
 	    (mptsas_check_acc_handle(mpt->m_acc_req_frame_hdl)
+	    != DDI_SUCCESS) ||
+	    (mptsas_check_acc_handle(mpt->m_acc_req_sense_hdl)
 	    != DDI_SUCCESS) ||
 	    (mptsas_check_acc_handle(mpt->m_acc_reply_frame_hdl)
 	    != DDI_SUCCESS) ||
@@ -1468,6 +1561,9 @@ mptsas_attach(dev_info_t *dip, ddi_attach_cmd_t cmd)
 	/*
 	 * After this point, we are not going to fail the attach.
 	 */
+
+	/* Let the UFM susbsystem know we're ready to receive callbacks */
+	ddi_ufm_update(mpt->m_ufmh);
 
 	/* Print message of HBA present */
 	ddi_report_dev(dip);
@@ -1505,10 +1601,15 @@ fail:
 		if (smp_attach_setup) {
 			mptsas_smp_teardown(mpt);
 		}
+		if (enc_attach_setup) {
+			mptsas_enc_teardown(mpt);
+		}
 		if (hba_attach_setup) {
 			mptsas_hba_teardown(mpt);
 		}
 
+		if (mpt->m_tmp_targets)
+			refhash_destroy(mpt->m_tmp_targets);
 		if (mpt->m_targets)
 			refhash_destroy(mpt->m_targets);
 		if (mpt->m_smp_targets)
@@ -1565,6 +1666,7 @@ fail:
 			cv_destroy(&mpt->m_fw_cv);
 			cv_destroy(&mpt->m_config_cv);
 			cv_destroy(&mpt->m_fw_diag_cv);
+			cv_destroy(&mpt->m_extreq_sense_refcount_cv);
 		}
 
 		if (map_setup) {
@@ -1802,6 +1904,9 @@ mptsas_do_detach(dev_info_t *dip)
 	if (!mpt) {
 		return (DDI_FAILURE);
 	}
+
+	ddi_ufm_fini(mpt->m_ufmh);
+
 	/*
 	 * Still have pathinfo child, should not detach mpt driver
 	 */
@@ -1812,7 +1917,8 @@ mptsas_do_detach(dev_info_t *dip)
 			 */
 			ndi_devi_enter(scsi_vhci_dip, &circ1);
 			ndi_devi_enter(dip, &circ);
-			while (pip = mdi_get_next_client_path(dip, NULL)) {
+			while ((pip = mdi_get_next_client_path(dip, NULL)) !=
+			    NULL) {
 				if (mdi_pi_free(pip, 0) == MDI_SUCCESS) {
 					continue;
 				}
@@ -1982,9 +2088,10 @@ mptsas_do_detach(dev_info_t *dip)
 	cv_destroy(&mpt->m_fw_cv);
 	cv_destroy(&mpt->m_config_cv);
 	cv_destroy(&mpt->m_fw_diag_cv);
-
+	cv_destroy(&mpt->m_extreq_sense_refcount_cv);
 
 	mptsas_smp_teardown(mpt);
+	mptsas_enc_teardown(mpt);
 	mptsas_hba_teardown(mpt);
 
 	mptsas_config_space_fini(mpt);
@@ -2232,6 +2339,54 @@ mptsas_smp_teardown(mptsas_t *mpt)
 		mpt->m_smptran = NULL;
 	}
 	mpt->m_smp_devhdl = 0;
+}
+
+static int
+mptsas_enc_setup(mptsas_t *mpt)
+{
+	list_create(&mpt->m_enclosures, sizeof (mptsas_enclosure_t),
+	    offsetof(mptsas_enclosure_t, me_link));
+	return (TRUE);
+}
+
+static void
+mptsas_enc_free(mptsas_enclosure_t *mep)
+{
+	if (mep == NULL)
+		return;
+	if (mep->me_slotleds != NULL) {
+		VERIFY3U(mep->me_nslots, >, 0);
+		kmem_free(mep->me_slotleds, sizeof (uint8_t) * mep->me_nslots);
+	}
+	kmem_free(mep, sizeof (mptsas_enclosure_t));
+}
+
+static void
+mptsas_enc_teardown(mptsas_t *mpt)
+{
+	mptsas_enclosure_t *mep;
+
+	while ((mep = list_remove_head(&mpt->m_enclosures)) != NULL) {
+		mptsas_enc_free(mep);
+	}
+	list_destroy(&mpt->m_enclosures);
+}
+
+static mptsas_enclosure_t *
+mptsas_enc_lookup(mptsas_t *mpt, uint16_t hdl)
+{
+	mptsas_enclosure_t *mep;
+
+	ASSERT(MUTEX_HELD(&mpt->m_mutex));
+
+	for (mep = list_head(&mpt->m_enclosures); mep != NULL;
+	    mep = list_next(&mpt->m_enclosures, mep)) {
+		if (hdl == mep->me_enchdl) {
+			return (mep);
+		}
+	}
+
+	return (NULL);
 }
 
 static int
@@ -2527,8 +2682,9 @@ mptsas_alloc_request_frames(mptsas_t *mpt)
 	/*
 	 * re-alloc when it has already alloced
 	 */
-	mptsas_dma_addr_destroy(&mpt->m_dma_req_frame_hdl,
-	    &mpt->m_acc_req_frame_hdl);
+	if (mpt->m_dma_req_frame_hdl)
+		mptsas_dma_addr_destroy(&mpt->m_dma_req_frame_hdl,
+		    &mpt->m_acc_req_frame_hdl);
 
 	/*
 	 * The size of the request frame pool is:
@@ -2570,6 +2726,80 @@ mptsas_alloc_request_frames(mptsas_t *mpt)
 }
 
 static int
+mptsas_alloc_sense_bufs(mptsas_t *mpt)
+{
+	ddi_dma_attr_t		sense_dma_attrs;
+	caddr_t			memp;
+	ddi_dma_cookie_t	cookie;
+	size_t			mem_size;
+	int			num_extrqsense_bufs;
+
+	ASSERT(mpt->m_extreq_sense_refcount == 0);
+
+	/*
+	 * re-alloc when it has already alloced
+	 */
+	if (mpt->m_dma_req_sense_hdl) {
+		rmfreemap(mpt->m_erqsense_map);
+		mptsas_dma_addr_destroy(&mpt->m_dma_req_sense_hdl,
+		    &mpt->m_acc_req_sense_hdl);
+	}
+
+	/*
+	 * The size of the request sense pool is:
+	 *   (Number of Request Frames - 2 ) * Request Sense Size +
+	 *   extra memory for extended sense requests.
+	 */
+	mem_size = ((mpt->m_max_requests - 2) * mpt->m_req_sense_size) +
+	    mptsas_extreq_sense_bufsize;
+
+	/*
+	 * set the DMA attributes.  ARQ buffers
+	 * aligned on a 16-byte boundry.
+	 */
+	sense_dma_attrs = mpt->m_msg_dma_attr;
+	sense_dma_attrs.dma_attr_align = 16;
+	sense_dma_attrs.dma_attr_sgllen = 1;
+
+	/*
+	 * allocate the request sense buffer pool.
+	 */
+	if (mptsas_dma_addr_create(mpt, sense_dma_attrs,
+	    &mpt->m_dma_req_sense_hdl, &mpt->m_acc_req_sense_hdl, &memp,
+	    mem_size, &cookie) == FALSE) {
+		return (DDI_FAILURE);
+	}
+
+	/*
+	 * Store the request sense base memory address.  This chip uses this
+	 * address to dma the request sense data.  The second
+	 * address is the address mpt uses to access the data.
+	 * The third is the base for the extended rqsense buffers.
+	 */
+	mpt->m_req_sense_dma_addr = cookie.dmac_laddress;
+	mpt->m_req_sense = memp;
+	memp += (mpt->m_max_requests - 2) * mpt->m_req_sense_size;
+	mpt->m_extreq_sense = memp;
+
+	/*
+	 * The extra memory is divided up into multiples of the base
+	 * buffer size in order to allocate via rmalloc().
+	 * Note that the rmallocmap cannot start at zero!
+	 */
+	num_extrqsense_bufs = mptsas_extreq_sense_bufsize /
+	    mpt->m_req_sense_size;
+	mpt->m_erqsense_map = rmallocmap_wait(num_extrqsense_bufs);
+	rmfree(mpt->m_erqsense_map, num_extrqsense_bufs, 1);
+
+	/*
+	 * Clear the pool.
+	 */
+	bzero(mpt->m_req_sense, mem_size);
+
+	return (DDI_SUCCESS);
+}
+
+static int
 mptsas_alloc_reply_frames(mptsas_t *mpt)
 {
 	ddi_dma_attr_t		frame_dma_attrs;
@@ -2580,8 +2810,10 @@ mptsas_alloc_reply_frames(mptsas_t *mpt)
 	/*
 	 * re-alloc when it has already alloced
 	 */
-	mptsas_dma_addr_destroy(&mpt->m_dma_reply_frame_hdl,
-	    &mpt->m_acc_reply_frame_hdl);
+	if (mpt->m_dma_reply_frame_hdl) {
+		mptsas_dma_addr_destroy(&mpt->m_dma_reply_frame_hdl,
+		    &mpt->m_acc_reply_frame_hdl);
+	}
 
 	/*
 	 * The size of the reply frame pool is:
@@ -2632,8 +2864,10 @@ mptsas_alloc_free_queue(mptsas_t *mpt)
 	/*
 	 * re-alloc when it has already alloced
 	 */
-	mptsas_dma_addr_destroy(&mpt->m_dma_free_queue_hdl,
-	    &mpt->m_acc_free_queue_hdl);
+	if (mpt->m_dma_free_queue_hdl) {
+		mptsas_dma_addr_destroy(&mpt->m_dma_free_queue_hdl,
+		    &mpt->m_acc_free_queue_hdl);
+	}
 
 	/*
 	 * The reply free queue size is:
@@ -2687,8 +2921,10 @@ mptsas_alloc_post_queue(mptsas_t *mpt)
 	/*
 	 * re-alloc when it has already alloced
 	 */
-	mptsas_dma_addr_destroy(&mpt->m_dma_post_queue_hdl,
-	    &mpt->m_acc_post_queue_hdl);
+	if (mpt->m_dma_post_queue_hdl) {
+		mptsas_dma_addr_destroy(&mpt->m_dma_post_queue_hdl,
+		    &mpt->m_acc_post_queue_hdl);
+	}
 
 	/*
 	 * The reply descriptor post queue size is:
@@ -2778,17 +3014,31 @@ mptsas_hba_fini(mptsas_t *mpt)
 	/*
 	 * Free up any allocated memory
 	 */
-	mptsas_dma_addr_destroy(&mpt->m_dma_req_frame_hdl,
-	    &mpt->m_acc_req_frame_hdl);
+	if (mpt->m_dma_req_frame_hdl) {
+		mptsas_dma_addr_destroy(&mpt->m_dma_req_frame_hdl,
+		    &mpt->m_acc_req_frame_hdl);
+	}
 
-	mptsas_dma_addr_destroy(&mpt->m_dma_reply_frame_hdl,
-	    &mpt->m_acc_reply_frame_hdl);
+	if (mpt->m_dma_req_sense_hdl) {
+		rmfreemap(mpt->m_erqsense_map);
+		mptsas_dma_addr_destroy(&mpt->m_dma_req_sense_hdl,
+		    &mpt->m_acc_req_sense_hdl);
+	}
 
-	mptsas_dma_addr_destroy(&mpt->m_dma_free_queue_hdl,
-	    &mpt->m_acc_free_queue_hdl);
+	if (mpt->m_dma_reply_frame_hdl) {
+		mptsas_dma_addr_destroy(&mpt->m_dma_reply_frame_hdl,
+		    &mpt->m_acc_reply_frame_hdl);
+	}
 
-	mptsas_dma_addr_destroy(&mpt->m_dma_post_queue_hdl,
-	    &mpt->m_acc_post_queue_hdl);
+	if (mpt->m_dma_free_queue_hdl) {
+		mptsas_dma_addr_destroy(&mpt->m_dma_free_queue_hdl,
+		    &mpt->m_acc_free_queue_hdl);
+	}
+
+	if (mpt->m_dma_post_queue_hdl) {
+		mptsas_dma_addr_destroy(&mpt->m_dma_post_queue_hdl,
+		    &mpt->m_acc_post_queue_hdl);
+	}
 
 	if (mpt->m_replyh_args != NULL) {
 		kmem_free(mpt->m_replyh_args, sizeof (m_replyh_arg_t)
@@ -2953,7 +3203,6 @@ mptsas_scsi_tgt_init(dev_info_t *hba_dip, dev_info_t *tgt_dip,
 		char model[SATA_ID_MODEL_LEN + 1];
 		char fw[SATA_ID_FW_LEN + 1];
 		char *vid, *pid;
-		int i;
 
 		mutex_exit(&mpt->m_mutex);
 		/*
@@ -2982,29 +3231,7 @@ mptsas_scsi_tgt_init(dev_info_t *hba_dip, dev_info_t *tgt_dip,
 		model[SATA_ID_MODEL_LEN] = 0;
 		fw[SATA_ID_FW_LEN] = 0;
 
-		/*
-		 * split model into into vid/pid
-		 */
-		for (i = 0, pid = model; i < SATA_ID_MODEL_LEN; i++, pid++)
-			if ((*pid == ' ') || (*pid == '\t'))
-				break;
-		if (i < SATA_ID_MODEL_LEN) {
-			vid = model;
-			/*
-			 * terminate vid, establish pid
-			 */
-			*pid++ = 0;
-		} else {
-			/*
-			 * vid will stay "ATA     ", the rule is same
-			 * as sata framework implementation.
-			 */
-			vid = NULL;
-			/*
-			 * model is all pid
-			 */
-			pid = model;
-		}
+		sata_split_model(model, &vid, &pid);
 
 		/*
 		 * override SCSA "inquiry-*" properties
@@ -3475,7 +3702,6 @@ mptsas_scsi_init_pkt(struct scsi_address *ap, struct scsi_pkt *pkt,
 {
 	mptsas_cmd_t		*cmd, *new_cmd;
 	mptsas_t		*mpt = ADDR2MPT(ap);
-	int			failure = 1;
 	uint_t			oldcookiec;
 	mptsas_target_t		*ptgt = NULL;
 	int			rval;
@@ -3511,55 +3737,81 @@ mptsas_scsi_init_pkt(struct scsi_address *ap, struct scsi_pkt *pkt,
 	 */
 	if (pkt == NULL) {
 		ddi_dma_handle_t	save_dma_handle;
-		ddi_dma_handle_t	save_arq_dma_handle;
-		struct buf		*save_arq_bp;
-		ddi_dma_cookie_t	save_arqcookie;
 
 		cmd = kmem_cache_alloc(mpt->m_kmem_cache, kf);
+		if (cmd == NULL)
+			return (NULL);
 
-		if (cmd) {
-			save_dma_handle = cmd->cmd_dmahandle;
-			save_arq_dma_handle = cmd->cmd_arqhandle;
-			save_arq_bp = cmd->cmd_arq_buf;
-			save_arqcookie = cmd->cmd_arqcookie;
-			bzero(cmd, sizeof (*cmd) + scsi_pkt_size());
-			cmd->cmd_dmahandle = save_dma_handle;
-			cmd->cmd_arqhandle = save_arq_dma_handle;
-			cmd->cmd_arq_buf = save_arq_bp;
-			cmd->cmd_arqcookie = save_arqcookie;
+		save_dma_handle = cmd->cmd_dmahandle;
+		bzero(cmd, sizeof (*cmd) + scsi_pkt_size());
+		cmd->cmd_dmahandle = save_dma_handle;
 
-			pkt = (void *)((uchar_t *)cmd +
-			    sizeof (struct mptsas_cmd));
-			pkt->pkt_ha_private = (opaque_t)cmd;
-			pkt->pkt_address = *ap;
-			pkt->pkt_private = (opaque_t)cmd->cmd_pkt_private;
-			pkt->pkt_scbp = (opaque_t)&cmd->cmd_scb;
-			pkt->pkt_cdbp = (opaque_t)&cmd->cmd_cdb;
-			cmd->cmd_pkt = (struct scsi_pkt *)pkt;
-			cmd->cmd_cdblen = (uchar_t)cmdlen;
-			cmd->cmd_scblen = statuslen;
-			cmd->cmd_rqslen = SENSE_LENGTH;
-			cmd->cmd_tgt_addr = ptgt;
-			failure = 0;
-		}
+		pkt = (void *)((uchar_t *)cmd +
+		    sizeof (struct mptsas_cmd));
+		pkt->pkt_ha_private = (opaque_t)cmd;
+		pkt->pkt_address = *ap;
+		pkt->pkt_private = (opaque_t)cmd->cmd_pkt_private;
+		pkt->pkt_scbp = (opaque_t)&cmd->cmd_scb;
+		pkt->pkt_cdbp = (opaque_t)&cmd->cmd_cdb;
+		cmd->cmd_pkt = (struct scsi_pkt *)pkt;
+		cmd->cmd_cdblen = (uchar_t)cmdlen;
+		cmd->cmd_scblen = statuslen;
+		cmd->cmd_rqslen = SENSE_LENGTH;
+		cmd->cmd_tgt_addr = ptgt;
 
-		if (failure || (cmdlen > sizeof (cmd->cmd_cdb)) ||
+		if ((cmdlen > sizeof (cmd->cmd_cdb)) ||
 		    (tgtlen > PKT_PRIV_LEN) ||
 		    (statuslen > EXTCMDS_STATUS_SIZE)) {
-			if (failure == 0) {
-				/*
-				 * if extern alloc fails, all will be
-				 * deallocated, including cmd
-				 */
-				failure = mptsas_pkt_alloc_extern(mpt, cmd,
-				    cmdlen, tgtlen, statuslen, kf);
-			}
-			if (failure) {
-				/*
-				 * if extern allocation fails, it will
-				 * deallocate the new pkt as well
-				 */
+			int failure;
+
+			/*
+			 * We are going to allocate external packet space which
+			 * might include the sense data buffer for DMA so we
+			 * need to increase the reference counter here.  In a
+			 * case the HBA is in reset we just simply free the
+			 * allocated packet and bail out.
+			 */
+			mutex_enter(&mpt->m_mutex);
+			if (mpt->m_in_reset) {
+				mutex_exit(&mpt->m_mutex);
+
+				cmd->cmd_flags = CFLAG_FREE;
+				kmem_cache_free(mpt->m_kmem_cache, cmd);
 				return (NULL);
+			}
+			mpt->m_extreq_sense_refcount++;
+			ASSERT(mpt->m_extreq_sense_refcount > 0);
+			mutex_exit(&mpt->m_mutex);
+
+			/*
+			 * if extern alloc fails, all will be
+			 * deallocated, including cmd
+			 */
+			failure = mptsas_pkt_alloc_extern(mpt, cmd,
+			    cmdlen, tgtlen, statuslen, kf);
+
+			if (failure != 0 || cmd->cmd_extrqslen == 0) {
+				/*
+				 * If the external packet space allocation
+				 * failed, or we didn't allocate the sense
+				 * data buffer for DMA we need to decrease the
+				 * reference counter.
+				 */
+				mutex_enter(&mpt->m_mutex);
+				ASSERT(mpt->m_extreq_sense_refcount > 0);
+				mpt->m_extreq_sense_refcount--;
+				if (mpt->m_extreq_sense_refcount == 0)
+					cv_broadcast(
+					    &mpt->m_extreq_sense_refcount_cv);
+				mutex_exit(&mpt->m_mutex);
+
+				if (failure != 0) {
+					/*
+					 * if extern allocation fails, it will
+					 * deallocate the new pkt as well
+					 */
+					return (NULL);
+				}
 			}
 		}
 		new_cmd = cmd;
@@ -3846,7 +4098,22 @@ mptsas_scsi_destroy_pkt(struct scsi_address *ap, struct scsi_pkt *pkt)
 		cmd->cmd_flags = CFLAG_FREE;
 		kmem_cache_free(mpt->m_kmem_cache, (void *)cmd);
 	} else {
+		boolean_t extrqslen = cmd->cmd_extrqslen != 0;
+
 		mptsas_pkt_destroy_extern(mpt, cmd);
+
+		/*
+		 * If the packet had the sense data buffer for DMA allocated we
+		 * need to decrease the reference counter.
+		 */
+		if (extrqslen) {
+			mutex_enter(&mpt->m_mutex);
+			ASSERT(mpt->m_extreq_sense_refcount > 0);
+			mpt->m_extreq_sense_refcount--;
+			if (mpt->m_extreq_sense_refcount == 0)
+				cv_broadcast(&mpt->m_extreq_sense_refcount_cv);
+			mutex_exit(&mpt->m_mutex);
+		}
 	}
 }
 
@@ -3860,18 +4127,11 @@ mptsas_kmem_cache_constructor(void *buf, void *cdrarg, int kmflags)
 {
 	mptsas_cmd_t		*cmd = buf;
 	mptsas_t		*mpt  = cdrarg;
-	struct scsi_address	ap;
-	uint_t			cookiec;
-	ddi_dma_attr_t		arq_dma_attr;
 	int			(*callback)(caddr_t);
 
 	callback = (kmflags == KM_SLEEP)? DDI_DMA_SLEEP: DDI_DMA_DONTWAIT;
 
 	NDBG4(("mptsas_kmem_cache_constructor"));
-
-	ap.a_hba_tran = mpt->m_tran;
-	ap.a_target = 0;
-	ap.a_lun = 0;
 
 	/*
 	 * allocate a dma handle
@@ -3881,41 +4141,6 @@ mptsas_kmem_cache_constructor(void *buf, void *cdrarg, int kmflags)
 		cmd->cmd_dmahandle = NULL;
 		return (-1);
 	}
-
-	cmd->cmd_arq_buf = scsi_alloc_consistent_buf(&ap, (struct buf *)NULL,
-	    SENSE_LENGTH, B_READ, callback, NULL);
-	if (cmd->cmd_arq_buf == NULL) {
-		ddi_dma_free_handle(&cmd->cmd_dmahandle);
-		cmd->cmd_dmahandle = NULL;
-		return (-1);
-	}
-
-	/*
-	 * allocate a arq handle
-	 */
-	arq_dma_attr = mpt->m_msg_dma_attr;
-	arq_dma_attr.dma_attr_sgllen = 1;
-	if ((ddi_dma_alloc_handle(mpt->m_dip, &arq_dma_attr, callback,
-	    NULL, &cmd->cmd_arqhandle)) != DDI_SUCCESS) {
-		ddi_dma_free_handle(&cmd->cmd_dmahandle);
-		scsi_free_consistent_buf(cmd->cmd_arq_buf);
-		cmd->cmd_dmahandle = NULL;
-		cmd->cmd_arqhandle = NULL;
-		return (-1);
-	}
-
-	if (ddi_dma_buf_bind_handle(cmd->cmd_arqhandle,
-	    cmd->cmd_arq_buf, (DDI_DMA_READ | DDI_DMA_CONSISTENT),
-	    callback, NULL, &cmd->cmd_arqcookie, &cookiec) != DDI_SUCCESS) {
-		ddi_dma_free_handle(&cmd->cmd_dmahandle);
-		ddi_dma_free_handle(&cmd->cmd_arqhandle);
-		scsi_free_consistent_buf(cmd->cmd_arq_buf);
-		cmd->cmd_dmahandle = NULL;
-		cmd->cmd_arqhandle = NULL;
-		cmd->cmd_arq_buf = NULL;
-		return (-1);
-	}
-
 	return (0);
 }
 
@@ -3929,15 +4154,6 @@ mptsas_kmem_cache_destructor(void *buf, void *cdrarg)
 
 	NDBG4(("mptsas_kmem_cache_destructor"));
 
-	if (cmd->cmd_arqhandle) {
-		(void) ddi_dma_unbind_handle(cmd->cmd_arqhandle);
-		ddi_dma_free_handle(&cmd->cmd_arqhandle);
-		cmd->cmd_arqhandle = NULL;
-	}
-	if (cmd->cmd_arq_buf) {
-		scsi_free_consistent_buf(cmd->cmd_arq_buf);
-		cmd->cmd_arq_buf = NULL;
-	}
 	if (cmd->cmd_dmahandle) {
 		ddi_dma_free_handle(&cmd->cmd_dmahandle);
 		cmd->cmd_dmahandle = NULL;
@@ -3995,7 +4211,7 @@ mptsas_cache_frames_constructor(void *buf, void *cdrarg, int kmflags)
 	 * address to dma to and from the driver.  The second
 	 * address is the address mpt uses to fill in the SGL.
 	 */
-	p->m_phys_addr = cookie.dmac_address;
+	p->m_phys_addr = cookie.dmac_laddress;
 
 	return (DDI_SUCCESS);
 }
@@ -4011,12 +4227,44 @@ mptsas_cache_frames_destructor(void *buf, void *cdrarg)
 		(void) ddi_dma_unbind_handle(p->m_dma_hdl);
 		(void) ddi_dma_mem_free(&p->m_acc_hdl);
 		ddi_dma_free_handle(&p->m_dma_hdl);
-		p->m_phys_addr = NULL;
+		p->m_phys_addr = 0;
 		p->m_frames_addr = NULL;
 		p->m_dma_hdl = NULL;
 		p->m_acc_hdl = NULL;
 	}
 
+}
+
+/*
+ * Figure out if we need to use a different method for the request
+ * sense buffer and allocate from the map if necessary.
+ */
+static boolean_t
+mptsas_cmdarqsize(mptsas_t *mpt, mptsas_cmd_t *cmd, size_t senselength, int kf)
+{
+	if (senselength > mpt->m_req_sense_size) {
+		unsigned long i;
+
+		/* Sense length is limited to an 8 bit value in MPI Spec. */
+		if (senselength > 255)
+			senselength = 255;
+		cmd->cmd_extrqschunks = (senselength +
+		    (mpt->m_req_sense_size - 1))/mpt->m_req_sense_size;
+		i = (kf == KM_SLEEP ? rmalloc_wait : rmalloc)
+		    (mpt->m_erqsense_map, cmd->cmd_extrqschunks);
+
+		if (i == 0)
+			return (B_FALSE);
+
+		cmd->cmd_extrqslen = (uint16_t)senselength;
+		cmd->cmd_extrqsidx = i - 1;
+		cmd->cmd_arq_buf = mpt->m_extreq_sense +
+		    (cmd->cmd_extrqsidx * mpt->m_req_sense_size);
+	} else {
+		cmd->cmd_rqslen = (uchar_t)senselength;
+	}
+
+	return (B_TRUE);
 }
 
 /*
@@ -4030,12 +4278,6 @@ mptsas_pkt_alloc_extern(mptsas_t *mpt, mptsas_cmd_t *cmd,
     int cmdlen, int tgtlen, int statuslen, int kf)
 {
 	caddr_t			cdbp, scbp, tgt;
-	int			(*callback)(caddr_t) = (kf == KM_SLEEP) ?
-	    DDI_DMA_SLEEP : DDI_DMA_DONTWAIT;
-	struct scsi_address	ap;
-	size_t			senselength;
-	ddi_dma_attr_t		ext_arq_dma_attr;
-	uint_t			cookiec;
 
 	NDBG3(("mptsas_pkt_alloc_extern: "
 	    "cmd=0x%p cmdlen=%d tgtlen=%d statuslen=%d kf=%x",
@@ -4067,41 +4309,10 @@ mptsas_pkt_alloc_extern(mptsas_t *mpt, mptsas_cmd_t *cmd,
 		cmd->cmd_pkt->pkt_scbp = (opaque_t)scbp;
 
 		/* allocate sense data buf for DMA */
-
-		senselength = statuslen - MPTSAS_GET_ITEM_OFF(
-		    struct scsi_arq_status, sts_sensedata);
-		cmd->cmd_rqslen = (uchar_t)senselength;
-
-		ap.a_hba_tran = mpt->m_tran;
-		ap.a_target = 0;
-		ap.a_lun = 0;
-
-		cmd->cmd_ext_arq_buf = scsi_alloc_consistent_buf(&ap,
-		    (struct buf *)NULL, senselength, B_READ,
-		    callback, NULL);
-
-		if (cmd->cmd_ext_arq_buf == NULL) {
+		if (mptsas_cmdarqsize(mpt, cmd, statuslen -
+		    MPTSAS_GET_ITEM_OFF(struct scsi_arq_status, sts_sensedata),
+		    kf) == B_FALSE)
 			goto fail;
-		}
-		/*
-		 * allocate a extern arq handle and bind the buf
-		 */
-		ext_arq_dma_attr = mpt->m_msg_dma_attr;
-		ext_arq_dma_attr.dma_attr_sgllen = 1;
-		if ((ddi_dma_alloc_handle(mpt->m_dip,
-		    &ext_arq_dma_attr, callback,
-		    NULL, &cmd->cmd_ext_arqhandle)) != DDI_SUCCESS) {
-			goto fail;
-		}
-
-		if (ddi_dma_buf_bind_handle(cmd->cmd_ext_arqhandle,
-		    cmd->cmd_ext_arq_buf, (DDI_DMA_READ | DDI_DMA_CONSISTENT),
-		    callback, NULL, &cmd->cmd_ext_arqcookie,
-		    &cookiec)
-		    != DDI_SUCCESS) {
-			goto fail;
-		}
-		cmd->cmd_flags |= CFLAG_EXTARQBUFVALID;
 	}
 	return (0);
 fail:
@@ -4123,20 +4334,15 @@ mptsas_pkt_destroy_extern(mptsas_t *mpt, mptsas_cmd_t *cmd)
 		_NOTE(NOT_REACHED)
 		/* NOTREACHED */
 	}
+	if (cmd->cmd_extrqslen != 0) {
+		rmfree(mpt->m_erqsense_map, cmd->cmd_extrqschunks,
+		    cmd->cmd_extrqsidx + 1);
+	}
 	if (cmd->cmd_flags & CFLAG_CDBEXTERN) {
 		kmem_free(cmd->cmd_pkt->pkt_cdbp, (size_t)cmd->cmd_cdblen);
 	}
 	if (cmd->cmd_flags & CFLAG_SCBEXTERN) {
 		kmem_free(cmd->cmd_pkt->pkt_scbp, (size_t)cmd->cmd_scblen);
-		if (cmd->cmd_flags & CFLAG_EXTARQBUFVALID) {
-			(void) ddi_dma_unbind_handle(cmd->cmd_ext_arqhandle);
-		}
-		if (cmd->cmd_ext_arqhandle) {
-			ddi_dma_free_handle(&cmd->cmd_ext_arqhandle);
-			cmd->cmd_ext_arqhandle = NULL;
-		}
-		if (cmd->cmd_ext_arq_buf)
-			scsi_free_consistent_buf(cmd->cmd_ext_arq_buf);
 	}
 	if (cmd->cmd_flags & CFLAG_PRIVEXTERN) {
 		kmem_free(cmd->cmd_pkt->pkt_private, (size_t)cmd->cmd_privlen);
@@ -4180,11 +4386,6 @@ mptsas_scsi_dmafree(struct scsi_address *ap, struct scsi_pkt *pkt)
 	if (cmd->cmd_flags & CFLAG_DMAVALID) {
 		(void) ddi_dma_unbind_handle(cmd->cmd_dmahandle);
 		cmd->cmd_flags &= ~CFLAG_DMAVALID;
-	}
-
-	if (cmd->cmd_flags & CFLAG_EXTARQBUFVALID) {
-		(void) ddi_dma_unbind_handle(cmd->cmd_ext_arqhandle);
-		cmd->cmd_flags &= ~CFLAG_EXTARQBUFVALID;
 	}
 
 	mptsas_free_extra_sgl_frame(mpt, cmd);
@@ -4252,6 +4453,7 @@ mptsas_sge_chain(mptsas_t *mpt, mptsas_cmd_t *cmd,
 {
 	pMpi2SGESimple64_t	sge;
 	pMpi2SGEChain64_t	sgechain;
+	uint64_t		nframe_phys_addr;
 	uint_t			cookiec;
 	mptti_t			*dmap;
 	uint32_t		flags;
@@ -4375,10 +4577,8 @@ mptsas_sge_chain(mptsas_t *mpt, mptsas_cmd_t *cmd,
 	p = cmd->cmd_extra_frames;
 
 	ddi_put16(acc_hdl, &sgechain->Length, chainlength);
-	ddi_put32(acc_hdl, &sgechain->Address.Low,
-	    p->m_phys_addr);
-	/* SGL is allocated in the first 4G mem range */
-	ddi_put32(acc_hdl, &sgechain->Address.High, 0);
+	ddi_put32(acc_hdl, &sgechain->Address.Low, p->m_phys_addr);
+	ddi_put32(acc_hdl, &sgechain->Address.High, p->m_phys_addr >> 32);
 
 	/*
 	 * If there are more than 2 frames left we have to
@@ -4436,12 +4636,14 @@ mptsas_sge_chain(mptsas_t *mpt, mptsas_cmd_t *cmd,
 				 * Note that frames are in contiguous
 				 * memory space.
 				 */
+				nframe_phys_addr = p->m_phys_addr +
+				    (mpt->m_req_frame_size * k);
 				ddi_put32(p->m_acc_hdl,
 				    &sgechain->Address.Low,
-				    (p->m_phys_addr +
-				    (mpt->m_req_frame_size * k)));
+				    nframe_phys_addr);
 				ddi_put32(p->m_acc_hdl,
-				    &sgechain->Address.High, 0);
+				    &sgechain->Address.High,
+				    nframe_phys_addr >> 32);
 
 				/*
 				 * If there are more than 2 frames left
@@ -4591,6 +4793,7 @@ mptsas_ieee_sge_chain(mptsas_t *mpt, mptsas_cmd_t *cmd,
 {
 	pMpi2IeeeSgeSimple64_t	ieeesge;
 	pMpi25IeeeSgeChain64_t	ieeesgechain;
+	uint64_t		nframe_phys_addr;
 	uint_t			cookiec;
 	mptti_t			*dmap;
 	uint8_t			flags;
@@ -4710,10 +4913,8 @@ mptsas_ieee_sge_chain(mptsas_t *mpt, mptsas_cmd_t *cmd,
 	p = cmd->cmd_extra_frames;
 
 	ddi_put32(acc_hdl, &ieeesgechain->Length, chainlength);
-	ddi_put32(acc_hdl, &ieeesgechain->Address.Low,
-	    p->m_phys_addr);
-	/* SGL is allocated in the first 4G mem range */
-	ddi_put32(acc_hdl, &ieeesgechain->Address.High, 0);
+	ddi_put32(acc_hdl, &ieeesgechain->Address.Low, p->m_phys_addr);
+	ddi_put32(acc_hdl, &ieeesgechain->Address.High, p->m_phys_addr >> 32);
 
 	/*
 	 * If there are more than 2 frames left we have to
@@ -4770,12 +4971,14 @@ mptsas_ieee_sge_chain(mptsas_t *mpt, mptsas_cmd_t *cmd,
 				 * Note that frames are in contiguous
 				 * memory space.
 				 */
+				nframe_phys_addr = p->m_phys_addr +
+				    (mpt->m_req_frame_size * k);
 				ddi_put32(p->m_acc_hdl,
 				    &ieeesgechain->Address.Low,
-				    (p->m_phys_addr +
-				    (mpt->m_req_frame_size * k)));
+				    nframe_phys_addr);
 				ddi_put32(p->m_acc_hdl,
-				    &ieeesgechain->Address.High, 0);
+				    &ieeesgechain->Address.High,
+				    nframe_phys_addr >> 32);
 
 				/*
 				 * If there are more than 2 frames left
@@ -5126,7 +5329,7 @@ mptsas_handle_address_reply(mptsas_t *mpt,
 	pMpi2AddressReplyDescriptor_t	address_reply;
 	pMPI2DefaultReply_t		reply;
 	mptsas_fw_diagnostic_buffer_t	*pBuffer;
-	uint32_t			reply_addr;
+	uint32_t			reply_addr, reply_frame_dma_baseaddr;
 	uint16_t			SMID, iocstatus;
 	mptsas_slots_t			*slots = mpt->m_active;
 	mptsas_cmd_t			*cmd = NULL;
@@ -5145,10 +5348,11 @@ mptsas_handle_address_reply(mptsas_t *mpt,
 	 * If reply frame is not in the proper range we should ignore this
 	 * message and exit the interrupt handler.
 	 */
-	if ((reply_addr < mpt->m_reply_frame_dma_addr) ||
-	    (reply_addr >= (mpt->m_reply_frame_dma_addr +
+	reply_frame_dma_baseaddr = mpt->m_reply_frame_dma_addr & 0xffffffffu;
+	if ((reply_addr < reply_frame_dma_baseaddr) ||
+	    (reply_addr >= (reply_frame_dma_baseaddr +
 	    (mpt->m_reply_frame_size * mpt->m_max_replies))) ||
-	    ((reply_addr - mpt->m_reply_frame_dma_addr) %
+	    ((reply_addr - reply_frame_dma_baseaddr) %
 	    mpt->m_reply_frame_size != 0)) {
 		mptsas_log(mpt, CE_WARN, "?Received invalid reply frame "
 		    "address 0x%x\n", reply_addr);
@@ -5159,7 +5363,7 @@ mptsas_handle_address_reply(mptsas_t *mpt,
 	(void) ddi_dma_sync(mpt->m_dma_reply_frame_hdl, 0, 0,
 	    DDI_DMA_SYNC_FORCPU);
 	reply = (pMPI2DefaultReply_t)(mpt->m_reply_frame + (reply_addr -
-	    mpt->m_reply_frame_dma_addr));
+	    reply_frame_dma_baseaddr));
 	function = ddi_get8(mpt->m_acc_reply_frame_hdl, &reply->Function);
 
 	NDBG31(("mptsas_handle_address_reply: function 0x%x, reply_addr=0x%x",
@@ -5224,7 +5428,7 @@ mptsas_handle_address_reply(mptsas_t *mpt,
 		cv_signal(&mpt->m_fw_cv);
 		break;
 	case MPI2_FUNCTION_EVENT_NOTIFICATION:
-		reply_frame_no = (reply_addr - mpt->m_reply_frame_dma_addr) /
+		reply_frame_no = (reply_addr - reply_frame_dma_baseaddr) /
 		    mpt->m_reply_frame_size;
 		args = &mpt->m_replyh_args[reply_frame_no];
 		args->mpt = (void *)mpt;
@@ -5349,28 +5553,24 @@ mptsas_handle_address_reply(mptsas_t *mpt,
 	}
 }
 
+#ifdef MPTSAS_DEBUG
+static uint8_t mptsas_last_sense[256];
+#endif
+
 static void
 mptsas_check_scsi_io_error(mptsas_t *mpt, pMpi2SCSIIOReply_t reply,
     mptsas_cmd_t *cmd)
 {
 	uint8_t			scsi_status, scsi_state;
-	uint16_t		ioc_status;
+	uint16_t		ioc_status, cmd_rqs_len;
 	uint32_t		xferred, sensecount, responsedata, loginfo = 0;
 	struct scsi_pkt		*pkt;
 	struct scsi_arq_status	*arqstat;
-	struct buf		*bp;
 	mptsas_target_t		*ptgt = cmd->cmd_tgt_addr;
 	uint8_t			*sensedata = NULL;
 	uint64_t		sas_wwn;
 	uint8_t			phy;
 	char			wwn_str[MPTSAS_WWN_STRLEN];
-
-	if ((cmd->cmd_flags & (CFLAG_SCBEXTERN | CFLAG_EXTARQBUFVALID)) ==
-	    (CFLAG_SCBEXTERN | CFLAG_EXTARQBUFVALID)) {
-		bp = cmd->cmd_ext_arq_buf;
-	} else {
-		bp = cmd->cmd_arq_buf;
-	}
 
 	scsi_status = ddi_get8(mpt->m_acc_reply_frame_hdl, &reply->SCSIStatus);
 	ioc_status = ddi_get16(mpt->m_acc_reply_frame_hdl, &reply->IOCStatus);
@@ -5454,11 +5654,19 @@ mptsas_check_scsi_io_error(mptsas_t *mpt, pMpi2SCSIIOReply_t reply,
 		arqstat->sts_rqpkt_state |= STATE_XFERRED_DATA;
 		arqstat->sts_rqpkt_statistics = pkt->pkt_statistics;
 		sensedata = (uint8_t *)&arqstat->sts_sensedata;
-
-		bcopy((uchar_t *)bp->b_un.b_addr, sensedata,
-		    ((cmd->cmd_rqslen >= sensecount) ? sensecount :
-		    cmd->cmd_rqslen));
-		arqstat->sts_rqpkt_resid = (cmd->cmd_rqslen - sensecount);
+		cmd_rqs_len = cmd->cmd_extrqslen ?
+		    cmd->cmd_extrqslen : cmd->cmd_rqslen;
+		(void) ddi_dma_sync(mpt->m_dma_req_sense_hdl, 0, 0,
+		    DDI_DMA_SYNC_FORKERNEL);
+#ifdef MPTSAS_DEBUG
+		bcopy(cmd->cmd_arq_buf, mptsas_last_sense,
+		    ((cmd_rqs_len >= sizeof (mptsas_last_sense)) ?
+		    sizeof (mptsas_last_sense):cmd_rqs_len));
+#endif
+		bcopy((uchar_t *)cmd->cmd_arq_buf, sensedata,
+		    ((cmd_rqs_len >= sensecount) ? sensecount :
+		    cmd_rqs_len));
+		arqstat->sts_rqpkt_resid = (cmd_rqs_len - sensecount);
 		cmd->cmd_flags |= CFLAG_CMDARQ;
 		/*
 		 * Set proper status for pkt if autosense was valid
@@ -5621,7 +5829,7 @@ mptsas_check_scsi_io_error(mptsas_t *mpt, pMpi2SCSIIOReply_t reply,
 
 static void
 mptsas_check_task_mgt(mptsas_t *mpt, pMpi2SCSIManagementReply_t reply,
-	mptsas_cmd_t *cmd)
+    mptsas_cmd_t *cmd)
 {
 	uint8_t		task_type;
 	uint16_t	ioc_status;
@@ -5970,7 +6178,8 @@ mptsas_free_devhdl(mptsas_t *mpt, uint16_t devhdl)
 	req.DevHandle = LE_16(devhdl);
 
 	ret = mptsas_do_passthru(mpt, (uint8_t *)&req, (uint8_t *)&rep, NULL,
-	    sizeof (req), sizeof (rep), NULL, 0, NULL, 0, 60, FKIOCTL);
+	    sizeof (req), sizeof (rep), 0, MPTSAS_PASS_THRU_DIRECTION_NONE,
+	    NULL, 0, 60, FKIOCTL);
 	if (ret != 0) {
 		cmn_err(CE_WARN, "mptsas_free_devhdl: passthru SAS IO Unit "
 		    "Control error %d", ret);
@@ -5985,6 +6194,80 @@ mptsas_free_devhdl(mptsas_t *mpt, uint16_t devhdl)
 	}
 
 	return (DDI_SUCCESS);
+}
+
+/*
+ * We have a SATA target that has changed, which means the "bridge-port"
+ * property must be updated to reflect the SAS WWN of the new attachment point.
+ * This may change if a SATA device changes which bay, and therefore phy, it is
+ * plugged into. This SATA device may be a multipath virtual device or may be a
+ * physical device. We have to handle both cases.
+ */
+static boolean_t
+mptsas_update_sata_bridge(mptsas_t *mpt, dev_info_t *parent,
+    mptsas_target_t *ptgt)
+{
+	int			rval;
+	uint16_t		dev_hdl;
+	uint16_t		pdev_hdl;
+	uint64_t		dev_sas_wwn;
+	uint8_t			physport;
+	uint8_t			phy_id;
+	uint32_t		page_address;
+	uint16_t		bay_num, enclosure, io_flags;
+	uint32_t		dev_info;
+	char			uabuf[SCSI_WWN_BUFLEN];
+	dev_info_t		*dip;
+	mdi_pathinfo_t		*pip;
+
+	mutex_enter(&mpt->m_mutex);
+	page_address = (MPI2_SAS_DEVICE_PGAD_FORM_HANDLE &
+	    MPI2_SAS_DEVICE_PGAD_FORM_MASK) | (uint32_t)ptgt->m_devhdl;
+	rval = mptsas_get_sas_device_page0(mpt, page_address, &dev_hdl,
+	    &dev_sas_wwn, &dev_info, &physport, &phy_id, &pdev_hdl, &bay_num,
+	    &enclosure, &io_flags);
+	mutex_exit(&mpt->m_mutex);
+	if (rval != DDI_SUCCESS) {
+		mptsas_log(mpt, CE_WARN, "unable to get SAS page 0 for "
+		    "handle %d", page_address);
+		return (B_FALSE);
+	}
+
+	if (scsi_wwn_to_wwnstr(dev_sas_wwn, 1, uabuf) == NULL) {
+		mptsas_log(mpt, CE_WARN,
+		    "mptsas unable to format SATA bridge WWN");
+		return (B_FALSE);
+	}
+
+	if (mpt->m_mpxio_enable == TRUE && (pip = mptsas_find_path_addr(parent,
+	    ptgt->m_addr.mta_wwn, 0)) != NULL) {
+		if (mdi_prop_update_string(pip, SCSI_ADDR_PROP_BRIDGE_PORT,
+		    uabuf) != DDI_SUCCESS) {
+			mptsas_log(mpt, CE_WARN,
+			    "mptsas unable to create SCSI bridge port "
+			    "property for SATA device");
+			return (B_FALSE);
+		}
+		return (B_TRUE);
+	}
+
+	if ((dip = mptsas_find_child_addr(parent, ptgt->m_addr.mta_wwn,
+	    0)) != NULL) {
+		if (ndi_prop_update_string(DDI_DEV_T_NONE, dip,
+		    SCSI_ADDR_PROP_BRIDGE_PORT, uabuf) != DDI_PROP_SUCCESS) {
+			mptsas_log(mpt, CE_WARN,
+			    "mptsas unable to create SCSI bridge port "
+			    "property for SATA device");
+			return (B_FALSE);
+		}
+		return (B_TRUE);
+	}
+
+	mptsas_log(mpt, CE_WARN, "mptsas failed to find dev_info_t or "
+	    "mdi_pathinfo_t for target with WWN %016" PRIx64,
+	    ptgt->m_addr.mta_wwn);
+
+	return (B_FALSE);
 }
 
 static void
@@ -6055,7 +6338,8 @@ mptsas_update_phymask(mptsas_t *mpt)
  * 7. Physical disks are removed because of RAID creation.
  */
 static void
-mptsas_handle_dr(void *args) {
+mptsas_handle_dr(void *args)
+{
 	mptsas_topo_change_list_t	*topo_node = NULL;
 	mptsas_topo_change_list_t	*save_node = NULL;
 	mptsas_t			*mpt;
@@ -6214,10 +6498,11 @@ handle_topo_change:
 		 * If HBA is being reset, don't perform operations depending
 		 * on the IOC. We must free the topo list, however.
 		 */
-		if (!mpt->m_in_reset)
+		if (!mpt->m_in_reset) {
 			mptsas_handle_topo_change(topo_node, parent);
-		else
+		} else {
 			NDBG20(("skipping topo change received during reset"));
+		}
 		save_node = topo_node;
 		topo_node = topo_node->next;
 		ASSERT(save_node);
@@ -6309,10 +6594,15 @@ mptsas_handle_topo_change(mptsas_topo_change_list_t *topo_node,
 				mptsas_log(mpt, CE_NOTE,
 				    "mptsas_handle_topo_change: could not "
 				    "allocate memory. \n");
+			} else if (rval == DEV_INFO_FAIL_GUID) {
+				mptsas_log(mpt, CE_NOTE,
+				    "mptsas_handle_topo_change: could not "
+				    "get SATA GUID for target %d. \n",
+				    topo_node->devhdl);
 			}
 			/*
-			 * If rval is DEV_INFO_PHYS_DISK than there is nothing
-			 * else to do, just leave.
+			 * If rval is DEV_INFO_PHYS_DISK or indicates failure
+			 * then there is nothing else to do, just leave.
 			 */
 			if (rval != DEV_INFO_SUCCESS) {
 				return;
@@ -6358,6 +6648,21 @@ mptsas_handle_topo_change(mptsas_topo_change_list_t *topo_node,
 			ndi_devi_exit(scsi_vhci_dip, circ);
 
 			/*
+			 * If this is a SATA device, make sure that the
+			 * bridge-port (the SAS WWN that the SATA device is
+			 * plugged into) is updated. This may change if a SATA
+			 * device changes which bay, and therefore phy, it is
+			 * plugged into.
+			 */
+			if (IS_SATA_DEVICE(ptgt->m_deviceinfo)) {
+				if (!mptsas_update_sata_bridge(mpt, parent,
+				    ptgt)) {
+					mutex_enter(&mpt->m_mutex);
+					return;
+				}
+			}
+
+			/*
 			 * Add parent's props for SMHBA support
 			 */
 			if (flags == MPTSAS_TOPO_FLAG_DIRECT_ATTACHED_DEVICE) {
@@ -6375,6 +6680,7 @@ mptsas_handle_topo_change(mptsas_topo_change_list_t *topo_node,
 					    SCSI_ADDR_PROP_ATTACHED_PORT);
 					mptsas_log(mpt, CE_WARN, "Failed to"
 					    "attached-port props");
+					mutex_enter(&mpt->m_mutex);
 					return;
 				}
 				if (ddi_prop_update_int(DDI_DEV_T_NONE, parent,
@@ -6384,6 +6690,7 @@ mptsas_handle_topo_change(mptsas_topo_change_list_t *topo_node,
 					    parent, MPTSAS_NUM_PHYS);
 					mptsas_log(mpt, CE_WARN, "Failed to"
 					    " create num-phys props");
+					mutex_enter(&mpt->m_mutex);
 					return;
 				}
 
@@ -6392,7 +6699,6 @@ mptsas_handle_topo_change(mptsas_topo_change_list_t *topo_node,
 				 */
 				mutex_enter(&mpt->m_mutex);
 				if (mptsas_smhba_phy_init(mpt)) {
-					mutex_exit(&mpt->m_mutex);
 					mptsas_log(mpt, CE_WARN, "mptsas phy"
 					    " update failed");
 					return;
@@ -6414,6 +6720,7 @@ mptsas_handle_topo_change(mptsas_topo_change_list_t *topo_node,
 					mptsas_log(mpt, CE_WARN,
 					    "mptsas virtual-port"
 					    "port prop update failed");
+					mutex_enter(&mpt->m_mutex);
 					return;
 				}
 			}
@@ -6491,6 +6798,7 @@ mptsas_handle_topo_change(mptsas_topo_change_list_t *topo_node,
 				    SCSI_ADDR_PROP_ATTACHED_PORT);
 				mptsas_log(mpt, CE_WARN, "mptsas attached port "
 				    "prop update failed");
+				mutex_enter(&mpt->m_mutex);
 				break;
 			}
 			if (ddi_prop_update_int(DDI_DEV_T_NONE, parent,
@@ -6500,6 +6808,7 @@ mptsas_handle_topo_change(mptsas_topo_change_list_t *topo_node,
 				    MPTSAS_NUM_PHYS);
 				mptsas_log(mpt, CE_WARN, "mptsas num phys "
 				    "prop update failed");
+				mutex_enter(&mpt->m_mutex);
 				break;
 			}
 			if (ddi_prop_update_int(DDI_DEV_T_NONE, parent,
@@ -6509,13 +6818,12 @@ mptsas_handle_topo_change(mptsas_topo_change_list_t *topo_node,
 				    MPTSAS_VIRTUAL_PORT);
 				mptsas_log(mpt, CE_WARN, "mptsas virtual port "
 				    "prop update failed");
+				mutex_enter(&mpt->m_mutex);
 				break;
 			}
 		}
 
 		mutex_enter(&mpt->m_mutex);
-		ptgt->m_led_status = 0;
-		(void) mptsas_flush_led_status(mpt, ptgt);
 		if (rval == DDI_SUCCESS) {
 			refhash_remove(mpt->m_targets, ptgt);
 			ptgt = NULL;
@@ -6628,6 +6936,7 @@ mptsas_handle_topo_change(mptsas_topo_change_list_t *topo_node,
 				    MPTSAS_VIRTUAL_PORT);
 				mptsas_log(mpt, CE_WARN, "mptsas virtual port "
 				    "prop update failed");
+				mutex_enter(&mpt->m_mutex);
 				return;
 			}
 			/*
@@ -6640,6 +6949,7 @@ mptsas_handle_topo_change(mptsas_topo_change_list_t *topo_node,
 				    MPTSAS_NUM_PHYS);
 				mptsas_log(mpt, CE_WARN, "mptsas num phys"
 				    "prop update failed");
+				mutex_enter(&mpt->m_mutex);
 				return;
 			}
 			/*
@@ -6653,6 +6963,7 @@ mptsas_handle_topo_change(mptsas_topo_change_list_t *topo_node,
 				    SCSI_ADDR_PROP_ATTACHED_PORT);
 				mptsas_log(mpt, CE_WARN, "mptsas attached port "
 				    "prop update failed");
+				mutex_enter(&mpt->m_mutex);
 				return;
 			}
 		}
@@ -6694,7 +7005,8 @@ mptsas_record_event(void *args)
 	mpt = replyh_arg->mpt;
 
 	eventreply = (pMpi2EventNotificationReply_t)
-	    (mpt->m_reply_frame + (rfm - mpt->m_reply_frame_dma_addr));
+	    (mpt->m_reply_frame + (rfm -
+	    (mpt->m_reply_frame_dma_addr & 0xffffffffu)));
 	event = ddi_get16(mpt->m_acc_reply_frame_hdl, &eventreply->Event);
 
 
@@ -6782,11 +7094,12 @@ mptsas_handle_event_sync(void *args)
 	ASSERT(mutex_owned(&mpt->m_mutex));
 
 	eventreply = (pMpi2EventNotificationReply_t)
-	    (mpt->m_reply_frame + (rfm - mpt->m_reply_frame_dma_addr));
+	    (mpt->m_reply_frame + (rfm -
+	    (mpt->m_reply_frame_dma_addr & 0xffffffffu)));
 	event = ddi_get16(mpt->m_acc_reply_frame_hdl, &eventreply->Event);
 
-	if (iocstatus = ddi_get16(mpt->m_acc_reply_frame_hdl,
-	    &eventreply->IOCStatus)) {
+	if ((iocstatus = ddi_get16(mpt->m_acc_reply_frame_hdl,
+	    &eventreply->IOCStatus)) != 0) {
 		if (iocstatus == MPI2_IOCSTATUS_FLAG_LOG_INFO_AVAILABLE) {
 			mptsas_log(mpt, CE_WARN,
 			    "!mptsas_handle_event_sync: event 0x%x, "
@@ -7486,11 +7799,12 @@ mptsas_handle_event(void *args)
 	}
 
 	eventreply = (pMpi2EventNotificationReply_t)
-	    (mpt->m_reply_frame + (rfm - mpt->m_reply_frame_dma_addr));
+	    (mpt->m_reply_frame + (rfm -
+	    (mpt->m_reply_frame_dma_addr & 0xffffffffu)));
 	event = ddi_get16(mpt->m_acc_reply_frame_hdl, &eventreply->Event);
 
-	if (iocstatus = ddi_get16(mpt->m_acc_reply_frame_hdl,
-	    &eventreply->IOCStatus)) {
+	if ((iocstatus = ddi_get16(mpt->m_acc_reply_frame_hdl,
+	    &eventreply->IOCStatus)) != 0) {
 		if (iocstatus == MPI2_IOCSTATUS_FLAG_LOG_INFO_AVAILABLE) {
 			mptsas_log(mpt, CE_WARN,
 			    "!mptsas_handle_event: IOCStatus=0x%x, "
@@ -7584,18 +7898,29 @@ mptsas_handle_event(void *args)
 	{
 		pMpi2EventDataSasEnclDevStatusChange_t	encstatus;
 		uint8_t					rc;
+		uint16_t				enchdl;
 		char					string[80];
+		mptsas_enclosure_t			*mep;
 
 		encstatus = (pMpi2EventDataSasEnclDevStatusChange_t)
 		    eventreply->EventData;
 
 		rc = ddi_get8(mpt->m_acc_reply_frame_hdl,
 		    &encstatus->ReasonCode);
+		enchdl = ddi_get16(mpt->m_acc_reply_frame_hdl,
+		    &encstatus->EnclosureHandle);
+
 		switch (rc) {
 		case MPI2_EVENT_SAS_ENCL_RC_ADDED:
 			(void) sprintf(string, "added");
 			break;
 		case MPI2_EVENT_SAS_ENCL_RC_NOT_RESPONDING:
+			mep = mptsas_enc_lookup(mpt, enchdl);
+			if (mep != NULL) {
+				list_remove(&mpt->m_enclosures, mep);
+				mptsas_enc_free(mep);
+				mep = NULL;
+			}
 			(void) sprintf(string, ", not responding");
 			break;
 		default:
@@ -7605,6 +7930,13 @@ mptsas_handle_event(void *args)
 		    "%x%s\n", mpt->m_instance,
 		    ddi_get16(mpt->m_acc_reply_frame_hdl,
 		    &encstatus->EnclosureHandle), string));
+
+		/*
+		 * No matter what has happened, update all of our device state
+		 * for enclosures, by retriggering an evaluation.
+		 */
+		mpt->m_done_traverse_enc = 0;
+		mptsas_update_hashtab(mpt);
 		break;
 	}
 
@@ -8007,6 +8339,60 @@ mptsas_handle_event(void *args)
 		}
 		break;
 	}
+	case MPI2_EVENT_ACTIVE_CABLE_EXCEPTION:
+	{
+		pMpi26EventDataActiveCableExcept_t	actcable;
+		uint32_t power;
+		uint8_t reason, id;
+
+		actcable = (pMpi26EventDataActiveCableExcept_t)
+		    eventreply->EventData;
+		power = ddi_get32(mpt->m_acc_reply_frame_hdl,
+		    &actcable->ActiveCablePowerRequirement);
+		reason = ddi_get8(mpt->m_acc_reply_frame_hdl,
+		    &actcable->ReasonCode);
+		id = ddi_get8(mpt->m_acc_reply_frame_hdl,
+		    &actcable->ReceptacleID);
+
+		/*
+		 * It'd be nice if this weren't just logging to the system but
+		 * were telling FMA about the active cable problem and FMA was
+		 * aware of the cable topology and state.
+		 */
+		switch (reason) {
+		case MPI26_EVENT_ACTIVE_CABLE_PRESENT:
+			/* Don't log anything if it's fine */
+			break;
+		case MPI26_EVENT_ACTIVE_CABLE_INSUFFICIENT_POWER:
+			mptsas_log(mpt, CE_WARN, "An active cable (id %u) does "
+			    "not have sufficient power to be enabled. "
+			    "Devices connected to this cable will not be "
+			    "visible to the system.", id);
+			if (power == UINT32_MAX) {
+				mptsas_log(mpt, CE_CONT, "The cable's power "
+				    "requirements are unknown.\n");
+			} else {
+				mptsas_log(mpt, CE_CONT, "The cable requires "
+				    "%u mW of power to function.\n", power);
+			}
+			break;
+		case MPI26_EVENT_ACTIVE_CABLE_DEGRADED:
+			mptsas_log(mpt, CE_WARN, "An active cable (id %u) is "
+			    "degraded and not running at its full speed. "
+			    "Some devices might not appear.", id);
+			break;
+		default:
+			break;
+		}
+		break;
+	}
+	case MPI2_EVENT_PCIE_DEVICE_STATUS_CHANGE:
+	case MPI2_EVENT_PCIE_ENUMERATION:
+	case MPI2_EVENT_PCIE_TOPOLOGY_CHANGE_LIST:
+	case MPI2_EVENT_PCIE_LINK_COUNTER:
+		mptsas_log(mpt, CE_NOTE, "Unhandled mpt_sas PCIe device "
+		    "event received (0x%x)", event);
+		break;
 	default:
 		NDBG20(("mptsas%d: unknown event %x received",
 		    mpt->m_instance, event));
@@ -8271,13 +8657,15 @@ mptsas_start_cmd(mptsas_t *mpt, mptsas_cmd_t *cmd)
 {
 	struct scsi_pkt		*pkt = CMD2PKT(cmd);
 	uint32_t		control = 0;
-	caddr_t			mem;
+	caddr_t			mem, arsbuf;
 	pMpi2SCSIIORequest_t	io_request;
 	ddi_dma_handle_t	dma_hdl = mpt->m_dma_req_frame_hdl;
 	ddi_acc_handle_t	acc_hdl = mpt->m_acc_req_frame_hdl;
 	mptsas_target_t		*ptgt = cmd->cmd_tgt_addr;
 	uint16_t		SMID, io_flags = 0;
-	uint32_t		request_desc_low, request_desc_high;
+	uint8_t			ars_size;
+	uint64_t		request_desc;
+	uint32_t		ars_dmaaddrlow;
 	mptsas_cmd_t		*c;
 
 	NDBG1(("mptsas_start_cmd: cmd=0x%p, flags 0x%x", (void *)cmd,
@@ -8354,8 +8742,27 @@ mptsas_start_cmd(mptsas_t *mpt, mptsas_cmd_t *cmd)
 
 	mem = mpt->m_req_frame + (mpt->m_req_frame_size * SMID);
 	io_request = (pMpi2SCSIIORequest_t)mem;
-
+	if (cmd->cmd_extrqslen != 0) {
+		/*
+		 * Mapping of the buffer was done in mptsas_pkt_alloc_extern().
+		 * Calculate the DMA address with the same offset.
+		 */
+		arsbuf = cmd->cmd_arq_buf;
+		ars_size = cmd->cmd_extrqslen;
+		ars_dmaaddrlow = (mpt->m_req_sense_dma_addr +
+		    ((uintptr_t)arsbuf - (uintptr_t)mpt->m_req_sense)) &
+		    0xffffffffu;
+	} else {
+		arsbuf = mpt->m_req_sense + (mpt->m_req_sense_size * (SMID-1));
+		cmd->cmd_arq_buf = arsbuf;
+		ars_size = mpt->m_req_sense_size;
+		ars_dmaaddrlow = (mpt->m_req_sense_dma_addr +
+		    (mpt->m_req_sense_size * (SMID-1))) &
+		    0xffffffffu;
+	}
 	bzero(io_request, sizeof (Mpi2SCSIIORequest_t));
+	bzero(arsbuf, ars_size);
+
 	ddi_put8(acc_hdl, &io_request->SGLOffset0, offsetof
 	    (MPI2_SCSI_IO_REQUEST, SGL) / 4);
 	mptsas_init_std_hdr(acc_hdl, io_request, ptgt->m_devhdl, Lun(cmd), 0,
@@ -8368,9 +8775,9 @@ mptsas_start_cmd(mptsas_t *mpt, mptsas_cmd_t *cmd)
 	if (mptsas_use_fastpath &&
 	    ptgt->m_io_flags & MPI25_SAS_DEVICE0_FLAGS_ENABLED_FAST_PATH) {
 		io_flags |= MPI25_SCSIIO_IOFLAGS_FAST_PATH;
-		request_desc_low = MPI25_REQ_DESCRIPT_FLAGS_FAST_PATH_SCSI_IO;
+		request_desc = MPI25_REQ_DESCRIPT_FLAGS_FAST_PATH_SCSI_IO;
 	} else {
-		request_desc_low = MPI2_REQ_DESCRIPT_FLAGS_SCSI_IO;
+		request_desc = MPI2_REQ_DESCRIPT_FLAGS_SCSI_IO;
 	}
 	ddi_put16(acc_hdl, &io_request->IoFlags, io_flags);
 	/*
@@ -8389,15 +8796,8 @@ mptsas_start_cmd(mptsas_t *mpt, mptsas_cmd_t *cmd)
 	/*
 	 * save ARQ information
 	 */
-	ddi_put8(acc_hdl, &io_request->SenseBufferLength, cmd->cmd_rqslen);
-	if ((cmd->cmd_flags & (CFLAG_SCBEXTERN | CFLAG_EXTARQBUFVALID)) ==
-	    (CFLAG_SCBEXTERN | CFLAG_EXTARQBUFVALID)) {
-		ddi_put32(acc_hdl, &io_request->SenseBufferLowAddress,
-		    cmd->cmd_ext_arqcookie.dmac_address);
-	} else {
-		ddi_put32(acc_hdl, &io_request->SenseBufferLowAddress,
-		    cmd->cmd_arqcookie.dmac_address);
-	}
+	ddi_put8(acc_hdl, &io_request->SenseBufferLength, ars_size);
+	ddi_put32(acc_hdl, &io_request->SenseBufferLowAddress, ars_dmaaddrlow);
 
 	ddi_put32(acc_hdl, &io_request->Control, control);
 
@@ -8405,13 +8805,15 @@ mptsas_start_cmd(mptsas_t *mpt, mptsas_cmd_t *cmd)
 	    SMID, (void *)io_request, (void *)cmd));
 
 	(void) ddi_dma_sync(dma_hdl, 0, 0, DDI_DMA_SYNC_FORDEV);
+	(void) ddi_dma_sync(mpt->m_dma_req_sense_hdl, 0, 0,
+	    DDI_DMA_SYNC_FORDEV);
 
 	/*
 	 * Build request descriptor and write it to the request desc post reg.
 	 */
-	request_desc_low |= (SMID << 16);
-	request_desc_high = ptgt->m_devhdl << 16;
-	MPTSAS_START_CMD(mpt, request_desc_low, request_desc_high);
+	request_desc |= (SMID << 16);
+	request_desc |= (uint64_t)ptgt->m_devhdl << 48;
+	MPTSAS_START_CMD(mpt, request_desc);
 
 	/*
 	 * Start timeout.
@@ -8531,6 +8933,8 @@ mptsas_fma_check(mptsas_t *mpt, mptsas_cmd_t *cmd)
 	    DDI_SUCCESS) ||
 	    (mptsas_check_acc_handle(mpt->m_acc_req_frame_hdl) !=
 	    DDI_SUCCESS) ||
+	    (mptsas_check_acc_handle(mpt->m_acc_req_sense_hdl) !=
+	    DDI_SUCCESS) ||
 	    (mptsas_check_acc_handle(mpt->m_acc_reply_frame_hdl) !=
 	    DDI_SUCCESS) ||
 	    (mptsas_check_acc_handle(mpt->m_acc_free_queue_hdl) !=
@@ -8549,6 +8953,8 @@ mptsas_fma_check(mptsas_t *mpt, mptsas_cmd_t *cmd)
 		pkt->pkt_statistics = 0;
 	}
 	if ((mptsas_check_dma_handle(mpt->m_dma_req_frame_hdl) !=
+	    DDI_SUCCESS) ||
+	    (mptsas_check_dma_handle(mpt->m_dma_req_sense_hdl) !=
 	    DDI_SUCCESS) ||
 	    (mptsas_check_dma_handle(mpt->m_dma_reply_frame_hdl) !=
 	    DDI_SUCCESS) ||
@@ -8574,18 +8980,6 @@ mptsas_fma_check(mptsas_t *mpt, mptsas_cmd_t *cmd)
 	    DDI_SUCCESS) ||
 	    (mptsas_check_acc_handle(cmd->cmd_extra_frames->m_acc_hdl) !=
 	    DDI_SUCCESS)))) {
-		ddi_fm_service_impact(mpt->m_dip, DDI_SERVICE_UNAFFECTED);
-		pkt->pkt_reason = CMD_TRAN_ERR;
-		pkt->pkt_statistics = 0;
-	}
-	if (cmd->cmd_arqhandle &&
-	    (mptsas_check_dma_handle(cmd->cmd_arqhandle) != DDI_SUCCESS)) {
-		ddi_fm_service_impact(mpt->m_dip, DDI_SERVICE_UNAFFECTED);
-		pkt->pkt_reason = CMD_TRAN_ERR;
-		pkt->pkt_statistics = 0;
-	}
-	if (cmd->cmd_ext_arqhandle &&
-	    (mptsas_check_dma_handle(cmd->cmd_ext_arqhandle) != DDI_SUCCESS)) {
 		ddi_fm_service_impact(mpt->m_dip, DDI_SERVICE_UNAFFECTED);
 		pkt->pkt_reason = CMD_TRAN_ERR;
 		pkt->pkt_statistics = 0;
@@ -8896,7 +9290,7 @@ mptsas_do_scsi_reset(mptsas_t *mpt, uint16_t devhdl)
 
 static int
 mptsas_scsi_reset_notify(struct scsi_address *ap, int flag,
-	void (*callback)(caddr_t), caddr_t arg)
+    void (*callback)(caddr_t), caddr_t arg)
 {
 	mptsas_t	*mpt = ADDR2MPT(ap);
 
@@ -9184,11 +9578,17 @@ mptsas_flush_hba(mptsas_t *mpt)
 	mutex_exit(&mpt->m_tx_waitq_mutex);
 
 	/*
-	 * Drain the taskqs prior to reallocating resources.
+	 * Drain the taskqs prior to reallocating resources. The thread
+	 * passing through here could be launched from either (dr)
+	 * or (event) taskqs so only wait on the 'other' queue since
+	 * waiting on 'this' queue is a deadlock condition.
 	 */
 	mutex_exit(&mpt->m_mutex);
-	ddi_taskq_wait(mpt->m_event_taskq);
-	ddi_taskq_wait(mpt->m_dr_taskq);
+	if (!taskq_member((taskq_t *)mpt->m_event_taskq, curthread))
+		ddi_taskq_wait(mpt->m_event_taskq);
+	if (!taskq_member((taskq_t *)mpt->m_dr_taskq, curthread))
+		ddi_taskq_wait(mpt->m_dr_taskq);
+
 	mutex_enter(&mpt->m_mutex);
 }
 
@@ -9799,6 +10199,61 @@ mptsas_watch(void *arg)
 }
 
 static void
+mptsas_watchsubr_tgt(mptsas_t *mpt, mptsas_target_t *ptgt, hrtime_t timestamp)
+{
+	mptsas_cmd_t	*cmd;
+
+	/*
+	 * If we were draining due to a qfull condition,
+	 * go back to full throttle.
+	 */
+	if ((ptgt->m_t_throttle < MAX_THROTTLE) &&
+	    (ptgt->m_t_throttle > HOLD_THROTTLE) &&
+	    (ptgt->m_t_ncmds < ptgt->m_t_throttle)) {
+		mptsas_set_throttle(mpt, ptgt, MAX_THROTTLE);
+		mptsas_restart_hba(mpt);
+	}
+
+	cmd = TAILQ_LAST(&ptgt->m_active_cmdq, mptsas_active_cmdq);
+	if (cmd == NULL)
+		return;
+
+	if (cmd->cmd_active_expiration <= timestamp) {
+		/*
+		 * Earliest command timeout expired. Drain throttle.
+		 */
+		mptsas_set_throttle(mpt, ptgt, DRAIN_THROTTLE);
+
+		/*
+		 * Check for remaining commands.
+		 */
+		cmd = TAILQ_FIRST(&ptgt->m_active_cmdq);
+		if (cmd->cmd_active_expiration > timestamp) {
+			/*
+			 * Wait for remaining commands to complete or
+			 * time out.
+			 */
+			NDBG23(("command timed out, pending drain"));
+			return;
+		}
+
+		/*
+		 * All command timeouts expired.
+		 */
+		mptsas_log(mpt, CE_NOTE, "Timeout of %d seconds "
+		    "expired with %d commands on target %d lun %d.",
+		    cmd->cmd_pkt->pkt_time, ptgt->m_t_ncmds,
+		    ptgt->m_devhdl, Lun(cmd));
+
+		mptsas_cmd_timeout(mpt, ptgt);
+	} else if (cmd->cmd_active_expiration <=
+	    timestamp + (hrtime_t)mptsas_scsi_watchdog_tick * NANOSEC) {
+		NDBG23(("pending timeout"));
+		mptsas_set_throttle(mpt, ptgt, DRAIN_THROTTLE);
+	}
+}
+
+static void
 mptsas_watchsubr(mptsas_t *mpt)
 {
 	int		i;
@@ -9849,54 +10304,12 @@ mptsas_watchsubr(mptsas_t *mpt)
 
 	for (ptgt = refhash_first(mpt->m_targets); ptgt != NULL;
 	    ptgt = refhash_next(mpt->m_targets, ptgt)) {
-		/*
-		 * If we were draining due to a qfull condition,
-		 * go back to full throttle.
-		 */
-		if ((ptgt->m_t_throttle < MAX_THROTTLE) &&
-		    (ptgt->m_t_throttle > HOLD_THROTTLE) &&
-		    (ptgt->m_t_ncmds < ptgt->m_t_throttle)) {
-			mptsas_set_throttle(mpt, ptgt, MAX_THROTTLE);
-			mptsas_restart_hba(mpt);
-		}
+		mptsas_watchsubr_tgt(mpt, ptgt, timestamp);
+	}
 
-		cmd = TAILQ_LAST(&ptgt->m_active_cmdq, mptsas_active_cmdq);
-		if (cmd == NULL)
-			continue;
-
-		if (cmd->cmd_active_expiration <= timestamp) {
-			/*
-			 * Earliest command timeout expired. Drain throttle.
-			 */
-			mptsas_set_throttle(mpt, ptgt, DRAIN_THROTTLE);
-
-			/*
-			 * Check for remaining commands.
-			 */
-			cmd = TAILQ_FIRST(&ptgt->m_active_cmdq);
-			if (cmd->cmd_active_expiration > timestamp) {
-				/*
-				 * Wait for remaining commands to complete or
-				 * time out.
-				 */
-				NDBG23(("command timed out, pending drain"));
-				continue;
-			}
-
-			/*
-			 * All command timeouts expired.
-			 */
-			mptsas_log(mpt, CE_NOTE, "Timeout of %d seconds "
-			    "expired with %d commands on target %d lun %d.",
-			    cmd->cmd_pkt->pkt_time, ptgt->m_t_ncmds,
-			    ptgt->m_devhdl, Lun(cmd));
-
-			mptsas_cmd_timeout(mpt, ptgt);
-		} else if (cmd->cmd_active_expiration <=
-		    timestamp + (hrtime_t)mptsas_scsi_watchdog_tick * NANOSEC) {
-			NDBG23(("pending timeout"));
-			mptsas_set_throttle(mpt, ptgt, DRAIN_THROTTLE);
-		}
+	for (ptgt = refhash_first(mpt->m_tmp_targets); ptgt != NULL;
+	    ptgt = refhash_next(mpt->m_tmp_targets, ptgt)) {
+		mptsas_watchsubr_tgt(mpt, ptgt, timestamp);
 	}
 }
 
@@ -10184,9 +10597,10 @@ mptsas_start_passthru(mptsas_t *mpt, mptsas_cmd_t *cmd)
 	struct scsi_pkt		*pkt = cmd->cmd_pkt;
 	mptsas_pt_request_t	*pt = pkt->pkt_ha_private;
 	uint32_t		request_size;
-	uint32_t		request_desc_low, request_desc_high = 0;
-	uint32_t		i, sense_bufp;
+	uint32_t		i;
+	uint64_t		request_desc = 0;
 	uint8_t			desc_type;
+	uint16_t		SMID;
 	uint8_t			*request, function;
 	ddi_dma_handle_t	dma_hdl = mpt->m_dma_req_frame_hdl;
 	ddi_acc_handle_t	acc_hdl = mpt->m_acc_req_frame_hdl;
@@ -10196,11 +10610,13 @@ mptsas_start_passthru(mptsas_t *mpt, mptsas_cmd_t *cmd)
 	request = pt->request;
 	request_size = pt->request_size;
 
+	SMID = cmd->cmd_slot;
+
 	/*
 	 * Store the passthrough message in memory location
 	 * corresponding to our slot number
 	 */
-	memp = mpt->m_req_frame + (mpt->m_req_frame_size * cmd->cmd_slot);
+	memp = mpt->m_req_frame + (mpt->m_req_frame_size * SMID);
 	request_hdrp = (pMPI2RequestHeader_t)memp;
 	bzero(memp, mpt->m_req_frame_size);
 
@@ -10209,9 +10625,9 @@ mptsas_start_passthru(mptsas_t *mpt, mptsas_cmd_t *cmd)
 	}
 
 	NDBG15(("mptsas_start_passthru: Func 0x%x, MsgFlags 0x%x, "
-	    "size=%d, in %d, out %d", request_hdrp->Function,
+	    "size=%d, in %d, out %d, SMID %d", request_hdrp->Function,
 	    request_hdrp->MsgFlags, request_size,
-	    pt->data_size, pt->dataout_size));
+	    pt->data_size, pt->dataout_size, SMID));
 
 	/*
 	 * Add an SGE, even if the length is zero.
@@ -10230,26 +10646,42 @@ mptsas_start_passthru(mptsas_t *mpt, mptsas_cmd_t *cmd)
 	if ((function == MPI2_FUNCTION_SCSI_IO_REQUEST) ||
 	    (function == MPI2_FUNCTION_RAID_SCSI_IO_PASSTHROUGH)) {
 		pMpi2SCSIIORequest_t	scsi_io_req;
+		caddr_t			arsbuf;
+		uint8_t			ars_size;
+		uint32_t		ars_dmaaddrlow;
 
 		NDBG15(("mptsas_start_passthru: Is SCSI IO Req"));
 		scsi_io_req = (pMpi2SCSIIORequest_t)request_hdrp;
+
+		if (cmd->cmd_extrqslen != 0) {
+			/*
+			 * Mapping of the buffer was done in
+			 * mptsas_do_passthru().
+			 * Calculate the DMA address with the same offset.
+			 */
+			arsbuf = cmd->cmd_arq_buf;
+			ars_size = cmd->cmd_extrqslen;
+			ars_dmaaddrlow = (mpt->m_req_sense_dma_addr +
+			    ((uintptr_t)arsbuf - (uintptr_t)mpt->m_req_sense)) &
+			    0xffffffffu;
+		} else {
+			arsbuf = mpt->m_req_sense +
+			    (mpt->m_req_sense_size * (SMID-1));
+			cmd->cmd_arq_buf = arsbuf;
+			ars_size = mpt->m_req_sense_size;
+			ars_dmaaddrlow = (mpt->m_req_sense_dma_addr +
+			    (mpt->m_req_sense_size * (SMID-1))) &
+			    0xffffffffu;
+		}
+		bzero(arsbuf, ars_size);
+
+		ddi_put8(acc_hdl, &scsi_io_req->SenseBufferLength, ars_size);
+		ddi_put32(acc_hdl, &scsi_io_req->SenseBufferLowAddress,
+		    ars_dmaaddrlow);
+
 		/*
 		 * Put SGE for data and data_out buffer at the end of
 		 * scsi_io_request message header.(64 bytes in total)
-		 * Following above SGEs, the residual space will be
-		 * used by sense data.
-		 */
-		ddi_put8(acc_hdl,
-		    &scsi_io_req->SenseBufferLength,
-		    (uint8_t)(request_size - 64));
-
-		sense_bufp = mpt->m_req_frame_dma_addr +
-		    (mpt->m_req_frame_size * cmd->cmd_slot);
-		sense_bufp += 64;
-		ddi_put32(acc_hdl,
-		    &scsi_io_req->SenseBufferLowAddress, sense_bufp);
-
-		/*
 		 * Set SGLOffset0 value
 		 */
 		ddi_put8(acc_hdl, &scsi_io_req->SGLOffset0,
@@ -10262,9 +10694,11 @@ mptsas_start_passthru(mptsas_t *mpt, mptsas_cmd_t *cmd)
 		 */
 		if (function == MPI2_FUNCTION_SCSI_IO_REQUEST) {
 			desc_type = MPI2_REQ_DESCRIPT_FLAGS_SCSI_IO;
-			request_desc_high = (ddi_get16(acc_hdl,
-			    &scsi_io_req->DevHandle) << 16);
+			request_desc = ((uint64_t)ddi_get16(acc_hdl,
+			    &scsi_io_req->DevHandle) << 48);
 		}
+		(void) ddi_dma_sync(mpt->m_dma_req_sense_hdl, 0, 0,
+		    DDI_DMA_SYNC_FORDEV);
 	}
 
 	/*
@@ -10273,9 +10707,9 @@ mptsas_start_passthru(mptsas_t *mpt, mptsas_cmd_t *cmd)
 	 * finish.
 	 */
 	(void) ddi_dma_sync(dma_hdl, 0, 0, DDI_DMA_SYNC_FORDEV);
-	request_desc_low = (cmd->cmd_slot << 16) + desc_type;
-	cmd->cmd_rfm = NULL;
-	MPTSAS_START_CMD(mpt, request_desc_low, request_desc_high);
+	request_desc |= (SMID << 16) + desc_type;
+	cmd->cmd_rfm = 0;
+	MPTSAS_START_CMD(mpt, request_desc);
 	if ((mptsas_check_dma_handle(dma_hdl) != DDI_SUCCESS) ||
 	    (mptsas_check_acc_handle(acc_hdl) != DDI_SUCCESS)) {
 		ddi_fm_service_impact(mpt->m_dip, DDI_SERVICE_UNAFFECTED);
@@ -10328,15 +10762,17 @@ mpi_pre_fw_download(mptsas_t *mpt, mptsas_pt_request_t *pt)
 
 	pt->sgl_offset = offsetof(MPI2_FW_DOWNLOAD_REQUEST, SGL) +
 	    sizeof (*tcsge);
-	if (pt->request_size != pt->sgl_offset)
+	if (pt->request_size != pt->sgl_offset) {
 		NDBG15(("mpi_pre_fw_download(): Incorrect req size, "
 		    "0x%x, should be 0x%x, dataoutsz 0x%x",
 		    (int)pt->request_size, (int)pt->sgl_offset,
 		    (int)pt->dataout_size));
-	if (pt->data_size < sizeof (MPI2_FW_DOWNLOAD_REPLY))
+	}
+	if (pt->data_size < sizeof (MPI2_FW_DOWNLOAD_REPLY)) {
 		NDBG15(("mpi_pre_fw_download(): Incorrect rep size, "
 		    "0x%x, should be 0x%x", pt->data_size,
 		    (int)sizeof (MPI2_FW_DOWNLOAD_REPLY)));
+	}
 }
 
 /*
@@ -10366,15 +10802,17 @@ mpi_pre_fw_25_download(mptsas_t *mpt, mptsas_pt_request_t *pt)
 	req25->ImageSize = tcsge->ImageSize;
 
 	pt->sgl_offset = offsetof(MPI25_FW_DOWNLOAD_REQUEST, SGL);
-	if (pt->request_size != pt->sgl_offset)
+	if (pt->request_size != pt->sgl_offset) {
 		NDBG15(("mpi_pre_fw_25_download(): Incorrect req size, "
 		    "0x%x, should be 0x%x, dataoutsz 0x%x",
 		    pt->request_size, pt->sgl_offset,
 		    pt->dataout_size));
-	if (pt->data_size < sizeof (MPI2_FW_DOWNLOAD_REPLY))
+	}
+	if (pt->data_size < sizeof (MPI2_FW_DOWNLOAD_REPLY)) {
 		NDBG15(("mpi_pre_fw_25_download(): Incorrect rep size, "
 		    "0x%x, should be 0x%x", pt->data_size,
 		    (int)sizeof (MPI2_FW_UPLOAD_REPLY)));
+	}
 }
 
 /*
@@ -10410,15 +10848,17 @@ mpi_pre_fw_upload(mptsas_t *mpt, mptsas_pt_request_t *pt)
 
 	pt->sgl_offset = offsetof(MPI2_FW_UPLOAD_REQUEST, SGL) +
 	    sizeof (*tcsge);
-	if (pt->request_size != pt->sgl_offset)
+	if (pt->request_size != pt->sgl_offset) {
 		NDBG15(("mpi_pre_fw_upload(): Incorrect req size, "
 		    "0x%x, should be 0x%x, dataoutsz 0x%x",
 		    pt->request_size, pt->sgl_offset,
 		    pt->dataout_size));
-	if (pt->data_size < sizeof (MPI2_FW_UPLOAD_REPLY))
+	}
+	if (pt->data_size < sizeof (MPI2_FW_UPLOAD_REPLY)) {
 		NDBG15(("mpi_pre_fw_upload(): Incorrect rep size, "
 		    "0x%x, should be 0x%x", pt->data_size,
 		    (int)sizeof (MPI2_FW_UPLOAD_REPLY)));
+	}
 }
 
 /*
@@ -10448,15 +10888,17 @@ mpi_pre_fw_25_upload(mptsas_t *mpt, mptsas_pt_request_t *pt)
 	req25->ImageSize = tcsge->ImageSize;
 
 	pt->sgl_offset = offsetof(MPI25_FW_UPLOAD_REQUEST, SGL);
-	if (pt->request_size != pt->sgl_offset)
+	if (pt->request_size != pt->sgl_offset) {
 		NDBG15(("mpi_pre_fw_25_upload(): Incorrect req size, "
 		    "0x%x, should be 0x%x, dataoutsz 0x%x",
 		    pt->request_size, pt->sgl_offset,
 		    pt->dataout_size));
-	if (pt->data_size < sizeof (MPI2_FW_UPLOAD_REPLY))
+	}
+	if (pt->data_size < sizeof (MPI2_FW_UPLOAD_REPLY)) {
 		NDBG15(("mpi_pre_fw_25_upload(): Incorrect rep size, "
 		    "0x%x, should be 0x%x", pt->data_size,
 		    (int)sizeof (MPI2_FW_UPLOAD_REPLY)));
+	}
 }
 
 /*
@@ -10468,16 +10910,18 @@ mpi_pre_ioc_facts(mptsas_t *mpt, mptsas_pt_request_t *pt)
 #ifndef __lock_lint
 	_NOTE(ARGUNUSED(mpt))
 #endif
-	if (pt->request_size != sizeof (MPI2_IOC_FACTS_REQUEST))
+	if (pt->request_size != sizeof (MPI2_IOC_FACTS_REQUEST)) {
 		NDBG15(("mpi_pre_ioc_facts(): Incorrect req size, "
 		    "0x%x, should be 0x%x, dataoutsz 0x%x",
 		    pt->request_size,
 		    (int)sizeof (MPI2_IOC_FACTS_REQUEST),
 		    pt->dataout_size));
-	if (pt->data_size != sizeof (MPI2_IOC_FACTS_REPLY))
+	}
+	if (pt->data_size != sizeof (MPI2_IOC_FACTS_REPLY)) {
 		NDBG15(("mpi_pre_ioc_facts(): Incorrect rep size, "
 		    "0x%x, should be 0x%x", pt->data_size,
 		    (int)sizeof (MPI2_IOC_FACTS_REPLY)));
+	}
 	pt->sgl_offset = (uint16_t)pt->request_size;
 }
 
@@ -10490,16 +10934,18 @@ mpi_pre_port_facts(mptsas_t *mpt, mptsas_pt_request_t *pt)
 #ifndef __lock_lint
 	_NOTE(ARGUNUSED(mpt))
 #endif
-	if (pt->request_size != sizeof (MPI2_PORT_FACTS_REQUEST))
+	if (pt->request_size != sizeof (MPI2_PORT_FACTS_REQUEST)) {
 		NDBG15(("mpi_pre_port_facts(): Incorrect req size, "
 		    "0x%x, should be 0x%x, dataoutsz 0x%x",
 		    pt->request_size,
 		    (int)sizeof (MPI2_PORT_FACTS_REQUEST),
 		    pt->dataout_size));
-	if (pt->data_size != sizeof (MPI2_PORT_FACTS_REPLY))
+	}
+	if (pt->data_size != sizeof (MPI2_PORT_FACTS_REPLY)) {
 		NDBG15(("mpi_pre_port_facts(): Incorrect rep size, "
 		    "0x%x, should be 0x%x", pt->data_size,
 		    (int)sizeof (MPI2_PORT_FACTS_REPLY)));
+	}
 	pt->sgl_offset = (uint16_t)pt->request_size;
 }
 
@@ -10513,15 +10959,17 @@ mpi_pre_sata_passthrough(mptsas_t *mpt, mptsas_pt_request_t *pt)
 	_NOTE(ARGUNUSED(mpt))
 #endif
 	pt->sgl_offset = offsetof(MPI2_SATA_PASSTHROUGH_REQUEST, SGL);
-	if (pt->request_size != pt->sgl_offset)
+	if (pt->request_size != pt->sgl_offset) {
 		NDBG15(("mpi_pre_sata_passthrough(): Incorrect req size, "
 		    "0x%x, should be 0x%x, dataoutsz 0x%x",
 		    pt->request_size, pt->sgl_offset,
 		    pt->dataout_size));
-	if (pt->data_size != sizeof (MPI2_SATA_PASSTHROUGH_REPLY))
+	}
+	if (pt->data_size != sizeof (MPI2_SATA_PASSTHROUGH_REPLY)) {
 		NDBG15(("mpi_pre_sata_passthrough(): Incorrect rep size, "
 		    "0x%x, should be 0x%x", pt->data_size,
 		    (int)sizeof (MPI2_SATA_PASSTHROUGH_REPLY)));
+	}
 }
 
 static void
@@ -10531,15 +10979,17 @@ mpi_pre_smp_passthrough(mptsas_t *mpt, mptsas_pt_request_t *pt)
 	_NOTE(ARGUNUSED(mpt))
 #endif
 	pt->sgl_offset = offsetof(MPI2_SMP_PASSTHROUGH_REQUEST, SGL);
-	if (pt->request_size != pt->sgl_offset)
+	if (pt->request_size != pt->sgl_offset) {
 		NDBG15(("mpi_pre_smp_passthrough(): Incorrect req size, "
 		    "0x%x, should be 0x%x, dataoutsz 0x%x",
 		    pt->request_size, pt->sgl_offset,
 		    pt->dataout_size));
-	if (pt->data_size != sizeof (MPI2_SMP_PASSTHROUGH_REPLY))
+	}
+	if (pt->data_size != sizeof (MPI2_SMP_PASSTHROUGH_REPLY)) {
 		NDBG15(("mpi_pre_smp_passthrough(): Incorrect rep size, "
 		    "0x%x, should be 0x%x", pt->data_size,
 		    (int)sizeof (MPI2_SMP_PASSTHROUGH_REPLY)));
+	}
 }
 
 /*
@@ -10552,14 +11002,16 @@ mpi_pre_config(mptsas_t *mpt, mptsas_pt_request_t *pt)
 	_NOTE(ARGUNUSED(mpt))
 #endif
 	pt->sgl_offset = offsetof(MPI2_CONFIG_REQUEST, PageBufferSGE);
-	if (pt->request_size != pt->sgl_offset)
+	if (pt->request_size != pt->sgl_offset) {
 		NDBG15(("mpi_pre_config(): Incorrect req size, 0x%x, "
 		    "should be 0x%x, dataoutsz 0x%x", pt->request_size,
 		    pt->sgl_offset, pt->dataout_size));
-	if (pt->data_size != sizeof (MPI2_CONFIG_REPLY))
+	}
+	if (pt->data_size != sizeof (MPI2_CONFIG_REPLY)) {
 		NDBG15(("mpi_pre_config(): Incorrect rep size, 0x%x, "
 		    "should be 0x%x", pt->data_size,
 		    (int)sizeof (MPI2_CONFIG_REPLY)));
+	}
 	pt->simple = 1;
 }
 
@@ -10573,15 +11025,17 @@ mpi_pre_scsi_io_req(mptsas_t *mpt, mptsas_pt_request_t *pt)
 	_NOTE(ARGUNUSED(mpt))
 #endif
 	pt->sgl_offset = offsetof(MPI2_SCSI_IO_REQUEST, SGL);
-	if (pt->request_size != pt->sgl_offset)
+	if (pt->request_size != pt->sgl_offset) {
 		NDBG15(("mpi_pre_config(): Incorrect req size, 0x%x, "
 		    "should be 0x%x, dataoutsz 0x%x", pt->request_size,
 		    pt->sgl_offset,
 		    pt->dataout_size));
-	if (pt->data_size != sizeof (MPI2_SCSI_IO_REPLY))
+	}
+	if (pt->data_size != sizeof (MPI2_SCSI_IO_REPLY)) {
 		NDBG15(("mpi_pre_config(): Incorrect rep size, 0x%x, "
 		    "should be 0x%x", pt->data_size,
 		    (int)sizeof (MPI2_SCSI_IO_REPLY)));
+	}
 }
 
 /*
@@ -10662,8 +11116,8 @@ mptsas_do_passthru(mptsas_t *mpt, uint8_t *request, uint8_t *reply,
 	pMPI2RequestHeader_t		request_msg;
 	pMPI2DefaultReply_t		reply_msg;
 	Mpi2SCSIIOReply_t		rep_msg;
-	int				i, status = 0, pt_flags = 0, rv = 0;
 	int				rvalue;
+	int				i, status = 0, pt_flags = 0, rv = 0;
 	uint8_t				function;
 
 	ASSERT(mutex_owned(&mpt->m_mutex));
@@ -10683,6 +11137,8 @@ mptsas_do_passthru(mptsas_t *mpt, uint8_t *request, uint8_t *reply,
 		mptsas_log(mpt, CE_WARN, "failed to copy request data");
 		goto out;
 	}
+	NDBG27(("mptsas_do_passthru: mode 0x%x, size 0x%x, Func 0x%x",
+	    mode, request_size, request_msg->Function));
 	mutex_enter(&mpt->m_mutex);
 
 	function = request_msg->Function;
@@ -10787,6 +11243,40 @@ mptsas_do_passthru(mptsas_t *mpt, uint8_t *request, uint8_t *reply,
 	cmd->cmd_pkt		= pkt;
 	cmd->cmd_flags		= CFLAG_CMDIOC | CFLAG_PASSTHRU;
 
+	if ((function == MPI2_FUNCTION_SCSI_IO_REQUEST) ||
+	    (function == MPI2_FUNCTION_RAID_SCSI_IO_PASSTHROUGH)) {
+		uint8_t			com, cdb_group_id;
+		boolean_t		ret;
+
+		pkt->pkt_cdbp = ((pMpi2SCSIIORequest_t)request_msg)->CDB.CDB32;
+		com = pkt->pkt_cdbp[0];
+		cdb_group_id = CDB_GROUPID(com);
+		switch (cdb_group_id) {
+		case CDB_GROUPID_0: cmd->cmd_cdblen = CDB_GROUP0; break;
+		case CDB_GROUPID_1: cmd->cmd_cdblen = CDB_GROUP1; break;
+		case CDB_GROUPID_2: cmd->cmd_cdblen = CDB_GROUP2; break;
+		case CDB_GROUPID_4: cmd->cmd_cdblen = CDB_GROUP4; break;
+		case CDB_GROUPID_5: cmd->cmd_cdblen = CDB_GROUP5; break;
+		default:
+			NDBG27(("mptsas_do_passthru: SCSI_IO, reserved "
+			    "CDBGROUP 0x%x requested!", cdb_group_id));
+			break;
+		}
+
+		reply_len = sizeof (MPI2_SCSI_IO_REPLY);
+		sense_len = reply_size - reply_len;
+		ret = mptsas_cmdarqsize(mpt, cmd, sense_len, KM_SLEEP);
+		VERIFY(ret == B_TRUE);
+	} else {
+		reply_len = reply_size;
+		sense_len = 0;
+	}
+
+	NDBG27(("mptsas_do_passthru: %s, dsz 0x%x, dosz 0x%x, replen 0x%x, "
+	    "snslen 0x%x",
+	    (direction == MPTSAS_PASS_THRU_DIRECTION_WRITE)?"Write":"Read",
+	    data_size, dataout_size, reply_len, sense_len));
+
 	/*
 	 * Save the command in a slot
 	 */
@@ -10804,6 +11294,10 @@ mptsas_do_passthru(mptsas_t *mpt, uint8_t *request, uint8_t *reply,
 	while ((cmd->cmd_flags & CFLAG_FINISHED) == 0) {
 		cv_wait(&mpt->m_passthru_cv, &mpt->m_mutex);
 	}
+
+	NDBG27(("mptsas_do_passthru: Cmd complete, flags 0x%x, rfm 0x%x "
+	    "pktreason 0x%x", cmd->cmd_flags, cmd->cmd_rfm,
+	    pkt->pkt_reason));
 
 	if (cmd->cmd_flags & CFLAG_PREPARED) {
 		memp = mpt->m_req_frame + (mpt->m_req_frame_size *
@@ -10831,7 +11325,7 @@ mptsas_do_passthru(mptsas_t *mpt, uint8_t *request, uint8_t *reply,
 		    DDI_DMA_SYNC_FORCPU);
 		reply_msg = (pMPI2DefaultReply_t)
 		    (mpt->m_reply_frame + (cmd->cmd_rfm -
-		    mpt->m_reply_frame_dma_addr));
+		    (mpt->m_reply_frame_dma_addr & 0xffffffffu)));
 	}
 
 	mptsas_fma_check(mpt, cmd);
@@ -10858,7 +11352,9 @@ mptsas_do_passthru(mptsas_t *mpt, uint8_t *request, uint8_t *reply,
 		if ((function == MPI2_FUNCTION_SCSI_IO_REQUEST) ||
 		    (function == MPI2_FUNCTION_RAID_SCSI_IO_PASSTHROUGH)) {
 			reply_len = sizeof (MPI2_SCSI_IO_REPLY);
-			sense_len = reply_size - reply_len;
+			sense_len = cmd->cmd_extrqslen ?
+			    min(sense_len, cmd->cmd_extrqslen) :
+			    min(sense_len, cmd->cmd_rqslen);
 		} else {
 			reply_len = reply_size;
 			sense_len = 0;
@@ -10922,9 +11418,15 @@ out:
 		ddi_put32(mpt->m_datap, &mpt->m_reg->ReplyFreeHostIndex,
 		    mpt->m_free_index);
 	}
-	if (cmd && (cmd->cmd_flags & CFLAG_PREPARED)) {
-		mptsas_remove_cmd(mpt, cmd);
-		pt_flags &= (~MPTSAS_REQUEST_POOL_CMD);
+	if (cmd) {
+		if (cmd->cmd_extrqslen != 0) {
+			rmfree(mpt->m_erqsense_map, cmd->cmd_extrqschunks,
+			    cmd->cmd_extrqsidx + 1);
+		}
+		if (cmd->cmd_flags & CFLAG_PREPARED) {
+			mptsas_remove_cmd(mpt, cmd);
+			pt_flags &= (~MPTSAS_REQUEST_POOL_CMD);
+		}
 	}
 	if (pt_flags & MPTSAS_REQUEST_POOL_CMD)
 		mptsas_return_to_pool(mpt, cmd);
@@ -10953,6 +11455,7 @@ out:
 	}
 	if (request_msg)
 		kmem_free(request_msg, request_size);
+	NDBG27(("mptsas_do_passthru: Done status 0x%x", status));
 
 	return (status);
 }
@@ -11016,7 +11519,8 @@ mptsas_start_diag(mptsas_t *mpt, mptsas_cmd_t *cmd)
 	pMpi2DiagReleaseRequest_t	pDiag_release_msg;
 	struct scsi_pkt			*pkt = cmd->cmd_pkt;
 	mptsas_diag_request_t		*diag = pkt->pkt_ha_private;
-	uint32_t			request_desc_low, i;
+	uint32_t			i;
+	uint64_t			request_desc;
 
 	ASSERT(mutex_owned(&mpt->m_mutex));
 
@@ -11069,10 +11573,10 @@ mptsas_start_diag(mptsas_t *mpt, mptsas_cmd_t *cmd)
 	 */
 	(void) ddi_dma_sync(mpt->m_dma_req_frame_hdl, 0, 0,
 	    DDI_DMA_SYNC_FORDEV);
-	request_desc_low = (cmd->cmd_slot << 16) +
+	request_desc = (cmd->cmd_slot << 16) +
 	    MPI2_REQ_DESCRIPT_FLAGS_DEFAULT_TYPE;
-	cmd->cmd_rfm = NULL;
-	MPTSAS_START_CMD(mpt, request_desc_low, 0);
+	cmd->cmd_rfm = 0;
+	MPTSAS_START_CMD(mpt, request_desc);
 	if ((mptsas_check_dma_handle(mpt->m_dma_req_frame_hdl) !=
 	    DDI_SUCCESS) ||
 	    (mptsas_check_acc_handle(mpt->m_acc_req_frame_hdl) !=
@@ -11170,7 +11674,8 @@ mptsas_post_fw_diag_buffer(mptsas_t *mpt,
 		(void) ddi_dma_sync(mpt->m_dma_reply_frame_hdl, 0, 0,
 		    DDI_DMA_SYNC_FORCPU);
 		reply = (pMpi2DiagBufferPostReply_t)(mpt->m_reply_frame +
-		    (cmd->cmd_rfm - mpt->m_reply_frame_dma_addr));
+		    (cmd->cmd_rfm -
+		    (mpt->m_reply_frame_dma_addr & 0xffffffffu)));
 
 		/*
 		 * Get the reply message data
@@ -11324,7 +11829,8 @@ mptsas_release_fw_diag_buffer(mptsas_t *mpt,
 		(void) ddi_dma_sync(mpt->m_dma_reply_frame_hdl, 0, 0,
 		    DDI_DMA_SYNC_FORCPU);
 		reply = (pMpi2DiagReleaseReply_t)(mpt->m_reply_frame +
-		    (cmd->cmd_rfm - mpt->m_reply_frame_dma_addr));
+		    (cmd->cmd_rfm -
+		    (mpt->m_reply_frame_dma_addr & 0xffffffffu)));
 
 		/*
 		 * Get the reply message data
@@ -11484,7 +11990,7 @@ mptsas_diag_register(mptsas_t *mpt, mptsas_fw_diag_register_t *diag_register,
 		mptsas_log(mpt, CE_WARN, "Check of DMA handle failed in "
 		    "mptsas_diag_register.");
 		ddi_fm_service_impact(mpt->m_dip, DDI_SERVICE_UNAFFECTED);
-			status = DDI_FAILURE;
+		status = DDI_FAILURE;
 	}
 
 	/*
@@ -12186,7 +12692,8 @@ led_control(mptsas_t *mpt, intptr_t data, int mode)
 {
 	int ret = 0;
 	mptsas_led_control_t lc;
-	mptsas_target_t *ptgt;
+	mptsas_enclosure_t *mep;
+	uint16_t slotidx;
 
 	if (ddi_copyin((void *)data, &lc, sizeof (lc), mode) != 0) {
 		return (EFAULT);
@@ -12205,29 +12712,42 @@ led_control(mptsas_t *mpt, intptr_t data, int mode)
 	    (lc.Command == MPTSAS_LEDCTL_FLAG_GET && (mode & FREAD) == 0))
 		return (EACCES);
 
-	/* Locate the target we're interrogating... */
+	/* Locate the required enclosure */
 	mutex_enter(&mpt->m_mutex);
-	ptgt = refhash_linear_search(mpt->m_targets,
-	    mptsas_target_eval_slot, &lc);
-	if (ptgt == NULL) {
-		/* We could not find a target for that enclosure/slot. */
+	mep = mptsas_enc_lookup(mpt, lc.Enclosure);
+	if (mep == NULL) {
+		mutex_exit(&mpt->m_mutex);
+		return (ENOENT);
+	}
+
+	if (lc.Slot < mep->me_fslot) {
+		mutex_exit(&mpt->m_mutex);
+		return (ENOENT);
+	}
+
+	/*
+	 * Slots on the enclosure are maintained in array where me_fslot is
+	 * entry zero. We normalize the requested slot.
+	 */
+	slotidx = lc.Slot - mep->me_fslot;
+	if (slotidx >= mep->me_nslots) {
 		mutex_exit(&mpt->m_mutex);
 		return (ENOENT);
 	}
 
 	if (lc.Command == MPTSAS_LEDCTL_FLAG_SET) {
 		/* Update our internal LED state. */
-		ptgt->m_led_status &= ~(1 << (lc.Led - 1));
-		ptgt->m_led_status |= lc.LedStatus << (lc.Led - 1);
+		mep->me_slotleds[slotidx] &= ~(1 << (lc.Led - 1));
+		mep->me_slotleds[slotidx] |= lc.LedStatus << (lc.Led - 1);
 
 		/* Flush it to the controller. */
-		ret = mptsas_flush_led_status(mpt, ptgt);
+		ret = mptsas_flush_led_status(mpt, mep, slotidx);
 		mutex_exit(&mpt->m_mutex);
 		return (ret);
 	}
 
 	/* Return our internal LED state. */
-	lc.LedStatus = (ptgt->m_led_status >> (lc.Led - 1)) & 1;
+	lc.LedStatus = (mep->me_slotleds[slotidx] >> (lc.Led - 1)) & 1;
 	mutex_exit(&mpt->m_mutex);
 
 	if (ddi_copyout(&lc, (void *)data, sizeof (lc), mode) != 0) {
@@ -12404,21 +12924,6 @@ mptsas_ioctl(dev_t dev, int cmd, intptr_t data, int mode, cred_t *credp,
 				ndi_dc_freehdl(dcp);
 				goto out;
 			}
-			mutex_enter(&mpt->m_mutex);
-			if (cmd == DEVCTL_DEVICE_ONLINE) {
-				ptgt->m_tgt_unconfigured = 0;
-			} else if (cmd == DEVCTL_DEVICE_OFFLINE) {
-				ptgt->m_tgt_unconfigured = 1;
-			}
-			if (cmd == DEVCTL_DEVICE_OFFLINE) {
-				ptgt->m_led_status |=
-				    (1 << (MPTSAS_LEDCTL_LED_OK2RM - 1));
-			} else {
-				ptgt->m_led_status &=
-				    ~(1 << (MPTSAS_LEDCTL_LED_OK2RM - 1));
-			}
-			(void) mptsas_flush_led_status(mpt, ptgt);
-			mutex_exit(&mpt->m_mutex);
 			ndi_dc_freehdl(dcp);
 		}
 		goto out;
@@ -12605,6 +13110,12 @@ mptsas_restart_ioc(mptsas_t *mpt)
 	mpt->m_in_reset = TRUE;
 
 	/*
+	 * Wait until all the allocated sense data buffers for DMA are freed.
+	 */
+	while (mpt->m_extreq_sense_refcount > 0)
+		cv_wait(&mpt->m_extreq_sense_refcount_cv, &mpt->m_mutex);
+
+	/*
 	 * Set all throttles to HOLD
 	 */
 	for (ptgt = refhash_first(mpt->m_targets); ptgt != NULL;
@@ -12713,12 +13224,6 @@ mptsas_init_chip(mptsas_t *mpt, int first_time)
 		goto fail;
 	}
 
-	mpt->m_targets = refhash_create(MPTSAS_TARGET_BUCKET_COUNT,
-	    mptsas_target_addr_hash, mptsas_target_addr_cmp,
-	    mptsas_target_free, sizeof (mptsas_target_t),
-	    offsetof(mptsas_target_t, m_link),
-	    offsetof(mptsas_target_t, m_addr), KM_SLEEP);
-
 	if (mptsas_alloc_active_slots(mpt, KM_SLEEP)) {
 		goto fail;
 	}
@@ -12728,6 +13233,10 @@ mptsas_init_chip(mptsas_t *mpt, int first_time)
 	 */
 	if (mptsas_alloc_request_frames(mpt) == DDI_FAILURE) {
 		mptsas_log(mpt, CE_WARN, "mptsas_alloc_request_frames failed");
+		goto fail;
+	}
+	if (mptsas_alloc_sense_bufs(mpt) == DDI_FAILURE) {
+		mptsas_log(mpt, CE_WARN, "mptsas_alloc_sense_bufs failed");
 		goto fail;
 	}
 	if (mptsas_alloc_free_queue(mpt) == DDI_FAILURE) {
@@ -12764,7 +13273,7 @@ mur:
 	 * Initialize the Reply Free Queue with the physical addresses of our
 	 * reply frames.
 	 */
-	cookie.dmac_address = mpt->m_reply_frame_dma_addr;
+	cookie.dmac_address = mpt->m_reply_frame_dma_addr & 0xffffffffu;
 	for (i = 0; i < mpt->m_max_replies; i++) {
 		ddi_put32(mpt->m_acc_free_queue_hdl,
 		    &((uint32_t *)(void *)mpt->m_free_queue)[i],
@@ -12804,6 +13313,8 @@ mur:
 	 * enable events
 	 */
 	if (mptsas_ioc_enable_event_notification(mpt)) {
+		mptsas_log(mpt, CE_WARN,
+		    "mptsas_ioc_enable_event_notification failed");
 		goto fail;
 	}
 
@@ -12813,6 +13324,8 @@ mur:
 	 */
 
 	if ((mptsas_check_dma_handle(mpt->m_dma_req_frame_hdl) !=
+	    DDI_SUCCESS) ||
+	    (mptsas_check_dma_handle(mpt->m_dma_req_sense_hdl) !=
 	    DDI_SUCCESS) ||
 	    (mptsas_check_dma_handle(mpt->m_dma_reply_frame_hdl) !=
 	    DDI_SUCCESS) ||
@@ -12829,6 +13342,8 @@ mur:
 	/* Check all acc handles */
 	if ((mptsas_check_acc_handle(mpt->m_datap) != DDI_SUCCESS) ||
 	    (mptsas_check_acc_handle(mpt->m_acc_req_frame_hdl) !=
+	    DDI_SUCCESS) ||
+	    (mptsas_check_acc_handle(mpt->m_acc_req_sense_hdl) !=
 	    DDI_SUCCESS) ||
 	    (mptsas_check_acc_handle(mpt->m_acc_reply_frame_hdl) !=
 	    DDI_SUCCESS) ||
@@ -13374,7 +13889,7 @@ mptsas_get_target_device_info(mptsas_t *mpt, uint32_t page_address,
 
 	if ((dev_info & (MPI2_SAS_DEVICE_INFO_SSP_TARGET |
 	    MPI2_SAS_DEVICE_INFO_SATA_DEVICE |
-	    MPI2_SAS_DEVICE_INFO_ATAPI_DEVICE)) == NULL) {
+	    MPI2_SAS_DEVICE_INFO_ATAPI_DEVICE)) == 0) {
 		rval = DEV_INFO_WRONG_DEVICE_TYPE;
 		return (rval);
 	}
@@ -13401,28 +13916,32 @@ mptsas_get_target_device_info(mptsas_t *mpt, uint32_t page_address,
 	 */
 	if (dev_info & (MPI2_SAS_DEVICE_INFO_SATA_DEVICE |
 	    MPI2_SAS_DEVICE_INFO_ATAPI_DEVICE)) {
+		/* alloc a temporary target to send the cmd to */
+		tmp_tgt = mptsas_tgt_alloc(mpt->m_tmp_targets, *dev_handle,
+		    0, dev_info, 0, 0);
 		mutex_exit(&mpt->m_mutex);
-		/* alloc a tmp_tgt to send the cmd */
-		tmp_tgt = kmem_zalloc(sizeof (struct mptsas_target),
-		    KM_SLEEP);
-		tmp_tgt->m_devhdl = *dev_handle;
-		tmp_tgt->m_deviceinfo = dev_info;
-		tmp_tgt->m_qfull_retries = QFULL_RETRIES;
-		tmp_tgt->m_qfull_retry_interval =
-		    drv_usectohz(QFULL_RETRY_INTERVAL * 1000);
-		tmp_tgt->m_t_throttle = MAX_THROTTLE;
+
 		devicename = mptsas_get_sata_guid(mpt, tmp_tgt, 0);
-		kmem_free(tmp_tgt, sizeof (struct mptsas_target));
-		mutex_enter(&mpt->m_mutex);
+
+		if (devicename == -1) {
+			mutex_enter(&mpt->m_mutex);
+			refhash_remove(mpt->m_tmp_targets, tmp_tgt);
+			rval = DEV_INFO_FAIL_GUID;
+			return (rval);
+		}
+
 		if (devicename != 0 && (((devicename >> 56) & 0xf0) == 0x50)) {
 			sas_wwn = devicename;
 		} else if (dev_info & MPI2_SAS_DEVICE_INFO_DIRECT_ATTACH) {
 			sas_wwn = 0;
 		}
+
+		mutex_enter(&mpt->m_mutex);
+		refhash_remove(mpt->m_tmp_targets, tmp_tgt);
 	}
 
 	phymask = mptsas_physport_to_phymask(mpt, physport);
-	*pptgt = mptsas_tgt_alloc(mpt, *dev_handle, sas_wwn,
+	*pptgt = mptsas_tgt_alloc(mpt->m_targets, *dev_handle, sas_wwn,
 	    dev_info, phymask, phynum);
 	if (*pptgt == NULL) {
 		mptsas_log(mpt, CE_WARN, "Failed to allocated target"
@@ -13455,6 +13974,7 @@ inq83_retry:
 	if (rval != DDI_SUCCESS) {
 		mptsas_log(mpt, CE_WARN, "!mptsas request inquiry page "
 		    "0x83 for target:%x, lun:%x failed!", target, lun);
+		sata_guid = -1;
 		goto out;
 	}
 	/* According to SAT2, the first descriptor is logic unit name */
@@ -13778,6 +14298,9 @@ mptsas_bus_config(dev_info_t *pdip, uint_t flag,
 		mptsas_config_all(pdip);
 		ret = NDI_SUCCESS;
 		break;
+	default:
+		ret = NDI_FAILURE;
+		break;
 	}
 
 	if ((ret == NDI_SUCCESS) && bconfig) {
@@ -14065,11 +14588,13 @@ mptsas_config_luns(dev_info_t *pdip, mptsas_target_t *ptgt)
 			continue;
 		}
 		saved_repluns[lun_cnt] = lun_num;
-		if (cdip = mptsas_find_child_addr(pdip, sas_wwn, lun_num))
+		if ((cdip = mptsas_find_child_addr(pdip, sas_wwn, lun_num)) !=
+		    NULL) {
 			ret = DDI_SUCCESS;
-		else
+		} else {
 			ret = mptsas_probe_lun(pdip, lun_num, &cdip,
 			    ptgt);
+		}
 		if ((ret == DDI_SUCCESS) && (cdip != NULL)) {
 			(void) ndi_prop_remove(DDI_DEV_T_NONE, cdip,
 			    MPTSAS_DEV_GONE);
@@ -14243,7 +14768,74 @@ mptsas_offline_missed_luns(dev_info_t *pdip, uint16_t *repluns,
 	}
 }
 
-void
+/*
+ * If this enclosure doesn't exist in the enclosure list, add it. If it does,
+ * update it.
+ */
+static void
+mptsas_enclosure_update(mptsas_t *mpt, mptsas_enclosure_t *mep)
+{
+	mptsas_enclosure_t *m;
+
+	ASSERT(MUTEX_HELD(&mpt->m_mutex));
+	m = mptsas_enc_lookup(mpt, mep->me_enchdl);
+	if (m != NULL) {
+		uint8_t *ledp;
+		m->me_flags = mep->me_flags;
+
+
+		/*
+		 * If the number of slots and the first slot entry in the
+		 * enclosure has not changed, then we don't need to do anything
+		 * here. Otherwise, we need to allocate a new array for the LED
+		 * status of the slot.
+		 */
+		if (m->me_fslot == mep->me_fslot &&
+		    m->me_nslots == mep->me_nslots)
+			return;
+
+		/*
+		 * If the number of slots or the first slot has changed, it's
+		 * not clear that we're really in a place that we can continue
+		 * to honor the existing flags.
+		 */
+		if (mep->me_nslots > 0) {
+			ledp = kmem_zalloc(sizeof (uint8_t) * mep->me_nslots,
+			    KM_SLEEP);
+		} else {
+			ledp = NULL;
+		}
+
+		if (m->me_slotleds != NULL) {
+			kmem_free(m->me_slotleds, sizeof (uint8_t) *
+			    m->me_nslots);
+		}
+		m->me_slotleds = ledp;
+		m->me_fslot = mep->me_fslot;
+		m->me_nslots = mep->me_nslots;
+		return;
+	}
+
+	m = kmem_zalloc(sizeof (*m), KM_SLEEP);
+	m->me_enchdl = mep->me_enchdl;
+	m->me_flags = mep->me_flags;
+	m->me_nslots = mep->me_nslots;
+	m->me_fslot = mep->me_fslot;
+	if (m->me_nslots > 0) {
+		m->me_slotleds = kmem_zalloc(sizeof (uint8_t) * mep->me_nslots,
+		    KM_SLEEP);
+		/*
+		 * It may make sense to optionally flush all of the slots and/or
+		 * read the slot status flag here to synchronize between
+		 * ourselves and the card. So far, that hasn't been needed
+		 * annecdotally when enumerating something new. If we do, we
+		 * should kick that off in a taskq potentially.
+		 */
+	}
+	list_insert_tail(&mpt->m_enclosures, m);
+}
+
+static void
 mptsas_update_hashtab(struct mptsas *mpt)
 {
 	uint32_t	page_address;
@@ -14258,7 +14850,7 @@ mptsas_update_hashtab(struct mptsas *mpt)
 	(void) mptsas_get_raid_info(mpt);
 
 	dev_handle = mpt->m_smp_devhdl;
-	for (; mpt->m_done_traverse_smp == 0; ) {
+	while (mpt->m_done_traverse_smp == 0) {
 		page_address = (MPI2_SAS_EXPAND_PGAD_FORM_GET_NEXT_HNDL &
 		    MPI2_SAS_EXPAND_PGAD_FORM_MASK) | (uint32_t)dev_handle;
 		if (mptsas_get_sas_expander_page0(mpt, page_address, &smp_node)
@@ -14270,16 +14862,34 @@ mptsas_update_hashtab(struct mptsas *mpt)
 	}
 
 	/*
+	 * Loop over enclosures so we can understand what's there.
+	 */
+	dev_handle = MPTSAS_INVALID_DEVHDL;
+	while (mpt->m_done_traverse_enc == 0) {
+		mptsas_enclosure_t me;
+
+		page_address = (MPI2_SAS_ENCLOS_PGAD_FORM_GET_NEXT_HANDLE &
+		    MPI2_SAS_ENCLOS_PGAD_FORM_MASK) | (uint32_t)dev_handle;
+
+		if (mptsas_get_enclosure_page0(mpt, page_address, &me) !=
+		    DDI_SUCCESS) {
+			break;
+		}
+		dev_handle = me.me_enchdl;
+		mptsas_enclosure_update(mpt, &me);
+	}
+
+	/*
 	 * Config target devices
 	 */
 	dev_handle = mpt->m_dev_handle;
 
 	/*
-	 * Do loop to get sas device page 0 by GetNextHandle till the
+	 * Loop to get sas device page 0 by GetNextHandle till the
 	 * the last handle. If the sas device is a SATA/SSP target,
 	 * we try to config it.
 	 */
-	for (; mpt->m_done_traverse_dev == 0; ) {
+	while (mpt->m_done_traverse_dev == 0) {
 		ptgt = NULL;
 		page_address =
 		    (MPI2_SAS_DEVICE_PGAD_FORM_GET_NEXT_HANDLE &
@@ -14290,6 +14900,9 @@ mptsas_update_hashtab(struct mptsas *mpt)
 		if ((rval == DEV_INFO_FAIL_PAGE0) ||
 		    (rval == DEV_INFO_FAIL_ALLOC)) {
 			break;
+		}
+		if (rval == DEV_INFO_FAIL_GUID) {
+			continue;
 		}
 
 		mpt->m_dev_handle = dev_handle;
@@ -14313,14 +14926,14 @@ mptsas_update_driver_data(struct mptsas *mpt)
 	 * 3. call sas_device_page/expander_page to update hash table
 	 */
 	mptsas_update_phymask(mpt);
+
 	/*
-	 * Invalid the existing entries
-	 *
-	 * XXX - It seems like we should just delete everything here.  We are
-	 * holding the lock and are about to refresh all the targets in both
-	 * hashes anyway.  Given the path we're in, what outstanding async
-	 * event could possibly be trying to reference one of these things
-	 * without taking the lock, and how would that be useful anyway?
+	 * Remove all the devhdls for existing entries but leave their
+	 * addresses alone.  In update_hashtab() below, we'll find all
+	 * targets that are still present and reassociate them with
+	 * their potentially new devhdls.  Leaving the targets around in
+	 * this fashion allows them to be used on the tx waitq even
+	 * while IOC reset is occurring.
 	 */
 	for (tp = refhash_first(mpt->m_targets); tp != NULL;
 	    tp = refhash_next(mpt->m_targets, tp)) {
@@ -14335,6 +14948,7 @@ mptsas_update_driver_data(struct mptsas *mpt)
 	}
 	mpt->m_done_traverse_dev = 0;
 	mpt->m_done_traverse_smp = 0;
+	mpt->m_done_traverse_enc = 0;
 	mpt->m_dev_handle = mpt->m_smp_devhdl = MPTSAS_INVALID_DEVHDL;
 	mptsas_update_hashtab(mpt);
 }
@@ -14365,7 +14979,8 @@ mptsas_config_all(dev_info_t *pdip)
 
 	mutex_enter(&mpt->m_mutex);
 
-	if (!mpt->m_done_traverse_dev || !mpt->m_done_traverse_smp) {
+	if (!mpt->m_done_traverse_dev || !mpt->m_done_traverse_smp ||
+	    !mpt->m_done_traverse_enc) {
 		mptsas_update_hashtab(mpt);
 	}
 
@@ -14875,11 +15490,6 @@ mptsas_create_virt_lun(dev_info_t *pdip, struct scsi_inquiry *inq, char *guid,
 				    (!MDI_PI_IS_STANDBY(*pip)) &&
 				    (ptgt->m_tgt_unconfigured == 0)) {
 					rval = mdi_pi_online(*pip, 0);
-					mutex_enter(&mpt->m_mutex);
-					ptgt->m_led_status = 0;
-					(void) mptsas_flush_led_status(mpt,
-					    ptgt);
-					mutex_exit(&mpt->m_mutex);
 				} else {
 					rval = DDI_SUCCESS;
 				}
@@ -15078,6 +15688,27 @@ mptsas_create_virt_lun(dev_info_t *pdip, struct scsi_inquiry *inq, char *guid,
 			    mpt->un.m_base_wwid);
 		}
 
+		if (IS_SATA_DEVICE(ptgt->m_deviceinfo)) {
+			char	uabuf[SCSI_WWN_BUFLEN];
+
+			if (scsi_wwn_to_wwnstr(dev_sas_wwn, 1, uabuf) == NULL) {
+				mptsas_log(mpt, CE_WARN,
+				    "mptsas unable to format SATA bridge WWN");
+				mdi_rtn = MDI_FAILURE;
+				goto virt_create_done;
+			}
+
+			if (mdi_prop_update_string(*pip,
+			    SCSI_ADDR_PROP_BRIDGE_PORT, uabuf) !=
+			    DDI_SUCCESS) {
+				mptsas_log(mpt, CE_WARN,
+				    "mptsas unable to create SCSI bridge port "
+				    "property for SATA device");
+				mdi_rtn = MDI_FAILURE;
+				goto virt_create_done;
+			}
+		}
+
 		if (mdi_prop_update_string(*pip,
 		    SCSI_ADDR_PROP_ATTACHED_PORT, pdev_wwn_str) !=
 		    DDI_PROP_SUCCESS) {
@@ -15133,12 +15764,6 @@ mptsas_create_virt_lun(dev_info_t *pdip, struct scsi_inquiry *inq, char *guid,
 		}
 		NDBG20(("new path:%s onlining,", MDI_PI(*pip)->pi_addr));
 		mdi_rtn = mdi_pi_online(*pip, 0);
-		if (mdi_rtn == MDI_SUCCESS) {
-			mutex_enter(&mpt->m_mutex);
-			ptgt->m_led_status = 0;
-			(void) mptsas_flush_led_status(mpt, ptgt);
-			mutex_exit(&mpt->m_mutex);
-		}
 		if (mdi_rtn == MDI_NOT_SUPPORTED) {
 			mdi_rtn = MDI_FAILURE;
 		}
@@ -15397,12 +16022,31 @@ mptsas_create_phys_lun(dev_info_t *pdip, struct scsi_inquiry *inq,
 		}
 
 		if (IS_SATA_DEVICE(dev_info)) {
+			char	uabuf[SCSI_WWN_BUFLEN];
+
 			if (ndi_prop_update_string(DDI_DEV_T_NONE,
 			    *lun_dip, MPTSAS_VARIANT, "sata") !=
 			    DDI_PROP_SUCCESS) {
 				mptsas_log(mpt, CE_WARN,
 				    "mptsas unable to create "
 				    "property for device variant ");
+				ndi_rtn = NDI_FAILURE;
+				goto phys_create_done;
+			}
+
+			if (scsi_wwn_to_wwnstr(dev_sas_wwn, 1, uabuf) == NULL) {
+				mptsas_log(mpt, CE_WARN,
+				    "mptsas unable to format SATA bridge WWN");
+				ndi_rtn = NDI_FAILURE;
+				goto phys_create_done;
+			}
+
+			if (ndi_prop_update_string(DDI_DEV_T_NONE, *lun_dip,
+			    SCSI_ADDR_PROP_BRIDGE_PORT, uabuf) !=
+			    DDI_PROP_SUCCESS) {
+				mptsas_log(mpt, CE_WARN,
+				    "mptsas unable to create SCSI bridge port "
+				    "property for SATA device");
 				ndi_rtn = NDI_FAILURE;
 				goto phys_create_done;
 			}
@@ -15491,12 +16135,6 @@ phys_create_done:
 			 * Try to online the new node
 			 */
 			ndi_rtn = ndi_devi_online(*lun_dip, NDI_ONLINE_ATTACH);
-		}
-		if (ndi_rtn == NDI_SUCCESS) {
-			mutex_enter(&mpt->m_mutex);
-			ptgt->m_led_status = 0;
-			(void) mptsas_flush_led_status(mpt, ptgt);
-			mutex_exit(&mpt->m_mutex);
 		}
 
 		/*
@@ -15969,7 +16607,8 @@ mptsas_phy_to_tgt(mptsas_t *mpt, mptsas_phymask_t phymask, uint8_t phy)
 			break;
 		}
 		if ((rval == DEV_INFO_WRONG_DEVICE_TYPE) ||
-		    (rval == DEV_INFO_PHYS_DISK)) {
+		    (rval == DEV_INFO_PHYS_DISK) ||
+		    (rval == DEV_INFO_FAIL_GUID)) {
 			continue;
 		}
 		mpt->m_dev_handle = cur_handle;
@@ -16039,7 +16678,8 @@ mptsas_wwid_to_ptgt(mptsas_t *mpt, mptsas_phymask_t phymask, uint64_t wwid)
 			break;
 		}
 		if ((rval == DEV_INFO_WRONG_DEVICE_TYPE) ||
-		    (rval == DEV_INFO_PHYS_DISK)) {
+		    (rval == DEV_INFO_PHYS_DISK) ||
+		    (rval == DEV_INFO_FAIL_GUID)) {
 			continue;
 		}
 		mpt->m_dev_handle = cur_handle;
@@ -16102,7 +16742,7 @@ mptsas_wwid_to_psmp(mptsas_t *mpt, mptsas_phymask_t phymask, uint64_t wwid)
 }
 
 mptsas_target_t *
-mptsas_tgt_alloc(mptsas_t *mpt, uint16_t devhdl, uint64_t wwid,
+mptsas_tgt_alloc(refhash_t *refhash, uint16_t devhdl, uint64_t wwid,
     uint32_t devinfo, mptsas_phymask_t phymask, uint8_t phynum)
 {
 	mptsas_target_t *tmp_tgt = NULL;
@@ -16110,7 +16750,7 @@ mptsas_tgt_alloc(mptsas_t *mpt, uint16_t devhdl, uint64_t wwid,
 
 	addr.mta_wwn = wwid;
 	addr.mta_phymask = phymask;
-	tmp_tgt = refhash_lookup(mpt->m_targets, &addr);
+	tmp_tgt = refhash_lookup(refhash, &addr);
 	if (tmp_tgt != NULL) {
 		NDBG20(("Hash item already exist"));
 		tmp_tgt->m_deviceinfo = devinfo;
@@ -16134,7 +16774,7 @@ mptsas_tgt_alloc(mptsas_t *mpt, uint16_t devhdl, uint64_t wwid,
 	tmp_tgt->m_t_throttle = MAX_THROTTLE;
 	TAILQ_INIT(&tmp_tgt->m_active_cmdq);
 
-	refhash_insert(mpt->m_targets, tmp_tgt);
+	refhash_insert(refhash, tmp_tgt);
 
 	return (tmp_tgt);
 }
@@ -16211,22 +16851,24 @@ mptsas_addr_to_ptgt(mptsas_t *mpt, char *addr, mptsas_phymask_t phymask)
 }
 
 static int
-mptsas_flush_led_status(mptsas_t *mpt, mptsas_target_t *ptgt)
+mptsas_flush_led_status(mptsas_t *mpt, mptsas_enclosure_t *mep, uint16_t idx)
 {
 	uint32_t slotstatus = 0;
 
+	ASSERT3U(idx, <, mep->me_nslots);
+
 	/* Build an MPI2 Slot Status based on our view of the world */
-	if (ptgt->m_led_status & (1 << (MPTSAS_LEDCTL_LED_IDENT - 1)))
+	if (mep->me_slotleds[idx] & (1 << (MPTSAS_LEDCTL_LED_IDENT - 1)))
 		slotstatus |= MPI2_SEP_REQ_SLOTSTATUS_IDENTIFY_REQUEST;
-	if (ptgt->m_led_status & (1 << (MPTSAS_LEDCTL_LED_FAIL - 1)))
+	if (mep->me_slotleds[idx] & (1 << (MPTSAS_LEDCTL_LED_FAIL - 1)))
 		slotstatus |= MPI2_SEP_REQ_SLOTSTATUS_PREDICTED_FAULT;
-	if (ptgt->m_led_status & (1 << (MPTSAS_LEDCTL_LED_OK2RM - 1)))
+	if (mep->me_slotleds[idx] & (1 << (MPTSAS_LEDCTL_LED_OK2RM - 1)))
 		slotstatus |= MPI2_SEP_REQ_SLOTSTATUS_REQUEST_REMOVE;
 
 	/* Write it to the controller */
 	NDBG14(("mptsas_ioctl: set LED status %x for slot %x",
-	    slotstatus, ptgt->m_slot_num));
-	return (mptsas_send_sep(mpt, ptgt, &slotstatus,
+	    slotstatus, idx + mep->me_fslot));
+	return (mptsas_send_sep(mpt, mep, idx, &slotstatus,
 	    MPI2_SEP_REQ_ACTION_WRITE_STATUS));
 }
 
@@ -16234,32 +16876,29 @@ mptsas_flush_led_status(mptsas_t *mpt, mptsas_target_t *ptgt)
  *  send sep request, use enclosure/slot addressing
  */
 static int
-mptsas_send_sep(mptsas_t *mpt, mptsas_target_t *ptgt,
+mptsas_send_sep(mptsas_t *mpt, mptsas_enclosure_t *mep, uint16_t idx,
     uint32_t *status, uint8_t act)
 {
 	Mpi2SepRequest_t	req;
 	Mpi2SepReply_t		rep;
 	int			ret;
+	uint16_t		enctype;
+	uint16_t		slot;
 
 	ASSERT(mutex_owned(&mpt->m_mutex));
 
 	/*
-	 * We only support SEP control of directly-attached targets, in which
-	 * case the "SEP" we're talking to is a virtual one contained within
-	 * the HBA itself.  This is necessary because DA targets typically have
-	 * no other mechanism for LED control.  Targets for which a separate
-	 * enclosure service processor exists should be controlled via ses(7d)
-	 * or sgen(7d).  Furthermore, since such requests can time out, they
-	 * should be made in user context rather than in response to
-	 * asynchronous fabric changes.
-	 *
-	 * In addition, we do not support this operation for RAID volumes,
-	 * since there is no slot associated with them.
+	 * Look through the enclosures and make sure that this enclosure is
+	 * something that is directly attached device. If we didn't find an
+	 * enclosure for this device, don't send the ioctl.
 	 */
-	if (!(ptgt->m_deviceinfo & DEVINFO_DIRECT_ATTACHED) ||
-	    ptgt->m_addr.mta_phymask == 0) {
+	enctype = mep->me_flags & MPI2_SAS_ENCLS0_FLAGS_MNG_MASK;
+	if (enctype != MPI2_SAS_ENCLS0_FLAGS_MNG_IOC_SES &&
+	    enctype != MPI2_SAS_ENCLS0_FLAGS_MNG_IOC_SGPIO &&
+	    enctype != MPI2_SAS_ENCLS0_FLAGS_MNG_IOC_GPIO) {
 		return (ENOTTY);
 	}
+	slot = idx + mep->me_fslot;
 
 	bzero(&req, sizeof (req));
 	bzero(&rep, sizeof (rep));
@@ -16267,13 +16906,14 @@ mptsas_send_sep(mptsas_t *mpt, mptsas_target_t *ptgt,
 	req.Function = MPI2_FUNCTION_SCSI_ENCLOSURE_PROCESSOR;
 	req.Action = act;
 	req.Flags = MPI2_SEP_REQ_FLAGS_ENCLOSURE_SLOT_ADDRESS;
-	req.EnclosureHandle = LE_16(ptgt->m_enclosure);
-	req.Slot = LE_16(ptgt->m_slot_num);
+	req.EnclosureHandle = LE_16(mep->me_enchdl);
+	req.Slot = LE_16(slot);
 	if (act == MPI2_SEP_REQ_ACTION_WRITE_STATUS) {
 		req.SlotStatus = LE_32(*status);
 	}
 	ret = mptsas_do_passthru(mpt, (uint8_t *)&req, (uint8_t *)&rep, NULL,
-	    sizeof (req), sizeof (rep), NULL, 0, NULL, 0, 60, FKIOCTL);
+	    sizeof (req), sizeof (rep), 0, MPTSAS_PASS_THRU_DIRECTION_NONE,
+	    NULL, 0, 60, FKIOCTL);
 	if (ret != 0) {
 		mptsas_log(mpt, CE_NOTE, "mptsas_send_sep: passthru SEP "
 		    "Processor Request message error %d", ret);
@@ -16335,6 +16975,7 @@ mptsas_dma_addr_create(mptsas_t *mpt, ddi_dma_attr_t dma_attr,
 	    DDI_DMA_CONSISTENT, DDI_DMA_SLEEP, NULL, dma_memp, &alloc_len,
 	    acc_hdp) != DDI_SUCCESS) {
 		ddi_dma_free_handle(dma_hdp);
+		*dma_hdp = NULL;
 		return (FALSE);
 	}
 
@@ -16343,6 +16984,7 @@ mptsas_dma_addr_create(mptsas_t *mpt, ddi_dma_attr_t dma_attr,
 	    cookiep, &ncookie) != DDI_DMA_MAPPED) {
 		(void) ddi_dma_mem_free(acc_hdp);
 		ddi_dma_free_handle(dma_hdp);
+		*dma_hdp = NULL;
 		return (FALSE);
 	}
 
@@ -16358,4 +17000,49 @@ mptsas_dma_addr_destroy(ddi_dma_handle_t *dma_hdp, ddi_acc_handle_t *acc_hdp)
 	(void) ddi_dma_unbind_handle(*dma_hdp);
 	(void) ddi_dma_mem_free(acc_hdp);
 	ddi_dma_free_handle(dma_hdp);
+	*dma_hdp = NULL;
+}
+
+/*
+ * DDI UFM Callbacks
+ */
+static int
+mptsas_ufm_fill_image(ddi_ufm_handle_t *ufmh, void *arg, uint_t imgno,
+    ddi_ufm_image_t *img)
+{
+	if (imgno != 0)
+		return (EINVAL);
+
+	ddi_ufm_image_set_desc(img, "IOC Firmware");
+	ddi_ufm_image_set_nslots(img, 1);
+
+	return (0);
+}
+
+static int
+mptsas_ufm_fill_slot(ddi_ufm_handle_t *ufmh, void *arg, uint_t imgno,
+    uint_t slotno, ddi_ufm_slot_t *slot)
+{
+	mptsas_t *mpt = (mptsas_t *)arg;
+	char *buf;
+
+	if (imgno != 0 || slotno != 0 ||
+	    ddi_prop_lookup_string(DDI_DEV_T_ANY, mpt->m_dip,
+	    DDI_PROP_DONTPASS, "firmware-version", &buf) != DDI_PROP_SUCCESS)
+		return (EINVAL);
+
+	ddi_ufm_slot_set_attrs(slot, DDI_UFM_ATTR_ACTIVE);
+	ddi_ufm_slot_set_version(slot, buf);
+
+	ddi_prop_free(buf);
+
+	return (0);
+}
+
+static int
+mptsas_ufm_getcaps(ddi_ufm_handle_t *ufmh, void *arg, ddi_ufm_cap_t *caps)
+{
+	*caps = DDI_UFM_CAP_REPORT;
+
+	return (0);
 }

@@ -22,13 +22,7 @@
 # Copyright 2010 Sun Microsystems, Inc.  All rights reserved.
 # Use is subject to license terms.
 #
-# uts/intel/igb/Makefile
-#
-#	This makefile drives the production of the igb
-#	network driver kernel module.
-#
-#	intel architecture dependent
-#
+# Copyright (c) 2018, Joyent, Inc.
 
 #
 #	Paths to the base of the uts directory trees
@@ -41,7 +35,6 @@ UTSBASE = ../..
 MODULE		= igb
 OBJECTS		= $(IGB_OBJS:%=$(OBJS_DIR)/%)
 OBJECTS		+= $(E1000API_OBJS:%=$(OBJS_DIR)/%)
-LINTS		= $(IGB_OBJS:%.o=$(LINTS_DIR)/%.ln)
 ROOTMODULE	= $(ROOT_DRV_DIR)/$(MODULE)
 CONF_SRCDIR	= $(UTSBASE)/common/io/igb
 
@@ -50,13 +43,17 @@ CONF_SRCDIR	= $(UTSBASE)/common/io/igb
 #
 include $(UTSBASE)/intel/Makefile.intel
 
-LINTFLAGS += \
-	-I$(UTSBASE)/common/io/igb \
-	-I$(UTSBASE)/common/io/e1000api
-
+#
+# For now, disable these warnings; maintainers should endeavor
+# to investigate and remove these for maximum coverage.
+# Please do not carry these forward to new Makefiles.
+#
 CERRWARN	+= -_gcc=-Wno-switch
-CERRWARN	+= -_gcc=-Wno-uninitialized
+CERRWARN	+= $(CNOWARN_UNINIT)
 CERRWARN	+= -_cc=-erroff=E_STATEMENT_NOT_REACHED
+
+# needs work
+SMOFF += all_func_returns,indenting
 
 CFLAGS		+= -I$(UTSBASE)/common/io/e1000api
 CFLAGS		+= -I$(UTSBASE)/common/io/igb
@@ -65,13 +62,13 @@ CFLAGS		+= -I$(UTSBASE)/common/io/igb
 #	Define targets
 #
 ALL_TARGET	= $(BINARY) $(CONFMOD)
-LINT_TARGET	= $(MODULE).lint
 INSTALL_TARGET	= $(BINARY) $(ROOTMODULE) $(ROOT_CONFFILE)
 
 #
 # Driver depends on MAC
 #
 LDFLAGS		+= -dy -N misc/mac
+MAPFILES	+= ddi mac random kernel ksensor
 
 #
 #	Default build targets.
@@ -86,15 +83,10 @@ clean:		$(CLEAN_DEPS)
 
 clobber:	$(CLOBBER_DEPS)
 
-lint:		$(LINT_DEPS)
-
-modlintlib:	$(MODLINTLIB_DEPS)
-
-clean.lint:	$(CLEAN_LINT_DEPS)
-
 install:	$(INSTALL_DEPS)
 
 #
 #	Include common targets.
 #
+include $(UTSBASE)/Makefile.mapfile
 include $(UTSBASE)/intel/Makefile.targ

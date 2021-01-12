@@ -33,6 +33,8 @@
 /*
  * Copyright 2012 Jens Elkner <jel+illumos@cs.uni-magdeburg.de>
  * Copyright 2012 Hans Rosenfeld <rosenfeld@grumpf.hope-2000.org>
+ * Copyright 2019 Joyent, Inc.
+ * Copyright 2020 Oxide Computer Company
  */
 
 /*
@@ -60,6 +62,7 @@
 #include <sys/bitmap.h>
 #include <sys/x86_archext.h>
 #include <sys/pci_cfgspace.h>
+#include <sys/sysmacros.h>
 #ifdef __xpv
 #include <sys/hypervisor.h>
 #endif
@@ -75,10 +78,23 @@
  *		5 for family 0x14
  *		6 for family 0x15, models 00 - 0f
  *		7 for family 0x15, models 10 - 1f
+ *		8 for family 0x15, models 30 - 3f
+ *		9 for family 0x15, models 60 - 6f
+ *		10 for family 0x15, models 70 - 7f
+ *		11 for family 0x16, models 00 - 0f
+ *		12 for family 0x16, models 30 - 3f
+ *		13 for family 0x17, models 00 - 0f
+ *		14 for family 0x17, models 10 - 2f
+ *		15 for family 0x17, models 30 - 3f
+ *		16 for family 0x17, models 60 - 6f
+ *		17 for family 0x17, models 70 - 7f
+ *		18 for family 0x18, models 00 - 0f
+ *		19 for family 0x19, models 00 - 0f
+ *		20 for family 0x19, models 20 - 2f
  * Second index by (model & 0x3) for family 0fh,
  * CPUID pkg bits (Fn8000_0001_EBX[31:28]) for later families.
  */
-static uint32_t amd_skts[8][8] = {
+static uint32_t amd_skts[21][8] = {
 	/*
 	 * Family 0xf revisions B through E
 	 */
@@ -197,13 +213,209 @@ static uint32_t amd_skts[8][8] = {
 		X86_SOCKET_UNKNOWN	/* 0b111 */
 	},
 
+	/*
+	 * Family 0x15 models 30-3f
+	 */
+#define	A_SKTS_8			8
+	{
+		X86_SOCKET_FP3,		/* 0b000 */
+		X86_SOCKET_FM2R2,	/* 0b001 */
+		X86_SOCKET_UNKNOWN,	/* 0b010 */
+		X86_SOCKET_UNKNOWN,	/* 0b011 */
+		X86_SOCKET_UNKNOWN,	/* 0b100 */
+		X86_SOCKET_UNKNOWN,	/* 0b101 */
+		X86_SOCKET_UNKNOWN,	/* 0b110 */
+		X86_SOCKET_UNKNOWN	/* 0b111 */
+	},
+
+	/*
+	 * Family 0x15 models 60-6f
+	 */
+#define	A_SKTS_9			9
+	{
+		X86_SOCKET_FP4,		/* 0b000 */
+		X86_SOCKET_UNKNOWN,	/* 0b001 */
+		X86_SOCKET_AM4,		/* 0b010 */
+		X86_SOCKET_FM2R2,	/* 0b011 */
+		X86_SOCKET_UNKNOWN,	/* 0b100 */
+		X86_SOCKET_UNKNOWN,	/* 0b101 */
+		X86_SOCKET_UNKNOWN,	/* 0b110 */
+		X86_SOCKET_UNKNOWN	/* 0b111 */
+	},
+
+	/*
+	 * Family 0x15 models 70-7f
+	 */
+#define	A_SKTS_10			10
+	{
+		X86_SOCKET_FP4,		/* 0b000 */
+		X86_SOCKET_UNKNOWN,	/* 0b001 */
+		X86_SOCKET_AM4,		/* 0b010 */
+		X86_SOCKET_UNKNOWN,	/* 0b011 */
+		X86_SOCKET_FT4,		/* 0b100 */
+		X86_SOCKET_UNKNOWN,	/* 0b101 */
+		X86_SOCKET_UNKNOWN,	/* 0b110 */
+		X86_SOCKET_UNKNOWN	/* 0b111 */
+	},
+
+	/*
+	 * Family 0x16 models 00-0f
+	 */
+#define	A_SKTS_11			11
+	{
+		X86_SOCKET_FT3,		/* 0b000 */
+		X86_SOCKET_FS1B,	/* 0b001 */
+		X86_SOCKET_UNKNOWN,	/* 0b010 */
+		X86_SOCKET_UNKNOWN,	/* 0b011 */
+		X86_SOCKET_UNKNOWN,	/* 0b100 */
+		X86_SOCKET_UNKNOWN,	/* 0b101 */
+		X86_SOCKET_UNKNOWN,	/* 0b110 */
+		X86_SOCKET_UNKNOWN	/* 0b111 */
+	},
+
+	/*
+	 * Family 0x16 models 30-3f
+	 */
+#define	A_SKTS_12			12
+	{
+		X86_SOCKET_FT3B,	/* 0b000 */
+		X86_SOCKET_UNKNOWN,	/* 0b001 */
+		X86_SOCKET_UNKNOWN,	/* 0b010 */
+		X86_SOCKET_FP4,		/* 0b011 */
+		X86_SOCKET_UNKNOWN,	/* 0b100 */
+		X86_SOCKET_UNKNOWN,	/* 0b101 */
+		X86_SOCKET_UNKNOWN,	/* 0b110 */
+		X86_SOCKET_UNKNOWN	/* 0b111 */
+	},
+
+	/*
+	 * Family 0x17 models 00-0f	(Zen 1 - Naples, Ryzen)
+	 */
+#define	A_SKTS_13			13
+	{
+		X86_SOCKET_UNKNOWN,	/* 0b000 */
+		X86_SOCKET_UNKNOWN,	/* 0b001 */
+		X86_SOCKET_AM4,		/* 0b010 */
+		X86_SOCKET_UNKNOWN,	/* 0b011 */
+		X86_SOCKET_SP3,		/* 0b100 */
+		X86_SOCKET_UNKNOWN,	/* 0b101 */
+		X86_SOCKET_UNKNOWN,	/* 0b110 */
+		X86_SOCKET_SP3R2	/* 0b111 */
+	},
+
+	/*
+	 * Family 0x17 models 10-2f	(Zen 1 - APU: Raven Ridge)
+	 *				(Zen 1 - APU: Banded Kestrel)
+	 *				(Zen 1 - APU: Dali)
+	 */
+#define	A_SKTS_14			14
+	{
+		X86_SOCKET_FP5,		/* 0b000 */
+		X86_SOCKET_UNKNOWN,	/* 0b001 */
+		X86_SOCKET_AM4,		/* 0b010 */
+		X86_SOCKET_UNKNOWN,	/* 0b011 */
+		X86_SOCKET_UNKNOWN,	/* 0b100 */
+		X86_SOCKET_UNKNOWN,	/* 0b101 */
+		X86_SOCKET_UNKNOWN,	/* 0b110 */
+		X86_SOCKET_UNKNOWN	/* 0b111 */
+	},
+
+	/*
+	 * Family 0x17 models 30-3f	(Zen 2 - Rome)
+	 */
+#define	A_SKTS_15			15
+	{
+		X86_SOCKET_UNKNOWN,	/* 0b000 */
+		X86_SOCKET_UNKNOWN,	/* 0b001 */
+		X86_SOCKET_UNKNOWN,	/* 0b010 */
+		X86_SOCKET_UNKNOWN,	/* 0b011 */
+		X86_SOCKET_SP3,		/* 0b100 */
+		X86_SOCKET_UNKNOWN,	/* 0b101 */
+		X86_SOCKET_UNKNOWN,	/* 0b110 */
+		X86_SOCKET_SP3R2	/* 0b111 */
+	},
+
+	/*
+	 * Family 0x17 models 60-6f	(Zen 2 - Renoir)
+	 */
+#define	A_SKTS_16			16
+	{
+		X86_SOCKET_FP6,		/* 0b000 */
+		X86_SOCKET_UNKNOWN,	/* 0b001 */
+		X86_SOCKET_AM4,		/* 0b010 */
+		X86_SOCKET_UNKNOWN,	/* 0b011 */
+		X86_SOCKET_UNKNOWN,	/* 0b100 */
+		X86_SOCKET_UNKNOWN,	/* 0b101 */
+		X86_SOCKET_UNKNOWN,	/* 0b110 */
+		X86_SOCKET_UNKNOWN	/* 0b111 */
+	},
+
+	/*
+	 * Family 0x17 models 70-7f	(Zen 2 - Matisse)
+	 */
+#define	A_SKTS_17			17
+	{
+		X86_SOCKET_UNKNOWN,	/* 0b000 */
+		X86_SOCKET_UNKNOWN,	/* 0b001 */
+		X86_SOCKET_AM4,		/* 0b010 */
+		X86_SOCKET_UNKNOWN,	/* 0b011 */
+		X86_SOCKET_UNKNOWN,	/* 0b100 */
+		X86_SOCKET_UNKNOWN,	/* 0b101 */
+		X86_SOCKET_UNKNOWN,	/* 0b110 */
+		X86_SOCKET_UNKNOWN	/* 0b111 */
+	},
+
+	/*
+	 * Family 0x18 models 00-0f	(Dhyana)
+	 */
+#define	A_SKTS_18			18
+	{
+		X86_SOCKET_UNKNOWN,	/* 0b000 */
+		X86_SOCKET_UNKNOWN,	/* 0b001 */
+		X86_SOCKET_UNKNOWN,	/* 0b010 */
+		X86_SOCKET_UNKNOWN,	/* 0b011 */
+		X86_SOCKET_SL1,		/* 0b100 */
+		X86_SOCKET_UNKNOWN,	/* 0b101 */
+		X86_SOCKET_DM1,		/* 0b110 */
+		X86_SOCKET_SL1R2	/* 0b111 */
+	},
+
+	/*
+	 * Family 0x19 models 00-0f	(Zen 3 - Milan)
+	 */
+#define	A_SKTS_19			19
+	{
+		X86_SOCKET_UNKNOWN,	/* 0b000 */
+		X86_SOCKET_UNKNOWN,	/* 0b001 */
+		X86_SOCKET_UNKNOWN,	/* 0b010 */
+		X86_SOCKET_UNKNOWN,	/* 0b011 */
+		X86_SOCKET_SP3,		/* 0b100 */
+		X86_SOCKET_UNKNOWN,	/* 0b101 */
+		X86_SOCKET_UNKNOWN,	/* 0b110 */
+		X86_SOCKET_STRX4	/* 0b111 */
+	},
+
+	/*
+	 * Family 0x19 models 20-2f	(Zen 3 - Vermeer)
+	 */
+#define	A_SKTS_20			20
+	{
+		X86_SOCKET_UNKNOWN,	/* 0b000 */
+		X86_SOCKET_UNKNOWN,	/* 0b001 */
+		X86_SOCKET_AM4,		/* 0b010 */
+		X86_SOCKET_UNKNOWN,	/* 0b011 */
+		X86_SOCKET_UNKNOWN,	/* 0b100 */
+		X86_SOCKET_UNKNOWN,	/* 0b101 */
+		X86_SOCKET_UNKNOWN,	/* 0b110 */
+		X86_SOCKET_UNKNOWN	/* 0b111 */
+	}
 };
 
 struct amd_sktmap_s {
 	uint32_t	skt_code;
 	char		sktstr[16];
 };
-static struct amd_sktmap_s amd_sktmap[23] = {
+static struct amd_sktmap_s amd_sktmap_strs[X86_NUM_SOCKETS + 1] = {
 	{ X86_SOCKET_754,	"754" },
 	{ X86_SOCKET_939,	"939" },
 	{ X86_SOCKET_940,	"940" },
@@ -225,7 +437,50 @@ static struct amd_sktmap_s amd_sktmap[23] = {
 	{ X86_SOCKET_FP2,	"FP2" },
 	{ X86_SOCKET_FS1R2,	"FS1r2" },
 	{ X86_SOCKET_FM2,	"FM2" },
+	{ X86_SOCKET_FP3,	"FP3" },
+	{ X86_SOCKET_FM2R2,	"FM2r2" },
+	{ X86_SOCKET_FP4,	"FP4" },
+	{ X86_SOCKET_AM4,	"AM4" },
+	{ X86_SOCKET_FT3,	"FT3" },
+	{ X86_SOCKET_FT4,	"FT4" },
+	{ X86_SOCKET_FS1B,	"FS1b" },
+	{ X86_SOCKET_FT3B,	"FT3b" },
+	{ X86_SOCKET_SP3,	"SP3" },
+	{ X86_SOCKET_SP3R2,	"SP3r2" },
+	{ X86_SOCKET_FP5,	"FP5" },
+	{ X86_SOCKET_FP6,	"FP6" },
+	{ X86_SOCKET_STRX4,	"sTRX4" },
+	{ X86_SOCKET_SL1,	"SL1" },
+	{ X86_SOCKET_SL1R2,	"SL1R2" },
+	{ X86_SOCKET_DM1,	"DM1" },
 	{ X86_SOCKET_UNKNOWN,	"Unknown" }
+};
+
+static const struct amd_skt_mapent {
+	uint_t sm_family;
+	uint_t sm_modello;
+	uint_t sm_modelhi;
+	uint_t sm_sktidx;
+} amd_sktmap[] = {
+	{ 0x10, 0x00, 0xff, A_SKTS_2 },
+	{ 0x11, 0x00, 0xff, A_SKTS_3 },
+	{ 0x12, 0x00, 0xff, A_SKTS_4 },
+	{ 0x14, 0x00, 0x0f, A_SKTS_5 },
+	{ 0x15, 0x00, 0x0f, A_SKTS_6 },
+	{ 0x15, 0x10, 0x1f, A_SKTS_7 },
+	{ 0x15, 0x30, 0x3f, A_SKTS_8 },
+	{ 0x15, 0x60, 0x6f, A_SKTS_9 },
+	{ 0x15, 0x70, 0x7f, A_SKTS_10 },
+	{ 0x16, 0x00, 0x0f, A_SKTS_11 },
+	{ 0x16, 0x30, 0x3f, A_SKTS_12 },
+	{ 0x17, 0x00, 0x0f, A_SKTS_13 },
+	{ 0x17, 0x10, 0x2f, A_SKTS_14 },
+	{ 0x17, 0x30, 0x3f, A_SKTS_15 },
+	{ 0x17, 0x60, 0x6f, A_SKTS_16 },
+	{ 0x17, 0x70, 0x7f, A_SKTS_17 },
+	{ 0x18, 0x00, 0x0f, A_SKTS_18 },
+	{ 0x19, 0x00, 0x0f, A_SKTS_19 },
+	{ 0x19, 0x20, 0x2f, A_SKTS_20 }
 };
 
 /*
@@ -243,7 +498,7 @@ static const struct amd_rev_mapent {
 	uint_t rm_stephi;
 	uint32_t rm_chiprev;
 	const char *rm_chiprevstr;
-	int rm_sktidx;
+	uint_t rm_sktidx;
 } amd_revmap[] = {
 	/*
 	 * =============== AuthenticAMD Family 0xf ===============
@@ -346,11 +601,130 @@ static const struct amd_rev_mapent {
 	/*
 	 * =============== AuthenticAMD Family 0x15 ===============
 	 */
-	{ 0x15, 0x01, 0x01, 0x2, 0x2, X86_CHIPREV_AMD_15OR_REV_B2, "B2",
+	{ 0x15, 0x01, 0x01, 0x2, 0x2, X86_CHIPREV_AMD_15OR_REV_B2, "OR-B2",
 	    A_SKTS_6 },
-	{ 0x15, 0x10, 0x10, 0x1, 0x1, X86_CHIPREV_AMD_15TN_REV_A1, "A1",
+	{ 0x15, 0x02, 0x02, 0x0, 0x0, X86_CHIPREV_AMD_150R_REV_C0, "OR-C0",
+	    A_SKTS_6 },
+	{ 0x15, 0x10, 0x10, 0x1, 0x1, X86_CHIPREV_AMD_15TN_REV_A1, "TN-A1",
 	    A_SKTS_7 },
+	{ 0x15, 0x30, 0x30, 0x1, 0x1, X86_CHIPREV_AMD_15KV_REV_A1, "KV-A1",
+	    A_SKTS_8 },
+	/*
+	 * There is no Family 15 Models 60-6f revision guide available, so at
+	 * least get the socket information.
+	 */
+	{ 0x15, 0x60, 0x6f, 0x0, 0xf, X86_CHIPREV_AMD_15F60, "??",
+	    A_SKTS_9 },
+	{ 0x15, 0x70, 0x70, 0x0, 0x0, X86_CHIPREV_AMD_15ST_REV_A0, "ST-A0",
+	    A_SKTS_10 },
+
+	/*
+	 * =============== AuthenticAMD Family 0x16 ===============
+	 */
+	{ 0x16, 0x00, 0x00, 0x1, 0x1, X86_CHIPREV_AMD_16_KB_A1, "KB-A1",
+	    A_SKTS_11 },
+	{ 0x16, 0x30, 0x30, 0x1, 0x1, X86_CHIPREV_AMD_16_ML_A1, "ML-A1",
+	    A_SKTS_12 },
+
+	/*
+	 * =============== AuthenticAMD Family 0x17 ===============
+	 */
+	{ 0x17, 0x01, 0x01, 0x1, 0x1, X86_CHIPREV_AMD_17_ZP_B1, "ZP-B1",
+	    A_SKTS_13 },
+	{ 0x17, 0x01, 0x01, 0x2, 0x2, X86_CHIPREV_AMD_17_ZP_B2, "ZP-B2",
+	    A_SKTS_13 },
+	{ 0x17, 0x01, 0x01, 0x1, 0x1, X86_CHIPREV_AMD_17_PiR_B2, "PiR-B2",
+	    A_SKTS_13 },
+
+	{ 0x17, 0x11, 0x11, 0x0, 0x0, X86_CHIPREV_AMD_17_RV_B0, "RV-B0",
+	    A_SKTS_14 },
+	{ 0x17, 0x11, 0x11, 0x1, 0x1, X86_CHIPREV_AMD_17_RV_B1, "RV-B1",
+	    A_SKTS_14 },
+	{ 0x17, 0x18, 0x18, 0x1, 0x1, X86_CHIPREV_AMD_17_PCO_B1, "PCO-B1",
+	    A_SKTS_14 },
+
+	{ 0x17, 0x30, 0x30, 0x0, 0x0, X86_CHIPREV_AMD_17_SSP_A0, "SSP-A0",
+	    A_SKTS_15 },
+	{ 0x17, 0x31, 0x31, 0x0, 0x0, X86_CHIPREV_AMD_17_SSP_B0, "SSP-B0",
+	    A_SKTS_15 },
+
+	{ 0x17, 0x71, 0x71, 0x0, 0x0, X86_CHIPREV_AMD_17_MTS_B0, "MTS-B0",
+	    A_SKTS_17 },
+
+	/*
+	 * =============== HygonGenuine Family 0x18 ===============
+	 */
+	{ 0x18, 0x00, 0x00, 0x1, 0x1, X86_CHIPREV_HYGON_18_DN_A1, "DN_A1",
+	    A_SKTS_18 },
 };
+
+/*
+ * AMD keeps the socket type in CPUID Fn8000_0001_EBX, bits 31:28.
+ */
+static uint32_t
+synth_amd_skt_cpuid(uint_t family, uint_t sktid)
+{
+	struct cpuid_regs cp;
+	uint_t idx;
+
+	cp.cp_eax = 0x80000001;
+	(void) __cpuid_insn(&cp);
+
+	/* PkgType bits */
+	idx = BITX(cp.cp_ebx, 31, 28);
+
+	if (idx > 7) {
+		return (X86_SOCKET_UNKNOWN);
+	}
+
+	if (family == 0x10) {
+		uint32_t val;
+
+		val = pci_getl_func(0, 24, 2, 0x94);
+		if (BITX(val, 8, 8)) {
+			if (amd_skts[sktid][idx] == X86_SOCKET_AM2R2) {
+				return (X86_SOCKET_AM3);
+			} else if (amd_skts[sktid][idx] == X86_SOCKET_S1g3) {
+				return (X86_SOCKET_S1g4);
+			}
+		}
+	}
+
+	return (amd_skts[sktid][idx]);
+}
+
+static void
+synth_amd_skt(uint_t family, uint_t model, uint32_t *skt_p)
+{
+	int platform;
+	const struct amd_skt_mapent *skt;
+	uint_t i;
+
+	if (skt_p == NULL || family < 0xf)
+		return;
+
+#ifdef __xpv
+	/* PV guest */
+	if (!is_controldom()) {
+		*skt_p = X86_SOCKET_UNKNOWN;
+		return;
+	}
+#endif
+	platform = get_hwenv();
+
+	if ((platform & HW_VIRTUAL) != 0) {
+		*skt_p = X86_SOCKET_UNKNOWN;
+		return;
+	}
+
+	for (i = 0, skt = amd_sktmap; i < ARRAY_SIZE(amd_sktmap);
+	    i++, skt++) {
+		if (family == skt->sm_family &&
+		    model >= skt->sm_modello && model <= skt->sm_modelhi) {
+			*skt_p = synth_amd_skt_cpuid(family, skt->sm_sktidx);
+		}
+	}
+}
 
 static void
 synth_amd_info(uint_t family, uint_t model, uint_t step,
@@ -363,8 +737,7 @@ synth_amd_info(uint_t family, uint_t model, uint_t step,
 	if (family < 0xf)
 		return;
 
-	for (i = 0, rmp = amd_revmap; i < sizeof (amd_revmap) / sizeof (*rmp);
-	    i++, rmp++) {
+	for (i = 0, rmp = amd_revmap; i < ARRAY_SIZE(amd_revmap); i++, rmp++) {
 		if (family == rmp->rm_family &&
 		    model >= rmp->rm_modello && model <= rmp->rm_modelhi &&
 		    step >= rmp->rm_steplo && step <= rmp->rm_stephi) {
@@ -373,8 +746,10 @@ synth_amd_info(uint_t family, uint_t model, uint_t step,
 		}
 	}
 
-	if (!found)
+	if (!found) {
+		synth_amd_skt(family, model, skt_p);
 		return;
+	}
 
 	if (chiprev_p != NULL)
 		*chiprev_p = rmp->rm_chiprev;
@@ -398,41 +773,7 @@ synth_amd_info(uint_t family, uint_t model, uint_t step,
 		} else if (family == 0xf) {
 			*skt_p = amd_skts[rmp->rm_sktidx][model & 0x3];
 		} else {
-			/*
-			 * Starting with family 10h, socket type is stored in
-			 * CPUID Fn8000_0001_EBX
-			 */
-			struct cpuid_regs cp;
-			int idx;
-
-			cp.cp_eax = 0x80000001;
-			(void) __cpuid_insn(&cp);
-
-			/* PkgType bits */
-			idx = BITX(cp.cp_ebx, 31, 28);
-
-			if (idx > 7) {
-				/* Reserved bits */
-				*skt_p = X86_SOCKET_UNKNOWN;
-			} else {
-				*skt_p = amd_skts[rmp->rm_sktidx][idx];
-			}
-			if (family == 0x10) {
-				/*
-				 * Look at Ddr3Mode bit of DRAM Configuration
-				 * High Register to decide whether this is
-				 * actually AM3 or S1g4.
-				 */
-				uint32_t val;
-
-				val = pci_getl_func(0, 24, 2, 0x94);
-				if (BITX(val, 8, 8)) {
-					if (*skt_p == X86_SOCKET_AM2R2)
-						*skt_p = X86_SOCKET_AM3;
-					else if (*skt_p == X86_SOCKET_S1g3)
-						*skt_p = X86_SOCKET_S1g4;
-				}
-			}
+			*skt_p = synth_amd_skt_cpuid(family, rmp->rm_sktidx);
 		}
 	}
 }
@@ -444,6 +785,7 @@ _cpuid_skt(uint_t vendor, uint_t family, uint_t model, uint_t step)
 
 	switch (vendor) {
 	case X86_VENDOR_AMD:
+	case X86_VENDOR_HYGON:
 		synth_amd_info(family, model, step, &skt, NULL, NULL);
 		break;
 
@@ -464,9 +806,10 @@ _cpuid_sktstr(uint_t vendor, uint_t family, uint_t model, uint_t step)
 
 	switch (vendor) {
 	case X86_VENDOR_AMD:
+	case X86_VENDOR_HYGON:
 		synth_amd_info(family, model, step, &skt, NULL, NULL);
 
-		sktmapp = amd_sktmap;
+		sktmapp = amd_sktmap_strs;
 		while (sktmapp->skt_code != X86_SOCKET_UNKNOWN) {
 			if (sktmapp->skt_code == skt)
 				break;
@@ -490,6 +833,7 @@ _cpuid_chiprev(uint_t vendor, uint_t family, uint_t model, uint_t step)
 
 	switch (vendor) {
 	case X86_VENDOR_AMD:
+	case X86_VENDOR_HYGON:
 		synth_amd_info(family, model, step, NULL, &chiprev, NULL);
 		break;
 
@@ -508,6 +852,7 @@ _cpuid_chiprevstr(uint_t vendor, uint_t family, uint_t model, uint_t step)
 
 	switch (vendor) {
 	case X86_VENDOR_AMD:
+	case X86_VENDOR_HYGON:
 		synth_amd_info(family, model, step, NULL, NULL, &revstr);
 		break;
 
@@ -536,6 +881,8 @@ _cpuid_vendorstr_to_vendorcode(char *vendorstr)
 		return (X86_VENDOR_Intel);
 	else if (strcmp(vendorstr, X86_VENDORSTR_AMD) == 0)
 		return (X86_VENDOR_AMD);
+	else if (strcmp(vendorstr, X86_VENDORSTR_HYGON) == 0)
+		return (X86_VENDOR_HYGON);
 	else if (strcmp(vendorstr, X86_VENDORSTR_TM) == 0)
 		return (X86_VENDOR_TM);
 	else if (strcmp(vendorstr, CyrixInstead) == 0)

@@ -23,6 +23,7 @@
 # Copyright 2007 Sun Microsystems, Inc.  All rights reserved.
 # Use is subject to license terms.
 #
+# Copyright (c) 2018, Joyent, Inc.
 
 #
 # This makefile drives the production of SCSI vHCI Driver
@@ -39,7 +40,6 @@ UTSBASE   = ../..
 #
 MODULE		= scsi_vhci
 OBJECTS		= $(SCSI_VHCI_OBJS:%=$(OBJS_DIR)/%)
-LINTS		= $(SCSI_VHCI_OBJS:%.o=$(LINTS_DIR)/%.ln)
 ROOTMODULE	= $(ROOT_DRV_DIR)/$(MODULE)
 CONF_SRCDIR	= $(UTSBASE)/common/io/scsi/adapters/scsi_vhci
 
@@ -49,14 +49,16 @@ CONF_SRCDIR	= $(UTSBASE)/common/io/scsi/adapters/scsi_vhci
 include $(UTSBASE)/intel/Makefile.intel
 
 CERRWARN	+= -_gcc=-Wno-parentheses
-CERRWARN	+= -_gcc=-Wno-uninitialized
+CERRWARN	+= $(CNOWARN_UNINIT)
 CERRWARN	+= -_gcc=-Wno-unused-label
+
+# needs work
+SMATCH=off
 
 #
 # Define targets.
 #
 ALL_TARGET	= $(BINARY) $(SRC_CONFILE)
-LINT_TARGET	= $(MODULE).lint
 INSTALL_TARGET	= $(BINARY) $(ROOTMODULE) $(ROOT_CONFFILE)
 
 #
@@ -76,12 +78,6 @@ all:		$(ALL_DEPS)
 clean:		$(CLEAN_DEPS)
 
 clobber:	$(CLOBBER_DEPS)
-
-lint:		$(LINT_DEPS)
-
-modlintlib:	$(MODLINTLIB_DEPS)
-
-clean.lint:	$(CLEAN_LINT_DEPS)
 
 install:	$(INSTALL_DEPS)
 

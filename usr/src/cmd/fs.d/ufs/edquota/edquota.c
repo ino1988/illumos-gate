@@ -21,10 +21,11 @@
 /*
  * Copyright 2008 Sun Microsystems, Inc.  All rights reserved.
  * Use is subject to license terms.
+ * Copyright (c) 2016 by Delphix. All rights reserved.
  */
 
 /*	Copyright (c) 1984, 1986, 1987, 1988, 1989 AT&T	*/
-/*	  All Rights Reserved  	*/
+/*	  All Rights Reserved	*/
 
 /*
  * University Copyright- Copyright (c) 1982, 1986, 1988
@@ -35,8 +36,6 @@
  * software developed by the University of California, Berkeley, and its
  * contributors.
  */
-
-#pragma ident	"%Z%%M%	%I%	%E% SMI"
 
 /*
  * Disk quota editor.
@@ -282,7 +281,7 @@ editit(void)
 		/*
 		 * Certain editors can exit with a non-zero status even
 		 * though everything is peachy. Best to ask the user what
-		 * s/he really wants to do. (N.B.: if we're non-interactive
+		 * they really wants to do. (N.B.: if we're non-interactive
 		 * we'll "break" the while loop before we get here.)
 		 */
 		if (WIFEXITED(status) && (WEXITSTATUS(status) != 0)) {
@@ -841,7 +840,7 @@ quotactl(int cmd, char *special, uid_t uid, caddr_t addr)
 		exit(31+1);
 	}
 	qfile[0] = '\0';
-	while ((status = getmntent(fstab, &mntp)) == NULL) {
+	while ((status = getmntent(fstab, &mntp)) == 0) {
 		/*
 		 * check that it is a ufs file system
 		 * for all quotactl()s except Q_ALLSYNC check that

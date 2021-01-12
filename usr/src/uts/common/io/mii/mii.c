@@ -24,6 +24,10 @@
  */
 
 /*
+ * Copyright (c) 2018, Joyent, Inc.
+ */
+
+/*
  * mii - MII/PHY support for MAC drivers
  *
  * Utility module to provide a consistent interface to a MAC driver accross
@@ -61,7 +65,7 @@ enum {
 	MII_ELOOP,
 };
 
-static const char *mii_errors[] = {
+static const char * const mii_errors[] = {
 	"",
 	"Failure resetting PHY.",
 	"Failure starting PHY.",
@@ -71,7 +75,7 @@ static const char *mii_errors[] = {
 };
 
 /* Indexed by XCVR_ type */
-static const const char *mii_xcvr_types[] = {
+static const char * const mii_xcvr_types[] = {
 	"Undefined",
 	"Unknown",
 	"10 Mbps",
@@ -1519,7 +1523,7 @@ debounce:
 		 * gigabit modes cannot use legacy parallel detection.
 		 */
 
-		if ((ph->phy_type == XCVR_1000T) &
+		if ((ph->phy_type == XCVR_1000T) &&
 		    (anexp & MII_AN_EXP_LPCANAN)) {
 
 			/* check for gige */

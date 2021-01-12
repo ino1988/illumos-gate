@@ -23,6 +23,7 @@
 #
 # Copyright (c) 2001, 2010, Oracle and/or its affiliates. All rights reserved.
 # Copyright 2014 Garrett D'Amore <garrett@damore.org>
+# Copyright 2020 Joyent, Inc.
 #
 #
 # open-tree exception list
@@ -36,7 +37,6 @@
 #
 ./usr/src/cmd/oawk/EXPLAIN
 ./usr/src/cmd/vi/port/ex.news
-./usr/src/cmd/ssh/doc
 
 #
 # Ignore everything under trees that may be resynched from outside ON.
@@ -144,7 +144,6 @@
 # Ignore internal packages, scripts, and tools that are intentionally not
 # built or used during a nightly.
 #
-./usr/src/cmd/sgs/packages
 ./usr/src/cmd/sgs/rtld.4.x
 ./usr/src/prototypes
 ./usr/src/cmd/pools/poold/com/sun/solaris/*/*/package.html
@@ -195,7 +194,7 @@
 ./usr/src/cmd/sendmail/src/statusd_shm.h
 
 #
-# Ignore files originally supplied by ISC (Internet Software Consortium) 
+# Ignore files originally supplied by ISC (Internet Software Consortium)
 # as part of a BIND release.
 #
 ./usr/src/lib/libresolv2/common/irs/getaddrinfo.c
@@ -208,22 +207,6 @@
 # assembly files. We keep it around for future reference.
 #
 ./usr/src/common/bignum/mont_mulf.c
-
-#
-# Ignore the sparc Makefiles for x86-only drivers;
-# they're used to build warlock only.
-#
-./usr/src/uts/sparc/sata/Makefile
-./usr/src/uts/sparc/si3124/Makefile
-./usr/src/uts/sparc/nv_sata/Makefile
-./usr/src/uts/sparc/ahci/Makefile
-
-#
-# Ignore uttrack.c.  It is provided as part of the standard
-# ACPI CA source code but provides optional resource tracking
-# functionality which is not used.
-#
-./usr/src/uts/intel/io/acpica/utilities/uttrack.c
 
 #
 # Ignore any files that get used during a gcc build only.
@@ -248,12 +231,6 @@
 #
 ./usr/src/OPENSOLARIS.LICENSE
 
-# Though "COPYING" is usually used as a filename for GPL, the license
-# information for openssh is actually found in usr/src/cmd/ssh/doc/LICENSE.
-# The COPYING.Ylonen file is merely additional information.
-#
-./usr/src/cmd/ssh/doc/COPYING.Ylonen
-
 #
 # This covers header files that are not delivered.
 #
@@ -263,4 +240,3 @@
 # ld tests which are not currently delivered
 #
 ./usr/src/cmd/sgs/test
-./usr/src/cmd/mdb/test

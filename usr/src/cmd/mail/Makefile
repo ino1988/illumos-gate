@@ -22,11 +22,12 @@
 # Copyright 2009 Sun Microsystems, Inc.  All rights reserved.
 # Use is subject to license terms.
 #
+# Copyright (c) 2018, Joyent, Inc.
+#
 
+BINPROG=	mail
 
-BINPROG=	mail 
-
-PROG= 	       $(BINPROG)
+PROG=	       $(BINPROG)
 
 GREP=		grep
 
@@ -35,14 +36,14 @@ include ../Makefile.cmd
 CLOBBERFILES=	$(PROG)
 CLEANFILES=	$(MAILOBJS)
 
-MAILOBJS= 	add_recip.o cat.o ckdlivopts.o \
+MAILOBJS=	add_recip.o cat.o ckdlivopts.o \
 		cksaved.o clr_hinfo.o copyback.o copylet.o \
-		copymt.o createmf.o del_recipl.o Dout.o  delete.o \
+		copymt.o createmf.o del_recipl.o Dout.o	 delete.o \
 		done.o doopen.o dumpaff.o dumprcv.o \
 		errmsg.o gendeliv.o getarg.o getcomment.o \
 		gethead.o goback.o init.o \
 		isheader.o isit.o islocal.o istext.o legal.o \
-		lock.o  main.o mkdead.o mta_ercode.o \
+		lock.o	main.o mkdead.o mta_ercode.o \
 		new_recipl.o parse.o pckaffspot.o pckrcvspot.o \
 		pickFrom.o pipletr.o poplist.o printhdr.o printmail.o \
 		pushlist.o savehdrs.o sel_disp.o  sendlist.o \
@@ -52,7 +53,7 @@ MAILOBJS= 	add_recip.o cat.o ckdlivopts.o \
 MAILSRC=	 $(MAILOBJS:%.o=%.c)
 
 CPROG=		mail
-CPROGSRC= 	$(CPROG:%=_%.c)
+CPROGSRC=	$(CPROG:%=_%.c)
 
 # ROOT directories
 ROOTMAILD=	$(ROOTLIB)/mail
@@ -72,14 +73,17 @@ EDITPATH= \
 CPPFLAGS =	-DSVR4 -I. $(CPPFLAGS.master)
 CERRWARN +=	-_gcc=-Wno-implicit-function-declaration
 CERRWARN +=	-_gcc=-Wno-unused-variable
-CERRWARN +=	-_gcc=-Wno-uninitialized
+CERRWARN +=	$(CNOWARN_UNINIT)
 CERRWARN +=	-_gcc=-Wno-clobbered
 CERRWARN +=	-_gcc=-Wno-extra
+
+# missing type declarations for old-style functions
+SMATCH =	off
 
 LDLIBS +=	-lmail -lsocket
 
 # mail defines its own delete() - reduce symbols to locals to remove name clash.
-LDFLAGS +=	$(MAPFILE.NGB:%=-M%)
+LDFLAGS +=	$(MAPFILE.NGB:%=-Wl,-M%)
 
 # conditional assignments
 #
@@ -87,12 +91,9 @@ all:=		TARGET= all
 install:=	TARGET= install
 clean:=		TARGET= clean
 clobber:=	TARGET= clobber
-lint:=		TARGET= lint
 
 # file modes, owners and groups for the install target
 #
-
-
 $(ROOTBIN)/mail :=	FILEMODE =	02511
 
 
@@ -104,9 +105,9 @@ $(ROOTINC)/% : %
 
 .PARALLEL: $(MAILOBJS) $(OBJS)
 
-all:		$(PROG) 
+all:		$(PROG)
 
-mail: 		$(MAILOBJS)
+mail:		$(MAILOBJS)
 	$(LINK.c) -o $@ $(MAILOBJS) $(LDLIBS)
 	$(POST_PROCESS)
 
@@ -116,9 +117,6 @@ install: all .WAIT $(ROOTBINPROG) $(ROOTSYMLINKS)
 #
 $(ROOTBIN)/rmail:
 	$(RM) $@; $(SYMLINK) mail $@
-
-lint: 
-	$(LINT.c) $(MAILSRC)
 
 clean:
 	$(RM) $(OBJS) $(MAILOBJS)

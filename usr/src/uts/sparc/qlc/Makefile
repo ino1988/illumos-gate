@@ -33,7 +33,6 @@ UTSBASE	= ../..
 #
 MODULE		= qlc
 OBJECTS		= $(QLC_OBJS:%=$(OBJS_DIR)/%)
-LINTS		= $(QLC_OBJS:%.o=$(LINTS_DIR)/%.ln)
 ROOTMODULE	= $(ROOT_DRV_DIR)/$(MODULE)
 CONF_SRCDIR	= $(UTSBASE)/common/io/fibre-channel/fca/qlc
 
@@ -47,7 +46,6 @@ include $(UTSBASE)/sparc/Makefile.sparc
 #	Define targets
 #
 ALL_TARGET	= $(BINARY) $(CONFMOD) $(ITUMOD)
-LINT_TARGET	= $(MODULE).lint
 INSTALL_TARGET	= $(BINARY) $(ROOTMODULE) $(ROOT_CONFFILE)
 
 #
@@ -61,12 +59,6 @@ INC_PATH	+= -I$(UTSBASE)/common/sys/fibre-channel/impl
 
 LDFLAGS		+= -dy -Nmisc/fctl
 
-#
-#	Lint tags
-#
-LINTTAGS	+= -erroff=E_BAD_PTR_CAST_ALIGN
-LINTTAGS	+= -erroff=E_SUPPRESSION_DIRECTIVE_UNUSED
-
 FWIMAGES         = 2200
 FWIMAGES        += 2300
 FWIMAGES        += 2400
@@ -77,7 +69,7 @@ FWIMAGES        += 8100
 FWMODULES        = $(FWIMAGES:%=$(MODULE)_fw_%)
 FWMODULES_SRC    = $(FWIMAGES:%=$(CONF_SRCDIR)/ql_fw_%.c)
 
-CERRWARN	+= -_gcc=-Wno-uninitialized
+CERRWARN	+= $(CNOWARN_UNINIT)
 CERRWARN	+= -_gcc=-Wno-type-limits
 CERRWARN	+= -_gcc=-Wno-parentheses
 
@@ -93,12 +85,6 @@ def:		$(DEF_DEPS)
 clean:		$(CLEAN_DEPS)
 
 clobber:	$(CLOBBER_DEPS)
-
-lint:		$(LINT_DEPS)
-
-modlintlib:	$(MODLINTLIB_DEPS)
-
-clean.lint:	$(CLEAN_LINT_DEPS)
 
 install:	$(INSTALL_DEPS)
 

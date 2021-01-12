@@ -1,37 +1,66 @@
-'\" te
+.\"
+.\" Sun Microsystems, Inc. gratefully acknowledges The Open Group for
+.\" permission to reproduce portions of its copyrighted documentation.
+.\" Original documentation from The Open Group can be obtained online at
+.\" http://www.opengroup.org/bookstore/.
+.\"
+.\" The Institute of Electrical and Electronics Engineers and The Open
+.\" Group, have given us permission to reprint portions of their
+.\" documentation.
+.\"
+.\" In the following statement, the phrase ``this text'' refers to portions
+.\" of the system documentation.
+.\"
+.\" Portions of this text are reprinted and reproduced in electronic form
+.\" in the SunOS Reference Manual, from IEEE Std 1003.1, 2004 Edition,
+.\" Standard for Information Technology -- Portable Operating System
+.\" Interface (POSIX), The Open Group Base Specifications Issue 6,
+.\" Copyright (C) 2001-2004 by the Institute of Electrical and Electronics
+.\" Engineers, Inc and The Open Group.  In the event of any discrepancy
+.\" between these versions and the original IEEE and The Open Group
+.\" Standard, the original IEEE and The Open Group Standard is the referee
+.\" document.  The original Standard can be obtained online at
+.\" http://www.opengroup.org/unix/online.html.
+.\"
+.\" This notice shall appear on any product containing this material.
+.\"
+.\" The contents of this file are subject to the terms of the
+.\" Common Development and Distribution License (the "License").
+.\" You may not use this file except in compliance with the License.
+.\"
+.\" You can obtain a copy of the license at usr/src/OPENSOLARIS.LICENSE
+.\" or http://www.opensolaris.org/os/licensing.
+.\" See the License for the specific language governing permissions
+.\" and limitations under the License.
+.\"
+.\" When distributing Covered Code, include this CDDL HEADER in each
+.\" file and include the License file at usr/src/OPENSOLARIS.LICENSE.
+.\" If applicable, add the following below this CDDL HEADER, with the
+.\" fields enclosed by brackets "[]" replaced with your own identifying
+.\" information: Portions Copyright [yyyy] [name of copyright owner]
+.\"
+.\"
 .\" Copyright 1989 AT&T
-.\" Copyright (c) 2009, Sun Microsystems, Inc. All Rights Reserved
 .\" Portions Copyright (c) 1992, X/Open Company Limited All Rights Reserved
-.\" Sun Microsystems, Inc. gratefully acknowledges The Open Group for permission to reproduce portions of its copyrighted documentation. Original documentation from The Open Group can be obtained online at  http://www.opengroup.org/bookstore/.
-.\" The Institute of Electrical and Electronics Engineers and The Open Group, have given us permission to reprint portions of their documentation. In the following statement, the phrase "this text" refers to portions of the system documentation. Portions of this text
-.\" are reprinted and reproduced in electronic form in the Sun OS Reference Manual, from IEEE Std 1003.1, 2004 Edition, Standard for Information Technology -- Portable Operating System Interface (POSIX), The Open Group Base Specifications Issue 6, Copyright (C) 2001-2004 by the Institute of Electrical
-.\" and Electronics Engineers, Inc and The Open Group. In the event of any discrepancy between these versions and the original IEEE and The Open Group Standard, the original IEEE and The Open Group Standard is the referee document. The original Standard can be obtained online at http://www.opengroup.org/unix/online.html.
-.\"  This notice shall appear on any product containing this material.
-.\" The contents of this file are subject to the terms of the Common Development and Distribution License (the "License").  You may not use this file except in compliance with the License.
-.\" You can obtain a copy of the license at usr/src/OPENSOLARIS.LICENSE or http://www.opensolaris.org/os/licensing.  See the License for the specific language governing permissions and limitations under the License.
-.\" When distributing Covered Code, include this CDDL HEADER in each file and include the License file at usr/src/OPENSOLARIS.LICENSE.  If applicable, add the following below this CDDL HEADER, with the fields enclosed by brackets "[]" replaced with your own identifying information: Portions Copyright [yyyy] [name of copyright owner]
-.TH CRONTAB 1 "Apr 6, 2009"
+.\" Copyright (c) 2009, Sun Microsystems, Inc. All Rights Reserved
+.\" Copyright 2020 OmniOS Community Edition (OmniOSce) Association.
+.\"
+.TH CRONTAB 1 "Aug 20, 2020"
 .SH NAME
 crontab \- user crontab file
 .SH SYNOPSIS
-.LP
 .nf
-\fB/usr/bin/crontab\fR [\fIfilename\fR]
+\fB/usr/bin/crontab\fR [\fB-u\fR \fIusername\fR] [\fIfilename\fR]
 .fi
 
 .LP
 .nf
-\fB/usr/bin/crontab\fR \fB-e\fR [\fIusername\fR]
+\fB/usr/bin/crontab\fR \fB{ -e | -l | -r }\fR [\fIusername\fR]
 .fi
 
 .LP
 .nf
-\fB/usr/bin/crontab\fR \fB-l\fR [\fIusername\fR]
-.fi
-
-.LP
-.nf
-\fB/usr/bin/crontab\fR \fB-r\fR [\fIusername\fR]
+\fB/usr/bin/crontab\fR \fB-u\fR \fIusername\fR \fB{ -e | -l | -r }\fR
 .fi
 
 .LP
@@ -41,17 +70,12 @@ crontab \- user crontab file
 
 .LP
 .nf
-\fB/usr/xpg4/bin/crontab\fR \fB-e\fR [\fIusername\fR]
+\fB/usr/xpg4/bin/crontab\fR \fB{ -e | -l | -r }\fR [\fIusername\fR]
 .fi
 
 .LP
 .nf
-\fB/usr/xpg4/bin/crontab\fR \fB-l\fR [\fIusername\fR]
-.fi
-
-.LP
-.nf
-\fB/usr/xpg4/bin/crontab\fR \fB-r\fR [\fIusername\fR]
+\fB/usr/xpg4/bin/crontab\fR \fB-u\fR \fIusername\fR \fB{ -e | -l | -r }\fR
 .fi
 
 .LP
@@ -61,22 +85,15 @@ crontab \- user crontab file
 
 .LP
 .nf
-\fB/usr/xpg6/bin/crontab\fR \fB-e\fR [\fIusername\fR]
+\fB/usr/xpg6/bin/crontab\fR \fB{ -e | -l | -r }\fR [\fIusername\fR]
 .fi
 
 .LP
 .nf
-\fB/usr/xpg6/bin/crontab\fR \fB-l\fR [\fIusername\fR]
-.fi
-
-.LP
-.nf
-\fB/usr/xpg6/bin/crontab\fR \fB-r\fR [\fIusername\fR]
+\fB/usr/xpg6/bin/crontab\fR \fB-u\fR \fIusername\fR \fB{ -e | -l | -r }\fR
 .fi
 
 .SH DESCRIPTION
-.sp
-.LP
 The \fBcrontab\fR utility manages a user's access with \fBcron\fR (see
 \fBcron\fR(1M)) by copying, creating, listing, and removing \fBcrontab\fR
 files. If invoked without options, \fBcrontab\fR copies the specified file, or
@@ -85,10 +102,9 @@ users' crontabs.
 .sp
 .LP
 If \fBcrontab\fR is invoked with \fIfilename\fR, this overwrites an existing
-\fBcrontab\fR entry for the user that invokes it.
+\fBcrontab\fR entry for the user that invokes it, or for the user specified
+with the \fB-u\fR option.
 .SS "\fBcrontab\fR Access Control"
-.sp
-.LP
 Users: Access to \fBcrontab\fR is allowed:
 .RS +4
 .TP
@@ -130,7 +146,7 @@ authorization is allowed to submit a job.
 .TP
 .ie t \(bu
 .el o
-if Solaris Auditing is enabled, the user's shell is not audited and the user is
+if Auditing is enabled, the user's shell is not audited and the user is
 not the \fBcrontab\fR owner. This can occur if the user logs in by way of a
 program, such as some versions of \fBSSH\fR, which does not set audit
 parameters.
@@ -143,8 +159,6 @@ The rules for \fBallow\fR and \fBdeny\fR apply to \fBroot\fR only if the
 .LP
 The \fBallow\fR/\fBdeny\fR files consist of one user name per line.
 .SS "\fBcrontab\fR Entry Format"
-.sp
-.LP
 A \fBcrontab\fR file consists of lines of six fields each. The fields are
 separated by spaces or tabs. The first five are integer patterns that specify
 the following:
@@ -164,10 +178,16 @@ day of the week (0\(mi6 with 0=Sunday).
 .LP
 Each of these patterns can be either an asterisk (meaning all legal values) or
 a list of elements separated by commas. An element is either a number or two
-numbers separated by a minus sign (meaning an inclusive range). Time specified
-here is interpreted in the currently active timezone. At the top of the crontab
-file this is the timezone which is set system-wide in /etc/default/init. A user
-can add a line such as:
+numbers separated by a hyphen (meaning an inclusive range).
+.LP
+A range or asterisk can optionally be followed by a step value as
+\fI/<number>\fR. For example, \fI2\(mi59/3\fR can be used in the minutes field
+to specify every three minutes starting at 2 past the hour, or \fI*/2\fR in
+the hours field means every two hours.
+.LP
+Time specified here is interpreted in the currently active timezone. At the top
+of the crontab file this is the timezone which is set system-wide in
+/etc/default/init. A user can add a line such as:
 .sp
 .in +2
 .nf
@@ -234,17 +254,15 @@ environment variables are set to match those that are in effect in the
 If you do not redirect the standard output and standard error of your commands,
 any generated output or errors are mailed to you.
 .SS "\fBcrontab\fR Environment Variables"
-.sp
-.LP
 The following variables are supported:
 .sp
 .ne 2
 .na
-\fB\fBHOME\fR\fR
+\fBHOME\fR
 .ad
 .sp .6
 .RS 4n
-Allows the user to choose and alternative directory for cron to change
+Allows the user to choose an alternative directory for cron to change
 directory to prior to running the command. For example:
 .sp
 .in +2
@@ -259,7 +277,7 @@ HOME=/var/tmp
 .sp
 .ne 2
 .na
-\fB\fBSHELL\fR\fR
+\fBSHELL\fR
 .ad
 .sp .6
 .RS 4n
@@ -277,7 +295,7 @@ SHELL=/usr/bin/ksh
 .sp
 .ne 2
 .na
-\fB\fBTZ\fR\fR
+\fBTZ\fR
 .ad
 .sp .6
 .RS 4n
@@ -307,8 +325,6 @@ The lines that are not setting these environment variables are  the same as
 crontab entries that conform to the UNIX standard and are described elsewhere
 in this man page.
 .SS "Setting \fBcron\fR Jobs Across Timezones"
-.sp
-.LP
 The default timezone of the \fBcron\fR daemon sets the system-wide timezone for
 \fBcron\fR entries. This, in turn, is by set by default system-wide using
 \fB/etc/default/init\fR.
@@ -318,13 +334,11 @@ If some form of \fBdaylight savings\fR or \fBsummer/winter time\fR is in
 effect, then jobs scheduled during the switchover period could be executed
 once, twice, or not at all.
 .SH OPTIONS
-.sp
-.LP
 The following options are supported:
 .sp
 .ne 2
 .na
-\fB\fB-e\fR\fR
+\fB-e\fR
 .ad
 .RS 6n
 Edits a copy of the current user's \fBcrontab\fR file, or creates an empty file
@@ -348,7 +362,7 @@ done by root or by a user with the \fBsolaris.jobs.admin\fR authorization.
 .sp
 .ne 2
 .na
-\fB\fB-l\fR\fR
+\fB-l\fR
 .ad
 .RS 6n
 Lists the \fBcrontab\fR file for the invoking user. Only root or a user with
@@ -359,7 +373,7 @@ the \fBsolaris.jobs.admin\fR authorization can specify a username following the
 .sp
 .ne 2
 .na
-\fB\fB-r\fR\fR
+\fB-r\fR
 .ad
 .RS 6n
 Removes a user's \fBcrontab\fR from the \fBcrontab\fR directory. Only root or a
@@ -368,8 +382,19 @@ following the \fB-r\fR option to remove the \fBcrontab\fR file of the specified
 user.
 .RE
 
+.sp
+.ne 2
+.na
+\fB-u\fR \fIusername\fR
+.ad
+.RS 6n
+Specifies the name of the user whose \fBcrontab\fR is to be replaced, viewed or
+modified. This can only be done by root or by a user with the
+\fBsolaris.jobs.admin\fR authorization.
+
+.RE
+
 .SH EXAMPLES
-.LP
 \fBExample 1 \fRCleaning up Core Files
 .sp
 .LP
@@ -430,7 +455,33 @@ example:
 would run a command only on Mondays.
 
 .LP
-\fBExample 4 \fRUsing Environment Variables
+\fBExample 4 \fRUsing step values:
+.sp
+.LP
+This example runs a job every hour during the night and every 3 hours during
+working hours.
+
+.sp
+.in +2
+.nf
+\fB0 8-18/3,19-7 * * *\fR
+.fi
+.in -2
+.sp
+
+.LP
+and to run a job every 2 minutes, use:
+
+.sp
+.in +2
+.nf
+\fB*/2 * * * *\fR
+.fi
+.in -2
+.sp
+
+.LP
+\fBExample 5 \fRUsing Environment Variables
 .sp
 .LP
 The following entries take advantage of \fBcrontab\fR support for certain
@@ -461,16 +512,13 @@ Korn shell. The file concludes with \fBTZ\fR, \fBHOME\fR, and \fBSHELL\fR
 entries that return those variable to their default values.
 
 .SH ENVIRONMENT VARIABLES
-.sp
-.LP
 See \fBenviron\fR(5) for descriptions of the following environment variables
 that affect the execution of \fBcrontab\fR: \fBLANG\fR, \fBLC_ALL\fR,
 \fBLC_CTYPE\fR, \fBLC_MESSAGES\fR, and \fBNLSPATH\fR.
 .SS "\fB/usr/bin/crontab\fR"
-.sp
 .ne 2
 .na
-\fB\fBEDITOR\fR\fR
+\fBEDITOR\fR
 .ad
 .RS 10n
 Determine the editor to be invoked when the \fB-e\fR option is specified. This
@@ -481,7 +529,7 @@ is overridden by the \fBVISUAL\fR environmental variable. The default editor is
 .sp
 .ne 2
 .na
-\fB\fBPATH\fR\fR
+\fBPATH\fR
 .ad
 .RS 10n
 The \fBPATH\fR in \fBcrontab\fR's environment specifies the search path used to
@@ -491,7 +539,7 @@ find the editor.
 .sp
 .ne 2
 .na
-\fB\fBVISUAL\fR\fR
+\fBVISUAL\fR
 .ad
 .RS 10n
 Determine the visual editor to be invoked when the \fB-e\fR option is
@@ -500,10 +548,9 @@ specified. If \fBVISUAL\fR is not specified, then the environment variable
 .RE
 
 .SS "\fB/usr/xpg4/bin/crontab\fR"
-.sp
 .ne 2
 .na
-\fB\fBEDITOR\fR\fR
+\fBEDITOR\fR
 .ad
 .RS 10n
 Determine the editor to be invoked when the \fB-e\fR option is specified. The
@@ -511,10 +558,9 @@ default editor is \fB/usr/xpg4/bin/vi\fR.
 .RE
 
 .SS "\fB/usr/xpg6/bin/crontab\fR"
-.sp
 .ne 2
 .na
-\fB\fBEDITOR\fR\fR
+\fBEDITOR\fR
 .ad
 .RS 10n
 Determine the editor to be invoked when the \fB-e\fR option is specified. The
@@ -522,13 +568,11 @@ default editor is \fB/usr/xpg6/bin/vi\fR.
 .RE
 
 .SH EXIT STATUS
-.sp
-.LP
 The following exit values are returned:
 .sp
 .ne 2
 .na
-\fB\fB0\fR\fR
+\fB0\fR
 .ad
 .RS 6n
 Successful completion.
@@ -537,17 +581,16 @@ Successful completion.
 .sp
 .ne 2
 .na
-\fB\fB>0\fR\fR
+\fB>0\fR
 .ad
 .RS 6n
 An error occurred.
 .RE
 
 .SH FILES
-.sp
 .ne 2
 .na
-\fB\fB/etc/cron.d\fR\fR
+\fB/etc/cron.d\fR
 .ad
 .RS 28n
 main cron directory
@@ -556,7 +599,7 @@ main cron directory
 .sp
 .ne 2
 .na
-\fB\fB/etc/cron.d/cron.allow\fR\fR
+\fB/etc/cron.d/cron.allow\fR
 .ad
 .RS 28n
 list of allowed users
@@ -565,7 +608,7 @@ list of allowed users
 .sp
 .ne 2
 .na
-\fB\fB/etc/default/cron\fR\fR
+\fB/etc/default/cron\fR
 .ad
 .RS 28n
 contains cron default settings
@@ -574,7 +617,7 @@ contains cron default settings
 .sp
 .ne 2
 .na
-\fB\fB/etc/cron.d/cron.deny\fR\fR
+\fB/etc/cron.d/cron.deny\fR
 .ad
 .RS 28n
 list of denied users
@@ -583,7 +626,7 @@ list of denied users
 .sp
 .ne 2
 .na
-\fB\fB/var/cron/log\fR\fR
+\fB/var/cron/log\fR
 .ad
 .RS 28n
 accounting information
@@ -592,20 +635,16 @@ accounting information
 .sp
 .ne 2
 .na
-\fB\fB/var/spool/cron/crontabs\fR\fR
+\fB/var/spool/cron/crontabs\fR
 .ad
 .RS 28n
 spool area for \fBcrontab\fR
 .RE
 
 .SH ATTRIBUTES
-.sp
-.LP
 See \fBattributes\fR(5) for descriptions of the following attributes:
 .SS "\fB/usr/bin/crontab\fR"
-.sp
 
-.sp
 .TS
 box;
 c | c
@@ -616,9 +655,7 @@ Interface Stability	Standard
 .TE
 
 .SS "\fB/usr/xpg4/bin/crontab\fR"
-.sp
 
-.sp
 .TS
 box;
 c | c
@@ -629,9 +666,7 @@ Interface Stability	Standard
 .TE
 
 .SS "\fB/usr/xpg6/bin/crontab\fR"
-.sp
 
-.sp
 .TS
 box;
 c | c
@@ -642,14 +677,10 @@ Interface Stability	Standard
 .TE
 
 .SH SEE ALSO
-.sp
-.LP
 \fBatq\fR(1), \fBatrm\fR(1), \fBauths\fR(1), \fBed\fR(1), \fBsh\fR(1),
 \fBvi\fR(1), \fBcron\fR(1M), \fBsu\fR(1M), \fBauth_attr\fR(4),
 \fBattributes\fR(5), \fBenviron\fR(5), \fBstandards\fR(5)
 .SH NOTES
-.sp
-.LP
 If you inadvertently enter the \fBcrontab\fR command with no arguments, do not
 attempt to get out with Control-d. This removes all entries in your
 \fBcrontab\fR file. Instead, exit with Control-c.

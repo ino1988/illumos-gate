@@ -64,7 +64,6 @@ file path=etc/ipf/ipf.conf group=sys original_name=SUNWipf:etc/ipf/ipf.conf \
 file path=lib/svc/manifest/network/ipfilter.xml group=sys mode=0444
 file path=lib/svc/method/ipfilter mode=0555
 file path=usr/kernel/drv/$(ARCH64)/ipf group=sys
-$(i386_ONLY)file path=usr/kernel/drv/ipf group=sys
 file path=usr/kernel/drv/ipf.conf group=sys
 $(i386_ONLY)file path=usr/lib/ipf/$(ARCH32)/ipftest mode=0555
 file path=usr/lib/ipf/$(ARCH64)/ipftest mode=0555
@@ -115,6 +114,10 @@ file path=usr/share/man/man1m/ipfstat.1m
 file path=usr/share/man/man1m/ipmon.1m
 file path=usr/share/man/man1m/ipnat.1m
 file path=usr/share/man/man1m/ippool.1m
+file path=usr/share/man/man4/ipf.4
+file path=usr/share/man/man4/ipmon.4
+file path=usr/share/man/man4/ipnat.4
+file path=usr/share/man/man4/ippool.4
 file path=usr/share/man/man5/ipfilter.5
 file path=usr/share/man/man7i/ipnat.7i
 hardlink path=usr/lib/ipf/ipftest target=../../../usr/lib/isaexec
@@ -131,3 +134,8 @@ legacy pkg=SUNWipfu desc="IP Filter Utilities" \
 license cr_Sun license=cr_Sun
 license usr/src/cmd/ipf/tools/IPFILTER.LICENCE \
     license=usr/src/cmd/ipf/tools/IPFILTER.LICENCE
+link path=usr/share/man/man4/ipf.conf.4 target=./ipf.4
+link path=usr/share/man/man4/ipf6.conf.4 target=./ipf.4
+link path=usr/share/man/man4/ipmon.conf.4 target=./ipmon.4
+link path=usr/share/man/man4/ipnat.conf.4 target=./ipnat.4
+link path=usr/share/man/man4/ippool.conf.4 target=./ippool.4

@@ -18,30 +18,35 @@
 #
 # CDDL HEADER END
 #
-#
-# Copyright 2011 Nexenta Systems, Inc.  All rights reserved.
+
 #
 # Copyright 2010 Sun Microsystems, Inc.  All rights reserved.
 # Use is subject to license terms.
-#
 # Copyright 2013 Garrett D'Amore <garrett@damore.org>
+# Copyright 2015 Igor Kozhukhov <ikozhukhov@gmail.com>
+# Copyright 2017 Nexenta Systems, Inc.
 #
-# head/Makefile
-#
+
 # include global definitions
 include ../Makefile.master
 
-sparc_HDRS= 
+sparc_HDRS=
 i386_HDRS=	stack_unwind.h
 
-# Headers are listed one per line so that TeamWare can auto-merge most changes
+KRB5HDRS=		\
+	mit_copyright.h	\
+	mit-sipb-copyright.h
 
-KRB5HDRS= mit_copyright.h mit-sipb-copyright.h
+ATTRDB_HDRS=		\
+	auth_attr.h	\
+	auth_list.h	\
+	exec_attr.h	\
+	prof_attr.h	\
+	secdb.h		\
+	user_attr.h
 
-ATTRDB_HDRS=	secdb.h auth_attr.h exec_attr.h prof_attr.h user_attr.h \
-	auth_list.h
-
-HDRS=   $($(MACH)_HDRS)  $(ATTRDB_HDRS) \
+HDRS=   $($(MACH)_HDRS)	\
+	$(ATTRDB_HDRS)	\
 	aio.h		\
 	alloca.h	\
 	apptrace.h	\
@@ -65,6 +70,7 @@ HDRS=   $($(MACH)_HDRS)  $(ATTRDB_HDRS) \
 	dlfcn.h		\
 	door.h		\
 	elf.h		\
+	endian.h	\
 	err.h		\
 	errno.h		\
 	euc.h		\
@@ -78,6 +84,7 @@ HDRS=   $($(MACH)_HDRS)  $(ATTRDB_HDRS) \
 	floatingpoint.h	\
 	fmtmsg.h	\
 	fnmatch.h	\
+	fts.h		\
 	ftw.h		\
 	gelf.h		\
 	getopt.h	\
@@ -107,11 +114,7 @@ HDRS=   $($(MACH)_HDRS)  $(ATTRDB_HDRS) \
 	macros.h	\
 	malloc.h	\
 	math.h		\
-	mdmn_changelog.h	\
 	memory.h	\
-	meta.h		\
-	meta_runtime.h	\
-	metadyn.h	\
 	mon.h		\
 	monetary.h	\
 	mp.h		\
@@ -125,7 +128,6 @@ HDRS=   $($(MACH)_HDRS)  $(ATTRDB_HDRS) \
 	nl_types.h	\
 	nlist.h		\
 	note.h		\
-	nsctl.h		\
 	nsswitch.h	\
 	nss_common.h	\
 	nss_dbdefs.h	\
@@ -159,7 +161,6 @@ HDRS=   $($(MACH)_HDRS)  $(ATTRDB_HDRS) \
 	sac.h		\
 	sched.h		\
 	schedctl.h	\
-	sdssc.h		\
 	search.h	\
 	semaphore.h	\
 	setjmp.h	\
@@ -168,6 +169,7 @@ HDRS=   $($(MACH)_HDRS)  $(ATTRDB_HDRS) \
 	siginfo.h	\
 	signal.h	\
 	spawn.h		\
+	stdalign.h	\
 	stdarg.h	\
 	stdbool.h	\
 	stddef.h	\
@@ -177,6 +179,7 @@ HDRS=   $($(MACH)_HDRS)  $(ATTRDB_HDRS) \
 	stdio_tag.h	\
 	stdio_impl.h	\
 	stdlib.h	\
+	stdnoreturn.h	\
 	storclass.h	\
 	string.h	\
 	strings.h	\
@@ -191,13 +194,16 @@ HDRS=   $($(MACH)_HDRS)  $(ATTRDB_HDRS) \
 	tgmath.h	\
 	thread.h	\
 	thread_db.h	\
+	threads.h	\
 	time.h		\
 	tiuser.h	\
 	tzfile.h	\
+	uchar.h		\
 	ucontext.h	\
 	ucred.h		\
 	ulimit.h	\
 	unistd.h	\
+	upanic.h	\
 	userdefs.h	\
 	ustat.h		\
 	utime.h		\
@@ -223,7 +229,7 @@ ISOHDRS = \
 	locale_iso.h	\
 	math_c99.h	\
 	math_iso.h	\
-	setjmp_iso.h  	\
+	setjmp_iso.h	\
 	signal_iso.h	\
 	stdarg_c99.h	\
 	stdarg_iso.h	\
@@ -231,6 +237,7 @@ ISOHDRS = \
 	stdio_c99.h	\
 	stdio_iso.h	\
 	stdlib_c99.h	\
+	stdlib_c11.h	\
 	stdlib_iso.h	\
 	string_iso.h	\
 	time_iso.h	\
@@ -238,7 +245,7 @@ ISOHDRS = \
 	wchar_iso.h	\
 	wctype_iso.h
 
-ARPAHDRS = 		\
+ARPAHDRS =		\
 	ftp.h		\
 	inet.h		\
 	nameser.h	\
@@ -273,7 +280,6 @@ RPCSVC_GEN_HDRS = \
 	nfs_prot.h	\
 	nfs4_prot.h	\
 	nis.h		\
-	rex.h		\
 	rquota.h	\
 	rstat.h		\
 	rusers.h	\
@@ -282,9 +288,6 @@ RPCSVC_GEN_HDRS = \
 	ufs_prot.h	\
 	nfs_acl.h
 
-LVMRPCHDRS = \
-mhdx.h mdiox.h meta_basic.h metad.h metamed.h metamhd.h metacl.h
-
 SYMHDRASSERT = $(ROOT)/usr/include/iso/assert_iso.h
 SYMHDRERRNO = $(ROOT)/usr/include/iso/errno_iso.h
 SYMHDRFLOAT = $(ROOT)/usr/include/iso/float_iso.h
@@ -292,17 +295,10 @@ SYMHDRISO646 = $(ROOT)/usr/include/iso/iso646_iso.h
 
 RPCGENFLAGS = -C -h
 rpcsvc/rwall.h :=	RPCGENFLAGS += -M
-meta_basic.h :=	RPCGENFLAGS += -M
-metad.h := RPCGENFLAGS += -M
-metamed.h := RPCGENFLAGS += -M
-mhdx.h := RPCGENFLAGS += -M
-mdiox.h := RPCGENFLAGS += -M
-metamhd.h := RPCGENFLAGS += -M
-metacl.h := RPCGENFLAGS += -M
 
 # rpcsvc rpcgen source (.x files)
 #
-# yp.x is an attempt at codifying what was hand coded in RPCL. 
+# yp.x is an attempt at codifying what was hand coded in RPCL.
 # Unfortunately it doesn't quite work. (The handcoded stuff isn't
 # expressable in RPCL) this is due to the fact that YP was written
 # before rpcgen existed.  Hence, yp_prot.h cannot be derived from yp.x
@@ -312,9 +308,6 @@ metacl.h := RPCGENFLAGS += -M
 
 RPCSVCPROTS = \
 $(RPCSVC_GEN_HDRS:%.h=%.x)        nis_object.x       yp.x
-
-LVMSVCPROTS = \
-$(LVMRPCHDRS:%.h=%.x)
 
 RPCSVCHDRS= $(RPCSVC_SRC_HDRS) $(RPCSVC_GEN_HDRS)
 
@@ -328,13 +321,10 @@ ROOTHDRS= $(HDRS:%=$(ROOT)/usr/include/%)  \
 	$(UUIDHDRS:%=$(ROOT)/usr/include/uuid/%)  \
 	$(RPCSVCHDRS:%=$(ROOT)/usr/include/rpcsvc/%)  \
 	$(RPCSVCPROTS:%=$(ROOT)/usr/include/rpcsvc/%)  \
-	$(LVMRPCHDRS:%=$(ROOT)/usr/include/%) \
 	$(PROTOHDRS:%=$(ROOT)/usr/include/protocols/%)
 
 DIRS= iso arpa audio rpcsvc protocols security uuid kerberosv5
 ROOTDIRS= $(DIRS:%=$(ROOT)/usr/include/%)
-
-SED=	sed
 
 # check files really don't exist
 #
@@ -422,28 +412,27 @@ $(ROOT)/usr/include/%: %
 
 .PARALLEL:	$(ROOTHDRS) $(CHECKHDRS)
 
-install_h: 	$(ROOTDIRS) .WAIT $(ROOTHDRS) $(SYMHDRASSERT) $(SYMHDRERRNO) \
+install_h:	$(ROOTDIRS) .WAIT $(ROOTHDRS) $(SYMHDRASSERT) $(SYMHDRERRNO) \
 		$(SYMHDRFLOAT) $(SYMHDRISO646)
 
 check:	$(CHECKHDRS)
 
 clean clobber:
-	$(RM) $(LVMRPCHDRS); 
 	cd rpcsvc ; $(RM) $(RPCSVC_GEN_HDRS)
 
 $(ROOTDIRS):
 	$(INS.dir)
 
-$(SYMHDRASSERT): 
+$(SYMHDRASSERT):
 	-$(RM) $@; $(SYMLINK) ../assert.h $@
 
-$(SYMHDRERRNO):  
+$(SYMHDRERRNO):
 	-$(RM) $@; $(SYMLINK) ../errno.h $@
 
-$(SYMHDRFLOAT):  
+$(SYMHDRFLOAT):
 	-$(RM) $@; $(SYMLINK) ../float.h $@
 
-$(SYMHDRISO646): 
+$(SYMHDRISO646):
 	-$(RM) $@; $(SYMLINK) ../iso646.h $@
 
 rpcsvc/%.h:	rpcsvc/%.x
@@ -452,55 +441,3 @@ rpcsvc/%.h:	rpcsvc/%.x
 rpcsvc/nis.h:	rpcsvc/nis.x
 	$(RPCGEN) $(RPCGENFLAGS) rpcsvc/nis.x |\
 	$(SED) -e '/EDIT_START/,$$ d' > $@
-
-meta_basic.h:	../uts/common/sys/lvm/meta_basic.x
-	$(RPCGEN) $(RPCGENFLAGS)  ../uts/common/sys/lvm/meta_basic.x | \
-	awk '/<synch.h>/ { print "#ifdef _REENTRANT"; print $$0; print "#endif\t/* _REENTRANT */"; next } \
-	/<thread.h>/ { print "#ifdef _REENTRANT"; print $$0; print "#endif\t/* _REENTRANT */"; next } \
-	{ print $0 } \
-	' > $@
-
-metad.h:	metad.x
-	$(RPCGEN) $(RPCGENFLAGS)  metad.x | \
-	awk '/<synch.h>/ { print "#ifdef _REENTRANT"; print $$0; print "#endif\t/* _REENTRANT */"; next } \
-	/<thread.h>/ { print "#ifdef _REENTRANT"; print $$0; print "#endif\t/* _REENTRANT */"; next } \
-	{ print $0 } \
-	' > $@
-
-mhdx.h:	../uts/common/sys/lvm/mhdx.x
-	$(RPCGEN) $(RPCGENFLAGS) ../uts/common/sys/lvm/mhdx.x | \
-	awk '/<synch.h>/ { print "#ifdef _REENTRANT"; print $$0; print "#endif\t/* _REENTRANT */"; next } \
-	/<thread.h>/ { print "#ifdef _REENTRANT"; print $$0; print "#endif\t/* _REENTRANT */"; next } \
-	{ print $0 } \
-	' > $@
-
-mdiox.h:	../uts/common/sys/lvm/mdiox.x
-	$(RPCGEN) $(RPCGENFLAGS) ../uts/common/sys/lvm/mdiox.x | \
-	nawk '{sub(/sys\/lvm\/md_mhdx/, "mhdx"); print $$0}' | \
-	nawk '{sub(/sys\/lvm\/md_basic/, "meta_basic"); print $$0}' | \
-	awk '/<synch.h>/ { print "#ifdef _REENTRANT"; print $$0; print "#endif\t/* _REENTRANT */"; next } \
-	/<thread.h>/ { print "#ifdef _REENTRANT"; print $$0; print "#endif\t/* _REENTRANT */"; next } \
-	{ print $0 } \
-	' > $@
-
-metamed.h:	../uts/common/sys/lvm/metamed.x
-	$(RPCGEN) $(RPCGENFLAGS) ../uts/common/sys/lvm/metamed.x | \
-	nawk '{sub(/sys\/lvm\/md_basic/, "meta_basic"); print $$0}' | \
-	awk '/<synch.h>/ { print "#ifdef _REENTRANT"; print $$0; print "#endif\t/* _REENTRANT */"; next } \
-	/<thread.h>/ { print "#ifdef _REENTRANT"; print $$0; print "#endif\t/* _REENTRANT */"; next } \
-	{ print $0 } \
-	' > $@
-
-metamhd.h:	metamhd.x
-	$(RPCGEN) $(RPCGENFLAGS) metamhd.x | \
-	awk '/<synch.h>/ { print "#ifdef _REENTRANT"; print $$0; print "#endif\t/* _REENTRANT */"; next } \
-	/<thread.h>/ { print "#ifdef _REENTRANT"; print $$0; print "#endif\t/* _REENTRANT */"; next } \
-	{ print $0 } \
-	' > $@
-
-metacl.h:	metacl.x
-	$(RPCGEN) $(RPCGENFLAGS) metacl.x | \
-	awk '/<synch.h>/ { print "#ifdef _REENTRANT"; print $$0; print "#endif\t/* _REENTRANT */"; next } \
-	/<thread.h>/ { print "#ifdef _REENTRANT"; print $$0; print "#endif\t/* _REENTRANT */"; next } \
-	{ print $0 } \
-	' > $@

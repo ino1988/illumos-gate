@@ -20,7 +20,7 @@
  * CDDL HEADER END
  */
 /*	Copyright (c) 1984, 1986, 1987, 1988, 1989 AT&T	*/
-/*	  All Rights Reserved  	*/
+/*	  All Rights Reserved	*/
 
 
 /*
@@ -28,7 +28,8 @@
  * Use is subject to license terms.
  */
 /*
- * Copyright 2011 Nexenta Systems, Inc.  All rights reserved.
+ * Copyright 2013 Nexenta Systems, Inc.  All rights reserved.
+ * Copyright 2015 Joyent, Inc.
  */
 
 #ifndef _SYS_FLOCK_H
@@ -41,6 +42,9 @@
 #include <sys/callb.h>
 #include <sys/param.h>
 #include <sys/zone.h>
+#if defined(_KERNEL)
+#include <sys/file.h>
+#endif
 
 #ifdef	__cplusplus
 extern "C" {
@@ -201,7 +205,7 @@ typedef enum {
     FLK_LOCKMGR_DOWN
 } flk_lockmgr_status_t;
 
-#if defined(_KERNEL)
+#if defined(_KERNEL) || defined(_FAKE_KERNEL)
 
 /*
  * The following structure is used to hold a list of locks returned
@@ -221,6 +225,10 @@ typedef struct locklist {
 #define	FLK_QUERY_ACTIVE	0x1
 #define	FLK_QUERY_SLEEPING	0x2
 
+#if defined(_KERNEL)
+int	ofdlock(file_t *, int, struct flock64 *, int, u_offset_t);
+void	ofdcleanlock(file_t *);
+#endif
 int	reclock(struct vnode *, struct flock64 *, int, int, u_offset_t,
 		flk_callback_t *);
 int	chklock(struct vnode *, int, u_offset_t, ssize_t, int,
@@ -245,6 +253,7 @@ void	flk_init_callback(flk_callback_t *,
 void	flk_add_callback(flk_callback_t *,
 		callb_cpr_t *(*)(flk_cb_when_t, void *), void *,
 		flk_callback_t *);
+void	flk_del_callback(flk_callback_t *);
 callb_cpr_t *flk_invoke_callbacks(flk_callback_t *, flk_cb_when_t);
 
 /* Zones hooks */

@@ -20,6 +20,7 @@
 #
 #
 # Copyright (c) 2009, 2010, Oracle and/or its affiliates. All rights reserved.
+# Copyright 2018 OmniOS Community Edition (OmniOSce) Association.
 #
 
 LIBRARY =	misc.a
@@ -30,32 +31,32 @@ PYSRCS=		__init__.py
 
 include ../../Makefile.lib
 
-LIBLINKS = 
+LIBLINKS =
 SRCDIR =	../common
-ROOTLIBDIR=	$(ROOT)/usr/lib/python2.6/vendor-packages/solaris
+ROOTLIBDIR=	$(ROOT)/usr/lib/python$(PYVER)/vendor-packages/solaris
+ROOTLIBDIR64=	$(ROOTLIBDIR)/64
 PYOBJS=		$(PYSRCS:%.py=$(SRCDIR)/%.pyc)
 PYFILES=	$(PYSRCS) $(PYSRCS:%.py=%.pyc)
-ROOTPYSOLFILES= $(PYFILES:%=$(ROOTLIBDIR)/%)
-PYTHON=		$(PYTHON_26)
+ROOTPYSOLFILES=	$(PYFILES:%=$(ROOTLIBDIR)/%)
 
-C99MODE=        -xc99=%all
-C99LMODE=       -Xc99=%all
+CSTD=		$(CSTD_GNU99)
 
 LIBS =		$(DYNLIB)
-LDLIBS +=	-lc -lsec -lidmap -lpython2.6
+LDLIBS +=	-lc -lsec -lidmap -lpython$(PYVER)$(PYSUFFIX)
+NATIVE_LIBS +=	libpython$(PYVER)$(PYSUFFIX).so
 CFLAGS +=	$(CCVERBOSE)
 CERRWARN +=	-_gcc=-Wno-unused-variable
-CPPFLAGS +=	-I$(ADJUNCT_PROTO)/usr/include/python2.6
+CPPFLAGS +=	\
+	-I$(ADJUNCT_PROTO)/usr/include/python$(PYVER)$(PYSUFFIX)
+
+all:
 
 .KEEP_STATE:
-
-all: $(PYOBJS) $(LIBS)
-
-install: all $(ROOTPYSOLFILES)
 
 $(ROOTLIBDIR)/%: %
 	$(INS.pyfile)
 
-lint: lintcheck
+$(ROOTLIBDIR)/%: ../common/%
+	$(INS.pyfile)
 
 include ../../Makefile.targ

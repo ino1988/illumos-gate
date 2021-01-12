@@ -21,6 +21,8 @@
 
 #
 # Copyright (c) 2008, 2010, Oracle and/or its affiliates. All rights reserved.
+# Copyright 2017 Jason King.
+# Copyright 2019 Joyent, Inc.
 #
 
 #
@@ -44,11 +46,13 @@ SYMBOL_VERSION SUNWprivate {
     global:
 	aes_alloc_keysched;
 	aes_copy_block;
+	aes_copy_block64;
 	aes_decrypt_block;
 	aes_decrypt_contiguous_blocks;
 	aes_encrypt_block;
 	aes_encrypt_contiguous_blocks;
 	aes_init_keysched;
+	aes_xor_block;
 	arcfour_crypt;
 	arcfour_key_init;
 	big_One;
@@ -76,7 +80,16 @@ SYMBOL_VERSION SUNWprivate {
 	blowfish_encrypt_contiguous_blocks;
 	blowfish_init_keysched;
 	bytestring2bignum;
-	ctr_mode_final;
+	cbc_alloc_ctx;
+	cbc_init_ctx;
+	ccm_alloc_ctx;
+	ccm_decrypt_final;
+	ccm_encrypt_final;
+	ccm_init_ctx;
+	cmac_alloc_ctx;
+	cmac_init_ctx;
+	cmac_mode_final;
+	ctr_alloc_ctx;
 	ctr_init_ctx;
 	des3_crunch_block;
 	des_alloc_keysched;
@@ -90,6 +103,11 @@ SYMBOL_VERSION SUNWprivate {
 	dsa_genkey_pair;
 	dsa_sign;
 	dsa_verify;
+	ecb_alloc_ctx;
+	gcm_alloc_ctx;
+	gcm_decrypt_final;
+	gcm_encrypt_final;
+	gcm_init_ctx;
 	pkcs1_decode;
 	pkcs1_encode;
 	pkcs7_decode;

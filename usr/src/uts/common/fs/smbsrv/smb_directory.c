@@ -21,6 +21,8 @@
 /*
  * Copyright 2010 Sun Microsystems, Inc.  All rights reserved.
  * Use is subject to license terms.
+ *
+ * Copyright 2017 Nexenta Systems, Inc.  All rights reserved.
  */
 
 #include <smbsrv/smb_kproto.h>
@@ -57,8 +59,7 @@ smb_pre_create_directory(smb_request_t *sr)
 	rc = smbsr_decode_data(sr, "%S", sr,
 	    &sr->arg.dirop.fqi.fq_path.pn_path);
 
-	DTRACE_SMB_2(op__CreateDirectory__start, smb_request_t *, sr,
-	    struct dirop *, &sr->arg.dirop);
+	DTRACE_SMB_START(op__CreateDirectory, smb_request_t *, sr);
 
 	return ((rc == 0) ? SDRC_SUCCESS : SDRC_ERROR);
 }
@@ -66,7 +67,7 @@ smb_pre_create_directory(smb_request_t *sr)
 void
 smb_post_create_directory(smb_request_t *sr)
 {
-	DTRACE_SMB_1(op__CreateDirectory__done, smb_request_t *, sr);
+	DTRACE_SMB_DONE(op__CreateDirectory, smb_request_t *, sr);
 }
 
 smb_sdrc_t
@@ -204,8 +205,7 @@ smb_pre_delete_directory(smb_request_t *sr)
 	rc = smbsr_decode_data(sr, "%S", sr,
 	    &sr->arg.dirop.fqi.fq_path.pn_path);
 
-	DTRACE_SMB_2(op__DeleteDirectory__start, smb_request_t *, sr,
-	    struct dirop *, &sr->arg.dirop);
+	DTRACE_SMB_START(op__DeleteDirectory, smb_request_t *, sr);
 
 	return ((rc == 0) ? SDRC_SUCCESS : SDRC_ERROR);
 }
@@ -213,7 +213,7 @@ smb_pre_delete_directory(smb_request_t *sr)
 void
 smb_post_delete_directory(smb_request_t *sr)
 {
-	DTRACE_SMB_1(op__DeleteDirectory__done, smb_request_t *, sr);
+	DTRACE_SMB_DONE(op__DeleteDirectory, smb_request_t *, sr);
 }
 
 smb_sdrc_t
@@ -250,11 +250,7 @@ smb_com_delete_directory(smb_request_t *sr)
 	rc = smb_fsop_lookup(sr, sr->user_cr, SMB_FOLLOW_LINKS,
 	    tnode, fqi->fq_dnode, fqi->fq_last_comp, &fqi->fq_fnode);
 	if (rc != 0) {
-		if (rc == ENOENT)
-			smbsr_error(sr, NT_STATUS_OBJECT_NAME_NOT_FOUND,
-			    ERRDOS, ERROR_FILE_NOT_FOUND);
-		else
-			smbsr_errno(sr, rc);
+		smbsr_errno(sr, rc);
 		smb_node_release(fqi->fq_dnode);
 		return (SDRC_ERROR);
 	}
@@ -279,7 +275,13 @@ smb_com_delete_directory(smb_request_t *sr)
 		return (SDRC_ERROR);
 	}
 
-	rc = smb_node_getattr(sr, fqi->fq_fnode, &fqi->fq_fattr);
+	/*
+	 * Using kcred because we just want the DOS attrs
+	 * and don't want access errors for this.
+	 */
+	fqi->fq_fattr.sa_mask = SMB_AT_DOSATTR;
+	rc = smb_node_getattr(sr, fqi->fq_fnode, zone_kcred(), NULL,
+	    &fqi->fq_fattr);
 	if (rc != 0) {
 		smbsr_errno(sr, rc);
 		smb_node_release(fqi->fq_dnode);
@@ -353,8 +355,7 @@ smb_pre_check_directory(smb_request_t *sr)
 	rc = smbsr_decode_data(sr, "%S", sr,
 	    &sr->arg.dirop.fqi.fq_path.pn_path);
 
-	DTRACE_SMB_2(op__CheckDirectory__start, smb_request_t *, sr,
-	    struct dirop *, &sr->arg.dirop);
+	DTRACE_SMB_START(op__CheckDirectory, smb_request_t *, sr);
 
 	return ((rc == 0) ? SDRC_SUCCESS : SDRC_ERROR);
 }
@@ -362,7 +363,7 @@ smb_pre_check_directory(smb_request_t *sr)
 void
 smb_post_check_directory(smb_request_t *sr)
 {
-	DTRACE_SMB_1(op__CheckDirectory__done, smb_request_t *, sr);
+	DTRACE_SMB_DONE(op__CheckDirectory, smb_request_t *, sr);
 }
 
 smb_sdrc_t
@@ -409,11 +410,7 @@ smb_com_check_directory(smb_request_t *sr)
 	    tnode, fqi->fq_dnode, fqi->fq_last_comp, &fqi->fq_fnode);
 	smb_node_release(fqi->fq_dnode);
 	if (rc != 0) {
-		if (rc == ENOENT)
-			smbsr_error(sr, NT_STATUS_OBJECT_NAME_NOT_FOUND,
-			    ERRDOS, ERROR_PATH_NOT_FOUND);
-		else
-			smbsr_errno(sr, rc);
+		smbsr_errno(sr, rc);
 		return (SDRC_ERROR);
 	}
 

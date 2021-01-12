@@ -22,6 +22,7 @@
  * Copyright 2010 Sun Microsystems, Inc.  All rights reserved.
  * Use is subject to license terms.
  * Copyright 2012 Milan Jurik. All rights reserved.
+ * Copyright 2016 OmniTI Computer Consulting, Inc. All rights reserved.
  */
 
 /*
@@ -2393,7 +2394,7 @@ hxge_dma_mem_free(p_hxge_dma_common_t dma_p)
 	}
 
 	dma_p->kaddrp = NULL;
-	dma_p->alength = NULL;
+	dma_p->alength = 0;
 }
 
 /*
@@ -3254,7 +3255,7 @@ static int
 hxge_m_getprop(void *barg, const char *pr_name, mac_prop_id_t pr_num,
     uint_t pr_valsize, void *pr_val)
 {
-	hxge_t 		*hxgep = barg;
+	hxge_t		*hxgep = barg;
 	p_hxge_stats_t	statsp = hxgep->statsp;
 	int		err = 0;
 	link_flowctrl_t fl;
@@ -3321,7 +3322,7 @@ hxge_m_getprop(void *barg, const char *pr_name, mac_prop_id_t pr_num,
 			break;
 
 		default:
-			err = EINVAL;
+			err = ENOTSUP;
 			break;
 	}
 
@@ -3433,7 +3434,7 @@ hxge_set_priv_prop(p_hxge_t hxgep, const char *pr_name, uint_t pr_valsize,
 		err = hxge_param_set_ip_opt(hxgep, NULL, NULL, (char *)pr_val,
 		    (caddr_t)&param_arr[param_class_opt_ipv6_sctp]);
 	} else {
-		err = EINVAL;
+		err = ENOTSUP;
 	}
 
 	HXGE_DEBUG_MSG((hxgep, DLADM_CTL,
@@ -3503,7 +3504,7 @@ hxge_get_priv_prop(p_hxge_t hxgep, const char *pr_name, uint_t pr_valsize,
 
 		value = (int)param_arr[param_class_opt_ipv6_sctp].value;
 	} else {
-		err = EINVAL;
+		err = ENOTSUP;
 	}
 
 	if (err == 0) {
@@ -4461,9 +4462,9 @@ hxge_link_update(p_hxge_t hxgep, link_state_t state)
 static void
 hxge_msix_init(p_hxge_t hxgep)
 {
-	uint32_t 		data0;
-	uint32_t 		data1;
-	uint32_t 		data2;
+	uint32_t		data0;
+	uint32_t		data1;
+	uint32_t		data2;
 	int			i;
 	uint32_t		msix_entry0;
 	uint32_t		msix_entry1;

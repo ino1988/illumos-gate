@@ -20,6 +20,11 @@
  */
 /*
  * Copyright (c) 2007, 2010, Oracle and/or its affiliates. All rights reserved.
+ * Copyright 2016 Nexenta Systems, Inc.
+ * Copyright (c) 2017 by Delphix. All rights reserved.
+ * Copyright (c) 2019, Joyent, Inc.
+ * Copyright 2020 RackTop Systems, Inc.
+ * Copyright 2020 Oxide Computer Company
  */
 /*
  * Copyright (c) 2010, Intel Corporation.
@@ -67,6 +72,7 @@
 #include <sys/note.h>
 #include <sys/pci_intr_lib.h>
 #include <sys/sunndi.h>
+#include <sys/prom_debug.h>
 #if !defined(__xpv)
 #include <sys/hpet.h>
 #include <sys/clock.h>
@@ -75,7 +81,7 @@
 /*
  *	Local Function Prototypes
  */
-static int apic_handle_defconf();
+static int apic_handle_defconf(void);
 static int apic_parse_mpct(caddr_t mpct, int bypass);
 static struct apic_mpfps_hdr *apic_find_fps_sig(caddr_t fptr, int size);
 static int apic_checksum(caddr_t bptr, int len);
@@ -178,7 +184,7 @@ int	apic_num_rebind = 0;
  * Maximum number of APIC CPUs in the system, -1 indicates that dynamic
  * allocation of CPU ids is disabled.
  */
-int 	apic_max_nproc = -1;
+int	apic_max_nproc = -1;
 int	apic_nproc = 0;
 size_t	apic_cpus_size = 0;
 int	apic_defconf = 0;
@@ -285,6 +291,8 @@ static	int acpi_nmi_scnt = 0;
 static	ACPI_MADT_LOCAL_APIC_NMI *acpi_nmi_cp = NULL;
 static	int acpi_nmi_ccnt = 0;
 
+static	boolean_t acpi_found_smp_config = B_FALSE;
+
 /*
  * The following added to identify a software poweroff method if available.
  */
@@ -326,14 +334,16 @@ apic_probe_common(char *modname)
 {
 	uint32_t mpct_addr, ebda_start = 0, base_mem_end;
 	caddr_t	biosdatap;
-	caddr_t	mpct = 0;
-	caddr_t	fptr;
-	int	i, mpct_size, mapsize, retval = PSM_FAILURE;
+	caddr_t	mpct = NULL;
+	caddr_t	fptr = NULL;
+	int	i, mpct_size = 0, mapsize, retval = PSM_FAILURE;
 	ushort_t	ebda_seg, base_mem_size;
 	struct	apic_mpfps_hdr	*fpsp;
 	struct	apic_mp_cnf_hdr	*hdrp;
 	int bypass_cpu_and_ioapics_in_mptables;
 	int acpi_user_options;
+
+	PRM_POINT("apic_probe_common()");
 
 	if (apic_forceload < 0)
 		return (retval);
@@ -352,7 +362,15 @@ apic_probe_common(char *modname)
 	if (!apic_use_acpi)
 		apic_use_acpi_madt_only = 0;
 
+	PRM_POINT("acpi_probe()");
 	retval = acpi_probe(modname);
+	PRM_DEBUG(retval);
+
+	/* in UEFI system, there is no BIOS data */
+	if (ddi_prop_exists(DDI_DEV_T_ANY, ddi_root_node(), 0, "efi-systab")) {
+		PRM_POINT("UEFI system!");
+		goto apic_ret;
+	}
 
 	/*
 	 * mapin the bios data area 40:0
@@ -360,17 +378,21 @@ apic_probe_common(char *modname)
 	 * 40:0Eh - two-byte location for the exact starting address of
 	 *	    the EBDA segment for EISA
 	 */
+	PRM_POINT("psm_map_phys()");
 	biosdatap = psm_map_phys(0x400, 0x20, PROT_READ);
+	PRM_DEBUG(biosdatap);
 	if (!biosdatap)
 		goto apic_ret;
 	fpsp = (struct apic_mpfps_hdr *)NULL;
 	mapsize = MPFPS_RAM_WIN_LEN;
 	/*LINTED: pointer cast may result in improper alignment */
 	ebda_seg = *((ushort_t *)(biosdatap+0xe));
+	PRM_DEBUG(ebda_seg);
 	/* check the 1k of EBDA */
 	if (ebda_seg) {
 		ebda_start = ((uint32_t)ebda_seg) << 4;
 		fptr = psm_map_phys(ebda_start, MPFPS_RAM_WIN_LEN, PROT_READ);
+		PRM_DEBUG(fptr);
 		if (fptr) {
 			if (!(fpsp =
 			    apic_find_fps_sig(fptr, MPFPS_RAM_WIN_LEN)))
@@ -378,6 +400,7 @@ apic_probe_common(char *modname)
 		}
 	}
 	/* If not in EBDA, check the last k of system base memory */
+	PRM_DEBUG(fpsp);
 	if (!fpsp) {
 		/*LINTED: pointer cast may result in improper alignment */
 		base_mem_size = *((ushort_t *)(biosdatap + 0x13));
@@ -391,6 +414,7 @@ apic_probe_common(char *modname)
 
 			fptr = psm_map_phys(base_mem_end, MPFPS_RAM_WIN_LEN,
 			    PROT_READ);
+			PRM_DEBUG(fptr);
 
 			if (fptr) {
 				if (!(fpsp = apic_find_fps_sig(fptr,
@@ -399,13 +423,16 @@ apic_probe_common(char *modname)
 			}
 		}
 	}
+	PRM_POINT("psm_unmap_phys()");
 	psm_unmap_phys(biosdatap, 0x20);
 
 	/* If still cannot find it, check the BIOS ROM space */
+	PRM_DEBUG(fpsp);
 	if (!fpsp) {
 		mapsize = MPFPS_ROM_WIN_LEN;
 		fptr = psm_map_phys(MPFPS_ROM_WIN_START,
 		    MPFPS_ROM_WIN_LEN, PROT_READ);
+		PRM_DEBUG(fptr);
 		if (fptr) {
 			if (!(fpsp =
 			    apic_find_fps_sig(fptr, MPFPS_ROM_WIN_LEN))) {
@@ -415,13 +442,18 @@ apic_probe_common(char *modname)
 		}
 	}
 
+	PRM_DEBUG(fptr);
+	PRM_DEBUG(fpsp);
+	PRM_POINT("apic_checksum()");
 	if (apic_checksum((caddr_t)fpsp, fpsp->mpfps_length * 16) != 0) {
+		PRM_POINT("psm_unmap_phys()");
 		psm_unmap_phys(fptr, MPFPS_ROM_WIN_LEN);
 		goto apic_ret;
 	}
 
 	apic_spec_rev = fpsp->mpfps_spec_rev;
 	if ((apic_spec_rev != 04) && (apic_spec_rev != 01)) {
+		PRM_POINT("psm_unmap_phys()");
 		psm_unmap_phys(fptr, MPFPS_ROM_WIN_LEN);
 		goto apic_ret;
 	}
@@ -431,7 +463,9 @@ apic_probe_common(char *modname)
 
 	/* check default configuration (dual CPUs) */
 	if ((apic_defconf = fpsp->mpfps_featinfo1) != 0) {
+		PRM_POINT("psm_unmap_phys()");
 		psm_unmap_phys(fptr, mapsize);
+		PRM_POINT("apic_handle_defconf()");
 		if ((retval = apic_handle_defconf()) != PSM_SUCCESS)
 			return (retval);
 
@@ -440,6 +474,7 @@ apic_probe_common(char *modname)
 
 	/* MP Configuration Table */
 	mpct_addr = (uint32_t)(fpsp->mpfps_mpct_paddr);
+	PRM_DEBUG(mpct_addr);
 
 	psm_unmap_phys(fptr, mapsize); /* unmap floating ptr struct */
 
@@ -461,6 +496,7 @@ apic_probe_common(char *modname)
 	}
 	mpct_size = (int)hdrp->mpcnf_tbl_length;
 
+	PRM_POINT("apic_set_pwroff_method_from_mpcnfhdr()");
 	apic_set_pwroff_method_from_mpcnfhdr(hdrp);
 
 	psm_unmap_phys((caddr_t)hdrp, sizeof (struct apic_mp_cnf_hdr));
@@ -486,6 +522,8 @@ apic_probe_common(char *modname)
 	hdrp = (struct apic_mp_cnf_hdr *)mpct;
 	apicadr = (uint32_t *)mapin_apic((uint32_t)hdrp->mpcnf_local_apic,
 	    APIC_LOCAL_MEMLEN, PROT_READ | PROT_WRITE);
+	PRM_DEBUG(hdrp);
+	PRM_DEBUG(apicadr);
 	if (!apicadr)
 		goto apic_fail1;
 
@@ -498,15 +536,20 @@ apic_probe_common(char *modname)
 	}
 
 apic_fail1:
+	PRM_POINT("apic_fail1:");
 	psm_unmap_phys(mpct, mpct_size);
 	mpct = NULL;
 
 apic_ret:
+	PRM_POINT("apic_ret:");
 	if (retval == PSM_SUCCESS) {
 		extern int apic_ioapic_method_probe();
 
-		if ((retval = apic_ioapic_method_probe()) == PSM_SUCCESS)
+		PRM_POINT("apic_ioapic_method_probe()");
+		if ((retval = apic_ioapic_method_probe()) == PSM_SUCCESS) {
+			PRM_POINT("SUCCESS");
 			return (PSM_SUCCESS);
+		}
 	}
 
 	for (i = 0; i < apic_io_max; i++)
@@ -522,6 +565,7 @@ apic_ret:
 	if (mpct)
 		psm_unmap_phys(mpct, mpct_size);
 
+	PRM_DEBUG(retval);
 	return (retval);
 }
 
@@ -579,10 +623,22 @@ apic_free_apic_cpus(void)
 	}
 }
 
+static uint32_t
+acpi_get_apic_lid(void)
+{
+	uint32_t	id;
+
+	id = apic_reg_ops->apic_read(APIC_LID_REG);
+	if (apic_mode != LOCAL_X2APIC)
+		id >>= APIC_ID_BIT_OFFSET;
+
+	return (id);
+}
+
 static int
 acpi_probe(char *modname)
 {
-	int			i, intmax, index;
+	int			i, intmax;
 	uint32_t		id, ver;
 	int			acpi_verboseflags = 0;
 	int			madt_seen, madt_size;
@@ -609,18 +665,24 @@ acpi_probe(char *modname)
 	if (!apic_use_acpi)
 		return (PSM_FAILURE);
 
+	PRM_POINT("AcpiGetTable(MADT)");
 	if (AcpiGetTable(ACPI_SIG_MADT, 1,
-	    (ACPI_TABLE_HEADER **) &acpi_mapic_dtp) != AE_OK)
+	    (ACPI_TABLE_HEADER **) &acpi_mapic_dtp) != AE_OK) {
+		cmn_err(CE_WARN, "!acpi_probe: No MADT found!");
 		return (PSM_FAILURE);
+	}
 
+	PRM_DEBUG((uint32_t)acpi_mapic_dtp->Address);
+	PRM_POINT("mapin_apic()");
 	apicadr = mapin_apic((uint32_t)acpi_mapic_dtp->Address,
 	    APIC_LOCAL_MEMLEN, PROT_READ | PROT_WRITE);
 	if (!apicadr)
 		return (PSM_FAILURE);
 
 	if ((local_ids = (uint32_t *)kmem_zalloc(NCPU * sizeof (uint32_t),
-	    KM_NOSLEEP)) == NULL)
+	    KM_NOSLEEP)) == NULL) {
 		return (PSM_FAILURE);
+	}
 
 	if ((proc_ids = (uint32_t *)kmem_zalloc(NCPU * sizeof (uint32_t),
 	    KM_NOSLEEP)) == NULL) {
@@ -628,36 +690,39 @@ acpi_probe(char *modname)
 		return (PSM_FAILURE);
 	}
 
-	id = apic_reg_ops->apic_read(APIC_LID_REG);
-	local_ids[0] = (uchar_t)(id >> 24);
-	apic_nproc = index = 1;
+	PRM_POINT("acpi_get_apic_lid()");
+	local_ids[0] = acpi_get_apic_lid();
+	PRM_DEBUG(local_ids[0]);
+
+	apic_nproc = 1;
 	apic_io_max = 0;
 
 	ap = (ACPI_SUBTABLE_HEADER *) (acpi_mapic_dtp + 1);
 	madt_size = acpi_mapic_dtp->Header.Length;
 	madt_seen = sizeof (*acpi_mapic_dtp);
 
+	PRM_DEBUG(madt_size);
 	while (madt_seen < madt_size) {
 		switch (ap->Type) {
 		case ACPI_MADT_TYPE_LOCAL_APIC:
 			mpa = (ACPI_MADT_LOCAL_APIC *) ap;
 			if (mpa->LapicFlags & ACPI_MADT_ENABLED) {
+				if (mpa->Id == 255) {
+					cmn_err(CE_WARN, "!%s: encountered "
+					    "invalid entry in MADT: CPU %d "
+					    "has Local APIC Id equal to 255",
+					    psm_name, mpa->ProcessorId);
+				}
 				if (mpa->Id == local_ids[0]) {
-					ASSERT(index == 1);
 					proc_ids[0] = mpa->ProcessorId;
 				} else if (apic_nproc < NCPU && use_mp &&
 				    apic_nproc < boot_ncpus) {
-					local_ids[index] = mpa->Id;
-					proc_ids[index] = mpa->ProcessorId;
-					index++;
+					local_ids[apic_nproc] = mpa->Id;
+					proc_ids[apic_nproc] = mpa->ProcessorId;
 					apic_nproc++;
 				} else if (apic_nproc == NCPU && !warned) {
 					cmn_err(CE_WARN, "%s: CPU limit "
-					    "exceeded"
-#if !defined(__amd64)
-					    " for 32-bit mode"
-#endif
-					    "; Solaris will use %d CPUs.",
+					    "exceeded; will use %d CPUs.",
 					    psm_name,  NCPU);
 					warned = 1;
 				}
@@ -698,7 +763,7 @@ acpi_probe(char *modname)
 				acpi_nmi_sp = mns;
 			acpi_nmi_scnt++;
 
-			cmn_err(CE_NOTE, "!apic: nmi source: %d 0x%x\n",
+			cmn_err(CE_NOTE, "!apic: nmi source: %d 0x%x",
 			    mns->GlobalIrq, mns->IntiFlags);
 			break;
 
@@ -709,7 +774,7 @@ acpi_probe(char *modname)
 				acpi_nmi_cp = mlan;
 			acpi_nmi_ccnt++;
 
-			cmn_err(CE_NOTE, "!apic: local nmi: %d 0x%x %d\n",
+			cmn_err(CE_NOTE, "!apic: local nmi: %d 0x%x %d",
 			    mlan->ProcessorId, mlan->IntiFlags,
 			    mlan->Lint);
 			break;
@@ -717,7 +782,7 @@ acpi_probe(char *modname)
 		case ACPI_MADT_TYPE_LOCAL_APIC_OVERRIDE:
 			/* UNIMPLEMENTED */
 			mao = (ACPI_MADT_LOCAL_APIC_OVERRIDE *) ap;
-			cmn_err(CE_NOTE, "!apic: address override: %lx\n",
+			cmn_err(CE_NOTE, "!apic: address override: %lx",
 			    (long)mao->Address);
 			break;
 
@@ -725,7 +790,7 @@ acpi_probe(char *modname)
 			/* UNIMPLEMENTED */
 			misa = (ACPI_MADT_IO_SAPIC *) ap;
 
-			cmn_err(CE_NOTE, "!apic: io sapic: %d %d %lx\n",
+			cmn_err(CE_NOTE, "!apic: io sapic: %d %d %lx",
 			    misa->Id, misa->GlobalIrqBase,
 			    (long)misa->Address);
 			break;
@@ -735,7 +800,7 @@ acpi_probe(char *modname)
 			mis = (ACPI_MADT_INTERRUPT_SOURCE *) ap;
 
 			cmn_err(CE_NOTE,
-			    "!apic: irq source: %d %d %d 0x%x %d %d\n",
+			    "!apic: irq source: %d %d %d 0x%x %d %d",
 			    mis->Id, mis->Eid, mis->GlobalIrq,
 			    mis->IntiFlags, mis->Type,
 			    mis->IoSapicVector);
@@ -744,29 +809,18 @@ acpi_probe(char *modname)
 		case ACPI_MADT_TYPE_LOCAL_X2APIC:
 			mpx2a = (ACPI_MADT_LOCAL_X2APIC *) ap;
 
-			/*
-			 * All logical processors with APIC ID values
-			 * of 255 and greater will have their APIC
-			 * reported through Processor X2APIC structure.
-			 * All logical processors with APIC ID less than
-			 * 255 will have their APIC reported through
-			 * Processor Local APIC.
-			 */
-			if ((mpx2a->LapicFlags & ACPI_MADT_ENABLED) &&
-			    (mpx2a->LocalApicId >> 8)) {
-				if (apic_nproc < NCPU && use_mp &&
+			if (mpx2a->LapicFlags & ACPI_MADT_ENABLED) {
+				if (mpx2a->LocalApicId == local_ids[0]) {
+					proc_ids[0] = mpx2a->Uid;
+				} else if (apic_nproc < NCPU && use_mp &&
 				    apic_nproc < boot_ncpus) {
-					local_ids[index] = mpx2a->LocalApicId;
-					proc_ids[index] = mpa->ProcessorId;
-					index++;
+					local_ids[apic_nproc] =
+					    mpx2a->LocalApicId;
+					proc_ids[apic_nproc] = mpx2a->Uid;
 					apic_nproc++;
 				} else if (apic_nproc == NCPU && !warned) {
 					cmn_err(CE_WARN, "%s: CPU limit "
-					    "exceeded"
-#if !defined(__amd64)
-					    " for 32-bit mode"
-#endif
-					    "; Solaris will use %d CPUs.",
+					    "exceeded; will use %d CPUs.",
 					    psm_name,  NCPU);
 					warned = 1;
 				}
@@ -780,9 +834,9 @@ acpi_probe(char *modname)
 			if (mx2alan->Uid >> 8)
 				acpi_nmi_ccnt++;
 
-#ifdef	DEBUG
+#ifdef DEBUG
 			cmn_err(CE_NOTE,
-			    "!apic: local x2apic nmi: %d 0x%x %d\n",
+			    "!apic: local x2apic nmi: %d 0x%x %d",
 			    mx2alan->Uid, mx2alan->IntiFlags, mx2alan->Lint);
 #endif
 
@@ -798,6 +852,16 @@ acpi_probe(char *modname)
 		ap = (ACPI_SUBTABLE_HEADER *)(((char *)ap) + ap->Length);
 	}
 
+	PRM_DEBUG(apic_nproc);
+	PRM_DEBUG(apic_io_max);
+
+	/* We found multiple enabled cpus via MADT */
+	if ((apic_nproc > 1) && (apic_io_max > 0)) {
+		acpi_found_smp_config = B_TRUE;
+		cmn_err(CE_NOTE,
+		    "!apic: Using ACPI (MADT) for SMP configuration");
+	}
+
 	/*
 	 * allocate enough space for possible hot-adding of CPUs.
 	 * max_ncpus may be less than apic_nproc if it's set by user.
@@ -805,6 +869,7 @@ acpi_probe(char *modname)
 	if (plat_dr_support_cpu()) {
 		apic_max_nproc = max_ncpus;
 	}
+	PRM_DEBUG(apic_max_nproc);
 	apic_cpus_size = max(apic_nproc, max_ncpus) * sizeof (*apic_cpus);
 	if ((apic_cpus = kmem_zalloc(apic_cpus_size, KM_NOSLEEP)) == NULL)
 		goto cleanup;
@@ -813,15 +878,21 @@ acpi_probe(char *modname)
 	 * ACPI doesn't provide the local apic ver, get it directly from the
 	 * local apic
 	 */
+	PRM_POINT("apic_read(APIC_VERS_REG)");
 	ver = apic_reg_ops->apic_read(APIC_VERS_REG);
+	PRM_DEBUG(ver);
+	PRM_DEBUG(apic_nproc);
+	PRM_DEBUG(boot_ncpus);
 	for (i = 0; i < apic_nproc; i++) {
 		apic_cpus[i].aci_local_id = local_ids[i];
 		apic_cpus[i].aci_local_ver = (uchar_t)(ver & 0xFF);
 		apic_cpus[i].aci_processor_id = proc_ids[i];
 		/* Only build mapping info for CPUs present at boot. */
-		if (i < boot_ncpus)
+		if (i < boot_ncpus) {
 			(void) acpica_map_cpu(i, proc_ids[i]);
+		}
 	}
+	PRM_POINT("acpica_map_cpu loop complete");
 
 	/*
 	 * To support CPU dynamic reconfiguration, the apic CPU info structure
@@ -829,19 +900,19 @@ acpi_probe(char *modname)
 	 * The state for each apic CPU info structure will be assigned according
 	 * to the following rules:
 	 * Rule 1:
-	 * 	Slot index range: [0, min(apic_nproc, boot_ncpus))
+	 *	Slot index range: [0, min(apic_nproc, boot_ncpus))
 	 *	State flags: 0
 	 *	Note: cpu exists and will be configured/enabled at boot time
 	 * Rule 2:
-	 * 	Slot index range: [boot_ncpus, apic_nproc)
+	 *	Slot index range: [boot_ncpus, apic_nproc)
 	 *	State flags: APIC_CPU_FREE | APIC_CPU_DIRTY
 	 *	Note: cpu exists but won't be configured/enabled at boot time
 	 * Rule 3:
-	 * 	Slot index range: [apic_nproc, boot_ncpus)
+	 *	Slot index range: [apic_nproc, boot_ncpus)
 	 *	State flags: APIC_CPU_FREE
 	 *	Note: cpu doesn't exist at boot time
 	 * Rule 4:
-	 * 	Slot index range: [max(apic_nproc, boot_ncpus), max_ncpus)
+	 *	Slot index range: [max(apic_nproc, boot_ncpus), max_ncpus)
 	 *	State flags: APIC_CPU_FREE
 	 *	Note: cpu doesn't exist at boot time
 	 */
@@ -860,8 +931,10 @@ acpi_probe(char *modname)
 		apic_cpus[i].aci_status = APIC_CPU_FREE;
 	}
 
+	PRM_POINT("ioapic reads");
 	for (i = 0; i < apic_io_max; i++) {
 		ioapic_ix = i;
+		PRM_DEBUG(ioapic_ix);
 
 		/*
 		 * need to check Sitka on the following acpi problem
@@ -871,16 +944,20 @@ acpi_probe(char *modname)
 		 * actual id directly from the ioapic.
 		 */
 		id = ioapic_read(ioapic_ix, APIC_ID_CMD);
+		PRM_DEBUG(id);
 		hid = (uchar_t)(id >> 24);
+		PRM_DEBUG(hid);
 
 		if (hid != apic_io_id[i]) {
 			if (apic_io_id[i] == 0)
 				apic_io_id[i] = hid;
 			else { /* set ioapic id to whatever reported by ACPI */
 				id = ((uint32_t)apic_io_id[i]) << 24;
+				PRM_POINT("ioapic_write(ID)");
 				ioapic_write(ioapic_ix, APIC_ID_CMD, id);
 			}
 		}
+		PRM_POINT("ioapic_read(VERS)");
 		ver = ioapic_read(ioapic_ix, APIC_VERS_CMD);
 		apic_io_ver[i] = (uchar_t)(ver & 0xff);
 		intmax = (ver >> 16) & 0xff;
@@ -896,6 +973,7 @@ acpi_probe(char *modname)
 	 * acpi-user-options specifies legacy mode
 	 * (no SCI, no ACPI mode)
 	 */
+	PRM_POINT("acpica_get_sci()");
 	if (acpica_get_sci(&sci, &sci_flags) != AE_OK)
 		sci = -1;
 
@@ -904,13 +982,17 @@ acpi_probe(char *modname)
 	 * If this fails, we don't attempt to use ACPI
 	 * even if we were able to get a MADT above
 	 */
-	if (acpica_init() != AE_OK)
+	PRM_POINT("acpica_init()");
+	if (acpica_init() != AE_OK) {
+		cmn_err(CE_WARN, "!apic: Failed to initialize acpica!");
 		goto cleanup;
+	}
 
 	/*
 	 * Call acpica_build_processor_map() now that we have
 	 * ACPI namesspace access
 	 */
+	PRM_POINT("acpica_build_processor_map()");
 	(void) acpica_build_processor_map();
 
 	/*
@@ -929,14 +1011,19 @@ acpi_probe(char *modname)
 	if (apic_verbose & APIC_VERBOSE_POWEROFF_PAUSE_FLAG)
 		acpi_verboseflags |= PSM_VERBOSE_POWEROFF_PAUSE_FLAG;
 
+	PRM_POINT("acpi_psm_init()");
 	if (acpi_psm_init(modname, acpi_verboseflags) == ACPI_PSM_FAILURE)
 		goto cleanup;
 
 	/* Enable ACPI APIC interrupt routing */
+	PRM_POINT("apic_acpi_enter_apicmode()");
 	if (apic_acpi_enter_apicmode() != PSM_FAILURE) {
+		cmn_err(CE_NOTE, "!apic: Using APIC interrupt routing mode");
+		PRM_POINT("build_reserved_irqlist()");
 		build_reserved_irqlist((uchar_t *)apic_reserved_irqlist);
 		apic_enable_acpi = 1;
 		if (apic_sci_vect > 0) {
+			PRM_POINT("acpica_set_core_feature()");
 			acpica_set_core_feature(ACPI_FEATURE_SCI_EVENT);
 		}
 		if (apic_use_acpi_madt_only) {
@@ -946,21 +1033,25 @@ acpi_probe(char *modname)
 
 #if !defined(__xpv)
 		/*
-		 * probe ACPI for hpet information here which is used later
-		 * in apic_picinit().
+		 * Probe ACPI for HPET information here which is used later in
+		 * apic_picinit().  Note that we do not need to use the HPET at
+		 * all on most modern systems, but if there is an actionable
+		 * failure message it will be logged by the routine itself.
 		 */
-		if (hpet_acpi_init(&apic_hpet_vect, &apic_hpet_flags) < 0) {
-			cmn_err(CE_NOTE, "!ACPI HPET table query failed\n");
-		}
+		PRM_POINT("hpet_acpi_init()");
+		(void) hpet_acpi_init(&apic_hpet_vect, &apic_hpet_flags);
 #endif
 
 		kmem_free(local_ids, NCPU * sizeof (uint32_t));
 		kmem_free(proc_ids, NCPU * sizeof (uint32_t));
+		PRM_POINT("SUCCESS");
 		return (PSM_SUCCESS);
 	}
 	/* if setting APIC mode failed above, we fall through to cleanup */
 
 cleanup:
+	cmn_err(CE_WARN, "!apic: Failed acpi_probe, SMP config was %s",
+	    acpi_found_smp_config ? "found" : "not found");
 	apic_free_apic_cpus();
 	if (apicadr != NULL) {
 		mapout_apic((caddr_t)apicadr, APIC_LOCAL_MEMLEN);
@@ -979,6 +1070,7 @@ cleanup:
 	acpi_nmi_scnt = 0;
 	acpi_nmi_cp = NULL;
 	acpi_nmi_ccnt = 0;
+	acpi_found_smp_config = B_FALSE;
 	kmem_free(local_ids, NCPU * sizeof (uint32_t));
 	kmem_free(proc_ids, NCPU * sizeof (uint32_t));
 	return (PSM_FAILURE);
@@ -989,10 +1081,8 @@ cleanup:
  * Fill all details as MP table does not give any more info
  */
 static int
-apic_handle_defconf()
+apic_handle_defconf(void)
 {
-	uint_t	lid;
-
 	/* Failed to probe ACPI MADT tables, disable CPU DR. */
 	apic_max_nproc = -1;
 	apic_free_apic_cpus();
@@ -1010,8 +1100,7 @@ apic_handle_defconf()
 	CPUSET_ONLY(apic_cpumask, 0);
 	CPUSET_ADD(apic_cpumask, 1);
 	apic_nproc = 2;
-	lid = apic_reg_ops->apic_read(APIC_LID_REG);
-	apic_cpus[0].aci_local_id = (uchar_t)(lid >> APIC_ID_BIT_OFFSET);
+	apic_cpus[0].aci_local_id = acpi_get_apic_lid();
 	/*
 	 * According to the PC+MP spec 1.1, the local ids
 	 * for the default configuration has to be 0 or 1
@@ -1056,10 +1145,9 @@ apic_parse_mpct(caddr_t mpct, int bypass_cpus_and_ioapics)
 	struct	apic_io_entry	*ioapicp;
 	struct	apic_io_intr	*intrp;
 	int			ioapic_ix;
-	uint_t	lid;
-	uint32_t	id;
-	uchar_t hid;
-	int	warned = 0;
+	uint32_t		lid, id;
+	uchar_t			hid;
+	int			warned = 0;
 
 	/*LINTED: pointer cast may result in improper alignment */
 	procp = (struct apic_procent *)(mpct + sizeof (struct apic_mp_cnf_hdr));
@@ -1078,11 +1166,7 @@ apic_parse_mpct(caddr_t mpct, int bypass_cpus_and_ioapics)
 					apic_nproc++;
 				} else if (apic_nproc == NCPU && !warned) {
 					cmn_err(CE_WARN, "%s: CPU limit "
-					    "exceeded"
-#if !defined(__amd64)
-					    " for 32-bit mode"
-#endif
-					    "; Solaris will use %d CPUs.",
+					    "exceeded; will use %d CPUs.",
 					    psm_name,  NCPU);
 					warned = 1;
 				}
@@ -1112,10 +1196,9 @@ apic_parse_mpct(caddr_t mpct, int bypass_cpus_and_ioapics)
 		if (!bypass_cpus_and_ioapics &&
 		    procp->proc_cpuflags & CPUFLAGS_EN) {
 			if (procp->proc_cpuflags & CPUFLAGS_BP) { /* Boot CPU */
-				lid = apic_reg_ops->apic_read(APIC_LID_REG);
+				lid = acpi_get_apic_lid();
 				apic_cpus[0].aci_local_id = procp->proc_apicid;
-				if (apic_cpus[0].aci_local_id !=
-				    (uchar_t)(lid >> APIC_ID_BIT_OFFSET)) {
+				if (apic_cpus[0].aci_local_id != lid) {
 					return (PSM_FAILURE);
 				}
 				apic_cpus[0].aci_local_ver =
@@ -1332,7 +1415,7 @@ apic_checksum(caddr_t bptr, int len)
 /* this is the non-acpi version */
 int
 apic_handle_pci_pci_bridge(dev_info_t *idip, int child_devno, int child_ipin,
-			struct apic_io_intr **intrp)
+    struct apic_io_intr **intrp)
 {
 	dev_info_t *dipp, *dip;
 	int pci_irq;
@@ -1362,14 +1445,14 @@ apic_handle_pci_pci_bridge(dev_info_t *idip, int child_devno, int child_ipin,
 			 * found or the root is reached.
 			 */
 			ipin = (child_devno + child_ipin) % PCI_INTD;
-				if (bridge_bus == 0 && apic_pci_bus_total == 1)
-					bridge_bus = (int)apic_single_pci_busid;
-				pci_irq = ((bridge_devno & 0x1f) << 2) |
-				    (ipin & 0x3);
-				if ((*intrp = apic_find_io_intr_w_busid(pci_irq,
-				    bridge_bus)) != NULL) {
-					return (pci_irq);
-				}
+			if (bridge_bus == 0 && apic_pci_bus_total == 1)
+				bridge_bus = (int)apic_single_pci_busid;
+			pci_irq = ((bridge_devno & 0x1f) << 2) |
+			    (ipin & 0x3);
+			if ((*intrp = apic_find_io_intr_w_busid(pci_irq,
+			    bridge_bus)) != NULL) {
+				return (pci_irq);
+			}
 			dip = dipp;
 			child_devno = bridge_devno;
 			child_ipin = ipin;
@@ -1580,7 +1663,7 @@ apic_allocate_irq(int irq)
 {
 	int	freeirq, i;
 
-	if ((freeirq = apic_find_free_irq(irq, (APIC_RESV_IRQ - 1))) == -1)
+	if ((freeirq = apic_find_free_irq(irq, (APIC_RESV_IRQ - 1))) == -1) {
 		if ((freeirq = apic_find_free_irq(APIC_FIRST_FREE_IRQ,
 		    (irq - 1))) == -1) {
 			/*
@@ -1592,16 +1675,20 @@ apic_allocate_irq(int irq)
 				if ((apic_irq_table[i] == NULL) ||
 				    apic_irq_table[i]->airq_mps_intr_index ==
 				    FREE_INDEX) {
-				freeirq = i;
-				break;
+					freeirq = i;
+					break;
+				}
+			}
+
+			if (freeirq == -1) {
+				/* This shouldn't happen, but just in case */
+				cmn_err(CE_WARN, "%s: NO available IRQ",
+				    psm_name);
+				return (-1);
 			}
 		}
-		if (freeirq == -1) {
-			/* This shouldn't happen, but just in case */
-			cmn_err(CE_WARN, "%s: NO available IRQ", psm_name);
-			return (-1);
-		}
 	}
+
 	if (apic_irq_table[freeirq] == NULL) {
 		apic_irq_table[freeirq] =
 		    kmem_zalloc(sizeof (apic_irq_t), KM_NOSLEEP);
@@ -2245,10 +2332,20 @@ apic_acpi_enter_apicmode(void)
 	arg.Integer.Value = ACPI_APIC_MODE;
 
 	status = AcpiEvaluateObject(NULL, "\\_PIC", &arglist, NULL);
-	if (ACPI_FAILURE(status))
+	/*
+	 * Per ACPI spec - section 5.8.1 _PIC Method
+	 * calling the \_PIC control method is optional for the OS
+	 * and might not be found. It's ok to not fail in such cases.
+	 * This is the case on linux KVM and qemu (status AE_NOT_FOUND)
+	 */
+	if (ACPI_FAILURE(status) && (status != AE_NOT_FOUND)) {
+		cmn_err(CE_NOTE,
+		    "!apic: Reporting APIC mode failed (via _PIC), err: 0x%x",
+		    ACPI_FAILURE(status));
 		return (PSM_FAILURE);
-	else
+	} else {
 		return (PSM_SUCCESS);
+	}
 }
 
 

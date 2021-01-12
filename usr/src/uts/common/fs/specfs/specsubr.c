@@ -24,10 +24,11 @@
  */
 /*
  * Copyright (c) 2012 by Delphix. All rights reserved.
+ * Copyright 2017 Joyent, Inc.
  */
 
 /*	Copyright (c) 1983, 1984, 1985, 1986, 1987, 1988, 1989 AT&T	*/
-/*	  All Rights Reserved  	*/
+/*	  All Rights Reserved	*/
 
 /*
  * University Copyright- Copyright (c) 1982, 1986, 1988
@@ -157,7 +158,7 @@ specvp(
 		sp->s_commonvp	= NULL;
 		sp->s_dev	= dev;
 		sp->s_dip	= NULL;
-		sp->s_nextr	= NULL;
+		sp->s_nextr	= 0;
 		sp->s_list	= NULL;
 		sp->s_plcy	= NULL;
 		sp->s_size	= 0;
@@ -235,7 +236,7 @@ makespecvp(dev_t dev, vtype_t type)
 	sp->s_commonvp	= cvp;
 	sp->s_dev	= dev;
 	sp->s_dip	= NULL;
-	sp->s_nextr	= NULL;
+	sp->s_nextr	= 0;
 	sp->s_list	= NULL;
 	sp->s_plcy	= NULL;
 	sp->s_size	= 0;
@@ -416,8 +417,13 @@ specfind(dev_t dev, vtype_t type)
 			nvp = STOV(st);
 			if (nvp->v_type == type && st->s_commonvp != nvp) {
 				VN_HOLD(nvp);
-				mutex_exit(&stable_lock);
-				return (nvp);
+				/* validate vnode is visible in the zone */
+				if (nvp->v_path != NULL &&
+				    ZONE_PATH_VISIBLE(nvp->v_path, curzone)) {
+					mutex_exit(&stable_lock);
+					return (nvp);
+				}
+				VN_RELE(nvp);
 			}
 		}
 		st = st->s_next;
@@ -547,7 +553,7 @@ get_cvp(
 		sp->s_commonvp	= svp;		/* points to itself */
 		sp->s_dev	= dev;
 		sp->s_dip	= NULL;
-		sp->s_nextr	= NULL;
+		sp->s_nextr	= 0;
 		sp->s_list	= NULL;
 		sp->s_plcy	= NULL;
 		sp->s_size	= UNKNOWN_SIZE;
@@ -593,7 +599,7 @@ commonvp(dev_t dev, vtype_t type)
 		sp->s_commonvp	= svp;		/* points to itself */
 		sp->s_dev	= dev;
 		sp->s_dip	= NULL;
-		sp->s_nextr	= NULL;
+		sp->s_nextr	= 0;
 		sp->s_list	= NULL;
 		sp->s_plcy	= NULL;
 		sp->s_size	= UNKNOWN_SIZE;

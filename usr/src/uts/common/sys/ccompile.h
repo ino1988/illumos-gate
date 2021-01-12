@@ -23,6 +23,10 @@
  * Copyright 2004 Sun Microsystems, Inc.  All rights reserved.
  * Use is subject to license terms.
  */
+/*
+ * Copyright 2015 EveryCity Ltd. All rights reserved.
+ * Copyright 2019 Joyent, Inc.
+ */
 
 #ifndef	_SYS_CCOMPILE_H
 #define	_SYS_CCOMPILE_H
@@ -112,19 +116,31 @@ extern "C" {
  */
 #define	__sun_attr___const__	__attribute__((__const__))
 
+#if __GNUC_VERSION >= 20700
+#define	__aligned(x)		__attribute__((__aligned__(x)))
 /*
- * structure packing like #pragma pack(1)
+ * This attribute, attached to a variable, means that the variable is meant to
+ * be possibly unused. GCC will not produce a warning for this variable.
  */
-#define	__sun_attr___packed__	__attribute__((__packed__))
+#define	__sun_attr___unused__	__attribute__((__unused__))
+#endif
 
 #define	___sun_attr_inner(__a)	__sun_attr_##__a
 #define	__sun_attr__(__a)	___sun_attr_inner __a
 
 #else	/* __ATTRIBUTE_IMPLEMENTED || __GNUC__ */
 
+#define	__aligned(x)
 #define	__sun_attr__(__a)
+#define	__sun_attr___unused__
 
 #endif	/* __ATTRIBUTE_IMPLEMENTED || __GNUC__ */
+
+#if __GNUC_VERSION >= 40100
+#define	__sentinel(__n)	__attribute__((__sentinel__(__n)))
+#else
+#define	__sentinel(__n)
+#endif
 
 /*
  * Shorthand versions for readability
@@ -139,7 +155,12 @@ extern "C" {
 #define	__RETURNS_TWICE		__sun_attr__((__returns_twice__))
 #define	__CONST			__sun_attr__((__const__))
 #define	__PURE			__sun_attr__((__pure__))
-#define	__GNU_UNUSED	__attribute__((__unused__))
+#define	__packed		__attribute__((__packed__))
+#define	__section(x)		__attribute__((__section__(x)))
+#define	__unused		__sun_attr__((__unused__))
+#define	__used			__attribute__((__used__))
+#define	__weak_symbol		__attribute__((__weak__))
+#define	__HIDDEN		__attribute__((visibility("hidden")))
 
 #ifdef	__cplusplus
 }

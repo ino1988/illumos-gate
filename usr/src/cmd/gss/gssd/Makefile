@@ -22,6 +22,7 @@
 # Copyright 2009 Sun Microsystems, Inc.  All rights reserved.
 # Use is subject to license terms.
 #
+# Copyright (c) 2018, Joyent, Inc.
 
 TESTPROG = gssdtest
 
@@ -37,18 +38,15 @@ GSSC_BASEOBJS = gssdtest.o gssd_release_name_and_type.o gssd_clnt_stubs.o \
 
 GD_OBJS	= gssd_svc.o
 GC_OBJS	= gssd_clnt.o
-G_OBJS	= gssd_xdr.o 
+G_OBJS	= gssd_xdr.o
 GSSDOBJS = $(GSSD_BASEOBJS) $(GD_OBJS) $(G_OBJS)
 GSSCOBJS = $(GSSC_BASEOBJS) $(GC_OBJS) $(G_OBJS)
-
-GSSD_LINTS = $(GSSD_BASEOBJS:.o=.c)
-GSSC_LINTS = $(GSSC_BASEOBJS:.o=.c)
 
 ROBJS	= $(GD_OBJS) $(GC_OBJS) $(G_OBJS)
 OBJS	= $(GSSD_BASEOBJS) $(GD_OBJS) $(GSSC_BASEOBJS) $(GC_OBJS) $(G_OBJS)
 SRCS	= $(OBJS:.o=.c)
 RSRC	= $(ROBJS:.o=.c)
-RSRC 	+= gssd.h
+RSRC	+= gssd.h
 
 CLOBBERFILES += $(TESTPROG)
 
@@ -68,19 +66,22 @@ ROOTLIB=	$(ROOT)/usr/lib/gss
 DIRS=	$(ROOTLIB)
 
 CPPFLAGS += -I$(SRC)/uts/common/gssapi/include
-COPTFLAG += $(XESS) #-I$(KINCDIR) 
+COPTFLAG += $(XESS) #-I$(KINCDIR)
 
 CERRWARN += -_gcc=-Wno-unused-variable
 CERRWARN += -_gcc=-Wno-implicit-function-declaration
 CERRWARN += -_gcc=-Wno-parentheses
-CERRWARN += -_gcc=-Wno-uninitialized
+CERRWARN += $(CNOWARN_UNINIT)
+
+# not linted
+SMATCH=off
 
 LDLIBS += -lgss -lnsl
 
 gssd :=	MAPFILES = $(MAPFILE.INT) $(MAPFILE.NGB)
-gssd :=	LDFLAGS += $(MAPFILES:%=-M%)
+gssd :=	LDFLAGS += $(MAPFILES:%=-Wl,-M%)
 
-$(GPROGS) := CPPFLAGS += -DSYSV -DSunOS=50 
+$(GPROGS) := CPPFLAGS += -DSYSV -DSunOS=50
 
 .KEEP_STATE:
 
@@ -96,7 +97,7 @@ gssd:	$(GSSDOBJS) $$(MAPFILES)
 	$(LINK.c) $(GSSDOBJS) -o $@ $(LDLIBS)
 	$(POST_PROCESS)
 
-gssdtest:       $(GSSCOBJS) 
+gssdtest:	$(GSSCOBJS)
 	$(LINK.c) $(GSSCOBJS) -o $@ $(LDLIBS)
 	$(POST_PROCESS)
 
@@ -135,14 +136,6 @@ install_h:
 
 clean:
 	$(RM) $(OBJS) $(RSRC) gssd.x
-
-lint_gssd:
-	$(LINT.c) $(GSSD_LINTS)
-
-lint_gssc:
-	$(LINT.c) $(GSSC_LINTS)
-
-lint:	lint_gssd lint_gssc
 
 check:	$(CHKMANIFEST)
 

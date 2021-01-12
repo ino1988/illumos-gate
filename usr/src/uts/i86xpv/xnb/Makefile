@@ -23,12 +23,7 @@
 # Copyright 2010 Sun Microsystems, Inc.  All rights reserved.
 # Use is subject to license terms.
 #
-#
-#	This makefile drives the production of the xnb
-#	network driver support module.
-#
-#	i86xpv architecture dependent
-#
+# Copyright (c) 2018, Joyent, Inc.
 
 #
 #	Path to the base of the uts directory tree (usually /usr/src/uts).
@@ -40,7 +35,6 @@ UTSBASE	= ../..
 #
 MODULE		= xnb
 OBJECTS		= $(XNB_OBJS:%=$(OBJS_DIR)/%)
-LINTS		= $(XNB_OBJS:%.o=$(LINTS_DIR)/%.ln)
 ROOTMODULE	= $(ROOT_PSM_MISC_DIR)/$(MODULE)
 
 #
@@ -52,7 +46,6 @@ include $(UTSBASE)/i86xpv/Makefile.i86xpv
 #	Define targets
 #
 ALL_TARGET	= $(BINARY)
-LINT_TARGET	= $(MODULE).lint
 INSTALL_TARGET	= $(BINARY) $(ROOTMODULE)
 
 #
@@ -70,13 +63,12 @@ LDFLAGS		+= -dy -N misc/mac
 # use Solaris specific code in xen public header files
 #
 CFLAGS		+= -D_SOLARIS
-LINTFLAGS	+= -D_SOLARIS
 
-LINTTAGS	+= -erroff=E_PTRDIFF_OVERFLOW
-LINTTAGS	+= -erroff=E_ASSIGN_NARROW_CONV
-LINTTAGS	+= -erroff=E_BAD_PTR_CAST_ALIGN
 
-CERRWARN	+= -_gcc=-Wno-uninitialized
+CERRWARN	+= $(CNOWARN_UNINIT)
+
+# needs work
+SMOFF += signed
 
 #
 #	Default build targets.
@@ -87,17 +79,9 @@ def:		$(DEF_DEPS)
 
 all:		$(ALL_DEPS)
 
-# This build only 64-bit, but the lint32 below
-# needs corresponding clean/clobber deps.
-clean:		$(CLEAN_DEPS) clean.debug32
+clean:		$(CLEAN_DEPS)
 
-clobber:	$(CLOBBER_DEPS) clobber.debug32
-
-lint:		$(LINT_DEPS)
-
-modlintlib:	$(MODLINTLIB_DEPS) lint32
-
-clean.lint:	$(CLEAN_LINT_DEPS)
+clobber:	$(CLOBBER_DEPS)
 
 install:	$(INSTALL_DEPS)
 

@@ -1,19 +1,52 @@
-'\" te
-.\"  Copyright (c) 1992, X/Open Company Limited
-.\"  All Rights Reserved  Portions Copyright (c) 1995, Sun Microsystems, Inc.
-.\"  All Rights Reserved
-.\" Sun Microsystems, Inc. gratefully acknowledges The Open Group for permission to reproduce portions of its copyrighted documentation. Original documentation from The Open Group can be obtained online at
+.\"
+.\" Sun Microsystems, Inc. gratefully acknowledges The Open Group for
+.\" permission to reproduce portions of its copyrighted documentation.
+.\" Original documentation from The Open Group can be obtained online at
 .\" http://www.opengroup.org/bookstore/.
-.\" The Institute of Electrical and Electronics Engineers and The Open Group, have given us permission to reprint portions of their documentation. In the following statement, the phrase "this text" refers to portions of the system documentation. Portions of this text are reprinted and reproduced in electronic form in the Sun OS Reference Manual, from IEEE Std 1003.1, 2004 Edition, Standard for Information Technology -- Portable Operating System Interface (POSIX), The Open Group Base Specifications Issue 6, Copyright (C) 2001-2004 by the Institute of Electrical and Electronics Engineers, Inc and The Open Group. In the event of any discrepancy between these versions and the original IEEE and The Open Group Standard, the original IEEE and The Open Group Standard is the referee document. The original Standard can be obtained online at http://www.opengroup.org/unix/online.html.
-.\"  This notice shall appear on any product containing this material.
-.\" The contents of this file are subject to the terms of the Common Development and Distribution License (the "License").  You may not use this file except in compliance with the License.
-.\" You can obtain a copy of the license at usr/src/OPENSOLARIS.LICENSE or http://www.opensolaris.org/os/licensing.  See the License for the specific language governing permissions and limitations under the License.
-.\" When distributing Covered Code, include this CDDL HEADER in each file and include the License file at usr/src/OPENSOLARIS.LICENSE.  If applicable, add the following below this CDDL HEADER, with the fields enclosed by brackets "[]" replaced with your own identifying information: Portions Copyright [yyyy] [name of copyright owner]
-.TH FNMATCH 5 "Mar 28, 1995"
+.\"
+.\" The Institute of Electrical and Electronics Engineers and The Open
+.\" Group, have given us permission to reprint portions of their
+.\" documentation.
+.\"
+.\" In the following statement, the phrase ``this text'' refers to portions
+.\" of the system documentation.
+.\"
+.\" Portions of this text are reprinted and reproduced in electronic form
+.\" in the SunOS Reference Manual, from IEEE Std 1003.1, 2004 Edition,
+.\" Standard for Information Technology -- Portable Operating System
+.\" Interface (POSIX), The Open Group Base Specifications Issue 6,
+.\" Copyright (C) 2001-2004 by the Institute of Electrical and Electronics
+.\" Engineers, Inc and The Open Group.  In the event of any discrepancy
+.\" between these versions and the original IEEE and The Open Group
+.\" Standard, the original IEEE and The Open Group Standard is the referee
+.\" document.  The original Standard can be obtained online at
+.\" http://www.opengroup.org/unix/online.html.
+.\"
+.\" This notice shall appear on any product containing this material.
+.\"
+.\" The contents of this file are subject to the terms of the
+.\" Common Development and Distribution License (the "License").
+.\" You may not use this file except in compliance with the License.
+.\"
+.\" You can obtain a copy of the license at usr/src/OPENSOLARIS.LICENSE
+.\" or http://www.opensolaris.org/os/licensing.
+.\" See the License for the specific language governing permissions
+.\" and limitations under the License.
+.\"
+.\" When distributing Covered Code, include this CDDL HEADER in each
+.\" file and include the License file at usr/src/OPENSOLARIS.LICENSE.
+.\" If applicable, add the following below this CDDL HEADER, with the
+.\" fields enclosed by brackets "[]" replaced with your own identifying
+.\" information: Portions Copyright [yyyy] [name of copyright owner]
+.\"
+.\"
+.\" Copyright (c) 1992, X/Open Company Limited.  All Rights Reserved.
+.\" Portions Copyright (c) 1995, Sun Microsystems, Inc.  All Rights Reserved.
+.\"
+.TH FNMATCH 5 "Jun 14, 2015"
 .SH NAME
 fnmatch \- file name pattern matching
 .SH DESCRIPTION
-.sp
 .LP
 The pattern matching notation described below  is used to specify patterns for
 matching strings in the shell. Historically, pattern matching notation is
@@ -22,12 +55,10 @@ this reason, the description of the rules for this pattern matching notation is
 based on the description of regular expression notation described on the
 \fBregex\fR(5) manual page.
 .SS "Patterns Matching a Single Character"
-.sp
 .LP
-The following \fIpatterns matching a single character\fR match a single
-character: \fIordinary characters\fR, \fIspecial pattern characters\fR and
-\fIpattern bracket expressions\fR. The pattern bracket expression will also
-match a single collating element.
+The following patterns match a single character: \fIordinary characters\fR,
+\fIspecial pattern characters\fR and \fIpattern bracket expressions\fR. The pattern
+bracket expression will also match a single collating element.
 .sp
 .LP
 An ordinary character is a pattern that matches itself. It can be any character
@@ -162,7 +193,6 @@ syntax errors can result or implementation extensions can be triggered. For
 example, the KornShell supports a series of extensions based on parentheses in
 patterns; see  \fBksh\fR(1)
 .SS "Patterns Matching Multiple Characters"
-.sp
 .LP
 The following rules are used to construct \fIpatterns matching multiple
 characters\fR from \fIpatterns matching a single character\fR:
@@ -238,7 +268,6 @@ matches the strings \fBad\fR, \fBabcd\fR, \fBefabcd\fR, \fBaaaad\fR and
 .RE
 
 .SS "Patterns Used for Filename Expansion"
-.sp
 .LP
 The rules described so far in \fBPatterns\fR \fBMatching\fR \fBMultiple\fR
 \fBCharacters\fR and \fBPatterns\fR \fBMatching\fR \fBa\fR \fBSingle\fR
@@ -305,6 +334,5 @@ bracket expression or does not match any existing filenames or pathnames, the
 pattern string is left unchanged.
 .RE
 .SH SEE ALSO
-.sp
 .LP
 \fBfind\fR(1), \fBksh\fR(1), \fBfnmatch\fR(3C), \fBregex\fR(5)

@@ -1,5 +1,6 @@
 /*
  * Copyright (c) 2010, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2016 by Delphix. All rights reserved.
  */
 
 /*
@@ -362,7 +363,7 @@ rdsv3_notify_queue_get(struct rdsv3_sock *rs, struct msghdr *msghdr)
 	 * in the user provided cmsg buffer. We don't try to copy more, to avoid
 	 * losing notifications - except when the buffer is so small that
 	 * it wouldn't
-	 * even hold a single notification. Then we give him as much of this
+	 * even hold a single notification. Then we give as much of this
 	 * single
 	 * msg as we can squeeze in, and set MSG_CTRUNC.
 	 */
@@ -456,7 +457,6 @@ rdsv3_recvmsg(struct rdsv3_sock *rs, uio_t *uio,
     struct nmsghdr *msg, size_t size, int msg_flags)
 {
 	struct rsock *sk = rdsv3_rs_to_sk(rs);
-	long timeo;
 	int ret = 0;
 	struct sockaddr_in *sin = NULL;
 	struct rdsv3_incoming *inc = NULL;
@@ -468,9 +468,6 @@ rdsv3_recvmsg(struct rdsv3_sock *rs, uio_t *uio,
 	if ((uio->uio_fmode & (FNDELAY | FNONBLOCK)) ||
 	    (msg_flags & MSG_DONTWAIT))
 		nonblock = B_TRUE;
-
-	/* udp_recvmsg()->sock_recvtimeo() gets away without locking too.. */
-	timeo = rdsv3_rcvtimeo(sk, nonblock);
 
 	if (msg_flags & MSG_OOB)
 		goto out;

@@ -24,14 +24,14 @@
 #
 
 PROG= nc
-OBJS= atomicio.o netcat.o socks.o strtonum.o
+OBJS= atomicio.o netcat.o socks.o
 
 SRCS= $(OBJS:%.o=%.c)
 
 include		../../../Makefile.cmd
 
 LDLIBS +=	-lresolv -lsocket
-CERRWARN +=	-_gcc=-Wno-uninitialized
+CERRWARN +=	$(CNOWARN_UNINIT)
 
 .KEEP_STATE:
 

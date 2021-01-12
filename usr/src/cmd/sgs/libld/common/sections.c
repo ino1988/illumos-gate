@@ -424,7 +424,7 @@ ignore_section_processing(Ofl_desc *ofl)
  */
 static uintptr_t
 new_section(Ofl_desc *ofl, Word shtype, const char *shname, Xword entcnt,
-	Is_desc **ret_isec, Shdr **ret_shdr, Elf_Data **ret_data)
+    Is_desc **ret_isec, Shdr **ret_shdr, Elf_Data **ret_data)
 {
 	typedef struct sec_info {
 		Word d_type;
@@ -689,7 +689,7 @@ new_section(Ofl_desc *ofl, Word shtype, const char *shname, Xword entcnt,
  */
 static uintptr_t
 new_section_from_template(Ofl_desc *ofl, Is_desc *tmpl_isp, size_t size,
-	Is_desc **ret_isec, Shdr **ret_shdr, Elf_Data **ret_data)
+    Is_desc **ret_isec, Shdr **ret_shdr, Elf_Data **ret_data)
 {
 	Shdr		*shdr;
 	Elf_Data	*data;
@@ -1269,7 +1269,14 @@ make_dynamic(Ofl_desc *ofl)
 
 		if (flags & FLG_OF_SYMBOLIC)
 			cnt++;			/* DT_SYMBOLIC */
+
+		if (ofl->ofl_aslr != 0)		/* DT_SUNW_ASLR */
+			cnt++;
 	}
+
+	/* DT_SUNW_KMOD */
+	if (ofl->ofl_flags & FLG_OF_KMOD)
+		cnt++;
 
 	/*
 	 * Account for Architecture dependent .dynamic entries, and defaults.
@@ -1688,7 +1695,7 @@ make_cap(Ofl_desc *ofl, Word shtype, const char *shname, int ident)
 	}
 
 	if (size == 0)
-		return (NULL);
+		return (0);
 
 	if (new_section(ofl, shtype, shname, size, &isec,
 	    &shdr, &data) == S_ERROR)
@@ -2373,7 +2380,7 @@ make_dynstr(Ofl_desc *ofl)
 			    (ELF_ST_BIND(sdp->sd_sym->st_info) != STB_LOCAL))
 				continue;
 
-			if (sdp->sd_sym->st_name == NULL)
+			if (sdp->sd_sym->st_name == 0)
 				continue;
 
 			if (st_insert(ofl->ofl_dynstrtab, sdp->sd_name) == -1)
@@ -2429,7 +2436,7 @@ make_reloc(Ofl_desc *ofl, Os_desc *osp)
 	Is_desc		*isec;
 	size_t		size;
 	Xword		sh_flags;
-	char 		*sectname;
+	char		*sectname;
 	Os_desc		*rosp;
 	Word		relsize;
 	const char	*rel_prefix;
@@ -2660,7 +2667,7 @@ ld_make_sunwmove(Ofl_desc *ofl, int mv_nums)
 	Is_desc		*isec;
 	Aliste		idx;
 	Sym_desc	*sdp;
-	int 		cnt = 1;
+	int		cnt = 1;
 
 
 	if (new_section(ofl, SHT_SUNW_move, MSG_ORIG(MSG_SCN_SUNWMOVE),

@@ -20,12 +20,14 @@
 #
 #
 # Copyright (c) 2006, 2010, Oracle and/or its affiliates. All rights reserved.
+# Copyright 2013 Saso Kiselkov. All rights reserved.
 #
 
 LIBRARY =	libmd.a
 VERS =		.1
 
-OBJECTS =	md4.o md5.o sha1.o sha2.o
+OBJECTS =	edonr.o md4.o md5.o sha1.o sha2.o \
+		skein.o skein_block.o skein_iv.o
 
 include		$(SRC)/lib/Makefile.lib
 include		$(SRC)/lib/Makefile.rootfs
@@ -33,15 +35,14 @@ include		$(SRC)/lib/Makefile.lib.64
 include		../Makefile.com
 
 # Symbol capabilities objects are added for sun4u and sun4v.
-EXTPICS = 	../capabilities/sun4u/sparcv9/pics/symcap.o \
+EXTPICS =	../capabilities/sun4u/sparcv9/pics/symcap.o \
 		../capabilities/sun4v/sparcv9/pics/symcap.o
 
 .KEEP_STATE:
 
 all:		$(LIBS)
 
-install:	all $(ROOTLIBS64) $(ROOTLINKS64) $(ROOTLINT64)
+install:	all $(ROOTLIBS64) $(ROOTLINKS64) $(ROOTCOMPATLINKS64)
 
-lint:		lintcheck
 
 include		../Makefile.targ

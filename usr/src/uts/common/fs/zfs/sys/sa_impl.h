@@ -21,6 +21,7 @@
 /*
  * Copyright (c) 2010, Oracle and/or its affiliates. All rights reserved.
  * Copyright (c) 2013 by Delphix. All rights reserved.
+ * Copyright (c) 2014 Spectra Logic Corporation, All rights reserved.
  */
 
 #ifndef	_SYS_SA_IMPL_H
@@ -100,7 +101,7 @@ typedef struct sa_lot {
 	sa_attr_type_t *lot_attrs;	/* array of attr #'s */
 	uint32_t lot_var_sizes;	/* how many aren't fixed size */
 	uint32_t lot_attr_count;	/* total attr count */
-	list_t 	lot_idx_tab;	/* should be only a couple of entries */
+	list_t	lot_idx_tab;	/* should be only a couple of entries */
 	int	lot_instance;	/* used with lot_hash to identify entry */
 } sa_lot_t;
 
@@ -109,7 +110,7 @@ typedef struct sa_idx_tab {
 	list_node_t	sa_next;
 	sa_lot_t	*sa_layout;
 	uint16_t	*sa_variable_lengths;
-	refcount_t	sa_refcount;
+	zfs_refcount_t	sa_refcount;
 	uint32_t	*sa_idx_tab;	/* array of offsets */
 } sa_idx_tab_t;
 
@@ -133,7 +134,7 @@ typedef struct sa_idx_tab {
  * adding a completely new attribute is a very rare operation.
  */
 struct sa_os {
-	kmutex_t 	sa_lock;
+	kmutex_t	sa_lock;
 	boolean_t	sa_need_attr_registration;
 	boolean_t	sa_force_spill;
 	uint64_t	sa_master_obj;
@@ -210,11 +211,12 @@ typedef enum sa_data_op {
  */
 
 struct sa_handle {
+	dmu_buf_user_t	sa_dbu;
 	kmutex_t	sa_lock;
 	dmu_buf_t	*sa_bonus;
 	dmu_buf_t	*sa_spill;
 	objset_t	*sa_os;
-	void 		*sa_userp;
+	void		*sa_userp;
 	sa_idx_tab_t	*sa_bonus_tab;	 /* idx of bonus */
 	sa_idx_tab_t	*sa_spill_tab; /* only present if spill activated */
 };
@@ -235,7 +237,7 @@ struct sa_handle {
 #define	SA_BONUSTYPE_FROM_DB(db) \
 	(dmu_get_bonustype((dmu_buf_t *)db))
 
-#define	SA_BLKPTR_SPACE	(DN_MAX_BONUSLEN - sizeof (blkptr_t))
+#define	SA_BLKPTR_SPACE	(DN_OLD_MAX_BONUSLEN - sizeof (blkptr_t))
 
 #define	SA_LAYOUT_NUM(x, type) \
 	((!IS_SA_BONUSTYPE(type) ? 0 : (((IS_SA_BONUSTYPE(type)) && \

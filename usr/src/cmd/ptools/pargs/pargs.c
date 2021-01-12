@@ -23,7 +23,7 @@
  * Use is subject to license terms.
  */
 /*
- * Copyright (c) 2013, Joyent, Inc.  All rights reserved.
+ * Copyright (c) 2018, Joyent, Inc.
  */
 
 /*
@@ -73,6 +73,13 @@
 #include <wctype.h>
 #include <widec.h>
 #include <elfcap.h>
+#include <libgen.h>
+
+typedef enum pargs_cmd {
+	PARGS_ARGV,
+	PARGS_ENV,
+	PARGS_AUXV
+} pargs_cmd_t;
 
 typedef struct pargs_data {
 	struct ps_prochandle *pd_proc;	/* target proc handle */
@@ -84,6 +91,7 @@ typedef struct pargs_data {
 	uintptr_t *pd_argv;
 	char **pd_argv_strs;
 	size_t pd_envc;
+	size_t pd_env_space;
 	uintptr_t *pd_envp;
 	char **pd_envp_strs;
 	size_t pd_auxc;
@@ -305,15 +313,15 @@ unctrl_str(const char *src, int escape_slash, int *unprintable)
  * a set of safe characters and adding those few common punctuation characters
  * which are known to be safe.  The rules are:
  *
- * 	If this is a printable character (graph), and not punctuation, it is
- * 	safe to leave unquoted.
+ *	If this is a printable character (graph), and not punctuation, it is
+ *	safe to leave unquoted.
  *
- * 	If it's one of known hard-coded safe characters, it's also safe to leave
- * 	unquoted.
+ *	If it's one of the known hard-coded safe characters, it's also safe to
+ *	leave unquoted.
  *
- * 	Otherwise, the entire argument must be quoted.
+ *	Otherwise, the entire argument must be quoted.
  *
- * This will cause some strings to be unecessarily quoted, but it is safer than
+ * This will cause some strings to be unnecessarily quoted, but it is safer than
  * having a character unintentionally interpreted by the shell.
  */
 static int
@@ -356,12 +364,12 @@ quote_string_ascii(pargs_data_t *datap, char *src)
 	 * with by unctrl_str().  We make the following subtitution when we
 	 * encounter a single quote:
 	 *
-	 * 	' = '"'"'
+	 *	' = '"'"'
 	 *
 	 * In addition, we put single quotes around the entire argument.  For
 	 * example:
 	 *
-	 * 	foo'bar = 'foo'"'"'bar'
+	 *	foo'bar = 'foo'"'"'bar'
 	 */
 	dstlen = strlen(src) + 3 + 4 * quote_count;
 	dst = safe_zalloc(dstlen);
@@ -615,6 +623,7 @@ get_args(pargs_data_t *datap)
 	if (read_ptr_array(datap, argvoff, datap->pd_argv, argc) <= 0) {
 		free(datap->pd_argv);
 		datap->pd_argv = NULL;
+		datap->pd_argc = 0;
 		return;
 	}
 
@@ -634,6 +643,26 @@ build_env(void *data, struct ps_prochandle *pr, uintptr_t addr, const char *str)
 	pargs_data_t *datap = data;
 
 	if (datap->pd_envp != NULL) {
+		if (datap->pd_envc == datap->pd_env_space) {
+			/*
+			 * Not enough space for storing the env (it has more
+			 * items than before).  Try to grow both arrays.
+			 */
+			void *new = realloc(datap->pd_envp,
+			    sizeof (uintptr_t) * datap->pd_env_space * 2);
+			if (new == NULL)
+				return (1);
+			datap->pd_envp = new;
+
+			new = realloc(datap->pd_envp_strs,
+			    sizeof (char *) * datap->pd_env_space * 2);
+			if (new == NULL)
+				return (1);
+			datap->pd_envp_strs = new;
+
+			datap->pd_env_space *= 2;
+		}
+
 		datap->pd_envp[datap->pd_envc] = addr;
 		if (str == NULL)
 			datap->pd_envp_strs[datap->pd_envc] = NULL;
@@ -654,8 +683,11 @@ get_env(pargs_data_t *datap)
 	datap->pd_envc = 0;
 	(void) Penv_iter(pr, build_env, datap);
 
-	datap->pd_envp = safe_zalloc(sizeof (uintptr_t) * datap->pd_envc);
-	datap->pd_envp_strs = safe_zalloc(sizeof (char *) * datap->pd_envc);
+	/* We must allocate space for at least one entry */
+	datap->pd_env_space = datap->pd_envc != 0 ? datap->pd_envc : 1;
+	datap->pd_envp = safe_zalloc(sizeof (uintptr_t) * datap->pd_env_space);
+	datap->pd_envp_strs =
+	    safe_zalloc(sizeof (char *) * datap->pd_env_space);
 
 	datap->pd_envc = 0;
 	(void) Penv_iter(pr, build_env, datap);
@@ -687,7 +719,7 @@ at_str(long val, char *instr, size_t n, char *str)
  */
 
 #define	FMT_AV(s, n, hwcap, mask, name)				\
-	if ((hwcap) & (mask)) 					\
+	if ((hwcap) & (mask))					\
 		(void) snprintf(s, n, "%s" name " | ", s)
 
 /*ARGSUSED*/
@@ -812,7 +844,10 @@ static struct aux_id aux_arr[] = {
 	{ AT_SUN_BRANDNAME,	"AT_SUN_BRANDNAME",	at_str	},
 	{ AT_SUN_BRAND_AUX1,	"AT_SUN_BRAND_AUX1",	at_null	},
 	{ AT_SUN_BRAND_AUX2,	"AT_SUN_BRAND_AUX2",	at_null	},
-	{ AT_SUN_BRAND_AUX3,	"AT_SUN_BRAND_AUX3",	at_null	}
+	{ AT_SUN_BRAND_AUX3,	"AT_SUN_BRAND_AUX3",	at_null	},
+	{ AT_SUN_COMMPAGE,	"AT_SUN_COMMPAGE",	at_null	},
+	{ AT_SUN_FPTYPE,	"AT_SUN_FPTYPE",	at_null },
+	{ AT_SUN_FPSIZE,	"AT_SUN_FPSIZE",	at_null }
 };
 
 #define	N_AT_ENTS (sizeof (aux_arr) / sizeof (struct aux_id))
@@ -1115,32 +1150,20 @@ free_data(pargs_data_t *datap)
 {
 	int i;
 
-	if (datap->pd_argv) {
-		for (i = 0; i < datap->pd_argc; i++) {
-			if (datap->pd_argv_strs[i] != NULL)
-				free(datap->pd_argv_strs[i]);
-		}
-		free(datap->pd_argv);
-		free(datap->pd_argv_strs);
-	}
+	for (i = 0; i < datap->pd_argc; i++)
+		free(datap->pd_argv_strs[i]);
+	free(datap->pd_argv);
+	free(datap->pd_argv_strs);
 
-	if (datap->pd_envp) {
-		for (i = 0; i < datap->pd_envc; i++) {
-			if (datap->pd_envp_strs[i] != NULL)
-				free(datap->pd_envp_strs[i]);
-		}
-		free(datap->pd_envp);
-		free(datap->pd_envp_strs);
-	}
+	for (i = 0; i < datap->pd_envc; i++)
+		free(datap->pd_envp_strs[i]);
+	free(datap->pd_envp);
+	free(datap->pd_envp_strs);
 
-	if (datap->pd_auxv) {
-		for (i = 0; i < datap->pd_auxc; i++) {
-			if (datap->pd_auxv_strs[i] != NULL)
-				free(datap->pd_auxv_strs[i]);
-		}
-		free(datap->pd_auxv);
-		free(datap->pd_auxv_strs);
-	}
+	for (i = 0; i < datap->pd_auxc; i++)
+		free(datap->pd_auxv_strs[i]);
+	free(datap->pd_auxv);
+	free(datap->pd_auxv_strs);
 }
 
 static void
@@ -1155,7 +1178,7 @@ print_args(pargs_data_t *datap)
 
 	for (i = 0; i < datap->pd_argc; i++) {
 		(void) printf("argv[%d]: ", i);
-		if (datap->pd_argv[i] == NULL) {
+		if (datap->pd_argv[i] == (uintptr_t)NULL) {
 			(void) printf("<NULL>\n");
 		} else if (datap->pd_argv_strs[i] == NULL) {
 			(void) printf("<0x%0*lx>\n",
@@ -1201,7 +1224,8 @@ print_cmdline(pargs_data_t *datap)
 	 * an error message and bail.
 	 */
 	for (i = 0; i < datap->pd_argc; i++) {
-		if (datap->pd_argv == NULL || datap->pd_argv[i] == NULL ||
+		if (datap->pd_argv == NULL ||
+		    datap->pd_argv[i] == (uintptr_t)NULL ||
 		    datap->pd_argv_strs[i] == NULL) {
 			(void) fprintf(stderr, "%s: target has corrupted "
 			    "argument list\n", command);
@@ -1273,19 +1297,24 @@ main(int argc, char *argv[])
 	int opt;
 	int error = 1;
 	core_content_t content = 0;
+	pargs_cmd_t cmd = PARGS_ARGV;
 
 	(void) setlocale(LC_ALL, "");
 
-	if ((command = strrchr(argv[0], '/')) != NULL)
-		command++;
-	else
-		command = argv[0];
+	command = basename(argv[0]);
+
+	if (strcmp(command, "penv") == 0)
+		cmd = PARGS_ENV;
+	else if (strcmp(command, "pauxv") == 0)
+		cmd = PARGS_AUXV;
 
 	while ((opt = getopt(argc, argv, "acelxF")) != EOF) {
 		switch (opt) {
 		case 'a':		/* show process arguments */
 			content |= CC_CONTENT_STACK;
 			aflag++;
+			if (cmd != PARGS_ARGV)
+				errflg++;
 			break;
 		case 'c':		/* force 7-bit ascii */
 			cflag++;
@@ -1293,13 +1322,19 @@ main(int argc, char *argv[])
 		case 'e':		/* show environment variables */
 			content |= CC_CONTENT_STACK;
 			eflag++;
+			if (cmd != PARGS_ARGV)
+				errflg++;
 			break;
 		case 'l':
 			lflag++;
 			aflag++;	/* -l implies -a */
+			if (cmd != PARGS_ARGV)
+				errflg++;
 			break;
 		case 'x':		/* show aux vector entries */
 			xflag++;
+			if (cmd != PARGS_ARGV)
+				errflg++;
 			break;
 		case 'F':
 			/*
@@ -1316,8 +1351,19 @@ main(int argc, char *argv[])
 
 	/* -a is the default if no options are specified */
 	if ((aflag + eflag + xflag + lflag) == 0) {
-		aflag++;
-		content |= CC_CONTENT_STACK;
+		switch (cmd) {
+		case PARGS_ARGV:
+			aflag++;
+			content |= CC_CONTENT_STACK;
+			break;
+		case PARGS_ENV:
+			content |= CC_CONTENT_STACK;
+			eflag++;
+			break;
+		case PARGS_AUXV:
+			xflag++;
+			break;
+		}
 	}
 
 	/* -l cannot be used with the -x or -e flags */
@@ -1331,15 +1377,15 @@ main(int argc, char *argv[])
 
 	if (errflg || argc <= 0) {
 		(void) fprintf(stderr,
-		    "usage:  %s [-acexF] { pid | core } ...\n"
+		    "usage:  %s [-aceFlx] { pid | core } ...\n"
 		    "  (show process arguments and environment)\n"
 		    "  -a: show process arguments (default)\n"
 		    "  -c: interpret characters as 7-bit ascii regardless of "
 		    "locale\n"
 		    "  -e: show environment variables\n"
+		    "  -F: force grabbing of the target process\n"
 		    "  -l: display arguments as command line\n"
-		    "  -x: show aux vector entries\n"
-		    "  -F: force grabbing of the target process\n", command);
+		    "  -x: show aux vector entries\n", command);
 		return (2);
 	}
 

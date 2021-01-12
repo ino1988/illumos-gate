@@ -21,7 +21,10 @@
 #
 # Copyright 2008 Sun Microsystems, Inc.  All rights reserved.
 # Use is subject to license terms.
-# Copyright 2011 Nexenta Systems, Inc.  All rights reserved.
+#
+# Copyright 2015 Nexenta Systems, Inc.  All rights reserved.
+#
+# Copyright (c) 2018, Joyent, Inc.
 
 #
 #	This makefile drives the production of the cifs server file system
@@ -38,7 +41,6 @@ UTSBASE	= ../..
 #
 MODULE		= smbsrv
 OBJECTS		= $(SMBSRV_OBJS:%=$(OBJS_DIR)/%)
-LINTS		= $(SMBSRV_OBJS:%.o=$(LINTS_DIR)/%.ln)
 ROOTMODULE	= $(USR_DRV_DIR)/$(MODULE)
 CONF_SRCDIR	= $(UTSBASE)/common/fs/smbsrv
 
@@ -58,7 +60,6 @@ LDFLAGS += -Nmisc/kcf
 #	Define targets
 #
 ALL_TARGET	= $(BINARY)
-LINT_TARGET	= $(MODULE).lint
 INSTALL_TARGET	= $(BINARY) $(ROOTMODULE) $(ROOTLINK) $(ROOT_CONFFILE)
 
 #
@@ -69,9 +70,10 @@ CLEANFILES	+= $(MODSTUBS_O)
 
 INC_PATH	+= -I$(SRC)/common
 
-CERRWARN	+= -_gcc=-Wno-uninitialized
-CERRWARN	+= -_gcc=-Wno-parentheses
 CERRWARN	+= -_gcc=-Wno-switch
+
+# needs work
+SMATCH=off
 
 #
 #	Default build targets.
@@ -85,12 +87,6 @@ all:		$(ALL_DEPS)
 clean:		$(CLEAN_DEPS)
 
 clobber:	$(CLOBBER_DEPS)
-
-lint:		$(LINT_DEPS)
-
-modlintlib:	$(MODLINTLIB_DEPS)
-
-clean.lint:	$(CLEAN_LINT_DEPS)
 
 install:	$(INSTALL_DEPS)
 

@@ -24,6 +24,7 @@
 /*
  * Copyright (c) 1988, 2010, Oracle and/or its affiliates. All rights reserved.
  * Copyright (c) 2013, Joyent, Inc.  All rights reserved.
+ * Copyright (c) 2016 by Delphix. All rights reserved.
  */
 
 #include <sys/param.h>
@@ -317,7 +318,9 @@ time_t	boot_time = 0;		/* Boot time in seconds since 1970 */
 cyclic_id_t clock_cyclic;	/* clock()'s cyclic_id */
 cyclic_id_t deadman_cyclic;	/* deadman()'s cyclic_id */
 
-extern void	clock_tick_schedule(int);
+extern void clock_tick_schedule(int);
+extern void set_freemem(void);
+extern void pageout_deadman(void);
 
 static int lgrp_ticks;		/* counter to schedule lgrp load calcs */
 
@@ -399,7 +402,6 @@ clock(void)
 	uint_t	w_io;
 	cpu_t	*cp;
 	cpupart_t *cpupart;
-	extern	void	set_freemem();
 	void	(*funcp)();
 	int32_t ltemp;
 	int64_t lltemp;
@@ -476,6 +478,7 @@ clock(void)
 	if (one_sec) {
 		loadavg_update();
 		deadman_counter++;
+		pageout_deadman();
 	}
 
 	/*
@@ -1957,13 +1960,7 @@ deadman(void)
 				panic("panic dump timeout");
 				/*NOTREACHED*/
 			}
-		} else if (panic_sync) {
-			if (sync_timeleft && (--sync_timeleft == 0)) {
-				panic("panic sync timeout");
-				/*NOTREACHED*/
-			}
 		}
-
 		return;
 	}
 

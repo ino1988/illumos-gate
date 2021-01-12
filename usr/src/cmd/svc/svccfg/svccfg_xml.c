@@ -21,6 +21,11 @@
 /*
  * Copyright (c) 2004, 2010, Oracle and/or its affiliates. All rights reserved.
  */
+/*
+ * Copyright 2011 Nexenta Systems, Inc.  All rights reserved.
+ * Copyright 2020 Joyent, Inc.
+ */
+
 
 /*
  * XML document manipulation routines
@@ -580,9 +585,7 @@ lxml_store_value(value_t *v, element_t type, const xmlChar *value)
 	case SC_USTRING:
 		scf_type = lxml_element_to_type(type);
 
-		if ((v->sc_u.sc_string = strdup((char *)value)) == NULL)
-			uu_die(gettext("string duplication failed (%s)\n"),
-			    strerror(errno));
+		v->sc_u.sc_string = safe_strdup((const char *)value);
 		if (lxml_validate_string_value(scf_type,
 		    v->sc_u.sc_string) != 0)
 			uu_die(gettext("illegal value \"%s\" for "
@@ -1012,6 +1015,10 @@ lxml_get_method_context(pgroup_t *pg, xmlNodePtr ctx)
 	    SCF_TYPE_ASTRING, ctx, "resource_pool", NULL) != 0)
 		return (-1);
 
+	if (new_opt_str_prop_from_attr(pg, SCF_PROPERTY_SECFLAGS,
+	    SCF_TYPE_ASTRING, ctx, "security_flags", NULL) != 0)
+		return (-1);
+
 	for (cursor = ctx->xmlChildrenNode; cursor != NULL;
 	    cursor = cursor->next) {
 		if (lxml_ignorable_block(cursor))
@@ -1098,7 +1105,8 @@ lxml_get_exec_method(entity_t *entity, xmlNodePtr emeth)
 	/*
 	 * There is a possibility that a method context also exists, in which
 	 * case the following attributes are defined: project, resource_pool,
-	 * working_directory, profile, user, group, privileges, limit_privileges
+	 * working_directory, profile, user, group, privileges,
+	 * limit_privileges, security_flags
 	 */
 	for (cursor = emeth->xmlChildrenNode; cursor != NULL;
 	    cursor = cursor->next) {
@@ -1370,7 +1378,7 @@ lxml_get_entity_stability(entity_t *entity, xmlNodePtr rstr)
 	if (((stabval = xmlGetProp(rstr, (xmlChar *)value_attr)) == NULL) ||
 	    (*stabval == 0)) {
 		uu_warn(gettext("no stability value found\n"));
-		stabval = (xmlChar *)strdup("External");
+		stabval = (xmlChar *)safe_strdup("External");
 	}
 
 	pg = internal_pgroup_find_or_create(entity, (char *)scf_pg_general,
@@ -1438,8 +1446,7 @@ lxml_get_paramval(pgroup_t *pgrp, const char *propname, xmlNodePtr pval)
 	char *value;
 	char *prop;
 
-	if ((prop = strdup(propname)) == NULL)
-		uu_die(gettext("Out of memory.\n"));
+	prop = safe_strdup(propname);
 
 	value = (char *)xmlGetProp(pval, (xmlChar *)value_attr);
 	if (value == NULL || *value == '\0')
@@ -1455,8 +1462,7 @@ lxml_get_parameter(pgroup_t *pgrp, const char *propname, xmlNodePtr param)
 {
 	property_t *p = internal_property_new();
 
-	if ((p->sc_property_name = strdup(propname)) == NULL)
-		uu_die(gettext("Out of memory.\n"));
+	p->sc_property_name = safe_strdup(propname);
 	p->sc_value_type = SCF_TYPE_ASTRING;
 
 	(void) lxml_get_value(p, SC_ASTRING, param);
@@ -1607,7 +1613,7 @@ lxml_get_notification_parameters(entity_t *entity, xmlNodePtr np)
 		if (entity->sc_etype != SVCCFG_INSTANCE_OBJECT ||
 		    strcmp(entity->sc_fmri, SCF_NOTIFY_PARAMS_INST) != 0) {
 			semerr(gettext(
-			    "Non-SMF transition evenst must go to %s\n"),
+			    "Non-SMF transition events must go to %s\n"),
 			    SCF_NOTIFY_PARAMS_INST);
 			goto out;
 		}
@@ -1620,6 +1626,7 @@ lxml_get_notification_parameters(entity_t *entity, xmlNodePtr np)
 
 			lxml_get_event(entity, pgname, np);
 		}
+		break;
 
 	default:	/* smf state transition tokens */
 		if (entity->sc_etype == SVCCFG_SERVICE_OBJECT &&
@@ -1707,8 +1714,7 @@ lxml_get_loctext(entity_t *service, pgroup_t *pg, xmlNodePtr loctext,
 	/*
 	 * Remove leading and trailing whitespace.
 	 */
-	if ((stripped = strdup((const char *)cursor->content)) == NULL)
-		uu_die(gettext("Out of memory\n"));
+	stripped = safe_strdup((const char *)cursor->content);
 
 	for (; isspace(*stripped); stripped++)
 		;
@@ -1944,14 +1950,13 @@ lxml_label_to_groupname(const char *prefix, const char *in)
 	char *out, *cp;
 	size_t len, piece_len;
 
-	out = uu_zalloc(2 * scf_limit(SCF_LIMIT_MAX_NAME_LENGTH) + 1);
+	out = uu_zalloc(2 * max_scf_name_len + 1);
 	if (out == NULL)
 		return (NULL);
 
-	(void) strcpy(out, prefix);
-	(void) strcat(out, in);
+	(void) strlcpy(out, prefix, 2 * max_scf_name_len + 1);
 
-	len = strlen(out);
+	len = strlcat(out, in, 2 * max_scf_name_len + 1);
 	if (len > max_scf_name_len) {
 		/* Use the first half and the second half. */
 		piece_len = (max_scf_name_len - 2) / 2;
@@ -1959,8 +1964,6 @@ lxml_label_to_groupname(const char *prefix, const char *in)
 		(void) strncpy(out + piece_len, "..", 2);
 
 		(void) strcpy(out + piece_len + 2, out + (len - piece_len));
-
-		len = strlen(out);
 	}
 
 	/*
@@ -1970,8 +1973,6 @@ lxml_label_to_groupname(const char *prefix, const char *in)
 		if (!(isalnum(*cp) || *cp == '_' || *cp == '-'))
 			*cp = '_';
 	}
-
-	*cp = '\0';
 
 	return (out);
 }
@@ -2036,9 +2037,7 @@ seps_to_prop_values(property_t **p, xmlChar *seps)
 		v->sc_type = (*p)->sc_value_type;
 		v->sc_free = lxml_free_str;
 		val_str[0] = *seps;
-		v->sc_u.sc_string = strdup(val_str);
-		if (v->sc_u.sc_string == NULL)
-			uu_die(gettext("Out of memory\n"));
+		v->sc_u.sc_string = safe_strdup(val_str);
 		internal_attach_value(*p, v);
 	}
 }
@@ -2083,19 +2082,48 @@ lxml_get_tm_manpage(entity_t *service, xmlNodePtr manpage)
 {
 	pgroup_t *pg;
 	char *pgname;
+	char *name;
 	xmlChar *title;
+	xmlChar *section;
 
 	/*
-	 * Fetch title attribute, convert to something sanitized, and create
-	 * property group.
+	 * Fetch title and section attributes, convert to something sanitized,
+	 * and create property group.
 	 */
 	title = xmlGetProp(manpage, (xmlChar *)title_attr);
-	pgname = (char *)lxml_label_to_groupname(SCF_PG_TM_MAN_PREFIX,
-	    (const char *)title);
+	if (title == NULL)
+		return (-1);
+	section = xmlGetProp(manpage, (xmlChar *)section_attr);
+	if (section == NULL) {
+		xmlFree(title);
+		return (-1);
+	}
+
+	name = safe_malloc(max_scf_name_len + 1);
+
+	/* Find existing property group with underscore separators */
+	(void) snprintf(name, max_scf_name_len + 1, "%s_%s", title, section);
+	pgname = lxml_label_to_groupname(SCF_PG_TM_MAN_PREFIX, name);
+	pg = internal_pgroup_find(service, pgname, SCF_GROUP_TEMPLATE);
+
+	uu_free(pgname);
+	(void) snprintf(name, max_scf_name_len + 1, "%s%s", title, section);
+	pgname = lxml_label_to_groupname(SCF_PG_TM_MAN_PREFIX, name);
+
+	if (pg == NULL) {
+		pg = internal_pgroup_find_or_create(service, pgname,
+		    SCF_GROUP_TEMPLATE);
+	} else {
+		/* Rename property group */
+		free((char *)pg->sc_pgroup_name);
+		pg->sc_pgroup_name = safe_strdup(pgname);
+	}
+
+	uu_free(pgname);
+	free(name);
+	xmlFree(section);
 	xmlFree(title);
 
-	pg = internal_pgroup_find_or_create(service, pgname,
-	    (char *)SCF_GROUP_TEMPLATE);
 
 	/*
 	 * Each attribute is an astring property within the group.
@@ -2123,12 +2151,16 @@ lxml_get_tm_doclink(entity_t *service, xmlNodePtr doc_link)
 	 * property group.
 	 */
 	name = xmlGetProp(doc_link, (xmlChar *)name_attr);
+	if (name == NULL)
+		return (-1);
 
 	pgname = (char *)lxml_label_to_groupname(SCF_PG_TM_DOC_PREFIX,
 	    (const char *)name);
 
 	pg = internal_pgroup_find_or_create(service, pgname,
 	    (char *)SCF_GROUP_TEMPLATE);
+
+	uu_free(pgname);
 	xmlFree(name);
 
 	/*
@@ -3286,9 +3318,12 @@ lxml_get_instance(entity_t *service, xmlNodePtr inst, bundle_type_t bt,
 	return (0);
 }
 
-/* ARGSUSED1 */
+/*
+ * Unimplemented and obsolete, but we still process it for compatibility
+ * purposes.
+ */
 static int
-lxml_get_single_instance(entity_t *entity, xmlNodePtr si)
+lxml_get_single_instance(entity_t *entity, xmlNodePtr si __unused)
 {
 	pgroup_t *pg;
 	property_t *p;
@@ -3328,7 +3363,8 @@ lxml_get_single_instance(entity_t *entity, xmlNodePtr si)
  * that are still located in the /var/svc manifests directory.
  */
 static int
-lxml_check_upgrade(const char *service) {
+lxml_check_upgrade(const char *service)
+{
 	scf_handle_t	*h = NULL;
 	scf_scope_t	*sc = NULL;
 	scf_service_t	*svc = NULL;
@@ -3368,6 +3404,28 @@ out:
 }
 
 /*
+ * Validate the svc:/-prefixed FMRI generated from the service name.
+ */
+static void
+validate_service_name(const entity_t *s)
+{
+	char *fmri;
+	int ftype;
+	const char *finst;
+
+	if ((fmri = uu_strdup(s->sc_fmri)) == NULL)
+		uu_die(gettext("couldn't allocate memory"));
+
+	if (scf_parse_fmri(fmri, &ftype, NULL, NULL, &finst, NULL, NULL) != 0 ||
+	    finst != NULL || ftype != SCF_FMRI_TYPE_SVC) {
+		uu_die(gettext("invalid value \"%s\": should be a bare "
+		    "service name\n"), s->sc_name);
+	}
+
+	uu_free(fmri);
+}
+
+/*
  * Translate a service element into an internal instance/property tree, added
  * to bundle.
  *
@@ -3390,6 +3448,8 @@ lxml_get_service(bundle_t *bundle, xmlNodePtr svc, svccfg_op_t op)
 	 */
 	s = internal_service_new((char *)xmlGetProp(svc,
 	    (xmlChar *)name_attr));
+
+	validate_service_name(s);
 
 	version = xmlGetProp(svc, (xmlChar *)version_attr);
 	s->sc_u.sc_service.sc_service_version = atol((const char *)version);
@@ -3668,7 +3728,7 @@ lxml_get_bundle_file(bundle_t *bundle, const char *filename, svccfg_op_t op)
 		return (-1);
 	}
 
-	document->name = strdup(filename);
+	document->name = safe_strdup(filename);
 
 	/*
 	 * Verify that this is a document type we understand.

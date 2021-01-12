@@ -21,6 +21,7 @@
 
 #
 # Copyright (c) 2010, Oracle and/or its affiliates. All rights reserved.
+# Copyright 2019 OmniOS Community Edition (OmniOSce) Association.
 #
 
 set name=pkg.fmri value=pkg:/system/file-system/nfs@$(PKGVERS)
@@ -67,13 +68,9 @@ file path=etc/fs/nfs/mount mode=0555
 file path=etc/nfssec.conf group=sys original_name=SUNWnfsc:etc/nfssec.conf \
     preserve=true
 file path=kernel/fs/$(ARCH64)/nfs group=sys mode=0755
-$(i386_ONLY)file path=kernel/fs/nfs group=sys mode=0755
 file path=kernel/misc/$(ARCH64)/klmmod group=sys mode=0755
 file path=kernel/misc/$(ARCH64)/klmops group=sys mode=0755
 file path=kernel/misc/$(ARCH64)/nfs_dlboot group=sys mode=0755
-$(i386_ONLY)file path=kernel/misc/klmmod group=sys mode=0755
-$(i386_ONLY)file path=kernel/misc/klmops group=sys mode=0755
-$(i386_ONLY)file path=kernel/misc/nfs_dlboot group=sys mode=0755
 file path=lib/svc/manifest/network/nfs/cbd.xml group=sys mode=0444
 file path=lib/svc/manifest/network/nfs/client.xml group=sys mode=0444
 file path=lib/svc/manifest/network/nfs/mapid.xml group=sys mode=0444
@@ -82,20 +79,16 @@ file path=lib/svc/manifest/network/nfs/status.xml group=sys mode=0444
 file path=lib/svc/method/nfs-client mode=0555
 file path=lib/svc/method/nlockmgr mode=0555
 file path=usr/bin/nfsstat mode=0555
-file path=usr/bin/on mode=0555
 file path=usr/lib/fs/nfs/dfmounts mode=0555
 file path=usr/lib/fs/nfs/dfshares mode=0555
 file path=usr/lib/fs/nfs/nfsfind group=sys mode=0555
 file path=usr/lib/fs/nfs/showmount mode=0555
 file path=usr/lib/fs/nfs/umount mode=0555
 file path=usr/lib/nfs/libmapid.so.1
-file path=usr/lib/nfs/llib-lmapid
-file path=usr/lib/nfs/llib-lmapid.ln
 file path=usr/lib/nfs/lockd mode=0555
 file path=usr/lib/nfs/nfs4cbd mode=0555
 file path=usr/lib/nfs/nfsmapid mode=0555
 file path=usr/lib/nfs/statd mode=0555
-file path=usr/share/man/man1/on.1
 file path=usr/share/man/man1m/mount_nfs.1m
 file path=usr/share/man/man1m/nfs4cbd.1m
 file path=usr/share/man/man1m/nfsmapid.1m
@@ -106,7 +99,6 @@ file path=usr/share/man/man4/nfs.4
 file path=usr/share/man/man4/nfssec.conf.4
 group groupname=unknown gid=96
 hardlink path=kernel/sys/$(ARCH64)/nfs target=../../../kernel/fs/$(ARCH64)/nfs
-$(i386_ONLY)hardlink path=kernel/sys/nfs target=../../kernel/fs/nfs
 legacy pkg=SUNWnfsckr \
     desc="Network File System (NFS) client kernel support (Root)" \
     name="Network File System (NFS) client kernel support (Root)"

@@ -30,10 +30,10 @@ include ../Makefile.cmd
 
 CFLAGS += -I$(SRC)/uts/common
 LINTFLAGS += -I$(SRC)/uts/common
-C99MODE= $(C99_ENABLE)
+CSTD= $(CSTD_GNU99)
 CFLAGS += $(CCVERBOSE)
 CERRWARN += -_gcc=-Wno-parentheses
-CERRWARN += -_gcc=-Wno-uninitialized
+CERRWARN += $(CNOWARN_UNINIT)
 
 SRCS = $(PROG:%=%.c)
 OBJECTS = $(SRCS:%.c=%.o)

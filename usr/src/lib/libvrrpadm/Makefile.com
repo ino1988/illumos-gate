@@ -32,21 +32,19 @@ include ../../Makefile.lib
 # install this library in the root filesystem
 #include ../../Makefile.rootfs
 
-LIBS =		$(DYNLIB) $(LINTLIB)
+LIBS =		$(DYNLIB)
 LDLIBS +=	-lc -lsocket -ldladm -lscf
 
 SRCDIR =	../common
-$(LINTLIB) :=	SRCS = $(SRCDIR)/$(LINTSRC)
 
 CFLAGS +=	$(CCVERBOSE)
 CPPFLAGS +=	-I$(SRCDIR) -D_REENTRANT
 
-C99MODE =	$(C99_ENABLE)
+CSTD =	$(CSTD_GNU99)
 
 .KEEP_STATE:
 
 all:		$(LIBS)
 
-lint:		lintcheck
 
 include $(SRC)/lib/Makefile.targ

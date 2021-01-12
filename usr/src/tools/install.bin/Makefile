@@ -18,10 +18,10 @@
 #
 # CDDL HEADER END
 #
+
+#
 # Copyright 2009 Sun Microsystems, Inc.  All rights reserved.
 # Use is subject to license terms.
-#
-# tools/install.bin/Makefile
 #
 
 PROG=	install.bin
@@ -34,7 +34,11 @@ CFLAGS += $(CCVERBOSE)
 CERRWARN += -_gcc=-Wno-type-limits
 CPPFLAGS += -I../protocmp
 LDLIBS += -lgen
+NATIVE_LIBS += libgen.so
 CLEANFILES += $(OBJS)
+
+# Assume we don't have the install.bin available yet
+INS.file=	$(RM) $@; $(CP) $< $(@D); $(CHMOD) $(FILEMODE) $@
 
 .KEEP_STATE:
 

@@ -22,17 +22,20 @@
 # Copyright 2009 Sun Microsystems, Inc.  All rights reserved.
 # Use is subject to license terms.
 #
+# Copyright 2018 Joyent, Inc.
+# Copyright 2019 Garrett D'Amore <garrett@damore.org>
+#
 # cmd/mailx/Makefile
 
 PROG= mailx
 
-OBJS=	myfopen.o aux.o cmd1.o cmd2.o cmd3.o \
+OBJS=	myfopen.o cmd1.o cmd2.o cmd3.o \
 	cmd4.o cmdtab.o collect.o config.o edit.o \
 	init.o fio.o getname.o head.o \
 	hostname.o lex.o list.o lock.o lpaths.o \
 	main.o names.o optim.o popen.o quit.o \
 	receipt.o send.o sigretro.o stralloc.o temp.o \
-	translate.o tty.o usg.local.o vars.o
+	translate.o tty.o usg.local.o util.o vars.o
 
 SRCS=	$(OBJS:.o=.c)
 
@@ -63,12 +66,14 @@ $(ROOTUCBMAILRC) :=	FILEMODE =	0644
 
 CPPFLAGS=	-Ihdr -DUSG -DOPTIM $(CPPFLAGS.master)
 CERRWARN +=	-_gcc=-Wno-parentheses
-CERRWARN +=	-_gcc=-Wno-uninitialized
+CERRWARN +=	$(CNOWARN_UNINIT)
 CERRWARN +=	-_gcc=-Wno-unused-variable
 CERRWARN +=	-_gcc=-Wno-clobbered
-LINTFLAGS= 	-hb
-LDLIBS +=	-lmail
-LDFLAGS +=	$(MAPFILE.NGB:%=-M%)
+# not linted
+SMATCH=off
+
+LDLIBS +=	-lmail -lcustr
+LDFLAGS +=	$(MAPFILE.NGB:%=-Wl,-M%)
 
 CLOBBERFILES += $(MAILXHELP)
 
@@ -105,8 +110,6 @@ $(POFILE):      $(POFILES)
 
 clean:
 	$(RM) $(OBJS)
-
-lint: lint_SRCS
 
 include ../Makefile.targ
 

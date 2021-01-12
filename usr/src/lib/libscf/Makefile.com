@@ -21,6 +21,7 @@
 #
 # Copyright (c) 2004, 2010, Oracle and/or its affiliates. All rights reserved.
 #
+# Copyright (c) 2018, Joyent, Inc.
 
 LIBRARY =	libscf.a
 VERS =		.1
@@ -37,22 +38,21 @@ OBJECTS = \
 include ../../Makefile.lib
 include ../../Makefile.rootfs
 
-LIBS =		$(DYNLIB) $(LINTLIB)
+LIBS =		$(DYNLIB)
 
 $(NOT_NATIVE)NATIVE_BUILD = $(POUND_SIGN)
 $(NATIVE_BUILD)VERS =
 $(NATIVE_BUILD)LIBS = $(DYNLIB)
 
 LDLIBS_i386 += -lsmbios
-LDLIBS +=	-luutil -lc -lgen -lnsl -lnvpair
+LDLIBS +=	-luutil -lc -lgen -lnvpair
 LDLIBS +=	$(LDLIBS_$(MACH))
 
 SRCDIR =	../common
-$(LINTLIB) :=	SRCS = $(SRCDIR)/$(LINTSRC)
 
 COMDIR =	../../../common/svc
 
-CFLAGS +=	$(CCVERBOSE) -Wp,-xc99=%all
+CFLAGS +=	$(CCVERBOSE) -Wp,$(CSTD_GNU99)
 CPPFLAGS +=	-I../inc -I../../common/inc -I$(COMDIR) -I$(ROOTHDRDIR)
 $(NOT_RELEASE_BUILD) CPPFLAGS += -DFASTREBOOT_DEBUG
 
@@ -60,7 +60,10 @@ CERRWARN +=	-_gcc=-Wno-switch
 CERRWARN +=	-_gcc=-Wno-char-subscripts
 CERRWARN +=	-_gcc=-Wno-unused-label
 CERRWARN +=	-_gcc=-Wno-parentheses
-CERRWARN +=	-_gcc=-Wno-uninitialized
+CERRWARN +=	$(CNOWARN_UNINIT)
+
+# not linted
+SMATCH=off
 
 #
 # For native builds, we compile and link against the native version
@@ -71,14 +74,12 @@ MY_NATIVE_CPPFLAGS =\
 		-DNATIVE_BUILD $(DTEXTDOM) \
 		-I../inc -I$(COMDIR) -I$(LIBUUTIL)/common -I$(ROOTHDRDIR)
 MY_NATIVE_LDLIBS = -L$(LIBUUTIL)/native -R$(LIBUUTIL)/native -luutil -lc -lgen \
-		   -lnsl -lnvpair
+		   -lnvpair
 MY_NATIVE_LDLIBS_i386 = -lsmbios
 MY_NATIVE_LDLIBS += $(MY_NATIVE_LDLIBS_$(MACH))
 
 .KEEP_STATE:
 
 all:
-
-lint: lintcheck
 
 include ../../Makefile.targ

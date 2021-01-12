@@ -21,6 +21,7 @@
 
 #
 # Copyright (c) 2007, 2010, Oracle and/or its affiliates. All rights reserved.
+# Copyright (c) 2019, Joyent, Inc.
 #
 
 SHELL=/usr/bin/ksh93
@@ -123,7 +124,7 @@ MAPFILES=       ../mapfile-vers
 # Set common AST build flags (e.g. C99/XPG6, needed to support the math stuff)
 include ../../../Makefile.ast
 
-LIBS =		$(DYNLIB) $(LINTLIB)
+LIBS =		$(DYNLIB)
 
 LDLIBS += \
 	-lcmd \
@@ -133,7 +134,6 @@ LDLIBS += \
 	-lm \
 	-lc
 
-$(LINTLIB) :=	SRCS = $(SRCDIR)/$(LINTSRC)
 
 SRCDIR =	../common
 
@@ -157,9 +157,12 @@ CERRWARN	+= -_gcc=-Wno-parentheses
 CERRWARN	+= -_gcc=-Wno-unused-value
 CERRWARN	+= -_gcc=-Wno-unused-variable
 CERRWARN	+= -_gcc=-Wno-unused-function
-CERRWARN	+= -_gcc=-Wno-uninitialized
+CERRWARN	+= $(CNOWARN_UNINIT)
 CERRWARN	+= -_gcc=-Wno-clobbered
 CERRWARN	+= -_gcc=-Wno-char-subscripts
+
+# smatch gets out of memory on common/sh/macro.c
+SMATCH		= off
 
 pics/sh/macro.o		:= CERRWARN += -erroff=E_NO_IMPLICIT_DECL_ALLOWED
 pics/sh/nvdisc.o	:= CERRWARN += -erroff=E_END_OF_LOOP_CODE_NOT_REACHED
@@ -167,13 +170,5 @@ pics/sh/nvdisc.o	:= CERRWARN += -erroff=E_END_OF_LOOP_CODE_NOT_REACHED
 .KEEP_STATE:
 
 all: mkpicdirs .WAIT $(LIBS)
-
-#
-# libshell is not lint-clean yet; fake up a target.  (You can use
-# "make lintcheck" to actually run lint; please send all lint fixes
-# upstream (to AT&T) so the next update will pull them into ON.)
-#
-lint:
-	@ print "usr/src/lib/libshell is not lint-clean: skipping"
 
 include ../../Makefile.targ

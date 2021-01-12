@@ -21,6 +21,7 @@
 
 /*
  * Copyright (c) 1989, 2010, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2016 by Delphix. All rights reserved.
  */
 
 /*	Copyright (c) 1984, 1986, 1987, 1988, 1989 AT&T	*/
@@ -100,7 +101,7 @@ gettext("No current filename"));
 
 		case 'f':
 			edited = 0;
-			/* fall into ... */
+			/* FALLTHROUGH */
 
 		case 'e':
 			if (savedfile[0]) {
@@ -214,7 +215,7 @@ getargs(void)
 		case '\\':
 			if (any(peekchar(), "#%|"))
 				c = getchar();
-			/* fall into... */
+			/* FALLTHROUGH */
 
 		default:
 			if (cp > &genbuf[LBSIZE - 2])
@@ -392,7 +393,7 @@ rop(int c)
 		if (c == 'e' && errno == ENOENT) {
 			edited++;
 			/*
-			 * If the user just did "ex foo" he is probably
+			 * If the user just did "ex foo" they're probably
 			 * creating a new file.  Don't be an error, since
 			 * this is ugly, and it messes up the + option.
 			 */
@@ -415,6 +416,7 @@ rop(int c)
 
 	case S_IFBLK:
 		error(gettext(" Block special file"));
+		/* FALLTHROUGH */
 
 	case S_IFCHR:
 		if (isatty(io))
@@ -422,6 +424,7 @@ rop(int c)
 		if (samei(&stbuf, "/dev/null"))
 			break;
 		error(gettext(" Character special file"));
+		/* FALLTHROUGH */
 
 	case S_IFDIR:
 		error(gettext(" Directory"));
@@ -450,7 +453,7 @@ rop(int c)
 	/* If it is a read command, then we must set dot to addr1
 	 * (value of N in :Nr ).  In the default case, addr1 will
 	 * already be set to dot.
-	 * 
+	 *
 	 * Next, it is necessary to mark the beginning (undap1) and
 	 * ending (undap2) addresses affected (for undo).  Note that
 	 * rop2() and rop3() will adjust the value of undap2.
@@ -535,7 +538,7 @@ samei(struct stat64 *sp, unsigned char *cp)
 {
 	struct stat64 stb;
 
-	if (stat64((char *)cp, &stb) < 0) 
+	if (stat64((char *)cp, &stb) < 0)
 		return (0);
 	return (IDENTICAL((*sp), stb));
 }
@@ -589,7 +592,7 @@ gettext("No current filename"));
 	case 0:
 		if (!exclam && (!value(vi_WRITEANY) || value(vi_READONLY)))
 		switch (edfile()) {
-		
+
 		case NOTEDF:
 			if (nonexist)
 				break;

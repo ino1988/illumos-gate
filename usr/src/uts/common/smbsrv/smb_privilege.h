@@ -21,10 +21,14 @@
 /*
  * Copyright 2009 Sun Microsystems, Inc.  All rights reserved.
  * Use is subject to license terms.
+ *
+ * Copyright 2019 Nexenta by DDN, Inc. All rights reserved.
  */
 
 #ifndef _SMB_PRIVILEGE_H
 #define	_SMB_PRIVILEGE_H
+
+#include <smb/wintypes.h>
 
 #ifdef __cplusplus
 extern "C" {
@@ -93,6 +97,8 @@ extern "C" {
 #define	SE_SYSTEM_ENVIRONMENT_NAME	"SeSystemEnvironmentPrivilege"
 #define	SE_CHANGE_NOTIFY_NAME		"SeChangeNotifyPrivilege"
 #define	SE_REMOTE_SHUTDOWN_NAME		"SeRemoteShutdownPrivilege"
+#define	SE_READ_FILE_NAME		"BypassAclRead"
+#define	SE_WRITE_FILE_NAME		"BypassAclWrite"
 
 #define	SE_MIN_LUID			2
 #define	SE_CREATE_TOKEN_LUID		2
@@ -118,7 +124,9 @@ extern "C" {
 #define	SE_SYSTEM_ENVIRONMENT_LUID	22
 #define	SE_CHANGE_NOTIFY_LUID		23
 #define	SE_REMOTE_SHUTDOWN_LUID		24
-#define	SE_MAX_LUID			24
+#define	SE_READ_FILE_LUID		25
+#define	SE_WRITE_FILE_LUID		26
+#define	SE_MAX_LUID			26
 
 /*
  * Privilege attributes
@@ -133,18 +141,28 @@ extern "C" {
  */
 #define	PRIVILEGE_SET_ALL_NECESSARY		1
 
+/*
+ * Local User ID (an NT thing, not a Unix UID)
+ * See also: smb_luid_xdr()
+ */
 typedef struct smb_luid {
 	uint32_t lo_part;
 	uint32_t hi_part;
 } smb_luid_t;
 
-
+/*
+ * Local User ID and attributes (again, an NT thing)
+ * See also: smb_luid_attrs_xdr()
+ */
 typedef struct smb_luid_attrs {
 	smb_luid_t luid;
 	uint32_t attrs;
 } smb_luid_attrs_t;
 
-
+/*
+ * An (NT-style) collection of privileges.
+ * See also: smb_privset_xdr()
+ */
 typedef struct smb_privset {
 	uint32_t priv_cnt;
 	uint32_t control;

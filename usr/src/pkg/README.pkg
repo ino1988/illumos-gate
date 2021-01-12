@@ -218,7 +218,7 @@ These are the PKGMOG_DEFINES in usr/src/pkg/Makefile.
 	$(ARCH32)
 	$(ARCH64)
 	$(PKGVERS), which is set to
-	   $(PKGVERS_COMPONENT),$(PKGVERS_BUILTON)-0.$(PKGVERS_BRANCH)
+	   $(PKGVERS_COMPONENT),$(PKGVERS_BUILTON)-$(PKGVERS_BRANCH)
 
 pkgmogrify(1) also allows us to include a set of default transformations.
 The definitions for these transforms are in usr/src/pkg/transforms/.  An
@@ -442,10 +442,7 @@ The following actions are required for all packages in ON.
 	    in /usr/share/package-manager/data/opensolaris.org.sections.
 
 	license
-	    All packages must specify a set of license actions.  If
-	    you're adding items here that are not already included in
-	    usr/src/pkg/license_files, then you will also need to modify 
-	    usr/src/tools/opensolaris/license-list.
+	    All packages must specify a set of license actions.
 
 You don't need to set the following.  They're taken care of for all OS/Net
 packages in the transforms/common_actions file.

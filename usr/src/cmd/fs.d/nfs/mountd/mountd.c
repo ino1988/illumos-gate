@@ -17,9 +17,12 @@
  * information: Portions Copyright [yyyy] [name of copyright owner]
  *
  * CDDL HEADER END
- *
+ */
+
+/*
  * Copyright (c) 1989, 2010, Oracle and/or its affiliates. All rights reserved.
- * Copyright 2014 Nexenta Systems, Inc.  All rights reserved.
+ * Copyright (c) 2012, 2016 by Delphix. All rights reserved.
+ * Copyright 2016 Nexenta Systems, Inc.  All rights reserved.
  */
 
 /*	Copyright (c) 1983, 1984, 1985, 1986, 1987, 1988, 1989 AT&T	*/
@@ -84,9 +87,12 @@
 #include "smfcfg.h"
 #include <pwd.h>
 #include <grp.h>
+#include <alloca.h>
 
 extern int daemonize_init(void);
-extern void daemonize_fini(int fd);
+extern void daemonize_fini(int);
+
+extern int _nfssys(int, void *);
 
 struct sh_list *share_list;
 
@@ -97,36 +103,27 @@ static mutex_t logging_queue_lock;
 static cond_t logging_queue_cv;
 
 static share_t *find_lofsentry(char *, int *);
-static int getclientsnames_lazy(char *, struct netbuf **,
-	struct nd_hostservlist **);
-static int getclientsnames(SVCXPRT *, struct netbuf **,
-	struct nd_hostservlist **);
-static int getclientsflavors_old(share_t *, SVCXPRT *, struct netbuf **,
-	struct nd_hostservlist **, int *);
-static int getclientsflavors_new(share_t *, SVCXPRT *, struct netbuf **,
-	struct nd_hostservlist **, int *);
-static int check_client_old(share_t *, SVCXPRT *, struct netbuf **,
-	struct nd_hostservlist **, int, uid_t, gid_t, uid_t *, gid_t *);
-static int check_client_new(share_t *, SVCXPRT *, struct netbuf **,
-	struct nd_hostservlist **, int, uid_t, gid_t, uid_t *, gid_t *);
+static int getclientsflavors_old(share_t *, struct cln *, int *);
+static int getclientsflavors_new(share_t *, struct cln *, int *);
+static int check_client_old(share_t *, struct cln *, int, uid_t, gid_t, uint_t,
+    gid_t *, uid_t *, gid_t *, uint_t *, gid_t **);
+static int check_client_new(share_t *, struct cln *, int, uid_t, gid_t, uint_t,
+    gid_t *, uid_t *, gid_t *i, uint_t *, gid_t **);
 static void mnt(struct svc_req *, SVCXPRT *);
 static void mnt_pathconf(struct svc_req *);
 static int mount(struct svc_req *r);
 static void sh_free(struct sh_list *);
 static void umount(struct svc_req *);
 static void umountall(struct svc_req *);
-static void sigexit(int);
 static int newopts(char *);
 static tsol_tpent_t *get_client_template(struct sockaddr *);
 
+static int debug;
 static int verbose;
 static int rejecting;
 static int mount_vers_min = MOUNTVERS;
 static int mount_vers_max = MOUNTVERS3;
-
-/* Needs to be accessed by nfscmd.c */
-int  in_access_list(SVCXPRT *, struct netbuf **,
-	struct nd_hostservlist **, char *);
+static int mountd_port = 0;
 
 extern void nfscmd_func(void *, char *, size_t, door_desc_t *, uint_t);
 
@@ -146,6 +143,12 @@ typedef struct logging_data {
 
 static logging_data *logging_head = NULL;
 static logging_data *logging_tail = NULL;
+
+/*
+ * Our copy of some system variables obtained using sysconf(3c)
+ */
+static long ngroups_max;	/* _SC_NGROUPS_MAX */
+static long pw_size;		/* _SC_GETPW_R_SIZE_MAX */
 
 /* ARGSUSED */
 static void *
@@ -293,16 +296,13 @@ do_logging_queue(logging_data *lq)
 	int		cleared = 0;
 	char		*host;
 
-	struct nd_hostservlist	*clnames;
-
 	while (lq) {
+		struct cln cln;
+
 		if (lq->ld_host == NULL) {
 			DTRACE_PROBE(mountd, name_by_lazy);
-			if (getclientsnames_lazy(lq->ld_netid,
-			    &lq->ld_nb, &clnames) != 0)
-				host = NULL;
-			else
-				host = clnames->h_hostservs[0].h_host;
+			cln_init_lazy(&cln, lq->ld_netid, lq->ld_nb);
+			host = cln_gethost(&cln);
 		} else
 			host = lq->ld_host;
 
@@ -312,8 +312,8 @@ do_logging_queue(logging_data *lq)
 		if (lq->ld_rpath)
 			mntlist_new(host, lq->ld_rpath);
 
-		if (lq->ld_host != host)
-			netdir_free(clnames, ND_HOSTSERVLIST);
+		if (lq->ld_host == NULL)
+			cln_fini(&cln);
 
 		free_logging_data(lq);
 		cleared++;
@@ -365,6 +365,82 @@ convert_int(int *val, char *str)
 	return (0);
 }
 
+/*
+ * This function is called for each configured network type to
+ * bind and register our RPC service programs.
+ *
+ * On TCP or UDP, we may want to bind MOUNTPROG on a specific port
+ * (when mountd_port is specified) in which case we'll use the
+ * variant of svc_tp_create() that lets us pass a bind address.
+ */
+static void
+md_svc_tp_create(struct netconfig *nconf)
+{
+	char port_str[8];
+	struct nd_hostserv hs;
+	struct nd_addrlist *al = NULL;
+	SVCXPRT *xprt = NULL;
+	rpcvers_t vers;
+
+	vers = mount_vers_max;
+
+	/*
+	 * If mountd_port is set and this is an inet transport,
+	 * bind this service on the specified port.  The TLI way
+	 * to create such a bind address is netdir_getbyname()
+	 * with the special "host" HOST_SELF_BIND.  This builds
+	 * an all-zeros IP address with the specified port.
+	 */
+	if (mountd_port != 0 &&
+	    (strcmp(nconf->nc_protofmly, NC_INET) == 0 ||
+	    strcmp(nconf->nc_protofmly, NC_INET6) == 0)) {
+		int err;
+
+		snprintf(port_str, sizeof (port_str), "%u",
+		    (unsigned short)mountd_port);
+
+		hs.h_host = HOST_SELF_BIND;
+		hs.h_serv = port_str;
+		err = netdir_getbyname((struct netconfig *)nconf, &hs, &al);
+		if (err == 0 && al != NULL) {
+			xprt = svc_tp_create_addr(mnt, MOUNTPROG, vers,
+			    nconf, al->n_addrs);
+			netdir_free(al, ND_ADDRLIST);
+		}
+		if (xprt == NULL) {
+			syslog(LOG_ERR, "mountd: unable to create "
+			    "(MOUNTD,%d) on transport %s (port %d)",
+			    vers, nconf->nc_netid, mountd_port);
+		}
+		/* fall-back to default bind */
+	}
+	if (xprt == NULL) {
+		/*
+		 * Had mountd_port=0, or non-inet transport,
+		 * or the bind to a specific port failed.
+		 * Do a default bind.
+		 */
+		xprt = svc_tp_create(mnt, MOUNTPROG, vers, nconf);
+	}
+	if (xprt == NULL) {
+		syslog(LOG_ERR, "mountd: unable to create "
+		    "(MOUNTD,%d) on transport %s",
+		    vers, nconf->nc_netid);
+		return;
+	}
+
+	/*
+	 * Register additional versions on this transport.
+	 */
+	while (--vers >= mount_vers_min) {
+		if (!svc_reg(xprt, MOUNTPROG, vers, mnt, nconf)) {
+			(void) syslog(LOG_ERR, "mountd: "
+			    "failed to register vers %d on %s",
+			    vers, nconf->nc_netid);
+		}
+	}
+}
+
 int
 main(int argc, char *argv[])
 {
@@ -382,6 +458,8 @@ main(int argc, char *argv[])
 	int listen_backlog = 0;
 	int max_threads = 0;
 	int tmp;
+	struct netconfig *nconf;
+	NCONF_HANDLE *nc;
 
 	int	pipe_fd = -1;
 
@@ -401,6 +479,7 @@ main(int argc, char *argv[])
 	can_do_mlp = priv_ineffect(PRIV_NET_BINDMLP);
 	if (__init_daemon_priv(PU_RESETGROUPS|PU_CLEARLIMITSET, -1, -1,
 	    PRIV_SYS_NFS, PRIV_PROC_AUDIT, PRIV_FILE_DAC_SEARCH,
+	    PRIV_NET_PRIVADDR,
 	    can_do_mlp ? PRIV_NET_BINDMLP : NULL, NULL) == -1) {
 		(void) fprintf(stderr,
 		    "%s: must be run with sufficient privileges\n",
@@ -425,8 +504,18 @@ main(int argc, char *argv[])
 		    "failed, using default value");
 	}
 
-	while ((c = getopt(argc, argv, "vrm:")) != EOF) {
+	ret = nfs_smf_get_iprop("mountd_port", &mountd_port,
+	    DEFAULT_INSTANCE, SCF_TYPE_INTEGER, NFSD);
+	if (ret != SA_OK) {
+		syslog(LOG_ERR, "Reading of mountd_port from SMF "
+		    "failed, using default value");
+	}
+
+	while ((c = getopt(argc, argv, "dvrm:p:")) != EOF) {
 		switch (c) {
+		case 'd':
+			debug++;
+			break;
 		case 'v':
 			verbose++;
 			break;
@@ -441,6 +530,15 @@ main(int argc, char *argv[])
 				break;
 			}
 			max_threads = tmp;
+			break;
+		case 'p':
+			if (convert_int(&tmp, optarg) != 0 || tmp < 1 ||
+			    tmp > UINT16_MAX) {
+				(void) fprintf(stderr, "%s: invalid port "
+				    "number\n", argv[0]);
+				break;
+			}
+			mountd_port = tmp;
 			break;
 		default:
 			fprintf(stderr, "usage: mountd [-v] [-r]\n");
@@ -491,6 +589,8 @@ main(int argc, char *argv[])
 	 * even though we may get versions > MOUNTVERS3, we still need
 	 * to start nfsauth service, so continue on regardless of values.
 	 */
+	if (mount_vers_max > MOUNTVERS3)
+		mount_vers_max = MOUNTVERS3;
 	if (mount_vers_min > mount_vers_max) {
 		fprintf(stderr, "server_versmin > server_versmax\n");
 		mount_vers_max = mount_vers_min;
@@ -511,7 +611,8 @@ main(int argc, char *argv[])
 	/* Don't drop core if the NFS module isn't loaded. */
 	(void) signal(SIGSYS, SIG_IGN);
 
-	pipe_fd = daemonize_init();
+	if (!debug)
+		pipe_fd = daemonize_init();
 
 	/*
 	 * If we coredump it'll be in /core
@@ -519,7 +620,8 @@ main(int argc, char *argv[])
 	if (chdir("/") < 0)
 		fprintf(stderr, "chdir /: %s\n", strerror(errno));
 
-	openlog("mountd", LOG_PID, LOG_DAEMON);
+	if (!debug)
+		openlog("mountd", LOG_PID, LOG_DAEMON);
 
 	/*
 	 * establish our lock on the lock file and write our pid to it.
@@ -540,6 +642,18 @@ main(int argc, char *argv[])
 	}
 
 	audit_mountd_setup();	/* BSM */
+
+	/*
+	 * Get required system variables
+	 */
+	if ((ngroups_max = sysconf(_SC_NGROUPS_MAX)) == -1) {
+		syslog(LOG_ERR, "Unable to get _SC_NGROUPS_MAX");
+		exit(1);
+	}
+	if ((pw_size = sysconf(_SC_GETPW_R_SIZE_MAX)) == -1) {
+		syslog(LOG_ERR, "Unable to get _SC_GETPW_R_SIZE_MAX");
+		exit(1);
+	}
 
 	/*
 	 * Set number of file descriptors to unlimited
@@ -592,6 +706,11 @@ main(int argc, char *argv[])
 		exit(1);
 	}
 
+	if (mountd_port < 0 || mountd_port > UINT16_MAX) {
+		fprintf(stderr, "unable to use specified port\n");
+		exit(1);
+	}
+
 	/*
 	 * Make sure to unregister any previous versions in case the
 	 * user is reconfiguring the server in interesting ways.
@@ -636,48 +755,27 @@ main(int argc, char *argv[])
 	}
 
 	/*
-	 * Create datagram and connection oriented services
+	 * Enumerate network transports and create service listeners
+	 * as appropriate for each.
 	 */
-	if (mount_vers_max >= MOUNTVERS) {
-		if (svc_create(mnt, MOUNTPROG, MOUNTVERS, "datagram_v") == 0) {
-			fprintf(stderr,
-			    "couldn't register datagram_v MOUNTVERS\n");
-			exit(1);
-		}
-		if (svc_create(mnt, MOUNTPROG, MOUNTVERS, "circuit_v") == 0) {
-			fprintf(stderr,
-			    "couldn't register circuit_v MOUNTVERS\n");
-			exit(1);
-		}
+	if ((nc = setnetconfig()) == NULL) {
+		syslog(LOG_ERR, "setnetconfig failed: %m");
+		return (-1);
 	}
+	while ((nconf = getnetconfig(nc)) != NULL) {
+		/*
+		 * Skip things like tpi_raw, invisible...
+		 */
+		if ((nconf->nc_flag & NC_VISIBLE) == 0)
+			continue;
+		if (nconf->nc_semantics != NC_TPI_CLTS &&
+		    nconf->nc_semantics != NC_TPI_COTS &&
+		    nconf->nc_semantics != NC_TPI_COTS_ORD)
+			continue;
 
-	if (mount_vers_max >= MOUNTVERS_POSIX) {
-		if (svc_create(mnt, MOUNTPROG, MOUNTVERS_POSIX,
-		    "datagram_v") == 0) {
-			fprintf(stderr,
-			    "couldn't register datagram_v MOUNTVERS_POSIX\n");
-			exit(1);
-		}
-		if (svc_create(mnt, MOUNTPROG, MOUNTVERS_POSIX,
-		    "circuit_v") == 0) {
-			fprintf(stderr,
-			    "couldn't register circuit_v MOUNTVERS_POSIX\n");
-			exit(1);
-		}
+		md_svc_tp_create(nconf);
 	}
-
-	if (mount_vers_max >= MOUNTVERS3) {
-		if (svc_create(mnt, MOUNTPROG, MOUNTVERS3, "datagram_v") == 0) {
-			fprintf(stderr,
-			    "couldn't register datagram_v MOUNTVERS3\n");
-			exit(1);
-		}
-		if (svc_create(mnt, MOUNTPROG, MOUNTVERS3, "circuit_v") == 0) {
-			fprintf(stderr,
-			    "couldn't register circuit_v MOUNTVERS3\n");
-			exit(1);
-		}
-	}
+	(void) endnetconfig(nc);
 
 	/*
 	 * Start serving
@@ -745,164 +843,38 @@ mnt(struct svc_req *rqstp, SVCXPRT *transp)
 	}
 }
 
-/* Set up anonymous client */
-
-struct nd_hostservlist *
-anon_client(char *host)
-{
-	struct nd_hostservlist *anon_hsl;
-	struct nd_hostserv *anon_hs;
-
-	anon_hsl = malloc(sizeof (*anon_hsl));
-	if (anon_hsl == NULL)
-		return (NULL);
-
-	anon_hs = malloc(sizeof (*anon_hs));
-	if (anon_hs == NULL) {
-		free(anon_hsl);
-		return (NULL);
-	}
-
-	if (host == NULL)
-		anon_hs->h_host = strdup("(anon)");
-	else
-		anon_hs->h_host = strdup(host);
-
-	if (anon_hs->h_host == NULL) {
-		free(anon_hs);
-		free(anon_hsl);
-		return (NULL);
-	}
-	anon_hs->h_serv = '\0';
-
-	anon_hsl->h_cnt = 1;
-	anon_hsl->h_hostservs = anon_hs;
-
-	return (anon_hsl);
-}
-
-static int
-getclientsnames_common(struct netconfig *nconf, struct netbuf **nbuf,
-    struct nd_hostservlist **serv)
-{
-	char host[MAXIPADDRLEN];
-
-	assert(*nbuf != NULL);
-
-	/*
-	 * Use the this API instead of the netdir_getbyaddr()
-	 * to avoid service lookup.
-	 */
-	if (__netdir_getbyaddr_nosrv(nconf, serv, *nbuf) != 0) {
-		if (strcmp(nconf->nc_protofmly, NC_INET) == 0) {
-			struct sockaddr_in *sa;
-
-			/* LINTED pointer alignment */
-			sa = (struct sockaddr_in *)((*nbuf)->buf);
-			(void) inet_ntoa_r(sa->sin_addr, host);
-		} else if (strcmp(nconf->nc_protofmly, NC_INET6) == 0) {
-			struct sockaddr_in6 *sa;
-
-			/* LINTED pointer alignment */
-			sa = (struct sockaddr_in6 *)((*nbuf)->buf);
-			(void) inet_ntop(AF_INET6, sa->sin6_addr.s6_addr,
-			    host, INET6_ADDRSTRLEN);
-		} else {
-			syslog(LOG_ERR, gettext(
-			    "Client's address is neither IPv4 nor IPv6"));
-			return (EINVAL);
-		}
-
-		*serv = anon_client(host);
-		if (*serv == NULL)
-			return (ENOMEM);
-	}
-
-	assert(*serv != NULL);
-	return (0);
-}
-
-/*
- * Get the client's hostname from the copy of the
- * relevant transport handle parts.
- * If the name is not available then return "(anon)".
- */
-static int
-getclientsnames_lazy(char *netid, struct netbuf **nbuf,
-    struct nd_hostservlist **serv)
-{
-	struct netconfig *nconf;
-	int	rc;
-
-	nconf = getnetconfigent(netid);
-	if (nconf == NULL) {
-		syslog(LOG_ERR, "%s: getnetconfigent failed", netid);
-		*serv = anon_client(NULL);
-		if (*serv == NULL)
-			return (ENOMEM);
-		return (0);
-	}
-
-	rc = getclientsnames_common(nconf, nbuf, serv);
-	freenetconfigent(nconf);
-	return (rc);
-}
-
-/*
- * Get the client's hostname from the transport handle.
- * If the name is not available then return "(anon)".
- */
-int
-getclientsnames(SVCXPRT *transp, struct netbuf **nbuf,
-    struct nd_hostservlist **serv)
-{
-	struct netconfig *nconf;
-	int	rc;
-
-	nconf = getnetconfigent(transp->xp_netid);
-	if (nconf == NULL) {
-		syslog(LOG_ERR, "%s: getnetconfigent failed",
-		    transp->xp_netid);
-		*serv = anon_client(NULL);
-		if (*serv == NULL)
-			return (ENOMEM);
-		return (0);
-	}
-
-	*nbuf = svc_getrpccaller(transp);
-	if (*nbuf == NULL) {
-		freenetconfigent(nconf);
-		*serv = anon_client(NULL);
-		if (*serv == NULL)
-			return (ENOMEM);
-		return (0);
-	}
-
-	rc = getclientsnames_common(nconf, nbuf, serv);
-	freenetconfigent(nconf);
-	return (rc);
-}
-
 void
-log_cant_reply(SVCXPRT *transp)
+log_cant_reply_cln(struct cln *cln)
 {
 	int saverrno;
-	struct nd_hostservlist *clnames = NULL;
-	register char *host;
-	struct netbuf *nb;
+	char *host;
 
 	saverrno = errno;	/* save error code */
-	if (getclientsnames(transp, &nb, &clnames) != 0)
+
+	host = cln_gethost(cln);
+	if (host == NULL)
 		return;
-	host = clnames->h_hostservs->h_host;
 
 	errno = saverrno;
 	if (errno == 0)
 		syslog(LOG_ERR, "couldn't send reply to %s", host);
 	else
 		syslog(LOG_ERR, "couldn't send reply to %s: %m", host);
+}
 
-	netdir_free(clnames, ND_HOSTSERVLIST);
+void
+log_cant_reply(SVCXPRT *transp)
+{
+	int saverrno;
+	struct cln cln;
+
+	saverrno = errno;	/* save error code */
+	cln_init(&cln, transp);
+	errno = saverrno;
+
+	log_cant_reply_cln(&cln);
+
+	cln_fini(&cln);
 }
 
 /*
@@ -1010,8 +982,7 @@ checkrootmount(share_t *sh, char *rpath)
  * otherwise EACCES.
  */
 static int
-mount_enoent_error(SVCXPRT *transp, char *path, char *rpath,
-    struct nd_hostservlist **clnames, struct netbuf **nb, int *flavor_list)
+mount_enoent_error(struct cln *cln, char *path, char *rpath, int *flavor_list)
 {
 	char *checkpath, *dp;
 	share_t *sh = NULL;
@@ -1054,11 +1025,11 @@ mount_enoent_error(SVCXPRT *transp, char *path, char *rpath,
 			 * Check permissions in mount table.
 			 */
 			if (newopts(sh->sh_opts))
-				flavor_count = getclientsflavors_new(sh,
-				    transp, nb, clnames, flavor_list);
+				flavor_count = getclientsflavors_new(sh, cln,
+				    flavor_list);
 			else
-				flavor_count = getclientsflavors_old(sh,
-				    transp, nb, clnames, flavor_list);
+				flavor_count = getclientsflavors_old(sh, cln,
+				    flavor_list);
 			if (flavor_count != 0) {
 				/*
 				 * Found entry in table and
@@ -1182,6 +1153,140 @@ cleanup:
 	return (FALSE);
 }
 
+
+#define	CLN_CLNAMES	(1 << 0)
+#define	CLN_HOST	(1 << 1)
+
+static void
+cln_init_common(struct cln *cln, SVCXPRT *transp, char *netid,
+    struct netbuf *nbuf)
+{
+	if ((cln->transp = transp) != NULL) {
+		assert(netid == NULL && nbuf == NULL);
+		cln->netid = transp->xp_netid;
+		cln->nbuf = svc_getrpccaller(transp);
+	} else {
+		cln->netid = netid;
+		cln->nbuf = nbuf;
+	}
+
+	cln->nconf = NULL;
+	cln->clnames = NULL;
+	cln->host = NULL;
+
+	cln->flags = 0;
+}
+
+void
+cln_init(struct cln *cln, SVCXPRT *transp)
+{
+	cln_init_common(cln, transp, NULL, NULL);
+}
+
+void
+cln_init_lazy(struct cln *cln, char *netid, struct netbuf *nbuf)
+{
+	cln_init_common(cln, NULL, netid, nbuf);
+}
+
+void
+cln_fini(struct cln *cln)
+{
+	if (cln->nconf != NULL)
+		freenetconfigent(cln->nconf);
+
+	if (cln->clnames != NULL)
+		netdir_free(cln->clnames, ND_HOSTSERVLIST);
+
+	free(cln->host);
+}
+
+struct netbuf *
+cln_getnbuf(struct cln *cln)
+{
+	return (cln->nbuf);
+}
+
+struct nd_hostservlist *
+cln_getclientsnames(struct cln *cln)
+{
+	if ((cln->flags & CLN_CLNAMES) == 0) {
+		/*
+		 * nconf is not needed if we do not have nbuf (see
+		 * cln_gethost() too), so we check for nbuf and in a case it is
+		 * NULL we do not try to get nconf.
+		 */
+		if (cln->netid != NULL && cln->nbuf != NULL) {
+			cln->nconf = getnetconfigent(cln->netid);
+			if (cln->nconf == NULL)
+				syslog(LOG_ERR, "%s: getnetconfigent failed",
+				    cln->netid);
+		}
+
+		if (cln->nconf != NULL && cln->nbuf != NULL)
+			(void) __netdir_getbyaddr_nosrv(cln->nconf,
+			    &cln->clnames, cln->nbuf);
+
+		cln->flags |= CLN_CLNAMES;
+	}
+
+	return (cln->clnames);
+}
+
+/*
+ * Return B_TRUE if the host is already available at no cost
+ */
+boolean_t
+cln_havehost(struct cln *cln)
+{
+	return ((cln->flags & (CLN_CLNAMES | CLN_HOST)) != 0);
+}
+
+char *
+cln_gethost(struct cln *cln)
+{
+	if (cln_getclientsnames(cln) != NULL)
+		return (cln->clnames->h_hostservs[0].h_host);
+
+	if ((cln->flags & CLN_HOST) == 0) {
+		if (cln->nconf == NULL || cln->nbuf == NULL) {
+			cln->host = strdup("(anon)");
+		} else {
+			char host[MAXIPADDRLEN];
+
+			if (strcmp(cln->nconf->nc_protofmly, NC_INET) == 0) {
+				struct sockaddr_in *sa;
+
+				/* LINTED pointer alignment */
+				sa = (struct sockaddr_in *)(cln->nbuf->buf);
+				(void) inet_ntoa_r(sa->sin_addr, host);
+
+				cln->host = strdup(host);
+			} else if (strcmp(cln->nconf->nc_protofmly,
+			    NC_INET6) == 0) {
+				struct sockaddr_in6 *sa;
+
+				/* LINTED pointer alignment */
+				sa = (struct sockaddr_in6 *)(cln->nbuf->buf);
+				(void) inet_ntop(AF_INET6,
+				    sa->sin6_addr.s6_addr,
+				    host, INET6_ADDRSTRLEN);
+
+				cln->host = strdup(host);
+			} else {
+				syslog(LOG_ERR, gettext("Client's address is "
+				    "neither IPv4 nor IPv6"));
+
+				cln->host = strdup("(anon)");
+			}
+		}
+
+		cln->flags |= CLN_HOST;
+	}
+
+	return (cln->host);
+}
+
 /*
  * Check mount requests, add to mounted list if ok
  */
@@ -1196,12 +1301,11 @@ mount(struct svc_req *rqstp)
 	int len = FHSIZE3;
 	char *path, rpath[MAXPATHLEN];
 	share_t *sh = NULL;
-	struct nd_hostservlist *clnames = NULL;
+	struct cln cln;
 	char *host = NULL;
 	int error = 0, lofs_tried = 0, enqueued;
 	int flavor_list[MAX_FLAVORS];
 	int flavor_count;
-	struct netbuf *nb = NULL;
 	ucred_t	*uc = NULL;
 
 	int audit_status;
@@ -1215,6 +1319,8 @@ mount(struct svc_req *rqstp)
 		return (EACCES);
 	}
 
+	cln_init(&cln, transp);
+
 	/*
 	 * Put off getting the name for the client until we
 	 * need it. This is a performance gain. If we are logging,
@@ -1224,7 +1330,7 @@ mount(struct svc_req *rqstp)
 	 */
 	if (verbose) {
 		DTRACE_PROBE(mountd, name_by_verbose);
-		if (getclientsnames(transp, &nb, &clnames) != 0) {
+		if ((host = cln_gethost(&cln)) == NULL) {
 			/*
 			 * We failed to get a name for the client, even
 			 * 'anon', probably because we ran out of memory.
@@ -1234,7 +1340,6 @@ mount(struct svc_req *rqstp)
 			error = EACCES;
 			goto reply;
 		}
-		host = clnames->h_hostservs[0].h_host;
 	}
 
 	/*
@@ -1275,8 +1380,8 @@ mount(struct svc_req *rqstp)
 			syslog(LOG_ERR,
 			    "mount request: realpath: %s: %m", path);
 		if (error == ENOENT)
-			error = mount_enoent_error(transp, path, rpath,
-			    &clnames, &nb, flavor_list);
+			error = mount_enoent_error(&cln, path, rpath,
+			    flavor_list);
 		goto reply;
 	}
 
@@ -1296,14 +1401,9 @@ mount(struct svc_req *rqstp)
 	}
 
 	if (newopts(sh->sh_opts))
-		flavor_count = getclientsflavors_new(sh, transp, &nb, &clnames,
-		    flavor_list);
+		flavor_count = getclientsflavors_new(sh, &cln, flavor_list);
 	else
-		flavor_count = getclientsflavors_old(sh, transp, &nb, &clnames,
-		    flavor_list);
-
-	if (clnames)
-		host = clnames->h_hostservs[0].h_host;
+		flavor_count = getclientsflavors_old(sh, &cln, flavor_list);
 
 	if (flavor_count == 0) {
 		error = EACCES;
@@ -1422,7 +1522,7 @@ reply:
 			fhs.fhs_status = error;
 
 		if (!svc_sendreply(transp, xdr_fhstatus, (char *)&fhs))
-			log_cant_reply(transp);
+			log_cant_reply_cln(&cln);
 
 		audit_status = fhs.fhs_status;
 		break;
@@ -1439,11 +1539,14 @@ reply:
 
 		mountres3.fhs_status = error;
 		if (!svc_sendreply(transp, xdr_mountres3, (char *)&mountres3))
-			log_cant_reply(transp);
+			log_cant_reply_cln(&cln);
 
 		audit_status = mountres3.fhs_status;
 		break;
 	}
+
+	if (cln_havehost(&cln))
+		host = cln_gethost(&cln);
 
 	if (verbose)
 		syslog(LOG_NOTICE, "MOUNT: %s %s %s",
@@ -1459,8 +1562,7 @@ reply:
 	if (enqueued == FALSE) {
 		if (host == NULL) {
 			DTRACE_PROBE(mountd, name_by_in_thread);
-			if (getclientsnames(transp, &nb, &clnames) == 0)
-				host = clnames->h_hostservs[0].h_host;
+			host = cln_gethost(&cln);
 		}
 
 		DTRACE_PROBE(mountd, logged_in_thread);
@@ -1472,10 +1574,10 @@ reply:
 	if (path != NULL)
 		svc_freeargs(transp, xdr_dirpath, (caddr_t)&path);
 
-done:
 	if (sh)
 		sharefree(sh);
-	netdir_free(clnames, ND_HOSTSERVLIST);
+
+	cln_fini(&cln);
 
 	return (error);
 }
@@ -1516,10 +1618,8 @@ same_file_system(const char *path1, const char *path2)
 		return (B_FALSE);
 	}
 
-	if (nvl1 != NULL)
-		nvlist_free(nvl1);
-	if (nvl2 != NULL)
-		nvlist_free(nvl2);
+	nvlist_free(nvl1);
+	nvlist_free(nvl2);
 
 	/*
 	 * We were unable to find fsid's for at least one of the paths.
@@ -1546,7 +1646,7 @@ findentry(char *path)
 {
 	share_t *sh = NULL;
 	struct sh_list *shp;
-	register char *p1, *p2;
+	char *p1, *p2;
 
 	check_sharetab();
 
@@ -1772,13 +1872,13 @@ done:
  * not distinguished syntactically.  We check for hosts first because
  * it's cheaper, then try netgroups.
  *
- * If pnb and pclnames are NULL, it means that we have to use transp
- * to resolve client IP address to hostname. If they aren't NULL
- * then transp argument won't be used and can be NULL.
+ * Return values:
+ *  1 - access is granted
+ *  0 - access is denied
+ * -1 - an error occured
  */
 int
-in_access_list(SVCXPRT *transp, struct netbuf **pnb,
-    struct nd_hostservlist **pclnames,
+in_access_list(struct cln *cln,
     char *access_list)	/* N.B. we clobber this "input" parameter */
 {
 	char addr[INET_ADDRSTRLEN];
@@ -1786,45 +1886,30 @@ in_access_list(SVCXPRT *transp, struct netbuf **pnb,
 	int nentries = 0;
 	char *cstr = access_list;
 	char *gr = access_list;
-	char *host;
-	int off;
 	int i;
 	int response;
-	int sbr = 0;
-	struct nd_hostservlist *clnames;
-	struct netent n, *np;
+	int ret;
+	struct netbuf *pnb;
+	struct nd_hostservlist *clnames = NULL;
 
 	/* If no access list - then it's unrestricted */
 	if (access_list == NULL || *access_list == '\0')
 		return (1);
 
-	assert(transp != NULL || (*pnb != NULL && *pclnames != NULL));
-
-	/* Get client address if it wasn't provided */
-	if (*pnb == NULL)
-		/* Don't grant access if client address isn't known */
-		if ((*pnb = svc_getrpccaller(transp)) == NULL)
-			return (0);
-
-	/* Try to lookup client hostname if it wasn't provided */
-	if (*pclnames == NULL)
-		getclientsnames(transp, pnb, pclnames);
-	clnames = *pclnames;
+	if ((pnb = cln_getnbuf(cln)) == NULL)
+		return (-1);
 
 	for (;;) {
-		if ((cstr = strpbrk(cstr, "[]:")) != NULL) {
-			switch (*cstr) {
-			case '[':
-			case ']':
-				sbr = !sbr;
+		if ((cstr = strpbrk(cstr, "[:")) != NULL) {
+			if (*cstr == ':') {
+				*cstr = '\0';
+			} else {
+				assert(*cstr == '[');
+				cstr = strchr(cstr + 1, ']');
+				if (cstr == NULL)
+					return (-1);
 				cstr++;
 				continue;
-			case ':':
-				if (sbr) {
-					cstr++;
-					continue;
-				}
-				*cstr = '\0';
 			}
 		}
 
@@ -1848,6 +1933,8 @@ in_access_list(SVCXPRT *transp, struct netbuf **pnb,
 
 			/* Netname support */
 			if (!isdigit(*gr) && *gr != '[') {
+				struct netent n, *np;
+
 				if ((np = getnetbyname_r(gr, &n, buff,
 				    sizeof (buff))) != NULL &&
 				    np->n_net != 0) {
@@ -1857,38 +1944,46 @@ in_access_list(SVCXPRT *transp, struct netbuf **pnb,
 					if (inet_ntop(AF_INET, &np->n_net, addr,
 					    INET_ADDRSTRLEN) == NULL)
 						break;
-					if (inet_matchaddr((*pnb)->buf, addr))
+					ret = inet_matchaddr(pnb->buf, addr);
+					if (ret == -1) {
+						if (errno == EINVAL) {
+							syslog(LOG_WARNING,
+							    "invalid access "
+							    "list entry: %s",
+							    addr);
+						}
+						return (-1);
+					} else if (ret == 1) {
 						return (response);
+					}
 				}
 			} else {
-				if (inet_matchaddr((*pnb)->buf, gr))
+				ret = inet_matchaddr(pnb->buf, gr);
+				if (ret == -1) {
+					if (errno == EINVAL) {
+						syslog(LOG_WARNING,
+						    "invalid access list "
+						    "entry: %s", gr);
+					}
+					return (-1);
+				} else if (ret == 1) {
 					return (response);
+				}
 			}
 
-			if (cstr == NULL)
-				break;
-
-			gr = ++cstr;
-
-			continue;
+			goto next;
 		}
 
 		/*
 		 * No other checks can be performed if client address
 		 * can't be resolved.
 		 */
-		if (clnames == NULL) {
-			if (cstr == NULL)
-				break;
-
-			gr = ++cstr;
-
-			continue;
-		}
+		if ((clnames = cln_getclientsnames(cln)) == NULL)
+			goto next;
 
 		/* Otherwise loop through all client hostname aliases */
 		for (i = 0; i < clnames->h_cnt; i++) {
-			host = clnames->h_hostservs[i].h_host;
+			char *host = clnames->h_hostservs[i].h_host;
 
 			/*
 			 * If the list name begins with a dot then
@@ -1901,7 +1996,7 @@ in_access_list(SVCXPRT *transp, struct netbuf **pnb,
 					if (strchr(host, '.') == NULL)
 						return (response);
 				} else {
-					off = strlen(host) - strlen(gr);
+					int off = strlen(host) - strlen(gr);
 					if (off > 0 &&
 					    strcasecmp(host + off, gr) == 0) {
 						return (response);
@@ -1916,6 +2011,7 @@ in_access_list(SVCXPRT *transp, struct netbuf **pnb,
 
 		nentries++;
 
+next:
 		if (cstr == NULL)
 			break;
 
@@ -2013,8 +2109,7 @@ newopts(char *opts)
  * default is that access is granted.
  */
 static int
-getclientsflavors_old(share_t *sh, SVCXPRT *transp, struct netbuf **nb,
-    struct nd_hostservlist **clnames, int *flavors)
+getclientsflavors_old(share_t *sh, struct cln *cln, int *flavors)
 {
 	char *opts, *p, *val;
 	boolean_t ok = B_FALSE;
@@ -2040,13 +2135,13 @@ getclientsflavors_old(share_t *sh, SVCXPRT *transp, struct netbuf **nb,
 		case OPT_RO:
 		case OPT_RW:
 			defaultaccess = 0;
-			if (in_access_list(transp, nb, clnames, val))
-				ok++;
+			if (in_access_list(cln, val) > 0)
+				ok = B_TRUE;
 			break;
 
 		case OPT_NONE:
 			defaultaccess = 0;
-			if (in_access_list(transp, nb, clnames, val))
+			if (in_access_list(cln, val) > 0)
 				reject = B_TRUE;
 		}
 	}
@@ -2055,7 +2150,7 @@ getclientsflavors_old(share_t *sh, SVCXPRT *transp, struct netbuf **nb,
 
 	/* none takes precedence over everything else */
 	if (reject)
-		ok = B_TRUE;
+		ok = B_FALSE;
 
 	return (defaultaccess || ok);
 }
@@ -2078,13 +2173,13 @@ getclientsflavors_old(share_t *sh, SVCXPRT *transp, struct netbuf **nb,
  * version 3 of the mount protocol.
  */
 static int
-getclientsflavors_new(share_t *sh, SVCXPRT *transp, struct netbuf **nb,
-    struct nd_hostservlist **clnames, int *flavors)
+getclientsflavors_new(share_t *sh, struct cln *cln, int *flavors)
 {
 	char *opts, *p, *val;
 	char *lasts;
 	char *f;
-	boolean_t access_ok;
+	boolean_t defaultaccess = B_TRUE;	/* default access is rw */
+	boolean_t access_ok = B_FALSE;
 	int count, c;
 	boolean_t reject = B_FALSE;
 
@@ -2096,43 +2191,43 @@ getclientsflavors_new(share_t *sh, SVCXPRT *transp, struct netbuf **nb,
 
 	p = opts;
 	count = c = 0;
-	/* default access is rw */
-	access_ok = B_TRUE;
 
 	while (*p) {
 		switch (getsubopt(&p, optlist, &val)) {
 		case OPT_SEC:
+			if (reject)
+				access_ok = B_FALSE;
+
 			/*
 			 * Before a new sec=xxx option, check if we need
 			 * to move the c index back to the previous count.
 			 */
-			if (!access_ok) {
+			if (!defaultaccess && !access_ok) {
 				c = count;
 			}
 
 			/* get all the sec=f1[:f2] flavors */
-			while ((f = strtok_r(val, ":", &lasts))
-			    != NULL) {
+			while ((f = strtok_r(val, ":", &lasts)) != NULL) {
 				flavors[c++] = map_flavor(f);
 				val = NULL;
 			}
 
 			/* for a new sec=xxx option, default is rw access */
-			access_ok = B_TRUE;
+			defaultaccess = B_TRUE;
+			access_ok = B_FALSE;
+			reject = B_FALSE;
 			break;
 
 		case OPT_RO:
 		case OPT_RW:
-			if (in_access_list(transp, nb, clnames, val)) {
-				count = c;
+			defaultaccess = B_FALSE;
+			if (in_access_list(cln, val) > 0)
 				access_ok = B_TRUE;
-			} else {
-				access_ok = B_FALSE;
-			}
 			break;
 
 		case OPT_NONE:
-			if (in_access_list(transp, nb, clnames, val))
+			defaultaccess = B_FALSE;
+			if (in_access_list(cln, val) > 0)
 				reject = B_TRUE; /* none overides rw/ro */
 			break;
 		}
@@ -2141,7 +2236,7 @@ getclientsflavors_new(share_t *sh, SVCXPRT *transp, struct netbuf **nb,
 	if (reject)
 		access_ok = B_FALSE;
 
-	if (!access_ok)
+	if (!defaultaccess && !access_ok)
 		c = count;
 
 	free(opts);
@@ -2159,16 +2254,59 @@ getclientsflavors_new(share_t *sh, SVCXPRT *transp, struct netbuf **nb,
  * flavor.  Other flavors are values of the new "sec=" option.
  */
 int
-check_client(share_t *sh, struct netbuf *nb,
-    struct nd_hostservlist *clnames, int flavor, uid_t clnt_uid, gid_t clnt_gid,
-    uid_t *srv_uid, gid_t *srv_gid)
+check_client(share_t *sh, struct cln *cln, int flavor, uid_t clnt_uid,
+    gid_t clnt_gid, uint_t clnt_ngids, gid_t *clnt_gids, uid_t *srv_uid,
+    gid_t *srv_gid, uint_t *srv_ngids, gid_t **srv_gids)
 {
 	if (newopts(sh->sh_opts))
-		return (check_client_new(sh, NULL, &nb, &clnames, flavor,
-		    clnt_uid, clnt_gid, srv_uid, srv_gid));
+		return (check_client_new(sh, cln, flavor, clnt_uid, clnt_gid,
+		    clnt_ngids, clnt_gids, srv_uid, srv_gid, srv_ngids,
+		    srv_gids));
 	else
-		return (check_client_old(sh, NULL, &nb, &clnames, flavor,
-		    clnt_uid, clnt_gid, srv_uid, srv_gid));
+		return (check_client_old(sh, cln, flavor, clnt_uid, clnt_gid,
+		    clnt_ngids, clnt_gids, srv_uid, srv_gid, srv_ngids,
+		    srv_gids));
+}
+
+extern int _getgroupsbymember(const char *, gid_t[], int, int);
+
+/*
+ * Get supplemental groups for uid
+ */
+static int
+getusergroups(uid_t uid, uint_t *ngrps, gid_t **grps)
+{
+	struct passwd pwd;
+	char *pwbuf = alloca(pw_size);
+	gid_t *tmpgrps = alloca(ngroups_max * sizeof (gid_t));
+	int tmpngrps;
+
+	if (getpwuid_r(uid, &pwd, pwbuf, pw_size) == NULL)
+		return (-1);
+
+	tmpgrps[0] = pwd.pw_gid;
+
+	tmpngrps = _getgroupsbymember(pwd.pw_name, tmpgrps, ngroups_max, 1);
+	if (tmpngrps <= 0) {
+		syslog(LOG_WARNING,
+		    "getusergroups(): Unable to get groups for user %s",
+		    pwd.pw_name);
+
+		return (-1);
+	}
+
+	*grps = malloc(tmpngrps * sizeof (gid_t));
+	if (*grps == NULL) {
+		syslog(LOG_ERR,
+		    "getusergroups(): Memory allocation failed: %m");
+
+		return (-1);
+	}
+
+	*ngrps = tmpngrps;
+	(void) memcpy(*grps, tmpgrps, tmpngrps * sizeof (gid_t));
+
+	return (0);
 }
 
 /*
@@ -2250,9 +2388,9 @@ get_gid(char *value, gid_t *gid)
 }
 
 static int
-check_client_old(share_t *sh, SVCXPRT *transp, struct netbuf **nb,
-    struct nd_hostservlist **clnames, int flavor, uid_t clnt_uid,
-    gid_t clnt_gid, uid_t *srv_uid, gid_t *srv_gid)
+check_client_old(share_t *sh, struct cln *cln, int flavor, uid_t clnt_uid,
+    gid_t clnt_gid, uint_t clnt_ngids, gid_t *clnt_gids, uid_t *srv_uid,
+    gid_t *srv_gid, uint_t *srv_ngids, gid_t **srv_gids)
 {
 	char *opts, *p, *val;
 	int match;	/* Set when a flavor is matched */
@@ -2269,6 +2407,14 @@ check_client_old(share_t *sh, SVCXPRT *transp, struct netbuf **nb,
 		return (0);
 	}
 
+	/*
+	 * If client provided 16 supplemental groups with AUTH_SYS, lookup
+	 * locally for all of them
+	 */
+	if (flavor == AUTH_SYS && clnt_ngids == NGRPS && ngroups_max > NGRPS)
+		if (getusergroups(clnt_uid, srv_ngids, srv_gids) == 0)
+			perm |= NFSAUTH_GROUPS;
+
 	p = opts;
 	match = AUTH_UNIX;
 
@@ -2277,13 +2423,21 @@ check_client_old(share_t *sh, SVCXPRT *transp, struct netbuf **nb,
 
 		case OPT_SECURE:
 			match = AUTH_DES;
+
+			if (perm & NFSAUTH_GROUPS) {
+				free(*srv_gids);
+				*srv_ngids = 0;
+				*srv_gids = NULL;
+				perm &= ~NFSAUTH_GROUPS;
+			}
+
 			break;
 
 		case OPT_RO:
 			list++;
 			if (val != NULL)
 				ro_val++;
-			if (in_access_list(transp, nb, clnames, val))
+			if (in_access_list(cln, val) > 0)
 				perm |= NFSAUTH_RO;
 			break;
 
@@ -2291,7 +2445,7 @@ check_client_old(share_t *sh, SVCXPRT *transp, struct netbuf **nb,
 			list++;
 			if (val != NULL)
 				rw_val++;
-			if (in_access_list(transp, nb, clnames, val))
+			if (in_access_list(cln, val) > 0)
 				perm |= NFSAUTH_RW;
 			break;
 
@@ -2310,20 +2464,27 @@ check_client_old(share_t *sh, SVCXPRT *transp, struct netbuf **nb,
 			if (clnt_uid != 0)
 				break;
 
-			if (in_access_list(transp, nb, clnames, val)) {
+			if (in_access_list(cln, val) > 0) {
 				perm |= NFSAUTH_ROOT;
 				perm |= NFSAUTH_UIDMAP | NFSAUTH_GIDMAP;
 				map_deny = B_FALSE;
+
+				if (perm & NFSAUTH_GROUPS) {
+					free(*srv_gids);
+					*srv_ngids = 0;
+					*srv_gids = NULL;
+					perm &= ~NFSAUTH_GROUPS;
+				}
 			}
 			break;
 
 		case OPT_NONE:
 			/*
-			 * Check if  the client should have no access
+			 * Check if the client should have no access
 			 * to this share at all. This option behaves
 			 * more like "root" than either "rw" or "ro".
 			 */
-			if (in_access_list(transp, nb, clnames, val))
+			if (in_access_list(cln, val) > 0)
 				perm |= NFSAUTH_DENIED;
 			break;
 
@@ -2382,9 +2543,17 @@ check_client_old(share_t *sh, SVCXPRT *transp, struct netbuf **nb,
 					break;
 				}
 
-				if (in_access_list(transp, nb, clnames, al)) {
+				if (in_access_list(cln, al) > 0) {
 					*srv_uid = srv;
 					perm |= NFSAUTH_UIDMAP;
+
+					if (perm & NFSAUTH_GROUPS) {
+						free(*srv_gids);
+						*srv_ngids = 0;
+						*srv_gids = NULL;
+						perm &= ~NFSAUTH_GROUPS;
+					}
+
 					break;
 				}
 			}
@@ -2447,9 +2616,17 @@ check_client_old(share_t *sh, SVCXPRT *transp, struct netbuf **nb,
 					break;
 				}
 
-				if (in_access_list(transp, nb, clnames, al)) {
+				if (in_access_list(cln, al) > 0) {
 					*srv_gid = srv;
 					perm |= NFSAUTH_GIDMAP;
+
+					if (perm & NFSAUTH_GROUPS) {
+						free(*srv_gids);
+						*srv_ngids = 0;
+						*srv_gids = NULL;
+						perm &= ~NFSAUTH_GROUPS;
+					}
+
 					break;
 				}
 			}
@@ -2524,15 +2701,13 @@ check_client_old(share_t *sh, SVCXPRT *transp, struct netbuf **nb,
  * return TRUE to indicate that this "flavor" is a wrong sec.
  */
 static bool_t
-is_wrongsec(share_t *sh, SVCXPRT *transp, struct netbuf **nb,
-	struct nd_hostservlist **clnames, int flavor)
+is_wrongsec(share_t *sh, struct cln *cln, int flavor)
 {
 	int flavor_list[MAX_FLAVORS];
 	int flavor_count, i;
 
 	/* get the flavor list that the client has access with */
-	flavor_count = getclientsflavors_new(sh, transp, nb,
-	    clnames, flavor_list);
+	flavor_count = getclientsflavors_new(sh, cln, flavor_list);
 
 	if (flavor_count == 0)
 		return (FALSE);
@@ -2570,9 +2745,9 @@ is_wrongsec(share_t *sh, SVCXPRT *transp, struct netbuf **nb,
  */
 
 static int
-check_client_new(share_t *sh, SVCXPRT *transp, struct netbuf **nb,
-    struct nd_hostservlist **clnames, int flavor, uid_t clnt_uid,
-    gid_t clnt_gid, uid_t *srv_uid, gid_t *srv_gid)
+check_client_new(share_t *sh, struct cln *cln, int flavor, uid_t clnt_uid,
+    gid_t clnt_gid, uint_t clnt_ngids, gid_t *clnt_gids, uid_t *srv_uid,
+    gid_t *srv_gid, uint_t *srv_ngids, gid_t **srv_gids)
 {
 	char *opts, *p, *val;
 	char *lasts;
@@ -2590,6 +2765,14 @@ check_client_new(share_t *sh, SVCXPRT *transp, struct netbuf **nb,
 		syslog(LOG_ERR, "check_client: no memory");
 		return (0);
 	}
+
+	/*
+	 * If client provided 16 supplemental groups with AUTH_SYS, lookup
+	 * locally for all of them
+	 */
+	if (flavor == AUTH_SYS && clnt_ngids == NGRPS && ngroups_max > NGRPS)
+		if (getusergroups(clnt_uid, srv_ngids, srv_gids) == 0)
+			perm |= NFSAUTH_GROUPS;
 
 	p = opts;
 
@@ -2617,7 +2800,7 @@ check_client_new(share_t *sh, SVCXPRT *transp, struct netbuf **nb,
 			list++;
 			if (val != NULL)
 				ro_val++;
-			if (in_access_list(transp, nb, clnames, val))
+			if (in_access_list(cln, val) > 0)
 				perm |= NFSAUTH_RO;
 			break;
 
@@ -2628,7 +2811,7 @@ check_client_new(share_t *sh, SVCXPRT *transp, struct netbuf **nb,
 			list++;
 			if (val != NULL)
 				rw_val++;
-			if (in_access_list(transp, nb, clnames, val))
+			if (in_access_list(cln, val) > 0)
 				perm |= NFSAUTH_RW;
 			break;
 
@@ -2650,20 +2833,27 @@ check_client_new(share_t *sh, SVCXPRT *transp, struct netbuf **nb,
 			if (clnt_uid != 0)
 				break;
 
-			if (in_access_list(transp, nb, clnames, val)) {
+			if (in_access_list(cln, val) > 0) {
 				perm |= NFSAUTH_ROOT;
 				perm |= NFSAUTH_UIDMAP | NFSAUTH_GIDMAP;
 				map_deny = B_FALSE;
+
+				if (perm & NFSAUTH_GROUPS) {
+					free(*srv_gids);
+					*srv_gids = NULL;
+					*srv_ngids = 0;
+					perm &= ~NFSAUTH_GROUPS;
+				}
 			}
 			break;
 
 		case OPT_NONE:
 			/*
-			 * Check if  the client should have no access
+			 * Check if the client should have no access
 			 * to this share at all. This option behaves
 			 * more like "root" than either "rw" or "ro".
 			 */
-			if (in_access_list(transp, nb, clnames, val))
+			if (in_access_list(cln, val) > 0)
 				perm |= NFSAUTH_DENIED;
 			break;
 
@@ -2722,9 +2912,17 @@ check_client_new(share_t *sh, SVCXPRT *transp, struct netbuf **nb,
 					break;
 				}
 
-				if (in_access_list(transp, nb, clnames, al)) {
+				if (in_access_list(cln, al) > 0) {
 					*srv_uid = srv;
 					perm |= NFSAUTH_UIDMAP;
+
+					if (perm & NFSAUTH_GROUPS) {
+						free(*srv_gids);
+						*srv_gids = NULL;
+						*srv_ngids = 0;
+						perm &= ~NFSAUTH_GROUPS;
+					}
+
 					break;
 				}
 			}
@@ -2787,9 +2985,17 @@ check_client_new(share_t *sh, SVCXPRT *transp, struct netbuf **nb,
 					break;
 				}
 
-				if (in_access_list(transp, nb, clnames, al)) {
+				if (in_access_list(cln, al) > 0) {
 					*srv_gid = srv;
 					perm |= NFSAUTH_GIDMAP;
+
+					if (perm & NFSAUTH_GROUPS) {
+						free(*srv_gids);
+						*srv_gids = NULL;
+						*srv_ngids = 0;
+						perm &= ~NFSAUTH_GROUPS;
+					}
+
 					break;
 				}
 			}
@@ -2832,7 +3038,7 @@ done:
 		 * If not, return NFSAUTH_DENIED.
 		 */
 		if ((perm & (NFSAUTH_RO | NFSAUTH_RW)) == 0) {
-			if (is_wrongsec(sh, transp, nb, clnames, flavor))
+			if (is_wrongsec(sh, cln, flavor))
 				perm |= NFSAUTH_WRONGSEC;
 			else
 				perm |= NFSAUTH_DENIED;
@@ -2983,7 +3189,7 @@ alloc_failed:
 static void
 sh_free(struct sh_list *shp)
 {
-	register struct sh_list *next;
+	struct sh_list *next;
 
 	while (shp) {
 		sharefree(shp->shl_sh);
@@ -3002,9 +3208,8 @@ umount(struct svc_req *rqstp)
 {
 	char *host, *path, *remove_path;
 	char rpath[MAXPATHLEN];
-	struct nd_hostservlist *clnames = NULL;
 	SVCXPRT *transp;
-	struct netbuf *nb;
+	struct cln cln;
 
 	transp = rqstp->rq_xprt;
 	path = NULL;
@@ -3012,11 +3217,15 @@ umount(struct svc_req *rqstp)
 		svcerr_decode(transp);
 		return;
 	}
+
+	cln_init(&cln, transp);
+
 	errno = 0;
 	if (!svc_sendreply(transp, xdr_void, (char *)NULL))
-		log_cant_reply(transp);
+		log_cant_reply_cln(&cln);
 
-	if (getclientsnames(transp, &nb, &clnames) != 0) {
+	host = cln_gethost(&cln);
+	if (host == NULL) {
 		/*
 		 * Without the hostname we can't do audit or delete
 		 * this host from the mount entries.
@@ -3024,7 +3233,6 @@ umount(struct svc_req *rqstp)
 		svc_freeargs(transp, xdr_dirpath, (caddr_t)&path);
 		return;
 	}
-	host = clnames->h_hostservs[0].h_host;
 
 	if (verbose)
 		syslog(LOG_NOTICE, "UNMOUNT: %s unmounted %s", host, path);
@@ -3040,8 +3248,9 @@ umount(struct svc_req *rqstp)
 
 	mntlist_delete(host, remove_path);	/* remove from mount list */
 
+	cln_fini(&cln);
+
 	svc_freeargs(transp, xdr_dirpath, (caddr_t)&path);
-	netdir_free(clnames, ND_HOSTSERVLIST);
 }
 
 /*
@@ -3050,10 +3259,9 @@ umount(struct svc_req *rqstp)
 static void
 umountall(struct svc_req *rqstp)
 {
-	struct nd_hostservlist *clnames = NULL;
 	SVCXPRT *transp;
 	char *host;
-	struct netbuf *nb;
+	struct cln cln;
 
 	transp = rqstp->rq_xprt;
 	if (!svc_getargs(transp, xdr_void, NULL)) {
@@ -3067,12 +3275,14 @@ umountall(struct svc_req *rqstp)
 	 * on the net blasting the requester with a response.
 	 */
 	svcerr_systemerr(transp);
-	if (getclientsnames(transp, &nb, &clnames) != 0) {
+
+	cln_init(&cln, transp);
+
+	host = cln_gethost(&cln);
+	if (host == NULL) {
 		/* Can't do anything without the name of the client */
 		return;
 	}
-
-	host = clnames->h_hostservs[0].h_host;
 
 	/*
 	 * Remove all hosts entries from mount list
@@ -3082,7 +3292,7 @@ umountall(struct svc_req *rqstp)
 	if (verbose)
 		syslog(LOG_NOTICE, "UNMOUNTALL: from %s", host);
 
-	netdir_free(clnames, ND_HOSTSERVLIST);
+	cln_fini(&cln);
 }
 
 void *
@@ -3095,15 +3305,6 @@ exmalloc(size_t size)
 		exit(1);
 	}
 	return (ret);
-}
-
-static void
-sigexit(int signum)
-{
-
-	if (signum == SIGHUP)
-		_exit(0);
-	_exit(1);
 }
 
 static tsol_tpent_t *

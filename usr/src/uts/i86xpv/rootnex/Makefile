@@ -23,6 +23,8 @@
 # Copyright 2007 Sun Microsystems, Inc.  All rights reserved.
 # Use is subject to license terms.
 #
+# Copyright 2016 Joyent, Inc.
+#
 
 #
 #	This makefile drives the production of the rootnex driver
@@ -40,7 +42,6 @@ UTSBASE	= ../..
 #
 MODULE		= rootnex
 OBJECTS		= $(ROOTNEX_OBJS:%=$(OBJS_DIR)/%)
-LINTS		= $(ROOTNEX_OBJS:%.o=$(LINTS_DIR)/%.ln)
 ROOTMODULE	= $(ROOT_PSM_DRV_DIR)/$(MODULE)
 
 #
@@ -52,7 +53,6 @@ include $(UTSBASE)/i86xpv/Makefile.i86xpv
 #	Define targets
 #
 ALL_TARGET	= $(BINARY)
-LINT_TARGET	= $(MODULE).lint
 INSTALL_TARGET	= $(BINARY) $(ROOTMODULE)
 
 #
@@ -60,12 +60,11 @@ INSTALL_TARGET	= $(BINARY) $(ROOTMODULE)
 #
 LDFLAGS		+= -dy
 
-LINTTAGS	+= -erroff=E_ASSIGN_NARROW_CONV
-LINTTAGS	+= -erroff=E_BAD_PTR_CAST_ALIGN
 
-CERRWARN	+= -_gcc=-Wno-uninitialized
+CERRWARN	+= $(CNOWARN_UNINIT)
 CERRWARN	+= -_gcc=-Wno-unused-label
 CERRWARN	+= -_gcc=-Wno-parentheses
+CERRWARN	+= -_gcc=-Wno-unused-function
 
 #
 #	Default build targets.
@@ -79,12 +78,6 @@ all:		$(ALL_DEPS)
 clean:		$(CLEAN_DEPS)
 
 clobber:	$(CLOBBER_DEPS)
-
-lint:		$(LINT_DEPS)
-
-modlintlib:	$(MODLINTLIB_DEPS)
-
-clean.lint:	$(CLEAN_LINT_DEPS)
 
 install:	$(INSTALL_DEPS)
 

@@ -23,8 +23,11 @@
  * Copyright 2009 Sun Microsystems, Inc.  All rights reserved.
  * Use is subject to license terms.
  */
+
 /*
  * Copyright 2012 Garrett D'Amore <garrett@damore.org>.  All rights reserved.
+ * Copyright (c) 2014 by Delphix. All rights reserved.
+ * Copyright 2017 Nexenta Systems, Inc.
  */
 
 /*
@@ -272,16 +275,21 @@ xpvd_attach(dev_info_t *devi, ddi_attach_cmd_t cmd)
 		xpvd_dip = NULL;
 		return (DDI_FAILURE);
 	}
+	if (ddi_create_minor_node(devi, "devctl", S_IFCHR,
+	    ddi_get_instance(devi), DDI_PSEUDO, 0) != DDI_SUCCESS) {
+		(void) ndi_event_unbind_set(xpvd_ndi_event_handle,
+		    &xpvd_ndi_events, NDI_SLEEP);
+		(void) ndi_event_free_hdl(xpvd_ndi_event_handle);
+		xpvd_dip = NULL;
+		return (DDI_FAILURE);
+	}
 
 #ifdef XPV_HVM_DRIVER
 	(void) ddi_prop_update_int(DDI_DEV_T_NONE, devi, DDI_NO_AUTODETACH, 1);
 
-	/*
-	 * Report our version to dom0.
-	 */
-	if (xenbus_printf(XBT_NULL, "guest/xpvd", "version", "%d",
-	    HVMPV_XPVD_VERS))
-		cmn_err(CE_WARN, "xpvd: couldn't write version\n");
+	/* Report our version to dom0 */
+	(void) xenbus_printf(XBT_NULL, "guest/xpvd", "version", "%d",
+	    HVMPV_XPVD_VERS);
 #endif /* XPV_HVM_DRIVER */
 
 	/* watch both frontend and backend for new devices */
@@ -369,9 +377,11 @@ got_xs_prop:
 		break;
 	}
 
-	if ((rv == DDI_PROP_SUCCESS) && (prop_len > 0)) {
-		bcopy(prop_str, buff, prop_len);
-		*lengthp = prop_len;
+	if (rv == DDI_PROP_SUCCESS) {
+		if (prop_op != PROP_LEN) {
+			bcopy(prop_str, buff, prop_len);
+			*lengthp = prop_len;
+		}
 	}
 	kmem_free(prop_str, len);
 	return (rv);
@@ -686,7 +696,7 @@ xpvd_disable_intr(dev_info_t *rdip, ddi_intr_handle_impl_t *hdlp, int inum)
 /*ARGSUSED*/
 static int
 xpvd_ctlops(dev_info_t *dip, dev_info_t *rdip,
-	ddi_ctl_enum_t ctlop, void *arg, void *result)
+    ddi_ctl_enum_t ctlop, void *arg, void *result)
 {
 	switch (ctlop) {
 	case DDI_CTLOPS_REPORTDEV:
@@ -762,11 +772,20 @@ xpvd_name_child(dev_info_t *child, char *addr, int addrlen)
 	ddi_prop_free(domain);
 
 	/*
-	 * Use "unit-address" property (frontend/softdev drivers).
+	 * Use "vdev" and "unit-address" properties (frontend/softdev drivers).
+	 * At boot time, only the vdev property is available on xdf disks.
 	 */
 	if (ddi_prop_lookup_string(DDI_DEV_T_ANY, child, DDI_PROP_DONTPASS,
-	    "unit-address", &prop_str) != DDI_PROP_SUCCESS)
-		return (DDI_FAILURE);
+	    "unit-address", &prop_str) != DDI_PROP_SUCCESS) {
+		if (ddi_prop_lookup_int_array(DDI_DEV_T_ANY, child,
+		    DDI_PROP_DONTPASS, "vdev", &vdev,
+		    &nvdev) != DDI_PROP_SUCCESS)
+			return (DDI_FAILURE);
+		ASSERT(nvdev == 1);
+		(void) snprintf(addr, addrlen, "%d", vdev[0]);
+		ddi_prop_free(vdev);
+		return (DDI_SUCCESS);
+	}
 	(void) strlcpy(addr, prop_str, addrlen);
 	ddi_prop_free(prop_str);
 	return (DDI_SUCCESS);
@@ -783,6 +802,9 @@ xpvd_initchild(dev_info_t *child)
 	 */
 	if (ndi_dev_is_persistent_node(child) == 0) {
 		ddi_set_parent_data(child, NULL);
+		if (xpvd_name_child(child, addr, sizeof (addr)) != DDI_SUCCESS)
+			return (DDI_FAILURE);
+		ddi_set_name_addr(child, addr);
 
 		/*
 		 * Try to merge the properties from this prototype
@@ -854,7 +876,7 @@ i_xpvd_parse_devname(char *name, xendev_devclass_t *devclassp,
 	int len = strlen(name) + 1;
 	char *device_name = i_ddi_strdup(name, KM_SLEEP);
 	char *cname = NULL, *caddr = NULL;
-	boolean_t ret;
+	boolean_t ret = B_FALSE;
 
 	i_ddi_parse_name(device_name, &cname, &caddr, NULL);
 
@@ -906,7 +928,7 @@ done:
  */
 static int
 xpvd_bus_config(dev_info_t *parent, uint_t flag, ddi_bus_config_op_t op,
-	void *arg, dev_info_t **childp)
+    void *arg, dev_info_t **childp)
 {
 	int circ;
 	char *cname = NULL;

@@ -22,8 +22,10 @@
 /*
  * Copyright 2009 Sun Microsystems, Inc.  All rights reserved.
  * Use is subject to license terms.
+ * Copyright 2014 Joyent, Inc.  All rights reserved.
  */
 
+#include <sys/sysmacros.h>
 #include <sys/types.h>
 #include <sys/conf.h>
 #include <sys/time.h>
@@ -129,6 +131,9 @@ ilb_conn_remove_common(ilb_conn_t *connp, boolean_t c2s)
 	ilb_conn_hash_t *hash;
 	ilb_conn_t **next, **prev;
 	ilb_conn_t **next_prev, **prev_next;
+
+	next_prev = NULL;
+	prev_next = NULL;
 
 	if (c2s) {
 		hash = connp->conn_c2s_hash;
@@ -300,7 +305,7 @@ ilb_conn_hash_init(ilb_stack_t *ilbs)
 	 * If ilbs->ilbs_conn_hash_size is not a power of 2, bump it up to
 	 * the next power of 2.
 	 */
-	if (ilbs->ilbs_conn_hash_size & (ilbs->ilbs_conn_hash_size - 1)) {
+	if (!ISP2(ilbs->ilbs_conn_hash_size)) {
 		for (i = 0; i < 31; i++) {
 			if (ilbs->ilbs_conn_hash_size < (1 << i))
 				break;
@@ -364,6 +369,7 @@ ilb_conn_hash_fini(ilb_stack_t *ilbs)
 {
 	uint32_t i;
 	ilb_conn_t *connp;
+	ilb_conn_hash_t *hash;
 
 	if (ilbs->ilbs_c2s_conn_hash == NULL) {
 		ASSERT(ilbs->ilbs_s2c_conn_hash == NULL);
@@ -387,10 +393,10 @@ ilb_conn_hash_fini(ilb_stack_t *ilbs)
 	ilbs->ilbs_conn_taskq = NULL;
 
 	/* Then remove all the conns. */
+	hash = ilbs->ilbs_s2c_conn_hash;
 	for (i = 0; i < ilbs->ilbs_conn_hash_size; i++) {
-		while ((connp = ilbs->ilbs_s2c_conn_hash->ilb_connp) != NULL) {
-			ilbs->ilbs_s2c_conn_hash->ilb_connp =
-			    connp->conn_s2c_next;
+		while ((connp = hash[i].ilb_connp) != NULL) {
+			hash[i].ilb_connp = connp->conn_s2c_next;
 			ILB_SERVER_REFRELE(connp->conn_server);
 			if (connp->conn_rule_cache.topo == ILB_TOPO_IMPL_NAT) {
 				ilb_nat_src_entry_t *ent;
@@ -695,6 +701,7 @@ update_conn_tcp(ilb_conn_t *connp, void *iph, tcpha_t *tcpha, int32_t pkt_len,
 	uint32_t ack, seq;
 	int32_t seg_len;
 
+	ack = 0;
 	if (tcpha->tha_flags & TH_RST)
 		return (B_FALSE);
 
@@ -899,6 +906,11 @@ ilb_check_icmp_conn(ilb_stack_t *ilbs, mblk_t *mp, int l3, void *out_iph,
 	ilb_rule_info_t rule_cache;
 	uint32_t adj_ip_sum;
 	boolean_t full_nat;
+
+	in_iph4 = NULL;
+	in_iph6 = NULL;
+	icmph4 = NULL;
+	icmph6 = NULL;
 
 	if (l3 == IPPROTO_IP) {
 		in6_addr_t in_src, in_dst;
@@ -1359,7 +1371,7 @@ ilb_sticky_hash_init(ilb_stack_t *ilbs)
 	char tq_name[TASKQ_NAMELEN];
 	ilb_timer_t *tm;
 
-	if (ilbs->ilbs_sticky_hash_size & (ilbs->ilbs_sticky_hash_size - 1)) {
+	if (!ISP2(ilbs->ilbs_sticky_hash_size)) {
 		for (i = 0; i < 31; i++) {
 			if (ilbs->ilbs_sticky_hash_size < (1 << i))
 				break;

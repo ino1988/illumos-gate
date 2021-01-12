@@ -37,7 +37,7 @@ include ../../../Makefile.lib
 include ../../Makefile.defs
 
 SRCS = $(OBJECTS:%.o=../common/%.c)
-C99MODE = $(C99_ENABLE)
+CSTD = $(CSTD_GNU99)
 CPPFLAGS += -I../common -I. -D_REENTRANT
 $(NOT_RELEASE_BUILD)CPPFLAGS += -DDEBUG
 CFLAGS += $(CCVERBOSE)
@@ -47,20 +47,17 @@ CERRWARN += -_gcc=-Wno-type-limits
 LDLIBS += \
 	-lumem \
 	-lc
-LIBS =		$(DYNLIB) $(LINTLIB)
+LIBS =		$(DYNLIB)
 ROOTLIBDIR =	$(ROOTSCSILIBDIR)
 ROOTLIBDIR64 =	$(ROOTSCSILIBDIR)/$(MACH64)
 
 CLEANFILES += \
 	../common/scsi_errno.c
 
-$(LINTLIB) :=	SRCS = $(SRCDIR)/$(LINTSRC)
 
 .KEEP_STATE:
 
 all : $(LIBS)
-
-lint : lintcheck
 
 ../common/scsi_errno.c: ../common/mkerrno.sh ../common/libscsi.h
 	sh ../common/mkerrno.sh < ../common/libscsi.h > $@

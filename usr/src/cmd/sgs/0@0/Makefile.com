@@ -22,7 +22,7 @@
 # Copyright 2006 Sun Microsystems, Inc.  All rights reserved.
 # Use is subject to license terms.
 #
-# ident	"%Z%%M%	%I%	%E% SMI"
+# Copyright 2019 OmniOS Community Edition (OmniOSce) Association.
 #
 
 LIBRARY=	0@0.a
@@ -31,20 +31,20 @@ VERS=		.1
 OBJECTS=	0@0.o
 CRTI=		pics/crti.o
 CRTN=		pics/crtn.o
-CRTS=		$(CRTI)		$(CRTN)
+CRTS=		$(CRTI) $(CRTN)
 
-include 	$(SRC)/lib/Makefile.lib
+include		$(SRC)/lib/Makefile.lib
 
 MAPFILES=
-ASFLAGS=	-P -D_ASM	$(CPPFLAGS)
+ASFLAGS=	-P -D_ASM $(CPPFLAGS)
 DYNFLAGS +=	$(BLOCAL) $(ZNOVERSION) $(ZINITFIRST)
 LDLIBS +=	-lc
-BUILD.SO=       $(LD) -o $@ -G $(DYNFLAGS) $(CRTI) $(PICS) $(LDLIBS) $(CRTN)
+BUILD.SO=       $(LD) -o $@ $(GSHARED) $(DYNFLAGS) $(CRTI) $(PICS) $(LDLIBS) $(CRTN)
 BUILD.s=	$(AS) $(ASFLAGS) $< -o $@
 
 SRCS=		$(OBJECTS:%.o=../common/%.c)
 
-CLEANFILES +=	$(LINTOUT) $(CRTS)
+CLEANFILES +=	$(CRTS)
 CLOBBERFILES +=	$(DYNLIB)
 
 ROOTDYNLIB=	$(DYNLIB:%=$(ROOTLIBDIR)/%)

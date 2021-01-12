@@ -20,7 +20,8 @@
 # Copyright 2007 Sun Microsystems, Inc.  All rights reserved.
 # Use is subject to license terms.
 #
-# ident	"%Z%%M%	%I%	%E% SMI"
+# Copyright 2016 Joyent, Inc.
+# Copyright 2019 OmniOS Community Edition (OmniOSce) Association.
 #
 
 #
@@ -34,7 +35,6 @@ UTSBASE = ../..
 MODULE		= cpu_ms.AuthenticAMD.15
 #
 OBJECTS		= $(CPU_AO_OBJS:%=$(OBJS_DIR)/%)
-LINTS           = $(CPU_AO_OBJS:%.o=$(LINTS_DIR)/%.ln)
 ROOTMODULE      = $(ROOT_PSM_CPU_DIR)/$(MODULE)
 
 SRCDIR		= ../cpu/amd_opteron
@@ -49,20 +49,15 @@ AO_GENDISP	= ../cpu/scripts/ao_gendisp
 include ../cpu/Makefile.cpu
 
 #
-#	Our lint library has a different name from that of the module we build.
-#
-LINT_MODULE	= amd_opteron
-
-#
 #       Define targets
 #
 ALL_TARGET      = $(BINARY)
-LINT_TARGET     = $(LINT_MODULE).lint
 INSTALL_TARGET  = $(BINARY) $(ROOTMODULE)
 
 #
 #	Overrides and additions
 #
+$(OBJS_DIR)/ao_mca.o :=	CERRWARN	+= -_gcc=-Wno-unused-function
 CLEANFILES	+= $(AO_MCA_DISP_C)
 CPPFLAGS	+= -I$(SRCDIR) -I$(OBJS_DIR)
 ASFLAGS		+= -I$(SRCDIR) -I$(OBJS_DIR)
@@ -80,12 +75,6 @@ all:            $(ALL_DEPS)
 clean:          $(CLEAN_DEPS)
 
 clobber:        $(CLOBBER_DEPS)
-
-lint:           $(LINT_DEPS)
-
-modlintlib:     $(MODLINTLIB_DEPS)
-
-clean.lint:     $(CLEAN_LINT_DEPS)
 
 install:        $(INSTALL_DEPS)
 

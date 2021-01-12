@@ -26,7 +26,7 @@
  */
 
 /*	Copyright (c) 1984, 1986, 1987, 1988, 1989 AT&T	*/
-/*	  All Rights Reserved  	*/
+/*	  All Rights Reserved	*/
 
 /*
  * University Copyright- Copyright (c) 1982, 1986, 1988
@@ -82,9 +82,9 @@ extern "C" {
 
 typedef	unsigned long	rlim_t;
 
-#define	RLIM_INFINITY	(-3l)
-#define	RLIM_SAVED_MAX	(-2l)
-#define	RLIM_SAVED_CUR	(-1l)
+#define	RLIM_INFINITY	((rlim_t)-3)
+#define	RLIM_SAVED_MAX	((rlim_t)-2)
+#define	RLIM_SAVED_CUR	((rlim_t)-1)
 
 #else	/* _LP64 */
 

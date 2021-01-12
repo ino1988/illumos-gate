@@ -21,10 +21,10 @@
 
 /*
  * Copyright (c) 2008, 2010, Oracle and/or its affiliates. All rights reserved.
- */
-
-/*
  * Copyright 2013 Nexenta Systems, Inc. All rights reserved.
+ * Copyright 2016 Toomas Soome <tsoome@me.com>
+ * Copyright (c) 2015 by Delphix. All rights reserved.
+ * Copyright 2019 OmniOS Community Edition (OmniOSce) Association.
  */
 
 #ifndef	_LIBBE_PRIV_H
@@ -43,6 +43,7 @@ extern "C" {
 #define	BE_AUTO_NAME_DELIM	'-'
 #define	BE_DEFAULTS		"/etc/default/be"
 #define	BE_DFLT_BENAME_STARTS	"BENAME_STARTS_WITH="
+#define	BE_DFLT_BE_HAS_GRUB	"BE_HAS_GRUB="
 #define	BE_CONTAINER_DS_NAME	"ROOT"
 #define	BE_DEFAULT_CONSOLE	"text"
 #define	BE_POLICY_PROPERTY	"org.opensolaris.libbe:policy"
@@ -59,8 +60,12 @@ extern "C" {
 #define	BE_WHITE_SPACE		" \t\r\n"
 #define	BE_CAP_FILE		"/boot/grub/capability"
 #define	BE_INSTALL_GRUB		"/sbin/installgrub"
-#define	BE_STAGE_1		"/boot/grub/stage1"
-#define	BE_STAGE_2		"/boot/grub/stage2"
+#define	BE_GRUB_STAGE_1		"/boot/grub/stage1"
+#define	BE_GRUB_STAGE_2		"/boot/grub/stage2"
+#define	BE_INSTALL_BOOT		"/usr/sbin/installboot"
+#define	BE_LOADER_STAGES	"/boot"
+#define	BE_SPARC_BOOTBLK	"/lib/fs/zfs/bootblk"
+
 #define	ZFS_CLOSE(_zhp) \
 	if (_zhp) { \
 		zfs_close(_zhp); \
@@ -84,7 +89,7 @@ typedef struct be_transaction_data {
 	char		*obe_zpool;	/* Original BE pool */
 	char		*obe_snap_name;	/* Original BE snapshot name */
 	char		*obe_altroot;	/* Original BE altroot */
-	char 		*nbe_name;	/* New BE name */
+	char		*nbe_name;	/* New BE name */
 	char		*nbe_root_ds;	/* New BE root dataset */
 	char		*nbe_zpool;	/* New BE pool */
 	char		*nbe_desc;	/* New BE description */
@@ -133,8 +138,15 @@ typedef struct be_plcy_list {
 
 struct be_defaults {
 	boolean_t	be_deflt_rpool_container;
-	char		be_deflt_bename_starts_with[ZFS_MAXNAMELEN];
+	boolean_t	be_deflt_grub;
+	char		be_deflt_bename_starts_with[ZFS_MAX_DATASET_NAME_LEN];
 };
+
+typedef enum be_nextboot_state {
+	BE_NEXTBOOT_IGNORE = -1,
+	BE_NEXTBOOT_SET,
+	BE_NEXTBOOT_UNSET
+} be_nextboot_state_t;
 
 /* Library globals */
 extern libzfs_handle_t *g_zfs;
@@ -145,7 +157,7 @@ int be_set_uuid(char *);
 int be_get_uuid(const char *, uuid_t *);
 
 /* be_list.c */
-int _be_list(char *, be_node_list_t **);
+int _be_list(char *, be_node_list_t **, uint64_t);
 int be_get_zone_be_list(char *, char *, be_node_list_t **);
 
 /* be_mount.c */
@@ -169,6 +181,7 @@ boolean_t be_zfs_init(void);
 void be_zfs_fini(void);
 void be_make_root_ds(const char *, const char *, char *, int);
 void be_make_container_ds(const char *, char *, int);
+void be_make_root_container_ds(const char *, char *, int);
 char *be_make_name_from_ds(const char *, char *);
 int be_append_menu(char *, char *, char *, char *, char *);
 int be_remove_menu(char *, char *, char *);
@@ -194,7 +207,7 @@ int zfs_err_to_be_err(libzfs_handle_t *);
 int errno_to_be_err(int);
 
 /* be_activate.c */
-int _be_activate(char *);
+int _be_activate(char *, be_nextboot_state_t);
 int be_activate_current_be(void);
 boolean_t be_is_active_on_boot(char *);
 
@@ -210,6 +223,7 @@ boolean_t be_zone_compare_uuids(char *);
 
 /* check architecture functions */
 char *be_get_default_isa(void);
+char *be_get_platform(void);
 boolean_t be_is_isa(char *);
 boolean_t be_has_grub(void);
 

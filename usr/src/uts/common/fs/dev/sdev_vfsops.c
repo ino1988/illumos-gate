@@ -21,6 +21,8 @@
 /*
  * Copyright 2009 Sun Microsystems, Inc.  All rights reserved.
  * Use is subject to license terms.
+ * Copyright 2015 Joyent, Inc.  All rights reserved.
+ * Copyright (c) 2017 by Delphix. All rights reserved.
  */
 
 /*
@@ -56,6 +58,7 @@
 #include <sys/fs/dv_node.h>
 #include <sys/sunndi.h>
 #include <sys/mntent.h>
+#include <sys/disp.h>
 
 /*
  * /dev vfs operations.
@@ -66,6 +69,7 @@
  */
 struct sdev_data *sdev_origins; /* mount info for origins under /dev */
 kmutex_t sdev_lock; /* used for mount/unmount/rename synchronization */
+taskq_t *sdev_taskq = NULL;
 
 /*
  * static
@@ -169,7 +173,13 @@ devinit(int fstype, char *name)
 
 	if ((devmajor = getudev()) == (major_t)-1) {
 		cmn_err(CE_WARN, "%s: can't get unique dev", sdev_vfssw.name);
-		return (1);
+		return (ENXIO);
+	}
+
+	if (sdev_plugin_init() != 0) {
+		cmn_err(CE_WARN, "%s: failed to set init plugin subsystem",
+		    sdev_vfssw.name);
+		return (EIO);
 	}
 
 	/* initialize negative cache */
@@ -254,6 +264,20 @@ sdev_mount(struct vfs *vfsp, struct vnode *mvp, struct mounta *uap,
 	mutex_enter(&sdev_lock);
 
 	/*
+	 * Check that the taskq has been created. We can't do this in our
+	 * _init or devinit because they run too early for ddi_taskq_create.
+	 */
+	if (sdev_taskq == NULL) {
+		sdev_taskq = taskq_create("sdev", 1, minclsyspri, 1, 1, 0);
+		if (sdev_taskq == NULL) {
+			error = ENOMEM;
+			mutex_exit(&sdev_lock);
+			VN_RELE(avp);
+			goto cleanup;
+		}
+	}
+
+	/*
 	 * handling installation
 	 */
 	if (uap->flags & MS_REMOUNT) {
@@ -332,6 +356,7 @@ sdev_mount(struct vfs *vfsp, struct vnode *mvp, struct mounta *uap,
 		ASSERT(sdev_origins);
 		dv->sdev_flags &= ~SDEV_GLOBAL;
 		dv->sdev_origin = sdev_origins->sdev_root;
+		SDEV_HOLD(dv->sdev_origin);
 	} else {
 		sdev_ncache_setup();
 		rw_enter(&dv->sdev_contents, RW_WRITER);
@@ -488,7 +513,7 @@ sdev_find_mntinfo(char *mntpt)
 	mntinfo = sdev_mntinfo;
 	while (mntinfo) {
 		if (strcmp(mntpt, mntinfo->sdev_root->sdev_name) == 0) {
-			SDEVTOV(mntinfo->sdev_root)->v_count++;
+			VN_HOLD(SDEVTOV(mntinfo->sdev_root));
 			break;
 		}
 		mntinfo = mntinfo->sdev_next;
@@ -500,7 +525,26 @@ sdev_find_mntinfo(char *mntpt)
 void
 sdev_mntinfo_rele(struct sdev_data *mntinfo)
 {
+	vnode_t *vp;
+
 	mutex_enter(&sdev_lock);
-	SDEVTOV(mntinfo->sdev_root)->v_count--;
+	vp = SDEVTOV(mntinfo->sdev_root);
+	mutex_enter(&vp->v_lock);
+	VN_RELE_LOCKED(vp);
+	mutex_exit(&vp->v_lock);
+	mutex_exit(&sdev_lock);
+}
+
+void
+sdev_mnt_walk(void (*func)(struct sdev_node *, void *), void *arg)
+{
+	struct sdev_data *mntinfo;
+
+	mutex_enter(&sdev_lock);
+	mntinfo = sdev_mntinfo;
+	while (mntinfo != NULL) {
+		func(mntinfo->sdev_root, arg);
+		mntinfo = mntinfo->sdev_next;
+	}
 	mutex_exit(&sdev_lock);
 }

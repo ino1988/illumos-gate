@@ -22,6 +22,7 @@
 /*
  * Copyright 2010 Sun Microsystems, Inc.  All rights reserved.
  * Use is subject to license terms.
+ * Copyright 2019 Joyent, Inc.
  */
 
 /*	Copyright (c) 1984, 1986, 1987, 1988, 1989 AT&T	*/
@@ -215,6 +216,7 @@ struct seg_ops segdev_ops = {
 	segdev_getmemid,
 	segdev_getpolicy,
 	segdev_capable,
+	seg_inherit_notsup
 };
 
 /*
@@ -356,8 +358,9 @@ devmap_ctxto(void *data)
  * Create a device segment.
  */
 int
-segdev_create(struct seg *seg, void *argsp)
+segdev_create(struct seg **segpp, void *argsp)
 {
+	struct seg *seg = *segpp;
 	struct segdev_data *sdp;
 	struct segdev_crargs *a = (struct segdev_crargs *)argsp;
 	devmap_handle_t *dhp = (devmap_handle_t *)a->devmap_data;
@@ -367,7 +370,7 @@ segdev_create(struct seg *seg, void *argsp)
 	 * Since the address space is "write" locked, we
 	 * don't need the segment lock to protect "segdev" data.
 	 */
-	ASSERT(seg->s_as && AS_WRITE_HELD(seg->s_as, &seg->s_as->a_lock));
+	ASSERT(seg->s_as && AS_WRITE_HELD(seg->s_as));
 
 	hat_map(seg->s_as->a_hat, seg->s_base, seg->s_size, HAT_MAP);
 
@@ -473,7 +476,7 @@ segdev_dup(struct seg *seg, struct seg *newseg)
 	 * Since the address space is "write" locked, we
 	 * don't need the segment lock to protect "segdev" data.
 	 */
-	ASSERT(seg->s_as && AS_WRITE_HELD(seg->s_as, &seg->s_as->a_lock));
+	ASSERT(seg->s_as && AS_WRITE_HELD(seg->s_as));
 
 	newsdp = sdp_alloc();
 
@@ -645,7 +648,7 @@ segdev_unmap(struct seg *seg, caddr_t addr, size_t len)
 	 * Since the address space is "write" locked, we
 	 * don't need the segment lock to protect "segdev" data.
 	 */
-	ASSERT(seg->s_as && AS_WRITE_HELD(seg->s_as, &seg->s_as->a_lock));
+	ASSERT(seg->s_as && AS_WRITE_HELD(seg->s_as));
 
 	if ((sz = sdp->softlockcnt) > 0) {
 		/*
@@ -1134,7 +1137,7 @@ segdev_free(struct seg *seg)
 	 * Since the address space is "write" locked, we
 	 * don't need the segment lock to protect "segdev" data.
 	 */
-	ASSERT(seg->s_as && AS_WRITE_HELD(seg->s_as, &seg->s_as->a_lock));
+	ASSERT(seg->s_as && AS_WRITE_HELD(seg->s_as));
 
 	while (dhp != NULL)
 		dhp = devmap_handle_unmap(dhp);
@@ -1616,7 +1619,7 @@ segdev_fault(
 	    "addr %p len %lx type %x\n",
 	    (void *)dhp_head, (void *)seg, (void *)addr, len, type));
 
-	ASSERT(seg->s_as && AS_LOCK_HELD(seg->s_as, &seg->s_as->a_lock));
+	ASSERT(seg->s_as && AS_LOCK_HELD(seg->s_as));
 
 	/* Handle non-devmap case */
 	if (dhp_head == NULL)
@@ -2056,7 +2059,7 @@ segdev_faulta(struct seg *seg, caddr_t addr)
 {
 	TRACE_2(TR_FAC_DEVMAP, TR_DEVMAP_FAULTA,
 	    "segdev_faulta: seg=%p addr=%p", (void *)seg, (void *)addr);
-	ASSERT(seg->s_as && AS_LOCK_HELD(seg->s_as, &seg->s_as->a_lock));
+	ASSERT(seg->s_as && AS_LOCK_HELD(seg->s_as));
 
 	return (0);
 }
@@ -2074,7 +2077,7 @@ segdev_setprot(struct seg *seg, caddr_t addr, size_t len, uint_t prot)
 	TRACE_4(TR_FAC_DEVMAP, TR_DEVMAP_SETPROT,
 	    "segdev_setprot:start seg=%p addr=%p len=%lx prot=%x",
 	    (void *)seg, (void *)addr, len, prot);
-	ASSERT(seg->s_as && AS_LOCK_HELD(seg->s_as, &seg->s_as->a_lock));
+	ASSERT(seg->s_as && AS_LOCK_HELD(seg->s_as));
 
 	if ((sz = sdp->softlockcnt) > 0 && dhp_head != NULL) {
 		/*
@@ -2197,7 +2200,7 @@ segdev_checkprot(struct seg *seg, caddr_t addr, size_t len, uint_t prot)
 	TRACE_4(TR_FAC_DEVMAP, TR_DEVMAP_CHECKPROT,
 	    "segdev_checkprot:start seg=%p addr=%p len=%lx prot=%x",
 	    (void *)seg, (void *)addr, len, prot);
-	ASSERT(seg->s_as && AS_LOCK_HELD(seg->s_as, &seg->s_as->a_lock));
+	ASSERT(seg->s_as && AS_LOCK_HELD(seg->s_as));
 
 	/*
 	 * If segment protection can be used, simply check against them
@@ -2234,7 +2237,7 @@ segdev_getprot(struct seg *seg, caddr_t addr, size_t len, uint_t *protv)
 	TRACE_4(TR_FAC_DEVMAP, TR_DEVMAP_GETPROT,
 	    "segdev_getprot:start seg=%p addr=%p len=%lx protv=%p",
 	    (void *)seg, (void *)addr, len, (void *)protv);
-	ASSERT(seg->s_as && AS_LOCK_HELD(seg->s_as, &seg->s_as->a_lock));
+	ASSERT(seg->s_as && AS_LOCK_HELD(seg->s_as));
 
 	pgno = seg_page(seg, addr + len) - seg_page(seg, addr) + 1;
 	if (pgno != 0) {
@@ -2265,7 +2268,7 @@ segdev_getoffset(register struct seg *seg, caddr_t addr)
 	TRACE_2(TR_FAC_DEVMAP, TR_DEVMAP_GETOFFSET,
 	    "segdev_getoffset:start seg=%p addr=%p", (void *)seg, (void *)addr);
 
-	ASSERT(seg->s_as && AS_LOCK_HELD(seg->s_as, &seg->s_as->a_lock));
+	ASSERT(seg->s_as && AS_LOCK_HELD(seg->s_as));
 
 	return ((u_offset_t)sdp->offset + (addr - seg->s_base));
 }
@@ -2279,7 +2282,7 @@ segdev_gettype(register struct seg *seg, caddr_t addr)
 	TRACE_2(TR_FAC_DEVMAP, TR_DEVMAP_GETTYPE,
 	    "segdev_gettype:start seg=%p addr=%p", (void *)seg, (void *)addr);
 
-	ASSERT(seg->s_as && AS_LOCK_HELD(seg->s_as, &seg->s_as->a_lock));
+	ASSERT(seg->s_as && AS_LOCK_HELD(seg->s_as));
 
 	return (sdp->type);
 }
@@ -2294,7 +2297,7 @@ segdev_getvp(register struct seg *seg, caddr_t addr, struct vnode **vpp)
 	TRACE_2(TR_FAC_DEVMAP, TR_DEVMAP_GETVP,
 	    "segdev_getvp:start seg=%p addr=%p", (void *)seg, (void *)addr);
 
-	ASSERT(seg->s_as && AS_LOCK_HELD(seg->s_as, &seg->s_as->a_lock));
+	ASSERT(seg->s_as && AS_LOCK_HELD(seg->s_as));
 
 	/*
 	 * Note that this vp is the common_vp of the device, where the
@@ -2324,7 +2327,7 @@ segdev_sync(struct seg *seg, caddr_t addr, size_t len, int attr, uint_t flags)
 {
 	TRACE_0(TR_FAC_DEVMAP, TR_DEVMAP_SYNC, "segdev_sync:start");
 
-	ASSERT(seg->s_as && AS_LOCK_HELD(seg->s_as, &seg->s_as->a_lock));
+	ASSERT(seg->s_as && AS_LOCK_HELD(seg->s_as));
 
 	return (0);
 }
@@ -2340,7 +2343,7 @@ segdev_incore(struct seg *seg, caddr_t addr, size_t len, char *vec)
 
 	TRACE_0(TR_FAC_DEVMAP, TR_DEVMAP_INCORE, "segdev_incore:start");
 
-	ASSERT(seg->s_as && AS_LOCK_HELD(seg->s_as, &seg->s_as->a_lock));
+	ASSERT(seg->s_as && AS_LOCK_HELD(seg->s_as));
 
 	for (len = (len + PAGEOFFSET) & PAGEMASK; len; len -= PAGESIZE,
 	    v += PAGESIZE)
@@ -2359,7 +2362,7 @@ segdev_lockop(struct seg *seg, caddr_t addr,
 {
 	TRACE_0(TR_FAC_DEVMAP, TR_DEVMAP_LOCKOP, "segdev_lockop:start");
 
-	ASSERT(seg->s_as && AS_LOCK_HELD(seg->s_as, &seg->s_as->a_lock));
+	ASSERT(seg->s_as && AS_LOCK_HELD(seg->s_as));
 
 	return (0);
 }
@@ -2374,7 +2377,7 @@ segdev_advise(struct seg *seg, caddr_t addr, size_t len, uint_t behav)
 {
 	TRACE_0(TR_FAC_DEVMAP, TR_DEVMAP_ADVISE, "segdev_advise:start");
 
-	ASSERT(seg->s_as && AS_LOCK_HELD(seg->s_as, &seg->s_as->a_lock));
+	ASSERT(seg->s_as && AS_LOCK_HELD(seg->s_as));
 
 	return (0);
 }
@@ -2382,10 +2385,10 @@ segdev_advise(struct seg *seg, caddr_t addr, size_t len, uint_t behav)
 /*
  * segdev pages are not dumped, so we just return
  */
-/*ARGSUSED*/
 static void
-segdev_dump(struct seg *seg)
-{}
+segdev_dump(struct seg *seg __unused)
+{
+}
 
 /*
  * ddi_segmap_setup:	Used by drivers who wish specify mapping attributes
@@ -2402,7 +2405,7 @@ ddi_segmap_setup(dev_t dev, off_t offset, struct as *as, caddr_t *addrp,
 	int (*mapfunc)(dev_t dev, off_t off, int prot);
 	uint_t hat_attr;
 	pfn_t pfn;
-	int	error, i;
+	int error, i;
 
 	TRACE_0(TR_FAC_DEVMAP, TR_DEVMAP_SEGMAP_SETUP,
 	    "ddi_segmap_setup:start");
@@ -2424,25 +2427,25 @@ ddi_segmap_setup(dev_t dev, off_t offset, struct as *as, caddr_t *addrp,
 	if (ddi_device_mapping_check(dev, accattrp, rnumber, &hat_attr) == -1)
 		return (ENXIO);
 
+	if (len == 0)
+		return (ENXIO);
+
 	/*
 	 * Check to ensure that the entire range is
 	 * legal and we are not trying to map in
 	 * more than the device will let us.
 	 */
-	for (i = 0; i < len; i += PAGESIZE) {
-		if (i == 0) {
-			/*
-			 * Save the pfn at offset here. This pfn will be
-			 * used later to get user address.
-			 */
-			if ((pfn = (pfn_t)cdev_mmap(mapfunc, dev, offset,
-			    maxprot)) == PFN_INVALID)
-				return (ENXIO);
-		} else {
-			if (cdev_mmap(mapfunc, dev, offset + i, maxprot) ==
-			    PFN_INVALID)
-				return (ENXIO);
-		}
+	/*
+	 * Save the pfn at offset here. This pfn will be
+	 * used later to get user address.
+	 */
+	pfn = (pfn_t)cdev_mmap(mapfunc, dev, offset, maxprot);
+	if (pfn == PFN_INVALID)
+		return (ENXIO);
+
+	for (i = PAGESIZE; i < len; i += PAGESIZE) {
+		if (cdev_mmap(mapfunc, dev, offset + i, maxprot) == PFN_INVALID)
+			return (ENXIO);
 	}
 
 	as_rangelock(as);
@@ -2724,6 +2727,8 @@ devmap_roundup(devmap_handle_t *dhp, ulong_t offset, size_t len,
 	 * the page size to use. The same calculations can use the
 	 * virtual address to determine the page size.
 	 */
+	pg = 0;
+	poff = 0;
 	base = (ulong_t)ptob(dhp->dh_pfn);
 	for (level = dhp->dh_mmulevel; level >= 0; level--) {
 		pg = page_get_pagesize(level);
@@ -3079,7 +3084,7 @@ devmap_load(devmap_cookie_t dhc, offset_t offset, size_t len, uint_t type,
 	 *	the as lock is held. Verify here and return error if drivers
 	 *	inadvertently call devmap_load on a wrong devmap handle.
 	 */
-	if ((asp != &kas) && !AS_LOCK_HELD(asp, &asp->a_lock))
+	if ((asp != &kas) && !AS_LOCK_HELD(asp))
 		return (FC_MAKE_ERR(EINVAL));
 
 	soff = (ssize_t)(offset - dhp->dh_uoff);
@@ -3985,7 +3990,6 @@ ddi_umem_free(ddi_umem_cookie_t cookie)
 			mutex_exit(&cp->lock);
 			panic("ddi_umem_free for cookie with pending faults %p",
 			    (void *)cp);
-			return;
 		}
 
 		segkp_release(segkp, cp->cvaddr);

@@ -18,13 +18,12 @@
 #
 # CDDL HEADER END
 #
+# Copyright 2014 Garrett D'Amore <garrett@damore.org>
 #
 # Copyright 2009 Sun Microsystems, Inc.  All rights reserved.
 # Use is subject to license terms.
 #
-#	This makefile drives the production of the ARCFOUR KEF provider.
-#
-#	Intel implementation architecture dependent
+# Copyright (c) 2019, Joyent, Inc.
 #
 
 #
@@ -37,7 +36,6 @@ COM_DIR = $(COMMONBASE)/crypto/arcfour
 #	Define the module and object file sets.
 #
 MODULE		= arcfour
-LINTS		= $(ARCFOURPROV_OBJS:%.o=$(LINTS_DIR)/%.ln)
 ARCFOURPROV_OBJS_32 =
 ARCFOURPROV_OBJS_64 = arcfour-x86_64.o
 ARCFOURPROV_OBJS += $(ARCFOURPROV_OBJS_$(CLASS))
@@ -49,14 +47,10 @@ ROOTMODULE	= $(ROOT_CRYPTO_DIR)/$(MODULE)
 #
 include $(UTSBASE)/intel/Makefile.intel
 
-#	set signing mode
-ELFSIGN_MOD	= $(ELFSIGN_CRYPTO)
-
 #
 #	Define targets
 #
 ALL_TARGET	= $(BINARY)
-LINT_TARGET	= $(MODULE).lint
 INSTALL_TARGET	= $(BINARY) $(ROOTMODULE)
 
 #
@@ -79,12 +73,6 @@ clean:		$(CLEAN_DEPS)
 
 clobber:	$(CLOBBER_DEPS)
 
-lint:		$(LINT_DEPS)
-
-modlintlib:	$(MODLINTLIB_DEPS)
-
-clean.lint:	$(CLEAN_LINT_DEPS)
-
 install:	$(INSTALL_DEPS)
 
 #
@@ -94,10 +82,6 @@ include $(UTSBASE)/intel/Makefile.targ
 
 $(OBJS_DIR)/arcfour-x86_64.o: arcfour-x86_64.s
 	$(COMPILE.s) -o $@ ${@F:.o=.s}
-	$(POST_PROCESS_O)
-
-$(OBJS_DIR)/arcfour-x86_64.ln: arcfour-x86_64.s
-	@($(LHEAD) $(LINT.s) ${@F:.ln=.s} $(LTAIL))
 
 arcfour-x86_64.s: $(COM_DIR)/amd64/arcfour-x86_64.pl
 	$(PERL) $? $@

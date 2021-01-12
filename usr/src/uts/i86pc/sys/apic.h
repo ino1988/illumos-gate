@@ -20,8 +20,9 @@
  */
 /*
  * Copyright (c) 1993, 2010, Oracle and/or its affiliates. All rights reserved.
+ * Copyright 2018 Joyent, Inc.
+ * Copyright (c) 2017 by Delphix. All rights reserved.
  */
-
 /*
  * Copyright (c) 2010, Intel Corporation.
  * All rights reserved.
@@ -116,6 +117,9 @@ typedef enum apic_mode {
 /* General x2APIC constants used at various places */
 #define	APIC_SVR_SUPPRESS_BROADCAST_EOI		0x1000
 #define	APIC_DIRECTED_EOI_BIT			0x1000000
+
+/* x2APIC enable bit in REG_APIC_BASE_MSR */
+#define	X2APIC_ENABLE_BIT	10
 
 /* IRR register	*/
 #define	APIC_IRR_REG		0x80
@@ -827,7 +831,8 @@ extern int apic_local_mode();
 extern void apic_change_eoi();
 extern void apic_send_EOI(uint32_t);
 extern void apic_send_directed_EOI(uint32_t);
-extern uint_t apic_calibrate(volatile uint32_t *, uint16_t *);
+extern uint64_t apic_calibrate();
+extern void x2apic_send_pir_ipi(processorid_t);
 
 extern volatile uint32_t *apicadr;	/* virtual addr of local APIC   */
 extern int apic_forceload;
@@ -867,12 +872,14 @@ extern int apic_sci_vect;
 extern int apic_hpet_vect;
 extern uchar_t apic_ipls[];
 extern apic_reg_ops_t *apic_reg_ops;
+extern apic_reg_ops_t local_apic_regs_ops;
 extern apic_mode_t apic_mode;
 extern void x2apic_update_psm();
 extern void apic_change_ops();
 extern void apic_common_send_ipi(int, int);
 extern void apic_set_directed_EOI_handler();
 extern int apic_directed_EOI_supported();
+extern void apic_common_send_pir_ipi(processorid_t);
 
 extern apic_intrmap_ops_t *apic_vt_ops;
 

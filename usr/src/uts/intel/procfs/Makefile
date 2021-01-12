@@ -24,6 +24,8 @@
 # Copyright 2006 Sun Microsystems, Inc.  All rights reserved.
 # Use is subject to license terms.
 #
+# Copyright 2019 Joyent, Inc.
+# Copyright 2020 OmniOS Community Edition (OmniOSce) Association.
 
 #
 #	This makefile drives the production of the procfs file system
@@ -42,7 +44,6 @@ UTSBASE	= ../..
 #
 MODULE		= procfs
 OBJECTS		= $(PROC_OBJS:%=$(OBJS_DIR)/%)
-LINTS		= $(PROC_OBJS:%.o=$(LINTS_DIR)/%.ln)
 ROOTMODULE	= $(ROOT_FS_DIR)/$(MODULE)
 
 #
@@ -54,7 +55,6 @@ include $(UTSBASE)/intel/Makefile.intel
 #	Define targets
 #
 ALL_TARGET	= $(BINARY)
-LINT_TARGET	= $(MODULE).lint
 INSTALL_TARGET	= $(BINARY) $(ROOTMODULE)
 
 #
@@ -65,17 +65,22 @@ $(MODSTUBS_O)	:= AS_CPPFLAGS += -DPROC_MODULE
 CLEANFILES	+= $(MODSTUBS_O)
 
 #
-# For now, disable these lint checks; maintainers should endeavor
-# to investigate and remove these for maximum lint coverage.
+# For now, disable these warnings; maintainers should endeavor
+# to investigate and remove these for maximum coverage.
 # Please do not carry these forward to new Makefiles.
 #
-LINTTAGS	+= -erroff=E_BAD_PTR_CAST_ALIGN
-LINTTAGS	+= -erroff=E_PTRDIFF_OVERFLOW
-LINTTAGS	+= -erroff=E_ASSIGN_NARROW_CONV
 
 CERRWARN	+= -_gcc=-Wno-parentheses
 CERRWARN	+= -_gcc=-Wno-switch
-CERRWARN	+= -_gcc=-Wno-uninitialized
+CERRWARN	+= $(CNOWARN_UNINIT)
+
+# needs work
+$(OBJS_DIR)/prsubr.o := SMOFF += all_func_returns
+$(OBJS_DIR)/prcontrol.o := SMOFF += all_func_returns
+$(OBJS_DIR)/prioctl.o := SMOFF += signed
+
+LDFLAGS         += -dy -Nfs/namefs
+
 #
 #	Default build targets.
 #
@@ -88,12 +93,6 @@ all:		$(ALL_DEPS)
 clean:		$(CLEAN_DEPS)
 
 clobber:	$(CLOBBER_DEPS)
-
-lint:		$(LINT_DEPS)
-
-modlintlib:	$(MODLINTLIB_DEPS)
-
-clean.lint:	$(CLEAN_LINT_DEPS)
 
 install:	$(INSTALL_DEPS)
 

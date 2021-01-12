@@ -18,8 +18,12 @@
 #
 # CDDL HEADER END
 #
+
 #
 # Copyright (c) 1999, 2010, Oracle and/or its affiliates. All rights reserved.
+# Copyright 2016 Nexenta Systems, Inc.
+# Copyright 2020 Joyent, Inc.
+# Copyright 2019 Peter Tribble.
 #
 
 include ../../Makefile.cmd
@@ -32,7 +36,7 @@ RCM_SRC = \
 	$(COMMON)/rcm_impl.c \
 	$(COMMON)/rcm_subr.c \
 	$(COMMON)/rcm_lock.c \
-	$(COMMON)/rcm_script.c 
+	$(COMMON)/rcm_script.c
 
 RCM_OBJ = \
 	rcm_event.o \
@@ -56,10 +60,7 @@ COMMON_MOD_SRC = \
 	$(COMMON)/pool_rcm.c \
 	$(COMMON)/mpxio_rcm.c \
 	$(COMMON)/ip_anon_rcm.c \
-	$(COMMON)/svm_rcm.c \
 	$(COMMON)/bridge_rcm.c
-
-sparc_MOD_SRC = $(COMMON)/ttymux_rcm.c
 
 COMMON_PERL_SCRIPT_SRC =
 
@@ -82,10 +83,7 @@ COMMON_MOD_OBJ = \
 	pool_rcm.o \
 	mpxio_rcm.o \
 	ip_anon_rcm.o \
-	svm_rcm.o \
 	bridge_rcm.o
-
-sparc_MOD_OBJ = ttymux_rcm.o
 
 RCM_DAEMON = rcm_daemon
 
@@ -103,10 +101,7 @@ COMMON_RCM_MODS = \
 	SUNW_pool_rcm.so \
 	SUNW_mpxio_rcm.so \
 	SUNW_ip_anon_rcm.so \
-	SUNW_svm_rcm.so \
 	SUNW_bridge_rcm.so
-
-sparc_RCM_MODS = SUNW_ttymux_rcm.so
 
 RCM_DIR = rcm
 MOD_DIR = modules
@@ -114,35 +109,35 @@ SCRIPT_DIR = scripts
 
 CLOBBERFILES += $(COMMON_RCM_MODS) $($(MACH)_RCM_MODS) $(RCM_DAEMON)
 
-LINT_MODULES = $(COMMON_MOD_SRC:.c=.ln) $($(MACH)_MOD_SRC:.c=.ln)
-
 CPPFLAGS += -I..
 CPPFLAGS += -D_POSIX_PTHREAD_SEMANTICS -D_REENTRANT
 CFLAGS += $(CCVERBOSE) $(C_PICFLAGS)
 
 CERRWARN += -_gcc=-Wno-parentheses
 CERRWARN += -_gcc=-Wno-unused-label
-CERRWARN += -_gcc=-Wno-uninitialized
+CERRWARN += $(CNOWARN_UNINIT)
 CERRWARN += -_gcc=-Wno-unused-function
 
+# not linted
+SMATCH=off
+
 MAPFILES = ../common/mapfile-intf $(MAPFILE.NGB)
-rcm_daemon := LDFLAGS += $(MAPFILES:%=-M%)
+rcm_daemon := LDFLAGS += $(MAPFILES:%=-Wl,-M%)
 
-LINTFLAGS += -u -erroff=E_FUNC_ARG_UNUSED
+LDLIBS_MODULES = -L$(ROOT)/lib -L$(ROOT)/usr/lib
+SUNW_pool_rcm.so := LDLIBS_MODULES += -lpool -lnvpair
+SUNW_network_rcm.so := LDLIBS_MODULES += -ldladm -lnvpair -ldevinfo
+SUNW_vlan_rcm.so := LDLIBS_MODULES += -ldladm -lnvpair
+SUNW_vnic_rcm.so := LDLIBS_MODULES += -ldladm -lnvpair
+SUNW_ibpart_rcm.so := LDLIBS_MODULES += -ldladm -lnvpair
+SUNW_aggr_rcm.so := LDLIBS_MODULES += -ldladm -lnvpair
+SUNW_ip_rcm.so := LDLIBS_MODULES += -linetutil -ldladm -lipmp -lipadm -lnvpair -lsocket -lgen
+SUNW_ip_anon_rcm.so := LDLIBS_MODULES += -linetutil
+SUNW_bridge_rcm.so := LDLIBS_MODULES += -ldladm -lnvpair
+SUNW_mpxio_rcm.so := LDLIBS_MODULES += -ldevinfo
+LDLIBS_MODULES += -lrcm -lc $(LDSTACKPROTECT)
 
-LDLIBS_MODULES = 
-SUNW_pool_rcm.so := LDLIBS_MODULES += -L$(ROOT)/usr/lib -lpool
-SUNW_svm_rcm.so	:= LDLIBS_MODULES += -L$(ROOT)/usr/lib -lmeta
-SUNW_network_rcm.so := LDLIBS_MODULES += -L$(ROOT)/lib -ldladm
-SUNW_vlan_rcm.so := LDLIBS_MODULES += -L$(ROOT)/lib -ldladm
-SUNW_vnic_rcm.so := LDLIBS_MODULES += -L$(ROOT)/lib -ldladm
-SUNW_ibpart_rcm.so := LDLIBS_MODULES += -L$(ROOT)/lib -ldladm
-SUNW_aggr_rcm.so := LDLIBS_MODULES += -L$(ROOT)/lib -ldladm
-SUNW_ip_rcm.so := LDLIBS_MODULES += -L$(ROOT)/lib -linetutil -ldladm -lipmp -lipadm
-SUNW_ip_anon_rcm.so := LDLIBS_MODULES += -L$(ROOT)/lib -linetutil
-SUNW_bridge_rcm.so := LDLIBS_MODULES += -L$(ROOT)/lib -ldladm
-
-LDLIBS += -lgen -lelf -lrcm -lnvpair -ldevinfo -lnsl -lsocket
+LDLIBS += -lrcm -lnvpair
 
 SRCS = $(RCM_SRC) $(COMMON_MOD_SRC)
 
@@ -169,7 +164,6 @@ all :=		TARGET= all
 install :=	TARGET= install
 clean :=	TARGET= clean
 clobber :=	TARGET= clobber
-lint :=		TARGET= lint
 
 $(ROOTLIB_RCM_SCRIPTS) :=	FILEMODE = 555
 
@@ -189,14 +183,6 @@ install: all			\
 
 clean:
 	$(RM) $(RCM_OBJ) $(COMMON_MOD_OBJ) $($(MACH)_MOD_OBJ) $(POFILES)
-
-lint: $(RCM_DAEMON).ln $(LINT_MODULES)
-
-$(RCM_DAEMON).ln: FRC
-	$(LINT.c) $(RCM_SRC) $(LDLIBS)
-
-%.ln: FRC
-	$(LINT.c) $(RCM_SRC) $(@:.ln=.c) $(LDLIBS)
 
 FRC:
 

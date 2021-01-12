@@ -33,9 +33,10 @@
  */
 
 /*
- * Copyright 2011 Nexenta Systems, Inc.  All rights reserved.
  * Copyright 2010 Sun Microsystems, Inc.  All rights reserved.
  * Use is subject to license terms.
+ *
+ * Copyright 2018 Nexenta Systems, Inc.  All rights reserved.
  */
 
 #ifndef _FS_SMBFS_NODE_H_
@@ -186,7 +187,7 @@ typedef struct smbfs_node_hdr {
  * be held whenever any kind of access of r_size is made.
  *
  * Lock ordering:
- * 	r_rwlock > r_lkserlock > r_statelock
+ *	r_rwlock > r_lkserlock > r_statelock
  */
 
 typedef struct smbnode {
@@ -221,10 +222,8 @@ typedef struct smbnode {
 	struct smbfs_fctx	*n_dirseq;	/* ff context */
 	int		n_dirofs;	/* last ff offset */
 	int		n_fidrefs;
-	uint16_t	n_fid;		/* file handle */
+	smb_fh_t	*n_fid;		/* file handle */
 	enum vtype	n_ovtype;	/* vnode type opened */
-	uint32_t	n_rights;	/* granted rights */
-	int		n_vcgenid;	/* gereration no. (reconnect) */
 
 	/*
 	 * Misc. bookkeeping
@@ -232,15 +231,17 @@ typedef struct smbnode {
 	cred_t		*r_cred;	/* current credentials */
 	u_offset_t	r_nextr;	/* next read offset (read-ahead) */
 	long		r_mapcnt;	/* count of mmapped pages */
+	uint_t		r_inmap;	/* to serialize read/write and mmap */
 	uint_t		r_count;	/* # of refs not reflect in v_count */
 	uint_t		r_awcount;	/* # of outstanding async write */
 	uint_t		r_gcount;	/* getattrs waiting to flush pages */
 	uint_t		r_flags;	/* flags, see below */
-	uint32_t	n_flag;		/* NXXX flags below */
+	uint32_t	n_flag;		/* N--- flags below */
 	uint_t		r_error;	/* async write error */
 	kcondvar_t	r_cv;		/* condvar for blocked threads */
 	avl_tree_t	r_dir;		/* cache of readdir responses */
 	rddir_cache	*r_direof;	/* pointer to the EOF entry */
+	u_offset_t	r_modaddr;	/* address for page in writenp */
 	kthread_t	*r_serial;	/* id of purging thread */
 	list_t		r_indelmap;	/* list of delmap callers */
 
@@ -282,7 +283,7 @@ typedef struct smbnode {
 #define	NATTRCHANGED	0x02000 /* kill cached attributes at close */
 #define	NALLOC		0x04000 /* being created */
 #define	NWALLOC		0x08000 /* awaiting creation */
-#define	N_XATTR 	0x10000 /* extended attribute (dir or file) */
+#define	N_XATTR		0x10000 /* extended attribute (dir or file) */
 
 /*
  * Flag bits in: smbnode_t .r_flags

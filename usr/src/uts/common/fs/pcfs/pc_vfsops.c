@@ -23,6 +23,9 @@
  * Copyright 2009 Sun Microsystems, Inc.  All rights reserved.
  * Use is subject to license terms.
  */
+/*
+ * Copyright (c) 2017 by Delphix. All rights reserved.
+ */
 
 #include <sys/param.h>
 #include <sys/systm.h>
@@ -115,9 +118,9 @@ static mntopt_t mntopts[] = {
 	{ MNTOPT_PCFS_NOFOLDCASE, nofoldcase_cancel, NULL, MO_DEFAULT, NULL },
 	{ MNTOPT_PCFS_FOLDCASE, foldcase_cancel, NULL, 0, NULL },
 	{ MNTOPT_PCFS_CLAMPTIME, clamptime_cancel, NULL, MO_DEFAULT, NULL },
-	{ MNTOPT_PCFS_NOCLAMPTIME, noclamptime_cancel, NULL, NULL, NULL },
-	{ MNTOPT_NOATIME, noatime_cancel, NULL, NULL, NULL },
-	{ MNTOPT_ATIME, atime_cancel, NULL, NULL, NULL },
+	{ MNTOPT_PCFS_NOCLAMPTIME, noclamptime_cancel, NULL, 0, NULL },
+	{ MNTOPT_NOATIME, noatime_cancel, NULL, 0, NULL },
+	{ MNTOPT_ATIME, atime_cancel, NULL, 0, NULL },
 	{ MNTOPT_PCFS_TIMEZONE, NULL, "+0", MO_DEFAULT | MO_HASVALUE, NULL },
 	{ MNTOPT_PCFS_SECSIZE, NULL, NULL, MO_HASVALUE, NULL }
 };
@@ -156,7 +159,7 @@ static vfsdef_t vfw = {
 	VFSDEF_VERSION,
 	"pcfs",
 	pcfsinit,
-	VSW_HASPROTO|VSW_CANREMOUNT|VSW_STATS|VSW_CANLOFI,
+	VSW_HASPROTO|VSW_CANREMOUNT|VSW_STATS|VSW_CANLOFI|VSW_MOUNTDEV,
 	&pcfs_mntopts
 };
 

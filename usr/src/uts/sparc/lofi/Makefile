@@ -18,7 +18,7 @@
 #
 # CDDL HEADER END
 #
-#
+# Copyright 2016 Toomas Soome <tsoome@me.com>
 # Copyright 2009 Sun Microsystems, Inc.  All rights reserved.
 # Use is subject to license terms.
 #
@@ -35,7 +35,6 @@ UTSBASE	= ../..
 #
 MODULE		= lofi
 OBJECTS		= $(LOFI_OBJS:%=$(OBJS_DIR)/%)
-LINTS		= $(LOFI_OBJS:%.o=$(LINTS_DIR)/%.ln)
 ROOTMODULE	= $(ROOT_DRV_DIR)/$(MODULE)
 CONF_SRCDIR	= $(UTSBASE)/common/io
 
@@ -48,17 +47,18 @@ include $(UTSBASE)/sparc/Makefile.sparc
 #	Define targets
 #
 ALL_TARGET	= $(BINARY) $(SRC_CONFILE)
-LINT_TARGET	= $(MODULE).lint
 INSTALL_TARGET	= $(BINARY) $(ROOTMODULE) $(ROOT_CONFFILE)
+
+LDFLAGS += -dy -Nmisc/cmlb
 
 #
 #	Overrides.
 #
 CFLAGS		+= $(CCVERBOSE)
 
-CERRWARN	+= -_gcc=-Wno-uninitialized
+CERRWARN	+= $(CNOWARN_UNINIT)
 
-INC_PATH	+= -I$(SRC)/common/lzma  
+INC_PATH	+= -I$(SRC)/common/lzma
 
 #
 #	Default build targets.
@@ -72,12 +72,6 @@ all:		$(ALL_DEPS)
 clean:		$(CLEAN_DEPS)
 
 clobber:	$(CLOBBER_DEPS)
-
-lint:		$(LINT_DEPS)
-
-modlintlib:	$(MODLINTLIB_DEPS)
-
-clean.lint:	$(CLEAN_LINT_DEPS)
 
 install:	$(INSTALL_DEPS)
 

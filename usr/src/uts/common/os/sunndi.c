@@ -420,8 +420,7 @@ ndi_dc_freehdl(struct devctl_iocdata *dcp)
 	if (dcp->c_unitaddr != NULL)
 		kmem_free(dcp->c_unitaddr, MAXNAMELEN);
 
-	if (dcp->nvl_user != NULL)
-		nvlist_free(dcp->nvl_user);
+	nvlist_free(dcp->nvl_user);
 
 	kmem_free(dcp, sizeof (*dcp));
 }
@@ -2369,6 +2368,7 @@ i_ddi_fault_logger(dev_info_t *rdip, struct ddi_fault_event_data *fedp)
 
 	default:
 		bad = 1;
+		still = 0;
 		break;
 	}
 

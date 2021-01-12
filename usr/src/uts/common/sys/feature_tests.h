@@ -21,6 +21,7 @@
 
 /*
  * Copyright 2013 Garrett D'Amore <garrett@damore.org>
+ * Copyright 2016 Joyent, Inc.
  *
  * Copyright 2006 Sun Microsystems, Inc.  All rights reserved.
  * Use is subject to license terms.
@@ -81,6 +82,10 @@ extern "C" {
  *                      compiler that complies with ISO/IEC 9899:1999, other-
  *                      wise known as the C99 standard.
  *
+ * _STDC_C11		Like _STDC_C99 except that the value of __STDC_VERSION__
+ *                      is 201112L indicating a compiler that compiles with
+ *                      ISO/IEC 9899:2011, otherwise known as the C11 standard.
+ *
  * _STRICT_SYMBOLS	Used in cases where symbol visibility is restricted
  *                      by the standards, and the user has not explicitly
  *                      relaxed the strictness via __EXTENSIONS__.
@@ -91,8 +96,8 @@ extern "C" {
 #endif
 
 /*
- * ISO/IEC 9899:1990 and it's revision, ISO/IEC 9899:1999 specify the
- * following predefined macro name:
+ * ISO/IEC 9899:1990 and it's revisions, ISO/IEC 9899:1999 and ISO/IEC
+ * 99899:2011 specify the following predefined macro name:
  *
  * __STDC__	The integer constant 1, intended to indicate a conforming
  *		implementation.
@@ -125,7 +130,7 @@ extern "C" {
  * cc -Xs (K&R C)		    undefined	      undefined
  *
  * gcc (default)			1	      undefined
- * gcc -ansi, -std={c89, c99,...)  	1              defined
+ * gcc -ansi, -std={c89, c99,...)	1               defined
  * gcc -traditional (K&R)	    undefined	      undefined
  *
  * The default compilation modes for Sun C compilers versus GNU C compilers
@@ -143,8 +148,12 @@ extern "C" {
 #endif
 
 /*
- * Compiler complies with ISO/IEC 9899:1999
+ * Compiler complies with ISO/IEC 9899:1999 or ISO/IEC 9989:2011
  */
+
+#if __STDC_VERSION__ - 0 >= 201112L
+#define	_STDC_C11
+#endif
 
 #if __STDC_VERSION__ - 0 >= 199901L
 #define	_STDC_C99
@@ -182,7 +191,7 @@ extern "C" {
  *	of _POSIX_SOURCE nor _XOPEN_SOURCE is defined and the value of
  *	__STDC__ does not imply standards conformance).
  *    -	Extended system interfaces are explicitly requested (__EXTENSIONS__
- * 	is defined).
+ *	is defined).
  *    -	Access to in-kernel interfaces is requested (_KERNEL or _KMEMUSER is
  *	defined).  (Note that this dependency is an artifact of the current
  *	kernel implementation and may change in future releases.)
@@ -377,33 +386,50 @@ extern "C" {
 #endif
 
 /*
- * It is invalid to compile an XPG3, XPG4, XPG4v2, or XPG5 application
- * using c99.  The same is true for POSIX.1-1990, POSIX.2-1992, POSIX.1b,
- * and POSIX.1c applications. Likewise, it is invalid to compile an XPG6
- * or a POSIX.1-2001 application with anything other than a c99 or later
- * compiler.  Therefore, we force an error in both cases.
- */
-#if defined(_STDC_C99) && (defined(__XOPEN_OR_POSIX) && !defined(_XPG6))
-#error "Compiler or options invalid for pre-UNIX 03 X/Open applications \
-	and pre-2001 POSIX applications"
-#elif !defined(_STDC_C99) && \
-	(defined(__XOPEN_OR_POSIX) && defined(_XPG6))
-#error "Compiler or options invalid; UNIX 03 and POSIX.1-2001 applications \
-	require the use of c99"
-#endif
-
-/*
  * The following macro defines a value for the ISO C99 restrict
  * keyword so that _RESTRICT_KYWD resolves to "restrict" if
- * an ISO C99 compiler is used and "" (null string) if any other
- * compiler is used. This allows for the use of single prototype
- * declarations regardless of compiler version.
+ * an ISO C99 compiler is used, "__restrict" for c++ and "" (null string)
+ * if any other compiler is used. This allows for the use of single
+ * prototype declarations regardless of compiler version.
  */
-#if (defined(__STDC__) && defined(_STDC_C99)) && !defined(__cplusplus)
-#define	_RESTRICT_KYWD	restrict
+#if (defined(__STDC__) && defined(_STDC_C99))
+#ifdef __cplusplus
+#define	_RESTRICT_KYWD	__restrict
+#else
+/*
+ * NOTE: The whitespace between the '#' and 'define' is significant.
+ * It foils gcc's fixincludes from defining a redundant 'restrict'.
+ */
+/* CSTYLED */
+# define	_RESTRICT_KYWD	restrict
+#endif
 #else
 #define	_RESTRICT_KYWD
 #endif
+
+/*
+ * The following macro defines a value for the ISO C11 _Noreturn
+ * keyword so that _NORETURN_KYWD resolves to "_Noreturn" if
+ * an ISO C11 compiler is used and "" (null string) if any other
+ * compiler is used. This allows for the use of single prototype
+ * declarations regardless of compiler version.
+ */
+#if (defined(__STDC__) && defined(_STDC_C11)) && !defined(__cplusplus)
+#define	_NORETURN_KYWD	_Noreturn
+#else
+#define	_NORETURN_KYWD
+#endif
+
+/* ISO/IEC 9899:2011 Annex K */
+#if defined(__STDC_WANT_LIB_EXT1__)
+#if __STDC_WANT_LIB_EXT1__
+#define	__EXT1_VISIBLE		1
+#else
+#define	__EXT1_VISIBLE		0
+#endif
+#else
+#define	__EXT1_VISIBLE		0
+#endif /* __STDC_WANT_LIB_EXT1__ */
 
 /*
  * The following macro indicates header support for the ANSI C++
@@ -416,6 +442,18 @@ extern "C" {
  * ISO/IEC 9899:1999, Programming Languages - C.
  */
 #define	_ISO_C_9899_1999
+
+/*
+ * The following macro indicates header support for the C11 standard,
+ * ISO/IEC 9899:2011, Programming Languages - C.
+ */
+#define	_ISO_C_9899_2011
+
+/*
+ * The following macro indicates header support for the C11 standard,
+ * ISO/IEC 9899:2011 Annex K, Programming Languages - C.
+ */
+#undef	__STDC_LIB_EXT1__
 
 /*
  * The following macro indicates header support for DTrace. The value is an

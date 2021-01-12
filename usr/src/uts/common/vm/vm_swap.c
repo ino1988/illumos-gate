@@ -18,12 +18,17 @@
  *
  * CDDL HEADER END
  */
+
+/*
+ * Copyright 2015 Joyent, Inc.
+ */
+
 /*
  * Copyright (c) 1987, 2010, Oracle and/or its affiliates. All rights reserved.
  */
 
 /*	Copyright (c) 1984, 1986, 1987, 1988, 1989 AT&T	*/
-/*	  All Rights Reserved  	*/
+/*	  All Rights Reserved	*/
 
 /*
  * University Copyright- Copyright (c) 1982, 1986, 1988
@@ -103,7 +108,7 @@ kmutex_t swapinfo_lock;
 /*
  * protected by the swapinfo_lock
  */
-struct swapinfo	*swapinfo;
+extern struct swapinfo	*swapinfo;
 
 static	struct	swapinfo *silast;
 static	int	nswapfiles;
@@ -131,7 +136,7 @@ uint_t swapalloc_maxcontig;
  * Allocate a range of up to *lenp contiguous slots (page) from a physical
  * swap device. Flags are one of:
  *	SA_NOT  Must have a slot from a physical swap device other than the
- * 		the one containing input (*vpp, *offp).
+ *		the one containing input (*vpp, *offp).
  * Less slots than requested may be returned. *lenp allocated slots are
  * returned starting at *offp on *vpp.
  * Returns 1 for a successful allocation, 0 for couldn't allocate any slots.
@@ -402,8 +407,8 @@ swap_in_range(struct vnode *vp, u_offset_t offset, size_t len)
  */
 static struct vnode *
 swapdel_byname(
-	char 	*name,			/* pathname to delete */
-	ulong_t lowblk) 	/* Low block number of area to delete */
+	char	*name,			/* pathname to delete */
+	ulong_t lowblk)			/* Low block number of area to delete */
 {
 	struct swapinfo **sipp, *osip;
 	u_offset_t soff;
@@ -625,7 +630,18 @@ swapctl(int sc_cmd, void *sc_arg, int *rv)
 			return (0);
 		}
 beginning:
+		mutex_enter(&swapinfo_lock);
 		tmp_nswapfiles = nswapfiles;
+		mutex_exit(&swapinfo_lock);
+
+		/*
+		 * Return early if there are no swap entries to report:
+		 */
+		if (tmp_nswapfiles < 1) {
+			*rv = 0;
+			return (0);
+		}
+
 		/* Return an error if not enough space for the whole table. */
 		if (length < tmp_nswapfiles)
 			return (ENOMEM);
@@ -920,7 +936,18 @@ swapctl32(int sc_cmd, void *sc_arg, int *rv)
 			return (0);
 		}
 beginning:
+		mutex_enter(&swapinfo_lock);
 		tmp_nswapfiles = nswapfiles;
+		mutex_exit(&swapinfo_lock);
+
+		/*
+		 * Return early if there are no swap entries to report:
+		 */
+		if (tmp_nswapfiles < 1) {
+			*rv = 0;
+			return (0);
+		}
+
 		/* Return an error if not enough space for the whole table. */
 		if (length < tmp_nswapfiles)
 			return (ENOMEM);
@@ -1379,7 +1406,7 @@ swapdel(
 	cvp = common_specvp(vp);
 
 
-	lowblk = lowblk ? lowblk : 1; 	/* Skip first page (disk label) */
+	lowblk = lowblk ? lowblk : 1;	/* Skip first page (disk label) */
 	soff = ptob(btopr(lowblk << SCTRSHFT)); /* must be page aligned */
 
 	mutex_enter(&swapinfo_lock);
@@ -1655,8 +1682,8 @@ again:
  * always include the requested offset or fail. Returns the offsets
  * backed as [*offp, *offp + *lenp) and the physical offsets used to
  * back them from *pvpp in the range [*pstartp, *pstartp + *lenp).
- * Returns 	0 for success
- * 		SE_NOANON -- no anon slot for requested paged
+ * Returns	0 for success
+ *		SE_NOANON -- no anon slot for requested paged
  *		SE_NOSWAP -- no physical swap space available
  */
 int
@@ -1769,7 +1796,7 @@ swap_newphysname(
 /*
  * Get the physical swap backing store location for a given anonymous page
  * named (vp, off). The backing store name is returned in (*pvpp, *poffp).
- * Returns	0 		success
+ * Returns	0		success
  *		EIDRM --	no anon slot (page is not allocated)
  */
 int

@@ -19,13 +19,17 @@
  * CDDL HEADER END
  */
 /*	Copyright (c) 1984, 1986, 1987, 1988, 1989 AT&T	*/
-/*	  All Rights Reserved  	*/
+/*	  All Rights Reserved	*/
 
 
 /*
  * Copyright (c) 1989, 2010, Oracle and/or its affiliates. All rights reserved.
  */
 
+/*
+ * Copyright 2016 Jason King
+ * Copyright 2019 Nexenta Systems, Inc.  All rights reserved.
+ */
 
 #include <dlfcn.h>
 #include <stdio.h>
@@ -48,7 +52,9 @@
 #include <sys/mkdev.h>
 #include <sys/int_limits.h>
 #include <sys/zone.h>
+#include <sys/debug.h>
 #include <libzfs.h>
+#include <libcmdutils.h>
 
 #include "fslib.h"
 
@@ -134,6 +140,7 @@ extern char *default_fstype(char *);
 					/* message */
 
 #define	NUMBER_WIDTH		40
+CTASSERT(NUMBER_WIDTH >= NN_NUMBUF_SZ);
 
 /*
  * A numbuf_t is used when converting a number to a string representation
@@ -219,7 +226,6 @@ static bool_int		o_option;
 
 static bool_int		tty_output;
 static bool_int		use_scaling;
-static int		scale;
 
 static void usage(void);
 static void do_devnm(int, char **);
@@ -591,7 +597,6 @@ parse_options(int argc, char *argv[])
 			SET_OPTION(g);
 		} else if (arg == 'h') {
 			use_scaling = TRUE;
-			scale = 1024;
 		} else if (arg == 'k' && ! k_option) {
 			SET_OPTION(k);
 		} else if (arg == 'l' && ! l_option) {
@@ -967,8 +972,7 @@ run_fs_specific_df(struct df_request request_list[], int entries)
  */
 static int
 prune_list(struct df_request request_list[],
-		size_t n_requests,
-		size_t *valid_requests)
+    size_t n_requests, size_t *valid_requests)
 {
 	size_t	i;
 	size_t	n_valid = 0;
@@ -1151,85 +1155,26 @@ number_to_string(
 			int unit_from,		/* from units of this size */
 			int unit_to)		/* to units of this size */
 {
-	if ((long long)number == (long long)-1)
-		(void) strcpy(buf, "-1");
-	else {
-		if (unit_from == unit_to)
-			(void) sprintf(buf, "%llu", number);
-		else if (unit_from < unit_to)
-			(void) sprintf(buf, "%llu",
-			    number / (unsigned long long)(unit_to / unit_from));
-		else
-			(void) sprintf(buf, "%llu",
-			    number * (unsigned long long)(unit_from / unit_to));
-	}
-	return (buf);
-}
-
-/*
- * Convert an unsigned long long to a string representation and place the
- * result in the caller-supplied buffer.
- * The given number is in units of "unit_from" size,
- * this will first be converted to a number in 1024 or 1000 byte size,
- * depending on the scaling factor.
- * Then the number is scaled down until it is small enough to be in a good
- * human readable format i.e. in the range 0 thru scale-1.
- * If it's smaller than 10 there's room enough to provide one decimal place.
- * The value "(unsigned long long)-1" is a special case and is always
- * converted to "-1".
- * Returns a pointer to the caller-supplied buffer.
- */
-static char *
-number_to_scaled_string(
-			numbuf_t buf,		/* put the result here */
-			unsigned long long number, /* convert this number */
-			int unit_from,
-			int scale)
-{
-	unsigned long long save = 0;
-	char *M = "KMGTPE"; /* Measurement: kilo, mega, giga, tera, peta, exa */
-	char *uom = M;    /* unit of measurement, initially 'K' (=M[0]) */
-
 	if ((long long)number == (long long)-1) {
 		(void) strcpy(buf, "-1");
 		return (buf);
 	}
 
-	/*
-	 * Convert number from unit_from to given scale (1024 or 1000).
-	 * This means multiply number by unit_from and divide by scale.
-	 *
-	 * Would like to multiply by unit_from and then divide by scale,
-	 * but if the first multiplication would overflow, then need to
-	 * divide by scale and then multiply by unit_from.
-	 */
-	if (number > (UINT64_MAX / (unsigned long long)unit_from)) {
-		number = (number / (unsigned long long)scale) *
-		    (unsigned long long)unit_from;
-	} else {
-		number = (number * (unsigned long long)unit_from) /
-		    (unsigned long long)scale;
-	}
+	/* don't crash if, i.e. fsp->f_frsize == 0 */
+	if (unit_from <= 0)
+		unit_from = 1;
+	if (unit_to <= 0)
+		unit_to = 1;
 
-	/*
-	 * Now we have number as a count of scale units.
-	 * Stop scaling when we reached exa bytes, then something is
-	 * probably wrong with our number.
-	 */
+	if (unit_from == unit_to)
+		(void) sprintf(buf, "%llu", number);
+	else if (unit_from < unit_to)
+		(void) sprintf(buf, "%llu",
+		    number / (unsigned long long)(unit_to / unit_from));
+	else
+		(void) sprintf(buf, "%llu",
+		    number * (unsigned long long)(unit_from / unit_to));
 
-	while ((number >= scale) && (*uom != 'E')) {
-		uom++; /* next unit of measurement */
-		save = number;
-		number = (number + (scale / 2)) / scale;
-	}
-	/* check if we should output a decimal place after the point */
-	if (save && ((save / scale) < 10)) {
-		/* sprintf() will round for us */
-		float fnum = (float)save / scale;
-		(void) sprintf(buf, "%2.1f%c", fnum, *uom);
-	} else {
-		(void) sprintf(buf, "%4llu%c", number, *uom);
-	}
 	return (buf);
 }
 
@@ -1434,11 +1379,11 @@ k_output(struct df_request *dfrp, struct statvfs64 *fsp)
 	fsblkcnt64_t	free_blocks		= fsp->f_bfree;
 	fsblkcnt64_t	available_blocks	= fsp->f_bavail;
 	fsblkcnt64_t	used_blocks;
-	char 		*file_system		= DFR_SPECIAL(dfrp);
+	char		*file_system		= DFR_SPECIAL(dfrp);
 	numbuf_t	total_blocks_buf;
 	numbuf_t	used_blocks_buf;
 	numbuf_t	available_blocks_buf;
-	char 		capacity_buf[LINEBUF_SIZE];
+	char		capacity_buf[LINEBUF_SIZE];
 
 	/*
 	 * If the free block count is -1, don't trust anything but the total
@@ -1488,16 +1433,19 @@ k_output(struct df_request *dfrp, struct statvfs64 *fsp)
 	adjust_total_blocks(dfrp, &total_blocks, fsp->f_frsize);
 
 	if (use_scaling) { /* comes from the -h option */
-	(void) printf("%-*s %*s %*s %*s %-*s %-s\n",
-	    FILESYSTEM_WIDTH, file_system,
-	    SCALED_WIDTH, number_to_scaled_string(total_blocks_buf,
-	    total_blocks, fsp->f_frsize, scale),
-	    SCALED_WIDTH, number_to_scaled_string(used_blocks_buf,
-	    used_blocks, fsp->f_frsize, scale),
-	    AVAILABLE_WIDTH, number_to_scaled_string(available_blocks_buf,
-	    available_blocks, fsp->f_frsize, scale),
-	    CAPACITY_WIDTH, capacity_buf,
-	    DFR_MOUNT_POINT(dfrp));
+		nicenum_scale(total_blocks, fsp->f_frsize,
+		    total_blocks_buf, sizeof (total_blocks_buf), 0);
+		nicenum_scale(used_blocks, fsp->f_frsize,
+		    used_blocks_buf, sizeof (used_blocks_buf), 0);
+		nicenum_scale(available_blocks, fsp->f_frsize,
+		    available_blocks_buf, sizeof (available_blocks_buf), 0);
+
+		(void) printf("%-*s %*s %*s %*s %-*s %-s\n",
+		    FILESYSTEM_WIDTH, file_system,
+		    SCALED_WIDTH, total_blocks_buf,
+		    SCALED_WIDTH, used_blocks_buf,
+		    AVAILABLE_WIDTH, available_blocks_buf,
+		    CAPACITY_WIDTH, capacity_buf, DFR_MOUNT_POINT(dfrp));
 		return;
 	}
 
@@ -1553,7 +1501,7 @@ k_output(struct df_request *dfrp, struct statvfs64 *fsp)
  * The following is for internationalization support.
  */
 static bool_int strings_initialized;
-static char 	*files_str;
+static char	*files_str;
 static char	*blocks_str;
 static char	*total_str;
 static char	*kilobytes_str;
@@ -1789,8 +1737,8 @@ create_request_list(
 	struct df_request	*requests;
 	struct df_request	*dfrp;
 	size_t			size;
-	size_t 			i;
-	size_t 			request_index = 0;
+	size_t			i;
+	size_t			request_index = 0;
 	size_t			max_requests;
 	int			errors = 0;
 
@@ -2028,7 +1976,7 @@ do_df(int argc, char *argv[])
 			 * arguments, the filesystem types must match
 			 *
 			 * XXX: the alternative of doing this check here is to
-			 * 	invoke prune_list, but then we have to
+			 *	invoke prune_list, but then we have to
 			 *	modify this code to ignore invalid requests.
 			 */
 			if (F_option && ! EQ(fstype, FSType)) {

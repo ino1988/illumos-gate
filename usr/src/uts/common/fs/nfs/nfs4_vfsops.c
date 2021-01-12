@@ -18,7 +18,9 @@
  *
  * CDDL HEADER END
  */
+
 /*
+ * Copyright 2015 Nexenta Systems, Inc.  All rights reserved.
  * Copyright (c) 2003, 2010, Oracle and/or its affiliates. All rights reserved.
  */
 
@@ -260,7 +262,8 @@ nfs4fini(void)
  */
 static struct sec_data *
 create_authdh_data(char *netname, int nlen, struct netbuf *syncaddr,
-		struct knetconfig *knconf) {
+    struct knetconfig *knconf)
+{
 	struct sec_data *secdata;
 	dh_k4_clntdata_t *data;
 	char *pf, *p;
@@ -308,7 +311,8 @@ create_authdh_data(char *netname, int nlen, struct netbuf *syncaddr,
  * is responsible for freeing.
  */
 sec_data_t *
-copy_sec_data(sec_data_t *fsecdata) {
+copy_sec_data(sec_data_t *fsecdata)
+{
 	sec_data_t *tsecdata;
 
 	if (fsecdata == NULL)
@@ -1283,8 +1287,7 @@ recov_retry:
 		    OP_READLINK, NULL, NULL, NULL) == FALSE) {
 			nfs4_end_op(mi, NULL, NULL, &recov_state, needrecov);
 			if (!e.error)
-				(void) xdr_free(xdr_COMPOUND4res_clnt,
-				    (caddr_t)&res);
+				xdr_free(xdr_COMPOUND4res_clnt, (caddr_t)&res);
 			goto recov_retry;
 		}
 	}
@@ -1301,7 +1304,7 @@ recov_retry:
 
 	if (res.status) {
 		e.error = geterrno4(res.status);
-		(void) xdr_free(xdr_COMPOUND4res_clnt, (caddr_t)&res);
+		xdr_free(xdr_COMPOUND4res_clnt, (caddr_t)&res);
 		if (! recovery)
 			nfs4_end_op(mi, NULL, NULL, &recov_state, needrecov);
 		sfh4_rele(&sfh);
@@ -1315,12 +1318,12 @@ recov_retry:
 	lr_res = &resop->nfs_resop4_u.opreadlink;
 
 	/* treat symlink name as data */
-	*linktextp = utf8_to_str(&lr_res->link, &len, NULL);
+	*linktextp = utf8_to_str((utf8string *)&lr_res->link, &len, NULL);
 
 	if (! recovery)
 		nfs4_end_op(mi, NULL, NULL, &recov_state, needrecov);
 	sfh4_rele(&sfh);
-	(void) xdr_free(xdr_COMPOUND4res_clnt, (caddr_t)&res);
+	xdr_free(xdr_COMPOUND4res_clnt, (caddr_t)&res);
 	return (0);
 }
 
@@ -1798,8 +1801,7 @@ recov_retry:
 			kmem_free(argop,
 			    lookuparg.arglen * sizeof (nfs_argop4));
 			if (!ep->error)
-				(void) xdr_free(xdr_COMPOUND4res_clnt,
-				    (caddr_t)&res);
+				xdr_free(xdr_COMPOUND4res_clnt, (caddr_t)&res);
 			return;
 		}
 
@@ -1810,7 +1812,7 @@ recov_retry:
 		    NULL, NULL, NULL, OP_GETFH, NULL, NULL, NULL);
 		if (!ep->error) {
 			ep->error = geterrno4(res.status);
-			(void) xdr_free(xdr_COMPOUND4res_clnt, (caddr_t)&res);
+			xdr_free(xdr_COMPOUND4res_clnt, (caddr_t)&res);
 		}
 		nfs4args_lookup_free(argop, num_argops);
 		kmem_free(argop, lookuparg.arglen * sizeof (nfs_argop4));
@@ -1844,7 +1846,7 @@ is_link_err:
 		}
 		nfs4args_lookup_free(argop, num_argops);
 		kmem_free(argop, lookuparg.arglen * sizeof (nfs_argop4));
-		(void) xdr_free(xdr_COMPOUND4res_clnt, (caddr_t)&res);
+		xdr_free(xdr_COMPOUND4res_clnt, (caddr_t)&res);
 		return;
 	}
 
@@ -1899,7 +1901,7 @@ is_link_err:
 
 		nfs4args_lookup_free(argop, num_argops);
 		kmem_free(argop, lookuparg.arglen * sizeof (nfs_argop4));
-		(void) xdr_free(xdr_COMPOUND4res_clnt, (caddr_t)&res);
+		xdr_free(xdr_COMPOUND4res_clnt, (caddr_t)&res);
 
 		if (ep->error)
 			return;
@@ -1982,7 +1984,7 @@ is_link_err:
 
 		nfs4args_lookup_free(argop, num_argops);
 		kmem_free(argop, lookuparg.arglen * sizeof (nfs_argop4));
-		(void) xdr_free(xdr_COMPOUND4res_clnt, (caddr_t)&res);
+		xdr_free(xdr_COMPOUND4res_clnt, (caddr_t)&res);
 
 		if (ep->error)
 			return;
@@ -2031,7 +2033,7 @@ is_link_err:
 	nfs_rw_exit(&svp->sv_lock);
 	nfs4args_lookup_free(argop, num_argops);
 	kmem_free(argop, lookuparg.arglen * sizeof (nfs_argop4));
-	(void) xdr_free(xdr_COMPOUND4res_clnt, (caddr_t)&res);
+	xdr_free(xdr_COMPOUND4res_clnt, (caddr_t)&res);
 	if (!recovery)
 		nfs4_end_fop(mi, NULL, NULL, OH_MOUNT, &recov_state, needrecov);
 }
@@ -2345,6 +2347,10 @@ nfs4rootvp(vnode_t **rtvpp, vfs_t *vfsp, struct servinfo4 *svp_head,
 		mi->mi_flags |= MI4_DIRECTIO;
 
 	mi->mi_flags |= MI4_MOUNTING;
+
+	mutex_init(&mi->mi_rnodes_lock, NULL, MUTEX_DEFAULT, NULL);
+	list_create(&mi->mi_rnodes, sizeof (rnode4_t),
+	    offsetof(rnode4_t, r_mi_link));
 
 	/*
 	 * Make a vfs struct for nfs.  We do this here instead of below
@@ -3515,12 +3521,12 @@ nfs4setclientid_otw(mntinfo4_t *mi, struct servinfo4 *svp,  cred_t *cr,
 		 * handling of clientid in use errors (regen another
 		 * clientid and try again?)
 		 */
-		(void) xdr_free(xdr_COMPOUND4res_clnt, (caddr_t)&res);
+		xdr_free(xdr_COMPOUND4res_clnt, (caddr_t)&res);
 		return;
 	}
 
 	if (res.status) {
-		(void) xdr_free(xdr_COMPOUND4res_clnt, (caddr_t)&res);
+		xdr_free(xdr_COMPOUND4res_clnt, (caddr_t)&res);
 		return;
 	}
 
@@ -3546,7 +3552,7 @@ nfs4setclientid_otw(mntinfo4_t *mi, struct servinfo4 *svp,  cred_t *cr,
 	}
 #endif
 
-	(void) xdr_free(xdr_COMPOUND4res_clnt, (caddr_t)&res);
+	xdr_free(xdr_COMPOUND4res_clnt, (caddr_t)&res);
 
 	/* Confirm the client id and get the lease_time attribute */
 
@@ -3599,12 +3605,12 @@ nfs4setclientid_otw(mntinfo4_t *mi, struct servinfo4 *svp,  cred_t *cr,
 			    clid_inuse->r_netid, clid_inuse->r_addr);
 		}
 
-		(void) xdr_free(xdr_COMPOUND4res_clnt, (caddr_t)&res);
+		xdr_free(xdr_COMPOUND4res_clnt, (caddr_t)&res);
 		return;
 	}
 
 	if (res.status) {
-		(void) xdr_free(xdr_COMPOUND4res_clnt, (caddr_t)&res);
+		xdr_free(xdr_COMPOUND4res_clnt, (caddr_t)&res);
 		return;
 	}
 
@@ -3627,7 +3633,7 @@ nfs4setclientid_otw(mntinfo4_t *mi, struct servinfo4 *svp,  cred_t *cr,
 	}
 	mutex_exit(&np->s_lock);
 
-	(void) xdr_free(xdr_COMPOUND4res_clnt, (caddr_t)&res);
+	xdr_free(xdr_COMPOUND4res_clnt, (caddr_t)&res);
 }
 
 /*

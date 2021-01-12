@@ -1,12 +1,49 @@
-'\" te
-.\"  Copyright 1994, The X/Open Company Ltd.  All Rights Reserved  Portions Copyright 1989 AT&T  Portions Copyright (c) 1998, Sun Microsystems, Inc.  All Rights Reserved
-.\" Sun Microsystems, Inc. gratefully acknowledges The Open Group for permission to reproduce portions of its copyrighted documentation. Original documentation from The Open Group can be obtained online at
+.\"
+.\" Sun Microsystems, Inc. gratefully acknowledges The Open Group for
+.\" permission to reproduce portions of its copyrighted documentation.
+.\" Original documentation from The Open Group can be obtained online at
 .\" http://www.opengroup.org/bookstore/.
-.\" The Institute of Electrical and Electronics Engineers and The Open Group, have given us permission to reprint portions of their documentation. In the following statement, the phrase "this text" refers to portions of the system documentation. Portions of this text are reprinted and reproduced in electronic form in the Sun OS Reference Manual, from IEEE Std 1003.1, 2004 Edition, Standard for Information Technology -- Portable Operating System Interface (POSIX), The Open Group Base Specifications Issue 6, Copyright (C) 2001-2004 by the Institute of Electrical and Electronics Engineers, Inc and The Open Group. In the event of any discrepancy between these versions and the original IEEE and The Open Group Standard, the original IEEE and The Open Group Standard is the referee document. The original Standard can be obtained online at http://www.opengroup.org/unix/online.html.
-.\"  This notice shall appear on any product containing this material.
-.\" The contents of this file are subject to the terms of the Common Development and Distribution License (the "License").  You may not use this file except in compliance with the License.
-.\" You can obtain a copy of the license at usr/src/OPENSOLARIS.LICENSE or http://www.opensolaris.org/os/licensing.  See the License for the specific language governing permissions and limitations under the License.
-.\" When distributing Covered Code, include this CDDL HEADER in each file and include the License file at usr/src/OPENSOLARIS.LICENSE.  If applicable, add the following below this CDDL HEADER, with the fields enclosed by brackets "[]" replaced with your own identifying information: Portions Copyright [yyyy] [name of copyright owner]
+.\"
+.\" The Institute of Electrical and Electronics Engineers and The Open
+.\" Group, have given us permission to reprint portions of their
+.\" documentation.
+.\"
+.\" In the following statement, the phrase ``this text'' refers to portions
+.\" of the system documentation.
+.\"
+.\" Portions of this text are reprinted and reproduced in electronic form
+.\" in the SunOS Reference Manual, from IEEE Std 1003.1, 2004 Edition,
+.\" Standard for Information Technology -- Portable Operating System
+.\" Interface (POSIX), The Open Group Base Specifications Issue 6,
+.\" Copyright (C) 2001-2004 by the Institute of Electrical and Electronics
+.\" Engineers, Inc and The Open Group.  In the event of any discrepancy
+.\" between these versions and the original IEEE and The Open Group
+.\" Standard, the original IEEE and The Open Group Standard is the referee
+.\" document.  The original Standard can be obtained online at
+.\" http://www.opengroup.org/unix/online.html.
+.\"
+.\" This notice shall appear on any product containing this material.
+.\"
+.\" The contents of this file are subject to the terms of the
+.\" Common Development and Distribution License (the "License").
+.\" You may not use this file except in compliance with the License.
+.\"
+.\" You can obtain a copy of the license at usr/src/OPENSOLARIS.LICENSE
+.\" or http://www.opensolaris.org/os/licensing.
+.\" See the License for the specific language governing permissions
+.\" and limitations under the License.
+.\"
+.\" When distributing Covered Code, include this CDDL HEADER in each
+.\" file and include the License file at usr/src/OPENSOLARIS.LICENSE.
+.\" If applicable, add the following below this CDDL HEADER, with the
+.\" fields enclosed by brackets "[]" replaced with your own identifying
+.\" information: Portions Copyright [yyyy] [name of copyright owner]
+.\"
+.\"
+.\" Portions Copyright 1989 AT&T
+.\" Copyright 1994, The X/Open Company Ltd.  All Rights Reserved.
+.\" Portions Copyright (c) 1998, Sun Microsystems, Inc.  All Rights Reserved.
+.\"
 .TH T_SNDUDATA 3NSL "May 7, 1998"
 .SH NAME
 t_sndudata \- send a data unit
@@ -22,7 +59,6 @@ t_sndudata \- send a data unit
 .fi
 
 .SH DESCRIPTION
-.sp
 .LP
 This routine is part of the \fBXTI\fR interfaces which evolved from the
 \fBTLI\fR interfaces. \fBXTI\fR represents the future evolution of these
@@ -80,7 +116,7 @@ discarded.
 .sp
 .LP
 If it is not possible for the transport provider to immediately detect the
-conditions that cause the errors \fBTBADDADDR\fR and \fBTBADOPT\fR, these
+conditions that cause the errors \fBTBADADDR\fR and \fBTBADOPT\fR, these
 errors will alternatively be returned by \fIt_rcvuderr.\fR Therefore, an
 application must be prepared to receive these errors in both of these ways.
 .sp
@@ -88,16 +124,13 @@ application must be prepared to receive these errors in both of these ways.
 If the call is interrupted, \fBt_sndudata()\fR will return \fBEINTR\fR and the
 datagram will not be sent.
 .SH RETURN VALUES
-.sp
 .LP
 Upon successful completion, a value of  \fB0\fR is returned.  Otherwise, a
 value of  -1 is returned and \fBt_errno\fR is set to indicate an error.
 .SH VALID STATES
-.sp
 .LP
 \fBT_IDLE\fR.
 .SH ERRORS
-.sp
 .LP
 On failure, \fBt_errno\fR is set to one of the following:
 .sp
@@ -199,13 +232,11 @@ A system error has occurred during execution of this function.
 .RE
 
 .SH TLI COMPATIBILITY
-.sp
 .LP
 The \fBXTI\fR and \fBTLI\fR interface definitions have common names but use
 different header files. This, and other semantic differences between the two
 interfaces are described in the subsections below.
 .SS "Interface Header"
-.sp
 .LP
 The \fBXTI\fR interfaces use the header file, \fBxti.h.\fR \fBTLI\fR interfaces
 should \fInot\fR use this header.  They should use the header:
@@ -214,7 +245,6 @@ should \fInot\fR use this header.  They should use the header:
 #include <tiuser.h>
 .in -2
 .SS "Error Description Values"
-.sp
 .LP
 The \fBt_errno\fR values that can be set by the \fBXTI\fR interface and cannot
 be set by the \fBTLI\fR interface are:
@@ -239,18 +269,15 @@ be set by the \fBTLI\fR interface are:
 \fBTOUTSTATE\fR
 .in -2
 .SS "Notes"
-.sp
 .LP
 Whenever this function fails with \fBt_error\fR set to \fBTFLOW,\fR
 \fBO_NONBLOCK\fR must have been set.
 .SS "Option Buffers"
-.sp
 .LP
 The format of the options in an \fBopt\fR buffer is dictated by the transport
 provider. Unlike the \fBXTI\fR interface, the \fBTLI\fR interface does not fix
 the buffer format.
 .SH ATTRIBUTES
-.sp
 .LP
 See \fBattributes\fR(5)  for descriptions of the following attributes:
 .sp
@@ -266,7 +293,6 @@ MT Level	Safe
 .TE
 
 .SH SEE ALSO
-.sp
 .LP
 \fBfcntl\fR(2), \fBt_alloc\fR(3NSL), \fBt_bind\fR(3NSL), \fBt_error\fR(3NSL),
 \fBt_getinfo\fR(3NSL), \fBt_look\fR(3NSL), \fBt_open\fR(3NSL),

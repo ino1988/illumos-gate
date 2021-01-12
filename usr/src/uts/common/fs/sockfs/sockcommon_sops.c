@@ -25,6 +25,7 @@
 
 /*
  * Copyright (c) 2014, Joyent, Inc.  All rights reserved.
+ * Copyright 2019 OmniOS Community Edition (OmniOSce) Association.
  */
 
 #include <sys/types.h>
@@ -953,6 +954,13 @@ so_poll(struct sonode *so, short events, int anyyet, short *reventsp,
 	if (!list_is_empty(&so->so_acceptq_list))
 		*reventsp |= (POLLIN|POLLRDNORM) & events;
 
+	/*
+	 * If we're looking for POLLRDHUP, indicate it if we have sent the
+	 * last rx signal for the socket.
+	 */
+	if ((events & POLLRDHUP) && (state & SS_SENTLASTREADSIG))
+		*reventsp |= POLLRDHUP;
+
 	/* Data */
 	/* so_downcalls is null for sctp */
 	if (so->so_downcalls != NULL && so->so_downcalls->sd_poll != NULL) {
@@ -988,14 +996,20 @@ so_poll(struct sonode *so, short events, int anyyet, short *reventsp,
 			*reventsp |= POLLHUP;
 	}
 
-	if (!*reventsp && !anyyet) {
+	if ((!*reventsp && !anyyet) || (events & POLLET)) {
 		/* Check for read events again, but this time under lock */
 		if (events & (POLLIN|POLLRDNORM)) {
 			mutex_enter(&so->so_lock);
 			if (SO_HAVE_DATA(so) ||
 			    !list_is_empty(&so->so_acceptq_list)) {
+				if (events & POLLET) {
+					so->so_pollev |= SO_POLLEV_IN;
+					*phpp = &so->so_poll_list;
+				}
+
 				mutex_exit(&so->so_lock);
 				*reventsp |= (POLLIN|POLLRDNORM) & events;
+
 				return (0);
 			} else {
 				so->so_pollev |= SO_POLLEV_IN;
@@ -1540,6 +1554,18 @@ so_closed(sock_upper_handle_t sock_handle)
 	VN_RELE(SOTOV(so));
 }
 
+vnode_t *
+so_get_vnode(sock_upper_handle_t sock_handle)
+{
+	sonode_t *so = (sonode_t *)sock_handle;
+	vnode_t *vn;
+
+	vn = SOTOV(so);
+	VN_HOLD(vn);
+
+	return (vn);
+}
+
 void
 so_zcopy_notify(sock_upper_handle_t sock_handle)
 {
@@ -1575,10 +1601,10 @@ int
 so_recvmsg(struct sonode *so, struct nmsghdr *msg, struct uio *uiop,
     struct cred *cr)
 {
-	rval_t 		rval;
-	int 		flags = 0;
+	rval_t		rval;
+	int		flags = 0;
 	t_uscalar_t	controllen, namelen;
-	int 		error = 0;
+	int		error = 0;
 	int ret;
 	mblk_t		*mctlp = NULL;
 	union T_primitives *tpr;
@@ -1940,5 +1966,6 @@ sock_upcalls_t so_upcalls = {
 	so_signal_oob,
 	so_zcopy_notify,
 	so_set_error,
-	so_closed
+	so_closed,
+	so_get_vnode
 };

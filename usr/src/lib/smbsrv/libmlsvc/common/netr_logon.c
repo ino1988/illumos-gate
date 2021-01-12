@@ -21,7 +21,7 @@
 
 /*
  * Copyright (c) 2007, 2010, Oracle and/or its affiliates. All rights reserved.
- * Copyright 2012 Nexenta Systems, Inc.  All rights reserved.
+ * Copyright 2019 Nexenta by DDN, Inc. All rights reserved.
  */
 
 /*
@@ -37,8 +37,8 @@
 #include <netdb.h>
 #include <thread.h>
 
+#include <libmlrpc/libmlrpc.h>
 #include <smbsrv/libsmb.h>
-#include <smbsrv/libmlrpc.h>
 #include <smbsrv/libmlsvc.h>
 #include <smbsrv/ndl/netlogon.ndl>
 #include <smbsrv/netrauth.h>
@@ -46,9 +46,7 @@
 #include <smbsrv/smb_token.h>
 #include <mlsvc.h>
 
-#define	NETLOGON_ATTEMPTS	2
-
-static uint32_t netlogon_logon(smb_logon_t *, smb_token_t *);
+static uint32_t netlogon_logon(smb_logon_t *, smb_token_t *, smb_domainex_t *);
 static uint32_t netr_server_samlogon(mlsvc_handle_t *, netr_info_t *, char *,
     smb_logon_t *, smb_token_t *);
 static void netr_invalidate_chain(void);
@@ -58,8 +56,9 @@ static void netr_network_samlogon(ndr_heap_t *, netr_info_t *,
     smb_logon_t *, struct netr_logon_info2 *);
 static void netr_setup_identity(ndr_heap_t *, smb_logon_t *,
     netr_logon_id_t *);
-static boolean_t netr_isadmin(struct netr_validation_info3 *);
 static uint32_t netr_setup_domain_groups(struct netr_validation_info3 *,
+    smb_ids_t *);
+static uint32_t netr_setup_krb5res_groups(struct krb5_validation_info *,
     smb_ids_t *);
 static uint32_t netr_setup_token_wingrps(struct netr_validation_info3 *,
     smb_token_t *);
@@ -73,6 +72,81 @@ static mutex_t netlogon_mutex;
 static cond_t netlogon_cv;
 static boolean_t netlogon_busy = B_FALSE;
 static boolean_t netlogon_abort = B_FALSE;
+
+/*
+ * Helper for Kerberos authentication
+ */
+uint32_t
+smb_decode_krb5_pac(smb_token_t *token, char *data, uint_t len)
+{
+	struct krb5_validation_info info;
+	ndr_buf_t *nbuf;
+	smb_sid_t *domsid;
+	uint32_t status = NT_STATUS_NO_MEMORY;
+	int rc;
+
+	bzero(&info, sizeof (info));
+
+	/* Need to keep this until we're done with &info */
+	nbuf = ndr_buf_init(&TYPEINFO(netr_interface));
+	if (nbuf == NULL)
+		goto out;
+
+	rc = ndr_buf_decode(nbuf, NDR_PTYPE_PAC,
+	    NETR_OPNUM_decode_krb5_pac, data, len, &info);
+	if (rc != NDR_DRC_OK) {
+		status = RPC_NT_PROTOCOL_ERROR;
+		goto out;
+	}
+
+	/*
+	 * Copy the decoded info into the token,
+	 * similar to netr_setup_token()
+	 */
+	domsid = (smb_sid_t *)info.info3.LogonDomainId;
+
+	token->tkn_user.i_sid = smb_sid_splice(domsid,
+	    info.info3.UserId);
+	if (token->tkn_user.i_sid == NULL)
+		goto out;
+
+	token->tkn_primary_grp.i_sid = smb_sid_splice(domsid,
+	    info.info3.PrimaryGroupId);
+	if (token->tkn_primary_grp.i_sid == NULL)
+		goto out;
+
+	if (info.info3.EffectiveName.str) {
+		token->tkn_account_name =
+		    strdup((char *)info.info3.EffectiveName.str);
+		if (token->tkn_account_name == NULL)
+			goto out;
+	}
+
+	if (info.info3.LogonDomainName.str) {
+		token->tkn_domain_name =
+		    strdup((char *)info.info3.LogonDomainName.str);
+		if (token->tkn_domain_name == NULL)
+			goto out;
+	}
+
+	status = netr_setup_domain_groups(&info.info3, &token->tkn_win_grps);
+	if (status != NT_STATUS_SUCCESS)
+		goto out;
+
+	if (info.rg_rid_cnt != 0) {
+		status = netr_setup_krb5res_groups(&info, &token->tkn_win_grps);
+		if (status != NT_STATUS_SUCCESS)
+			goto out;
+	}
+
+	status = netr_setup_token_wingrps(&info.info3, token);
+
+out:
+	if (nbuf != NULL)
+		ndr_buf_fini(nbuf);
+
+	return (status);
+}
 
 /*
  * Abort impending domain logon requests.
@@ -97,12 +171,19 @@ smb_logon_abort(void)
  * If the user is successfully authenticated, we build an
  * access token and the status will be NT_STATUS_SUCCESS.
  * Otherwise, the token contents are invalid.
+ *
+ * This will retry a few times for errors indicating that the
+ * current DC might have gone off-line or become too busy etc.
+ * With such errors, smb_ddiscover_bad_dc is called and then
+ * the smb_domain_getinfo call here waits for new DC info.
  */
+int smb_netr_logon_retries = 3;
 void
 smb_logon_domain(smb_logon_t *user_info, smb_token_t *token)
 {
+	smb_domainex_t	di;
 	uint32_t	status;
-	int		i;
+	int		retries = smb_netr_logon_retries;
 
 	if (user_info->lg_secmode != SMB_SECMODE_DOMAIN)
 		return;
@@ -110,21 +191,28 @@ smb_logon_domain(smb_logon_t *user_info, smb_token_t *token)
 	if (user_info->lg_domain_type == SMB_DOMAIN_LOCAL)
 		return;
 
-	for (i = 0; i < NETLOGON_ATTEMPTS; ++i) {
+	while (--retries > 0) {
+
+		if (!smb_domain_getinfo(&di)) {
+			syslog(LOG_ERR, "logon DC getinfo failed");
+			status = NT_STATUS_NO_LOGON_SERVERS;
+			goto out;
+		}
+
 		(void) mutex_lock(&netlogon_mutex);
 		while (netlogon_busy && !netlogon_abort)
 			(void) cond_wait(&netlogon_cv, &netlogon_mutex);
 
 		if (netlogon_abort) {
 			(void) mutex_unlock(&netlogon_mutex);
-			user_info->lg_status = NT_STATUS_REQUEST_ABORTED;
-			return;
+			status = NT_STATUS_REQUEST_ABORTED;
+			goto out;
 		}
 
 		netlogon_busy = B_TRUE;
 		(void) mutex_unlock(&netlogon_mutex);
 
-		status = netlogon_logon(user_info, token);
+		status = netlogon_logon(user_info, token, &di);
 
 		(void) mutex_lock(&netlogon_mutex);
 		netlogon_busy = B_FALSE;
@@ -133,70 +221,160 @@ smb_logon_domain(smb_logon_t *user_info, smb_token_t *token)
 		(void) cond_signal(&netlogon_cv);
 		(void) mutex_unlock(&netlogon_mutex);
 
-		if (status != NT_STATUS_CANT_ACCESS_DOMAIN_INFO)
+		switch (status) {
+		case NT_STATUS_BAD_NETWORK_PATH:
+		case NT_STATUS_BAD_NETWORK_NAME:
+		case RPC_NT_SERVER_TOO_BUSY:
+			/*
+			 * May retry with a new DC, or if we're
+			 * out of retries, will return...
+			 */
+			status = NT_STATUS_NO_LOGON_SERVERS;
 			break;
+		default:
+			goto out;
+		}
 	}
 
+out:
 	if (status != NT_STATUS_SUCCESS)
 		syslog(LOG_INFO, "logon[%s\\%s]: %s", user_info->lg_e_domain,
 		    user_info->lg_e_username, xlate_nt_status(status));
-
 	user_info->lg_status = status;
 }
 
+/*
+ * Run a netr_server_samlogon call, dealing with the possible need to
+ * re-establish the NetLogon credential chain.  If that fails, return
+ * NT_STATUS_DOMAIN_TRUST_INCONSISTENT indicating the machine account
+ * needs it's password reset (or whatever).  Other errors are from the
+ * netr_server_samlogon() call including the many possibilities listed
+ * above that function.
+ */
 static uint32_t
-netlogon_logon(smb_logon_t *user_info, smb_token_t *token)
+netlogon_logon(smb_logon_t *user_info, smb_token_t *token, smb_domainex_t *di)
 {
-	char resource_domain[SMB_PI_MAX_DOMAIN];
-	char server[NETBIOS_NAME_SZ * 2];
+	char server[MAXHOSTNAMELEN];
 	mlsvc_handle_t netr_handle;
-	smb_domainex_t di;
 	uint32_t status;
-	int retries = 0;
+	boolean_t did_reauth = B_FALSE;
 
-	(void) smb_getdomainname(resource_domain, SMB_PI_MAX_DOMAIN);
-
-	/* Avoid interfering with DC discovery. */
-	if (smb_ddiscover_wait() != 0 ||
-	    !smb_domain_getinfo(&di)) {
-		netr_invalidate_chain();
-		return (NT_STATUS_CANT_ACCESS_DOMAIN_INFO);
+	/*
+	 * This netr_open call does the work to connect to the DC,
+	 * get the IPC share, open the named pipe, RPC bind, etc.
+	 */
+	status = netr_open(di->d_dci.dc_name, di->d_primary.di_nbname,
+	    &netr_handle);
+	if (status != 0) {
+		syslog(LOG_ERR, "netlogon remote open failed (%s)",
+		    xlate_nt_status(status));
+		return (status);
 	}
 
-	do {
-		if (netr_open(di.d_dc, di.d_primary.di_nbname, &netr_handle)
-		    != 0)
-			return (NT_STATUS_OPEN_FAILED);
+	if (di->d_dci.dc_name[0] != '\0' &&
+	    (*netr_global_info.server != '\0')) {
+		(void) snprintf(server, sizeof (server),
+		    "\\\\%s", di->d_dci.dc_name);
+		if (strncasecmp(netr_global_info.server,
+		    server, strlen(server)) != 0)
+			netr_invalidate_chain();
+	}
 
-		if (di.d_dc && (*netr_global_info.server != '\0')) {
-			(void) snprintf(server, sizeof (server),
-			    "\\\\%s", di.d_dc);
-			if (strncasecmp(netr_global_info.server,
-			    server, strlen(server)) != 0)
-				netr_invalidate_chain();
+reauth:
+	if ((netr_global_info.flags & NETR_FLG_VALID) == 0 ||
+	    !smb_match_netlogon_seqnum()) {
+		/*
+		 * This does netr_server_req_challenge() and
+		 * netr_server_authenticate2(), updating the
+		 * current netlogon sequence number.
+		 */
+		status = netlogon_auth(di->d_dci.dc_name, &netr_handle,
+		    NETR_FLG_NULL);
+
+		if (status != 0) {
+			syslog(LOG_ERR, "netlogon remote auth failed (%s)",
+			    xlate_nt_status(status));
+			(void) netr_close(&netr_handle);
+			return (NT_STATUS_DOMAIN_TRUST_INCONSISTENT);
 		}
 
-		if ((netr_global_info.flags & NETR_FLG_VALID) == 0 ||
-		    !smb_match_netlogon_seqnum()) {
-			status = netlogon_auth(di.d_dc, &netr_handle,
-			    NETR_FLG_NULL);
+		netr_global_info.flags |= NETR_FLG_VALID;
+	}
 
-			if (status != 0) {
-				(void) netr_close(&netr_handle);
-				return (NT_STATUS_LOGON_FAILURE);
-			}
+	status = netr_server_samlogon(&netr_handle,
+	    &netr_global_info, di->d_dci.dc_name, user_info, token);
 
+	if (status == NT_STATUS_INSUFFICIENT_LOGON_INFO) {
+		if (!did_reauth) {
+			/* Call netlogon_auth() again, just once. */
+			did_reauth = B_TRUE;
+			goto reauth;
+		}
+		status = NT_STATUS_DOMAIN_TRUST_INCONSISTENT;
+	}
+
+	(void) netr_close(&netr_handle);
+
+	return (status);
+}
+
+/*
+ * Helper for mlsvc_netlogon
+ *
+ * Call netlogon_auth with appropriate locks etc.
+ * Serialize like smb_logon_domain does for
+ * netlogon_logon / netlogon_auth
+ */
+uint32_t
+smb_netlogon_check(char *server, char *domain)
+{
+	mlsvc_handle_t netr_handle;
+	uint32_t	status;
+
+	(void) mutex_lock(&netlogon_mutex);
+	while (netlogon_busy)
+		(void) cond_wait(&netlogon_cv, &netlogon_mutex);
+
+	netlogon_busy = B_TRUE;
+	(void) mutex_unlock(&netlogon_mutex);
+
+	/*
+	 * This section like netlogon_logon(), but only does
+	 * one pass and no netr_server_samlogon call.
+	 */
+
+	status = netr_open(server, domain,
+	    &netr_handle);
+	if (status != 0) {
+		syslog(LOG_ERR, "netlogon remote open failed (%s)",
+		    xlate_nt_status(status));
+		goto unlock_out;
+	}
+
+	if ((netr_global_info.flags & NETR_FLG_VALID) == 0 ||
+	    !smb_match_netlogon_seqnum()) {
+		/*
+		 * This does netr_server_req_challenge() and
+		 * netr_server_authenticate2(), updating the
+		 * current netlogon sequence number.
+		 */
+		status = netlogon_auth(server, &netr_handle,
+		    NETR_FLG_NULL);
+		if (status != 0) {
+			syslog(LOG_ERR, "netlogon remote auth failed (%s)",
+			    xlate_nt_status(status));
+		} else {
 			netr_global_info.flags |= NETR_FLG_VALID;
 		}
+	}
 
-		status = netr_server_samlogon(&netr_handle,
-		    &netr_global_info, di.d_dc, user_info, token);
+	(void) netr_close(&netr_handle);
 
-		(void) netr_close(&netr_handle);
-	} while (status == NT_STATUS_INSUFFICIENT_LOGON_INFO && retries++ < 3);
-
-	if (retries >= 3)
-		status = NT_STATUS_LOGON_FAILURE;
+unlock_out:
+	(void) mutex_lock(&netlogon_mutex);
+	netlogon_busy = B_FALSE;
+	(void) cond_signal(&netlogon_cv);
+	(void) mutex_unlock(&netlogon_mutex);
 
 	return (status);
 }
@@ -242,6 +420,10 @@ netr_setup_token(struct netr_validation_info3 *info3, smb_logon_t *user_info,
 	if (token->tkn_account_name == NULL || token->tkn_domain_name == NULL)
 		return (NT_STATUS_NO_MEMORY);
 
+	status = netr_setup_domain_groups(info3, &token->tkn_win_grps);
+	if (status != NT_STATUS_SUCCESS)
+		return (status);
+
 	status = netr_setup_token_wingrps(info3, token);
 	if (status != NT_STATUS_SUCCESS)
 		return (status);
@@ -254,13 +436,14 @@ netr_setup_token(struct netr_validation_info3 *info3, smb_logon_t *user_info,
 	 * exclusively ored with the 16 byte UserSessionKey to recover
 	 * the the clear form.
 	 */
-	if ((token->tkn_session_key = malloc(SMBAUTH_SESSION_KEY_SZ)) == NULL)
+	if ((token->tkn_ssnkey.val = malloc(SMBAUTH_SESSION_KEY_SZ)) == NULL)
 		return (NT_STATUS_NO_MEMORY);
+	token->tkn_ssnkey.len = SMBAUTH_SESSION_KEY_SZ;
 	bzero(rc4key, SMBAUTH_SESSION_KEY_SZ);
 	bcopy(netr_info->session_key.key, rc4key, netr_info->session_key.len);
-	bcopy(info3->UserSessionKey.data, token->tkn_session_key,
+	bcopy(info3->UserSessionKey.data, token->tkn_ssnkey.val,
 	    SMBAUTH_SESSION_KEY_SZ);
-	rand_hash((unsigned char *)token->tkn_session_key,
+	rand_hash((unsigned char *)token->tkn_ssnkey.val,
 	    SMBAUTH_SESSION_KEY_SZ, rc4key, SMBAUTH_SESSION_KEY_SZ);
 
 	return (NT_STATUS_SUCCESS);
@@ -603,7 +786,14 @@ netr_setup_identity(ndr_heap_t *heap, smb_logon_t *user_info,
 
 	(void) mutex_unlock(&logon_id_mutex);
 
-	identity->parameter_control = 0;
+	/*
+	 * [MS-APDS] 3.1.5.2 "NTLM Network Logon" says to set
+	 * ParameterControl to the 'E' + 'K' bits.  Those are:
+	 * (1 << 5) | (1 << 11), a.k.a
+	 */
+	identity->parameter_control =
+	    MSV1_0_ALLOW_SERVER_TRUST_ACCOUNT |
+	    MSV1_0_ALLOW_WORKSTATION_TRUST_ACCOUNT;
 	identity->logon_id.LowPart = logon_id;
 	identity->logon_id.HighPart = 0;
 
@@ -623,44 +813,21 @@ netr_setup_identity(ndr_heap_t *heap, smb_logon_t *user_info,
 }
 
 /*
- * Sets up domain, local and well-known group membership for the given
- * token. Two assumptions have been made here:
- *
- *   a) token already contains a valid user SID so that group
- *      memberships can be established
- *
- *   b) token belongs to a domain user
+ * Add local and well-known group membership to the given
+ * token.  Called after domain groups have been added.
  */
 static uint32_t
-netr_setup_token_wingrps(struct netr_validation_info3 *info3,
+netr_setup_token_wingrps(struct netr_validation_info3 *info3 __unused,
     smb_token_t *token)
 {
-	smb_ids_t tkn_grps;
 	uint32_t status;
 
-	tkn_grps.i_cnt = 0;
-	tkn_grps.i_ids = NULL;
-
-	status = netr_setup_domain_groups(info3, &tkn_grps);
-	if (status != NT_STATUS_SUCCESS) {
-		smb_ids_free(&tkn_grps);
+	status = smb_sam_usr_groups(token->tkn_user.i_sid,
+	    &token->tkn_win_grps);
+	if (status != NT_STATUS_SUCCESS)
 		return (status);
-	}
 
-	status = smb_sam_usr_groups(token->tkn_user.i_sid, &tkn_grps);
-	if (status != NT_STATUS_SUCCESS) {
-		smb_ids_free(&tkn_grps);
-		return (status);
-	}
-
-	if (netr_isadmin(info3))
-		token->tkn_flags |= SMB_ATF_ADMIN;
-
-	status = smb_wka_token_groups(token->tkn_flags, &tkn_grps);
-	if (status == NT_STATUS_SUCCESS)
-		token->tkn_win_grps = tkn_grps;
-	else
-		smb_ids_free(&tkn_grps);
+	status = smb_wka_token_groups(token->tkn_flags, &token->tkn_win_grps);
 
 	return (status);
 }
@@ -723,28 +890,32 @@ netr_setup_domain_groups(struct netr_validation_info3 *info3, smb_ids_t *gids)
 }
 
 /*
- * Determines if the given user is the domain Administrator or a
- * member of Domain Admins
+ * Converts additional "resource" groups (from krb5_validation_info)
+ * into the internal representation (gids), appending to the list
+ * already put in place by netr_setup_domain_groups().
  */
-static boolean_t
-netr_isadmin(struct netr_validation_info3 *info3)
+static uint32_t netr_setup_krb5res_groups(struct krb5_validation_info *info,
+    smb_ids_t *gids)
 {
-	smb_domain_t di;
-	int i;
+	smb_sid_t *domain_sid;
+	smb_id_t *ids;
+	int i, total_cnt;
 
-	if (!smb_domain_lookup_sid((smb_sid_t *)info3->LogonDomainId, &di))
-		return (B_FALSE);
+	total_cnt = gids->i_cnt + info->rg_rid_cnt;
 
-	if (di.di_type != SMB_DOMAIN_PRIMARY)
-		return (B_FALSE);
+	gids->i_ids = realloc(gids->i_ids, total_cnt * sizeof (smb_id_t));
+	if (gids->i_ids == NULL)
+		return (NT_STATUS_NO_MEMORY);
 
-	if ((info3->UserId == DOMAIN_USER_RID_ADMIN) ||
-	    (info3->PrimaryGroupId == DOMAIN_GROUP_RID_ADMINS))
-		return (B_TRUE);
+	domain_sid = (smb_sid_t *)info->rg_dom_sid;
 
-	for (i = 0; i < info3->GroupCount; i++)
-		if (info3->GroupIds[i].rid == DOMAIN_GROUP_RID_ADMINS)
-			return (B_TRUE);
+	ids = gids->i_ids + gids->i_cnt;
+	for (i = 0; i < info->rg_rid_cnt; i++, gids->i_cnt++, ids++) {
+		ids->i_sid = smb_sid_splice(domain_sid, info->rg_rids[i].rid);
+		if (ids->i_sid == NULL)
+			return (NT_STATUS_NO_MEMORY);
+		ids->i_attrs = info->rg_rids[i].attributes;
+	}
 
-	return (B_FALSE);
+	return (0);
 }

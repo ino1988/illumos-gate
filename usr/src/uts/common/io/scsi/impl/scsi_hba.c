@@ -22,6 +22,7 @@
 /*
  * Copyright (c) 1994, 2010, Oracle and/or its affiliates. All rights reserved.
  * Copyright 2014 Garrett D'Amore <garrett@damore.org>
+ * Copyright (c) 2016 by Delphix. All rights reserved.
  */
 
 #include <sys/note.h>
@@ -6544,7 +6545,7 @@ done:		ASSERT(child);
 		 * detect new device_insert.
 		 */
 		if ((sdchild->sd_inq == NULL) ||
-		    ((pi == NULL) && ndi_devi_device_isremoved(child))) {
+		    ((pi == 0) && ndi_devi_device_isremoved(child))) {
 
 			/* hotplug_node can only be revived via hotplug. */
 			if ((se == SE_HP) || !ndi_dev_is_hotplug_node(child)) {
@@ -6973,7 +6974,7 @@ typedef struct scsi_lunrpt {
  * to allocate a buffer of sufficient size, and reissue the command. If the
  * first command succeeds, but the second fails, we return whatever we were
  * able to get the first time. We return enough information for the caller to
- * tell whether he got all the LUNs or only a subset.
+ * tell whether they got all the LUNs or only a subset.
  *
  * If successful, we allocate an array of scsi_lun_t to hold the results. The
  * caller must kmem_free(*lunarrayp, *sizep) when finished with it. Upon
@@ -8879,7 +8880,6 @@ scsi_hba_tgtmap_set_end(scsi_hba_tgtmap_t *handle, uint_t flags)
 int
 scsi_hba_tgtmap_tgt_add(scsi_hba_tgtmap_t *handle,
     scsi_tgtmap_tgt_type_t tgt_type, char *tgt_addr, void *tgt_priv)
-
 {
 	impl_scsi_tgtmap_t	*tgtmap = (impl_scsi_tgtmap_t *)handle;
 	dev_info_t		*self = tgtmap->tgtmap_tran->tran_iport_dip;

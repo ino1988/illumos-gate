@@ -20,6 +20,10 @@
  */
 
 /*
+ * Copyright (c) 2018 Peter Tribble.
+ */
+
+/*
  * Copyright (c) 1993, 2010, Oracle and/or its affiliates. All rights reserved.
  */
 
@@ -61,7 +65,6 @@ typedef unsigned long CAF_T;
 
 #define	CAF_IN_GLOBAL_ZONE	0x00000001	/* in global zone */
 #define	CAF_SCOPE_GLOBAL	0x00000002	/* -G specified */
-#define	CAF_SCOPE_NONGLOBAL	0x00000004	/* -Z specified */
 
 /* path to the request file in the package directory */
 
@@ -210,8 +213,8 @@ extern int	eval_path __P((char **server_ptr, char **client_ptr,
 		    char **map_ptr, char *path));
 extern int	get_orig_offset __P((void));
 extern char	*get_inst_root __P((void));
-extern char	*get_mount_point __P((short n));
-extern char	*get_remote_path __P((short n));
+extern char	*get_mount_point __P((uint32_t n));
+extern char	*get_remote_path __P((uint32_t n));
 extern void	set_env_cbdir __P((void));
 extern int	set_inst_root __P((char *path));
 extern void	put_path_params __P((void));
@@ -242,32 +245,32 @@ extern int  isUpdate __P((void));
 
 /* mntinfo.c */
 extern int	get_mntinfo __P((int map_client, char *vfstab_file));
-extern short	fsys __P((char *path));
-extern struct fstable *get_fs_entry __P((short n));
+extern uint32_t	fsys __P((char *path));
+extern struct fstable *get_fs_entry __P((uint32_t n));
 extern int	mount_client __P((void));
 extern int	unmount_client __P((void));
-extern short	resolved_fsys __P((char *path));
-extern char	*get_server_host __P((short n));
-extern char	*server_map __P((char *path, short fsys_value));
-extern int	use_srvr_map __P((char *path, short *fsys_value));
-extern int	use_srvr_map_n __P((short n));
-extern int	is_fs_writeable __P((char *path, short *fsys_value));
-extern int	is_remote_fs __P((char *path, short *fsys_value));
-extern int	is_served __P((char *path, short *fsys_value));
-extern int	is_mounted __P((char *path, short *fsys_value));
-extern int	is_fs_writeable_n __P((short n));
-extern int	is_remote_fs_n __P((short n));
-extern int	is_served_n __P((short n));
-extern int	is_mounted_n __P((short n));
-extern fsblkcnt_t	get_blk_size_n __P((short n));
-extern fsblkcnt_t	get_frag_size_n __P((short n));
-extern fsblkcnt_t	get_blk_used_n __P((short n));
-extern fsblkcnt_t	get_blk_free_n __P((short n));
-extern fsblkcnt_t	get_inode_used_n __P((short n));
-extern fsblkcnt_t	get_inode_free_n __P((short n));
-extern void	set_blk_used_n __P((short n, fsblkcnt_t value));
-extern char	*get_source_name_n __P((short n));
-extern char	*get_fs_name_n __P((short n));
+extern uint32_t	resolved_fsys __P((char *path));
+extern char	*get_server_host __P((uint32_t n));
+extern char	*server_map __P((char *path, uint32_t fsys_value));
+extern int	use_srvr_map __P((char *path, uint32_t *fsys_value));
+extern int	use_srvr_map_n __P((uint32_t n));
+extern int	is_fs_writeable __P((char *path, uint32_t *fsys_value));
+extern int	is_remote_fs __P((char *path, uint32_t *fsys_value));
+extern int	is_served __P((char *path, uint32_t *fsys_value));
+extern int	is_mounted __P((char *path, uint32_t *fsys_value));
+extern int	is_fs_writeable_n __P((uint32_t n));
+extern int	is_remote_fs_n __P((uint32_t n));
+extern int	is_served_n __P((uint32_t n));
+extern int	is_mounted_n __P((uint32_t n));
+extern fsblkcnt_t	get_blk_size_n __P((uint32_t n));
+extern fsblkcnt_t	get_frag_size_n __P((uint32_t n));
+extern fsblkcnt_t	get_blk_used_n __P((uint32_t n));
+extern fsblkcnt_t	get_blk_free_n __P((uint32_t n));
+extern fsblkcnt_t	get_inode_used_n __P((uint32_t n));
+extern fsblkcnt_t	get_inode_free_n __P((uint32_t n));
+extern void	set_blk_used_n __P((uint32_t n, fsblkcnt_t value));
+extern char	*get_source_name_n __P((uint32_t n));
+extern char	*get_fs_name_n __P((uint32_t n));
 extern int	load_fsentry __P((struct fstable *fs_entry, char *name,
 		    char *fstype, char *remote_name));
 extern int	isreloc __P((char *pkginstdir));
@@ -330,12 +333,6 @@ extern void	putConditionInfo __P((char *, char *));
 extern void		setadminFile __P((char *file));
 extern char		*setadminSetting __P((char *a_paramName,
 				char *a_paramValue));
-extern char		*set_keystore_admin __P((void));
-extern boolean_t	get_proxy_port_admin __P((char **, ushort_t *));
-extern boolean_t	check_keystore_admin __P((char **));
-extern int		web_ck_retries __P((void));
-extern int		web_ck_timeout __P((void));
-extern int		web_ck_authentication __P((void));
 
 /* setlist.c */
 extern char	*cl_iscript __P((int idx));
@@ -354,11 +351,6 @@ extern int	cl_deliscript __P((int i));
 extern unsigned	cl_svfy __P((int i));
 extern unsigned	cl_dvfy __P((int i));
 extern unsigned	cl_pthrel __P((int i));
-
-/* passwd.c */
-extern int	pkg_passphrase_cb __P((char *, int, int, void *));
-extern void	set_passarg __P((char *));
-extern void	set_prompt __P((char *));
 
 /* fixpath.c */
 extern void __P(export_client_env(char *));

@@ -4,7 +4,7 @@
  */
 
 /*	Copyright (c) 1984, 1986, 1987, 1988, 1989 AT&T	*/
-/*	  All Rights Reserved  	*/
+/*	  All Rights Reserved	*/
 
 
 /*
@@ -268,6 +268,7 @@
 #define	oldintr oldmodes.c_cc[VINTR]
 
 #include	<stdio.h>
+#include	<stdlib.h>
 #include	<termio.h>
 #include	<signal.h>
 
@@ -321,8 +322,6 @@
 #define	OLDPLUGBOARD	"sp"
 
 #define	DEFTYPE		"unknown"
-
-#define	NOTTY		'x'
 
 /*
  * Baud Rate Conditionals
@@ -390,7 +389,6 @@ char	Kill_char;		/* new kill character */
 char	Intr_char;		/* new interrupt character */
 char	Specialerase;	/* set => Erase_char only on terminals with backspace */
 
-char	Ttyid = NOTTY;		/* terminal identifier */
 char	*TtyType;		/* type of terminal */
 char	*DefType;		/* default type if none other computed */
 char	*NewType;		/* mapping identifier based on old flags */
@@ -545,7 +543,7 @@ main(int argc, char *argv[])
 	while (--argc >= 0) {
 		p = *++argv;
 		if (*p == '-') {
-			if (*++p == NULL)
+			if (*++p == '\0')
 				Report = YES; /* report current terminal type */
 			else
 				while (*p)
@@ -559,12 +557,13 @@ main(int argc, char *argv[])
 				/* special erase: operate on all but TTY33 */
 				Specialerase = YES;
 				/* explicit fall-through to -e case */
+				/* FALLTHROUGH */
 
 			case 'e':	/* erase character */
-				if (*p == NULL)
+				if (*p == '\0')
 					Erase_char = -1;
 				else {
-					if (*p == '^' && p[1] != NULL)
+					if (*p == '^' && p[1] != '\0')
 						if (*++p == '?')
 							Erase_char = '\177';
 						else
@@ -576,10 +575,10 @@ main(int argc, char *argv[])
 				continue;
 
 			case 'i':	/* interrupt character */
-				if (*p == NULL)
+				if (*p == '\0')
 					Intr_char = CNTL('C');
 				else {
-					if (*p == '^' && p[1] != NULL)
+					if (*p == '^' && p[1] != '\0')
 						if (*++p == '?')
 							Intr_char = '\177';
 						else
@@ -591,10 +590,10 @@ main(int argc, char *argv[])
 				continue;
 
 			case 'k':	/* kill character */
-				if (*p == NULL)
+				if (*p == '\0')
 					Kill_char = CNTL('U');
 				else {
-					if (*p == '^' && p[1] != NULL)
+					if (*p == '^' && p[1] != '\0')
 						if (*++p == '?')
 							Kill_char = '\177';
 						else
@@ -626,7 +625,7 @@ main(int argc, char *argv[])
 
 mapold:				Map->Ident = NewType;
 				Map->Test = ALL;
-				if (*p == NULL) {
+				if (*p == '\0') {
 					p = nextarg(argc--, argv++);
 				}
 				Map->Type = p;
@@ -643,7 +642,7 @@ mapold:				Map->Ident = NewType;
 				 * illegal syntax will only produce
 				 * weird results.
 				 */
-				if (*p == NULL) {
+				if (*p == '\0') {
 					p = nextarg(argc--, argv++);
 				}
 				if (isalnum(*p)) {
@@ -656,34 +655,34 @@ mapold:				Map->Ident = NewType;
 				Not = NO;
 				while (!Break)
 					switch (*p) {
-					case NULL:
+					case '\0':
 						p = nextarg(argc--, argv++);
 						continue;
 
 					case ':':	/* mapped type */
-						*p++ = NULL;
+						*p++ = '\0';
 						Break = YES;
 						continue;
 
 					case '>':	/* conditional */
 						Map->Test |= GT;
-						*p++ = NULL;
+						*p++ = '\0';
 						continue;
 
 					case '<':	/* conditional */
 						Map->Test |= LT;
-						*p++ = NULL;
+						*p++ = '\0';
 						continue;
 
 					case '=':	/* conditional */
 					case '@':
 						Map->Test |= EQ;
-						*p++ = NULL;
+						*p++ = '\0';
 						continue;
 
 					case '!':	/* invert conditions */
 						Not = ~Not;
-						*p++ = NULL;
+						*p++ = '\0';
 						continue;
 
 					case 'B':	/* Baud rate */
@@ -703,7 +702,7 @@ mapold:				Map->Ident = NewType;
 				if (Not) {	/* invert sense of test */
 					Map->Test = (~(Map->Test))&ALL;
 				}
-				if (*p == NULL) {
+				if (*p == '\0') {
 					p = nextarg(argc--, argv++);
 				}
 				Map->Type = p;
@@ -747,7 +746,7 @@ mapold:				Map->Ident = NewType;
 				continue;
 
 			default:
-				*p-- = NULL;
+				*p-- = '\0';
 				fatal("Bad flag -", p);
 			}
 		} else {
@@ -775,14 +774,11 @@ mapold:				Map->Ident = NewType;
 	if (bufp && *bufp != '/')
 		(void) strcpy(bufp-8, "NOTHING"); /* overwrite only "TERMCAP" */
 	/* get current idea of terminal type from environment */
-	if (!Dash_h && TtyType == 0)
+	if (!Dash_h && TtyType == NULL)
 		TtyType = getenv("TERM");
 
-	if (!RepOnly && Ttyid == NOTTY && (TtyType == 0 || !Dash_h))
-		Ttyid = ttyname(FILEDES);
-
 	/* If still undefined, use DEFTYPE */
-	if (TtyType == 0) {
+	if (TtyType == NULL) {
 		TtyType = DEFTYPE;
 	}
 
@@ -1193,7 +1189,7 @@ reportek(char *name, char new, char old, char def)
 	else
 		prs(" set to ");
 	bufp = buf;
-	if (tgetstr("kb", &bufp) > (char *)0 && n == buf[0] && buf[1] == NULL)
+	if (tgetstr("kb", &bufp) > (char *)0 && n == buf[0] && buf[1] == '\0')
 		prs("Backspace\n");
 	else if (n == 0177)
 		prs("Delete\n");
@@ -1345,13 +1341,13 @@ makealias(char *buf)
 	i = 1;
 	while (*b && *b != ':') {
 		if (*b == '|') {
-			*a++ = NULL;
+			*a++ = '\0';
 			Alias[i++] = a;
 			b++;
 		} else
 			*a++ = *b++;
 	}
-	*a = NULL;
+	*a = '\0';
 	Alias[i] = NULL;
 #ifdef	DEB
 	for (i = 0; Alias[i]; printf("A:%s\n", Alias[i++]))
@@ -1407,7 +1403,6 @@ wrtermcap(char *bp)
 		}
 		*p++ = *bp++;
 	}
-/* */
 
 	while (*bp) {
 		switch (*bp) {
@@ -1513,7 +1508,7 @@ baudrate(char *p)
 
 	while (i < 7 && (isalnum(*p) || *p == '.'))
 		buf[i++] = *p++;
-	buf[i] = NULL;
+	buf[i] = '\0';
 	for (i = 0; speeds[i].string; i++)
 		if (sequal(speeds[i].string, buf))
 			return (speeds[i].speed);
@@ -1533,7 +1528,7 @@ char	*type;
 #endif
 	Map = map;
 	while (Map->Ident) {
-		if (*(Map->Ident) == NULL ||
+		if (*(Map->Ident) == '\0' ||
 		    sequal(Map->Ident, type) || isalias(Map->Ident)) {
 			match = NO;
 			switch (Map->Test) {

@@ -21,6 +21,7 @@
 
 /*
  * Copyright (c) 2008, 2010, Oracle and/or its affiliates. All rights reserved.
+ * Copyright 2020 Joyent, Inc.
  */
 
 /*
@@ -37,6 +38,7 @@
 #include <ctype.h>
 #include <strings.h>
 #include <libdevinfo.h>
+#include <libdiskmgt.h>
 #include <devid.h>
 #include <sys/libdevid.h>
 #include <pthread.h>
@@ -60,18 +62,6 @@ typedef struct disk_cbdata {
 } disk_cbdata_t;
 
 /*
- * Given a /devices path for a whole disk, appending this extension gives the
- * path to a raw device that can be opened.
- */
-#if defined(__i386) || defined(__amd64)
-#define	PHYS_EXTN	":q,raw"
-#elif defined(__sparc) || defined(__sparcv9)
-#define	PHYS_EXTN	":c,raw"
-#else
-#error	Unknown architecture
-#endif
-
-/*
  * Methods for disks. This is used by the disk-transport module to
  * generate ereports based off SCSI disk status.
  */
@@ -85,25 +75,18 @@ static const topo_method_t disk_methods[] = {
 	{ NULL }
 };
 
-static const topo_pgroup_info_t io_pgroup = {
-	TOPO_PGROUP_IO,
-	TOPO_STABILITY_PRIVATE,
-	TOPO_STABILITY_PRIVATE,
-	1
-};
+static int disk_temp_reading(topo_mod_t *, tnode_t *, topo_version_t,
+    nvlist_t *, nvlist_t **);
 
-static const topo_pgroup_info_t disk_auth_pgroup = {
-	FM_FMRI_AUTHORITY,
-	TOPO_STABILITY_PRIVATE,
-	TOPO_STABILITY_PRIVATE,
-	1
-};
+#define	TOPO_METH_DISK_TEMP		"disk_temp_reading"
+#define	TOPO_METH_DISK_TEMP_DESC	"Disk Temperature Reading"
+#define	TOPO_METH_DISK_TEMP_VERSION	0
 
-static const topo_pgroup_info_t storage_pgroup = {
-	TOPO_PGROUP_STORAGE,
-	TOPO_STABILITY_PRIVATE,
-	TOPO_STABILITY_PRIVATE,
-	1
+static const topo_method_t disk_fac_methods[] = {
+	{ TOPO_METH_DISK_TEMP, TOPO_METH_DISK_TEMP_DESC,
+	    TOPO_METH_DISK_TEMP_VERSION, TOPO_STABILITY_INTERNAL,
+	    disk_temp_reading },
+	{ NULL }
 };
 
 /*
@@ -124,18 +107,22 @@ static int
 disk_set_props(topo_mod_t *mod, tnode_t *parent,
     tnode_t *dtn, dev_di_node_t *dnode)
 {
-	nvlist_t	*asru = NULL;
+	nvlist_t	*asru = NULL, *drive_attrs;
 	char		*label = NULL;
 	nvlist_t	*fmri = NULL;
+	dm_descriptor_t drive_descr = 0;
+	uint32_t	rpm;
 	int		err;
 
 	/* pull the label property down from our parent 'bay' node */
 	if (topo_node_label(parent, &label, &err) != 0) {
-		topo_mod_dprintf(mod, "disk_set_props: "
-		    "label error %s\n", topo_strerror(err));
-		goto error;
-	}
-	if (topo_node_label_set(dtn, label, &err) != 0) {
+		if (err != ETOPO_PROP_NOENT) {
+			topo_mod_dprintf(mod, "disk_set_props: "
+			    "label error %s\n", topo_strerror(err));
+			goto error;
+		}
+	} else if (topo_prop_set_string(dtn, TOPO_PGROUP_PROTOCOL,
+	    TOPO_PROP_LABEL, TOPO_PROP_MUTABLE, label, &err) != 0) {
 		topo_mod_dprintf(mod, "disk_set_props: "
 		    "label_set error %s\n", topo_strerror(err));
 		goto error;
@@ -264,14 +251,53 @@ disk_set_props(topo_mod_t *mod, tnode_t *parent,
 		    "set cap error %s\n", topo_strerror(err));
 		goto error;
 	}
+
+	if (dnode->ddn_devid == NULL ||
+	    (drive_descr = dm_get_descriptor_by_name(DM_DRIVE,
+	    dnode->ddn_devid, &err)) == 0 ||
+	    (drive_attrs = dm_get_attributes(drive_descr, &err)) == NULL)
+		goto out;
+
+	if (nvlist_lookup_boolean(drive_attrs, DM_SOLIDSTATE) == 0 ||
+	    nvlist_lookup_uint32(drive_attrs, DM_RPM, &rpm) != 0)
+		goto out;
+
+	if (topo_prop_set_uint32(dtn, TOPO_PGROUP_STORAGE, TOPO_STORAGE_RPM,
+	    TOPO_PROP_IMMUTABLE, rpm, &err) != 0) {
+		topo_mod_dprintf(mod, "disk_set_props: "
+		    "set rpm error %s\n", topo_strerror(err));
+		dm_free_descriptor(drive_descr);
+		goto error;
+	}
 	err = 0;
 
-out:	if (fmri)
-		nvlist_free(fmri);
+	/*
+	 * Create UFM node to capture the drive firmware version
+	 */
+	if (dnode->ddn_firm != NULL) {
+		topo_ufm_slot_info_t slotinfo = { 0 };
+
+		slotinfo.usi_version = dnode->ddn_firm;
+		slotinfo.usi_active = B_TRUE;
+		if (strcmp(topo_node_name(parent), USB_DEVICE) == 0)
+			slotinfo.usi_mode = TOPO_UFM_SLOT_MODE_NONE;
+		else
+			slotinfo.usi_mode = TOPO_UFM_SLOT_MODE_WO;
+		if (topo_node_range_create(mod, dtn, UFM, 0, 0) != 0 ||
+		    topo_mod_create_ufm(mod, dtn, "drive firmware",
+		    &slotinfo) == NULL) {
+			topo_mod_dprintf(mod, "failed to create %s node", UFM);
+			goto out;
+		}
+	}
+
+out:
+	if (drive_descr != 0)
+		dm_free_descriptor(drive_descr);
+	nvlist_free(fmri);
 	if (label)
 		topo_mod_strfree(mod, label);
-	if (asru)
-		nvlist_free(asru);
+	nvlist_free(asru);
 	return (err);
 
 error:	err = topo_mod_seterrno(mod, err);
@@ -307,26 +333,134 @@ disk_trim_whitespace(topo_mod_t *mod, const char *begin)
 	return (buf);
 }
 
-/*
- * Manufacturing strings can contain characters that are invalid for use in hc
- * authority names.  This trims leading and trailing whitespace, and
- * substitutes any characters known to be bad.
- */
-char *
-disk_auth_clean(topo_mod_t *mod, const char *str)
+/*ARGSUSED*/
+static int
+disk_temp_reading(topo_mod_t *mod, tnode_t *node, topo_version_t vers,
+    nvlist_t *in, nvlist_t **out)
 {
-	char *buf, *p;
+	char *devid;
+	uint32_t temp;
+	dm_descriptor_t drive_descr = 0;
+	nvlist_t *drive_stats, *pargs, *nvl;
+	int err;
 
-	if (str == NULL)
-		return (NULL);
+	if (vers > TOPO_METH_DISK_TEMP_VERSION)
+		return (topo_mod_seterrno(mod, ETOPO_METHOD_VERNEW));
 
-	if ((buf = topo_mod_strdup(mod, str)) == NULL)
-		return (NULL);
+	if (nvlist_lookup_nvlist(in, TOPO_PROP_ARGS, &pargs) != 0 ||
+	    nvlist_lookup_string(pargs, TOPO_IO_DEVID, &devid) != 0) {
+		topo_mod_dprintf(mod, "Failed to lookup %s arg",
+		    TOPO_IO_DEVID);
+		return (topo_mod_seterrno(mod, EMOD_NVL_INVAL));
+	}
 
-	while ((p = strpbrk(buf, " :=")) != NULL)
-		*p = '-';
+	if ((drive_descr = dm_get_descriptor_by_name(DM_DRIVE, devid,
+	    &err)) == 0) {
+		topo_mod_dprintf(mod, "failed to get drive decriptor for %s",
+		    devid);
+		return (topo_mod_seterrno(mod, EMOD_UNKNOWN));
+	}
 
-	return (buf);
+	if ((drive_stats = dm_get_stats(drive_descr, DM_DRV_STAT_TEMPERATURE,
+	    &err)) == NULL ||
+	    nvlist_lookup_uint32(drive_stats, DM_TEMPERATURE, &temp) != 0) {
+		topo_mod_dprintf(mod, "failed to read disk temp for %s",
+		    devid);
+		dm_free_descriptor(drive_descr);
+		return (topo_mod_seterrno(mod, EMOD_UNKNOWN));
+	}
+	dm_free_descriptor(drive_descr);
+
+	if (topo_mod_nvalloc(mod, &nvl, NV_UNIQUE_NAME) != 0 ||
+	    nvlist_add_string(nvl, TOPO_PROP_VAL_NAME,
+	    TOPO_SENSOR_READING) != 0 ||
+	    nvlist_add_uint32(nvl, TOPO_PROP_VAL_TYPE, TOPO_TYPE_DOUBLE) !=
+	    0 || nvlist_add_double(nvl, TOPO_PROP_VAL_VAL, (double)temp) != 0) {
+		topo_mod_dprintf(mod, "Failed to allocate 'out' nvlist\n");
+		nvlist_free(nvl);
+		return (topo_mod_seterrno(mod, EMOD_NOMEM));
+	}
+	*out = nvl;
+
+	return (0);
+}
+
+static int
+disk_add_temp_sensor(topo_mod_t *mod, tnode_t *pnode, const char *devid)
+{
+	tnode_t *fnode;
+	topo_pgroup_info_t pgi;
+	nvlist_t *arg_nvl = NULL;
+	int err;
+
+	if ((fnode = topo_node_facbind(mod, pnode, "temp",
+	    TOPO_FAC_TYPE_SENSOR)) == NULL) {
+		topo_mod_dprintf(mod, "failed to bind facility node");
+		/* errno set */
+		return (-1);
+	}
+
+	/*
+	 * Set props:
+	 * - facility/sensor-class
+	 * - facility/sensor-type
+	 * - facility/units
+	 */
+	pgi.tpi_name = TOPO_PGROUP_FACILITY;
+	pgi.tpi_namestab = TOPO_STABILITY_PRIVATE;
+	pgi.tpi_datastab = TOPO_STABILITY_PRIVATE;
+	pgi.tpi_version = 1;
+	if (topo_pgroup_create(fnode, &pgi, &err) != 0) {
+		if (err != ETOPO_PROP_DEFD) {
+			topo_mod_dprintf(mod,  "pgroups create failure (%s)\n",
+			    topo_strerror(err));
+			/* errno set */
+			goto err;
+		}
+	}
+	if (topo_prop_set_string(fnode, TOPO_PGROUP_FACILITY,
+	    TOPO_SENSOR_CLASS, TOPO_PROP_IMMUTABLE,
+	    TOPO_SENSOR_CLASS_THRESHOLD, &err) != 0 ||
+	    topo_prop_set_uint32(fnode, TOPO_PGROUP_FACILITY,
+	    TOPO_FACILITY_TYPE, TOPO_PROP_IMMUTABLE, TOPO_SENSOR_TYPE_TEMP,
+	    &err) != 0 ||
+	    topo_prop_set_uint32(fnode, TOPO_PGROUP_FACILITY,
+	    TOPO_SENSOR_UNITS, TOPO_PROP_IMMUTABLE,
+	    TOPO_SENSOR_UNITS_DEGREES_C, &err) != 0) {
+		topo_mod_dprintf(mod, "Failed to set props on facnode (%s)",
+		    topo_strerror(err));
+		/* errno set */
+		goto err;
+	}
+
+	/*
+	 * Register a property method for facility/reading
+	 */
+	if (topo_method_register(mod, fnode, disk_fac_methods) < 0) {
+		topo_mod_dprintf(mod, "failed to register facility methods");
+		goto err;
+	}
+	if (topo_mod_nvalloc(mod, &arg_nvl, NV_UNIQUE_NAME) < 0 ||
+	    nvlist_add_string(arg_nvl, TOPO_IO_DEVID, devid) != 0) {
+		topo_mod_dprintf(mod, "Failed build arg nvlist\n");
+		(void) topo_mod_seterrno(mod, EMOD_NOMEM);
+		goto err;
+	}
+	if (topo_prop_method_register(fnode, TOPO_PGROUP_FACILITY,
+	    TOPO_SENSOR_READING, TOPO_TYPE_DOUBLE, "disk_temp_reading",
+	    arg_nvl, &err) != 0) {
+		topo_mod_dprintf(mod, "Failed to register %s propmeth "
+		    "on fac node %s (%s)\n", TOPO_SENSOR_READING,
+		    topo_node_name(fnode), topo_strerror(err));
+		/* errno set */
+		goto err;
+	}
+	nvlist_free(arg_nvl);
+	return (0);
+err:
+	topo_node_unbind(fnode);
+	nvlist_free(arg_nvl);
+	return (-1);
 }
 
 /* create the disk topo node */
@@ -343,10 +477,10 @@ disk_tnode_create(topo_mod_t *mod, tnode_t *parent,
 
 	*rval = NULL;
 	if (dnode != NULL) {
-		mfg = disk_auth_clean(mod, dnode->ddn_mfg);
-		model = disk_auth_clean(mod, dnode->ddn_model);
-		firm = disk_auth_clean(mod, dnode->ddn_firm);
-		serial = disk_auth_clean(mod, dnode->ddn_serial);
+		mfg = topo_mod_clean_str(mod, dnode->ddn_mfg);
+		model = topo_mod_clean_str(mod, dnode->ddn_model);
+		firm = topo_mod_clean_str(mod, dnode->ddn_firm);
+		serial = topo_mod_clean_str(mod, dnode->ddn_serial);
 	} else {
 		mfg = model = firm = serial = NULL;
 	}
@@ -403,6 +537,13 @@ disk_tnode_create(topo_mod_t *mod, tnode_t *parent,
 		    name, i, topo_strerror(topo_mod_errno(mod)));
 		topo_node_unbind(dtn);
 		return (-1);
+	}
+
+	if (dnode != NULL && dnode->ddn_devid != NULL &&
+	    disk_add_temp_sensor(mod, dtn, dnode->ddn_devid) != 0) {
+		topo_mod_dprintf(mod, "disk_tnode_create: failed to create "
+		    "temperature sensor node on bay=%d/disk=0",
+		    topo_node_instance(parent));
 	}
 	*rval = dtn;
 	return (0);
@@ -497,6 +638,43 @@ disk_declare_addr(topo_mod_t *mod, tnode_t *parent, topo_list_t *listp,
 }
 
 /*
+ * Try to find a disk based on the bridge-port property. This is most often used
+ * for SATA devices which are attached to a SAS controller and are therefore
+ * behind a SATL bridge port. SES only knows of devices based on this SAS WWN,
+ * not based on any SATA GUIDs.
+ */
+int
+disk_declare_bridge(topo_mod_t *mod, tnode_t *parent, topo_list_t *listp,
+    const char *addr, tnode_t **childp)
+{
+	dev_di_node_t *dnode;
+	int i;
+
+	/* Check for match using addr. */
+	for (dnode = topo_list_next(listp); dnode != NULL;
+	    dnode = topo_list_next(dnode)) {
+		if (dnode->ddn_bridge_port == NULL)
+			continue;
+
+		for (i = 0; i < dnode->ddn_ppath_count; i++) {
+			if ((dnode->ddn_bridge_port[i] != NULL) &&
+			    (strncmp(dnode->ddn_bridge_port[i], addr,
+			    strcspn(dnode->ddn_bridge_port[i], ":"))) == 0) {
+				topo_mod_dprintf(mod, "disk_declare_bridge: "
+				    "found disk matching bridge %s", addr);
+				return (disk_declare(mod, parent, dnode,
+				    childp));
+			}
+		}
+	}
+
+	topo_mod_dprintf(mod, "disk_declare_bridge: "
+	    "failed to find disk matching bridge %s", addr);
+
+	return (1);
+}
+
+/*
  * Used to declare a disk that has been discovered through other means (usually
  * ses), that is not enumerated in the devinfo tree.
  */
@@ -582,12 +760,12 @@ dev_di_node_add(di_node_t node, char *devid, disk_cbdata_t *cbp)
 	char		*s;
 	int64_t		*nblocksp;
 	uint64_t	nblocks;
-	int		*dblksizep;
-	uint_t		dblksize;
+	int		*blksizep;
+	uint_t		blksize;
 	char		lentry[MAXPATHLEN];
 	int		pathcount;
 	int		*inq_dtype, itype;
-	int 		i;
+	int		i;
 
 	if (devid) {
 		/*
@@ -817,21 +995,39 @@ dev_di_node_add(di_node_t node, char *devid, disk_cbdata_t *cbp)
 	    INQUIRY_SERIAL_NO, &s) > 0) {
 		if ((dnode->ddn_serial = disk_trim_whitespace(mod, s)) == NULL)
 			goto error;
+	} else {
+		/*
+		 * Many USB disk devices don't emulate serial inquiry number
+		 * because their serial number can be longer than the standard
+		 * SCSI length. If we didn't get an inquiry serial number, fill
+		 * one in this way.
+		 */
+		di_node_t parent;
+
+		if ((parent = di_parent_node(node)) != DI_NODE_NIL &&
+		    di_prop_lookup_strings(DDI_DEV_T_ANY, parent,
+		    "usb-serialno", &s) > 0) {
+			if ((dnode->ddn_serial = disk_trim_whitespace(mod,
+			    s)) == NULL) {
+				goto error;
+			}
+		}
 	}
+
 	if (di_prop_lookup_int64(DDI_DEV_T_ANY, node,
 	    "device-nblocks", &nblocksp) > 0) {
 		nblocks = (uint64_t)*nblocksp;
 		/*
 		 * To save kernel memory, the driver may not define
-		 * "device-dblksize" when its value is default DEV_BSIZE.
+		 * "device-blksize" when its value is default DEV_BSIZE.
 		 */
 		if (di_prop_lookup_ints(DDI_DEV_T_ANY, node,
-		    "device-dblksize", &dblksizep) > 0)
-			dblksize = (uint_t)*dblksizep;
+		    "device-blksize", &blksizep) > 0)
+			blksize = (uint_t)*blksizep;
 		else
-			dblksize = DEV_BSIZE;		/* default value */
+			blksize = DEV_BSIZE;		/* default value */
 		(void) snprintf(lentry, sizeof (lentry),
-		    "%" PRIu64, nblocks * dblksize);
+		    "%" PRIu64, nblocks * blksize);
 		if ((dnode->ddn_cap = topo_mod_strdup(mod, lentry)) == NULL)
 			goto error;
 	}
@@ -969,6 +1165,7 @@ disk_status(topo_mod_t *mod, tnode_t *nodep, topo_version_t vers,
 	 */
 	if (nvlist_lookup_string(in_nvl, "path", &fullpath) == 0) {
 		devpath = NULL;
+		pathlen = 0;
 	} else {
 		/*
 		 * Get the /devices path and attempt to open the disk status

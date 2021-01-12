@@ -22,7 +22,7 @@
 # Copyright 2009 Sun Microsystems, Inc.  All rights reserved.
 # Use is subject to license terms.
 #
-#
+# Copyright (c) 2018, Joyent, Inc.
 
 LIBRARY= libfdisk.a
 VERS= .1
@@ -37,9 +37,9 @@ include ../../Makefile.rootfs
 
 SRCDIR=	../common
 
-LIBS=	$(DYNLIB) $(LINTLIB)
+LIBS=	$(DYNLIB)
 
-C99MODE=	$(C99_DISABLE)
+CSTD=	$(CSTD_GNU89)
 
 CPPFLAGS += -I.
 LDLIBS += -lc
@@ -49,16 +49,16 @@ CFLAGS += -D_FILE_OFFSET_BITS=64
 CFLAGS64 += -D_LARGEFILE64_SOURCE
 CFLAGS64 += -D_FILE_OFFSET_BITS=64
 
-LINTFLAGS +=    -erroff=E_BAD_PTR_CAST_ALIGN
-LINTFLAGS64 +=    -erroff=E_BAD_PTR_CAST_ALIGN
 
-CERRWARN +=	-_gcc=-Wno-uninitialized
+CERRWARN +=	$(CNOWARN_UNINIT)
+
+# not linted
+SMATCH=off
 
 .KEEP_STATE:
 
 all: $(LIBS)
 
-lint: lintcheck
 
 pics/%.o: ../common/%.c
 	$(COMPILE.c) -o $@ $<

@@ -22,31 +22,27 @@
 # Copyright 2008 Sun Microsystems, Inc.  All rights reserved.
 # Use is subject to license terms.
 #
+# Copyright 2019 RackTop Systems.
+#
 # lib/libfru/Makefile.flag
 #
 
-LINTFLAGS =	-uxn
-LINTFLAGS64 =	$(LINTFLAGS) -m64
-LINTOUT=	lint.out
-LINTSRC =       $(LINTLIB:%.ln=%)
-ROOTLINTDIR =   $(ROOTLIBDIR)
-ROOTLINT =      $(LINTSRC:%=$(ROOTLINTDIR)/%)
 
 CPPFLAGS +=	-I../include -I$(SRC)/lib/libpicl
 CPPFLAGS +=	-I$(SRC)/lib/libfruutils
 CPPFLAGS +=	-I$(SRC)/cmd/picl/plugins/inc
-CPPFLAGS += 	-D_REENTRANT
+CPPFLAGS +=	-D_REENTRANT
 CFLAGS +=	$(CCVERBOSE)
-CCFLAGS64 += 	-mt
+CCFLAGS64 +=	-mt
 CCFLAGS +=	-mt
 LDLIBS +=	-lc
 
+CCERRWARN +=	-_gcc=-Wno-unused-variable
+CCERRWARN +=	-_gcc=-Wno-switch
+CCERRWARN +=	-_gcc=-Wno-reorder
+CCERRWARN +=	-_gcc=-Wno-type-limits
+
 CLEANFILES +=	pics/lex.fru.cc pics/y.tab.cc pics/y.tab.h
-
-$(LINTLIB) :=	SRCS = ../llib-lfru
-$(LINTLIB) :=	LINTFLAGS = -nvx -I../include
-$(LINTLIB) :=	LINTFLAGS64 = -nvx -m64 -I../include
-
 CLOBBERFILES +=	$(DYNLIBCCC) libfru.so
 
 .KEEP_STATE:
@@ -55,6 +51,3 @@ all : pics .WAIT $(DYNLIBCCC)
 	$(RM) libfru.so
 	$(LN) $(DYNLIBCCC) libfru.so
 	$(CHMOD) 755 libfru.so
-
-lint :
-	@ $(ECHO) "No C code here, only C++ code: skipping"

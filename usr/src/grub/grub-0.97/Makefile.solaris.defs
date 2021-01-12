@@ -1,6 +1,8 @@
 #
 # Copyright 2005 Sun Microsystems, Inc.  All rights reserved.
 # Use is subject to license terms.
+# Copyright 2016 Nexenta Systems, Inc.
+# Copyright 2019 OmniOS Community Edition (OmniOSce) Association.
 #
 include $(SRC)/Makefile.master
 
@@ -42,11 +44,13 @@ OPTION_DOCS	= $(POUND_SIGN)
 OPTION_FS	= $(POUND_SIGN)
 
 
-BASE_CFLAGS	= -B$(GCC_ROOT)/bin/ -g $(CPPFLAGS) $(OPTFLAGS)
-BASE_CCASFLAGS	= -B$(GCC_ROOT)/bin/ -g $(CPPFLAGS) $(OPTFLAGS)
-BASE_LDFLAGS	=
+BASE_CFLAGS	= $($(MACH)_XARCH)
+BASE_CFLAGS	+= -B$(GNUC_ROOT)/bin/ -g $(CPPFLAGS) $(OPTFLAGS) -std=gnu89
+BASE_CCASFLAGS	= $($(MACH)_XARCH)
+BASE_CCASFLAGS	+= -B$(GNUC_ROOT)/bin/ -g $(CPPFLAGS) $(OPTFLAGS)
+BASE_LDFLAGS	= $($(MACH)_XARCH)
 
-CC		= $(GCC_ROOT)/bin/gcc
+CC		= $(GNUC_ROOT)/bin/gcc
 CFLAGS		= $(BASE_CFLAGS)
 CCDEPMODE	= depmode=none
 
@@ -69,12 +73,14 @@ CPPFLAGS	= $(DEFS) $(INCLUDES) $(WARNFLAGS) \
 		  $(t.ENVCPPFLAGS4:I,%=-nostdinc -isystem %)
 
 CCLD		= $(GNU_ROOT)/bin/gld
+GLDTARGET	= -melf_i386_sol2
 LDFLAGS		= $(BASE_LDFLAGS)
 LINKFLAGS	= -g
 LINK		= $(CCLD) $(LINKFLAGS) $(LDFLAGS)
 
 DEFS		= -DHAVE_CONFIG_H -DSOLARIS_NETBOOT
 OPTFLAGS	= -falign-jumps=1 -falign-loops=1 -falign-functions=1
+OPTFLAGS	+= -fno-reorder-functions
 #WARNFLAGS	= -Wall -Wmissing-prototypes -Wunused -Wshadow \
 #		  -Wpointer-arith -Wundef
 

@@ -22,6 +22,7 @@
 #
 # Copyright (c) 2007, 2010, Oracle and/or its affiliates. All rights reserved.
 #
+# Copyright (c) 2019, Joyent, Inc.
 
 SHELL=/usr/bin/ksh93
 
@@ -672,14 +673,12 @@ include ../../../Makefile.ast
 # and $(TRANSMACH) (generated)
 SRCS=		$(OBJECTS:%.o=../%.c)
 
-LIBS =		$(DYNLIB) $(LINTLIB)
+LIBS =		$(DYNLIB)
 
 LDLIBS += \
 	-lsocket \
 	-lm \
 	-lc
-
-$(LINTLIB) :=	SRCS = $(SRCDIR)/$(LINTSRC)
 
 SRCDIR =	../common
 
@@ -724,10 +723,12 @@ CFLAGS64 += \
 	$(ASTCFLAGS64)
 
 CERRWARN += -_gcc=-Wno-parentheses
-CERRWARN += -_gcc=-Wno-uninitialized
+CERRWARN += $(CNOWARN_UNINIT)
 CERRWARN += -_gcc=-Wno-char-subscripts
 CERRWARN += -_gcc=-Wno-clobbered
 CERRWARN += -_gcc=-Wno-unused-variable
+CERRWARN += -_gcc=-Wno-unused-but-set-variable
+CERRWARN += -_gcc=-Wno-unused-but-set-parameter
 CERRWARN += -_gcc=-Wno-unused-value
 CERRWARN += -_gcc=-Wno-unused-function
 CERRWARN += -_gcc=-Wno-unused-label
@@ -735,6 +736,8 @@ CERRWARN += -_gcc=-Wno-implicit-function-declaration
 CERRWARN += -_gcc=-Wno-empty-body
 CERRWARN += -_gcc=-Wno-type-limits
 CERRWARN += -_gcc=-Wno-address
+
+SMATCH=off
 
 pics/$(MACH)/src/lib/libast/conftab.o \
 pics/$(MACH64)/src/lib/libast/conftab.o	:= CERRWARN += -erroff=E_INIT_DOES_NOT_FIT
@@ -746,27 +749,19 @@ pics/common/hash/memhash.o		:= CERRWARN += -erroff=E_CONST_PROMOTED_UNSIGNED_LON
 pics/common/hash/memsum.o		:= CERRWARN += -erroff=E_CONST_PROMOTED_UNSIGNED_LONG
 pics/common/hash/strhash.o		:= CERRWARN += -erroff=E_CONST_PROMOTED_UNSIGNED_LONG
 pics/common/hash/strsum.o		:= CERRWARN += -erroff=E_CONST_PROMOTED_UNSIGNED_LONG
-pics/common/misc/recstr.o 		:= CERRWARN += -erroff=E_INTEGER_OVERFLOW_DETECTED
-pics/common/misc/translate.o 		:= CERRWARN += -erroff=E_INTEGER_OVERFLOW_DETECTED
+pics/common/misc/recstr.o		:= CERRWARN += -erroff=E_INTEGER_OVERFLOW_DETECTED
+pics/common/misc/translate.o		:= CERRWARN += -erroff=E_INTEGER_OVERFLOW_DETECTED
 pics/common/path/pathkey.o		:= CERRWARN += -erroff=E_CONST_PROMOTED_UNSIGNED_LONG
 pics/common/port/astconf.o		:= CERRWARN += -erroff=E_CONST_OBJ_SHOULD_HAVE_INITIZR
-pics/common/stdio/fflush.o 		:= CERRWARN += -erroff=E_NO_IMPLICIT_DECL_ALLOWED
-pics/common/stdio/getline.o 		:= CERRWARN += -erroff=E_NO_IMPLICIT_DECL_ALLOWED
-pics/common/sfio/sfmove.o 		:= CERRWARN += -erroff=E_NO_IMPLICIT_DECL_ALLOWED
-pics/common/sfio/sfrd.o 		:= CERRWARN += -erroff=E_NO_IMPLICIT_DECL_ALLOWED
-pics/common/sfio/sfvscanf.o 		:= CERRWARN += -erroff=E_END_OF_LOOP_CODE_NOT_REACHED
-pics/common/tm/tmxduration.o 		:= CERRWARN += -erroff=E_NO_IMPLICIT_DECL_ALLOWED
+pics/common/stdio/fflush.o		:= CERRWARN += -erroff=E_NO_IMPLICIT_DECL_ALLOWED
+pics/common/stdio/getline.o		:= CERRWARN += -erroff=E_NO_IMPLICIT_DECL_ALLOWED
+pics/common/sfio/sfmove.o		:= CERRWARN += -erroff=E_NO_IMPLICIT_DECL_ALLOWED
+pics/common/sfio/sfrd.o			:= CERRWARN += -erroff=E_NO_IMPLICIT_DECL_ALLOWED
+pics/common/sfio/sfvscanf.o		:= CERRWARN += -erroff=E_END_OF_LOOP_CODE_NOT_REACHED
+pics/common/tm/tmxduration.o		:= CERRWARN += -erroff=E_NO_IMPLICIT_DECL_ALLOWED
 
 .KEEP_STATE:
 
 all: mkpicdirs .WAIT $(LIBS)
-
-#
-# libast is not lint-clean yet; fake up a target.  (You can use
-# "make lintcheck" to actually run lint; please send all lint fixes
-# upstream (to AT&T) so the next update will pull them into ON.)
-#
-lint:
-	@ print "usr/src/lib/libast is not lint-clean: skipping"
 
 include ../../Makefile.targ

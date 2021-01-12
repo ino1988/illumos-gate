@@ -20,6 +20,7 @@
 #
 # Copyright (c) 2009, 2010, Oracle and/or its affiliates. All rights reserved.
 #
+# Copyright (c) 2018, Joyent, Inc.
 
 PROG=		ilbadm
 
@@ -32,14 +33,17 @@ include	../../../Makefile.cmd
 include	../../../Makefile.ctf
 include ../../Makefile.cmd-inet
 
-LDLIBS +=	-lcmdutils -lsocket -lnsl -lilb -linetutil -lkstat
+LDLIBS +=	-lcmdutils -lsocket -lnsl -lilb -lkstat -lofmt
 CPPFLAGS +=	-I$(SRC)/lib/libilb/common -I$(SRC)/uts/common
 
 CERRWARN +=	-_gcc=-Wno-switch
 CERRWARN +=	-_gcc=-Wno-parentheses
-CERRWARN +=	-_gcc=-Wno-uninitialized
+CERRWARN +=	$(CNOWARN_UNINIT)
 
-C99MODE =	$(C99_ENABLE)
+# not linted
+SMATCH=off
+
+CSTD =	$(CSTD_GNU99)
 
 POFILES =	$(OBJS:%.o=%.po)
 POFILE =	$(PROG)_all.po

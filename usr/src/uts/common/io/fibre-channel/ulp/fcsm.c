@@ -64,8 +64,7 @@ static clock_t		fcsm_offline_ticks;
 
 
 #ifdef DEBUG
-uint32_t		fcsm_debug = (SMDL_TRACE | SMDL_IO |
-    SMDL_ERR | SMDL_INFO);
+uint32_t		fcsm_debug = 0;
 #endif
 
 
@@ -431,7 +430,7 @@ fcsm_attach(dev_info_t *dip, ddi_attach_cmd_t cmd)
 
 		/* Create a minor node */
 		if (ddi_create_minor_node(fcsm_dip, "fcsm", S_IFCHR,
-		    NULL, DDI_PSEUDO, 0) == DDI_SUCCESS) {
+		    0, DDI_PSEUDO, 0) == DDI_SUCCESS) {
 			/* Announce presence of the device */
 			mutex_exit(&fcsm_global_mutex);
 			ddi_report_dev(dip);

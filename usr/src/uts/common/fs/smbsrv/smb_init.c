@@ -19,19 +19,26 @@
  * CDDL HEADER END
  */
 /*
- * Copyright 2011 Nexenta Systems, Inc.  All rights reserved.
  * Copyright (c) 2007, 2010, Oracle and/or its affiliates. All rights reserved.
+ * Copyright 2014 Nexenta Systems, Inc.  All rights reserved.
+ * Copyright 2019 Joyent, Inc.
  */
 
 #include <sys/types.h>
+#include <sys/conf.h>
 #include <sys/ddi.h>
 #include <sys/modctl.h>
 #include <sys/cred.h>
+#include <sys/disp.h>
 #include <sys/ioccom.h>
 #include <sys/policy.h>
 #include <sys/cmn_err.h>
 #include <smbsrv/smb_kproto.h>
 #include <smbsrv/smb_ioctl.h>
+
+#ifdef	_FAKE_KERNEL
+#error	"See libfksmbsrv"
+#endif	/* _FAKE_KERNEL */
 
 static int smb_drv_open(dev_t *, int, int, cred_t *);
 static int smb_drv_close(dev_t, int, int, cred_t *);
@@ -55,17 +62,11 @@ static int smb_drv_getinfo(dev_info_t *, ddi_info_cmd_t, void *, void **);
  * with Windows NT4.0. Previous experiments with NT4.0 resulted in directory
  * listing problems so this buffer size is configurable based on the end-user
  * environment. When in doubt use 37KB.
- *
- * smb_raw_mode: read_raw and write_raw supported (1) or NOT supported (0).
  */
 int	smb_maxbufsize = SMB_NT_MAXBUF;
-int	smb_oplock_levelII = 1;
-int	smb_oplock_timeout = OPLOCK_STD_TIMEOUT;
-int	smb_oplock_min_timeout = OPLOCK_MIN_TIMEOUT;
 int	smb_flush_required = 1;
 int	smb_dirsymlink_enable = 1;
 int	smb_sign_debug = 0;
-int	smb_raw_mode = 0;
 int	smb_shortnames = 1;
 uint_t	smb_audit_flags =
 #ifdef	DEBUG
@@ -74,11 +75,13 @@ uint_t	smb_audit_flags =
     0;
 #endif
 
+int smb_allow_advisory_locks = 0;	/* See smb_vops.c */
+
 /*
  * Maximum number of simultaneous authentication, share mapping, pipe open
  * requests to be processed.
  */
-int	smb_ssetup_threshold = 256;
+int	smb_ssetup_threshold = SMB_AUTHSVC_MAXTHREAD;
 int	smb_tcon_threshold = 1024;
 int	smb_opipe_threshold = 1024;
 
@@ -90,7 +93,22 @@ int	smb_ssetup_timeout = (30 * 1000);
 int	smb_tcon_timeout = (30 * 1000);
 int	smb_opipe_timeout = (30 * 1000);
 
-int	smb_threshold_debug = 0;
+/*
+ * Thread priorities used in smbsrv.  Our threads spend most of their time
+ * blocked on various conditions.  However, if the system gets heavy load,
+ * the scheduler has to choose an order to run these.  We want the order:
+ * (a) timers, (b) notifications, (c) workers, (d) receivers (and etc.)
+ * where notifications are oplock and change notify work.  Aside from this
+ * relative ordering, smbsrv threads should run with a priority close to
+ * that of normal user-space threads (thus minclsyspri below), just like
+ * NFS and other "file service" kinds of processing.
+ */
+int smbsrv_base_pri	= MINCLSYSPRI;
+int smbsrv_listen_pri	= MINCLSYSPRI;
+int smbsrv_receive_pri	= MINCLSYSPRI;
+int smbsrv_worker_pri	= MINCLSYSPRI + 1;
+int smbsrv_notify_pri	= MINCLSYSPRI + 2;
+int smbsrv_timer_pri	= MINCLSYSPRI + 5;
 
 
 /*
@@ -160,17 +178,12 @@ _init(void)
 {
 	int rc;
 
-	if ((rc = smb_kshare_init()) != 0)
-		return (rc);
-
-	if ((rc = smb_server_svc_init()) != 0) {
-		smb_kshare_fini();
+	if ((rc = smb_server_g_init()) != 0) {
 		return (rc);
 	}
 
 	if ((rc = mod_install(&modlinkage)) != 0) {
-		smb_kshare_fini();
-		(void) smb_server_svc_fini();
+		smb_server_g_fini();
 	}
 
 	return (rc);
@@ -187,9 +200,11 @@ _fini(void)
 {
 	int	rc;
 
+	if (smb_server_get_count() != 0)
+		return (EBUSY);
+
 	if ((rc = mod_remove(&modlinkage)) == 0) {
-		rc = smb_server_svc_fini();
-		smb_kshare_fini();
+		smb_server_g_fini();
 	}
 
 	return (rc);
@@ -202,13 +217,25 @@ _fini(void)
  */
 /* ARGSUSED */
 static int
-smb_drv_open(dev_t *devp, int flag, int otyp, cred_t *credp)
+smb_drv_open(dev_t *devp, int flag, int otyp, cred_t *cr)
 {
+	zoneid_t zid;
+
 	/*
 	 * Check caller's privileges.
 	 */
-	if (secpolicy_smb(credp) != 0)
+	if (secpolicy_smb(cr) != 0)
 		return (EPERM);
+
+	/*
+	 * We need a unique minor per zone otherwise an smbd in any other
+	 * zone will keep this minor open and we won't get a close call.
+	 * The zone ID is good enough as a minor number.
+	 */
+	zid = crgetzoneid(cr);
+	if (zid < 0)
+		return (ENODEV);
+	*devp = makedevice(getmajor(*devp), zid);
 
 	/*
 	 * Start SMB service state machine
@@ -220,7 +247,14 @@ smb_drv_open(dev_t *devp, int flag, int otyp, cred_t *credp)
 static int
 smb_drv_close(dev_t dev, int flag, int otyp, cred_t *credp)
 {
-	return (smb_server_delete());
+	smb_server_t	*sv;
+	int		rc;
+
+	rc = smb_server_lookup(&sv);
+	if (rc == 0)
+		rc = smb_server_delete(sv);
+
+	return (rc);
 }
 
 /* ARGSUSED */
@@ -233,20 +267,49 @@ smb_drv_ioctl(dev_t drv, int cmd, intptr_t argp, int flags, cred_t *cred,
 	uint32_t	crc;
 	boolean_t	copyout = B_FALSE;
 	int		rc = 0;
+	size_t		alloclen;
 
-	if (ddi_copyin((const void *)argp, &ioc_hdr, sizeof (smb_ioc_header_t),
-	    flags) || (ioc_hdr.version != SMB_IOC_VERSION))
+	if (ddi_copyin((void *)argp, &ioc_hdr, sizeof (ioc_hdr), flags))
 		return (EFAULT);
+
+	/*
+	 * Check version and length.
+	 *
+	 * Note that some ioctls (i.e. SMB_IOC_SVCENUM) have payload
+	 * data after the ioctl struct, in which case they specify a
+	 * length much larger than sizeof smb_ioc_t.  The theoretical
+	 * largest ioctl data is therefore the size of the union plus
+	 * the max size of the payload (which is SMB_IOC_DATA_SIZE).
+	 */
+	if (ioc_hdr.version != SMB_IOC_VERSION ||
+	    ioc_hdr.len < sizeof (ioc_hdr) ||
+	    ioc_hdr.len > (sizeof (*ioc) + SMB_IOC_DATA_SIZE))
+		return (EINVAL);
 
 	crc = ioc_hdr.crc;
 	ioc_hdr.crc = 0;
 	if (smb_crc_gen((uint8_t *)&ioc_hdr, sizeof (ioc_hdr)) != crc)
-		return (EFAULT);
+		return (EINVAL);
 
-	ioc = kmem_alloc(ioc_hdr.len, KM_SLEEP);
-	if (ddi_copyin((const void *)argp, ioc, ioc_hdr.len, flags)) {
-		kmem_free(ioc, ioc_hdr.len);
+	/*
+	 * Note that smb_ioc_t is a union, and callers set ioc_hdr.len
+	 * to the size of the actual union arm.  If some caller were to
+	 * set that size too small, we could end up passing under-sized
+	 * memory to one of the type-specific handler functions.  Avoid
+	 * that problem by allocating at least the size of the union,
+	 * (zeroed out) and then copy in the caller specified length.
+	 */
+	alloclen = MAX(ioc_hdr.len, sizeof (*ioc));
+	ioc = kmem_zalloc(alloclen, KM_SLEEP);
+	if (ddi_copyin((void *)argp, ioc, ioc_hdr.len, flags)) {
+		kmem_free(ioc, alloclen);
 		return (EFAULT);
+	}
+
+	/* Don't allow the request size to change mid-ioctl */
+	if (ioc_hdr.len != ioc->ioc_hdr.len) {
+		kmem_free(ioc, alloclen);
+		return (EINVAL);
 	}
 
 	switch (cmd) {
@@ -298,11 +361,10 @@ smb_drv_ioctl(dev_t drv, int cmd, intptr_t argp, int flags, cred_t *cred,
 		break;
 	}
 	if ((rc == 0) && copyout) {
-		if (ddi_copyout((const void *)ioc, (void *)argp, ioc_hdr.len,
-		    flags))
+		if (ddi_copyout(ioc, (void *)argp, ioc_hdr.len, flags))
 			rc = EFAULT;
 	}
-	kmem_free(ioc, ioc_hdr.len);
+	kmem_free(ioc, alloclen);
 	return (rc);
 }
 

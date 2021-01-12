@@ -21,9 +21,7 @@
 # Copyright 2009 Sun Microsystems, Inc.  All rights reserved.
 # Use is subject to license terms.
 #
-#	This makefile drives the production of the TPM driver kernel
-#	module.
-#
+# Copyright (c) 2018, Joyent, Inc.
 
 UTSBASE	= $(SRC)/uts
 
@@ -32,7 +30,6 @@ UTSBASE	= $(SRC)/uts
 #
 MODULE		= tpm
 OBJECTS		= $(TPM_OBJS:%=$(OBJS_DIR)/%)
-LINTS		= $(TPM_OBJS:%.o=$(LINTS_DIR)/%.ln)
 ROOTMODULE	= $(ROOT_DRV_DIR)/$(MODULE)
 
 #
@@ -47,7 +44,6 @@ include $(UTSBASE)/intel/Makefile.intel
 #	Define targets
 #
 ALL_TARGET	= $(BINARY)
-LINT_TARGET	= $(MODULE).lint
 INSTALL_TARGET	= $(BINARY) $(ROOTMODULE)
 
 #
@@ -65,6 +61,9 @@ CPPFLAGS	+= -I$(ADJUNCT_PROTO)/usr/include
 
 CERRWARN	+= -_gcc=-Wno-parentheses
 
+# needs work
+$(OBJS_DIR)/tpm.o := SMOFF += index_overflow
+
 #
 #	Default build targets.
 #
@@ -77,12 +76,6 @@ all:		$(ALL_DEPS)
 clean:		$(CLEAN_DEPS)
 
 clobber:	$(CLOBBER_DEPS)
-
-lint:		$(LINT_DEPS)
-
-modlintlib:	$(MODLINTLIB_DEPS)
-
-clean.lint:	$(CLEAN_LINT_DEPS)
 
 install:	$(INSTALL_DEPS)
 

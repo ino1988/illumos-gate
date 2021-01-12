@@ -24,8 +24,6 @@
  * Use is subject to license terms.
  */
 
-#pragma ident	"%Z%%M%	%I%	%E% SMI"
-
 #include <sys/mdb_modapi.h>
 #include <sys/scsi/scsi.h>
 #include <sys/dkio.h>
@@ -72,7 +70,7 @@ typedef struct i_ddi_soft_state sd_state_str_t, *sd_state_str_ptr;
 /* structure to store soft state statistics */
 typedef struct sd_str {
 	void		*sd_state;
-	uintptr_t 	current_root;
+	uintptr_t	current_root;
 	int		current_list_count;
 	int		valid_root_count;
 	int		silent;
@@ -95,7 +93,7 @@ typedef struct sd_str {
 static int
 buf_avforw_walk_init(mdb_walk_state_t *wsp)
 {
-	if (wsp->walk_addr == NULL) {
+	if (wsp->walk_addr == 0) {
 		mdb_warn("buffer address required with the command\n");
 		return (WALK_ERR);
 	}
@@ -127,7 +125,7 @@ buf_avforw_walk_step(mdb_walk_state_t *wsp)
 	 * if walk_addr is null then it effectively means an end of all
 	 * buf structures, hence end the iterations.
 	 */
-	if (wsp->walk_addr == NULL) {
+	if (wsp->walk_addr == 0) {
 		return (WALK_DONE);
 	}
 
@@ -141,7 +139,7 @@ buf_avforw_walk_step(mdb_walk_state_t *wsp)
 	}
 
 	status = wsp->walk_callback(wsp->walk_addr, wsp->walk_data,
-							    wsp->walk_cbdata);
+	    wsp->walk_cbdata);
 	wsp->walk_addr = (uintptr_t)(((buf_t *)wsp->walk_data)->av_forw);
 
 	return (status);
@@ -223,37 +221,37 @@ static void
 dump_xbuf_attr(struct __ddi_xbuf_attr *xba_ptr, uintptr_t mem_addr)
 {
 	mdb_printf("0x%8lx:\tmutex\t\tallocsize\tpending\n",
-		mem_addr + offsetof(struct __ddi_xbuf_attr, xa_mutex));
+	    mem_addr + offsetof(struct __ddi_xbuf_attr, xa_mutex));
 
 	mdb_printf("           \t%lx\t\t%d\t\t%d\n",
-		xba_ptr->xa_mutex._opaque[0], xba_ptr->xa_allocsize,
-							xba_ptr->xa_pending);
+	    xba_ptr->xa_mutex._opaque[0], xba_ptr->xa_allocsize,
+	    xba_ptr->xa_pending);
 	mdb_printf("0x%8lx:\tactive_limit\tactive_count\tactive_lowater\n",
-		mem_addr + offsetof(struct __ddi_xbuf_attr, xa_active_limit));
+	    mem_addr + offsetof(struct __ddi_xbuf_attr, xa_active_limit));
 
 	mdb_printf("           \t%lx\t\t%lx\t\t%lx\n",
-		xba_ptr->xa_active_limit, xba_ptr->xa_active_count,
-						xba_ptr->xa_active_lowater);
+	    xba_ptr->xa_active_limit, xba_ptr->xa_active_count,
+	    xba_ptr->xa_active_lowater);
 	mdb_printf("0x%8lx:\theadp\t\ttailp\n",
-		mem_addr + offsetof(struct __ddi_xbuf_attr, xa_headp));
+	    mem_addr + offsetof(struct __ddi_xbuf_attr, xa_headp));
 
 	mdb_printf("           \t%lx%c\t%lx\n",
-		xba_ptr->xa_headp, (xba_ptr->xa_headp == 0?'\t':' '),
-							xba_ptr->xa_tailp);
+	    xba_ptr->xa_headp, (xba_ptr->xa_headp == 0?'\t':' '),
+	    xba_ptr->xa_tailp);
 	mdb_printf(
 	"0x%8lx:\treserve_mutex\treserve_limit\treserve_count\treserve_headp\n",
-		mem_addr + offsetof(struct __ddi_xbuf_attr, xa_reserve_mutex));
+	    mem_addr + offsetof(struct __ddi_xbuf_attr, xa_reserve_mutex));
 
 	mdb_printf("           \t%lx\t\t%lx\t\t%lx\t\t%lx\n",
-		xba_ptr->xa_reserve_mutex._opaque[0], xba_ptr->xa_reserve_limit,
-		xba_ptr->xa_reserve_count, xba_ptr->xa_reserve_headp);
+	    xba_ptr->xa_reserve_mutex._opaque[0], xba_ptr->xa_reserve_limit,
+	    xba_ptr->xa_reserve_count, xba_ptr->xa_reserve_headp);
 
 	mdb_printf("0x%8lx:\ttimeid\t\ttq\n",
-		mem_addr + offsetof(struct __ddi_xbuf_attr, xa_timeid));
+	    mem_addr + offsetof(struct __ddi_xbuf_attr, xa_timeid));
 
 	mdb_printf("           \t%lx%c\t%lx\n",
-		xba_ptr->xa_timeid, (xba_ptr->xa_timeid == 0?'\t':' '),
-								xba_ptr->xa_tq);
+	    xba_ptr->xa_timeid, (xba_ptr->xa_timeid == 0?'\t':' '),
+	    xba_ptr->xa_tq);
 }
 
 /*
@@ -280,7 +278,7 @@ init_softstate_members(mdb_walk_state_t *wsp)
 	SD_DATA(valid_root_count) = 0;
 
 	if (mdb_vread((void *)&SD_DATA(sd_state_data),
-			sizeof (sd_state_str_t), wsp->walk_addr) == -1) {
+	    sizeof (sd_state_str_t), wsp->walk_addr) == -1) {
 		mdb_warn("failed to sd_state at %p", wsp->walk_addr);
 		return (WALK_ERR);
 	}
@@ -308,7 +306,7 @@ init_softstate_members(mdb_walk_state_t *wsp)
 static int
 sd_state_walk_init(mdb_walk_state_t *wsp)
 {
-	if (wsp->walk_addr == NULL &&
+	if (wsp->walk_addr == 0 &&
 	    mdb_readvar(&wsp->walk_addr, "sd_state") == -1) {
 		mdb_warn("failed to read 'sd_state'");
 		return (WALK_ERR);
@@ -335,7 +333,7 @@ sd_state_walk_init(mdb_walk_state_t *wsp)
 static int
 ssd_state_walk_init(mdb_walk_state_t *wsp)
 {
-	if (wsp->walk_addr == NULL &&
+	if (wsp->walk_addr == (uintptr_t)NULL &&
 	    mdb_readvar(&wsp->walk_addr, "ssd_state") == -1) {
 		mdb_warn("failed to read 'ssd_state'");
 		return (WALK_ERR);
@@ -383,7 +381,7 @@ sd_state_walk_step(mdb_walk_state_t *wsp)
 	}
 
 	status = wsp->walk_callback((uintptr_t)tp, wsp->walk_data,
-							wsp->walk_cbdata);
+	    wsp->walk_cbdata);
 	if (tp != 0) {
 		/* Count the number of non-zero un entries. */
 		SD_DATA(valid_root_count++);
@@ -444,7 +442,7 @@ process_semo_sleepq(uintptr_t	walk_addr, int silent)
 		}
 
 		if (mdb_vread((void *)&currentBuf, sizeof (buf_t),
-							rootBuf) == -1) {
+		    rootBuf) == -1) {
 			mdb_warn("failed to read buf at %p", rootBuf);
 			return (FAIL);
 		}
@@ -458,10 +456,10 @@ process_semo_sleepq(uintptr_t	walk_addr, int silent)
 		rootBuf = (uintptr_t)currentBuf.av_forw;
 	}
 
-	if (rootBuf == NULL) {
+	if (rootBuf == 0) {
 		mdb_printf("------------------------------\n");
 		mdb_printf("Processed %d SEMOCLOSE SLEEP Q entries\n",
-							semo_sleepq_count);
+		    semo_sleepq_count);
 		mdb_printf("------------------------------\n");
 
 	}
@@ -500,9 +498,9 @@ process_sdlun_waitq(uintptr_t walk_addr, int silent)
 		}
 
 		if (mdb_vread(&currentBuf, sizeof (buf_t),
-						(uintptr_t)rootBuf) == -1) {
+		    (uintptr_t)rootBuf) == -1) {
 			mdb_warn("failed to read buf at %p",
-							(uintptr_t)rootBuf);
+			    (uintptr_t)rootBuf);
 			return (FAIL);
 		}
 
@@ -516,7 +514,7 @@ process_sdlun_waitq(uintptr_t walk_addr, int silent)
 		++sdLunQ_count;
 	}
 
-	if (rootBuf == NULL) {
+	if (rootBuf == 0) {
 		mdb_printf("------------------------------\n");
 		mdb_printf("Processed %d UN WAIT Q entries\n", sdLunQ_count);
 		mdb_printf("------------------------------\n");
@@ -543,7 +541,7 @@ process_xbuf(uintptr_t xbuf_attr, int silent)
 	void			*xba_root;
 	int			xbuf_q_count = 0;
 
-	if (xbuf_attr == NULL) {
+	if (xbuf_attr == 0) {
 		mdb_printf("---------------------------\n");
 		mdb_printf("No XBUF ATTR entry\n");
 		mdb_printf("---------------------------\n");
@@ -552,7 +550,7 @@ process_xbuf(uintptr_t xbuf_attr, int silent)
 
 	/* Process the Xbuf Attr struct for a device. */
 	if (mdb_vread((void *)&xba, sizeof (struct __ddi_xbuf_attr),
-							xbuf_attr) == -1) {
+	    xbuf_attr) == -1) {
 		mdb_warn("failed to read xbuf_attr at %p", xbuf_attr);
 		return (FAIL);
 	}
@@ -580,9 +578,9 @@ process_xbuf(uintptr_t xbuf_attr, int silent)
 		}
 
 		if (mdb_vread((void *)&xba_current, sizeof (buf_t),
-						(uintptr_t)xba_root) == -1) {
+		    (uintptr_t)xba_root) == -1) {
 			mdb_warn("failed to read buf at %p",
-							(uintptr_t)xba_root);
+			    (uintptr_t)xba_root);
 			return (FAIL);
 		}
 		if (!silent) {
@@ -614,10 +612,10 @@ static void
 print_footer(const void *walk_data)
 {
 	if (SD_DATA_IN_CBACK(current_list_count) >=
-			(SD_DATA_IN_CBACK(sd_state_data.n_items) - 1)) {
+	    (SD_DATA_IN_CBACK(sd_state_data.n_items) - 1)) {
 		mdb_printf("---------------------------\n");
 		mdb_printf("Processed %d UN softstate entries\n",
-					SD_DATA_IN_CBACK(valid_root_count));
+		    SD_DATA_IN_CBACK(valid_root_count));
 		mdb_printf("---------------------------\n");
 	}
 }
@@ -630,7 +628,7 @@ print_footer(const void *walk_data)
  *		invokes the walker.
  *		It is called during each walk step. It displays the contents
  *		of the current soft state object (addr) passed to it by the
- * 		step function. It also prints the header and footer during the
+ *		step function. It also prints the header and footer during the
  *		first and the last step of the walker.
  *		The contents of the soft state also includes various queues
  *		it includes like Xbuf, semo_close, sdlun_waitq.
@@ -653,13 +651,13 @@ sd_callback(uintptr_t addr, const void *walk_data, void *flg_silent)
 	if (SD_DATA_IN_CBACK(current_list_count) == 0) {
 		mdb_printf("walk_addr = %lx\n", SD_DATA_IN_CBACK(sd_state));
 		mdb_printf("walking sd_state units via ptr: %lx\n",
-					SD_DATA_IN_CBACK(current_root));
+		    SD_DATA_IN_CBACK(current_root));
 		mdb_printf("%d entries in sd_state table\n",
-				SD_DATA_IN_CBACK(sd_state_data.n_items));
+		    SD_DATA_IN_CBACK(sd_state_data.n_items));
 	}
 
 	mdb_printf("\nun %d: %lx\n", SD_DATA_IN_CBACK(current_list_count),
-									addr);
+	    addr);
 
 	mdb_printf("--------------\n");
 
@@ -693,7 +691,7 @@ sd_callback(uintptr_t addr, const void *walk_data, void *flg_silent)
 	/* process device semoclose wait Q */
 	if (sdLun.un_semoclose._opaque[1] == 0) {
 		process_semo_sleepq((uintptr_t)sdLun.un_semoclose._opaque[0],
-									silent);
+		    silent);
 	}
 
 	/* print the actual number of soft state processed */
@@ -727,7 +725,7 @@ dcmd_sd_state(uintptr_t addr, uint_t flags, int argc, const mdb_arg_t *argv)
 
 	/* Enable the silent mode if '-s' option specified the user */
 	if (mdb_getopts(argc, argv, 's', MDB_OPT_SETBITS, TRUE, &silent, NULL)
-							!= argc) {
+	    != argc) {
 		return (DCMD_USAGE);
 	}
 
@@ -766,7 +764,7 @@ dcmd_sd_state(uintptr_t addr, uint_t flags, int argc, const mdb_arg_t *argv)
 		/* process device's semoclose wait Q */
 		if (sdLun.un_semoclose._opaque[1] == 0) {
 			process_semo_sleepq(
-			(uintptr_t)sdLun.un_semoclose._opaque[0], silent);
+			    (uintptr_t)sdLun.un_semoclose._opaque[0], silent);
 		}
 	}
 	return (DCMD_OK);
@@ -799,7 +797,7 @@ dcmd_ssd_state(uintptr_t addr, uint_t flags, int argc, const mdb_arg_t *argv)
 
 	/* Enable the silent mode if '-s' option specified the user */
 	if (mdb_getopts(argc, argv, 's', MDB_OPT_SETBITS, TRUE, &silent, NULL)
-							!= argc) {
+	    != argc) {
 		return (DCMD_USAGE);
 	}
 
@@ -837,7 +835,7 @@ dcmd_ssd_state(uintptr_t addr, uint_t flags, int argc, const mdb_arg_t *argv)
 		/* process device's semoclose wait Q */
 		if (sdLun.un_semoclose._opaque[1] == 0) {
 			process_semo_sleepq(
-			(uintptr_t)sdLun.un_semoclose._opaque[0], silent);
+			    (uintptr_t)sdLun.un_semoclose._opaque[0], silent);
 		}
 	}
 	return (DCMD_OK);
@@ -874,7 +872,7 @@ dcmd_buf_avforw(uintptr_t addr, uint_t flags, int argc, const mdb_arg_t *argv)
 	 */
 	if ((flags & DCMD_ADDRSPEC)) {
 		mdb_pwalk("buf_avforw", buf_callback, (void *)&buf_entries,
-									addr);
+		    addr);
 		return (DCMD_OK);
 	} else {
 		mdb_printf("buffer address required with the command\n");

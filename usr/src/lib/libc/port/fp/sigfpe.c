@@ -33,8 +33,6 @@
  * California.
  */
 
-#pragma ident	"%Z%%M%	%I%	%E% SMI"
-
 /* Swap handler for SIGFPE codes.	 */
 
 #include "lint.h"
@@ -152,9 +150,15 @@ _sigfpe_master(int sig, siginfo_t *siginfo, void *arg)
 		case FPE_FLTOVF:
 			exception = fp_overflow;
 			goto ieee;
+#if defined(__i386) || defined(__amd64)
+		case FPE_FLTDEN:
+			exception = fp_denormalized;
+			goto ieee;
+#endif
 		default:	/* The common default treatment is to abort. */
 			break;
 		}
+		/* FALLTHROUGH */
 	case ((intptr_t)(SIGFPE_ABORT)):
 		abort();
 		break;

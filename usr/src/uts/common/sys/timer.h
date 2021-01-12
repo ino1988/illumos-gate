@@ -24,12 +24,17 @@
  * Use is subject to license terms.
  */
 
+/*
+ * Copyright 2020 Joyent, Inc.
+ */
+
 #ifndef	_SYS_TIMER_H
 #define	_SYS_TIMER_H
 
 #include <sys/types.h>
 #include <sys/proc.h>
 #include <sys/thread.h>
+#include <sys/param.h>
 
 #ifdef	__cplusplus
 extern "C" {
@@ -38,7 +43,15 @@ extern "C" {
 #ifdef	_KERNEL
 
 #define	_TIMER_MAX	32
-extern	int	timer_max;		/* patchable via /etc/system */
+/*
+ * Max timers per process.  This is patchable via /etc/system and can be
+ * updated via kmdb.  Sticking to positive powers of 2 is recommended.
+ * The default value is 4 * NCPU. Setting timer_max to a value below the
+ * default via /etc/system is ignored.
+ */
+extern	int	timer_max;
+
+#define	_TIMER_ALLOC_INIT	8	/* initial size for p_itimer array */
 
 /*
  * Bit values for the it_lock field.
@@ -55,32 +68,45 @@ extern	int	timer_max;		/* patchable via /etc/system */
 
 struct clock_backend;
 
-typedef struct itimer {
+struct itimer;
+typedef struct itimer itimer_t;
+
+struct itimer {
 	itimerspec_t	it_itime;
 	hrtime_t	it_hrtime;
 	ushort_t	it_flags;
 	ushort_t	it_lock;
-	void		*it_arg;
-	sigqueue_t	*it_sigq;
-	klwp_t		*it_lwp;
+	void		*it_arg;	/* clock backend-specific data */
 	struct proc	*it_proc;
+	union {
+		struct {
+			sigqueue_t	*__it_sigq;
+			klwp_t		*__it_lwp;
+		} __proc;
+		void *__it_frontend;
+	} __data;			/* timer frontend-specific data */
 	kcondvar_t	it_cv;
 	int		it_blockers;
 	int		it_pending;
 	int		it_overrun;
 	struct clock_backend *it_backend;
+	void		(*it_fire)(itimer_t *);
 	kmutex_t	it_mutex;
 	void		*it_portev;	/* port_kevent_t pointer */
 	void		*it_portsrc;	/* port_source_t pointer */
 	int		it_portfd;	/* port file descriptor */
-} itimer_t;
+};
+
+#define	it_sigq		__data.__proc.__it_sigq
+#define	it_lwp		__data.__proc.__it_lwp
+#define	it_frontend	__data.__it_frontend
 
 typedef struct clock_backend {
 	struct sigevent clk_default;
 	int (*clk_clock_settime)(timespec_t *);
 	int (*clk_clock_gettime)(timespec_t *);
 	int (*clk_clock_getres)(timespec_t *);
-	int (*clk_timer_create)(itimer_t *, struct sigevent *);
+	int (*clk_timer_create)(itimer_t *, void (*)(itimer_t *));
 	int (*clk_timer_settime)(itimer_t *, int, const struct itimerspec *);
 	int (*clk_timer_gettime)(itimer_t *, struct itimerspec *);
 	int (*clk_timer_delete)(itimer_t *);
@@ -88,8 +114,8 @@ typedef struct clock_backend {
 } clock_backend_t;
 
 extern void clock_add_backend(clockid_t clock, clock_backend_t *backend);
+extern clock_backend_t *clock_get_backend(clockid_t clock);
 
-extern void timer_fire(itimer_t *);
 extern void timer_lwpbind();
 
 extern	void	timer_func(sigqueue_t *);

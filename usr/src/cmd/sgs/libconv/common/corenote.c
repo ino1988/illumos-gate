@@ -25,7 +25,8 @@
  */
 /*
  * Copyright 2012 DEY Storage Systems, Inc.  All rights reserved.
- * Copyright (c) 2013, Joyent, Inc. All rights reserved.
+ * Copyright (c) 2018 Joyent, Inc.
+ * Copyright 2020 Oxide Computer Company
  */
 
 /*
@@ -37,6 +38,7 @@
 #include	<stdio.h>
 #include	<procfs.h>
 #include	<sys/corectl.h>
+#include	<sys/secflags.h>
 #include	<string.h>
 #include	<_conv.h>
 #include	<corenote_msg.h>
@@ -57,9 +59,10 @@ conv_cnote_type(Word type, Conv_fmt_flags_t fmt_flags,
 		MSG_NT_LWPSINFO,	MSG_NT_PRPRIV,
 		MSG_NT_PRPRIVINFO,	MSG_NT_CONTENT,
 		MSG_NT_ZONENAME,	MSG_NT_FDINFO,
-		MSG_NT_SPYMASTER
+		MSG_NT_SPYMASTER,	MSG_NT_SECFLAGS,
+		MSG_NT_LWPNAME,		MSG_NT_UPANIC
 	};
-#if NT_NUM != NT_SPYMASTER
+#if NT_NUM != NT_UPANIC
 #error "NT_NUM has grown. Update core note types[]"
 #endif
 	static const conv_ds_msg_t ds_types = {
@@ -104,19 +107,22 @@ conv_cnote_auxv_type(Word type, Conv_fmt_flags_t fmt_flags,
 	static const conv_ds_msg_t ds_types_2000_2011 = {
 	    CONV_DS_MSG_INIT(2000, types_2000_2011) };
 
-	static const Msg	types_2014_2023[] = {
+	static const Msg	types_2014_2028[] = {
 		MSG_AUXV_AT_SUN_EXECNAME,	MSG_AUXV_AT_SUN_MMU,
 		MSG_AUXV_AT_SUN_LDDATA,		MSG_AUXV_AT_SUN_AUXFLAGS,
 		MSG_AUXV_AT_SUN_EMULATOR,	MSG_AUXV_AT_SUN_BRANDNAME,
 		MSG_AUXV_AT_SUN_BRAND_AUX1,	MSG_AUXV_AT_SUN_BRAND_AUX2,
-		MSG_AUXV_AT_SUN_BRAND_AUX3,	MSG_AUXV_AT_SUN_HWCAP2
+		MSG_AUXV_AT_SUN_BRAND_AUX3,	MSG_AUXV_AT_SUN_HWCAP2,
+		0,				0,
+		MSG_AUXV_AT_SUN_COMMPAGE,	MSG_AUXV_AT_SUN_FPTYPE,
+		MSG_AUXV_AT_SUN_FPSIZE
 	};
-	static const conv_ds_msg_t ds_types_2014_2023 = {
-	    CONV_DS_MSG_INIT(2014, types_2014_2023) };
+	static const conv_ds_msg_t ds_types_2014_2028 = {
+	    CONV_DS_MSG_INIT(2014, types_2014_2028) };
 
 	static const conv_ds_t	*ds[] = {
 		CONV_DS_ADDR(ds_types_0_22), CONV_DS_ADDR(ds_types_2000_2011),
-		CONV_DS_ADDR(ds_types_2014_2023), NULL };
+		CONV_DS_ADDR(ds_types_2014_2028), NULL };
 
 	return (conv_map_ds(ELFOSABI_NONE, EM_NONE, type, ds, fmt_flags,
 	    inv_buf));
@@ -249,8 +255,8 @@ conv_cnote_syscall(Word sysnum, Conv_fmt_flags_t fmt_flags,
 		MSG_SYS_MUNMAP,			MSG_SYS_FPATHCONF,
 		MSG_SYS_VFORK,			MSG_SYS_FCHDIR,
 		MSG_SYS_READV,			MSG_SYS_WRITEV,
-		MSG_SYS_123,			MSG_SYS_124,
-		MSG_SYS_125,			MSG_SYS_126,
+		MSG_SYS_PREADV,			MSG_SYS_PWRITEV,
+		MSG_SYS_UPANIC,			MSG_SYS_GETRANDOM,
 		MSG_SYS_MMAPOBJ,		MSG_SYS_SETRLIMIT,
 		MSG_SYS_GETRLIMIT,		MSG_SYS_LCHOWN,
 		MSG_SYS_MEMCNTL,		MSG_SYS_GETPMSG,
@@ -1170,7 +1176,7 @@ conv_cnote_pr_flags(int flags, Conv_fmt_flags_t fmt_flags,
     Conv_cnote_pr_flags_buf_t *cnote_pr_flags_buf)
 {
 	static const Val_desc vda[] = {
-		{ PR_STOPPED, 		MSG_PR_FLAGS_STOPPED },
+		{ PR_STOPPED,		MSG_PR_FLAGS_STOPPED },
 		{ PR_ISTOP,		MSG_PR_FLAGS_ISTOP },
 		{ PR_DSTOP,		MSG_PR_FLAGS_DSTOP },
 		{ PR_STEP,		MSG_PR_FLAGS_STEP },
@@ -1329,7 +1335,7 @@ conv_cnote_proc_flag(int flags, Conv_fmt_flags_t fmt_flags,
 	 * their numeric value.
 	 */
 	static const Val_desc vda[] = {
-		{ 0x00000001, 		MSG_PROC_FLAG_SSYS },
+		{ 0x00000001,		MSG_PROC_FLAG_SSYS },
 		{ 0x02000000,		MSG_PROC_FLAG_SMSACCT },
 		{ 0,			0 }
 	};
@@ -1950,10 +1956,10 @@ conv_cnote_fltset(uint32_t *maskarr, int n_mask,
 	MSG_SYS_FCHDIR_ALT_SIZE			/* 120 */ + \
 	MSG_SYS_READV_ALT_SIZE			/* 121 */ + \
 	MSG_SYS_WRITEV_ALT_SIZE			/* 122 */ + \
-	MSG_SYS_123_SIZE			/* 123 (unused) */ + \
-	MSG_SYS_124_SIZE			/* 124 (unused) */ + \
-	MSG_SYS_125_SIZE			/* 125 (unused) */ + \
-	MSG_SYS_126_SIZE			/* 126 (unused) */ + \
+	MSG_SYS_PREADV_SIZE			/* 123 */ + \
+	MSG_SYS_PWRITEV_SIZE			/* 124 */ + \
+	MSG_SYS_UPANIC_SIZE			/* 125 */ + \
+	MSG_SYS_GETRANDOM_SIZE			/* 126 */ + \
 	MSG_SYS_MMAPOBJ_ALT_SIZE		/* 127 */ + \
 	MSG_SYS_SETRLIMIT_ALT_SIZE		/* 128 */ + \
 	\
@@ -2273,10 +2279,10 @@ conv_cnote_sysset(uint32_t *maskarr, int n_mask,
 		{ 0x00800000,	MSG_SYS_FCHDIR_ALT },
 		{ 0x01000000,	MSG_SYS_READV_ALT },
 		{ 0x02000000,	MSG_SYS_WRITEV_ALT },
-		{ 0x04000000,	MSG_SYS_123 },
-		{ 0x08000000,	MSG_SYS_124 },
-		{ 0x10000000,	MSG_SYS_125 },
-		{ 0x20000000,	MSG_SYS_126 },
+		{ 0x04000000,	MSG_SYS_PREADV_ALT },
+		{ 0x08000000,	MSG_SYS_PWRITEV_ALT },
+		{ 0x10000000,	MSG_SYS_UPANIC_ALT },
+		{ 0x20000000,	MSG_SYS_GETRANDOM_ALT },
 		{ 0x40000000,	MSG_SYS_MMAPOBJ_ALT },
 		{ 0x80000000,	MSG_SYS_SETRLIMIT_ALT },
 		{ 0,			0 }
@@ -2473,7 +2479,7 @@ conv_cnote_fileflags(uint32_t fileflags, Conv_fmt_flags_t fmt_flags,
 		{ 0x2000,	MSG_PR_O_LARGEFILE },
 		{ 0x20000,	MSG_PR_O_NOFOLLOW },
 		{ 0x40000,	MSG_PR_O_NOLINKS },
-		{ 0, NULL },
+		{ 0, 0 },
 	};
 
 	arg.oflags = arg.rflags = fileflags;
@@ -2525,7 +2531,7 @@ conv_cnote_filemode(uint32_t mode, Conv_fmt_flags_t fmt_flags,
 		{ 0004,		MSG_S_IROTH },
 		{ 0002,		MSG_S_IWOTH },
 		{ 0001,		MSG_S_IXOTH },
-		{ 0, NULL },
+		{ 0, 0 },
 	};
 
 	arg.oflags = arg.rflags = mode & ~(0xf000);
@@ -2564,7 +2570,7 @@ conv_cnote_filemode(uint32_t mode, Conv_fmt_flags_t fmt_flags,
 		s = MSG_S_IFPORT;
 		break;
 	default:
-		s = NULL;
+		s = 0;
 		break;
 	}
 
@@ -2581,4 +2587,109 @@ conv_cnote_filemode(uint32_t mode, Conv_fmt_flags_t fmt_flags,
 
 	(void) conv_expn_field(&arg, vda, fmt_flags);
 	return (buf);
+}
+
+
+#define	PROCSECFLGSZ	CONV_EXPN_FIELD_DEF_PREFIX_SIZE +		\
+	MSG_ASLR_SIZE		+ CONV_EXPN_FIELD_DEF_SEP_SIZE +	\
+	MSG_FORBIDNULLMAP_SIZE	+ CONV_EXPN_FIELD_DEF_SEP_SIZE +	\
+	MSG_NOEXECSTACK_SIZE	+ CONV_EXPN_FIELD_DEF_SEP_SIZE +	\
+	CONV_INV_BUFSIZE	+ CONV_EXPN_FIELD_DEF_SUFFIX_SIZE
+
+/*
+ * Ensure that Conv_cnote_pr_secflags_buf_t is large enough:
+ *
+ * PROCSECFLGSZ is the real minimum size of the buffer required by
+ * conv_prsecflags(). However, Conv_cnote_pr_secflags_buf_t uses
+ * CONV_CNOTE_PSECFLAGS_FLAG_BUFSIZE to set the buffer size. We do things this
+ * way because the definition of PROCSECFLGSZ uses information that is not
+ * available in the environment of other programs that include the conv.h
+ * header file.
+ */
+#if (CONV_PRSECFLAGS_BUFSIZE != PROCSECFLGSZ) && !defined(__lint)
+#define	REPORT_BUFSIZE PROCSECFLGSZ
+#include "report_bufsize.h"
+#error "CONV_PRSECFLAGS_BUFSIZE does not match PROCSECFLGSZ"
+#endif
+
+const char *
+conv_prsecflags(secflagset_t flags, Conv_fmt_flags_t fmt_flags,
+    Conv_secflags_buf_t *secflags_buf)
+{
+	/*
+	 * The values are initialized later, based on position in this array
+	 */
+	static Val_desc vda[] = {
+		{ 0, MSG_ASLR },
+		{ 0, MSG_FORBIDNULLMAP },
+		{ 0, MSG_NOEXECSTACK },
+		{ 0, 0 }
+	};
+	static CONV_EXPN_FIELD_ARG conv_arg = {
+	    NULL, sizeof (secflags_buf->buf)
+	};
+	int i;
+
+	for (i = 0; vda[i].v_msg != 0; i++)
+		vda[i].v_val = secflag_to_bit(i);
+
+	if (flags == 0)
+		return (MSG_ORIG(MSG_GBL_ZERO));
+
+	conv_arg.buf = secflags_buf->buf;
+	conv_arg.oflags = conv_arg.rflags = flags;
+	(void) conv_expn_field(&conv_arg, vda, fmt_flags);
+
+	return ((const char *)secflags_buf->buf);
+}
+
+
+#define	UPANICFLGSZ	CONV_EXPN_FIELD_DEF_PREFIX_SIZE +		\
+	MSG_MSG_VALID_SIZE	+ CONV_EXPN_FIELD_DEF_SEP_SIZE +	\
+	MSG_MSG_ERROR_SIZE	+ CONV_EXPN_FIELD_DEF_SEP_SIZE +	\
+	MSG_MSG_TRUNC_SIZE	+ CONV_EXPN_FIELD_DEF_SEP_SIZE +	\
+	CONV_INV_BUFSIZE	+ CONV_EXPN_FIELD_DEF_SUFFIX_SIZE
+
+/*
+ * Ensure that Conv_upanic_buf_t is large enough:
+ *
+ * UPANICFLGSZ is the real minimum size of the buffer required by
+ * conv_prsecflags(). However, Conv_upanic_buf_t uses CONV_PRUPANIC_BUFSIZE to
+ * set the buffer size. We do things this way because the definition of
+ * UPANICFLGSZ uses information that is not available in the environment of
+ * other programs that include the conv.h header file.
+ */
+#if (CONV_PRUPANIC_BUFSIZE != UPANICFLGSZ)
+#define	REPORT_BUFSIZE UPANICFLGSZ
+#include "report_bufsize.h"
+#error "CONV_PRUPANIC_BUFSIZE does not match UPANICFLGSZ"
+#endif
+
+const char *
+conv_prupanic(uint32_t flags, Conv_fmt_flags_t fmt_flags,
+    Conv_upanic_buf_t *upanic_buf)
+{
+	/*
+	 * Unfortunately, we cannot directly use the PRUPANIC_FLAG_* macros here
+	 * because of the fact that this is also built natively and that would
+	 * create an unresolvable flag day.
+	 */
+	static Val_desc vda[] = {
+		{ 0x01, MSG_MSG_VALID },
+		{ 0x02, MSG_MSG_ERROR },
+		{ 0x04, MSG_MSG_TRUNC },
+		{ 0, 0 }
+	};
+	static CONV_EXPN_FIELD_ARG conv_arg = {
+	    NULL, sizeof (upanic_buf->buf)
+	};
+
+	if (flags == 0)
+		return (MSG_ORIG(MSG_GBL_ZERO));
+
+	conv_arg.buf = upanic_buf->buf;
+	conv_arg.oflags = conv_arg.rflags = flags;
+	(void) conv_expn_field(&conv_arg, vda, fmt_flags);
+
+	return ((const char *)upanic_buf->buf);
 }

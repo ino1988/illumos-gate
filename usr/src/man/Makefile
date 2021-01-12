@@ -20,8 +20,10 @@ SUBDIRS=	man1		\
 		man1c		\
 		man1has		\
 		man1m		\
+		man1s		\
 		man2		\
 		man3		\
+		man3avl		\
 		man3bsm		\
 		man3c		\
 		man3c_db	\
@@ -58,6 +60,7 @@ SUBDIRS=	man1		\
 		man3nsl		\
 		man3nvpair	\
 		man3pam		\
+		man3ofmt	\
 		man3papi	\
 		man3perl	\
 		man3picl	\
@@ -80,6 +83,7 @@ SUBDIRS=	man1		\
 		man3tecla	\
 		man3tnf		\
 		man3tsol	\
+		man3utempter	\
 		man3uuid	\
 		man3volmgt	\
 		man3xcurses	\

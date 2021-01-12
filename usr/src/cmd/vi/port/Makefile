@@ -23,6 +23,7 @@
 # Copyright 2010 Sun Microsystems, Inc.  All rights reserved.
 # Use is subject to license terms.
 #
+# Copyright (c) 2018, Joyent, Inc.
 
 # cmd/vi/port/Makefile
 
@@ -58,8 +59,11 @@ CERRWARN += -_gcc=-Wno-parentheses
 CERRWARN += -_gcc=-Wno-unused-variable
 CERRWARN += -_gcc=-Wno-unused-label
 CERRWARN += -_gcc=-Wno-unused-value
-CERRWARN += -_gcc=-Wno-uninitialized
+CERRWARN += $(CNOWARN_UNINIT)
 CERRWARN += -_gcc=-Wno-address
+
+# way too old
+SMATCH=off
 
 #
 # For message catalogue files
@@ -77,14 +81,13 @@ CPPFLAGS +=  -DUSG -DSTDIO -DVMUNIX -DTABS=8 -DSINGLE -DTAG_STACK
 
 # vi maintains its own versions of various routines from libc and libcurses,
 # so localize all symbols to avoid name space collisions.
-LDFLAGS +=	$(MAPFILE.NGB:%=-M%)
+LDFLAGS +=	$(MAPFILE.NGB:%=-Wl,-M%)
 
 CLOBBERFILES += $(LIBPROGS)
 ex :=		LDLIBS += -lmapmalloc -lcurses -lgen -lcrypt_i
 $(XPG4) :=	LDLIBS += -lmapmalloc -lcurses -lgen -lcrypt_i
 $(XPG6) :=	LDLIBS += -lmapmalloc -lcurses -lgen -lcrypt_i
 exrecover :=	LDLIBS += -lmapmalloc -lcrypt_i
-lint :=		LDLIBS += -lmapmalloc -lcurses -lgen -lcrypt
 
 ROOTLIBPROGS= $(LIBPROGS:%=$(ROOTLIB)/%)
 
@@ -117,11 +120,11 @@ ex.xpg6: $(XD6) $(XPG6EXOBJS)
 $(XD4)/compile.o $(XD6)/compile.o: ../../expr/compile.c
 	$(COMPILE.c) -o $@ ../../expr/compile.c
 
-%values-xpg4.o: ../../../lib/common/common/values-xpg4.c
-	$(COMPILE.c) -o $@ ../../../lib/common/common/values-xpg4.c
+%values-xpg4.o: ../../../lib/crt/common/values-xpg4.c
+	$(COMPILE.c) -o $@ ../../../lib/crt/common/values-xpg4.c
 
-%values-xpg6.o: ../../../lib/common/common/values-xpg6.c
-	$(COMPILE.c) -o $@ ../../../lib/common/common/values-xpg6.c
+%values-xpg6.o: ../../../lib/crt/common/values-xpg6.c
+	$(COMPILE.c) -o $@ ../../../lib/crt/common/values-xpg6.c
 
 $(XPG4EXOBJS): $(XD4)
 
@@ -167,7 +170,5 @@ $(ROOTXPG6LINKS): $(ROOTXPG6PROG)
 
 clean:
 	$(RM) $(OBJS)
-
-lint: lint_SRCS
 
 include ../../Makefile.targ

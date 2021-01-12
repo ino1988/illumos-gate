@@ -19,23 +19,27 @@
 #
 # CDDL HEADER END
 #
+
 #
 # Copyright (c) 1997-2000 by Sun Microsystems, Inc.
 # All rights reserved.
 #
-# cmd/abi/appcert/static_prof/Makefile.com
+# Copyright 2015 Nexenta Systems, Inc.  All rights reserved.
 #
+# Copyright (c) 2018, Joyent, Inc.
 
 include		$(SRC)/cmd/Makefile.cmd
 
 PROG = static_prof
 SRCS = $(PROG:%=../%.c)
 
-# CPPFLAGS =	-I.. 
-CFLAGS	+=	$(LDLIBS)
 CERRWARN +=	-_gcc=-Wno-unused-value
 CERRWARN +=	-_gcc=-Wno-parentheses
-LDLIBS	=	-lelf
+
+# not linted
+SMATCH=off
+
+LDLIBS +=	-lelf
 
 LINTFLAGS =	-nmxsuF -errtags=yes
 LINTLIBS +=	$(LDLIBS)

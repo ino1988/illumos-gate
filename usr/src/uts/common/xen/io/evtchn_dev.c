@@ -22,6 +22,7 @@
 /*
  * Copyright 2009 Sun Microsystems, Inc.  All rights reserved.
  * Use is subject to license terms.
+ * Copyright 2017 Joyent, Inc.
  */
 
 
@@ -78,7 +79,7 @@
 
 /* Some handy macros */
 #define	EVTCHNDRV_MINOR2INST(minor)	((int)(minor))
-#define	EVTCHNDRV_DEFAULT_NCLONES 	256
+#define	EVTCHNDRV_DEFAULT_NCLONES	256
 #define	EVTCHNDRV_INST2SOFTS(inst)	\
 	(ddi_get_soft_state(evtchndrv_statep, (inst)))
 
@@ -111,8 +112,8 @@ static int evtchndrv_detach(dev_info_t *, ddi_detach_cmd_t);
 static struct evtsoftdata *port_user[NR_EVENT_CHANNELS];
 static kmutex_t port_user_lock;
 
-void
-evtchn_device_upcall()
+uint_t
+evtchn_device_upcall(caddr_t arg __unused, caddr_t arg1 __unused)
 {
 	struct evtsoftdata *ep;
 	int port;
@@ -153,6 +154,7 @@ evtchn_device_upcall()
 
 done:
 	mutex_exit(&port_user_lock);
+	return (DDI_INTR_CLAIMED);
 }
 
 /* ARGSUSED */
@@ -450,7 +452,6 @@ evtchndrv_poll(dev_t dev, short ev, int anyyet, short *revp, pollhead_t **phpp)
 	short mask = 0;
 
 	ep = EVTCHNDRV_INST2SOFTS(EVTCHNDRV_MINOR2INST(minor));
-	*phpp = (struct pollhead *)NULL;
 
 	if (ev & POLLOUT)
 		mask |= POLLOUT;
@@ -458,12 +459,13 @@ evtchndrv_poll(dev_t dev, short ev, int anyyet, short *revp, pollhead_t **phpp)
 		mask |= POLLERR;
 	if (ev & (POLLIN | POLLRDNORM)) {
 		mutex_enter(&ep->evtchn_lock);
-		if (ep->ring_cons != ep->ring_prod)
+		if (ep->ring_cons != ep->ring_prod) {
 			mask |= (POLLIN | POLLRDNORM) & ev;
-		else
-			if (mask == 0 && !anyyet)
-				*phpp = &ep->evtchn_pollhead;
+		}
 		mutex_exit(&ep->evtchn_lock);
+	}
+	if ((mask == 0 && !anyyet) || (ev & POLLET)) {
+		*phpp = &ep->evtchn_pollhead;
 	}
 	*revp = mask;
 	return (0);
@@ -619,7 +621,7 @@ evtchndrv_attach(dev_info_t *dip, ddi_attach_cmd_t cmd)
 	    NULL);
 
 	error = ddi_create_minor_node(dip, "evtchn", S_IFCHR, unit,
-	    DDI_PSEUDO, NULL);
+	    DDI_PSEUDO, 0);
 	if (error != DDI_SUCCESS)
 		goto fail;
 
@@ -655,7 +657,7 @@ evtchndrv_detach(dev_info_t *dip, ddi_detach_cmd_t cmd)
 
 /* Solaris driver framework */
 
-static 	struct cb_ops evtchndrv_cb_ops = {
+static struct cb_ops evtchndrv_cb_ops = {
 	evtchndrv_open,		/* cb_open */
 	evtchndrv_close,	/* cb_close */
 	nodev,			/* cb_strategy */

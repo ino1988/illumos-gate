@@ -20,6 +20,7 @@
 #
 #
 # Copyright (c) 2007, 2010, Oracle and/or its affiliates. All rights reserved.
+# Copyright 2018 Nexenta Systems, Inc.  All rights reserved.
 #
 
 include ../../../Makefile.master
@@ -32,11 +33,9 @@ HDRS=	alloc.h			\
 	mailslot.h		\
 	mbuf.h			\
 	msgbuf.h		\
-	ndr.h			\
 	netbios.h		\
 	netrauth.h		\
 	nmpipes.h		\
-	ntaccess.h		\
 	ntifs.h			\
 	ntlocale.h		\
 	smb_sid.h		\
@@ -47,30 +46,30 @@ HDRS=	alloc.h			\
 	smb_idmap.h		\
 	smb_inet.h		\
 	smb_ioctl.h		\
+	smb_kcrypt.h		\
 	smb_kproto.h		\
 	smb_kstat.h		\
 	smb_ktypes.h		\
+	smb_oplock.h		\
 	smb_privilege.h		\
 	smb_share.h		\
 	smb_token.h		\
 	smb_vops.h		\
 	smb_xdr.h		\
 	smbinfo.h		\
+	smb2.h			\
+	smb2_kproto.h		\
 	string.h		\
 	svrapi.h		\
-	winioctl.h		\
-	winsvc.h		\
-	wintypes.h
+	winsvc.h
 
 NDLHDRS= dssetup.ndl		\
 	eventlog.ndl		\
 	llsrpc.ndl		\
 	lsarpc.ndl		\
 	msgsvc.ndl		\
-	ndrtypes.ndl		\
 	netdfs.ndl		\
 	netlogon.ndl		\
-	rpcpdu.ndl		\
 	samrpc.ndl		\
 	security.ndl		\
 	spoolss.ndl		\

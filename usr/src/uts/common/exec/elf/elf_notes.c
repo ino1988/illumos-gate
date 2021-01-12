@@ -26,7 +26,8 @@
 
 /*
  * Copyright 2012 DEY Storage Systems, Inc.  All rights reserved.
- * Copyright (c) 2014, Joyent, Inc. All rights reserved.
+ * Copyright 2018 Joyent, Inc.
+ * Copyright 2020 OmniOS Community Edition (OmniOSce) Association.
  */
 
 #include <sys/types.h>
@@ -94,7 +95,7 @@ setup_note_header(Phdr *v, proc_t *p)
 
 	v[0].p_type = PT_NOTE;
 	v[0].p_flags = PF_R;
-	v[0].p_filesz = (sizeof (Note) * (9 + 2 * nlwp + nzomb + nfd))
+	v[0].p_filesz = (sizeof (Note) * (10 + 3 * nlwp + nzomb + nfd))
 	    + roundup(sizeof (psinfo_t), sizeof (Word))
 	    + roundup(sizeof (pstatus_t), sizeof (Word))
 	    + roundup(prgetprivsize(), sizeof (Word))
@@ -104,9 +105,11 @@ setup_note_header(Phdr *v, proc_t *p)
 	    + roundup(__KERN_NAUXV_IMPL * sizeof (aux_entry_t), sizeof (Word))
 	    + roundup(sizeof (utsname), sizeof (Word))
 	    + roundup(sizeof (core_content_t), sizeof (Word))
+	    + roundup(sizeof (prsecflags_t), sizeof (Word))
 	    + (nlwp + nzomb) * roundup(sizeof (lwpsinfo_t), sizeof (Word))
 	    + nlwp * roundup(sizeof (lwpstatus_t), sizeof (Word))
-	    + nfd * roundup(sizeof (prfdinfo_t), sizeof (Word));
+	    + nlwp * roundup(sizeof (prlwpname_t), sizeof (Word))
+	    + nfd * roundup(sizeof (prfdinfo_core_t), sizeof (Word));
 
 	if (curproc->p_agenttp != NULL) {
 		v[0].p_filesz += sizeof (Note) +
@@ -161,6 +164,13 @@ setup_note_header(Phdr *v, proc_t *p)
 		v[0].p_filesz += nlwp * sizeof (Note)
 		    + nlwp * roundup(sizeof (asrset_t), sizeof (Word));
 #endif /* __sparc */
+
+	mutex_enter(&p->p_lock);
+	if ((p->p_upanicflag & P_UPF_PANICKED) != 0) {
+		v[0].p_filesz += sizeof (Note) +
+		    roundup(sizeof (prupanic_t), sizeof (Word));
+	}
+	mutex_exit(&p->p_lock);
 }
 
 int
@@ -182,6 +192,8 @@ write_elfnotes(proc_t *p, int sig, vnode_t *vp, offset_t offset,
 		prpriv_t	ppriv;
 		priv_impl_info_t prinfo;
 		struct utsname	uts;
+		prsecflags_t	psecflags;
+		prupanic_t	upanic;
 	} *bigwad;
 
 	size_t xregsize = prhasx(p)? prgetprxregsize(p) : 0;
@@ -287,6 +299,12 @@ write_elfnotes(proc_t *p, int sig, vnode_t *vp, offset_t offset,
 	if (error)
 		goto done;
 
+	prgetsecflags(p, &bigwad->psecflags);
+	error = elfnote(vp, &offset, NT_SECFLAGS, sizeof (prsecflags_t),
+	    (caddr_t)&bigwad->psecflags, rlimit, credp);
+	if (error)
+		goto done;
+
 	prgetcred(p, &bigwad->pcred);
 
 	if (bigwad->pcred.pr_ngroups != 0) {
@@ -341,7 +359,7 @@ write_elfnotes(proc_t *p, int sig, vnode_t *vp, offset_t offset,
 		vnode_t *fvp;
 		struct file *fp;
 		vattr_t vattr;
-		prfdinfo_t fdinfo;
+		prfdinfo_core_t fdinfo;
 
 		bzero(&fdinfo, sizeof (fdinfo));
 
@@ -376,11 +394,28 @@ write_elfnotes(proc_t *p, int sig, vnode_t *vp, offset_t offset,
 		(void) vnodetopath(vroot, fvp, fdinfo.pr_path,
 		    sizeof (fdinfo.pr_path), credp);
 
-		error = VOP_GETATTR(fvp, &vattr, 0, credp, NULL);
-		if (error != 0) {
+		if (VOP_GETATTR(fvp, &vattr, 0, credp, NULL) != 0) {
+			/*
+			 * Try to write at least a subset of information
+			 */
+			fdinfo.pr_major = 0;
+			fdinfo.pr_minor = 0;
+			fdinfo.pr_ino = 0;
+			fdinfo.pr_mode = 0;
+			fdinfo.pr_uid = (uid_t)-1;
+			fdinfo.pr_gid = (gid_t)-1;
+			fdinfo.pr_rmajor = 0;
+			fdinfo.pr_rminor = 0;
+			fdinfo.pr_size = -1;
+
+			error = elfnote(vp, &offset, NT_FDINFO,
+			    sizeof (fdinfo), &fdinfo, rlimit, credp);
 			VN_RELE(fvp);
-			VN_RELE(vroot);
-			goto done;
+			if (error) {
+				VN_RELE(vroot);
+				goto done;
+			}
+			continue;
 		}
 
 		if (fvp->v_type == VSOCK)
@@ -431,6 +466,7 @@ write_elfnotes(proc_t *p, int sig, vnode_t *vp, offset_t offset,
 	nzomb = p->p_zombcnt;
 	/* for each entry in the lwp directory ... */
 	for (ldp = p->p_lwpdir; nlwp + nzomb != 0; ldp++) {
+		prlwpname_t name = { 0, };
 
 		if ((lep = ldp->ld_entry) == NULL)	/* empty slot */
 			continue;
@@ -441,6 +477,10 @@ write_elfnotes(proc_t *p, int sig, vnode_t *vp, offset_t offset,
 			lwp = ttolwp(t);
 			mutex_enter(&p->p_lock);
 			prgetlwpsinfo(t, &bigwad->lwpsinfo);
+			if (t->t_name != NULL) {
+				(void) strlcpy(name.pr_lwpname, t->t_name,
+				    sizeof (name.pr_lwpname));
+			}
 			mutex_exit(&p->p_lock);
 		} else {				/* zombie lwp */
 			ASSERT(nzomb != 0);
@@ -451,11 +491,15 @@ write_elfnotes(proc_t *p, int sig, vnode_t *vp, offset_t offset,
 			bigwad->lwpsinfo.pr_sname = 'Z';
 			bigwad->lwpsinfo.pr_start.tv_sec = lep->le_start;
 		}
+
+		name.pr_lwpid = bigwad->lwpsinfo.pr_lwpid;
+
 		error = elfnote(vp, &offset, NT_LWPSINFO,
 		    sizeof (bigwad->lwpsinfo), (caddr_t)&bigwad->lwpsinfo,
 		    rlimit, credp);
 		if (error)
 			goto done;
+
 		if (t == NULL)		/* nothing more to do for a zombie */
 			continue;
 
@@ -488,6 +532,11 @@ write_elfnotes(proc_t *p, int sig, vnode_t *vp, offset_t offset,
 		    rlimit, credp);
 		if (error)
 			goto done;
+
+		if ((error = elfnote(vp, &offset, NT_LWPNAME, sizeof (name),
+		    (caddr_t)&name, rlimit, credp)) != 0)
+			goto done;
+
 
 #if defined(__sparc)
 		/*
@@ -555,6 +604,36 @@ write_elfnotes(proc_t *p, int sig, vnode_t *vp, offset_t offset,
 		}
 	}
 	ASSERT(nlwp == 0);
+
+	/*
+	 * If a upanic occurred, add a note for it.
+	 */
+	mutex_enter(&p->p_lock);
+	if ((p->p_upanicflag & P_UPF_PANICKED) != 0) {
+		bzero(&bigwad->upanic, sizeof (prupanic_t));
+		bigwad->upanic.pru_version = PRUPANIC_VERSION_1;
+		if ((p->p_upanicflag & P_UPF_INVALMSG) != 0) {
+			bigwad->upanic.pru_flags |= PRUPANIC_FLAG_MSG_ERROR;
+		}
+
+		if ((p->p_upanicflag & P_UPF_TRUNCMSG) != 0) {
+			bigwad->upanic.pru_flags |= PRUPANIC_FLAG_MSG_TRUNC;
+		}
+
+		if ((p->p_upanicflag & P_UPF_HAVEMSG) != 0) {
+			bigwad->upanic.pru_flags |= PRUPANIC_FLAG_MSG_VALID;
+			bcopy(p->p_upanic, bigwad->upanic.pru_data,
+			    PRUPANIC_BUFLEN);
+		}
+
+		error = elfnote(vp, &offset, NT_UPANIC, sizeof (prupanic_t),
+		    &bigwad->upanic, rlimit, credp);
+		if (error != 0) {
+			mutex_exit(&p->p_lock);
+			goto done;
+		}
+	}
+	mutex_exit(&p->p_lock);
 
 done:
 	kmem_free(bigwad, bigsize);

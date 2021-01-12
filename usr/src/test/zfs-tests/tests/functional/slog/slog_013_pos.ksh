@@ -26,7 +26,7 @@
 #
 
 #
-# Copyright (c) 2013 by Delphix. All rights reserved.
+# Copyright (c) 2013, 2016 by Delphix. All rights reserved.
 #
 
 . $STF_SUITE/tests/functional/slog/slog.kshlib
@@ -47,48 +47,32 @@ verify_runnable "global"
 function cleanup_testenv
 {
 	cleanup
-	if datasetexists $TESTPOOL2 ; then
-		log_must $ZPOOL destroy -f $TESTPOOL2
-	fi
-	if [[ -n $lofidev ]]; then
-		$LOFIADM -d $lofidev
-	fi
+	[[ -n $lofidev ]] && $LOFIADM -d $lofidev
 }
 
 log_assert "Verify slog device can be disk, file, lofi device or any device " \
 	"that presents a block interface."
 verify_disk_count "$DISKS" 2
 log_onexit cleanup_testenv
+log_must setup
 
 dsk1=${DISKS%% *}
-log_must $ZPOOL create $TESTPOOL ${DISKS#$dsk1}
+log_must zpool create $TESTPOOL ${DISKS#$dsk1}
 
 # Add nomal disk
-log_must $ZPOOL add $TESTPOOL log $dsk1
+log_must zpool add $TESTPOOL log $dsk1
 log_must verify_slog_device $TESTPOOL $dsk1 'ONLINE'
 # Add nomal file
-log_must $ZPOOL add $TESTPOOL log $LDEV
+log_must zpool add $TESTPOOL log $LDEV
 ldev=$(random_get $LDEV)
 log_must verify_slog_device $TESTPOOL $ldev 'ONLINE'
 
 # Add lofi device
 lofidev=${LDEV2%% *}
-log_must $LOFIADM -a $lofidev
-lofidev=$($LOFIADM $lofidev)
-log_must $ZPOOL add $TESTPOOL log $lofidev
+log_must lofiadm -a $lofidev
+lofidev=$(lofiadm $lofidev)
+log_must zpool add $TESTPOOL log $lofidev
 log_must verify_slog_device $TESTPOOL $lofidev 'ONLINE'
 
 log_pass "Verify slog device can be disk, file, lofi device or any device " \
 	"that presents a block interface."
-
-# Temp disable fore bug 6569095
-# Add file which reside in the itself
-mntpnt=$(get_prop mountpoint $TESTPOOL)
-log_must $MKFILE 100M $mntpnt/vdev
-log_must $ZPOOL add $TESTPOOL $mntpnt/vdev
-
-# Temp disable fore bug 6569072
-# Add ZFS volume
-vol=$TESTPOOL/vol
-log_must $ZPOOL create -V 64M $vol
-log_must $ZPOOL add $TESTPOOL /dev/zvol/dsk/$vol

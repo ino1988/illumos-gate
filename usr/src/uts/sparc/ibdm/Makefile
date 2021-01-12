@@ -40,10 +40,7 @@ UTSBASE	= ../..
 #
 MODULE		= ibdm
 OBJECTS		= $(IBDM_OBJS:%=$(OBJS_DIR)/%)
-LINTS		= $(IBDM_OBJS:%.o=$(LINTS_DIR)/%.ln)
 ROOTMODULE	= $(ROOT_MISC_DIR)/$(MODULE)
-WARLOCK_OUT	= $(IBDM_OBJS:%.o=%.ll)
-WARLOCK_OK	= $(MODULE).ok
 
 #
 #	Include common rules.
@@ -54,7 +51,6 @@ include $(UTSBASE)/sparc/Makefile.sparc
 #	Define targets
 #
 ALL_TARGET	= $(BINARY)
-LINT_TARGET	= $(MODULE).lint
 INSTALL_TARGET	= $(BINARY) $(ROOTMODULE)
 
 #
@@ -63,24 +59,18 @@ INSTALL_TARGET	= $(BINARY) $(ROOTMODULE)
 ALL_BUILDS	= $(ALL_BUILDSONLY64)
 DEF_BUILDS	= $(DEF_BUILDSONLY64)
 
-# 
-# lint pass one enforcement 
-# 
-CFLAGS += $(CCVERBOSE)
-
 #
 #	depends on misc/ibtl, and misc/ibmf
 #
 LDFLAGS	+= -dy -Nmisc/ibtl -Nmisc/ibmf
 
 #
-# For now, disable these lint checks; maintainers should endeavor
-# to investigate and remove these for maximum lint coverage.
+# For now, disable these warnings; maintainers should endeavor
+# to investigate and remove these for maximum coverage.
 # Please do not carry these forward to new Makefiles.
 #
-LINTTAGS	+= -erroff=E_BAD_PTR_CAST_ALIGN
-
-CERRWARN	+= -_gcc=-Wno-uninitialized
+CFLAGS		+= $(CCVERBOSE)
+CERRWARN	+= $(CNOWARN_UNINIT)
 
 #
 #	Default build targets.
@@ -92,16 +82,8 @@ def:		$(DEF_DEPS)
 all:		$(ALL_DEPS)
 
 clean:		$(CLEAN_DEPS)
-		$(RM) $(WARLOCK_OUT) $(WARLOCK_OK)
 
 clobber:	$(CLOBBER_DEPS)
-		$(RM) $(WARLOCK_OUT) $(WARLOCK_OK)
-
-lint:		$(LINT_DEPS)
-
-modlintlib:	$(MODLINTLIB_DEPS) lint32
-
-clean.lint:	$(CLEAN_LINT_DEPS)
 
 install:	$(INSTALL_DEPS)
 
@@ -109,22 +91,3 @@ install:	$(INSTALL_DEPS)
 #	Include common targets.
 #
 include $(UTSBASE)/sparc/Makefile.targ
-
-#
-#	Defines for local commands.
-#
-WARLOCK		= warlock
-WLCC		= wlcc
-TOUCH		= touch
-TEST		= test
-
-warlock: $(WARLOCK_OK)
-
-
-$(WARLOCK_OK): $(WARLOCK_OUT) 
-	$(TOUCH) $@
-
-%.ll: $(UTSBASE)/common/io/ib/mgt/ibdm/%.c \
-		$(UTSBASE)/common/sys/ib/mgt/ibdm/ibdm_impl.h \
-		$(UTSBASE)/common/sys/ib/mgt/ibdm/ibdm_ibnex.h
-	$(WLCC)  $(CPPFLAGS) -DDEBUG -o $@ $<

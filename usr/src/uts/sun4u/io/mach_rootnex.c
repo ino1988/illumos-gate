@@ -22,8 +22,9 @@
  * Copyright 2006 Sun Microsystems, Inc.  All rights reserved.
  * Use is subject to license terms.
  */
-
-#pragma ident	"%Z%%M%	%I%	%E% SMI"
+/*
+ * Copyright 2019 Peter Tribble.
+ */
 
 /*
  * sun4u root nexus driver
@@ -104,7 +105,7 @@ rootnex_add_intr_impl(dev_info_t *dip, dev_info_t *rdip,
 	 * Hack to support the UPA slave devices before the 1275
 	 * support for imap was introduced.
 	 */
-	if (ddi_getproplen(DDI_DEV_T_ANY, dip, NULL, "interrupt-map",
+	if (ddi_getproplen(DDI_DEV_T_ANY, dip, 0, "interrupt-map",
 	    &len) != DDI_PROP_SUCCESS && ddi_getprop(DDI_DEV_T_ANY,
 	    rdip, DDI_PROP_DONTPASS, "upa-interrupt-slave", 0) != 0 &&
 	    ddi_get_parent(rdip) == dip) {
@@ -175,7 +176,7 @@ rootnex_remove_intr_impl(dev_info_t *dip, dev_info_t *rdip,
 	 * Hack to support the UPA slave devices before the 1275
 	 * support for imap was introduced.
 	 */
-	if (ddi_getproplen(DDI_DEV_T_ANY, dip, NULL, "interrupt-map",
+	if (ddi_getproplen(DDI_DEV_T_ANY, dip, 0, "interrupt-map",
 	    &len) != DDI_PROP_SUCCESS && ddi_getprop(DDI_DEV_T_ANY,
 	    rdip, DDI_PROP_DONTPASS, "upa-interrupt-slave", 0) != 0) {
 		int32_t r_upaid = -1;
@@ -329,13 +330,7 @@ rootnex_name_child_impl(dev_info_t *child, char *name, int namelen)
 	if ((strcmp(node_name, "fhc") == 0) ||
 	    (strcmp(node_name, "mem-unit") == 0) ||
 	    (strcmp(node_name, "central") == 0)) {
-#ifdef  _STARFIRE
-		portid = ((((rp->regspec_bustype) & 0x6) >> 1) |
-		    (((rp->regspec_bustype) & 0xF0) >> 2) |
-		    (((rp->regspec_bustype) & 0x8) << 3));
-#else
 		portid = (rp->regspec_bustype >> 1) & 0x1f;
-#endif
 
 		/*
 		 * The port-id must go on the hardware property list,

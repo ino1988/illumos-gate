@@ -22,7 +22,7 @@
 # Copyright 2009 Sun Microsystems, Inc.  All rights reserved.
 # Use is subject to license terms.
 #
-# cmd/cmd-inet/usr.bin/rdist/Makefile
+# Copyright (c) 2018, Joyent, Inc.
 
 PROG=	rdist
 OBJS=	docmd.o expand.o lookup.o main.o server.o
@@ -36,7 +36,7 @@ include ../../Makefile.cmd-inet
 
 CPPFLAGS +=	-DSYSV -DSTRNET -DBSD_COMP
 LDLIBS +=	-lsocket -lnsl
-LDFLAGS +=	$(MAPFILE.NGB:%=-M%)
+LDFLAGS +=	$(MAPFILE.NGB:%=-Wl,-M%)
 
 include  $(SRC)/lib/gss_mechs/mech_krb5/Makefile.mech_krb5
 LDFLAGS += $(KRUNPATH) -L$(ROOT)$(KLIBDIR_DO) -L$(ROOT)$(KLIBDIR_GL)
@@ -53,7 +53,10 @@ CERRWARN +=	-_gcc=-Wno-unused-function
 CERRWARN +=	-_gcc=-Wno-unused-label
 CERRWARN +=	-_gcc=-Wno-parentheses
 CERRWARN +=	-_gcc=-Wno-clobbered
-CERRWARN +=	-_gcc=-Wno-uninitialized
+CERRWARN +=	$(CNOWARN_UNINIT)
+
+# not linted
+SMATCH=off
 
 ROOTSYMLINK=	$(ROOT)/usr/ucb/$(PROG)
 
@@ -75,11 +78,5 @@ $(ROOTSYMLINK):
 
 clean:
 	$(RM) $(OBJS) $(KCMDOBJS) $(YOBJS)
-
-lint:
-	$(YACC.y) $(YSRCS)
-	$(LINT.c) $(SRCS) y.tab.c $(LDLIBS)
-	$(RM) y.tab.c
-
 
 include ../../../Makefile.targ

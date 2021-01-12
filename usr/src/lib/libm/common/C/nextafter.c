@@ -26,8 +26,8 @@
  * Use is subject to license terms.
  */
 
-#pragma weak nextafter = __nextafter
-#pragma weak _nextafter = __nextafter
+#pragma weak __nextafter = nextafter
+#pragma weak _nextafter = nextafter
 
 #include "libm.h"
 #include <float.h>		/* DBL_MIN */
@@ -37,7 +37,7 @@ nextafter(double x, double y) {
 	int		hx, hy, k;
 	double		ans;
 	unsigned	lx;
-	volatile double dummy;
+	volatile double dummy __unused;
 
 	hx = ((int *)&x)[HIWORD];
 	lx = ((int *)&x)[LOWORD];

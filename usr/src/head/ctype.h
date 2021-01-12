@@ -20,7 +20,7 @@
  * CDDL HEADER END
  */
 /*	Copyright (c) 1988 AT&T	*/
-/*	  All Rights Reserved  	*/
+/*	  All Rights Reserved	*/
 
 
 /*
@@ -107,6 +107,8 @@ extern int ispunct_l(int, locale_t);
 extern int isspace_l(int, locale_t);
 extern int isupper_l(int, locale_t);
 extern int isxdigit_l(int, locale_t);
+extern int tolower_l(int, locale_t);
+extern int toupper_l(int, locale_t);
 
 #endif /* defined(_XPG7) || !defined(_STRICT_SYMBOLS) */
 

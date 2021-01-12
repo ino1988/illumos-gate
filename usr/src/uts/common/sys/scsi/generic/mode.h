@@ -18,9 +18,11 @@
  *
  * CDDL HEADER END
  */
+
 /*
  * Copyright 2009 Sun Microsystems, Inc.  All rights reserved.
  * Use is subject to license terms.
+ * Copyright 2017 Nexenta Systems, Inc.
  */
 
 #ifndef	_SYS_SCSI_GENERIC_MODE_H
@@ -149,6 +151,22 @@ struct mode_page {
 	((type *)(((ulong_t)(mhdr))+MODE_HEADER_LENGTH+(mhdr)->bdesc_length))
 
 /*
+ * Page Control field (bits 7 and 6) follows the following specification:
+ *
+ * 	Value			Meaning
+ * 	----------------------------------------------------------------------
+ * 	00b			current values
+ * 	01b			changeable values
+ * 	10b			default values
+ * 	11b			saved values
+ */
+
+#define	MODEPAGE_CURRENT	0x00
+#define	MODEPAGE_CHANGEABLE	0x40
+#define	MODEPAGE_DEFAULT	0x80
+#define	MODEPAGE_SAVED		0xC0
+
+/*
  * Page codes follow the following specification:
  *
  *	Code Value(s)		What
@@ -173,6 +191,8 @@ struct mode_page {
  */
 
 #define	MODEPAGE_DISCO_RECO	0x02
+#define	MODEPAGE_FORMAT		0x03
+#define	MODEPAGE_GEOMETRY	0x04
 #define	MODEPAGE_CACHING	0x08
 #define	MODEPAGE_PDEVICE	0x09
 #define	MODEPAGE_CTRL_MODE	0x0A

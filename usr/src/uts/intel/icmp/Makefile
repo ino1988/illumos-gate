@@ -23,6 +23,7 @@
 #
 # Copyright 2008 Sun Microsystems, Inc.  All rights reserved.
 # Use is subject to license terms.
+# Copyright (c) 2018, Joyent, Inc.
 #
 #	This makefile drives the production of the icmp IP driver
 #
@@ -39,7 +40,6 @@ UTSBASE	= ../..
 #
 MODULE		= icmp
 OBJECTS		= $(ICMP_OBJS:%=$(OBJS_DIR)/%)
-LINTS		= $(ICMP_OBJS:%.o=$(LINTS_DIR)/%.ln)
 ROOTMODULE	= $(ROOT_DRV_DIR)/$(MODULE)
 ROOTLINK	= $(ROOT_STRMOD_DIR)/$(MODULE) $(ROOT_SOCK_DIR)/$(MODULE)
 CONF_SRCDIR	= $(UTSBASE)/common/inet/ip
@@ -60,7 +60,6 @@ include $(UTSBASE)/intel/Makefile.intel
 #	Define targets
 #
 ALL_TARGET	= $(BINARY) $(SRC_CONFFILE)
-LINT_TARGET	= $(MODULE).lint
 INSTALL_TARGET	= $(BINARY) $(ROOTMODULE) $(ROOTLINK) $(ROOT_CONFFILE)
 
 #
@@ -68,14 +67,8 @@ INSTALL_TARGET	= $(BINARY) $(ROOTMODULE) $(ROOTLINK) $(ROOT_CONFFILE)
 #
 LDFLAGS		+= -dy -Ndrv/ip -Nfs/sockfs
 
-#
-# For now, disable these lint checks; maintainers should endeavor
-# to investigate and remove these for maximum lint coverage.
-# Please do not carry these forward to new Makefiles.
-#
-LINTTAGS	+= -erroff=E_BAD_PTR_CAST_ALIGN
-LINTTAGS	+= -erroff=E_PTRDIFF_OVERFLOW
-LINTTAGS	+= -erroff=E_ASSIGN_NARROW_CONV
+# needs work
+$(OBJS_DIR)/icmpddi.o := SMOFF += index_overflow
 
 #
 #	Default build targets.
@@ -89,12 +82,6 @@ all:		$(ALL_DEPS) $(SISCHECK_DEPS)
 clean:		$(CLEAN_DEPS) $(SISCLEAN_DEPS)
 
 clobber:	$(CLOBBER_DEPS) $(SISCLEAN_DEPS)
-
-lint:		$(LINT_DEPS)
-
-modlintlib:	$(MODLINTLIB_DEPS)
-
-clean.lint:	$(CLEAN_LINT_DEPS)
 
 install:	$(INSTALL_DEPS) $(SISCHECK_DEPS)
 

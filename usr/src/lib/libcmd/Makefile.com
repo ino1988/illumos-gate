@@ -22,6 +22,7 @@
 #
 # Copyright (c) 2007, 2010, Oracle and/or its affiliates. All rights reserved.
 #
+# Copyright (c) 2018, Joyent, Inc.
 
 
 SHELL=/usr/bin/ksh93
@@ -90,9 +91,7 @@ MAPFILES=       ../mapfile-vers
 # Set common AST build flags (e.g. C99/XPG6, needed to support the math stuff)
 include ../../../Makefile.ast
 
-LIBS =		$(DYNLIB) $(LINTLIB)
-
-$(LINTLIB) :=	SRCS = $(SRCDIR)/$(LINTSRC)
+LIBS =		$(DYNLIB)
 
 LDLIBS += \
 	-lsum \
@@ -134,9 +133,12 @@ CFLAGS64 += \
 
 CERRWARN	+= -_gcc=-Wno-unused-value
 CERRWARN	+= -_gcc=-Wno-parentheses
-CERRWARN	+= -_gcc=-Wno-uninitialized
+CERRWARN	+= $(CNOWARN_UNINIT)
 CERRWARN	+= -_gcc=-Wno-unused-variable
 CERRWARN	+= -_gcc=-Wno-implicit-function-declaration
+
+# not linted
+SMATCH=off
 
 pics/cut.o	:= CERRWARN += -erroff=E_END_OF_LOOP_CODE_NOT_REACHED
 pics/sync.o	:= CERRWARN += -erroff=E_END_OF_LOOP_CODE_NOT_REACHED
@@ -144,14 +146,6 @@ pics/vmstate.o	:= CERRWARN += -erroff=E_NO_IMPLICIT_DECL_ALLOWED
 
 .KEEP_STATE:
 
-all: $(LIBS) 
-
-#
-# libcmd is not lint-clean yet; fake up a target.  (You can use
-# "make lintcheck" to actually run lint; please send all lint fixes
-# upstream (to AT&T) so the next update will pull them into ON.)
-#
-lint:
-	@ print "usr/src/lib/libcmd is not lint-clean: skipping"
+all: $(LIBS)
 
 include ../../Makefile.targ

@@ -22,21 +22,18 @@
 # Copyright 2006 Sun Microsystems, Inc.  All rights reserved.
 # Use is subject to license terms.
 #
+# Copyright (c) 2018, Joyent, Inc.
 
 LIBRARY =		libipp-core.a
 VERS =			.0
 OBJECTS = ipp.o ipp_types.o read.o strings.o write.o
 
 include ../../../Makefile.lib
-include ../../../Makefile.rootfs
 
 SRCDIR =	../common
 
-ROOTLIBDIR=	$(ROOT)/usr/lib
-
 LIBS =			$(DYNLIB)
 
-$(LINTLIB):=	SRCS = $(SRCDIR)/$(LINTSRC)
 
 CFLAGS +=	$(CCVERBOSE)
 CPPFLAGS +=	-I$(SRCDIR)
@@ -46,6 +43,8 @@ CERRWARN +=	-_gcc=-Wno-unused-variable
 CERRWARN +=	-_gcc=-Wno-char-subscripts
 CERRWARN +=	-_gcc=-Wno-switch
 
+SMOFF += all_func_returns
+
 MAPFILES =	$(SRCDIR)/mapfile
 
 LDLIBS +=	-lpapi-common -lc
@@ -54,6 +53,5 @@ LDLIBS +=	-lpapi-common -lc
 
 all:	$(LIBS)
 
-lint:	lintcheck
 
 include ../../../Makefile.targ

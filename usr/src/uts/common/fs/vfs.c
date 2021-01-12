@@ -18,12 +18,18 @@
  *
  * CDDL HEADER END
  */
+
 /*
  * Copyright (c) 1988, 2010, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2019, Joyent, Inc.
+ * Copyright 2016 Toomas Soome <tsoome@me.com>
+ * Copyright (c) 2016, 2017 by Delphix. All rights reserved.
+ * Copyright 2016 Nexenta Systems, Inc.
+ * Copyright 2017 RackTop Systems.
  */
 
 /*	Copyright (c) 1983, 1984, 1985, 1986, 1987, 1988, 1989 AT&T	*/
-/*	  All Rights Reserved  	*/
+/*	  All Rights Reserved	*/
 
 /*
  * University Copyright- Copyright (c) 1982, 1986, 1988
@@ -234,10 +240,13 @@ fsop_root(vfs_t *vfsp, vnode_t **vpp)
 	 * Make sure this root has a path.  With lofs, it is possible to have
 	 * a NULL mountpoint.
 	 */
-	if (ret == 0 && vfsp->vfs_mntpt != NULL && (*vpp)->v_path == NULL) {
+	if (ret == 0 && vfsp->vfs_mntpt != NULL &&
+	    (*vpp)->v_path == vn_vpath_empty) {
+		const char *path;
+
 		mntpt = vfs_getmntpoint(vfsp);
-		vn_setpath_str(*vpp, refstr_value(mntpt),
-		    strlen(refstr_value(mntpt)));
+		path = refstr_value(mntpt);
+		vn_setpath_str(*vpp, path, strlen(path));
 		refstr_rele(mntpt);
 	}
 
@@ -339,8 +348,9 @@ fs_copyfsops(const fs_operation_def_t *template, vfsops_t *actual,
 			fs_nosys, fs_nosys,
 
 		VFSNAME_FREEVFS, offsetof(vfsops_t, vfs_freevfs),
-			(fs_generic_func_p)fs_freevfs,
-			(fs_generic_func_p)fs_freevfs,	/* Shouldn't fail */
+			(fs_generic_func_p)(uintptr_t)fs_freevfs,
+			/* Shouldn't fail */
+			(fs_generic_func_p)(uintptr_t)fs_freevfs,
 
 		VFSNAME_VNSTATE, offsetof(vfsops_t, vfs_vnstate),
 			(fs_generic_func_p)fs_nosys,
@@ -353,8 +363,8 @@ fs_copyfsops(const fs_operation_def_t *template, vfsops_t *actual,
 }
 
 void
-zfs_boot_init() {
-
+zfs_boot_init(void)
+{
 	if (strcmp(rootfs.bo_fstype, MNTTYPE_ZFS) == 0)
 		spa_boot_init();
 }
@@ -523,7 +533,7 @@ vfs_init(vfs_t *vfsp, vfsops_t *op, void *data)
 	vfsp->vfs_prev = vfsp;
 	vfsp->vfs_zone_next = vfsp;
 	vfsp->vfs_zone_prev = vfsp;
-	vfsp->vfs_lofi_minor = 0;
+	vfsp->vfs_lofi_id = 0;
 	sema_init(&vfsp->vfs_reflock, 1, NULL, SEMA_DEFAULT, NULL);
 	vfsimpl_setup(vfsp);
 	vfsp->vfs_data = (data);
@@ -786,6 +796,7 @@ vfs_mountfs(char *module, char *spec, char *path)
 	struct mounta mounta;
 	vfs_t *vfsp;
 
+	bzero(&mounta, sizeof (mounta));
 	mounta.flags = MS_SYSSPACE | MS_DATA;
 	mounta.fstype = module;
 	mounta.spec = spec;
@@ -904,36 +915,11 @@ vfs_mountroot(void)
 	vfs_mountfs("mntfs", "/etc/mnttab", "/etc/mnttab");
 	vfs_mountfs("tmpfs", "/etc/svc/volatile", "/etc/svc/volatile");
 	vfs_mountfs("objfs", "objfs", OBJFS_ROOT);
+	vfs_mountfs("bootfs", "bootfs", "/system/boot");
 
 	if (getzoneid() == GLOBAL_ZONEID) {
 		vfs_mountfs("sharefs", "sharefs", "/etc/dfs/sharetab");
 	}
-
-#ifdef __sparc
-	/*
-	 * This bit of magic can go away when we convert sparc to
-	 * the new boot architecture based on ramdisk.
-	 *
-	 * Booting off a mirrored root volume:
-	 * At this point, we have booted and mounted root on a
-	 * single component of the mirror.  Complete the boot
-	 * by configuring SVM and converting the root to the
-	 * dev_t of the mirrored root device.  This dev_t conversion
-	 * only works because the underlying device doesn't change.
-	 */
-	if (root_is_svm) {
-		if (svm_rootconf()) {
-			panic("vfs_mountroot: cannot remount root");
-		}
-
-		/*
-		 * mnttab should reflect the new root device
-		 */
-		vfs_lock_wait(rootvfs);
-		vfs_setresource(rootvfs, rootfs.bo_name, 0);
-		vfs_unlock(rootvfs);
-	}
-#endif /* __sparc */
 
 	if (strcmp(rootfs.bo_fstype, "zfs") != 0) {
 		/*
@@ -981,7 +967,7 @@ lofi_add(const char *fsname, struct vfs *vfsp,
 	ldi_ident_t ldi_id;
 	ldi_handle_t ldi_hdl;
 	vfssw_t *vfssw;
-	int minor;
+	int id;
 	int err = 0;
 
 	if ((vfssw = vfs_getvfssw(fsname)) == NULL)
@@ -1025,12 +1011,12 @@ lofi_add(const char *fsname, struct vfs *vfsp,
 		goto out2;
 
 	err = ldi_ioctl(ldi_hdl, LOFI_MAP_FILE, (intptr_t)li,
-	    FREAD | FWRITE | FKIOCTL, kcred, &minor);
+	    FREAD | FWRITE | FKIOCTL, kcred, &id);
 
 	(void) ldi_close(ldi_hdl, FREAD | FWRITE, kcred);
 
 	if (!err)
-		vfsp->vfs_lofi_minor = minor;
+		vfsp->vfs_lofi_id = id;
 
 out2:
 	ldi_ident_release(ldi_id);
@@ -1046,18 +1032,18 @@ out:
 static void
 lofi_remove(struct vfs *vfsp)
 {
-	struct lofi_ioctl *li = NULL;
+	struct lofi_ioctl *li;
 	ldi_ident_t ldi_id;
 	ldi_handle_t ldi_hdl;
 	int err;
 
-	if (vfsp->vfs_lofi_minor == 0)
+	if (vfsp->vfs_lofi_id == 0)
 		return;
 
 	ldi_id = ldi_ident_from_anon();
 
 	li = kmem_zalloc(sizeof (*li), KM_SLEEP);
-	li->li_minor = vfsp->vfs_lofi_minor;
+	li->li_id = vfsp->vfs_lofi_id;
 	li->li_cleanup = B_TRUE;
 
 	err = ldi_open_by_name("/dev/lofictl", FREAD | FWRITE, kcred,
@@ -1072,12 +1058,11 @@ lofi_remove(struct vfs *vfsp)
 	(void) ldi_close(ldi_hdl, FREAD | FWRITE, kcred);
 
 	if (!err)
-		vfsp->vfs_lofi_minor = 0;
+		vfsp->vfs_lofi_id = 0;
 
 out:
 	ldi_ident_release(ldi_id);
-	if (li != NULL)
-		kmem_free(li, sizeof (*li));
+	kmem_free(li, sizeof (*li));
 }
 
 /*
@@ -1102,7 +1087,7 @@ out:
  */
 int
 domount(char *fsname, struct mounta *uap, vnode_t *vp, struct cred *credp,
-	struct vfs **vfspp)
+    struct vfs **vfspp)
 {
 	struct vfssw	*vswp;
 	vfsops_t	*vfsops;
@@ -1112,7 +1097,7 @@ domount(char *fsname, struct mounta *uap, vnode_t *vp, struct cred *credp,
 	mntopts_t	mnt_mntopts;
 	int		error = 0;
 	int		copyout_error = 0;
-	int		ovflags;
+	int		ovflags = 0;
 	char		*opts = uap->optptr;
 	char		*inargs = opts;
 	int		optlen = uap->optlen;
@@ -1129,6 +1114,7 @@ domount(char *fsname, struct mounta *uap, vnode_t *vp, struct cred *credp,
 	struct pathname	pn, rpn;
 	vsk_anchor_t	*vskap;
 	char fstname[FSTYPSZ];
+	zone_t		*zone;
 
 	/*
 	 * The v_flag value for the mount point vp is permanently set
@@ -1305,7 +1291,8 @@ domount(char *fsname, struct mounta *uap, vnode_t *vp, struct cred *credp,
 		 * successful for later cleanup and addition to
 		 * the mount in progress table.
 		 */
-		if ((uap->flags & MS_GLOBAL) == 0 &&
+		if ((vswp->vsw_flag & VSW_MOUNTDEV) &&
+		    (uap->flags & MS_GLOBAL) == 0 &&
 		    lookupname(uap->spec, fromspace,
 		    FOLLOW, NULL, &bvp) == 0) {
 			addmip = 1;
@@ -1477,7 +1464,7 @@ domount(char *fsname, struct mounta *uap, vnode_t *vp, struct cred *credp,
 	/*
 	 * PRIV_SYS_MOUNT doesn't mean you can become root.
 	 */
-	if (vfsp->vfs_lofi_minor != 0) {
+	if (vfsp->vfs_lofi_id != 0) {
 		uap->flags |= MS_NOSUID;
 		vfs_setmntopt_nolock(&mnt_mntopts, MNTOPT_NOSUID, NULL, 0, 0);
 	}
@@ -1500,8 +1487,6 @@ domount(char *fsname, struct mounta *uap, vnode_t *vp, struct cred *credp,
 	 */
 	if (!remount) {
 		if (error = vfs_lock(vfsp)) {
-			vfsp->vfs_flag = ovflags;
-
 			lofi_remove(vfsp);
 
 			if (splice)
@@ -1521,7 +1506,8 @@ domount(char *fsname, struct mounta *uap, vnode_t *vp, struct cred *credp,
 	 * wlock above. This case is for a non-spliced, non-global filesystem.
 	 */
 	if (!addmip) {
-		if ((uap->flags & MS_GLOBAL) == 0 &&
+		if ((vswp->vsw_flag & VSW_MOUNTDEV) &&
+		    (uap->flags & MS_GLOBAL) == 0 &&
 		    lookupname(uap->spec, fromspace, FOLLOW, NULL, &bvp) == 0) {
 			addmip = 1;
 		}
@@ -1590,9 +1576,24 @@ domount(char *fsname, struct mounta *uap, vnode_t *vp, struct cred *credp,
 	}
 
 	/*
-	 * Serialize with zone creations.
+	 * Serialize with zone state transitions.
+	 * See vfs_list_add; zone mounted into is:
+	 *	zone_find_by_path(refstr_value(vfsp->vfs_mntpt))
+	 * not the zone doing the mount (curproc->p_zone), but if we're already
+	 * inside a NGZ, then we know what zone we are.
 	 */
-	mount_in_progress();
+	if (INGLOBALZONE(curproc)) {
+		zone = zone_find_by_path(mountpt);
+		ASSERT(zone != NULL);
+	} else {
+		zone = curproc->p_zone;
+		/*
+		 * zone_find_by_path does a hold, so do one here too so that
+		 * we can do a zone_rele after mount_completed.
+		 */
+		zone_hold(zone);
+	}
+	mount_in_progress(zone);
 	/*
 	 * Instantiate (or reinstantiate) the file system.  If appropriate,
 	 * splice it into the file system name space.
@@ -1761,7 +1762,8 @@ domount(char *fsname, struct mounta *uap, vnode_t *vp, struct cred *credp,
 
 		vfs_unlock(vfsp);
 	}
-	mount_completed();
+	mount_completed(zone);
+	zone_rele(zone);
 	if (splice)
 		vn_vfsunlock(vp);
 
@@ -2768,7 +2770,7 @@ vfs_freeopttbl(mntopts_t *mp)
 /* ARGSUSED */
 static int
 vfs_mntdummyread(vnode_t *vp, uio_t *uio, int ioflag, cred_t *cred,
-	caller_context_t *ct)
+    caller_context_t *ct)
 {
 	return (0);
 }
@@ -2776,7 +2778,7 @@ vfs_mntdummyread(vnode_t *vp, uio_t *uio, int ioflag, cred_t *cred,
 /* ARGSUSED */
 static int
 vfs_mntdummywrite(vnode_t *vp, uio_t *uio, int ioflag, cred_t *cred,
-	caller_context_t *ct)
+    caller_context_t *ct)
 {
 	return (0);
 }
@@ -2809,8 +2811,8 @@ vfs_mnttabvp_setup(void)
 	vnode_t *tvp;
 	vnodeops_t *vfs_mntdummyvnops;
 	const fs_operation_def_t mnt_dummyvnodeops_template[] = {
-		VOPNAME_READ, 		{ .vop_read = vfs_mntdummyread },
-		VOPNAME_WRITE, 		{ .vop_write = vfs_mntdummywrite },
+		VOPNAME_READ,		{ .vop_read = vfs_mntdummyread },
+		VOPNAME_WRITE,		{ .vop_write = vfs_mntdummywrite },
 		VOPNAME_GETATTR,	{ .vop_getattr = vfs_mntdummygetattr },
 		VOPNAME_VNEVENT,	{ .vop_vnevent = fs_vnevent_support },
 		NULL,			NULL
@@ -4017,9 +4019,6 @@ vfs_unrefvfssw(struct vfssw *vswp)
 	mutex_exit(&vswp->vsw_lock);
 }
 
-int sync_timeout = 30;		/* timeout for syncing a page during panic */
-int sync_timeleft;		/* portion of sync_timeout remaining */
-
 static int sync_retries = 20;	/* number of retries when not making progress */
 static int sync_triesleft;	/* portion of sync_retries remaining */
 
@@ -4030,23 +4029,13 @@ static int new_bufcnt, old_bufcnt;
  * Sync all of the mounted filesystems, and then wait for the actual i/o to
  * complete.  We wait by counting the number of dirty pages and buffers,
  * pushing them out using bio_busy() and page_busy(), and then counting again.
- * This routine is used during both the uadmin A_SHUTDOWN code as well as
- * the SYNC phase of the panic code (see comments in panic.c).  It should only
+ * This routine is used during the uadmin A_SHUTDOWN code.  It should only
  * be used after some higher-level mechanism has quiesced the system so that
  * new writes are not being initiated while we are waiting for completion.
  *
- * To ensure finite running time, our algorithm uses two timeout mechanisms:
- * sync_timeleft (a timer implemented by the omnipresent deadman() cyclic), and
- * sync_triesleft (a progress counter used by the vfs_syncall() loop below).
- * Together these ensure that syncing completes if our i/o paths are stuck.
- * The counters are declared above so they can be found easily in the debugger.
- *
- * The sync_timeleft counter is reset by bio_busy() and page_busy() using the
- * vfs_syncprogress() subroutine whenever we make progress through the lists of
- * pages and buffers.  It is decremented and expired by the deadman() cyclic.
- * When vfs_syncall() decides it is done, we disable the deadman() counter by
- * setting sync_timeleft to zero.  This timer guards against vfs_syncall()
- * deadlocking or hanging inside of a broken filesystem or driver routine.
+ * To ensure finite running time, our algorithm uses sync_triesleft (a progress
+ * counter used by the vfs_syncall() loop below). It is declared above so
+ * it can be found easily in the debugger.
  *
  * The sync_triesleft counter is updated by vfs_syncall() itself.  If we make
  * sync_retries consecutive calls to bio_busy() and page_busy() without
@@ -4060,13 +4049,11 @@ void
 vfs_syncall(void)
 {
 	if (rootdir == NULL && !modrootloaded)
-		return; /* panic during boot - no filesystems yet */
+		return; /* no filesystems have been loaded yet */
 
 	printf("syncing file systems...");
-	vfs_syncprogress();
 	sync();
 
-	vfs_syncprogress();
 	sync_triesleft = sync_retries;
 
 	old_bufcnt = new_bufcnt = INT_MAX;
@@ -4078,7 +4065,6 @@ vfs_syncall(void)
 
 		new_bufcnt = bio_busy(B_TRUE);
 		new_pgcnt = page_busy(B_TRUE);
-		vfs_syncprogress();
 
 		if (new_bufcnt == 0 && new_pgcnt == 0)
 			break;
@@ -4101,25 +4087,7 @@ vfs_syncall(void)
 	else
 		printf(" done\n");
 
-	sync_timeleft = 0;
 	delay(hz);
-}
-
-/*
- * If we are in the middle of the sync phase of panic, reset sync_timeleft to
- * sync_timeout to indicate that we are making progress and the deadman()
- * omnipresent cyclic should not yet time us out.  Note that it is safe to
- * store to sync_timeleft here since the deadman() is firing at high-level
- * on top of us.  If we are racing with the deadman(), either the deadman()
- * will decrement the old value and then we will reset it, or we will
- * reset it and then the deadman() will immediately decrement it.  In either
- * case, correct behavior results.
- */
-void
-vfs_syncprogress(void)
-{
-	if (panicstr)
-		sync_timeleft = sync_timeout;
 }
 
 /*
@@ -4204,7 +4172,7 @@ vfsinit(void)
 		VFSNAME_UNMOUNT,	{ .error = vfs_EIO },
 		VFSNAME_ROOT,		{ .error = vfs_EIO },
 		VFSNAME_STATVFS,	{ .error = vfs_EIO },
-		VFSNAME_SYNC, 		{ .vfs_sync = vfs_EIO_sync },
+		VFSNAME_SYNC,		{ .vfs_sync = vfs_EIO_sync },
 		VFSNAME_VGET,		{ .error = vfs_EIO },
 		VFSNAME_MOUNTROOT,	{ .error = vfs_EIO },
 		VFSNAME_FREEVFS,	{ .error = vfs_EIO },
@@ -4217,7 +4185,7 @@ vfsinit(void)
 		VFSNAME_UNMOUNT,	{ .error = vfsstray },
 		VFSNAME_ROOT,		{ .error = vfsstray },
 		VFSNAME_STATVFS,	{ .error = vfsstray },
-		VFSNAME_SYNC, 		{ .vfs_sync = vfsstray_sync },
+		VFSNAME_SYNC,		{ .vfs_sync = vfsstray_sync },
 		VFSNAME_VGET,		{ .error = vfsstray },
 		VFSNAME_MOUNTROOT,	{ .error = vfsstray },
 		VFSNAME_FREEVFS,	{ .error = vfsstray },
@@ -4262,7 +4230,7 @@ vfsinit(void)
 	for (vswp = &vfssw[1]; vswp < &vfssw[nfstype]; vswp++) {
 		RLOCK_VFSSW();
 		if (vswp->vsw_init != NULL)
-			(*vswp->vsw_init)(vswp - vfssw, vswp->vsw_name);
+			(void) (*vswp->vsw_init)(vswp - vfssw, vswp->vsw_name);
 		RUNLOCK_VFSSW();
 	}
 
@@ -4637,13 +4605,12 @@ getfsname(char *askfor, char *name, size_t namelen)
  * convention that the NFS V2 filesystem name is "nfs" (see vfs_conf.c)
  * we need to map "nfs" => "nfsdyn" and "nfs2" => "nfs".  The dynamic
  * nfs module will map the type back to either "nfs", "nfs3", or "nfs4".
- * This is only for root filesystems, all other uses such as cachefs
- * will expect that "nfs" == NFS V2.
+ * This is only for root filesystems, all other uses will expect
+ * that "nfs" == NFS V2.
  */
 static void
 getrootfs(char **fstypp, char **fsmodp)
 {
-	extern char *strplumb_get_netdev_path(void);
 	char *propstr = NULL;
 
 	/*
@@ -4693,11 +4660,7 @@ getrootfs(char **fstypp, char **fsmodp)
 		(void) strncpy(rootfs.bo_name, propstr, BO_MAXOBJNAME);
 		ddi_prop_free(propstr);
 	} else {
-		/* attempt to determine netdev_path via boot_mac address */
-		netdev_path = strplumb_get_netdev_path();
-		if (netdev_path == NULL)
-			panic("cannot find boot network interface");
-		(void) strncpy(rootfs.bo_name, netdev_path, BO_MAXOBJNAME);
+		rootfs.bo_name[0] = '\0';
 	}
 	*fstypp = rootfs.bo_fstype;
 	*fsmodp = "nfs";
@@ -4780,14 +4743,14 @@ vfs_get_lofi(vfs_t *vfsp, vnode_t **vpp)
 	int strsize;
 	int err;
 
-	if (vfsp->vfs_lofi_minor == 0) {
+	if (vfsp->vfs_lofi_id == 0) {
 		*vpp = NULL;
 		return (-1);
 	}
 
-	strsize = snprintf(NULL, 0, LOFINODE_PATH, vfsp->vfs_lofi_minor);
+	strsize = snprintf(NULL, 0, LOFINODE_PATH, vfsp->vfs_lofi_id);
 	path = kmem_alloc(strsize + 1, KM_SLEEP);
-	(void) snprintf(path, strsize + 1, LOFINODE_PATH, vfsp->vfs_lofi_minor);
+	(void) snprintf(path, strsize + 1, LOFINODE_PATH, vfsp->vfs_lofi_id);
 
 	/*
 	 * We may be inside a zone, so we need to use the /dev path, but

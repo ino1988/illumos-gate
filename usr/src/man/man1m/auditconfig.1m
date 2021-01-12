@@ -1,9 +1,11 @@
 '\" te
 .\"  Copyright (c) 2008, Sun Microsystems, Inc. All Rights Reserved
+.\"  Copyright 2015, Joyent, Inc. All Rights Reserved
+.\"  Copyright (c) 2017 Peter Tribble
 .\" The contents of this file are subject to the terms of the Common Development and Distribution License (the "License"). You may not use this file except in compliance with the License.
 .\" You can obtain a copy of the license at usr/src/OPENSOLARIS.LICENSE or http://www.opensolaris.org/os/licensing. See the License for the specific language governing permissions and limitations under the License.
 .\" When distributing Covered Code, include this CDDL HEADER in each file and include the License file at usr/src/OPENSOLARIS.LICENSE. If applicable, add the following below this CDDL HEADER, with the fields enclosed by brackets "[]" replaced with your own identifying information: Portions Copyright [yyyy] [name of copyright owner]
-.TH AUDITCONFIG 1M "Sep 14, 2009"
+.TH AUDITCONFIG 1M "Mar 6, 2017"
 .SH NAME
 auditconfig \- configure auditing
 .SH SYNOPSIS
@@ -13,14 +15,9 @@ auditconfig \- configure auditing
 .fi
 
 .SH DESCRIPTION
-.sp
 .LP
 \fBauditconfig\fR provides a command line interface to get and set kernel audit
 parameters.
-.sp
-.LP
-This functionality is available only if the Solaris Auditing feature has been
-enabled. See \fBbsmconv\fR(1M) for more information.
 .sp
 .LP
 The setting of the \fBperzone\fR policy determines the scope of the audit
@@ -36,20 +33,19 @@ global zone; setting these policies requires the privileges of a global zone
 administrator. \fBperzone\fR and \fBahlt\fR are described under the
 \fB-setpolicy\fR option, below.
 .SH OPTIONS
-.sp
 .ne 2
 .na
 \fB\fB-aconf\fR\fR
 .ad
 .sp .6
 .RS 4n
-Set the non-attributable audit mask from the \fBaudit_control\fR(4) file. For
-example:
+Set the non-attributable audit mask to the value set using the
+\fB-setnaflags\fR option. For example:
 .sp
 .in +2
 .nf
 # auditconfig -aconf
-Configured non-attributable events.
+Configured non-attributable event mask.
 .fi
 .in -2
 .sp
@@ -94,8 +90,8 @@ audit record from audit trail:
 .ad
 .sp .6
 .RS 4n
-Checks the configuration of the non-attributable events set in the kernel
-against the entries in \fBaudit_control\fR(4). If the runtime class mask of a
+Checks that the current non-attributable event flags set in the kernel
+matches the configuration. If the runtime class mask of a
 kernel audit event does not match the configured class mask, a mismatch is
 reported.
 .RE
@@ -225,9 +221,29 @@ Display the kernel audit condition. The condition displayed is the literal
 string \fBauditing\fR meaning auditing is enabled and turned on (the kernel
 audit module is constructing and queuing audit records); \fBnoaudit\fR, meaning
 auditing is enabled but turned off (the kernel audit module is not constructing
-and queuing audit records); \fBdisabled\fR, meaning that the audit module has
-not been enabled; or \fBnospace\fR, meaning there is no space for saving audit
-records. See \fBauditon\fR(2) and \fBauditd\fR(1M) for further information.
+and queuing audit records); or \fBnospace\fR, meaning there is no space for
+saving audit records. See \fBauditon\fR(2) and \fBauditd\fR(1M) for further
+information.
+.RE
+
+.sp
+.ne 2
+.na
+\fB\fB-getcwd\fR\fR
+.ad
+.sp .6
+.RS 4n
+Prints current working directory (anchored from zone root at system boot). For
+example:
+.sp
+.in +2
+.nf
+# cd /usr/tmp
+# auditconfig -getcwd
+current working directory = /var/tmp
+.fi
+.in -2
+.sp
 .RE
 
 .sp
@@ -249,7 +265,25 @@ audit class mask for event AUE_RENAME(42) = 0x30
 .fi
 .in -2
 .sp
+.RE
 
+.sp
+.ne 2
+.na
+\fB\fB-getflags\fR\fR
+.ad
+.sp .6
+.RS 4n
+Display the current active and configured user default audit flags. For
+example:
+.sp
+.in +2
+.nf
+# auditconfig -getflags
+active user default audit flags = no(0x0,0x0)
+configured user default audit flags = ex,lo(0x40001000,0x40001000)
+.fi
+.in -2
 .RE
 
 .sp
@@ -300,12 +334,57 @@ global zone. Otherwise, it is that of the local zone.
 .sp
 .ne 2
 .na
+\fB\fB-getnaflags\fR\fR
+.ad
+.sp .6
+.RS 4n
+Display the current active and configured non-attributable audit flags. For
+example:
+.sp
+.in +2
+.nf
+# auditconfig -getnaflags
+active non-attributable audit flags = no(0x0,0x0)
+configured non-attributable audit flags = lo(0x1000,0x1000)
+.fi
+.in -2
+.RE
+
+.sp
+.ne 2
+.na
 \fB\fB-getpinfo\fR \fIpid\fR\fR
 .ad
 .sp .6
 .RS 4n
 Display the audit ID, preselection mask, terminal ID, and audit session ID for
 the specified process.
+.RE
+
+.sp
+.ne 2
+.na
+\fB\fB-getplugin\fR [\fIplugin\fR]\fR
+.ad
+.sp .6
+.RS 4n
+Display the currently installed plugins and their attributes. If \fIplugin\fR is
+specified, \fB-getplugin\fR only shows information for that \fIplugin\fR. For
+example:
+.sp
+.in +2
+.nf
+# auditconfig -getplugin
+Plugin: audit_binfile (active)
+        Attributes: p_dir=/var/audit;p_fsize=0;p_minfree=0;
+
+Plugin: audit_syslog (inactive)
+        Attributes: p_flags=;
+
+Plugin: audit_remote (inactive)
+        Attributes: p_hosts=;p_retries=3;p_timeout=5;
+.fi
+.in -2
 .RE
 
 .sp
@@ -319,27 +398,6 @@ Display the kernel audit policy. The \fBahlt\fR and \fBperzone\fR policies
 reflect the settings from the global zone. If \fBperzone\fR is set, all other
 policies reflect the local zone's settings. If \fBperzone\fR is not set, the
 policies are machine-wide.
-.RE
-
-.sp
-.ne 2
-.na
-\fB\fB-getcwd\fR\fR
-.ad
-.sp .6
-.RS 4n
-Prints current working directory (anchored from zone root at system boot). For
-example:
-.sp
-.in +2
-.nf
-# cd /usr/tmp
-# auditconfig -getcwd
-current working directory = /var/tmp
-.fi
-.in -2
-.sp
-
 .RE
 
 .sp
@@ -415,7 +473,7 @@ block. For example:
 .sp
 .in +2
 .nf
-# ./auditconfig -getqhiwater
+# auditconfig -getqhiwater
 audit queue hiwater mark (records) = 100
 .fi
 .in -2
@@ -516,9 +574,9 @@ Execute shell or \fIcmd\fR with specified \fIsession-ID\fR. For example:
 .sp
 .in +2
 .nf
-# ./auditconfig -setasid 2000 /bin/ksh
+# auditconfig -setasid 2000 /bin/ksh
 #
-# ./auditconfig -getpinfo 104485
+# auditconfig -getpinfo 104485
 audit id = abc(666)
 process preselection mask = lo(0x1000,0x1000)
 terminal id (maj,min,host) = 235,197121,elbow(172.146.89.77)
@@ -559,9 +617,26 @@ Execute shell or \fIcmd\fR with the specified \fIaudit-ID\fR.
 .RS 4n
 Map the kernel event \fIevent\fR to the classes specified by \fIaudit_flags\fR.
 \fIevent\fR is an event number or name. An \fIaudit_flag\fR is a two character
-string representing an audit class. See \fBaudit_control\fR(4) for further
-information. If \fBperzone\fR is not set, this option is valid only in the
-global zone.
+string representing an audit class. If \fBperzone\fR is not set, this option
+is valid only in the global zone.
+.RE
+
+.sp
+.ne 2
+.na
+\fB\fB-setflags\fR \fIaudit_flags\fR\fR
+.ad
+.sp .6
+.RS 4n
+Sets the user default audit flags. For example, to set execute and login
+auditing for all users:
+.sp
+.in +2
+.nf
+# auditconfig -setflags ex,lo
+user default audit flags = ex,lo(0x40001000,0x40001000)
+.fi
+.in -2
 .RE
 
 .sp
@@ -592,12 +667,44 @@ If \fBperzone\fR is not set, this option is valid only in the global zone.
 .sp
 .ne 2
 .na
+\fB\fB-setnaflags\fR \fIaudit_flags\fR\fR
+.ad
+.sp .6
+.RS 4n
+Sets the non-attributable audit flags. For example:
+.sp
+.in +2
+.nf
+# auditconfig -setnaflags lo
+non-attributable audit flags = lo(0x1000,0x1000)
+.fi
+.in -2
+.RE
+
+.sp
+.ne 2
+.na
+\fB\fB-setplugin\fR \fIname active\fR|\fIinactive\fR [\fIattributes\fR [\fIqsize\fR]]\fR
+.ad
+.sp .6
+.RS 4n
+Configures a plugin's attributes. For example:
+.sp
+.in +2
+.nf
+# auditconfig -setplugin audit_syslog active
+.fi
+.in -2
+.RE
+
+.sp
+.ne 2
+.na
 \fB\fB-setpmask\fR \fIpid flags\fR\fR
 .ad
 .sp .6
 .RS 4n
-Set the preselection mask of the specified process. \fBflags\fR is the ASCII
-representation of the flags similar to that in \fBaudit_control\fR(4).
+Set the preselection mask of the specified process.
 .sp
 If \fBperzone\fR is not set, this option is valid only in the global zone.
 .RE
@@ -893,7 +1000,6 @@ The following is an example of an \fBauditconfig\fR program:
 .sp
 
 .SH EXIT STATUS
-.sp
 .ne 2
 .na
 \fB\fB0\fR\fR
@@ -912,7 +1018,6 @@ An error occurred.
 .RE
 
 .SH FILES
-.sp
 .ne 2
 .na
 \fB\fB/etc/security/audit_event\fR\fR
@@ -931,7 +1036,6 @@ Stores class definitions used in the audit system.
 .RE
 
 .SH ATTRIBUTES
-.sp
 .LP
 See \fBattributes\fR(5) for descriptions of the following attributes:
 .sp
@@ -947,28 +1051,22 @@ Interface Stability	Committed
 .TE
 
 .SH SEE ALSO
-.sp
 .LP
-\fBaudit\fR(1M), \fBauditd\fR(1M), \fBauditstat\fR(1M), \fBbsmconv\fR(1M),
+\fBaudit\fR(1M), \fBauditd\fR(1M), \fBauditstat\fR(1M),
 \fBpraudit\fR(1M), \fBauditon\fR(2), \fBexecv\fR(2), \fBaudit_class\fR(4),
-\fBaudit_control\fR(4), \fBaudit_event\fR(4), \fBattributes\fR(5),
-\fBaudit_binfile\fR(5)
-.sp
-.LP
-See the section on Solaris Auditing in \fISystem Administration Guide: Security
-Services\fR.
+\fBaudit_event\fR(4), \fBattributes\fR(5),
+\fBaudit_binfile\fR(5), \fBaudit_remote\fR(5), \fBaudit_syslog\fR(5)
 .SH NOTES
-.sp
 .LP
-If plugin output is selected using \fBaudit_control\fR(4), the behavior of the
-system with respect to the \fB-setpolicy\fR \fB+cnt\fR and the
+If the \fBaudit_remote\fR or \fBaudit_syslog\fR plugins are active, the
+behavior of the system with respect to the \fB-setpolicy\fR \fB+cnt\fR and the
 \fB-setqhiwater\fR options is modified slightly. If \fB-setpolicy\fR \fB+cnt\fR
 is set, data will continue to be sent to the selected plugin, even though
 output to the binary audit log is stopped, pending the freeing of disk space.
 If \fB-setpolicy\fR \fB-cnt\fR is used, the blocking behavior is as described
 under OPTIONS, above. The value set for the queue high water mark is used
 within \fBauditd\fR as the default value for its queue limits unless overridden
-by means of the \fBqsize\fR attribute as described in \fBaudit_control\fR(4).
+by means of the \fBqsize\fR attribute.
 .sp
 .LP
 The \fBauditconfig\fR options that modify or display process-based information

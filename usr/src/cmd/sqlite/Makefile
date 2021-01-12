@@ -22,6 +22,7 @@
 # Copyright 2007 Sun Microsystems, Inc.  All rights reserved.
 # Use is subject to license terms.
 #
+# Copyright (c) 2018, Joyent, Inc.
 
 PROG=		sqlite
 
@@ -29,8 +30,7 @@ include ../Makefile.cmd
 
 include $(SRC)/lib/Makefile.lib
 
-SQLITEHDRDIR=	$(ROOTHDRDIR)/sqlite
-LIBSQLITE=	$(ROOTLIBDIR)/libsqlite.o
+SQLITEHDRDIR=	$(ROOTHDRDIR)/sqlite-sys
 
 ROOTLIBSVCBIN=	$(ROOT)/lib/svc/bin
 ROOTSQLITE=	$(PROG:%=$(ROOTLIBSVCBIN)/%)
@@ -40,6 +40,11 @@ $(OBJS) :=	CFLAGS += $(CTF_FLAGS)
 $(OBJS) :=	CTFCONVERT_POST = $(CTFCONVERT_O)
 
 CERRWARN +=	-_gcc=-Wno-empty-body
+
+# not linted
+SMATCH=off
+
+LDLIBS +=	-lsqlite-sys
 
 .KEEP_STATE:
 
@@ -53,17 +58,15 @@ CPPFLAGS +=	-D_REENTRANT -DTHREADSAFE=1 -DHAVE_USLEEP=1 \
 
 $(PROG): $(OBJS) $(SQLITEHDRDIR)/sqlite.h
 	$(LINK.c) -o $@ $(OBJS) \
-	    $(MAPFILE.NES:%=-M%) $(MAPFILE.NED:%=-M%) $(LIBSQLITE)
-	$(CTFMERGE) -t -L VERSION -o $@ $(OBJS) $(LIBSQLITE)
+	    $(MAPFILE.NES:%=-Wl,-M%) $(MAPFILE.NED:%=-Wl,-M%) $(LDLIBS)
+	$(CTFMERGE) -t -L VERSION -o $@ $(OBJS)
 	$(POST_PROCESS)
 
-all: $(PROG) 
+all: $(PROG)
 
 install: all $(ROOTSQLITE)
 
 clean:
 	$(RM) $(OBJS)
-
-lint:
 
 include ../Makefile.targ

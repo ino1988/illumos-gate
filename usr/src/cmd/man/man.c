@@ -22,8 +22,9 @@
 /*
  * Copyright (c) 1990, 2010, Oracle and/or its affiliates. All rights reserved.
  * Copyright 2012, Josef 'Jeff' Sipek <jeffpc@31bits.net>. All rights reserved.
- * Copyright 2013 Nexenta Systems, Inc. All rights reserved.
  * Copyright 2014 Garrett D'Amore <garrett@damore.org>
+ * Copyright 2016 Nexenta Systems, Inc.
+ * Copyright 2019 Joyent, Inc.
  */
 
 /*	Copyright (c) 1983, 1984, 1985, 1986, 1987, 1988, 1989  AT&T.	*/
@@ -95,14 +96,14 @@ struct suffix {
 /*
  * Flags that control behavior of build_manpath()
  *
- *   BMP_ISPATH 		pathv is a vector constructed from PATH.
- *                		Perform appropriate path translations for
- * 				manpath.
+ *   BMP_ISPATH			pathv is a vector constructed from PATH.
+ *				Perform appropriate path translations for
+ *				manpath.
  *   BMP_APPEND_DEFMANDIR	Add DEFMANDIR to the end if it hasn't
  *				already appeared earlier.
  *   BMP_FALLBACK_DEFMANDIR	Append /usr/share/man only if no other
  *				manpath (including derived from PATH)
- * 				elements are valid.
+ *				elements are valid.
  */
 #define	BMP_ISPATH		1
 #define	BMP_APPEND_DEFMANDIR	2
@@ -199,7 +200,7 @@ static void	usage_catman(void);
 static void	usage_makewhatis(void);
 static void	whatapro(struct man_node *, char *);
 
-static char	language[MAXPATHLEN]; 	/* LC_MESSAGES */
+static char	language[MAXPATHLEN];	/* LC_MESSAGES */
 static char	localedir[MAXPATHLEN];	/* locale specific path component */
 
 static char	*newsection = NULL;
@@ -529,20 +530,22 @@ getsect(struct man_node *manp, char **pv)
 		manp->secv = NULL;
 		get_all_sect(manp);
 	} else if (sargs) {
+		DPRINTF("-- Adding %s: sections=%s\n", manp->path, mansec);
 		manp->secv = split(mansec, ',');
 		for (sectp = manp->secv; *sectp; sectp++)
 			lower(*sectp);
 	} else if ((sections = strchr(*pv, ',')) != NULL) {
-		DPRINTF("-- Adding %s: MANSECTS=%s\n", manp->path, sections);
-		manp->secv = split(++sections, ',');
+		sections++;
+		DPRINTF("-- Adding %s: sections=%s\n", manp->path, sections);
+		manp->secv = split(sections, ',');
 		for (sectp = manp->secv; *sectp; sectp++)
 			lower(*sectp);
 		if (*manp->secv == NULL)
 			get_all_sect(manp);
 	} else if ((sections = check_config(*pv)) != NULL) {
 		manp->defsrch = 1;
-		DPRINTF("-- Adding %s: from %s, MANSECTS=%s\n", manp->path,
-		    CONFIG, sections);
+		DPRINTF("-- Adding %s: sections=%s (from %s)\n", manp->path,
+		    sections, CONFIG);
 		manp->secv = split(sections, ',');
 		for (sectp = manp->secv; *sectp; sectp++)
 			lower(*sectp);
@@ -550,7 +553,7 @@ getsect(struct man_node *manp, char **pv)
 			get_all_sect(manp);
 	} else {
 		manp->defsrch = 1;
-		DPRINTF("-- Adding %s: default sort order\n", manp->path);
+		DPRINTF("-- Adding %s: default search order\n", manp->path);
 		manp->secv = NULL;
 		get_all_sect(manp);
 	}
@@ -567,7 +570,7 @@ get_all_sect(struct man_node *manp)
 	char	**dv;
 	char	**p;
 	char	*prev = NULL;
-	char 	*tmp = NULL;
+	char	*tmp = NULL;
 	int	maxentries = MAXTOKENS;
 	int	entries = 0;
 
@@ -1132,7 +1135,7 @@ searchdir(char *path, char *dir, char *name)
 		return (0);
 
 	while ((sd = readdir(sdp))) {
-		char	*pname;
+		char	*pname, *upper = NULL;
 
 		if ((pname = strdup(sd->d_name)) == NULL)
 			err(1, "strdup");
@@ -1142,14 +1145,38 @@ searchdir(char *path, char *dir, char *name)
 		last = strrchr(pname, '.');
 		nlen = last - pname;
 		(void) snprintf(dname, sizeof (dname), "%.*s.", nlen, pname);
+
+		/*
+		 * Check for a case where name has something like foo.3C because
+		 * the user reasonably thought that the section name was
+		 * capitalized in the file. This relies on the fact that all of
+		 * our section names are currently 7-bit ASCII.
+		 */
+		if (last != NULL) {
+			char *c;
+			if ((upper = strdup(pname)) == NULL) {
+				err(1, "strdup");
+			}
+
+			c = strrchr(upper, '.');
+			c++;
+			while (*c != '\0') {
+				*c = toupper(*c);
+				c++;
+			}
+		}
+
 		if (strcmp(dname, file) == 0 ||
-		    strcmp(pname, name) == 0) {
+		    strcmp(pname, name) == 0 ||
+		    (upper != NULL && strcmp(upper, name) == 0)) {
 			(void) format(path, dir, name, sd->d_name);
 			(void) closedir(sdp);
 			free(pname);
+			free(upper);
 			return (1);
 		}
 		free(pname);
+		free(upper);
 	}
 	(void) closedir(sdp);
 
@@ -1193,7 +1220,6 @@ format(char *path, char *dir, char *name, char *pg)
 	char		manpname[MAXPATHLEN], catpname[MAXPATHLEN];
 	char		cmdbuf[BUFSIZ], tmpbuf[BUFSIZ];
 	char		*cattool;
-	int		utf8 = 0;
 	struct stat	sbman, sbcat;
 
 	found++;
@@ -1227,22 +1253,16 @@ format(char *path, char *dir, char *name, char *pg)
 	else
 		cattool = "cat";
 
-	/* Preprocess UTF-8 input with preconv (could be smarter) */
-	if (strstr(path, "UTF-8") != NULL)
-		utf8 = 1;
-
 	if (psoutput) {
 		(void) snprintf(cmdbuf, BUFSIZ,
-		    "cd %s; %s %s%s | mandoc -Tps | lp -Tpostscript",
-		    path, cattool, manpname,
-		    utf8 ? " | " PRECONV " -e UTF-8" : "");
+		    "cd %s; %s %s | mandoc -Tps | lp -Tpostscript",
+		    path, cattool, manpname);
 		DPRINTF("-- Using manpage: %s\n", manpname);
 		goto cmd;
 	} else if (lintout) {
 		(void) snprintf(cmdbuf, BUFSIZ,
-		    "cd %s; %s %s%s | mandoc -Tlint",
-		    path, cattool, manpname,
-		    utf8 ? " | " PRECONV " -e UTF-8" : "");
+		    "cd %s; %s %s | mandoc -Tlint",
+		    path, cattool, manpname);
 		DPRINTF("-- Linting manpage: %s\n", manpname);
 		goto cmd;
 	}
@@ -1262,10 +1282,8 @@ format(char *path, char *dir, char *name, char *pg)
 	DPRINTF("-- Using manpage: %s\n", manpname);
 	if (manwidth > 0)
 		(void) snprintf(tmpbuf, BUFSIZ, "-Owidth=%d ", manwidth);
-	(void) snprintf(cmdbuf, BUFSIZ, "cd %s; %s %s%s | mandoc -T%s %s| %s",
-	    path, cattool, manpname,
-	    utf8 ? " | " PRECONV " -e UTF-8 " : "",
-	    utf8 ? "utf8" : "ascii", (manwidth > 0) ? tmpbuf : "", pager);
+	(void) snprintf(cmdbuf, BUFSIZ, "cd %s; %s %s | mandoc %s| %s",
+	    path, cattool, manpname, (manwidth > 0) ? tmpbuf : "", pager);
 
 cmd:
 	DPRINTF("-- Command: %s\n", cmdbuf);
@@ -1298,9 +1316,10 @@ check_config(char *path)
 {
 	FILE		*fp;
 	char		*rc = NULL;
-	char		*sect;
+	char		*sect = NULL;
 	char		fname[MAXPATHLEN];
 	char		*line = NULL;
+	char		*nl;
 	size_t		linecap = 0;
 
 	(void) snprintf(fname, MAXPATHLEN, "%s/%s", path, CONFIG);
@@ -1309,18 +1328,20 @@ check_config(char *path)
 		return (NULL);
 
 	while (getline(&line, &linecap, fp) > 0) {
-		if ((rc = strstr(line, "MANSECTS")) != NULL)
+		if ((rc = strstr(line, "MANSECTS=")) != NULL)
 			break;
 	}
 
 	(void) fclose(fp);
 
-	if (rc == NULL || (sect = strchr(line, '=')) == NULL)
-		return (NULL);
-	else
-		return (++sect);
-}
+	if (rc != NULL) {
+		if ((nl = strchr(rc, '\n')) != NULL)
+			*nl = '\0';
+		sect = strchr(rc, '=') + 1;
+	}
 
+	return (sect);
+}
 
 /*
  * Initialize the bintoman array with appropriate device and inode info.
@@ -1350,8 +1371,8 @@ dupcheck(struct man_node *mnp, struct dupnode **dnp)
 {
 	struct dupnode	*curdnp;
 	struct secnode	*cursnp;
-	struct stat 	sb;
-	int 		i;
+	struct stat	sb;
+	int		i;
 	int		rv = 1;
 	int		dupfound;
 
@@ -1528,7 +1549,8 @@ path_to_manpath(char *bindir)
  * Free a linked list of dupnode structs.
  */
 void
-free_dupnode(struct dupnode *dnp) {
+free_dupnode(struct dupnode *dnp)
+{
 	struct dupnode *dnp2;
 	struct secnode *snp;
 

@@ -24,6 +24,10 @@
  * Use is subject to license terms.
  */
 
+/*
+ * Copyright 2019 Joyent, Inc.
+ */
+
 #include <sys/types.h>
 #include <sys/conf.h>
 #include <sys/debug.h>
@@ -324,7 +328,8 @@ crb_win_lock(struct unm_adapter_s *adapter)
 		/*
 		 *  Yield CPU
 		 */
-		for (i = 0; i < 20; i++);
+		for (i = 0; i < 20; i++)
+			;
 	}
 	adapter->unm_crb_writelit_adapter(adapter, UNM_CRB_WIN_LOCK_ID,
 	    adapter->portnum);
@@ -699,7 +704,6 @@ unm_nic_hw_write_wx_2M(unm_adapter *adapter, u64 off, void *data, int len)
 	if (rv == -1) {
 		cmn_err(CE_PANIC, "%s: invalid offset: 0x%016llx\n",
 		    __FUNCTION__, off);
-		return (-1);
 	}
 
 	if (rv == 1) {
@@ -808,7 +812,6 @@ unm_nic_hw_read_wx_2M(unm_adapter *adapter, u64 off, void *data, int len)
 	if (rv == -1) {
 		cmn_err(CE_PANIC, "%s: invalid offset: 0x%016llx\n",
 		    __FUNCTION__, off);
-		return (-1);
 	}
 
 	if (rv == 1) {
@@ -948,7 +951,6 @@ unm_nic_pci_set_window_128M(struct unm_adapter_s *adapter,
 		/* DDR network side */
 		/* MN access should never come here */
 		cmn_err(CE_PANIC, "%s\n", __FUNCTION__);
-		addr = -1ULL;
 	} else if (ADDR_IN_RANGE(addr, UNM_ADDR_OCM0, UNM_ADDR_OCM0_MAX)) {
 		addr -= UNM_ADDR_OCM0;
 		addr += UNM_PCI_OCM0;
@@ -1858,10 +1860,10 @@ unm_nic_set_promisc_mode(struct unm_adapter_s *adapter)
 			break;
 	}
 
-if (!ret)
-	adapter->promisc = 1;
+	if (!ret)
+		adapter->promisc = 1;
 
-		return (ret);
+	return (ret);
 }
 
 int
@@ -1904,8 +1906,7 @@ unm_nic_unset_promisc_mode(struct unm_adapter_s *adapter)
 }
 
 long
-unm_nic_phy_read(unm_adapter *adapter, long reg,
-		    __uint32_t *readval)
+unm_nic_phy_read(unm_adapter *adapter, long reg, __uint32_t *readval)
 {
 	long	ret = 0;
 
@@ -1934,21 +1935,20 @@ unm_nic_init_port(struct unm_adapter_s *adapter)
 	long	portnum = adapter->physical_port;
 	long	ret = 0;
 	long	reg = 0;
-	unm_niu_gbe_ifmode_t	mode_dont_care = 0;
 	u32			port_mode = 0;
 
 	unm_nic_set_link_parameters(adapter);
 
 	switch (adapter->ahw.board_type) {
 	case UNM_NIC_GBE:
-		ret = unm_niu_enable_gbe_port(adapter, mode_dont_care);
+		ret = unm_niu_enable_gbe_port(adapter);
 		break;
 
 	case UNM_NIC_XGBE:
 		adapter->unm_nic_hw_read_wx(adapter, UNM_PORT_MODE_ADDR,
 		    &port_mode, 4);
 		if (port_mode == UNM_PORT_MODE_802_3_AP) {
-			ret = unm_niu_enable_gbe_port(adapter, mode_dont_care);
+			ret = unm_niu_enable_gbe_port(adapter);
 		} else {
 			adapter->unm_crb_writelit_adapter(adapter,
 			    UNM_NIU_XGE_CONFIG_0 + (0x10000 * portnum), 0x5);

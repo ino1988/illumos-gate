@@ -24,10 +24,7 @@
 # Copyright 2008 Sun Microsystems, Inc.  All rights reserved.
 # Use is subject to license terms.
 #
-#	This makefile drives the production of the udp driver kernel module.
-#
-#	intel implementation architecture dependent
-#
+# Copyright (c) 2018, Joyent, Inc.
 
 #
 #	Path to the base of the uts directory tree (usually /usr/src/uts).
@@ -39,7 +36,6 @@ UTSBASE	= ../..
 #
 MODULE		= udp
 OBJECTS		= $(UDP_OBJS:%=$(OBJS_DIR)/%)
-LINTS		= $(UDP_OBJS:%.o=$(LINTS_DIR)/%.ln)
 ROOTMODULE	= $(ROOT_DRV_DIR)/$(MODULE)
 ROOTLINK	= $(ROOT_STRMOD_DIR)/$(MODULE) $(ROOT_SOCK_DIR)/$(MODULE)
 CONF_SRCDIR	= $(UTSBASE)/common/inet/udp
@@ -60,13 +56,15 @@ include $(UTSBASE)/intel/Makefile.intel
 #	Define targets
 #
 ALL_TARGET	= $(BINARY) $(SRC_CONFILE)
-LINT_TARGET	= $(MODULE).lint
 INSTALL_TARGET	= $(BINARY) $(ROOTMODULE) $(ROOTLINK) $(ROOT_CONFFILE)
 
 #
 #	depends on ip and sockfs
 #
 LDFLAGS		+= -dy -Ndrv/ip -Nfs/sockfs
+
+# needs work
+$(OBJS_DIR)/udpddi.o := SMOFF += index_overflow
 
 #
 #	Default build targets.
@@ -80,12 +78,6 @@ all:		$(ALL_DEPS)
 clean:		$(CLEAN_DEPS)
 
 clobber:	$(CLOBBER_DEPS)
-
-lint:		$(LINT_DEPS)
-
-modlintlib:	$(MODLINTLIB_DEPS)
-
-clean.lint:	$(CLEAN_LINT_DEPS)
 
 install:	$(INSTALL_DEPS)
 

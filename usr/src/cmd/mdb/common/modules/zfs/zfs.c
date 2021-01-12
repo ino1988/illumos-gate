@@ -21,10 +21,22 @@
 /*
  * Copyright (c) 2005, 2010, Oracle and/or its affiliates. All rights reserved.
  * Copyright 2011 Nexenta Systems, Inc. All rights reserved.
- * Copyright (c) 2012, 2014 by Delphix. All rights reserved.
+ * Copyright (c) 2011, 2018 by Delphix. All rights reserved.
+ * Copyright 2020 Joyent, Inc.
  */
 
 /* Portions Copyright 2010 Robert Milkowski */
+
+/*
+ * ZFS_MDB lets dmu.h know that we don't have dmu_ot, and we will define our
+ * own macros to access the target's dmu_ot.  Therefore it must be defined
+ * before including any ZFS headers.  Note that we don't define
+ * DMU_OT_IS_ENCRYPTED_IMPL() or DMU_OT_BYTESWAP_IMPL(), therefore using them
+ * will result in a compilation error.  If they are needed in the future, we
+ * can implement them similarly to mdb_dmu_ot_is_encrypted_impl().
+ */
+#define	ZFS_MDB
+#define	DMU_OT_IS_ENCRYPTED_IMPL(ot) mdb_dmu_ot_is_encrypted_impl(ot)
 
 #include <mdb/mdb_ctf.h>
 #include <sys/zfs_context.h>
@@ -42,6 +54,8 @@
 #include <ctype.h>
 #include <sys/zfs_acl.h>
 #include <sys/sa_impl.h>
+#include <sys/multilist.h>
+#include <sys/btree.h>
 
 #ifdef _KERNEL
 #define	ZFS_OBJ_NAME	"zfs"
@@ -65,9 +79,12 @@ enum spa_flags {
 	SPA_FLAG_HISTOGRAMS		= 1 << 5
 };
 
+/*
+ * If any of these flags are set, call spa_vdevs in spa_print
+ */
 #define	SPA_FLAG_ALL_VDEV	\
 	(SPA_FLAG_VDEVS | SPA_FLAG_ERRORS | SPA_FLAG_METASLAB_GROUPS | \
-	SPA_FLAG_METASLABS | SPA_FLAG_HISTOGRAMS)
+	SPA_FLAG_METASLABS)
 
 static int
 getmember(uintptr_t addr, const char *type, mdb_ctf_id_t *idp,
@@ -126,102 +143,110 @@ strisprint(const char *cp)
 	return (B_TRUE);
 }
 
-#define	NICENUM_BUFLEN 6
-
+/*
+ * <addr>::sm_entries <buffer length in bytes>
+ *
+ * Treat the buffer specified by the given address as a buffer that contains
+ * space map entries. Iterate over the specified number of entries and print
+ * them in both encoded and decoded form.
+ */
+/* ARGSUSED */
 static int
-snprintfrac(char *buf, int len,
-    uint64_t numerator, uint64_t denom, int frac_digits)
+sm_entries(uintptr_t addr, uint_t flags, int argc, const mdb_arg_t *argv)
 {
-	int mul = 1;
-	int whole, frac, i;
+	uint64_t bufsz = 0;
+	boolean_t preview = B_FALSE;
 
-	for (i = frac_digits; i; i--)
-		mul *= 10;
-	whole = numerator / denom;
-	frac = mul * numerator / denom - mul * whole;
-	return (mdb_snprintf(buf, len, "%u.%0*u", whole, frac_digits, frac));
-}
+	if (!(flags & DCMD_ADDRSPEC))
+		return (DCMD_USAGE);
 
-static void
-mdb_nicenum(uint64_t num, char *buf)
-{
-	uint64_t n = num;
-	int index = 0;
-	char *u;
-
-	while (n >= 1024) {
-		n = (n + (1024 / 2)) / 1024; /* Round up or down */
-		index++;
-	}
-
-	u = &" \0K\0M\0G\0T\0P\0E\0"[index*2];
-
-	if (index == 0) {
-		(void) mdb_snprintf(buf, NICENUM_BUFLEN, "%llu",
-		    (u_longlong_t)n);
-	} else if (n < 10 && (num & (num - 1)) != 0) {
-		(void) snprintfrac(buf, NICENUM_BUFLEN,
-		    num, 1ULL << 10 * index, 2);
-		strcat(buf, u);
-	} else if (n < 100 && (num & (num - 1)) != 0) {
-		(void) snprintfrac(buf, NICENUM_BUFLEN,
-		    num, 1ULL << 10 * index, 1);
-		strcat(buf, u);
+	if (argc < 1) {
+		preview = B_TRUE;
+		bufsz = 2;
+	} else if (argc != 1) {
+		return (DCMD_USAGE);
 	} else {
-		(void) mdb_snprintf(buf, NICENUM_BUFLEN, "%llu%s",
-		    (u_longlong_t)n, u);
-	}
-}
-
-static int verbose;
-
-static int
-freelist_walk_init(mdb_walk_state_t *wsp)
-{
-	if (wsp->walk_addr == NULL) {
-		mdb_warn("must supply starting address\n");
-		return (WALK_ERR);
+		switch (argv[0].a_type) {
+		case MDB_TYPE_STRING:
+			bufsz = mdb_strtoull(argv[0].a_un.a_str);
+			break;
+		case MDB_TYPE_IMMEDIATE:
+			bufsz = argv[0].a_un.a_val;
+			break;
+		default:
+			return (DCMD_USAGE);
+		}
 	}
 
-	wsp->walk_data = 0;  /* Index into the freelist */
-	return (WALK_NEXT);
-}
+	char *actions[] = { "ALLOC", "FREE", "INVALID" };
+	for (uintptr_t bufend = addr + bufsz; addr < bufend;
+	    addr += sizeof (uint64_t)) {
+		uint64_t nwords;
+		uint64_t start_addr = addr;
 
-static int
-freelist_walk_step(mdb_walk_state_t *wsp)
-{
-	uint64_t entry;
-	uintptr_t number = (uintptr_t)wsp->walk_data;
-	char *ddata[] = { "ALLOC", "FREE", "CONDENSE", "INVALID",
-			    "INVALID", "INVALID", "INVALID", "INVALID" };
-	int mapshift = SPA_MINBLOCKSHIFT;
+		uint64_t word = 0;
+		if (mdb_vread(&word, sizeof (word), addr) == -1) {
+			mdb_warn("failed to read space map entry %p", addr);
+			return (DCMD_ERR);
+		}
 
-	if (mdb_vread(&entry, sizeof (entry), wsp->walk_addr) == -1) {
-		mdb_warn("failed to read freelist entry %p", wsp->walk_addr);
-		return (WALK_DONE);
+		if (SM_PREFIX_DECODE(word) == SM_DEBUG_PREFIX) {
+			(void) mdb_printf("\t    [%6llu] %s: txg %llu, "
+			    "pass %llu\n",
+			    (u_longlong_t)(addr),
+			    actions[SM_DEBUG_ACTION_DECODE(word)],
+			    (u_longlong_t)SM_DEBUG_TXG_DECODE(word),
+			    (u_longlong_t)SM_DEBUG_SYNCPASS_DECODE(word));
+			continue;
+		}
+
+		char entry_type;
+		uint64_t raw_offset, raw_run, vdev_id = SM_NO_VDEVID;
+
+		if (SM_PREFIX_DECODE(word) != SM2_PREFIX) {
+			entry_type = (SM_TYPE_DECODE(word) == SM_ALLOC) ?
+			    'A' : 'F';
+			raw_offset = SM_OFFSET_DECODE(word);
+			raw_run = SM_RUN_DECODE(word);
+			nwords = 1;
+		} else {
+			ASSERT3U(SM_PREFIX_DECODE(word), ==, SM2_PREFIX);
+
+			raw_run = SM2_RUN_DECODE(word);
+			vdev_id = SM2_VDEV_DECODE(word);
+
+			/* it is a two-word entry so we read another word */
+			addr += sizeof (uint64_t);
+			if (addr >= bufend) {
+				mdb_warn("buffer ends in the middle of a two "
+				    "word entry\n", addr);
+				return (DCMD_ERR);
+			}
+
+			if (mdb_vread(&word, sizeof (word), addr) == -1) {
+				mdb_warn("failed to read space map entry %p",
+				    addr);
+				return (DCMD_ERR);
+			}
+
+			entry_type = (SM2_TYPE_DECODE(word) == SM_ALLOC) ?
+			    'A' : 'F';
+			raw_offset = SM2_OFFSET_DECODE(word);
+			nwords = 2;
+		}
+
+		(void) mdb_printf("\t    [%6llx]    %c  range:"
+		    " %010llx-%010llx  size: %06llx vdev: %06llu words: %llu\n",
+		    (u_longlong_t)start_addr,
+		    entry_type, (u_longlong_t)raw_offset,
+		    (u_longlong_t)(raw_offset + raw_run),
+		    (u_longlong_t)raw_run,
+		    (u_longlong_t)vdev_id, (u_longlong_t)nwords);
+
+		if (preview)
+			break;
 	}
-	wsp->walk_addr += sizeof (entry);
-	wsp->walk_data = (void *)(number + 1);
-
-	if (SM_DEBUG_DECODE(entry)) {
-		mdb_printf("DEBUG: %3u  %10s: txg=%llu  pass=%llu\n",
-		    number,
-		    ddata[SM_DEBUG_ACTION_DECODE(entry)],
-		    SM_DEBUG_TXG_DECODE(entry),
-		    SM_DEBUG_SYNCPASS_DECODE(entry));
-	} else {
-		mdb_printf("Entry: %3u  offsets=%08llx-%08llx  type=%c  "
-		    "size=%06llx", number,
-		    SM_OFFSET_DECODE(entry) << mapshift,
-		    (SM_OFFSET_DECODE(entry) + SM_RUN_DECODE(entry)) <<
-		    mapshift,
-		    SM_TYPE_DECODE(entry) == SM_ALLOC ? 'A' : 'F',
-		    SM_RUN_DECODE(entry) << mapshift);
-		if (verbose)
-			mdb_printf("      (raw=%012llx)\n", entry);
-		mdb_printf("\n");
-	}
-	return (WALK_NEXT);
+	return (DCMD_OK);
 }
 
 static int
@@ -230,7 +255,7 @@ mdb_dsl_dir_name(uintptr_t addr, char *buf)
 	static int gotid;
 	static mdb_ctf_id_t dd_id;
 	uintptr_t dd_parent;
-	char dd_myname[MAXNAMELEN];
+	char dd_myname[ZFS_MAX_DATASET_NAME_LEN];
 
 	if (!gotid) {
 		if (mdb_ctf_lookup_by_name(ZFS_STRUCT "dsl_dir",
@@ -265,7 +290,7 @@ objset_name(uintptr_t addr, char *buf)
 	static int gotid;
 	static mdb_ctf_id_t os_id, ds_id;
 	uintptr_t os_dsl_dataset;
-	char ds_snapname[MAXNAMELEN];
+	char ds_snapname[ZFS_MAX_DATASET_NAME_LEN];
 	uintptr_t ds_dir;
 
 	buf[0] = '\0';
@@ -308,20 +333,26 @@ objset_name(uintptr_t addr, char *buf)
 	return (0);
 }
 
-static void
-enum_lookup(char *out, size_t size, mdb_ctf_id_t id, int val,
-    const char *prefix)
+static int
+enum_lookup(char *type, int val, const char *prefix, size_t size, char *out)
 {
 	const char *cp;
 	size_t len = strlen(prefix);
+	mdb_ctf_id_t enum_type;
 
-	if ((cp = mdb_ctf_enum_name(id, val)) != NULL) {
+	if (mdb_ctf_lookup_by_name(type, &enum_type) != 0) {
+		mdb_warn("Could not find enum for %s", type);
+		return (-1);
+	}
+
+	if ((cp = mdb_ctf_enum_name(enum_type, val)) != NULL) {
 		if (strncmp(cp, prefix, len) == 0)
 			cp += len;
 		(void) strncpy(out, cp, size);
 	} else {
 		mdb_snprintf(out, size, "? (%d)", val);
 	}
+	return (0);
 }
 
 /* ARGSUSED */
@@ -333,63 +364,184 @@ zfs_params(uintptr_t addr, uint_t flags, int argc, const mdb_arg_t *argv)
 	 * egrep "^[a-z0-9_]+ [a-z0-9_]+( =.*)?;" *.c | cut -d ' ' -f 2
 	 */
 	static const char *params[] = {
-		"arc_reduce_dnlc_percent",
 		"arc_lotsfree_percent",
-		"zfs_dirty_data_max",
-		"zfs_dirty_data_sync",
-		"zfs_delay_max_ns",
-		"zfs_delay_min_dirty_percent",
-		"zfs_delay_scale",
-		"zfs_vdev_max_active",
-		"zfs_vdev_sync_read_min_active",
-		"zfs_vdev_sync_read_max_active",
-		"zfs_vdev_sync_write_min_active",
-		"zfs_vdev_sync_write_max_active",
-		"zfs_vdev_async_read_min_active",
-		"zfs_vdev_async_read_max_active",
-		"zfs_vdev_async_write_min_active",
-		"zfs_vdev_async_write_max_active",
-		"zfs_vdev_scrub_min_active",
-		"zfs_vdev_scrub_max_active",
-		"zfs_vdev_async_write_active_min_dirty_percent",
-		"zfs_vdev_async_write_active_max_dirty_percent",
-		"spa_asize_inflation",
-		"zfs_arc_max",
-		"zfs_arc_min",
-		"arc_shrink_shift",
-		"zfs_mdcomp_disable",
-		"zfs_prefetch_disable",
-		"zfetch_max_streams",
-		"zfetch_min_sec_reap",
-		"zfetch_block_cap",
-		"zfetch_array_rd_sz",
-		"zfs_default_bs",
-		"zfs_default_ibs",
-		"metaslab_aliquot",
-		"reference_tracking_enable",
-		"reference_history",
-		"spa_max_replication_override",
-		"spa_mode_global",
-		"zfs_flags",
-		"zfs_txg_timeout",
-		"zfs_vdev_cache_max",
-		"zfs_vdev_cache_size",
-		"zfs_vdev_cache_bshift",
-		"vdev_mirror_shift",
-		"zfs_scrub_limit",
-		"zfs_no_scrub_io",
-		"zfs_no_scrub_prefetch",
-		"zfs_vdev_aggregation_limit",
+		"arc_pages_pp_reserve",
+		"arc_reduce_dnlc_percent",
+		"arc_swapfs_reserve",
+		"arc_zio_arena_free_shift",
+		"dbuf_cache_hiwater_pct",
+		"dbuf_cache_lowater_pct",
+		"dbuf_cache_max_bytes",
+		"dbuf_cache_max_shift",
+		"ddt_zap_indirect_blockshift",
+		"ddt_zap_leaf_blockshift",
+		"ditto_same_vdev_distance_shift",
+		"dmu_find_threads",
+		"dmu_rescan_dnode_threshold",
+		"dsl_scan_delay_completion",
 		"fzap_default_block_shift",
-		"zfs_immediate_write_sz",
-		"zfs_read_chunk_size",
-		"zfs_nocacheflush",
-		"zil_replay_disable",
-		"metaslab_gang_bang",
+		"l2arc_feed_again",
+		"l2arc_feed_min_ms",
+		"l2arc_feed_secs",
+		"l2arc_headroom",
+		"l2arc_headroom_boost",
+		"l2arc_noprefetch",
+		"l2arc_norw",
+		"l2arc_write_boost",
+		"l2arc_write_max",
+		"metaslab_aliquot",
+		"metaslab_bias_enabled",
+		"metaslab_debug_load",
+		"metaslab_debug_unload",
 		"metaslab_df_alloc_threshold",
 		"metaslab_df_free_pct",
+		"metaslab_fragmentation_factor_enabled",
+		"metaslab_force_ganging",
+		"metaslab_lba_weighting_enabled",
+		"metaslab_load_pct",
+		"metaslab_min_alloc_size",
+		"metaslab_ndf_clump_shift",
+		"metaslab_preload_enabled",
+		"metaslab_preload_limit",
+		"metaslab_trace_enabled",
+		"metaslab_trace_max_entries",
+		"metaslab_unload_delay",
+		"metaslabs_per_vdev",
+		"reference_history",
+		"reference_tracking_enable",
+		"send_holes_without_birth_time",
+		"spa_asize_inflation",
+		"spa_load_verify_data",
+		"spa_load_verify_maxinflight",
+		"spa_load_verify_metadata",
+		"spa_max_replication_override",
+		"spa_min_slop",
+		"spa_mode_global",
+		"spa_slop_shift",
+		"space_map_blksz",
+		"vdev_mirror_shift",
+		"zfetch_max_distance",
+		"zfs_abd_chunk_size",
+		"zfs_abd_scatter_enabled",
+		"zfs_arc_average_blocksize",
+		"zfs_arc_evict_batch_limit",
+		"zfs_arc_grow_retry",
+		"zfs_arc_max",
+		"zfs_arc_meta_limit",
+		"zfs_arc_meta_min",
+		"zfs_arc_min",
+		"zfs_arc_p_min_shift",
+		"zfs_arc_shrink_shift",
+		"zfs_async_block_max_blocks",
+		"zfs_ccw_retry_interval",
+		"zfs_commit_timeout_pct",
+		"zfs_compressed_arc_enabled",
+		"zfs_condense_indirect_commit_entry_delay_ticks",
+		"zfs_condense_indirect_vdevs_enable",
+		"zfs_condense_max_obsolete_bytes",
+		"zfs_condense_min_mapping_bytes",
+		"zfs_condense_pct",
+		"zfs_dbgmsg_maxsize",
+		"zfs_deadman_checktime_ms",
+		"zfs_deadman_enabled",
+		"zfs_deadman_synctime_ms",
+		"zfs_dedup_prefetch",
+		"zfs_default_bs",
+		"zfs_default_ibs",
+		"zfs_delay_max_ns",
+		"zfs_delay_min_dirty_percent",
+		"zfs_delay_resolution_ns",
+		"zfs_delay_scale",
+		"zfs_dirty_data_max",
+		"zfs_dirty_data_max_max",
+		"zfs_dirty_data_max_percent",
+		"zfs_dirty_data_sync",
+		"zfs_flags",
+		"zfs_free_bpobj_enabled",
+		"zfs_free_leak_on_eio",
+		"zfs_free_min_time_ms",
+		"zfs_fsync_sync_cnt",
+		"zfs_immediate_write_sz",
+		"zfs_indirect_condense_obsolete_pct",
+		"zfs_lua_check_instrlimit_interval",
+		"zfs_lua_max_instrlimit",
+		"zfs_lua_max_memlimit",
+		"zfs_max_recordsize",
+		"zfs_mdcomp_disable",
+		"zfs_metaslab_condense_block_threshold",
+		"zfs_metaslab_fragmentation_threshold",
+		"zfs_metaslab_segment_weight_enabled",
+		"zfs_metaslab_switch_threshold",
+		"zfs_mg_fragmentation_threshold",
+		"zfs_mg_noalloc_threshold",
+		"zfs_multilist_num_sublists",
+		"zfs_no_scrub_io",
+		"zfs_no_scrub_prefetch",
+		"zfs_nocacheflush",
+		"zfs_nopwrite_enabled",
+		"zfs_object_remap_one_indirect_delay_ticks",
+		"zfs_obsolete_min_time_ms",
+		"zfs_pd_bytes_max",
+		"zfs_per_txg_dirty_frees_percent",
+		"zfs_prefetch_disable",
+		"zfs_read_chunk_size",
+		"zfs_recover",
+		"zfs_recv_queue_length",
+		"zfs_redundant_metadata_most_ditto_level",
+		"zfs_remap_blkptr_enable",
+		"zfs_remove_max_copy_bytes",
+		"zfs_remove_max_segment",
+		"zfs_resilver_delay",
+		"zfs_resilver_min_time_ms",
+		"zfs_scan_idle",
+		"zfs_scan_min_time_ms",
+		"zfs_scrub_delay",
+		"zfs_scrub_limit",
+		"zfs_send_corrupt_data",
+		"zfs_send_queue_length",
+		"zfs_send_set_freerecords_bit",
+		"zfs_sync_pass_deferred_free",
+		"zfs_sync_pass_dont_compress",
+		"zfs_sync_pass_rewrite",
+		"zfs_sync_taskq_batch_pct",
+		"zfs_top_maxinflight",
+		"zfs_txg_timeout",
+		"zfs_vdev_aggregation_limit",
+		"zfs_vdev_async_read_max_active",
+		"zfs_vdev_async_read_min_active",
+		"zfs_vdev_async_write_active_max_dirty_percent",
+		"zfs_vdev_async_write_active_min_dirty_percent",
+		"zfs_vdev_async_write_max_active",
+		"zfs_vdev_async_write_min_active",
+		"zfs_vdev_cache_bshift",
+		"zfs_vdev_cache_max",
+		"zfs_vdev_cache_size",
+		"zfs_vdev_max_active",
+		"zfs_vdev_queue_depth_pct",
+		"zfs_vdev_read_gap_limit",
+		"zfs_vdev_removal_max_active",
+		"zfs_vdev_removal_min_active",
+		"zfs_vdev_scrub_max_active",
+		"zfs_vdev_scrub_min_active",
+		"zfs_vdev_sync_read_max_active",
+		"zfs_vdev_sync_read_min_active",
+		"zfs_vdev_sync_write_max_active",
+		"zfs_vdev_sync_write_min_active",
+		"zfs_vdev_write_gap_limit",
+		"zfs_write_implies_delete_child",
+		"zfs_zil_clean_taskq_maxalloc",
+		"zfs_zil_clean_taskq_minalloc",
+		"zfs_zil_clean_taskq_nthr_pct",
+		"zil_replay_disable",
+		"zil_slog_bulk",
+		"zio_buf_debug_limit",
+		"zio_dva_throttle_enabled",
 		"zio_injection_enabled",
 		"zvol_immediate_write_sz",
+		"zvol_maxphys",
+		"zvol_unmap_enabled",
+		"zvol_unmap_sync_enabled",
+		"zfs_max_dataset_nesting",
 	};
 
 	for (int i = 0; i < sizeof (params) / sizeof (params[0]); i++) {
@@ -412,9 +564,49 @@ zfs_params(uintptr_t addr, uint_t flags, int argc, const mdb_arg_t *argv)
 
 /* ARGSUSED */
 static int
+dva(uintptr_t addr, uint_t flags, int argc, const mdb_arg_t *argv)
+{
+	dva_t dva;
+	if (mdb_vread(&dva, sizeof (dva_t), addr) == -1) {
+		mdb_warn("failed to read dva_t");
+		return (DCMD_ERR);
+	}
+	mdb_printf("<%llu:%llx:%llx>\n",
+	    (u_longlong_t)DVA_GET_VDEV(&dva),
+	    (u_longlong_t)DVA_GET_OFFSET(&dva),
+	    (u_longlong_t)DVA_GET_ASIZE(&dva));
+
+	return (DCMD_OK);
+}
+
+typedef struct mdb_dmu_object_type_info {
+	boolean_t ot_encrypt;
+} mdb_dmu_object_type_info_t;
+
+static boolean_t
+mdb_dmu_ot_is_encrypted_impl(dmu_object_type_t ot)
+{
+	mdb_dmu_object_type_info_t mdoti;
+	GElf_Sym sym;
+	size_t sz = mdb_ctf_sizeof_by_name("dmu_object_type_info_t");
+
+	if (mdb_lookup_by_obj(ZFS_OBJ_NAME, "dmu_ot", &sym)) {
+		mdb_warn("failed to find " ZFS_OBJ_NAME "`dmu_ot");
+		return (B_FALSE);
+	}
+
+	if (mdb_ctf_vread(&mdoti, "dmu_object_type_info_t",
+	    "mdb_dmu_object_type_info_t", sym.st_value + sz * ot, 0) != 0) {
+		return (B_FALSE);
+	}
+
+	return (mdoti.ot_encrypt);
+}
+
+/* ARGSUSED */
+static int
 blkptr(uintptr_t addr, uint_t flags, int argc, const mdb_arg_t *argv)
 {
-	mdb_ctf_id_t type_enum, checksum_enum, compress_enum;
 	char type[80], checksum[80], compress[80];
 	blkptr_t blk, *bp = &blk;
 	char buf[BP_SPRINTF_LEN];
@@ -424,19 +616,15 @@ blkptr(uintptr_t addr, uint_t flags, int argc, const mdb_arg_t *argv)
 		return (DCMD_ERR);
 	}
 
-	if (mdb_ctf_lookup_by_name("enum dmu_object_type", &type_enum) == -1 ||
-	    mdb_ctf_lookup_by_name("enum zio_checksum", &checksum_enum) == -1 ||
-	    mdb_ctf_lookup_by_name("enum zio_compress", &compress_enum) == -1) {
+	if (enum_lookup("enum dmu_object_type", BP_GET_TYPE(bp), "DMU_OT_",
+	    sizeof (type), type) == -1 ||
+	    enum_lookup("enum zio_checksum", BP_GET_CHECKSUM(bp),
+	    "ZIO_CHECKSUM_", sizeof (checksum), checksum) == -1 ||
+	    enum_lookup("enum zio_compress", BP_GET_COMPRESS(bp),
+	    "ZIO_COMPRESS_", sizeof (compress), compress) == -1) {
 		mdb_warn("Could not find blkptr enumerated types");
 		return (DCMD_ERR);
 	}
-
-	enum_lookup(type, sizeof (type), type_enum,
-	    BP_GET_TYPE(bp), "DMU_OT_");
-	enum_lookup(checksum, sizeof (checksum), checksum_enum,
-	    BP_GET_CHECKSUM(bp), "ZIO_CHECKSUM_");
-	enum_lookup(compress, sizeof (compress), compress_enum,
-	    BP_GET_COMPRESS(bp), "ZIO_COMPRESS_");
 
 	SNPRINTF_BLKPTR(mdb_snprintf, '\n', buf, sizeof (buf), bp, type,
 	    checksum, compress);
@@ -449,6 +637,7 @@ blkptr(uintptr_t addr, uint_t flags, int argc, const mdb_arg_t *argv)
 typedef struct mdb_dmu_buf_impl {
 	struct {
 		uint64_t db_object;
+		uintptr_t db_data;
 	} db;
 	uintptr_t db_objset;
 	uint64_t db_level;
@@ -465,10 +654,12 @@ dbuf(uintptr_t addr, uint_t flags, int argc, const mdb_arg_t *argv)
 	mdb_dmu_buf_impl_t db;
 	char objectname[32];
 	char blkidname[32];
-	char path[MAXNAMELEN];
+	char path[ZFS_MAX_DATASET_NAME_LEN];
+	int ptr_width = (int)(sizeof (void *)) * 2;
 
 	if (DCMD_HDRSPEC(flags))
-		mdb_printf("        addr object lvl blkid holds os\n");
+		mdb_printf("%*s %8s %3s %9s %5s %s\n",
+		    ptr_width, "addr", "object", "lvl", "blkid", "holds", "os");
 
 	if (mdb_ctf_vread(&db, ZFS_STRUCT "dmu_buf_impl", "mdb_dmu_buf_impl_t",
 	    addr, 0) == -1)
@@ -490,7 +681,7 @@ dbuf(uintptr_t addr, uint_t flags, int argc, const mdb_arg_t *argv)
 		return (DCMD_ERR);
 	}
 
-	mdb_printf("%p %8s %1u %9s %2llu %s\n", addr,
+	mdb_printf("%*p %8s %3u %9s %5llu %s\n", ptr_width, addr,
 	    objectname, (int)db.db_level, blkidname,
 	    db.db_holds.rc_count, path);
 
@@ -591,6 +782,7 @@ zap_leaf(uintptr_t addr, uint_t flags, int argc, const mdb_arg_t *argv)
 	char buf[16*1024];
 	int verbose = B_FALSE;
 	int four = B_FALSE;
+	dmu_buf_t l_dbuf;
 	zap_leaf_t l;
 	zap_leaf_phys_t *zlp = (void *)buf;
 	int i;
@@ -601,7 +793,8 @@ zap_leaf(uintptr_t addr, uint_t flags, int argc, const mdb_arg_t *argv)
 	    NULL) != argc)
 		return (DCMD_USAGE);
 
-	l.l_phys = zlp;
+	l_dbuf.db_data = zlp;
+	l.l_dbuf = &l_dbuf;
 	l.l_bs = 14; /* assume 16k blocks */
 	if (four)
 		l.l_bs = 12;
@@ -720,7 +913,7 @@ dbufs_cb(uintptr_t addr, const void *unknown, void *arg)
 	dmu_buf_t db;
 	uint8_t level;
 	uint64_t blkid;
-	char osname[MAXNAMELEN];
+	char osname[ZFS_MAX_DATASET_NAME_LEN];
 
 	if (GETMEMBID(addr, &data->id, db_objset, objset) ||
 	    GETMEMBID(addr, &data->id, db, db) ||
@@ -756,7 +949,8 @@ dbufs(uintptr_t addr, uint_t flags, int argc, const mdb_arg_t *argv)
 	    'n', MDB_OPT_STR, &data.osname,
 	    'o', MDB_OPT_STR, &object,
 	    'l', MDB_OPT_UINT64, &data.level,
-	    'b', MDB_OPT_STR, &blkid) != argc) {
+	    'b', MDB_OPT_STR, &blkid,
+	    NULL) != argc) {
 		return (DCMD_USAGE);
 	}
 
@@ -812,13 +1006,17 @@ abuf_find_cb(uintptr_t addr, const void *unknown, void *arg)
 	return (WALK_NEXT);
 }
 
+typedef struct mdb_arc_state {
+	uintptr_t	arcs_list[ARC_BUFC_NUMTYPES];
+} mdb_arc_state_t;
+
 /* ARGSUSED */
 static int
 abuf_find(uintptr_t addr, uint_t flags, int argc, const mdb_arg_t *argv)
 {
 	abuf_find_data_t data;
 	GElf_Sym sym;
-	int i;
+	int i, j;
 	const char *syms[] = {
 		"ARC_mru",
 		"ARC_mru_ghost",
@@ -848,14 +1046,30 @@ abuf_find(uintptr_t addr, uint_t flags, int argc, const mdb_arg_t *argv)
 	}
 
 	for (i = 0; i < sizeof (syms) / sizeof (syms[0]); i++) {
+		mdb_arc_state_t mas;
+
 		if (mdb_lookup_by_obj(ZFS_OBJ_NAME, syms[i], &sym)) {
 			mdb_warn("can't find symbol %s", syms[i]);
 			return (DCMD_ERR);
 		}
 
-		if (mdb_pwalk("list", abuf_find_cb, &data, sym.st_value) != 0) {
-			mdb_warn("can't walk %s", syms[i]);
+		if (mdb_ctf_vread(&mas, "arc_state_t", "mdb_arc_state_t",
+		    sym.st_value, 0) != 0) {
+			mdb_warn("can't read arcs_list of %s", syms[i]);
 			return (DCMD_ERR);
+		}
+
+		for (j = 0; j < ARC_BUFC_NUMTYPES; j++) {
+			uintptr_t addr = mas.arcs_list[j];
+
+			if (addr == 0)
+				continue;
+
+			if (mdb_pwalk("multilist", abuf_find_cb, &data,
+			    addr) != 0) {
+				mdb_warn("can't walk %s", syms[i]);
+				return (DCMD_ERR);
+			}
 		}
 	}
 
@@ -958,6 +1172,17 @@ arc_print(uintptr_t addr, uint_t flags, int argc, const mdb_arg_t *argv)
 	static const char *bytestats[] = {
 		"p", "c", "c_min", "c_max", "size", "duplicate_buffers_size",
 		"arc_meta_used", "arc_meta_limit", "arc_meta_max",
+		"arc_meta_min", "hdr_size", "data_size", "metadata_size",
+		"other_size", "anon_size", "anon_evictable_data",
+		"anon_evictable_metadata", "mru_size", "mru_evictable_data",
+		"mru_evictable_metadata", "mru_ghost_size",
+		"mru_ghost_evictable_data", "mru_ghost_evictable_metadata",
+		"mfu_size", "mfu_evictable_data", "mfu_evictable_metadata",
+		"mfu_ghost_size", "mfu_ghost_evictable_data",
+		"mfu_ghost_evictable_metadata", "evict_l2_cached",
+		"evict_l2_eligible", "evict_l2_ineligible", "l2_read_bytes",
+		"l2_write_bytes", "l2_size", "l2_asize", "l2_hdr_size",
+		"compressed_size", "uncompressed_size", "overhead_size",
 		NULL
 	};
 
@@ -1064,8 +1289,65 @@ arc_print(uintptr_t addr, uint_t flags, int argc, const mdb_arg_t *argv)
 
 typedef struct mdb_spa_print {
 	pool_state_t spa_state;
-	char spa_name[MAXNAMELEN];
+	char spa_name[ZFS_MAX_DATASET_NAME_LEN];
+	uintptr_t spa_normal_class;
 } mdb_spa_print_t;
+
+
+const char histo_stars[] = "****************************************";
+const int histo_width = sizeof (histo_stars) - 1;
+
+static void
+dump_histogram(const uint64_t *histo, int size, int offset)
+{
+	int i;
+	int minidx = size - 1;
+	int maxidx = 0;
+	uint64_t max = 0;
+
+	for (i = 0; i < size; i++) {
+		if (histo[i] > max)
+			max = histo[i];
+		if (histo[i] > 0 && i > maxidx)
+			maxidx = i;
+		if (histo[i] > 0 && i < minidx)
+			minidx = i;
+	}
+
+	if (max < histo_width)
+		max = histo_width;
+
+	for (i = minidx; i <= maxidx; i++) {
+		mdb_printf("%3u: %6llu %s\n",
+		    i + offset, (u_longlong_t)histo[i],
+		    &histo_stars[(max - histo[i]) * histo_width / max]);
+	}
+}
+
+typedef struct mdb_metaslab_class {
+	uint64_t mc_histogram[RANGE_TREE_HISTOGRAM_SIZE];
+} mdb_metaslab_class_t;
+
+/*
+ * spa_class_histogram(uintptr_t class_addr)
+ *
+ * Prints free space histogram for a device class
+ *
+ * Returns DCMD_OK, or DCMD_ERR.
+ */
+static int
+spa_class_histogram(uintptr_t class_addr)
+{
+	mdb_metaslab_class_t mc;
+	if (mdb_ctf_vread(&mc, "metaslab_class_t",
+	    "mdb_metaslab_class_t", class_addr, 0) == -1)
+		return (DCMD_ERR);
+
+	mdb_inc_indent(4);
+	dump_histogram(mc.mc_histogram, RANGE_TREE_HISTOGRAM_SIZE, 0);
+	mdb_dec_indent(4);
+	return (DCMD_OK);
+}
 
 /*
  * ::spa
@@ -1127,6 +1409,8 @@ spa_print(uintptr_t addr, uint_t flags, int argc, const mdb_arg_t *argv)
 		state = statetab[spa.spa_state];
 
 	mdb_printf("%0?p %9s %s\n", addr, state, spa.spa_name);
+	if (spa_flags & SPA_FLAG_HISTOGRAMS)
+		spa_class_histogram(spa.spa_normal_class);
 
 	if (spa_flags & SPA_FLAG_CONFIG) {
 		mdb_printf("\n");
@@ -1199,130 +1483,140 @@ spa_print_config(uintptr_t addr, uint_t flags, int argc, const mdb_arg_t *argv)
 	    0, NULL));
 }
 
-const char histo_stars[] = "****************************************";
-const int histo_width = sizeof (histo_stars) - 1;
-
-static void
-dump_histogram(const uint64_t *histo, int size, int offset)
-{
-	int i;
-	int minidx = size - 1;
-	int maxidx = 0;
-	uint64_t max = 0;
-
-	for (i = 0; i < size; i++) {
-		if (histo[i] > max)
-			max = histo[i];
-		if (histo[i] > 0 && i > maxidx)
-			maxidx = i;
-		if (histo[i] > 0 && i < minidx)
-			minidx = i;
-	}
-
-	if (max < histo_width)
-		max = histo_width;
-
-	for (i = minidx; i <= maxidx; i++) {
-		mdb_printf("%3u: %6llu %s\n",
-		    i + offset, (u_longlong_t)histo[i],
-		    &histo_stars[(max - histo[i]) * histo_width / max]);
-	}
-}
-
 typedef struct mdb_range_tree {
+	struct {
+		uint64_t bt_num_elems;
+		uint64_t bt_num_nodes;
+	} rt_root;
 	uint64_t rt_space;
+	range_seg_type_t rt_type;
+	uint8_t		rt_shift;
+	uint64_t	rt_start;
 } mdb_range_tree_t;
 
 typedef struct mdb_metaslab_group {
 	uint64_t mg_fragmentation;
 	uint64_t mg_histogram[RANGE_TREE_HISTOGRAM_SIZE];
+	uintptr_t mg_vd;
 } mdb_metaslab_group_t;
 
 typedef struct mdb_metaslab {
 	uint64_t ms_id;
 	uint64_t ms_start;
 	uint64_t ms_size;
+	int64_t ms_deferspace;
 	uint64_t ms_fragmentation;
-	uintptr_t ms_alloctree[TXG_SIZE];
-	uintptr_t ms_freetree[TXG_SIZE];
-	uintptr_t ms_tree;
+	uint64_t ms_weight;
+	uintptr_t ms_allocating[TXG_SIZE];
+	uintptr_t ms_checkpointing;
+	uintptr_t ms_freeing;
+	uintptr_t ms_freed;
+	uintptr_t ms_allocatable;
+	uintptr_t ms_unflushed_frees;
+	uintptr_t ms_unflushed_allocs;
 	uintptr_t ms_sm;
 } mdb_metaslab_t;
 
 typedef struct mdb_space_map_phys_t {
-	uint64_t smp_alloc;
+	int64_t smp_alloc;
 	uint64_t smp_histogram[SPACE_MAP_HISTOGRAM_SIZE];
 } mdb_space_map_phys_t;
 
 typedef struct mdb_space_map {
 	uint64_t sm_size;
 	uint8_t sm_shift;
-	uint64_t sm_alloc;
 	uintptr_t sm_phys;
 } mdb_space_map_t;
 
 typedef struct mdb_vdev {
-	uintptr_t vdev_ms;
+	uint64_t vdev_id;
+	uint64_t vdev_state;
+	uintptr_t vdev_ops;
+	struct {
+		uint64_t vs_aux;
+		uint64_t vs_ops[VS_ZIO_TYPES];
+		uint64_t vs_bytes[VS_ZIO_TYPES];
+		uint64_t vs_read_errors;
+		uint64_t vs_write_errors;
+		uint64_t vs_checksum_errors;
+	} vdev_stat;
+	uintptr_t vdev_child;
+	uint64_t vdev_children;
 	uint64_t vdev_ms_count;
-	vdev_stat_t vdev_stat;
+	uintptr_t vdev_mg;
+	uintptr_t vdev_ms;
+	uintptr_t vdev_path;
 } mdb_vdev_t;
 
+typedef struct mdb_vdev_ops {
+	char vdev_op_type[16];
+} mdb_vdev_ops_t;
+
 static int
-metaslab_stats(uintptr_t addr, int spa_flags)
+metaslab_stats(mdb_vdev_t *vd, int spa_flags)
 {
-	mdb_vdev_t vdev;
-	uintptr_t *vdev_ms;
-
-	if (mdb_ctf_vread(&vdev, "vdev_t", "mdb_vdev_t",
-	    (uintptr_t)addr, 0) == -1) {
-		mdb_warn("failed to read vdev at %p\n", addr);
-		return (DCMD_ERR);
-	}
-
 	mdb_inc_indent(4);
-	mdb_printf("%<u>%-?s %6s %20s %10s %9s%</u>\n", "ADDR", "ID",
-	    "OFFSET", "FREE", "FRAGMENTATION");
+	mdb_printf("%<u>%-?s %6s %20s %10s %10s %10s%</u>\n", "ADDR", "ID",
+	    "OFFSET", "FREE", "FRAG", "UCMU");
 
-	vdev_ms = mdb_alloc(vdev.vdev_ms_count * sizeof (void *),
+	uintptr_t *vdev_ms = mdb_alloc(vd->vdev_ms_count * sizeof (vdev_ms),
 	    UM_SLEEP | UM_GC);
-	if (mdb_vread(vdev_ms, vdev.vdev_ms_count * sizeof (void *),
-	    (uintptr_t)vdev.vdev_ms) == -1) {
-		mdb_warn("failed to read vdev_ms at %p\n", vdev.vdev_ms);
+	if (mdb_vread(vdev_ms, vd->vdev_ms_count * sizeof (uintptr_t),
+	    vd->vdev_ms) == -1) {
+		mdb_warn("failed to read vdev_ms at %p\n", vd->vdev_ms);
 		return (DCMD_ERR);
 	}
 
-	for (int m = 0; m < vdev.vdev_ms_count; m++) {
+	for (int m = 0; m < vd->vdev_ms_count; m++) {
 		mdb_metaslab_t ms;
 		mdb_space_map_t sm = { 0 };
-		char free[NICENUM_BUFLEN];
+		mdb_space_map_phys_t smp = { 0 };
+		mdb_range_tree_t rt;
+		uint64_t uallocs, ufrees, raw_free, raw_uchanges_mem;
+		char free[MDB_NICENUM_BUFLEN];
+		char uchanges_mem[MDB_NICENUM_BUFLEN];
 
 		if (mdb_ctf_vread(&ms, "metaslab_t", "mdb_metaslab_t",
-		    (uintptr_t)vdev_ms[m], 0) == -1)
+		    vdev_ms[m], 0) == -1)
 			return (DCMD_ERR);
 
-		if (ms.ms_sm != NULL &&
+		if (ms.ms_sm != 0 &&
 		    mdb_ctf_vread(&sm, "space_map_t", "mdb_space_map_t",
 		    ms.ms_sm, 0) == -1)
 			return (DCMD_ERR);
 
-		mdb_nicenum(ms.ms_size - sm.sm_alloc, free);
+		if (mdb_ctf_vread(&rt, "range_tree_t", "mdb_range_tree_t",
+		    ms.ms_unflushed_frees, 0) == -1)
+			return (DCMD_ERR);
+		ufrees = rt.rt_space;
+		raw_uchanges_mem = rt.rt_root.bt_num_nodes * BTREE_LEAF_SIZE;
+
+		if (mdb_ctf_vread(&rt, "range_tree_t", "mdb_range_tree_t",
+		    ms.ms_unflushed_allocs, 0) == -1)
+			return (DCMD_ERR);
+		uallocs = rt.rt_space;
+		raw_uchanges_mem += rt.rt_root.bt_num_nodes * BTREE_LEAF_SIZE;
+		mdb_nicenum(raw_uchanges_mem, uchanges_mem);
+
+		raw_free = ms.ms_size;
+		if (ms.ms_sm != 0 && sm.sm_phys != 0) {
+			(void) mdb_ctf_vread(&smp, "space_map_phys_t",
+			    "mdb_space_map_phys_t", sm.sm_phys, 0);
+			raw_free -= smp.smp_alloc;
+		}
+		raw_free += ufrees - uallocs;
+		mdb_nicenum(raw_free, free);
 
 		mdb_printf("%0?p %6llu %20llx %10s ", vdev_ms[m], ms.ms_id,
 		    ms.ms_start, free);
 		if (ms.ms_fragmentation == ZFS_FRAG_INVALID)
-			mdb_printf("%9s\n", "-");
+			mdb_printf("%9s ", "-");
 		else
-			mdb_printf("%9llu%%\n", ms.ms_fragmentation);
+			mdb_printf("%9llu%% ", ms.ms_fragmentation);
+		mdb_printf("%10s\n", uchanges_mem);
 
-		if ((spa_flags & SPA_FLAG_HISTOGRAMS) && ms.ms_sm != NULL) {
-			mdb_space_map_phys_t smp;
-
-			if (sm.sm_phys == NULL)
-				continue;
-
-			(void) mdb_ctf_vread(&smp, "space_map_phys_t",
-			    "mdb_space_map_phys_t", sm.sm_phys, 0);
-
+		if ((spa_flags & SPA_FLAG_HISTOGRAMS) && ms.ms_sm != 0 &&
+		    sm.sm_phys != 0) {
 			dump_histogram(smp.smp_histogram,
 			    SPACE_MAP_HISTOGRAM_SIZE, sm.sm_shift);
 		}
@@ -1332,21 +1626,54 @@ metaslab_stats(uintptr_t addr, int spa_flags)
 }
 
 static int
-metaslab_group_stats(uintptr_t addr, int spa_flags)
+metaslab_group_stats(mdb_vdev_t *vd, int spa_flags)
 {
 	mdb_metaslab_group_t mg;
 	if (mdb_ctf_vread(&mg, "metaslab_group_t", "mdb_metaslab_group_t",
-	    (uintptr_t)addr, 0) == -1) {
-		mdb_warn("failed to read vdev_mg at %p\n", addr);
+	    vd->vdev_mg, 0) == -1) {
+		mdb_warn("failed to read vdev_mg at %p\n", vd->vdev_mg);
 		return (DCMD_ERR);
 	}
 
 	mdb_inc_indent(4);
-	mdb_printf("%<u>%-?s %15s%</u>\n", "ADDR", "FRAGMENTATION");
+	mdb_printf("%<u>%-?s %7s %9s%</u>\n", "ADDR", "FRAG", "UCMU");
+
 	if (mg.mg_fragmentation == ZFS_FRAG_INVALID)
-		mdb_printf("%0?p %15s\n", addr, "-");
+		mdb_printf("%0?p %6s\n", vd->vdev_mg, "-");
 	else
-		mdb_printf("%0?p %15llu%%\n", addr, mg.mg_fragmentation);
+		mdb_printf("%0?p %6llu%%", vd->vdev_mg, mg.mg_fragmentation);
+
+
+	uintptr_t *vdev_ms = mdb_alloc(vd->vdev_ms_count * sizeof (vdev_ms),
+	    UM_SLEEP | UM_GC);
+	if (mdb_vread(vdev_ms, vd->vdev_ms_count * sizeof (uintptr_t),
+	    vd->vdev_ms) == -1) {
+		mdb_warn("failed to read vdev_ms at %p\n", vd->vdev_ms);
+		return (DCMD_ERR);
+	}
+
+	uint64_t raw_uchanges_mem = 0;
+	char uchanges_mem[MDB_NICENUM_BUFLEN];
+	for (int m = 0; m < vd->vdev_ms_count; m++) {
+		mdb_metaslab_t ms;
+		mdb_range_tree_t rt;
+
+		if (mdb_ctf_vread(&ms, "metaslab_t", "mdb_metaslab_t",
+		    vdev_ms[m], 0) == -1)
+			return (DCMD_ERR);
+
+		if (mdb_ctf_vread(&rt, "range_tree_t", "mdb_range_tree_t",
+		    ms.ms_unflushed_frees, 0) == -1)
+			return (DCMD_ERR);
+		raw_uchanges_mem += rt.rt_root.bt_num_nodes * BTREE_LEAF_SIZE;
+
+		if (mdb_ctf_vread(&rt, "range_tree_t", "mdb_range_tree_t",
+		    ms.ms_unflushed_allocs, 0) == -1)
+			return (DCMD_ERR);
+		raw_uchanges_mem += rt.rt_root.bt_num_nodes * BTREE_LEAF_SIZE;
+	}
+	mdb_nicenum(raw_uchanges_mem, uchanges_mem);
+	mdb_printf("%10s\n", uchanges_mem);
 
 	if (spa_flags & SPA_FLAG_HISTOGRAMS)
 		dump_histogram(mg.mg_histogram, RANGE_TREE_HISTOGRAM_SIZE, 0);
@@ -1370,33 +1697,28 @@ static int
 do_print_vdev(uintptr_t addr, int flags, int depth, boolean_t recursive,
     int spa_flags)
 {
-	vdev_t vdev;
-	char desc[MAXNAMELEN];
-	int c, children;
-	uintptr_t *child;
-	const char *state, *aux;
-
-	if (mdb_vread(&vdev, sizeof (vdev), (uintptr_t)addr) == -1) {
-		mdb_warn("failed to read vdev_t at %p\n", (uintptr_t)addr);
+	mdb_vdev_t vd;
+	if (mdb_ctf_vread(&vd, "vdev_t", "mdb_vdev_t",
+	    (uintptr_t)addr, 0) == -1)
 		return (DCMD_ERR);
-	}
 
 	if (flags & DCMD_PIPE_OUT) {
 		mdb_printf("%#lr\n", addr);
 	} else {
-		if (vdev.vdev_path != NULL) {
+		char desc[MAXNAMELEN];
+		if (vd.vdev_path != 0) {
 			if (mdb_readstr(desc, sizeof (desc),
-			    (uintptr_t)vdev.vdev_path) == -1) {
+			    (uintptr_t)vd.vdev_path) == -1) {
 				mdb_warn("failed to read vdev_path at %p\n",
-				    vdev.vdev_path);
+				    vd.vdev_path);
 				return (DCMD_ERR);
 			}
-		} else if (vdev.vdev_ops != NULL) {
+		} else if (vd.vdev_ops != 0) {
 			vdev_ops_t ops;
 			if (mdb_vread(&ops, sizeof (ops),
-			    (uintptr_t)vdev.vdev_ops) == -1) {
+			    (uintptr_t)vd.vdev_ops) == -1) {
 				mdb_warn("failed to read vdev_ops at %p\n",
-				    vdev.vdev_ops);
+				    vd.vdev_ops);
 				return (DCMD_ERR);
 			}
 			(void) strcpy(desc, ops.vdev_op_type);
@@ -1412,7 +1734,8 @@ do_print_vdev(uintptr_t addr, int flags, int depth, boolean_t recursive,
 
 		mdb_printf("%0?p ", addr);
 
-		switch (vdev.vdev_state) {
+		const char *state, *aux;
+		switch (vd.vdev_state) {
 		case VDEV_STATE_CLOSED:
 			state = "CLOSED";
 			break;
@@ -1439,7 +1762,7 @@ do_print_vdev(uintptr_t addr, int flags, int depth, boolean_t recursive,
 			break;
 		}
 
-		switch (vdev.vdev_stat.vs_aux) {
+		switch (vd.vdev_stat.vs_aux) {
 		case VDEV_AUX_NONE:
 			aux = "-";
 			break;
@@ -1488,6 +1811,9 @@ do_print_vdev(uintptr_t addr, int flags, int depth, boolean_t recursive,
 		case VDEV_AUX_SPLIT_POOL:
 			aux = "SPLIT_POOL";
 			break;
+		case VDEV_AUX_CHILDREN_OFFLINE:
+			aux = "CHILDREN_OFFLINE";
+			break;
 		default:
 			aux = "UNKNOWN";
 			break;
@@ -1496,7 +1822,6 @@ do_print_vdev(uintptr_t addr, int flags, int depth, boolean_t recursive,
 		mdb_printf("%-9s %-12s %*s%s\n", state, aux, depth, "", desc);
 
 		if (spa_flags & SPA_FLAG_ERRORS) {
-			vdev_stat_t *vs = &vdev.vdev_stat;
 			int i;
 
 			mdb_inc_indent(4);
@@ -1505,48 +1830,50 @@ do_print_vdev(uintptr_t addr, int flags, int depth, boolean_t recursive,
 			    "%12s%</u>\n", "READ", "WRITE", "FREE", "CLAIM",
 			    "IOCTL");
 			mdb_printf("OPS     ");
-			for (i = 1; i < ZIO_TYPES; i++)
-				mdb_printf("%11#llx%s", vs->vs_ops[i],
-				    i == ZIO_TYPES - 1 ? "" : "  ");
+			for (i = 1; i < VS_ZIO_TYPES; i++)
+				mdb_printf("%11#llx%s",
+				    vd.vdev_stat.vs_ops[i],
+				    i == VS_ZIO_TYPES - 1 ? "" : "  ");
 			mdb_printf("\n");
 			mdb_printf("BYTES   ");
-			for (i = 1; i < ZIO_TYPES; i++)
-				mdb_printf("%11#llx%s", vs->vs_bytes[i],
-				    i == ZIO_TYPES - 1 ? "" : "  ");
+			for (i = 1; i < VS_ZIO_TYPES; i++)
+				mdb_printf("%11#llx%s",
+				    vd.vdev_stat.vs_bytes[i],
+				    i == VS_ZIO_TYPES - 1 ? "" : "  ");
 
 
 			mdb_printf("\n");
-			mdb_printf("EREAD    %10#llx\n", vs->vs_read_errors);
-			mdb_printf("EWRITE   %10#llx\n", vs->vs_write_errors);
+			mdb_printf("EREAD    %10#llx\n",
+			    vd.vdev_stat.vs_read_errors);
+			mdb_printf("EWRITE   %10#llx\n",
+			    vd.vdev_stat.vs_write_errors);
 			mdb_printf("ECKSUM   %10#llx\n",
-			    vs->vs_checksum_errors);
+			    vd.vdev_stat.vs_checksum_errors);
 			mdb_dec_indent(4);
 			mdb_printf("\n");
 		}
 
-		if (spa_flags & SPA_FLAG_METASLAB_GROUPS &&
-		    vdev.vdev_mg != NULL) {
-			metaslab_group_stats((uintptr_t)vdev.vdev_mg,
-			    spa_flags);
+		if ((spa_flags & SPA_FLAG_METASLAB_GROUPS) &&
+		    vd.vdev_mg != 0) {
+			metaslab_group_stats(&vd, spa_flags);
 		}
-		if (spa_flags & SPA_FLAG_METASLABS && vdev.vdev_ms != NULL) {
-			metaslab_stats((uintptr_t)addr, spa_flags);
+		if ((spa_flags & SPA_FLAG_METASLABS) && vd.vdev_ms != 0) {
+			metaslab_stats(&vd, spa_flags);
 		}
 	}
 
-	children = vdev.vdev_children;
-
+	uint64_t children = vd.vdev_children;
 	if (children == 0 || !recursive)
 		return (DCMD_OK);
 
-	child = mdb_alloc(children * sizeof (void *), UM_SLEEP | UM_GC);
-	if (mdb_vread(child, children * sizeof (void *),
-	    (uintptr_t)vdev.vdev_child) == -1) {
-		mdb_warn("failed to read vdev children at %p", vdev.vdev_child);
+	uintptr_t *child = mdb_alloc(children * sizeof (child),
+	    UM_SLEEP | UM_GC);
+	if (mdb_vread(child, children * sizeof (void *), vd.vdev_child) == -1) {
+		mdb_warn("failed to read vdev children at %p", vd.vdev_child);
 		return (DCMD_ERR);
 	}
 
-	for (c = 0; c < children; c++) {
+	for (uint64_t c = 0; c < children; c++) {
 		if (do_print_vdev(child[c], flags, depth + 2, recursive,
 		    spa_flags)) {
 			return (DCMD_ERR);
@@ -1578,6 +1905,168 @@ vdev_print(uintptr_t addr, uint_t flags, int argc, const mdb_arg_t *argv)
 	}
 
 	return (do_print_vdev(addr, flags, (int)depth, recursive, spa_flags));
+}
+
+typedef struct mdb_metaslab_alloc_trace {
+	uintptr_t mat_mg;
+	uintptr_t mat_msp;
+	uint64_t mat_size;
+	uint64_t mat_weight;
+	uint64_t mat_offset;
+	uint32_t mat_dva_id;
+	int mat_allocator;
+} mdb_metaslab_alloc_trace_t;
+
+static void
+metaslab_print_weight(uint64_t weight)
+{
+	char buf[100];
+
+	if (WEIGHT_IS_SPACEBASED(weight)) {
+		mdb_nicenum(
+		    weight & ~(METASLAB_ACTIVE_MASK | METASLAB_WEIGHT_TYPE),
+		    buf);
+	} else {
+		char size[MDB_NICENUM_BUFLEN];
+		mdb_nicenum(1ULL << WEIGHT_GET_INDEX(weight), size);
+		(void) mdb_snprintf(buf, sizeof (buf), "%llu x %s",
+		    WEIGHT_GET_COUNT(weight), size);
+	}
+	mdb_printf("%11s ", buf);
+}
+
+/* ARGSUSED */
+static int
+metaslab_weight(uintptr_t addr, uint_t flags, int argc, const mdb_arg_t *argv)
+{
+	uint64_t weight = 0;
+	char active;
+
+	if (argc == 0 && (flags & DCMD_ADDRSPEC)) {
+		if (mdb_vread(&weight, sizeof (uint64_t), addr) == -1) {
+			mdb_warn("failed to read weight at %p\n", addr);
+			return (DCMD_ERR);
+		}
+	} else if (argc == 1 && !(flags & DCMD_ADDRSPEC)) {
+		weight = (argv[0].a_type == MDB_TYPE_IMMEDIATE) ?
+		    argv[0].a_un.a_val : mdb_strtoull(argv[0].a_un.a_str);
+	} else {
+		return (DCMD_USAGE);
+	}
+
+	if (DCMD_HDRSPEC(flags)) {
+		mdb_printf("%<u>%-6s %9s %9s%</u>\n",
+		    "ACTIVE", "ALGORITHM", "WEIGHT");
+	}
+
+	if (weight & METASLAB_WEIGHT_PRIMARY)
+		active = 'P';
+	else if (weight & METASLAB_WEIGHT_SECONDARY)
+		active = 'S';
+	else
+		active = '-';
+	mdb_printf("%6c %8s ", active,
+	    WEIGHT_IS_SPACEBASED(weight) ? "SPACE" : "SEGMENT");
+	metaslab_print_weight(weight);
+	mdb_printf("\n");
+
+	return (DCMD_OK);
+}
+
+/* ARGSUSED */
+static int
+metaslab_trace(uintptr_t addr, uint_t flags, int argc, const mdb_arg_t *argv)
+{
+	mdb_metaslab_alloc_trace_t mat;
+	mdb_metaslab_group_t mg = { 0 };
+	char result_type[100];
+
+	if (mdb_ctf_vread(&mat, "metaslab_alloc_trace_t",
+	    "mdb_metaslab_alloc_trace_t", addr, 0) == -1) {
+		return (DCMD_ERR);
+	}
+
+	if (!(flags & DCMD_PIPE_OUT) && DCMD_HDRSPEC(flags)) {
+		mdb_printf("%<u>%6s %6s %8s %11s %11s %18s %18s%</u>\n",
+		    "MSID", "DVA", "ASIZE", "ALLOCATOR", "WEIGHT", "RESULT",
+		    "VDEV");
+	}
+
+	if (mat.mat_msp != 0) {
+		mdb_metaslab_t ms;
+
+		if (mdb_ctf_vread(&ms, "metaslab_t", "mdb_metaslab_t",
+		    mat.mat_msp, 0) == -1) {
+			return (DCMD_ERR);
+		}
+		mdb_printf("%6llu ", ms.ms_id);
+	} else {
+		mdb_printf("%6s ", "-");
+	}
+
+	mdb_printf("%6d %8llx %11llx ", mat.mat_dva_id, mat.mat_size,
+	    mat.mat_allocator);
+
+	metaslab_print_weight(mat.mat_weight);
+
+	if ((int64_t)mat.mat_offset < 0) {
+		if (enum_lookup("enum trace_alloc_type", mat.mat_offset,
+		    "TRACE_", sizeof (result_type), result_type) == -1) {
+			mdb_warn("Could not find enum for trace_alloc_type");
+			return (DCMD_ERR);
+		}
+		mdb_printf("%18s ", result_type);
+	} else {
+		mdb_printf("%<b>%18llx%</b> ", mat.mat_offset);
+	}
+
+	if (mat.mat_mg != 0 &&
+	    mdb_ctf_vread(&mg, "metaslab_group_t", "mdb_metaslab_group_t",
+	    mat.mat_mg, 0) == -1) {
+		return (DCMD_ERR);
+	}
+
+	if (mg.mg_vd != 0) {
+		mdb_vdev_t vdev;
+		char desc[MAXNAMELEN];
+
+		if (mdb_ctf_vread(&vdev, "vdev_t", "mdb_vdev_t",
+		    mg.mg_vd, 0) == -1) {
+			return (DCMD_ERR);
+		}
+
+		if (vdev.vdev_path != 0) {
+			char path[MAXNAMELEN];
+
+			if (mdb_readstr(path, sizeof (path),
+			    vdev.vdev_path) == -1) {
+				mdb_warn("failed to read vdev_path at %p\n",
+				    vdev.vdev_path);
+				return (DCMD_ERR);
+			}
+			char *slash;
+			if ((slash = strrchr(path, '/')) != NULL) {
+				strcpy(desc, slash + 1);
+			} else {
+				strcpy(desc, path);
+			}
+		} else if (vdev.vdev_ops != 0) {
+			mdb_vdev_ops_t ops;
+			if (mdb_ctf_vread(&ops, "vdev_ops_t", "mdb_vdev_ops_t",
+			    vdev.vdev_ops, 0) == -1) {
+				mdb_warn("failed to read vdev_ops at %p\n",
+				    vdev.vdev_ops);
+				return (DCMD_ERR);
+			}
+			(void) mdb_snprintf(desc, sizeof (desc),
+			    "%s-%llu", ops.vdev_op_type, vdev.vdev_id);
+		} else {
+			(void) strcpy(desc, "<unknown>");
+		}
+		mdb_printf("%18s\n", desc);
+	}
+
+	return (DCMD_OK);
 }
 
 typedef struct metaslab_walk_data {
@@ -1640,7 +2129,6 @@ metaslab_walk_step(mdb_walk_state_t *wsp)
 	return (wsp->walk_callback(msp, &ms, wsp->walk_cbdata));
 }
 
-/* ARGSUSED */
 static int
 metaslab_walk_init(mdb_walk_state_t *wsp)
 {
@@ -1648,7 +2136,7 @@ metaslab_walk_init(mdb_walk_state_t *wsp)
 	uintptr_t root_vdevp;
 	uintptr_t childp;
 
-	if (wsp->walk_addr == NULL) {
+	if (wsp->walk_addr == 0) {
 		mdb_warn("must supply address of spa_t\n");
 		return (WALK_ERR);
 	}
@@ -1679,8 +2167,12 @@ typedef struct mdb_spa {
 	uintptr_t spa_root_vdev;
 } mdb_spa_t;
 
+typedef struct mdb_dsl_pool {
+	uintptr_t dp_root_dir;
+} mdb_dsl_pool_t;
+
 typedef struct mdb_dsl_dir {
-	uintptr_t dd_phys;
+	uintptr_t dd_dbuf;
 	int64_t dd_space_towrite[TXG_SIZE];
 } mdb_dsl_dir_t;
 
@@ -1691,11 +2183,15 @@ typedef struct mdb_dsl_dir_phys {
 } mdb_dsl_dir_phys_t;
 
 typedef struct space_data {
-	uint64_t ms_alloctree[TXG_SIZE];
-	uint64_t ms_freetree[TXG_SIZE];
-	uint64_t ms_tree;
+	uint64_t ms_allocating[TXG_SIZE];
+	uint64_t ms_checkpointing;
+	uint64_t ms_freeing;
+	uint64_t ms_freed;
+	uint64_t ms_unflushed_frees;
+	uint64_t ms_unflushed_allocs;
+	uint64_t ms_allocatable;
+	int64_t ms_deferspace;
 	uint64_t avail;
-	uint64_t nowavail;
 } space_data_t;
 
 /* ARGSUSED */
@@ -1707,6 +2203,7 @@ space_cb(uintptr_t addr, const void *unknown, void *arg)
 	mdb_range_tree_t rt;
 	mdb_space_map_t sm = { 0 };
 	mdb_space_map_phys_t smp = { 0 };
+	uint64_t uallocs, ufrees;
 	int i;
 
 	if (mdb_ctf_vread(&ms, "metaslab_t", "mdb_metaslab_t",
@@ -1715,35 +2212,55 @@ space_cb(uintptr_t addr, const void *unknown, void *arg)
 
 	for (i = 0; i < TXG_SIZE; i++) {
 		if (mdb_ctf_vread(&rt, "range_tree_t",
-		    "mdb_range_tree_t", ms.ms_alloctree[i], 0) == -1)
+		    "mdb_range_tree_t", ms.ms_allocating[i], 0) == -1)
 			return (WALK_ERR);
-
-		sd->ms_alloctree[i] += rt.rt_space;
-
-		if (mdb_ctf_vread(&rt, "range_tree_t",
-		    "mdb_range_tree_t", ms.ms_freetree[i], 0) == -1)
-			return (WALK_ERR);
-
-		sd->ms_freetree[i] += rt.rt_space;
+		sd->ms_allocating[i] += rt.rt_space;
 	}
 
 	if (mdb_ctf_vread(&rt, "range_tree_t",
-	    "mdb_range_tree_t", ms.ms_tree, 0) == -1)
+	    "mdb_range_tree_t", ms.ms_checkpointing, 0) == -1)
 		return (WALK_ERR);
+	sd->ms_checkpointing += rt.rt_space;
 
-	if (ms.ms_sm != NULL &&
+	if (mdb_ctf_vread(&rt, "range_tree_t",
+	    "mdb_range_tree_t", ms.ms_freeing, 0) == -1)
+		return (WALK_ERR);
+	sd->ms_freeing += rt.rt_space;
+
+	if (mdb_ctf_vread(&rt, "range_tree_t",
+	    "mdb_range_tree_t", ms.ms_freed, 0) == -1)
+		return (WALK_ERR);
+	sd->ms_freed += rt.rt_space;
+
+	if (mdb_ctf_vread(&rt, "range_tree_t",
+	    "mdb_range_tree_t", ms.ms_allocatable, 0) == -1)
+		return (WALK_ERR);
+	sd->ms_allocatable += rt.rt_space;
+
+	if (mdb_ctf_vread(&rt, "range_tree_t",
+	    "mdb_range_tree_t", ms.ms_unflushed_frees, 0) == -1)
+		return (WALK_ERR);
+	sd->ms_unflushed_frees += rt.rt_space;
+	ufrees = rt.rt_space;
+
+	if (mdb_ctf_vread(&rt, "range_tree_t",
+	    "mdb_range_tree_t", ms.ms_unflushed_allocs, 0) == -1)
+		return (WALK_ERR);
+	sd->ms_unflushed_allocs += rt.rt_space;
+	uallocs = rt.rt_space;
+
+	if (ms.ms_sm != 0 &&
 	    mdb_ctf_vread(&sm, "space_map_t",
 	    "mdb_space_map_t", ms.ms_sm, 0) == -1)
 		return (WALK_ERR);
 
-	if (sm.sm_phys != NULL) {
+	if (sm.sm_phys != 0) {
 		(void) mdb_ctf_vread(&smp, "space_map_phys_t",
 		    "mdb_space_map_phys_t", sm.sm_phys, 0);
 	}
 
-	sd->ms_tree += rt.rt_space;
-	sd->avail += sm.sm_size - sm.sm_alloc;
-	sd->nowavail += sm.sm_size - smp.smp_alloc;
+	sd->ms_deferspace += ms.ms_deferspace;
+	sd->avail += sm.sm_size - smp.smp_alloc + ufrees - uallocs;
 
 	return (WALK_NEXT);
 }
@@ -1760,11 +2277,10 @@ static int
 spa_space(uintptr_t addr, uint_t flags, int argc, const mdb_arg_t *argv)
 {
 	mdb_spa_t spa;
-	uintptr_t dp_root_dir;
+	mdb_dsl_pool_t dp;
 	mdb_dsl_dir_t dd;
+	mdb_dmu_buf_impl_t db;
 	mdb_dsl_dir_phys_t dsp;
-	uint64_t children;
-	uintptr_t childaddr;
 	space_data_t sd;
 	int shift = 20;
 	char *suffix = "M";
@@ -1781,21 +2297,16 @@ spa_space(uintptr_t addr, uint_t flags, int argc, const mdb_arg_t *argv)
 		suffix = "";
 	}
 
-	if (GETMEMB(addr, "spa", spa_dsl_pool, spa.spa_dsl_pool) ||
-	    GETMEMB(addr, "spa", spa_root_vdev, spa.spa_root_vdev) ||
-	    GETMEMB(spa.spa_root_vdev, "vdev", vdev_children, children) ||
-	    GETMEMB(spa.spa_root_vdev, "vdev", vdev_child, childaddr) ||
-	    GETMEMB(spa.spa_dsl_pool, "dsl_pool",
-	    dp_root_dir, dp_root_dir) ||
-	    GETMEMB(dp_root_dir, "dsl_dir", dd_phys, dd.dd_phys) ||
-	    GETMEMB(dp_root_dir, "dsl_dir",
-	    dd_space_towrite, dd.dd_space_towrite) ||
-	    GETMEMB(dd.dd_phys, "dsl_dir_phys",
-	    dd_used_bytes, dsp.dd_used_bytes) ||
-	    GETMEMB(dd.dd_phys, "dsl_dir_phys",
-	    dd_compressed_bytes, dsp.dd_compressed_bytes) ||
-	    GETMEMB(dd.dd_phys, "dsl_dir_phys",
-	    dd_uncompressed_bytes, dsp.dd_uncompressed_bytes)) {
+	if (mdb_ctf_vread(&spa, ZFS_STRUCT "spa", "mdb_spa_t",
+	    addr, 0) == -1 ||
+	    mdb_ctf_vread(&dp, ZFS_STRUCT "dsl_pool", "mdb_dsl_pool_t",
+	    spa.spa_dsl_pool, 0) == -1 ||
+	    mdb_ctf_vread(&dd, ZFS_STRUCT "dsl_dir", "mdb_dsl_dir_t",
+	    dp.dp_root_dir, 0) == -1 ||
+	    mdb_ctf_vread(&db, ZFS_STRUCT "dmu_buf_impl", "mdb_dmu_buf_impl_t",
+	    dd.dd_dbuf, 0) == -1 ||
+	    mdb_ctf_vread(&dsp, ZFS_STRUCT "dsl_dir_phys",
+	    "mdb_dsl_dir_phys_t", db.db.db_data, 0) == -1) {
 		return (DCMD_ERR);
 	}
 
@@ -1819,19 +2330,26 @@ spa_space(uintptr_t addr, uint_t flags, int argc, const mdb_arg_t *argv)
 	}
 
 	mdb_printf("ms_allocmap = %llu%s %llu%s %llu%s %llu%s\n",
-	    sd.ms_alloctree[0] >> shift, suffix,
-	    sd.ms_alloctree[1] >> shift, suffix,
-	    sd.ms_alloctree[2] >> shift, suffix,
-	    sd.ms_alloctree[3] >> shift, suffix);
-	mdb_printf("ms_freemap = %llu%s %llu%s %llu%s %llu%s\n",
-	    sd.ms_freetree[0] >> shift, suffix,
-	    sd.ms_freetree[1] >> shift, suffix,
-	    sd.ms_freetree[2] >> shift, suffix,
-	    sd.ms_freetree[3] >> shift, suffix);
-	mdb_printf("ms_tree = %llu%s\n", sd.ms_tree >> shift, suffix);
-	mdb_printf("last synced avail = %llu%s\n", sd.avail >> shift, suffix);
-	mdb_printf("current syncing avail = %llu%s\n",
-	    sd.nowavail >> shift, suffix);
+	    sd.ms_allocating[0] >> shift, suffix,
+	    sd.ms_allocating[1] >> shift, suffix,
+	    sd.ms_allocating[2] >> shift, suffix,
+	    sd.ms_allocating[3] >> shift, suffix);
+	mdb_printf("ms_checkpointing = %llu%s\n",
+	    sd.ms_checkpointing >> shift, suffix);
+	mdb_printf("ms_freeing = %llu%s\n",
+	    sd.ms_freeing >> shift, suffix);
+	mdb_printf("ms_freed = %llu%s\n",
+	    sd.ms_freed >> shift, suffix);
+	mdb_printf("ms_unflushed_frees = %llu%s\n",
+	    sd.ms_unflushed_frees >> shift, suffix);
+	mdb_printf("ms_unflushed_allocs = %llu%s\n",
+	    sd.ms_unflushed_allocs >> shift, suffix);
+	mdb_printf("ms_allocatable = %llu%s\n",
+	    sd.ms_allocatable >> shift, suffix);
+	mdb_printf("ms_deferspace = %llu%s\n",
+	    sd.ms_deferspace >> shift, suffix);
+	mdb_printf("current avail = %llu%s\n",
+	    sd.avail >> shift, suffix);
 
 	return (DCMD_OK);
 }
@@ -1931,7 +2449,7 @@ spa_vdevs(uintptr_t addr, uint_t flags, int argc, const mdb_arg_t *argv)
 	/*
 	 * Unitialized spa_t structures can have a NULL root vdev.
 	 */
-	if (spa.spa_root_vdev == NULL) {
+	if (spa.spa_root_vdev == 0) {
 		mdb_printf("no associated vdevs\n");
 		return (DCMD_OK);
 	}
@@ -2170,6 +2688,266 @@ zio_state(uintptr_t addr, uint_t flags, int argc, const mdb_arg_t *argv)
 	return (mdb_pwalk_dcmd("zio_root", "zio", argc, argv, addr));
 }
 
+
+typedef struct mdb_zfs_btree_hdr {
+	uintptr_t		bth_parent;
+	boolean_t		bth_core;
+	/*
+	 * For both leaf and core nodes, represents the number of elements in
+	 * the node. For core nodes, they will have bth_count + 1 children.
+	 */
+	uint32_t		bth_count;
+} mdb_zfs_btree_hdr_t;
+
+typedef struct mdb_zfs_btree_core {
+	mdb_zfs_btree_hdr_t	btc_hdr;
+	uintptr_t		btc_children[BTREE_CORE_ELEMS + 1];
+	uint8_t			btc_elems[];
+} mdb_zfs_btree_core_t;
+
+typedef struct mdb_zfs_btree_leaf {
+	mdb_zfs_btree_hdr_t	btl_hdr;
+	uint8_t			btl_elems[];
+} mdb_zfs_btree_leaf_t;
+
+typedef struct mdb_zfs_btree {
+	uintptr_t		bt_root;
+	size_t			bt_elem_size;
+} mdb_zfs_btree_t;
+
+typedef struct btree_walk_data {
+	mdb_zfs_btree_t		bwd_btree;
+	mdb_zfs_btree_hdr_t	*bwd_node;
+	uint64_t		bwd_offset; // In units of bt_node_size
+} btree_walk_data_t;
+
+static uintptr_t
+btree_leftmost_child(uintptr_t addr, mdb_zfs_btree_hdr_t *buf)
+{
+	size_t size = offsetof(zfs_btree_core_t, btc_children) +
+	    sizeof (uintptr_t);
+	for (;;) {
+		if (mdb_vread(buf, size, addr) == -1) {
+			mdb_warn("failed to read at %p\n", addr);
+			return ((uintptr_t)0ULL);
+		}
+		if (!buf->bth_core)
+			return (addr);
+		mdb_zfs_btree_core_t *node = (mdb_zfs_btree_core_t *)buf;
+		addr = node->btc_children[0];
+	}
+}
+
+static int
+btree_walk_step(mdb_walk_state_t *wsp)
+{
+	btree_walk_data_t *bwd = wsp->walk_data;
+	size_t elem_size = bwd->bwd_btree.bt_elem_size;
+	if (wsp->walk_addr == 0ULL)
+		return (WALK_DONE);
+
+	if (!bwd->bwd_node->bth_core) {
+		/*
+		 * For the first element in a leaf node, read in the full
+		 * leaf, since we only had part of it read in before.
+		 */
+		if (bwd->bwd_offset == 0) {
+			if (mdb_vread(bwd->bwd_node, BTREE_LEAF_SIZE,
+			    wsp->walk_addr) == -1) {
+				mdb_warn("failed to read at %p\n",
+				    wsp->walk_addr);
+				return (WALK_ERR);
+			}
+		}
+
+		int status = wsp->walk_callback((uintptr_t)(wsp->walk_addr +
+		    offsetof(mdb_zfs_btree_leaf_t, btl_elems) +
+		    bwd->bwd_offset * elem_size), bwd->bwd_node,
+		    wsp->walk_cbdata);
+		if (status != WALK_NEXT)
+			return (status);
+		bwd->bwd_offset++;
+
+		/* Find the next element, if we're at the end of the leaf. */
+		while (bwd->bwd_offset == bwd->bwd_node->bth_count) {
+			uintptr_t par = bwd->bwd_node->bth_parent;
+			uintptr_t cur = wsp->walk_addr;
+			wsp->walk_addr = par;
+			if (par == 0ULL)
+				return (WALK_NEXT);
+
+			size_t size = sizeof (zfs_btree_core_t) +
+			    BTREE_CORE_ELEMS * elem_size;
+			if (mdb_vread(bwd->bwd_node, size, wsp->walk_addr) ==
+			    -1) {
+				mdb_warn("failed to read at %p\n",
+				    wsp->walk_addr);
+				return (WALK_ERR);
+			}
+			mdb_zfs_btree_core_t *node =
+			    (mdb_zfs_btree_core_t *)bwd->bwd_node;
+			int i;
+			for (i = 0; i <= bwd->bwd_node->bth_count; i++) {
+				if (node->btc_children[i] == cur)
+					break;
+			}
+			if (i > bwd->bwd_node->bth_count) {
+				mdb_warn("btree parent/child mismatch at "
+				    "%#lx\n", cur);
+				return (WALK_ERR);
+			}
+			bwd->bwd_offset = i;
+		}
+		return (WALK_NEXT);
+	}
+
+	if (!bwd->bwd_node->bth_core) {
+		mdb_warn("Invalid btree node at %#lx\n", wsp->walk_addr);
+		return (WALK_ERR);
+	}
+	mdb_zfs_btree_core_t *node = (mdb_zfs_btree_core_t *)bwd->bwd_node;
+	int status = wsp->walk_callback((uintptr_t)(wsp->walk_addr +
+	    offsetof(mdb_zfs_btree_core_t, btc_elems) + bwd->bwd_offset *
+	    elem_size), bwd->bwd_node, wsp->walk_cbdata);
+	if (status != WALK_NEXT)
+		return (status);
+
+	uintptr_t new_child = node->btc_children[bwd->bwd_offset + 1];
+	wsp->walk_addr = btree_leftmost_child(new_child, bwd->bwd_node);
+	if (wsp->walk_addr == 0ULL)
+		return (WALK_ERR);
+
+	bwd->bwd_offset = 0;
+	return (WALK_NEXT);
+}
+
+static int
+btree_walk_init(mdb_walk_state_t *wsp)
+{
+	btree_walk_data_t *bwd;
+
+	if (wsp->walk_addr == 0ULL) {
+		mdb_warn("must supply address of zfs_btree_t\n");
+		return (WALK_ERR);
+	}
+
+	bwd = mdb_zalloc(sizeof (btree_walk_data_t), UM_SLEEP);
+	if (mdb_ctf_vread(&bwd->bwd_btree, "zfs_btree_t", "mdb_zfs_btree_t",
+	    wsp->walk_addr, 0) == -1) {
+		mdb_free(bwd, sizeof (*bwd));
+		return (WALK_ERR);
+	}
+
+	if (bwd->bwd_btree.bt_elem_size == 0) {
+		mdb_warn("invalid or uninitialized btree at %#lx\n",
+		    wsp->walk_addr);
+		mdb_free(bwd, sizeof (*bwd));
+		return (WALK_ERR);
+	}
+
+	size_t size = MAX(BTREE_LEAF_SIZE, sizeof (zfs_btree_core_t) +
+	    BTREE_CORE_ELEMS * bwd->bwd_btree.bt_elem_size);
+	bwd->bwd_node = mdb_zalloc(size, UM_SLEEP);
+
+	uintptr_t node = (uintptr_t)bwd->bwd_btree.bt_root;
+	if (node == 0ULL) {
+		wsp->walk_addr = 0ULL;
+		wsp->walk_data = bwd;
+		return (WALK_NEXT);
+	}
+	node = btree_leftmost_child(node, bwd->bwd_node);
+	if (node == 0ULL) {
+		mdb_free(bwd->bwd_node, size);
+		mdb_free(bwd, sizeof (*bwd));
+		return (WALK_ERR);
+	}
+	bwd->bwd_offset = 0;
+
+	wsp->walk_addr = node;
+	wsp->walk_data = bwd;
+	return (WALK_NEXT);
+}
+
+static void
+btree_walk_fini(mdb_walk_state_t *wsp)
+{
+	btree_walk_data_t *bwd = (btree_walk_data_t *)wsp->walk_data;
+
+	if (bwd == NULL)
+		return;
+
+	size_t size = MAX(BTREE_LEAF_SIZE, sizeof (zfs_btree_core_t) +
+	    BTREE_CORE_ELEMS * bwd->bwd_btree.bt_elem_size);
+	if (bwd->bwd_node != NULL)
+		mdb_free(bwd->bwd_node, size);
+
+	mdb_free(bwd, sizeof (*bwd));
+}
+
+typedef struct mdb_multilist {
+	uint64_t ml_num_sublists;
+	uintptr_t ml_sublists;
+} mdb_multilist_t;
+
+static int
+multilist_walk_step(mdb_walk_state_t *wsp)
+{
+	return (wsp->walk_callback(wsp->walk_addr, wsp->walk_layer,
+	    wsp->walk_cbdata));
+}
+
+static int
+multilist_walk_init(mdb_walk_state_t *wsp)
+{
+	mdb_multilist_t ml;
+	ssize_t sublist_sz;
+	int list_offset;
+	size_t i;
+
+	if (wsp->walk_addr == 0) {
+		mdb_warn("must supply address of multilist_t\n");
+		return (WALK_ERR);
+	}
+
+	if (mdb_ctf_vread(&ml, "multilist_t", "mdb_multilist_t",
+	    wsp->walk_addr, 0) == -1) {
+		return (WALK_ERR);
+	}
+
+	if (ml.ml_num_sublists == 0 || ml.ml_sublists == 0) {
+		mdb_warn("invalid or uninitialized multilist at %#lx\n",
+		    wsp->walk_addr);
+		return (WALK_ERR);
+	}
+
+	/* mdb_ctf_sizeof_by_name() will print an error for us */
+	sublist_sz = mdb_ctf_sizeof_by_name("multilist_sublist_t");
+	if (sublist_sz == -1)
+		return (WALK_ERR);
+
+	/* mdb_ctf_offsetof_by_name will print an error for us */
+	list_offset = mdb_ctf_offsetof_by_name("multilist_sublist_t",
+	    "mls_list");
+	if (list_offset == -1)
+		return (WALK_ERR);
+
+	for (i = 0; i < ml.ml_num_sublists; i++) {
+		wsp->walk_addr = ml.ml_sublists + i * sublist_sz + list_offset;
+
+		if (mdb_layered_walk("list", wsp) == -1) {
+			mdb_warn("can't walk multilist sublist");
+			return (WALK_ERR);
+		}
+	}
+
+	return (WALK_NEXT);
+}
+
+typedef struct mdb_txg_list {
+	size_t		tl_offset;
+	uintptr_t	tl_head[TXG_SIZE];
+} mdb_txg_list_t;
+
 typedef struct txg_list_walk_data {
 	uintptr_t lw_head[TXG_SIZE];
 	int	lw_txgoff;
@@ -2182,17 +2960,18 @@ static int
 txg_list_walk_init_common(mdb_walk_state_t *wsp, int txg, int maxoff)
 {
 	txg_list_walk_data_t *lwd;
-	txg_list_t list;
+	mdb_txg_list_t list;
 	int i;
 
 	lwd = mdb_alloc(sizeof (txg_list_walk_data_t), UM_SLEEP | UM_GC);
-	if (mdb_vread(&list, sizeof (txg_list_t), wsp->walk_addr) == -1) {
+	if (mdb_ctf_vread(&list, "txg_list_t", "mdb_txg_list_t", wsp->walk_addr,
+	    0) == -1) {
 		mdb_warn("failed to read txg_list_t at %#lx", wsp->walk_addr);
 		return (WALK_ERR);
 	}
 
 	for (i = 0; i < TXG_SIZE; i++)
-		lwd->lw_head[i] = (uintptr_t)list.tl_head[i];
+		lwd->lw_head[i] = list.tl_head[i];
 	lwd->lw_offset = list.tl_offset;
 	lwd->lw_obj = mdb_alloc(lwd->lw_offset + sizeof (txg_node_t),
 	    UM_SLEEP | UM_GC);
@@ -2243,12 +3022,12 @@ txg_list_walk_step(mdb_walk_state_t *wsp)
 	txg_node_t *node;
 	int status;
 
-	while (wsp->walk_addr == NULL && lwd->lw_txgoff < lwd->lw_maxoff) {
+	while (wsp->walk_addr == 0 && lwd->lw_txgoff < lwd->lw_maxoff) {
 		lwd->lw_txgoff++;
 		wsp->walk_addr = lwd->lw_head[lwd->lw_txgoff];
 	}
 
-	if (wsp->walk_addr == NULL)
+	if (wsp->walk_addr == 0)
 		return (WALK_DONE);
 
 	addr = wsp->walk_addr - lwd->lw_offset;
@@ -2277,7 +3056,7 @@ spa_walk_init(mdb_walk_state_t *wsp)
 {
 	GElf_Sym sym;
 
-	if (wsp->walk_addr != NULL) {
+	if (wsp->walk_addr != 0) {
 		mdb_warn("spa walk only supports global walks\n");
 		return (WALK_ERR);
 	}
@@ -2381,13 +3160,6 @@ zfs_blkstats(uintptr_t addr, uint_t flags, int argc, const mdb_arg_t *argv)
 	dmu_object_type_t t;
 	zfs_blkstat_t *tzb;
 	uint64_t ditto;
-	dmu_object_type_info_t dmu_ot[DMU_OT_NUMTYPES + 10];
-	/* +10 in case it grew */
-
-	if (mdb_readvar(&dmu_ot, "dmu_ot") == -1) {
-		mdb_warn("failed to read 'dmu_ot'");
-		return (DCMD_ERR);
-	}
 
 	if (mdb_getopts(argc, argv,
 	    'v', MDB_OPT_SETBITS, TRUE, &verbose,
@@ -2422,10 +3194,10 @@ zfs_blkstats(uintptr_t addr, uint_t flags, int argc, const mdb_arg_t *argv)
 	    "\t  avg\t comp\t%%Total\tType\n");
 
 	for (t = 0; t <= DMU_OT_TOTAL; t++) {
-		char csize[NICENUM_BUFLEN], lsize[NICENUM_BUFLEN];
-		char psize[NICENUM_BUFLEN], asize[NICENUM_BUFLEN];
-		char avg[NICENUM_BUFLEN];
-		char comp[NICENUM_BUFLEN], pct[NICENUM_BUFLEN];
+		char csize[MDB_NICENUM_BUFLEN], lsize[MDB_NICENUM_BUFLEN];
+		char psize[MDB_NICENUM_BUFLEN], asize[MDB_NICENUM_BUFLEN];
+		char avg[MDB_NICENUM_BUFLEN];
+		char comp[MDB_NICENUM_BUFLEN], pct[MDB_NICENUM_BUFLEN];
 		char typename[64];
 		int l;
 
@@ -2436,8 +3208,8 @@ zfs_blkstats(uintptr_t addr, uint_t flags, int argc, const mdb_arg_t *argv)
 			strcpy(typename, "other");
 		else if (t == DMU_OT_TOTAL)
 			strcpy(typename, "Total");
-		else if (mdb_readstr(typename, sizeof (typename),
-		    (uintptr_t)dmu_ot[t].ot_name) == -1) {
+		else if (enum_lookup("enum dmu_object_type",
+		    t, "DMU_OT_", sizeof (typename), typename) == -1) {
 			mdb_warn("failed to read type name");
 			return (DCMD_ERR);
 		}
@@ -2471,9 +3243,9 @@ zfs_blkstats(uintptr_t addr, uint_t flags, int argc, const mdb_arg_t *argv)
 			mdb_nicenum(zb->zb_psize, psize);
 			mdb_nicenum(zb->zb_asize, asize);
 			mdb_nicenum(zb->zb_asize / zb->zb_count, avg);
-			(void) snprintfrac(comp, NICENUM_BUFLEN,
+			(void) mdb_snprintfrac(comp, MDB_NICENUM_BUFLEN,
 			    zb->zb_lsize, zb->zb_psize, 2);
-			(void) snprintfrac(pct, NICENUM_BUFLEN,
+			(void) mdb_snprintfrac(pct, MDB_NICENUM_BUFLEN,
 			    100 * zb->zb_asize, tzb->zb_asize, 2);
 
 			mdb_printf("%6s\t%5s\t%5s\t%5s\t%5s"
@@ -2537,25 +3309,25 @@ reference_cb(uintptr_t addr, const void *ignored, void *arg)
 	return (WALK_NEXT);
 }
 
-typedef struct mdb_refcount {
+typedef struct mdb_zfs_refcount {
 	uint64_t rc_count;
-} mdb_refcount_t;
+} mdb_zfs_refcount_t;
 
-typedef struct mdb_refcount_removed {
+typedef struct mdb_zfs_refcount_removed {
 	uint64_t rc_removed_count;
-} mdb_refcount_removed_t;
+} mdb_zfs_refcount_removed_t;
 
-typedef struct mdb_refcount_tracked {
+typedef struct mdb_zfs_refcount_tracked {
 	boolean_t rc_tracked;
-} mdb_refcount_tracked_t;
+} mdb_zfs_refcount_tracked_t;
 
 /* ARGSUSED */
 static int
-refcount(uintptr_t addr, uint_t flags, int argc, const mdb_arg_t *argv)
+zfs_refcount(uintptr_t addr, uint_t flags, int argc, const mdb_arg_t *argv)
 {
-	mdb_refcount_t rc;
-	mdb_refcount_removed_t rcr;
-	mdb_refcount_tracked_t rct;
+	mdb_zfs_refcount_t rc;
+	mdb_zfs_refcount_removed_t rcr;
+	mdb_zfs_refcount_tracked_t rct;
 	int off;
 	boolean_t released = B_FALSE;
 
@@ -2567,30 +3339,30 @@ refcount(uintptr_t addr, uint_t flags, int argc, const mdb_arg_t *argv)
 	    NULL) != argc)
 		return (DCMD_USAGE);
 
-	if (mdb_ctf_vread(&rc, "refcount_t", "mdb_refcount_t", addr,
+	if (mdb_ctf_vread(&rc, "zfs_refcount_t", "mdb_zfs_refcount_t", addr,
 	    0) == -1)
 		return (DCMD_ERR);
 
-	if (mdb_ctf_vread(&rcr, "refcount_t", "mdb_refcount_removed_t", addr,
-	    MDB_CTF_VREAD_QUIET) == -1) {
-		mdb_printf("refcount_t at %p has %llu holds (untracked)\n",
+	if (mdb_ctf_vread(&rcr, "zfs_refcount_t", "mdb_zfs_refcount_removed_t",
+	    addr, MDB_CTF_VREAD_QUIET) == -1) {
+		mdb_printf("zfs_refcount_t at %p has %llu holds (untracked)\n",
 		    addr, (longlong_t)rc.rc_count);
 		return (DCMD_OK);
 	}
 
-	if (mdb_ctf_vread(&rct, "refcount_t", "mdb_refcount_tracked_t", addr,
-	    MDB_CTF_VREAD_QUIET) == -1) {
+	if (mdb_ctf_vread(&rct, "zfs_refcount_t", "mdb_zfs_refcount_tracked_t",
+	    addr, MDB_CTF_VREAD_QUIET) == -1) {
 		/* If this is an old target, it might be tracked. */
 		rct.rc_tracked = B_TRUE;
 	}
 
-	mdb_printf("refcount_t at %p has %llu current holds, "
+	mdb_printf("zfs_refcount_t at %p has %llu current holds, "
 	    "%llu recently released holds\n",
 	    addr, (longlong_t)rc.rc_count, (longlong_t)rcr.rc_removed_count);
 
 	if (rct.rc_tracked && rc.rc_count > 0)
 		mdb_printf("current holds:\n");
-	off = mdb_ctf_offsetof_by_name("refcount_t", "rc_list");
+	off = mdb_ctf_offsetof_by_name("zfs_refcount_t", "rc_list");
 	if (off == -1)
 		return (DCMD_ERR);
 	mdb_pwalk("list", reference_cb, (void*)B_FALSE, addr + off);
@@ -2598,10 +3370,10 @@ refcount(uintptr_t addr, uint_t flags, int argc, const mdb_arg_t *argv)
 	if (released && rcr.rc_removed_count > 0) {
 		mdb_printf("released holds:\n");
 
-		off = mdb_ctf_offsetof_by_name("refcount_t", "rc_removed");
+		off = mdb_ctf_offsetof_by_name("zfs_refcount_t", "rc_removed");
 		if (off == -1)
 			return (DCMD_ERR);
-		mdb_pwalk("list", reference_cb, (void*)B_FALSE, addr + off);
+		mdb_pwalk("list", reference_cb, (void*)B_TRUE, addr + off);
 	}
 
 	return (DCMD_OK);
@@ -2724,7 +3496,7 @@ sa_attr_print(uintptr_t addr, uint_t flags, int argc, const mdb_arg_t *argv)
 	}
 
 	if (bonus_tab && !TOC_ATTR_PRESENT(offset_tab[attr_id]) &&
-	    spill_tab == NULL) {
+	    spill_tab == 0) {
 		mdb_printf("Attribute does not exist\n");
 		return (DCMD_ERR);
 	} else if (!TOC_ATTR_PRESENT(offset_tab[attr_id]) && spill_tab) {
@@ -3013,7 +3785,7 @@ zfs_acl_dump(uintptr_t addr, uint_t flags, int argc, const mdb_arg_t *argv)
 		return (DCMD_USAGE);
 
 	if (mdb_getopts(argc, argv,
-	    'v', MDB_OPT_SETBITS, TRUE, &verbose, TRUE, NULL) != argc)
+	    'v', MDB_OPT_SETBITS, TRUE, &verbose, NULL) != argc)
 		return (DCMD_USAGE);
 
 	if (mdb_vread(&zacl, sizeof (zfs_acl_t), addr) == -1) {
@@ -3038,7 +3810,7 @@ zfs_acl_dump(uintptr_t addr, uint_t flags, int argc, const mdb_arg_t *argv)
 static int
 zfs_acl_node_walk_init(mdb_walk_state_t *wsp)
 {
-	if (wsp->walk_addr == NULL) {
+	if (wsp->walk_addr == 0) {
 		mdb_warn("must supply address of zfs_acl_node_t\n");
 		return (WALK_ERR);
 	}
@@ -3079,7 +3851,7 @@ zfs_aces_walk_init_common(mdb_walk_state_t *wsp, int version,
 {
 	ace_walk_data_t *ace_walk_data;
 
-	if (wsp->walk_addr == NULL) {
+	if (wsp->walk_addr == 0) {
 		mdb_warn("must supply address of zfs_acl_node_t\n");
 		return (WALK_ERR);
 	}
@@ -3236,12 +4008,12 @@ rrwlock(uintptr_t addr, uint_t flags, int argc, const mdb_arg_t *argv)
 	}
 
 	mdb_printf("anonymous references:\n");
-	(void) mdb_call_dcmd("refcount", addr +
+	(void) mdb_call_dcmd("zfs_refcount", addr +
 	    mdb_ctf_offsetof_by_name(ZFS_STRUCT "rrwlock", "rr_anon_rcount"),
 	    DCMD_ADDRSPEC, 0, NULL);
 
 	mdb_printf("linked references:\n");
-	(void) mdb_call_dcmd("refcount", addr +
+	(void) mdb_call_dcmd("zfs_refcount", addr +
 	    mdb_ctf_offsetof_by_name(ZFS_STRUCT "rrwlock", "rr_linked_rcount"),
 	    DCMD_ADDRSPEC, 0, NULL);
 
@@ -3256,6 +4028,543 @@ rrwlock(uintptr_t addr, uint_t flags, int argc, const mdb_arg_t *argv)
 	return (DCMD_OK);
 }
 
+typedef struct mdb_arc_buf_hdr_t {
+	uint16_t b_psize;
+	uint16_t b_lsize;
+	struct {
+		uint32_t	b_bufcnt;
+		uintptr_t	b_state;
+	} b_l1hdr;
+} mdb_arc_buf_hdr_t;
+
+enum arc_cflags {
+	ARC_CFLAG_VERBOSE		= 1 << 0,
+	ARC_CFLAG_ANON			= 1 << 1,
+	ARC_CFLAG_MRU			= 1 << 2,
+	ARC_CFLAG_MFU			= 1 << 3,
+	ARC_CFLAG_BUFS			= 1 << 4,
+};
+
+typedef struct arc_compression_stats_data {
+	GElf_Sym anon_sym;	/* ARC_anon symbol */
+	GElf_Sym mru_sym;	/* ARC_mru symbol */
+	GElf_Sym mrug_sym;	/* ARC_mru_ghost symbol */
+	GElf_Sym mfu_sym;	/* ARC_mfu symbol */
+	GElf_Sym mfug_sym;	/* ARC_mfu_ghost symbol */
+	GElf_Sym l2c_sym;	/* ARC_l2c_only symbol */
+	uint64_t *anon_c_hist;	/* histogram of compressed sizes in anon */
+	uint64_t *anon_u_hist;	/* histogram of uncompressed sizes in anon */
+	uint64_t *anon_bufs;	/* histogram of buffer counts in anon state */
+	uint64_t *mru_c_hist;	/* histogram of compressed sizes in mru */
+	uint64_t *mru_u_hist;	/* histogram of uncompressed sizes in mru */
+	uint64_t *mru_bufs;	/* histogram of buffer counts in mru */
+	uint64_t *mfu_c_hist;	/* histogram of compressed sizes in mfu */
+	uint64_t *mfu_u_hist;	/* histogram of uncompressed sizes in mfu */
+	uint64_t *mfu_bufs;	/* histogram of buffer counts in mfu */
+	uint64_t *all_c_hist;	/* histogram of compressed anon + mru + mfu */
+	uint64_t *all_u_hist;	/* histogram of uncompressed anon + mru + mfu */
+	uint64_t *all_bufs;	/* histogram of buffer counts in all states  */
+	int arc_cflags;		/* arc compression flags, specified by user */
+	int hist_nbuckets;	/* number of buckets in each histogram */
+
+	ulong_t l1hdr_off;	/* offset of b_l1hdr in arc_buf_hdr_t */
+} arc_compression_stats_data_t;
+
+int
+highbit64(uint64_t i)
+{
+	int h = 1;
+
+	if (i == 0)
+		return (0);
+	if (i & 0xffffffff00000000ULL) {
+		h += 32; i >>= 32;
+	}
+	if (i & 0xffff0000) {
+		h += 16; i >>= 16;
+	}
+	if (i & 0xff00) {
+		h += 8; i >>= 8;
+	}
+	if (i & 0xf0) {
+		h += 4; i >>= 4;
+	}
+	if (i & 0xc) {
+		h += 2; i >>= 2;
+	}
+	if (i & 0x2) {
+		h += 1;
+	}
+	return (h);
+}
+
+/* ARGSUSED */
+static int
+arc_compression_stats_cb(uintptr_t addr, const void *unknown, void *arg)
+{
+	arc_compression_stats_data_t *data = arg;
+	arc_flags_t flags;
+	mdb_arc_buf_hdr_t hdr;
+	int cbucket, ubucket, bufcnt;
+
+	/*
+	 * mdb_ctf_vread() uses the sizeof the target type (e.g.
+	 * sizeof (arc_buf_hdr_t) in the target) to read in the entire contents
+	 * of the target type into a buffer and then copy the values of the
+	 * desired members from the mdb typename (e.g. mdb_arc_buf_hdr_t) from
+	 * this buffer. Unfortunately, the way arc_buf_hdr_t is used by zfs,
+	 * the actual size allocated by the kernel for arc_buf_hdr_t is often
+	 * smaller than `sizeof (arc_buf_hdr_t)` (see the definitions of
+	 * l1arc_buf_hdr_t and arc_buf_hdr_t in
+	 * usr/src/uts/common/fs/zfs/arc.c). Attempting to read the entire
+	 * contents of arc_buf_hdr_t from the target (as mdb_ctf_vread() does)
+	 * can cause an error if the allocated size is indeed smaller--it's
+	 * possible that the 'missing' trailing members of arc_buf_hdr_t
+	 * (l1arc_buf_hdr_t and/or arc_buf_hdr_crypt_t) may fall into unmapped
+	 * memory.
+	 *
+	 * We use the GETMEMB macro instead which performs an mdb_vread()
+	 * but only reads enough of the target to retrieve the desired struct
+	 * member instead of the entire struct.
+	 */
+	if (GETMEMB(addr, "arc_buf_hdr", b_flags, flags) == -1)
+		return (WALK_ERR);
+
+	/*
+	 * We only count headers that have data loaded in the kernel.
+	 * This means an L1 header must be present as well as the data
+	 * that corresponds to the L1 header. If there's no L1 header,
+	 * we can skip the arc_buf_hdr_t completely. If it's present, we
+	 * must look at the ARC state (b_l1hdr.b_state) to determine if
+	 * the data is present.
+	 */
+	if ((flags & ARC_FLAG_HAS_L1HDR) == 0)
+		return (WALK_NEXT);
+
+	if (GETMEMB(addr, "arc_buf_hdr", b_psize, hdr.b_psize) == -1 ||
+	    GETMEMB(addr, "arc_buf_hdr", b_lsize, hdr.b_lsize) == -1 ||
+	    GETMEMB(addr + data->l1hdr_off, "l1arc_buf_hdr", b_bufcnt,
+	    hdr.b_l1hdr.b_bufcnt) == -1 ||
+	    GETMEMB(addr + data->l1hdr_off, "l1arc_buf_hdr", b_state,
+	    hdr.b_l1hdr.b_state) == -1)
+		return (WALK_ERR);
+
+	/*
+	 * Headers in the ghost states, or the l2c_only state don't have
+	 * arc buffers linked off of them. Thus, their compressed size
+	 * is meaningless, so we skip these from the stats.
+	 */
+	if (hdr.b_l1hdr.b_state == data->mrug_sym.st_value ||
+	    hdr.b_l1hdr.b_state == data->mfug_sym.st_value ||
+	    hdr.b_l1hdr.b_state == data->l2c_sym.st_value) {
+		return (WALK_NEXT);
+	}
+
+	/*
+	 * The physical size (compressed) and logical size
+	 * (uncompressed) are in units of SPA_MINBLOCKSIZE. By default,
+	 * we use the log2 of this value (rounded down to the nearest
+	 * integer) to determine the bucket to assign this header to.
+	 * Thus, the histogram is logarithmic with respect to the size
+	 * of the header. For example, the following is a mapping of the
+	 * bucket numbers and the range of header sizes they correspond to:
+	 *
+	 *	0: 0 byte headers
+	 *	1: 512 byte headers
+	 *	2: [1024 - 2048) byte headers
+	 *	3: [2048 - 4096) byte headers
+	 *	4: [4096 - 8192) byte headers
+	 *	5: [8192 - 16394) byte headers
+	 *	6: [16384 - 32768) byte headers
+	 *	7: [32768 - 65536) byte headers
+	 *	8: [65536 - 131072) byte headers
+	 *	9: 131072 byte headers
+	 *
+	 * If the ARC_CFLAG_VERBOSE flag was specified, we use the
+	 * physical and logical sizes directly. Thus, the histogram will
+	 * no longer be logarithmic; instead it will be linear with
+	 * respect to the size of the header. The following is a mapping
+	 * of the first many bucket numbers and the header size they
+	 * correspond to:
+	 *
+	 *	0: 0 byte headers
+	 *	1: 512 byte headers
+	 *	2: 1024 byte headers
+	 *	3: 1536 byte headers
+	 *	4: 2048 byte headers
+	 *	5: 2560 byte headers
+	 *	6: 3072 byte headers
+	 *
+	 * And so on. Keep in mind that a range of sizes isn't used in
+	 * the case of linear scale because the headers can only
+	 * increment or decrement in sizes of 512 bytes. So, it's not
+	 * possible for a header to be sized in between whats listed
+	 * above.
+	 *
+	 * Also, the above mapping values were calculated assuming a
+	 * SPA_MINBLOCKSHIFT of 512 bytes and a SPA_MAXBLOCKSIZE of 128K.
+	 */
+
+	if (data->arc_cflags & ARC_CFLAG_VERBOSE) {
+		cbucket = hdr.b_psize;
+		ubucket = hdr.b_lsize;
+	} else {
+		cbucket = highbit64(hdr.b_psize);
+		ubucket = highbit64(hdr.b_lsize);
+	}
+
+	bufcnt = hdr.b_l1hdr.b_bufcnt;
+	if (bufcnt >= data->hist_nbuckets)
+		bufcnt = data->hist_nbuckets - 1;
+
+	/* Ensure we stay within the bounds of the histogram array */
+	ASSERT3U(cbucket, <, data->hist_nbuckets);
+	ASSERT3U(ubucket, <, data->hist_nbuckets);
+
+	if (hdr.b_l1hdr.b_state == data->anon_sym.st_value) {
+		data->anon_c_hist[cbucket]++;
+		data->anon_u_hist[ubucket]++;
+		data->anon_bufs[bufcnt]++;
+	} else if (hdr.b_l1hdr.b_state == data->mru_sym.st_value) {
+		data->mru_c_hist[cbucket]++;
+		data->mru_u_hist[ubucket]++;
+		data->mru_bufs[bufcnt]++;
+	} else if (hdr.b_l1hdr.b_state == data->mfu_sym.st_value) {
+		data->mfu_c_hist[cbucket]++;
+		data->mfu_u_hist[ubucket]++;
+		data->mfu_bufs[bufcnt]++;
+	}
+
+	data->all_c_hist[cbucket]++;
+	data->all_u_hist[ubucket]++;
+	data->all_bufs[bufcnt]++;
+
+	return (WALK_NEXT);
+}
+
+/* ARGSUSED */
+static int
+arc_compression_stats(uintptr_t addr, uint_t flags, int argc,
+    const mdb_arg_t *argv)
+{
+	arc_compression_stats_data_t data = { 0 };
+	unsigned int max_shifted = SPA_MAXBLOCKSIZE >> SPA_MINBLOCKSHIFT;
+	unsigned int hist_size;
+	char range[32];
+	int rc = DCMD_OK;
+	int off;
+
+	if (mdb_getopts(argc, argv,
+	    'v', MDB_OPT_SETBITS, ARC_CFLAG_VERBOSE, &data.arc_cflags,
+	    'a', MDB_OPT_SETBITS, ARC_CFLAG_ANON, &data.arc_cflags,
+	    'b', MDB_OPT_SETBITS, ARC_CFLAG_BUFS, &data.arc_cflags,
+	    'r', MDB_OPT_SETBITS, ARC_CFLAG_MRU, &data.arc_cflags,
+	    'f', MDB_OPT_SETBITS, ARC_CFLAG_MFU, &data.arc_cflags,
+	    NULL) != argc)
+		return (DCMD_USAGE);
+
+	if (mdb_lookup_by_obj(ZFS_OBJ_NAME, "ARC_anon", &data.anon_sym) ||
+	    mdb_lookup_by_obj(ZFS_OBJ_NAME, "ARC_mru", &data.mru_sym) ||
+	    mdb_lookup_by_obj(ZFS_OBJ_NAME, "ARC_mru_ghost", &data.mrug_sym) ||
+	    mdb_lookup_by_obj(ZFS_OBJ_NAME, "ARC_mfu", &data.mfu_sym) ||
+	    mdb_lookup_by_obj(ZFS_OBJ_NAME, "ARC_mfu_ghost", &data.mfug_sym) ||
+	    mdb_lookup_by_obj(ZFS_OBJ_NAME, "ARC_l2c_only", &data.l2c_sym)) {
+		mdb_warn("can't find arc state symbol");
+		return (DCMD_ERR);
+	}
+
+	/*
+	 * Determine the maximum expected size for any header, and use
+	 * this to determine the number of buckets needed for each
+	 * histogram. If ARC_CFLAG_VERBOSE is specified, this value is
+	 * used directly; otherwise the log2 of the maximum size is
+	 * used. Thus, if using a log2 scale there's a maximum of 10
+	 * possible buckets, while the linear scale (when using
+	 * ARC_CFLAG_VERBOSE) has a maximum of 257 buckets.
+	 */
+	if (data.arc_cflags & ARC_CFLAG_VERBOSE)
+		data.hist_nbuckets = max_shifted + 1;
+	else
+		data.hist_nbuckets = highbit64(max_shifted) + 1;
+
+	hist_size = sizeof (uint64_t) * data.hist_nbuckets;
+
+	data.anon_c_hist = mdb_zalloc(hist_size, UM_SLEEP);
+	data.anon_u_hist = mdb_zalloc(hist_size, UM_SLEEP);
+	data.anon_bufs = mdb_zalloc(hist_size, UM_SLEEP);
+
+	data.mru_c_hist = mdb_zalloc(hist_size, UM_SLEEP);
+	data.mru_u_hist = mdb_zalloc(hist_size, UM_SLEEP);
+	data.mru_bufs = mdb_zalloc(hist_size, UM_SLEEP);
+
+	data.mfu_c_hist = mdb_zalloc(hist_size, UM_SLEEP);
+	data.mfu_u_hist = mdb_zalloc(hist_size, UM_SLEEP);
+	data.mfu_bufs = mdb_zalloc(hist_size, UM_SLEEP);
+
+	data.all_c_hist = mdb_zalloc(hist_size, UM_SLEEP);
+	data.all_u_hist = mdb_zalloc(hist_size, UM_SLEEP);
+	data.all_bufs = mdb_zalloc(hist_size, UM_SLEEP);
+
+	if ((off = mdb_ctf_offsetof_by_name(ZFS_STRUCT "arc_buf_hdr",
+	    "b_l1hdr")) == -1) {
+		mdb_warn("could not get offset of b_l1hdr from arc_buf_hdr_t");
+		rc = DCMD_ERR;
+		goto out;
+	}
+	data.l1hdr_off = off;
+
+	if (mdb_walk("arc_buf_hdr_t_full", arc_compression_stats_cb,
+	    &data) != 0) {
+		mdb_warn("can't walk arc_buf_hdr's");
+		rc = DCMD_ERR;
+		goto out;
+	}
+
+	if (data.arc_cflags & ARC_CFLAG_VERBOSE) {
+		rc = mdb_snprintf(range, sizeof (range),
+		    "[n*%llu, (n+1)*%llu)", SPA_MINBLOCKSIZE,
+		    SPA_MINBLOCKSIZE);
+	} else {
+		rc = mdb_snprintf(range, sizeof (range),
+		    "[2^(n-1)*%llu, 2^n*%llu)", SPA_MINBLOCKSIZE,
+		    SPA_MINBLOCKSIZE);
+	}
+
+	if (rc < 0) {
+		/* snprintf failed, abort the dcmd */
+		rc = DCMD_ERR;
+		goto out;
+	} else {
+		/* snprintf succeeded above, reset return code */
+		rc = DCMD_OK;
+	}
+
+	if (data.arc_cflags & ARC_CFLAG_ANON) {
+		if (data.arc_cflags & ARC_CFLAG_BUFS) {
+			mdb_printf("Histogram of the number of anon buffers "
+			    "that are associated with an arc hdr.\n");
+			dump_histogram(data.anon_bufs, data.hist_nbuckets, 0);
+			mdb_printf("\n");
+		}
+		mdb_printf("Histogram of compressed anon buffers.\n"
+		    "Each bucket represents buffers of size: %s.\n", range);
+		dump_histogram(data.anon_c_hist, data.hist_nbuckets, 0);
+		mdb_printf("\n");
+
+		mdb_printf("Histogram of uncompressed anon buffers.\n"
+		    "Each bucket represents buffers of size: %s.\n", range);
+		dump_histogram(data.anon_u_hist, data.hist_nbuckets, 0);
+		mdb_printf("\n");
+	}
+
+	if (data.arc_cflags & ARC_CFLAG_MRU) {
+		if (data.arc_cflags & ARC_CFLAG_BUFS) {
+			mdb_printf("Histogram of the number of mru buffers "
+			    "that are associated with an arc hdr.\n");
+			dump_histogram(data.mru_bufs, data.hist_nbuckets, 0);
+			mdb_printf("\n");
+		}
+		mdb_printf("Histogram of compressed mru buffers.\n"
+		    "Each bucket represents buffers of size: %s.\n", range);
+		dump_histogram(data.mru_c_hist, data.hist_nbuckets, 0);
+		mdb_printf("\n");
+
+		mdb_printf("Histogram of uncompressed mru buffers.\n"
+		    "Each bucket represents buffers of size: %s.\n", range);
+		dump_histogram(data.mru_u_hist, data.hist_nbuckets, 0);
+		mdb_printf("\n");
+	}
+
+	if (data.arc_cflags & ARC_CFLAG_MFU) {
+		if (data.arc_cflags & ARC_CFLAG_BUFS) {
+			mdb_printf("Histogram of the number of mfu buffers "
+			    "that are associated with an arc hdr.\n");
+			dump_histogram(data.mfu_bufs, data.hist_nbuckets, 0);
+			mdb_printf("\n");
+		}
+
+		mdb_printf("Histogram of compressed mfu buffers.\n"
+		    "Each bucket represents buffers of size: %s.\n", range);
+		dump_histogram(data.mfu_c_hist, data.hist_nbuckets, 0);
+		mdb_printf("\n");
+
+		mdb_printf("Histogram of uncompressed mfu buffers.\n"
+		    "Each bucket represents buffers of size: %s.\n", range);
+		dump_histogram(data.mfu_u_hist, data.hist_nbuckets, 0);
+		mdb_printf("\n");
+	}
+
+	if (data.arc_cflags & ARC_CFLAG_BUFS) {
+		mdb_printf("Histogram of all buffers that "
+		    "are associated with an arc hdr.\n");
+		dump_histogram(data.all_bufs, data.hist_nbuckets, 0);
+		mdb_printf("\n");
+	}
+
+	mdb_printf("Histogram of all compressed buffers.\n"
+	    "Each bucket represents buffers of size: %s.\n", range);
+	dump_histogram(data.all_c_hist, data.hist_nbuckets, 0);
+	mdb_printf("\n");
+
+	mdb_printf("Histogram of all uncompressed buffers.\n"
+	    "Each bucket represents buffers of size: %s.\n", range);
+	dump_histogram(data.all_u_hist, data.hist_nbuckets, 0);
+
+out:
+	mdb_free(data.anon_c_hist, hist_size);
+	mdb_free(data.anon_u_hist, hist_size);
+	mdb_free(data.anon_bufs, hist_size);
+
+	mdb_free(data.mru_c_hist, hist_size);
+	mdb_free(data.mru_u_hist, hist_size);
+	mdb_free(data.mru_bufs, hist_size);
+
+	mdb_free(data.mfu_c_hist, hist_size);
+	mdb_free(data.mfu_u_hist, hist_size);
+	mdb_free(data.mfu_bufs, hist_size);
+
+	mdb_free(data.all_c_hist, hist_size);
+	mdb_free(data.all_u_hist, hist_size);
+	mdb_free(data.all_bufs, hist_size);
+
+	return (rc);
+}
+
+typedef struct mdb_range_seg64 {
+	uint64_t rs_start;
+	uint64_t rs_end;
+} mdb_range_seg64_t;
+
+typedef struct mdb_range_seg32 {
+	uint32_t rs_start;
+	uint32_t rs_end;
+} mdb_range_seg32_t;
+
+/* ARGSUSED */
+static int
+range_tree_cb(uintptr_t addr, const void *unknown, void *arg)
+{
+	mdb_range_tree_t *rt = (mdb_range_tree_t *)arg;
+	uint64_t start, end;
+
+	if (rt->rt_type == RANGE_SEG64) {
+		mdb_range_seg64_t rs;
+
+		if (mdb_ctf_vread(&rs, ZFS_STRUCT "range_seg64",
+		    "mdb_range_seg64_t", addr, 0) == -1)
+			return (DCMD_ERR);
+		start = rs.rs_start;
+		end = rs.rs_end;
+	} else {
+		ASSERT3U(rt->rt_type, ==, RANGE_SEG32);
+		mdb_range_seg32_t rs;
+
+		if (mdb_ctf_vread(&rs, ZFS_STRUCT "range_seg32",
+		    "mdb_range_seg32_t", addr, 0) == -1)
+			return (DCMD_ERR);
+		start = ((uint64_t)rs.rs_start << rt->rt_shift) + rt->rt_start;
+		end = ((uint64_t)rs.rs_end << rt->rt_shift) + rt->rt_start;
+	}
+
+	mdb_printf("\t[%llx %llx) (length %llx)\n", start, end, end - start);
+
+	return (0);
+}
+
+/* ARGSUSED */
+static int
+range_tree(uintptr_t addr, uint_t flags, int argc,
+    const mdb_arg_t *argv)
+{
+	mdb_range_tree_t rt;
+	uintptr_t btree_addr;
+
+	if (!(flags & DCMD_ADDRSPEC))
+		return (DCMD_USAGE);
+
+	if (mdb_ctf_vread(&rt, ZFS_STRUCT "range_tree", "mdb_range_tree_t",
+	    addr, 0) == -1)
+		return (DCMD_ERR);
+
+	mdb_printf("%p: range tree of %llu entries, %llu bytes\n",
+	    addr, rt.rt_root.bt_num_elems, rt.rt_space);
+
+	btree_addr = addr +
+	    mdb_ctf_offsetof_by_name(ZFS_STRUCT "range_tree", "rt_root");
+
+	if (mdb_pwalk("zfs_btree", range_tree_cb, &rt, btree_addr) != 0) {
+		mdb_warn("can't walk range_tree segments");
+		return (DCMD_ERR);
+	}
+	return (DCMD_OK);
+}
+
+typedef struct mdb_spa_log_sm {
+	uint64_t sls_sm_obj;
+	uint64_t sls_txg;
+	uint64_t sls_nblocks;
+	uint64_t sls_mscount;
+} mdb_spa_log_sm_t;
+
+/* ARGSUSED */
+static int
+logsm_stats_cb(uintptr_t addr, const void *unknown, void *arg)
+{
+	mdb_spa_log_sm_t sls;
+	if (mdb_ctf_vread(&sls, ZFS_STRUCT "spa_log_sm", "mdb_spa_log_sm_t",
+	    addr, 0) == -1)
+		return (WALK_ERR);
+
+	mdb_printf("%7lld %7lld %7lld %7lld\n",
+	    sls.sls_txg, sls.sls_nblocks, sls.sls_mscount, sls.sls_sm_obj);
+
+	return (WALK_NEXT);
+}
+typedef struct mdb_log_summary_entry {
+	uint64_t lse_start;
+	uint64_t lse_blkcount;
+	uint64_t lse_mscount;
+} mdb_log_summary_entry_t;
+
+/* ARGSUSED */
+static int
+logsm_summary_cb(uintptr_t addr, const void *unknown, void *arg)
+{
+	mdb_log_summary_entry_t lse;
+	if (mdb_ctf_vread(&lse, ZFS_STRUCT "log_summary_entry",
+	    "mdb_log_summary_entry_t", addr, 0) == -1)
+		return (WALK_ERR);
+
+	mdb_printf("%7lld %7lld %7lld\n",
+	    lse.lse_start, lse.lse_blkcount, lse.lse_mscount);
+	return (WALK_NEXT);
+}
+
+/* ARGSUSED */
+static int
+logsm_stats(uintptr_t addr, uint_t flags, int argc, const mdb_arg_t *argv)
+{
+	if (!(flags & DCMD_ADDRSPEC))
+		return (DCMD_USAGE);
+
+	uintptr_t sls_avl_addr = addr +
+	    mdb_ctf_offsetof_by_name(ZFS_STRUCT "spa", "spa_sm_logs_by_txg");
+	uintptr_t summary_addr = addr +
+	    mdb_ctf_offsetof_by_name(ZFS_STRUCT "spa", "spa_log_summary");
+
+	mdb_printf("Log Entries:\n");
+	mdb_printf("%7s %7s %7s %7s\n", "txg", "blk", "ms", "obj");
+	if (mdb_pwalk("avl", logsm_stats_cb, NULL, sls_avl_addr) != 0)
+		return (DCMD_ERR);
+
+	mdb_printf("\nSummary Entries:\n");
+	mdb_printf("%7s %7s %7s\n", "txg", "blk", "ms");
+	if (mdb_pwalk("list", logsm_summary_cb, NULL, summary_addr) != 0)
+		return (DCMD_ERR);
+
+	return (DCMD_OK);
+}
+
 /*
  * MDB module linkage information:
  *
@@ -3266,6 +4575,7 @@ rrwlock(uintptr_t addr, uint_t flags, int argc, const mdb_arg_t *argv)
 static const mdb_dcmd_t dcmds[] = {
 	{ "arc", "[-bkmg]", "print ARC variables", arc_print },
 	{ "blkptr", ":", "print blkptr_t", blkptr },
+	{ "dva", ":", "print dva_t", dva },
 	{ "dbuf", ":", "print dmu_buf_impl_t", dbuf },
 	{ "dbuf_stats", ":", "dbuf stats", dbuf_stats },
 	{ "dbufs",
@@ -3276,6 +4586,8 @@ static const mdb_dcmd_t dcmds[] = {
 	{ "abuf_find", "dva_word[0] dva_word[1]",
 	    "find arc_buf_hdr_t of a specified DVA",
 	    abuf_find },
+	{ "logsm_stats", ":", "print log space map statistics of a spa_t",
+	    logsm_stats},
 	{ "spa", "?[-cevmMh]\n"
 	    "\t-c display spa config\n"
 	    "\t-e display vdev statistics\n"
@@ -3292,11 +4604,14 @@ static const mdb_dcmd_t dcmds[] = {
 	    "\t-M display metaslab group statistic\n"
 	    "\t-h display histogram (requires -m or -M)\n",
 	    "given a spa_t, print vdev summary", spa_vdevs },
-	{ "vdev", ":[-re]\n"
+	{ "sm_entries", "<buffer length in bytes>",
+	    "print out space map entries from a buffer decoded",
+	    sm_entries},
+	{ "vdev", ":[-remMh]\n"
 	    "\t-r display recursively\n"
 	    "\t-e display statistics\n"
-	    "\t-m display metaslab statistics\n"
-	    "\t-M display metaslab group statistics\n"
+	    "\t-m display metaslab statistics (top level vdev only)\n"
+	    "\t-M display metaslab group statistics (top level vdev only)\n"
 	    "\t-h display histogram (requires -m or -M)\n",
 	    "vdev_t summary", vdev_print },
 	{ "zio", ":[-cpr]\n"
@@ -3310,9 +4625,9 @@ static const mdb_dcmd_t dcmds[] = {
 	    "given a spa_t, print block type stats from last scrub",
 	    zfs_blkstats },
 	{ "zfs_params", "", "print zfs tunable parameters", zfs_params },
-	{ "refcount", ":[-r]\n"
+	{ "zfs_refcount", ":[-r]\n"
 	    "\t-r display recently removed references",
-	    "print refcount_t holders", refcount },
+	    "print zfs_refcount_t holders", zfs_refcount },
 	{ "zap_leaf", "", "print zap_leaf_phys_t", zap_leaf },
 	{ "zfs_aces", ":[-v]", "print all ACEs from a zfs_acl_t",
 	    zfs_acl_dump },
@@ -3326,12 +4641,24 @@ static const mdb_dcmd_t dcmds[] = {
 	    "print zfs debug log", dbgmsg},
 	{ "rrwlock", ":",
 	    "print rrwlock_t, including readers", rrwlock},
+	{ "metaslab_weight", "weight",
+	    "print metaslab weight", metaslab_weight},
+	{ "metaslab_trace", ":",
+	    "print metaslab allocation trace records", metaslab_trace},
+	{ "arc_compression_stats", ":[-vabrf]\n"
+	    "\t-v verbose, display a linearly scaled histogram\n"
+	    "\t-a display ARC_anon state statistics individually\n"
+	    "\t-r display ARC_mru state statistics individually\n"
+	    "\t-f display ARC_mfu state statistics individually\n"
+	    "\t-b display histogram of buffer counts\n",
+	    "print a histogram of compressed arc buffer sizes",
+	    arc_compression_stats},
+	{ "range_tree", ":",
+	    "print entries in range_tree_t", range_tree},
 	{ NULL }
 };
 
 static const mdb_walker_t walkers[] = {
-	{ "zms_freelist", "walk ZFS metaslab freelist",
-	    freelist_walk_init, freelist_walk_step, NULL },
 	{ "txg_list", "given any txg_list_t *, walk all entries in all txgs",
 	    txg_list_walk_init, txg_list_walk_step, NULL },
 	{ "txg_list0", "given any txg_list_t *, walk all entries in txg 0",
@@ -3351,6 +4678,8 @@ static const mdb_walker_t walkers[] = {
 	    spa_walk_init, spa_walk_step, NULL },
 	{ "metaslab", "given a spa_t *, walk all metaslab_t structures",
 	    metaslab_walk_init, metaslab_walk_step, NULL },
+	{ "multilist", "given a multilist_t *, walk all list_t structures",
+	    multilist_walk_init, multilist_walk_step, NULL },
 	{ "zfs_acl_node", "given a zfs_acl_t, walk all zfs_acl_nodes",
 	    zfs_acl_node_walk_init, zfs_acl_node_walk_step, NULL },
 	{ "zfs_acl_node_aces", "given a zfs_acl_node_t, walk all ACEs",
@@ -3358,6 +4687,8 @@ static const mdb_walker_t walkers[] = {
 	{ "zfs_acl_node_aces0",
 	    "given a zfs_acl_node_t, walk all ACEs as ace_t",
 	    zfs_acl_node_aces0_walk_init, zfs_aces_walk_step, NULL },
+	{ "zfs_btree", "given a zfs_btree_t *, walk all entries",
+	    btree_walk_init, btree_walk_step, btree_walk_fini },
 	{ NULL }
 };
 

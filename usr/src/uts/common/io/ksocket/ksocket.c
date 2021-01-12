@@ -22,6 +22,7 @@
 /*
  * Copyright 2011 Nexenta Systems, Inc.  All rights reserved.
  * Copyright (c) 2008, 2010, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2014, Joyent, Inc. All rights reserved.
  */
 
 #include <sys/file.h>
@@ -67,7 +68,7 @@ ksocket_socket(ksocket_t *ksp, int domain, int type, int protocol, int flags,
 			char *mod = NULL;
 
 			/*
-			 * Could be that root file sytem is not loaded or
+			 * Could be that root file system is not loaded or
 			 * soconfig has not run yet.
 			 */
 			if (type == SOCK_STREAM && (domain == AF_INET ||
@@ -820,7 +821,7 @@ ksocket_spoll(ksocket_t ks, int timo, short events, short *revents,
 		if (error != 0 || *revents != 0)
 			break;
 
-		if (pcp->pc_flag & T_POLLWAKE)
+		if (pcp->pc_flag & PC_POLLWAKE)
 			continue;
 
 		if (timo == -1) {
@@ -840,7 +841,7 @@ ksocket_spoll(ksocket_t ks, int timo, short events, short *revents,
 	if (pdp->pd_php != NULL) {
 		pollhead_delete(pdp->pd_php, pdp);
 		pdp->pd_php = NULL;
-		pdp->pd_fd = NULL;
+		pdp->pd_fd = 0;
 	}
 
 	/*

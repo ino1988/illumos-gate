@@ -29,8 +29,9 @@ include $(SRC)/lib/policykit/Makefile.policykit
 CPPFLAGS =	$(POLICYKIT_DBUS_CPPFLAGS) $(POLICYKIT_GLIB_CPPFLAGS) $(CPPFLAGS.master)
 
 CERRWARN +=	-_gcc=-Wno-unused-variable
+CERRWARN +=	-_gcc=-Wno-unused-function
 
-C99MODE =	$(C99_ENABLE)
+CSTD =	$(CSTD_GNU99)
 
 ROOTLIBPCDIR =	$(ROOT)/usr/lib/pkgconfig
 ROOTLIBPC =	$(LIBPCSRC:%=$(ROOTLIBPCDIR)/%)

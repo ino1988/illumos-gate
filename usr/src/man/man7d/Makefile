@@ -11,13 +11,16 @@
 
 #
 # Copyright 2011, Richard Lowe
-# Copyright 2013 Nexenta Systems, Inc.  All rights reserved.
-# Copyright 2014 Garrett D'Amore <garrett@damore.org>
+# Copyright 2016 Garrett D'Amore <garrett@damore.org>
+# Copyright 2019 Joyent, Inc.
+# Copyright 2016 Hans Rosenfeld <rosenfeld@grumpf.hope-2000.org>
+# Copyright 2018 Nexenta Systems, Inc.
+# Copyright 2020 Peter Tribble
 #
 
 include		$(SRC)/Makefile.master
 
-MANSECT= 	7d
+MANSECT=	7d
 
 _MANFILES=	aac.7d		\
 		afe.7d		\
@@ -31,7 +34,8 @@ _MANFILES=	aac.7d		\
 		av1394.7d	\
 		bge.7d		\
 		blkdev.7d	\
-		bscv.7d		\
+		bnxe.7d		\
+		ccid.7d		\
 		chxge.7d	\
 		console.7d	\
 		cpuid.7d	\
@@ -40,6 +44,7 @@ _MANFILES=	aac.7d		\
 		devinfo.7d	\
 		dmfe.7d		\
 		dtrace.7d	\
+		e1000g.7d	\
 		ehci.7d		\
 		fasttrap.7d	\
 		fbt.7d		\
@@ -51,14 +56,13 @@ _MANFILES=	aac.7d		\
 		fctl.7d		\
 		fd.7d		\
 		fp.7d		\
+		full.7d		\
 		gld.7d		\
 		hci1394.7d	\
 		hermon.7d	\
 		hid.7d		\
 		hme.7d		\
 		hubd.7d		\
-		hwahc.7d	\
-		hwarc.7d	\
 		hxge.7d		\
 		ib.7d		\
 		ibcm.7d		\
@@ -68,20 +72,18 @@ _MANFILES=	aac.7d		\
 		ibtl.7d		\
 		ieee1394.7d	\
 		igb.7d		\
-		ii.7d		\
 		ipnet.7d	\
 		iscsi.7d	\
 		iser.7d		\
 		ixgbe.7d	\
 		kmdb.7d		\
 		kstat.7d	\
+		ksensor.7d	\
 		ksyms.7d	\
 		llc1.7d		\
 		lockstat.7d	\
 		lofi.7d		\
 		log.7d		\
-		md.7d		\
-		mediator.7d	\
 		mem.7d		\
 		mpt_sas.7d	\
 		mr_sas.7d	\
@@ -120,13 +122,12 @@ _MANFILES=	aac.7d		\
 		sgen.7d		\
 		srpt.7d		\
 		st.7d		\
-		sv.7d		\
 		sysmsg.7d	\
 		systrace.7d	\
 		ticlts.7d	\
 		tty.7d		\
-		ttymux.7d	\
 		tzmon.7d	\
+		ufm.7d		\
 		ugen.7d		\
 		uhci.7d		\
 		usb_ac.7d	\
@@ -140,13 +141,10 @@ _MANFILES=	aac.7d		\
 		usbsksp.7d	\
 		usbsprl.7d	\
 		usbvc.7d	\
-		uwba.7d		\
 		virtualkm.7d	\
 		vni.7d		\
 		vr.7d		\
 		wscons.7d	\
-		wusb_ca.7d	\
-		wusb_df.7d	\
 		xge.7d		\
 		yge.7d		\
 		zcons.7d	\
@@ -154,9 +152,6 @@ _MANFILES=	aac.7d		\
 
 sparc_MANFILES=	audiocs.7d	\
 		bbc_beep.7d	\
-		ctsmc.7d	\
-		cvc.7d		\
-		cvcredir.7d	\
 		dad.7d		\
 		dm2s.7d		\
 		dr.7d		\
@@ -164,10 +159,8 @@ sparc_MANFILES=	audiocs.7d	\
 		fas.7d		\
 		gpio_87317.7d	\
 		grbeep.7d	\
-		idn.7d		\
 		mc-opl.7d	\
 		n2rng.7d	\
-		ncp.7d		\
 		ntwdt.7d	\
 		oplkmdrv.7d	\
 		oplmsu.7d	\
@@ -175,7 +168,6 @@ sparc_MANFILES=	audiocs.7d	\
 		pcicmu.7d	\
 		pcipsy.7d	\
 		pcisch.7d	\
-		schpc.7d	\
 		sf.7d		\
 		smbus.7d	\
 		socal.7d	\
@@ -188,6 +180,8 @@ sparc_MANFILES=	audiocs.7d	\
 
 i386_MANFILES=	ahci.7d		\
 		amd8111s.7d	\
+		amdnbtemp.7d	\
+		amdzen.7d	\
 		amr.7d		\
 		arcmsr.7d	\
 		arn.7d		\
@@ -204,27 +198,32 @@ i386_MANFILES=	ahci.7d		\
 		audioixp.7d	\
 		audiosolo.7d	\
 		audiovia823x.7d \
-		audiovia97.7d	\
 		bcm_sata.7d	\
 		bfe.7d		\
 		cmdk.7d		\
+		coretemp.7d	\
 		cpqary3.7d	\
 		dnet.7d		\
 		ecpp.7d		\
 		elxl.7d		\
-		heci.7d		\
-		i915.7d		\
+		i40e.7d		\
+		imc.7d		\
+		imcstub.7d	\
 		ipmi.7d		\
 		iprb.7d		\
 		ipw.7d		\
 		iwh.7d		\
 		iwi.7d		\
+		iwn.7d		\
 		mega_sas.7d	\
+		mlxcx.7d	\
 		npe.7d		\
 		ntxn.7d		\
 		nv_sata.7d	\
+		nvme.7d		\
+		pchtemp.7d	\
 		pcn.7d		\
-		radeon.7d	\
+		qede.7d		\
 		ral.7d		\
 		rtw.7d		\
 		rum.7d		\
@@ -232,43 +231,44 @@ i386_MANFILES=	ahci.7d		\
 		rwn.7d		\
 		sda.7d		\
 		sdhost.7d	\
+		sfxge.7d	\
 		si3124.7d	\
- 	 	skd.7d		\
+		skd.7d		\
 		smbios.7d	\
+		smntemp.7d	\
 		uath.7d		\
 		ural.7d		\
 		urtw.7d		\
+		usmn.7d		\
+		vioblk.7d	\
+		vioif.7d	\
+		virtio.7d	\
 		wpi.7d		\
+		xhci.7d		\
+		zen_udf.7d	\
 		zyd.7d
 
 _MANLINKS=	1394.7d		\
-	 	allkmem.7d	\
-	 	bscbus.7d	\
-	 	fdc.7d		\
-	 	firewire.7d	\
-	 	hwa1480_fw.7d	\
-	 	i2bsc.7d	\
-	 	kmem.7d		\
-	 	lo0.7d		\
-	 	ticots.7d	\
-	 	ticotsord.7d	\
-	 	urandom.7d	\
-	 	usb.7d		\
-	 	uwb.7d
+		allkmem.7d	\
+		fdc.7d		\
+		firewire.7d	\
+		kmem.7d		\
+		lo0.7d		\
+		ticots.7d	\
+		ticotsord.7d	\
+		urandom.7d	\
+		usb.7d
 
-sparc_MANLINKS=	drmach.7d	\
-		ngdr.7d		\
-		ngdrmach.7d
+sparc_MANLINKS=	drmach.7d
+
+i386_MANLINKS=	amdzen_stub.7d
 
 MANFILES =	$(_MANFILES) $($(MACH)_MANFILES)
 MANLINKS =	$(_MANLINKS) $($(MACH)_MANLINKS)
 
-bscbus.7d	:= LINKSRC = bscv.7d
-i2bsc.7d	:= LINKSRC = bscv.7d
+amdzen_stub.7d	:= LINKSRC = amdzen.7d
 
 drmach.7d	:= LINKSRC = dr.7d
-ngdr.7d		:= LINKSRC = dr.7d
-ngdrmach.7d	:= LINKSRC = dr.7d
 
 fdc.7d		:= LINKSRC = fd.7d
 
@@ -286,10 +286,6 @@ ticots.7d	:= LINKSRC = ticlts.7d
 ticotsord.7d	:= LINKSRC = ticlts.7d
 
 usb.7d		:= LINKSRC = usba.7d
-
-uwb.7d		:= LINKSRC = uwba.7d
-
-hwa1480_fw.7d	:= LINKSRC = wusb_df.7d
 
 .KEEP_STATE:
 

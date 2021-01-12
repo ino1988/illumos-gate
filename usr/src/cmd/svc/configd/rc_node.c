@@ -22,6 +22,7 @@
 /*
  * Copyright (c) 2004, 2010, Oracle and/or its affiliates. All rights reserved.
  * Copyright (c) 2013, Joyent, Inc.  All rights reserved.
+ * Copyright (c) 2016 by Delphix. All rights reserved.
  */
 
 /*
@@ -388,17 +389,6 @@
 
 #define	MAX_VALID_CHILDREN 3
 
-/*
- * The ADT_smf_* symbols may not be defined on the build machine.  Because
- * of this, we do not want to compile the _smf_aud_event() function when
- * doing native builds.
- */
-#ifdef	NATIVE_BUILD
-#define	smf_audit_event(i, s, r, d)
-#else
-#define	smf_audit_event(i, s, r, d)	_smf_audit_event(i, s, r, d)
-#endif	/* NATIVE_BUILD */
-
 typedef struct rc_type_info {
 	uint32_t	rt_type;		/* matches array index */
 	uint32_t	rt_num_ids;
@@ -585,11 +575,11 @@ static audit_special_prop_item_t special_props_list[] = {
  * Clients use their position in the list to track which notifications they
  * have not yet reported.  As they process notifications, they move forward
  * in the list past them.  There is always a client at the beginning of the
- * list -- as he moves past notifications, he removes them from the list and
+ * list -- as it moves past notifications, it removes them from the list and
  * cleans them up.
  *
  * The rc_pg_notify_lock protects all notification state.  The rc_pg_notify_cv
- * is used for global signalling, and each client has a cv which he waits for
+ * is used for global signalling, and each client has a cv which it waits for
  * events of interest on.
  *
  * rc_notify_in_use is used to protect rc_notify_list from deletions when
@@ -3392,7 +3382,7 @@ rc_node_modify_permission_check(char **match_auth)
  * only on the Solaris build machines to create the seed repository, and it
  * is compiled against the build machine's header files.  The ADT_smf_*
  * symbols may not be defined in these header files.  For this reason
- * smf_annotation_event(), _smf_audit_event() and special_property_event()
+ * smf_annotation_event(), smf_audit_event() and special_property_event()
  * are not compiled for native builds.
  */
 #ifndef	NATIVE_BUILD
@@ -3443,17 +3433,19 @@ smf_annotation_event(int status, int return_val)
 	}
 	adt_free_event(event);
 }
+#endif
 
 /*
- * _smf_audit_event interacts with the security auditing system to generate
+ * smf_audit_event interacts with the security auditing system to generate
  * an audit event structure.  It establishes an audit session and allocates
  * an audit event.  The event is filled in from the audit data, and
  * adt_put_event is called to generate the event.
  */
 static void
-_smf_audit_event(au_event_t event_id, int status, int return_val,
+smf_audit_event(au_event_t event_id, int status, int return_val,
     audit_event_data_t *data)
 {
+#ifndef	NATIVE_BUILD
 	char *auth_used;
 	char *fmri;
 	char *prop_value;
@@ -3468,7 +3460,7 @@ _smf_audit_event(au_event_t event_id, int status, int return_val,
 	if ((session = get_audit_session()) == NULL)
 		return;
 	if ((event = adt_alloc_event(session, event_id)) == NULL) {
-		uu_warn("_smf_audit_event cannot allocate event "
+		uu_warn("smf_audit_event cannot allocate event "
 		    "data.  %s\n", strerror(errno));
 		return;
 	}
@@ -3483,7 +3475,7 @@ _smf_audit_event(au_event_t event_id, int status, int return_val,
 		auth_used = data->ed_auth;
 	}
 	if (data->ed_fmri == NULL) {
-		syslog(LOG_WARNING, "_smf_audit_event called with "
+		syslog(LOG_WARNING, "smf_audit_event called with "
 		    "empty FMRI string");
 		fmri = "UNKNOWN FMRI";
 	} else {
@@ -3623,12 +3615,14 @@ _smf_audit_event(au_event_t event_id, int status, int return_val,
 	}
 
 	if (adt_put_event(event, status, return_val) != 0) {
-		uu_warn("_smf_audit_event failed to put event.  %s\n",
+		uu_warn("smf_audit_event failed to put event.  %s\n",
 		    strerror(errno));
 	}
 	adt_free_event(event);
+#endif
 }
 
+#ifndef NATIVE_BUILD
 /*
  * Determine if the combination of the property group at pg_name and the
  * property at prop_name are in the set of special startd properties.  If

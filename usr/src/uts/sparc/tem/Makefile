@@ -39,13 +39,8 @@ UTSBASE	= ../..
 #	Define the module and object file sets.
 #
 MODULE		= tem
-OBJECTS		= $(TEM_OBJS:%=$(OBJS_DIR)/%)
-
-LINTS		= $(TEM_OBJS:%.o=$(LINTS_DIR)/%.ln)
+OBJECTS		= $(TEM_OBJS:%=$(OBJS_DIR)/%) $(FONT_OBJS:%=$(OBJS_DIR)/%)
 ROOTMODULE	= $(ROOT_MISC_DIR)/$(MODULE)
-WARLOCK_OUT	= $(TEM_OBJS:%.o=%.ll)
-WARLOCK_OK	= $(MODULE).ok
-WLCMD_DIR	= $(UTSBASE)/common/io/warlock
 
 #
 #	Include common rules.
@@ -56,22 +51,9 @@ include $(UTSBASE)/sparc/Makefile.sparc
 #	Define targets
 #
 ALL_TARGET	= $(BINARY)
-LINT_TARGET	= $(MODULE).lint
 INSTALL_TARGET	= $(BINARY) $(ROOTMODULE)
 
-CFLAGS += $(CCVERBOSE)
-
 LDFLAGS += -dy -Ndacf/consconfig_dacf
-
-#
-# For now, disable these lint checks; maintainers should endeavor
-# to investigate and remove these for maximum lint coverage.
-# Please do not carry these forward to new Makefiles.
-#
-LINTTAGS	+= -erroff=E_STATIC_UNUSED
-
-CERRWARN	+= -_gcc=-Wno-unused-function
-CERRWARN	+= -_gcc=-Wno-uninitialized
 
 #
 #	Default build targets.
@@ -86,38 +68,9 @@ clean:		$(CLEAN_DEPS)
 
 clobber:	$(CLOBBER_DEPS)
 
-lint:		$(LINT_DEPS)
-
-modlintlib:	$(MODLINTLIB_DEPS)
-
-clean.lint:	$(CLEAN_LINT_DEPS)
-
 install:	$(INSTALL_DEPS)
 
 #
 #	Include common targets.
 #
 include $(UTSBASE)/sparc/Makefile.targ
-
-#
-#	Defines for local commands
-#
-TEST		= test
-WLCC		= wlcc
-TOUCH		= touch
-WARLOCK		= warlock
-
-#
-#	warlock targets
-#
-
-warlock:	$(WARLOCK_OUT) warlock_ddi.files
-	$(WARLOCK) -c $(WLCMD_DIR)/tem.wlcmd $(WARLOCK_OUT) \
-	-l ../../sparc/warlock/ddi_dki_impl.ll
-	$(TOUCH) $(WARLOCK_OK)
-
-%.ll:	$(UTSBASE)/common/io/%.c
-	$(WLCC) $(CPPFLAGS) -DDEBUG -o $@ $<
-
-warlock_ddi.files:
-	@cd ../../sparc/warlock; pwd; $(MAKE) warlock

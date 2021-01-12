@@ -18,9 +18,10 @@
 #
 # CDDL HEADER END
 #
-#
+# Copyright 2016 Toomas Soome <tsoome@me.com>
 # Copyright 2010 Sun Microsystems, Inc.  All rights reserved.
 # Use is subject to license terms.
+# Copyright 2018 Joyent, Inc.
 #
 
 PROG = halt
@@ -50,7 +51,7 @@ CPPFLAGS += -I../../uts/common/fs/zfs
 CERRWARN += -_gcc=-Wno-unused-label
 
 LDLIBS += -lbsm -lscf -lzfs -lgen
-LDLIBS_i386 +=	-lgrubmgmt
+LDLIBS_i386 +=	-lbe
 LDLIBS +=	$(LDLIBS_$(MACH))
 
 CLOBBERFILES += $(ROOTLINKS) $(ROOTSYMLINKS)
@@ -60,10 +61,10 @@ install :=	TARGET = install
 clean   :=	TARGET = clean
 clobber :=	TARGET = clobber
 lint    :=	TARGET = lint
-lint	:=	LINTFLAGS = -u
+lint	:=	LINTFLAGS += -u
 
 
-all: $(PROG) 
+all: $(PROG)
 
 install: all $(ROOTUSRSBINPROG) $(ROOTLINKS) $(ROOTSYMLINKS) $(SUBDIRS)
 

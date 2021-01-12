@@ -513,7 +513,7 @@ typedef struct modctl {
 	char		mod_delay_unload;	/* deferred unload */
 
 	struct modctl_list *mod_requisites;	/* mods this one depends on. */
-	void		*__unused;	/* NOTE: reuse (same size) is OK, */
+	void		*mod_unused;	/* NOTE: reuse (same size) is OK, */
 					/* deletion causes mdb.vs.core issues */
 	int		mod_loadcnt;	/* number of times mod was loaded */
 	int		mod_nenabled;	/* # of enabled DTrace probes in mod */
@@ -546,6 +546,7 @@ typedef int modid_t;
 extern kmutex_t mod_lock;
 
 extern char *systemfile;
+extern char *self_assembly;
 extern char **syscallnames;
 extern int moddebug;
 

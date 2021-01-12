@@ -17,8 +17,15 @@
  * information: Portions Copyright [yyyy] [name of copyright owner]
  *
  * CDDL HEADER END
- *
+ */
+
+/*
  * Copyright (c) 2003, 2010, Oracle and/or its affiliates. All rights reserved.
+ */
+
+/*
+ * Copyright 2018 Nexenta Systems, Inc.
+ * Copyright (c) 2015, Joyent, Inc.
  */
 
 #include <sys/systm.h>
@@ -26,6 +33,7 @@
 #include <nfs/nfs.h>
 #include <nfs/export.h>
 #include <sys/cmn_err.h>
+#include <sys/avl.h>
 
 #define	PSEUDOFS_SUFFIX		" (pseudo)"
 
@@ -134,19 +142,20 @@ nfs4_vget_pseudo(struct exportinfo *exi, vnode_t **vpp, fid_t *fidp)
  *
  * A visible list has a per-file-system scope.  Any exportinfo
  * struct (real or pseudo) can have a visible list as long as
- * a) its export root is VROOT
+ * a) its export root is VROOT, or is the zone's root for in-zone NFS service
  * b) a descendant of the export root is shared
  */
 struct exportinfo *
-pseudo_exportfs(vnode_t *vp, fid_t *fid, struct exp_visible *vis_head,
-	    struct exportdata *exdata)
+pseudo_exportfs(nfs_export_t *ne, vnode_t *vp, fid_t *fid,
+    struct exp_visible *vis_head, struct exportdata *exdata)
 {
 	struct exportinfo *exi;
 	struct exportdata *kex;
 	fsid_t fsid;
 	int vpathlen;
+	int i;
 
-	ASSERT(RW_WRITE_HELD(&exported_lock));
+	ASSERT(RW_WRITE_HELD(&ne->exported_lock));
 
 	fsid = vp->v_vfsp->vfs_fsid;
 	exi = kmem_zalloc(sizeof (*exi), KM_SLEEP);
@@ -156,6 +165,7 @@ pseudo_exportfs(vnode_t *vp, fid_t *fid, struct exp_visible *vis_head,
 	VN_HOLD(exi->exi_vp);
 	exi->exi_visible = vis_head;
 	exi->exi_count = 1;
+	exi->exi_zoneid = ne->ne_globals->nfs_zoneid;
 	exi->exi_volatile_dev = (vfssw[vp->v_vfsp->vfs_fstype].vsw_flag &
 	    VSW_VOLATILEDEV) ? 1 : 0;
 	mutex_init(&exi->exi_lock, NULL, MUTEX_DEFAULT, NULL);
@@ -173,12 +183,12 @@ pseudo_exportfs(vnode_t *vp, fid_t *fid, struct exp_visible *vis_head,
 	kex = &exi->exi_export;
 	kex->ex_flags = EX_PSEUDO;
 
-	vpathlen = vp->v_path ? strlen(vp->v_path) : 0;
+	vpathlen = strlen(vp->v_path);
 	kex->ex_pathlen = vpathlen + strlen(PSEUDOFS_SUFFIX);
 	kex->ex_path = kmem_alloc(kex->ex_pathlen + 1, KM_SLEEP);
 
 	if (vpathlen)
-		(void) strcpy(kex->ex_path, vp->v_path);
+		(void) strncpy(kex->ex_path, vp->v_path, vpathlen);
 	(void) strcpy(kex->ex_path + vpathlen, PSEUDOFS_SUFFIX);
 
 	/* Transfer the secinfo data from exdata to this new pseudo node */
@@ -186,14 +196,28 @@ pseudo_exportfs(vnode_t *vp, fid_t *fid, struct exp_visible *vis_head,
 		srv_secinfo_exp2pseu(&exi->exi_export, exdata);
 
 	/*
-	 * Initialize auth cache lock
+	 * Initialize auth cache and auth cache lock
 	 */
+	for (i = 0; i < AUTH_TABLESIZE; i++) {
+		exi->exi_cache[i] = kmem_alloc(sizeof (avl_tree_t), KM_SLEEP);
+		avl_create(exi->exi_cache[i], nfsauth_cache_clnt_compar,
+		    sizeof (struct auth_cache_clnt),
+		    offsetof(struct auth_cache_clnt, authc_link));
+	}
 	rw_init(&exi->exi_cache_lock, NULL, RW_DEFAULT, NULL);
 
 	/*
 	 * Insert the new entry at the front of the export list
 	 */
-	export_link(exi);
+	export_link(ne, exi);
+
+	/*
+	 * Initialize exi_id and exi_kstats
+	 */
+	mutex_enter(&nfs_exi_id_lock);
+	exi->exi_id = exi_id_get_next();
+	avl_add(&exi_id_tree, exi);
+	mutex_exit(&nfs_exi_id_lock);
 
 	return (exi);
 }
@@ -269,14 +293,14 @@ tree_prepend_node(treenode_t *n, exp_visible_t *v, exportinfo_t *e)
  * they should be already freed.
  */
 static void
-tree_remove_node(treenode_t *node)
+tree_remove_node(nfs_export_t *ne, treenode_t *node)
 {
 	treenode_t *parent = node->tree_parent;
 	treenode_t *s; /* s for sibling */
 
 	if (parent == NULL) {
 		kmem_free(node, sizeof (*node));
-		ns_root = NULL;
+		ne->ns_root = NULL;
 		return;
 	}
 	/* This node is first child */
@@ -425,6 +449,7 @@ more_visible(struct exportinfo *exi, treenode_t *tree_head)
 	struct exp_visible *vp1, *vp2, *vis_head, *tail, *next;
 	int found;
 	treenode_t *child, *curr, *connect_point;
+	nfs_export_t *ne = nfs_get_export();
 
 	vis_head = tree_head->tree_vis;
 	connect_point = exi->exi_tree;
@@ -434,8 +459,12 @@ more_visible(struct exportinfo *exi, treenode_t *tree_head)
 	 * list just assign the entire supplied list.
 	 */
 	if (exi->exi_visible == NULL) {
-		tree_add_child(exi->exi_tree, tree_head);
+		tree_add_child(connect_point, tree_head);
 		exi->exi_visible = vis_head;
+
+		/* Update the change timestamp */
+		tree_update_change(ne, connect_point, &vis_head->vis_change);
+
 		return;
 	}
 
@@ -492,6 +521,11 @@ more_visible(struct exportinfo *exi, treenode_t *tree_head)
 			connect_point = child;
 		} else { /* Branching */
 			tree_add_child(connect_point, curr);
+
+			/* Update the change timestamp */
+			tree_update_change(ne, connect_point,
+			    &curr->tree_vis->vis_change);
+
 			connect_point = NULL;
 		}
 	}
@@ -600,14 +634,19 @@ treeclimb_export(struct exportinfo *exip)
 	fid_t fid;
 	int error;
 	int exportdir;
-	struct exportinfo *exi = NULL;
 	struct exportinfo *new_exi = exip;
 	struct exp_visible *visp;
 	struct exp_visible *vis_head = NULL;
 	struct vattr va;
 	treenode_t *tree_head = NULL;
+	timespec_t now;
+	nfs_export_t *ne;
 
-	ASSERT(RW_WRITE_HELD(&exported_lock));
+	ne = exip->exi_ne;
+	ASSERT3P(ne, ==, nfs_get_export());	/* curzone reality check */
+	ASSERT(RW_WRITE_HELD(&ne->exported_lock));
+
+	gethrestime(&now);
 
 	vp = exip->exi_vp;
 	VN_HOLD(vp);
@@ -621,60 +660,67 @@ treeclimb_export(struct exportinfo *exip)
 		if (error)
 			break;
 
-		if (! exportdir) {
-			/*
-			 * Check if this exportroot is a VROOT dir.  If so,
-			 * then attach the pseudonodes.  If not, then
-			 * continue .. traversal until we hit a VROOT
-			 * export (pseudo or real).
-			 */
-			exi = checkexport4(&vp->v_vfsp->vfs_fsid, &fid, vp);
-			if (exi != NULL && vp->v_flag & VROOT) {
-				/*
-				 * Found an export info
-				 *
-				 * Extend the list of visible
-				 * directories whether it's a pseudo
-				 * or a real export.
-				 */
-				more_visible(exi, tree_head);
-				break;	/* and climb no further */
-			}
-		}
-
+		ASSERT3U(exip->exi_zoneid, ==, curzone->zone_id);
 		/*
-		 * If at the root of the filesystem, need
-		 * to traverse across the mountpoint
-		 * and continue the climb on the mounted-on
-		 * filesystem.
+		 * The root of the file system, or the zone's root for
+		 * in-zone NFS service needs special handling
 		 */
-		if (vp->v_flag & VROOT) {
+		if (vp->v_flag & VROOT || vp == EXI_TO_ZONEROOTVP(exip)) {
+			if (!exportdir) {
+				struct exportinfo *exi;
 
-			if (! exportdir) {
+				/*
+				 * Check if this VROOT dir is already exported.
+				 * If so, then attach the pseudonodes.  If not,
+				 * then continue .. traversal until we hit a
+				 * VROOT export (pseudo or real).
+				 */
+				exi = checkexport4(&vp->v_vfsp->vfs_fsid, &fid,
+				    vp);
+				if (exi != NULL) {
+					/*
+					 * Found an export info
+					 *
+					 * Extend the list of visible
+					 * directories whether it's a pseudo
+					 * or a real export.
+					 */
+					more_visible(exi, tree_head);
+					break;	/* and climb no further */
+				}
+
 				/*
 				 * Found the root directory of a filesystem
 				 * that isn't exported.  Need to export
 				 * this as a pseudo export so that an NFS v4
 				 * client can do lookups in it.
 				 */
-				new_exi = pseudo_exportfs(vp, &fid, vis_head,
-				    NULL);
+				new_exi = pseudo_exportfs(ne, vp, &fid,
+				    vis_head, NULL);
 				vis_head = NULL;
 			}
 
-			if (VN_CMP(vp, rootdir)) {
+			if (VN_IS_CURZONEROOT(vp)) {
 				/* at system root */
 				/*
 				 * If sharing "/", new_exi is shared exportinfo
 				 * (exip). Otherwise, new_exi is exportinfo
-				 * created in pseudo_exportfs() above.
+				 * created by pseudo_exportfs() above.
 				 */
-				ns_root = tree_prepend_node(tree_head, 0,
+				ne->ns_root = tree_prepend_node(tree_head, NULL,
 				    new_exi);
+
+				/* Update the change timestamp */
+				tree_update_change(ne, ne->ns_root, &now);
+
 				break;
 			}
 
-			vp = untraverse(vp);
+			/*
+			 * Traverse across the mountpoint and continue the
+			 * climb on the mounted-on filesystem.
+			 */
+			vp = untraverse(vp, ne->exi_root->exi_vp);
 			exportdir = 0;
 			continue;
 		}
@@ -700,9 +746,9 @@ treeclimb_export(struct exportinfo *exip)
 		visp->vis_exported = exportdir;
 		visp->vis_secinfo = NULL;
 		visp->vis_seccnt = 0;
+		visp->vis_change = now;		/* structure copy */
 		visp->vis_next = vis_head;
 		vis_head = visp;
-
 
 		/*
 		 * Will set treenode's pointer to exportinfo to
@@ -753,14 +799,17 @@ treeclimb_export(struct exportinfo *exip)
 
 		/* Connect unconnected exportinfo, if there is any. */
 		if (new_exi && new_exi != exip)
-			tree_head = tree_prepend_node(tree_head, 0, new_exi);
+			tree_head = tree_prepend_node(tree_head, NULL, new_exi);
 
 		while (tree_head) {
 			treenode_t *t2 = tree_head;
 			exportinfo_t *e  = tree_head->tree_exi;
 			/* exip will be freed in exportfs() */
 			if (e && e != exip) {
-				export_unlink(e);
+				mutex_enter(&nfs_exi_id_lock);
+				avl_remove(&exi_id_tree, e);
+				mutex_exit(&nfs_exi_id_lock);
+				export_unlink(ne, e);
 				exi_rele(e);
 			}
 			tree_head = tree_head->tree_child_first;
@@ -781,41 +830,62 @@ treeclimb_export(struct exportinfo *exip)
  * node was a leaf node.
  * Deleting of nodes will finish when we reach a node which
  * has children or is a real export, then we might still need
- * to continue releasing visibles, until we reach VROOT node.
+ * to continue releasing visibles, until we reach VROOT or zone's root node.
  */
 void
-treeclimb_unexport(struct exportinfo *exip)
+treeclimb_unexport(nfs_export_t *ne, struct exportinfo *exip)
 {
 	treenode_t *tnode, *old_nd;
+	treenode_t *connect_point = NULL;
 
-	ASSERT(RW_WRITE_HELD(&exported_lock));
+	ASSERT(RW_WRITE_HELD(&ne->exported_lock));
+	ASSERT(curzone->zone_id == exip->exi_zoneid ||
+	    curzone->zone_id == global_zone->zone_id);
 
+	/*
+	 * exi_tree can be null for the zone root
+	 * which means we're already at the "top"
+	 * and there's nothing more to "climb".
+	 */
 	tnode = exip->exi_tree;
+	if (tnode == NULL) {
+		/* Should only happen for... */
+		ASSERT(exip == ne->exi_root);
+		return;
+	}
+
 	/*
 	 * The unshared exportinfo was unlinked in unexport().
 	 * Zeroing tree_exi ensures that we will skip it.
 	 */
 	tnode->tree_exi = NULL;
 
-	if (tnode->tree_vis) /* system root has tree_vis == NULL */
+	if (tnode->tree_vis != NULL) /* system root has tree_vis == NULL */
 		tnode->tree_vis->vis_exported = 0;
 
-	while (tnode) {
+	while (tnode != NULL) {
 
-		/* Stop at VROOT node which is exported or has child */
+		/*
+		 * Stop at VROOT (or zone root) node which is exported or has
+		 * child.
+		 */
 		if (TREE_ROOT(tnode) &&
-		    (TREE_EXPORTED(tnode) || tnode->tree_child_first))
+		    (TREE_EXPORTED(tnode) || tnode->tree_child_first != NULL))
 			break;
 
 		/* Release pseudo export if it has no child */
 		if (TREE_ROOT(tnode) && !TREE_EXPORTED(tnode) &&
-		    tnode->tree_child_first == 0) {
-			export_unlink(tnode->tree_exi);
+		    tnode->tree_child_first == NULL) {
+			mutex_enter(&nfs_exi_id_lock);
+			avl_remove(&exi_id_tree, tnode->tree_exi);
+			mutex_exit(&nfs_exi_id_lock);
+			export_unlink(ne, tnode->tree_exi);
 			exi_rele(tnode->tree_exi);
+			tnode->tree_exi = NULL;
 		}
 
 		/* Release visible in parent's exportinfo */
-		if (tnode->tree_vis)
+		if (tnode->tree_vis != NULL)
 			less_visible(vis2exi(tnode), tnode->tree_vis);
 
 		/* Continue with parent */
@@ -823,9 +893,16 @@ treeclimb_unexport(struct exportinfo *exip)
 		tnode = tnode->tree_parent;
 
 		/* Remove itself, if this is a leaf and non-exported node */
-		if (old_nd->tree_child_first == NULL && !TREE_EXPORTED(old_nd))
-			tree_remove_node(old_nd);
+		if (old_nd->tree_child_first == NULL &&
+		    !TREE_EXPORTED(old_nd)) {
+			tree_remove_node(ne, old_nd);
+			connect_point = tnode;
+		}
 	}
+
+	/* Update the change timestamp */
+	if (connect_point != NULL)
+		tree_update_change(ne, connect_point, NULL);
 }
 
 /*
@@ -834,13 +911,13 @@ treeclimb_unexport(struct exportinfo *exip)
  * vnode.
  */
 vnode_t *
-untraverse(vnode_t *vp)
+untraverse(vnode_t *vp, vnode_t *zone_rootvp)
 {
 	vnode_t *tvp, *nextvp;
 
 	tvp = vp;
 	for (;;) {
-		if (! (tvp->v_flag & VROOT))
+		if (!(tvp->v_flag & VROOT) && !VN_CMP(tvp, zone_rootvp))
 			break;
 
 		/* lock vfs to prevent unmount of this vfs */
@@ -871,7 +948,7 @@ untraverse(vnode_t *vp)
 
 /*
  * Given an exportinfo, climb up to find the exportinfo for the VROOT
- * of the filesystem.
+ * (or zone root) of the filesystem.
  *
  * e.g.         /
  *              |
@@ -888,7 +965,7 @@ untraverse(vnode_t *vp)
  *
  * If d is shared, then c will be put into a's visible list.
  * Note: visible list is per filesystem and is attached to the
- * VROOT exportinfo.
+ * VROOT exportinfo.  Returned exi does NOT have a new hold.
  */
 struct exportinfo *
 get_root_export(struct exportinfo *exip)
@@ -917,15 +994,18 @@ has_visible(struct exportinfo *exi, vnode_t *vp)
 	fid_t fid;
 	bool_t vp_is_exported;
 
-	vp_is_exported = VN_CMP(vp,  exi->exi_vp);
+	vp_is_exported = VN_CMP(vp, exi->exi_vp);
 
 	/*
-	 * An exported root vnode has a sub-dir shared if it has a visible list.
-	 * i.e. if it does not have a visible list, then there is no node in
-	 * this filesystem leads to any other shared node.
+	 * An exported root vnode has a sub-dir shared if it has a visible
+	 * list.  i.e. if it does not have a visible list, then there is no
+	 * node in this filesystem leads to any other shared node.
 	 */
-	if (vp_is_exported && (vp->v_flag & VROOT))
+	ASSERT3P(curzone->zone_id, ==, exi->exi_zoneid);
+	if (vp_is_exported &&
+	    ((vp->v_flag & VROOT) || VN_IS_CURZONEROOT(vp))) {
 		return (exi->exi_visible ? 1 : 0);
+	}
 
 	/*
 	 * Only the exportinfo of a fs root node may have a visible list.
@@ -998,7 +1078,7 @@ nfs_visible(struct exportinfo *exi, vnode_t *vp, int *expseudo)
 	 * Only a PSEUDO node has a visible list or an exported VROOT
 	 * node may have a visible list.
 	 */
-	if (! PSEUDO(exi))
+	if (!PSEUDO(exi))
 		exi = get_root_export(exi);
 
 	/* Get the fid of the vnode */
@@ -1099,23 +1179,110 @@ nfs_exported(struct exportinfo *exi, vnode_t *vp)
  * skips . and .. entries.
  */
 int
-nfs_visible_inode(struct exportinfo *exi, ino64_t ino, int *expseudo)
+nfs_visible_inode(struct exportinfo *exi, ino64_t ino,
+    struct exp_visible **visp)
+{
+	/*
+	 * Only a PSEUDO node has a visible list or an exported VROOT
+	 * node may have a visible list.
+	 */
+	if (!PSEUDO(exi))
+		exi = get_root_export(exi);
+
+	for (*visp = exi->exi_visible; *visp != NULL; *visp = (*visp)->vis_next)
+		if ((u_longlong_t)ino == (*visp)->vis_ino) {
+			return (1);
+		}
+
+	return (0);
+}
+
+/*
+ * Get the change attribute from visible and returns TRUE.
+ * If the change value is not available returns FALSE.
+ */
+bool_t
+nfs_visible_change(struct exportinfo *exi, vnode_t *vp, timespec_t *change)
 {
 	struct exp_visible *visp;
+	fid_t fid;
+	treenode_t *node;
+	nfs_export_t *ne = nfs_get_export();
+
+	/*
+	 * First check to see if vp is export root.
+	 */
+	if (VN_CMP(vp, exi->exi_vp))
+		goto exproot;
 
 	/*
 	 * Only a PSEUDO node has a visible list or an exported VROOT
 	 * node may have a visible list.
 	 */
-	if (! PSEUDO(exi))
+	if (!PSEUDO(exi))
 		exi = get_root_export(exi);
 
-	for (visp = exi->exi_visible; visp; visp = visp->vis_next)
-		if ((u_longlong_t)ino == visp->vis_ino) {
-			*expseudo = visp->vis_exported;
-			return (1);
-		}
+	/* Get the fid of the vnode */
+	bzero(&fid, sizeof (fid));
+	fid.fid_len = MAXFIDSZ;
+	if (vop_fid_pseudo(vp, &fid) != 0)
+		return (FALSE);
 
-	*expseudo = 0;
-	return (0);
+	/*
+	 * We can't trust VN_CMP() above because of LOFS.
+	 * Even though VOP_CMP will do the right thing for LOFS
+	 * objects, VN_CMP will short circuit out early when the
+	 * vnode ops ptrs are different.  Just in case we're dealing
+	 * with LOFS, compare exi_fid/fsid here.
+	 */
+	if (EQFID(&exi->exi_fid, &fid) &&
+	    EQFSID(&exi->exi_fsid, &vp->v_vfsp->vfs_fsid))
+		goto exproot;
+
+	/* See if it matches any fid in the visible list */
+	for (visp = exi->exi_visible; visp; visp = visp->vis_next) {
+		if (EQFID(&fid, &visp->vis_fid)) {
+			*change = visp->vis_change;
+			return (TRUE);
+		}
+	}
+
+	return (FALSE);
+
+exproot:
+	/* The VROOT export have its visible available through treenode */
+	node = exi->exi_tree;
+	if (node != ne->ns_root) {
+		ASSERT(node->tree_vis != NULL);
+		*change = node->tree_vis->vis_change;
+	} else {
+		ASSERT(node->tree_vis == NULL);
+		*change = ne->ns_root_change;
+	}
+	return (TRUE);
+}
+
+/*
+ * Update the change attribute value for a particular treenode.  The change
+ * attribute value is stored in the visible attached to the treenode, or in the
+ * ns_root_change.
+ *
+ * If the change value is not supplied, the current time is used.
+ */
+void
+tree_update_change(nfs_export_t *ne, treenode_t *tnode, timespec_t *change)
+{
+	timespec_t *vis_change;
+
+	ASSERT(tnode != NULL);
+	ASSERT((tnode != ne->ns_root && tnode->tree_vis != NULL) ||
+	    (tnode == ne->ns_root && tnode->tree_vis == NULL));
+
+	vis_change = tnode == ne->ns_root ? &ne->ns_root_change
+	    : &tnode->tree_vis->vis_change;
+
+	if (change != NULL)
+		*vis_change = *change;
+	else
+		gethrestime(vis_change);
 }

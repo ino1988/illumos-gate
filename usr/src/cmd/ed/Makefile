@@ -22,6 +22,7 @@
 # Copyright 2008 Sun Microsystems, Inc.  All rights reserved.
 # Use is subject to license terms.
 #
+# Copyright (c) 2018, Joyent, Inc.
 
 PROG= ed
 XPG4PROG= ed
@@ -31,7 +32,7 @@ EDOBJ= ed.o compile.o
 XPG4EDOBJ= edobjs.xpg4/ed.o edobjs.xpg4/compile.o  values-xpg4.o
 XPG6EDOBJ= edobjs.xpg6/ed.o edobjs.xpg6/compile.o  values-xpg6.o
 OBJS= $(EDOBJ) $(XPG4EDOBJ) $(XPG6EDOBJ)
-SRCS= ./ed.c ../expr/compile.c 
+SRCS= ./ed.c ../expr/compile.c
 
 POFILES= $(EDOBJ:%.o=%.po)
 
@@ -41,15 +42,18 @@ CFLAGS += $(CCVERBOSE)
 CERRWARN += -_gcc=-Wno-parentheses
 CERRWARN += -_gcc=-Wno-unused-variable
 CERRWARN += -_gcc=-Wno-unused-function
-CERRWARN += -_gcc=-Wno-uninitialized
-$(XPG4) := CFLAGS += -DXPG4  
-$(XPG6) := CFLAGS += -DXPG6 -I$(SRC)/lib/libc/inc 
-lint := LDLIBS += -lgen -lcrypt
+CERRWARN += $(CNOWARN_UNINIT)
+
+# not linted
+SMATCH=off
+
+$(XPG4) := CFLAGS += -DXPG4
+$(XPG6) := CFLAGS += -DXPG6 -I$(SRC)/lib/libc/inc
 LDLIBS += -lmapmalloc -lgen -lcrypt_i
 XGETFLAGS += -a -x ed.xcl
 
 MAPFILE.INT =	../expr/mapfile-intf
-LDFLAGS +=	$(MAPFILE.INT:%=-M%)
+LDFLAGS +=	$(MAPFILE.INT:%=-Wl,-M%)
 
 POFILE= ed_cmd.po
 
@@ -66,7 +70,7 @@ $(PROG): $(EDOBJ) $(MAPFILE.INT)
 	$(LINK.c) $(EDOBJ) -o $@ $(LDLIBS)
 	$(POST_PROCESS)
 
-$(XPG4): edobjs.xpg4 $(XPG4EDOBJ) $(MAPFILE.INT) 
+$(XPG4): edobjs.xpg4 $(XPG4EDOBJ) $(MAPFILE.INT)
 	$(LINK.c) $(XPG4EDOBJ) -o $@ $(LDLIBS)
 	$(POST_PROCESS)
 
@@ -74,7 +78,7 @@ $(XPG6): edobjs.xpg6 $(XPG6EDOBJ)  $(MAPFILE.INT)
 	$(LINK.c) $(XPG6EDOBJ) -o $@ $(LDLIBS)
 	$(POST_PROCESS)
 
-compile.o:	../expr/compile.c 
+compile.o:	../expr/compile.c
 	$(COMPILE.c) -o $@ ../expr/compile.c
 
 edobjs.xpg4/%.o:	%.c
@@ -103,16 +107,14 @@ install: all $(ROOTPROG) $(ROOTXPG4PROG) $(ROOTXPG6PROG)
 	$(RM) $(ROOTBIN)/red
 	$(LN) $(ROOTBIN)/ed $(ROOTBIN)/red
 
-values-xpg4.o: ../../lib/common/common/values-xpg4.c
-	$(COMPILE.c) -o $@ ../../lib/common/common/values-xpg4.c
+values-xpg4.o: ../../lib/crt/common/values-xpg4.c
+	$(COMPILE.c) -o $@ ../../lib/crt/common/values-xpg4.c
 
-values-xpg6.o: ../../lib/common/common/values-xpg6.c
-	$(COMPILE.c) -o $@ ../../lib/common/common/values-xpg6.c
+values-xpg6.o: ../../lib/crt/common/values-xpg6.c
+	$(COMPILE.c) -o $@ ../../lib/crt/common/values-xpg6.c
 
 clean:
 	-@rm -rf $(OBJS) $(XPG4) $(XPG6) edobjs.xpg4 edobjs.xpg6 \
 		compile.c.i
-
-lint:	lint_PROG
 
 include ../Makefile.targ

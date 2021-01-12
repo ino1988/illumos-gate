@@ -22,13 +22,7 @@
 # Copyright 2008 Sun Microsystems, Inc.  All rights reserved.
 # Use is subject to license terms.
 #
-
-# ident	"%Z%%M%	%I%	%E% SMI"
-#
-# This makefile drives the production of the ipw driver kernel module.
-#
-# i86pc architecture dependent
-#
+# Copyright (c) 2018, Joyent, Inc.
 
 #
 #	Path to the base of the uts directory tree (usually /usr/src/uts).
@@ -38,9 +32,8 @@ UTSBASE	= ../..
 #
 #	Define the module and object file sets.
 #
-MODULE		= iwi 
+MODULE		= iwi
 OBJECTS		= $(IWI_OBJS:%=$(OBJS_DIR)/%)
-LINTS		= $(IWI_OBJS:%.o=$(LINTS_DIR)/%.ln)
 ROOTMODULE	= $(ROOT_DRV_DIR)/$(MODULE)
 
 #
@@ -52,11 +45,13 @@ include $(UTSBASE)/intel/Makefile.intel
 #	Define targets
 #
 ALL_TARGET	= $(BINARY) $(CONFMOD) $(ITUMOD)
-LINT_TARGET	= $(MODULE).lint
 INSTALL_TARGET	= $(BINARY) $(ROOTMODULE)
 
 CPPFLAGS	+= -I. -D_KERNEL
-LDFLAGS         += -dy -Nmisc/mac -Nmisc/net80211 -Ndrv/random -Ndrv/ip 
+LDFLAGS         += -dy -Nmisc/mac -Nmisc/net80211 -Ndrv/random -Ndrv/ip
+
+# needs work
+$(OBJS_DIR)/ipw2200.o := SMOFF += deref_check
 
 #
 #	Default build targets.
@@ -70,12 +65,6 @@ all:		$(ALL_DEPS)
 clean:		$(CLEAN_DEPS)
 
 clobber:	$(CLOBBER_DEPS)
-
-lint:		$(LINT_DEPS)
-
-modlintlib:	$(MODLINTLIB_DEPS)
-
-clean.lint:	$(CLEAN_LINT_DEPS)
 
 install:	$(INSTALL_DEPS)
 

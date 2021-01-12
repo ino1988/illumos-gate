@@ -21,6 +21,8 @@
 # Copyright 2009 Sun Microsystems, Inc.  All rights reserved.
 # Use is subject to license terms.
 #
+# Copyright (c) 2016 by Delphix. All rights reserved.
+#
 # uts/sparc/dev/Makefile
 #	This makefile drives the production of the /dev file system
 #	kernel module.
@@ -38,7 +40,6 @@ UTSBASE	= ../..
 #
 MODULE		= dev
 OBJECTS		= $(DEV_OBJS:%=$(OBJS_DIR)/%)
-LINTS		= $(DEV_OBJS:%.o=$(LINTS_DIR)/%.ln)
 ROOTMODULE	= $(ROOT_FS_DIR)/$(MODULE)
 
 #
@@ -50,7 +51,6 @@ include $(UTSBASE)/sparc/Makefile.sparc
 #	Define targets
 #
 ALL_TARGET	= $(BINARY)
-LINT_TARGET	= $(MODULE).lint
 INSTALL_TARGET	= $(BINARY) $(ROOTMODULE)
 
 #
@@ -64,9 +64,10 @@ LDFLAGS		+= -dy -Nfs/devfs -Nmisc/dls
 INC_PATH	+= -I$(UTSBASE)/common/fs/zfs
 INC_PATH	+= -I$(UTSBASE)/common/io/bpf
 
+
 CERRWARN	+= -_gcc=-Wno-parentheses
 CERRWARN	+= -_gcc=-Wno-unused-label
-CERRWARN	+= -_gcc=-Wno-uninitialized
+CERRWARN	+= $(CNOWARN_UNINIT)
 
 #
 #	Default build targets.
@@ -80,12 +81,6 @@ all:		$(ALL_DEPS)
 clean:		$(CLEAN_DEPS)
 
 clobber:	$(CLOBBER_DEPS)
-
-lint:		$(LINT_DEPS)
-
-modlintlib:	$(MODLINTLIB_DEPS)
-
-clean.lint:	$(CLEAN_LINT_DEPS)
 
 install:	$(INSTALL_DEPS)
 

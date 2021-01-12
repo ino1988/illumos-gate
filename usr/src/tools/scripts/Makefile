@@ -22,22 +22,25 @@
 # Copyright (c) 1999, 2010, Oracle and/or its affiliates. All rights reserved.
 #
 # Copyright 2010, Richard Lowe
+#
+# Copyright 2020 Joyent, Inc.
+# Copyright 2020 OmniOS Community Edition (OmniOSce) Association.
 
 SHELL=/usr/bin/ksh93
 
+SCRIPTS= \
+	bldenv \
+	nightly
+
 SHFILES= \
 	Install \
-	bldenv \
 	build_cscope \
 	bringovercheck \
 	checkpaths \
-	checkproto \
 	cstyle \
 	elfcmp \
 	flg.flp \
 	genoffsets \
-	hgsetup \
-	nightly \
 	onu \
 	protocmp.terse \
 	sccscheck \
@@ -66,48 +69,47 @@ PYFILES= \
 	copyrightchk \
 	git-pbchk \
 	hdrchk \
-	hg-active \
 	mapfilechk \
 	validate_pkg \
+	wscheck \
 	wsdiff
 
 SCRIPTLINKS= \
 	git-nits
 
-MAN1FILES= \
-	Install.1 \
-	bldenv.1 \
-	bringovercheck.1 \
-	cddlchk.1 \
-	checkpaths.1 \
-	check_rtime.1 \
-	cstyle.1 \
-	find_elf.1 \
-	flg.flp.1 \
-	git-pbchk.1 \
-	hdrchk.1 \
-	interface_check.1 \
-	interface_cmp.1 \
-	hgsetup.1 \
-	jstyle.1 \
-	mapfilechk.1 \
-	nightly.1 \
-	onu.1 \
-	sccscheck.1 \
-	webrev.1 \
-	which_scm.1 \
-	ws.1 \
-	wsdiff.1 \
-	xref.1
+MAN1ONBLDFILES= \
+	Install.1onbld \
+	bldenv.1onbld \
+	bringovercheck.1onbld \
+	cddlchk.1onbld \
+	checkpaths.1onbld \
+	check_rtime.1onbld \
+	ctfconvert.1onbld \
+	cstyle.1onbld \
+	find_elf.1onbld \
+	flg.flp.1onbld \
+	git-pbchk.1onbld \
+	hdrchk.1onbld \
+	interface_check.1onbld \
+	interface_cmp.1onbld \
+	jstyle.1onbld \
+	mapfilechk.1onbld \
+	nightly.1onbld \
+	onu.1onbld \
+	sccscheck.1onbld \
+	webrev.1onbld \
+	which_scm.1onbld \
+	ws.1onbld \
+	wsdiff.1onbld \
+	xref.1onbld
 
-MAN1LINKS= \
-	git-nits.1
+MAN1ONBLDLINKS= \
+	git-nits.1onbld
 
 MAKEFILES= \
 	xref.mk
 
 ETCFILES= \
-	hgstyle \
 	its.conf \
 	its.reg
 
@@ -116,59 +118,57 @@ EXCEPTFILES= \
 	interface_check \
 	interface_cmp
 
-CLEANFILES = $(SHFILES) $(PERLFILES) $(PYFILES) bldenv.1
+CLEANFILES = $(SHFILES) $(PERLFILES) $(PYFILES) bldenv.1onbld onu.sh
 
 include ../Makefile.tools
 
 ROOTONBLDSCRIPTLINKS = $(SCRIPTLINKS:%=$(ROOTONBLDBIN)/%)
-ROOTONBLDMAN1LINKS = $(MAN1LINKS:%=$(ROOTONBLDMAN1)/%)
+ROOTONBLDMAN1ONBLDLINKS = $(MAN1ONBLDLINKS:%=$(ROOTONBLDMAN1ONBLD)/%)
 
-$(ROOTONBLDETCFILES)	:= FILEMODE=	644
-$(ROOTONBLDEXCEPTFILES)	:= FILEMODE=	644
-$(ROOTONBLDPERLMODULES)	:= FILEMODE=	644
-$(ROOTONBLDMAKEFILES)	:= FILEMODE=	644
-$(ROOTONBLDMAN1FILES)	:= FILEMODE=	644
+$(ROOTONBLDETCFILES)		:= FILEMODE=	644
+$(ROOTONBLDEXCEPTFILES)		:= FILEMODE=	644
+$(ROOTONBLDPERLMODULES)		:= FILEMODE=	644
+$(ROOTONBLDMAKEFILES)		:= FILEMODE=	644
+$(ROOTONBLDMAN1ONBLDFILES)	:= FILEMODE=	644
 
 .KEEP_STATE:
 
 all:	$(SHFILES) $(PERLFILES) $(PERLMODULES) $(PYFILES) \
-	$(MAN1FILES) $(MAKEFILES)
+	$(MAN1ONBLDFILES) $(MAKEFILES) $(SCRIPTS)
+
+onu.sh:	onu.sh.in
+	$(SED) -e "s:@PYTHON_VERSION@:$(PYTHON_VERSION):g" < onu.sh.in > $@
 
 $(ROOTONBLDBIN)/git-nits:
 	$(RM) $(ROOTONBLDBIN)/git-nits
 	$(SYMLINK) git-pbchk $(ROOTONBLDBIN)/git-nits
 
-$(ROOTONBLDMAN1)/git-nits.1:
-	$(RM) $(ROOTONBLDMAN1)/git-nits.1
-	$(SYMLINK) git-pbchk.1 $(ROOTONBLDMAN1)/git-nits.1
+$(ROOTONBLDMAN1ONBLD)/git-nits.1onbld:
+	$(RM) $(ROOTONBLDMAN1ONBLD)/git-nits.1onbld
+	$(SYMLINK) git-pbchk.1onbld $(ROOTONBLDMAN1ONBLD)/git-nits.1onbld
 
-install: all .WAIT $(ROOTONBLDSHFILES) $(ROOTONBLDPERLFILES)	\
-		$(ROOTONBLDPERLMODULES) $(ROOTONBLDPYFILES)	\
-		$(ROOTONBLDSCRIPTLINKS) $(ROOTONBLDMAN1FILES)	\
-		$(ROOTONBLDMAKEFILES) $(ROOTONBLDETCFILES)	\
-		$(ROOTONBLDEXCEPTFILES) $(ROOTONBLDMAN1LINKS)
+install: all .WAIT $(ROOTONBLDSHFILES) $(ROOTONBLDPERLFILES)		\
+		$(ROOTONBLDPERLMODULES) $(ROOTONBLDPYFILES)		\
+		$(ROOTONBLDSCRIPTLINKS) $(ROOTONBLDMAN1ONBLDFILES)	\
+		$(ROOTONBLDMAKEFILES) $(ROOTONBLDETCFILES)		\
+		$(ROOTONBLDEXCEPTFILES) $(ROOTONBLDMAN1ONBLDLINKS)	\
+		$(ROOTONBLDSCRIPTS)
 
 clean:
 	$(RM) $(CLEANFILES)
 
-bldenv: bldenv.sh stdenv.sh
-	$(RM) "$@"
-	sed -e '/# STDENV_START/ r stdenv.sh' bldenv.sh > "$@"
-	# Check for shell lint and fail if we hit warnings
-	shlintout="$$( /usr/bin/ksh93 -n "$@" 2>&1 )" ; \
-		[[ "$${shlintout}" != "" ]] && \
-		{ print -r -- "$${shlintout}" ;	false ; } || true
-	$(CHMOD) +x "$@" 
-
-bldenv.1: bldenv
+bldenv.1onbld: bldenv
 	$(RM) "$@"
 	(set +o errexit ; ksh93 $? --nroff ; true) 2>&1 | \
-	sed 's/\.DS/.nf/g;s/\.DE/.fi/' > "$@"
+	sed -e 's/\.DS/.nf/g;s/\.DE/.fi/' \
+	-e 's/\.TH BLDENV 1/.TH BLDENV 1ONBLD "September 4, 2018"/' \
+	-e 's/.OP \([a-z]\) - flag -/.OP \\-\1/g' \
+	-e 's/(1)/(1ONBLD)/' > "$@"
 
-nightly: nightly.sh stdenv.sh
-	$(RM) "$@"
-	sed -e '/# STDENV_START/ r stdenv.sh' nightly.sh > nightly
-	$(CHMOD) +x "$@" 
+#
+# Not run by default: bootstrap...
+check:
+	$(ROOTONBLDBINMACH)/mandoc -Tlint -Wwarning $(MAN1ONBLDFILES)
 
 include ../Makefile.targ
 

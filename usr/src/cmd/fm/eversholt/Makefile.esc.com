@@ -17,10 +17,12 @@
 # information: Portions Copyright [yyyy] [name of copyright owner]
 #
 # CDDL HEADER END
-# 
 #
 # Copyright 2007 Sun Microsystems, Inc.  All rights reserved.
 # Use is subject to license terms.
+#
+# Copyright 2018 RackTop Systems.
+# Copyright (c) 2018, Joyent, Inc.
 #
 
 FMADIR = $(SRC)/cmd/fm
@@ -37,35 +39,27 @@ CMNOBJS = alloc.o check.o eftread.o esclex.o io.o literals.o lut.o \
 COMMONOBJS = escparse.o $(CMNOBJS)
 COMMONSRCS = $(COMMONOBJS:%.o=$(EVERCMNSRC)/%.c)
 
-LINTSRCS = $(CMNOBJS:%.o=$(EVERCMNSRC)/%.c)
-LINTFLAGS = -mnux
-
-$(NOT_RELEASE_BUILD)CPPFLAGS += -DDEBUG
-
-CPPFLAGS += -I$(EVERCMNSRC) -I.
+BASECPPFLAGS = -I$(EVERCMNSRC) -I.
+$(NOT_RELEASE_BUILD)BASECPPFLAGS += -DDEBUG
+CPPFLAGS += $(BASECPPFLAGS)
 CFLAGS += $(CCVERBOSE)
-CERRWARN += -_gcc=-Wno-uninitialized
+CERRWARN += $(CNOWARN_UNINIT)
 CERRWARN += -_gcc=-Wno-unused-label
 CERRWARN += -_gcc=-Wno-parentheses
 CERRWARN += -_gcc=-Wno-switch
 
+SMOFF += all_func_returns
+
 CTFCONVO = $(CTFCONVERT_O)
 CTFMRG = $(CTFMERGE) -L VERSION -o $@ $(OBJS)
 
-debug := CTFCONVO = STRIPSTABS_KEEP_STABS= $(CTFCONVERT_O)
-debug := CTFMRG = STRIPSTABS_KEEP_STABS= $(CTFMERGE) -L VERSION -o $@ $(OBJS)
 debug := COPTFLAG =
 debug := COPTFLAG64 =
 
 ROOTPDIR = $(ROOT)/usr/lib/fm
 ROOTPROG = $(ROOTPDIR)/$(PROG)
 
-install: $(PROG) $(ROOTPROG)
-
 install_h: $(ROOTHDIR) $(ROOTHDRS)
-
-lint:	$(LINTSRCS)
-	$(LINT.c) $(LINTSRCS) $(LDLIBS)
 
 %.o: %.c
 	$(COMPILE.c) $<
@@ -80,12 +74,8 @@ escparse.o: $(EVERCMNSRC)/escparse.y
 	$(COMPILE.c) -DYYDEBUG -c -o $@ y.tab.c
 	$(CTFCONVO)
 
-$(ROOT)/usr/lib/fm:
+$(ROOTPDIR):
 	$(INS.dir)
 
-$(ROOTPDIR): $(ROOT)/usr/lib/fm
-	$(INS.dir)
-
-$(ROOTPDIR)/%: %
+$(ROOTPDIR)/%: % $(ROOTPDIR)
 	$(INS.file)
-

@@ -48,16 +48,11 @@ POFILE= fsck.po
 
 catalog:        $(POFILE)
 
-#
-# Uncomment the following two lines to build for dbx debugging
-#COPTFLAG = -g
-#COPTFLAG64 = -g
-#
 CPPFLAGS +=	-D_LARGEFILE64_SOURCE
 
 CERRWARN +=	-_gcc=-Wno-parentheses
 CERRWARN +=	-_gcc=-Wno-unused-variable
-CERRWARN +=	-_gcc=-Wno-uninitialized
+CERRWARN +=	$(CNOWARN_UNINIT)
 
 #
 # We need to tell lint not to complain about the routines

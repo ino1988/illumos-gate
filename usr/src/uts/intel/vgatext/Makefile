@@ -22,6 +22,7 @@
 # uts/intel/vgatext/Makefile
 # Copyright 2006 Sun Microsystems, Inc.  All rights reserved.
 # Use is subject to license terms.
+# Copyright 2015 Igor Kozhukhov <ikozhukhov@gmail.com>
 #
 
 #
@@ -39,13 +40,13 @@ UTSBASE	= ../..
 #	Define the module and object file sets.
 #
 MODULE		= vgatext
-OBJECTS		= $(VGATEXT_OBJS:%=$(OBJS_DIR)/%) $(OBJS_DIR)/$(VGATEXT_FONT).o
-LINTS		= $(VGATEXT_OBJS:%.o=$(LINTS_DIR)/%.ln)
+OBJECTS		= $(VGATEXT_OBJS:%=$(OBJS_DIR)/%)
 ROOTMODULE	= $(ROOT_DRV_DIR)/$(MODULE)
-VGATEXT_FONT	= 8859-1
-VGATEXT_SRC	= $(UTSBASE)/intel/io/vgatext
+GFX_DIR		= $(UTSBASE)/i86pc/io/gfx_private
+INC_PATH	+= -I$(GFX_DIR)
 
-LDFLAGS +=	-dy -Nmisc/agpmaster
+LDFLAGS +=	-dy -Nmisc/gfx_private
+
 #
 #	Include common rules.
 #
@@ -55,19 +56,7 @@ include $(UTSBASE)/intel/Makefile.intel
 #	Define targets
 #
 ALL_TARGET	= $(BINARY) # $(SRC_CONFILE)
-LINT_TARGET	= $(MODULE).lint
 INSTALL_TARGET	= $(BINARY) $(ROOTMODULE)
-
-#
-# For now, disable these lint checks; maintainers should endeavor
-# to investigate and remove these for maximum lint coverage.
-# Please do not carry these forward to new Makefiles.
-#
-LINTTAGS	+= -erroff=E_BAD_PTR_CAST_ALIGN
-LINTTAGS	+= -erroff=E_STATIC_UNUSED
-
-CERRWARN	+= -_gcc=-Wno-parentheses
-CERRWARN	+= -_gcc=-Wno-unused-variable
 
 #
 #	Default build targets.
@@ -82,27 +71,9 @@ clean:		$(CLEAN_DEPS)
 
 clobber:	$(CLOBBER_DEPS)
 
-lint:		$(LINT_DEPS)
-
-modlintlib:	$(MODLINTLIB_DEPS)
-
-clean.lint:	$(CLEAN_LINT_DEPS)
-
 install:	$(INSTALL_DEPS)
-
-# Custom targets and rules
-
-$(OBJS_DIR)/$(VGATEXT_FONT).c:	$(VGATEXT_SRC)/$(VGATEXT_FONT).bdf
-	awk -f $(VGATEXT_SRC)/bdf_to_c.awk	\
-		$(VGATEXT_SRC)/$(VGATEXT_FONT).bdf > $@
-
-$(OBJS_DIR)/$(VGATEXT_FONT).o:	$(OBJS_DIR)/$(VGATEXT_FONT).c
-	$(COMPILE.c) -o $@ $<
-	$(CTFCONVERT_O)
 
 #
 #	Include common targets.
 #
 include $(UTSBASE)/intel/Makefile.targ
-
-CLEANFILES	+= $(OBJS_DIR)/$(VGATEXT_FONT).c

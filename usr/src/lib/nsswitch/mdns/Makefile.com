@@ -18,12 +18,11 @@
 #
 # CDDL HEADER END
 #
+
+#
 # Copyright 2007 Sun Microsystems, Inc.  All rights reserved.
 # Use is subject to license terms.
 #
-#ident	"%Z%%M%	%I%	%E% SMI"
-#
-# lib/nsswitch/mdns/Makefile.com
 
 LIBRARY =	libnss_mdns.a
 VERS =		.1
@@ -35,8 +34,8 @@ OBJECTS =	gethostent.o	\
 # include common nsswitch library definitions.
 include		../../Makefile.com
 
-C99MODE =       $(C99_ENABLE)
-LDLIBS +=	-lnsl -ldns_sd -lscf
+CSTD=		$(CSTD_GNU99)
+LDLIBS +=	-ldns_sd -lscf
 DYNLIB1 =	nss_mdns.so$(VERS)
 
-lint	:=  LDLIBS = $(LDLIBS.lib) -lc -lnsl -lscf -ldns_sd
+lint	:=  LDLIBS = $(LDLIBS.lib) -lc -lscf -ldns_sd

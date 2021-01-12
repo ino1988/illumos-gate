@@ -21,6 +21,7 @@
 
 /*
  * Copyright (c) 2002, 2010, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2018, Joyent, Inc.
  */
 
 /*
@@ -449,7 +450,7 @@ ehci_allocate_pools(ehci_state_t	*ehcip)
 			USB_DPRINTF_L2(PRINT_MASK_ATTA, ehcip->ehci_log_hdl,
 			    "ehci_allocate_pools: More than 1 cookie");
 
-		goto failure;
+			goto failure;
 		}
 	} else {
 		USB_DPRINTF_L4(PRINT_MASK_ATTA, ehcip->ehci_log_hdl,
@@ -834,8 +835,7 @@ skip_intr:
  * Register FIXED or MSI interrupts.
  */
 static int
-ehci_add_intrs(ehci_state_t	*ehcip,
-		int		intr_type)
+ehci_add_intrs(ehci_state_t *ehcip, int intr_type)
 {
 	int	actual, avail, intr_size, count = 0;
 	int	i, flag, ret;
@@ -1076,7 +1076,8 @@ ehci_init_hardware(ehci_state_t	*ehcip)
 			 * always keep a dummy QH on the list.
 			 */
 			ehci_qh_t *dummy_async_qh =
-			    ehci_alloc_qh(ehcip, NULL, NULL);
+			    ehci_alloc_qh(ehcip, NULL,
+			    EHCI_INTERRUPT_MODE_FLAG);
 
 			Set_QH(dummy_async_qh->qh_link_ptr,
 			    ((ehci_qh_cpu_to_iommu(ehcip, dummy_async_qh) &
@@ -1232,8 +1233,7 @@ ehci_init_check_status(ehci_state_t	*ehcip)
  * Initialize the Host Controller (HC).
  */
 int
-ehci_init_ctlr(ehci_state_t	*ehcip,
-		int		init_type)
+ehci_init_ctlr(ehci_state_t *ehcip, int init_type)
 {
 	USB_DPRINTF_L4(PRINT_MASK_ATTA, ehcip->ehci_log_hdl, "ehci_init_ctlr:");
 
@@ -1406,6 +1406,19 @@ ehci_take_control(ehci_state_t *ehcip)
 		extended_cap = pci_config_get32(ehcip->ehci_config_handle,
 		    extended_cap_offset);
 
+		/*
+		 * It's possible that we'll receive an invalid PCI read here due
+		 * to something going wrong due to platform firmware. This has
+		 * been observed in the wild depending on the version of ACPI in
+		 * use. If this happens, we'll assume that the capability does
+		 * not exist and that we do not need to take control from the
+		 * BIOS.
+		 */
+		if (extended_cap == PCI_EINVAL32) {
+			extended_cap_id = EHCI_EX_CAP_ID_RESERVED;
+			break;
+		}
+
 		/* Get the capability ID */
 		extended_cap_id = (extended_cap & EHCI_EX_CAP_ID) >>
 		    EHCI_EX_CAP_ID_SHIFT;
@@ -1418,6 +1431,7 @@ ehci_take_control(ehci_state_t *ehcip)
 		/* Get the offset of the next capability */
 		extended_cap_offset = (extended_cap & EHCI_EX_CAP_NEXT_PTR) >>
 		    EHCI_EX_CAP_NEXT_PTR_SHIFT;
+
 	}
 
 	/*
@@ -2976,7 +2990,8 @@ ehci_lattice_parent(uint_t node)
  * Based on the "real" array leaf node and interval, get the periodic node.
  */
 static uint_t
-ehci_find_periodic_node(uint_t leaf, int interval) {
+ehci_find_periodic_node(uint_t leaf, int interval)
+{
 	uint_t	lattice_leaf;
 	uint_t	height = ehci_lattice_height(interval);
 	uint_t	pnode;
@@ -4640,8 +4655,8 @@ ehci_do_byte_stats(
 	uint8_t		attr,
 	uint8_t		addr)
 {
-	uint8_t 	type = attr & USB_EP_ATTR_MASK;
-	uint8_t 	dir = addr & USB_EP_DIR_MASK;
+	uint8_t		type = attr & USB_EP_ATTR_MASK;
+	uint8_t		dir = addr & USB_EP_DIR_MASK;
 
 	if (dir == USB_EP_DIR_IN) {
 		EHCI_TOTAL_STATS_DATA(ehcip)->reads++;

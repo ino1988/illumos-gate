@@ -21,9 +21,15 @@
 
 #
 # Copyright (c) 2010, Oracle and/or its affiliates. All rights reserved.
+# Copyright 2013 Saso Kiselkov. All rights reserved.
+# Copyright 2019 Peter Tribble.
 #
 
 COMDIR =	$(SRC)/common/crypto
+
+pics/%.o: $(COMDIR)/edonr/%.c
+		$(COMPILE.c) -I$(COMDIR)/edonr -o $@ $<
+		$(POST_PROCESS_O)
 
 pics/%.o: $(COMDIR)/md4/%.c
 		$(COMPILE.c) -I$(COMDIR)/md4 -o $@ $<
@@ -40,10 +46,14 @@ pics/%.o: $(COMDIR)/sha1/%.c
 pics/sha1_asm.o: $(COMDIR)/sha1/sparc/$(PLATFORM)/sha1_asm.s
 		$(COMPILE.s) -o pics/sha1_asm.o \
 		$(COMDIR)/sha1/sparc/$(PLATFORM)/sha1_asm.s
-		$(POST_PROCESS_O)
+		$(POST_PROCESS_S_O)
 
 pics/%.o: $(COMDIR)/sha2/%.c
 		$(COMPILE.c) -I$(COMDIR)/sha2 -o $@ $<
+		$(POST_PROCESS_O)
+
+pics/%.o: $(COMDIR)/skein/%.c
+		$(COMPILE.c) -I$(COMDIR)/skein -o $@ $<
 		$(POST_PROCESS_O)
 
 include		$(SRC)/lib/Makefile.targ

@@ -21,6 +21,7 @@
 #
 # Copyright (c) 2009, 2010, Oracle and/or its affiliates. All rights reserved.
 #
+# Copyright (c) 2018, Joyent, Inc.
 
 #
 #	Path to the base of the uts directory tree (usually /usr/src/uts).
@@ -34,7 +35,6 @@ MODULE		= myri10ge
 
 OBJECTS		+= $(MYRI10GE_OBJS:%=$(OBJS_DIR)/%)
 
-LINTS	    += $(MYRI10GE_OBJS:%.o=$(LINTS_DIR)/%.ln)
 
 ROOTMODULE	= $(ROOT_DRV_DIR)/$(MODULE)
 
@@ -47,15 +47,14 @@ include $(UTSBASE)/intel/Makefile.intel
 #	Define targets
 #
 ALL_TARGET	    = $(BINARY)
-LINT_TARGET	    = $(MODULE).lint
 INSTALL_TARGET  = $(BINARY) $(ROOTMODULE)
 
 #
 # Overrides
 #
-LINTTAGS  += -DSOLARIS_S11 -erroff=E_STATIC_UNUSED
 
-#COPTIMIZE = -xO4
+# needs work
+SMATCH=off
 
 INC_PATH  += -I$(UTSBASE)/common/io/myri10ge -I$(UTSBASE)/common/io/myri10ge/firmware
 
@@ -78,12 +77,6 @@ all:		    $(ALL_DEPS)
 clean:		  $(CLEAN_DEPS)
 
 clobber:	  $(CLOBBER_DEPS)
-
-lint:		    $(LINT_DEPS)
-
-modlintlib: $(MODLINTLIB_DEPS)
-
-clean.lint: $(CLEAN_LINT_DEPS)
 
 install:	  $(INSTALL_DEPS)
 

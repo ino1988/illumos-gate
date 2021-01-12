@@ -21,6 +21,7 @@
 
 #
 # Copyright (c) 2004, 2010, Oracle and/or its affiliates. All rights reserved.
+# Copyright 2020 Joyent, Inc.
 #
 
 MYPROG =	svccfg
@@ -34,9 +35,6 @@ SRCS  =		svccfg_main.c \
 		svccfg_xml.c \
 		svccfg_help.c
 
-LNTS =		$(SRCS:%.c=%.ln) \
-		manifest_find.ln \
-		manifest_hash.ln
 
 MYOBJS =	$(SRCS:%.c=%.o) \
 		svccfg_grammar.o \
@@ -46,7 +44,7 @@ MYOBJS =	$(SRCS:%.c=%.o) \
 		notify_params.o
 OBJS =		$(MYOBJS)
 
-POFILES = 	$(SRCS:%.c=%.po) \
+POFILES =	$(SRCS:%.c=%.po) \
 		svccfg_grammar.po \
 		svccfg_lex.po \
 		../common/manifest_find.po \
@@ -67,7 +65,7 @@ $(NATIVE_BUILD)OBJS = $(MYOBJS:%.o=%-native.o)
 # still export a number of "yy*" (libl) interfaces.  Reduce all other symbols
 # to local scope.
 MAPFILES +=	$(MAPFILE.LEX) $(MAPFILE.NGB)
-MAPOPTS =	$(MAPFILES:%=-M%)
+MAPOPTS =	$(MAPFILES:%=-Wl,-M%)
 
 MYCPPFLAGS =	-I ../common -I$(ADJUNCT_PROTO)/usr/include/libxml2
 CPPFLAGS +=	$(MYCPPFLAGS)
@@ -76,9 +74,12 @@ LDFLAGS +=	$(MAPOPTS)
 CERRWARN +=	-_gcc=-Wno-unused-label
 CERRWARN +=	-_gcc=-Wno-implicit-function-declaration
 CERRWARN +=	-_gcc=-Wno-switch
-CERRWARN +=	-_gcc=-Wno-uninitialized
+CERRWARN +=	$(CNOWARN_UNINIT)
 CERRWARN +=	-_gcc=-Wno-unused-variable
 CERRWARN +=	-_gcc=-Wno-parentheses
+
+# not linted
+SMATCH=off
 
 LFLAGS = -t
 YFLAGS = -d
@@ -88,15 +89,15 @@ CLOBBERFILES += svccfg_lex.c svccfg_grammar.c svccfg_grammar.h \
 
 SVCCFG_EXTRA_LIBS = -lxml2 -lscf -ll -luutil -lumem -lmd5 -lnvpair
 $(NOT_NATIVE)SVCCFG_EXTRA_LIBS += -ltecla
+#
+# If no adjunct, then we'll already find /usr/lib via LDLIBS below.
+#
+$(NO_ADJUNCT_PROTO)NATIVE_LIBS += libxml2.so libl.so libumem.so \
+    libmd5.so libnvpair.so libc.so
 
 LIBSCF		= $(SRC)/lib/libscf
 LIBTECLA	= $(SRC)/lib/libtecla		# just for the header
 LIBUUTIL	= $(SRC)/lib/libuutil
-
-debug := COPTFLAG = -g
-
-lint := LINTFLAGS = -mux
-lint := SVCCFG_EXTRA_LIBS = -lscf -ll -luutil -lumem -lmd5 -lnvpair
 
 LDLIBS += $(SVCCFG_EXTRA_LIBS)
 
@@ -109,7 +110,7 @@ $(NATIVE_BUILD)CPPFLAGS = \
 	-I$(LIBSCF)/inc \
 	-I$(LIBTECLA) \
 	-I$(LIBUUTIL)/common
-$(NATIVE_BUILD)LDFLAGS =
+$(NATIVE_BUILD)LDFLAGS = $(BDIRECT)
 $(NATIVE_BUILD)LDLIBS = \
 	-L$(LIBUUTIL)/native -R $(LIBUUTIL)/native \
 	-L$(LIBSCF)/native -R $(LIBSCF)/native \
@@ -121,7 +122,7 @@ svccfg_lex.o svccfg_grammar.o := CCVERBOSE =
 svccfg_help.po := XGETFLAGS =	-a
 
 .KEEP_STATE:
-.PARALLEL: $(OBJS) $(LNTS)
+.PARALLEL: $(OBJS)
 
 all debug: $(PROG)
 
@@ -133,6 +134,8 @@ native: FRC
 $(PROG): $(OBJS) $(MAPFILES)
 	$(LINK.c) -o $@ $(OBJS) $(LDLIBS)
 	$(POST_PROCESS)
+
+$(POFILES): svccfg_grammar.h
 
 $(POFILE): $(POFILES)
 	cat $(POFILES) > $(POFILE)
@@ -151,10 +154,7 @@ svccfg_grammar.h svccfg_grammar.c: svccfg.y
 	@$(MV) y.tab.c svccfg_grammar.c
 
 clean: FRC
-	$(RM) $(MYOBJS) $(MYOBJS:%.o=%-native.o) $(LNTS)
-
-lint: $(LNTS)
-	$(LINT.c) $(LINTFLAGS) $(LNTS) $(LDLIBS)
+	$(RM) $(MYOBJS) $(MYOBJS:%.o=%-native.o)
 
 %-native.o: %.c
 	$(COMPILE.c) -o $@ $<
@@ -167,9 +167,6 @@ lint: $(LNTS)
 %.o: ../common/%.c
 	$(COMPILE.c) $(OUTPUT_OPTION) $<
 	$(POST_PROCESS_O)
-
-%.ln: ../common/%.c
-	$(LINT.c) $(OUTPUT_OPTION) -c $<
 
 include ../../Makefile.targ
 

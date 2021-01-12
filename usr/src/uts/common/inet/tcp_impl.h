@@ -20,9 +20,9 @@
  */
 /*
  * Copyright (c) 2005, 2010, Oracle and/or its affiliates. All rights reserved.
- * Copyright (c) 2011, Joyent Inc. All rights reserved.
+ * Copyright 2019 Joyent, Inc.
  * Copyright (c) 2013, OmniTI Computer Consulting, Inc. All rights reserved.
- * Copyright (c) 2013 by Delphix. All rights reserved.
+ * Copyright (c) 2013, 2017 by Delphix. All rights reserved.
  */
 
 #ifndef	_INET_TCP_IMPL_H
@@ -105,10 +105,10 @@ extern sock_downcalls_t sock_tcp_downcalls;
  */
 #define	TCP_IS_DETACHED(tcp)	((tcp)->tcp_detached)
 
-/* TCP timers related data strucutres.  Refer to tcp_timers.c. */
+/* TCP timers related data structures.  Refer to tcp_timers.c. */
 typedef struct tcp_timer_s {
 	conn_t	*connp;
-	void 	(*tcpt_proc)(void *);
+	void	(*tcpt_proc)(void *);
 	callout_id_t   tcpt_tid;
 } tcp_timer_t;
 
@@ -132,48 +132,79 @@ extern kmem_cache_t *tcp_timercache;
 	(tcp)->tcp_timer_tid = TCP_TIMER((tcp), tcp_timer, (intvl));	\
 }
 
+
+/*
+ * Maximum TIME_WAIT timeout.  It is defined here (instead of tcp_tunables.c)
+ * so that other parameters can be derived from it.
+ */
+#define	TCP_TIME_WAIT_MAX	(10 * MINUTES)
+
+/*
+ * TCP_TIME_WAIT_DELAY governs how often the time_wait_collector runs.
+ * Running it every 5 seconds seems to yield a reasonable balance between
+ * cleanup liveliness and system load.
+ */
+#define	TCP_TIME_WAIT_DELAY	(5 * SECONDS)
+
+#define	TCP_TIME_WAIT_BUCKETS	((TCP_TIME_WAIT_MAX / TCP_TIME_WAIT_DELAY) + 1)
+
 /*
  * For scalability, we must not run a timer for every TCP connection
  * in TIME_WAIT state.  To see why, consider (for time wait interval of
  * 1 minutes):
  *	10,000 connections/sec * 60 seconds/time wait = 600,000 active conn's
  *
- * This list is ordered by time, so you need only delete from the head
- * until you get to entries which aren't old enough to delete yet.
- * The list consists of only the detached TIME_WAIT connections.
+ * Since TIME_WAIT expiration occurs on a per-squeue basis, handling
+ * connections from all netstacks on the system, a simple queue is inadequate
+ * for pending entries.  This is because tcp_time_wait_interval may differ
+ * between connections, causing tail insertion to violate expiration order.
+ *
+ * Instead of performing expensive sorting or unnecessary list traversal to
+ * counteract interval variance between netstacks, a timing wheel structure is
+ * used.  The duration covered by each bucket in the wheel is determined by the
+ * TCP_TIME_WAIT_DELAY (5 seconds).  The number of buckets in the wheel is
+ * determined by dividing the maximum TIME_WAIT interval (10 minutes) by
+ * TCP_TIME_WAIT_DELAY, with one added bucket for rollover protection.
+ * (Yielding 121 buckets with the current parameters)  When items are inserted
+ * into the set of buckets, they are indexed by using their expiration time
+ * divided by the bucket size, modulo the number of buckets.  This means that
+ * when each bucket is processed, all items within should have expired within
+ * the last TCP_TIME_WAIT_DELAY interval.
+ *
+ * Since bucket timer schedules are rounded to the nearest TCP_TIME_WAIT_DELAY
+ * interval to ensure all connections in the pending bucket will be expired, a
+ * per-squeue offset is used when doing TIME_WAIT scheduling.  This offset is
+ * between 0 and the TCP_TIME_WAIT_DELAY and is designed to avoid scheduling
+ * all of the tcp_time_wait_collector threads to run in lock-step.  The offset
+ * is fixed while there are any connections present in the buckets.
  *
  * When a tcp_t enters TIME_WAIT state, a timer is started (timeout is
  * tcps_time_wait_interval).  When the tcp_t is detached (upper layer closes
- * the end point), it is moved to the time wait list and another timer is
- * started (expiry time is set at tcp_time_wait_expire, which is
- * also calculated using tcps_time_wait_interval).  This means that the
- * TIME_WAIT state can be extended (up to doubled) if the tcp_t doesn't
- * become detached for a long time.
+ * the end point), it is scheduled to be cleaned up by the squeue-driving
+ * tcp_time_wait_collector (also using tcps_time_wait_interval).  This means
+ * that the TIME_WAIT state can be extended (up to doubled) if the tcp_t
+ * doesn't become detached for a long time.
  *
  * The list manipulations (including tcp_time_wait_next/prev)
  * are protected by the tcp_time_wait_lock. The content of the
  * detached TIME_WAIT connections is protected by the normal perimeters.
  *
- * This list is per squeue and squeues are shared across the tcp_stack_t's.
- * Things on tcp_time_wait_head remain associated with the tcp_stack_t
- * and conn_netstack.
- * The tcp_t's that are added to tcp_free_list are disassociated and
- * have NULL tcp_tcps and conn_netstack pointers.
+ * These connection lists are per squeue and squeues are shared across the
+ * tcp_stack_t instances.  Things in a tcp_time_wait_bucket remain associated
+ * with the tcp_stack_t and conn_netstack.  Any tcp_t connections stored in the
+ * tcp_free_list are disassociated and have NULL tcp_tcps and conn_netstack
+ * pointers.
  */
 typedef struct tcp_squeue_priv_s {
 	kmutex_t	tcp_time_wait_lock;
+	boolean_t	tcp_time_wait_collector_active;
 	callout_id_t	tcp_time_wait_tid;
-	tcp_t		*tcp_time_wait_head;
-	tcp_t		*tcp_time_wait_tail;
+	uint64_t	tcp_time_wait_cnt;
+	int64_t		tcp_time_wait_schedule;
+	int64_t		tcp_time_wait_offset;
+	tcp_t		*tcp_time_wait_bucket[TCP_TIME_WAIT_BUCKETS];
 	tcp_t		*tcp_free_list;
 	uint_t		tcp_free_list_cnt;
-#ifdef DEBUG
-	/*
-	 * For debugging purpose, true when tcp_time_wait_collector() is
-	 * running.
-	 */
-	boolean_t	tcp_time_wait_running;
-#endif
 } tcp_squeue_priv_t;
 
 /*
@@ -269,17 +300,6 @@ typedef struct tcp_squeue_priv_s {
 	}
 
 /*
- * Set tcp_rto with boundary checking.
- */
-#define	TCP_SET_RTO(tcp, rto) \
-	if ((rto) < (tcp)->tcp_rto_min)			\
-		(tcp)->tcp_rto = (tcp)->tcp_rto_min;	\
-	else if ((rto) > (tcp)->tcp_rto_max)		\
-		(tcp)->tcp_rto = (tcp)->tcp_rto_max;	\
-	else						\
-		(tcp)->tcp_rto = (rto);
-
-/*
  * TCP options struct returned from tcp_parse_options.
  */
 typedef struct tcp_opt_s {
@@ -289,6 +309,15 @@ typedef struct tcp_opt_s {
 	uint32_t	tcp_opt_ts_ecr;
 	tcp_t		*tcp;
 } tcp_opt_t;
+
+/*
+ * Flags returned from tcp_parse_options.
+ */
+#define	TCP_OPT_MSS_PRESENT	1
+#define	TCP_OPT_WSCALE_PRESENT	2
+#define	TCP_OPT_TSTAMP_PRESENT	4
+#define	TCP_OPT_SACK_OK_PRESENT	8
+#define	TCP_OPT_SACK_PRESENT	16
 
 /*
  * Write-side flow-control is implemented via the per instance STREAMS
@@ -440,11 +469,6 @@ extern uint32_t tcp_early_abort;
 #define	IP_ADDR_CACHE_HASH(faddr)					\
 	(ntohl(faddr) & (IP_ADDR_CACHE_SIZE -1))
 
-/* TCP cwnd burst factor. */
-#define	TCP_CWND_INFINITE	65535
-#define	TCP_CWND_SS		3
-#define	TCP_CWND_NORMAL		5
-
 /*
  * TCP reassembly macros.  We hide starting and ending sequence numbers in
  * b_next and b_prev of messages on the reassembly queue.  The messages are
@@ -538,6 +562,63 @@ extern uint32_t tcp_early_abort;
 #define	tcps_dev_flow_ctl		tcps_propinfo_tbl[58].prop_cur_bval
 #define	tcps_reass_timeout		tcps_propinfo_tbl[59].prop_cur_uval
 #define	tcps_iss_incr			tcps_propinfo_tbl[65].prop_cur_uval
+#define	tcps_abc			tcps_propinfo_tbl[67].prop_cur_bval
+#define	tcps_abc_l_var			tcps_propinfo_tbl[68].prop_cur_uval
+
+
+/*
+ * As defined in RFC 6298, the RTO is the average estimates (SRTT) plus a
+ * multiple of the deviation estimates (K * RTTVAR):
+ *
+ * RTO = SRTT + max(G, K * RTTVAR)
+ *
+ * K is defined in the RFC as 4, and G is the clock granularity. We constrain
+ * the minimum mean deviation to TCP_SD_MIN when processing new RTTs, so this
+ * becomes:
+ *
+ * RTO = SRTT + 4 * RTTVAR
+ *
+ * In practice, however, we make several additions to it. As we use a finer
+ * grained clock than BSD and update RTO for every ACK, we add in another 1/4 of
+ * RTT to the deviation of RTO to accommodate burstiness of 1/4 of window size:
+ *
+ * RTO = SRTT + (SRTT / 4) + 4 * RTTVAR
+ *
+ * Since tcp_rtt_sa is 8 times the SRTT, and tcp_rtt_sd is 4 times the RTTVAR,
+ * this becomes:
+ *
+ * RTO = (tcp_rtt_sa / 8) + ((tcp_rtt_sa / 8) / 4) + tcp_rtt_sd
+ * RTO = (tcp_rtt_sa / 2^3) + (tcp_rtt_sa / 2^5) + tcp_rtt_sd
+ * RTO = (tcp_rtt_sa >> 3) + (tcp_rtt_sa >> 5) + tcp_rtt_sd
+ *
+ * The "tcp_rexmit_interval_extra" and "tcp_conn_grace_period" tunables are
+ * used to help account for extreme environments where the algorithm fails to
+ * work; by default they should be 0. (The latter tunable is only used for
+ * calculating the intial RTO, and so is optionally passed in as "extra".) We
+ * add them here:
+ *
+ * RTO = (tcp_rtt_sa >> 3) + (tcp_rtt_sa >> 5) + tcp_rtt_sd +
+ *     tcps_rexmit_interval_extra + tcps_conn_grace_period
+ *
+ * We then pin the RTO within our configured boundaries (sections 2.4 and 2.5
+ * of RFC 6298).
+ */
+static __GNU_INLINE clock_t
+tcp_calculate_rto(tcp_t *tcp, tcp_stack_t *tcps, uint32_t extra)
+{
+	clock_t rto;
+
+	rto = NSEC2MSEC((tcp->tcp_rtt_sa >> 3) + (tcp->tcp_rtt_sa >> 5) +
+	    tcp->tcp_rtt_sd) + tcps->tcps_rexmit_interval_extra + extra;
+
+	if (rto < tcp->tcp_rto_min) {
+		rto = tcp->tcp_rto_min;
+	} else if (rto > tcp->tcp_rto_max) {
+		rto = tcp->tcp_rto_max;
+	}
+
+	return (rto);
+}
 
 extern struct qinit tcp_rinitv4, tcp_rinitv6;
 extern boolean_t do_tcp_fusion;
@@ -591,7 +672,7 @@ extern void	tcp_ipsec_cleanup(tcp_t *);
 extern int	tcp_maxpsz_set(tcp_t *, boolean_t);
 extern void	tcp_mss_set(tcp_t *, uint32_t);
 extern void	tcp_reinput(conn_t *, mblk_t *, ip_recv_attr_t *, ip_stack_t *);
-extern void	tcp_rsrv(queue_t *);
+extern int	tcp_rsrv(queue_t *);
 extern uint_t	tcp_rwnd_reopen(tcp_t *);
 extern int	tcp_rwnd_set(tcp_t *, uint32_t);
 extern int	tcp_set_destination(tcp_t *);
@@ -641,10 +722,10 @@ extern void	tcp_send_synack(void *, mblk_t *, void *, ip_recv_attr_t *);
 extern void	tcp_shutdown_output(void *, mblk_t *, void *, ip_recv_attr_t *);
 extern void	tcp_ss_rexmit(tcp_t *);
 extern void	tcp_update_xmit_tail(tcp_t *, uint32_t);
-extern void	tcp_wput(queue_t *, mblk_t *);
+extern int	tcp_wput(queue_t *, mblk_t *);
 extern void	tcp_wput_data(tcp_t *, mblk_t *, boolean_t);
-extern void	tcp_wput_sock(queue_t *, mblk_t *);
-extern void	tcp_wput_fallback(queue_t *, mblk_t *);
+extern int	tcp_wput_sock(queue_t *, mblk_t *);
+extern int	tcp_wput_fallback(queue_t *, mblk_t *);
 extern void	tcp_xmit_ctl(char *, tcp_t *, uint32_t, uint32_t, int);
 extern void	tcp_xmit_listeners_reset(mblk_t *, ip_recv_attr_t *,
 		    ip_stack_t *i, conn_t *);
@@ -654,11 +735,13 @@ extern mblk_t	*tcp_xmit_mp(tcp_t *, mblk_t *, int32_t, int32_t *,
 /*
  * Input related functions in tcp_input.c.
  */
+extern void	cc_cong_signal(tcp_t *, uint32_t, uint32_t);
 extern void	tcp_icmp_input(void *, mblk_t *, void *, ip_recv_attr_t *);
 extern void	tcp_input_data(void *, mblk_t *, void *, ip_recv_attr_t *);
 extern void	tcp_input_listener_unbound(void *, mblk_t *, void *,
 		    ip_recv_attr_t *);
-extern boolean_t	tcp_paws_check(tcp_t *, tcpha_t *, tcp_opt_t *);
+extern boolean_t	tcp_paws_check(tcp_t *, const tcp_opt_t *);
+extern int	tcp_parse_options(tcpha_t *, tcp_opt_t *);
 extern uint_t	tcp_rcv_drain(tcp_t *);
 extern void	tcp_rcv_enqueue(tcp_t *, mblk_t *, uint_t, cred_t *);
 extern boolean_t	tcp_verifyicmp(conn_t *, void *, icmph_t *, icmp6_t *,
@@ -698,10 +781,10 @@ extern void	tcp_err_ack_prim(tcp_t *, mblk_t *, int, int, int);
 extern void	tcp_info_req(tcp_t *, mblk_t *);
 extern void	tcp_send_conn_ind(void *, mblk_t *, void *);
 extern void	tcp_send_pending(void *, mblk_t *, void *, ip_recv_attr_t *);
-extern void	tcp_tpi_accept(queue_t *, mblk_t *);
+extern int	tcp_tpi_accept(queue_t *, mblk_t *);
 extern void	tcp_tpi_bind(tcp_t *, mblk_t *);
-extern int	tcp_tpi_close(queue_t *, int);
-extern int	tcp_tpi_close_accept(queue_t *);
+extern int	tcp_tpi_close(queue_t *, int, cred_t *);
+extern int	tcp_tpi_close_accept(queue_t *, int, cred_t *);
 extern void	tcp_tpi_connect(tcp_t *, mblk_t *);
 extern int	tcp_tpi_opt_get(queue_t *, t_scalar_t, t_scalar_t, uchar_t *);
 extern int	tcp_tpi_opt_set(queue_t *, uint_t, int, int, uint_t, uchar_t *,

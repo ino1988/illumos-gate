@@ -22,6 +22,8 @@
 /*
  * Copyright 2010 Sun Microsystems, Inc.  All rights reserved.
  * Use is subject to license terms.
+ * Copyright (c) 2016 by Delphix. All rights reserved.
+ * Copyright 2019 Joyent, Inc.
  */
 
 /*
@@ -40,6 +42,7 @@
 #include <sys/modctl.h>
 #include <sys/note.h>
 #include <sys/param.h>
+#include <sys/pattr.h>
 #include <sys/policy.h>
 #include <sys/sdt.h>
 #include <sys/stat.h>
@@ -219,8 +222,8 @@ static struct qinit bridge_dld_rinit = {
 };
 
 static struct qinit bridge_dld_winit = {
-	(int (*)())dld_wput,	/* qi_putp */
-	(int (*)())dld_wsrv,	/* qi_srvp */
+	dld_wput,		/* qi_putp */
+	dld_wsrv,		/* qi_srvp */
 	NULL,			/* qi_qopen */
 	NULL,			/* qi_qclose */
 	NULL,			/* qi_qadmin */
@@ -1539,8 +1542,9 @@ bridge_open(queue_t *rq, dev_t *devp, int oflag, int sflag, cred_t *credp)
  * This is used only for bridge control streams.  DLPI goes through dld
  * instead.
  */
+/* ARGSUSED */
 static int
-bridge_close(queue_t *rq)
+bridge_close(queue_t *rq, int flags __unused, cred_t *credp __unused)
 {
 	bridge_stream_t	*bsp = rq->q_ptr;
 	bridge_inst_t *bip;
@@ -1703,7 +1707,12 @@ reform_vlan_header(mblk_t *mp, uint16_t vlanid, uint16_t tci, uint16_t pvid)
 	if (mp == NULL)
 		return (mp);
 
-	/* No forwarded packet can have hardware checksum enabled */
+	/*
+	 * A forwarded packet cannot have hardware offloads enabled
+	 * because we don't know if the destination can handle them.
+	 * By this point, any hardware offloads present should have
+	 * been emulated.
+	 */
 	DB_CKSUMFLAGS(mp) = 0;
 
 	/* Get the no-modification cases out of the way first */
@@ -1905,17 +1914,22 @@ bridge_forward(bridge_link_t *blp, mac_header_info_t *hdr_info, mblk_t *mp,
 				blp->bl_trillthreads++;
 				mutex_exit(&blp->bl_trilllock);
 				update_header(mp, hdr_info, B_FALSE);
-				if (is_xmit)
-					mp = mac_fix_cksum(mp);
-				/* all trill data frames have Inner.VLAN */
+
+				/*
+				 * All trill data frames have
+				 * Inner.VLAN.
+				 */
 				mp = reform_vlan_header(mp, vlanid, tci, 0);
+
 				if (mp == NULL) {
 					KIINCR(bki_drops);
-					fwd_unref(bfp);
-					return (NULL);
+					goto done;
 				}
+
 				trill_encap_fn(tdp, blp, hdr_info, mp,
 				    bfp->bf_trill_nick);
+
+done:
 				mutex_enter(&blp->bl_trilllock);
 				if (--blp->bl_trillthreads == 0 &&
 				    blp->bl_trilldata == NULL)
@@ -1957,17 +1971,16 @@ bridge_forward(bridge_link_t *blp, mac_header_info_t *hdr_info, mblk_t *mp,
 				mpsend = copymsg(mp);
 			}
 
-			if (!from_trill && is_xmit)
-				mpsend = mac_fix_cksum(mpsend);
-
 			mpsend = reform_vlan_header(mpsend, vlanid, tci,
 			    blpsend->bl_pvid);
+
 			if (mpsend == NULL) {
 				KIINCR(bki_drops);
 				continue;
 			}
 
 			KIINCR(bki_forwards);
+
 			/*
 			 * No need to bump up the link reference count, as
 			 * the forwarding entry itself holds a reference to
@@ -1977,11 +1990,12 @@ bridge_forward(bridge_link_t *blp, mac_header_info_t *hdr_info, mblk_t *mp,
 				mac_rx_common(blpsend->bl_mh, NULL, mpsend);
 			} else {
 				KLPINCR(blpsend, bkl_xmit);
-				MAC_RING_TX(blpsend->bl_mh, NULL, mpsend,
+				mpsend = mac_ring_tx(blpsend->bl_mh, NULL,
 				    mpsend);
 				freemsg(mpsend);
 			}
 		}
+
 		/*
 		 * Handle a special case: if we're transmitting to the original
 		 * link, then check whether the localaddr flag is set.  If it
@@ -2068,11 +2082,9 @@ bridge_forward(bridge_link_t *blp, mac_header_info_t *hdr_info, mblk_t *mp,
 				mpsend = copymsg(mp);
 			}
 
-			if (!from_trill && is_xmit)
-				mpsend = mac_fix_cksum(mpsend);
-
 			mpsend = reform_vlan_header(mpsend, vlanid, tci,
 			    blpsend->bl_pvid);
+
 			if (mpsend == NULL) {
 				KIINCR(bki_drops);
 				continue;
@@ -2082,10 +2094,13 @@ bridge_forward(bridge_link_t *blp, mac_header_info_t *hdr_info, mblk_t *mp,
 				KIINCR(bki_unknown);
 			else
 				KIINCR(bki_mbcast);
+
 			KLPINCR(blpsend, bkl_xmit);
-			if ((mpcopy = copymsg(mpsend)) != NULL)
+			if ((mpcopy = copymsg(mpsend)) != NULL) {
 				mac_rx_common(blpsend->bl_mh, NULL, mpcopy);
-			MAC_RING_TX(blpsend->bl_mh, NULL, mpsend, mpsend);
+			}
+
+			mpsend = mac_ring_tx(blpsend->bl_mh, NULL, mpsend);
 			freemsg(mpsend);
 			link_unref(blpsend);
 		}
@@ -2463,7 +2478,7 @@ bridge_xmit_cb(mac_handle_t mh, mac_ring_handle_t rh, mblk_t *mpnext)
 	    (blp->bl_flags & BLF_SDUFAIL)))) {
 		KIINCR(bki_sent);
 		KLINCR(bkl_xmit);
-		MAC_RING_TX(blp->bl_mh, rh, mpnext, mp);
+		mp = mac_ring_tx(blp->bl_mh, rh, mpnext);
 		return (mp);
 	}
 
@@ -2507,7 +2522,7 @@ bridge_xmit_cb(mac_handle_t mh, mac_ring_handle_t rh, mblk_t *mpnext)
 
 		/*
 		 * We have to learn from our own transmitted packets, because
-		 * there may be a Solaris DLPI raw sender (who can specify his
+		 * there may be a Solaris DLPI raw sender (which can specify its
 		 * own source address) using promiscuous mode for receive.  The
 		 * mac layer information won't (and can't) tell us everything
 		 * we need to know.
@@ -2521,7 +2536,7 @@ bridge_xmit_cb(mac_handle_t mh, mac_ring_handle_t rh, mblk_t *mpnext)
 			    B_FALSE, B_TRUE);
 		}
 		if (mp != NULL) {
-			MAC_RING_TX(blp->bl_mh, rh, mp, mp);
+			mp = mac_ring_tx(blp->bl_mh, rh, mp);
 			if (mp == NULL) {
 				KIINCR(bki_sent);
 				KLINCR(bkl_xmit);
@@ -2587,7 +2602,7 @@ bridge_trill_decaps(bridge_link_t *blp, mblk_t *mp, uint16_t ingress_nick)
 			/* Deliver a copy locally as well */
 			if ((mpcopy = copymsg(mp)) != NULL)
 				mac_rx_common(blp->bl_mh, NULL, mpcopy);
-			MAC_RING_TX(blp->bl_mh, NULL, mp, mp);
+			mp = mac_ring_tx(blp->bl_mh, NULL, mp);
 		}
 		if (mp == NULL) {
 			KIINCR(bki_sent);
@@ -2608,7 +2623,7 @@ bridge_trill_output(bridge_link_t *blp, mblk_t *mp)
 	bridge_inst_t *bip = blp->bl_inst;	/* used by macros */
 
 	mac_trill_snoop(blp->bl_mh, mp);
-	MAC_RING_TX(blp->bl_mh, NULL, mp, mp);
+	mp = mac_ring_tx(blp->bl_mh, NULL, mp);
 	if (mp == NULL) {
 		KIINCR(bki_sent);
 		KLINCR(bkl_xmit);
@@ -3301,7 +3316,7 @@ bridge_ioctl(queue_t *wq, mblk_t *mp)
 		miocnak(wq, mp, 0, rc);
 }
 
-static void
+static int
 bridge_wput(queue_t *wq, mblk_t *mp)
 {
 	switch (DB_TYPE(mp)) {
@@ -3320,6 +3335,7 @@ bridge_wput(queue_t *wq, mblk_t *mp)
 		freemsg(mp);
 		break;
 	}
+	return (0);
 }
 
 /*
@@ -3423,7 +3439,7 @@ bridge_detach(dev_info_t *dip, ddi_detach_cmd_t cmd)
 /* ARGSUSED */
 static int
 bridge_info(dev_info_t *dip, ddi_info_cmd_t infocmd, void *arg,
-	void **result)
+    void **result)
 {
 	int	rc;
 

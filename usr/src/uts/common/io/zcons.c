@@ -180,9 +180,9 @@ static int zc_detach(dev_info_t *, ddi_detach_cmd_t);
 
 static int zc_open(queue_t *, dev_t *, int, int, cred_t *);
 static int zc_close(queue_t *, int, cred_t *);
-static void zc_wput(queue_t *, mblk_t *);
-static void zc_rsrv(queue_t *);
-static void zc_wsrv(queue_t *);
+static int zc_wput(queue_t *, mblk_t *);
+static int zc_rsrv(queue_t *);
+static int zc_wsrv(queue_t *);
 
 /*
  * The instance number is encoded in the dev_t in the minor number; the lowest
@@ -215,13 +215,13 @@ static struct module_info zc_info = {
 	"zcons",
 	0,
 	INFPSZ,
-	2048,
+	_TTY_BUFSIZ,
 	128
 };
 
 static struct qinit zc_rinit = {
 	NULL,
-	(int (*)()) zc_rsrv,
+	zc_rsrv,
 	zc_open,
 	zc_close,
 	NULL,
@@ -230,8 +230,8 @@ static struct qinit zc_rinit = {
 };
 
 static struct qinit zc_winit = {
-	(int (*)()) zc_wput,
-	(int (*)()) zc_wsrv,
+	zc_wput,
+	zc_wsrv,
 	NULL,
 	NULL,
 	NULL,
@@ -252,14 +252,14 @@ static struct streamtab zc_tab_info = {
  * this will define (struct cb_ops cb_zc_ops) and (struct dev_ops zc_ops)
  */
 DDI_DEFINE_STREAM_OPS(zc_ops, nulldev, nulldev,	zc_attach, zc_detach, nodev, \
-	zc_getinfo, ZC_CONF_FLAG, &zc_tab_info, ddi_quiesce_not_needed);
+    zc_getinfo, ZC_CONF_FLAG, &zc_tab_info, ddi_quiesce_not_needed);
 
 /*
  * Module linkage information for the kernel.
  */
 
 static struct modldrv modldrv = {
-	&mod_driverops, 	/* Type of module (this is a pseudo driver) */
+	&mod_driverops,		/* Type of module (this is a pseudo driver) */
 	"Zone console driver",	/* description of module */
 	&zc_ops			/* driver ops */
 };
@@ -501,7 +501,7 @@ zc_master_open(zc_state_t *zcs,
 		sop->so_flags = SO_HIWAT | SO_LOWAT;
 	else
 		sop->so_flags = SO_HIWAT | SO_LOWAT | SO_ISTTY;
-	sop->so_hiwat = 512;
+	sop->so_hiwat = _TTY_BUFSIZ;
 	sop->so_lowat = 256;
 	putnext(rqp, mop);
 
@@ -576,7 +576,7 @@ zc_slave_open(zc_state_t *zcs,
 	mop->b_wptr += sizeof (struct stroptions);
 	sop = (struct stroptions *)(void *)mop->b_rptr;
 	sop->so_flags = SO_HIWAT | SO_LOWAT | SO_ISTTY;
-	sop->so_hiwat = 512;
+	sop->so_hiwat = _TTY_BUFSIZ;
 	sop->so_lowat = 256;
 	putnext(rqp, mop);
 
@@ -587,11 +587,11 @@ zc_slave_open(zc_state_t *zcs,
  * open(9e) entrypoint; checks sflag, and rejects anything unordinary.
  */
 static int
-zc_open(queue_t *rqp,		/* pointer to the read side queue */
-	dev_t   *devp,		/* pointer to stream tail's dev */
-	int	oflag,		/* the user open(2) supplied flags */
-	int	sflag,		/* open state flag */
-	cred_t  *credp)		/* credentials */
+zc_open(queue_t *rqp,	/* pointer to the read side queue */
+    dev_t   *devp,	/* pointer to stream tail's dev */
+    int	oflag,		/* the user open(2) supplied flags */
+    int	sflag,		/* open state flag */
+    cred_t  *credp)	/* credentials */
 {
 	int instance = ZC_INSTANCE(*devp);
 	int ret;
@@ -740,7 +740,7 @@ handle_mflush(queue_t *qp, mblk_t *mp)
  * enqueues the messages; in the case that something is enqueued, wsrv(9E)
  * will take care of eventually shuttling I/O to the other side.
  */
-static void
+static int
 zc_wput(queue_t *qp, mblk_t *mp)
 {
 	unsigned char type = mp->b_datap->db_type;
@@ -771,11 +771,11 @@ zc_wput(queue_t *qp, mblk_t *mp)
 			 */
 			if (iocbp->ioc_count != TRANSPARENT) {
 				miocack(qp, mp, 0, EINVAL);
-				return;
+				return (0);
 			}
 			if (zcs->zc_slave_vnode != NULL) {
 				miocack(qp, mp, 0, 0);
-				return;
+				return (0);
 			}
 
 			/*
@@ -784,7 +784,7 @@ zc_wput(queue_t *qp, mblk_t *mp)
 			 */
 			if (curzone != global_zone) {
 				miocack(qp, mp, 0, EINVAL);
-				return;
+				return (0);
 			}
 
 			/*
@@ -797,13 +797,13 @@ zc_wput(queue_t *qp, mblk_t *mp)
 			slave_filep = getf(slave_fd);
 			if (slave_filep == NULL) {
 				miocack(qp, mp, 0, EINVAL);
-				return;
+				return (0);
 			}
 			if (ZC_STATE_TO_SLAVEDEV(zcs) !=
 			    slave_filep->f_vnode->v_rdev) {
 				releasef(slave_fd);
 				miocack(qp, mp, 0, EINVAL);
-				return;
+				return (0);
 			}
 
 			/*
@@ -820,7 +820,7 @@ zc_wput(queue_t *qp, mblk_t *mp)
 			mutex_exit(&slave_snodep->s_lock);
 			releasef(slave_fd);
 			miocack(qp, mp, 0, 0);
-			return;
+			return (0);
 		case ZC_RELEASESLAVE:
 			/*
 			 * Release the master's handle on the slave's vnode.
@@ -829,11 +829,11 @@ zc_wput(queue_t *qp, mblk_t *mp)
 			 */
 			if (iocbp->ioc_count != TRANSPARENT) {
 				miocack(qp, mp, 0, EINVAL);
-				return;
+				return (0);
 			}
 			if (zcs->zc_slave_vnode == NULL) {
 				miocack(qp, mp, 0, 0);
-				return;
+				return (0);
 			}
 
 			/*
@@ -842,7 +842,7 @@ zc_wput(queue_t *qp, mblk_t *mp)
 			 */
 			if (curzone != global_zone) {
 				miocack(qp, mp, 0, EINVAL);
-				return;
+				return (0);
 			}
 
 			/*
@@ -856,13 +856,13 @@ zc_wput(queue_t *qp, mblk_t *mp)
 			slave_filep = getf(slave_fd);
 			if (slave_filep == NULL) {
 				miocack(qp, mp, 0, EINVAL);
-				return;
+				return (0);
 			}
 			if (zcs->zc_slave_vnode->v_rdev !=
 			    slave_filep->f_vnode->v_rdev) {
 				releasef(slave_fd);
 				miocack(qp, mp, 0, EINVAL);
-				return;
+				return (0);
 			}
 
 			/*
@@ -879,7 +879,7 @@ zc_wput(queue_t *qp, mblk_t *mp)
 			zcs->zc_slave_vnode = NULL;
 			releasef(slave_fd);
 			miocack(qp, mp, 0, 0);
-			return;
+			return (0);
 		default:
 			break;
 		}
@@ -898,7 +898,7 @@ zc_wput(queue_t *qp, mblk_t *mp)
 			freemsg(mp);
 			break;
 		}
-		return;
+		return (0);
 	}
 
 	if (type >= QPCTL) {
@@ -920,7 +920,7 @@ zc_wput(queue_t *qp, mblk_t *mp)
 			break;
 		}
 		DBG1("done (hipri) wput, %s side", zc_side(qp));
-		return;
+		return (0);
 	}
 
 	/*
@@ -935,6 +935,7 @@ zc_wput(queue_t *qp, mblk_t *mp)
 		(void) putq(qp, mp);
 	}
 	DBG1("done wput, %s side", zc_side(qp));
+	return (0);
 }
 
 /*
@@ -944,7 +945,7 @@ zc_wput(queue_t *qp, mblk_t *mp)
  * Enable the write side of the partner.  This triggers the partner to send
  * messages queued on its write side to this queue's read side.
  */
-static void
+static int
 zc_rsrv(queue_t *qp)
 {
 	zc_state_t *zcs;
@@ -957,9 +958,10 @@ zc_rsrv(queue_t *qp)
 	ASSERT(qp == zcs->zc_master_rdq || qp == zcs->zc_slave_rdq);
 	if (zc_switch(qp) == NULL) {
 		DBG("zc_rsrv: other side isn't listening\n");
-		return;
+		return (0);
 	}
 	qenable(WR(zc_switch(qp)));
+	return (0);
 }
 
 /*
@@ -970,7 +972,7 @@ zc_rsrv(queue_t *qp)
  * them via putnext(). Else, if queued messages cannot be sent, leave them
  * on this queue.
  */
-static void
+static int
 zc_wsrv(queue_t *qp)
 {
 	mblk_t *mp;
@@ -989,7 +991,7 @@ zc_wsrv(queue_t *qp)
 				freemsg(mp);
 		}
 		flushq(qp, FLUSHALL);
-		return;
+		return (0);
 	}
 
 	/*
@@ -1011,4 +1013,5 @@ zc_wsrv(queue_t *qp)
 			break;
 		}
 	}
+	return (0);
 }

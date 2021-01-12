@@ -27,6 +27,7 @@
  */
 /*
  * Copyright (c) 2012, Joyent, Inc.  All rights reserved.
+ * Copyright 2017 RackTop Systems.
  */
 
 /*
@@ -36,7 +37,7 @@
  *    OPTION			MEANING
  *
  *    -z dtrace=symbol		assigns symbol to PT_SUNWDTRACE segment,
- *    				providing scratch area for dtrace processing.
+ *				providing scratch area for dtrace processing.
  *
  *    -z noreloc		suppress relocation processing.  This provides
  *				a mechanism for validating kernel module symbol
@@ -102,7 +103,6 @@ static Setstate zfwflag	= SET_UNKNOWN;
 
 static Boolean	aflag	= FALSE;
 static Boolean	bflag	= FALSE;
-static Boolean	rflag	= FALSE;
 static Boolean	sflag	= FALSE;
 static Boolean	zinflag = FALSE;
 static Boolean	zlflag	= FALSE;
@@ -111,8 +111,16 @@ static Boolean	Blflag	= FALSE;
 static Boolean	Beflag	= FALSE;
 static Boolean	Bsflag	= FALSE;
 static Boolean	Dflag	= FALSE;
-static Boolean	Gflag	= FALSE;
 static Boolean	Vflag	= FALSE;
+
+enum output_type {
+	OT_RELOC,		/* relocatable object */
+	OT_SHARED,		/* shared object */
+	OT_EXEC,		/* dynamic executable */
+	OT_KMOD,		/* kernel module */
+};
+
+static enum output_type	otype = OT_EXEC;
 
 /*
  * ztflag's state is set by pointing it to the matching string:
@@ -227,6 +235,7 @@ usage_mesg(Boolean detail)
 	(void) fprintf(stderr, MSG_INTL(MSG_ARG_DETAIL_ZT));
 	(void) fprintf(stderr, MSG_INTL(MSG_ARG_DETAIL_ZTO));
 	(void) fprintf(stderr, MSG_INTL(MSG_ARG_DETAIL_ZTW));
+	(void) fprintf(stderr, MSG_INTL(MSG_ARG_DETAIL_ZTY));
 	(void) fprintf(stderr, MSG_INTL(MSG_ARG_DETAIL_ZWRAP));
 	(void) fprintf(stderr, MSG_INTL(MSG_ARG_DETAIL_ZVER));
 }
@@ -312,18 +321,41 @@ check_flags(Ofl_desc * ofl, int argc)
 		ld_eprintf(ofl, ERR_FATAL, MSG_INTL(MSG_ARG_YP),
 		    Llibdir ? 'L' : 'U');
 
-	if (rflag) {
-		if (dflag == SET_UNKNOWN)
-			dflag = SET_FALSE;
+	if ((otype == OT_RELOC) || (otype == OT_KMOD)) {
+		if (otype == OT_RELOC) {
+			if (dflag == SET_UNKNOWN)
+				dflag = SET_FALSE;
+		} else if (otype == OT_KMOD) {
+			if (dflag != SET_UNKNOWN) {
+				ld_eprintf(ofl, ERR_FATAL,
+				    MSG_INTL(MSG_MARG_INCOMP),
+				    MSG_INTL(MSG_MARG_TYPE_KMOD),
+				    MSG_ORIG(MSG_ARG_D));
+			}
+
+			dflag = SET_TRUE;
+		}
+
 		/*
 		 * Combining relocations when building a relocatable
 		 * object isn't allowed.  Warn the user, but proceed.
 		 */
-		if (ofl->ofl_flags & FLG_OF_COMREL)
+		if (ofl->ofl_flags & FLG_OF_COMREL) {
+			const char *msg;
+
+			if (otype == OT_RELOC) {
+				msg = MSG_INTL(MSG_MARG_REL);
+			} else {
+				msg = MSG_INTL(MSG_MARG_TYPE_KMOD);
+			}
 			ld_eprintf(ofl, ERR_WARNING, MSG_INTL(MSG_MARG_INCOMP),
-			    MSG_INTL(MSG_MARG_REL),
+			    msg,
 			    MSG_ORIG(MSG_ARG_ZCOMBRELOC));
+		}
 		ofl->ofl_flags |= FLG_OF_RELOBJ;
+
+		if (otype == OT_KMOD)
+			ofl->ofl_flags |= FLG_OF_KMOD;
 	} else {
 		/*
 		 * Translating object capabilities to symbol capabilities is
@@ -374,7 +406,7 @@ check_flags(Ofl_desc * ofl, int argc)
 		    MSG_ORIG(MSG_ARG_ZRELAXRELOC),
 		    MSG_ORIG(MSG_ARG_ZNORELAXRELOC));
 
-	if (ofl->ofl_filtees && !Gflag)
+	if (ofl->ofl_filtees && (otype != OT_SHARED))
 		ld_eprintf(ofl, ERR_FATAL, MSG_INTL(MSG_MARG_ST_ONLYAVL),
 		    ((ofl->ofl_flags & FLG_OF_AUX) ?
 		    MSG_INTL(MSG_MARG_FILTER_AUX) : MSG_INTL(MSG_MARG_FILTER)));
@@ -428,7 +460,7 @@ check_flags(Ofl_desc * ofl, int argc)
 			ofl->ofl_guideflags |= FLG_OFG_NO_TEXT;
 		}
 
-		if (Gflag || !rflag) {
+		if ((otype == OT_SHARED) || (otype == OT_EXEC)) {
 			/*
 			 * Create a dynamic object.  -Bdirect indicates that all
 			 * references should be bound directly.  This also
@@ -468,7 +500,7 @@ check_flags(Ofl_desc * ofl, int argc)
 			}
 		}
 
-		if (!Gflag && !rflag) {
+		if (otype == OT_EXEC) {
 			/*
 			 * Dynamically linked executable.
 			 */
@@ -492,7 +524,7 @@ check_flags(Ofl_desc * ofl, int argc)
 				ld_eprintf(ofl, ERR_FATAL,
 				    MSG_INTL(MSG_MARG_DY_INCOMP),
 				    MSG_INTL(MSG_MARG_SONAME));
-		} else if (!rflag) {
+		} else if (otype == OT_SHARED) {
 			/*
 			 * Shared library.
 			 */
@@ -542,6 +574,9 @@ check_flags(Ofl_desc * ofl, int argc)
 				    MSG_INTL(MSG_MARG_REL),
 				    MSG_ORIG(MSG_ARG_CI));
 		}
+
+		assert((ofl->ofl_flags & (FLG_OF_SHAROBJ|FLG_OF_EXEC)) !=
+		    (FLG_OF_SHAROBJ|FLG_OF_EXEC));
 	} else {
 		ofl->ofl_flags |= FLG_OF_STATIC;
 
@@ -563,14 +598,14 @@ check_flags(Ofl_desc * ofl, int argc)
 		if (ztflag)
 			ld_eprintf(ofl, ERR_FATAL, MSG_INTL(MSG_ARG_ST_INCOMP),
 			    MSG_ORIG(MSG_ARG_ZTEXTALL));
-		if (Gflag)
+		if (otype == OT_SHARED)
 			ld_eprintf(ofl, ERR_FATAL, MSG_INTL(MSG_MARG_ST_INCOMP),
 			    MSG_INTL(MSG_MARG_SO));
-		if (aflag && rflag)
+		if (aflag && (otype == OT_RELOC))
 			ld_eprintf(ofl, ERR_FATAL, MSG_INTL(MSG_MARG_INCOMP),
 			    MSG_ORIG(MSG_ARG_A), MSG_INTL(MSG_MARG_REL));
 
-		if (rflag) {
+		if (otype == OT_RELOC) {
 			/*
 			 * We can only strip the symbol table and string table
 			 * if no output relocations will refer to them.
@@ -716,7 +751,7 @@ createargv(Ofl_desc *ofl, int *usage)
 
 	/*
 	 * The argument being examined is either:
-	 *	ld32= 	or
+	 *	ld32=	or
 	 *	ld64=
 	 */
 #if	defined(_LP64)
@@ -916,8 +951,8 @@ guidance_parse(Ofl_desc *ofl, char *optarg)
 /*
  * Parse the -z assert-deflib option. This option can appear in two different
  * forms:
- * 	-z assert-deflib
- * 	-z assert-deflib=libfred.so
+ *	-z assert-deflib
+ *	-z assert-deflib=libfred.so
  *
  * Either form enables this option, the latter form marks libfred.so as an
  * exempt library from the check. It is valid to have multiple invocations of
@@ -940,7 +975,6 @@ assdeflib_parse(Ofl_desc *ofl, char *optarg)
 	    MSG_STR_SOEXT_SIZE;
 	if (olen > MSG_ARG_ASSDEFLIB_SIZE) {
 		if (optarg[MSG_ARG_ASSDEFLIB_SIZE] != '=') {
-			ld_eprintf(ofl, ERR_FATAL, "Missing =\n");
 			ld_eprintf(ofl, ERR_FATAL, MSG_INTL(MSG_ARG_ILLEGAL),
 			    MSG_ORIG(MSG_ARG_ASSDEFLIB), optarg);
 			return (TRUE);
@@ -1201,7 +1235,7 @@ parseopt_pass1(Ofl_desc *ofl, int argc, char **argv, int *usage)
 
 		case 'r':
 			DBG_CALL(Dbg_args_option(ofl->ofl_lml, ndx, c, NULL));
-			rflag = TRUE;
+			otype = OT_RELOC;
 			break;
 
 		case 'R':
@@ -1236,6 +1270,14 @@ parseopt_pass1(Ofl_desc *ofl, int argc, char **argv, int *usage)
 
 		case 'z':
 			DBG_CALL(Dbg_args_option(ofl->ofl_lml, ndx, c, optarg));
+
+			/*
+			 * Skip comma that might be present between -z and its
+			 * argument (e.g. if -Wl,-z,assert-deflib was passed).
+			 */
+			if (strncmp(optarg, MSG_ORIG(MSG_STR_COMMA),
+			    MSG_STR_COMMA_SIZE) == 0)
+				optarg++;
 
 			/*
 			 * For specific help, print our usage message and exit
@@ -1437,6 +1479,36 @@ parseopt_pass1(Ofl_desc *ofl, int argc, char **argv, int *usage)
 				if (ld_wrap_enter(ofl,
 				    optarg + MSG_ARG_WRAP_SIZE) == NULL)
 					return (S_ERROR);
+			} else if (strncmp(optarg, MSG_ORIG(MSG_ARG_ASLR),
+			    MSG_ARG_ASLR_SIZE) == 0) {
+				char *p = optarg + MSG_ARG_ASLR_SIZE;
+				if (*p == '\0') {
+					ofl->ofl_aslr = 1;
+				} else if (*p == '=') {
+					p++;
+
+					if ((strcmp(p,
+					    MSG_ORIG(MSG_ARG_ENABLED)) == 0) ||
+					    (strcmp(p,
+					    MSG_ORIG(MSG_ARG_ENABLE)) == 0)) {
+						ofl->ofl_aslr = 1;
+					} else if ((strcmp(p,
+					    MSG_ORIG(MSG_ARG_DISABLED)) == 0) ||
+					    (strcmp(p,
+					    MSG_ORIG(MSG_ARG_DISABLE)) == 0)) {
+						ofl->ofl_aslr = -1;
+					} else {
+						ld_eprintf(ofl, ERR_FATAL,
+						    MSG_INTL(MSG_ARG_ILLEGAL),
+						    MSG_ORIG(MSG_ARG_ZASLR), p);
+						return (S_ERROR);
+					}
+				} else {
+					ld_eprintf(ofl, ERR_FATAL,
+					    MSG_INTL(MSG_ARG_ILLEGAL),
+					    MSG_ORIG(MSG_ARG_Z), optarg);
+					return (S_ERROR);
+				}
 			} else if ((strncmp(optarg, MSG_ORIG(MSG_ARG_GUIDE),
 			    MSG_ARG_GUIDE_SIZE) == 0) &&
 			    ((optarg[MSG_ARG_GUIDE_SIZE] == '=') ||
@@ -1471,6 +1543,40 @@ parseopt_pass1(Ofl_desc *ofl, int argc, char **argv, int *usage)
 			    MSG_ARG_ASSDEFLIB_SIZE) == 0) {
 				if (assdeflib_parse(ofl, optarg) != TRUE)
 					return (S_ERROR);
+
+			/*
+			 * Process new-style output type specification, which
+			 * we'll use in pass 2 and throughout.
+			 */
+			} else if (strncmp(optarg, MSG_ORIG(MSG_ARG_TYPE),
+			    MSG_ARG_TYPE_SIZE) == 0) {
+				char *p = optarg + MSG_ARG_TYPE_SIZE;
+				if (*p != '=') {
+					ld_eprintf(ofl, ERR_FATAL,
+					    MSG_INTL(MSG_ARG_ILLEGAL),
+					    MSG_ORIG(MSG_ARG_Z), optarg);
+					return (S_ERROR);
+				}
+
+				p++;
+				if (strcmp(p,
+				    MSG_ORIG(MSG_ARG_TYPE_RELOC)) == 0) {
+					otype = OT_RELOC;
+				} else if (strcmp(p,
+				    MSG_ORIG(MSG_ARG_TYPE_EXEC)) == 0) {
+					otype = OT_EXEC;
+				} else if (strcmp(p,
+				    MSG_ORIG(MSG_ARG_TYPE_SHARED)) == 0) {
+					otype = OT_SHARED;
+				} else if (strcmp(p,
+				    MSG_ORIG(MSG_ARG_TYPE_KMOD)) == 0) {
+					otype = OT_KMOD;
+				} else {
+					ld_eprintf(ofl, ERR_FATAL,
+					    MSG_INTL(MSG_ARG_ILLEGAL),
+					    MSG_ORIG(MSG_ARG_Z), optarg);
+					return (S_ERROR);
+				}
 			/*
 			 * The following options just need validation as they
 			 * are interpreted on the second pass through the
@@ -1589,7 +1695,7 @@ parseopt_pass1(Ofl_desc *ofl, int argc, char **argv, int *usage)
 
 		case 'G':
 			DBG_CALL(Dbg_args_option(ofl->ofl_lml, ndx, c, NULL));
-			Gflag = TRUE;
+			otype = OT_SHARED;
 			break;
 
 		case 'L':

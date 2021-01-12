@@ -21,9 +21,9 @@
 /*
  * Copyright 2007 Sun Microsystems, Inc.  All rights reserved.
  * Use is subject to license terms.
+ *
+ * Copyright 2016 Joyent, Inc.
  */
-
-#pragma ident	"%Z%%M%	%I%	%E% SMI"
 
 #include <stddef.h>
 #include <sys/mdb_modapi.h>
@@ -34,6 +34,8 @@
 #include <sys/usb/usba/usba_types.h>
 #include <sys/usb/usba/usba_impl.h>
 #include <sys/usb/usba/hcdi_impl.h>
+#include <sys/usb/hubd/hub.h>
+#include <sys/usb/hubd/hubdvar.h>
 #include <sys/file.h>
 #include <sys/sunndi.h>
 #include <unistd.h>
@@ -96,9 +98,9 @@ find_dip(uintptr_t dip_addr, const void *local_dip, void *cb_arg)
 {
 	uintptr_t			cur_usb_dev;
 	usba_device2devinfo_cbdata_t	*cb_data =
-			    (usba_device2devinfo_cbdata_t *)cb_arg;
+	    (usba_device2devinfo_cbdata_t *)cb_arg;
 
-	if ((cur_usb_dev = mdb_usba_get_usba_device(dip_addr)) == NULL) {
+	if ((cur_usb_dev = mdb_usba_get_usba_device(dip_addr)) == 0) {
 		/*
 		 * If there's no corresponding usba_device_t, this dip isn't
 		 * a usb node.  Might be an sd node.  Ignore it.
@@ -182,7 +184,7 @@ int
 usba_list_walk_init(mdb_walk_state_t *wsp)
 {
 	/* Must have a start addr.  */
-	if (wsp->walk_addr == NULL) {
+	if (wsp->walk_addr == 0) {
 		mdb_warn("not a global walk.  Starting address required\n");
 
 		return (WALK_ERR);
@@ -215,7 +217,7 @@ usba_list_walk_step(mdb_walk_state_t *wsp)
 	wsp->walk_addr = (uintptr_t)list_entry.next;
 
 	/* Check if we're at the last element */
-	if (wsp->walk_addr == NULL) {
+	if (wsp->walk_addr == 0) {
 
 		return (WALK_DONE);
 	}
@@ -237,14 +239,14 @@ usba_list_walk_step(mdb_walk_state_t *wsp)
 int
 usb_pipe_handle_walk_init(mdb_walk_state_t *wsp)
 {
-	if (wsp->walk_addr == NULL) {
+	if (wsp->walk_addr == 0) {
 		mdb_warn("not a global walk; usba_device_t required\n");
 
 		return (WALK_ERR);
 	}
 
 	wsp->walk_data = mdb_alloc((sizeof (usba_ph_impl_t)) * USBA_N_ENDPOINTS,
-					UM_SLEEP | UM_GC);
+	    UM_SLEEP | UM_GC);
 
 	/*
 	 * Read the usb_ph_list array into local memory.
@@ -286,7 +288,7 @@ usb_pipe_handle_walk_step(mdb_walk_state_t *wsp)
 	}
 
 	status = wsp->walk_callback((uintptr_t)impl_list[index].usba_ph_data,
-					wsp->walk_data, wsp->walk_cbdata);
+	    wsp->walk_data, wsp->walk_cbdata);
 
 	/* Set up to start at next pipe handle next time. */
 	wsp->walk_arg = (void *)(index + 1);
@@ -403,7 +405,7 @@ usba_device_walk_init(mdb_walk_state_t *wsp)
 {
 	usba_list_entry_t	list_entry;
 
-	if (wsp->walk_addr != NULL) {
+	if (wsp->walk_addr != 0) {
 		mdb_warn(
 		    "global walk only.  Must be invoked without an address\n");
 
@@ -422,6 +424,72 @@ usba_device_walk_init(mdb_walk_state_t *wsp)
 	return (WALK_NEXT);
 }
 
+int
+usba_hubd_walk_init(mdb_walk_state_t *wsp)
+{
+	if (wsp->walk_addr != 0) {
+		mdb_warn("hubd only supports global walks.\n");
+		return (WALK_ERR);
+	}
+
+	if (mdb_layered_walk("usba_device", wsp) == -1) {
+		mdb_warn("couldn't walk 'usba_device'");
+		return (WALK_ERR);
+	}
+
+	return (WALK_NEXT);
+}
+
+/*
+ * Getting the hub state is annoying. The root hubs are stored on dev_info_t
+ * while the normal hubs are stored as soft state.
+ */
+int
+usba_hubd_walk_step(mdb_walk_state_t *wsp)
+{
+	usba_device_t ud;
+	hubd_t hubd;
+	struct dev_info dev_info;
+	uintptr_t state_addr;
+
+	if (mdb_vread(&ud, sizeof (ud), wsp->walk_addr) != sizeof (ud)) {
+		mdb_warn("failed to read usba_device_t at %p", wsp->walk_addr);
+		return (WALK_ERR);
+	}
+
+	if (ud.usb_root_hubd != NULL) {
+		if (mdb_vread(&hubd, sizeof (hubd),
+		    (uintptr_t)ud.usb_root_hubd) != sizeof (hubd)) {
+			mdb_warn("failed to read hubd at %p", ud.usb_root_hubd);
+			return (WALK_ERR);
+		}
+		return (wsp->walk_callback((uintptr_t)ud.usb_root_hubd, &hubd,
+		    wsp->walk_cbdata));
+	}
+
+	if (ud.usb_hubdi == NULL)
+		return (WALK_NEXT);
+
+	/*
+	 * For non-root hubs, the hubd_t is stored in the soft state. Figure out
+	 * the instance from the dev_info_t and then get its soft state.
+	 */
+	if (mdb_vread(&dev_info, sizeof (struct dev_info),
+	    (uintptr_t)ud.usb_dip) != sizeof (struct dev_info)) {
+		mdb_warn("failed to read dev_info_t for device %p at %p",
+		    wsp->walk_addr, ud.usb_dip);
+		return (WALK_ERR);
+	}
+
+	if (mdb_get_soft_state_byname("hubd_statep", dev_info.devi_instance,
+	    &state_addr, &hubd, sizeof (hubd)) == -1) {
+		mdb_warn("failed to read hubd soft state for instance %d from "
+		    "usb device %p", dev_info.devi_instance, wsp->walk_addr);
+		return (WALK_ERR);
+	}
+
+	return (wsp->walk_callback(state_addr, &hubd, wsp->walk_cbdata));
+}
 
 /*
  * usba_device dcmd
@@ -437,7 +505,7 @@ usba_device(uintptr_t addr, uint_t flags, int argc, const mdb_arg_t *argv)
 	char		pathname[MAXNAMELEN];
 	char		dname[MODMAXNAMELEN + 1] = "<unatt>"; /* Driver name */
 	char		drv_statep[MODMAXNAMELEN+ 10];
-	uint_t		usb_flag  = NULL;
+	uint_t		usb_flag  = 0;
 	boolean_t	no_driver_attached = FALSE;
 	uintptr_t	dip_addr;
 	struct dev_info	devinfo;
@@ -509,7 +577,7 @@ usba_device(uintptr_t addr, uint_t flags, int argc, const mdb_arg_t *argv)
 
 	if (usb_flag & USB_DUMP_VERBOSE) {
 		int		i;
-		uintptr_t	statep = NULL;
+		uintptr_t	statep = 0;
 		char		*string_descr;
 		char		**config_cloud, **conf_str_descr;
 		usb_dev_descr_t	usb_dev_descr;
@@ -613,7 +681,8 @@ usba_device(uintptr_t addr, uint_t flags, int argc, const mdb_arg_t *argv)
 			    * usba_device_struct.usb_n_cfgs, (uintptr_t)
 			    usba_device_struct.usb_cfg_str_descr)) == -1) {
 
-			    mdb_warn("failed to read config cloud pointers");
+				mdb_warn("failed to read config cloud "
+				    "pointers");
 
 			} else {
 
@@ -717,7 +786,7 @@ usba_debug_buf(uintptr_t addr, uint_t flags, int argc, const mdb_arg_t *argv)
 	}
 	local_debug_buf[debug_buf_size - 1] = '\0';
 
-	if (strlen(local_debug_buf) == NULL) {
+	if (strlen(local_debug_buf) == 0) {
 
 		return (DCMD_OK);
 	}
@@ -789,6 +858,8 @@ static const mdb_walker_t walkers[] = {
 	    usb_pipe_handle_walk_init, usb_pipe_handle_walk_step, NULL, NULL },
 	{ "usba_device", "walk global list of usba_device_t structures",
 	    usba_device_walk_init, usba_list_walk_step, NULL, NULL },
+	{ "hubd", "walk hubd instances", usba_hubd_walk_init,
+	    usba_hubd_walk_step, NULL, NULL },
 	{ NULL }
 };
 

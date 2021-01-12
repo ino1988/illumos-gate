@@ -1,11 +1,39 @@
-.\" Copyright 2014 Garrett D'Amore <garrett@damore.org>
-.\" Copyright (c) 2008, Sun Microsystems, Inc. All Rights Reserved.
-.\" Copyright (c) 1980 Regents of the University of California.  All rights reserved.  The Berkeley software License Agreement specifies the terms and conditions for redistribution.
-.\" Portions Copyright (c) 1992, X/Open Company Limited  All Rights Reserved.
-.\" Sun Microsystems, Inc. gratefully acknowledges The Open Group for permission to reproduce portions of its copyrighted documentation. Original documentation from The Open Group can be obtained online at
+.\"
+.\" Sun Microsystems, Inc. gratefully acknowledges The Open Group for
+.\" permission to reproduce portions of its copyrighted documentation.
+.\" Original documentation from The Open Group can be obtained online at
 .\" http://www.opengroup.org/bookstore/.
-.\" The Institute of Electrical and Electronics Engineers and The Open Group, have given us permission to reprint portions of their documentation. In the following statement, the phrase "this text" refers to portions of the system documentation. Portions of this text are reprinted and reproduced in electronic form in the Sun OS Reference Manual, from IEEE Std 1003.1, 2004 Edition, Standard for Information Technology -- Portable Operating System Interface (POSIX), The Open Group Base Specifications Issue 6, Copyright (C) 2001-2004 by the Institute of Electrical and Electronics Engineers, Inc and The Open Group. In the event of any discrepancy between these versions and the original IEEE and The Open Group Standard, the original IEEE and The Open Group Standard is the referee document. The original Standard can be obtained online at http://www.opengroup.org/unix/online.html.
-.\"  This notice shall appear on any product containing this material.
+.\"
+.\" The Institute of Electrical and Electronics Engineers and The Open
+.\" Group, have given us permission to reprint portions of their
+.\" documentation.
+.\"
+.\" In the following statement, the phrase ``this text'' refers to portions
+.\" of the system documentation.
+.\"
+.\" Portions of this text are reprinted and reproduced in electronic form
+.\" in the SunOS Reference Manual, from IEEE Std 1003.1, 2004 Edition,
+.\" Standard for Information Technology -- Portable Operating System
+.\" Interface (POSIX), The Open Group Base Specifications Issue 6,
+.\" Copyright (C) 2001-2004 by the Institute of Electrical and Electronics
+.\" Engineers, Inc and The Open Group.  In the event of any discrepancy
+.\" between these versions and the original IEEE and The Open Group
+.\" Standard, the original IEEE and The Open Group Standard is the referee
+.\" document.  The original Standard can be obtained online at
+.\" http://www.opengroup.org/unix/online.html.
+.\"
+.\" This notice shall appear on any product containing this material.
+.\"
+.\" The Berkeley software License Agreement specifies the terms and conditions
+.\" for redistribution.
+.\"
+.\"
+.\" Copyright (c) 1980 Regents of the University of California.
+.\" All rights reserved.
+.\" Portions Copyright (c) 1992, X/Open Company Limited  All Rights Reserved.
+.\" Copyright (c) 2008, Sun Microsystems, Inc. All Rights Reserved.
+.\" Copyright 2014 Garrett D'Amore <garrett@damore.org>
+.\"
 .Dd "Aug 16, 2014"
 .Dt USLEEP 3C
 .Os
@@ -22,12 +50,13 @@ The
 function suspends the caller from execution for the number
 of microseconds specified by the
 .Fa useconds
-argument. The actual suspension
-time might be less than requested because any caught signal will terminate
+argument.
+The actual suspension time might be less than requested because any caught
+signal will terminate
 .Fn usleep
-following execution of that signal's catching routine. The
-suspension time might be longer than requested by an arbitrary amount because
-of the scheduling of other activity in the system.
+following execution of that signal's catching routine.
+The suspension time might be longer than requested by an arbitrary amount
+because of the scheduling of other activity in the system.
 .Lp
 If the value of
 .Fa useconds
@@ -36,18 +65,21 @@ is 0, then the call has no effect.
 The use of the
 usleep
 function has no effect on the action or blockage
-of any signal. In a multithreaded process, only the invoking thread is
-suspended from execution.
+of any signal.
+In a multithreaded process, only the invoking thread is suspended from
+execution.
 .Sh RETURN VALUES
 On completion,
 .Fn usleep
-returns 0. There are no error returns.
+returns 0.
+There are no error returns.
 .Sh ERRORS
 No errors are returned.
 .Sh USAGE
 The
 .Fn usleep
-function is included for its historical usage and is Obsolete.  The
+function is included for its historical usage and is Obsolete.
+The
 .Xr nanosleep 3C
 function is preferred over this function.
 .Sh INTERFACE STABILITY
@@ -62,7 +94,8 @@ function is preferred over this function.
 .Sh STANDARDS
 The
 .Fn usleep
-function is available in the following compilation environments.  See
+function is available in the following compilation environments.
+See
 .Xr standards 5 .
 .Lp
 .Bl -bullet -compact

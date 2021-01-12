@@ -23,12 +23,7 @@
 # Copyright 2008 Sun Microsystems, Inc.  All rights reserved.
 # Use is subject to license terms.
 #
-#	This makefile drives the production of the tavor InfiniBand module
-#
-#	intel architecture dependent
-#
-# uts/intel/tavor/Makefile
-#
+# Copyright (c) 2018, Joyent, Inc.
 
 #
 #	Paths to the base of the uts directory trees
@@ -40,13 +35,9 @@ UTSBASE = ../..
 #
 MODULE		= tavor
 OBJECTS		= $(TAVOR_OBJS:%=$(OBJS_DIR)/%)
-LINTS		= $(TAVOR_OBJS:%.o=$(LINTS_DIR)/%.ln)
 ROOTMODULE	= $(ROOT_DRV_DIR)/$(MODULE)
 CONF_SRCDIR	= $(UTSBASE)/common/io/ib/adapters/tavor
 LDFLAGS		+= -dy -Ndrv/ib -Nmisc/ibtl -Nmisc/ibmf
-WARLOCK_OUT    	= $(TAVOR_OBJS:%.o=%.ll)
-WARLOCK_OK	= $(MODULE).ok
-WLCMD_DIR	= $(UTSBASE)/common/io/warlock
 
 #
 #	Include common rules.
@@ -57,7 +48,6 @@ include $(UTSBASE)/intel/Makefile.intel
 #	Define targets
 #
 ALL_TARGET	= $(BINARY) $(SRC_CONFFILE)
-LINT_TARGET	= $(MODULE).lint
 INSTALL_TARGET	= $(BINARY) $(ROOTMODULE) $(ROOT_CONFFILE)
 
 #
@@ -70,24 +60,19 @@ INSTALL_TARGET	= $(BINARY) $(ROOTMODULE) $(ROOT_CONFFILE)
 #DEBUG_DEFS_DBG32 += -DTNF_DEBUG
 #DEBUG_DEFS_DBG64 += -DTNF_DEBUG
 
-# 
-# lint pass one enforcement 
-# 
-CFLAGS += $(CCVERBOSE)
-
 #
-# For now, disable these lint checks; maintainers should endeavor
-# to investigate and remove these for maximum lint coverage.
+# For now, disable these warnings; maintainers should endeavor
+# to investigate and remove these for maximum coverage.
 # Please do not carry these forward to new Makefiles.
 #
-LINTTAGS	+= -erroff=E_BAD_PTR_CAST_ALIGN
-LINTTAGS	+= -erroff=E_ASSIGN_NARROW_CONV
-LINTTAGS	+= -erroff=E_SUSPICIOUS_COMPARISON
-
+CFLAGS		+= $(CCVERBOSE)
 CERRWARN	+= -_gcc=-Wno-unused-value
 CERRWARN	+= -_gcc=-Wno-unused-label
-CERRWARN	+= -_gcc=-Wno-uninitialized
+CERRWARN	+= $(CNOWARN_UNINIT)
 CERRWARN	+= -_gcc=-Wno-type-limits
+
+# needs work
+SMATCH=off
 
 #
 #	Default build targets.
@@ -99,16 +84,8 @@ def:		$(DEF_DEPS)
 all:		$(ALL_DEPS)
 
 clean:		$(CLEAN_DEPS)
-		$(RM) $(WARLOCK_OUT) $(WARLOCK_OK)
 
 clobber:	$(CLOBBER_DEPS)
-		$(RM) $(WARLOCK_OUT) $(WARLOCK_OK)
-
-lint:		$(LINT_DEPS)
-
-modlintlib:	$(MODLINTLIB_DEPS)
-
-clean.lint:	$(CLEAN_LINT_DEPS)
 
 install:	$(INSTALL_DEPS)
 
@@ -116,25 +93,3 @@ install:	$(INSTALL_DEPS)
 #	Include common targets.
 #
 include $(UTSBASE)/intel/Makefile.targ
-
-
-#
-#	Defines for local commands.
-#
-WARLOCK         = warlock
-WLCC            = wlcc
-TOUCH           = touch
-TEST            = test
-
-warlock: $(WARLOCK_OK)
-
-$(WARLOCK_OK): $(WARLOCK_OUT) warlock_ddi.files $(WLCMD_DIR)/tavor.wlcmd
-	$(WARLOCK) -c $(WLCMD_DIR)/tavor.wlcmd $(WARLOCK_OUT) -l \
-	$(UTSBASE)/intel/warlock/ddi_dki_impl.ll
-	$(TOUCH) $@
-
-%.ll: $(UTSBASE)/common/io/ib/adapters/tavor/%.c
-	$(WLCC)  $(CPPFLAGS) -DNPROBE -DDEBUG -o $@ $<
-
-warlock_ddi.files:
-	@cd $(UTSBASE)/intel/warlock; pwd; $(MAKE) warlock

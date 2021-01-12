@@ -19,12 +19,17 @@
 # CDDL HEADER END
 #
 
+#
 # Copyright (c) 1989, 2010, Oracle and/or its affiliates. All rights reserved.
-# Copyright 2010 Nexenta Systems, Inc.  All rights reserved.
-# Copyright (c) 2012 Joyent, Inc.  All rights reserved.
-# Copyright (c) 2012 by Delphix. All rights reserved.
+# Copyright 2020 Joyent, Inc.
+# Copyright (c) 2012, 2015 by Delphix. All rights reserved.
 # Copyright (c) 2013 DEY Storage Systems, Inc. All rights reserved.
 # Copyright 2014 Garrett D'Amore <garrett@damore.org>
+# Copyright 2016 Toomas Soome <tsoome@me.com>
+# Copyright 2018 Nexenta Systems, Inc.
+# Copyright 2018 Gary Mills
+# Copyright 2019 Peter Tribble
+#
 
 include ../Makefile.master
 
@@ -64,7 +69,6 @@ COMMON_SUBDIRS=		\
 	audio		\
 	auths		\
 	autopush	\
-	avs		\
 	awk		\
 	awk_xpg4	\
 	backup		\
@@ -74,14 +78,13 @@ COMMON_SUBDIRS=		\
 	bc		\
 	bdiff		\
 	beadm		\
-	bfs		\
 	bnu		\
 	boot		\
 	busstat		\
 	cal		\
-	calendar	\
 	captoinfo	\
 	cat		\
+	ccidadm		\
 	cdrw		\
 	cfgadm		\
 	checkeq		\
@@ -96,6 +99,7 @@ COMMON_SUBDIRS=		\
 	cmd-inet	\
 	col		\
 	compress	\
+	connstat	\
 	consadm		\
 	coreadm		\
 	cpio		\
@@ -104,6 +108,10 @@ COMMON_SUBDIRS=		\
 	crypt		\
 	csh		\
 	csplit		\
+	ctfconvert	\
+	ctfdiff		\
+	ctfdump		\
+	ctfmerge	\
 	ctrun		\
 	ctstat		\
 	ctwatch		\
@@ -111,6 +119,7 @@ COMMON_SUBDIRS=		\
 	date		\
 	dc		\
 	dd		\
+	demangle	\
 	deroff		\
 	devfsadm	\
 	syseventd	\
@@ -125,10 +134,12 @@ COMMON_SUBDIRS=		\
 	dircmp		\
 	dirname		\
 	dis		\
+	diskinfo	\
 	diskmgtd	\
 	dispadmin	\
 	dladm		\
 	dlstat		\
+	dlutil		\
 	dmesg		\
 	dodatadm	\
 	dtrace		\
@@ -138,12 +149,12 @@ COMMON_SUBDIRS=		\
 	echo		\
 	ed		\
 	eeprom		\
-	egrep		\
 	eject		\
 	emul64ioctl	\
 	enhance		\
 	env		\
 	eqn		\
+	etdump		\
 	expand		\
 	expr		\
 	exstr		\
@@ -154,8 +165,8 @@ COMMON_SUBDIRS=		\
 	fdetach		\
 	fdformat	\
 	fdisk		\
+	ficl		\
 	filesync	\
-	fgrep		\
 	file		\
 	find		\
 	flowadm		\
@@ -183,8 +194,8 @@ COMMON_SUBDIRS=		\
 	gettext		\
 	gettxt		\
 	grep		\
-	grep_xpg4	\
 	groups		\
+	growfs		\
 	grpck		\
 	gss		\
 	hal		\
@@ -194,8 +205,8 @@ COMMON_SUBDIRS=		\
 	hostname	\
 	hotplug		\
 	hotplugd	\
-	hwdata		\
 	ibd_upgrade	\
+	iconv		\
 	id		\
 	idmap		\
 	infocmp		\
@@ -216,7 +227,6 @@ COMMON_SUBDIRS=		\
 	iscsitsvc	\
 	isns		\
 	itadm		\
-	java		\
 	kbd		\
 	keyserv		\
 	killall		\
@@ -243,15 +253,15 @@ COMMON_SUBDIRS=		\
 	logger		\
 	login		\
 	logins		\
+	logname		\
 	look		\
 	ls		\
 	luxadm		\
-	lvm		\
 	mach		\
-	machid		\
 	mail		\
 	mailwrapper	\
 	mailx		\
+	make		\
 	makekey		\
 	man		\
 	mandoc		\
@@ -297,6 +307,7 @@ COMMON_SUBDIRS=		\
 	pathchk		\
 	pbind		\
 	pcidr		\
+	pcieb		\
 	pcitool		\
 	pfexec		\
 	pfexecd		\
@@ -334,6 +345,7 @@ COMMON_SUBDIRS=		\
 	pwd		\
 	pyzfs		\
 	raidctl		\
+	raidz_test	\
 	ramdiskadm	\
 	rcap		\
 	rcm_daemon	\
@@ -341,7 +353,6 @@ COMMON_SUBDIRS=		\
 	refer		\
 	regcmp		\
 	renice		\
-	rexd		\
 	rm		\
 	rmdir		\
 	rmformat	\
@@ -372,6 +383,7 @@ COMMON_SUBDIRS=		\
 	sgs		\
 	sh		\
 	shcomp		\
+	sleep		\
 	smbios		\
 	smbsrv		\
 	smserverd	\
@@ -407,7 +419,6 @@ COMMON_SUBDIRS=		\
 	tbl		\
 	tcopy		\
 	tcpd		\
-	terminfo	\
 	th_tools	\
 	tic		\
 	time		\
@@ -434,6 +445,7 @@ COMMON_SUBDIRS=		\
 	users		\
 	utmp_update	\
 	utmpd		\
+	uuidgen		\
 	valtools	\
 	vgrind		\
 	vi		\
@@ -442,6 +454,7 @@ COMMON_SUBDIRS=		\
 	vrrpadm		\
 	vscan		\
 	vt		\
+	vtfontcvt	\
 	w		\
 	wall		\
 	which		\
@@ -449,7 +462,6 @@ COMMON_SUBDIRS=		\
 	whodo		\
 	wracct		\
 	write		\
-	wusbadm		\
 	xargs		\
 	xstr		\
 	yes		\
@@ -473,17 +485,25 @@ COMMON_SUBDIRS=		\
 	ztest
 
 i386_SUBDIRS=		\
+	acpi		\
 	acpihpd		\
 	addbadsec	\
+	ahciem		\
+	amdzen		\
+	bhyve		\
+	bhyvectl	\
 	biosdev		\
+	cxgbetool	\
 	diskscan	\
-	lms		\
+	nvmeadm		\
+	pptadm		\
+	rdmsr		\
 	rtc		\
 	ucodeadm	\
+	xhci		\
 	xvm
 
 sparc_SUBDIRS=		\
-	cvcd		\
 	dcs		\
 	device_remap	\
 	drd		\
@@ -516,7 +536,6 @@ MSGSUBDIRS=		\
 	auditset	\
 	auths		\
 	autopush	\
-	avs		\
 	awk		\
 	awk_xpg4	\
 	backup		\
@@ -539,6 +558,7 @@ MSGSUBDIRS=		\
 	cmd-inet	\
 	col		\
 	compress	\
+	connstat	\
 	consadm		\
 	coreadm		\
 	cpio		\
@@ -570,7 +590,6 @@ MSGSUBDIRS=		\
 	expand		\
 	expr		\
 	fcinfo		\
-	fgrep		\
 	file		\
 	filesync	\
 	find		\
@@ -587,13 +606,13 @@ MSGSUBDIRS=		\
 	gettext		\
 	gettxt		\
 	grep		\
-	grep_xpg4	\
 	grpck		\
 	gss		\
 	halt		\
 	head		\
 	hostname	\
 	hotplug		\
+	iconv		\
 	id		\
 	idmap		\
 	isaexec		\
@@ -615,8 +634,8 @@ MSGSUBDIRS=		\
 	logins		\
 	ls		\
 	luxadm		\
-	lvm		\
 	mailx		\
+	make		\
 	man		\
 	mesg		\
 	mkdir		\
@@ -684,7 +703,6 @@ MSGSUBDIRS=		\
 	sort		\
 	split		\
 	srptadm		\
-	ssh		\
 	stat		\
 	stmfadm		\
 	stmsboot	\
@@ -725,7 +743,6 @@ MSGSUBDIRS=		\
 	whodo		\
 	wracct		\
 	write		\
-	wusbadm		\
 	xargs		\
 	yppasswd	\
 	zdump		\
@@ -747,6 +764,7 @@ sparc_MSGSUBDIRS=	\
 	vntsd
 
 i386_MSGSUBDIRS=	\
+	rdmsr		\
 	ucodeadm
 
 #
@@ -778,7 +796,7 @@ AUDITSUBDIRS=		\
 	auditreduce	\
 	auditset	\
 	auditstat	\
-	praudit		
+	praudit
 
 #
 # commands not owned by the systems group
@@ -825,10 +843,10 @@ _dc: $(DCSUBDIRS)
 #
 # Dependencies
 #
-fs.d: fstyp
+fs.d:	fstyp
 ksh:	shcomp isaexec
-mdb:	terminfo
 print:	lp
+fmt:	mailx
 
 $(FIRST_SUBDIRS) $(BWOSDIRS) $(SUBDIRS) $(AUDITSUBDIRS): FRC
 	@if [ -f $@/Makefile  ]; then \

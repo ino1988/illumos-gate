@@ -23,11 +23,7 @@
 # Use is subject to license terms.
 #
 # Copyright (c) 2012 by Delphix. All rights reserved.
-#
-#	This makefile drives the production of the network lock manager client
-#	side module.
-#
-#	intel implementation architecture dependent
+# Copyright 2019 Joyent, Inc.
 #
 
 #
@@ -40,7 +36,6 @@ UTSBASE	= ../..
 #
 MODULE		= klmops
 OBJECTS		= $(KLMOPS_OBJS:%=$(OBJS_DIR)/%)
-LINTS		= $(KLMOPS_OBJS:%.o=$(LINTS_DIR)/%.ln)
 ROOTMODULE	= $(ROOT_MISC_DIR)/$(MODULE)
 
 #
@@ -52,7 +47,6 @@ include $(UTSBASE)/intel/Makefile.intel
 #	Define targets
 #
 ALL_TARGET	= $(BINARY)
-LINT_TARGET	= $(MODULE).lint
 INSTALL_TARGET	= $(BINARY) $(ROOTMODULE)
 
 #
@@ -60,7 +54,6 @@ INSTALL_TARGET	= $(BINARY) $(ROOTMODULE)
 #
 LDFLAGS		+= -dy -Nstrmod/rpcmod -Nfs/nfs -Nmisc/klmmod
 LDFLAGS		+= -M $(UTSBASE)/common/klm/mapfile-ops
-CTFMRGFLAGS	+= -f
 
 #
 #	Default build targets.
@@ -74,12 +67,6 @@ all:		$(ALL_DEPS)
 clean:		$(CLEAN_DEPS)
 
 clobber:	$(CLOBBER_DEPS)
-
-lint:		$(LINT_DEPS)
-
-modlintlib:	$(MODLINTLIB_DEPS)
-
-clean.lint:	$(CLEAN_LINT_DEPS)
 
 install:	$(INSTALL_DEPS)
 

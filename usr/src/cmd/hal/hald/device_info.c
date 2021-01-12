@@ -1368,7 +1368,6 @@ process_fdi_file (const char *dir, const char *filename,
 	char buf[512];
 	FILE *file;
 	int filesize;
-	size_t read;
 	char *filebuf;
 	dbus_bool_t device_matched;
 	XML_Parser parser;
@@ -1400,7 +1399,7 @@ process_fdi_file (const char *dir, const char *filename,
 		HAL_ERROR (("Could not allocate %d bytes for file %s", filesize, buf));
 		goto out;
 	}
-	read = fread (filebuf, sizeof (char), filesize, file);
+	(void) fread (filebuf, sizeof (char), filesize, file);
 
 	/* initialize parsing context */
 	parsing_context =
@@ -1589,6 +1588,7 @@ di_search_and_merge (HalDevice *d, DeviceInfoType type)
 	dbus_bool_t ret;
 	char *s1;
 	char *s2;
+	char *s3;
 
 	ret = FALSE;
 
@@ -1604,9 +1604,11 @@ di_search_and_merge (HalDevice *d, DeviceInfoType type)
 		if (hal_fdi_source_preprobe != NULL) {
 			s1 = hal_fdi_source_preprobe;
 			s2 = NULL;
+			s3 = NULL;
 		} else {
-			s1 = PACKAGE_DATA_DIR "/hal/fdi/preprobe";
-			s2 = PACKAGE_SYSCONF_DIR "/hal/fdi/preprobe";
+			s1 = PACKAGE_OLD_DATA_DIR "/hal/fdi/preprobe";
+			s2 = PACKAGE_DATA_DIR "/hal/fdi/preprobe";
+			s3 = PACKAGE_SYSCONF_DIR "/hal/fdi/preprobe";
 		}
 		break;
 
@@ -1614,9 +1616,11 @@ di_search_and_merge (HalDevice *d, DeviceInfoType type)
 		if (hal_fdi_source_information != NULL) {
 			s1 = hal_fdi_source_information;
 			s2 = NULL;
+			s3 = NULL;
 		} else {
-			s1 = PACKAGE_DATA_DIR "/hal/fdi/information";
-			s2 = PACKAGE_SYSCONF_DIR "/hal/fdi/information";
+			s1 = PACKAGE_OLD_DATA_DIR "/hal/fdi/information";
+			s2 = PACKAGE_DATA_DIR "/hal/fdi/information";
+			s3 = PACKAGE_SYSCONF_DIR "/hal/fdi/information";
 		}
 		break;
 
@@ -1624,15 +1628,18 @@ di_search_and_merge (HalDevice *d, DeviceInfoType type)
 		if (hal_fdi_source_policy != NULL) {
 			s1 = hal_fdi_source_policy;
 			s2 = NULL;
+			s3 = NULL;
 		} else {
-			s1 = PACKAGE_DATA_DIR "/hal/fdi/policy";
-			s2 = PACKAGE_SYSCONF_DIR "/hal/fdi/policy";
+			s1 = PACKAGE_OLD_DATA_DIR "/hal/fdi/policy";
+			s2 = PACKAGE_DATA_DIR "/hal/fdi/policy";
+			s3 = PACKAGE_SYSCONF_DIR "/hal/fdi/policy";
 		}
 		break;
 
 	default:
 		s1 = NULL;
 		s2 = NULL;
+		s3 = NULL;
 		HAL_ERROR (("Bogus device information type %d", type));
 		break;
 	}
@@ -1641,6 +1648,8 @@ di_search_and_merge (HalDevice *d, DeviceInfoType type)
 		ret = scan_fdi_files (s1, d) || ret;
 	if (s2 != NULL)
 		ret = scan_fdi_files (s2, d) || ret;
+	if (s3 != NULL)
+		ret = scan_fdi_files (s3, d) || ret;
 
 	return ret;
 }

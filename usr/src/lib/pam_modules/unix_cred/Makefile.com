@@ -31,10 +31,9 @@ include		../../Makefile.pam_modules
 
 LDLIBS		+= -lbsm -lpam -lsecdb -lproject -lc
 CERRWARN	+= -_gcc=-Wno-parentheses
-CERRWARN	+= -_gcc=-Wno-uninitialized
+CERRWARN	+= $(CNOWARN_UNINIT)
 
 all:	$(LIBS)
 
-lint:	lintcheck
 
 include	$(SRC)/lib/Makefile.targ

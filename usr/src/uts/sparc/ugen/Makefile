@@ -24,6 +24,7 @@
 # Copyright 2009 Sun Microsystems, Inc.  All rights reserved.
 # Use is subject to license terms.
 #
+# Copyright 2014 Garrett D'Amore <garrett@damore.org>
 #
 #	This makefile drives the production of the ugen kernel driver.
 #
@@ -40,22 +41,20 @@ UTSBASE	= ../..
 #
 MODULE		= ugen
 OBJECTS		= $(UGEN_OBJS:%=$(OBJS_DIR)/%)
-LINTS		= $(UGEN_OBJS:%.o=$(LINTS_DIR)/%.ln)
 ROOTMODULE	= $(ROOT_DRV_DIR)/$(MODULE)
-WARLOCK_OUT     = $(UGEN_OBJS:%.o=%.ll)
-WARLOCK_OK      = $(MODULE).ok
-WLCMD_DIR	= $(UTSBASE)/common/io/warlock
 
 #
 #	Include common rules.
 #
 include $(UTSBASE)/sparc/Makefile.sparc
 
-# 
-# lint pass one enforcement 
-# 
-CFLAGS += $(CCVERBOSE)
-CERRWARN	+= -_gcc=-Wno-uninitialized
+#
+# For now, disable these warnings; maintainers should endeavor
+# to investigate and remove these for maximum coverage.
+# Please do not carry these forward to new Makefiles.
+#
+CFLAGS		+= $(CCVERBOSE)
+CERRWARN	+= $(CNOWARN_UNINIT)
 
 #
 # depends on misc/usba
@@ -66,7 +65,6 @@ LDFLAGS         += -dy -Nmisc/usba
 #	Define targets
 #
 ALL_TARGET	= $(BINARY)
-LINT_TARGET	= $(MODULE).lint
 INSTALL_TARGET	= $(BINARY) $(ROOTMODULE)
 
 .KEEP_STATE:
@@ -76,16 +74,8 @@ all:		$(ALL_DEPS)
 def:		$(DEF_DEPS)
 
 clean:		$(CLEAN_DEPS)
-		$(RM) $(WARLOCK_OUT) $(WARLOCK_OK)
 
 clobber:	$(CLOBBER_DEPS)
-		$(RM) $(WARLOCK_OUT) $(WARLOCK_OK)
-
-lint:		$(LINT_DEPS)
-
-modlintlib:	$(MODLINTLIB_DEPS)
-
-clean.lint:	$(CLEAN_LINT_DEPS)
 
 install:	$(INSTALL_DEPS)
 
@@ -93,54 +83,3 @@ install:	$(INSTALL_DEPS)
 #	Include common targets.
 #
 include $(UTSBASE)/sparc/Makefile.targ
-
-#
-#	Defines for local commands.
-#
-WARLOCK		= warlock
-WLCC		= wlcc
-TOUCH		= touch
-TEST		= test
-
-#
-#	lock_lint rules
-#
-USBA_FILES = $(USBA_WITHOUT_WUSB_OBJS:%.o=../usba/%.ll)
-UHCI_FILES = $(UHCI_OBJS:%.o=../uhci/%.ll)
-OHCI_FILES = $(OHCI_OBJS:%.o=../ohci/%.ll)
-EHCI_FILES = $(EHCI_OBJS:%.o=../ehci/%.ll)
-
-warlock: $(WARLOCK_OK)  warlock_with_usba
-
-$(WARLOCK_OK): $(WARLOCK_OUT) $(WLCMD_DIR)/ugen.wlcmd warlock_ddi.files
-	$(WARLOCK) -c $(WLCMD_DIR)/ugen.wlcmd $(WARLOCK_OUT)  \
-		-l ../warlock/ddi_dki_impl.ll
-	$(TOUCH) $@
-
-%.ll: $(UTSBASE)/common/io/usb/clients/ugen/%.c \
-		$(UTSBASE)/common/sys/usb/clients/ugen/ugend.h
-	$(WLCC)  $(CPPFLAGS) -DDEBUG -o $@ $<
-
-
-warlock_with_usba: $(WLCMD_DIR)/ugen_with_usba.wlcmd  $(WARLOCK_OUT) \
-	usba_files ohci_files ehci_files uhci_files warlock_ddi.files
-	$(WARLOCK) -c $(WLCMD_DIR)/ugen_with_usba.wlcmd \
-		$(USBA_FILES) $(OHCI_FILES) $(EHCI_FILES) $(UHCI_FILES) \
-		$(WARLOCK_OUT) \
-	-l ../warlock/ddi_dki_impl.ll
-
-usba_files:
-	@cd ../usba;pwd; $(MAKE) warlock
-
-uhci_files:
-	@cd ../uhci;pwd; $(MAKE) warlock
-
-ohci_files:
-	@cd ../ohci;pwd; $(MAKE) warlock
-
-ehci_files:
-	@cd ../ehci;pwd; $(MAKE) warlock
-
-warlock_ddi.files:
-	cd ../warlock; pwd; $(MAKE) warlock
-

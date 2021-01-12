@@ -22,34 +22,37 @@
 # Copyright 2008 Sun Microsystems, Inc.  All rights reserved.
 # Use is subject to license terms.
 #
+# Copyright (c) 2018, Joyent, Inc.
 
 LIBRARY= libsec.a
 VERS= .1
 
 YFLAGS =	-d -v -b acl
-LFLAGS = 	-t
+LFLAGS =	-t
 OBJS_SHARED= acl_common.o
 GENERATED_SRCS = acl.tab.o acl_lex.o
 OBJS_COMMON= aclcheck.o aclmode.o aclsort.o acltext.o aclutils.o
 OBJECTS= $(OBJS_COMMON) $(OBJS_SHARED) $(GENERATED_SRCS)
 CLEANFILES += acl_lex.c acl.tab.c acl.tab.h
-LINTSRCS = $(OBJS_COMMON)
 
 # include library definitions
 include ../../Makefile.lib
 
 SRCDIR=		../common
 
-LIBS =		$(DYNLIB) $(LINTLIB)
+LIBS =		$(DYNLIB)
 
 CFLAGS +=	$(CCVERBOSE)
 CPPFLAGS +=	-I$(SRCDIR) -I. -I../../../common/acl
 LDLIBS += -lc -lavl -lidmap
 
 CERRWARN +=	-_gcc=-Wno-parentheses
-CERRWARN +=	-_gcc=-Wno-uninitialized
+CERRWARN +=	$(CNOWARN_UNINIT)
 CERRWARN +=	-_gcc=-Wno-unused-label
 CERRWARN +=	-_gcc=-Wno-unused-variable
+
+# not linted
+SMATCH=off
 
 CLOBBERFILES += acl.output
 
@@ -59,13 +62,11 @@ include ../../Makefile.rootfs
 SRCS=		$(OBJS_COMMON:%.o=$(SRCDIR)/%.c) \
 		 $(OBJS_SHARED:%.o=$(SRC)/common/acl/%.c)
 
-$(LINTLIB):= SRCS=	$(SRCDIR)/$(LINTSRC)
 
 .KEEP_STATE:
 
 all: $(LIBS)
 
-lint: lintcheck
 
 pics/%.o: ../../../common/acl/%.c
 	$(COMPILE.c) -o $@ $<

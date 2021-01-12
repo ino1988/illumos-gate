@@ -23,6 +23,11 @@
  * Use is subject to license terms.
  */
 
+/*
+ * Copyright 2019 OmniOS Community Edition (OmniOSce) Association.
+ */
+
+#include <stddef.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <strings.h>
@@ -41,15 +46,6 @@
 #include <libdlstat.h>
 #include <libdlaggr.h>
 
-/*
- * x86 <sys/regs> ERR conflicts with <curses.h> ERR.
- * Include curses.h last.
- */
-#if	defined(ERR)
-#undef  ERR
-#endif
-#include <curses.h>
-
 struct flowlist {
 	char		flowname[MAXFLOWNAMELEN];
 	char		linkname[MAXLINKNAMELEN];
@@ -62,487 +58,17 @@ struct flowlist {
 	pktsum_t	diffstats;
 };
 
-static	int	maxx, maxy, redraw = 0;
-static	volatile uint_t handle_resize = 0, handle_break = 0;
-
 pktsum_t		totalstats;
 struct flowlist		*stattable = NULL;
-static int		statentry = -1, maxstatentries = 0;
 
 #define	STATGROWSIZE	16
 
-/*
- * Search for flowlist entry in stattable which matches
- * the flowname and linkid.  If no match is found, use
- * next available slot.  If no slots are available,
- * reallocate table with  more slots.
- *
- * Return: *flowlist of matching flow
- *         NULL if realloc fails
- */
-
-static struct flowlist *
-findstat(const char *flowname, datalink_id_t linkid)
-{
-	int match = 0;
-	struct flowlist *flist;
-
-	/* Look for match in the stattable */
-	for (match = 0, flist = stattable;
-	    match <= statentry;
-	    match++, flist++) {
-
-		if (flist == NULL)
-			break;
-		/* match the flowname */
-		if (flowname != NULL) {
-			if (strncmp(flowname, flist->flowname, MAXFLOWNAMELEN)
-			    == NULL)
-				return (flist);
-		/* match the linkid */
-		} else {
-			if (linkid == flist->linkid)
-				return (flist);
-		}
-	}
-
-	/*
-	 * No match found in the table.  Store statistics in the next slot.
-	 * If necessary, make room for this entry.
-	 */
-	statentry++;
-	if ((maxstatentries == 0) || (maxstatentries == statentry)) {
-		maxstatentries += STATGROWSIZE;
-		stattable = realloc(stattable,
-		    maxstatentries * sizeof (struct flowlist));
-		if (stattable == NULL) {
-			perror("realloc");
-			return (struct flowlist *)(NULL);
-		}
-	}
-	flist = &stattable[statentry];
-	bzero(flist, sizeof (struct flowlist));
-
-	if (flowname != NULL)
-		(void) strncpy(flist->flowname, flowname, MAXFLOWNAMELEN);
-	flist->linkid = linkid;
-	flist->fd = INT32_MAX;
-
-	return (flist);
-}
-
-/*ARGSUSED*/
-static void
-print_flow_stats(dladm_handle_t handle, struct flowlist *flist)
-{
-	struct flowlist *fcurr;
-	double ikbs, okbs;
-	double ipks, opks;
-	double dlt;
-	int fcount;
-	static boolean_t first = B_TRUE;
-
-	if (first) {
-		first = B_FALSE;
-		(void) printw("please wait...\n");
-		return;
-	}
-
-	for (fcount = 0, fcurr = flist;
-	    fcount <= statentry;
-	    fcount++, fcurr++) {
-		if (fcurr->flowname && fcurr->display) {
-			dlt = (double)fcurr->diffstats.snaptime/(double)NANOSEC;
-			ikbs = fcurr->diffstats.rbytes * 8 / dlt / 1024;
-			okbs = fcurr->diffstats.obytes * 8 / dlt / 1024;
-			ipks = fcurr->diffstats.ipackets / dlt;
-			opks = fcurr->diffstats.opackets / dlt;
-			(void) printw("%-15.15s", fcurr->flowname);
-			(void) printw("%-10.10s", fcurr->linkname);
-			(void) printw("%9.2f %9.2f %9.2f %9.2f ",
-			    ikbs, okbs, ipks, opks);
-			(void) printw("\n");
-		}
-	}
-}
-
-/*ARGSUSED*/
-static int
-flow_kstats(dladm_handle_t handle, dladm_flow_attr_t *attr, void *arg)
-{
-	kstat_ctl_t 	*kcp = (kstat_ctl_t *)arg;
-	kstat_t		*ksp;
-	struct flowlist	*flist;
-	pktsum_t	currstats, *prevstats, *diffstats;
-
-	flist = findstat(attr->fa_flowname, attr->fa_linkid);
-	if (flist == NULL)
-		return (DLADM_WALK_CONTINUE);
-
-	flist->display = B_FALSE;
-	prevstats = &flist->prevstats;
-	diffstats = &flist->diffstats;
-
-	(void) dladm_datalink_id2info(handle, attr->fa_linkid, NULL, NULL,
-	    NULL, flist->linkname, sizeof (flist->linkname));
-
-
-	/* lookup kstat entry */
-	ksp = dladm_kstat_lookup(kcp, NULL, -1, attr->fa_flowname, "flow");
-
-	if (ksp == NULL)
-		return (DLADM_WALK_CONTINUE);
-
-	/* read packet and byte stats */
-	dladm_get_stats(kcp, ksp, &currstats);
-
-	if (flist->ifspeed == 0)
-		(void) dladm_kstat_value(ksp, "ifspeed", KSTAT_DATA_UINT64,
-		    &flist->ifspeed);
-
-	if (flist->first) {
-		flist->first = B_FALSE;
-	} else {
-		dladm_stats_diff(diffstats, &currstats, prevstats);
-		if (diffstats->snaptime == 0)
-			return (DLADM_WALK_CONTINUE);
-		dladm_stats_total(&totalstats, diffstats, &totalstats);
-	}
-
-	bcopy(&currstats, prevstats, sizeof (pktsum_t));
-	flist->display = B_TRUE;
-
-	return (DLADM_WALK_CONTINUE);
-}
-
-/*ARGSUSED*/
-static void
-print_link_stats(dladm_handle_t handle, struct flowlist *flist)
-{
-	struct flowlist *fcurr;
-	double ikbs, okbs;
-	double ipks, opks;
-	double util;
-	double dlt;
-	int fcount;
-	static boolean_t first = B_TRUE;
-
-	if (first) {
-		first = B_FALSE;
-		(void) printw("please wait...\n");
-		return;
-	}
-
-	for (fcount = 0, fcurr = flist;
-	    fcount <= statentry;
-	    fcount++, fcurr++) {
-		if ((fcurr->linkid != DATALINK_INVALID_LINKID) &&
-		    fcurr->display)  {
-			dlt = (double)fcurr->diffstats.snaptime/(double)NANOSEC;
-			ikbs = (double)fcurr->diffstats.rbytes * 8 / dlt / 1024;
-			okbs = (double)fcurr->diffstats.obytes * 8 / dlt / 1024;
-			ipks = (double)fcurr->diffstats.ipackets / dlt;
-			opks = (double)fcurr->diffstats.opackets / dlt;
-			(void) printw("%-10.10s", fcurr->linkname);
-			(void) printw("%9.2f %9.2f %9.2f %9.2f ",
-			    ikbs, okbs, ipks, opks);
-			if (fcurr->ifspeed != 0)
-				util = ((ikbs + okbs) * 1024) *
-				    100/ fcurr->ifspeed;
-			else
-				util = (double)0;
-			(void) attron(A_BOLD);
-			(void) printw("    %6.2f", util);
-			(void) attroff(A_BOLD);
-			(void) printw("\n");
-		}
-	}
-}
-
-/*
- * This function is called through the dladm_walk_datalink_id() walker and
- * calls the dladm_walk_flow() walker.
- */
-
-/*ARGSUSED*/
-static int
-link_flowstats(dladm_handle_t handle, datalink_id_t linkid, void *arg)
-{
-	dladm_status_t	status;
-
-	status = dladm_walk_flow(flow_kstats, handle, linkid, arg, B_FALSE);
-	if (status == DLADM_STATUS_OK)
-		return (DLADM_WALK_CONTINUE);
-	else
-		return (DLADM_WALK_TERMINATE);
-}
-
-/*ARGSUSED*/
-static int
-link_kstats(dladm_handle_t handle, datalink_id_t linkid, void *arg)
-{
-	kstat_ctl_t		*kcp = (kstat_ctl_t *)arg;
-	struct flowlist		*flist;
-	pktsum_t		currstats, *prevstats, *diffstats;
-	datalink_class_t	class;
-	kstat_t			*ksp;
-	char			dnlink[MAXPATHLEN];
-
-	/* find the flist entry */
-	flist = findstat(NULL, linkid);
-	flist->display = B_FALSE;
-	if (flist != NULL) {
-		prevstats = &flist->prevstats;
-		diffstats = &flist->diffstats;
-	} else {
-		return (DLADM_WALK_CONTINUE);
-	}
-
-	if (dladm_datalink_id2info(handle, linkid, NULL, &class, NULL,
-	    flist->linkname, sizeof (flist->linkname)) != DLADM_STATUS_OK)
-		return (DLADM_WALK_CONTINUE);
-
-	if (flist->fd == INT32_MAX) {
-		if (class == DATALINK_CLASS_PHYS) {
-			(void) snprintf(dnlink, MAXPATHLEN, "/dev/net/%s",
-			    flist->linkname);
-			if ((flist->fd = open(dnlink, O_RDWR)) < 0)
-				return (DLADM_WALK_CONTINUE);
-		} else {
-			flist->fd = -1;
-		}
-		(void) kstat_chain_update(kcp);
-	}
-
-	/* lookup kstat entry */
-	ksp = dladm_kstat_lookup(kcp, NULL, -1, flist->linkname, "net");
-
-	if (ksp == NULL)
-		return (DLADM_WALK_CONTINUE);
-
-	/* read packet and byte stats */
-	dladm_get_stats(kcp, ksp, &currstats);
-
-	if (flist->ifspeed == 0)
-		(void) dladm_kstat_value(ksp, "ifspeed", KSTAT_DATA_UINT64,
-		    &flist->ifspeed);
-
-	if (flist->first) {
-		flist->first = B_FALSE;
-	} else {
-		dladm_stats_diff(diffstats, &currstats, prevstats);
-		if (diffstats->snaptime == 0)
-			return (DLADM_WALK_CONTINUE);
-	}
-
-	bcopy(&currstats, prevstats, sizeof (*prevstats));
-	flist->display = B_TRUE;
-
-	return (DLADM_WALK_CONTINUE);
-}
-
-static void
-closedevnet()
-{
-	int index = 0;
-	struct flowlist *flist;
-
-	/* Close all open /dev/net/ files */
-
-	for (flist = stattable; index < maxstatentries; index++, flist++) {
-		if (flist->linkid == DATALINK_INVALID_LINKID)
-			break;
-		if (flist->fd != -1 && flist->fd != INT32_MAX)
-			(void) close(flist->fd);
-	}
-}
-
-/*ARGSUSED*/
-static void
-sig_break(int s)
-{
-	handle_break = 1;
-}
-
-/*ARGSUSED*/
-static void
-sig_resize(int s)
-{
-	handle_resize = 1;
-}
-
-static void
-curses_init()
-{
-	maxx = maxx;	/* lint */
-	maxy = maxy;	/* lint */
-
-	/* Install signal handlers */
-	(void) signal(SIGINT,  sig_break);
-	(void) signal(SIGQUIT, sig_break);
-	(void) signal(SIGTERM, sig_break);
-	(void) signal(SIGWINCH, sig_resize);
-
-	/* Initialize ncurses */
-	(void) initscr();
-	(void) cbreak();
-	(void) noecho();
-	(void) curs_set(0);
-	timeout(0);
-	getmaxyx(stdscr, maxy, maxx);
-}
-
-static void
-curses_fin()
-{
-	(void) printw("\n");
-	(void) curs_set(1);
-	(void) nocbreak();
-	(void) endwin();
-
-	free(stattable);
-}
-
-static void
-stat_report(dladm_handle_t handle, kstat_ctl_t *kcp,  datalink_id_t linkid,
-    const char *flowname, int opt)
-{
-
-	double dlt, ikbs, okbs, ipks, opks;
-
-	struct flowlist *fstable = stattable;
-
-	if ((opt != LINK_REPORT) && (opt != FLOW_REPORT))
-		return;
-
-	/* Handle window resizes */
-	if (handle_resize) {
-		(void) endwin();
-		(void) initscr();
-		(void) cbreak();
-		(void) noecho();
-		(void) curs_set(0);
-		timeout(0);
-		getmaxyx(stdscr, maxy, maxx);
-		redraw = 1;
-		handle_resize = 0;
-	}
-
-	/* Print title */
-	(void) erase();
-	(void) attron(A_BOLD);
-	(void) move(0, 0);
-	if (opt == FLOW_REPORT)
-		(void) printw("%-15.15s", "Flow");
-	(void) printw("%-10.10s", "Link");
-	(void) printw("%9.9s %9.9s %9.9s %9.9s ",
-	    "iKb/s", "oKb/s", "iPk/s", "oPk/s");
-	if (opt == LINK_REPORT)
-		(void) printw("    %6.6s", "%Util");
-	(void) printw("\n");
-	(void) attroff(A_BOLD);
-
-	(void) move(2, 0);
-
-	/* Print stats for each link or flow */
-	bzero(&totalstats, sizeof (totalstats));
-	if (opt == LINK_REPORT) {
-		/* Display all links */
-		if (linkid == DATALINK_ALL_LINKID) {
-			(void) dladm_walk_datalink_id(link_kstats, handle,
-			    (void *)kcp, DATALINK_CLASS_ALL,
-			    DATALINK_ANY_MEDIATYPE, DLADM_OPT_ACTIVE);
-		/* Display 1 link */
-		} else {
-			(void) link_kstats(handle, linkid, kcp);
-		}
-		print_link_stats(handle, fstable);
-
-	} else if (opt == FLOW_REPORT) {
-		/* Display 1 flow */
-		if (flowname != NULL) {
-			dladm_flow_attr_t fattr;
-			if (dladm_flow_info(handle, flowname, &fattr) !=
-			    DLADM_STATUS_OK)
-				return;
-			(void) flow_kstats(handle, &fattr, kcp);
-		/* Display all flows on all links */
-		} else if (linkid == DATALINK_ALL_LINKID) {
-			(void) dladm_walk_datalink_id(link_flowstats, handle,
-			    (void *)kcp, DATALINK_CLASS_ALL,
-			    DATALINK_ANY_MEDIATYPE, DLADM_OPT_ACTIVE);
-		/* Display all flows on a link */
-		} else if (linkid != DATALINK_INVALID_LINKID) {
-			(void) dladm_walk_flow(flow_kstats, handle, linkid, kcp,
-			    B_FALSE);
-		}
-		print_flow_stats(handle, fstable);
-
-		/* Print totals */
-		(void) attron(A_BOLD);
-		dlt = (double)totalstats.snaptime / (double)NANOSEC;
-		ikbs = totalstats.rbytes / dlt / 1024;
-		okbs = totalstats.obytes / dlt / 1024;
-		ipks = totalstats.ipackets / dlt;
-		opks = totalstats.opackets / dlt;
-		(void) printw("\n%-25.25s", "Totals");
-		(void) printw("%9.2f %9.2f %9.2f %9.2f ",
-		    ikbs, okbs, ipks, opks);
-		(void) attroff(A_BOLD);
-	}
-
-	if (redraw)
-		(void) clearok(stdscr, 1);
-
-	if (refresh() == ERR)
-		return;
-
-	if (redraw) {
-		(void) clearok(stdscr, 0);
-		redraw = 0;
-	}
-}
-
 /* Exported functions */
-
-/*
- * Continuously display link or flow statstics using a libcurses
- * based display.
- */
-
-void
-dladm_continuous(dladm_handle_t handle, datalink_id_t linkid,
-    const char *flowname, int interval, int opt)
-{
-	kstat_ctl_t *kcp;
-
-	if ((kcp = kstat_open()) == NULL) {
-		warn("kstat open operation failed");
-		return;
-	}
-
-	curses_init();
-
-	for (;;) {
-
-		if (handle_break)
-			break;
-
-		stat_report(handle, kcp, linkid, flowname, opt);
-
-		(void) sleep(max(1, interval));
-	}
-
-	closedevnet();
-	curses_fin();
-	(void) kstat_close(kcp);
-}
 
 /*
  * dladm_kstat_lookup() is a modified version of kstat_lookup which
  * adds the class as a selector.
  */
-
 kstat_t *
 dladm_kstat_lookup(kstat_ctl_t *kcp, const char *module, int instance,
     const char *name, const char *class)
@@ -647,7 +173,6 @@ dladm_status_t
 dladm_get_single_mac_stat(dladm_handle_t handle, datalink_id_t linkid,
     const char *name, uint8_t type, void *val)
 {
-	kstat_ctl_t	*kcp;
 	char		module[DLPI_LINKNAME_MAX];
 	uint_t		instance;
 	char 		link[DLPI_LINKNAME_MAX];
@@ -673,30 +198,31 @@ dladm_get_single_mac_stat(dladm_handle_t handle, datalink_id_t linkid,
 	if (status != DLADM_STATUS_OK)
 		return (status);
 
-	if ((kcp = kstat_open()) == NULL) {
-		warn("kstat_open operation failed");
-		return (-1);
-	}
-
 	/*
 	 * The kstat query could fail if the underlying MAC
 	 * driver was already detached.
 	 */
-	if ((ksp = kstat_lookup(kcp, module, instance, "mac")) == NULL &&
-	    (ksp = kstat_lookup(kcp, module, instance, NULL)) == NULL)
-		goto bail;
+	if (dladm_dld_kcp(handle) == NULL) {
+		warn("kstat_open operation failed");
+		return (-1);
+	}
 
-	if (kstat_read(kcp, ksp, NULL) == -1)
+	if ((ksp = kstat_lookup(dladm_dld_kcp(handle), module, instance,
+	    "mac")) == NULL &&
+	    (ksp = kstat_lookup(dladm_dld_kcp(handle), module, instance,
+	    NULL)) == NULL) {
+		goto bail;
+	}
+
+	if (kstat_read(dladm_dld_kcp(handle), ksp, NULL) == -1)
 		goto bail;
 
 	if (dladm_kstat_value(ksp, name, type, val) < 0)
 		goto bail;
 
-	(void) kstat_close(kcp);
 	return (DLADM_STATUS_OK);
 
 bail:
-	(void) kstat_close(kcp);
 	return (dladm_errno2status(errno));
 }
 
@@ -1196,26 +722,23 @@ dladm_sort_index_list(uint_t idlist[], uint_t size)
 
 /* Support for legacy drivers */
 void
-i_query_legacy_stats(const char *linkname, pktsum_t *stats)
+i_query_legacy_stats(dladm_handle_t dh, const char *linkname, pktsum_t *stats)
 {
-	kstat_ctl_t	*kcp;
 	kstat_t		*ksp;
 
 	bzero(stats, sizeof (*stats));
 
-	if ((kcp = kstat_open()) == NULL)
+	if (dladm_dld_kcp(dh) == NULL)
 		return;
 
-	ksp = dladm_kstat_lookup(kcp, "link", 0, linkname, NULL);
+	ksp = dladm_kstat_lookup(dladm_dld_kcp(dh), "link", 0, linkname, NULL);
 
 	if (ksp != NULL)
-		dladm_get_stats(kcp, ksp, stats);
-
-	(void) kstat_close(kcp);
+		dladm_get_stats(dladm_dld_kcp(dh), ksp, stats);
 }
 
 void *
-i_dlstat_legacy_rx_lane_stats(const char *linkname)
+i_dlstat_legacy_rx_lane_stats(dladm_handle_t dh, const char *linkname)
 {
 	dladm_stat_chain_t	*head = NULL;
 	pktsum_t		stats;
@@ -1224,7 +747,7 @@ i_dlstat_legacy_rx_lane_stats(const char *linkname)
 	bzero(&stats, sizeof (pktsum_t));
 
 	/* Query for dls stats */
-	i_query_legacy_stats(linkname, &stats);
+	i_query_legacy_stats(dh, linkname, &stats);
 
 	/* Convert to desired data type */
 	rx_lane_stat_entry = calloc(1, sizeof (rx_lane_stat_entry_t));
@@ -1252,7 +775,7 @@ done:
 }
 
 void *
-i_dlstat_legacy_tx_lane_stats(const char *linkname)
+i_dlstat_legacy_tx_lane_stats(dladm_handle_t dh, const char *linkname)
 {
 	dladm_stat_chain_t	*head = NULL;
 	pktsum_t		stats;
@@ -1261,7 +784,7 @@ i_dlstat_legacy_tx_lane_stats(const char *linkname)
 	bzero(&stats, sizeof (pktsum_t));
 
 	/* Query for dls stats */
-	i_query_legacy_stats(linkname, &stats);
+	i_query_legacy_stats(dh, linkname, &stats);
 
 	/* Convert to desired data type */
 	tx_lane_stat_entry = calloc(1, sizeof (tx_lane_stat_entry_t));
@@ -1370,10 +893,11 @@ static dladm_extract_idlist_t dladm_extract_idlist[] = {
 };
 
 static void
-i_dlstat_get_idlist(const char *modname, dlstat_idlist_type_t idlist_type,
+i_dlstat_get_idlist(dladm_handle_t handle, const char *modname,
+    dlstat_idlist_type_t idlist_type,
     uint_t idlist[], uint_t *size)
 {
-	kstat_ctl_t	*kcp;
+	kstat_ctl_t	*kcp = dladm_dld_kcp(handle);
 	kstat_t		*ksp;
 	char		*prefix;
 	int		prefixlen;
@@ -1381,9 +905,9 @@ i_dlstat_get_idlist(const char *modname, dlstat_idlist_type_t idlist_type,
 
 	*size = 0;
 
-	if ((kcp = kstat_open()) == NULL) {
+	if (kcp == NULL) {
 		warn("kstat_open operation failed");
-		goto done;
+		return;
 	}
 
 	prefix = dladm_extract_idlist[idlist_type].di_prefix;
@@ -1396,24 +920,20 @@ i_dlstat_get_idlist(const char *modname, dlstat_idlist_type_t idlist_type,
 		}
 	}
 	dladm_sort_index_list(idlist, *size);
-
-done:
-	(void) kstat_close(kcp);
 }
 
 static dladm_stat_chain_t *
-i_dlstat_query_stats(const char *modname, const char *prefix,
-    uint_t idlist[], uint_t idlist_size,
+i_dlstat_query_stats(dladm_handle_t handle, const char *modname,
+    const char *prefix, uint_t idlist[], uint_t idlist_size,
     void * (*fn)(kstat_ctl_t *, kstat_t *, int))
 {
-	kstat_ctl_t		*kcp;
 	kstat_t			*ksp;
 	char			statname[MAXLINKNAMELEN];
 	int 			i = 0;
 	dladm_stat_chain_t 	*head = NULL, *prev = NULL;
 	dladm_stat_chain_t	*curr;
 
-	if ((kcp = kstat_open()) == NULL) {
+	if (dladm_dld_kcp(handle) == NULL) {
 		warn("kstat_open operation failed");
 		return (NULL);
 	}
@@ -1424,7 +944,8 @@ i_dlstat_query_stats(const char *modname, const char *prefix,
 		(void) snprintf(statname, sizeof (statname), "%s%d", prefix,
 		    index);
 
-		ksp = dladm_kstat_lookup(kcp, modname, 0, statname, NULL);
+		ksp = dladm_kstat_lookup(dladm_dld_kcp(handle), modname, 0,
+		    statname, NULL);
 		if (ksp == NULL)
 			continue;
 
@@ -1432,7 +953,7 @@ i_dlstat_query_stats(const char *modname, const char *prefix,
 		if (curr == NULL)
 			break;
 
-		curr->dc_statentry = fn(kcp, ksp, index);
+		curr->dc_statentry = fn(dladm_dld_kcp(handle), ksp, index);
 		if (curr->dc_statentry == NULL) {
 			free(curr);
 			break;
@@ -1450,21 +971,20 @@ i_dlstat_query_stats(const char *modname, const char *prefix,
 		prev = curr;
 	}
 done:
-	(void) kstat_close(kcp);
 	return (head);
 }
 
 static misc_stat_entry_t *
-i_dlstat_misc_stats(const char *linkname)
+i_dlstat_misc_stats(dladm_handle_t handle, const char *linkname)
 {
-	kstat_ctl_t		*kcp;
 	kstat_t			*ksp;
 	misc_stat_entry_t 	*misc_stat_entry = NULL;
 
-	if ((kcp = kstat_open()) == NULL)
+	if (dladm_dld_kcp(handle) == NULL)
 		return (NULL);
 
-	ksp = dladm_kstat_lookup(kcp, linkname, 0, DLSTAT_MAC_MISC_STAT, NULL);
+	ksp = dladm_kstat_lookup(dladm_dld_kcp(handle), linkname, 0,
+	    DLSTAT_MAC_MISC_STAT, NULL);
 	if (ksp == NULL)
 		goto done;
 
@@ -1472,10 +992,10 @@ i_dlstat_misc_stats(const char *linkname)
 	if (misc_stat_entry == NULL)
 		goto done;
 
-	i_dlstat_get_stats(kcp, ksp, &misc_stat_entry->mse_stats,
+	i_dlstat_get_stats(dladm_dld_kcp(handle), ksp,
+	    &misc_stat_entry->mse_stats,
 	    misc_stats_list, MISC_STAT_SIZE);
 done:
-	(void) kstat_close(kcp);
 	return (misc_stat_entry);
 }
 
@@ -1586,11 +1106,12 @@ done:
 }
 
 static dladm_stat_chain_t *
-i_dlstat_rx_local_stats(const char *linkname)
+i_dlstat_rx_local_stats(dladm_handle_t handle, const char *linkname)
 {
 	dladm_stat_chain_t	*local_stats = NULL;
 
-	local_stats = i_dlstat_query_stats(linkname, DLSTAT_MAC_RX_SWLANE,
+	local_stats = i_dlstat_query_stats(handle, linkname,
+	    DLSTAT_MAC_RX_SWLANE,
 	    default_idlist, default_idlist_size,
 	    i_dlstat_rx_local_retrieve_stat);
 
@@ -1602,13 +1123,13 @@ i_dlstat_rx_local_stats(const char *linkname)
 }
 
 static dladm_stat_chain_t *
-i_dlstat_rx_bcast_stats(const char *linkname)
+i_dlstat_rx_bcast_stats(dladm_handle_t handle, const char *linkname)
 {
 	misc_stat_entry_t	*misc_stat_entry;
 	dladm_stat_chain_t	*head = NULL;
 	rx_lane_stat_entry_t	*rx_lane_stat_entry;
 
-	misc_stat_entry = i_dlstat_misc_stats(linkname);
+	misc_stat_entry = i_dlstat_misc_stats(handle, linkname);
 	if (misc_stat_entry == NULL)
 		goto done;
 
@@ -1644,13 +1165,13 @@ done:
 }
 
 static dladm_stat_chain_t *
-i_dlstat_rx_defunctlane_stats(const char *linkname)
+i_dlstat_rx_defunctlane_stats(dladm_handle_t handle, const char *linkname)
 {
 	misc_stat_entry_t	*misc_stat_entry;
 	dladm_stat_chain_t	*head = NULL;
 	rx_lane_stat_entry_t	*rx_lane_stat_entry;
 
-	misc_stat_entry = i_dlstat_misc_stats(linkname);
+	misc_stat_entry = i_dlstat_misc_stats(handle, linkname);
 	if (misc_stat_entry == NULL)
 		goto done;
 
@@ -1692,15 +1213,15 @@ done:
 }
 
 static dladm_stat_chain_t *
-i_dlstat_rx_hwlane_stats(const char *linkname)
+i_dlstat_rx_hwlane_stats(dladm_handle_t handle, const char *linkname)
 {
 	uint_t	rx_hwlane_idlist[MAX_RINGS_PER_GROUP];
 	uint_t	rx_hwlane_idlist_size;
 
-	i_dlstat_get_idlist(linkname, DLSTAT_RX_HWLANE_IDLIST,
+	i_dlstat_get_idlist(handle, linkname, DLSTAT_RX_HWLANE_IDLIST,
 	    rx_hwlane_idlist, &rx_hwlane_idlist_size);
 
-	return (i_dlstat_query_stats(linkname, DLSTAT_MAC_RX_HWLANE,
+	return (i_dlstat_query_stats(handle, linkname, DLSTAT_MAC_RX_HWLANE,
 	    rx_hwlane_idlist, rx_hwlane_idlist_size,
 	    i_dlstat_rx_hwlane_retrieve_stat));
 }
@@ -1710,7 +1231,7 @@ static dladm_stat_chain_t *
 i_dlstat_rx_swlane_stats(dladm_handle_t dh, datalink_id_t linkid,
     const char *linkname)
 {
-	return (i_dlstat_query_stats(linkname, DLSTAT_MAC_RX_SWLANE,
+	return (i_dlstat_query_stats(dh, linkname, DLSTAT_MAC_RX_SWLANE,
 	    default_idlist, default_idlist_size,
 	    i_dlstat_rx_swlane_retrieve_stat));
 }
@@ -1738,14 +1259,14 @@ dlstat_rx_lane_stats(dladm_handle_t dh, datalink_id_t linkid)
 	}
 
 	if (is_legacy_driver) {
-		head = i_dlstat_legacy_rx_lane_stats(linkname);
+		head = i_dlstat_legacy_rx_lane_stats(dh, linkname);
 		goto done;
 	}
 
-	local_stats = i_dlstat_rx_local_stats(linkname);
-	bcast_stats = i_dlstat_rx_bcast_stats(linkname);
-	defunctlane_stats = i_dlstat_rx_defunctlane_stats(linkname);
-	lane_stats = i_dlstat_rx_hwlane_stats(linkname);
+	local_stats = i_dlstat_rx_local_stats(dh, linkname);
+	bcast_stats = i_dlstat_rx_bcast_stats(dh, linkname);
+	defunctlane_stats = i_dlstat_rx_defunctlane_stats(dh, linkname);
+	lane_stats = i_dlstat_rx_hwlane_stats(dh, linkname);
 	if (lane_stats == NULL)
 		lane_stats = i_dlstat_rx_swlane_stats(dh, linkid, linkname);
 
@@ -1828,13 +1349,13 @@ done:
 }
 
 static dladm_stat_chain_t *
-i_dlstat_tx_bcast_stats(const char *linkname)
+i_dlstat_tx_bcast_stats(dladm_handle_t handle, const char *linkname)
 {
 	misc_stat_entry_t	*misc_stat_entry;
 	dladm_stat_chain_t	*head = NULL;
 	tx_lane_stat_entry_t	*tx_lane_stat_entry;
 
-	misc_stat_entry = i_dlstat_misc_stats(linkname);
+	misc_stat_entry = i_dlstat_misc_stats(handle, linkname);
 	if (misc_stat_entry == NULL)
 		goto done;
 
@@ -1868,13 +1389,13 @@ done:
 }
 
 static dladm_stat_chain_t *
-i_dlstat_tx_defunctlane_stats(const char *linkname)
+i_dlstat_tx_defunctlane_stats(dladm_handle_t handle, const char *linkname)
 {
 	misc_stat_entry_t	*misc_stat_entry;
 	dladm_stat_chain_t	*head = NULL;
 	tx_lane_stat_entry_t	*tx_lane_stat_entry;
 
-	misc_stat_entry = i_dlstat_misc_stats(linkname);
+	misc_stat_entry = i_dlstat_misc_stats(handle, linkname);
 	if (misc_stat_entry == NULL)
 		goto done;
 
@@ -1906,15 +1427,15 @@ done:
 }
 
 static dladm_stat_chain_t *
-i_dlstat_tx_hwlane_stats(const char *linkname)
+i_dlstat_tx_hwlane_stats(dladm_handle_t handle, const char *linkname)
 {
 	uint_t	tx_hwlane_idlist[MAX_RINGS_PER_GROUP];
 	uint_t	tx_hwlane_idlist_size;
 
-	i_dlstat_get_idlist(linkname, DLSTAT_TX_HWLANE_IDLIST,
+	i_dlstat_get_idlist(handle, linkname, DLSTAT_TX_HWLANE_IDLIST,
 	    tx_hwlane_idlist, &tx_hwlane_idlist_size);
 
-	return (i_dlstat_query_stats(linkname, DLSTAT_MAC_TX_HWLANE,
+	return (i_dlstat_query_stats(handle, linkname, DLSTAT_MAC_TX_HWLANE,
 	    tx_hwlane_idlist, tx_hwlane_idlist_size,
 	    i_dlstat_tx_hwlane_retrieve_stat));
 }
@@ -1924,7 +1445,7 @@ static dladm_stat_chain_t *
 i_dlstat_tx_swlane_stats(dladm_handle_t dh, datalink_id_t linkid,
     const char *linkname)
 {
-	return (i_dlstat_query_stats(linkname, DLSTAT_MAC_TX_SWLANE,
+	return (i_dlstat_query_stats(dh, linkname, DLSTAT_MAC_TX_SWLANE,
 	    default_idlist, default_idlist_size,
 	    i_dlstat_tx_swlane_retrieve_stat));
 }
@@ -1951,13 +1472,13 @@ dlstat_tx_lane_stats(dladm_handle_t dh, datalink_id_t linkid)
 	}
 
 	if (is_legacy_driver) {
-		head = i_dlstat_legacy_tx_lane_stats(linkname);
+		head = i_dlstat_legacy_tx_lane_stats(dh, linkname);
 		goto done;
 	}
 
-	bcast_stats = i_dlstat_tx_bcast_stats(linkname);
-	defunctlane_stats = i_dlstat_tx_defunctlane_stats(linkname);
-	lane_stats = i_dlstat_tx_hwlane_stats(linkname);
+	bcast_stats = i_dlstat_tx_bcast_stats(dh, linkname);
+	defunctlane_stats = i_dlstat_tx_defunctlane_stats(dh, linkname);
+	lane_stats = i_dlstat_tx_hwlane_stats(dh, linkname);
 	if (lane_stats == NULL)
 		lane_stats = i_dlstat_tx_swlane_stats(dh, linkid, linkname);
 
@@ -2130,7 +1651,7 @@ i_dlstat_query_fanout_stats(dladm_handle_t dh, datalink_id_t linkid,
 		return (NULL);
 	}
 
-	i_dlstat_get_idlist(linkname, DLSTAT_FANOUT_IDLIST,
+	i_dlstat_get_idlist(dh, linkname, DLSTAT_FANOUT_IDLIST,
 	    fanout_idlist, &fanout_idlist_size);
 
 	for (i = 0; i < idlist_size; i++) {
@@ -2139,7 +1660,7 @@ i_dlstat_query_fanout_stats(dladm_handle_t dh, datalink_id_t linkid,
 		(void) snprintf(statprefix, sizeof (statprefix), "%s%d_fanout",
 		    prefix, index);
 
-		curr_head = i_dlstat_query_stats(modname, statprefix,
+		curr_head = i_dlstat_query_stats(dh, modname, statprefix,
 		    fanout_idlist, fanout_idlist_size,
 		    i_dlstat_fanout_retrieve_stat);
 
@@ -2185,7 +1706,7 @@ dlstat_fanout_hwlane_stats(dladm_handle_t dh, datalink_id_t linkid,
 	uint_t	rx_hwlane_idlist[MAX_RINGS_PER_GROUP];
 	uint_t	rx_hwlane_idlist_size;
 
-	i_dlstat_get_idlist(linkname, DLSTAT_RX_HWLANE_IDLIST,
+	i_dlstat_get_idlist(dh, linkname, DLSTAT_RX_HWLANE_IDLIST,
 	    rx_hwlane_idlist, &rx_hwlane_idlist_size);
 
 	return (i_dlstat_query_fanout_stats(dh, linkid, rx_hwlane_idlist,
@@ -2311,10 +1832,10 @@ dlstat_rx_ring_stats(dladm_handle_t dh, datalink_id_t linkid)
 	} else
 		modname = linkname;
 
-	i_dlstat_get_idlist(modname, DLSTAT_RX_RING_IDLIST,
+	i_dlstat_get_idlist(dh, modname, DLSTAT_RX_RING_IDLIST,
 	    rx_ring_idlist, &rx_ring_idlist_size);
 
-	return (i_dlstat_query_stats(modname, DLSTAT_MAC_RX_RING,
+	return (i_dlstat_query_stats(dh, modname, DLSTAT_MAC_RX_RING,
 	    rx_ring_idlist, rx_ring_idlist_size,
 	    i_dlstat_rx_ring_retrieve_stat));
 }
@@ -2398,10 +1919,10 @@ dlstat_tx_ring_stats(dladm_handle_t dh, datalink_id_t linkid)
 	} else
 		modname = linkname;
 
-	i_dlstat_get_idlist(modname, DLSTAT_TX_RING_IDLIST,
+	i_dlstat_get_idlist(dh, modname, DLSTAT_TX_RING_IDLIST,
 	    tx_ring_idlist, &tx_ring_idlist_size);
 
-	return (i_dlstat_query_stats(modname, DLSTAT_MAC_TX_RING,
+	return (i_dlstat_query_stats(dh, modname, DLSTAT_MAC_TX_RING,
 	    tx_ring_idlist, tx_ring_idlist_size,
 	    i_dlstat_tx_ring_retrieve_stat));
 }
@@ -2496,7 +2017,8 @@ done:
 /*ARGSUSED*/
 static boolean_t
 i_dlstat_total_match(void *arg1, void *arg2)
-{					/* Always single entry for total */
+{
+	/* Always single entry for total */
 	return (B_TRUE);
 }
 
@@ -2647,9 +2169,9 @@ done:
  * the corresponding device driver.
  */
 static aggr_port_stat_entry_t *
-i_dlstat_single_port_stats(const char *portname, datalink_id_t linkid)
+i_dlstat_single_port_stats(dladm_handle_t handle, const char *portname,
+    datalink_id_t linkid)
 {
-	kstat_ctl_t		*kcp;
 	kstat_t			*ksp;
 	char			module[DLPI_LINKNAME_MAX];
 	uint_t			instance;
@@ -2658,12 +2180,13 @@ i_dlstat_single_port_stats(const char *portname, datalink_id_t linkid)
 	if (dladm_parselink(portname, module, &instance) != DLADM_STATUS_OK)
 		goto done;
 
-	if ((kcp = kstat_open()) == NULL) {
+	if (dladm_dld_kcp(handle) == NULL) {
 		warn("kstat open operation failed");
 		return (NULL);
 	}
 
-	ksp = dladm_kstat_lookup(kcp, module, instance, "mac", NULL);
+	ksp = dladm_kstat_lookup(dladm_dld_kcp(handle), module, instance,
+	    "mac", NULL);
 	if (ksp == NULL)
 		goto done;
 
@@ -2674,10 +2197,10 @@ i_dlstat_single_port_stats(const char *portname, datalink_id_t linkid)
 	/* Save port's linkid */
 	aggr_port_stat_entry->ape_portlinkid = linkid;
 
-	i_dlstat_get_stats(kcp, ksp, &aggr_port_stat_entry->ape_stats,
+	i_dlstat_get_stats(dladm_dld_kcp(handle), ksp,
+	    &aggr_port_stat_entry->ape_stats,
 	    aggr_port_stats_list, AGGR_PORT_STAT_SIZE);
 done:
-	(void) kstat_close(kcp);
 	return (aggr_port_stat_entry);
 }
 
@@ -2705,8 +2228,8 @@ dlstat_aggr_port_stats(dladm_handle_t dh, datalink_id_t linkid)
 			goto done;
 		}
 
-		aggr_port_stat_entry = i_dlstat_single_port_stats(dpa.dp_dev,
-		    portp->lp_linkid);
+		aggr_port_stat_entry = i_dlstat_single_port_stats(dh,
+		    dpa.dp_dev, portp->lp_linkid);
 
 		/* Create dladm_stat_chain_t object for this stat */
 		curr = malloc(sizeof (dladm_stat_chain_t));
@@ -2756,7 +2279,7 @@ dlstat_misc_stats(dladm_handle_t dh, datalink_id_t linkid)
 		goto done;
 	}
 
-	misc_stat_entry = i_dlstat_misc_stats(linkname);
+	misc_stat_entry = i_dlstat_misc_stats(dh, linkname);
 	if (misc_stat_entry == NULL)
 		goto done;
 
@@ -2990,28 +2513,27 @@ dladm_link_stat_query_all_free(dladm_stat_chain_t *curr)
 
 /* flow stats specific routines */
 flow_stat_t *
-dladm_flow_stat_query(const char *flowname)
+dladm_flow_stat_query(dladm_handle_t handle, const char *flowname)
 {
-	kstat_ctl_t	*kcp;
 	kstat_t		*ksp;
 	flow_stat_t	*flow_stat = NULL;
 
-	if ((kcp = kstat_open()) == NULL)
+	if (dladm_dld_kcp(handle) == NULL)
 		return (NULL);
 
 	flow_stat = calloc(1, sizeof (flow_stat_t));
 	if (flow_stat == NULL)
 		goto done;
 
-	ksp = dladm_kstat_lookup(kcp, NULL, -1, flowname, "flow");
+	ksp = dladm_kstat_lookup(dladm_dld_kcp(handle), NULL, -1, flowname,
+	    "flow");
 
 	if (ksp != NULL) {
-		i_dlstat_get_stats(kcp, ksp, flow_stat, flow_stats_list,
-		    FLOW_STAT_SIZE);
+		i_dlstat_get_stats(dladm_dld_kcp(handle), ksp, flow_stat,
+		    flow_stats_list, FLOW_STAT_SIZE);
 	}
 
 done:
-	(void) kstat_close(kcp);
 	return (flow_stat);
 }
 
@@ -3042,13 +2564,13 @@ dladm_flow_stat_free(flow_stat_t *curr)
 
 /* Query all flow stats */
 name_value_stat_entry_t *
-dladm_flow_stat_query_all(const char *flowname)
+dladm_flow_stat_query_all(dladm_handle_t handle, const char *flowname)
 {
 	flow_stat_t		*flow_stat;
 	name_value_stat_entry_t	*name_value_stat_entry = NULL;
 
 	/* Query flow stats */
-	flow_stat =  dladm_flow_stat_query(flowname);
+	flow_stat = dladm_flow_stat_query(handle, flowname);
 	if (flow_stat == NULL)
 		goto done;
 

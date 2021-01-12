@@ -24,9 +24,7 @@
 # Copyright 2009 Sun Microsystems, Inc.  All rights reserved.
 # Use is subject to license terms.
 #
-#	This makefile drives the production of the pcieb driver kernel
-#	module.
-#
+# Copyright 2019 Joyent, Inc.
 
 #
 #	Path to the base of the uts directory tree (usually /usr/src/uts).
@@ -38,7 +36,6 @@ UTSBASE	= ../..
 #
 MODULE		= pcieb
 OBJECTS		= $(PCIEB_OBJS:%=$(OBJS_DIR)/%)
-LINTS		= $(PCIEB_OBJS:%.o=$(LINTS_DIR)/%.ln)
 ROOTMODULE	= $(ROOT_DRV_DIR)/$(MODULE)
 CONF_SRCDIR	= $(UTSBASE)/common/io/pciex
 
@@ -51,7 +48,6 @@ include $(UTSBASE)/intel/Makefile.intel
 #	Define targets
 #
 ALL_TARGET	= $(BINARY) $(SRC_CONFILE)
-LINT_TARGET	= $(MODULE).lint
 INSTALL_TARGET	= $(BINARY) $(ROOTMODULE) $(ROOT_CONFFILE)
 
 #
@@ -66,18 +62,6 @@ MODSTUBS_DIR	 = $(OBJS_DIR)
 CLEANFILES	+= $(MODSTUBS_O)
 
 #
-# For now, disable these lint checks; maintainers should endeavor
-# to investigate and remove these for maximum lint coverage.
-# Please do not carry these forward to new Makefiles.
-#
-LINTTAGS	+= -erroff=E_SUSPICIOUS_COMPARISON
-LINTTAGS	+= -erroff=E_BAD_PTR_CAST_ALIGN
-LINTTAGS	+= -erroff=E_PTRDIFF_OVERFLOW
-LINTTAGS	+= -erroff=E_ASSIGN_NARROW_CONV
-
-CERRWARN	+= -_gcc=-Wno-unused-value
-
-#
 #	Default build targets.
 #
 .KEEP_STATE:
@@ -90,16 +74,9 @@ clean:		$(CLEAN_DEPS)
 
 clobber:	$(CLOBBER_DEPS)
 
-lint:		$(LINT_DEPS)
-
-modlintlib:	$(MODLINTLIB_DEPS)
-
-clean.lint:	$(CLEAN_LINT_DEPS)
-
 install:	$(INSTALL_DEPS)
 
 #
 #	Include common targets.
 #
 include $(UTSBASE)/intel/Makefile.targ
-

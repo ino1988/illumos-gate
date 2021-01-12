@@ -24,7 +24,7 @@
 # Use is subject to license terms.
 #
 #
-#	This makefile drives the production of the hidparser driver 
+#	This makefile drives the production of the hidparser driver
 #	kernel module.
 #
 
@@ -38,7 +38,6 @@ UTSBASE	= ../..
 #
 MODULE		= hidparser
 OBJECTS		= $(HIDPARSER_OBJS:%=$(OBJS_DIR)/%)
-LINTS		= $(HIDPARSER_OBJS:%.o=$(LINTS_DIR)/%.ln)
 ROOTMODULE	= $(ROOT_MISC_DIR)/$(MODULE)
 
 #
@@ -46,13 +45,12 @@ ROOTMODULE	= $(ROOT_MISC_DIR)/$(MODULE)
 #
 include $(UTSBASE)/intel/Makefile.intel
 
-CERRWARN	+= -_gcc=-Wno-uninitialized
+CERRWARN	+= $(CNOWARN_UNINIT)
 
 #
 #	Define targets
 #
 ALL_TARGET	= $(BINARY)
-LINT_TARGET	= $(MODULE).lint
 INSTALL_TARGET	= $(BINARY) $(ROOTMODULE)
 
 #
@@ -78,12 +76,6 @@ all:		$(ALL_DEPS)
 clean:		$(CLEAN_DEPS)
 
 clobber:	$(CLOBBER_DEPS)
-
-lint:		$(LINT_DEPS)
-
-modlintlib:	$(MODLINTLIB_DEPS)
-
-clean.lint:	$(CLEAN_LINT_DEPS)
 
 install:	$(INSTALL_DEPS)
 

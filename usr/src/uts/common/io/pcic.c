@@ -22,6 +22,7 @@
 /*
  * Copyright 2008 Sun Microsystems, Inc.  All rights reserved.
  * Use is subject to license terms.
+ * Copyright (c) 2016 by Delphix. All rights reserved.
  */
 
 /*
@@ -140,14 +141,14 @@ struct bus_ops pcmciabus_ops = {
 	NULL,				/* (*bus_remove_eventcall)();	*/
 	NULL,				/* (*bus_post_event)();		*/
 	NULL,				/* (*bus_intr_ctl)();		*/
-	NULL,				/* (*bus_config)(); 		*/
-	NULL,				/* (*bus_unconfig)(); 		*/
-	NULL,				/* (*bus_fm_init)(); 		*/
-	NULL,				/* (*bus_fm_fini)(); 		*/
+	NULL,				/* (*bus_config)();		*/
+	NULL,				/* (*bus_unconfig)();		*/
+	NULL,				/* (*bus_fm_init)();		*/
+	NULL,				/* (*bus_fm_fini)();		*/
 	NULL,				/* (*bus_enter)()		*/
 	NULL,				/* (*bus_exit)()		*/
 	NULL,				/* (*bus_power)()		*/
-	pcmcia_intr_ops			/* (*bus_intr_op)(); 		*/
+	pcmcia_intr_ops			/* (*bus_intr_op)();		*/
 };
 
 static struct cb_ops pcic_cbops = {
@@ -2646,7 +2647,7 @@ pcic_calc_speed(pcicdev_t *pcic, uint32_t speed)
  * Generally the larger value is taken if 2 are possible.
  */
 static struct pcic_card_times {
-	uint16_t cycle;	/* Speed as found in the atribute space of he card. */
+	uint16_t cycle;	/* Speed as found in the atribute space of the card. */
 	uint16_t setup;	/* Corresponding address setup time. */
 	uint16_t width;	/* Corresponding width, OE or WE. */
 	uint16_t hold;	/* Corresponding data or address hold time. */
@@ -2826,7 +2827,7 @@ pcic_set_window(dev_info_t *dip, set_window_t *window)
 				(void) pcmcia_free_mem(memp->res_dip, &res);
 				memp->pcw_status &= ~(PCW_MAPPED|PCW_ENABLED);
 				memp->pcw_hostmem = NULL;
-				memp->pcw_base = NULL;
+				memp->pcw_base = 0;
 				memp->pcw_len = 0;
 			}
 
@@ -2885,7 +2886,7 @@ pcic_set_window(dev_info_t *dip, set_window_t *window)
 				    (window->socket << 16),
 				    (caddr_t *)&memp->pcw_hostmem,
 				    &memp->pcw_handle,
-				    &window->attr, NULL);
+				    &window->attr, 0);
 
 				if (which != DDI_SUCCESS) {
 
@@ -4743,7 +4744,7 @@ pcic_set_interrupt(dev_info_t *dip, set_irq_handler_t *handler)
 		}
 
 		pcic->irq_current->intr =
-		    (ddi_intr_handler_t *)handler->handler;
+		    (ddi_intr_handler_t *)(uintptr_t)handler->handler;
 		pcic->irq_current->handler_id = handler->handler_id;
 		pcic->irq_current->arg1 = handler->arg1;
 		pcic->irq_current->arg2 = handler->arg2;
@@ -4756,7 +4757,7 @@ pcic_set_interrupt(dev_info_t *dip, set_irq_handler_t *handler)
 		break;
 
 	default:
-		intr->intr = (ddi_intr_handler_t *)handler->handler;
+		intr->intr = (ddi_intr_handler_t *)(uintptr_t)handler->handler;
 		intr->handler_id = handler->handler_id;
 		intr->arg1 = handler->arg1;
 		intr->arg2 = handler->arg2;
@@ -6081,7 +6082,7 @@ pcic_close(dev_t dev, int flag, int otyp, cred_t *cred)
 
 static int
 pcic_ioctl(dev_t dev, int cmd, intptr_t arg, int mode, cred_t *cred,
-	int *rval)
+    int *rval)
 {
 #ifdef CARDBUS
 	if (cardbus_is_cb_minor(dev))

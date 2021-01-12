@@ -22,23 +22,20 @@
 # Copyright 2009 Sun Microsystems, Inc.  All rights reserved.
 # Use is subject to license terms.
 #
-# cmd/power/Makefile
-#
+# Copyright (c) 2018, Joyent, Inc.
 
 DAEMON_SRCS =	powerd.c sysstat.c
 DAEMON_OBJS =	$(DAEMON_SRCS:%.c=%.o)
 DAEMON =	powerd
-PMCFG_SRCS = 	conf.c parse.c handlers.c
+PMCFG_SRCS =	conf.c parse.c handlers.c
 PMCFG_OBJS =	$(PMCFG_SRCS:%.c=%.o)
-PMCFG = 	pmconfig
-SUSPEND_SRCS = 	sys-suspend.c pm_pam_conv.c
+PMCFG =		pmconfig
+SUSPEND_SRCS =	sys-suspend.c pm_pam_conv.c
 SUSPEND_OBJS =	$(SUSPEND_SRCS:%.c=%.o)
-SUSPEND = 	sys-suspend
-SRCS = 		$(DAEMON_SRCS) $(PMCFG_SRCS) $(SUSPEND_SRCS)
-OBJS = 		$(SRCS:%.c=%.o)
-SCRIPTS =	sysidpm.sh
-SYSIDPM = 	sysidpm
-PROG =		$(DAEMON) $(PMCFG) $(SYSIDPM) $(SUSPEND)
+SUSPEND =	sys-suspend
+SRCS =		$(DAEMON_SRCS) $(PMCFG_SRCS) $(SUSPEND_SRCS)
+OBJS =		$(SRCS:%.c=%.o)
+PROG =		$(DAEMON) $(PMCFG) $(SUSPEND)
 POWERCONF=	power.conf
 ETCFILES =	$(POWERCONF)
 POWERPERM =	power
@@ -56,9 +53,6 @@ TEXT_DOMAIN=	SUNW_OST_OSCMD
 XGETFLAGS +=    -a -x power_all.xcl
 POFILE=		power_all.po
 POFILES=	$(PMCFG_SRCS:%.c=%.po) $(SUSPEND_SRCS:%.c=%.po)
-# needed because POFILES is deleted by clobber, but it's under
-# SCCS control here.
-OPOFILES=	sysidpm.po
 
 # pmconfig only needs libdevinfo on sparc
 sparc_LDEVINFO=	-ldevinfo -lefi -ladm -lzfs -lnvpair
@@ -80,25 +74,21 @@ ROOTLIBPOWERDAEMON= $(DAEMON:%=$(ROOTLIBPOWER)/%)
 $(ROOTLIBPOWER) := FILEMODE= 755
 $(ROOTLIBPOWERDAEMON) := FILEMODE= 555
 
-ROOTETCFILES= $(ETCFILES:%=$(ROOTETC)/%) 
-$(ROOTETCFILES) := FILEMODE= 644 
-
-ROOTUSRSBINSYSIDPM= $(SYSIDPM:%=$(ROOTUSRSBIN)/%)
-$(ROOTUSRSBINSYSIDPM) := FILEMODE= 755
+ROOTETCFILES= $(ETCFILES:%=$(ROOTETC)/%)
+$(ROOTETCFILES) := FILEMODE= 644
 
 #
 # lint pass one enforcement
 #
 CFLAGS += $(CCVERBOSE)
-CERRWARN += -_gcc=-Wno-parentheses
-CERRWARN += -_gcc=-Wno-uninitialized
-CERRWARN += -_gcc=-Wno-unused-value
+
+SMOFF += signed
 
 .PARALLEL: $(OBJS)
 
 .KEEP_STATE:
 
-all: $(PROG) $(POWERPERM).dfl $(ETCFILES) $(SCRIPTS)
+all: $(PROG) $(POWERPERM).dfl $(ETCFILES)
 
 install clean:
 
@@ -109,7 +99,7 @@ $(DAEMON_OBJS): $(DAEMON_SRCS)
 	$(PROCESS_COMMENT) $@
 
 $(DAEMON): $(DAEMON_OBJS)
-	$(CC) -o $@ $(DAEMON_OBJS) $(LDFLAGS) $(DAEMON_LDLIBS)
+	$(LINK.c) -o $@ $(DAEMON_OBJS) $(DAEMON_LDLIBS)
 	$(POST_PROCESS)
 
 $(PMCFG_OBJS): pmconfig.h
@@ -123,7 +113,7 @@ $(SUSPEND): $(SUSPEND_OBJS)
 	$(POST_PROCESS)
 
 install: all $(ROOTUSRSBINPMCFG) $(ROOTLIBPOWERDAEMON) $(ROOTUSRBINSUSPEND) \
-	$(ROOTETCFILES) $(ROOTUSRSBINSYSIDPM) $(ROOTETCDEFAULTFILES) \
+	$(ROOTETCFILES) $(ROOTETCDEFAULTFILES) \
 	$(ROOTMANIFEST) $(ROOTSVCMETHOD)
 
 $(ROOTLIBPOWER):
@@ -134,17 +124,14 @@ $(ROOTLIBPOWER)/%:	%
 
 $(ROOTLIBPOWERDAEMON): $(ROOTLIBPOWER)
 
-$(OPOFILES):
-	@
-
-$(POFILE):	$(POFILES) $(OPOFILES)
+$(POFILE):	$(POFILES)
 	$(RM)	$@
-	cat	$(POFILES) $(OPOFILES)	> $@
+	cat	$(POFILES)	> $@
 
 check:	$(CHKMANIFEST)
 
 clean:
-	$(RM) $(OBJS) $(SYSIDPM) $(POWERCONF)
+	$(RM) $(OBJS) $(POWERCONF)
 	$(RM) $(POFILE) $(POFILES)
 
 lint := LINTFLAGS=-auxn

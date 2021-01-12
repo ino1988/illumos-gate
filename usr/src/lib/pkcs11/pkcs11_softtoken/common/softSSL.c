@@ -21,6 +21,8 @@
 /*
  * Copyright 2009 Sun Microsystems, Inc.  All rights reserved.
  * Use is subject to license terms.
+ *
+ * Copyright 2020 Joyent, Inc.
  */
 
 #include <fcntl.h>
@@ -584,7 +586,7 @@ out:
  * . mech_p:	key derivation mechanism. the mechanism parameter carries the
  *		client and mastter random from the Hello handshake messages,
  *		the specification of the key and IV sizes, and the location
- * 		for the resulting keys and IVs.
+ *		for the resulting keys and IVs.
  * . basekey_p: The master secret key.
  * . pTemplate & ulAttributeCount: Any extra attributes for the key to be
  *		created.
@@ -595,13 +597,13 @@ out:
  *	and server random.
  *	First a keyblock is generated usining the following formula:
  *	key_block =
- *      	MD5(master_secret + SHA(`A' + master_secret +
+ *		MD5(master_secret + SHA(`A' + master_secret +
  *					ServerHello.random +
  *					ClientHello.random)) +
- *      	MD5(master_secret + SHA(`BB' + master_secret +
+ *		MD5(master_secret + SHA(`BB' + master_secret +
  *					ServerHello.random +
  *					ClientHello.random)) +
- *      	MD5(master_secret + SHA(`CCC' + master_secret +
+ *		MD5(master_secret + SHA(`CCC' + master_secret +
  *					ServerHello.random +
  *					ClientHello.random)) + [...];
  *
@@ -865,12 +867,15 @@ soft_ssl_key_and_mac_derive(soft_session_t *sp, CK_MECHANISM_PTR mech,
 #ifdef	__sparcv9
 			/* LINTED */
 			soft_ssl_weaken_key(mech, kb, (uint_t)secret_key_bytes,
-#else	/* __sparcv9 */
-			soft_ssl_weaken_key(mech, kb, secret_key_bytes,
-#endif	/* __sparcv9 */
 			    random_data->pClientRandom, ClientRandomLen,
 			    random_data->pServerRandom, ServerRandomLen,
 			    export_keys, B_TRUE);
+#else	/* __sparcv9 */
+			soft_ssl_weaken_key(mech, kb, secret_key_bytes,
+			    random_data->pClientRandom, ClientRandomLen,
+			    random_data->pServerRandom, ServerRandomLen,
+			    export_keys, B_TRUE);
+#endif	/* __sparcv9 */
 			new_tmpl[n].pValue = export_keys;
 			new_tmpl[n].ulValueLen = MD5_HASH_SIZE;
 		} else {
@@ -896,12 +901,15 @@ soft_ssl_key_and_mac_derive(soft_session_t *sp, CK_MECHANISM_PTR mech,
 #ifdef	__sparcv9
 			/* LINTED */
 			soft_ssl_weaken_key(mech, kb, (uint_t)secret_key_bytes,
-#else	/* __sparcv9 */
-			soft_ssl_weaken_key(mech, kb, secret_key_bytes,
-#endif	/* __sparcv9 */
 			    random_data->pServerRandom, ServerRandomLen,
 			    random_data->pClientRandom, ClientRandomLen,
 			    export_keys + MD5_HASH_SIZE, B_FALSE);
+#else	/* __sparcv9 */
+			soft_ssl_weaken_key(mech, kb, secret_key_bytes,
+			    random_data->pServerRandom, ServerRandomLen,
+			    random_data->pClientRandom, ClientRandomLen,
+			    export_keys + MD5_HASH_SIZE, B_FALSE);
+#endif	/* __sparcv9 */
 			new_tmpl[n].pValue = export_keys + MD5_HASH_SIZE;
 		} else
 			new_tmpl[n].pValue = kb;
@@ -925,8 +933,7 @@ soft_ssl_key_and_mac_derive(soft_session_t *sp, CK_MECHANISM_PTR mech,
 	if (new_tmpl_allocated)
 		free(new_tmpl);
 
-	if (export_keys != NULL)
-		free(export_keys);
+	freezero(export_keys, 2 * MD5_HASH_SIZE);
 
 	return (rv);
 
@@ -955,8 +962,7 @@ out_err:
 	if (new_tmpl_allocated)
 		free(new_tmpl);
 
-	if (export_keys != NULL)
-		free(export_keys);
+	freezero(export_keys, 2 * MD5_HASH_SIZE);
 
 	return (rv);
 }
@@ -994,23 +1000,23 @@ soft_add_derived_key(CK_ATTRIBUTE_PTR tmpl, CK_ULONG attrcount,
 
 	/* ... and, if it needs to persist, write on the token */
 	if (IS_TOKEN_OBJECT(secret_key)) {
-		secret_key->session_handle = (CK_SESSION_HANDLE)NULL;
+		secret_key->session_handle = CK_INVALID_HANDLE;
 		soft_add_token_object_to_slot(secret_key);
 		rv = soft_put_object_to_keystore(secret_key);
 		if (rv != CKR_OK) {
 			soft_delete_token_object(secret_key, B_FALSE, B_FALSE);
 			return (rv);
 		}
-		*phKey = (CK_OBJECT_HANDLE)secret_key;
+		*phKey = set_objecthandle(secret_key);
 
 		return (CKR_OK);
 	}
 
 	/* Add the new object to the session's object list. */
 	soft_add_object_to_session(secret_key, sp);
-	secret_key->session_handle = (CK_SESSION_HANDLE)sp;
+	secret_key->session_handle = sp->handle;
 
-	*phKey = (CK_OBJECT_HANDLE)secret_key;
+	*phKey = set_objecthandle(secret_key);
 
 	return (rv);
 }

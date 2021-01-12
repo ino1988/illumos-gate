@@ -26,6 +26,11 @@
  * Copyright 2009 Sun Microsystems, Inc.  All rights reserved.
  * Use is subject to license terms.
  */
+
+/*
+ * Copyright (c) 2018, Joyent, Inc.
+ */
+
 #include <sys/types.h>
 #include <sys/conf.h>
 #include <sys/debug.h>
@@ -725,8 +730,7 @@ unm_check_options(unm_adapter *adapter)
 
 	tx_desc = ddi_prop_get_int(DDI_DEV_T_ANY, dip, DDI_PROP_DONTPASS,
 	    txringsize_propname, MAX_CMD_DESCRIPTORS_HOST);
-	if (tx_desc >= 256 && tx_desc <= MAX_CMD_DESCRIPTORS &&
-	    !(tx_desc & (tx_desc - 1))) {
+	if (tx_desc >= 256 && tx_desc <= MAX_CMD_DESCRIPTORS && ISP2(tx_desc)) {
 		adapter->MaxTxDescCount = tx_desc;
 	} else {
 		cmn_err(CE_WARN, "%s%d: TxRingSize defaulting to %d, since "
@@ -739,8 +743,7 @@ unm_check_options(unm_adapter *adapter)
 	rx_desc = ddi_prop_get_int(DDI_DEV_T_ANY, dip, DDI_PROP_DONTPASS,
 	    rxringsize_propname, maxrx);
 	if (rx_desc >= NX_MIN_DRIVER_RDS_SIZE &&
-	    rx_desc <= NX_MAX_SUPPORTED_RDS_SIZE &&
-	    !(rx_desc & (rx_desc - 1))) {
+	    rx_desc <= NX_MAX_SUPPORTED_RDS_SIZE && ISP2(rx_desc)) {
 		adapter->MaxRxDescCount = rx_desc;
 	} else {
 		cmn_err(CE_WARN, "%s%d: RxRingSize defaulting to %d, since "
@@ -753,8 +756,7 @@ unm_check_options(unm_adapter *adapter)
 	rx_jdesc = ddi_prop_get_int(DDI_DEV_T_ANY, dip, DDI_PROP_DONTPASS,
 	    jumborxringsize_propname, MAX_JUMBO_RCV_DESCRIPTORS);
 	if (rx_jdesc >= NX_MIN_DRIVER_RDS_SIZE &&
-	    rx_jdesc <= NX_MAX_SUPPORTED_JUMBO_RDS_SIZE &&
-	    !(rx_jdesc & (rx_jdesc - 1))) {
+	    rx_jdesc <= NX_MAX_SUPPORTED_JUMBO_RDS_SIZE && ISP2(rx_jdesc)) {
 		adapter->MaxJumboRxDescCount = rx_jdesc;
 	} else {
 		cmn_err(CE_WARN, "%s%d: JumboRingSize defaulting to %d, since "
@@ -1358,7 +1360,7 @@ unmdetach(dev_info_t *dip, ddi_detach_cmd_t cmd)
 	unm_adapter  *adapter = (unm_adapter *)ddi_get_driver_private(dip);
 
 	if (adapter == NULL)
-	return (DDI_FAILURE);
+		return (DDI_FAILURE);
 
 	switch (cmd) {
 	case DDI_DETACH:

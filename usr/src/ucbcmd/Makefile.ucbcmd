@@ -23,6 +23,7 @@
 # Copyright 2008 Sun Microsystems, Inc.  All rights reserved.
 # Use is subject to license terms.
 #
+# Copyright (c) 2018, Joyent, Inc.
 #
 # ucbcmd/Makefile.ucbcmd
 #
@@ -43,7 +44,6 @@ FILEMODE=	0555
 LIBFILEMODE=	0444
 ROOTBIN=	$(ROOT)/usr/ucb
 ROOTLIB=	$(ROOT)/usr/ucblib
-ROOT4LIB=	$(ROOT)/usr/4lib
 ROOTETC=	$(ROOT)/etc
 ROOTSHLIB=	$(ROOT)/usr/share/lib
 ROOTBIN32=	$(ROOTBIN)/$(MACH32)
@@ -51,12 +51,14 @@ ROOTBIN64=	$(ROOTBIN)/$(MACH64)
 
 ROOTPROG=	$(PROG:%=$(ROOTBIN)/%)
 ROOTLIBPROG=	$(PROG:%=$(ROOTLIB)/%)
-ROOT4LIBPROG=	$(PROG:%=$(ROOT4LIB)/%)
 ROOTETCPROG=	$(PROG:%=$(ROOTETC)/%)
 ROOTPROG64=	$(PROG:%=$(ROOTBIN64)/%)
 ROOTPROG32=	$(PROG:%=$(ROOTBIN32)/%)
 
 ISAEXEC=	$(ROOT)/usr/lib/isaexec
+
+# don't lint any of ucbcmd
+SMATCH=off
 
 # storing LDLIBS in two macros allows reordering of options
 LDLIBS.cmd =    $(ENVLDLIBS1)  $(ENVLDLIBS2)  $(ENVLDLIBS3)
@@ -64,7 +66,8 @@ LDLIBS =        $(LDLIBS.cmd)
 
 LDFLAGS.cmd = \
 	$(ENVLDFLAGS1) $(ENVLDFLAGS2) $(ENVLDFLAGS3) \
-	$(MAPFILE.NES:%=-M%) $(MAPFILE.PGA:%=-M%) $(MAPFILE.NED:%=-M%)
+	$(MAPFILE.NES:%=-Wl,-M%) $(MAPFILE.PGA:%=-Wl,-M%) $(MAPFILE.NED:%=-Wl,-M%) \
+	$(BDIRECT)
 
 LDFLAGS =       $(LDFLAGS.cmd)
 
@@ -72,9 +75,6 @@ $(ROOTBIN)/%: %
 	$(INS.file)
 
 $(ROOTLIB)/%: %
-	$(INS.file)
-
-$(ROOT4LIB)/%: %
 	$(INS.file)
 
 $(ROOTETC)/%: %

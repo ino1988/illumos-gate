@@ -20,7 +20,7 @@
  */
 /*
  * Copyright (c) 2007, 2010, Oracle and/or its affiliates. All rights reserved.
- * Copyright 2012 Nexenta Systems, Inc.  All rights reserved.
+ * Copyright 2017 Nexenta Systems, Inc.  All rights reserved.
  */
 
 /*
@@ -78,8 +78,7 @@ smb_pre_open_print_file(smb_request_t *sr)
 
 	op->create_disposition = FILE_OVERWRITE_IF;
 	op->create_options = FILE_NON_DIRECTORY_FILE;
-	DTRACE_SMB_2(op__OpenPrintFile__start, smb_request_t *, sr,
-	    struct open_param *, op);
+	DTRACE_SMB_START(op__OpenPrintFile, smb_request_t *, sr); /* arg.open */
 
 	return ((rc == 0) ? SDRC_SUCCESS : SDRC_ERROR);
 }
@@ -87,7 +86,7 @@ smb_pre_open_print_file(smb_request_t *sr)
 void
 smb_post_open_print_file(smb_request_t *sr)
 {
-	DTRACE_SMB_1(op__OpenPrintFile__done, smb_request_t *, sr);
+	DTRACE_SMB_DONE(op__OpenPrintFile, smb_request_t *, sr);
 }
 
 /*
@@ -122,7 +121,8 @@ smb_com_open_print_file(smb_request_t *sr)
 	}
 	if ((rc = smbsr_encode_result(sr, 1, 0,
 	    "bww", 1, sr->smb_fid, 0)) == 0) {
-		if ((si = smb_kshare_lookup(SMB_SHARE_PRINT)) == NULL) {
+		si = smb_kshare_lookup(sr->sr_server, SMB_SHARE_PRINT);
+		if (si == NULL) {
 			cmn_err(CE_NOTE, "smb_com_open_print_file: SDRC_ERROR");
 			return (SDRC_ERROR);
 		}
@@ -134,9 +134,9 @@ smb_com_open_print_file(smb_request_t *sr)
 		(void) strlcpy(sp->sd_username, sr->uid_user->u_name,
 		    MAXNAMELEN);
 		sp->sd_fid = sr->smb_fid;
-		if (smb_spool_add_doc(sp))
+		if (smb_spool_add_doc(sr->tid_tree, sp))
 			kmem_free(sp, sizeof (smb_kspooldoc_t));
-		smb_kshare_release(si);
+		smb_kshare_release(sr->sr_server, si);
 	}
 	return ((rc == 0) ? SDRC_SUCCESS : SDRC_ERROR);
 }
@@ -157,14 +157,14 @@ smb_pre_close_print_file(smb_request_t *sr)
 
 	rc = smbsr_decode_vwv(sr, "w", &sr->smb_fid);
 
-	DTRACE_SMB_1(op__ClosePrintFile__start, smb_request_t *, sr);
+	DTRACE_SMB_START(op__ClosePrintFile, smb_request_t *, sr);
 	return ((rc == 0) ? SDRC_SUCCESS : SDRC_ERROR);
 }
 
 void
 smb_post_close_print_file(smb_request_t *sr)
 {
-	DTRACE_SMB_1(op__ClosePrintFile__done, smb_request_t *, sr);
+	DTRACE_SMB_DONE(op__ClosePrintFile, smb_request_t *, sr);
 }
 
 /*
@@ -208,14 +208,14 @@ smb_com_close_print_file(smb_request_t *sr)
 smb_sdrc_t
 smb_pre_get_print_queue(smb_request_t *sr)
 {
-	DTRACE_SMB_1(op__GetPrintQueue__start, smb_request_t *, sr);
+	DTRACE_SMB_START(op__GetPrintQueue, smb_request_t *, sr);
 	return (SDRC_SUCCESS);
 }
 
 void
 smb_post_get_print_queue(smb_request_t *sr)
 {
-	DTRACE_SMB_1(op__GetPrintQueue__done, smb_request_t *, sr);
+	DTRACE_SMB_DONE(op__GetPrintQueue, smb_request_t *, sr);
 }
 
 smb_sdrc_t
@@ -254,14 +254,14 @@ smb_pre_write_print_file(smb_request_t *sr)
 
 	rc = smbsr_decode_vwv(sr, "w", &sr->smb_fid);
 
-	DTRACE_SMB_1(op__WritePrintFile__start, smb_request_t *, sr);
+	DTRACE_SMB_START(op__WritePrintFile, smb_request_t *, sr);
 	return ((rc == 0) ? SDRC_SUCCESS : SDRC_ERROR);
 }
 
 void
 smb_post_write_print_file(smb_request_t *sr)
 {
-	DTRACE_SMB_1(op__WritePrintFile__done, smb_request_t *, sr);
+	DTRACE_SMB_DONE(op__WritePrintFile, smb_request_t *, sr);
 
 	kmem_free(sr->arg.rw, sizeof (smb_rw_param_t));
 }
@@ -290,7 +290,10 @@ smb_com_write_print_file(smb_request_t *sr)
 	node = sr->fid_ofile->f_node;
 	sr->user_cr = smb_ofile_getcred(sr->fid_ofile);
 
-	if (smb_node_getattr(sr, node, &attr) != 0) {
+	bzero(&attr, sizeof (attr));
+	attr.sa_mask = SMB_AT_SIZE;
+	rc = smb_node_getattr(sr, node, sr->user_cr, sr->fid_ofile, &attr);
+	if (rc != 0) {
 		smbsr_error(sr, NT_STATUS_INTERNAL_ERROR,
 		    ERRDOS, ERROR_INTERNAL_ERROR);
 		return (SDRC_ERROR);

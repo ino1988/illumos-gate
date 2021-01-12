@@ -20,8 +20,9 @@
 #
 #
 # Copyright (c) 2005, 2010, Oracle and/or its affiliates. All rights reserved.
-# Copyright (c) 2012 by Delphix. All rights reserved.
-#
+# Copyright (c) 2012, 2016 by Delphix. All rights reserved.
+# Copyright 2017 RackTop Systems.
+# Copyright 2020 Joyent, Inc.
 
 PROG= ztest
 OBJS= $(PROG).o
@@ -32,21 +33,36 @@ include ../../Makefile.ctf
 
 INCS += -I../../../lib/libzpool/common
 INCS += -I../../../uts/common/fs/zfs
+INCS += -I../../../uts/common/fs/zfs/lua
 INCS += -I../../../common/zfs
+INCS += -I../../../lib/libzutil/common
 
-LDLIBS += -lumem -lzpool -lcmdutils -lm -lnvpair
+LDLIBS += -lumem -lzpool -lcmdutils -lm -lnvpair -lfakekernel -lzutil
 
-C99MODE= -xc99=%all
+CSTD= $(CSTD_GNU99)
 C99LMODE= -Xc99=%all
 CFLAGS += -g $(CCVERBOSE)
 CFLAGS64 += -g $(CCVERBOSE)
+CPPFLAGS.first = -I$(SRC)/lib/libfakekernel/common -D_FAKE_KERNEL
 CPPFLAGS += -D_LARGEFILE64_SOURCE=1 -D_REENTRANT $(INCS) -DDEBUG
 
 # lint complains about unused _umem_* functions
 LINTFLAGS += -xerroff=E_NAME_DEF_NOT_USED2
 LINTFLAGS64 += -xerroff=E_NAME_DEF_NOT_USED2
 
+# lint complains about unused inline functions, even though
+# they are "inline", not "static inline", with "extern inline"
+# implementations and usage in libzpool.
+LINTFLAGS += -erroff=E_STATIC_UNUSED
+LINTFLAGS64 += -erroff=E_STATIC_UNUSED
+
 CERRWARN += -_gcc=-Wno-switch
+
+# false positive
+SMOFF += signed
+
+# needs work
+SMOFF += all_func_returns
 
 .KEEP_STATE:
 

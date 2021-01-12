@@ -19,8 +19,6 @@
 # CDDL HEADER END
 #
 #
-#ident	"%Z%%M%	%I%	%E% SMI"
-#
 # Copyright 2006 Sun Microsystems, Inc.  All rights reserved.
 # Use is subject to license terms.
 
@@ -35,7 +33,6 @@ UTSBASE	= ../..
 #
 MODULE		= smbus
 OBJECTS		= $(SMBUS_OBJS:%=$(OBJS_DIR)/%)
-LINTS		= $(SMBUS_OBJS:%.o=$(LINTS_DIR)/%.ln)
 ROOTMODULE	= $(ROOT_PSM_DRV_DIR)/$(MODULE)
 
 #
@@ -43,25 +40,14 @@ ROOTMODULE	= $(ROOT_PSM_DRV_DIR)/$(MODULE)
 #
 include $(UTSBASE)/sun4u/Makefile.sun4u
 
-# 
-# lint pass one enforcement 
-# 
 CFLAGS += $(CCVERBOSE) -I../../sun4u
 
 LDFLAGS += -dy -N misc/i2c_svc
 
 #
-# For now, disable these lint checks; maintainers should endeavor
-# to investigate and remove these for maximum lint coverage.
-# Please do not carry these forward to new Makefiles.
-#
-LINTTAGS	+= -erroff=E_BAD_PTR_CAST_ALIGN
-
-#
 #	Define targets
 #
 ALL_TARGET	= $(BINARY)
-LINT_TARGET	= $(MODULE).lint
 INSTALL_TARGET	= $(BINARY) $(ROOTMODULE)
 
 .KEEP_STATE:
@@ -74,34 +60,7 @@ clean:		$(CLEAN_DEPS)
 
 clobber:	$(CLOBBER_DEPS)
 
-lint:		$(LINT_DEPS)
-
-modlintlib:	$(MODLINTLIB_DEPS)
-
-clean.lint:	$(CLEAN_LINT_DEPS)
-
 install:	$(INSTALL_DEPS)
-
-#
-#	Defines for local commands.
-#
-WLCC		= wlcc
-TOUCH		= touch
-WARLOCK		= warlock
-
-#
-#	Warlock targets
-#
-
-SMBUS = $(SMBUS_OBJS:%.o=%.ll)
-
-warlock: $(MODULE).ok 
-
-%.ok:	$(SMBUS_FILES)
-	$(TOUCH) $@
-
-%.ll: $(UTSBASE)/sun4u/io/i2c/nexus/smbus/%.c
-	$(WLCC) $(CFLAGS) $(CPPFLAGS) -DDEBUG -o $@ $<
 
 #
 #	Include common targets

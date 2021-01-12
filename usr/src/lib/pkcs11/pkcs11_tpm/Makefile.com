@@ -21,8 +21,23 @@
 # Copyright 2009 Sun Microsystems, Inc.  All rights reserved.
 # Use is subject to license terms.
 #
+# Copyright 2018 Jason King
+#
+# Copyright (c) 2018, Joyent, Inc.
+
 LIBRARY =	pkcs11_tpm.a
 VERS =		.1
+
+RSA_DIR =		$(SRC)/common/crypto/rsa
+RSA_FLAGS =		-I$(RSA_DIR)
+
+BIGNUM_DIR =		$(SRC)/common/bignum
+BIGNUM_FLAGS =		-I$(BIGNUM_DIR)
+
+PADDING_DIR =		$(SRC)/common/crypto/padding
+PADDING_FLAGS =		-I$(PADDING_DIR)
+
+SOFTCRYPTOFLAGS =	$(RSA_FLAGS) $(PADDING_FLAGS) $(BIGNUM_FLAGS)
 
 OBJECTS= api_interface.o \
 	apiutil.o \
@@ -73,28 +88,22 @@ TSSLIB=-L$(TSPILIBDIR)
 TSSLIB64=-L$(TSPILIBDIR)/$(MACH64)
 TSSINC=-I$(TSPIINCDIR)
 
-LDLIBS += $(TSSLIB) -L$(ADJUNCT_PROTO)/lib -lc -luuid -lmd -ltspi -lcrypto
-CPPFLAGS += -xCC -D_POSIX_PTHREAD_SEMANTICS $(TSSINC)
+LDLIBS += $(TSSLIB) -L$(ADJUNCT_PROTO)/lib -lc -luuid -lmd -ltspi -lsoftcrypto
+CPPFLAGS += -xCC -D_POSIX_PTHREAD_SEMANTICS $(TSSINC) $(SOFTCRYPTOFLAGS)
 CPPFLAGS64 += $(CPPFLAGS)
-C99MODE=        $(C99_ENABLE)
+CSTD=        $(CSTD_GNU99)
 
 CERRWARN +=	-_gcc=-Wno-parentheses
 CERRWARN +=	-_gcc=-Wno-unused-label
-CERRWARN +=	-_gcc=-Wno-uninitialized
+CERRWARN +=	$(CNOWARN_UNINIT)
 
-LINTSRC= $(OBJECTS:%.o=$(SRCDIR)/%.c)
-
-$(LINTLIB):=	SRCS	=	$(SRCDIR)/$(LINTSRC)
-LINTSRC= $(SRCS)
-
-CLOBBERFILES += C.ln
+# not linted
+SMATCH=off
 
 .KEEP_STATE:
 
 all: $(LIBS)
- 
-lint: $$(LINTSRC)
-	$(LINT.c) $(LINTCHECKFLAGS) $(LINTSRC) $(LDLIBS)
+
 
 pics/%.o: $(SRCDIR)/%.c
 	$(COMPILE.c) -o $@ $<

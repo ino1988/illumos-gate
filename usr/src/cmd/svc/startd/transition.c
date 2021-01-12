@@ -21,6 +21,8 @@
 /*
  * Copyright 2009 Sun Microsystems, Inc.  All rights reserved.
  * Use is subject to license terms.
+ *
+ * Copyright 2016-2018 RackTop Systems.
  */
 
 
@@ -137,6 +139,13 @@ gt_enter_maint(scf_handle_t *h, graph_vertex_t *v,
 		    "%s.\n", v->gv_name);
 
 		graph_transition_propagate(v, PROPAGATE_STOP, rerr);
+
+		/*
+		 * The maintenance transition may satisfy optional_all/restart
+		 * dependencies and should be propagated to determine
+		 * whether new dependents are satisfiable.
+		 */
+		graph_transition_propagate(v, PROPAGATE_SAT, rerr);
 	} else {
 		log_framework(LOG_DEBUG, "Propagating maintenance of %s.\n",
 		    v->gv_name);
@@ -158,19 +167,17 @@ gt_enter_offline(scf_handle_t *h, graph_vertex_t *v,
 	v->gv_flags &= ~GV_TOOFFLINE;
 
 	/*
-	 * If the instance should be enabled, see if we can start it.
-	 * Otherwise send a disable command.
-	 * If a instance has the GV_TOOFFLINE flag set then it must
-	 * remains offline until the disable process completes.
+	 * If the instance should be disabled send it a disable command.
+	 * Otherwise, if GV_TOOFFLINE was not set, see if we can start it.
 	 */
-	if (v->gv_flags & GV_ENABLED) {
-		if (to_offline == 0)
-			graph_start_if_satisfied(v);
-	} else {
+	if (v->gv_flags & GV_TODISABLE) {
 		if (gt_running(old_state) && v->gv_post_disable_f)
 			v->gv_post_disable_f();
 
 		vertex_send_event(v, RESTARTER_EVENT_TYPE_DISABLE);
+	} else if (v->gv_flags & GV_ENABLED) {
+		if (to_offline == 0)
+			graph_start_if_satisfied(v);
 	}
 
 	/*
@@ -267,6 +274,12 @@ gt_enter_disabled(scf_handle_t *h, graph_vertex_t *v,
 
 		graph_transition_propagate(v, PROPAGATE_STOP, rerr);
 
+		/*
+		 * The disable transition may satisfy optional_all/restart
+		 * dependencies and should be propagated to determine
+		 * whether new dependents are satisfiable.
+		 */
+		graph_transition_propagate(v, PROPAGATE_SAT, rerr);
 	} else {
 		log_framework(LOG_DEBUG, "Propagating disable of %s.\n",
 		    v->gv_name);

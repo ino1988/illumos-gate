@@ -22,8 +22,9 @@
  * Copyright 2006 Sun Microsystems, Inc.  All rights reserved.
  * Use is subject to license terms.
  */
-
-#pragma ident	"%Z%%M%	%I%	%E% SMI"
+/*
+ * Copyright 2015, Joyent, Inc.
+ */
 
 #include <stdio.h>
 #include <stdlib.h>
@@ -31,6 +32,7 @@
 #include <fcntl.h>
 #include <string.h>
 #include <limits.h>
+#include <sys/secflags.h>
 
 #include "Pcontrol.h"
 
@@ -65,6 +67,33 @@ proc_get_cred(pid_t pid, prcred_t *credp, int ngroups)
 		(void) close(fd);
 	}
 	return (rv);
+}
+
+int
+proc_get_secflags(pid_t pid, prsecflags_t **psf)
+{
+	char fname[PATH_MAX];
+	int fd;
+	int rv = -1;
+
+	if ((*psf = calloc(1, sizeof (prsecflags_t))) == NULL)
+		return (-1);
+
+	(void) snprintf(fname, sizeof (fname), "%s/%d/secflags",
+	    procfs_path, (int)pid);
+	if ((fd = open(fname, O_RDONLY)) >= 0) {
+		if (read(fd, *psf, sizeof (prsecflags_t)) ==
+		    sizeof (prsecflags_t))
+			rv = 0;
+		(void) close(fd);
+	}
+	return (rv);
+}
+
+void
+proc_free_priv(prpriv_t *prv)
+{
+	free(prv);
 }
 
 /*

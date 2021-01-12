@@ -22,8 +22,6 @@
 # Copyright 2006 Sun Microsystems, Inc.  All rights reserved.
 # Use is subject to license terms.
 #
-# ident	"%Z%%M%	%I%	%E% SMI"
-#
 
 PROG =		hald-runner
 OBJS =		main.o runner.o utils.o
@@ -35,10 +33,11 @@ include ../Makefile.hal
 ROOTCMDDIR =	$(ROOTLIB_HAL)
 
 LDLIBS +=	-lc -ldbus-1 -ldbus-glib-1 -lglib-2.0
+NATIVE_LIBS +=	libdbus-1.so libdbus-glib-1.so libglib-2.0.so
 
 CPPFLAGS +=	$(HAL_DBUS_CPPFLAGS) $(HAL_GLIB_CPPFLAGS) $(HAL_CONFIG_CPPFLAGS)
 CPPFLAGS +=	-UDBUS_API_SUBJECT_TO_CHANGE
-C99MODE =	$(C99_ENABLE)
+CSTD =	$(CSTD_GNU99)
 
 .KEEP_STATE:
 

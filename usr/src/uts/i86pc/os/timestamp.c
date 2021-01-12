@@ -24,6 +24,8 @@
  * Use is subject to license terms.
  *
  * Copyright 2012 Nexenta Systems, Inc. All rights reserved.
+ * Copyright (c) 2014, 2016 by Delphix. All rights reserved.
+ * Copyright 2018 Joyent, Inc.
  */
 
 #include <sys/types.h>
@@ -45,6 +47,8 @@
 #include <sys/time.h>
 #include <sys/panic.h>
 #include <sys/cpu.h>
+#include <sys/sdt.h>
+#include <sys/comm_page.h>
 
 /*
  * Using the Pentium's TSC register for gethrtime()
@@ -97,7 +101,6 @@
 
 #define	NSEC_SHIFT 5
 
-static uint_t nsec_scale;
 static uint_t nsec_unscale;
 
 /*
@@ -138,25 +141,37 @@ static volatile int tsc_sync_go;
 
 int tsc_master_slave_sync_needed = 1;
 
-static int	tsc_max_delta;
-static hrtime_t tsc_sync_tick_delta[NCPU];
 typedef struct tsc_sync {
 	volatile hrtime_t master_tsc, slave_tsc;
 } tsc_sync_t;
 static tsc_sync_t *tscp;
-static hrtime_t largest_tsc_delta = 0;
-static ulong_t shortest_write_time = ~0UL;
 
-static hrtime_t	tsc_last = 0;
 static hrtime_t	tsc_last_jumped = 0;
-static hrtime_t	tsc_hrtime_base = 0;
 static int	tsc_jumped = 0;
+static uint32_t	tsc_wayback = 0;
+/*
+ * The cap of 1 second was chosen since it is the frequency at which the
+ * tsc_tick() function runs which means that when gethrtime() is called it
+ * should never be more than 1 second since tsc_last was updated.
+ */
+static hrtime_t tsc_resume_cap_ns = NANOSEC;	 /* 1s */
 
 static hrtime_t	shadow_tsc_hrtime_base;
 static hrtime_t	shadow_tsc_last;
 static uint_t	shadow_nsec_scale;
 static uint32_t	shadow_hres_lock;
 int get_tsc_ready();
+
+static inline
+hrtime_t tsc_protect(hrtime_t a) {
+	if (a > tsc_resume_cap) {
+		atomic_inc_32(&tsc_wayback);
+		DTRACE_PROBE3(tsc__wayback, htrime_t, a, hrtime_t, tsc_last,
+		    uint32_t, tsc_wayback);
+		return (tsc_resume_cap);
+	}
+	return (a);
+}
 
 hrtime_t
 tsc_gethrtime(void)
@@ -186,6 +201,20 @@ tsc_gethrtime(void)
 			 * delta to be zero.
 			 */
 			tsc = 0;
+		} else {
+			/*
+			 * If we reach this else clause we assume that we have
+			 * gone through a suspend/resume cycle and use the
+			 * current tsc value as the delta.
+			 *
+			 * In rare cases we can reach this else clause due to
+			 * a lack of monotonicity in the TSC value.  In such
+			 * cases using the current TSC value as the delta would
+			 * cause us to return a value ~2x of what it should
+			 * be.  To protect against these cases we cap the
+			 * suspend/resume delta at tsc_resume_cap.
+			 */
+			tsc = tsc_protect(tsc);
 		}
 
 		hrt = tsc_hrtime_base;
@@ -226,6 +255,8 @@ tsc_gethrtime_delta(void)
 			tsc -= tsc_last;
 		} else if (tsc >= tsc_last - 2 * tsc_max_delta) {
 			tsc = 0;
+		} else {
+			tsc = tsc_protect(tsc);
 		}
 
 		hrt = tsc_hrtime_base;
@@ -249,10 +280,64 @@ tsc_gethrtime_tick_delta(void)
 	return (hrt);
 }
 
+/* Calculate the hrtime while exposing the parameters of that calculation. */
+hrtime_t
+tsc_gethrtime_params(uint64_t *tscp, uint32_t *scalep, uint8_t *shiftp)
+{
+	uint32_t old_hres_lock, scale;
+	hrtime_t tsc, last, base;
+
+	do {
+		old_hres_lock = hres_lock;
+
+		if (gethrtimef == tsc_gethrtime_delta) {
+			ulong_t flags;
+
+			flags = clear_int_flag();
+			tsc = tsc_read() + tsc_sync_tick_delta[CPU->cpu_id];
+			restore_int_flag(flags);
+		} else {
+			tsc = tsc_read();
+		}
+
+		last = tsc_last;
+		base = tsc_hrtime_base;
+		scale = nsec_scale;
+
+	} while ((old_hres_lock & ~1) != hres_lock);
+
+	/* See comments in tsc_gethrtime() above */
+	if (tsc >= last) {
+		tsc -= last;
+	} else if (tsc >= last - 2 * tsc_max_delta) {
+		tsc = 0;
+	} else {
+		tsc = tsc_protect(tsc);
+	}
+
+	TSC_CONVERT_AND_ADD(tsc, base, nsec_scale);
+
+	if (tscp != NULL) {
+		/*
+		 * Do not simply communicate the delta applied to the hrtime
+		 * base, but rather the effective TSC measurement.
+		 */
+		*tscp = tsc + last;
+	}
+	if (scalep != NULL) {
+		*scalep = scale;
+	}
+	if (shiftp != NULL) {
+		*shiftp = NSEC_SHIFT;
+	}
+
+	return (base);
+}
+
 /*
- * This is similar to the above, but it cannot actually spin on hres_lock.
- * As a result, it caches all of the variables it needs; if the variables
- * don't change, it's done.
+ * This is similar to tsc_gethrtime_delta, but it cannot actually spin on
+ * hres_lock.  As a result, it caches all of the variables it needs; if the
+ * variables don't change, it's done.
  */
 hrtime_t
 dtrace_gethrtime(void)
@@ -285,6 +370,8 @@ dtrace_gethrtime(void)
 			tsc -= tsc_last;
 		else if (tsc >= tsc_last - 2*tsc_max_delta)
 			tsc = 0;
+		else
+			tsc = tsc_protect(tsc);
 
 		hrt = tsc_hrtime_base;
 
@@ -332,6 +419,8 @@ dtrace_gethrtime(void)
 			tsc -= shadow_tsc_last;
 		else if (tsc >= shadow_tsc_last - 2 * tsc_max_delta)
 			tsc = 0;
+		else
+			tsc = tsc_protect(tsc);
 
 		hrt = shadow_tsc_hrtime_base;
 
@@ -410,25 +499,27 @@ tsc_gethrtimeunscaled_delta(void)
 }
 
 /*
- * Called by the master in the TSC sync operation (usually the boot CPU).
- * If the slave is discovered to have a skew, gethrtimef will be changed to
- * point to tsc_gethrtime_delta(). Calculating skews is precise only when
- * the master and slave TSCs are read simultaneously; however, there is no
- * algorithm that can read both CPUs in perfect simultaneity. The proposed
- * algorithm is an approximate method based on the behaviour of cache
- * management. The slave CPU continuously reads TSC and then reads a global
- * variable which the master CPU updates. The moment the master's update reaches
- * the slave's visibility (being forced by an mfence operation) we use the TSC
- * reading taken on the slave. A corresponding TSC read will be taken on the
- * master as soon as possible after finishing the mfence operation. But the
- * delay between causing the slave to notice the invalid cache line and the
- * competion of mfence is not repeatable. This error is heuristically assumed
- * to be 1/4th of the total write time as being measured by the two TSC reads
- * on the master sandwiching the mfence. Furthermore, due to the nature of
- * bus arbitration, contention on memory bus, etc., the time taken for the write
- * to reflect globally can vary a lot. So instead of taking a single reading,
- * a set of readings are taken and the one with least write time is chosen
- * to calculate the final skew.
+ * TSC Sync Master
+ *
+ * Typically called on the boot CPU, this attempts to quantify TSC skew between
+ * different CPUs.  If an appreciable difference is found, gethrtimef will be
+ * changed to point to tsc_gethrtime_delta().
+ *
+ * Calculating skews is precise only when the master and slave TSCs are read
+ * simultaneously; however, there is no algorithm that can read both CPUs in
+ * perfect simultaneity.  The proposed algorithm is an approximate method based
+ * on the behaviour of cache management.  The slave CPU continuously polls the
+ * TSC while reading a global variable updated by the master CPU.  The latest
+ * TSC reading is saved when the master's update (forced via mfence) reaches
+ * visibility on the slave.  The master will also take a TSC reading
+ * immediately following the mfence.
+ *
+ * While the delay between cache line invalidation on the slave and mfence
+ * completion on the master is not repeatable, the error is heuristically
+ * assumed to be 1/4th of the write time recorded by the master.  Multiple
+ * samples are taken to control for the variance caused by external factors
+ * such as bus contention.  Each sample set is independent per-CPU to control
+ * for differing memory latency on NUMA systems.
  *
  * TSC sync is disabled in the context of virtualization because the CPUs
  * assigned to the guest are virtual CPUs which means the real CPUs on which
@@ -441,7 +532,7 @@ void
 tsc_sync_master(processorid_t slave)
 {
 	ulong_t flags, source, min_write_time = ~0UL;
-	hrtime_t write_time, x, mtsc_after, tdelta;
+	hrtime_t write_time, mtsc_after, last_delta = 0;
 	tsc_sync_t *tsc = tscp;
 	int cnt;
 	int hwtype;
@@ -464,57 +555,53 @@ tsc_sync_master(processorid_t slave)
 			SMT_PAUSE();
 		write_time =  mtsc_after - tsc->master_tsc;
 		if (write_time <= min_write_time) {
-			min_write_time = write_time;
+			hrtime_t tdelta;
+
+			tdelta = tsc->slave_tsc - mtsc_after;
+			if (tdelta < 0)
+				tdelta = -tdelta;
 			/*
-			 * Apply heuristic adjustment only if the calculated
-			 * delta is > 1/4th of the write time.
+			 * If the margin exists, subtract 1/4th of the measured
+			 * write time from the master's TSC value.  This is an
+			 * estimate of how late the mfence completion came
+			 * after the slave noticed the cache line change.
 			 */
-			x = tsc->slave_tsc - mtsc_after;
-			if (x < 0)
-				x = -x;
-			if (x > (min_write_time/4))
-				/*
-				 * Subtract 1/4th of the measured write time
-				 * from the master's TSC value, as an estimate
-				 * of how late the mfence completion came
-				 * after the slave noticed the cache line
-				 * change.
-				 */
+			if (tdelta > (write_time/4)) {
 				tdelta = tsc->slave_tsc -
-				    (mtsc_after - (min_write_time/4));
-			else
+				    (mtsc_after - (write_time/4));
+			} else {
 				tdelta = tsc->slave_tsc - mtsc_after;
-			tsc_sync_tick_delta[slave] =
-			    tsc_sync_tick_delta[source] - tdelta;
+			}
+			last_delta = tsc_sync_tick_delta[source] - tdelta;
+			tsc_sync_tick_delta[slave] = last_delta;
+			min_write_time = write_time;
 		}
 
 		tsc->master_tsc = tsc->slave_tsc = write_time = 0;
 		membar_enter();
 		tsc_sync_go = TSC_SYNC_STOP;
 	}
-	if (tdelta < 0)
-		tdelta = -tdelta;
-	if (tdelta > largest_tsc_delta)
-		largest_tsc_delta = tdelta;
-	if (min_write_time < shortest_write_time)
-		shortest_write_time = min_write_time;
+
 	/*
-	 * Enable delta variants of tsc functions if the largest of all chosen
-	 * deltas is > smallest of the write time.
+	 * Only enable the delta variants of the TSC functions if the measured
+	 * skew is greater than the fastest write time.
 	 */
-	if (largest_tsc_delta > shortest_write_time) {
+	last_delta = (last_delta < 0) ? -last_delta : last_delta;
+	if (last_delta > min_write_time) {
 		gethrtimef = tsc_gethrtime_delta;
 		gethrtimeunscaledf = tsc_gethrtimeunscaled_delta;
+		tsc_ncpu = NCPU;
 	}
 	restore_int_flag(flags);
 }
 
 /*
+ * TSC Sync Slave
+ *
  * Called by a CPU which has just been onlined.  It is expected that the CPU
  * performing the online operation will call tsc_sync_master().
  *
- * TSC sync is disabled in the context of virtualization. See comments
- * above tsc_sync_master.
+ * Like tsc_sync_master, this logic is skipped on virtualized platforms.
  */
 void
 tsc_sync_slave(void)
@@ -538,11 +625,9 @@ tsc_sync_slave(void)
 		tsc_sync_go = TSC_SYNC_GO;
 		do {
 			/*
-			 * Do not put an SMT_PAUSE here. For instance,
-			 * if the master and slave are really the same
-			 * hyper-threaded CPU, then you want the master
-			 * to yield to the slave as quickly as possible here,
-			 * but not the other way.
+			 * Do not put an SMT_PAUSE here.  If the master and
+			 * slave are the same hyper-threaded CPU, we want the
+			 * master to yield as quickly as possible to the slave.
 			 */
 			s1 = tsc_read();
 		} while (tsc->master_tsc == 0);
@@ -598,6 +683,7 @@ tsc_tick(void)
 		 * resume (i.e nsec_scale remains the same).
 		 */
 		delta = now;
+		delta = tsc_protect(delta);
 		tsc_last_jumped += tsc_last;
 		tsc_jumped = 1;
 	} else {
@@ -646,10 +732,23 @@ tsc_hrtimeinit(uint64_t cpu_freq_hz)
 	hrtime_tick = tsc_tick;
 	gethrtime_hires = 1;
 	/*
+	 * Being part of the comm page, tsc_ncpu communicates the published
+	 * length of the tsc_sync_tick_delta array.  This is kept zeroed to
+	 * ignore the absent delta data while the TSCs are synced.
+	 */
+	tsc_ncpu = 0;
+	/*
 	 * Allocate memory for the structure used in the tsc sync logic.
 	 * This structure should be aligned on a multiple of cache line size.
 	 */
 	tscp = kmem_zalloc(PAGESIZE, KM_SLEEP);
+
+	/*
+	 * Convert the TSC resume cap ns value into its unscaled TSC value.
+	 * See tsc_gethrtime().
+	 */
+	if (tsc_resume_cap == 0)
+		TSC_CONVERT(tsc_resume_cap_ns, tsc_resume_cap, nsec_unscale);
 }
 
 int
@@ -659,12 +758,10 @@ get_tsc_ready()
 }
 
 /*
- * Adjust all the deltas by adding the passed value to the array.
- * Then use the "delt" versions of the the gethrtime functions.
- * Note that 'tdelta' _could_ be a negative number, which should
- * reduce the values in the array (used, for example, if the Solaris
- * instance was moved by a virtual manager to a machine with a higher
- * value of tsc).
+ * Adjust all the deltas by adding the passed value to the array and activate
+ * the "delta" versions of the gethrtime functions.  It is possible that the
+ * adjustment could be negative.  Such may occur if the SunOS instance was
+ * moved by a virtual manager to a machine with a higher value of TSC.
  */
 void
 tsc_adjust_delta(hrtime_t tdelta)
@@ -677,19 +774,16 @@ tsc_adjust_delta(hrtime_t tdelta)
 
 	gethrtimef = tsc_gethrtime_delta;
 	gethrtimeunscaledf = tsc_gethrtimeunscaled_delta;
+	tsc_ncpu = NCPU;
 }
 
 /*
  * Functions to manage TSC and high-res time on suspend and resume.
  */
 
-/*
- * declarations needed for time adjustment
- */
-extern void	rtcsync(void);
+/* tod_ops from "uts/i86pc/io/todpc_subr.c" */
 extern tod_ops_t *tod_ops;
-/* There must be a better way than exposing nsec_scale! */
-extern uint_t	nsec_scale;
+
 static uint64_t tsc_saved_tsc = 0; /* 1 in 2^64 chance this'll screw up! */
 static timestruc_t tsc_saved_ts;
 static int	tsc_needs_resume = 0;	/* We only want to do this once. */
@@ -699,23 +793,20 @@ int		tsc_suspend_count = 0;
 int		tsc_resume_in_cyclic = 0;
 
 /*
- * Let timestamp.c know that we are suspending.  It needs to take
- * snapshots of the current time, and do any pre-suspend work.
+ * Take snapshots of the current time and do any other pre-suspend work.
  */
 void
 tsc_suspend(void)
 {
-/*
- * What we need to do here, is to get the time we suspended, so that we
- * know how much we should add to the resume.
- * This routine is called by each CPU, so we need to handle reentry.
- */
+	/*
+	 * We need to collect the time at which we suspended here so we know
+	 * now much should be added during the resume.  This is called by each
+	 * CPU, so reentry must be properly handled.
+	 */
 	if (tsc_gethrtime_enable) {
 		/*
-		 * We put the tsc_read() inside the lock as it
-		 * as no locking constraints, and it puts the
-		 * aquired value closer to the time stamp (in
-		 * case we delay getting the lock).
+		 * Perform the tsc_read after acquiring the lock to make it as
+		 * accurate as possible in the face of contention.
 		 */
 		mutex_enter(&tod_lock);
 		tsc_saved_tsc = tsc_read();
@@ -737,8 +828,7 @@ tsc_suspend(void)
 }
 
 /*
- * Restore all timestamp state based on the snapshots taken at
- * suspend time.
+ * Restore all timestamp state based on the snapshots taken at suspend time.
  */
 void
 tsc_resume(void)

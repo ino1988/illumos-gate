@@ -19,14 +19,14 @@
 #
 # CDDL HEADER END
 #
+
 #
 # Copyright 2004 Sun Microsystems, Inc.  All rights reserved.
 # Use is subject to license terms.
 #
-# ident	"%Z%%M%	%I%	%E% SMI"
+# Copyright 2015 RackTop Systems.
 #
-# cmd/picl/plugins/common/devtree/Makefile
-#
+
 LIBRARY=	libpicldevtree.a
 VERS=		.1
 
@@ -45,7 +45,6 @@ ROOTLIBDIR =	$(USR_LIB_PLUGINDIR)
 ROOTETC	=	$(ROOT)/etc
 ROOTLIB =	$(ROOT)/usr/lib
 
-CLEANFILES=	$(LINTOUT) $(LINTLIB)
 CLOBBERFILES += $(LIBLINKS)
 
 CPPFLAGS +=	-I$(SRC)/lib/libsysevent -I$(SRC)/uts/common
@@ -54,12 +53,8 @@ CFLAGS +=	$(CCVERBOSE) $(C_PICFLAGS)
 CPPFLAGS +=	-D_REENTRANT
 LDLIBS +=	-L$(SRC)/lib/libsysevent -L$(SRC)/lib/libpicltree/$(MACH)
 LDLIBS +=	-lc -lkstat -ldevinfo -lpicltree -lnvpair
-LDLIBS +=	-L../piclevent -L$(ROOT)/usr/lib/picl/plugins -lpiclevent
-LDLIBS +=	-R/usr/platform/\$$PLATFORM/lib/picl/plugins
-LDLIBS +=	-R/usr/platform/sun4u/lib/picl/plugins
-LDLIBS +=	-R/usr/lib/picl/plugins
-
-LINTFLAGS +=	-L$(SRC)/lib/libpicltree/$(MACH) -lpicltree
+$(SPARC_BLD)LDLIBS +=	-R/usr/platform/\$$PLATFORM/lib/picl/plugins
+$(SPARC_BLD)LDLIBS +=	-R/usr/platform/sun4u/lib/picl/plugins
 
 .KEEP_STATE:
 
@@ -71,12 +66,11 @@ all :=		TARGET= all
 install :=	TARGET= install
 clean :=	TARGET= clean
 clobber :=	TARGET= clobber
-lint :=		TARGET= lint
 _msg :=		TARGET= _msg
 
 all: $(LIBS) $(LIBLINKS)
 
-install:	$(ROOTLIBDIR) all $(ROOTLIBS) $(ROOTLINKS) 
+install:	$(ROOTLIBDIR) all $(ROOTLIBS) $(ROOTLINKS)
 
 _msg:	$(MSGDOMAIN) $(POFILE)
 	$(RM) $(MSGDOMAIN)/$(POFILE)
@@ -93,11 +87,8 @@ $(LIBLINKS):	FRC
 include $(SRC)/cmd/picl/plugins/Makefile.targ
 include $(SRC)/lib/Makefile.targ
 
-lint :
-	$(LINT.c) $(SRCS)
-
 %.so: %.o
-	$(LINK.c) -o $@ $(GSHARED) -h $@ $<
+	$(LINK.c) -o $@ $(GSHARED) -h $@ $< $(LDLIBS)
 
 %.o: %.c
 	$(COMPILE.c) -o $@ $<

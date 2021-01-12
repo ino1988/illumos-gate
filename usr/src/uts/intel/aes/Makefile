@@ -18,13 +18,12 @@
 #
 # CDDL HEADER END
 #
+# Copyright 2014 Garrett D'Amore <garrett@damore.org>
 #
 # Copyright 2009 Sun Microsystems, Inc.  All rights reserved.
 # Use is subject to license terms.
 #
-#	This makefile drives the production of the AES KEF provider.
-#
-#	Intel implementation architecture dependent
+# Copyright (c) 2019, Joyent, Inc.
 #
 
 #
@@ -37,7 +36,6 @@ COM_DIR = $(COMMONBASE)/crypto/aes
 #	Define the module and object file sets.
 #
 MODULE		= aes
-LINTS		= $(AESPROV_OBJS:%.o=$(LINTS_DIR)/%.ln)
 AESPROV_OBJS_32	=
 AESPROV_OBJS_64	= aes_amd64.o aes_intel.o aeskey.o
 AESPROV_OBJS	+= $(AESPROV_OBJS_$(CLASS))
@@ -49,14 +47,10 @@ ROOTMODULE	= $(ROOT_CRYPTO_DIR)/$(MODULE)
 #
 include $(UTSBASE)/intel/Makefile.intel
 
-#	set signing mode
-ELFSIGN_MOD	= $(ELFSIGN_CRYPTO)
-
 #
 #	Define targets
 #
 ALL_TARGET	= $(BINARY)
-LINT_TARGET	= $(MODULE).lint
 INSTALL_TARGET	= $(BINARY) $(ROOTMODULE)
 
 #
@@ -81,12 +75,6 @@ clean:		$(CLEAN_DEPS)
 
 clobber:	$(CLOBBER_DEPS)
 
-lint:		$(LINT_DEPS)
-
-modlintlib:	$(MODLINTLIB_DEPS)
-
-clean.lint:	$(CLEAN_LINT_DEPS)
-
 install:	$(INSTALL_DEPS)
 
 #
@@ -94,16 +82,9 @@ install:	$(INSTALL_DEPS)
 #
 include $(UTSBASE)/intel/Makefile.targ
 
-$(OBJS_DIR)/%.ln: $(COM_DIR)/amd64/%.c
-	@($(LHEAD) $(LINT.c) $(COM_DIR)/amd64/${@F:.ln=.c} $(LTAIL))
-
 $(OBJS_DIR)/%.o:  $(COM_DIR)/amd64/%.c
 	$(COMPILE.c) -o $@ $(COM_DIR)/amd64/${@F:.o=.c}
-	$(POST_PROCESS_O)
+	$(CTFCONVERT_O)
 
 $(OBJS_DIR)/%.o: $(COM_DIR)/amd64/%.s
 	$(COMPILE.s) -o $@ $(COM_DIR)/amd64/${@F:.o=.s}
-	$(POST_PROCESS_O)
-
-$(OBJS_DIR)/%.ln: $(COM_DIR)/amd64/%.s
-	@($(LHEAD) $(LINT.s) $(COM_DIR)/amd64/${@F:.ln=.s} $(LTAIL))

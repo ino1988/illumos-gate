@@ -21,6 +21,12 @@
 /*
  * Copyright 2008 Sun Microsystems, Inc.  All rights reserved.
  * Use is subject to license terms.
+ * Copyright 2014 Joyent, Inc.  All rights reserved.
+ */
+
+/*
+ * Copyright (c) 2016 by Delphix. All rights reserved.
+ * Copyright 2018 Nexenta Systems, Inc.
  */
 
 /*
@@ -30,6 +36,7 @@
  */
 
 #include <sys/types.h>
+#include <sys/null.h>
 #include <sys/varargs.h>
 
 #if defined(_KERNEL)
@@ -37,10 +44,6 @@
 #include <sys/debug.h>
 #elif !defined(_BOOT)
 #include <string.h>
-#endif
-
-#ifndef	NULL
-#define	NULL	0l
 #endif
 
 #include "memcpy.h"
@@ -68,13 +71,17 @@ vsnprintf(char *buf, size_t buflen, const char *fmt, va_list aargs)
 {
 	uint64_t ul, tmp;
 	char *bufp = buf;	/* current buffer pointer */
-	int pad, width, base, sign, c, num;
+	char c, pad;
+	int width, base, sign, num;
 	int prec, h_count, l_count, dot_count;
 	int pad_count, transfer_count, left_align;
 	char *digits, *sp, *bs;
 	char numbuf[65];	/* sufficient for a 64-bit binary value */
+	int numwidth;
 	va_list args;
 
+	ul = 0;
+	bs = NULL;
 	/*
 	 * Make a copy so that all our callers don't have to make a copy
 	 */
@@ -89,7 +96,7 @@ vsnprintf(char *buf, size_t buflen, const char *fmt, va_list aargs)
 			continue;
 		}
 
-		width = prec = 0;
+		width = prec = numwidth = 0;
 		left_align = base = sign = 0;
 		h_count = l_count = dot_count = 0;
 		pad = ' ';
@@ -254,31 +261,54 @@ next_fmt:
 			base = *bs++;
 		}
 
-		/* avoid repeated division if width is 0 */
-		if (width > 0) {
-			tmp = ul;
-			do {
-				width--;
-			} while ((tmp /= base) != 0);
-		}
-
-		if (sign && pad == '0')
-			ADDCHAR('-');
-		while (width-- > sign)
-			ADDCHAR(pad);
-		if (sign && pad == ' ')
-			ADDCHAR('-');
-
-		sp = numbuf;
+		/*
+		 * Fill in the number string buffer and calculate the
+		 * number string length.
+		 */
 		tmp = ul;
+		sp = numbuf;
 		do {
 			*sp++ = digits[tmp % base];
+			numwidth++;
 		} while ((tmp /= base) != 0);
 
+		/*
+		 * Reduce the total field width by precision or the number
+		 * string length depending on which one is bigger, and sign.
+		 */
+		if (prec >= numwidth)
+			width -= prec;
+		else
+			width -= numwidth;
+		width -= sign;
+
+		/* Add the sign if width is '0'-padded */
+		if (sign && pad == '0')
+			ADDCHAR('-');
+
+		/* If not left-aligned, add the width padding */
+		if (!left_align) {
+			while (width-- > 0)
+				ADDCHAR(pad);
+		}
+
+		/* Add the sign if width is NOT '0'-padded */
+		if (sign && pad != '0')
+			ADDCHAR('-');
+
+		/* Add the precision '0'-padding */
+		while (prec-- > numwidth)
+			ADDCHAR('0');
+
+		/* Print out the number */
 		while (sp > numbuf) {
 			sp--;
 			ADDCHAR(*sp);
 		}
+
+		/* Add left-alignment padding */
+		while (width-- > 0)
+			ADDCHAR(' ');
 
 		if (c == 'b' && ul != 0) {
 			int any = 0;
@@ -311,7 +341,7 @@ next_fmt:
 	return (bufp - buf);
 }
 
-/*PRINTFLIKE1*/
+/*PRINTFLIKE3*/
 size_t
 snprintf(char *buf, size_t buflen, const char *fmt, ...)
 {

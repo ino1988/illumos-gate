@@ -20,6 +20,7 @@
 #
 
 #
+# Copyright (c) 2018 Peter Tribble.
 # Copyright (c) 2014 Gary Mills
 # Copyright 2008 Sun Microsystems, Inc.  All rights reserved.
 # Use is subject to license terms.
@@ -29,26 +30,27 @@ PROG=	getent
 
 include ../Makefile.cmd
 
-CERRWARN += -_gcc=-Wno-unused-variable
-CERRWARN += -_gcc=-Wno-implicit-function-declaration
-
 OBJECTS= \
+	dogetauthattr.o	\
 	dogetethers.o	\
+	dogetexecattr.o	\
 	dogetgr.o	\
 	dogethost.o	\
 	dogetipnodes.o	\
 	dogetnet.o	\
 	dogetnetmask.o	\
+	dogetprofattr.o	\
 	dogetproject.o	\
 	dogetproto.o	\
 	dogetpw.o	\
 	dogetsp.o	\
 	dogetserv.o	\
+	dogetuserattr.o	\
 	getent.o
 
 SRCS=	$(OBJECTS:.o=.c)
 
-LDLIBS	+= -lsocket -lnsl -lproject
+LDLIBS	+= -lsecdb -lsocket -lnsl -lproject
 
 #
 # for message catalog

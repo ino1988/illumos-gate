@@ -21,6 +21,7 @@
 
 /*
  * Copyright (c) 2010, Oracle and/or its affiliates. All rights reserved.
+ * Copyright 2017 Joyent, Inc.
  */
 
 /*
@@ -766,8 +767,8 @@ sol_ucma_write(dev_t dev, struct uio *uio,  cred_t *credp)
 }
 
 static int
-sol_ucma_poll(dev_t dev, short events, int anyyet,
-    short *reventsp, struct pollhead **phpp)
+sol_ucma_poll(dev_t dev, short events, int anyyet, short *reventsp,
+    struct pollhead **phpp)
 {
 	minor_t		minor = getminor(dev);
 	sol_ucma_file_t	*filep;
@@ -785,8 +786,9 @@ sol_ucma_poll(dev_t dev, short events, int anyyet,
 		*reventsp = POLLIN | POLLRDNORM;
 	} else {
 		*reventsp = 0;
-		if (!anyyet)
-			*phpp = filep->file_pollhead;
+	}
+	if ((*reventsp == 0 && !anyyet) || (events && POLLET)) {
+		*phpp = filep->file_pollhead;
 	}
 	sol_ofs_uobj_put(&filep->file_uobj);
 
@@ -865,7 +867,7 @@ sol_ucma_create_id(dev_t dev, void *io_buf, struct uio *uio)
 static int
 sol_ucma_destroy_id(dev_t dev, void *io_buf, struct uio *uio)
 {
-	sol_ucma_chan_t 	*chanp;
+	sol_ucma_chan_t		*chanp;
 	uint32_t		ucma_id;
 	sol_ucma_file_t		*filep;
 	sol_ucma_destroy_id_t	*id_inp;
@@ -1486,7 +1488,7 @@ sol_ucma_join_mcast(dev_t dev, void *io_buf, struct uio *uio)
 	bcopy((void *)(&(join_buf->addr)), (void *)(&(mcastp->mcast_addr)),
 	    sizeof (struct sockaddr));
 	mcastp->mcast_chan = chanp;
-	sol_ofs_uobj_init(&mcastp->mcast_uobj, NULL, SOL_UCMA_MCAST_TYPE);
+	sol_ofs_uobj_init(&mcastp->mcast_uobj, 0, SOL_UCMA_MCAST_TYPE);
 	if (sol_ofs_uobj_add(&ucma_mcast_uo_tbl, &mcastp->mcast_uobj) != 0) {
 		sol_ofs_uobj_free(&mcastp->mcast_uobj);
 		return (ENOMEM);
@@ -1766,7 +1768,7 @@ ucma_alloc_file(minor_t *new_minorp)
 	sol_ucma_file_t	*new_file;
 
 	new_file = kmem_zalloc(sizeof (sol_ucma_file_t), KM_SLEEP);
-	sol_ofs_uobj_init(&new_file->file_uobj, NULL, SOL_UCMA_EVT_FILE_TYPE);
+	sol_ofs_uobj_init(&new_file->file_uobj, 0, SOL_UCMA_EVT_FILE_TYPE);
 	if (sol_ofs_uobj_add(&ucma_file_uo_tbl, &new_file->file_uobj) != 0) {
 		sol_ofs_uobj_free(&new_file->file_uobj);
 		return (NULL);
@@ -1803,7 +1805,7 @@ ucma_alloc_chan(sol_ucma_file_t *filep, sol_ucma_create_id_t *create_id_inp)
 	    filep, create_id_inp);
 
 	new_chanp = kmem_zalloc(sizeof (sol_ucma_chan_t), KM_SLEEP);
-	sol_ofs_uobj_init(&new_chanp->chan_uobj, NULL, SOL_UCMA_CM_ID_TYPE);
+	sol_ofs_uobj_init(&new_chanp->chan_uobj, 0, SOL_UCMA_CM_ID_TYPE);
 	if (sol_ofs_uobj_add(&ucma_ctx_uo_tbl, &new_chanp->chan_uobj) != 0) {
 		sol_ofs_uobj_free(&new_chanp->chan_uobj);
 		return (NULL);

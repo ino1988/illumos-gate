@@ -22,17 +22,16 @@
 # Copyright 2010 Sun Microsystems, Inc.  All rights reserved.
 # Use is subject to license terms.
 #
+# Copyright (c) 2019, Joyent, Inc.
+#
 
 include ../../Makefile.common
 
-MODULES = $(COMMON_MODULES_PROC) $(COMMON_MODULES_PROC_32BIT) \
-    $(COMMON_MODULES_KVM) uhci
+MODULES = $(COMMON_MODULES_PROC) $(COMMON_MODULES_PROC_32BIT)
+MODULES += disk_label libsmbios
 
-SUBDIRS = mdb mdb_ks kmdb libstandctf libstand .WAIT $(MODULES)
+SUBDIRS = mdb .WAIT $(MODULES)
 
 include ../../Makefile.subdirs
 
 .PARALLEL: $(SUBDIRS)
-
-# inter-module dependencies
-kmdb: libstand libstandctf mdb_ks

@@ -20,6 +20,7 @@
  */
 /*
  * Copyright (c) 2004, 2010, Oracle and/or its affiliates. All rights reserved.
+ * Copyright 2019 Joyent, Inc.
  */
 /*
  * Copyright (c) 2010, Intel Corporation.
@@ -67,7 +68,8 @@ extern void plcnt_inc_dec(page_t *, int, int, long, int);
 #define	PLCNT_INCR(pp, mnode, mtype, szc, flags)			\
 	plcnt_inc_dec(pp, mtype, szc, 1l << PAGE_BSZS_SHIFT(szc), flags)
 #define	PLCNT_DECR(pp, mnode, mtype, szc, flags)			\
-	plcnt_inc_dec(pp, mtype, szc, -1l << PAGE_BSZS_SHIFT(szc), flags)
+	plcnt_inc_dec(pp, mtype, szc, \
+	(long)(ULONG_MAX << PAGE_BSZS_SHIFT(szc)), flags)
 
 /*
  * macro to update page list max counts.  no-op on x86.
@@ -125,7 +127,7 @@ extern page_t ****page_freelists;
  */
 extern page_t ***page_cachelists;
 
-#define	PAGE_CACHELISTS(mnode, color, mtype) 		\
+#define	PAGE_CACHELISTS(mnode, color, mtype)		\
 	(*(page_cachelists[mtype] + (color)))
 
 /*
@@ -152,7 +154,7 @@ extern page_t *page_get_mnode_cachelist(uint_t, uint_t, int, int);
  * simply return the limits of the given mnode, which then
  * determines the length of hpm_counters array for the mnode.
  */
-#define	HPM_COUNTERS_LIMITS(mnode, physbase, physmax, first) 	\
+#define	HPM_COUNTERS_LIMITS(mnode, physbase, physmax, first)	\
 	{							\
 		(physbase) = mem_node_config[(mnode)].physbase;	\
 		(physmax) = mem_node_config[(mnode)].physmax;	\
@@ -181,6 +183,7 @@ extern page_t *page_get_mnode_cachelist(uint_t, uint_t, int, int);
 	pgcnt_t _np;							       \
 	pfn_t _pfn = (pfn);						       \
 	pfn_t _endpfn = _pfn + _cnt;					       \
+	rv = 0;								       \
 	while (_pfn < _endpfn) {					       \
 		_mn = PFN_2_MEM_NODE(_pfn);				       \
 		_np = MIN(_endpfn, mem_node_config[_mn].physmax + 1) - _pfn;   \
@@ -304,9 +307,9 @@ extern int mtype_init(vnode_t *, caddr_t, uint_t *, size_t);
 	}								\
 }
 
-extern int mtype_pgr_init(int *, page_t *, int, pgcnt_t);
-#define	MTYPE_PGR_INIT(mtype, flags, pp, mnode, pgcnt)			\
-	(mtype = mtype_pgr_init(&flags, pp, mnode, pgcnt))
+extern int mtype_pgr_init(int *, page_t *, pgcnt_t);
+#define	MTYPE_PGR_INIT(mtype, flags, pp, pgcnt)				\
+	(mtype = mtype_pgr_init(&flags, pp, pgcnt))
 
 #define	MNODE_PGCNT(mnode)		mnode_pgcnt(mnode)
 
@@ -458,9 +461,6 @@ typedef struct {
 /* allocation size to ensure vm_cpu_data_t resides in its own cache line */
 #define	VM_CPU_DATA_PADSIZE						\
 	(P2ROUNDUP(sizeof (vm_cpu_data_t), L2CACHE_ALIGN_MAX))
-
-/* for boot cpu before kmem is initialized */
-extern char	vm_cpu_data0[];
 
 /*
  * When a bin is empty, and we can't satisfy a color request correctly,

@@ -21,6 +21,11 @@
 
 #
 # Copyright (c) 2009, 2010, Oracle and/or its affiliates. All rights reserved.
+# Copyright 2015, OmniTI Computer Consulting, Inc. All rights reserved.
+# Copyright 2018 OmniOS Community Edition (OmniOSce) Association.
+# Copyright 2019 Peter Tribble.
+# Copyright 2018 Joyent, Inc.
+# Copyright 2020 Oxide Computer Company
 #
 
 # This file provides exceptions to the usual rules applied to ELF objects by
@@ -47,7 +52,6 @@ SKIP		^usr/src/			# no objects in source code
 
 # Individual files that we don't examine
 SKIP		^boot/grub/bin/grub$
-SKIP		^usr/apache/libexec/mod_ipp.so$	# Apache loadable module
 # USIII specific extns. cause ldd noise on USII bld. m/c
 SKIP		^usr/lib/fps/sun4u/UltraSPARC.*/fptest$
 SKIP		^usr/MACH(lib)/lddstub$		# lddstub has no dependencies
@@ -60,26 +64,31 @@ SKIP		^usr/platform/.*/libpsvcpolicy_psr\.so\.1
 SKIP		^usr/platform/.*/libpsvcpolicy\.so\.1
 SKIP		^usr/lib/sysevent/modules/picl_slm.so$
 
+#
+# The stdio tests all link against libumem to interpose on libc's
+# malloc; however, they do not actually reference the object.
+#
+SKIP		^opt/libc-tests/tests/stdio/
+
 # Objects that are allowed to have executable data segments
 EXEC_DATA	^MACH(lib)/ld\.so\.1$
 EXEC_DATA	^lib/libc\.so\.1$	# 6524709, 32-bit, needed for x86 only
-EXEC_DATA	^lib/amd64/libumem\.so\.1$ # ptcumem
-EXEC_DATA	^lib/libumem\.so\.1$	# ptcumem
+EXEC_DATA	^MACH(lib)/libumem\.so\.1$ # ptcumem
 EXEC_DATA	^opt/SUNWdtrt/tst/.*/ustack/tst\.helper\.exe$
 EXEC_DATA	^platform/.*/MACH(kernel)/unix$
-EXEC_DATA	^platform/.*/multiboot$
 
 # Objects that are allowed to have an executable stack
 EXEC_STACK	^platform/.*/MACH(kernel)/unix$
 EXEC_STACK	^platform/.*/multiboot$
+EXEC_STACK	^opt/os-tests/tests/secflags/stacky$
 
 # Objects for which we allow relocations to the text segment
 TEXTREL		^platform/.*/MACH(kernel)/unix$
+TEXTREL		^usr/sbin/amd64/bhyve$
 
 # Directories and files that are allowed to have no direct bound symbols
 NODIRECT	^platform/.*/MACH(kernel)/unix$
 NODIRECT	^usr/ucb
-NODIRECT	^usr/4lib/sbcp$
 
 # Identify any files that should be skipped when building a crle(1)
 # configuration file.  As the hwcap libraries can be loop-back mounted onto
@@ -91,20 +100,18 @@ STAB	^platform/.*/MACH(kernel)/unix$
 
 # Files that are allowed undefined references
 UNDEF_REF	^usr/lib/libnisdb\.so\.2$
-UNDEF_REF	^usr/snadm/lib/libsvm\.so\.1$
 
 # Objects allowed to have unused dependencies
 UNUSED_DEPS	^usr/lib/picl/plugins/		# require devtree dependencies
-UNUSED_DEPS	^usr/lib/libp	# profile libc makes libm an unused dep of libc
 
-# libm.so.2 dependency
-UNUSED_OBJ	unused object=.*MACH(libm)/libm_hwcap1\.so\.2
+# libnetsnmphelpers.so is empty in some net-snmp versions
+UNUSED_OBJ	unused object=.*/libnetsnmphelpers\.so\..*
+UNREF_OBJ	unreferenced object=.*/libnetsnmphelpers\.so\..*
 
 # Unused runpaths due to dlopen() use
 UNUSED_RPATH	/usr/lib/fs/autofs.*\ from\ .automountd
 UNUSED_RPATH	/etc/ppp/plugins.*\ from\ .*pppd
 UNUSED_RPATH	/usr/lib/inet/ppp.*\ from\ .*pppd
-UNUSED_RPATH	/usr/sfw/lib.*\ from\ .*libipsecutil\.so\.1
 UNUSED_RPATH	/usr/platform/.*rsmlib.*\ from\ .*librsm\.so\.2
 UNUSED_RPATH	\$ORIGIN.*\ from\ .*fcode.so
 UNUSED_RPATH	/opt/VRTSvxvm/lib.*\ from\ .*libdiskmgt\.so\.1
@@ -119,41 +126,29 @@ UNUSED_RPATH	/usr/lib/mps.*\ from\ .*libnss3\.so
 UNUSED_RPATH	/usr/lib/mps.*\ from\ .*libnssutil3\.so
 UNUSED_RPATH	/usr/lib/mps.*\ from\ .*libsmime3\.so
 UNUSED_RPATH	/usr/lib/mps.*\ from\ .*libssl3\.so
-UNUSED_RPATH	/usr/sfw/lib.*\ from\ .*libdbus-1\.so\.3
-UNUSED_RPATH	/usr/sfw/lib.*\ from\ .*libdbus-glib-1\.so\.2
-UNUSED_RPATH	/usr/sfw/lib.*\ from\ .*libglib-2\.0\.so\.0
-UNUSED_RPATH	/usr/X11/lib.*\ from\ .*libglib-2\.0\.so\.0
-UNUSED_RPATH	/usr/sfw/lib.*\ from\ .*libgobject-2\.0\.so\.0
-UNUSED_RPATH	/usr/X11/lib.*\ from\ .*libgobject-2\.0\.so\.0
-UNUSED_RPATH	/usr/sfw/lib.*\ from\ .*libgthread-2\.0\.so\.0
-UNUSED_RPATH	/usr/X11/lib.*\ from\ .*libgthread-2\.0\.so\.0
-UNUSED_RPATH	/usr/sfw/lib.*\ from\ .*libcrypto\.so\.0\.9\.8
-UNUSED_RPATH	/usr/sfw/lib.*\ from\ .*libnetsnmp\.so\.15
-UNUSED_RPATH	/usr/sfw/lib.*\ from\ .*libgcc_s\.so\.1
-UNUSED_RPATH	/usr/ccs/lib.*\ from\ .*libgcc_s\.so\.1
-UNUSED_RPATH	/usr/lib.*\ from\ .*libgcc_s\.so\.1
-UNUSED_RPATH	/usr/postgres/8.3/lib.*\ from\ .*libpq\.so\.5
-UNUSED_RPATH	/usr/sfw/lib.*\ from\ .*libpq\.so\.5
 UNUSED_RPATH	/usr/lib.*\ from\ .*/usr/lib/mps
-UNUSED_RPATH	/usr/ccs/lib.*\ from\ .*/usr/lib/mps
+UNUSED_RPATH	/usr/gnu/lib.*\ from\ .*/usr/lib/libpython2\..
+UNUSED_RPATH	/usr/gnu/lib.*\ from\ .*/usr/lib/64/libpython2\..
+UNUSED_RPATH	/usr/gnu/lib.*\ from\ .*/usr/lib/64/libpython3\..
+UNUSED_RPATH	/usr/snadm/lib.*\ from\ .*/usr/snadm/lib/libspmicommon\.so\.1
+UNUSED_RPATH	/usr/gcc/.*/lib.*\ from\ .*
 
 # Unused runpaths for reasons not captured above
-UNUSED_RPATH	/usr/lib/smbsrv.*\ from\ .*libsmb\.so\.1 	# future needs
-UNUSED_RPATH	/usr.*\ from\ .*tst\.gcc\.exe			# gcc built
-
+UNUSED_RPATH	/usr/lib/smbsrv.*\ from\ .*libsmb\.so\.1	# future needs
 
 # Unreferenced objects of non-OSnet objects we can't change
 UNREF_OBJ	/lib.*\ of\ .*libcimapi\.so
 UNREF_OBJ	/lib.*\ of\ .*libdbus-1\.so\.3
 UNREF_OBJ	/lib.*\ of\ .*libdbus-glib-1\.so\.2
+UNREF_OBJ	/lib.*\ of\ .*libgio-2.0\.so\.0
 UNREF_OBJ	/lib.*\ of\ .*libglib-2.0\.so\.0
 UNREF_OBJ	/lib.*\ of\ .*libgobject-2.0\.so\.0
 UNREF_OBJ	/lib.*\ of\ .*libgthread-2\.0\.so\.0
 UNREF_OBJ	/lib.*\ of\ .*libjvm\.so
-UNREF_OBJ	/lib.*\ of\ .*libnetsnmp\.so\.15
-UNREF_OBJ	/lib.*\ of\ .*libnetsnmpagent\.so\.15
-UNREF_OBJ	/lib.*\ of\ .*libnetsnmpmibs\.so\.15
-UNREF_OBJ	/lib.*\ of\ .*libnetsnmphelpers\.so\.15
+UNREF_OBJ	/lib.*\ of\ .*libnetsnmp\.so\..*
+UNREF_OBJ	/lib.*\ of\ .*libnetsnmpagent\.so\..*
+UNREF_OBJ	/lib.*\ of\ .*libnetsnmpmibs\.so\..*
+UNREF_OBJ	/lib.*\ of\ .*libnetsnmphelpers\.so\..*
 UNREF_OBJ	/lib.*\ of\ .*libnspr4\.so
 UNREF_OBJ	/lib.*\ of\ .*libpq\.so\.5
 UNREF_OBJ	/lib.*\ of\ .*libsoftokn3\.so
@@ -165,11 +160,17 @@ UNREF_OBJ	/lib.*\ of\ .*libxml2\.so\.2
 UNREF_OBJ	/lib.*\ of\ .*libxslt\.so\.1
 UNREF_OBJ	/lib.*\ of\ .*libpq\.so\.4
 UNREF_OBJ	/lib.*\ of\ .*libpython2\.4\.so\.1\.0
+UNREF_OBJ	/lib.*\ of\ .*libpython2\.6\.so\.1\.0
+UNREF_OBJ	/lib.*\ of\ .*libpython2\.7\.so\.1\.0
+UNREF_OBJ	/lib.*\ of\ .*libpython3\.[56789]m?\.so\.1\.0
 UNREF_OBJ	/libgcc_s.*\ of\ .*libstdc\+\+\.so\.6
+UNREF_OBJ	/libgcc_s.*\ of\ .*libgmodule-2\.0\.so\.0
 
 # Unreferenced object of objects we can't change for other reasons
 UNREF_OBJ	/libmapmalloc\.so\.1;\ unused\ dependency\ of	# interposer
 UNREF_OBJ	/libstdc\+\+\.so\.6;\ unused\ dependency\ of	# gcc build
+UNREF_OBJ	/libgcc_s\.so\.1;\ unused\ dependency\ of	# gcc build
+UNREF_OBJ	/libgcc_s\.so\.1.*\ of\ .*libstdc\+\+\.so\.6	# omnios gcc mix
 UNREF_OBJ	/libm\.so\.2.*\ of\ .*libstdc\+\+\.so\.6	# gcc build
 UNREF_OBJ	/lib.*\ of\ .*/lib/picl/plugins/		# picl
 UNREF_OBJ	/lib.*\ of\ .*kcfd				# interposer
@@ -199,27 +200,91 @@ OLDDEP		libw\.so\.1			# on297 build 7
 # for implementation reasons, and the mangled names used to encode argument
 # and return value types are difficult to handle well in mapfiles.
 # Furthermore, the Sun compiler and gcc use different and incompatible
-# name mangling conventions. Since ON must be buildable by either, we
+# name mangling conventions. Since illumos must be buildable by either, we
 # would have to maintain two sets of mapfiles for each such object.
-# C++ use is rare in ON, so this is not worth pursuing.
+# C++ use is rare in illumos, so this is not worth pursuing.
 #
 NOSYMSORT	opt/SUNWdtrt/tst/common/pid/tst.weak2.exe	# DTrace test
-NOSYMSORT	lib/amd64/libnsl\.so\.1				# C++
-NOSYMSORT	lib/sparcv9/libnsl\.so\.1			# C++
-NOSYMSORT	lib/sparcv9/libfru\.so\.1			# C++
-NOSYMSORT	usr/lib/lms					# C++
 NOSYMSORT	ld\.so\.1					# libc_pic.a user
-NOSYMSORT	lib/libsun_fc\.so\.1				# C++
-NOSYMSORT	lib/amd64/libsun_fc\.so\.1			# C++
-NOSYMSORT	lib/sparcv9/libsun_fc\.so\.1 			# C++
-NOSYMSORT	usr/lib/amd64/libfru\.so\.1			# C++
+NOSYMSORT	usr/bin/audioconvert				# C++
+NOSYMSORT	usr/bin/make					# C++
+NOSYMSORT	usr/MACH(lib)/libsun_fc\.so\.1			# C++
+NOSYMSORT	usr/MACH(lib)/libfru\.so\.1			# C++
+NOSYMSORT	usr/lib/libnisdb\.so\.2				# C++
 
+# The majority of illumos deliverables should not depend on the GCC runtime
+# (any necessary runtime symbol should be provided by libc.so, instead).
+# However, the GNU C++ runtime requires the GCC runtime, so certain objects
+# must be excepted.
+FORBIDDEN	libgcc_s\.so
+FORBIDDEN_DEP	usr/bin/audioconvert            # C++
+FORBIDDEN_DEP   usr/bin/make                    # C++
+FORBIDDEN_DEP   usr/MACH(lib)/libfru.so.1       # C++
+FORBIDDEN_DEP   usr/MACH(lib)/libsun_fc.so.1    # C++
+FORBIDDEN_DEP   usr/lib/netsvc/yp/rpc.yppasswdd # C++
+FORBIDDEN_DEP   usr/lib/netsvc/yp/ypserv        # C++
+FORBIDDEN_DEP   usr/lib/netsvc/yp/ypxfr         # C++
+FORBIDDEN_DEP   usr/lib/netsvc/yp/ypxfrd        # C++
 
-# The libprtdiag_psr.so.1 objects built under usr/src/lib/libprtdiag_psr
-# are a family, all built using the same makefile, targeted at different
-# sparc hardware variants. There are a small number of cases where this
-# one size fits all approach causes an object to be linked against an
-# unneeded library.
-UNREF_OBJ	lib/(libdevinfo|libcfgadm)\.so\.1; .*\ of\ .*SUNW,Netra-CP2300/lib/libprtdiag_psr\.so\.1
+# libfakekernel is a test environment, not intended for general use
+FORBIDDEN libfakekernel\.so
+FORBIDDEN_DEP usr/MACH(lib)/libzpool.so.1
+FORBIDDEN_DEP usr/bin/amd64/ztest
+FORBIDDEN_DEP usr/bin/i86/ztest
+FORBIDDEN_DEP usr/bin/raidz_test
+FORBIDDEN_DEP usr/bin/sparcv7/ztest
+FORBIDDEN_DEP usr/bin/sparcv9/ztest
+FORBIDDEN_DEP usr/lib/MACH(smbfs)/libfknsmb.so.1
+FORBIDDEN_DEP usr/lib/MACH(smbfs)/libfksmbfs.so.1
+FORBIDDEN_DEP usr/lib/MACH(smbsrv)/libfksmbsrv.so.1
+FORBIDDEN_DEP usr/lib/smbsrv/fksmbd
+FORBIDDEN_DEP usr/lib/smbsrv/test-msgbuf
+FORBIDDEN_DEP usr/lib/smbsrv/testoplock
+FORBIDDEN_DEP usr/sbin/amd64/zdb
+FORBIDDEN_DEP usr/sbin/i86/zdb
+FORBIDDEN_DEP usr/sbin/sparcv7/zdb
+FORBIDDEN_DEP usr/sbin/sparcv9/zdb
 
+# libucb is intended for legacy compatibility, not general use
+FORBIDDEN libucb\.so
+FORBIDDEN_DEP usr/ucb/
+FORBIDDEN_DEP usr/ucblib/
 
+# Older versions of libraries only provided for binary compatibility
+FORBIDDEN libm\.so\.1
+FORBIDDEN libresolv\.so\.1
+FORBIDDEN libxcurses\.so\.1
+
+#
+# the SUNWonld directory contains built versions of demos, built only to
+# ensure their correctness.
+#
+EXEC_STACK	^opt/SUNWonld
+EXEC_DATA	^opt/SUNWonld
+NODIRECT	^opt/SUNWonld
+
+#
+# Closed binaries have an old mcs comment mentioning SunOS rather than
+# illumos.  These comments are not generated as part of the build, and
+# it seems wrong to rewrite them; ignore them instead.
+#
+NO_COMMENT	^usr/bin/pax
+NO_COMMENT	^usr/lib/amd64/libike\.so\.1
+NO_COMMENT	^usr/lib/fwflash/verify/ses-SUN\.so
+NO_COMMENT	^usr/lib/inet/amd64/in\.iked
+NO_COMMENT	^usr/lib/inet/certdb
+NO_COMMENT	^usr/lib/inet/certlocal
+NO_COMMENT	^usr/lib/inet/certrldb
+NO_COMMENT	^usr/lib/inet/sparcv9/in\.iked
+NO_COMMENT	^usr/lib/labeld
+NO_COMMENT	^usr/lib/libike\.so\.1
+NO_COMMENT	^usr/lib/mdb/kvm/amd64/mpt\.so
+NO_COMMENT	^usr/lib/mdb/kvm/amd64/nfs\.so
+NO_COMMENT	^usr/lib/mdb/kvm/sparcv9/mpt\.so
+NO_COMMENT	^usr/lib/mdb/kvm/sparcv9/nfs\.so
+NO_COMMENT	^usr/lib/raidcfg/amd64/mpt\.so\.1
+NO_COMMENT	^usr/lib/raidcfg/mpt\.so\.1
+NO_COMMENT	^usr/lib/raidcfg/sparcv9/mpt\.so\.1
+NO_COMMENT	^usr/lib/sparcv9/libike\.so\.1
+NO_COMMENT	^usr/sbin/chk_encodings
+NO_COMMENT	^usr/xpg4/bin/more

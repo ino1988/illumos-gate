@@ -20,10 +20,11 @@
  */
 /*
  * Copyright (c) 1986, 2010, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2015, Joyent, Inc. All rights reserved.
  */
 
 /*	Copyright (c) 1984, 1986, 1987, 1988, 1989 AT&T	*/
-/*	  All Rights Reserved  	*/
+/*	  All Rights Reserved	*/
 
 /*
  * University Copyright- Copyright (c) 1982, 1986, 1988
@@ -511,9 +512,8 @@ anon_set_ptr(struct anon_hdr *ahp, ulong_t an_idx, struct anon *ap, int flags)
  * Copy anon array into a given new anon array
  */
 int
-anon_copy_ptr(struct anon_hdr *sahp, ulong_t s_idx,
-	struct anon_hdr *dahp, ulong_t d_idx,
-	pgcnt_t npages, int flags)
+anon_copy_ptr(struct anon_hdr *sahp, ulong_t s_idx, struct anon_hdr *dahp,
+    ulong_t d_idx, pgcnt_t npages, int flags)
 {
 	void **sapp, **dapp;
 	void *ap;
@@ -769,9 +769,9 @@ set_anoninfo(void)
  * reserve swap space, we need to check memory-based as well
  * as disk-backed (physical) swap.  The following algorithm
  * is used:
- * 	Check the space on physical swap
- * 		i.e. amount needed < ani_max - ani_phys_resv
- * 	If we are swapping on swapfs check
+ *	Check the space on physical swap
+ *		i.e. amount needed < ani_max - ani_phys_resv
+ *	If we are swapping on swapfs check
  *		amount needed < (availrmem - swapfs_minfree)
  * Since the algorithm to check for the quantity of swap space is
  * almost the same as that for reserving it, we'll just use anon_resvmem
@@ -787,13 +787,21 @@ anon_resvmem(size_t size, boolean_t takemem, zone_t *zone, int tryhard)
 	pgcnt_t pswap_pages = 0;
 	proc_t *p = curproc;
 
-	if (zone != NULL && takemem) {
+	if (zone != NULL) {
 		/* test zone.max-swap resource control */
 		mutex_enter(&p->p_lock);
 		if (rctl_incr_swap(p, zone, ptob(npages)) != 0) {
 			mutex_exit(&p->p_lock);
+
+			if (takemem)
+				atomic_add_64(&zone->zone_anon_alloc_fail, 1);
+
 			return (0);
 		}
+
+		if (!takemem)
+			rctl_decr_swap(zone, ptob(npages));
+
 		mutex_exit(&p->p_lock);
 	}
 	mutex_enter(&anoninfo_lock);
@@ -1264,7 +1272,8 @@ anon_decref_pages(
 					if (ap->an_pvp != NULL &&
 					    !vn_matchopval(ap->an_pvp,
 					    VOPNAME_DISPOSE,
-					    (fs_generic_func_p)fs_dispose))
+					    (fs_generic_func_p)(uintptr_t)
+					    fs_dispose))
 						dispose = 1;
 				}
 				for (j = i; j < i + curpgcnt; j++) {
@@ -1330,7 +1339,7 @@ anon_decref_pages(
  */
 void
 anon_dup(struct anon_hdr *old, ulong_t old_idx, struct anon_hdr *new,
-			ulong_t new_idx, size_t size)
+    ulong_t new_idx, size_t size)
 {
 	spgcnt_t npages;
 	kmutex_t *ahm;
@@ -1660,8 +1669,9 @@ anon_free_pages(
 /*
  * Make anonymous pages discardable
  */
-void
-anon_disclaim(struct anon_map *amp, ulong_t index, size_t size)
+int
+anon_disclaim(struct anon_map *amp, ulong_t index, size_t size,
+    uint_t behav, pgcnt_t *purged)
 {
 	spgcnt_t npages = btopr(size);
 	struct anon *ap;
@@ -1669,11 +1679,13 @@ anon_disclaim(struct anon_map *amp, ulong_t index, size_t size)
 	anoff_t off;
 	page_t *pp, *root_pp;
 	kmutex_t *ahm;
-	pgcnt_t pgcnt;
+	pgcnt_t pgcnt, npurged = 0;
 	ulong_t old_idx, idx, i;
 	struct anon_hdr *ahp = amp->ahp;
 	anon_sync_obj_t cookie;
+	int err = 0;
 
+	VERIFY(behav == MADV_FREE || behav == MADV_PURGE);
 	ASSERT(RW_READ_HELD(&amp->a_rwlock));
 	pgcnt = 1;
 	for (; npages > 0; index = (pgcnt == 1) ? index + 1 :
@@ -1721,6 +1733,7 @@ anon_disclaim(struct anon_map *amp, ulong_t index, size_t size)
 			page_unlock(pp);
 			segadvstat.MADV_FREE_miss.value.ul++;
 			anon_array_exit(&cookie);
+			err = EBUSY;
 			continue;
 		}
 
@@ -1738,6 +1751,15 @@ anon_disclaim(struct anon_map *amp, ulong_t index, size_t size)
 			continue;
 		}
 
+		if (behav == MADV_PURGE && pp->p_szc != 0) {
+			/*
+			 * If we're purging and we have a large page, simplify
+			 * things a bit by demoting ourselves into the base
+			 * page case.
+			 */
+			(void) page_try_demote_pages(pp);
+		}
+
 		if (pp->p_szc == 0) {
 			pgcnt = 1;
 
@@ -1750,7 +1772,27 @@ anon_disclaim(struct anon_map *amp, ulong_t index, size_t size)
 				ap->an_pvp = NULL;
 				ap->an_poff = 0;
 			}
-			mutex_exit(ahm);
+
+			if (behav == MADV_PURGE) {
+				/*
+				 * If we're purging (instead of merely freeing),
+				 * rip out this anon structure entirely to
+				 * assure that any subsequent fault pulls from
+				 * the backing vnode (if any).
+				 */
+				if (--ap->an_refcnt == 0)
+					anon_rmhash(ap);
+
+				mutex_exit(ahm);
+				(void) anon_set_ptr(ahp, index,
+				    NULL, ANON_SLEEP);
+				npurged++;
+				ANI_ADD(1);
+				kmem_cache_free(anon_cache, ap);
+			} else {
+				mutex_exit(ahm);
+			}
+
 			segadvstat.MADV_FREE_hit.value.ul++;
 
 			/*
@@ -1759,7 +1801,9 @@ anon_disclaim(struct anon_map *amp, ulong_t index, size_t size)
 			 */
 			(void) hat_pageunload(pp, HAT_FORCE_PGUNLOAD);
 			/*LINTED: constant in conditional context */
-			VN_DISPOSE(pp, B_FREE, 0, kcred);
+			VN_DISPOSE(pp,
+			    behav == MADV_FREE ? B_FREE : B_INVAL, 0, kcred);
+
 			anon_array_exit(&cookie);
 			continue;
 		}
@@ -1771,6 +1815,7 @@ anon_disclaim(struct anon_map *amp, ulong_t index, size_t size)
 				page_unlock(pp);
 				segadvstat.MADV_FREE_miss.value.ul++;
 				anon_array_exit(&cookie);
+				err = EBUSY;
 				continue;
 			} else {
 				pgcnt = 1;
@@ -1842,6 +1887,11 @@ skiplp:
 			page_unlock(pp);
 		anon_array_exit(&cookie);
 	}
+
+	if (purged != NULL)
+		*purged = npurged;
+
+	return (err);
 }
 
 /*
@@ -3155,7 +3205,7 @@ anon_map_demotepages(
 	pgcnt_t		i, pg_idx;
 	ulong_t		an_idx;
 	caddr_t		vaddr;
-	int 		err;
+	int		err;
 	int		retry = 0;
 	uint_t		vpprot;
 
@@ -3403,7 +3453,7 @@ anonmap_free(struct anon_map *amp)
  */
 int
 non_anon(struct anon_hdr *ahp, ulong_t anon_idx, u_offset_t *offp,
-				size_t *lenp)
+    size_t *lenp)
 {
 	ulong_t i, el;
 	ssize_t low, high;
@@ -3521,7 +3571,7 @@ ulong_t *
 anon_get_slot(struct anon_hdr *ahp, ulong_t an_idx)
 {
 	struct anon	**app;
-	void 		**ppp;
+	void		**ppp;
 
 	ASSERT(an_idx < ahp->size);
 
@@ -3580,7 +3630,7 @@ anon_array_enter(struct anon_map *amp, ulong_t an_idx, anon_sync_obj_t *sobj)
 
 int
 anon_array_try_enter(struct anon_map *amp, ulong_t an_idx,
-			anon_sync_obj_t *sobj)
+    anon_sync_obj_t *sobj)
 {
 	ulong_t		*ap_slot;
 	kmutex_t	*mtx;

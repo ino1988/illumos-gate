@@ -23,6 +23,7 @@
 # Copyright 2009 Sun Microsystems, Inc.  All rights reserved.
 # Use is subject to license terms.
 #
+# Copyright (c) 2018, Joyent, Inc.
 
 #
 # This makefile drives the production of iSCSI initiator Driver
@@ -39,7 +40,6 @@ UTSBASE   = ../..
 #
 MODULE		= iscsi
 OBJECTS		= $(ISCSI_INITIATOR_OBJS:%=$(OBJS_DIR)/%)
-LINTS		= $(ISCSI_INITIATOR_OBJS:%.o=$(LINTS_DIR)/%.ln)
 ROOTMODULE	= $(ROOT_DRV_DIR)/$(MODULE)
 CONF_SRCDIR	= $(UTSBASE)/common/io/scsi/adapters/iscsi
 
@@ -52,7 +52,6 @@ include $(UTSBASE)/intel/Makefile.intel
 # Define targets.
 #
 ALL_TARGET	= $(BINARY) $(SRC_CONFILE)
-LINT_TARGET	= $(MODULE).lint
 INSTALL_TARGET	= $(BINARY) $(ROOTMODULE) $(ROOT_CONFFILE)
 
 # includes
@@ -65,14 +64,15 @@ INC_PATH	+= -I$(SRC)/common/hdcrc
 LDFLAGS += -dy -N"misc/scsi" -N"fs/sockfs" -N"sys/doorfs" -Nmisc/md5 -Nmisc/ksocket
 LDFLAGS += -N"misc/idm"
 
-LINTFLAGS += -a -erroff=E_BAD_PTR_CAST_ALIGN -erroff=E_PTRDIFF_OVERFLOW
-LINTFLAGS64 += -a -erroff=E_BAD_PTR_CAST_ALIGN -erroff=E_PTRDIFF_OVERFLOW
 
 CERRWARN	+= -_gcc=-Wno-switch
 CERRWARN	+= -_gcc=-Wno-unused-function
 CERRWARN	+= -_gcc=-Wno-parentheses
 CERRWARN	+= -_gcc=-Wno-type-limits
-CERRWARN	+= -_gcc=-Wno-uninitialized
+CERRWARN	+= $(CNOWARN_UNINIT)
+
+# needs work
+SMATCH=off
 
 #
 # Default build targets.
@@ -86,12 +86,6 @@ all:		$(ALL_DEPS)
 clean:		$(CLEAN_DEPS)
 
 clobber:	$(CLOBBER_DEPS)
-
-lint:		$(LINT_DEPS)
-
-modlintlib:	$(MODLINTLIB_DEPS)
-
-clean.lint:	$(CLEAN_LINT_DEPS)
 
 install:	$(INSTALL_DEPS)
 

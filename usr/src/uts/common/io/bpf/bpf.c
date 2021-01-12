@@ -40,6 +40,7 @@
 /*
  * Copyright 2009 Sun Microsystems, Inc.  All rights reserved.
  * Use is subject to license terms.
+ * Copyright 2017 Joyent, Inc.
  */
 
 /*
@@ -251,10 +252,12 @@ bpf_attachd(struct bpf_d *d, const char *ifname, int dlt)
 	int hdrlen;
 	int error;
 
-	ASSERT(d->bd_bif == NULL);
-	ASSERT(d->bd_mcip == NULL);
+	ASSERT(d->bd_bif == (uintptr_t)NULL);
+	ASSERT(d->bd_mcip == (uintptr_t)NULL);
 	zone = d->bd_zone;
 	zonematch = B_TRUE;
+	error = 0;
+	bpr = NULL;
 again:
 	mh = 0;
 	mcip = 0;
@@ -293,7 +296,7 @@ next:
 			MBPF_CLIENT_CLOSE(bpr, mcip);
 			mcip = 0;
 		}
-		if (mh != NULL) {
+		if (mh != 0) {
 			MBPF_CLOSE(bpr, mh);
 			mh = 0;
 		}
@@ -310,6 +313,10 @@ next:
 		}
 		return (error);
 	}
+
+	/* No providers? */
+	if (bpr == NULL)
+		return (ENOENT);
 
 	d->bd_mac = *bpr;
 	d->bd_mcip = mcip;
@@ -1385,7 +1392,7 @@ bpf_ifname(struct bpf_d *d, char *buffer, int bufsize)
 {
 
 	mutex_enter(&d->bd_lock);
-	if (d->bd_bif == NULL) {
+	if (d->bd_bif == 0) {
 		mutex_exit(&d->bd_lock);
 		return (EINVAL);
 	}
@@ -1396,19 +1403,20 @@ bpf_ifname(struct bpf_d *d, char *buffer, int bufsize)
 	return (0);
 }
 
-/*
- * Support for poll() system call
- *
- * Return true iff the specific operation will not block indefinitely - with
- * the assumption that it is safe to positively acknowledge a request for the
- * ability to write to the BPF device.
- * Otherwise, return false but make a note that a selnotify() must be done.
- */
+/* ARGSUSED */
 int
 bpfchpoll(dev_t dev, short events, int anyyet, short *reventsp,
     struct pollhead **phpp)
 {
 	struct bpf_d *d = bpf_dev_get(getminor(dev));
+
+	/*
+	 * Until this driver is modified to issue proper pollwakeup() calls on
+	 * its pollhead, edge-triggered polling is not allowed.
+	 */
+	if (events & POLLET) {
+		return (EPERM);
+	}
 
 	if (events & (POLLIN | POLLRDNORM)) {
 		/*
@@ -1420,9 +1428,13 @@ bpfchpoll(dev_t dev, short events, int anyyet, short *reventsp,
 		    d->bd_slen != 0)) {
 			*reventsp |= events & (POLLIN | POLLRDNORM);
 		} else {
+			/*
+			 * Until the bpf driver has been updated to include
+			 * adequate pollwakeup() logic, no pollhead will be
+			 * emitted here, preventing the resource from being
+			 * cached by poll()/devpoll/epoll.
+			 */
 			*reventsp = 0;
-			if (!anyyet)
-				*phpp = &d->bd_poll;
 			/* Start the read timeout if necessary */
 			if (d->bd_rtout > 0 && d->bd_state == BPF_IDLE) {
 				bpf_clear_timeout(d);

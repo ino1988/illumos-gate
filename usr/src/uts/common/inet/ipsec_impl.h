@@ -21,6 +21,8 @@
 /*
  * Copyright 2009 Sun Microsystems, Inc.  All rights reserved.
  * Use is subject to license terms.
+ * Copyright (c) 2012 Nexenta Systems, Inc. All rights reserved.
+ * Copyright 2017 Joyent, Inc.
  */
 
 #ifndef _INET_IPSEC_IMPL_H
@@ -108,6 +110,9 @@ extern "C" {
  */
 extern boolean_t keysock_extended_reg(netstack_t *);
 extern uint32_t keysock_next_seq(netstack_t *);
+
+/* Common-code for spdsock and keysock. */
+extern void keysock_spdsock_wput_iocdata(queue_t *, mblk_t *, sa_family_t);
 
 /*
  * Locking for ipsec policy rules:
@@ -231,7 +236,7 @@ typedef struct ipsec_prot
 	uint16_t	ipp_espa_minbits;	 /* ESP auth: min keylen */
 	uint16_t	ipp_espa_maxbits;	 /* ESP auth: max keylen */
 	uint32_t	ipp_km_proto;		 /* key mgmt protocol */
-	uint32_t	ipp_km_cookie;		 /* key mgmt cookie */
+	uint64_t	ipp_km_cookie;		 /* key mgmt cookie */
 	uint32_t	ipp_replay_depth;	 /* replay window */
 	/* XXX add lifetimes */
 } ipsec_prot_t;
@@ -785,7 +790,7 @@ struct ipsec_stack {
 	 * Because policy needs to know what algorithms are supported, keep the
 	 * lists of algorithms here.
 	 */
-	kmutex_t 		ipsec_alg_lock;
+	krwlock_t 		ipsec_alg_lock;
 
 	uint8_t			ipsec_nalgs[IPSEC_NALGTYPES];
 	ipsec_alginfo_t	*ipsec_alglists[IPSEC_NALGTYPES][IPSEC_MAX_ALGS];

@@ -20,10 +20,10 @@
  */
 /*
  * Copyright (c) 1983, 2010, Oracle and/or its affiliates. All rights reserved.
- * Copyright (c) 2012, Joyent, Inc. All rights reserved.
+ * Copyright 2019 Joyent, Inc.
  */
 /*
- * Copyright 2012 Nexenta Systems, Inc. All rights reserved.
+ * Copyright 2016 Nexenta Systems, Inc. All rights reserved.
  */
 
 #include <stdio.h>
@@ -72,6 +72,7 @@ static char	*dumpfile;		/* source of raw crash dump */
 static long	bounds = -1;		/* numeric suffix */
 static long	pagesize;		/* dump pagesize */
 static int	dumpfd = -1;		/* dumpfile descriptor */
+static boolean_t have_dumpfile = B_TRUE;	/* dumpfile existence */
 static dumphdr_t corehdr, dumphdr;	/* initial and terminal dumphdrs */
 static boolean_t dump_incomplete;	/* dumphdr indicates incomplete */
 static boolean_t fm_panic;		/* dump is the result of fm_panic */
@@ -83,6 +84,7 @@ static int	interactive;		/* user invoked; no syslog */
 static int	csave;			/* save dump compressed */
 static int	filemode;		/* processing file, not dump device */
 static int	percent_done;		/* progress indicator */
+static int	sec_done;		/* progress last report time */
 static hrtime_t	startts;		/* timestamp at start */
 static volatile uint64_t saved;		/* count of pages written */
 static volatile uint64_t zpages;	/* count of zero pages not written */
@@ -90,6 +92,7 @@ static dumpdatahdr_t datahdr;		/* compression info */
 static long	coreblksize;		/* preferred write size (st_blksize) */
 static int	cflag;			/* run as savecore -c */
 static int	mflag;			/* run as savecore -m */
+static int	rflag;			/* run as savecore -r */
 
 /*
  * Payload information for the events we raise.  These are used
@@ -162,7 +165,7 @@ static void
 usage(void)
 {
 	(void) fprintf(stderr,
-	    "usage: %s [-Lvd] [-f dumpfile] [dirname]\n", progname);
+	    "usage: %s [-L | -r] [-vd] [-f dumpfile] [dirname]\n", progname);
 	exit(1);
 }
 
@@ -227,7 +230,7 @@ logprint(uint32_t flags, char *message, ...)
 		 * raise if run as savecore -m.  If something in the
 		 * raise_event codepath calls logprint avoid recursion.
 		 */
-		if (!mflag && logprint_raised++ == 0)
+		if (!mflag && !rflag && logprint_raised++ == 0)
 			raise_event(SC_EVENT_SAVECORE_FAILURE, buf);
 		code = 2;
 		break;
@@ -238,7 +241,7 @@ logprint(uint32_t flags, char *message, ...)
 
 	case SC_EXIT_ERR:
 	default:
-		if (!mflag && logprint_raised++ == 0)
+		if (!mflag && !rflag && logprint_raised++ == 0 && have_dumpfile)
 			raise_event(SC_EVENT_SAVECORE_FAILURE, buf);
 		code = 1;
 		break;
@@ -265,8 +268,8 @@ static void
 Fread(void *buf, size_t size, FILE *f)
 {
 	if (fread(buf, size, 1, f) != 1)
-		logprint(SC_SL_ERR | SC_EXIT_ERR, "fread: ferror %d feof %d",
-		    ferror(f), feof(f));
+		logprint(SC_SL_ERR | SC_EXIT_ERR, "fread: %s",
+		    strerror(errno));
 }
 
 static void
@@ -298,9 +301,11 @@ Fstat(int fd, Stat_t *sb, const char *fname)
 static void
 Stat(const char *fname, Stat_t *sb)
 {
-	if (stat64(fname, sb) != 0)
-		logprint(SC_SL_ERR | SC_EXIT_ERR, "stat(\"%s\"): %s", fname,
-		    strerror(errno));
+	if (stat64(fname, sb) != 0) {
+		have_dumpfile = B_FALSE;
+		logprint(SC_SL_ERR | SC_EXIT_ERR, "failed to get status "
+		    "of file %s", fname);
+	}
 }
 
 static void
@@ -351,7 +356,7 @@ read_number_from_file(const char *filename, long default_value)
 static void
 read_dumphdr(void)
 {
-	if (filemode)
+	if (filemode || rflag)
 		dumpfd = Open(dumpfile, O_RDONLY, 0644);
 	else
 		dumpfd = Open(dumpfile, O_RDWR | O_DSYNC, 0644);
@@ -404,7 +409,7 @@ read_dumphdr(void)
 		/*
 		 * Clear valid bit so we don't complain on every invocation.
 		 */
-		if (!filemode)
+		if (!filemode && !rflag)
 			Pwrite(dumpfd, &dumphdr, sizeof (dumphdr), endoff);
 		logprint(SC_SL_ERR | SC_EXIT_ERR,
 		    "initial dump header corrupt");
@@ -456,8 +461,8 @@ build_dump_map(int corefd, const pfn_t *pfn_table)
 	for (i = 0; i < corehdr.dump_nvtop; i++) {
 		long first = 0;
 		long last = corehdr.dump_npages - 1;
-		long middle;
-		pfn_t pfn;
+		long middle = 0;
+		pfn_t pfn = 0;
 		uintptr_t h;
 
 		Fread(&vtop, sizeof (mem_vtop_t), in);
@@ -656,7 +661,7 @@ copy_crashfile(const char *corefile)
 	 * Write out the modified dump header to the dump device.
 	 * The dump device has been processed, so DF_VALID is clear.
 	 */
-	if (!filemode)
+	if (!filemode && !rflag)
 		Pwrite(dumpfd, &dumphdr, sizeof (dumphdr), endoff);
 
 	(void) close(corefd);
@@ -1084,11 +1089,12 @@ report_progress()
 		return;
 
 	percent = saved * 100LL / corehdr.dump_npages;
-	if (percent > percent_done) {
-		sec = (gethrtime() - startts) / 1000 / 1000 / 1000;
+	sec = (gethrtime() - startts) / NANOSEC;
+	if (percent > percent_done || sec > sec_done) {
 		(void) printf("\r%2d:%02d %3d%% done", sec / 60, sec % 60,
 		    percent);
 		(void) fflush(stdout);
+		sec_done = sec;
 		percent_done = percent;
 	}
 }
@@ -1183,7 +1189,7 @@ decompress_pages(int corefd)
 	char *cpage = NULL;
 	char *dpage = NULL;
 	char *out;
-	pgcnt_t curpage;
+	pgcnt_t curpage = 0;
 	block_t *b;
 	FILE *dumpf;
 	FILE *tracef = NULL;
@@ -1195,7 +1201,7 @@ decompress_pages(int corefd)
 	dumpcsize_t dcsize;
 	int nstreams = datahdr.dump_nstreams;
 	int maxcsize = datahdr.dump_maxcsize;
-	int nout, tag, doflush;
+	int nout = 0, tag, doflush;
 
 	dumpf = fdopen(dup(dumpfd), "rb");
 	if (dumpf == NULL)
@@ -1417,7 +1423,7 @@ build_corefile(const char *namelist, const char *corefile)
 	 * Write out the modified dump headers.
 	 */
 	Pwrite(corefd, &corehdr, sizeof (corehdr), 0);
-	if (!filemode)
+	if (!filemode && !rflag)
 		Pwrite(dumpfd, &dumphdr, sizeof (dumphdr), endoff);
 
 	(void) close(corefd);
@@ -1526,7 +1532,10 @@ stack_retrieve(char *stack)
 	    DUMP_ERPTSIZE);
 	dumpoff -= DUMP_SUMMARYSIZE;
 
-	dumpfd = Open(dumpfile, O_RDWR | O_DSYNC, 0644);
+	if (rflag)
+		dumpfd = Open(dumpfile, O_RDONLY, 0644);
+	else
+		dumpfd = Open(dumpfile, O_RDWR | O_DSYNC, 0644);
 	dumpoff = llseek(dumpfd, dumpoff, SEEK_END) & -DUMP_OFFSET;
 
 	Pread(dumpfd, &sd, sizeof (summary_dump_t), dumpoff);
@@ -1663,7 +1672,7 @@ main(int argc, char *argv[])
 	if (savedir != NULL)
 		savedir = strdup(savedir);
 
-	while ((c = getopt(argc, argv, "Lvcdmf:")) != EOF) {
+	while ((c = getopt(argc, argv, "Lvcdmf:r")) != EOF) {
 		switch (c) {
 		case 'L':
 			livedump++;
@@ -1679,6 +1688,9 @@ main(int argc, char *argv[])
 			break;
 		case 'm':
 			mflag++;
+			break;
+		case 'r':
+			rflag++;
 			break;
 		case 'f':
 			dumpfile = optarg;
@@ -1704,14 +1716,19 @@ main(int argc, char *argv[])
 	if (cflag && livedump)
 		usage();
 
+	if (rflag && (cflag || mflag || livedump))
+		usage();
+
 	if (dumpfile == NULL || livedump)
 		dumpfd = Open("/dev/dump", O_RDONLY, 0444);
 
 	if (dumpfile == NULL) {
 		dumpfile = Zalloc(MAXPATHLEN);
-		if (ioctl(dumpfd, DIOCGETDEV, dumpfile) == -1)
+		if (ioctl(dumpfd, DIOCGETDEV, dumpfile) == -1) {
+			have_dumpfile = B_FALSE;
 			logprint(SC_SL_NONE | SC_IF_ISATTY | SC_EXIT_ERR,
 			    "no dump device configured");
+		}
 	}
 
 	if (mflag)
@@ -1745,7 +1762,7 @@ main(int argc, char *argv[])
 	 * We could extend it to handle this, but there doesn't seem to be
 	 * a general need for it, so we isolate the complexity here instead.
 	 */
-	if (dumphdr.dump_panicstring[0] != '\0') {
+	if (dumphdr.dump_panicstring[0] != '\0' && !rflag) {
 		int logfd = Open("/dev/conslog", O_WRONLY, 0644);
 		log_ctl_t lc;
 		struct strbuf ctl, dat;
@@ -1794,7 +1811,7 @@ main(int argc, char *argv[])
 	 * for the same event.  Also avoid raising an event for a
 	 * livedump, or when we inflating a compressed dump.
 	 */
-	if (!fm_panic && !livedump && !filemode)
+	if (!fm_panic && !livedump && !filemode && !rflag)
 		raise_event(SC_EVENT_DUMP_PENDING, NULL);
 
 	logprint(SC_SL_WARN, "System dump time: %s",
@@ -1850,7 +1867,7 @@ main(int argc, char *argv[])
 		 * has panicked. We know a reasonable amount about the
 		 * condition at this time, but the dump is still compressed.
 		 */
-		if (!livedump && !fm_panic)
+		if (!livedump && !fm_panic && !rflag)
 			raise_event(SC_EVENT_DUMP_AVAILABLE, NULL);
 
 		if (metrics_size > 0) {
@@ -1919,7 +1936,7 @@ main(int argc, char *argv[])
 
 		build_corefile(namelist, corefile);
 
-		if (!livedump && !filemode && !fm_panic)
+		if (!livedump && !filemode && !fm_panic && !rflag)
 			raise_event(SC_EVENT_DUMP_AVAILABLE, NULL);
 
 		if (access(METRICSFILE, F_OK) == 0) {
@@ -1929,24 +1946,32 @@ main(int argc, char *argv[])
 			if (sec < 1)
 				sec = 1;
 
-			(void) fprintf(mfile, "[[[[,,,");
-			for (i = 0; i < argc; i++)
-				(void) fprintf(mfile, "%s ", argv[i]);
-			(void) fprintf(mfile, "\n");
-			(void) fprintf(mfile, ",,,%s/%s\n", savedir, corefile);
-			(void) fprintf(mfile, ",,,%s %s %s %s %s\n",
-			    dumphdr.dump_utsname.sysname,
-			    dumphdr.dump_utsname.nodename,
-			    dumphdr.dump_utsname.release,
-			    dumphdr.dump_utsname.version,
-			    dumphdr.dump_utsname.machine);
-			(void) fprintf(mfile, "Uncompress pages,%"PRIu64"\n",
-			    saved);
-			(void) fprintf(mfile, "Uncompress time,%d\n", sec);
-			(void) fprintf(mfile, "Uncompress pages/sec,%"
-			    PRIu64"\n", saved / sec);
-			(void) fprintf(mfile, "]]]]\n");
-			(void) fclose(mfile);
+			if (mfile == NULL) {
+				logprint(SC_SL_WARN,
+				    "Can't create %s: %s",
+				    METRICSFILE, strerror(errno));
+			} else {
+				(void) fprintf(mfile, "[[[[,,,");
+				for (i = 0; i < argc; i++)
+					(void) fprintf(mfile, "%s ", argv[i]);
+				(void) fprintf(mfile, "\n");
+				(void) fprintf(mfile, ",,,%s/%s\n", savedir,
+				    corefile);
+				(void) fprintf(mfile, ",,,%s %s %s %s %s\n",
+				    dumphdr.dump_utsname.sysname,
+				    dumphdr.dump_utsname.nodename,
+				    dumphdr.dump_utsname.release,
+				    dumphdr.dump_utsname.version,
+				    dumphdr.dump_utsname.machine);
+				(void) fprintf(mfile,
+				    "Uncompress pages,%"PRIu64"\n", saved);
+				(void) fprintf(mfile, "Uncompress time,%d\n",
+				    sec);
+				(void) fprintf(mfile, "Uncompress pages/sec,%"
+				    PRIu64"\n", saved / sec);
+				(void) fprintf(mfile, "]]]]\n");
+				(void) fclose(mfile);
+			}
 		}
 	}
 

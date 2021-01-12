@@ -21,6 +21,7 @@
 /*
  * Copyright 2009 Sun Microsystems, Inc.  All rights reserved.
  * Use is subject to license terms.
+ * Copyright 2019 Joyent, Inc.
  */
 
 /*
@@ -34,6 +35,9 @@
 #include	<sys/dld_impl.h>
 #include	<sys/sdt.h>
 #include	<sys/atomic.h>
+#include	<sys/sysevent.h>
+#include	<sys/sysevent/eventdefs.h>
+#include	<sys/sysevent/datalink.h>
 
 static kmem_cache_t	*i_dls_link_cachep;
 mod_hash_t		*i_dls_link_hash;
@@ -43,7 +47,7 @@ static uint_t		i_dls_link_count;
 #define		IMPL_HASHSZ	67	/* prime */
 
 /*
- * Construct a hash key encompassing both DLSAP value and VLAN idenitifier.
+ * Construct a hash key from the DLSAP value.
  */
 #define	MAKE_KEY(_sap)						\
 	((mod_hash_key_t)(uintptr_t)((_sap) << VLAN_ID_SIZE))
@@ -262,10 +266,12 @@ i_dls_head_free(dls_head_t *dhp)
 }
 
 /*
- * Try to send mp up to the streams of the given sap and vid. Return B_TRUE
- * if this message is sent to any streams.
- * Note that this function will copy the message chain and the original
- * mp will remain valid after this function
+ * Try to send mp up to the streams of the given sap. Return the
+ * number of streams which accepted this message, or 0 if no streams
+ * accepted the message.
+ *
+ * Note that this function copies the message chain and the original
+ * mp remains valid after this function returns.
  */
 static uint_t
 i_dls_link_rx_func(dls_link_t *dlp, mac_resource_handle_t mrh,
@@ -283,25 +289,24 @@ i_dls_link_rx_func(dls_link_t *dlp, mac_resource_handle_t mrh,
 	int		rval;
 
 	/*
-	 * Construct a hash key from the VLAN identifier and the
-	 * DLSAP that represents dld_str_t in promiscuous mode.
+	 * Construct a hash key from the DLSAP.
 	 */
 	key = MAKE_KEY(sap);
 
 	/*
-	 * Search the hash table for dld_str_t eligible to receive
-	 * a packet chain for this DLSAP/VLAN combination. The mod hash's
-	 * internal lock serializes find/insert/remove from the mod hash list.
-	 * Incrementing the dh_ref (while holding the mod hash lock) ensures
-	 * dls_link_remove will wait for the upcall to finish.
+	 * Search the hash table for a dld_str_t eligible to receive a
+	 * packet chain for this DLSAP. The mod hash's internal lock
+	 * serializes find/insert/remove from the mod hash list.
+	 * Incrementing the dh_ref (while holding the mod hash lock)
+	 * ensures dls_link_remove will wait for the upcall to finish.
 	 */
 	if (mod_hash_find_cb_rval(hash, key, (mod_hash_val_t *)&dhp,
 	    i_dls_head_hold, &rval) != 0 || (rval != 0)) {
-		return (B_FALSE);
+		return (0);
 	}
 
 	/*
-	 * Find dld_str_t that will accept the sub-chain.
+	 * Find all dld_str_t that will accept the sub-chain.
 	 */
 	for (dsp = dhp->dh_list; dsp != NULL; dsp = dsp->ds_next) {
 		if (!acceptfunc(dsp, mhip, &ds_rx, &ds_rx_arg))
@@ -313,7 +318,7 @@ i_dls_link_rx_func(dls_link_t *dlp, mac_resource_handle_t mrh,
 		naccepted++;
 
 		/*
-		 * There will normally be at least more dld_str_t
+		 * There will normally be at least one more dld_str_t
 		 * (since we've yet to check for non-promiscuous
 		 * dld_str_t) so dup the sub-chain.
 		 */
@@ -377,7 +382,16 @@ i_dls_link_rx(void *arg, mac_resource_handle_t mrh, mblk_t *mp,
 
 		vid = VLAN_ID(mhi.mhi_tci);
 
+		/*
+		 * This condition is true only when a sun4v vsw client
+		 * is on the scene; as it is the only type of client
+		 * that multiplexes VLANs on a single client instance.
+		 * All other types of clients have one VLAN per client
+		 * instance. In that case, MAC strips the VLAN tag
+		 * before delivering it to DLS (see mac_rx_deliver()).
+		 */
 		if (mhi.mhi_istagged) {
+
 			/*
 			 * If it is tagged traffic, send it upstream to
 			 * all dld_str_t which are attached to the physical
@@ -407,14 +421,13 @@ i_dls_link_rx(void *arg, mac_resource_handle_t mrh, mblk_t *mp,
 		}
 
 		/*
-		 * Construct a hash key from the VLAN identifier and the
-		 * DLSAP.
+		 * Construct a hash key from the DLSAP.
 		 */
 		key = MAKE_KEY(mhi.mhi_bindsap);
 
 		/*
-		 * Search the has table for dld_str_t eligible to receive
-		 * a packet chain for this DLSAP/VLAN combination.
+		 * Search the hash table for dld_str_t eligible to receive
+		 * a packet chain for this DLSAP.
 		 */
 		if (mod_hash_find_cb_rval(hash, key, (mod_hash_val_t *)&dhp,
 		    i_dls_head_hold, &rval) != 0 || (rval != 0)) {
@@ -553,7 +566,13 @@ dls_rx_promisc(void *arg, mac_resource_handle_t mrh, mblk_t *mp,
 	dls_head_t			*dhp;
 	mod_hash_key_t			key;
 
+	/*
+	 * We expect to deal with only a single packet.
+	 */
+	ASSERT3P(mp->b_next, ==, NULL);
+
 	DLS_PREPARE_PKT(dlp->dl_mh, mp, &mhi, err);
+
 	if (err != 0)
 		goto drop;
 
@@ -579,6 +598,67 @@ drop:
 	freemsg(mp);
 }
 
+/*
+ * We'd like to notify via sysevents that a link state change has occurred.
+ * There are a couple of challenges associated with this. The first is that if
+ * the link is flapping a lot, we may not see an accurate state when we launch
+ * the notification, we're told it changed, not what it changed to.
+ *
+ * The next problem is that all of the information that a user has associated
+ * with this device is the exact opposite of what we have on the dls_link_t. We
+ * have the name of the mac device, which has no bearing on what users see.
+ * Likewise, we don't have the datalink id either. So we're going to have to get
+ * this from dls.
+ *
+ * This is all further complicated by the fact that this could be going on in
+ * another thread at the same time as someone is tearing down the dls_link_t
+ * that we're associated with. We need to be careful not to grab the mac
+ * perimeter, otherwise we stand a good chance of deadlock.
+ */
+static void
+dls_link_notify(void *arg, mac_notify_type_t type)
+{
+	dls_link_t	*dlp = arg;
+	dls_dl_handle_t	dhp;
+	nvlist_t	*nvp;
+	sysevent_t	*event;
+	sysevent_id_t	eid;
+
+	if (type != MAC_NOTE_LINK && type != MAC_NOTE_LOWLINK)
+		return;
+
+	/*
+	 * If we can't find a devnet handle for this link, then there is no user
+	 * knowable device for this at the moment and there's nothing we can
+	 * really share with them that will make sense.
+	 */
+	if (dls_devnet_hold_tmp_by_link(dlp, &dhp) != 0)
+		return;
+
+	/*
+	 * Because we're attaching this nvlist_t to the sysevent, it'll get
+	 * cleaned up when we call sysevent_free.
+	 */
+	VERIFY(nvlist_alloc(&nvp, NV_UNIQUE_NAME, KM_SLEEP) == 0);
+	VERIFY(nvlist_add_int32(nvp, DATALINK_EV_LINK_ID,
+	    dls_devnet_linkid(dhp)) == 0);
+	VERIFY(nvlist_add_string(nvp, DATALINK_EV_LINK_NAME,
+	    dls_devnet_link(dhp)) == 0);
+	VERIFY(nvlist_add_int32(nvp, DATALINK_EV_ZONE_ID,
+	    dls_devnet_getzid(dhp)) == 0);
+
+	dls_devnet_rele_tmp(dhp);
+
+	event = sysevent_alloc(EC_DATALINK, ESC_DATALINK_LINK_STATE,
+	    ILLUMOS_KERN_PUB"dls", SE_SLEEP);
+	VERIFY(event != NULL);
+	(void) sysevent_attach_attributes(event, (sysevent_attr_list_t *)nvp);
+
+	(void) log_sysevent(event, SE_SLEEP, &eid);
+	sysevent_free(event);
+
+}
+
 static void
 i_dls_link_destroy(dls_link_t *dlp)
 {
@@ -589,6 +669,9 @@ i_dls_link_destroy(dls_link_t *dlp)
 	/*
 	 * Free the structure back to the cache.
 	 */
+	if (dlp->dl_mnh != NULL)
+		mac_notify_remove(dlp->dl_mnh, B_TRUE);
+
 	if (dlp->dl_mch != NULL)
 		mac_client_close(dlp->dl_mch, 0);
 
@@ -600,6 +683,7 @@ i_dls_link_destroy(dls_link_t *dlp)
 	dlp->dl_mh = NULL;
 	dlp->dl_mch = NULL;
 	dlp->dl_mip = NULL;
+	dlp->dl_mnh = NULL;
 	dlp->dl_unknowns = 0;
 	dlp->dl_nonip_cnt = 0;
 	kmem_cache_free(i_dls_link_cachep, dlp);
@@ -639,6 +723,8 @@ i_dls_link_create(const char *name, dls_link_t **dlpp)
 	    MAC_OPEN_FLAGS_USE_DATALINK_NAME);
 	if (err != 0)
 		goto bail;
+
+	dlp->dl_mnh = mac_notify_add(dlp->dl_mh, dls_link_notify, dlp);
 
 	DTRACE_PROBE2(dls__primary__client, char *, dlp->dl_name, void *,
 	    dlp->dl_mch);

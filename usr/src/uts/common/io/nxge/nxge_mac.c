@@ -1540,7 +1540,7 @@ nxge_n2_serdes_init(p_nxge_t nxgep)
 			if ((status = nxge_mdio_write(nxgep, portn,
 			    ESR_N2_DEV_ADDR,
 			    ESR_N2_TEST_CFG_REG, test_cfg.value)) != NXGE_OK)
-			goto fail;
+				goto fail;
 		}
 
 		/* Initialize PLL for 10G */
@@ -2002,7 +2002,7 @@ nxge_n2_kt_serdes_init(p_nxge_t nxgep)
 			NXGE_ERROR_MSG((nxgep, NXGE_ERR_CTL,
 			    "nxge_n2_kt_serdes_init: "
 			    "Serdes/signal for port<%d> not ready", portn));
-				goto done;
+			goto done;
 		}
 	} else if (portn == 1) {
 		/* Wait for serdes to be ready */
@@ -2031,7 +2031,7 @@ nxge_n2_kt_serdes_init(p_nxge_t nxgep)
 			NXGE_ERROR_MSG((nxgep, NXGE_ERR_CTL,
 			    "nxge_n2_kt_serdes_init: "
 			    "Serdes/signal for port<%d> not ready", portn));
-				goto done;
+			goto done;
 		}
 	}
 done:
@@ -2519,7 +2519,7 @@ nxge_1G_serdes_init(p_nxge_t nxgep)
 			NXGE_ERROR_MSG((nxgep, NXGE_ERR_CTL,
 			    "nxge_neptune_1G_serdes_init: "
 			    "Serdes/signal for port<%d> not ready", portn));
-				goto done;
+			goto done;
 		}
 	} else if (portn == 1) {
 		if ((val & ESR_SIG_P1_BITS_MASK_1G) !=
@@ -2533,7 +2533,7 @@ nxge_1G_serdes_init(p_nxge_t nxgep)
 			NXGE_ERROR_MSG((nxgep, NXGE_ERR_CTL,
 			    "nxge_neptune_1G_serdes_init: "
 			    "Serdes/signal for port<%d> not ready", portn));
-				goto done;
+			goto done;
 
 		}
 	}
@@ -2876,7 +2876,7 @@ fail:
 
 static int
 nxge_nlp2020_i2c_read(p_nxge_t nxgep, uint8_t ctrl_port, uint16_t address,
-	    uint16_t reg, uint8_t *data)
+    uint16_t reg, uint8_t *data)
 {
 	int  phy_dev, phy_reg;
 	uint16_t phy_data = 0;
@@ -3953,7 +3953,7 @@ nxge_tn1010_xcvr_init(p_nxge_t nxgep)
 	/*
 	 * The following 4 lines actually overwrites what ever the ndd command
 	 * has set. For example, by command
-	 * 	ndd -set /dev/nxge1 adv_autoneg_cap n (n = 0 or 1)
+	 *	ndd -set /dev/nxge1 adv_autoneg_cap n (n = 0 or 1)
 	 * we could set param_arr[param_autoneg].value to n.  However, because
 	 * here we assign constants to these parameters, whatever we set with
 	 * the "ndd -set" command will be replaced. So command
@@ -4314,8 +4314,8 @@ nxge_rx_mac_init(p_nxge_t nxgep)
 	uint8_t			portn;
 	npi_handle_t		handle;
 	npi_status_t		rs = NPI_SUCCESS;
-	uint16_t 		*addr16p;
-	uint16_t 		addr0, addr1, addr2;
+	uint16_t		*addr16p;
+	uint16_t		addr0, addr1, addr2;
 	xmac_rx_config_t	xconfig;
 	bmac_rx_config_t	bconfig;
 
@@ -4505,7 +4505,7 @@ nxge_status_t
 nxge_rx_mac_enable(p_nxge_t nxgep)
 {
 	npi_handle_t	handle;
-	uint8_t 	portn;
+	uint8_t		portn;
 	npi_status_t	rs = NPI_SUCCESS;
 	nxge_status_t	status = NXGE_OK;
 
@@ -4639,11 +4639,11 @@ nxge_rx_mac_reset(p_nxge_t nxgep)
 	if (nxgep->mac.porttype == PORT_TYPE_XMAC) {
 		if ((rs = npi_xmac_reset(handle, portn, XRX_MAC_RESET_ALL))
 		    != NPI_SUCCESS)
-		goto fail;
+			goto fail;
 	} else {
 		if ((rs = npi_bmac_reset(handle, portn, RX_MAC_RESET))
 		    != NPI_SUCCESS)
-		goto fail;
+			goto fail;
 	}
 
 	NXGE_DEBUG_MSG((nxgep, MAC_CTL, "<== nxge_rx_mac_reset: port<%d>",
@@ -5443,7 +5443,7 @@ fail:
 
 nxge_status_t
 nxge_mii_read(p_nxge_t nxgep, uint8_t xcvr_portn, uint8_t xcvr_reg,
-		uint16_t *value)
+    uint16_t *value)
 {
 	npi_status_t rs = NPI_SUCCESS;
 
@@ -5482,7 +5482,7 @@ fail:
 
 nxge_status_t
 nxge_mii_write(p_nxge_t nxgep, uint8_t xcvr_portn, uint8_t xcvr_reg,
-		uint16_t value)
+    uint16_t value)
 {
 	npi_status_t rs = NPI_SUCCESS;
 
@@ -5521,10 +5521,10 @@ fail:
 /*
  * Perform write to Clause45 serdes / transceiver device
  * Arguments:
- *	xcvr_portn: 	The IEEE 802.3 Clause45 PHYAD, it is the same as port
+ *	xcvr_portn:	The IEEE 802.3 Clause45 PHYAD, it is the same as port
  *			number if nxge_mdio_write is used for accessing the
  *			internal LSIL serdes. Otherwise PHYAD is different
- * 			for different platforms.
+ *			for different platforms.
  *	device:		With each PHYAD, the driver can use MDIO to control
  *			multiple devices inside the PHY, here "device" is an
  *			MMD (MDIO managable device).
@@ -5534,7 +5534,7 @@ fail:
  */
 nxge_status_t
 nxge_mdio_read(p_nxge_t nxgep, uint8_t xcvr_portn, uint8_t device,
-		uint16_t xcvr_reg, uint16_t *value)
+    uint16_t xcvr_reg, uint16_t *value)
 {
 	npi_status_t rs = NPI_SUCCESS;
 
@@ -5565,7 +5565,7 @@ fail:
 
 nxge_status_t
 nxge_mdio_write(p_nxge_t nxgep, uint8_t xcvr_portn, uint8_t device,
-		uint16_t xcvr_reg, uint16_t value)
+    uint16_t xcvr_reg, uint16_t value)
 {
 	npi_status_t rs = NPI_SUCCESS;
 
@@ -5597,7 +5597,7 @@ fail:
 
 nxge_status_t
 nxge_mii_check(p_nxge_t nxgep, mii_bmsr_t bmsr, mii_bmsr_t bmsr_ints,
-		nxge_link_state_t *link_up)
+    nxge_link_state_t *link_up)
 {
 	p_nxge_param_t	param_arr;
 	p_nxge_stats_t	statsp;
@@ -6679,8 +6679,8 @@ nxge_link_monitor(p_nxge_t nxgep, link_mon_enable_t enable)
 			 * argument to the check_link function.
 			 */
 			if (nxgep->xcvr.check_link) {
-				timerid = timeout(
-				    (fptrv_t)(nxgep->xcvr.check_link),
+				timerid = timeout((fptrv_t)(uintptr_t)
+				    (nxgep->xcvr.check_link),
 				    nxgep,
 				    drv_usectohz(LINK_MONITOR_PERIOD));
 				MUTEX_ENTER(&nxgep->poll_lock);
@@ -6944,7 +6944,7 @@ nxge_mac_intr(void *arg1, void *arg2)
 		if (status & ICFG_XMAC_TX_ALL) {
 			if (status & ICFG_XMAC_TX_UNDERRUN) {
 				statsp->xmac_stats.tx_underflow_err++;
-				NXGE_FM_REPORT_ERROR(nxgep, portn, NULL,
+				NXGE_FM_REPORT_ERROR(nxgep, portn, 0,
 				    NXGE_FM_EREPORT_TXMAC_UNDERFLOW);
 			}
 			if (status & ICFG_XMAC_TX_MAX_PACKET_ERR) {
@@ -6956,12 +6956,12 @@ nxge_mac_intr(void *arg1, void *arg2)
 			}
 			if (status & ICFG_XMAC_TX_OVERFLOW) {
 				statsp->xmac_stats.tx_overflow_err++;
-				NXGE_FM_REPORT_ERROR(nxgep, portn, NULL,
+				NXGE_FM_REPORT_ERROR(nxgep, portn, 0,
 				    NXGE_FM_EREPORT_TXMAC_OVERFLOW);
 			}
 			if (status & ICFG_XMAC_TX_FIFO_XFR_ERR) {
 				statsp->xmac_stats.tx_fifo_xfr_err++;
-				NXGE_FM_REPORT_ERROR(nxgep, portn, NULL,
+				NXGE_FM_REPORT_ERROR(nxgep, portn, 0,
 				    NXGE_FM_EREPORT_TXMAC_TXFIFO_XFR_ERR);
 			}
 			if (status & ICFG_XMAC_TX_BYTE_CNT_EXP) {
@@ -6983,7 +6983,7 @@ nxge_mac_intr(void *arg1, void *arg2)
 				statsp->xmac_stats.rx_overflow_err++;
 			if (status & ICFG_XMAC_RX_UNDERFLOW) {
 				statsp->xmac_stats.rx_underflow_err++;
-				NXGE_FM_REPORT_ERROR(nxgep, portn, NULL,
+				NXGE_FM_REPORT_ERROR(nxgep, portn, 0,
 				    NXGE_FM_EREPORT_RXMAC_UNDERFLOW);
 			}
 			/*
@@ -7082,12 +7082,12 @@ nxge_mac_intr(void *arg1, void *arg2)
 		if (status & ICFG_BMAC_TX_ALL) {
 			if (status & ICFG_BMAC_TX_UNDERFLOW) {
 				statsp->bmac_stats.tx_underrun_err++;
-				NXGE_FM_REPORT_ERROR(nxgep, portn, NULL,
+				NXGE_FM_REPORT_ERROR(nxgep, portn, 0,
 				    NXGE_FM_EREPORT_TXMAC_UNDERFLOW);
 			}
 			if (status & ICFG_BMAC_TX_MAXPKTSZ_ERR) {
 				statsp->bmac_stats.tx_max_pkt_err++;
-				NXGE_FM_REPORT_ERROR(nxgep, portn, NULL,
+				NXGE_FM_REPORT_ERROR(nxgep, portn, 0,
 				    NXGE_FM_EREPORT_TXMAC_MAX_PKT_ERR);
 			}
 			if (status & ICFG_BMAC_TX_BYTE_CNT_EXP) {
@@ -7115,19 +7115,19 @@ nxge_mac_intr(void *arg1, void *arg2)
 			if (status & ICFG_BMAC_RX_CRC_ERR_CNT_EXP) {
 				statsp->bmac_stats.rx_crc_err_cnt +=
 				    BMAC_CRC_ER_CNT_MASK;
-				NXGE_FM_REPORT_ERROR(nxgep, portn, NULL,
+				NXGE_FM_REPORT_ERROR(nxgep, portn, 0,
 				    NXGE_FM_EREPORT_RXMAC_CRC_ERRCNT_EXP);
 			}
 			if (status & ICFG_BMAC_RX_LEN_ERR_CNT_EXP) {
 				statsp->bmac_stats.rx_len_err_cnt +=
 				    MAC_LEN_ER_CNT_MASK;
-				NXGE_FM_REPORT_ERROR(nxgep, portn, NULL,
+				NXGE_FM_REPORT_ERROR(nxgep, portn, 0,
 				    NXGE_FM_EREPORT_RXMAC_LENGTH_ERRCNT_EXP);
 			}
-			if (status & ICFG_BMAC_RX_VIOL_ERR_CNT_EXP)
+			if (status & ICFG_BMAC_RX_VIOL_ERR_CNT_EXP) {
 				statsp->bmac_stats.rx_viol_err_cnt +=
 				    BMAC_CD_VIO_CNT_MASK;
-				NXGE_FM_REPORT_ERROR(nxgep, portn, NULL,
+				NXGE_FM_REPORT_ERROR(nxgep, portn, 0,
 				    NXGE_FM_EREPORT_RXMAC_VIOL_ERRCNT_EXP);
 			}
 			if (status & ICFG_BMAC_RX_BYTE_CNT_EXP) {
@@ -7137,7 +7137,7 @@ nxge_mac_intr(void *arg1, void *arg2)
 			if (status & ICFG_BMAC_RX_ALIGNERR_CNT_EXP) {
 				statsp->bmac_stats.rx_align_err_cnt +=
 				    BMAC_AL_ER_CNT_MASK;
-				NXGE_FM_REPORT_ERROR(nxgep, portn, NULL,
+				NXGE_FM_REPORT_ERROR(nxgep, portn, 0,
 				    NXGE_FM_EREPORT_RXMAC_ALIGN_ECNT_EXP);
 			}
 
@@ -7155,6 +7155,7 @@ nxge_mac_intr(void *arg1, void *arg2)
 					statsp->bmac_stats.tx_nopause_state++;
 			}
 		}
+	}
 
 	if (ldgp->nldvs == 1) {
 		(void) npi_intr_ldg_mgmt_set(handle, ldgp->ldg,
@@ -7515,7 +7516,7 @@ nxge_hswap_phy_present(p_nxge_t nxgep, uint8_t portn)
 	if (nxge_is_phy_present(nxgep, GOA_CLAUSE45_PORT_ADDR_BASE + portn,
 	    BCM8706_DEV_ID, BCM_PHY_ID_MASK)) {
 		nxgep->xcvr_addr = GOA_CLAUSE45_PORT_ADDR_BASE + portn;
-			goto found_phy;
+		goto found_phy;
 	}
 
 	/*
@@ -8105,7 +8106,7 @@ nxge_scan_ports_phy(p_nxge_t nxgep, p_nxge_hw_list_t hw_p)
 			goto error_exit;
 		}
 		break;
-	case 1: 	/* Only one clause45 port */
+	case 1:		/* Only one clause45 port */
 		switch (total_phy_fd) {	/* Number of clause22 ports */
 		case 3:
 			/*
@@ -8465,7 +8466,8 @@ nxge_is_valid_local_mac(ether_addr_st mac_addr)
 }
 
 static void
-nxge_bcm5464_link_led_off(p_nxge_t nxgep) {
+nxge_bcm5464_link_led_off(p_nxge_t nxgep)
+{
 
 	npi_status_t rs = NPI_SUCCESS;
 	uint8_t xcvr_portn;
@@ -8635,7 +8637,7 @@ nxge_get_num_of_xaui(uint32_t *port_pma_pmd_dev_id,
 
 	*num_xaui = 0;
 	if ((port_pma_pmd_dev_id[0]  == PHY_BCM8704_FAMILY &&
-	    port_pcs_dev_id[0] 	== PHY_BCM8704_FAMILY) ||
+	    port_pcs_dev_id[0] == PHY_BCM8704_FAMILY) ||
 	    (((port_pma_pmd_dev_id[0] & TN1010_DEV_ID_MASK)
 	    == TN1010_DEV_ID) &&
 	    ((port_pcs_dev_id[0] & TN1010_DEV_ID_MASK)
@@ -8748,8 +8750,8 @@ fail:
  * Teranetics TN1010 PHY chip supports both 1G and 10G modes, this function
  * figures out the speed of the PHY determined by the autonegotiation
  * process and sets the following 3 parameters,
- * 	nxgep->mac.portmode
- *     	nxgep->statsp->mac_stats.link_speed
+ *	nxgep->mac.portmode
+ *	nxgep->statsp->mac_stats.link_speed
  *	nxgep->statsp->mac_stats.xcvr_inuse
  */
 static nxge_status_t

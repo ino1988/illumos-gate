@@ -1,6 +1,8 @@
 /*
+ * Copyright 2017 Gary Mills
  * Copyright 2010 Sun Microsystems, Inc.  All rights reserved.
  * Use is subject to license terms.
+ * Copyright 2019 Joyent, Inc.
  */
 
 /*
@@ -71,7 +73,7 @@ uint32_t rt2860_dbg_flags = 0x0;
 #define	RWN_DEBUG \
 	rt2860_debug
 #else
-#define	RWN_DEBUG
+#define	RWN_DEBUG(...) (void)(0)
 #endif
 
 static void *rt2860_soft_state_p = NULL;
@@ -516,7 +518,7 @@ rt2860_read_eeprom(struct rt2860_softc *sc)
 		sc->txpow2[i + 15] = (int8_t)(val >> 8);
 	}
 	/* fix broken Tx power entries */
-	for (i = 0; i < 36; i++) {
+	for (i = 0; i < 35; i++) {
 		if (sc->txpow1[14 + i] < -7 || sc->txpow1[14 + i] > 15)
 			sc->txpow1[14 + i] = 5;
 		if (sc->txpow2[14 + i] < -7 || sc->txpow2[14 + i] > 15)
@@ -671,8 +673,8 @@ rt2860_read_eeprom(struct rt2860_softc *sc)
  */
 static int
 rt2860_alloc_dma_mem(dev_info_t *devinfo, ddi_dma_attr_t *dma_attr,
-	size_t memsize, ddi_device_acc_attr_t *attr_p, uint_t alloc_flags,
-	uint_t bind_flags, struct dma_area *dma_p)
+    size_t memsize, ddi_device_acc_attr_t *attr_p, uint_t alloc_flags,
+    uint_t bind_flags, struct dma_area *dma_p)
 {
 	int	err;
 
@@ -899,11 +901,10 @@ rt2860_free_rx_ring(struct rt2860_softc *sc, struct rt2860_rx_ring *ring)
 		rt2860_free_dma_mem(&ring->rxdesc_dma);
 
 	count = RT2860_RX_RING_COUNT;
-	if (ring->data != NULL) {
-		for (i = 0; i < count; i++) {
-			data = &ring->data[i];
-			rt2860_free_dma_mem(&data->rxbuf_dma);
-		}
+
+	for (i = 0; i < count; i++) {
+		data = &ring->data[i];
+		rt2860_free_dma_mem(&data->rxbuf_dma);
 	}
 }
 

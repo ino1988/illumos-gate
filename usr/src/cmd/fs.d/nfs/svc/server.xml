@@ -22,7 +22,10 @@
  CDDL HEADER END
 
 	Copyright (c) 2004, 2010, Oracle and/or its affiliates. All rights reserved.
-	Copyright 2014 Nexenta Systems, Inc.  All rights reserved.
+	Copyright (c) 2012 by Delphix. All rights reserved.
+	Copyright 2014 Nexenta Systems, Inc.  All rights reserved
+	Copyright 2016 Hans Rosenfeld <rosenfeld@grumpf.hope-2000.org>
+	Copyright (c) 2012, 2014 by Delphix. All rights reserved.
 
 	NOTE:  This service manifest is not editable; its contents will
 	be overwritten by package or patch operations, including
@@ -39,7 +42,7 @@
 <service
 	name='network/nfs/server'
 	type='service'
-	version='1'>
+	version='2'>
 
 	<dependency name='network'
 	    grouping='require_any'
@@ -102,7 +105,7 @@
 	    grouping='require_all'
 	    restart_on='error'
 	    type='service'>
-	    	<service_fmri value='svc:/system/filesystem/local' />
+		<service_fmri value='svc:/system/filesystem/local' />
 	</dependency>
 
 	<dependent
@@ -150,11 +153,17 @@
 		<propval name='ipf_method' type='astring'
 		    value='/lib/svc/method/nfs-server ipfilter' />
 	</property_group>
- 
+
 	<property_group name='firewall_config' type='com.sun,fw_configuration'>
 		<propval name='policy' type='astring' value='use_global' />
+		<propval name='block_policy' type='astring'
+			value='use_global' />
 		<propval name='apply_to' type='astring' value='' />
+		<propval name='apply_to_6' type='astring' value='' />
 		<propval name='exceptions' type='astring' value='' />
+		<propval name='exceptions_6' type='astring' value='' />
+		<propval name='target' type='astring' value='' />
+		<propval name='target_6' type='astring' value='' />
 		<propval name='value_authorization' type='astring'
 			value='solaris.smf.value.firewall.config' />
 	</property_group>
@@ -167,9 +176,10 @@
 	   <propval name='server_delegation' type='astring' value='on'/>
 	   <propval name='server_versmax' type='integer' value='4'/>
 	   <propval name='server_versmin' type='integer' value='2'/>
-	   <propval name='servers' type='integer' value='16'/>
+	   <propval name='servers' type='integer' value='256'/>
 	   <propval name='mountd_listen_backlog' type='integer' value='64'/>
 	   <propval name='mountd_max_threads' type='integer' value='16'/>
+	   <propval name='mountd_port' type='integer' value='0'/>
 	 </property_group>
 	</instance>
 

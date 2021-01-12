@@ -23,6 +23,7 @@
 #
 # Copyright 2010 Nexenta Systems, Inc.  All rights reserved.
 # Use is subject to license terms.
+# Copyright 2019 OmniOS Community Edition (OmniOSce) Association.
 #
 
 LIBBASENAME=	libc
@@ -42,13 +43,9 @@ ROOTFS_LIB64=	$(ROOTFS_LIB)/$(MACH64)
 ROOTVARIANTDIR=	$(ROOTLIB)/libc
 ROOTVARIANTDIR64=	$(ROOTLIB64)/libc
 
-ROOTFS_LINTDIR=		$(ROOTFS_LIB)
-ROOTFS_LINTDIR64=	$(ROOTFS_LIB64)
-ROOTFS_LINTLIB=		$(ROOTFS_LINTDIR)/$(LINTLIB)
-ROOTFS_LINTLIB64=	$(ROOTFS_LINTDIR64)/$(LINTLIB)
-
 # include common library definitions
 include ../Makefile.lib
+include ../Makefile.rootfs
 
 #
 # on some architectures, we build multiple libc variants
@@ -94,17 +91,17 @@ VARIANT_SUBDIRS64	= $(VARIANTS64:%=$(MACH)_%/$(VARBLD64))
 SUBDIRS=	$(MACH_CAP) $(MACH) $(MACH_ETC) $(VARIANT_SUBDIRS)
 $(BUILD64)SUBDIRS += $(MACH64) $(VARIANT_SUBDIRS64)
 
-LIBS =		$(DYNLIB) $(LINTLIB)
+LIBS =		$(DYNLIB)
 
-ROOTLIBS64=	$(ROOTLIBDIR64)/$(DYNLIB) $(ROOTLIBDIR64)/$(LINTLIB)
-MACHLIBS64=	$(MACH64)/$(DYNLIB) $(MACH64)/$(LINTLIB)
+ROOTLIBS64=	$(ROOTLIB64)/$(DYNLIB)
+MACHLIBS64=	$(MACH64)/$(DYNLIB)
 VARIANTLIBS=	$(VARIANTS:%=$(MACH)_%/$(VARBLD)/$(LIBBASENAME)_%.so.1)
 VARIANTLIBS64=	$(VARIANTS64:%=$(MACH)_%/$(VARBLD64)/$(LIBBASENAME)_%.so.1)
 ROOTVARIANTLIBS= $(VARIANTS:%=$(ROOTVARIANTDIR)/$(LIBBASENAME)_%.so.1)
 ROOTVARIANTLIBS64= $(VARIANTS64:%=$(ROOTVARIANTDIR64)/$(LIBBASENAME)_%.so.1)
 
 # definitions for install_h target
-BASEHDRS=	getxby_door.h 
+BASEHDRS=	getxby_door.h
 CHECKHDRS=	$(BASEHDRS:%.h=port/gen/%.check)
 HDRS=		$(BASEHDRS)
 
@@ -114,8 +111,8 @@ CLOBBERFILES += THIRDPARTYLICENSE extract-copyright
 $(ROOTHDRDIR)/%: port/gen/%
 	$(INS.file)
 
-$(ROOTLIBDIR)/$(DYNLIB)	:=	FILEMODE = 755
-$(ROOTLIBDIR64)/$(DYNLIB) :=	FILEMODE = 755
+$(ROOTLIB)/$(DYNLIB)	:=	FILEMODE = 755
+$(ROOTLIB64)/$(DYNLIB) :=	FILEMODE = 755
 $(ROOTFS_LIBDIR)/$(DYNLIB)	:=	FILEMODE = 755
 $(ROOTFS_LIBDIR64)/$(DYNLIB)	:=	FILEMODE = 755
 
@@ -169,30 +166,19 @@ $($(MACH)_COMP): FRC
 install:	all			\
 		etc			\
 		inslib32		\
-		$(BUILD64) inslib64
+		$(ROOTCOMPATLINKS)
 
-inslib32:	$(ROOTFS_LIBS) $(ROOTFS_LINKS) $(ROOTFS_LINT) \
-		$(ROOTFS_LINTLIB) \
-		$(ROOTVARIANTLIBS)
+$(BUILD64)install: inslib64 $(ROOTCOMPATLINKS64)
 
-inslib64:	$(ROOTFS_LIBS64) $(ROOTFS_LINKS64) \
-		$(ROOTFS_LINTLIB64) \
-		$(ROOTVARIANTLIBS64)
+inslib32:	$(ROOTFS_LIBS) $(ROOTFS_LINKS) $(ROOTVARIANTLIBS)
+
+inslib64:	$(ROOTFS_LIBS64) $(ROOTFS_LINKS64) $(ROOTVARIANTLIBS64)
 
 install_h: all_h $(ROOTHDRS)
 
 all_h:	$(MACH)/assym.h $(MACH64)/assym.h
 
 check:	$(CHECKHDRS)
-
-$(ROOTFS_LIB)/%: $(MACH)/%
-	$(INS.file)
-$(ROOTFS_LIBDIR)/$(LIBLINKS): $(ROOTFS_LIBDIR)/$(LIBLINKS)$(VERS)
-	$(INS.liblink)
-$(ROOTFS_LIB64)/%: $(MACH64)/%
-	$(INS.file)
-$(ROOTFS_LIBDIR64)/$(LIBLINKS): $(ROOTFS_LIBDIR64)/$(LIBLINKS)$(VERS)
-	$(INS.liblink)
 
 $(ROOTVARIANTDIR): $(ROOTLIB)
 	$(INS.dir)
@@ -208,21 +194,6 @@ $(ROOTVARIANTDIR64): $(ROOTLIB64)
 $(ROOTVARIANTDIR64)/%: $(ROOTVARIANTDIR64) $(VAR1_BLDDIR64)/%
 	$(INS.file)
 
-# install rule for lint library target
-$(ROOTFS_LINTDIR)/%: port/%
-	$(INS.file)
-$(ROOTFS_LINTDIR64)/%: port/%
-	$(INS.file)
-$(ROOTFS_LINTDIR)/%: $(MACH)/%
-	$(INS.file)
-$(ROOTFS_LINTDIR64)/%: $(MACH64)/%
-	$(INS.file)
-
-$(LINTLIB):
-	@cd $(MACH); pwd; VERSION='$(VERSION)' $(MAKE) $@
-$(LINTLIB64):
-	@cd $(MACH64); pwd; VERSION='$(VERSION)' $(MAKE) $@
-
 $(MACH)/$(LIB_PIC): FRC
 	@cd $(MACH); pwd; VERSION='$(VERSION)' $(MAKE) $(LIB_PIC)
 $(MACH64)/$(LIB_PIC): FRC
@@ -232,7 +203,6 @@ all	:=	TARGET= all
 install	:=	TARGET= install
 clean	:=	TARGET= clean
 clobber	:=	TARGET= clobber
-lint	:=	TARGET= lint
 
 .PARALLEL:	$(SUBDIRS)
 
@@ -244,7 +214,6 @@ clobber: $(SUBDIRS) etc clobber_local
 clobber_local:
 	$(RM) $(CLOBBERFILES)
 
-lint: $(SUBDIRS)
 
 _msg:	$(MSGDOMAIN) catalog
 
@@ -258,5 +227,6 @@ cscope.out tags: FRC
 	$(XREF) -x $@
 
 FRC:
+
 # include MACH-specific library targets
 include ../Makefile.mach

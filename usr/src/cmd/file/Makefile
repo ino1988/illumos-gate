@@ -22,6 +22,7 @@
 # Copyright 2007 Sun Microsystems, Inc.  All rights reserved.
 # Use is subject to license terms.
 #
+# Copyright (c) 2018, Joyent, Inc.
 
 PROG= file
 XPG4PROG= file
@@ -37,14 +38,17 @@ SRCS=	file.c elf_read.c magicutils.c $(ELFCAP)/elfcap.c
 
 include ../Makefile.cmd
 
-CERRWARN += -_gcc=-Wno-uninitialized
+CSTD=	$(CSTD_GNU99)
+C99LMODE= -Xc99=%all
+
+CERRWARN += $(CNOWARN_UNINIT)
 CERRWARN += -_gcc=-Wno-type-limits
 
 POFILE= file_all.po
 POFILES= $(SRCS:%.c=%.po)
 
-# The debug binary can be built using the flag
-# -D COPTFLAG=-g CGLOBALSTATIC=
+# The debug binary can be built using the flags
+# SOURCEDEBUG=yes CGLOBALSTATIC=
 # This will avoid the multiple symbols definition error
 # for static global variables in elf_read32.o and elf_read64.o
 

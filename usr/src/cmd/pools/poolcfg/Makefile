@@ -22,14 +22,12 @@
 # Copyright 2007 Sun Microsystems, Inc.  All rights reserved.
 # Use is subject to license terms.
 #
-#ident	"%Z%%M%	%I%	%E% SMI"
-#
-# cmd/pools/poolbind/Makefile
+# Copyright (c) 2018, Joyent, Inc.
 
 PROG =		poolcfg
 OBJS =		poolcfg_lex.o poolcfg_grammar.o
 SRCS =		$(OBJS:%.o=%.c) $(COMMON_SRCS)
-POFILES = 	$(OBJS:.o=.po)
+POFILES =	$(OBJS:.o=.po)
 POFILE =	poolcfg.po
 
 include ../../Makefile.cmd
@@ -39,7 +37,7 @@ include ../Makefile.pools
 # still export a number of "yy*" (libl) interfaces.  Reduce all other symbols
 # to local scope.
 MAPFILES +=	$(MAPFILE.LEX) $(MAPFILE.NGB)
-MAPOPTS =	$(MAPFILES:%=-M%)
+MAPOPTS =	$(MAPFILES:%=-Wl,-M%)
 
 LFLAGS =	-t
 YFLAGS =	-d
@@ -48,6 +46,9 @@ LDFLAGS +=	$(MAPOPTS)
 LDLIBS +=	-lpool -ll
 XGETFLAGS =	-a
 CLOBBERFILES +=	poolcfg_lex.c poolcfg_grammar.c poolcfg_grammar.h
+
+# not linted
+SMATCH=off
 
 .KEEP_STATE:
 
@@ -78,10 +79,5 @@ clean:
 
 $(POFILE):	$(POFILES)
 	$(RM) $@; cat $(POFILES) > $@
-
-#
-# We don't do lint of lex- and yacc- generated source files
-#
-lint:
 
 include ../../Makefile.targ

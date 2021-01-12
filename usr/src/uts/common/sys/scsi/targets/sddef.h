@@ -23,7 +23,8 @@
  */
 /*
  * Copyright 2011 cyril.galibern@opensvc.com
- * Copyright 2014 Nexenta Systems, Inc.  All rights reserved.
+ * Copyright 2017 Nexenta Systems, Inc.  All rights reserved.
+ * Copyright 2019 Joyent, Inc.
  */
 
 #ifndef	_SYS_SCSI_TARGETS_SDDEF_H
@@ -215,6 +216,35 @@ struct sd_mapblocksize_info {
 _NOTE(SCHEME_PROTECTS_DATA("unshared data", sd_mapblocksize_info))
 
 
+/* Thin-provisioning (UNMAP) flags for un_thin_flags. */
+enum {
+	SD_THIN_PROV_ENABLED =		1 << 0,	/* UNMAP available */
+	SD_THIN_PROV_READ_ZEROS =	1 << 1	/* unmapped blk = zeros */
+};
+
+/*
+ * Device limits as read from the Block Limits VPD page (0xB0). If the page
+ * is unavailable, will be filled with some defaults.
+ */
+typedef struct sd_blk_limits_s {
+	uint16_t	lim_opt_xfer_len_gran;
+	uint32_t	lim_max_xfer_len;
+	uint32_t	lim_opt_xfer_len;
+	uint32_t	lim_max_pfetch_len;
+	uint32_t	lim_max_unmap_lba_cnt;
+	uint32_t	lim_max_unmap_descr_cnt;
+	uint32_t	lim_opt_unmap_gran;
+	uint32_t	lim_unmap_gran_align;
+	uint64_t	lim_max_write_same_len;
+} sd_blk_limits_t;
+
+typedef struct sd_unmapstats {
+	kstat_named_t	us_cmds;
+	kstat_named_t	us_errs;
+	kstat_named_t	us_extents;
+	kstat_named_t	us_bytes;
+} sd_unmapstats_t;
+
 /*
  * sd_lun: The main data structure for a scsi logical unit.
  * Stored as the softstate structure for each device.
@@ -356,6 +386,8 @@ struct sd_lun {
 	union	ocmap	un_ocmap;		/* open partition map */
 	struct	kstat	*un_pstats[NSDMAP];	/* partition statistics */
 	struct	kstat	*un_stats;		/* disk statistics */
+	sd_unmapstats_t	*un_unmapstats;		/* UNMAP stats structure */
+	struct	kstat	*un_unmapstats_ks;	/* UNMAP kstat */
 	kstat_t		*un_errstats;		/* for error statistics */
 	uint64_t	un_exclopen;		/* exclusive open bitmask */
 	ddi_devid_t	un_devid;		/* device id */
@@ -460,11 +492,13 @@ struct sd_lun {
 	    un_f_pm_log_sense_smart	:1,	/* log sense support SMART */
 						/* feature attribute */
 	    un_f_is_solid_state		:1,	/* has solid state media */
+	    un_f_is_rotational		:1,	/* spinning rust */
 	    un_f_mmc_gesn_polling	:1,	/* use GET EVENT STATUS */
 						/* NOTIFICATION for polling */
 	    un_f_enable_rmw		:1,	/* Force RMW in sd driver */
 	    un_f_expnevent		:1,
-	    un_f_reserved		:3;
+	    un_f_cache_mode_changeable	:1,	/* can change cache mode */
+	    un_f_reserved		:1;
 
 	/* Ptr to table of strings for ASC/ASCQ error message printing */
 	struct scsi_asq_key_strings	*un_additional_codes;
@@ -505,6 +539,12 @@ struct sd_lun {
 	struct sd_w_map	*un_wm;		/* head of sd_w_map chain */
 	uint64_t	un_rmw_incre_count;	/* count I/O */
 	timeout_id_t	un_rmw_msg_timeid;	/* for RMW message control */
+
+	/* Thin provisioning support (see SD_THIN_PROV_*) */
+	uint64_t	un_thin_flags;
+
+	/* Block limits (0xB0 VPD page) */
+	sd_blk_limits_t	un_blk_lim;
 
 	/* For timeout callback to issue a START STOP UNIT command */
 	timeout_id_t	un_startstop_timeid;
@@ -757,17 +797,6 @@ _NOTE(MUTEX_PROTECTS_DATA(sd_lun::un_fi_mutex,
  * This is used in some vendor specific checks.
  */
 #define	SD_IS_LSI(un)	((un)->un_f_cfg_is_lsi == TRUE)
-
-/*
- * Macros to check if the lun is a Sun T3 or a T4
- */
-#define	SD_IS_T3(un) \
-	((bcmp(SD_INQUIRY(un)->inq_vid, "SUN", 3) == 0) && \
-	(bcmp(SD_INQUIRY(un)->inq_pid, "T3", 2) == 0))
-
-#define	SD_IS_T4(un) \
-	((bcmp(SD_INQUIRY(un)->inq_vid, "SUN", 3) == 0) && \
-	(bcmp(SD_INQUIRY(un)->inq_pid, "T4", 2) == 0))
 
 /*
  * Macros for non-512 byte writes to removable devices.
@@ -1125,10 +1154,10 @@ struct sd_fi_arq {
 #else
 
 #undef	SDDEBUG
-#define	SD_ERROR	{ if (0) sd_log_err; }
-#define	SD_TRACE	{ if (0) sd_log_trace; }
-#define	SD_INFO		{ if (0) sd_log_info; }
-#define	SD_DUMP_MEMORY	{ if (0) sd_dump_memory; }
+#define	SD_ERROR(...)		(void)(0)
+#define	SD_TRACE(...)		(void)(0)
+#define	SD_INFO(...)		(void)(0)
+#define	SD_DUMP_MEMORY(...)	(void)(0)
 #endif
 
 
@@ -1742,12 +1771,6 @@ struct sd_fm_internal {
 #else
 #define	SD_RETRY_DELAY			((clock_t)0)
 #endif
-
-/*
- * 60 seconds is what we will wait for to reset the
- * throttle back to it SD_MAX_THROTTLE.
- */
-#define	SD_RESET_THROTTLE_TIMEOUT	60
 
 /*
  * Number of times we'll retry a normal operation.
@@ -2379,7 +2402,8 @@ typedef struct disk_power_attr_pc {
 #define	SD_VPD_ASCII_OP_PG	0x08	/* 0x82 - ASCII Op Defs */
 #define	SD_VPD_DEVID_WWN_PG	0x10	/* 0x83 - Device Identification */
 #define	SD_VPD_EXTENDED_DATA_PG	0x80	/* 0x86 - Extended data about the lun */
-#define	SD_VPD_DEV_CHARACTER_PG	0x400	/* 0xB1 - Device Characteristics */
+#define	SD_VPD_BLK_LIMITS_PG	0x400	/* 0xB0 - Block Limits */
+#define	SD_VPD_DEV_CHARACTER_PG	0x800	/* 0xB1 - Device Characteristics */
 
 /*
  * Non-volatile cache support

@@ -23,6 +23,18 @@
  * Use is subject to license terms.
  */
 
+/*
+ * Copyright 2017 Joyent, Inc.
+ */
+
+/*
+ * Copyright 2019 OmniOS Community Edition (OmniOSce) Association.
+ */
+
+/*
+ * Copyright 2020 Peter Tribble.
+ */
+
 #include <stdio.h>
 #include <locale.h>
 #include <stdarg.h>
@@ -86,7 +98,6 @@ static void	warn(const char *, ...);
 
 /* callback functions for printing output */
 static ofmt_cb_t print_default_cb, print_flow_stats_cb;
-static void flowstat_ofmt_check(ofmt_status_t, boolean_t, ofmt_handle_t);
 
 #define	NULL_OFMT		{NULL, 0, 0, NULL}
 
@@ -132,7 +143,7 @@ typedef struct  history_fields_buf_s {
 	char	history_rbytes[10];
 	char	history_opackets[9];
 	char	history_obytes[10];
-	char	history_bandwidth[14];
+	char	history_bandwidth[15];
 } history_fields_buf_t;
 
 static ofmt_field_t history_fields[] = {
@@ -149,7 +160,7 @@ static ofmt_field_t history_fields[] = {
 	offsetof(history_fields_buf_t, history_opackets), print_default_cb},
 { "OBYTES",	11,
 	offsetof(history_fields_buf_t, history_obytes), print_default_cb},
-{ "BANDWIDTH",	15,
+{ "BANDWIDTH",	16,
 	offsetof(history_fields_buf_t, history_bandwidth), print_default_cb},
 NULL_OFMT}
 ;
@@ -160,7 +171,7 @@ typedef struct  history_l_fields_buf_s {
 	char	history_l_etime[13];
 	char	history_l_rbytes[8];
 	char	history_l_obytes[8];
-	char	history_l_bandwidth[14];
+	char	history_l_bandwidth[15];
 } history_l_fields_buf_t;
 
 static ofmt_field_t history_l_fields[] = {
@@ -175,7 +186,7 @@ static ofmt_field_t history_l_fields[] = {
 	offsetof(history_l_fields_buf_t, history_l_rbytes), print_default_cb},
 { "OBYTES",	9,
 	offsetof(history_l_fields_buf_t, history_l_obytes), print_default_cb},
-{ "BANDWIDTH",	15,
+{ "BANDWIDTH",	16,
 	offsetof(history_l_fields_buf_t, history_l_bandwidth),
 	    print_default_cb},
 NULL_OFMT}
@@ -191,7 +202,7 @@ static dladm_handle_t handle = NULL;
 
 const char *usage_ermsg = "flowstat [-r | -t] [-i interval] "
 	    "[-l link] [flow]\n"
-	    "       flowstat [-S] [-A] [-i interval] [-p] [ -o field[,...]]\n"
+	    "       flowstat [-A] [-i interval] [-p] [ -o field[,...]]\n"
 	    "                [-u R|K|M|G|T|P] [-l link] [flow]\n"
 	    "       flowstat -h [-a] [-d] [-F format]"
 	    " [-s <DD/MM/YYYY,HH:MM:SS>]\n"
@@ -423,7 +434,7 @@ query_flow_stats(dladm_handle_t handle, dladm_flow_attr_t *attr, void *arg)
 	prev_stat = flow_node->fc_stat;
 
 	/* Query library for current stats */
-	curr_stat = dladm_flow_stat_query(flowname);
+	curr_stat = dladm_flow_stat_query(handle, flowname);
 	if (curr_stat == NULL)
 		goto done;
 
@@ -488,7 +499,7 @@ dump_one_flow_stats(dladm_handle_t handle, dladm_flow_attr_t *attr, void *arg)
 	char	*flowname = attr->fa_flowname;
 	void	*stat;
 
-	stat = dladm_flow_stat_query_all(flowname);
+	stat = dladm_flow_stat_query_all(handle, flowname);
 	if (stat == NULL)
 		goto done;
 	print_all_stats(stat);
@@ -537,7 +548,7 @@ dump_all_flow_stats(dladm_flow_attr_t *attrp, void *arg, datalink_id_t linkid,
 int
 main(int argc, char *argv[])
 {
-	dladm_status_t 		status;
+	dladm_status_t		status;
 	int			option;
 	boolean_t		r_arg = B_FALSE;
 	boolean_t		t_arg = B_FALSE;
@@ -546,7 +557,6 @@ main(int argc, char *argv[])
 	boolean_t		o_arg = B_FALSE;
 	boolean_t		u_arg = B_FALSE;
 	boolean_t		A_arg = B_FALSE;
-	boolean_t		S_arg = B_FALSE;
 	boolean_t		flow_arg = B_FALSE;
 	datalink_id_t		linkid = DATALINK_ALL_LINKID;
 	char			linkname[MAXLINKNAMELEN];
@@ -585,7 +595,7 @@ main(int argc, char *argv[])
 	bzero(&state, sizeof (state));
 
 	opterr = 0;
-	while ((option = getopt_long(argc, argv, ":rtApSi:o:u:l:h",
+	while ((option = getopt_long(argc, argv, ":rtApi:o:u:l:h",
 	    NULL, NULL)) != -1) {
 		switch (option) {
 		case 'r':
@@ -611,11 +621,6 @@ main(int argc, char *argv[])
 				die_optdup(option);
 
 			p_arg = B_TRUE;
-			break;
-		case 'S':
-			if (S_arg)
-				die_optdup(option);
-			S_arg = B_TRUE;
 			break;
 		case 'i':
 			if (i_arg)
@@ -648,9 +653,9 @@ main(int argc, char *argv[])
 			break;
 		case 'h':
 			if (r_arg || t_arg || p_arg || o_arg || u_arg ||
-			    i_arg || S_arg || A_arg) {
+			    i_arg || A_arg) {
 				die("the option -h is not compatible with "
-				    "-r, -t, -p, -o, -u, -i, -S, -A");
+				    "-r, -t, -p, -o, -u, -i, -A");
 			}
 			do_show_history(argc, argv);
 			return (0);
@@ -673,11 +678,6 @@ main(int argc, char *argv[])
 	if (p_arg && strcasecmp(o_fields_str, "all") == 0)
 		die("\"-o all\" is invalid with -p");
 
-	if (S_arg &&
-	    (r_arg || t_arg || p_arg || o_arg || u_arg))
-		die("the option -S is not compatible with "
-		    "-r, -t, -p, -o, -u");
-
 	if (A_arg &&
 	    (r_arg || t_arg || p_arg || o_arg || u_arg || i_arg))
 		die("the option -A is not compatible with "
@@ -691,12 +691,6 @@ main(int argc, char *argv[])
 		flow_arg = B_TRUE;
 	} else if (optind != argc) {
 		usage();
-	}
-
-	if (S_arg) {
-		dladm_continuous(handle, linkid, (flow_arg ? flowname : NULL),
-		    interval, FLOW_REPORT);
-		return (0);
 	}
 
 	if (flow_arg &&
@@ -727,7 +721,7 @@ main(int argc, char *argv[])
 	}
 
 	oferr = ofmt_open(fields_str, flow_s_fields, ofmtflags, 0, &ofmt);
-	flowstat_ofmt_check(oferr, state.fs_parsable, ofmt);
+	ofmt_check(oferr, state.fs_parsable, ofmt, die, warn);
 	state.fs_ofmt = ofmt;
 
 	for (;;) {
@@ -792,7 +786,7 @@ show_history_time(dladm_usage_t *history, void *arg)
 {
 	show_history_state_t	*state = (show_history_state_t *)arg;
 	char			buf[DLADM_STRSIZE];
-	history_l_fields_buf_t 	ubuf;
+	history_l_fields_buf_t	ubuf;
 	time_t			time;
 	double			bw;
 	dladm_flow_attr_t	attr;
@@ -995,7 +989,7 @@ do_show_history(int argc, char *argv[])
 		    0, &ofmt);
 	}
 
-	flowstat_ofmt_check(oferr, state.us_parsable, ofmt);
+	ofmt_check(oferr, state.us_parsable, ofmt, die, warn);
 	state.us_ofmt = ofmt;
 
 	if (F_arg && d_arg)
@@ -1123,27 +1117,4 @@ print_default_cb(ofmt_arg_t *of_arg, char *buf, uint_t bufsize)
 	value = (char *)of_arg->ofmt_cbarg + of_arg->ofmt_id;
 	(void) strlcpy(buf, value, bufsize);
 	return (B_TRUE);
-}
-
-static void
-flowstat_ofmt_check(ofmt_status_t oferr, boolean_t parsable,
-    ofmt_handle_t ofmt)
-{
-	char buf[OFMT_BUFSIZE];
-
-	if (oferr == OFMT_SUCCESS)
-		return;
-	(void) ofmt_strerror(ofmt, oferr, buf, sizeof (buf));
-	/*
-	 * All errors are considered fatal in parsable mode.
-	 * NOMEM errors are always fatal, regardless of mode.
-	 * For other errors, we print diagnostics in human-readable
-	 * mode and processs what we can.
-	 */
-	if (parsable || oferr == OFMT_ENOFIELDS) {
-		ofmt_close(ofmt);
-		die(buf);
-	} else {
-		warn(buf);
-	}
 }

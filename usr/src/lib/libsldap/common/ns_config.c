@@ -71,22 +71,22 @@ extern thread_key_t	ns_cmgkey;
  */
 static int
 __s_val_postime(ParamIndexType i, ns_default_config *def,
-		ns_param_t *param, char *errbuf);
+    ns_param_t *param, char *errbuf);
 static int
 __s_val_basedn(ParamIndexType i, ns_default_config *def,
-		ns_param_t *param, char *errbuf);
+    ns_param_t *param, char *errbuf);
 
 static int
 __s_val_binddn(ParamIndexType i, ns_default_config *def,
-		ns_param_t *param, char *errbuf);
+    ns_param_t *param, char *errbuf);
 
 static int
 __s_val_bindpw(ParamIndexType i, ns_default_config *def,
-		ns_param_t *param, char *errbuf);
+    ns_param_t *param, char *errbuf);
 
 static int
 __s_val_serverList(ParamIndexType i, ns_default_config *def,
-		ns_param_t *param, char *errbuf);
+    ns_param_t *param, char *errbuf);
 
 /*
  * Forward declarations
@@ -97,7 +97,7 @@ verify_value(ns_config_t *cfg, char *name, char *value, char *errstr);
 
 static int
 set_default_value(ns_config_t *configptr, char *name, char *value,
-	ns_ldap_error_t **error);
+    ns_ldap_error_t **error);
 
 static void
 set_curr_config(ns_config_t *ptr);
@@ -531,7 +531,7 @@ static ns_default_config defconfig[] = {
 
 	/* array terminator [not an entry] */
 	{NULL, NS_LDAP_FILE_VERSION_P,
-		CLIENTCONFIG,	NS_UNKNOWN,	TRUE,	NULL,
+		CLIENTCONFIG,	NS_UNKNOWN,	TRUE,	0,
 		NULL,
 		{ NS_UNKNOWN, 0, NULL },
 		NULL, NULL },
@@ -835,9 +835,8 @@ destroy_config(ns_config_t *ptr)
 	if (ptr != NULL) {
 		if (ptr == current_config)
 			current_config = NULL;
-		if (ptr->domainName != NULL)
-			free(ptr->domainName);
-			ptr->domainName = NULL;
+		free(ptr->domainName);
+		ptr->domainName = NULL;
 		for (i = 0; i <= LAST_VALUE; i++) {
 			destroy_param(ptr, i);
 		}
@@ -1171,7 +1170,7 @@ __s_api_crosscheck(ns_config_t *ptr, char *errstr, int check_dn)
 	    /* check for auth value....passwd/bindn if necessary */
 
 		for (j = 0; ptr->paramList[NS_LDAP_AUTH_P].ns_pi != NULL &&
-		    ptr->paramList[NS_LDAP_AUTH_P].ns_pi[j] != NULL; j++) {
+		    ptr->paramList[NS_LDAP_AUTH_P].ns_pi[j] != 0; j++) {
 		value = ptr->paramList[NS_LDAP_AUTH_P].ns_pi[j];
 		switch (value) {
 		case NS_LDAP_EA_SIMPLE:
@@ -1371,7 +1370,7 @@ get_defconfig(ns_config_t *ptr, ParamIndexType type)
 
 static int
 set_default_value(ns_config_t *configptr, char *name,
-			char *value, ns_ldap_error_t **error)
+    char *value, ns_ldap_error_t **error)
 {
 	ParamIndexType	i;
 	int		ret;
@@ -1381,7 +1380,7 @@ set_default_value(ns_config_t *configptr, char *name,
 		(void) snprintf(errstr, sizeof (errstr), gettext(
 		    "Illegal type name (%s).\n"), name);
 		MKERROR(LOG_ERR, *error, NS_CONFIG_SYNTAX, strdup(errstr),
-		    NULL);
+		    NS_LDAP_MEMORY);
 		return (NS_LDAP_CONFIG);
 	}
 
@@ -1631,7 +1630,7 @@ __s_api_split_key_value(char *buffer, char **name, char **value)
  */
 int
 __ns_ldap_setParamValue(ns_config_t *ptr, const ParamIndexType type,
-		const void *data, ns_ldap_error_t **error)
+    const void *data, ns_ldap_error_t **error)
 {
 	ns_default_config	*def = NULL;
 	ns_param_t		conf;
@@ -1654,7 +1653,7 @@ __ns_ldap_setParamValue(ns_config_t *ptr, const ParamIndexType type,
 		    gettext("Unable to set value: "
 		    "invalid ParamIndexType (%d)"), type);
 		MKERROR(LOG_ERR, *error, NS_CONFIG_SYNTAX, strdup(errstr),
-		    NULL);
+		    NS_LDAP_MEMORY);
 		return (NS_LDAP_CONFIG);
 	}
 
@@ -1700,7 +1699,7 @@ __ns_ldap_setParamValue(ns_config_t *ptr, const ParamIndexType type,
 				    "invalid %s (%d)"), def->name,
 				    def->index);
 				MKERROR(LOG_ERR, *error, NS_CONFIG_SYNTAX,
-				    strdup(errstr), NULL);
+				    strdup(errstr), NS_LDAP_MEMORY);
 				if (tcp != NULL)
 					free(tcp);
 				return (NS_LDAP_CONFIG);
@@ -1722,7 +1721,7 @@ __ns_ldap_setParamValue(ns_config_t *ptr, const ParamIndexType type,
 				    "invalid %s (%d)"), def->name,
 				    def->index);
 				MKERROR(LOG_ERR, *error, NS_CONFIG_SYNTAX,
-				    strdup(errstr), NULL);
+				    strdup(errstr), NS_LDAP_MEMORY);
 				if (tcp != NULL)
 					free(tcp);
 				return (NS_LDAP_CONFIG);
@@ -1751,7 +1750,7 @@ __ns_ldap_setParamValue(ns_config_t *ptr, const ParamIndexType type,
 			    "invalid serviceAuthenticationMethod (%s)"),
 			    cp);
 			MKERROR(LOG_ERR, *error, NS_CONFIG_SYNTAX,
-			    strdup(errstr), NULL);
+			    strdup(errstr), NS_LDAP_MEMORY);
 			if (tcp != NULL)
 				free(tcp);
 			return (NS_LDAP_CONFIG);
@@ -1859,7 +1858,7 @@ __ns_ldap_setParamValue(ns_config_t *ptr, const ParamIndexType type,
 			    "invalid serviceCredentialLevel (%s)"),
 			    cp);
 			MKERROR(LOG_ERR, *error, NS_CONFIG_SYNTAX,
-			    strdup(errstr), NULL);
+			    strdup(errstr), NS_LDAP_MEMORY);
 			if (tcp != NULL)
 				free(tcp);
 			return (NS_LDAP_CONFIG);
@@ -1971,7 +1970,7 @@ __ns_ldap_setParamValue(ns_config_t *ptr, const ParamIndexType type,
 			    "invalid serviceSearchDescriptor (%s)"),
 			    cp);
 			MKERROR(LOG_ERR, *error, NS_CONFIG_SYNTAX,
-			    strdup(errstr), NULL);
+			    strdup(errstr), NS_LDAP_MEMORY);
 			if (tcp != NULL)
 				free(tcp);
 			return (NS_LDAP_CONFIG);
@@ -2214,7 +2213,7 @@ __ns_ldap_setParamValue(ns_config_t *ptr, const ParamIndexType type,
 					    ptbuf);
 					MKERROR(LOG_ERR, *error,
 					    NS_CONFIG_SYNTAX,
-					    strdup(errstr), NULL);
+					    strdup(errstr), NS_LDAP_MEMORY);
 					free(conf.ns_pi);
 					if (tcp != NULL)
 						free(tcp);
@@ -2239,7 +2238,7 @@ __ns_ldap_setParamValue(ns_config_t *ptr, const ParamIndexType type,
 			    gettext("Unable to set value: "
 			    "invalid authenticationMethod (%s)"), ptbuf);
 			MKERROR(LOG_ERR, *error, NS_CONFIG_SYNTAX,
-			    strdup(errstr), NULL);
+			    strdup(errstr), NS_LDAP_MEMORY);
 			if (tcp != NULL)
 				free(tcp);
 			return (NS_LDAP_CONFIG);
@@ -2286,7 +2285,7 @@ __ns_ldap_setParamValue(ns_config_t *ptr, const ParamIndexType type,
 					    ptbuf);
 					MKERROR(LOG_ERR, *error,
 					    NS_CONFIG_SYNTAX,
-					    strdup(errstr), NULL);
+					    strdup(errstr), NS_LDAP_MEMORY);
 					free(conf.ns_pi);
 					if (tcp != NULL)
 						free(tcp);
@@ -2311,7 +2310,7 @@ __ns_ldap_setParamValue(ns_config_t *ptr, const ParamIndexType type,
 			    gettext("Unable to set value: "
 			    "invalid credentialLevel (%s)"), ptbuf);
 			MKERROR(LOG_ERR, *error, NS_CONFIG_SYNTAX,
-			    strdup(errstr), NULL);
+			    strdup(errstr), NS_LDAP_MEMORY);
 			if (tcp != NULL)
 				free(tcp);
 			return (NS_LDAP_CONFIG);
@@ -2330,7 +2329,7 @@ __ns_ldap_setParamValue(ns_config_t *ptr, const ParamIndexType type,
 				"invalid schema mapping (%s)"), cp);
 				exitrc = NS_LDAP_CONFIG;
 				MKERROR(LOG_ERR, *error, NS_CONFIG_SYNTAX,
-				    strdup(errstr), NULL);
+				    strdup(errstr), NS_LDAP_MEMORY);
 			}
 			if (tcp)
 				free(tcp);
@@ -2390,7 +2389,7 @@ __ns_ldap_setParamValue(ns_config_t *ptr, const ParamIndexType type,
 						MKERROR(LOG_ERR, *error,
 						    NS_LDAP_INTERNAL,
 						    strdup(errstr),
-						    NULL);
+						    NS_LDAP_MEMORY);
 						break;
 					case NS_HASH_RC_EXISTED:
 						exitrc = NS_LDAP_CONFIG;
@@ -2405,7 +2404,7 @@ __ns_ldap_setParamValue(ns_config_t *ptr, const ParamIndexType type,
 						MKERROR(LOG_ERR, *error,
 						    NS_CONFIG_SYNTAX,
 						    strdup(errstr),
-						    NULL);
+						    NS_LDAP_MEMORY);
 						break;
 					case NS_HASH_RC_NO_MEMORY:
 						exitrc = NS_LDAP_MEMORY;
@@ -2500,7 +2499,7 @@ __ns_ldap_setParamValue(ns_config_t *ptr, const ParamIndexType type,
 					MKERROR(LOG_ERR, *error,
 					    NS_LDAP_INTERNAL,
 					    strdup(errstr),
-					    NULL);
+					    NS_LDAP_MEMORY);
 					break;
 				case NS_HASH_RC_NO_MEMORY:
 					exitrc = NS_LDAP_MEMORY;
@@ -2578,7 +2577,7 @@ __ns_ldap_setParamValue(ns_config_t *ptr, const ParamIndexType type,
 					MKERROR(LOG_ERR, *error,
 					    NS_LDAP_INTERNAL,
 					    strdup(errstr),
-					    NULL);
+					    NS_LDAP_MEMORY);
 					break;
 				case NS_HASH_RC_EXISTED:
 					exitrc = NS_LDAP_CONFIG;
@@ -2592,7 +2591,7 @@ __ns_ldap_setParamValue(ns_config_t *ptr, const ParamIndexType type,
 					MKERROR(LOG_ERR, *error,
 					    NS_CONFIG_SYNTAX,
 					    strdup(errstr),
-					    NULL);
+					    NS_LDAP_MEMORY);
 					break;
 				case NS_HASH_RC_NO_MEMORY:
 					exitrc = NS_LDAP_MEMORY;
@@ -2621,7 +2620,7 @@ __ns_ldap_setParamValue(ns_config_t *ptr, const ParamIndexType type,
 		    gettext("Unable to set value: invalid configuration "
 		    "type (%d)"), def->data_type);
 		MKERROR(LOG_ERR, *error, NS_CONFIG_SYNTAX, strdup(errstr),
-		    NULL);
+		    NS_LDAP_MEMORY);
 		if (tcp != NULL)
 			free(tcp);
 		return (NS_LDAP_CONFIG);
@@ -2639,7 +2638,7 @@ __ns_ldap_setParamValue(ns_config_t *ptr, const ParamIndexType type,
 			(void) snprintf(errstr, sizeof (errstr),
 			    gettext("%s"), errstr);
 			MKERROR(LOG_WARNING, *error, NS_CONFIG_SYNTAX,
-			    strdup(errstr), NULL);
+			    strdup(errstr), NS_LDAP_MEMORY);
 
 			sav_conf = ptr->paramList[type];
 			ptr->paramList[type] = conf;
@@ -2698,7 +2697,7 @@ __ns_ldap_setParamValue(ns_config_t *ptr, const ParamIndexType type,
 
 int
 __ns_ldap_setParam(const ParamIndexType type,
-		const void *data, ns_ldap_error_t **error)
+    const void *data, ns_ldap_error_t **error)
 {
 	ns_ldap_error_t		*errorp;
 	int			ret;
@@ -2731,7 +2730,7 @@ __ns_ldap_setParam(const ParamIndexType type,
 		    gettext("Unable to set parameter from a client in "
 		    "__ns_ldap_setParam()"));
 		MKERROR(LOG_WARNING, *error, NS_CONFIG_SYNTAX, strdup(errstr),
-		    NULL);
+		    NS_LDAP_MEMORY);
 		if (cfg != NULL)
 			__s_api_release_config(cfg);
 		(void) mutex_unlock(&ns_loadrefresh_lock);
@@ -2756,7 +2755,7 @@ __ns_ldap_setParam(const ParamIndexType type,
 			    errorp != NULL && errorp->message != NULL ?
 			    errorp->message : "");
 			MKERROR(LOG_WARNING, *error, NS_CONFIG_NOTLOADED,
-			    strdup(errstr), NULL);
+			    strdup(errstr), NS_LDAP_MEMORY);
 			if (errorp != NULL)
 				(void) __ns_ldap_freeError(&errorp);
 			(void) mutex_unlock(&ns_loadrefresh_lock);
@@ -2918,7 +2917,7 @@ __ns_ldap_freeParam(void ***data)
 
 int
 __ns_ldap_getParam(const ParamIndexType Param,
-		void ***data, ns_ldap_error_t **error)
+    void ***data, ns_ldap_error_t **error)
 {
 	char			errstr[2 * MAXERROR];
 	ns_ldap_error_t		*errorp;
@@ -2956,7 +2955,7 @@ __ns_ldap_getParam(const ParamIndexType Param,
 			    errorp != NULL && errorp->message != NULL ?
 			    errorp->message : "");
 			MKERROR(LOG_WARNING, *error, NS_CONFIG_NOTLOADED,
-			    strdup(errstr), NULL);
+			    strdup(errstr), NS_LDAP_MEMORY);
 			if (errorp != NULL)
 				(void) __ns_ldap_freeError(&errorp);
 			(void) mutex_unlock(&ns_loadrefresh_lock);
@@ -2977,7 +2976,7 @@ __ns_ldap_getParam(const ParamIndexType Param,
 		(void) snprintf(errstr, sizeof (errstr),
 		    gettext("No configuration information available."));
 		MKERROR(LOG_ERR, *error, NS_CONFIG_NOTLOADED,
-		    strdup(errstr), NULL);
+		    strdup(errstr), NS_LDAP_MEMORY);
 		return (NS_LDAP_CONFIG);
 	}
 
@@ -3273,7 +3272,7 @@ strValueError:
 /* shared by __door_getldapconfig() and __door_getadmincred() */
 int
 __door_getconf(char **buffer, int *buflen, ns_ldap_error_t **error,
-		    int callnumber)
+    int callnumber)
 {
 	typedef union {
 		ldap_data_t	s_d;
@@ -3319,7 +3318,7 @@ __door_getconf(char **buffer, int *buflen, ns_ldap_error_t **error,
 		    "ldap_cachemgr failed - error: %d."),
 		    space->s_d.ldap_ret.ldap_errno);
 		MKERROR(LOG_WARNING, *error, NS_CONFIG_CACHEMGR,
-		    strdup(errstr), NULL);
+		    strdup(errstr), NS_LDAP_MEMORY);
 		free(space);
 		return (NS_LDAP_OP_FAILED);
 	default:
@@ -3359,7 +3358,7 @@ __door_getldapconfig(char **buffer, int *buflen, ns_ldap_error_t **error)
  */
 int
 SetDoorInfoToUnixCred(char *buffer, ns_ldap_error_t **errorp,
-	UnixCred_t **cred)
+    UnixCred_t **cred)
 {
 	UnixCred_t	*ptr;
 	char		errstr[MAXERROR];
@@ -3390,7 +3389,7 @@ SetDoorInfoToUnixCred(char *buffer, ns_ldap_error_t **errorp,
 			    gettext("SetDoorInfoToUnixCred: "
 			    "Unknown keyword encountered '%s'."), name);
 			MKERROR(LOG_ERR, *errorp, NS_CONFIG_SYNTAX,
-			    strdup(errstr), NULL);
+			    strdup(errstr), NS_LDAP_MEMORY);
 			return (NS_LDAP_CONFIG);
 		}
 		switch (index) {
@@ -3405,7 +3404,7 @@ SetDoorInfoToUnixCred(char *buffer, ns_ldap_error_t **errorp,
 			    gettext("SetDoorInfoToUnixCred: "
 			    "Unknown index encountered '%d'."), index);
 			MKERROR(LOG_ERR, *errorp, NS_CONFIG_SYNTAX,
-			    strdup(errstr), NULL);
+			    strdup(errstr), NS_LDAP_MEMORY);
 			return (NS_LDAP_CONFIG);
 		}
 		strptr = (char *)strtok_r(NULL, DOORLINESEP, &rest);
@@ -3695,7 +3694,7 @@ __s_api_AuthEnumtoStruct(const EnumAuthType_t i)
 /* ARGSUSED */
 static int
 __s_val_postime(ParamIndexType i, ns_default_config *def,
-		ns_param_t *param, char *errbuf)
+    ns_param_t *param, char *errbuf)
 {
 	char	*cp;
 	long	tot;
@@ -3713,6 +3712,7 @@ __s_val_postime(ParamIndexType i, ns_default_config *def,
 				if (*(cp+1) == '\0') {
 					break;
 				}
+				/* FALLTHROUGH */
 			default:
 				(void) strcpy(errbuf, "Illegal time value");
 				return (NS_PARSE_ERR);
@@ -3735,7 +3735,7 @@ __s_val_postime(ParamIndexType i, ns_default_config *def,
 /* ARGSUSED */
 static int
 __s_val_basedn(ParamIndexType i, ns_default_config *def,
-		ns_param_t *param, char *errbuf)
+    ns_param_t *param, char *errbuf)
 {
 	if (param && param->ns_ptype == CHARPTR &&
 	    i == NS_LDAP_SEARCH_BASEDN_P &&
@@ -3758,7 +3758,7 @@ __s_val_basedn(ParamIndexType i, ns_default_config *def,
 /* ARGSUSED */
 static int
 __s_val_serverList(ParamIndexType i, ns_default_config *def,
-		ns_param_t *param, char *errbuf)
+    ns_param_t *param, char *errbuf)
 {
 	for (i = 0; i < param->ns_acnt; i++) {
 		if ((__s_api_isipv4(param->ns_ppc[i])) ||
@@ -3783,7 +3783,7 @@ __s_val_serverList(ParamIndexType i, ns_default_config *def,
 /* ARGSUSED */
 static int
 __s_val_binddn(ParamIndexType i, ns_default_config *def,
-		ns_param_t *param, char *errbuf)
+    ns_param_t *param, char *errbuf)
 {
 	char *dntype;
 
@@ -3810,7 +3810,7 @@ __s_val_binddn(ParamIndexType i, ns_default_config *def,
 /* ARGSUSED */
 static int
 __s_val_bindpw(ParamIndexType i, ns_default_config *def,
-		ns_param_t *param, char *errbuf)
+    ns_param_t *param, char *errbuf)
 {
 	char *pwtype;
 

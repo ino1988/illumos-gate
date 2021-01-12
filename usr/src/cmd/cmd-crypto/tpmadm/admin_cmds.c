@@ -50,13 +50,13 @@ int cmd_keyinfo(TSS_HCONTEXT hContext, TSS_HTPM hTPM, int argc, char *argv[]);
 int cmd_deletekey(TSS_HCONTEXT hContext, TSS_HTPM hTPM, int argc, char *argv[]);
 
 cmdtable_t commands[] = {
-	{"status", "", cmd_status},
-	{"init", "", cmd_init},
-	{"clear", "[owner | lock]", cmd_clear},
-	{"auth", "", cmd_auth},
-	{"keyinfo", "[uuid]", cmd_keyinfo},
-	{"deletekey", "uuid", cmd_deletekey},
-	{NULL, NULL, NULL},
+	{ "status", "", cmd_status },
+	{ "init", "", cmd_init },
+	{ "clear", "[owner | lock]", cmd_clear },
+	{ "auth", "", cmd_auth },
+	{ "keyinfo", "[uuid]", cmd_keyinfo },
+	{ "deletekey", "uuid", cmd_deletekey },
+	{ NULL, NULL, NULL },
 };
 
 BYTE well_known[] = TSS_WELL_KNOWN_SECRET;
@@ -661,11 +661,11 @@ cmd_init(TSS_HCONTEXT hContext, TSS_HTPM hTPM, int argc, char *argv[])
 	    sizeof (well_known), well_known))
 		return (ERR_FAIL);
 
-	ret = Tspi_TPM_TakeOwnership(hTPM, hKeySRK, NULL);
+	ret = Tspi_TPM_TakeOwnership(hTPM, hKeySRK, 0);
 	if (ret == TPM_E_NO_ENDORSEMENT) {
 		if (createek(hContext, hTPM))
 			return (ERR_FAIL);
-		ret = Tspi_TPM_TakeOwnership(hTPM, hKeySRK, NULL);
+		ret = Tspi_TPM_TakeOwnership(hTPM, hKeySRK, 0);
 	}
 	if (ret) {
 		print_error(ret, gettext("Take ownership"));
@@ -701,7 +701,7 @@ cmd_auth(TSS_HCONTEXT hContext, TSS_HTPM hTPM, int argc, char *argv[])
 	    gettext("= New TPM owner passphrase ="), 0, NULL))
 		return (ERR_FAIL);
 
-	ret = Tspi_ChangeAuth(hTPM, NULL, hNewPolicy);
+	ret = Tspi_ChangeAuth(hTPM, 0, hNewPolicy);
 	if (ret && ret != TSP_ERROR(TSS_E_POLICY_NO_SECRET)) {
 		print_error(ret, gettext("Change authorization"));
 		return (ERR_FAIL);

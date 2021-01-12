@@ -23,6 +23,7 @@
 # Copyright 2010 Sun Microsystems, Inc.  All rights reserved.
 # Use is subject to license terms.
 #
+# Copyright 2014 Garrett D'Amore <garrett@damore.org>
 #
 #	This makefile drives the production of Abstract Control Model of
 #	USB Communication Devices Class dirver.
@@ -36,11 +37,7 @@ UTSBASE	= ../..
 #
 MODULE		= usbecm
 OBJECTS		= $(USBECM_OBJS:%=$(OBJS_DIR)/%)
-LINTS		= $(USBECM_OBJS:%.o=$(LINTS_DIR)/%.ln)
 ROOTMODULE	= $(ROOT_DRV_DIR)/$(MODULE)
-WARLOCK_OUT	= $(USBECM_OBJS:%.o=%.ll)
-WARLOCK_OK	= $(MODULE).ok
-WLCMD_DIR	= $(UTSBASE)/common/io/warlock
 
 #
 #	Include common rules.
@@ -49,16 +46,12 @@ include $(UTSBASE)/sparc/Makefile.sparc
 
 LDFLAGS         += -dy -Nmisc/usba -Nmisc/mac
 
-#
-# lint pass one enforcement
-#
 CFLAGS += $(CCVERBOSE)
 
 #
 #	Define targets
 #
 ALL_TARGET	= $(BINARY)
-LINT_TARGET	= $(MODULE).lint
 INSTALL_TARGET	= $(BINARY) $(ROOTMODULE)
 
 .KEEP_STATE:
@@ -68,16 +61,8 @@ all:		$(ALL_DEPS)
 def:		$(DEF_DEPS)
 
 clean:		$(CLEAN_DEPS)
-		$(RM) $(WARLOCK_OUT) $(WARLOCK_OK)
 
 clobber:	$(CLOBBER_DEPS)
-		$(RM) $(WARLOCK_OUT) $(WARLOCK_OK)
-
-lint:		$(LINT_DEPS)
-
-modlintlib:	$(MODLINTLIB_DEPS)
-
-clean.lint:	$(CLEAN_LINT_DEPS)
 
 install:	$(INSTALL_DEPS)
 
@@ -85,53 +70,3 @@ install:	$(INSTALL_DEPS)
 #	Include common targets.
 #
 include $(UTSBASE)/sparc/Makefile.targ
-
-#
-#	Defines for local commands.
-#
-WLCC		= wlcc
-TOUCH		= touch
-WARLOCK		= warlock
-TEST		= test
-
-#
-#	warlock
-#
-WARLOCK_CMD	= $(WLCMD_DIR)/$(MODULE).wlcmd
-
-USBA_FILES = $(USBA_WITHOUT_WUSB_OBJS:%.o=../usba/%.ll)
-UHCI_FILES = $(UHCI_OBJS:%.o=../uhci/%.ll)
-OHCI_FILES = $(OHCI_OBJS:%.o=../ohci/%.ll)
-EHCI_FILES = $(EHCI_OBJS:%.o=../ehci/%.ll)
-
-warlock: $(WARLOCK_OK) warlock_with_usba
-
-%.ll: $(UTSBASE)/common/io/usb/clients/usbecm/%.c
-	$(WLCC) $(CPPFLAGS) -DDEBUG -o $@ $<
-
-$(WARLOCK_OK): $(WARLOCK_OUT) $(WLCMD_DIR)/usbecm.wlcmd warlock_ddi.files
-	$(WARLOCK) -c $(WLCMD_DIR)/usbecm.wlcmd $(WARLOCK_OUT)  \
-		-l ../warlock/ddi_dki_impl.ll
-	$(TOUCH) $@
-
-warlock_with_usba: $(WLCMD_DIR)/usbecm_with_usba.wlcmd $(WARLOCK_OUT) \
-	usba_files ohci_files uhci_files ehci_files \
-	warlock_ddi.files
-	$(WARLOCK) -c $(WLCMD_DIR)/usbecm_with_usba.wlcmd \
-		$(USBA_FILES) $(OHCI_FILES) $(EHCI_FILES) $(UHCI_FILES) \
-		$(WARLOCK_OUT) -l ../warlock/ddi_dki_impl.ll
-
-usba_files:
-	@cd ../usba;pwd; $(MAKE) warlock
-
-uhci_files:
-	@cd ../uhci;pwd; $(MAKE) warlock
-
-ohci_files:
-	@cd ../ohci;pwd; $(MAKE) warlock
-
-ehci_files:
-	@cd ../ehci;pwd; $(MAKE) warlock
-
-warlock_ddi.files:
-	cd ../warlock; pwd; $(MAKE) warlock

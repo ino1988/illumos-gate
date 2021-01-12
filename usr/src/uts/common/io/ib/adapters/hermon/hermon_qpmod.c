@@ -21,6 +21,7 @@
 
 /*
  * Copyright (c) 2008, 2010, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2016 by Delphix. All rights reserved.
  */
 
 /*
@@ -33,6 +34,7 @@
  *    and Error.
  */
 
+#include <sys/sysmacros.h>
 #include <sys/types.h>
 #include <sys/conf.h>
 #include <sys/ddi.h>
@@ -675,7 +677,7 @@ hermon_qp_modify(hermon_state_t *state, hermon_qphdl_t qp,
 			 * If still draining SQ, then fail transition attempt
 			 * to RTS, even though this is now done is two steps
 			 * (see below) if the consumer has tried this before
-			 * it's drained, let him fail and wait appropriately
+			 * it's drained, let it fail and wait appropriately
 			 */
 			if (qp->qp_sqd_still_draining) {
 				mutex_exit(&qp->qp_lock);
@@ -3375,7 +3377,7 @@ hermon_qp_validate_resp_rsrc(hermon_state_t *state, ibt_qp_rc_attr_t *rc,
 	if (rdma_ra_in == 0) {
 		rdma_ra_in = 1;
 	}
-	if ((rdma_ra_in & (rdma_ra_in - 1)) == 0) {
+	if (ISP2(rdma_ra_in)) {
 		*rra_max = highbit(rdma_ra_in) - 1;
 	} else {
 		*rra_max = highbit(rdma_ra_in);
@@ -3411,7 +3413,7 @@ hermon_qp_validate_init_depth(hermon_state_t *state, ibt_qp_rc_attr_t *rc,
 	if (rdma_ra_out == 0) {
 		rdma_ra_out = 1;
 	}
-	if ((rdma_ra_out & (rdma_ra_out - 1)) == 0) {
+	if (ISP2(rdma_ra_out)) {
 		*sra_max = highbit(rdma_ra_out) - 1;
 	} else {
 		*sra_max = highbit(rdma_ra_out);

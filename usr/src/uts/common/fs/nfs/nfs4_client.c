@@ -20,10 +20,11 @@
  */
 /*
  * Copyright (c) 1986, 2010, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2017 by Delphix. All rights reserved.
  */
 
 /*
- *  	Copyright (c) 1983,1984,1985,1986,1987,1988,1989  AT&T.
+ *	Copyright (c) 1983,1984,1985,1986,1987,1988,1989  AT&T.
  *	All Rights Reserved
  */
 
@@ -184,7 +185,6 @@ nfs4_validate_caches(vnode_t *vp, cred_t *cr)
 		return (0);
 	}
 
-	gar.n4g_va.va_mask = AT_ALL;
 	return (nfs4_getattr_otw(vp, &gar, cr, 0));
 }
 
@@ -464,33 +464,15 @@ nfs4_attr_cache(vnode_t *vp, nfs4_ga_res_t *garp,
 	rp = VTOR4(vp);
 	mutex_enter(&rp->r_statelock);
 	was_serial = (rp->r_serial == curthread);
-	if (rp->r_serial && !was_serial) {
-		klwp_t *lwp = ttolwp(curthread);
-
+	if (rp->r_serial != NULL && !was_serial) {
 		/*
-		 * If we're the recovery thread, then purge current attrs
-		 * and bail out to avoid potential deadlock between another
-		 * thread caching attrs (r_serial thread), recov thread,
-		 * and an async writer thread.
+		 * Purge current attrs and bail out to avoid potential deadlock
+		 * between another thread caching attrs (r_serial thread), this
+		 * thread, and a thread trying to read or write pages.
 		 */
-		if (recov) {
-			PURGE_ATTRCACHE4_LOCKED(rp);
-			mutex_exit(&rp->r_statelock);
-			return;
-		}
-
-		if (lwp != NULL)
-			lwp->lwp_nostop++;
-		while (rp->r_serial != NULL) {
-			if (!cv_wait_sig(&rp->r_cv, &rp->r_statelock)) {
-				mutex_exit(&rp->r_statelock);
-				if (lwp != NULL)
-					lwp->lwp_nostop--;
-				return;
-			}
-		}
-		if (lwp != NULL)
-			lwp->lwp_nostop--;
+		PURGE_ATTRCACHE4_LOCKED(rp);
+		mutex_exit(&rp->r_statelock);
+		return;
 	}
 
 	/*
@@ -582,6 +564,16 @@ nfs4_attr_cache(vnode_t *vp, nfs4_ga_res_t *garp,
 			    rp->r_attr.va_ctime.tv_nsec !=
 			    vap->va_ctime.tv_nsec)
 				ctime_changed = 1;
+
+			/*
+			 * If the change attribute was not provided by server
+			 * or it differs, then flush all caches.
+			 */
+			if (!garp->n4g_change_valid ||
+			    rp->r_change != garp->n4g_change) {
+				mtime_changed = 1;
+				ctime_changed = 1;
+			}
 		} else {
 			writemodify_set = B_TRUE;
 		}
@@ -914,13 +906,13 @@ nfs4_getattr_otw_norecovery(vnode_t *vp, nfs4_ga_res_t *garp,
 		return;
 
 	if (res.status != NFS4_OK) {
-		(void) xdr_free(xdr_COMPOUND4res_clnt, (caddr_t)&res);
+		xdr_free(xdr_COMPOUND4res_clnt, (caddr_t)&res);
 		return;
 	}
 
 	*garp = res.array[1].nfs_resop4_u.opgetattr.ga_res;
 
-	(void) xdr_free(xdr_COMPOUND4res_clnt, (caddr_t)&res);
+	xdr_free(xdr_COMPOUND4res_clnt, (caddr_t)&res);
 }
 
 /*
@@ -1030,7 +1022,7 @@ recov_retry:
 		nfs4_end_fop(VTOMI4(vp), vp, NULL, OH_GETATTR, &recov_state,
 		    needrecov);
 		if (!e.error) {
-			(void) xdr_free(xdr_COMPOUND4res_clnt, (caddr_t)&res);
+			xdr_free(xdr_COMPOUND4res_clnt, (caddr_t)&res);
 			e.error = geterrno4(res.status);
 		}
 		if (abort == FALSE)
@@ -1051,7 +1043,7 @@ recov_retry:
 			    ga_res.n4g_ext_res,
 			    garp->n4g_ext_res, sizeof (nfs4_ga_ext_res_t));
 	}
-	(void) xdr_free(xdr_COMPOUND4res_clnt, (caddr_t)&res);
+	xdr_free(xdr_COMPOUND4res_clnt, (caddr_t)&res);
 	nfs4_end_fop(VTOMI4(vp), vp, NULL, OH_GETATTR, &recov_state,
 	    needrecov);
 	return (e.error);
@@ -3057,7 +3049,7 @@ nfs_free_mi4(mntinfo4_t *mi)
 	nfs4_oo_hash_bucket_t   *bucketp;
 	nfs4_debug_msg_t	*msgp;
 	int i;
-	servinfo4_t 		*svp;
+	servinfo4_t		*svp;
 
 	/*
 	 * Code introduced here should be carefully evaluated to make
@@ -3106,6 +3098,7 @@ nfs_free_mi4(mntinfo4_t *mi)
 	mutex_destroy(&mi->mi_lock);
 	mutex_destroy(&mi->mi_async_lock);
 	mutex_destroy(&mi->mi_msg_list_lock);
+	mutex_destroy(&mi->mi_rnodes_lock);
 	nfs_rw_destroy(&mi->mi_recovlock);
 	nfs_rw_destroy(&mi->mi_rename_lock);
 	nfs_rw_destroy(&mi->mi_fh_lock);
@@ -3142,6 +3135,7 @@ nfs_free_mi4(mntinfo4_t *mi)
 	list_destroy(&mi->mi_foo_list);
 	list_destroy(&mi->mi_bseqid_list);
 	list_destroy(&mi->mi_lost_state);
+	list_destroy(&mi->mi_rnodes);
 	avl_destroy(&mi->mi_filehandles);
 	kmem_free(mi, sizeof (*mi));
 }
@@ -3189,10 +3183,10 @@ nfs4_clnt_init(void)
 	    nfs4_mi_destroy);
 
 	/*
-	 * Initialise the reference count of the notsupp xattr cache vnode to 1
+	 * Initialize the reference count of the notsupp xattr cache vnode to 1
 	 * so that it never goes away (VOP_INACTIVE isn't called on it).
 	 */
-	nfs4_xattr_notsupp_vnode.v_count = 1;
+	vn_reinit(&nfs4_xattr_notsupp_vnode);
 }
 
 void
@@ -3511,7 +3505,7 @@ recov_retry:
 	    after_time.tv_sec, after_time.tv_nsec));
 
 	if (e.error == 0 && res.status == NFS4ERR_CB_PATH_DOWN) {
-		(void) xdr_free(xdr_COMPOUND4res_clnt, (caddr_t)&res);
+		xdr_free(xdr_COMPOUND4res_clnt, (caddr_t)&res);
 		nfs4_delegreturn_all(sp);
 		nfs4_end_op(mi, NULL, NULL, &recov_state, needrecov);
 		VFS_RELE(mi->mi_vfsp);
@@ -3542,8 +3536,7 @@ recov_retry:
 			nfs4_end_op(mi, NULL, NULL, &recov_state, needrecov);
 			VFS_RELE(mi->mi_vfsp);
 			if (!e.error)
-				(void) xdr_free(xdr_COMPOUND4res_clnt,
-				    (caddr_t)&res);
+				xdr_free(xdr_COMPOUND4res_clnt, (caddr_t)&res);
 			mutex_enter(&sp->s_lock);
 			goto recov_retry;
 		}
@@ -3562,7 +3555,7 @@ recov_retry:
 	}
 
 	if (!rpc_error)
-		(void) xdr_free(xdr_COMPOUND4res_clnt, (caddr_t)&res);
+		xdr_free(xdr_COMPOUND4res_clnt, (caddr_t)&res);
 
 	nfs4_end_op(mi, NULL, NULL, &recov_state, needrecov);
 

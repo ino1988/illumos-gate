@@ -20,12 +20,17 @@
  * CDDL HEADER END
  */
 /*	Copyright (c) 1988 AT&T	*/
-/*	  All Rights Reserved  	*/
+/*	  All Rights Reserved	*/
 
 
 /*
  * Copyright 1999-2003 Sun Microsystems, Inc.  All rights reserved.
  * Use is subject to license terms.
+ */
+
+/*
+ * Copyright 2014 PALO, Richard.
+ * Copyright 2016 Joyent, Inc.
  */
 
 /*
@@ -43,9 +48,9 @@
 #ifndef _ISO_STDDEF_ISO_H
 #define	_ISO_STDDEF_ISO_H
 
-#pragma ident	"%Z%%M%	%I%	%E% SMI" /* SVr4.0 1.5 */
-
 #include <sys/isa_defs.h>
+#include <sys/feature_tests.h>
+#include <sys/null.h>
 
 #ifdef	__cplusplus
 extern "C" {
@@ -53,14 +58,6 @@ extern "C" {
 
 #if __cplusplus >= 199711L
 namespace std {
-#endif
-
-#ifndef	NULL
-#if defined(_LP64)
-#define	NULL    0L
-#else
-#define	NULL    0
-#endif
 #endif
 
 #if !defined(_PTRDIFF_T) || __cplusplus >= 199711L
@@ -85,11 +82,20 @@ typedef unsigned int	size_t;		/* (historical version) */
 }
 #endif /* end of namespace std */
 
-#if __cplusplus >= 199711L
-#define	offsetof(s, m)  (std::size_t)(&(((s *)0)->m))
-#else
-#define	offsetof(s, m)  (size_t)(&(((s *)0)->m))
+#if !defined(_MAX_ALIGN_T)
+#if !defined(_STRICT_SYMBOLS) || defined(_STDC_C11)
+#define	_MAX_ALIGN_T
+typedef	_MAX_ALIGNMENT_TYPE max_align_t;
+#endif /* !_STRICT_SYMBOLS || _STDC_C11 */
+#endif	/* _MAX_ALIGN_T */
+
+#if __EXT1_VISIBLE
+/* ISO/IEC 9899:2011 K.3.3.2 */
+#ifndef	_RSIZE_T_DEFINED
+#define	_RSIZE_T_DEFINED
+typedef size_t rsize_t;
 #endif
+#endif	/* __EXT1_VISIBLE */
 
 #ifdef	__cplusplus
 }

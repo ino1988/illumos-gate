@@ -19,8 +19,11 @@
 # CDDL HEADER END
 #
 #
+# Copyright 2015 Gary Mills
 # Copyright 2008 Sun Microsystems, Inc.  All rights reserved.
 # Use is subject to license terms.
+#
+# Copyright 2019 OmniOS Community Edition (OmniOSce) Association.
 #
 
 PROG=		lex
@@ -39,14 +42,21 @@ OBJECTS=	$(LIBOBJS) $(LIBOBJS_W) $(LIBOBJS_E)
 
 FORMS=		nceucform ncform nrform
 
-include 	../../../../lib/Makefile.lib
+include		../../../../lib/Makefile.lib
+
+COMPATLINKS=	usr/ccs/lib/libl.so
+COMPATLINKS64=	usr/ccs/lib/$(MACH64)/libl.so
+
+$(ROOT)/usr/ccs/lib/libl.so := COMPATLINKTARGET=../../lib/libl.so.1
+$(ROOT)/usr/ccs/lib/$(MACH64)/libl.so:= \
+	COMPATLINKTARGET=../../../lib/$(MACH64)/libl.so.1
 
 SRCDIR =	../common
 
-C99MODE=	$(C99_ENABLE)
+CSTD=	$(CSTD_GNU99)
 
 CERRWARN +=	-_gcc=-Wno-unused-label
-CERRWARN +=	-_gcc=-Wno-uninitialized
+CERRWARN +=	$(CNOWARN_UNINIT)
 CERRWARN +=	-_gcc=-Wno-parentheses
 
 # Override default source file derivation rule (in Makefile.lib)
@@ -56,9 +66,7 @@ MACHSRCS=	$(MACHOBJS:%.o=../common/%.c)
 LIBSRCS =	$(LIBOBJS:%.o=../common/%.c)
 SRCS=		$(MACHSRCS) $(LIBSRCS)
 
-LIBS =          $(DYNLIB) $(LINTLIB)
-
-LINTSRCS=	../common/llib-l$(LIBNAME)
+LIBS =          $(DYNLIB)
 
 INCLIST=	$(INCLIST_$(MACH)) -I../../include -I../../include/$(MACH)
 DEFLIST=	-DELF
@@ -75,17 +83,10 @@ objs/%_e.o:=	DEFLIST = -DEUC -DJLSLEX  -DEOPTION -D$*=$*_e
 pics/%_e.o:=	DEFLIST = -DEUC -DJLSLEX  -DEOPTION -D$*=$*_e
 
 CPPFLAGS=	$(INCLIST) $(DEFLIST) $(CPPFLAGS.master)
-BUILD.AR=	$(AR) $(ARFLAGS) $@ `$(LORDER) $(OBJS) | $(TSORT)`
-LINTFLAGS=	-amux
-LINTPOUT=	lint.out
 
-$(LINTLIB):=	LINTFLAGS = -nvx
 $(ROOTPROG):=	FILEMODE = 0555
 
 ROOTFORMS=	$(FORMS:%=$(ROOTSHLIBCCS)/%)
-
-ROOTLINTDIR=	$(ROOTLIBDIR)
-ROOTLINT=	$(LINTSRCS:../common/%=$(ROOTLINTDIR)/%)
 
 DYNLINKLIBDIR=	$(ROOTLIBDIR)
 DYNLINKLIB=	$(LIBLINKS:%=$(DYNLINKLIBDIR)/%)
@@ -94,7 +95,7 @@ DYNLINKLIB=	$(LIBLINKS:%=$(DYNLINKLIBDIR)/%)
 $(DYNLIB) :=	CFLAGS += $(CCVERBOSE)
 $(DYNLIB) :=	CFLAGS64 += $(CCVERBOSE)
 
-$(DYNLIB) :=	LDLIBS += -lc
+LDLIBS += -lc
 
-CLEANFILES +=	../common/parser.c $(LINTPOUT)
+CLEANFILES +=	../common/parser.c
 CLOBBERFILES +=	$(LIBS) $(LIBRARY)

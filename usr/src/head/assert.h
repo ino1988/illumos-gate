@@ -20,10 +20,12 @@
  * CDDL HEADER END
  */
 /*	Copyright (c) 1988 AT&T	*/
-/*	  All Rights Reserved  	*/
+/*	  All Rights Reserved	*/
 
 /*
  * Copyright 2014 Garrett D'Amore <garrett@damore.org>
+ * Copyright 2016 Joyent, Inc.
+ * Copyright 2018 OmniOS Community Edition (OmniOSce) Association.
  *
  * Copyright 2004 Sun Microsystems, Inc.  All rights reserved.
  * Use is subject to license terms.
@@ -41,6 +43,13 @@ extern void __assert_c99(const char *, const char *, int, const char *);
 #else
 extern void __assert(const char *, const char *, int);
 #endif /* __STDC_VERSION__ - 0 >= 199901L */
+
+/*
+ * In C11 the static_assert macro is always defined, unlike the assert macro.
+ */
+#if __STDC_VERSION__ - 0 >= 201112L && !defined(__cplusplus)
+#define	static_assert	_Static_assert
+#endif /* __STDC_VERSION - 0 >= 201112L && !defined(__cplusplus) */
 
 #ifdef	__cplusplus
 }

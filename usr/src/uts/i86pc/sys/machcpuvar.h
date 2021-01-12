@@ -23,7 +23,7 @@
  * Use is subject to license terms.
  */
 /*
- * Copyright 2011 Joyent, Inc. All rights reserved.
+ * Copyright 2019 Joyent, Inc.
  */
 
 #ifndef	_SYS_MACHCPUVAR_H
@@ -40,6 +40,9 @@ extern "C" {
 #include <sys/rm_platter.h>
 #include <sys/avintr.h>
 #include <sys/pte.h>
+#include <sys/stddef.h>
+#include <sys/debug.h>
+#include <sys/cpuvar.h>
 
 #ifndef	_ASM
 /*
@@ -78,11 +81,93 @@ struct xen_evt_data {
 	ulong_t		evt_affinity[sizeof (ulong_t) * 8]; /* service on cpu */
 };
 
+enum fast_syscall_state {
+	FSS_DISABLED		= 0,
+	FSS_ASYSC_ENABLED	= (1 << 0),
+	FSS_SEP_ENABLED		= (1 << 1)
+};
+
+struct kpti_frame {
+	uint64_t	kf_lower_redzone;
+
+	/* Stashed value of %cr3 when we entered the trampoline. */
+	greg_t		kf_tr_cr3;
+
+	/*
+	 * We use %r13-r14 as scratch registers in the trampoline code,
+	 * so stash those here "below" the rest of the stack so they can be
+	 * pushed/popped if needed.
+	 */
+	greg_t		kf_r14;
+	greg_t		kf_r13;
+
+	/*
+	 * Part of this struct is used as the HW stack frame when taking an
+	 * interrupt on the user page table. The CPU is going to push a bunch
+	 * of regs onto the stack pointer set in the TSS/IDT (which we set to
+	 * &kf_rsp here).
+	 *
+	 * This is only a temporary holding area for them (we'll move them over
+	 * to the real interrupt stack once we've set %cr3).
+	 *
+	 * Note that these must be cleared during a process switch on this cpu.
+	 */
+	greg_t		kf_err;		/* Bottom of initial hw stack frame */
+	greg_t		kf_rip;
+	greg_t		kf_cs;
+	greg_t		kf_rflags;
+	greg_t		kf_rsp;
+	greg_t		kf_ss;
+
+	greg_t		kf_tr_rsp;	/* Top of HW stack frame */
+	/* We also write this with the %rsp value on tramp entry */
+
+	/* Written to 0x1 when this kpti_frame is in use. */
+	uint64_t	kf_tr_flag;
+
+	uint64_t	kf_middle_redzone;
+
+	/*
+	 * The things we need to write to %cr3 to change between page tables.
+	 * These live "above" the HW stack.
+	 */
+	greg_t		kf_kernel_cr3;
+	greg_t		kf_user_cr3;
+	greg_t		kf_tr_ret_rsp;
+
+	uint64_t	kf_unused;		/* For 16-byte align */
+
+	uint64_t	kf_upper_redzone;
+};
+
+typedef struct cpu_smt {
+	lock_t cs_lock;
+	char cs_pad[56];
+	struct cpu *cs_sib;
+	volatile uint64_t cs_intr_depth;
+	volatile uint64_t cs_state;
+	volatile uint64_t cs_sibstate;
+} cpu_smt_t;
+
+/*
+ * This first value, MACHCPU_SIZE is the size of all the members in the cpu_t
+ * AND struct machcpu, before we get to the mcpu_pad and the kpti area.
+ * The KPTI is used to contain per-CPU data that is visible in both sets of
+ * page-tables, and hence must be page-aligned and page-sized. See
+ * hat_pcp_setup().
+ *
+ * There are CTASSERTs in os/intr.c that verify this all works out.
+ */
+#define	MACHCPU_SIZE	(1568 + 696)
+#define	MACHCPU_PAD	(MMU_PAGESIZE - MACHCPU_SIZE)
+#define	MACHCPU_PAD2	(MMU_PAGESIZE - 16 - 3 * sizeof (struct kpti_frame))
+
 struct	machcpu {
 	/*
 	 * x_call fields - used for interprocessor cross calls
 	 */
 	struct xc_msg	*xc_msgbox;
+	struct xc_msg	*xc_curmsg;
 	struct xc_msg	*xc_free;
 	xc_data_t	xc_data;
 	uint32_t	xc_wait_cnt;
@@ -103,6 +188,8 @@ struct	machcpu {
 	gate_desc_t	*mcpu_idt;	/* current IDT */
 
 	tss_t		*mcpu_tss;	/* TSS */
+	void		*mcpu_ldt;
+	size_t		mcpu_ldt_len;
 
 	kmutex_t	mcpu_ppaddr_mutex;
 	caddr_t		mcpu_caddr1;	/* per cpu CADDR1 */
@@ -133,6 +220,8 @@ struct	machcpu {
 	uint16_t mcpu_idle_type;	/* CPU next idle type */
 	uint16_t max_cstates;		/* supported max cstates */
 
+	enum fast_syscall_state	mcpu_fast_syscall_state;
+
 	struct cpu_ucode_info	*mcpu_ucode_info;
 
 	void			*mcpu_pm_mach_state;
@@ -147,6 +236,17 @@ struct	machcpu {
 	 * The low order bits will be incremented on every interrupt.
 	 */
 	volatile uint32_t	mcpu_istamp;
+
+	cpu_smt_t		mcpu_smt;
+
+	char			mcpu_pad[MACHCPU_PAD];
+
+	/* This is the start of the page */
+	char			mcpu_pad2[MACHCPU_PAD2];
+	struct kpti_frame	mcpu_kpti;
+	struct kpti_frame	mcpu_kpti_flt;
+	struct kpti_frame	mcpu_kpti_dbg;
+	char			mcpu_pad3[16];
 };
 
 #define	NINTR_THREADS	(LOCK_LEVEL-1)	/* number of interrupt threads */
@@ -167,7 +267,6 @@ struct	machcpu {
 #define	cpu_gdt cpu_m.mcpu_gdt
 #define	cpu_idt cpu_m.mcpu_idt
 #define	cpu_tss cpu_m.mcpu_tss
-#define	cpu_ldt cpu_m.mcpu_ldt
 #define	cpu_caddr1 cpu_m.mcpu_caddr1
 #define	cpu_caddr2 cpu_m.mcpu_caddr2
 #define	cpu_softinfo cpu_m.mcpu_softinfo

@@ -1,17 +1,53 @@
-'\" te
-.\" Copyright 1989 AT&T.  Copyright (c) 2002, Sun Microsystems, Inc.  All Rights Reserved.  Portions Copyright (c) 1992, X/Open Company Limited.  All Rights Reserved.
-.\" Sun Microsystems, Inc. gratefully acknowledges The Open Group for permission to reproduce portions of its copyrighted documentation. Original documentation from The Open Group can be obtained online at
+.\"
+.\" Sun Microsystems, Inc. gratefully acknowledges The Open Group for
+.\" permission to reproduce portions of its copyrighted documentation.
+.\" Original documentation from The Open Group can be obtained online at
 .\" http://www.opengroup.org/bookstore/.
-.\" The Institute of Electrical and Electronics Engineers and The Open Group, have given us permission to reprint portions of their documentation. In the following statement, the phrase "this text" refers to portions of the system documentation. Portions of this text are reprinted and reproduced in electronic form in the Sun OS Reference Manual, from IEEE Std 1003.1, 2004 Edition, Standard for Information Technology -- Portable Operating System Interface (POSIX), The Open Group Base Specifications Issue 6, Copyright (C) 2001-2004 by the Institute of Electrical and Electronics Engineers, Inc and The Open Group. In the event of any discrepancy between these versions and the original IEEE and The Open Group Standard, the original IEEE and The Open Group Standard is the referee document. The original Standard can be obtained online at http://www.opengroup.org/unix/online.html.
-.\"  This notice shall appear on any product containing this material.
-.\" The contents of this file are subject to the terms of the Common Development and Distribution License (the "License").  You may not use this file except in compliance with the License.
-.\" You can obtain a copy of the license at usr/src/OPENSOLARIS.LICENSE or http://www.opensolaris.org/os/licensing.  See the License for the specific language governing permissions and limitations under the License.
-.\" When distributing Covered Code, include this CDDL HEADER in each file and include the License file at usr/src/OPENSOLARIS.LICENSE.  If applicable, add the following below this CDDL HEADER, with the fields enclosed by brackets "[]" replaced with your own identifying information: Portions Copyright [yyyy] [name of copyright owner]
-.TH FCLOSE 3C "Nov 1, 2003"
+.\"
+.\" The Institute of Electrical and Electronics Engineers and The Open
+.\" Group, have given us permission to reprint portions of their
+.\" documentation.
+.\"
+.\" In the following statement, the phrase ``this text'' refers to portions
+.\" of the system documentation.
+.\"
+.\" Portions of this text are reprinted and reproduced in electronic form
+.\" in the SunOS Reference Manual, from IEEE Std 1003.1, 2004 Edition,
+.\" Standard for Information Technology -- Portable Operating System
+.\" Interface (POSIX), The Open Group Base Specifications Issue 6,
+.\" Copyright (C) 2001-2004 by the Institute of Electrical and Electronics
+.\" Engineers, Inc and The Open Group.  In the event of any discrepancy
+.\" between these versions and the original IEEE and The Open Group
+.\" Standard, the original IEEE and The Open Group Standard is the referee
+.\" document.  The original Standard can be obtained online at
+.\" http://www.opengroup.org/unix/online.html.
+.\"
+.\" This notice shall appear on any product containing this material.
+.\"
+.\" The contents of this file are subject to the terms of the
+.\" Common Development and Distribution License (the "License").
+.\" You may not use this file except in compliance with the License.
+.\"
+.\" You can obtain a copy of the license at usr/src/OPENSOLARIS.LICENSE
+.\" or http://www.opensolaris.org/os/licensing.
+.\" See the License for the specific language governing permissions
+.\" and limitations under the License.
+.\"
+.\" When distributing Covered Code, include this CDDL HEADER in each
+.\" file and include the License file at usr/src/OPENSOLARIS.LICENSE.
+.\" If applicable, add the following below this CDDL HEADER, with the
+.\" fields enclosed by brackets "[]" replaced with your own identifying
+.\" information: Portions Copyright [yyyy] [name of copyright owner]
+.\"
+.\"
+.\" Copyright 1989 AT&T
+.\" Portions Copyright (c) 1992, X/Open Company Limited.  All Rights Reserved.
+.\" Copyright (c) 2002, Sun Microsystems, Inc.  All Rights Reserved.
+.\"
+.TH FCLOSE 3C "March 25, 2020"
 .SH NAME
 fclose \- close a stream
 .SH SYNOPSIS
-.LP
 .nf
 #include <stdio.h>
 
@@ -19,8 +55,6 @@ fclose \- close a stream
 .fi
 
 .SH DESCRIPTION
-.sp
-.LP
 The \fBfclose()\fR function causes the stream pointed to by \fIstream\fR to be
 flushed and the associated file to be closed. Any unwritten buffered data for
 the stream is written to the file; any unread buffered data is discarded. The
@@ -42,13 +76,9 @@ behavior.
 The \fBfclose()\fR function is performed automatically for all open files upon
 calling \fBexit\fR(2).
 .SH RETURN VALUES
-.sp
-.LP
 Upon successful completion, \fBfclose()\fR returns \fB0\fR. Otherwise, it
 returns \fBEOF\fR and sets \fBerrno\fR to indicate the error.
 .SH ERRORS
-.sp
-.LP
 The \fBfclose()\fR function will fail if:
 .sp
 .ne 2
@@ -99,6 +129,8 @@ The \fBfclose()\fR function was interrupted by a signal.
 The process is a member of a background process group attempting to write to
 its controlling terminal, \fBTOSTOP\fR is set, the process is neither ignoring
 nor blocking \fBSIGTTOU\fR and the process group of the process is orphaned.
+\fIstream\fR was created by \fBopen_wmemstream\fR(3C) and a wide-character or
+byte sequence buffered is invalid in the current locale.
 .RE
 
 .sp
@@ -135,8 +167,6 @@ limits of the device.
 .RE
 
 .SH ATTRIBUTES
-.sp
-.LP
 See \fBattributes\fR(5) for descriptions of the following attributes:
 .sp
 
@@ -153,7 +183,6 @@ MT-Level	MT-Safe
 .TE
 
 .SH SEE ALSO
-.sp
-.LP
 \fBclose\fR(2), \fBexit\fR(2), \fBgetrlimit\fR(2), \fBulimit\fR(2),
-\fBfopen\fR(3C), \fBstdio\fR(3C), \fBattributes\fR(5), \fBstandards\fR(5)
+\fBfcloseall\fR(3C), \fBfopen\fR(3C), \fBstdio\fR(3C),
+\fBattributes\fR(5), \fBstandards\fR(5)

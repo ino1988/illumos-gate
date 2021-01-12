@@ -25,7 +25,7 @@
  */
 
 /*
- * Copyright (c) 2013, Joyent, Inc. All rights reserved.
+ * Copyright 2018 Joyent, Inc.
  * Copyright (c) 2013 by Delphix. All rights reserved.
  */
 
@@ -189,6 +189,7 @@ typedef enum dtrace_probespec {
 #define	DIF_OP_RLDX	77		/* rldx  [r1], rd */
 #define	DIF_OP_XLATE	78		/* xlate xlrindex, rd */
 #define	DIF_OP_XLARG	79		/* xlarg xlrindex, rd */
+#define	DIF_OP_STGA	80		/* stga var, ri, rd */
 
 #define	DIF_INTOFF_MAX		0xffff	/* highest integer table offset */
 #define	DIF_STROFF_MAX		0xffff	/* highest string table offset */
@@ -241,6 +242,7 @@ typedef enum dtrace_probespec {
 #define	DIF_VAR_UID		0x011e	/* process user ID */
 #define	DIF_VAR_GID		0x011f	/* process group ID */
 #define	DIF_VAR_ERRNO		0x0120	/* thread errno */
+#define	DIF_VAR_THREADNAME	0x0121	/* thread name */
 
 #define	DIF_SUBR_RAND			0
 #define	DIF_SUBR_MUTEX_OWNED		1
@@ -2131,12 +2133,18 @@ extern void dtrace_probe(dtrace_id_t, uintptr_t arg0, uintptr_t arg1,
  *
  * 1.2.4  Caller's context
  *
- *   dtms_create_probe() is called from either ioctl() or module load context.
- *   The DTrace framework is locked in such a way that meta providers may not
- *   register or unregister. This means that the meta provider cannot call
- *   dtrace_meta_register() or dtrace_meta_unregister(). However, the context is
- *   such that the provider may (and is expected to) call provider-related
- *   DTrace provider APIs including dtrace_probe_create().
+ *   dtms_create_probe() is called from either ioctl() or module load context
+ *   in the context of a newly-created provider (that is, a provider that
+ *   is a result of a call to dtms_provide_pid()). The DTrace framework is
+ *   locked in such a way that meta providers may not register or unregister,
+ *   such that no other thread can call into a meta provider operation and that
+ *   atomicity is assured with respect to meta provider operations across
+ *   dtms_provide_pid() and subsequent calls to dtms_create_probe().
+ *   The context is thus effectively single-threaded with respect to the meta
+ *   provider, and that the meta provider cannot call dtrace_meta_register()
+ *   or dtrace_meta_unregister(). However, the context is such that the
+ *   provider may (and is expected to) call provider-related DTrace provider
+ *   APIs including dtrace_probe_create().
  *
  * 1.3  void *dtms_provide_pid(void *arg, dtrace_meta_provider_t *mprov,
  *	      pid_t pid)
@@ -2205,8 +2213,8 @@ extern void dtrace_probe(dtrace_id_t, uintptr_t arg0, uintptr_t arg1,
  */
 typedef struct dtrace_helper_probedesc {
 	char *dthpb_mod;			/* probe module */
-	char *dthpb_func; 			/* probe function */
-	char *dthpb_name; 			/* probe name */
+	char *dthpb_func;			/* probe function */
+	char *dthpb_name;			/* probe name */
 	uint64_t dthpb_base;			/* base address */
 	uint32_t *dthpb_offs;			/* offsets array */
 	uint32_t *dthpb_enoffs;			/* is-enabled offsets array */
@@ -2280,7 +2288,7 @@ extern void dtrace_membar_consumer(void);
 extern void (*dtrace_cpu_init)(processorid_t);
 extern void (*dtrace_modload)(struct modctl *);
 extern void (*dtrace_modunload)(struct modctl *);
-extern void (*dtrace_helpers_cleanup)();
+extern void (*dtrace_helpers_cleanup)(proc_t *);
 extern void (*dtrace_helpers_fork)(proc_t *parent, proc_t *child);
 extern void (*dtrace_cpustart_init)();
 extern void (*dtrace_cpustart_fini)();

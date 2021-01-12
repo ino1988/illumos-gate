@@ -9,31 +9,48 @@
 # http://www.illumos.org/license/CDDL.
 #
 #
-# Copyright (c) 2014 Racktop Systems.
+# Copyright 2015, OmniTI Computer Consulting, Inc. All rights reserved.
+# Copyright 2016 RackTop Systems.
 #
 
 include $(SRC)/lib/Makefile.lib
 
-# PERL_VERSION used to be set here,
-# but as it is also needed in usr/src/pkg/Makefile, 
+# PERL_VERSION and PERL_ARCH used to be set here,
+# but as they were also needed in usr/src/pkg/Makefile,
 # the definition was moved to usr/src/Makefile.master
-
-PERL_ARCH = i86pc-solaris-64int
-$(SPARC_BLD)PERL_ARCH = sun4-solaris-64int
 
 PERLDIR = $(ADJUNCT_PROTO)/usr/perl5/$(PERL_VERSION)
 PERLLIBDIR = $(PERLDIR)/lib/$(PERL_ARCH)
 PERLINCDIR = $(PERLLIBDIR)/CORE
+PERLLIBDIR64 = $(PERLDIR)/lib/$(PERL_ARCH64)
+PERLINCDIR64 = $(PERLLIBDIR64)/CORE
+
+PERLBINDIR = $(PERLDIR)/bin
+PERLBINDIR64 = $(PERLDIR)/bin
+$(BUILDPERL64)PERLBINDIR = $(PERLDIR)/bin/$(MACH)
+$(BUILDPERL32)PERLBINDIR64 = $(PERLDIR)/bin/$(MACH64)
 
 PERLMOD = $(MODULE).pm
 PERLEXT = $(MACH)/$(MODULE).so
+PERLEXT64 = $(MACH64)/$(MODULE).so
 
 ROOTPERLDIR = $(ROOT)/usr/perl5/$(PERL_VERSION)
 ROOTPERLLIBDIR = $(ROOTPERLDIR)/lib/$(PERL_ARCH)
 ROOTPERLMODDIR = $(ROOTPERLLIBDIR)/Sun/Solaris
 ROOTPERLEXTDIR = $(ROOTPERLLIBDIR)/auto/Sun/Solaris/$(MODULE)
+ROOTPERLLIBDIR64 = $(ROOTPERLDIR)/lib/$(PERL_ARCH64)
+ROOTPERLMODDIR64 = $(ROOTPERLLIBDIR64)/Sun/Solaris
+ROOTPERLEXTDIR64 = $(ROOTPERLLIBDIR64)/auto/Sun/Solaris/$(MODULE)
 
 ROOTPERLMOD = $(ROOTPERLMODDIR)/$(MODULE).pm
 ROOTPERLEXT = $(ROOTPERLEXTDIR)/$(MODULE).so
+ROOTPERLMOD64 = $(ROOTPERLMODDIR64)/$(MODULE).pm
+ROOTPERLEXT64 = $(ROOTPERLEXTDIR64)/$(MODULE).so
 
-C99MODE = $(C99_ENABLE)
+XSUBPP = $(PERLBINDIR)/perl $(PERLDIR)/lib/ExtUtils/xsubpp \
+	-typemap $(PERLDIR)/lib/ExtUtils/typemap
+XSUBPP64 = $(PERLBINDIR64)/perl $(PERLDIR)/lib/ExtUtils/xsubpp \
+	-typemap $(PERLDIR)/lib/ExtUtils/typemap
+
+CSTD = $(CSTD_GNU99)
+ZGUIDANCE =

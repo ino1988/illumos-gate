@@ -31,9 +31,6 @@
  * WARRANTIES OF MERCHANTIBILITY AND FITNESS FOR A PARTICULAR PURPOSE.
  */
 
-#pragma ident	"%Z%%M%	%I%	%E% SMI"
-#define RCSID	"$Id: options.c,v 1.74 2000/04/15 01:27:13 masputra Exp $"
-
 #include <ctype.h>
 #include <stdio.h>
 #include <errno.h>
@@ -65,10 +62,6 @@
 
 #if defined(ultrix) || defined(NeXT)
 char *strdup __P((char *));
-#endif
-
-#if !defined(lint) && !defined(_lint)
-static const char rcsid[] = RCSID;
 #endif
 
 /*
@@ -1315,9 +1308,10 @@ getword(f, word, newlinep, filename)
 	    /*
 	     * Store the resulting character for the escape sequence.
 	     */
-	    if (len < MAXWORDLEN-1)
+	    if (len < MAXWORDLEN) {
 		word[len] = value;
-	    ++len;
+		++len;
+	    }
 
 	    if (!got)
 		c = getc(f);
@@ -1350,9 +1344,10 @@ getword(f, word, newlinep, filename)
 	/*
 	 * An ordinary character: store it in the word and get another.
 	 */
-	if (len < MAXWORDLEN-1)
+	if (len < MAXWORDLEN) {
 	    word[len] = c;
-	++len;
+	    ++len;
+	}
 
 	c = getc(f);
     }

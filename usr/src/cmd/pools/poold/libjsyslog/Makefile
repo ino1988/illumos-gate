@@ -22,33 +22,21 @@
 # Copyright 2006 Sun Microsystems, Inc.  All rights reserved.
 # Use is subject to license terms.
 #
-# ident	"%Z%%M%	%I%	%E% SMI"
+# Copyright 2020 Peter Tribble
 #
 
 include $(SRC)/lib/Makefile.lib
 
-SUBDIRS =	$(MACH)
+SUBDIRS = $(MACH64)
 
 all :=		TARGET = all
 clean :=	TARGET = clean
 clobber :=	TARGET = clobber
 install :=	TARGET = install
-lint :=		TARGET = lint
 
-JNI_CLASSES = \
-	com.sun.solaris.service.logging.SyslogHandler
-
-JNI_GENERATED_HEADERS = \
-	jsyslog.h
-
-CLEANFILES += $(JNI_GENERATED_HEADERS)
-
-all install lint: $(JNI_GENERATED_HEADERS) .WAIT $(SUBDIRS)
+all install: $(SUBDIRS)
 
 clean clobber:		$(SUBDIRS)
-
-$(JNI_GENERATED_HEADERS): $(SRC)/cmd/pools/poold/JPool.jar
-	$(JAVAH) -classpath $? -o $@ $(JNI_CLASSES)
 
 $(SUBDIRS):	FRC
 	@cd $@; pwd; $(MAKE) $(TARGET)

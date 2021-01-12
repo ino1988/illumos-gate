@@ -345,7 +345,7 @@ sendvec_chunk64(file_t *fp, u_offset_t *fileoff, struct ksendfilevec64 *sfv,
 
 ssize32_t
 sendvec64(file_t *fp, const struct ksendfilevec64 *vec, int sfvcnt,
-	size32_t *xferred, int fildes)
+    size32_t *xferred, int fildes)
 {
 	u_offset_t		fileoff;
 	int			copy_cnt;
@@ -702,14 +702,18 @@ sendvec_chunk(file_t *fp, u_offset_t *fileoff, struct sendfilevec *sfv,
 #endif
 	mblk_t	*dmp = NULL;
 	char	*buf = NULL;
-	size_t  extra;
+	size_t  extra = 0;
 	int maxblk, wroff, tail_len;
 	struct sonode *so;
 	stdata_t *stp;
 	struct nmsghdr msg;
 
+	maxblk = 0;
+	wroff = 0;
 	fflag = fp->f_flag;
 	vp = fp->f_vnode;
+	so = NULL;
+	stp = NULL;
 
 	if (vp->v_type == VSOCK) {
 		so = VTOSO(vp);
@@ -953,12 +957,26 @@ sendvec_chunk(file_t *fp, u_offset_t *fileoff, struct sendfilevec *sfv,
 					if (socket_setsockopt(VTOSO(vp),
 					    SOL_SOCKET, SO_SND_COPYAVOID,
 					    &on, sizeof (on), CRED()) == 0)
-					segmapit = 1;
+						segmapit = 1;
 				}
 			}
 
 			if (segmapit) {
+				struct vattr va;
 				boolean_t nowait;
+
+				va.va_mask = AT_SIZE;
+				error = VOP_GETATTR(readvp, &va, 0, kcred,
+				    NULL);
+				if (error != 0 || sfv_off >= va.va_size) {
+					VOP_RWUNLOCK(readvp, V_WRITELOCK_FALSE,
+					    NULL);
+					releasef(sfv->sfv_fd);
+					return (error);
+				}
+				/* Read as much as possible. */
+				if (sfv_off + sfv_len > va.va_size)
+					sfv_len = va.va_size - sfv_off;
 
 				nowait = (sfv->sfv_flag & SFV_NOWAIT) != 0;
 				error = snf_segmap(fp, readvp, sfv_off,
@@ -1123,7 +1141,7 @@ sendfilev(int opcode, int fildes, const struct sendfilevec *vec, int sfvcnt,
 	int first_vector_error = 0;
 	file_t *fp;
 	struct vnode *vp;
-	struct sonode *so;
+	struct sonode *so = NULL;
 	u_offset_t fileoff;
 	int copy_cnt;
 	const struct sendfilevec *copy_vec;
@@ -1316,12 +1334,13 @@ sendfilev(int opcode, int fildes, const struct sendfilevec *vec, int sfvcnt,
 
 
 #ifdef _SYSCALL32_IMPL
-	if (get_udatamodel() == DATAMODEL_ILP32)
-		copy_vec = (const struct sendfilevec *)((char *)copy_vec +
-		    (copy_cnt * sizeof (ksendfilevec32_t)));
-	else
+		if (get_udatamodel() == DATAMODEL_ILP32) {
+			copy_vec = (const struct sendfilevec *)
+			    ((char *)copy_vec +
+			    (copy_cnt * sizeof (ksendfilevec32_t)));
+		} else
 #endif
-		copy_vec += copy_cnt;
+			copy_vec += copy_cnt;
 		sfvcnt -= copy_cnt;
 
 	/* Process all vector members up to first error */

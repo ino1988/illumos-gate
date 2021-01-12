@@ -20,7 +20,7 @@
  * CDDL HEADER END
  */
 /*	Copyright (c) 1984, 1986, 1987, 1988, 1989 AT&T	*/
-/*	  All Rights Reserved  	*/
+/*	  All Rights Reserved	*/
 
 
 /*
@@ -58,6 +58,12 @@ extern "C" {
 #define	MS_SYSSPACE	0x0008	/* Mounta already in kernel space */
 #define	MS_NOSPLICE	0x1000	/* Don't splice fs instance into name space */
 #define	MS_NOCHECK	0x2000	/* Clustering: suppress mount busy checks */
+/*
+ * MS_CRYPT indicates that encryption keys should be loaded if they are not
+ * already available. This is not defined in glibc, but it is never seen by
+ * the kernel so it will not cause any problems.
+ */
+#define	MS_CRYPT	0x4000
 /*
  * Mask to sift out flag bits allowable from mount(2).
  */

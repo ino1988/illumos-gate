@@ -21,6 +21,7 @@
 
 /*
  * Copyright (c) 2007, 2010, Oracle and/or its affiliates. All rights reserved.
+ * Copyright 2018 Nexenta Systems, Inc.  All rights reserved.
  */
 
 #ifndef _SMBSRV_SMB_H
@@ -30,9 +31,7 @@
 /*
  * SMB definitions and interfaces, mostly defined in the SMB and CIFS specs.
  */
-#ifdef _KERNEL
 #include <sys/types.h>
-#endif
 #include <smbsrv/string.h>
 #include <smbsrv/msgbuf.h>
 
@@ -40,7 +39,7 @@
 #include <smb/nterror.h>
 #include <smb/lmerr.h>
 #include <smb/doserror.h>
-#include <smbsrv/ntaccess.h>
+#include <smb/ntaccess.h>
 
 /*
  * Macintosh Extensions for CIFS
@@ -127,6 +126,7 @@ typedef struct smb_hdrbuf {
  */
 
 #define	SMB_PROTOCOL_MAGIC	0x424d53ff
+#define	SMB2_PROTOCOL_MAGIC	0x424d53fe
 
 /*
  * Time and date encoding (CIFS Section 3.6). The date is encoded such
@@ -202,7 +202,26 @@ typedef uint32_t smb_utime_t;
 #define	NT_CREATE_FLAG_REQUEST_OPLOCK		0x02
 #define	NT_CREATE_FLAG_REQUEST_OPBATCH		0x04
 #define	NT_CREATE_FLAG_OPEN_TARGET_DIR		0x08
+#define	NT_CREATE_FLAG_EXTENDED_RESPONSE	0x10
 
+/*
+ * The option flags valid in the SMB nt_create_andx call are a subset of
+ * those defined in ntifs.h (ditto SMB nt_transact_create)
+ */
+#define	SMB_NTCREATE_VALID_OPTIONS (FILE_VALID_OPTION_FLAGS & ~( \
+	FILE_SYNCHRONOUS_IO_ALERT | FILE_SYNCHRONOUS_IO_NONALERT |\
+	FILE_RESERVE_OPFILTER))
+
+/*
+ * Oplocks levels as expressed in the SMB procotol, i.e.
+ * in nt_create_andx and nt_transact_create responses.
+ * The FS-level oplock interface flags are in ntifs.h
+ * (See OPLOCK_LEVEL_...)
+ */
+#define	SMB_OPLOCK_NONE		0
+#define	SMB_OPLOCK_EXCLUSIVE	1
+#define	SMB_OPLOCK_BATCH	2
+#define	SMB_OPLOCK_LEVEL_II	3
 
 /*
  * Define the filter flags for NtNotifyChangeDirectoryFile
@@ -234,7 +253,7 @@ typedef uint32_t smb_utime_t;
 #define	FILE_ACTION_ADDED_STREAM	0x00000006
 #define	FILE_ACTION_REMOVED_STREAM	0x00000007
 #define	FILE_ACTION_MODIFIED_STREAM	0x00000008
-
+/* See also: FILE_ACTION_SUBDIR_CHANGED etc. */
 
 /* Lock type flags */
 #define	LOCKING_ANDX_NORMAL_LOCK	0x00
@@ -402,6 +421,25 @@ typedef uint32_t smb_utime_t;
 #define	LANMAN2_1		 9  /* OS/2 LANMAN2.1 */
 #define	Windows_for_Workgroups_3_1a 10 /* Windows for Workgroups Version 1.0 */
 #define	NT_LM_0_12		11  /* The SMB protocol designed for NT */
+#define	DIALECT_SMB2002		12  /* SMB 2.002 (switch to SMB2) */
+#define	DIALECT_SMB2XXX		13  /* SMB 2.??? (switch to SMB2) */
+
+/*
+ * SMB_TREE_CONNECT_ANDX  request flags
+ *
+ * The tree specified by TID in the SMB header
+ * should be disconnected - disconnect errors
+ * should be ignored.
+ */
+#define	SMB_TCONX_DISCONECT_TID		0x0001
+/*
+ * Client request for signing key protection.
+ */
+#define	SMB_TCONX_EXTENDED_SIGNATURES	0x0004
+/*
+ * Client request for extended information.
+ */
+#define	SMB_TCONX_EXTENDED_RESPONSE	0x0008
 
 /*
  * SMB_TREE_CONNECT_ANDX OptionalSupport flags
@@ -624,11 +662,9 @@ typedef uint32_t smb_utime_t;
  *        3 - The file existed and was truncated
  */
 
-#define	SMB_OACT_LOCK			0x8000
 #define	SMB_OACT_OPENED			0x01
 #define	SMB_OACT_CREATED		0x02
 #define	SMB_OACT_TRUNCATED		0x03
-
 #define	SMB_OACT_OPLOCK			0x8000
 
 #define	SMB_FTYPE_DISK			0
@@ -778,20 +814,12 @@ typedef uint32_t smb_utime_t;
  * The following bits may be set in the SecurityMode field of the
  * SMB_COM_NEGOTIATE response.
  *
- * Notes:
- * NEGOTIATE_SECURITY_SHARE_LEVEL is a montana2 invention.
- *
- * The NTDDK definitions are:
- * #define	NEGOTIATE_USER_SECURITY			    0x01
- * #define	NEGOTIATE_ENCRYPT_PASSWORDS		    0x02
- * #define	NEGOTIATE_SECURITY_SIGNATURES_ENABLED	    0x04
- * #define	NEGOTIATE_SECURITY_SIGNATURES_REQUIRED	    0x08
+ * Note: Same as the NTDDK definitions.
  */
-#define	NEGOTIATE_SECURITY_SHARE_LEVEL		    0x00
-#define	NEGOTIATE_SECURITY_USER_LEVEL		    0x01
-#define	NEGOTIATE_SECURITY_CHALLENGE_RESPONSE	    0x02
-#define	NEGOTIATE_SECURITY_SIGNATURES_ENABLED	    0x04
-#define	NEGOTIATE_SECURITY_SIGNATURES_REQUIRED	    0x08
+#define	NEGOTIATE_USER_SECURITY				0x01
+#define	NEGOTIATE_ENCRYPT_PASSWORDS			0x02
+#define	NEGOTIATE_SECURITY_SIGNATURES_ENABLED		0x04
+#define	NEGOTIATE_SECURITY_SIGNATURES_REQUIRED		0x08
 
 
 /*
@@ -930,6 +958,20 @@ typedef uint32_t smb_utime_t;
 #define	FILE_REMOTE_DEVICE		0x00000010
 #define	FILE_DEVICE_IS_MOUNTED		0x00000020
 #define	FILE_VIRTUAL_VOLUME		0x00000040
+
+/*
+ * File System Control Flags for smb_com_trans2_query|set_fs_information
+ * level SMB_FILE_FS_CONTROL_INFORMATION
+ */
+#define	FILE_VC_QUOTA_TRACK		0x00000001
+#define	FILE_VC_QUOTA_ENFORCE		0x00000002
+#define	FILE_VC_CONTENT_INDEX_DISABLED	0x00000008
+#define	FILE_VC_LOG_QUOTA_THRESHOLD	0x00000010
+#define	FILE_VC_LOG_QUOTA_LIMIT		0x00000020
+#define	FILE_VC_LOG_VOLUME_THRESHOLD	0x00000040
+#define	FILE_VC_LOG_VOLUME_LIMIT	0x00000080
+#define	FILE_VC_QUOTAS_INCOMPLETE	0x00000100
+#define	FILE_VC_QUOTAS_REBUILDING	0x00000200
 
 /*
  * CREATE_ANDX ShareAccess Flags

@@ -21,7 +21,9 @@
 
 /*
  * Copyright (c) 2008, 2010, Oracle and/or its affiliates. All rights reserved.
- * Copyright (c) 2014, Joyent, Inc.  All rights reserved.
+ * Copyright 2019 Joyent, Inc.
+ * Copyright 2017 RackTop Systems.
+ * Copyright 2020 OmniOS Community Edition (OmniOSce) Association.
  */
 
 /*
@@ -113,6 +115,7 @@
 #include <sys/stream.h>
 #include <sys/strsun.h>
 #include <sys/strsubr.h>
+#include <sys/pattr.h>
 #include <sys/dlpi.h>
 #include <sys/modhash.h>
 #include <sys/mac_impl.h>
@@ -599,21 +602,28 @@ mac_client_link_state(mac_client_impl_t *mcip)
  * Return the statistics of a MAC client. These statistics are different
  * then the statistics of the underlying MAC which are returned by
  * mac_stat_get().
+ *
+ * Note that for things based on the tx and rx stats, mac will end up clobbering
+ * those stats when the underlying set of rings in the srs changes. As such, we
+ * need to source not only the current set, but also the historical set when
+ * returning to the client, lest our counters appear to go backwards.
  */
 uint64_t
 mac_client_stat_get(mac_client_handle_t mch, uint_t stat)
 {
-	mac_client_impl_t 	*mcip = (mac_client_impl_t *)mch;
-	mac_impl_t 		*mip = mcip->mci_mip;
-	flow_entry_t 		*flent = mcip->mci_flent;
-	mac_soft_ring_set_t 	*mac_srs;
-	mac_rx_stats_t		*mac_rx_stat;
-	mac_tx_stats_t		*mac_tx_stat;
+	mac_client_impl_t	*mcip = (mac_client_impl_t *)mch;
+	mac_impl_t		*mip = mcip->mci_mip;
+	flow_entry_t		*flent = mcip->mci_flent;
+	mac_soft_ring_set_t	*mac_srs;
+	mac_rx_stats_t		*mac_rx_stat, *old_rx_stat;
+	mac_tx_stats_t		*mac_tx_stat, *old_tx_stat;
 	int i;
 	uint64_t val = 0;
 
 	mac_srs = (mac_soft_ring_set_t *)(flent->fe_tx_srs);
 	mac_tx_stat = &mac_srs->srs_tx.st_stat;
+	old_rx_stat = &mcip->mci_misc_stat.mms_defunctrxlanestats;
+	old_tx_stat = &mcip->mci_misc_stat.mms_defuncttxlanestats;
 
 	switch (stat) {
 	case MAC_STAT_LINK_STATE:
@@ -645,12 +655,15 @@ mac_client_stat_get(mac_client_handle_t mch, uint_t stat)
 		break;
 	case MAC_STAT_OBYTES:
 		val = mac_tx_stat->mts_obytes;
+		val += old_tx_stat->mts_obytes;
 		break;
 	case MAC_STAT_OPACKETS:
 		val = mac_tx_stat->mts_opackets;
+		val += old_tx_stat->mts_opackets;
 		break;
 	case MAC_STAT_OERRORS:
 		val = mac_tx_stat->mts_oerrors;
+		val += old_tx_stat->mts_oerrors;
 		break;
 	case MAC_STAT_IPACKETS:
 		for (i = 0; i < flent->fe_rx_srs_cnt; i++) {
@@ -659,6 +672,8 @@ mac_client_stat_get(mac_client_handle_t mch, uint_t stat)
 			val += mac_rx_stat->mrs_intrcnt +
 			    mac_rx_stat->mrs_pollcnt + mac_rx_stat->mrs_lclcnt;
 		}
+		val += old_rx_stat->mrs_intrcnt + old_rx_stat->mrs_pollcnt +
+		    old_rx_stat->mrs_lclcnt;
 		break;
 	case MAC_STAT_RBYTES:
 		for (i = 0; i < flent->fe_rx_srs_cnt; i++) {
@@ -668,6 +683,8 @@ mac_client_stat_get(mac_client_handle_t mch, uint_t stat)
 			    mac_rx_stat->mrs_pollbytes +
 			    mac_rx_stat->mrs_lclbytes;
 		}
+		val += old_rx_stat->mrs_intrbytes + old_rx_stat->mrs_pollbytes +
+		    old_rx_stat->mrs_lclbytes;
 		break;
 	case MAC_STAT_IERRORS:
 		for (i = 0; i < flent->fe_rx_srs_cnt; i++) {
@@ -675,6 +692,7 @@ mac_client_stat_get(mac_client_handle_t mch, uint_t stat)
 			mac_rx_stat = &mac_srs->srs_rx.sr_stat;
 			val += mac_rx_stat->mrs_ierrors;
 		}
+		val += old_rx_stat->mrs_ierrors;
 		break;
 	default:
 		val = mac_driver_stat_default(mip, stat);
@@ -843,15 +861,18 @@ mac_unicast_update_client_flow(mac_client_impl_t *mcip)
 	mac_flow_set_desc(flent, &flow_desc);
 
 	/*
-	 * The v6 local addr (used by mac protection) needs to be
+	 * The v6 local and SLAAC addrs (used by mac protection) need to be
 	 * regenerated because our mac address has changed.
 	 */
-	mac_protect_update_v6_local_addr(mcip);
+	mac_protect_update_mac_token(mcip);
 
 	/*
-	 * A MAC client could have one MAC address but multiple
-	 * VLANs. In that case update the flow entries corresponding
-	 * to all VLANs of the MAC client.
+	 * When there are multiple VLANs sharing the same MAC address,
+	 * each gets its own MAC client, except when running on sun4v
+	 * vsw. In that case the mci_flent_list is used to place
+	 * multiple VLAN flows on one MAC client. If we ever get rid
+	 * of vsw then this code can go, but until then we need to
+	 * update all flow entries.
 	 */
 	for (flent = mcip->mci_flent_list; flent != NULL;
 	    flent = flent->fe_client_next) {
@@ -1009,7 +1030,7 @@ mac_unicast_primary_set(mac_handle_t mh, const uint8_t *addr)
 		return (0);
 	}
 
-	if (mac_find_macaddr(mip, (uint8_t *)addr) != 0) {
+	if (mac_find_macaddr(mip, (uint8_t *)addr) != NULL) {
 		i_mac_perim_exit(mip);
 		return (EBUSY);
 	}
@@ -1024,9 +1045,9 @@ mac_unicast_primary_set(mac_handle_t mh, const uint8_t *addr)
 		mac_capab_aggr_t aggr_cap;
 
 		/*
-		 * If the mac is an aggregation, other than the unicast
+		 * If the MAC is an aggregation, other than the unicast
 		 * addresses programming, aggr must be informed about this
-		 * primary unicst address change to change its mac address
+		 * primary unicst address change to change its MAC address
 		 * policy to be user-specified.
 		 */
 		ASSERT(map->ma_type == MAC_ADDRESS_TYPE_UNICAST_CLASSIFIED);
@@ -1267,7 +1288,7 @@ mac_addr_random(mac_client_handle_t mch, uint_t prefix_len,
 		    prefix_len, addr_len - prefix_len);
 	}
 
-	*diag = 0;
+	*diag = MAC_DIAG_NONE;
 	return (0);
 }
 
@@ -1337,13 +1358,14 @@ mac_client_open(mac_handle_t mh, mac_client_handle_t *mchp, char *name,
 
 	mcip->mci_mip = mip;
 	mcip->mci_upper_mip = NULL;
-	mcip->mci_rx_fn = mac_pkt_drop;
+	mcip->mci_rx_fn = mac_rx_def;
 	mcip->mci_rx_arg = NULL;
 	mcip->mci_rx_p_fn = NULL;
 	mcip->mci_rx_p_arg = NULL;
 	mcip->mci_p_unicast_list = NULL;
 	mcip->mci_direct_rx_fn = NULL;
 	mcip->mci_direct_rx_arg = NULL;
+	mcip->mci_vidcache = MCIP_VIDCACHE_INVALID;
 
 	mcip->mci_unicast_list = NULL;
 
@@ -1357,7 +1379,7 @@ mac_client_open(mac_handle_t mh, mac_client_handle_t *mchp, char *name,
 		mcip->mci_state_flags |= MCIS_IS_AGGR_PORT;
 
 	if (mip->mi_state_flags & MIS_IS_AGGR)
-		mcip->mci_state_flags |= MCIS_IS_AGGR;
+		mcip->mci_state_flags |= MCIS_IS_AGGR_CLIENT;
 
 	if ((flags & MAC_OPEN_FLAGS_USE_DATALINK_NAME) != 0) {
 		datalink_id_t	linkid;
@@ -1416,6 +1438,7 @@ mac_client_open(mac_handle_t mh, mac_client_handle_t *mchp, char *name,
 	mcip->mci_flent = flent;
 	FLOW_MARK(flent, FE_MC_NO_DATAPATH);
 	flent->fe_mcip = mcip;
+
 	/*
 	 * Place initial creation reference on the flow. This reference
 	 * is released in the corresponding delete action viz.
@@ -1430,7 +1453,7 @@ mac_client_open(mac_handle_t mh, mac_client_handle_t *mchp, char *name,
 	 */
 	mac_client_add(mcip);
 
-	mcip->mci_share = NULL;
+	mcip->mci_share = 0;
 	if (share_desired)
 		i_mac_share_alloc(mcip);
 
@@ -1522,7 +1545,8 @@ mac_client_close(mac_client_handle_t mch, uint16_t flags)
 }
 
 /*
- * Set the rx bypass receive callback.
+ * Set the Rx bypass receive callback and return B_TRUE. Return
+ * B_FALSE if it's not possible to enable bypass.
  */
 boolean_t
 mac_rx_bypass_set(mac_client_handle_t mch, mac_direct_rx_t rx_fn, void *arg1)
@@ -1533,11 +1557,11 @@ mac_rx_bypass_set(mac_client_handle_t mch, mac_direct_rx_t rx_fn, void *arg1)
 	ASSERT(MAC_PERIM_HELD((mac_handle_t)mip));
 
 	/*
-	 * If the mac_client is a VLAN, we should not do DLS bypass and
-	 * instead let the packets come up via mac_rx_deliver so the vlan
-	 * header can be stripped.
+	 * If the client has more than one VLAN then process packets
+	 * through DLS. This should happen only when sun4v vsw is on
+	 * the scene.
 	 */
-	if (mcip->mci_nvids > 0)
+	if (mcip->mci_nvids > 1)
 		return (B_FALSE);
 
 	/*
@@ -1591,8 +1615,8 @@ mac_rx_set(mac_client_handle_t mch, mac_rx_t rx_fn, void *arg)
 	i_mac_perim_exit(mip);
 
 	/*
-	 * If we're changing the rx function on the primary mac of a vnic,
-	 * make sure any secondary macs on the vnic are updated as well.
+	 * If we're changing the Rx function on the primary MAC of a VNIC,
+	 * make sure any secondary addresses on the VNIC are updated as well.
 	 */
 	if (umip != NULL) {
 		ASSERT((umip->mi_state_flags & MIS_IS_VNIC) != 0);
@@ -1606,7 +1630,33 @@ mac_rx_set(mac_client_handle_t mch, mac_rx_t rx_fn, void *arg)
 void
 mac_rx_clear(mac_client_handle_t mch)
 {
-	mac_rx_set(mch, mac_pkt_drop, NULL);
+	mac_rx_set(mch, mac_rx_def, NULL);
+}
+
+void
+mac_rx_barrier(mac_client_handle_t mch)
+{
+	mac_client_impl_t *mcip = (mac_client_impl_t *)mch;
+	mac_impl_t *mip = mcip->mci_mip;
+
+	i_mac_perim_enter(mip);
+
+	/* If a RX callback is set, quiesce and restart that datapath */
+	if (mcip->mci_rx_fn != mac_rx_def) {
+		mac_rx_client_quiesce(mch);
+		mac_rx_client_restart(mch);
+	}
+
+	/* If any promisc callbacks are registered, perform a barrier there */
+	if (mcip->mci_promisc_list != NULL || mip->mi_promisc_list != NULL) {
+		mac_cb_info_t *mcbi =  &mip->mi_promisc_cb_info;
+
+		mutex_enter(mcbi->mcbi_lockp);
+		mac_callback_barrier(mcbi);
+		mutex_exit(mcbi->mcbi_lockp);
+	}
+
+	i_mac_perim_exit(mip);
 }
 
 void
@@ -1685,7 +1735,7 @@ mac_client_set_rings_prop(mac_client_impl_t *mcip, mac_resource_props_t *mrp,
 	uint_t			ringcnt;
 	boolean_t		unspec;
 
-	if (mcip->mci_share != NULL)
+	if (mcip->mci_share != 0)
 		return (EINVAL);
 
 	if (mrp->mrp_mask & MRP_RX_RINGS) {
@@ -1770,7 +1820,15 @@ mac_client_set_rings_prop(mac_client_impl_t *mcip, mac_resource_props_t *mrp,
 				}
 			/* Let check if we can give this an excl group */
 			} else if (group == defgrp) {
-				ngrp = 	mac_reserve_rx_group(mcip, mac_addr,
+				/*
+				 * If multiple clients share an
+				 * address then they must stay on the
+				 * default group.
+				 */
+				if (mac_check_macaddr_shared(mcip->mci_unicast))
+					return (0);
+
+				ngrp = mac_reserve_rx_group(mcip, mac_addr,
 				    B_TRUE);
 				/* Couldn't give it a group, that's fine */
 				if (ngrp == NULL)
@@ -1792,7 +1850,17 @@ mac_client_set_rings_prop(mac_client_impl_t *mcip, mac_resource_props_t *mrp,
 		}
 
 		if (group == defgrp && ((mrp->mrp_nrxrings > 0) || unspec)) {
-			ngrp = 	mac_reserve_rx_group(mcip, mac_addr, B_TRUE);
+			/*
+			 * We are requesting Rx rings. Try to reserve
+			 * a non-default group.
+			 *
+			 * If multiple clients share an address then
+			 * they must stay on the default group.
+			 */
+			if (mac_check_macaddr_shared(mcip->mci_unicast))
+				return (EINVAL);
+
+			ngrp = mac_reserve_rx_group(mcip, mac_addr, B_TRUE);
 			if (ngrp == NULL)
 				return (ENOSPC);
 
@@ -1935,7 +2003,7 @@ mac_client_set_rings_prop(mac_client_impl_t *mcip, mac_resource_props_t *mrp,
 
 		/* Switch to H/W */
 		if (group == defgrp && ((mrp->mrp_ntxrings > 0) || unspec)) {
-			ngrp = 	mac_reserve_tx_group(mcip, B_TRUE);
+			ngrp = mac_reserve_tx_group(mcip, B_TRUE);
 			if (ngrp == NULL)
 				return (ENOSPC);
 			mac_tx_client_quiesce((mac_client_handle_t)mcip);
@@ -2000,7 +2068,7 @@ mac_client_set_rings_prop(mac_client_impl_t *mcip, mac_resource_props_t *mrp,
 static int
 mac_resource_ctl_set(mac_client_handle_t mch, mac_resource_props_t *mrp)
 {
-	mac_client_impl_t 	*mcip = (mac_client_impl_t *)mch;
+	mac_client_impl_t	*mcip = (mac_client_impl_t *)mch;
 	mac_impl_t		*mip = (mac_impl_t *)mcip->mci_mip;
 	mac_impl_t		*umip = mcip->mci_upper_mip;
 	int			err = 0;
@@ -2149,10 +2217,10 @@ mac_unicast_flow_create(mac_client_impl_t *mcip, uint8_t *mac_addr,
 		flent_flags = FLOW_VNIC_MAC;
 
 	/*
-	 * For the first flow we use the mac client's name - mci_name, for
-	 * subsequent ones we just create a name with the vid. This is
+	 * For the first flow we use the MAC client's name - mci_name, for
+	 * subsequent ones we just create a name with the VID. This is
 	 * so that we can add these flows to the same flow table. This is
-	 * fine as the flow name (except for the one with the mac client's
+	 * fine as the flow name (except for the one with the MAC client's
 	 * name) is not visible. When the first flow is removed, we just replace
 	 * its fdesc with another from the list, so we will still retain the
 	 * flent with the MAC client's flow name.
@@ -2310,6 +2378,7 @@ mac_client_datapath_setup(mac_client_impl_t *mcip, uint16_t vid,
 		 * The unicast MAC address must have been added successfully.
 		 */
 		ASSERT(mcip->mci_unicast != NULL);
+
 		/*
 		 * Push down the sub-flows that were defined on this link
 		 * hitherto. The flows are added to the active flow table
@@ -2321,15 +2390,23 @@ mac_client_datapath_setup(mac_client_impl_t *mcip, uint16_t vid,
 
 		ASSERT(!no_unicast);
 		/*
-		 * A unicast flow already exists for that MAC client,
-		 * this flow must be the same mac address but with
-		 * different VID. It has been checked by mac_addr_in_use().
+		 * A unicast flow already exists for that MAC client
+		 * so this flow must be the same MAC address but with
+		 * a different VID. It has been checked by
+		 * mac_addr_in_use().
 		 *
-		 * We will use the SRS etc. from the mci_flent. Note that
-		 * We don't need to create kstat for this as except for
-		 * the fdesc, everything will be used from in the 1st flent.
+		 * We will use the SRS etc. from the initial
+		 * mci_flent. We don't need to create a kstat for
+		 * this, as except for the fdesc, everything will be
+		 * used from the first flent.
+		 *
+		 * The only time we should see multiple flents on the
+		 * same MAC client is on the sun4v vsw. If we removed
+		 * that code we should be able to remove the entire
+		 * notion of multiple flents on a MAC client (this
+		 * doesn't affect sub/user flows because they have
+		 * their own list unrelated to mci_flent_list).
 		 */
-
 		if (bcmp(mac_addr, map->ma_addr, map->ma_len) != 0) {
 			err = EINVAL;
 			goto bail;
@@ -2389,7 +2466,17 @@ done_setup:
 	if (flent->fe_rx_ring_group != NULL)
 		mac_rx_group_unmark(flent->fe_rx_ring_group, MR_INCIPIENT);
 	FLOW_UNMARK(flent, FE_INCIPIENT);
-	FLOW_UNMARK(flent, FE_MC_NO_DATAPATH);
+
+	/*
+	 * If this is an aggr port client, don't enable the flow's
+	 * datapath at this stage. Otherwise, bcast traffic could
+	 * arrive while the aggr port is in the process of
+	 * initializing. Instead, the flow's datapath is started later
+	 * when mac_client_set_flow_cb() is called.
+	 */
+	if ((mcip->mci_state_flags & MCIS_IS_AGGR_PORT) == 0)
+		FLOW_UNMARK(flent, FE_MC_NO_DATAPATH);
+
 	mac_tx_client_unblock(mcip);
 	return (0);
 bail:
@@ -2458,8 +2545,14 @@ i_mac_unicast_add(mac_client_handle_t mch, uint8_t *mac_addr, uint16_t flags,
 	boolean_t		is_vnic_primary =
 	    (flags & MAC_UNICAST_VNIC_PRIMARY);
 
-	/* when VID is non-zero, the underlying MAC can not be VNIC */
-	ASSERT(!((mip->mi_state_flags & MIS_IS_VNIC) && (vid != 0)));
+	/*
+	 * When the VID is non-zero the underlying MAC cannot be a
+	 * VNIC. I.e., dladm create-vlan cannot take a VNIC as
+	 * argument, only the primary MAC client.
+	 */
+	ASSERT(!((mip->mi_state_flags & MIS_IS_VNIC) && (vid != VLAN_ID_NONE)));
+
+	*diag = MAC_DIAG_NONE;
 
 	/*
 	 * Can't unicast add if the client asked only for minimal datapath
@@ -2472,18 +2565,19 @@ i_mac_unicast_add(mac_client_handle_t mch, uint8_t *mac_addr, uint16_t flags,
 	 * Check for an attempted use of the current Port VLAN ID, if enabled.
 	 * No client may use it.
 	 */
-	if (mip->mi_pvid != 0 && vid == mip->mi_pvid)
+	if (mip->mi_pvid != VLAN_ID_NONE && vid == mip->mi_pvid)
 		return (EBUSY);
 
 	/*
 	 * Check whether it's the primary client and flag it.
 	 */
-	if (!(mcip->mci_state_flags & MCIS_IS_VNIC) && is_primary && vid == 0)
+	if (!(mcip->mci_state_flags & MCIS_IS_VNIC) && is_primary &&
+	    vid == VLAN_ID_NONE)
 		mcip->mci_flags |= MAC_CLIENT_FLAGS_PRIMARY;
 
 	/*
 	 * is_vnic_primary is true when we come here as a VLAN VNIC
-	 * which uses the primary mac client's address but with a non-zero
+	 * which uses the primary MAC client's address but with a non-zero
 	 * VID. In this case the MAC address is not specified by an upper
 	 * MAC client.
 	 */
@@ -2535,7 +2629,7 @@ i_mac_unicast_add(mac_client_handle_t mch, uint8_t *mac_addr, uint16_t flags,
 		/*
 		 * Create a handle for vid 0.
 		 */
-		ASSERT(vid == 0);
+		ASSERT(vid == VLAN_ID_NONE);
 		muip = kmem_zalloc(sizeof (mac_unicast_impl_t), KM_SLEEP);
 		muip->mui_vid = vid;
 		*mah = (mac_unicast_handle_t)muip;
@@ -2555,7 +2649,9 @@ i_mac_unicast_add(mac_client_handle_t mch, uint8_t *mac_addr, uint16_t flags,
 	}
 
 	/*
-	 * If this is a VNIC/VLAN, disable softmac fast-path.
+	 * If this is a VNIC/VLAN, disable softmac fast-path. This is
+	 * only relevant to legacy devices which use softmac to
+	 * interface with GLDv3.
 	 */
 	if (mcip->mci_state_flags & MCIS_IS_VNIC) {
 		err = mac_fastpath_disable((mac_handle_t)mip);
@@ -2603,9 +2699,11 @@ i_mac_unicast_add(mac_client_handle_t mch, uint8_t *mac_addr, uint16_t flags,
 		(void) mac_client_set_resources(mch, mrp);
 	} else if (mcip->mci_state_flags & MCIS_IS_VNIC) {
 		/*
-		 * This is a primary VLAN client, we don't support
-		 * specifying rings property for this as it inherits the
-		 * rings property from its MAC.
+		 * This is a VLAN client sharing the address of the
+		 * primary MAC client; i.e., one created via dladm
+		 * create-vlan. We don't support specifying ring
+		 * properties for this type of client as it inherits
+		 * these from the primary MAC client.
 		 */
 		if (is_vnic_primary) {
 			mac_resource_props_t	*vmrp;
@@ -2664,7 +2762,7 @@ i_mac_unicast_add(mac_client_handle_t mch, uint8_t *mac_addr, uint16_t flags,
 
 	/*
 	 * Set the flags here so that if this is a passive client, we
-	 * can return  and set it when we call mac_client_datapath_setup
+	 * can return and set it when we call mac_client_datapath_setup
 	 * when this becomes the active client. If we defer to using these
 	 * flags to mac_client_datapath_setup, then for a passive client,
 	 * we'd have to store the flags somewhere (probably fe_flags)
@@ -2715,10 +2813,10 @@ i_mac_unicast_add(mac_client_handle_t mch, uint8_t *mac_addr, uint16_t flags,
 		 * for MAC addresses. I.e. all requests from the clients
 		 * must have the MAC_UNICAST_HW flag set or clear.
 		 */
-		if ((mcip->mci_state_flags & MCIS_UNICAST_HW) != 0 &&
-		    !is_unicast_hw ||
-		    (mcip->mci_state_flags & MCIS_UNICAST_HW) == 0 &&
-		    is_unicast_hw) {
+		if (((mcip->mci_state_flags & MCIS_UNICAST_HW) != 0 &&
+		    !is_unicast_hw) ||
+		    ((mcip->mci_state_flags & MCIS_UNICAST_HW) == 0 &&
+		    is_unicast_hw)) {
 			err = EINVAL;
 			goto bail_out;
 		}
@@ -2901,7 +2999,7 @@ mac_client_datapath_teardown(mac_client_handle_t mch, mac_unicast_impl_t *muip,
 	mac_misc_stat_delete(flent);
 
 	/* Initialize the receiver function to a safe routine */
-	flent->fe_cb_fn = (flow_fn_t)mac_pkt_drop;
+	flent->fe_cb_fn = (flow_fn_t)mac_rx_def;
 	flent->fe_cb_arg1 = NULL;
 	flent->fe_cb_arg2 = NULL;
 
@@ -2940,7 +3038,7 @@ mac_client_datapath_teardown(mac_client_handle_t mch, mac_unicast_impl_t *muip,
 	if (muip != NULL)
 		kmem_free(muip, sizeof (mac_unicast_impl_t));
 	mac_protect_cancel_timer(mcip);
-	mac_protect_flush_dhcp(mcip);
+	mac_protect_flush_dynamic(mcip);
 
 	bzero(&mcip->mci_misc_stat, sizeof (mcip->mci_misc_stat));
 	/*
@@ -2967,14 +3065,14 @@ mac_unicast_remove(mac_client_handle_t mch, mac_unicast_handle_t mah)
 	i_mac_perim_enter(mip);
 	if (mcip->mci_flags & MAC_CLIENT_FLAGS_VNIC_PRIMARY) {
 		/*
-		 * Called made by the upper MAC client of a VNIC.
+		 * Call made by the upper MAC client of a VNIC.
 		 * There's nothing much to do, the unicast address will
 		 * be removed by the VNIC driver when the VNIC is deleted,
 		 * but let's ensure that all our transmit is done before
 		 * the client does a mac_client_stop lest it trigger an
 		 * assert in the driver.
 		 */
-		ASSERT(muip->mui_vid == 0);
+		ASSERT(muip->mui_vid == VLAN_ID_NONE);
 
 		mac_tx_client_flush(mcip);
 
@@ -3038,6 +3136,7 @@ mac_unicast_remove(mac_client_handle_t mch, mac_unicast_handle_t mah)
 		i_mac_perim_exit(mip);
 		return (0);
 	}
+
 	/*
 	 * Remove the VID from the list of client's VIDs.
 	 */
@@ -3064,7 +3163,7 @@ mac_unicast_remove(mac_client_handle_t mch, mac_unicast_handle_t mah)
 		 * flows.
 		 */
 		flent = mac_client_get_flow(mcip, muip);
-		ASSERT(flent != NULL);
+		VERIFY3P(flent, !=, NULL);
 
 		/*
 		 * The first one is disappearing, need to make sure
@@ -3092,6 +3191,7 @@ mac_unicast_remove(mac_client_handle_t mch, mac_unicast_handle_t mah)
 
 		FLOW_FINAL_REFRELE(flent);
 		ASSERT(!(mcip->mci_state_flags & MCIS_EXCLUSIVE));
+
 		/*
 		 * Enable fastpath if this is a VNIC or a VLAN.
 		 */
@@ -3105,7 +3205,8 @@ mac_unicast_remove(mac_client_handle_t mch, mac_unicast_handle_t mah)
 	mui_vid = muip->mui_vid;
 	mac_client_datapath_teardown(mch, muip, flent);
 
-	if ((mcip->mci_flags & MAC_CLIENT_FLAGS_PRIMARY) && mui_vid == 0) {
+	if ((mcip->mci_flags & MAC_CLIENT_FLAGS_PRIMARY) &&
+	    mui_vid == VLAN_ID_NONE) {
 		mcip->mci_flags &= ~MAC_CLIENT_FLAGS_PRIMARY;
 	} else {
 		i_mac_perim_exit(mip);
@@ -3255,7 +3356,8 @@ mac_promisc_add(mac_client_handle_t mch, mac_client_promisc_type_t type,
 	}
 
 	if ((mcip->mci_state_flags & MCIS_IS_VNIC) &&
-	    type == MAC_CLIENT_PROMISC_ALL) {
+	    type == MAC_CLIENT_PROMISC_ALL &&
+	    (mcip->mci_protect_flags & MPT_FLAG_PROMISC_FILTERED)) {
 		/*
 		 * The function is being invoked by the upper MAC client
 		 * of a VNIC. The VNIC should only see the traffic
@@ -3416,7 +3518,7 @@ mac_tx_cookie_t
 mac_tx(mac_client_handle_t mch, mblk_t *mp_chain, uintptr_t hint,
     uint16_t flag, mblk_t **ret_mp)
 {
-	mac_tx_cookie_t		cookie = NULL;
+	mac_tx_cookie_t		cookie = 0;
 	int			error;
 	mac_tx_percpu_t		*mytx;
 	mac_soft_ring_set_t	*srs;
@@ -3433,7 +3535,7 @@ mac_tx(mac_client_handle_t mch, mblk_t *mp_chain, uintptr_t hint,
 		MAC_TX_TRY_HOLD(mcip, mytx, error);
 		if (error != 0) {
 			freemsgchain(mp_chain);
-			return (NULL);
+			return (0);
 		}
 	}
 
@@ -3477,7 +3579,9 @@ mac_tx(mac_client_handle_t mch, mblk_t *mp_chain, uintptr_t hint,
 	srs_tx = &srs->srs_tx;
 	if (srs_tx->st_mode == SRS_TX_DEFAULT &&
 	    (srs->srs_state & SRS_ENQUEUED) == 0 &&
-	    mip->mi_nactiveclients == 1 && mp_chain->b_next == NULL) {
+	    mip->mi_nactiveclients == 1 &&
+	    mp_chain->b_next == NULL &&
+	    (DB_CKSUMFLAGS(mp_chain) & HW_LSO) == 0) {
 		uint64_t	obytes;
 
 		/*
@@ -3512,9 +3616,11 @@ mac_tx(mac_client_handle_t mch, mblk_t *mp_chain, uintptr_t hint,
 		obytes = (mp_chain->b_cont == NULL ? MBLKL(mp_chain) :
 		    msgdsize(mp_chain));
 
-		MAC_TX(mip, srs_tx->st_arg2, mp_chain, mcip);
+		mp_chain = mac_provider_tx(mip, srs_tx->st_arg2, mp_chain,
+		    mcip);
+
 		if (mp_chain == NULL) {
-			cookie = NULL;
+			cookie = 0;
 			SRS_TX_STAT_UPDATE(srs, opackets, 1);
 			SRS_TX_STAT_UPDATE(srs, obytes, obytes);
 		} else {
@@ -3524,7 +3630,74 @@ mac_tx(mac_client_handle_t mch, mblk_t *mp_chain, uintptr_t hint,
 			mutex_exit(&srs->srs_lock);
 		}
 	} else {
-		cookie = srs_tx->st_func(srs, mp_chain, hint, flag, ret_mp);
+		mblk_t *mp = mp_chain;
+		mblk_t *new_head = NULL;
+		mblk_t *new_tail = NULL;
+
+		/*
+		 * There are occasions where the packets arriving here
+		 * may request hardware offloads that are not
+		 * available from the underlying MAC provider. This
+		 * currently only happens when a packet is sent across
+		 * the MAC-loopback path of one MAC and then forwarded
+		 * (via IP) to another MAC that lacks one or more of
+		 * the hardware offloads provided by the first one.
+		 * However, in the future, we may choose to pretend
+		 * all MAC providers support all offloads, performing
+		 * emulation on Tx as needed.
+		 *
+		 * We iterate each mblk in-turn, emulating hardware
+		 * offloads as required. From this process, we create
+		 * a new chain. The new chain may be the same as the
+		 * original chain (no hardware emulation needed), a
+		 * collection of new mblks (hardware emulation
+		 * needed), or a mix. At this point, the chain is safe
+		 * for consumption by the underlying MAC provider and
+		 * is passed down to the SRS.
+		 */
+		while (mp != NULL) {
+			mblk_t *next = mp->b_next;
+			mblk_t *tail = NULL;
+			const uint16_t needed =
+			    (DB_CKSUMFLAGS(mp) ^ mip->mi_tx_cksum_flags) &
+			    DB_CKSUMFLAGS(mp);
+
+			mp->b_next = NULL;
+
+			if ((needed & (HCK_TX_FLAGS | HW_LSO_FLAGS)) != 0) {
+				mac_emul_t emul = 0;
+
+				if (needed & HCK_IPV4_HDRCKSUM)
+					emul |= MAC_IPCKSUM_EMUL;
+				if (needed & (HCK_PARTIALCKSUM | HCK_FULLCKSUM))
+					emul |= MAC_HWCKSUM_EMUL;
+				if (needed & HW_LSO)
+					emul = MAC_LSO_EMUL;
+
+				mac_hw_emul(&mp, &tail, NULL, emul);
+
+				if (mp == NULL) {
+					mp = next;
+					continue;
+				}
+			}
+
+			if (new_head == NULL) {
+				new_head = mp;
+			} else {
+				new_tail->b_next = mp;
+			}
+
+			new_tail = (tail == NULL) ? mp : tail;
+			mp = next;
+		}
+
+		if (new_head == NULL) {
+			cookie = 0;
+			goto done;
+		}
+
+		cookie = srs_tx->st_func(srs, new_head, hint, flag, ret_mp);
 	}
 
 done:
@@ -3584,7 +3757,7 @@ mac_tx_is_flow_blocked(mac_client_handle_t mch, mac_tx_cookie_t cookie)
 	 */
 	if (mac_srs->srs_tx.st_mode == SRS_TX_FANOUT ||
 	    mac_srs->srs_tx.st_mode == SRS_TX_AGGR) {
-		if (cookie != NULL) {
+		if (cookie != 0) {
 			sringp = (mac_soft_ring_t *)cookie;
 			mutex_enter(&sringp->s_ring_lock);
 			if (sringp->s_ring_state & S_RING_TX_HIWAT)
@@ -3925,14 +4098,15 @@ mac_client_get_effective_resources(mac_client_handle_t mch,
  * The unicast packets of MAC_CLIENT_PROMISC_FILTER callbacks are dispatched
  * after classification by mac_rx_deliver().
  */
-
 static void
 mac_promisc_dispatch_one(mac_promisc_impl_t *mpip, mblk_t *mp,
-    boolean_t loopback)
+    boolean_t loopback, boolean_t local)
 {
-	mblk_t *mp_copy, *mp_next;
+	mblk_t *mp_next;
 
 	if (!mpip->mpi_no_copy || mpip->mpi_strip_vlan_tag) {
+		mblk_t *mp_copy;
+
 		mp_copy = copymsg(mp);
 		if (mp_copy == NULL)
 			return;
@@ -3942,16 +4116,24 @@ mac_promisc_dispatch_one(mac_promisc_impl_t *mpip, mblk_t *mp,
 			if (mp_copy == NULL)
 				return;
 		}
-		mp_next = NULL;
-	} else {
-		mp_copy = mp;
-		mp_next = mp->b_next;
-	}
-	mp_copy->b_next = NULL;
 
-	mpip->mpi_fn(mpip->mpi_arg, NULL, mp_copy, loopback);
-	if (mp_copy == mp)
-		mp->b_next = mp_next;
+		/*
+		 * There is code upstack that can't deal with message
+		 * chains.
+		 */
+		for (mblk_t *tmp = mp_copy; tmp != NULL; tmp = mp_next) {
+			mp_next = tmp->b_next;
+			tmp->b_next = NULL;
+			mpip->mpi_fn(mpip->mpi_arg, NULL, tmp, loopback);
+		}
+
+		return;
+	}
+
+	mp_next = mp->b_next;
+	mp->b_next = NULL;
+	mpip->mpi_fn(mpip->mpi_arg, NULL, mp, loopback);
+	mp->b_next = mp_next;
 }
 
 /*
@@ -3993,7 +4175,7 @@ mac_is_mcast(mac_impl_t *mip, mblk_t *mp)
  */
 void
 mac_promisc_dispatch(mac_impl_t *mip, mblk_t *mp_chain,
-    mac_client_impl_t *sender)
+    mac_client_impl_t *sender, boolean_t local)
 {
 	mac_promisc_impl_t *mpip;
 	mac_cb_t *mcb;
@@ -4033,8 +4215,10 @@ mac_promisc_dispatch(mac_impl_t *mip, mblk_t *mp_chain,
 
 			if (is_sender ||
 			    mpip->mpi_type == MAC_CLIENT_PROMISC_ALL ||
-			    is_mcast)
-				mac_promisc_dispatch_one(mpip, mp, is_sender);
+			    is_mcast) {
+				mac_promisc_dispatch_one(mpip, mp, is_sender,
+				    local);
+			}
 		}
 	}
 	MAC_PROMISC_WALKER_DCR(mip);
@@ -4063,7 +4247,8 @@ mac_promisc_client_dispatch(mac_client_impl_t *mcip, mblk_t *mp_chain)
 			mpip = (mac_promisc_impl_t *)mcb->mcb_objp;
 			if (mpip->mpi_type == MAC_CLIENT_PROMISC_FILTERED &&
 			    !is_mcast) {
-				mac_promisc_dispatch_one(mpip, mp, B_FALSE);
+				mac_promisc_dispatch_one(mpip, mp, B_FALSE,
+				    B_FALSE);
 			}
 		}
 	}
@@ -4142,12 +4327,27 @@ i_mac_capab_get(mac_handle_t mh, mac_capab_t cap, void *cap_data)
 {
 	mac_impl_t *mip = (mac_impl_t *)mh;
 
-	if (mip->mi_bridge_link != NULL)
+	if (mip->mi_bridge_link != NULL) {
 		return (cap == MAC_CAPAB_NO_ZCOPY);
-	else if (mip->mi_callbacks->mc_callbacks & MC_GETCAPAB)
-		return (mip->mi_getcapab(mip->mi_driver, cap, cap_data));
-	else
+	} else if (mip->mi_callbacks->mc_callbacks & MC_GETCAPAB) {
+		boolean_t res;
+
+		res = mip->mi_getcapab(mip->mi_driver, cap, cap_data);
+		/*
+		 * Until we have suppport for TSOv6 emulation in the MAC
+		 * loopback path, do not allow the TSOv6 capability to be
+		 * advertised to consumers.
+		 */
+		if (res && cap == MAC_CAPAB_LSO) {
+			mac_capab_lso_t *cap_lso = cap_data;
+
+			cap_lso->lso_flags &= ~LSO_TX_BASIC_TCP_IPV6;
+			cap_lso->lso_basic_tcp_ipv6.lso_max = 0;
+		}
+		return (res);
+	} else {
 		return (B_FALSE);
+	}
 }
 
 /*
@@ -4162,8 +4362,9 @@ mac_capab_get(mac_handle_t mh, mac_capab_t cap, void *cap_data)
 	mac_impl_t *mip = (mac_impl_t *)mh;
 
 	/*
-	 * if mi_nactiveclients > 1, only MAC_CAPAB_LEGACY, MAC_CAPAB_HCKSUM,
-	 * MAC_CAPAB_NO_NATIVEVLAN and MAC_CAPAB_NO_ZCOPY can be advertised.
+	 * Some capabilities are restricted when there are more than one active
+	 * clients on the MAC resource.  The ones noted below are safe,
+	 * independent of that count.
 	 */
 	if (mip->mi_nactiveclients > 1) {
 		switch (cap) {
@@ -4171,6 +4372,7 @@ mac_capab_get(mac_handle_t mh, mac_capab_t cap, void *cap_data)
 			return (B_TRUE);
 		case MAC_CAPAB_LEGACY:
 		case MAC_CAPAB_HCKSUM:
+		case MAC_CAPAB_LSO:
 		case MAC_CAPAB_NO_NATIVEVLAN:
 			break;
 		default:
@@ -4588,7 +4790,7 @@ mac_set_resources(mac_handle_t mh, mac_resource_props_t *mrp)
 void
 mac_get_resources(mac_handle_t mh, mac_resource_props_t *mrp)
 {
-	mac_impl_t 		*mip = (mac_impl_t *)mh;
+	mac_impl_t		*mip = (mac_impl_t *)mh;
 	mac_client_impl_t	*mcip;
 
 	mcip = mac_primary_client_handle(mip);
@@ -4606,7 +4808,7 @@ mac_get_resources(mac_handle_t mh, mac_resource_props_t *mrp)
 void
 mac_get_effective_resources(mac_handle_t mh, mac_resource_props_t *mrp)
 {
-	mac_impl_t 		*mip = (mac_impl_t *)mh;
+	mac_impl_t		*mip = (mac_impl_t *)mh;
 	mac_client_impl_t	*mcip;
 
 	mcip = mac_primary_client_handle(mip);
@@ -4800,6 +5002,8 @@ mac_client_add_to_flow_list(mac_client_impl_t *mcip, flow_entry_t *flent)
 	 */
 	rw_enter(&mcip->mci_rw_lock, RW_WRITER);
 
+	mcip->mci_vidcache = MCIP_VIDCACHE_INVALID;
+
 	/* Add it to the head */
 	flent->fe_client_next = mcip->mci_flent_list;
 	mcip->mci_flent_list = flent;
@@ -4830,6 +5034,8 @@ mac_client_remove_flow_from_list(mac_client_impl_t *mcip, flow_entry_t *flent)
 	 * using mci_rw_lock
 	 */
 	rw_enter(&mcip->mci_rw_lock, RW_WRITER);
+	mcip->mci_vidcache = MCIP_VIDCACHE_INVALID;
+
 	while ((fe != NULL) && (fe != flent)) {
 		prev_fe = fe;
 		fe = fe->fe_client_next;
@@ -4858,6 +5064,14 @@ mac_client_check_flow_vid(mac_client_impl_t *mcip, uint16_t vid)
 {
 	flow_entry_t	*flent;
 	uint16_t	mci_vid;
+	uint32_t	cache = mcip->mci_vidcache;
+
+	/*
+	 * In hopes of not having to touch the mci_rw_lock, check to see if
+	 * this vid matches our cached result.
+	 */
+	if (MCIP_VIDCACHE_ISVALID(cache) && MCIP_VIDCACHE_VID(cache) == vid)
+		return (MCIP_VIDCACHE_BOOL(cache) ? B_TRUE : B_FALSE);
 
 	/* The mci_flent_list is protected by mci_rw_lock */
 	rw_enter(&mcip->mci_rw_lock, RW_WRITER);
@@ -4865,10 +5079,13 @@ mac_client_check_flow_vid(mac_client_impl_t *mcip, uint16_t vid)
 	    flent = flent->fe_client_next) {
 		mci_vid = i_mac_flow_vid(flent);
 		if (vid == mci_vid) {
+			mcip->mci_vidcache = MCIP_VIDCACHE_CACHE(vid, B_TRUE);
 			rw_exit(&mcip->mci_rw_lock);
 			return (B_TRUE);
 		}
 	}
+
+	mcip->mci_vidcache = MCIP_VIDCACHE_CACHE(vid, B_FALSE);
 	rw_exit(&mcip->mci_rw_lock);
 	return (B_FALSE);
 }
@@ -5520,4 +5737,24 @@ mac_client_set_rings(mac_client_handle_t mch, int rxrings, int txrings)
 		mrp->mrp_mask |= MRP_TX_RINGS;
 		mrp->mrp_ntxrings = txrings;
 	}
+}
+
+boolean_t
+mac_get_promisc_filtered(mac_client_handle_t mch)
+{
+	mac_client_impl_t	*mcip = (mac_client_impl_t *)mch;
+
+	return (mcip->mci_protect_flags & MPT_FLAG_PROMISC_FILTERED);
+}
+
+void
+mac_set_promisc_filtered(mac_client_handle_t mch, boolean_t enable)
+{
+	mac_client_impl_t	*mcip = (mac_client_impl_t *)mch;
+
+	ASSERT(MAC_PERIM_HELD((mac_handle_t)mcip->mci_mip));
+	if (enable)
+		mcip->mci_protect_flags |= MPT_FLAG_PROMISC_FILTERED;
+	else
+		mcip->mci_protect_flags &= ~MPT_FLAG_PROMISC_FILTERED;
 }

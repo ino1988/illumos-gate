@@ -203,6 +203,8 @@ nxge_intr(void *arg1, void *arg2)
 	int i, j, nldvs, nintrs = 1;
 	npi_status_t rs = NPI_SUCCESS;
 
+	VERIFY(ldvp != NULL);
+
 	/* DDI interface returns second arg as NULL (n2 niumx driver) !!! */
 	if (arg2 == NULL || (void *) ldvp->nxgep != arg2) {
 		nxgep = ldvp->nxgep;
@@ -347,7 +349,7 @@ nxge_check_xaui_xfp(p_nxge_t nxgep)
 	}
 
 	if (status != NXGE_OK) {
-		NXGE_FM_REPORT_ERROR(nxgep, portn, NULL,
+		NXGE_FM_REPORT_ERROR(nxgep, portn, 0,
 		    NXGE_FM_EREPORT_XAUI_ERR);
 		if (DDI_FM_EREPORT_CAP(nxgep->fm_capabilities)) {
 			NXGE_ERROR_MSG((nxgep, NXGE_ERR_CTL,

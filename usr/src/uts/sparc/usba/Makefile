@@ -38,9 +38,6 @@ UTSBASE	= ../..
 #
 MODULE		= usba
 OBJECTS		= $(USBA_OBJS:%=$(OBJS_DIR)/%)
-LINTS		= $(USBA_OBJS:%.o=$(LINTS_DIR)/%.ln)
-WARLOCK_OUT	= $(USBA_OBJS:%.o=%.ll)
-WARLOCK_OK	= $(MODULE).ok
 ROOTMODULE	= $(ROOT_MISC_DIR)/$(MODULE)
 
 #
@@ -48,12 +45,13 @@ ROOTMODULE	= $(ROOT_MISC_DIR)/$(MODULE)
 #
 include $(UTSBASE)/sparc/Makefile.sparc
 
-# 
-# lint pass one enforcement 
-# 
-CFLAGS += $(CCVERBOSE)
-
-CERRWARN	+= -_gcc=-Wno-uninitialized
+#
+# For now, disable these warnings; maintainers should endeavor
+# to investigate and remove these for maximum coverage.
+# Please do not carry these forward to new Makefiles.
+#
+CFLAGS		+= $(CCVERBOSE)
+CERRWARN	+= $(CNOWARN_UNINIT)
 CERRWARN	+= -_gcc=-Wno-parentheses
 CERRWARN	+= -_gcc=-Wno-switch
 CERRWARN	+= -_gcc=-Wno-unused-label
@@ -64,7 +62,6 @@ CERRWARN	+= -_gcc=-Wno-unused-variable
 #	Define targets
 #
 ALL_TARGET	= $(BINARY)
-LINT_TARGET	= $(MODULE).lint
 INSTALL_TARGET	= $(BINARY) $(ROOTMODULE)
 
 .KEEP_STATE:
@@ -73,17 +70,9 @@ all:		$(ALL_DEPS)
 
 def:		$(DEF_DEPS)
 
-clean:		$(CLEAN_DEPS); \
-                $(RM) $(WARLOCK_OUT) $(WARLOCK_OK)
+clean:		$(CLEAN_DEPS)
 
-clobber:	$(CLOBBER_DEPS); \
-                $(RM) $(WARLOCK_OUT) $(WARLOCK_OK)
-
-lint:		$(LINT_DEPS)
-
-modlintlib:	$(MODLINTLIB_DEPS)
-
-clean.lint:	$(CLEAN_LINT_DEPS)
+clobber:	$(CLOBBER_DEPS)
 
 install:	$(INSTALL_DEPS)
 
@@ -91,24 +80,3 @@ install:	$(INSTALL_DEPS)
 #	Include common targets.
 #
 include $(UTSBASE)/sparc/Makefile.targ
-
-#
-#	Defines for local commands.
-#
-WLCC		= wlcc
-TOUCH		= touch
-WARLOCK		= warlock
-
-#
-#	Warlock targets
-#
-
-USBA_FILES = $(USBA_OBJS:%.o=%.ll)
-
-warlock: $(MODULE).ok 
-
-%.ok:	$(USBA_FILES)
-	$(TOUCH) $@
-
-%.ll: $(UTSBASE)/common/io/usb/usba/%.c
-	$(WLCC) $(CPPFLAGS) -DDEBUG -o $@ $<

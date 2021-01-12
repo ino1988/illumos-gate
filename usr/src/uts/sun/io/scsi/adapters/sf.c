@@ -22,6 +22,7 @@
  * Copyright 2009 Sun Microsystems, Inc.  All rights reserved.
  * Use is subject to license terms.
  * Copyright (c) 2011 Bayard G. Bell. All rights reserved.
+ * Copyright (c) 2016 by Delphix. All rights reserved.
  */
 
 /*
@@ -56,9 +57,6 @@ static int sfdebug = 0;
 
 static int sf_bus_config_debug = 0;
 
-/* Why do I have to do this? */
-#define	offsetof(s, m)  (size_t)(&(((s *)0)->m))
-
 #include <sys/scsi/scsi.h>
 #include <sys/fc4/fcal.h>
 #include <sys/fc4/fcp.h>
@@ -77,6 +75,7 @@ static int sf_bus_config_debug = 0;
 #include <sys/devctl.h>
 #include <sys/scsi/targets/ses.h>
 #include <sys/callb.h>
+#include <sys/sysmacros.h>
 
 static int sf_info(dev_info_t *, ddi_info_cmd_t, void *, void **);
 static int sf_attach(dev_info_t *, ddi_attach_cmd_t);
@@ -3545,7 +3544,7 @@ sf_do_reportlun(struct sf *sf, struct sf_els_hdr *privp,
 	reportlun->fcp_cntl.cntl_qtype = FCP_QTYPE_SIMPLE;
 
 	(void) ddi_dma_sync(lun_dma_handle, 0, 0, DDI_DMA_SYNC_FORDEV);
-	/* We know he's there, so this should be fast */
+	/* We know it's there, so this should be fast */
 	privp->timeout = sf_watchdog_time + SF_FCP_TIMEOUT;
 	if (sf_els_transport(sf, privp) == 1)
 		return (1);

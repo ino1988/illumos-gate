@@ -1110,12 +1110,10 @@ dam_deact_cleanup(dam_t *mapp, id_t addrid, char *addrstr,
 	mutex_enter(&mapp->dam_lock);
 	bitset_del(&mapp->dam_active_set, addrid);
 	passp->da_ppriv = NULL;
-	if (passp->da_nvl)
-		nvlist_free(passp->da_nvl);
+	nvlist_free(passp->da_nvl);
 	passp->da_nvl = NULL;
 	passp->da_ppriv_rpt = NULL;
-	if (passp->da_nvl_rpt)
-		nvlist_free(passp->da_nvl_rpt);
+	nvlist_free(passp->da_nvl_rpt);
 	passp->da_nvl_rpt = NULL;
 
 	DTRACE_PROBE3(damap__addr__deactivate__end,
@@ -1456,7 +1454,7 @@ dam_addr_stable_cb(void *arg)
 	 */
 	if (spend) {
 		if (taskq_dispatch(system_taskq, dam_stabilize_map,
-		    mapp, TQ_NOSLEEP | TQ_NOQUEUE)) {
+		    mapp, TQ_NOSLEEP | TQ_NOQUEUE) != TASKQID_INVALID) {
 			DTRACE_PROBE2(damap__map__addr__stable__start,
 			    char *, mapp->dam_name, dam_t *, mapp);
 
@@ -1548,7 +1546,7 @@ dam_addrset_stable_cb(void *arg)
 	 */
 	if ((mapp->dam_flags & DAM_SPEND) ||
 	    (taskq_dispatch(system_taskq, dam_stabilize_map, mapp,
-	    TQ_NOSLEEP | TQ_NOQUEUE) == NULL)) {
+	    TQ_NOSLEEP | TQ_NOQUEUE) == TASKQID_INVALID)) {
 		DAM_INCR_STAT(mapp, dam_overrun);
 		mapp->dam_stable_overrun++;
 		dam_sched_timeout(dam_addrset_stable_cb, mapp,
@@ -1658,8 +1656,7 @@ dam_addr_report_release(dam_t *mapp, id_t addrid)
 		mutex_enter(&mapp->dam_lock);
 	}
 	passp->da_ppriv_rpt = NULL;
-	if (passp->da_nvl_rpt)
-		nvlist_free(passp->da_nvl_rpt);
+	nvlist_free(passp->da_nvl_rpt);
 }
 
 /*

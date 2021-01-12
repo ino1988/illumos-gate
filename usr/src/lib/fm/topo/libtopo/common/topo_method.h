@@ -23,7 +23,9 @@
  * Copyright 2008 Sun Microsystems, Inc.  All rights reserved.
  * Use is subject to license terms.
  */
-
+/*
+ * Copyright 2020 Joyent, Inc.
+ */
 #ifndef _TOPO_METHOD_H
 #define	_TOPO_METHOD_H
 
@@ -54,6 +56,14 @@ extern int topo_prop_method_version_register(tnode_t *, const char *,
     int *);
 
 /*
+ * These are for the private consumption of the sensor-transport fmd plugin
+ * and topo_method_sensor_failure()
+ */
+#define	ST_SPOOF_FMRI		"spoof_resource_fmri"
+#define	ST_SPOOF_SENSOR		"spoof_sensor_name"
+#define	ST_SPOOF_STATE		"spoof_sensor_state"
+
+/*
  * FMRI methods
  */
 #define	TOPO_METH_ASRU_COMPUTE		"topo_asru_compute"
@@ -66,6 +76,10 @@ extern int topo_prop_method_version_register(tnode_t *, const char *,
 #define	TOPO_METH_PGRP_GET		"topo_pgrp_get"
 #define	TOPO_METH_PROP_SET		"topo_prop_set"
 #define	TOPO_METH_FACILITY		"topo_facility"
+#define	TOPO_METH_OCCUPIED		"topo_occupied"
+#define	TOPO_METH_PATH_STR2NVL		"topo_path_str2nvl"
+#define	TOPO_METH_PATH_NVL2STR		"topo_path_nvl2str"
+
 
 #define	TOPO_METH_FMRI_VERSION			0
 #define	TOPO_METH_FRU_COMPUTE_VERSION		0
@@ -77,6 +91,7 @@ extern int topo_prop_method_version_register(tnode_t *, const char *,
 #define	TOPO_METH_PGRP_GET_VERSION		0
 #define	TOPO_METH_PROP_SET_VERSION		0
 #define	TOPO_METH_FACILITY_VERSION		0
+#define	TOPO_METH_OCCUPIED_VERSION		0
 
 #define	TOPO_METH_ASRU_COMPUTE_DESC	"Dynamic ASRU constructor"
 #define	TOPO_METH_FRU_COMPUTE_DESC	"Dynamic FRU constructor"
@@ -88,8 +103,10 @@ extern int topo_prop_method_version_register(tnode_t *, const char *,
 #define	TOPO_METH_PGRP_GET_DESC		"get property group for FMRI"
 #define	TOPO_METH_PROP_SET_DESC		"set properties for FMRI"
 #define	TOPO_METH_FACILITY_DESC		"get facility for FMRI"
+#define	TOPO_METH_OCCUPIED_DESC		"get occupant status"
 
 #define	TOPO_METH_COMPARE_RET		"compare-return"
+#define	TOPO_METH_OCCUPIED_RET		"occupied-return"
 
 #define	TOPO_METH_FMRI_ARG_NAME		"child-name"
 #define	TOPO_METH_FMRI_ARG_INST		"child-inst"

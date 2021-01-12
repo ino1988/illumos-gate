@@ -18,11 +18,12 @@
 #
 # CDDL HEADER END
 #
+
+#
 # Copyright 2010 Sun Microsystems, Inc.  All rights reserved.
 # Use is subject to license terms.
 #
-# cmd/cmd-inet/usr.lib/in.ndpd/Makefile
-#
+# Copyright (c) 2018, Joyent, Inc.
 
 PROG=		in.ndpd
 OBJS=		config.o main.o ndp.o tables.o trace.o
@@ -36,10 +37,10 @@ ROOTMANIFESTDIR=	$(ROOTSVCNETWORKROUTING)
 
 # in.ndpd uses the ancillary data feature which is available only through
 # UNIX 98 standards version of Socket interface. This interface is supposed to
-# be accessed by -lxnet. In addition -lsocket and -lnsl are used to
+# be accessed by -lxnet. In addition -lsocket is used to
 # capture new not-yet-standard interfaces. Someday -lxnet alone should be enough
 # when IPv6 inspired new interfaces are part of standards.
-LDLIBS +=	-ldhcpagent -lxnet -lsocket -lnsl -lipadm
+LDLIBS +=	-ldhcpagent -lxnet -lsocket -lipadm
 
 # these #defines are required to use UNIX 98 interfaces
 _D_UNIX98_EXTN= -D_XOPEN_SOURCE=500 -D__EXTENSIONS__
@@ -57,7 +58,10 @@ LINTFLAGS +=	-erroff=E_INCONS_ARG_DECL2 -erroff=E_INCONS_VAL_TYPE_DECL2
 LINTFLAGS +=	-erroff=E_BAD_PTR_CAST_ALIGN
 
 CERRWARN += -_gcc=-Wno-switch
-CERRWARN += -_gcc=-Wno-uninitialized
+CERRWARN += $(CNOWARN_UNINIT)
+
+# not linted
+SMATCH=off
 
 CTFCONVERT_HOOK = && $(CTFCONVERT_O)
 CTFMERGE_HOOK = && $(CTFMERGE) -L VERSION -o $@ $(OBJS)

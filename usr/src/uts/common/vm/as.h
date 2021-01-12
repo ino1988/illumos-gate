@@ -24,7 +24,7 @@
  */
 
 /*
- * Copyright (c) 2013, Joyent, Inc.  All rights reserved.
+ * Copyright 2018 Joyent, Inc.
  */
 
 /*	Copyright (c) 1984, 1986, 1987, 1988, 1989 AT&T */
@@ -125,7 +125,6 @@ struct as {
 	vnode_t	**a_objectdir;	/* object directory (procfs) */
 	size_t	a_sizedir;	/* size of object directory */
 	struct as_callback *a_callbacks; /* callback list */
-	void *a_xhat;		/* list of xhat providers */
 	proc_t	*a_proc;	/* back pointer to proc */
 	size_t	a_resvsize;	/* size of reserved part of address space */
 };
@@ -135,24 +134,20 @@ struct as {
 #define	AS_UNMAPWAIT		0x20
 #define	AS_NEEDSPURGE		0x10	/* mostly for seg_nf, see as_purge() */
 #define	AS_NOUNMAPWAIT		0x02
-#define	AS_BUSY			0x01	/* needed by XHAT framework */
 
 #define	AS_ISPGLCK(as)		((as)->a_flags & AS_PAGLCK)
 #define	AS_ISCLAIMGAP(as)	((as)->a_flags & AS_CLAIMGAP)
 #define	AS_ISUNMAPWAIT(as)	((as)->a_flags & AS_UNMAPWAIT)
-#define	AS_ISBUSY(as)		((as)->a_flags & AS_BUSY)
 #define	AS_ISNOUNMAPWAIT(as)	((as)->a_flags & AS_NOUNMAPWAIT)
 
 #define	AS_SETPGLCK(as)		((as)->a_flags |= AS_PAGLCK)
 #define	AS_SETCLAIMGAP(as)	((as)->a_flags |= AS_CLAIMGAP)
 #define	AS_SETUNMAPWAIT(as)	((as)->a_flags |= AS_UNMAPWAIT)
-#define	AS_SETBUSY(as)		((as)->a_flags |= AS_BUSY)
 #define	AS_SETNOUNMAPWAIT(as)	((as)->a_flags |= AS_NOUNMAPWAIT)
 
 #define	AS_CLRPGLCK(as)		((as)->a_flags &= ~AS_PAGLCK)
 #define	AS_CLRCLAIMGAP(as)	((as)->a_flags &= ~AS_CLAIMGAP)
 #define	AS_CLRUNMAPWAIT(as)	((as)->a_flags &= ~AS_UNMAPWAIT)
-#define	AS_CLRBUSY(as)		((as)->a_flags &= ~AS_BUSY)
 #define	AS_CLRNOUNMAPWAIT(as)	((as)->a_flags &= ~AS_NOUNMAPWAIT)
 
 #define	AS_TYPE_64BIT(as)	\
@@ -240,19 +235,19 @@ extern struct as kas;		/* kernel's address space */
  * in rwlock.c for more information on the semantics of and motivation behind
  * RW_READER_STARVEWRITER.)
  */
-#define	AS_LOCK_ENTER(as, lock, type)		rw_enter((lock), \
+#define	AS_LOCK_ENTER(as, type)		rw_enter(&(as)->a_lock, \
 	(type) == RW_READER ? RW_READER_STARVEWRITER : (type))
-#define	AS_LOCK_EXIT(as, lock)			rw_exit((lock))
-#define	AS_LOCK_DESTROY(as, lock)		rw_destroy((lock))
-#define	AS_LOCK_TRYENTER(as, lock, type)	rw_tryenter((lock), \
+#define	AS_LOCK_EXIT(as)		rw_exit(&(as)->a_lock)
+#define	AS_LOCK_DESTROY(as)		rw_destroy(&(as)->a_lock)
+#define	AS_LOCK_TRYENTER(as, type)	rw_tryenter(&(as)->a_lock, \
 	(type) == RW_READER ? RW_READER_STARVEWRITER : (type))
 
 /*
  * Macros to test lock states.
  */
-#define	AS_LOCK_HELD(as, lock)		RW_LOCK_HELD((lock))
-#define	AS_READ_HELD(as, lock)		RW_READ_HELD((lock))
-#define	AS_WRITE_HELD(as, lock)		RW_WRITE_HELD((lock))
+#define	AS_LOCK_HELD(as)		RW_LOCK_HELD(&(as)->a_lock)
+#define	AS_READ_HELD(as)		RW_READ_HELD(&(as)->a_lock)
+#define	AS_WRITE_HELD(as)		RW_WRITE_HELD(&(as)->a_lock)
 
 /*
  * macros to walk thru segment lists
@@ -260,6 +255,8 @@ extern struct as kas;		/* kernel's address space */
 #define	AS_SEGFIRST(as)		avl_first(&(as)->a_segtree)
 #define	AS_SEGNEXT(as, seg)	AVL_NEXT(&(as)->a_segtree, (seg))
 #define	AS_SEGPREV(as, seg)	AVL_PREV(&(as)->a_segtree, (seg))
+
+typedef int (*segcreate_func_t)(struct seg **, void *);
 
 void	as_init(void);
 void	as_avlinit(struct as *);
@@ -278,8 +275,10 @@ faultcode_t as_faulta(struct as *as, caddr_t addr, size_t size);
 int	as_setprot(struct as *as, caddr_t addr, size_t size, uint_t prot);
 int	as_checkprot(struct as *as, caddr_t addr, size_t size, uint_t prot);
 int	as_unmap(struct as *as, caddr_t addr, size_t size);
-int	as_map(struct as *as, caddr_t addr, size_t size, int ((*crfp)()),
-		void *argsp);
+int	as_map(struct as *as, caddr_t addr, size_t size, segcreate_func_t crfp,
+    void *argsp);
+int as_map_locked(struct as *as, caddr_t addr, size_t size,
+    segcreate_func_t crfp, void *argsp);
 void	as_purge(struct as *as);
 int	as_gap(struct as *as, size_t minlen, caddr_t *basep, size_t *lenp,
 		uint_t flags, caddr_t addr);

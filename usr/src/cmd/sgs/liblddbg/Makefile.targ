@@ -22,22 +22,23 @@
 # Copyright 2006 Sun Microsystems, Inc.  All rights reserved.
 # Use is subject to license terms.
 #
-# ident	"%Z%%M%	%I%	%E% SMI"
+# Copyright 2016 RackTop Systems.
+# Copyright 2019 OmniOS Community Edition (OmniOSce) Association.
 #
 
-pics/%.o:	../common/%.c
+pics/%.o:	$(SRCDIR)/common/%.c
 		$(COMPILE.c) -o $@ $<
 		$(POST_PROCESS_O)
 
-pics/%.o:	$(SGSTOOLS)/common/%.c
+pics/%.o:	$(SGSCOMMON)/%.c
 		$(COMPILE.c) -o $@ $<
 		$(POST_PROCESS_O)
 
-pics/%32.o:	../common/%.c
+pics/%32.o:	$(SRCDIR)/common/%.c
 		$(COMPILE.c) -o $@ $<
 		$(POST_PROCESS_O)
 
-pics/%64.o:	../common/%.c
+pics/%64.o:	$(SRCDIR)/common/%.c
 		$(COMPILE.c) -D_ELF64 -o $@ $<
 		$(POST_PROCESS_O)
 
@@ -47,22 +48,7 @@ $(LIBLINKS):
 delete:
 		$(RM) $(DYNLIB)
 
-.PARALLEL:	$(LINTOUT32) $(LINTOUT64) $(LINTLIB32) $(LINTLIB64)
-
-lint:		$(LINTLIB32) $(LINTOUT32) $(LINTLIB64) $(LINTOUT64) \
-		    .WAIT $(SGSLINTOUT)
-
-# Special target for native builds (ie. when we need to build a version of ld
-# to build a version of ld :-).
-
-native:		$(SGSPROTO)/$(DYNLIB)
-
-$(SGSPROTO)/$(DYNLIB): \
-		pics .WAIT $$(PICS)
-		$(BUILD.SO)
-		$(POST_PROCESS_SO)
-		-@$(RM) $(SGSPROTO)/$(LIBLINKS)
-		$(SYMLINK) $(DYNLIB) $(SGSPROTO)/$(LIBLINKS)
+$(PICS):	pics
 
 include		$(SRC)/lib/Makefile.targ
 include		$(SRC)/cmd/sgs/Makefile.targ

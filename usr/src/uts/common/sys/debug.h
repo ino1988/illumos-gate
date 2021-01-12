@@ -26,7 +26,8 @@
  */
 
 /*
- * Copyright (c) 2012 by Delphix. All rights reserved.
+ * Copyright (c) 2012, 2017 by Delphix. All rights reserved.
+ * Copyright 2013 Saso Kiselkov. All rights reserved.
  */
 
 /*	Copyright (c) 1984, 1986, 1987, 1988, 1989 AT&T	*/
@@ -35,7 +36,9 @@
 #ifndef _SYS_DEBUG_H
 #define	_SYS_DEBUG_H
 
+#if !defined(_STANDALONE)
 #include <sys/isa_defs.h>
+#endif
 #include <sys/types.h>
 #include <sys/note.h>
 
@@ -107,29 +110,40 @@ extern void assfail3(const char *, uintmax_t, const char *, uintmax_t,
 			__FILE__, __LINE__); \
 _NOTE(CONSTCOND) } while (0)
 
+#define	VERIFY3B(x, y, z)	VERIFY3_IMPL(x, y, z, boolean_t)
 #define	VERIFY3S(x, y, z)	VERIFY3_IMPL(x, y, z, int64_t)
 #define	VERIFY3U(x, y, z)	VERIFY3_IMPL(x, y, z, uint64_t)
 #define	VERIFY3P(x, y, z)	VERIFY3_IMPL(x, y, z, uintptr_t)
 #define	VERIFY0(x)		VERIFY3_IMPL(x, ==, 0, uintmax_t)
 
 #if DEBUG
+#define	ASSERT3B(x, y, z)	VERIFY3_IMPL(x, y, z, boolean_t)
 #define	ASSERT3S(x, y, z)	VERIFY3_IMPL(x, y, z, int64_t)
 #define	ASSERT3U(x, y, z)	VERIFY3_IMPL(x, y, z, uint64_t)
 #define	ASSERT3P(x, y, z)	VERIFY3_IMPL(x, y, z, uintptr_t)
 #define	ASSERT0(x)		VERIFY3_IMPL(x, ==, 0, uintmax_t)
 #else
+#define	ASSERT3B(x, y, z)	((void)0)
 #define	ASSERT3S(x, y, z)	((void)0)
 #define	ASSERT3U(x, y, z)	((void)0)
 #define	ASSERT3P(x, y, z)	((void)0)
 #define	ASSERT0(x)		((void)0)
 #endif
 
-#ifdef	_KERNEL
+/*
+ * Compile-time assertion. The condition 'x' must be constant.
+ */
+#define	CTASSERT(x)		_CTASSERT(x, __LINE__)
+#define	_CTASSERT(x, y)		__CTASSERT(x, y)
+#define	__CTASSERT(x, y) \
+	typedef char __compile_time_assertion__ ## y [(x) ? 1 : -1] __unused
+
+#if defined(_KERNEL) || defined(_FAKE_KERNEL)
 
 extern void abort_sequence_enter(char *);
 extern void debug_enter(char *);
 
-#endif	/* _KERNEL */
+#endif	/* _KERNEL || _FAKE_KERNEL */
 
 #if defined(DEBUG) && !defined(__sun)
 /* CSTYLED */

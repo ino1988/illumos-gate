@@ -21,18 +21,20 @@
 #
 # Copyright (c) 2003, 2010, Oracle and/or its affiliates. All rights reserved.
 # Copyright (c) 2013 RackTop Systems.
+# Copyright 2018, Joyent, Inc.
 #
 
 LIBRARY=	libcmdutils.a
 VERS=		.1
-CMD_OBJS=	avltree.o sysattrs.o writefile.o process_xattrs.o uid.o gid.o
+CMD_OBJS=	avltree.o sysattrs.o writefile.o process_xattrs.o uid.o gid.o \
+		nicenum.o
 COM_OBJS=	list.o
 OBJECTS=	$(CMD_OBJS) $(COM_OBJS)
 
 include ../../Makefile.lib
 include ../../Makefile.rootfs
 
-LIBS =		$(DYNLIB) $(LINTLIB)
+LIBS =		$(DYNLIB)
 
 LDLIBS +=	-lc -lavl -lnvpair
 
@@ -42,8 +44,6 @@ COMDIR= $(SRC)/common/list
 SRCS=	\
 	$(CMD_OBJS:%.o=$(SRCDIR)/%.c)   \
 	$(COM_OBJS:%.o=$(COMDIR)/%.c)
-
-$(LINTLIB) :=	SRCS = $(SRCDIR)/$(LINTSRC)
 
 CFLAGS +=	$(CCVERBOSE)
 
@@ -55,7 +55,6 @@ CPPFLAGS +=	-I.. -I../../common/inc -D_REENTRANT -D_FILE_OFFSET_BITS=64
 
 all: $(LIBS)
 
-lint: lintcheck
 
 pics/%.o: $(COMDIR)/%.c
 	$(COMPILE.c) -o $@ $<

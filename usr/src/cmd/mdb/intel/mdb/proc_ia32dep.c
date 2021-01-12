@@ -24,7 +24,8 @@
  * Use is subject to license terms.
  */
 /*
- * Copyright (c) 2012, Joyent, Inc.  All rights reserved.
+ * Copyright 2019 Doma Gergő Mihály <doma.gergo.mihaly@gmail.com>
+ * Copyright 2018 Joyent, Inc.
  */
 
 /*
@@ -37,13 +38,17 @@
 #include <mdb/mdb_proc.h>
 #include <mdb/mdb_kreg.h>
 #include <mdb/mdb_err.h>
+#include <mdb/mdb_isautil.h>
 #include <mdb/mdb_ia32util.h>
 #include <mdb/mdb.h>
 
+#include <sys/ucontext.h>
 #include <sys/frame.h>
 #include <libproc.h>
 #include <sys/fp.h>
 #include <ieeefp.h>
+
+#include <stddef.h>
 
 const mdb_tgt_regdesc_t pt_regdesc[] = {
 	{ "gs", GS, MDB_TGT_R_EXPORT },
@@ -95,7 +100,8 @@ pt_read_instr(mdb_tgt_t *t)
 	const lwpstatus_t *psp = &Pstatus(t->t_pshandle)->pr_lwp;
 	uint8_t ret = 0;
 
-	(void) mdb_tgt_vread(t, &ret, sizeof (ret), psp->pr_reg[EIP]);
+	(void) mdb_tgt_aread(t, MDB_TGT_AS_VIRT_I, &ret, sizeof (ret),
+	    psp->pr_reg[EIP]);
 
 	return (ret);
 }
@@ -108,9 +114,37 @@ pt_regs(uintptr_t addr, uint_t flags, int argc, const mdb_arg_t *argv)
 	mdb_tgt_tid_t tid;
 	prgregset_t grs;
 	prgreg_t eflags;
+	boolean_t from_ucontext = B_FALSE;
 
-	if (argc != 0)
+	if (mdb_getopts(argc, argv,
+	    'u', MDB_OPT_SETBITS, B_TRUE, &from_ucontext, NULL) != argc) {
 		return (DCMD_USAGE);
+	}
+
+	if (from_ucontext) {
+		int off;
+		int o0, o1;
+
+		if (!(flags & DCMD_ADDRSPEC)) {
+			mdb_warn("-u requires a ucontext_t address\n");
+			return (DCMD_ERR);
+		}
+
+		o0 = mdb_ctf_offsetof_by_name("ucontext_t", "uc_mcontext");
+		o1 = mdb_ctf_offsetof_by_name("mcontext_t", "gregs");
+		if (o0 == -1 || o1 == -1) {
+			off = offsetof(ucontext_t, uc_mcontext) +
+			    offsetof(mcontext_t, gregs);
+		} else {
+			off = o0 + o1;
+		}
+
+		if (mdb_vread(&grs, sizeof (grs), addr + off) != sizeof (grs)) {
+			mdb_warn("failed to read from ucontext_t %p", addr);
+			return (DCMD_ERR);
+		}
+		goto print_regs;
+	}
 
 	if (t->t_pshandle == NULL || Pstate(t->t_pshandle) == PS_UNDEAD) {
 		mdb_warn("no process active\n");
@@ -132,6 +166,7 @@ pt_regs(uintptr_t addr, uint_t flags, int argc, const mdb_arg_t *argv)
 		return (DCMD_ERR);
 	}
 
+print_regs:
 	eflags = grs[EFL];
 
 	mdb_printf("%%cs = 0x%04x\t\t%%eax = 0x%0?p %A\n",
@@ -194,50 +229,110 @@ fpcw2str(uint32_t cw, char *buf, size_t nbytes)
 	buf[0] = '\0';
 
 	/*
-	 * Decode all masks in the 80387 control word.
+	 * Decode all exception masks in the x87 FPU Control Word.
+	 *
+	 * See here:
+	 * Intel® 64 and IA-32 Architectures Software Developer’s Manual,
+	 * Volume 1: Basic Architecture, 8.1.5 x87 FPU Control Word
 	 */
-	if (cw & FPIM)
+	if (cw & FPIM)	/* Invalid operation mask. */
 		p += mdb_snprintf(p, (size_t)(end - p), "|IM");
-	if (cw & FPDM)
+	if (cw & FPDM)	/* Denormalized operand mask. */
 		p += mdb_snprintf(p, (size_t)(end - p), "|DM");
-	if (cw & FPZM)
+	if (cw & FPZM)	/* Zero divide mask. */
 		p += mdb_snprintf(p, (size_t)(end - p), "|ZM");
-	if (cw & FPOM)
+	if (cw & FPOM)	/* Overflow mask. */
 		p += mdb_snprintf(p, (size_t)(end - p), "|OM");
-	if (cw & FPUM)
+	if (cw & FPUM)	/* Underflow mask. */
 		p += mdb_snprintf(p, (size_t)(end - p), "|UM");
-	if (cw & FPPM)
+	if (cw & FPPM)	/* Precision mask. */
 		p += mdb_snprintf(p, (size_t)(end - p), "|PM");
-	if (cw & FPPC)
-		p += mdb_snprintf(p, (size_t)(end - p), "|PC");
-	if (cw & FPRC)
-		p += mdb_snprintf(p, (size_t)(end - p), "|RC");
-	if (cw & FPIC)
-		p += mdb_snprintf(p, (size_t)(end - p), "|IC");
 
 	/*
-	 * Decode precision, rounding, and infinity options in control word.
+	 * Decode precision control options.
 	 */
-	if (cw & FPSIG24)
+	switch (cw & FPPC) {
+	case FPSIG24:
+		/* 24-bit significand, single precision. */
 		p += mdb_snprintf(p, (size_t)(end - p), "|SIG24");
-	if (cw & FPSIG53)
+		break;
+	case FPSIG53:
+		/* 53-bit significand, double precision. */
 		p += mdb_snprintf(p, (size_t)(end - p), "|SIG53");
-	if (cw & FPSIG64)
+		break;
+	case FPSIG64:
+		/* 64-bit significand, double extended precision. */
 		p += mdb_snprintf(p, (size_t)(end - p), "|SIG64");
+		break;
+	default:
+		/*
+		 * Should never happen.
+		 * Value 0x00000100 is 'Reserved'.
+		 */
+		break;
+	}
 
-	if ((cw & FPRC) == (FPRD|FPRU))
-		p += mdb_snprintf(p, (size_t)(end - p), "|RTZ");
-	else if (cw & FPRD)
-		p += mdb_snprintf(p, (size_t)(end - p), "|RD");
-	else if (cw & FPRU)
-		p += mdb_snprintf(p, (size_t)(end - p), "|RU");
-	else
+	/*
+	 * Decode rounding control options.
+	 */
+	switch (cw & FPRC) {
+	case FPRTN:
+		/* Round to nearest, or to even if equidistant. */
 		p += mdb_snprintf(p, (size_t)(end - p), "|RTN");
+		break;
+	case FPRD:
+		/* Round down. */
+		p += mdb_snprintf(p, (size_t)(end - p), "|RD");
+		break;
+	case FPRU:
+		/* Round up. */
+		p += mdb_snprintf(p, (size_t)(end - p), "|RU");
+		break;
+	case FPCHOP:
+		/* Truncate. */
+		p += mdb_snprintf(p, (size_t)(end - p), "|RTZ");
+		break;
+	default:
+		/*
+		 * This is a two-bit field.
+		 * No other options left.
+		 */
+		break;
+	}
 
-	if (cw & FPA)
-		p += mdb_snprintf(p, (size_t)(end - p), "|A");
-	else
+	/*
+	 * Decode infinity control options.
+	 *
+	 * This field has been retained for compatibility with
+	 * the 287 and earlier co-processors.
+	 * In the more modern FPUs, this bit is disregarded and
+	 * both -infinity and +infinity are respected.
+	 * Comment source: SIMPLY FPU by Raymond Filiatreault
+	 */
+	switch (cw & FPIC) {
+	case FPP:
+		/*
+		 * Projective infinity.
+		 * Both -infinity and +infinity are treated as
+		 * unsigned infinity.
+		 */
 		p += mdb_snprintf(p, (size_t)(end - p), "|P");
+		break;
+	case FPA:
+		/*
+		 * Affine infinity.
+		 * Respects both -infinity and +infinity.
+		 */
+		p += mdb_snprintf(p, (size_t)(end - p), "|A");
+		break;
+	default:
+		/*
+		 * This is a one-bit field.
+		 * No other options left.
+		 */
+		break;
+	}
+
 	if (cw & WFPB17)
 		p += mdb_snprintf(p, (size_t)(end - p), "|WFPB17");
 	if (cw & WFPB24)

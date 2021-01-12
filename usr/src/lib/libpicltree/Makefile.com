@@ -22,6 +22,7 @@
 # Copyright 2006 Sun Microsystems, Inc.  All rights reserved.
 # Use is subject to license terms.
 #
+# Copyright (c) 2018, Joyent, Inc.
 
 LIBRARY=	libpicltree.a
 VERS=		.1
@@ -29,19 +30,20 @@ OBJECTS=	picltree.o
 
 include $(SRC)/lib/Makefile.lib
 
-LIBS =		$(DYNLIB) $(LINTLIB)
+LIBS =		$(DYNLIB)
 LDLIBS +=	-lc
-$(LINTLIB) :=	SRCS = $(SRCDIR)/$(LINTSRC)
 
 CPPFLAGS +=	-D_REENTRANT -I.. -I../../libpicl -I$(SRC)/cmd/picl/plugins/inc
 CFLAGS +=	$(CCVERBOSE)
 
-CERRWARN +=	-_gcc=-Wno-uninitialized
+CERRWARN +=	$(CNOWARN_UNINIT)
+
+# not linted
+SMATCH=off
 
 .KEEP_STATE:
 
 all : $(LIBS)
 
-lint: lintcheck
 
 include $(SRC)/lib/Makefile.targ

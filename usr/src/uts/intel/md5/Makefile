@@ -24,9 +24,7 @@
 # Copyright 2009 Sun Microsystems, Inc.  All rights reserved.
 # Use is subject to license terms.
 #
-#	This makefile drives the production of the md5 crypto kernel module.
-#
-#	intel architecture dependent
+# Copyright (c) 2019, Joyent, Inc.
 #
 
 #
@@ -43,7 +41,6 @@ MD5_OBJS_32	=
 MD5_OBJS_64	= md5_amd64.o
 MD5_OBJS	+= $(MD5_OBJS_$(CLASS))
 OBJECTS		= $(MD5_OBJS:%=$(OBJS_DIR)/%)
-LINTS		= $(MD5_OBJS:%.o=$(LINTS_DIR)/%.ln)
 ROOTMODULE	= $(ROOT_CRYPTO_DIR)/$(MODULE)
 ROOTLINK	= $(ROOT_MISC_DIR)/$(MODULE)
 
@@ -61,7 +58,6 @@ CLEANFILES += md5_amd64.s
 #	Define targets
 #
 ALL_TARGET	= $(BINARY)
-LINT_TARGET	= $(MODULE).lint
 INSTALL_TARGET	= $(BINARY) $(ROOTMODULE) $(ROOTLINK)
 
 #
@@ -82,12 +78,6 @@ clean:		$(CLEAN_DEPS)
 
 clobber:	$(CLOBBER_DEPS)
 
-lint:		$(LINT_DEPS)
-
-modlintlib:	$(MODLINTLIB_DEPS)
-
-clean.lint:	$(CLEAN_LINT_DEPS)
-
 install:	$(INSTALL_DEPS)
 
 $(ROOTLINK):	$(ROOT_MISC_DIR) $(ROOTMODULE)
@@ -103,7 +93,3 @@ md5_amd64.s: $(COMDIR)/amd64/md5_amd64.pl
 
 $(OBJS_DIR)/md5_amd64.o: md5_amd64.s
 	$(COMPILE.s) -o $@ md5_amd64.s
-	$(POST_PROCESS_O)
-
-$(OBJS_DIR)/md5_amd64.ln: md5_amd64.s
-	@($(LHEAD) $(LINT.c) md5_amd64.s $(LTAIL))

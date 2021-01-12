@@ -3,7 +3,7 @@
 .\" The contents of this file are subject to the terms of the Common Development and Distribution License (the "License").  You may not use this file except in compliance with the License.
 .\" You can obtain a copy of the license at usr/src/OPENSOLARIS.LICENSE or http://www.opensolaris.org/os/licensing.  See the License for the specific language governing permissions and limitations under the License.
 .\" When distributing Covered Code, include this CDDL HEADER in each file and include the License file at usr/src/OPENSOLARIS.LICENSE.  If applicable, add the following below this CDDL HEADER, with the fields enclosed by brackets "[]" replaced with your own identifying information: Portions Copyright [yyyy] [name of copyright owner]
-.TH USBSKSP 7D "Aug 23, 2006"
+.TH USBSKSP 7D "May 13, 2017"
 .SH NAME
 usbsksp \- Keyspan USB to serial converter driver
 .SH SYNOPSIS
@@ -23,7 +23,6 @@ usbskpsp@unit
 .fi
 
 .SH DESCRIPTION
-.sp
 .LP
 The \fBusbsksp\fR driver is a loadable \fBSTREAMS\fR and \fBUSBA\fR (Solaris
 USB architecture) compliant client driver that provides basic asynchronous
@@ -31,27 +30,25 @@ communication support for Keyspan USB-to-serial converters. The \fBusbsksp\fR
 driver supports the Keyspan USA19HS, USA49WG and USA49WLC models. By default,
 the USA19HS and USA49WG models are compatible with the \fBusbsksp\fR driver and
 no configuration or installation steps are required.  (The USA49WG model is a
-USB 2.0 device comforming to \fIUniversal Serial Bus Specification 2.0\fR and
+USB 2.0 device conforming to \fIUniversal Serial Bus Specification 2.0\fR and
 the USB 2.0 host controller is required to support the USA49WG model. Note that
-the USA49WG is not compatible with USB 1.1 host controllers). If you use the
-Keyspan USA49WLC model, you must download and install a firmware package to
-enable the device to work with the \fBusbsksp\fR driver. See the Keyspan
-website (\fIhttp://www.keyspan.com/downloads/sun/\fR) for more information.
-Serial device streams are built with appropriate modules that  are  pushed atop
+the USA49WG is not compatible with USB 1.1 host controllers). The Keyspan
+USA49WLC model requires a firmware package that is no longer publicly available.
+Serial device streams are built with appropriate modules that are pushed atop
 the \fBusbsksp\fR driver by the \fBautopush\fR(1M) facility.
 .sp
 .LP
 The \fBusbsksp\fR module supports the \fBtermio\fR(7I) device control functions
 specified by flags in the \fBc_cflag\fR word of the termios structure, and by
-the IGNBRK,  IGNPAR,  PARMRK and INPCK flags in the \fBc_iflag\fR word of the
+the IGNBRK, IGNPAR, PARMRK and INPCK flags in the \fBc_iflag\fR word of the
 termios structure. All other \fBtermio\fR(7I) functions must be performed by
 \fBSTREAMS\fR modules pushed atop the driver. When a device is opened, the
-\fBldterm\fR(7M) and \fBttcompat\fR(7M)  \fBSTREAMS\fR modules are
+\fBldterm\fR(7M) and \fBttcompat\fR(7M) \fBSTREAMS\fR modules are
 automatically pushed on top of the stream, providing the standard
 \fBtermio\fR(7I) interface.
 .sp
 .LP
-Use device logical names \fB/dev/term/[0-9]\fR*  to  access  the serial ports.
+Use device logical names \fB/dev/term/[0-9]\fR* to access the serial ports.
 These names are typically used to provide a logical access point for a dial-in
 line that is used with a modem.
 .sp
@@ -59,15 +56,14 @@ line that is used with a modem.
 A special feature (controlled by the minor device number) is available that
 enables a single tty line to be connected to a modem and used for incoming and
 outgoing calls. By accessing through device logical name \fB/dev/cua/[0-9]\fR*,
-you can open a port without  the carrier detect signal being asserted, either
+you can open a port without the carrier detect signal being asserted, either
 through hardware or an equivalent software mechanism. These devices are
-commonly known as  'dial-out' lines.
+commonly known as 'dial-out' lines.
 .sp
 .LP
-Unlike onboard serial ports, the \fBusbsksp\fR ports  cannot serve as a local
+Unlike onboard serial ports, the \fBusbsksp\fR ports cannot serve as a local
 serial console.
 .SH APPLICATION PROGRAMMING INTERFACE
-.sp
 .LP
 A dial-in line can be opened only if the corresponding dial-out line is closed.
 A blocking \fB/dev/term\fR open waits until the \fB/dev/cua\fR line is closed
@@ -76,29 +72,27 @@ well) and carrier is detected again.  A non-blocking \fB/dev/term\fR open
 returns an error if the \fB/dev/cua\fR is open.
 .sp
 .LP
-If the \fB/dev/term\fR line is opened successfully  (usually  only when
+If the \fB/dev/term\fR line is opened successfully (usually only when
 carrier is recognized on the modem), the corresponding \fB/dev/cua\fR line
-cannot be opened. This allows a modem and port to be used  for dial-in (by
+cannot be opened. This allows a modem and port to be used for dial-in (by
 enabling the line for login in \fB/etc/inittab\fR) or dial-out (by
 \fBtip\fR(1), or \fBuucp\fR(1C)) when no one is logged in on the line.
 .sp
 .LP
-Device hot-removal  is functionally equivalent to a modem disconnect event, as
+Device hot-removal is functionally equivalent to a modem disconnect event, as
 defined in \fBtermio\fR(7I).
 .SH IOCTLS
-.sp
 .LP
-The  \fBusbsksp\fR driver supports the  standard set of \fBtermio\fR(7I) ioctl
+The \fBusbsksp\fR driver supports the standard set of \fBtermio\fR(7I) ioctl
 calls.
 .sp
 .LP
-Input and output line speeds can be set to the following baud rates:  0, 50,
-75, 110, 134, 150, 200, 300, 600, 1200, 1800, 2400, 4800, 9600,  19200,  38400,
-57600,  115200, or 230400.  Input and output line speeds cannot be set
+Input and output line speeds can be set to the following baud rates: 0, 50,
+75, 110, 134, 150, 200, 300, 600, 1200, 1800, 2400, 4800, 9600, 19200, 38400,
+57600, 115200, or 230400.  Input and output line speeds cannot be set
 independently. For example, when the output speed is set, the input speed is
 automatically set to the same speed.
 .SH ERRORS
-.sp
 .LP
 An \fBopen()\fR fails under the following conditions:
 .sp
@@ -107,7 +101,7 @@ An \fBopen()\fR fails under the following conditions:
 \fB\fBENXIO\fR\fR
 .ad
 .RS 9n
-The  unit being opened does not exist.
+The unit being opened does not exist.
 .RE
 
 .sp
@@ -116,7 +110,7 @@ The  unit being opened does not exist.
 \fB\fBEBUSY\fR\fR
 .ad
 .RS 9n
-The \fB/dev/cua\fR (dial-out) device is being opened while  the \fB/dev/term\fR
+The \fB/dev/cua\fR (dial-out) device is being opened while the \fB/dev/term\fR
 (dial-in device) is open, or the dial-in device is being opened with a no-delay
 open while the dial-out device is open.
 .RE
@@ -127,7 +121,7 @@ open while the dial-out device is open.
 \fB\fBEBUSY\fR\fR
 .ad
 .RS 9n
-The  unit has been marked as exclusive-use by another  process with a TIOCEXCL
+The unit has been marked as exclusive-use by another process with a TIOCEXCL
 ioctl() call.
 .RE
 
@@ -141,7 +135,6 @@ USB device I/O error.
 .RE
 
 .SH FILES
-.sp
 .ne 2
 .na
 \fB\fB/kernel/drv/usbsksp\fR\fR
@@ -192,7 +185,6 @@ dial-in tty lines.
 .RE
 
 .SH ATTRIBUTES
-.sp
 .LP
 See \fBattributes\fR(5) for descriptions of the following attributes:
 .sp
@@ -208,13 +200,11 @@ Architecture	SPARC, x86, PCI-based systems
 .TE
 
 .SH SEE ALSO
-.sp
 .LP
 \fBstrconf\fR(1), \fBtip\fR(1), \fBuucp\fR(1C), \fBautopush\fR(1M),
 \fBioctl\fR(2), \fBopen\fR(2), \fBtermios\fR(3C), \fBattributes\fR(5),
 \fBusba\fR(7D), \fBtermio\fR(7I), \fBldterm\fR(7M), \fBttcompat\fR(7M)
 .SH DIAGNOSTICS
-.sp
 .LP
 In addition to being logged, the following messages may appear on the system
 console. All messages are formatted in the following manner:
@@ -245,7 +235,7 @@ and reconnect.\fR
 .ad
 .sp .6
 .RS 4n
-The device was hot-removed while open. A new device  was hot-inserted which is
+The device was hot-removed while open. A new device was hot-inserted which is
 not identical to the original device. Please disconnect the device and
 reconnect the original device to the same port.
 .RE
@@ -258,20 +248,20 @@ reconnect the original device to the same port.
 .sp .6
 .RS 4n
 The device that was hot-removed from its USB port has been re-inserted again to
-the same port. It is available for access but data from a  previous transfer
+the same port. It is available for access but data from a previous transfer
 may be lost.
 .RE
 
 .sp
 .ne 2
 .na
-\fBCannot access <\fIdevice\fR>. Please reconnect.\fR
+\fBCannot access <\fR\fIdevice\fR\fB>. Please reconnect.\fR
 .ad
 .sp .6
 .RS 4n
 This device has been disconnected because a device other than the original one
 has been inserted. The driver informs you of this fact by displaying the name
-of  the original device.
+of the original device.
 .RE
 
 .sp
@@ -283,7 +273,7 @@ Please download it from Keyspan website and install it.\fR
 .sp .6
 .RS 4n
 By default, only an empty firmware package is installed for the usa49wlc model.
-Please download the SUNWukspfw package from Keyspan's web site and install it.
+You will need to obtain a copy of the SUNWukspfw package and install it.
 .RE
 
 .sp

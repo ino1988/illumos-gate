@@ -24,7 +24,7 @@
  */
 
 /*	Copyright (c) 1984, 1986, 1987, 1988, 1989 AT&T	*/
-/*	  All Rights Reserved  	*/
+/*	All Rights Reserved	*/
 
 /*
  * University Copyright- Copyright (c) 1982, 1986, 1988
@@ -34,6 +34,10 @@
  * University Acknowledgment- Portions of this document are derived from
  * software developed by the University of California, Berkeley, and its
  * contributors.
+ */
+
+/*
+ * Copyright (c) 2018, Joyent, Inc.
  */
 
 /*
@@ -64,7 +68,7 @@
  *	bsize - block size
  *	fragsize - fragment size
  *	cgsize - The number of disk cylinders per cylinder group.
- * 	free - minimum free space
+ *	free - minimum free space
  *	rps - rotational speed (rev/sec).
  *	nbpi - number of data bytes per allocated inode
  *	opt - optimization (space, time)
@@ -235,6 +239,7 @@
 #include	<sys/int_const.h>
 #include	<signal.h>
 #include	<sys/efi_partition.h>
+#include	<fslib.h>
 #include	"roll_log.h"
 
 #define	bcopy(f, t, n)    (void) memcpy(t, f, n)
@@ -248,7 +253,7 @@
 #include	<sys/statvfs.h>
 #include	<locale.h>
 #include	<fcntl.h>
-#include 	<sys/isa_defs.h>	/* for ENDIAN defines */
+#include	<sys/isa_defs.h>	/* for ENDIAN defines */
 #include	<sys/vtoc.h>
 
 #include	<sys/dkio.h>
@@ -403,7 +408,7 @@ static void wtfs_breakup(diskaddr_t bno, int size, char *bf);
 static int isblock(struct fs *fs, unsigned char *cp, int h);
 static void clrblock(struct fs *fs, unsigned char *cp, int h);
 static void setblock(struct fs *fs, unsigned char *cp, int h);
-static void usage();
+static void usage(void) __NORETURN;
 static void dump_fscmd(char *fsys, int fsi);
 static uint64_t number(uint64_t d_value, char *param, int flags);
 static int match(char *s);
@@ -508,9 +513,9 @@ long	ntrack = DFLNTRAK;		/* tracks per cylinder group */
 int	ntrack_flag = RC_DEFAULT;
 long	bsize = DESBLKSIZE;		/* filesystem block size */
 int	bsize_flag = RC_DEFAULT;
-long	fragsize = DESFRAGSIZE; 	/* filesystem fragment size */
+long	fragsize = DESFRAGSIZE;		/* filesystem fragment size */
 int	fragsize_flag = RC_DEFAULT;
-long	minfree = MINFREE; 		/* fs_minfree */
+long	minfree = MINFREE;		/* fs_minfree */
 int	minfree_flag = RC_DEFAULT;
 long	rps = DEFHZ;			/* revolutions/second of drive */
 int	rps_flag = RC_DEFAULT;
@@ -544,12 +549,9 @@ int	label_type;
 /*
  * logging support
  */
-int	ismdd;			/* true if device is a SVM device */
-int	islog;			/* true if ufs or SVM logging is enabled */
-int	islogok;		/* true if ufs/SVM log state is good */
-
-static int	isufslog;	/* true if ufs logging is enabled */
-static int	waslog;		/* true when ufs logging disabled during grow */
+int	islog;			/* true if ufs logging is enabled */
+int	islogok;		/* true if ufs log state is good */
+int	waslog;			/* true when ufs logging disabled during grow */
 
 /*
  * growfs defines, globals, and forward references
@@ -575,7 +577,7 @@ diskaddr_t		testfrags;
 int		inlockexit;
 int		isbad;
 
-void		lockexit(int);
+void		lockexit(int) __NORETURN;
 void		randomgeneration(void);
 void		checksummarysize(void);
 int		checksblock(struct fs, int);
@@ -614,8 +616,8 @@ void		wlockfs(void);
 void		clockfs(void);
 void		wtsb(void);
 static int64_t	checkfragallocated(daddr32_t);
-static struct csum 	*read_summaryinfo(struct fs *);
-static diskaddr_t 	probe_summaryinfo();
+static struct csum	*read_summaryinfo(struct fs *);
+static diskaddr_t	probe_summaryinfo();
 
 int
 main(int argc, char *argv[])
@@ -631,7 +633,6 @@ main(int argc, char *argv[])
 	char *special;
 	struct statvfs64 fs;
 	struct dk_geom dkg;
-	struct dk_cinfo dkcinfo;
 	struct dk_minfo dkminfo;
 	char pbuf[sizeof (uint64_t) * 3 + 1];
 	char *tmpbuf;
@@ -769,7 +770,7 @@ main(int argc, char *argv[])
 		case 'G':	/* grow the file system */
 			grow = 1;
 			break;
-		case 'P':	/* probe the file system growing size 	*/
+		case 'P':	/* probe the file system growing size	*/
 			Pflag = 1;
 			grow = 1; /* probe mode implies fs growing	*/
 			break;
@@ -1373,26 +1374,9 @@ retry_alternate_logic:
 	/*
 	 * get the controller info
 	 */
-	ismdd = 0;
 	islog = 0;
 	islogok = 0;
 	waslog = 0;
-
-	if (ioctl(fsi, DKIOCINFO, &dkcinfo) == 0)
-		/*
-		 * if it is an MDD (disksuite) device
-		 */
-		if (dkcinfo.dki_ctype == DKC_MD) {
-			ismdd++;
-			/*
-			 * check the logging device
-			 */
-			if (ioctl(fsi, _FIOISLOG, NULL) == 0) {
-				islog++;
-				if (ioctl(fsi, _FIOISLOGOK, NULL) == 0)
-					islogok++;
-			}
-		}
 
 	/*
 	 * Do not grow the file system, but print on stdout the maximum
@@ -1456,7 +1440,7 @@ retry_alternate_logic:
 				    "can't open %s\n"), MNTTAB);
 				exit(32);
 			}
-			while ((getmntent(mnttab, &mntp)) == NULL) {
+			while ((getmntent(mnttab, &mntp)) == 0) {
 				if (grow) {
 					checkmount(&mntp, special);
 					continue;
@@ -2400,6 +2384,17 @@ grow50:
 	return (0);
 }
 
+static diskaddr_t
+get_device_size(int fd)
+{
+	struct dk_minfo	disk_info;
+
+	if ((ioctl(fd, DKIOCGMEDIAINFO, (caddr_t)&disk_info)) == -1)
+		return (0);
+
+	return (disk_info.dki_capacity);
+}
+
 /*
  * Figure out how big the partition we're dealing with is.
  * The value returned is in disk blocks (sectors);
@@ -2424,23 +2419,32 @@ get_max_size(int fd)
 	}
 
 	if (index < 0) {
-		switch (index) {
-		case VT_ERROR:
-			break;
-		case VT_EIO:
-			errno = EIO;
-			break;
-		case VT_EINVAL:
-			errno = EINVAL;
+		/*
+		 * Since both attempts to read the label failed, we're
+		 * going to use DKIOCGMEDIAINFO to get device size.
+		 */
+
+		label_type = LABEL_TYPE_OTHER;
+		slicesize = get_device_size(fd);
+		if (slicesize == 0) {
+			switch (index) {
+			case VT_ERROR:
+				break;
+			case VT_EIO:
+				errno = EIO;
+				break;
+			case VT_EINVAL:
+				errno = EINVAL;
+			}
+			perror(gettext("Can not determine partition size"));
+			lockexit(32);
 		}
-		perror(gettext("Can not determine partition size"));
-		lockexit(32);
 	}
 
 	if (label_type == LABEL_TYPE_EFI) {
 		slicesize = efi_vtoc->efi_parts[index].p_size;
 		efi_free(efi_vtoc);
-	} else {
+	} else if (label_type == LABEL_TYPE_VTOC) {
 		/*
 		 * In the vtoc struct, p_size is a 32-bit signed quantity.
 		 * In the dk_gpt struct (efi's version of the vtoc), p_size
@@ -3286,8 +3290,8 @@ static void
 awtfs(diskaddr_t bno, int size, char *bf, int release)
 {
 	int n;
-	aio_trans 	*transp;
-	sigset_t 	old_mask;
+	aio_trans	*transp;
+	sigset_t	old_mask;
 
 	if (fso == -1)
 		return;
@@ -3473,7 +3477,7 @@ setblock(struct fs *fs, unsigned char *cp, int h)
 }
 
 static void
-usage()
+usage(void)
 {
 	(void) fprintf(stderr,
 	    gettext("ufs usage: mkfs [-F FSType] [-V] [-m] [-o options] "
@@ -3997,7 +4001,7 @@ checksblock(struct fs sb, int proceed)
 
 /*
  * Roll the embedded log, if any, and set up the global variables
- * islog, islogok and isufslog.
+ * islog and islogok.
  */
 static void
 logsetup(char *devstr)
@@ -4014,17 +4018,14 @@ logsetup(char *devstr)
 		/*
 		 * No log present, nothing to do.
 		 */
-		islogok = 0;
 		islog = 0;
-		isufslog = 0;
+		islogok = 0;
 		return;
 	} else {
 		/*
 		 * There's a log in a yet unknown state, attempt to roll it.
 		 */
-		islog = 1;
 		islogok = 0;
-		isufslog = 0;
 
 		/*
 		 * We failed to roll the log, bail out.
@@ -4032,7 +4033,7 @@ logsetup(char *devstr)
 		if (rl_roll_log(devstr) != RL_SUCCESS)
 			return;
 
-		isufslog = 1;
+		islog = 1;
 
 		/* log is not okay; check the fs */
 		if ((FSOKAY != (sblock.fs_state + sblock.fs_time)) ||
@@ -4140,7 +4141,7 @@ growinit(char *devstr)
 	/*
 	 * disable ufs logging for growing
 	 */
-	if (isufslog) {
+	if (islog) {
 		if (rl_log_control(devstr, _FIOLOGDISABLE) != RL_SUCCESS) {
 			(void) fprintf(stderr, gettext(
 			    "failed to disable logging\n"));
@@ -4476,9 +4477,9 @@ findcsfragino()
 		dp = gdinode((ino_t)i);
 		switch (dp->di_mode & IFMT) {
 			case IFSHAD	:
-			case IFLNK 	:
-			case IFDIR 	:
-			case IFREG 	: break;
+			case IFLNK	:
+			case IFDIR	:
+			case IFREG	: break;
 			default		: continue;
 		}
 
@@ -4561,7 +4562,7 @@ fixcsfragino()
 static struct csum *
 read_summaryinfo(struct	fs *fsp)
 {
-	struct csum 	*csp;
+	struct csum	*csp;
 	int		i;
 
 	if ((csp = malloc((size_t)fsp->fs_cssize)) == NULL) {
@@ -4589,7 +4590,7 @@ read_summaryinfo(struct	fs *fsp)
 int64_t
 checkfragallocated(daddr32_t frag)
 {
-	struct 	csfrag	*cfp;
+	struct	csfrag	*cfp;
 	/*
 	 * Since the lists are sorted we can break the search if the asked
 	 * frag is smaller then the one in the list.
@@ -4625,12 +4626,12 @@ diskaddr_t
 probe_summaryinfo()
 {
 	/* fragments by which the csum block can be extended. */
-	int64_t 	growth_csum_frags = 0;
+	int64_t		growth_csum_frags = 0;
 	/* fragments by which the filesystem can be extended. */
 	int64_t		growth_fs_frags = 0;
 	int64_t		new_fs_cssize;	/* size of csum blk in the new FS */
 	int64_t		new_fs_ncg;	/* number of cg in the new FS */
-	int64_t 	spare_csum;
+	int64_t		spare_csum;
 	daddr32_t	oldfrag_daddr;
 	daddr32_t	newfrag_daddr;
 	daddr32_t	daddr;
@@ -5714,7 +5715,7 @@ in_64bit_mode(void)
 static int
 validate_size(int fd, diskaddr_t size)
 {
-	char 		buf[DEV_BSIZE];
+	char	buf[DEV_BSIZE];
 	int rc;
 
 	if ((llseek(fd, (offset_t)((size - 1) * DEV_BSIZE), SEEK_SET) == -1) ||

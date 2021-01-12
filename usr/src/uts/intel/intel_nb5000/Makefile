@@ -21,6 +21,7 @@
 # Use is subject to license terms.
 # Copyright (c) 2011 Bayard G. Bell. All rights reserved.
 #
+# Copyright (c) 2018, Joyent, Inc.
 
 #
 # Intel 5000/5100/5400/7300 chipset memory controller hub (MCH) module
@@ -46,13 +47,11 @@ CONF_SRCDIR	= $(UTSBASE)/intel/io/intel_nb5000
 include ../Makefile.intel
 
 OBJECTS		= $(INTEL_NB5000_OBJS:%=$(OBJS_DIR)/%)
-LINTS		= $(INTEL_NB5000_OBJS:%.o=$(LINTS_DIR)/%.ln)
 
 #
 #       Define targets
 #
 ALL_TARGET      = $(BINARY)
-LINT_TARGET     = $(LINT_MODULE).lint
 INSTALL_TARGET  = $(BINARY) $(ROOTMODULE) $(ROOT_CONFFILE)
 
 #
@@ -61,7 +60,10 @@ INSTALL_TARGET  = $(BINARY) $(ROOTMODULE) $(ROOT_CONFFILE)
 LDFLAGS         += -dy -N drv/smbios
 
 CERRWARN	+= -_gcc=-Wno-parentheses
-CERRWARN	+= -_gcc=-Wno-uninitialized
+CERRWARN	+= $(CNOWARN_UNINIT)
+
+# needs work
+SMATCH=off
 
 #
 #       Default build targets.
@@ -75,12 +77,6 @@ all:            $(ALL_DEPS)
 clean:          $(CLEAN_DEPS)
 
 clobber:        $(CLOBBER_DEPS)
-
-lint:           $(LINT_DEPS)
-
-modlintlib:     $(MODLINTLIB_DEPS)
-
-clean.lint:     $(CLEAN_LINT_DEPS)
 
 install:        $(INSTALL_DEPS)
 

@@ -33,7 +33,7 @@
 #pragma init(initialize_raw_access)
 
 static hash_obj_t	*hash_table[TABLE_SIZE];
-extern raw_list_t 	*g_raw;
+extern raw_list_t	*g_raw;
 
 static void
 initialize_raw_access(void)
@@ -433,9 +433,9 @@ get_container_info(const char *def_file, const char *cont_desc_str,
 		token = tokenizer(buf, "#", &field, &matched);
 		/* find the names */
 		token = tokenizer(buf, ":", &field, &matched);
-		if (token != 0x00) {
+		if (token != NULL) {
 			token = tokenizer(token, "|", &item, &matched);
-			while (token != 0x00) {
+			while (token != NULL) {
 				if (strcmp(token, cont_desc_str) == 0) {
 					foundIt = 1;
 					goto found;
@@ -443,7 +443,7 @@ get_container_info(const char *def_file, const char *cont_desc_str,
 				token = tokenizer(item, "|", &item, &matched);
 			}
 			/* check the last remaining item */
-			if ((item != 0x00) &&
+			if ((item != NULL) &&
 			    (strcmp(item, cont_desc_str) == 0)) {
 				foundIt = 1;
 				goto found;
@@ -454,16 +454,16 @@ get_container_info(const char *def_file, const char *cont_desc_str,
 found :
 	if (foundIt == 1) {
 		token = tokenizer(field, ":", &field, &matched);
-		if (token == 0x00) {
+		if (token == NULL) {
 			(void) fclose(file);
 			return (-1);
 		}
 		cont_info->header_ver = (headerrev_t)atoi(token);
 
 		token = tokenizer(field, ":\n", &field, &matched);
-		while (token != 0x00) {
+		while (token != NULL) {
 			token = tokenizer(token, ",", &item, &matched);
-			if (token == 0x00) {
+			if (token == NULL) {
 				(void) fclose(file);
 				return (-1);
 			}
@@ -481,14 +481,14 @@ found :
 			}
 
 			token = tokenizer(item, ",", &item, &matched);
-			if (token == 0x00) {
+			if (token == NULL) {
 				(void) fclose(file);
 				return (-1);
 			}
 
 			cont_info->section_info[cont_info->
 			    num_sections].address = atoi(token);
-			if (item == '\0') {
+			if (item == NULL) {
 				(void) fclose(file);
 				return (-1);
 			}
@@ -1098,7 +1098,7 @@ open_raw_data(raw_list_t *node)
 
 	cont_hash_obj = create_container_hash_object();
 	if (cont_hash_obj == NULL) {
-		return (NULL);
+		return (0);
 	}
 
 	add_hashobject_to_hashtable(cont_hash_obj);
@@ -1122,7 +1122,7 @@ open_raw_data(raw_list_t *node)
 	}
 
 	if (retval < 0) {
-		return (NULL);
+		return (0);
 	}
 
 	cont_hash_obj->u.cont_obj->num_of_section = cont_info.num_sections;
@@ -1131,7 +1131,7 @@ open_raw_data(raw_list_t *node)
 	for (count = 0; count < cont_info.num_sections; count++) {
 		sec_hash_obj = create_section_hash_object();
 		if (sec_hash_obj == NULL) {
-			return (NULL);
+			return (0);
 		}
 
 		add_hashobject_to_hashtable(sec_hash_obj);

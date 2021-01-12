@@ -1,3 +1,4 @@
+
 /*
  * CDDL HEADER START
  *
@@ -20,11 +21,13 @@
  */
 
 /*
- * Copyright 2011, Richard Lowe.
+ * Copyright 2018, Richard Lowe.
  */
 /*
  * Copyright 2010 Sun Microsystems, Inc.  All rights reserved.
  * Use is subject to license terms.
+ *
+ * Copyright 2019 Joyent, Inc.
  */
 
 /*
@@ -36,13 +39,12 @@
  */
 
 /* If you modify this file, you must increment CW_VERSION */
-#define	CW_VERSION	"1.30"
+#define	CW_VERSION	"5.0"
 
 /*
  * -#		Verbose mode
  * -###		Show compiler commands built by driver, no compilation
  * -A<name[(tokens)]>	Preprocessor predicate assertion
- * -B<[static|dynamic]>	Specify dynamic or static binding
  * -C		Prevent preprocessor from removing comments
  * -c		Compile only - produce .o files, suppress linking
  * -cg92	Alias for -xtarget=ss1000
@@ -55,8 +57,6 @@
  *		as errors
  * -fast	Optimize using a selection of options
  * -fd		Report old-style function definitions and declarations
- * -features=zla	Allow zero-length arrays
- * -flags	Show this summary of compiler options
  * -fnonstd	Initialize floating-point hardware to non-standard preferences
  * -fns[=<yes|no>] Select non-standard floating point mode
  * -fprecision=<p> Set FP rounding precision mode p(single, double, extended)
@@ -65,15 +65,12 @@
  * -fsingle	Use single-precision arithmetic (-Xt and -Xs modes only)
  * -ftrap=<t>	Select floating-point trapping mode in effect at startup
  * -fstore	force floating pt. values to target precision on assignment
- * -G		Build a dynamic shared library
  * -g		Compile for debugging
  * -H		Print path name of each file included during compilation
  * -h <name>	Assign <name> to generated dynamic shared library
  * -I<dir>	Add <dir> to preprocessor #include file search path
  * -i		Passed to linker to ignore any LD_LIBRARY_PATH setting
  * -keeptmp	Keep temporary files created during compilation
- * -KPIC	Compile position independent code with 32-bit addresses
- * -Kpic	Compile position independent code
  * -L<dir>	Pass to linker to add <dir> to the library search path
  * -l<name>	Link with library lib<name>.a or lib<name>.so
  * -mc		Remove duplicate strings from .comment section of output files
@@ -83,17 +80,12 @@
  * -native	Find available processor, generate code accordingly
  * -nofstore	Do not force floating pt. values to target precision
  *		on assignment
- * -nolib	Same as -xnolib
- * -noqueue	Disable queuing of compiler license requests
  * -norunpath	Do not build in a runtime path for shared libraries
  * -O		Use default optimization level (-xO2 or -xO3. Check man page.)
  * -o <outputfile> Set name of output file to <outputfile>
  * -P		Compile source through preprocessor only, output to .i  file
- * -PIC		Alias for -KPIC or -xcode=pic32
  * -p		Compile for profiling with prof
- * -pic		Alias for -Kpic or -xcode=pic13
  * -Q[y|n]	Emit/don't emit identification info to output file
- * -qp		Compile for profiling with prof
  * -R<dir[:dir]> Build runtime search path list into executable
  * -S		Compile and only generate assembly code (.s)
  * -s		Strip symbol table from the executable file
@@ -105,16 +97,12 @@
  * -w		Suppress compiler warning messages
  * -Xa		Compile assuming ANSI C conformance, allow K & R extensions
  *		(default mode)
- * -Xc		Compile assuming strict ANSI C conformance
  * -Xs		Compile assuming (pre-ANSI) K & R C style code
  * -Xt		Compile assuming K & R conformance, allow ANSI C
- * -x386	Generate code for the 80386 processor
- * -x486	Generate code for the 80486 processor
  * -xarch=<a>	Specify target architecture instruction set
  * -xbuiltin[=<b>] When profitable inline, or substitute intrinisic functions
  *		for system functions, b={%all,%none}
  * -xCC		Accept C++ style comments
- * -xchar_byte_order=<o> Specify multi-char byte order <o> (default, high, low)
  * -xchip=<c>	Specify the target processor for use by the optimizer
  * -xcode=<c>	Generate different code for forming addresses
  * -xcrossfile[=<n>] Enable optimization and inlining across source files,
@@ -132,15 +120,9 @@
  * -xlibmil	Inline selected libm math routines for optimization
  * -xlic_lib=sunperf	Link in the Sun supplied performance libraries
  * -xlicinfo	Show license server information
- * -xM		Generate makefile dependencies
- * -xM1		Generate makefile dependencies, but exclude /usr/include
  * -xmaxopt=[off,1,2,3,4,5] maximum optimization level allowed on #pragma opt
- * -xnolib	Do not link with default system libraries
- * -xnolibmil	Cancel -xlibmil on command line
  * -xO<n>	Generate optimized code (n={1|2|3|4|5})
  * -xP		Print prototypes for function definitions
- * -xpentium	Generate code for the pentium processor
- * -xpg		Compile for profiling with gprof
  * -xprofile=<p> Collect data for a profile or use a profile to optimize
  *		<p>={{collect,use}[:<path>],tcov}
  * -xregs=<r>	Control register allocation
@@ -154,8 +136,6 @@
  * -xtarget=<t>	Specify target system for optimization
  * -xtemp=<dir>	Set directory for temporary files to <dir>
  * -xtime	Report the execution time for each compilation phase
- * -xtransition	Emit warnings for differences between K&R C and ANSI C
- * -xtrigraphs[=<yes|no>] Enable|disable trigraph translation
  * -xunroll=n	Enable unrolling loops n times where possible
  * -Y<c>,<dir>	Specify <dir> for location of component <c> (a,l,m,p,0,h,i,u)
  * -YA,<dir>	Change default directory searched for components
@@ -176,15 +156,12 @@
  * -c				pass-thru
  * -cg92			-m32 -mcpu=v8 -mtune=supersparc (SPARC only)
  * -D<name[=token]>		pass-thru
- * -dy or -dn			-Wl,-dy or -Wl,-dn
  * -E				pass-thru
  * -erroff=E_EMPTY_TRANSLATION_UNIT ignore
  * -errtags=%all		-Wall
  * -errwarn=%all		-Werror else -Wno-error
  * -fast			error
  * -fd				error
- * -features=zla		ignore
- * -flags			--help
  * -fnonstd			error
  * -fns[=<yes|no>]		error
  * -fprecision=<p>		error
@@ -193,15 +170,12 @@
  * -fsingle[=<n>]		error
  * -ftrap=<t>			error
  * -fstore			error
- * -G				pass-thru
  * -g				pass-thru
  * -H				pass-thru
  * -h <name>			pass-thru
  * -I<dir>			pass-thru
  * -i				pass-thru
  * -keeptmp			-save-temps
- * -KPIC			-fPIC
- * -Kpic			-fpic
  * -L<dir>			pass-thru
  * -l<name>			pass-thru
  * -mc				error
@@ -211,20 +185,14 @@
  * -native			error
  * -nofstore			error
  * -nolib			-nodefaultlibs
- * -noqueue			ignore
  * -norunpath			ignore
  * -O				-O1 (Check the man page to be certain)
  * -o <outputfile>		pass-thru
  * -P				-E -o filename.i (or error)
- * -PIC				-fPIC (C++ only)
  * -p				pass-thru
- * -pic				-fpic (C++ only)
  * -Q[y|n]			error
- * -qp				-p
  * -R<dir[:dir]>		pass-thru
  * -S				pass-thru
- * -s				-Wl,-s
- * -t				-Wl,-t
  * -U<name>			pass-thru
  * -V				--version
  * -v				-Wall
@@ -232,23 +200,17 @@
  * -Wp,<arg>			pass-thru except -xc99=<a>
  * -Wl,<arg>			pass-thru
  * -W{m,0,2,h,i,u>		error/ignore
- * -Wu,-xmodel=kernel		-ffreestanding -mcmodel=kernel -mno-red-zone
  * -xmodel=kernel		-ffreestanding -mcmodel=kernel -mno-red-zone
  * -Wu,-save_args		-msave-args
  * -w				pass-thru
  * -Xa				-std=iso9899:199409 or -ansi
- * -Xc				-ansi -pedantic
  * -Xt				error
  * -Xs				-traditional -std=c89
- * -x386			-march=i386 (x86 only)
- * -x486			-march=i486 (x86 only)
  * -xarch=<a>			table
  * -xbuiltin[=<b>]		-fbuiltin (-fno-builtin otherwise)
  * -xCC				ignore
- * -xchar_byte_order=<o>	error
  * -xchip=<c>			table
  * -xcode=<c>			table
- * -xdebugformat=<format>	ignore (always use dwarf-2 for gcc)
  * -xcrossfile[=<n>]		ignore
  * -xe				error
  * -xF				error
@@ -259,15 +221,9 @@
  * -xlibmieee			error
  * -xlibmil			error
  * -xlic_lib=sunperf		error
- * -xM				-M
- * -xM1				-MM
  * -xmaxopt=[...]		error
- * -xnolib			-nodefaultlibs
- * -xnolibmil			error
  * -xO<n>			-O<n>
  * -xP				error
- * -xpentium			-march=pentium (x86 only)
- * -xpg				error
  * -xprofile=<p>		error
  * -xregs=<r>			table
  * -xs				error
@@ -280,7 +236,6 @@
  * -xtemp=<dir>			error
  * -xtime			error
  * -xtransition			-Wtransition
- * -xtrigraphs=<yes|no>		-trigraphs -notrigraphs
  * -xunroll=n			error
  * -W0,-xdbggen=no%usedonly	-fno-eliminate-unused-debug-symbols
  *				-fno-eliminate-unused-debug-types
@@ -291,20 +246,22 @@
  * -YS,<dir>			error
  */
 
-#include <stdio.h>
-#include <sys/types.h>
-#include <unistd.h>
-#include <string.h>
-#include <stdlib.h>
 #include <ctype.h>
-#include <fcntl.h>
+#include <err.h>
 #include <errno.h>
-#include <stdarg.h>
-#include <sys/utsname.h>
+#include <fcntl.h>
+#include <getopt.h>
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#include <unistd.h>
+#include <dirent.h>
+
 #include <sys/param.h>
-#include <sys/isa_defs.h>
-#include <sys/wait.h>
 #include <sys/stat.h>
+#include <sys/types.h>
+#include <sys/utsname.h>
+#include <sys/wait.h>
 
 #define	CW_F_CXX	0x01
 #define	CW_F_SHADOW	0x02
@@ -312,29 +269,6 @@
 #define	CW_F_ECHO	0x08
 #define	CW_F_XLATE	0x10
 #define	CW_F_PROG	0x20
-
-typedef enum cw_compiler {
-	CW_C_CC = 0,
-	CW_C_GCC
-} cw_compiler_t;
-
-static const char *cmds[] = {
-	"cc", "CC",
-	"gcc", "g++"
-};
-
-static char default_dir[2][MAXPATHLEN] = {
-	DEFAULT_CC_DIR,
-	DEFAULT_GCC_DIR,
-};
-
-#define	CC(ctx) \
-	(((ctx)->i_flags & CW_F_SHADOW) ? \
-	    ((ctx)->i_compiler == CW_C_CC ? CW_C_GCC : CW_C_CC) : \
-	    (ctx)->i_compiler)
-
-#define	CIDX(compiler, flags)	\
-	((int)(compiler) << 1) + ((flags) & CW_F_CXX ? 1 : 0)
 
 typedef enum cw_op {
 	CW_O_NONE = 0,
@@ -351,14 +285,28 @@ struct aelist {
 	int ael_argc;
 };
 
+typedef enum {
+	GNU,
+	SUN,
+	SMATCH
+} compiler_style_t;
+
+typedef struct {
+	char *c_name;
+	char *c_path;
+	compiler_style_t c_style;
+} cw_compiler_t;
+
 typedef struct cw_ictx {
-	cw_compiler_t	i_compiler;
+	struct cw_ictx	*i_next;
+	cw_compiler_t	*i_compiler;
+	char		*i_linker;
 	struct aelist	*i_ae;
 	uint32_t	i_flags;
 	int		i_oldargc;
 	char		**i_oldargv;
 	pid_t		i_pid;
-	char		i_discard[MAXPATHLEN];
+	char		*i_tmpdir;
 	char		*i_stderr;
 } cw_ictx_t;
 
@@ -390,7 +338,7 @@ typedef struct xarch_table {
  */
 static const xarch_table_t xtbl[] = {
 #if defined(__x86)
-	{ "generic",	SS11 },
+	{ "generic",	SS11, {NULL} },
 	{ "generic64",	(SS11|M64), { "-m64", "-mtune=opteron" } },
 	{ "amd64",	(SS11|M64), { "-m64", "-mtune=opteron" } },
 	{ "386",	SS11,	{ "-march=i386" } },
@@ -416,8 +364,6 @@ static const xarch_table_t xtbl[] = {
 };
 
 static int xtbl_size = sizeof (xtbl) / sizeof (xarch_table_t);
-
-static const char *progname;
 
 static const char *xchip_tbl[] = {
 #if defined(__x86)
@@ -464,23 +410,7 @@ static const char *xregs_tbl[] = {
 static void
 nomem(void)
 {
-	(void) fprintf(stderr, "%s: error: out of memory\n", progname);
-	exit(1);
-}
-
-static void
-cw_perror(const char *fmt, ...)
-{
-	va_list ap;
-	int saved_errno = errno;
-
-	(void) fprintf(stderr, "%s: error: ", progname);
-
-	va_start(ap, fmt);
-	(void) vfprintf(stderr, fmt, ap);
-	va_end(ap);
-
-	(void) fprintf(stderr, " (%s)\n", strerror(saved_errno));
+	errx(1, "out of memory");
 }
 
 static void
@@ -488,7 +418,7 @@ newae(struct aelist *ael, const char *arg)
 {
 	struct ae *ae;
 
-	if ((ae = calloc(sizeof (*ae), 1)) == NULL)
+	if ((ae = calloc(1, sizeof (*ae))) == NULL)
 		nomem();
 	ae->ae_arg = strdup(arg);
 	if (ael->ael_tail == NULL)
@@ -502,9 +432,9 @@ newae(struct aelist *ael, const char *arg)
 static cw_ictx_t *
 newictx(void)
 {
-	cw_ictx_t *ctx = calloc(sizeof (cw_ictx_t), 1);
+	cw_ictx_t *ctx = calloc(1, sizeof (cw_ictx_t));
 	if (ctx)
-		if ((ctx->i_ae = calloc(sizeof (struct aelist), 1)) == NULL) {
+		if ((ctx->i_ae = calloc(1, sizeof (struct aelist))) == NULL) {
 			free(ctx);
 			return (NULL);
 		}
@@ -515,9 +445,7 @@ newictx(void)
 static void
 error(const char *arg)
 {
-	(void) fprintf(stderr,
-	    "%s: error: mapping failed at or near arg '%s'\n", progname, arg);
-	exit(2);
+	errx(2, "error: mapping failed at or near arg '%s'", arg);
 }
 
 /*
@@ -549,24 +477,6 @@ optim_disable(struct aelist *h, int level)
 	}
 }
 
-/* ARGSUSED */
-static void
-Xamode(struct aelist *h)
-{
-}
-
-static void
-Xcmode(struct aelist *h)
-{
-	static int xconce;
-
-	if (xconce++)
-		return;
-
-	newae(h, "-ansi");
-	newae(h, "-pedantic-errors");
-}
-
 static void
 Xsmode(struct aelist *h)
 {
@@ -580,11 +490,17 @@ Xsmode(struct aelist *h)
 }
 
 static void
-usage()
+usage(void)
 {
+	extern char *__progname;
 	(void) fprintf(stderr,
-	    "usage: %s { -_cc | -_gcc | -_CC | -_g++ } [ -_compiler | ... ]\n",
-	    progname);
+	    "usage: %s [-C] [--versions] --primary <compiler> "
+	    "[--shadow <compiler>]... -- cflags...\n",
+	    __progname);
+	(void) fprintf(stderr, "compilers take the form: name,path,style\n"
+	    " - name: a unique name usable in flag specifiers\n"
+	    " - path: path to the compiler binary\n"
+	    " - style: the style of flags expected: either sun or gnu\n");
 	exit(2);
 }
 
@@ -635,15 +551,75 @@ xlate(struct aelist *h, const char *xarg, const char **table)
 	}
 }
 
+/*
+ * The compiler wants the output file to end in appropriate extension.  If
+ * we're generating a name from whole cloth (path == NULL), we assume that
+ * extension to be .o, otherwise we match the extension of the caller.
+ */
+static char *
+discard_file_name(cw_ictx_t *ctx, const char *path)
+{
+	char *ret, *ext;
+	char tmpl[] = "cwXXXXXX";
+
+	if (path == NULL) {
+		ext = ".o";
+	} else {
+		ext = strrchr(path, '.');
+	}
+
+	/*
+	 * We need absolute control over where the temporary file goes, since
+	 * we rely on it for cleanup so tempnam(3C) and tmpnam(3C) are
+	 * inappropriate (they use TMPDIR, preferentially).
+	 *
+	 * mkstemp(3C) doesn't actually help us, since the temporary file
+	 * isn't used by us, only its name.
+	 */
+	if (mktemp(tmpl) == NULL)
+		nomem();
+
+	(void) asprintf(&ret, "%s/%s%s", ctx->i_tmpdir, tmpl,
+	    (ext != NULL) ? ext : "");
+
+	if (ret == NULL)
+		nomem();
+
+	return (ret);
+}
+
+static boolean_t
+is_source_file(const char *path)
+{
+	char *ext = strrchr(path, '.');
+
+	if ((ext == NULL) || (*(ext + 1) == '\0'))
+		return (B_FALSE);
+
+	ext += 1;
+
+	if ((strcasecmp(ext, "c") == 0) ||
+	    (strcmp(ext, "cc") == 0) ||
+	    (strcmp(ext, "i") == 0) ||
+	    (strcasecmp(ext, "s") == 0) ||
+	    (strcmp(ext, "cpp") == 0)) {
+		return (B_TRUE);
+	}
+
+	return (B_FALSE);
+}
+
+
 static void
 do_gcc(cw_ictx_t *ctx)
 {
 	int c;
-	int pic = 0, nolibc = 0;
+	int nolibc = 0;
 	int in_output = 0, seen_o = 0, c_files = 0;
 	cw_op_t op = CW_O_LINK;
 	char *model = NULL;
-	int	mflag = 0;
+	char *nameflag;
+	int mflag = 0;
 
 	if (ctx->i_flags & CW_F_PROG) {
 		newae(ctx->i_ae, "--version");
@@ -679,10 +655,12 @@ do_gcc(cw_ictx_t *ctx)
 	 */
 	newae(ctx->i_ae, "-D__sun");
 
+	if (asprintf(&nameflag, "-_%s=", ctx->i_compiler->c_name) == -1)
+		nomem();
+
 	/*
 	 * Walk the argument list, translating as we go ..
 	 */
-
 	while (--ctx->i_oldargc > 0) {
 		char *arg = *++ctx->i_oldargv;
 		size_t arglen = strlen(arg);
@@ -697,10 +675,7 @@ do_gcc(cw_ictx_t *ctx)
 			    strcmp(arg + arglen - 3, ".il") == 0)
 				continue;
 
-			if (!in_output && arglen > 2 &&
-			    arg[arglen - 2] == '.' &&
-			    (arg[arglen - 1] == 'S' || arg[arglen - 1] == 's' ||
-			    arg[arglen - 1] == 'c' || arg[arglen - 1] == 'i'))
+			if (!in_output && is_source_file(arg))
 				c_files++;
 
 			/*
@@ -709,15 +684,20 @@ do_gcc(cw_ictx_t *ctx)
 			 * output is always discarded for the secondary
 			 * compiler.
 			 */
-			if ((ctx->i_flags & CW_F_SHADOW) && in_output)
-				newae(ctx->i_ae, ctx->i_discard);
-			else
+			if ((ctx->i_flags & CW_F_SHADOW) && in_output) {
+				newae(ctx->i_ae, discard_file_name(ctx, arg));
+			} else {
 				newae(ctx->i_ae, arg);
+			}
 			in_output = 0;
 			continue;
 		}
 
 		if (ctx->i_flags & CW_F_CXX) {
+			if (strncmp(arg, "-_g++=", 6) == 0) {
+				newae(ctx->i_ae, strchr(arg, '=') + 1);
+				continue;
+			}
 			if (strncmp(arg, "-compat=", 8) == 0) {
 				/* discard -compat=4 and -compat=5 */
 				continue;
@@ -733,23 +713,6 @@ do_gcc(cw_ictx_t *ctx)
 			if (strcmp(arg, "-xwe") == 0) {
 				/* turn warnings into errors */
 				newae(ctx->i_ae, "-Werror");
-				continue;
-			}
-			if (strcmp(arg, "-noex") == 0) {
-				/* no exceptions */
-				newae(ctx->i_ae, "-fno-exceptions");
-				/* no run time type descriptor information */
-				newae(ctx->i_ae, "-fno-rtti");
-				continue;
-			}
-			if (strcmp(arg, "-pic") == 0) {
-				newae(ctx->i_ae, "-fpic");
-				pic = 1;
-				continue;
-			}
-			if (strcmp(arg, "-PIC") == 0) {
-				newae(ctx->i_ae, "-fPIC");
-				pic = 1;
 				continue;
 			}
 			if (strcmp(arg, "-norunpath") == 0) {
@@ -772,16 +735,11 @@ do_gcc(cw_ictx_t *ctx)
 
 		switch ((c = arg[1])) {
 		case '_':
-			if (strcmp(arg, "-_noecho") == 0)
-				ctx->i_flags &= ~CW_F_ECHO;
-			else if (strncmp(arg, "-_cc=", 5) == 0 ||
-			    strncmp(arg, "-_CC=", 5) == 0)
-				/* EMPTY */;
-			else if (strncmp(arg, "-_gcc=", 6) == 0 ||
-			    strncmp(arg, "-_g++=", 6) == 0)
-				newae(ctx->i_ae, arg + 6);
-			else
-				error(arg);
+			if ((strncmp(arg, nameflag, strlen(nameflag)) == 0) ||
+			    (strncmp(arg, "-_gcc=", 6) == 0) ||
+			    (strncmp(arg, "-_gnu=", 6) == 0)) {
+				newae(ctx->i_ae, strchr(arg, '=') + 1);
+			}
 			break;
 		case '#':
 			if (arglen == 1) {
@@ -790,8 +748,13 @@ do_gcc(cw_ictx_t *ctx)
 			}
 			error(arg);
 			break;
-		case 'g':
-			newae(ctx->i_ae, "-gdwarf-2");
+		case 'f':
+			if ((strcmp(arg, "-fpic") == 0) ||
+			    (strcmp(arg, "-fPIC") == 0)) {
+				newae(ctx->i_ae, arg);
+				break;
+			}
+			error(arg);
 			break;
 		case 'E':
 			if (arglen == 1) {
@@ -820,6 +783,7 @@ do_gcc(cw_ictx_t *ctx)
 			error(arg);
 			break;
 		case 'A':
+		case 'g':
 		case 'h':
 		case 'I':
 		case 'i':
@@ -838,7 +802,7 @@ do_gcc(cw_ictx_t *ctx)
 				newae(ctx->i_ae, arg);
 			} else if (ctx->i_flags & CW_F_SHADOW) {
 				newae(ctx->i_ae, "-o");
-				newae(ctx->i_ae, ctx->i_discard);
+				newae(ctx->i_ae, discard_file_name(ctx, arg));
 			} else {
 				newae(ctx->i_ae, arg);
 			}
@@ -853,16 +817,6 @@ do_gcc(cw_ictx_t *ctx)
 				newae(ctx->i_ae, "-ffreestanding");
 			break;
 		case 'd':
-			if (arglen == 2) {
-				if (strcmp(arg, "-dy") == 0) {
-					newae(ctx->i_ae, "-Wl,-dy");
-					break;
-				}
-				if (strcmp(arg, "-dn") == 0) {
-					newae(ctx->i_ae, "-Wl,-dn");
-					break;
-				}
-			}
 			if (strcmp(arg, "-dalign") == 0) {
 				/*
 				 * -dalign forces alignment in some cases;
@@ -895,51 +849,12 @@ do_gcc(cw_ictx_t *ctx)
 			}
 			error(arg);
 			break;
-		case 'f':
-			if (strcmp(arg, "-flags") == 0) {
-				newae(ctx->i_ae, "--help");
-				break;
-			}
-			if (strncmp(arg, "-features=zla", 13) == 0) {
-				/*
-				 * Accept but ignore this -- gcc allows
-				 * zero length arrays.
-				 */
-				break;
-			}
-			error(arg);
-			break;
-		case 'G':
-			newae(ctx->i_ae, "-shared");
-			nolibc = 1;
-			break;
 		case 'k':
 			if (strcmp(arg, "-keeptmp") == 0) {
 				newae(ctx->i_ae, "-save-temps");
 				break;
 			}
 			error(arg);
-			break;
-		case 'K':
-			if (arglen == 1) {
-				if ((arg = *++ctx->i_oldargv) == NULL ||
-				    *arg == '\0')
-					error("-K");
-				ctx->i_oldargc--;
-			} else {
-				arg += 2;
-			}
-			if (strcmp(arg, "pic") == 0) {
-				newae(ctx->i_ae, "-fpic");
-				pic = 1;
-				break;
-			}
-			if (strcmp(arg, "PIC") == 0) {
-				newae(ctx->i_ae, "-fPIC");
-				pic = 1;
-				break;
-			}
-			error("-K");
 			break;
 		case 'm':
 			if (strcmp(arg, "-mt") == 0) {
@@ -957,39 +872,6 @@ do_gcc(cw_ictx_t *ctx)
 			if (strcmp(arg, "-m32") == 0) {
 				newae(ctx->i_ae, "-m32");
 				mflag |= M32;
-				break;
-			}
-			error(arg);
-			break;
-		case 'B':	/* linker options */
-		case 'M':
-		case 'z':
-			{
-				char *opt;
-				size_t len;
-				char *s;
-
-				if (arglen == 1) {
-					opt = *++ctx->i_oldargv;
-					if (opt == NULL || *opt == '\0')
-						error(arg);
-					ctx->i_oldargc--;
-				} else {
-					opt = arg + 2;
-				}
-				len = strlen(opt) + 7;
-				if ((s = malloc(len)) == NULL)
-					nomem();
-				(void) snprintf(s, len, "-Wl,-%c%s", c, opt);
-				newae(ctx->i_ae, s);
-				free(s);
-			}
-			break;
-		case 'n':
-			if (strcmp(arg, "-noqueue") == 0) {
-				/*
-				 * Horrid license server stuff - n/a
-				 */
 				break;
 			}
 			error(arg);
@@ -1013,27 +895,15 @@ do_gcc(cw_ictx_t *ctx)
 			op = CW_O_PREPROCESS;
 			nolibc = 1;
 			break;
-		case 'q':
-			if (strcmp(arg, "-qp") == 0) {
-				newae(ctx->i_ae, "-p");
-				break;
-			}
-			error(arg);
-			break;
 		case 's':
-			if (arglen == 1) {
-				newae(ctx->i_ae, "-Wl,-s");
+			if (strcmp(arg, "-shared") == 0) {
+				newae(ctx->i_ae, "-shared");
+				nolibc = 1;
 				break;
 			}
 			error(arg);
 			break;
-		case 't':
-			if (arglen == 1) {
-				newae(ctx->i_ae, "-Wl,-t");
-				break;
-			}
-			error(arg);
-			break;
+
 		case 'V':
 			if (arglen == 1) {
 				ctx->i_flags &= ~CW_F_ECHO;
@@ -1061,18 +931,6 @@ do_gcc(cw_ictx_t *ctx)
 			    strncmp(arg, "-Wp,", 4) == 0 ||
 			    strncmp(arg, "-Wl,", 4) == 0) {
 				newae(ctx->i_ae, arg);
-				break;
-			}
-			if (strcmp(arg, "-W0,-xc99=pragma") == 0) {
-				/* (undocumented) enables _Pragma */
-				break;
-			}
-			if (strcmp(arg, "-W0,-xc99=%none") == 0) {
-				/*
-				 * This is a polite way of saying
-				 * "no c99 constructs allowed!"
-				 * For now, just accept and ignore this.
-				 */
 				break;
 			}
 			if (strcmp(arg, "-W0,-noglobal") == 0 ||
@@ -1105,13 +963,6 @@ do_gcc(cw_ictx_t *ctx)
 				 */
 				break;
 			}
-			if (strcmp(arg, "-W2,-Rcond_elim") == 0) {
-				/*
-				 * Elimination and expansion of conditionals;
-				 * gcc has no direct equivalent.
-				 */
-				break;
-			}
 			if (strcmp(arg, "-Wd,-xsafe=unboundsym") == 0) {
 				/*
 				 * Prevents optimizing away checks for
@@ -1122,8 +973,6 @@ do_gcc(cw_ictx_t *ctx)
 			}
 			if (strncmp(arg, "-Wc,-xcode=", 11) == 0) {
 				xlate(ctx->i_ae, arg + 11, xcode_tbl);
-				if (strncmp(arg + 11, "pic", 3) == 0)
-					pic = 1;
 				break;
 			}
 			if (strncmp(arg, "-Wc,-Qiselect", 13) == 0) {
@@ -1141,13 +990,6 @@ do_gcc(cw_ictx_t *ctx)
 				break;
 			}
 #if defined(__x86)
-			if (strcmp(arg, "-Wu,-xmodel=kernel") == 0) {
-				newae(ctx->i_ae, "-ffreestanding");
-				newae(ctx->i_ae, "-mno-red-zone");
-				model = "-mcmodel=kernel";
-				nolibc = 1;
-				break;
-			}
 			if (strcmp(arg, "-Wu,-save_args") == 0) {
 				newae(ctx->i_ae, "-msave-args");
 				break;
@@ -1158,11 +1000,6 @@ do_gcc(cw_ictx_t *ctx)
 		case 'X':
 			if (strcmp(arg, "-Xa") == 0 ||
 			    strcmp(arg, "-Xt") == 0) {
-				Xamode(ctx->i_ae);
-				break;
-			}
-			if (strcmp(arg, "-Xc") == 0) {
-				Xcmode(ctx->i_ae);
 				break;
 			}
 			if (strcmp(arg, "-Xs") == 0) {
@@ -1175,22 +1012,6 @@ do_gcc(cw_ictx_t *ctx)
 			if (arglen == 1)
 				error(arg);
 			switch (arg[2]) {
-#if defined(__x86)
-			case '3':
-				if (strcmp(arg, "-x386") == 0) {
-					newae(ctx->i_ae, "-march=i386");
-					break;
-				}
-				error(arg);
-				break;
-			case '4':
-				if (strcmp(arg, "-x486") == 0) {
-					newae(ctx->i_ae, "-march=i486");
-					break;
-				}
-				error(arg);
-				break;
-#endif	/* __x86 */
 			case 'a':
 				if (strncmp(arg, "-xarch=", 7) == 0) {
 					mflag |= xlate_xtb(ctx->i_ae, arg + 7);
@@ -1227,20 +1048,9 @@ do_gcc(cw_ictx_t *ctx)
 				}
 				if (strncmp(arg, "-xcode=", 7) == 0) {
 					xlate(ctx->i_ae, arg + 7, xcode_tbl);
-					if (strncmp(arg + 7, "pic", 3) == 0)
-						pic = 1;
 					break;
 				}
-				if (strncmp(arg, "-xcache=", 8) == 0)
-					break;
 				if (strncmp(arg, "-xcrossfile", 11) == 0)
-					break;
-				error(arg);
-				break;
-			case 'd':
-				if (strcmp(arg, "-xdepend") == 0)
-					break;
-				if (strncmp(arg, "-xdebugformat=", 14) == 0)
 					break;
 				error(arg);
 				break;
@@ -1276,36 +1086,15 @@ do_gcc(cw_ictx_t *ctx)
 				error(arg);
 				break;
 #endif	/* __x86 */
-			case 'M':
-				if (strcmp(arg, "-xM") == 0) {
-					newae(ctx->i_ae, "-M");
-					break;
-				}
-				if (strcmp(arg, "-xM1") == 0) {
-					newae(ctx->i_ae, "-MM");
-					break;
-				}
-				error(arg);
-				break;
-			case 'n':
-				if (strcmp(arg, "-xnolib") == 0) {
-					nolibc = 1;
-					break;
-				}
-				error(arg);
-				break;
 			case 'O':
 				if (strncmp(arg, "-xO", 3) == 0) {
 					size_t len = strlen(arg);
-					char *s;
+					char *s = NULL;
 					int c = *(arg + 3);
 					int level;
 
 					if (len != 4 || !isdigit(c))
 						error(arg);
-
-					if ((s = malloc(len)) == NULL)
-						nomem();
 
 					level = atoi(arg + 3);
 					if (level > 5)
@@ -1322,20 +1111,10 @@ do_gcc(cw_ictx_t *ctx)
 						 */
 						level = 2;
 					}
-					(void) snprintf(s, len, "-O%d", level);
+					if (asprintf(&s, "-O%d", level) == -1)
+						nomem();
 					newae(ctx->i_ae, s);
 					free(s);
-					break;
-				}
-				error(arg);
-				break;
-			case 'p':
-				if (strcmp(arg, "-xpentium") == 0) {
-					newae(ctx->i_ae, "-march=pentium");
-					break;
-				}
-				if (strcmp(arg, "-xpg") == 0) {
-					newae(ctx->i_ae, "-pg");
 					break;
 				}
 				error(arg);
@@ -1355,18 +1134,6 @@ do_gcc(cw_ictx_t *ctx)
 				error(arg);
 				break;
 			case 't':
-				if (strcmp(arg, "-xtransition") == 0) {
-					newae(ctx->i_ae, "-Wtransition");
-					break;
-				}
-				if (strcmp(arg, "-xtrigraphs=yes") == 0) {
-					newae(ctx->i_ae, "-trigraphs");
-					break;
-				}
-				if (strcmp(arg, "-xtrigraphs=no") == 0) {
-					newae(ctx->i_ae, "-notrigraphs");
-					break;
-				}
 				if (strncmp(arg, "-xtarget=", 9) == 0) {
 					xlate(ctx->i_ae, arg + 9, xtarget_tbl);
 					break;
@@ -1394,14 +1161,6 @@ do_gcc(cw_ictx_t *ctx)
 			/* Just ignore -YS,... for now */
 			if (strncmp(arg, "S,", 2) == 0)
 				break;
-			if (strncmp(arg, "l,", 2) == 0) {
-				char *s = strdup(arg);
-				s[0] = '-';
-				s[1] = 'B';
-				newae(ctx->i_ae, s);
-				free(s);
-				break;
-			}
 			if (strncmp(arg, "I,", 2) == 0) {
 				char *s = strdup(arg);
 				s[0] = '-';
@@ -1423,11 +1182,20 @@ do_gcc(cw_ictx_t *ctx)
 		}
 	}
 
-	if (c_files > 1 && (ctx->i_flags & CW_F_SHADOW) &&
-	    op != CW_O_PREPROCESS) {
-		(void) fprintf(stderr, "%s: error: multiple source files are "
-		    "allowed only with -E or -P\n", progname);
-		exit(2);
+	free(nameflag);
+
+	/*
+	 * When compiling multiple source files in a single invocation some
+	 * compilers output objects into the current directory with
+	 * predictable and conventional names.
+	 *
+	 * We prevent any attempt to compile multiple files at once so that
+	 * any such objects created by a shadow can't escape into a later
+	 * link-edit.
+	 */
+	if (c_files > 1 && op != CW_O_PREPROCESS) {
+		errx(2, "multiple source files are "
+		    "allowed only with -E or -P");
 	}
 
 	/*
@@ -1436,9 +1204,8 @@ do_gcc(cw_ictx_t *ctx)
 	 * used.
 	 */
 	if ((mflag & (SS11|SS12)) == (SS11|SS12)) {
-		(void) fprintf(stderr,
+		errx(2,
 		    "Conflicting \"-xarch=\" flags (both Studio 11 and 12)\n");
-		exit(2);
 	}
 
 	switch (mflag) {
@@ -1493,57 +1260,94 @@ do_gcc(cw_ictx_t *ctx)
 		    "Incompatible -xarch= and/or -m32/-m64 options used.\n");
 		exit(2);
 	}
-	if (op == CW_O_LINK && (ctx->i_flags & CW_F_SHADOW))
-		exit(0);
 
-	if (model && !pic)
+	if (ctx->i_flags & CW_F_SHADOW) {
+		if (op == CW_O_PREPROCESS)
+			exit(0);
+		else if (op == CW_O_LINK && c_files == 0)
+			exit(0);
+	}
+
+	if (model != NULL)
 		newae(ctx->i_ae, model);
 	if (!nolibc)
 		newae(ctx->i_ae, "-lc");
 	if (!seen_o && (ctx->i_flags & CW_F_SHADOW)) {
 		newae(ctx->i_ae, "-o");
-		newae(ctx->i_ae, ctx->i_discard);
+		newae(ctx->i_ae, discard_file_name(ctx, NULL));
 	}
+}
+
+static void
+do_smatch(cw_ictx_t *ctx)
+{
+	if (ctx->i_flags & CW_F_PROG) {
+		newae(ctx->i_ae, "--version");
+		return;
+	}
+
+	/*
+	 * Some sources shouldn't run smatch at all.
+	 */
+	for (int i = 0; i < ctx->i_oldargc; i++) {
+		char *arg = ctx->i_oldargv[i];
+
+		if (strcmp(arg, "-_smatch=off") == 0) {
+			ctx->i_flags &= ~ (CW_F_EXEC | CW_F_ECHO);
+			return;
+		}
+	}
+
+	/*
+	 * smatch can handle gcc's options.
+	 */
+	do_gcc(ctx);
 }
 
 static void
 do_cc(cw_ictx_t *ctx)
 {
-	int in_output = 0, seen_o = 0;
+	int in_output = 0, seen_o = 0, c_files = 0;
 	cw_op_t op = CW_O_LINK;
+	char *nameflag;
 
 	if (ctx->i_flags & CW_F_PROG) {
 		newae(ctx->i_ae, "-V");
 		return;
 	}
 
+	if (asprintf(&nameflag, "-_%s=", ctx->i_compiler->c_name) == -1)
+		nomem();
+
 	while (--ctx->i_oldargc > 0) {
 		char *arg = *++ctx->i_oldargv;
 
+		if (strncmp(arg, "-_CC=", 5) == 0) {
+			newae(ctx->i_ae, strchr(arg, '=') + 1);
+			continue;
+		}
+
 		if (*arg != '-') {
+			if (!in_output && is_source_file(arg))
+				c_files++;
+
 			if (in_output == 0 || !(ctx->i_flags & CW_F_SHADOW)) {
 				newae(ctx->i_ae, arg);
 			} else {
 				in_output = 0;
-				newae(ctx->i_ae, ctx->i_discard);
+				newae(ctx->i_ae, discard_file_name(ctx, arg));
 			}
 			continue;
 		}
 		switch (*(arg + 1)) {
 		case '_':
-			if (strcmp(arg, "-_noecho") == 0) {
-				ctx->i_flags &= ~CW_F_ECHO;
-			} else if (strncmp(arg, "-_cc=", 5) == 0 ||
-			    strncmp(arg, "-_CC=", 5) == 0) {
-				newae(ctx->i_ae, arg + 5);
-			} else if (strncmp(arg, "-_gcc=", 6) != 0 &&
-			    strncmp(arg, "-_g++=", 6) != 0) {
-				(void) fprintf(stderr,
-				    "%s: invalid argument '%s'\n", progname,
-				    arg);
-				exit(2);
+			if ((strncmp(arg, nameflag, strlen(nameflag)) == 0) ||
+			    (strncmp(arg, "-_cc=", 5) == 0) ||
+			    (strncmp(arg, "-_sun=", 6) == 0)) {
+				newae(ctx->i_ae, strchr(arg, '=') + 1);
 			}
 			break;
+
 		case 'V':
 			ctx->i_flags &= ~CW_F_ECHO;
 			newae(ctx->i_ae, arg);
@@ -1555,7 +1359,7 @@ do_cc(cw_ictx_t *ctx)
 				newae(ctx->i_ae, arg);
 			} else if (ctx->i_flags & CW_F_SHADOW) {
 				newae(ctx->i_ae, "-o");
-				newae(ctx->i_ae, ctx->i_discard);
+				newae(ctx->i_ae, discard_file_name(ctx, arg));
 			} else {
 				newae(ctx->i_ae, arg);
 			}
@@ -1576,69 +1380,58 @@ do_cc(cw_ictx_t *ctx)
 		}
 	}
 
-	if ((op == CW_O_LINK || op == CW_O_PREPROCESS) &&
-	    (ctx->i_flags & CW_F_SHADOW))
-		exit(0);
+	free(nameflag);
+
+	/* See the comment on this same code in do_gcc() */
+	if (c_files > 1 && op != CW_O_PREPROCESS) {
+		errx(2, "multiple source files are "
+		    "allowed only with -E or -P");
+	}
+
+	if (ctx->i_flags & CW_F_SHADOW) {
+		if (op == CW_O_PREPROCESS)
+			exit(0);
+		else if (op == CW_O_LINK && c_files == 0)
+			exit(0);
+	}
 
 	if (!seen_o && (ctx->i_flags & CW_F_SHADOW)) {
 		newae(ctx->i_ae, "-o");
-		newae(ctx->i_ae, ctx->i_discard);
+		newae(ctx->i_ae, discard_file_name(ctx, NULL));
 	}
 }
 
 static void
 prepctx(cw_ictx_t *ctx)
 {
-	const char *dir = NULL, *cmd;
-	char *program = NULL;
-	size_t len;
-
-	switch (CIDX(CC(ctx), ctx->i_flags)) {
-		case CIDX(CW_C_CC, 0):
-			program = getenv("CW_CC");
-			dir = getenv("CW_CC_DIR");
-			break;
-		case CIDX(CW_C_CC, CW_F_CXX):
-			program = getenv("CW_CPLUSPLUS");
-			dir = getenv("CW_CPLUSPLUS_DIR");
-			break;
-		case CIDX(CW_C_GCC, 0):
-			program = getenv("CW_GCC");
-			dir = getenv("CW_GCC_DIR");
-			break;
-		case CIDX(CW_C_GCC, CW_F_CXX):
-			program = getenv("CW_GPLUSPLUS");
-			dir = getenv("CW_GPLUSPLUS_DIR");
-			break;
-	}
-
-	if (program == NULL) {
-		if (dir == NULL)
-			dir = default_dir[CC(ctx)];
-		cmd = cmds[CIDX(CC(ctx), ctx->i_flags)];
-		len = strlen(dir) + strlen(cmd) + 2;
-		if ((program = malloc(len)) == NULL)
-			nomem();
-		(void) snprintf(program, len, "%s/%s", dir, cmd);
-	}
-
-	newae(ctx->i_ae, program);
+	newae(ctx->i_ae, ctx->i_compiler->c_path);
 
 	if (ctx->i_flags & CW_F_PROG) {
 		(void) printf("%s: %s\n", (ctx->i_flags & CW_F_SHADOW) ?
-		    "shadow" : "primary", program);
+		    "shadow" : "primary", ctx->i_compiler->c_path);
 		(void) fflush(stdout);
 	}
+
+	/*
+	 * If LD_ALTEXEC is already set, the expectation would be that that
+	 * link-editor is run, as such we need to leave it the environment
+	 * alone and let that happen.
+	 */
+	if ((ctx->i_linker != NULL) && (getenv("LD_ALTEXEC") == NULL))
+		setenv("LD_ALTEXEC", ctx->i_linker, 1);
 
 	if (!(ctx->i_flags & CW_F_XLATE))
 		return;
 
-	switch (CC(ctx)) {
-	case CW_C_CC:
+	switch (ctx->i_compiler->c_style) {
+	case SUN:
 		do_cc(ctx);
 		break;
-	case CW_C_GCC:
+	case GNU:
 		do_gcc(ctx);
+		break;
+	case SMATCH:
+		do_smatch(ctx);
 		break;
 	}
 }
@@ -1674,19 +1467,22 @@ invoke(cw_ictx_t *ctx)
 		return (0);
 
 	/*
-	 * We must fix up the environment here so that the
-	 * dependency files are not trampled by the shadow compiler.
+	 * We must fix up the environment here so that the dependency files are
+	 * not trampled by the shadow compiler. Also take care of GCC
+	 * environment variables that will throw off gcc. This assumes a primary
+	 * gcc.
 	 */
 	if ((ctx->i_flags & CW_F_SHADOW) &&
 	    (unsetenv("SUNPRO_DEPENDENCIES") != 0 ||
-	    unsetenv("DEPENDENCIES_OUTPUT") != 0)) {
+	    unsetenv("DEPENDENCIES_OUTPUT") != 0 ||
+	    unsetenv("GCC_ROOT") != 0)) {
 		(void) fprintf(stderr, "error: environment setup failed: %s\n",
 		    strerror(errno));
 		return (-1);
 	}
 
 	(void) execv(newargv[0], newargv);
-	cw_perror("couldn't run %s", newargv[0]);
+	warn("couldn't run %s", newargv[0]);
 
 	return (-1);
 }
@@ -1706,7 +1502,7 @@ reap(cw_ictx_t *ctx)
 
 	do {
 		if (waitpid(ctx->i_pid, &status, 0) < 0) {
-			cw_perror("cannot reap child");
+			warn("cannot reap child");
 			return (-1);
 		}
 		if (status != 0) {
@@ -1720,10 +1516,8 @@ reap(cw_ictx_t *ctx)
 		}
 	} while (!WIFEXITED(status) && !WIFSIGNALED(status));
 
-	(void) unlink(ctx->i_discard);
-
 	if (stat(ctx->i_stderr, &s) < 0) {
-		cw_perror("stat failed on child cleanup");
+		warn("stat failed on child cleanup");
 		return (-1);
 	}
 	if (s.st_size != 0) {
@@ -1751,21 +1545,7 @@ reap(cw_ictx_t *ctx)
 static int
 exec_ctx(cw_ictx_t *ctx, int block)
 {
-	char *file;
-
-	/*
-	 * To avoid offending cc's sensibilities, the name of its output
-	 * file must end in '.o'.
-	 */
-	if ((file = tempnam(NULL, ".cw")) == NULL) {
-		nomem();
-		return (-1);
-	}
-	(void) strlcpy(ctx->i_discard, file, MAXPATHLEN);
-	(void) strlcat(ctx->i_discard, ".o", MAXPATHLEN);
-	free(file);
-
-	if ((ctx->i_stderr = tempnam(NULL, ".cw")) == NULL) {
+	if ((ctx->i_stderr = tempnam(ctx->i_tmpdir, "cw")) == NULL) {
 		nomem();
 		return (-1);
 	}
@@ -1776,26 +1556,23 @@ exec_ctx(cw_ictx_t *ctx, int block)
 		(void) fclose(stderr);
 		if ((fd = open(ctx->i_stderr, O_WRONLY | O_CREAT | O_EXCL,
 		    0666)) < 0) {
-			cw_perror("open failed for standard error");
-			exit(1);
+			err(1, "open failed for standard error");
 		}
 		if (dup2(fd, 2) < 0) {
-			cw_perror("dup2 failed for standard error");
-			exit(1);
+			err(1, "dup2 failed for standard error");
 		}
 		if (fd != 2)
 			(void) close(fd);
 		if (freopen("/dev/fd/2", "w", stderr) == NULL) {
-			cw_perror("freopen failed for /dev/fd/2");
-			exit(1);
+			err(1, "freopen failed for /dev/fd/2");
 		}
+
 		prepctx(ctx);
 		exit(invoke(ctx));
 	}
 
 	if (ctx->i_pid < 0) {
-		cw_perror("fork failed");
-		return (1);
+		err(1, "fork failed");
 	}
 
 	if (block)
@@ -1804,115 +1581,232 @@ exec_ctx(cw_ictx_t *ctx, int block)
 	return (0);
 }
 
+static void
+parse_compiler(const char *spec, cw_compiler_t *compiler)
+{
+	char *tspec, *token;
+
+	if ((tspec = strdup(spec)) == NULL)
+		nomem();
+
+	if ((token = strsep(&tspec, ",")) == NULL)
+		errx(1, "Compiler is missing a name: %s", spec);
+	compiler->c_name = token;
+
+	if ((token = strsep(&tspec, ",")) == NULL)
+		errx(1, "Compiler is missing a path: %s", spec);
+	compiler->c_path = token;
+
+	if ((token = strsep(&tspec, ",")) == NULL)
+		errx(1, "Compiler is missing a style: %s", spec);
+
+	if ((strcasecmp(token, "gnu") == 0) ||
+	    (strcasecmp(token, "gcc") == 0)) {
+		compiler->c_style = GNU;
+	} else if ((strcasecmp(token, "sun") == 0) ||
+	    (strcasecmp(token, "cc") == 0)) {
+		compiler->c_style = SUN;
+	} else if ((strcasecmp(token, "smatch") == 0)) {
+		compiler->c_style = SMATCH;
+	} else {
+		errx(1, "unknown compiler style: %s", token);
+	}
+
+	if (tspec != NULL)
+		errx(1, "Excess tokens in compiler: %s", spec);
+}
+
+static void
+cleanup(cw_ictx_t *ctx)
+{
+	DIR *dirp;
+	struct dirent *dp;
+	char buf[MAXPATHLEN];
+
+	if ((dirp = opendir(ctx->i_tmpdir)) == NULL) {
+		if (errno != ENOENT) {
+			err(1, "couldn't open temp directory: %s",
+			    ctx->i_tmpdir);
+		} else {
+			return;
+		}
+	}
+
+	errno = 0;
+	while ((dp = readdir(dirp)) != NULL) {
+		(void) snprintf(buf, MAXPATHLEN, "%s/%s", ctx->i_tmpdir,
+		    dp->d_name);
+
+		if (strcmp(dp->d_name, ".") == 0 ||
+		    strcmp(dp->d_name, "..") == 0) {
+			continue;
+		}
+
+		if (unlink(buf) == -1)
+			err(1, "failed to unlink temp file: %s", dp->d_name);
+		errno = 0;
+	}
+
+	if (errno != 0) {
+		err(1, "failed to read temporary directory: %s",
+		    ctx->i_tmpdir);
+	}
+
+	(void) closedir(dirp);
+	if (rmdir(ctx->i_tmpdir) != 0) {
+		err(1, "failed to unlink temporary directory: %s",
+		    ctx->i_tmpdir);
+	}
+}
+
 int
 main(int argc, char **argv)
 {
-	cw_ictx_t *ctx = newictx();
-	cw_ictx_t *ctx_shadow = newictx();
-	const char *dir;
-	int do_serial, do_shadow;
+	int ch;
+	cw_compiler_t primary = { NULL, NULL, 0 };
+	cw_compiler_t shadows[10];
+	int nshadows = 0;
 	int ret = 0;
+	boolean_t do_serial = B_FALSE;
+	boolean_t do_exec = B_FALSE;
+	boolean_t vflg = B_FALSE;
+	boolean_t Cflg = B_FALSE;
+	boolean_t cflg = B_FALSE;
+	boolean_t nflg = B_FALSE;
+	char *tmpdir;
 
-	if ((progname = strrchr(argv[0], '/')) == NULL)
-		progname = argv[0];
-	else
-		progname++;
+	cw_ictx_t *main_ctx;
 
-	if (ctx == NULL || ctx_shadow == NULL)
+	static struct option longopts[] = {
+		{ "compiler", no_argument, NULL, 'c' },
+		{ "linker", required_argument, NULL, 'l' },
+		{ "noecho", no_argument, NULL, 'n' },
+		{ "primary", required_argument, NULL, 'p' },
+		{ "shadow", required_argument, NULL, 's' },
+		{ "versions", no_argument, NULL, 'v' },
+		{ NULL, 0, NULL, 0 },
+	};
+
+
+	if ((main_ctx = newictx()) == NULL)
 		nomem();
 
-	ctx->i_flags = CW_F_ECHO|CW_F_XLATE;
+	while ((ch = getopt_long(argc, argv, "C", longopts, NULL)) != -1) {
+		switch (ch) {
+		case 'c':
+			cflg = B_TRUE;
+			break;
+		case 'C':
+			Cflg = B_TRUE;
+			break;
+		case 'l':
+			if ((main_ctx->i_linker = strdup(optarg)) == NULL)
+				nomem();
+			break;
+		case 'n':
+			nflg = B_TRUE;
+			break;
+		case 'p':
+			if (primary.c_path != NULL) {
+				warnx("Only one primary compiler may "
+				    "be specified");
+				usage();
+			}
 
-	/*
-	 * Figure out where to get our tools from.  This depends on
-	 * the environment variables set at run time.
-	 */
-	if ((dir = getenv("SPRO_VROOT")) != NULL) {
-		(void) snprintf(default_dir[CW_C_CC], MAXPATHLEN,
-		    "%s/bin", dir);
-	} else if ((dir = getenv("SPRO_ROOT")) != NULL) {
-		(void) snprintf(default_dir[CW_C_CC], MAXPATHLEN,
-		    "%s/SS12/bin", dir);
-	} else if ((dir = getenv("BUILD_TOOLS")) != NULL) {
-		(void) snprintf(default_dir[CW_C_CC], MAXPATHLEN,
-		    "%s/SUNWspro/SS12/bin", dir);
+			parse_compiler(optarg, &primary);
+			break;
+		case 's':
+			if (nshadows >= 10)
+				errx(1, "May only use 10 shadows at "
+				    "the moment");
+			parse_compiler(optarg, &shadows[nshadows]);
+			nshadows++;
+			break;
+		case 'v':
+			vflg = B_TRUE;
+			break;
+		default:
+			(void) fprintf(stderr, "Did you forget '--'?\n");
+			usage();
+		}
 	}
 
-	if ((dir = getenv("GCC_ROOT")) != NULL) {
-		(void) snprintf(default_dir[CW_C_GCC], MAXPATHLEN,
-		    "%s/bin", dir);
-	}
-
-	do_shadow = (getenv("CW_NO_SHADOW") ? 0 : 1);
-	do_serial = (getenv("CW_SHADOW_SERIAL") ? 1 : 0);
-
-	if (getenv("CW_NO_EXEC") == NULL)
-		ctx->i_flags |= CW_F_EXEC;
-
-	/*
-	 * The first argument must be one of "-_cc", "-_gcc", "-_CC", or "-_g++"
-	 */
-	if (argc == 1)
+	if (primary.c_path == NULL) {
+		warnx("A primary compiler must be specified");
 		usage();
-	argc--;
-	argv++;
-	if (strcmp(argv[0], "-_cc") == 0) {
-		ctx->i_compiler = CW_C_CC;
-	} else if (strcmp(argv[0], "-_gcc") == 0) {
-		ctx->i_compiler = CW_C_GCC;
-	} else if (strcmp(argv[0], "-_CC") == 0) {
-		ctx->i_compiler = CW_C_CC;
-		ctx->i_flags |= CW_F_CXX;
-	} else if (strcmp(argv[0], "-_g++") == 0) {
-		ctx->i_compiler = CW_C_GCC;
-		ctx->i_flags |= CW_F_CXX;
-	} else {
-		/* assume "-_gcc" by default */
-		argc++;
-		argv--;
-		ctx->i_compiler = CW_C_GCC;
 	}
 
-	/*
-	 * -_compiler - tell us the path to the primary compiler only
-	 */
-	if (argc > 1 && strcmp(argv[1], "-_compiler") == 0) {
-		ctx->i_flags &= ~CW_F_XLATE;
-		prepctx(ctx);
-		(void) printf("%s\n", ctx->i_ae->ael_head->ae_arg);
-		return (0);
+	do_serial = (getenv("CW_SHADOW_SERIAL") == NULL) ? B_FALSE : B_TRUE;
+	do_exec = (getenv("CW_NO_EXEC") == NULL) ? B_TRUE : B_FALSE;
+
+	/* Leave room for argv[0] */
+	argc -= (optind - 1);
+	argv += (optind - 1);
+
+	main_ctx->i_oldargc = argc;
+	main_ctx->i_oldargv = argv;
+	main_ctx->i_flags = CW_F_XLATE;
+	if (nflg == 0)
+		main_ctx->i_flags |= CW_F_ECHO;
+	if (do_exec)
+		main_ctx->i_flags |= CW_F_EXEC;
+	if (Cflg)
+		main_ctx->i_flags |= CW_F_CXX;
+	main_ctx->i_compiler = &primary;
+
+	if (cflg) {
+		(void) fputs(primary.c_path, stdout);
 	}
 
-	/*
-	 * -_versions - tell us the cw version, paths to all compilers, and
-	 *		ask each for its version if we know how.
-	 */
-	if (argc > 1 && strcmp(argv[1], "-_versions") == 0) {
-		(void) printf("cw version %s", CW_VERSION);
-		if (!do_shadow)
-			(void) printf(" (SHADOW MODE DISABLED)");
-		(void) printf("\n");
+	if (vflg) {
+		(void) printf("cw version %s\n", CW_VERSION);
 		(void) fflush(stdout);
-		ctx->i_flags &= ~CW_F_ECHO;
-		ctx->i_flags |= CW_F_PROG|CW_F_EXEC;
-		argc--;
-		argv++;
+		main_ctx->i_flags &= ~CW_F_ECHO;
+		main_ctx->i_flags |= CW_F_PROG | CW_F_EXEC;
 		do_serial = 1;
 	}
 
-	ctx->i_oldargc = argc;
-	ctx->i_oldargv = argv;
+	tmpdir = getenv("TMPDIR");
+	if (tmpdir == NULL)
+		tmpdir = "/tmp";
 
-	ret |= exec_ctx(ctx, do_serial);
+	if (asprintf(&main_ctx->i_tmpdir, "%s/cw.XXXXXX", tmpdir) == -1)
+		nomem();
 
-	if (do_shadow) {
-		(void) memcpy(ctx_shadow, ctx, sizeof (cw_ictx_t));
-		ctx_shadow->i_flags |= CW_F_SHADOW;
-		ret |= exec_ctx(ctx_shadow, 1);
+	if ((main_ctx->i_tmpdir = mkdtemp(main_ctx->i_tmpdir)) == NULL)
+		errx(1, "failed to create temporary directory");
+
+	ret |= exec_ctx(main_ctx, do_serial);
+
+	for (int i = 0; i < nshadows; i++) {
+		int r;
+		cw_ictx_t *shadow_ctx;
+
+		if ((shadow_ctx = newictx()) == NULL)
+			nomem();
+
+		(void) memcpy(shadow_ctx, main_ctx, sizeof (cw_ictx_t));
+
+		shadow_ctx->i_flags |= CW_F_SHADOW;
+		shadow_ctx->i_compiler = &shadows[i];
+
+		r = exec_ctx(shadow_ctx, do_serial);
+		if (r == 0) {
+			shadow_ctx->i_next = main_ctx->i_next;
+			main_ctx->i_next = shadow_ctx;
+		}
+		ret |= r;
 	}
 
-	if (!do_serial)
-		ret |= reap(ctx);
+	if (!do_serial) {
+		cw_ictx_t *next = main_ctx;
+		while (next != NULL) {
+			cw_ictx_t *toreap = next;
+			next = next->i_next;
+			ret |= reap(toreap);
+		}
+	}
 
+	cleanup(main_ctx);
 	return (ret);
 }

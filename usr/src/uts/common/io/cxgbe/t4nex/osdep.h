@@ -43,6 +43,15 @@
 #define	CH_WARN(sc, ...)	cxgb_printf(sc->dip, CE_WARN, ##__VA_ARGS__)
 #define	CH_WARN_RATELIMIT(sc, ...) cxgb_printf(sc->dip, CE_WARN, ##__VA_ARGS__)
 #define	CH_ALERT(sc, ...)	cxgb_printf(sc->dip, CE_NOTE, ##__VA_ARGS__)
+#define	CH_INFO(sc, ...)	cxgb_printf(sc->dip, CE_NOTE, ##__VA_ARGS__)
+
+#define CH_MSG(sc, level, category, fmt, ...)  
+#ifdef DEBUG
+#define CH_DBG(sc, category, fmt, ...) cxgb_printf(sc->dip, CE_NOTE, ##__VA_ARGS__)
+#else
+#define CH_DBG(sc, category, fmt, ...)
+#endif
+#define CH_DUMP_MBOX(adap, mbox, data_reg, size) 
 
 #define	MII_BMCR	0x00
 #define	MII_BMSR	0x01
@@ -110,6 +119,14 @@
 #define	ADVERTISE_1000FULL	0x0200
 #define	ADVERTISE_1000HALF	0x0100
 
+#define PCI_VENDOR_ID           0x00
+#define PCI_DEVICE_ID           0x02
+
+#define PCI_BASE_ADDRESS_0	0x10
+#define PCI_BASE_ADDRESS_1	0x14
+#define PCI_BASE_ADDRESS_2	0x18
+#define PCI_BASE_ADDRESS_MEM_MASK	(~0x0fUL)
+
 #define	PCI_CAP_ID_EXP		PCI_CAP_ID_PCI_E
 #define	PCI_EXP_DEVCTL		PCIE_DEVCTL
 #define	PCI_EXP_DEVCTL_PAYLOAD	PCIE_DEVCTL_MAX_PAYLOAD_MASK
@@ -118,6 +135,7 @@
 #define	PCI_EXP_LNKSTA		PCIE_LINKSTS
 #define	PCI_EXP_LNKSTA_CLS	PCIE_LINKSTS_SPEED_MASK
 #define	PCI_EXP_LNKSTA_NLW	PCIE_LINKSTS_NEG_WIDTH_MASK
+#define	PCI_EXP_DEVCTL2		0x28
 
 #define	PCI_VPD_ADDR	2
 #define	PCI_VPD_ADDR_F	0x8000
@@ -160,6 +178,13 @@ typedef uint8_t		__be8;
 typedef uint16_t	__be16;
 typedef uint32_t	__be32;
 typedef uint64_t	__be64;
+
+typedef uint32_t	__le32;
+
+typedef int8_t		s8;
+typedef int16_t		s16;
+typedef int32_t		s32;
+typedef int64_t		s64;
 
 typedef boolean_t	bool;
 #define	true		B_TRUE
@@ -215,9 +240,11 @@ typedef boolean_t	bool;
 #define	SPEED_100		100
 #define	SPEED_1000		1000
 #define	SPEED_10000		10000
+#define	SPEED_40000		40000
 #define	DUPLEX_HALF		0
 #define	DUPLEX_FULL		1
 
+#define ETH_ALEN		6
 int ilog2(long x);
 unsigned char *strstrip(unsigned char *s);
 

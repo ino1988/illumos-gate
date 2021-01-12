@@ -21,6 +21,8 @@
 /*
  * Copyright 2010 Sun Microsystems, Inc.  All rights reserved.
  * Use is subject to license terms.
+ *
+ * Copyright 2020 Nexenta by DDN, Inc. All rights reserved.
  */
 
 /*
@@ -125,7 +127,6 @@ uint32_t
 smb_sd_read(smb_request_t *sr, smb_sd_t *sd, uint32_t secinfo)
 {
 	smb_fssd_t fs_sd;
-	smb_error_t smb_err;
 	smb_node_t *node;
 	uint32_t status = NT_STATUS_SUCCESS;
 	uint32_t sd_flags;
@@ -136,10 +137,8 @@ smb_sd_read(smb_request_t *sr, smb_sd_t *sd, uint32_t secinfo)
 	smb_fssd_init(&fs_sd, secinfo, sd_flags);
 
 	error = smb_fsop_sdread(sr, sr->user_cr, node, &fs_sd);
-	if (error) {
-		smbsr_map_errno(error, &smb_err);
-		return (smb_err.status);
-	}
+	if (error)
+		return (smb_errno2status(error));
 
 	status = smb_sd_fromfs(&fs_sd, sd);
 	smb_fssd_term(&fs_sd);
@@ -159,7 +158,6 @@ smb_sd_write(smb_request_t *sr, smb_sd_t *sd, uint32_t secinfo)
 {
 	smb_node_t *node;
 	smb_fssd_t fs_sd;
-	smb_error_t smb_err;
 	uint32_t status;
 	uint32_t sd_flags;
 	int error;
@@ -180,8 +178,7 @@ smb_sd_write(smb_request_t *sr, smb_sd_t *sd, uint32_t secinfo)
 	if (error) {
 		if (error == EBADE)
 			return (NT_STATUS_INVALID_OWNER);
-		smbsr_map_errno(error, &smb_err);
-		return (smb_err.status);
+		return (smb_errno2status(error));
 	}
 
 	return (NT_STATUS_SUCCESS);
@@ -246,16 +243,29 @@ smb_sd_tofs(smb_sd_t *sd, smb_fssd_t *fs_sd)
 		}
 	}
 
+	/*
+	 * In SMB, the 'secinfo' determines which parts of the SD the client
+	 * intends to change. Notably, this includes changing the DACL_PRESENT
+	 * and SACL_PRESENT control bits. The client can specify e.g.
+	 * SACL_SECINFO, but not SACL_PRESENT, and this means the client intends
+	 * to remove the SACL.
+	 *
+	 * If the *_PRESENT bit isn't set, then the respective ACL will be NULL.
+	 * [MS-DTYP] disallows providing an ACL when the PRESENT bit isn't set.
+	 * This is enforced by smb_decode_sd().
+	 *
+	 * We allow the SACL to be NULL, but we MUST have a DACL.
+	 * If the DACL is NULL, that's equivalent to "everyone:full_set:allow".
+	 */
+
 	/* DACL */
 	if (fs_sd->sd_secinfo & SMB_DACL_SECINFO) {
-		if (sd->sd_control & SE_DACL_PRESENT) {
-			status = smb_acl_to_zfs(sd->sd_dacl, flags,
-			    SMB_DACL_SECINFO, &fs_sd->sd_zdacl);
-			if (status != NT_STATUS_SUCCESS)
-				return (status);
-		}
-		else
-			return (NT_STATUS_INVALID_ACL);
+		ASSERT3U(((sd->sd_control & SE_DACL_PRESENT) != 0), ==,
+		    (sd->sd_dacl != NULL));
+		status = smb_acl_to_zfs(sd->sd_dacl, flags,
+		    SMB_DACL_SECINFO, &fs_sd->sd_zdacl);
+		if (status != NT_STATUS_SUCCESS)
+			return (status);
 	}
 
 	/* SACL */
@@ -266,8 +276,6 @@ smb_sd_tofs(smb_sd_t *sd, smb_fssd_t *fs_sd)
 			if (status != NT_STATUS_SUCCESS) {
 				return (status);
 			}
-		} else {
-			return (NT_STATUS_INVALID_ACL);
 		}
 	}
 

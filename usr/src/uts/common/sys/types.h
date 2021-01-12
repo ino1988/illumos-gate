@@ -19,12 +19,15 @@
  * CDDL HEADER END
  */
 /*	Copyright (c) 1984, 1986, 1987, 1988, 1989 AT&T	*/
-/*	  All Rights Reserved  	*/
+/*	  All Rights Reserved	*/
 
 
 /*
  * Copyright 2009 Sun Microsystems, Inc.  All rights reserved.
  * Use is subject to license terms.
+ *
+ * Copyright 2013 Nexenta Systems, Inc.  All rights reserved.
+ * Copyright 2016 Joyent, Inc.
  */
 
 #ifndef _SYS_TYPES_H
@@ -558,7 +561,7 @@ typedef	unsigned int	uint;
 typedef	unsigned long	ulong;
 /* END CSTYLED */
 
-#if defined(_KERNEL)
+#if defined(_KERNEL) || defined(_FAKE_KERNEL)
 
 #define	SHRT_MIN	(-32768)	/* min value of a "short int" */
 #define	SHRT_MAX	32767		/* max value of a "short int" */
@@ -586,6 +589,14 @@ typedef	unsigned long	ulong;
 					/* max of "long long int" */
 #define	ULLONG_MAX	18446744073709551615ULL
 					/* max of "unsigned long long int" */
+
+#if defined(_LP64) || _FILE_OFFSET_BITS == 32
+#define	OFF_MIN		LONG_MIN
+#define	OFF_MAX		LONG_MAX
+#elif _FILE_OFFSET_BITS == 64
+#define	OFF_MIN		LLONG_MIN
+#define	OFF_MAX		LLONG_MAX
+#endif	/* _LP64 || _FILE_OFFSET_BITS == 32 */
 
 #endif	/* defined(_KERNEL) */
 

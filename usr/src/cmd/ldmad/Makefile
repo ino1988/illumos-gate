@@ -64,8 +64,8 @@ LDLIBS +=	-lds -ldladm -ldevinfo -lpri
 INCS +=		-I$(ROOT)/usr/platform/sun4v/include/sys
 INCS +=		-I$(SRC)/uts/sun4v
 CPPFLAGS += 	-D_LARGEFILE_SOURCE -D_FILE_OFFSET_BITS=64 $(INCS)
-C99MODE =	$(C99_ENABLE)
-CERRWARN +=	-_gcc=-Wno-uninitialized
+CSTD =	$(CSTD_GNU99)
+CERRWARN +=	$(CNOWARN_UNINIT)
 
 LINTFLAGS += -erroff=E_BAD_PTR_CAST_ALIGN
 

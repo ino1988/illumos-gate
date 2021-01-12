@@ -23,7 +23,9 @@
  * Copyright (c) 2006, 2010, Oracle and/or its affiliates. All rights reserved.
  */
 /*
- * Copyright 2013 Nexenta Systems, Inc.  All rights reserved.
+ * Copyright 2017 Nexenta Systems, Inc.  All rights reserved.
+ * Copyright 2016 Argo Technologies SA
+ * Copyright 2019 Joyent, Inc.
  */
 
 /*
@@ -149,9 +151,9 @@ static char sata_rev_tag[] = {"1.46"};
 /*
  * SATA cb_ops functions
  */
-static 	int sata_hba_open(dev_t *, int, int, cred_t *);
-static 	int sata_hba_close(dev_t, int, int, cred_t *);
-static 	int sata_hba_ioctl(dev_t, int, intptr_t, int, cred_t *,	int *);
+static	int sata_hba_open(dev_t *, int, int, cred_t *);
+static	int sata_hba_close(dev_t, int, int, cred_t *);
+static	int sata_hba_ioctl(dev_t, int, intptr_t, int, cred_t *,	int *);
 
 /*
  * SCSA required entry points
@@ -162,17 +164,17 @@ static	int sata_scsi_tgt_probe(struct scsi_device *,
     int (*callback)(void));
 static void sata_scsi_tgt_free(dev_info_t *, dev_info_t *,
     scsi_hba_tran_t *, struct scsi_device *);
-static 	int sata_scsi_start(struct scsi_address *, struct scsi_pkt *);
-static 	int sata_scsi_abort(struct scsi_address *, struct scsi_pkt *);
-static 	int sata_scsi_reset(struct scsi_address *, int);
-static 	int sata_scsi_getcap(struct scsi_address *, char *, int);
-static 	int sata_scsi_setcap(struct scsi_address *, char *, int, int);
-static 	struct scsi_pkt *sata_scsi_init_pkt(struct scsi_address *,
+static	int sata_scsi_start(struct scsi_address *, struct scsi_pkt *);
+static	int sata_scsi_abort(struct scsi_address *, struct scsi_pkt *);
+static	int sata_scsi_reset(struct scsi_address *, int);
+static	int sata_scsi_getcap(struct scsi_address *, char *, int);
+static	int sata_scsi_setcap(struct scsi_address *, char *, int, int);
+static	struct scsi_pkt *sata_scsi_init_pkt(struct scsi_address *,
     struct scsi_pkt *, struct buf *, int, int, int, int, int (*)(caddr_t),
     caddr_t);
-static 	void sata_scsi_destroy_pkt(struct scsi_address *, struct scsi_pkt *);
-static 	void sata_scsi_dmafree(struct scsi_address *, struct scsi_pkt *);
-static 	void sata_scsi_sync_pkt(struct scsi_address *, struct scsi_pkt *);
+static	void sata_scsi_destroy_pkt(struct scsi_address *, struct scsi_pkt *);
+static	void sata_scsi_dmafree(struct scsi_address *, struct scsi_pkt *);
+static	void sata_scsi_sync_pkt(struct scsi_address *, struct scsi_pkt *);
 
 /*
  * SATA HBA interface functions are defined in sata_hba.h header file
@@ -279,25 +281,25 @@ static	int sata_ioctl_get_serialnumber_info(sata_hba_inst_t *,
 /*
  * Local functions
  */
-static 	void sata_remove_hba_instance(dev_info_t *);
-static 	int sata_validate_sata_hba_tran(dev_info_t *, sata_hba_tran_t *);
-static 	void sata_probe_ports(sata_hba_inst_t *);
+static	void sata_remove_hba_instance(dev_info_t *);
+static	int sata_validate_sata_hba_tran(dev_info_t *, sata_hba_tran_t *);
+static	void sata_probe_ports(sata_hba_inst_t *);
 static	void sata_probe_pmports(sata_hba_inst_t *, uint8_t);
-static 	int sata_reprobe_port(sata_hba_inst_t *, sata_device_t *, int);
-static 	int sata_reprobe_pmult(sata_hba_inst_t *, sata_device_t *, int);
-static 	int sata_reprobe_pmport(sata_hba_inst_t *, sata_device_t *, int);
+static	int sata_reprobe_port(sata_hba_inst_t *, sata_device_t *, int);
+static	int sata_reprobe_pmult(sata_hba_inst_t *, sata_device_t *, int);
+static	int sata_reprobe_pmport(sata_hba_inst_t *, sata_device_t *, int);
 static	int sata_alloc_pmult(sata_hba_inst_t *, sata_device_t *);
 static	void sata_free_pmult(sata_hba_inst_t *, sata_device_t *);
-static 	int sata_add_device(dev_info_t *, sata_hba_inst_t *, sata_device_t *);
+static	int sata_add_device(dev_info_t *, sata_hba_inst_t *, sata_device_t *);
 static	int sata_offline_device(sata_hba_inst_t *, sata_device_t *,
     sata_drive_info_t *);
-static 	dev_info_t *sata_create_target_node(dev_info_t *, sata_hba_inst_t *,
+static	dev_info_t *sata_create_target_node(dev_info_t *, sata_hba_inst_t *,
     sata_address_t *);
-static 	void sata_remove_target_node(sata_hba_inst_t *,
+static	void sata_remove_target_node(sata_hba_inst_t *,
     sata_address_t *);
-static 	int sata_validate_scsi_address(sata_hba_inst_t *,
+static	int sata_validate_scsi_address(sata_hba_inst_t *,
     struct scsi_address *, sata_device_t *);
-static 	int sata_validate_sata_address(sata_hba_inst_t *, int, int, int);
+static	int sata_validate_sata_address(sata_hba_inst_t *, int, int, int);
 static	sata_pkt_t *sata_pkt_alloc(sata_pkt_txlate_t *, int (*)(caddr_t));
 static	void sata_pkt_free(sata_pkt_txlate_t *);
 static	int sata_dma_buf_setup(sata_pkt_txlate_t *, int, int (*)(caddr_t),
@@ -306,14 +308,14 @@ static	void sata_common_free_dma_rsrcs(sata_pkt_txlate_t *);
 static	int sata_probe_device(sata_hba_inst_t *, sata_device_t *);
 static	sata_drive_info_t *sata_get_device_info(sata_hba_inst_t *,
     sata_device_t *);
-static 	int sata_identify_device(sata_hba_inst_t *, sata_drive_info_t *);
+static	int sata_identify_device(sata_hba_inst_t *, sata_drive_info_t *);
 static	void sata_reidentify_device(sata_pkt_txlate_t *);
 static	struct buf *sata_alloc_local_buffer(sata_pkt_txlate_t *, int);
-static 	void sata_free_local_buffer(sata_pkt_txlate_t *);
-static 	uint64_t sata_check_capacity(sata_drive_info_t *);
-void 	sata_adjust_dma_attr(sata_drive_info_t *, ddi_dma_attr_t *,
+static	void sata_free_local_buffer(sata_pkt_txlate_t *);
+static	uint64_t sata_check_capacity(sata_drive_info_t *);
+void	sata_adjust_dma_attr(sata_drive_info_t *, ddi_dma_attr_t *,
     ddi_dma_attr_t *);
-static 	int sata_fetch_device_identify_data(sata_hba_inst_t *,
+static	int sata_fetch_device_identify_data(sata_hba_inst_t *,
     sata_drive_info_t *);
 static	void sata_update_port_info(sata_hba_inst_t *, sata_device_t *);
 static	void sata_update_pmport_info(sata_hba_inst_t *, sata_device_t *);
@@ -467,7 +469,7 @@ static ddi_device_acc_attr_t sata_acc_attr = {
 static	kmutex_t sata_mutex;		/* protects sata_hba_list */
 static	kmutex_t sata_log_mutex;	/* protects log */
 
-static 	char sata_log_buf[256];
+static	char sata_log_buf[256];
 
 /*
  * sata trace debug
@@ -495,8 +497,8 @@ int	sata_atapidisk_write_cache = 1;	/* enabled */
 /*
  * Linked list of HBA instances
  */
-static 	sata_hba_inst_t *sata_hba_list = NULL;
-static 	sata_hba_inst_t *sata_hba_list_tail = NULL;
+static	sata_hba_inst_t *sata_hba_list = NULL;
+static	sata_hba_inst_t *sata_hba_list_tail = NULL;
 /*
  * Pointer to per-instance SATA HBA soft structure is stored in sata_hba_tran
  * structure and in sata soft state.
@@ -505,13 +507,13 @@ static 	sata_hba_inst_t *sata_hba_list_tail = NULL;
 /*
  * Event daemon related variables
  */
-static 	kmutex_t sata_event_mutex;
-static 	kcondvar_t sata_event_cv;
-static 	kthread_t *sata_event_thread = NULL;
-static 	int sata_event_thread_terminate = 0;
-static 	int sata_event_pending = 0;
-static 	int sata_event_thread_active = 0;
-extern 	pri_t minclsyspri;
+static	kmutex_t sata_event_mutex;
+static	kcondvar_t sata_event_cv;
+static	kthread_t *sata_event_thread = NULL;
+static	int sata_event_thread_terminate = 0;
+static	int sata_event_pending = 0;
+static	int sata_event_thread_active = 0;
+extern	pri_t minclsyspri;
 
 /*
  * NCQ error recovery command
@@ -1348,7 +1350,8 @@ sata_hba_ioctl(dev_t dev, int cmd, intptr_t arg, int mode, cred_t *credp,
 	}
 
 	/* read devctl ioctl data */
-	if (cmd != DEVCTL_AP_CONTROL) {
+	if (cmd != DEVCTL_AP_CONTROL && cmd >= DEVCTL_IOC &&
+	    cmd <= DEVCTL_IOC_MAX) {
 		if (ndi_dc_allochdl((void *)arg, &dcp) != NDI_SUCCESS)
 			return (EFAULT);
 
@@ -1496,7 +1499,7 @@ sata_hba_ioctl(dev_t dev, int cmd, intptr_t arg, int mode, cred_t *credp,
 				rv = EFAULT;
 				break;
 			}
-			ioc.cmd 	= (uint_t)ioc32.cmd;
+			ioc.cmd		= (uint_t)ioc32.cmd;
 			ioc.port	= (uint_t)ioc32.port;
 			ioc.get_size	= (uint_t)ioc32.get_size;
 			ioc.buf		= (caddr_t)(uintptr_t)ioc32.buf;
@@ -1676,9 +1679,13 @@ sata_hba_ioctl(dev_t dev, int cmd, intptr_t arg, int mode, cred_t *credp,
 	if (dcp) {
 		ndi_dc_freehdl(dcp);
 	}
-	mutex_enter(&SATA_CPORT_INFO(sata_hba_inst, cport)->cport_mutex);
-	cportinfo->cport_event_flags &= ~SATA_APCTL_LOCK_PORT_BUSY;
-	mutex_exit(&SATA_CPORT_INFO(sata_hba_inst, cport)->cport_mutex);
+
+	if (cmd >= DEVCTL_IOC && cmd <= DEVCTL_IOC_MAX) {
+		mutex_enter(&SATA_CPORT_INFO(sata_hba_inst,
+		    cport)->cport_mutex);
+		cportinfo->cport_event_flags &= ~SATA_APCTL_LOCK_PORT_BUSY;
+		mutex_exit(&SATA_CPORT_INFO(sata_hba_inst, cport)->cport_mutex);
+	}
 
 	return (rv);
 }
@@ -1952,6 +1959,58 @@ sata_register_pmult(dev_info_t *dip, sata_device_t *sd, sata_pmult_gscr_t *sg)
 }
 
 /*
+ * sata_split_model splits the model ID into vendor and product IDs.
+ * It assumes that a vendor ID cannot be longer than 8 characters, and
+ * that vendor and product ID are separated by a whitespace.
+ */
+void
+sata_split_model(char *model, char **vendor, char **product)
+{
+	int i, modlen;
+	char *vid, *pid;
+
+	/*
+	 * remove whitespace at the end of model
+	 */
+	for (i = SATA_ID_MODEL_LEN; i > 0; i--)
+		if (model[i] == ' ' || model[i] == '\t' || model[i] == '\0')
+			model[i] = '\0';
+		else
+			break;
+
+	/*
+	 * try to split model into into vid/pid
+	 */
+	modlen = strlen(model);
+	for (i = 0, pid = model; i < modlen; i++, pid++)
+		if ((*pid == ' ') || (*pid == '\t'))
+			break;
+
+	/*
+	 * only use vid if it is less than 8 chars (as in SCSI)
+	 */
+	if (i < modlen && i <= 8) {
+		vid = model;
+		/*
+		 * terminate vid, establish pid
+		 */
+		*pid++ = '\0';
+	} else {
+		/*
+		 * vid will stay "ATA     "
+		 */
+		vid = NULL;
+		/*
+		 * model is all pid
+		 */
+		pid = model;
+	}
+
+	*vendor = vid;
+	*product = pid;
+}
+
+/*
  * sata_name_child is for composing the name of the node
  * the format of the name is "target,0".
  */
@@ -1995,7 +2054,6 @@ sata_scsi_tgt_init(dev_info_t *hba_dip, dev_info_t *tgt_dip,
 	char			model[SATA_ID_MODEL_LEN + 1];
 	char			fw[SATA_ID_FW_LEN + 1];
 	char			*vid, *pid;
-	int			i;
 
 	/*
 	 * Fail tran_tgt_init for .conf stub node
@@ -2060,17 +2118,7 @@ sata_scsi_tgt_init(dev_info_t *hba_dip, dev_info_t *tgt_dip,
 	model[SATA_ID_MODEL_LEN] = 0;
 	fw[SATA_ID_FW_LEN] = 0;
 
-	/* split model into into vid/pid */
-	for (i = 0, pid = model; i < SATA_ID_MODEL_LEN; i++, pid++)
-		if ((*pid == ' ') || (*pid == '\t'))
-			break;
-	if (i < SATA_ID_MODEL_LEN) {
-		vid = model;
-		*pid++ = 0;		/* terminate vid, establish pid */
-	} else {
-		vid = NULL;		/* vid will stay "ATA     " */
-		pid = model;		/* model is all pid */
-	}
+	sata_split_model(model, &vid, &pid);
 
 	if (vid)
 		(void) scsi_device_prop_update_inqstring(sd, INQUIRY_VENDOR_ID,
@@ -2485,12 +2533,12 @@ sata_scsi_start(struct scsi_address *ap, struct scsi_pkt *pkt)
 				if (taskq_dispatch(SATA_TXLT_TASKQ(spx),
 				    (task_func_t *)spx->txlt_scsi_pkt->pkt_comp,
 				    (void *)spx->txlt_scsi_pkt, TQ_NOSLEEP) ==
-				    NULL) {
+				    TASKQID_INVALID) {
 					return (TRAN_BUSY);
 				}
 			} else if (taskq_dispatch(SATA_TXLT_TASKQ(spx),
 			    (task_func_t *)spx->txlt_scsi_pkt->pkt_comp,
-			    (void *)spx->txlt_scsi_pkt, TQ_SLEEP) == NULL) {
+			    spx->txlt_scsi_pkt, TQ_SLEEP) == TASKQID_INVALID) {
 				/* Scheduling the callback failed */
 				return (TRAN_BUSY);
 			}
@@ -2842,12 +2890,12 @@ static int
 sata_scsi_getcap(struct scsi_address *ap, char *cap, int whom)
 {
 
-	sata_hba_inst_t 	*sata_hba_inst =
+	sata_hba_inst_t		*sata_hba_inst =
 	    (sata_hba_inst_t *)(ap->a_hba_tran->tran_hba_private);
 	sata_device_t		sata_device;
 	sata_drive_info_t	*sdinfo;
 	ddi_dma_attr_t		adj_dma_attr;
-	int 			rval;
+	int			rval;
 
 	SATADBG2(SATA_DBG_SCSI_IF, sata_hba_inst,
 	    "sata_scsi_getcap: target: 0x%x, cap: %s\n",
@@ -3211,12 +3259,12 @@ sata_txlt_generic_pkt_info(sata_pkt_txlate_t *spx, int *reason, int flag)
 				if (taskq_dispatch(SATA_TXLT_TASKQ(spx),
 				    (task_func_t *)spx->txlt_scsi_pkt->pkt_comp,
 				    (void *)spx->txlt_scsi_pkt, TQ_NOSLEEP) ==
-				    NULL) {
+				    TASKQID_INVALID) {
 					return (TRAN_BUSY);
 				}
 			} else if (taskq_dispatch(SATA_TXLT_TASKQ(spx),
 			    (task_func_t *)spx->txlt_scsi_pkt->pkt_comp,
-			    (void *)spx->txlt_scsi_pkt, TQ_SLEEP) == NULL) {
+			    spx->txlt_scsi_pkt, TQ_SLEEP) == TASKQID_INVALID) {
 				/* Scheduling the callback failed */
 				return (TRAN_BUSY);
 			}
@@ -3437,12 +3485,13 @@ sata_txlt_invalid_command(sata_pkt_txlate_t *spx)
 		if (servicing_interrupt()) {
 			if (taskq_dispatch(SATA_TXLT_TASKQ(spx),
 			    (task_func_t *)spx->txlt_scsi_pkt->pkt_comp,
-			    (void *)spx->txlt_scsi_pkt, TQ_NOSLEEP) == NULL) {
+			    (void *)spx->txlt_scsi_pkt, TQ_NOSLEEP) ==
+			    TASKQID_INVALID) {
 				return (TRAN_BUSY);
 			}
 		} else if (taskq_dispatch(SATA_TXLT_TASKQ(spx),
 		    (task_func_t *)spx->txlt_scsi_pkt->pkt_comp,
-		    (void *)spx->txlt_scsi_pkt, TQ_SLEEP) == NULL) {
+		    (void *)spx->txlt_scsi_pkt, TQ_SLEEP) == TASKQID_INVALID) {
 			/* Scheduling the callback failed */
 			return (TRAN_BUSY);
 		}
@@ -3486,12 +3535,13 @@ sata_txlt_check_condition(sata_pkt_txlate_t *spx, uchar_t key, uchar_t code)
 		if (servicing_interrupt()) {
 			if (taskq_dispatch(SATA_TXLT_TASKQ(spx),
 			    (task_func_t *)spx->txlt_scsi_pkt->pkt_comp,
-			    (void *)spx->txlt_scsi_pkt, TQ_NOSLEEP) == NULL) {
+			    (void *)spx->txlt_scsi_pkt, TQ_NOSLEEP) ==
+			    TASKQID_INVALID) {
 				return (TRAN_BUSY);
 			}
 		} else if (taskq_dispatch(SATA_TXLT_TASKQ(spx),
 		    (task_func_t *)spx->txlt_scsi_pkt->pkt_comp,
-		    (void *)spx->txlt_scsi_pkt, TQ_SLEEP) == NULL) {
+		    (void *)spx->txlt_scsi_pkt, TQ_SLEEP) == TASKQID_INVALID) {
 			/* Scheduling the callback failed */
 			return (TRAN_BUSY);
 		}
@@ -3536,12 +3586,13 @@ sata_txlt_nodata_cmd_immediate(sata_pkt_txlate_t *spx)
 		if (servicing_interrupt()) {
 			if (taskq_dispatch(SATA_TXLT_TASKQ(spx),
 			    (task_func_t *)spx->txlt_scsi_pkt->pkt_comp,
-			    (void *)spx->txlt_scsi_pkt, TQ_NOSLEEP) == NULL) {
+			    (void *)spx->txlt_scsi_pkt, TQ_NOSLEEP) ==
+			    TASKQID_INVALID) {
 				return (TRAN_BUSY);
 			}
 		} else if (taskq_dispatch(SATA_TXLT_TASKQ(spx),
 		    (task_func_t *)spx->txlt_scsi_pkt->pkt_comp,
-		    (void *)spx->txlt_scsi_pkt, TQ_SLEEP) == NULL) {
+		    (void *)spx->txlt_scsi_pkt, TQ_SLEEP) == TASKQID_INVALID) {
 			/* Scheduling the callback failed */
 			return (TRAN_BUSY);
 		}
@@ -3863,12 +3914,13 @@ done:
 		if (servicing_interrupt()) {
 			if (taskq_dispatch(SATA_TXLT_TASKQ(spx),
 			    (task_func_t *)spx->txlt_scsi_pkt->pkt_comp,
-			    (void *)spx->txlt_scsi_pkt, TQ_NOSLEEP) == NULL) {
+			    (void *)spx->txlt_scsi_pkt, TQ_NOSLEEP) ==
+			    TASKQID_INVALID) {
 				return (TRAN_BUSY);
 			}
 		} else if (taskq_dispatch(SATA_TXLT_TASKQ(spx),
 		    (task_func_t *)spx->txlt_scsi_pkt->pkt_comp,
-		    (void *)spx->txlt_scsi_pkt, TQ_SLEEP) == NULL) {
+		    (void *)spx->txlt_scsi_pkt, TQ_SLEEP) == TASKQID_INVALID) {
 			/* Scheduling the callback failed */
 			return (TRAN_BUSY);
 		}
@@ -4013,12 +4065,13 @@ sata_txlt_request_sense(sata_pkt_txlate_t *spx)
 		if (servicing_interrupt()) {
 			if (taskq_dispatch(SATA_TXLT_TASKQ(spx),
 			    (task_func_t *)spx->txlt_scsi_pkt->pkt_comp,
-			    (void *)spx->txlt_scsi_pkt, TQ_NOSLEEP) == NULL) {
+			    (void *)spx->txlt_scsi_pkt, TQ_NOSLEEP) ==
+			    TASKQID_INVALID) {
 				return (TRAN_BUSY);
 			}
 		} else if (taskq_dispatch(SATA_TXLT_TASKQ(spx),
 		    (task_func_t *)spx->txlt_scsi_pkt->pkt_comp,
-		    (void *)spx->txlt_scsi_pkt, TQ_SLEEP) == NULL) {
+		    (void *)spx->txlt_scsi_pkt, TQ_SLEEP) == TASKQID_INVALID) {
 			/* Scheduling the callback failed */
 			return (TRAN_BUSY);
 		}
@@ -4106,12 +4159,13 @@ sata_txlt_test_unit_ready(sata_pkt_txlate_t *spx)
 		if (servicing_interrupt()) {
 			if (taskq_dispatch(SATA_TXLT_TASKQ(spx),
 			    (task_func_t *)spx->txlt_scsi_pkt->pkt_comp,
-			    (void *)spx->txlt_scsi_pkt, TQ_NOSLEEP) == NULL) {
+			    (void *)spx->txlt_scsi_pkt, TQ_NOSLEEP) ==
+			    TASKQID_INVALID) {
 				return (TRAN_BUSY);
 			}
 		} else if (taskq_dispatch(SATA_TXLT_TASKQ(spx),
 		    (task_func_t *)spx->txlt_scsi_pkt->pkt_comp,
-		    (void *)spx->txlt_scsi_pkt, TQ_SLEEP) == NULL) {
+		    (void *)spx->txlt_scsi_pkt, TQ_SLEEP) == TASKQID_INVALID) {
 			/* Scheduling the callback failed */
 			return (TRAN_BUSY);
 		}
@@ -4440,12 +4494,13 @@ err_out:
 		if (servicing_interrupt()) {
 			if (taskq_dispatch(SATA_TXLT_TASKQ(spx),
 			    (task_func_t *)spx->txlt_scsi_pkt->pkt_comp,
-			    (void *)spx->txlt_scsi_pkt, TQ_NOSLEEP) == NULL) {
+			    (void *)spx->txlt_scsi_pkt, TQ_NOSLEEP) ==
+			    TASKQID_INVALID) {
 				return (TRAN_BUSY);
 			}
 		} else if (taskq_dispatch(SATA_TXLT_TASKQ(spx),
 		    (task_func_t *)spx->txlt_scsi_pkt->pkt_comp,
-		    (void *)spx->txlt_scsi_pkt, TQ_SLEEP) == NULL) {
+		    (void *)spx->txlt_scsi_pkt, TQ_SLEEP) == TASKQID_INVALID) {
 			/* Scheduling the callback failed */
 			return (TRAN_BUSY);
 		}
@@ -4475,6 +4530,7 @@ sata_txlt_read_capacity(sata_pkt_txlate_t *spx)
 	struct buf *bp = spx->txlt_sata_pkt->satapkt_cmd.satacmd_bp;
 	sata_drive_info_t *sdinfo;
 	uint64_t val;
+	uint32_t lbsize = DEV_BSIZE;
 	uchar_t *rbuf;
 	int rval, reason;
 	kmutex_t *cport_mutex = &(SATA_TXLT_CPORT_MUTEX(spx));
@@ -4513,17 +4569,28 @@ sata_txlt_read_capacity(sata_pkt_txlate_t *spx)
 		 */
 		val = MIN(sdinfo->satadrv_capacity - 1, UINT32_MAX);
 
+		if (sdinfo->satadrv_id.ai_phys_sect_sz & SATA_L2PS_CHECK_BIT) {
+			/* physical/logical sector size word is valid */
+
+			if (sdinfo->satadrv_id.ai_phys_sect_sz &
+			    SATA_L2PS_BIG_SECTORS) {
+				/* if this set 117-118 words are valid */
+				lbsize = sdinfo->satadrv_id.ai_words_lsec[0] |
+				    (sdinfo->satadrv_id.ai_words_lsec[1] << 16);
+				lbsize <<= 1; /* convert from words to bytes */
+			}
+		}
 		rbuf = (uchar_t *)bp->b_un.b_addr;
 		/* Need to swap endians to match scsi format */
 		rbuf[0] = (val >> 24) & 0xff;
 		rbuf[1] = (val >> 16) & 0xff;
 		rbuf[2] = (val >> 8) & 0xff;
 		rbuf[3] = val & 0xff;
-		/* block size - always 512 bytes, for now */
-		rbuf[4] = 0;
-		rbuf[5] = 0;
-		rbuf[6] = 0x02;
-		rbuf[7] = 0;
+		rbuf[4] = (lbsize >> 24) & 0xff;
+		rbuf[5] = (lbsize >> 16) & 0xff;
+		rbuf[6] = (lbsize >> 8) & 0xff;
+		rbuf[7] = lbsize & 0xff;
+
 		scsipkt->pkt_state |= STATE_XFERRED_DATA;
 		scsipkt->pkt_resid = 0;
 
@@ -4543,12 +4610,13 @@ sata_txlt_read_capacity(sata_pkt_txlate_t *spx)
 		if (servicing_interrupt()) {
 			if (taskq_dispatch(SATA_TXLT_TASKQ(spx),
 			    (task_func_t *)spx->txlt_scsi_pkt->pkt_comp,
-			    (void *)spx->txlt_scsi_pkt, TQ_NOSLEEP) == NULL) {
+			    (void *)spx->txlt_scsi_pkt, TQ_NOSLEEP) ==
+			    TASKQID_INVALID) {
 				return (TRAN_BUSY);
 			}
 		} else if (taskq_dispatch(SATA_TXLT_TASKQ(spx),
 		    (task_func_t *)spx->txlt_scsi_pkt->pkt_comp,
-		    (void *)spx->txlt_scsi_pkt, TQ_SLEEP) == NULL) {
+		    (void *)spx->txlt_scsi_pkt, TQ_SLEEP) == TASKQID_INVALID) {
 			/* Scheduling the callback failed */
 			return (TRAN_BUSY);
 		}
@@ -4573,6 +4641,7 @@ sata_txlt_read_capacity16(sata_pkt_txlate_t *spx)
 	sata_drive_info_t *sdinfo;
 	uint64_t val;
 	uint16_t l2p_exp;
+	uint32_t lbsize = DEV_BSIZE;
 	uchar_t *rbuf;
 	int rval, reason;
 #define	TPE	0x80
@@ -4656,6 +4725,14 @@ sata_txlt_read_capacity16(sata_pkt_txlate_t *spx)
 				    sdinfo->satadrv_id.ai_phys_sect_sz &
 				    SATA_L2PS_EXP_MASK;
 			}
+
+			if (sdinfo->satadrv_id.ai_phys_sect_sz &
+			    SATA_L2PS_BIG_SECTORS) {
+				/* if this set 117-118 words are valid */
+				lbsize = sdinfo->satadrv_id.ai_words_lsec[0] |
+				    (sdinfo->satadrv_id.ai_words_lsec[1] << 16);
+				lbsize <<= 1; /* convert from words to bytes */
+			}
 		}
 
 		rbuf = (uchar_t *)bp->b_un.b_addr;
@@ -4670,12 +4747,10 @@ sata_txlt_read_capacity16(sata_pkt_txlate_t *spx)
 		rbuf[5] = (val >> 16) & 0xff;
 		rbuf[6] = (val >> 8) & 0xff;
 		rbuf[7] = val & 0xff;
-
-		/* logical block length in bytes = 512 (for now) */
-		/* rbuf[8] = 0; */
-		/* rbuf[9] = 0; */
-		rbuf[10] = 0x02;
-		/* rbuf[11] = 0; */
+		rbuf[8] = (lbsize >> 24) & 0xff;
+		rbuf[9] = (lbsize >> 16) & 0xff;
+		rbuf[10] = (lbsize >> 8) & 0xff;
+		rbuf[11] = lbsize & 0xff;
 
 		/* p_type, prot_en, unspecified by SAT-2 */
 		/* rbuf[12] = 0; */
@@ -4684,17 +4759,25 @@ sata_txlt_read_capacity16(sata_pkt_txlate_t *spx)
 		/* logical blocks per physical block exponent */
 		rbuf[13] = l2p_exp;
 
-		/* lowest aligned logical block address = 0 (for now) */
-		/* tpe and tprz as defined in T10/10-079 r0 */
-		if (sdinfo->satadrv_id.ai_addsupported &
-		    SATA_DETERMINISTIC_READ) {
-			if (sdinfo->satadrv_id.ai_addsupported &
-			    SATA_READ_ZERO) {
+		/*
+		 * tpe and tprz as defined in T10/10-079 r0.
+		 * TRIM support is indicated by the relevant bit in the data
+		 * set management word. Read-after-trim behavior is indicated
+		 * by the additional bits in the identify device word. Of the
+		 * three defined possibilities, we only flag read-zero.
+		 */
+		if (sdinfo->satadrv_id.ai_dsm & SATA_DSM_TRIM) {
+			rbuf[14] |= TPE;
+
+			if ((sdinfo->satadrv_id.ai_addsupported &
+			    SATA_DETERMINISTIC_READ) &&
+			    (sdinfo->satadrv_id.ai_addsupported &
+			    SATA_READ_ZERO)) {
 				rbuf[14] |= TPRZ;
-			} else {
-				rbuf[14] |= TPE;
 			}
 		}
+
+		/* lowest aligned logical block address = 0 (for now) */
 		/* rbuf[15] = 0; */
 
 		scsipkt->pkt_state |= STATE_XFERRED_DATA;
@@ -4718,12 +4801,13 @@ sata_txlt_read_capacity16(sata_pkt_txlate_t *spx)
 		if (servicing_interrupt()) {
 			if (taskq_dispatch(SATA_TXLT_TASKQ(spx),
 			    (task_func_t *)spx->txlt_scsi_pkt->pkt_comp,
-			    (void *)spx->txlt_scsi_pkt, TQ_NOSLEEP) == NULL) {
+			    (void *)spx->txlt_scsi_pkt, TQ_NOSLEEP) ==
+			    TASKQID_INVALID) {
 				return (TRAN_BUSY);
 			}
 		} else if (taskq_dispatch(SATA_TXLT_TASKQ(spx),
 		    (task_func_t *)spx->txlt_scsi_pkt->pkt_comp,
-		    (void *)spx->txlt_scsi_pkt, TQ_SLEEP) == NULL) {
+		    (void *)spx->txlt_scsi_pkt, TQ_SLEEP) == TASKQID_INVALID) {
 			/* Scheduling the callback failed */
 			return (TRAN_BUSY);
 		}
@@ -4784,7 +4868,7 @@ sata_txlt_unmap(sata_pkt_txlate_t *spx)
 	bdlen = scsipkt->pkt_cdbp[7];
 	bdlen = (bdlen << 8) + scsipkt->pkt_cdbp[8] - paramlen;
 	if ((bdlen < 0) || ((bdlen % 16) != 0) ||
-	    (bdlen > (bp->b_bcount - paramlen))) {
+	    ((bp != NULL) && (bdlen > (bp->b_bcount - paramlen)))) {
 		SATADBG1(SATA_DBG_SCSI_IF, spx->txlt_sata_hba_inst,
 		    "sata_txlt_unmap: invalid block descriptor length", NULL);
 		mutex_exit(cport_mutex);
@@ -4914,7 +4998,7 @@ sata_txlt_mode_sense(sata_pkt_txlate_t *spx)
 	sata_drive_info_t *sdinfo;
 	sata_id_t *sata_id;
 	struct scsi_extended_sense *sense;
-	int 		len, bdlen, count, alc_len;
+	int		len, bdlen, count, alc_len;
 	int		pc;	/* Page Control code */
 	uint8_t		*buf;	/* mode sense buffer */
 	int		rval, reason;
@@ -5167,12 +5251,13 @@ done:
 		if (servicing_interrupt()) {
 			if (taskq_dispatch(SATA_TXLT_TASKQ(spx),
 			    (task_func_t *)spx->txlt_scsi_pkt->pkt_comp,
-			    (void *)spx->txlt_scsi_pkt, TQ_NOSLEEP) == NULL) {
+			    (void *)spx->txlt_scsi_pkt, TQ_NOSLEEP) ==
+			    TASKQID_INVALID) {
 				return (TRAN_BUSY);
 			}
 		} else if (taskq_dispatch(SATA_TXLT_TASKQ(spx),
 		    (task_func_t *)spx->txlt_scsi_pkt->pkt_comp,
-		    (void *)spx->txlt_scsi_pkt, TQ_SLEEP) == NULL) {
+		    (void *)spx->txlt_scsi_pkt, TQ_SLEEP) == TASKQID_INVALID) {
 			/* Scheduling the callback failed */
 			return (TRAN_BUSY);
 		}
@@ -5496,12 +5581,13 @@ done:
 		if (servicing_interrupt()) {
 			if (taskq_dispatch(SATA_TXLT_TASKQ(spx),
 			    (task_func_t *)spx->txlt_scsi_pkt->pkt_comp,
-			    (void *)spx->txlt_scsi_pkt, TQ_NOSLEEP) == NULL) {
+			    (void *)spx->txlt_scsi_pkt, TQ_NOSLEEP) ==
+			    TASKQID_INVALID) {
 				return (TRAN_BUSY);
 			}
 		} else if (taskq_dispatch(SATA_TXLT_TASKQ(spx),
 		    (task_func_t *)spx->txlt_scsi_pkt->pkt_comp,
-		    (void *)spx->txlt_scsi_pkt, TQ_SLEEP) == NULL) {
+		    (void *)spx->txlt_scsi_pkt, TQ_SLEEP) == TASKQID_INVALID) {
 			/* Scheduling the callback failed */
 			return (TRAN_BUSY);
 		}
@@ -5753,14 +5839,14 @@ sata_txlt_ata_pass_thru(sata_pkt_txlate_t *spx)
 /*
  * Translate command: Log Sense
  */
-static 	int
+static int
 sata_txlt_log_sense(sata_pkt_txlate_t *spx)
 {
 	struct scsi_pkt	*scsipkt = spx->txlt_scsi_pkt;
 	struct buf	*bp = spx->txlt_sata_pkt->satapkt_cmd.satacmd_bp;
 	sata_drive_info_t *sdinfo;
 	struct scsi_extended_sense *sense;
-	int 		len, count, alc_len;
+	int		len, count, alc_len;
 	int		pc;	/* Page Control code */
 	int		page_code;	/* Page code */
 	uint8_t		*buf;	/* log sense buffer */
@@ -5998,12 +6084,13 @@ done:
 		if (servicing_interrupt()) {
 			if (taskq_dispatch(SATA_TXLT_TASKQ(spx),
 			    (task_func_t *)spx->txlt_scsi_pkt->pkt_comp,
-			    (void *)spx->txlt_scsi_pkt, TQ_NOSLEEP) == NULL) {
+			    (void *)spx->txlt_scsi_pkt, TQ_NOSLEEP) ==
+			    TASKQID_INVALID) {
 				return (TRAN_BUSY);
 			}
 		} else if (taskq_dispatch(SATA_TXLT_TASKQ(spx),
 		    (task_func_t *)spx->txlt_scsi_pkt->pkt_comp,
-		    (void *)spx->txlt_scsi_pkt, TQ_SLEEP) == NULL) {
+		    (void *)spx->txlt_scsi_pkt, TQ_SLEEP) == TASKQID_INVALID) {
 			/* Scheduling the callback failed */
 			return (TRAN_BUSY);
 		}
@@ -6732,12 +6819,13 @@ bad_param:
 		if (servicing_interrupt()) {
 			if (taskq_dispatch(SATA_TXLT_TASKQ(spx),
 			    (task_func_t *)spx->txlt_scsi_pkt->pkt_comp,
-			    (void *)spx->txlt_scsi_pkt, TQ_NOSLEEP) == NULL) {
+			    (void *)spx->txlt_scsi_pkt, TQ_NOSLEEP) ==
+			    TASKQID_INVALID) {
 				return (TRAN_BUSY);
 			}
 		} else if (taskq_dispatch(SATA_TXLT_TASKQ(spx),
 		    (task_func_t *)spx->txlt_scsi_pkt->pkt_comp,
-		    (void *)spx->txlt_scsi_pkt, TQ_SLEEP) == NULL) {
+		    (void *)spx->txlt_scsi_pkt, TQ_SLEEP) == TASKQID_INVALID) {
 			/* Scheduling the callback failed */
 			return (TRAN_BUSY);
 		}
@@ -6821,7 +6909,7 @@ sata_reidentify_device(sata_pkt_txlate_t *spx)
  * Returns TRAN_ACCEPT or code returned by sata_hba_start() and
  * appropriate values in scsi_pkt fields.
  */
-static 	int
+static int
 sata_txlt_synchronize_cache(sata_pkt_txlate_t *spx)
 {
 	sata_cmd_t *scmd = &spx->txlt_sata_pkt->satapkt_cmd;
@@ -7159,12 +7247,13 @@ sata_txlt_lba_out_of_range(sata_pkt_txlate_t *spx)
 		if (servicing_interrupt()) {
 			if (taskq_dispatch(SATA_TXLT_TASKQ(spx),
 			    (task_func_t *)spx->txlt_scsi_pkt->pkt_comp,
-			    (void *)spx->txlt_scsi_pkt, TQ_NOSLEEP) == NULL) {
+			    (void *)spx->txlt_scsi_pkt, TQ_NOSLEEP) ==
+			    TASKQID_INVALID) {
 				return (TRAN_BUSY);
 			}
 		} else if (taskq_dispatch(SATA_TXLT_TASKQ(spx),
 		    (task_func_t *)spx->txlt_scsi_pkt->pkt_comp,
-		    (void *)spx->txlt_scsi_pkt, TQ_SLEEP) == NULL) {
+		    (void *)spx->txlt_scsi_pkt, TQ_SLEEP) == TASKQID_INVALID) {
 			/* Scheduling the callback failed */
 			return (TRAN_BUSY);
 		}
@@ -7301,12 +7390,13 @@ sata_txlt_ata_pass_thru_illegal_cmd(sata_pkt_txlate_t *spx)
 		if (servicing_interrupt()) {
 			if (taskq_dispatch(SATA_TXLT_TASKQ(spx),
 			    (task_func_t *)spx->txlt_scsi_pkt->pkt_comp,
-			    (void *)spx->txlt_scsi_pkt, TQ_NOSLEEP) == NULL) {
+			    (void *)spx->txlt_scsi_pkt, TQ_NOSLEEP) ==
+			    TASKQID_INVALID) {
 				return (TRAN_BUSY);
 			}
 		} else if (taskq_dispatch(SATA_TXLT_TASKQ(spx),
 		    (task_func_t *)spx->txlt_scsi_pkt->pkt_comp,
-		    (void *)spx->txlt_scsi_pkt, TQ_SLEEP) == NULL) {
+		    (void *)spx->txlt_scsi_pkt, TQ_SLEEP) == TASKQID_INVALID) {
 			/* Scheduling the callback failed */
 			return (TRAN_BUSY);
 		}
@@ -7335,7 +7425,7 @@ sata_txlt_unmap_nodata_cmd(sata_pkt_txlate_t *spx)
 		/* scsi callback required */
 		if (taskq_dispatch(SATA_TXLT_TASKQ(spx),
 		    (task_func_t *)spx->txlt_scsi_pkt->pkt_comp,
-		    (void *)spx->txlt_scsi_pkt, TQ_SLEEP) == NULL) {
+		    (void *)spx->txlt_scsi_pkt, TQ_SLEEP) == TASKQID_INVALID) {
 			/* Scheduling the callback failed */
 			return (TRAN_BUSY);
 		}
@@ -7364,12 +7454,13 @@ sata_emul_rw_completion(sata_pkt_txlate_t *spx)
 		if (servicing_interrupt()) {
 			if (taskq_dispatch(SATA_TXLT_TASKQ(spx),
 			    (task_func_t *)spx->txlt_scsi_pkt->pkt_comp,
-			    (void *)spx->txlt_scsi_pkt, TQ_NOSLEEP) == NULL) {
+			    (void *)spx->txlt_scsi_pkt, TQ_NOSLEEP) ==
+			    TASKQID_INVALID) {
 				return (TRAN_BUSY);
 			}
 		} else if (taskq_dispatch(SATA_TXLT_TASKQ(spx),
 		    (task_func_t *)spx->txlt_scsi_pkt->pkt_comp,
-		    (void *)spx->txlt_scsi_pkt, TQ_SLEEP) == NULL) {
+		    (void *)spx->txlt_scsi_pkt, TQ_SLEEP) == TASKQID_INVALID) {
 			/* Scheduling the callback failed */
 			return (TRAN_BUSY);
 		}
@@ -9153,7 +9244,7 @@ sata_build_lsense_page_30(
  */
 static	int
 sata_build_lsense_page_0e(sata_drive_info_t *sdinfo, uint8_t *buf,
-	sata_pkt_txlate_t *spx)
+    sata_pkt_txlate_t *spx)
 {
 	struct start_stop_cycle_counter_log *log_page;
 	int i, rval, index;
@@ -10356,12 +10447,12 @@ sata_remove_hba_instance(dev_info_t *dip)
  * when there is no device attached.
  */
 
-static 	void
+static void
 sata_probe_ports(sata_hba_inst_t *sata_hba_inst)
 {
 	dev_info_t		*dip = SATA_DIP(sata_hba_inst);
 	int			ncport;
-	sata_cport_info_t 	*cportinfo;
+	sata_cport_info_t	*cportinfo;
 	sata_drive_info_t	*drive;
 	sata_device_t		sata_device;
 	int			rval;
@@ -10496,7 +10587,7 @@ sata_probe_pmports(sata_hba_inst_t *sata_hba_inst, uint8_t ncport)
 {
 	dev_info_t		*dip = SATA_DIP(sata_hba_inst);
 	sata_pmult_info_t	*pmultinfo = NULL;
-	sata_pmport_info_t 	*pmportinfo = NULL;
+	sata_pmport_info_t	*pmportinfo = NULL;
 	sata_drive_info_t	*drive = NULL;
 	sata_device_t		sata_device;
 
@@ -10595,11 +10686,11 @@ reprobe_pmport:
  * device identification failed - adding a device could be retried.
  *
  */
-static 	int
+static int
 sata_add_device(dev_info_t *pdip, sata_hba_inst_t *sata_hba_inst,
     sata_device_t *sata_device)
 {
-	sata_cport_info_t 	*cportinfo;
+	sata_cport_info_t	*cportinfo;
 	sata_pmult_info_t	*pminfo;
 	sata_pmport_info_t	*pmportinfo;
 	dev_info_t		*cdip;		/* child dip */
@@ -10846,7 +10937,7 @@ sata_offline_device(sata_hba_inst_t *sata_hba_inst,
 
 static dev_info_t *
 sata_create_target_node(dev_info_t *dip, sata_hba_inst_t *sata_hba_inst,
-			sata_address_t *sata_addr)
+    sata_address_t *sata_addr)
 {
 	dev_info_t *cdip = NULL;
 	int rval;
@@ -11034,7 +11125,7 @@ fail:
  */
 static void
 sata_remove_target_node(sata_hba_inst_t *sata_hba_inst,
-			sata_address_t *sata_addr)
+    sata_address_t *sata_addr)
 {
 	dev_info_t *tdip;
 	uint8_t cport = sata_addr->cport;
@@ -12176,7 +12267,7 @@ sata_init_write_cache_mode(sata_drive_info_t *sdinfo)
  */
 static int
 sata_validate_sata_address(sata_hba_inst_t *sata_hba_inst, int cport,
-	int pmport, int qual)
+    int pmport, int qual)
 {
 	if (qual == SATA_ADDR_DCPORT && pmport != 0)
 		goto invalid_address;
@@ -12209,7 +12300,7 @@ invalid_address:
  */
 static int
 sata_validate_scsi_address(sata_hba_inst_t *sata_hba_inst,
-	struct scsi_address *ap, sata_device_t *sata_device)
+    struct scsi_address *ap, sata_device_t *sata_device)
 {
 	int cport, pmport, qual, rval;
 
@@ -12351,7 +12442,7 @@ sata_devt_to_devinfo(dev_t dev)
  * Returns:
  *	SATA_SUCCESS if device type was successfully probed and port-linked
  *		drive info structure was updated;
- * 	SATA_FAILURE if there is no device, or device was not probed
+ *	SATA_FAILURE if there is no device, or device was not probed
  *		successully;
  *	SATA_RETRY if device probe can be retried later.
  * If a device cannot be identified, sata_device's dev_state and dev_type
@@ -14265,7 +14356,7 @@ sata_get_target_dip(dev_info_t *dip, uint8_t cport, uint8_t pmport)
 {
 	dev_info_t	*cdip = NULL;
 	int		target, tgt;
-	int 		circ;
+	int		circ;
 	uint8_t		qual;
 
 	sata_hba_inst_t	*sata_hba_inst;
@@ -14330,7 +14421,7 @@ sata_get_scsi_target_dip(dev_info_t *dip, sata_address_t *saddr)
 {
 	dev_info_t	*cdip = NULL;
 	int		target, tgt;
-	int 		circ;
+	int		circ;
 
 	target = SATA_TO_SCSI_TARGET(saddr->cport, saddr->pmport, saddr->qual);
 
@@ -17460,8 +17551,8 @@ sata_log(sata_hba_inst_t *sata_hba_inst, uint_t level, char *fmt, ...)
 static void
 sata_event_thread_control(int startstop)
 {
-	static 	int sata_event_thread_terminating = 0;
-	static 	int sata_event_thread_starting = 0;
+	static int sata_event_thread_terminating = 0;
+	static int sata_event_thread_starting = 0;
 	int i;
 
 	mutex_enter(&sata_event_mutex);
@@ -18086,7 +18177,7 @@ sata_process_controller_events(sata_hba_inst_t *sata_hba_inst)
 		mutex_enter(&sata_hba_inst->satahba_mutex);
 		cportinfo = SATA_CPORT_INFO(sata_hba_inst, ncport);
 		mutex_exit(&sata_hba_inst->satahba_mutex);
-		if (cportinfo == NULL || cportinfo->cport_state == NULL)
+		if (cportinfo == NULL || cportinfo->cport_state == 0)
 			continue;
 
 		/* We have initialized controller port info */

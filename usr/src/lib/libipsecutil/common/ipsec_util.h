@@ -22,6 +22,9 @@
  * Copyright 2009 Sun Microsystems, Inc.  All rights reserved.
  * Use is subject to license terms.
  */
+/*
+ * Copyright 2018 Joyent, Inc.
+ */
 
 #ifndef	_IPSEC_UTIL_H
 #define	_IPSEC_UTIL_H
@@ -211,21 +214,7 @@ extern int dbgstr2num(char *);
 extern int parsedbgopts(char *);
 
 /*
- * SSL library (OpenSSL)
- */
-#define	LIBSSL	"libssl.so"
-
-void libssl_load(void);
-
-/*
- * crypto library (OpenSSL)
- */
-#define	LIBCRYPTO	"libcrypto.so"
-
-void libcrypto_load(void);
-
-/*
- * functions to manipulate the kmcookie-label mapping file
+ * functions to manipulate the IKEv1 kmcookie-label mapping file
  */
 
 #define	KMCFILE		"/var/run/ipsec_kmc_map"

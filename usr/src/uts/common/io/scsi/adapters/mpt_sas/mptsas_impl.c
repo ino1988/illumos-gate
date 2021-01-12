@@ -24,6 +24,7 @@
  * Copyright 2012 Nexenta Systems, Inc. All rights reserved.
  * Copyright 2014 OmniTI Computer Consulting, Inc. All rights reserved.
  * Copyright (c) 2014, Tegile Systems Inc. All rights reserved.
+ * Copyright (c) 2019, Joyent, Inc.
  */
 
 /*
@@ -203,7 +204,8 @@ mptsas_start_config_page_access(mptsas_t *mpt, mptsas_cmd_t *cmd)
 	struct scsi_pkt		*pkt = cmd->cmd_pkt;
 	mptsas_config_request_t	*config = pkt->pkt_ha_private;
 	uint8_t			direction;
-	uint32_t		length, flagslength, request_desc_low;
+	uint32_t		length, flagslength;
+	uint64_t		request_desc;
 
 	ASSERT(mutex_owned(&mpt->m_mutex));
 
@@ -277,10 +279,10 @@ mptsas_start_config_page_access(mptsas_t *mpt, mptsas_cmd_t *cmd)
 
 	(void) ddi_dma_sync(mpt->m_dma_req_frame_hdl, 0, 0,
 	    DDI_DMA_SYNC_FORDEV);
-	request_desc_low = (cmd->cmd_slot << 16) +
+	request_desc = (cmd->cmd_slot << 16) +
 	    MPI2_REQ_DESCRIPT_FLAGS_DEFAULT_TYPE;
-	cmd->cmd_rfm = NULL;
-	MPTSAS_START_CMD(mpt, request_desc_low, 0);
+	cmd->cmd_rfm = 0;
+	MPTSAS_START_CMD(mpt, request_desc);
 	if ((mptsas_check_dma_handle(mpt->m_dma_req_frame_hdl) !=
 	    DDI_SUCCESS) ||
 	    (mptsas_check_acc_handle(mpt->m_acc_req_frame_hdl) !=
@@ -376,6 +378,7 @@ mptsas_access_config_page(mptsas_t *mpt, uint8_t action, uint8_t page_type,
 	 * Check if the header request completed without timing out
 	 */
 	if (cmd->cmd_flags & CFLAG_TIMEOUT) {
+		config_flags |= MPTSAS_CMD_TIMEOUT;
 		mptsas_log(mpt, CE_WARN, "config header request timeout");
 		rval = DDI_FAILURE;
 		goto page_done;
@@ -390,7 +393,7 @@ mptsas_access_config_page(mptsas_t *mpt, uint8_t action, uint8_t page_type,
 		(void) ddi_dma_sync(mpt->m_dma_reply_frame_hdl, 0, 0,
 		    DDI_DMA_SYNC_FORCPU);
 		reply = (pMpi2ConfigReply_t)(mpt->m_reply_frame + (cmd->cmd_rfm
-		    - mpt->m_reply_frame_dma_addr));
+		    - (mpt->m_reply_frame_dma_addr & 0xffffffffu)));
 		config.page_type = ddi_get8(mpt->m_acc_reply_frame_hdl,
 		    &reply->Header.PageType);
 		config.page_number = ddi_get8(mpt->m_acc_reply_frame_hdl,
@@ -518,6 +521,7 @@ mptsas_access_config_page(mptsas_t *mpt, uint8_t action, uint8_t page_type,
 	 * Check if the request completed without timing out
 	 */
 	if (cmd->cmd_flags & CFLAG_TIMEOUT) {
+		config_flags |= MPTSAS_CMD_TIMEOUT;
 		mptsas_log(mpt, CE_WARN, "config page request timeout");
 		rval = DDI_FAILURE;
 		goto page_done;
@@ -535,7 +539,7 @@ mptsas_access_config_page(mptsas_t *mpt, uint8_t action, uint8_t page_type,
 		(void) ddi_dma_sync(cmd->cmd_dmahandle, 0, 0,
 		    DDI_DMA_SYNC_FORCPU);
 		reply = (pMpi2ConfigReply_t)(mpt->m_reply_frame + (cmd->cmd_rfm
-		    - mpt->m_reply_frame_dma_addr));
+		    - (mpt->m_reply_frame_dma_addr & 0xffffffffu)));
 		iocstatus = ddi_get16(mpt->m_acc_reply_frame_hdl,
 		    &reply->IOCStatus);
 		iocstatus = MPTSAS_IOCSTATUS(iocstatus);
@@ -611,8 +615,8 @@ page_done:
 
 int
 mptsas_send_config_request_msg(mptsas_t *mpt, uint8_t action, uint8_t pagetype,
-	uint32_t pageaddress, uint8_t pagenumber, uint8_t pageversion,
-	uint8_t pagelength, uint32_t SGEflagslength, uint32_t SGEaddress32)
+    uint32_t pageaddress, uint8_t pagenumber, uint8_t pageversion,
+    uint8_t pagelength, uint32_t SGEflagslength, uint64_t SGEaddress)
 {
 	pMpi2ConfigRequest_t	config;
 	int			send_numbytes;
@@ -629,7 +633,10 @@ mptsas_send_config_request_msg(mptsas_t *mpt, uint8_t action, uint8_t pagetype,
 	ddi_put32(mpt->m_hshk_acc_hdl,
 	    &config->PageBufferSGE.MpiSimple.FlagsLength, SGEflagslength);
 	ddi_put32(mpt->m_hshk_acc_hdl,
-	    &config->PageBufferSGE.MpiSimple.u.Address32, SGEaddress32);
+	    &config->PageBufferSGE.MpiSimple.u.Address64.Low, SGEaddress);
+	ddi_put32(mpt->m_hshk_acc_hdl,
+	    &config->PageBufferSGE.MpiSimple.u.Address64.High,
+	    SGEaddress >> 32);
 	send_numbytes = sizeof (MPI2_CONFIG_REQUEST);
 
 	/*
@@ -644,9 +651,9 @@ mptsas_send_config_request_msg(mptsas_t *mpt, uint8_t action, uint8_t pagetype,
 
 int
 mptsas_send_extended_config_request_msg(mptsas_t *mpt, uint8_t action,
-	uint8_t extpagetype, uint32_t pageaddress, uint8_t pagenumber,
-	uint8_t pageversion, uint16_t extpagelength,
-	uint32_t SGEflagslength, uint32_t SGEaddress32)
+    uint8_t extpagetype, uint32_t pageaddress, uint8_t pagenumber,
+    uint8_t pageversion, uint16_t extpagelength,
+    uint32_t SGEflagslength, uint64_t SGEaddress)
 {
 	pMpi2ConfigRequest_t	config;
 	int			send_numbytes;
@@ -665,7 +672,10 @@ mptsas_send_extended_config_request_msg(mptsas_t *mpt, uint8_t action,
 	ddi_put32(mpt->m_hshk_acc_hdl,
 	    &config->PageBufferSGE.MpiSimple.FlagsLength, SGEflagslength);
 	ddi_put32(mpt->m_hshk_acc_hdl,
-	    &config->PageBufferSGE.MpiSimple.u.Address32, SGEaddress32);
+	    &config->PageBufferSGE.MpiSimple.u.Address64.Low, SGEaddress);
+	ddi_put32(mpt->m_hshk_acc_hdl,
+	    &config->PageBufferSGE.MpiSimple.u.Address64.High,
+	    SGEaddress >> 32);
 	send_numbytes = sizeof (MPI2_CONFIG_REQUEST);
 
 	/*
@@ -710,7 +720,7 @@ mptsas_ioc_wait_for_doorbell(mptsas_t *mpt)
 
 int
 mptsas_send_handshake_msg(mptsas_t *mpt, caddr_t memp, int numbytes,
-	ddi_acc_handle_t accessp)
+    ddi_acc_handle_t accessp)
 {
 	int	i;
 
@@ -762,7 +772,7 @@ mptsas_send_handshake_msg(mptsas_t *mpt, caddr_t memp, int numbytes,
 
 int
 mptsas_get_handshake_msg(mptsas_t *mpt, caddr_t memp, int numbytes,
-	ddi_acc_handle_t accessp)
+    ddi_acc_handle_t accessp)
 {
 	int		i, totalbytes, bytesleft;
 	uint16_t	val;
@@ -1079,7 +1089,7 @@ mptsas_return_to_pool(mptsas_t *mpt, mptsas_cmd_t *cmd)
  */
 int
 mptsas_ioc_task_management(mptsas_t *mpt, int task_type, uint16_t dev_handle,
-	int lun, uint8_t *reply, uint32_t reply_size, int mode)
+    int lun, uint8_t *reply, uint32_t reply_size, int mode)
 {
 	/*
 	 * In order to avoid allocating variables on the stack,
@@ -1093,7 +1103,7 @@ mptsas_ioc_task_management(mptsas_t *mpt, int task_type, uint16_t dev_handle,
 	mptsas_cmd_t				*cmd;
 	struct scsi_pkt				*pkt;
 	mptsas_slots_t				*slots = mpt->m_active;
-	uint32_t				request_desc_low, i;
+	uint64_t				request_desc, i;
 	pMPI2DefaultReply_t			reply_msg;
 
 	/*
@@ -1149,9 +1159,9 @@ mptsas_ioc_task_management(mptsas_t *mpt, int task_type, uint16_t dev_handle,
 	 */
 	(void) ddi_dma_sync(mpt->m_dma_req_frame_hdl, 0, 0,
 	    DDI_DMA_SYNC_FORDEV);
-	request_desc_low = (cmd->cmd_slot << 16) +
+	request_desc = (cmd->cmd_slot << 16) +
 	    MPI2_REQ_DESCRIPT_FLAGS_HIGH_PRIORITY;
-	MPTSAS_START_CMD(mpt, request_desc_low, 0);
+	MPTSAS_START_CMD(mpt, request_desc);
 	rval = mptsas_poll(mpt, cmd, MPTSAS_POLL_TIME);
 
 	if (pkt->pkt_reason == CMD_INCOMPLETE)
@@ -1167,7 +1177,7 @@ mptsas_ioc_task_management(mptsas_t *mpt, int task_type, uint16_t dev_handle,
 		    DDI_DMA_SYNC_FORCPU);
 		reply_msg = (pMPI2DefaultReply_t)
 		    (mpt->m_reply_frame + (cmd->cmd_rfm -
-		    mpt->m_reply_frame_dma_addr));
+		    (mpt->m_reply_frame_dma_addr & 0xffffffffu)));
 		if (reply_size > sizeof (MPI2_SCSI_TASK_MANAGE_REPLY)) {
 			reply_size = sizeof (MPI2_SCSI_TASK_MANAGE_REPLY);
 		}
@@ -1303,7 +1313,7 @@ mptsas_update_flash(mptsas_t *mpt, caddr_t ptrbuffer, uint32_t size,
 	struct scsi_pkt		*pkt;
 	int			i;
 	int			rvalue = 0;
-	uint32_t		request_desc_low;
+	uint64_t		request_desc;
 
 	if (mpt->m_MPI25 && !mptsas_enable_mpi25_flashupdate) {
 		/*
@@ -1389,10 +1399,10 @@ mptsas_update_flash(mptsas_t *mpt, caddr_t ptrbuffer, uint32_t size,
 	 */
 	(void) ddi_dma_sync(mpt->m_dma_req_frame_hdl, 0, 0,
 	    DDI_DMA_SYNC_FORDEV);
-	request_desc_low = (cmd->cmd_slot << 16) +
+	request_desc = (cmd->cmd_slot << 16) +
 	    MPI2_REQ_DESCRIPT_FLAGS_DEFAULT_TYPE;
-	cmd->cmd_rfm = NULL;
-	MPTSAS_START_CMD(mpt, request_desc_low, 0);
+	cmd->cmd_rfm = 0;
+	MPTSAS_START_CMD(mpt, request_desc);
 
 	rvalue = 0;
 	(void) cv_reltimedwait(&mpt->m_fw_cv, &mpt->m_mutex,
@@ -1699,9 +1709,12 @@ mptsas_sasiou_page_0_cb(mptsas_t *mpt, caddr_t page_memp,
 	/*
 	 * ASSERT that the num_phys value in SAS IO Unit Page 0 is the same as
 	 * was initially set.  This should never change throughout the life of
-	 * the driver.
+	 * the driver.  Note, due to cases where we've seen page zero have more
+	 * phys than the reported manufacturing information, we limit the number
+	 * of phys here to what we got from the manufacturing information.
 	 */
-	ASSERT(num_phys == mpt->m_num_phys);
+	ASSERT3U(num_phys, >=, mpt->m_num_phys);
+	num_phys = mpt->m_num_phys;
 	for (i = 0; i < num_phys; i++) {
 		cpdi[i] = ddi_get32(accessp,
 		    &sasioupage0->PhyData[i].
@@ -1763,11 +1776,14 @@ mptsas_sasiou_page_1_cb(mptsas_t *mpt, caddr_t page_memp,
 	sasioupage1 = (pMpi2SasIOUnitPage1_t)page_memp;
 	num_phys = ddi_get8(accessp, &sasioupage1->NumPhys);
 	/*
-	 * ASSERT that the num_phys value in SAS IO Unit Page 1 is the same as
+	 * ASSERT that the num_phys value in SAS IO Unit Page 0 is the same as
 	 * was initially set.  This should never change throughout the life of
-	 * the driver.
+	 * the driver.  Note, due to cases where we've seen page zero have more
+	 * phys than the reported manufacturing information, we limit the number
+	 * of phys here to what we got from the manufacturing information.
 	 */
-	ASSERT(num_phys == mpt->m_num_phys);
+	ASSERT3U(num_phys, >=, mpt->m_num_phys);
+	num_phys = mpt->m_num_phys;
 	for (i = 0; i < num_phys; i++) {
 		cpdi[i] = ddi_get32(accessp, &sasioupage1->PhyData[i].
 		    ControllerPhyDeviceInfo);
@@ -1924,7 +1940,7 @@ mptsas_get_sas_io_unit_page_hndshk(mptsas_t *mpt)
 	pMpi2SasIOUnitPage1_t	sasioupage1;
 	int			recv_numbytes;
 	caddr_t			recv_memp, page_memp;
-	int			i, num_phys, start_phy = 0;
+	uint_t			i, num_phys, start_phy = 0;
 	int			page0_size =
 	    sizeof (MPI2_CONFIG_PAGE_SASIOUNIT_0) +
 	    (sizeof (MPI2_SAS_IO_UNIT0_PHY_DATA) * (MPTSAS_MAX_PHYS - 1));
@@ -1936,10 +1952,21 @@ mptsas_get_sas_io_unit_page_hndshk(mptsas_t *mpt)
 	uint32_t		readpage1 = 0, retrypage0 = 0;
 	uint16_t		iocstatus;
 	uint8_t			port_flags, page_number, action;
-	uint32_t		reply_size = 256; /* Big enough for any page */
+	uint32_t		reply_size;
 	uint_t			state;
 	int			rval = DDI_FAILURE;
 	boolean_t		free_recv = B_FALSE, free_page = B_FALSE;
+
+	/*
+	 * We want to find a reply_size that's large enough for the page0 and
+	 * page1 sizes and resistant to increase in the number of phys.
+	 */
+	reply_size = MAX(page0_size, page1_size);
+	if (P2ROUNDUP(reply_size, 256) <= reply_size) {
+		mptsas_log(mpt, CE_WARN, "mptsas_get_sas_io_unit_page_hndsk: "
+		    "cannot size reply size");
+		goto cleanup;
+	}
 
 	/*
 	 * Initialize our "state machine".  This is a bit convoluted,
@@ -2004,7 +2031,7 @@ mptsas_get_sas_io_unit_page_hndshk(mptsas_t *mpt)
 			    MPI2_SGE_FLAGS_END_OF_BUFFER |
 			    MPI2_SGE_FLAGS_SIMPLE_ELEMENT |
 			    MPI2_SGE_FLAGS_SYSTEM_ADDRESS |
-			    MPI2_SGE_FLAGS_32_BIT_ADDRESSING |
+			    MPI2_SGE_FLAGS_64_BIT_ADDRESSING |
 			    MPI2_SGE_FLAGS_IOC_TO_HOST |
 			    MPI2_SGE_FLAGS_END_OF_LIST) <<
 			    MPI2_SGE_FLAGS_SHIFT);
@@ -2020,7 +2047,7 @@ mptsas_get_sas_io_unit_page_hndshk(mptsas_t *mpt)
 			    MPI2_SGE_FLAGS_END_OF_BUFFER |
 			    MPI2_SGE_FLAGS_SIMPLE_ELEMENT |
 			    MPI2_SGE_FLAGS_SYSTEM_ADDRESS |
-			    MPI2_SGE_FLAGS_32_BIT_ADDRESSING |
+			    MPI2_SGE_FLAGS_64_BIT_ADDRESSING |
 			    MPI2_SGE_FLAGS_IOC_TO_HOST |
 			    MPI2_SGE_FLAGS_END_OF_LIST) <<
 			    MPI2_SGE_FLAGS_SHIFT);
@@ -2064,7 +2091,7 @@ mptsas_get_sas_io_unit_page_hndshk(mptsas_t *mpt)
 		    MPI2_CONFIG_EXTPAGETYPE_SAS_IO_UNIT, 0, page_number,
 		    ddi_get8(recv_accessp, &configreply->Header.PageVersion),
 		    ddi_get16(recv_accessp, &configreply->ExtPageLength),
-		    flags_length, page_cookie.dmac_address)) {
+		    flags_length, page_cookie.dmac_laddress)) {
 			goto cleanup;
 		}
 
@@ -2093,13 +2120,32 @@ mptsas_get_sas_io_unit_page_hndshk(mptsas_t *mpt)
 
 			num_phys = ddi_get8(page_accessp,
 			    &sasioupage0->NumPhys);
-			ASSERT(num_phys == mpt->m_num_phys);
 			if (num_phys > MPTSAS_MAX_PHYS) {
 				mptsas_log(mpt, CE_WARN, "Number of phys "
 				    "supported by HBA (%d) is more than max "
 				    "supported by driver (%d).  Driver will "
 				    "not attach.", num_phys,
 				    MPTSAS_MAX_PHYS);
+				rval = DDI_FAILURE;
+				goto cleanup;
+			}
+			if (num_phys > mpt->m_num_phys) {
+				mptsas_log(mpt, CE_WARN, "Number of phys "
+				    "reported by HBA SAS IO Unit Page 0 (%u) "
+				    "is greater than that reported by the "
+				    "manufacturing information (%u). Driver "
+				    "phy count limited to %u. Please contact "
+				    "the firmware vendor about this.", num_phys,
+				    mpt->m_num_phys, mpt->m_num_phys);
+				num_phys = mpt->m_num_phys;
+			} else if (num_phys < mpt->m_num_phys) {
+				mptsas_log(mpt, CE_WARN, "Number of phys "
+				    "reported by HBA SAS IO Unit Page 0 (%u) "
+				    "is less than that reported by the "
+				    "manufacturing information (%u). Driver "
+				    "will not attach. Please contact the "
+				    "firmware vendor about this.", num_phys,
+				    mpt->m_num_phys);
 				rval = DDI_FAILURE;
 				goto cleanup;
 			}
@@ -2174,13 +2220,32 @@ mptsas_get_sas_io_unit_page_hndshk(mptsas_t *mpt)
 
 			num_phys = ddi_get8(page_accessp,
 			    &sasioupage1->NumPhys);
-			ASSERT(num_phys == mpt->m_num_phys);
 			if (num_phys > MPTSAS_MAX_PHYS) {
 				mptsas_log(mpt, CE_WARN, "Number of phys "
 				    "supported by HBA (%d) is more than max "
 				    "supported by driver (%d).  Driver will "
 				    "not attach.", num_phys,
 				    MPTSAS_MAX_PHYS);
+				rval = DDI_FAILURE;
+				goto cleanup;
+			}
+			if (num_phys > mpt->m_num_phys) {
+				mptsas_log(mpt, CE_WARN, "Number of phys "
+				    "reported by HBA SAS IO Unit Page 1 (%u) "
+				    "is greater than that reported by the "
+				    "manufacturing information (%u). Limiting "
+				    "phy count to %u. Please contact the "
+				    "firmware vendor about this.", num_phys,
+				    mpt->m_num_phys, mpt->m_num_phys);
+				num_phys = mpt->m_num_phys;
+			} else if (num_phys < mpt->m_num_phys) {
+				mptsas_log(mpt, CE_WARN, "Number of phys "
+				    "reported by HBA SAS IO Unit Page 1 (%u) "
+				    "is less than that reported by the "
+				    "manufacturing information (%u). Driver "
+				    "will not attach. Please contact the "
+				    "firmware vendor about this.", num_phys,
+				    mpt->m_num_phys);
 				rval = DDI_FAILURE;
 				goto cleanup;
 			}
@@ -2288,7 +2353,8 @@ mptsas_get_manufacture_page5(mptsas_t *mpt)
 		goto done;
 	}
 
-	if (iocstatus = ddi_get16(recv_accessp, &configreply->IOCStatus)) {
+	if ((iocstatus = ddi_get16(recv_accessp, &configreply->IOCStatus)) !=
+	    0) {
 		mptsas_log(mpt, CE_WARN, "mptsas_get_manufacture_page5 update: "
 		    "IOCStatus=0x%x, IOCLogInfo=0x%x", iocstatus,
 		    ddi_get32(recv_accessp, &configreply->IOCLogInfo));
@@ -2314,6 +2380,8 @@ mptsas_get_manufacture_page5(mptsas_t *mpt)
 
 	bzero(page_memp, sizeof (MPI2_CONFIG_PAGE_MAN_5));
 	m5 = (pMpi2ManufacturingPage5_t)page_memp;
+	NDBG20(("mptsas_get_manufacture_page5: paddr 0x%p",
+	    (void *)(uintptr_t)page_cookie.dmac_laddress));
 
 	/*
 	 * Give reply address to IOC to store config page in and send
@@ -2323,7 +2391,7 @@ mptsas_get_manufacture_page5(mptsas_t *mpt)
 	flagslength = sizeof (MPI2_CONFIG_PAGE_MAN_5);
 	flagslength |= ((uint32_t)(MPI2_SGE_FLAGS_LAST_ELEMENT |
 	    MPI2_SGE_FLAGS_END_OF_BUFFER | MPI2_SGE_FLAGS_SIMPLE_ELEMENT |
-	    MPI2_SGE_FLAGS_SYSTEM_ADDRESS | MPI2_SGE_FLAGS_32_BIT_ADDRESSING |
+	    MPI2_SGE_FLAGS_SYSTEM_ADDRESS | MPI2_SGE_FLAGS_64_BIT_ADDRESSING |
 	    MPI2_SGE_FLAGS_IOC_TO_HOST |
 	    MPI2_SGE_FLAGS_END_OF_LIST) << MPI2_SGE_FLAGS_SHIFT);
 
@@ -2332,7 +2400,7 @@ mptsas_get_manufacture_page5(mptsas_t *mpt)
 	    MPI2_CONFIG_PAGETYPE_MANUFACTURING, 0, 5,
 	    ddi_get8(recv_accessp, &configreply->Header.PageVersion),
 	    ddi_get8(recv_accessp, &configreply->Header.PageLength),
-	    flagslength, page_cookie.dmac_address)) {
+	    flagslength, page_cookie.dmac_laddress)) {
 		rval = DDI_FAILURE;
 		goto done;
 	}
@@ -2346,7 +2414,8 @@ mptsas_get_manufacture_page5(mptsas_t *mpt)
 		goto done;
 	}
 
-	if (iocstatus = ddi_get16(recv_accessp, &configreply->IOCStatus)) {
+	if ((iocstatus = ddi_get16(recv_accessp, &configreply->IOCStatus)) !=
+	    0) {
 		mptsas_log(mpt, CE_WARN, "mptsas_get_manufacture_page5 config: "
 		    "IOCStatus=0x%x, IOCLogInfo=0x%x", iocstatus,
 		    ddi_get32(recv_accessp, &configreply->IOCLogInfo));
@@ -2664,7 +2733,8 @@ mptsas_get_manufacture_page0(mptsas_t *mpt)
 		goto done;
 	}
 
-	if (iocstatus = ddi_get16(recv_accessp, &configreply->IOCStatus)) {
+	if ((iocstatus = ddi_get16(recv_accessp, &configreply->IOCStatus)) !=
+	    0) {
 		mptsas_log(mpt, CE_WARN, "mptsas_get_manufacture_page5 update: "
 		    "IOCStatus=0x%x, IOCLogInfo=0x%x", iocstatus,
 		    ddi_get32(recv_accessp, &configreply->IOCLogInfo));
@@ -2699,7 +2769,7 @@ mptsas_get_manufacture_page0(mptsas_t *mpt)
 	flagslength = sizeof (MPI2_CONFIG_PAGE_MAN_0);
 	flagslength |= ((uint32_t)(MPI2_SGE_FLAGS_LAST_ELEMENT |
 	    MPI2_SGE_FLAGS_END_OF_BUFFER | MPI2_SGE_FLAGS_SIMPLE_ELEMENT |
-	    MPI2_SGE_FLAGS_SYSTEM_ADDRESS | MPI2_SGE_FLAGS_32_BIT_ADDRESSING |
+	    MPI2_SGE_FLAGS_SYSTEM_ADDRESS | MPI2_SGE_FLAGS_64_BIT_ADDRESSING |
 	    MPI2_SGE_FLAGS_IOC_TO_HOST |
 	    MPI2_SGE_FLAGS_END_OF_LIST) << MPI2_SGE_FLAGS_SHIFT);
 
@@ -2708,7 +2778,7 @@ mptsas_get_manufacture_page0(mptsas_t *mpt)
 	    MPI2_CONFIG_PAGETYPE_MANUFACTURING, 0, 0,
 	    ddi_get8(recv_accessp, &configreply->Header.PageVersion),
 	    ddi_get8(recv_accessp, &configreply->Header.PageLength),
-	    flagslength, page_cookie.dmac_address)) {
+	    flagslength, page_cookie.dmac_laddress)) {
 		rval = DDI_FAILURE;
 		goto done;
 	}
@@ -2722,7 +2792,8 @@ mptsas_get_manufacture_page0(mptsas_t *mpt)
 		goto done;
 	}
 
-	if (iocstatus = ddi_get16(recv_accessp, &configreply->IOCStatus)) {
+	if ((iocstatus = ddi_get16(recv_accessp, &configreply->IOCStatus)) !=
+	    0) {
 		mptsas_log(mpt, CE_WARN, "mptsas_get_manufacture_page0 config: "
 		    "IOCStatus=0x%x, IOCLogInfo=0x%x", iocstatus,
 		    ddi_get32(recv_accessp, &configreply->IOCLogInfo));
@@ -2786,6 +2857,93 @@ done:
 	if (free_page)
 		mptsas_dma_addr_destroy(&page_dma_handle, &page_accessp);
 	MPTSAS_ENABLE_INTR(mpt);
+
+	return (rval);
+}
+
+static int
+mptsas_enclosurepage_0_cb(mptsas_t *mpt, caddr_t page_memp,
+    ddi_acc_handle_t accessp, uint16_t iocstatus, uint32_t iocloginfo,
+    va_list ap)
+{
+	uint32_t			page_address;
+	pMpi2SasEnclosurePage0_t	encpage, encout;
+
+	if ((iocstatus != MPI2_IOCSTATUS_SUCCESS) &&
+	    (iocstatus != MPI2_IOCSTATUS_CONFIG_INVALID_PAGE)) {
+		mptsas_log(mpt, CE_WARN, "mptsas_get_enclsourepage0 "
+		    "header: IOCStatus=0x%x, IOCLogInfo=0x%x",
+		    iocstatus, iocloginfo);
+		return (DDI_FAILURE);
+	}
+
+	page_address = va_arg(ap, uint32_t);
+	encout = va_arg(ap, pMpi2SasEnclosurePage0_t);
+	encpage = (pMpi2SasEnclosurePage0_t)page_memp;
+
+	/*
+	 * The INVALID_PAGE status is normal if using GET_NEXT_HANDLE and there
+	 * are no more pages.  If everything is OK up to this point but the
+	 * status is INVALID_PAGE, change rval to FAILURE and quit.  Also,
+	 * signal that enclosure traversal is complete.
+	 */
+	if (iocstatus == MPI2_IOCSTATUS_CONFIG_INVALID_PAGE) {
+		if ((page_address & MPI2_SAS_DEVICE_PGAD_FORM_MASK) ==
+		    MPI2_SAS_DEVICE_PGAD_FORM_GET_NEXT_HANDLE) {
+			mpt->m_done_traverse_enc = 1;
+		}
+		return (DDI_FAILURE);
+	}
+
+	encout->Header.PageVersion = ddi_get8(accessp,
+	    &encpage->Header.PageVersion);
+	encout->Header.PageNumber = ddi_get8(accessp,
+	    &encpage->Header.PageNumber);
+	encout->Header.PageType = ddi_get8(accessp, &encpage->Header.PageType);
+	encout->Header.ExtPageLength = ddi_get16(accessp,
+	    &encpage->Header.ExtPageLength);
+	encout->Header.ExtPageType = ddi_get8(accessp,
+	    &encpage->Header.ExtPageType);
+
+	encout->EnclosureLogicalID.Low = ddi_get32(accessp,
+	    &encpage->EnclosureLogicalID.Low);
+	encout->EnclosureLogicalID.High = ddi_get32(accessp,
+	    &encpage->EnclosureLogicalID.High);
+	encout->Flags = ddi_get16(accessp, &encpage->Flags);
+	encout->EnclosureHandle = ddi_get16(accessp, &encpage->EnclosureHandle);
+	encout->NumSlots = ddi_get16(accessp, &encpage->NumSlots);
+	encout->StartSlot = ddi_get16(accessp, &encpage->StartSlot);
+	encout->EnclosureLevel = ddi_get8(accessp, &encpage->EnclosureLevel);
+	encout->SEPDevHandle = ddi_get16(accessp, &encpage->SEPDevHandle);
+
+	return (DDI_SUCCESS);
+}
+
+/*
+ * Request information about the SES enclosures.
+ */
+int
+mptsas_get_enclosure_page0(mptsas_t *mpt, uint32_t page_address,
+    mptsas_enclosure_t *mep)
+{
+	int rval = DDI_SUCCESS;
+	Mpi2SasEnclosurePage0_t	encpage;
+
+	ASSERT(MUTEX_HELD(&mpt->m_mutex));
+
+	bzero(&encpage, sizeof (encpage));
+	rval = mptsas_access_config_page(mpt,
+	    MPI2_CONFIG_ACTION_PAGE_READ_CURRENT,
+	    MPI2_CONFIG_EXTPAGETYPE_ENCLOSURE, 0, page_address,
+	    mptsas_enclosurepage_0_cb, page_address, &encpage);
+
+	if (rval == DDI_SUCCESS) {
+		mep->me_enchdl = encpage.EnclosureHandle;
+		mep->me_flags = encpage.Flags;
+		mep->me_nslots = encpage.NumSlots;
+		mep->me_fslot = encpage.StartSlot;
+		mep->me_slotleds = NULL;
+	}
 
 	return (rval);
 }

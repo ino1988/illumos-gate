@@ -1,5 +1,6 @@
 /*
  * Copyright (c) 2007, 2010, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2015 by Delphix. All rights reserved.
  */
 
 /*
@@ -10,10 +11,10 @@
  * Redistribution and use in source and binary forms, with or without
  * modification, are permitted provided that the following conditions
  * are met:
- * 	- Redistributions of source code must retain the above copyright
+ *	- Redistributions of source code must retain the above copyright
  *	  notice, this list of conditions and the following disclaimer.
  *
- * 	- Redistributions in binary form must reproduce the above copyright
+ *	- Redistributions in binary form must reproduce the above copyright
  *	  notice, this list of conditions and the following disclaimer in
  *	  the documentation and/or other materials provided with the
  *	  distribution.
@@ -112,9 +113,9 @@ typedef struct fs_fhandle {
 } fs_fhandle_t;
 
 typedef struct scsi_link {
-	struct scsi_link 	*sl_next;
-	struct scsi_link 	*sl_prev;
-	struct scsi_adapter 	*sl_sa;
+	struct scsi_link	*sl_next;
+	struct scsi_link	*sl_prev;
+	struct scsi_adapter	*sl_sa;
 	unsigned int		sl_sid;
 	unsigned int		sl_lun;
 	unsigned int		sl_requested_max_active;
@@ -426,7 +427,7 @@ typedef struct tm_ops {
 	int (*tm_putfile)();
 	int (*tm_putdir)();
 	int (*tm_putvol)();	/* Reserved */
-	int (*tm_getfile)();
+	void * (*tm_getfile)(void *);
 	int (*tm_getdir)();
 	int (*tm_getvol)();	/* Reserved */
 } tm_ops_t;
@@ -475,7 +476,7 @@ typedef struct ndmp_metadata_property {
 } ndmp_metadata_property_t;
 
 typedef struct ndmp_metadata_property_ext {
-	char mp_name[ZFS_MAXNAMELEN];
+	char mp_name[ZFS_MAX_DATASET_NAME_LEN];
 	char mp_value[ZFS_MAXPROPLEN];
 	char mp_source[ZFS_MAXPROPLEN];
 } ndmp_metadata_property_ext_t;
@@ -498,7 +499,7 @@ typedef struct ndmp_metadata_header {
 /* Extended metadata format */
 typedef struct ndmp_metadata_header_ext {
 	ndmp_metadata_top_header_t nh_hdr;
-	char nh_dataset[ZFS_MAXNAMELEN];
+	char nh_dataset[ZFS_MAX_DATASET_NAME_LEN];
 	int32_t nh_total_bytes;
 	int32_t nh_major;
 	int32_t nh_minor;

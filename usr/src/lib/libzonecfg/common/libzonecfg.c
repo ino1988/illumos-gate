@@ -22,6 +22,8 @@
 /*
  * Copyright 2014 Gary Mills
  * Copyright (c) 2003, 2010, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2018, Joyent, Inc.
+ * Copyright 2015 Nexenta Systems, Inc. All rights reserved.
  */
 
 #include <libsysevent.h>
@@ -96,6 +98,7 @@
 #define	DTD_ELEM_OBSOLETES	(const xmlChar *) "obsoletes"
 #define	DTD_ELEM_DEV_PERM	(const xmlChar *) "dev-perm"
 #define	DTD_ELEM_ADMIN		(const xmlChar *) "admin"
+#define	DTD_ELEM_SECFLAGS	(const xmlChar *) "security-flags"
 
 #define	DTD_ATTR_ACTION		(const xmlChar *) "action"
 #define	DTD_ATTR_ADDRESS	(const xmlChar *) "address"
@@ -133,6 +136,10 @@
 #define	DTD_ATTR_USER		(const xmlChar *) "user"
 #define	DTD_ATTR_AUTHS		(const xmlChar *) "auths"
 #define	DTD_ATTR_FS_ALLOWED	(const xmlChar *) "fs-allowed"
+#define	DTD_ATTR_DEFAULT	(const xmlChar *) "default"
+#define	DTD_ATTR_LOWER		(const xmlChar *) "lower"
+#define	DTD_ATTR_UPPER		(const xmlChar *) "upper"
+
 
 #define	DTD_ENTITY_BOOLEAN	"boolean"
 #define	DTD_ENTITY_DEVPATH	"devpath"
@@ -2634,6 +2641,7 @@ zonecfg_add_admin(zone_dochandle_t handle, struct zone_admintab *tabptr,
 
 	return (Z_OK);
 }
+
 static int
 zonecfg_delete_auth_core(zone_dochandle_t handle, struct zone_admintab *tabptr,
     char *zonename)
@@ -2746,6 +2754,159 @@ zonecfg_lookup_admin(zone_dochandle_t handle, struct zone_admintab *tabptr)
 	return (Z_OK);
 }
 
+static int
+zonecfg_add_secflags_core(zone_dochandle_t handle,
+    struct zone_secflagstab *tabptr)
+{
+	xmlNodePtr newnode, cur = handle->zone_dh_cur;
+	int err;
+
+	newnode = xmlNewTextChild(cur, NULL, DTD_ELEM_SECFLAGS, NULL);
+	err = newprop(newnode, DTD_ATTR_DEFAULT, tabptr->zone_secflags_default);
+	if (err != Z_OK)
+		return (err);
+	err = newprop(newnode, DTD_ATTR_LOWER, tabptr->zone_secflags_lower);
+	if (err != Z_OK)
+		return (err);
+	err = newprop(newnode, DTD_ATTR_UPPER, tabptr->zone_secflags_upper);
+	if (err != Z_OK)
+		return (err);
+
+	return (Z_OK);
+}
+
+int
+zonecfg_add_secflags(zone_dochandle_t handle, struct zone_secflagstab *tabptr)
+{
+	int err;
+
+
+	if (tabptr == NULL)
+		return (Z_INVAL);
+
+	if ((err = operation_prep(handle)) != Z_OK)
+		return (err);
+
+	if ((err = zonecfg_add_secflags_core(handle, tabptr)) != Z_OK)
+		return (err);
+
+	return (Z_OK);
+}
+
+static int
+zonecfg_delete_secflags_core(zone_dochandle_t handle,
+    struct zone_secflagstab *tabptr)
+{
+	xmlNodePtr cur = handle->zone_dh_cur;
+	boolean_t def_match, low_match, up_match;
+
+	for (cur = cur->xmlChildrenNode; cur != NULL; cur = cur->next) {
+		if (xmlStrcmp(cur->name, DTD_ELEM_SECFLAGS) != 0)
+			continue;
+
+		def_match = match_prop(cur, DTD_ATTR_DEFAULT,
+		    tabptr->zone_secflags_default);
+		low_match = match_prop(cur, DTD_ATTR_LOWER,
+		    tabptr->zone_secflags_lower);
+		up_match = match_prop(cur, DTD_ATTR_UPPER,
+		    tabptr->zone_secflags_upper);
+
+		if (def_match && low_match && up_match) {
+			xmlUnlinkNode(cur);
+			xmlFreeNode(cur);
+			return (Z_OK);
+		}
+
+	}
+	return (Z_NO_RESOURCE_ID);
+}
+
+int
+zonecfg_delete_secflags(zone_dochandle_t handle,
+    struct zone_secflagstab *tabptr)
+{
+	int err;
+
+	if (tabptr == NULL)
+		return (Z_INVAL);
+
+	if ((err = operation_prep(handle)) != Z_OK)
+		return (err);
+
+	if ((err = zonecfg_delete_secflags_core(handle, tabptr)) != Z_OK)
+		return (err);
+
+	return (Z_OK);
+}
+
+int
+zonecfg_modify_secflags(zone_dochandle_t handle,
+    struct zone_secflagstab *oldtabptr,
+    struct zone_secflagstab *newtabptr)
+{
+	int err;
+
+	if (oldtabptr == NULL || newtabptr == NULL)
+		return (Z_INVAL);
+
+	if ((err = operation_prep(handle)) != Z_OK)
+		return (err);
+
+	if ((err = zonecfg_delete_secflags_core(handle, oldtabptr))
+	    != Z_OK)
+		return (err);
+
+	if ((err = zonecfg_add_secflags_core(handle, newtabptr)) != Z_OK)
+		return (err);
+
+	return (Z_OK);
+}
+
+int
+zonecfg_lookup_secflags(zone_dochandle_t handle,
+    struct zone_secflagstab *tabptr)
+{
+	xmlNodePtr cur;
+	int err;
+
+	if (tabptr == NULL)
+		return (Z_INVAL);
+
+	if ((err = operation_prep(handle)) != Z_OK)
+		return (err);
+
+	cur = handle->zone_dh_cur;
+
+	for (cur = cur->xmlChildrenNode; cur != NULL; cur = cur->next) {
+		if (xmlStrcmp(cur->name, DTD_ELEM_SECFLAGS) != 0)
+			continue;
+
+		if ((err = fetchprop(cur, DTD_ATTR_DEFAULT,
+		    tabptr->zone_secflags_default,
+		    sizeof (tabptr->zone_secflags_default))) != Z_OK) {
+			handle->zone_dh_cur = handle->zone_dh_top;
+			return (err);
+		}
+
+		if ((err = fetchprop(cur, DTD_ATTR_LOWER,
+		    tabptr->zone_secflags_lower,
+		    sizeof (tabptr->zone_secflags_lower))) != Z_OK) {
+			handle->zone_dh_cur = handle->zone_dh_top;
+			return (err);
+		}
+
+		if ((err = fetchprop(cur, DTD_ATTR_UPPER,
+		    tabptr->zone_secflags_upper,
+		    sizeof (tabptr->zone_secflags_upper))) != Z_OK) {
+			handle->zone_dh_cur = handle->zone_dh_top;
+			return (err);
+		}
+
+		return (Z_OK);
+	}
+
+	return (Z_NO_ENTRY);
+}
 
 /* Lock to serialize all devwalks */
 static pthread_mutex_t zonecfg_devwalk_lock = PTHREAD_MUTEX_INITIALIZER;
@@ -2821,8 +2982,8 @@ zonecfg_devwalk_cb(const char *path, const struct stat *st, int f,
 	if (strlen(path) <= g_devwalk_skip_prefix)
 		return (0);
 
-	g_devwalk_cb(path + g_devwalk_skip_prefix, st->st_uid, st->st_gid,
-	    st->st_mode & S_IAMB, acl_txt != NULL ? acl_txt : "",
+	(void) g_devwalk_cb(path + g_devwalk_skip_prefix, st->st_uid,
+	    st->st_gid, st->st_mode & S_IAMB, acl_txt != NULL ? acl_txt : "",
 	    g_devwalk_data);
 	free(acl_txt);
 	return (0);
@@ -2929,7 +3090,8 @@ zonecfg_devperms_apply(zone_dochandle_t hdl, const char *inpath, uid_t owner,
  */
 int
 zonecfg_find_mounts(char *rootpath, int (*callback)(const struct mnttab *,
-    void *), void *priv) {
+    void *), void *priv)
+{
 	FILE *mnttab;
 	struct mnttab m;
 	size_t l;
@@ -5817,8 +5979,7 @@ zonecfg_valid_fs_type(const char *type)
 	if (strcmp(type, "proc") == 0 ||
 	    strcmp(type, "mntfs") == 0 ||
 	    strcmp(type, "autofs") == 0 ||
-	    strncmp(type, "nfs", sizeof ("nfs") - 1) == 0 ||
-	    strcmp(type, "cachefs") == 0)
+	    strncmp(type, "nfs", sizeof ("nfs") - 1) == 0)
 		return (B_FALSE);
 	/*
 	 * The caller may do more detailed verification to make sure other
@@ -6919,6 +7080,61 @@ zonecfg_lookup_mcap(zone_dochandle_t handle, struct zone_mcaptab *tabptr)
 	}
 
 	return (Z_NO_ENTRY);
+}
+
+int
+zonecfg_getsecflagsent(zone_dochandle_t handle,
+    struct zone_secflagstab *tabptr)
+{
+	int err;
+	xmlNodePtr cur;
+
+	if (handle == NULL)
+		return (Z_INVAL);
+
+	if ((err = zonecfg_setent(handle)) != Z_OK)
+		return (err);
+
+
+	if ((cur = handle->zone_dh_cur) == NULL)
+		return (Z_NO_ENTRY);
+
+	for (; cur != NULL; cur = cur->next) {
+		if (xmlStrcmp(cur->name, DTD_ELEM_SECFLAGS) == 0)
+			break;
+	}
+
+	if (cur == NULL) {
+		handle->zone_dh_cur = handle->zone_dh_top;
+		return (Z_NO_ENTRY);
+	}
+
+	if ((err = fetchprop(cur, DTD_ATTR_DEFAULT,
+	    tabptr->zone_secflags_default,
+	    sizeof (tabptr->zone_secflags_default))) != Z_OK) {
+		handle->zone_dh_cur = handle->zone_dh_top;
+		return (err);
+	}
+
+	if ((err = fetchprop(cur, DTD_ATTR_LOWER,
+	    tabptr->zone_secflags_lower,
+	    sizeof (tabptr->zone_secflags_lower))) != Z_OK) {
+		handle->zone_dh_cur = handle->zone_dh_top;
+		return (err);
+	}
+
+	if ((err = fetchprop(cur, DTD_ATTR_UPPER,
+	    tabptr->zone_secflags_upper,
+	    sizeof (tabptr->zone_secflags_upper))) != Z_OK) {
+		handle->zone_dh_cur = handle->zone_dh_top;
+		return (err);
+	}
+
+	handle->zone_dh_cur = cur->next;
+
+	(void) zonecfg_endent(handle);
+
+	return (err);
 }
 
 static int
@@ -8037,7 +8253,7 @@ zonecfg_insert_userauths(zone_dochandle_t handle, char *user, char *zonename)
 
 int
 zonecfg_remove_userauths(zone_dochandle_t handle, char *user, char *zonename,
-	boolean_t deauthorize)
+    boolean_t deauthorize)
 {
 	zone_userauths_t *new, **prev, *next;
 

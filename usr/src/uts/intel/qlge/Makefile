@@ -22,7 +22,8 @@
 # Copyright 2010 Sun Microsystems, Inc.  All rights reserved.
 # Use is subject to license terms.
 #
-# This makefile drives the production of the qlge driver kernel module.
+# Copyright (c) 2018, Joyent, Inc.
+
 #
 # Path to the base of the uts directory tree (usually /usr/src/uts).
 #
@@ -37,7 +38,6 @@ ARCHDIR:sh = cd ..; basename `pwd`
 #
 MODULE		= qlge
 OBJECTS		= $(QLGE_OBJS:%=$(OBJS_DIR)/%)
-LINTS		= $(QLGE_OBJS:%.o=$(LINTS_DIR)/%.ln)
 ROOTMODULE	= $(ROOT_DRV_DIR)/$(MODULE)
 
 #
@@ -49,7 +49,6 @@ include ../Makefile.$(ARCHDIR)
 #	Define targets
 #
 ALL_TARGET	= $(BINARY)
-LINT_TARGET	= $(MODULE).lint
 INSTALL_TARGET	= $(BINARY) $(ROOTMODULE)
 
 #
@@ -61,11 +60,13 @@ INC_PATH	+= -I$(UTSBASE)/common/sys/fibre-channel/fca/qlge
 
 LDFLAGS		+= -dy -Nmisc/mac -Ndrv/ip
 
-C99MODE=	-xc99=%all
 C99LMODE=	-Xc99=%all
 
 CERRWARN	+= -_gcc=-Wno-switch
-CERRWARN	+= -_gcc=-Wno-uninitialized
+CERRWARN	+= $(CNOWARN_UNINIT)
+
+# needs work
+$(OBJS_DIR)/qlge.o := SMOFF += deref_check
 
 #
 #	Default build targets.
@@ -79,12 +80,6 @@ all:		$(ALL_DEPS)
 clean:		$(CLEAN_DEPS)
 
 clobber:	$(CLOBBER_DEPS)
-
-lint:		$(LINT_DEPS)
-
-modlintlib:	$(MODLINTLIB_DEPS)
-
-clean.lint:	$(CLEAN_LINT_DEPS)
 
 install:	$(INSTALL_DEPS)
 

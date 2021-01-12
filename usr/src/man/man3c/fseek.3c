@@ -1,17 +1,53 @@
-'\" te
-.\" Copyright 1989 AT&T.  Copyright (c) 20023, Sun Microsystems, Inc.  All Rights Reserved.  Portions Copyright (c) 1992, X/Open Company Limited.  All Rights Reserved.
-.\" Sun Microsystems, Inc. gratefully acknowledges The Open Group for permission to reproduce portions of its copyrighted documentation. Original documentation from The Open Group can be obtained online at
+.\"
+.\" Sun Microsystems, Inc. gratefully acknowledges The Open Group for
+.\" permission to reproduce portions of its copyrighted documentation.
+.\" Original documentation from The Open Group can be obtained online at
 .\" http://www.opengroup.org/bookstore/.
-.\" The Institute of Electrical and Electronics Engineers and The Open Group, have given us permission to reprint portions of their documentation. In the following statement, the phrase "this text" refers to portions of the system documentation. Portions of this text are reprinted and reproduced in electronic form in the Sun OS Reference Manual, from IEEE Std 1003.1, 2004 Edition, Standard for Information Technology -- Portable Operating System Interface (POSIX), The Open Group Base Specifications Issue 6, Copyright (C) 2001-2004 by the Institute of Electrical and Electronics Engineers, Inc and The Open Group. In the event of any discrepancy between these versions and the original IEEE and The Open Group Standard, the original IEEE and The Open Group Standard is the referee document. The original Standard can be obtained online at http://www.opengroup.org/unix/online.html.
-.\"  This notice shall appear on any product containing this material.
-.\" The contents of this file are subject to the terms of the Common Development and Distribution License (the "License").  You may not use this file except in compliance with the License.
-.\" You can obtain a copy of the license at usr/src/OPENSOLARIS.LICENSE or http://www.opensolaris.org/os/licensing.  See the License for the specific language governing permissions and limitations under the License.
-.\" When distributing Covered Code, include this CDDL HEADER in each file and include the License file at usr/src/OPENSOLARIS.LICENSE.  If applicable, add the following below this CDDL HEADER, with the fields enclosed by brackets "[]" replaced with your own identifying information: Portions Copyright [yyyy] [name of copyright owner]
-.TH FSEEK 3C "Nov 1, 2003"
+.\"
+.\" The Institute of Electrical and Electronics Engineers and The Open
+.\" Group, have given us permission to reprint portions of their
+.\" documentation.
+.\"
+.\" In the following statement, the phrase ``this text'' refers to portions
+.\" of the system documentation.
+.\"
+.\" Portions of this text are reprinted and reproduced in electronic form
+.\" in the SunOS Reference Manual, from IEEE Std 1003.1, 2004 Edition,
+.\" Standard for Information Technology -- Portable Operating System
+.\" Interface (POSIX), The Open Group Base Specifications Issue 6,
+.\" Copyright (C) 2001-2004 by the Institute of Electrical and Electronics
+.\" Engineers, Inc and The Open Group.  In the event of any discrepancy
+.\" between these versions and the original IEEE and The Open Group
+.\" Standard, the original IEEE and The Open Group Standard is the referee
+.\" document.  The original Standard can be obtained online at
+.\" http://www.opengroup.org/unix/online.html.
+.\"
+.\" This notice shall appear on any product containing this material.
+.\"
+.\" The contents of this file are subject to the terms of the
+.\" Common Development and Distribution License (the "License").
+.\" You may not use this file except in compliance with the License.
+.\"
+.\" You can obtain a copy of the license at usr/src/OPENSOLARIS.LICENSE
+.\" or http://www.opensolaris.org/os/licensing.
+.\" See the License for the specific language governing permissions
+.\" and limitations under the License.
+.\"
+.\" When distributing Covered Code, include this CDDL HEADER in each
+.\" file and include the License file at usr/src/OPENSOLARIS.LICENSE.
+.\" If applicable, add the following below this CDDL HEADER, with the
+.\" fields enclosed by brackets "[]" replaced with your own identifying
+.\" information: Portions Copyright [yyyy] [name of copyright owner]
+.\"
+.\"
+.\" Copyright 1989 AT&T.
+.\" Portions Copyright (c) 1992, X/Open Company Limited.  All Rights Reserved.
+.\" Copyright (c) 2003, Sun Microsystems, Inc.  All Rights Reserved.
+.\"
+.TH FSEEK 3C "March 25, 2020"
 .SH NAME
 fseek, fseeko \- reposition a file-position indicator in a stream
 .SH SYNOPSIS
-.LP
 .nf
 #include <stdio.h>
 
@@ -24,8 +60,6 @@ fseek, fseeko \- reposition a file-position indicator in a stream
 .fi
 
 .SH DESCRIPTION
-.sp
-.LP
 The \fBfseek()\fR function sets the file-position indicator for the stream
 pointed to by \fIstream\fR. The \fBfseeko()\fR function is identical to
 \fBfseek()\fR except for the type of \fIoffset\fR.
@@ -65,7 +99,8 @@ Set position to \fBEOF\fR plus \fIoffset\fR.
 .LP
 If the stream is to be used with wide character input/output functions,
 \fIoffset\fR must either be 0 or a value returned by an earlier call to
-\fBftell\fR(3C) on the same stream and \fIwhence\fR must be \fBSEEK_SET\fR.
+\fBftell\fR(3C) on the same stream and \fIwhence\fR must be \fBSEEK_SET\fR. This
+constraint does not hold for streams created by \fBopen_wmemstream\fR(3C).
 .sp
 .LP
 A successful call to \fBfseek()\fR clears the end-of-file indicator for the
@@ -93,14 +128,32 @@ If the stream is writable and buffered data had not been written to the
 underlying file, \fBfseek()\fR will cause the unwritten data to be written to
 the file and mark the \fBst_ctime\fR and \fBst_mtime\fR fields of the file for
 update.
+.SS \fBopen_wmemstream\fR(3C)
+When using a stream based on
+.B open_wmemstream\fR(3C),
+the
+.B fseek()
+and
+.B fseeko()
+functions no longer operate in terms of bytes. Instead, like the stream itself,
+the values used in
+.I offset
+are measured in units of wide characters, the underlying data unit of the
+stream. The values returned by
+.B ftell(3C)
+or
+.B ftello(3C)
+are also in these same units, allowing them to be used in the same way. These
+streams do not have the constraints of other wide character streams and may the
+full range of values in
+.I whence
+and
+.I offset,
+the same as would be done for a normal byte-oriented stream.
 .SH RETURN VALUES
-.sp
-.LP
 The \fBfseek()\fR and \fBfseeko()\fR functions return \fB0\fR on success;
 otherwise, they returned \fB\(mi1\fR and set \fBerrno\fR to indicate the error.
 .SH ERRORS
-.sp
-.LP
 The \fBfseek()\fR and \fBfseeko()\fR functions will fail if, either the
 \fIstream\fR is unbuffered or the \fIstream\fR's buffer needed to be flushed,
 and the call to \fBfseek()\fR or \fBfseeko()\fR causes an underlying
@@ -235,8 +288,6 @@ correctly in an object of type \fBoff_t\fR.
 .RE
 
 .SH USAGE
-.sp
-.LP
 Although on the UNIX system an offset returned by \fBftell()\fR or
 \fBftello()\fR (see \fBftell\fR(3C)) is measured in bytes, and it is
 permissible to seek to positions relative to that offset, portability to
@@ -248,8 +299,6 @@ necessarily measured in bytes.
 The \fBfseeko()\fR function has a transitional interface for 64-bit file
 offsets.  See \fBlf64\fR(5).
 .SH ATTRIBUTES
-.sp
-.LP
 See \fBattributes\fR(5) for descriptions of the following attributes:
 .sp
 
@@ -266,8 +315,6 @@ MT-Level	MT-Safe
 .TE
 
 .SH SEE ALSO
-.sp
-.LP
-\fBgetrlimit\fR(2), \fBulimit\fR(2), \fBfopen\fR(3UCB), \fBftell\fR(3C),
+\fBgetrlimit\fR(2), \fBulimit\fR(2), \fBftell\fR(3C),
 \fBrewind\fR(3C), \fBungetc\fR(3C), \fBungetwc\fR(3C), \fBattributes\fR(5),
 \fBlf64\fR(5), \fBstandards\fR(5)

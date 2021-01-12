@@ -3,19 +3,16 @@
 .\" The contents of this file are subject to the terms of the Common Development and Distribution License (the "License").  You may not use this file except in compliance with the License.
 .\" You can obtain a copy of the license at usr/src/OPENSOLARIS.LICENSE or http://www.opensolaris.org/os/licensing.  See the License for the specific language governing permissions and limitations under the License.
 .\" When distributing Covered Code, include this CDDL HEADER in each file and include the License file at usr/src/OPENSOLARIS.LICENSE.  If applicable, add the following below this CDDL HEADER, with the fields enclosed by brackets "[]" replaced with your own identifying information: Portions Copyright [yyyy] [name of copyright owner]
-.TH ATTRIBUTES 5 "Jul 29, 2007"
+.TH ATTRIBUTES 5 "May 13, 2017"
 .SH NAME
 attributes, architecture, availability, CSI, stability, MT-Level, standard \-
 attributes of interfaces
 .SH DESCRIPTION
-.sp
 .LP
 The \fBATTRIBUTES\fR section of a manual page contains a table defining
 attribute types and their corresponding values. The following is an example of
 an attributes table. Not all attribute types are appropriate for all types of
 interfaces.
-.sp
-
 .sp
 .TS
 box;
@@ -35,20 +32,18 @@ Standard	See \fBstandards\fR(5).
 .TE
 
 .SS "Architecture"
-.sp
 .LP
 Architecture defines processor or specific hardware. See \fB-p\fR option of
 \fBuname\fR(1). In some cases, it may indicate required adapters or
 peripherals.
 .SS "Code Set Independence (CSI)"
-.sp
 .LP
 \fBOS\fR utilities and libraries free of dependencies on the properties of any
 code sets are said to have Code Set Independence (CSI). They have the attribute
 of being \fBCSI\fR enabled. This is in contrast to many commands and utilities,
 for example, that work only with Extended Unix Codesets (EUC), an encoding
 method that allows concurrent support for up to four code sets and is commonly
-used  to represent Asian character sets.
+used to represent Asian character sets.
 .sp
 .LP
 For practical reasons, however, this independence is not absolute. Certain
@@ -63,7 +58,7 @@ File code is a superset of \fBASCII\fR.
 .TP
 .ie t \(bu
 .el o
-To support multi-byte characters and null-terminated  \fBUNIX\fR file names,
+To support multi-byte characters and null-terminated \fBUNIX\fR file names,
 the \fINULL\fR and \fB/\fR (slash) characters cannot be part of any multi-byte
 characters.
 .RE
@@ -182,7 +177,6 @@ applied. Statically bound programs will only get support for C and POSIX
 locales.
 .RE
 .SS "Interface Stability"
-.sp
 .LP
 Sun often provides developers with early access to new technologies, which
 allows developers to evaluate with them as soon as possible. Unfortunately, new
@@ -213,7 +207,6 @@ structures and some symbols in system header files) may be implementation
 artifacts. Such internal interfaces are not only subject to incompatible change
 or removal, but we are unlikely to mention such a change in release notes.
 .SS "Release Levels"
-.sp
 .LP
 Products are given release levels, as well as names, to aid compatibility
 discussions. Each release level may also include changes suitable for lower
@@ -227,7 +220,7 @@ l l l .
 Release	Version	Significance
 _
 Major	x.0	T{
-Likely to contain major feature additions; adhere to different,  possibly incompatible standard revisions; and though unlikely, could change, drop, or replace Committed interfaces. Initial product releases are usually 1.0.
+Likely to contain major feature additions; adhere to different, possibly incompatible standard revisions; and though unlikely, could change, drop, or replace Committed interfaces. Initial product releases are usually 1.0.
 T}
 _
 Minor	x.y	T{
@@ -244,9 +237,8 @@ T}
 In the context of interface stability, update releases (occasionally referred
 to as patch releases) should be considered equivalent to Micro Releases.
 .SS "Classifications"
-.sp
 .LP
-The following table summarizes how stability level  classifications relate to
+The following table summarizes how stability level classifications relate to
 release level. The first column lists the Stability Level. The second column
 lists the Release Level for Incompatible Changes, and the third column lists
 other comments. For a complete discussion of individual classifications, see
@@ -269,7 +261,7 @@ Volatile	Micro (x.y.z)	Incompatibilities are common.
 .sp
 .LP
 The interface stability level classifications described on this manual page
-apply to both source and binary  interfaces unless otherwise stated. All
+apply to both source and binary interfaces unless otherwise stated. All
 stability level classifications are public, with the exception of the
 \fBPrivate\fR classification. The precise stability level of a public interface
 (one that is documented in the manual pages) is unspecified unless explicitly
@@ -327,7 +319,7 @@ general expectation should be that Uncommitted interfaces are not likely to
 change incompatibly and if such changes occur they will be small in impact and
 may often have a mitigation plan.
 .sp
-Uncommitted interfaces generally fall into one of the following subcategorizes:
+Uncommitted interfaces generally fall into one of the following subcategories:
 .RS +4
 .TP
 1.
@@ -450,7 +442,6 @@ support. Use of an Obsolete interface may produce warning messages.
 .RE
 
 .SS "Exceptions"
-.sp
 .LP
 There are rare instances when it is in the best interest of both Sun and the
 customer to break the interface stability commitment. The following list
@@ -493,7 +484,6 @@ major" release vehicle possible.  However, often the consequences of the
 vulnerabilities or contractual branding requirements will force delivery in a
 patch.
 .SS "Compatibility with Earlier Interface Classification Schemes"
-.sp
 .LP
 In releases up to and including Solaris 10, a different interface
 classification scheme was used. The following table summarizes the mapping
@@ -530,7 +520,6 @@ interpretation. As part of the migration to the new classification scheme, many
 formerly Evolving interfaces were upgraded to Committed. However, upon
 encountering the term Evolving, Uncommitted should be inferred.
 .SS "MT-Level"
-.sp
 .LP
 Libraries are classified into categories that define their ability to support
 multiple threads. Manual pages containing functions that are of multiple or
@@ -706,7 +695,6 @@ also, by definition, Deferred-Cancel-Safe.
 .RE
 
 .SS "Standard"
-.sp
 .LP
 Many interfaces are defined and controlled as industry standards. When this is
 the case, the controlling body and/or public, versioned document is noted in
@@ -728,6 +716,5 @@ very formal organization, as in ISO or ANSII, a less formal, but generally
 accepted organization such as IETF, or as informal as the sole contributor in
 the case of FOSS (Free or Open Source Software).
 .SH SEE ALSO
-.sp
 .LP
-\fBuname\fR(1), \fBpkgadd\fR(1M), \fBIntro\fR(3), \fBstandards\fR(5)
+\fBuname\fR(1), \fBIntro\fR(3), \fBstandards\fR(5)

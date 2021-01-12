@@ -24,9 +24,8 @@
 # Copyright 2009 Sun Microsystems, Inc.  All rights reserved.
 # Use is subject to license terms.
 #
-#	This makefile drives the production of the hme driver
-#	kernel module.
-#
+# Copyright (c) 2018, Joyent, Inc.
+
 
 #
 #	Path to the base of the uts directory tree (usually /usr/src/uts).
@@ -38,7 +37,6 @@ UTSBASE	= ../..
 #
 MODULE		= hme
 OBJECTS		= $(HME_OBJS:%=$(OBJS_DIR)/%)
-LINTS		= $(HME_OBJS:%.o=$(LINTS_DIR)/%.ln)
 ROOTMODULE	= $(ROOT_DRV_DIR)/$(MODULE)
 
 #
@@ -50,7 +48,6 @@ include $(UTSBASE)/intel/Makefile.intel
 #	Define targets
 #
 ALL_TARGET	= $(BINARY)
-LINT_TARGET	= $(MODULE).lint
 INSTALL_TARGET	= $(BINARY) $(ROOTMODULE)
 
 #
@@ -61,7 +58,10 @@ LDFLAGS		+= -dy -Nmisc/mii -Nmisc/mac
 
 CERRWARN	+= -_gcc=-Wno-switch
 CERRWARN	+= -_gcc=-Wno-unused-label
-CERRWARN	+= -_gcc=-Wno-uninitialized
+CERRWARN	+= $(CNOWARN_UNINIT)
+
+# needs work
+$(OBJS_DIR)/hme.o := SMOFF += indenting,deref_check
 
 #
 #	Default build targets.
@@ -75,12 +75,6 @@ all:		$(ALL_DEPS)
 clean:		$(CLEAN_DEPS)
 
 clobber:	$(CLOBBER_DEPS)
-
-lint:		$(LINT_DEPS)
-
-modlintlib:	$(MODLINTLIB_DEPS)
-
-clean.lint:	$(CLEAN_LINT_DEPS)
 
 install:	$(INSTALL_DEPS)
 

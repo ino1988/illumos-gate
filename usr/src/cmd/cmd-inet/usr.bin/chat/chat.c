@@ -90,12 +90,6 @@
 #define const
 #endif
 
-#pragma ident	"%Z%%M%	%I%	%E% SMI"
-
-#ifndef lint
-static const char rcsid[] = "$Id: chat.c,v 1.26 1999/12/23 01:39:54 paulus Exp $";
-#endif
-
 #include <stdio.h>
 #include <ctype.h>
 #include <time.h>
@@ -1212,6 +1206,7 @@ int get_char()
 
     default:
 	logf("warning: read() on stdin returned %d", status);
+	/* FALLTHROUGH */
 
     case -1:
 	if ((status = fcntl(0, F_GETFL, 0)) == -1)
@@ -1237,17 +1232,18 @@ int c;
     switch (status) {
     case 1:
 	return (0);
-	
+
     default:
 	logf("warning: write() on stdout returned %d", status);
-	
+	/* FALLTHROUGH */
+
     case -1:
 	if ((status = fcntl(0, F_GETFL, 0)) == -1)
 	    fatal(2, "Can't get file mode flags on stdin, %m");
 
 	if (fcntl(0, F_SETFL, status & ~O_NONBLOCK) == -1)
 	    fatal(2, "Can't set file mode flags on stdin: %m");
-	
+
 	return (-1);
     }
 }

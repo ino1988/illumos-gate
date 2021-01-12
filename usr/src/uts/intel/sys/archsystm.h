@@ -21,6 +21,7 @@
 
 /*
  * Copyright (c) 1993, 2010, Oracle and/or its affiliates. All rights reserved.
+ * Copyright 2019 Joyent, Inc.
  */
 
 #ifndef _SYS_ARCHSYSTM_H
@@ -54,11 +55,9 @@ extern void mfence_insn(void);
 extern uint16_t getgs(void);
 extern void setgs(uint16_t);
 
-extern void patch_sse(void);
-extern void patch_sse2(void);
 #endif
 
-extern void patch_xsave(void);
+extern kmem_cache_t *fpsave_cachep;
 
 extern void cli(void);
 extern void sti(void);
@@ -78,23 +77,25 @@ extern void int20(void);
 extern void int_cmci(void);
 
 #if defined(__amd64)
-extern void sys_syscall();
-extern void sys_syscall32();
+extern void sys_syscall(), tr_sys_syscall();
+extern void sys_syscall32(), tr_sys_syscall32();
 extern void sys_lcall32();
 extern void sys_syscall_int();
-extern void brand_sys_syscall();
-extern void brand_sys_syscall32();
-extern void brand_sys_syscall_int();
+extern void tr_sys_syscall_int();
+extern void brand_sys_syscall(), tr_brand_sys_syscall();
+extern void brand_sys_syscall32(), tr_brand_sys_syscall32();
+extern void brand_sys_syscall_int(), tr_brand_sys_syscall_int();
 extern int update_sregs();
 extern void reset_sregs();
 #elif defined(__i386)
 extern void sys_call();
+extern void tr_sys_call();
 extern void brand_sys_call();
 #endif
 extern void sys_sysenter();
-extern void _sys_sysenter_post_swapgs();
+extern void tr_sys_sysenter();
 extern void brand_sys_sysenter();
-extern void _brand_sys_sysenter_post_swapgs();
+extern void tr_brand_sys_sysenter();
 
 extern void dosyscall(void);
 
@@ -180,6 +181,21 @@ extern int sys_rtt_common(struct regs *);
 extern void fakesoftint(void);
 
 extern void *plat_traceback(void *);
+
+/*
+ * The following two macros are the four byte instruction sequence of stac, nop
+ * and clac, nop. These are used in startup_smap() and hotinline_smap() as a
+ * part of properly setting up the valid instructions. For more information on
+ * SMAP, see uts/intel/ia32/ml/copy.s, uts/i86pc/os/machdep.c and
+ * uts/common/os/modctl.c.
+ *
+ * Note that smap_disable and smap_enable are resolved to stubs at compile time,
+ * but inlined at runtime by do_hotinlines() in uts/i86pc/os/machdep.c.
+ */
+#define	SMAP_CLAC_INSTR	0x90ca010f
+#define	SMAP_STAC_INSTR	0x90cb010f
+extern void smap_disable(void);
+extern void smap_enable(void);
 
 #if defined(__xpv)
 extern void xen_init_callbacks(void);

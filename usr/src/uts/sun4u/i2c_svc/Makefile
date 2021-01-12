@@ -1,6 +1,4 @@
 #
-#ident	"%Z%%M%	%I%	%E% SMI"
-#
 # Copyright 2004 Sun Microsystems, Inc.  All rights reserved.
 # Use is subject to license terms.
 
@@ -15,7 +13,6 @@ UTSBASE	= ../..
 #
 MODULE		= i2c_svc
 OBJECTS		= $(I2C_SVC_OBJS:%=$(OBJS_DIR)/%)
-LINTS		= $(I2C_SVC_OBJS:%.o=$(LINTS_DIR)/%.ln)
 ROOTMODULE	= $(ROOT_PSM_MISC_DIR)/$(MODULE)
 
 #
@@ -23,9 +20,6 @@ ROOTMODULE	= $(ROOT_PSM_MISC_DIR)/$(MODULE)
 #
 include $(UTSBASE)/sun4u/Makefile.sun4u
 
-# 
-# lint pass one enforcement 
-# 
 CFLAGS += $(CCVERBOSE)
 
 LDFLAGS += -dy
@@ -34,7 +28,6 @@ LDFLAGS += -dy
 #	Define targets
 #
 ALL_TARGET	= $(BINARY)
-LINT_TARGET	= $(MODULE).lint
 INSTALL_TARGET	= $(BINARY) $(ROOTMODULE)
 
 .KEEP_STATE:
@@ -47,36 +40,9 @@ clean:		$(CLEAN_DEPS)
 
 clobber:	$(CLOBBER_DEPS)
 
-lint:		$(LINT_DEPS)
-
-modlintlib:	$(MODLINTLIB_DEPS)
-
-clean.lint:	$(CLEAN_LINT_DEPS)
-
 install:	$(INSTALL_DEPS)
 
 #
 #	Include common targets.
 #
 include $(UTSBASE)/sun4u/Makefile.targ
-
-#
-#	Defines for local commands.
-#
-WLCC		= wlcc
-TOUCH		= touch
-WARLOCK		= warlock
-
-#
-#	Warlock targets
-#
-
-I2C_SVC_FILES = $(I2C_SVC_OBJS:%.o=%.ll)
-
-warlock: $(MODULE).ok 
-
-%.ok:	$(I2C_SVC_FILES)
-	$(TOUCH) $@
-
-%.ll: $(UTSBASE)/sun4u/io/i2c/misc/%.c
-	$(WLCC) $(CFLAGS) $(CPPFLAGS) -DDEBUG -o $@ $<

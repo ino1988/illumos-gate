@@ -20,11 +20,11 @@
  */
 /*
  * Copyright (c) 2010, Oracle and/or its affiliates. All rights reserved.
- * Copyright 2012 Nexenta Systems, Inc. All rights reserved.
+ * Copyright 2015 Nexenta Systems, Inc. All rights reserved.
  */
 
 #include <sys/sunddi.h>
-#ifndef _KERNEL
+#if !defined(_KERNEL) && !defined(_FAKE_KERNEL)
 #include <string.h>
 #include <strings.h>
 #include <stddef.h>
@@ -97,7 +97,8 @@ smb_doorhdr_opname(uint32_t op)
 		{ SMB_DR_QUOTA_SET,		"quota_set" },
 		{ SMB_DR_DFS_GET_REFERRALS,	"dfs_get_referrals" },
 		{ SMB_DR_SHR_HOSTACCESS,	"share_hostaccess" },
-		{ SMB_DR_SHR_EXEC,		"share_exec" }
+		{ SMB_DR_SHR_EXEC,		"share_exec" },
+		{ SMB_DR_NOTIFY_DC_CHANGED,	"notify_dc_changed" }
 	};
 	int	i;
 
@@ -236,8 +237,6 @@ bool_t
 smb_netuserinfo_xdr(XDR *xdrs, smb_netuserinfo_t *objp)
 {
 	if (!xdr_uint64_t(xdrs, &objp->ui_session_id))
-		return (FALSE);
-	if (!xdr_uint16_t(xdrs, &objp->ui_smb_uid))
 		return (FALSE);
 	if (!xdr_uint16_t(xdrs, &objp->ui_domain_len))
 		return (FALSE);
@@ -446,6 +445,9 @@ smb_gmttoken_snapname_xdr(XDR *xdrs, smb_gmttoken_snapname_t *objp)
 		return (FALSE);
 	}
 	if (!xdr_string(xdrs, &objp->gts_gmttoken, SMB_VSS_GMT_SIZE)) {
+		return (FALSE);
+	}
+	if (!xdr_uint64_t(xdrs, &objp->gts_toktime)) {
 		return (FALSE);
 	}
 	return (TRUE);

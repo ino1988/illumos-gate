@@ -19,9 +19,11 @@
  * CDDL HEADER END
  */
 /*
- * Copyright 2011 Nexenta Systems, Inc.  All rights reserved.
  * Copyright 2010 Sun Microsystems, Inc.  All rights reserved.
  * Use is subject to license terms.
+ *
+ * Copyright 2017 Nexenta Systems, Inc.  All rights reserved.
+ * Copyright 2018 RackTop Systems.
  */
 
 #include <strings.h>
@@ -90,7 +92,7 @@ static smb_lwka_t *smb_lwka_lookup_sid(smb_sid_t *);
  *
  *   NT_STATUS_NOT_FOUND	This is not a local account
  *   NT_STATUS_NONE_MAPPED	It's a local account but cannot be
- *   				translated.
+ *				translated.
  *   other error status codes.
  */
 uint32_t
@@ -200,7 +202,7 @@ smb_sam_lookup_name(char *domain, char *name, uint16_t type,
  *
  *   NT_STATUS_NOT_FOUND	This is not a local account
  *   NT_STATUS_NONE_MAPPED	It's a local account but cannot be
- *   				translated.
+ *				translated.
  *   other error status codes.
  */
 uint32_t
@@ -258,6 +260,7 @@ smb_sam_lookup_sid(smb_sid_t *sid, smb_account_t *account)
 				return (NT_STATUS_NO_SUCH_USER);
 
 			account->a_name = strdup(smbpw.pw_name);
+			account->a_flags = smbpw.pw_flags;
 			break;
 
 		case SMB_IDMAP_GROUP:
@@ -476,6 +479,7 @@ smb_sam_grp_ismember(const char *gname, smb_sid_t *sid)
 
 /*
  * Frees memories allocated for the passed account fields.
+ * Initializes @account after all.
  */
 void
 smb_account_free(smb_account_t *account)
@@ -484,6 +488,8 @@ smb_account_free(smb_account_t *account)
 	free(account->a_domain);
 	smb_sid_free(account->a_sid);
 	smb_sid_free(account->a_domsid);
+
+	bzero(account, sizeof (smb_account_t));
 }
 
 /*
@@ -570,4 +576,36 @@ smb_lwka_lookup_sid(smb_sid_t *sid)
 	}
 
 	return (NULL);
+}
+
+/*
+ * smb_sid_islocal
+ *
+ * Check a SID to see if it belongs to the local domain.
+ */
+boolean_t
+smb_sid_islocal(smb_sid_t *sid)
+{
+	smb_domain_t di;
+	boolean_t islocal = B_FALSE;
+
+	if (smb_domain_lookup_type(SMB_DOMAIN_LOCAL, &di))
+		islocal = smb_sid_indomain(di.di_binsid, sid);
+
+	return (islocal);
+}
+
+void
+smb_ids_free(smb_ids_t *ids)
+{
+	smb_id_t *id;
+	int i;
+
+	if ((ids != NULL) && (ids->i_ids != NULL)) {
+		id = ids->i_ids;
+		for (i = 0; i < ids->i_cnt; i++, id++)
+			smb_sid_free(id->i_sid);
+
+		free(ids->i_ids);
+	}
 }

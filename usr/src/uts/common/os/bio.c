@@ -21,10 +21,15 @@
 /*
  * Copyright 2009 Sun Microsystems, Inc.  All rights reserved.
  * Use is subject to license terms.
+ * Copyright 2019 Joyent, Inc.
+ */
+
+/*
+ * Copyright (c) 2016 by Delphix. All rights reserved.
  */
 
 /*	Copyright (c) 1984, 1986, 1987, 1988, 1989 AT&T	*/
-/*	  All Rights Reserved  	*/
+/*	  All Rights Reserved	*/
 
 /*
  * University Copyright- Copyright (c) 1982, 1986, 1988
@@ -71,7 +76,7 @@ static	kmutex_t	bfree_lock;	/* protects the bfreelist structure */
 struct hbuf	*hbuf;			/* Hash buckets */
 struct dwbuf	*dwbuf;			/* Delayed write buckets */
 static struct buf *bhdrlist;		/* buf header free list */
-static int 	nbuf;			/* number of buffer headers allocated */
+static int	nbuf;			/* number of buffer headers allocated */
 
 static int	lastindex;		/* Reference point on where to start */
 					/* when looking for free buffers */
@@ -79,7 +84,7 @@ static int	lastindex;		/* Reference point on where to start */
 #define	bio_bhash(dev, bn)	(hash2ints((dev), (int)(bn)) & v.v_hmask)
 #define	EMPTY_LIST	((struct buf *)-1)
 
-static kcondvar_t	bio_mem_cv; 	/* Condition variables */
+static kcondvar_t	bio_mem_cv;	/* Condition variables */
 static kcondvar_t	bio_flushinval_cv;
 static int	bio_doingflush;		/* flush in progress */
 static int	bio_doinginval;		/* inval in progress */
@@ -134,12 +139,12 @@ void (*bio_snapshot_strategy)(void *, buf_t *);
 
 /* Private routines */
 static struct buf	*bio_getfreeblk(long);
-static void 		bio_mem_get(long);
+static void		bio_mem_get(long);
 static void		bio_bhdr_free(struct buf *);
 static struct buf	*bio_bhdr_alloc(void);
 static void		bio_recycle(int, long);
-static void 		bio_pageio_done(struct buf *);
-static int 		bio_incore(dev_t, daddr_t);
+static void		bio_pageio_done(struct buf *);
+static int		bio_incore(dev_t, daddr_t);
 
 /*
  * Buffer cache constants
@@ -292,7 +297,7 @@ breada(dev_t dev, daddr_t blkno, daddr_t rablkno, long bsize)
  */
 void
 bwrite_common(void *arg, struct buf *bp, int force_wait,
-				int do_relse, int clear_flags)
+    int do_relse, int clear_flags)
 {
 	register int do_wait;
 	struct ufsvfs *ufsvfsp = (struct ufsvfs *)arg;
@@ -527,7 +532,6 @@ bio_busy(int cleanit)
 	kmutex_t *hmp;
 
 	for (i = 0; i < v.v_hbuf; i++) {
-		vfs_syncprogress();
 		dp = (struct buf *)&hbuf[i];
 		hmp = &hbuf[i].b_lock;
 
@@ -638,7 +642,7 @@ loop:
 		notavail(bp);
 		mutex_exit(hmp);
 
-		ASSERT((bp->b_flags & B_NOCACHE) == NULL);
+		ASSERT((bp->b_flags & B_NOCACHE) == 0);
 
 		if (nbp == NULL) {
 			/*
@@ -712,7 +716,7 @@ loop:
 		nbp->b_vp = NULL;
 	}
 
-	ASSERT((nbp->b_flags & B_NOCACHE) == NULL);
+	ASSERT((nbp->b_flags & B_NOCACHE) == 0);
 
 	binshash(nbp, dp);
 	mutex_exit(hmp);
@@ -724,7 +728,7 @@ loop:
 
 	/*
 	 * Come here in case of an internal error. At this point we couldn't
-	 * get a buffer, but he have to return one. Hence we allocate some
+	 * get a buffer, but we have to return one. Hence we allocate some
 	 * kind of error reply buffer on the fly. This buffer is marked as
 	 * B_NOCACHE | B_AGE | B_ERROR | B_DONE to assure the following:
 	 *	- B_ERROR will indicate error to the caller.
@@ -886,7 +890,6 @@ bflush(dev_t dev)
 	 * candidates on the delwri_list and then drop the hash locks.
 	 */
 	for (i = 0; i < v.v_hbuf; i++) {
-		vfs_syncprogress();
 		hmp = &hbuf[i].b_lock;
 		dp = (struct buf *)&dwbuf[i];
 		mutex_enter(hmp);
@@ -907,7 +910,6 @@ bflush(dev_t dev)
 	 * and write back all the buffers that have B_DELWRI set.
 	 */
 	while (delwri_list != EMPTY_LIST) {
-		vfs_syncprogress();
 		bp = delwri_list;
 
 		sema_p(&bp->b_sem);	/* may block */
@@ -1320,6 +1322,9 @@ pageio_setup(struct page *pp, size_t len, struct vnode *vp, int flags)
 		cpup = CPU;	/* get pointer AFTER preemption is disabled */
 		CPU_STATS_ADDQ(cpup, vm, pgin, 1);
 		CPU_STATS_ADDQ(cpup, vm, pgpgin, btopr(len));
+
+		atomic_add_64(&curzone->zone_pgpgin, btopr(len));
+
 		if ((flags & B_ASYNC) == 0) {
 			klwp_t *lwp = ttolwp(curthread);
 			if (lwp != NULL)
@@ -1336,12 +1341,18 @@ pageio_setup(struct page *pp, size_t len, struct vnode *vp, int flags)
 		if (pp != NULL && pp->p_vnode != NULL) {
 			if (IS_SWAPFSVP(pp->p_vnode)) {
 				CPU_STATS_ADDQ(cpup, vm, anonpgin, btopr(len));
+				atomic_add_64(&curzone->zone_anonpgin,
+				    btopr(len));
 			} else {
 				if (pp->p_vnode->v_flag & VVMEXEC) {
 					CPU_STATS_ADDQ(cpup, vm, execpgin,
 					    btopr(len));
+					atomic_add_64(&curzone->zone_execpgin,
+					    btopr(len));
 				} else {
 					CPU_STATS_ADDQ(cpup, vm, fspgin,
+					    btopr(len));
+					atomic_add_64(&curzone->zone_fspgin,
 					    btopr(len));
 				}
 			}
@@ -1369,7 +1380,6 @@ pageio_setup(struct page *pp, size_t len, struct vnode *vp, int flags)
 
 	VN_HOLD(vp);
 	bp->b_vp = vp;
-	THREAD_KPRI_RELEASE_N(btopr(len)); /* release kpri from page_locks */
 
 	/*
 	 * Caller sets dev & blkno and can adjust

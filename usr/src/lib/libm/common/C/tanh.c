@@ -27,7 +27,7 @@
  * Use is subject to license terms.
  */
 
-#pragma weak tanh = __tanh
+#pragma weak __tanh = tanh
 
 /* INDENT OFF */
 /*
@@ -56,7 +56,6 @@
  */
 
 #include "libm.h"
-#include "libm_synonyms.h"
 #include "libm_protos.h"
 #include <math.h>
 
@@ -68,10 +67,11 @@ static const double
 /* INDENT ON */
 
 double
-tanh(double x) {
+tanh(double x)
+{
 	double t, y, z;
 	int signx;
-	volatile double dummy;
+	volatile double dummy __unused;
 
 	if (isnan(x))
 		return (x * x);	/* + -> * for Cheetah */
@@ -95,7 +95,7 @@ tanh(double x) {
 	} else if (!finite(t))
 		return (copysign(1.0, x));
 	else
-		return (signx == 1 ? -z + small * small : z - small * small);
+		return ((signx != 0) ? -z + small * small : z - small * small);
 
-	return (signx == 1 ? -z : z);
+	return ((signx != 0) ? -z : z);
 }

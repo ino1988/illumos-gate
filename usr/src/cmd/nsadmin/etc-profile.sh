@@ -20,7 +20,7 @@
 #
 # Copyright 2010 Sun Microsystems, Inc.  All rights reserved.
 # Use is subject to license terms.
-#
+# Copyright 2015 Nexenta Systems, Inc. All rights reserved.
 
 # The profile that all logins get before using their own .profile.
 
@@ -29,8 +29,7 @@ export LOGNAME PATH
 
 if [ "$TERM" = "" ]
 then
-	if /bin/i386
-	then
+	if [ `uname -p` = "i386" ]; then
 		TERM=sun-color
 	else
 		TERM=sun
@@ -40,6 +39,14 @@ fi
 
 #	Login and -su shells get /etc/profile services.
 #	-rsh is given its environment in its .profile.
+
+case "$0" in
+-bash)
+	# set prompt for bash
+	PS1="\u@\h:\w\\$ "
+	export PS1
+	;;
+esac
 
 case "$0" in
 -sh | -ksh | -ksh93 | -jsh | -bash | -zsh)
@@ -54,12 +61,12 @@ case "$0" in
 
 		/bin/mail -E
 		case $? in
-		0) 
+		0)
 			echo "You have new mail."
-		  	;;
-		2) 
+			;;
+		2)
 			echo "You have mail."
-		   	;;
+			;;
 		esac
 	fi
 esac

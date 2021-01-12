@@ -29,14 +29,15 @@
 #include <setjmp.h>
 
 /*
- * The i386 ABI says that the stack pointer need be only 4-byte aligned
- * before a function call (STACK_ALIGN == 4).  We use a 16-byte stack
- * alignment for the benefit of floating point code compiled using sse2.
- * Even though the i386 ABI doesn't require it, both cc and gcc
- * assume this alignment on entry to a function and maintain it
- * for calls made from that function.  If the stack is initially
- * aligned on a 16-byte boundary, it will continue to be so aligned.
- * If it is not initially so aligned, it will never become so aligned.
+ * The stack needs to be 16-byte aligned with a 4-byte bias.  See comment in
+ * lib/libc/i386/gen/makectxt.c.
+ *
+ * Note: If you change it, you need to change it in the following files as
+ * well:
+ *
+ *  - lib/libc/i386/gen/makectxt.c
+ *  - lib/crt/i386/crti.s
+ *  - lib/crt/i386/crt1.s
  */
 #undef	STACK_ALIGN
 #define	STACK_ALIGN	16
@@ -85,7 +86,7 @@ setup_top_frame(void *stk, size_t stksize, ulwp_t *ulwp)
 
 int
 setup_context(ucontext_t *ucp, void *(*func)(ulwp_t *),
-	ulwp_t *ulwp, caddr_t stk, size_t stksize)
+    ulwp_t *ulwp, caddr_t stk, size_t stksize)
 {
 	static int initialized;
 	static greg_t fs, es, ds, cs, ss;
@@ -209,10 +210,10 @@ setgregs(ulwp_t *ulwp, gregset_t rs)
 
 int
 __csigsetjmp(greg_t cs, greg_t ss, greg_t gs,
-	greg_t fs, greg_t es, greg_t ds,
-	greg_t edi, greg_t esi, greg_t ebp, greg_t esp,
-	greg_t ebx, greg_t edx, greg_t ecx, greg_t eax, greg_t eip,
-	sigjmp_buf env, int savemask)
+    greg_t fs, greg_t es, greg_t ds,
+    greg_t edi, greg_t esi, greg_t ebp, greg_t esp,
+    greg_t ebx, greg_t edx, greg_t ecx, greg_t eax, greg_t eip,
+    sigjmp_buf env, int savemask)
 {
 	ucontext_t *ucp = (ucontext_t *)env;
 	ulwp_t *self = curthread;

@@ -33,22 +33,23 @@ $(ROOTUSRSBIN)/ping	:=	FILEMODE= 04555
 
 # Ping uses the ancillary data feature which is available only through
 # UNIX 98 standards version of Socket interface. This interface is supposed to
-# be accessed by -lxnet. In addition -lsocket and -lnsl are used to
+# be accessed by -lxnet. In addition -lsocket and is used to
 # capture new not-yet-standard interfaces. Someday -lxnet alone should be enough
 # when IPv6 inspired new interfaces are part of standards.
-LDLIBS +=	-lxnet -lsocket -lnsl -lm -linetutil
+LDLIBS +=	-lxnet -lsocket -lm -linetutil
 
-# These #defines are required to use UNIX 98 interfaces
-CPPFLAGS += -D_XOPEN_SOURCE=500 -D__EXTENSIONS__
+# These #defines are required to use SUSv3 interfaces
+CPPFLAGS += -D_XOPEN_SOURCE=600 -D__EXTENSIONS__
+
+CSTD=	$(CSTD_GNU99)
 
 # Setting the above defines to use the UNIX98 ancillary data feature
 # causes lint to output warnings about lint library declarations conflicting
 # with those in the header files. Since we need these features the best
 # course of action is to switch the types of the resulting warnings off
 # when running lint.
-LINTFLAGS += -erroff=E_INCONS_VAL_TYPE_DECL2 -erroff=E_INCONS_ARG_DECL2 
-
-CERRWARN += -_gcc=-Wno-uninitialized
+LINTFLAGS += -erroff=E_INCONS_VAL_TYPE_DECL2 -erroff=E_INCONS_ARG_DECL2 \
+		-erroff=E_NAME_USED_NOT_DEF2
 
 .KEEP_STATE:
 .PARALLEL:
@@ -61,7 +62,7 @@ $(PROG): $(OBJS)
 
 install: all $(ROOTUSRSBINPROG)
 
-clean:	
+clean:
 	$(RM) $(OBJS)
 
 lint:	lint_SRCS

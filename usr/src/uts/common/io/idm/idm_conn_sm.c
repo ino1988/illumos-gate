@@ -22,6 +22,8 @@
 /*
  * Copyright (c) 2008, 2010, Oracle and/or its affiliates. All rights reserved.
  * Copyright (c) 2013 by Delphix. All rights reserved.
+ * Copyright 2017 Nexenta Systems, Inc.  All rights reserved.
+ * Copyright 2020 Joyent, Inc.
  */
 
 #include <sys/cpuvar.h>
@@ -170,6 +172,7 @@ idm_conn_sm_fini(idm_conn_t *ic)
 	 * destroy it since there is no way to locate the object now.
 	 */
 	mutex_enter(&ic->ic_state_mutex);
+	IDM_SM_TIMER_CLEAR(ic);
 	mutex_destroy(&ic->ic_state_mutex);
 }
 
@@ -339,6 +342,7 @@ idm_conn_event_handler(void *event_ctx_opaque)
 			 */
 			IDM_SM_LOG(CE_NOTE, "*** drop PDU %p", (void *) pdu);
 			idm_pdu_complete(pdu, IDM_STATUS_FAIL);
+			event_ctx->iec_info = (uintptr_t)NULL;
 			break;
 		default:
 			ASSERT(0);
@@ -418,6 +422,10 @@ idm_conn_event_handler(void *event_ctx_opaque)
 				}
 			}
 			break;
+		case CA_DROP:
+			/* Already completed above. */
+			ASSERT3P(event_ctx->iec_info, ==, NULL);
+			break;
 		default:
 			ASSERT(0);
 			break;
@@ -491,7 +499,8 @@ idm_login_timeout(void *arg)
 {
 	idm_conn_t *ic = arg;
 
-	idm_conn_event(ic, CE_LOGIN_TIMEOUT, NULL);
+	ic->ic_state_timeout = 0;
+	idm_conn_event(ic, CE_LOGIN_TIMEOUT, (uintptr_t)NULL);
 }
 
 static void
@@ -500,6 +509,7 @@ idm_state_s3_xpt_up(idm_conn_t *ic, idm_conn_event_ctx_t *event_ctx)
 	switch (event_ctx->iec_event) {
 	case CE_LOGIN_RCV:
 		/* T4 */
+		/* Keep login timeout active through S3 and into S4 */
 		idm_initial_login_actions(ic, event_ctx);
 		idm_update_state(ic, CS_S4_IN_LOGIN, event_ctx);
 		break;
@@ -508,7 +518,7 @@ idm_state_s3_xpt_up(idm_conn_t *ic, idm_conn_event_ctx_t *event_ctx)
 		 * Don't need to cancel login timer since the timer is
 		 * presumed to be the source of this event.
 		 */
-		(void) idm_notify_client(ic, CN_LOGIN_FAIL, NULL);
+		(void) idm_notify_client(ic, CN_LOGIN_FAIL, (uintptr_t)NULL);
 		idm_update_state(ic, CS_S9_INIT_ERROR, event_ctx);
 		break;
 	case CE_CONNECT_REJECT:
@@ -518,15 +528,15 @@ idm_state_s3_xpt_up(idm_conn_t *ic, idm_conn_event_ctx_t *event_ctx)
 		 * connection context to handle additional notifications.
 		 * IDM needs to just clean things up on its own.
 		 */
-		(void) untimeout(ic->ic_state_timeout);
+		IDM_SM_TIMER_CLEAR(ic);
 		idm_update_state(ic, CS_S9A_REJECTED, event_ctx);
 		break;
 	case CE_CONNECT_FAIL:
 	case CE_TRANSPORT_FAIL:
 	case CE_LOGOUT_OTHER_CONN_SND:
 		/* T6 */
-		(void) untimeout(ic->ic_state_timeout);
-		(void) idm_notify_client(ic, CN_LOGIN_FAIL, NULL);
+		IDM_SM_TIMER_CLEAR(ic);
+		(void) idm_notify_client(ic, CN_LOGIN_FAIL, (uintptr_t)NULL);
 		idm_update_state(ic, CS_S9_INIT_ERROR, event_ctx);
 		break;
 	case CE_TX_PROTOCOL_ERROR:
@@ -553,7 +563,7 @@ idm_state_s4_in_login(idm_conn_t *ic, idm_conn_event_ctx_t *event_ctx)
 	case CE_LOGIN_SUCCESS_SND:
 		ASSERT(ic->ic_client_callback == NULL);
 
-		(void) untimeout(ic->ic_state_timeout);
+		IDM_SM_TIMER_CLEAR(ic);
 		idm_login_success_actions(ic, event_ctx);
 		if (ic->ic_rdma_extensions) {
 			/* T19 */
@@ -565,7 +575,7 @@ idm_state_s4_in_login(idm_conn_t *ic, idm_conn_event_ctx_t *event_ctx)
 		break;
 	case CE_LOGIN_TIMEOUT:
 		/* T7 */
-		(void) idm_notify_client(ic, CN_LOGIN_FAIL, NULL);
+		(void) idm_notify_client(ic, CN_LOGIN_FAIL, (uintptr_t)NULL);
 		idm_update_state(ic, CS_S9_INIT_ERROR, event_ctx);
 		break;
 	case CE_LOGIN_FAIL_SND:
@@ -574,7 +584,7 @@ idm_state_s4_in_login(idm_conn_t *ic, idm_conn_event_ctx_t *event_ctx)
 		 * the state machine cleanup until the completion callback.
 		 * Only 1 level or callback interposition is allowed.
 		 */
-		(void) untimeout(ic->ic_state_timeout);
+		IDM_SM_TIMER_CLEAR(ic);
 		pdu = (idm_pdu_t *)event_ctx->iec_info;
 		ASSERT(ic->ic_client_callback == NULL);
 		ic->ic_client_callback = pdu->isp_callback;
@@ -598,8 +608,8 @@ idm_state_s4_in_login(idm_conn_t *ic, idm_conn_event_ctx_t *event_ctx)
 	case CE_LOGOUT_OTHER_CONN_SND:
 	case CE_LOGOUT_OTHER_CONN_RCV:
 		/* T7 */
-		(void) untimeout(ic->ic_state_timeout);
-		(void) idm_notify_client(ic, CN_LOGIN_FAIL, NULL);
+		IDM_SM_TIMER_CLEAR(ic);
+		(void) idm_notify_client(ic, CN_LOGIN_FAIL, (uintptr_t)NULL);
 		idm_update_state(ic, CS_S9_INIT_ERROR, event_ctx);
 		break;
 	case CE_LOGOUT_SESSION_SUCCESS:
@@ -610,7 +620,7 @@ idm_state_s4_in_login(idm_conn_t *ic, idm_conn_event_ctx_t *event_ctx)
 		 * connections are shut down by a CE_LOGOUT_SESSION_SUCCESS
 		 * event sent from the session to the IDM layer.
 		 */
-		(void) untimeout(ic->ic_state_timeout);
+		IDM_SM_TIMER_CLEAR(ic);
 		if (IDM_CONN_ISTGT(ic)) {
 			ic->ic_transport_ops->it_tgt_conn_disconnect(ic);
 		} else {
@@ -826,7 +836,8 @@ idm_logout_req_timeout(void *arg)
 {
 	idm_conn_t *ic = arg;
 
-	idm_conn_event(ic, CE_LOGOUT_TIMEOUT, NULL);
+	ic->ic_state_timeout = 0;
+	idm_conn_event(ic, CE_LOGOUT_TIMEOUT, (uintptr_t)NULL);
 }
 
 static void
@@ -840,7 +851,7 @@ idm_state_s7_logout_req(idm_conn_t *ic, idm_conn_event_ctx_t *event_ctx)
 	case CE_LOGOUT_OTHER_CONN_SND:
 		/* T10 */
 		if (IDM_CONN_ISTGT(ic)) {
-			(void) untimeout(ic->ic_state_timeout);
+			IDM_SM_TIMER_CLEAR(ic);
 		}
 		idm_ffp_disable(ic, FD_CONN_LOGOUT); /* Explicit logout */
 		idm_update_state(ic, CS_S6_IN_LOGOUT, event_ctx);
@@ -849,7 +860,7 @@ idm_state_s7_logout_req(idm_conn_t *ic, idm_conn_event_ctx_t *event_ctx)
 	case CE_LOGOUT_SESSION_SND:
 		/* T10 */
 		if (IDM_CONN_ISTGT(ic)) {
-			(void) untimeout(ic->ic_state_timeout);
+			IDM_SM_TIMER_CLEAR(ic);
 		}
 		idm_ffp_disable(ic, FD_SESS_LOGOUT); /* Explicit logout */
 		idm_update_state(ic, CS_S6_IN_LOGOUT, event_ctx);
@@ -865,7 +876,7 @@ idm_state_s7_logout_req(idm_conn_t *ic, idm_conn_event_ctx_t *event_ctx)
 	case CE_ASYNC_DROP_ALL_CONN_SND:
 		/* T16 */
 		if (IDM_CONN_ISTGT(ic)) {
-			(void) untimeout(ic->ic_state_timeout);
+			IDM_SM_TIMER_CLEAR(ic);
 		}
 		/* FALLTHROUGH */
 	case CE_LOGOUT_TIMEOUT:
@@ -875,7 +886,7 @@ idm_state_s7_logout_req(idm_conn_t *ic, idm_conn_event_ctx_t *event_ctx)
 	case CE_LOGOUT_SESSION_SUCCESS:
 		/* T18 */
 		if (IDM_CONN_ISTGT(ic)) {
-			(void) untimeout(ic->ic_state_timeout);
+			IDM_SM_TIMER_CLEAR(ic);
 		}
 		idm_ffp_disable(ic, FD_SESS_LOGOUT); /* Explicit logout */
 
@@ -906,7 +917,8 @@ idm_cleanup_timeout(void *arg)
 {
 	idm_conn_t *ic = arg;
 
-	idm_conn_event(ic, CE_CLEANUP_TIMEOUT, NULL);
+	ic->ic_state_timeout = 0;
+	idm_conn_event(ic, CE_CLEANUP_TIMEOUT, (uintptr_t)NULL);
 }
 
 static void
@@ -922,7 +934,7 @@ idm_state_s8_cleanup(idm_conn_t *ic, idm_conn_event_ctx_t *event_ctx)
 	case CE_LOGOUT_SUCCESS_RCV:
 	case CE_LOGOUT_SUCCESS_SND:
 	case CE_LOGOUT_SESSION_SUCCESS:
-		(void) untimeout(ic->ic_state_timeout);
+		IDM_SM_TIMER_CLEAR(ic);
 		/*FALLTHROUGH*/
 	case CE_CLEANUP_TIMEOUT:
 		/* M1 */
@@ -1031,7 +1043,7 @@ idm_state_s10_in_cleanup(idm_conn_t *ic, idm_conn_event_ctx_t *event_ctx)
 	case CE_LOGOUT_SUCCESS_SND:
 	case CE_LOGOUT_SUCCESS_RCV:
 	case CE_LOGOUT_SESSION_SUCCESS:
-		(void) untimeout(ic->ic_state_timeout);
+		IDM_SM_TIMER_CLEAR(ic);
 		/*FALLTHROUGH*/
 	case CE_CLEANUP_TIMEOUT:
 		idm_update_state(ic, CS_S11_COMPLETE, event_ctx);
@@ -1160,9 +1172,9 @@ idm_update_state(idm_conn_t *ic, idm_conn_state_t new_state,
 		break;
 	case CS_S2_XPT_WAIT:
 		if ((rc = idm_ini_conn_finish(ic)) != 0) {
-			idm_conn_event(ic, CE_CONNECT_FAIL, NULL);
+			idm_conn_event(ic, CE_CONNECT_FAIL, (uintptr_t)NULL);
 		} else {
-			idm_conn_event(ic, CE_CONNECT_SUCCESS, NULL);
+			idm_conn_event(ic, CE_CONNECT_SUCCESS, (uintptr_t)NULL);
 		}
 		break;
 	case CS_S3_XPT_UP:
@@ -1175,10 +1187,12 @@ idm_update_state(idm_conn_t *ic, idm_conn_state_t new_state,
 		if ((rc = idm_tgt_conn_finish(ic)) != IDM_STATUS_SUCCESS) {
 			switch (rc) {
 			case IDM_STATUS_REJECT:
-				idm_conn_event(ic, CE_CONNECT_REJECT, NULL);
+				idm_conn_event(ic, CE_CONNECT_REJECT,
+				    (uintptr_t)NULL);
 				break;
 			default:
-				idm_conn_event(ic, CE_CONNECT_FAIL, NULL);
+				idm_conn_event(ic, CE_CONNECT_FAIL,
+				    (uintptr_t)NULL);
 				break;
 			}
 		}
@@ -1187,12 +1201,14 @@ idm_update_state(idm_conn_t *ic, idm_conn_state_t new_state,
 		 * First login received will cause a transition to
 		 * CS_S4_IN_LOGIN.  Start login timer.
 		 */
+		IDM_SM_TIMER_CHECK(ic);
 		ic->ic_state_timeout = timeout(idm_login_timeout, ic,
-		    drv_usectohz(IDM_LOGIN_SECONDS*1000000));
+		    drv_usectohz(IDM_LOGIN_SECONDS * 1000000));
 		break;
 	case CS_S4_IN_LOGIN:
 		if (ic->ic_conn_type == CONN_TYPE_INI) {
-			(void) idm_notify_client(ic, CN_READY_FOR_LOGIN, NULL);
+			(void) idm_notify_client(ic, CN_READY_FOR_LOGIN,
+			    (uintptr_t)NULL);
 			mutex_enter(&ic->ic_state_mutex);
 			ic->ic_state_flags |= CF_LOGIN_READY;
 			cv_signal(&ic->ic_state_cv);
@@ -1208,13 +1224,13 @@ idm_update_state(idm_conn_t *ic, idm_conn_state_t new_state,
 		 */
 		idm_status = idm_ffp_enable(ic);
 		if (idm_status != IDM_STATUS_SUCCESS) {
-			idm_conn_event(ic, CE_TRANSPORT_FAIL, NULL);
+			idm_conn_event(ic, CE_TRANSPORT_FAIL, (uintptr_t)NULL);
 		}
 
 		if (ic->ic_reinstate_conn) {
 			/* Connection reinstatement is complete */
 			idm_conn_event(ic->ic_reinstate_conn,
-			    CE_CONN_REINSTATE_SUCCESS, NULL);
+			    CE_CONN_REINSTATE_SUCCESS, (uintptr_t)NULL);
 		}
 		break;
 	case CS_S6_IN_LOGOUT:
@@ -1222,6 +1238,7 @@ idm_update_state(idm_conn_t *ic, idm_conn_state_t new_state,
 	case CS_S7_LOGOUT_REQ:
 		/* Start logout timer for target connections */
 		if (IDM_CONN_ISTGT(ic)) {
+			IDM_SM_TIMER_CHECK(ic);
 			ic->ic_state_timeout = timeout(idm_logout_req_timeout,
 			    ic, drv_usectohz(IDM_LOGOUT_SECONDS*1000000));
 		}
@@ -1235,9 +1252,10 @@ idm_update_state(idm_conn_t *ic, idm_conn_state_t new_state,
 		}
 
 		/* Stop executing active tasks */
-		idm_task_abort(ic, NULL, AT_INTERNAL_SUSPEND);
+		(void) idm_task_abort(ic, NULL, AT_INTERNAL_SUSPEND);
 
 		/* Start logout timer */
+		IDM_SM_TIMER_CHECK(ic);
 		ic->ic_state_timeout = timeout(idm_cleanup_timeout, ic,
 		    drv_usectohz(IDM_CLEANUP_SECONDS*1000000));
 		break;
@@ -1269,7 +1287,7 @@ idm_update_state(idm_conn_t *ic, idm_conn_state_t new_state,
 				    ic);
 			} else {
 				(void) idm_notify_client(ic, CN_CONNECT_FAIL,
-				    NULL);
+				    (uintptr_t)NULL);
 			}
 		}
 		/*FALLTHROUGH*/
@@ -1290,7 +1308,7 @@ idm_update_state(idm_conn_t *ic, idm_conn_state_t new_state,
 		}
 
 		/* Abort all tasks */
-		idm_task_abort(ic, NULL, AT_INTERNAL_ABORT);
+		(void) idm_task_abort(ic, NULL, AT_INTERNAL_ABORT);
 
 		/*
 		 * Handle terminal state actions on the global taskq so
@@ -1311,9 +1329,10 @@ idm_update_state(idm_conn_t *ic, idm_conn_state_t new_state,
 		    ic->ic_transport_ops->it_tgt_enable_datamover(ic);
 
 		if (idm_status == IDM_STATUS_SUCCESS) {
-			idm_conn_event(ic, CE_ENABLE_DM_SUCCESS, NULL);
+			idm_conn_event(ic, CE_ENABLE_DM_SUCCESS,
+			    (uintptr_t)NULL);
 		} else {
-			idm_conn_event(ic, CE_ENABLE_DM_FAIL, NULL);
+			idm_conn_event(ic, CE_ENABLE_DM_FAIL, (uintptr_t)NULL);
 		}
 
 		break;
@@ -1340,11 +1359,13 @@ idm_conn_unref(void *ic_void)
 	 * IDM connection).
 	 */
 	if (IDM_CONN_ISTGT(ic)) {
-		(void) idm_notify_client(ic, CN_CONNECT_DESTROY, NULL);
+		(void) idm_notify_client(ic, CN_CONNECT_DESTROY,
+		    (uintptr_t)NULL);
 		idm_svc_conn_destroy(ic);
 	} else {
 		/* Initiator may destroy connection during this call */
-		(void) idm_notify_client(ic, CN_CONNECT_DESTROY, NULL);
+		(void) idm_notify_client(ic, CN_CONNECT_DESTROY,
+		    (uintptr_t)NULL);
 	}
 }
 
@@ -1363,7 +1384,7 @@ idm_conn_reject_unref(void *ic_void)
 
 static idm_pdu_event_action_t
 idm_conn_sm_validate_pdu(idm_conn_t *ic, idm_conn_event_ctx_t *event_ctx,
-	idm_pdu_t *pdu)
+    idm_pdu_t *pdu)
 {
 	char			*reason_string;
 	idm_pdu_event_action_t	action;
@@ -1462,7 +1483,7 @@ idm_conn_sm_validate_pdu(idm_conn_t *ic, idm_conn_event_ctx_t *event_ctx,
 		case CS_S8_CLEANUP:
 		case CS_S10_IN_CLEANUP:
 			action = CA_DROP;
-			break;
+			goto validate_pdu_done;
 		default:
 			action = ((event_ctx->iec_pdu_event_type == CT_TX_PDU) ?
 			    CA_TX_PROTOCOL_ERROR : CA_RX_PROTOCOL_ERROR);
@@ -1488,7 +1509,7 @@ idm_conn_sm_validate_pdu(idm_conn_t *ic, idm_conn_event_ctx_t *event_ctx,
 		case CS_S8_CLEANUP:
 		case CS_S10_IN_CLEANUP:
 			action = CA_DROP;
-			break;
+			goto validate_pdu_done;
 		default:
 			action = ((event_ctx->iec_pdu_event_type == CT_TX_PDU) ?
 			    CA_TX_PROTOCOL_ERROR : CA_RX_PROTOCOL_ERROR);
@@ -1508,7 +1529,7 @@ idm_conn_sm_validate_pdu(idm_conn_t *ic, idm_conn_event_ctx_t *event_ctx,
 		case CS_S8_CLEANUP:
 		case CS_S10_IN_CLEANUP:
 			action = CA_DROP;
-			break;
+			goto validate_pdu_done;
 		default:
 			action = ((event_ctx->iec_pdu_event_type == CT_TX_PDU) ?
 			    CA_TX_PROTOCOL_ERROR : CA_RX_PROTOCOL_ERROR);
@@ -1600,7 +1621,7 @@ idm_ffp_enable(idm_conn_t *ic)
 	ic->ic_ffp = B_TRUE;
 	mutex_exit(&ic->ic_state_mutex);
 
-	rc = idm_notify_client(ic, CN_FFP_ENABLED, NULL);
+	rc = idm_notify_client(ic, CN_FFP_ENABLED, (uintptr_t)NULL);
 	if (rc != IDM_STATUS_SUCCESS) {
 		mutex_enter(&ic->ic_state_mutex);
 		ic->ic_ffp = B_FALSE;

@@ -19,11 +19,12 @@
  * CDDL HEADER END
  */
 /*	Copyright (c) 1984, 1986, 1987, 1988, 1989 AT&T	*/
-/*	  All Rights Reserved  	*/
+/*	  All Rights Reserved	*/
 
 /*
  * Copyright 2009 Sun Microsystems, Inc.  All rights reserved.
  * Use is subject to license terms.
+ * Copyright 2018 OmniOS Community Edition (OmniOSce) Association.
  */
 
 #ifndef _SYS_CONF_H
@@ -40,11 +41,11 @@
 extern "C" {
 #endif
 
-#define	FMNAMESZ	8 		/* used by struct fmodsw */
+#define	FMNAMESZ	8		/* used by struct fmodsw */
 
 #if !defined(_XPG4_2) || defined(__EXTENSIONS__)
 
-#ifdef _KERNEL
+#if defined(_KERNEL) || defined(_FAKE_KERNEL)
 
 /*
  * XXX  Given that drivers need to include this file,
@@ -52,10 +53,14 @@ extern "C" {
  *	it legitimizes (aka provides prototypes for)
  *	all sorts of functions that aren't in the DKI/SunDDI
  */
+#include <sys/types.h>
 #include <sys/systm.h>
+
+#endif	/* _KERNEL || _FAKE_KERNEL */
+#ifdef	_KERNEL
+
 #include <sys/devops.h>
 #include <sys/model.h>
-#include <sys/types.h>
 #include <sys/buf.h>
 #include <sys/cred.h>
 #include <sys/uio.h>
@@ -220,6 +225,8 @@ extern int cdev_prop_op(dev_t, dev_info_t *, ddi_prop_op_t,
 #define	_D_DIRECT	0x80000	/* Private flag for transport modules */
 
 #define	D_OPEN_RETURNS_EINTR	0x100000 /* EINTR expected from open(9E) */
+
+#define	_D_SINGLE_INSTANCE	0x200000 /* Module may only be pushed once */
 
 #endif /* !defined(_XPG4_2) || defined(__EXTENSIONS__) */
 

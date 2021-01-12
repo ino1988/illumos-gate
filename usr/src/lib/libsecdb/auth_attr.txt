@@ -71,9 +71,6 @@ solaris.label.file.downgrade:::Downgrade File Label::help=LabelFileDowngrade.htm
 solaris.label.file.upgrade:::Upgrade File Label::help=LabelFileUpgrade.html
 solaris.label.print:::View Printer Queue at All Labels::help=LabelPrint.html
 solaris.label.range:::Set Label Outside User Accred Range::help=LabelRange.html
-solaris.label.win.downgrade:::Downgrade DragNDrop or CutPaste Info::help=LabelWinDowngrade.html
-solaris.label.win.noview:::DragNDrop or CutPaste without viewing contents::help=LabelWinNoView.html
-solaris.label.win.upgrade:::Upgrade DragNDrop or CutPaste Info::help=LabelWinUpgrade.html
 #
 solaris.login.:::Login Control::help=LoginHeader.html
 solaris.login.enable:::Enable Logins::help=LoginEnable.html
@@ -176,6 +173,7 @@ solaris.smf.value.inetd:::Change values of SMF Inetd configuration paramaters::h
 solaris.smf.value.ipsec:::Change Values of SMF IPsec Properties::help=SmfValueIPsec.html
 solaris.smf.value.mdns:::Change Values of MDNS Service Properties::help=SmfValueMDNS.html
 solaris.smf.value.nwam:::Change Values of SMF Network Auto-Magic Properties::help=SmfValueNWAM.html
+solaris.smf.value.process-security:::Change Values of Process Security properties::help=SmfValueProcSec.html
 solaris.smf.value.smb:::Change Values of SMB Service Properties::help=SmfValueSMB.html
 solaris.smf.read.smb:::Read permission for protected SMF SMB Service Properties::help=AuthReadSMB.html
 solaris.smf.value.smtp-notify:::Change values of Email Event Notification Agent properties::

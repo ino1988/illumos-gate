@@ -22,8 +22,6 @@
 # Copyright 2008 Sun Microsystems, Inc.  All rights reserved.
 # Use is subject to license terms.
 #
-# ident	"%Z%%M%	%I%	%E% SMI"
-#
 
 LIBRARY =	libnss_files.a
 VERS =		.1
@@ -58,10 +56,22 @@ include		../../Makefile.com
 include ../../../Makefile.rootfs
 
 CPPFLAGS +=	-I../../../common/inc
-LINTFLAGS +=	-erroff=E_GLOBAL_COULD_BE_STATIC2
-LINTFLAGS64 +=	-erroff=E_GLOBAL_COULD_BE_STATIC2 
 
-LDLIBS +=	-lsocket -lnsl
+LDLIBS +=	-lnsl
 DYNLIB1 =	nss_files.so$(VERS)
 
+COMPATLINKS=	usr/lib/$(DYNLIB1) \
+		etc/lib/$(DYNLIB1)
+COMPATLINKS64=	usr/lib/$(MACH64)/$(DYNLIB1)
+
+$(ROOT)/usr/lib/$(DYNLIB1) := COMPATLINKTARGET=../../lib/$(DYNLIB1)
+$(ROOT)/usr/lib/$(MACH64)/$(DYNLIB1):= \
+	COMPATLINKTARGET=../../../lib/$(MACH64)/$(DYNLIB1)
+$(ROOT)/usr/lib/$(DYNLIB1) := COMPATLINKTARGET=../../lib/$(DYNLIB1)
+$(ROOT)/usr/lib/$(MACH64)/$(DYNLIB1):= \
+	COMPATLINKTARGET=../../../lib/$(MACH64)/$(DYNLIB1)
+
+$(ROOT)/etc/lib/$(DYNLIB1) := COMPATLINKTARGET= ../../lib/$(DYNLIB1)
+
 all: $(DYNLIB1)
+

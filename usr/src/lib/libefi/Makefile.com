@@ -20,10 +20,10 @@
 #
 #
 # Copyright 2006 Sun Microsystems, Inc.  All rights reserved.
+# Copyright 2018 OmniOS Community Edition (OmniOSce) Association.
 # Use is subject to license terms.
 #
-# ident	"%Z%%M%	%I%	%E% SMI"
-#
+# Copyright (c) 2018, Joyent, Inc.
 
 LIBRARY =	libefi.a
 VERS =		.1
@@ -36,17 +36,16 @@ include ../../Makefile.rootfs
 
 SRCDIR =	../common
 
-LIBS =		$(DYNLIB) $(LINTLIB)
-LDLIBS +=	-luuid -lc
-$(LINTLIB) :=	SRCS = $(SRCDIR)/$(LINTSRC)
+LIBS =		$(DYNLIB)
+LDLIBS +=	-luuid -lsmbios -lc
 CFLAGS +=	$(CCVERBOSE)
 
-LINTFLAGS64 +=	-errchk=longptr64
+
+SMOFF += kmalloc_wrong_size
 
 .KEEP_STATE:
 
 all: $(LIBS)
 
-lint: lintcheck
 
 include ../../Makefile.targ

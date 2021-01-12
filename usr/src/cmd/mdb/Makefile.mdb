@@ -26,7 +26,8 @@
 #
 # Copyright 2011 Nexenta Systems, Inc.  All rights reserved.
 # Copyright (c) 2012 by Delphix. All rights reserved.
-# Copyright (c) 2012 Joyent, Inc. All rights reserved.
+# Copyright 2019 Joyent, Inc.
+# Copyright 2018 Jason King
 #
 
 .KEEP_STATE:
@@ -95,12 +96,13 @@ SRCS += \
 $(NOT_RELEASE_BUILD)CPPFLAGS += -DDEBUG
 CPPFLAGS += -D_MDB -I. -I../.. -I../../../common
 
-C99MODE=	-xc99=%all
+CSTD=	$(CSTD_GNU99)
 C99LMODE=	-Xc99=%all
 
 LDLIBS += -lcurses -lkvm -lproc -lrtld_db -lctf -lumem -ldisasm -lscf
+LDLIBS += -ldemangle-sys
 
-CERRWARN += -_gcc=-Wno-uninitialized
+CERRWARN += $(CNOWARN_UNINIT)
 CERRWARN += -_gcc=-Wno-char-subscripts
 CERRWARN += -_gcc=-Wno-clobbered
 CERRWARN += -_gcc=-Wno-parentheses

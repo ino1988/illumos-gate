@@ -22,6 +22,7 @@
 /*
  * Copyright 2008 Sun Microsystems, Inc.  All rights reserved.
  * Use is subject to license terms.
+ * Copyright (c) 2016 by Delphix. All rights reserved.
  */
 
 #include <sys/types.h>
@@ -68,15 +69,15 @@ static fileid_t *head;
 devid_t		*ufs_devp;
 
 struct dirinfo {
-	int 	loc;
+	int	loc;
 	fileid_t *fi;
 };
 
 static	int	bufs_close(int);
 static	void	bufs_closeall(int);
-static 	ino_t	find(fileid_t *filep, char *path);
+static	ino_t	find(fileid_t *filep, char *path);
 static	ino_t	dlook(fileid_t *filep, char *path);
-static 	daddr32_t	sbmap(fileid_t *filep, daddr32_t bn);
+static	daddr32_t	sbmap(fileid_t *filep, daddr32_t bn);
 static  struct direct *readdir(struct dirinfo *dstuff);
 static	void set_cache(int, void *, uint_t);
 static	void *get_cache(int);
@@ -150,9 +151,10 @@ find(fileid_t *filep, char *path)
 	int len, r;
 	devid_t	*devp;
 
+	inode = 0;
 	if (path == NULL || *path == '\0') {
 		printf("null path\n");
-		return ((ino_t)0);
+		return (inode);
 	}
 
 	dprintf("openi: %s\n", path);
@@ -661,7 +663,7 @@ bufs_lseek(int fd, off_t addr, int whence)
 {
 	fileid_t *filep;
 
-	/* Make sure user knows what file he is talking to */
+	/* Make sure user knows what file they are talking to */
 	if (!(filep = find_fp(fd)))
 		return (-1);
 
@@ -738,7 +740,7 @@ bufs_close(int fd)
 {
 	fileid_t *filep;
 
-	/* Make sure user knows what file he is talking to */
+	/* Make sure user knows what file they are talking to */
 	if (!(filep = find_fp(fd)))
 		return (-1);
 

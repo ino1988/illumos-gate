@@ -1104,6 +1104,8 @@ vmu_calculate_seg(vmu_entity_t *vmu_entities, struct seg *seg)
 	pgcnt_t swresv = 0;
 	pgcnt_t panon = 0;
 
+	s_start = 0;
+	p_end = 0;
 	/* Can zero-length segments exist?  Not sure, so paranoia. */
 	if (seg->s_size <= 0)
 		return;
@@ -1533,12 +1535,12 @@ vmu_calculate_proc(proc_t *p)
 	ASSERT(entities != NULL);
 	/* process all segs in process's address space */
 	as = p->p_as;
-	AS_LOCK_ENTER(as, &as->a_lock, RW_READER);
+	AS_LOCK_ENTER(as, RW_READER);
 	for (seg = AS_SEGFIRST(as); seg != NULL;
 	    seg = AS_SEGNEXT(as, seg)) {
 		vmu_calculate_seg(entities, seg);
 	}
-	AS_LOCK_EXIT(as, &as->a_lock);
+	AS_LOCK_EXIT(as);
 }
 
 /*
@@ -1547,9 +1549,10 @@ vmu_calculate_proc(proc_t *p)
 static void
 vmu_clear_calc()
 {
-	if (vmu_data.vmu_system != NULL)
+	if (vmu_data.vmu_system != NULL) {
 		vmu_free_entity(vmu_data.vmu_system);
 		vmu_data.vmu_system = NULL;
+	}
 	if (vmu_data.vmu_zones_hash != NULL)
 		i_mod_hash_clear_nosync(vmu_data.vmu_zones_hash);
 	if (vmu_data.vmu_projects_col_hash != NULL)

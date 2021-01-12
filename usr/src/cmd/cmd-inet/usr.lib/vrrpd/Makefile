@@ -37,7 +37,7 @@ $(ROOTETC)/inet/$(CFGFILES):= FILEMODE= 644
 $(ROOTETC)/inet/$(CFGFILES):= OWNER= root 
 $(ROOTETC)/inet/$(CFGFILES):= GROUP= sys 
 
-C99MODE=		$(C99_ENABLE)
+CSTD=		$(CSTD_GNU99)
 
 #
 # We need access to the ancillary data features which are only available
@@ -47,7 +47,7 @@ CPPFLAGS += -D_XOPEN_SOURCE=600 -D__EXTENSIONS__
 LDLIBS += -lvrrpadm -lsocket -lnsl -ldladm -linetutil -lipadm -lsysevent -lnvpair -lsecdb
 LINTFLAGS += -erroff=E_INCONS_ARG_DECL2  -erroff=E_INCONS_ARG_USED2
 
-CERRWARN += -_gcc=-Wno-uninitialized
+CERRWARN += $(CNOWARN_UNINIT)
 
 #
 # Instrument vrrpd with CTF data to ease debugging.

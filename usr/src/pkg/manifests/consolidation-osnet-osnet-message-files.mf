@@ -93,9 +93,6 @@ file path=usr/lib/help/auths/locale/LabelHeader.html
 file path=usr/lib/help/auths/locale/LabelPrint.html
 file path=usr/lib/help/auths/locale/LabelRange.html
 file path=usr/lib/help/auths/locale/LabelServer.html
-file path=usr/lib/help/auths/locale/LabelWinDowngrade.html
-file path=usr/lib/help/auths/locale/LabelWinNoView.html
-file path=usr/lib/help/auths/locale/LabelWinUpgrade.html
 file path=usr/lib/help/auths/locale/LinkSecurity.html
 file path=usr/lib/help/auths/locale/LoginEnable.html
 file path=usr/lib/help/auths/locale/LoginHeader.html
@@ -173,6 +170,7 @@ file path=usr/lib/help/auths/locale/SmfValueMDNS.html
 file path=usr/lib/help/auths/locale/SmfValueNADD.html
 file path=usr/lib/help/auths/locale/SmfValueNDMP.html
 file path=usr/lib/help/auths/locale/SmfValueNWAM.html
+file path=usr/lib/help/auths/locale/SmfValueProcSec.html
 file path=usr/lib/help/auths/locale/SmfValueRouting.html
 file path=usr/lib/help/auths/locale/SmfValueSMB.html
 file path=usr/lib/help/auths/locale/SmfValueVscan.html
@@ -284,6 +282,7 @@ file path=usr/lib/locale/C/LC_MESSAGES/FMD.po
 file path=usr/lib/locale/C/LC_MESSAGES/FMNOTIFY.po
 file path=usr/lib/locale/C/LC_MESSAGES/GMCA.po
 file path=usr/lib/locale/C/LC_MESSAGES/INTEL.po
+file path=usr/lib/locale/C/LC_MESSAGES/NIC.po
 file path=usr/lib/locale/C/LC_MESSAGES/NXGE.po
 file path=usr/lib/locale/C/LC_MESSAGES/PCI.po
 file path=usr/lib/locale/C/LC_MESSAGES/PCIEX.po
@@ -318,7 +317,6 @@ file path=usr/lib/locale/C/LC_MESSAGES/more.help group=sys
 file path=usr/lib/locale/C/LC_MESSAGES/priv_names group=sys
 file path=usr/lib/locale/C/LC_MESSAGES/uxlibc.src group=sys
 file path=usr/lib/locale/C/LC_TIME/SUNW_OST_OSCMD.po group=sys
-file path=usr/lib/locale/C/LC_TIME/SUNW_OST_OSLIB.po group=sys
 file path=usr/share/lib/locale/com/sun/admin/pm/client/pmHelpResources.java \
     group=lp
 file path=usr/share/lib/locale/com/sun/admin/pm/client/pmResources.java \

@@ -21,6 +21,7 @@
 /*
  * Copyright 2010 Sun Microsystems, Inc.  All rights reserved.
  * Use is subject to license terms.
+ * Copyright (c) 2016 by Delphix. All rights reserved.
  */
 
 /*
@@ -190,7 +191,7 @@ smb_end_node_challenge(nbt_name_reply_t *reply_info)
 	/*
 	 * The response packet has in it the address of the presumed owner
 	 * of the name.  Challenge that owner.  If owner either does not
-	 * respond or indicates that he no longer owns the name, claim the
+	 * respond or indicates that they no longer own the name, claim the
 	 * name.  Otherwise, the name cannot be claimed.
 	 */
 
@@ -437,7 +438,7 @@ smb_netbios_process_response(uint16_t tid, addr_entry_t *addr,
 		 * address of the presumed owner of the
 		 * name.  Challenge that owner.  If
 		 * owner either does not respond or
-		 * indicates that he no longer owns the
+		 * indicates that they no longer own the
 		 * name, claim the name.  Otherwise,
 		 * the name cannot be claimed.
 		 */
@@ -483,16 +484,12 @@ smb_name_buf_from_packet(unsigned char *buf, int n_buf,
 	addr_entry_t		*raddr;
 	unsigned char 		*heap = buf;
 	unsigned char 		*end_heap = heap + n_buf;
-	unsigned char 		*dnptrs[32];
 	unsigned char		comp_name_buf[MAX_NAME_LENGTH];
 	unsigned int		tmp;
 	int			i, step;
 
 	if (n_buf < NAME_HEADER_SIZE)
 		return (-1);		/* no header, impossible */
-
-	dnptrs[0] = heap;
-	dnptrs[1] = 0;
 
 	BE_OUT16(heap, npb->name_trn_id);
 	heap += 2;

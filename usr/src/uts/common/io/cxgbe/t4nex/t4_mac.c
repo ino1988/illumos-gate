@@ -20,6 +20,10 @@
  * release for licensing terms and conditions.
  */
 
+/*
+ * Copyright 2020 RackTop Systems, Inc.
+ */
+
 #include <sys/ddi.h>
 #include <sys/sunddi.h>
 #include <sys/dlpi.h>
@@ -37,7 +41,6 @@ static void t4_mc_stop(void *arg);
 static int t4_mc_setpromisc(void *arg, boolean_t on);
 static int t4_mc_multicst(void *arg, boolean_t add, const uint8_t *mcaddr);
 static int t4_mc_unicst(void *arg, const uint8_t *ucaddr);
-static mblk_t *t4_mc_tx(void *arg, mblk_t *m);
 static boolean_t t4_mc_getcapab(void *arg, mac_capab_t cap, void *data);
 static int t4_mc_setprop(void *arg, const char *name, mac_prop_id_t id,
     uint_t size, const void *val);
@@ -46,8 +49,6 @@ static int t4_mc_getprop(void *arg, const char *name, mac_prop_id_t id,
 static void t4_mc_propinfo(void *arg, const char *name, mac_prop_id_t id,
     mac_prop_info_handle_t ph);
 
-static int begin_synchronized_op(struct port_info *pi, int hold, int waitok);
-static void end_synchronized_op(struct port_info *pi, int held);
 static int t4_init_synchronized(struct port_info *pi);
 static int t4_uninit_synchronized(struct port_info *pi);
 static void propinfo(struct port_info *pi, const char *name,
@@ -63,8 +64,27 @@ mac_callbacks_t t4_m_callbacks = {
 	.mc_stop	= t4_mc_stop,
 	.mc_setpromisc	= t4_mc_setpromisc,
 	.mc_multicst	= t4_mc_multicst,
-	.mc_unicst	= t4_mc_unicst,
-	.mc_tx		= t4_mc_tx,
+	.mc_unicst =    t4_mc_unicst,
+	.mc_tx =        t4_mc_tx,
+	.mc_getcapab =	t4_mc_getcapab,
+	.mc_setprop =	t4_mc_setprop,
+	.mc_getprop =	t4_mc_getprop,
+	.mc_propinfo =	t4_mc_propinfo,
+};
+
+/* I couldn't comeup with a better idea of not redefine
+ * another strcture and instead somehow reuse the earlier
+ * above structure and modify its members.
+ */
+mac_callbacks_t t4_m_ring_callbacks = {
+	.mc_callbacks =	MC_GETCAPAB | MC_PROPERTIES,
+	.mc_getstat =	t4_mc_getstat,
+	.mc_start =	t4_mc_start,
+	.mc_stop =	t4_mc_stop,
+	.mc_setpromisc =t4_mc_setpromisc,
+	.mc_multicst =	t4_mc_multicst,
+	.mc_unicst =    NULL, /* t4_addmac */
+	.mc_tx =        NULL, /* t4_eth_tx */
 	.mc_getcapab	= t4_mc_getcapab,
 	.mc_setprop	= t4_mc_setprop,
 	.mc_getprop	= t4_mc_getprop,
@@ -211,15 +231,31 @@ t4_mc_getstat(void *arg, uint_t stat, uint64_t *val)
 	case ETHER_STAT_XCVR_INUSE:
 		return (ENOTSUP);
 
+	case ETHER_STAT_CAP_100GFDX:
+		*val = !!(lc->pcaps & FW_PORT_CAP32_SPEED_100G);
+		break;
+
+	case ETHER_STAT_CAP_40GFDX:
+		*val = !!(lc->pcaps & FW_PORT_CAP32_SPEED_40G);
+		break;
+
+	case ETHER_STAT_CAP_25GFDX:
+		*val = !!(lc->pcaps & FW_PORT_CAP32_SPEED_25G);
+		break;
+
+	case ETHER_STAT_CAP_10GFDX:
+		*val = !!(lc->pcaps & FW_PORT_CAP32_SPEED_10G);
+		break;
+
 	case ETHER_STAT_CAP_1000FDX:
-		*val = !!(lc->supported & FW_PORT_CAP_SPEED_1G);
+		*val = !!(lc->pcaps & FW_PORT_CAP32_SPEED_1G);
 		break;
 
 	case ETHER_STAT_CAP_1000HDX:
 		return (ENOTSUP);
 
 	case ETHER_STAT_CAP_100FDX:
-		*val = !!(lc->supported & FW_PORT_CAP_SPEED_100M);
+		*val = !!(lc->pcaps & FW_PORT_CAP32_SPEED_100M);
 		break;
 
 	case ETHER_STAT_CAP_100HDX:
@@ -238,7 +274,7 @@ t4_mc_getstat(void *arg, uint_t stat, uint64_t *val)
 		break;
 
 	case ETHER_STAT_CAP_AUTONEG:
-		*val = !!(lc->supported & FW_PORT_CAP_ANEG);
+		*val = !!(lc->pcaps & FW_PORT_CAP32_ANEG);
 		break;
 
 	/*
@@ -274,16 +310,62 @@ t4_mc_getstat(void *arg, uint_t stat, uint64_t *val)
 		*val = (lc->requested_fc & PAUSE_TX) ? 1 : 0;
 		break;
 
+	case ETHER_STAT_ADV_CAP_100GFDX:
+		*val = !!(lc->acaps & FW_PORT_CAP32_SPEED_100G);
+		break;
+
+	case ETHER_STAT_ADV_CAP_40GFDX:
+		*val = !!(lc->acaps & FW_PORT_CAP32_SPEED_40G);
+		break;
+
+	case ETHER_STAT_ADV_CAP_25GFDX:
+		*val = !!(lc->acaps & FW_PORT_CAP32_SPEED_25G);
+		break;
+
+	case ETHER_STAT_ADV_CAP_10GFDX:
+		*val = !!(lc->acaps & FW_PORT_CAP32_SPEED_10G);
+		break;
+
 	case ETHER_STAT_ADV_CAP_1000FDX:
+		*val = !!(lc->acaps & FW_PORT_CAP32_SPEED_1G);
+		break;
+
+	case ETHER_STAT_ADV_CAP_AUTONEG:
+		*val = !!(lc->acaps & FW_PORT_CAP32_ANEG);
+		break;
+
 	case ETHER_STAT_ADV_CAP_1000HDX:
 	case ETHER_STAT_ADV_CAP_100FDX:
 	case ETHER_STAT_ADV_CAP_100HDX:
 	case ETHER_STAT_ADV_CAP_10FDX:
 	case ETHER_STAT_ADV_CAP_10HDX:
-	case ETHER_STAT_ADV_CAP_AUTONEG:
 		return (ENOTSUP);	/* TODO */
 
+
+	case ETHER_STAT_LP_CAP_100GFDX:
+		*val = !!(lc->acaps & FW_PORT_CAP32_SPEED_100G);
+		break;
+
+	case ETHER_STAT_LP_CAP_40GFDX:
+		*val = !!(lc->acaps & FW_PORT_CAP32_SPEED_40G);
+		break;
+
+	case ETHER_STAT_LP_CAP_25GFDX:
+		*val = !!(lc->acaps & FW_PORT_CAP32_SPEED_25G);
+		break;
+
+	case ETHER_STAT_LP_CAP_10GFDX:
+		*val = !!(lc->acaps & FW_PORT_CAP32_SPEED_10G);
+		break;
+
 	case ETHER_STAT_LP_CAP_1000FDX:
+		*val = !!(lc->acaps & FW_PORT_CAP32_SPEED_1G);
+		break;
+
+	case ETHER_STAT_LP_CAP_AUTONEG:
+		*val = !!(lc->acaps & FW_PORT_CAP32_ANEG);
+		break;
+
 	case ETHER_STAT_LP_CAP_1000HDX:
 	case ETHER_STAT_LP_CAP_100FDX:
 	case ETHER_STAT_LP_CAP_100HDX:
@@ -291,7 +373,6 @@ t4_mc_getstat(void *arg, uint_t stat, uint64_t *val)
 	case ETHER_STAT_LP_CAP_10HDX:
 	case ETHER_STAT_LP_CAP_ASMPAUSE:
 	case ETHER_STAT_LP_CAP_PAUSE:
-	case ETHER_STAT_LP_CAP_AUTONEG:
 		return (ENOTSUP);
 
 	case ETHER_STAT_LINK_ASMPAUSE:
@@ -416,22 +497,31 @@ t4_mc_multicst(void *arg, boolean_t add, const uint8_t *mcaddr)
 	return (0);
 }
 
-static int
+int
 t4_mc_unicst(void *arg, const uint8_t *ucaddr)
 {
 	struct port_info *pi = arg;
 	struct adapter *sc = pi->adapter;
 	int rc;
 
+	if (ucaddr == NULL)
+		return (EINVAL);
+
 	rc = begin_synchronized_op(pi, 1, 1);
 	if (rc != 0)
 		return (rc);
+
+	/* We will support adding only one mac address */
+	if (pi->adapter->props.multi_rings && pi->macaddr_cnt) {
+		end_synchronized_op(pi, 1);
+		return (ENOSPC);
+	}
 	rc = t4_change_mac(sc, sc->mbox, pi->viid, pi->xact_addr_filt, ucaddr,
-	    true, true);
+			   true, &pi->smt_idx);
 	if (rc < 0)
 		rc = -rc;
 	else {
-		/* LINTED: E_CONSTANT_CONDITION */
+		pi->macaddr_cnt++;
 		pi->xact_addr_filt = rc;
 		rc = 0;
 	}
@@ -440,14 +530,329 @@ t4_mc_unicst(void *arg, const uint8_t *ucaddr)
 	return (rc);
 }
 
-static mblk_t *
+int
+t4_addmac(void *arg, const uint8_t *ucaddr)
+{
+	return (t4_mc_unicst(arg, ucaddr));
+}
+
+static int
+t4_remmac(void *arg, const uint8_t *mac_addr)
+{
+	struct port_info *pi = arg;
+	int rc;
+
+	rc = begin_synchronized_op(pi, 1, 1);
+	if (rc != 0)
+		return (rc);
+
+	pi->macaddr_cnt--;
+	end_synchronized_op(pi, 1);
+
+	return (0);
+}
+
+/*
+ * Callback funtion for MAC layer to register all groups.
+ */
+void
+t4_fill_group(void *arg, mac_ring_type_t rtype, const int rg_index,
+	      mac_group_info_t *infop, mac_group_handle_t gh)
+{
+	struct port_info *pi = arg;
+
+	switch (rtype) {
+	case MAC_RING_TYPE_RX: {
+		infop->mgi_driver = (mac_group_driver_t)arg;
+		infop->mgi_start = NULL;
+		infop->mgi_stop = NULL;
+		infop->mgi_addmac = t4_addmac;
+		infop->mgi_remmac = t4_remmac;
+		infop->mgi_count = pi->nrxq;
+		break;
+	}
+	case MAC_RING_TYPE_TX:
+	default:
+		ASSERT(0);
+		break;
+	}
+}
+
+static int
+t4_ring_start(mac_ring_driver_t rh, uint64_t mr_gen_num)
+{
+	struct sge_rxq *rxq = (struct sge_rxq *)rh;
+
+	RXQ_LOCK(rxq);
+	rxq->ring_gen_num = mr_gen_num;
+	RXQ_UNLOCK(rxq);
+	return (0);
+}
+
+/*
+ * Enable interrupt on the specificed rx ring.
+ */
+int
+t4_ring_intr_enable(mac_intr_handle_t intrh)
+{
+	struct sge_rxq *rxq = (struct sge_rxq *)intrh;
+	struct adapter *sc = rxq->port->adapter;
+	struct sge_iq *iq;
+
+	iq = &rxq->iq;
+	RXQ_LOCK(rxq);
+	iq->polling = 0;
+	iq->state = IQS_IDLE;
+	t4_write_reg(sc, MYPF_REG(A_SGE_PF_GTS),
+		     V_SEINTARM(iq->intr_params) | V_INGRESSQID(iq->cntxt_id));
+	RXQ_UNLOCK(rxq);
+	return (0);
+}
+
+/*
+ * Disable interrupt on the specificed rx ring.
+ */
+int
+t4_ring_intr_disable(mac_intr_handle_t intrh)
+{
+	struct sge_rxq *rxq = (struct sge_rxq *)intrh;
+	struct sge_iq *iq;
+
+	/* Nothing to be done here wrt interrupt, as it
+	 * will not fire, until we write back to
+	 * A_SGE_PF_GTS.SEIntArm in t4_ring_intr_enable.
+	 */
+
+	iq = &rxq->iq;
+	RXQ_LOCK(rxq);
+	iq->polling = 1;
+	iq->state = IQS_BUSY;
+	RXQ_UNLOCK(rxq);
+	return (0);
+}
+
+mblk_t *
+t4_poll_ring(void *arg, int n_bytes)
+{
+	struct sge_rxq *rxq = (struct sge_rxq *)arg;
+	mblk_t *mp = NULL;
+
+	ASSERT(n_bytes >= 0);
+	if (n_bytes == 0)
+		return (NULL);
+
+	RXQ_LOCK(rxq);
+	mp = t4_ring_rx(rxq, n_bytes);
+	RXQ_UNLOCK(rxq);
+
+	return (mp);
+}
+
+/*
+ * Retrieve a value for one of the statistics for a particular rx ring
+ */
+int
+t4_rx_stat(mac_ring_driver_t rh, uint_t stat, uint64_t *val)
+{
+	struct sge_rxq *rxq = (struct sge_rxq *)rh;
+
+	switch (stat) {
+	case MAC_STAT_RBYTES:
+		*val = rxq->rxbytes;
+		break;
+
+	case MAC_STAT_IPACKETS:
+		*val = rxq->rxpkts;
+		break;
+
+	default:
+		*val = 0;
+		return (ENOTSUP);
+	}
+
+	return (0);
+}
+
+/*
+ * Retrieve a value for one of the statistics for a particular tx ring
+ */
+int
+t4_tx_stat(mac_ring_driver_t rh, uint_t stat, uint64_t *val)
+{
+	struct sge_txq *txq = (struct sge_txq *)rh;
+
+	switch (stat) {
+	case MAC_STAT_RBYTES:
+		*val = txq->txbytes;
+		break;
+
+	case MAC_STAT_IPACKETS:
+		*val = txq->txpkts;
+		break;
+
+	default:
+		*val = 0;
+		return (ENOTSUP);
+	}
+
+	return (0);
+}
+
+/*
+ * Callback funtion for MAC layer to register all rings
+ * for given ring_group, noted by group_index.
+ * Since we have only one group, ring index becomes
+ * absolute index.
+ */
+void
+t4_fill_ring(void *arg, mac_ring_type_t rtype, const int group_index,
+	     const int ring_index, mac_ring_info_t *infop, mac_ring_handle_t rh)
+{
+	struct port_info *pi = arg;
+	mac_intr_t *mintr;
+
+	switch (rtype) {
+	case MAC_RING_TYPE_RX: {
+		struct sge_rxq *rxq;
+
+		rxq = &pi->adapter->sge.rxq[pi->first_rxq + ring_index];
+		rxq->ring_handle = rh;
+
+		infop->mri_driver = (mac_ring_driver_t)rxq;
+		infop->mri_start = t4_ring_start;
+		infop->mri_stop = NULL;
+		infop->mri_poll = t4_poll_ring;
+		infop->mri_stat = t4_rx_stat;
+
+		mintr = &infop->mri_intr;
+		mintr->mi_handle = (mac_intr_handle_t)rxq;
+		mintr->mi_enable = t4_ring_intr_enable;
+		mintr->mi_disable = t4_ring_intr_disable;
+
+		break;
+	}
+	case MAC_RING_TYPE_TX: {
+		struct sge_txq *txq = &pi->adapter->sge.txq[pi->first_txq + ring_index];
+		txq->ring_handle = rh;
+		infop->mri_driver = (mac_ring_driver_t)txq;
+		infop->mri_start = NULL;
+		infop->mri_stop = NULL;
+		infop->mri_tx = t4_eth_tx;
+		infop->mri_stat = t4_tx_stat;
+		break;
+	}
+	default:
+		ASSERT(0);
+		break;
+	}
+}
+
+mblk_t *
 t4_mc_tx(void *arg, mblk_t *m)
 {
 	struct port_info *pi = arg;
 	struct adapter *sc = pi->adapter;
 	struct sge_txq *txq = &sc->sge.txq[pi->first_txq];
 
-	return (t4_eth_tx(pi, txq, m));
+	return (t4_eth_tx(txq, m));
+}
+
+static int
+t4_mc_transceiver_info(void *arg, uint_t id, mac_transceiver_info_t *infop)
+{
+	struct port_info *pi = arg;
+
+	if (id != 0 || infop == NULL)
+		return (EINVAL);
+
+	switch (pi->mod_type) {
+	case FW_PORT_MOD_TYPE_NONE:
+		mac_transceiver_info_set_present(infop, B_FALSE);
+		break;
+	case FW_PORT_MOD_TYPE_NOTSUPPORTED:
+		mac_transceiver_info_set_present(infop, B_TRUE);
+		mac_transceiver_info_set_usable(infop, B_FALSE);
+		break;
+	default:
+		mac_transceiver_info_set_present(infop, B_TRUE);
+		mac_transceiver_info_set_usable(infop, B_TRUE);
+		break;
+	}
+
+	return (0);
+}
+
+static int
+t4_mc_transceiver_read(void *arg, uint_t id, uint_t page, void *bp,
+    size_t nbytes, off_t offset, size_t *nread)
+{
+	struct port_info *pi = arg;
+	struct adapter *sc = pi->adapter;
+	int rc;
+	size_t i, maxread;
+	/* LINTED: E_FUNC_VAR_UNUSED */
+	struct fw_ldst_cmd ldst __unused;
+
+	if (id != 0 || bp == NULL || nbytes == 0 || nread == NULL ||
+	    (page != 0xa0 && page != 0xa2) || offset < 0)
+		return (EINVAL);
+
+	if (nbytes > 256 || offset >= 256 || (offset + nbytes > 256))
+		return (EINVAL);
+
+	rc = begin_synchronized_op(pi, 0, 1);
+	if (rc != 0)
+		return (rc);
+
+	/*
+	 * Firmware has a maximum size that we can read. Don't read more than it
+	 * allows.
+	 */
+	maxread = sizeof (ldst.u.i2c.data);
+	for (i = 0; i < nbytes; i += maxread) {
+		size_t toread = MIN(maxread, nbytes - i);
+		rc = -t4_i2c_rd(sc, sc->mbox, pi->port_id, page, offset, toread,
+		    bp);
+		if (rc != 0)
+			break;
+		offset += toread;
+		bp = (void *)((uintptr_t)bp + toread);
+	}
+	end_synchronized_op(pi, 0);
+	if (rc == 0)
+		*nread = nbytes;
+	return (rc);
+}
+
+static int
+t4_port_led_set(void *arg, mac_led_mode_t mode, uint_t flags)
+{
+	struct port_info *pi = arg;
+	struct adapter *sc = pi->adapter;
+	int val, rc;
+
+	if (flags != 0)
+		return (EINVAL);
+
+	switch (mode) {
+	case MAC_LED_DEFAULT:
+		val = 0;
+		break;
+	case MAC_LED_IDENT:
+		val = 0xffff;
+		break;
+
+	default:
+		return (ENOTSUP);
+	}
+
+	rc = begin_synchronized_op(pi, 1, 1);
+	if (rc != 0)
+		return (rc);
+	rc = -t4_identify_port(sc, sc->mbox, pi->viid, val);
+	end_synchronized_op(pi, 1);
+
+	return (rc);
 }
 
 static boolean_t
@@ -455,6 +860,8 @@ t4_mc_getcapab(void *arg, mac_capab_t cap, void *data)
 {
 	struct port_info *pi = arg;
 	boolean_t status = B_TRUE;
+	mac_capab_transceiver_t *mct;
+	mac_capab_led_t *mcl;
 
 	switch (cap) {
 	case MAC_CAPAB_HCKSUM:
@@ -477,11 +884,110 @@ t4_mc_getcapab(void *arg, mac_capab_t cap, void *data)
 			status = B_FALSE;
 		break;
 
+	case MAC_CAPAB_RINGS: {
+		mac_capab_rings_t *cap_rings = data;
+
+		if (!pi->adapter->props.multi_rings) {
+			status = B_FALSE;
+			break;
+		}
+		switch (cap_rings->mr_type) {
+		case MAC_RING_TYPE_RX:
+			cap_rings->mr_group_type = MAC_GROUP_TYPE_STATIC;
+			cap_rings->mr_rnum = pi->nrxq;
+			cap_rings->mr_gnum = 1;
+			cap_rings->mr_rget = t4_fill_ring;
+			cap_rings->mr_gget = t4_fill_group;
+			cap_rings->mr_gaddring = NULL;
+			cap_rings->mr_gremring = NULL;
+			break;
+		case MAC_RING_TYPE_TX:
+			cap_rings->mr_group_type = MAC_GROUP_TYPE_STATIC;
+			cap_rings->mr_rnum = pi->ntxq;
+			cap_rings->mr_gnum = 0;
+			cap_rings->mr_rget = t4_fill_ring;
+			cap_rings->mr_gget = NULL;
+			break;
+		}
+		break;
+	}
+
+	case MAC_CAPAB_TRANSCEIVER:
+		mct = data;
+
+		mct->mct_flags = 0;
+		mct->mct_ntransceivers = 1;
+		mct->mct_info = t4_mc_transceiver_info;
+		mct->mct_read = t4_mc_transceiver_read;
+		break;
+	case MAC_CAPAB_LED:
+		mcl = data;
+		mcl->mcl_flags = 0;
+		mcl->mcl_modes = MAC_LED_DEFAULT | MAC_LED_IDENT;
+		mcl->mcl_set = t4_port_led_set;
+		break;
+
 	default:
 		status = B_FALSE; /* cap not supported */
 	}
 
 	return (status);
+}
+
+static link_fec_t
+fec_to_link_fec(cc_fec_t cc_fec)
+{
+	link_fec_t link_fec = 0;
+
+	if ((cc_fec & (FEC_RS | FEC_BASER_RS)) == (FEC_RS | FEC_BASER_RS))
+		return (LINK_FEC_AUTO);
+
+	if ((cc_fec & FEC_NONE) != 0)
+		link_fec |= LINK_FEC_NONE;
+
+	if ((cc_fec & FEC_AUTO) != 0)
+		link_fec |= LINK_FEC_AUTO;
+
+	if ((cc_fec & FEC_RS) != 0)
+		link_fec |= LINK_FEC_RS;
+
+	if ((cc_fec & FEC_BASER_RS) != 0)
+		link_fec |= LINK_FEC_BASE_R;
+
+	return (link_fec);
+}
+
+static int
+link_fec_to_fec(int v)
+{
+	int fec = 0;
+
+	if ((v & LINK_FEC_AUTO) != 0) {
+		fec = FEC_AUTO;
+		v &= ~LINK_FEC_AUTO;
+	} else {
+		if ((v & LINK_FEC_NONE) != 0) {
+			fec = FEC_NONE;
+			v &= ~LINK_FEC_NONE;
+		}
+
+		if ((v & LINK_FEC_RS) != 0) {
+			fec |= FEC_RS;
+			v &= ~LINK_FEC_RS;
+		}
+
+		if ((v & LINK_FEC_BASE_R) != 0) {
+			fec |= FEC_BASER_RS;
+			v &= ~LINK_FEC_BASE_R;
+		}
+	}
+
+	if (v != 0)
+		return (-1);
+
+	ASSERT3S(fec, !=, 0);
+
+	return (fec);
 }
 
 /* ARGSUSED */
@@ -495,17 +1001,19 @@ t4_mc_setprop(void *arg, const char *name, mac_prop_id_t id, uint_t size,
 	uint8_t v8 = *(uint8_t *)val;
 	uint32_t v32 = *(uint32_t *)val;
 	int old, new = 0, relink = 0, rx_mode = 0, rc = 0;
+	boolean_t down_link = B_TRUE;
 	link_flowctrl_t fc;
+	link_fec_t fec;
 
 	/*
 	 * Save a copy of link_config. This can be used to restore link_config
-	 * if t4_link_start() fails.
+	 * if t4_link_l1cfg() fails.
 	 */
 	bcopy(lc, &lc_copy, sizeof (struct link_config));
 
 	switch (id) {
 	case MAC_PROP_AUTONEG:
-		if (lc->supported & FW_PORT_CAP_ANEG) {
+		if (lc->pcaps & FW_PORT_CAP32_ANEG) {
 			old = lc->autoneg;
 			new = v8 ? AUTONEG_ENABLE : AUTONEG_DISABLE;
 			if (old != new) {
@@ -514,20 +1022,20 @@ t4_mc_setprop(void *arg, const char *name, mac_prop_id_t id, uint_t size,
 				relink = 1;
 				if (new == AUTONEG_DISABLE) {
 					/* Only 100M is available */
-					lc->requested_speed =
-					    FW_PORT_CAP_SPEED_100M;
-					lc->advertising =
-					    FW_PORT_CAP_SPEED_100M;
+					lc->speed_caps =
+					    FW_PORT_CAP32_SPEED_100M;
+					lc->acaps =
+					    FW_PORT_CAP32_SPEED_100M;
 				} else {
 					/*
 					 * Advertise autonegotiation capability
 					 * along with supported speeds
 					 */
-					lc->advertising |= (FW_PORT_CAP_ANEG |
-					    (lc->supported &
-					    (FW_PORT_CAP_SPEED_100M |
-					    FW_PORT_CAP_SPEED_1G)));
-					lc->requested_speed = 0;
+					lc->acaps |= (FW_PORT_CAP32_ANEG |
+					    (lc->pcaps &
+					    (FW_PORT_CAP32_SPEED_100M |
+					    FW_PORT_CAP32_SPEED_1G)));
+					lc->speed_caps = 0;
 				}
 			}
 		} else
@@ -563,13 +1071,37 @@ t4_mc_setprop(void *arg, const char *name, mac_prop_id_t id, uint_t size,
 		}
 		break;
 
+	case MAC_PROP_EN_FEC_CAP:
+		if (!fec_supported(lc->pcaps)) {
+			rc = ENOTSUP;
+			break;
+		}
+
+		fec = *(link_fec_t *)val;
+		new = link_fec_to_fec(fec);
+		if (new < 0) {
+			rc = EINVAL;
+		} else if (new != lc->requested_fec) {
+			lc->requested_fec = new;
+			relink = 1;
+			/*
+			 * For fec, do not preemptively force the link
+			 * down. If changing fec causes the link state
+			 * to transition, then appropriate asynchronous
+			 * events are generated which correctly reflect
+			 * the link state.
+			 */
+			down_link = B_FALSE;
+		}
+		break;
+
 	case MAC_PROP_EN_10GFDX_CAP:
-		if (lc->supported & FW_PORT_CAP_ANEG && is_10G_port(pi)) {
-			old = lc->advertising & FW_PORT_CAP_SPEED_10G;
-			new = v8 ? FW_PORT_CAP_SPEED_10G : 0;
+		if (lc->pcaps & FW_PORT_CAP32_ANEG && is_10G_port(pi)) {
+			old = lc->acaps & FW_PORT_CAP32_SPEED_10G;
+			new = v8 ? FW_PORT_CAP32_SPEED_10G : 0;
 			if (new != old) {
-				lc->advertising &= ~FW_PORT_CAP_SPEED_10G;
-				lc->advertising |= new;
+				lc->acaps &= ~FW_PORT_CAP32_SPEED_10G;
+				lc->acaps |= new;
 				relink = 1;
 			}
 		} else
@@ -580,12 +1112,12 @@ t4_mc_setprop(void *arg, const char *name, mac_prop_id_t id, uint_t size,
 	case MAC_PROP_EN_1000FDX_CAP:
 		/* Forced 1G */
 		if (lc->autoneg == AUTONEG_ENABLE) {
-			old = lc->advertising & FW_PORT_CAP_SPEED_1G;
-			new = v8 ? FW_PORT_CAP_SPEED_1G : 0;
+			old = lc->acaps & FW_PORT_CAP32_SPEED_1G;
+			new = v8 ? FW_PORT_CAP32_SPEED_1G : 0;
 
 			if (old != new) {
-				lc->advertising &= ~FW_PORT_CAP_SPEED_1G;
-				lc->advertising |= new;
+				lc->acaps &= ~FW_PORT_CAP32_SPEED_1G;
+				lc->acaps |= new;
 				relink = 1;
 			}
 		} else
@@ -595,11 +1127,11 @@ t4_mc_setprop(void *arg, const char *name, mac_prop_id_t id, uint_t size,
 	case MAC_PROP_EN_100FDX_CAP:
 		/* Forced 100M */
 		if (lc->autoneg == AUTONEG_ENABLE) {
-			old = lc->advertising & FW_PORT_CAP_SPEED_100M;
-			new = v8 ? FW_PORT_CAP_SPEED_100M : 0;
+			old = lc->acaps & FW_PORT_CAP32_SPEED_100M;
+			new = v8 ? FW_PORT_CAP32_SPEED_100M : 0;
 			if (old != new) {
-				lc->advertising &= ~FW_PORT_CAP_SPEED_100M;
-				lc->advertising |= new;
+				lc->acaps &= ~FW_PORT_CAP32_SPEED_100M;
+				lc->acaps |= new;
 				relink = 1;
 			}
 		} else
@@ -616,11 +1148,12 @@ t4_mc_setprop(void *arg, const char *name, mac_prop_id_t id, uint_t size,
 
 	if (isset(&sc->open_device_map, pi->port_id) != 0) {
 		if (relink != 0) {
-			t4_os_link_changed(pi->adapter, pi->port_id, 0);
+			if (down_link)
+				t4_os_link_changed(pi->adapter, pi->port_id, 0);
 			rc = begin_synchronized_op(pi, 1, 1);
 			if (rc != 0)
 				return (rc);
-			rc = -t4_link_start(sc, sc->mbox, pi->tx_chan,
+			rc = -t4_link_l1cfg(sc, sc->mbox, pi->tx_chan,
 			    &pi->link_cfg);
 			end_synchronized_op(pi, 1);
 			if (rc != 0) {
@@ -697,19 +1230,48 @@ t4_mc_getprop(void *arg, const char *name, mac_prop_id_t id, uint_t size,
 			*(link_flowctrl_t *)val = LINK_FLOWCTRL_NONE;
 		break;
 
+	case MAC_PROP_ADV_FEC_CAP:
+		if (!fec_supported(lc->pcaps))
+			return (ENOTSUP);
+
+		*(link_fec_t *)val = fec_to_link_fec(lc->fec);
+		break;
+
+	case MAC_PROP_EN_FEC_CAP:
+		if (!fec_supported(lc->pcaps))
+			return (ENOTSUP);
+
+		*(link_fec_t *)val = fec_to_link_fec(lc->requested_fec);
+		break;
+
+	case MAC_PROP_ADV_100GFDX_CAP:
+	case MAC_PROP_EN_100GFDX_CAP:
+		*u = !!(lc->acaps & FW_PORT_CAP32_SPEED_100G);
+		break;
+
+	case MAC_PROP_ADV_40GFDX_CAP:
+	case MAC_PROP_EN_40GFDX_CAP:
+		*u = !!(lc->acaps & FW_PORT_CAP32_SPEED_40G);
+		break;
+
+	case MAC_PROP_ADV_25GFDX_CAP:
+	case MAC_PROP_EN_25GFDX_CAP:
+		*u = !!(lc->acaps & FW_PORT_CAP32_SPEED_25G);
+		break;
+
 	case MAC_PROP_ADV_10GFDX_CAP:
 	case MAC_PROP_EN_10GFDX_CAP:
-		*u = !!(lc->advertising & FW_PORT_CAP_SPEED_10G);
+		*u = !!(lc->acaps & FW_PORT_CAP32_SPEED_10G);
 		break;
 
 	case MAC_PROP_ADV_1000FDX_CAP:
 	case MAC_PROP_EN_1000FDX_CAP:
-		*u = !!(lc->advertising & FW_PORT_CAP_SPEED_1G);
+		*u = !!(lc->acaps & FW_PORT_CAP32_SPEED_1G);
 		break;
 
 	case MAC_PROP_ADV_100FDX_CAP:
 	case MAC_PROP_EN_100FDX_CAP:
-		*u = !!(lc->advertising & FW_PORT_CAP_SPEED_100M);
+		*u = !!(lc->acaps & FW_PORT_CAP32_SPEED_100M);
 		break;
 
 	case MAC_PROP_PRIVATE:
@@ -737,7 +1299,7 @@ t4_mc_propinfo(void *arg, const char *name, mac_prop_id_t id,
 		break;
 
 	case MAC_PROP_AUTONEG:
-		if (lc->supported & FW_PORT_CAP_ANEG)
+		if (lc->pcaps & FW_PORT_CAP32_ANEG)
 			mac_prop_info_set_default_uint8(ph, 1);
 		else
 			mac_prop_info_set_perm(ph, MAC_PROP_PERM_READ);
@@ -751,25 +1313,34 @@ t4_mc_propinfo(void *arg, const char *name, mac_prop_id_t id,
 		mac_prop_info_set_default_link_flowctrl(ph, LINK_FLOWCTRL_BI);
 		break;
 
+	case MAC_PROP_EN_FEC_CAP:
+		mac_prop_info_set_default_fec(ph, LINK_FEC_AUTO);
+		break;
+
+	case MAC_PROP_ADV_FEC_CAP:
+		mac_prop_info_set_perm(ph, MAC_PROP_PERM_READ);
+		mac_prop_info_set_default_fec(ph, LINK_FEC_AUTO);
+		break;
+
 	case MAC_PROP_EN_10GFDX_CAP:
-		if (lc->supported & FW_PORT_CAP_ANEG &&
-		    lc->supported & FW_PORT_CAP_SPEED_10G)
+		if (lc->pcaps & FW_PORT_CAP32_ANEG &&
+		    lc->pcaps & FW_PORT_CAP32_SPEED_10G)
 			mac_prop_info_set_default_uint8(ph, 1);
 		else
 			mac_prop_info_set_perm(ph, MAC_PROP_PERM_READ);
 		break;
 
 	case MAC_PROP_EN_1000FDX_CAP:
-		if (lc->supported & FW_PORT_CAP_ANEG &&
-		    lc->supported & FW_PORT_CAP_SPEED_1G)
+		if (lc->pcaps & FW_PORT_CAP32_ANEG &&
+		    lc->pcaps & FW_PORT_CAP32_SPEED_1G)
 			mac_prop_info_set_default_uint8(ph, 1);
 		else
 			mac_prop_info_set_perm(ph, MAC_PROP_PERM_READ);
 		break;
 
 	case MAC_PROP_EN_100FDX_CAP:
-		if (lc->supported & FW_PORT_CAP_ANEG &&
-		    lc->supported & FW_PORT_CAP_SPEED_100M)
+		if (lc->pcaps & FW_PORT_CAP32_ANEG &&
+		    lc->pcaps & FW_PORT_CAP32_SPEED_100M)
 			mac_prop_info_set_default_uint8(ph, 1);
 		else
 			mac_prop_info_set_perm(ph, MAC_PROP_PERM_READ);
@@ -790,7 +1361,7 @@ t4_mc_propinfo(void *arg, const char *name, mac_prop_id_t id,
 	}
 }
 
-static int
+int
 begin_synchronized_op(struct port_info *pi, int hold, int waitok)
 {
 	struct adapter *sc = pi->adapter;
@@ -823,7 +1394,7 @@ failed:
 	return (rc);
 }
 
-static void
+void
 end_synchronized_op(struct port_info *pi, int held)
 {
 	struct adapter *sc = pi->adapter;
@@ -867,7 +1438,7 @@ t4_init_synchronized(struct port_info *pi)
 		goto done;
 	}
 	rc = t4_change_mac(sc, sc->mbox, pi->viid, pi->xact_addr_filt,
-	    pi->hw_addr, true, true);
+	    pi->hw_addr, true, &pi->smt_idx);
 	if (rc < 0) {
 		cxgb_printf(pi->dip, CE_WARN, "change_mac failed: %d", rc);
 		rc = -rc;
@@ -876,7 +1447,7 @@ t4_init_synchronized(struct port_info *pi)
 		/* LINTED: E_ASSIGN_NARROW_CONV */
 		pi->xact_addr_filt = rc;
 
-	rc = -t4_link_start(sc, sc->mbox, pi->tx_chan, &pi->link_cfg);
+	rc = -t4_link_l1cfg(sc, sc->mbox, pi->tx_chan, &pi->link_cfg);
 	if (rc != 0) {
 		cxgb_printf(pi->dip, CE_WARN, "start_link failed: %d", rc);
 		goto done;
@@ -1004,7 +1575,7 @@ setprop(struct port_info *pi, const char *name, const void *val)
 
 	/*
 	 * Save a copy of link_config. This can be used to restore link_config
-	 * if t4_link_start() fails.
+	 * if t4_link_l1cfg() fails.
 	 */
 	bcopy(lc, &lc_old, sizeof (struct link_config));
 
@@ -1098,7 +1669,7 @@ setprop(struct port_info *pi, const char *name, const void *val)
 			rc = begin_synchronized_op(pi, 1, 1);
 			if (rc != 0)
 				return (rc);
-			rc = -t4_link_start(sc, sc->mbox, pi->tx_chan, lc);
+			rc = -t4_link_l1cfg(sc, sc->mbox, pi->tx_chan, lc);
 			end_synchronized_op(pi, 1);
 			if (rc != 0) {
 				cxgb_printf(pi->dip, CE_WARN,
@@ -1127,8 +1698,16 @@ setprop(struct port_info *pi, const char *name, const void *val)
 void
 t4_mc_init(struct port_info *pi)
 {
-	pi->mc = &t4_m_callbacks;
 	pi->props = t4_priv_props;
+}
+
+void
+t4_mc_cb_init(struct port_info *pi)
+{
+	if (pi->adapter->props.multi_rings)
+		pi->mc = &t4_m_ring_callbacks;
+	else
+		pi->mc = &t4_m_callbacks;
 }
 
 void
@@ -1144,4 +1723,13 @@ void
 t4_mac_rx(struct port_info *pi, struct sge_rxq *rxq, mblk_t *m)
 {
 	mac_rx(pi->mh, NULL, m);
+}
+
+void
+t4_mac_tx_update(struct port_info *pi, struct sge_txq *txq)
+{
+	if (pi->adapter->props.multi_rings)
+		mac_tx_ring_update(pi->mh, txq->ring_handle);
+	else
+		mac_tx_update(pi->mh);
 }

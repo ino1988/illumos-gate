@@ -22,6 +22,7 @@
 /*
  * Copyright (c) 2003, 2010, Oracle and/or its affiliates. All rights reserved.
  * Copyright 2014 Nexenta Systems, Inc. All rights reserved.
+ * Copyright (c) 2015 by Delphix. All rights reserved.
  */
 
 /*
@@ -133,7 +134,7 @@ struct cmd {
 #define	SHELP_READY	"ready"
 #define	SHELP_SHUTDOWN	"shutdown [-r [-- boot_arguments]]"
 #define	SHELP_REBOOT	"reboot [-- boot_arguments]"
-#define	SHELP_LIST	"list [-cipv]"
+#define	SHELP_LIST	"list [-cinpv]"
 #define	SHELP_VERIFY	"verify"
 #define	SHELP_INSTALL	"install [brand-specific args]"
 #define	SHELP_UNINSTALL	"uninstall [-F] [brand-specific args]"
@@ -253,7 +254,7 @@ long_help(int cmd_num)
 		    "option.  When used with the general -z <zone> and/or -u "
 		    "<uuid-match>\n\toptions, lists only the specified "
 		    "matching zone, but lists it\n\tregardless of its state, "
-		    "and the -i and -c options are disallowed.  The\n\t-v "
+		    "and the -i, -c, and -n options are disallowed.  The\n\t-v "
 		    "option can be used to display verbose information: zone "
 		    "name, id,\n\tcurrent state, root directory and options.  "
 		    "The -p option can be used\n\tto request machine-parsable "
@@ -713,7 +714,8 @@ again:
 }
 
 static int
-zone_print_list(zone_state_t min_state, boolean_t verbose, boolean_t parsable)
+zone_print_list(zone_state_t min_state, boolean_t verbose, boolean_t parsable,
+    boolean_t exclude_global)
 {
 	int i;
 	zone_entry_t zent;
@@ -731,8 +733,11 @@ zone_print_list(zone_state_t min_state, boolean_t verbose, boolean_t parsable)
 		 */
 		return (i);
 	}
-	for (i = 0; i < nzents; i++)
+	for (i = 0; i < nzents; i++) {
+		if (exclude_global && zents[i].zid == GLOBAL_ZONEID)
+			continue;
 		zone_print(&zents[i], verbose, parsable);
+	}
 	if (min_state >= ZONE_STATE_RUNNING)
 		return (Z_OK);
 	/*
@@ -1023,6 +1028,18 @@ validate_zonepath(char *path, int cmd_num)
 		(void) fprintf(stderr, gettext("%s is not owned by root.\n"),
 		    rpath);
 		err = B_TRUE;
+
+		/* Try to change owner */
+		if (cmd_num != CMD_VERIFY) {
+			(void) fprintf(stderr, gettext("%s: changing owner "
+			    "to root.\n"), rpath);
+			if (chown(rpath, 0, -1) != 0) {
+				zperror(rpath, B_FALSE);
+				return (Z_ERR);
+			} else {
+				err = B_FALSE;
+			}
+		}
 	}
 	err |= bad_mode_bit(stbuf.st_mode, S_IRUSR, B_TRUE, rpath);
 	err |= bad_mode_bit(stbuf.st_mode, S_IWUSR, B_TRUE, rpath);
@@ -1033,6 +1050,17 @@ validate_zonepath(char *path, int cmd_num)
 	err |= bad_mode_bit(stbuf.st_mode, S_IROTH, B_FALSE, rpath);
 	err |= bad_mode_bit(stbuf.st_mode, S_IWOTH, B_FALSE, rpath);
 	err |= bad_mode_bit(stbuf.st_mode, S_IXOTH, B_FALSE, rpath);
+
+	/* If the group perms are wrong, fix them */
+	if (err && (cmd_num != CMD_VERIFY)) {
+		(void) fprintf(stderr, gettext("%s: changing permissions "
+		    "to 0700.\n"), rpath);
+		if (chmod(rpath, S_IRWXU) != 0) {
+			zperror(path, B_FALSE);
+		} else {
+			err = B_FALSE;
+		}
+	}
 
 	(void) snprintf(ppath, sizeof (ppath), "%s/..", path);
 	if ((res = resolvepath(ppath, rppath, sizeof (rppath))) == -1) {
@@ -1345,14 +1373,15 @@ list_func(int argc, char *argv[])
 {
 	zone_entry_t *zentp, zent;
 	int arg, retv;
-	boolean_t output = B_FALSE, verbose = B_FALSE, parsable = B_FALSE;
+	boolean_t output = B_FALSE, verbose = B_FALSE, parsable = B_FALSE,
+	    exclude_global = B_FALSE;
 	zone_state_t min_state = ZONE_STATE_RUNNING;
 	zoneid_t zone_id = getzoneid();
 
 	if (target_zone == NULL) {
 		/* all zones: default view to running but allow override */
 		optind = 0;
-		while ((arg = getopt(argc, argv, "?cipv")) != EOF) {
+		while ((arg = getopt(argc, argv, "?cinpv")) != EOF) {
 			switch (arg) {
 			case '?':
 				sub_usage(SHELP_LIST, CMD_LIST);
@@ -1373,6 +1402,9 @@ list_func(int argc, char *argv[])
 				    min_state);
 
 				break;
+			case 'n':
+				exclude_global = B_TRUE;
+				break;
 			case 'p':
 				parsable = B_TRUE;
 				break;
@@ -1390,7 +1422,8 @@ list_func(int argc, char *argv[])
 			return (Z_ERR);
 		}
 		if (zone_id == GLOBAL_ZONEID || is_system_labeled()) {
-			retv = zone_print_list(min_state, verbose, parsable);
+			retv = zone_print_list(min_state, verbose, parsable,
+			    exclude_global);
 		} else {
 			fake_up_local_zone(zone_id, &zent);
 			retv = Z_OK;
@@ -1400,7 +1433,7 @@ list_func(int argc, char *argv[])
 	}
 
 	/*
-	 * Specific target zone: disallow -i/-c suboptions.
+	 * Specific target zone: disallow -i/-c/-n suboptions.
 	 */
 	optind = 0;
 	while ((arg = getopt(argc, argv, "?pv")) != EOF) {
@@ -3097,7 +3130,7 @@ done:
 
 static void
 warn_dev_match(zone_dochandle_t s_handle, char *source_zone,
-	zone_dochandle_t t_handle, char *target_zone)
+    zone_dochandle_t t_handle, char *target_zone)
 {
 	int err;
 	struct zone_devtab s_devtab;
@@ -3219,7 +3252,7 @@ print_fs_warnings(struct zone_fstab *s_fstab, struct zone_fstab *t_fstab)
 
 static void
 warn_fs_match(zone_dochandle_t s_handle, char *source_zone,
-	zone_dochandle_t t_handle, char *target_zone)
+    zone_dochandle_t t_handle, char *target_zone)
 {
 	int err;
 	struct zone_fstab s_fstab;
@@ -3263,7 +3296,7 @@ warn_fs_match(zone_dochandle_t s_handle, char *source_zone,
  */
 static void
 warn_ip_match(zone_dochandle_t s_handle, char *source_zone,
-	zone_dochandle_t t_handle, char *target_zone)
+    zone_dochandle_t t_handle, char *target_zone)
 {
 	int err;
 	struct zone_nwiftab s_nwiftab;
@@ -3318,7 +3351,7 @@ warn_ip_match(zone_dochandle_t s_handle, char *source_zone,
 
 static void
 warn_dataset_match(zone_dochandle_t s_handle, char *source,
-	zone_dochandle_t t_handle, char *target)
+    zone_dochandle_t t_handle, char *target)
 {
 	int err;
 	struct zone_dstab s_dstab;
@@ -3482,7 +3515,8 @@ copy_zone(char *src, char *dst)
 
 /* ARGSUSED */
 int
-zfm_print(const struct mnttab *p, void *r) {
+zfm_print(const struct mnttab *p, void *r)
+{
 	zerror("  %s\n", p->mnt_mountp);
 	return (0);
 }
@@ -3849,7 +3883,7 @@ cleanup_zonepath(char *zonepath, boolean_t all)
 	 * We shouldn't need these checks but lets be paranoid since we
 	 * could blow away the whole system here if we got the wrong zonepath.
 	 */
-	if (*zonepath == NULL || strcmp(zonepath, "/") == 0) {
+	if (*zonepath == '\0' || strcmp(zonepath, "/") == 0) {
 		(void) fprintf(stderr, "invalid zonepath '%s'\n", zonepath);
 		return (Z_INVAL);
 	}

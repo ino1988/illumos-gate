@@ -22,13 +22,14 @@
 # Copyright 2010 Sun Microsystems, Inc.  All rights reserved.
 # Use is subject to license terms.
 #
-# cmd/sgs/gprof/Makefile.com
+# Copyright (c) 2018, Joyent, Inc.
+# Copyright 2019 OmniOS Community Edition (OmniOSce) Association.
 #
 
 PROG=		gprof
 
-include 	$(SRC)/cmd/Makefile.cmd
-include 	$(SRC)/cmd/sgs/Makefile.com
+include		$(SRC)/cmd/Makefile.cmd
+include		$(SRC)/cmd/sgs/Makefile.com
 
 COMOBJS=	gprof.o arcs.o dfn.o lookup.o calls.o \
 		printgprof.o printlist.o readelf.o
@@ -41,12 +42,12 @@ INCLIST=	-I../common -I../../include -I../../include/$(MACH)
 DEFLIST=	-DELF_OBJ -DELF
 CPPFLAGS=	$(INCLIST) $(DEFLIST) $(CPPFLAGS.master) -I$(ELFCAP)
 CFLAGS +=	$(CCVERBOSE)
-C99MODE=	$(C99_ENABLE)
-LDLIBS +=	$(CONVLIBDIR) $(CONV_LIB) $(ELFLIBDIR) -lelf
-LINTSRCS =	$(SRCS)
-LINTFLAGS +=	-x
-CERRWARN +=	-_gcc=-Wno-uninitialized
-CLEANFILES +=	$(LINTOUTS)
+CSTD=	$(CSTD_GNU99)
+LDLIBS +=	$(CONVLIBDIR) -lconv $(ELFLIBDIR) -lelf
+CERRWARN +=	$(CNOWARN_UNINIT)
+
+# not linted
+SMATCH=off
 
 ROOTLIBBLURB=	$(BLURBS:%=$(ROOTSHLIBCCS)/%)
 

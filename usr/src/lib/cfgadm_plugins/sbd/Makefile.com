@@ -22,6 +22,7 @@
 # Copyright 2009 Sun Microsystems, Inc.  All rights reserved.
 # Use is subject to license terms.
 #
+# Copyright (c) 2018, Joyent, Inc.
 
 LIBRARY= sbd.a
 VERS= .1
@@ -49,7 +50,10 @@ LDLIBS +=	-lc -lkstat -lnvpair
 
 CERRWARN +=	-_gcc=-Wno-parentheses
 CERRWARN +=	-_gcc=-Wno-char-subscripts
-CERRWARN +=	-_gcc=-Wno-uninitialized
+CERRWARN +=	$(CNOWARN_UNINIT)
+
+# not linted
+SMATCH=off
 
 CPPFLAGS +=	-I$(ROOT)/usr/platform/$(PLATFORM)/include -DSBD_DEBUG
 #
@@ -63,7 +67,6 @@ ERRSRC=		$(ROOT)/usr/platform/$(PLATFORM)/include/sys/sbd_ioctl.h
 
 all: $(LIBS)
 
-lint:   lintcheck
 
 # Create target directories
 $(USR_PSM_DIR):
@@ -97,6 +100,6 @@ pics/%.o: ../common/%.c
 	$(GENERRDIR)/sbdgenerr < $(ERRSRC) > ../common/ap_err.c
 
 sbdgenerr: $(GENERRDIR)/sbdgenerr.pl
-	$(RM) $(GENERRDIR)/sbdgenerr 
+	$(RM) $(GENERRDIR)/sbdgenerr
 	cat $(GENERRDIR)/sbdgenerr.pl > $(GENERRDIR)/sbdgenerr
 	$(CHMOD) +x $(GENERRDIR)/sbdgenerr

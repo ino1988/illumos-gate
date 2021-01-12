@@ -22,21 +22,18 @@
 # Copyright 2008 Sun Microsystems, Inc.  All rights reserved.
 # Use is subject to license terms.
 #
+# Copyright (c) 2018, Joyent, Inc.
 
 LIBRARY =		libpapi.a
 VERS =			.0
 OBJECTS = job.o nss.o printer.o psm.o service.o
 
 include ../../../Makefile.lib
-include ../../../Makefile.rootfs
 
 SRCDIR =	../common
 
-ROOTLIBDIR=	$(ROOT)/usr/lib
-
 LIBS =			$(DYNLIB)
 
-$(LINTLIB):=	SRCS = $(SRCDIR)/$(LINTSRC)
 
 MAPFILES =	$(SRCDIR)/mapfile
 
@@ -48,10 +45,11 @@ LDLIBS +=	-lc
 
 CERRWARN +=	-_gcc=-Wno-unused-variable
 
+SMOFF += all_func_returns
+
 .KEEP_STATE:
 
 all:	$(LIBS)
 
-lint:	lintcheck
 
 include ../../../Makefile.targ

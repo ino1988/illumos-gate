@@ -22,6 +22,7 @@
 # Copyright 2007 Sun Microsystems, Inc.  All rights reserved.
 # Use is subject to license terms.
 #
+# Copyright (c) 2018, Joyent, Inc.
 
 PROG = vscand
 SRCS =	vs_main.c	\
@@ -46,8 +47,11 @@ $(NOT_RELEASE_BUILD)CPPFLAGS += -DDEBUG
 
 CERRWARN += -_gcc=-Wno-switch
 
+# not linted
+SMATCH=off
+
 LINTFLAGS += -mu
-C99MODE =       -xc99=%all
+CSTD =       $(CSTD_GNU99)
 C99LMODE =      -Xc99=%all
 
 MANIFEST = vscan.xml

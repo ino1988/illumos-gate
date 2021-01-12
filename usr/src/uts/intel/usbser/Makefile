@@ -22,7 +22,7 @@
 # Copyright 2008 Sun Microsystems, Inc.  All rights reserved.
 # Use is subject to license terms.
 #
-# uts/intel/usbser/Makefile
+# Copyright (c) 2018, Joyent, Inc.
 
 
 #
@@ -38,11 +38,7 @@ UTSBASE	= ../..
 #
 MODULE		= usbser
 OBJECTS		= $(USBSER_OBJS:%=$(OBJS_DIR)/%)
-LINTS		= $(USBSER_OBJS:%.o=$(LINTS_DIR)/%.ln)
 ROOTMODULE	= $(ROOT_MISC_DIR)/$(MODULE)
-WARLOCK_OUT	= $(USBSER_OBJS:%.o=%.ll)
-WARLOCK_OK	= $(MODULE).ok
-WLCMD_DIR	= $(UTSBASE)/common/io/warlock
 
 #
 #	Include common rules.
@@ -58,19 +54,10 @@ LDFLAGS         += -dy -Nmisc/usba
 #	Define targets
 #
 ALL_TARGET	= $(BINARY)
-LINT_TARGET	= $(MODULE).lint
 INSTALL_TARGET	= $(BINARY) $(ROOTMODULE)
 
-#
-# For now, disable these lint checks; maintainers should endeavor
-# to investigate and remove these for maximum lint coverage.
-# Please do not carry these forward to new Makefiles.
-#
-LINTTAGS	+= -erroff=E_BAD_PTR_CAST_ALIGN
-
-CERRWARN	+= -_gcc=-Wno-uninitialized
-CERRWARN	+= -_gcc=-Wno-parentheses
-CERRWARN	+= -_gcc=-Wno-unused-label
+# needs work
+SMOFF += all_func_returns
 
 .KEEP_STATE:
 
@@ -79,16 +66,8 @@ all:		$(ALL_DEPS)
 def:		$(DEF_DEPS)
 
 clean:		$(CLEAN_DEPS)
-		$(RM) $(WARLOCK_OUT) $(WARLOCK_OK)
 
 clobber:	$(CLOBBER_DEPS)
-		$(RM) $(WARLOCK_OUT) $(WARLOCK_OK)
-
-lint:		$(LINT_DEPS)
-
-modlintlib:	$(MODLINTLIB_DEPS)
-
-clean.lint:	$(CLEAN_LINT_DEPS)
 
 install:	$(INSTALL_DEPS)
 
@@ -96,29 +75,3 @@ install:	$(INSTALL_DEPS)
 #	Include common targets.
 #
 include $(UTSBASE)/intel/Makefile.targ
-
-#
-#	Defines for local commands.
-#
-WLCC		= wlcc
-TOUCH		= touch
-WARLOCK		= warlock
-TEST		= test
-
-#
-#	Warlock
-#
-WARLOCK_CMD	= $(WLCMD_DIR)/$(MODULE).wlcmd
-
-warlock: $(WARLOCK_OK)
-
-$(WARLOCK_OK):	$(WARLOCK_OUT) $(WARLOCK_CMD) warlock_ddi.files
-	$(WARLOCK) -c $(WARLOCK_CMD) $(WARLOCK_OUT) \
-		-l ../warlock/ddi_dki_impl.ll
-	$(TOUCH) $@
-
-%.ll: $(UTSBASE)/common/io/usb/clients/usbser/%.c
-	$(WLCC) $(CPPFLAGS) -DDEBUG -o $@ $<
-
-warlock_ddi.files:
-	cd ../warlock; pwd; $(MAKE) warlock

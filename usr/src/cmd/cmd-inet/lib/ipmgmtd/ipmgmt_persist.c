@@ -21,6 +21,9 @@
 
 /*
  * Copyright (c) 2010, Oracle and/or its affiliates. All rights reserved.
+ * Copyright 2018 Joyent, Inc.
+ * Copyright 2016 Argo Technologie SA.
+ * Copyright (c) 2016-2017, Chris Fraire <cfraire@me.com>.
  */
 
 /*
@@ -111,19 +114,22 @@ ipmgmt_nvlist_match(nvlist_t *db_nvl, const char *proto, const char *ifname,
 
 	if ((proto == NULL && db_proto != NULL) ||
 	    (proto != NULL && db_proto == NULL) ||
-	    strcmp(proto, db_proto) != 0) {
+	    (proto != NULL && db_proto != NULL &&
+	    strcmp(proto, db_proto) != 0)) {
 		/* no intersection - different protocols. */
 		return (B_FALSE);
 	}
 	if ((ifname == NULL && db_ifname != NULL) ||
 	    (ifname != NULL && db_ifname == NULL) ||
-	    strcmp(ifname, db_ifname) != 0) {
+	    (ifname != NULL && db_ifname != NULL &&
+	    strcmp(ifname, db_ifname) != 0)) {
 		/* no intersection - different interfaces. */
 		return (B_FALSE);
 	}
 	if ((aobjname == NULL && db_aobjname != NULL) ||
 	    (aobjname != NULL && db_aobjname == NULL) ||
-	    strcmp(aobjname, db_aobjname) != 0) {
+	    (aobjname != NULL && db_aobjname != NULL &&
+	    strcmp(aobjname, db_aobjname) != 0)) {
 		/* no intersection - different address objects */
 		return (B_FALSE);
 	}
@@ -452,6 +458,7 @@ ipmgmt_db_walk(db_wfunc_t *db_walk_func, void *db_warg, ipadm_db_op_t db_op)
 		(void) pthread_attr_init(&attr);
 		(void) pthread_attr_setdetachstate(&attr,
 		    PTHREAD_CREATE_DETACHED);
+		(void) pthread_attr_setname_np(&attr, "db_restore");
 		err = pthread_create(&tid, &attr, ipmgmt_db_restore_thread,
 		    NULL);
 		(void) pthread_attr_destroy(&attr);
@@ -904,7 +911,8 @@ ipmgmt_aobjmap_op(ipmgmt_aobjmap_t *nodep, uint32_t op)
 			if (strcmp(head->am_aobjname,
 			    nodep->am_aobjname) == 0 &&
 			    (head->am_atype != IPADM_ADDR_IPV6_ADDRCONF ||
-			    head->am_linklocal == nodep->am_linklocal))
+			    head->ipmgmt_am_linklocal ==
+			    nodep->ipmgmt_am_linklocal))
 				break;
 		}
 
@@ -916,10 +924,7 @@ ipmgmt_aobjmap_op(ipmgmt_aobjmap_t *nodep, uint32_t op)
 			head->am_family = nodep->am_family;
 			head->am_flags = nodep->am_flags;
 			head->am_atype = nodep->am_atype;
-			if (head->am_atype == IPADM_ADDR_IPV6_ADDRCONF) {
-				head->am_ifid = nodep->am_ifid;
-				head->am_linklocal = nodep->am_linklocal;
-			}
+			head->am_atype_cache = nodep->am_atype_cache;
 		} else {
 			for (head = aobjmap.aobjmap_head; head != NULL;
 			    head = head->am_next) {
@@ -1064,29 +1069,43 @@ i_ipmgmt_node2nvl(nvlist_t **nvl, ipmgmt_aobjmap_t *np)
 	if ((err = nvlist_add_string(*nvl, ATYPE, strval)) != 0)
 		goto fail;
 
-	if (np->am_atype == IPADM_ADDR_IPV6_ADDRCONF) {
-		struct sockaddr_in6	*in6;
+	switch (np->am_atype) {
+		case IPADM_ADDR_IPV6_ADDRCONF: {
+			struct sockaddr_in6	*in6;
 
-		in6 = (struct sockaddr_in6 *)&np->am_ifid;
-		if (np->am_linklocal &&
-		    IN6_IS_ADDR_UNSPECIFIED(&in6->sin6_addr)) {
-			if ((err = nvlist_add_string(*nvl, IPADM_NVP_IPNUMADDR,
-			    "default")) != 0)
-				goto fail;
-		} else {
-			if (inet_ntop(AF_INET6, &in6->sin6_addr, strval,
-			    IPMGMT_STRSIZE) == NULL) {
-				err = errno;
-				goto fail;
+			in6 = &np->ipmgmt_am_ifid;
+			if (np->ipmgmt_am_linklocal &&
+			    IN6_IS_ADDR_UNSPECIFIED(&in6->sin6_addr)) {
+				if ((err = nvlist_add_string(*nvl,
+				    IPADM_NVP_IPNUMADDR, "default")) != 0) {
+					goto fail;
+				}
+			} else {
+				if (inet_ntop(AF_INET6, &in6->sin6_addr, strval,
+				    IPMGMT_STRSIZE) == NULL) {
+					err = errno;
+					goto fail;
+				}
+				if ((err = nvlist_add_string(*nvl,
+				    IPADM_NVP_IPNUMADDR, strval)) != 0) {
+					goto fail;
+				}
 			}
-			if ((err = nvlist_add_string(*nvl, IPADM_NVP_IPNUMADDR,
-			    strval)) != 0)
+		}
+			break;
+		case IPADM_ADDR_DHCP: {
+			if (np->ipmgmt_am_reqhost &&
+			    *np->ipmgmt_am_reqhost != '\0' &&
+			    (err = nvlist_add_string(*nvl, IPADM_NVP_REQHOST,
+			    np->ipmgmt_am_reqhost)) != 0)
 				goto fail;
 		}
-	} else {
-		if ((err = nvlist_add_string(*nvl, IPADM_NVP_IPNUMADDR,
-		    "")) != 0)
-			goto fail;
+			/* FALLTHRU */
+		default:
+			if ((err = nvlist_add_string(*nvl, IPADM_NVP_IPNUMADDR,
+			    "")) != 0)
+				goto fail;
+			break;
 	}
 	return (err);
 fail:
@@ -1107,7 +1126,7 @@ ipmgmt_aobjmap_init(void *arg, nvlist_t *db_nvl, char *buf, size_t buflen,
 {
 	nvpair_t		*nvp = NULL;
 	char			*name, *strval = NULL;
-	ipmgmt_aobjmap_t 	node;
+	ipmgmt_aobjmap_t	node;
 	struct sockaddr_in6	*in6;
 
 	*errp = 0;
@@ -1134,16 +1153,18 @@ ipmgmt_aobjmap_init(void *arg, nvlist_t *db_nvl, char *buf, size_t buflen,
 			node.am_atype = (ipadm_addr_type_t)atoi(strval);
 		} else if (strcmp(IPADM_NVP_IPNUMADDR, name) == 0) {
 			if (node.am_atype == IPADM_ADDR_IPV6_ADDRCONF) {
-				in6 = (struct sockaddr_in6 *)&node.am_ifid;
+				in6 = &node.ipmgmt_am_ifid;
 				if (strcmp(strval, "default") == 0) {
-					bzero(in6, sizeof (node.am_ifid));
-					node.am_linklocal = B_TRUE;
+					bzero(in6,
+					    sizeof (node.ipmgmt_am_ifid));
+					node.ipmgmt_am_linklocal = B_TRUE;
 				} else {
 					(void) inet_pton(AF_INET6, strval,
 					    &in6->sin6_addr);
 					if (IN6_IS_ADDR_UNSPECIFIED(
 					    &in6->sin6_addr))
-						node.am_linklocal = B_TRUE;
+						node.ipmgmt_am_linklocal =
+						    B_TRUE;
 				}
 			}
 		}

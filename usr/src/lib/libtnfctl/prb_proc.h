@@ -26,8 +26,6 @@
 #ifndef _PRB_PROC_H
 #define	_PRB_PROC_H
 
-#pragma ident	"%Z%%M%	%I%	%E% SMI"
-
 #ifdef __cplusplus
 extern "C" {
 #endif
@@ -45,8 +43,8 @@ extern "C" {
 #include <sys/types.h>
 #include <sys/syscall.h>
 #include <sys/procfs.h>
+#include <sys/errno.h>
 #include <signal.h>
-#include <note.h>
 
 #include <tnf/probe.h>
 
@@ -64,6 +62,7 @@ typedef enum prb_status {
 	 * standard errno values.
 	 */
 	PRB_STATUS_MINERRNO = 1,	/* minimum errno value */
+	PRB_STATUS_EAGAIN = EAGAIN,
 	PRB_STATUS_MAXERRNO = 1023,	/* maximum errno value */
 
 	PRB_STATUS_ALLOCFAIL,		/* memory allocation failed */
@@ -91,8 +90,6 @@ typedef struct prb_proc_state {
 	boolean_t	ps_isbptfault;
 	long		ps_syscallnum;
 } prb_proc_state_t;
-
-NOTE(SCHEME_PROTECTS_DATA("one thread per handle", prb_proc_state))
 
 /*
  * Opaque /proc handle
@@ -141,7 +138,7 @@ prb_status_t	prb_proc_wait(prb_proc_ctl_t *proc_p, boolean_t use_sigmask,
 					sigset_t *oldmask);
 prb_status_t	prb_proc_cont(prb_proc_ctl_t *proc_p);
 prb_status_t	prb_proc_state(prb_proc_ctl_t *proc_p,
-					prb_proc_state_t * state_p);
+					prb_proc_state_t *state_p);
 prb_status_t	prb_proc_setrlc(prb_proc_ctl_t *proc_p, boolean_t rlc);
 prb_status_t	prb_proc_setklc(prb_proc_ctl_t *proc_p, boolean_t klc);
 prb_status_t	prb_proc_exit(prb_proc_ctl_t *proc_p, uint_t syscall,

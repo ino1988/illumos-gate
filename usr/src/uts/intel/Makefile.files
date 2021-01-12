@@ -21,7 +21,9 @@
 
 #
 # Copyright (c) 1999, 2010, Oracle and/or its affiliates. All rights reserved.
-# Copyright (c) 2012, Joyent, Inc. All rights reserved.
+# Copyright 2019 Joyent, Inc.
+# Copyright 2018 Nexenta Systems, Inc.
+# Copyright 2019 Peter Tribble.
 #
 
 #
@@ -35,6 +37,7 @@
 #
 CORE_OBJS +=		\
 	arch_kdi.o	\
+	comm_page_util.o \
 	copy.o		\
 	copy_subr.o	\
 	cpc_subr.o	\
@@ -51,18 +54,14 @@ CORE_OBJS +=		\
 	lock_prim.o	\
 	ovbcopy.o	\
 	polled_io.o	\
+	retpoline.o	\
 	sseblk.o	\
 	sundep.o	\
 	swtch.o		\
 	sysi86.o
 
-#
-# 64-bit multiply/divide compiler helper routines
-# used only for ia32
-#
-
-SPECIAL_OBJS_32 +=	\
-	muldiv.o
+DBOOT_OBJS +=		\
+	retpoline.o
 
 #
 #	Generic-unix Module
@@ -119,15 +118,10 @@ CORE_OBJS += ucode_utils.o
 #
 #	Driver modules
 #
-AGPGART_OBJS +=	agpgart.o agp_kstat.o
-AGPTARGET_OBJS += agptarget.o
-AMD64GART_OBJS += amd64_gart.o
 ARCMSR_OBJS += arcmsr.o
 ATA_OBJS += $(GHD_OBJS) ata_blacklist.o ata_common.o ata_disk.o \
 	ata_dma.o atapi.o atapi_fsm.o ata_debug.o \
 	sil3xxx.o
-BSCBUS_OBJS += bscbus.o
-BSCV_OBJS += bscv.o
 CMDK_OBJS += cmdk.o
 CMLB_OBJS += cmlb.o
 CPUNEX_OBJS += cpunex.o
@@ -152,22 +146,17 @@ RADEON_OBJS += r300_cmdbuf.o radeon_cp.o radeon_drv.o \
 			radeon_state.o radeon_irq.o radeon_mem.o
 SD_OBJS += sd.o sd_xbuf.o
 
-HECI_OBJS += 		\
-	heci_init.o	\
-	heci_intr.o	\
-	heci_interface.o \
-	io_heci.o	\
-	heci_main.o
-
 STRATEGY_OBJS += strategy.o
 UCODE_OBJS += ucode_drv.o
-VGATEXT_OBJS += vgatext.o vgasubr.o
+VGATEXT_OBJS += vgatext.o
 
 #
 #	Kernel linker
 #
 KRTLD_OBJS +=		\
+	bootfsops.o	\
 	bootrd.o	\
+	bootrd_cpio.o	\
 	ufsops.o	\
 	hsfs.o		\
 	doreloc.o	\
@@ -180,41 +169,58 @@ KRTLD_OBJS +=		\
 #
 #	misc. modules
 #
-ACPICA_OBJS	+= dbcmds.o dbdisply.o \
-		   dbexec.o dbfileio.o dbhistry.o dbinput.o dbstats.o \
-		   dbutils.o dbxface.o evevent.o evgpe.o evgpeblk.o \
-		   evmisc.o evregion.o evrgnini.o evsci.o evxface.o \
-		   evxfevnt.o evxfregn.o hwacpi.o hwgpe.o hwregs.o \
-		   hwsleep.o hwtimer.o dsfield.o dsinit.o dsmethod.o \
-		   dsmthdat.o dsobject.o dsopcode.o dsutils.o dswexec.o \
-		   dswload.o dswscope.o dswstate.o exconfig.o exconvrt.o \
-		   excreate.o exdump.o exfield.o exfldio.o exmisc.o \
-		   exmutex.o exnames.o exoparg1.o exoparg2.o exoparg3.o \
-		   exoparg6.o exprep.o exregion.o exresnte.o exresolv.o \
-		   exresop.o exstore.o exstoren.o exstorob.o exsystem.o \
-		   exutils.o psargs.o psopcode.o psparse.o psscope.o \
-		   pstree.o psutils.o pswalk.o psxface.o nsaccess.o \
-		   nsalloc.o nsdump.o nsdumpdv.o nseval.o nsinit.o \
-		   nsload.o nsnames.o nsobject.o nsparse.o nssearch.o \
-		   nsutils.o nswalk.o nsxfeval.o nsxfname.o nsxfobj.o \
-		   rsaddr.o rscalc.o rscreate.o rsdump.o \
+ACPICA_OBJS	+= \
+		   dmbuffer.o dmcstyle.o dmdeferred.o dmnames.o dmopcode.o \
+		   dmresrc.o dmresrcl.o dmresrcl2.o dmresrcs.o dmutils.o \
+		   dmwalk.o \
+		   \
+		   dsargs.o dscontrol.o dsdebug.o dsfield.o dsinit.o \
+		   dsmethod.o dsmthdat.o dsobject.o dsopcode.o dsutils.o \
+		   dswexec.o dswload.o dswload2.o dswscope.o dswstate.o \
+		   dspkginit.o \
+		   \
+		   evevent.o evglock.o evgpe.o evgpeblk.o evgpeinit.o \
+		   evgpeutil.o evhandler.o evmisc.o evregion.o evrgnini.o \
+		   evsci.o evxface.o evxfevnt.o evxfgpe.o evxfregn.o \
+		   \
+		   exconcat.o exconfig.o exconvrt.o excreate.o exdebug.o \
+		   exdump.o exfield.o exfldio.o exmisc.o exmutex.o exnames.o \
+		   exoparg1.o exoparg2.o exoparg3.o exoparg6.o exprep.o \
+		   exregion.o exresnte.o exresolv.o exresop.o exstore.o \
+		   exstoren.o exstorob.o exsystem.o extrace.o exutils.o \
+		   \
+		   hwacpi.o hwesleep.o hwgpe.o hwpci.o hwregs.o hwsleep.o \
+		   hwtimer.o hwvalid.o hwxface.o hwxfsleep.o \
+		   \
+		   psargs.o psloop.o psobject.o psopcode.o psopinfo.o \
+		   psparse.o psscope.o pstree.o psutils.o pswalk.o psxface.o \
+		   \
+		   nsaccess.o nsalloc.o nsarguments.o nsconvert.o nsdump.o \
+		   nsdumpdv.o nseval.o nsinit.o nsload.o nsnames.o nsobject.o \
+		   nsparse.o nspredef.o nsprepkg.o nsrepair.o nsrepair2.o \
+		   nssearch.o nsutils.o nswalk.o nsxfeval.o nsxfname.o \
+		   nsxfobj.o \
+		   \
+		   rsaddr.o rscalc.o rscreate.o rsdump.o rsdumpinfo.o \
 		   rsinfo.o rsio.o rsirq.o rslist.o rsmemory.o rsmisc.o \
-		   rsutils.o rsxface.o tbfadt.o tbfind.o tbinstal.o  \
-		   tbutils.o tbxface.o tbxfroot.o \
-		   utalloc.o utclib.o utcopy.o utdebug.o utdelete.o \
-		   uteval.o utglobal.o utinit.o utmath.o utmisc.o \
-		   utobject.o utresrc.o utxface.o acpica.o acpi_enum.o \
-		   master_ops.o osl.o osl_ml.o acpica_ec.o utcache.o \
-		   utmutex.o utstate.o dmbuffer.o dmnames.o dmobject.o \
-		   dmopcode.o dmresrc.o dmresrcl.o dmresrcs.o dmutils.o \
-		   dmwalk.o psloop.o nspredef.o hwxface.o hwvalid.o \
-		   utlock.o utids.o nsrepair.o nsrepair2.o \
-		   dbmethod.o dbnames.o dsargs.o dscontrol.o dswload2.o \
-		   evglock.o evgpeinit.o evgpeutil.o evxfgpe.o exdebug.o \
-		   hwpci.o utdecode.o utosi.o utxferror.o
+		   rsserial.o rsutils.o rsxface.o \
+		   \
+		   tbdata.o tbfadt.o tbfind.o tbinstal.o tbprint.o tbutils.o \
+		   tbxface.o tbxfload.o tbxfroot.o \
+		   \
+		   utaddress.o utalloc.o utascii.o utbuffer.o utcache.o \
+		   utclib.o utcopy.o utdebug.o utdecode.o utdelete.o \
+		   uterror.o uteval.o utexcep.o utglobal.o uthex.o utids.o \
+		   utinit.o utlock.o utmath.o utmisc.o utmutex.o utnonansi.o \
+		   utobject.o utosi.o utownerid.o utpredef.o utresrc.o \
+		   utstate.o utstring.o uttrack.o utuuid.o utxface.o \
+		   utxferror.o utxfinit.o utxfmutex.o utresdecode.o \
+		   utstrsuppt.o utstrtoul64.o \
+		   \
+		   acpi_enum.o acpica_ec.o acpica.o ahids.o master_ops.o \
+		   osl_ml.o osl.o
 
 
-AGP_OBJS += agpmaster.o
 FBT_OBJS += fbt.o
 SDT_OBJS += sdt.o
 
@@ -222,11 +228,6 @@ SDT_OBJS += sdt.o
 #	AMD8111 NIC driver module
 #
 AMD8111S_OBJS += amd8111s_main.o amd8111s_hw.o
-
-#
-#	Pentium Performance Counter BackEnd module
-#
-P123_PCBE_OBJS = p123_pcbe.o
 
 #
 #	Pentium 4 Performance Counter BackEnd module
@@ -266,7 +267,7 @@ S10_BRAND_OBJS	=	s10_brand.o s10_brand_asm.o
 #
 #	special files
 #
-MODSTUB_OBJ +=	 	\
+MODSTUB_OBJ +=		\
 	modstubs.o
 
 BOOTDEV_OBJS +=		\
@@ -308,3 +309,45 @@ INTEL_NB5000_OBJS += \
 	dimm_addr.o \
 	nb_pci_cfg.o \
 	nb5000_init.o
+
+#
+# VMware VMXNET3 virtual network device
+#
+VMXNET3S_OBJS =	vmxnet3_main.o \
+		vmxnet3_rx.o \
+		vmxnet3_tx.o \
+		vmxnet3_utils.o
+
+#
+# VMware PVSCSI SCSI Controller
+#
+PVSCSI_OBJS =	pvscsi.o
+
+#
+# Intel Temperature Module
+#
+CORETEMP_OBJS =	coretemp.o
+
+#
+# AMD Family 17 northbridge driver
+#
+AMDF17NBDF_OBJS = amdf17nbdf.o
+
+#
+# Intel Platform Controller Hub Temperature Module
+#
+PCHTEMP_OBJS = pchtemp.o
+
+#
+# AMD Family 10h-16h temperature driver
+#
+AMDNBTEMP_OBJS = amdnbtemp.o
+
+#
+# AMD Zen Nexus Driver
+#
+AMDZEN_OBJS = amdzen.o
+AMDZEN_STUB_OBJS = amdzen_stub.o
+SMNTEMP_OBJS = smntemp.o
+USMN_OBJS = usmn.o
+ZEN_UDF_OBJS = zen_udf.o

@@ -20,6 +20,9 @@
  */
 /*
  * Copyright (c) 1989, 2010, Oracle and/or its affiliates. All rights reserved.
+ * Copyright 2012 Marcel Telka <marcel@telka.sk>
+ * Copyright 2013 Nexenta Systems, Inc.  All rights reserved.
+ * Copyright 2018 OmniOS Community Edition (OmniOSce) Association.
  */
 /* Copyright (c) 1983, 1984, 1985, 1986, 1987, 1988, 1989 AT&T */
 /* All Rights Reserved */
@@ -188,7 +191,11 @@ struct svc_ops {
 		/* `ready-to-receive' */
 	void	(*xp_clone_xprt)(SVCXPRT *, SVCXPRT *);
 		/* transport specific clone function */
-	void	(*xp_tattrs) (SVCXPRT *, int, void **);
+	void	(*xp_tattrs)(SVCXPRT *, int, void **);
+		/* transport specific hold function */
+	void	(*xp_hold)(queue_t *);
+		/* transport specific release function */
+	void	(*xp_release)(queue_t *, mblk_t *, bool_t);
 };
 
 #define	SVC_TATTR_ADDRMASK	1
@@ -254,7 +261,7 @@ struct __svcpool {
 	 * The pool's thread lock p_thread_lock protects:
 	 * - p_threads, p_detached_threads, p_reserved_threads and p_closing
 	 * The pool's request lock protects:
-	 * - p_asleep, p_drowsy, p_reqs, p_walkers, p_req_cv.
+	 * - p_asleep, p_drowsy, p_reqs, p_size, p_walkers, p_req_cv.
 	 * The following fields are `initialized constants':
 	 * - p_id, p_stksize, p_timeout.
 	 * Access to p_next and p_prev is protected by the pool
@@ -271,7 +278,7 @@ struct __svcpool {
 	kmutex_t	p_thread_lock;		/* Thread lock		  */
 	int		p_asleep;		/* Asleep threads	  */
 	int		p_drowsy;		/* Drowsy flag		  */
-	kcondvar_t 	p_req_cv;		/* svc_poll() sleep var.  */
+	kcondvar_t	p_req_cv;		/* svc_poll() sleep var.  */
 	clock_t		p_timeout;		/* svc_poll() timeout	  */
 	kmutex_t	p_req_lock;		/* Request lock		  */
 	int		p_reqs;			/* Pending requests	  */
@@ -359,6 +366,8 @@ struct __svcpool {
 	kmutex_t	p_user_lock;		/* Creator lock		  */
 	void		(*p_offline)();		/* callout for unregister */
 	void		(*p_shutdown)();	/* callout for shutdown */
+
+	size_t		p_size;			/* Total size of queued msgs */
 };
 
 /*
@@ -411,8 +420,8 @@ typedef struct __svcxprt_common {
 #define	xp_netid	xp_xpc.xpc_netid
 
 struct __svcmasterxprt {
-	SVCMASTERXPRT 	*xp_next;	/* Next transport in the list	*/
-	SVCMASTERXPRT 	*xp_prev;	/* Prev transport in the list	*/
+	SVCMASTERXPRT	*xp_next;	/* Next transport in the list	*/
+	SVCMASTERXPRT	*xp_prev;	/* Prev transport in the list	*/
 	__SVCXPRT_COMMON xp_xpc;	/* Fields common with the clone	*/
 	SVCPOOL		*xp_pool;	/* Pointer to the pool		*/
 	mblk_t		*xp_req_head;	/* Request queue head		*/
@@ -426,6 +435,11 @@ struct __svcmasterxprt {
 	struct netbuf	xp_addrmask;	/* address mask			*/
 
 	caddr_t		xp_p2;		/* private: for use by svc ops  */
+
+	int		xp_full : 1;	/* xprt is full			*/
+	int		xp_enable : 1;	/* xprt needs to be enabled	*/
+	int		xp_reqs;	/* number of requests queued	*/
+	size_t		xp_size;	/* total size of queued msgs	*/
 };
 
 /*
@@ -523,6 +537,14 @@ struct __svcxprt {
 	if ((src_xprt)->xp_ops->xp_clone_xprt) \
 		(*(src_xprt)->xp_ops->xp_clone_xprt) \
 		    (src_xprt, dst_xprt)
+
+#define	SVC_HOLD(xprt) \
+	if ((xprt)->xp_ops->xp_hold) \
+		(*(xprt)->xp_ops->xp_hold)((xprt)->xp_wq)
+
+#define	SVC_RELE(xprt, mp, enable) \
+	if ((xprt)->xp_ops->xp_release) \
+		(*(xprt)->xp_ops->xp_release)((xprt)->xp_wq, (mp), (enable))
 
 #define	SVC_RECV(clone_xprt, mp, msg) \
 	(*(clone_xprt)->xp_ops->xp_recv)((clone_xprt), (mp), (msg))
@@ -720,6 +742,15 @@ extern void	xprt_unregister();
 #endif /* __STDC__ */
 #endif	/* _KERNEL */
 
+#ifdef _KERNEL
+/*
+ * Transport hold and release.
+ */
+extern void rpcmod_hold(queue_t *);
+extern void rpcmod_release(queue_t *, mblk_t *, bool_t);
+extern void mir_svc_hold(queue_t *);
+extern void mir_svc_release(queue_t *, mblk_t *, bool_t);
+#endif /* _KERNEL */
 
 /*
  * When the service routine is called, it must first check to see if it
@@ -787,7 +818,7 @@ extern int	svc_clts_kcreate(struct file *, uint_t, struct T_info_ack *,
 				SVCMASTERXPRT **);
 extern int	svc_cots_kcreate(struct file *, uint_t, struct T_info_ack *,
 				SVCMASTERXPRT **);
-extern void	svc_queuereq(queue_t *, mblk_t *);
+extern bool_t	svc_queuereq(queue_t *, mblk_t *, bool_t);
 extern void	svc_queueclean(queue_t *);
 extern void	svc_queueclose(queue_t *);
 extern int	svc_reserve_thread(SVCXPRT *);
@@ -844,14 +875,6 @@ extern void	rpc_gss_cleanup(SVCXPRT *);
 extern pollfd_t	*svc_pollfd;
 extern int	svc_max_pollfd;
 extern fd_set	svc_fdset;
-#if !defined(_LP64) && FD_SETSIZE > 1024
-extern fd_set	_new_svc_fdset;
-#ifdef __PRAGMA_REDEFINE_EXTNAME
-#pragma redefine_extname	svc_fdset	_new_svc_fdset
-#else   /* __PRAGMA_REDEFINE_EXTNAME */
-#define	svc_fdset	_new_svc_fdset
-#endif  /* __PRAGMA_REDEFINE_EXTNAME */
-#endif	/* LP64 && FD_SETSIZE > 1024 */
 #define	svc_fds svc_fdset.fds_bits[0]	/* compatibility */
 
 /*
@@ -903,7 +926,7 @@ extern int	svc_create(void (*)(struct svc_req *, SVCXPRT *),
 				const rpcprog_t, const rpcvers_t,
 				const char *);
 	/*
-	 * 	void (*dispatch)();		-- dispatch routine
+	 *	void (*dispatch)();		-- dispatch routine
 	 *	const rpcprog_t prognum;	-- program number
 	 *	const rpcvers_t versnum;	-- version number
 	 *	const char *nettype;		-- network type
@@ -921,6 +944,22 @@ extern SVCXPRT	*svc_tp_create(void (*)(struct svc_req *, SVCXPRT *),
 	 * const rpcprog_t prognum;		-- program number
 	 * const rpcvers_t versnum;		-- version number
 	 * const struct netconfig *nconf;	-- netconfig structure
+	 */
+
+/*
+ * Variant of svc_tp_create that accepts a binding address.
+ * If addr == NULL, this is the same as svc_tp_create().
+ */
+extern SVCXPRT	*svc_tp_create_addr(void (*)(struct svc_req *, SVCXPRT *),
+				const rpcprog_t, const rpcvers_t,
+				const struct netconfig *,
+				const struct netbuf *);
+	/*
+	 * void (*dispatch)();			-- dispatch routine
+	 * const rpcprog_t prognum;		-- program number
+	 * const rpcvers_t versnum;		-- version number
+	 * const struct netconfig *nconf;	-- netconfig structure
+	 * const struct netbuf *addr;		-- address to bind
 	 */
 
 /*
@@ -960,9 +999,9 @@ extern SVCXPRT	*svc_dg_create(const int, const uint_t, const uint_t);
  */
 extern  SVCXPRT	*svc_fd_create(const int, const uint_t, const uint_t);
 	/*
-	 * 	const int fd;			-- open connection end point
-	 * 	const uint_t sendsize;		-- max send size
-	 * 	const uint_t recvsize;		-- max recv size
+	 *	const int fd;			-- open connection end point
+	 *	const uint_t sendsize;		-- max send size
+	 *	const uint_t recvsize;		-- max recv size
 	 */
 
 /*
@@ -977,7 +1016,7 @@ extern SVCXPRT	*svc_door_create(void (*)(struct svc_req *, SVCXPRT *),
 				const rpcprog_t, const rpcvers_t,
 				const uint_t);
 	/*
-	 * 	void (*dispatch)();		-- dispatch routine
+	 *	void (*dispatch)();		-- dispatch routine
 	 *	const rpcprog_t prognum;	-- program number
 	 *	const rpcvers_t versnum;	-- version number
 	 *	const uint_t sendsize;		-- send buffer size

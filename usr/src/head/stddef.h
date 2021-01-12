@@ -20,7 +20,7 @@
  * CDDL HEADER END
  */
 /*	Copyright (c) 1988 AT&T	*/
-/*	  All Rights Reserved  	*/
+/*	  All Rights Reserved	*/
 
 
 /*
@@ -31,10 +31,9 @@
 #ifndef _STDDEF_H
 #define	_STDDEF_H
 
-#pragma ident	"%Z%%M%	%I%	%E% SMI"
-
 #include <sys/isa_defs.h>
 #include <iso/stddef_iso.h>
+#include <sys/stddef.h>
 
 /*
  * Allow global visibility for symbols defined in

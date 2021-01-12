@@ -24,8 +24,6 @@
  * Use is subject to license terms.
  */
 
-#pragma ident	"%Z%%M%	%I%	%E% SMI"
-
 #include <sys/debug.h>
 #include <sys/types.h>
 #include <sys/param.h>
@@ -49,7 +47,7 @@
 #include <sys/pci.h>
 #include <sys/vmsystm.h>
 #include <sys/int_fmtio.h>
-#include "gfx_private.h"
+#include <sys/gfx_private.h>
 
 #ifdef __xpv
 #include <sys/hypervisor.h>
@@ -72,7 +70,7 @@ gfxp_umem_cookie_init(caddr_t kva, size_t size)
 	umem_cookie->type = KMEM_NON_PAGEABLE;
 	umem_cookie->size = size;
 
-	return ((ddi_umem_cookie_t *)umem_cookie);
+	return ((ddi_umem_cookie_t)umem_cookie);
 }
 
 void

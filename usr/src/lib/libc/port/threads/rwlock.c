@@ -21,6 +21,7 @@
 
 /*
  * Copyright (c) 1999, 2010, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2016 by Delphix. All rights reserved.
  */
 
 #include "lint.h"
@@ -504,7 +505,6 @@ shared_rwlock_lock(rwlock_t *rwlp, timespec_t *tsp, int rd_wr)
 {
 	volatile uint32_t *rwstate = (volatile uint32_t *)&rwlp->rwlock_readers;
 	mutex_t *mp = &rwlp->mutex;
-	uint32_t readers;
 	int try_flag;
 	int error;
 
@@ -535,8 +535,12 @@ shared_rwlock_lock(rwlock_t *rwlp, timespec_t *tsp, int rd_wr)
 			}
 		}
 		atomic_or_32(rwstate, URW_HAS_WAITERS);
+
+#ifdef THREAD_DEBUG
+		uint32_t readers;
 		readers = *rwstate;
 		ASSERT_CONSISTENT_STATE(readers);
+#endif
 		/*
 		 * The calls to __lwp_rwlock_*() below will release the mutex,
 		 * so we need a dtrace probe here.  The owner field of the
@@ -620,7 +624,7 @@ rwlock_lock(rwlock_t *rwlp, timespec_t *tsp, int rd_wr)
 			/*
 			 * Do a priority check on the queued waiter (the
 			 * highest priority thread on the queue) to see
-			 * if we should defer to him or just grab the lock.
+			 * if we should defer to it or just grab the lock.
 			 */
 			int our_pri = real_priority(self);
 			int his_pri = real_priority(ulwp);

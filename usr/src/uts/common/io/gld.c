@@ -21,6 +21,8 @@
 /*
  * Copyright 2009 Sun Microsystems, Inc.  All rights reserved.
  * Use is subject to license terms.
+ * Copyright (c) 2016 by Delphix. All rights reserved.
+ * Copyright 2018 Joyent, Inc.
  */
 
 /*
@@ -1728,7 +1730,7 @@ gld_wput(queue_t *q, mblk_t *mp)
 		 */
 		GLD_CLEAR_MBLK_VTAG(mp);
 		multidata = B_FALSE;
-		/* LINTED: E_CASE_FALLTHRU */
+		/* FALLTHROUGH */
 	case M_MULTIDATA:
 		/* Only call gld_start() directly if nothing queued ahead */
 		/* No guarantees about ordering with different threads */
@@ -2900,10 +2902,10 @@ gld_sendup(gld_mac_info_t *macinfo, pktinfo_t *pktinfo,
 	 * device might need this, so it's here but undocumented.
 	 */
 	if (macinfo->gldm_options & GLDOPT_FAST_RECV) {
-		send = (void (*)(queue_t *, mblk_t *))putq;
+		send = (void (*)(queue_t *, mblk_t *))(uintptr_t)putq;
 		cansend = canput;
 	} else {
-		send = (void (*)(queue_t *, mblk_t *))putnext;
+		send = putnext;
 		cansend = canputnext;
 	}
 
@@ -3081,7 +3083,7 @@ gld_paccept(gld_t *gld, pktinfo_t *pktinfo)
 
 static void
 gld_passon(gld_t *gld, mblk_t *mp, pktinfo_t *pktinfo,
-	void (*send)(queue_t *qp, mblk_t *mp))
+    void (*send)(queue_t *qp, mblk_t *mp))
 {
 	boolean_t is_phys = GLD_IS_PHYS(gld);
 	int skiplen;
@@ -3475,13 +3477,13 @@ gld_fastpath(gld_t *gld, queue_t *q, mblk_t *mp)
 	}
 
 	/*
-	 * We take his fastpath request as a declaration that he will accept
+	 * We take the fastpath request as a declaration that they will accept
 	 * M_DATA messages from us, whether or not we are willing to accept
-	 * them from him.  This allows us to have fastpath in one direction
+	 * M_DATA from them.  This allows us to have fastpath in one direction
 	 * (flow upstream) even on media with Source Routing, where we are
 	 * unable to provide a fixed MAC header to be prepended to downstream
 	 * flowing packets.  So we set GLD_FAST whether or not we decide to
-	 * allow him to send M_DATA down to us.
+	 * allow them to send M_DATA down to us.
 	 */
 	GLDM_LOCK(macinfo, RW_WRITER);
 	gld->gld_flags |= GLD_FAST;
@@ -4549,8 +4551,7 @@ gld_unitdata(queue_t *q, mblk_t *mp)
 	ifp = ((gld_mac_pvt_t *)macinfo->gldm_mac_pvt)->interfacep;
 
 	/* grab any checksum information that may be present */
-	hcksum_retrieve(mp->b_cont, NULL, NULL, &start, &stuff, &end,
-	    &value, &flags);
+	mac_hcksum_get(mp->b_cont, &start, &stuff, &end, &value, &flags);
 
 	/*
 	 * Prepend a valid header for transmission
@@ -4566,8 +4567,7 @@ gld_unitdata(queue_t *q, mblk_t *mp)
 	}
 
 	/* apply any checksum information to the first block in the chain */
-	(void) hcksum_assoc(nmp, NULL, NULL, start, stuff, end, value,
-	    flags, 0);
+	mac_hcksum_set(nmp, start, stuff, end, value, flags);
 
 	GLD_CLEAR_MBLK_VTAG(nmp);
 	if (gld_start(q, nmp, GLD_WSRV, upri) == GLD_NORESOURCES) {

@@ -14,13 +14,17 @@
 # Copyright (c) 2012 by Delphix. All rights reserved.
 # Copyright 2014 Nexenta Systems, Inc.
 # Copyright 2014 Garrett D'Amore <garrett@damore.org>
+# Copyright (c) 2015, Joyent, Inc.  All rights reserved.
+# Copyright 2018 Gary Mills
+# Copyright 2019 OmniOS Community Edition (OmniOSce) Association.
+# Copyright 2019 Peter Tribble
 #
 
 include		$(SRC)/Makefile.master
 
 MANSECT=	5
 
-MANFILES=	Intro.5			\
+_MANFILES=	Intro.5			\
 		acl.5			\
 		ad.5			\
 		ascii.5			\
@@ -29,6 +33,7 @@ MANFILES=	Intro.5			\
 		audit_remote.5		\
 		audit_syslog.5		\
 		brands.5		\
+		byteorder.5		\
 		cancellation.5		\
 		charmap.5		\
 		condition.5		\
@@ -41,8 +46,10 @@ MANFILES=	Intro.5			\
 		device_clean.5		\
 		dhcp.5			\
 		environ.5		\
+		epoll.5			\
 		eqn.5			\
 		eqnchar.5		\
+		eventfd.5		\
 		extendedFILE.5		\
 		filesystem.5		\
 		fnmatch.5		\
@@ -68,6 +75,7 @@ MANFILES=	Intro.5			\
 		man.5			\
 		mandoc_char.5		\
 		mandoc_roff.5		\
+		mansun.5		\
 		mdoc.5			\
 		me.5			\
 		mech_spnego.5		\
@@ -107,6 +115,7 @@ MANFILES=	Intro.5			\
 		regex.5			\
 		regexp.5		\
 		resource_controls.5	\
+		security-flags.5	\
 		smf.5			\
 		smf_bootstrap.5		\
 		smf_method.5		\
@@ -119,10 +128,27 @@ MANFILES=	Intro.5			\
 		tecla.5			\
 		term.5			\
 		threads.5		\
+		timerfd.5		\
 		trusted_extensions.5	\
 		vgrindefs.5		\
 		zones.5			\
 		zpool-features.5
+
+sparc_MANFILES=
+
+i386_MANFILES=	beastie.4th.5		\
+		brand.4th.5		\
+		check-password.4th.5	\
+		color.4th.5		\
+		delay.4th.5		\
+		gptzfsboot.5		\
+		isoboot.5		\
+		loader.5		\
+		loader.4th.5		\
+		menu.4th.5		\
+		menusets.4th.5		\
+		pxeboot.5		\
+		version.4th.5
 
 MANLINKS=	ANSI.5		\
 		C++.5		\
@@ -150,12 +176,15 @@ MANLINKS=	ANSI.5		\
 		architecture.5	\
 		availability.5	\
 		compile.5	\
+		endian.5	\
 		intro.5		\
 		pthreads.5	\
 		stability.5	\
 		standard.5	\
 		step.5		\
 		teclarc.5
+
+MANFILES=	$(_MANFILES) $($(MACH)_MANFILES)
 
 intro.5		:= LINKSRC = Intro.5
 
@@ -165,6 +194,8 @@ architecture.5	:= LINKSRC = attributes.5
 availability.5	:= LINKSRC = attributes.5
 stability.5	:= LINKSRC = attributes.5
 standard.5	:= LINKSRC = attributes.5
+
+endian.5	:= LINKSRC = byteorder.5
 
 RBAC.5		:= LINKSRC = rbac.5
 

@@ -22,8 +22,7 @@
 # Copyright 2006 Sun Microsystems, Inc.  All rights reserved.
 # Use is subject to license terms.
 #
-# ident	"%Z%%M%	%I%	%E% SMI"
-#
+# Copyright (c) 2018, Joyent, Inc.
 
 LIBRARY= libsasl.a
 VERS= .1
@@ -38,12 +37,9 @@ OBJECTS=	$(SASLOBJS) $(COMMONOBJS)
 
 include ../../Makefile.lib
 
-LIBS=		$(DYNLIB) $(LINTLIB)
+LIBS=		$(DYNLIB)
 SRCS=		$(SASLOBJS:%.o=../lib/%.c) $(COMMONOBJS:%.o=$(PLUGDIR)/%.c)
-$(LINTLIB):= 	SRCS = $(SRCDIR)/$(LINTSRC)
 LDLIBS +=	-lsocket -lc -lmd
-LINTFLAGS +=	-DPIC
-LINTFLAGS64 +=	-DPIC
 
 SRCDIR=		../lib
 PLUGDIR=	../plugin
@@ -52,11 +48,13 @@ CFLAGS +=	$(CCVERBOSE) $(XSTRCONST)
 CFLAGS64 +=	$(XSTRCONST)
 CPPFLAGS +=	-I../include -I$(PLUGDIR)
 
+# not linted
+SMATCH=off
+
 .KEEP_STATE:
 
 all: $(LIBS)
 
-lint: lintcheck
 
 pics/%.o: $(PLUGDIR)/%.c
 	$(COMPILE.c) -o $@ $<

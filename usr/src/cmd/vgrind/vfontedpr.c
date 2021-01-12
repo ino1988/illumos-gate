@@ -4,8 +4,6 @@
  * specifies the terms and conditions for redistribution.
  */
 
-#pragma ident	"%Z%%M%	%I%	%E% SMI" 
-
 #include <ctype.h>
 #include <stdio.h>
 #include <sys/types.h>
@@ -269,7 +267,7 @@ flagsdone:
 	cp = strings;
 	while (*cp) {
 	    while (*cp == ' ' || *cp =='\t')
-		*cp++ = NULL;
+		*cp++ = '\0';
 	    if (*cp)
 		*cpp++ = cp;
 	    while (*cp != ' ' && *cp  != '\t' && *cp)
@@ -357,7 +355,7 @@ flagsdone:
 	blklevel = 0;
 	prclevel = -1;
 	for (psptr=0; psptr<PSMAX; psptr++) {
-	    pstack[psptr][0] = NULL;
+	    pstack[psptr][0] = '\0';
 	    plstack[psptr] = 0;
 	}
 	psptr = -1;
@@ -447,7 +445,7 @@ putScp(char *os)
 	if (psptr < PSMAX-1) {
 	    ++psptr;
 	    strncpy (pstack[psptr], pname, PNAMELEN);
-	    pstack[psptr][PNAMELEN] = NULL;
+	    pstack[psptr][PNAMELEN] = '\0';
 	    plstack[psptr] = blklevel;
 	}
     }
@@ -792,6 +790,7 @@ putcp(int c)
 	default:
 		if (c < 040)
 			putchar('^'), c |= '@';
+		/* FALLTHROUGH */
 	case '\t':
 	case '\n':
 		putchar(c);
@@ -802,10 +801,9 @@ putcp(int c)
  *	look for a process beginning on this line
  */
 boolean
-isproc(s)
-    char *s;
+isproc(char *s)
 {
-    pname[0] = NULL;
+    pname[0] = '\0';
     if (l_prclevel ? (prclevel == blklevel) : (!l_toplex || blklevel == 0))
 	if (expmatch (s, l_prcbeg, pname) != NIL) {
 	    return (TRUE);

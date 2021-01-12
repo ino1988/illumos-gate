@@ -19,20 +19,23 @@
  * CDDL HEADER END
  */
 /*	Copyright (c) 1984, 1986, 1987, 1988, 1989 AT&T	*/
-/*	  All Rights Reserved  	*/
+/*	  All Rights Reserved	*/
 
 
 /*
  * Copyright 2008 Sun Microsystems, Inc.  All rights reserved.
  * Use is subject to license terms.
  *
- * Copyright 2011, 2012 Nexenta Systems, Inc.  All rights reserved.
+ * Copyright 2013 Nexenta Systems, Inc.  All rights reserved.
+ *
+ * Copyright 2018 Joyent Inc.
  */
 
 #ifndef _SYS_SYSMACROS_H
 #define	_SYS_SYSMACROS_H
 
 #include <sys/param.h>
+#include <sys/stddef.h>
 
 #ifdef	__cplusplus
 extern "C" {
@@ -61,6 +64,10 @@ extern "C" {
 #endif
 #ifndef	SIGNOF
 #define	SIGNOF(a)	((a) < 0 ? -1 : (a) > 0)
+#endif
+
+#ifndef	__DECONST
+#define	__DECONST(type, var)	((type)(uintptr_t)(const void *)(var))
 #endif
 
 #ifdef _KERNEL
@@ -132,7 +139,7 @@ extern unsigned char bcd_to_byte[256];
 
 #define	getminor(x)	(minor_t)((x) & L_MAXMIN)
 
-#else
+#else	/* _KERNEL */
 
 /* major part of a device external from the kernel (same as emajor below) */
 
@@ -366,18 +373,22 @@ extern unsigned char bcd_to_byte[256];
 #error	One of _BIT_FIELDS_LTOH or _BIT_FIELDS_HTOL must be defined
 #endif  /* _BIT_FIELDS_LTOH */
 
-/* avoid any possibility of clashing with <stddef.h> version */
-#if defined(_KERNEL) && !defined(_KMEMUSER)
-
-#if !defined(offsetof)
-#define	offsetof(s, m)	((size_t)(&(((s *)0)->m)))
-#endif /* !offsetof */
-
-#define	container_of(m, s, name)			\
-	(void *)((uintptr_t)(m) - (uintptr_t)offsetof(s, name))
-
+#if !defined(ARRAY_SIZE)
 #define	ARRAY_SIZE(x)	(sizeof (x) / sizeof (x[0]))
-#endif /* _KERNEL, !_KMEMUSER */
+#endif
+
+/*
+ * Add a value to a uint64_t that saturates at UINT64_MAX instead of wrapping
+ * around.
+ */
+#define	UINT64_OVERFLOW_ADD(val, add) \
+	((val) > ((val) + (add)) ? (UINT64_MAX) : ((val) + (add)))
+
+/*
+ * Convert to an int64, saturating at INT64_MAX.
+ */
+#define	UINT64_OVERFLOW_TO_INT64(uval) \
+	(((uval) > INT64_MAX) ? INT64_MAX : (int64_t)(uval))
 
 #ifdef	__cplusplus
 }

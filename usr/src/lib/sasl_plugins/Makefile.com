@@ -22,6 +22,7 @@
 # Copyright 2008 Sun Microsystems, Inc.  All rights reserved.
 # Use is subject to license terms.
 #
+# Copyright (c) 2018, Joyent, Inc.
 
 COMMONOBJS=	plugin_common.o
 OBJECTS=	$(PLUG_OBJS) $(COMMONOBJS)
@@ -30,7 +31,10 @@ include $(SRC)/lib/Makefile.lib
 
 CPPFLAGS +=	-I$(SRC)/lib/libsasl/include
 
-CERRWARN +=	-_gcc=-Wno-uninitialized
+CERRWARN +=	$(CNOWARN_UNINIT)
+
+# not linted
+SMATCH=off
 
 LIBS =		$(DYNLIB)
 SRCS=		$(PLUG_OBJS:%.o=../%.c) \
@@ -42,8 +46,6 @@ MAPFILES =	../../mapfile-vers
 ROOTLIBDIR=	$(ROOT)/usr/lib/sasl
 ROOTLIBDIR64=	$(ROOT)/usr/lib/sasl/$(MACH64)
 
-LINTFLAGS=	$(ENC_FLAGS)
-LINTFLAGS64=	-m64 $(ENC_FLAGS)
 
 CFLAGS +=	$(CCVERBOSE) $(XSTRCONST) $(ENC_FLAGS)
 CFLAGS64 +=	$(XSTRCONST) $(ENC_FLAGS)
@@ -52,7 +54,6 @@ CFLAGS64 +=	$(XSTRCONST) $(ENC_FLAGS)
 
 all:	$(LIBS)
 
-lint:	lintcheck
 
 pics/%.o: $(SRC)/lib/libsasl/plugin/%.c
 	$(COMPILE.c) -o $@ $<

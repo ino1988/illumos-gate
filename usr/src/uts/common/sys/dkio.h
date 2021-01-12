@@ -22,8 +22,9 @@
 /*
  * Copyright (c) 1982, 2010, Oracle and/or its affiliates. All rights reserved.
  *
- * Copyright 2011 Nexenta Systems, Inc.  All rights reserved.
+ * Copyright 2017 Nexenta Systems, Inc.  All rights reserved.
  * Copyright 2012 DEY Storage Systems, Inc.  All rights reserved.
+ * Copyright 2019 Joyent, Inc.
  */
 
 #ifndef _SYS_DKIO_H
@@ -81,7 +82,7 @@ struct dk_cinfo {
 #define	DKC_SMSFLOPPY	12
 #define	DKC_SCSI_CCS	13	/* SCSI CCS compatible */
 #define	DKC_INTEL82072	14	/* native floppy chip */
-#define	DKC_MD		16	/* meta-disk (virtual-disk) driver */
+#define	DKC_MD		16	/* meta-disk (virtual-disk) driver (obsolete) */
 #define	DKC_INTEL82077	19	/* 82077 floppy disk controller */
 #define	DKC_DIRECT	20	/* Intel direct attached device i.e. IDE */
 #define	DKC_PCMCIA_MEM	21	/* PCMCIA memory disk-like type (Obsolete) */
@@ -355,6 +356,23 @@ struct dk_minfo_ext {
 	uint_t		dki_pbsize;	/* Physical blocksize of media */
 };
 
+#ifdef	_KERNEL
+
+/*
+ * The 32-bit version of the media info API did not end up with a consistent
+ * size in an ILP32 and LP64 interface. While the actual offsets of the members
+ * are the same, the resulting structure size is not.
+ */
+#pragma pack(4)
+struct dk_minfo_ext32 {
+	uint_t		dki_media_type;	/* Media type or profile info */
+	uint_t		dki_lbsize;	/* Logical blocksize of media */
+	diskaddr_t	dki_capacity;	/* Capacity as # of dki_lbsize blks */
+	uint_t		dki_pbsize;	/* Physical blocksize of media */
+};
+#pragma pack()
+#endif
+
 /*
  * Media types or profiles known
  */
@@ -523,17 +541,32 @@ typedef struct dk_updatefw_32 {
 
 /*
  * ioctl to free space (e.g. SCSI UNMAP) off a disk.
+ * Pass a dkioc_free_list_t containing a list of extents to be freed.
  */
 #define	DKIOCFREE	(DKIOC|50)
 
-typedef struct dkioc_free_s {
-	uint32_t df_flags;
-	uint32_t df_reserved;   /* For easy 64-bit alignment below... */
-	diskaddr_t df_start;
-	diskaddr_t df_length;
-} dkioc_free_t;
-
 #define	DF_WAIT_SYNC	0x00000001	/* Wait for full write-out of free. */
+typedef struct dkioc_free_list_ext_s {
+	uint64_t		dfle_start;
+	uint64_t		dfle_length;
+} dkioc_free_list_ext_t;
+
+typedef struct dkioc_free_list_s {
+	uint64_t		dfl_flags;
+	uint64_t		dfl_num_exts;
+	uint64_t		dfl_offset;
+	dkioc_free_list_ext_t	dfl_exts[1];
+} dkioc_free_list_t;
+#define	DFL_SZ(num_exts) \
+	(sizeof (dkioc_free_list_t) + \
+	(num_exts - 1) * sizeof (dkioc_free_list_ext_t))
+
+/*
+ * ioctl to determine if free (e.g. SCSI UNMAP) is supported.
+ * See FDIOC ioctls for why we're not using '51' here.
+ */
+#define	DKIOC_CANFREE	(DKIOC|60)
+
 
 #ifdef	__cplusplus
 }

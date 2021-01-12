@@ -20,6 +20,7 @@
 #
 #
 # Copyright (c) 2007, 2010, Oracle and/or its affiliates. All rights reserved.
+# Copyright 2019 Nexenta Systems, Inc.  All rights reserved.
 #
 
 #
@@ -44,6 +45,8 @@ SYMBOL_VERSION SUNWprivate {
 	dfs_info_free;
 	dssetup_check_service;
 	dssetup_clear_domain_info;
+	lsa_lookup_lname;
+	lsa_lookup_lsid;
 	lsa_lookup_name;
 	lsa_lookup_sid;
 	mlsvc_disconnect;
@@ -53,6 +56,9 @@ SYMBOL_VERSION SUNWprivate {
 	mlsvc_netlogon;
 	smb_autohome_add;
 	smb_autohome_remove;
+	smb_ddiscover_bad_dc;
+	smb_ddiscover_refresh;
+	smb_decode_krb5_pac;
 	smb_locate_dc;
 	smb_logon;
 	smb_logon_abort;
@@ -68,14 +74,17 @@ SYMBOL_VERSION SUNWprivate {
 	smb_shr_iterinit;
 	smb_shr_list;
 	smb_shr_load;
+	smb_shr_load_execinfo;
 	smb_shr_modify;
 	smb_shr_remove;
 	smb_shr_rename;
 	smb_shr_sa_csc_name;
 	smb_shr_start;
 	smb_shr_stop;
+	smb_shr_unload;
 	smb_token_destroy;
 	smb_token_log;
+	smb_token_setup_common;
 	spoolss_register_copyfile;
     local:
 	*;

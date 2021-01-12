@@ -22,6 +22,7 @@
 # Copyright 2009 Sun Microsystems, Inc.  All rights reserved.
 # Use is subject to license terms.
 #
+# Copyright (c) 2018, Joyent, Inc.
 
 
 #
@@ -38,8 +39,7 @@ UTSBASE	= ../..
 #	Define the module and object file sets.
 #
 MODULE		= arn
-OBJECTS		= $(ARN_OBJS:%=$(OBJS_DIR)/%) 
-LINTS		= $(ARN_OBJS:%.o=$(LINTS_DIR)/%.ln)
+OBJECTS		= $(ARN_OBJS:%=$(OBJS_DIR)/%)
 ROOTMODULE	= $(ROOT_DRV_DIR)/$(MODULE)
 
 #
@@ -51,7 +51,6 @@ include $(UTSBASE)/intel/Makefile.intel
 #	Define targets
 #
 ALL_TARGET	= $(BINARY)
-LINT_TARGET	= $(MODULE).lint
 INSTALL_TARGET	= $(BINARY) $(ROOTMODULE)
 
 #
@@ -59,13 +58,13 @@ INSTALL_TARGET	= $(BINARY) $(ROOTMODULE)
 #
 LDFLAGS		+= -dy -Nmisc/mac -Nmisc/net80211
 
-LINTTAGS        += -erroff=E_BAD_PTR_CAST_ALIGN
 
 CERRWARN	+= -_gcc=-Wno-unused-variable
-CERRWARN	+= -_gcc=-Wno-unused-function
-CERRWARN	+= -_gcc=-Wno-uninitialized
+CERRWARN	+= $(CNOWARN_UNINIT)
 CERRWARN	+= -_gcc=-Wno-char-subscripts
-CERRWARN	+= -_gcc=-Wno-empty-body
+
+# various issues
+SMATCH=off
 
 #
 #	Default build targets.
@@ -79,12 +78,6 @@ all:		$(ALL_DEPS)
 clean:		$(CLEAN_DEPS)
 
 clobber:	$(CLOBBER_DEPS)
-
-lint:		$(LINT_DEPS)
-
-modlintlib:	$(MODLINTLIB_DEPS)
-
-clean.lint:	$(CLEAN_LINT_DEPS)
 
 install:	$(INSTALL_DEPS)
 

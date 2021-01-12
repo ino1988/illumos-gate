@@ -20,13 +20,11 @@
  * CDDL HEADER END
  */
 /*	Copyright (c) 1984, 1986, 1987, 1988, 1989 AT&T	*/
-/*	  All Rights Reserved  	*/
+/*	  All Rights Reserved	*/
 
 
 #ifndef _PKGDEV_H
 #define	_PKGDEV_H
-
-#pragma ident	"%Z%%M%	%I%	%E% SMI"	/* SVr4.0 1.2.1.1 */
 
 #ifdef	__cplusplus
 extern "C" {
@@ -37,7 +35,7 @@ extern "C" {
 struct pkgdev {
 	int			rdonly;
 	int			mntflg;
-	longlong_t 	capacity; /* number of 512-blocks on device */
+	longlong_t	capacity; /* number of 512-blocks on device */
 	char		*name;
 	char		*dirname;
 	char		*pathname;

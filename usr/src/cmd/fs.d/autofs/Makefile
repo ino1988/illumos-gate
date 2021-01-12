@@ -18,9 +18,12 @@
 #
 # CDDL HEADER END
 #
-# Copyright (c) 1992, 2010, Oracle and/or its affiliates. All rights reserved.
+
 #
-# cmd/fs.d/autofs/Makefile
+# Copyright (c) 1992, 2010, Oracle and/or its affiliates. All rights reserved.
+# Copyright 2015 RackTop Systems.
+# Copyright (c) 2018, Joyent, Inc.
+#
 
 FSTYPE=		autofs
 AUTO=		automount
@@ -92,9 +95,12 @@ CPPFLAGS=	-I. -I.. -I../nfs/lib $(CPPFLAGS.master) -D_REENTRANT  \
 CERRWARN +=	-_gcc=-Wno-parentheses
 CERRWARN +=	-_gcc=-Wno-unused-variable
 CERRWARN +=	-_gcc=-Wno-switch
-CERRWARN +=	-_gcc=-Wno-uninitialized
+CERRWARN +=	$(CNOWARN_UNINIT)
 CERRWARN +=	-_gcc=-Wno-unused-label
 CERRWARN +=	-_gcc=-Wno-unused-function
+
+# not linted
+SMATCH=off
 
 OBJS=		$(AUTOOBJS) $(MOUNTOBJS) $(TYPEOBJS) \
 		$(SHAREOBJS) $(UNSHAREOBJS)
@@ -125,11 +131,11 @@ $(TYPEPROG):	webnfs.h $(TYPEOBJS)
 		$(POST_PROCESS)
 
 $(SHARE):	$(SHAREOBJS)
-		$(LINK.c) -o $@ $(SHAREOBJS)
+		$(LINK.c) -o $@ $(SHAREOBJS) $(LDLIBS)
 		$(POST_PROCESS)
 
 $(UNSHARE):	$(UNSHAREOBJS)
-		$(LINK.c) -o $@ $(UNSHAREOBJS)
+		$(LINK.c) -o $@ $(UNSHAREOBJS) $(LDLIBS)
 		$(POST_PROCESS)
 
 $(ROOTSVCSYSTEM)/filesystem/%: %

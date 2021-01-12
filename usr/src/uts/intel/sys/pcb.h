@@ -21,6 +21,7 @@
 
 /*
  * Copyright (c) 1992, 2010, Oracle and/or its affiliates. All rights reserved.
+ * Copyright 2020 Joyent, Inc.
  */
 
 #ifndef _SYS_PCB_H
@@ -28,6 +29,9 @@
 
 #include <sys/regset.h>
 #include <sys/segments.h>
+#ifndef _ASM
+#include <sys/fp.h>	/* kfpu_t */
+#endif
 
 #ifdef	__cplusplus
 extern "C" {
@@ -48,7 +52,6 @@ typedef struct pcb {
 	uint_t		pcb_flags;	/* state flags; cleared on fork */
 	greg_t		pcb_drstat;	/* status debug register (%dr6) */
 	unsigned char	pcb_instr;	/* /proc: instruction at stop */
-#if defined(__amd64)
 	unsigned char	pcb_rupdate;	/* new register values in pcb -> regs */
 	uintptr_t	pcb_fsbase;
 	uintptr_t	pcb_gsbase;
@@ -56,7 +59,6 @@ typedef struct pcb {
 	selector_t	pcb_es;
 	selector_t	pcb_fs;
 	selector_t	pcb_gs;
-#endif /* __amd64 */
 	user_desc_t	pcb_fsdesc;	/* private per-lwp %fs descriptors */
 	user_desc_t	pcb_gsdesc;	/* private per-lwp %gs descriptors */
 } pcb_t;
@@ -74,10 +76,26 @@ typedef struct pcb {
 #define	REQUEST_NOSTEP	0x200	/* request pending to disable single-step */
 #define	ASYNC_HWERR	0x400	/* hardware error has corrupted context  */
 
+/* pcb_rupdate values */
+#define	PCB_UPDATE_SEGS	0x01	/* Update segment registers */
+#define	PCB_UPDATE_FPU	0x02	/* Update FPU registers */
+
+#define	PCB_SET_UPDATE_SEGS(pcb)	((pcb)->pcb_rupdate |= PCB_UPDATE_SEGS)
+#define	PCB_SET_UPDATE_FPU(pcb)		((pcb)->pcb_rupdate |= PCB_UPDATE_FPU)
+#define	PCB_NEED_UPDATE_SEGS(pcb)	\
+	(((pcb)->pcb_rupdate & PCB_UPDATE_SEGS) != 0)
+#define	PCB_NEED_UPDATE_FPU(pcb)	\
+	(((pcb)->pcb_rupdate & PCB_UPDATE_FPU) != 0)
+#define	PCB_NEED_UPDATE(pcb)		\
+	(PCB_NEED_UPDATE_FPU(pcb) || PCB_NEED_UPDATE_SEGS(pcb))
+#define	PCB_CLEAR_UPDATE_SEGS(pcb)	((pcb)->pcb_rupdate &= ~PCB_UPDATE_SEGS)
+#define	PCB_CLEAR_UPDATE_FPU(pcb)	((pcb)->pcb_rupdate &= ~PCB_UPDATE_FPU)
+
 /* fpu_flags */
-#define	FPU_EN		0x1	/* flag signifying fpu in use */
-#define	FPU_VALID	0x2	/* fpu_regs has valid fpu state */
-#define	FPU_MODIFIED	0x4	/* fpu_regs is modified (/proc) */
+#define	FPU_EN		0x01	/* FPU in use (user or kernel) */
+#define	FPU_VALID	0x02	/* fpu_regs has valid fpu state */
+#define	FPU_MODIFIED	0x04	/* fpu_regs is modified (/proc) */
+#define	FPU_KERNEL	0x08	/* Kernel is using the FPU */
 
 #define	FPU_INVALID	0x0	/* fpu context is not in use */
 

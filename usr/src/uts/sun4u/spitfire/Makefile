@@ -41,7 +41,6 @@ UTSBASE	= ../..
 #
 MODULE		= SUNW,UltraSPARC-II
 OBJECTS		= $(SPITFIRE_OBJS:%=$(OBJS_DIR)/%)
-LINTS		= $(SPITFIRE_OBJS:%.o=$(LINTS_DIR)/%.ln)
 ROOTMODULE	= $(ROOT_PSM_CPU_DIR)/$(MODULE)
 SOFTLINKS	= SUNW,UltraSPARC-IIi
 ROOTSOFTLINKS	= $(SOFTLINKS:%=$(ROOT_PSM_CPU_DIR)/%)
@@ -63,13 +62,7 @@ CLEANFILES	+= $(CPULIB) $(SYM_MOD)
 #	Define targets
 #
 ALL_TARGET	= $(SYM_MOD)
-LINT_TARGET	= $(MODULE).lint
 INSTALL_TARGET	= def $(BINARY) $(ROOTMODULE) $(ROOTSOFTLINKS)
-
-#
-# lint pass one enforcement
-#
-CFLAGS += $(CCVERBOSE)
 
 #
 # cpu-module-specific flags
@@ -78,15 +71,12 @@ CPPFLAGS += -DCPU_MODULE -DSPITFIRE
 AS_CPPFLAGS += -DCPU_MODULE -DSPITFIRE
 
 #
-# For now, disable these lint checks; maintainers should endeavor
-# to investigate and remove these for maximum lint coverage.
+# For now, disable these warnings; maintainers should endeavor
+# to investigate and remove these for maximum coverage.
 # Please do not carry these forward to new Makefiles.
 #
-LINTTAGS	+= -erroff=E_PTRDIFF_OVERFLOW
-LINTTAGS	+= -erroff=E_ASSIGN_NARROW_CONV
-LINTTAGS	+= -erroff=E_BAD_FORMAT_STR2
-
-CERRWARN	+= -_gcc=-Wno-uninitialized
+CFLAGS		+= $(CCVERBOSE)
+CERRWARN	+= $(CNOWARN_UNINIT)
 
 #
 #	Default build targets.
@@ -101,16 +91,10 @@ clean:		$(CLEAN_DEPS)
 
 clobber:	$(CLOBBER_DEPS)
 
-lint:		$(LINT_DEPS)
-
-modlintlib:	$(MODLINTLIB_DEPS)
-
-clean.lint:	$(CLEAN_LINT_DEPS)
-
 install:	$(INSTALL_DEPS)
 
-$(CPULIB):	$(BINARY)
-	$(BUILD.SO) $(BINARY)
+$(CPULIB):	$(OBJECTS)
+	$(BUILD.SO) $(OBJECTS)
 
 $(SYM_MOD):	$(UNIX_O) $(CPULIB)
 	@echo "resolving symbols against unix.o"

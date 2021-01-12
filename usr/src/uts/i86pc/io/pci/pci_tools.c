@@ -22,6 +22,7 @@
  * Copyright (c) 2005, 2010, Oracle and/or its affiliates. All rights reserved.
  */
 
+#include <sys/sysmacros.h>
 #include <sys/types.h>
 #include <sys/mkdev.h>
 #include <sys/stat.h>
@@ -277,12 +278,11 @@ pcitool_get_intr(dev_info_t *dip, void *arg, int mode)
 	pcitool_intr_get_t partial_iget;
 	pcitool_intr_get_t *iget = &partial_iget;
 	size_t	iget_kmem_alloc_size = 0;
-	uint8_t num_devs_ret;
+	uint8_t num_devs_ret = 0;
 	int copyout_rval;
 	int rval = SUCCESS;
 	int circ;
 	int i;
-
 	ddi_intr_handle_impl_t info_hdl;
 	apic_get_intr_t intr_info;
 	apic_get_type_t type_info;
@@ -588,7 +588,7 @@ pcitool_cfg_access(pcitool_reg_t *prg, boolean_t write_flag,
 	pci_cfgacc_req_t req;
 	uint32_t max_offset;
 
-	if ((size <= 0) || (size > 8) || ((size & (size - 1)) != 0)) {
+	if ((size <= 0) || (size > 8) || !ISP2(size)) {
 		prg->status = PCITOOL_INVALID_SIZE;
 		return (ENOTSUP);
 	}
@@ -639,6 +639,9 @@ pcitool_cfg_access(pcitool_reg_t *prg, boolean_t write_flag,
 		case 8:
 			local_data = VAL64(&req);
 			break;
+		default:
+			prg->status = PCITOOL_INVALID_ADDRESS;
+			return (ENOTSUP);
 		}
 		if (big_endian) {
 			prg->data =
@@ -674,9 +677,9 @@ pcitool_io_access(pcitool_reg_t *prg, boolean_t write_flag)
 	int port = (int)prg->phys_addr;
 	size_t size = PCITOOL_ACC_ATTR_SIZE(prg->acc_attr);
 	boolean_t big_endian = PCITOOL_ACC_IS_BIG_ENDIAN(prg->acc_attr);
-	int rval = SUCCESS;
+	volatile int rval = SUCCESS;
 	on_trap_data_t otd;
-	uint64_t local_data;
+	volatile uint64_t local_data;
 
 
 	/*
@@ -762,9 +765,9 @@ pcitool_mem_access(pcitool_reg_t *prg, uint64_t virt_addr, boolean_t write_flag)
 {
 	size_t size = PCITOOL_ACC_ATTR_SIZE(prg->acc_attr);
 	boolean_t big_endian = PCITOOL_ACC_IS_BIG_ENDIAN(prg->acc_attr);
-	int rval = DDI_SUCCESS;
+	volatile int rval = DDI_SUCCESS;
 	on_trap_data_t otd;
-	uint64_t local_data;
+	volatile uint64_t local_data;
 
 	/*
 	 * on_trap works like setjmp.
@@ -872,7 +875,7 @@ pcitool_map(uint64_t phys_addr, size_t size, size_t *num_pages)
 			prom_printf("boundary violation: "
 			    "offset:0x%" PRIx64 ", size:%ld, pagesize:0x%lx\n",
 			    offset, (uintptr_t)size, (uintptr_t)MMU_PAGESIZE);
-		return (NULL);
+		return (0);
 
 	} else if ((offset + size) > MMU_PAGESIZE) {
 		(*num_pages)++;
@@ -883,7 +886,7 @@ pcitool_map(uint64_t phys_addr, size_t size, size_t *num_pages)
 	if (virt_base == NULL) {
 		if (pcitool_debug)
 			prom_printf("Couldn't get virtual base address.\n");
-		return (NULL);
+		return (0);
 	}
 
 	if (pcitool_debug)
@@ -1175,7 +1178,7 @@ pcitool_dev_reg_ops(dev_info_t *dip, void *arg, int cmd, int mode)
 
 			virt_addr = pcitool_map(prg.phys_addr, size,
 			    &num_virt_pages);
-			if (virt_addr == NULL) {
+			if (virt_addr == 0) {
 				prg.status = PCITOOL_IO_ERROR;
 				rval = EIO;
 				goto done_reg;

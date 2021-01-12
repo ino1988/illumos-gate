@@ -21,6 +21,8 @@
 /*
  * Copyright 2009 Sun Microsystems, Inc.  All rights reserved.
  * Use is subject to license terms.
+ *
+ * Copyright 2018 Nexenta Systems, Inc.  All rights reserved.
  */
 
 /*
@@ -33,7 +35,7 @@
 #include <sys/types.h>
 #include <sys/varargs.h>
 #include <sys/byteorder.h>
-#ifndef _KERNEL
+#if !defined(_KERNEL) && !defined(_FAKE_KERNEL)
 #include <stdlib.h>
 #include <syslog.h>
 #include <string.h>
@@ -50,7 +52,12 @@ static int buf_decode(smb_msgbuf_t *, char *, va_list ap);
 static int buf_encode(smb_msgbuf_t *, char *, va_list ap);
 static void *smb_msgbuf_malloc(smb_msgbuf_t *, size_t);
 static int smb_msgbuf_chkerc(char *text, int erc);
-static void buf_decode_wcs(smb_wchar_t *, smb_wchar_t *, int wcstrlen);
+
+static int msgbuf_get_oem_string(smb_msgbuf_t *, char **, int);
+static int msgbuf_get_unicode_string(smb_msgbuf_t *, char **, int);
+static int msgbuf_put_oem_string(smb_msgbuf_t *, char *, int);
+static int msgbuf_put_unicode_string(smb_msgbuf_t *, char *, int);
+
 
 /*
  * Returns the offset or number of bytes used within the buffer.
@@ -161,7 +168,7 @@ smb_msgbuf_term(smb_msgbuf_t *mb)
 	while (item) {
 		tmp = item;
 		item = item->next;
-#ifndef _KERNEL
+#if !defined(_KERNEL) && !defined(_FAKE_KERNEL)
 		free(tmp);
 #else
 		kmem_free(tmp, tmp->size);
@@ -176,7 +183,7 @@ smb_msgbuf_term(smb_msgbuf_t *mb)
  * Decode a smb_msgbuf buffer as indicated by the format string into
  * the variable arg list. This is similar to a scanf operation.
  *
- * On success, returns the number of bytes encoded. Otherwise
+ * On success, returns the number of bytes decoded. Otherwise
  * returns a -ve error code.
  */
 int
@@ -212,18 +219,18 @@ smb_msgbuf_decode(smb_msgbuf_t *mb, char *fmt, ...)
 static int
 buf_decode(smb_msgbuf_t *mb, char *fmt, va_list ap)
 {
-	uint32_t ival;
 	uint8_t c;
-	uint8_t *cvalp;
-	uint8_t **cvalpp;
+	uint8_t *bvalp;
 	uint16_t *wvalp;
 	uint32_t *lvalp;
 	uint64_t *llvalp;
-	smb_wchar_t *wcs;
+	char **cvalpp;
+	boolean_t repc_specified;
 	int repc;
 	int rc;
 
 	while ((c = *fmt++) != 0) {
+		repc_specified = B_FALSE;
 		repc = 1;
 
 		if (c == ' ' || c == '\t')
@@ -245,9 +252,11 @@ buf_decode(smb_msgbuf_t *mb, char *fmt, va_list ap)
 				repc = repc * 10 + c - '0';
 				c = *fmt++;
 			} while ('0' <= c && c <= '9');
+			repc_specified = B_TRUE;
 		} else if (c == '#') {
 			repc = va_arg(ap, int);
 			c = *fmt++;
+			repc_specified = B_TRUE;
 		}
 
 		switch (c) {
@@ -258,26 +267,26 @@ buf_decode(smb_msgbuf_t *mb, char *fmt, va_list ap)
 			mb->scan += repc;
 			break;
 
-		case 'c':
+		case 'c': /* get char */
 			if (smb_msgbuf_has_space(mb, repc) == 0)
 				return (SMB_MSGBUF_UNDERFLOW);
 
-			cvalp = va_arg(ap, uint8_t *);
-			bcopy(mb->scan, cvalp, repc);
+			bvalp = va_arg(ap, uint8_t *);
+			bcopy(mb->scan, bvalp, repc);
 			mb->scan += repc;
 			break;
 
-		case 'b':
+		case 'b': /* get byte */
 			if (smb_msgbuf_has_space(mb, repc) == 0)
 				return (SMB_MSGBUF_UNDERFLOW);
 
-			cvalp = va_arg(ap, uint8_t *);
+			bvalp = va_arg(ap, uint8_t *);
 			while (repc-- > 0) {
-				*cvalp++ = *mb->scan++;
+				*bvalp++ = *mb->scan++;
 			}
 			break;
 
-		case 'w':
+		case 'w': /* get word */
 			rc = smb_msgbuf_has_space(mb, repc * sizeof (uint16_t));
 			if (rc == 0)
 				return (SMB_MSGBUF_UNDERFLOW);
@@ -289,7 +298,7 @@ buf_decode(smb_msgbuf_t *mb, char *fmt, va_list ap)
 			}
 			break;
 
-		case 'l':
+		case 'l': /* get long */
 			rc = smb_msgbuf_has_space(mb, repc * sizeof (int32_t));
 			if (rc == 0)
 				return (SMB_MSGBUF_UNDERFLOW);
@@ -301,7 +310,7 @@ buf_decode(smb_msgbuf_t *mb, char *fmt, va_list ap)
 			}
 			break;
 
-		case 'q':
+		case 'q': /* get quad */
 			rc = smb_msgbuf_has_space(mb, repc * sizeof (int64_t));
 			if (rc == 0)
 				return (SMB_MSGBUF_UNDERFLOW);
@@ -318,63 +327,23 @@ buf_decode(smb_msgbuf_t *mb, char *fmt, va_list ap)
 				goto unicode_translation;
 			/*FALLTHROUGH*/
 
-		case 's':
-			ival = strlen((const char *)mb->scan) + 1;
-			if (smb_msgbuf_has_space(mb, ival) == 0)
-				return (SMB_MSGBUF_UNDERFLOW);
-
-			if ((cvalp = smb_msgbuf_malloc(mb, ival * 2)) == 0)
-				return (SMB_MSGBUF_UNDERFLOW);
-
-			if ((ival = smb_stombs((char *)cvalp,
-			    (char *)mb->scan, ival * 2)) ==
-			    (uint32_t)-1) {
-				return (SMB_MSGBUF_DATA_ERROR);
-			}
-
-			cvalpp = va_arg(ap, uint8_t **);
-			*cvalpp = cvalp;
-			mb->scan += (ival+1);
+		case 's': /* get OEM string */
+			cvalpp = va_arg(ap, char **);
+			if (!repc_specified)
+				repc = 0;
+			rc = msgbuf_get_oem_string(mb, cvalpp, repc);
+			if (rc != 0)
+				return (rc);
 			break;
 
-		case 'U': /* Convert from unicode */
+		case 'U': /* get UTF-16 string */
 unicode_translation:
-			/*
-			 * Unicode strings are always word aligned.
-			 * The malloc'd area is larger than the
-			 * original string because the UTF-8 chars
-			 * may be longer than the wide-chars.
-			 */
-			smb_msgbuf_word_align(mb);
-			/*LINTED E_BAD_PTR_CAST_ALIGN*/
-			wcs = (smb_wchar_t *)mb->scan;
-
-			/* count the null wchar */
-			repc = sizeof (smb_wchar_t);
-			while (*wcs++)
-				repc += sizeof (smb_wchar_t);
-
-			if (smb_msgbuf_has_space(mb, repc) == 0)
-				return (SMB_MSGBUF_UNDERFLOW);
-
-			/* Decode wchar string into host byte-order */
-			if ((wcs = smb_msgbuf_malloc(mb, repc)) == 0)
-				return (SMB_MSGBUF_UNDERFLOW);
-
-			/*LINTED E_BAD_PTR_CAST_ALIGN*/
-			buf_decode_wcs(wcs, (smb_wchar_t *)mb->scan,
-			    repc / sizeof (smb_wchar_t));
-
-			/* Get space for translated string */
-			if ((cvalp = smb_msgbuf_malloc(mb, repc * 2)) == 0)
-				return (SMB_MSGBUF_UNDERFLOW);
-
-			/* Translate string */
-			(void) smb_wcstombs((char *)cvalp, wcs, repc * 2);
-
-			cvalpp = va_arg(ap, uint8_t **);
-			*cvalpp = cvalp;
-			mb->scan += repc;
+			cvalpp = va_arg(ap, char **);
+			if (!repc_specified)
+				repc = 0;
+			rc = msgbuf_get_unicode_string(mb, cvalpp, repc);
+			if (rc != 0)
+				return (rc);
 			break;
 
 		case 'M':
@@ -398,6 +367,151 @@ unicode_translation:
 	return (SMB_MSGBUF_SUCCESS);
 }
 
+/*
+ * msgbuf_get_oem_string
+ *
+ * Decode an OEM string, returning its UTF-8 form in strpp,
+ * allocated using smb_msgbuf_malloc (automatically freed).
+ * If max_bytes != 0, consume at most max_bytes of the mb.
+ * See also: mbc_marshal_get_oem_string
+ */
+static int
+msgbuf_get_oem_string(smb_msgbuf_t *mb, char **strpp, int max_bytes)
+{
+	char		*mbs;
+	uint8_t		*oembuf = NULL;
+	int		oemlen;		// len of OEM string, w/o null
+	int		datalen;	// OtW data len
+	int		mbsmax;		// max len of ret str
+	int		rlen;
+
+	if (max_bytes == 0)
+		max_bytes = 0xffff;
+
+	/*
+	 * Determine the OtW data length and OEM string length
+	 * Note: oemlen is the string length (w/o null) and
+	 * datalen is how much we move mb->scan
+	 */
+	datalen = 0;
+	oemlen = 0;
+	for (;;) {
+		if (datalen >= max_bytes)
+			break;
+		/* in-line smb_msgbuf_has_space */
+		if ((mb->scan + datalen) >= mb->end)
+			return (SMB_MSGBUF_UNDERFLOW);
+		datalen++;
+		if (mb->scan[datalen - 1] == 0)
+			break;
+		oemlen++;
+	}
+
+	/*
+	 * Get datalen bytes into a temp buffer
+	 * sized with room to add a null.
+	 * Free oembuf in smb_msgbuf_term
+	 */
+	oembuf = smb_msgbuf_malloc(mb, datalen + 1);
+	if (oembuf == NULL)
+		return (SMB_MSGBUF_UNDERFLOW);
+	bcopy(mb->scan, oembuf, datalen);
+	mb->scan += datalen;
+	oembuf[oemlen] = '\0';
+
+	/*
+	 * Get the buffer we'll return and convert to UTF-8.
+	 * May take as much as double the space.
+	 */
+	mbsmax = oemlen * 2;
+	mbs = smb_msgbuf_malloc(mb, mbsmax + 1);
+	if (mbs == NULL)
+		return (SMB_MSGBUF_UNDERFLOW);
+	rlen = smb_oemtombs(mbs, oembuf, mbsmax);
+	if (rlen < 0)
+		return (SMB_MSGBUF_UNDERFLOW);
+	if (rlen > mbsmax)
+		rlen = mbsmax;
+	mbs[rlen] = '\0';
+	*strpp = mbs;
+	return (0);
+}
+
+/*
+ * msgbuf_get_unicode_string
+ *
+ * Decode a UTF-16 string, returning its UTF-8 form in strpp,
+ * allocated using smb_msgbuf_malloc (automatically freed).
+ * If max_bytes != 0, consume at most max_bytes of the mb.
+ * See also: mbc_marshal_get_unicode_string
+ */
+static int
+msgbuf_get_unicode_string(smb_msgbuf_t *mb, char **strpp, int max_bytes)
+{
+	char		*mbs;
+	uint16_t	*wcsbuf = NULL;
+	int		wcslen;		// wchar count
+	int		datalen;	// OtW data len
+	size_t		mbsmax;		// max len of ret str
+	size_t		rlen;
+
+	if (max_bytes == 0)
+		max_bytes = 0xffff;
+
+	/*
+	 * Unicode strings are always word aligned.
+	 */
+	smb_msgbuf_word_align(mb);
+
+	/*
+	 * Determine the OtW data length and (WC) string length
+	 * Note: wcslen counts 16-bit wide_chars (w/o null),
+	 * and datalen is how much we move mb->scan
+	 */
+	datalen = 0;
+	wcslen = 0;
+	for (;;) {
+		if (datalen >= max_bytes)
+			break;
+		/* in-line smb_msgbuf_has_space */
+		if ((mb->scan + datalen) >= mb->end)
+			return (SMB_MSGBUF_UNDERFLOW);
+		datalen += 2;
+		if (mb->scan[datalen - 2] == 0 &&
+		    mb->scan[datalen - 1] == 0)
+			break;
+		wcslen++;
+	}
+
+	/*
+	 * Get datalen bytes into a temp buffer
+	 * sized with room to add a (WC) null.
+	 * Note: wcsbuf has little-endian order
+	 */
+	wcsbuf = smb_msgbuf_malloc(mb, datalen + 2);
+	if (wcsbuf == NULL)
+		return (SMB_MSGBUF_UNDERFLOW);
+	bcopy(mb->scan, wcsbuf, datalen);
+	mb->scan += datalen;
+	wcsbuf[wcslen] = 0;
+
+	/*
+	 * Get the buffer we'll return and convert to UTF-8.
+	 * May take as much 4X number of wide chars.
+	 */
+	mbsmax = wcslen * MTS_MB_CUR_MAX;
+	mbs = smb_msgbuf_malloc(mb, mbsmax + 1);
+	if (mbs == NULL)
+		return (SMB_MSGBUF_UNDERFLOW);
+	rlen = smb_wcstombs(mbs, wcsbuf, mbsmax);
+	if (rlen == (size_t)-1)
+		return (SMB_MSGBUF_UNDERFLOW);
+	if (rlen > mbsmax)
+		rlen = mbsmax;
+	mbs[rlen] = '\0';
+	*strpp = mbs;
+	return (0);
+}
 
 /*
  * smb_msgbuf_encode
@@ -445,15 +559,15 @@ buf_encode(smb_msgbuf_t *mb, char *fmt, va_list ap)
 	uint16_t wval;
 	uint32_t lval;
 	uint64_t llval;
-	uint32_t ival;
-	uint8_t *cvalp;
+	uint8_t *bvalp;
+	char *cvalp;
 	uint8_t c;
-	smb_wchar_t wcval;
-	int count;
-	int repc = 1;
+	boolean_t repc_specified;
+	int repc;
 	int rc;
 
 	while ((c = *fmt++) != 0) {
+		repc_specified = B_FALSE;
 		repc = 1;
 
 		if (c == ' ' || c == '\t')
@@ -475,9 +589,11 @@ buf_encode(smb_msgbuf_t *mb, char *fmt, va_list ap)
 				repc = repc * 10 + c - '0';
 				c = *fmt++;
 			} while ('0' <= c && c <= '9');
+			repc_specified = B_TRUE;
 		} else if (c == '#') {
 			repc = va_arg(ap, int);
 			c = *fmt++;
+			repc_specified = B_TRUE;
 		}
 
 		switch (c) {
@@ -489,16 +605,16 @@ buf_encode(smb_msgbuf_t *mb, char *fmt, va_list ap)
 				*mb->scan++ = 0;
 			break;
 
-		case 'c':
+		case 'c': /* put char */
 			if (smb_msgbuf_has_space(mb, repc) == 0)
 				return (SMB_MSGBUF_OVERFLOW);
 
-			cvalp = va_arg(ap, uint8_t *);
-			bcopy(cvalp, mb->scan, repc);
+			bvalp = va_arg(ap, uint8_t *);
+			bcopy(bvalp, mb->scan, repc);
 			mb->scan += repc;
 			break;
 
-		case 'b':
+		case 'b': /* put byte */
 			if (smb_msgbuf_has_space(mb, repc) == 0)
 				return (SMB_MSGBUF_OVERFLOW);
 
@@ -508,7 +624,7 @@ buf_encode(smb_msgbuf_t *mb, char *fmt, va_list ap)
 			}
 			break;
 
-		case 'w':
+		case 'w': /* put word */
 			rc = smb_msgbuf_has_space(mb, repc * sizeof (uint16_t));
 			if (rc == 0)
 				return (SMB_MSGBUF_OVERFLOW);
@@ -520,7 +636,7 @@ buf_encode(smb_msgbuf_t *mb, char *fmt, va_list ap)
 			}
 			break;
 
-		case 'l':
+		case 'l': /* put long */
 			rc = smb_msgbuf_has_space(mb, repc * sizeof (int32_t));
 			if (rc == 0)
 				return (SMB_MSGBUF_OVERFLOW);
@@ -532,7 +648,7 @@ buf_encode(smb_msgbuf_t *mb, char *fmt, va_list ap)
 			}
 			break;
 
-		case 'q':
+		case 'q': /* put quad */
 			rc = smb_msgbuf_has_space(mb, repc * sizeof (int64_t));
 			if (rc == 0)
 				return (SMB_MSGBUF_OVERFLOW);
@@ -549,67 +665,23 @@ buf_encode(smb_msgbuf_t *mb, char *fmt, va_list ap)
 				goto unicode_translation;
 			/* FALLTHROUGH */
 
-		case 's':
-			cvalp = va_arg(ap, uint8_t *);
-			ival = strlen((const char *)cvalp) + 1;
-
-			if (smb_msgbuf_has_space(mb, ival) == 0)
-				return (SMB_MSGBUF_OVERFLOW);
-
-			ival =
-			    smb_mbstos((char *)mb->scan, (const char *)cvalp);
-			mb->scan += ival + 1;
+		case 's': /* put OEM string */
+			cvalp = va_arg(ap, char *);
+			if (!repc_specified)
+				repc = 0;
+			rc = msgbuf_put_oem_string(mb, cvalp, repc);
+			if (rc != 0)
+				return (rc);
 			break;
 
-		case 'U': /* unicode */
+		case 'U': /* put UTF-16 string */
 unicode_translation:
-			/*
-			 * Unicode strings are always word aligned.
-			 */
-			smb_msgbuf_word_align(mb);
-			cvalp = va_arg(ap, uint8_t *);
-
-			for (;;) {
-				rc = smb_msgbuf_has_space(mb,
-				    sizeof (smb_wchar_t));
-				if (rc == 0)
-					return (SMB_MSGBUF_OVERFLOW);
-
-				count = smb_mbtowc(&wcval, (const char *)cvalp,
-				    MTS_MB_CHAR_MAX);
-
-				if (count < 0) {
-					return (SMB_MSGBUF_DATA_ERROR);
-				} else if (count == 0) {
-					/*
-					 * No longer need to do this now that
-					 * mbtowc correctly writes the null
-					 * before returning zero but paranoia
-					 * wins.
-					 */
-					wcval = 0;
-					count = 1;
-				}
-
-				/* Write wchar in wire-format */
-				LE_OUT16(mb->scan, wcval);
-
-				if (*cvalp == 0) {
-					/*
-					 * End of string. Check to see whether
-					 * or not to include the null
-					 * terminator.
-					 */
-					if ((mb->flags & SMB_MSGBUF_NOTERM) ==
-					    0)
-						mb->scan +=
-						    sizeof (smb_wchar_t);
-					break;
-				}
-
-				mb->scan += sizeof (smb_wchar_t);
-				cvalp += count;
-			}
+			cvalp = va_arg(ap, char *);
+			if (!repc_specified)
+				repc = 0;
+			rc = msgbuf_put_unicode_string(mb, cvalp, repc);
+			if (rc != 0)
+				return (rc);
 			break;
 
 		case 'M':
@@ -630,6 +702,141 @@ unicode_translation:
 	return (SMB_MSGBUF_SUCCESS);
 }
 
+/*
+ * Marshal a UTF-8 string (str) into mbc, converting to OEM codeset.
+ * Also write a null unless the repc count limits the length we put.
+ * When (repc > 0) the length we marshal must be exactly repc, and
+ * truncate or pad the mb data as necessary.
+ * See also: mbc_marshal_put_oem_string
+ */
+static int
+msgbuf_put_oem_string(smb_msgbuf_t *mb, char *mbs, int repc)
+{
+	uint8_t		*oembuf = NULL;
+	uint8_t		*s;
+	int		oemlen;
+	int		rlen;
+
+	/*
+	 * Compute length of converted OEM string,
+	 * NOT including null terminator
+	 */
+	if ((oemlen = smb_sbequiv_strlen(mbs)) == -1)
+		return (SMB_MSGBUF_DATA_ERROR);
+
+	/*
+	 * If repc not specified, put whole string + NULL,
+	 * otherwise will truncate or pad as needed.
+	 */
+	if (repc <= 0) {
+		repc = oemlen;
+		if ((mb->flags & SMB_MSGBUF_NOTERM) == 0)
+			repc += sizeof (char);
+	}
+	if (smb_msgbuf_has_space(mb, repc) == 0)
+		return (SMB_MSGBUF_OVERFLOW);
+
+	/*
+	 * Convert into a temporary buffer
+	 * Free oembuf in smb_msgbuf_term.
+	 */
+	oembuf = smb_msgbuf_malloc(mb, oemlen + 1);
+	if (oembuf == NULL)
+		return (SMB_MSGBUF_UNDERFLOW);
+	rlen = smb_mbstooem(oembuf, mbs, oemlen);
+	if (rlen < 0)
+		return (SMB_MSGBUF_DATA_ERROR);
+	if (rlen > oemlen)
+		rlen = oemlen;
+	oembuf[rlen] = '\0';
+
+	/*
+	 * Copy the converted string into the message,
+	 * truncated or paded as required.
+	 */
+	s = oembuf;
+	while (repc > 0) {
+		*mb->scan++ = *s;
+		if (*s != '\0')
+			s++;
+		repc--;
+	}
+
+	return (0);
+}
+
+/*
+ * Marshal a UTF-8 string (str) into mbc, converting to UTF-16.
+ * Also write a null unless the repc count limits the length.
+ * When (repc > 0) the length we marshal must be exactly repc,
+ * and truncate or pad the mb data as necessary.
+ * See also: mbc_marshal_put_unicode_string
+ */
+static int
+msgbuf_put_unicode_string(smb_msgbuf_t *mb, char *mbs, int repc)
+{
+	smb_wchar_t	*wcsbuf = NULL;
+	smb_wchar_t	*wp;
+	size_t		wcslen, wcsbytes;
+	size_t		rlen;
+
+	/* align to word boundary */
+	smb_msgbuf_word_align(mb);
+
+	/*
+	 * Compute length of converted UTF-16 string,
+	 * NOT including null terminator (in bytes).
+	 */
+	wcsbytes = smb_wcequiv_strlen(mbs);
+	if (wcsbytes == (size_t)-1)
+		return (SMB_MSGBUF_DATA_ERROR);
+
+	/*
+	 * If repc not specified, put whole string + NULL,
+	 * otherwise will truncate or pad as needed.
+	 */
+	if (repc <= 0) {
+		repc = (int)wcsbytes;
+		if ((mb->flags & SMB_MSGBUF_NOTERM) == 0)
+			repc += sizeof (smb_wchar_t);
+	}
+	if (smb_msgbuf_has_space(mb, repc) == 0)
+		return (SMB_MSGBUF_OVERFLOW);
+
+	/*
+	 * Convert into a temporary buffer
+	 * Free wcsbuf in smb_msgbuf_term
+	 */
+	wcslen = wcsbytes / 2;
+	wcsbuf = smb_msgbuf_malloc(mb, wcsbytes + 2);
+	if (wcsbuf == NULL)
+		return (SMB_MSGBUF_UNDERFLOW);
+	rlen = smb_mbstowcs(wcsbuf, mbs, wcslen);
+	if (rlen == (size_t)-1)
+		return (SMB_MSGBUF_DATA_ERROR);
+	if (rlen > wcslen)
+		rlen = wcslen;
+	wcsbuf[rlen] = 0;
+
+	/*
+	 * Copy the converted string into the message,
+	 * truncated or paded as required.  Preserve
+	 * little-endian order while copying.
+	 */
+	wp = wcsbuf;
+	while (repc > 1) {
+		smb_wchar_t wchar = LE_IN16(wp);
+		LE_OUT16(mb->scan, wchar);
+		mb->scan += 2;
+		if (wchar != 0)
+			wp++;
+		repc -= sizeof (smb_wchar_t);
+	}
+	if (repc > 0)
+		*mb->scan++ = '\0';
+
+	return (0);
+}
 
 /*
  * smb_msgbuf_malloc
@@ -645,7 +852,7 @@ smb_msgbuf_malloc(smb_msgbuf_t *mb, size_t size)
 
 	size += sizeof (smb_msgbuf_mlist_t);
 
-#ifndef _KERNEL
+#if !defined(_KERNEL) && !defined(_FAKE_KERNEL)
 	if ((item = malloc(size)) == NULL)
 		return (NULL);
 #else
@@ -692,16 +899,4 @@ smb_msgbuf_chkerc(char *text, int erc)
 		}
 	}
 	return (erc);
-}
-
-static void
-buf_decode_wcs(smb_wchar_t *dst_wcstr, smb_wchar_t *src_wcstr, int wcstrlen)
-{
-	int i;
-
-	for (i = 0; i < wcstrlen; i++) {
-		*dst_wcstr = LE_IN16(src_wcstr);
-		dst_wcstr++;
-		src_wcstr++;
-	}
 }

@@ -19,6 +19,7 @@
 # CDDL HEADER END
 #
 #
+# Copyright 2016 Gary Mills
 # Copyright 2009 Sun Microsystems, Inc.  All rights reserved.
 # Use is subject to license terms.
 #
@@ -34,7 +35,6 @@ IFLAGS += -I$(USR_PLAT_DIR)/sun4u/include -I ../../../libprtdiag/inc
 IFLAGS += -I $(SRC)/cmd/picl/plugins/sun4u/psvc/psvcobj
 
 LDLIBS += -lpicl
-LINTFLAGS += $(IFLAGS)
 
 #
 # links in /usr/platform
@@ -76,7 +76,7 @@ $(LINKED_DIRS):	$(USR_PLAT_DIR)
 $(LINKED_LIB_DIRS):	$(LINKED_DIRS)
 	-$(INS.dir)
 
-$(LINKED_PRTDIAG_DIRS):	$(USR_PLAT_DIR)
+$(LINKED_PRTDIAG_DIRS):	$(LINKED_LIB_DIRS)
 	-$(INS.slink6)
 
 #

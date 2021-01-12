@@ -5,11 +5,17 @@
  *
  * Copyright 2008 Sun Microsystems, Inc.  All rights reserved.
  * Use is subject to license terms.
+ *
+ * Copyright (c) 2014, Joyent, Inc.  All rights reserved.
  */
 
-
-#ifndef SOLARIS
-#define SOLARIS (defined(__SVR4) || defined(__svr4__)) && defined(sun)
+#ifdef SOLARIS
+#undef	SOLARIS
+#endif
+#if (defined(sun) && (defined(__svr4__) || defined(__SVR4)))
+#define	SOLARIS	(1)
+#else
+#define	SOLARIS	(0)
 #endif
 
 #include <sys/types.h>
@@ -78,6 +84,7 @@
 #include "netinet/ip_state.h"
 #include "netinet/ip_proxy.h"
 #include "ipmon.h"
+#include "ipfzone.h"
 
 #if !defined(lint)
 static const char sccsid[] = "@(#)ipmon.c	1.21 6/5/96 (C)1993-2000 Darren Reed";
@@ -127,10 +134,10 @@ struct	flags	tcpfl[] = {
 	{ 0, '\0' }
 };
 
-#if defined(__hpux) || (SOLARIS && (SOLARIS2 < 10))
+#if defined(__hpux) || (defined(SOLARIS) && (SOLARIS2 < 10))
 static	char	*pidfile = "/etc/ipf/ipmon.pid";
 #else
-# if (BSD >= 199306) || SOLARIS
+# if (BSD >= 199306) || defined(SOLARIS)
 static	char	*pidfile = "/var/run/ipmon.pid";
 # else
 static	char	*pidfile = "/etc/ipmon.pid";
@@ -1340,10 +1347,10 @@ printipflog:
 static void usage(prog)
 char *prog;
 {
-	fprintf(stderr, "%s: [-abDFhnpstvxX] %s %s %s %s %s %s\n",
-		prog, "[-N device]", "[ [-o [NSI]] [-O [NSI]]",
-		"[-P pidfile]", "[-S device]", "[-f device]",
-		"filename");
+	fprintf(stderr, "%s: [-abDFhnpstvxX] %s %s %s %s %s %s %s\n",
+		prog, "[-G|-z zonename]", "[-N device]",
+		"[ [-o [NSI]] [-O [NSI]]", "[-P pidfile]", "[-S device]",
+		"[-f device]", "filename");
 	exit(1);
 }
 
@@ -1377,6 +1384,11 @@ FILE *log;
 	if ((fd = open(file, O_RDWR)) == -1) {
 		(void) fprintf(stderr, "%s: open: %s\n",
 			       file, STRERROR(errno));
+		exit(1);
+	}
+
+	if (setzone(fd) != 0) {
+		close(fd);
 		exit(1);
 	}
 
@@ -1444,6 +1456,7 @@ char *argv[];
 	char	buf[DEFAULT_IPFLOGSIZE], *iplfile[3], *s;
 	extern	int	optind;
 	extern	char	*optarg;
+	const	char	*optstr = "?abB:C:Df:G:FhnN:o:O:pP:sS:tvxXz:";
 
 	fd[0] = fd[1] = fd[2] = -1;
 	fdt[0] = fdt[1] = fdt[2] = -1;
@@ -1451,7 +1464,13 @@ char *argv[];
 	iplfile[1] = IPNAT_NAME;
 	iplfile[2] = IPSTATE_NAME;
 
-	while ((c = getopt(argc, argv, "?abB:C:Df:FhnN:o:O:pP:sS:tvxX")) != -1)
+	/*
+	 * We need to set the zone name before calling openlog in
+	 * the switch statement below
+	 */
+	getzoneopt(argc, argv, optstr);
+
+	while ((c = getopt(argc, argv, optstr)) != -1)
 		switch (c)
 		{
 		case 'a' :
@@ -1482,6 +1501,9 @@ char *argv[];
 			flushlogs(iplfile[0], log);
 			flushlogs(iplfile[1], log);
 			flushlogs(iplfile[2], log);
+			break;
+		case 'G' :
+			/* Already handled by getzoneopt() above */
 			break;
 		case 'n' :
 			opts |= OPT_RESOLVE;
@@ -1535,6 +1557,9 @@ char *argv[];
 		case 'X' :
 			opts |= OPT_HEXHDR;
 			break;
+		case 'z' :
+			/* Already handled by getzoneopt() above */
+			break;
 		default :
 		case 'h' :
 		case '?' :
@@ -1571,6 +1596,12 @@ char *argv[];
 				exit(1);
 				/* NOTREACHED */
 			}
+
+			if (setzone(fd[i]) != 0) {
+				close(fd[i]);
+				exit(1);
+			}
+
 			if (!(regular[i] = !S_ISCHR(sb.st_mode)))
 				devices++;
 		}

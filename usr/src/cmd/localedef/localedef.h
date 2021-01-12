@@ -10,7 +10,7 @@
  */
 
 /*
- * Copyright 2010 Nexenta Systems, Inc.  All rights reserved.
+ * Copyright 2017 Nexenta Systems, Inc.
  * Copyright 2013 DEY Storage Systmes, Inc.
  */
 
@@ -44,6 +44,7 @@ void warn(const char *, ...);
 int putl_category(const char *, FILE *);
 int wr_category(void *, size_t, FILE *);
 FILE *open_category(void);
+void delete_category(FILE *);
 void close_category(FILE *);
 void copy_category(char *);
 
@@ -55,10 +56,11 @@ wchar_t *get_wcs(void);
 
 /* charmap.c - CHARMAP handling */
 void init_charmap(void);
-void add_charmap(char *, int);
+void add_charmap(const char *, int);
 void add_charmap_undefined(char *);
 void add_charmap_posix(void);
 void add_charmap_range(char *, char *, int);
+void add_charmap_char(const char *name, int val);
 int lookup_charmap(const char *, wchar_t *);
 int check_charmap_undefined(char *);
 int check_charmap(wchar_t);
@@ -97,7 +99,7 @@ void add_subst_symbol(char *);
 /* ctype.c - LC_CTYPE handling */
 void init_ctype(void);
 void add_ctype(int);
-void add_ctype_range(int);
+void add_ctype_range(wchar_t);
 void add_width(int, int);
 void add_width_range(int, int, int);
 void add_caseconv(int, int);

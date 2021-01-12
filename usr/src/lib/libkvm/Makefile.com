@@ -22,6 +22,7 @@
 # Copyright 2006 Sun Microsystems, Inc.  All rights reserved.
 # Use is subject to license terms.
 #
+# Copyright (c) 2018, Joyent, Inc.
 
 LIBRARY=	libkvm.a
 VERS=		.1
@@ -33,11 +34,7 @@ include ../../Makefile.lib
 
 SRCDIR =	../common
 
-LIBS =		$(DYNLIB) $(LINTLIB)
-
-$(LINTLIB):= SRCS=../common/llib-lkvm
-
-LINTSRC=	$(LINTLIB:%.ln=%)
+LIBS =		$(DYNLIB)
 
 CFLAGS	+=	$(CCVERBOSE)
 DYNFLAGS32 +=	-Wl,-f,/usr/platform/\$$PLATFORM/lib/$(DYNLIBPSR)
@@ -46,13 +43,14 @@ LDLIBS +=	-lelf -lc
 
 CPPFLAGS = -D_KMEMUSER -D_LARGEFILE64_SOURCE=1 -I.. $(CPPFLAGS.master)
 
-CERRWARN +=	-_gcc=-Wno-uninitialized
+CERRWARN +=	$(CNOWARN_UNINIT)
+
+SMOFF += signed
 
 CLOBBERFILES += test test.o
 
 .KEEP_STATE:
 
-lint: lintcheck
 
 test: ../common/test.c
 	$(COMPILE.c) ../common/test.c
@@ -64,7 +62,3 @@ include ../../Makefile.targ
 objs/%.o pics/%.o: ../common/%.c ../kvm.h
 	$(COMPILE.c) -o $@ $<
 	$(POST_PROCESS_O)
-
-# install rule for lint library target
-$(ROOTLINTDIR)/%:	../common/%
-	$(INS.file)

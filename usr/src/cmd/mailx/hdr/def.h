@@ -20,7 +20,12 @@
  */
 
 /*
+ * Copyright 2018 Joyent, Inc.
+ */
+
+/*
  * Copyright (c) 1985, 2010, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2016 by Delphix. All rights reserved.
  */
 
 /*	Copyright (c) 1984, 1986, 1987, 1988, 1989 AT&T */
@@ -60,6 +65,7 @@ extern "C" {
 #include <stdlib.h>
 #include <ulimit.h>
 #include <wait.h>
+#include <libcustr.h>
 #endif
 #ifdef VMUNIX
 #include <sys/wait.h>
@@ -204,11 +210,11 @@ struct cmd {
  * line
  */
 
-struct headline {
-	char	*l_from;	/* The name of the sender */
-	char	*l_tty;		/* His tty string (if any) */
-	char	*l_date;	/* The entire date string */
-};
+typedef struct headline {
+	custr_t	*hl_from;	/* The name of the sender */
+	custr_t	*hl_tty;	/* Its tty string (if any) */
+	custr_t	*hl_date;	/* The entire date string */
+} headline_t;
 
 #define	GTO	1		/* Grab To: line */
 #define	GSUBJECT 2		/* Likewise, Subject: line */
@@ -486,6 +492,9 @@ extern int	hash(char name[]);
 extern char	*hcontents(char hfield[]);
 extern int	headerp(register char *line);
 extern int	headers(int *msgvec);
+extern int	headline_alloc(headline_t **);
+extern void	headline_free(headline_t *);
+extern void	headline_reset(headline_t *);
 extern int	help(void);
 extern char	*helppath(char *file);
 extern char	*hfield(char field[], struct message *mp,
@@ -497,7 +506,7 @@ extern int	igfield(char *list[]);
 extern int	inc(void);
 extern void	inithost(void);
 extern int	isdir(char name[]);
-extern int	ishead(char linebuf[]);
+extern boolean_t is_headline(const char *);
 extern int	ishfield(char linebuf[], char field[]);
 extern int	ishost(char *sys, char *rest);
 extern int	isign(char *field, int saving);
@@ -533,7 +542,7 @@ extern int	null(char *e);
 extern int	outof(struct name *names, FILE *fo);
 extern struct name	*outpre(struct name *to);
 extern void	panic(char *str);
-extern void	parse(char line[], struct headline *hl, char pbuf[]);
+extern int	parse_headline(const char *, headline_t *);
 extern int	pcmdlist(void);
 extern int	pdot(void);
 extern int	preserve(int *msgvec);

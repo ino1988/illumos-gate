@@ -22,6 +22,8 @@
 /*
  * Copyright 2014 Garrett D'Amore <garrett@damore.org>
  *
+ * Copyright 2013 Nexenta Systems, Inc.  All rights reserved.
+ *
  * Copyright 2010 Sun Microsystems, Inc.  All rights reserved.
  * Use is subject to license terms.
  */
@@ -44,12 +46,12 @@
 
 #include <sys/feature_tests.h>
 
-#ifndef _KERNEL
+#if !defined(_KERNEL) && !defined(_FAKE_KERNEL)
 #if !defined(__XOPEN_OR_POSIX) || defined(_XPG6) || defined(__EXTENSIONS__)
 #include <sys/time_impl.h>
 #endif
 #include <sys/time.h>
-#endif /* _KERNEL */
+#endif /* !_KERNEL */
 
 #ifdef	__cplusplus
 extern "C" {
@@ -80,26 +82,10 @@ typedef struct {		/* signal set type */
  * Select uses bit masks of file descriptors in longs.
  * These macros manipulate such bit fields.
  * FD_SETSIZE may be defined by the user, but the default here
- * should be >= NOFILE (param.h).
+ * should be >= RLIM_FD_MAX.
  */
 #ifndef	FD_SETSIZE
-#ifdef _LP64
 #define	FD_SETSIZE	65536
-#else
-#define	FD_SETSIZE	1024
-#endif	/* _LP64 */
-#elif FD_SETSIZE > 1024 && !defined(_LP64)
-#ifdef __PRAGMA_REDEFINE_EXTNAME
-#pragma	redefine_extname	select	select_large_fdset
-#if !defined(__XOPEN_OR_POSIX) || defined(_XPG6) || defined(__EXTENSIONS__)
-#pragma	redefine_extname	pselect	pselect_large_fdset
-#endif
-#else	/* __PRAGMA_REDEFINE_EXTNAME */
-#define	select	select_large_fdset
-#if !defined(__XOPEN_OR_POSIX) || defined(_XPG6) || defined(__EXTENSIONS__)
-#define	pselect	pselect_large_fdset
-#endif
-#endif	/* __PRAGMA_REDEFINE_EXTNAME */
 #endif	/* FD_SETSIZE */
 
 #if !defined(_XPG4_2) || defined(__EXTENSIONS__)
@@ -147,13 +133,13 @@ typedef	struct __fd_set {
 #define	FD_ISSET(__n, __p)	(((__p)->fds_bits[(__n)/FD_NFDBITS] & \
 				    (1ul << ((__n) % FD_NFDBITS))) != 0l)
 
-#ifdef _KERNEL
+#if defined(_KERNEL) || defined(_FAKE_KERNEL)
 #define	FD_ZERO(p)	bzero((p), sizeof (*(p)))
 #else
 #define	FD_ZERO(__p)    (void) memset((__p), 0, sizeof (*(__p)))
 #endif /* _KERNEL */
 
-#ifndef	_KERNEL
+#if !defined(_KERNEL) && !defined(_FAKE_KERNEL)
 extern int select(int, fd_set *_RESTRICT_KYWD, fd_set *_RESTRICT_KYWD,
 	fd_set *_RESTRICT_KYWD, struct timeval *_RESTRICT_KYWD);
 

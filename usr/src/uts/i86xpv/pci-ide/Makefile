@@ -23,6 +23,8 @@
 # Copyright 2007 Sun Microsystems, Inc.  All rights reserved.
 # Use is subject to license terms.
 #
+# Copyright 2016 Joyent, Inc.
+#
 
 #
 #	This makefile drives the production of the pci-ide "drv"
@@ -41,7 +43,6 @@ UTSBASE	= ../..
 #
 MODULE		= pci-ide
 OBJECTS		= $(PCIIDE_OBJS:%=$(OBJS_DIR)/%)
-LINTS		= $(PCIIDE_OBJS:%.o=$(LINTS_DIR)/%.ln)
 ROOTMODULE	= $(ROOT_PSM_DRV_DIR)/$(MODULE)
 CONF_SRCDIR	= $(UTSBASE)/common/io/pci-ide
 
@@ -54,7 +55,6 @@ include $(UTSBASE)/i86xpv/Makefile.i86xpv
 #	Define targets
 #
 ALL_TARGET	= $(BINARY) $(CONFMOD)
-LINT_TARGET	= $(MODULE).lint
 INSTALL_TARGET	= $(BINARY) $(ROOTMODULE) $(ROOT_CONFFILE)
 
 #
@@ -66,6 +66,7 @@ DEBUG_DEFS	+= $(DEBUG_FLGS)
 INC_PATH	+= -I$(UTSBASE)/common/io/pci-ide
 
 CERRWARN	+= -_gcc=-Wno-switch
+CERRWARN	+= -_gcc=-Wno-unused-function
 
 #
 #	Default build targets.
@@ -79,12 +80,6 @@ all:		$(ALL_DEPS)
 clean:		$(CLEAN_DEPS)
 
 clobber:	$(CLOBBER_DEPS)
-
-lint:		$(LINT_DEPS)
-
-modlintlib:	$(MODLINTLIB_DEPS)
-
-clean.lint:	$(CLEAN_LINT_DEPS)
 
 install:	$(INSTALL_DEPS)
 

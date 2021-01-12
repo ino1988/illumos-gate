@@ -23,6 +23,8 @@
 # Copyright 2009 Sun Microsystems, Inc.  All rights reserved.
 # Use is subject to license terms.
 # Copyright (c) 2012 by Delphix. All rights reserved.
+# Copyright 2020 Joyent, Inc.
+# Copyright 2017 RackTop Systems.
 #
 
 PROG:sh=	cd ..; basename `pwd`
@@ -32,24 +34,40 @@ OBJS= $(PROG).o zdb_il.o
 include ../../Makefile.cmd
 include ../../Makefile.ctf
 
-INCS += -I../../../lib/libzpool/common 
+INCS += -I../../../lib/libzpool/common
 INCS +=	-I../../../uts/common/fs/zfs
 INCS +=	-I../../../common/zfs
+INCS += -I../../../lib/libzutil/common
 
-LDLIBS += -lzpool -lumem -lnvpair -lzfs -lavl
+LDLIBS += -lzpool -lumem -lnvpair -lzutil -lavl -lfakekernel
 
-C99MODE=	-xc99=%all
+CSTD=	$(CSTD_GNU99)
 C99LMODE=	-Xc99=%all
 
 CFLAGS += $(CCVERBOSE)
 CFLAGS64 += $(CCVERBOSE)
+CPPFLAGS.first = -I$(SRC)/lib/libfakekernel/common -D_FAKE_KERNEL
 CPPFLAGS += -D_LARGEFILE64_SOURCE=1 -D_REENTRANT $(INCS) -DDEBUG
 
-CERRWARN += -_gcc=-Wno-uninitialized
+# re-enable warnings that we can tolerate, which are disabled by default
+# in Makefile.master
+CERRWARN += -_gcc=-Wmissing-braces
+CERRWARN += -_gcc=-Wsign-compare
+
+SMOFF += 64bit_shift,all_func_returns
 
 # lint complains about unused _umem_* functions
 LINTFLAGS += -xerroff=E_NAME_DEF_NOT_USED2
 LINTFLAGS64 += -xerroff=E_NAME_DEF_NOT_USED2
+
+# lint complains about unused inline functions, even though
+# they are "inline", not "static inline", with "extern inline"
+# implementations and usage in libzpool.
+LINTFLAGS += -erroff=E_STATIC_UNUSED
+LINTFLAGS64 += -erroff=E_STATIC_UNUSED
+
+LINTFLAGS += -erroff=E_BAD_PTR_CAST_ALIGN
+LINTFLAGS64 += -erroff=E_BAD_PTR_CAST_ALIGN
 
 .KEEP_STATE:
 

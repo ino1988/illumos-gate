@@ -23,8 +23,11 @@
 # Use is subject to license terms.
 #
 SUBDIRS = mdb_kb \
+	i40e \
 	generic_cpu \
 	amd_opteron \
-	sata
+	sata \
+	smbios \
+	xhci
 
 include ../../Makefile.subdirs

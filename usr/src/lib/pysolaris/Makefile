@@ -21,35 +21,29 @@
 #
 # Copyright 2010 Sun Microsystems, Inc.  All rights reserved.
 # Use is subject to license terms.
+# Copyright 2018 OmniOS Community Edition (OmniOSce) Association.
 #
 
 include	../Makefile.lib
 
-SUBDIRS=	$(MACH)
-XGETTEXT=	$(GNUXGETTEXT)
-XGETFLAGS=	$(GNUXGETFLAGS)
+SUBDIRS=
+$(BUILDPY2)SUBDIRS += $(MACH)
+$(BUILD64)$(BUILDPY2)SUBDIRS += $(MACH64)
+$(BUILD64)$(BUILDPY3)SUBDIRS += py3
 
 all :=		TARGET= all
 install :=	TARGET= install
 clean :=	TARGET= clean
 clobber :=	TARGET= clobber
-lint :=		TARGET= lint
 
-MSGFIND =	$(FIND) . -name '*.py' -o -name '*.c'
-MSGFILES =	$(MSGFIND:sh)
 PYCFIND =	$(FIND) . -name '*.pyc'
-PYCFILES = 	$(PYCFIND:sh)
-POFILE =	pysolaris.po
+PYCFILES =	$(PYCFIND:sh)
 
 .KEEP_STATE:
 
-all install clean lint: $(SUBDIRS)
+all install clean: $(SUBDIRS)
 clobber: $(SUBDIRS)
-	$(RM) $(POFILE) $(PYCFILES)
-
-$(POFILE):	pofile_MSGFILES
-
-_msg: $(MSGDOMAINPOFILE)
+	$(RM) $(PYCFILES)
 
 $(SUBDIRS): FRC
 	@cd $@; pwd; $(MAKE) $(TARGET)

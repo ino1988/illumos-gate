@@ -21,6 +21,12 @@
 /*
  * Copyright 2010 Sun Microsystems, Inc.  All rights reserved.
  * Use is subject to license terms.
+ * Copyright (c) 2016 by Delphix. All rights reserved.
+ */
+
+/*
+ * Copyright 2017 Joyent, Inc.
+ * Copyright 2017 James S Blachly, MD <james.blachly@gmail.com>
  */
 
 /*
@@ -95,6 +101,49 @@ static int mm_kstat_snapshot(kstat_t *ksp, void *buf, int rw);
 
 static int mm_read_mem_name(intptr_t data, mem_name_t *mem_name);
 
+#define	MM_KMEMLOG_NENTRIES	64
+
+static int mm_kmemlogent;
+static mm_logentry_t mm_kmemlog[MM_KMEMLOG_NENTRIES];
+
+/*
+ * On kmem/allmem writes, we log information that might be useful in the event
+ * that a write is errant (that is, due to operator error) and induces a later
+ * problem.  Note that (in particular) in the event of such operator-induced
+ * corruption, a search over the kernel address space for the corrupted
+ * address will yield the ring buffer entry that recorded the write.  And
+ * should it seem baroque or otherwise unnecessary, yes, we need this kind of
+ * auditing facility and yes, we learned that the hard way: disturbingly,
+ * there exist recommendations for "tuning" the system that involve writing to
+ * kernel memory addresses via the kernel debugger, and -- as we discovered --
+ * these can easily be applied incorrectly or unsafely, yielding an entirely
+ * undebuggable "can't happen" kind of panic.
+ */
+static void
+mm_logkmem(struct uio *uio)
+{
+	mm_logentry_t *ent;
+	proc_t *p = curthread->t_procp;
+
+	mutex_enter(&mm_lock);
+
+	ent = &mm_kmemlog[mm_kmemlogent++];
+
+	if (mm_kmemlogent == MM_KMEMLOG_NENTRIES)
+		mm_kmemlogent = 0;
+
+	ent->mle_vaddr = (uintptr_t)uio->uio_loffset;
+	ent->mle_len = uio->uio_resid;
+	gethrestime(&ent->mle_hrestime);
+	ent->mle_hrtime = gethrtime();
+	ent->mle_pid = p->p_pidp->pid_id;
+
+	(void) strncpy(ent->mle_psargs,
+	    p->p_user.u_psargs, sizeof (ent->mle_psargs));
+
+	mutex_exit(&mm_lock);
+}
+
 /*ARGSUSED1*/
 static int
 mm_attach(dev_info_t *devi, ddi_attach_cmd_t cmd)
@@ -113,6 +162,7 @@ mm_attach(dev_info_t *devi, ddi_attach_cmd_t cmd)
 		{ "allkmem",	M_ALLKMEM,	0,	"all",	"all",	0600 },
 		{ "null",	M_NULL,	PRIVONLY_DEV,	NULL,	NULL,	0666 },
 		{ "zero",	M_ZERO, PRIVONLY_DEV,	NULL,	NULL,	0666 },
+		{ "full",	M_FULL, PRIVONLY_DEV,	NULL,	NULL,	0666 },
 	};
 	kstat_t *ksp;
 
@@ -174,6 +224,7 @@ mmopen(dev_t *devp, int flag, int typ, struct cred *cred)
 	switch (getminor(*devp)) {
 	case M_NULL:
 	case M_ZERO:
+	case M_FULL:
 	case M_MEM:
 	case M_KMEM:
 	case M_ALLKMEM:
@@ -200,6 +251,7 @@ mmchpoll(dev_t dev, short events, int anyyet, short *reventsp,
 	switch (getminor(dev)) {
 	case M_NULL:
 	case M_ZERO:
+	case M_FULL:
 	case M_MEM:
 	case M_KMEM:
 	case M_ALLKMEM:
@@ -207,10 +259,11 @@ mmchpoll(dev_t dev, short events, int anyyet, short *reventsp,
 		    POLLWRNORM | POLLRDBAND | POLLWRBAND);
 		/*
 		 * A non NULL pollhead pointer should be returned in case
-		 * user polls for 0 events.
+		 * user polls for 0 events or is doing an edge-triggerd poll.
 		 */
-		*phpp = !anyyet && !*reventsp ?
-		    &mm_pollhd : (struct pollhead *)NULL;
+		if ((!*reventsp && !anyyet) || (events & POLLET)) {
+			*phpp = &mm_pollhd;
+		}
 		return (0);
 	default:
 		/* no other devices currently support polling */
@@ -288,10 +341,10 @@ mmpagelock(struct as *as, caddr_t va)
 	struct seg *seg;
 	int i;
 
-	AS_LOCK_ENTER(as, &as->a_lock, RW_READER);
+	AS_LOCK_ENTER(as, RW_READER);
 	seg = as_segat(as, va);
 	i = (seg != NULL)? SEGOP_CAPABLE(seg, S_CAPABILITY_NOMINFLT) : 0;
-	AS_LOCK_EXIT(as, &as->a_lock);
+	AS_LOCK_EXIT(as);
 
 	return (i);
 }
@@ -354,6 +407,9 @@ mmrw(dev_t dev, struct uio *uio, enum uio_rw rw, cred_t *cred)
 			if ((error = plat_mem_do_mmio(uio, rw)) != ENOTSUP)
 				break;
 
+			if (rw == UIO_WRITE)
+				mm_logkmem(uio);
+
 			/*
 			 * If vaddr does not map a valid page, as_pagelock()
 			 * will return failure. Hence we can't check the
@@ -387,6 +443,14 @@ mmrw(dev_t dev, struct uio *uio, enum uio_rw rw, cred_t *cred)
 			}
 
 			break;
+
+		case M_FULL:
+			if (rw == UIO_WRITE) {
+				error = ENOSPC;
+				break;
+			}
+			/* else it's a read, fall through to zero case */
+			/*FALLTHROUGH*/
 
 		case M_ZERO:
 			if (rw == UIO_READ) {
@@ -496,7 +560,7 @@ mmioctl_vtop(intptr_t data)
 		as = p->p_as;
 		if (as == mem_vtop.m_as) {
 			mutex_exit(&p->p_lock);
-			AS_LOCK_ENTER(as, &as->a_lock, RW_READER);
+			AS_LOCK_ENTER(as, RW_READER);
 			for (seg = AS_SEGFIRST(as); seg != NULL;
 			    seg = AS_SEGNEXT(as, seg))
 				if ((uintptr_t)mem_vtop.m_va -
@@ -504,7 +568,7 @@ mmioctl_vtop(intptr_t data)
 					break;
 			if (seg != NULL)
 				pfn = hat_getpfnum(as->a_hat, mem_vtop.m_va);
-			AS_LOCK_EXIT(as, &as->a_lock);
+			AS_LOCK_EXIT(as);
 			mutex_enter(&p->p_lock);
 		}
 		sprunlock(p);
@@ -777,6 +841,7 @@ mmmmap(dev_t dev, off_t off, int prot)
 		/* no longer supported with KPR */
 		return (-1);
 
+	case M_FULL:
 	case M_ZERO:
 		/*
 		 * We shouldn't be mmap'ing to /dev/zero here as
@@ -853,7 +918,7 @@ mmsegmap(dev_t dev, off_t off, struct as *as, caddr_t *addrp, off_t len,
 		 * Make /dev/mem mappings non-consistent since we can't
 		 * alias pages that don't have page structs behind them,
 		 * such as kernel stack pages. If someone mmap()s a kernel
-		 * stack page and if we give him a tte with cv, a line from
+		 * stack page and if we give them a tte with cv, a line from
 		 * that page can get into both pages of the spitfire d$.
 		 * But snoop from another processor will only invalidate
 		 * the first page. This later caused kernel (xc_attention)

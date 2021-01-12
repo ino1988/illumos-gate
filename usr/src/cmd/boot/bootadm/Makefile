@@ -21,34 +21,41 @@
 #
 # Copyright 2009 Sun Microsystems, Inc.  All rights reserved.
 # Use is subject to license terms.
-# 
-# Copyright 2011 Nexenta Systems, Inc. All rights reserved.
 #
+# Copyright 2016 Toomas Soome <tsoome@me.com>
+# Copyright 2016 Nexenta Systems, Inc.
+# Copyright 2018 OmniOS Community Edition (OmniOSce) Association.
+# Copyright (c) 2018, Joyent, Inc.
 
 PROG= bootadm
 
 SBINLINKS= $(PROG)
 
-OBJS= bootadm.o bootadm_upgrade.o bootadm_hyper.o
+OBJS= bootadm.o bootadm_upgrade.o bootadm_hyper.o bootadm_digest.o \
+	bootadm_loader.o
 SRCS = $(OBJS:.o=.c)
+POFILES= $(OBJS:%.o=%.po)
 
 include ../Makefile.com
 
+POFILE= bootadm_cmd.po
 
 .KEEP_STATE:
 
 LDLIBS_i386= -lfdisk
-LDLIBS +=	-lnvpair -lgen -ladm -lefi -lscf -lz -lbe -lzfs $(LDLIBS_$(MACH))
+LDLIBS += -lficl-sys -lmd -lcryptoutil -lnvpair -lgen -ladm -lefi
+LDLIBS += -lscf -lz -lbe -lzfs -lofmt $(LDLIBS_$(MACH))
+NATIVE_LIBS += libz.so
 
 # Writing into string literals is incorrect.  We need to match gcc's
 # behavior, which causes us to take SIGSEGV on such a write.
 CFLAGS +=	$(XSTRCONST)
 CPPFLAGS +=	-D_FILE_OFFSET_BITS=64
-CPPFLAGS +=	-I../../../uts/common -I../../../common
+CPPFLAGS +=	-I$(SRC)/uts/common -I$(SRC)/common -I$(SRC)/common/ficl
 
-CERRWARN +=	-_gcc=-Wno-parentheses
-CERRWARN +=	-_gcc=-Wno-uninitialized
-CERRWARN +=	-_gcc=-Wno-unused-label
+SMOFF +=	all_func_returns
+
+CSTD=	$(CSTD_GNU99)
 
 LINTFLAGS += -erroff=E_INCONS_ARG_DECL2
 LINTFLAGS += -erroff=E_INCONS_VAL_TYPE_DECL2
@@ -62,10 +69,12 @@ $(PROG): $(OBJS) bootadm.h
 
 install: all $(ROOTSBINPROG) .WAIT $(ROOTUSRSBINLINKS)
 
-clean:
-	-$(RM) $(OBJS)
+$(POFILE): $(POFILES)
+	$(RM) $@
+	$(CAT) $(POFILES) > $@
 
-_msg:
+clean:
+	-$(RM) $(OBJS) $(POFILE) $(POFILES)
 
 lint:	lint_SRCS
 

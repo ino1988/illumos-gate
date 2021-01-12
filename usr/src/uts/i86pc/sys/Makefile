@@ -21,6 +21,7 @@
 #
 # Copyright 2009 Sun Microsystems, Inc.  All rights reserved.
 # Use is subject to license terms.
+# Copyright 2019 Joyent, Inc.
 #
 # uts/i86pc/sys/Makefile
 #
@@ -43,8 +44,9 @@ HDRS=  \
 	clock.h		\
 	cram.h		\
 	ddi_subrdefs.h	\
-	debug_info.h 	\
+	debug_info.h	\
 	fastboot.h	\
+	hma.h		\
 	mach_mmu.h	\
 	machclock.h	\
 	machcpuvar.h	\
@@ -59,8 +61,9 @@ HDRS=  \
 	psm_modctl.h	\
 	psm_types.h	\
 	rm_platter.h	\
-	smp_impldefs.h	\
 	sbd_ioctl.h	\
+	smp_impldefs.h	\
+	smt.h		\
 	vm_machparam.h	\
 	x_call.h	\
 	xc_levels.h	\

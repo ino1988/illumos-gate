@@ -23,6 +23,8 @@
  * Copyright (c) 1990, 2010, Oracle and/or its affiliates. All rights reserved.
  * Copyright 2012 Garrett D'Amore <garrett@damore.org>.  All rights reserved.
  * Copyright (c) 2012 by Delphix. All rights reserved.
+ * Copyright 2016 Nexenta Systems, Inc.  All rights reserved.
+ * Copyright 2019 Joyent, Inc.
  */
 
 #ifndef	_SYS_SUNDDI_H
@@ -174,6 +176,7 @@ extern "C" {
 #define	DDI_NT_SCSI_ENCLOSURE	"ddi_enclosure:scsi"
 
 #define	DDI_NT_BLOCK_SAS	"ddi_block:sas"
+#define	DDI_NT_BLOCK_BLKDEV	"ddi_block:blkdev"
 
 /*
  * xVM virtual block devices
@@ -200,15 +203,17 @@ extern "C" {
 
 #define	DDI_NT_KEYBOARD	"ddi_keyboard"		/* keyboard device */
 
-#define	DDI_NT_PARALLEL "ddi_parallel"		/* parallel port */
+#define	DDI_NT_PARALLEL	"ddi_parallel"		/* parallel port */
 
 #define	DDI_NT_PRINTER	"ddi_printer"		/* printer device */
 
 #define	DDI_NT_UGEN	"ddi_generic:usb"	/* USB generic drv */
 
-#define	DDI_NT_SMP	"ddi_sas_smp" 		/* smp devcies */
+#define	DDI_NT_SMP	"ddi_sas_smp"		/* smp devcies */
 
 #define	DDI_NT_NEXUS	"ddi_ctl:devctl"	/* nexus drivers */
+
+#define	DDI_NT_NVME_NEXUS	"ddi_ctl:devctl:nvme"	/* nexus drivers */
 
 #define	DDI_NT_SCSI_NEXUS	"ddi_ctl:devctl:scsi"	/* nexus drivers */
 
@@ -217,6 +222,9 @@ extern "C" {
 #define	DDI_NT_IB_NEXUS		"ddi_ctl:devctl:ib"	/* nexus drivers */
 
 #define	DDI_NT_ATTACHMENT_POINT	"ddi_ctl:attachment_point" /* attachment pt */
+
+#define	DDI_NT_NVME_ATTACHMENT_POINT	"ddi_ctl:attachment_point:nvme"
+						/* nvme attachment pt */
 
 #define	DDI_NT_SCSI_ATTACHMENT_POINT	"ddi_ctl:attachment_point:scsi"
 						/* scsi attachment pt */
@@ -239,6 +247,8 @@ extern "C" {
 						/* Fabric Devices */
 #define	DDI_NT_IB_ATTACHMENT_POINT	"ddi_ctl:attachment_point:ib"
 						/* IB devices */
+#define	DDI_NT_CCID_ATTACHMENT_POINT	"ddi_ctl:attachment_point:ccid"
+						/* CCID devices */
 
 #define	DDI_NT_AV_ASYNC "ddi_av:async"		/* asynchronous AV device */
 #define	DDI_NT_AV_ISOCH "ddi_av:isoch"		/* isochronous AV device */
@@ -251,6 +261,12 @@ extern "C" {
 
 #define	DDI_NT_REGACC		"ddi_tool_reg"	/* tool register access */
 #define	DDI_NT_INTRCTL		"ddi_tool_intr"	/* tool intr access */
+
+/*
+ * Various device types used for sensors.
+ */
+#define	DDI_NT_SENSOR_TEMP_CPU	"ddi_sensor:temperature:cpu"
+#define	DDI_NT_SENSOR_TEMP_PCH	"ddi_sensor:temperature:pch"
 
 /*
  * DDI event definitions
@@ -329,7 +345,7 @@ typedef enum {
     DDI_DEVSTATE_UP = 32
 } ddi_devstate_t;
 
-#ifdef	_KERNEL
+#if defined(_KERNEL) || defined(_FAKE_KERNEL)
 
 /*
  * Common property definitions
@@ -462,6 +478,7 @@ extern size_t strlcat(char *, const char *, size_t);
 extern size_t strlcpy(char *, const char *, size_t);
 extern size_t strspn(const char *, const char *);
 extern size_t strcspn(const char *, const char *);
+extern char *strsep(char **, const char *);
 extern int bcmp(const void *, const void *, size_t) __PURE;
 extern int stoi(char **);
 extern void numtos(ulong_t, char *);
@@ -502,7 +519,10 @@ extern kiconv_t kiconv_open(const char *, const char *);
 extern size_t kiconv(kiconv_t, char **, size_t *, char **, size_t *, int *);
 extern int kiconv_close(kiconv_t);
 extern size_t kiconvstr(const char *, const char *, char *, size_t *, char *,
-	size_t *, int, int *);
+    size_t *, int, int *);
+
+#endif /* _KERNEL || _FAKE_KERNEL */
+#ifdef	_KERNEL
 
 /*
  * ddi_map_regs
@@ -523,7 +543,7 @@ extern size_t kiconvstr(const char *, const char *, char *, size_t *, char *,
  */
 int
 ddi_map_regs(dev_info_t *dip, uint_t rnumber, caddr_t *kaddrp,
-	off_t offset, off_t len);
+    off_t offset, off_t len);
 
 /*
  * ddi_unmap_regs
@@ -543,11 +563,11 @@ ddi_map_regs(dev_info_t *dip, uint_t rnumber, caddr_t *kaddrp,
 
 void
 ddi_unmap_regs(dev_info_t *dip, uint_t rnumber, caddr_t *kaddrp,
-	off_t offset, off_t len);
+    off_t offset, off_t len);
 
 int
 ddi_map(dev_info_t *dp, ddi_map_req_t *mp, off_t offset, off_t len,
-	caddr_t *addrp);
+    caddr_t *addrp);
 
 int
 ddi_apply_range(dev_info_t *dip, dev_info_t *rdip, struct regspec *rp);
@@ -560,11 +580,11 @@ ddi_rnumber_to_regspec(dev_info_t *dip, int rnumber);
 
 int
 ddi_bus_map(dev_info_t *dip, dev_info_t *rdip, ddi_map_req_t *mp, off_t offset,
-	off_t len, caddr_t *vaddrp);
+    off_t len, caddr_t *vaddrp);
 
 int
 nullbusmap(dev_info_t *dip, dev_info_t *rdip, ddi_map_req_t *mp, off_t offset,
-	off_t len, caddr_t *vaddrp);
+    off_t len, caddr_t *vaddrp);
 
 int ddi_peek8(dev_info_t *dip, int8_t *addr, int8_t *val_p);
 int ddi_peek16(dev_info_t *dip, int16_t *addr, int16_t *val_p);
@@ -581,7 +601,7 @@ int ddi_poke64(dev_info_t *dip, int64_t *addr, int64_t val);
  * using the parent nexi.
  */
 int ddi_peekpokeio(dev_info_t *devi, struct uio *uio, enum uio_rw rw,
-	caddr_t addr, size_t len, uint_t xfersize);
+    caddr_t addr, size_t len, uint_t xfersize);
 
 /*
  * Pagesize conversions using the parent nexi
@@ -626,54 +646,52 @@ ddi_exit_critical(unsigned int);
  */
 int
 devmap_setup(dev_t dev, offset_t off, ddi_as_handle_t as, caddr_t *addrp,
-	size_t len, uint_t prot, uint_t maxprot, uint_t flags,
-	struct cred *cred);
+    size_t len, uint_t prot, uint_t maxprot, uint_t flags, struct cred *cred);
 
 int
 ddi_devmap_segmap(dev_t dev, off_t off, ddi_as_handle_t as, caddr_t *addrp,
-	off_t len, uint_t prot, uint_t maxprot, uint_t flags,
-	struct cred *cred);
+    off_t len, uint_t prot, uint_t maxprot, uint_t flags, struct cred *cred);
 
 int
 devmap_load(devmap_cookie_t dhp, offset_t offset, size_t len, uint_t type,
-	uint_t rw);
+    uint_t rw);
 
 int
 devmap_unload(devmap_cookie_t dhp, offset_t offset, size_t len);
 
 int
 devmap_devmem_setup(devmap_cookie_t dhp, dev_info_t *dip,
-	struct devmap_callback_ctl *callback_ops,
-	uint_t rnumber, offset_t roff, size_t len, uint_t maxprot,
-	uint_t flags, ddi_device_acc_attr_t *accattrp);
+    struct devmap_callback_ctl *callback_ops,
+    uint_t rnumber, offset_t roff, size_t len, uint_t maxprot,
+    uint_t flags, ddi_device_acc_attr_t *accattrp);
 
 int
 devmap_umem_setup(devmap_cookie_t dhp, dev_info_t *dip,
-	struct devmap_callback_ctl *callback_ops,
-	ddi_umem_cookie_t cookie, offset_t off, size_t len, uint_t maxprot,
-	uint_t flags, ddi_device_acc_attr_t *accattrp);
+    struct devmap_callback_ctl *callback_ops,
+    ddi_umem_cookie_t cookie, offset_t off, size_t len, uint_t maxprot,
+    uint_t flags, ddi_device_acc_attr_t *accattrp);
 
 int
 devmap_devmem_remap(devmap_cookie_t dhp, dev_info_t *dip,
-	uint_t rnumber, offset_t roff, size_t len, uint_t maxprot,
-	uint_t flags, ddi_device_acc_attr_t *accattrp);
+    uint_t rnumber, offset_t roff, size_t len, uint_t maxprot,
+    uint_t flags, ddi_device_acc_attr_t *accattrp);
 
 int
 devmap_umem_remap(devmap_cookie_t dhp, dev_info_t *dip,
-	ddi_umem_cookie_t cookie, offset_t off, size_t len, uint_t maxprot,
-	uint_t flags, ddi_device_acc_attr_t *accattrp);
+    ddi_umem_cookie_t cookie, offset_t off, size_t len, uint_t maxprot,
+    uint_t flags, ddi_device_acc_attr_t *accattrp);
 
 void
 devmap_set_ctx_timeout(devmap_cookie_t dhp, clock_t ticks);
 
 int
 devmap_default_access(devmap_cookie_t dhp, void *pvtp, offset_t off,
-	size_t len, uint_t type, uint_t rw);
+    size_t len, uint_t type, uint_t rw);
 
 int
 devmap_do_ctxmgt(devmap_cookie_t dhp, void *pvtp, offset_t off, size_t len,
-	uint_t type, uint_t rw, int (*ctxmgt)(devmap_cookie_t, void *, offset_t,
-	size_t, uint_t, uint_t));
+    uint_t type, uint_t rw, int (*ctxmgt)(devmap_cookie_t, void *, offset_t,
+    size_t, uint_t, uint_t));
 
 
 void *ddi_umem_alloc(size_t size, int flag, ddi_umem_cookie_t *cookiep);
@@ -698,20 +716,20 @@ ddi_umem_iosetup(ddi_umem_cookie_t cookie, off_t off, size_t len, int direction,
  */
 int
 ddi_segmap(dev_t dev, off_t offset, struct as *asp, caddr_t *addrp, off_t len,
-	uint_t prot, uint_t maxprot, uint_t flags, cred_t *credp);
+    uint_t prot, uint_t maxprot, uint_t flags, cred_t *credp);
 
 int
 ddi_segmap_setup(dev_t dev, off_t offset, struct as *as, caddr_t *addrp,
-	off_t len, uint_t prot, uint_t maxprot, uint_t flags, cred_t *cred,
-	ddi_device_acc_attr_t *accattrp, uint_t rnumber);
+    off_t len, uint_t prot, uint_t maxprot, uint_t flags, cred_t *cred,
+    ddi_device_acc_attr_t *accattrp, uint_t rnumber);
 
 int
 ddi_map_fault(dev_info_t *dip, struct hat *hat, struct seg *seg, caddr_t addr,
-	struct devpage *dp, pfn_t pfn, uint_t prot, uint_t lock);
+    struct devpage *dp, pfn_t pfn, uint_t prot, uint_t lock);
 
 int
 ddi_device_mapping_check(dev_t dev, ddi_device_acc_attr_t *accattrp,
-	uint_t rnumber, uint_t *hat_flags);
+    uint_t rnumber, uint_t *hat_flags);
 
 /*
  * Property functions:   See also, ddipropdefs.h.
@@ -775,7 +793,7 @@ void ddi_prop_free(void *data);
 
 int
 nopropop(dev_t dev, dev_info_t *dip, ddi_prop_op_t prop_op, int mod_flags,
-	char *name, caddr_t valuep, int *lengthp);
+    char *name, caddr_t valuep, int *lengthp);
 
 /*
  * ddi_prop_op: The basic property operator for drivers.
@@ -795,31 +813,31 @@ nopropop(dev_t dev, dev_info_t *dip, ddi_prop_op_t prop_op, int mod_flags,
 
 int
 ddi_prop_op(dev_t dev, dev_info_t *dip, ddi_prop_op_t prop_op, int mod_flags,
-	char *name, caddr_t valuep, int *lengthp);
+    char *name, caddr_t valuep, int *lengthp);
 
 /* ddi_prop_op_size: for drivers that implement size in bytes */
 int
 ddi_prop_op_size(dev_t dev, dev_info_t *dip, ddi_prop_op_t prop_op,
-	int mod_flags, char *name, caddr_t valuep, int *lengthp,
-	uint64_t size64);
+    int mod_flags, char *name, caddr_t valuep, int *lengthp,
+    uint64_t size64);
 
 /* ddi_prop_op_size_blksize: like ddi_prop_op_size, in blksize blocks */
 int
 ddi_prop_op_size_blksize(dev_t dev, dev_info_t *dip, ddi_prop_op_t prop_op,
-	int mod_flags, char *name, caddr_t valuep, int *lengthp,
-	uint64_t size64, uint_t blksize);
+    int mod_flags, char *name, caddr_t valuep, int *lengthp,
+    uint64_t size64, uint_t blksize);
 
 /* ddi_prop_op_nblocks: for drivers that implement size in DEV_BSIZE blocks */
 int
 ddi_prop_op_nblocks(dev_t dev, dev_info_t *dip, ddi_prop_op_t prop_op,
-	int mod_flags, char *name, caddr_t valuep, int *lengthp,
-	uint64_t nblocks64);
+    int mod_flags, char *name, caddr_t valuep, int *lengthp,
+    uint64_t nblocks64);
 
 /* ddi_prop_op_nblocks_blksize: like ddi_prop_op_nblocks, in blksize blocks */
 int
 ddi_prop_op_nblocks_blksize(dev_t dev, dev_info_t *dip, ddi_prop_op_t prop_op,
-	int mod_flags, char *name, caddr_t valuep, int *lengthp,
-	uint64_t nblocks64, uint_t blksize);
+    int mod_flags, char *name, caddr_t valuep, int *lengthp,
+    uint64_t nblocks64, uint_t blksize);
 
 /*
  * Variable length props...
@@ -830,7 +848,7 @@ ddi_prop_op_nblocks_blksize(dev_t dev, dev_info_t *dip, ddi_prop_op_t prop_op,
  *		allocated by property provider via kmem_alloc. Requester
  *		is responsible for freeing returned property via kmem_free.
  *
- * 	Arguments:
+ *	Arguments:
  *
  *	dev:	Input:	dev_t of property.
  *	dip:	Input:	dev_info_t pointer of child.
@@ -841,7 +859,7 @@ ddi_prop_op_nblocks_blksize(dev_t dev, dev_info_t *dip, ddi_prop_op_t prop_op,
  *	valuep:	Output:	Addr of callers buffer pointer.
  *	lengthp:Output:	*lengthp will contain prop length on exit.
  *
- * 	Possible Returns:
+ *	Possible Returns:
  *
  *		DDI_PROP_SUCCESS:	Prop found and returned.
  *		DDI_PROP_NOT_FOUND:	Prop not found
@@ -851,7 +869,7 @@ ddi_prop_op_nblocks_blksize(dev_t dev, dev_info_t *dip, ddi_prop_op_t prop_op,
 
 int
 ddi_getlongprop(dev_t dev, dev_info_t *dip, int flags,
-	char *name, caddr_t valuep, int *lengthp);
+    char *name, caddr_t valuep, int *lengthp);
 
 /*
  *
@@ -879,7 +897,7 @@ ddi_getlongprop(dev_t dev, dev_info_t *dip, int flags,
 
 int
 ddi_getlongprop_buf(dev_t dev, dev_info_t *dip, int flags,
-	char *name, caddr_t valuep, int *lengthp);
+    char *name, caddr_t valuep, int *lengthp);
 
 /*
  * Integer/boolean sized props.
@@ -924,7 +942,7 @@ ddi_getproplen(dev_t dev, dev_info_t *dip, int flags, char *name, int *lengthp);
 
 int
 ddi_prop_create(dev_t dev, dev_info_t *dip, int flag,
-	char *name, caddr_t value, int length);
+    char *name, caddr_t value, int length);
 
 /*
  * ddi_prop_modify:	Modify a managed property value
@@ -932,7 +950,7 @@ ddi_prop_create(dev_t dev, dev_info_t *dip, int flag,
 
 int
 ddi_prop_modify(dev_t dev, dev_info_t *dip, int flag,
-	char *name, caddr_t value, int length);
+    char *name, caddr_t value, int length);
 
 /*
  * ddi_prop_remove:	Undefine a managed property:
@@ -979,8 +997,8 @@ ddi_prop_cache_invalidate(dev_t dev, dev_info_t *dip, char *name, int flags);
 
 int
 ddi_bus_prop_op(dev_t dev, dev_info_t *dip, dev_info_t *ch_dip,
-	ddi_prop_op_t prop_op, int mod_flags,
-	char *name, caddr_t valuep, int *lengthp);
+    ddi_prop_op_t prop_op, int mod_flags,
+    char *name, caddr_t valuep, int *lengthp);
 
 
 /*
@@ -1297,8 +1315,8 @@ ddi_dma_attr_merge(ddi_dma_attr_t *attr, ddi_dma_attr_t *mod);
 
 int
 ddi_dma_alloc_handle(dev_info_t *dip, ddi_dma_attr_t *attr,
-	int (*waitfp)(caddr_t), caddr_t arg,
-	ddi_dma_handle_t *handlep);
+    int (*waitfp)(caddr_t), caddr_t arg,
+    ddi_dma_handle_t *handlep);
 
 /*
  * Free DMA handle
@@ -1313,9 +1331,9 @@ ddi_dma_free_handle(ddi_dma_handle_t *handlep);
 
 int
 ddi_dma_mem_alloc(ddi_dma_handle_t handle, size_t length,
-	ddi_device_acc_attr_t *accattrp, uint_t xfermodes,
-	int (*waitfp)(caddr_t), caddr_t arg, caddr_t *kaddrp,
-	size_t *real_length, ddi_acc_handle_t *handlep);
+    ddi_device_acc_attr_t *accattrp, uint_t xfermodes,
+    int (*waitfp)(caddr_t), caddr_t arg, caddr_t *kaddrp,
+    size_t *real_length, ddi_acc_handle_t *handlep);
 
 /*
  * Free DMA memory
@@ -1330,9 +1348,9 @@ ddi_dma_mem_free(ddi_acc_handle_t *hp);
 
 int
 ddi_dma_addr_bind_handle(ddi_dma_handle_t handle, struct as *as,
-	caddr_t addr, size_t len, uint_t flags,
-	int (*waitfp)(caddr_t), caddr_t arg,
-	ddi_dma_cookie_t *cookiep, uint_t *ccountp);
+    caddr_t addr, size_t len, uint_t flags,
+    int (*waitfp)(caddr_t), caddr_t arg,
+    ddi_dma_cookie_t *cookiep, uint_t *ccountp);
 
 /*
  * bind buffer to DMA handle
@@ -1340,8 +1358,8 @@ ddi_dma_addr_bind_handle(ddi_dma_handle_t handle, struct as *as,
 
 int
 ddi_dma_buf_bind_handle(ddi_dma_handle_t handle, struct buf *bp,
-	uint_t flags, int (*waitfp)(caddr_t), caddr_t arg,
-	ddi_dma_cookie_t *cookiep, uint_t *ccountp);
+    uint_t flags, int (*waitfp)(caddr_t), caddr_t arg,
+    ddi_dma_cookie_t *cookiep, uint_t *ccountp);
 
 /*
  * unbind mapping object to handle
@@ -1352,6 +1370,10 @@ ddi_dma_unbind_handle(ddi_dma_handle_t handle);
 
 /*
  * get next DMA cookie
+ *
+ * This function has been deprecated because it is unsafe. Please use
+ * ddi_dma_cookie_iter(), ddi_dma_cookie_get(), or ddi_dma_cookie_one() instead.
+ * For more information on the problems, please see the manual page.
  */
 
 void
@@ -1370,7 +1392,7 @@ ddi_dma_numwin(ddi_dma_handle_t handle, uint_t *nwinp);
 
 int
 ddi_dma_getwin(ddi_dma_handle_t handle, uint_t win, off_t *offp,
-	size_t *lenp, ddi_dma_cookie_t *cookiep, uint_t *ccountp);
+    size_t *lenp, ddi_dma_cookie_t *cookiep, uint_t *ccountp);
 
 /*
  * activate 64 bit SBus support
@@ -1479,7 +1501,7 @@ ddi_run_callback(uintptr_t *listid);
 
 int
 nochpoll(dev_t dev, short events, int anyyet, short *reventsp,
-	struct pollhead **phpp);
+    struct pollhead **phpp);
 
 dev_info_t *
 nodevinfo(dev_t dev, int otyp);
@@ -1552,16 +1574,16 @@ void
 swab(void *src, void *dst, size_t nbytes);
 
 int
-ddi_create_minor_node(dev_info_t *dip, char *name, int spec_type,
-    minor_t minor_num, char *node_type, int flag);
+ddi_create_minor_node(dev_info_t *dip, const char *name, int spec_type,
+    minor_t minor_num, const char *node_type, int flag);
 
 int
-ddi_create_priv_minor_node(dev_info_t *dip, char *name, int spec_type,
-    minor_t minor_num, char *node_type, int flag,
+ddi_create_priv_minor_node(dev_info_t *dip, const char *name, int spec_type,
+    minor_t minor_num, const char *node_type, int flag,
     const char *rdpriv, const char *wrpriv, mode_t priv_mode);
 
 void
-ddi_remove_minor_node(dev_info_t *dip, char *name);
+ddi_remove_minor_node(dev_info_t *dip, const char *name);
 
 int
 ddi_in_panic(void);
@@ -1739,30 +1761,30 @@ ddi_ctlops(dev_info_t *d, dev_info_t *r, ddi_ctl_enum_t o, void *a, void *v);
 
 int
 ddi_dma_allochdl(dev_info_t *dip, dev_info_t *rdip, ddi_dma_attr_t *attr,
-	int (*waitfp)(caddr_t), caddr_t arg, ddi_dma_handle_t *handlep);
+    int (*waitfp)(caddr_t), caddr_t arg, ddi_dma_handle_t *handlep);
 
 int
 ddi_dma_freehdl(dev_info_t *dip, dev_info_t *rdip,
-	ddi_dma_handle_t handle);
+    ddi_dma_handle_t handle);
 
 int
 ddi_dma_bindhdl(dev_info_t *dip, dev_info_t *rdip,
-	ddi_dma_handle_t handle, struct ddi_dma_req *dmareq,
-	ddi_dma_cookie_t *cp, uint_t *ccountp);
+    ddi_dma_handle_t handle, struct ddi_dma_req *dmareq,
+    ddi_dma_cookie_t *cp, uint_t *ccountp);
 
 int
 ddi_dma_unbindhdl(dev_info_t *dip, dev_info_t *rdip,
-	ddi_dma_handle_t handle);
+    ddi_dma_handle_t handle);
 
 int
 ddi_dma_flush(dev_info_t *dip, dev_info_t *rdip,
-	ddi_dma_handle_t handle, off_t off, size_t len,
-	uint_t cache_flags);
+    ddi_dma_handle_t handle, off_t off, size_t len,
+    uint_t cache_flags);
 
 int
 ddi_dma_win(dev_info_t *dip, dev_info_t *rdip,
-	ddi_dma_handle_t handle, uint_t win, off_t *offp,
-	size_t *lenp, ddi_dma_cookie_t *cookiep, uint_t *ccountp);
+    ddi_dma_handle_t handle, uint_t win, off_t *offp,
+    size_t *lenp, ddi_dma_cookie_t *cookiep, uint_t *ccountp);
 
 /*
  * bus_dma_ctl wrapper
@@ -1770,8 +1792,8 @@ ddi_dma_win(dev_info_t *dip, dev_info_t *rdip,
 
 int
 ddi_dma_mctl(dev_info_t *dip, dev_info_t *rdip, ddi_dma_handle_t handle,
-	enum ddi_dma_ctlops request, off_t *offp, size_t *lenp,
-	caddr_t *objp, uint_t flags);
+    enum ddi_dma_ctlops request, off_t *offp, size_t *lenp,
+    caddr_t *objp, uint_t flags);
 
 /*
  * dvma support for networking drivers
@@ -1782,14 +1804,14 @@ dvma_pagesize(dev_info_t *dip);
 
 int
 dvma_reserve(dev_info_t *dip,  ddi_dma_lim_t *limp, uint_t pages,
-	ddi_dma_handle_t *handlep);
+    ddi_dma_handle_t *handlep);
 
 void
 dvma_release(ddi_dma_handle_t h);
 
 void
 dvma_kaddr_load(ddi_dma_handle_t h, caddr_t a, uint_t len, uint_t index,
-	ddi_dma_cookie_t *cp);
+    ddi_dma_cookie_t *cp);
 
 void
 dvma_unload(ddi_dma_handle_t h, uint_t objindex, uint_t type);
@@ -1831,8 +1853,18 @@ extern void ddi_set_console_bell(void (*bellfunc)(clock_t duration));
 extern int ddi_check_acc_handle(ddi_acc_handle_t);
 extern int ddi_check_dma_handle(ddi_dma_handle_t);
 extern void ddi_dev_report_fault(dev_info_t *, ddi_fault_impact_t,
-	ddi_fault_location_t, const char *);
+    ddi_fault_location_t, const char *);
 extern ddi_devstate_t ddi_get_devstate(dev_info_t *);
+
+/*
+ * Replacement DMA cookie functions for ddi_dma_nextcookie().
+ */
+extern int ddi_dma_ncookies(ddi_dma_handle_t);
+extern const ddi_dma_cookie_t *ddi_dma_cookie_iter(ddi_dma_handle_t,
+    const ddi_dma_cookie_t *);
+extern const ddi_dma_cookie_t *ddi_dma_cookie_get(ddi_dma_handle_t, uint_t);
+extern const ddi_dma_cookie_t *ddi_dma_cookie_one(ddi_dma_handle_t);
+
 
 /*
  * Miscellaneous redefines
@@ -1858,8 +1890,8 @@ extern ddi_devstate_t ddi_get_devstate(dev_info_t *);
 
 int
 ddi_regs_map_setup(dev_info_t *dip, uint_t rnumber, caddr_t *addrp,
-	offset_t offset, offset_t len, ddi_device_acc_attr_t *accattrp,
-	ddi_acc_handle_t *handle);
+    offset_t offset, offset_t len, ddi_device_acc_attr_t *accattrp,
+    ddi_acc_handle_t *handle);
 
 void
 ddi_regs_map_free(ddi_acc_handle_t *handle);
@@ -1882,19 +1914,19 @@ ddi_get64(ddi_acc_handle_t handle, uint64_t *addr);
 
 void
 ddi_rep_get8(ddi_acc_handle_t handle, uint8_t *host_addr, uint8_t *dev_addr,
-	size_t repcount, uint_t flags);
+    size_t repcount, uint_t flags);
 
 void
 ddi_rep_get16(ddi_acc_handle_t handle, uint16_t *host_addr, uint16_t *dev_addr,
-	size_t repcount, uint_t flags);
+    size_t repcount, uint_t flags);
 
 void
 ddi_rep_get32(ddi_acc_handle_t handle, uint32_t *host_addr, uint32_t *dev_addr,
-	size_t repcount, uint_t flags);
+    size_t repcount, uint_t flags);
 
 void
 ddi_rep_get64(ddi_acc_handle_t handle, uint64_t *host_addr, uint64_t *dev_addr,
-	size_t repcount, uint_t flags);
+    size_t repcount, uint_t flags);
 
 void
 ddi_put8(ddi_acc_handle_t handle, uint8_t *addr, uint8_t value);
@@ -1910,30 +1942,30 @@ ddi_put64(ddi_acc_handle_t handle, uint64_t *addr, uint64_t value);
 
 void
 ddi_rep_put8(ddi_acc_handle_t handle, uint8_t *host_addr, uint8_t *dev_addr,
-	size_t repcount, uint_t flags);
+    size_t repcount, uint_t flags);
 void
 ddi_rep_put16(ddi_acc_handle_t handle, uint16_t *host_addr, uint16_t *dev_addr,
-	size_t repcount, uint_t flags);
+    size_t repcount, uint_t flags);
 void
 ddi_rep_put32(ddi_acc_handle_t handle, uint32_t *host_addr, uint32_t *dev_addr,
-	size_t repcount, uint_t flags);
+    size_t repcount, uint_t flags);
 
 void
 ddi_rep_put64(ddi_acc_handle_t handle, uint64_t *host_addr, uint64_t *dev_addr,
-	size_t repcount, uint_t flags);
+    size_t repcount, uint_t flags);
 
 /*
  * these are special device handling functions
  */
 int
 ddi_device_zero(ddi_acc_handle_t handle, caddr_t dev_addr,
-	size_t bytecount, ssize_t dev_advcnt, uint_t dev_datasz);
+    size_t bytecount, ssize_t dev_advcnt, uint_t dev_datasz);
 
 int
 ddi_device_copy(
-	ddi_acc_handle_t src_handle, caddr_t src_addr, ssize_t src_advcnt,
-	ddi_acc_handle_t dest_handle, caddr_t dest_addr, ssize_t dest_advcnt,
-	size_t bytecount, uint_t dev_datasz);
+    ddi_acc_handle_t src_handle, caddr_t src_addr, ssize_t src_advcnt,
+    ddi_acc_handle_t dest_handle, caddr_t dest_addr, ssize_t dest_advcnt,
+    size_t bytecount, uint_t dev_datasz);
 
 /*
  * these are software byte swapping functions
@@ -2009,9 +2041,8 @@ pci_ereport_post(dev_info_t *dip, ddi_fm_error_t *derr, uint16_t *status);
 #if defined(__i386) || defined(__amd64)
 int
 pci_peekpoke_check(dev_info_t *, dev_info_t *, ddi_ctl_enum_t, void *, void *,
-	int (*handler)(dev_info_t *, dev_info_t *, ddi_ctl_enum_t, void *,
-	void *), kmutex_t *, kmutex_t *,
-	void (*scan)(dev_info_t *, ddi_fm_error_t *));
+    int (*handler)(dev_info_t *, dev_info_t *, ddi_ctl_enum_t, void *, void *),
+    kmutex_t *, kmutex_t *, void (*scan)(dev_info_t *, ddi_fm_error_t *));
 #endif
 
 void
@@ -2124,8 +2155,8 @@ ddi_remove_event_handler(ddi_callback_id_t id);
  */
 int
 ddi_add_event_handler(dev_info_t *dip, ddi_eventcookie_t event,
-	void (*handler)(dev_info_t *, ddi_eventcookie_t, void *, void *),
-	void *arg, ddi_callback_id_t *id);
+    void (*handler)(dev_info_t *, ddi_eventcookie_t, void *, void *),
+    void *arg, ddi_callback_id_t *id);
 
 /*
  * Return a handle for event "name" by calling up the device tree
@@ -2134,15 +2165,15 @@ ddi_add_event_handler(dev_info_t *dip, ddi_eventcookie_t event,
  */
 int
 ddi_get_eventcookie(dev_info_t *dip, char *name,
-	ddi_eventcookie_t *event_cookiep);
+    ddi_eventcookie_t *event_cookiep);
 
 /*
  * log a system event
  */
 int
 ddi_log_sysevent(dev_info_t *dip, char *vendor, char *class_name,
-	char *subclass_name, nvlist_t *attr_list, sysevent_id_t *eidp,
-	int sleep_flag);
+    char *subclass_name, nvlist_t *attr_list, sysevent_id_t *eidp,
+    int sleep_flag);
 
 /*
  * ddi_log_sysevent() vendors
@@ -2163,7 +2194,7 @@ typedef struct ddi_taskq ddi_taskq_t;
  * Create a task queue
  */
 ddi_taskq_t *ddi_taskq_create(dev_info_t *dip, const char *name,
-	int nthreads, pri_t pri, uint_t cflags);
+    int nthreads, pri_t pri, uint_t cflags);
 
 /*
  * destroy a task queue

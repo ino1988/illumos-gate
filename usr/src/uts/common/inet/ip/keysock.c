@@ -22,6 +22,9 @@
  * Copyright 2009 Sun Microsystems, Inc.  All rights reserved.
  * Use is subject to license terms.
  */
+/*
+ * Copyright 2017 Joyent, Inc.
+ */
 
 #include <sys/param.h>
 #include <sys/types.h>
@@ -141,11 +144,11 @@ static	keysockparam_t	lcl_param_arr[] = {
 #define	ks2dbg(keystack, a)	if (keystack->keystack_debug > 1) printf a
 #define	ks3dbg(keystack, a)	if (keystack->keystack_debug > 2) printf a
 
-static int keysock_close(queue_t *);
+static int keysock_close(queue_t *, int, cred_t *);
 static int keysock_open(queue_t *, dev_t *, int, int, cred_t *);
-static void keysock_wput(queue_t *, mblk_t *);
-static void keysock_rput(queue_t *, mblk_t *);
-static void keysock_rsrv(queue_t *);
+static int keysock_wput(queue_t *, mblk_t *);
+static int keysock_rput(queue_t *, mblk_t *);
+static int keysock_rsrv(queue_t *);
 static void keysock_passup(mblk_t *, sadb_msg_t *, minor_t,
     keysock_consumer_t *, boolean_t, keysock_stack_t *);
 static void *keysock_stack_init(netstackid_t stackid, netstack_t *ns);
@@ -156,12 +159,12 @@ static struct module_info info = {
 };
 
 static struct qinit rinit = {
-	(pfi_t)keysock_rput, (pfi_t)keysock_rsrv, keysock_open, keysock_close,
+	keysock_rput, keysock_rsrv, keysock_open, keysock_close,
 	NULL, &info
 };
 
 static struct qinit winit = {
-	(pfi_t)keysock_wput, NULL, NULL, NULL, NULL, &info
+	keysock_wput, NULL, NULL, NULL, NULL, &info
 };
 
 struct streamtab keysockinfo = {
@@ -314,11 +317,7 @@ bail:
 
 /* ARGSUSED */
 static int
-keysock_param_get(q, mp, cp, cr)
-	queue_t	*q;
-	mblk_t	*mp;
-	caddr_t	cp;
-	cred_t *cr;
+keysock_param_get(queue_t *q, mblk_t *mp, caddr_t cp, cred_t *cr)
 {
 	keysockparam_t	*keysockpa = (keysockparam_t *)cp;
 	uint_t value;
@@ -336,12 +335,7 @@ keysock_param_get(q, mp, cp, cr)
 /* This routine sets an NDD variable in a keysockparam_t structure. */
 /* ARGSUSED */
 static int
-keysock_param_set(q, mp, value, cp, cr)
-	queue_t	*q;
-	mblk_t	*mp;
-	char	*value;
-	caddr_t	cp;
-	cred_t *cr;
+keysock_param_set(queue_t *q, mblk_t *mp, char *value, caddr_t cp, cred_t *cr)
 {
 	ulong_t	new_value;
 	keysockparam_t	*keysockpa = (keysockparam_t *)cp;
@@ -477,8 +471,9 @@ keysock_stack_fini(netstackid_t stackid, void *arg)
 /*
  * Close routine for keysock.
  */
+/* ARGSUSED */
 static int
-keysock_close(queue_t *q)
+keysock_close(queue_t *q, int flags __unused, cred_t *credp __unused)
 {
 	keysock_t *ks;
 	keysock_consumer_t *kc;
@@ -716,7 +711,7 @@ keysock_open(queue_t *q, dev_t *devp, int flag, int sflag, cred_t *credp)
 		 */
 		if (!ipsec_loader_wait(q,
 		    keystack->keystack_netstack->netstack_ipsec)) {
-			(void) keysock_close(q);
+			(void) keysock_close(q, 0, credp);
 			return (EPFNOSUPPORT);
 		}
 	}
@@ -775,9 +770,7 @@ keysock_capability_req(queue_t *q, mblk_t *mp)
  * The current state of the stream is copied from keysock_state.
  */
 static void
-keysock_info_req(q, mp)
-	queue_t	*q;
-	mblk_t	*mp;
+keysock_info_req(queue_t *q, mblk_t *mp)
 {
 	mp = tpi_ack_alloc(mp, sizeof (struct T_info_ack), M_PCPROTO,
 	    T_INFO_ACK);
@@ -794,11 +787,7 @@ keysock_info_req(q, mp)
  * upstream.
  */
 static void
-keysock_err_ack(q, mp, t_error, sys_error)
-	queue_t	*q;
-	mblk_t	*mp;
-	int	t_error;
-	int	sys_error;
+keysock_err_ack(queue_t *q, mblk_t *mp, int t_error, int sys_error)
 {
 	if ((mp = mi_tpi_err_ack_alloc(mp, t_error, sys_error)) != NULL)
 		qreply(q, mp);
@@ -892,6 +881,81 @@ keysock_opt_set(queue_t *q, uint_t mgmt_flags, int level,
 }
 
 /*
+ * Handle STREAMS ioctl copyin for getsockname() for both PF_KEY and
+ * PF_POLICY.
+ */
+void
+keysock_spdsock_wput_iocdata(queue_t *q, mblk_t *mp, sa_family_t family)
+{
+	mblk_t *mp1;
+	STRUCT_HANDLE(strbuf, sb);
+	/* What size of sockaddr do we need? */
+	const uint_t addrlen = sizeof (struct sockaddr);
+
+	/* We only handle TI_GET{MY,PEER}NAME (get{sock,peer}name()). */
+	switch (((struct iocblk *)mp->b_rptr)->ioc_cmd) {
+	case TI_GETMYNAME:
+	case TI_GETPEERNAME:
+		break;
+	default:
+		freemsg(mp);
+		return;
+	}
+
+	switch (mi_copy_state(q, mp, &mp1)) {
+	case -1:
+		return;
+	case MI_COPY_CASE(MI_COPY_IN, 1):
+		break;
+	case MI_COPY_CASE(MI_COPY_OUT, 1):
+		/*
+		 * The address has been copied out, so now
+		 * copyout the strbuf.
+		 */
+		mi_copyout(q, mp);
+		return;
+	case MI_COPY_CASE(MI_COPY_OUT, 2):
+		/*
+		 * The address and strbuf have been copied out.
+		 * We're done, so just acknowledge the original
+		 * M_IOCTL.
+		 */
+		mi_copy_done(q, mp, 0);
+		return;
+	default:
+		/*
+		 * Something strange has happened, so acknowledge
+		 * the original M_IOCTL with an EPROTO error.
+		 */
+		mi_copy_done(q, mp, EPROTO);
+		return;
+	}
+
+	/*
+	 * Now we have the strbuf structure for TI_GET{MY,PEER}NAME. Next we
+	 * copyout the requested address and then we'll copyout the strbuf.
+	 * Regardless of sockname or peername, we just return a sockaddr with
+	 * sa_family set.
+	 */
+	STRUCT_SET_HANDLE(sb, ((struct iocblk *)mp->b_rptr)->ioc_flag,
+	    (void *)mp1->b_rptr);
+
+	if (STRUCT_FGET(sb, maxlen) < addrlen) {
+		mi_copy_done(q, mp, EINVAL);
+		return;
+	}
+
+	mp1 = mi_copyout_alloc(q, mp, STRUCT_FGETP(sb, buf), addrlen, B_TRUE);
+	if (mp1 == NULL)
+		return;
+
+	STRUCT_FSET(sb, len, addrlen);
+	((struct sockaddr *)mp1->b_wptr)->sa_family = family;
+	mp1->b_wptr += addrlen;
+	mi_copyout(q, mp);
+}
+
+/*
  * Handle STREAMS messages.
  */
 static void
@@ -954,11 +1018,24 @@ keysock_wput_other(queue_t *q, mblk_t *mp)
 			break;
 		}
 		return;
+	case M_IOCDATA:
+		keysock_spdsock_wput_iocdata(q, mp, PF_KEY);
+		return;
 	case M_IOCTL:
 		iocp = (struct iocblk *)mp->b_rptr;
 		error = EINVAL;
 
 		switch (iocp->ioc_cmd) {
+		case TI_GETMYNAME:
+		case TI_GETPEERNAME:
+			/*
+			 * For pfiles(1) observability with getsockname().
+			 * See keysock_spdsock_wput_iocdata() for the rest of
+			 * this.
+			 */
+			mi_copyin(q, mp, NULL,
+			    SIZEOF_STRUCT(strbuf, iocp->ioc_flag));
+			return;
 		case ND_SET:
 		case ND_GET:
 			if (nd_getset(q, keystack->keystack_g_nd, mp)) {
@@ -1839,7 +1916,7 @@ keysock_parse(queue_t *q, mblk_t *mp)
  * as PF_KEY sockets are concerned.  I do some conversion, but not as much
  * as IP/rts does.
  */
-static void
+static int
 keysock_wput(queue_t *q, mblk_t *mp)
 {
 	uchar_t *rptr = mp->b_rptr;
@@ -1860,7 +1937,7 @@ keysock_wput(queue_t *q, mblk_t *mp)
 		ks1dbg(keystack, ("Huh?  wput for an consumer instance (%d)?\n",
 		    kc->kc_sa_type));
 		putnext(q, mp);
-		return;
+		return (0);
 	}
 	ks = (keysock_t *)q->q_ptr;
 	keystack = ks->keysock_keystack;
@@ -1874,7 +1951,7 @@ keysock_wput(queue_t *q, mblk_t *mp)
 		 */
 		ks2dbg(keystack, ("raw M_DATA in keysock.\n"));
 		freemsg(mp);
-		return;
+		return (0);
 	case M_PROTO:
 	case M_PCPROTO:
 		if ((mp->b_wptr - rptr) >= sizeof (struct T_data_req)) {
@@ -1884,7 +1961,7 @@ keysock_wput(queue_t *q, mblk_t *mp)
 					ks2dbg(keystack,
 					    ("No data after DATA_REQ.\n"));
 					freemsg(mp);
-					return;
+					return (0);
 				}
 				freeb(mp);
 				mp = mp1;
@@ -1897,11 +1974,12 @@ keysock_wput(queue_t *q, mblk_t *mp)
 		ks3dbg(keystack, ("In default wput case (%d %d).\n",
 		    mp->b_datap->db_type, ((union T_primitives *)rptr)->type));
 		keysock_wput_other(q, mp);
-		return;
+		return (0);
 	}
 
 	/* I now have a PF_KEY message in an M_DATA block, pointed to by mp. */
 	keysock_parse(q, mp);
+	return (0);
 }
 
 /* BELOW THIS LINE ARE ROUTINES INCLUDING AND RELATED TO keysock_rput(). */
@@ -2252,7 +2330,7 @@ error:
  * Keysock's read service procedure is there only for PF_KEY reply
  * messages that really need to reach the top.
  */
-static void
+static int
 keysock_rsrv(queue_t *q)
 {
 	mblk_t *mp;
@@ -2262,9 +2340,10 @@ keysock_rsrv(queue_t *q)
 			putnext(q, mp);
 		} else {
 			(void) putbq(q, mp);
-			return;
+			return (0);
 		}
 	}
+	return (0);
 }
 
 /*
@@ -2272,7 +2351,7 @@ keysock_rsrv(queue_t *q)
  * ESP, AH, etc.  I should only see KEYSOCK_OUT and KEYSOCK_HELLO_ACK
  * messages on my read queues.
  */
-static void
+static int
 keysock_rput(queue_t *q, mblk_t *mp)
 {
 	keysock_consumer_t *kc = (keysock_consumer_t *)q->q_ptr;
@@ -2297,7 +2376,7 @@ keysock_rput(queue_t *q, mblk_t *mp)
 		    ("Hmmm, a non M_CTL (%d, 0x%x) on keysock_rput.\n",
 		    mp->b_datap->db_type, mp->b_datap->db_type));
 		putnext(q, mp);
-		return;
+		return (0);
 	}
 
 	ii = (ipsec_info_t *)mp->b_rptr;
@@ -2341,7 +2420,7 @@ keysock_rput(queue_t *q, mblk_t *mp)
 				    ("One flush/dump message back from %d,"
 				    " more to go.\n", samsg->sadb_msg_satype));
 				freemsg(mp1);
-				return;
+				return (0);
 			}
 
 			samsg->sadb_msg_errno =
@@ -2352,18 +2431,19 @@ keysock_rput(queue_t *q, mblk_t *mp)
 		}
 		keysock_passup(mp1, samsg, serial, kc,
 		    (samsg->sadb_msg_type == SADB_DUMP), keystack);
-		return;
+		return (0);
 	case KEYSOCK_HELLO_ACK:
 		/* Aha, now we can link in the consumer! */
 		ksa = (keysock_hello_ack_t *)ii;
 		keysock_link_consumer(ksa->ks_hello_satype, kc);
 		freemsg(mp);
-		return;
+		return (0);
 	default:
 		ks1dbg(keystack, ("Hmmm, an IPsec info I'm not used to, 0x%x\n",
 		    ii->ipsec_info_type));
 		putnext(q, mp);
 	}
+	return (0);
 }
 
 /*

@@ -25,7 +25,8 @@
  */
 /*
  * Copyright 2012 DEY Storage Systems, Inc.  All rights reserved.
- * Copyright (c) 2013, Joyent, Inc. All rights reserved.
+ * Copyright (c) 2018, Joyent, Inc.
+ * Copyright 2020 Oxide Computer Company
  */
 
 #include <stdlib.h>
@@ -34,10 +35,13 @@
 #include <sys/types.h>
 #include <unistd.h>
 #include <sys/corectl.h>
+#include <procfs.h>
 #include <msg.h>
 #include <_elfdump.h>
 #include <struct_layout.h>
 #include <conv.h>
+#include <ctype.h>
+#include <sys/sysmacros.h>
 
 
 /*
@@ -93,7 +97,6 @@
 	print_strbuf(state, _title, &layout->_field)
 
 
-
 /*
  * Structure used to maintain state data for a core note, or a subregion
  * (sub-struct) of a core note. These values would otherwise need to be
@@ -135,26 +138,59 @@ typedef void (* dump_func_t)(note_state_t *state, const char *title);
 static const char *
 safe_str(const char *str, size_t n)
 {
-	static char	buf[512];
-	char		*s;
-	size_t		i;
+	static char	buf[2048];
+	size_t		i, used;
 
 	if (n == 0)
 		return (MSG_ORIG(MSG_STR_EMPTY));
 
-	for (i = 0; i < n; i++)
+	/*
+	 * If the string is terminated and doesn't need escaping, we can return
+	 * it as is.
+	 */
+	for (i = 0; i < n; i++) {
 		if (str[i] == '\0')
 			return (str);
 
-	i = (n >= sizeof (buf)) ? (sizeof (buf) - 4) : (n - 1);
-	(void) memcpy(buf, str, i);
-	s = buf + i;
-	if (n >= sizeof (buf)) {
-		*s++ = '.';
-		*s++ = '.';
-		*s++ = '.';
+		if (!isascii(str[i]) || !isprint(str[i])) {
+			break;
+		}
 	}
-	*s = '\0';
+
+	for (i = 0, used = 0; i < n; i++) {
+		if (str[i] == '\0') {
+			if (used + 1 > sizeof (buf))
+				break;
+			buf[used++] = str[i];
+			return (buf);
+		} else if (isascii(str[i]) && isprint(str[i])) {
+			if (used + 1 > sizeof (buf))
+				break;
+			buf[used++] = str[i];
+		} else {
+			size_t len = snprintf(NULL, 0, "\\x%02x", str[i]);
+			if (used + len > sizeof (buf))
+				break;
+			(void) snprintf(buf + used, sizeof (buf) - used,
+			    "\\x%02x", str[i]);
+			used += len;
+		}
+	}
+
+	if (i == n && used < sizeof (buf)) {
+		buf[used] = '\0';
+		return (buf);
+	}
+
+	/*
+	 * If we got here, we would have overflowed. Figure out where we need to
+	 * start and truncate.
+	 */
+	used = MIN(used, sizeof (buf) - 4);
+	buf[used++] = '.';
+	buf[used++] = '.';
+	buf[used++] = '.';
+	buf[used++] = '\0';
 	return (buf);
 }
 
@@ -166,7 +202,7 @@ extract_as_word(note_state_t *state, const sl_field_t *fdesc)
 {
 	return (sl_extract_as_word(state->ns_data, state->ns_swap, fdesc));
 }
-static Word
+static Lword
 extract_as_lword(note_state_t *state, const sl_field_t *fdesc)
 {
 	return (sl_extract_as_lword(state->ns_data, state->ns_swap, fdesc));
@@ -197,7 +233,7 @@ data_present(note_state_t *state, const sl_field_t *fdesc)
 /*
  * indent_enter/exit are used to start/end output for a subitem.
  * On entry, a title is output, and the indentation level is raised
- * by one unit. On exit, the indentation level is restrored to its
+ * by one unit. On exit, the indentation level is restored to its
  * previous value.
  */
 static void
@@ -436,6 +472,7 @@ dump_auxv(note_state_t *state, const char *title)
 		Conv_cap_val_hw2_buf_t		hw2;
 		Conv_cnote_auxv_af_buf_t	auxv_af;
 		Conv_ehdr_flags_buf_t		ehdr_flags;
+		Conv_secflags_buf_t		secflags;
 		Conv_inv_buf_t			inv;
 	} conv_buf;
 	sl_fmtbuf_t	buf;
@@ -496,6 +533,8 @@ dump_auxv(note_state_t *state, const char *title)
 		case AT_SUN_GID:
 		case AT_SUN_RGID:
 		case AT_SUN_LPAGESZ:
+		case AT_SUN_FPSIZE:
+		case AT_SUN_FPTYPE:
 			num_fmt = SL_FMT_NUM_DEC;
 			break;
 
@@ -827,6 +866,46 @@ dump_timestruc(note_state_t *state, const char *title)
 	indent_exit(state);
 }
 
+/*
+ * Output information from prsecflags_t structure.
+ */
+static void
+dump_secflags(note_state_t *state, const char *title)
+{
+	const sl_prsecflags_layout_t *layout = state->ns_arch->prsecflags;
+	Conv_secflags_buf_t inv;
+	Lword lw;
+	Word w;
+
+	indent_enter(state, title, &layout->pr_version);
+
+	w = extract_as_word(state, &layout->pr_version);
+
+	if (w != PRSECFLAGS_VERSION_1) {
+		PRINT_DEC(MSG_INTL(MSG_NOTE_BAD_SECFLAGS_VER), pr_version);
+		dump_hex_bytes(state->ns_data, state->ns_len, state->ns_indent,
+		    4, 3);
+	} else {
+		PRINT_DEC(MSG_ORIG(MSG_CNOTE_T_PR_VERSION), pr_version);
+		lw = extract_as_lword(state, &layout->pr_effective);
+		print_str(state, MSG_ORIG(MSG_CNOTE_T_PR_EFFECTIVE),
+		    conv_prsecflags(lw, 0, &inv));
+
+		lw = extract_as_lword(state, &layout->pr_inherit);
+		print_str(state, MSG_ORIG(MSG_CNOTE_T_PR_INHERIT),
+		    conv_prsecflags(lw, 0, &inv));
+
+		lw = extract_as_lword(state, &layout->pr_lower);
+		print_str(state, MSG_ORIG(MSG_CNOTE_T_PR_LOWER),
+		    conv_prsecflags(lw, 0, &inv));
+
+		lw = extract_as_lword(state, &layout->pr_upper);
+		print_str(state, MSG_ORIG(MSG_CNOTE_T_PR_UPPER),
+		    conv_prsecflags(lw, 0, &inv));
+	}
+
+	indent_exit(state);
+}
 
 /*
  * Output information from utsname structure.
@@ -859,9 +938,9 @@ dump_prgregset(note_state_t *state, const char *title)
 	Conv_inv_buf_t	inv_buf1, inv_buf2;
 	Word		w;
 
+	fdesc1 = fdesc2 = state->ns_arch->prgregset->elt0;
 	indent_enter(state, title, &fdesc1);
 
-	fdesc1 = fdesc2 = state->ns_arch->prgregset->elt0;
 	for (w = 0; w < fdesc1.slf_nelts; ) {
 		if (w == (fdesc1.slf_nelts - 1)) {
 			/* One last register is left */
@@ -927,12 +1006,12 @@ dump_lwpstatus(note_state_t *state, const char *title)
 		w = extract_as_word(state, &layout->pr_why);
 		print_str(state, MSG_ORIG(MSG_CNOTE_T_PR_WHY),
 		    conv_cnote_pr_why(w, 0, &conv_buf.inv));
-	}
 
-	if (data_present(state, &layout->pr_what)) {
-		w2 = extract_as_word(state, &layout->pr_what);
-		print_str(state, MSG_ORIG(MSG_CNOTE_T_PR_WHAT),
-		    conv_cnote_pr_what(w, w2, 0, &conv_buf.inv));
+		if (data_present(state, &layout->pr_what)) {
+			w2 = extract_as_word(state, &layout->pr_what);
+			print_str(state, MSG_ORIG(MSG_CNOTE_T_PR_WHAT),
+			    conv_cnote_pr_what(w, w2, 0, &conv_buf.inv));
+		}
 	}
 
 	if (data_present(state, &layout->pr_cursig)) {
@@ -1097,6 +1176,7 @@ dump_pstatus(note_state_t *state, const char *title)
 	state->ns_vcol += 5;
 	state->ns_t2col += 5;
 	state->ns_v2col += 5;
+
 	PRINT_SUBTYPE(MSG_ORIG(MSG_CNOTE_T_PR_LWP), pr_lwp, dump_lwpstatus);
 	state->ns_vcol -= 5;
 	state->ns_t2col -= 5;
@@ -1132,12 +1212,13 @@ dump_prstatus(note_state_t *state, const char *title)
 		w = extract_as_word(state, &layout->pr_why);
 		print_str(state, MSG_ORIG(MSG_CNOTE_T_PR_WHY),
 		    conv_cnote_pr_why(w, 0, &conv_buf.inv));
-	}
 
-	if (data_present(state, &layout->pr_what)) {
-		w2 = extract_as_word(state, &layout->pr_what);
-		print_str(state, MSG_ORIG(MSG_CNOTE_T_PR_WHAT),
-		    conv_cnote_pr_what(w, w2, 0, &conv_buf.inv));
+
+		if (data_present(state, &layout->pr_what)) {
+			w2 = extract_as_word(state, &layout->pr_what);
+			print_str(state, MSG_ORIG(MSG_CNOTE_T_PR_WHAT),
+			    conv_cnote_pr_what(w, w2, 0, &conv_buf.inv));
+		}
 	}
 
 	PRINT_SUBTYPE(MSG_ORIG(MSG_CNOTE_T_PR_INFO), pr_info, dump_siginfo);
@@ -1205,6 +1286,20 @@ dump_prstatus(note_state_t *state, const char *title)
 
 	PRINT_ZHEX(MSG_ORIG(MSG_CNOTE_T_PR_INSTR), pr_instr);
 	PRINT_SUBTYPE(MSG_ORIG(MSG_CNOTE_T_PR_REG), pr_reg, dump_prgregset);
+
+	indent_exit(state);
+}
+
+
+static void
+dump_lwpname(note_state_t *state, const char *title)
+{
+	const sl_prlwpname_layout_t *layout = state->ns_arch->prlwpname;
+
+	indent_enter(state, title, &layout->pr_lwpid);
+
+	PRINT_DEC(MSG_ORIG(MSG_CNOTE_T_PR_LWPID), pr_lwpid);
+	PRINT_STRBUF(MSG_ORIG(MSG_CNOTE_T_PR_LWPNAME), pr_lwpname);
 
 	indent_exit(state);
 }
@@ -1699,6 +1794,40 @@ dump_asrset(note_state_t *state, const char *title)
 	indent_exit(state);
 }
 
+static void
+dump_upanic(note_state_t *state, const char *title)
+{
+	const sl_prupanic_layout_t *layout = state->ns_arch->prupanic;
+	Conv_upanic_buf_t inv;
+	Word w;
+
+	indent_enter(state, title, &layout->pru_version);
+	w = extract_as_word(state, &layout->pru_version);
+	if (w != PRUPANIC_VERSION_1) {
+		PRINT_DEC(MSG_INTL(MSG_NOTE_BAD_UPANIC_VER), pru_version);
+		dump_hex_bytes(state->ns_data, state->ns_len, state->ns_indent,
+		    4, 3);
+	} else {
+		PRINT_DEC(MSG_ORIG(MSG_CNOTE_T_PRU_VERSION), pru_version);
+		w = extract_as_word(state, &layout->pru_flags);
+		print_str(state, MSG_ORIG(MSG_CNOTE_T_PRU_FLAGS),
+		    conv_prupanic(w, 0, &inv));
+
+		if ((w & PRUPANIC_FLAG_MSG_VALID) != 0) {
+			/*
+			 * We have a message that is _probably_ a text string,
+			 * but the interface allows for arbitrary data. The only
+			 * guarantee is that someone using this is probably up
+			 * to no good. As a result, we basically try to print
+			 * this as a string, but in the face of certain types of
+			 * data, we hex escape it.
+			 */
+			print_strbuf(state, MSG_ORIG(MSG_CNOTE_T_PRU_DATA),
+			    &layout->pru_data);
+		}
+	}
+}
+
 corenote_ret_t
 corenote(Half mach, int do_swap, Word type,
     const char *desc, Word descsz)
@@ -1855,6 +1984,23 @@ corenote(Half mach, int do_swap, Word type,
 		state.ns_t2col = 45;
 		state.ns_v2col = 58;
 		dump_psinfo(&state, MSG_ORIG(MSG_CNOTE_DESC_PSINFO_T));
+		return (CORENOTE_R_OK);
+
+	case NT_SECFLAGS:
+		state.ns_vcol = 23;
+		state.ns_t2col = 41;
+		state.ns_v2col = 54;
+		dump_secflags(&state, MSG_ORIG(MSG_CNOTE_DESC_PRSECFLAGS_T));
+		return (CORENOTE_R_OK);
+
+	case NT_LWPNAME:
+		state.ns_vcol = 20;
+		dump_lwpname(&state, MSG_ORIG(MSG_CNOTE_DESC_PRLWPNAME_T));
+		return (CORENOTE_R_OK);
+
+	case NT_UPANIC:
+		state.ns_vcol = 23;
+		dump_upanic(&state, MSG_ORIG(MSG_CNOTE_DESC_PRUPANIC_T));
 		return (CORENOTE_R_OK);
 	}
 

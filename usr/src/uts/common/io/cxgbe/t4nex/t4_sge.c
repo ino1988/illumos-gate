@@ -43,12 +43,6 @@ int rx_buf_size = 8192;
 int tx_copy_threshold = 256;
 uint16_t rx_copy_threshold = 256;
 
-enum {
-	SPG_SIZE = 64,		/* Size of status page */
-	FL_ALIGN = CACHE_LINE,	/* packet buffer alignment in FL buffers */
-	FL_PKTSHIFT = 2		/* payload is at this offset in packet buffer */
-};
-
 /* Used to track coalesced tx work request */
 struct txpkts {
 	mblk_t *tail;		/* head is in the software descriptor */
@@ -75,19 +69,21 @@ static int service_iq(struct sge_iq *iq, int budget);
 static inline void init_iq(struct sge_iq *iq, struct adapter *sc, int tmr_idx,
     int8_t pktc_idx, int qsize, uint8_t esize);
 static inline void init_fl(struct sge_fl *fl, uint16_t qsize);
-static inline void init_eq(struct sge_eq *eq, uint16_t eqtype, uint16_t qsize,
-    uint8_t tx_chan, uint16_t iqid);
+static inline void init_eq(struct adapter *sc, struct sge_eq *eq,
+    uint16_t eqtype, uint16_t qsize,uint8_t tx_chan, uint16_t iqid);
 static int alloc_iq_fl(struct port_info *pi, struct sge_iq *iq,
     struct sge_fl *fl, int intr_idx, int cong);
 static int free_iq_fl(struct port_info *pi, struct sge_iq *iq,
     struct sge_fl *fl);
 static int alloc_fwq(struct adapter *sc);
 static int free_fwq(struct adapter *sc);
+#ifdef TCP_OFFLOAD_ENABLE
 static int alloc_mgmtq(struct adapter *sc);
+#endif
 static int alloc_rxq(struct port_info *pi, struct sge_rxq *rxq, int intr_idx,
     int i);
 static int free_rxq(struct port_info *pi, struct sge_rxq *rxq);
-#ifndef TCP_OFFLOAD_DISABLE
+#ifdef TCP_OFFLOAD_ENABLE
 static int alloc_ofld_rxq(struct port_info *pi, struct sge_ofld_rxq *ofld_rxq,
 	int intr_idx);
 static int free_ofld_rxq(struct port_info *pi, struct sge_ofld_rxq *ofld_rxq);
@@ -95,16 +91,18 @@ static int free_ofld_rxq(struct port_info *pi, struct sge_ofld_rxq *ofld_rxq);
 static int ctrl_eq_alloc(struct adapter *sc, struct sge_eq *eq);
 static int eth_eq_alloc(struct adapter *sc, struct port_info *pi,
     struct sge_eq *eq);
-#ifndef TCP_OFFLOAD_DISABLE
+#ifdef TCP_OFFLOAD_ENABLE
 static int ofld_eq_alloc(struct adapter *sc, struct port_info *pi,
     struct sge_eq *eq);
 #endif
 static int alloc_eq(struct adapter *sc, struct port_info *pi,
     struct sge_eq *eq);
 static int free_eq(struct adapter *sc, struct sge_eq *eq);
+#ifdef TCP_OFFLOAD_ENABLE
 static int alloc_wrq(struct adapter *sc, struct port_info *pi,
     struct sge_wrq *wrq, int idx);
 static int free_wrq(struct adapter *sc, struct sge_wrq *wrq);
+#endif
 static int alloc_txq(struct port_info *pi, struct sge_txq *txq, int idx);
 static int free_txq(struct port_info *pi, struct sge_txq *txq);
 static int alloc_dma_memory(struct adapter *sc, size_t len, int flags,
@@ -126,8 +124,8 @@ static int refill_fl(struct adapter *sc, struct sge_fl *fl, int nbufs);
 static void refill_sfl(void *arg);
 static void add_fl_to_sfl(struct adapter *sc, struct sge_fl *fl);
 static void free_fl_bufs(struct sge_fl *fl);
-static mblk_t *get_fl_payload(struct sge_fl *fl, uint32_t len_newbuf,
-    int *fl_bufs_used);
+static mblk_t *get_fl_payload(struct adapter *sc, struct sge_fl *fl,
+    uint32_t len_newbuf, int *fl_bufs_used);
 static int get_frame_txinfo(struct sge_txq *txq, mblk_t **fp,
     struct txinfo *txinfo, int sgl_only);
 static inline int fits_in_txb(struct sge_txq *txq, int len, int *waste);
@@ -161,6 +159,8 @@ static int update_port_info_kstats(kstat_t *ksp, int rw);
 static kstat_t *setup_txq_kstats(struct port_info *pi, struct sge_txq *txq,
     int idx);
 static int update_txq_kstats(kstat_t *ksp, int rw);
+static int handle_sge_egr_update(struct sge_iq *, const struct rss_header *,
+    mblk_t *);
 static int handle_fw_rpl(struct sge_iq *iq, const struct rss_header *rss,
     mblk_t *m);
 
@@ -184,7 +184,8 @@ t4_sge_init(struct adapter *sc)
 	struct driver_properties *p = &sc->props;
 	ddi_dma_attr_t *dma_attr;
 	ddi_device_acc_attr_t *acc_attr;
-	uint32_t v;
+	uint32_t sge_control, sge_conm_ctrl;
+	int egress_threshold;
 
 	/*
 	 * Device access and DMA attributes for descriptor rings
@@ -230,6 +231,17 @@ t4_sge_init(struct adapter *sc)
 	dma_attr->dma_attr_flags = 0;
 
 	/*
+	 * Ingress Padding Boundary and Egress Status Page Size are set up by
+	 * t4_fixup_host_params().
+	 */
+	sge_control = t4_read_reg(sc, A_SGE_CONTROL);
+	sc->sge.pktshift = G_PKTSHIFT(sge_control);
+	sc->sge.stat_len = (sge_control & F_EGRSTATUSPAGESIZE) ? 128 : 64;
+
+	/* t4_nex uses FLM packed mode */
+	sc->sge.fl_align = t4_fl_pkt_align(sc, true);
+
+	/*
 	 * Device access and DMA attributes for rx buffers
 	 */
 	sc->sge.rxb_params.dip = sc->dip;
@@ -249,7 +261,7 @@ t4_sge_init(struct adapter *sc)
 	 * and an rx buf cannot have an address with any of these bits set.
 	 * FL_ALIGN is >= 32 so we're sure things are ok.
 	 */
-	dma_attr->dma_attr_align = FL_ALIGN;
+	dma_attr->dma_attr_align = sc->sge.fl_align;
 	dma_attr->dma_attr_burstsizes = 0xfff;
 	dma_attr->dma_attr_minxfer = 1;
 	dma_attr->dma_attr_maxxfer = UINT64_MAX;
@@ -260,19 +272,32 @@ t4_sge_init(struct adapter *sc)
 
 	sc->sge.rxbuf_cache = rxbuf_cache_create(&sc->sge.rxb_params);
 
-	v = t4_read_reg(sc, A_SGE_CONM_CTRL);
-	sc->sge.fl_starve_threshold = G_EGRTHRESHOLD(v) * 2 + 1;
+	/*
+	 * A FL with <= fl_starve_thres buffers is starving and a periodic
+	 * timer will attempt to refill it.  This needs to be larger than the
+	 * SGE's Egress Congestion Threshold.  If it isn't, then we can get
+	 * stuck waiting for new packets while the SGE is waiting for us to
+	 * give it more Free List entries.  (Note that the SGE's Egress
+	 * Congestion Threshold is in units of 2 Free List pointers.) For T4,
+	 * there was only a single field to control this.  For T5 there's the
+	 * original field which now only applies to Unpacked Mode Free List
+	 * buffers and a new field which only applies to Packed Mode Free List
+	 * buffers.
+	 */
 
-	t4_set_reg_field(sc, A_SGE_CONTROL, V_PKTSHIFT(M_PKTSHIFT) |
-	    V_INGPADBOUNDARY(M_INGPADBOUNDARY) |
-	    F_EGRSTATUSPAGESIZE, V_INGPADBOUNDARY(ilog2(FL_ALIGN) - 5) |
-	    V_PKTSHIFT(FL_PKTSHIFT) |
-	    F_RXPKTCPLMODE |
-	    V_EGRSTATUSPAGESIZE(SPG_SIZE == 128));
-
-	t4_set_reg_field(sc, A_SGE_HOST_PAGE_SIZE,
-	    V_HOSTPAGESIZEPF0(M_HOSTPAGESIZEPF0),
-	    V_HOSTPAGESIZEPF0(PAGE_SHIFT - 10));
+	sge_conm_ctrl = t4_read_reg(sc, A_SGE_CONM_CTRL);
+	switch (CHELSIO_CHIP_VERSION(sc->params.chip)) {
+	case CHELSIO_T4:
+		egress_threshold = G_EGRTHRESHOLD(sge_conm_ctrl);
+		break;
+	case CHELSIO_T5:
+		egress_threshold = G_EGRTHRESHOLDPACKING(sge_conm_ctrl);
+		break;
+	case CHELSIO_T6:
+	default:
+		egress_threshold = G_T6_EGRTHRESHOLDPACKING(sge_conm_ctrl);
+	}
+	sc->sge.fl_starve_threshold = 2*egress_threshold + 1;
 
 	t4_write_reg(sc, A_SGE_FL_BUFFER_SIZE0, rx_buf_size);
 
@@ -294,7 +319,10 @@ t4_sge_init(struct adapter *sc)
 
 	(void) t4_register_cpl_handler(sc, CPL_FW4_MSG, handle_fw_rpl);
 	(void) t4_register_cpl_handler(sc, CPL_FW6_MSG, handle_fw_rpl);
+	(void) t4_register_cpl_handler(sc, CPL_SGE_EGR_UPDATE, handle_sge_egr_update);
 	(void) t4_register_cpl_handler(sc, CPL_RX_PKT, t4_eth_rx);
+	(void) t4_register_fw_msg_handler(sc, FW6_TYPE_CMD_RPL,
+		    t4_handle_fw_rpl);
 }
 
 /*
@@ -319,11 +347,13 @@ t4_setup_adapter_queues(struct adapter *sc)
 	if (rc != 0)
 		return (rc);
 
+#ifdef TCP_OFFLOAD_ENABLE
 	/*
 	 * Management queue.  This is just a control queue that uses the fwq as
 	 * its associated iq.
 	 */
 	rc = alloc_mgmtq(sc);
+#endif
 
 	return (rc);
 }
@@ -357,7 +387,7 @@ first_vector(struct port_info *pi)
 		if (i == pi->port_id)
 			break;
 
-#ifndef TCP_OFFLOAD_DISABLE
+#ifdef TCP_OFFLOAD_ENABLE
 		if (!(sc->flags & INTR_FWD))
 			rc += p->nrxq + p->nofldrxq;
 		else
@@ -368,7 +398,7 @@ first_vector(struct port_info *pi)
 		 * NIC queues exist and they'd better be taking direct
 		 * interrupts.
 		 */
-		KASSERT(!(sc->flags & INTR_FWD));
+		ASSERT(!(sc->flags & INTR_FWD));
 		rc += p->nrxq;
 #endif
 	}
@@ -390,7 +420,7 @@ port_intr_iq(struct port_info *pi, int idx)
 	if (sc->intr_count == 1)
 		return (&sc->sge.fwq);
 
-#ifndef TCP_OFFLOAD_DISABLE
+#ifdef TCP_OFFLOAD_ENABLE
 	if (!(sc->flags & INTR_FWD)) {
 		idx %= pi->nrxq + pi->nofldrxq;
 
@@ -425,10 +455,11 @@ port_intr_iq(struct port_info *pi, int idx)
 int
 t4_setup_port_queues(struct port_info *pi)
 {
-	int rc = 0, i, intr_idx, j, iqid;
+	int rc = 0, i, intr_idx, j;
 	struct sge_rxq *rxq;
 	struct sge_txq *txq;
-#ifndef TCP_OFFLOAD_DISABLE
+#ifdef TCP_OFFLOAD_ENABLE
+	int iqid;
 	struct sge_wrq *ctrlq;
 	struct sge_ofld_rxq *ofld_rxq;
 	struct sge_wrq *ofld_txq;
@@ -455,13 +486,13 @@ t4_setup_port_queues(struct port_info *pi)
 
 		init_fl(&rxq->fl, p->qsize_rxq / 8); /* 8 bufs in each entry */
 
-#ifndef TCP_OFFLOAD_DISABLE
-		if ((!(sc->flags & INTR_FWD)) ||
-		    (sc->intr_count > 1 && pi->nrxq >= pi->nofldrxq))
+		if ((!(sc->flags & INTR_FWD))
+#ifdef TCP_OFFLOAD_ENABLE
+		    || (sc->intr_count > 1 && pi->nrxq >= pi->nofldrxq)
 #else
-		if (!(sc->flags & INTR_FWD))
+		    || (sc->intr_count > 1 && pi->nrxq)
 #endif
-		{
+		   ) {
 			rxq->iq.flags |= IQ_INTR;
 			rc = alloc_rxq(pi, rxq, intr_idx, i);
 			if (rc != 0)
@@ -471,7 +502,7 @@ t4_setup_port_queues(struct port_info *pi)
 
 	}
 
-#ifndef TCP_OFFLOAD_DISABLE
+#ifdef TCP_OFFLOAD_ENABLE
 	for_each_ofld_rxq(pi, i, ofld_rxq) {
 
 		init_iq(&ofld_rxq->iq, sc, pi->tmr_idx, pi->pktc_idx,
@@ -508,7 +539,7 @@ t4_setup_port_queues(struct port_info *pi)
 		j++;
 	}
 
-#ifndef TCP_OFFLOAD_DISABLE
+#ifdef TCP_OFFLOAD_ENABLE
 	for_each_ofld_rxq(pi, i, ofld_rxq) {
 		if (ofld_rxq->iq.flags & IQ_INTR)
 			continue;
@@ -528,32 +559,32 @@ t4_setup_port_queues(struct port_info *pi)
 		uint16_t iqid;
 
 		iqid = port_intr_iq(pi, j)->cntxt_id;
-		init_eq(&txq->eq, EQ_ETH, p->qsize_txq, pi->tx_chan, iqid);
+		init_eq(sc, &txq->eq, EQ_ETH, p->qsize_txq, pi->tx_chan, iqid);
 		rc = alloc_txq(pi, txq, i);
 		if (rc != 0)
 			goto done;
 	}
 
-#ifndef TCP_OFFLOAD_DISABLE
+#ifdef TCP_OFFLOAD_ENABLE
 	for_each_ofld_txq(pi, i, ofld_txq) {
 		uint16_t iqid;
 
 		iqid = port_intr_iq(pi, j)->cntxt_id;
-		init_eq(&ofld_txq->eq, EQ_OFLD, p->qsize_txq, pi->tx_chan,
+		init_eq(sc, &ofld_txq->eq, EQ_OFLD, p->qsize_txq, pi->tx_chan,
 		    iqid);
 		rc = alloc_wrq(sc, pi, ofld_txq, i);
 		if (rc != 0)
 			goto done;
 	}
-#endif
 
 	/*
 	 * Finally, the control queue.
 	 */
 	ctrlq = &sc->sge.ctrlq[pi->port_id];
 	iqid = port_intr_iq(pi, 0)->cntxt_id;
-	init_eq(&ctrlq->eq, EQ_CTRL, CTRL_EQ_QSIZE, pi->tx_chan, iqid);
+	init_eq(sc, &ctrlq->eq, EQ_CTRL, CTRL_EQ_QSIZE, pi->tx_chan, iqid);
 	rc = alloc_wrq(sc, pi, ctrlq, 0);
+#endif
 
 done:
 	if (rc != 0)
@@ -571,8 +602,8 @@ t4_teardown_port_queues(struct port_info *pi)
 	int i;
 	struct sge_rxq *rxq;
 	struct sge_txq *txq;
+#ifdef TCP_OFFLOAD_ENABLE
 	struct adapter *sc = pi->adapter;
-#ifndef TCP_OFFLOAD_DISABLE
 	struct sge_ofld_rxq *ofld_rxq;
 	struct sge_wrq *ofld_txq;
 #endif
@@ -586,13 +617,15 @@ t4_teardown_port_queues(struct port_info *pi)
 		pi->ksp_info = NULL;
 	}
 
+#ifdef TCP_OFFLOAD_ENABLE
 	(void) free_wrq(sc, &sc->sge.ctrlq[pi->port_id]);
+#endif
 
 	for_each_txq(pi, i, txq) {
 		(void) free_txq(pi, txq);
 	}
 
-#ifndef TCP_OFFLOAD_DISABLE
+#ifdef TCP_OFFLOAD_ENABLE
 	for_each_ofld_txq(pi, i, ofld_txq) {
 		(void) free_wrq(sc, ofld_txq);
 	}
@@ -617,7 +650,7 @@ t4_teardown_port_queues(struct port_info *pi)
 			(void) free_rxq(pi, rxq);
 	}
 
-#ifndef TCP_OFFLOAD_DISABLE
+#ifdef TCP_OFFLOAD_ENABLE
 	for_each_ofld_rxq(pi, i, ofld_rxq) {
 		if (ofld_rxq->iq.flags & IQ_INTR)
 			(void) free_ofld_rxq(pi, ofld_rxq);
@@ -638,17 +671,42 @@ t4_intr_all(caddr_t arg1, caddr_t arg2)
 	return (DDI_INTR_CLAIMED);
 }
 
+static void
+t4_intr_rx_work(struct sge_iq *iq)
+{
+	mblk_t *mp = NULL;
+	struct sge_rxq *rxq = iq_to_rxq(iq);	/* Use iff iq is part of rxq */
+	RXQ_LOCK(rxq);
+	if (!iq->polling) {
+		mp = t4_ring_rx(rxq, iq->qsize/8);
+		t4_write_reg(iq->adapter, MYPF_REG(A_SGE_PF_GTS),
+		     V_INGRESSQID((u32)iq->cntxt_id) | V_SEINTARM(iq->intr_next));
+	}
+	RXQ_UNLOCK(rxq);
+	if (mp != NULL)
+		mac_rx_ring(rxq->port->mh, rxq->ring_handle, mp,
+			    rxq->ring_gen_num);
+}
+
 /* Deals with interrupts on the given ingress queue */
 /* ARGSUSED */
 uint_t
 t4_intr(caddr_t arg1, caddr_t arg2)
 {
-	/* LINTED: E_BAD_PTR_CAST_ALIGN */
 	struct sge_iq *iq = (struct sge_iq *)arg2;
+	int state;
 
-	if (atomic_cas_uint(&iq->state, IQS_IDLE, IQS_BUSY) == IQS_IDLE) {
-		(void) service_iq(iq, 0);
-		(void) atomic_cas_uint(&iq->state, IQS_BUSY, IQS_IDLE);
+	/* Right now receive polling is only enabled for MSI-X and
+	 * when we have enough msi-x vectors i.e no interrupt forwarding.
+	 */
+	if (iq->adapter->props.multi_rings) {
+		t4_intr_rx_work(iq);
+	} else {
+		state = atomic_cas_uint(&iq->state, IQS_IDLE, IQS_BUSY);
+		if (state == IQS_IDLE) {
+			(void) service_iq(iq, 0);
+			(void) atomic_cas_uint(&iq->state, IQS_BUSY, IQS_IDLE);
+		}
 	}
 	return (DDI_INTR_CLAIMED);
 }
@@ -668,6 +726,123 @@ t4_intr_err(caddr_t arg1, caddr_t arg2)
 }
 
 /*
+ * t4_ring_rx - Process responses from an SGE response queue.
+ *
+ * This function processes responses from an SGE response queue up to the supplied budget.
+ * Responses include received packets as well as control messages from FW
+ * or HW.
+ * It returns a chain of mblks containing the received data, to be
+ * passed up to mac_ring_rx().
+ */
+mblk_t *
+t4_ring_rx(struct sge_rxq *rxq, int budget)
+{
+	struct sge_iq *iq = &rxq->iq;
+	struct sge_fl *fl = &rxq->fl;           /* Use iff IQ_HAS_FL */
+	struct adapter *sc = iq->adapter;
+	struct rsp_ctrl *ctrl;
+	const struct rss_header *rss;
+	int ndescs = 0, fl_bufs_used = 0;
+	int rsp_type;
+	uint32_t lq;
+	mblk_t *mblk_head = NULL, **mblk_tail, *m;
+	struct cpl_rx_pkt *cpl;
+	uint32_t received_bytes = 0, pkt_len = 0;
+	bool csum_ok;
+	uint16_t err_vec;
+
+	mblk_tail = &mblk_head;
+
+	while (is_new_response(iq, &ctrl)) {
+
+		membar_consumer();
+
+		m = NULL;
+		rsp_type = G_RSPD_TYPE(ctrl->u.type_gen);
+		lq = be32_to_cpu(ctrl->pldbuflen_qid);
+		rss = (const void *)iq->cdesc;
+
+		switch (rsp_type) {
+		case X_RSPD_TYPE_FLBUF:
+
+			ASSERT(iq->flags & IQ_HAS_FL);
+
+			if (CPL_RX_PKT == rss->opcode) {
+				cpl = (void *)(rss + 1);
+				pkt_len = be16_to_cpu(cpl->len);
+
+				if (iq->polling && ((received_bytes + pkt_len) > budget))
+					goto done;
+
+				m = get_fl_payload(sc, fl, lq, &fl_bufs_used);
+				if (m == NULL)
+					goto done;
+
+				iq->intr_next = iq->intr_params;
+				m->b_rptr += sc->sge.pktshift;
+				if (sc->params.tp.rx_pkt_encap)
+				/* It is enabled only in T6 config file */
+					err_vec = G_T6_COMPR_RXERR_VEC(ntohs(cpl->err_vec));
+				else
+					err_vec = ntohs(cpl->err_vec);
+
+				csum_ok = cpl->csum_calc && !err_vec;
+
+				/* TODO: what about cpl->ip_frag? */
+				if (csum_ok && !cpl->ip_frag) {
+					mac_hcksum_set(m, 0, 0, 0, 0xffff,
+					    HCK_FULLCKSUM_OK | HCK_FULLCKSUM |
+					    HCK_IPV4_HDRCKSUM_OK);
+					rxq->rxcsum++;
+				}
+				rxq->rxpkts++;
+				rxq->rxbytes += pkt_len;
+				received_bytes += pkt_len;
+
+				*mblk_tail = m;
+				mblk_tail = &m->b_next;
+
+				break;
+			}
+
+			m = get_fl_payload(sc, fl, lq, &fl_bufs_used);
+			if (m == NULL)
+				goto done;
+			/* FALLTHROUGH */
+
+		case X_RSPD_TYPE_CPL:
+			ASSERT(rss->opcode < NUM_CPL_CMDS);
+			sc->cpl_handler[rss->opcode](iq, rss, m);
+			break;
+
+		default:
+			break;
+		}
+		iq_next(iq);
+		++ndescs;
+		if (!iq->polling && (ndescs == budget))
+			break;
+	}
+
+done:
+
+	t4_write_reg(sc, MYPF_REG(A_SGE_PF_GTS),
+		     V_CIDXINC(ndescs) | V_INGRESSQID(iq->cntxt_id) |
+		     V_SEINTARM(V_QINTR_TIMER_IDX(X_TIMERREG_UPDATE_CIDX)));
+
+	if ((fl_bufs_used > 0) || (iq->flags & IQ_HAS_FL)) {
+		int starved;
+		FL_LOCK(fl);
+		fl->needed += fl_bufs_used;
+		starved = refill_fl(sc, fl, fl->cap / 8);
+		FL_UNLOCK(fl);
+		if (starved)
+			add_fl_to_sfl(sc, fl);
+	}
+	return (mblk_head);
+}
+
+/*
  * Deals with anything and everything on the given ingress queue.
  */
 static int
@@ -682,6 +857,7 @@ service_iq(struct sge_iq *iq, int budget)
 	int ndescs = 0, limit, fl_bufs_used = 0;
 	int rsp_type;
 	uint32_t lq;
+	int starved;
 	mblk_t *m;
 	STAILQ_HEAD(, sge_iq) iql = STAILQ_HEAD_INITIALIZER(iql);
 
@@ -706,10 +882,25 @@ service_iq(struct sge_iq *iq, int budget)
 
 				ASSERT(iq->flags & IQ_HAS_FL);
 
-				m = get_fl_payload(fl, lq, &fl_bufs_used);
+				m = get_fl_payload(sc, fl, lq, &fl_bufs_used);
 				if (m == NULL) {
-					panic("%s: line %d.", __func__,
-					    __LINE__);
+					/*
+					 * Rearm the iq with a
+					 * longer-than-default timer
+					 */
+					t4_write_reg(sc, MYPF_REG(A_SGE_PF_GTS), V_CIDXINC(ndescs) |
+							V_INGRESSQID((u32)iq->cntxt_id) |
+							V_SEINTARM(V_QINTR_TIMER_IDX(SGE_NTIMERS-1)));
+					if (fl_bufs_used > 0) {
+						ASSERT(iq->flags & IQ_HAS_FL);
+						FL_LOCK(fl);
+						fl->needed += fl_bufs_used;
+						starved = refill_fl(sc, fl, fl->cap / 8);
+						FL_UNLOCK(fl);
+						if (starved)
+							add_fl_to_sfl(sc, fl);
+					}
+					return (0);
 				}
 
 			/* FALLTHRU */
@@ -789,7 +980,6 @@ service_iq(struct sge_iq *iq, int budget)
 	    V_INGRESSQID((u32)iq->cntxt_id) | V_SEINTARM(iq->intr_next));
 
 	if (iq->flags & IQ_HAS_FL) {
-		int starved;
 
 		FL_LOCK(fl);
 		fl->needed += fl_bufs_used;
@@ -802,6 +992,7 @@ service_iq(struct sge_iq *iq, int budget)
 	return (0);
 }
 
+#ifdef TCP_OFFLOAD_ENABLE
 int
 t4_mgmt_tx(struct adapter *sc, mblk_t *m)
 {
@@ -821,7 +1012,7 @@ t4_wrq_tx_locked(struct adapter *sc, struct sge_wrq *wrq, mblk_t *m0)
 	mblk_t *wr, *next;
 
 	TXQ_LOCK_ASSERT_OWNED(wrq);
-#ifndef TCP_OFFLOAD_DISABLE
+#ifdef TCP_OFFLOAD_ENABLE
 	ASSERT((eq->flags & EQ_TYPEMASK) == EQ_OFLD ||
 	    (eq->flags & EQ_TYPEMASK) == EQ_CTRL);
 #else
@@ -902,6 +1093,7 @@ t4_wrq_tx_locked(struct adapter *sc, struct sge_wrq *wrq, mblk_t *m0)
 
 	return (0);
 }
+#endif
 
 /* Per-packet header in a coalesced tx WR, before the SGL starts (in flits) */
 #define	TXPKTS_PKT_HDR ((\
@@ -922,12 +1114,14 @@ t4_wrq_tx_locked(struct adapter *sc, struct sge_wrq *wrq, mblk_t *m0)
 /* Header of a tx LSO WR, before SGL of first packet (in flits) */
 #define	TXPKT_LSO_WR_HDR ((\
 	sizeof (struct fw_eth_tx_pkt_wr) + \
-	sizeof (struct cpl_tx_pkt_lso) + \
+	sizeof(struct cpl_tx_pkt_lso_core) + \
 	sizeof (struct cpl_tx_pkt_core)) / 8)
 
 mblk_t *
-t4_eth_tx(struct port_info *pi, struct sge_txq *txq, mblk_t *frame)
+t4_eth_tx(void *arg, mblk_t *frame)
 {
+	struct sge_txq *txq = (struct sge_txq *) arg;
+	struct port_info *pi = txq->port;
 	struct adapter *sc = pi->adapter;
 	struct sge_eq *eq = &txq->eq;
 	mblk_t *next_frame;
@@ -1013,8 +1207,11 @@ t4_eth_tx(struct port_info *pi, struct sge_txq *txq, mblk_t *frame)
 
 doorbell:
 		/* Fewer and fewer doorbells as the queue fills up */
-		if (eq->pending >= (1 << (fls(eq->qsize - eq->avail) / 2)))
+		if (eq->pending >= (1 << (fls(eq->qsize - eq->avail) / 2))) {
+			txq->txbytes += txinfo.len;
+			txq->txpkts++;
 			ring_tx_db(sc, eq);
+		}
 		(void) reclaim_tx_descs(txq, 32);
 	}
 
@@ -1044,8 +1241,8 @@ doorbell:
 }
 
 static inline void
-init_iq(struct sge_iq *iq, struct adapter *sc, int tmr_idx, int8_t pktc_idx, int
-    qsize, uint8_t esize)
+init_iq(struct sge_iq *iq, struct adapter *sc, int tmr_idx, int8_t pktc_idx,
+	int qsize, uint8_t esize)
 {
 	ASSERT(tmr_idx >= 0 && tmr_idx < SGE_NTIMERS);
 	ASSERT(pktc_idx < SGE_NCOUNTERS);	/* -ve is ok, means don't use */
@@ -1067,14 +1264,25 @@ init_fl(struct sge_fl *fl, uint16_t qsize)
 {
 
 	fl->qsize = qsize;
+	fl->allocb_fail = 0;
 }
 
 static inline void
-init_eq(struct sge_eq *eq, uint16_t eqtype, uint16_t qsize, uint8_t tx_chan,
-    uint16_t iqid)
+init_eq(struct adapter *sc, struct sge_eq *eq, uint16_t eqtype, uint16_t qsize,
+    uint8_t tx_chan, uint16_t iqid)
 {
+	struct sge *s = &sc->sge;
+	uint32_t r;
+
 	ASSERT(tx_chan < NCHAN);
 	ASSERT(eqtype <= EQ_TYPEMASK);
+
+	if (is_t5(sc->params.chip)) {
+		r = t4_read_reg(sc, A_SGE_EGRESS_QUEUES_PER_PAGE_PF);
+		r >>= S_QUEUESPERPAGEPF0 +
+		    (S_QUEUESPERPAGEPF1 - S_QUEUESPERPAGEPF0) * sc->pf;
+		s->s_qpp = r & M_QUEUESPERPAGEPF0;
+	}
 
 	eq->flags = eqtype & EQ_TYPEMASK;
 	eq->tx_chan = tx_chan;
@@ -1098,7 +1306,7 @@ static int
 alloc_iq_fl(struct port_info *pi, struct sge_iq *iq, struct sge_fl *fl,
     int intr_idx, int cong)
 {
-	int rc, cntxt_id;
+	int rc, i, cntxt_id;
 	size_t len;
 	struct fw_iq_cmd c;
 	struct adapter *sc = iq->adapter;
@@ -1139,9 +1347,13 @@ alloc_iq_fl(struct port_info *pi, struct sge_iq *iq, struct sge_fl *fl,
 	c.iqsize = cpu_to_be16(iq->qsize);
 	c.iqaddr = cpu_to_be64(iq->ba);
 	if (cong >= 0)
-		c.iqns_to_fl0congen = BE_32(F_FW_IQ_CMD_IQFLINTCONGEN);
+		c.iqns_to_fl0congen = BE_32(F_FW_IQ_CMD_IQFLINTCONGEN |
+					V_FW_IQ_CMD_IQTYPE(cong ?
+					FW_IQ_IQTYPE_NIC : FW_IQ_IQTYPE_OFLD));
 
 	if (fl != NULL) {
+		unsigned int chip_ver = CHELSIO_CHIP_VERSION(sc->params.chip);
+
 		mutex_init(&fl->lock, NULL, MUTEX_DRIVER,
 		    DDI_INTR_PRI(sc->intr_pri));
 		fl->flags |= FL_MTX;
@@ -1153,7 +1365,7 @@ alloc_iq_fl(struct port_info *pi, struct sge_iq *iq, struct sge_fl *fl,
 			return (rc);
 
 		/* Allocate space for one software descriptor per buffer. */
-		fl->cap = (fl->qsize - SPG_SIZE / RX_FL_ESIZE) * 8;
+		fl->cap = (fl->qsize - sc->sge.stat_len / RX_FL_ESIZE) * 8;
 		fl->sdesc = kmem_zalloc(sizeof (struct fl_sdesc) * fl->cap,
 		    KM_SLEEP);
 		fl->needed = fl->cap;
@@ -1168,9 +1380,23 @@ alloc_iq_fl(struct port_info *pi, struct sge_iq *iq, struct sge_fl *fl,
 			    F_FW_IQ_CMD_FL0CONGCIF |
 			    F_FW_IQ_CMD_FL0CONGEN);
 		}
+
+		/* In T6, for egress queue type FL there is internal overhead
+		 * of 16B for header going into FLM module.  Hence the maximum
+		 * allowed burst size is 448 bytes.  For T4/T5, the hardware
+		 * doesn't coalesce fetch requests if more than 64 bytes of
+		 * Free List pointers are provided, so we use a 128-byte Fetch
+		 * Burst Minimum there (T6 implements coalescing so we can use
+		 * the smaller 64-byte value there).
+		 */
+
 		c.fl0dcaen_to_fl0cidxfthresh =
-		    cpu_to_be16(V_FW_IQ_CMD_FL0FBMIN(X_FETCHBURSTMIN_64B) |
-		    V_FW_IQ_CMD_FL0FBMAX(X_FETCHBURSTMAX_512B));
+		    cpu_to_be16(V_FW_IQ_CMD_FL0FBMIN(chip_ver <= CHELSIO_T5
+						     ? X_FETCHBURSTMIN_128B
+						     : X_FETCHBURSTMIN_64B) |
+		    V_FW_IQ_CMD_FL0FBMAX(chip_ver <= CHELSIO_T5
+					 ? X_FETCHBURSTMAX_512B
+					 : X_FETCHBURSTMAX_256B));
 		c.fl0size = cpu_to_be16(fl->qsize);
 		c.fl0addr = cpu_to_be64(fl->ba);
 	}
@@ -1190,6 +1416,9 @@ alloc_iq_fl(struct port_info *pi, struct sge_iq *iq, struct sge_fl *fl,
 	iq->cntxt_id = be16_to_cpu(c.iqid);
 	iq->abs_id = be16_to_cpu(c.physiqid);
 	iq->flags |= IQ_ALLOCATED;
+	mutex_init(&iq->lock, NULL,
+		    MUTEX_DRIVER, DDI_INTR_PRI(DDI_INTR_PRI(sc->intr_pri)));
+	iq->polling = 0;
 
 	cntxt_id = iq->cntxt_id - sc->sge.iq_start;
 	if (cntxt_id >= sc->sge.niq) {
@@ -1215,6 +1444,31 @@ alloc_iq_fl(struct port_info *pi, struct sge_iq *iq, struct sge_fl *fl,
 		FL_UNLOCK(fl);
 
 		iq->flags |= IQ_HAS_FL;
+	}
+
+	if (is_t5(sc->params.chip) && cong >= 0) {
+		uint32_t param, val;
+
+		param = V_FW_PARAMS_MNEM(FW_PARAMS_MNEM_DMAQ) |
+			V_FW_PARAMS_PARAM_X(FW_PARAMS_PARAM_DMAQ_CONM_CTXT) |
+			V_FW_PARAMS_PARAM_YZ(iq->cntxt_id);
+		if (cong == 0)
+			val = 1 << 19;
+		else {
+			val = 2 << 19;
+			for (i = 0; i < 4; i++) {
+				if (cong & (1 << i))
+					val |= 1 << (i << 2);
+			}
+		}
+
+		rc = -t4_set_params(sc, sc->mbox, sc->pf, 0, 1, &param, &val);
+		if (rc != 0) {
+			/* report error but carry on */
+			cxgb_printf(sc->dip, CE_WARN,
+			    "failed to set congestion manager context for "
+			    "ingress queue %d: %d", iq->cntxt_id, rc);
+		}
 	}
 
 	/* Enable IQ interrupts */
@@ -1244,6 +1498,7 @@ free_iq_fl(struct port_info *pi, struct sge_iq *iq, struct sge_fl *fl)
 				    "failed to free queue %p: %d", iq, rc);
 				return (rc);
 			}
+			mutex_destroy(&iq->lock);
 			iq->flags &= ~IQ_ALLOCATED;
 		}
 
@@ -1308,13 +1563,14 @@ free_fwq(struct adapter *sc)
 	return (free_iq_fl(NULL, &sc->sge.fwq, NULL));
 }
 
+#ifdef TCP_OFFLOAD_ENABLE
 static int
 alloc_mgmtq(struct adapter *sc)
 {
 	int rc;
 	struct sge_wrq *mgmtq = &sc->sge.mgmtq;
 
-	init_eq(&mgmtq->eq, EQ_CTRL, CTRL_EQ_QSIZE, sc->port[0]->tx_chan,
+	init_eq(sc, &mgmtq->eq, EQ_CTRL, CTRL_EQ_QSIZE, sc->port[0]->tx_chan,
 	    sc->sge.fwq.cntxt_id);
 	rc = alloc_wrq(sc, NULL, mgmtq, 0);
 	if (rc != 0) {
@@ -1325,6 +1581,7 @@ alloc_mgmtq(struct adapter *sc)
 
 	return (0);
 }
+#endif
 
 static int
 alloc_rxq(struct port_info *pi, struct sge_rxq *rxq, int intr_idx, int i)
@@ -1332,7 +1589,8 @@ alloc_rxq(struct port_info *pi, struct sge_rxq *rxq, int intr_idx, int i)
 	int rc;
 
 	rxq->port = pi;
-	rc = alloc_iq_fl(pi, &rxq->iq, &rxq->fl, intr_idx, 1 << pi->tx_chan);
+	rc = alloc_iq_fl(pi, &rxq->iq, &rxq->fl, intr_idx,
+			 t4_get_tp_ch_map(pi->adapter, pi->tx_chan));
 	if (rc != 0)
 		return (rc);
 
@@ -1358,7 +1616,7 @@ free_rxq(struct port_info *pi, struct sge_rxq *rxq)
 	return (rc);
 }
 
-#ifndef TCP_OFFLOAD_DISABLE
+#ifdef TCP_OFFLOAD_ENABLE
 static int
 alloc_ofld_rxq(struct port_info *pi, struct sge_ofld_rxq *ofld_rxq,
 	int intr_idx)
@@ -1366,7 +1624,7 @@ alloc_ofld_rxq(struct port_info *pi, struct sge_ofld_rxq *ofld_rxq,
 	int rc;
 
 	rc = alloc_iq_fl(pi, &ofld_rxq->iq, &ofld_rxq->fl, intr_idx,
-	    1 << pi->tx_chan);
+	    t4_get_tp_ch_map(pi->adapter, pi->tx_chan));
 	if (rc != 0)
 		return (rc);
 
@@ -1444,7 +1702,8 @@ eth_eq_alloc(struct adapter *sc, struct port_info *pi, struct sge_eq *eq)
 	    V_FW_EQ_ETH_CMD_VFN(0));
 	c.alloc_to_len16 = BE_32(F_FW_EQ_ETH_CMD_ALLOC |
 	    F_FW_EQ_ETH_CMD_EQSTART | FW_LEN16(c));
-	c.viid_pkd = BE_32(V_FW_EQ_ETH_CMD_VIID(pi->viid));
+	c.autoequiqe_to_viid = BE_32(F_FW_EQ_ETH_CMD_AUTOEQUIQE |
+	    F_FW_EQ_ETH_CMD_AUTOEQUEQE | V_FW_EQ_ETH_CMD_VIID(pi->viid));
 	c.fetchszm_to_iqid =
 	    BE_32(V_FW_EQ_ETH_CMD_HOSTFCMODE(X_HOSTFCMODE_STATUS_PAGE) |
 	    V_FW_EQ_ETH_CMD_PCIECHN(eq->tx_chan) | F_FW_EQ_ETH_CMD_FETCHRO |
@@ -1473,7 +1732,7 @@ eth_eq_alloc(struct adapter *sc, struct port_info *pi, struct sge_eq *eq)
 	return (rc);
 }
 
-#ifndef TCP_OFFLOAD_DISABLE
+#ifdef TCP_OFFLOAD_ENABLE
 static int
 ofld_eq_alloc(struct adapter *sc, struct port_info *pi, struct sge_eq *eq)
 {
@@ -1532,10 +1791,11 @@ alloc_eq(struct adapter *sc, struct port_info *pi, struct sge_eq *eq)
 	if (rc != 0)
 		return (rc);
 
-	eq->cap = eq->qsize - SPG_SIZE / EQ_ESIZE;
+	eq->cap = eq->qsize - sc->sge.stat_len / EQ_ESIZE;
 	eq->spg = (void *)&eq->desc[eq->cap];
 	eq->avail = eq->cap - 1;	/* one less to avoid cidx = pidx */
 	eq->pidx = eq->cidx = 0;
+	eq->doorbells = sc->doorbells;
 
 	switch (eq->flags & EQ_TYPEMASK) {
 	case EQ_CTRL:
@@ -1546,7 +1806,7 @@ alloc_eq(struct adapter *sc, struct port_info *pi, struct sge_eq *eq)
 		rc = eth_eq_alloc(sc, pi, eq);
 		break;
 
-#ifndef TCP_OFFLOAD_DISABLE
+#ifdef TCP_OFFLOAD_ENABLE
 	case EQ_OFLD:
 		rc = ofld_eq_alloc(sc, pi, eq);
 		break;
@@ -1556,6 +1816,25 @@ alloc_eq(struct adapter *sc, struct port_info *pi, struct sge_eq *eq)
 		panic("%s: invalid eq type %d.", __func__,
 		    eq->flags & EQ_TYPEMASK);
 	}
+
+	if (eq->doorbells &
+		(DOORBELL_UDB | DOORBELL_UDBWC | DOORBELL_WCWR)) {
+		uint32_t s_qpp = sc->sge.s_qpp;
+		uint32_t mask = (1 << s_qpp) - 1;
+		volatile uint8_t *udb;
+
+		udb = (volatile uint8_t *)sc->reg1p + UDBS_DB_OFFSET;
+		udb += (eq->cntxt_id >> s_qpp) << PAGE_SHIFT;   /* pg offset */
+		eq->udb_qid = eq->cntxt_id & mask;              /* id in page */
+		if (eq->udb_qid > PAGE_SIZE / UDBS_SEG_SIZE)
+			eq->doorbells &= ~DOORBELL_WCWR;
+		else {
+			udb += eq->udb_qid << UDBS_SEG_SHIFT;   /* seg offset */
+			eq->udb_qid = 0;
+		}
+		eq->udb = (volatile void *)udb;
+	}
+
 	if (rc != 0) {
 		cxgb_printf(sc->dip, CE_WARN,
 		    "failed to allocate egress queue(%d): %d",
@@ -1582,7 +1861,7 @@ free_eq(struct adapter *sc, struct sge_eq *eq)
 			    eq->cntxt_id);
 			break;
 
-#ifndef TCP_OFFLOAD_DISABLE
+#ifdef TCP_OFFLOAD_ENABLE
 		case EQ_OFLD:
 			rc = -t4_ofld_eq_free(sc, sc->mbox, sc->pf, 0,
 			    eq->cntxt_id);
@@ -1614,6 +1893,7 @@ free_eq(struct adapter *sc, struct sge_eq *eq)
 	return (0);
 }
 
+#ifdef TCP_OFFLOAD_ENABLE
 /* ARGSUSED */
 static int
 alloc_wrq(struct adapter *sc, struct port_info *pi, struct sge_wrq *wrq,
@@ -1649,6 +1929,7 @@ free_wrq(struct adapter *sc, struct sge_wrq *wrq)
 	bzero(wrq, sizeof (*wrq));
 	return (0);
 }
+#endif
 
 static int
 alloc_txq(struct port_info *pi, struct sge_txq *txq, int idx)
@@ -2058,19 +2339,22 @@ free_fl_bufs(struct sge_fl *fl)
  * Note that fl->cidx and fl->offset are left unchanged in case of failure.
  */
 static mblk_t *
-get_fl_payload(struct sge_fl *fl, uint32_t len_newbuf, int *fl_bufs_used)
+get_fl_payload(struct adapter *sc, struct sge_fl *fl,
+	       uint32_t len_newbuf, int *fl_bufs_used)
 {
 	struct mblk_pair frame = {0};
 	struct rxbuf *rxb;
 	mblk_t *m = NULL;
 	uint_t nbuf = 0, len, copy, n;
-	uint32_t cidx, offset;
+	uint32_t cidx, offset, rcidx, roffset;
 
 	/*
 	 * The SGE won't pack a new frame into the current buffer if the entire
 	 * payload doesn't fit in the remaining space.  Move on to the next buf
 	 * in that case.
 	 */
+	rcidx = fl->cidx;
+	roffset = fl->offset;
 	if (fl->offset > 0 && len_newbuf & F_RSPD_NEWBUF) {
 		fl->offset = 0;
 		if (++fl->cidx == fl->cap)
@@ -2084,8 +2368,15 @@ get_fl_payload(struct sge_fl *fl, uint32_t len_newbuf, int *fl_bufs_used)
 	copy = (len <= fl->copy_threshold);
 	if (copy != 0) {
 		frame.head = m = allocb(len, BPRI_HI);
-		if (m == NULL)
+		if (m == NULL) {
+			fl->allocb_fail++;
+			cmn_err(CE_WARN,"%s: mbuf allocation failure "
+					"count = %llu", __func__,
+					(unsigned long long)fl->allocb_fail);
+			fl->cidx = rcidx;
+			fl->offset = roffset;
 			return (NULL);
+		}
 	}
 
 	while (len) {
@@ -2101,7 +2392,15 @@ get_fl_payload(struct sge_fl *fl, uint32_t len_newbuf, int *fl_bufs_used)
 			m = desballoc((unsigned char *)rxb->va + offset, n,
 			    BPRI_HI, &rxb->freefunc);
 			if (m == NULL) {
-				freemsg(frame.head);
+				fl->allocb_fail++;
+				cmn_err(CE_WARN,
+					"%s: mbuf allocation failure "
+					"count = %llu", __func__,
+					(unsigned long long)fl->allocb_fail);
+				if (frame.head)
+					freemsgchain(frame.head);
+				fl->cidx = rcidx;
+				fl->offset = roffset;
 				return (NULL);
 			}
 			atomic_inc_uint(&rxb->ref_cnt);
@@ -2113,7 +2412,7 @@ get_fl_payload(struct sge_fl *fl, uint32_t len_newbuf, int *fl_bufs_used)
 		}
 		m->b_wptr += n;
 		len -= n;
-		offset += roundup(n, FL_ALIGN);
+		offset += roundup(n, sc->sge.fl_align);
 		ASSERT(offset <= rxb->buf_size);
 		if (offset == rxb->buf_size) {
 			offset = 0;
@@ -2192,7 +2491,7 @@ start:	txinfo->nsegs = 0;
 		}
 		freemsg(*fp);
 		*fp = m;
-		mac_hcksum_set(m, NULL, NULL, NULL, NULL, txinfo->flags);
+		mac_hcksum_set(m, 0, 0, 0, 0, txinfo->flags);
 	}
 
 	if (txinfo->len <= IMM_LEN && !sgl_only)
@@ -2223,8 +2522,7 @@ start:	txinfo->nsegs = 0;
 				free_txinfo_resources(txq, txinfo);
 				freemsg(*fp);
 				*fp = m;
-				mac_hcksum_set(m, NULL, NULL, NULL, NULL,
-				    txinfo->flags);
+				mac_hcksum_set(m, 0, 0, 0, 0, txinfo->flags);
 				goto start;
 			}
 
@@ -2578,7 +2876,7 @@ write_txpkt_wr(struct port_info *pi, struct sge_txq *txq, mblk_t *m,
 	ctrl = sizeof (struct cpl_tx_pkt_core);
 	if (txinfo->flags & HW_LSO) {
 		nflits = TXPKT_LSO_WR_HDR;
-		ctrl += sizeof (struct cpl_tx_pkt_lso);
+		ctrl += sizeof(struct cpl_tx_pkt_lso_core);
 	} else
 		nflits = TXPKT_WR_HDR;
 	if (txinfo->nsegs > 0)
@@ -2602,7 +2900,7 @@ write_txpkt_wr(struct port_info *pi, struct sge_txq *txq, mblk_t *m,
 	wr->r3 = 0;
 
 	if (txinfo->flags & HW_LSO) {
-		struct cpl_tx_pkt_lso *lso = (void *)(wr + 1);
+		struct cpl_tx_pkt_lso_core *lso = (void *)(wr + 1);
 		char *p = (void *)m->b_rptr;
 		ctrl = V_LSO_OPCODE((u32)CPL_TX_PKT_LSO) | F_LSO_FIRST_SLICE |
 		    F_LSO_LAST_SLICE;
@@ -2625,7 +2923,10 @@ write_txpkt_wr(struct port_info *pi, struct sge_txq *txq, mblk_t *m,
 		lso->ipid_ofst = cpu_to_be16(0);
 		lso->mss = cpu_to_be16(txinfo->mss);
 		lso->seqno_offset = cpu_to_be32(0);
-		lso->len = cpu_to_be32(txinfo->len);
+		if (is_t4(pi->adapter->params.chip))
+			lso->len = cpu_to_be32(txinfo->len);
+		else
+			lso->len = cpu_to_be32(V_LSO_T5_XFER_SIZE(txinfo->len));
 
 		cpl = (void *)(lso + 1);
 
@@ -2800,6 +3101,12 @@ copy_to_txd(struct sge_eq *eq, caddr_t from, caddr_t *to, int len)
 static inline void
 ring_tx_db(struct adapter *sc, struct sge_eq *eq)
 {
+	int val, db_mode;
+	u_int db = eq->doorbells;
+
+	if (eq->pending > 1)
+		db &= ~DOORBELL_WCWR;
+
 	if (eq->pending > eq->pidx) {
 		int offset = eq->cap - (eq->pending - eq->pidx);
 
@@ -2820,8 +3127,49 @@ ring_tx_db(struct adapter *sc, struct sge_eq *eq)
 
 	membar_producer();
 
-	t4_write_reg(sc, MYPF_REG(A_SGE_PF_KDOORBELL),
-	    V_QID(eq->cntxt_id) | V_PIDX(eq->pending));
+	if (is_t4(sc->params.chip))
+		val = V_PIDX(eq->pending);
+	else
+		val = V_PIDX_T5(eq->pending);
+
+	db_mode = (1 << (ffs(db) - 1));
+	switch (db_mode) {
+		case DOORBELL_UDB:
+			*eq->udb = LE_32(V_QID(eq->udb_qid) | val);
+			break;
+
+		case DOORBELL_WCWR:
+			{
+				volatile uint64_t *dst, *src;
+				int i;
+				/*
+				 * Queues whose 128B doorbell segment fits in
+				 * the page do not use relative qid
+				 * (udb_qid is always 0).  Only queues with
+				 * doorbell segments can do WCWR.
+				 */
+				ASSERT(eq->udb_qid == 0 && eq->pending == 1);
+
+				dst = (volatile void *)((uintptr_t)eq->udb +
+				    UDBS_WR_OFFSET - UDBS_DB_OFFSET);
+				i = eq->pidx ? eq->pidx - 1 : eq->cap - 1;
+				src = (void *)&eq->desc[i];
+				while (src != (void *)&eq->desc[i + 1])
+				        *dst++ = *src++;
+				membar_producer();
+				break;
+			}
+
+		case DOORBELL_UDBWC:
+			*eq->udb = LE_32(V_QID(eq->udb_qid) | val);
+			membar_producer();
+			break;
+
+		case DOORBELL_KDB:
+			t4_write_reg(sc, MYPF_REG(A_SGE_PF_KDOORBELL),
+			    V_QID(eq->cntxt_id) | val);
+			break;
+	}
 
 	eq->pending = 0;
 }
@@ -2930,16 +3278,27 @@ write_txqflush_wr(struct sge_txq *txq)
 static int
 t4_eth_rx(struct sge_iq *iq, const struct rss_header *rss, mblk_t *m)
 {
+	bool csum_ok;
+	uint16_t err_vec;
 	struct sge_rxq *rxq = (void *)iq;
 	struct mblk_pair chain = {0};
+	struct adapter *sc = iq->adapter;
 	const struct cpl_rx_pkt *cpl = (const void *)(rss + 1);
 
 	iq->intr_next = iq->intr_params;
 
-	m->b_rptr += FL_PKTSHIFT;
+	m->b_rptr += sc->sge.pktshift;
 
+	/* Compressed error vector is enabled for T6 only */
+	if (sc->params.tp.rx_pkt_encap)
+		/* It is enabled only in T6 config file */
+		err_vec = G_T6_COMPR_RXERR_VEC(ntohs(cpl->err_vec));
+	else
+		err_vec = ntohs(cpl->err_vec);
+
+	csum_ok = cpl->csum_calc && !err_vec;
 	/* TODO: what about cpl->ip_frag? */
-	if (cpl->csum_calc && !cpl->err_vec && !cpl->ip_frag) {
+	if (csum_ok && !cpl->ip_frag) {
 		mac_hcksum_set(m, 0, 0, 0, 0xffff,
 		    HCK_FULLCKSUM_OK | HCK_FULLCKSUM |
 		    HCK_IPV4_HDRCKSUM_OK);
@@ -2955,6 +3314,8 @@ t4_eth_rx(struct sge_iq *iq, const struct rss_header *rss, mblk_t *m)
 
 	t4_mac_rx(rxq->port, rxq, chain.head);
 
+	rxq->rxpkts++;
+	rxq->rxbytes  += be16_to_cpu(cpl->len);
 	return (0);
 }
 
@@ -2964,6 +3325,7 @@ static inline void
 ring_fl_db(struct adapter *sc, struct sge_fl *fl)
 {
 	int desc_start, desc_last, ndesc;
+	uint32_t v = sc->params.arch.sge_fl_db ;
 
 	ndesc = FL_HW_IDX(fl->pending);
 
@@ -2999,10 +3361,15 @@ ring_fl_db(struct adapter *sc, struct sge_fl *fl)
 		    ndesc * RX_FL_ESIZE, DDI_DMA_SYNC_FORDEV);
 	}
 
+	if (is_t4(sc->params.chip))
+		v |= V_PIDX(ndesc);
+	else
+		v |= V_PIDX_T5(ndesc);
+	v |= V_QID(fl->cntxt_id) | V_PIDX(ndesc);
+
 	membar_producer();
 
-	t4_write_reg(sc, MYPF_REG(A_SGE_PF_KDOORBELL), F_DBPRIO |
-	    V_QID(fl->cntxt_id) | V_PIDX(ndesc));
+	t4_write_reg(sc, MYPF_REG(A_SGE_PF_KDOORBELL), v);
 
 	/*
 	 * Update pending count:
@@ -3011,18 +3378,54 @@ ring_fl_db(struct adapter *sc, struct sge_fl *fl)
 	fl->pending -= ndesc * 8;
 }
 
+static void
+tx_reclaim_task(void *arg)
+{
+	struct sge_txq *txq = arg;
+
+	TXQ_LOCK(txq);
+	reclaim_tx_descs(txq, txq->eq.qsize);
+	TXQ_UNLOCK(txq);
+}
+
 /* ARGSUSED */
+static int
+handle_sge_egr_update(struct sge_iq *iq, const struct rss_header *rss,
+                mblk_t *m)
+{
+	const struct cpl_sge_egr_update *cpl = (const void *)(rss + 1);
+	unsigned int qid = G_EGR_QID(ntohl(cpl->opcode_qid));
+	struct adapter *sc = iq->adapter;
+	struct sge *s = &sc->sge;
+	struct sge_eq *eq;
+	struct sge_txq *txq;
+
+	txq = (void *)s->eqmap[qid - s->eq_start];
+	eq = &txq->eq;
+	txq->qflush++;
+	t4_mac_tx_update(txq->port, txq);
+
+	ddi_taskq_dispatch(sc->tq[eq->tx_chan], tx_reclaim_task,
+		(void *)txq, DDI_NOSLEEP);
+
+	return (0);
+}
+
 static int
 handle_fw_rpl(struct sge_iq *iq, const struct rss_header *rss, mblk_t *m)
 {
+	struct adapter *sc = iq->adapter;
 	const struct cpl_fw6_msg *cpl = (const void *)(rss + 1);
 
 	ASSERT(m == NULL);
 
-	if (cpl->type == FW6_TYPE_CMD_RPL)
-		(void) t4_handle_fw_rpl(iq->adapter, cpl->data);
+	if (cpl->type == FW_TYPE_RSSCPL || cpl->type == FW6_TYPE_RSSCPL) {
+		const struct rss_header *rss2;
 
-	return (0);
+		rss2 = (const struct rss_header *)&cpl->data[0];
+		return (sc->cpl_handler[rss2->opcode](iq, rss2, m));
+	}
+	return (sc->fw_msg_handler[cpl->type](sc, &cpl->data[0]));
 }
 
 int
@@ -3241,6 +3644,8 @@ update_port_info_kstats(kstat_t *ksp, int rw)
  */
 struct rxq_kstats {
 	kstat_named_t rxcsum;
+	kstat_named_t rxpkts;
+	kstat_named_t rxbytes;
 	kstat_named_t nomem;
 };
 
@@ -3267,6 +3672,8 @@ setup_rxq_kstats(struct port_info *pi, struct sge_rxq *rxq, int idx)
 	kstatp = (struct rxq_kstats *)ksp->ks_data;
 
 	KS_UINIT(rxcsum);
+	KS_UINIT(rxpkts);
+	KS_UINIT(rxbytes);
 	KS_UINIT(nomem);
 
 	ksp->ks_update = update_rxq_kstats;
@@ -3286,6 +3693,8 @@ update_rxq_kstats(kstat_t *ksp, int rw)
 		return (0);
 
 	KS_U_FROM(rxcsum, rxq);
+	KS_U_FROM(rxpkts, rxq);
+	KS_U_FROM(rxbytes, rxq);
 	KS_U_FROM(nomem, rxq);
 
 	return (0);

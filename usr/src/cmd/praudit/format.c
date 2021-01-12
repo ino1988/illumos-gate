@@ -19,6 +19,9 @@
  * CDDL HEADER END
  */
 /*
+ * Copyright (c) 2019 Peter Tribble.
+ */
+/*
  * Copyright 2009 Sun Microsystems, Inc.  All rights reserved.
  * Use is subject to license terms.
  */
@@ -62,6 +65,154 @@ static int	do_mtime32(pr_context_t *context, int status, int flag,
     uint32_t scale);
 static int	do_mtime64(pr_context_t *context, int status, int flag,
     uint64_t scale);
+
+/*
+ * for uid/gid caches
+ */
+static uid_t		lastuid	= (uid_t)-1;
+static gid_t		lastgid = (gid_t)-1;
+static char		*lastuname = NULL;
+static char		*lastgname = NULL;
+static char		*getname(uid_t);
+static char		*getgroup(gid_t);
+static struct cachenode *findincache(struct cachenode **, long);
+#include <utmpx.h>
+
+struct	utmpx utmp;
+
+#define	NMAX	(sizeof (utmp.ut_name))
+#define	SCPYN(a, b)	(void) strncpy(a, b, NMAX)
+
+struct cachenode {		/* this struct must be zeroed before using */
+	struct cachenode *lesschild;	/* subtree whose entries < val */
+	struct cachenode *grtrchild;	/* subtree whose entries > val */
+	long val;			/* the uid or gid of this entry */
+	int initted;			/* name has been filled in */
+	char name[NMAX+1];		/* the string that val maps to */
+};
+static struct cachenode *names, *groups;
+
+static struct cachenode *
+findincache(struct cachenode **head, long val)
+{
+	struct cachenode **parent = head;
+	struct cachenode *c = *parent;
+
+	while (c != NULL) {
+		if (val == c->val) {
+			/* found it */
+			return (c);
+		} else if (val < c->val) {
+			parent = &c->lesschild;
+			c = c->lesschild;
+		} else {
+			parent = &c->grtrchild;
+			c = c->grtrchild;
+		}
+	}
+
+	/* not in the cache, make a new entry for it */
+	c = calloc(1, sizeof (struct cachenode));
+	if (c == NULL) {
+		perror("praudit");
+		exit(2);
+	}
+	*parent = c;
+	c->val = val;
+	return (c);
+}
+
+/*
+ * get name from cache, or passwd file for a given uid;
+ * lastuid is set to uid.
+ */
+static char *
+getname(uid_t uid)
+{
+	struct passwd *pwent;
+	struct cachenode *c;
+
+	if ((uid == lastuid) && lastuname)
+		return (lastuname);
+
+	c = findincache(&names, uid);
+	if (c->initted == 0) {
+		if ((pwent = getpwuid(uid)) != NULL) {
+			SCPYN(&c->name[0], pwent->pw_name);
+		} else {
+			(void) sprintf(&c->name[0], "%u", (int)uid);
+		}
+		c->initted = 1;
+	}
+	lastuid = uid;
+	lastuname = &c->name[0];
+	return (lastuname);
+}
+
+/*
+ * get name from cache, or group file for a given gid;
+ * lastgid is set to gid.
+ */
+static char *
+getgroup(gid_t gid)
+{
+	struct group *grent;
+	struct cachenode *c;
+
+	if ((gid == lastgid) && lastgname)
+		return (lastgname);
+
+	c = findincache(&groups, gid);
+	if (c->initted == 0) {
+		if ((grent = getgrgid(gid)) != NULL) {
+			SCPYN(&c->name[0], grent->gr_name);
+		} else {
+			(void) sprintf(&c->name[0], "%u", (int)gid);
+		}
+		c->initted = 1;
+	}
+	lastgid = gid;
+	lastgname = &c->name[0];
+	return (lastgname);
+}
+
+/*
+ * populate name cache from given file
+ * caller is responsible for opening and closing the file
+ */
+void
+loadnames(FILE *pf)
+{
+	struct passwd *pwent;
+	struct cachenode *c;
+
+	while ((pwent = fgetpwent(pf)) != NULL) {
+		c = findincache(&names, pwent->pw_uid);
+		if (c->initted == 0) {
+			SCPYN(&c->name[0], pwent->pw_name);
+			c->initted = 1;
+		}
+	}
+}
+
+/*
+ * populate group cache from given file
+ * caller is responsible for opening and closing the file
+ */
+void
+loadgroups(FILE *gf)
+{
+	struct group *grent;
+	struct cachenode *c;
+
+	while ((grent = fgetgrent(gf)) != NULL) {
+		c = findincache(&groups, grent->gr_gid);
+		if (c->initted == 0) {
+			SCPYN(&c->name[0], grent->gr_name);
+			c->initted = 1;
+		}
+	}
+}
 
 /*
  * ------------------------------------------------------
@@ -649,7 +800,7 @@ major_32(uint32_t dev)
 
 /*
  * -----------------------------------------------------------------------
- * pa_tid() 	: Process terminal id and display contents
+ * pa_tid()	: Process terminal id and display contents
  * return codes	: -1 - error
  *		:  0 - successful
  *
@@ -1236,7 +1387,7 @@ bu2string(char basic_unit)
 				{ AUR_CHAR, "char" },
 				{ AUR_SHORT, "short" },
 				{ AUR_INT32, "int32" },
-				{ AUR_INT64, "int64" } 	};
+				{ AUR_INT64, "int64" }	};
 
 	for (i = 0; i < sizeof (bu_map) / sizeof (struct bu_map_ent); i++)
 		if (basic_unit == bu_map[i].basic_unit)
@@ -1556,7 +1707,7 @@ htp2string(char print_sugg)
 				{ AUP_OCTAL, "octal" },
 				{ AUP_DECIMAL, "decimal" },
 				{ AUP_HEX, "hexadecimal" },
-				{ AUP_STRING, "string" } 	};
+				{ AUP_STRING, "string" }	};
 
 	for (i = 0; i < sizeof (htp_map) / sizeof (struct htp_map_ent); i++)
 		if (print_sugg == htp_map[i].print_sugg)
@@ -1862,9 +2013,6 @@ done:
 	if (wstat == 0)
 		wstat = do_newline(context, flag);
 
-	if (wstat == 0 && context->data_mode == FILEMODE)
-		(void) fflush(stdout);
-
 	return ((rstat != 0 || wstat != 0) ? -1 : 0);
 }
 
@@ -2014,27 +2162,20 @@ static int
 pa_print_uid(pr_context_t *context, uid_t uid, int status, int flag)
 {
 	int	returnstat;
-	struct passwd *pw;
 	uval_t	uval;
 
 	if (status < 0)
 		return (status);
 
-	if (!(context->format & PRF_RAWM)) {
-		/* get password file entry */
-		if ((pw = getpwuid(uid)) == NULL) {
-			returnstat = 1;
-		} else {
-			/* print in ASCII form */
-			uval.uvaltype = PRA_STRING;
-			uval.string_val = pw->pw_name;
-			returnstat = pa_print(context, &uval, flag);
-		}
-	}
-	/* print in integer form */
-	if ((context->format & PRF_RAWM) || (returnstat == 1)) {
+	if (context->format & PRF_RAWM) {
+		/* print in integer form */
 		uval.uvaltype = PRA_INT32;
 		uval.int32_val = uid;
+		returnstat = pa_print(context, &uval, flag);
+	} else {
+		/* print in ASCII form */
+		uval.uvaltype = PRA_STRING;
+		uval.string_val = getname(uid);
 		returnstat = pa_print(context, &uval, flag);
 	}
 	return (returnstat);
@@ -2047,7 +2188,7 @@ pa_print_uid(pr_context_t *context, uid_t uid, int status, int flag)
  *		pointed to by audit_adr, and displays it in either
  *		raw form or its ASCII representation, if status >= 0.
  * return codes : -1 - error
- * 		:  1 - warning, passwd entry not found
+ *		:  1 - warning, passwd entry not found
  *		:  0 - successful
  * -----------------------------------------------------------------------
  */
@@ -2070,27 +2211,20 @@ static int
 pa_print_gid(pr_context_t *context, gid_t gid, int status, int flag)
 {
 	int	returnstat;
-	struct group *gr;
 	uval_t	uval;
 
 	if (status < 0)
 		return (status);
 
-	if (!(context->format & PRF_RAWM)) {
-		/* get group file entry */
-		if ((gr = getgrgid(gid)) == NULL) {
-			returnstat = 1;
-		} else {
-			/* print in ASCII form */
-			uval.uvaltype = PRA_STRING;
-			uval.string_val = gr->gr_name;
-			returnstat = pa_print(context, &uval, flag);
-		}
-	}
-	/* print in integer form */
-	if ((context->format & PRF_RAWM) || (returnstat == 1)) {
+	if (context->format & PRF_RAWM) {
+		/* print in integer form */
 		uval.uvaltype = PRA_INT32;
 		uval.int32_val = gid;
+		returnstat = pa_print(context, &uval, flag);
+	} else {
+		/* print in ASCII form */
+		uval.uvaltype = PRA_STRING;
+		uval.string_val = getgroup(gid);
 		returnstat = pa_print(context, &uval, flag);
 	}
 	return (returnstat);
@@ -2103,7 +2237,7 @@ pa_print_gid(pr_context_t *context, gid_t gid, int status, int flag)
  *			pointed to by audit_adr, and displays it in either
  *			raw form or its ASCII representation, if status >= 0.
  * return codes : -1 - error
- * 		:  1 - warning, passwd entry not found
+ *		:  1 - warning, passwd entry not found
  *		:  0 - successful
  * -----------------------------------------------------------------------
  */
@@ -2130,7 +2264,7 @@ pa_gr_uid(pr_context_t *context, int status, int flag)
  *			pointed to by audit_adr, and displays it in either
  *			raw form or its ASCII representation, if status >= 0.
  * return codes : -1 - error
- * 		:  1 - warning, passwd entry not found
+ *		:  1 - warning, passwd entry not found
  *		:  0 - successful
  * -----------------------------------------------------------------------
  */
@@ -2734,9 +2868,9 @@ pa_printstr(pr_context_t *context, char *str)
 /*
  * -----------------------------------------------------------------------
  * pa_print()	:  print as one str or formatted for easy reading.
- * 		: flag - indicates whether to output a new line for
+ *		: flag - indicates whether to output a new line for
  *		: multi-line output.
- * 		:		= 0; no new line
+ *		:		= 0; no new line
  *		:		= 1; new line if regular output
  * output	: The audit record information is displayed in the
  *		  type specified by uvaltype and value specified in
@@ -2835,9 +2969,6 @@ pa_print(pr_context_t *context, uval_t *uval, int flag)
 				returnstat = pr_putchar(context, '\n');
 		}
 	}
-	if ((returnstat == 0) && (context->data_mode == FILEMODE))
-		(void) fflush(stdout);
-
 	return (returnstat);
 }
 
@@ -2908,8 +3039,8 @@ convertascii(char *p, char *c, int size)
  *
  * Format of xobj
  *	text token id		adr_char
- * 	XID 			adr_u_int32
- * 	creator uid		adr_pw_uid
+ *	XID			adr_u_int32
+ *	creator uid		adr_pw_uid
  * -----------------------------------------------------------------------
  */
 int

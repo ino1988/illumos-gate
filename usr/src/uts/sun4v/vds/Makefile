@@ -40,7 +40,6 @@ UTSBASE	= ../..
 #
 MODULE		= vds
 OBJECTS		= $(VDS_OBJS:%=$(OBJS_DIR)/%)
-LINTS		= $(VDS_OBJS:%.o=$(LINTS_DIR)/%.ln)
 ROOTMODULE	= $(ROOT_PSM_DRV_DIR)/$(MODULE)
 
 #
@@ -59,13 +58,12 @@ CLEANFILES	+= $(MODSTUBS_O)
 #	Define targets
 #
 ALL_TARGET	= $(BINARY)
-LINT_TARGET	= $(MODULE).lint
 INSTALL_TARGET	= $(BINARY) $(ROOTMODULE)
 
 CFLAGS += $(CCVERBOSE)
 CFLAGS += -D_EXTVTOC
 
-CERRWARN += -_gcc=-Wno-uninitialized
+CERRWARN += $(CNOWARN_UNINIT)
 
 #
 # module dependencies
@@ -84,12 +82,6 @@ all:		$(ALL_DEPS)
 clean:		$(CLEAN_DEPS)
 
 clobber:	$(CLOBBER_DEPS)
-
-lint:		$(LINT_DEPS)
-
-modlintlib:	$(MODLINTLIB_DEPS)
-
-clean.lint:	$(CLEAN_LINT_DEPS)
 
 install:	$(INSTALL_DEPS)
 

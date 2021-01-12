@@ -22,11 +22,13 @@
 
 #
 # Copyright (c) 2002, 2010, Oracle and/or its affiliates. All rights reserved.
-#
-
 # Copyright 2008, 2010, Richard Lowe
 # Copyright 2012 Marcel Telka <marcel@telka.sk>
 # Copyright 2014 Bart Coddens <bart.coddens@gmail.com>
+# Copyright 2017 Nexenta Systems, Inc.
+# Copyright 2019 Joyent, Inc.
+# Copyright 2016 RackTop Systems.
+#
 
 #
 # This script takes a file list and a workspace and builds a set of html files
@@ -145,6 +147,358 @@ span.new {
 </style>
 '
 
+# CSS for the HTML version of the man pages.
+# Current version is from mandoc 1.14.5.
+MANCSS='
+/* $Id: mandoc.css,v 1.45 2019/03/01 10:57:18 schwarze Exp $ */
+/*
+ * Standard style sheet for mandoc(1) -Thtml and man.cgi(8).
+ *
+ * Written by Ingo Schwarze <schwarze@openbsd.org>.
+ * I place this file into the public domain.
+ * Permission to use, copy, modify, and distribute it for any purpose
+ * with or without fee is hereby granted, without any conditions.
+ */
+
+/* Global defaults. */
+
+html {		max-width: 65em; }
+body {		font-family: Helvetica,Arial,sans-serif; }
+table {		margin-top: 0em;
+		margin-bottom: 0em;
+		border-collapse: collapse; }
+/* Some browsers set border-color in a browser style for tbody,
+ * but not for table, resulting in inconsistent border styling. */
+tbody {		border-color: inherit; }
+tr {		border-color: inherit; }
+td {		vertical-align: top;
+		padding-left: 0.2em;
+		padding-right: 0.2em;
+		border-color: inherit; }
+ul, ol, dl {	margin-top: 0em;
+		margin-bottom: 0em; }
+li, dt {	margin-top: 1em; }
+
+.permalink {	border-bottom: thin dotted;
+		color: inherit;
+		font: inherit;
+		text-decoration: inherit; }
+* {		clear: both }
+
+/* Search form and search results. */
+
+fieldset {	border: thin solid silver;
+		border-radius: 1em;
+		text-align: center; }
+input[name=expr] {
+		width: 25%; }
+
+table.results {	margin-top: 1em;
+		margin-left: 2em;
+		font-size: smaller; }
+
+/* Header and footer lines. */
+
+table.head {	width: 100%;
+		border-bottom: 1px dotted #808080;
+		margin-bottom: 1em;
+		font-size: smaller; }
+td.head-vol {	text-align: center; }
+td.head-rtitle {
+		text-align: right; }
+
+table.foot {	width: 100%;
+		border-top: 1px dotted #808080;
+		margin-top: 1em;
+		font-size: smaller; }
+td.foot-os {	text-align: right; }
+
+/* Sections and paragraphs. */
+
+.manual-text {
+		margin-left: 3.8em; }
+.Nd { }
+section.Sh { }
+h1.Sh {		margin-top: 1.2em;
+		margin-bottom: 0.6em;
+		margin-left: -3.2em;
+		font-size: 110%; }
+section.Ss { }
+h2.Ss {		margin-top: 1.2em;
+		margin-bottom: 0.6em;
+		margin-left: -1.2em;
+		font-size: 105%; }
+.Pp {		margin: 0.6em 0em; }
+.Sx { }
+.Xr { }
+
+/* Displays and lists. */
+
+.Bd { }
+.Bd-indent {	margin-left: 3.8em; }
+
+.Bl-bullet {	list-style-type: disc;
+		padding-left: 1em; }
+.Bl-bullet > li { }
+.Bl-dash {	list-style-type: none;
+		padding-left: 0em; }
+.Bl-dash > li:before {
+		content: "\2014  "; }
+.Bl-item {	list-style-type: none;
+		padding-left: 0em; }
+.Bl-item > li { }
+.Bl-compact > li {
+		margin-top: 0em; }
+
+.Bl-enum {	padding-left: 2em; }
+.Bl-enum > li { }
+.Bl-compact > li {
+		margin-top: 0em; }
+
+.Bl-diag { }
+.Bl-diag > dt {
+		font-style: normal;
+		font-weight: bold; }
+.Bl-diag > dd {
+		margin-left: 0em; }
+.Bl-hang { }
+.Bl-hang > dt { }
+.Bl-hang > dd {
+		margin-left: 5.5em; }
+.Bl-inset { }
+.Bl-inset > dt { }
+.Bl-inset > dd {
+		margin-left: 0em; }
+.Bl-ohang { }
+.Bl-ohang > dt { }
+.Bl-ohang > dd {
+		margin-left: 0em; }
+.Bl-tag {	margin-top: 0.6em;
+		margin-left: 5.5em; }
+.Bl-tag > dt {
+		float: left;
+		margin-top: 0em;
+		margin-left: -5.5em;
+		padding-right: 0.5em;
+		vertical-align: top; }
+.Bl-tag > dd {
+		clear: right;
+		width: 100%;
+		margin-top: 0em;
+		margin-left: 0em;
+		margin-bottom: 0.6em;
+		vertical-align: top;
+		overflow: auto; }
+.Bl-compact {	margin-top: 0em; }
+.Bl-compact > dd {
+		margin-bottom: 0em; }
+.Bl-compact > dt {
+		margin-top: 0em; }
+
+.Bl-column { }
+.Bl-column > tbody > tr { }
+.Bl-column > tbody > tr > td {
+		margin-top: 1em; }
+.Bl-compact > tbody > tr > td {
+		margin-top: 0em; }
+
+.Rs {		font-style: normal;
+		font-weight: normal; }
+.RsA { }
+.RsB {		font-style: italic;
+		font-weight: normal; }
+.RsC { }
+.RsD { }
+.RsI {		font-style: italic;
+		font-weight: normal; }
+.RsJ {		font-style: italic;
+		font-weight: normal; }
+.RsN { }
+.RsO { }
+.RsP { }
+.RsQ { }
+.RsR { }
+.RsT {		text-decoration: underline; }
+.RsU { }
+.RsV { }
+
+.eqn { }
+.tbl td {	vertical-align: middle; }
+
+.HP {		margin-left: 3.8em;
+		text-indent: -3.8em; }
+
+/* Semantic markup for command line utilities. */
+
+table.Nm { }
+code.Nm {	font-style: normal;
+		font-weight: bold;
+		font-family: inherit; }
+.Fl {		font-style: normal;
+		font-weight: bold;
+		font-family: inherit; }
+.Cm {		font-style: normal;
+		font-weight: bold;
+		font-family: inherit; }
+.Ar {		font-style: italic;
+		font-weight: normal; }
+.Op {		display: inline; }
+.Ic {		font-style: normal;
+		font-weight: bold;
+		font-family: inherit; }
+.Ev {		font-style: normal;
+		font-weight: normal;
+		font-family: monospace; }
+.Pa {		font-style: italic;
+		font-weight: normal; }
+
+/* Semantic markup for function libraries. */
+
+.Lb { }
+code.In {	font-style: normal;
+		font-weight: bold;
+		font-family: inherit; }
+a.In { }
+.Fd {		font-style: normal;
+		font-weight: bold;
+		font-family: inherit; }
+.Ft {		font-style: italic;
+		font-weight: normal; }
+.Fn {		font-style: normal;
+		font-weight: bold;
+		font-family: inherit; }
+.Fa {		font-style: italic;
+		font-weight: normal; }
+.Vt {		font-style: italic;
+		font-weight: normal; }
+.Va {		font-style: italic;
+		font-weight: normal; }
+.Dv {		font-style: normal;
+		font-weight: normal;
+		font-family: monospace; }
+.Er {		font-style: normal;
+		font-weight: normal;
+		font-family: monospace; }
+
+/* Various semantic markup. */
+
+.An { }
+.Lk { }
+.Mt { }
+.Cd {		font-style: normal;
+		font-weight: bold;
+		font-family: inherit; }
+.Ad {		font-style: italic;
+		font-weight: normal; }
+.Ms {		font-style: normal;
+		font-weight: bold; }
+.St { }
+.Ux { }
+
+/* Physical markup. */
+
+.Bf {		display: inline; }
+.No {		font-style: normal;
+		font-weight: normal; }
+.Em {		font-style: italic;
+		font-weight: normal; }
+.Sy {		font-style: normal;
+		font-weight: bold; }
+.Li {		font-style: normal;
+		font-weight: normal;
+		font-family: monospace; }
+
+/* Tooltip support. */
+
+h1.Sh, h2.Ss {	position: relative; }
+.An, .Ar, .Cd, .Cm, .Dv, .Em, .Er, .Ev, .Fa, .Fd, .Fl, .Fn, .Ft,
+.Ic, code.In, .Lb, .Lk, .Ms, .Mt, .Nd, code.Nm, .Pa, .Rs,
+.St, .Sx, .Sy, .Va, .Vt, .Xr {
+		display: inline-block;
+		position: relative; }
+
+.An::before {	content: "An"; }
+.Ar::before {	content: "Ar"; }
+.Cd::before {	content: "Cd"; }
+.Cm::before {	content: "Cm"; }
+.Dv::before {	content: "Dv"; }
+.Em::before {	content: "Em"; }
+.Er::before {	content: "Er"; }
+.Ev::before {	content: "Ev"; }
+.Fa::before {	content: "Fa"; }
+.Fd::before {	content: "Fd"; }
+.Fl::before {	content: "Fl"; }
+.Fn::before {	content: "Fn"; }
+.Ft::before {	content: "Ft"; }
+.Ic::before {	content: "Ic"; }
+code.In::before { content: "In"; }
+.Lb::before {	content: "Lb"; }
+.Lk::before {	content: "Lk"; }
+.Ms::before {	content: "Ms"; }
+.Mt::before {	content: "Mt"; }
+.Nd::before {	content: "Nd"; }
+code.Nm::before { content: "Nm"; }
+.Pa::before {	content: "Pa"; }
+.Rs::before {	content: "Rs"; }
+h1.Sh::before {	content: "Sh"; }
+h2.Ss::before {	content: "Ss"; }
+.St::before {	content: "St"; }
+.Sx::before {	content: "Sx"; }
+.Sy::before {	content: "Sy"; }
+.Va::before {	content: "Va"; }
+.Vt::before {	content: "Vt"; }
+.Xr::before {	content: "Xr"; }
+
+.An::before, .Ar::before, .Cd::before, .Cm::before,
+.Dv::before, .Em::before, .Er::before, .Ev::before,
+.Fa::before, .Fd::before, .Fl::before, .Fn::before, .Ft::before,
+.Ic::before, code.In::before, .Lb::before, .Lk::before,
+.Ms::before, .Mt::before, .Nd::before, code.Nm::before,
+.Pa::before, .Rs::before,
+h1.Sh::before, h2.Ss::before, .St::before, .Sx::before, .Sy::before,
+.Va::before, .Vt::before, .Xr::before {
+		opacity: 0;
+		transition: .15s ease opacity;
+		pointer-events: none;
+		position: absolute;
+		bottom: 100%;
+		box-shadow: 0 0 .35em #000;
+		padding: .15em .25em;
+		white-space: nowrap;
+		font-family: Helvetica,Arial,sans-serif;
+		font-style: normal;
+		font-weight: bold;
+		color: black;
+		background: #fff; }
+.An:hover::before, .Ar:hover::before, .Cd:hover::before, .Cm:hover::before,
+.Dv:hover::before, .Em:hover::before, .Er:hover::before, .Ev:hover::before,
+.Fa:hover::before, .Fd:hover::before, .Fl:hover::before, .Fn:hover::before,
+.Ft:hover::before, .Ic:hover::before, code.In:hover::before,
+.Lb:hover::before, .Lk:hover::before, .Ms:hover::before, .Mt:hover::before,
+.Nd:hover::before, code.Nm:hover::before, .Pa:hover::before,
+.Rs:hover::before, h1.Sh:hover::before, h2.Ss:hover::before, .St:hover::before,
+.Sx:hover::before, .Sy:hover::before, .Va:hover::before, .Vt:hover::before,
+.Xr:hover::before {
+		opacity: 1;
+		pointer-events: inherit; }
+
+/* Overrides to avoid excessive margins on small devices. */
+
+@media (max-width: 37.5em) {
+.manual-text {
+		margin-left: 0.5em; }
+h1.Sh, h2.Ss {	margin-left: 0em; }
+.Bd-indent {	margin-left: 2em; }
+.Bl-hang > dd {
+		margin-left: 2em; }
+.Bl-tag {	margin-left: 2em; }
+.Bl-tag > dt {
+		margin-left: -2em; }
+.HP {		margin-left: 2em;
+		text-indent: -2em; }
+}
+'
+
 #
 # Display remote target with prefix and trailing slash.
 #
@@ -239,20 +593,20 @@ function remote_mkdirs
 			    "cannot create temporary file for batch file"
 			return 1
 		fi
-                OLDIFS=$IFS
-                IFS=/
+		OLDIFS=$IFS
+		IFS=/
 		typeset dir
-                for dir in ${dirs_mk}; do
+		for dir in ${dirs_mk}; do
 			#
 			# Use the '-' prefix to ignore mkdir errors in order
 			# to avoid an error in case the directory already
 			# exists. We check the directory with chdir to be sure
 			# there is one.
 			#
-                        print -- "-mkdir ${dir}" >> ${batch_file_mkdir}
-                        print "chdir ${dir}" >> ${batch_file_mkdir}
-                done
-                IFS=$OLDIFS
+			print -- "-mkdir ${dir}" >> ${batch_file_mkdir}
+			print "chdir ${dir}" >> ${batch_file_mkdir}
+		done
+		IFS=$OLDIFS
 		typeset -r sftp_err_msg=$( $MKTEMP /tmp/webrev_scp_err.XXXXXX )
 		if [[ -z ${sftp_err_msg} ]]; then
 			print "\nERROR: remote_mkdirs:" \
@@ -519,7 +873,7 @@ html_quote()
 	$SED -e "s/&/\&amp;/g" -e "s/</\&lt;/g" -e "s/>/\&gt;/g" "$@" | expand
 }
 
-# 
+#
 # Trim a digest-style revision to a conventionally readable yet useful length
 #
 trim_digest()
@@ -836,7 +1190,7 @@ sdiff_to_html()
 	print "$HTML<head>$STDHEAD"
 	print "<title>$WNAME Sdiff $TPATH/$TNAME</title>"
 	print "</head><body id=\"SUNWwebrev\">"
-        print "<a class=\"print\" href=\"javascript:print()\">Print this page</a>"
+	print "<a class=\"print\" href=\"javascript:print()\">Print this page</a>"
 	print "<pre>$COMMENT</pre>\n"
 	print "<table><tr valign=\"top\">"
 	print "<td><pre>"
@@ -914,75 +1268,14 @@ function framed_sdiff
 	  <frame src="${RTOP}ancnav.html" scrolling="no" marginwidth="0"
 	   marginheight="0" name="nav"></frame>
 	  <noframes>
-            <body id="SUNWwebrev">
+	    <body id="SUNWwebrev">
 	      Alas 'frames' webrev requires that your browser supports frames
 	      and has the feature enabled.
-            </body>
+	    </body>
 	  </noframes>
 	  </frameset>
 	</html>
 	EOF
-}
-
-
-#
-# fix_postscript
-#
-# Merge codereview output files to a single conforming postscript file, by:
-#	- removing all extraneous headers/trailers
-#	- making the page numbers right
-#	- removing pages devoid of contents which confuse some
-#	  postscript readers.
-#
-# From Casper.
-#
-function fix_postscript
-{
-	infile=$1
-
-	cat > /tmp/$$.crmerge.pl << \EOF
-
-	print scalar(<>);		# %!PS-Adobe---
-	print "%%Orientation: Landscape\n";
-
-	$pno = 0;
-	$doprint = 1;
-
-	$page = "";
-
-	while (<>) {
-		next if (/^%%Pages:\s*\d+/);
-
-		if (/^%%Page:/) {
-			if ($pno == 0 || $page =~ /\)S/) {
-				# Header or single page containing text
-				print "%%Page: ? $pno\n" if ($pno > 0);
-				print $page;
-				$pno++;
-			} else {
-				# Empty page, skip it.
-			}
-			$page = "";
-			$doprint = 1;
-			next;
-		}
-
-		# Skip from %%Trailer of one document to Endprolog
-		# %%Page of the next
-		$doprint = 0 if (/^%%Trailer/);
-		$page .= $_ if ($doprint);
-	}
-
-	if ($page =~ /\)S/) {
-		print "%%Page: ? $pno\n";
-		print $page;
-	} else {
-		$pno--;
-	}
-	print "%%Trailer\n%%Pages: $pno\n";
-EOF
-
-	$PERL /tmp/$$.crmerge.pl < $infile
 }
 
 
@@ -1055,20 +1348,20 @@ function insert_anchors
 #
 function relative_dir
 {
-        typeset cur="${1##$2?(/)}"
+	typeset cur="${1##$2?(/)}"
 
-        #
-        # If the first path was specified absolutely, and it does
-        # not start with the second path, it's an error.
-        #
-        if [[ "$cur" = "/${1#/}" ]]; then
-                # Should never happen.
-                print -u2 "\nWARNING: relative_dir: \"$1\" not relative "
-                print -u2 "to \"$2\".  Check input paths.  Framed webrev "
-                print -u2 "will not be relocatable!"
-                print $2
-                return
-        fi
+	#
+	# If the first path was specified absolutely, and it does
+	# not start with the second path, it's an error.
+	#
+	if [[ "$cur" = "/${1#/}" ]]; then
+		# Should never happen.
+		print -u2 "\nWARNING: relative_dir: \"$1\" not relative "
+		print -u2 "to \"$2\".  Check input paths.  Framed webrev "
+		print -u2 "will not be relocatable!"
+		print $2
+		return
+	fi
 
 	#
 	# This is kind of ugly.  The sed script will do the following:
@@ -1102,22 +1395,23 @@ function frame_nav_js
 {
 cat << \EOF
 var myInt;
-var scrolling=0;
+var scrolling = 0;
 var sfactor = 3;
-var scount=10;
+var scount = 10;
 
-function scrollByPix() {
-	if (scount<=0) {
-		sfactor*=1.2;
-		scount=10;
+function scrollByPix()
+{
+	if (scount <= 0) {
+		sfactor *= 1.2;
+		scount = 10;
 	}
-	parent.lhs.scrollBy(0,sfactor);
-	parent.rhs.scrollBy(0,sfactor);
+	parent.lhs.scrollBy(0, sfactor);
+	parent.rhs.scrollBy(0, sfactor);
 	scount--;
 }
 
-function scrollToAnc(num) {
-
+function scrollToAnc(num)
+{
 	// Update the value of the anchor in the form which we use as
 	// storage for this value.  setAncValue() will take care of
 	// correcting for overflow and underflow of the value and return
@@ -1134,8 +1428,8 @@ function scrollToAnc(num) {
 	parent.lhs.location.replace(parent.lhs.location.pathname + "#" + num);
 	parent.rhs.location.replace(parent.rhs.location.pathname + "#" + num);
 
-	parent.lhs.scrollBy(0,-30);
-	parent.rhs.scrollBy(0,-30);
+	parent.lhs.scrollBy(0, -30);
+	parent.rhs.scrollBy(0, -30);
 }
 
 function getAncValue()
@@ -1171,50 +1465,54 @@ function setAncValue(val)
 	return (val);
 }
 
-function stopScroll() {
-	if (scrolling==1) {
+function stopScroll()
+{
+	if (scrolling == 1) {
 		clearInterval(myInt);
-		scrolling=0;
+		scrolling = 0;
 	}
 }
 
-function startScroll() {
+function startScroll()
+{
 	stopScroll();
-	scrolling=1;
-	myInt=setInterval("scrollByPix()",10);
+	scrolling = 1;
+	myInt = setInterval("scrollByPix()", 10);
 }
 
-function handlePress(b) {
-
+function handlePress(b)
+{
 	switch (b) {
-	    case 1 :
+	case 1:
 		scrollToAnc(-1);
 		break;
-	    case 2 :
+	case 2:
 		scrollToAnc(getAncValue() - 1);
 		break;
-	    case 3 :
-		sfactor=-3;
+	case 3:
+		sfactor = -3;
 		startScroll();
 		break;
-	    case 4 :
-		sfactor=3;
+	case 4:
+		sfactor = 3;
 		startScroll();
 		break;
-	    case 5 :
+	case 5:
 		scrollToAnc(getAncValue() + 1);
 		break;
-	    case 6 :
+	case 6:
 		scrollToAnc(999999);
 		break;
 	}
 }
 
-function handleRelease(b) {
+function handleRelease(b)
+{
 	stopScroll();
 }
 
-function keypress(ev) {
+function keypress(ev)
+{
 	var keynum;
 	var keychar;
 
@@ -1233,10 +1531,15 @@ function keypress(ev) {
 		handlePress(5);
 		return (0);
 	}
+
 	return (1);
 }
 
-function ValidateDiffNum(){
+function ValidateDiffNum()
+{
+	var val;
+	var i;
+
 	val = parent.nav.document.diff.display.value;
 	if (val == "EOF") {
 		scrollToAnc(999999);
@@ -1248,15 +1551,15 @@ function ValidateDiffNum(){
 		return;
 	}
 
-        i=parseInt(val);
-        if (isNaN(i)) {
-                parent.nav.document.diff.display.value = getAncValue();
-        } else {
-                scrollToAnc(i);
-        }
-        return false;
-}
+	i = parseInt(val);
+	if (isNaN(i)) {
+		parent.nav.document.diff.display.value = getAncValue();
+	} else {
+		scrollToAnc(i);
+	}
 
+	return (false);
+}
 EOF
 }
 
@@ -1441,8 +1744,6 @@ source_to_html()
 # HTML; if the latter, embedded bugids (sequence of 5 or more digits)
 # are turned into URLs.
 #
-# This is also used with Mercurial and the file list provided by hg-active.
-#
 comments_from_wx()
 {
 	typeset fmt=$1
@@ -1483,10 +1784,7 @@ getcomments()
 	if [[ -n $Nflag ]]; then
 		return
 	fi
-	#
-	# Mercurial support uses a file list in wx format, so this
-	# will be used there, too
-	#
+
 	if [[ -n $wxfile ]]; then
 		comments_from_wx $fmt $p
 	fi
@@ -1527,8 +1825,8 @@ function difflines
 	/^[0-9]*,[0-9]*c$/ {
 		n=split(substr($1,1,length($1)-1), counts, ",");
 		if (n != 2) {
-		    error=2
-		    exit;
+			error=2
+			exit;
 		}
 		#
 		# 3,5c means lines 3 , 4 and 5 are changed, a total of 3 lines.
@@ -1667,41 +1965,6 @@ function flist_from_wx
 }
 
 #
-# Call hg-active to get the active list output in the wx active list format
-#
-function hg_active_wxfile
-{
-	typeset child=$1
-	typeset parent=$2
-
-	TMPFLIST=/tmp/$$.active
-	$HG_ACTIVE -w $child -p $parent -o $TMPFLIST
-	wxfile=$TMPFLIST
-}
-
-#
-# flist_from_mercurial
-# Call hg-active to get a wx-style active list, and hand it off to
-# flist_from_wx
-#
-function flist_from_mercurial
-{
-	typeset child=$1
-	typeset parent=$2
-
-	print " File list from: hg-active -p $parent ...\c"
-	if [[ ! -x $HG_ACTIVE ]]; then
-		print		# Blank line for the \c above
-		print -u2 "Error: hg-active tool not found.  Exiting"
-		exit 1
-	fi
-	hg_active_wxfile $child $parent
-
-	# flist_from_wx prints the Done, so we don't have to.
-	flist_from_wx $TMPFLIST
-}
-
-#
 # Transform a specified 'git log' output format into a wx-like active list.
 #
 function git_wxfile
@@ -1711,31 +1974,33 @@ function git_wxfile
 
 	TMPFLIST=/tmp/$$.active
 	$PERL -e 'my (%files, %realfiles, $msg);
-	my $branch = $ARGV[0];
-	 
-	open(F, "git diff -M --name-status $branch |");
+	my $parent = $ARGV[0];
+	my $child = $ARGV[1];
+
+	open(F, "git diff -M --name-status $parent..$child |");
 	while (<F>) {
 	    chomp;
 	    if (/^R(\d+)\s+([^ ]+)\s+([^ ]+)/) { # rename
-		if ($1 >= 75) {			 # Probably worth treating as a rename
+		if ($1 >= 75) {		 # Probably worth treating as a rename
 		    $realfiles{$3} = $2;
 		} else {
 		    $realfiles{$3} = $3;
 		    $realfiles{$2} = $2;
-	        }
+		}
 	    } else {
 		my $f = (split /\s+/, $_)[1];
 		$realfiles{$f} = $f;
 	    }
 	}
 	close(F);
-	 
+
 	my $state = 1;		    # 0|comments, 1|files
-	open(F, "git whatchanged --pretty=format:%B $branch.. |");
+	open(F, "git whatchanged --pretty=format:%B $parent..$child |");
 	while (<F>) {
 	    chomp;
 	    if (/^:[0-9]{6}/) {
-		my $fname = (split /\t/, $_)[1];
+		my ($unused, $fname, $fname2) = split(/\t/, $_);
+		$fname = $fname2 if defined($fname2);
 		next if !defined($realfiles{$fname}); # No real change
 		$state = 1;
 		chomp $msg;
@@ -1749,14 +2014,14 @@ function git_wxfile
 	    }
 	}
 	close(F);
-	 
+
 	for (sort keys %files) {
 	    if ($realfiles{$_} ne $_) {
 		print "$_ $realfiles{$_}\n$files{$_}\n\n";
 	    } else {
 		print "$_\n$files{$_}\n\n"
 	    }
-	}' ${parent} > $TMPFLIST
+	}' ${parent} ${child} > $TMPFLIST
 
 	wxfile=$TMPFLIST
 }
@@ -1849,82 +2114,6 @@ function get_file_mode
 	    ' $1
 }
 
-function build_old_new_mercurial
-{
-	typeset olddir="$1"
-	typeset newdir="$2"
-	typeset old_mode=
-	typeset new_mode=
-	typeset file
-
-	#
-	# Get old file mode, from the parent revision manifest entry.
-	# Mercurial only stores a "file is executable" flag, but the
-	# manifest will display an octal mode "644" or "755".
-	#
-	if [[ "$PDIR" == "." ]]; then
-		file="$PF"
-	else
-		file="$PDIR/$PF"
-	fi
-	file=`echo $file | $SED 's#/#\\\/#g'`
-	# match the exact filename, and return only the permission digits
-	old_mode=`$SED -n -e "/^\\(...\\) . ${file}$/s//\\1/p" \
-	    < $HG_PARENT_MANIFEST`
-
-	#
-	# Get new file mode, directly from the filesystem.
-	# Normalize the mode to match Mercurial's behavior.
-	#
-	new_mode=`get_file_mode $CWS/$DIR/$F`
-	if [[ -n "$new_mode" ]]; then
-		if [[ "$new_mode" = *[1357]* ]]; then
-			new_mode=755
-		else
-			new_mode=644
-		fi
-	fi
-
-	#
-	# new version of the file.
-	#
-	rm -rf $newdir/$DIR/$F
-	if [[ -e $CWS/$DIR/$F ]]; then
-		cp $CWS/$DIR/$F $newdir/$DIR/$F
-		if [[ -n $new_mode ]]; then
-			chmod $new_mode $newdir/$DIR/$F
-		else
-			# should never happen
-			print -u2 "ERROR: set mode of $newdir/$DIR/$F"
-		fi
-	fi
-
-	#
-	# parent's version of the file
-	#
-	# Note that we get this from the last version common to both
-	# ourselves and the parent.  References are via $CWS since we have no
-	# guarantee that the parent workspace is reachable via the filesystem.
-	#
-	if [[ -n $parent_webrev && -e $PWS/$PDIR/$PF ]]; then
-		cp $PWS/$PDIR/$PF $olddir/$PDIR/$PF
-	elif [[ -n $HG_PARENT ]]; then
-		hg cat -R $CWS -r $HG_PARENT $CWS/$PDIR/$PF > \
-		    $olddir/$PDIR/$PF 2>/dev/null
-
-		if (( $? != 0 )); then
-			rm -f $olddir/$PDIR/$PF
-		else
-			if [[ -n $old_mode ]]; then
-				chmod $old_mode $olddir/$PDIR/$PF
-			else
-				# should never happen
-				print -u2 "ERROR: set mode of $olddir/$PDIR/$PF"
-			fi
-		fi
-	fi
-}
-
 function build_old_new_git
 {
 	typeset olddir="$1"
@@ -1945,25 +2134,25 @@ function build_old_new_git
 	if [[ "$PDIR" == "." ]]; then
 		file="$PF"
 	else
-	       file="$PDIR/$PF"
+		file="$PDIR/$PF"
 	fi
 
 	if [[ -n $parent_webrev && -e $PWS/$PDIR/$PF ]]; then
 		cp $PWS/$PDIR/$PF $olddir/$PDIR/$PF
 	else
-                $GIT ls-tree $GIT_PARENT $file | read o_mode type o_object junk
-                $GIT cat-file $type $o_object > $olddir/$file 2>/dev/null
-                 
-                if (( $? != 0 )); then
-                        rm -f $olddir/$file
-                elif [[ -n $o_mode ]]; then
-                        # Strip the first 3 digits, to get a regular octal mode
-                        o_mode=${o_mode/???/}
-                        chmod $o_mode $olddir/$file
-                else
-                        # should never happen
-                        print -u2 "ERROR: set mode of $olddir/$file"
-                fi
+		$GIT ls-tree $GIT_PARENT $file | read o_mode type o_object junk
+		$GIT cat-file $type $o_object > $olddir/$file 2>/dev/null
+
+		if (( $? != 0 )); then
+			rm -f $olddir/$file
+		elif [[ -n $o_mode ]]; then
+			# Strip the first 3 digits, to get a regular octal mode
+			o_mode=${o_mode/???/}
+			chmod $o_mode $olddir/$file
+		else
+			# should never happen
+			print -u2 "ERROR: set mode of $olddir/$file"
+		fi
 	fi
 
 	#
@@ -1977,8 +2166,8 @@ function build_old_new_git
 	rm -rf $newdir/$file
 
         if [[ -e $CWS/$DIR/$F ]]; then
-            cp $CWS/$DIR/$F $newdir/$DIR/$F
-            chmod $(get_file_mode $CWS/$DIR/$F) $newdir/$DIR/$F
+		cp $CWS/$DIR/$F $newdir/$DIR/$F
+		chmod $(get_file_mode $CWS/$DIR/$F) $newdir/$DIR/$F
         fi
 	cd $OWD
 }
@@ -2039,9 +2228,7 @@ function build_old_new
 	mkdir -p $olddir/$PDIR
 	mkdir -p $newdir/$DIR
 
-	if [[ $SCM_MODE == "mercurial" ]]; then
-		build_old_new_mercurial "$olddir" "$newdir"
-	elif [[ $SCM_MODE == "git" ]]; then
+	if [[ $SCM_MODE == "git" ]]; then
 		build_old_new_git "$olddir" "$newdir"
 	elif [[ $SCM_MODE == "subversion" ]]; then
 		build_old_new_subversion "$olddir" "$newdir"
@@ -2067,8 +2254,10 @@ function usage
 	webrev [common-options] -w <wx file>
 
 Options:
+	-c <revision>: generate webrev for single revision (git only)
 	-C <filename>: Use <filename> for the information tracking configuration.
 	-D: delete remote webrev
+	-h <revision>: specify "head" revision for comparison (git only)
 	-i <filename>: Include <filename> in the index.html file.
 	-I <filename>: Use <filename> for the information tracking registry.
 	-n: do not generate the webrev (useful with -U)
@@ -2105,11 +2294,8 @@ PATH=$(/bin/dirname "$(whence $0)"):$PATH
 
 [[ -z $WDIFF ]] && WDIFF=`look_for_prog wdiff`
 [[ -z $WX ]] && WX=`look_for_prog wx`
-[[ -z $HG_ACTIVE ]] && HG_ACTIVE=`look_for_prog hg-active`
 [[ -z $GIT ]] && GIT=`look_for_prog git`
 [[ -z $WHICH_SCM ]] && WHICH_SCM=`look_for_prog which_scm`
-[[ -z $CODEREVIEW ]] && CODEREVIEW=`look_for_prog codereview`
-[[ -z $PS2PDF ]] && PS2PDF=`look_for_prog ps2pdf`
 [[ -z $PERL ]] && PERL=`look_for_prog perl`
 [[ -z $RSYNC ]] && RSYNC=`look_for_prog rsync`
 [[ -z $SCCS ]] && SCCS=`look_for_prog sccs`
@@ -2123,6 +2309,8 @@ PATH=$(/bin/dirname "$(whence $0)"):$PATH
 [[ -z $MKTEMP ]] && MKTEMP=`look_for_prog mktemp`
 [[ -z $GREP ]] && GREP=`look_for_prog grep`
 [[ -z $FIND ]] && FIND=`look_for_prog find`
+[[ -z $MANDOC ]] && MANDOC=`look_for_prog mandoc`
+[[ -z $COL ]] && COL=`look_for_prog col`
 
 # set name of trash directory for remote webrev deletion
 TRASH_DIR=".trash"
@@ -2138,13 +2326,6 @@ if [[ ! -x $WHICH_SCM ]]; then
 	exit 1
 fi
 
-#
-# These aren't fatal, but we want to note them to the user.
-# We don't warn on the absence of 'wx' until later when we've
-# determined that we actually need to try to invoke it.
-#
-[[ ! -x $CODEREVIEW ]] && print -u2 "WARNING: codereview(1) not found."
-[[ ! -x $PS2PDF ]] && print -u2 "WARNING: ps2pdf(1) not found."
 [[ ! -x $WDIFF ]] && print -u2 "WARNING: wdiff not found."
 
 # Declare global total counters.
@@ -2156,10 +2337,12 @@ typeset -r DEFAULT_REMOTE_HOST="cr.opensolaris.org"
 typeset -r rsync_prefix="rsync://"
 typeset -r ssh_prefix="ssh://"
 
+cflag=
 Cflag=
 Dflag=
 flist_mode=
 flist_file=
+hflag=
 iflag=
 Iflag=
 lflag=
@@ -2174,17 +2357,20 @@ Uflag=
 wflag=
 remote_target=
 
-#
-# NOTE: when adding/removing options it is necessary to sync the list
-#	with usr/src/tools/onbld/hgext/cdm.py
-#
-while getopts "C:Di:I:lnNo:Op:t:Uw" opt
+while getopts "c:C:Dh:i:I:lnNo:Op:t:Uw" opt
 do
 	case $opt in
+	c)	cflag=1
+		codemgr_head=$OPTARG
+		codemgr_parent=$OPTARG~1;;
+
 	C)	Cflag=1
 		ITSCONF=$OPTARG;;
 
 	D)	Dflag=1;;
+
+	h)	hflag=1
+		codemgr_head=$OPTARG;;
 
 	i)	iflag=1
 		INCLUDE_FILE=$OPTARG;;
@@ -2241,32 +2427,8 @@ fi
 # logic.
 #
 $WHICH_SCM | read SCM_MODE junk || exit 1
-if [[ $SCM_MODE == "mercurial" ]]; then
-	#
-	# Mercurial priorities:
-	# 1. hg root from CODEMGR_WS environment variable
-	# 1a. hg root from CODEMGR_WS/usr/closed if we're somewhere under
-	#    usr/closed when we run webrev
-	# 2. hg root from directory of invocation
-	#
-	if [[ ${PWD} =~ "usr/closed" ]]; then
-		testparent=${CODEMGR_WS}/usr/closed
-		# If we're in OpenSolaris mode, we enforce a minor policy:
-		# help to make sure the reviewer doesn't accidentally publish
-		# source which is under usr/closed
-		if [[ -n "$Oflag" ]]; then
-			print -u2 "OpenSolaris output not permitted with" \
-			    "usr/closed changes"
-			exit 1
-		fi
-	else
-	        testparent=${CODEMGR_WS}
-	fi
-	[[ -z $codemgr_ws && -n $testparent ]] && \
-	    codemgr_ws=$(hg root -R $testparent 2>/dev/null)
-	[[ -z $codemgr_ws ]] && codemgr_ws=$(hg root 2>/dev/null)
-	CWS=$codemgr_ws
-elif [[ $SCM_MODE == "git" ]]; then
+
+if [[ $SCM_MODE == "git" ]]; then
 	#
 	# Git priorities:
 	# 1. git rev-parse --git-dir from CODEMGR_WS environment variable
@@ -2274,7 +2436,7 @@ elif [[ $SCM_MODE == "git" ]]; then
 	#
 	[[ -z $codemgr_ws && -n $CODEMGR_WS ]] && \
 	    codemgr_ws=$($GIT --git-dir=$CODEMGR_WS/.git rev-parse --git-dir \
-                2>/dev/null)
+		2>/dev/null)
 	[[ -z $codemgr_ws ]] && \
 	    codemgr_ws=$($GIT rev-parse --git-dir 2>/dev/null)
 
@@ -2282,7 +2444,9 @@ elif [[ $SCM_MODE == "git" ]]; then
 		codemgr_ws="${PWD}/${codemgr_ws}"
 	fi
 
-	codemgr_ws=$(dirname $codemgr_ws) # Lose the '/.git'
+	if [[ "$codemgr_ws" = *"/.git" ]]; then
+		codemgr_ws=$(dirname $codemgr_ws) # Lose the '/.git'
+	fi
 	CWS="$codemgr_ws"
 elif [[ $SCM_MODE == "subversion" ]]; then
 	#
@@ -2367,7 +2531,7 @@ fi
 # is in use.
 #
 case "$SCM_MODE" in
-mercurial|git|subversion)
+git|subversion)
 	;;
 unknown)
 	if [[ $flist_mode == "auto" ]]; then
@@ -2425,100 +2589,23 @@ if [[ $# -gt 0 ]]; then
 	print -u2 "WARNING: unused arguments: $*"
 fi
 
-#
-# Before we entered the DO_EVERYTHING loop, we should have already set CWS
-# and CODEMGR_WS as needed.  Here, we set the parent workspace.
-#
-if [[ $SCM_MODE == "mercurial" ]]; then
-	#
-	# Parent can either be specified with -p
-	# Specified with CODEMGR_PARENT in the environment
-	# or taken from hg's default path.
-	#
 
-	if [[ -z $codemgr_parent && -n $CODEMGR_PARENT ]]; then
-		codemgr_parent=$CODEMGR_PARENT
+if [[ $SCM_MODE == "git" ]]; then
+	# Check that "head" revision specified with -c or -h is sane
+	if [[ -n $cflag || -n $hflag ]]; then
+		head_rev=$($GIT rev-parse --verify --quiet "$codemgr_head")
+		if [[ -z $head_rev ]]; then
+			print -u2 "Error: bad revision ${codemgr_head}"
+			exit 1
+		fi
 	fi
 
-	if [[ -z $codemgr_parent ]]; then
-		codemgr_parent=`hg path -R $codemgr_ws default 2>/dev/null`
+	if [[ -z $codemgr_head ]]; then
+		codemgr_head="HEAD";
 	fi
 
-	PWS=$codemgr_parent
-
-	#
-	# If the parent is a webrev, we want to do some things against
-	# the natural workspace parent (file list, comments, etc)
-	#
-	if [[ -n $parent_webrev ]]; then
-		real_parent=$(hg path -R $codemgr_ws default 2>/dev/null)
-	else
-		real_parent=$PWS
-	fi
-
-	#
-	# If hg-active exists, then we run it.  In the case of no explicit
-	# flist given, we'll use it for our comments.  In the case of an
-	# explicit flist given we'll try to use it for comments for any
-	# files mentioned in the flist.
-	#
-	if [[ -z $flist_done ]]; then
-		flist_from_mercurial $CWS $real_parent
-		flist_done=1
-	fi
-
-	#
-	# If we have a file list now, pull out any variables set
-	# therein.  We do this now (rather than when we possibly use
-	# hg-active to find comments) to avoid stomping specifications
-	# in the user-specified flist.
-	#
-	if [[ -n $flist_done ]]; then
-		env_from_flist
-	fi
-
-	#
-	# Only call hg-active if we don't have a wx formatted file already
-	#
-	if [[ -x $HG_ACTIVE && -z $wxfile ]]; then
-		print "  Comments from: hg-active -p $real_parent ...\c"
-		hg_active_wxfile $CWS $real_parent
-		print " Done."
-	fi
-
-	#
-	# At this point we must have a wx flist either from hg-active,
-	# or in general.  Use it to try and find our parent revision,
-	# if we don't have one.
-	#
-	if [[ -z $HG_PARENT ]]; then
-		eval `$SED -e "s/#.*$//" $wxfile | $GREP HG_PARENT=`
-	fi
-
-	#
-	# If we still don't have a parent, we must have been given a
-	# wx-style active list with no HG_PARENT specification, run
-	# hg-active and pull an HG_PARENT out of it, ignore the rest.
-	#
-	if [[ -z $HG_PARENT && -x $HG_ACTIVE ]]; then
-		$HG_ACTIVE -w $codemgr_ws -p $real_parent | \
-		    eval `$SED -e "s/#.*$//" | $GREP HG_PARENT=`
-	elif [[ -z $HG_PARENT ]]; then
-		print -u2 "Error: Cannot discover parent revision"
-		exit 1
-	fi
-
-	pnode=$(trim_digest $HG_PARENT)
-	PRETTY_PWS="${PWS} (at ${pnode})"
-	cnode=$(hg parent -R $codemgr_ws --template '{node|short}' \
-	    2>/dev/null)
-	PRETTY_CWS="${CWS} (at ${cnode})"}
-elif [[ $SCM_MODE == "git" ]]; then
-	#
 	# Parent can either be specified with -p, or specified with
 	# CODEMGR_PARENT in the environment.
-	#
-
 	if [[ -z $codemgr_parent && -n $CODEMGR_PARENT ]]; then
 		codemgr_parent=$CODEMGR_PARENT
 	fi
@@ -2528,13 +2615,16 @@ elif [[ $SCM_MODE == "git" ]]; then
 	this_branch=$($GIT branch | nawk '$1 == "*" { print $2 }')
 	par_branch="origin/master"
 
-        # If we're not on a branch there's nothing we can do
-        if [[ $this_branch != "(no branch)" ]]; then
-                $GIT for-each-ref                                                 \
-                    --format='%(refname:short) %(upstream:short)' refs/heads/ |   \
-                    while read local remote; do                                   \
-                	[[ "$local" == "$this_branch" ]] && par_branch="$remote"; \
-                    done
+	# If we're not on a branch there's nothing we can do
+	if [[ $this_branch != "(no branch)" ]]; then
+		$GIT for-each-ref					\
+		    --format='%(refname:short) %(upstream:short)'	\
+		    refs/heads/ |					\
+		    while read local remote; do
+			if [[ "$local" == "$this_branch" ]]; then
+				par_branch="$remote"
+			fi
+		done
 	fi
 
 	if [[ -z $codemgr_parent ]]; then
@@ -2553,7 +2643,7 @@ elif [[ $SCM_MODE == "git" ]]; then
 	fi
 
 	if [[ -z $flist_done ]]; then
-		flist_from_git "$CWS" "$real_parent"
+		flist_from_git "$codemgr_head" "$real_parent"
 		flist_done=1
 	fi
 
@@ -2571,12 +2661,12 @@ elif [[ $SCM_MODE == "git" ]]; then
 	#
 	if [[ -z $wxfile ]]; then
 		print "  Comments from: git...\c"
-		git_wxfile "$CWS" "$real_parent"
+		git_wxfile "$codemgr_head" "$real_parent"
 		print " Done."
 	fi
 
 	if [[ -z $GIT_PARENT ]]; then
-		GIT_PARENT=$($GIT merge-base "$real_parent" HEAD)
+		GIT_PARENT=$($GIT merge-base "$real_parent" "$codemgr_head")
 	fi
 	if [[ -z $GIT_PARENT ]]; then
 		print -u2 "Error: Cannot discover parent revision"
@@ -2585,18 +2675,27 @@ elif [[ $SCM_MODE == "git" ]]; then
 
 	pnode=$(trim_digest $GIT_PARENT)
 
-	if [[ $real_parent == */* ]]; then
+	if [[ -n $cflag ]]; then
+		PRETTY_PWS="previous revision (at ${pnode})"
+	elif [[ $real_parent == */* ]]; then
 		origin=$(echo $real_parent | cut -d/ -f1)
 		origin=$($GIT remote -v | \
 		    $AWK '$1 == "'$origin'" { print $2; exit }')
 		PRETTY_PWS="${PWS} (${origin} at ${pnode})"
+	elif [[ -n $pflag && -z $parent_webrev ]]; then
+		PRETTY_PWS="${CWS} (explicit revision ${pnode})"
 	else
 		PRETTY_PWS="${PWS} (at ${pnode})"
 	fi
 
-	cnode=$($GIT --git-dir=${codemgr_ws}/.git rev-parse --short=12 HEAD \
-	    2>/dev/null)
-	PRETTY_CWS="${CWS} (at ${cnode})"
+	cnode=$($GIT --git-dir=${codemgr_ws}/.git rev-parse --short=12 \
+	    ${codemgr_head} 2>/dev/null)
+
+	if [[ -n $cflag || -n $hflag ]]; then
+		PRETTY_CWS="${CWS} (explicit head at ${cnode})"
+	else
+		PRETTY_CWS="${CWS} (at ${cnode})"
+	fi
 elif [[ $SCM_MODE == "subversion" ]]; then
 
 	#
@@ -2609,26 +2708,28 @@ elif [[ $SCM_MODE == "subversion" ]]; then
 		flist_from_subversion $CWS $OLDPWD
 	fi
 else
-    if [[ $SCM_MODE == "unknown" ]]; then
-	print -u2 "    Unknown type of SCM in use"
-    else
-	print -u2 "    Unsupported SCM in use: $SCM_MODE"
-    fi
+	if [[ $SCM_MODE == "unknown" ]]; then
+		print -u2 "    Unknown type of SCM in use"
+	else
+		print -u2 "    Unsupported SCM in use: $SCM_MODE"
+	fi
 
-    env_from_flist
+	env_from_flist
 
-    if [[ -z $CODEMGR_WS ]]; then
-	print -u2 "SCM not detected/supported and CODEMGR_WS not specified"
-	exit 1
-    fi
+	if [[ -z $CODEMGR_WS ]]; then
+		print -u2 "SCM not detected/supported and " \
+		    "CODEMGR_WS not specified"
+		exit 1
+		fi
 
-    if [[ -z $CODEMGR_PARENT ]]; then
-	print -u2 "SCM not detected/supported and CODEMGR_PARENT not specified"
-	exit 1
-    fi
+	if [[ -z $CODEMGR_PARENT ]]; then
+		print -u2 "SCM not detected/supported and " \
+		    "CODEMGR_PARENT not specified"
+		exit 1
+	fi
 
-    CWS=$CODEMGR_WS
-    PWS=$CODEMGR_PARENT
+	CWS=$CODEMGR_WS
+	PWS=$CODEMGR_PARENT
 fi
 
 #
@@ -2892,8 +2993,6 @@ print "      Output to: $WDIR"
 [[ ! $FLIST -ef $WDIR/file.list ]] && cp $FLIST $WDIR/file.list
 
 rm -f $WDIR/$WNAME.patch
-rm -f $WDIR/$WNAME.ps
-rm -f $WDIR/$WNAME.pdf
 
 touch $WDIR/$WNAME.patch
 
@@ -2904,41 +3003,6 @@ print "   Output Files:"
 #
 $SED -e "s/#.*$//" -e "/=/d" -e "/^[   ]*$/d" $FLIST > /tmp/$$.flist.clean
 FLIST=/tmp/$$.flist.clean
-
-#
-# For Mercurial, create a cache of manifest entries.
-#
-if [[ $SCM_MODE == "mercurial" ]]; then
-	#
-	# Transform the FLIST into a temporary sed script that matches
-	# relevant entries in the Mercurial manifest as follows:
-	# 1) The script will be used against the parent revision manifest,
-	#    so for FLIST lines that have two filenames (a renamed file)
-	#    keep only the old name.
-	# 2) Escape all forward slashes the filename.
-	# 3) Change the filename into another sed command that matches
-	#    that file in "hg manifest -v" output:  start of line, three
-	#    octal digits for file permissions, space, a file type flag
-	#    character, space, the filename, end of line.
-	# 4) Eliminate any duplicate entries.  (This can occur if a
-	#    file has been used as the source of an hg cp and it's
-	#    also been modified in the same changeset.)
-	#
-	SEDFILE=/tmp/$$.manifest.sed
-	$SED '
-		s#^[^ ]* ##
-		s#/#\\\/#g
-		s#^.*$#/^... . &$/p#
-	' < $FLIST | $SORT -u > $SEDFILE
-
-	#
-	# Apply the generated script to the output of "hg manifest -v"
-	# to get the relevant subset for this webrev.
-	#
-	HG_PARENT_MANIFEST=/tmp/$$.manifest
-	hg -R $CWS manifest -v -r $HG_PARENT |
-	    $SED -n -f $SEDFILE > $HG_PARENT_MANIFEST
-fi
 
 #
 # First pass through the files: generate the per-file webrev HTML-files.
@@ -2980,7 +3044,7 @@ do
 
 		F=${P##*/}
 
-        else
+	else
 		DIR=${P%/*}
 		if [[ "$DIR" == "$P" ]]; then
 			DIR="."   # File at root of workspace
@@ -3016,8 +3080,22 @@ do
 	#
 	OWD=$PWD
 	cd $WDIR/raw_files
-	ofile=old/$PDIR/$PF
-	nfile=new/$DIR/$F
+
+	#
+	# The "git apply" command does not tolerate the spurious
+	# "./" that we otherwise insert; be careful not to include
+	# it in the paths that we pass to diff(1).
+	#
+	if [[ $PDIR == "." ]]; then
+		ofile=old/$PF
+	else
+		ofile=old/$PDIR/$PF
+	fi
+	if [[ $DIR == "." ]]; then
+		nfile=new/$F
+	else
+		nfile=new/$DIR/$F
+	fi
 
 	mv_but_nodiff=
 	cmp $ofile $nfile > /dev/null 2>&1
@@ -3032,12 +3110,9 @@ do
 	#	- renames must be handled specially: we emit a 'remove'
 	#	  diff and an 'add' diff
 	#	- new files and deleted files must be handled specially
-	#	- Solaris patch(1m) can't cope with file creation
-	#	  (and hence renames) as of this writing.
-	#       - To make matters worse, gnu patch doesn't interpret the
-	#	  output of Solaris diff properly when it comes to
-	#	  adds and deletes.  We need to do some "cleansing"
-	#         transformations:
+	#	- GNU patch doesn't interpret the output of illumos diff
+	#	  properly when it comes to adds and deletes.  We need to
+	#	  do some "cleansing" transformations:
 	#	    [to add a file] @@ -1,0 +X,Y @@  -->  @@ -0,0 +X,Y @@
 	#	    [to del a file] @@ -X,Y +1,0 @@  -->  @@ -X,Y +0,0 @@
 	#
@@ -3068,11 +3143,9 @@ do
 	# whole wad.
 	#
 	cat $WDIR/$DIR/$F.patch >> $WDIR/$WNAME.patch
-
 	print " patch\c"
 
 	if [[ -f $ofile && -f $nfile && -z $mv_but_nodiff ]]; then
-
 		${CDIFFCMD:-diff -bt -C 5} $ofile $nfile > $WDIR/$DIR/$F.cdiff
 		diff_to_html $F $DIR/$F "C" "$COMM" < $WDIR/$DIR/$F.cdiff \
 		    > $WDIR/$DIR/$F.cdiff.html
@@ -3081,7 +3154,6 @@ do
 		${UDIFFCMD:-diff -bt -U 5} $ofile $nfile > $WDIR/$DIR/$F.udiff
 		diff_to_html $F $DIR/$F "U" "$COMM" < $WDIR/$DIR/$F.udiff \
 		    > $WDIR/$DIR/$F.udiff.html
-
 		print " udiffs\c"
 
 		if [[ -x $WDIFF ]]; then
@@ -3098,13 +3170,10 @@ do
 		sdiff_to_html $ofile $nfile $F $DIR "$COMM" \
 		    > $WDIR/$DIR/$F.sdiff.html
 		print " sdiffs\c"
-
 		print " frames\c"
 
 		rm -f $WDIR/$DIR/$F.cdiff $WDIR/$DIR/$F.udiff
-
 		difflines $ofile $nfile > $WDIR/$DIR/$F.count
-
 	elif [[ -f $ofile && -f $nfile && -n $mv_but_nodiff ]]; then
 		# renamed file: may also have differences
 		difflines $ofile $nfile > $WDIR/$DIR/$F.count
@@ -3117,28 +3186,50 @@ do
 	fi
 
 	#
-	# Now we generate the postscript for this file.  We generate diffs
-	# only in the event that there is delta, or the file is new (it seems
-	# tree-killing to print out the contents of deleted files).
+	# Check if it's man page, and create plain text, html and raw (ascii)
+	# output for the new version, as well as diffs against old version.
 	#
-	if [[ -f $nfile ]]; then
-		ocr=$ofile
-		[[ ! -f $ofile ]] && ocr=/dev/null
-
-		if [[ -z $mv_but_nodiff ]]; then
-			textcomm=`getcomments text $P $PP`
-			if [[ -x $CODEREVIEW ]]; then
-				$CODEREVIEW -y "$textcomm" \
-				    -e $ocr $nfile \
-				    > /tmp/$$.psfile 2>/dev/null &&
-				    cat /tmp/$$.psfile >> $WDIR/$WNAME.ps
+	if [[ -f "$nfile" && "$nfile" = *.+([0-9])*([a-zA-Z]) && \
+	    -x $MANDOC && -x $COL ]]; then
+		$MANDOC -Tascii $nfile | $COL -b > $nfile.man.txt
+		source_to_html txt < $nfile.man.txt > $nfile.man.txt.html
+		print " man-txt\c"
+		print "$MANCSS" > $WDIR/raw_files/new/$DIR/man.css
+		$MANDOC -Thtml -Ostyle=man.css $nfile > $nfile.man.html
+		print " man-html\c"
+		$MANDOC -Tascii $nfile > $nfile.man.raw
+		print " man-raw\c"
+		if [[ -f "$ofile" && -z $mv_but_nodiff ]]; then
+			$MANDOC -Tascii $ofile | $COL -b > $ofile.man.txt
+			${CDIFFCMD:-diff -bt -C 5} $ofile.man.txt \
+			    $nfile.man.txt > $WDIR/$DIR/$F.man.cdiff
+			diff_to_html $F $DIR/$F "C" "$COMM" < \
+			    $WDIR/$DIR/$F.man.cdiff > \
+			    $WDIR/$DIR/$F.man.cdiff.html
+			print " man-cdiffs\c"
+			${UDIFFCMD:-diff -bt -U 5} $ofile.man.txt \
+			    $nfile.man.txt > $WDIR/$DIR/$F.man.udiff
+			diff_to_html $F $DIR/$F "U" "$COMM" < \
+			    $WDIR/$DIR/$F.man.udiff > \
+			    $WDIR/$DIR/$F.man.udiff.html
+			print " man-udiffs\c"
+			if [[ -x $WDIFF ]]; then
+				$WDIFF -c "$COMM" -t "$WNAME Wdiff $DIR/$F" \
+				    $ofile.man.txt $nfile.man.txt > \
+				    $WDIR/$DIR/$F.man.wdiff.html 2>/dev/null
 				if [[ $? -eq 0 ]]; then
-					print " ps\c"
+					print " man-wdiffs\c"
 				else
-					print " ps[fail]\c"
+					print " man-wdiffs[fail]\c"
 				fi
 			fi
+			sdiff_to_html $ofile.man.txt $nfile.man.txt $F.man $DIR \
+			    "$COMM" > $WDIR/$DIR/$F.man.sdiff.html
+			print " man-sdiffs\c"
+			print " man-frames\c"
 		fi
+		rm -f $ofile.man.txt $nfile.man.txt
+		rm -f $WDIR/$DIR/$F.man.cdiff $WDIR/$DIR/$F.man.udiff
 	fi
 
 	if [[ -f $ofile ]]; then
@@ -3158,16 +3249,6 @@ done
 
 frame_nav_js > $WDIR/ancnav.js
 frame_navigation > $WDIR/ancnav.html
-
-if [[ ! -f $WDIR/$WNAME.ps ]]; then
-	print " Generating PDF: Skipped: no output available"
-elif [[ -x $CODEREVIEW && -x $PS2PDF ]]; then
-	print " Generating PDF: \c"
-	fix_postscript $WDIR/$WNAME.ps | $PS2PDF - > $WDIR/$WNAME.pdf
-	print "Done."
-else
-	print " Generating PDF: Skipped: missing 'ps2pdf' or 'codereview'"
-fi
 
 # If we're in OpenSolaris mode and there's a closed dir under $WDIR,
 # delete it - prevent accidental publishing of closed source
@@ -3202,16 +3283,16 @@ print "<table>"
 #
 # Get the preparer's name:
 #
-# If the SCM detected is Mercurial, and the configuration property
-# ui.username is available, use that, but be careful to properly escape
-# angle brackets (HTML syntax characters) in the email address.
+# If the SCM detected is Git, and the configuration property user.name is
+# available, use that, but be careful to properly escape angle brackets (HTML
+# syntax characters) in the email address.
 #
 # Otherwise, use the current userid in the form "John Doe (jdoe)", but
 # to maintain compatibility with passwd(4), we must support '&' substitutions.
 #
 preparer=
-if [[ "$SCM_MODE" == mercurial ]]; then
-	preparer=`hg showconfig ui.username 2>/dev/null`
+if [[ "$SCM_MODE" == git ]]; then
+	preparer=$(git config user.name 2>/dev/null)
 	if [[ -n "$preparer" ]]; then
 		preparer="$(echo "$preparer" | html_quote)"
 	fi
@@ -3248,11 +3329,6 @@ if [[ -f $WDIR/$WNAME.patch ]]; then
 	wpatch_url="$(print $WNAME.patch | url_encode)"
 	print "<tr><th>Patch of changes:</th><td>"
 	print "<a href=\"$wpatch_url\">$WNAME.patch</a></td></tr>"
-fi
-if [[ -f $WDIR/$WNAME.pdf ]]; then
-	wpdf_url="$(print $WNAME.pdf | url_encode)"
-	print "<tr><th>Printable review:</th><td>"
-	print "<a href=\"$wpdf_url\">$WNAME.pdf</a></td></tr>"
 fi
 
 if [[ -n "$iflag" ]]; then
@@ -3303,27 +3379,22 @@ do
 	if [[ -f $F.cdiff.html ]]; then
 		cdiff_url="$(print $P.cdiff.html | url_encode)"
 		udiff_url="$(print $P.udiff.html | url_encode)"
+		sdiff_url="$(print $P.sdiff.html | url_encode)"
+		frames_url="$(print $P.frames.html | url_encode)"
 		print "<a href=\"$cdiff_url\">Cdiffs</a>"
 		print "<a href=\"$udiff_url\">Udiffs</a>"
-
 		if [[ -f $F.wdiff.html && -x $WDIFF ]]; then
 			wdiff_url="$(print $P.wdiff.html | url_encode)"
 			print "<a href=\"$wdiff_url\">Wdiffs</a>"
 		fi
-
-		sdiff_url="$(print $P.sdiff.html | url_encode)"
 		print "<a href=\"$sdiff_url\">Sdiffs</a>"
-
-		frames_url="$(print $P.frames.html | url_encode)"
 		print "<a href=\"$frames_url\">Frames</a>"
 	else
-		print " ------ ------ ------"
-
+		print " ------ ------"
 		if [[ -x $WDIFF ]]; then
 			print " ------"
 		fi
-
-		print " ------"
+		print " ------ ------"
 	fi
 
 	# If there's an old file, make the link
@@ -3380,9 +3451,7 @@ do
 		print " <i>(deleted)</i>"
 	fi
 
-	#
 	# Check for usr/closed and deleted_files/usr/closed
-	#
 	if [ ! -z "$Oflag" ]; then
 		if [[ $P == usr/closed/* || \
 		    $P == deleted_files/usr/closed/* ]]; then
@@ -3391,32 +3460,66 @@ do
 		fi
 	fi
 
-	print "</p>"
-	# Insert delta comments
+	manpage=
+	if [[ -f $F.man.cdiff.html || \
+	    -f $WDIR/raw_files/new/$P.man.txt.html ]]; then
+		manpage=1
+		print "<br/>man:"
+	fi
 
+	if [[ -f $F.man.cdiff.html ]]; then
+		mancdiff_url="$(print $P.man.cdiff.html | url_encode)"
+		manudiff_url="$(print $P.man.udiff.html | url_encode)"
+		mansdiff_url="$(print $P.man.sdiff.html | url_encode)"
+		manframes_url="$(print $P.man.frames.html | url_encode)"
+		print "<a href=\"$mancdiff_url\">Cdiffs</a>"
+		print "<a href=\"$manudiff_url\">Udiffs</a>"
+		if [[ -f $F.man.wdiff.html && -x $WDIFF ]]; then
+			manwdiff_url="$(print $P.man.wdiff.html | url_encode)"
+			print "<a href=\"$manwdiff_url\">Wdiffs</a>"
+		fi
+		print "<a href=\"$mansdiff_url\">Sdiffs</a>"
+		print "<a href=\"$manframes_url\">Frames</a>"
+	elif [[ -n $manpage ]]; then
+		print " ------ ------"
+		if [[ -x $WDIFF ]]; then
+			print " ------"
+		fi
+		print " ------ ------"
+	fi
+
+	if [[ -f $WDIR/raw_files/new/$P.man.txt.html ]]; then
+		mantxt_url="$(print raw_files/new/$P.man.txt.html | url_encode)"
+		print "<a href=\"$mantxt_url\">TXT</a>"
+		manhtml_url="$(print raw_files/new/$P.man.html | url_encode)"
+		print "<a href=\"$manhtml_url\">HTML</a>"
+		manraw_url="$(print raw_files/new/$P.man.raw | url_encode)"
+		print "<a href=\"$manraw_url\">Raw</a>"
+	elif [[ -n $manpage ]]; then
+		print " --- ---- ---"
+	fi
+
+	print "</p>"
+
+	# Insert delta comments
 	print "<blockquote><pre>"
 	getcomments html $P $PP
 	print "</pre>"
 
 	# Add additional comments comment
-
 	print "<!-- Add comments to explain changes in $P here -->"
 
 	# Add count of changes.
-
 	if [[ -f $F.count ]]; then
 	    cat $F.count
 	    rm $F.count
 	fi
 
-	if [[ $SCM_MODE == "mercurial" ||
-	    $SCM_MODE == "unknown" ]]; then
-
+	if [[ $SCM_MODE == "unknown" ]]; then
 		# Include warnings for important file mode situations:
 		# 1) New executable files
 		# 2) Permission changes of any kind
 		# 3) Existing executable files
-
 		old_mode=
 		if [[ -f $WDIR/raw_files/old/$PP ]]; then
 			old_mode=`get_file_mode $WDIR/raw_files/old/$PP`

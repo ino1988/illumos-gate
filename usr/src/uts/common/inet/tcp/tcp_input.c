@@ -22,7 +22,9 @@
 /*
  * Copyright (c) 2010, Oracle and/or its affiliates. All rights reserved.
  * Copyright 2011 Nexenta Systems, Inc. All rights reserved.
- * Copyright (c) 2011 Joyent, Inc. All rights reserved.
+ * Copyright 2019 Joyent, Inc.
+ * Copyright (c) 2014, 2016 by Delphix. All rights reserved.
+ * Copyright 2020 OmniOS Community Edition (OmniOSce) Association.
  */
 
 /* This file contains all TCP input processing functions. */
@@ -50,7 +52,7 @@
 #include <inet/ipsec_impl.h>
 
 /*
- * RFC1323-recommended phrasing of TSTAMP option, for easier parsing
+ * RFC7323-recommended phrasing of TSTAMP option, for easier parsing
  */
 
 #ifdef _BIG_ENDIAN
@@ -60,15 +62,6 @@
 #define	TCPOPT_NOP_NOP_TSTAMP ((10 << 24) | (TCPOPT_TSTAMP << 16) | \
 	(TCPOPT_NOP << 8) | TCPOPT_NOP)
 #endif
-
-/*
- * Flags returned from tcp_parse_options.
- */
-#define	TCP_OPT_MSS_PRESENT	1
-#define	TCP_OPT_WSCALE_PRESENT	2
-#define	TCP_OPT_TSTAMP_PRESENT	4
-#define	TCP_OPT_SACK_OK_PRESENT	8
-#define	TCP_OPT_SACK_PRESENT	16
 
 /*
  *  PAWS needs a timer for 24 days.  This is the number of ticks in 24 days
@@ -107,7 +100,7 @@
  * tcps_time_wait_interval since the period before upper layer closes the
  * connection is not accounted for when tcp_time_wait_append() is called.
  *
- * If uppser layer has closed the connection, call tcp_time_wait_append()
+ * If upper layer has closed the connection, call tcp_time_wait_append()
  * directly.
  *
  */
@@ -170,13 +163,139 @@ static void	tcp_icmp_error_ipv6(tcp_t *, mblk_t *, ip_recv_attr_t *);
 static mblk_t	*tcp_input_add_ancillary(tcp_t *, mblk_t *, ip_pkt_t *,
 		    ip_recv_attr_t *);
 static void	tcp_input_listener(void *, mblk_t *, void *, ip_recv_attr_t *);
-static int	tcp_parse_options(tcpha_t *, tcp_opt_t *);
 static void	tcp_process_options(tcp_t *, tcpha_t *);
 static mblk_t	*tcp_reass(tcp_t *, mblk_t *, uint32_t);
 static void	tcp_reass_elim_overlap(tcp_t *, mblk_t *);
 static void	tcp_rsrv_input(void *, mblk_t *, void *, ip_recv_attr_t *);
-static void	tcp_set_rto(tcp_t *, time_t);
+static void	tcp_set_rto(tcp_t *, hrtime_t);
 static void	tcp_setcred_data(mblk_t *, ip_recv_attr_t *);
+
+/*
+ * CC wrapper hook functions
+ */
+static void
+cc_ack_received(tcp_t *tcp, uint32_t seg_ack, int32_t bytes_acked,
+    uint16_t type)
+{
+	uint32_t old_cwnd = tcp->tcp_cwnd;
+
+	tcp->tcp_ccv.bytes_this_ack = bytes_acked;
+	if (tcp->tcp_cwnd <= tcp->tcp_swnd)
+		tcp->tcp_ccv.flags |= CCF_CWND_LIMITED;
+	else
+		tcp->tcp_ccv.flags &= ~CCF_CWND_LIMITED;
+
+	if (type == CC_ACK) {
+		if (tcp->tcp_cwnd > tcp->tcp_cwnd_ssthresh) {
+			if (tcp->tcp_ccv.flags & CCF_RTO)
+				tcp->tcp_ccv.flags &= ~CCF_RTO;
+
+			tcp->tcp_ccv.t_bytes_acked +=
+			    min(tcp->tcp_ccv.bytes_this_ack,
+			    tcp->tcp_tcps->tcps_abc_l_var * tcp->tcp_mss);
+			if (tcp->tcp_ccv.t_bytes_acked >= tcp->tcp_cwnd) {
+				tcp->tcp_ccv.t_bytes_acked -= tcp->tcp_cwnd;
+				tcp->tcp_ccv.flags |= CCF_ABC_SENTAWND;
+			}
+		} else {
+			tcp->tcp_ccv.flags &= ~CCF_ABC_SENTAWND;
+			tcp->tcp_ccv.t_bytes_acked = 0;
+		}
+	}
+
+	if (CC_ALGO(tcp)->ack_received != NULL) {
+		/*
+		 * The FreeBSD code where this originated had a comment "Find
+		 * a way to live without this" in several places where curack
+		 * got set.  If they eventually dump curack from the cc
+		 * variables, we'll need to adapt our code.
+		 */
+		tcp->tcp_ccv.curack = seg_ack;
+		CC_ALGO(tcp)->ack_received(&tcp->tcp_ccv, type);
+	}
+
+	DTRACE_PROBE3(cwnd__cc__ack__received, tcp_t *, tcp, uint32_t, old_cwnd,
+	    uint32_t, tcp->tcp_cwnd);
+}
+
+void
+cc_cong_signal(tcp_t *tcp, uint32_t seg_ack, uint32_t type)
+{
+	uint32_t old_cwnd = tcp->tcp_cwnd;
+	uint32_t old_cwnd_ssthresh = tcp->tcp_cwnd_ssthresh;
+	switch (type) {
+	case CC_NDUPACK:
+		if (!IN_FASTRECOVERY(tcp->tcp_ccv.flags)) {
+			tcp->tcp_rexmit_max = tcp->tcp_snxt;
+			if (tcp->tcp_ecn_ok) {
+				tcp->tcp_cwr_snd_max = tcp->tcp_snxt;
+				tcp->tcp_cwr = B_TRUE;
+				tcp->tcp_ecn_cwr_sent = B_FALSE;
+			}
+		}
+		break;
+	case CC_ECN:
+		if (!IN_CONGRECOVERY(tcp->tcp_ccv.flags)) {
+			tcp->tcp_rexmit_max = tcp->tcp_snxt;
+			if (tcp->tcp_ecn_ok) {
+				tcp->tcp_cwr_snd_max = tcp->tcp_snxt;
+				tcp->tcp_cwr = B_TRUE;
+				tcp->tcp_ecn_cwr_sent = B_FALSE;
+			}
+		}
+		break;
+	case CC_RTO:
+		tcp->tcp_ccv.flags |= CCF_RTO;
+		tcp->tcp_dupack_cnt = 0;
+		tcp->tcp_ccv.t_bytes_acked = 0;
+		/*
+		 * Give up on fast recovery and congestion recovery if we were
+		 * attempting either.
+		 */
+		EXIT_RECOVERY(tcp->tcp_ccv.flags);
+		if (CC_ALGO(tcp)->cong_signal == NULL) {
+			/*
+			 * RFC5681 Section 3.1
+			 * ssthresh = max (FlightSize / 2, 2*SMSS) eq (4)
+			 */
+			tcp->tcp_cwnd_ssthresh = max(
+			    (tcp->tcp_snxt - tcp->tcp_suna) / 2 / tcp->tcp_mss,
+			    2) * tcp->tcp_mss;
+			tcp->tcp_cwnd = tcp->tcp_mss;
+		}
+
+		if (tcp->tcp_ecn_ok) {
+			tcp->tcp_cwr = B_TRUE;
+			tcp->tcp_cwr_snd_max = tcp->tcp_snxt;
+			tcp->tcp_ecn_cwr_sent = B_FALSE;
+		}
+		break;
+	}
+
+	if (CC_ALGO(tcp)->cong_signal != NULL) {
+		tcp->tcp_ccv.curack = seg_ack;
+		CC_ALGO(tcp)->cong_signal(&tcp->tcp_ccv, type);
+	}
+
+	DTRACE_PROBE6(cwnd__cc__cong__signal, tcp_t *, tcp, uint32_t, old_cwnd,
+	    uint32_t, tcp->tcp_cwnd, uint32_t, old_cwnd_ssthresh,
+	    uint32_t, tcp->tcp_cwnd_ssthresh, uint32_t, type);
+}
+
+static void
+cc_post_recovery(tcp_t *tcp, uint32_t seg_ack)
+{
+	uint32_t old_cwnd = tcp->tcp_cwnd;
+
+	if (CC_ALGO(tcp)->post_recovery != NULL) {
+		tcp->tcp_ccv.curack = seg_ack;
+		CC_ALGO(tcp)->post_recovery(&tcp->tcp_ccv);
+	}
+	tcp->tcp_ccv.t_bytes_acked = 0;
+
+	DTRACE_PROBE3(cwnd__cc__post__recovery, tcp_t *, tcp,
+	    uint32_t, old_cwnd, uint32_t, tcp->tcp_cwnd);
+}
 
 /*
  * Set the MSS associated with a particular tcp based on its current value,
@@ -236,7 +355,7 @@ tcp_mss_set(tcp_t *tcp, uint32_t mss)
  * Extract option values from a tcp header.  We put any found values into the
  * tcpopt struct and return a bitmask saying which options were found.
  */
-static int
+int
 tcp_parse_options(tcpha_t *tcpha, tcp_opt_t *tcpopt)
 {
 	uchar_t		*endp;
@@ -250,6 +369,19 @@ tcp_parse_options(tcpha_t *tcpha, tcp_opt_t *tcpopt)
 
 	endp = up + TCP_HDR_LENGTH(tcpha);
 	up += TCP_MIN_HEADER_LENGTH;
+	/*
+	 * If timestamp option is aligned as recommended in RFC 7323 Appendix
+	 * A, and is the only option, return quickly.
+	 */
+	if (TCP_HDR_LENGTH(tcpha) == (uint32_t)TCP_MIN_HEADER_LENGTH +
+	    TCPOPT_REAL_TS_LEN &&
+	    OK_32PTR(up) &&
+	    *(uint32_t *)up == TCPOPT_NOP_NOP_TSTAMP) {
+		tcpopt->tcp_opt_ts_val = ABE32_TO_U32((up+4));
+		tcpopt->tcp_opt_ts_ecr = ABE32_TO_U32((up+8));
+
+		return (TCP_OPT_TSTAMP_PRESENT);
+	}
 	while (up < endp) {
 		len = endp - up;
 		switch (*up) {
@@ -544,6 +676,9 @@ tcp_process_options(tcp_t *tcp, tcpha_t *tcpha)
 	 * updated properly.
 	 */
 	TCP_SET_INIT_CWND(tcp, tcp->tcp_mss, tcps->tcps_slow_start_initial);
+
+	if (tcp->tcp_cc_algo->conn_init != NULL)
+		tcp->tcp_cc_algo->conn_init(&tcp->tcp_ccv);
 }
 
 /*
@@ -555,7 +690,7 @@ tcp_process_options(tcp_t *tcp, tcpha_t *tcpha)
 static mblk_t *
 tcp_reass(tcp_t *tcp, mblk_t *mp, uint32_t start)
 {
-	uint32_t	end;
+	uint32_t	end, bytes;
 	mblk_t		*mp1;
 	mblk_t		*mp2;
 	mblk_t		*next_mp;
@@ -574,26 +709,26 @@ tcp_reass(tcp_t *tcp, mblk_t *mp, uint32_t start)
 			freeb(mp);
 			continue;
 		}
+		bytes = end - start;
 		mp->b_cont = NULL;
 		TCP_REASS_SET_SEQ(mp, start);
 		TCP_REASS_SET_END(mp, end);
 		mp1 = tcp->tcp_reass_tail;
-		if (!mp1) {
-			tcp->tcp_reass_tail = mp;
-			tcp->tcp_reass_head = mp;
-			TCPS_BUMP_MIB(tcps, tcpInDataUnorderSegs);
-			TCPS_UPDATE_MIB(tcps, tcpInDataUnorderBytes,
-			    end - start);
-			continue;
-		}
-		/* New stuff completely beyond tail? */
-		if (SEQ_GEQ(start, TCP_REASS_END(mp1))) {
-			/* Link it on end. */
-			mp1->b_cont = mp;
+		if (mp1 == NULL || SEQ_GEQ(start, TCP_REASS_END(mp1))) {
+			if (mp1 != NULL) {
+				/*
+				 * New stuff is beyond the tail; link it on the
+				 * end.
+				 */
+				mp1->b_cont = mp;
+			} else {
+				tcp->tcp_reass_head = mp;
+			}
 			tcp->tcp_reass_tail = mp;
 			TCPS_BUMP_MIB(tcps, tcpInDataUnorderSegs);
-			TCPS_UPDATE_MIB(tcps, tcpInDataUnorderBytes,
-			    end - start);
+			TCPS_UPDATE_MIB(tcps, tcpInDataUnorderBytes, bytes);
+			tcp->tcp_cs.tcp_in_data_unorder_segs++;
+			tcp->tcp_cs.tcp_in_data_unorder_bytes += bytes;
 			continue;
 		}
 		mp1 = tcp->tcp_reass_head;
@@ -685,82 +820,27 @@ tcp_reass_elim_overlap(tcp_t *tcp, mblk_t *mp)
 }
 
 /*
- * This function does PAWS protection check. Returns B_TRUE if the
- * segment passes the PAWS test, else returns B_FALSE.
+ * This function does PAWS protection check, per RFC 7323 section 5. Requires
+ * that timestamp options are already processed into tcpoptp. Returns B_TRUE if
+ * the segment passes the PAWS test, else returns B_FALSE.
  */
 boolean_t
-tcp_paws_check(tcp_t *tcp, tcpha_t *tcpha, tcp_opt_t *tcpoptp)
+tcp_paws_check(tcp_t *tcp, const tcp_opt_t *tcpoptp)
 {
-	uint8_t	flags;
-	int	options;
-	uint8_t *up;
-	conn_t	*connp = tcp->tcp_connp;
-
-	flags = (unsigned int)tcpha->tha_flags & 0xFF;
-	/*
-	 * If timestamp option is aligned nicely, get values inline,
-	 * otherwise call general routine to parse.  Only do that
-	 * if timestamp is the only option.
-	 */
-	if (TCP_HDR_LENGTH(tcpha) == (uint32_t)TCP_MIN_HEADER_LENGTH +
-	    TCPOPT_REAL_TS_LEN &&
-	    OK_32PTR((up = ((uint8_t *)tcpha) +
-	    TCP_MIN_HEADER_LENGTH)) &&
-	    *(uint32_t *)up == TCPOPT_NOP_NOP_TSTAMP) {
-		tcpoptp->tcp_opt_ts_val = ABE32_TO_U32((up+4));
-		tcpoptp->tcp_opt_ts_ecr = ABE32_TO_U32((up+8));
-
-		options = TCP_OPT_TSTAMP_PRESENT;
-	} else {
-		if (tcp->tcp_snd_sack_ok) {
-			tcpoptp->tcp = tcp;
+	if (TSTMP_LT(tcpoptp->tcp_opt_ts_val,
+	    tcp->tcp_ts_recent)) {
+		if (LBOLT_FASTPATH64 <
+		    (tcp->tcp_last_rcv_lbolt + PAWS_TIMEOUT)) {
+			/* This segment is not acceptable. */
+			return (B_FALSE);
 		} else {
-			tcpoptp->tcp = NULL;
+			/*
+			 * Connection has been idle for
+			 * too long.  Reset the timestamp
+			 */
+			tcp->tcp_ts_recent =
+			    tcpoptp->tcp_opt_ts_val;
 		}
-		options = tcp_parse_options(tcpha, tcpoptp);
-	}
-
-	if (options & TCP_OPT_TSTAMP_PRESENT) {
-		/*
-		 * Do PAWS per RFC 1323 section 4.2.  Accept RST
-		 * regardless of the timestamp, page 18 RFC 1323.bis.
-		 */
-		if ((flags & TH_RST) == 0 &&
-		    TSTMP_LT(tcpoptp->tcp_opt_ts_val,
-		    tcp->tcp_ts_recent)) {
-			if (LBOLT_FASTPATH64 <
-			    (tcp->tcp_last_rcv_lbolt + PAWS_TIMEOUT)) {
-				/* This segment is not acceptable. */
-				return (B_FALSE);
-			} else {
-				/*
-				 * Connection has been idle for
-				 * too long.  Reset the timestamp
-				 * and assume the segment is valid.
-				 */
-				tcp->tcp_ts_recent =
-				    tcpoptp->tcp_opt_ts_val;
-			}
-		}
-	} else {
-		/*
-		 * If we don't get a timestamp on every packet, we
-		 * figure we can't really trust 'em, so we stop sending
-		 * and parsing them.
-		 */
-		tcp->tcp_snd_ts_ok = B_FALSE;
-
-		connp->conn_ht_iphc_len -= TCPOPT_REAL_TS_LEN;
-		connp->conn_ht_ulp_len -= TCPOPT_REAL_TS_LEN;
-		tcp->tcp_tcpha->tha_offset_and_reserved -= (3 << 4);
-		/*
-		 * Adjust the tcp_mss and tcp_cwnd accordingly. We avoid
-		 * doing a slow start here so as to not to lose on the
-		 * transfer rate built up so far.
-		 */
-		tcp_mss_set(tcp, tcp->tcp_mss + TCPOPT_REAL_TS_LEN);
-		if (tcp->tcp_snd_sack_ok)
-			tcp->tcp_max_sack_blk = 4;
 	}
 	return (B_TRUE);
 }
@@ -835,12 +915,12 @@ static mblk_t *
 tcp_conn_create_v6(conn_t *lconnp, conn_t *connp, mblk_t *mp,
     ip_recv_attr_t *ira)
 {
-	tcp_t 		*ltcp = lconnp->conn_tcp;
+	tcp_t		*ltcp = lconnp->conn_tcp;
 	tcp_t		*tcp = connp->conn_tcp;
 	mblk_t		*tpi_mp;
 	ipha_t		*ipha;
 	ip6_t		*ip6h;
-	sin6_t 		sin6;
+	sin6_t		sin6;
 	uint_t		ifindex = ira->ira_ruifindex;
 	tcp_stack_t	*tcps = tcp->tcp_tcps;
 
@@ -932,7 +1012,7 @@ static mblk_t *
 tcp_conn_create_v4(conn_t *lconnp, conn_t *connp, mblk_t *mp,
     ip_recv_attr_t *ira)
 {
-	tcp_t 		*ltcp = lconnp->conn_tcp;
+	tcp_t		*ltcp = lconnp->conn_tcp;
 	tcp_t		*tcp = connp->conn_tcp;
 	sin_t		sin;
 	mblk_t		*tpi_mp = NULL;
@@ -1038,7 +1118,7 @@ boolean_t
 tcp_eager_blowoff(tcp_t	*listener, t_scalar_t seqnum)
 {
 	tcp_t	*eager;
-	mblk_t 	*mp;
+	mblk_t	*mp;
 
 	eager = listener;
 	mutex_enter(&listener->tcp_eager_lock);
@@ -1113,7 +1193,7 @@ tcp_eager_cleanup(tcp_t *listener, boolean_t q0_only)
 
 /*
  * If we are an eager connection hanging off a listener that hasn't
- * formally accepted the connection yet, get off his list and blow off
+ * formally accepted the connection yet, get off its list and blow off
  * any data that we have accumulated.
  */
 void
@@ -1208,7 +1288,7 @@ tcp_eager_unlink(tcp_t *tcp)
  *
  * incoming SYN (listener perimeter)	-> tcp_input_listener()
  *
- * incoming SYN-ACK-ACK (eager perim) 	-> tcp_input_data()
+ * incoming SYN-ACK-ACK (eager perim)	-> tcp_input_data()
  * send T_CONN_IND (listener perim)	-> tcp_send_conn_ind()
  *
  * Sockfs ACCEPT Path:
@@ -1319,7 +1399,7 @@ tcp_input_listener(void *arg, mblk_t *mp, void *arg2, ip_recv_attr_t *ira)
 	conn_t		*econnp = NULL;
 	squeue_t	*new_sqp;
 	mblk_t		*mp1;
-	uint_t 		ip_hdr_len;
+	uint_t		ip_hdr_len;
 	conn_t		*lconnp = (conn_t *)arg;
 	tcp_t		*listener = lconnp->conn_tcp;
 	tcp_stack_t	*tcps = listener->tcp_tcps;
@@ -1456,7 +1536,7 @@ tcp_input_listener(void *arg, mblk_t *mp, void *arg2, ip_recv_attr_t *ira)
 	ASSERT(ira->ira_sqp != NULL);
 	new_sqp = ira->ira_sqp;
 
-	econnp = (conn_t *)tcp_get_conn(arg2, tcps);
+	econnp = tcp_get_conn(arg2, tcps);
 	if (econnp == NULL)
 		goto error2;
 
@@ -2375,8 +2455,6 @@ tcp_input_data(void *arg, mblk_t *mp, void *arg2, ip_recv_attr_t *ira)
 	ip_pkt_t	ipp;
 	boolean_t	ofo_seg = B_FALSE; /* Out of order segment */
 	uint32_t	cwnd;
-	uint32_t	add;
-	int		npkt;
 	int		mss;
 	conn_t		*connp = (conn_t *)arg;
 	squeue_t	*sqp = (squeue_t *)arg2;
@@ -2392,6 +2470,7 @@ tcp_input_data(void *arg, mblk_t *mp, void *arg2, ip_recv_attr_t *ira)
 		tcp_unfuse(tcp);
 	}
 
+	mss = 0;
 	iphdr = mp->b_rptr;
 	rptr = mp->b_rptr;
 	ASSERT(OK_32PTR(rptr));
@@ -2465,7 +2544,7 @@ tcp_input_data(void *arg, mblk_t *mp, void *arg2, ip_recv_attr_t *ira)
 
 	flags = (unsigned int)tcpha->tha_flags & 0xFF;
 
-	BUMP_LOCAL(tcp->tcp_ibsegs);
+	TCPS_BUMP_MIB(tcps, tcpHCInSegs);
 	DTRACE_PROBE2(tcp__trace__recv, mblk_t *, mp, tcp_t *, tcp);
 
 	if ((flags & TH_URG) && sqp != NULL) {
@@ -2644,8 +2723,6 @@ tcp_input_data(void *arg, mblk_t *mp, void *arg2, ip_recv_attr_t *ira)
 				tcp->tcp_rexmit = B_FALSE;
 				tcp->tcp_rexmit_nxt = tcp->tcp_snxt;
 				tcp->tcp_rexmit_max = tcp->tcp_snxt;
-				tcp->tcp_snd_burst = tcp->tcp_localnet ?
-				    TCP_CWND_INFINITE : TCP_CWND_NORMAL;
 				tcp->tcp_ms_we_have_waited = 0;
 
 				/*
@@ -2654,6 +2731,9 @@ tcp_input_data(void *arg, mblk_t *mp, void *arg2, ip_recv_attr_t *ira)
 				 * draft-floyd-incr-init-win-01.txt,
 				 * Increasing TCP's Initial Window.
 				 */
+				DTRACE_PROBE3(cwnd__retransmitted__syn,
+				    tcp_t *, tcp, uint32_t, tcp->tcp_cwnd,
+				    uint32_t, tcp->tcp_mss);
 				tcp->tcp_cwnd = tcp->tcp_mss;
 			}
 
@@ -2712,7 +2792,7 @@ tcp_input_data(void *arg, mblk_t *mp, void *arg2, ip_recv_attr_t *ira)
 						tcp->tcp_ack_tid = 0;
 					}
 					tcp_send_data(tcp, ack_mp);
-					BUMP_LOCAL(tcp->tcp_obsegs);
+					TCPS_BUMP_MIB(tcps, tcpHCOutSegs);
 					TCPS_BUMP_MIB(tcps, tcpOutAck);
 
 					if (!IPCL_IS_NONSTR(connp)) {
@@ -2913,23 +2993,55 @@ tcp_input_data(void *arg, mblk_t *mp, void *arg2, ip_recv_attr_t *ira)
 	new_swnd = ntohs(tcpha->tha_win) <<
 	    ((tcpha->tha_flags & TH_SYN) ? 0 : tcp->tcp_snd_ws);
 
-	if (tcp->tcp_snd_ts_ok) {
-		if (!tcp_paws_check(tcp, tcpha, &tcpopt)) {
-			/*
-			 * This segment is not acceptable.
-			 * Drop it and send back an ACK.
-			 */
-			freemsg(mp);
-			flags |= TH_ACK_NEEDED;
-			goto ack_check;
-		}
-	} else if (tcp->tcp_snd_sack_ok) {
-		tcpopt.tcp = tcp;
+	/*
+	 * We are interested in two TCP options: timestamps (if negotiated) and
+	 * SACK (if negotiated). Skip option parsing if neither is negotiated.
+	 */
+	if (tcp->tcp_snd_ts_ok || tcp->tcp_snd_sack_ok) {
+		int options;
+		if (tcp->tcp_snd_sack_ok)
+			tcpopt.tcp = tcp;
+		else
+			tcpopt.tcp = NULL;
+		options = tcp_parse_options(tcpha, &tcpopt);
 		/*
-		 * SACK info in already updated in tcp_parse_options.  Ignore
-		 * all other TCP options...
+		 * RST segments must not be subject to PAWS and are not
+		 * required to have timestamps.
+		 * We do not drop keepalive segments without
+		 * timestamps, to maintain compatibility with legacy TCP stacks.
 		 */
-		(void) tcp_parse_options(tcpha, &tcpopt);
+		boolean_t keepalive = (seg_len == 0 || seg_len == 1) &&
+		    (seg_seq + 1 == tcp->tcp_rnxt);
+		if (tcp->tcp_snd_ts_ok && !(flags & TH_RST) && !keepalive) {
+			/*
+			 * Per RFC 7323 section 3.2., silently drop non-RST
+			 * segments without expected TSopt. This is a 'SHOULD'
+			 * requirement.
+			 * We accept keepalives without TSopt to maintain
+			 * interoperability with tcp implementations that omit
+			 * the TSopt on these. Keepalive data is discarded, so
+			 * there is no risk corrupting data by accepting these.
+			 */
+			if (!(options & TCP_OPT_TSTAMP_PRESENT)) {
+				/*
+				 * Leave a breadcrumb for people to detect this
+				 * behavior.
+				 */
+				DTRACE_TCP1(droppedtimestamp, tcp_t *, tcp);
+				freemsg(mp);
+				return;
+			}
+
+			if (!tcp_paws_check(tcp, &tcpopt)) {
+				/*
+				 * This segment is not acceptable.
+				 * Drop it and send back an ACK.
+				 */
+				freemsg(mp);
+				flags |= TH_ACK_NEEDED;
+				goto ack_check;
+			}
+		}
 	}
 try_again:;
 	mss = tcp->tcp_mss;
@@ -3069,6 +3181,7 @@ try_again:;
 
 		if (tcp->tcp_rwnd == 0) {
 			TCPS_BUMP_MIB(tcps, tcpInWinProbe);
+			tcp->tcp_cs.tcp_in_zwnd_probes++;
 		} else {
 			TCPS_BUMP_MIB(tcps, tcpInDataPastWinSegs);
 			TCPS_UPDATE_MIB(tcps, tcpInDataPastWinBytes, -rgap);
@@ -3222,11 +3335,10 @@ ok:;
 	}
 
 	/*
-	 * Check whether we can update tcp_ts_recent.  This test is
-	 * NOT the one in RFC 1323 3.4.  It is from Braden, 1993, "TCP
-	 * Extensions for High Performance: An Update", Internet Draft.
+	 * Check whether we can update tcp_ts_recent. This test is from RFC
+	 * 7323, section 5.3.
 	 */
-	if (tcp->tcp_snd_ts_ok &&
+	if (tcp->tcp_snd_ts_ok && !(flags & TH_RST) &&
 	    TSTMP_GEQ(tcpopt.tcp_opt_ts_val, tcp->tcp_ts_recent) &&
 	    SEQ_LEQ(seg_seq, tcp->tcp_rack)) {
 		tcp->tcp_ts_recent = tcpopt.tcp_opt_ts_val;
@@ -3319,6 +3431,9 @@ ok:;
 	} else if (seg_len > 0) {
 		TCPS_BUMP_MIB(tcps, tcpInDataInorderSegs);
 		TCPS_UPDATE_MIB(tcps, tcpInDataInorderBytes, seg_len);
+		tcp->tcp_cs.tcp_in_data_inorder_segs++;
+		tcp->tcp_cs.tcp_in_data_inorder_bytes += seg_len;
+
 		/*
 		 * If an out of order FIN was received before, and the seq
 		 * num and len of the new segment match that of the FIN,
@@ -3384,7 +3499,7 @@ ok:;
 	 * and TCP_OLD_URP_INTERPRETATION is set. This implies that the urgent
 	 * byte was at seg_seq - 1, in which case we ignore the urgent flag.
 	 */
-	if (flags & TH_URG && urp >= 0) {
+	if ((flags & TH_URG) && urp >= 0) {
 		if (!tcp->tcp_urp_last_valid ||
 		    SEQ_GT(urp + seg_seq, tcp->tcp_urp_last)) {
 			/*
@@ -3840,9 +3955,10 @@ process_ack:
 			tcp->tcp_rexmit = B_FALSE;
 			tcp->tcp_rexmit_nxt = tcp->tcp_snxt;
 			tcp->tcp_rexmit_max = tcp->tcp_snxt;
-			tcp->tcp_snd_burst = tcp->tcp_localnet ?
-			    TCP_CWND_INFINITE : TCP_CWND_NORMAL;
 			tcp->tcp_ms_we_have_waited = 0;
+			DTRACE_PROBE3(cwnd__retransmitted__syn,
+			    tcp_t *, tcp, uint32_t, tcp->tcp_cwnd,
+			    uint32_t, tcp->tcp_mss);
 			tcp->tcp_cwnd = mss;
 		}
 
@@ -3886,33 +4002,22 @@ process_ack:
 	 */
 	if (tcp->tcp_cwr && SEQ_GT(seg_ack, tcp->tcp_cwr_snd_max))
 		tcp->tcp_cwr = B_FALSE;
-	if (tcp->tcp_ecn_ok && (flags & TH_ECE)) {
-		if (!tcp->tcp_cwr) {
-			npkt = ((tcp->tcp_snxt - tcp->tcp_suna) >> 1) / mss;
-			tcp->tcp_cwnd_ssthresh = MAX(npkt, 2) * mss;
-			tcp->tcp_cwnd = npkt * mss;
-			/*
-			 * If the cwnd is 0, use the timer to clock out
-			 * new segments.  This is required by the ECN spec.
-			 */
-			if (npkt == 0) {
-				TCP_TIMER_RESTART(tcp, tcp->tcp_rto);
-				/*
-				 * This makes sure that when the ACK comes
-				 * back, we will increase tcp_cwnd by 1 MSS.
-				 */
-				tcp->tcp_cwnd_cnt = 0;
-			}
-			tcp->tcp_cwr = B_TRUE;
-			/*
-			 * This marks the end of the current window of in
-			 * flight data.  That is why we don't use
-			 * tcp_suna + tcp_swnd.  Only data in flight can
-			 * provide ECN info.
-			 */
-			tcp->tcp_cwr_snd_max = tcp->tcp_snxt;
-			tcp->tcp_ecn_cwr_sent = B_FALSE;
-		}
+	if (tcp->tcp_ecn_ok && (flags & TH_ECE) && !tcp->tcp_cwr) {
+		cc_cong_signal(tcp, seg_ack, CC_ECN);
+		/*
+		 * If the cwnd is 0, use the timer to clock out
+		 * new segments.  This is required by the ECN spec.
+		 */
+		if (tcp->tcp_cwnd == 0)
+			TCP_TIMER_RESTART(tcp, tcp->tcp_rto);
+		tcp->tcp_cwr = B_TRUE;
+		/*
+		 * This marks the end of the current window of in
+		 * flight data.  That is why we don't use
+		 * tcp_suna + tcp_swnd.  Only data in flight can
+		 * provide ECN info.
+		 */
+		tcp->tcp_cwr_snd_max = tcp->tcp_snxt;
 	}
 
 	mp1 = tcp->tcp_xmit_head;
@@ -3934,6 +4039,8 @@ process_ack:
 				/* Do Limited Transmit */
 				if ((dupack_cnt = ++tcp->tcp_dupack_cnt) <
 				    tcps->tcps_dupack_fast_retransmit) {
+					cc_ack_received(tcp, seg_ack,
+					    bytes_acked, CC_DUPACK);
 					/*
 					 * RFC 3042
 					 *
@@ -3980,12 +4087,10 @@ process_ack:
 				 * dropped (due to congestion.)
 				 */
 				if (!tcp->tcp_cwr) {
-					npkt = ((tcp->tcp_snxt -
-					    tcp->tcp_suna) >> 1) / mss;
-					tcp->tcp_cwnd_ssthresh = MAX(npkt, 2) *
-					    mss;
-					tcp->tcp_cwnd = (npkt +
-					    tcp->tcp_dupack_cnt) * mss;
+					cc_cong_signal(tcp, seg_ack,
+					    CC_NDUPACK);
+					cc_ack_received(tcp, seg_ack,
+					    bytes_acked, CC_DUPACK);
 				}
 				if (tcp->tcp_ecn_ok) {
 					tcp->tcp_cwr = B_TRUE;
@@ -4008,15 +4113,6 @@ process_ack:
 				} else {
 					tcp->tcp_rexmit_max = tcp->tcp_snxt;
 				}
-
-				/*
-				 * Do not allow bursty traffic during.
-				 * fast recovery.  Refer to Fall and Floyd's
-				 * paper "Simulation-based Comparisons of
-				 * Tahoe, Reno and SACK TCP" (in CCR?)
-				 * This is a best current practise.
-				 */
-				tcp->tcp_snd_burst = TCP_CWND_SS;
 
 				/*
 				 * For SACK:
@@ -4056,6 +4152,8 @@ process_ack:
 				} /* tcp_snd_sack_ok */
 
 				} else {
+					cc_ack_received(tcp, seg_ack,
+					    bytes_acked, CC_DUPACK);
 					/*
 					 * Here we perform congestion
 					 * avoidance, but NOT slow start.
@@ -4077,6 +4175,10 @@ process_ack:
 					cwnd = tcp->tcp_cwnd + mss;
 					if (cwnd > tcp->tcp_cwnd_max)
 						cwnd = tcp->tcp_cwnd_max;
+					DTRACE_PROBE3(cwnd__fast__recovery,
+					    tcp_t *, tcp,
+					    uint32_t, tcp->tcp_cwnd,
+					    uint32_t, cwnd);
 					tcp->tcp_cwnd = cwnd;
 					if (tcp->tcp_unsent > 0)
 						flags |= TH_XMIT_NEEDED;
@@ -4179,7 +4281,7 @@ process_ack:
 			}
 			mp = tcp_ack_mp(tcp);
 			if (mp != NULL) {
-				BUMP_LOCAL(tcp->tcp_obsegs);
+				TCPS_BUMP_MIB(tcps, tcpHCOutSegs);
 				TCPS_BUMP_MIB(tcps, tcpOutAck);
 				tcp_send_data(tcp, mp);
 			}
@@ -4209,17 +4311,10 @@ process_ack:
 		ASSERT(tcp->tcp_rexmit == B_FALSE);
 		if (SEQ_GEQ(seg_ack, tcp->tcp_rexmit_max)) {
 			tcp->tcp_dupack_cnt = 0;
-			/*
-			 * Restore the orig tcp_cwnd_ssthresh after
-			 * fast retransmit phase.
-			 */
-			if (tcp->tcp_cwnd > tcp->tcp_cwnd_ssthresh) {
-				tcp->tcp_cwnd = tcp->tcp_cwnd_ssthresh;
-			}
+
+			cc_post_recovery(tcp, seg_ack);
+
 			tcp->tcp_rexmit_max = seg_ack;
-			tcp->tcp_cwnd_cnt = 0;
-			tcp->tcp_snd_burst = tcp->tcp_localnet ?
-			    TCP_CWND_INFINITE : TCP_CWND_NORMAL;
 
 			/*
 			 * Remove all notsack info to avoid confusion with
@@ -4248,8 +4343,12 @@ process_ack:
 				 * aggressive behaviour in sending new
 				 * segments.
 				 */
-				tcp->tcp_cwnd = tcp->tcp_cwnd_ssthresh +
+				cwnd = tcp->tcp_cwnd_ssthresh +
 				    tcps->tcps_dupack_fast_retransmit * mss;
+				DTRACE_PROBE3(cwnd__fast__retransmit__part__ack,
+				    tcp_t *, tcp, uint32_t, tcp->tcp_cwnd,
+				    uint32_t, cwnd);
+				tcp->tcp_cwnd = cwnd;
 				tcp->tcp_cwnd_cnt = tcp->tcp_cwnd;
 				flags |= TH_REXMIT_NEEDED;
 			}
@@ -4280,8 +4379,6 @@ process_ack:
 			} else {
 				tcp->tcp_rexmit = B_FALSE;
 				tcp->tcp_rexmit_nxt = tcp->tcp_snxt;
-				tcp->tcp_snd_burst = tcp->tcp_localnet ?
-				    TCP_CWND_INFINITE : TCP_CWND_NORMAL;
 			}
 			tcp->tcp_ms_we_have_waited = 0;
 		}
@@ -4312,28 +4409,10 @@ process_ack:
 	 * usual.
 	 */
 	if (!tcp->tcp_ecn_ok || !(flags & TH_ECE)) {
-		cwnd = tcp->tcp_cwnd;
-		add = mss;
-
-		if (cwnd >= tcp->tcp_cwnd_ssthresh) {
-			/*
-			 * This is to prevent an increase of less than 1 MSS of
-			 * tcp_cwnd.  With partial increase, tcp_wput_data()
-			 * may send out tinygrams in order to preserve mblk
-			 * boundaries.
-			 *
-			 * By initializing tcp_cwnd_cnt to new tcp_cwnd and
-			 * decrementing it by 1 MSS for every ACKs, tcp_cwnd is
-			 * increased by 1 MSS for every RTTs.
-			 */
-			if (tcp->tcp_cwnd_cnt <= 0) {
-				tcp->tcp_cwnd_cnt = cwnd + add;
-			} else {
-				tcp->tcp_cwnd_cnt -= add;
-				add = 0;
-			}
+		if (IN_RECOVERY(tcp->tcp_ccv.flags)) {
+			EXIT_RECOVERY(tcp->tcp_ccv.flags);
 		}
-		tcp->tcp_cwnd = MIN(cwnd + add, tcp->tcp_cwnd_max);
+		cc_ack_received(tcp, seg_ack, bytes_acked, CC_ACK);
 	}
 
 	/* See if the latest urgent data has been acknowledged */
@@ -4341,36 +4420,29 @@ process_ack:
 	    SEQ_GT(seg_ack, tcp->tcp_urg))
 		tcp->tcp_valid_bits &= ~TCP_URG_VALID;
 
-	/* Can we update the RTT estimates? */
-	if (tcp->tcp_snd_ts_ok) {
-		/* Ignore zero timestamp echo-reply. */
-		if (tcpopt.tcp_opt_ts_ecr != 0) {
-			tcp_set_rto(tcp, (int32_t)LBOLT_FASTPATH -
-			    (int32_t)tcpopt.tcp_opt_ts_ecr);
-		}
-
-		/* If needed, restart the timer. */
-		if (tcp->tcp_set_timer == 1) {
-			TCP_TIMER_RESTART(tcp, tcp->tcp_rto);
-			tcp->tcp_set_timer = 0;
-		}
-		/*
-		 * Update tcp_csuna in case the other side stops sending
-		 * us timestamps.
-		 */
-		tcp->tcp_csuna = tcp->tcp_snxt;
-	} else if (SEQ_GT(seg_ack, tcp->tcp_csuna)) {
+	/*
+	 * Update the RTT estimates. Note that we don't use the TCP
+	 * timestamp option to calculate RTT even if one is present. This is
+	 * because the timestamp option's resolution (CPU tick) is
+	 * too coarse to measure modern datacenter networks' microsecond
+	 * latencies. The timestamp field's resolution is limited by its
+	 * 4-byte width (see RFC1323), and since we always store a
+	 * high-resolution nanosecond presision timestamp along with the data,
+	 * there is no point to ever using the timestamp option.
+	 */
+	if (SEQ_GT(seg_ack, tcp->tcp_csuna)) {
 		/*
 		 * An ACK sequence we haven't seen before, so get the RTT
 		 * and update the RTO. But first check if the timestamp is
 		 * valid to use.
 		 */
 		if ((mp1->b_next != NULL) &&
-		    SEQ_GT(seg_ack, (uint32_t)(uintptr_t)(mp1->b_next)))
-			tcp_set_rto(tcp, (int32_t)LBOLT_FASTPATH -
-			    (int32_t)(intptr_t)mp1->b_prev);
-		else
+		    SEQ_GT(seg_ack, (uint32_t)(uintptr_t)(mp1->b_next))) {
+			tcp_set_rto(tcp, gethrtime() -
+			    (hrtime_t)(intptr_t)mp1->b_prev);
+		} else {
 			TCPS_BUMP_MIB(tcps, tcpRttNoUpdate);
+		}
 
 		/* Remeber the last sequence to be ACKed */
 		tcp->tcp_csuna = seg_ack;
@@ -4399,7 +4471,7 @@ process_ack:
 			if (SEQ_GT(seg_ack,
 			    (uint32_t)(uintptr_t)(mp1->b_next))) {
 				mp1->b_prev =
-				    (mblk_t *)(uintptr_t)LBOLT_FASTPATH;
+				    (mblk_t *)(intptr_t)gethrtime();
 				mp1->b_next = NULL;
 			}
 			break;
@@ -4876,11 +4948,13 @@ xmit_check:
 
 			if (mp1 != NULL) {
 				tcp->tcp_xmit_head->b_prev =
-				    (mblk_t *)LBOLT_FASTPATH;
+				    (mblk_t *)(intptr_t)gethrtime();
 				tcp->tcp_csuna = tcp->tcp_snxt;
 				TCPS_BUMP_MIB(tcps, tcpRetransSegs);
 				TCPS_UPDATE_MIB(tcps, tcpRetransBytes,
 				    snd_size);
+				tcp->tcp_cs.tcp_out_retrans_segs++;
+				tcp->tcp_cs.tcp_out_retrans_bytes += snd_size;
 				tcp_send_data(tcp, mp1);
 			}
 		}
@@ -4910,9 +4984,10 @@ xmit_check:
 			 * timer is used to avoid a timeout before the
 			 * limited transmitted segment's ACK gets back.
 			 */
-			if (tcp->tcp_xmit_head != NULL)
+			if (tcp->tcp_xmit_head != NULL) {
 				tcp->tcp_xmit_head->b_prev =
-				    (mblk_t *)LBOLT_FASTPATH;
+				    (mblk_t *)(intptr_t)gethrtime();
+			}
 		}
 
 		/* Anything more to do? */
@@ -4955,7 +5030,7 @@ ack_check:
 
 		if (mp1 != NULL) {
 			tcp_send_data(tcp, mp1);
-			BUMP_LOCAL(tcp->tcp_obsegs);
+			TCPS_BUMP_MIB(tcps, tcpHCOutSegs);
 			TCPS_BUMP_MIB(tcps, tcpOutAck);
 		}
 		if (tcp->tcp_ack_tid != 0) {
@@ -5034,6 +5109,15 @@ tcp_input_add_ancillary(tcp_t *tcp, mblk_t *mp, ip_pkt_t *ipp,
 
 	optlen = 0;
 	addflag.crb_all = 0;
+
+	/* If app asked for TOS and it has changed ... */
+	if (connp->conn_recv_ancillary.crb_recvtos &&
+	    ipp->ipp_type_of_service != tcp->tcp_recvtos &&
+	    (ira->ira_flags & IRAF_IS_IPV4)) {
+		optlen += sizeof (struct T_opthdr) +
+		    P2ROUNDUP(sizeof (uint8_t), __TPI_ALIGN_SIZE);
+		addflag.crb_recvtos = 1;
+	}
 	/* If app asked for pktinfo and the index has changed ... */
 	if (connp->conn_recv_ancillary.crb_ip_recvpktinfo &&
 	    ira->ira_ruifindex != tcp->tcp_recvifindex) {
@@ -5053,8 +5137,9 @@ tcp_input_add_ancillary(tcp_t *tcp, mblk_t *mp, ip_pkt_t *ipp,
 		optlen += sizeof (struct T_opthdr) + sizeof (uint_t);
 		addflag.crb_ipv6_recvtclass = 1;
 	}
+
 	/*
-	 * If app asked for hopbyhop headers and it has changed ...
+	 * If app asked for hop-by-hop headers and it has changed ...
 	 * For security labels, note that (1) security labels can't change on
 	 * a connected socket at all, (2) we're connected to at most one peer,
 	 * (3) if anything changes, then it must be some other extra option.
@@ -5132,6 +5217,23 @@ tcp_input_add_ancillary(tcp_t *tcp, mblk_t *mp, ip_pkt_t *ipp,
 	todi->OPT_length = optlen;
 	todi->OPT_offset = sizeof (*todi);
 	optptr = (uchar_t *)&todi[1];
+
+	/* If app asked for TOS and it has changed ... */
+	if (addflag.crb_recvtos) {
+		toh = (struct T_opthdr *)optptr;
+		toh->level = IPPROTO_IP;
+		toh->name = IP_RECVTOS;
+		toh->len = sizeof (*toh) +
+		    P2ROUNDUP(sizeof (uint8_t), __TPI_ALIGN_SIZE);
+		toh->status = 0;
+		optptr += sizeof (*toh);
+		*(uint8_t *)optptr = ipp->ipp_type_of_service;
+		optptr = (uchar_t *)toh + toh->len;
+		ASSERT(__TPI_TOPT_ISALIGNED(optptr));
+		/* Save as "last" value */
+		tcp->tcp_recvtos = ipp->ipp_type_of_service;
+	}
+
 	/*
 	 * If app asked for pktinfo and the index has changed ...
 	 * Note that the local address never changes for the connection.
@@ -5248,38 +5350,53 @@ tcp_input_add_ancillary(tcp_t *tcp, mblk_t *mp, ip_pkt_t *ipp,
 	return (mp);
 }
 
-/* The minimum of smoothed mean deviation in RTO calculation. */
-#define	TCP_SD_MIN	400
+/* The minimum of smoothed mean deviation in RTO calculation (nsec). */
+#define	TCP_SD_MIN	400000000
 
 /*
- * Set RTO for this connection.  The formula is from Jacobson and Karels'
- * "Congestion Avoidance and Control" in SIGCOMM '88.  The variable names
- * are the same as those in Appendix A.2 of that paper.
+ * Set RTO for this connection based on a new round-trip time measurement.
+ * The formula is from Jacobson and Karels' "Congestion Avoidance and Control"
+ * in SIGCOMM '88.  The variable names are the same as those in Appendix A.2
+ * of that paper.
  *
  * m = new measurement
  * sa = smoothed RTT average (8 * average estimates).
  * sv = smoothed mean deviation (mdev) of RTT (4 * deviation estimates).
  */
 static void
-tcp_set_rto(tcp_t *tcp, clock_t rtt)
+tcp_set_rto(tcp_t *tcp, hrtime_t rtt)
 {
-	long m = TICK_TO_MSEC(rtt);
-	clock_t sa = tcp->tcp_rtt_sa;
-	clock_t sv = tcp->tcp_rtt_sd;
-	clock_t rto;
-	tcp_stack_t	*tcps = tcp->tcp_tcps;
+	hrtime_t m = rtt;
+	hrtime_t sa = tcp->tcp_rtt_sa;
+	hrtime_t sv = tcp->tcp_rtt_sd;
+	tcp_stack_t *tcps = tcp->tcp_tcps;
 
 	TCPS_BUMP_MIB(tcps, tcpRttUpdate);
 	tcp->tcp_rtt_update++;
+	tcp->tcp_rtt_sum += m;
+	tcp->tcp_rtt_cnt++;
 
 	/* tcp_rtt_sa is not 0 means this is a new sample. */
 	if (sa != 0) {
 		/*
-		 * Update average estimator:
-		 *	new rtt = 7/8 old rtt + 1/8 Error
+		 * Update average estimator (see section 2.3 of RFC6298):
+		 *	SRTT = 7/8 SRTT + 1/8 rtt
+		 *
+		 * We maintain tcp_rtt_sa as 8 * SRTT, so this reduces to:
+		 *	tcp_rtt_sa = 7 * SRTT + rtt
+		 *	tcp_rtt_sa = 7 * (tcp_rtt_sa / 8) + rtt
+		 *	tcp_rtt_sa = tcp_rtt_sa - (tcp_rtt_sa / 8) + rtt
+		 *	tcp_rtt_sa = tcp_rtt_sa + (rtt - (tcp_rtt_sa / 8))
+		 *	tcp_rtt_sa = tcp_rtt_sa + (rtt - (tcp_rtt_sa / 2^3))
+		 *	tcp_rtt_sa = tcp_rtt_sa + (rtt - (tcp_rtt_sa >> 3))
+		 *
+		 * (rtt - tcp_rtt_sa / 8) is simply the difference
+		 * between the new rtt measurement and the existing smoothed
+		 * RTT average. This is referred to as "Error" in subsequent
+		 * calculations.
 		 */
 
-		/* m is now Error in estimate. */
+		/* m is now Error. */
 		m -= sa >> 3;
 		if ((sa += m) <= 0) {
 			/*
@@ -5292,7 +5409,13 @@ tcp_set_rto(tcp_t *tcp, clock_t rtt)
 
 		/*
 		 * Update deviation estimator:
-		 *	new mdev = 3/4 old mdev + 1/4 (abs(Error) - old mdev)
+		 *  mdev = 3/4 mdev + 1/4 abs(Error)
+		 *
+		 * We maintain tcp_rtt_sd as 4 * mdev, so this reduces to:
+		 *  tcp_rtt_sd = 3 * mdev + abs(Error)
+		 *  tcp_rtt_sd = tcp_rtt_sd - (tcp_rtt_sd / 4) + abs(Error)
+		 *  tcp_rtt_sd = tcp_rtt_sd - (tcp_rtt_sd / 2^2) + abs(Error)
+		 *  tcp_rtt_sd = tcp_rtt_sd - (tcp_rtt_sd >> 2) + abs(Error)
 		 */
 		if (m < 0)
 			m = -m;
@@ -5312,33 +5435,21 @@ tcp_set_rto(tcp_t *tcp, clock_t rtt)
 	}
 	if (sv < TCP_SD_MIN) {
 		/*
-		 * We do not know that if sa captures the delay ACK
-		 * effect as in a long train of segments, a receiver
-		 * does not delay its ACKs.  So set the minimum of sv
-		 * to be TCP_SD_MIN, which is default to 400 ms, twice
-		 * of BSD DATO.  That means the minimum of mean
+		 * Since a receiver doesn't delay its ACKs during a long run of
+		 * segments, sa may not have captured the effect of delayed ACK
+		 * timeouts on the RTT.  To make sure we always account for the
+		 * possible delay (and avoid the unnecessary retransmission),
+		 * TCP_SD_MIN is set to 400ms, twice the delayed ACK timeout of
+		 * 200ms on older SunOS/BSD systems and modern Windows systems
+		 * (as of 2019).  This means that the minimum possible mean
 		 * deviation is 100 ms.
-		 *
 		 */
 		sv = TCP_SD_MIN;
 	}
 	tcp->tcp_rtt_sa = sa;
 	tcp->tcp_rtt_sd = sv;
-	/*
-	 * RTO = average estimates (sa / 8) + 4 * deviation estimates (sv)
-	 *
-	 * Add tcp_rexmit_interval extra in case of extreme environment
-	 * where the algorithm fails to work.  The default value of
-	 * tcp_rexmit_interval_extra should be 0.
-	 *
-	 * As we use a finer grained clock than BSD and update
-	 * RTO for every ACKs, add in another .25 of RTT to the
-	 * deviation of RTO to accomodate burstiness of 1/4 of
-	 * window size.
-	 */
-	rto = (sa >> 3) + sv + tcps->tcps_rexmit_interval_extra + (sa >> 5);
 
-	TCP_SET_RTO(tcp, rto);
+	tcp->tcp_rto = tcp_calculate_rto(tcp, tcps, 0);
 
 	/* Now, we can reset tcp_timer_backoff to use the new RTO... */
 	tcp->tcp_timer_backoff = 0;
@@ -5493,7 +5604,7 @@ tcp_rsrv_input(void *arg, mblk_t *mp, void *arg2, ip_recv_attr_t *dummy)
  * TCP, we have no data to send out of here.  What we do is clear the receive
  * window, and send out a window update.
  */
-void
+int
 tcp_rsrv(queue_t *q)
 {
 	conn_t		*connp = Q_TO_CONN(q);
@@ -5510,7 +5621,7 @@ tcp_rsrv(queue_t *q)
 	mutex_enter(&tcp->tcp_rsrv_mp_lock);
 	if ((mp = tcp->tcp_rsrv_mp) == NULL) {
 		mutex_exit(&tcp->tcp_rsrv_mp_lock);
-		return;
+		return (0);
 	}
 	tcp->tcp_rsrv_mp = NULL;
 	mutex_exit(&tcp->tcp_rsrv_mp_lock);
@@ -5518,6 +5629,7 @@ tcp_rsrv(queue_t *q)
 	CONN_INC_REF(connp);
 	SQUEUE_ENTER_ONE(connp->conn_sqp, mp, tcp_rsrv_input, connp,
 	    NULL, SQ_PROCESS, SQTAG_TCP_RSRV);
+	return (0);
 }
 
 /* At minimum we need 8 bytes in the TCP header for the lookup */
@@ -5661,6 +5773,10 @@ noticmpv4:
 			npkt = ((tcp->tcp_snxt - tcp->tcp_suna) >> 1) /
 			    tcp->tcp_mss;
 			tcp->tcp_cwnd_ssthresh = MAX(npkt, 2) * tcp->tcp_mss;
+
+			DTRACE_PROBE3(cwnd__source__quench, tcp_t *, tcp,
+			    uint32_t, tcp->tcp_cwnd,
+			    uint32_t, tcp->tcp_mss);
 			tcp->tcp_cwnd = tcp->tcp_mss;
 			tcp->tcp_cwnd_cnt = 0;
 		}

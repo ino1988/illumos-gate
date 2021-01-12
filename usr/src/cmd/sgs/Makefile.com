@@ -21,6 +21,8 @@
 
 #
 # Copyright (c) 1996, 2010, Oracle and/or its affiliates. All rights reserved.
+# Copyright 2016 RackTop Systems.
+# Copyright 2019 OmniOS Community Edition (OmniOSce) Association.
 #
 
 .KEEP_STATE:
@@ -28,8 +30,6 @@
 
 
 include		$(SRC)/cmd/sgs/Makefile.var
-
-SRCBASE =	../../../..
 
 i386_ARCH =	intel
 sparc_ARCH =	sparc
@@ -40,15 +40,17 @@ ARCH =		$($(MACH)_ARCH)
 
 # Setting DEBUG = -DDEBUG (or "make DEBUG=-DDEBUG ...") enables ASSERT()
 # checking.  This is automatically enabled for DEBUG builds, not for non-debug
-# builds.  Unset the global C99_DISABLE flag to insure we uncover all compiler
+# builds.  Unset the global CSTD_GNU89 flag to insure we uncover all compiler
 # warnings/errors.
 DEBUG =
 $(NOT_RELEASE_BUILD)DEBUG = -DDEBUG
 
-C99_DISABLE =	$(C99_ENABLE)
+CSTD_GNU89 =	$(CSTD_GNU99)
 
 CFLAGS +=	$(CCVERBOSE) $(DEBUG) $(XFFLAG)
 CFLAGS64 +=	$(CCVERBOSE) $(DEBUG) $(XFFLAG)
+
+NATIVE_CFLAGS +=	$(CCVERBOSE) $(DEBUG) $(XFFLAG)
 
 CERRWARN +=	-_gcc=-Wno-type-limits
 CERRWARN +=	-_gcc=-Wno-parentheses
@@ -61,12 +63,12 @@ ELFCAP=		$(SRC)/common/elfcap
 
 # Reassign CPPFLAGS so that local search paths are used before any parent
 # $ROOT paths.
-CPPFLAGS =	-I. -I../common -I../../include -I../../include/$(MACH) \
+CPPFLAGS =	-I. -I../common -I$(SGSHOME)/include -I$(SGSHOME)/include/$(MACH) \
 		$(CPPFLAGS.master) -I$(ELFCAP)
 
 # PICS64 is unique to our environment
-$(PICS64) :=	sparc_CFLAGS += -xregs=no%appl -K pic
-$(PICS64) :=	sparcv9_CFLAGS += -xregs=no%appl -K pic
+$(PICS64) :=	sparc_CFLAGS += -xregs=no%appl $(C_PICFLAGS)
+$(PICS64) :=	sparcv9_CFLAGS += -xregs=no%appl $(C_PICFLAGS)
 $(PICS64) :=	CPPFLAGS += -DPIC -D_REENTRANT
 
 LDFLAGS +=	$(ZIGNORE)
@@ -75,7 +77,7 @@ DYNFLAGS +=	$(ZIGNORE)
 # Establish the local tools, proto and package area.
 
 SGSHOME =	$(SRC)/cmd/sgs
-SGSPROTO =	$(SGSHOME)/proto/$(MACH)
+SGSCOMMON =	$(SGSHOME)/common
 SGSTOOLS =	$(SGSHOME)/tools
 SGSMSGID =	$(SGSHOME)/messages
 SGSMSGDIR =	$(SGSHOME)/messages/$(MACH)
@@ -109,72 +111,10 @@ DTEXTDOM =
 # Define any generic sgsmsg(1l) flags.  The default message generation system
 # is to use gettext(3i), add the -C flag to switch to catgets(3c).
 
-SGSMSG =		$(SGSTOOLS)/$(MACH)/sgsmsg
+SGSMSG =		$(ONBLD_TOOLS)/bin/$(MACH)/sgsmsg
 SGSMSG_PIGLATIN_NL =	perl $(SGSTOOLS)/common/sgsmsg_piglatin_nl.pl
-CHKMSG =		$(SGSTOOLS)/chkmsg.sh
+CHKMSG =		$(SGSHOME)/tools/chkmsg.sh
 
 SGSMSGVFLAG =
 SGSMSGFLAGS =	$(SGSMSGVFLAG) -i $(SGSMSGID)/sgs.ident
 CHKMSGFLAGS =	$(SGSMSGTARG:%=-m %) $(SGSMSGCHK:%=-m %)
-
-# Native targets should use the minimum of ld(1) flags to allow building on
-# previous releases.  We use mapfiles to scope, but don't bother versioning.
-
-native :=	DYNFLAGS = -R$(SGSPROTO) -L$(SGSPROTO) $(ZNOVERSION)
-
-# Comment out the following two lines to have the sgs built from the system
-# link-editor, rather than the local proto link-editor.
-CC_USE_PROTO =	-Yl,$(SGSPROTO)
-LD_USE_PROTO =	$(SGSPROTO)/
-
-#
-# lint-related stuff
-#
-LIBNAME32 =	$(LIBNAME:%=%32)
-LIBNAME64 =	$(LIBNAME:%=%64)
-LIBNAMES =	$(LIBNAME32) $(LIBNAME64)
-
-SGSLINTOUT =	lint.out
-LINTOUT1 =	lint.out.1
-LINTOUT32 =	lint.out.32
-LINTOUT64 =	lint.out.64
-LINTOUTS =	$(SGSLINTOUT) $(LINTOUT1) $(LINTOUT32) $(LINTOUT64)
-
-LINTLIBSRC =	$(LINTLIB:%.ln=%)
-LINTLIB32 =	$(LINTLIB:%.ln=%32.ln)
-LINTLIB64 =	$(LINTLIB:%.ln=%64.ln)
-LINTLIBS =	$(LINTLIB32) $(LINTLIB64)
-
-LINTFLAGS =	-m -errtags=yes -erroff=E_SUPPRESSION_DIRECTIVE_UNUSED
-LINTFLAGS64 =	-m -errtags=yes -erroff=E_SUPPRESSION_DIRECTIVE_UNUSED \
-		    $(VAR_LINTFLAGS64)
-
-#
-# When building a lint library, no other lint libraries are verified as
-# dependencies, nor is the stardard C lint library processed.  All dependency
-# verification is carried out through linting the sources themselves.
-#
-$(LINTLIB) :=	LINTFLAGS += -n
-$(LINTLIB) :=	LINTFLAGS64 += -n
-
-$(LINTLIB32) :=	LINTFLAGS += -n
-$(LINTLIB32) :=	LINTFLAGS64 += -n
-$(LINTLIB64) :=	LINTFLAGS += -n
-$(LINTLIB64) :=	LINTFLAGS64 += -n
-
-#
-# These libraries have two resulting lint libraries.  If a dependency is
-# declared using these variables, the substitution for the 32/64 versions at
-# lint time happens automatically (see Makefile.targ).
-#
-LD_LIB =	-lld
-LD_LIB32 =	-lld32
-LD_LIB64 =	-lld64
-
-LDDBG_LIB =	-llddbg
-LDDBG_LIB32 =	-llddbg32
-LDDBG_LIB64 =	-llddbg64
-
-CONV_LIB =	-lconv
-CONV_LIB32 =	-lconv32
-CONV_LIB64 =	-lconv64

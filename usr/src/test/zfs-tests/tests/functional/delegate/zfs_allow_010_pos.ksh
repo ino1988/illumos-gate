@@ -26,7 +26,7 @@
 #
 
 #
-# Copyright (c) 2013 by Delphix. All rights reserved.
+# Copyright (c) 2013, 2016 by Delphix. All rights reserved.
 #
 
 . $STF_SUITE/tests/functional/delegate/delegate_common.kshlib
@@ -59,6 +59,7 @@ set -A perms	create		true		false	\
 		allow		true		true	\
 		quota		true		false	\
 		reservation	true		true	\
+		dnodesize	true		false	\
 		recordsize	true		false	\
 		mountpoint	true		false	\
 		checksum	true		true	\
@@ -95,7 +96,7 @@ for dtst in $DATASETS; do
 
 	typeset -i i=0
 	while (( i < ${#perms[@]} )); do
-		log_must $ZFS allow $STAFF1 ${perms[$i]} $dtst
+		log_must zfs allow $STAFF1 ${perms[$i]} $dtst
 
 		if [[ ${perms[((i+k))]} == "true" ]]; then
 			log_must verify_perm $dtst ${perms[$i]} $STAFF1

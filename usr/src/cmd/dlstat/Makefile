@@ -22,7 +22,7 @@
 # Copyright 2010 Sun Microsystems, Inc.  All rights reserved.
 # Use is subject to license terms.
 #
-#
+# Copyright (c) 2018, Joyent, Inc.
 
 PROG= dlstat
 
@@ -33,15 +33,18 @@ include ../Makefile.cmd
 CERRWARN += -_gcc=-Wno-implicit-function-declaration
 CERRWARN += -_gcc=-Wno-unused-label
 CERRWARN += -_gcc=-Wno-unused-variable
-CERRWARN += -_gcc=-Wno-uninitialized
+CERRWARN += $(CNOWARN_UNINIT)
+
+# not linted
+SMATCH=off
 
 XGETFLAGS += -a -x $(PROG).xcl
 LDLIBS += -L$(ROOT)/lib
-LDLIBS += -ldladm -linetutil
+LDLIBS += -ldladm -lofmt
 
 .KEEP_STATE:
 
-all: $(ROOTFS_PROG) 
+all: $(ROOTFS_PROG)
 
 install: all $(ROOTSBINPROG)
 	$(RM) $(ROOTUSRSBINPROG)

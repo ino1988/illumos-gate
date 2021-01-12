@@ -3,7 +3,9 @@
  * Use is subject to license terms.
  */
 
-#pragma ident	"%Z%%M%	%I%	%E% SMI"
+/*
+ * Copyright (c) 2018, Joyent, Inc.
+ */
 
 /*
  * zdump 7.24
@@ -142,9 +144,7 @@ time_t *tp;
 #endif /* !defined TYPECHECK */
 
 static void
-abbrok(abbrp, zone)
-const char * const	abbrp;
-const char * const	zone;
+abbrok(const char * const abbrp, const char * const zone)
 {
 	register const char *cp;
 	int error = 0;
@@ -152,43 +152,24 @@ const char * const	zone;
 	if (warned)
 		return;
 	cp = abbrp;
-	while (isascii(*cp) && isalpha((unsigned char)*cp))
+	while (isalpha(*cp) || isdigit(*cp) || *cp == '-' || *cp == '+')
 		++cp;
 	(void) fflush(stdout);
-	if (cp - abbrp == 0) {
-		/*
-		 * TRANSLATION_NOTE
-		 * The first %s prints for the program name (zdump),
-		 * the second %s prints the timezone name, the third
-		 * %s prints the timezone abbreviation (tzname[0] or
-		 * tzname[1]).
-		 */
-		(void) fprintf(stderr, gettext("%s: warning: zone \"%s\" "
-		    "abbreviation \"%s\" lacks alphabetic at start\n"),
-		    progname, zone, abbrp);
-		error = 1;
-	} else if (cp - abbrp < 3) {
+	if (cp - abbrp < 3) {
 		(void) fprintf(stderr, gettext("%s: warning: zone \"%s\" "
 		    "abbreviation \"%s\" has fewer than 3 alphabetics\n"),
 		    progname, zone, abbrp);
 		error = 1;
 	} else if (cp - abbrp > 6) {
 		(void) fprintf(stderr, gettext("%s: warning: zone \"%s\" "
-		    "abbreviation \"%s\" has more than 6 alphabetics\n"),
+		    "abbreviation \"%s\" has more than 6 characters\n"),
 		    progname, zone, abbrp);
 		error = 1;
-	}
-	if (error == 0 && (*cp == '+' || *cp == '-')) {
-		++cp;
-		if (isascii(*cp) && isdigit((unsigned char)*cp))
-			if (*cp++ == '1' && *cp >= '0' && *cp <= '4')
-				++cp;
-		if (*cp != '\0') {
-			(void) fprintf(stderr, gettext("%s: warning: "
-			    "zone \"%s\" abbreviation \"%s\" differs from "
-			    "POSIX standard\n"), progname, zone, abbrp);
-			error = 1;
-		}
+	} else if (*cp != '\0') {
+		(void) fprintf(stderr, gettext("%s: warning: zone \"%s\" "
+		    "abbreviation \"%s\" has characters other than "
+		    "alphanumerics\n"), progname, zone, abbrp);
+		error = 1;
 	}
 	if (error)
 		warned = TRUE;
@@ -254,8 +235,9 @@ char	*argv[];
 					cutloyear = lo;
 					cuthiyear = hi;
 			} else {
-(void) fprintf(stderr, gettext("%s: wild -c argument %s\n"),
-					progname, cutarg);
+				(void) fprintf(stderr,
+				    gettext("%s: wild -c argument %s\n"),
+				    progname, cutarg);
 				exit(EXIT_FAILURE);
 			}
 		}

@@ -21,6 +21,7 @@
 /*
  * Copyright 2009 Sun Microsystems, Inc.  All rights reserved.
  * Use is subject to license terms.
+ * Copyright 2019, Joyent, Inc.
  */
 
 #ifndef	_SYS_PCI_H
@@ -105,7 +106,13 @@ extern "C" {
 #define	PCI_BCNF_BCNTRL_B2B_ENAB	0x0080
 
 #define	PCI_BCNF_IO_MASK	0xf0
+#define	PCI_BCNF_IO_SHIFT	8
 #define	PCI_BCNF_MEM_MASK	0xfff0
+#define	PCI_BCNF_MEM_SHIFT	16
+#define	PCI_BCNF_ADDR_MASK	0x000f
+
+#define	PCI_BCNF_IO_32BIT	0x01
+#define	PCI_BCNF_PF_MEM_64BIT	0x01
 
 /*
  * Header type 2 (Cardbus) offsets
@@ -161,6 +168,7 @@ extern "C" {
 /*
  * PCI status register bits
  */
+#define	PCI_STAT_READY		0x1	/* Immediate Readiness */
 #define	PCI_STAT_INTR		0x8	/* Interrupt state */
 #define	PCI_STAT_CAP		0x10	/* Implements Capabilities */
 #define	PCI_STAT_66MHZ		0x20	/* 66 MHz capable */
@@ -228,6 +236,7 @@ extern "C" {
 #define	PCI_MASS_ATA		0x5	/* ATA Controller */
 #define	PCI_MASS_SATA		0x6	/* Serial ATA */
 #define	PCI_MASS_SAS		0x7	/* Serial Attached SCSI (SAS) Cntrlr */
+#define	PCI_MASS_NVME		0x8	/* Non-Volatile memory controller */
 #define	PCI_MASS_OTHER		0x80	/* Other Mass Storage Controller */
 
 /*
@@ -480,23 +489,23 @@ extern "C" {
 /*
  * Programming interfaces for class 0xC / subclass 0x0 (Firewire)
  */
-#define	PCI_SERIAL_FIRE_WIRE  		0x00	/* IEEE 1394 (Firewire) */
-#define	PCI_SERIAL_FIRE_1394_HCI 	0x10	/* 1394 OpenHCI Host Cntrlr */
+#define	PCI_SERIAL_FIRE_WIRE		0x00	/* IEEE 1394 (Firewire) */
+#define	PCI_SERIAL_FIRE_1394_HCI	0x10	/* 1394 OpenHCI Host Cntrlr */
 
 /*
  * Programming interfaces for class 0xC / subclass 0x3 (USB controller)
  */
-#define	PCI_SERIAL_USB_IF_UHCI 		0x00	/* UHCI Compliant */
-#define	PCI_SERIAL_USB_IF_OHCI 		0x10	/* OHCI Compliant */
-#define	PCI_SERIAL_USB_IF_EHCI 		0x20	/* EHCI Compliant */
-#define	PCI_SERIAL_USB_IF_GENERIC 	0x80	/* no specific HCD */
-#define	PCI_SERIAL_USB_IF_DEVICE 	0xFE	/* not a HCD */
+#define	PCI_SERIAL_USB_IF_UHCI		0x00	/* UHCI Compliant */
+#define	PCI_SERIAL_USB_IF_OHCI		0x10	/* OHCI Compliant */
+#define	PCI_SERIAL_USB_IF_EHCI		0x20	/* EHCI Compliant */
+#define	PCI_SERIAL_USB_IF_GENERIC	0x80	/* no specific HCD */
+#define	PCI_SERIAL_USB_IF_DEVICE	0xFE	/* not a HCD */
 
 /*
  * Programming interfaces for class 0xC / subclass 0x7 (IPMI controller)
  */
-#define	PCI_SERIAL_IPMI_IF_SMIC 	0x0	/* SMIC Interface */
-#define	PCI_SERIAL_IPMI_IF_KBD 		0x1	/* Keyboard Ctrl Style Intfc */
+#define	PCI_SERIAL_IPMI_IF_SMIC		0x0	/* SMIC Interface */
+#define	PCI_SERIAL_IPMI_IF_KBD		0x1	/* Keyboard Ctrl Style Intfc */
 #define	PCI_SERIAL_IPMI_IF_BTI		0x2	/* Block Transfer Interface */
 
 /*
@@ -514,8 +523,8 @@ extern "C" {
 /*
  * Programming interfaces for class 0xD / subclass 0x1 (Consumer IR controller)
  */
-#define	PCI_WIRELESS_IR_CONSUMER 	0x00	/* Consumer IR Controller */
-#define	PCI_WIRELESS_IR_UWB_RC 		0x10	/* UWB Radio Controller */
+#define	PCI_WIRELESS_IR_CONSUMER	0x00	/* Consumer IR Controller */
+#define	PCI_WIRELESS_IR_UWB_RC		0x10	/* UWB Radio Controller */
 
 /*
  * PCI Sub-class codes - base class 0xE (Intelligent I/O controllers)
@@ -574,6 +583,7 @@ extern "C" {
 #define	PCI_BASE_TYPE_M		0x00000006  /* type indicator mask */
 #define	PCI_BASE_PREF_M		0x00000008  /* prefetch mask */
 #define	PCI_BASE_M_ADDR_M	0xfffffff0  /* memory address mask */
+#define	PCI_BASE_M_ADDR64_M	0xfffffffffffffff0ULL /* 64bit mem addr mask */
 #define	PCI_BASE_IO_ADDR_M	0xfffffffe  /* I/O address mask */
 
 #define	PCI_BASE_ROM_ADDR_M	0xfffff800  /* ROM address mask */
@@ -919,6 +929,8 @@ typedef struct pcix_attr {
 #define	PCI_MSI_MME_SHIFT	0x4	/* Shift for MME bits */
 #define	PCI_MSI_64BIT_MASK	0x0080	/* 64bit support mask in MSI ctrl reg */
 #define	PCI_MSI_PVM_MASK	0x0100	/* PVM support mask in MSI ctrl reg */
+#define	PCI_MSI_EMD_MASK	0x0200	/* EMD Capable Mask */
+#define	PCI_MSI_EMD_ENABLE	0x0400	/* EMD Enable bit */
 
 /*
  * PCI Extended Message Signalled Interrupts (MSI-X) capability entry offsets
@@ -1233,6 +1245,13 @@ typedef struct pci_phys_spec pci_regspec_t;
  * the driver or the OBP.
  */
 #define	PCI_BUS_CONF_MAP_PROP	"pci-conf-indirect"
+
+/*
+ * PCI returns all 1s for an invalid read.
+ */
+#define	PCI_EINVAL8	0xff
+#define	PCI_EINVAL16	0xffff
+#define	PCI_EINVAL32	0xffffffff
 
 #ifdef	__cplusplus
 }

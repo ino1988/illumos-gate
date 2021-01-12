@@ -18,10 +18,15 @@
  *
  * CDDL HEADER END
  */
+
 /*
  * Copyright (c) 2010, Oracle and/or its affiliates. All rights reserved.
- * Copyright 2012 Nexenta Systems, Inc. All rights reserved.
+ * Copyright 2017 Nexenta Systems, Inc.
+ * Copyright (c) 2018, Joyent, Inc.
+ * Copyright 2017 Gary Mills
+ * Copyright (c) 2016, Chris Fraire <cfraire@me.com>.
  */
+
 #include <arpa/inet.h>
 #include <errno.h>
 #include <getopt.h>
@@ -77,18 +82,19 @@ static cmd_t	cmds[] = {
 	    "\tshow-if\t\t[[-p] -o <field>,...] [<interface>]\n"	},
 	{ "set-ifprop",	do_set_ifprop,
 	    "\tset-ifprop\t[-t] -p <prop>=<value[,...]> -m <protocol> "
-	    "<interface>" 						},
+	    "<interface>"						},
 	{ "reset-ifprop", do_reset_ifprop,
 	    "\treset-ifprop\t[-t] -p <prop> -m <protocol> <interface>"	},
 	{ "show-ifprop", do_show_ifprop,
 	    "\tshow-ifprop\t[[-c] -o <field>,...] [-p <prop>,...]\n"
-	    "\t\t\t[-m <protocol>] [interface]\n" 			},
+	    "\t\t\t[-m <protocol>] [interface]\n"			},
 
 	/* address management related sub-commands */
 	{ "create-addr", do_create_addr,
 	    "\tcreate-addr\t[-t] -T static [-d] "
 	    "-a{local|remote}=addr[/prefixlen]\n\t\t\t<addrobj>\n"
-	    "\tcreate-addr\t[-t] -T dhcp [-w <seconds> | forever] <addrobj>\n"
+	    "\tcreate-addr\t[-t] -T dhcp [-w <seconds> | forever]\n"
+	    "\t\t\t[-1] [-h <hostname>] <addrobj>\n"
 	    "\tcreate-addr\t[-t] -T addrconf [-i interface-id]\n"
 	    "\t\t\t[-p {stateful|stateless}={yes|no}] <addrobj>" },
 	{ "down-addr",	do_down_addr,	"\tdown-addr\t[-t] <addrobj>"	},
@@ -105,7 +111,7 @@ static cmd_t	cmds[] = {
 	    "\treset-addrprop\t[-t] -p <prop> <addrobj>"		},
 	{ "show-addrprop", do_show_addrprop,
 	    "\tshow-addrprop\t[[-c] -o <field>,...] [-p <prop>,...] "
-	    "<addrobj>\n" 						},
+	    "<addrobj>\n"						},
 
 	/* protocol properties related sub-commands */
 	{ "set-prop",	do_set_prop,
@@ -161,7 +167,9 @@ static const struct option addr_longopts[] = {
 	{"address",	required_argument,	0, 'a'	},
 	{"down",	no_argument,		0, 'd'	},
 	{"interface-id", required_argument,	0, 'i'	},
+	{"primary",	no_argument,		0, '1'	},
 	{"prop",	required_argument,	0, 'p'	},
+	{"reqhost", required_argument,	0, 'h'	},
 	{"temporary",	no_argument,		0, 't'	},
 	{"type",	required_argument,	0, 'T'	},
 	{"wait",	required_argument,	0, 'w'	},
@@ -329,12 +337,13 @@ ipadm_addrobj_t	ipaddr = NULL;
 
 static char *progname;
 
-static void	die(const char *, ...);
-static void	die_opterr(int, int, const char *);
+
+static void	warn(const char *, ...);
+static void	die(const char *, ...) __NORETURN;
+static void	die_opterr(int, int, const char *) __NORETURN;
 static void	warn_ipadmerr(ipadm_status_t, const char *, ...);
-static void 	ipadm_ofmt_check(ofmt_status_t, boolean_t, ofmt_handle_t);
-static void 	ipadm_check_propstr(const char *, boolean_t, const char *);
-static void 	process_misc_addrargs(int, char **, const char *, int *,
+static void	ipadm_check_propstr(const char *, boolean_t, const char *);
+static void	process_misc_addrargs(int, char **, const char *, int *,
 		    uint32_t *);
 
 static void
@@ -441,7 +450,7 @@ do_enable_if(int argc, char *argv[], const char *use)
 {
 	ipadm_status_t	status;
 	int		index;
-	uint32_t 	flags = IPADM_OPT_ACTIVE|IPADM_OPT_PERSIST;
+	uint32_t	flags = IPADM_OPT_ACTIVE|IPADM_OPT_PERSIST;
 
 	process_misc_addrargs(argc, argv, use, &index, &flags);
 	if (flags & IPADM_OPT_PERSIST)
@@ -482,7 +491,7 @@ do_disable_if(int argc, char *argv[], const char *use)
 {
 	ipadm_status_t	status;
 	int		index;
-	uint32_t 	flags = IPADM_OPT_ACTIVE|IPADM_OPT_PERSIST;
+	uint32_t	flags = IPADM_OPT_ACTIVE|IPADM_OPT_PERSIST;
 
 	process_misc_addrargs(argc, argv, use, &index, &flags);
 	if (flags & IPADM_OPT_PERSIST)
@@ -495,8 +504,7 @@ do_disable_if(int argc, char *argv[], const char *use)
 }
 
 /*
- * called in from print_prop_cb() and does the job of printing each
- * individual column in the 'ipadm show-*prop' output.
+ * Print individual columns for the show-*prop subcommands.
  */
 static void
 print_prop(show_prop_state_t *statep, uint_t flags, char *buf, size_t bufsize)
@@ -506,40 +514,22 @@ print_prop(show_prop_state_t *statep, uint_t flags, char *buf, size_t bufsize)
 	char			*propval = statep->sps_propval;
 	uint_t			proto = statep->sps_proto;
 	size_t			propsize = MAXPROPVALLEN;
-	char			*object;
 	ipadm_status_t		status;
 
 	if (statep->sps_ifprop) {
 		status = ipadm_get_ifprop(iph, ifname, prop_name, propval,
 		    &propsize, proto, flags);
-		object = ifname;
 	} else if (statep->sps_modprop) {
 		status = ipadm_get_prop(iph, prop_name, propval, &propsize,
 		    proto, flags);
-		object = ipadm_proto2str(proto);
 	} else {
 		status = ipadm_get_addrprop(iph, prop_name, propval, &propsize,
 		    statep->sps_aobjname, flags);
-		object = statep->sps_aobjname;
 	}
 
 	if (status != IPADM_SUCCESS) {
-		if (status == IPADM_PROP_UNKNOWN ||
-		    status == IPADM_INVALID_ARG) {
-			warn_ipadmerr(status, "cannot get property '%s' for "
-			    "'%s'", prop_name, object);
-		} else if (status == IPADM_NOTSUP) {
-			warn_ipadmerr(status, "'%s'", object);
-		} else if (status == IPADM_NOTFOUND) {
-			if (flags & IPADM_OPT_PERSIST) {
-				propval[0] = '\0';
-				goto cont;
-			} else {
-				warn_ipadmerr(status, "no such object '%s'",
-				    object);
-			}
-		} else if (status == IPADM_ENXIO) {
-			/* the interface is probably disabled */
+		if ((status == IPADM_NOTFOUND && (flags & IPADM_OPT_PERSIST)) ||
+		    status == IPADM_ENXIO) {
 			propval[0] = '\0';
 			goto cont;
 		}
@@ -553,8 +543,7 @@ cont:
 }
 
 /*
- * callback function which displays output for set-prop, set-ifprop and
- * set-addrprop subcommands.
+ * Callback function for show-*prop subcommands.
  */
 static boolean_t
 print_prop_cb(ofmt_arg_t *ofarg, char *buf, size_t bufsize)
@@ -632,18 +621,18 @@ show_property(void *arg, const char *pname, uint_t proto)
 
 /*
  * Properties to be displayed is in `statep->sps_proplist'. If it is NULL,
- * for all the properties for the specified object, relavant information, will
- * be displayed. Otherwise, for the selected property set, display relevant
+ * for all the properties for the specified object, display relevant
+ * information. Otherwise, for the selected property set, display relevant
  * information
  */
 static void
 show_properties(void *arg, int prop_class)
 {
 	show_prop_state_t	*statep = arg;
-	nvlist_t 		*nvl = statep->sps_proplist;
+	nvlist_t		*nvl = statep->sps_proplist;
 	uint_t			proto = statep->sps_proto;
 	nvpair_t		*curr_nvp;
-	char 			*buf, *name;
+	char			*buf, *name;
 	ipadm_status_t		status;
 
 	/* allocate sufficient buffer to hold a property value */
@@ -676,10 +665,10 @@ show_properties(void *arg, int prop_class)
 static void
 do_show_ifprop(int argc, char **argv, const char *use)
 {
-	int 		option;
-	nvlist_t 	*proplist = NULL;
+	int		option;
+	nvlist_t	*proplist = NULL;
 	char		*fields_str = NULL;
-	char 		*ifname;
+	char		*ifname;
 	ofmt_handle_t	ofmt;
 	ofmt_status_t	oferr;
 	uint_t		ofmtflags = 0;
@@ -690,6 +679,7 @@ do_show_ifprop(int argc, char **argv, const char *use)
 	ipadm_status_t	status;
 	show_prop_state_t state;
 
+	protostr = "ip";
 	opterr = 0;
 	bzero(&state, sizeof (state));
 	state.sps_propval = NULL;
@@ -729,8 +719,6 @@ do_show_ifprop(int argc, char **argv, const char *use)
 	else
 		ifname = NULL;
 
-	if (!m_arg)
-		protostr = "ip";
 	if ((proto = ipadm_str2proto(protostr)) == MOD_PROTO_NONE)
 		die("invalid protocol '%s' specified", protostr);
 
@@ -740,7 +728,7 @@ do_show_ifprop(int argc, char **argv, const char *use)
 	if (state.sps_parsable)
 		ofmtflags |= OFMT_PARSABLE;
 	oferr = ofmt_open(fields_str, intfprop_fields, ofmtflags, 0, &ofmt);
-	ipadm_ofmt_check(oferr, state.sps_parsable, ofmt);
+	ofmt_check(oferr, state.sps_parsable, ofmt, die, warn);
 	state.sps_ofmt = ofmt;
 
 	/* retrieve interface(s) and print the properties */
@@ -774,15 +762,17 @@ do_show_ifprop(int argc, char **argv, const char *use)
 static void
 set_ifprop(int argc, char **argv, boolean_t reset, const char *use)
 {
-	int 			option;
-	ipadm_status_t 		status = IPADM_SUCCESS;
-	boolean_t 		p_arg = _B_FALSE;
+	int			option;
+	ipadm_status_t		status = IPADM_SUCCESS;
+	boolean_t		p_arg = _B_FALSE;
 	boolean_t		m_arg = _B_FALSE;
-	char 			*ifname, *nv, *protostr;
+	char			*ifname, *nv, *protostr;
 	char			*prop_name, *prop_val;
 	uint_t			flags = IPADM_OPT_PERSIST;
 	uint_t			proto;
 
+	nv = NULL;
+	protostr = NULL;
 	opterr = 0;
 	while ((option = getopt_long(argc, argv, ":m:p:t",
 	    set_ifprop_longopts, NULL)) != -1) {
@@ -829,7 +819,6 @@ set_ifprop(int argc, char **argv, boolean_t reset, const char *use)
 	status = ipadm_set_ifprop(iph, ifname, prop_name, prop_val, proto,
 	    flags);
 
-done:
 	if (status != IPADM_SUCCESS) {
 		if (reset)
 			die("reset-ifprop: %s: %s",
@@ -859,11 +848,11 @@ do_reset_ifprop(int argc, char **argv, const char *use)
 static void
 do_show_prop(int argc, char **argv, const char *use)
 {
-	char 			option;
-	nvlist_t 		*proplist = NULL;
+	char			option;
+	nvlist_t		*proplist = NULL;
 	char			*fields_str = NULL;
-	char 			*protostr;
-	show_prop_state_t 	state;
+	char			*protostr;
+	show_prop_state_t	state;
 	ofmt_handle_t		ofmt;
 	ofmt_status_t		oferr;
 	uint_t			ofmtflags = 0;
@@ -919,7 +908,7 @@ do_show_prop(int argc, char **argv, const char *use)
 	else
 		ofmtflags |= OFMT_WRAP;
 	oferr = ofmt_open(fields_str, modprop_fields, ofmtflags, 0, &ofmt);
-	ipadm_ofmt_check(oferr, state.sps_parsable, ofmt);
+	ofmt_check(oferr, state.sps_parsable, ofmt, die, warn);
 	state.sps_ofmt = ofmt;
 
 	/* handles all the errors */
@@ -962,13 +951,14 @@ parse_modifiers(const char *pstr, uint_t *flags, const char *use)
 static void
 set_prop(int argc, char **argv, boolean_t reset, const char *use)
 {
-	int 			option;
-	ipadm_status_t 		status = IPADM_SUCCESS;
-	char 			*protostr, *nv, *prop_name, *prop_val;
-	boolean_t 		p_arg = _B_FALSE;
-	uint_t 			proto;
+	int			option;
+	ipadm_status_t		status = IPADM_SUCCESS;
+	char			*protostr, *nv, *prop_name, *prop_val;
+	boolean_t		p_arg = _B_FALSE;
+	uint_t			proto;
 	uint_t			flags = IPADM_OPT_PERSIST;
 
+	nv = NULL;
 	opterr = 0;
 	while ((option = getopt_long(argc, argv, ":p:t", set_prop_longopts,
 	    NULL)) != -1) {
@@ -1009,7 +999,7 @@ set_prop(int argc, char **argv, boolean_t reset, const char *use)
 	else
 		flags |= IPADM_OPT_ACTIVE;
 	status = ipadm_set_prop(iph, prop_name, prop_val, proto, flags);
-done:
+
 	if (status != IPADM_SUCCESS) {
 		if (reset)
 			die("reset-prop: %s: %s",
@@ -1181,9 +1171,9 @@ process_addrconf_addrargs(const char *use, char *addrarg)
 		"stateful",
 		NULL,
 	};
-	boolean_t	stateless;
+	boolean_t	stateless = _B_FALSE;
 	boolean_t	stateless_arg = _B_FALSE;
-	boolean_t	stateful;
+	boolean_t	stateful = _B_FALSE;
 	boolean_t	stateful_arg = _B_FALSE;
 	ipadm_status_t	status;
 
@@ -1258,14 +1248,19 @@ do_create_addr(int argc, char *argv[], const char *use)
 	char		*addrconf_arg = NULL;
 	char		*interface_id = NULL;
 	char		*wait = NULL;
+	char		*reqhost = NULL;
 	boolean_t	s_opt = _B_FALSE;	/* static addr options */
 	boolean_t	auto_opt = _B_FALSE;	/* Addrconf options */
 	boolean_t	dhcp_opt = _B_FALSE;	/* dhcp options */
+	boolean_t	primary_opt = _B_FALSE;	/* dhcp primary option */
 
 	opterr = 0;
-	while ((option = getopt_long(argc, argv, ":T:a:di:p:w:t",
+	while ((option = getopt_long(argc, argv, ":1T:a:dh:i:p:w:t",
 	    addr_longopts, NULL)) != -1) {
 		switch (option) {
+		case '1':
+			primary_opt = _B_TRUE;
+			break;
 		case 'T':
 			atype = optarg;
 			break;
@@ -1276,6 +1271,9 @@ do_create_addr(int argc, char *argv[], const char *use)
 		case 'd':
 			flags &= ~IPADM_OPT_UP;
 			s_opt = _B_TRUE;
+			break;
+		case 'h':
+			reqhost = optarg;
 			break;
 		case 'i':
 			interface_id = optarg;
@@ -1308,7 +1306,8 @@ do_create_addr(int argc, char *argv[], const char *use)
 	 * Allocate and initialize the addrobj based on the address type.
 	 */
 	if (strcmp(atype, "static") == 0) {
-		if (static_arg == NULL || auto_opt || dhcp_opt) {
+		if (static_arg == NULL || auto_opt || dhcp_opt ||
+		    reqhost != NULL || primary_opt) {
 			die("Invalid arguments for type %s\nusage: %s",
 			    atype, use);
 		}
@@ -1345,13 +1344,27 @@ do_create_addr(int argc, char *argv[], const char *use)
 				    ipadm_status2str(status));
 			}
 		}
+		if (primary_opt) {
+			status = ipadm_set_primary(ipaddr, _B_TRUE);
+			if (status != IPADM_SUCCESS) {
+				die("Error in setting primary flag: %s",
+				    ipadm_status2str(status));
+			}
+		}
+		if (reqhost != NULL) {
+			status = ipadm_set_reqhost(ipaddr, reqhost);
+			if (status != IPADM_SUCCESS) {
+				die("Error in setting reqhost: %s",
+				    ipadm_status2str(status));
+			}
+		}
 	} else if (strcmp(atype, "addrconf") == 0) {
-		if (dhcp_opt || s_opt) {
+		if (dhcp_opt || s_opt || reqhost != NULL || primary_opt) {
 			die("Invalid arguments for type %s\nusage: %s",
 			    atype, use);
 		}
 
-		/* Initialize the addrobj for dhcp addresses. */
+		/* Initialize the addrobj for ipv6-addrconf addresses. */
 		status = ipadm_create_addrobj(IPADM_ADDR_IPV6_ADDRCONF,
 		    argv[optind], &ipaddr);
 		if (status != IPADM_SUCCESS) {
@@ -1412,7 +1425,7 @@ static void
 do_delete_addr(int argc, char *argv[], const char *use)
 {
 	ipadm_status_t	status;
-	uint32_t 	flags = IPADM_OPT_ACTIVE|IPADM_OPT_PERSIST;
+	uint32_t	flags = IPADM_OPT_ACTIVE|IPADM_OPT_PERSIST;
 	int		option;
 
 	opterr = 0;
@@ -1445,7 +1458,7 @@ do_enable_addr(int argc, char *argv[], const char *use)
 {
 	ipadm_status_t	status;
 	int		index;
-	uint32_t 	flags = IPADM_OPT_ACTIVE|IPADM_OPT_PERSIST;
+	uint32_t	flags = IPADM_OPT_ACTIVE|IPADM_OPT_PERSIST;
 
 	process_misc_addrargs(argc, argv, use, &index, &flags);
 	if (flags & IPADM_OPT_PERSIST)
@@ -1464,7 +1477,7 @@ do_up_addr(int argc, char *argv[], const char *use)
 {
 	ipadm_status_t	status;
 	int		index;
-	uint32_t 	flags = IPADM_OPT_ACTIVE|IPADM_OPT_PERSIST;
+	uint32_t	flags = IPADM_OPT_ACTIVE|IPADM_OPT_PERSIST;
 
 	process_misc_addrargs(argc, argv, use, &index, &flags);
 	status = ipadm_up_addr(iph, argv[index], flags);
@@ -1482,7 +1495,7 @@ do_disable_addr(int argc, char *argv[], const char *use)
 {
 	ipadm_status_t	status;
 	int		index;
-	uint32_t 	flags = IPADM_OPT_ACTIVE|IPADM_OPT_PERSIST;
+	uint32_t	flags = IPADM_OPT_ACTIVE|IPADM_OPT_PERSIST;
 
 	process_misc_addrargs(argc, argv, use, &index, &flags);
 	if (flags & IPADM_OPT_PERSIST)
@@ -1503,7 +1516,7 @@ do_down_addr(int argc, char *argv[], const char *use)
 {
 	ipadm_status_t	status;
 	int		index;
-	uint32_t 	flags = IPADM_OPT_ACTIVE|IPADM_OPT_PERSIST;
+	uint32_t	flags = IPADM_OPT_ACTIVE|IPADM_OPT_PERSIST;
 
 	process_misc_addrargs(argc, argv, use, &index, &flags);
 	status = ipadm_down_addr(iph, argv[index], flags);
@@ -1623,8 +1636,7 @@ is_from_gz(const char *lifname)
 
 	if (if_info->ifi_cflags & IFIF_L3PROTECT)
 		ret = _B_TRUE;
-	if (if_info)
-		ipadm_free_if_info(if_info);
+	ipadm_free_if_info(if_info);
 	return (ret);
 }
 
@@ -1841,7 +1853,7 @@ do_show_addr(int argc, char *argv[], const char *use)
 		fields_str = def_fields_str;
 	oferr = ofmt_open(fields_str, show_addr_fields, ofmtflags, 0, &ofmt);
 
-	ipadm_ofmt_check(oferr, state.sa_parsable, ofmt);
+	ofmt_check(oferr, state.sa_parsable, ofmt, die, warn);
 	state.sa_ofmt = ofmt;
 
 	status = ipadm_addr_info(iph, ifname, &ainfo, 0, LIFC_DEFAULT);
@@ -1976,7 +1988,7 @@ do_show_if(int argc, char *argv[], const char *use)
 	if (state.si_parsable)
 		ofmtflags |= OFMT_PARSABLE;
 	oferr = ofmt_open(fields_str, show_if_fields, ofmtflags, 0, &ofmt);
-	ipadm_ofmt_check(oferr, state.si_parsable, ofmt);
+	ofmt_check(oferr, state.si_parsable, ofmt, die, warn);
 	state.si_ofmt = ofmt;
 	bzero(&sargs, sizeof (sargs));
 	sargs.si_state = &state;
@@ -2003,13 +2015,14 @@ do_show_if(int argc, char *argv[], const char *use)
 static void
 set_addrprop(int argc, char **argv, boolean_t reset, const char *use)
 {
-	int 			option;
-	ipadm_status_t 		status = IPADM_SUCCESS;
-	boolean_t 		p_arg = _B_FALSE;
-	char 			*nv, *aobjname;
+	int			option;
+	ipadm_status_t		status = IPADM_SUCCESS;
+	boolean_t		p_arg = _B_FALSE;
+	char			*nv, *aobjname;
 	char			*prop_name, *prop_val;
 	uint_t			flags = IPADM_OPT_ACTIVE|IPADM_OPT_PERSIST;
 
+	nv = NULL;
 	opterr = 0;
 	while ((option = getopt_long(argc, argv, ":i:p:t", set_ifprop_longopts,
 	    NULL)) != -1) {
@@ -2076,16 +2089,20 @@ do_reset_addrprop(int argc, char **argv, const char *use)
 static void
 do_show_addrprop(int argc, char *argv[], const char *use)
 {
-	int 			option;
-	nvlist_t 		*proplist = NULL;
+	int			option;
+	nvlist_t		*proplist = NULL;
 	char			*fields_str = NULL;
-	show_prop_state_t 	state;
+	show_prop_state_t	state;
 	ofmt_handle_t		ofmt;
 	ofmt_status_t		oferr;
 	uint_t			ofmtflags = 0;
-	char			*aobjname;
+	char			*aobjname = NULL;
 	char			*ifname = NULL;
 	char			*cp;
+	ipadm_addr_info_t	*ainfop = NULL;
+	ipadm_addr_info_t	*ptr;
+	ipadm_status_t		status;
+	boolean_t		found = _B_FALSE;
 
 	opterr = 0;
 	bzero(&state, sizeof (state));
@@ -2100,7 +2117,7 @@ do_show_addrprop(int argc, char *argv[], const char *use)
 		case 'p':
 			if (ipadm_str2nvlist(optarg, &proplist,
 			    IPADM_NORVAL) != 0)
-				die("invalid interface properties specified");
+				die("invalid addrobj properties specified");
 			break;
 		case 'c':
 			state.sps_parsable = _B_TRUE;
@@ -2117,84 +2134,62 @@ do_show_addrprop(int argc, char *argv[], const char *use)
 		aobjname = argv[optind];
 		cp = strchr(aobjname, '/');
 		if (cp == NULL)
-			die("Invalid address object name provided");
+			die("invalid addrobj name provided");
 		if (*(cp + 1) == '\0') {
 			ifname = aobjname;
 			*cp = '\0';
 			aobjname = NULL;
 		}
-	} else if (optind == argc) {
-		aobjname = NULL;
-	} else {
+	} else if (optind != argc) {
 		die("Usage: %s", use);
 	}
 	state.sps_proplist = proplist;
 	if (state.sps_parsable)
 		ofmtflags |= OFMT_PARSABLE;
 	oferr = ofmt_open(fields_str, addrprop_fields, ofmtflags, 0, &ofmt);
-	ipadm_ofmt_check(oferr, state.sps_parsable, ofmt);
+	ofmt_check(oferr, state.sps_parsable, ofmt, die, warn);
 	state.sps_ofmt = ofmt;
 
-	if (aobjname != NULL) {
-		(void) strlcpy(state.sps_aobjname, aobjname,
+	status = ipadm_addr_info(iph, ifname, &ainfop, 0, LIFC_DEFAULT);
+	/* Return without printing any error, if no addresses were found */
+	if (status == IPADM_NOTFOUND)
+		return;
+	if (status != IPADM_SUCCESS)
+		die("error retrieving address: %s", ipadm_status2str(status));
+
+	for (ptr = ainfop; ptr != NULL; ptr = IA_NEXT(ptr)) {
+		char	*taobjname = ptr->ia_aobjname;
+
+		if (taobjname[0] == '\0')
+			continue;
+		if (aobjname != NULL) {
+			if (strcmp(aobjname, taobjname) == 0)
+				found = _B_TRUE;
+			else
+				continue;
+		}
+		if (ptr->ia_atype == IPADM_ADDR_IPV6_ADDRCONF) {
+			if (found)
+				break;
+			else
+				continue;
+		}
+		(void) strlcpy(state.sps_aobjname, taobjname,
 		    sizeof (state.sps_aobjname));
 		show_properties(&state, IPADMPROP_CLASS_ADDR);
-	} else {
-		ipadm_addr_info_t	*ainfop = NULL;
-		ipadm_addr_info_t	*ptr;
-		ipadm_status_t		status;
-
-		status = ipadm_addr_info(iph, ifname, &ainfop, 0, LIFC_DEFAULT);
-		/*
-		 * Return without printing any error, if no addresses were
-		 * found.
-		 */
-		if (status == IPADM_NOTFOUND)
-			return;
-		if (status != IPADM_SUCCESS) {
-			die("Error retrieving address: %s",
-			    ipadm_status2str(status));
-		}
-		for (ptr = ainfop; ptr; ptr = IA_NEXT(ptr)) {
-			aobjname = ptr->ia_aobjname;
-			if (aobjname[0] == '\0' ||
-			    ptr->ia_atype == IPADM_ADDR_IPV6_ADDRCONF) {
-				continue;
-			}
-			(void) strlcpy(state.sps_aobjname, aobjname,
-			    sizeof (state.sps_aobjname));
-			show_properties(&state, IPADMPROP_CLASS_ADDR);
-		}
-		ipadm_free_addr_info(ainfop);
+		if (found)
+			break;
 	}
+	ipadm_free_addr_info(ainfop);
+
+	if (aobjname != NULL && !found)
+		die("addrobj not found: %s", aobjname);
+
 	nvlist_free(proplist);
 	ofmt_close(ofmt);
 	if (state.sps_retstatus != IPADM_SUCCESS) {
 		ipadm_close(iph);
 		exit(EXIT_FAILURE);
-	}
-}
-
-static void
-ipadm_ofmt_check(ofmt_status_t oferr, boolean_t parsable,
-    ofmt_handle_t ofmt)
-{
-	char buf[OFMT_BUFSIZE];
-
-	if (oferr == OFMT_SUCCESS)
-		return;
-	(void) ofmt_strerror(ofmt, oferr, buf, sizeof (buf));
-	/*
-	 * All errors are considered fatal in parsable mode.
-	 * NOMEM errors are always fatal, regardless of mode.
-	 * For other errors, we print diagnostics in human-readable
-	 * mode and processs what we can.
-	 */
-	if (parsable || oferr == OFMT_ENOFIELDS) {
-		ofmt_close(ofmt);
-		die(buf);
-	} else {
-		warn(buf);
 	}
 }
 

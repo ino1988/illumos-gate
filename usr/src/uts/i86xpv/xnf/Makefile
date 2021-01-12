@@ -25,13 +25,7 @@
 # Copyright 2007 Sun Microsystems, Inc.  All rights reserved.
 # Use is subject to license terms.
 #
-# ident	"%Z%%M%	%I%	%E% SMI"
-#
-#	This makefile drives the production of the xve
-#	network driver kernel module.
-#
-#	i86xpv architecture dependent
-#
+# Copyright (c) 2018, Joyent, Inc.
 
 #
 #	Path to the base of the uts directory tree (usually /usr/src/uts).
@@ -43,7 +37,6 @@ UTSBASE	= ../..
 #
 MODULE		= xnf
 OBJECTS		= $(XNF_OBJS:%=$(OBJS_DIR)/%)
-LINTS		= $(XNF_OBJS:%.o=$(LINTS_DIR)/%.ln)
 ROOTMODULE	= $(ROOT_PSM_DRV_DIR)/$(MODULE)
 
 #
@@ -55,7 +48,6 @@ include $(UTSBASE)/i86xpv/Makefile.i86xpv
 #	Define targets
 #
 ALL_TARGET	= $(BINARY)
-LINT_TARGET	= $(MODULE).lint
 INSTALL_TARGET	= $(BINARY) $(ROOTMODULE)
 
 #
@@ -67,11 +59,10 @@ LDFLAGS		+= -dy -N misc/mac -N drv/ip
 # use Solaris specific code in xen public header files
 #
 CFLAGS		+= -D_SOLARIS
-LINTFLAGS	+= -D_SOLARIS
 
-LINTTAGS	+= -erroff=E_ASSIGN_NARROW_CONV
-LINTTAGS	+= -erroff=E_PTRDIFF_OVERFLOW
-LINTTAGS	+= -erroff=E_BAD_PTR_CAST_ALIGN
+
+# needs work
+SMATCH=off
 
 #
 #	Default build targets.
@@ -85,12 +76,6 @@ all:		$(ALL_DEPS)
 clean:		$(CLEAN_DEPS)
 
 clobber:	$(CLOBBER_DEPS)
-
-lint:		$(LINT_DEPS)
-
-modlintlib:	$(MODLINTLIB_DEPS)
-
-clean.lint:	$(CLEAN_LINT_DEPS)
 
 install:	$(INSTALL_DEPS)
 

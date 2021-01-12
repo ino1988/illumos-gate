@@ -21,6 +21,7 @@
 #
 # Copyright (c) 1998, 2010, Oracle and/or its affiliates. All rights reserved.
 #
+# Copyright (c) 2018, Joyent, Inc.
 
 PROG= savecore
 SRCS= ../savecore.c ../../../uts/common/os/compress.c
@@ -28,12 +29,14 @@ OBJS= savecore.o compress.o
 
 include ../../Makefile.cmd
 
-C99MODE = $(C99_ENABLE)
+CSTD = $(CSTD_GNU99)
 
 CFLAGS += $(CCVERBOSE)
 CFLAGS64 += $(CCVERBOSE)
-CERRWARN += -_gcc=-Wno-uninitialized
 CPPFLAGS += -D_LARGEFILE64_SOURCE=1 -DBZ_NO_STDIO -I$(SRC)/uts/common
+
+# not linted
+SMATCH=off
 
 #
 # savecore is compiled with bits from $(SRC)/common/bzip2 and some function
@@ -41,7 +44,7 @@ CPPFLAGS += -D_LARGEFILE64_SOURCE=1 -DBZ_NO_STDIO -I$(SRC)/uts/common
 # savecore.c it will compile, but trying to call that function
 # will jump to 0.  So we use -ztext to avoid that.
 #
-LDFLAGS += -ztext
+LDFLAGS += $(ZTEXT)
 
 BZIP2OBJS =	bz2blocksort.o	\
 		bz2compress.o	\
@@ -61,23 +64,6 @@ $(PROG): $(OBJS) $(BZIP2OBJS)
 
 clean:
 	$(RM) $(OBJS) $(BZIP2OBJS)
-
-lint := CPPFLAGS += -I$(SRC)/common
-
-#
-# Linting the usr/src/common/bzip2 source produces reams of complaints.
-# So we only lint regular SRCS, but we need to excuse two complaints
-# related to bz_internal_error.
-#
-
-lint := BZ2LINTCOPOUTS = -erroff=E_NAME_USED_NOT_DEF2
-lint := BZ2LINTCOPOUTS += -erroff=E_NAME_DEF_NOT_USED2
-
-lint := LINTFLAGS += $(BZ2LINTCOPOUTS)
-lint := LINTFLAGS64 += $(BZ2LINTCOPOUTS)
-
-lint:	$(LINTSRCS)
-	$(LINT.c) $(SRCS) $(LDLIBS)
 
 include ../../Makefile.targ
 

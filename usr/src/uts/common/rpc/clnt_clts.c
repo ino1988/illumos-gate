@@ -18,6 +18,11 @@
  *
  * CDDL HEADER END
  */
+
+/*
+ * Copyright 2015 Nexenta Systems, Inc.  All rights reserved.
+ */
+
 /*
  * Copyright 2009 Sun Microsystems, Inc.  All rights reserved.
  * Use is subject to license terms.
@@ -304,8 +309,8 @@ clnt_clts_stats_fini(zoneid_t zoneid, struct rpc_clts_client **statsp)
 /* ARGSUSED */
 int
 clnt_clts_kcreate(struct knetconfig *config, struct netbuf *addr,
-	rpcprog_t pgm, rpcvers_t vers, int retrys, struct cred *cred,
-	CLIENT **cl)
+    rpcprog_t pgm, rpcvers_t vers, int retrys, struct cred *cred,
+    CLIENT **cl)
 {
 	CLIENT *h;
 	struct cku_private *p;
@@ -342,9 +347,11 @@ clnt_clts_kcreate(struct knetconfig *config, struct netbuf *addr,
 
 	/* pre-serialize call message header */
 	if (!xdr_callhdr(&p->cku_outxdr, &call_msg)) {
+		XDR_DESTROY(&p->cku_outxdr);
 		error = EINVAL;		/* XXX */
 		goto bad;
 	}
+	XDR_DESTROY(&p->cku_outxdr);
 
 	p->cku_config.knc_rdev = config->knc_rdev;
 	p->cku_config.knc_semantics = config->knc_semantics;
@@ -411,8 +418,8 @@ clnt_clts_kinit(CLIENT *h, struct netbuf *addr, int retrys, cred_t *cred)
  */
 static int
 clnt_clts_ksettimers(CLIENT *h, struct rpc_timers *t, struct rpc_timers *all,
-	int minimum, void (*feedback)(int, int, caddr_t), caddr_t arg,
-	uint32_t xid)
+    int minimum, void (*feedback)(int, int, caddr_t), caddr_t arg,
+    uint32_t xid)
 {
 	/* LINTED pointer alignment */
 	struct cku_private *p = htop(h);
@@ -453,8 +460,8 @@ clnt_clts_ksettimers(CLIENT *h, struct rpc_timers *t, struct rpc_timers *all,
  */
 enum clnt_stat
 clnt_clts_kcallit_addr(CLIENT *h, rpcproc_t procnum, xdrproc_t xdr_args,
-	caddr_t argsp, xdrproc_t xdr_results, caddr_t resultsp,
-	struct timeval wait, struct netbuf *sin)
+    caddr_t argsp, xdrproc_t xdr_results, caddr_t resultsp,
+    struct timeval wait, struct netbuf *sin)
 {
 	/* LINTED pointer alignment */
 	struct cku_private *p = htop(h);
@@ -528,6 +535,7 @@ call_again:
 			if ((!XDR_PUTINT32(xdrs, (int32_t *)&procnum)) ||
 			    (!AUTH_MARSHALL(h->cl_auth, xdrs, p->cku_cred)) ||
 			    (!(*xdr_args)(xdrs, argsp))) {
+				XDR_DESTROY(xdrs);
 				freemsg(mp);
 				p->cku_err.re_status = RPC_CANTENCODEARGS;
 				p->cku_err.re_errno = EIO;
@@ -544,12 +552,15 @@ call_again:
 			/* Serialize the procedure number and the arguments. */
 			if (!AUTH_WRAP(h->cl_auth, (caddr_t)p->cku_rpchdr,
 			    CKU_HDRSIZE+4, xdrs, xdr_args, argsp)) {
+				XDR_DESTROY(xdrs);
 				freemsg(mp);
 				p->cku_err.re_status = RPC_CANTENCODEARGS;
 				p->cku_err.re_errno = EIO;
 				goto done;
 			}
 		}
+
+		XDR_DESTROY(xdrs);
 	} else
 		mp = mpdup;
 
@@ -780,6 +791,7 @@ tryread:
 		p->cku_err.re_status = RPC_CANTDECODERES;
 		p->cku_err.re_errno = EIO;
 		(void) xdr_rpc_free_verifier(xdrs, &reply_msg);
+		XDR_DESTROY(xdrs);
 		goto done1;
 	}
 
@@ -796,6 +808,7 @@ tryread:
 			p->cku_err.re_why = AUTH_INVALIDRESP;
 			RCSTAT_INCR(p->cku_stats, rcbadverfs);
 			(void) xdr_rpc_free_verifier(xdrs, &reply_msg);
+			XDR_DESTROY(xdrs);
 			goto tryread;
 		}
 		if (!AUTH_UNWRAP(h->cl_auth, xdrs, xdr_results, resultsp)) {
@@ -803,6 +816,7 @@ tryread:
 			p->cku_err.re_errno = EIO;
 		}
 		(void) xdr_rpc_free_verifier(xdrs, &reply_msg);
+		XDR_DESTROY(xdrs);
 		goto done1;
 	}
 	/* set errno in case we can't recover */
@@ -820,11 +834,13 @@ tryread:
 	 */
 	if (re_status == RPC_PROCUNAVAIL && p->cku_bcast) {
 		(void) xdr_rpc_free_verifier(xdrs, &reply_msg);
+		XDR_DESTROY(xdrs);
 		goto tryread;
 	}
 	if (re_status == RPC_AUTHERROR) {
 
 		(void) xdr_rpc_free_verifier(xdrs, &reply_msg);
+		XDR_DESTROY(xdrs);
 		call_table_remove(call);
 		if (call->call_reply != NULL) {
 			freemsg(call->call_reply);
@@ -914,6 +930,7 @@ tryread:
 	}
 
 	(void) xdr_rpc_free_verifier(xdrs, &reply_msg);
+	XDR_DESTROY(xdrs);
 
 done1:
 	call_table_remove(call);
@@ -987,8 +1004,8 @@ done:
 
 static enum clnt_stat
 clnt_clts_kcallit(CLIENT *h, rpcproc_t procnum, xdrproc_t xdr_args,
-	caddr_t argsp, xdrproc_t xdr_results, caddr_t resultsp,
-	struct timeval wait)
+    caddr_t argsp, xdrproc_t xdr_results, caddr_t resultsp,
+    struct timeval wait)
 {
 	return (clnt_clts_kcallit_addr(h, procnum, xdr_args, argsp,
 	    xdr_results, resultsp, wait, NULL));
@@ -1006,16 +1023,13 @@ clnt_clts_kerror(CLIENT *h, struct rpc_err *err)
 	*err = p->cku_err;
 }
 
+/*ARGSUSED*/
 static bool_t
 clnt_clts_kfreeres(CLIENT *h, xdrproc_t xdr_res, caddr_t res_ptr)
 {
-	/* LINTED pointer alignment */
-	struct cku_private *p = htop(h);
-	XDR *xdrs;
+	xdr_free(xdr_res, res_ptr);
 
-	xdrs = &(p->cku_outxdr);
-	xdrs->x_op = XDR_FREE;
-	return ((*xdr_res)(xdrs, res_ptr));
+	return (TRUE);
 }
 
 /*ARGSUSED*/
@@ -1770,7 +1784,7 @@ endpnt_reap_dispatch(void *a)
 	 * endpoint.
 	 */
 	if (taskq_dispatch(endpnt_taskq, (task_func_t *)endpnt_reap, etp,
-	    TQ_NOSLEEP) == NULL)
+	    TQ_NOSLEEP) == TASKQID_INVALID)
 		return;
 	mutex_enter(&etp->e_ilock);
 	etp->e_async_count++;
@@ -1991,7 +2005,7 @@ endpnt_repossess(void *a)
 	 */
 	if (endpnt_taskq != NULL)
 		(void) taskq_dispatch(endpnt_taskq,
-		    (task_func_t *)endpnt_reclaim, (void *)ALL_ZONES,
+		    (task_func_t *)(uintptr_t)endpnt_reclaim, (void *)ALL_ZONES,
 		    TQ_NOSLEEP);
 }
 

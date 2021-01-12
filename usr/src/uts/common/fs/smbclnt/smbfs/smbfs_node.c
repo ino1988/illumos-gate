@@ -35,11 +35,14 @@
 /*
  * Copyright 2009 Sun Microsystems, Inc.  All rights reserved.
  * Use is subject to license terms.
+ *
+ * Copyright 2017 Nexenta Systems, Inc.  All rights reserved.
  */
 
 #include <sys/param.h>
 #include <sys/systm.h>
 #include <sys/cred.h>
+#include <sys/errno.h>
 #include <sys/time.h>
 #include <sys/vfs.h>
 #include <sys/vnode.h>
@@ -200,11 +203,6 @@ smbfs_nget(vnode_t *dvp, const char *name, int nmlen,
 
 	return (0);
 }
-
-/*
- * smbfs_attrcache_enter, smbfs_attrcache_lookup replaced by
- * code more closely resembling NFS.  See smbfs_client.c
- */
 
 /*
  * Update the local notion of the mtime of some directory.

@@ -24,7 +24,7 @@
  * Use is subject to license terms.
  */
 /*
- * Copyright 2011 Joyent, Inc.  All rights reserved.
+ * Copyright 2017 Joyent, Inc.
  */
 
 #include <sys/dtrace_impl.h>
@@ -300,7 +300,7 @@ leaf:
 				ASSERT(depth == 0);
 
 				while (depth < pcstack_limit)
-					pcstack[depth++] = NULL;
+					pcstack[depth++] = 0;
 				return;
 			}
 
@@ -343,7 +343,7 @@ leaf:
 			}
 
 			while (depth < pcstack_limit)
-				pcstack[depth++] = NULL;
+				pcstack[depth++] = 0;
 			return;
 		}
 
@@ -505,7 +505,7 @@ dtrace_getupcstack(uint64_t *pcstack, int pcstack_limit)
 
 zero:
 	while (pcstack_limit-- > 0)
-		*pcstack++ = NULL;
+		*pcstack++ = 0;
 }
 
 int
@@ -534,7 +534,7 @@ dtrace_getustackdepth(void)
 	 * beyond that NULL return address.
 	 */
 	if (DTRACE_CPUFLAG_ISSET(CPU_DTRACE_ENTRY) &&
-	    (rp->r_o7 != NULL || n != 1))
+	    (rp->r_o7 != 0 || n != 1))
 		n++;
 
 	return (n);
@@ -637,7 +637,7 @@ dtrace_getufpstack(uint64_t *pcstack, uint64_t *fpstack, int pcstack_limit)
 
 zero:
 	while (pcstack_limit-- > 0)
-		*pcstack++ = NULL;
+		*pcstack++ = 0;
 }
 
 uint64_t
@@ -938,6 +938,14 @@ got_fp:
 	}
 
 	return (value);
+}
+
+/* ARGSUSED */
+void
+dtrace_setreg(struct regs *rp, uint_t reg, ulong_t val)
+{
+	/* Not supported at this time */
+	DTRACE_CPUFLAG_SET(CPU_DTRACE_ILLOP);
 }
 
 /*ARGSUSED*/

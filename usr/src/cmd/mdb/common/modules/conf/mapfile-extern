@@ -1,6 +1,6 @@
 #
 # Copyright (c) 2008, 2010, Oracle and/or its affiliates. All rights reserved.
-# Copyright (c) 2013 by Delphix. All rights reserved.
+# Copyright (c) 2013, 2015 by Delphix. All rights reserved.
 #
 # CDDL HEADER START
 #
@@ -67,6 +67,7 @@ SYMBOL_SCOPE {
 		mdb_ctf_module_lookup		{ FLAGS = EXTERN };
 		mdb_ctf_offsetof		{ FLAGS = EXTERN };
 		mdb_ctf_offsetof_by_name	{ FLAGS = EXTERN };
+		mdb_ctf_sizeof_by_name		{ FLAGS = EXTERN };
 		mdb_ctf_readsym			{ FLAGS = EXTERN };
 		mdb_ctf_type_cmp		{ FLAGS = EXTERN };
 		mdb_ctf_type_invalidate		{ FLAGS = EXTERN };
@@ -101,6 +102,7 @@ SYMBOL_SCOPE {
 		mdb_get_lbolt			{ FLAGS = EXTERN };
 		mdb_get_pipe			{ FLAGS = EXTERN };
 		mdb_get_soft_state_byaddr	{ FLAGS = EXTERN };
+		mdb_get_soft_state_byname	{ FLAGS = EXTERN };
 		mdb_get_state			{ FLAGS = EXTERN };
 		mdb_get_xdata			{ FLAGS = EXTERN };
 		mdb_gethrtime			{ FLAGS = EXTERN };
@@ -122,6 +124,7 @@ SYMBOL_SCOPE {
 		mdb_memio_create		{ FLAGS = EXTERN };
 		mdb_name_to_major		{ FLAGS = EXTERN };
 		mdb_nhconvert			{ FLAGS = EXTERN };
+		mdb_nicenum			{ FLAGS = EXTERN };
 		mdb_object_iter			{ FLAGS = EXTERN };
 		mdb_one_bit			{ FLAGS = EXTERN };
 		mdb_page2pfn			{ FLAGS = EXTERN };
@@ -130,6 +133,7 @@ SYMBOL_SCOPE {
 		mdb_pid2proc			{ FLAGS = EXTERN };
 		mdb_pread			{ FLAGS = EXTERN };
 		mdb_printf			{ FLAGS = EXTERN };
+		mdb_snprintfrac			{ FLAGS = EXTERN };
 		mdb_prop_kernel			{ FLAGS = EXTERN };
 		mdb_prop_postmortem		{ FLAGS = EXTERN };
 		mdb_pwalk			{ FLAGS = EXTERN };

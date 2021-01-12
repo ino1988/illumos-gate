@@ -25,7 +25,7 @@
 /*
  * PSARC/2004/154 nfsmapid DNS enhancements implementation.
  *
- * As per RFC 3530, file owner and group attributes in version 4 of the
+ * As per RFC 7530, file owner and group attributes in version 4 of the
  * NFS protocol are no longer exchanged between client and server as 32
  * bit integral values. Instead, owner and group file attributes are
  * exchanged between client and server as UTF8 strings of form
@@ -959,7 +959,7 @@ get_nfs_domain(void)
 	bzero(value, NS_MAXCDNAME);
 	ret = nfs_smf_get_prop("nfsmapid_domain", value, DEFAULT_INSTANCE,
 	    SCF_TYPE_ASTRING, NFSMAPID, &bufsz);
-	if (ret == SA_OK && *value != NULL) {
+	if (ret == SA_OK && *value != '\0') {
 		char *dp = NULL;
 #ifdef DEBUG
 		char    *whoami = "get_nfs_domain";

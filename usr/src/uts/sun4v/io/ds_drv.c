@@ -408,7 +408,7 @@ ds_init()
 int
 ds_sys_dispatch_func(void (func)(void *), void *arg)
 {
-	return (DS_DISPATCH(func, arg) == NULL);
+	return (DS_DISPATCH(func, arg) == TASKQID_INVALID);
 }
 
 /*
@@ -493,8 +493,6 @@ static ds_log_entry_t ds_log_entry_pool[DS_LOG_NPOOL];
 static void
 ds_log_init(void)
 {
-	ds_log_entry_t	*new;
-
 	/* initialize global lock */
 	mutex_init(&ds_log.lock, NULL, MUTEX_DRIVER, NULL);
 
@@ -506,9 +504,9 @@ ds_log_init(void)
 	ds_log.nentry = 0;
 
 	/* initialize the free list */
-	for (new = ds_log_entry_pool; new < DS_LOG_POOL_END; new++) {
-		new->next = ds_log.freelist;
-		ds_log.freelist = new;
+	for (int i = 0; i < DS_LOG_NPOOL; i++) {
+		ds_log_entry_pool[i].next = ds_log.freelist;
+		ds_log.freelist = &ds_log_entry_pool[i];
 	}
 
 	mutex_exit(&ds_log.lock);
@@ -758,7 +756,7 @@ ds_log_add_msg(int32_t dest, uint8_t *msg, size_t sz)
 		DS_DBG_LOG(CE_NOTE, "%s: log exceeded %d bytes, scheduling"
 		    " a purge...", __func__, DS_LOG_LIMIT);
 
-		if (DS_DISPATCH(ds_log_purge, NULL) == NULL) {
+		if (DS_DISPATCH(ds_log_purge, NULL) == TASKQID_INVALID) {
 			cmn_err(CE_NOTE, "%s: purge thread failed to start",
 			    __func__);
 		}

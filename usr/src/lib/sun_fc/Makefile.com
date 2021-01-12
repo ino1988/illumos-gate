@@ -22,6 +22,7 @@
 # Copyright 2009 Sun Microsystems, Inc.  All rights reserved.
 # Use is subject to license terms.
 #
+# Copyright 2019 RackTop Systems.
 #
 
 LIBRARYCCC =	libsun_fc.a
@@ -132,10 +133,17 @@ INCS +=		-I$(SRCDIR)
 INCS +=		-I$(SRC)/lib/hbaapi/common
 
 CCFLAGS +=	-D_POSIX_PTHREAD_SEMANTICS
-CCFLAGS +=	-compat=5
+CCFLAGS +=	-compat=5 -_g++=-std=c++98
 CCFLAGS64 +=	-D_POSIX_PTHREAD_SEMANTICS
-CCFLAGS64 +=	-compat=5
+CCFLAGS64 +=	-compat=5 -_g++=-std=c++98
 CPPFLAGS +=	$(INCS) -DBUILD_TIME='"Wed Sep 24 12:00:00 2008"'
+
+CCERRWARN +=	-_gcc=-Wno-reorder
+CCERRWARN +=	-_gcc=-Wno-unused-variable
+CCERRWARN +=	-_gcc=-Wno-unused-value
+CCERRWARN +=	-_gcc=-Wno-unused-function
+CCERRWARN +=	-_gcc=-Wno-type-limits
+CCERRWARN +=	-_gcc=-Wno-return-type
 
 LDLIBS			+= -ldevinfo
 LDLIBS			+= -lsysevent
@@ -144,14 +152,9 @@ $(__SUNC)CCNEEDED	= $(CCEXTNEEDED)
 LDLIBS			+= $(CCNEEDED)
 LDLIBS			+= -lc
 
-$(LINTLIB) := SRCS=	$(SRCDIR)/$(LINTSRC)
 
 .KEEP_STATE:
 
 all: $(LIBS)
-
-lint:
-	@echo "This section is not required to be lint clean"
-	@echo "C++"
 
 include ../../Makefile.targ

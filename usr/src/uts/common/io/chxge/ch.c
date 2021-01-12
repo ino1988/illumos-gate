@@ -22,6 +22,7 @@
 /*
  * Copyright 2008 Sun Microsystems, Inc.  All rights reserved.
  * Use is subject to license terms.
+ * Copyright 2018 Joyent, Inc.
  */
 
 /*
@@ -59,6 +60,7 @@
 #include <sys/sunddi.h>
 #include <sys/dlpi.h>
 #include <sys/ethernet.h>
+#include <sys/mac_provider.h>
 #include <sys/strsun.h>
 #include <sys/strsubr.h>
 #include <inet/common.h>
@@ -319,7 +321,7 @@ _fini(void)
 	for (i = 0; i < SZ_INUSE; i++)
 		t += buffers_in_use[i];
 
-	if (t != NULL)
+	if (t != 0)
 		return (DDI_FAILURE);
 
 	status = mod_remove(&modlinkage);
@@ -1377,8 +1379,7 @@ ch_send_up(ch_t *chp, mblk_t *mp, uint32_t cksum, int flg)
 		 * set in /etc/system (see sge.c).
 		 */
 		if (flg)
-			(void) hcksum_assoc(mp, NULL, NULL, 0, 0, 0, cksum,
-			    HCK_FULLCKSUM, 0);
+			mac_hcksum_set(mp, 0, 0, 0, cksum, HCK_FULLCKSUM);
 		gld_recv(chp->ch_macp, mp);
 	} else {
 		freemsg(mp);
@@ -1693,8 +1694,7 @@ ch_send(gld_mac_info_t *macinfo, mblk_t *mp)
 	msg_flg = 0;
 	if (chp->ch_config.cksum_enabled) {
 		if (is_T2(chp)) {
-			hcksum_retrieve(mp, NULL, NULL, NULL, NULL, NULL,
-			    NULL, &msg_flg);
+			mac_hcksum_get(mp, NULL, NULL, NULL, NULL, &msg_flg);
 			flg = (msg_flg & HCK_FULLCKSUM)?
 			    CH_NO_CPL: CH_NO_HWCKSUM|CH_NO_CPL;
 		} else
@@ -1915,7 +1915,7 @@ ch_get_prop(ch_t *chp)
 	dev_info_t *pdip;
 	uint32_t vendor_id, device_id, revision_id;
 	uint32_t *prop_val = NULL;
-	uint32_t prop_len = NULL;
+	uint32_t prop_len = 0;
 
 	val = ddi_getprop(DDI_DEV_T_ANY, chp->ch_dip, DDI_PROP_DONTPASS,
 	    "enable_dvma", -1);
@@ -1994,7 +1994,7 @@ ch_get_prop(ch_t *chp)
 
 		/* if 133 Mhz not enabled, then do nothing - we're not PCIx */
 		v = pci_config_get32(chp->ch_hpci, 0x64);
-		if ((v & 0x20000) == NULL) {
+		if ((v & 0x20000) == 0) {
 			chp->ch_config.burstsize_set = 0;
 			chp->ch_config.transaction_cnt_set = 0;
 			goto fail_exit;
@@ -2257,7 +2257,7 @@ fail_exit:
 		val = ddi_getprop(DDI_DEV_T_ANY, chp->ch_dip, DDI_PROP_DONTPASS,
 		    "enable-checksum-offload", -1);
 	if (val != -1) {
-		if (val == NULL)
+		if (val == 0)
 			chp->ch_config.cksum_enabled = 0;
 	}
 

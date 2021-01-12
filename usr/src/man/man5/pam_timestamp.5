@@ -10,13 +10,12 @@
 .\"
 .\" Copyright 2014 Nexenta Systems, Inc.
 .\"
-.Dd Aug 20, 2014
+.Dd Nov 26, 2017
 .Dt PAM_TIMESTAMP 5
 .Os
 .Sh NAME
 .Nm pam_timestamp
-.Nd PAM authentication module using cached successful
-authentication attempts
+.Nd PAM authentication module using cached successful authentication attempts
 .Sh SYNOPSIS
 .Nm pam_timestamp.so.1
 .Op Ar debug
@@ -50,18 +49,18 @@ and
 Proper authentication operation requires
 .Xr pam_unix_cred 5
 be stacked above
-.Xr pam_timestamp .
+.Nm .
 .Sh OPTIONS
 .Bl -tag -width Ds
 .It Dv debug
 Provides
-.Xr syslog 3
+.Xr syslog 3C
 debugging information at the
 .Sy LOG_AUTH | LOG_DEBUG
 level.
 .It Dv timeout
-Specifies the period (in miniutes) for which the timestamp
-file is valid. The default value is 5 minutes.
+Specifies the period (in minutes) for which the timestamp file is valid.
+The default value is 5 minutes.
 .El
 .Sh FILES
 .Bl -tag -width indent
@@ -83,7 +82,7 @@ or timestamp file is expired or corrupt.
 .
 The following example is a
 .Xr pam.conf 4
-fragment that illustartes a default settings for allowing
+fragment that illustrates default settings for allowing
 .Xr su 1M
 authentication:
 .Bd -literal -offset indent
@@ -107,8 +106,8 @@ su  auth required	pam_unix_auth.so.1
 .Sy MT-Safe .
 .Sh SEE ALSO
 .Xr su 1M ,
+.Xr syslog 3C ,
 .Xr pam 3PAM ,
 .Xr pam_sm_authenticate 3PAM ,
 .Xr pam_sm_setcred 3PAM ,
-.Xr pam.conf 4 ,
-.Xr syslog 3C
+.Xr pam.conf 4

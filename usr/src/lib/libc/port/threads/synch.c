@@ -22,6 +22,8 @@
 /*
  * Copyright 2009 Sun Microsystems, Inc.  All rights reserved.
  * Use is subject to license terms.
+ * Copyright 2015, Joyent, Inc.
+ * Copyright (c) 2016 by Delphix. All rights reserved.
  */
 
 #include "lint.h"
@@ -2314,6 +2316,29 @@ mutex_lock(mutex_t *mp)
 	return (mutex_lock_impl(mp, NULL));
 }
 
+void
+mutex_enter(mutex_t *mp)
+{
+	int ret;
+	int attr = mp->mutex_type & ALL_ATTRIBUTES;
+
+	/*
+	 * Require LOCK_ERRORCHECK, accept LOCK_RECURSIVE.
+	 */
+	if (attr != LOCK_ERRORCHECK &&
+	    attr != (LOCK_ERRORCHECK | LOCK_RECURSIVE)) {
+		mutex_panic(mp, "mutex_enter: bad mutex type");
+	}
+	ret = mutex_lock(mp);
+	if (ret == EDEADLK) {
+		mutex_panic(mp, "recursive mutex_enter");
+	} else if (ret == EAGAIN) {
+		mutex_panic(mp, "excessive recursive mutex_enter");
+	} else if (ret != 0) {
+		mutex_panic(mp, "unknown mutex_enter failure");
+	}
+}
+
 int
 pthread_mutex_timedlock(pthread_mutex_t *_RESTRICT_KYWD mp,
 	const struct timespec *_RESTRICT_KYWD abstime)
@@ -2571,6 +2596,25 @@ fast_unlock:
 	/* else do it the long way */
 slow_unlock:
 	return (mutex_unlock_internal(mp, 0));
+}
+
+void
+mutex_exit(mutex_t *mp)
+{
+	int ret;
+	int attr = mp->mutex_type & ALL_ATTRIBUTES;
+
+	if (attr != LOCK_ERRORCHECK &&
+	    attr != (LOCK_ERRORCHECK | LOCK_RECURSIVE)) {
+		mutex_panic(mp, "mutex_exit: bad mutex type");
+	}
+	ret = mutex_unlock(mp);
+	if (ret == EPERM) {
+		mutex_panic(mp, "mutex_exit: not owner");
+	} else if (ret != 0) {
+		mutex_panic(mp, "unknown mutex_exit failure");
+	}
+
 }
 
 /*
@@ -3674,11 +3718,11 @@ cond_signal(cond_t *cvp)
 		return (error);
 
 	/*
-	 * Move someone from the condvar sleep queue to the mutex sleep
-	 * queue for the mutex that he will acquire on being waked up.
-	 * We can do this only if we own the mutex he will acquire.
-	 * If we do not own the mutex, or if his ul_cv_wake flag
-	 * is set, just dequeue and unpark him.
+	 * Move some thread from the condvar sleep queue to the mutex sleep
+	 * queue for the mutex that it will acquire on being waked up.
+	 * We can do this only if we own the mutex it will acquire.
+	 * If we do not own the mutex, or if its ul_cv_wake flag
+	 * is set, just dequeue and unpark it.
 	 */
 	qp = queue_lock(cvp, CV);
 	ulwpp = queue_slot(qp, &prev, &more);
@@ -3690,26 +3734,26 @@ cond_signal(cond_t *cvp)
 	ulwp = *ulwpp;
 
 	/*
-	 * Inform the thread that he was the recipient of a cond_signal().
-	 * This lets him deal with cond_signal() and, concurrently,
+	 * Inform the thread that it was the recipient of a cond_signal().
+	 * This lets it deal with cond_signal() and, concurrently,
 	 * one or more of a cancellation, a UNIX signal, or a timeout.
 	 * These latter conditions must not consume a cond_signal().
 	 */
 	ulwp->ul_signalled = 1;
 
 	/*
-	 * Dequeue the waiter but leave his ul_sleepq non-NULL
-	 * while we move him to the mutex queue so that he can
+	 * Dequeue the waiter but leave its ul_sleepq non-NULL
+	 * while we move it to the mutex queue so that it can
 	 * deal properly with spurious wakeups.
 	 */
 	queue_unlink(qp, ulwpp, prev);
 
-	mp = ulwp->ul_cvmutex;		/* the mutex he will acquire */
+	mp = ulwp->ul_cvmutex;		/* the mutex it will acquire */
 	ulwp->ul_cvmutex = NULL;
 	ASSERT(mp != NULL);
 
 	if (ulwp->ul_cv_wake || !MUTEX_OWNED(mp, self)) {
-		/* just wake him up */
+		/* just wake it up */
 		lwpid = ulwp->ul_lwpid;
 		no_preempt(self);
 		ulwp->ul_sleepq = NULL;
@@ -3718,7 +3762,7 @@ cond_signal(cond_t *cvp)
 		(void) __lwp_unpark(lwpid);
 		preempt(self);
 	} else {
-		/* move him to the mutex queue */
+		/* move it to the mutex queue */
 		mqp = queue_lock(mp, MX);
 		enqueue(mqp, ulwp, 0);
 		mp->mutex_waiters = 1;
@@ -3833,18 +3877,18 @@ cond_broadcast(cond_t *cvp)
 			break;
 		ASSERT(ulwp->ul_wchan == cvp);
 		queue_unlink(qp, &qrp->qr_head, NULL);
-		mp = ulwp->ul_cvmutex;		/* his mutex */
+		mp = ulwp->ul_cvmutex;		/* its mutex */
 		ulwp->ul_cvmutex = NULL;
 		ASSERT(mp != NULL);
 		if (ulwp->ul_cv_wake || !MUTEX_OWNED(mp, self)) {
-			/* just wake him up */
+			/* just wake it up */
 			ulwp->ul_sleepq = NULL;
 			ulwp->ul_wchan = NULL;
 			if (nlwpid == maxlwps)
 				lwpid = alloc_lwpids(lwpid, &nlwpid, &maxlwps);
 			lwpid[nlwpid++] = ulwp->ul_lwpid;
 		} else {
-			/* move him to the mutex queue */
+			/* move it to the mutex queue */
 			if (mp != mp_cache) {
 				mp_cache = mp;
 				if (mqp != NULL)

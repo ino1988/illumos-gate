@@ -40,12 +40,8 @@ UTSBASE	= ../..
 #
 MODULE		= aac
 OBJECTS		= $(AAC_OBJS:%=$(OBJS_DIR)/%)
-LINTS		= $(AAC_OBJS:%.o=$(LINTS_DIR)/%.ln)
 ROOTMODULE	= $(ROOT_DRV_DIR)/$(MODULE)
 CONF_SRCDIR	= $(UTSBASE)/common/io/aac
-WARLOCK_OUT     = $(AAC_OBJS:%.o=%.ll)
-WARLOCK_OK      = $(MODULE).ok
-WLCMD_DIR       = $(UTSBASE)/common/io/warlock
 
 #
 #	Include common rules.
@@ -56,24 +52,20 @@ include $(UTSBASE)/sparc/Makefile.sparc
 #	Define targets
 #
 ALL_TARGET	= $(BINARY) $(CONFMOD)
-LINT_TARGET	= $(MODULE).lint
 INSTALL_TARGET	= $(BINARY) $(ROOTMODULE) $(ROOT_CONFFILE)
 
-# 
-# lint pass one enforcement 
-# 
-CFLAGS		+= $(CCVERBOSE)
-
 #
-# 	Kernel Module Dependencies
+#	Kernel Module Dependencies
 #
 LDFLAGS		+= -dy -Nmisc/scsi
 
 #
-# 	Overrides
+# For now, disable these warnings; maintainers should endeavor
+# to investigate and remove these for maximum coverage.
+# Please do not carry these forward to new Makefiles.
 #
-
-CERRWARN	+= -_gcc=-Wno-uninitialized
+CFLAGS		+= $(CCVERBOSE)
+CERRWARN	+= $(CNOWARN_UNINIT)
 CERRWARN	+= -_gcc=-Wno-parentheses
 CERRWARN	+= -_gcc=-Wno-unused-value
 CERRWARN	+= -_gcc=-Wno-unused-label
@@ -92,49 +84,9 @@ clean:		$(CLEAN_DEPS)
 
 clobber:	$(CLOBBER_DEPS)
 
-lint:		$(LINT_DEPS)
-
-modlintlib:	$(MODLINTLIB_DEPS)
-
-clean.lint:	$(CLEAN_LINT_DEPS)
-
 install:	$(INSTALL_DEPS)
 
 #
 #	Include common targets.
 #
 include $(UTSBASE)/sparc/Makefile.targ
-
-#
-#	Defines for local commands.
-#
-WARLOCK		= warlock
-WLCC		= wlcc
-TOUCH		= touch
-TEST		= test
-
-#
-#	lock_lint rules
-#
-SCSI_FILES = $(SCSI_OBJS:%.o= -l $(UTSBASE)/sparc/scsi/%.ll)
-
-%.wlcmd:
-	cd $(WLCMD_DIR); $(TEST) -f $@ || $(SCCS) get $@
-
-warlock: $(WARLOCK_OK)
-
-$(WARLOCK_OK): $(WARLOCK_OUT) warlock_ddi.files scsi.files aac.wlcmd
-	$(WARLOCK) -c $(WLCMD_DIR)/aac.wlcmd $(WARLOCK_OUT) \
-	$(SCSI_FILES) \
-	$(UTSBASE)/sparc/warlock/scsi.ll \
-	-l $(UTSBASE)/sparc/warlock/ddi_dki_impl.ll
-	$(TOUCH) $@
-
-%.ll: $(UTSBASE)/common/io/aac/%.c
-	$(WLCC) $(CPPFLAGS) -DDEBUG -o $@ $<
-
-warlock_ddi.files:
-	@cd $(UTSBASE)/sparc/warlock; pwd; $(MAKE) warlock
-
-scsi.files:
-	@cd $(UTSBASE)/sparc/scsi; pwd; $(MAKE) warlock

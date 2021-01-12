@@ -21,6 +21,9 @@
 /*
  * Copyright 2010 Sun Microsystems, Inc.  All rights reserved.
  * Use is subject to license terms.
+ * Copyright (c) 2012 Nexenta Systems, Inc. All rights reserved.
+ * Copyright (c) 2016 by Delphix. All rights reserved.
+ * Copyright (c) 2018, Joyent, Inc.
  */
 
 /*
@@ -160,7 +163,7 @@ int ipsec_weird_null_inbound_policy = 0;
  * Inbound traffic should have matching identities for both SA's.
  */
 
-#define	SA_IDS_MATCH(sa1, sa2) 						\
+#define	SA_IDS_MATCH(sa1, sa2)						\
 	(((sa1) == NULL) || ((sa2) == NULL) ||				\
 	(((sa1)->ipsa_src_cid == (sa2)->ipsa_src_cid) &&		\
 	    (((sa1)->ipsa_dst_cid == (sa2)->ipsa_dst_cid))))
@@ -412,17 +415,15 @@ ipsec_stack_fini(netstackid_t stackid, void *arg)
 		mutex_destroy(&(ipss->ipsec_sel_hash[i].hash_lock));
 	}
 
-	mutex_enter(&ipss->ipsec_alg_lock);
+	rw_enter(&ipss->ipsec_alg_lock, RW_WRITER);
 	for (algtype = 0; algtype < IPSEC_NALGTYPES; algtype ++) {
-		int nalgs = ipss->ipsec_nalgs[algtype];
-
-		for (i = 0; i < nalgs; i++) {
+		for (i = 0; i < IPSEC_MAX_ALGS; i++) {
 			if (ipss->ipsec_alglists[algtype][i] != NULL)
 				ipsec_alg_unreg(algtype, i, ns);
 		}
 	}
-	mutex_exit(&ipss->ipsec_alg_lock);
-	mutex_destroy(&ipss->ipsec_alg_lock);
+	rw_exit(&ipss->ipsec_alg_lock);
+	rw_destroy(&ipss->ipsec_alg_lock);
 
 	ipsid_gc(ns);
 	ipsid_fini(ns);
@@ -654,7 +655,7 @@ ipsec_stack_init(netstackid_t stackid, netstack_t *ns)
 		mutex_init(&(ipss->ipsec_sel_hash[i].hash_lock),
 		    NULL, MUTEX_DEFAULT, NULL);
 
-	mutex_init(&ipss->ipsec_alg_lock, NULL, MUTEX_DEFAULT, NULL);
+	rw_init(&ipss->ipsec_alg_lock, NULL, RW_DEFAULT, NULL);
 	for (i = 0; i < IPSEC_NALGTYPES; i++) {
 		ipss->ipsec_nalgs[i] = 0;
 	}
@@ -717,7 +718,7 @@ alg_insert_sortlist(enum ipsec_algtype at, uint8_t algid, netstack_t *ns)
 	ASSERT(ai != NULL);
 	ASSERT(algid == ai->alg_id);
 
-	ASSERT(MUTEX_HELD(&ipss->ipsec_alg_lock));
+	ASSERT(RW_WRITE_HELD(&ipss->ipsec_alg_lock));
 
 	holder = algid;
 
@@ -754,7 +755,7 @@ alg_remove_sortlist(enum ipsec_algtype at, uint8_t algid, netstack_t *ns)
 	ipsec_stack_t	*ipss = ns->netstack_ipsec;
 	int newcount = ipss->ipsec_nalgs[at];
 
-	ASSERT(MUTEX_HELD(&ipss->ipsec_alg_lock));
+	ASSERT(RW_WRITE_HELD(&ipss->ipsec_alg_lock));
 
 	for (i = 0; i <= newcount; i++) {
 		if (copyback) {
@@ -775,7 +776,7 @@ ipsec_alg_reg(ipsec_algtype_t algtype, ipsec_alginfo_t *alg, netstack_t *ns)
 {
 	ipsec_stack_t	*ipss = ns->netstack_ipsec;
 
-	ASSERT(MUTEX_HELD(&ipss->ipsec_alg_lock));
+	ASSERT(RW_WRITE_HELD(&ipss->ipsec_alg_lock));
 
 	ASSERT(ipss->ipsec_alglists[algtype][alg->alg_id] == NULL);
 	ipsec_alg_fix_min_max(alg, algtype, ns);
@@ -794,7 +795,7 @@ ipsec_alg_unreg(ipsec_algtype_t algtype, uint8_t algid, netstack_t *ns)
 {
 	ipsec_stack_t	*ipss = ns->netstack_ipsec;
 
-	ASSERT(MUTEX_HELD(&ipss->ipsec_alg_lock));
+	ASSERT(RW_WRITE_HELD(&ipss->ipsec_alg_lock));
 
 	ASSERT(ipss->ipsec_alglists[algtype][algid] != NULL);
 	ipsec_alg_free(ipss->ipsec_alglists[algtype][algid]);
@@ -3177,6 +3178,7 @@ ipsec_act_find(const ipsec_act_t *a, int n, netstack_t *ns)
 	 * TODO: should canonicalize a[] (i.e., zeroize any padding)
 	 * so we can use a non-trivial policy_hash function.
 	 */
+	ap = NULL;
 	for (i = n-1; i >= 0; i--) {
 		hval = policy_hash(IPSEC_ACTION_HASH_SIZE, &a[i], &a[n]);
 
@@ -3534,7 +3536,7 @@ ipsec_update_present_flags(ipsec_stack_t *ipss)
 
 boolean_t
 ipsec_policy_delete(ipsec_policy_head_t *php, ipsec_selkey_t *keys, int dir,
-	netstack_t *ns)
+    netstack_t *ns)
 {
 	ipsec_sel_t *sp;
 	ipsec_policy_t *ip, *nip, *head;
@@ -4122,6 +4124,11 @@ ipsec_in_release_refs(ip_recv_attr_t *ira)
 		IPSA_REFRELE(ira->ira_ipsec_esp_sa);
 		ira->ira_ipsec_esp_sa = NULL;
 	}
+	if (ira->ira_ipsec_action != NULL) {
+		IPACT_REFRELE(ira->ira_ipsec_action);
+		ira->ira_ipsec_action = NULL;
+	}
+
 	ira->ira_flags &= ~IRAF_IPSEC_SECURE;
 }
 
@@ -4520,10 +4527,9 @@ iplatch_free(ipsec_latch_t *ipl)
 ipsec_latch_t *
 iplatch_create()
 {
-	ipsec_latch_t *ipl = kmem_alloc(sizeof (*ipl), KM_NOSLEEP);
+	ipsec_latch_t *ipl = kmem_zalloc(sizeof (*ipl), KM_NOSLEEP);
 	if (ipl == NULL)
 		return (ipl);
-	bzero(ipl, sizeof (*ipl));
 	mutex_init(&ipl->ipl_lock, NULL, MUTEX_DEFAULT, NULL);
 	ipl->ipl_refcnt = 1;
 	return (ipl);
@@ -4687,8 +4693,9 @@ ipsid_fini(netstack_t *ns)
 }
 
 /*
- * Update the minimum and maximum supported key sizes for the
- * specified algorithm. Must be called while holding the algorithms lock.
+ * Update the minimum and maximum supported key sizes for the specified
+ * algorithm, which is either a member of a netstack alg array or about to be,
+ * and therefore must be called holding ipsec_alg_lock for write.
  */
 void
 ipsec_alg_fix_min_max(ipsec_alginfo_t *alg, ipsec_algtype_t alg_type,
@@ -4703,7 +4710,7 @@ ipsec_alg_fix_min_max(ipsec_alginfo_t *alg, ipsec_algtype_t alg_type,
 	crypto_mech_usage_t mask;
 	ipsec_stack_t	*ipss = ns->netstack_ipsec;
 
-	ASSERT(MUTEX_HELD(&ipss->ipsec_alg_lock));
+	ASSERT(RW_WRITE_HELD(&ipss->ipsec_alg_lock));
 
 	/*
 	 * Compute the min, max, and default key sizes (in number of
@@ -5056,7 +5063,7 @@ ipsec_prov_update_callback_stack(uint32_t event, void *event_arg,
 	 * the algorithm valid flag and trigger an update of the
 	 * SAs that depend on that algorithm.
 	 */
-	mutex_enter(&ipss->ipsec_alg_lock);
+	rw_enter(&ipss->ipsec_alg_lock, RW_WRITER);
 	for (algtype = 0; algtype < IPSEC_NALGTYPES; algtype++) {
 		for (algidx = 0; algidx < ipss->ipsec_nalgs[algtype];
 		    algidx++) {
@@ -5119,7 +5126,7 @@ ipsec_prov_update_callback_stack(uint32_t event, void *event_arg,
 				    CRYPTO_MECH_ADDED, ns);
 		}
 	}
-	mutex_exit(&ipss->ipsec_alg_lock);
+	rw_exit(&ipss->ipsec_alg_lock);
 	crypto_free_mech_list(mechs, mech_count);
 
 	if (alg_changed) {
@@ -5377,7 +5384,7 @@ ipsec_tun_outbound(mblk_t *mp, iptun_t *iptun, ipha_t *inner_ipv4,
 		 * NOTE2:  "negotiate transport" tunnels should match ALL
 		 * inbound packets, but we do not uncomment the ASSERT()
 		 * below because if/when we open PF_POLICY, a user can
-		 * shoot him/her-self in the foot with a 0 priority.
+		 * shoot themself in the foot with a 0 priority.
 		 */
 
 		/* ASSERT(itp->itp_flags & ITPF_P_TUNNEL); */
@@ -6276,6 +6283,9 @@ ipsec_fragcache_add(ipsec_fragcache_t *frag, mblk_t *iramp, mblk_t *mp,
 #ifdef FRAGCACHE_DEBUG
 	cmn_err(CE_WARN, "Fragcache: %s\n", inbound ? "INBOUND" : "OUTBOUND");
 #endif
+	v6_proto = 0;
+	fraghdr = NULL;
+
 	/*
 	 * You're on the slow path, so insure that every packet in the
 	 * cache is a single-mblk one.

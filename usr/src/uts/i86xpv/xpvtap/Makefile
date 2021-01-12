@@ -41,7 +41,6 @@ UTSBASE	= ../..
 #
 MODULE		= xpvtap
 OBJECTS		= $(XPVTAP_OBJS:%=$(OBJS_DIR)/%)
-LINTS		= $(XPVTAP_OBJS:%.o=$(LINTS_DIR)/%.ln)
 ROOTMODULE	= $(ROOT_PSM_DRV_DIR)/$(MODULE)
 
 #
@@ -53,7 +52,6 @@ include $(UTSBASE)/i86xpv/Makefile.i86xpv
 #	Define targets
 #
 ALL_TARGET	= $(BINARY)
-LINT_TARGET	= $(MODULE).lint
 INSTALL_TARGET	= $(BINARY) $(ROOTMODULE)
 
 #
@@ -62,18 +60,11 @@ INSTALL_TARGET	= $(BINARY) $(ROOTMODULE)
 DEF_BUILDS      = $(DEF_BUILDS64)
 ALL_BUILDS      = $(ALL_BUILDS64)
 
-LDFLAGS		+= 
-
 #
 # use Solaris specific code in xen public header files
 #
 CFLAGS		+= -D_SOLARIS
-LINTFLAGS	+= -D_SOLARIS
 
-LINTTAGS	+= -erroff=E_PTRDIFF_OVERFLOW
-LINTTAGS	+= -erroff=E_ASSIGN_NARROW_CONV
-LINTTAGS	+= -erroff=E_BAD_PTR_CAST_ALIGN
-LINTTAGS	+= -erroff=E_CONSTANT_CONDITION
 
 CERRWARN	+= -_gcc=-Wno-unused-label
 
@@ -86,17 +77,9 @@ def:		$(DEF_DEPS)
 
 all:		$(ALL_DEPS)
 
-# This build only 64-bit, but the lint32 below
-# needs corresponding clean/clobber deps.
-clean:		$(CLEAN_DEPS) clean.debug32
+clean:		$(CLEAN_DEPS)
 
-clobber:	$(CLOBBER_DEPS) clobber.debug32
-
-lint:		$(LINT_DEPS)
-
-modlintlib:	$(MODLINTLIB_DEPS) lint32
-
-clean.lint:	$(CLEAN_LINT_DEPS)
+clobber:	$(CLOBBER_DEPS)
 
 install:	$(INSTALL_DEPS)
 

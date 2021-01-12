@@ -22,8 +22,6 @@
 # Copyright 2008 Sun Microsystems, Inc.  All rights reserved.
 # Use is subject to license terms.
 #
-# ident	"%Z%%M%	%I%	%E% SMI"
-#
 
 LIBRARY=	libavl.a
 VERS=		.1
@@ -32,20 +30,17 @@ OBJECTS=	avl.o
 include ../../Makefile.lib
 include ../../Makefile.rootfs
 
-LIBS =		$(DYNLIB) $(LINTLIB)
+LIBS =		$(DYNLIB)
 SRCS =		$(COMDIR)/avl.c
 
-$(LINTLIB) :=	SRCS = $(SRCDIR)/$(LINTSRC)
+COMDIR =	$(SRC)/common/avl
 
-COMDIR = 	$(SRC)/common/avl
-
+LDLIBS +=	-lc
 CFLAGS +=	$(CCVERBOSE)
 
 .KEEP_STATE:
 
 all : $(LIBS)
-
-lint : lintcheck
 
 pics/%.o:	 $(COMDIR)/%.c
 	$(COMPILE.c) -o $@ $<

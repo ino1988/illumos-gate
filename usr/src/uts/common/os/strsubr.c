@@ -25,6 +25,9 @@
 /*
  * Copyright 2010 Sun Microsystems, Inc.  All rights reserved.
  * Use is subject to license terms.
+ * Copyright (c) 2016 by Delphix. All rights reserved.
+ * Copyright 2018 OmniOS Community Edition (OmniOSce) Association.
+ * Copyright 2018 Joyent, Inc.
  */
 
 #include <sys/types.h>
@@ -359,7 +362,8 @@ static void esballoc_mblk_free(mblk_t *);
  *	for passthru read and write queues
  */
 
-static void pass_wput(queue_t *, mblk_t *);
+static int pass_rput(queue_t *, mblk_t *);
+static int pass_wput(queue_t *, mblk_t *);
 static queue_t *link_addpassthru(stdata_t *);
 static void link_rempassthru(queue_t *);
 
@@ -373,7 +377,7 @@ struct  module_info passthru_info = {
 };
 
 struct  qinit passthru_rinit = {
-	(int (*)())putnext,
+	pass_rput,
 	NULL,
 	NULL,
 	NULL,
@@ -383,7 +387,7 @@ struct  qinit passthru_rinit = {
 };
 
 struct  qinit passthru_winit = {
-	(int (*)()) pass_wput,
+	pass_wput,
 	NULL,
 	NULL,
 	NULL,
@@ -949,7 +953,7 @@ str_sendsig(vnode_t *vp, int event, uchar_t band, int error)
  */
 static void
 dosendsig(proc_t *proc, int events, int sevent, k_siginfo_t *info,
-	uchar_t band, int error)
+    uchar_t band, int error)
 {
 	ASSERT(MUTEX_HELD(&proc->p_lock));
 
@@ -2349,7 +2353,7 @@ mux_rmvedge(stdata_t *upstp, int muxid, str_stack_t *ss)
  */
 int
 devflg_to_qflag(struct streamtab *stp, uint32_t devflag, uint32_t *qflagp,
-	uint32_t *sqtypep)
+    uint32_t *sqtypep)
 {
 	uint32_t qflag = 0;
 	uint32_t sqtype = 0;
@@ -2462,6 +2466,17 @@ devflg_to_qflag(struct streamtab *stp, uint32_t devflag, uint32_t *qflagp,
 			goto bad;
 		qflag |= _QDIRECT;
 	}
+
+	/*
+	 * Private flag used to indicate that a streams module should only
+	 * be pushed once. The TTY streams modules have this flag since if
+	 * libc believes itself to be an xpg4 process then it will
+	 * automatically and unconditionally push them when a PTS device is
+	 * opened. If an application is not aware of this then without this
+	 * flag we would end up with duplicate modules.
+	 */
+	if (devflag & _D_SINGLE_INSTANCE)
+		qflag |= _QSINGLE_INSTANCE;
 
 	*qflagp = qflag;
 	*sqtypep = sqtype;
@@ -4020,7 +4035,7 @@ esballoc_enqueue_mblk(mblk_t *mp)
 {
 
 	if (taskq_dispatch(system_taskq, (task_func_t *)esballoc_mblk_free, mp,
-	    TQ_NOSLEEP) == NULL) {
+	    TQ_NOSLEEP) == TASKQID_INVALID) {
 		mblk_t *first_mp = mp;
 		/*
 		 * System is low on resources and can't perform a non-sleeping
@@ -6390,7 +6405,7 @@ drain_syncq(syncq_t *sq)
 		sq->sq_svcflags &= ~SQ_SERVICE;
 
 	/*
-	 * If SQ_EXCL is set, someone else is processing this syncq - let him
+	 * If SQ_EXCL is set, someone else is processing this syncq - let them
 	 * finish the job.
 	 */
 	if (flags & SQ_EXCL) {
@@ -7801,12 +7816,19 @@ strsetuio(stdata_t *stp)
 	stp->sd_struiordq = wrq ? _RD(wrq) : 0;
 }
 
+static int
+pass_rput(queue_t *q, mblk_t *mp)
+{
+	putnext(q, mp);
+	return (0);
+}
+
 /*
  * pass_wput, unblocks the passthru queues, so that
  * messages can arrive at muxs lower read queue, before
  * I_LINK/I_UNLINK is acked/nacked.
  */
-static void
+static int
 pass_wput(queue_t *q, mblk_t *mp)
 {
 	syncq_t *sq;
@@ -7815,6 +7837,7 @@ pass_wput(queue_t *q, mblk_t *mp)
 	if (sq->sq_flags & SQ_BLOCKED)
 		unblocksq(sq, SQ_BLOCKED, 0);
 	putnext(q, mp);
+	return (0);
 }
 
 /*
@@ -8086,7 +8109,7 @@ strflushrq(vnode_t *vp, int flag)
 
 void
 strsetrputhooks(vnode_t *vp, uint_t flags,
-		msgfunc_t protofunc, msgfunc_t miscfunc)
+    msgfunc_t protofunc, msgfunc_t miscfunc)
 {
 	struct stdata *stp = vp->v_stream;
 
@@ -8448,6 +8471,12 @@ mblk_copycred(mblk_t *mp, const mblk_t *src)
 		dbp->db_cpid = cpid;
 }
 
+
+/*
+ * Now that NIC drivers are expected to deal only with M_DATA mblks, the
+ * hcksum_assoc and hcksum_retrieve functions are deprecated in favor of their
+ * respective mac_hcksum_set and mac_hcksum_get counterparts.
+ */
 int
 hcksum_assoc(mblk_t *mp,  multidata_t *mmd, pdesc_t *pd,
     uint32_t start, uint32_t stuff, uint32_t end, uint32_t value,

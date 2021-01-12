@@ -189,7 +189,9 @@ mlsetup(struct regs *rp, kfpu_t *fp)
 	p0.p_brkpageszc = 0;
 	p0.p_t1_lgrpid = LGRP_NONE;
 	p0.p_tr_lgrpid = LGRP_NONE;
+	psecflags_default(&p0.p_secflags);
 	sigorset(&p0.p_ignore, &ignoredefault);
+
 
 	CPU->cpu_thread = &t0;
 	CPU->cpu_dispthread = &t0;
@@ -406,7 +408,7 @@ kobj_start(void *cif)
 		prom_panic("no ELF image");
 	ehdr = (Ehdr *)(uintptr_t)eadr;
 	for (i = 0; i < BA_NUM; i++)
-		bootaux[i].ba_val = NULL;
+		bootaux[i].ba_val = 0;
 	bootaux[BA_PHNUM].ba_val = ehdr->e_phnum;
 	bootaux[BA_PHENT].ba_val = ehdr->e_phentsize;
 	bootaux[BA_LDNAME].ba_ptr = NULL;

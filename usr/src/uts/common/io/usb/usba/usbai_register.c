@@ -21,6 +21,9 @@
 /*
  * Copyright 2009 Sun Microsystems, Inc.  All rights reserved.
  * Use is subject to license terms.
+ *
+ * Copyright 2014 Garrett D'Amore <garrett@damore.org>
+ * Copyright 2019, Joyent, Inc.
  */
 
 /*
@@ -112,14 +115,13 @@ uint_t			usbai_register_dump_errlevel = USB_LOG_L2;
 uint_t			usbai_register_errmask = (uint_t)-1;
 
 /* Function prototypes */
-static int usba_build_bos(usba_device_t *, usb_client_dev_data_t *);
 static int usba_build_descr_tree(dev_info_t *, usba_device_t *,
 				usb_client_dev_data_t *);
 static void usba_process_cfg_descr(usba_reg_state_t *);
 static int usba_process_if_descr(usba_reg_state_t *, boolean_t *);
 static int usba_process_ep_descr(usba_reg_state_t *);
+static int usba_process_ss_ep_comp_descr(usba_reg_state_t *);
 static int usba_process_cv_descr(usba_reg_state_t *);
-static int usba_process_ep_comp_descr(usba_reg_state_t *);
 static int usba_set_parse_values(dev_info_t *dip, usba_device_t *usba_device,
     usba_reg_state_t *state);
 static void* usba_kmem_realloc(void *, int, int);
@@ -427,16 +429,6 @@ usb_get_dev_data(dev_info_t *dip,
 		return (USB_FAILURE);
 	}
 
-	/* get parsed bos for wusb device */
-	if (usba_device->usb_is_wireless) {
-		if ((rval = usba_build_bos(usba_device, usb_reg)) !=
-		    USB_SUCCESS) {
-			kmem_free(usb_reg, sizeof (usb_client_dev_data_t));
-
-			return (rval);
-		}
-	}
-
 	usb_reg->dev_iblock_cookie = usba_hcdi_get_hcdi(
 	    usba_device->usb_root_hub_dip)->hcdi_soft_iblock_cookie;
 
@@ -595,10 +587,6 @@ usb_free_dev_data(dev_info_t *dip, usb_client_dev_data_t *reg)
 			usb_free_descr_tree(dip, reg);
 		}
 
-		if (reg->dev_bos != NULL) {
-			kmem_free(reg->dev_bos, sizeof (usb_bos_data_t));
-		}
-
 		mutex_enter(&usba_device->usb_mutex);
 		prev = &usba_device->usb_client_dev_data_list;
 		entry = usba_device->usb_client_dev_data_list.cddl_next;
@@ -645,40 +633,6 @@ usb_free_dev_data(dev_info_t *dip, usb_client_dev_data_t *reg)
 	USB_DPRINTF_L4(DPRINT_MASK_REGISTER, usbai_reg_log_handle,
 	    "usb_free_dev_data done");
 }
-
-/*
- * This builds the BOS descriptors for WUSB device
- */
-static int
-usba_build_bos(usba_device_t *usba_device, usb_client_dev_data_t *usb_reg)
-{
-	uint8_t		*buf;
-	size_t		size, buflen;
-
-	buf = usba_device->usb_wireless_data->wusb_bos;
-	buflen = usba_device->usb_wireless_data->wusb_bos_length;
-
-	usb_reg->dev_bos = kmem_zalloc(sizeof (usb_bos_data_t),
-	    KM_SLEEP);
-	size = usb_parse_bos_descr(buf, buflen, &usb_reg->dev_bos->bos_descr,
-	    sizeof (usb_bos_descr_t));
-	if (size != USB_BOS_DESCR_SIZE) {
-		kmem_free(usb_reg->dev_bos, sizeof (usb_bos_data_t));
-
-		return (USB_FAILURE);
-	}
-
-	size = usb_parse_uwb_bos_descr(buf, buflen,
-	    &usb_reg->dev_bos->bos_uwb_cap, sizeof (usb_uwb_cap_descr_t));
-	if (size != USB_UWB_CAP_DESCR_SIZE) {
-		kmem_free(usb_reg->dev_bos, sizeof (usb_bos_data_t));
-
-		return (USB_FAILURE);
-	}
-
-	return (USB_SUCCESS);
-}
-
 
 /*
  * usba_build_descr_tree:
@@ -847,18 +801,31 @@ usba_build_descr_tree(dev_info_t *dip, usba_device_t *usba_device,
 				}
 
 				break;
-			case USB_DESCR_TYPE_WIRELESS_EP_COMP:
-				/* for WUSB devices */
-				if (process_this_if_tree &&
-				    state.st_build_ep_comp) {
-					if (usba_process_ep_comp_descr(
+
+			case USB_DESCR_TYPE_SS_EP_COMP:
+
+				/*
+				 * These entries should always follow an
+				 * endpoint description. If an endpoint
+				 * description wasn't the last
+				 * thing that we found, then we shouldn't
+				 * process this descriptor.
+				 */
+				if (state.st_last_processed_descr_type ==
+				    USB_DESCR_TYPE_EP) {
+					if (usba_process_ss_ep_comp_descr(
 					    &state) != USB_SUCCESS) {
 
 						return (USB_FAILURE);
 					}
-				}
 
+					state.st_last_processed_descr_type =
+					    USB_DESCR_TYPE_SS_EP_COMP;
+
+					break;
+				}
 				break;
+
 			case USB_DESCR_TYPE_STRING:
 				USB_DPRINTF_L2(DPRINT_MASK_ALL,
 				    usbai_reg_log_handle,
@@ -1106,30 +1073,33 @@ usba_process_ep_descr(usba_reg_state_t *state)
 	return (USB_SUCCESS);
 }
 
-
+/*
+ * usba_process_ss_ep_comp_descr:
+ * 	This processes a raw endpoint companion descriptor and associates it
+ * 	inside of an existing endpoint's entry.
+ *
+ * Arguments:
+ *	state		- Pointer to this module's state structure.
+ *
+ * Returns:
+ *	USB_SUCCESS:	Descriptor is successfully parsed.
+ *	USB_FAILURE:	Descriptor is inappropriately placed in config cloud.
+ */
 static int
-usba_process_ep_comp_descr(usba_reg_state_t *state)
+usba_process_ss_ep_comp_descr(usba_reg_state_t *state)
 {
-	USB_DPRINTF_L4(DPRINT_MASK_REGISTER, usbai_reg_log_handle,
-	    "usba_process_ep_comp_descr starting");
-
-	/* No endpoint descr preceeds this descr */
-	if (state->st_curr_ep == NULL) {
-		USB_DPRINTF_L2(DPRINT_MASK_REGISTER, usbai_reg_log_handle,
-		    "usba_process_ep_comp_descr: no endpt before the descr");
-
+	if (state->st_curr_ep == NULL)
 		return (USB_FAILURE);
-	}
 
-	(void) usb_parse_data("ccccsscc", state->st_curr_raw_descr,
+	(void) usb_parse_data("4cs", state->st_curr_raw_descr,
 	    state->st_curr_raw_descr_len,
-	    &state->st_curr_ep->ep_comp_descr,
-	    sizeof (usb_ep_comp_descr_t));
-	USB_DPRINTF_L4(DPRINT_MASK_REGISTER, usbai_reg_log_handle,
-	    "usba_process_ep_comp_descr done");
+	    &state->st_curr_ep->ep_ss_comp,
+	    sizeof (usb_ep_ss_comp_descr_t));
+	state->st_curr_ep->ep_ss_valid = B_TRUE;
 
 	return (USB_SUCCESS);
 }
+
 
 /*
  * usba_process_cv_descr:
@@ -1172,6 +1142,7 @@ usba_process_cv_descr(usba_reg_state_t *state)
 		break;
 
 	case USB_DESCR_TYPE_EP:
+	case USB_DESCR_TYPE_SS_EP_COMP:
 		n_cvs_ptr = &state->st_curr_ep->ep_n_cvs;
 		cvs_ptr = &state->st_curr_ep->ep_cvs;
 		break;
@@ -1227,7 +1198,6 @@ usba_set_parse_values(dev_info_t *dip, usba_device_t *usba_device,
 	/* Default to *all* in case configuration# prop not set. */
 	mutex_enter(&usba_device->usb_mutex);
 	state->st_cfg_to_build = usba_device->usb_active_cfg_ndx;
-	state->st_build_ep_comp = usba_device->usb_is_wireless;
 	mutex_exit(&usba_device->usb_mutex);
 	if (state->st_cfg_to_build == USBA_DEV_CONFIG_INDEX_UNDEFINED) {
 		state->st_cfg_to_build = USBA_ALL;
@@ -1343,7 +1313,7 @@ usba_make_alts_sparse(usb_alt_if_data_t **array, uint_t *n_elements)
 	uint8_t largest_value;
 	uint8_t curr_value;
 	uint_t	in_order = 0;
-	usb_alt_if_data_t *orig_addr = *array; /* Non-sparse array base ptr */
+	usb_alt_if_data_t *orig_addr; /* Non-sparse array base ptr */
 	usb_alt_if_data_t *repl_array;	/* Base ptr to sparse array */
 	uint_t	n_repl_elements;	/* Number elements in the new array */
 	uint_t	i;
@@ -1358,6 +1328,7 @@ usba_make_alts_sparse(usb_alt_if_data_t **array, uint_t *n_elements)
 	    "make_sparse: array=0x%p, n_orig_elements=%d",
 	    (void *)array, n_orig_elements);
 
+	orig_addr = *array;
 	curr_value = orig_addr[0].altif_descr.bAlternateSetting;
 	smallest_value = largest_value = curr_value;
 
@@ -1665,7 +1636,7 @@ usba_dump_descr_tree(dev_info_t *dip, usb_client_dev_data_t *usb_reg,
 	usb_cfg_descr_t *config_descr; /* and its USB descriptor. */
 	char		*string;
 	char		*name_string = NULL;
-	int		name_string_size;
+	int		name_string_size = 0;
 
 	if ((usb_reg == NULL) || ((log_handle == NULL) && (dip == NULL))) {
 
@@ -1883,7 +1854,7 @@ usba_dump_if(usb_if_data_t *which_if, usb_log_handle_t dump_handle,
  */
 static void
 usba_dump_ep(uint_t which_ep, usb_ep_data_t *ep, usb_log_handle_t dump_handle,
-		uint_t dump_level, uint_t dump_mask, char *string)
+    uint_t dump_level, uint_t dump_mask, char *string)
 {
 	int which_cv;
 	usb_ep_descr_t *ep_descr = &ep->ep_descr;
@@ -2003,4 +1974,46 @@ usba_dump_bin(uint8_t *data, int max_bytes, int indent,
 		buffer[nexthere] = '\0';
 		(void) usb_log(dump_handle, dump_level, dump_mask, buffer);
 	}
+}
+
+/*
+ * usb_ep_xdescr_fill:
+ *
+ * Fills in the extended endpoint descriptor based on data from the
+ * configuration tree.
+ *
+ * Arguments:
+ * 	version		- Should be USB_EP_XDESCR_CURRENT_VERSION
+ * 	dip		- devinfo pointer
+ * 	ep_data		- endpoint data pointer
+ * 	ep_xdesc	- An extended descriptor structure, filled upon
+ *			  successful completion.
+ *
+ * Return values:
+ *	USB_SUCCESS	 - filling data succeeded
+ *	USB_INVALID_ARGS - invalid arguments
+ */
+int
+usb_ep_xdescr_fill(uint_t version, dev_info_t *dip, usb_ep_data_t *ep_data,
+    usb_ep_xdescr_t *ep_xdescr)
+{
+	if (version != USB_EP_XDESCR_VERSION_ONE) {
+
+		return (USB_INVALID_ARGS);
+	}
+
+	if (dip == NULL || ep_data == NULL || ep_xdescr == NULL) {
+
+		return (USB_INVALID_ARGS);
+	}
+
+	bzero(ep_xdescr, sizeof (usb_ep_xdescr_t));
+	ep_xdescr->uex_version = version;
+	ep_xdescr->uex_ep = ep_data->ep_descr;
+	if (ep_data->ep_ss_valid == B_TRUE) {
+		ep_xdescr->uex_flags |= USB_EP_XFLAGS_SS_COMP;
+		ep_xdescr->uex_ep_ss = ep_data->ep_ss_comp;
+	}
+
+	return (USB_SUCCESS);
 }

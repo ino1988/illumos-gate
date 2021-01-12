@@ -24,6 +24,8 @@
  */
 /*
  * Copyright 2014 Josef 'Jeff' Sipek <jeffpc@josefsipek.net>
+ * Copyright (c) 2014 by Delphix. All rights reserved.
+ * Copyright 2017 Joyent, Inc.
  */
 
 #include <sys/cpuvar.h>
@@ -39,17 +41,12 @@
 #include <sys/privregs.h>
 #include <sys/psm_common.h>
 
-/* Function prototypes of local apic and X2APIC */
+/* Function prototypes of local apic */
 static uint64_t local_apic_read(uint32_t reg);
 static void local_apic_write(uint32_t reg, uint64_t value);
 static int get_local_apic_pri(void);
 static void local_apic_write_task_reg(uint64_t value);
 static void local_apic_write_int_cmd(uint32_t cpu_id, uint32_t cmd1);
-static uint64_t local_x2apic_read(uint32_t msr);
-static void local_x2apic_write(uint32_t msr, uint64_t value);
-static int get_local_x2apic_pri(void);
-static void local_x2apic_write_task_reg(uint64_t value);
-static void local_x2apic_write_int_cmd(uint32_t cpu_id, uint32_t cmd1);
 
 /*
  * According to the X2APIC specification:
@@ -63,26 +60,18 @@ static void local_x2apic_write_int_cmd(uint32_t cpu_id, uint32_t cmd1);
  *	1			1	APIC is enabled in X2APIC mode
  * -----------------------------------------------------------
  */
-int	x2apic_enable = 1;
 apic_mode_t apic_mode = LOCAL_APIC;	/* Default mode is Local APIC */
 
+/* See apic_directed_EOI_supported().  Currently 3-state variable. */
+volatile int apic_directed_eoi_state = 2;
+
 /* Uses MMIO (Memory Mapped IO) */
-static apic_reg_ops_t local_apic_regs_ops = {
+apic_reg_ops_t local_apic_regs_ops = {
 	local_apic_read,
 	local_apic_write,
 	get_local_apic_pri,
 	local_apic_write_task_reg,
 	local_apic_write_int_cmd,
-	apic_send_EOI,
-};
-
-/* X2APIC : Uses RDMSR/WRMSR instructions to access APIC registers */
-static apic_reg_ops_t x2apic_regs_ops = {
-	local_x2apic_read,
-	local_x2apic_write,
-	get_local_x2apic_pri,
-	local_x2apic_write_task_reg,
-	local_x2apic_write_int_cmd,
 	apic_send_EOI,
 };
 
@@ -96,8 +85,6 @@ apic_reg_ops_t *apic_reg_ops = &local_apic_regs_ops;
  */
 void apic_send_EOI();
 void apic_send_directed_EOI(uint32_t irq);
-
-#define	X2APIC_ENABLE_BIT	10
 
 /*
  * Local APIC Implementation
@@ -146,51 +133,6 @@ local_apic_write_int_cmd(uint32_t cpu_id, uint32_t cmd1)
 	apicadr[APIC_INT_CMD1] = cmd1;
 }
 
-/*
- * X2APIC Implementation.
- */
-static uint64_t
-local_x2apic_read(uint32_t msr)
-{
-	uint64_t i;
-
-	i = (uint64_t)(rdmsr(REG_X2APIC_BASE_MSR + (msr >> 2)) & 0xffffffff);
-	return (i);
-}
-
-static void
-local_x2apic_write(uint32_t msr, uint64_t value)
-{
-	uint64_t tmp;
-
-	if (msr != APIC_EOI_REG) {
-		tmp = rdmsr(REG_X2APIC_BASE_MSR + (msr >> 2));
-		tmp = (tmp & 0xffffffff00000000) | value;
-	} else {
-		tmp = 0;
-	}
-
-	wrmsr((REG_X2APIC_BASE_MSR + (msr >> 2)), tmp);
-}
-
-static int
-get_local_x2apic_pri(void)
-{
-	return (rdmsr(REG_X2APIC_BASE_MSR + (APIC_TASK_REG >> 2)));
-}
-
-static void
-local_x2apic_write_task_reg(uint64_t value)
-{
-	X2APIC_WRITE(APIC_TASK_REG, value);
-}
-
-static void
-local_x2apic_write_int_cmd(uint32_t cpu_id, uint32_t cmd1)
-{
-	wrmsr((REG_X2APIC_BASE_MSR + (APIC_INT_CMD1 >> 2)),
-	    (((uint64_t)cpu_id << 32) | cmd1));
-}
 
 /*ARGSUSED*/
 void
@@ -232,38 +174,6 @@ apic_send_directed_EOI(uint32_t irq)
 	}
 }
 
-int
-apic_detect_x2apic(void)
-{
-	if (x2apic_enable == 0)
-		return (0);
-
-	return (is_x86_feature(x86_featureset, X86FSET_X2APIC));
-}
-
-void
-apic_enable_x2apic(void)
-{
-	uint64_t apic_base_msr;
-
-	if (apic_local_mode() == LOCAL_X2APIC) {
-		/* BIOS apparently has enabled X2APIC */
-		if (apic_mode != LOCAL_X2APIC)
-			x2apic_update_psm();
-		return;
-	}
-
-	/*
-	 * This is the first time we are enabling X2APIC on this CPU
-	 */
-	apic_base_msr = rdmsr(REG_APIC_BASE_MSR);
-	apic_base_msr = apic_base_msr | (0x1 << X2APIC_ENABLE_BIT);
-	wrmsr(REG_APIC_BASE_MSR, apic_base_msr);
-
-	if (apic_mode != LOCAL_X2APIC)
-		x2apic_update_psm();
-}
-
 /*
  * Determine which mode the current CPU is in. See the table above.
  * (IA32_APIC_BASE[11])   (IA32_APIC_BASE[10])
@@ -294,110 +204,44 @@ apic_directed_EOI_supported()
 {
 	uint32_t ver;
 
+	/*
+	 * There are some known issues with some versions of Linux KVM and QEMU
+	 * where by directed EOIs do not properly function and instead get
+	 * coalesced at the hypervisor, causing the host not to see interrupts.
+	 * Thus, when the platform is KVM, we would like to disable it by
+	 * default, but keep it available otherwise.
+	 *
+	 * We use a three-state variable (apic_directed_eoi_state) to determine
+	 * how we handle directed EOI.
+	 *
+	 * 0 --> Don't do directed EOI at all.
+	 * 1 --> Do directed EOI if available, no matter the HW environment.
+	 * 2 --> Don't do directed EOI on KVM, but do it otherwise if available.
+	 *
+	 * If some grinning weirdo put something else in there, treat it as '2'
+	 * (i.e. the current default).
+	 *
+	 * Note, at this time illumos KVM does not identify as KVM. If it does,
+	 * we'll need to do some work to determine if it should be caught by
+	 * this or if it should show up as its own value of platform_type.
+	 */
+	switch (apic_directed_eoi_state) {
+	case 0:
+		/* Don't do it at all. */
+		return (0);
+	case 1:
+		break;
+	case 2:
+	default:
+		/* Only do it if we aren't on KVM. */
+		if (get_hwenv() == HW_KVM)
+			return (0);
+		/* FALLTHRU */
+	}
+
 	ver = apic_reg_ops->apic_read(APIC_VERS_REG);
 	if (ver & APIC_DIRECTED_EOI_BIT)
 		return (1);
 
 	return (0);
-}
-
-/*
- * Change apic_reg_ops depending upon the apic_mode.
- */
-void
-apic_change_ops()
-{
-	if (apic_mode == LOCAL_APIC)
-		apic_reg_ops = &local_apic_regs_ops;
-	else if (apic_mode == LOCAL_X2APIC)
-		apic_reg_ops = &x2apic_regs_ops;
-}
-
-/*
- * Generates an interprocessor interrupt to another CPU when X2APIC mode is
- * enabled.
- */
-void
-x2apic_send_ipi(int cpun, int ipl)
-{
-	int vector;
-	ulong_t flag;
-
-	ASSERT(apic_mode == LOCAL_X2APIC);
-
-	/*
-	 * With X2APIC, Intel relaxed the semantics of the
-	 * WRMSR instruction such that references to the X2APIC
-	 * MSR registers are no longer serializing instructions.
-	 * The code that initiates IPIs assumes that some sort
-	 * of memory serialization occurs. The old APIC code
-	 * did a write to uncachable memory mapped registers.
-	 * Any reference to uncached memory is a serializing
-	 * operation. To mimic those semantics here, we do an
-	 * atomic operation, which translates to a LOCK OR instruction,
-	 * which is serializing.
-	 */
-	atomic_or_ulong(&flag, 1);
-
-	vector = apic_resv_vector[ipl];
-
-	flag = intr_clear();
-
-	/*
-	 * According to X2APIC specification in section '2.3.5.1' of
-	 * Interrupt Command Register Semantics, the semantics of
-	 * programming Interrupt Command Register to dispatch an interrupt
-	 * is simplified. A single MSR write to the 64-bit ICR is required
-	 * for dispatching an interrupt. Specifically with the 64-bit MSR
-	 * interface to ICR, system software is not required to check the
-	 * status of the delivery status bit prior to writing to the ICR
-	 * to send an IPI. With the removal of the Delivery Status bit,
-	 * system software no longer has a reason to read the ICR. It remains
-	 * readable only to aid in debugging.
-	 */
-#ifdef	DEBUG
-	APIC_AV_PENDING_SET();
-#endif	/* DEBUG */
-
-	if ((cpun == psm_get_cpu_id())) {
-		X2APIC_WRITE(X2APIC_SELF_IPI, vector);
-	} else {
-		apic_reg_ops->apic_write_int_cmd(
-		    apic_cpus[cpun].aci_local_id, vector);
-	}
-
-	intr_restore(flag);
-}
-
-/*
- * Generates IPI to another CPU depending on the local APIC mode.
- * apic_send_ipi() and x2apic_send_ipi() depends on the configured
- * mode of the local APIC, but that may not match the actual mode
- * early in CPU startup.
- *
- * Any changes made to this routine must be accompanied by similar
- * changes to apic_send_ipi().
- */
-void
-apic_common_send_ipi(int cpun, int ipl)
-{
-	int vector;
-	ulong_t flag;
-	int mode = apic_local_mode();
-
-	if (mode == LOCAL_X2APIC) {
-		x2apic_send_ipi(cpun, ipl);
-		return;
-	}
-
-	ASSERT(mode == LOCAL_APIC);
-
-	vector = apic_resv_vector[ipl];
-	ASSERT((vector >= APIC_BASE_VECT) && (vector <= APIC_SPUR_INTR));
-	flag = intr_clear();
-	while (local_apic_regs_ops.apic_read(APIC_INT_CMD1) & AV_PENDING)
-		apic_ret();
-	local_apic_regs_ops.apic_write_int_cmd(apic_cpus[cpun].aci_local_id,
-	    vector);
-	intr_restore(flag);
 }

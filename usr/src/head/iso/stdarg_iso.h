@@ -20,7 +20,7 @@
  * CDDL HEADER END
  */
 /*	Copyright (c) 1988 AT&T	*/
-/*	  All Rights Reserved  	*/
+/*	  All Rights Reserved	*/
 
 
 /*
@@ -42,8 +42,6 @@
 
 #ifndef _ISO_STDARG_ISO_H
 #define	_ISO_STDARG_ISO_H
-
-#pragma ident	"%Z%%M%	%I%	%E% SMI" /* SVr4.0 1.8 */
 
 /*
  * This header defines the ISO C 1989 and ISO C++ 1998 variable

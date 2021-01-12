@@ -19,6 +19,7 @@
  * CDDL HEADER END
  */
 /*
+ * Copyright 2017 Joyent Inc
  * Copyright 2009 Sun Microsystems, Inc.  All rights reserved.
  * Use is subject to license terms.
  */
@@ -37,6 +38,7 @@
 #include <sys/mnttab.h>
 #include <sys/param.h>
 #include <sys/time.h>
+#include <sys/debug.h>
 #ifdef notdef
 #include <netconfig.h>
 #endif
@@ -77,7 +79,7 @@ void getquota();
 int  hasquota();
 void log_cant_reply();
 void setupfs();
-static void zexit();
+static void zexit(int) __NORETURN;
 
 static libzfs_handle_t *(*_libzfs_init)(void);
 static void (*_libzfs_fini)(libzfs_handle_t *);
@@ -327,6 +329,7 @@ getquota(rqstp, transp)
 	 * This authentication is really bogus with the current rpc
 	 * authentication scheme. One day we will have something for real.
 	 */
+	CTASSERT(sizeof (authp) <= RQCRED_SIZE);
 	if (rqstp->rq_cred.oa_flavor != AUTH_UNIX ||
 	    (((authp) rqstp->rq_clntcred)->aup_uid != 0 &&
 		((authp) rqstp->rq_clntcred)->aup_uid != (uid_t)gqa.gqa_uid)) {
@@ -403,15 +406,11 @@ sendreply:
 }
 
 int
-quotactl(cmd, mountp, uid, dqp)
-	int	cmd;
-	char	*mountp;
-	uid_t	uid;
-	struct dqblk *dqp;
+quotactl(int cmd, char *mountp, uid_t uid, struct dqblk *dqp)
 {
-	int 		fd;
-	int 		status;
-	struct quotctl 	quota;
+	int		fd;
+	int		status;
+	struct quotctl	quota;
 	char		mountpoint[256];
 	FILE		*fstab;
 	struct mnttab	mntp;
@@ -427,7 +426,7 @@ quotactl(cmd, mountp, uid, dqp)
 			return (-1);
 		}
 		fd = -1;
-		while ((status = getmntent(fstab, &mntp)) == NULL) {
+		while ((status = getmntent(fstab, &mntp)) == 0) {
 			if (strcmp(mntp.mnt_fstype, MNTTYPE_UFS) != 0 ||
 				!(hasmntopt(&mntp, MNTOPT_RQ) ||
 				hasmntopt(&mntp, MNTOPT_QUOTA)))
@@ -477,7 +476,7 @@ findfsq(char *dir)
 {
 	struct stat sb;
 	struct fsquot *fsqp;
-	static time_t lastmtime = 0; 	/* mount table's previous mtime */
+	static time_t lastmtime = 0;	/* mount table's previous mtime */
 
 	/*
 	 * If we've never looked at the mount table, or it has changed

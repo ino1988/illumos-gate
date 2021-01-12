@@ -20,6 +20,7 @@
  */
 
 /*
+ * Copyright 2017 Joyent Inc
  * Copyright 2009 Sun Microsystems, Inc.  All rights reserved.
  * Use is subject to license terms.
  */
@@ -66,6 +67,7 @@
 #include <rpcsvc/nis_dhext.h>
 #include <syslog.h>
 #include <libscf.h>
+#include <sys/debug.h>
 
 #include "debug.h"
 #include "keyserv_cache.h"
@@ -746,15 +748,12 @@ __key_net_get_2_svc(uid, arg, keynetname)
 }
 
 bool_t
-__key_get_conv_2_svc(uid, arg, res)
-	uid_t uid;
-	keybuf arg;
-	cryptkeyres *res;
+__key_get_conv_2_svc(uid_t uid, keybuf arg, cryptkeyres *res)
 {
 
 	if (debugging)
 		(void) fprintf(stderr, "get_conv(%d, %.*s) = ", uid,
-			sizeof (arg), arg);
+		    sizeof (keybuf), arg);
 
 
 	res->status = pk_get_conv_key(uid, arg, res);
@@ -1334,6 +1333,7 @@ get_auth(trans, rqstp, uid)
 		fprintf(stderr, "local_uid  %d\n", cred.euid);
 	if (rqstp->rq_cred.oa_flavor == AUTH_SYS ||
 	    rqstp->rq_cred.oa_flavor == AUTH_LOOPBACK) {
+		CTASSERT(sizeof (struct authunix_parms) <= RQCRED_SIZE);
 /* LINTED pointer alignment */
 		*uid = ((struct authunix_parms *)rqstp->rq_clntcred)->aup_uid;
 		return (*uid == cred.euid || cred.euid == 0);

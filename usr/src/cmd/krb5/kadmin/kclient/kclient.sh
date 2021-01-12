@@ -21,6 +21,7 @@
 #
 # Copyright (c) 2003, 2010, Oracle and/or its affiliates. All rights reserved.
 # Copyright 2014 Nexenta Systems, Inc.  All rights reserved.
+# Copyright 2016 Toomas Soome <tsoome@me.com>
 #
 # This script is used to setup the Kerberos client by
 # supplying information about the Kerberos realm and kdc.
@@ -999,6 +1000,8 @@ function netmask2length {
 function getSubnets {
 	typeset -ui16 addr netmask
 	typeset -ui16 classa=16\#ff000000
+	typeset -ui16 classb=16\#ffff0000
+	typeset -ui16 classc=16\#ffffff00
 
 	ifconfig -a|while read line
 	do
@@ -1020,6 +1023,18 @@ function getSubnets {
 		[[ $((addr & classa)) -eq 16\#7f000000 ]] && continue
 
 		print $(num2ipAddr $((addr & netmask)))/$(netmask2length $netmask)
+		if [ $netmask -gt $classc ]
+		then
+			print $(num2ipAddr $((addr & classc)))/$(netmask2length $classc)
+		fi
+		if [ $netmask -gt $classb ]
+		then
+			print $(num2ipAddr $((addr & classb)))/$(netmask2length $classb)
+		fi
+		if [ $netmask -gt $classa ]
+		then
+			print $(num2ipAddr $((addr & classa)))/$(netmask2length $classa)
+		fi
 	done
 }
 
@@ -1371,7 +1386,7 @@ EOF
         i=0
 
 	# first check to see if /dev/random exists to generate a new password
-	if [[ ! -h /dev/random ]]; then
+	if [[ ! -e /dev/random ]]; then
 		printf "$(gettext "/dev/random does not exist").\n" >&2
 		error_message
 	fi

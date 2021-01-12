@@ -20,37 +20,34 @@
 #
 #
 # Copyright (c) 2005, 2010, Oracle and/or its affiliates. All rights reserved.
+# Copyright 2016 Igor Kozhukhov <ikozhukhov@gmail.com>.
+# Copyright (c) 2015 by Delphix. All rights reserved.
+# Copyright 2020 Joyent, Inc.
 #
 
 PROG= zpool
 OBJS= zpool_main.o zpool_vdev.o zpool_iter.o zpool_util.o
-SRCS= $(OBJS:%.o=%.c)
 POFILES=$(OBJS:%.o=%.po)
 POFILE= zpool.po
 
 include ../Makefile.cmd
+include ../Makefile.cmd.64
 include ../Makefile.ctf
 
 STATCOMMONDIR = $(SRC)/cmd/stat/common
 
 STAT_COMMON_OBJS = timestamp.o
-STAT_COMMON_SRCS = $(STAT_COMMON_OBJS:%.o=$(STATCOMMONDIR)/%.c)
-SRCS += $(STAT_COMMON_SRCS)
 
-LDLIBS += -lzfs -lnvpair -ldevid -lefi -ldiskmgt -luutil -lumem
+LDLIBS += -lzfs -lnvpair -ldevid -lefi -ldiskmgt -luutil -lumem -lzutil \
+	-lm -lzpool
 
-INCS += -I../../common/zfs -I$(STATCOMMONDIR)
+INCS += -I../../common/zfs -I../../uts/common/fs/zfs -I$(STATCOMMONDIR)
+INCS += -I../../lib/libzutil/common
 
-CPPFLAGS += -D_LARGEFILE64_SOURCE=1 -D_REENTRANT $(INCS)
+CSTD=	$(CSTD_GNU99)
+
+CPPFLAGS += $(INCS)
 $(NOT_RELEASE_BUILD)CPPFLAGS += -DDEBUG
-
-# lint complains about unused _umem_* functions
-LINTFLAGS += -xerroff=E_NAME_DEF_NOT_USED2 
-LINTFLAGS64 += -xerroff=E_NAME_DEF_NOT_USED2  
-
-CERRWARN += -_gcc=-Wno-unused-function
-CERRWARN += -_gcc=-Wno-uninitialized
-CERRWARN += -_gcc=-Wno-parentheses
 
 ROOTUSRSBINLINKS = $(PROG:%=$(ROOTUSRSBIN)/%)
 
@@ -74,8 +71,6 @@ $(POFILE): $(POFILES)
 
 clean:
 	$(RM) $(OBJS) $(STAT_COMMON_OBJS)
-
-lint:	lint_SRCS
 
 # Links from /usr/sbin to /sbin
 $(ROOTUSRSBINLINKS):

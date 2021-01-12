@@ -22,20 +22,18 @@
 /*
  * Copyright 2008 Sun Microsystems, Inc.  All rights reserved.
  * Use is subject to license terms.
+ * Copyright 2018 Jason King
  */
 
 /*	Copyright (c) 1988 AT&T	*/
-/*	  All Rights Reserved  	*/
-
-
-#pragma ident	"%Z%%M%	%I%	%E% SMI"
+/*	  All Rights Reserved	*/
 
 /*
  *	Program profiling report generator.
  *
  *	Usage:
  *
- * 	prof [-ChsVz] [-a | c | n | t]  [-o  |  x]   [-g  |  l]
+ *	prof [-ChsVz] [-a | c | n | t]  [-o  |  x]   [-g  |  l]
  *	    [-m mdata] [prog]
  *
  *	Where "prog" is the program that was profiled; "a.out" by default.
@@ -139,7 +137,7 @@ char *aformat = "%8o ";
 int gflag = 0;			/*  replaces gmatch and gmask */
 int Cflag = 0;
 
-PROF_FILE	*ldptr; 		/* For program ("a.out") file. */
+PROF_FILE	*ldptr;		/* For program ("a.out") file. */
 
 FILE	*mon_iop;		/* For profile (MON_OUT) file. */
 char	*sym_fn = "a.out";	/* Default program file name. */
@@ -200,7 +198,7 @@ struct snymEntry {
 	char	*sym_addr;	/* address which has a synonym */
 	int	howMany;	/* # of synonyms for this symbol */
 	int	snymReported;	/* 'was printed in a report line already'  */
-				/* 	flag, */
+				/*	flag, */
 				/*   > 0 report line printed for these syns. */
 				/*  == 0 not printed yet. */
 	long	tot_sl_count;	/* total subr calls for these snyms */
@@ -350,10 +348,6 @@ main(int argc, char **argv)
 
 	long sf;	/* Scale for index into pcounts: */
 			/*	i(pc) = ((pc - pc_l) * sf)/bias. */
-
-	/* LINTED: set but not used */
-	long s_inv;	/* Inverse: i_inv(i) = */
-			/*		{pc00, pc00+1, ... pc00+s_inv-1}. */
 
 	unsigned pc_m;	/* Range of PCs profiled: pc_m = pc_h - pc_l */
 
@@ -605,15 +599,13 @@ pc_l, pc_h, pc_m, pc_m, head.nfns, n_cc, n_pc));
 		sf >>= 1;
 		bias >>= 1;
 	}
-	s_inv = pc_m/n_pc;	/* Range of PCs mapped into one index. */
 
 	/* BEGIN CSTYLED */
 OLD_DEBUG(
 	if (debug_value) {
-		Fprint(
-			stderr,
-			"sf = %d, s_inv = %d bias = %d\n",
-			(long)sf, s_inv, bias);
+
+		Fprint(stderr, "sf = %d, s_inv = %d bias = %d\n",
+		    (long)sf, pc_m / n_pc, bias);
 	}
 );
 	/* END CSTYLED */
@@ -1020,8 +1012,8 @@ if (debug_value)  {
 	 * option causes certain additional information to be printed.
 	 */
 
-OLD_DEBUG(if (debug_value) Fprint(stderr,
-"Time unaccounted for: %.7G\n", t_tot - t0));
+	OLD_DEBUG(if (debug_value) Fprint(stderr,
+	    "Time unaccounted for: %.7G\n", t_tot - t0));
 
 	if (sort)	/* If comparison routine given then use it. */
 		qsort((char *)slist, (unsigned)n_syms,
@@ -1219,11 +1211,14 @@ eofon(FILE *iop, char *fn)
 	exit(1);
 }
 
-/* Version of perror() that prints cmdname first. */
+/*
+ * Version of perror() that prints cmdname first.
+ * Print system error message & exit.
+ */
 
 static void
 Perror(char *s)
-{				/* Print system error message & exit. */
+{
 	int err = errno;	/* Save current errno in case */
 
 	Fprint(stderr, "%s: ", cmdname);
@@ -1317,9 +1312,7 @@ demangled_name(char *s)
 	const char *name;
 	size_t	len;
 
-	name = conv_demangle_name(s);
-
-	if (strcmp(name, s) == 0)
+	if ((name = conv_demangle_name(s)) == s)
 		return (s);
 
 	if (format_buf != NULL)
@@ -1330,6 +1323,7 @@ demangled_name(char *s)
 	if (format_buf == NULL)
 		return (s);
 	(void) snprintf(format_buf, len, FORMAT_BUF, name, s);
+	free((void *)name);
 	return (format_buf);
 }
 

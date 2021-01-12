@@ -24,7 +24,9 @@
  * Use is subject to license terms.
  */
 
-#pragma ident	"%Z%%M%	%I%	%E% SMI"
+/*
+ * Copyright (c) 2015 by Delphix. All rights reserved.
+ */
 
 #include "libzfs_jni_diskmgt.h"
 #include "libzfs_jni_util.h"
@@ -68,7 +70,7 @@ static void (*error_func)(const char *, va_list);
 static char *
 get_device_name(dm_descriptor_t device, int *error)
 {
-	char *dup;
+	char *dup = NULL;
 	char *name;
 
 	*error = 0;
@@ -120,9 +122,9 @@ get_disk(dm_descriptor_t disk, int *error)
 				/* Get media */
 				dm_descriptor_t *media =
 				    dm_get_associated_descriptors(disk,
-					DM_MEDIA, error);
+				    DM_MEDIA, error);
 				if (*error != 0 || media == NULL ||
-				    *media == NULL) {
+				    *media == 0) {
 					handle_error(
 					    "could not get media from disk %s",
 					    dp->name);
@@ -136,9 +138,9 @@ get_disk(dm_descriptor_t disk, int *error)
 						/* Get free slices */
 						dp->slices =
 						    get_disk_usable_slices(
-							media[0], dp->name,
-							dp->blocksize,
-							&(dp->in_use), error);
+						    media[0], dp->name,
+						    dp->blocksize,
+						    &(dp->in_use), error);
 					}
 					dm_free_descriptors(media);
 				}
@@ -175,7 +177,8 @@ get_disk_aliases(dm_descriptor_t disk, char *name, int *error)
 		int j;
 
 		/* Count aliases */
-		for (j = 0; aliases[j] != NULL; j++);
+		for (j = 0; aliases[j] != 0; j++)
+			;
 
 		names = (char **)calloc(j + 1, sizeof (char *));
 		if (names == NULL) {
@@ -184,7 +187,7 @@ get_disk_aliases(dm_descriptor_t disk, char *name, int *error)
 		} else {
 
 			/* For each alias... */
-			for (j = 0; *error == 0 && aliases[j] != NULL; j++) {
+			for (j = 0; *error == 0 && aliases[j] != 0; j++) {
 
 				dm_descriptor_t alias = aliases[j];
 				char *aname = dm_get_name(alias, error);
@@ -268,7 +271,7 @@ get_disk_slices(dm_descriptor_t media, const char *name, uint32_t blocksize,
 
 		/* For each slice... */
 		for (j = 0; *error == 0 &&
-		    slices != NULL && slices[j] != NULL; j++) {
+		    slices != NULL && slices[j] != 0; j++) {
 
 			/* Get slice */
 			dmgt_slice_t *slice =
@@ -369,7 +372,8 @@ get_disk_usable_slices(dm_descriptor_t media, const char *name,
 	if (slices != NULL) {
 		int i, nslices;
 
-		for (nslices = 0; slices[nslices] != NULL; nslices++);
+		for (nslices = 0; slices[nslices] != NULL; nslices++)
+			;
 
 		/* Prune slices based on use */
 		for (i = nslices - 1; i >= 0; i--) {
@@ -386,7 +390,7 @@ get_disk_usable_slices(dm_descriptor_t media, const char *name,
 
 			s_in_use = slice_in_use(slice, error);
 			if (*error) {
-			    break;
+				break;
 			}
 
 			if (s_in_use) {
@@ -627,7 +631,7 @@ slice_too_small(dmgt_slice_t *slice)
 	if (slice->size < SPA_MINDEVSIZE) {
 #ifdef DEBUG
 		(void) fprintf(stderr, "can't use %s: slice too small: %llu\n",
-			slice->name, (unsigned long long)slice->size);
+		    slice->name, (unsigned long long)slice->size);
 #endif
 		return (1);
 	}
@@ -686,7 +690,7 @@ dmgt_avail_disk_iter(dmgt_disk_iter_f func, void *data)
 		int i;
 
 		/* For each disk... */
-		for (i = 0; disks != NULL && disks[i] != NULL; i++) {
+		for (i = 0; disks != NULL && disks[i] != 0; i++) {
 			dm_descriptor_t disk = (dm_descriptor_t)disks[i];
 			int online;
 

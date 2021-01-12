@@ -34,10 +34,11 @@ include ../../Makefile.hal
 ROOTCMDDIR =	$(ROOTLIB_HAL)
 
 LDLIBS +=	-lc -ldbus-1 -lhal
+NATIVE_LIBS +=	libdbus-1.so
 
 CPPFLAGS +=	$(HAL_DBUS_CPPFLAGS) $(HAL_CONFIG_CPPFLAGS)
 CPPFLAGS +=	-I$(ROOT)/usr/include/hal -I../../hald
-C99MODE =	$(C99_ENABLE)
+CSTD =	$(CSTD_GNU99)
 
 .KEEP_STATE:
 

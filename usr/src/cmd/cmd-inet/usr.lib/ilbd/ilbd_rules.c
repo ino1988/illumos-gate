@@ -839,7 +839,7 @@ i_ilbd_rule_action(const char *rule_name, const struct passwd *ps,
 			rc = ilbd_check_client_config_auth(ps);
 		/* generate the audit record before bailing out */
 		if (rc != ILB_STATUS_OK) {
-			if (rule_name != '\0') {
+			if (*rule_name != '\0') {
 				ilbd_audit_rule_event(rule_name, NULL,
 				    cmd, rc, ucredp);
 			} else {
@@ -1094,7 +1094,7 @@ ilbd_ip_to_str(uint16_t ipversion, struct in6_addr *addr, char *valstr)
 	IP_COPY_IMPL_2_CLI(addr, &ipaddr);
 	addrptr = (ipversion == AF_INET) ?
 	    (void *)&ipaddr.ia_v4 : (void *)&ipaddr.ia_v6;
-	if (inet_ntop(ipversion, (void *)addrptr, valstr, vallen == NULL))
+	if (inet_ntop(ipversion, (void *)addrptr, valstr, vallen) == NULL)
 		logerr("ilbd_ip_to_str: inet_ntop failed");
 	return;
 

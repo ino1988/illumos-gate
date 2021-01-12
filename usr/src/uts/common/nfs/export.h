@@ -18,13 +18,16 @@
  *
  * CDDL HEADER END
  */
+
 /*
  * Copyright (c) 1989, 2010, Oracle and/or its affiliates. All rights reserved.
- * Copyright 2014 Nexenta Systems, Inc.  All rights reserved.
+ * Copyright 2016 Nexenta Systems, Inc.  All rights reserved.
+ * Copyright 2016 Jason King.
+ * Copyright 2018 Nexenta Systems, Inc.  All rights reserved.
  */
 
 /*	Copyright (c) 1984, 1986, 1987, 1988, 1989 AT&T	*/
-/*	  All Rights Reserved  	*/
+/*	  All Rights Reserved	*/
 
 #ifndef	_NFS_EXPORT_H
 #define	_NFS_EXPORT_H
@@ -34,6 +37,12 @@
 #include <sys/vnode.h>
 #include <nfs/nfs4.h>
 #include <sys/kiconv.h>
+#include <sys/avl.h>
+#include <sys/zone.h>
+
+#ifdef _KERNEL
+#include <sys/pkp_hash.h> /* for PKP_HASH_SIZE */
+#endif /* _KERNEL */
 
 #ifdef	__cplusplus
 extern "C" {
@@ -65,7 +74,7 @@ struct secinfo {
 	int32_t		s_refcnt;	/* reference count for tracking */
 					/* how many children (self included) */
 					/* use this flavor. */
-	int 		s_window;	/* window */
+	int		s_window;	/* window */
 	uint_t		s_rootid;	/* UID to use for authorized roots */
 	int		s_rootcnt;	/* count of root names */
 	caddr_t		*s_rootnames;	/* array of root names */
@@ -80,7 +89,7 @@ struct secinfo32 {
 	int32_t		s_refcnt;	/* reference count for tracking */
 					/* how many children (self included) */
 					/* use this flavor. */
-	int32_t 	s_window;	/* window */
+	int32_t		s_window;	/* window */
 	uint32_t	s_rootid;	/* UID to use for authorized roots */
 	int32_t		s_rootcnt;	/* count of root names */
 	caddr32_t	s_rootnames;	/* array of root names */
@@ -183,8 +192,10 @@ struct exportdata32 {
 #endif /* VOLATILE_FH_TEST */
 
 #define	EX_CHARMAP	0x1000	/* NFS may need a character set conversion */
-#define	EX_NOACLFAB	0x2000	/* If set, NFSv2 and v3 servers doesn't */
-				/* fabricate ACL for VOP_GETSECATTR OTW call */
+#define	EX_NOACLFAB	0x2000	/* If set, NFSv2 and v3 servers won't */
+				/* fabricate an aclent_t ACL on file systems */
+				/* that don't support aclent_t ACLs */
+#define	EX_NOHIDE	0x4000	/* traversable from exported parent */
 
 #ifdef	_KERNEL
 
@@ -215,34 +226,83 @@ struct ex_vol_rename {
 #endif /* VOLATILE_FH_TEST */
 
 /*
- * An auth cache entry can exist in 4 active states, with the inactive
- * state being indicated by no entry in the cache.
+ * An auth cache client entry.  This is the umbrella structure and contains all
+ * related auth_cache entries in the authc_tree AVL tree.
+ */
+struct auth_cache_clnt {
+	avl_node_t		authc_link;
+	struct netbuf		authc_addr;	/* address of the client */
+	krwlock_t		authc_lock;	/* protects authc_tree */
+	avl_tree_t		authc_tree;	/* auth_cache entries */
+};
+
+/*
+ * An auth cache entry can exist in 6 states.
  *
- * A FRESH entry is one which is either new or has been refreshed at
- * least once.
+ * A NEW entry was recently allocated and added to the cache.  It does not
+ * contain the valid auth state yet.
  *
- * A STALE entry is one which has been detected to be too old. The
- * transistion from FRESH to STALE prevents multiple threads from
- * submitting refresh requests.
+ * A WAITING entry is one which is actively engaging the user land mountd code
+ * to authenticate or re-authenticate it.  The auth state might not be valid
+ * yet.  The other threads should wait on auth_cv until the retrieving thread
+ * finishes the retrieval and changes the auth cache entry to FRESH, or NEW (in
+ * a case this entry had no valid auth state yet).
  *
- * A REFRESHING entry is one which is actively engaging the user land
- * mountd code to re-authenticate the cache entry.
+ * A REFRESHING entry is one which is actively engaging the user land mountd
+ * code to re-authenticate the cache entry.  There is currently no other thread
+ * waiting for the results of the refresh.
  *
- * An INVALID entry was one which was either STALE or REFRESHING
- * and was deleted out of the encapsulating exi. Since we can't
- * delete it yet, we mark it as INVALID, which lets the refreshq
- * know not to work on it.
+ * A FRESH entry is one which is valid (it is either newly retrieved or has
+ * been refreshed at least once).
  *
- * Note that the auth state of the entry is always valid, even if the
- * entry is STALE. Just as you can eat stale bread, you can consume
- * a stale cache entry. The only time the contents change could be
- * during the transistion from REFRESHING to FRESH.
+ * A STALE entry is one which has been detected to be too old.  The transition
+ * from FRESH to STALE prevents multiple threads from submitting refresh
+ * requests.
+ *
+ * An INVALID entry is one which was either STALE or REFRESHING and was deleted
+ * out of the encapsulating exi.  Since we can't delete it yet, we mark it as
+ * INVALID, which lets the refresh thread know not to work on it and free it
+ * instead.
+ *
+ * Note that the auth state of the entry is valid, even if the entry is STALE.
+ * Just as you can eat stale bread, you can consume a stale cache entry. The
+ * only time the contents change could be during the transition from REFRESHING
+ * or WAITING to FRESH.
+ *
+ * Valid state transitions:
+ *
+ *          alloc
+ *            |
+ *            v
+ *         +-----+
+ *    +--->| NEW |------>free
+ *    |    +-----+
+ *    |       |
+ *    |       v
+ *    |  +---------+
+ *    +<-| WAITING |
+ *    ^  +---------+
+ *    |       |
+ *    |       v
+ *    |       +<--------------------------+<---------------+
+ *    |       |                           ^                |
+ *    |       v                           |                |
+ *    |   +-------+    +-------+    +------------+    +---------+
+ *    +---| FRESH |--->| STALE |--->| REFRESHING |--->| WAITING |
+ *        +-------+    +-------+    +------------+    +---------+
+ *            |            |              |
+ *            |            v              |
+ *            v       +---------+         |
+ *          free<-----| INVALID |<--------+
+ *                    +---------+
  */
 typedef enum auth_state {
 	NFS_AUTH_FRESH,
 	NFS_AUTH_STALE,
 	NFS_AUTH_REFRESHING,
-	NFS_AUTH_INVALID
+	NFS_AUTH_INVALID,
+	NFS_AUTH_NEW,
+	NFS_AUTH_WAITING
 } auth_state_t;
 
 /*
@@ -252,19 +312,20 @@ typedef enum auth_state {
  * contents or auth_lock must be held.
  */
 struct auth_cache {
-	struct netbuf		auth_addr;
+	avl_node_t		auth_link;
+	struct auth_cache_clnt	*auth_clnt;
 	int			auth_flavor;
-	uid_t			auth_clnt_uid;
-	gid_t			auth_clnt_gid;
+	cred_t			*auth_clnt_cred;
 	uid_t			auth_srv_uid;
 	gid_t			auth_srv_gid;
+	uint_t			auth_srv_ngids;
+	gid_t			*auth_srv_gids;
 	int			auth_access;
 	time_t			auth_time;
 	time_t			auth_freshness;
 	auth_state_t		auth_state;
-	char			*auth_netid;
 	kmutex_t		auth_lock;
-	struct auth_cache	*auth_next;
+	kcondvar_t		auth_cv;
 };
 
 #define	AUTH_TABLESIZE	32
@@ -412,18 +473,24 @@ typedef struct treenode {
 } treenode_t;
 
 /*
- * TREE_ROOT checks if the node corresponds to a filesystem root
+ * Now that we have links to chase, we can get the zone rootvp just from
+ * an export.  No current-zone-context needed.
+ */
+#define	EXI_TO_ZONEROOTVP(exi) ((exi)->exi_ne->exi_root->exi_vp)
+
+/*
+ * TREE_ROOT checks if the node corresponds to a filesystem root or
+ * the zone's root directory.
  * TREE_EXPORTED checks if the node is explicitly shared
  */
 
 #define	TREE_ROOT(t) \
-	((t)->tree_exi && (t)->tree_exi->exi_vp->v_flag & VROOT)
+	((t)->tree_exi != NULL && \
+	(((t)->tree_exi->exi_vp->v_flag & VROOT) || \
+	VN_CMP(EXI_TO_ZONEROOTVP((t)->tree_exi), (t)->tree_exi->exi_vp)))
 
 #define	TREE_EXPORTED(t) \
 	((t)->tree_exi && !PSEUDO((t)->tree_exi))
-
-/* Root of nfs pseudo namespace */
-extern treenode_t *ns_root;
 
 #define	EXPTABLESIZE   256
 
@@ -448,6 +515,8 @@ struct exp_hash {
  * should not use va_fsid for a GETATTR(FATTR4_FSID) reply.  It must
  * use exi_fsid because it is guaranteed to be persistent.  This isn't
  * in any way related to NFS4 volatile filehandles.
+ *
+ * The exi_cache_lock protects the exi_cache AVL trees.
  */
 struct exportinfo {
 	struct exportdata	exi_export;
@@ -460,19 +529,29 @@ struct exportinfo {
 	krwlock_t		exi_cache_lock;
 	kmutex_t		exi_lock;
 	uint_t			exi_count;
+	zoneid_t		exi_zoneid;
 	vnode_t			*exi_vp;
 	vnode_t			*exi_dvp;
-	struct auth_cache	*exi_cache[AUTH_TABLESIZE];
+	avl_tree_t		*exi_cache[AUTH_TABLESIZE];
 	struct log_buffer	*exi_logbuffer;
 	struct exp_visible	*exi_visible;
 	struct charset_cache	*exi_charset;
 	unsigned		exi_volatile_dev:1;
 	unsigned		exi_moved:1;
+	int			exi_id;
+	avl_node_t		exi_id_link;
+	/*
+	 * Soft-reference/backpointer to zone's nfs_export_t.
+	 * This allows us access to the zone's rootvp (stored in
+	 * exi_ne->exi_root->exi_vp) even if the current thread isn't in
+	 * same-zone context.
+	 */
+	struct nfs_export	*exi_ne;
 #ifdef VOLATILE_FH_TEST
 	uint32_t		exi_volatile_id;
 	struct ex_vol_rename	*exi_vol_rename;
 	kmutex_t		exi_vol_rename_lock;
-#endif /* VOLATILE_FH_TEST */
+#endif /* VOLATILE_FH_TEST -- keep last! */
 };
 
 typedef struct exportinfo exportinfo_t;
@@ -485,7 +564,7 @@ typedef struct secinfo secinfo_t;
  * a real export at the mount point (VROOT) which has a subtree shared
  * has a visible list.
  *
- * The exi_visible field is NULL for normal, non=pseudo filesystems
+ * The exi_visible field is NULL for normal, non-pseudo filesystems
  * which do not have any subtree exported. If the field is non-null,
  * it points to a list of visible entries, identified by vis_fid and/or
  * vis_ino. The presence of a "visible" list means that if this export
@@ -514,6 +593,7 @@ struct exp_visible {
 	struct exp_visible	*vis_next;
 	struct secinfo		*vis_secinfo;
 	int			vis_seccnt;
+	timespec_t		vis_change;
 };
 typedef struct exp_visible exp_visible_t;
 
@@ -542,15 +622,20 @@ typedef struct exp_visible exp_visible_t;
 #define	rdonly4(req, cs)  \
 	(vn_is_readonly((cs)->vp) || \
 	    (nfsauth4_access((cs)->exi, (cs)->vp, (req), (cs)->basecr, NULL, \
-	    NULL) & (NFSAUTH_RO | NFSAUTH_LIMITED)))
+	    NULL, NULL, NULL) & (NFSAUTH_RO | NFSAUTH_LIMITED)))
 
 extern int	nfsauth4_access(struct exportinfo *, vnode_t *,
-				struct svc_req *, cred_t *, uid_t *, gid_t *);
+    struct svc_req *, cred_t *, uid_t *, gid_t *, uint_t *, gid_t **);
 extern int	nfsauth4_secinfo_access(struct exportinfo *,
-				struct svc_req *, int, int, cred_t *);
+    struct svc_req *, int, int, cred_t *);
+extern int	nfsauth_cache_clnt_compar(const void *, const void *);
 extern int	nfs_fhbcmp(char *, char *, int);
-extern int	nfs_exportinit(void);
+extern void	nfs_exportinit(void);
 extern void	nfs_exportfini(void);
+extern void	nfs_export_zone_init(nfs_globals_t *);
+extern void	nfs_export_zone_fini(nfs_globals_t *);
+extern void	nfs_export_zone_shutdown(nfs_globals_t *);
+extern int	nfs_export_get_rootfh(nfs_globals_t *);
 extern int	chk_clnt_sec(struct exportinfo *, struct svc_req *);
 extern int	makefh(fhandle_t *, struct vnode *, struct exportinfo *);
 extern int	makefh_ol(fhandle_t *, struct exportinfo *, uint_t);
@@ -566,28 +651,61 @@ extern struct exportinfo *nfs_vptoexi(vnode_t *, vnode_t *, cred_t *, int *,
     int *, bool_t);
 extern int	nfs_check_vpexi(vnode_t *, vnode_t *, cred_t *,
 			struct exportinfo **);
-extern void	export_link(struct exportinfo *);
-extern void	export_unlink(struct exportinfo *);
-extern vnode_t *untraverse(vnode_t *);
+extern vnode_t *untraverse(vnode_t *, vnode_t *);
 extern int	vn_is_nfs_reparse(vnode_t *, cred_t *);
 extern int	client_is_downrev(struct svc_req *);
 extern char    *build_symlink(vnode_t *, cred_t *, size_t *);
+
+extern fhandle_t nullfh2;	/* for comparing V2 filehandles */
+
+typedef struct nfs_export {
+	/* Root of nfs pseudo namespace */
+	treenode_t *ns_root;
+
+	nfs_globals_t		*ne_globals;	/* "up" pointer */
+
+	struct exportinfo *exptable_path_hash[PKP_HASH_SIZE];
+	struct exportinfo *exptable[EXPTABLESIZE];
+
+	/*
+	 * Read/Write lock that protects the exportinfo list.  This lock
+	 * must be held when searching or modifiying the exportinfo list.
+	 */
+	krwlock_t exported_lock;
+
+	/* "public" and default (root) location for public filehandle */
+	struct exportinfo *exi_public;
+	struct exportinfo *exi_root;
+	/* For checking default public file handle */
+	fid_t exi_rootfid;
+	/* For comparing V2 filehandles */
+	fhandle_t nullfh2;
+
+	/* The change attribute value of the root of nfs pseudo namespace */
+	timespec_t ns_root_change;
+} nfs_export_t;
 
 /*
  * Functions that handle the NFSv4 server namespace
  */
 extern exportinfo_t *vis2exi(treenode_t *);
 extern int	treeclimb_export(struct exportinfo *);
-extern void	treeclimb_unexport(struct exportinfo *);
+extern void	treeclimb_unexport(nfs_export_t *, struct exportinfo *);
 extern int	nfs_visible(struct exportinfo *, vnode_t *, int *);
-extern int	nfs_visible_inode(struct exportinfo *, ino64_t, int *);
+extern int	nfs_visible_inode(struct exportinfo *, ino64_t,
+		    struct exp_visible **);
 extern int	has_visible(struct exportinfo *, vnode_t *);
 extern void	free_visible(struct exp_visible *);
 extern int	nfs_exported(struct exportinfo *, vnode_t *);
-extern struct exportinfo *pseudo_exportfs(vnode_t *, fid_t *,
-    struct exp_visible *, struct exportdata *);
+extern struct exportinfo *pseudo_exportfs(nfs_export_t *, vnode_t *, fid_t *,
+		    struct exp_visible *, struct exportdata *);
 extern int	vop_fid_pseudo(vnode_t *, fid_t *);
 extern int	nfs4_vget_pseudo(struct exportinfo *, vnode_t **, fid_t *);
+extern bool_t	nfs_visible_change(struct exportinfo *, vnode_t *,
+		    timespec_t *);
+extern void	tree_update_change(nfs_export_t *, treenode_t *, timespec_t *);
+extern void	rfs4_clean_state_exi(nfs_export_t *, struct exportinfo *);
+
 /*
  * Functions that handle the NFSv4 server namespace security flavors
  * information.
@@ -595,13 +713,16 @@ extern int	nfs4_vget_pseudo(struct exportinfo *, vnode_t **, fid_t *);
 extern void	srv_secinfo_exp2pseu(struct exportdata *, struct exportdata *);
 extern void	srv_secinfo_list_free(struct secinfo *, int);
 
+extern nfs_export_t *nfs_get_export();
+extern void	export_link(nfs_export_t *, struct exportinfo *);
+extern void	export_unlink(nfs_export_t *, struct exportinfo *);
+
 /*
- * "public" and default (root) location for public filehandle
+ * exi_id support
  */
-extern struct exportinfo *exi_public, *exi_root;
-extern fhandle_t nullfh2;	/* for comparing V2 filehandles */
-extern krwlock_t exported_lock;
-extern struct exportinfo *exptable[];
+extern kmutex_t  nfs_exi_id_lock;
+extern avl_tree_t exi_id_tree;
+extern int exi_id_get_next(void);
 
 /*
  * Two macros for identifying public filehandles.

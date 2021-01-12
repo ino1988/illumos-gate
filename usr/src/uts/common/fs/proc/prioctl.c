@@ -22,10 +22,11 @@
 /*
  * Copyright 2010 Sun Microsystems, Inc.  All rights reserved.
  * Use is subject to license terms.
+ * Copyright 2017 Joyent, Inc.
  */
 
 /*	Copyright (c) 1984, 1986, 1987, 1988, 1989 AT&T	*/
-/*	  All rights reserved.  	*/
+/*	  All rights reserved.	*/
 
 #include <sys/types.h>
 #include <sys/param.h>
@@ -135,24 +136,12 @@ prctioctl(prnode_t *pnp, int cmd, intptr_t arg, int flag, cred_t *cr)
 /*ARGSUSED*/
 #ifdef _SYSCALL32_IMPL
 static int
-prioctl64(
-	struct vnode *vp,
-	int cmd,
-	intptr_t arg,
-	int flag,
-	cred_t *cr,
-	int *rvalp,
-	caller_context_t *ct)
+prioctl64(struct vnode *vp, int cmd, intptr_t arg, int flag, cred_t *cr,
+    int *rvalp, caller_context_t *ct)
 #else
 int
-prioctl(
-	struct vnode *vp,
-	int cmd,
-	intptr_t arg,
-	int flag,
-	cred_t *cr,
-	int *rvalp,
-	caller_context_t *ct)
+prioctl(struct vnode *vp, int cmd, intptr_t arg, int flag, cred_t *cr,
+    int *rvalp, caller_context_t *ct)
 #endif	/* _SYSCALL32_IMPL */
 {
 	int nsig = PROC_IS_BRANDED(curproc)? BROP(curproc)->b_nsig : NSIG;
@@ -941,8 +930,7 @@ startover:
 	}
 
 	case PIOCGHOLD:		/* get signal-hold mask */
-		schedctl_finish_sigblock(t);
-		sigktou(&t->t_hold, &un.holdmask);
+		prgethold(t, &un.holdmask);
 		prunlock(pnp);
 		if (copyout(&un.holdmask, cmaddr, sizeof (un.holdmask)))
 			error = EFAULT;
@@ -962,9 +950,9 @@ startover:
 			n = 0;
 		else {
 			mutex_exit(&p->p_lock);
-			AS_LOCK_ENTER(as, &as->a_lock, RW_WRITER);
+			AS_LOCK_ENTER(as, RW_WRITER);
 			n = prnsegs(as, 0);
-			AS_LOCK_EXIT(as, &as->a_lock);
+			AS_LOCK_EXIT(as);
 			mutex_enter(&p->p_lock);
 		}
 		prunlock(pnp);
@@ -983,9 +971,9 @@ startover:
 			prunlock(pnp);
 		} else {
 			mutex_exit(&p->p_lock);
-			AS_LOCK_ENTER(as, &as->a_lock, RW_WRITER);
+			AS_LOCK_ENTER(as, RW_WRITER);
 			error = oprgetmap(p, &iolhead);
-			AS_LOCK_EXIT(as, &as->a_lock);
+			AS_LOCK_EXIT(as);
 			mutex_enter(&p->p_lock);
 			prunlock(pnp);
 
@@ -1406,8 +1394,7 @@ oprgetstatus32(kthread_t *t, prstatus32_t *sp, zone_t *zp)
 	sp->pr_cursig  = lwp->lwp_cursig;
 	prassignset(&sp->pr_sigpend, &p->p_sig);
 	prassignset(&sp->pr_lwppend, &t->t_sig);
-	schedctl_finish_sigblock(t);
-	prassignset(&sp->pr_sighold, &t->t_hold);
+	prgethold(t, &sp->pr_sighold);
 	sp->pr_altstack.ss_sp =
 	    (caddr32_t)(uintptr_t)lwp->lwp_sigaltstack.ss_sp;
 	sp->pr_altstack.ss_size = (size32_t)lwp->lwp_sigaltstack.ss_size;
@@ -1657,11 +1644,11 @@ oprgetpsinfo32(proc_t *p, prpsinfo32_t *psp, kthread_t *tp)
 			psp->pr_pctmem = 0;
 		} else {
 			mutex_exit(&p->p_lock);
-			AS_LOCK_ENTER(as, &as->a_lock, RW_READER);
+			AS_LOCK_ENTER(as, RW_READER);
 			psp->pr_size = (size32_t)btopr(as->a_resvsize);
 			psp->pr_rssize = (size32_t)rm_asrss(as);
 			psp->pr_pctmem = rm_pctmemory(as);
-			AS_LOCK_EXIT(as, &as->a_lock);
+			AS_LOCK_EXIT(as);
 			mutex_enter(&p->p_lock);
 		}
 	}
@@ -1684,14 +1671,8 @@ oprgetpsinfo32(proc_t *p, prpsinfo32_t *psp, kthread_t *tp)
 
 /*ARGSUSED*/
 static int
-prioctl32(
-	struct vnode *vp,
-	int cmd,
-	intptr_t arg,
-	int flag,
-	cred_t *cr,
-	int *rvalp,
-	caller_context_t *ct)
+prioctl32(struct vnode *vp, int cmd, intptr_t arg, int flag, cred_t *cr,
+    int *rvalp, caller_context_t *ct)
 {
 	int nsig = PROC_IS_BRANDED(curproc)? BROP(curproc)->b_nsig : NSIG;
 	caddr_t cmaddr = (caddr_t)arg;
@@ -1863,7 +1844,7 @@ prioctl32(
 
 	case PIOCOPENM:		/* open mapped object for reading */
 		if (cmaddr == NULL)
-			un32.va = NULL;
+			un32.va = (caddr32_t)(uintptr_t)NULL;
 		else if (copyin(cmaddr, &un32.va, sizeof (un32.va)))
 			error = EFAULT;
 		break;
@@ -2568,8 +2549,7 @@ startover:
 	}
 
 	case PIOCGHOLD:		/* get signal-hold mask */
-		schedctl_finish_sigblock(t);
-		sigktou(&t->t_hold, &un32.holdmask);
+		prgethold(t, &un32.holdmask);
 		prunlock(pnp);
 		if (copyout(&un32.holdmask, cmaddr, sizeof (un32.holdmask)))
 			error = EFAULT;
@@ -2589,9 +2569,9 @@ startover:
 			n = 0;
 		else {
 			mutex_exit(&p->p_lock);
-			AS_LOCK_ENTER(as, &as->a_lock, RW_WRITER);
+			AS_LOCK_ENTER(as, RW_WRITER);
 			n = prnsegs(as, 0);
-			AS_LOCK_EXIT(as, &as->a_lock);
+			AS_LOCK_EXIT(as);
 			mutex_enter(&p->p_lock);
 		}
 		prunlock(pnp);
@@ -2613,9 +2593,9 @@ startover:
 			prunlock(pnp);
 		} else {
 			mutex_exit(&p->p_lock);
-			AS_LOCK_ENTER(as, &as->a_lock, RW_WRITER);
+			AS_LOCK_ENTER(as, RW_WRITER);
 			error = oprgetmap32(p, &iolhead);
-			AS_LOCK_EXIT(as, &as->a_lock);
+			AS_LOCK_EXIT(as);
 			mutex_enter(&p->p_lock);
 			prunlock(pnp);
 
@@ -3142,7 +3122,7 @@ propenm(prnode_t *pnp, caddr_t cmaddr, caddr_t va, int *rvalp, cred_t *cr)
 		 * change because it is marked P_PR_LOCK.
 		 */
 		mutex_exit(&p->p_lock);
-		AS_LOCK_ENTER(as, &as->a_lock, RW_READER);
+		AS_LOCK_ENTER(as, RW_READER);
 		seg = as_segat(as, va);
 		if (seg != NULL &&
 		    seg->s_ops == &segvn_ops &&
@@ -3153,7 +3133,7 @@ propenm(prnode_t *pnp, caddr_t cmaddr, caddr_t va, int *rvalp, cred_t *cr)
 		} else {
 			error = EINVAL;
 		}
-		AS_LOCK_EXIT(as, &as->a_lock);
+		AS_LOCK_EXIT(as);
 		mutex_enter(&p->p_lock);
 	} else if ((xvp = p->p_exec) == NULL) {
 		error = EINVAL;
@@ -3246,8 +3226,7 @@ oprgetstatus(kthread_t *t, prstatus_t *sp, zone_t *zp)
 	sp->pr_cursig  = lwp->lwp_cursig;
 	prassignset(&sp->pr_sigpend, &p->p_sig);
 	prassignset(&sp->pr_lwppend, &t->t_sig);
-	schedctl_finish_sigblock(t);
-	prassignset(&sp->pr_sighold, &t->t_hold);
+	prgethold(t, &sp->pr_sighold);
 	sp->pr_altstack = lwp->lwp_sigaltstack;
 	prgetaction(p, up, lwp->lwp_cursig, &sp->pr_action);
 	sp->pr_pid   = p->p_pid;
@@ -3496,11 +3475,11 @@ oprgetpsinfo(proc_t *p, prpsinfo_t *psp, kthread_t *tp)
 			psp->pr_pctmem = 0;
 		} else {
 			mutex_exit(&p->p_lock);
-			AS_LOCK_ENTER(as, &as->a_lock, RW_READER);
+			AS_LOCK_ENTER(as, RW_READER);
 			psp->pr_size = btopr(as->a_resvsize);
 			psp->pr_rssize = rm_asrss(as);
 			psp->pr_pctmem = rm_pctmemory(as);
-			AS_LOCK_EXIT(as, &as->a_lock);
+			AS_LOCK_EXIT(as);
 			mutex_enter(&p->p_lock);
 		}
 	}
@@ -3523,7 +3502,7 @@ oprgetmap(proc_t *p, list_t *iolhead)
 	struct seg *brkseg, *stkseg;
 	uint_t prot;
 
-	ASSERT(as != &kas && AS_WRITE_HELD(as, &as->a_lock));
+	ASSERT(as != &kas && AS_WRITE_HELD(as));
 
 	/*
 	 * Request an initial buffer size that doesn't waste memory
@@ -3541,6 +3520,10 @@ oprgetmap(proc_t *p, list_t *iolhead)
 		caddr_t eaddr = seg->s_base + pr_getsegsize(seg, 0);
 		caddr_t saddr, naddr;
 		void *tmp = NULL;
+
+		if ((seg->s_flags & S_HOLE) != 0) {
+			continue;
+		}
 
 		for (saddr = seg->s_base; saddr < eaddr; saddr = naddr) {
 			prot = pr_getprot(seg, 0, &tmp, &saddr, &naddr, eaddr);
@@ -3583,7 +3566,7 @@ oprgetmap32(proc_t *p, list_t *iolhead)
 	struct seg *brkseg, *stkseg;
 	uint_t prot;
 
-	ASSERT(as != &kas && AS_WRITE_HELD(as, &as->a_lock));
+	ASSERT(as != &kas && AS_WRITE_HELD(as));
 
 	/*
 	 * Request an initial buffer size that doesn't waste memory
@@ -3601,6 +3584,10 @@ oprgetmap32(proc_t *p, list_t *iolhead)
 		caddr_t eaddr = seg->s_base + pr_getsegsize(seg, 0);
 		caddr_t saddr, naddr;
 		void *tmp = NULL;
+
+		if ((seg->s_flags & S_HOLE) != 0) {
+			continue;
+		}
 
 		for (saddr = seg->s_base; saddr < eaddr; saddr = naddr) {
 			prot = pr_getprot(seg, 0, &tmp, &saddr, &naddr, eaddr);
@@ -3643,7 +3630,7 @@ oprpdsize(struct as *as)
 	struct seg *seg;
 	size_t size;
 
-	ASSERT(as != &kas && AS_WRITE_HELD(as, &as->a_lock));
+	ASSERT(as != &kas && AS_WRITE_HELD(as));
 
 	if ((seg = AS_SEGFIRST(as)) == NULL)
 		return (0);
@@ -3654,6 +3641,10 @@ oprpdsize(struct as *as)
 		caddr_t saddr, naddr;
 		void *tmp = NULL;
 		size_t npage;
+
+		if ((seg->s_flags & S_HOLE) != 0) {
+			continue;
+		}
 
 		for (saddr = seg->s_base; saddr < eaddr; saddr = naddr) {
 			(void) pr_getprot(seg, 0, &tmp, &saddr, &naddr, eaddr);
@@ -3673,7 +3664,7 @@ oprpdsize32(struct as *as)
 	struct seg *seg;
 	size_t size;
 
-	ASSERT(as != &kas && AS_WRITE_HELD(as, &as->a_lock));
+	ASSERT(as != &kas && AS_WRITE_HELD(as));
 
 	if ((seg = AS_SEGFIRST(as)) == NULL)
 		return (0);
@@ -3684,6 +3675,10 @@ oprpdsize32(struct as *as)
 		caddr_t saddr, naddr;
 		void *tmp = NULL;
 		size_t npage;
+
+		if ((seg->s_flags & S_HOLE) != 0) {
+			continue;
+		}
 
 		for (saddr = seg->s_base; saddr < eaddr; saddr = naddr) {
 			(void) pr_getprot(seg, 0, &tmp, &saddr, &naddr, eaddr);
@@ -3711,15 +3706,15 @@ oprpdread(struct as *as, uint_t hatid, struct uio *uiop)
 	int error;
 
 again:
-	AS_LOCK_ENTER(as, &as->a_lock, RW_WRITER);
+	AS_LOCK_ENTER(as, RW_WRITER);
 
 	if ((seg = AS_SEGFIRST(as)) == NULL) {
-		AS_LOCK_EXIT(as, &as->a_lock);
+		AS_LOCK_EXIT(as);
 		return (0);
 	}
 	size = oprpdsize(as);
 	if (uiop->uio_resid < size) {
-		AS_LOCK_EXIT(as, &as->a_lock);
+		AS_LOCK_EXIT(as);
 		return (E2BIG);
 	}
 
@@ -3734,6 +3729,10 @@ again:
 		caddr_t eaddr = seg->s_base + pr_getsegsize(seg, 0);
 		caddr_t saddr, naddr;
 		void *tmp = NULL;
+
+		if ((seg->s_flags & S_HOLE) != 0) {
+			continue;
+		}
 
 		for (saddr = seg->s_base; saddr < eaddr; saddr = naddr) {
 			size_t len;
@@ -3765,7 +3764,7 @@ again:
 			 */
 			if (next > (uintptr_t)buf + size) {
 				pr_getprot_done(&tmp);
-				AS_LOCK_EXIT(as, &as->a_lock);
+				AS_LOCK_EXIT(as);
 
 				kmem_free(buf, size);
 
@@ -3797,7 +3796,7 @@ again:
 		ASSERT(tmp == NULL);
 	} while ((seg = AS_SEGNEXT(as, seg)) != NULL);
 
-	AS_LOCK_EXIT(as, &as->a_lock);
+	AS_LOCK_EXIT(as);
 
 	ASSERT((uintptr_t)pmp <= (uintptr_t)buf + size);
 	error = uiomove(buf, (caddr_t)pmp - buf, UIO_READ, uiop);
@@ -3818,15 +3817,15 @@ oprpdread32(struct as *as, uint_t hatid, struct uio *uiop)
 	int error;
 
 again:
-	AS_LOCK_ENTER(as, &as->a_lock, RW_WRITER);
+	AS_LOCK_ENTER(as, RW_WRITER);
 
 	if ((seg = AS_SEGFIRST(as)) == NULL) {
-		AS_LOCK_EXIT(as, &as->a_lock);
+		AS_LOCK_EXIT(as);
 		return (0);
 	}
 	size = oprpdsize32(as);
 	if (uiop->uio_resid < size) {
-		AS_LOCK_EXIT(as, &as->a_lock);
+		AS_LOCK_EXIT(as);
 		return (E2BIG);
 	}
 
@@ -3841,6 +3840,10 @@ again:
 		caddr_t eaddr = seg->s_base + pr_getsegsize(seg, 0);
 		caddr_t saddr, naddr;
 		void *tmp = NULL;
+
+		if ((seg->s_flags & S_HOLE) != 0) {
+			continue;
+		}
 
 		for (saddr = seg->s_base; saddr < eaddr; saddr = naddr) {
 			size_t len;
@@ -3872,7 +3875,7 @@ again:
 			 */
 			if (next > (uintptr_t)buf + size) {
 				pr_getprot_done(&tmp);
-				AS_LOCK_EXIT(as, &as->a_lock);
+				AS_LOCK_EXIT(as);
 
 				kmem_free(buf, size);
 
@@ -3904,7 +3907,7 @@ again:
 		ASSERT(tmp == NULL);
 	} while ((seg = AS_SEGNEXT(as, seg)) != NULL);
 
-	AS_LOCK_EXIT(as, &as->a_lock);
+	AS_LOCK_EXIT(as);
 
 	ASSERT((uintptr_t)pmp == (uintptr_t)buf + size);
 	error = uiomove(buf, (caddr_t)pmp - buf, UIO_READ, uiop);

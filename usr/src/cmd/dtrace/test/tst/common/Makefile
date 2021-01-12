@@ -26,7 +26,8 @@
 
 #
 # Copyright (c) 2012 by Delphix. All rights reserved.
-# Copyright (c) 2013, Joyent, Inc. All rights reserved.
+# Copyright 2015 Nexenta Systems, Inc.  All rights reserved.
+# Copyright 2018 Joyent, Inc.
 #
 
 #
@@ -56,7 +57,7 @@ sysevent/tst.post_chan.exe := LDLIBS += -lsysevent
 
 ustack/tst.bigstack.exe := COPTFLAG += -xO1
 
-GCC = $(ONBLD_TOOLS)/bin/$(MACH)/cw -_gcc
+CSTD = $(CSTD_GNU99)
 
 nfs/%.o: $(SNOOPDIR)/%.c
 	$(COMPILE.c) -o $@ $< -I$(SNOOPDIR)
@@ -74,14 +75,12 @@ nfs/tst.call3.exe: nfs/tst.call3.o nfs/$(RPCSVCOBJS)
 	$(LDLIBS) -lnsl -lrpcsvc
 	$(POST_PROCESS) ; $(STRIP_STABS)
 
-pid/tst.gcc.exe: pid/tst.gcc.c
-	$(GCC) -o pid/tst.gcc.exe pid/tst.gcc.c $(LDFLAGS)
-	$(POST_PROCESS) ; $(STRIP_STABS)
-
 json/tst.usdt.o: json/usdt.h
 
 json/usdt.h: json/usdt.d
 	$(DTRACE) -h -s json/usdt.d -o json/usdt.h
+
+CLOBBERFILES +=	json/usdt.h
 
 json/usdt.o: json/usdt.d json/tst.usdt.o
 	$(COMPILE.d) -o json/usdt.o -s json/usdt.d json/tst.usdt.o

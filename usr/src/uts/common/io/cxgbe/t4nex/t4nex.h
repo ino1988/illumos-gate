@@ -42,6 +42,8 @@ extern "C" {
 #define	T4_IOCTL_GET_CIM_QCFG	(T4_IOCTL + 12)
 #define	T4_IOCTL_GET_CIM_IBQ	(T4_IOCTL + 13)
 #define	T4_IOCTL_GET_EDC	(T4_IOCTL + 14)
+#define	T4_IOCTL_LOAD_FW	(T4_IOCTL + 15)
+#define	T4_IOCTL_GET_CUDBG	(T4_IOCTL + 16)
 
 enum {
 	T4_CTXT_EGRESS,
@@ -55,6 +57,7 @@ struct t4_reg32_cmd {
 };
 
 #define	T4_REGDUMP_SIZE (160 * 1024)
+#define	T5_REGDUMP_SIZE (332 * 1024)
 struct t4_regdump {
 	uint32_t  version;
 	uint32_t  len;
@@ -103,16 +106,30 @@ struct t4_edc {
 };
 
 struct t4_cim_qcfg {
-	uint16_t base[6];
-	uint16_t size[6];
+	uint16_t base[14];
+	uint16_t size[14];
 	uint16_t thres[6];
-	uint32_t stat[4 * (6)];
+	uint32_t stat[4 * (6 + 8)];
+	uint32_t obq_wr[2 * (8)];
+	uint32_t num_obq;
 };
 
 #define	T4_DEVLOG_SIZE	32768
 struct t4_devlog {
 	uint32_t len;
-	uint8_t  *data;
+	uint32_t data[0];
+};
+
+struct t4_ldfw {
+	uint32_t len;
+	uint32_t data[0];
+};
+
+struct t4_cudbg_dump {
+	uint8_t wr_flash;
+	uint8_t bitmap[16];
+	uint32_t len;
+	uint32_t data[0];
 };
 
 #ifdef __cplusplus

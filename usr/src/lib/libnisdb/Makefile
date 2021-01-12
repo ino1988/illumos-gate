@@ -19,9 +19,12 @@
 # CDDL HEADER END
 #
 #
+# Copyright 2015 Gary Mills
 # Copyright 2009 Sun Microsystems, Inc.  All rights reserved.
 # Use is subject to license terms.
 #
+# Copyright (c) 2019, Joyent, Inc.
+# Copyright 2019 RackTop Systems.
 #
 
 LIBRARY= libnisdb.a
@@ -134,20 +137,62 @@ LARGEPICS=	$(LARGESYMS:%=pics/%)
 $(LARGEPICS) :=	sparc_C_PICFLAGS = $(C_BIGPICFLAGS)
 $(LARGEPICS) :=	i386_C_PICFLAGS = $(C_BIGPICFLAGS)
 
+# More and stricter semantic checks and lint-like checks
+CFLAGS	+=	$(CCVERBOSE)
+
 CPPFLAGS +=	-D_REENTRANT
 
-CERRWARN +=	-_gcc=-Wno-unused-variable
-CERRWARN +=	-_gcc=-Wno-unused-value
-CERRWARN +=	-_gcc=-Wno-uninitialized
-CERRWARN +=	-_gcc=-Wno-implicit-function-declaration
+# Have an unused variable that can't be removed
+UVAR_PICS = \
+pics/db_dictionary_c_xdr.o \
+pics/db_dictlog_c_xdr.o \
+pics/db_entry_c_xdr.o \
+pics/db_index_c_xdr.o \
+pics/db_item_c_xdr.o \
+pics/db_log_entry_c_xdr.o \
+pics/db_mindex_c_xdr.o \
+pics/db_query_c_xdr.o \
+pics/db_scheme_c_xdr.o \
+pics/db_table_c_xdr.o \
+pics/db_vers_c_xdr.o \
+pics/ldap_xdr.o \
+pics/dit_access.o \
+pics/update.o \
+pics/yptol_utils.o \
+pics/map_ctrl.o
+
+$(UVAR_PICS) := CERRWARN += -_gcc=-Wno-unused-variable
+
+# Correcting these might alter logic
+CERRWARN +=	$(CNOWARN_UNINIT)
 CERRWARN +=	-_gcc=-Wno-switch
-CERRWARN +=	-_gcc=-Wno-parentheses
+
+CCERRWARN +=	-_gcc=-Wno-parentheses
+CCERRWARN +=	-_gcc=-Wno-unused-variable
+CCERRWARN +=	-_gcc=-Wno-unused-value
+CCERRWARN +=	-_gcc=-Wno-unused-function
+CCERRWARN +=	-_gcc=-Wno-return-type
+CCERRWARN +=	-_gcc=-Wno-uninitialized
+
+CCERRWARN +=	-_gcc7=-Wno-nonnull-compare
+CCERRWARN +=	-_gcc8=-Wno-nonnull-compare
+CCERRWARN +=	-_gcc9=-Wno-nonnull-compare
+
+# not linted
+SMATCH=off
 
 # Extra includes, from yp, for yptol files.
 CPPFLAGS += -I$(SRC)/cmd/ypcmd
 
+# Need the path to nis_clnt.h
+CLNT_PICS = pics/db_entry_c_xdr.o pics/ldap_xdr.o pics/db_mindex_c_xdr.o
+
+$(CLNT_PICS) := CPPFLAGS += -I../libnsl/nis/gen
+
 LIBS = $(DYNLIB)
 ZDEFS=
+ZGUIDANCE=
+
 LDLIBS += -lnsl -lldap -lc
 
 # A number of interfaces are interposed by numerous applications, therefore
@@ -164,23 +209,12 @@ all :=		TARGET= all
 clean :=	TARGET= clean
 clobber :=	TARGET= clobber
 install :=	TARGET= install
-lint :=		TARGET= lint
 
 .KEEP_STATE:
 
 all:	$(DERIVED_FILES) $(LIBS)
 
 install: all $(ROOTLIBS) $(ROOTLINKS)
-
-lint: $(DERIVED_FILES) .WAIT lintcheck
-
-pics/%.o: %.c
-	$(COMPILE.c) -o $@ $<
-	$(POST_PROCESS_O)
-
-pics/%.o: %.cc
-	$(COMPILE.cc) -o $@ $<
-	$(POST_PROCESS_O)
 
 objs/%.o pics/%.o profs/%.o: $(YPTOL_DIR)/%.c
 	$(COMPILE.c) -o $@ $<

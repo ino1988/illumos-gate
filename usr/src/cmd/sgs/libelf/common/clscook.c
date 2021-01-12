@@ -27,8 +27,6 @@
 /*	Copyright (c) 1988 AT&T	*/
 /*	  All Rights Reserved  	*/
 
-#pragma ident	"%Z%%M%	%I%	%E% SMI"
-
 /*
  * This stuff used to live in cook.c, but was moved out to
  * facilitate dual (Elf32 and Elf64) compilation.  See block
@@ -39,6 +37,7 @@
 #include <ar.h>
 #include <stdlib.h>
 #include <errno.h>
+#include <sys/sysmacros.h>
 #include "decl.h"
 #include "member.h"
 #include "msg.h"
@@ -92,7 +91,6 @@
 static Okay
 _elf_prepscn(Elf *elf, size_t cnt)
 {
-	NOTE(ASSUMING_PROTECTED(*elf))
 	Elf_Scn *	s;
 	Elf_Scn *	end;
 
@@ -103,7 +101,6 @@ _elf_prepscn(Elf *elf, size_t cnt)
 		_elf_seterr(EMEM_SCN, errno);
 		return (OK_NO);
 	}
-	NOTE(NOW_INVISIBLE_TO_OTHER_THREADS(*s))
 	elf->ed_scntabsz = cnt;
 	end = s + cnt;
 	elf->ed_hdscn = s;
@@ -137,7 +134,6 @@ _elf_prepscn(Elf *elf, size_t cnt)
 	s->s_myflags = SF_ALLOC;
 	s->s_hdnode = 0;
 	s->s_tlnode = 0;
-	NOTE(NOW_VISIBLE_TO_OTHER_THREADS(*s))
 	return (OK_YES);
 }
 
@@ -145,14 +141,12 @@ _elf_prepscn(Elf *elf, size_t cnt)
 Okay
 _elf_cookscn(Elf_Scn * s)
 {
-	NOTE(ASSUMING_PROTECTED(*s, *(s->s_elf)))
 	Elf *			elf;
 	Shdr *			sh;
 	register Dnode *	d = &s->s_dnode;
 	size_t			fsz, msz;
 	unsigned		work;
 
-	NOTE(NOW_INVISIBLE_TO_OTHER_THREADS(*d))
 	s->s_hdnode = s->s_tlnode = d;
 	s->s_err = 0;
 	s->s_shflags = 0;
@@ -177,7 +171,7 @@ _elf_cookscn(Elf_Scn * s)
 	d->db_data.d_off = 0;
 	fsz = elf_fsize(d->db_data.d_type, 1, elf->ed_version);
 	msz = _elf_msize(d->db_data.d_type, elf->ed_version);
-	d->db_data.d_size = (sh->sh_size / fsz) * msz;
+	d->db_data.d_size = MAX(sh->sh_size, (sh->sh_size / fsz) * msz);
 	d->db_shsz = sh->sh_size;
 	d->db_raw = 0;
 	d->db_buf = 0;
@@ -192,7 +186,6 @@ _elf_cookscn(Elf_Scn * s)
 
 	s->s_myflags |= SF_READY;
 
-	NOTE(NOW_VISIBLE_TO_OTHER_THREADS(*d))
 	return (OK_YES);
 }
 
@@ -219,7 +212,6 @@ _elf_snode()
 int
 _elf_ehdr(Elf * elf, int inplace)
 {
-	NOTE(ASSUMING_PROTECTED(*elf))
 	register size_t	fsz;		/* field size */
 	Elf_Data	dst, src;
 
@@ -296,7 +288,6 @@ _elf_ehdr(Elf * elf, int inplace)
 int
 _elf_phdr(Elf * elf, int inplace)
 {
-	NOTE(ASSUMING_PROTECTED(*elf))
 	register size_t		fsz, msz;
 	Elf_Data		dst, src;
 	Ehdr *			eh = elf->ed_ehdr;	/* must be present */
@@ -315,7 +306,8 @@ _elf_phdr(Elf * elf, int inplace)
 	ELFACCESSDATA(work, _elf_work)
 	msz = _elf_msize(ELF_T_PHDR, work) * eh->e_phnum;
 	if ((eh->e_phoff == 0) ||
-	    ((fsz + eh->e_phoff) > elf->ed_fsz)) {
+	    (elf->ed_fsz <= eh->e_phoff) ||
+	    (elf->ed_fsz - eh->e_phoff < fsz)) {
 		_elf_seterr(EFMT_PHTAB, 0);
 		return (-1);
 	}
@@ -355,7 +347,6 @@ _elf_phdr(Elf * elf, int inplace)
 int
 _elf_shdr(Elf * elf, int inplace)
 {
-	NOTE(ASSUMING_PROTECTED(*elf))
 	register size_t		fsz, msz;
 	size_t			scncnt;
 	Elf_Data		dst, src;

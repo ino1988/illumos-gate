@@ -25,6 +25,7 @@
  *
  * Copyright 2008 Sun Microsystems, Inc.  All rights reserved.
  * Use is subject to license terms.
+ * Copyright 2015 Joyent, Inc.  All rights reserved.
  */
 
 /*	Copyright (c) 1983, 1984, 1985, 1986, 1987, 1988, 1989 AT&T	*/
@@ -80,8 +81,12 @@ extern "C" {
 #define	MAP_TYPE	0xf		/* mask for share type */
 
 /* other flags to mmap (or-ed in to MAP_SHARED or MAP_PRIVATE) */
+#define	MAP_FILE	0		/* map from file (default) */
 #define	MAP_FIXED	0x10		/* user assigns address */
+/* Not implemented */
+#define	MAP_RENAME	0x20		/* rename private pages to file */
 #define	MAP_NORESERVE	0x40		/* don't reserve needed swap area */
+/* Note that 0x80 is _MAP_LOW32, defined below */
 #define	MAP_ANON	0x100		/* map anonymous pages directly */
 #define	MAP_ANONYMOUS	MAP_ANON	/* (source compatibility) */
 #define	MAP_ALIGN	0x200		/* addr specifies alignment */
@@ -90,10 +95,8 @@ extern "C" {
 
 #ifdef _KERNEL
 #define	_MAP_TEXTREPL	0x1000
+#define	_MAP_RANDOMIZE	0x2000
 #endif /* _KERNEL */
-
-/* these flags not yet implemented */
-#define	MAP_RENAME	0x20		/* rename private pages to file */
 
 #if	(_POSIX_C_SOURCE <= 2) && !defined(_XPG4_2)
 /* these flags are used by memcntl */
@@ -302,7 +305,12 @@ struct memcntl_mha32 {
 #endif	/* !defined(__XOPEN_OR_POSIX) || defined(__EXTENSIONS__) */
 
 #if	(_POSIX_C_SOURCE <= 2) && !defined(_XPG4_2) || defined(__EXTENSIONS__)
-/* advice to madvise */
+/*
+ * advice to madvise
+ *
+ * Note, if more than 4 bits worth of advice (eg. 16) are specified then
+ * changes will be necessary to the struct vpage.
+ */
 #define	MADV_NORMAL		0	/* no further special treatment */
 #define	MADV_RANDOM		1	/* expect random page references */
 #define	MADV_SEQUENTIAL		2	/* expect sequential page references */
@@ -312,6 +320,8 @@ struct memcntl_mha32 {
 #define	MADV_ACCESS_DEFAULT	6	/* default access */
 #define	MADV_ACCESS_LWP		7	/* next LWP to access heavily */
 #define	MADV_ACCESS_MANY	8	/* many processes to access heavily */
+#define	MADV_PURGE		9	/* contents will be purged */
+
 #endif	/* (_POSIX_C_SOURCE <= 2) && !defined(_XPG4_2) ...  */
 
 #if !defined(__XOPEN_OR_POSIX) || defined(_XPG6) || defined(__EXTENSIONS__)
@@ -340,6 +350,7 @@ struct memcntl_mha32 {
 #define	MC_LOCKAS	5		/* lock address space in memory */
 #define	MC_UNLOCKAS	6		/* unlock address space from memory */
 #define	MC_HAT_ADVISE	7		/* advise hat map size */
+#define	MC_INHERIT_ZERO	8		/* zero out regions on fork() */
 
 /* sub-commands for MC_HAT_ADVISE */
 #define	MHA_MAPSIZE_VA		0x1	/* set preferred page size */

@@ -22,6 +22,7 @@
 # Copyright 2008 Sun Microsystems, Inc.  All rights reserved.
 # Use is subject to license terms.
 #
+# Copyright (c) 2018, Joyent, Inc.
 
 LIBRARY=	libbsdmalloc.a
 VERS=		.1
@@ -34,29 +35,18 @@ include ../../Makefile.lib
 
 SRCDIR =	../common
 
-LIBS =          $(DYNLIB) $(LINTLIB)
-
-# definitions for lint
-
-LINTFLAGS =	-uax
-LINTFLAGS64 =	-uax -m64
-LINTOUT=	lint.out
-
-LINTSRC=	$(LINTLIB:%.ln=%)
-ROOTLINTDIR=	$(ROOTLIBDIR)
-ROOTLINT=	$(LINTSRC:%=$(ROOTLINTDIR)/%)
-
-CLEANFILES +=	$(LINTOUT) $(LINTLIB)
+LIBS =          $(DYNLIB)
 
 CFLAGS +=	$(CCVERBOSE)
 CPPFLAGS +=	-D_REENTRANT
 DYNFLAGS +=     $(ZINTERPOSE)
 LDLIBS +=       -lc
 
+# not linted
+SMATCH=off
+
 .KEEP_STATE:
 
-lint:
-	$(LINT.c) $(SRCS) $(LDLIBS)
 
 #
 # create message catalogue files
@@ -76,8 +66,3 @@ include ../../Makefile.targ
 pics/%.o: ../common/%.c
 	$(COMPILE.c) -o $@ $<
 	$(POST_PROCESS_O)
-
-# install rule for lint library target
-$(ROOTLINTDIR)/%:	../common/%
-	$(INS.file)
-

@@ -24,8 +24,6 @@
  * Use is subject to license terms.
  */
 
-#pragma ident	"%Z%%M%	%I%	%E% SMI"
-
 /* enable debug output and some debug asserts */
 #undef	_IPQOS_CONF_DEBUG
 
@@ -251,7 +249,7 @@ static int readuser(char *str, uid_t *uid);
  * macros to call list functions with the more complex list element type
  * cast to the skeletal type iqpos_list_el_t.
  */
-#define	LIST_END(list, end)\
+#define	GET_LIST_END(list, end)\
 	list_end((ipqos_list_el_t **)list,  (ipqos_list_el_t ***)end)
 #define	ADD_TO_LIST(list, el)\
 	add_to_list((ipqos_list_el_t **)list, (ipqos_list_el_t *)el)
@@ -622,8 +620,7 @@ char *first_action)
 
 	return (IPQOS_CONF_SUCCESS);
 fail:
-	if (nvl != NULL)
-		nvlist_free(nvl);
+	nvlist_free(nvl);
 	return (IPQOS_CONF_ERR);
 }
 
@@ -711,8 +708,7 @@ enum ipp_flags flags)
 
 	return (IPQOS_CONF_SUCCESS);
 fail:
-	if (nvl != NULL)
-		nvlist_free(nvl);
+	nvlist_free(nvl);
 	return (IPQOS_CONF_ERR);
 }
 
@@ -776,8 +772,7 @@ enum ipp_flags flags)
 
 	return (IPQOS_CONF_SUCCESS);
 fail:
-	if (nvl != NULL)
-		nvlist_free(nvl);
+	nvlist_free(nvl);
 	return (IPQOS_CONF_ERR);
 }
 
@@ -3101,7 +3096,7 @@ int ifindex)
 	/* truncate any logical suffix */
 
 	if ((cp = strchr(lr->lifr_name, '@')) != NULL) {
-		*cp = NULL;
+		*cp = '\0';
 	}
 
 	/* print interface name */
@@ -4270,8 +4265,8 @@ int *upper)
 		*upper = (int)strtol(cp, &end2, 10);
 		SKIPWS(end);
 		SKIPWS(end2);
-		if ((range_st == end) || (*end != NULL) ||
-		    (cp == end) || (*end2 != NULL)) {
+		if ((range_st == end) || (*end != '\0') ||
+		    (cp == end) || (*end2 != '\0')) {
 			IPQOSCDBG0(L0, "Failed reading a-b\n");
 			return (IPQOS_CONF_ERR);
 		}
@@ -4280,7 +4275,7 @@ int *upper)
 
 		*lower = *upper = (int)strtol(range_st, &end, 10);
 		SKIPWS(end);
-		if ((range_st == end) || (*end != NULL)) {
+		if ((range_st == end) || (*end != '\0')) {
 			IPQOSCDBG0(L0, "Failed reading a\n");
 			return (IPQOS_CONF_ERR);
 		}
@@ -4410,7 +4405,7 @@ str_val_nd_t *enum_nvs)
 		} else {
 			value = (int)strtol(svalue, &end, 10);
 			SKIPWS(end);
-			if ((svalue == end) || (*end != NULL)) {
+			if ((svalue == end) || (*end != '\0')) {
 				IPQOSCDBG0(L0, "Invalid value\n");
 				goto array_err;
 			}
@@ -4828,7 +4823,7 @@ char **token)
 
 		/* Skip any whitespace */
 
-		while (isspace(*st) && st != '\0') {
+		while (isspace(*st) && *st != '\0') {
 			st++;
 		}
 
@@ -4976,7 +4971,7 @@ read_enum_nvs(char *line, char *module_name)
 			goto fail;
 		}
 		bcopy(start, name, len);
-		name[len] = NULL;
+		name[len] = '\0';
 		IPQOSCDBG1(L0, "Stored name: %s\n", name);
 
 		/* read assignment */
@@ -5195,7 +5190,7 @@ char *module)
 	token = strtok(info_str, ",");
 	*size = (uint32_t)strtol(token, &end, 10);
 	SKIPWS(end);
-	if ((end == token) || (*end != NULL)) {
+	if ((end == token) || (*end != '\0')) {
 		IPQOSCDBG0(L0, "Invalid size\n");
 		goto fail;
 	}
@@ -6345,8 +6340,7 @@ free_class(ipqos_conf_class_t *cls)
 
 	/* free its nvlist if present */
 
-	if (cls->nvlist)
-		nvlist_free(cls->nvlist);
+	nvlist_free(cls->nvlist);
 
 	/* free its action refs if present */
 
@@ -6790,8 +6784,7 @@ ipqos_conf_act_ref_t *arefs)
 	ipqos_conf_act_ref_t *next;
 
 	while (aref) {
-		if (aref->nvlist)
-			nvlist_free(aref->nvlist);
+		nvlist_free(aref->nvlist);
 		next = aref->next;
 		free(aref);
 		aref = next;
@@ -9254,7 +9247,7 @@ ipqos_conf_action_t *actions)
 	for (act = actions; act != NULL; act = act->next) {
 
 		/* store start of new resolved filters */
-		LIST_END(&act->filters, &new_filters);
+		GET_LIST_END(&act->filters, &new_filters);
 
 		/*
 		 * do name resolution on retry list adding resolved filters
@@ -9333,7 +9326,7 @@ char *dstpath)
 	/* not pwd or root */
 
 	} else {
-		*pathend = NULL;
+		*pathend = '\0';
 		tmppath = malloc(strlen(dstpath) + strlen("/ipqosconf.tmp") +
 		    1);
 		if (tmppath == NULL) {

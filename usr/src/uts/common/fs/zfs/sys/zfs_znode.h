@@ -20,7 +20,9 @@
  */
 /*
  * Copyright (c) 2005, 2010, Oracle and/or its affiliates. All rights reserved.
- * Copyright (c) 2012 by Delphix. All rights reserved.
+ * Copyright (c) 2012, 2018 by Delphix. All rights reserved.
+ * Copyright (c) 2014 Integros [integros.com]
+ * Copyright 2016 Nexenta Systems, Inc. All rights reserved.
  */
 
 #ifndef	_SYS_FS_ZFS_ZNODE_H
@@ -37,9 +39,11 @@
 #include <sys/rrwlock.h>
 #include <sys/zfs_sa.h>
 #include <sys/zfs_stat.h>
+#include <sys/zfs_rlock.h>
 #endif
 #include <sys/zfs_acl.h>
 #include <sys/zil.h>
+#include <sys/zfs_project.h>
 
 #ifdef	__cplusplus
 extern "C" {
@@ -47,7 +51,7 @@ extern "C" {
 
 /*
  * Additional file level attributes, that are stored
- * in the upper half of zp_flags
+ * in the upper half of z_pflags
  */
 #define	ZFS_READONLY		0x0000000100000000
 #define	ZFS_HIDDEN		0x0000000200000000
@@ -58,11 +62,21 @@ extern "C" {
 #define	ZFS_APPENDONLY		0x0000004000000000
 #define	ZFS_NODUMP		0x0000008000000000
 #define	ZFS_OPAQUE		0x0000010000000000
-#define	ZFS_AV_QUARANTINED 	0x0000020000000000
-#define	ZFS_AV_MODIFIED 	0x0000040000000000
+#define	ZFS_AV_QUARANTINED	0x0000020000000000
+#define	ZFS_AV_MODIFIED		0x0000040000000000
 #define	ZFS_REPARSE		0x0000080000000000
 #define	ZFS_OFFLINE		0x0000100000000000
 #define	ZFS_SPARSE		0x0000200000000000
+/*
+ * PROJINHERIT attribute is used to indicate that the child object under the
+ * directory which has the PROJINHERIT attribute needs to inherit its parent
+ * project ID that is used by project quota.
+ */
+#define	ZFS_PROJINHERIT		0x0000400000000000
+/*
+ * PROJID attr is used internally to indicate that the object has project ID.
+ */
+#define	ZFS_PROJID		0x0000800000000000
 
 #define	ZFS_ATTR_SET(zp, attr, value, pflags, tx) \
 { \
@@ -79,8 +93,8 @@ extern "C" {
  */
 #define	ZFS_XATTR		0x1		/* is an extended attribute */
 #define	ZFS_INHERIT_ACE		0x2		/* ace has inheritable ACEs */
-#define	ZFS_ACL_TRIVIAL 	0x4		/* files ACL is trivial */
-#define	ZFS_ACL_OBJ_ACE 	0x8		/* ACL has CMPLX Object ACE */
+#define	ZFS_ACL_TRIVIAL		0x4		/* files ACL is trivial */
+#define	ZFS_ACL_OBJ_ACE		0x8		/* ACL has CMPLX Object ACE */
 #define	ZFS_ACL_PROTECTED	0x10		/* ACL protected */
 #define	ZFS_ACL_DEFAULTED	0x20		/* ACL should be defaulted */
 #define	ZFS_ACL_AUTO_INHERIT	0x40		/* ACL should be inherited */
@@ -107,6 +121,7 @@ extern "C" {
 #define	SA_ZPL_SIZE(z)		z->z_attr_table[ZPL_SIZE]
 #define	SA_ZPL_ZNODE_ACL(z)	z->z_attr_table[ZPL_ZNODE_ACL]
 #define	SA_ZPL_PAD(z)		z->z_attr_table[ZPL_PAD]
+#define	SA_ZPL_PROJID(z)	z->z_attr_table[ZPL_PROJID]
 
 /*
  * Is ID ephemeral?
@@ -125,7 +140,7 @@ extern "C" {
 
 /*
  * Special attributes for master node.
- * "userquota@" and "groupquota@" are also valid (from
+ * "userquota@", "groupquota@" and "projectquota@" are also valid (from
  * zfs_userquota_prop_prefixes[]).
  */
 #define	ZFS_FSID		"FSID"
@@ -135,17 +150,6 @@ extern "C" {
 #define	ZFS_FUID_TABLES		"FUID"
 #define	ZFS_SHARES_DIR		"SHARES"
 #define	ZFS_SA_ATTRS		"SA_ATTRS"
-
-/*
- * Path component length
- *
- * The generic fs code uses MAXNAMELEN to represent
- * what the largest component length is.  Unfortunately,
- * this length includes the terminating NULL.  ZFS needs
- * to tell the users via pathconf() and statvfs() what the
- * true maximum length of a component is, excluding the NULL.
- */
-#define	ZFS_MAXNAMELEN	(MAXNAMELEN - 1)
 
 /*
  * Convert mode bits (zp_mode) to BSD-style DT_* values for storing in
@@ -185,8 +189,7 @@ typedef struct znode {
 	krwlock_t	z_parent_lock;	/* parent lock for directories */
 	krwlock_t	z_name_lock;	/* "master" lock for dirent locks */
 	zfs_dirlock_t	*z_dirlocks;	/* directory entry lock list */
-	kmutex_t	z_range_lock;	/* protects changes to z_range_avl */
-	avl_tree_t	z_range_avl;	/* avl tree of file range locks */
+	rangelock_t	z_rangelock;	/* file range locks */
 	uint8_t		z_unlinked;	/* file has been unlinked */
 	uint8_t		z_atime_dirty;	/* atime needs to be synced */
 	uint8_t		z_zn_prefetch;	/* Prefetch znodes? */
@@ -194,6 +197,7 @@ typedef struct znode {
 	uint_t		z_blksz;	/* block size in bytes */
 	uint_t		z_seq;		/* modification sequence number */
 	uint64_t	z_mapcnt;	/* number of pages mapped to file */
+	uint64_t	z_dnodesize;	/* dnode size */
 	uint64_t	z_gen;		/* generation (cached) */
 	uint64_t	z_size;		/* file size (cached) */
 	uint64_t	z_atime[2];	/* atime (cached) */
@@ -205,11 +209,18 @@ typedef struct znode {
 	uint32_t	z_sync_cnt;	/* synchronous open count */
 	kmutex_t	z_acl_lock;	/* acl data lock */
 	zfs_acl_t	*z_acl_cached;	/* cached acl */
+	uint64_t	z_projid;	/* project ID */
 	list_node_t	z_link_node;	/* all znodes in fs link */
 	sa_handle_t	*z_sa_hdl;	/* handle to sa data */
 	boolean_t	z_is_sa;	/* are we native sa? */
 } znode_t;
 
+static inline uint64_t
+zfs_inherit_projid(znode_t *dzp)
+{
+	return ((dzp->z_pflags & ZFS_PROJINHERIT) ? dzp->z_projid :
+	    ZFS_DEFAULT_PROJID);
+}
 
 /*
  * Range locking rules
@@ -312,6 +323,7 @@ extern int	zfs_sync(vfs_t *vfsp, short flag, cred_t *cr);
 extern dev_t	zfs_cmpldev(uint64_t);
 extern int	zfs_get_zplprop(objset_t *os, zfs_prop_t prop, uint64_t *value);
 extern int	zfs_get_stats(objset_t *os, nvlist_t *nv);
+extern boolean_t zfs_get_vfs_flag_unmounted(objset_t *os);
 extern void	zfs_znode_dmu_fini(znode_t *);
 
 extern void zfs_log_create(zilog_t *zilog, dmu_tx_t *tx, uint64_t txtype,
@@ -320,7 +332,7 @@ extern void zfs_log_create(zilog_t *zilog, dmu_tx_t *tx, uint64_t txtype,
 extern int zfs_log_create_txtype(zil_create_t, vsecattr_t *vsecp,
     vattr_t *vap);
 extern void zfs_log_remove(zilog_t *zilog, dmu_tx_t *tx, uint64_t txtype,
-    znode_t *dzp, char *name, uint64_t foid);
+    znode_t *dzp, char *name, uint64_t foid, boolean_t unlinked);
 #define	ZFS_NO_OBJECT	0	/* no object id */
 extern void zfs_log_link(zilog_t *zilog, dmu_tx_t *tx, uint64_t txtype,
     znode_t *dzp, znode_t *zp, char *name);

@@ -23,10 +23,17 @@
  * Copyright 2009 Sun Microsystems, Inc.  All rights reserved.
  * Use is subject to license terms.
  */
+
+/*
+ * Copyright (c) 2017, Joyent, Inc. All rights reserved.
+ */
+
 #ifndef _SYS_NETSTACK_H
 #define	_SYS_NETSTACK_H
 
 #include <sys/kstat.h>
+#include <sys/cred.h>
+#include <sys/mutex.h>
 
 #ifdef	__cplusplus
 extern "C" {
@@ -229,10 +236,12 @@ struct netstack_registry {
 
 extern void netstack_init(void);
 extern void netstack_hold(netstack_t *);
+extern netstack_t *netstack_hold_if_active(netstack_t *);
 extern void netstack_rele(netstack_t *);
 extern netstack_t *netstack_find_by_cred(const cred_t *);
 extern netstack_t *netstack_find_by_stackid(netstackid_t);
 extern netstack_t *netstack_find_by_zoneid(zoneid_t);
+extern boolean_t netstack_inuse_by_stackid(netstackid_t stackid);
 
 extern zoneid_t netstackid_to_zoneid(netstackid_t);
 extern zoneid_t netstack_get_zoneid(netstack_t *);

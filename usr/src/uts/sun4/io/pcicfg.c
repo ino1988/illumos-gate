@@ -20,6 +20,7 @@
  */
 /*
  * Copyright (c) 2005, 2010, Oracle and/or its affiliates. All rights reserved.
+ * Copyright 2019 Joyent, Inc.
  */
 
 /*
@@ -560,8 +561,7 @@ _fini(void)
 }
 
 int
-_info(modinfop)
-struct modinfo *modinfop;
+_info(struct modinfo *modinfop)
 {
 	return (mod_info(&modlinkage, modinfop));
 }
@@ -577,24 +577,24 @@ pcicfg_get_nslots(dev_info_t *dip, ddi_acc_handle_t handle)
 	    &cap_ptr)) == DDI_SUCCESS) {
 		uint32_t config;
 
-		PCI_CAP_PUT8(handle, NULL, cap_ptr, PCI_HP_DWORD_SELECT_OFF,
+		PCI_CAP_PUT8(handle, 0, cap_ptr, PCI_HP_DWORD_SELECT_OFF,
 		    PCI_HP_SLOT_CONFIGURATION_REG);
-		config = PCI_CAP_GET32(handle, NULL, cap_ptr,
+		config = PCI_CAP_GET32(handle, 0, cap_ptr,
 		    PCI_HP_DWORD_DATA_OFF);
 		num_slots = config & 0x1F;
 	} else if ((PCI_CAP_LOCATE(handle, PCI_CAP_ID_SLOT_ID, &cap_ptr))
 	    == DDI_SUCCESS) {
-		uint8_t esr_reg = PCI_CAP_GET8(handle, NULL,
+		uint8_t esr_reg = PCI_CAP_GET8(handle, 0,
 		    cap_ptr, PCI_CAP_ID_REGS_OFF);
 
 		num_slots = PCI_CAPSLOT_NSLOTS(esr_reg);
 	} else if ((PCI_CAP_LOCATE(handle, PCI_CAP_ID_PCI_E, &cap_ptr))
 	    == DDI_SUCCESS) {
-		int port_type = PCI_CAP_GET16(handle, NULL, cap_ptr,
+		int port_type = PCI_CAP_GET16(handle, 0, cap_ptr,
 		    PCIE_PCIECAP) & PCIE_PCIECAP_DEV_TYPE_MASK;
 
 		if ((port_type == PCIE_PCIECAP_DEV_TYPE_DOWN) &&
-		    (PCI_CAP_GET16(handle, NULL, cap_ptr, PCIE_PCIECAP)
+		    (PCI_CAP_GET16(handle, 0, cap_ptr, PCIE_PCIECAP)
 		    & PCIE_PCIECAP_SLOT_IMPL))
 				num_slots = 1;
 	}
@@ -614,7 +614,7 @@ pcicfg_is_chassis(dev_info_t *dip, ddi_acc_handle_t handle)
 	if ((PCI_CAP_LOCATE(handle, PCI_CAP_ID_SLOT_ID, &cap_ptr)) !=
 	    DDI_FAILURE) {
 
-		uint8_t esr_reg = PCI_CAP_GET8(handle, NULL, cap_ptr, 2);
+		uint8_t esr_reg = PCI_CAP_GET8(handle, 0, cap_ptr, 2);
 		if (PCI_CAPSLOT_FIC(esr_reg))
 			return (B_TRUE);
 	}
@@ -665,7 +665,7 @@ pcicfg_pcie_port_type(dev_info_t *dip, ddi_acc_handle_t handle)
 
 	if ((PCI_CAP_LOCATE(handle, PCI_CAP_ID_PCI_E, &cap_ptr)) !=
 	    DDI_FAILURE)
-		port_type = PCI_CAP_GET16(handle, NULL,
+		port_type = PCI_CAP_GET16(handle, 0,
 		    cap_ptr, PCIE_PCIECAP) & PCIE_PCIECAP_DEV_TYPE_MASK;
 
 	return (port_type);
@@ -1324,7 +1324,7 @@ pcicfg_ntbridge_unconfigure_child(dev_info_t *new_device, uint_t devno)
 {
 
 	dev_info_t	*new_ntbridgechild;
-	int 		len, bus;
+	int		len, bus;
 	uint16_t	vid;
 	ddi_acc_handle_t	config_handle;
 	pcicfg_bus_range_t pci_bus_range;
@@ -1491,7 +1491,7 @@ pcicfg_indirect_map(dev_info_t *dip)
 
 static uint_t
 pcicfg_get_ntbridge_child_range(dev_info_t *dip, uint64_t *boundbase,
-				uint64_t *boundlen, uint_t space_type)
+    uint64_t *boundlen, uint_t space_type)
 {
 	int		length, found = DDI_FAILURE, acount, i, ibridge;
 	pci_regspec_t	*assigned;
@@ -2548,8 +2548,7 @@ pcicfg_alloc_hole(hole_t *addr_hole, uint64_t *alast, uint32_t length)
 }
 
 static void
-pcicfg_get_mem(pcicfg_phdl_t *entry,
-	uint32_t length, uint64_t *ans)
+pcicfg_get_mem(pcicfg_phdl_t *entry, uint32_t length, uint64_t *ans)
 {
 	uint64_t new_mem;
 
@@ -2565,8 +2564,7 @@ pcicfg_get_mem(pcicfg_phdl_t *entry,
 }
 
 static void
-pcicfg_get_io(pcicfg_phdl_t *entry,
-	uint32_t length, uint32_t *ans)
+pcicfg_get_io(pcicfg_phdl_t *entry, uint32_t length, uint32_t *ans)
 {
 	uint32_t new_io;
 	uint64_t io_last;
@@ -3404,7 +3402,7 @@ pcicfg_device_off(ddi_acc_handle_t config_handle)
  */
 static int
 pcicfg_set_standard_props(dev_info_t *dip, ddi_acc_handle_t config_handle,
-	uint8_t pcie_dev)
+    uint8_t pcie_dev)
 {
 	int ret;
 	uint16_t val, cap_ptr;
@@ -3537,11 +3535,11 @@ pcicfg_set_standard_props(dev_info_t *dip, ddi_acc_handle_t config_handle,
 	ret = PCI_CAP_LOCATE(config_handle, PCI_CAP_ID_PCI_E, &cap_ptr);
 
 	if (pcie_dev && (ret == DDI_SUCCESS)) {
-		val = PCI_CAP_GET16(config_handle, NULL, cap_ptr,
+		val = PCI_CAP_GET16(config_handle, 0, cap_ptr,
 		    PCIE_PCIECAP) & PCIE_PCIECAP_SLOT_IMPL;
 		/* if slot implemented, get physical slot number */
 		if (val) {
-			wordval = (PCI_CAP_GET32(config_handle, NULL,
+			wordval = (PCI_CAP_GET32(config_handle, 0,
 			    cap_ptr, PCIE_SLOTCAP) >>
 			    PCIE_SLOTCAP_PHY_SLOT_NUM_SHIFT) &
 			    PCIE_SLOTCAP_PHY_SLOT_NUM_MASK;
@@ -3598,7 +3596,7 @@ pcicfg_set_busnode_props(dev_info_t *dip, uint8_t pcie_device_type,
 
 static int
 pcicfg_set_childnode_props(dev_info_t *dip, ddi_acc_handle_t config_handle,
-	uint8_t pcie_dev)
+    uint8_t pcie_dev)
 {
 
 	int		ret;
@@ -3720,6 +3718,10 @@ pcicfg_set_childnode_props(dev_info_t *dip, ddi_acc_handle_t config_handle,
 
 	/* pciSSSS.ssss  -> not created for PCIe as per PCIe bindings */
 	if (!pcie_dev) {
+		(void) sprintf(buffer, "pci%x,%x,s", sub_vid, sub_sid);
+		compat[n] = kmem_alloc(strlen(buffer) + 1, KM_SLEEP);
+		(void) strcpy(compat[n++], buffer);
+
 		(void) sprintf(buffer, "pci%x,%x", sub_vid, sub_sid);
 		compat[n] = kmem_alloc(strlen(buffer) + 1, KM_SLEEP);
 		(void) strcpy(compat[n++], buffer);
@@ -3734,6 +3736,12 @@ pcicfg_set_childnode_props(dev_info_t *dip, ddi_acc_handle_t config_handle,
 	(void) sprintf(buffer, "%s%x,%x", pprefix, vid, did);
 	compat[n] = kmem_alloc(strlen(buffer) + 1, KM_SLEEP);
 	(void) strcpy(compat[n++], buffer);
+
+	if (!pcie_dev) {
+		(void) sprintf(buffer, "%s%x,%x,p", pprefix, vid, did);
+		compat[n] = kmem_alloc(strlen(buffer) + 1, KM_SLEEP);
+		(void) strcpy(compat[n++], buffer);
+	}
 
 	/* pci[ex]class,CCSSPP */
 	(void) sprintf(buffer, "%sclass,%02x%02x%02x", pprefix,
@@ -3774,7 +3782,7 @@ pcicfg_set_childnode_props(dev_info_t *dip, ddi_acc_handle_t config_handle,
 
 static void
 pcicfg_set_bus_numbers(ddi_acc_handle_t config_handle,
-uint_t primary, uint_t secondary, uint_t subordinate)
+    uint_t primary, uint_t secondary, uint_t subordinate)
 {
 	DEBUG3("Setting bridge bus-range %d,%d,%d\n", primary, secondary,
 	    subordinate);
@@ -3886,7 +3894,7 @@ pcicfg_setup_bridge(pcicfg_phdl_t *entry,
 
 static void
 pcicfg_update_bridge(pcicfg_phdl_t *entry,
-	ddi_acc_handle_t handle)
+    ddi_acc_handle_t handle)
 {
 	uint_t length;
 
@@ -3943,7 +3951,7 @@ pcicfg_update_bridge(pcicfg_phdl_t *entry,
 /*ARGSUSED*/
 static void
 pcicfg_disable_bridge_probe_err(dev_info_t *dip, ddi_acc_handle_t h,
-	pcicfg_err_regs_t *regs)
+    pcicfg_err_regs_t *regs)
 {
 	uint16_t val;
 
@@ -3969,20 +3977,20 @@ pcicfg_disable_bridge_probe_err(dev_info_t *dip, ddi_acc_handle_t h,
 			return;
 
 		regs->pcie_cap_off = cap_ptr;
-		regs->devctl = devctl = PCI_CAP_GET16(h, NULL, cap_ptr,
+		regs->devctl = devctl = PCI_CAP_GET16(h, 0, cap_ptr,
 		    PCIE_DEVCTL);
 		devctl &= ~(PCIE_DEVCTL_UR_REPORTING_EN |
 		    PCIE_DEVCTL_CE_REPORTING_EN |
 		    PCIE_DEVCTL_NFE_REPORTING_EN |
 		    PCIE_DEVCTL_FE_REPORTING_EN);
-		PCI_CAP_PUT16(h, NULL, cap_ptr, PCIE_DEVCTL, devctl);
+		PCI_CAP_PUT16(h, 0, cap_ptr, PCIE_DEVCTL, devctl);
 	}
 }
 
 /*ARGSUSED*/
 static void
 pcicfg_enable_bridge_probe_err(dev_info_t *dip, ddi_acc_handle_t h,
-	pcicfg_err_regs_t *regs)
+    pcicfg_err_regs_t *regs)
 {
 	/* clear any pending errors */
 	pci_config_put16(h, PCI_CONF_STAT, PCI_STAT_S_TARG_AB|
@@ -4627,7 +4635,7 @@ pcicfg_fcode_probe(dev_info_t *parent, uint_t bus, uint_t device,
 			 * the status property if it exists.
 			 */
 			if (ddi_prop_lookup_string(DDI_DEV_T_ANY,
-			    new_child, NULL, "status", &status_prop) ==
+			    new_child, 0, "status", &status_prop) ==
 			    DDI_PROP_SUCCESS) {
 				if ((strncmp("disabled", status_prop, 8) ==
 				    0) || (strncmp("fail", status_prop, 4) ==
@@ -4890,7 +4898,7 @@ failedchild:
 
 static int
 pcicfg_probe_bridge(dev_info_t *new_child, ddi_acc_handle_t h, uint_t bus,
-	uint_t *highest_bus, boolean_t is_pcie)
+    uint_t *highest_bus, boolean_t is_pcie)
 {
 	uint64_t next_bus;
 	uint_t new_bus, num_slots;
@@ -5741,7 +5749,7 @@ pcicfg_config_teardown(ddi_acc_handle_t *handle)
 
 static int
 pcicfg_add_config_reg(dev_info_t *dip,
-	uint_t bus, uint_t device, uint_t func)
+    uint_t bus, uint_t device, uint_t func)
 {
 	int reg[10] = { PCI_ADDR_CONFIG, 0, 0, 0, 0};
 
@@ -6729,8 +6737,8 @@ pcicfg_remove_assigned_prop(dev_info_t *dip, pci_regspec_t *oldone)
 
 static int
 pcicfg_map_phys(dev_info_t *dip, pci_regspec_t *phys_spec,
-	caddr_t *addrp, ddi_device_acc_attr_t *accattrp,
-	ddi_acc_handle_t *handlep)
+    caddr_t *addrp, ddi_device_acc_attr_t *accattrp,
+    ddi_acc_handle_t *handlep)
 {
 	ddi_map_req_t mr;
 	ddi_acc_hdl_t *hp;
@@ -6805,7 +6813,7 @@ pcicfg_ari_configure(dev_info_t *dip)
 #ifdef DEBUG
 static void
 debug(char *fmt, uintptr_t a1, uintptr_t a2, uintptr_t a3,
-	uintptr_t a4, uintptr_t a5)
+    uintptr_t a4, uintptr_t a5)
 {
 	if (pcicfg_debug == 1) {
 		prom_printf("pcicfg: ");

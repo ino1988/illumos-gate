@@ -22,11 +22,7 @@
 # Copyright 2010 Sun Microsystems, Inc.  All rights reserved.
 # Use is subject to license terms.
 #
-#	This makefile drives the production of the Kernel Cryptographic
-#	Framework core module.
-#
-#	Intel implementation architecture dependent
-#
+# Copyright (c) 2019, Joyent, Inc.
 
 #
 #	Path to the base of the uts directory tree (usually /usr/src/uts).
@@ -38,7 +34,6 @@ COM_DIR = $(COMMONBASE)/crypto
 #	Define the module and object file sets.
 #
 MODULE		= kcf
-LINTS		= $(KCF_OBJS:%.o=$(LINTS_DIR)/%.ln)
 KCF_OBJS_32	=
 KCF_OBJS_64	= gcm_intel.o
 KCF_OBJS	+= $(KCF_OBJS_$(CLASS))
@@ -54,25 +49,24 @@ include $(UTSBASE)/intel/Makefile.intel
 #	Define targets
 #
 ALL_TARGET	= $(BINARY)
-LINT_TARGET	= $(MODULE).lint
 INSTALL_TARGET	= $(BINARY) $(ROOTMODULE)
 
-#
-# Linkage dependencies
-#
-
-#
-# lint pass one enforcement
-#
-CFLAGS		+= $(CCVERBOSE) -I$(COM_DIR)
+CFLAGS		+= -I$(COM_DIR)
 AS_CPPFLAGS	+= -I../../$(PLATFORM)
 
-LINTTAGS	+= -I$(COM_DIR)
-
+#
+# For now, disable these warnings; maintainers should endeavor
+# to investigate and remove these for maximum coverage.
+# Please do not carry these forward to new Makefiles.
+#
+CFLAGS		+= $(CCVERBOSE)
 CERRWARN	+= -_gcc=-Wno-switch
-CERRWARN	+= -_gcc=-Wno-uninitialized
+CERRWARN	+= $(CNOWARN_UNINIT)
 CERRWARN	+= -_gcc=-Wno-parentheses
 CERRWARN	+= -_gcc=-Wno-unused-label
+
+# needs work
+SMOFF += all_func_returns,signed_integer_overflow_check
 
 #
 #	Default build targets.
@@ -87,12 +81,6 @@ clean:		$(CLEAN_DEPS)
 
 clobber:	$(CLOBBER_DEPS)
 
-lint:		$(LINT_DEPS)
-
-modlintlib:	$(MODLINTLIB_DEPS)
-
-clean.lint:	$(CLEAN_LINT_DEPS)
-
 install:	$(INSTALL_DEPS)
 
 #
@@ -102,7 +90,3 @@ include $(UTSBASE)/intel/Makefile.targ
 
 $(OBJS_DIR)/%.o: $(COM_DIR)/modes/amd64/%.s
 	$(COMPILE.s) -o $@ $(COM_DIR)/modes/amd64/${@F:.o=.s}
-	$(POST_PROCESS_O)
-
-$(OBJS_DIR)/%.ln: $(COM_DIR)/modes/amd64/%.s
-	@($(LHEAD) $(LINT.s) $(COM_DIR)/modes/amd64/${@F:.ln=.s} $(LTAIL))

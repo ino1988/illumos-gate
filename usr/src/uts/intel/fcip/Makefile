@@ -23,10 +23,7 @@
 # Copyright 2008 Sun Microsystems, Inc.  All rights reserved.
 # Use is subject to license terms.
 #
-# This makefile drives the production of fcip driver kernel module.
-#
-# i86pc architecture dependent
-#
+# Copyright (c) 2018, Joyent, Inc.
 
 #
 #	Path to the base of the uts directory tree (usually /usr/src/uts).
@@ -38,7 +35,6 @@ UTSBASE	= ../..
 #
 MODULE		= fcip
 OBJECTS		= $(FCIP_OBJS:%=$(OBJS_DIR)/%)
-LINTS		= $(FCIP_OBJS:%.o=$(LINTS_DIR)/%.ln)
 ROOTMODULE	= $(ROOT_DRV_DIR)/$(MODULE)
 CONF_SRCDIR	= $(UTSBASE)/common/io/fibre-channel/ulp/
 
@@ -52,7 +48,6 @@ include $(UTSBASE)/intel/Makefile.intel
 #	Define targets
 #
 ALL_TARGET	= $(BINARY) $(CONFMOD) $(ITUMOD)
-LINT_TARGET	= $(MODULE).lint
 INSTALL_TARGET	= $(BINARY) $(ROOTMODULE) $(ROOT_CONFFILE)
 
 #
@@ -63,16 +58,15 @@ INC_PATH	+= -I$(SRC)/uts/common
 LDFLAGS		+= -dy -Nmisc/fctl -Ndrv/ip
 
 #
-#	Lint tags
+# For now, disable these warnings; maintainers should endeavor
+# to investigate and remove these for maximum coverage.
+# Please do not carry these forward to new Makefiles.
 #
-LINTTAGS	+= -erroff=E_BAD_PTR_CAST_ALIGN
-LINTTAGS	+= -erroff=E_SUSPICIOUS_COMPARISON
-LINTTAGS	+= -erroff=E_ASSIGN_NARROW_CONV
-LINTTAGS	+= -erroff=E_INCONS_ARG_USED2
-LINTTAGS	+= -erroff=E_INCONS_VAL_TYPE_USED2
-
 CERRWARN	+= -_gcc=-Wno-parentheses
 CERRWARN	+= -_gcc=-Wno-type-limits
+
+# needs work
+SMATCH=off
 
 #
 #	Default build targets.
@@ -86,15 +80,6 @@ all:		$(ALL_DEPS)
 clean:		$(CLEAN_DEPS)
 
 clobber:	$(CLOBBER_DEPS)
-
-lint:		$(LINT_DEPS)
-
-warlock:
-	@echo warlock is not supported
-
-modlintlib:	$(MODLINTLIB_DEPS)
-
-clean.lint:	$(CLEAN_LINT_DEPS)
 
 install:	$(INSTALL_DEPS)
 

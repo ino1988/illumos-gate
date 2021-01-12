@@ -21,6 +21,7 @@
 /*
  * Copyright (c) 2004, 2010, Oracle and/or its affiliates. All rights reserved.
  * Copyright 2012 Nexenta Systems, Inc.  All rights reserved.
+ * Copyright 2017 Joyent, Inc.
  */
 
 /*
@@ -921,7 +922,7 @@ kcf_rnd_chpoll(short events, int anyyet, short *reventsp,
 			*reventsp |= (events & (POLLIN | POLLRDNORM));
 	}
 
-	if (*reventsp == 0 && !anyyet)
+	if ((*reventsp == 0 && !anyyet) || (events & POLLET))
 		*phpp = &rnd_pollhead;
 }
 
@@ -963,7 +964,8 @@ rnd_handler(void *arg)
 		 * cache becomes empty.
 		 */
 		if (taskq_dispatch(system_taskq, rngprov_task,
-		    (void *)(uintptr_t)len, TQ_NOSLEEP | TQ_NOQUEUE) == 0) {
+		    (void *)(uintptr_t)len, TQ_NOSLEEP | TQ_NOQUEUE) ==
+		    TASKQID_INVALID) {
 			rngprov_task_idle = B_TRUE;
 		}
 	}
@@ -1093,4 +1095,14 @@ random_get_bytes(uint8_t *ptr, size_t len)
 	if (len < 1)
 		return (0);
 	return (kcf_rnd_get_bytes(ptr, len, B_TRUE));
+}
+
+int
+random_get_blocking_bytes(uint8_t *ptr, size_t len)
+{
+	ASSERT(!mutex_owned(&rndpool_lock));
+
+	if (len < 1)
+		return (0);
+	return (kcf_rnd_get_bytes(ptr, len, B_FALSE));
 }

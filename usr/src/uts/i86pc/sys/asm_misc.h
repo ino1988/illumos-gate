@@ -21,16 +21,20 @@
 /*
  * Copyright 2008 Sun Microsystems, Inc.  All rights reserved.
  * Use is subject to license terms.
+ * Copyright 2019 Joyent, Inc.
  */
 
 #ifndef _SYS_ASM_MISC_H
 #define	_SYS_ASM_MISC_H
 
-#pragma ident	"%Z%%M%	%I%	%E% SMI"
-
 #ifdef	__cplusplus
 extern "C" {
 #endif
+
+#define	RET_INSTR	0xc3
+#define	NOP_INSTR	0x90
+#define	STI_INSTR	0xfb
+#define	JMP_INSTR	0x00eb
 
 #ifdef _ASM	/* The remainder of this file is only for assembly files */
 
@@ -42,12 +46,6 @@ extern "C" {
 #define	LOADCPU(reg)			\
 	movl	%gs:CPU_SELF, reg;
 #endif
-
-#define	RET_INSTR	0xc3
-#define	NOP_INSTR	0x90
-#define	STI_INSTR	0xfb
-#define	JMP_INSTR	0x00eb
-
 
 #if defined(__i386)
 
@@ -83,23 +81,6 @@ extern "C" {
 	pop	%ebp
 
 #endif	/* __i386 */
-
-#if defined(__amd64)
-
-/*
- * While as doesn't support fxsaveq/fxrstorq (fxsave/fxrstor with REX.W = 1)
- * we will use the FXSAVEQ/FXRSTORQ macro
- */
-
-#define	FXSAVEQ(x)	\
-	.byte	0x48;	\
-	fxsave	x
-
-#define	FXRSTORQ(x)	\
-	.byte	0x48;	\
-	fxrstor	x
-
-#endif	/* __amd64 */
 
 #endif /* _ASM */
 

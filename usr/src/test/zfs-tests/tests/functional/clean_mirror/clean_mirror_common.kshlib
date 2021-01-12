@@ -25,9 +25,12 @@
 #
 
 #
-# Copyright (c) 2013 by Delphix. All rights reserved.
+# Copyright (c) 2013, 2016 by Delphix. All rights reserved.
+# Copyright (c) 2017 Datto Inc.
+# Copyright 2019 Joyent, Inc.
 #
 
+. $STF_SUITE/include/libtest.shlib
 . $STF_SUITE/tests/functional/clean_mirror/default.cfg
 
 # Most of the code related to the clearing of mirrors is duplicated in all
@@ -46,28 +49,36 @@ function overwrite_verify_mirror
 	set -A cksums
 	set -A newcksums
 
+	scrub_pool # Make sure we have a clean pool before starting the test.
+
 	while (( atfile < FILE_COUNT )); do
 		files[$atfile]=$TESTDIR/file.$atfile
-		log_must $FILE_WRITE -o create -f $TESTDIR/file.$atfile \
+		log_must file_write -o create -f $TESTDIR/file.$atfile \
 			-b $FILE_SIZE -c 1
-		cksums[$atfile]=$($CKSUM ${files[$atfile]})
+		cksums[$atfile]=$(cksum ${files[$atfile]})
 		(( atfile = atfile + 1 ))
 	done
 
 	# dd the primary side of the mirror
-	log_must $DD if=$OVERWRITING_DEVICE of=/dev/dsk/$AFFECTED_DEVICE \
+	log_must dd if=$OVERWRITING_DEVICE of=/dev/dsk/$AFFECTED_DEVICE \
 		seek=8 bs=$DD_BLOCK count=$(( DD_COUNT - 8 )) conv=notrunc
 
 	atfile=0
 
+	#
+	# Flush out the cache so that we ensure we're reading from disk.
+	#
+	log_must zpool export $TESTPOOL
+	log_must zpool import $TESTPOOL
+
 	typeset -i failedcount=0
 	while (( atfile < FILE_COUNT )); do
 		files[$atfile]=$TESTDIR/file.$atfile
-		newcksum=$($CKSUM ${files[$atfile]})
+		newcksum=$(cksum ${files[$atfile]})
 		if [[ $newcksum != ${cksums[$atfile]} ]]; then
 			(( failedcount = failedcount + 1 ))
 		fi
-		$RM -f ${files[$atfile]}
+		rm -f ${files[$atfile]}
 		(( atfile = atfile + 1 ))
 	done
 
@@ -75,4 +86,23 @@ function overwrite_verify_mirror
 		log_fail "of the $FILE_COUNT files $failedcount did not " \
 		    "have the same checksum before and after."
 	fi
+
+	sync_pool $TESTPOOL
+}
+
+# Scrub the pool and wait for completion.
+function scrub_pool
+{
+        typeset pool=$TESTPOOL
+        log_note "Scrubbing $TESTPOOL"
+
+        # Flush all the pool data.
+        log_must zpool scrub $pool
+
+        while ! is_pool_scrubbed $pool; do
+                if is_pool_resilvered $pool ; then
+                        log_fail "$pool should not have been resilvered"
+                fi
+                log_must sleep 2
+        done
 }

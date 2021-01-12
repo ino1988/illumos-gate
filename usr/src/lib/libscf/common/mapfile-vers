@@ -20,6 +20,7 @@
 #
 #
 # Copyright (c) 2006, 2010, Oracle and/or its affiliates. All rights reserved.
+# Copyright 2020 Joyent, Inc.
 #
 
 #
@@ -37,6 +38,11 @@
 #
 
 $mapfile_version 2
+
+SYMBOL_VERSION ILLUMOS_0.1 {
+    global:
+	smf_disable_instance_with_comment;
+} SUNW_1.2;
 
 SYMBOL_VERSION SUNW_1.2 {
     global:
@@ -328,6 +334,7 @@ SYMBOL_VERSION SUNWprivate_1.1 {
 	scf_get_boot_config_ovr;
 	scf_is_fastboot_default;
 	scf_fastreboot_default_set_transient;
+	scf_default_secflags;
 	_check_services;
 	_scf_handle_create_and_bind;
 	_smf_refresh_all_instances;

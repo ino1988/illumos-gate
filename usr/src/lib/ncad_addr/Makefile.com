@@ -31,13 +31,12 @@ include ../../Makefile.lib
 SRCDIR =	../common
 
 LIBS =		$(DYNLIB)
-LDLIBS +=	-lc -lnsl
+LDLIBS +=	-lc
 CFLAGS +=	$(CCVERBOSE)
 
 .KEEP_STATE:
 
 all: $(LIBS)
 
-lint: lintcheck
 
 include ../../Makefile.targ

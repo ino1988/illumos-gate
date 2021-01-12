@@ -25,6 +25,7 @@
 
 /*
  * Copyright 2011 Nexenta Systems, Inc. All rights reserved.
+ * Copyright (c) 2016, 2017 by Delphix. All rights reserved.
  */
 
 #include <sys/param.h>
@@ -2489,7 +2490,7 @@ start:
 			rw_enter(&rp->r_hashq->r_lock, RW_WRITER);
 			mutex_enter(&vp->v_lock);
 			if (vp->v_count > 1) {
-				vp->v_count--;
+				VN_RELE_LOCKED(vp);
 				mutex_exit(&vp->v_lock);
 				rw_exit(&rp->r_hashq->r_lock);
 				rw_enter(&rhtp->r_lock, RW_READER);
@@ -2504,7 +2505,7 @@ start:
 
 		mutex_enter(&vp->v_lock);
 		if (vp->v_count > 1) {
-			vp->v_count--;
+			VN_RELE_LOCKED(vp);
 			mutex_exit(&vp->v_lock);
 			rw_enter(&rhtp->r_lock, RW_READER);
 			goto start;
@@ -2697,7 +2698,7 @@ rp_addfree(rnode_t *rp, cred_t *cr)
 			rw_enter(&rp->r_hashq->r_lock, RW_WRITER);
 			mutex_enter(&vp->v_lock);
 			if (vp->v_count > 1) {
-				vp->v_count--;
+				VN_RELE_LOCKED(vp);
 				mutex_exit(&vp->v_lock);
 				rw_exit(&rp->r_hashq->r_lock);
 				return;
@@ -2730,7 +2731,7 @@ rp_addfree(rnode_t *rp, cred_t *cr)
 		 */
 		mutex_enter(&vp->v_lock);
 		if (vp->v_count > 1) {
-			vp->v_count--;
+			VN_RELE_LOCKED(vp);
 			mutex_exit(&vp->v_lock);
 			return;
 		}
@@ -2752,7 +2753,7 @@ rp_addfree(rnode_t *rp, cred_t *cr)
 
 	mutex_enter(&vp->v_lock);
 	if (vp->v_count > 1) {
-		vp->v_count--;
+		VN_RELE_LOCKED(vp);
 		mutex_exit(&vp->v_lock);
 		rw_exit(&rp->r_hashq->r_lock);
 		return;
@@ -2820,6 +2821,7 @@ rp_rmfree(rnode_t *rp)
 static void
 rp_addhash(rnode_t *rp)
 {
+	mntinfo_t *mi;
 
 	ASSERT(RW_WRITE_HELD(&rp->r_hashq->r_lock));
 	ASSERT(!(rp->r_flags & RHASHED));
@@ -2832,6 +2834,11 @@ rp_addhash(rnode_t *rp)
 	mutex_enter(&rp->r_statelock);
 	rp->r_flags |= RHASHED;
 	mutex_exit(&rp->r_statelock);
+
+	mi = VTOMI(RTOV(rp));
+	mutex_enter(&mi->mi_rnodes_lock);
+	list_insert_tail(&mi->mi_rnodes, rp);
+	mutex_exit(&mi->mi_rnodes_lock);
 }
 
 /*
@@ -2842,6 +2849,7 @@ rp_addhash(rnode_t *rp)
 static void
 rp_rmhash_locked(rnode_t *rp)
 {
+	mntinfo_t *mi;
 
 	ASSERT(RW_WRITE_HELD(&rp->r_hashq->r_lock));
 	ASSERT(rp->r_flags & RHASHED);
@@ -2852,6 +2860,12 @@ rp_rmhash_locked(rnode_t *rp)
 	mutex_enter(&rp->r_statelock);
 	rp->r_flags &= ~RHASHED;
 	mutex_exit(&rp->r_statelock);
+
+	mi = VTOMI(RTOV(rp));
+	mutex_enter(&mi->mi_rnodes_lock);
+	if (list_link_active(&rp->r_mi_link))
+		list_remove(&mi->mi_rnodes, rp);
+	mutex_exit(&mi->mi_rnodes_lock);
 }
 
 /*
@@ -2913,7 +2927,7 @@ rfind(rhashq_t *rhtp, nfs_fhandle *fh, struct vfs *vfsp)
 }
 
 /*
- * Return 1 if there is a active vnode belonging to this vfs in the
+ * Return 1 if there is an active vnode belonging to this vfs in the
  * rtable cache.
  *
  * Several of these checks are done without holding the usual
@@ -2924,28 +2938,27 @@ rfind(rhashq_t *rhtp, nfs_fhandle *fh, struct vfs *vfsp)
 int
 check_rtable(struct vfs *vfsp)
 {
-	int index;
 	rnode_t *rp;
 	vnode_t *vp;
+	mntinfo_t *mi;
 
-	for (index = 0; index < rtablesize; index++) {
-		rw_enter(&rtable[index].r_lock, RW_READER);
-		for (rp = rtable[index].r_hashf;
-		    rp != (rnode_t *)(&rtable[index]);
-		    rp = rp->r_hashf) {
-			vp = RTOV(rp);
-			if (vp->v_vfsp == vfsp) {
-				if (rp->r_freef == NULL ||
-				    (vn_has_cached_data(vp) &&
-				    (rp->r_flags & RDIRTY)) ||
-				    rp->r_count > 0) {
-					rw_exit(&rtable[index].r_lock);
-					return (1);
-				}
-			}
+	ASSERT(vfsp != NULL);
+	mi = VFTOMI(vfsp);
+
+	mutex_enter(&mi->mi_rnodes_lock);
+	for (rp = list_head(&mi->mi_rnodes); rp != NULL;
+	    rp = list_next(&mi->mi_rnodes, rp)) {
+		vp = RTOV(rp);
+
+		if (rp->r_freef == NULL ||
+		    (vn_has_cached_data(vp) && (rp->r_flags & RDIRTY)) ||
+		    rp->r_count > 0) {
+			mutex_exit(&mi->mi_rnodes_lock);
+			return (1);
 		}
-		rw_exit(&rtable[index].r_lock);
 	}
+	mutex_exit(&mi->mi_rnodes_lock);
+
 	return (0);
 }
 
@@ -2957,47 +2970,42 @@ check_rtable(struct vfs *vfsp)
 void
 destroy_rtable(struct vfs *vfsp, cred_t *cr)
 {
-	int index;
 	rnode_t *rp;
-	rnode_t *rlist;
-	rnode_t *r_hashf;
-	vnode_t *vp;
+	mntinfo_t *mi;
 
-	rlist = NULL;
+	ASSERT(vfsp != NULL);
 
-	for (index = 0; index < rtablesize; index++) {
-		rw_enter(&rtable[index].r_lock, RW_WRITER);
-		for (rp = rtable[index].r_hashf;
-		    rp != (rnode_t *)(&rtable[index]);
-		    rp = r_hashf) {
-			/* save the hash pointer before destroying */
-			r_hashf = rp->r_hashf;
-			vp = RTOV(rp);
-			if (vp->v_vfsp == vfsp) {
-				mutex_enter(&rpfreelist_lock);
-				if (rp->r_freef != NULL) {
-					rp_rmfree(rp);
-					mutex_exit(&rpfreelist_lock);
-					rp_rmhash_locked(rp);
-					rp->r_hashf = rlist;
-					rlist = rp;
-				} else
-					mutex_exit(&rpfreelist_lock);
-			}
-		}
-		rw_exit(&rtable[index].r_lock);
-	}
+	mi = VFTOMI(vfsp);
 
-	for (rp = rlist; rp != NULL; rp = rlist) {
-		rlist = rp->r_hashf;
+	mutex_enter(&rpfreelist_lock);
+	mutex_enter(&mi->mi_rnodes_lock);
+	while ((rp = list_remove_head(&mi->mi_rnodes)) != NULL) {
+		/*
+		 * If the rnode is no longer on the freelist it is not
+		 * ours and it will be handled by some other thread, so
+		 * skip it.
+		 */
+		if (rp->r_freef == NULL)
+			continue;
+		mutex_exit(&mi->mi_rnodes_lock);
+
+		rp_rmfree(rp);
+		mutex_exit(&rpfreelist_lock);
+
+		rp_rmhash(rp);
+
 		/*
 		 * This call to rp_addfree will end up destroying the
 		 * rnode, but in a safe way with the appropriate set
 		 * of checks done.
 		 */
 		rp_addfree(rp, cr);
-	}
 
+		mutex_enter(&rpfreelist_lock);
+		mutex_enter(&mi->mi_rnodes_lock);
+	}
+	mutex_exit(&mi->mi_rnodes_lock);
+	mutex_exit(&rpfreelist_lock);
 }
 
 /*
@@ -3065,6 +3073,53 @@ rflush(struct vfs *vfsp, cred_t *cr)
 	cnt = 0;
 
 	/*
+	 * If the vfs is known we can do fast path by iterating all rnodes that
+	 * belongs to this vfs.  This is much faster than the traditional way
+	 * of iterating rtable (below) in a case there is a lot of rnodes that
+	 * does not belong to our vfs.
+	 */
+	if (vfsp != NULL) {
+		mntinfo_t *mi = VFTOMI(vfsp);
+
+		mutex_enter(&mi->mi_rnodes_lock);
+		for (rp = list_head(&mi->mi_rnodes); rp != NULL;
+		    rp = list_next(&mi->mi_rnodes, rp)) {
+			vp = RTOV(rp);
+			/*
+			 * Don't bother sync'ing a vp if it
+			 * is part of virtual swap device or
+			 * if VFS is read-only
+			 */
+			if (IS_SWAPVP(vp) || vn_is_readonly(vp))
+				continue;
+			/*
+			 * If the vnode has pages and is marked as either dirty
+			 * or mmap'd, hold and add this vnode to the list of
+			 * vnodes to flush.
+			 */
+			ASSERT(vp->v_vfsp == vfsp);
+			if (vn_has_cached_data(vp) &&
+			    ((rp->r_flags & RDIRTY) || rp->r_mapcnt > 0)) {
+				VN_HOLD(vp);
+				vplist[cnt++] = vp;
+				if (cnt == num) {
+					/*
+					 * The vplist is full because there is
+					 * too many rnodes.  We are done for
+					 * now.
+					 */
+					break;
+				}
+			}
+		}
+		mutex_exit(&mi->mi_rnodes_lock);
+
+		goto done;
+	}
+
+	ASSERT(vfsp == NULL);
+
+	/*
 	 * Walk the hash queues looking for rnodes with page
 	 * lists associated with them.  Make a list of these
 	 * files.
@@ -3083,26 +3138,29 @@ rflush(struct vfs *vfsp, cred_t *cr)
 			if (IS_SWAPVP(vp) || vn_is_readonly(vp))
 				continue;
 			/*
-			 * If flushing all mounted file systems or
-			 * the vnode belongs to this vfs, has pages
-			 * and is marked as either dirty or mmap'd,
-			 * hold and add this vnode to the list of
+			 * If the vnode has pages and is marked as either dirty
+			 * or mmap'd, hold and add this vnode to the list of
 			 * vnodes to flush.
 			 */
-			if ((vfsp == NULL || vp->v_vfsp == vfsp) &&
-			    vn_has_cached_data(vp) &&
+			if (vn_has_cached_data(vp) &&
 			    ((rp->r_flags & RDIRTY) || rp->r_mapcnt > 0)) {
 				VN_HOLD(vp);
 				vplist[cnt++] = vp;
 				if (cnt == num) {
 					rw_exit(&rtable[index].r_lock);
-					goto toomany;
+					/*
+					 * The vplist is full because there is
+					 * too many rnodes.  We are done for
+					 * now.
+					 */
+					goto done;
 				}
 			}
 		}
 		rw_exit(&rtable[index].r_lock);
 	}
-toomany:
+
+done:
 
 	/*
 	 * Flush and release all of the files on the list.
@@ -4080,7 +4138,7 @@ nfs_rnode_reclaim(void)
 			rw_enter(&rp->r_hashq->r_lock, RW_WRITER);
 			mutex_enter(&vp->v_lock);
 			if (vp->v_count > 1) {
-				vp->v_count--;
+				VN_RELE_LOCKED(vp);
 				mutex_exit(&vp->v_lock);
 				rw_exit(&rp->r_hashq->r_lock);
 				mutex_enter(&rpfreelist_lock);
@@ -4637,7 +4695,7 @@ failover_remap(failinfo_t *fi)
 static int
 failover_lookup(char *path, vnode_t *root,
     int (*lookupproc)(vnode_t *, char *, vnode_t **, struct pathname *, int,
-	vnode_t *, cred_t *, int),
+    vnode_t *, cred_t *, int),
     int (*xattrdirproc)(vnode_t *, vnode_t **, bool_t, cred_t *, int),
     vnode_t **new)
 {
@@ -4759,7 +4817,7 @@ nfs_rw_enter_sig(nfs_rwlock_t *l, krw_t rw, int intr)
 
 				if (lwp != NULL)
 					lwp->lwp_nostop++;
-				if (!cv_wait_sig(&l->cv, &l->lock)) {
+				if (cv_wait_sig(&l->cv_rd, &l->lock) == 0) {
 					if (lwp != NULL)
 						lwp->lwp_nostop--;
 					mutex_exit(&l->lock);
@@ -4768,7 +4826,7 @@ nfs_rw_enter_sig(nfs_rwlock_t *l, krw_t rw, int intr)
 				if (lwp != NULL)
 					lwp->lwp_nostop--;
 			} else
-				cv_wait(&l->cv, &l->lock);
+				cv_wait(&l->cv_rd, &l->lock);
 		}
 		ASSERT(l->count < INT_MAX);
 #ifdef	DEBUG
@@ -4787,18 +4845,24 @@ nfs_rw_enter_sig(nfs_rwlock_t *l, krw_t rw, int intr)
 		 * decrement count to indicate that a writer
 		 * is active.
 		 */
-		while (l->count > 0 || l->owner != NULL) {
+		while (l->count != 0) {
 			l->waiters++;
 			if (intr) {
 				klwp_t *lwp = ttolwp(curthread);
 
 				if (lwp != NULL)
 					lwp->lwp_nostop++;
-				if (!cv_wait_sig(&l->cv, &l->lock)) {
+				if (cv_wait_sig(&l->cv, &l->lock) == 0) {
 					if (lwp != NULL)
 						lwp->lwp_nostop--;
 					l->waiters--;
-					cv_broadcast(&l->cv);
+					/*
+					 * If there are readers active and no
+					 * writers waiting then wake up all of
+					 * the waiting readers (if any).
+					 */
+					if (l->count > 0 && l->waiters == 0)
+						cv_broadcast(&l->cv_rd);
 					mutex_exit(&l->lock);
 					return (EINTR);
 				}
@@ -4808,6 +4872,7 @@ nfs_rw_enter_sig(nfs_rwlock_t *l, krw_t rw, int intr)
 				cv_wait(&l->cv, &l->lock);
 			l->waiters--;
 		}
+		ASSERT(l->owner == NULL);
 		l->owner = curthread;
 		l->count--;
 	}
@@ -4852,10 +4917,11 @@ nfs_rw_tryenter(nfs_rwlock_t *l, krw_t rw)
 		 * lock.  Otherwise, set the owner field to curthread and
 		 * decrement count to indicate that a writer is active.
 		 */
-		if (l->count > 0 || l->owner != NULL) {
+		if (l->count != 0) {
 			mutex_exit(&l->lock);
 			return (0);
 		}
+		ASSERT(l->owner == NULL);
 		l->owner = curthread;
 		l->count--;
 	}
@@ -4870,31 +4936,43 @@ nfs_rw_exit(nfs_rwlock_t *l)
 {
 
 	mutex_enter(&l->lock);
-	/*
-	 * If this is releasing a writer lock, then increment count to
-	 * indicate that there is one less writer active.  If this was
-	 * the last of possibly nested writer locks, then clear the owner
-	 * field as well to indicate that there is no writer active
-	 * and wakeup any possible waiting writers or readers.
-	 *
-	 * If releasing a reader lock, then just decrement count to
-	 * indicate that there is one less reader active.  If this was
-	 * the last active reader and there are writer(s) waiting,
-	 * then wake up the first.
-	 */
+
 	if (l->owner != NULL) {
 		ASSERT(l->owner == curthread);
+
+		/*
+		 * To release a writer lock increment count to indicate that
+		 * there is one less writer active.  If this was the last of
+		 * possibly nested writer locks, then clear the owner field as
+		 * well to indicate that there is no writer active.
+		 */
+		ASSERT(l->count < 0);
 		l->count++;
 		if (l->count == 0) {
 			l->owner = NULL;
-			cv_broadcast(&l->cv);
+
+			/*
+			 * If there are no writers waiting then wakeup all of
+			 * the waiting readers (if any).
+			 */
+			if (l->waiters == 0)
+				cv_broadcast(&l->cv_rd);
 		}
 	} else {
+		/*
+		 * To release a reader lock just decrement count to indicate
+		 * that there is one less reader active.
+		 */
 		ASSERT(l->count > 0);
 		l->count--;
-		if (l->count == 0 && l->waiters > 0)
-			cv_broadcast(&l->cv);
 	}
+
+	/*
+	 * If there are no readers active nor a writer active and there is a
+	 * writer waiting we need to wake up it.
+	 */
+	if (l->count == 0 && l->waiters > 0)
+		cv_signal(&l->cv);
 	mutex_exit(&l->lock);
 }
 
@@ -4918,6 +4996,7 @@ nfs_rw_init(nfs_rwlock_t *l, char *name, krw_type_t type, void *arg)
 	l->owner = NULL;
 	mutex_init(&l->lock, NULL, MUTEX_DEFAULT, NULL);
 	cv_init(&l->cv, NULL, CV_DEFAULT, NULL);
+	cv_init(&l->cv_rd, NULL, CV_DEFAULT, NULL);
 }
 
 void
@@ -4926,6 +5005,7 @@ nfs_rw_destroy(nfs_rwlock_t *l)
 
 	mutex_destroy(&l->lock);
 	cv_destroy(&l->cv);
+	cv_destroy(&l->cv_rd);
 }
 
 int
@@ -5102,7 +5182,7 @@ nfs_mount_label_policy(vfs_t *vfsp, struct netbuf *addr,
 	 * mounts into the global zone itself; restrict these to
 	 * read-only.)
 	 *
-	 * If the requestor is in some other zone, but his label
+	 * If the requestor is in some other zone, but their label
 	 * dominates the server, then allow read-down.
 	 *
 	 * Otherwise, access is denied.

@@ -24,12 +24,11 @@
  * Use is subject to license terms.
  */
 
-#pragma ident	"%Z%%M%	%I%	%E% SMI"
-
 #include <sys/systm.h>
 #include <sys/cmn_err.h>
 #include <sys/kobj.h>
 #include <sys/kobj_impl.h>
+#include <zlib.h>
 
 struct zchdr {
 	uint_t zch_magic;

@@ -23,6 +23,7 @@
 # Copyright 2009 Sun Microsystems, Inc.  All rights reserved.
 # Use is subject to license terms.
 #
+# Copyright (c) 2018, Joyent, Inc.
 
 PROG= stty ttymon ttyadm sttydefs
 XPG4PROG= stty
@@ -39,10 +40,10 @@ TTYMONOBJ=	ttymon.o tmglobal.o tmhandler.o tmpmtab.o tmttydefs.o \
 		tmutmp.o tmpeek.o tmlog.o tmlock.o tmutil.o tmexpress.o \
 		sttytable.o sttyparse.o ulockf.o
 
-TTYADMOBJ=	ttyadm.o tmutil.o admutil.o 
+TTYADMOBJ=	ttyadm.o tmutil.o admutil.o
 
 STTYDEFSOBJ=	sttydefs.o admutil.o tmttydefs.o tmparse.o sttytable.o \
-		sttyparse.o 
+		sttyparse.o
 
 OBJS= $(STTYOBJ) $(XPG4STTYOBJ) $(TTYMONOBJ) $(TTYADMOBJ) $(STTYDEFSOBJ)
 STTYSRC= stty.c sttytable.c sttyparse.c
@@ -55,7 +56,7 @@ SRCS= $(STTYSRC) $(TTYMONSRC) $(TTYADMSRC) $(STTYDEFSSRC)
 
 include ../Makefile.cmd
 
-# If machine name and /etc/issue file need to be printed 
+# If machine name and /etc/issue file need to be printed
 # before the service prompt is printed, then:  CPPFLAGS += -DSYS_NAME
 # If debug is needed, then:  CPPFLAGS += -DDEBUG
 # fix for 1111333 - turn on SYS_NAME so /etc/issue will be read if it exists
@@ -69,14 +70,16 @@ ttymon := LDLIBS += -lnsl -lsec -ldevinfo
 $(STTYOBJ) := CPPFLAGS += -DEUC
 $(XPG4STTYOBJ) := CPPFLAGS += -DEUC
 
-LINTFLAGS = -b -x
 CFLAGS += $(CCVERBOSE)
-LDFLAGS += $(MAPFILE.NGB:%=-M%)
+LDFLAGS += $(MAPFILE.NGB:%=-Wl,-M%)
 
 CERRWARN +=	-_gcc=-Wno-parentheses
 CERRWARN +=	-_gcc=-Wno-unused-variable
-CERRWARN +=	-_gcc=-Wno-uninitialized
+CERRWARN +=	$(CNOWARN_UNINIT)
 CERRWARN +=	-_gcc=-Wno-extra
+
+# not linted
+SMATCH=off
 
 #
 # Message catalog
@@ -157,11 +160,5 @@ $(DIRS):
 
 clean:
 	$(RM) $(OBJS)
-
-lint:
-	$(LINT.c) $(STTYSRC)
-	$(LINT.c) $(TTYMONSRC)
-	$(LINT.c) $(TTYADMSRC)
-	$(LINT.c) $(STTYDEFSSRC)
 
 include ../Makefile.targ

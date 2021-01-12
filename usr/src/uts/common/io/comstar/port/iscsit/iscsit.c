@@ -21,7 +21,8 @@
 /*
  * Copyright (c) 2008, 2010, Oracle and/or its affiliates. All rights reserved.
  *
- * Copyright 2014 Nexenta Systems, Inc. All rights reserved.
+ * Copyright 2017 Nexenta Systems, Inc.
+ * Copyright (c) 2017, Joyent, Inc.  All rights reserved.
  */
 
 #include <sys/cpuvar.h>
@@ -124,7 +125,7 @@ static idm_status_t iscsit_init(dev_info_t *dip);
 static idm_status_t iscsit_enable_svc(iscsit_hostinfo_t *hostinfo);
 static void iscsit_disable_svc(void);
 
-static int
+static boolean_t
 iscsit_check_cmdsn_and_queue(idm_pdu_t *rx_pdu);
 
 static void
@@ -912,7 +913,7 @@ iscsit_rx_pdu(idm_conn_t *ic, idm_pdu_t *rx_pdu)
 		 * now we treat it as a protocol error.
 		 */
 		idm_pdu_complete(rx_pdu, IDM_STATUS_SUCCESS);
-		idm_conn_event(ic, CE_TRANSPORT_FAIL, NULL);
+		idm_conn_event(ic, CE_TRANSPORT_FAIL, 0);
 		break;
 	case ISCSI_OP_SCSI_TASK_MGT_MSG:
 		if (iscsit_check_cmdsn_and_queue(rx_pdu)) {
@@ -933,7 +934,7 @@ iscsit_rx_pdu(idm_conn_t *ic, idm_pdu_t *rx_pdu)
 	default:
 		/* Protocol error */
 		idm_pdu_complete(rx_pdu, IDM_STATUS_SUCCESS);
-		idm_conn_event(ic, CE_TRANSPORT_FAIL, NULL);
+		idm_conn_event(ic, CE_TRANSPORT_FAIL, 0);
 		break;
 	}
 }
@@ -943,6 +944,22 @@ void
 iscsit_rx_pdu_error(idm_conn_t *ic, idm_pdu_t *rx_pdu, idm_status_t status)
 {
 	idm_pdu_complete(rx_pdu, IDM_STATUS_SUCCESS);
+}
+
+/*
+ * iscsit_rx_scsi_rsp -- cause the connection to be closed if response rx'd
+ *
+ * A target sends an SCSI Response PDU, it should never receive one.
+ * This has been seen when running the Codemonicon suite of tests which
+ * does negative testing of the protocol. If such a condition occurs using
+ * a normal initiator it most likely means there's data corruption in the
+ * header and that's grounds for dropping the connection as well.
+ */
+void
+iscsit_rx_scsi_rsp(idm_conn_t *ic, idm_pdu_t *rx_pdu)
+{
+	idm_pdu_complete(rx_pdu, IDM_STATUS_SUCCESS);
+	idm_conn_event(ic, CE_TRANSPORT_FAIL, 0);
 }
 
 void
@@ -976,7 +993,7 @@ iscsit_task_aborted(idm_task_t *idt, idm_status_t status)
 			 * STMF_ABORTED, the code actually looks for
 			 * STMF_ABORT_SUCCESS.
 			 */
-			stmf_task_lport_aborted(itask->it_stmf_task,
+			stmf_task_lport_aborted_unlocked(itask->it_stmf_task,
 			    STMF_ABORT_SUCCESS, STMF_IOF_LPORT_DONE);
 			return;
 		} else {
@@ -1208,6 +1225,7 @@ iscsit_conn_accept(idm_conn_t *ic)
 	mutex_init(&ict->ict_mutex, NULL, MUTEX_DRIVER, NULL);
 	mutex_init(&ict->ict_statsn_mutex, NULL, MUTEX_DRIVER, NULL);
 	idm_refcnt_init(&ict->ict_refcnt, ict);
+	idm_refcnt_init(&ict->ict_dispatch_refcnt, ict);
 
 	/*
 	 * Initialize login state machine
@@ -1353,6 +1371,9 @@ iscsit_conn_lost(idm_conn_t *ic)
 	 * Make sure there aren't any PDU's transitioning from the receive
 	 * handler to the dispatch taskq.
 	 */
+	if (idm_refcnt_is_held(&ict->ict_dispatch_refcnt) < 0) {
+		cmn_err(CE_WARN, "Possible hang in iscsit_conn_lost");
+	}
 	idm_refcnt_wait_ref(&ict->ict_dispatch_refcnt);
 
 	return (IDM_STATUS_SUCCESS);
@@ -1369,13 +1390,10 @@ iscsit_conn_destroy(idm_conn_t *ic)
 
 	/* Generate session state machine event */
 	if (ict->ict_sess != NULL) {
-		/*
-		 * Session state machine will call iscsit_conn_destroy_done()
-		 * when it has removed references to this connection.
-		 */
 		iscsit_sess_sm_event(ict->ict_sess, SE_CONN_FAIL, ict);
 	}
 
+	idm_refcnt_wait_ref(&ict->ict_dispatch_refcnt);
 	idm_refcnt_wait_ref(&ict->ict_refcnt);
 	/*
 	 * The session state machine does not need to post
@@ -1391,6 +1409,7 @@ iscsit_conn_destroy(idm_conn_t *ic)
 	iscsit_text_cmd_fini(ict);
 
 	mutex_destroy(&ict->ict_mutex);
+	idm_refcnt_destroy(&ict->ict_dispatch_refcnt);
 	idm_refcnt_destroy(&ict->ict_refcnt);
 	kmem_free(ict, sizeof (*ict));
 
@@ -1411,7 +1430,7 @@ iscsit_conn_logout(iscsit_conn_t *ict)
 	 */
 	mutex_enter(&ict->ict_mutex);
 	if (ict->ict_lost == B_FALSE && ict->ict_destroyed == B_FALSE) {
-		idm_conn_event(ict->ict_ic, CE_LOGOUT_SESSION_SUCCESS, NULL);
+		idm_conn_event(ict->ict_ic, CE_LOGOUT_SESSION_SUCCESS, 0);
 	}
 	mutex_exit(&ict->ict_mutex);
 }
@@ -1426,7 +1445,7 @@ iscsit_conn_logout(iscsit_conn_t *ict)
  * Target
  * Target portal (group?) == local port (really but we're not going to do this)
  *	iscsit needs to map connections to local ports (whatever we decide
- * 	they are)
+ *	they are)
  * Target == ?
  */
 
@@ -1526,8 +1545,9 @@ iscsit_xfer_scsi_data(scsi_task_t *task, stmf_data_buf_t *dbuf,
 	/*
 	 * If it's not immediate data then start the transfer
 	 */
-	ASSERT(ibuf->ibuf_is_immed == B_FALSE);
 	if (dbuf->db_flags & DB_DIRECTION_TO_RPORT) {
+		if (ibuf->ibuf_is_immed)
+			return (iscsit_idm_to_stmf(IDM_STATUS_SUCCESS));
 		/*
 		 * The DB_SEND_STATUS_GOOD flag in the STMF data buffer allows
 		 * the port provider to phase-collapse, i.e. send the status
@@ -1551,6 +1571,7 @@ iscsit_xfer_scsi_data(scsi_task_t *task, stmf_data_buf_t *dbuf,
 
 		return (iscsit_idm_to_stmf(idm_rc));
 	} else if (dbuf->db_flags & DB_DIRECTION_FROM_RPORT) {
+		ASSERT(ibuf->ibuf_is_immed == B_FALSE);
 		/* Grab the SN lock (see comment above) */
 		mutex_enter(&ict_sess->ist_sn_mutex);
 		idm_rc = idm_buf_rx_from_ini(iscsit_task->it_idm_task,
@@ -1870,20 +1891,8 @@ iscsit_abort(stmf_local_port_t *lport, int abort_cmd, void *arg, uint32_t flags)
 		 * Call IDM to abort the task.  Due to a variety of
 		 * circumstances the task may already be in the process of
 		 * aborting.
-		 * We'll let IDM worry about rationalizing all that except
-		 * for one particular instance.  If the state of the task
-		 * is TASK_COMPLETE, we need to indicate to the framework
-		 * that we are in fact done.  This typically happens with
-		 * framework-initiated task management type requests
-		 * (e.g. abort task).
 		 */
-		if (idt->idt_state == TASK_COMPLETE) {
-			idm_refcnt_wait_ref(&idt->idt_refcnt);
-			return (STMF_ABORT_SUCCESS);
-		} else {
-			idm_task_abort(idt->idt_ic, idt, AT_TASK_MGMT_ABORT);
-			return (STMF_SUCCESS);
-		}
+		return (idm_task_abort(idt->idt_ic, idt, AT_TASK_MGMT_ABORT));
 	}
 
 	/*NOTREACHED*/
@@ -1944,6 +1953,21 @@ iscsit_op_scsi_cmd(idm_conn_t *ic, idm_pdu_t *rx_pdu)
 	iscsit_process_pdu_in_queue(ict->ict_sess);
 }
 
+static int
+iscsit_validate_idm_pdu(idm_pdu_t *rx_pdu)
+{
+	iscsi_scsi_cmd_hdr_t	*iscsi_scsi =
+	    (iscsi_scsi_cmd_hdr_t *)rx_pdu->isp_hdr;
+
+	if ((iscsi_scsi->scb[0] == SCMD_READ) ||
+	    (iscsi_scsi->scb[0] == SCMD_READ_G1) ||
+	    (iscsi_scsi->scb[0] == SCMD_READ_G4)) {
+		if (iscsi_scsi->flags & ISCSI_FLAG_CMD_WRITE)
+			return (IDM_STATUS_FAIL);
+	}
+	return (IDM_STATUS_SUCCESS);
+}
+
 /*
  * ISCSI protocol
  */
@@ -1961,6 +1985,15 @@ iscsit_post_scsi_cmd(idm_conn_t *ic, idm_pdu_t *rx_pdu)
 	uint16_t		addl_cdb_len = 0;
 
 	ict = ic->ic_handle;
+	if (iscsit_validate_idm_pdu(rx_pdu) != IDM_STATUS_SUCCESS) {
+		/* Finish processing request */
+		iscsit_set_cmdsn(ict, rx_pdu);
+
+		iscsit_send_direct_scsi_resp(ict, rx_pdu,
+		    ISCSI_STATUS_CMD_COMPLETED, STATUS_CHECK);
+		idm_pdu_complete(rx_pdu, IDM_STATUS_PROTOCOL_ERROR);
+		return;
+	}
 
 	itask = iscsit_task_alloc(ict);
 	if (itask == NULL) {
@@ -2331,9 +2364,9 @@ iscsit_op_scsi_task_mgmt(iscsit_conn_t *ict, idm_pdu_t *rx_pdu)
 	iscsit_task_t			*itask;
 	iscsit_task_t			*tm_itask;
 	scsi_task_t			*task;
-	iscsi_scsi_task_mgt_hdr_t 	*iscsi_tm =
+	iscsi_scsi_task_mgt_hdr_t	*iscsi_tm =
 	    (iscsi_scsi_task_mgt_hdr_t *)rx_pdu->isp_hdr;
-	iscsi_scsi_task_mgt_rsp_hdr_t 	*iscsi_tm_rsp =
+	iscsi_scsi_task_mgt_rsp_hdr_t	*iscsi_tm_rsp =
 	    (iscsi_scsi_task_mgt_rsp_hdr_t *)rx_pdu->isp_hdr;
 	uint32_t			rtt, cmdsn, refcmdsn;
 	uint8_t				tm_func;
@@ -2392,9 +2425,10 @@ iscsit_op_scsi_task_mgmt(iscsit_conn_t *ict, idm_pdu_t *rx_pdu)
 			if (iscsit_cmdsn_in_window(ict, refcmdsn) &&
 			    iscsit_sna_lt(refcmdsn, cmdsn)) {
 				mutex_enter(&ict->ict_sess->ist_sn_mutex);
-				(void) iscsit_remove_pdu_from_queue(
-				    ict->ict_sess, refcmdsn);
-				iscsit_conn_dispatch_rele(ict);
+				if (iscsit_remove_pdu_from_queue(
+				    ict->ict_sess, refcmdsn)) {
+					iscsit_conn_dispatch_rele(ict);
+				}
 				mutex_exit(&ict->ict_sess->ist_sn_mutex);
 				iscsit_send_task_mgmt_resp(tm_resp_pdu,
 				    SCSI_TCP_TM_RESP_COMPLETE);
@@ -2579,7 +2613,7 @@ iscsit_pdu_op_login_cmd(iscsit_conn_t	*ict, idm_pdu_t *rx_pdu)
 void
 iscsit_pdu_op_logout_cmd(iscsit_conn_t	*ict, idm_pdu_t *rx_pdu)
 {
-	iscsi_logout_hdr_t 	*logout_req =
+	iscsi_logout_hdr_t	*logout_req =
 	    (iscsi_logout_hdr_t *)rx_pdu->isp_hdr;
 	iscsi_logout_rsp_hdr_t	*logout_rsp;
 	idm_pdu_t *resp;
@@ -2693,7 +2727,7 @@ iscsit_send_async_event(iscsit_conn_t *ict, uint8_t event)
 	 */
 	abt = idm_pdu_alloc(sizeof (iscsi_hdr_t), 0);
 	if (abt == NULL) {
-		idm_conn_event(ict->ict_ic, CE_TRANSPORT_FAIL, NULL);
+		idm_conn_event(ict->ict_ic, CE_TRANSPORT_FAIL, 0);
 		return;
 	}
 
@@ -2743,7 +2777,7 @@ iscsit_send_reject(iscsit_conn_t *ict, idm_pdu_t *rejected_pdu, uint8_t reason)
 	reject_pdu = idm_pdu_alloc(sizeof (iscsi_hdr_t),
 	    rejected_pdu->isp_hdrlen);
 	if (reject_pdu == NULL) {
-		idm_conn_event(ict->ict_ic, CE_TRANSPORT_FAIL, NULL);
+		idm_conn_event(ict->ict_ic, CE_TRANSPORT_FAIL, 0);
 		return;
 	}
 	idm_pdu_init(reject_pdu, ict->ict_ic, NULL, NULL);
@@ -3099,8 +3133,10 @@ iscsit_cmdsn_in_window(iscsit_conn_t *ict, uint32_t cmdsn)
  * CmdSN order. So out-of-order non-immediate commands are queued up on a
  * session-wide wait queue. Duplicate commands are ignored.
  *
+ * returns B_TRUE for commands which can be executed immediately (are
+ * non-deferred), B_FALSE for cases where a command was deferred or invalid.
  */
-static int
+static boolean_t
 iscsit_check_cmdsn_and_queue(idm_pdu_t *rx_pdu)
 {
 	idm_conn_t		*ic = rx_pdu->isp_ic;
@@ -3114,9 +3150,15 @@ iscsit_check_cmdsn_and_queue(idm_pdu_t *rx_pdu)
 		DTRACE_PROBE2(immediate__cmd, iscsit_sess_t *, ist,
 		    idm_pdu_t *, rx_pdu);
 		mutex_exit(&ist->ist_sn_mutex);
-		return (ISCSIT_CMDSN_EQ_EXPCMDSN);
+		return (B_TRUE);
 	}
-	if (iscsit_sna_lt(ist->ist_expcmdsn, ntohl(hdr->cmdsn))) {
+	/*
+	 * See RFC3270 3.1.1.2: non-immediate commands outside of the
+	 * expected window (from expcmdsn to maxcmdsn, inclusive)
+	 * should be silently ignored.
+	 */
+	if (iscsit_sna_lt(ist->ist_expcmdsn, ntohl(hdr->cmdsn)) &&
+	    iscsit_sna_lt(ntohl(hdr->cmdsn), ist->ist_maxcmdsn)) {
 		/*
 		 * Out-of-order commands (cmdSN higher than ExpCmdSN)
 		 * are staged on a fixed-size circular buffer until
@@ -3128,15 +3170,24 @@ iscsit_check_cmdsn_and_queue(idm_pdu_t *rx_pdu)
 		rx_pdu->isp_queue_time = gethrtime();
 		iscsit_add_pdu_to_queue(ist, rx_pdu);
 		mutex_exit(&ist->ist_sn_mutex);
-		return (ISCSIT_CMDSN_GT_EXPCMDSN);
-	} else if (iscsit_sna_lt(ntohl(hdr->cmdsn), ist->ist_expcmdsn)) {
+		return (B_FALSE);
+	} else if (iscsit_sna_lt(ntohl(hdr->cmdsn), ist->ist_expcmdsn) ||
+	    iscsit_sna_lt(ist->ist_maxcmdsn, ntohl(hdr->cmdsn))) {
+		/*
+		 * See above, this command is outside of our acceptable
+		 * window, we need to discard/complete.
+		 */
 		DTRACE_PROBE3(cmdsn__lt__expcmdsn, iscsit_sess_t *, ist,
 		    iscsit_conn_t *, ict, idm_pdu_t *, rx_pdu);
 		mutex_exit(&ist->ist_sn_mutex);
-		return (ISCSIT_CMDSN_LT_EXPCMDSN);
+		idm_pdu_complete(rx_pdu, IDM_STATUS_SUCCESS);
+		/*
+		 * tell our callers that the PDU "finished."
+		 */
+		return (B_FALSE);
 	} else {
 		mutex_exit(&ist->ist_sn_mutex);
-		return (ISCSIT_CMDSN_EQ_EXPCMDSN);
+		return (B_TRUE);
 	}
 }
 
@@ -3152,7 +3203,7 @@ static void
 iscsit_add_pdu_to_queue(iscsit_sess_t *ist, idm_pdu_t *rx_pdu)
 {
 	iscsit_cbuf_t	*cbuf	= ist->ist_rxpdu_queue;
-	iscsit_conn_t	*ict 	= rx_pdu->isp_ic->ic_handle;
+	iscsit_conn_t	*ict	= rx_pdu->isp_ic->ic_handle;
 	uint32_t	cmdsn	=
 	    ((iscsi_scsi_cmd_hdr_t *)rx_pdu->isp_hdr)->cmdsn;
 	uint32_t	index;

@@ -22,6 +22,9 @@
  * Copyright 2008 Sun Microsystems, Inc.  All rights reserved.
  * Use is subject to license terms.
  */
+/*
+ * Copyright (c) 2017 by Delphix. All rights reserved.
+ */
 
 /*
  * Contracts
@@ -891,7 +894,7 @@ contract_vnode_clear(contract_t *ct, contract_vnode_t *ctv)
 		list_remove(&ct->ct_vnodes, ctv);
 		result = 1;
 	} else {
-		vp->v_count--;
+		VN_RELE_LOCKED(vp);
 		result = 0;
 	}
 	mutex_exit(&vp->v_lock);
@@ -1539,6 +1542,7 @@ ctmpl_set(ct_template_t *template, ct_kparam_t *kparam, const cred_t *cr)
 	ct_param_t *param = &kparam->param;
 	uint64_t param_value;
 
+	param_value = 0;
 	if (param->ctpm_id == CTP_COOKIE ||
 	    param->ctpm_id == CTP_EV_INFO ||
 	    param->ctpm_id == CTP_EV_CRITICAL) {
@@ -1609,6 +1613,7 @@ ctmpl_get(ct_template_t *template, ct_kparam_t *kparam)
 	ct_param_t *param = &kparam->param;
 	uint64_t *param_value;
 
+	param_value = NULL;
 	if (param->ctpm_id == CTP_COOKIE ||
 	    param->ctpm_id == CTP_EV_INFO ||
 	    param->ctpm_id == CTP_EV_CRITICAL) {
@@ -1623,13 +1628,16 @@ ctmpl_get(ct_template_t *template, ct_kparam_t *kparam)
 	mutex_enter(&template->ctmpl_lock);
 	switch (param->ctpm_id) {
 	case CTP_COOKIE:
-		*param_value = template->ctmpl_cookie;
+		if (param_value != NULL)
+			*param_value = template->ctmpl_cookie;
 		break;
 	case CTP_EV_INFO:
-		*param_value = template->ctmpl_ev_info;
+		if (param_value != NULL)
+			*param_value = template->ctmpl_ev_info;
 		break;
 	case CTP_EV_CRITICAL:
-		*param_value = template->ctmpl_ev_crit;
+		if (param_value != NULL)
+			*param_value = template->ctmpl_ev_crit;
 		break;
 	default:
 		result = template->ctmpl_ops->ctop_get(template, kparam);
@@ -1837,10 +1845,8 @@ cte_rele(ct_kevent_t *e)
 	contract_rele(e->cte_contract);
 
 	mutex_destroy(&e->cte_lock);
-	if (e->cte_data)
-		nvlist_free(e->cte_data);
-	if (e->cte_gdata)
-		nvlist_free(e->cte_gdata);
+	nvlist_free(e->cte_data);
+	nvlist_free(e->cte_gdata);
 	kmem_free(e, sizeof (ct_kevent_t));
 }
 

@@ -20,6 +20,8 @@
 #
 #
 # Copyright (c) 2006, 2010, Oracle and/or its affiliates. All rights reserved.
+# Copyright 2013 Saso Kiselkov. All rights reserved.
+# Copyright (c) 2018, Joyent, Inc.
 #
 
 #
@@ -50,6 +52,31 @@ $mapfile_version 2
 # ELF section. As a result, ld will put the two main symbols in.
 #
 
+SYMBOL_VERSION ILLUMOS_0.1 {
+    global:
+	Skein1024_Final;
+	Skein1024_Final_Pad;
+	Skein1024_Init;
+	Skein1024_InitExt;
+	Skein1024_Output;
+	Skein1024_Update;
+	Skein_256_Final;
+	Skein_256_Final_Pad;
+	Skein_256_Init;
+	Skein_256_InitExt;
+	Skein_256_Output;
+	Skein_256_Update;
+	Skein_512_Final;
+	Skein_512_Final_Pad;
+	Skein_512_Init;
+	Skein_512_InitExt;
+	Skein_512_Output;
+	Skein_512_Update;
+	EdonRFinal;
+	EdonRHash;
+	EdonRInit;
+	EdonRUpdate;
+} SUNW_1.1;
 
 SYMBOL_VERSION SUNW_1.1 {
     global:
@@ -75,6 +102,24 @@ SYMBOL_VERSION SUNW_1.1 {
 	SHA512Final	{ FLAGS = NODYNSORT };
 	SHA512Init;
 	SHA512Update	{ FLAGS = NODYNSORT };
+};
+
+SYMBOL_VERSION ILLUMOSprivate {
+    global:
+$if _ELF64 && _x86
+	#
+	# We use hardware capabilities to define multiple versions of
+	# the block processing functions for some of the SHA functions.
+	# Unfortunately, that requires these to be global symbols, even
+	# though we don't want them to be. As such, they remain in a
+	# private version and hopefully some day will be removed. These
+	# symbols are not exposed in any meaningful way in a header file
+	# so no application should actually end up requiring this
+	# section.
+	#
+	sha1_block_data_order;
+	SHA256TransformBlocks;
+$endif
     local:
 	*;
 };

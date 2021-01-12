@@ -21,6 +21,7 @@
 
 #
 # Copyright (c) 1999, 2010, Oracle and/or its affiliates. All rights reserved.
+# Copyright 2019 OmniOS Community Edition (OmniOSce) Association.
 #
 
 include		$(SRC)/cmd/sgs/librtld/Makefile.com
@@ -29,16 +30,9 @@ CPPFLAGS +=	-I../../../../uts/intel/amd64/krtld
 
 .KEEP_STATE:
 
-ROOTFS_DYNLIB64 =	$(DYNLIB:%=$(ROOTFS_LIBDIR64)/%)
-$(ROOTFS_DYNLIB64) :=	FILEMODE=755
-
-LINTFLAGS64 +=	$(VAR_LINTFLAGS64)
-
 all:		$(DYNLIB) $(LIBLINKS)
 
-install:	all $(ROOTFS_DYNLIB64)
-
-lint:		$(LINTLIB) $(LINTOUT64) $(SGSLINTOUT)
+install:	all $(ROOTLIBS64) $(ROOTCOMPATLINKS64)
 
 CPPFLAGS +=	-D_ELF64
 

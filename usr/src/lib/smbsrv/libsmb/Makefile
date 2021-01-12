@@ -20,6 +20,7 @@
 #
 #
 # Copyright (c) 2007, 2010, Oracle and/or its affiliates. All rights reserved.
+# Copyright 2015 Igor Kozhukhov <ikozhukhov@gmail.com>
 #
 
 HDRS=	libsmb.h
@@ -27,10 +28,10 @@ HDRS=	libsmb.h
 GENSRCS = common/smb_status_tbl.h
 CLEANFILES += $(GENSRCS)
 
-all install lint: $(GENSRCS)
+all install: $(GENSRCS)
 
 include ../Makefile.smbsrv
 
 $(GENSRCS): common/smb_status_gen.awk $(SRC)/uts/common/smb/ntstatus.h
-	nawk -f common/smb_status_gen.awk \
+	$(AWK) -f common/smb_status_gen.awk \
 	  $(SRC)/uts/common/smb/ntstatus.h > $@

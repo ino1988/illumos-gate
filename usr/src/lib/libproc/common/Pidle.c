@@ -112,6 +112,7 @@ static const ps_ops_t P_idle_ops = {
 	.pop_pwrite	= Pwrite_idle,
 	.pop_cred	= (pop_cred_t)Pidle_int,
 	.pop_priv	= Ppriv_idle,
+	.pop_secflags	= (pop_secflags_t)Pidle_int,
 	.pop_psinfo	= (pop_psinfo_t)Pidle_voidp,
 	.pop_platform	= (pop_platform_t)Pidle_voidp,
 	.pop_uname	= (pop_uname_t)Pidle_int,
@@ -226,6 +227,7 @@ Pgrab_file(const char *fname, int *perr)
 	}
 
 	fp->file_fd = fd;
+	fp->file_dbgfile = -1;
 	fp->file_lo->rl_lmident = LM_ID_BASE;
 	if ((fp->file_lname = strdup(fp->file_pname)) == NULL) {
 		*perr = G_STRANGE;

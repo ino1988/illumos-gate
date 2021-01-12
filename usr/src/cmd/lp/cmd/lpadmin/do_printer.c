@@ -25,9 +25,8 @@
 /*
  * Copyright 2006 Sun Microsystems, Inc.  All rights reserved.
  * Use is subject to license terms.
+ * Copyright (c) 2016 by Delphix. All rights reserved.
  */
-
-#pragma ident	"%Z%%M%	%I%	%E% SMI"
 
 #include <stdio.h>
 #include <string.h>
@@ -41,25 +40,22 @@
 #include <bsm/devices.h>
 #include "lp.h"
 #include "class.h"
-#if defined PS_FAULTED
-#undef	PS_FAULTED
-#endif
 #include "printers.h"
 #include "msgs.h"
 
 #define	WHO_AM_I	I_AM_LPADMIN
-#include	"oam.h"
+#include "oam.h"
 
 #include "lpadmin.h"
 
 extern	void	fromallclasses();
 
-#if     !defined(PATH_MAX)
-# define PATH_MAX       1024
+#if !defined(PATH_MAX)
+#define	PATH_MAX	1024
 #endif
-#if     PATH_MAX < 1024
-# undef PATH_MAX
-# define PATH_MAX       1024
+#if PATH_MAX < 1024
+#undef PATH_MAX
+#define	PATH_MAX	1024
 #endif
 
 extern char		*label;
@@ -69,38 +65,40 @@ static char		*fullpath();
 char			*nameit();
 static void		pack_white(char *ptr);
 
-/**
- ** do_printer() - CREATE OR CHANGE PRINTER
- **/
+/*
+ * do_printer() - CREATE OR CHANGE PRINTER
+ */
 
-void			do_printer ()
+void
+do_printer(void)
 {
-	int			rc;
+	int rc;
 
 	/*
 	 * Set or change the printer configuration.
 	 */
 	if (strlen(modifications))
-		configure_printer (modifications);
+		configure_printer(modifications);
 
 	/*
 	 * Allow/deny forms.
 	 */
 	BEGIN_CRITICAL
 		if (!oldp)
-			if (allow_form_printer(getlist(NAME_NONE, "", ","), p) == -1) {
-				LP_ERRMSG1 (ERROR, E_ADM_ACCESSINFO, PERROR);
+			if (allow_form_printer(
+			    getlist(NAME_NONE, "", ","), p) == -1) {
+				LP_ERRMSG1(ERROR, E_ADM_ACCESSINFO, PERROR);
 				done(1);
 			}
 
 		if (f_allow || f_deny) {
 			if (f_allow && allow_form_printer(f_allow, p) == -1) {
-				LP_ERRMSG1 (ERROR, E_ADM_ACCESSINFO, PERROR);
+				LP_ERRMSG1(ERROR, E_ADM_ACCESSINFO, PERROR);
 				done(1);
 			}
 
 			if (f_deny && deny_form_printer(f_deny, p) == -1) {
-				LP_ERRMSG1 (ERROR, E_ADM_ACCESSINFO, PERROR);
+				LP_ERRMSG1(ERROR, E_ADM_ACCESSINFO, PERROR);
 				done(1);
 			}
 		}
@@ -110,21 +108,22 @@ void			do_printer ()
 
 	BEGIN_CRITICAL
 		if (!oldp)
-			if (add_paper_to_printer(getlist(NAME_NONE, "", ","),p) == -1) {
-				LP_ERRMSG1 (ERROR, E_ADM_ACCESSINFO, PERROR);
+			if (add_paper_to_printer(
+			    getlist(NAME_NONE, "", ","), p) == -1) {
+				LP_ERRMSG1(ERROR, E_ADM_ACCESSINFO, PERROR);
 				done(1);
 			}
 
 
-			if (p_add && add_paper_to_printer(p_add, p) == -1) {
-				LP_ERRMSG1 (ERROR, E_ADM_ACCESSINFO, PERROR);
-				done(1);
-			}
+		if (p_add && add_paper_to_printer(p_add, p) == -1) {
+			LP_ERRMSG1(ERROR, E_ADM_ACCESSINFO, PERROR);
+			done(1);
+		}
 
-			if (p_remove && remove_paper_from_printer(p_remove, p) == -1) {
-				LP_ERRMSG1 (ERROR, E_ADM_ACCESSINFO, PERROR);
-				done(1);
-			}
+		if (p_remove && remove_paper_from_printer(p_remove, p) == -1) {
+			LP_ERRMSG1(ERROR, E_ADM_ACCESSINFO, PERROR);
+			done(1);
+		}
 	END_CRITICAL
 
 	/*
@@ -132,19 +131,20 @@ void			do_printer ()
 	 */
 	BEGIN_CRITICAL
 		if (!oldp)
-			if (allow_user_printer(getlist(NAME_ALL, "", ","), p) == -1) {
-				LP_ERRMSG1 (ERROR, E_ADM_ACCESSINFO, PERROR);
+			if (allow_user_printer(
+			    getlist(NAME_ALL, "", ","), p) == -1) {
+				LP_ERRMSG1(ERROR, E_ADM_ACCESSINFO, PERROR);
 				done(1);
 			}
 
 		if (u_allow || u_deny) {
 			if (u_allow && allow_user_printer(u_allow, p) == -1) {
-				LP_ERRMSG1 (ERROR, E_ADM_ACCESSINFO, PERROR);
+				LP_ERRMSG1(ERROR, E_ADM_ACCESSINFO, PERROR);
 				done(1);
 			}
 
 			if (u_deny && deny_user_printer(u_deny, p) == -1) {
-				LP_ERRMSG1 (ERROR, E_ADM_ACCESSINFO, PERROR);
+				LP_ERRMSG1(ERROR, E_ADM_ACCESSINFO, PERROR);
 				done(1);
 			}
 		}
@@ -162,18 +162,18 @@ void			do_printer ()
 
 	case MNODEST:
 	case MERRDEST:
-		LP_ERRMSG (ERROR, E_ADM_ERRDEST);
-		done (1);
+		LP_ERRMSG(ERROR, E_ADM_ERRDEST);
+		done(1);
 		/*NOTREACHED*/
 
 	case MNOSPACE:
-		LP_ERRMSG (WARNING, E_ADM_NOPSPACE);
+		LP_ERRMSG(WARNING, E_ADM_NOPSPACE);
 		break;
 
 	case MNOPERM:	/* taken care of up front */
 	default:
-		LP_ERRMSG1 (ERROR, E_LP_BADSTATUS, rc);
-		done (1);
+		LP_ERRMSG1(ERROR, E_LP_BADSTATUS, rc);
+		done(1);
 		/*NOTREACHED*/
 	}
 
@@ -185,9 +185,10 @@ void			do_printer ()
 	/*
 	 * Mount or unmount form, print-wheel.
 	 */
-	if (M) 
-		do_mount(p, (f? f : (char *)0), (S? *S : (char *)0));
-	else if (t) do_max_trays(p);
+	if (M)
+		do_mount(p, (f? f : NULL), (S? *S : NULL));
+	else if (t)
+		do_max_trays(p);
 
 	/*
 	 * Display the alert type.
@@ -195,7 +196,7 @@ void			do_printer ()
 	if (A && STREQU(A, NAME_LIST)) {
 		if (label)
 			(void) printf(gettext("Printer %s: "), label);
-		printalert (stdout, &(oldp->fault_alert), 1);
+		printalert(stdout, &(oldp->fault_alert), 1);
 	}
 
 	/*
@@ -206,19 +207,19 @@ void			do_printer ()
 		send_message(S_QUIET_ALERT, p, (char *)QA_PRINTER, "");
 		rc = output(R_QUIET_ALERT);
 
-		switch(rc) {
+		switch (rc) {
 		case MOK:
 			break;
 
 		case MNODEST:	/* not quite, but not a lie either */
 		case MERRDEST:
-			LP_ERRMSG1 (WARNING, E_LP_NOQUIET, p);
+			LP_ERRMSG1(WARNING, E_LP_NOQUIET, p);
 			break;
 
 		case MNOPERM:	/* taken care of up front */
 		default:
-			LP_ERRMSG1 (ERROR, E_LP_BADSTATUS, rc);
-			done (1);
+			LP_ERRMSG1(ERROR, E_LP_BADSTATUS, rc);
+			done(1);
 			/*NOTREACHED*/
 		}
 	}
@@ -227,8 +228,8 @@ void			do_printer ()
 	 * Add printer p to class c
 	 */
 	if (c)  {
-		CLASS			*pc,
-					clsbuf;
+		CLASS *pc;
+		CLASS clsbuf;
 
 		if (STREQU(c, NAME_ANY))
 			c = NAME_ALL;
@@ -238,13 +239,8 @@ Loop:		if (!(pc = getclass(c))) {
 				goto Done;
 
 			if (errno != ENOENT) {
-				LP_ERRMSG2 (
-					ERROR,
-					E_LP_GETCLASS,
-					c,
-					PERROR
-				);
-				done (1);
+				LP_ERRMSG2(ERROR, E_LP_GETCLASS, c, PERROR);
+				done(1);
 			}
 
 			/*
@@ -253,52 +249,48 @@ Loop:		if (!(pc = getclass(c))) {
 			clsbuf.name = strdup(c);
 			clsbuf.members = 0;
 			if (addlist(&clsbuf.members, p) == -1) {
-				LP_ERRMSG (ERROR, E_LP_MALLOC);
-				done (1);
+				LP_ERRMSG(ERROR, E_LP_MALLOC);
+				done(1);
 			}
 			pc = &clsbuf;
 
 		} else if (searchlist(p, pc->members))
-			LP_ERRMSG2 (WARNING, E_ADM_INCLASS, p, pc->name);
+			LP_ERRMSG2(WARNING, E_ADM_INCLASS, p, pc->name);
 
 		else if (addlist(&pc->members, p) == -1) {
-			LP_ERRMSG (ERROR, E_LP_MALLOC);
-			done (1);
+			LP_ERRMSG(ERROR, E_LP_MALLOC);
+			done(1);
 		}
 
 		BEGIN_CRITICAL
 			if (putclass(pc->name, pc) == -1) {
-				LP_ERRMSG2 (
-					ERROR,
-					E_LP_PUTCLASS,
-					pc->name,
-					PERROR
-				);
+				LP_ERRMSG2(ERROR, E_LP_PUTCLASS, pc->name,
+				    PERROR);
 				done(1);
 			}
 		END_CRITICAL
 
-		send_message (S_LOAD_CLASS, pc->name);
+		send_message(S_LOAD_CLASS, pc->name);
 		rc = output(R_LOAD_CLASS);
 
-		switch(rc) {
+		switch (rc) {
 		case MOK:
 			break;
 
 		case MNODEST:
 		case MERRDEST:
-			LP_ERRMSG (ERROR, E_ADM_ERRDEST);
-			done (1);
+			LP_ERRMSG(ERROR, E_ADM_ERRDEST);
+			done(1);
 			/*NOTREACHED*/
 
 		case MNOSPACE:
-			LP_ERRMSG (WARNING, E_ADM_NOCSPACE);
+			LP_ERRMSG(WARNING, E_ADM_NOCSPACE);
 			break;
 
 		case MNOPERM:	/* taken care of up front */
 		default:
-			LP_ERRMSG1 (ERROR, E_LP_BADSTATUS, rc);
-			done (1);
+			LP_ERRMSG1(ERROR, E_LP_BADSTATUS, rc);
+			done(1);
 			/*NOTREACHED*/
 		}
 
@@ -312,27 +304,22 @@ Done:
 	if (r) {
 		if (STREQU(r, NAME_ALL) || STREQU(r, NAME_ANY))
 			fromallclasses(p);
-		else 
+		else
 			fromclass(p, r);
 	}
-
-	return;
 }
 
-/**
- ** configure_printer() - SET OR CHANGE CONFIGURATION OF PRINTER
- **/
+/*
+ * configure_printer() - SET OR CHANGE CONFIGURATION OF PRINTER
+ */
 
-static void		configure_printer (list)
-	char			*list;
+static void
+configure_printer(char *list)
 {
-	register PRINTER	*prbufp;
-
-	PRINTER			printer_struct;
-
-	char			type;
-	char *	infile_opts = NULL;
-
+	PRINTER	*prbufp;
+	PRINTER	 printer_struct;
+	char type;
+	char *infile_opts = NULL;
 
 	if (oldp) {
 
@@ -382,12 +369,12 @@ static void		configure_printer (list)
 		/*
 		 * If we are making this a local printer, make
 		 * sure that some local-only attributes are set.
-		 * (If the user has specified these as well, his/her
+		 * (If the user has specified these as well, their
 		 * values will overwrite what we set here.)
 		 */
 		} else if (oldp->remote) {
 			prbufp->banner = BAN_ALWAYS;
-			prbufp->interface = makepath(Lp_Model, STANDARD, (char *)0);
+			prbufp->interface = makepath(Lp_Model, STANDARD, NULL);
 			prbufp->fault_alert.shcmd = nameit(NAME_MAIL);
 
 			/*
@@ -408,14 +395,14 @@ static void		configure_printer (list)
 		 * or substructure members) needs to be considered
 		 * for EACH NEW MEMBER added to the structure.
 		 */
-		(void)memset (&printer_struct, 0, sizeof(printer_struct));
+		(void) memset(&printer_struct, 0, sizeof (printer_struct));
 
 		prbufp = &printer_struct;
 		prbufp->banner = BAN_ALWAYS;
 		prbufp->cpi.val = 0;
 		prbufp->cpi.sc = 0;
 		if (!s)
-			prbufp->interface = makepath(Lp_Model, m, (char *)0);
+			prbufp->interface = makepath(Lp_Model, m, NULL);
 		prbufp->lpi.val = 0;
 		prbufp->lpi.sc = 0;
 		prbufp->plen.val = 0;
@@ -429,211 +416,194 @@ static void		configure_printer (list)
 		prbufp->options = NULL;
 	}
 
-	while ((type = *list++) != '\0')  switch(type) {
+	while ((type = *list++) != '\0') {
+		switch (type) {
+		case 'A':
+			if (!s) {
+				if (STREQU(A, NAME_MAIL) ||
+				    STREQU(A, NAME_WRITE))
+					prbufp->fault_alert.shcmd = nameit(A);
+				else if (!STREQU(A, NAME_QUIET))
+					prbufp->fault_alert.shcmd = A;
+			}
+			break;
 
-	case 'A':
-		if (!s) {
-			if (STREQU(A, NAME_MAIL) || STREQU(A, NAME_WRITE))
-				prbufp->fault_alert.shcmd = nameit(A);
-			else if (!STREQU(A, NAME_QUIET))
-				prbufp->fault_alert.shcmd = A;
-		}
-		break;
+		case 'b':
+			if (!s)
+				prbufp->banner = banner;
+			break;
 
-	case 'b':
-		if (!s)
-			prbufp->banner = banner;
-		break;
+		case 'c':
+			if (!s)
+				prbufp->cpi = cpi_sdn;
+			break;
 
-	case 'c':
-		if (!s)
-			prbufp->cpi = cpi_sdn;
-		break;
+		case 'D':
+			prbufp->description = D;
+			break;
 
-	case 'D':
-		prbufp->description = D;
-		break;
+		case 'e':
+			if (!s) {
+				prbufp->interface = makepath(Lp_A_Interfaces,
+				    e, NULL);
+			}
+			break;
 
-	case 'e':
-		if (!s) {
-			prbufp->interface = makepath(
-				Lp_A_Interfaces,
-				e,
-				(char *)0
-			);
-		}
-		break;
-
-	case 'F':
-		if (!s)
-			prbufp->fault_rec = F;
-		break;
+		case 'F':
+			if (!s)
+				prbufp->fault_rec = F;
+			break;
 
 #if	defined(CAN_DO_MODULES)
-	case 'H':
-		if (!s)
-			prbufp->modules = H;
-		break;
+		case 'H':
+			if (!s)
+				prbufp->modules = H;
+			break;
 #endif
 
-	case 'h':
-		if (!s)
-			prbufp->login = 0;
-		break;
+		case 'h':
+			if (!s)
+				prbufp->login = 0;
+			break;
 
-	case 'i':
-		if (!s)
-			prbufp->interface = fullpath(i);
-		break;
+		case 'i':
+			if (!s)
+				prbufp->interface = fullpath(i);
+			break;
 
-	case 'I':
-		prbufp->input_types = I;
-		break;
+		case 'I':
+			prbufp->input_types = I;
+			break;
 
-	case 'l':
-		if (!s)
-			prbufp->login = 1;
-		break;
+		case 'l':
+			if (!s)
+				prbufp->login = 1;
+			break;
 
-	case 'L':
-		if (!s)
-			prbufp->plen = length_sdn;
-		break;
+		case 'L':
+			if (!s)
+				prbufp->plen = length_sdn;
+			break;
 
-	case 'm':
-		if (!s)
-			prbufp->interface = makepath(Lp_Model, m, (char *)0);
-		break;
+		case 'm':
+			if (!s)
+				prbufp->interface = makepath(Lp_Model, m, NULL);
+			break;
 
-	case 'M':
-		if (!s)
-			prbufp->lpi = lpi_sdn;
-		break;
+		case 'M':
+			if (!s)
+				prbufp->lpi = lpi_sdn;
+			break;
 
 #ifdef LP_USE_PAPI_ATTR
-	case 'n':
-	{
-		if (n_opt != NULL)
-		{
-			if (*n_opt == '/')
-			{
-				prbufp->ppd = fullpath(n_opt);
+		case 'n':
+			if (n_opt != NULL) {
+				if (*n_opt == '/') {
+					prbufp->ppd = fullpath(n_opt);
+				} else {
+					prbufp->ppd = makepath(Lp_Model, "ppd",
+					    n_opt, NULL);
+				}
+				ppdopt = 1;
 			}
-			else
-			{
-				prbufp->ppd =
-				    makepath(Lp_Model, "ppd", n_opt, (char *)0);
-			}
-			ppdopt = 1;
-		}
-		break;
-	}
+			break;
 #endif
 
-	case 'o':
-		/*
-		 * The "undefined" key-value -o options
-		 *
-		 * Options requires special handling. It is a
-		 * list whose members are to be handled
-		 * individually.
-		 *
-		 * Need to: set new options, keep old options if not
-		 * redefined, remove old options if defined as "key=".
-		 *
-		 *
-		 * "p" is a global containing the printer name
-		 */
-
-		if (!s) {
-
-			if ((infile_opts = getpentry(p, PR_OPTIONS)) == NULL)
-				prbufp->options = o_options;
-			else {
-				prbufp->options =
-					pick_opts(infile_opts, o_options);
-			}
-		}
-		break;
-
-	case 'R':
-		if (s) {
-			prbufp->remote = s;
-			prbufp->dial_info = 0;
-			prbufp->device = 0;
-		} else
-			prbufp->remote = 0;
-		break;
-
-	case 's':
-		if (!s) {
+		case 'o':
 			/*
-			 * lpadmin always defers to stty
+			 * The "undefined" key-value -o options
+			 *
+			 * Options requires special handling. It is a
+			 * list whose members are to be handled
+			 * individually.
+			 *
+			 * Need to: set new options, keep old options if not
+			 * redefined, remove old options if defined as "key=".
+			 *
+			 *
+			 * "p" is a global containing the printer name
 			 */
-			prbufp->speed = 0;
-			prbufp->stty = stty_opt;
+
+			if (!s) {
+				if ((infile_opts =
+				    getpentry(p, PR_OPTIONS)) == NULL) {
+					prbufp->options = o_options;
+				} else {
+					prbufp->options = pick_opts(infile_opts,
+					    o_options);
+				}
+			}
+			break;
+
+		case 'R':
+			if (s) {
+				prbufp->remote = s;
+				prbufp->dial_info = 0;
+				prbufp->device = 0;
+			} else {
+				prbufp->remote = 0;
+			}
+			break;
+
+		case 's':
+			if (!s) {
+				/*
+				 * lpadmin always defers to stty
+				 */
+				prbufp->speed = 0;
+				prbufp->stty = stty_opt;
+			}
+			break;
+
+		case 'S':
+			if (!M)
+				if (STREQU(*S, NAME_NONE))
+					prbufp->char_sets = 0;
+				else
+					prbufp->char_sets = S;
+			break;
+
+		case 'T':
+			prbufp->printer_types = T;
+			break;
+
+		case 'U':
+			if (!s) {
+				prbufp->dial_info = U;
+				prbufp->device = 0;
+				prbufp->remote = 0;
+			}
+			break;
+
+		case 'v':
+			if (!s) {
+				prbufp->device = v;
+				prbufp->dial_info = 0;
+				prbufp->remote = 0;
+			}
+			break;
+
+		case 'w':
+			if (!s)
+				prbufp->pwid = width_sdn;
+			break;
+
+		case 'W':
+			if (!s)
+				prbufp->fault_alert.W = W;
+			break;
+
 		}
-		break;
-
-	case 'S':
-		if (!M)
-			if (STREQU(*S, NAME_NONE))
-				prbufp->char_sets = 0;
-			else
-				prbufp->char_sets = S;
-		break;
-
-	case 'T':
-		prbufp->printer_types = T;
-		break;
-
-	case 'U':
-		if (!s) {
-			prbufp->dial_info = U;
-			prbufp->device = 0;
-			prbufp->remote = 0;
-		}
-		break;
-
-	case 'v':
-		if (!s) {
-			prbufp->device = v;
-			prbufp->dial_info = 0;
-			prbufp->remote = 0;
-		}
-		break;
-
-	case 'w':
-		if (!s)
-			prbufp->pwid = width_sdn;
-		break;
-
-	case 'W':
-		if (!s)
-			prbufp->fault_alert.W = W;
-		break;
-
 	}
 
 
 	BEGIN_CRITICAL
 		if (putprinter(p, prbufp) == -1) {
-			if (
-				errno == EINVAL
-			     && (badprinter & BAD_INTERFACE)
-			)
-				LP_ERRMSG1 (
-					ERROR,
-					E_ADM_BADINTF,
-					prbufp->interface
-				);
+			if (errno == EINVAL && (badprinter & BAD_INTERFACE))
+				LP_ERRMSG1(ERROR, E_ADM_BADINTF,
+				    prbufp->interface);
 			else
-				LP_ERRMSG2 (
-					ERROR,
-					E_LP_PUTPRINTER,
-					p,
-					PERROR
-				);
+				LP_ERRMSG2(ERROR, E_LP_PUTPRINTER, p, PERROR);
 			done(1);
 		}
 
@@ -642,20 +612,17 @@ static void		configure_printer (list)
 			update_dev_dbs(p, prbufp->device, "ADD");
 
 	END_CRITICAL
-
-	return;
 }
 
-/**
- ** fullpath()
- **/
+/*
+ * fullpath()
+ */
 
-static char		*fullpath (str)
-	char			*str;
+static char *
+fullpath(char *str)
 {
-	register char		*cur_dir,
-				*path;
-
+	char *cur_dir;
+	char *path;
 
 	while (*str && *str == ' ')
 		str++;
@@ -665,7 +632,7 @@ static char		*fullpath (str)
 	if (!(cur_dir = malloc(PATH_MAX + 1)))
 		return (str);
 
-	getcwd (cur_dir, PATH_MAX);
+	getcwd(cur_dir, PATH_MAX);
 	path = makepath(cur_dir, str, (char *)0);
 
 	/*
@@ -676,22 +643,22 @@ static char		*fullpath (str)
 	return (path);
 }
 
-/**
- ** nameit() - ADD USER NAME TO COMMAND
- **/
+/*
+ * nameit() - ADD USER NAME TO COMMAND
+ */
 
-char			*nameit (cmd)
-	char			*cmd;
+char *
+nameit(char *cmd)
 {
-	register char		*nm = getname(),
-				*copy = malloc(
-					(unsigned) (strlen(cmd) + 1 + 
-					strlen(nm) + 1)
-	);
+	char *nm;
+	char *copy;
 
-	(void) strcpy (copy, cmd);
-	(void) strcat (copy, " ");
-	(void) strcat (copy, nm);
+	nm = getname();
+	copy = malloc(strlen(cmd) + 1 + strlen(nm) + 1);
+
+	(void) strcpy(copy, cmd);
+	(void) strcat(copy, " ");
+	(void) strcat(copy, nm);
 	return (copy);
 }
 

@@ -25,9 +25,7 @@
  */
 
 /*	Copyright (c) 1988 AT&T	*/
-/*	  All Rights Reserved  	*/
-
-#pragma ident	"%Z%%M%	%I%	%E% SMI"
+/*	  All Rights Reserved	*/
 
 #include <sys/types.h>
 #include <ctype.h>
@@ -145,11 +143,11 @@ _compile(const char *sp, char *ep, char *endbuf, int viflag)
 {
 	wchar_t		c;
 	int		n;
-	wchar_t 	d;
-	const char 	*oldsp;
-	char 		*lastep;
-	int 		cclcnt;
-	char 		bracket[NBRA], *bracketp;
+	wchar_t		d;
+	const char	*oldsp;
+	char		*lastep;
+	int		cclcnt;
+	char		bracket[NBRA], *bracketp;
 	int		closed;
 	int		neg;
 	int		alloc;
@@ -176,7 +174,7 @@ _compile(const char *sp, char *ep, char *endbuf, int viflag)
 		/* malloc space */
 		const char *startsp = oldsp;
 		n = 0;
-		while ((d = *startsp++) != NULL) {
+		while ((d = *startsp++) != 0) {
 			if (d == '[')
 				n += 33; /* add room for bitmaps */
 		}
@@ -403,10 +401,14 @@ _compile(const char *sp, char *ep, char *endbuf, int viflag)
 					*ep++ = (char)c;
 					continue;
 				}
+				break;
 			}
 
-	/* Drop through to default to use \ to turn off special chars */
-
+			/*
+			 * Drop through to default to use \ to turn off
+			 * special chars
+			 */
+			/* FALLTHROUGH */
 		defchar:
 		default:
 			lastep = ep;

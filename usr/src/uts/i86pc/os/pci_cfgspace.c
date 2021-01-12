@@ -21,6 +21,7 @@
 
 /*
  * Copyright (c) 2005, 2010, Oracle and/or its affiliates. All rights reserved.
+ * Copyright 2019 Joyent, Inc.
  */
 
 /*
@@ -41,6 +42,8 @@
 
 #if defined(__xpv)
 int pci_max_nbus = 0xFE;
+#else
+int pci_max_nbus = 0xFF;
 #endif
 int pci_bios_cfg_type = PCI_MECHANISM_UNKNOWN;
 int pci_bios_maxbus;
@@ -253,6 +256,19 @@ pci_check_bios(void)
 	uint32_t	carryflag;
 	uint16_t	ax, dx;
 
+	/*
+	 * This mechanism uses a legacy BIOS call to detect PCI configuration,
+	 * but such calls are not available on systems with UEFI firmware.
+	 * For UEFI systems we must assume some reasonable defaults and scan
+	 * all possible buses.
+	 */
+	if (BOP_GETPROPLEN(bootops, "efi-systab") > 0) {
+		pci_bios_mech = 1;
+		pci_bios_vers = 0;
+		pci_bios_maxbus = pci_max_nbus;
+		return (PCI_MECHANISM_1);
+	}
+
 	bzero(&regs, sizeof (regs));
 	regs.eax.word.ax = (PCI_FUNCTION_ID << 8) | PCI_BIOS_PRESENT;
 
@@ -274,7 +290,14 @@ pci_check_bios(void)
 
 	pci_bios_mech = (ax & 0x3);
 	pci_bios_vers = regs.ebx.word.bx;
-	pci_bios_maxbus = (regs.ecx.word.cx & 0xff);
+
+	/*
+	 * Several BIOS implementations have known problems where they don't end
+	 * up correctly telling us to scan all PCI buses in the system. In
+	 * particular, many on-die CPU PCI devices are on a last bus that is
+	 * sometimes not enumerated. As such, do not trust the BIOS.
+	 */
+	pci_bios_maxbus = pci_max_nbus;
 
 	switch (pci_bios_mech) {
 	default:	/* ?!? */

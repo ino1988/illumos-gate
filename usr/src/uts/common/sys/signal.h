@@ -25,7 +25,7 @@
  */
 
 /*	Copyright (c) 1984, 1986, 1987, 1988, 1989 AT&T	*/
-/*	  All Rights Reserved  	*/
+/*	  All Rights Reserved	*/
 
 /*
  * University Copyright- Copyright (c) 1982, 1986, 1988
@@ -245,7 +245,7 @@ struct sigstack {
 #include <sys/ucontext.h>
 #endif /* defined(_XPG4_2) */
 
-#ifdef _KERNEL
+#if defined(_KERNEL) || defined(_FAKE_KERNEL)
 #include <sys/t_lock.h>
 
 extern const k_sigset_t nullsmask;	/* a null signal mask */

@@ -21,9 +21,11 @@
 
 /*
  * Copyright (c) 1999, 2010, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2016 by Delphix. All rights reserved.
+ * Copyright (c) 2017 by The MathWorks, Inc. All rights reserved.
  */
 /*
- * Copyright (c) 2012, Joyent, Inc. All rights reserved.
+ * Copyright 2018 Joyent, Inc.
  */
 
 #include "lint.h"
@@ -86,12 +88,12 @@ extern const Lc_interface rtld_funcs[];
  */
 #pragma weak _uberdata = __uberdata
 uberdata_t __uberdata = {
-	{ DEFAULTMUTEX, NULL, 0 },	/* link_lock */
-	{ RECURSIVEMUTEX, NULL, 0 },	/* ld_lock */
-	{ RECURSIVEMUTEX, NULL, 0 },	/* fork_lock */
-	{ RECURSIVEMUTEX, NULL, 0 },	/* atfork_lock */
-	{ RECURSIVEMUTEX, NULL, 0 },	/* callout_lock */
-	{ DEFAULTMUTEX, NULL, 0 },	/* tdb_hash_lock */
+	{ DEFAULTMUTEX, 0, 0 },	/* link_lock */
+	{ RECURSIVEMUTEX, 0, 0 },	/* ld_lock */
+	{ RECURSIVEMUTEX, 0, 0 },	/* fork_lock */
+	{ RECURSIVEMUTEX, 0, 0 },	/* atfork_lock */
+	{ RECURSIVEMUTEX, 0, 0 },	/* callout_lock */
+	{ DEFAULTMUTEX, 0, 0 },	/* tdb_hash_lock */
 	{ 0, },				/* tdb_hash_lock_stats */
 	{ { 0 }, },			/* siguaction[NSIG] */
 	{{ DEFAULTMUTEX, NULL, 0 },		/* bucket[NBUCKETS] */
@@ -105,6 +107,7 @@ uberdata_t __uberdata = {
 	{ DEFAULTMUTEX, NULL, 0 },
 	{ DEFAULTMUTEX, NULL, 0 }},
 	{ RECURSIVEMUTEX, NULL, NULL },		/* atexit_root */
+	{ RECURSIVEMUTEX, NULL },		/* quickexit_root */
 	{ DEFAULTMUTEX, 0, 0, NULL },		/* tsd_metadata */
 	{ DEFAULTMUTEX, {0, 0}, {0, 0} },	/* tls_metadata */
 	0,			/* primary_map */
@@ -136,6 +139,7 @@ uberdata_t __uberdata = {
 	NULL,			/* robustlocks */
 	NULL,			/* robustlist */
 	NULL,			/* progname */
+	NULL,			/* ub_comm_page */
 	NULL,			/* __tdb_bootstrap */
 	{			/* tdb */
 		NULL,		/* tdb_sync_addr_hash */
@@ -556,7 +560,7 @@ find_lwp(thread_t tid)
 
 int
 _thrp_create(void *stk, size_t stksize, void *(*func)(void *), void *arg,
-	long flags, thread_t *new_thread, size_t guardsize)
+    long flags, thread_t *new_thread, size_t guardsize, const char *name)
 {
 	ulwp_t *self = curthread;
 	uberdata_t *udp = self->ul_uberdata;
@@ -711,6 +715,9 @@ _thrp_create(void *stk, size_t stksize, void *(*func)(void *), void *arg,
 
 	exit_critical(self);
 
+	if (name != NULL && name[0] != '\0')
+		(void) pthread_setname_np(tid, name);
+
 	if (!(flags & THR_SUSPENDED))
 		(void) _thrp_continue(tid, TSTP_REGULAR);
 
@@ -719,9 +726,10 @@ _thrp_create(void *stk, size_t stksize, void *(*func)(void *), void *arg,
 
 int
 thr_create(void *stk, size_t stksize, void *(*func)(void *), void *arg,
-	long flags, thread_t *new_thread)
+    long flags, thread_t *new_thread)
 {
-	return (_thrp_create(stk, stksize, func, arg, flags, new_thread, 0));
+	return (_thrp_create(stk, stksize, func, arg, flags, new_thread, 0,
+	    NULL));
 }
 
 /*
@@ -774,9 +782,14 @@ _thrp_exit()
 	}
 	lmutex_unlock(&udp->link_lock);
 
-	tmem_exit();		/* deallocate tmem allocations */
+	/*
+	 * tsd_exit() may call its destructor free(), thus depending on
+	 * tmem, therefore tmem_exit() needs to be called after tsd_exit()
+	 * and tls_exit().
+	 */
 	tsd_exit();		/* deallocate thread-specific data */
 	tls_exit();		/* deallocate thread-local storage */
+	tmem_exit();		/* deallocate tmem allocations */
 	heldlock_exit();	/* deal with left-over held locks */
 
 	/* block all signals to finish exiting */
@@ -1219,6 +1232,23 @@ extern void atfork_init(void);
 extern void __proc64id(void);
 #endif
 
+static void
+init_auxv_data(uberdata_t *udp)
+{
+	Dl_argsinfo_t args;
+
+	udp->ub_comm_page = NULL;
+	if (dlinfo(RTLD_SELF, RTLD_DI_ARGSINFO, &args) < 0)
+		return;
+
+	while (args.dla_auxv->a_type != AT_NULL) {
+		if (args.dla_auxv->a_type == AT_SUN_COMMPAGE) {
+			udp->ub_comm_page = args.dla_auxv->a_un.a_ptr;
+		}
+		args.dla_auxv++;
+	}
+}
+
 /*
  * libc_init() is called by ld.so.1 for library initialization.
  * We perform minimal initialization; enough to work with the main thread.
@@ -1255,6 +1285,13 @@ libc_init(void)
 	(void) _atexit(__cleanup);
 
 	/*
+	 * Every libc, regardless of link map, needs to go through and check
+	 * its aux vectors.  Doing so will indicate whether or not this has
+	 * been given a comm page (to optimize certain system actions).
+	 */
+	init_auxv_data(udp);
+
+	/*
 	 * We keep our uberdata on one of (a) the first alternate link map
 	 * or (b) the primary link map.  We switch to the primary link map
 	 * and stay there once we see it.  All intermediate link maps are
@@ -1262,6 +1299,11 @@ libc_init(void)
 	 */
 	if (oldself != NULL && (oldself->ul_primarymap || !primary_link_map)) {
 		__tdb_bootstrap = oldself->ul_uberdata->tdb_bootstrap;
+		/*
+		 * Each link map has its own copy of the stack protector guard
+		 * and must always be initialized.
+		 */
+		ssp_init();
 		mutex_setup();
 		atfork_init();	/* every link map needs atfork() processing */
 		init_progname();
@@ -1402,6 +1444,7 @@ libc_init(void)
 		/* tls_size was zero when oldself was allocated */
 		lfree(oldself, sizeof (ulwp_t));
 	}
+	ssp_init();
 	mutex_setup();
 	atfork_init();
 	signal_init();
@@ -1785,17 +1828,17 @@ force_continue(ulwp_t *ulwp)
 		if (error != 0 && error != EINTR)
 			break;
 		error = 0;
-		if (ulwp->ul_stopping) {	/* he is stopping himself */
-			ts.tv_sec = 0;		/* give him a chance to run */
+		if (ulwp->ul_stopping) {	/* it is stopping itself */
+			ts.tv_sec = 0;		/* give it a chance to run */
 			ts.tv_nsec = 100000;	/* 100 usecs or clock tick */
 			(void) __nanosleep(&ts, NULL);
 		}
-		if (!ulwp->ul_stopping)		/* he is running now */
+		if (!ulwp->ul_stopping)		/* it is running now */
 			break;			/* so we are done */
 		/*
-		 * He is marked as being in the process of stopping
-		 * himself.  Loop around and continue him again.
-		 * He may not have been stopped the first time.
+		 * It is marked as being in the process of stopping
+		 * itself.  Loop around and continue it again.
+		 * It may not have been stopped the first time.
 		 */
 	}
 }
@@ -2365,6 +2408,87 @@ __nthreads(void)
 	return (curthread->ul_uberdata->nthreads);
 }
 
+/* "/proc/self/lwp/%u/lwpname" w/o stdio */
+static void
+lwpname_path(pthread_t tid, char *buf, size_t bufsize)
+{
+	(void) strlcpy(buf, "/proc/self/lwp/", bufsize);
+	ultos((uint64_t)tid, 10, buf + strlen(buf));
+	(void) strlcat(buf, "/lwpname", bufsize);
+}
+
+#pragma weak pthread_setname_np = thr_setname
+int
+thr_setname(pthread_t tid, const char *name)
+{
+	extern ssize_t __write(int, const void *, size_t);
+	char path[PATH_MAX];
+	int saved_errno;
+	size_t len;
+	ssize_t n;
+	int fd;
+
+	if (name == NULL)
+		name = "";
+
+	len = strlen(name) + 1;
+	if (len > THREAD_NAME_MAX)
+		return (ERANGE);
+
+	lwpname_path(tid, path, sizeof (path));
+
+	if ((fd = __open(path, O_WRONLY, 0)) < 0) {
+		if (errno == ENOENT)
+			errno = ESRCH;
+		return (errno);
+	}
+
+	n = __write(fd, name, len);
+	saved_errno = errno;
+	(void) __close(fd);
+
+	if (n < 0)
+		return (saved_errno);
+	if (n != len)
+		return (EFAULT);
+	return (0);
+}
+
+#pragma weak pthread_getname_np = thr_getname
+int
+thr_getname(pthread_t tid, char *buf, size_t bufsize)
+{
+	extern ssize_t __read(int, void *, size_t);
+	char name[THREAD_NAME_MAX];
+	char path[PATH_MAX];
+	int saved_errno;
+	ssize_t n;
+	int fd;
+
+	if (buf == NULL)
+		return (EINVAL);
+
+	lwpname_path(tid, path, sizeof (path));
+
+	if ((fd = __open(path, O_RDONLY, 0)) < 0) {
+		if (errno == ENOENT)
+			errno = ESRCH;
+		return (errno);
+	}
+
+	n = __read(fd, name, sizeof (name));
+	saved_errno = errno;
+	(void) __close(fd);
+
+	if (n < 0)
+		return (saved_errno);
+	if (n != sizeof (name))
+		return (EFAULT);
+	if (strlcpy(buf, name, bufsize) >= bufsize)
+		return (ERANGE);
+	return (0);
+}
+
 /*
  * XXX
  * The remainder of this file implements the private interfaces to java for
@@ -2479,7 +2603,7 @@ getlwpstatus(thread_t tid, struct lwpstatus *sp)
 				(void) __close(fd);
 				return (0);
 			}
-			yield();	/* give him a chance to stop */
+			yield();	/* give it a chance to stop */
 		}
 		(void) __close(fd);
 	}

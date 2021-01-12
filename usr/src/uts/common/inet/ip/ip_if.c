@@ -22,6 +22,7 @@
  * Copyright (c) 1991, 2010, Oracle and/or its affiliates. All rights reserved.
  * Copyright (c) 1990 Mentat Inc.
  * Copyright (c) 2013 by Delphix. All rights reserved.
+ * Copyright (c) 2016, Joyent, Inc. All rights reserved.
  * Copyright (c) 2014, OmniTI Computer Consulting, Inc. All rights reserved.
  */
 
@@ -193,8 +194,8 @@ static ip_v6mapinfo_func_t ip_ether_v6_mapping;
 static ip_v4mapinfo_func_t ip_ib_v4_mapping;
 static ip_v6mapinfo_func_t ip_ib_v6_mapping;
 static ip_v4mapinfo_func_t ip_mbcast_mapping;
-static void 	ip_cgtp_bcast_add(ire_t *, ip_stack_t *);
-static void 	ip_cgtp_bcast_delete(ire_t *, ip_stack_t *);
+static void	ip_cgtp_bcast_add(ire_t *, ip_stack_t *);
+static void	ip_cgtp_bcast_delete(ire_t *, ip_stack_t *);
 static void	phyint_free(phyint_t *);
 
 static void ill_capability_dispatch(ill_t *, mblk_t *, dl_capability_sub_t *);
@@ -223,6 +224,8 @@ static	void	ipif_trace_cleanup(const ipif_t *);
 #endif
 
 static	void	ill_dlpi_clear_deferred(ill_t *ill);
+
+static	void	phyint_flags_init(phyint_t *, t_uscalar_t);
 
 /*
  * if we go over the memory footprint limit more than once in this msec
@@ -282,7 +285,6 @@ static ip_m_t   ip_m_tbl[] = {
 	    ip_nodef_v6intfid }
 };
 
-static ill_t	ill_null;		/* Empty ILL for init. */
 char	ipif_loopback_name[] = "lo0";
 
 /* These are used by all IP network modules. */
@@ -716,7 +718,7 @@ ill_dlur_copy_address(uchar_t *phys_src, uint_t phys_length,
  */
 mblk_t *
 ill_dlur_gen(uchar_t *addr, uint_t addr_length, t_uscalar_t sap,
-		t_scalar_t sap_length)
+    t_scalar_t sap_length)
 {
 	dl_unitdata_req_t *dlur;
 	mblk_t	*mp;
@@ -1475,9 +1477,9 @@ ill_capability_id_ack(ill_t *ill, mblk_t *mp, dl_capability_sub_t *outers)
 
 	id_ic = (dl_capab_id_t *)(outers + 1);
 
+	inners = &id_ic->id_subcap;
 	if (outers->dl_length < sizeof (*id_ic) ||
-	    (inners = &id_ic->id_subcap,
-	    inners->dl_length > (outers->dl_length - sizeof (*inners)))) {
+	    inners->dl_length > (outers->dl_length - sizeof (*inners))) {
 		cmn_err(CE_WARN, "ill_capability_id_ack: malformed "
 		    "encapsulated capab type %d too long for mblk",
 		    inners->dl_cap);
@@ -2078,7 +2080,7 @@ ill_capability_lso_enable(ill_t *ill)
 	dld_capab_lso_t	lso;
 	int rc;
 
-	ASSERT(!ill->ill_isv6 && IAM_WRITER_ILL(ill));
+	ASSERT(IAM_WRITER_ILL(ill));
 
 	if (ill->ill_lso_capab == NULL) {
 		ill->ill_lso_capab = kmem_zalloc(sizeof (ill_lso_capab_t),
@@ -2095,7 +2097,8 @@ ill_capability_lso_enable(ill_t *ill)
 	if ((rc = idc->idc_capab_df(idc->idc_capab_dh, DLD_CAPAB_LSO, &lso,
 	    DLD_ENABLE)) == 0) {
 		ill->ill_lso_capab->ill_lso_flags = lso.lso_flags;
-		ill->ill_lso_capab->ill_lso_max = lso.lso_max;
+		ill->ill_lso_capab->ill_lso_max_tcpv4 = lso.lso_max_tcpv4;
+		ill->ill_lso_capab->ill_lso_max_tcpv6 = lso.lso_max_tcpv6;
 		ill->ill_capabilities |= ILL_CAPAB_LSO;
 		ip1dbg(("ill_capability_lso_enable: interface %s "
 		    "has enabled LSO\n ", ill->ill_name));
@@ -2113,15 +2116,12 @@ ill_capability_dld_enable(ill_t *ill)
 
 	ASSERT(IAM_WRITER_ILL(ill));
 
-	if (ill->ill_isv6)
-		return;
-
 	ill_mac_perim_enter(ill, &mph);
 	if (!ill->ill_isv6) {
 		ill_capability_direct_enable(ill);
 		ill_capability_poll_enable(ill);
-		ill_capability_lso_enable(ill);
 	}
+	ill_capability_lso_enable(ill);
 	ill->ill_capabilities |= ILL_CAPAB_DLD;
 	ill_mac_perim_exit(ill, mph);
 }
@@ -2205,7 +2205,7 @@ ill_capability_dld_disable(ill_t *ill)
  *
  * state		next state		event, action
  *
- * IDCS_UNKNOWN 	IDCS_PROBE_SENT		ill_capability_probe
+ * IDCS_UNKNOWN		IDCS_PROBE_SENT		ill_capability_probe
  * IDCS_PROBE_SENT	IDCS_OK			ill_capability_ack
  * IDCS_PROBE_SENT	IDCS_FAILED		ip_rput_dlpi_writer (nack)
  * IDCS_OK		IDCS_RENEG		Receipt of DL_NOTE_CAPAB_RENEG
@@ -2225,7 +2225,7 @@ void
 ill_taskq_dispatch(ip_stack_t *ipst)
 {
 	callb_cpr_t cprinfo;
-	char 	name[64];
+	char	name[64];
 	mblk_t	*mp;
 
 	(void) snprintf(name, sizeof (name), "ill_taskq_dispatch_%d",
@@ -2244,7 +2244,8 @@ ill_taskq_dispatch(ip_stack_t *ipst)
 			mp->b_next = NULL;
 
 			VERIFY(taskq_dispatch(system_taskq,
-			    ill_capability_ack_thr, mp, TQ_SLEEP) != 0);
+			    ill_capability_ack_thr, mp, TQ_SLEEP) !=
+			    TASKQID_INVALID);
 			mutex_enter(&ipst->ips_capab_taskq_lock);
 			mp = ipst->ips_capab_taskq_head;
 		}
@@ -2351,7 +2352,7 @@ ill_capability_ack(ill_t *ill, mblk_t *mp)
 	ASSERT(mp->b_next == NULL);
 
 	if (taskq_dispatch(system_taskq, ill_capability_ack_thr, mp,
-	    TQ_NOSLEEP) != 0)
+	    TQ_NOSLEEP) != TASKQID_INVALID)
 		return;
 
 	/*
@@ -3138,10 +3139,10 @@ ill_alloc_ppa(ill_if_t *ifp, ill_t *ill)
 			ill->ill_ppa = --ppa;
 		} else {
 			ppa = (int)(uintptr_t)vmem_xalloc(ifp->illif_ppa_arena,
-			    1, 		/* size */
-			    1, 		/* align/quantum */
-			    0, 		/* phase */
-			    0, 		/* nocross */
+			    1,		/* size */
+			    1,		/* align/quantum */
+			    0,		/* phase */
+			    0,		/* nocross */
 			    (void *)(uintptr_t)(ill->ill_ppa + 1), /* minaddr */
 			    (void *)(uintptr_t)(ill->ill_ppa + 2), /* maxaddr */
 			    VM_NOSLEEP|VM_FIRSTFIT);
@@ -3331,50 +3332,42 @@ ipsq_init(ill_t *ill, boolean_t enter)
 }
 
 /*
- * ill_init is called by ip_open when a device control stream is opened.
- * It does a few initializations, and shoots a DL_INFO_REQ message down
- * to the driver.  The response is later picked up in ip_rput_dlpi and
- * used to set up default mechanisms for talking to the driver.  (Always
- * called as writer.)
- *
- * If this function returns error, ip_open will call ip_close which in
- * turn will call ill_delete to clean up any memory allocated here that
- * is not yet freed.
+ * Here we perform initialisation of the ill_t common to both regular
+ * interface ILLs and the special loopback ILL created by ill_lookup_on_name.
  */
-int
-ill_init(queue_t *q, ill_t *ill)
+static int
+ill_init_common(ill_t *ill, queue_t *q, boolean_t isv6, boolean_t is_loopback,
+    boolean_t ipsq_enter)
 {
-	int	count;
-	dl_info_req_t	*dlir;
-	mblk_t	*info_mp;
+	int count;
 	uchar_t *frag_ptr;
 
-	/*
-	 * The ill is initialized to zero by mi_alloc*(). In addition
-	 * some fields already contain valid values, initialized in
-	 * ip_open(), before we reach here.
-	 */
 	mutex_init(&ill->ill_lock, NULL, MUTEX_DEFAULT, 0);
 	mutex_init(&ill->ill_saved_ire_lock, NULL, MUTEX_DEFAULT, NULL);
 	ill->ill_saved_ire_cnt = 0;
 
-	ill->ill_rq = q;
-	ill->ill_wq = WR(q);
+	if (is_loopback) {
+		ill->ill_max_frag = isv6 ? ip_loopback_mtu_v6plus :
+		    ip_loopback_mtuplus;
+		/*
+		 * No resolver here.
+		 */
+		ill->ill_net_type = IRE_LOOPBACK;
+	} else {
+		ill->ill_rq = q;
+		ill->ill_wq = WR(q);
+		ill->ill_ppa = UINT_MAX;
+	}
 
-	info_mp = allocb(MAX(sizeof (dl_info_req_t), sizeof (dl_info_ack_t)),
-	    BPRI_HI);
-	if (info_mp == NULL)
-		return (ENOMEM);
+	ill->ill_isv6 = isv6;
 
 	/*
 	 * Allocate sufficient space to contain our fragment hash table and
 	 * the device name.
 	 */
 	frag_ptr = (uchar_t *)mi_zalloc(ILL_FRAG_HASH_TBL_SIZE + 2 * LIFNAMSIZ);
-	if (frag_ptr == NULL) {
-		freemsg(info_mp);
+	if (frag_ptr == NULL)
 		return (ENOMEM);
-	}
 	ill->ill_frag_ptr = frag_ptr;
 	ill->ill_frag_free_num_pkts = 0;
 	ill->ill_last_frag_clean_time = 0;
@@ -3387,34 +3380,29 @@ ill_init(queue_t *q, ill_t *ill)
 
 	ill->ill_phyint = (phyint_t *)mi_zalloc(sizeof (phyint_t));
 	if (ill->ill_phyint == NULL) {
-		freemsg(info_mp);
 		mi_free(frag_ptr);
 		return (ENOMEM);
 	}
 
 	mutex_init(&ill->ill_phyint->phyint_lock, NULL, MUTEX_DEFAULT, 0);
-	/*
-	 * For now pretend this is a v4 ill. We need to set phyint_ill*
-	 * at this point because of the following reason. If we can't
-	 * enter the ipsq at some point and cv_wait, the writer that
-	 * wakes us up tries to locate us using the list of all phyints
-	 * in an ipsq and the ills from the phyint thru the phyint_ill*.
-	 * If we don't set it now, we risk a missed wakeup.
-	 */
-	ill->ill_phyint->phyint_illv4 = ill;
-	ill->ill_ppa = UINT_MAX;
+	if (isv6) {
+		ill->ill_phyint->phyint_illv6 = ill;
+	} else {
+		ill->ill_phyint->phyint_illv4 = ill;
+	}
+	if (is_loopback) {
+		phyint_flags_init(ill->ill_phyint, DL_LOOP);
+	}
+
 	list_create(&ill->ill_nce, sizeof (nce_t), offsetof(nce_t, nce_node));
 
 	ill_set_inputfn(ill);
 
-	if (!ipsq_init(ill, B_TRUE)) {
-		freemsg(info_mp);
+	if (!ipsq_init(ill, ipsq_enter)) {
 		mi_free(frag_ptr);
 		mi_free(ill->ill_phyint);
 		return (ENOMEM);
 	}
-
-	ill->ill_state_flags |= ILL_LL_SUBNET_PENDING;
 
 	/* Frag queue limit stuff */
 	ill->ill_frag_count = 0;
@@ -3439,6 +3427,49 @@ ill_init(queue_t *q, ill_t *ill)
 	ill->ill_xmit_count = ND_MAX_MULTICAST_SOLICIT;
 	ill->ill_max_buf = ND_MAX_Q;
 	ill->ill_refcnt = 0;
+
+	return (0);
+}
+
+/*
+ * ill_init is called by ip_open when a device control stream is opened.
+ * It does a few initializations, and shoots a DL_INFO_REQ message down
+ * to the driver.  The response is later picked up in ip_rput_dlpi and
+ * used to set up default mechanisms for talking to the driver.  (Always
+ * called as writer.)
+ *
+ * If this function returns error, ip_open will call ip_close which in
+ * turn will call ill_delete to clean up any memory allocated here that
+ * is not yet freed.
+ *
+ * Note: ill_ipst and ill_zoneid must be set before calling ill_init.
+ */
+int
+ill_init(queue_t *q, ill_t *ill)
+{
+	int ret;
+	dl_info_req_t	*dlir;
+	mblk_t	*info_mp;
+
+	info_mp = allocb(MAX(sizeof (dl_info_req_t), sizeof (dl_info_ack_t)),
+	    BPRI_HI);
+	if (info_mp == NULL)
+		return (ENOMEM);
+
+	/*
+	 * For now pretend this is a v4 ill. We need to set phyint_ill*
+	 * at this point because of the following reason. If we can't
+	 * enter the ipsq at some point and cv_wait, the writer that
+	 * wakes us up tries to locate us using the list of all phyints
+	 * in an ipsq and the ills from the phyint thru the phyint_ill*.
+	 * If we don't set it now, we risk a missed wakeup.
+	 */
+	if ((ret = ill_init_common(ill, q, B_FALSE, B_FALSE, B_TRUE)) != 0) {
+		freemsg(info_mp);
+		return (ret);
+	}
+
+	ill->ill_state_flags |= ILL_LL_SUBNET_PENDING;
 
 	/* Send down the Info Request to the driver. */
 	info_mp->b_datap->db_type = M_PCPROTO;
@@ -3687,10 +3718,8 @@ ill_lookup_on_name(char *name, boolean_t do_alloc, boolean_t isv6,
 	if (ill == NULL)
 		goto done;
 
-	*ill = ill_null;
-	mutex_init(&ill->ill_lock, NULL, MUTEX_DEFAULT, NULL);
+	bzero(ill, sizeof (*ill));
 	ill->ill_ipst = ipst;
-	list_create(&ill->ill_nce, sizeof (nce_t), offsetof(nce_t, nce_node));
 	netstack_hold(ipst->ips_netstack);
 	/*
 	 * For exclusive stacks we set the zoneid to zero
@@ -3698,25 +3727,12 @@ ill_lookup_on_name(char *name, boolean_t do_alloc, boolean_t isv6,
 	 */
 	ill->ill_zoneid = GLOBAL_ZONEID;
 
-	ill->ill_phyint = (phyint_t *)mi_zalloc(sizeof (phyint_t));
-	if (ill->ill_phyint == NULL)
+	if (ill_init_common(ill, NULL, isv6, B_TRUE, B_FALSE) != 0)
 		goto done;
 
-	if (isv6)
-		ill->ill_phyint->phyint_illv6 = ill;
-	else
-		ill->ill_phyint->phyint_illv4 = ill;
-	mutex_init(&ill->ill_phyint->phyint_lock, NULL, MUTEX_DEFAULT, 0);
-	phyint_flags_init(ill->ill_phyint, DL_LOOP);
-
-	if (isv6) {
-		ill->ill_isv6 = B_TRUE;
-		ill->ill_max_frag = ip_loopback_mtu_v6plus;
-	} else {
-		ill->ill_max_frag = ip_loopback_mtuplus;
-	}
 	if (!ill_allocate_mibs(ill))
 		goto done;
+
 	ill->ill_current_frag = ill->ill_max_frag;
 	ill->ill_mtu = ill->ill_max_frag;	/* Initial value */
 	ill->ill_mc_mtu = ill->ill_mtu;
@@ -3731,21 +3747,6 @@ ill_lookup_on_name(char *name, boolean_t do_alloc, boolean_t isv6,
 	ill->ill_name_length = sizeof (ipif_loopback_name);
 	/* Set ill_dlpi_pending for ipsq_current_finish() to work properly */
 	ill->ill_dlpi_pending = DL_PRIM_INVAL;
-
-	rw_init(&ill->ill_mcast_lock, NULL, RW_DEFAULT, NULL);
-	mutex_init(&ill->ill_mcast_serializer, NULL, MUTEX_DEFAULT, NULL);
-	ill->ill_global_timer = INFINITY;
-	ill->ill_mcast_v1_time = ill->ill_mcast_v2_time = 0;
-	ill->ill_mcast_v1_tset = ill->ill_mcast_v2_tset = 0;
-	ill->ill_mcast_rv = MCAST_DEF_ROBUSTNESS;
-	ill->ill_mcast_qi = MCAST_DEF_QUERY_INTERVAL;
-
-	/* No resolver here. */
-	ill->ill_net_type = IRE_LOOPBACK;
-
-	/* Initialize the ipsq */
-	if (!ipsq_init(ill, B_FALSE))
-		goto done;
 
 	ipif = ipif_allocate(ill, 0L, IRE_LOOPBACK, B_TRUE, B_TRUE, NULL);
 	if (ipif == NULL)
@@ -3775,16 +3776,9 @@ ill_lookup_on_name(char *name, boolean_t do_alloc, boolean_t isv6,
 	 * Chain us in at the end of the ill list. hold the ill
 	 * before we make it globally visible. 1 for the lookup.
 	 */
-	ill->ill_refcnt = 0;
 	ill_refhold(ill);
 
-	ill->ill_frag_count = 0;
-	ill->ill_frag_free_num_pkts = 0;
-	ill->ill_last_frag_clean_time = 0;
-
 	ipsq = ill->ill_phyint->phyint_ipsq;
-
-	ill_set_inputfn(ill);
 
 	if (ill_glist_insert(ill, "lo", isv6) != 0)
 		cmn_err(CE_PANIC, "cannot insert loopback interface");
@@ -3860,15 +3854,18 @@ ill_lookup_on_ifindex_global_instance(uint_t index, boolean_t isv6)
 {
 	ip_stack_t	*ipst;
 	ill_t		*ill;
+	netstack_t	*ns;
 
-	ipst = netstack_find_by_stackid(GLOBAL_NETSTACKID)->netstack_ip;
-	if (ipst == NULL) {
+	ns = netstack_find_by_stackid(GLOBAL_NETSTACKID);
+
+	if ((ipst = ns->netstack_ip) == NULL) {
 		cmn_err(CE_WARN, "No ip_stack_t for zoneid zero!\n");
+		netstack_rele(ns);
 		return (NULL);
 	}
 
 	ill = ill_lookup_on_ifindex(index, isv6, ipst);
-	netstack_rele(ipst->ips_netstack);
+	netstack_rele(ns);
 	return (ill);
 }
 
@@ -3942,6 +3939,7 @@ ill_get_next_ifindex(uint_t index, boolean_t isv6, ip_stack_t *ipst)
 	phyint_t *phyi_initial;
 	uint_t   ifindex;
 
+	phyi_initial = NULL;
 	rw_enter(&ipst->ips_ill_g_lock, RW_READER);
 
 	if (index == 0) {
@@ -4410,13 +4408,13 @@ ipif_comp_multi(ipif_t *old_ipif, ipif_t *new_ipif, boolean_t isv6)
  * condemned, not an underlying interface in an IPMP group, and
  * not a VNI interface.  Order of preference:
  *
- * 	1a. normal
- * 	1b. normal, but deprecated
- * 	2a. point to point
- * 	2b. point to point, but deprecated
- * 	3a. link local
- * 	3b. link local, but deprecated
- * 	4. loopback.
+ *	1a. normal
+ *	1b. normal, but deprecated
+ *	2a. point to point
+ *	2b. point to point, but deprecated
+ *	3a. link local
+ *	3b. link local, but deprecated
+ *	4. loopback.
  */
 static ipif_t *
 ipif_lookup_multicast(ip_stack_t *ipst, zoneid_t zoneid, boolean_t isv6)
@@ -4945,7 +4943,7 @@ ipif_ill_refrele_tail(ill_t *ill)
 	ASSERT(ipx->ipx_pending_mp != NULL && ipx->ipx_pending_ipif != NULL);
 
 	ipif = ipx->ipx_pending_ipif;
-	if (ipif->ipif_ill != ill) 	/* wait is for another ill; bail */
+	if (ipif->ipif_ill != ill)	/* wait is for another ill; bail */
 		goto unlock;
 
 	switch (ipx->ipx_waitfor) {
@@ -5384,7 +5382,7 @@ ip_mcast_mapping(ill_t *ill, uchar_t *addr, uchar_t *hwaddr)
  *
  * The netmask can be verified to be contiguous with 32 shifts and or
  * operations. Take the contiguous mask (in host byte order) and compute
- * 	mask | mask << 1 | mask << 2 | ... | mask << 31
+ *	mask | mask << 1 | mask << 2 | ... | mask << 31
  * the result will be the same as the 'mask' for contiguous mask.
  */
 static boolean_t
@@ -7869,7 +7867,7 @@ ip_sioctl_ip6addrpolicy(queue_t *q, mblk_t *mp)
 static void
 ip_sioctl_dstinfo(queue_t *q, mblk_t *mp)
 {
-	mblk_t 		*data_mp;
+	mblk_t		*data_mp;
 	struct dstinforeq	*dir;
 	uint8_t		*end, *cur;
 	in6_addr_t	*daddr, *saddr;
@@ -8620,7 +8618,7 @@ ip_sioctl_plink_ipmod(ipsq_t *ipsq, queue_t *q, mblk_t *mp, int ioccmd,
     struct linkblk *li)
 {
 	int		err = 0;
-	ill_t  		*ill;
+	ill_t		*ill;
 	queue_t		*ipwq, *dwq;
 	const char	*name;
 	struct qinit	*qinfo;
@@ -8639,12 +8637,12 @@ ip_sioctl_plink_ipmod(ipsq_t *ipsq, queue_t *q, mblk_t *mp, int ioccmd,
 		qinfo = ipwq->q_qinfo;
 		name = qinfo->qi_minfo->mi_idname;
 		if (name != NULL && strcmp(name, ip_mod_info.mi_idname) == 0 &&
-		    qinfo->qi_putp != (pfi_t)ip_lwput && ipwq->q_next != NULL) {
+		    qinfo->qi_putp != ip_lwput && ipwq->q_next != NULL) {
 			is_ip = B_TRUE;
 			break;
 		}
 		if (name != NULL && strcmp(name, arp_mod_info.mi_idname) == 0 &&
-		    qinfo->qi_putp != (pfi_t)ip_lwput && ipwq->q_next != NULL) {
+		    qinfo->qi_putp != ip_lwput && ipwq->q_next != NULL) {
 			break;
 		}
 	}
@@ -9288,7 +9286,7 @@ ip_sioctl_addif(ipif_t *dummy_ipif, sin_t *dummy_sin, queue_t *q, mblk_t *mp,
 	struct lifreq *lifr;
 	boolean_t	isv6;
 	boolean_t	exists;
-	char 	*name;
+	char	*name;
 	char	*endp;
 	char	*cp;
 	int	namelen;
@@ -9950,6 +9948,10 @@ ip_sioctl_get_addr(ipif_t *ipif, sin_t *sin, queue_t *q, mblk_t *mp,
 		*sin6 = sin6_null;
 		sin6->sin6_family = AF_INET6;
 		sin6->sin6_addr = ipif->ipif_v6lcl_addr;
+		if (IN6_IS_ADDR_LINKLOCAL(&sin6->sin6_addr)) {
+			sin6->sin6_scope_id =
+			    ipif->ipif_ill->ill_phyint->phyint_ifindex;
+		}
 		ASSERT(ipip->ipi_cmd_type == LIF_CMD);
 		lifr->lifr_addrlen =
 		    ip_mask_to_plen_v6(&ipif->ipif_v6net_mask);
@@ -10184,7 +10186,7 @@ ip_sioctl_flags_onoff(ipif_t *ipif, uint64_t flags, uint64_t *onp,
     uint64_t *offp)
 {
 	ill_t		*ill = ipif->ipif_ill;
-	phyint_t 	*phyi = ill->ill_phyint;
+	phyint_t	*phyi = ill->ill_phyint;
 	uint64_t	cantchange_flags, intf_flags;
 	uint64_t	turn_on, turn_off;
 
@@ -10829,7 +10831,7 @@ ip_sioctl_mtu(ipif_t *ipif, sin_t *sin, queue_t *q, mblk_t *mp,
 /* ARGSUSED */
 int
 ip_sioctl_get_mtu(ipif_t *ipif, sin_t *sin, queue_t *q, mblk_t *mp,
-	ip_ioctl_cmd_t *ipip, void *if_req)
+    ip_ioctl_cmd_t *ipip, void *if_req)
 {
 	struct ifreq	*ifr;
 	struct lifreq	*lifr;
@@ -10855,7 +10857,7 @@ ip_sioctl_get_mtu(ipif_t *ipif, sin_t *sin, queue_t *q, mblk_t *mp,
 /* ARGSUSED2 */
 int
 ip_sioctl_brdaddr(ipif_t *ipif, sin_t *sin, queue_t *q, mblk_t *mp,
-	ip_ioctl_cmd_t *ipip, void *if_req)
+    ip_ioctl_cmd_t *ipip, void *if_req)
 {
 	ipaddr_t addr;
 	ire_t	*ire;
@@ -12168,7 +12170,7 @@ ipif_arp_down(ipif_t *ipif)
  * basic DAD related initialization for IPv6. Honors ILLF_NOARP.
  *
  * The enumerated value res_act tunes the behavior:
- * 	* Res_act_initial: set up all the resolver structures for a new
+ *	* Res_act_initial: set up all the resolver structures for a new
  *	  IP address.
  *	* Res_act_defend: tell ARP that it needs to send a single gratuitous
  *	  ARP message in defense of the address.
@@ -14330,7 +14332,7 @@ int
 ipif_up(ipif_t *ipif, queue_t *q, mblk_t *mp)
 {
 	ill_t		*ill = ipif->ipif_ill;
-	boolean_t 	isv6 = ipif->ipif_isv6;
+	boolean_t	isv6 = ipif->ipif_isv6;
 	int		err = 0;
 	boolean_t	success;
 	uint_t		ipif_orig_id;
@@ -15286,8 +15288,8 @@ ipif_good_addr(ill_t *ill, zoneid_t zoneid)
  */
 typedef enum {
 	IPIF_NONE,
-	IPIF_DIFFNET_DEPRECATED, 	/* deprecated and different subnet */
-	IPIF_SAMENET_DEPRECATED, 	/* deprecated and same subnet */
+	IPIF_DIFFNET_DEPRECATED,	/* deprecated and different subnet */
+	IPIF_SAMENET_DEPRECATED,	/* deprecated and same subnet */
 	IPIF_DIFFNET_ALLZONES,		/* allzones and different subnet */
 	IPIF_SAMENET_ALLZONES,		/* allzones and same subnet */
 	IPIF_DIFFNET,			/* normal and different subnet */
@@ -15591,7 +15593,7 @@ ip_select_source_v4(ill_t *ill, ipaddr_t setsrc, ipaddr_t dst,
 /* ARGSUSED */
 int
 if_unitsel_restart(ipif_t *ipif, sin_t *dummy_sin, queue_t *q, mblk_t *mp,
-	ip_ioctl_cmd_t *ipip, void *dummy_ifreq)
+    ip_ioctl_cmd_t *ipip, void *dummy_ifreq)
 {
 	/*
 	 * ill_phyint_reinit merged the v4 and v6 into a single
@@ -15612,7 +15614,7 @@ if_unitsel(ipif_t *dummy_ipif, sin_t *dummy_sin, queue_t *q, mblk_t *mp,
     ip_ioctl_cmd_t *ipip, void *dummy_ifreq)
 {
 	queue_t		*q1 = q;
-	char 		*cp;
+	char		*cp;
 	char		interf_name[LIFNAMSIZ];
 	uint_t		ppa = *(uint_t *)mp->b_cont->b_cont->b_rptr;
 
@@ -16248,7 +16250,7 @@ ill_ptpaddr_cnt(const ill_t *ill)
 /* ARGSUSED */
 int
 ip_sioctl_get_lifusesrc(ipif_t *ipif, sin_t *sin, queue_t *q, mblk_t *mp,
-	ip_ioctl_cmd_t *ipip, void *ifreq)
+    ip_ioctl_cmd_t *ipip, void *ifreq)
 {
 	struct lifreq	*lifr = ifreq;
 
@@ -17396,7 +17398,7 @@ ip_ipmp_v6intfid(ill_t *ill, in6_addr_t *v6addr)
 	zone_t		*zp;
 	uint8_t		*addr;
 	uchar_t		hash[16];
-	ulong_t 	hostid;
+	ulong_t		hostid;
 	MD5_CTX		ctx;
 	ipmp_ifcookie_t	ic = { 0 };
 
@@ -18496,8 +18498,8 @@ arp_up_done:
 int
 ipif_arp_up(ipif_t *ipif, enum ip_resolver_action res_act, boolean_t was_dup)
 {
-	int 		err = 0;
-	ill_t 		*ill = ipif->ipif_ill;
+	int		err = 0;
+	ill_t		*ill = ipif->ipif_ill;
 	boolean_t	first_interface, wait_for_dlpi = B_FALSE;
 
 	DTRACE_PROBE3(ipif__downup, char *, "ipif_arp_up",
@@ -18994,8 +18996,7 @@ ipif_nce_down(ipif_t *ipif)
 	 * is going away.
 	 */
 	if (ill->ill_ipif_up_count == 0) {
-		ncec_walk(ill, (pfi_t)ncec_delete_per_ill,
-		    (uchar_t *)ill, ill->ill_ipst);
+		ncec_walk(ill, ncec_delete_per_ill, ill, ill->ill_ipst);
 		if (IS_UNDER_IPMP(ill))
 			nce_flush(ill, B_TRUE);
 	}

@@ -19,12 +19,16 @@
 #
 # CDDL HEADER END
 #
+# Copyright 2015 Toomas Soome <tsoome@me.com>
+# Copyright 2016 Nexenta Systems, Inc.
+# Copyright 2020 Oxide Computer Company
 #
 # Copyright 2008 Sun Microsystems, Inc.  All rights reserved.
 # Use is subject to license terms.
 #
+# Copyright (c) 2015 by Delphix. All rights reserved.
+#
 # @(#)cstyle 1.58 98/09/09 (from shannon)
-#ident	"%Z%%M%	%I%	%E% SMI"
 #
 # cstyle - check for some common stylistic errors.
 #
@@ -118,6 +122,16 @@ if ($doxygen_comments) {
 	$hdr_comment_start = qr/^\s*\/\*$/;
 }
 
+# FreeBSD uses comments styled as such for their license headers:
+# /*-
+#  * SPDX-License-Identifier: BSD-2-Clause-FreeBSD
+#  *
+#  ...
+#
+# In order to apply other cstyle checks to those files without stumbling over
+# the license header, tolerate such comment openings as well.
+my $fbsd_comment_start = qr/^\s*\/\*-$/;
+
 # Note, following must be in single quotes so that \s and \w work right.
 my $typename = '(int|char|short|long|unsigned|float|double' .
     '|\w+_t|struct\s+\w+|union\s+\w+|FILE)';
@@ -132,6 +146,11 @@ my %old2posix = (
 	'u_short' => 'ushort_t',
 	'u_long' => 'ulong_t',
 	'u_char' => 'uchar_t',
+	'u_int8_t' => 'uint8_t',
+	'u_int16_t' => 'uint16_t',
+	'u_int32_t' => 'uint32_t',
+	'u_int64_t' => 'uint64_t',
+	'u_quad_t' => 'uint64_t',
 	'quad' => 'quad_t'
 );
 
@@ -191,7 +210,11 @@ my $no_errs = 0;		# set for CSTYLED-protected lines
 sub err($) {
 	my ($error) = @_;
 	unless ($no_errs) {
-		printf $fmt, $filename, $., $error, $line;
+		if ($verbose) {
+			printf $fmt, $filename, $., $error, $line;
+		} else {
+			printf $fmt, $filename, $., $error;
+		}
 		$err_stat = 1;
 	}
 }
@@ -200,7 +223,11 @@ sub err_prefix($$) {
 	my ($prevline, $error) = @_;
 	my $out = $prevline."\n".$line;
 	unless ($no_errs) {
-		printf $fmt, $filename, $., $error, $out;
+		if ($verbose) {
+			printf $fmt, $filename, $., $error, $out;
+		} else {
+			printf $fmt, $filename, $., $error;
+		}
 		$err_stat = 1;
 	}
 }
@@ -208,7 +235,11 @@ sub err_prefix($$) {
 sub err_prev($) {
 	my ($error) = @_;
 	unless ($no_errs) {
-		printf $fmt, $filename, $. - 1, $error, $prev;
+		if ($verbose) {
+			printf $fmt, $filename, $. - 1, $error, $prev;
+		} else {
+			printf $fmt, $filename, $. - 1, $error;
+		}
 		$err_stat = 1;
 	}
 }
@@ -227,6 +258,7 @@ my $comment_done = 0;
 my $in_warlock_comment = 0;
 my $in_function = 0;
 my $in_function_header = 0;
+my $function_header_full_indent = 0;
 my $in_declaration = 0;
 my $note_level = 0;
 my $nextok = 0;
@@ -368,14 +400,15 @@ line: while (<$filehandle>) {
 
 	# is this the beginning or ending of a function?
 	# (not if "struct foo\n{\n")
-	if (/^{$/ && $prev =~ /\)\s*(const\s*)?(\/\*.*\*\/\s*)?\\?$/) {
+	if (/^\{$/ && $prev =~ /\)\s*(const\s*)?(\/\*.*\*\/\s*)?\\?$/) {
 		$in_function = 1;
 		$in_declaration = 1;
 		$in_function_header = 0;
+		$function_header_full_indent = 0;
 		$prev = $line;
 		next line;
 	}
-	if (/^}\s*(\/\*.*\*\/\s*)*$/) {
+	if (/^\}\s*(\/\*.*\*\/\s*)*$/) {
 		if ($prev =~ /^\s*return\s*;/) {
 			err_prev("unneeded return at end of function");
 		}
@@ -384,8 +417,43 @@ line: while (<$filehandle>) {
 		$prev = $line;
 		next line;
 	}
-	if (/^\w*\($/) {
+	if ($in_function_header && ! /^    (\w|\.)/ ) {
+		if (/^\{\}$/) {
+			$in_function_header = 0;
+			$function_header_full_indent = 0;
+		} elsif ($picky && ! (/^\t/ && $function_header_full_indent != 0)) {
+			err("continuation line should be indented by 4 spaces");
+		}
+	}
+
+	#
+	# If this matches something of form "foo(", it's probably a function
+	# definition, unless it ends with ") bar;", in which case it's a declaration
+	# that uses a macro to generate the type.
+	#
+	if (/^\w+\(/ && !/\) \w+;$/) {
 		$in_function_header = 1;
+		if (/\($/) {
+			$function_header_full_indent = 1;
+		}
+	}
+	if ($in_function_header && /^\{$/) {
+		$in_function_header = 0;
+		$function_header_full_indent = 0;
+		$in_function = 1;
+	}
+	if ($in_function_header && /\);$/) {
+		$in_function_header = 0;
+		$function_header_full_indent = 0;
+	}
+	if ($in_function_header && /\{$/ ) {
+		if ($picky) {
+			err("opening brace on same line as function header");
+		}
+		$in_function_header = 0;
+		$function_header_full_indent = 0;
+		$in_function = 1;
+		next line;
 	}
 
 	if ($in_warlock_comment && /\*\//) {
@@ -406,7 +474,7 @@ line: while (<$filehandle>) {
 		$comment_done = 0;
 	}
 	# does this looks like the start of a block comment?
-	if (/$hdr_comment_start/) {
+	if (/$hdr_comment_start/ || /$fbsd_comment_start/) {
 		if (!/^\t*\/\*/) {
 			err("block comment not indented by tabs");
 		}
@@ -446,7 +514,7 @@ line: while (<$filehandle>) {
 		err("spaces instead of tabs");
 	}
 	if (/^ / && !/^ \*[ \t\/]/ && !/^ \*$/ &&
-	    (!/^    \w/ || $in_function != 0)) {
+	    (!/^    (\w|\.)/ || $in_function != 0)) {
 		err("indent by spaces instead of tabs");
 	}
 	if (/^\t+ [^ \t\*]/ || /^\t+  \S/ || /^\t+   \S/) {
@@ -604,17 +672,17 @@ line: while (<$filehandle>) {
 	if (/^\s*\(void\)[^ ]/) {
 		err("missing space after (void) cast");
 	}
-	if (/\S{/ && !/{{/) {
+	if (/\S\{/ && !/\{\{/) {
 		err("missing space before left brace");
 	}
-	if ($in_function && /^\s+{/ &&
+	if ($in_function && /^\s+\{/ &&
 	    ($prev =~ /\)\s*$/ || $prev =~ /\bstruct\s+\w+$/)) {
 		err("left brace starting a line");
 	}
-	if (/}(else|while)/) {
+	if (/\}(else|while)/) {
 		err("missing space after right brace");
 	}
-	if (/}\s\s+(else|while)/) {
+	if (/\}\s\s+(else|while)/) {
 		err("extra space after right brace");
 	}
 	if (/\b_VOID\b|\bVOID\b|\bSTATIC\b/) {
@@ -660,25 +728,26 @@ line: while (<$filehandle>) {
 		# try to detect old non-POSIX types.
 		# POSIX requires all non-standard typedefs to end in _t,
 		# but historically these have been used.
-		if (/\b(unchar|ushort|uint|ulong|u_int|u_short|u_long|u_char|quad)\b/) {
+		my $types = join '|', keys %old2posix;
+		if (/\b($types)\b/) {
 			err("non-POSIX typedef $1 used: use $old2posix{$1} instead");
 		}
 	}
 	if ($heuristic) {
 		# cannot check this everywhere due to "struct {\n...\n} foo;"
 		if ($in_function && !$in_declaration &&
-		    /}./ && !/}\s+=/ && !/{.*}[;,]$/ && !/}(\s|)*$/ &&
-		    !/} (else|while)/ && !/}}/) {
+		    /\}./ && !/\}\s+=/ && !/\{.*\}[;,]$/ && !/\}(\s|)*$/ &&
+		    !/\} (else|while)/ && !/\}\}/) {
 			err("possible bad text following right brace");
 		}
 		# cannot check this because sub-blocks in
 		# the middle of code are ok
-		if ($in_function && /^\s+{/) {
+		if ($in_function && /^\s+\{/) {
 			err("possible left brace starting a line");
 		}
 	}
 	if (/^\s*else\W/) {
-		if ($prev =~ /^\s*}$/) {
+		if ($prev =~ /^\s*\}$/) {
 			err_prefix($prev,
 			    "else and right brace should be on same line");
 		}
@@ -764,8 +833,8 @@ process_indent($)
 
 	# skip over enumerations, array definitions, initializers, etc.
 	if ($cont_off <= 0 && !/^\s*$special/ &&
-	    (/(?:(?:\b(?:enum|struct|union)\s*[^\{]*)|(?:\s+=\s*)){/ ||
-	    (/^\s*{/ && $prev =~ /=\s*(?:\/\*.*\*\/\s*)*$/))) {
+	    (/(?:(?:\b(?:enum|struct|union)\s*[^\{]*)|(?:\s+=\s*))\{/ ||
+	    (/^\s*\{/ && $prev =~ /=\s*(?:\/\*.*\*\/\s*)*$/))) {
 		$cont_in = 0;
 		$cont_off = tr/{/{/ - tr/}/}/;
 		return;
@@ -788,14 +857,14 @@ process_indent($)
 		return		if (/^\s*\}?$/);
 		return		if (/^\s*\}?\s*else\s*\{?$/);
 		return		if (/^\s*do\s*\{?$/);
-		return		if (/{$/);
-		return		if (/}[,;]?$/);
+		return		if (/\{$/);
+		return		if (/\}[,;]?$/);
 
 		# Allow macros on their own lines
 		return		if (/^\s*[A-Z_][A-Z_0-9]*$/);
 
 		# cases we don't deal with, generally non-kosher
-		if (/{/) {
+		if (/\{/) {
 			err("stuff after {");
 			return;
 		}
@@ -864,7 +933,7 @@ process_indent($)
 			#
 			next		if (@cont_paren != 0);
 			if ($cont_special) {
-				if ($rest =~ /^\s*{?$/) {
+				if ($rest =~ /^\s*\{?$/) {
 					$cont_in = 0;
 					last;
 				}

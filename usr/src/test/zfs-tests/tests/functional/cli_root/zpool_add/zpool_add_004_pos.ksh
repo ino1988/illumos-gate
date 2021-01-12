@@ -24,6 +24,11 @@
 # Copyright 2009 Sun Microsystems, Inc.  All rights reserved.
 # Use is subject to license terms.
 #
+
+#
+# Copyright (c) 2014, 2016 by Delphix. All rights reserved.
+#
+
 . $STF_SUITE/include/libtest.shlib
 . $STF_SUITE/tests/functional/cli_root/zpool_add/zpool_add.kshlib
 
@@ -46,7 +51,7 @@ function cleanup
 		destroy_pool "$TESTPOOL"
 
 	datasetexists $TESTPOOL1/$TESTVOL && \
-		log_must $ZFS destroy -f $TESTPOOL1/$TESTVOL
+		log_must zfs destroy -f $TESTPOOL1/$TESTVOL
 	poolexists $TESTPOOL1 && \
 		destroy_pool "$TESTPOOL1"
 
@@ -63,10 +68,10 @@ log_must poolexists "$TESTPOOL"
 
 create_pool "$TESTPOOL1" "${disk}s${SLICE1}"
 log_must poolexists "$TESTPOOL1"
-log_must $ZFS create -V $VOLSIZE $TESTPOOL1/$TESTVOL
+log_must zfs create -V $VOLSIZE $TESTPOOL1/$TESTVOL
 
-log_must $ZPOOL add "$TESTPOOL" /dev/zvol/dsk/$TESTPOOL1/$TESTVOL
+log_must zpool add "$TESTPOOL" /dev/zvol/dsk/$TESTPOOL1/$TESTVOL
 
-log_must iscontained "$TESTPOOL" "/dev/zvol/dsk/$TESTPOOL1/$TESTVOL"
+log_must vdevs_in_pool "$TESTPOOL" "/dev/zvol/dsk/$TESTPOOL1/$TESTVOL"
 
 log_pass "'zpool add <pool> <vdev> ...' adds zfs volume to the pool successfully"

@@ -21,6 +21,7 @@
 # Copyright 2009 Sun Microsystems, Inc.  All rights reserved.
 # Use is subject to license terms.
 #
+# Copyright 2019, Joyent, Inc.
 
 # This target builds both a command (daemon) and various shared objects.  This
 # isn't a typical target, and the inclusion of both library and command
@@ -67,11 +68,11 @@ LINK_OBJS_CMN =			\
 	fssnap_link.o           \
 	sgen_link.o		\
 	smp_link.o		\
-	md_link.o		\
 	dtrace_link.o		\
 	vscan_link.o		\
 	zfs_link.o		\
-	zut_link.o
+	zut_link.o		\
+	sensor_link.o
 
 LINK_OBJS =	$(LINK_OBJS_CMN) \
 		$(LINK_OBJS_$(MACH))
@@ -96,14 +97,16 @@ LINTFLAGS += -erroff=E_NAME_USED_NOT_DEF2
 LINTFLAGS += -erroff=E_NAME_DEF_NOT_USED2
 LINTFLAGS += -erroff=E_NAME_MULTIPLY_DEF2
 
-CERRWARN += -_gcc=-Wno-uninitialized
+CERRWARN += $(CNOWARN_UNINIT)
 CERRWARN += -_gcc=-Wno-char-subscripts
 CERRWARN += -_gcc=-Wno-parentheses
+
+# not linted
+SMATCH=off
 
 # Define the dependencies required by devfsadm and all shared objects.
 LDLIBS +=		-ldevinfo
 devfsadm :=		LDLIBS += -lgen -lsysevent -lnvpair -lzonecfg -lbsm
-SUNW_md_link.so :=	LDLIBS += -lmeta
 SUNW_disk_link.so :=	LDLIBS += -ldevid
 SUNW_sgen_link.so :=	LDLIBS += -ldevid
 
@@ -161,7 +164,7 @@ install: all				\
 
 
 clean:
-	$(RM) $(OBJS) 
+	$(RM) $(OBJS)
 
 
 lint: $(DEVFSADM_MOD).ln $(LINT_MODULES)
@@ -182,7 +185,7 @@ $(DEVFSADM_MOD): $(DEVFSADM_OBJ)
 	$(POST_PROCESS)
 
 SUNW_%.so: %.o $(MAPFILES)
-	$(CC) -o $@ $(GSHARED) $(DYNFLAGS) -h $@ $< $(LDLIBS) -lc
+	$(LINK.c) -o $@ $(GSHARED) $(DYNFLAGS) -h $@ $< $(LDLIBS) -lc
 	$(POST_PROCESS_SO)
 
 %.o: $(COMMON)/%.c

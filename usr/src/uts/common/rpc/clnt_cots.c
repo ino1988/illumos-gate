@@ -18,6 +18,13 @@
  *
  * CDDL HEADER END
  */
+
+/*
+ * Copyright 2016 Nexenta Systems, Inc.  All rights reserved.
+ * Copyright (c) 2016 by Delphix. All rights reserved.
+ * Copyright 2019 Joyent, Inc.
+ */
+
 /*
  * Copyright 2009 Sun Microsystems, Inc.  All rights reserved.
  * Use is subject to license terms.
@@ -554,7 +561,7 @@ clnt_zone_destroy(zoneid_t zoneid, void *unused)
 
 int
 clnt_cots_kcreate(dev_t dev, struct netbuf *addr, int family, rpcprog_t prog,
-	rpcvers_t vers, uint_t max_msgsize, cred_t *cred, CLIENT **ncl)
+    rpcvers_t vers, uint_t max_msgsize, cred_t *cred, CLIENT **ncl)
 {
 	CLIENT *h;
 	cku_private_t *p;
@@ -603,6 +610,7 @@ clnt_cots_kcreate(dev_t dev, struct netbuf *addr, int family, rpcprog_t prog,
 	xdrmem_create(&p->cku_outxdr, p->cku_rpchdr, WIRE_HDR_SIZE, XDR_ENCODE);
 
 	if (!xdr_callhdr(&p->cku_outxdr, &call_msg)) {
+		XDR_DESTROY(&p->cku_outxdr);
 		RPCLOG0(1, "clnt_cots_kcreate - Fatal header serialization "
 		    "error\n");
 		auth_destroy(h->cl_auth);
@@ -610,11 +618,13 @@ clnt_cots_kcreate(dev_t dev, struct netbuf *addr, int family, rpcprog_t prog,
 		RPCLOG0(1, "clnt_cots_kcreate: create failed error EINVAL\n");
 		return (EINVAL);		/* XXX */
 	}
+	XDR_DESTROY(&p->cku_outxdr);
 
 	/*
 	 * The zalloc initialized the fields below.
 	 * p->cku_xid = 0;
 	 * p->cku_flags = 0;
+	 * p->cku_srcaddr.buf = NULL;
 	 * p->cku_srcaddr.len = 0;
 	 * p->cku_srcaddr.maxlen = 0;
 	 */
@@ -651,16 +661,13 @@ clnt_cots_kerror(CLIENT *h, struct rpc_err *err)
 	*err = p->cku_err;
 }
 
+/*ARGSUSED*/
 static bool_t
 clnt_cots_kfreeres(CLIENT *h, xdrproc_t xdr_res, caddr_t res_ptr)
 {
-	/* LINTED pointer alignment */
-	cku_private_t *p = htop(h);
-	XDR *xdrs;
+	xdr_free(xdr_res, res_ptr);
 
-	xdrs = &(p->cku_outxdr);
-	xdrs->x_op = XDR_FREE;
-	return ((*xdr_res)(xdrs, res_ptr));
+	return (TRUE);
 }
 
 static bool_t
@@ -1073,6 +1080,7 @@ call_again:
 		if ((!XDR_PUTINT32(xdrs, (int32_t *)&procnum)) ||
 		    (!AUTH_MARSHALL(h->cl_auth, xdrs, p->cku_cred)) ||
 		    (!(*xdr_args)(xdrs, argsp))) {
+			XDR_DESTROY(xdrs);
 			p->cku_err.re_status = RPC_CANTENCODEARGS;
 			p->cku_err.re_errno = EIO;
 			goto cots_done;
@@ -1091,11 +1099,14 @@ call_again:
 		/* Serialize the procedure number and the arguments. */
 		if (!AUTH_WRAP(h->cl_auth, p->cku_rpchdr, WIRE_HDR_SIZE+4,
 		    xdrs, xdr_args, argsp)) {
+			XDR_DESTROY(xdrs);
 			p->cku_err.re_status = RPC_CANTENCODEARGS;
 			p->cku_err.re_errno = EIO;
 			goto cots_done;
 		}
 	}
+
+	XDR_DESTROY(xdrs);
 
 	RPCLOG(2, "clnt_cots_kcallit: connected, sending call, tidu_size %d\n",
 	    tidu_size);
@@ -1365,6 +1376,7 @@ read_again:
 				    "failure\n");
 				freemsg(mp);
 				(void) xdr_rpc_free_verifier(xdrs, &reply_msg);
+				XDR_DESTROY(xdrs);
 				mutex_enter(&call->call_lock);
 				if (call->call_reply == NULL)
 					call->call_status = RPC_TIMEDOUT;
@@ -1402,6 +1414,7 @@ read_again:
 
 				(void) xdr_rpc_free_verifier(xdrs,
 				    &reply_msg);
+				XDR_DESTROY(xdrs);
 
 				if (p->cku_flags & CKU_ONQUEUE) {
 					call_table_remove(call);
@@ -1487,6 +1500,7 @@ read_again:
 	}
 
 	(void) xdr_rpc_free_verifier(xdrs, &reply_msg);
+	XDR_DESTROY(xdrs);
 
 	if (p->cku_flags & CKU_ONQUEUE) {
 		call_table_remove(call);
@@ -1535,7 +1549,7 @@ cots_done:
  */
 void
 clnt_cots_kinit(CLIENT *h, dev_t dev, int family, struct netbuf *addr,
-	int max_msgsize, cred_t *cred)
+    int max_msgsize, cred_t *cred)
 {
 	/* LINTED pointer alignment */
 	cku_private_t *p = htop(h);
@@ -1567,8 +1581,7 @@ clnt_cots_kinit(CLIENT *h, dev_t dev, int family, struct netbuf *addr,
 	p->cku_cred = cred;
 
 	if (p->cku_addr.maxlen < addr->len) {
-		if (p->cku_addr.maxlen != 0 && p->cku_addr.buf != NULL)
-			kmem_free(p->cku_addr.buf, p->cku_addr.maxlen);
+		kmem_free(p->cku_addr.buf, p->cku_addr.maxlen);
 		p->cku_addr.buf = kmem_zalloc(addr->maxlen, KM_SLEEP);
 		p->cku_addr.maxlen = addr->maxlen;
 	}
@@ -1595,8 +1608,7 @@ clnt_cots_kinit(CLIENT *h, dev_t dev, int family, struct netbuf *addr,
 /* ARGSUSED */
 static int
 clnt_cots_ksettimers(CLIENT *h, struct rpc_timers *t, struct rpc_timers *all,
-	int minimum, void (*feedback)(int, int, caddr_t), caddr_t arg,
-	uint32_t xid)
+    int minimum, void (*feedback)(int, int, caddr_t), caddr_t arg, uint32_t xid)
 {
 	/* LINTED pointer alignment */
 	cku_private_t *p = htop(h);
@@ -1642,10 +1654,9 @@ conn_kstat_update(kstat_t *ksp, int rw)
 				cm_entry->x_server.buf;
 			b = (uchar_t *)&sa->sin_addr;
 			(void) sprintf(fbuf,
-			    "%03d.%03d.%03d.%03d", b[0] & 0xFF, b[1] & 0xFF,
+			    "%d.%d.%d.%d", b[0] & 0xFF, b[1] & 0xFF,
 			    b[2] & 0xFF, b[3] & 0xFF);
-			cm_ksp_data->x_port.value.ui32 =
-				(uint32_t)sa->sin_port;
+			cm_ksp_data->x_port.value.ui32 = ntohs(sa->sin_port);
 		} else if (cm_entry->x_family == AF_INET6 &&
 				cm_entry->x_server.len >=
 				sizeof (struct sockaddr_in6)) {
@@ -1654,14 +1665,14 @@ conn_kstat_update(kstat_t *ksp, int rw)
 			sin6 = (struct sockaddr_in6 *)cm_entry->x_server.buf;
 			(void) kinet_ntop6((uchar_t *)&sin6->sin6_addr, fbuf,
 				INET6_ADDRSTRLEN);
-			cm_ksp_data->x_port.value.ui32 = sin6->sin6_port;
+			cm_ksp_data->x_port.value.ui32 = ntohs(sin6->sin6_port);
 		} else {
 			struct sockaddr_in  *sa;
 
 			sa = (struct sockaddr_in *)cm_entry->x_server.buf;
 			b = (uchar_t *)&sa->sin_addr;
 			(void) sprintf(fbuf,
-			    "%03d.%03d.%03d.%03d", b[0] & 0xFF, b[1] & 0xFF,
+			    "%d.%d.%d.%d", b[0] & 0xFF, b[1] & 0xFF,
 			    b[2] & 0xFF, b[3] & 0xFF);
 		}
 		KSTAT_NAMED_STR_BUFLEN(&cm_ksp_data->x_server) =
@@ -1692,7 +1703,7 @@ clnt_delay(clock_t ticks, bool_t nosignal)
  */
 static enum clnt_stat
 connmgr_cwait(struct cm_xprt *cm_entry, const struct timeval *waitp,
-	bool_t nosignal)
+    bool_t nosignal)
 {
 	bool_t interrupted;
 	clock_t timout, cv_stat;
@@ -1923,10 +1934,9 @@ use_new_conn:
 			 * a later retry.
 			 */
 			if (srcaddr->len != lru_entry->x_src.len) {
-				if (srcaddr->len > 0)
-					kmem_free(srcaddr->buf,
-					    srcaddr->maxlen);
-				srcaddr->buf = kmem_zalloc(
+				kmem_free(srcaddr->buf, srcaddr->maxlen);
+				ASSERT(lru_entry->x_src.len != 0);
+				srcaddr->buf = kmem_alloc(
 				    lru_entry->x_src.len, KM_SLEEP);
 				srcaddr->maxlen = srcaddr->len =
 				    lru_entry->x_src.len;
@@ -2081,7 +2091,7 @@ start_retry_loop:
 	cm_entry = (struct cm_xprt *)
 	    kmem_zalloc(sizeof (struct cm_xprt), KM_SLEEP);
 
-	cm_entry->x_server.buf = kmem_zalloc(destaddr->len, KM_SLEEP);
+	cm_entry->x_server.buf = kmem_alloc(destaddr->len, KM_SLEEP);
 	bcopy(destaddr->buf, cm_entry->x_server.buf, destaddr->len);
 	cm_entry->x_server.len = cm_entry->x_server.maxlen = destaddr->len;
 
@@ -2246,9 +2256,11 @@ start_retry_loop:
 	/*
 	 * Set up a transport entry in the connection manager's list.
 	 */
-	cm_entry->x_src.buf = kmem_zalloc(srcaddr->len, KM_SLEEP);
-	bcopy(srcaddr->buf, cm_entry->x_src.buf, srcaddr->len);
-	cm_entry->x_src.len = cm_entry->x_src.maxlen = srcaddr->len;
+	if (srcaddr->len > 0) {
+		cm_entry->x_src.buf = kmem_alloc(srcaddr->len, KM_SLEEP);
+		bcopy(srcaddr->buf, cm_entry->x_src.buf, srcaddr->len);
+		cm_entry->x_src.len = cm_entry->x_src.maxlen = srcaddr->len;
+	} /* Else kmem_zalloc() of cm_entry already sets its x_src to NULL. */
 
 	cm_entry->x_tiptr = tiptr;
 	cm_entry->x_time = ddi_get_lbolt();
@@ -2428,12 +2440,11 @@ connmgr_wrapconnect(
 		 * in case of a later retry.
 		 */
 		if (srcaddr->len != cm_entry->x_src.len) {
-			if (srcaddr->maxlen > 0)
-				kmem_free(srcaddr->buf, srcaddr->maxlen);
-			srcaddr->buf = kmem_zalloc(cm_entry->x_src.len,
+			kmem_free(srcaddr->buf, srcaddr->maxlen);
+			ASSERT(cm_entry->x_src.len != 0);
+			srcaddr->buf = kmem_alloc(cm_entry->x_src.len,
 			    KM_SLEEP);
-			srcaddr->maxlen = srcaddr->len =
-			    cm_entry->x_src.len;
+			srcaddr->maxlen = srcaddr->len = cm_entry->x_src.len;
 		}
 		bcopy(cm_entry->x_src.buf, srcaddr->buf, srcaddr->len);
 	}
@@ -2555,10 +2566,8 @@ connmgr_close(struct cm_xprt *cm_entry)
 	cv_destroy(&cm_entry->x_conn_cv);
 	cv_destroy(&cm_entry->x_dis_cv);
 
-	if (cm_entry->x_server.buf != NULL)
-		kmem_free(cm_entry->x_server.buf, cm_entry->x_server.maxlen);
-	if (cm_entry->x_src.buf != NULL)
-		kmem_free(cm_entry->x_src.buf, cm_entry->x_src.maxlen);
+	kmem_free(cm_entry->x_server.buf, cm_entry->x_server.maxlen);
+	kmem_free(cm_entry->x_src.buf, cm_entry->x_src.maxlen);
 	kmem_free(cm_entry, sizeof (struct cm_xprt));
 }
 
@@ -2621,11 +2630,11 @@ connmgr_connect(
 	queue_t			*wq,
 	struct netbuf		*addr,
 	int			addrfmly,
-	calllist_t 		*e,
-	int 			*tidu_ptr,
-	bool_t 			reconnect,
-	const struct timeval 	*waitp,
-	bool_t 			nosignal,
+	calllist_t		*e,
+	int			*tidu_ptr,
+	bool_t			reconnect,
+	const struct timeval	*waitp,
+	bool_t			nosignal,
 	cred_t			*cr)
 {
 	mblk_t *mp;
@@ -3094,7 +3103,7 @@ connmgr_snddis(struct cm_xprt *cm_entry)
  */
 static int
 clnt_dispatch_send(queue_t *q, mblk_t *mp, calllist_t *e, uint_t xid,
-			uint_t queue_flag)
+    uint_t queue_flag)
 {
 	ASSERT(e != NULL);
 
@@ -3604,7 +3613,7 @@ clnt_dispatch_notifyall(queue_t *q, int32_t msg_type, int32_t reason)
 				e->call_reason = reason;
 			e->call_notified = TRUE;
 			/*
-			 * Let the caller timeout, else he will retry
+			 * Let the caller timeout, else it will retry
 			 * immediately.
 			 */
 			e->call_status = RPC_XPRTFAILED;

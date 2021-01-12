@@ -18,15 +18,11 @@
 #
 # CDDL HEADER END
 #
-
-#
 # Copyright 2008 Sun Microsystems, Inc.  All rights reserved.
 # Use is subject to license terms.
 #
-#	This makefile drives the production of unix (and unix.o).
-#
-#	i86pc implementation architecture dependent
-#
+# Copyright 2019 Joyent, Inc.
+# Copyright 2019 OmniOS Community Edition (OmniOSce) Association.
 
 #
 #	Path to the base of the uts directory tree (usually /usr/src/uts).
@@ -38,22 +34,13 @@ UTSBASE	= ../..
 #
 UNIX		= unix
 DBOOT		= dboot
-MULTIBOOT	= multiboot
 
 OBJECTS		= $(SPECIAL_OBJS:%=$(OBJS_DIR)/%) \
 		  $(CORE_OBJS:%=$(OBJS_DIR)/%) \
 		  $(KRTLD_OBJS:%=$(OBJS_DIR)/%) \
 		  $(MACH_NOT_YET_KMODS:%=$(OBJS_DIR)/%)
 
-LINTS		= $(SPECIAL_OBJS:%.o=$(LINTS_DIR)/%.ln) \
-		  $(CORE_OBJS:%.o=$(LINTS_DIR)/%.ln) \
-		  $(KRTLD_OBJS:%.o=$(LINTS_DIR)/%.ln) \
-		  $(MACH_NOT_YET_KMODS:%.o=$(LINTS_DIR)/%.ln) \
-		  $(LINTS_DIR)/vers.ln \
-		  $(LINTS_DIR)/modstubs.ln
-
 ROOTMODULE	= $(ROOT_PSM_KERN_DIR)/$(UNIX)
-ROOT_MULTIBOOT	= $(ROOT_PSM_DIR)/$(MULTIBOOT)
 
 UNIX_BIN	= $(OBJS_DIR)/$(UNIX)
 
@@ -64,16 +51,15 @@ GENUNIX_DIR	= ../../intel/$(GENUNIX)
 
 LIBOPTS		= -L $(GENUNIX_DIR)/$(OBJS_DIR) -l $(GENUNIX)
 
-CTFEXTRAOBJS	= $(OBJS_DIR)/vers.o
+COMMP_CTF_SRC	= $(OBJS_DIR)/comm_page_ctf.c
+
+CTFEXTRAOBJS	= $(OBJS_DIR)/vers.o $(OBJS_DIR)/comm_page_ctf.o
 
 DBOOT_OBJS_DIR	= dboot/$(OBJS_DIR)
 DBOOT_OBJECTS	= $(DBOOT_OBJS:%=$(DBOOT_OBJS_DIR)/%)
 DBOOT_BIN	= $(DBOOT_OBJS_DIR)/$(DBOOT)
 DBOOT_O		= $(OBJS_DIR)/$(DBOOT).o
 DBOOT_S		= $(DBOOT_O:%.o=%.s)
-DBOOT_LINTS	= $(DBOOT_OBJS:%.o=$(DBOOT_OBJS_DIR)/%.ln)
-DBOOT_LINT	= $(i386_LINT)
-DBOOT_LINTTAGS	= -erroff=E_STATIC_UNUSED
 
 #
 #	Include common rules.
@@ -83,9 +69,8 @@ include $(UTSBASE)/i86pc/Makefile.i86pc
 #
 #	Define targets
 #
-ALL_TARGET	= $(UNIX_BIN) $(MULTIBOOT)
-LINT_TARGET	= $(LINT_LIB) $(DBOOT_LINT_LIB)
-INSTALL_TARGET	= $(UNIX_BIN) $(MULTIBOOT) $(ROOTMODULE) $(ROOT_MULTIBOOT)
+ALL_TARGET	= $(UNIX_BIN)
+INSTALL_TARGET	= $(UNIX_BIN) $(ROOTMODULE)
 
 #
 #	This is UNIX_DIR. Use a short path.
@@ -97,9 +82,11 @@ UNIX_DIR	= .
 #
 CLEANFILES	+=		\
 	$(UNIX_O) $(MODSTUBS_O)	\
-	$(OBJS_DIR)/vers.c $(OBJS_DIR)/vers.o \
+	$(OBJS_DIR)/vers.c \
 	$(OBJS_DIR)/dtracestubs.s \
-	$(DTRACESTUBS_O) $(DTRACESTUBS)
+	$(DTRACESTUBS_O) $(DTRACESTUBS) \
+	$(CTFEXTRAOBJS) \
+	$(COMMP_CTF_SRC)
 
 CLEANFILES	+=		\
 	$(DBOOT_O) $(DBOOT_S)	\
@@ -110,37 +97,36 @@ CLEANFILES	+=		\
 	$(DBOOT_BIN)
 
 CLEANFILES	+=		\
+	$(DBOOT_OBJS_DIR)/$(FONT).c \
+	$(OBJS_DIR)/$(FONT).c
+
+CLEANFILES	+=		\
 	$(OBJS_DIR)/fb_swtch_src.o \
 	$(OBJS_DIR)/fb_swtch_src \
 	$(OBJS_DIR)/fb_swtch.s
 
-CLEANFILES	+= \
-	$(ZLIB_OBJS:%.o=$(OBJS_DIR)/%.o) \
-	$(ZLIB_OBJS:%.o=$(OBJS_DIR)/%.ln)
+CLEANFILES	+= $(ZLIB_OBJS:%.o=$(OBJS_DIR)/%.o)
 
-CLOBBERFILES	= $(CLEANFILES) $(UNIX_BIN) $(MULTIBOOT)
-CLEANLINTFILES	+= $(LINT_LIB) $(DBOOT_LINT_LIB) $(DBOOT_LINTS)
+CLOBBERFILES	= $(CLEANFILES) $(UNIX_BIN)
 
 # instr_size needs a special header
 $(OBJS_DIR)/instr_size.o :=	EXTRA_OPTIONS	= -I$(SRC)/common/dis/i386
-$(OBJS_DIR)/instr_size.ln :=	EXTRA_OPTIONS	= -I$(SRC)/common/dis/i386
+
+#
+# When performing shadow studio builds, the pre-processed comm page
+# output from gcc can end up confusing studio.
+#
+$(OBJS_DIR)/comm_page_ctf.o :=	CERRWARN += -_cc=-erroff=E_TKNS_IGNORED_AT_END_OF_DIR
 
 CFLAGS += -DDIS_MEM
 
 #
-# For now, disable these lint checks; maintainers should endeavor
-# to investigate and remove these for maximum lint coverage.
+# For now, disable these checks; maintainers should endeavor
+# to investigate and remove these for maximum coverage.
 # Please do not carry these forward to new Makefiles.
 #
-LINTTAGS	+= -erroff=E_BAD_PTR_CAST_ALIGN
-LINTTAGS	+= -erroff=E_SUSPICIOUS_COMPARISON
-LINTTAGS	+= -erroff=E_SUPPRESSION_DIRECTIVE_UNUSED
-LINTTAGS	+= -erroff=E_STATIC_UNUSED
-LINTTAGS	+= -erroff=E_PTRDIFF_OVERFLOW
-LINTTAGS	+= -erroff=E_ASSIGN_NARROW_CONV
-
 CERRWARN	+= -_gcc=-Wno-parentheses
-CERRWARN	+= -_gcc=-Wno-uninitialized
+CERRWARN	+= $(CNOWARN_UNINIT)
 CERRWARN	+= -_gcc=-Wno-char-subscripts
 CERRWARN	+= -_gcc=-Wno-unused-variable
 CERRWARN	+= -_gcc=-Wno-unused-function
@@ -150,10 +136,18 @@ CERRWARN	+= -_gcc=-Wno-clobbered
 CERRWARN	+= -_gcc=-Wno-empty-body
 CERRWARN	+= -_gcc=-Wno-unused-value
 
-# Ensure that lint sees 'struct cpu' containing a fully declared
-# embedded 'struct machcpu'
-#
-LINTFLAGS	+= -D_MACHDEP -I../../i86pc
+# false positives
+SMOFF += index_overflow
+
+# needs work
+SMOFF += all_func_returns,deref_check,signed
+
+$(OBJS_DIR)/fmsmb.o := SMOFF += indenting
+$(OBJS_DIR)/zutil.o := SMOFF += indenting
+$(OBJS_DIR)/bootrd_cpio.o := SMOFF += allocating_enough_data
+
+# too hairy
+$(OBJS_DIR)/inflate.o := SMATCH=off
 
 #
 #	Default build targets.
@@ -168,14 +162,10 @@ clean: $(CLEAN_DEPS)
 
 clobber: $(CLOBBER_DEPS)
 
-lint: $(LINT_DEPS)
-
-clean.lint: $(CLEAN_LINT_DEPS)
-
 install: $(INSTALL_DEPS)
 
-MAPFILE_32 = $(MAPFILE)
-MAPFILE_64 = $(MAPFILE).amd64
+MAPFILE_32 = $(UNIX_MAPFILE)
+MAPFILE_64 = $(UNIX_MAPFILE).amd64
 
 MAPFILE_NAME = $(MAPFILE_$(CLASS))
 
@@ -188,7 +178,7 @@ $(UNIX_BIN):	$(UNIX_O) $(MODSTUBS_O) $(MAPFILE_NAME) \
 	$(CTFMERGE_UNIQUIFY_AGAINST_GENUNIX)
 	$(POST_PROCESS)
 
-$(UNIX_O):	$(OBJECTS) $(OBJS_DIR)/vers.o
+$(UNIX_O):	$(OBJECTS) $(CTFEXTRAOBJS)
 	$(LD) -r -o $@ $(OBJECTS) $(OBJS_DIR)/vers.o
 
 $(DBOOT_BIN):	$(DBOOT_OBJS_DIR) $(DBOOT_OBJECTS) dboot/Mapfile.dboot
@@ -205,43 +195,18 @@ $(DBOOT_O):	$(DBOOT_BIN)
 $(DBOOT_OBJS_DIR):
 	-@mkdir -p $@ 2> /dev/null
 
-#
-# dboot is built as an intermediate target in dboot.o, so just make
-# dboot.o the dependency here.
-#
-$(MULTIBOOT):	$(DBOOT_O)
-	$(CP)	$(DBOOT_BIN) $(MULTIBOOT)
-	$(POST_PROCESS)
+$(COMMP_CTF_SRC):	$(UTSBASE)/i86pc/ml/comm_page.s
+	$(COMPILE.cpp) -D_GENCTF -o $@ $(UTSBASE)/i86pc/ml/comm_page.s
+
+$(OBJS_DIR)/comm_page_ctf.o:	$(COMMP_CTF_SRC)
+	$(COMPILE.c) -o $@ $<
+	$(CTFCONVERT_O)
 
 #
 #	Special rules for generating assym.h for inclusion in assembly files.
 #
 $(DSF_DIR)/$(OBJS_DIR)/assym.h $(DSF_DIR)/$(OBJS_DIR)/kdi_assym.h:	FRC
 	@cd $(DSF_DIR); $(MAKE) all.targ
-
-#
-#	The global lint target builds the kernel lint library (llib-lunix.ln)
-#	which is equivalent to a lint of /unix.o. Then all kernel modules for
-#	this architecture are linted against the kernel lint library.
-#
-#	Note:	lint errors in the kernel lint library will be repeated for
-#		each module. It is important that the kernel lint library
-#		be clean to keep the textual output to a reasonable level.
-#
-
-$(LINT_LIB):	$(LINT_LIB_DIR) $(LINTS)
-	@pwd
-	@-$(ECHO) "\n$(UNIX): (library construction):"
-	@$(LINT) -o$(UNIX) $(LINTFLAGS) $(LINTS)
-	@$(MV) $(@F) $@
-
-$(DBOOT_LINT_LIB):	$(LINT_LIB_DIR) $(DBOOT_LINTS)
-	@pwd
-	@-$(ECHO) "\n$(DBOOT): (library construction):"
-	@$(LINT) -o$(DBOOT) $(DBOOT_LINTFLAGS) $(DBOOT_LINTS)
-	@$(MV) $(@F) $@
-
-lintlib:	$(LINT_DEPS)
 
 #
 #	Include common targets.

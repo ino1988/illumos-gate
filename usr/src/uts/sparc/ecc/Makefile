@@ -18,6 +18,7 @@
 #
 # CDDL HEADER END
 #
+# Copyright 2014 Garrett D'Amore <garrett@damore.org>
 #
 # Copyright 2009 Sun Microsystems, Inc.  All rights reserved.
 # Use is subject to license terms.
@@ -40,7 +41,6 @@ COM2_DIR = $(COMMONBASE)/crypto
 #
 MODULE		= ecc
 OBJECTS		= $(ECCPROV_OBJS:%=$(OBJS_DIR)/%)
-LINTS		= $(LINTS_DIR)/ecc.ln
 ROOTMODULE	= $(ROOT_CRYPTO_DIR)/$(MODULE)
 
 #
@@ -48,14 +48,10 @@ ROOTMODULE	= $(ROOT_CRYPTO_DIR)/$(MODULE)
 #
 include $(UTSBASE)/sparc/Makefile.sparc
 
-#	set signing mode
-ELFSIGN_MOD	= $(ELFSIGN_CRYPTO)
-
 #
 #	Define targets
 #
 ALL_TARGET	= $(BINARY)
-LINT_TARGET	= $(MODULE).lint
 INSTALL_TARGET	= $(BINARY) $(ROOTMODULE)
 
 #
@@ -63,16 +59,18 @@ INSTALL_TARGET	= $(BINARY) $(ROOTMODULE)
 #
 LDFLAGS += -dy -Nmisc/kcf
 
-#
-# lint pass one enforcement
-#
-CFLAGS		+= $(CCVERBOSE) -I$(COM1_DIR) -I$(COM2_DIR)
+CFLAGS		+= -I$(COM1_DIR) -I$(COM2_DIR)
 CFLAGS		+= -DMP_API_COMPATIBLE -DNSS_ECC_MORE_THAN_SUITE_B
-LINTFLAGS	+= -I$(COM1_DIR) -I$(COM2_DIR)
 
+#
+# For now, disable these warnings; maintainers should endeavor
+# to investigate and remove these for maximum coverage.
+# Please do not carry these forward to new Makefiles.
+#
+CFLAGS		+= $(CCVERBOSE)
 CERRWARN	+= -_gcc=-Wno-switch
 CERRWARN	+= -_gcc=-Wno-unused-label
-CERRWARN	+= -_gcc=-Wno-uninitialized
+CERRWARN	+= $(CNOWARN_UNINIT)
 CERRWARN	+= -_gcc=-Wno-type-limits
 CERRWARN	+= -_gcc=-Wno-empty-body
 CERRWARN	+= -_gcc=-Wno-unused-variable
@@ -90,12 +88,6 @@ all:		$(ALL_DEPS)
 clean:		$(CLEAN_DEPS)
 
 clobber:	$(CLOBBER_DEPS)
-
-lint:		$(LINT_DEPS)
-
-modlintlib:	$(MODLINTLIB_DEPS)
-
-clean.lint:	$(CLEAN_LINT_DEPS)
 
 install:	$(INSTALL_DEPS)
 

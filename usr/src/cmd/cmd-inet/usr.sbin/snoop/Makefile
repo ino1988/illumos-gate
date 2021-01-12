@@ -22,6 +22,7 @@
 #
 # Copyright 2009 Sun Microsystems, Inc.  All rights reserved.
 # Use is subject to license terms.
+# Copyright (c) 2018, Joyent, Inc.
 #
 
 PROG=	snoop
@@ -49,16 +50,19 @@ include	../../../Makefile.cmd
 CPPFLAGS += -I. -I$(SRC)/common/net/dhcp \
 	-D_LARGEFILE_SOURCE -D_FILE_OFFSET_BITS=64
 LDLIBS += -ldhcputil -ldlpi -lsocket -lnsl -ltsol
-LDFLAGS += $(MAPFILE.NGB:%=-M%)
+LDFLAGS += $(MAPFILE.NGB:%=-Wl,-M%)
 CERRWARN += -_gcc=-Wno-switch
 CERRWARN += -_gcc=-Wno-implicit-function-declaration
-CERRWARN += -_gcc=-Wno-uninitialized
+CERRWARN += $(CNOWARN_UNINIT)
 CERRWARN += -_gcc=-Wno-clobbered
 CERRWARN += -_gcc=-Wno-unused-value
 CERRWARN += -_gcc=-Wno-parentheses
 CERRWARN += -_gcc=-Wno-unused-variable
 CERRWARN += -_gcc=-Wno-unused-label
 CERRWARN += -_gcc=-Wno-unused-function
+
+# we really should have smatch running on this code but...
+SMATCH=off
 
 .KEEP_STATE:
 
@@ -74,7 +78,5 @@ install:	all $(ROOTUSRSBINPROG)
 
 clean:
 	$(RM) $(OBJS)
-
-lint:	lint_SRCS
 
 include	../../../Makefile.targ

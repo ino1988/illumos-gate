@@ -23,7 +23,7 @@ CPPFLAGS= -I. $(DEFS) $(MBCHAR) $(CPPFLAGS.master)
 CPPFLAGS +=	-I../../sh
 CPPFLAGS += -D_FILE_OFFSET_BITS=64
 CERRWARN += -_gcc=-Wno-implicit-function-declaration
-CERRWARN += -_gcc=-Wno-uninitialized
+CERRWARN += $(CNOWARN_UNINIT)
 CERRWARN += -_gcc=-Wno-parentheses
 CERRWARN += -_gcc=-Wno-implicit-int
 CERRWARN += -_gcc=-Wno-unused-function
@@ -35,7 +35,7 @@ CERRWARN += -_gcc=-Wno-extra
 LDLIBS += -lcurses
 
 MAPFILES =	../mapfile-intf $(MAPFILE.NGB)
-LDFLAGS +=	$(MAPFILES:%=-M%)
+LDFLAGS +=	$(MAPFILES:%=-Wl,-M%)
 
 PFOBJS = sh_policy.o
 
@@ -75,9 +75,6 @@ $(CSH_PROG): $(COMMONOBJS) $(LOCALOBJS) $(MAPFILES)
 $(HDDEP): ../sh.tconst.h
 
 install: all $(ROOTBINPROG)  $(ROOTPROG)
-
-lint:	../sh.tconst.h
-	$(LINT.c) $(COMMONSRCS) signal.c $(LDLIBS)
 
 clean:
 	$(RM) $(LOCALOBJS) $(COMMONOBJS)

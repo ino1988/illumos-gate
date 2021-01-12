@@ -1160,6 +1160,7 @@ int sh_exec(register const Shnode_t *t, int flags)
 				break;
 			}
 		    }
+		    /* FALLTHROUGH */
 		    case TFORK:
 		    {
 			register pid_t parent;
@@ -1373,6 +1374,7 @@ int sh_exec(register const Shnode_t *t, int flags)
 				sh_done(shp,0);
 			}
 		    }
+		    /* FALLTHROUGH */
 
 		    case TSETIO:
 		    {
@@ -2977,7 +2979,7 @@ static pid_t sh_ntfork(Shell_t *shp,const Shnode_t *t,char *argv[],int *jobid,in
 {
 	static pid_t	spawnpid;
 	static int	savetype;
-	static int	savejobid;
+	static int	savejobid __unused;
 	struct checkpt	buff;
 	int		otype=0, jmpval;
 	volatile int	jobwasset=0, scope=0, sigwasset=0;
@@ -3223,6 +3225,7 @@ static pid_t sh_ntfork(Shell_t *shp,const Shnode_t *t,char *argv[],int *jobid,in
 		{
 		    case ENOENT:
 			errormsg(SH_DICT,ERROR_system(ERROR_NOENT),e_found+4);
+			/* FALLTHROUGH */
 		    default:
 			errormsg(SH_DICT,ERROR_system(ERROR_NOEXEC),e_exec+4);
 		}

@@ -36,7 +36,7 @@ ROOTCMDDIR	= $(ROOT)/lib/inet
 POFILE		= $(PROG).po
 POFILES		= $(SRCS:%.c=%.po)
 
-C99MODE		= $(C99_ENABLE)
+CSTD		= $(CSTD_GNU99)
 
 #
 # We need access to the ancillary data features which are only available
@@ -46,7 +46,7 @@ CPPFLAGS += -D_XOPEN_SOURCE=600 -D__EXTENSIONS__
 LDLIBS	+= -lsocket -lnsl -lsysevent -lnvpair -lipmp -linetutil -ldlpi
 LINTFLAGS += -erroff=E_INCONS_ARG_DECL2 -erroff=E_INCONS_ARG_USED2
 
-CERRWARN += -_gcc=-Wno-uninitialized
+CERRWARN += $(CNOWARN_UNINIT)
 
 #
 # Instrument in.mpathd with CTF data to ease debugging.

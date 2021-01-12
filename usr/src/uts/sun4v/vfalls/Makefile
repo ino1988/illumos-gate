@@ -19,11 +19,10 @@
 # CDDL HEADER END
 #
 #
-# uts/sun4v/vfalls/Makefile
 # Copyright 2008 Sun Microsystems, Inc.  All rights reserved.
 # Use is subject to license terms.
+
 #
-#ident	"%Z%%M%	%I%	%E% SMI"
 #
 #	This makefile drives the production of the UltraSPARC-T2+ cpu module.
 #
@@ -40,7 +39,6 @@ UTSBASE	= ../..
 #
 MODULE		= SUNW,UltraSPARC-T2+
 OBJECTS		= $(NIAGARA2CPU_OBJS:%=$(OBJS_DIR)/%)
-LINTS		= $(NIAGARA2CPU_OBJS:%.o=$(LINTS_DIR)/%.ln)
 ROOTMODULE	= $(ROOT_PSM_CPU_DIR)/$(MODULE)
 
 CPU_DIR		= .
@@ -60,13 +58,9 @@ CLEANFILES	+= $(CPULIB) $(SYM_MOD)
 #	Define targets
 #
 ALL_TARGET	= $(SYM_MOD)
-LINT_TARGET	= $(MODULE).lint
 INSTALL_TARGET	= def $(BINARY) $(ROOTMODULE)
 
-#
-# lint pass one enforcement
-#
-CFLAGS += $(CCVERBOSE) -DVFALLS_IMPL
+CFLAGS += -DVFALLS_IMPL
 
 #
 # cpu-module-specific flags
@@ -98,16 +92,10 @@ clean:		$(CLEAN_DEPS)
 
 clobber:	$(CLOBBER_DEPS)
 
-lint:		$(LINT_DEPS)
-
-modlintlib:	$(MODLINTLIB_DEPS)
-
-clean.lint:	$(CLEAN_LINT_DEPS)
-
 install:	$(INSTALL_DEPS)
 
-$(CPULIB):	$(BINARY)
-	$(BUILD.SO) $(BINARY)
+$(CPULIB):	$(OBJECTS)
+	$(BUILD.SO) $(OBJECTS)
 
 $(SYM_MOD):	$(UNIX_O) $(CPULIB)
 	@echo "resolving symbols against unix.o"

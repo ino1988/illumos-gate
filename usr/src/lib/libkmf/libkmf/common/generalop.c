@@ -423,9 +423,9 @@ Cleanup_PK11_Session(KMF_HANDLE_T handle)
 {
 	if (handle != NULL) {
 		/* Close active session on a pkcs11 token */
-		if (handle->pk11handle != NULL) {
+		if (handle->pk11handle != 0) {
 			(void) C_CloseSession(handle->pk11handle);
-			handle->pk11handle = NULL;
+			handle->pk11handle = 0;
 		}
 	}
 }
@@ -990,7 +990,7 @@ KMF_RETURN
 kmf_get_file_format(char *filename, KMF_ENCODE_FORMAT *fmt)
 {
 	KMF_RETURN ret = KMF_OK;
-	KMF_DATA filebuf = {NULL, 0};
+	KMF_DATA filebuf = { 0, NULL };
 
 	if (filename == NULL || !strlen(filename) || fmt == NULL)
 		return (KMF_ERR_BAD_PARAMETER);
@@ -2168,7 +2168,7 @@ kmf_set_altname(KMF_X509_EXTENSIONS *extensions,
 {
 	KMF_RETURN ret = KMF_OK;
 	KMF_X509_EXTENSION subjAltName;
-	KMF_DATA dername = { NULL, 0 };
+	KMF_DATA dername = { 0, NULL };
 	BerElement *asn1 = NULL;
 	BerValue *extdata;
 	char *olddata = NULL;

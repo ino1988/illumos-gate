@@ -22,26 +22,26 @@
 # Copyright 2008 Sun Microsystems, Inc.  All rights reserved.
 # Use is subject to license terms.
 #
+# Copyright (c) 2018, Joyent, Inc.
 
 LIBRARY =		libpapi-common.a
 VERS =			.0
 OBJECTS = attribute.o common.o library.o list.o misc.o status.o uri.o
 
 include ../../../Makefile.lib
-include ../../../Makefile.rootfs
-
-ROOTLIBDIR=	$(ROOT)/usr/lib
 
 SRCDIR =	../common
 
 LIBS =			$(DYNLIB)
 
-$(LINTLIB):=	SRCS = $(SRCDIR)/$(LINTSRC)
 
 CFLAGS +=	$(CCVERBOSE)
 CPPFLAGS +=	-I$(SRCDIR)
 
 CERRWARN +=	-_gcc=-Wno-switch
+
+# not linted
+SMATCH=off
 
 MAPFILES =	$(SRCDIR)/mapfile
 
@@ -51,6 +51,5 @@ LDLIBS +=	-lc -lsocket -lnsl
 
 all:	$(LIBS)
 
-lint:	lintcheck
 
 include ../../../Makefile.targ

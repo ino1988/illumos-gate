@@ -25,6 +25,8 @@
  */
 /*
  * Copyright 2012 DEY Storage Systems, Inc.  All rights reserved.
+ * Copyright 2018 Joyent, Inc.
+ * Copyright 2020 OmniOS Community Edition (OmniOSce) Association.
  */
 
 #include <struct_layout.h>
@@ -359,7 +361,7 @@ static const sl_utsname_layout_t utsname_layout = {
 
 
 static const sl_prfdinfo_layout_t prfdinfo_layout = {
-	{ 0,	1088,	0,	0 },		/* sizeof (prfdinfo_t) */
+	{ 0,	1088,	0,	0 },		/* sizeof (prfdinfo_core_t) */
 	{ 0,	4,	0,	0 },		/* pr_fd */
 	{ 4,	4,	0,	0 },		/* pr_mode */
 	{ 8,	4,	0,	0 },		/* pr_uid */
@@ -375,6 +377,33 @@ static const sl_prfdinfo_layout_t prfdinfo_layout = {
 	{ 60,	4,	0,	0 },		/* pr_fdflags */
 	{ 64,	1,	1024,	0 },		/* pr_path[] */
 };
+
+
+static const sl_prsecflags_layout_t prsecflags_layout = {
+	{ 0,	40,	0,	0 },		/* sizeof (prsecflags_t) */
+	{ 0,	4,	0,	0 },		/* pr_version */
+	{ 8,	8,	0,	0 },		/* pr_effective */
+	{ 16,	8,	0,	0 },		/* pr_inherit */
+	{ 24,	8,	0,	0 },		/* pr_lower */
+	{ 32,	8,	0,	0 },		/* pr_upper */
+};
+
+
+static const sl_prlwpname_layout_t prlwpname_layout = {
+	{ 0,	40,	0,	0 },		/* sizeof (prlwpname_t) */
+	{ 0,	8,	0,	0 },		/* pr_lwpid */
+	{ 8,	1,	32,	0 },		/* pr_lwpname[] */
+};
+
+
+static const sl_prupanic_layout_t prupanic_layout = {
+	{ 0,	1032,	0,	0 },		/* sizeof (prupanic_t) */
+	{ 0,	4,	0,	0 },		/* pru_version */
+	{ 4,	4,	0,	0 },		/* pru_flags */
+	{ 8,	1,	1024,	0 },		/* pru_data[] */
+};
+
+
 
 
 static const sl_arch_layout_t layout_sparcv9 = {
@@ -398,6 +427,9 @@ static const sl_arch_layout_t layout_sparcv9 = {
 	&timestruc_layout,
 	&utsname_layout,
 	&prfdinfo_layout,
+	&prsecflags_layout,
+	&prlwpname_layout,
+	&prupanic_layout,
 };
 
 

@@ -24,7 +24,9 @@
  * Use is subject to license terms.
  */
 /*
- * Copyright (c) 2013, Joyent, Inc.  All rights reserved.
+ * Copyright 2018 Joyent, Inc.
+ * Copyright (c) 2014 by Delphix. All rights reserved.
+ * Copyright 2020 Oxide Computer Company
  */
 
 /*
@@ -102,8 +104,10 @@
 #include <stdio_ext.h>
 #include <stdlib.h>
 #include <string.h>
+#include <ctype.h>
 
 #define	PC_FAKE		-1UL			/* illegal pc value unequal 0 */
+#define	PANIC_BUFSIZE	1024
 
 static const char PT_EXEC_PATH[] = "a.out";	/* Default executable */
 static const char PT_CORE_PATH[] = "core";	/* Default core file */
@@ -1301,6 +1305,23 @@ pt_regstatus(uintptr_t addr, uint_t flags, int argc, const mdb_arg_t *argv)
 	return (pt_regs(addr, flags, argc, argv));
 }
 
+static void
+pt_thread_name(mdb_tgt_t *t, mdb_tgt_tid_t tid, char *buf, size_t bufsize)
+{
+	char name[THREAD_NAME_MAX];
+
+	buf[0] = '\0';
+
+	if (t->t_pshandle == NULL ||
+	    Plwp_getname(t->t_pshandle, tid, name, sizeof (name)) != 0 ||
+	    name[0] == '\0') {
+		(void) mdb_snprintf(buf, bufsize, "%lu", tid);
+		return;
+	}
+
+	(void) mdb_snprintf(buf, bufsize, "%lu [%s]", tid, name);
+}
+
 static int
 pt_findstack(uintptr_t tid, uint_t flags, int argc, const mdb_arg_t *argv)
 {
@@ -1309,6 +1330,7 @@ pt_findstack(uintptr_t tid, uint_t flags, int argc, const mdb_arg_t *argv)
 	int showargs = 0;
 	int count;
 	uintptr_t pc, sp;
+	char name[128];
 
 	if (!(flags & DCMD_ADDRSPEC))
 		return (DCMD_USAGE);
@@ -1332,7 +1354,10 @@ pt_findstack(uintptr_t tid, uint_t flags, int argc, const mdb_arg_t *argv)
 #else
 	sp = gregs.gregs[R_SP];
 #endif
-	mdb_printf("stack pointer for thread %p: %p\n", tid, sp);
+
+	pt_thread_name(t, tid, name, sizeof (name));
+
+	mdb_printf("stack pointer for thread %s: %p\n", name, sp);
 	if (pc != 0)
 		mdb_printf("[ %0?lr %a() ]\n", sp, pc);
 
@@ -1388,6 +1413,13 @@ pt_gcore(uintptr_t addr, uint_t flags, int argc, const mdb_arg_t *argv)
 	(void) mdb_snprintf(fname, size, "%s.%d", prefix, (int)pid);
 
 	if (Pgcore(t->t_pshandle, fname, content) != 0) {
+		/*
+		 * Short writes during dumping are specifically described by
+		 * EBADE, just as ZFS uses this otherwise-unused code for
+		 * checksum errors.  Translate to and mdb errno.
+		 */
+		if (errno == EBADE)
+			(void) set_errno(EMDB_SHORTWRITE);
 		mdb_warn("couldn't dump core");
 		return (DCMD_ERR);
 	}
@@ -1544,6 +1576,38 @@ pt_print_reason(const lwpstatus_t *psp)
 	}
 }
 
+static void
+pt_status_dcmd_upanic(prupanic_t *pru)
+{
+	size_t i;
+
+	mdb_printf("process panicked\n");
+	if ((pru->pru_flags & PRUPANIC_FLAG_MSG_ERROR) != 0) {
+		mdb_printf("warning: process upanic message was bad\n");
+		return;
+	}
+
+	if ((pru->pru_flags & PRUPANIC_FLAG_MSG_VALID) == 0)
+		return;
+
+	if ((pru->pru_flags & PRUPANIC_FLAG_MSG_TRUNC) != 0) {
+		mdb_printf("warning: process upanic message truncated\n");
+	}
+
+	mdb_printf("upanic message: ");
+
+	for (i = 0; i < PRUPANIC_BUFLEN; i++) {
+		if (pru->pru_data[i] == '\0')
+			break;
+		if (isascii(pru->pru_data[i]) && isprint(pru->pru_data[i])) {
+			mdb_printf("%c", pru->pru_data[i]);
+		} else {
+			mdb_printf("\\x%02x", pru->pru_data[i]);
+		}
+	}
+	mdb_printf("\n");
+}
+
 /*ARGSUSED*/
 static int
 pt_status_dcmd(uintptr_t addr, uint_t flags, int argc, const mdb_arg_t *argv)
@@ -1559,8 +1623,9 @@ pt_status_dcmd(uintptr_t addr, uint_t flags, int argc, const mdb_arg_t *argv)
 		int state;
 		GElf_Sym sym;
 		uintptr_t panicstr;
-		char panicbuf[128];
+		char *panicbuf = mdb_alloc(PANIC_BUFSIZE, UM_SLEEP);
 		const siginfo_t *sip = &(psp->pr_lwp.pr_info);
+		prupanic_t *pru = NULL;
 
 		char execname[MAXPATHLEN], buf[BUFSIZ];
 		char signame[SIG2STR_MAX + 4]; /* enough for SIG+name+\0 */
@@ -1666,12 +1731,19 @@ pt_status_dcmd(uintptr_t addr, uint_t flags, int argc, const mdb_arg_t *argv)
 		case PS_DEAD:
 			if (cursig == 0 && WIFSIGNALED(pi.pr_wstat))
 				cursig = WTERMSIG(pi.pr_wstat);
+
+			(void) Pupanic(P, &pru);
+
 			/*
-			 * We can only use pr_wstat == 0 as a test for gcore if
-			 * an NT_PRCRED note is present; these features were
-			 * added at the same time in Solaris 8.
+			 * Test for upanic first. We can only use pr_wstat == 0
+			 * as a test for gcore if an NT_PRCRED note is present;
+			 * these features were added at the same time in Solaris
+			 * 8.
 			 */
-			if (pi.pr_wstat == 0 && Pstate(P) == PS_DEAD &&
+			if (pru != NULL) {
+				pt_status_dcmd_upanic(pru);
+				Pupanic_free(pru);
+			} else if (pi.pr_wstat == 0 && Pstate(P) == PS_DEAD &&
 			    Pcred(P, &cred, 1) == 0) {
 				mdb_printf("process core file generated "
 				    "with gcore(1)\n");
@@ -1716,11 +1788,10 @@ pt_status_dcmd(uintptr_t addr, uint_t flags, int argc, const mdb_arg_t *argv)
 			    Pread(t->t_pshandle, &panicstr, sizeof (panicstr),
 			    sym.st_value) == sizeof (panicstr) &&
 			    Pread_string(t->t_pshandle, panicbuf,
-			    sizeof (panicbuf), panicstr) > 0) {
-				mdb_printf("panic message: %s",
+			    PANIC_BUFSIZE, panicstr) > 0) {
+				mdb_printf("libc panic message: %s",
 				    panicbuf);
 			}
-
 
 			break;
 
@@ -1731,6 +1802,7 @@ pt_status_dcmd(uintptr_t addr, uint_t flags, int argc, const mdb_arg_t *argv)
 		default:
 			mdb_printf("unknown libproc Pstate: %d\n", Pstate(P));
 		}
+		mdb_free(panicbuf, PANIC_BUFSIZE);
 
 	} else if (pt->p_file != NULL) {
 		const GElf_Ehdr *ehp = &pt->p_file->gf_ehdr;
@@ -1959,8 +2031,7 @@ pt_env_set(pt_data_t *pt, const char *nameval)
 	(void) mdb_nv_insert(&pt->p_env, name, NULL, (uintptr_t)val,
 	    MDB_NV_EXTNAME);
 
-	if (equals)
-		*equals = '=';
+	*equals = '=';
 }
 
 /*
@@ -2102,7 +2173,7 @@ static const mdb_dcmd_t pt_dcmds[] = {
 	{ "$i", NULL, "print signals that are ignored", pt_ignored },
 	{ "$l", NULL, "print the representative thread's lwp id", pt_lwpid },
 	{ "$L", NULL, "print list of the active lwp ids", pt_lwpids },
-	{ "$r", "?", "print general-purpose registers", pt_regs },
+	{ "$r", "?[-u]", "print general-purpose registers", pt_regs },
 	{ "$x", "?", "print floating point registers", pt_fpregs },
 	{ "$X", "?", "print floating point registers", pt_fpregs },
 	{ "$y", "?", "print floating point registers", pt_fpregs },
@@ -2122,7 +2193,7 @@ static const mdb_dcmd_t pt_dcmds[] = {
 	{ "kill", NULL, "forcibly kill and release target", pt_kill },
 	{ "release", "[-a]",
 	    "release the previously attached process", pt_detach },
-	{ "regs", "?", "print general-purpose registers", pt_regs },
+	{ "regs", "?[-u]", "print general-purpose registers", pt_regs },
 	{ "fpregs", "?[-dqs]", "print floating point registers", pt_fpregs },
 	{ "setenv", "name=value", "set an environment variable", pt_setenv },
 	{ "stack", "?[cnt]", "print stack backtrace", pt_stack },
@@ -3140,7 +3211,7 @@ pt_object_iter(mdb_tgt_t *t, mdb_tgt_map_f *func, void *private)
 		(void) strncpy(mp->map_name, s, MDB_TGT_MAPSZ);
 		mp->map_name[MDB_TGT_MAPSZ - 1] = '\0';
 		mp->map_flags = MDB_TGT_MAP_R | MDB_TGT_MAP_X;
-		mp->map_base = NULL;
+		mp->map_base = 0;
 		mp->map_size = 0;
 
 		if (func(private, mp, s) != 0)
@@ -3953,7 +4024,7 @@ pt_brkpt_ctor(mdb_tgt_t *t, mdb_sespec_t *sep, void *args)
 
 	ptb = mdb_alloc(sizeof (pt_brkpt_t), UM_SLEEP);
 	ptb->ptb_addr = pta->pta_addr;
-	ptb->ptb_instr = NULL;
+	ptb->ptb_instr = 0;
 	sep->se_data = ptb;
 
 	return (0);
@@ -3971,7 +4042,7 @@ static char *
 pt_brkpt_info(mdb_tgt_t *t, mdb_sespec_t *sep, mdb_vespec_t *vep,
     mdb_tgt_spec_desc_t *sp, char *buf, size_t nbytes)
 {
-	uintptr_t addr = NULL;
+	uintptr_t addr = 0;
 
 	if (vep != NULL) {
 		pt_bparg_t *pta = vep->ve_args;
@@ -4355,7 +4426,7 @@ pt_add_sbrkpt(mdb_tgt_t *t, const char *sym,
 
 	pta = mdb_alloc(sizeof (pt_bparg_t), UM_SLEEP);
 	pta->pta_symbol = strdup(sym);
-	pta->pta_addr = NULL;
+	pta->pta_addr = 0;
 
 	return (mdb_tgt_vespec_insert(t, &proc_brkpt_ops, spec_flags,
 	    func, data, pta, pt_bparg_dtor));
@@ -4651,27 +4722,27 @@ pt_auxv(mdb_tgt_t *t, const auxv_t **auxvp)
 
 static const mdb_tgt_ops_t proc_ops = {
 	pt_setflags,				/* t_setflags */
-	(int (*)()) mdb_tgt_notsup,		/* t_setcontext */
+	(int (*)())(uintptr_t)mdb_tgt_notsup,	/* t_setcontext */
 	pt_activate,				/* t_activate */
 	pt_deactivate,				/* t_deactivate */
 	pt_periodic,				/* t_periodic */
 	pt_destroy,				/* t_destroy */
 	pt_name,				/* t_name */
-	(const char *(*)()) mdb_conf_isa,	/* t_isa */
+	(const char *(*)())mdb_conf_isa,	/* t_isa */
 	pt_platform,				/* t_platform */
 	pt_uname,				/* t_uname */
 	pt_dmodel,				/* t_dmodel */
-	(ssize_t (*)()) mdb_tgt_notsup,		/* t_aread */
-	(ssize_t (*)()) mdb_tgt_notsup,		/* t_awrite */
+	(ssize_t (*)())mdb_tgt_notsup,		/* t_aread */
+	(ssize_t (*)())mdb_tgt_notsup,		/* t_awrite */
 	pt_vread,				/* t_vread */
 	pt_vwrite,				/* t_vwrite */
-	(ssize_t (*)()) mdb_tgt_notsup,		/* t_pread */
-	(ssize_t (*)()) mdb_tgt_notsup,		/* t_pwrite */
+	(ssize_t (*)())mdb_tgt_notsup,		/* t_pread */
+	(ssize_t (*)())mdb_tgt_notsup,		/* t_pwrite */
 	pt_fread,				/* t_fread */
 	pt_fwrite,				/* t_fwrite */
-	(ssize_t (*)()) mdb_tgt_notsup,		/* t_ioread */
-	(ssize_t (*)()) mdb_tgt_notsup,		/* t_iowrite */
-	(int (*)()) mdb_tgt_notsup,		/* t_vtop */
+	(ssize_t (*)())mdb_tgt_notsup,		/* t_ioread */
+	(ssize_t (*)())mdb_tgt_notsup,		/* t_iowrite */
+	(int (*)())(uintptr_t)mdb_tgt_notsup,	/* t_vtop */
 	pt_lookup_by_name,			/* t_lookup_by_name */
 	pt_lookup_by_addr,			/* t_lookup_by_addr */
 	pt_symbol_iter,				/* t_symbol_iter */
@@ -4685,15 +4756,14 @@ static const mdb_tgt_ops_t proc_ops = {
 	pt_run,					/* t_run */
 	pt_step,				/* t_step */
 	pt_step_out,				/* t_step_out */
-	(int (*)()) mdb_tgt_notsup,		/* t_step_branch */
 	pt_next,				/* t_next */
 	pt_continue,				/* t_cont */
 	pt_signal,				/* t_signal */
 	pt_add_vbrkpt,				/* t_add_vbrkpt */
 	pt_add_sbrkpt,				/* t_add_sbrkpt */
-	(int (*)()) mdb_tgt_null,		/* t_add_pwapt */
+	(int (*)())(uintptr_t)mdb_tgt_null,	/* t_add_pwapt */
 	pt_add_vwapt,				/* t_add_vwapt */
-	(int (*)()) mdb_tgt_null,		/* t_add_iowapt */
+	(int (*)())(uintptr_t)mdb_tgt_null,	/* t_add_iowapt */
 	pt_add_sysenter,			/* t_add_sysenter */
 	pt_add_sysexit,				/* t_add_sysexit */
 	pt_add_signal,				/* t_add_signal */
@@ -4819,8 +4889,8 @@ pt_lwp_setfpregs(mdb_tgt_t *t, void *tap, mdb_tgt_tid_t tid,
 }
 
 static const pt_ptl_ops_t proc_lwp_ops = {
-	(int (*)()) mdb_tgt_nop,
-	(void (*)()) mdb_tgt_nop,
+	(int (*)())(uintptr_t)mdb_tgt_nop,
+	(void (*)())(uintptr_t)mdb_tgt_nop,
 	pt_lwp_tid,
 	pt_lwp_iter,
 	pt_lwp_getregs,
@@ -5069,7 +5139,7 @@ pt_xd_auxv(mdb_tgt_t *t, void *buf, size_t nbytes)
 
 	if (P != NULL && (auxv = Pgetauxvec(P)) != NULL &&
 	    auxv->a_type != AT_NULL) {
-		for (auxp = auxv, auxn = 1; auxp->a_type != NULL; auxp++)
+		for (auxp = auxv, auxn = 1; auxp->a_type != 0; auxp++)
 			auxn++;
 	}
 

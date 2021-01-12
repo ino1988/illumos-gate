@@ -136,7 +136,7 @@ static int	xenconsgetchar(cons_polledio_arg_t);
 static boolean_t	xenconsischar(cons_polledio_arg_t);
 
 static uint_t	xenconsintr(caddr_t);
-static uint_t	xenconsintr_priv(caddr_t);
+static uint_t	xenconsintr_priv(caddr_t, caddr_t);
 /*PRINTFLIKE2*/
 static void	xenconserror(int, const char *, ...) __KPRINTFLIKE(2);
 static void	xencons_soft_state_free(struct xencons *);
@@ -162,7 +162,7 @@ xenconssetup_avintr(struct xencons *xcp, int attach)
 
 	if (attach) {
 		/* Setup our interrupt binding. */
-		(void) add_avintr(NULL, IPL_CONS, (avfunc)xenconsintr_priv,
+		(void) add_avintr(NULL, IPL_CONS, xenconsintr_priv,
 		    "xencons", xcp->console_irq, (caddr_t)xcp, NULL, NULL,
 		    xcp->dip);
 	} else {
@@ -172,7 +172,7 @@ xenconssetup_avintr(struct xencons *xcp, int attach)
 		 * service routine is not currently executing and that it won't
 		 * be invoked again.
 		 */
-		(void) rem_avintr(NULL, IPL_CONS, (avfunc)xenconsintr_priv,
+		(void) rem_avintr(NULL, IPL_CONS, xenconsintr_priv,
 		    xcp->console_irq);
 	}
 
@@ -352,7 +352,7 @@ xenconsattach(dev_info_t *devi, ddi_attach_cmd_t cmd)
 
 	/* create minor device node for this device */
 	ret = ddi_create_minor_node(devi, "xencons", S_IFCHR, instance,
-	    DDI_NT_SERIAL, NULL);
+	    DDI_NT_SERIAL, 0);
 	if (ret != DDI_SUCCESS) {
 		ddi_remove_minor_node(devi, NULL);
 		xencons_soft_state_free(xcp);
@@ -369,7 +369,7 @@ xenconsattach(dev_info_t *devi, ddi_attach_cmd_t cmd)
 /*ARGSUSED*/
 static int
 xenconsinfo(dev_info_t *dip, ddi_info_cmd_t infocmd, void *arg,
-	void **result)
+    void **result)
 {
 	dev_t dev = (dev_t)arg;
 	int instance, error;
@@ -547,14 +547,18 @@ xencons_rxint(struct xencons *xcp)
 loop:
 	mutex_enter(&xcp->excl);
 
+	instance = xcp->unit;
+
 	/* sanity check if we should bail */
 	if (xencons_console == NULL) {
 		mutex_exit(&xcp->excl);
+		DEBUGCONT1(XENCONS_DEBUG_PROCS,
+		    "xencons%d_rxint: xencons_console is NULL\n",
+		    instance);
 		goto out;
 	}
 
 	async = xcp->priv;
-	instance = xcp->unit;
 	ifp = xcp->ifp;
 	tp = &async->async_ttycommon;
 	q = tp->t_readq;
@@ -744,7 +748,7 @@ xenconsintr(caddr_t arg)
  * Console interrupt routine for priviliged domains
  */
 static uint_t
-xenconsintr_priv(caddr_t arg)
+xenconsintr_priv(caddr_t arg, caddr_t arg1 __unused)
 {
 	struct xencons *xcp = (struct xencons *)arg;
 

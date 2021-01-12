@@ -12,6 +12,7 @@
 
 #
 # Copyright 2010 Nexenta Systems, Inc.  All rights reserved.
+# Copyright 2016 Josef 'Jeff' Sipek <jeffpc@josefsipek.net>
 #
 
 #
@@ -106,11 +107,14 @@ foreach $a (@ARGV) {
 	}
 }
 
+# sort files to get a stable ordering to aid wsdiff(1onbld)
+@FILES = sort @FILES;
+
 foreach $a (@FILES) {
 	dofile($a);
 }
 
-foreach my $lic (keys %LICENSE) {
+foreach my $lic (sort keys %LICENSE) {
 	my @files = @{$LICENSE{$lic}};
 	print "\nThe following files from the C library:\n";
 	foreach my $f (@files) {

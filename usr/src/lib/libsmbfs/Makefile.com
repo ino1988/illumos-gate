@@ -22,7 +22,11 @@
 #
 # Copyright 2009 Sun Microsystems, Inc.  All rights reserved.
 # Use is subject to license terms.
+# Copyright 2015 Igor Kozhukhov <ikozhukhov@gmail.com>
 #
+# Copyright 2018 Nexenta Systems, Inc.  All rights reserved.
+#
+# Copyright (c) 2018, Joyent, Inc.
 
 #
 # lib/libsmbfs/Makefile.com
@@ -53,34 +57,28 @@ OBJ_LIB=\
 	nb.o \
 	nb_name.o \
 	nb_net.o \
-	nb_ssn.o \
 	nbns_rq.o \
-	negprot.o \
-	netshareenum.o \
 	newvc.o \
 	nls.o \
 	ntlm.o \
 	ntlmssp.o \
 	print.o \
-	rap.o \
 	rcfile.o \
-	rq.o \
-	signing.o \
+	rc_scf.o \
 	spnego.o \
 	spnegoparse.o \
-	ssnsetup.o \
 	ssp.o \
 	subr.o \
 	ui-sun.o \
 	utf_str.o
 
-OBJ_CMN= smbfs_ntacl.o 
+OBJ_CMN= smbfs_ntacl.o
 
 OBJECTS= $(OBJ_LIB) $(OBJ_CMN)
 
 include $(SRC)/lib/Makefile.lib
 
-LIBS =		$(DYNLIB) $(LINTLIB)
+LIBS =		$(DYNLIB)
 
 SRCDIR=		../smb
 CMNDIR=		$(SRC)/common/smbclnt
@@ -88,45 +86,32 @@ CMNDIR=		$(SRC)/common/smbclnt
 SRCS=		$(OBJ_LIB:%.o=$(SRCDIR)/%.c) \
 		$(OBJ_CMN:%.o=$(CMNDIR)/%.c)
 
-$(LINTLIB) :=	SRCS = $(SRCDIR)/$(LINTSRC)
 
-C99MODE=	$(C99_ENABLE)
+CSTD=	$(CSTD_GNU99)
 
-LDLIBS += -lsocket -lnsl -lc -lmd -lpkcs11 -lkrb5 -lsec -lidmap
+LDLIBS += -lsocket -lnsl -lc -lmd -lpkcs11 -lkrb5 -lsec -lidmap -lscf -luuid
 
 # normal warnings...
-CFLAGS	+=	$(CCVERBOSE) 
+CFLAGS	+=	$(CCVERBOSE)
 
-CERRWARN +=	-_gcc=-Wno-uninitialized
+CERRWARN +=	$(CNOWARN_UNINIT)
 CERRWARN +=	-_gcc=-Wno-unused-variable
 
+# not linted
+SMATCH=off
+
 CPPFLAGS += -D__EXTENSIONS__ -D_REENTRANT -DMIA \
-	-I$(SRCDIR) -I.. \
+	-I$(SRCDIR) -I.. -I../netsmb \
 	-I$(SRC)/uts/common \
 	-I$(SRC)/common/smbclnt
 
 # Debugging
 ${NOT_RELEASE_BUILD} CPPFLAGS += -DDEBUG
 
-# uncomment these for dbx debugging
-#COPTFLAG = -g
-#CTF_FLAGS =
-#CTFCONVERT_O=
-#CTFMERGE_LIB=
-
-# Filter out the less important lint.
-# See lgrep.awk
-LGREP =	nawk -f $(SRCDIR)/lgrep.awk
-LTAIL	+=	2>&1 | $(LGREP)
-
 all:	$(LIBS)
 
-lint:	lintcheck_t
 
 include ../../Makefile.targ
-
-lintcheck_t: $$(SRCS)
-	$(LINT.c) $(LINTCHECKFLAGS) $(SRCS) $(LDLIBS) $(LTAIL)
 
 objs/%.o pics/%.o: $(CMNDIR)/%.c
 	$(COMPILE.c) -o $@ $<

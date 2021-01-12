@@ -38,12 +38,8 @@ UTSBASE	= ../..
 #
 MODULE		= wc
 OBJECTS		= $(WC_OBJS:%=$(OBJS_DIR)/%)
-LINTS		= $(WC_OBJS:%.o=$(LINTS_DIR)/%.ln)
 ROOTMODULE	= $(ROOT_DRV_DIR)/$(MODULE)
 CONF_SRCDIR	= $(UTSBASE)/sun/io
-WARLOCK_OUT	= $(WC_OBJS:%.o=%.ll)
-WARLOCK_OK	= $(MODULE).ok
-WLCMD_DIR	= $(UTSBASE)/common/io/warlock
 
 #
 #	Include common rules.
@@ -54,7 +50,6 @@ include $(UTSBASE)/sparc/Makefile.sparc
 #	Define targets
 #
 ALL_TARGET	= $(BINARY) $(SRC_CONFILE)
-LINT_TARGET	= $(MODULE).lint
 INSTALL_TARGET	= $(BINARY) $(ROOTMODULE) $(ROOT_CONFFILE)
 
 #
@@ -64,12 +59,14 @@ MODSTUBS_DIR	 = $(OBJS_DIR)
 $(MODSTUBS_O)	:= AS_CPPFLAGS += -DWC_MODULE
 CLEANFILES	+= $(MODSTUBS_O)
 
-CERRWARN	+= -_gcc=-Wno-uninitialized
+#
+# For now, disable these warnings; maintainers should endeavor
+# to investigate and remove these for maximum coverage.
+# Please do not carry these forward to new Makefiles.
+#
+CFLAGS		+= $(CCVERBOSE)
+CERRWARN	+= $(CNOWARN_UNINIT)
 
-#
-# lint pass one enforcement
-#
-CFLAGS += $(CCVERBOSE)
 LDFLAGS += -dy -Nmisc/tem -Ndacf/consconfig_dacf
 
 #
@@ -85,49 +82,9 @@ clean:		$(CLEAN_DEPS)
 
 clobber:	$(CLOBBER_DEPS)
 
-lint:		$(LINT_DEPS)
-
-modlintlib:	$(MODLINTLIB_DEPS)
-
-clean.lint:	$(CLEAN_LINT_DEPS)
-
 install:	$(INSTALL_DEPS)
 
 #
 #	Include common targets.
 #
 include $(UTSBASE)/sparc/Makefile.targ
-
-#
-#	Defines for local commands
-#
-TEST		= test
-WLCC		= wlcc
-TOUCH		= touch
-WARLOCK		= warlock
-
-#
-#	warlock targets
-#
-
-#
-# vcons_conf.c is compiled to genunix, add it to WARLOCK_OUT
-#
-WARLOCK_OUT	+= vcons_conf.ll
-
-warlock:	$(WARLOCK_OUT) sdev_vtops.file  warlock_ddi.files
-	$(WARLOCK) -c $(WLCMD_DIR)/wc.wlcmd $(WARLOCK_OUT) \
-	-l ../../sparc/warlock/ddi_dki_impl.ll
-	$(WARLOCK) -c $(WLCMD_DIR)/wc_devfs.wlcmd sdev_vtops.ll vcons_conf.ll \
-	-l ../../sparc/warlock/ddi_dki_impl.ll
-	$(TOUCH) $(WARLOCK_OK)
-
-%.ll:	$(UTSBASE)/common/io/%.c
-	$(WLCC) $(CPPFLAGS) -DDEBUG -o $@ $<
-
-sdev_vtops.file:
-	$(WLCC) $(CPPFLAGS) -DDEBUG -o sdev_vtops.ll -c \
-	../../common/fs/dev/sdev_vtops.c
-
-warlock_ddi.files:
-	@cd ../../sparc/warlock; pwd; $(MAKE) warlock

@@ -106,7 +106,7 @@ audit_init_module()
 
 	/* generate a system-booted audit record */
 	au_write((caddr_t *)&rp, au_to_text("booting kernel"));
-	audit_async_finish((caddr_t *)&rp, AUE_SYSTEMBOOT, NULL,
+	audit_async_finish((caddr_t *)&rp, AUE_SYSTEMBOOT, 0,
 	    &(p0.p_user.u_start));
 }
 
@@ -175,7 +175,7 @@ audit_start(
 
 	/* get basic event for system call */
 	tad->tad_event = audit_s2e[scid].au_event;
-	if (audit_s2e[scid].au_init != (au_event_t)AUE_NULL) {
+	if (audit_s2e[scid].au_init != (au_event_t (*)(au_event_t))NULL) {
 		/* get specific event */
 		tad->tad_event = (*audit_s2e[scid].au_init)(tad->tad_event);
 	}

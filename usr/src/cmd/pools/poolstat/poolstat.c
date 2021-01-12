@@ -35,6 +35,7 @@
 #include <ctype.h>
 #include <limits.h>
 #include <errno.h>
+#include <stddef.h>
 
 #include <pool.h>
 #include "utils.h"
@@ -46,8 +47,6 @@
 #define	TEXT_DOMAIN	"SYS_TEST"
 #endif
 
-/* calculate offset of a particular element in a structure	*/
-#define	offsetof(s, m)  ((size_t)(&(((s *)0)->m)))
 #define	addrof(s)  ((char **)&(s))
 
 /* verify if a field is printable in respect of the current option flags */
@@ -160,6 +159,8 @@ static void sa_update(statistic_bag_t *, int);
 
 /* statistics printing function	*/
 static void prt_pool_stats(poolstat_list_element_t *);
+
+static void usage(void) __NORETURN;
 
 static void
 usage(void)

@@ -24,6 +24,7 @@
  *	  All Rights Reserved
  *
  * Copyright (c) 1989, 2010, Oracle and/or its affiliates. All rights reserved.
+ * Copyright 2018, Joyent, Inc.
  */
 
 /* Get definitions for the relocation types supported. */
@@ -281,8 +282,8 @@ print_rawdata(unsigned char *p_sec, size_t size)
  */
 static void
 print_rela(Elf *elf_file, SCNTAB *p_scns, Elf_Data *rdata, Elf_Data *sym_data,
-	GElf_Ehdr * p_ehdr, size_t reloc_size, size_t sym_size, char *filename,
-	SCNTAB *reloc_symtab)
+    GElf_Ehdr * p_ehdr, size_t reloc_size, size_t sym_size, char *filename,
+    SCNTAB *reloc_symtab)
 {
 	GElf_Rela rela;
 	GElf_Sym sym;
@@ -386,8 +387,8 @@ print_rela(Elf *elf_file, SCNTAB *p_scns, Elf_Data *rdata, Elf_Data *sym_data,
  */
 static void
 print_rel(Elf *elf_file, SCNTAB *p_scns, Elf_Data *rdata, Elf_Data *sym_data,
-	GElf_Ehdr *p_ehdr, size_t reloc_size, size_t sym_size, char *filename,
-	SCNTAB *reloc_symtab)
+    GElf_Ehdr *p_ehdr, size_t reloc_size, size_t sym_size, char *filename,
+    SCNTAB *reloc_symtab)
 {
 	GElf_Rel rel;
 	GElf_Sym sym;
@@ -477,28 +478,32 @@ static char *
 demangled_name(char *s)
 {
 	static char	*buf = NULL;
-	const char	*dn;
+	size_t		buflen = 0;
+	char		*dn;
 	size_t		len;
 
-	dn = conv_demangle_name(s);
+	dn = (char *)conv_demangle_name(s);
 
 	/*
 	 * If not demangled, just return the symbol name
 	 */
-	if (strcmp(s, dn) == 0)
+	if (dn == s)
 		return (s);
+
+	len = strlen(dn) + strlen(s) + 4;
+
+	if (buflen < len) {
+		free(buf);
+		if ((buf = malloc(len)) == NULL)
+			return (s);
+		buflen = len;
+	}
 
 	/*
 	 * Demangled. Format it
 	 */
-	if (buf != NULL)
-		free(buf);
-
-	len = strlen(dn) + strlen(s) + 4;
-	if ((buf = malloc(len)) == NULL)
-		return (s);
-
-	(void) snprintf(buf, len, "%s\t[%s]", dn, s);
+	(void) snprintf(buf, buflen, "%s\t[%s]", dn, s);
+	free(dn);
 	return (buf);
 }
 
@@ -513,7 +518,7 @@ demangled_name(char *s)
  */
 static void
 print_symtab(Elf *elf_file, SCNTAB *p_symtab, Elf_Data *sym_data,
-	long range, int index)
+    long range, int index)
 {
 	GElf_Sym sym;
 	int adj = 0;		/* field adjustment for elf64 */
@@ -526,7 +531,7 @@ print_symtab(Elf *elf_file, SCNTAB *p_symtab, Elf_Data *sym_data,
 		adj = 8;
 
 	while (range > 0) {
-		char		*sym_name = (char *)0;
+		char		*sym_name = NULL;
 		int		type, bind;
 		int		specsec;
 		unsigned int	shndx;
@@ -759,7 +764,7 @@ check_range(int low, int hi, size_t bound, char *filename)
  */
 static void
 dump_reloc_table(Elf *elf_file, GElf_Ehdr *p_ehdr,
-	SCNTAB *p_scns, int num_scns, char *filename)
+    SCNTAB *p_scns, int num_scns, char *filename)
 {
 	Elf_Data *rel_data;
 	Elf_Data *sym_data;
@@ -827,12 +832,6 @@ dump_reloc_table(Elf *elf_file, GElf_Ehdr *p_ehdr,
 		return;
 	}
 	sym_size = sym_data->d_size;
-
-	if (p_scns == NULL) {
-		(void) fprintf(stderr,
-		"%s: %s: no section table data\n", prog_name, filename);
-		return;
-	}
 
 	if (p_scns->p_shdr.sh_type == SHT_RELA) {
 		if (!n_flag && r_flag)
@@ -1225,6 +1224,8 @@ dump_dynamic(Elf *elf_file, SCNTAB *p_scns, int num_scns, char *filename)
 			case DT_SUNW_STRPAD:
 			case DT_SUNW_CAPCHAINENT:
 			case DT_SUNW_CAPCHAINSZ:
+			case DT_SUNW_ASLR:
+			case DT_SUNW_KMOD:
 				(void) printf(pdyn_Fmtptr,
 				    EC_XWORD(p_dyn.d_un.d_val));
 				break;
@@ -1464,7 +1465,7 @@ dump_elf_header(Elf *elf_file, char *filename, GElf_Ehdr * elf_head_p)
  */
 static void
 print_section(Elf *elf_file,
-	GElf_Ehdr *p_ehdr, SCNTAB *p, int num_scns, char *filename)
+    GElf_Ehdr *p_ehdr, SCNTAB *p, int num_scns, char *filename)
 {
 	unsigned char    *p_sec;
 	int	i;
@@ -1531,7 +1532,7 @@ print_section(Elf *elf_file,
  */
 static void
 dump_section(Elf *elf_file,
-	GElf_Ehdr *p_ehdr, SCNTAB *s, int num_scns, char *filename)
+    GElf_Ehdr *p_ehdr, SCNTAB *s, int num_scns, char *filename)
 {
 	SCNTAB *n_range, *d_range; /* for use with -n and -d modifiers */
 	int i;
@@ -1740,7 +1741,7 @@ dump_section_table(Elf *elf_file, GElf_Ehdr *elf_head_p, char *filename)
  */
 static struct stab_list_s *
 load_arstring_table(struct stab_list_s *STabList,
-	int fd, Elf *elf_file, Elf_Arhdr *p_ar, char *filename)
+    int fd, Elf *elf_file, Elf_Arhdr *p_ar, char *filename)
 {
 	off_t here;
 	struct stab_list_s *STL_entry, *STL_next;

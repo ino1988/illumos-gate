@@ -23,10 +23,7 @@
 #
 # uts/intel/mr_sas/Makefile
 #
-#	This makefile drives the production of the mr_sas driver kernel module.
-#
-#	intel implementation architecture dependent
-#
+# Copyright (c) 2018, Joyent, Inc.
 
 #
 #	Path to the base of the uts directory tree (usually /usr/src/uts).
@@ -38,7 +35,6 @@ UTSBASE	= ../..
 #
 MODULE		= mr_sas
 OBJECTS		= $(MR_SAS_OBJS:%=$(OBJS_DIR)/%)
-LINTS		= $(MR_SAS_OBJS:%.o=$(LINTS_DIR)/%.ln)
 ROOTMODULE	= $(ROOT_DRV_DIR)/$(MODULE)
 CONF_SRCDIR     = $(UTSBASE)/common/io/mr_sas
 
@@ -51,17 +47,19 @@ include $(UTSBASE)/intel/Makefile.intel
 #	Define targets
 #
 ALL_TARGET	= $(BINARY) $(CONFMOD)
-LINT_TARGET	= $(MODULE).lint
 INSTALL_TARGET	= $(BINARY) $(ROOTMODULE) $(ROOT_CONFFILE)
 
 #
-# 	Kernel Module Dependencies
+#	Kernel Module Dependencies
 #
 LDFLAGS		+= -dy -Nmisc/scsi
 
 CERRWARN	+= -_gcc=-Wno-unused-label
 CERRWARN	+= -_gcc=-Wno-switch
-CERRWARN	+= -_gcc=-Wno-uninitialized
+CERRWARN	+= $(CNOWARN_UNINIT)
+
+# needs work
+SMATCH=off
 
 #
 #	Default build targets.
@@ -75,12 +73,6 @@ all:		$(ALL_DEPS)
 clean:		$(CLEAN_DEPS)
 
 clobber:	$(CLOBBER_DEPS)
-
-lint:		$(LINT_DEPS)
-
-modlintlib:	$(MODLINTLIB_DEPS)
-
-clean.lint:	$(CLEAN_LINT_DEPS)
 
 install:	$(INSTALL_DEPS)
 

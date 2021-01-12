@@ -22,7 +22,7 @@
 # Copyright 2007 Sun Microsystems, Inc.  All rights reserved.
 # Use is subject to license terms.
 #
-#ident	"%Z%%M%	%I%	%E% SMI"
+# Copyright (c) 2018, Joyent, Inc.
 
 LIBRARY=	libdiskstatus.a
 VERS=		.1
@@ -36,7 +36,7 @@ OBJECTS=	libdiskstatus.o \
 include ../../../Makefile.lib
 include ../../Makefile.lib
 
-LIBS=		$(DYNLIB) $(LINTLIB)
+LIBS=		$(DYNLIB)
 
 SRCDIR=		../common
 
@@ -44,13 +44,12 @@ INCS +=		-I$(SRCDIR)
 LDLIBS +=	-lc -lnvpair
 CPPFLAGS +=	$(INCS)
 
-$(LINTLIB) := SRCS=	$(SRCDIR)/$(LINTSRC)
+# not linted
+SMATCH=off
 
 .KEEP_STATE:
 
 all: $(LIBS)
-
-lint: lintcheck
 
 include ../../../Makefile.targ
 include ../../Makefile.targ

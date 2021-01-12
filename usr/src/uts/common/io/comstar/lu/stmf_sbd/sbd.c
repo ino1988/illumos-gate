@@ -21,11 +21,12 @@
 
 /*
  * Copyright (c) 2008, 2010, Oracle and/or its affiliates. All rights reserved.
- * Copyright 2013 Nexenta Systems, Inc. All rights reserved.
+ * Copyright 2017 Nexenta Systems, Inc. All rights reserved.
  * Copyright (c) 2013 by Delphix. All rights reserved.
  */
 
 #include <sys/conf.h>
+#include <sys/list.h>
 #include <sys/file.h>
 #include <sys/ddi.h>
 #include <sys/sunddi.h>
@@ -55,6 +56,10 @@
 extern sbd_status_t sbd_pgr_meta_init(sbd_lu_t *sl);
 extern sbd_status_t sbd_pgr_meta_load(sbd_lu_t *sl);
 extern void sbd_pgr_reset(sbd_lu_t *sl);
+extern uint8_t HardwareAcceleratedLocking;
+extern uint8_t HardwareAcceleratedInit;
+extern uint8_t HardwareAcceleratedMove;
+extern uint8_t sbd_unmap_enable;
 
 static int sbd_getinfo(dev_info_t *dip, ddi_info_cmd_t cmd, void *arg,
     void **result);
@@ -108,6 +113,7 @@ static sbd_lu_t		*sbd_lu_list = NULL;
 static kmutex_t		sbd_lock;
 static dev_info_t	*sbd_dip;
 static uint32_t		sbd_lu_count = 0;
+uint8_t sbd_enable_unmap_sync = 0;
 
 /* Global property settings for the logical unit */
 char sbd_vendor_id[]	= "SUN     ";
@@ -154,7 +160,7 @@ static struct dev_ops sbd_ops = {
 	NULL			/* power */
 };
 
-#define	SBD_NAME	"COMSTAR SBD"
+#define	SBD_NAME	"COMSTAR SBD+ "
 
 static struct modldrv modldrv = {
 	&mod_driverops,
@@ -193,6 +199,14 @@ _init(void)
 	}
 	mutex_init(&sbd_lock, NULL, MUTEX_DRIVER, NULL);
 	rw_init(&sbd_global_prop_lock, NULL, RW_DRIVER, NULL);
+
+	if (HardwareAcceleratedLocking == 0)
+		cmn_err(CE_NOTE, "HardwareAcceleratedLocking Disabled");
+	if (HardwareAcceleratedMove == 0)
+		cmn_err(CE_NOTE, "HardwareAcceleratedMove  Disabled");
+	if (HardwareAcceleratedInit == 0)
+		cmn_err(CE_NOTE, "HardwareAcceleratedInit  Disabled");
+
 	return (0);
 }
 
@@ -271,6 +285,8 @@ sbd_getinfo(dev_info_t *dip, ddi_info_cmd_t cmd, void *arg, void **result)
 static int
 sbd_attach(dev_info_t *dip, ddi_attach_cmd_t cmd)
 {
+	char	*prop;
+
 	switch (cmd) {
 	case DDI_ATTACH:
 		sbd_dip = dip;
@@ -280,6 +296,23 @@ sbd_attach(dev_info_t *dip, ddi_attach_cmd_t cmd)
 			break;
 		}
 		ddi_report_dev(dip);
+
+		if (ddi_prop_lookup_string(DDI_DEV_T_ANY, dip,
+		    DDI_PROP_DONTPASS, "vendor-id", &prop) == DDI_SUCCESS) {
+			(void) snprintf(sbd_vendor_id, 9, "%s%8s", prop, "");
+			ddi_prop_free(prop);
+		}
+		if (ddi_prop_lookup_string(DDI_DEV_T_ANY, dip,
+		    DDI_PROP_DONTPASS, "product-id", &prop) == DDI_SUCCESS) {
+			(void) snprintf(sbd_product_id, 17, "%s%16s", prop, "");
+			ddi_prop_free(prop);
+		}
+		if (ddi_prop_lookup_string(DDI_DEV_T_ANY, dip,
+		    DDI_PROP_DONTPASS, "revision", &prop) == DDI_SUCCESS) {
+			(void) snprintf(sbd_revision, 5, "%s%4s", prop, "");
+			ddi_prop_free(prop);
+		}
+
 		return (DDI_SUCCESS);
 	}
 
@@ -317,7 +350,7 @@ sbd_close(dev_t dev, int flag, int otype, cred_t *credp)
 /* ARGSUSED */
 static int
 stmf_sbd_ioctl(dev_t dev, int cmd, intptr_t data, int mode,
-	cred_t *credp, int *rval)
+    cred_t *credp, int *rval)
 {
 	stmf_iocdata_t		*iocd;
 	void			*ibuf	= NULL;
@@ -887,7 +920,7 @@ sbd_load_section_hdr(sbd_lu_t *sl, sm_section_hdr_t *sms)
 {
 	sm_section_hdr_t	h;
 	uint64_t		st;
-	sbd_status_t 		ret;
+	sbd_status_t		ret;
 
 	for (st = sl->sl_meta_offset + sizeof (sbd_meta_start_t);
 	    st < sl->sl_meta_size_used; st += h.sms_size) {
@@ -1395,7 +1428,10 @@ sbd_write_lu_info(sbd_lu_t *sl)
 static void
 do_unmap_setup(sbd_lu_t *sl)
 {
-	ASSERT((sl->sl_flags & SL_UNMAP_ENABLED) == 0);
+	if (sbd_unmap_enable == 0) {
+		sl->sl_flags &= ~(SL_UNMAP_ENABLED);
+		return;
+	}
 
 	if ((sl->sl_flags & SL_ZFS_META) == 0)
 		return;	/* No UNMAP for you. */
@@ -1440,8 +1476,10 @@ sbd_populate_and_register_lu(sbd_lu_t *sl, uint32_t *err_ret)
 	lu->lu_send_status_done = sbd_send_status_done;
 	lu->lu_task_free = sbd_task_free;
 	lu->lu_abort = sbd_abort;
+	lu->lu_task_poll = sbd_task_poll;
 	lu->lu_dbuf_free = sbd_dbuf_free;
 	lu->lu_ctl = sbd_ctl;
+	lu->lu_task_done = sbd_ats_remove_by_task;
 	lu->lu_info = sbd_info;
 	sl->sl_state = STMF_STATE_OFFLINE;
 
@@ -1454,6 +1492,12 @@ sbd_populate_and_register_lu(sbd_lu_t *sl, uint32_t *err_ret)
 		return (EIO);
 	}
 
+	/*
+	 * setup the ATS (compare and write) lists to handle multiple
+	 * ATS commands simultaneously
+	 */
+	list_create(&sl->sl_ats_io_list, sizeof (ats_state_t),
+	    offsetof(ats_state_t, as_next));
 	*err_ret = 0;
 	return (0);
 }
@@ -1560,6 +1604,7 @@ odf_over_open:
 			sl->sl_lu_size = vattr.va_size;
 		}
 	}
+
 	if (sl->sl_lu_size < SBD_MIN_LU_SIZE) {
 		*err_ret = SBD_RET_FILE_SIZE_ERROR;
 		ret = EINVAL;
@@ -2996,8 +3041,10 @@ sbd_status_t
 sbd_data_read(sbd_lu_t *sl, struct scsi_task *task,
     uint64_t offset, uint64_t size, uint8_t *buf)
 {
-	int ret;
+	int ret, ioflag = 0;
 	long resid;
+	hrtime_t xfer_start;
+	uint8_t op = task->task_cdb[0];
 
 	if ((offset + size) > sl->sl_lu_size) {
 		return (SBD_IO_PAST_EOF);
@@ -3005,6 +3052,16 @@ sbd_data_read(sbd_lu_t *sl, struct scsi_task *task,
 
 	offset += sl->sl_data_offset;
 
+	/*
+	 * Check to see if the command is READ(10), READ(12), or READ(16).
+	 * If it is then check for bit 3 being set to indicate if Forced
+	 * Unit Access is being requested. If so, the FSYNC flag will be set
+	 * on the read.
+	 */
+	if (((op == SCMD_READ_G1) || (op == SCMD_READ_G4) ||
+	    (op == SCMD_READ_G5)) && (task->task_cdb[1] & BIT_3)) {
+		ioflag = FSYNC;
+	}
 	if ((offset + size) > sl->sl_data_readable_size) {
 		uint64_t store_end;
 		if (offset > sl->sl_data_readable_size) {
@@ -3016,6 +3073,7 @@ sbd_data_read(sbd_lu_t *sl, struct scsi_task *task,
 		size = store_end;
 	}
 
+	xfer_start = gethrtime();
 	DTRACE_PROBE5(backing__store__read__start, sbd_lu_t *, sl,
 	    uint8_t *, buf, uint64_t, size, uint64_t, offset,
 	    scsi_task_t *, task);
@@ -3031,11 +3089,14 @@ sbd_data_read(sbd_lu_t *sl, struct scsi_task *task,
 		rw_exit(&sl->sl_access_state_lock);
 		return (SBD_FAILURE);
 	}
+
 	ret = vn_rdwr(UIO_READ, sl->sl_data_vp, (caddr_t)buf, (ssize_t)size,
-	    (offset_t)offset, UIO_SYSSPACE, 0, RLIM64_INFINITY, CRED(),
+	    (offset_t)offset, UIO_SYSSPACE, ioflag, RLIM64_INFINITY, CRED(),
 	    &resid);
 	rw_exit(&sl->sl_access_state_lock);
 
+	stmf_lu_xfer_done(task, B_TRUE /* read */,
+	    (gethrtime() - xfer_start));
 	DTRACE_PROBE6(backing__store__read__end, sbd_lu_t *, sl,
 	    uint8_t *, buf, uint64_t, size, uint64_t, offset,
 	    int, ret, scsi_task_t *, task);
@@ -3058,6 +3119,9 @@ sbd_data_write(sbd_lu_t *sl, struct scsi_task *task,
 	long resid;
 	sbd_status_t sret = SBD_SUCCESS;
 	int ioflag;
+	hrtime_t xfer_start;
+	uint8_t op = task->task_cdb[0];
+	boolean_t fua_bit = B_FALSE;
 
 	if ((offset + size) > sl->sl_lu_size) {
 		return (SBD_IO_PAST_EOF);
@@ -3065,13 +3129,24 @@ sbd_data_write(sbd_lu_t *sl, struct scsi_task *task,
 
 	offset += sl->sl_data_offset;
 
-	if ((sl->sl_flags & SL_WRITEBACK_CACHE_DISABLE) &&
-	    (sl->sl_flags & SL_FLUSH_ON_DISABLED_WRITECACHE)) {
+	/*
+	 * Check to see if the command is WRITE(10), WRITE(12), or WRITE(16).
+	 * If it is then check for bit 3 being set to indicate if Forced
+	 * Unit Access is being requested. If so, the FSYNC flag will be set
+	 * on the write.
+	 */
+	if (((op == SCMD_WRITE_G1) || (op == SCMD_WRITE_G4) ||
+	    (op == SCMD_WRITE_G5)) && (task->task_cdb[1] & BIT_3)) {
+		fua_bit = B_TRUE;
+	}
+	if (((sl->sl_flags & SL_WRITEBACK_CACHE_DISABLE) &&
+	    (sl->sl_flags & SL_FLUSH_ON_DISABLED_WRITECACHE)) || fua_bit) {
 		ioflag = FSYNC;
 	} else {
 		ioflag = 0;
 	}
 
+	xfer_start = gethrtime();
 	DTRACE_PROBE5(backing__store__write__start, sbd_lu_t *, sl,
 	    uint8_t *, buf, uint64_t, size, uint64_t, offset,
 	    scsi_task_t *, task);
@@ -3092,6 +3167,8 @@ sbd_data_write(sbd_lu_t *sl, struct scsi_task *task,
 	    &resid);
 	rw_exit(&sl->sl_access_state_lock);
 
+	stmf_lu_xfer_done(task, B_FALSE /* write */,
+	    (gethrtime() - xfer_start));
 	DTRACE_PROBE6(backing__store__write__end, sbd_lu_t *, sl,
 	    uint8_t *, buf, uint64_t, size, uint64_t, offset,
 	    int, ret, scsi_task_t *, task);
@@ -3102,7 +3179,6 @@ sbd_data_write(sbd_lu_t *sl, struct scsi_task *task,
 		sret = sbd_flush_data_cache(sl, 1);
 	}
 over_sl_data_write:
-
 	if ((ret || resid) || (sret != SBD_SUCCESS)) {
 		return (SBD_FAILURE);
 	} else if ((offset + size) > sl->sl_data_readable_size) {
@@ -3501,7 +3577,7 @@ sbd_update_zfs_prop(sbd_lu_t *sl)
 		num = (*dp) & 0xF;
 		*ah_meta++ = (num < 10) ? (num + '0') : (num + ('a' - 10));
 	}
-	*ah_meta = NULL;
+	*ah_meta = '\0';
 	file = sbd_get_zvol_name(sl);
 	if (sbd_zvolset(file, (char *)ptr)) {
 		ret = SBD_META_CORRUPTED;
@@ -3689,22 +3765,26 @@ out:
 
 /*
  * Unmap a region in a volume.  Currently only supported for zvols.
+ * The list of extents to be freed is passed in a dkioc_free_list_t
+ * which the caller is responsible for destroying.
  */
 int
-sbd_unmap(sbd_lu_t *sl, uint64_t offset, uint64_t length)
+sbd_unmap(sbd_lu_t *sl, dkioc_free_list_t *dfl)
 {
 	vnode_t *vp;
-	int unused;
-	dkioc_free_t df;
+	int unused, ret;
 
-	/* Right now, we only support UNMAP on zvols. */
-	if (!(sl->sl_flags & SL_ZFS_META))
-		return (EIO);
+	/* Nothing to do */
+	if (dfl->dfl_num_exts == 0)
+		return (0);
 
-	df.df_flags = (sl->sl_flags & SL_WRITEBACK_CACHE_DISABLE) ?
+	/*
+	 * TODO: unmap performance may be improved by not doing the synchronous
+	 * removal of the blocks and writing of the metadata.  The
+	 * transaction is in the zil so the state should be stable.
+	 */
+	dfl->dfl_flags = (sl->sl_flags & SL_WRITEBACK_CACHE_DISABLE) ?
 	    DF_WAIT_SYNC : 0;
-	df.df_start = offset;
-	df.df_length = length;
 
 	/* Use the data vnode we have to send a fop_ioctl(). */
 	vp = sl->sl_data_vp;
@@ -3713,6 +3793,29 @@ sbd_unmap(sbd_lu_t *sl, uint64_t offset, uint64_t length)
 		return (EIO);
 	}
 
-	return (VOP_IOCTL(vp, DKIOCFREE, (intptr_t)(&df), FKIOCTL, kcred,
-	    &unused, NULL));
+	ret = VOP_IOCTL(vp, DKIOCFREE, (intptr_t)dfl, FKIOCTL, kcred,
+	    &unused, NULL);
+
+	return (ret);
+}
+
+/*
+ * Check if this lu belongs to sbd or some other lu
+ * provider. A simple check for one of the module
+ * entry points is sufficient.
+ */
+int
+sbd_is_valid_lu(stmf_lu_t *lu)
+{
+	if (lu->lu_new_task == sbd_new_task)
+		return (1);
+	return (0);
+}
+
+uint8_t
+sbd_get_lbasize_shift(stmf_lu_t *lu)
+{
+	sbd_lu_t *sl = (sbd_lu_t *)lu->lu_provider_private;
+
+	return (sl->sl_data_blocksize_shift);
 }

@@ -18,14 +18,16 @@
 #
 # CDDL HEADER END
 #
+
 #
+# Copyright 2016 Gary Mills
 # Copyright (c) 1989, 2010, Oracle and/or its affiliates. All rights reserved.
-# Copyright (c) 2012, Joyent, Inc.  All rights reserved.
+# Copyright 2019 Joyent, Inc.
 # Copyright (c) 2013, OmniTI Computer Consulting, Inc. All rights reserved.
 # Copyright 2013 Garrett D'Amore <garrett@damore.org>
-#
-# Copyright 2011 Nexenta Systems, Inc.  All rights reserved.
-# Use is subject to license terms.
+# Copyright 2018 Nexenta Systems, Inc.
+# Copyright 2019 OmniOS Community Edition (OmniOSce) Association.
+# Copyright 2019 Peter Tribble.
 #
 
 LIBCDIR=	$(SRC)/lib/libc
@@ -38,12 +40,12 @@ TARGET_ARCH=	sparc
 
 # Symbol capabilities objects.
 EXTPICS=			\
-        $(LIBCDIR)/capabilities/sun4u/sparcv9/pics/symcap.o \
-        $(LIBCDIR)/capabilities/sun4u-opl/sparcv9/pics/symcap.o \
-        $(LIBCDIR)/capabilities/sun4u-us3-hwcap1/sparcv9/pics/symcap.o \
-        $(LIBCDIR)/capabilities/sun4u-us3-hwcap2/sparcv9/pics/symcap.o \
-        $(LIBCDIR)/capabilities/sun4v-hwcap1/sparcv9/pics/symcap.o \
-        $(LIBCDIR)/capabilities/sun4v-hwcap2/sparcv9/pics/symcap.o
+	$(LIBCDIR)/capabilities/sun4u/sparcv9/pics/symcap.o \
+	$(LIBCDIR)/capabilities/sun4u-opl/sparcv9/pics/symcap.o \
+	$(LIBCDIR)/capabilities/sun4u-us3-hwcap1/sparcv9/pics/symcap.o \
+	$(LIBCDIR)/capabilities/sun4u-us3-hwcap2/sparcv9/pics/symcap.o \
+	$(LIBCDIR)/capabilities/sun4v-hwcap1/sparcv9/pics/symcap.o \
+	$(LIBCDIR)/capabilities/sun4v-hwcap2/sparcv9/pics/symcap.o
 
 # local objects
 STRETS=
@@ -117,6 +119,9 @@ $(__GNUC)FPASMOBJS +=		\
 ATOMICOBJS=			\
 	atomic.o
 
+CHACHAOBJS=			\
+	chacha.o
+
 XATTROBJS=			\
 	xattr_common.o
 
@@ -125,22 +130,28 @@ COMOBJS=			\
 	bcopy.o			\
 	bsearch.o		\
 	bzero.o			\
+	explicit_bzero.o	\
 	memccpy.o		\
+	memmem.o		\
 	qsort.o			\
 	strtol.o		\
 	strtoul.o		\
 	strtoll.o		\
-	strtoull.o
+	strtoull.o		\
+	multi3.o
 
 GENOBJS=			\
 	_getsp.o		\
 	_xregs_clrptr.o		\
 	abs.o			\
 	alloca.o		\
+	arc4random.o		\
+	arc4random_uniform.o	\
 	ascii_strcasecmp.o	\
 	byteorder.o		\
 	cuexit.o		\
 	ecvt.o			\
+	endian.o		\
 	getctxt.o		\
 	lock.o			\
 	makectxt.o		\
@@ -229,6 +240,7 @@ COMSYSOBJS=			\
 	getpid.o		\
 	getpmsg.o		\
 	getppid.o		\
+	getrandom.o		\
 	getrlimit.o		\
 	getuid.o		\
 	gtty.o			\
@@ -256,13 +268,16 @@ COMSYSOBJS=			\
 	pipe2.o			\
 	pollsys.o		\
 	pread.o			\
+	preadv.o		\
 	priocntlset.o		\
 	processor_bind.o	\
 	processor_info.o	\
 	profil.o		\
+	psecflagsset.o		\
 	putmsg.o		\
 	putpmsg.o		\
 	pwrite.o		\
+	pwritev.o		\
 	read.o			\
 	readv.o			\
 	resolvepath.o		\
@@ -289,6 +304,7 @@ COMSYSOBJS=			\
 	ulimit.o		\
 	umask.o			\
 	umount2.o		\
+	upanic.o		\
 	utssys.o		\
 	uucopy.o		\
 	vhangup.o		\
@@ -357,14 +373,14 @@ PORTGEN=			\
 	addsev.o		\
 	ascii_strncasecmp.o	\
 	assert.o		\
-	attrat.o		\
+	atexit.o		\
+	atfork.o		\
 	atof.o			\
 	atoi.o			\
 	atol.o			\
 	atoll.o			\
+	attrat.o		\
 	attropen.o		\
-	atexit.o		\
-	atfork.o		\
 	basename.o		\
 	calloc.o		\
 	catgets.o		\
@@ -400,16 +416,21 @@ PORTGEN=			\
 	fdetach.o		\
 	fdopendir.o		\
 	ffs.o			\
+	flock.o			\
 	fls.o			\
 	fmtmsg.o		\
+	freezero.o		\
 	ftime.o			\
 	ftok.o			\
+	fts.o			\
 	ftw.o			\
 	gcvt.o			\
+	get_nprocs.o		\
 	getauxv.o		\
 	getcwd.o		\
 	getdate_err.o		\
 	getdtblsize.o		\
+	getentropy.o		\
 	getenv.o		\
 	getexecname.o		\
 	getgrnam.o		\
@@ -422,7 +443,6 @@ PORTGEN=			\
 	getlogin.o		\
 	getmntent.o		\
 	getnetgrent.o		\
-	get_nprocs.o		\
 	getopt.o		\
 	getopt_long.o		\
 	getpagesize.o		\
@@ -471,7 +491,7 @@ PORTGEN=			\
 	madvise.o		\
 	malloc.o		\
 	memalign.o		\
-	memmem.o		\
+	memset_s.o		\
 	mkdev.o			\
 	mkdtemp.o		\
 	mkfifo.o		\
@@ -504,8 +524,9 @@ PORTGEN=			\
 	posix_madvise.o		\
 	posix_memalign.o	\
 	priocntl.o		\
-	privlib.o		\
 	priv_str_xlate.o	\
+	privlib.o		\
+	psecflags.o		\
 	psiginfo.o		\
 	psignal.o		\
 	pt.o			\
@@ -517,6 +538,9 @@ PORTGEN=			\
 	rctlops.o		\
 	readdir.o		\
 	readdir_r.o		\
+	reallocarray.o		\
+	reallocf.o		\
+	recallocarray.o		\
 	realpath.o		\
 	reboot.o		\
 	regexpr.o		\
@@ -526,6 +550,7 @@ PORTGEN=			\
 	scandir.o		\
 	seekdir.o		\
 	select.o		\
+	set_constraint_handler_s.o \
 	setlabel.o		\
 	setpriority.o		\
 	settimeofday.o		\
@@ -535,6 +560,7 @@ PORTGEN=			\
 	sigsend.o		\
 	sigsetops.o		\
 	ssignal.o		\
+	ssp.o			\
 	stack.o			\
 	stpcpy.o		\
 	stpncpy.o		\
@@ -558,6 +584,7 @@ PORTGEN=			\
 	strtoimax.o		\
 	strtok.o		\
 	strtok_r.o		\
+	strtonum.o		\
 	strtoumax.o		\
 	swab.o			\
 	swapctl.o		\
@@ -577,6 +604,7 @@ PORTGEN=			\
 	tfind.o			\
 	time_data.o		\
 	time_gdata.o		\
+	timespec_get.o		\
 	tls_data.o		\
 	truncate.o		\
 	tsdalloc.o		\
@@ -594,6 +622,14 @@ PORTGEN=			\
 	xgetwidth.o		\
 	xpg4.o			\
 	xpg6.o
+
+PORTINET=			\
+	inet_lnaof.o		\
+	inet_makeaddr.o		\
+	inet_network.o		\
+	inet_ntoa.o		\
+	inet_ntop.o		\
+	inet_pton.o
 
 PORTPRINT_W=			\
 	doprnt_w.o
@@ -625,6 +661,7 @@ PORTSTDIO=			\
 	_filbuf.o		\
 	_findbuf.o		\
 	_flsbuf.o		\
+	_stdio_flags.o		\
 	_wrtchk.o		\
 	clearerr.o		\
 	ctermid.o		\
@@ -640,6 +677,7 @@ PORTSTDIO=			\
 	fileno.o		\
 	flockf.o		\
 	flush.o			\
+	fmemopen.o		\
 	fopen.o			\
 	fpos.o			\
 	fputc.o			\
@@ -656,6 +694,9 @@ PORTSTDIO=			\
 	getpass.o		\
 	gets.o			\
 	getw.o			\
+	mse.o			\
+	open_memstream.o	\
+	open_wmemstream.o	\
 	popen.o			\
 	putc.o			\
 	putchar.o		\
@@ -671,7 +712,6 @@ PORTSTDIO=			\
 	tmpfile.o		\
 	tmpnam_r.o		\
 	ungetc.o		\
-	mse.o			\
 	vscanf.o		\
 	vwscanf.o		\
 	wscanf.o
@@ -729,6 +769,8 @@ PORTI18N_COND=			\
 PORTLOCALE=			\
 	big5.o			\
 	btowc.o			\
+	c16rtomb.o		\
+	c32rtomb.o		\
 	collate.o		\
 	collcmp.o		\
 	euc.o			\
@@ -754,6 +796,8 @@ PORTLOCALE=			\
 	mbftowc.o		\
 	mblen.o			\
 	mbrlen.o		\
+	mbrtoc16.o		\
+	mbrtoc32.o		\
 	mbrtowc.o		\
 	mbsinit.o		\
 	mbsnrtowcs.o		\
@@ -764,10 +808,6 @@ PORTLOCALE=			\
 	nextwctype.o		\
 	nl_langinfo.o		\
 	none.o			\
-	regcomp.o		\
-	regfree.o		\
-	regerror.o		\
-	regexec.o		\
 	rune.o			\
 	runetype.o		\
 	setlocale.o		\
@@ -816,12 +856,16 @@ RTOBJS=				\
 	shm.o			\
 	sigev_thread.o
 
+SECFLAGSOBJS=			\
+	secflags.o
+
 TPOOLOBJS=			\
 	thread_pool.o
 
 THREADSOBJS=			\
 	alloc.o			\
 	assfail.o		\
+	c11_thr.o		\
 	cancel.o		\
 	door_calls.o		\
 	tmem.o			\
@@ -871,6 +915,8 @@ PORTSYS=			\
 	chmod.o			\
 	chown.o			\
 	corectl.o		\
+	eventfd.o		\
+	epoll.o			\
 	exacctsys.o		\
 	execl.o			\
 	execle.o		\
@@ -908,6 +954,7 @@ PORTSYS=			\
 	sidsys.o		\
 	siginterrupt.o		\
 	signal.o		\
+	signalfd.o		\
 	sigpending.o		\
 	sigstack.o		\
 	stat.o			\
@@ -915,6 +962,7 @@ PORTSYS=			\
 	tasksys.o		\
 	time.o			\
 	time_util.o		\
+	timerfd.o		\
 	ucontext.o		\
 	unlink.o		\
 	ustat.o			\
@@ -924,7 +972,11 @@ PORTSYS=			\
 PORTREGEX=			\
 	glob.o			\
 	regcmp.o		\
+	regcomp.o		\
+	regerror.o		\
 	regex.o			\
+	regexec.o		\
+	regfree.o		\
 	wordexp.o
 
 VALUES=	values-Xa.o
@@ -937,6 +989,7 @@ MOSTOBJS=			\
 	$(FPOBJS64)		\
 	$(FPASMOBJS)		\
 	$(ATOMICOBJS)		\
+	$(CHACHAOBJS)		\
 	$(XATTROBJS)		\
 	$(COMOBJS)		\
 	$(GENOBJS)		\
@@ -946,6 +999,7 @@ MOSTOBJS=			\
 	$(PORTGEN64)		\
 	$(PORTI18N)		\
 	$(PORTI18N_COND)	\
+	$(PORTINET)		\
 	$(PORTLOCALE)		\
 	$(PORTPRINT)		\
 	$(PORTPRINT_W)		\
@@ -957,6 +1011,7 @@ MOSTOBJS=			\
 	$(PORTSYS64)		\
 	$(AIOOBJS)		\
 	$(RTOBJS)		\
+	$(SECFLAGSOBJS)		\
 	$(TPOOLOBJS)		\
 	$(THREADSOBJS)		\
 	$(THREADSMACHOBJS)	\
@@ -974,7 +1029,7 @@ TRACEOBJS=			\
 	plockstat.o
 
 # NOTE:	libc.so.1 must be linked with the minimal crti.o and crtn.o
-# modules whose source is provided in the $(SRC)/lib/common directory.
+# modules whose source is provided in the $(SRC)/lib/crt directory.
 # This must be done because otherwise the Sun C compiler would insert
 # its own versions of these modules and those versions contain code
 # to call out to C++ initialization functions.  Such C++ initialization
@@ -983,7 +1038,7 @@ TRACEOBJS=			\
 # Since libc contains no C++ code, linking with the minimal crti.o and
 # crtn.o modules is safe and avoids the problems described above.
 OBJECTS= $(CRTI) $(MOSTOBJS) $(CRTN)
-CRTSRCS= ../../common/sparcv9
+CRTSRCS= ../../crt/sparc
 
 # include common library definitions
 include $(SRC)/lib/Makefile.lib
@@ -1001,7 +1056,7 @@ CFLAGS64 += -xinline=
 
 CERRWARN += -_gcc=-Wno-parentheses
 CERRWARN += -_gcc=-Wno-switch
-CERRWARN += -_gcc=-Wno-uninitialized
+CERRWARN += $(CNOWARN_UNINIT)
 CERRWARN += -_gcc=-Wno-unused-value
 CERRWARN += -_gcc=-Wno-unused-label
 CERRWARN += -_gcc=-Wno-unused-variable
@@ -1022,15 +1077,15 @@ CFLAGS64 += $(XSTRCONST)
 
 ALTPICS= $(TRACEOBJS:%=pics/%)
 
-$(DYNLIB) := BUILD.SO = $(LD) -o $@ -G $(DYNFLAGS) $(PICS) $(ALTPICS) $(EXTPICS)
+$(DYNLIB) := BUILD.SO = $(LD) -o $@ $(GSHARED) $(DYNFLAGS) $(PICS) $(ALTPICS) $(EXTPICS)
 
 MAPFILES =	$(LIBCDIR)/port/mapfile-vers
 
-sparcv9_C_PICFLAGS= -K PIC
+sparcv9_C_PICFLAGS= $(sparcv9_C_BIGPICFLAGS)
 CFLAGS64 +=	$(EXTN_CFLAGS)
 CPPFLAGS=	-D_REENTRANT -Dsparc $(EXTN_CPPFLAGS) $(THREAD_DEBUG) \
 		-I$(LIBCBASE)/inc -I$(LIBCDIR)/inc $(CPPFLAGS.master)
-ASFLAGS=	$(EXTN_ASFLAGS) -K PIC -P -D__STDC__ -D_ASM -D__sparcv9 $(CPPFLAGS) \
+ASFLAGS=	$(EXTN_ASFLAGS) $(AS_BIGPICFLAGS) -P -D__STDC__ -D_ASM -D__sparcv9 $(CPPFLAGS) \
 		$(sparcv9_AS_XARCH)
 
 # As a favor to the dtrace syscall provider, libc still calls the
@@ -1054,7 +1109,7 @@ BUILD.s=	$(AS) $(ASFLAGS) $< -o $@
 # Override this top level flag so the compiler builds in its native
 # C99 mode.  This has been enabled to support the complex arithmetic
 # added to libc.
-C99MODE=	$(C99_ENABLE)
+CSTD=	$(CSTD_GNU99)
 
 # libc method of building an archive
 # The "$(GREP) -v ' L '" part is necessary only until
@@ -1073,38 +1128,6 @@ CLEANFILES=			\
 	$(ALTPICS)
 
 CLOBBERFILES +=	$(LIB_PIC)
-
-# list of C source for lint
-SRCS=							\
-	$(ATOMICOBJS:%.o=$(SRC)/common/atomic/%.c)	\
-	$(XATTROBJS:%.o=$(SRC)/common/xattr/%.c)	\
-	$(COMOBJS:%.o=$(SRC)/common/util/%.c)		\
-	$(PORTFP:%.o=$(LIBCDIR)/port/fp/%.c)			\
-	$(PORTGEN:%.o=$(LIBCDIR)/port/gen/%.c)			\
-	$(PORTI18N:%.o=$(LIBCDIR)/port/i18n/%.c)		\
-	$(PORTLOCALE:%.o=$(LIBCDIR)/port/locale/%.c)		\
-	$(PORTPRINT:%.o=$(LIBCDIR)/port/print/%.c)		\
-	$(PORTREGEX:%.o=$(LIBCDIR)/port/regex/%.c)		\
-	$(PORTSTDIO:%.o=$(LIBCDIR)/port/stdio/%.c)		\
-	$(PORTSYS:%.o=$(LIBCDIR)/port/sys/%.c)			\
-	$(AIOOBJS:%.o=$(LIBCDIR)/port/aio/%.c)			\
-	$(RTOBJS:%.o=$(LIBCDIR)/port/rt/%.c)			\
-	$(TPOOLOBJS:%.o=$(LIBCDIR)/port/tpool/%.c)		\
-	$(THREADSOBJS:%.o=$(LIBCDIR)/port/threads/%.c)		\
-	$(THREADSMACHOBJS:%.o=$(LIBCDIR)/$(MACH)/threads/%.c)	\
-	$(UNICODEOBJS:%.o=$(SRC)/common/unicode/%.c)	\
-	$(UNWINDMACHOBJS:%.o=$(LIBCDIR)/port/unwind/%.c)	\
-	$(FPOBJS:%.o=$(LIBCDIR)/$(MACH)/fp/%.c)			\
-	$(FPOBJS64:%.o=$(LIBCBASE)/fp/%.c)		\
-	$(LIBCBASE)/crt/_ftou.c				\
-	$(LIBCBASE)/gen/_xregs_clrptr.c			\
-	$(LIBCBASE)/gen/byteorder.c			\
-	$(LIBCBASE)/gen/ecvt.c				\
-	$(LIBCBASE)/gen/getctxt.c			\
-	$(LIBCBASE)/gen/makectxt.c			\
-	$(LIBCBASE)/gen/siginfolst.c			\
-	$(LIBCBASE)/gen/siglongjmp.c			\
-	$(LIBCBASE)/gen/swapctxt.c
 
 # conditional assignments
 $(DYNLIB) := CRTI = crti.o
@@ -1213,24 +1236,20 @@ $(PORTPRINT_W:%=pics/%) := \
 $(PORTI18N_COND:%=pics/%) := \
 	CPPFLAGS += -D_WCS_LONGLONG
 
+pics/arc4random.o :=	CPPFLAGS += -I$(SRC)/common/crypto/chacha
+
 # Files which need extra optimization
 pics/getenv.o := sparcv9_COPTFLAG = -xO4
+
+#
+# Disable the stack protector due to issues with bootstrapping rtld. See
+# cmd/sgs/rtld/Makefile.com for more information.
+#
+STACKPROTECT = none
 
 .KEEP_STATE:
 
 all: $(LIBS) $(LIB_PIC)
-
-lint	:=	CPPFLAGS += -I$(LIBCDIR)/$(MACH)/fp
-lint	:=	CPPFLAGS += -D_MSE_INT_H -D_LCONV_C99
-lint	:=	LINTFLAGS64 += -mn
-
-lint:
-	@echo $(LINT.c) ... $(LDLIBS)
-	@$(LINT.c) $(SRCS) $(LDLIBS)
-
-$(LINTLIB):= SRCS=$(LIBCDIR)/port/llib-lc
-$(LINTLIB):= CPPFLAGS += -D_MSE_INT_H
-$(LINTLIB):= LINTFLAGS64=-nvx -m64
 
 # object files that depend on inline template
 $(TIL:%=pics/%): $(LIBCBASE)/threads/sparcv9.il
@@ -1253,7 +1272,7 @@ $(LIB_PIC): pics $$(PICS)
 # special cases
 #$(STRETS:%=pics/%): crt/stret.s
 #	$(AS) $(ASFLAGS) -DSTRET$(@F:stret%.o=%) crt/stret.s -o $@
-#	$(POST_PROCESS_O)
+#	$(POST_PROCESS_S_O)
 
 #crt/_rtbootld.s:	crt/_rtboot.s crt/_rtld.c
 #	$(CC) $(CPPFLAGS) -O -S -K pic crt/_rtld.c -o crt/_rtld.s
@@ -1276,13 +1295,14 @@ $(ASSYMDEP_OBJS:%=pics/%): assym.h
 
 # assym.h build rules
 
-assym.h := CFLAGS64 += -g
+assym.h := CFLAGS64 += $(CCGDEBUG)
 
 GENASSYM_C = $(LIBCDIR)/$(MACH)/genassym.c
+LDFLAGS.native = $(LDASSERTS) $(ZASSERTDEFLIB)=libc.so $(BDIRECT)
 
 genassym: $(GENASSYM_C)
-	$(NATIVECC) -I$(LIBCBASE)/inc -I$(LIBCDIR)/inc \
-		$(CPPFLAGS.native) -o $@ $(GENASSYM_C)
+	$(NATIVECC) $(NATIVE_CFLAGS) -I$(LIBCBASE)/inc -I$(LIBCDIR)/inc \
+		$(CPPFLAGS.native) $(LDFLAGS.native) -o $@ $(GENASSYM_C)
 
 OFFSETS = $(LIBCDIR)/$(MACH)/offsets.in
 

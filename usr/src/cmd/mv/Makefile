@@ -42,7 +42,7 @@ CLOBBERFILES += $(CPFILE) $(LNFILE)
 CFLAGS	+=	$(CCVERBOSE)
 CERRWARN +=	-_gcc=-Wno-parentheses
 CERRWARN +=	-_gcc=-Wno-unused-variable
-CERRWARN +=	-_gcc=-Wno-uninitialized
+CERRWARN +=	$(CNOWARN_UNINIT)
 $(XPG4) := CFLAGS += -DXPG4
 LINTFLAGS += -DXPG4 -u
 XGETFLAGS += -a -x mv.xcl
@@ -76,8 +76,8 @@ xpg4_%.o:    $(SRC)/common/util/%.c
 	$(COMPILE.c) -o $@ $<
 	$(POST_PROCESS_O)
 
-%values-xpg4.o:		../../lib/common/common/values-xpg4.c
-	$(COMPILE.c) -o $@ ../../lib/common/common/values-xpg4.c
+%values-xpg4.o:		../../lib/crt/common/values-xpg4.c
+	$(COMPILE.c) -o $@ ../../lib/crt/common/values-xpg4.c
 
 $(CPFILE):	$(PROG)
 	@$(RM) $(CPFILE); $(LN) $(PROG) $(CPFILE)

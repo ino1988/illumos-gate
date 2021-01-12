@@ -36,12 +36,8 @@ UTSBASE	= ../..
 #
 MODULE		= ohci
 OBJECTS		= $(OHCI_OBJS:%=$(OBJS_DIR)/%)
-LINTS		= $(OHCI_OBJS:%.o=$(LINTS_DIR)/%.ln)
-WARLOCK_OUT	= $(OHCI_OBJS:%.o=%.ll)
-WARLOCK_OK	= $(MODULE).ok
 ROOTMODULE	= $(ROOT_DRV_DIR)/$(MODULE)
 CONF_SRCDIR	= $(UTSBASE)/common/io/usb/hcd/openhci
-WLCMD_DIR	= $(UTSBASE)/common/io/warlock
 
 #
 #	Include common rules.
@@ -57,17 +53,15 @@ LDFLAGS		+= -dy -Nmisc/usba
 #	Define targets
 #
 ALL_TARGET	= $(BINARY) $(SRC_CONFFILE)
-LINT_TARGET	= $(MODULE).lint
 INSTALL_TARGET	= $(BINARY) $(ROOTMODULE) $(ROOT_CONFFILE)
 
 #
-# For now, disable these lint checks; maintainers should endeavor
-# to investigate and remove these for maximum lint coverage.
+# For now, disable these warnings; maintainers should endeavor
+# to investigate and remove these for maximum coverage.
 # Please do not carry these forward to new Makefiles.
 #
-LINTTAGS	+= -erroff=E_BAD_PTR_CAST_ALIGN
 
-CERRWARN	+= -_gcc=-Wno-uninitialized
+CERRWARN	+= $(CNOWARN_UNINIT)
 
 #
 #	Default build targets.
@@ -79,16 +73,8 @@ def:		$(DEF_DEPS)
 all:		$(ALL_DEPS)
 
 clean:		$(CLEAN_DEPS)
-		$(RM) $(WARLOCK_OUT) $(WARLOCK_OK)
 
 clobber:	$(CLOBBER_DEPS)
-		$(RM) $(WARLOCK_OUT) $(WARLOCK_OK)
-
-lint:		$(LINT_DEPS)
-
-modlintlib:	$(MODLINTLIB_DEPS)
-
-clean.lint:	$(CLEAN_LINT_DEPS)
 
 install:	$(INSTALL_DEPS)
 
@@ -96,33 +82,3 @@ install:	$(INSTALL_DEPS)
 #	Include common targets.
 #
 include $(UTSBASE)/intel/Makefile.targ
-
-#
-#	Defines for local commands.
-#
-WARLOCK		= warlock
-WLCC		= wlcc
-TOUCH		= touch
-TEST		= test
-
-#
-#	lock_lint rules
-#
-USBA_FILES = $(USBA_OBJS:%.o= -l ../usba/%.ll)
-
-warlock: $(WARLOCK_OK)
-
-ohci.ok: $(WARLOCK_OUT) $(WLCMD_DIR)/ohci.wlcmd warlock_ddi.files usba.files
-	$(WARLOCK) -c $(WLCMD_DIR)/ohci.wlcmd  $(WARLOCK_OUT) \
-	$(USBA_FILES)  \
-	-l ../warlock/ddi_dki_impl.ll
-	$(TOUCH) $@
-
-%.ll: $(UTSBASE)/common/io/usb/hcd/openhci/%.c
-	$(WLCC) $(CPPFLAGS) -DDEBUG -o $@ $<
-
-warlock_ddi.files:
-	@cd ../warlock; pwd; $(MAKE) warlock
-
-usba.files:
-	@cd ../usba; pwd; $(MAKE) warlock

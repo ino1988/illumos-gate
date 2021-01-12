@@ -21,6 +21,8 @@
 
 /*
  * Copyright (c) 2008, 2010, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2017, Joyent, Inc.
+ * Copyright 2019 by Western Digital Corporation
  */
 
 #include <assert.h>
@@ -29,21 +31,24 @@
 #include <sys/fm/protocol.h>
 #include <string.h>
 
-#define	TOPO_PGROUP_IPMI 		"ipmi"
+#define	TOPO_PGROUP_IPMI		"ipmi"
 #define	TOPO_PROP_IPMI_ENTITY_REF	"entity_ref"
 #define	TOPO_PROP_IPMI_ENTITY_PRESENT	"entity_present"
+#define	FAC_PROV_IPMI			"fac_prov_ipmi"
 
 typedef struct ipmi_enum_data {
-	topo_mod_t	*ed_mod;
-	tnode_t		*ed_pnode;
-	const char	*ed_name;
-	char		*ed_label;
-	uint8_t		ed_entity;
-	topo_instance_t	ed_instance;
-	boolean_t	ed_hasfru;
+	topo_mod_t		*ed_mod;
+	tnode_t			*ed_pnode;
+	const char		*ed_name;
+	char			*ed_label;
+	uint8_t			ed_entity;
+	topo_instance_t		ed_instance;
+	ipmi_sdr_fru_locator_t	*ed_frusdr;
 } ipmi_enum_data_t;
 
 static int ipmi_present(topo_mod_t *, tnode_t *, topo_version_t, nvlist_t *,
+    nvlist_t **);
+static int ipmi_unusable(topo_mod_t *, tnode_t *, topo_version_t, nvlist_t *,
     nvlist_t **);
 static int ipmi_enum(topo_mod_t *, tnode_t *, const char *,
     topo_instance_t, topo_instance_t, void *, void *);
@@ -58,6 +63,9 @@ extern int ipmi_fru_fmri(topo_mod_t *mod, tnode_t *node,
 static const topo_method_t ipmi_methods[] = {
 	{ TOPO_METH_PRESENT, TOPO_METH_PRESENT_DESC,
 	    TOPO_METH_PRESENT_VERSION0, TOPO_STABILITY_INTERNAL, ipmi_present },
+	{ TOPO_METH_UNUSABLE, TOPO_METH_UNUSABLE_DESC,
+	    TOPO_METH_UNUSABLE_VERSION, TOPO_STABILITY_INTERNAL,
+	    ipmi_unusable },
 	{ "ipmi_fru_label", "Property method", 0,
 	    TOPO_STABILITY_INTERNAL, ipmi_fru_label},
 	{ "ipmi_fru_fmri", "Property method", 0,
@@ -73,6 +81,85 @@ const topo_modops_t ipmi_ops = { ipmi_enum, NULL };
 const topo_modinfo_t ipmi_info =
 	{ "ipmi", FM_FMRI_SCHEME_HC, TOPO_VERSION, &ipmi_ops };
 
+/* Common code used by topo methods below to find an IPMI entity */
+static int
+ipmi_find_entity(topo_mod_t *mod, tnode_t *tn, ipmi_handle_t **ihpp,
+    ipmi_entity_t **epp, char **namep, ipmi_sdr_t **sdrpp)
+{
+	ipmi_handle_t *ihp;
+	ipmi_entity_t *ep;
+	int err;
+	char *name = NULL, **names;
+	ipmi_sdr_t *sdrp = NULL;
+	uint_t nelems, i;
+
+	*ihpp = NULL;
+	*epp = NULL;
+	*namep = NULL;
+	*sdrpp = NULL;
+
+	if ((ihp = topo_mod_ipmi_hold(mod)) == NULL)
+		return (topo_mod_seterrno(mod, ETOPO_METHOD_UNKNOWN));
+
+	ep = topo_node_getspecific(tn);
+	if (ep != NULL) {
+		*ihpp = ihp;
+		*epp = ep;
+		return (0);
+	}
+
+	if (topo_prop_get_string(tn, TOPO_PGROUP_IPMI,
+	    TOPO_PROP_IPMI_ENTITY_PRESENT, &name, &err) == 0) {
+		/*
+		 * Some broken IPMI implementations don't export correct
+		 * entities, so referring to an entity isn't sufficient.
+		 * For these platforms, we allow the XML to specify a
+		 * single SDR record that represents the current present
+		 * state.
+		 */
+		sdrp = ipmi_sdr_lookup(ihp, name);
+	} else {
+		if (topo_prop_get_string_array(tn, TOPO_PGROUP_IPMI,
+		    TOPO_PROP_IPMI_ENTITY_REF, &names, &nelems, &err) != 0) {
+			/*
+			 * Not all nodes have an entity_ref attribute.
+			 * For these cases, return ENOTSUP so that we
+			 * fall back to the default hc presence
+			 * detection.
+			 */
+			topo_mod_ipmi_rele(mod);
+			return (topo_mod_seterrno(mod, ETOPO_METHOD_NOTSUP));
+		}
+
+		for (i = 0; i < nelems; i++) {
+			if ((ep = ipmi_entity_lookup_sdr(ihp, names[i]))
+			    != NULL) {
+				name = names[i];
+				names[i] = NULL;
+				break;
+			}
+		}
+
+		for (i = 0; i < nelems; i++)
+			topo_mod_strfree(mod, names[i]);
+		topo_mod_free(mod, names, (nelems * sizeof (char *)));
+
+		if (ep == NULL) {
+			topo_mod_dprintf(mod,
+			    "Failed to get present state of %s=%d\n",
+			    topo_node_name(tn), topo_node_instance(tn));
+			topo_mod_ipmi_rele(mod);
+			return (-1);
+		}
+		topo_node_setspecific(tn, ep);
+	}
+
+	*ihpp = ihp;
+	*namep = name;
+	*sdrpp = sdrp;
+	return (0);
+}
+
 /*
  * Determine if the entity is present.
  */
@@ -83,81 +170,22 @@ ipmi_present(topo_mod_t *mod, tnode_t *tn, topo_version_t version,
 {
 	ipmi_handle_t *ihp;
 	ipmi_entity_t *ep;
-	boolean_t present;
-	nvlist_t *nvl;
-	int err, i;
-	char *name, **names;
+	char *name;
 	ipmi_sdr_t *sdrp;
-	uint_t nelems;
+	int err;
+	boolean_t present = B_FALSE;
+	nvlist_t *nvl;
 
-	if ((ihp = topo_mod_ipmi_hold(mod)) == NULL)
-		return (topo_mod_seterrno(mod, ETOPO_METHOD_UNKNOWN));
-
-	ep = topo_node_getspecific(tn);
-	if (ep == NULL) {
-		if (topo_prop_get_string(tn, TOPO_PGROUP_IPMI,
-		    TOPO_PROP_IPMI_ENTITY_PRESENT, &name, &err) == 0) {
-			/*
-			 * Some broken IPMI implementations don't export correct
-			 * entities, so referring to an entity isn't sufficient.
-			 * For these platforms, we allow the XML to specify a
-			 * single SDR record that represents the current present
-			 * state.
-			 */
-			if ((sdrp = ipmi_sdr_lookup(ihp, name)) == NULL ||
-			    ipmi_entity_present_sdr(ihp, sdrp, &present) != 0) {
-				topo_mod_dprintf(mod,
-				    "Failed to get present state of %s (%s)\n",
-				    name, ipmi_errmsg(ihp));
-				topo_mod_strfree(mod, name);
-				topo_mod_ipmi_rele(mod);
-				return (-1);
-			}
-
-			topo_mod_dprintf(mod,
-			    "ipmi_entity_present_sdr(%s) = %d\n", name,
-			    present);
-			topo_mod_strfree(mod, name);
-		} else {
-			if (topo_prop_get_string_array(tn, TOPO_PGROUP_IPMI,
-			    TOPO_PROP_IPMI_ENTITY_REF, &names, &nelems, &err)
-			    != 0) {
-				/*
-				 * Not all nodes have an entity_ref attribute.
-				 * For these cases, return ENOTSUP so that we
-				 * fall back to the default hc presence
-				 * detection.
-				 */
-				topo_mod_ipmi_rele(mod);
-				return (topo_mod_seterrno(mod,
-				    ETOPO_METHOD_NOTSUP));
-			}
-
-			for (i = 0; i < nelems; i++)
-				if ((ep = ipmi_entity_lookup_sdr(ihp, names[i]))
-				    != NULL)
-					break;
-
-			for (i = 0; i < nelems; i++)
-				topo_mod_strfree(mod, names[i]);
-			topo_mod_free(mod, names, (nelems * sizeof (char *)));
-
-			if (ep == NULL) {
-				topo_mod_dprintf(mod,
-				    "Failed to get present state of %s=%d\n",
-				    topo_node_name(tn), topo_node_instance(tn));
-				topo_mod_ipmi_rele(mod);
-				return (-1);
-			}
-			topo_node_setspecific(tn, ep);
-		}
-	}
+	err = ipmi_find_entity(mod, tn, &ihp, &ep, &name, &sdrp);
+	if (err != 0)
+		return (err);
 
 	if (ep != NULL) {
 		if (ipmi_entity_present(ihp, ep, &present) != 0) {
 			topo_mod_dprintf(mod,
 			    "ipmi_entity_present() failed: %s",
 			    ipmi_errmsg(ihp));
+			topo_mod_strfree(mod, name);
 			topo_mod_ipmi_rele(mod);
 			return (-1);
 		}
@@ -165,14 +193,109 @@ ipmi_present(topo_mod_t *mod, tnode_t *tn, topo_version_t version,
 		topo_mod_dprintf(mod,
 		    "ipmi_entity_present(%d, %d) = %d\n", ep->ie_type,
 		    ep->ie_instance, present);
+	} else if (sdrp != NULL) {
+		if (ipmi_entity_present_sdr(ihp, sdrp, &present) != 0) {
+			topo_mod_dprintf(mod,
+			    "Failed to get present state of %s (%s)\n",
+			    name, ipmi_errmsg(ihp));
+			topo_mod_strfree(mod, name);
+			topo_mod_ipmi_rele(mod);
+			return (-1);
+		}
+
+		topo_mod_dprintf(mod, "ipmi_entity_present_sdr(%s) = %d\n",
+		    name, present);
 	}
 
+	topo_mod_strfree(mod, name);
 	topo_mod_ipmi_rele(mod);
 
 	if (topo_mod_nvalloc(mod, &nvl, NV_UNIQUE_NAME) != 0)
 		return (topo_mod_seterrno(mod, EMOD_FMRI_NVL));
 
 	if (nvlist_add_uint32(nvl, TOPO_METH_PRESENT_RET, present) != 0) {
+		nvlist_free(nvl);
+		return (topo_mod_seterrno(mod, EMOD_FMRI_NVL));
+	}
+
+	*out = nvl;
+
+	return (0);
+}
+
+/*
+ * Check whether an IPMI entity is a sensor that is unavailable
+ */
+static int
+ipmi_check_sensor(ipmi_handle_t *ihp, ipmi_entity_t *ep, const char *name,
+    ipmi_sdr_t *sdrp, void *data)
+{
+	ipmi_sdr_full_sensor_t *fsp;
+	ipmi_sdr_compact_sensor_t *csp;
+	uint8_t sensor_number;
+	ipmi_sensor_reading_t *reading;
+
+	switch (sdrp->is_type) {
+	case IPMI_SDR_TYPE_FULL_SENSOR:
+		fsp = (ipmi_sdr_full_sensor_t *)sdrp->is_record;
+		sensor_number = fsp->is_fs_number;
+		break;
+
+	case IPMI_SDR_TYPE_COMPACT_SENSOR:
+		csp = (ipmi_sdr_compact_sensor_t *)sdrp->is_record;
+		sensor_number = csp->is_cs_number;
+		break;
+
+	default:
+		return (0);
+	}
+
+	reading = ipmi_get_sensor_reading(ihp, sensor_number);
+	if (reading != NULL && reading->isr_state_unavailable)
+		return (1);
+
+	return (0);
+}
+
+/*
+ * Determine if the entity is unusable
+ */
+/*ARGSUSED*/
+static int
+ipmi_unusable(topo_mod_t *mod, tnode_t *tn, topo_version_t version,
+    nvlist_t *in, nvlist_t **out)
+{
+	ipmi_handle_t *ihp;
+	ipmi_entity_t *ep;
+	char *name;
+	ipmi_sdr_t *sdrp;
+	int err;
+	boolean_t unusable = B_FALSE;
+	nvlist_t *nvl;
+
+	err = ipmi_find_entity(mod, tn, &ihp, &ep, &name, &sdrp);
+	if (err != 0)
+		return (err);
+
+	/*
+	 * Check whether the IPMI presented us with an entity for a
+	 * sensor that is unavailable.
+	 */
+	if (ep != NULL) {
+		unusable = (ipmi_entity_iter_sdr(ihp, ep, ipmi_check_sensor,
+		    NULL) != 0);
+	} else if (sdrp != NULL) {
+		unusable = (ipmi_check_sensor(ihp, NULL, NULL, sdrp,
+		    NULL) != 0);
+	}
+
+	topo_mod_strfree(mod, name);
+	topo_mod_ipmi_rele(mod);
+
+	if (topo_mod_nvalloc(mod, &nvl, NV_UNIQUE_NAME) != 0)
+		return (topo_mod_seterrno(mod, EMOD_FMRI_NVL));
+
+	if (nvlist_add_uint32(nvl, TOPO_METH_UNUSABLE_RET, unusable) != 0) {
 		nvlist_free(nvl);
 		return (topo_mod_seterrno(mod, EMOD_FMRI_NVL));
 	}
@@ -194,7 +317,7 @@ ipmi_check_sdr(ipmi_handle_t *ihp, ipmi_entity_t *ep, const char *name,
 	ipmi_enum_data_t *edp = data;
 
 	if (sdrp->is_type == IPMI_SDR_TYPE_FRU_LOCATOR)
-		edp->ed_hasfru = B_TRUE;
+		edp->ed_frusdr = (ipmi_sdr_fru_locator_t *)sdrp->is_record;
 
 	return (0);
 }
@@ -210,16 +333,32 @@ ipmi_check_entity(ipmi_handle_t *ihp, ipmi_entity_t *ep, void *data)
 	ipmi_enum_data_t cdata;
 	tnode_t *pnode = edp->ed_pnode;
 	topo_mod_t *mod = edp->ed_mod;
+	topo_mod_t *fmod = topo_mod_getspecific(mod);
 	nvlist_t *auth, *fmri;
 	tnode_t *tn;
 	topo_pgroup_info_t pgi;
+	char *frudata = NULL, *part = NULL, *rev = NULL, *serial = NULL;
+	ipmi_fru_prod_info_t fruprod = {0};
+	ipmi_fru_brd_info_t frubrd = {0};
 	int err;
 	const char *labelname;
 	char label[64];
 	size_t len;
 
-	if (ep->ie_type != edp->ed_entity)
+	/*
+	 * Some questionable IPMI implementations group psu and fan entities
+	 * under things like motherboard or chassis entities.  So even if this
+	 * entity type isn't typically associated with fans and psus, if it has
+	 * children, then regardless of the type we need to decend down and
+	 * iterate over them.
+	 */
+	if (ep->ie_type != edp->ed_entity) {
+		if (ep->ie_children != 0 &&
+		    ipmi_entity_iter_children(ihp, ep, ipmi_check_entity,
+		    data) != 0)
+			return (1);
 		return (0);
+	}
 
 	/*
 	 * The purpose of power and cooling domains is to group psus and fans
@@ -238,16 +377,45 @@ ipmi_check_entity(ipmi_handle_t *ihp, ipmi_entity_t *ep, void *data)
 		return (1);
 	}
 
+	/*
+	 * Determine if there's a FRU record associated with this entity.  If
+	 * so, then read in the FRU identity info so that it can be included
+	 * in the authority portion of the FMRI.
+	 *
+	 * topo_mod_hcfmri() will safely except NULL values for the part,
+	 * rev and serial params, so we opt to simply drive on in the face of
+	 * any strdup failures.
+	 */
+	edp->ed_frusdr = NULL;
+	(void) ipmi_entity_iter_sdr(ihp, ep, ipmi_check_sdr, edp);
+	if (edp->ed_frusdr != NULL &&
+	    ipmi_fru_read(ihp, edp->ed_frusdr, &frudata) != -1) {
+		if (ipmi_fru_parse_product(ihp, frudata, &fruprod) == 0) {
+			part = strdup(fruprod.ifpi_part_number);
+			rev = strdup(fruprod.ifpi_product_version);
+			serial = strdup(fruprod.ifpi_product_serial);
+		} else if (ipmi_fru_parse_board(ihp, frudata, &frubrd) == 0) {
+			part = strdup(frubrd.ifbi_part_number);
+			serial = strdup(frubrd.ifbi_product_serial);
+		}
+	}
+	free(frudata);
+
 	if ((fmri = topo_mod_hcfmri(mod, pnode, FM_HC_SCHEME_VERSION,
-	    edp->ed_name, edp->ed_instance, NULL, auth, NULL, NULL,
-	    NULL)) == NULL) {
+	    edp->ed_name, edp->ed_instance, NULL, auth, part, rev,
+	    serial)) == NULL) {
 		nvlist_free(auth);
+		free(part);
+		free(rev);
+		free(serial);
 		topo_mod_dprintf(mod, "topo_mod_hcfmri() failed: %s",
 		    topo_mod_errmsg(mod));
 		return (1);
 	}
-
 	nvlist_free(auth);
+	free(part);
+	free(rev);
+	free(serial);
 
 	if ((tn = topo_node_bind(mod, pnode, edp->ed_name,
 	    edp->ed_instance, fmri)) == NULL) {
@@ -283,6 +451,12 @@ ipmi_check_entity(ipmi_handle_t *ihp, ipmi_entity_t *ep, void *data)
 	case IPMI_ET_FAN:
 		labelname = "FAN";
 		break;
+
+	default:
+		topo_mod_dprintf(mod, "unknown entity type, %u: cannot set "
+		    "label name", edp->ed_entity);
+		nvlist_free(fmri);
+		return (1);
 	}
 
 	len = strlen(label);
@@ -313,8 +487,42 @@ ipmi_check_entity(ipmi_handle_t *ihp, ipmi_entity_t *ep, void *data)
 		}
 	}
 
+	/*
+	 * Add properties to contain the IPMI entity id and instance.  This
+	 * will be used by the fac_prov_ipmi module to discover and enumerate
+	 * facility nodes for any associated sensors.
+	 */
+	if (topo_prop_set_uint32(tn, TOPO_PGROUP_IPMI, TOPO_PROP_IPMI_ENTITY_ID,
+	    TOPO_PROP_IMMUTABLE, ep->ie_type, &err) != 0 ||
+	    topo_prop_set_uint32(tn, TOPO_PGROUP_IPMI,
+	    TOPO_PROP_IPMI_ENTITY_INST, TOPO_PROP_IMMUTABLE, ep->ie_instance,
+	    &err) != 0) {
+		topo_mod_dprintf(mod, "failed to add ipmi properties (%s)",
+		    topo_strerror(err));
+		return (1);
+	}
 	if (topo_method_register(mod, tn, ipmi_methods) != 0) {
 		topo_mod_dprintf(mod, "topo_method_register() failed: %s",
+		    topo_mod_errmsg(mod));
+		return (1);
+	}
+
+	/*
+	 * Invoke the tmo_enum callback from the fac_prov_ipmi module on this
+	 * node.  This will have the effect of registering a method on this node
+	 * for enumerating sensors.
+	 */
+	if (fmod == NULL && (fmod = topo_mod_load(mod, FAC_PROV_IPMI,
+	    TOPO_VERSION)) == NULL) {
+		topo_mod_dprintf(mod, "failed to load %s: %s",
+		    FAC_PROV_IPMI, topo_mod_errmsg(mod));
+		return (-1);
+	}
+	topo_mod_setspecific(mod, fmod);
+
+	if (topo_mod_enumerate(fmod, tn, FAC_PROV_IPMI, FAC_PROV_IPMI, 0, 0,
+	    NULL) != 0) {
+		topo_mod_dprintf(mod, "facility provider enum failed (%s)",
 		    topo_mod_errmsg(mod));
 		return (1);
 	}
@@ -324,11 +532,8 @@ ipmi_check_entity(ipmi_handle_t *ihp, ipmi_entity_t *ep, void *data)
 	 * FRU locator record, then propagate the parent's FRU.  Otherwise, set
 	 * the FRU to be the same as the resource.
 	 */
-	edp->ed_hasfru = B_FALSE;
-	(void) ipmi_entity_iter_sdr(ihp, ep, ipmi_check_sdr, edp);
-
 	if (strcmp(topo_node_name(pnode), CHASSIS) == 0 ||
-	    edp->ed_hasfru) {
+	    edp->ed_frusdr != NULL) {
 		if (topo_node_resource(tn, &fmri, &err) != 0) {
 			topo_mod_dprintf(mod, "topo_node_resource() failed: %s",
 			    topo_strerror(err));
@@ -483,8 +688,8 @@ _topo_init(topo_mod_t *mod, topo_version_t version)
 		topo_mod_setdebug(mod);
 
 	if (topo_mod_register(mod, &ipmi_info, TOPO_VERSION) != 0) {
-		topo_mod_dprintf(mod, "%s registration failed: %s\n",
-		    DISK, topo_mod_errmsg(mod));
+		topo_mod_dprintf(mod, "module registration failed: %s\n",
+		    topo_mod_errmsg(mod));
 		return (-1); /* mod errno already set */
 	}
 
@@ -495,5 +700,16 @@ _topo_init(topo_mod_t *mod, topo_version_t version)
 void
 _topo_fini(topo_mod_t *mod)
 {
+	/*
+	 * This is the logical, and probably only safe spot where we could
+	 * unload fac_prov_ipmi.  But unfortunately, calling topo_mod_unload()
+	 * in the context of a module's _topo_fini entry point would result
+	 * in recursively grabbing the modhash lock and we'd deadlock.
+	 *
+	 * Unfortunately, libtopo doesn't currently have a mechanism for
+	 * expressing and handling intermodule dependencies, so we're left
+	 * with this situation where once a module loads another module,
+	 * it's going to be with us until we teardown the process.
+	 */
 	topo_mod_unregister(mod);
 }

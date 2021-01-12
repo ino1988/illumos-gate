@@ -20,25 +20,37 @@
 #
 #
 # Copyright (c) 2006, 2010, Oracle and/or its affiliates. All rights reserved.
+# Copyright 2013 Saso Kiselkov. All rights reserved.
 #
 
 LIBRARY =	libmd.a
 VERS =		.1
 
-OBJECTS =	md4.o md5.o sha1.o sha2.o
+OBJECTS =	edonr.o md4.o md5.o sha1.o sha2.o \
+		skein.o skein_block.o skein_iv.o
 
 include		$(SRC)/lib/Makefile.lib
 include		$(SRC)/lib/Makefile.rootfs
 include		$(SRC)/lib/Makefile.lib.64
 include		../Makefile.com
 
+CAPFILES =	pics/sha1-ni.o \
+		pics/sha256-ni.o
+
 EXTPICS =	pics/md5_amd64.o \
-		pics/sha1-x86_64.o \
 		pics/sha512-x86_64.o \
-		pics/sha256-x86_64.o
+		pics/sha256-x86_64.o \
+		pics/sha1-x86_64.o \
+		$(CAPFILES:%.o=%.o.symcap)
 
 CLEANFILES +=	$(EXTPICS) \
-		$(EXTPICS:pics/%.o=%.s)
+		$(EXTPICS:pics/%.o=%.s) \
+		$(CAPFILES) \
+		$(CAPFILES:%.o=%.o.objcap) \
+		$(CAPFILES:%.o=%.o.symcap)
+
+pics/sha1-ni.o.objcap		:= CAPFILE = capabilities/sha.cap
+pics/sha256-ni.o.objcap		:= CAPFILE = capabilities/sha.cap
 
 # This prevents <sys/asm_linkage.h> from including C source:
 AS_CPPFLAGS += -D_ASM
@@ -47,13 +59,26 @@ AS_CPPFLAGS += -D_ASM
 
 all:		$(LIBS)
 
-install:	all $(ROOTLIBS64) $(ROOTLINKS64) $(ROOTLINT64)
-
-lint:		lintcheck
+install:	all $(ROOTLIBS64) $(ROOTLINKS64) $(ROOTCOMPATLINKS64)
 
 pics/%.o: %.s
 		$(COMPILE.s) -o $@ ${@F:.o=.s}
 		$(POST_PROCESS_O)
+
+pics/%.o: $(SRC)/common/crypto/sha1/amd64/%.s
+		$(COMPILE.s) -o $@ $<
+		$(POST_PROCESS_O)
+
+pics/%.o: $(SRC)/common/crypto/sha2/amd64/%.s
+		$(COMPILE.s) -o $@ $<
+		$(POST_PROCESS_O)
+
+pics/%.o.objcap: pics/%.o
+		$(LD) -r -o $@ -Wl,-M$(CAPFILE) $(BREDUCE) $<
+		$(POST_PROCESS_O)
+
+pics/%.o.symcap: pics/%.o.objcap
+		$(LD) -r -o $@ -z symbolcap $<
 
 md5_amd64.s: $(COMDIR)/md5/amd64/md5_amd64.pl
 		$(PERL) $? $@

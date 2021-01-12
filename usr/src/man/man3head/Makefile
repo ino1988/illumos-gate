@@ -13,102 +13,203 @@
 # Copyright 2011, Richard Lowe
 # Copyright 2013 Nexenta Systems, Inc.  All rights reserved.
 # Copyright 2014 Garrett D'Amore <garrett@damore.org>
+# Copyright 2020 OmniOS Community Edition (OmniOSce) Association.
 #
 
 include		$(SRC)/Makefile.master
 
-MANSECT= 	3head
+MANSECT=	3head
 
 MANFILES=	acct.h.3head		\
-	 	aio.h.3head		\
-	 	ar.h.3head		\
-	 	archives.h.3head	\
-	 	assert.h.3head		\
-	 	complex.h.3head		\
-	 	cpio.h.3head		\
-	 	dirent.h.3head		\
-	 	errno.h.3head		\
-	 	fcntl.h.3head		\
-	 	fenv.h.3head		\
-	 	float.h.3head		\
-	 	floatingpoint.h.3head	\
-	 	fmtmsg.h.3head		\
-	 	fnmatch.h.3head		\
-	 	ftw.h.3head		\
-	 	glob.h.3head		\
-	 	grp.h.3head		\
-	 	iconv.h.3head		\
-	 	if.h.3head		\
-	 	in.h.3head		\
-	 	inet.h.3head		\
-	 	inttypes.h.3head	\
-	 	ipc.h.3head		\
-	 	iso646.h.3head		\
-	 	langinfo.h.3head	\
-	 	libgen.h.3head		\
-	 	libintl.h.3head		\
-	 	limits.h.3head		\
-	 	locale.h.3head		\
-	 	math.h.3head		\
-	 	mman.h.3head		\
-	 	monetary.h.3head	\
-	 	mqueue.h.3head		\
-	 	msg.h.3head		\
-	 	ndbm.h.3head		\
-	 	netdb.h.3head		\
-	 	nl_types.h.3head	\
-	 	poll.h.3head		\
-	 	pthread.h.3head		\
-	 	pwd.h.3head		\
-	 	regex.h.3head		\
-	 	resource.h.3head	\
-	 	sched.h.3head		\
-	 	search.h.3head		\
-	 	select.h.3head		\
-	 	sem.h.3head		\
-	 	semaphore.h.3head	\
-	 	setjmp.h.3head		\
-	 	shm.h.3head		\
-	 	siginfo.h.3head		\
-	 	signal.h.3head		\
-	 	socket.h.3head		\
-	 	spawn.h.3head		\
-	 	stat.h.3head		\
-	 	statvfs.h.3head		\
-	 	stdbool.h.3head		\
-	 	stddef.h.3head		\
-	 	stdint.h.3head		\
-	 	stdio.h.3head		\
-	 	stdlib.h.3head		\
-	 	string.h.3head		\
-	 	strings.h.3head		\
-	 	stropts.h.3head		\
-	 	syslog.h.3head		\
-	 	tar.h.3head		\
-	 	tcp.h.3head		\
-	 	termios.h.3head		\
-	 	tgmath.h.3head		\
-	 	time.h.3head		\
-	 	timeb.h.3head		\
-	 	times.h.3head		\
-	 	types.h.3head		\
-	 	types32.h.3head		\
-	 	ucontext.h.3head	\
-	 	uio.h.3head		\
-	 	ulimit.h.3head		\
-	 	un.h.3head		\
-	 	unistd.h.3head		\
-	 	utime.h.3head		\
-	 	utmpx.h.3head		\
-	 	utsname.h.3head		\
-	 	values.h.3head		\
-	 	wait.h.3head		\
-	 	wchar.h.3head		\
-	 	wctype.h.3head		\
-	 	wordexp.h.3head		\
-	 	xlocale.h.3head
+		aio.h.3head		\
+		ar.h.3head		\
+		archives.h.3head	\
+		assert.h.3head		\
+		complex.h.3head		\
+		cpio.h.3head		\
+		dirent.h.3head		\
+		endian.h.3head		\
+		errno.h.3head		\
+		fcntl.h.3head		\
+		fenv.h.3head		\
+		float.h.3head		\
+		floatingpoint.h.3head	\
+		fmtmsg.h.3head		\
+		fnmatch.h.3head		\
+		ftw.h.3head		\
+		glob.h.3head		\
+		grp.h.3head		\
+		iconv.h.3head		\
+		if.h.3head		\
+		in.h.3head		\
+		inet.h.3head		\
+		inttypes.h.3head	\
+		ipc.h.3head		\
+		iso646.h.3head		\
+		langinfo.h.3head	\
+		libgen.h.3head		\
+		libintl.h.3head		\
+		limits.h.3head		\
+		locale.h.3head		\
+		math.h.3head		\
+		mman.h.3head		\
+		monetary.h.3head	\
+		mqueue.h.3head		\
+		msg.h.3head		\
+		ndbm.h.3head		\
+		netdb.h.3head		\
+		nl_types.h.3head	\
+		poll.h.3head		\
+		pthread.h.3head		\
+		pwd.h.3head		\
+		queue.h.3head		\
+		regex.h.3head		\
+		resource.h.3head	\
+		sched.h.3head		\
+		search.h.3head		\
+		select.h.3head		\
+		sem.h.3head		\
+		semaphore.h.3head	\
+		setjmp.h.3head		\
+		shm.h.3head		\
+		siginfo.h.3head		\
+		signal.h.3head		\
+		socket.h.3head		\
+		spawn.h.3head		\
+		stat.h.3head		\
+		statvfs.h.3head		\
+		stdbool.h.3head		\
+		stddef.h.3head		\
+		stdint.h.3head		\
+		stdio.h.3head		\
+		stdlib.h.3head		\
+		string.h.3head		\
+		strings.h.3head		\
+		stropts.h.3head		\
+		syslog.h.3head		\
+		tar.h.3head		\
+		tcp.h.3head		\
+		termios.h.3head		\
+		tgmath.h.3head		\
+		time.h.3head		\
+		timeb.h.3head		\
+		times.h.3head		\
+		timespec.3head		\
+		types.h.3head		\
+		types32.h.3head		\
+		uchar.h.3head		\
+		ucontext.h.3head	\
+		uio.h.3head		\
+		ulimit.h.3head		\
+		un.h.3head		\
+		unistd.h.3head		\
+		upanic.h.3head		\
+		utime.h.3head		\
+		utmpx.h.3head		\
+		utsname.h.3head		\
+		values.h.3head		\
+		wait.h.3head		\
+		wchar.h.3head		\
+		wctype.h.3head		\
+		wordexp.h.3head		\
+		xlocale.h.3head
 
-MANLINKS=	acct.3head		\
+MANLINKS=	\
+		CMSG_DATA.3head \
+		CMSG_FIRSTHDR.3head \
+		CMSG_LEN.3head \
+		CMSG_NXTHDR.3head \
+		CMSG_SPACE.3head \
+		LIST_CLASS_ENTRY.3head \
+		LIST_CLASS_HEAD.3head \
+		LIST_CONCAT.3head \
+		LIST_EMPTY.3head \
+		LIST_ENTRY.3head \
+		LIST_FIRST.3head \
+		LIST_FOREACH.3head \
+		LIST_FOREACH_FROM.3head \
+		LIST_FOREACH_FROM_SAFE.3head \
+		LIST_FOREACH_SAFE.3head \
+		LIST_HEAD.3head \
+		LIST_HEAD_INITIALIZER.3head \
+		LIST_INIT.3head \
+		LIST_INSERT_AFTER.3head \
+		LIST_INSERT_BEFORE.3head \
+		LIST_INSERT_HEAD.3head \
+		LIST_NEXT.3head \
+		LIST_PREV.3head \
+		LIST_REMOVE.3head \
+		LIST_SWAP.3head \
+		SLIST_CLASS_ENTRY.3head \
+		SLIST_CLASS_HEAD.3head \
+		SLIST_CONCAT.3head \
+		SLIST_EMPTY.3head \
+		SLIST_ENTRY.3head \
+		SLIST_FIRST.3head \
+		SLIST_FOREACH.3head \
+		SLIST_FOREACH_FROM.3head \
+		SLIST_FOREACH_FROM_SAFE.3head \
+		SLIST_FOREACH_SAFE.3head \
+		SLIST_HEAD.3head \
+		SLIST_HEAD_INITIALIZER.3head \
+		SLIST_INIT.3head \
+		SLIST_INSERT_AFTER.3head \
+		SLIST_INSERT_HEAD.3head \
+		SLIST_NEXT.3head \
+		SLIST_REMOVE.3head \
+		SLIST_REMOVE_AFTER.3head \
+		SLIST_REMOVE_HEAD.3head \
+		SLIST_SWAP.3head \
+		STAILQ_CLASS_ENTRY.3head \
+		STAILQ_CLASS_HEAD.3head \
+		STAILQ_CONCAT.3head \
+		STAILQ_EMPTY.3head \
+		STAILQ_ENTRY.3head \
+		STAILQ_FIRST.3head \
+		STAILQ_FOREACH.3head \
+		STAILQ_FOREACH_FROM.3head \
+		STAILQ_FOREACH_FROM_SAFE.3head \
+		STAILQ_FOREACH_SAFE.3head \
+		STAILQ_HEAD.3head \
+		STAILQ_HEAD_INITIALIZER.3head \
+		STAILQ_INIT.3head \
+		STAILQ_INSERT_AFTER.3head \
+		STAILQ_INSERT_HEAD.3head \
+		STAILQ_INSERT_TAIL.3head \
+		STAILQ_LAST.3head \
+		STAILQ_NEXT.3head \
+		STAILQ_REMOVE.3head \
+		STAILQ_REMOVE_AFTER.3head \
+		STAILQ_REMOVE_HEAD.3head \
+		STAILQ_SWAP.3head \
+		TAILQ_CLASS_ENTRY.3head \
+		TAILQ_CLASS_HEAD.3head \
+		TAILQ_CONCAT.3head \
+		TAILQ_EMPTY.3head \
+		TAILQ_ENTRY.3head \
+		TAILQ_FIRST.3head \
+		TAILQ_FOREACH.3head \
+		TAILQ_FOREACH_FROM.3head \
+		TAILQ_FOREACH_FROM_SAFE.3head \
+		TAILQ_FOREACH_REVERSE.3head \
+		TAILQ_FOREACH_REVERSE_FROM.3head \
+		TAILQ_FOREACH_REVERSE_FROM_SAFE.3head \
+		TAILQ_FOREACH_REVERSE_SAFE.3head \
+		TAILQ_FOREACH_SAFE.3head \
+		TAILQ_HEAD.3head \
+		TAILQ_HEAD_INITIALIZER.3head \
+		TAILQ_INIT.3head \
+		TAILQ_INSERT_AFTER.3head \
+		TAILQ_INSERT_BEFORE.3head \
+		TAILQ_INSERT_HEAD.3head \
+		TAILQ_INSERT_TAIL.3head \
+		TAILQ_LAST.3head \
+		TAILQ_NEXT.3head \
+		TAILQ_PREV.3head \
+		TAILQ_REMOVE.3head \
+		TAILQ_SWAP.3head
+
+MANLINKS +=	acct.3head		\
 		aio.3head		\
 		ar.3head		\
 		archives.3head		\
@@ -180,6 +281,9 @@ MANLINKS=	acct.3head		\
 		time.3head		\
 		timeb.3head		\
 		times.3head		\
+		timeval.3head		\
+		TIMEVAL_TO_TIMESPEC.3head \
+		TIMESPEC_TO_TIMEVAL.3head \
 		types.3head		\
 		types32.3head		\
 		ucontext.3head		\
@@ -196,6 +300,100 @@ MANLINKS=	acct.3head		\
 		wctype.3head		\
 		wordexp.3head		\
 		xlocale.3head
+
+CMSG_DATA.3head := LINKSRC = socket.h.3head
+CMSG_FIRSTHDR.3head := LINKSRC = socket.h.3head
+CMSG_LEN.3head := LINKSRC = socket.h.3head
+CMSG_NXTHDR.3head := LINKSRC = socket.h.3head
+CMSG_SPACE.3head := LINKSRC = socket.h.3head
+LIST_CLASS_ENTRY.3head := LINKSRC = queue.h.3head
+LIST_CLASS_HEAD.3head := LINKSRC = queue.h.3head
+LIST_CONCAT.3head := LINKSRC = queue.h.3head
+LIST_EMPTY.3head := LINKSRC = queue.h.3head
+LIST_ENTRY.3head := LINKSRC = queue.h.3head
+LIST_FIRST.3head := LINKSRC = queue.h.3head
+LIST_FOREACH.3head := LINKSRC = queue.h.3head
+LIST_FOREACH_FROM.3head := LINKSRC = queue.h.3head
+LIST_FOREACH_FROM_SAFE.3head := LINKSRC = queue.h.3head
+LIST_FOREACH_SAFE.3head := LINKSRC = queue.h.3head
+LIST_HEAD.3head := LINKSRC = queue.h.3head
+LIST_HEAD_INITIALIZER.3head := LINKSRC = queue.h.3head
+LIST_INIT.3head := LINKSRC = queue.h.3head
+LIST_INSERT_AFTER.3head := LINKSRC = queue.h.3head
+LIST_INSERT_BEFORE.3head := LINKSRC = queue.h.3head
+LIST_INSERT_HEAD.3head := LINKSRC = queue.h.3head
+LIST_NEXT.3head := LINKSRC = queue.h.3head
+LIST_PREV.3head := LINKSRC = queue.h.3head
+LIST_REMOVE.3head := LINKSRC = queue.h.3head
+LIST_SWAP.3head := LINKSRC = queue.h.3head
+SLIST_CLASS_ENTRY.3head := LINKSRC = queue.h.3head
+SLIST_CLASS_HEAD.3head := LINKSRC = queue.h.3head
+SLIST_CONCAT.3head := LINKSRC = queue.h.3head
+SLIST_EMPTY.3head := LINKSRC = queue.h.3head
+SLIST_ENTRY.3head := LINKSRC = queue.h.3head
+SLIST_FIRST.3head := LINKSRC = queue.h.3head
+SLIST_FOREACH.3head := LINKSRC = queue.h.3head
+SLIST_FOREACH_FROM.3head := LINKSRC = queue.h.3head
+SLIST_FOREACH_FROM_SAFE.3head := LINKSRC = queue.h.3head
+SLIST_FOREACH_SAFE.3head := LINKSRC = queue.h.3head
+SLIST_HEAD.3head := LINKSRC = queue.h.3head
+SLIST_HEAD_INITIALIZER.3head := LINKSRC = queue.h.3head
+SLIST_INIT.3head := LINKSRC = queue.h.3head
+SLIST_INSERT_AFTER.3head := LINKSRC = queue.h.3head
+SLIST_INSERT_HEAD.3head := LINKSRC = queue.h.3head
+SLIST_NEXT.3head := LINKSRC = queue.h.3head
+SLIST_REMOVE.3head := LINKSRC = queue.h.3head
+SLIST_REMOVE_AFTER.3head := LINKSRC = queue.h.3head
+SLIST_REMOVE_HEAD.3head := LINKSRC = queue.h.3head
+SLIST_SWAP.3head := LINKSRC = queue.h.3head
+STAILQ_CLASS_ENTRY.3head := LINKSRC = queue.h.3head
+STAILQ_CLASS_HEAD.3head := LINKSRC = queue.h.3head
+STAILQ_CONCAT.3head := LINKSRC = queue.h.3head
+STAILQ_EMPTY.3head := LINKSRC = queue.h.3head
+STAILQ_ENTRY.3head := LINKSRC = queue.h.3head
+STAILQ_FIRST.3head := LINKSRC = queue.h.3head
+STAILQ_FOREACH.3head := LINKSRC = queue.h.3head
+STAILQ_FOREACH_FROM.3head := LINKSRC = queue.h.3head
+STAILQ_FOREACH_FROM_SAFE.3head := LINKSRC = queue.h.3head
+STAILQ_FOREACH_SAFE.3head := LINKSRC = queue.h.3head
+STAILQ_HEAD.3head := LINKSRC = queue.h.3head
+STAILQ_HEAD_INITIALIZER.3head := LINKSRC = queue.h.3head
+STAILQ_INIT.3head := LINKSRC = queue.h.3head
+STAILQ_INSERT_AFTER.3head := LINKSRC = queue.h.3head
+STAILQ_INSERT_HEAD.3head := LINKSRC = queue.h.3head
+STAILQ_INSERT_TAIL.3head := LINKSRC = queue.h.3head
+STAILQ_LAST.3head := LINKSRC = queue.h.3head
+STAILQ_NEXT.3head := LINKSRC = queue.h.3head
+STAILQ_REMOVE.3head := LINKSRC = queue.h.3head
+STAILQ_REMOVE_AFTER.3head := LINKSRC = queue.h.3head
+STAILQ_REMOVE_HEAD.3head := LINKSRC = queue.h.3head
+STAILQ_SWAP.3head := LINKSRC = queue.h.3head
+TAILQ_CLASS_ENTRY.3head := LINKSRC = queue.h.3head
+TAILQ_CLASS_HEAD.3head := LINKSRC = queue.h.3head
+TAILQ_CONCAT.3head := LINKSRC = queue.h.3head
+TAILQ_EMPTY.3head := LINKSRC = queue.h.3head
+TAILQ_ENTRY.3head := LINKSRC = queue.h.3head
+TAILQ_FIRST.3head := LINKSRC = queue.h.3head
+TAILQ_FOREACH.3head := LINKSRC = queue.h.3head
+TAILQ_FOREACH_FROM.3head := LINKSRC = queue.h.3head
+TAILQ_FOREACH_FROM_SAFE.3head := LINKSRC = queue.h.3head
+TAILQ_FOREACH_REVERSE.3head := LINKSRC = queue.h.3head
+TAILQ_FOREACH_REVERSE_FROM.3head := LINKSRC = queue.h.3head
+TAILQ_FOREACH_REVERSE_FROM_SAFE.3head := LINKSRC = queue.h.3head
+TAILQ_FOREACH_REVERSE_SAFE.3head := LINKSRC = queue.h.3head
+TAILQ_FOREACH_SAFE.3head := LINKSRC = queue.h.3head
+TAILQ_HEAD.3head := LINKSRC = queue.h.3head
+TAILQ_HEAD_INITIALIZER.3head := LINKSRC = queue.h.3head
+TAILQ_INIT.3head := LINKSRC = queue.h.3head
+TAILQ_INSERT_AFTER.3head := LINKSRC = queue.h.3head
+TAILQ_INSERT_BEFORE.3head := LINKSRC = queue.h.3head
+TAILQ_INSERT_HEAD.3head := LINKSRC = queue.h.3head
+TAILQ_INSERT_TAIL.3head := LINKSRC = queue.h.3head
+TAILQ_LAST.3head := LINKSRC = queue.h.3head
+TAILQ_NEXT.3head := LINKSRC = queue.h.3head
+TAILQ_PREV.3head := LINKSRC = queue.h.3head
+TAILQ_REMOVE.3head := LINKSRC = queue.h.3head
+TAILQ_SWAP.3head := LINKSRC = queue.h.3head
 
 acct.3head		:= LINKSRC = acct.h.3head
 aio.3head		:= LINKSRC = aio.h.3head
@@ -269,6 +467,10 @@ tgmath.3head		:= LINKSRC = tgmath.h.3head
 time.3head		:= LINKSRC = time.h.3head
 timeb.3head		:= LINKSRC = timeb.h.3head
 times.3head		:= LINKSRC = times.h.3head
+timespec.3head		:= LINKSRC = time.h.3head
+timeval.3head		:= LINKSRC = timespec.3head
+TIMEVAL_TO_TIMESPEC.3head := LINKSRC = timespec.3head
+TIMESPEC_TO_TIMEVAL.3head := LINKSRC = timespec.3head
 types.3head		:= LINKSRC = types.h.3head
 types32.3head		:= LINKSRC = types32.h.3head
 ucontext.3head		:= LINKSRC = ucontext.h.3head

@@ -20,7 +20,7 @@
  */
 /*
  * Copyright (c) 2007, 2010, Oracle and/or its affiliates. All rights reserved.
- * Copyright 2012 Nexenta Systems, Inc. All rights reserved.
+ * Copyright 2019 Nexenta by DDN, Inc. All rights reserved.
  */
 
 #include <smbsrv/smb_kproto.h>
@@ -151,24 +151,26 @@ smb_pathname_reduce(
     char		*last_component)
 {
 	smb_node_t	*root_node;
-	pathname_t	ppn;
+	pathname_t	ppn, mnt_pn;
 	char		*usepath;
 	int		lookup_flags = FOLLOW;
-	int 		trailing_slash = 0;
+	int		trailing_slash = 0;
 	int		err = 0;
 	int		len;
-	smb_node_t	*vss_cur_node;
-	smb_node_t	*vss_root_node;
+	smb_node_t	*vss_node;
 	smb_node_t	*local_cur_node;
 	smb_node_t	*local_root_node;
+	boolean_t	chk_vss;
+	char		*gmttoken;
 
 	ASSERT(dir_node);
 	ASSERT(last_component);
 
 	*dir_node = NULL;
 	*last_component = '\0';
-	vss_cur_node = NULL;
-	vss_root_node = NULL;
+	vss_node = NULL;
+	gmttoken = NULL;
+	chk_vss = B_FALSE;
 
 	if (sr && sr->tid_tree) {
 		if (STYPE_ISIPC(sr->tid_tree->t_res_type))
@@ -184,10 +186,11 @@ smb_pathname_reduce(
 	if (*path == '\0')
 		return (ENOENT);
 
-	usepath = kmem_alloc(MAXPATHLEN, KM_SLEEP);
+	usepath = kmem_alloc(SMB_MAXPATHLEN, KM_SLEEP);
 
-	if ((len = strlcpy(usepath, path, MAXPATHLEN)) >= MAXPATHLEN) {
-		kmem_free(usepath, MAXPATHLEN);
+	len = strlcpy(usepath, path, SMB_MAXPATHLEN);
+	if (len >= SMB_MAXPATHLEN) {
+		kmem_free(usepath, SMB_MAXPATHLEN);
 		return (ENAMETOOLONG);
 	}
 
@@ -204,27 +207,46 @@ smb_pathname_reduce(
 	local_cur_node = cur_node;
 	local_root_node = root_node;
 
-	if (SMB_TREE_IS_DFSROOT(sr) && (sr->smb_flg2 & SMB_FLAGS2_DFS)) {
-		err = smb_pathname_dfs_preprocess(sr, usepath, MAXPATHLEN);
-		if (err != 0) {
-			kmem_free(usepath, MAXPATHLEN);
-			return (err);
+	if (SMB_TREE_IS_DFSROOT(sr)) {
+		int is_dfs;
+		if (sr->session->dialect >= SMB_VERS_2_BASE)
+			is_dfs = sr->smb2_hdr_flags &
+			    SMB2_FLAGS_DFS_OPERATIONS;
+		else
+			is_dfs = sr->smb_flg2 & SMB_FLAGS2_DFS;
+		if (is_dfs != 0) {
+			err = smb_pathname_dfs_preprocess(sr, usepath,
+			    SMB_MAXPATHLEN);
+			if (err != 0) {
+				kmem_free(usepath, SMB_MAXPATHLEN);
+				return (err);
+			}
+			len = strlen(usepath);
 		}
-		len = strlen(usepath);
 	}
 
-	if (sr && (sr->smb_flg2 & SMB_FLAGS2_REPARSE_PATH)) {
-		err = smb_vss_lookup_nodes(sr, root_node, cur_node,
-		    usepath, &vss_cur_node, &vss_root_node);
+	if (sr != NULL) {
+		if (sr->session->dialect >= SMB_VERS_2_BASE) {
+			chk_vss = sr->arg.open.create_timewarp;
+		} else {
+			chk_vss = (sr->smb_flg2 &
+			    SMB_FLAGS2_REPARSE_PATH) != 0;
 
-		if (err != 0) {
-			kmem_free(usepath, MAXPATHLEN);
-			return (err);
+			if (chk_vss) {
+				gmttoken = kmem_alloc(SMB_VSS_GMT_SIZE,
+				    KM_SLEEP);
+				err = smb_vss_extract_gmttoken(usepath,
+				    gmttoken);
+				if (err != 0) {
+					kmem_free(usepath, SMB_MAXPATHLEN);
+					kmem_free(gmttoken, SMB_VSS_GMT_SIZE);
+					return (err);
+				}
+				len = strlen(usepath);
+			}
 		}
-
-		len = strlen(usepath);
-		local_cur_node = vss_cur_node;
-		local_root_node = vss_root_node;
+		if (chk_vss)
+			(void) pn_alloc(&mnt_pn);
 	}
 
 	if (usepath[len - 1] == '/')
@@ -232,15 +254,15 @@ smb_pathname_reduce(
 
 	(void) strcanon(usepath, "/");
 
-	(void) pn_alloc(&ppn);
+	(void) pn_alloc_sz(&ppn, SMB_MAXPATHLEN);
 
 	if ((err = pn_set(&ppn, usepath)) != 0) {
 		(void) pn_free(&ppn);
-		kmem_free(usepath, MAXPATHLEN);
-		if (vss_cur_node != NULL)
-			(void) smb_node_release(vss_cur_node);
-		if (vss_root_node != NULL)
-			(void) smb_node_release(vss_root_node);
+		kmem_free(usepath, SMB_MAXPATHLEN);
+		if (chk_vss)
+			(void) pn_free(&mnt_pn);
+		if (gmttoken != NULL)
+			kmem_free(gmttoken, SMB_VSS_GMT_SIZE);
 		return (err);
 	}
 
@@ -249,14 +271,21 @@ smb_pathname_reduce(
 	 * last component.  (We only need to return an smb_node for
 	 * the second to last component; a name is returned for the
 	 * last component.)
+	 *
+	 * For VSS requests, the last component might be a filesystem of its
+	 * own, and we need to discover that before exiting this function,
+	 * so allow the lookup to happen on the last component.
+	 * We'll correct this later when we convert to the snapshot.
 	 */
 
-	if (trailing_slash) {
-		(void) strlcpy(last_component, ".", MAXNAMELEN);
-	} else {
-		(void) pn_setlast(&ppn);
-		(void) strlcpy(last_component, ppn.pn_path, MAXNAMELEN);
-		ppn.pn_path[0] = '\0';
+	if (!chk_vss) {
+		if (trailing_slash) {
+			(void) strlcpy(last_component, ".", MAXNAMELEN);
+		} else {
+			(void) pn_setlast(&ppn);
+			(void) strlcpy(last_component, ppn.pn_path, MAXNAMELEN);
+			ppn.pn_path[0] = '\0';
+		}
 	}
 
 	if ((strcmp(ppn.pn_buf, "/") == 0) || (ppn.pn_buf[0] == '\0')) {
@@ -264,11 +293,61 @@ smb_pathname_reduce(
 		*dir_node = local_cur_node;
 	} else {
 		err = smb_pathname(sr, ppn.pn_buf, lookup_flags,
-		    local_root_node, local_cur_node, NULL, dir_node, cred);
+		    local_root_node, local_cur_node, NULL, dir_node, cred,
+		    chk_vss ? &mnt_pn : NULL);
 	}
 
 	(void) pn_free(&ppn);
-	kmem_free(usepath, MAXPATHLEN);
+	kmem_free(usepath, SMB_MAXPATHLEN);
+
+	/*
+	 * We need to try and convert to snapshots, even on error.
+	 * This is to handle the following cases:
+	 * - We're on the lowest level filesystem, but a directory got renamed
+	 *   on the live version. We'll get ENOENT, but can still find it in
+	 *   the snapshot.
+	 * - The last component was actually a file. We need to leave the last
+	 *   component in in case it is, itself, a mountpoint, but that means
+	 *   we might get ENOTDIR if it's not actually a directory.
+	 *
+	 * Note that if you change the share-relative name of a mountpoint,
+	 * you won't be able to access previous versions of files under it.
+	 */
+	if (chk_vss && *dir_node != NULL) {
+		if ((err = smb_vss_lookup_nodes(sr, *dir_node, &vss_node,
+		    gmttoken)) == 0) {
+			char *p = mnt_pn.pn_path;
+			size_t pathleft;
+
+			smb_node_release(*dir_node);
+			*dir_node = NULL;
+			pathleft = pn_pathleft(&mnt_pn);
+
+			if (pathleft == 0 || trailing_slash) {
+				(void) strlcpy(last_component, ".", MAXNAMELEN);
+			} else {
+				(void) pn_setlast(&mnt_pn);
+				(void) strlcpy(last_component, mnt_pn.pn_path,
+				    MAXNAMELEN);
+				mnt_pn.pn_path[0] = '\0';
+				pathleft -= strlen(last_component);
+			}
+
+			if (pathleft != 0) {
+				err = smb_pathname(sr, p, lookup_flags,
+				    vss_node, vss_node, NULL, dir_node, cred,
+				    NULL);
+			} else {
+				*dir_node = vss_node;
+				vss_node = NULL;
+			}
+		}
+	}
+
+	if (chk_vss)
+		(void) pn_free(&mnt_pn);
+	if (gmttoken != NULL)
+		kmem_free(gmttoken, SMB_VSS_GMT_SIZE);
 
 	/*
 	 * Prevent traversal to another file system if mount point
@@ -301,11 +380,8 @@ smb_pathname_reduce(
 		*last_component = 0;
 	}
 
-	if (vss_cur_node != NULL)
-		(void) smb_node_release(vss_cur_node);
-	if (vss_root_node != NULL)
-		(void) smb_node_release(vss_root_node);
-
+	if (vss_node != NULL)
+		(void) smb_node_release(vss_node);
 	return (err);
 }
 
@@ -340,11 +416,11 @@ smb_pathname_reduce(
 int
 smb_pathname(smb_request_t *sr, char *path, int flags,
     smb_node_t *root_node, smb_node_t *cur_node, smb_node_t **dir_node,
-    smb_node_t **ret_node, cred_t *cred)
+    smb_node_t **ret_node, cred_t *cred, pathname_t *mnt_pn)
 {
 	char		*component, *real_name, *namep;
 	pathname_t	pn, rpn, upn, link_pn;
-	smb_node_t	*dnode, *fnode;
+	smb_node_t	*dnode, *fnode, *mnt_node;
 	smb_attr_t	attr;
 	vnode_t		*rootvp, *vp;
 	size_t		pathleft;
@@ -353,6 +429,7 @@ smb_pathname(smb_request_t *sr, char *path, int flags,
 	int		local_flags;
 	uint32_t	abe_flag = 0;
 	char		namebuf[MAXNAMELEN];
+	vnode_t *fsrootvp = NULL;
 
 	if (path == NULL)
 		return (EINVAL);
@@ -366,9 +443,14 @@ smb_pathname(smb_request_t *sr, char *path, int flags,
 	if (dir_node)
 		*dir_node = NULL;
 
-	(void) pn_alloc(&upn);
+	(void) pn_alloc_sz(&upn, SMB_MAXPATHLEN);
 
 	if ((err = pn_set(&upn, path)) != 0) {
+		(void) pn_free(&upn);
+		return (err);
+	}
+
+	if (mnt_pn != NULL && (err = pn_set(mnt_pn, path) != 0)) {
 		(void) pn_free(&upn);
 		return (err);
 	}
@@ -382,6 +464,11 @@ smb_pathname(smb_request_t *sr, char *path, int flags,
 	component = kmem_alloc(MAXNAMELEN, KM_SLEEP);
 	real_name = kmem_alloc(MAXNAMELEN, KM_SLEEP);
 
+	if (mnt_pn != NULL) {
+		mnt_node = cur_node;
+		smb_node_ref(cur_node);
+	} else
+		mnt_node = NULL;
 	fnode = NULL;
 	dnode = cur_node;
 	smb_node_ref(dnode);
@@ -405,6 +492,10 @@ smb_pathname(smb_request_t *sr, char *path, int flags,
 
 		if ((err = pn_set(&pn, namep)) != 0)
 			break;
+
+		/* We want the DOS attributes. */
+		bzero(&attr, sizeof (attr));
+		attr.sa_mask = SMB_AT_DOSATTR;
 
 		local_flags = flags & FIGNORECASE;
 		err = smb_pathname_lookup(&pn, &rpn, local_flags,
@@ -510,18 +601,53 @@ smb_pathname(smb_request_t *sr, char *path, int flags,
 			upn.pn_pathlen--;
 		}
 
+		/*
+		 * If the node we looked up is the root of a filesystem,
+		 * snapshot the lookup so we can replay this after discovering
+		 * the lowest mounted filesystem.
+		 */
+		if (mnt_pn != NULL &&
+		    fnode != NULL &&
+		    (err = VFS_ROOT(fnode->vp->v_vfsp, &fsrootvp)) == 0) {
+			if (fsrootvp == fnode->vp) {
+				mnt_pn->pn_pathlen = pn_pathleft(&upn);
+				mnt_pn->pn_path = mnt_pn->pn_buf +
+				    ((ptrdiff_t)upn.pn_path -
+				    (ptrdiff_t)upn.pn_buf);
+
+				smb_node_ref(fnode);
+				if (mnt_node != NULL)
+					smb_node_release(mnt_node);
+				mnt_node = fnode;
+
+			}
+			VN_RELE(fsrootvp);
+		}
 	}
 
 	if ((pathleft) && (err == ENOENT))
 		err = ENOTDIR;
 
-	if (err) {
+	if (mnt_node == NULL)
+		mnt_pn = NULL;
+
+	/*
+	 * We always want to return a node when we're doing VSS
+	 * (mnt_pn != NULL)
+	 */
+	if (mnt_pn == NULL && err != 0) {
 		if (fnode)
 			smb_node_release(fnode);
 		if (dnode)
 			smb_node_release(dnode);
 	} else {
-		*ret_node = fnode;
+		if (mnt_pn != NULL) {
+			*ret_node = mnt_node;
+			if (fnode != NULL)
+				smb_node_release(fnode);
+		} else {
+			*ret_node = fnode;
+		}
 
 		if (dir_node)
 			*dir_node = dnode;
@@ -555,7 +681,7 @@ smb_pathname_lookup(pathname_t *pn, pathname_t *rpn, int flags,
 
 	err = lookuppnvp(pn, rpn, flags, NULL, vp, rootvp, dvp, cred);
 	if ((err == 0) && (attr != NULL))
-		(void) smb_vop_getattr(*vp, NULL, attr, 0, kcred);
+		(void) smb_vop_getattr(*vp, NULL, attr, 0, zone_kcred());
 
 	return (err);
 }
@@ -628,7 +754,7 @@ smb_lookuppathvptovp(smb_request_t *sr, char *path, vnode_t *startvp,
 
 		/* lookuppnvp should release the holds */
 		if (lookuppnvp(&pn, NULL, lookup_flags, NULL, &vp,
-		    rootvp, startvp, kcred) != 0) {
+		    rootvp, startvp, zone_kcred()) != 0) {
 			pn_free(&pn);
 			return (NULL);
 		}
@@ -865,6 +991,8 @@ smb_pathname_strcat(smb_request_t *sr, char *s1, const char *s2)
  *
  * Returns: B_TRUE if pn is valid,
  *          otherwise returns B_FALSE and sets error status in sr.
+ *
+ * XXX: Get rid of smbsr_error calls for SMB2
  */
 boolean_t
 smb_pathname_validate(smb_request_t *sr, smb_pathname_t *pn)
@@ -888,10 +1016,10 @@ smb_pathname_validate(smb_request_t *sr, smb_pathname_t *pn)
 		return (B_FALSE);
 	}
 
-	/* If fname is "." -> INVALID_OBJECT_NAME */
+	/* If fname is "." -> OBJECT_NAME_INVALID */
 	if (pn->pn_fname && (strcmp(pn->pn_fname, ".") == 0)) {
 		smbsr_error(sr, NT_STATUS_OBJECT_NAME_INVALID,
-		    ERRDOS, ERROR_PATH_NOT_FOUND);
+		    ERRDOS, ERROR_INVALID_NAME);
 		return (B_FALSE);
 	}
 
@@ -965,19 +1093,23 @@ smb_validate_object_name(smb_request_t *sr, smb_pathname_t *pn)
  *
  * smb_stream_parse_name should only be called for a path that
  * contains a valid named stream.  Path validation should have
- * been performed before this function is called.
+ * been performed before this function is called, typically by
+ * calling smb_is_stream_name() just before this.
  *
  * Find the last component of path and split it into filename
  * and stream name.
  *
  * On return the named stream type will be present.  The stream
  * type defaults to ":$DATA", if it has not been defined
- * For exmaple, 'stream' contains :<sname>:$DATA
+ * For example, 'stream' contains :<sname>:$DATA
+ *
+ * Output args: filename, stream both MAXNAMELEN
  */
 void
 smb_stream_parse_name(char *path, char *filename, char *stream)
 {
 	char *fname, *sname, *stype;
+	size_t flen, slen;
 
 	ASSERT(path);
 	ASSERT(filename);
@@ -985,12 +1117,24 @@ smb_stream_parse_name(char *path, char *filename, char *stream)
 
 	fname = strrchr(path, '\\');
 	fname = (fname == NULL) ? path : fname + 1;
-	(void) strlcpy(filename, fname, MAXNAMELEN);
+	sname = strchr(fname, ':');
+	/* Caller makes sure there is a ':' in path. */
+	VERIFY(sname != NULL);
+	/* LINTED: possible ptrdiff_t overflow */
+	flen = sname - fname;
+	slen = strlen(sname);
 
-	sname = strchr(filename, ':');
-	(void) strlcpy(stream, sname, MAXNAMELEN);
-	*sname = '\0';
+	if (flen > (MAXNAMELEN-1))
+		flen = (MAXNAMELEN-1);
+	(void) strncpy(filename, fname, flen);
+	filename[flen] = '\0';
 
+	if (slen > (MAXNAMELEN-1))
+		slen = (MAXNAMELEN-1);
+	(void) strncpy(stream, sname, slen);
+	stream[slen] = '\0';
+
+	/* Add a "stream type" if there isn't one. */
 	stype = strchr(stream + 1, ':');
 	if (stype == NULL)
 		(void) strlcat(stream, ":$DATA", MAXNAMELEN);
@@ -1031,6 +1175,27 @@ smb_is_stream_name(char *path)
 }
 
 /*
+ * Is this stream node a "restricted" type?
+ */
+boolean_t
+smb_strname_restricted(char *strname)
+{
+	char *stype;
+
+	stype = strrchr(strname, ':');
+	if (stype == NULL)
+		return (B_FALSE);
+
+	/*
+	 * Only ":$CA" is restricted (for now).
+	 */
+	if (strcmp(stype, ":$CA") == 0)
+		return (B_TRUE);
+
+	return (B_FALSE);
+}
+
+/*
  * smb_validate_stream_name
  *
  * B_FALSE will be returned, and the error status ser in the sr, if:
@@ -1044,6 +1209,7 @@ boolean_t
 smb_validate_stream_name(smb_request_t *sr, smb_pathname_t *pn)
 {
 	static char *strmtype[] = {
+		"$CA",
 		"$DATA",
 		"$INDEX_ALLOCATION"
 	};

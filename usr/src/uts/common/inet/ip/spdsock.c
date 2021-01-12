@@ -20,6 +20,8 @@
  */
 /*
  * Copyright (c) 2001, 2010, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2012 Nexenta Systems, Inc. All rights reserved.
+ * Copyright 2019, Joyent, Inc.
  */
 
 #include <sys/param.h>
@@ -33,6 +35,7 @@
 #include <sys/sysmacros.h>
 #define	_SUN_TPI_VERSION 2
 #include <sys/tihdr.h>
+#include <sys/timod.h>
 #include <sys/ddi.h>
 #include <sys/sunddi.h>
 #include <sys/mkdev.h>
@@ -149,11 +152,11 @@ static	spdsockparam_t	lcl_param_arr[] = {
 	(ss)->spdsock_dump_cur_chain = 0; \
 }
 
-static int spdsock_close(queue_t *);
+static int spdsock_close(queue_t *, int, cred_t *);
 static int spdsock_open(queue_t *, dev_t *, int, int, cred_t *);
-static void spdsock_wput(queue_t *, mblk_t *);
-static void spdsock_wsrv(queue_t *);
-static void spdsock_rsrv(queue_t *);
+static int spdsock_wput(queue_t *, mblk_t *);
+static int spdsock_wsrv(queue_t *);
+static int spdsock_rsrv(queue_t *);
 static void *spdsock_stack_init(netstackid_t stackid, netstack_t *ns);
 static void spdsock_stack_shutdown(netstackid_t stackid, void *arg);
 static void spdsock_stack_fini(netstackid_t stackid, void *arg);
@@ -168,12 +171,12 @@ static struct module_info info = {
 };
 
 static struct qinit rinit = {
-	NULL, (pfi_t)spdsock_rsrv, spdsock_open, spdsock_close,
+	NULL, spdsock_rsrv, spdsock_open, spdsock_close,
 	NULL, &info
 };
 
 static struct qinit winit = {
-	(pfi_t)spdsock_wput, (pfi_t)spdsock_wsrv, NULL, NULL, NULL, &info
+	spdsock_wput, spdsock_wsrv, NULL, NULL, NULL, &info
 };
 
 struct streamtab spdsockinfo = {
@@ -203,11 +206,11 @@ static const uint_t execmodes[] = {
 
 /* ARGSUSED */
 static int
-spdsock_param_get(q, mp, cp, cr)
-	queue_t	*q;
-	mblk_t	*mp;
-	caddr_t	cp;
-	cred_t *cr;
+spdsock_param_get(
+    queue_t	*q,
+    mblk_t	*mp,
+    caddr_t	cp,
+    cred_t *cr)
 {
 	spdsockparam_t	*spdsockpa = (spdsockparam_t *)cp;
 	uint_t value;
@@ -225,12 +228,12 @@ spdsock_param_get(q, mp, cp, cr)
 /* This routine sets an NDD variable in a spdsockparam_t structure. */
 /* ARGSUSED */
 static int
-spdsock_param_set(q, mp, value, cp, cr)
-	queue_t	*q;
-	mblk_t	*mp;
-	char *value;
-	caddr_t	cp;
-	cred_t *cr;
+spdsock_param_set(
+    queue_t	*q,
+    mblk_t	*mp,
+    char *value,
+    caddr_t	cp,
+    cred_t *cr)
 {
 	ulong_t	new_value;
 	spdsockparam_t	*spdsockpa = (spdsockparam_t *)cp;
@@ -693,23 +696,23 @@ spdsock_ext_to_sel(spd_ext_t **extv, ipsec_selkey_t *sel, int *diag)
 				    tc->spd_typecode_code_end;
 		}
 	}
-#define	ADDR2SEL(sel, extv, field, pfield, extn, bit)			      \
-	if ((extv)[(extn)] != NULL) {					      \
-		uint_t addrlen;						      \
-		struct spd_address *ap = 				      \
-			(struct spd_address *)((extv)[(extn)]); 	      \
-		addrlen = (ap->spd_address_af == AF_INET6) ? 		      \
-			IPV6_ADDR_LEN : IP_ADDR_LEN;			      \
-		if (SPD_64TO8(ap->spd_address_len) < 			      \
-			(addrlen + sizeof (*ap))) {			      \
-			*diag = SPD_DIAGNOSTIC_BAD_ADDR_LEN;		      \
-			return (B_FALSE);				      \
-		}							      \
-		bcopy((ap+1), &((sel)->field), addrlen);		      \
-		(sel)->pfield = ap->spd_address_prefixlen;		      \
-		(sel)->ipsl_valid |= (bit);				      \
-		(sel)->ipsl_valid |= (ap->spd_address_af == AF_INET6) ?	      \
-			IPSL_IPV6 : IPSL_IPV4;				      \
+#define	ADDR2SEL(sel, extv, field, pfield, extn, bit)			\
+	if ((extv)[(extn)] != NULL) {					\
+		uint_t addrlen;						\
+		struct spd_address *ap =				\
+			(struct spd_address *)((extv)[(extn)]);		\
+		addrlen = (ap->spd_address_af == AF_INET6) ?		\
+			IPV6_ADDR_LEN : IP_ADDR_LEN;			\
+		if (SPD_64TO8(ap->spd_address_len) <			\
+			(addrlen + sizeof (*ap))) {			\
+			*diag = SPD_DIAGNOSTIC_BAD_ADDR_LEN;		\
+			return (B_FALSE);				\
+		}							\
+		bcopy((ap+1), &((sel)->field), addrlen);		\
+		(sel)->pfield = ap->spd_address_prefixlen;		\
+		(sel)->ipsl_valid |= (bit);				\
+		(sel)->ipsl_valid |= (ap->spd_address_af == AF_INET6) ?	\
+			IPSL_IPV6 : IPSL_IPV4;				\
 	}
 
 	ADDR2SEL(sel, extv, ipsl_local, ipsl_local_pfxlen,
@@ -2268,7 +2271,7 @@ spdsock_alglist(queue_t *q, mblk_t *mp)
 	spdsock_t *ss = (spdsock_t *)q->q_ptr;
 	ipsec_stack_t *ipss = ss->spdsock_spds->spds_netstack->netstack_ipsec;
 
-	mutex_enter(&ipss->ipsec_alg_lock);
+	rw_enter(&ipss->ipsec_alg_lock, RW_READER);
 	/*
 	 * The SPD client expects to receive separate entries for
 	 * AH authentication and ESP authentication supported algorithms.
@@ -2296,7 +2299,7 @@ spdsock_alglist(queue_t *q, mblk_t *mp)
 
 	m = allocb(size, BPRI_HI);
 	if (m == NULL) {
-		mutex_exit(&ipss->ipsec_alg_lock);
+		rw_exit(&ipss->ipsec_alg_lock);
 		spdsock_error(q, mp, ENOMEM, 0);
 		return;
 	}
@@ -2324,9 +2327,9 @@ spdsock_alglist(queue_t *q, mblk_t *mp)
 	attr = (struct spd_attribute *)cur;
 
 #define	EMIT(tag, value) {					\
-		attr->spd_attr_tag = (tag); 			\
-		attr->spd_attr_value = (value); 		\
-		attr++;			  			\
+		attr->spd_attr_tag = (tag);			\
+		attr->spd_attr_value = (value);			\
+		attr++;						\
 	}
 
 	/*
@@ -2334,7 +2337,7 @@ spdsock_alglist(queue_t *q, mblk_t *mp)
 	 * ATTRPERALG above to match
 	 */
 #define	EMITALGATTRS(_type) {					\
-		EMIT(algattr[_type], algid); 		/* 1 */	\
+		EMIT(algattr[_type], algid);		/* 1 */	\
 		EMIT(minbitsattr[_type], minbits);	/* 2 */	\
 		EMIT(maxbitsattr[_type], maxbits);	/* 3 */	\
 		EMIT(defbitsattr[_type], defbits);	/* 4 */	\
@@ -2367,7 +2370,7 @@ spdsock_alglist(queue_t *q, mblk_t *mp)
 		}
 	}
 
-	mutex_exit(&ipss->ipsec_alg_lock);
+	rw_exit(&ipss->ipsec_alg_lock);
 
 #undef EMITALGATTRS
 #undef EMIT
@@ -2404,7 +2407,7 @@ spdsock_dumpalgs(queue_t *q, mblk_t *mp)
 	spdsock_t *ss = (spdsock_t *)q->q_ptr;
 	ipsec_stack_t *ipss = ss->spdsock_spds->spds_netstack->netstack_ipsec;
 
-	mutex_enter(&ipss->ipsec_alg_lock);
+	rw_enter(&ipss->ipsec_alg_lock, RW_READER);
 
 	/*
 	 * For each algorithm, we encode:
@@ -2437,7 +2440,7 @@ spdsock_dumpalgs(queue_t *q, mblk_t *mp)
 
 	m = allocb(size, BPRI_HI);
 	if (m == NULL) {
-		mutex_exit(&ipss->ipsec_alg_lock);
+		rw_exit(&ipss->ipsec_alg_lock);
 		spdsock_error(q, mp, ENOMEM, 0);
 		return;
 	}
@@ -2471,16 +2474,16 @@ spdsock_dumpalgs(queue_t *q, mblk_t *mp)
 	 */
 	if (act->spd_actions_count == 0) {
 		act->spd_actions_len = 0;
-		mutex_exit(&ipss->ipsec_alg_lock);
+		rw_exit(&ipss->ipsec_alg_lock);
 		goto error;
 	}
 
 	attr = (struct spd_attribute *)cur;
 
 #define	EMIT(tag, value) {					\
-		attr->spd_attr_tag = (tag); 			\
-		attr->spd_attr_value = (value); 		\
-		attr++;			  			\
+		attr->spd_attr_tag = (tag);			\
+		attr->spd_attr_value = (value);			\
+		attr++;						\
 	}
 
 	for (algtype = 0; algtype < IPSEC_NALGTYPES; algtype++) {
@@ -2523,7 +2526,7 @@ spdsock_dumpalgs(queue_t *q, mblk_t *mp)
 		}
 	}
 
-	mutex_exit(&ipss->ipsec_alg_lock);
+	rw_exit(&ipss->ipsec_alg_lock);
 
 #undef EMITALGATTRS
 #undef EMIT
@@ -2770,10 +2773,14 @@ spdsock_do_updatealg(spd_ext_t *extv[], spd_stack_t *spds)
 bail:
 	/* cleanup */
 	ipsec_alg_free(alg);
-	for (alg_type = 0; alg_type < IPSEC_NALGTYPES; alg_type++)
-		for (algid = 0; algid < IPSEC_MAX_ALGS; algid++)
-		if (spds->spds_algs[alg_type][algid] != NULL)
-			ipsec_alg_free(spds->spds_algs[alg_type][algid]);
+	for (alg_type = 0; alg_type < IPSEC_NALGTYPES; alg_type++) {
+		for (algid = 0; algid < IPSEC_MAX_ALGS; algid++) {
+			if (spds->spds_algs[alg_type][algid] != NULL) {
+				ipsec_alg_free(
+				    spds->spds_algs[alg_type][algid]);
+			}
+		}
+	}
 	return (diag);
 }
 
@@ -3243,9 +3250,9 @@ spdsock_capability_req(queue_t *q, mblk_t *mp)
  * The current state of the stream is copied from spdsock_state.
  */
 static void
-spdsock_info_req(q, mp)
-	queue_t	*q;
-	mblk_t	*mp;
+spdsock_info_req(
+    queue_t	*q,
+    mblk_t	*mp)
 {
 	mp = tpi_ack_alloc(mp, sizeof (struct T_info_ack), M_PCPROTO,
 	    T_INFO_ACK);
@@ -3262,11 +3269,11 @@ spdsock_info_req(q, mp)
  * upstream.
  */
 static void
-spdsock_err_ack(q, mp, t_error, sys_error)
-	queue_t	*q;
-	mblk_t	*mp;
-	int	t_error;
-	int	sys_error;
+spdsock_err_ack(
+    queue_t	*q,
+    mblk_t	*mp,
+    int	t_error,
+    int	sys_error)
 {
 	if ((mp = mi_tpi_err_ack_alloc(mp, t_error, sys_error)) != NULL)
 		qreply(q, mp);
@@ -3403,11 +3410,24 @@ spdsock_wput_other(queue_t *q, mblk_t *mp)
 			break;
 		}
 		return;
+	case M_IOCDATA:
+		keysock_spdsock_wput_iocdata(q, mp, PF_POLICY);
+		return;
 	case M_IOCTL:
 		iocp = (struct iocblk *)mp->b_rptr;
 		error = EINVAL;
 
 		switch (iocp->ioc_cmd) {
+		case TI_GETMYNAME:
+		case TI_GETPEERNAME:
+			/*
+			 * For pfiles(1) observability with getsockname().
+			 * See keysock_spdsock_wput_iocdata() for the rest of
+			 * this.
+			 */
+			mi_copyin(q, mp, NULL,
+			    SIZEOF_STRUCT(strbuf, iocp->ioc_flag));
+			return;
 		case ND_SET:
 		case ND_GET:
 			if (nd_getset(q, spds->spds_g_nd, mp)) {
@@ -3436,7 +3456,7 @@ spdsock_wput_other(queue_t *q, mblk_t *mp)
 	freemsg(mp);
 }
 
-static void
+static int
 spdsock_wput(queue_t *q, mblk_t *mp)
 {
 	uint8_t *rptr = mp->b_rptr;
@@ -3451,7 +3471,7 @@ spdsock_wput(queue_t *q, mblk_t *mp)
 	if (ss->spdsock_dump_req != NULL) {
 		if (!putq(q, mp))
 			freemsg(mp);
-		return;
+		return (0);
 	}
 
 	switch (mp->b_datap->db_type) {
@@ -3461,7 +3481,7 @@ spdsock_wput(queue_t *q, mblk_t *mp)
 		 */
 		ss2dbg(spds, ("raw M_DATA in spdsock.\n"));
 		freemsg(mp);
-		return;
+		return (0);
 	case M_PROTO:
 	case M_PCPROTO:
 		if ((mp->b_wptr - rptr) >= sizeof (struct T_data_req)) {
@@ -3471,7 +3491,7 @@ spdsock_wput(queue_t *q, mblk_t *mp)
 					ss2dbg(spds,
 					    ("No data after DATA_REQ.\n"));
 					freemsg(mp);
-					return;
+					return (0);
 				}
 				freeb(mp);
 				mp = mp1;
@@ -3484,11 +3504,12 @@ spdsock_wput(queue_t *q, mblk_t *mp)
 		ss3dbg(spds, ("In default wput case (%d %d).\n",
 		    mp->b_datap->db_type, ((union T_primitives *)rptr)->type));
 		spdsock_wput_other(q, mp);
-		return;
+		return (0);
 	}
 
 	/* I now have a PF_POLICY message in an M_DATA block. */
 	spdsock_parse(q, mp);
+	return (0);
 }
 
 /*
@@ -3561,7 +3582,7 @@ spdsock_open(queue_t *q, dev_t *devp, int flag, int sflag, cred_t *credp)
  * Dump another chunk if we were dumping before; when we finish, kick
  * the write-side queue in case it's waiting for read queue space.
  */
-void
+int
 spdsock_rsrv(queue_t *q)
 {
 	spdsock_t *ss = q->q_ptr;
@@ -3571,13 +3592,14 @@ spdsock_rsrv(queue_t *q)
 
 	if (ss->spdsock_dump_req == NULL)
 		qenable(OTHERQ(q));
+	return (0);
 }
 
 /*
  * Write-side service procedure, invoked when we defer processing
  * if another message is received while a dump is in progress.
  */
-void
+int
 spdsock_wsrv(queue_t *q)
 {
 	spdsock_t *ss = q->q_ptr;
@@ -3586,24 +3608,26 @@ spdsock_wsrv(queue_t *q)
 
 	if (ss->spdsock_dump_req != NULL) {
 		qenable(OTHERQ(q));
-		return;
+		return (0);
 	}
 
 	while ((mp = getq(q)) != NULL) {
 		if (ipsec_loaded(ipss)) {
-			spdsock_wput(q, mp);
+			(void) spdsock_wput(q, mp);
 			if (ss->spdsock_dump_req != NULL)
-				return;
+				return (0);
 		} else if (!ipsec_failed(ipss)) {
 			(void) putq(q, mp);
 		} else {
 			spdsock_error(q, mp, EPFNOSUPPORT, 0);
 		}
 	}
+	return (0);
 }
 
+/* ARGSUSED */
 static int
-spdsock_close(queue_t *q)
+spdsock_close(queue_t *q, int flags __unused, cred_t *credp __unused)
 {
 	spdsock_t *ss = q->q_ptr;
 	spd_stack_t	*spds = ss->spdsock_spds;
@@ -3684,7 +3708,7 @@ spdsock_merge_algs(spd_stack_t *spds)
 		}
 	}
 
-	mutex_enter(&ipss->ipsec_alg_lock);
+	rw_enter(&ipss->ipsec_alg_lock, RW_WRITER);
 
 	/*
 	 * For each algorithm currently defined, check if it is
@@ -3740,7 +3764,7 @@ spdsock_merge_algs(spd_stack_t *spds)
 		    spds->spds_algs_exec_mode[algtype];
 	}
 
-	mutex_exit(&ipss->ipsec_alg_lock);
+	rw_exit(&ipss->ipsec_alg_lock);
 
 	crypto_free_mech_list(mechs, mech_count);
 

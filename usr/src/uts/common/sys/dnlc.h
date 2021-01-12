@@ -23,7 +23,7 @@
  */
 
 /*	Copyright (c) 1983, 1984, 1985, 1986, 1987, 1988, 1989 AT&T	*/
-/*	  All Rights Reserved  	*/
+/*	  All Rights Reserved	*/
 
 /*
  * University Copyright- Copyright (c) 1982, 1986, 1988
@@ -76,7 +76,7 @@ extern "C" {
  * storing full names, then we are ok. The space savings are worth it.
  */
 typedef struct ncache {
-	struct ncache *hash_next; 	/* hash chain, MUST BE FIRST */
+	struct ncache *hash_next;	/* hash chain, MUST BE FIRST */
 	struct ncache *hash_prev;
 	struct vnode *vp;		/* vnode the name refers to */
 	struct vnode *dp;		/* vnode of parent of name */
@@ -169,7 +169,7 @@ struct nc_stats {
 		(namlen) = Xcp - (name);			\
 	}
 
-#if defined(_KERNEL)
+#if defined(_KERNEL) || defined(_FAKE_KERNEL)
 
 #include <sys/vfs.h>
 #include <sys/vnode.h>
@@ -187,7 +187,6 @@ void	dnlc_purge_vp(vnode_t *);
 int	dnlc_purge_vfsp(vfs_t *, int);
 void	dnlc_remove(vnode_t *, const char *);
 int	dnlc_fs_purge1(struct vnodeops *);
-vnode_t	*dnlc_reverse_lookup(vnode_t *, char *, size_t);
 void	dnlc_reduce_cache(void *);
 
 #endif	/* defined(_KERNEL) */
@@ -206,7 +205,7 @@ void	dnlc_reduce_cache(void *);
  */
 typedef struct dcfree {
 	uint64_t df_handle;		/* fs supplied handle */
-	struct dcfree *df_next; 	/* link to next free entry in bucket */
+	struct dcfree *df_next;		/* link to next free entry in bucket */
 	uint_t df_len;			/* length of free entry */
 } dcfree_t;
 

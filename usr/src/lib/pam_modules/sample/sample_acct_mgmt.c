@@ -21,6 +21,7 @@
 /*
  * Copyright 2009 Sun Microsystems, Inc.  All rights reserved.
  * Use is subject to license terms.
+ * Copyright (c) 2016 by Delphix. All rights reserved.
  */
 
 #include <syslog.h>
@@ -36,7 +37,7 @@ static int parse_allow_name(char *, char *);
 /*
  * pam_sm_acct_mgmt	main account managment routine.
  *			XXX: The routine just prints out a warning message.
- *			     It may need to force the user to change his/her
+ *			     It may need to force the user to change their
  *			     passwd.
  */
 
@@ -51,9 +52,9 @@ pam_sm_acct_mgmt(
 	char	*pg;
 	int	i;
 	/*LINTED - set but not used. Would be used in a real module. */
-	int	debug = 0;
+	int	debug __unused = 0;
 	/*LINTED - set but not used. Would be used in a real module. */
-	int	nowarn = 0;
+	int	nowarn __unused = 0;
 	int	error = 0;
 
 	if (argc == 0)

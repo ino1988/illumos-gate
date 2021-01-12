@@ -22,12 +22,15 @@
 #
 # Copyright (c) 2008, 2010, Oracle and/or its affiliates. All rights reserved.
 # Copyright 2012 OmniTI Computer Consulting, Inc.  All rights reserved.
+# Copyright 2018 OmniOS Community Edition (OmniOSce) Association.
 #
 
 include	../Makefile.lib
 
-SUBDIRS=	$(MACH)
-$(BUILD64)SUBDIRS += $(MACH64)
+SUBDIRS=
+$(BUILDPY2)SUBDIRS += $(MACH)
+$(BUILD64)$(BUILDPY2)SUBDIRS += $(MACH64)
+$(BUILD64)$(BUILDPY3)SUBDIRS += py3
 XGETTEXT=	$(GNUXGETTEXT)
 XGETFLAGS=	$(GNUXGETFLAGS)
 
@@ -35,14 +38,13 @@ all :=		TARGET= all
 install :=	TARGET= install
 clean :=	TARGET= clean
 clobber :=	TARGET= clobber
-lint :=		TARGET= lint
 
 MSGFILES =	`$(FIND) . -name '*.py' -o -name '*.c'`
 POFILE =	libbe_py.po
 
 .KEEP_STATE:
 
-all install clean clobber lint: $(SUBDIRS)
+all install clean clobber: $(SUBDIRS)
 
 $(POFILE):	pofile_MSGFILES
 

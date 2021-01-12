@@ -22,13 +22,15 @@
 # Use is subject to license terms.
 #
 # Copyright 2010 Nexenta Systems, Inc. All rights reserved.
-# Copyright (c) 2012 by Delphix. All rights reserved.
+# Copyright (c) 2012, 2015 by Delphix. All rights reserved.
+# Copyright 2016 Igor Kozhukhov <ikozhukhov@gmail.com>.
+# Copyright 2020 Joyent, Inc.
 #
 
 PROG=		zfs
-OBJS=		zfs_main.o zfs_iter.o
+OBJS=		zfs_main.o zfs_iter.o zfs_project.o
 SRCS=		$(OBJS:%.o=%.c)
-POFILES=	zfs_main.po zfs_iter.po
+POFILES=	zfs_main.po zfs_iter.po zfs_project.po
 POFILE=		zfs.po
 
 include ../Makefile.cmd
@@ -39,25 +41,23 @@ LINKPROGS=	mount umount
 ROOTETCFSTYPE=  $(ROOTETC)/fs/$(FSTYPE)
 USRLIBFSTYPE=	$(ROOTLIB)/fs/$(FSTYPE)
 
-LDLIBS += -lzfs_core -lzfs -luutil -lumem -lnvpair -lsec -lidmap
+LDLIBS += -lzfs_core -lzfs -luutil -lumem -lnvpair -lsec -lidmap -lzutil
+# cmdutils has list(9F) functions used by the project code.
+LDLIBS += -lcmdutils
 
 INCS += -I../../common/zfs
+INCS += -I$(SRC)/uts/common/fs/zfs
+INCS += -I../../lib/libzutil/common
 
-C99MODE=	-xc99=%all
+CSTD=	$(CSTD_GNU99)
 C99LMODE=	-Xc99=%all
 
 CPPFLAGS += -D_LARGEFILE64_SOURCE=1 -D_REENTRANT $(INCS)
 $(NOT_RELEASE_BUILD)CPPFLAGS += -DDEBUG
 
 # lint complains about unused _umem_* functions
-LINTFLAGS += -xerroff=E_NAME_DEF_NOT_USED2 
-LINTFLAGS64 += -xerroff=E_NAME_DEF_NOT_USED2 
-
-CERRWARN += -_gcc=-Wno-switch
-CERRWARN += -_gcc=-Wno-type-limits
-CERRWARN += -_gcc=-Wno-parentheses
-CERRWARN += -_gcc=-Wno-uninitialized
-CERRWARN += -_gcc=-Wno-old-style-declaration
+LINTFLAGS += -xerroff=E_NAME_DEF_NOT_USED2
+LINTFLAGS64 += -xerroff=E_NAME_DEF_NOT_USED2
 
 ROOTUSRSBINLINKS = $(PROG:%=$(ROOTUSRSBIN)/%)
 USRLIBFSTYPELINKS = $(LINKPROGS:%=$(USRLIBFSTYPE)/%)

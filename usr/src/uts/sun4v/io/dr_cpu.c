@@ -25,6 +25,10 @@
  */
 
 /*
+ * Copyright 2019 Joyent, Inc.
+ */
+
+/*
  * sun4v CPU DR Module
  */
 
@@ -407,7 +411,7 @@ dr_cpu_list_wrk(dr_cpu_hdr_t *req, dr_cpu_hdr_t **resp, int *resp_len)
 	case DR_CPU_FORCE_UNCONFIG:
 		drctl_flags = DRCTL_FLAG_FORCE;
 		force = B_TRUE;
-		_NOTE(FALLTHROUGH)
+		/* FALLTHROUGH */
 	case DR_CPU_UNCONFIGURE:
 		dr_fn = dr_cpu_unconfigure;
 		drctl_cmd = DRCTL_CPU_UNCONFIG_REQUEST;
@@ -579,7 +583,7 @@ dr_cpu_res_array_init(dr_cpu_hdr_t *req, drctl_rsrc_t *rsrc, int nrsrc)
 		 * on the memory allocated for the message buffer
 		 * itself.
 		 */
-		if (rsrc[idx].offset != NULL) {
+		if (rsrc[idx].offset != 0) {
 			err_str = (char *)rsrc + rsrc[idx].offset;
 			err_len = strlen(err_str) + 1;
 
@@ -1113,7 +1117,7 @@ dr_cpu_configure(processorid_t cpuid, int *status, boolean_t force)
 	 */
 	if (cpu_is_offline(cp)) {
 
-		if ((rv = cpu_online(cp)) != 0) {
+		if ((rv = cpu_online(cp, 0)) != 0) {
 			DR_DBG_CPU("failed to online CPU %d (%d)\n",
 			    cpuid, rv);
 			rv = DR_CPU_RES_FAILURE;
@@ -1535,7 +1539,7 @@ typedef struct {
 static int
 dr_cpu_check_node(dev_info_t *dip, void *arg)
 {
-	char 		*name;
+	char		*name;
 	processorid_t	cpuid;
 	dr_search_arg_t	*sarg = (dr_search_arg_t *)arg;
 

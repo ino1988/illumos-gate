@@ -22,6 +22,9 @@
 /*
  * Copyright (c) 2003, 2010, Oracle and/or its affiliates. All rights reserved.
  * Copyright (c) 2013, Joyent Inc. All rights reserved.
+ * Copyright (c) 2015, 2016 by Delphix. All rights reserved.
+ * Copyright 2019 OmniOS Community Edition (OmniOSce) Association.
+ * Copyright 2020 RackTop Systems Inc.
  */
 
 /*
@@ -76,6 +79,7 @@
 #include <sys/stropts.h>
 #include <sys/conf.h>
 #include <sys/systeminfo.h>
+#include <sys/secflags.h>
 
 #include <libdlpi.h>
 #include <libdllink.h>
@@ -135,7 +139,7 @@
 #define	DFSTYPES	"/etc/dfs/fstypes"
 #define	MAXTNZLEN	2048
 
-#define	ALT_MOUNT(mount_cmd) 	((mount_cmd) != Z_MNT_BOOT)
+#define	ALT_MOUNT(mount_cmd)	((mount_cmd) != Z_MNT_BOOT)
 
 /* a reasonable estimate for the number of lwps per process */
 #define	LWPS_PER_PROCESS	10
@@ -198,10 +202,18 @@ extern int _autofssys(int, void *);
 static int
 autofs_cleanup(zoneid_t zoneid)
 {
+	int r;
+
 	/*
 	 * Ask autofs to unmount all trigger nodes in the given zone.
+	 * Handle ENOSYS in the case that the autofs kernel module is not
+	 * installed.
 	 */
-	return (_autofssys(AUTOFS_UNMOUNTALL, (void *)zoneid));
+	r = _autofssys(AUTOFS_UNMOUNTALL, (void *)zoneid);
+	if (r != 0 && errno == ENOSYS) {
+		return (0);
+	}
+	return (r);
 }
 
 static void
@@ -463,7 +475,7 @@ make_one_dir(zlog_t *zlogp, const char *prefix, const char *subdir, mode_t mode,
 		/*
 		 * We don't check the file mode since presumably the zone
 		 * administrator may have had good reason to change the mode,
-		 * and we don't need to second guess him.
+		 * and we don't need to second guess them.
 		 */
 		if (!S_ISDIR(st.st_mode)) {
 			if (S_ISREG(st.st_mode)) {
@@ -1096,7 +1108,7 @@ mount_one_dev(zlog_t *zlogp, char *devpath, zone_mnt_t mount_cmd)
 	int			err;
 	int			retval = -1;
 	zone_iptype_t		iptype;
-	const char 		*curr_iptype;
+	const char		*curr_iptype;
 
 	if (di_prof_init(devpath, &prof)) {
 		zerror(zlogp, B_TRUE, "failed to initialize profile");
@@ -1232,11 +1244,12 @@ mount_one(zlog_t *zlogp, struct zone_fstab *fsptr, const char *rootpath,
 	/*
 	 * In general the strategy here is to do just as much verification as
 	 * necessary to avoid crashing or otherwise doing something bad; if the
-	 * administrator initiated the operation via zoneadm(1m), he'll get
-	 * auto-verification which will let him know what's wrong.  If he
-	 * modifies the zone configuration of a running zone and doesn't attempt
-	 * to verify that it's OK we won't crash but won't bother trying to be
-	 * too helpful either.  zoneadm verify is only a couple keystrokes away.
+	 * administrator initiated the operation via zoneadm(1m), they'll get
+	 * auto-verification which will let them know what's wrong.  If they
+	 * modify the zone configuration of a running zone, and don't attempt
+	 * to verify that it's OK, then we won't crash but won't bother trying
+	 * to be too helpful either. zoneadm verify is only a couple keystrokes
+	 * away.
 	 */
 	if (!zonecfg_valid_fs_type(fsptr->zone_fs_type)) {
 		zerror(zlogp, B_FALSE, "cannot mount %s on %s: "
@@ -1338,13 +1351,13 @@ free_fs_data(struct zone_fstab *fsarray, uint_t nelem)
  * scratch zone. The Environment creation process is split up into two
  * functions(build_mounted_pre_var() and build_mounted_post_var()). It
  * is done this way because:
- * 	We need to have both /etc and /var in the root of the scratchzone.
- * 	We loopback mount zone's own /etc and /var into the root of the
- * 	scratch zone. Unlike /etc, /var can be a seperate filesystem. So we
- * 	need to delay the mount of /var till the zone's root gets populated.
+ *	We need to have both /etc and /var in the root of the scratchzone.
+ *	We loopback mount zone's own /etc and /var into the root of the
+ *	scratch zone. Unlike /etc, /var can be a seperate filesystem. So we
+ *	need to delay the mount of /var till the zone's root gets populated.
  *	So mounting of localdirs[](/etc and /var) have been moved to the
- * 	build_mounted_post_var() which gets called only after the zone
- * 	specific filesystems are mounted.
+ *	build_mounted_post_var() which gets called only after the zone
+ *	specific filesystems are mounted.
  *
  * Note that the scratch zone we set up for updating the zone (Z_MNT_UPDATE)
  * does not loopback mount the zone's own /etc and /var into the root of the
@@ -1733,7 +1746,7 @@ mount_filesystems(zlog_t *zlogp, zone_mnt_t mount_cmd)
 	cb.pgcd_zlogp = zlogp;
 	cb.pgcd_fs_tab = &fs_ptr;
 	cb.pgcd_num_fs = &num_fs;
-	if (brand_platform_iter_gmounts(bh, zonepath,
+	if (brand_platform_iter_gmounts(bh, zone_name, zonepath,
 	    plat_gmount_cb, &cb) != 0) {
 		zerror(zlogp, B_FALSE, "unable to mount filesystems");
 		brand_close(bh);
@@ -2704,7 +2717,7 @@ add_net_for_linkid(zlog_t *zlogp, zoneid_t zoneid, zone_addr_list_t *start)
 		goto done;
 
 	/* over-write last ',' with '\0' */
-	zaddr[strnlen(zaddr, zlen) + 1] = '\0';
+	zaddr[strnlen(zaddr, zlen) - 1] = '\0';
 
 	/*
 	 * First make sure L3 protection is not already set on the link.
@@ -3479,8 +3492,7 @@ out:
 	zonecfg_free_rctl_value_list(rctltab.zone_rctl_valptr);
 	if (error && nvl_packed != NULL)
 		free(nvl_packed);
-	if (nvl != NULL)
-		nvlist_free(nvl);
+	nvlist_free(nvl);
 	if (nvlv != NULL)
 		free(nvlv);
 	if (handle != NULL)
@@ -4292,7 +4304,8 @@ remove_mlps(zlog_t *zlogp, zoneid_t zoneid)
 }
 
 int
-prtmount(const struct mnttab *fs, void *x) {
+prtmount(const struct mnttab *fs, void *x)
+{
 	zerror((zlog_t *)x, B_FALSE, "  %s", fs->mnt_mountp);
 	return (0);
 }
@@ -4590,6 +4603,96 @@ setup_zone_hostid(zone_dochandle_t handle, zlog_t *zlogp, zoneid_t zoneid)
 }
 
 static int
+setup_zone_secflags(zone_dochandle_t handle, zlog_t *zlogp, zoneid_t zoneid)
+{
+	psecflags_t secflags;
+	struct zone_secflagstab tab = {0};
+	secflagdelta_t delt;
+	int res;
+
+	res = zonecfg_lookup_secflags(handle, &tab);
+
+	if ((res != Z_OK) &&
+	    /* The general defaulting code will handle this */
+	    (res != Z_NO_ENTRY) && (res != Z_BAD_PROPERTY)) {
+		zerror(zlogp, B_FALSE, "security-flags property is "
+		    "invalid: %d", res);
+		return (res);
+	}
+
+	if (strlen(tab.zone_secflags_lower) == 0)
+		(void) strlcpy(tab.zone_secflags_lower, "none",
+		    sizeof (tab.zone_secflags_lower));
+	if (strlen(tab.zone_secflags_default) == 0)
+		(void) strlcpy(tab.zone_secflags_default,
+		    tab.zone_secflags_lower,
+		    sizeof (tab.zone_secflags_default));
+	if (strlen(tab.zone_secflags_upper) == 0)
+		(void) strlcpy(tab.zone_secflags_upper, "all",
+		    sizeof (tab.zone_secflags_upper));
+
+	if (secflags_parse(NULL, tab.zone_secflags_default,
+	    &delt) == -1) {
+		zerror(zlogp, B_FALSE, "default security-flags: '%s'"
+		    "are invalid", tab.zone_secflags_default);
+		return (Z_BAD_PROPERTY);
+	} else if (delt.psd_ass_active != B_TRUE) {
+		zerror(zlogp, B_FALSE, "relative security-flags are not "
+		    "allowed in zone configuration (default "
+		    "security-flags: '%s')",
+		    tab.zone_secflags_default);
+		return (Z_BAD_PROPERTY);
+	} else {
+		secflags_copy(&secflags.psf_inherit, &delt.psd_assign);
+		secflags_copy(&secflags.psf_effective, &delt.psd_assign);
+	}
+
+	if (secflags_parse(NULL, tab.zone_secflags_lower,
+	    &delt) == -1) {
+		zerror(zlogp, B_FALSE, "lower security-flags: '%s'"
+		    "are invalid", tab.zone_secflags_lower);
+		return (Z_BAD_PROPERTY);
+	} else if (delt.psd_ass_active != B_TRUE) {
+		zerror(zlogp, B_FALSE, "relative security-flags are not "
+		    "allowed in zone configuration (lower "
+		    "security-flags: '%s')",
+		    tab.zone_secflags_lower);
+		return (Z_BAD_PROPERTY);
+	} else {
+		secflags_copy(&secflags.psf_lower, &delt.psd_assign);
+	}
+
+	if (secflags_parse(NULL, tab.zone_secflags_upper,
+	    &delt) == -1) {
+		zerror(zlogp, B_FALSE, "upper security-flags: '%s'"
+		    "are invalid", tab.zone_secflags_upper);
+		return (Z_BAD_PROPERTY);
+	} else if (delt.psd_ass_active != B_TRUE) {
+		zerror(zlogp, B_FALSE, "relative security-flags are not "
+		    "allowed in zone configuration (upper "
+		    "security-flags: '%s')",
+		    tab.zone_secflags_upper);
+		return (Z_BAD_PROPERTY);
+	} else {
+		secflags_copy(&secflags.psf_upper, &delt.psd_assign);
+	}
+
+	if (!psecflags_validate(&secflags)) {
+		zerror(zlogp, B_TRUE, "security-flags violate invariants");
+		return (Z_BAD_PROPERTY);
+	}
+
+	if ((res = zone_setattr(zoneid, ZONE_ATTR_SECFLAGS, &secflags,
+	    sizeof (secflags))) != 0) {
+		zerror(zlogp, B_TRUE,
+		    "security-flags couldn't be set: %d", res);
+		return (Z_SYSTEM);
+	}
+
+	return (Z_OK);
+}
+
+static int
 setup_zone_fs_allowed(zone_dochandle_t handle, zlog_t *zlogp, zoneid_t zoneid)
 {
 	char fsallowed[ZONE_FS_ALLOWED_MAX];
@@ -4606,7 +4709,7 @@ setup_zone_fs_allowed(zone_dochandle_t handle, zlog_t *zlogp, zoneid_t zoneid)
 		report_prop_err(zlogp, "fs-allowed", fsallowed, res);
 		return (res);
 	} else if (fsallowed[0] == '-') {
-		/* dropping default privs - use remaining list */
+		/* dropping default filesystems - use remaining list */
 		if (fsallowed[1] != ',')
 			return (Z_OK);
 		fsallowedp += 2;
@@ -4649,6 +4752,9 @@ setup_zone_attrs(zlog_t *zlogp, char *zone_namep, zoneid_t zoneid)
 		goto out;
 
 	if ((res = setup_zone_fs_allowed(handle, zlogp, zoneid)) != Z_OK)
+		goto out;
+
+	if ((res = setup_zone_secflags(handle, zlogp, zoneid)) != Z_OK)
 		goto out;
 
 out:

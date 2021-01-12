@@ -26,6 +26,7 @@
 /*
  * Copyright (c) 1992, 2010, Oracle and/or its affiliates. All rights reserved.
  * Copyright 2012 Milan Jurik. All rights reserved.
+ * Copyright (c) 2016 by Delphix. All rights reserved.
  */
 
 
@@ -321,7 +322,7 @@ static int asyattach(dev_info_t *, ddi_attach_cmd_t);
 static int asydetach(dev_info_t *, ddi_detach_cmd_t);
 static int asyquiesce(dev_info_t *);
 
-static 	struct cb_ops cb_asy_ops = {
+static struct cb_ops cb_asy_ops = {
 	nodev,			/* cb_open */
 	nodev,			/* cb_close */
 	nodev,			/* cb_strategy */
@@ -1076,13 +1077,13 @@ asyattach(dev_info_t *devi, ddi_attach_cmd_t cmd)
 		(void) snprintf(name, ASY_MINOR_LEN, "%d", instance);
 	}
 	status = ddi_create_minor_node(devi, name, S_IFCHR, instance,
-	    asy->asy_com_port != 0 ? DDI_NT_SERIAL_MB : DDI_NT_SERIAL, NULL);
+	    asy->asy_com_port != 0 ? DDI_NT_SERIAL_MB : DDI_NT_SERIAL, 0);
 	if (status == DDI_SUCCESS) {
 		(void) strcat(name, ",cu");
 		status = ddi_create_minor_node(devi, name, S_IFCHR,
 		    OUTLINE | instance,
 		    asy->asy_com_port != 0 ? DDI_NT_SERIAL_MB_DO :
-		    DDI_NT_SERIAL_DO, NULL);
+		    DDI_NT_SERIAL_DO, 0);
 	}
 
 	if (status != DDI_SUCCESS) {
@@ -1119,7 +1120,7 @@ asyattach(dev_info_t *devi, ddi_attach_cmd_t cmd)
 /*ARGSUSED*/
 static int
 asyinfo(dev_info_t *dip, ddi_info_cmd_t infocmd, void *arg,
-	void **result)
+    void **result)
 {
 	dev_t dev = (dev_t)arg;
 	int instance, error;
@@ -1547,8 +1548,8 @@ asyopen(queue_t *rq, dev_t *dev, int flag, int sflag, cred_t *cr)
 	struct asyncline *async;
 	int		mcr;
 	int		unit;
-	int 		len;
-	struct termios 	*termiosp;
+	int		len;
+	struct termios	*termiosp;
 
 	unit = UNIT(*dev);
 	DEBUGCONT1(ASY_DEBUG_CLOSE, "asy%dopen\n", unit);
@@ -1802,7 +1803,7 @@ asyclose(queue_t *q, int flag, cred_t *credp)
 	 * write queue and there's a timer running, so we don't have to worry
 	 * about them.  For the untimed case, though, the user obviously made a
 	 * mistake, because these are handled immediately.  We'll terminate the
-	 * break now and honor his implicit request by discarding the rest of
+	 * break now and honor their implicit request by discarding the rest of
 	 * the data.
 	 */
 	if (async->async_flags & ASYNC_OUT_SUSPEND) {
@@ -1989,7 +1990,7 @@ asy_waiteot(struct asycom *asy)
 static void
 asy_reset_fifo(struct asycom *asy, uchar_t flush)
 {
-	uchar_t lcr;
+	uchar_t lcr = 0;
 
 	/* On a 16750, we have to set DLAB in order to set FIFOEXTRA. */
 
@@ -2941,7 +2942,7 @@ rv:
 	 * about an error- They do not track multiple errors. In fact,
 	 * you could consider them latched register bits if you like.
 	 * We are only interested in printing the error message once for
-	 * any cluster of overrun errrors.
+	 * any cluster of overrun errors.
 	 */
 	if (async->async_hw_overrun) {
 		if (async->async_flags & ASYNC_ISOPEN) {

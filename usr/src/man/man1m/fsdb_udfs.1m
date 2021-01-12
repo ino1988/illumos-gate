@@ -3,7 +3,7 @@
 .\" The contents of this file are subject to the terms of the Common Development and Distribution License (the "License").  You may not use this file except in compliance with the License.
 .\" You can obtain a copy of the license at usr/src/OPENSOLARIS.LICENSE or http://www.opensolaris.org/os/licensing.  See the License for the specific language governing permissions and limitations under the License.
 .\" When distributing Covered Code, include this CDDL HEADER in each file and include the License file at usr/src/OPENSOLARIS.LICENSE.  If applicable, add the following below this CDDL HEADER, with the fields enclosed by brackets "[]" replaced with your own identifying information: Portions Copyright [yyyy] [name of copyright owner]
-.TH FSDB_UDFS 1M "Jun 11, 1999"
+.TH FSDB_UDFS 1M "Nov 26, 2017"
 .SH NAME
 fsdb_udfs \- udfs file system debugger
 .SH SYNOPSIS
@@ -13,7 +13,6 @@ fsdb_udfs \- udfs file system debugger
 .fi
 
 .SH DESCRIPTION
-.sp
 .LP
 The \fBfsdb_udfs\fR command is an interactive tool that can be used to patch up
 a damaged \fBudfs\fR file system. \fBfsdb_udfs\fR has conversions to translate
@@ -39,7 +38,6 @@ with the \fB-w\fR option.
 Wherever possible, \fBadb\fR-like syntax has been adopted to promote the use of
 \fBfsdb\fR through familiarity.
 .SH OPTIONS
-.sp
 .LP
 The following options are supported:
 .sp
@@ -89,15 +87,14 @@ Display usage.
 .RE
 
 .SH USAGE
-.sp
 .LP
 Numbers are considered hexadecimal by default. The user has control over how
 data is to be displayed or accepted. The \fBbase\fR command displays or sets
 the input and output base. Once set, all input defaults to this base and all
-output displays in this base. The base can be overriden temporarily for input
+output displays in this base. The base can be overridden temporarily for input
 by preceding hexadecimal numbers by \fB0x\fR, preceding decimal numbers with a
 \fB0t\fR, or octal numbers with a \fB0\fR. Hexadecimal numbers beginning with
-\fBa\fR-\fBf\fR or \fBA\fR -\fBF\fR must be preceded with a \fB0x\fR to
+\fBa\fR-\fBf\fR or \fBA\fR-\fBF\fR must be preceded with a \fB0x\fR to
 distinguish them from commands.
 .sp
 .LP
@@ -223,7 +220,6 @@ or
 .LP
 is again synonymous.
 .SS "Expressions"
-.sp
 .LP
 The following symbols are recognized by \fBfsdb\fR:
 .sp
@@ -243,7 +239,7 @@ using the current value of \fIcount\fR.
 .ad
 .RS 13n
 Update the value of dot by specifying a numeric expression. Specify numeric
-expressions using addition, subtraction, mulitiplication, and division
+expressions using addition, subtraction, multiplication, and division
 operators ( \fB+\fR, \fB-\fR, \fB*\fR, and \fB%\fR). Numeric expressions are
 evaluated from left to right and can use parentheses. After evaluation, the
 value of dot is updated.
@@ -394,7 +390,6 @@ of the address pointed to by dot by expression \fIe\fR.
 .RE
 
 .SS "Commands"
-.sp
 .LP
 A command must be prefixed by a colon (\fB:\fR). Only enough letters of the
 command to uniquely distinguish it are needed. Multiple commands can be entered
@@ -404,7 +399,7 @@ on one line by  separating them by a SPACE, TAB, or semicolon (\fB;\fR).
 To view a potentially unmounted disk in a reasonable manner, \fBfsdb\fR
 supports the \fBcd\fR, \fBpwd\fR, \fBls\fR, and \fBfind\fR commands. The
 functionality of each of these commands basically matches that of its UNIX
-counterpart. See \fBcd\fR(1), \fBpwd\fR(1),\fBls\fR(1), and\fBfind\fR(1) for
+counterpart. See \fBcd\fR(1), \fBpwd\fR(1), \fBls\fR(1), and \fBfind\fR(1) for
 details. The \fB*\fR, \fB,\fR, \fB?\fR, and \fB-\fR wildcard characters are
 also supported.
 .sp
@@ -476,7 +471,7 @@ The value of dot is updated to the first byte of  this block.
 .sp .6
 .RS 4n
 Find files by name or i-number. Recursively searches directory \fIdir\fR and
-below for file names whose i-number matches\fB i\fR or whose name matches
+below for file names whose i-number matches \fBi\fR or whose name matches
 pattern \fIn\fR. Only one of the two options (\fB-name\fR or \fB-inum\fR) can
 be used at one time. The find \fB-print\fR is not necessary or accepted.
 .RE
@@ -582,7 +577,6 @@ Escape to the shell.
 .RE
 
 .SS "Inode Commands"
-.sp
 .LP
 In addition to the above commands, several other commands deal with inode
 fields and operate directly on the current inode (they still require the colon
@@ -737,7 +731,6 @@ Unique \fBID\fR
 .RE
 
 .SS "Formatted Output"
-.sp
 .LP
 Formatted output comes in two styles and many format types. The two styles of
 formatted output are: structured and unstructured. Structured output is used to
@@ -833,7 +826,7 @@ of using \fBfsdb\fR as a calculator for complex arithmetic.
 .sp
 
 .LP
-\fBExample 2 \fRUsing fsdb to display an i-number in idode fomat
+\fBExample 2 \fRUsing fsdb to display an i-number in inode fomat
 .sp
 .LP
 The following command displays the i-number \fB386\fR in inode format.\fB386\fR
@@ -1019,6 +1012,5 @@ address \fB1c92434\fR.
 .sp
 
 .SH SEE ALSO
-.sp
 .LP
 \fBclri\fR(1M), \fBfsck_udfs\fR(1M), \fBdir\fR(4),  \fBattributes\fR(5)

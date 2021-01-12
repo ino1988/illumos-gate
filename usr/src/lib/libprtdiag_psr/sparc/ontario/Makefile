@@ -19,6 +19,7 @@
 # CDDL HEADER END
 #
 #
+# Copyright 2016 Gary Mills
 # Copyright 2009 Sun Microsystems, Inc.  All rights reserved.
 # Use is subject to license terms.
 #
@@ -33,7 +34,7 @@ include ../Makefile.com
 #
 # links in /usr/platform
 #
-LINKED_PLATFORMS	= SUNW,Sun-Blade-T6300 
+LINKED_PLATFORMS	= SUNW,Sun-Blade-T6300
 
 LINKED_DIRS		= $(LINKED_PLATFORMS:%=$(USR_PLAT_DIR)/%)
 LINKED_LIB_DIRS		= $(LINKED_PLATFORMS:%=$(USR_PLAT_DIR)/%/lib)
@@ -49,7 +50,6 @@ IFLAGS +=  -I ../../../libprtdiag/inc
 IFLAGS += -I$(SRC)/cmd/picl/plugins/inc
 LDLIBS += -lpicl
 
-LINTFLAGS += $(IFLAGS)
 
 PLATFORM=SUNW,Sun-Fire-T200
 
@@ -77,7 +77,7 @@ $(LINKED_DIRS):	$(USR_PLAT_DIR)
 $(LINKED_LIB_DIRS):	$(LINKED_DIRS)
 	-$(INS.dir)
 
-$(LINKED_PRTDIAG_DIRS):	$(USR_PLAT_DIR)
+$(LINKED_PRTDIAG_DIRS):	$(LINKED_LIB_DIRS)
 	-$(INS.slink6)
 
 #

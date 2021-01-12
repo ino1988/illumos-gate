@@ -20,7 +20,9 @@
  */
 /*
  * Copyright (c) 2007, 2010, Oracle and/or its affiliates. All rights reserved.
- * Copyright 2011 Nexenta Systems, Inc.  All rights reserved.
+ * Copyright 2017 Nexenta Systems, Inc.  All rights reserved.
+ * Copyright 2017 Joyent, Inc.
+ * Copyright 2020 RackTop Systems, Inc.
  */
 
 #ifndef _SMB_IOCTL_H_
@@ -69,7 +71,7 @@ typedef	struct smb_ioc_spooldoc {
 
 typedef	struct {
 	smb_ioc_header_t hdr;
-	int32_t 	offset;
+	int32_t		offset;
 } smb_ioc_gmt_t;
 
 typedef struct smb_ioc_share {
@@ -89,6 +91,10 @@ typedef	struct smb_ioc_start {
 	int		opipe;
 	int		lmshrd;
 	int		udoor;
+	/* These are used only by libfksmbsrv */
+	void		*opipe_func;
+	void		*lmshr_func;
+	void		*udoor_func;
 } smb_ioc_start_t;
 
 typedef	struct smb_ioc_event {
@@ -114,10 +120,14 @@ typedef	struct smb_ioc_opennum {
 #define	SMB_SVCENUM_TYPE_FILE	0x46494C45	/* 'FILE' */
 #define	SMB_SVCENUM_TYPE_SHARE	0x53484152	/* 'SHAR' */
 
+/* Maximum size of payload data an smbsrv ioctl may use. */
+#define	SMB_IOC_DATA_SIZE		(256 * 1024)
+
 typedef struct smb_svcenum {
 	uint32_t	se_type;	/* object type to enumerate */
 	uint32_t	se_level;	/* level of detail being requested */
 	uint32_t	se_prefmaxlen;	/* client max size buffer preference */
+					/* (ignored by kernel) */
 	uint32_t	se_resume;	/* client resume handle */
 	uint32_t	se_bavail;	/* remaining buffer space in bytes */
 	uint32_t	se_bused;	/* consumed buffer space in bytes */
@@ -146,6 +156,7 @@ typedef	struct smb_ioc_fileid {
 	uint32_t	uniqid;
 } smb_ioc_fileid_t;
 
+/* See also: smb_kmod_cfg_t */
 typedef struct smb_ioc_cfg {
 	smb_ioc_header_t hdr;
 	uint32_t	maxworkers;
@@ -157,11 +168,24 @@ typedef struct smb_ioc_cfg {
 	int32_t		oplock_enable;
 	int32_t		sync_enable;
 	int32_t		secmode;
+	int32_t		netbios_enable;
 	int32_t		ipv6_enable;
 	int32_t		print_enable;
 	int32_t		traverse_mounts;
+	uint32_t	max_protocol;
+	uint32_t	min_protocol;
+	uint32_t	encrypt;
 	uint32_t	exec_flags;
+	uint32_t	negtok_len;
 	smb_version_t	version;
+	uint16_t	encrypt_cipher;
+	uint16_t	initial_credits;
+	uint16_t	maximum_credits;
+	/* SMB negotiate protocol response. */
+	uuid_t		machine_uuid;
+	uchar_t		negtok[SMB_PI_MAX_NEGTOK];
+	char		native_os[SMB_PI_MAX_NATIVE_OS];
+	char		native_lm[SMB_PI_MAX_LANMAN];
 	char		nbdomain[NETBIOS_NAME_SZ];
 	char		fqdn[SMB_PI_MAX_DOMAIN];
 	char		hostname[SMB_PI_MAX_HOST];
@@ -184,6 +208,12 @@ typedef union smb_ioc {
 } smb_ioc_t;
 
 uint32_t smb_crc_gen(uint8_t *, size_t);
+
+/* fksmbd (init,open,close,ioctl) calls into libfksmbsrv */
+int fksmbsrv_drv_open(void);
+int fksmbsrv_drv_close(void);
+int fksmbsrv_drv_ioctl(int cmd, void *arg);
+void fksmbsrv_drv_load(void);
 
 #ifdef __cplusplus
 }

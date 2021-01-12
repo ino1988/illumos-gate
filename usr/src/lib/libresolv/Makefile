@@ -19,9 +19,11 @@
 # CDDL HEADER END
 #
 #
+# Copyright 2015 Gary Mills
 # Copyright 2006 Sun Microsystems, Inc.  All rights reserved.
 # Use is subject to license terms.
 #
+# Copyright (c) 2018, Joyent, Inc.
 
 LIBRARY= libresolv.a
 VERS= .1
@@ -46,7 +48,7 @@ include ../Makefile.rootfs
 
 SRCDIR =	.
 
-C99MODE=	$(C99_DISABLE)
+CSTD=	$(CSTD_GNU89)
 
 # We really want to say this:
 #	CPPFLAGS += -DDEBUG -DSYSV -D_REENTRANT -I. -I../common/inc
@@ -54,15 +56,17 @@ C99MODE=	$(C99_DISABLE)
 # so we must put -I. ahead of the default include directories:
 CPPFLAGS = -I. -I../common/inc $(CPPFLAGS.master) -DDEBUG -DSYSV -D_REENTRANT
 LDLIBS += -lsocket -lnsl -lc
+CFLAGS += $(CCVERBOSE)
 
-CERRWARN += -_gcc=-Wno-implicit-function-declaration
 CERRWARN += -_gcc=-Wno-parentheses
-CERRWARN += -_gcc=-Wno-unused-variable
-CERRWARN += -_gcc=-Wno-uninitialized
-CERRWARN += -_gcc=-Wno-implicit-int
-CERRWARN += -_gcc=-Wno-extra
+CERRWARN += $(CNOWARN_UNINIT)
+
+# not linted
+SMATCH=off
 
 ROOTDYNLIBS=	$(DYNLIB:%=$(ROOTLIBDIR)/%)
+
+COMPATLINKS=	usr/lib/$(DYNLIB)
 
 .KEEP_STATE:
 
@@ -70,9 +74,8 @@ LIBS = $(DYNLIB)
 
 all: $(LIBS)
 
-install: all $(ROOTDYNLIBS)
+install: all $(ROOTDYNLIBS) $(ROOTCOMPATLINKS)
 
-lint: lintcheck
 
 # include library targets
 include ../Makefile.targ

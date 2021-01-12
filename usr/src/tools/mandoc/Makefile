@@ -10,42 +10,46 @@
 #
 
 #
-# Copyright 2014 Nexenta Systems, Inc.  All rights reserved.
+# Copyright 2017 Nexenta Systems, Inc.
+# Copyright 2018 Joyent, Inc.
 #
 
+CMDDIR=		$(SRC)/cmd/mandoc
+LCDIR=		$(SRC)/lib/libc/port
 
-PROG=		mandoc
+include		$(SRC)/tools/Makefile.tools
+include		$(CMDDIR)/Makefile.common
 
-CMDDIR=	$(SRC)/cmd/mandoc
+OBJS +=		fts.o \
+		reallocarray.o \
+		recallocarray.o \
+		strtonum.o
 
-include ../Makefile.tools
+CPPFLAGS +=	-_gcc=-nostdinc
+CPPFLAGS +=	-I. -include fts.h
+CPPFLAGS +=	-I$(NATIVE_ADJUNCT)/include
+LDFLAGS +=	-L$(NATIVE_ADJUNCT)/lib -R$(NATIVE_ADJUNCT)/lib
 
-include $(SRC)/cmd/mandoc/Makefile.common
-
-SRCS=	$(mandoc_OBJS:%.o=$(CMDDIR)/%.c)
-CLEANFILES=	$(PROG) $(OBJS)
-OBJS= $(mandoc_OBJS)
-PROG= mandoc
+# 3rd party code
+SMATCH=off
 
 .KEEP_STATE:
 
-install: all .WAIT $(ROOTONBLDMACHPROG)
-
-$(PROG):	$(OBJS)
-		$(LINK.c) -o $@ $(OBJS) $(LDLIBS)
-		$(POST_PROCESS)
-
 all:		$(PROG)
 
+install:	all $(ROOTONBLDMACHPROG)
+
+clean:
+		$(RM) $(PROG) $(OBJS)
+
+$(PROG):	$(OBJS)
+		$(LINK.c) $(OBJS) -o $@ $(LDLIBS)
+		$(POST_PROCESS)
 
 %.o:		$(CMDDIR)/%.c
 		$(COMPILE.c) -o $@ $<
 
-%.o:		$(LIBDIR)/%.c
+%.o:		$(LCDIR)/gen/%.c
 		$(COMPILE.c) -o $@ $<
 
-clean:
-		$(RM) $(CLEANFILES)
-
-include ../Makefile.targ
-
+include		$(SRC)/tools/Makefile.targ

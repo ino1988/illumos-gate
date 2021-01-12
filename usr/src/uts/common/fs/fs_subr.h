@@ -19,17 +19,16 @@
  * CDDL HEADER END
  */
 /*	Copyright (c) 1984, 1986, 1987, 1988, 1989 AT&T	*/
-/*	  All Rights Reserved  	*/
+/*	  All Rights Reserved	*/
 
 /*
  * Copyright 2007 Sun Microsystems, Inc.  All rights reserved.
  * Use is subject to license terms.
+ * Copyright 2017 Joyent, Inc.
  */
 
 #ifndef	_SYS_FS_SUBR_H
 #define	_SYS_FS_SUBR_H
-
-#pragma ident	"%Z%%M%	%I%	%E% SMI"
 
 #include <sys/types.h>
 #include <sys/cred.h>
@@ -50,7 +49,7 @@ extern "C" {
  * Utilities shared among file system implementations.
  */
 
-#ifdef	_KERNEL
+#if defined(_KERNEL) || defined(_FAKE_KERNEL)
 
 extern int	fs_nosys();
 extern int	fs_inval();
@@ -96,6 +95,9 @@ extern int	fs_acl_nontrivial(struct vnode *vp, struct cred *cr);
 extern int	fs_need_estale_retry(int);
 extern void	fs_vscan_register(int (*av_scan)(vnode_t *, cred_t *, int));
 extern int	fs_vscan(vnode_t *, cred_t *, int);
+
+/* Helper function to detect when epoll checks VOP_POLL handlers */
+extern boolean_t fs_reject_epoll();
 
 #endif	/* _KERNEL */
 

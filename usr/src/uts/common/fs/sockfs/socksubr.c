@@ -21,6 +21,9 @@
 
 /*
  * Copyright (c) 1995, 2010, Oracle and/or its affiliates. All rights reserved.
+ * Copyright 2016 Nexenta Systems, Inc.  All rights reserved.
+ * Copyright 2015, Joyent, Inc. All rights reserved.
+ * Copyright 2020 OmniOS Community Edition (OmniOSce) Association.
  */
 
 #include <sys/types.h>
@@ -112,17 +115,6 @@ extern void sendfile_init();
 extern void nl7c_init(void);
 
 extern int modrootloaded;
-
-#define	ADRSTRLEN (2 * sizeof (void *) + 1)
-/*
- * kernel structure for passing the sockinfo data back up to the user.
- * the strings array allows us to convert AF_UNIX addresses into strings
- * with a common method regardless of which n-bit kernel we're running.
- */
-struct k_sockinfo {
-	struct sockinfo	ks_si;
-	char		ks_straddr[3][ADRSTRLEN];
-};
 
 /*
  * Translate from a device pathname (e.g. "/dev/tcp") to a vnode.
@@ -439,7 +431,7 @@ sogetoff(mblk_t *mp, t_uscalar_t offset,
  */
 static int
 so_ux_lookup(struct sonode *so, struct sockaddr_un *soun, int checkaccess,
-		vnode_t **vpp)
+    vnode_t **vpp)
 {
 	vnode_t		*vp;	/* Underlying filesystem vnode */
 	vnode_t		*rvp;	/* real vnode */
@@ -624,7 +616,8 @@ so_addr_verify(struct sonode *so, const struct sockaddr *name,
 
 /*
  * Translate an AF_UNIX sockaddr_un to the transport internal name.
- * Assumes caller has called so_addr_verify first.
+ * Assumes caller has called so_addr_verify first.  The translated
+ * (internal form) address is stored in sti->sti_ux_taddr.
  */
 /*ARGSUSED*/
 int
@@ -660,13 +653,15 @@ so_ux_addr_xlate(struct sonode *so, struct sockaddr *name,
 	/*
 	 * Use the address of the peer vnode as the address to send
 	 * to. We release the peer vnode here. In case it has been
-	 * closed by the time the T_CONN_REQ or T_UNIDATA_REQ reaches the
+	 * closed by the time the T_CONN_REQ or T_UNITDATA_REQ reaches the
 	 * transport the message will get an error or be dropped.
+	 * Note that that soua_vp is never dereferenced; it's just a
+	 * convenient value by which we can identify the peer.
 	 */
-	sti->sti_ux_faddr.soua_vp = vp;
-	sti->sti_ux_faddr.soua_magic = SOU_MAGIC_EXPLICIT;
-	addr = &sti->sti_ux_faddr;
-	addrlen = (socklen_t)sizeof (sti->sti_ux_faddr);
+	sti->sti_ux_taddr.soua_vp = vp;
+	sti->sti_ux_taddr.soua_magic = SOU_MAGIC_EXPLICIT;
+	addr = &sti->sti_ux_taddr;
+	addrlen = (socklen_t)sizeof (sti->sti_ux_taddr);
 	dprintso(so, 1, ("ux_xlate UNIX: addrlen %d, vp %p\n",
 	    addrlen, (void *)vp));
 	VN_RELE(vp);
@@ -964,7 +959,46 @@ so_closefds(void *control, t_uscalar_t controllen, int oldflg,
 			    (int)CMSG_CONTENTLEN(cmsg),
 			    startoff - (int)sizeof (struct cmsghdr));
 		}
-		startoff -= cmsg->cmsg_len;
+		startoff -= ROUNDUP_cmsglen(cmsg->cmsg_len);
+	}
+}
+
+/*
+ * Handle truncation of a cmsg when the receive buffer is not big enough.
+ * Adjust the cmsg_len header field in the last cmsg that will be included in
+ * the buffer to reflect the number of bytes included.
+ */
+void
+so_truncatecmsg(void *control, t_uscalar_t controllen, uint_t maxlen)
+{
+	struct cmsghdr *cmsg;
+	uint_t len = 0;
+
+	if (control == NULL)
+		return;
+
+	for (cmsg = control;
+	    CMSG_VALID(cmsg, control, (uintptr_t)control + controllen);
+	    cmsg = CMSG_NEXT(cmsg)) {
+
+		len += ROUNDUP_cmsglen(cmsg->cmsg_len);
+
+		if (len > maxlen) {
+			/*
+			 * This cmsg is the last one that will be included in
+			 * the truncated buffer.
+			 */
+			socklen_t diff = len - maxlen;
+
+			if (diff < CMSG_CONTENTLEN(cmsg)) {
+				dprint(1, ("so_truncatecmsg: %d -> %d\n",
+				    cmsg->cmsg_len, cmsg->cmsg_len - diff));
+				cmsg->cmsg_len -= diff;
+			} else {
+				cmsg->cmsg_len = sizeof (struct cmsghdr);
+			}
+			break;
+		}
 	}
 }
 
@@ -1284,8 +1318,24 @@ so_opt2cmsg(mblk_t *mp, void *opt, t_uscalar_t optlen, int oldflg,
 
 			cmsg->cmsg_level = tohp->level;
 			cmsg->cmsg_type = tohp->name;
-			cmsg->cmsg_len = (socklen_t)(_TPI_TOPT_DATALEN(tohp) +
-			    sizeof (struct cmsghdr));
+			cmsg->cmsg_len = (socklen_t)sizeof (struct cmsghdr);
+			if (tohp->level == IPPROTO_IP &&
+			    (tohp->name == IP_RECVTOS ||
+			    tohp->name == IP_RECVTTL)) {
+				/*
+				 * The data for these is a uint8_t but, in
+				 * order to maintain alignment for any
+				 * following TPI primitives in the message,
+				 * there will be some trailing padding bytes
+				 * which are included in the TPI_TOPT_DATALEN.
+				 * For these types, we set the cmsg_len
+				 * explicitly to the correct value.
+				 */
+				cmsg->cmsg_len += (socklen_t)sizeof (uint8_t);
+			} else {
+				cmsg->cmsg_len +=
+				    (socklen_t)(_TPI_TOPT_DATALEN(tohp));
+			}
 
 			/* copy content to control data part */
 			bcopy(&tohp[1], CMSG_CONTENT(cmsg),
@@ -1762,7 +1812,7 @@ sockfs_update(kstat_t *ksp, int rw)
 		}
 	}
 	ksp->ks_ndata = nactive;
-	ksp->ks_data_size = nactive * sizeof (struct k_sockinfo);
+	ksp->ks_data_size = nactive * sizeof (struct sockinfo);
 
 	return (0);
 }
@@ -1772,10 +1822,10 @@ sockfs_snapshot(kstat_t *ksp, void *buf, int rw)
 {
 	int			ns;	/* # of sonodes we've copied	*/
 	struct sonode		*so;	/* current sonode on socklist	*/
-	struct k_sockinfo	*pksi;	/* where we put sockinfo data	*/
+	struct sockinfo		*psi;	/* where we put sockinfo data	*/
 	t_uscalar_t		sn_len;	/* soa_len			*/
 	zoneid_t		myzoneid = (zoneid_t)(uintptr_t)ksp->ks_private;
-	sotpi_info_t 		*sti;
+	sotpi_info_t		*sti;
 
 	ASSERT((zoneid_t)(uintptr_t)ksp->ks_private == getzoneid());
 
@@ -1786,12 +1836,14 @@ sockfs_snapshot(kstat_t *ksp, void *buf, int rw)
 	}
 
 	/*
-	 * for each sonode on the socklist, we massage the important
-	 * info into buf, in k_sockinfo format.
+	 * For each sonode on the socklist, we massage the important
+	 * info into buf, in sockinfo format.
 	 */
-	pksi = (struct k_sockinfo *)buf;
+	psi = (struct sockinfo *)buf;
 	ns = 0;
 	for (so = socklist.sl_list; so != NULL; so = SOTOTPI(so)->sti_next_so) {
+		vattr_t attr;
+
 		/* only stuff active sonodes and the same zone:		*/
 		if (so->so_count == 0 || so->so_zoneid != myzoneid) {
 			continue;
@@ -1801,26 +1853,35 @@ sockfs_snapshot(kstat_t *ksp, void *buf, int rw)
 		 * If the sonode was activated between the update and the
 		 * snapshot, we're done - as this is only a snapshot.
 		 */
-		if ((caddr_t)(pksi) >= (caddr_t)buf + ksp->ks_data_size) {
+		if ((caddr_t)(psi) >= (caddr_t)buf + ksp->ks_data_size) {
 			break;
 		}
 
 		sti = SOTOTPI(so);
 		/* copy important info into buf:			*/
-		pksi->ks_si.si_size = sizeof (struct k_sockinfo);
-		pksi->ks_si.si_family = so->so_family;
-		pksi->ks_si.si_type = so->so_type;
-		pksi->ks_si.si_flag = so->so_flag;
-		pksi->ks_si.si_state = so->so_state;
-		pksi->ks_si.si_serv_type = sti->sti_serv_type;
-		pksi->ks_si.si_ux_laddr_sou_magic =
-		    sti->sti_ux_laddr.soua_magic;
-		pksi->ks_si.si_ux_faddr_sou_magic =
-		    sti->sti_ux_faddr.soua_magic;
-		pksi->ks_si.si_laddr_soa_len = sti->sti_laddr.soa_len;
-		pksi->ks_si.si_faddr_soa_len = sti->sti_faddr.soa_len;
-		pksi->ks_si.si_szoneid = so->so_zoneid;
-		pksi->ks_si.si_faddr_noxlate = sti->sti_faddr_noxlate;
+		psi->si_size = sizeof (struct sockinfo);
+		psi->si_family = so->so_family;
+		psi->si_type = so->so_type;
+		psi->si_flag = so->so_flag;
+		psi->si_state = so->so_state;
+		psi->si_serv_type = sti->sti_serv_type;
+		psi->si_ux_laddr_sou_magic = sti->sti_ux_laddr.soua_magic;
+		psi->si_ux_faddr_sou_magic = sti->sti_ux_faddr.soua_magic;
+		psi->si_laddr_soa_len = sti->sti_laddr.soa_len;
+		psi->si_faddr_soa_len = sti->sti_faddr.soa_len;
+		psi->si_szoneid = so->so_zoneid;
+		psi->si_faddr_noxlate = sti->sti_faddr_noxlate;
+
+		/*
+		 * Grab the inode, if possible.
+		 * This must be done before entering so_lock as VOP_GETATTR
+		 * will acquire it.
+		 */
+		if (so->so_vnode == NULL ||
+		    VOP_GETATTR(so->so_vnode, &attr, 0, CRED(), NULL) != 0)
+			attr.va_nodeid = 0;
+
+		psi->si_inode = attr.va_nodeid;
 
 		mutex_enter(&so->so_lock);
 
@@ -1828,47 +1889,50 @@ sockfs_snapshot(kstat_t *ksp, void *buf, int rw)
 			ASSERT(sti->sti_laddr_sa->sa_data != NULL);
 			sn_len = sti->sti_laddr_len;
 			ASSERT(sn_len <= sizeof (short) +
-			    sizeof (pksi->ks_si.si_laddr_sun_path));
+			    sizeof (psi->si_laddr_sun_path));
 
-			pksi->ks_si.si_laddr_family =
+			psi->si_laddr_family =
 			    sti->sti_laddr_sa->sa_family;
 			if (sn_len != 0) {
 				/* AF_UNIX socket names are NULL terminated */
-				(void) strncpy(pksi->ks_si.si_laddr_sun_path,
+				(void) strncpy(psi->si_laddr_sun_path,
 				    sti->sti_laddr_sa->sa_data,
-				    sizeof (pksi->ks_si.si_laddr_sun_path));
-				sn_len = strlen(pksi->ks_si.si_laddr_sun_path);
+				    sizeof (psi->si_laddr_sun_path));
+				sn_len = strlen(psi->si_laddr_sun_path);
 			}
-			pksi->ks_si.si_laddr_sun_path[sn_len] = 0;
+			psi->si_laddr_sun_path[sn_len] = 0;
 		}
 
 		if (sti->sti_faddr_sa != NULL) {
 			ASSERT(sti->sti_faddr_sa->sa_data != NULL);
 			sn_len = sti->sti_faddr_len;
 			ASSERT(sn_len <= sizeof (short) +
-			    sizeof (pksi->ks_si.si_faddr_sun_path));
+			    sizeof (psi->si_faddr_sun_path));
 
-			pksi->ks_si.si_faddr_family =
+			psi->si_faddr_family =
 			    sti->sti_faddr_sa->sa_family;
 			if (sn_len != 0) {
-				(void) strncpy(pksi->ks_si.si_faddr_sun_path,
+				(void) strncpy(psi->si_faddr_sun_path,
 				    sti->sti_faddr_sa->sa_data,
-				    sizeof (pksi->ks_si.si_faddr_sun_path));
-				sn_len = strlen(pksi->ks_si.si_faddr_sun_path);
+				    sizeof (psi->si_faddr_sun_path));
+				sn_len = strlen(psi->si_faddr_sun_path);
 			}
-			pksi->ks_si.si_faddr_sun_path[sn_len] = 0;
+			psi->si_faddr_sun_path[sn_len] = 0;
 		}
 
 		mutex_exit(&so->so_lock);
 
-		(void) sprintf(pksi->ks_straddr[0], "%p", (void *)so);
-		(void) sprintf(pksi->ks_straddr[1], "%p",
+		(void) snprintf(psi->si_son_straddr,
+		    sizeof (psi->si_son_straddr), "%p", (void *)so);
+		(void) snprintf(psi->si_lvn_straddr,
+		    sizeof (psi->si_lvn_straddr), "%p",
 		    (void *)sti->sti_ux_laddr.soua_vp);
-		(void) sprintf(pksi->ks_straddr[2], "%p",
+		(void) snprintf(psi->si_fvn_straddr,
+		    sizeof (psi->si_fvn_straddr), "%p",
 		    (void *)sti->sti_ux_faddr.soua_vp);
 
 		ns++;
-		pksi++;
+		psi++;
 	}
 
 	ksp->ks_ndata = ns;
@@ -1879,7 +1943,7 @@ ssize_t
 soreadfile(file_t *fp, uchar_t *buf, u_offset_t fileoff, int *err, size_t size)
 {
 	struct uio auio;
-	struct iovec aiov[MSG_MAXIOVLEN];
+	struct iovec aiov[1];
 	register vnode_t *vp;
 	int ioflag, rwflag;
 	ssize_t cnt;

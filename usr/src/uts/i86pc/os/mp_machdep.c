@@ -25,6 +25,8 @@
 /*
  * Copyright (c) 2009-2010, Intel Corporation.
  * All rights reserved.
+ * Copyright 2018 Joyent, Inc.
+ * Copyright 2020 Oxide Computer Company
  */
 
 #define	PSMI_1_7
@@ -62,6 +64,8 @@
 #include <sys/sunddi.h>
 #include <sys/sunndi.h>
 #include <sys/cpc_pcbe.h>
+#include <sys/prom_debug.h>
+
 
 #define	OFFSETOF(s, m)		(size_t)(&(((s *)0)->m))
 
@@ -116,10 +120,10 @@ void (*psm_notifyf)(int)	= (void (*)(int))return_instr;
 void (*psm_set_idle_cpuf)(int)	= (void (*)(int))return_instr;
 void (*psm_unset_idle_cpuf)(int) = (void (*)(int))return_instr;
 void (*psminitf)()		= mach_init;
-void (*picinitf)() 		= return_instr;
-int (*clkinitf)(int, int *) 	= (int (*)(int, int *))return_instr;
-int (*ap_mlsetup)() 		= (int (*)(void))return_instr;
-void (*send_dirintf)() 		= return_instr;
+void (*picinitf)()		= return_instr;
+int (*clkinitf)(int, int *)	= (int (*)(int, int *))return_instr;
+int (*ap_mlsetup)()		= (int (*)(void))return_instr;
+void (*send_dirintf)()		= return_instr;
 void (*setspl)(int)		= (void (*)(int))return_instr;
 int (*addspl)(int, int, int, int) = (int (*)(int, int, int, int))return_instr;
 int (*delspl)(int, int, int, int) = (int (*)(int, int, int, int))return_instr;
@@ -148,6 +152,9 @@ int (*psm_get_ipivect)(int, int) = NULL;
 uchar_t (*psm_get_ioapicid)(uchar_t) = NULL;
 uint32_t (*psm_get_localapicid)(uint32_t) = NULL;
 uchar_t (*psm_xlate_vector_by_irq)(uchar_t) = NULL;
+int (*psm_get_pir_ipivect)(void) = NULL;
+void (*psm_send_pir_ipi)(processorid_t) = NULL;
+void (*psm_cmci_setup)(processorid_t, boolean_t) = NULL;
 
 int (*psm_clkinit)(int) = NULL;
 void (*psm_timer_reprogram)(hrtime_t) = NULL;
@@ -345,6 +352,9 @@ pg_plat_hw_rank(pghw_type_t hw1, pghw_type_t hw2)
 		PGHW_POW_ACTIVE,
 		PGHW_NUM_COMPONENTS
 	};
+
+	rank1 = 0;
+	rank2 = 0;
 
 	for (i = 0; hw_hier[i] != PGHW_NUM_COMPONENTS; i++) {
 		if (hw_hier[i] == hw1)
@@ -971,6 +981,7 @@ mach_init()
 {
 	struct psm_ops  *pops;
 
+	PRM_POINT("mach_construct_info()");
 	mach_construct_info();
 
 	pops = mach_set[0];
@@ -1010,6 +1021,7 @@ mach_init()
 		notify_error = pops->psm_notify_error;
 	}
 
+	PRM_POINT("psm_softinit()");
 	(*pops->psm_softinit)();
 
 	/*
@@ -1027,6 +1039,7 @@ mach_init()
 #ifndef __xpv
 	non_deep_idle_disp_enq_thread = disp_enq_thread;
 #endif
+	PRM_DEBUG(idle_cpu_use_hlt);
 	if (idle_cpu_use_hlt) {
 		idle_cpu = cpu_idle_adaptive;
 		CPU->cpu_m.mcpu_idle_cpu = cpu_idle;
@@ -1061,6 +1074,7 @@ mach_init()
 #endif
 	}
 
+	PRM_POINT("mach_smpinit()");
 	mach_smpinit();
 }
 
@@ -1130,6 +1144,14 @@ mach_smpinit(void)
 	if (pops->psm_enable_intr)
 		psm_enable_intr  = pops->psm_enable_intr;
 
+	/*
+	 * Set this vector so it can be used by vmbus (for Hyper-V)
+	 * Need this even for single-CPU systems.  This works for
+	 * "pcplusmp" and "apix" platforms, but not "uppc" (because
+	 * "Uni-processor PC" does not provide a _get_ipivect).
+	 */
+	psm_get_ipivect = pops->psm_get_ipivect;
+
 	/* check for multiple CPUs */
 	if (cnt < 2 && plat_dr_support_cpu() == B_FALSE)
 		return;
@@ -1152,7 +1174,10 @@ mach_smpinit(void)
 #endif
 	}
 
-	psm_get_ipivect = pops->psm_get_ipivect;
+	psm_get_pir_ipivect = pops->psm_get_pir_ipivect;
+	psm_send_pir_ipi = pops->psm_send_pir_ipi;
+	psm_cmci_setup = pops->psm_cmci_setup;
+
 
 	(void) add_avintr((void *)NULL, XC_HI_PIL, xc_serv, "xc_intr",
 	    (*pops->psm_get_ipivect)(XC_HI_PIL, PSM_INTR_IPI_HI),
@@ -1305,9 +1330,9 @@ static int x86_cpu_freq[] = { 60, 75, 80, 90, 120, 160, 166, 175, 180, 233 };
  * is most likely printed on the part.
  *
  * Some examples:
- * 	AMD Athlon 1000 mhz measured as 998 mhz
- * 	Intel Pentium III Xeon 733 mhz measured as 731 mhz
- * 	Intel Pentium IV 1500 mhz measured as 1495mhz
+ *	AMD Athlon 1000 mhz measured as 998 mhz
+ *	Intel Pentium III Xeon 733 mhz measured as 731 mhz
+ *	Intel Pentium IV 1500 mhz measured as 1495mhz
  *
  * If in the future this function is no longer sufficient to correct
  * for the error in the measurement, then the algorithm used to perform

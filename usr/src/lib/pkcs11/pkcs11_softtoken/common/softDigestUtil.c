@@ -21,6 +21,7 @@
 /*
  * Copyright 2008 Sun Microsystems, Inc.  All rights reserved.
  * Use is subject to license terms.
+ * Copyright (c) 2018, Joyent, Inc.
  */
 
 #include <strings.h>
@@ -46,7 +47,7 @@
  *
  * Description:
  *	called by C_DigestInit(). This function allocates space for
- *  	context, then calls the corresponding software provided digest
+ *	context, then calls the corresponding software provided digest
  *	init routine based on the mechanism.
  *
  * Returns:
@@ -101,6 +102,8 @@ soft_digest_init(soft_session_t *session_p, CK_MECHANISM_PTR pMechanism)
 	case CKM_SHA256:
 	case CKM_SHA384:
 	case CKM_SHA512:
+	case CKM_SHA512_224:
+	case CKM_SHA512_256:
 
 		(void) pthread_mutex_lock(&session_p->session_mutex);
 
@@ -111,25 +114,30 @@ soft_digest_init(soft_session_t *session_p, CK_MECHANISM_PTR pMechanism)
 			return (CKR_HOST_MEMORY);
 		}
 
+		session_p->digest.mech.mechanism = pMechanism->mechanism;
+		(void) pthread_mutex_unlock(&session_p->session_mutex);
+
 		switch (pMechanism->mechanism) {
 		case CKM_SHA256:
-			session_p->digest.mech.mechanism = CKM_SHA256;
-			(void) pthread_mutex_unlock(&session_p->session_mutex);
 			SHA2Init(SHA256,
 			    (SHA2_CTX *)session_p->digest.context);
 			break;
 
 		case CKM_SHA384:
-			session_p->digest.mech.mechanism = CKM_SHA384;
-			(void) pthread_mutex_unlock(&session_p->session_mutex);
 			SHA2Init(SHA384,
 			    (SHA2_CTX *)session_p->digest.context);
 			break;
 
 		case CKM_SHA512:
-			session_p->digest.mech.mechanism = CKM_SHA512;
-			(void) pthread_mutex_unlock(&session_p->session_mutex);
 			SHA2Init(SHA512,
+			    (SHA2_CTX *)session_p->digest.context);
+			break;
+		case CKM_SHA512_224:
+			SHA2Init(SHA512_224,
+			    (SHA2_CTX *)session_p->digest.context);
+			break;
+		case CKM_SHA512_256:
+			SHA2Init(SHA512_256,
 			    (SHA2_CTX *)session_p->digest.context);
 			break;
 		}
@@ -166,7 +174,7 @@ soft_digest_init(soft_session_t *session_p, CK_MECHANISM_PTR pMechanism)
  */
 CK_RV
 soft_digest_common(soft_session_t *session_p, CK_BYTE_PTR pData,
-	CK_ULONG ulDataLen, CK_BYTE_PTR pDigest, CK_ULONG_PTR pulDigestLen)
+    CK_ULONG ulDataLen, CK_BYTE_PTR pDigest, CK_ULONG_PTR pulDigestLen)
 {
 
 	CK_ULONG digestLen = 0;
@@ -182,19 +190,27 @@ soft_digest_common(soft_session_t *session_p, CK_BYTE_PTR pData,
 		break;
 
 	case CKM_SHA_1:
-		digestLen = 20;
+		digestLen = SHA1_DIGEST_LENGTH;
 		break;
 
 	case CKM_SHA256:
-		digestLen = 32;
+		digestLen = SHA256_DIGEST_LENGTH;
 		break;
 
 	case CKM_SHA384:
-		digestLen = 48;
+		digestLen = SHA384_DIGEST_LENGTH;
 		break;
 
 	case CKM_SHA512:
-		digestLen = 64;
+		digestLen = SHA512_DIGEST_LENGTH;
+		break;
+
+	case CKM_SHA512_224:
+		digestLen = SHA512_224_DIGEST_LENGTH;
+		break;
+
+	case CKM_SHA512_256:
+		digestLen = SHA512_256_DIGEST_LENGTH;
 		break;
 
 	default:
@@ -278,6 +294,8 @@ soft_digest_common(soft_session_t *session_p, CK_BYTE_PTR pData,
 	case CKM_SHA256:
 	case CKM_SHA384:
 	case CKM_SHA512:
+	case CKM_SHA512_224:
+	case CKM_SHA512_256:
 		if (pData != NULL) {
 			/*
 			 * this is called by soft_digest()
@@ -302,7 +320,7 @@ soft_digest_common(soft_session_t *session_p, CK_BYTE_PTR pData,
 
 	/* Paranoia on behalf of C_DigestKey callers: bzero the context */
 	if (session_p->digest.flags & CRYPTO_KEY_DIGESTED) {
-		bzero(session_p->digest.context, len);
+		explicit_bzero(session_p->digest.context, len);
 		session_p->digest.flags &= ~CRYPTO_KEY_DIGESTED;
 	}
 	*pulDigestLen = digestLen;
@@ -333,7 +351,7 @@ soft_digest_common(soft_session_t *session_p, CK_BYTE_PTR pData,
  */
 CK_RV
 soft_digest(soft_session_t *session_p, CK_BYTE_PTR pData, CK_ULONG ulDataLen,
-	CK_BYTE_PTR pDigest, CK_ULONG_PTR pulDigestLen)
+    CK_BYTE_PTR pDigest, CK_ULONG_PTR pulDigestLen)
 {
 
 	return (soft_digest_common(session_p, pData, ulDataLen,
@@ -359,7 +377,7 @@ soft_digest(soft_session_t *session_p, CK_BYTE_PTR pData, CK_ULONG ulDataLen,
  */
 CK_RV
 soft_digest_update(soft_session_t *session_p, CK_BYTE_PTR pPart,
-	CK_ULONG ulPartLen)
+    CK_ULONG ulPartLen)
 {
 
 	switch (session_p->digest.mech.mechanism) {
@@ -389,6 +407,8 @@ soft_digest_update(soft_session_t *session_p, CK_BYTE_PTR pPart,
 	case CKM_SHA256:
 	case CKM_SHA384:
 	case CKM_SHA512:
+	case CKM_SHA512_224:
+	case CKM_SHA512_256:
 		SHA2Update((SHA2_CTX *)session_p->digest.context,
 		    pPart, ulPartLen);
 		break;
@@ -417,7 +437,7 @@ soft_digest_update(soft_session_t *session_p, CK_BYTE_PTR pPart,
  */
 CK_RV
 soft_digest_final(soft_session_t *session_p, CK_BYTE_PTR pDigest,
-	CK_ULONG_PTR pulDigestLen)
+    CK_ULONG_PTR pulDigestLen)
 {
 
 	return (soft_digest_common(session_p, NULL, 0,
@@ -433,8 +453,8 @@ soft_digest_final(soft_session_t *session_p, CK_BYTE_PTR pDigest,
  * its mutex taken.
  */
 CK_RV
-soft_digest_init_internal(soft_session_t *session_p, CK_MECHANISM_PTR
-	pMechanism)
+soft_digest_init_internal(soft_session_t *session_p,
+    CK_MECHANISM_PTR pMechanism)
 {
 
 	CK_RV rv;

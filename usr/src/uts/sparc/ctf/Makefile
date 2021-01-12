@@ -22,33 +22,33 @@
 # Copyright 2007 Sun Microsystems, Inc.  All rights reserved.
 # Use is subject to license terms.
 #
+# Copyright 2018 Joyent, Inc.
+#
 
 UTSBASE	= ../..
 
 MODULE		= ctf
 OBJECTS		= $(CTF_OBJS:%=$(OBJS_DIR)/%)
-LINTS		= $(CTF_OBJS:%.o=$(LINTS_DIR)/%.ln)
 ROOTMODULE	= $(ROOT_MISC_DIR)/$(MODULE)
 
 include $(UTSBASE)/sparc/Makefile.sparc
 
 ALL_TARGET	= $(BINARY)
-LINT_TARGET	= $(MODULE).lint
 INSTALL_TARGET	= $(BINARY) $(ROOTMODULE)
+
+C99LMODE=	-Xc99=%all
 
 CFLAGS		+= $(CCVERBOSE)
 CPPFLAGS	+= -I$(SRC)/common/ctf -DCTF_OLD_VERSIONS
 LDFLAGS		+= $(BREDUCE) -M$(UTSBASE)/common/ctf/mapfile -dy
 
 #
-# For now, disable these lint checks; maintainers should endeavor
-# to investigate and remove these for maximum lint coverage.
+# For now, disable these warnings; maintainers should endeavor
+# to investigate and remove these for maximum coverage.
 # Please do not carry these forward to new Makefiles.
 #
-LINTTAGS	+= -erroff=E_PTRDIFF_OVERFLOW
-LINTTAGS	+= -erroff=E_ASSIGN_NARROW_CONV
 
-CERRWARN	+= -_gcc=-Wno-uninitialized
+CERRWARN	+= $(CNOWARN_UNINIT)
 
 .KEEP_STATE:
 
@@ -59,12 +59,6 @@ all:		$(ALL_DEPS)
 clean:		$(CLEAN_DEPS)
 
 clobber:	$(CLOBBER_DEPS)
-
-lint:		$(LINT_DEPS)
-
-modlintlib:	$(MODLINTLIB_DEPS)
-
-clean.lint:	$(CLEAN_LINT_DEPS)
 
 install:	$(INSTALL_DEPS)
 

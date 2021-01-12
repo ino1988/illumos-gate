@@ -20,6 +20,7 @@
  */
 /*
  * Copyright (c) 2000, 2010, Oracle and/or its affiliates. All rights reserved.
+ * Copyright 2019, Joyent, Inc.
  */
 
 #include <sys/types.h>
@@ -40,6 +41,7 @@
 #include <mdb/mdb_ks.h>
 
 #include "nvpair.h"
+#include "pci.h"
 #include "devinfo.h"
 
 #define	DEVINFO_TREE_INDENT	4	/* Indent for devs one down in tree */
@@ -74,17 +76,25 @@ prtconf_help(void)
 	    "with an address, prints the parents of, "
 	    "and all children of, that address.\n\n"
 	    "Switches:\n"
-	    "  -v   be verbose - print device property lists\n"
-	    "  -p   only print the ancestors of the given node\n"
-	    "  -c   only print the children of the given node\n");
+	    "  -v          be verbose - print device property lists\n"
+	    "  -p          only print the ancestors of the given node\n"
+	    "  -c          only print the children of the given node\n"
+	    "  -d driver   only print instances of driver\n"
+	    "  -i inst     only print if the driver instance number is inst\n");
 }
 
 void
 devinfo_help(void)
 {
 	mdb_printf("Switches:\n"
-	    "  -q   be quiet - don't print device property lists\n"
-	    "  -s   print summary of dev_info structures\n");
+	    "  -b type     print bus of device if it matches type\n"
+	    "  -d          print device private data\n"
+	    "  -q          be quiet - don't print device property lists\n"
+	    "  -s          print summary of dev_info structures\n"
+	    "\n"
+	    "The following types are supported for -b:\n"
+	    "\n"
+	    "  * pcie      print the PCI Express bus (pcie_bus_t)\n");
 }
 
 
@@ -136,10 +146,10 @@ devinfo_parents_walk_init(mdb_walk_state_t *wsp)
 
 	if (mdb_readvar(&devinfo_root, "top_devinfo") == -1) {
 		mdb_warn("failed to read 'top_devinfo'");
-		return (NULL);
+		return (0);
 	}
 
-	if (wsp->walk_addr == NULL)
+	if (wsp->walk_addr == 0)
 		wsp->walk_addr = devinfo_root;
 	addr = wsp->walk_addr;
 
@@ -231,10 +241,10 @@ devinfo_children_walk_init(mdb_walk_state_t *wsp)
 
 	if (mdb_readvar(&devinfo_root, "top_devinfo") == -1) {
 		mdb_warn("failed to read 'top_devinfo'");
-		return (NULL);
+		return (0);
 	}
 
-	if (wsp->walk_addr == NULL)
+	if (wsp->walk_addr == 0)
 		wsp->walk_addr = devinfo_root;
 
 	dic = mdb_alloc(sizeof (devinfo_children_walk_data_t), UM_SLEEP);
@@ -264,7 +274,7 @@ devinfo_children_walk_step(mdb_walk_state_t *wsp)
 	uintptr_t addr = wsp->walk_addr;
 	int status = WALK_NEXT;
 
-	if (wsp->walk_addr == NULL)
+	if (wsp->walk_addr == 0)
 		return (WALK_DONE);
 
 	if (mdb_vread(&dic->dic_dev, sizeof (dic->dic_dev), addr) == -1) {
@@ -445,7 +455,7 @@ devnames_walk_init(mdb_walk_state_t *wsp)
 	int devcnt;
 	uintptr_t devnamesp;
 
-	if (wsp->walk_addr != NULL) {
+	if (wsp->walk_addr != 0) {
 		mdb_warn("devnames walker only supports global walks\n");
 		return (WALK_ERR);
 	}
@@ -506,7 +516,7 @@ devinfo_siblings_walk_init(mdb_walk_state_t *wsp)
 	struct dev_info di;
 	uintptr_t addr = wsp->walk_addr;
 
-	if (addr == NULL) {
+	if (addr == 0) {
 		mdb_warn("a dev_info struct address must be provided\n");
 		return (WALK_ERR);
 	}
@@ -537,7 +547,7 @@ devinfo_siblings_walk_step(mdb_walk_state_t *wsp)
 	struct dev_info di;
 	uintptr_t addr = wsp->walk_addr;
 
-	if (addr == NULL)
+	if (addr == 0)
 		return (WALK_DONE);
 
 	if (mdb_vread(&di, sizeof (di), addr) == -1) {
@@ -555,7 +565,7 @@ devi_next_walk_step(mdb_walk_state_t *wsp)
 	struct dev_info di;
 	int status;
 
-	if (wsp->walk_addr == NULL)
+	if (wsp->walk_addr == 0)
 		return (WALK_DONE);
 
 	if (mdb_vread(&di, sizeof (di), wsp->walk_addr) == -1)
@@ -580,7 +590,8 @@ is_printable_string(unsigned char *prop_value)
 }
 
 static void
-devinfo_print_props_type(int type) {
+devinfo_print_props_type(int type)
+{
 	char *type_str = NULL;
 
 	switch (type) {
@@ -612,7 +623,7 @@ devinfo_print_props_type(int type) {
 
 static void
 devinfo_print_props_value(int elem_size, int nelem,
-	unsigned char *prop_value, int prop_value_len)
+    unsigned char *prop_value, int prop_value_len)
 {
 	int i;
 
@@ -651,27 +662,27 @@ devinfo_print_props_value(int elem_size, int nelem,
  * Guesses how to interpret the value of the property
  *
  * Params:
- * 	type      - Should be the type value of the property
- * 	prop_val  - Pointer to the property value data buffer
- * 	prop_len  - Length of the property value data buffer
+ *	type      - Should be the type value of the property
+ *	prop_val  - Pointer to the property value data buffer
+ *	prop_len  - Length of the property value data buffer
  *
  * Return values:
- * 	nelem     - The number of elements stored in the property value
- * 			data buffer pointed to by prop_val.
- * 	elem_size - The size (in bytes) of the elements stored in the property
- * 			value data buffer pointed to by prop_val.
- * 			Upon return if elem_size == 0 and nelem != 0 then
- * 			the property value data buffer contains strings
- * 	len_err   - There was an error with the length of the data buffer.
- * 			Its size is not a multiple of the array value type.
- * 			It will be interpreted as an array of bytes.
+ *	nelem     - The number of elements stored in the property value
+ *			data buffer pointed to by prop_val.
+ *	elem_size - The size (in bytes) of the elements stored in the property
+ *			value data buffer pointed to by prop_val.
+ *			Upon return if elem_size == 0 and nelem != 0 then
+ *			the property value data buffer contains strings
+ *	len_err   - There was an error with the length of the data buffer.
+ *			Its size is not a multiple of the array value type.
+ *			It will be interpreted as an array of bytes.
  */
 static void
 devinfo_print_props_guess(int type, unsigned char *prop_val, int prop_len,
     int *elem_size, int *nelem, int *len_err)
 {
 	*len_err = 0;
-	if (prop_len == NULL) {
+	if (prop_len == 0) {
 		*elem_size = 0;
 		*nelem = 0;
 		return;
@@ -839,7 +850,8 @@ next:
 }
 
 static void
-devinfo_pathinfo_state(mdi_pathinfo_state_t state) {
+devinfo_pathinfo_state(mdi_pathinfo_state_t state)
+{
 	char *type_str = NULL;
 
 	switch (state) {
@@ -866,7 +878,8 @@ devinfo_pathinfo_state(mdi_pathinfo_state_t state) {
 }
 
 static void
-devinfo_print_pathing(int mdi_component, void *mdi_client) {
+devinfo_print_pathing(int mdi_component, void *mdi_client)
+{
 	mdi_client_t		mdi_c;
 	struct mdi_pathinfo	*pip;
 
@@ -898,7 +911,7 @@ devinfo_print_pathing(int mdi_component, void *mdi_client) {
 
 		/* read in the pathinfo structure */
 		if (mdb_vread((void*)&pi, sizeof (pi),
-			    (uintptr_t)pip) == -1) {
+		    (uintptr_t)pip) == -1) {
 			mdb_warn("failed to read mdi_pathinfo at %p",
 			    (uintptr_t)pip);
 			goto exit;
@@ -906,7 +919,7 @@ devinfo_print_pathing(int mdi_component, void *mdi_client) {
 
 		/* read in the pchi (path host adapter) info */
 		if (mdb_vread((void*)&ph, sizeof (ph),
-			    (uintptr_t)pi.pi_phci) == -1) {
+		    (uintptr_t)pi.pi_phci) == -1) {
 			mdb_warn("failed to read mdi_pchi at %p",
 			    (uintptr_t)pi.pi_phci);
 			goto exit;
@@ -914,13 +927,13 @@ devinfo_print_pathing(int mdi_component, void *mdi_client) {
 
 		/* read in the dip of the phci so we can get it's name */
 		if (mdb_vread((void*)&ph_di, sizeof (ph_di),
-			    (uintptr_t)ph.ph_dip) == -1) {
+		    (uintptr_t)ph.ph_dip) == -1) {
 			mdb_warn("failed to read mdi_pchi at %p",
 			    (uintptr_t)ph.ph_dip);
 			goto exit;
 		}
 		if (mdb_vread(binding_name, sizeof (binding_name),
-			    (uintptr_t)ph_di.devi_binding_name) == -1) {
+		    (uintptr_t)ph_di.devi_binding_name) == -1) {
 			mdb_warn("failed to read binding_name at %p",
 			    (uintptr_t)ph_di.devi_binding_name);
 			goto exit;
@@ -932,7 +945,7 @@ devinfo_print_pathing(int mdi_component, void *mdi_client) {
 		/* print out the pathing info */
 		mdb_inc_indent(DEVINFO_PROP_INDENT);
 		if (mdb_pwalk_dcmd(NVPAIR_WALKER_FQNAME, NVPAIR_DCMD_FQNAME,
-			    0, NULL, (uintptr_t)pi.pi_prop) != 0) {
+		    0, NULL, (uintptr_t)pi.pi_prop) != 0) {
 			mdb_dec_indent(DEVINFO_PROP_INDENT);
 			goto exit;
 		}
@@ -954,6 +967,7 @@ devinfo_print(uintptr_t addr, struct dev_info *dev, devinfo_cb_data_t *data)
 	char		dname[MODMAXNAMELEN + 1];
 	devinfo_node_t	*din = (devinfo_node_t *)dev;
 	ddi_prop_t	*global_props = NULL;
+	boolean_t	hdname = B_FALSE;
 
 	if (mdb_readstr(binding_name, sizeof (binding_name),
 	    (uintptr_t)dev->devi_binding_name) == -1) {
@@ -974,6 +988,35 @@ devinfo_print(uintptr_t addr, struct dev_info *dev, devinfo_cb_data_t *data)
 		global_props = plist.prop_list;
 	}
 
+	if (dev->devi_node_state > DS_ATTACHED) {
+		if (mdb_devinfo2driver(addr, dname, sizeof (dname)) == 0)
+			hdname = B_TRUE;
+	}
+
+	/*
+	 * If a filter is installed and we don't have the driver's name, we
+	 * always skip it. Also if the filter doesn't match, then we'll also
+	 * skip the driver.
+	 */
+	if (data->di_filter != NULL &&
+	    (!hdname || strcmp(data->di_filter, dname) != 0)) {
+		return (WALK_NEXT);
+	}
+
+	if (data->di_instance != UINT64_MAX &&
+	    data->di_instance != (uint64_t)dev->devi_instance) {
+		return (WALK_NEXT);
+	}
+
+	/*
+	 * If we are output to a pipe, we only print the address of the
+	 * devinfo_t.
+	 */
+	if (data->di_flags & DEVINFO_PIPE) {
+		mdb_printf("%-0?p\n", addr);
+		return (WALK_NEXT);
+	}
+
 	mdb_inc_indent(din->din_depth * DEVINFO_TREE_INDENT);
 	if ((addr == data->di_base) || (data->di_flags & DEVINFO_ALLBOLD))
 		mdb_printf("%<b>");
@@ -985,7 +1028,7 @@ devinfo_print(uintptr_t addr, struct dev_info *dev, devinfo_cb_data_t *data)
 
 	if (dev->devi_node_state < DS_ATTACHED)
 		mdb_printf(" (driver not attached)");
-	else if (mdb_devinfo2driver(addr, dname, sizeof (dname)) != 0)
+	else if (hdname == B_FALSE)
 		mdb_printf(" (could not determine driver name)");
 	else
 		mdb_printf(" (driver name: %s)", dname);
@@ -1017,8 +1060,15 @@ prtconf(uintptr_t addr, uint_t flags, int argc, const mdb_arg_t *argv)
 	int status;
 
 	data.di_flags = DEVINFO_PARENT | DEVINFO_CHILD;
+	data.di_filter = NULL;
+	data.di_instance = UINT64_MAX;
+
+	if (flags & DCMD_PIPE_OUT)
+		data.di_flags |= DEVINFO_PIPE;
 
 	if (mdb_getopts(argc, argv,
+	    'd', MDB_OPT_STR, &data.di_filter,
+	    'i', MDB_OPT_UINT64, &data.di_instance,
 	    'v', MDB_OPT_SETBITS, DEVINFO_VERBOSE, &data.di_flags,
 	    'p', MDB_OPT_CLRBITS, DEVINFO_CHILD, &data.di_flags,
 	    'c', MDB_OPT_CLRBITS, DEVINFO_PARENT, &data.di_flags, NULL) != argc)
@@ -1026,7 +1076,7 @@ prtconf(uintptr_t addr, uint_t flags, int argc, const mdb_arg_t *argv)
 
 	if (mdb_readvar(&devinfo_root, "top_devinfo") == -1) {
 		mdb_warn("failed to read 'top_devinfo'");
-		return (NULL);
+		return (0);
 	}
 
 	if ((flags & DCMD_ADDRSPEC) == 0) {
@@ -1036,7 +1086,8 @@ prtconf(uintptr_t addr, uint_t flags, int argc, const mdb_arg_t *argv)
 	}
 
 	data.di_base = addr;
-	mdb_printf("%<u>%-?s %-50s%</u>\n", "DEVINFO", "NAME");
+	if (!(flags & DCMD_PIPE_OUT))
+		mdb_printf("%<u>%-?s %-50s%</u>\n", "DEVINFO", "NAME");
 
 	if ((data.di_flags & (DEVINFO_PARENT | DEVINFO_CHILD)) ==
 	    (DEVINFO_PARENT | DEVINFO_CHILD)) {
@@ -1077,6 +1128,7 @@ devinfo(uintptr_t addr, uint_t flags, int argc, const mdb_arg_t *argv)
 	struct dev_info devi;
 	devinfo_node_t din;
 	devinfo_cb_data_t data;
+	char *bus = NULL;
 
 	static const mdb_bitmask_t devi_state_masks[] = {
 	    { "DEVICE_OFFLINE",	DEVI_DEVICE_OFFLINE,	DEVI_DEVICE_OFFLINE },
@@ -1118,12 +1170,27 @@ devinfo(uintptr_t addr, uint_t flags, int argc, const mdb_arg_t *argv)
 
 	data.di_flags = DEVINFO_VERBOSE;
 	data.di_base = addr;
+	data.di_filter = NULL;
+	data.di_instance = UINT64_MAX;
 
 	if (mdb_getopts(argc, argv,
+	    'b', MDB_OPT_STR, &bus,
+	    'd', MDB_OPT_SETBITS, DEVINFO_DRIVER, &data.di_flags,
 	    'q', MDB_OPT_CLRBITS, DEVINFO_VERBOSE, &data.di_flags,
 	    's', MDB_OPT_SETBITS, DEVINFO_SUMMARY, &data.di_flags, NULL)
 	    != argc)
 		return (DCMD_USAGE);
+
+	if (bus != NULL && data.di_flags != DEVINFO_VERBOSE) {
+		mdb_warn("the -b option cannot be used with other options\n");
+		return (DCMD_USAGE);
+	}
+
+	if ((data.di_flags & DEVINFO_DRIVER) != 0 &&
+	    data.di_flags != (DEVINFO_DRIVER | DEVINFO_VERBOSE)) {
+		mdb_warn("the -d option cannot be used with other options\n");
+		return (DCMD_USAGE);
+	}
 
 	if ((flags & DCMD_ADDRSPEC) == 0) {
 		mdb_warn(
@@ -1131,7 +1198,37 @@ devinfo(uintptr_t addr, uint_t flags, int argc, const mdb_arg_t *argv)
 		return (DCMD_ERR);
 	}
 
-	if (DCMD_HDRSPEC(flags) && data.di_flags & DEVINFO_SUMMARY)
+	if (mdb_vread(&devi, sizeof (devi), addr) == -1) {
+		mdb_warn("failed to read device");
+		return (DCMD_ERR);
+	}
+
+	if (bus != NULL) {
+		if (strcmp(bus, "pcie") == 0) {
+			uintptr_t bus_addr;
+			if (pcie_bus_match(&devi, &bus_addr)) {
+				mdb_printf("%p\n", bus_addr);
+				return (DCMD_OK);
+			} else {
+				mdb_warn("%p does not have a PCIe bus\n",
+				    addr);
+			}
+		}
+
+		mdb_warn("unknown bus type: %s\n", bus);
+		return (DCMD_ERR);
+	}
+
+	if ((data.di_flags & DEVINFO_DRIVER) != 0) {
+		if ((flags & DCMD_PIPE_OUT) != 0 &&
+		    devi.devi_driver_data == NULL) {
+			return (DCMD_OK);
+		}
+		mdb_printf("%p\n", devi.devi_driver_data);
+		return (DCMD_OK);
+	}
+
+	if (DCMD_HDRSPEC(flags) && data.di_flags & DEVINFO_SUMMARY) {
 		mdb_printf(
 		    "%-?s %5s %?s %-20s %-s\n"
 		    "%-?s %5s %?s %-20s %-s\n"
@@ -1139,10 +1236,6 @@ devinfo(uintptr_t addr, uint_t flags, int argc, const mdb_arg_t *argv)
 		    "DEVINFO", "MAJ",  "REFCNT",   "NODENAME", "NODESTATE",
 		    "",        "INST", "CIRCULAR", "BINDNAME", "STATE",
 		    "",        "",     "THREAD",   "",         "FLAGS");
-
-	if (mdb_vread(&devi, sizeof (devi), addr) == -1) {
-		mdb_warn("failed to read device");
-		return (DCMD_ERR);
 	}
 
 	if (data.di_flags & DEVINFO_SUMMARY) {
@@ -1527,7 +1620,7 @@ soft_state_walk_init(mdb_walk_state_t *wsp)
 	soft_state_walk_t *sst;
 
 
-	if (wsp->walk_addr == NULL)
+	if (wsp->walk_addr == 0)
 		return (WALK_DONE);
 
 	sst = mdb_zalloc(sizeof (soft_state_walk_t), UM_SLEEP|UM_GC);
@@ -1541,6 +1634,33 @@ soft_state_walk_init(mdb_walk_state_t *wsp)
 		return (WALK_ERR);
 	}
 
+	if (sst->ssw_ss.size == 0) {
+		mdb_warn("read invalid softstate: softstate item size is "
+		    "zero\n");
+		return (WALK_ERR);
+	}
+
+	if (sst->ssw_ss.n_items == 0) {
+		mdb_warn("read invalid softstate: softstate has no entries\n");
+		return (WALK_ERR);
+	}
+
+	/*
+	 * Try and pick arbitrary bounds to try and catch an illegal soft state
+	 * structure. While these may be larger than we expect, we also don't
+	 * want to throw off a valid use.
+	 */
+	if (sst->ssw_ss.size >= 1024 * 1024 * 1024) {
+		mdb_warn("softstate size is larger than 1 GiB (0x%lx), invalid "
+		    "softstate?\n", sst->ssw_ss.size);
+		return (WALK_ERR);
+	}
+
+	if (sst->ssw_ss.n_items >= INT_MAX / 1024) {
+		mdb_warn("softstate item count seems too large: found %ld "
+		    "items\n", sst->ssw_ss.n_items);
+		return (WALK_ERR);
+	}
 
 	/* Read array of pointers to state structs into local storage. */
 	sst->ssw_pointers = mdb_alloc((sst->ssw_ss.n_items * sizeof (void *)),
@@ -1670,7 +1790,7 @@ devbindings(uintptr_t addr, uint_t flags, int argc, const mdb_arg_t *argv)
 int
 binding_hash_walk_init(mdb_walk_state_t *wsp)
 {
-	if (wsp->walk_addr == NULL)
+	if (wsp->walk_addr == 0)
 		return (WALK_ERR);
 
 	wsp->walk_data = mdb_alloc(sizeof (void *) * MOD_BIND_HASHSIZE,
@@ -1698,7 +1818,7 @@ binding_hash_walk_step(mdb_walk_state_t *wsp)
 	 * Walk the singly-linked list of struct bind
 	 */
 	bind_p = ((uintptr_t *)wsp->walk_data)[(ulong_t)wsp->walk_arg];
-	while (bind_p != NULL) {
+	while (bind_p != 0) {
 
 		if (mdb_vread(&bind, sizeof (bind), bind_p) == -1) {
 			mdb_warn("failed to read bind struct at %p",
@@ -1727,16 +1847,16 @@ int
 binding_hash_entry(uintptr_t addr, uint_t flags, int argc,
     const mdb_arg_t *argv)
 {
-	struct bind 	bind;
+	struct bind	bind;
 	/* Arbitrary lengths based on output format below */
 	char name[MAXPATHLEN] = "???";
 	char bind_name[MAXPATHLEN] = "<null>";
 
-	if ((flags & DCMD_ADDRSPEC) == NULL)
+	if ((flags & DCMD_ADDRSPEC) == 0)
 		return (DCMD_USAGE);
 
 	/* Allow null addresses to be passed (as from a walker) */
-	if (addr == NULL)
+	if (addr == 0)
 		return (DCMD_OK);
 
 	if (mdb_vread(&bind, sizeof (bind), addr) == -1) {
@@ -1818,7 +1938,7 @@ devinfo_audit_log_walk_step(mdb_walk_state_t *wsp)
 	int status = WALK_NEXT;
 
 	/* read in current entry and invoke callback */
-	if (addr == NULL)
+	if (addr == 0)
 		return (WALK_DONE);
 
 	if (mdb_vread(&dil->dil_buf, sizeof (devinfo_audit_t), addr) == -1) {
@@ -1831,7 +1951,7 @@ devinfo_audit_log_walk_step(mdb_walk_state_t *wsp)
 	if (--dil->dil_index < 0)
 		dil->dil_index += dil->dil_max;
 	if (dil->dil_index == dil->dil_start) {
-		wsp->walk_addr = NULL;
+		wsp->walk_addr = 0;
 		return (WALK_DONE);
 	}
 
@@ -1954,7 +2074,7 @@ devinfo_audit_node_walk_step(mdb_walk_state_t *wsp)
 	devinfo_audit_node_walk_data_t *dih = wsp->walk_data;
 	devinfo_audit_t *da = &dih->dih_buf;
 
-	if (wsp->walk_addr == NULL)
+	if (wsp->walk_addr == 0)
 		return (WALK_DONE);
 	(void) wsp->walk_callback(wsp->walk_addr, NULL, wsp->walk_cbdata);
 
@@ -2080,7 +2200,7 @@ devinfo_fmc_walk_init(mdb_walk_state_t *wsp)
 {
 	struct i_ddi_fmc fec;
 
-	if (wsp->walk_addr == NULL)
+	if (wsp->walk_addr == 0)
 		return (WALK_ERR);
 
 	if (mdb_vread(&fec, sizeof (fec), wsp->walk_addr) == -1) {
@@ -2122,7 +2242,7 @@ minornode_walk_init(mdb_walk_state_t *wsp)
 	struct dev_info di;
 	uintptr_t addr = wsp->walk_addr;
 
-	if (addr == NULL) {
+	if (addr == 0) {
 		mdb_warn("a dev_info struct address must be provided\n");
 		return (WALK_ERR);
 	}
@@ -2142,7 +2262,7 @@ minornode_walk_step(mdb_walk_state_t *wsp)
 	struct ddi_minor_data md;
 	uintptr_t addr = wsp->walk_addr;
 
-	if (addr == NULL)
+	if (addr == 0)
 		return (WALK_DONE);
 
 	if (mdb_vread(&md, sizeof (md), addr) == -1) {

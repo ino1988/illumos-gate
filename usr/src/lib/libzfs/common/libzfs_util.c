@@ -21,14 +21,17 @@
 
 /*
  * Copyright (c) 2005, 2010, Oracle and/or its affiliates. All rights reserved.
- * Copyright (c) 2013, Joyent, Inc. All rights reserved.
- * Copyright (c) 2012 by Delphix. All rights reserved.
+ * Copyright 2020 Joyent, Inc.
+ * Copyright (c) 2011, 2018 by Delphix. All rights reserved.
+ * Copyright 2016 Igor Kozhukhov <ikozhukhov@gmail.com>
+ * Copyright (c) 2017 Datto Inc.
  */
 
 /*
  * Internal utility routines for the ZFS library.
  */
 
+#include <ctype.h>
 #include <errno.h>
 #include <fcntl.h>
 #include <libintl.h>
@@ -36,19 +39,21 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <strings.h>
-#include <unistd.h>
-#include <ctype.h>
 #include <math.h>
+#include <sys/filio.h>
 #include <sys/mnttab.h>
 #include <sys/mntent.h>
 #include <sys/types.h>
+#include <libcmdutils.h>
 
 #include <libzfs.h>
 #include <libzfs_core.h>
 
 #include "libzfs_impl.h"
 #include "zfs_prop.h"
+#include "zfs_comutil.h"
 #include "zfeature_common.h"
+#include <libzutil.h>
 
 int
 libzfs_errno(libzfs_handle_t *hdl)
@@ -197,6 +202,9 @@ libzfs_error_description(libzfs_handle_t *hdl)
 	case EZFS_NOTSUP:
 		return (dgettext(TEXT_DOMAIN, "operation not supported "
 		    "on this dataset"));
+	case EZFS_IOC_NOTSUPPORTED:
+		return (dgettext(TEXT_DOMAIN, "operation not supported by "
+		    "zfs kernel module"));
 	case EZFS_ACTIVE_SPARE:
 		return (dgettext(TEXT_DOMAIN, "pool has active shared spare "
 		    "device"));
@@ -217,6 +225,9 @@ libzfs_error_description(libzfs_handle_t *hdl)
 	case EZFS_POSTSPLIT_ONLINE:
 		return (dgettext(TEXT_DOMAIN, "disk was split from this pool "
 		    "into a new one"));
+	case EZFS_SCRUB_PAUSED:
+		return (dgettext(TEXT_DOMAIN, "scrub is paused; "
+		    "use 'zpool scrub' to resume"));
 	case EZFS_SCRUBBING:
 		return (dgettext(TEXT_DOMAIN, "currently scrubbing; "
 		    "use 'zpool scrub -s' to cancel current scrub"));
@@ -228,6 +239,44 @@ libzfs_error_description(libzfs_handle_t *hdl)
 		return (dgettext(TEXT_DOMAIN, "invalid diff data"));
 	case EZFS_POOLREADONLY:
 		return (dgettext(TEXT_DOMAIN, "pool is read-only"));
+	case EZFS_NO_PENDING:
+		return (dgettext(TEXT_DOMAIN, "operation is not "
+		    "in progress"));
+	case EZFS_CHECKPOINT_EXISTS:
+		return (dgettext(TEXT_DOMAIN, "checkpoint exists"));
+	case EZFS_DISCARDING_CHECKPOINT:
+		return (dgettext(TEXT_DOMAIN, "currently discarding "
+		    "checkpoint"));
+	case EZFS_NO_CHECKPOINT:
+		return (dgettext(TEXT_DOMAIN, "checkpoint does not exist"));
+	case EZFS_DEVRM_IN_PROGRESS:
+		return (dgettext(TEXT_DOMAIN, "device removal in progress"));
+	case EZFS_VDEV_TOO_BIG:
+		return (dgettext(TEXT_DOMAIN, "device exceeds supported size"));
+	case EZFS_ACTIVE_POOL:
+		return (dgettext(TEXT_DOMAIN, "pool is imported on a "
+		    "different host"));
+	case EZFS_CRYPTOFAILED:
+		return (dgettext(TEXT_DOMAIN, "encryption failure"));
+	case EZFS_TOOMANY:
+		return (dgettext(TEXT_DOMAIN, "argument list too long"));
+	case EZFS_INITIALIZING:
+		return (dgettext(TEXT_DOMAIN, "currently initializing"));
+	case EZFS_NO_INITIALIZE:
+		return (dgettext(TEXT_DOMAIN, "there is no active "
+		    "initialization"));
+	case EZFS_WRONG_PARENT:
+		return (dgettext(TEXT_DOMAIN, "invalid parent dataset"));
+	case EZFS_TRIMMING:
+		return (dgettext(TEXT_DOMAIN, "currently trimming"));
+	case EZFS_NO_TRIM:
+		return (dgettext(TEXT_DOMAIN, "there is no active trim"));
+	case EZFS_TRIM_NOTSUP:
+		return (dgettext(TEXT_DOMAIN, "trim operations are not "
+		    "supported by this device"));
+	case EZFS_NO_RESILVER_DEFER:
+		return (dgettext(TEXT_DOMAIN, "this action requires the "
+		    "resilver_defer feature"));
 	case EZFS_UNKNOWN:
 		return (dgettext(TEXT_DOMAIN, "unknown error"));
 	default:
@@ -390,6 +439,25 @@ zfs_standard_error_fmt(libzfs_handle_t *hdl, int error, const char *fmt, ...)
 		    "pool I/O is currently suspended"));
 		zfs_verror(hdl, EZFS_POOLUNAVAIL, fmt, ap);
 		break;
+	case EREMOTEIO:
+		zfs_verror(hdl, EZFS_ACTIVE_POOL, fmt, ap);
+		break;
+	case ZFS_ERR_IOC_CMD_UNAVAIL:
+		zfs_error_aux(hdl, dgettext(TEXT_DOMAIN, "the loaded zfs "
+		    "module does not support this operation. A reboot may "
+		    "be required to enable this operation."));
+		zfs_verror(hdl, EZFS_IOC_NOTSUPPORTED, fmt, ap);
+		break;
+	case ZFS_ERR_IOC_ARG_UNAVAIL:
+		zfs_error_aux(hdl, dgettext(TEXT_DOMAIN, "the loaded zfs "
+		    "module does not support an option for this operation. "
+		    "A reboot may be required to enable this option."));
+		zfs_verror(hdl, EZFS_IOC_NOTSUPPORTED, fmt, ap);
+		break;
+	case ZFS_ERR_IOC_ARG_REQUIRED:
+	case ZFS_ERR_IOC_ARG_BADTYPE:
+		zfs_verror(hdl, EZFS_IOC_NOTSUPPORTED, fmt, ap);
+		break;
 	default:
 		zfs_error_aux(hdl, strerror(error));
 		zfs_verror(hdl, EZFS_UNKNOWN, fmt, ap);
@@ -473,7 +541,44 @@ zpool_standard_error_fmt(libzfs_handle_t *hdl, int error, const char *fmt, ...)
 	case EROFS:
 		zfs_verror(hdl, EZFS_POOLREADONLY, fmt, ap);
 		break;
-
+	/* There is no pending operation to cancel */
+	case ENOTACTIVE:
+		zfs_verror(hdl, EZFS_NO_PENDING, fmt, ap);
+		break;
+	case EREMOTEIO:
+		zfs_verror(hdl, EZFS_ACTIVE_POOL, fmt, ap);
+		break;
+	case ZFS_ERR_CHECKPOINT_EXISTS:
+		zfs_verror(hdl, EZFS_CHECKPOINT_EXISTS, fmt, ap);
+		break;
+	case ZFS_ERR_DISCARDING_CHECKPOINT:
+		zfs_verror(hdl, EZFS_DISCARDING_CHECKPOINT, fmt, ap);
+		break;
+	case ZFS_ERR_NO_CHECKPOINT:
+		zfs_verror(hdl, EZFS_NO_CHECKPOINT, fmt, ap);
+		break;
+	case ZFS_ERR_DEVRM_IN_PROGRESS:
+		zfs_verror(hdl, EZFS_DEVRM_IN_PROGRESS, fmt, ap);
+		break;
+	case ZFS_ERR_VDEV_TOO_BIG:
+		zfs_verror(hdl, EZFS_VDEV_TOO_BIG, fmt, ap);
+		break;
+	case ZFS_ERR_IOC_CMD_UNAVAIL:
+		zfs_error_aux(hdl, dgettext(TEXT_DOMAIN, "the loaded zfs "
+		    "module does not support this operation. A reboot may "
+		    "be required to enable this operation."));
+		zfs_verror(hdl, EZFS_IOC_NOTSUPPORTED, fmt, ap);
+		break;
+	case ZFS_ERR_IOC_ARG_UNAVAIL:
+		zfs_error_aux(hdl, dgettext(TEXT_DOMAIN, "the loaded zfs "
+		    "module does not support an option for this operation. "
+		    "A reboot may be required to enable this option."));
+		zfs_verror(hdl, EZFS_IOC_NOTSUPPORTED, fmt, ap);
+		break;
+	case ZFS_ERR_IOC_ARG_REQUIRED:
+	case ZFS_ERR_IOC_ARG_BADTYPE:
+		zfs_verror(hdl, EZFS_IOC_NOTSUPPORTED, fmt, ap);
+		break;
 	default:
 		zfs_error_aux(hdl, strerror(error));
 		zfs_verror(hdl, EZFS_UNKNOWN, fmt, ap);
@@ -560,50 +665,6 @@ zfs_strdup(libzfs_handle_t *hdl, const char *str)
 	return (ret);
 }
 
-/*
- * Convert a number to an appropriately human-readable output.
- */
-void
-zfs_nicenum(uint64_t num, char *buf, size_t buflen)
-{
-	uint64_t n = num;
-	int index = 0;
-	char u;
-
-	while (n >= 1024) {
-		n /= 1024;
-		index++;
-	}
-
-	u = " KMGTPE"[index];
-
-	if (index == 0) {
-		(void) snprintf(buf, buflen, "%llu", n);
-	} else if ((num & ((1ULL << 10 * index) - 1)) == 0) {
-		/*
-		 * If this is an even multiple of the base, always display
-		 * without any decimal precision.
-		 */
-		(void) snprintf(buf, buflen, "%llu%c", n, u);
-	} else {
-		/*
-		 * We want to choose a precision that reflects the best choice
-		 * for fitting in 5 characters.  This can get rather tricky when
-		 * we have numbers that are very close to an order of magnitude.
-		 * For example, when displaying 10239 (which is really 9.999K),
-		 * we want only a single place of precision for 10.0K.  We could
-		 * develop some complex heuristics for this, but it's much
-		 * easier just to try each combination in turn.
-		 */
-		int i;
-		for (i = 2; i >= 0; i--) {
-			if (snprintf(buf, buflen, "%.*f%c", i,
-			    (double)num / (1ULL << 10 * index), u) <= 5)
-				break;
-		}
-	}
-}
-
 void
 libzfs_print_on_error(libzfs_handle_t *hdl, boolean_t printerr)
 {
@@ -619,23 +680,31 @@ libzfs_init(void)
 		return (NULL);
 	}
 
+	if (regcomp(&hdl->libzfs_urire, URI_REGEX, REG_EXTENDED) != 0) {
+		free(hdl);
+		return (NULL);
+	}
+
 	if ((hdl->libzfs_fd = open(ZFS_DEV, O_RDWR)) < 0) {
+		regfree(&hdl->libzfs_urire);
 		free(hdl);
 		return (NULL);
 	}
 
-	if ((hdl->libzfs_mnttab = fopen(MNTTAB, "r")) == NULL) {
+	if ((hdl->libzfs_mnttab = fopen(MNTTAB, "rF")) == NULL) {
 		(void) close(hdl->libzfs_fd);
+		regfree(&hdl->libzfs_urire);
 		free(hdl);
 		return (NULL);
 	}
 
-	hdl->libzfs_sharetab = fopen("/etc/dfs/sharetab", "r");
+	hdl->libzfs_sharetab = fopen("/etc/dfs/sharetab", "rF");
 
 	if (libzfs_core_init() != 0) {
 		(void) close(hdl->libzfs_fd);
 		(void) fclose(hdl->libzfs_mnttab);
 		(void) fclose(hdl->libzfs_sharetab);
+		regfree(&hdl->libzfs_urire);
 		free(hdl);
 		return (NULL);
 	}
@@ -645,6 +714,10 @@ libzfs_init(void)
 	zpool_feature_init();
 	libzfs_mnttab_init(hdl);
 
+	if (getenv("ZFS_PROP_DEBUG") != NULL) {
+		hdl->libzfs_prop_debug = B_TRUE;
+	}
+
 	return (hdl);
 }
 
@@ -652,16 +725,19 @@ void
 libzfs_fini(libzfs_handle_t *hdl)
 {
 	(void) close(hdl->libzfs_fd);
-	if (hdl->libzfs_mnttab)
+	if (hdl->libzfs_mnttab != NULL)
 		(void) fclose(hdl->libzfs_mnttab);
-	if (hdl->libzfs_sharetab)
+	if (hdl->libzfs_sharetab != NULL)
 		(void) fclose(hdl->libzfs_sharetab);
+	if (hdl->libzfs_devlink != NULL)
+		(void) di_devlink_fini(&hdl->libzfs_devlink);
 	zfs_uninit_libshare(hdl);
 	zpool_free_handles(hdl);
 	libzfs_fru_clear(hdl, B_TRUE);
 	namespace_clear(hdl);
 	libzfs_mnttab_fini(hdl);
 	libzfs_core_fini();
+	regfree(&hdl->libzfs_urire);
 	free(hdl);
 }
 
@@ -687,7 +763,7 @@ zfs_get_pool_handle(const zfs_handle_t *zhp)
  * Given a name, determine whether or not it's a valid path
  * (starts with '/' or "./").  If so, walk the mnttab trying
  * to match the device number.  If not, treat the path as an
- * fs/vol/snap name.
+ * fs/vol/snap/bkmark name.
  */
 zfs_handle_t *
 zfs_path_to_zhandle(libzfs_handle_t *hdl, char *path, zfs_type_t argtype)
@@ -738,8 +814,9 @@ zcmd_alloc_dst_nvlist(libzfs_handle_t *hdl, zfs_cmd_t *zc, size_t len)
 	if (len == 0)
 		len = 16 * 1024;
 	zc->zc_nvlist_dst_size = len;
-	if ((zc->zc_nvlist_dst = (uint64_t)(uintptr_t)
-	    zfs_alloc(hdl, zc->zc_nvlist_dst_size)) == NULL)
+	zc->zc_nvlist_dst =
+	    (uint64_t)(uintptr_t)zfs_alloc(hdl, zc->zc_nvlist_dst_size);
+	if (zc->zc_nvlist_dst == 0)
 		return (-1);
 
 	return (0);
@@ -754,9 +831,9 @@ int
 zcmd_expand_dst_nvlist(libzfs_handle_t *hdl, zfs_cmd_t *zc)
 {
 	free((void *)(uintptr_t)zc->zc_nvlist_dst);
-	if ((zc->zc_nvlist_dst = (uint64_t)(uintptr_t)
-	    zfs_alloc(hdl, zc->zc_nvlist_dst_size))
-	    == NULL)
+	zc->zc_nvlist_dst =
+	    (uint64_t)(uintptr_t)zfs_alloc(hdl, zc->zc_nvlist_dst_size);
+	if (zc->zc_nvlist_dst == 0)
 		return (-1);
 
 	return (0);
@@ -771,6 +848,9 @@ zcmd_free_nvlists(zfs_cmd_t *zc)
 	free((void *)(uintptr_t)zc->zc_nvlist_conf);
 	free((void *)(uintptr_t)zc->zc_nvlist_src);
 	free((void *)(uintptr_t)zc->zc_nvlist_dst);
+	zc->zc_nvlist_conf = 0;
+	zc->zc_nvlist_src = 0;
+	zc->zc_nvlist_dst = 0;
 }
 
 static int
@@ -962,7 +1042,7 @@ zprop_print_one_property(const char *name, zprop_get_cbdata_t *cbp,
     const char *source, const char *recvd_value)
 {
 	int i;
-	const char *str;
+	const char *str = NULL;
 	char buf[128];
 
 	/*
@@ -1014,6 +1094,10 @@ zprop_print_one_property(const char *name, zprop_get_cbdata_t *cbp,
 			case ZPROP_SRC_RECEIVED:
 				str = "received";
 				break;
+
+			default:
+				str = NULL;
+				assert(!"unhandled zprop_source_t");
 			}
 			break;
 
@@ -1168,6 +1252,7 @@ zprop_parse_value(libzfs_handle_t *hdl, nvpair_t *elem, int prop,
 	const char *propname;
 	char *value;
 	boolean_t isnone = B_FALSE;
+	boolean_t isauto = B_FALSE;
 
 	if (type == ZFS_TYPE_POOL) {
 		proptype = zpool_prop_get_type(prop);
@@ -1203,8 +1288,9 @@ zprop_parse_value(libzfs_handle_t *hdl, nvpair_t *elem, int prop,
 			(void) nvpair_value_string(elem, &value);
 			if (strcmp(value, "none") == 0) {
 				isnone = B_TRUE;
-			} else if (zfs_nicestrtonum(hdl, value, ivalp)
-			    != 0) {
+			} else if (strcmp(value, "auto") == 0) {
+				isauto = B_TRUE;
+			} else if (zfs_nicestrtonum(hdl, value, ivalp) != 0) {
 				goto error;
 			}
 		} else if (datatype == DATA_TYPE_UINT64) {
@@ -1234,6 +1320,31 @@ zprop_parse_value(libzfs_handle_t *hdl, nvpair_t *elem, int prop,
 		    prop == ZFS_PROP_SNAPSHOT_LIMIT)) {
 			*ivalp = UINT64_MAX;
 		}
+
+		/*
+		 * Special handling for setting 'refreservation' to 'auto'.  Use
+		 * UINT64_MAX to tell the caller to use zfs_fix_auto_resv().
+		 * 'auto' is only allowed on volumes.
+		 */
+		if (isauto) {
+			switch (prop) {
+			case ZFS_PROP_REFRESERVATION:
+				if ((type & ZFS_TYPE_VOLUME) == 0) {
+					zfs_error_aux(hdl, dgettext(TEXT_DOMAIN,
+					    "'%s=auto' only allowed on "
+					    "volumes"), nvpair_name(elem));
+					goto error;
+				}
+				*ivalp = UINT64_MAX;
+				break;
+			default:
+				zfs_error_aux(hdl, dgettext(TEXT_DOMAIN,
+				    "'auto' is invalid value for '%s'"),
+				    nvpair_name(elem));
+				goto error;
+			}
+		}
+
 		break;
 
 	case PROP_TYPE_INDEX:
@@ -1498,4 +1609,51 @@ zprop_iter(zprop_func func, void *cb, boolean_t show_all, boolean_t ordered,
     zfs_type_t type)
 {
 	return (zprop_iter_common(func, cb, show_all, ordered, type));
+}
+
+/*
+ * zfs_get_hole_count retrieves the number of holes (blocks which are
+ * zero-filled) in the specified file using the _FIO_COUNT_FILLED ioctl. It
+ * also optionally fetches the block size when bs is non-NULL. With hole count
+ * and block size the full space consumed by the holes of a file can be
+ * calculated.
+ *
+ * On success, zero is returned, the count argument is set to the
+ * number of holes, and the bs argument is set to the block size (if it is
+ * not NULL). On error, a non-zero errno is returned and the values in count
+ * and bs are undefined.
+ */
+int
+zfs_get_hole_count(const char *path, uint64_t *count, uint64_t *bs)
+{
+	int fd, err;
+	struct stat64 ss;
+	uint64_t fill;
+
+	fd = open(path, O_RDONLY | O_LARGEFILE);
+	if (fd == -1)
+		return (errno);
+
+	if (ioctl(fd, _FIO_COUNT_FILLED, &fill) == -1) {
+		err = errno;
+		(void) close(fd);
+		return (err);
+	}
+
+	if (fstat64(fd, &ss) == -1) {
+		err = errno;
+		(void) close(fd);
+		return (err);
+	}
+
+	*count = (ss.st_size + ss.st_blksize - 1) / ss.st_blksize - fill;
+	VERIFY3S(*count, >=, 0);
+	if (bs != NULL) {
+		*bs = ss.st_blksize;
+	}
+
+	if (close(fd) == -1) {
+		return (errno);
+	}
+	return (0);
 }

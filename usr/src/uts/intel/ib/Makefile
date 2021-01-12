@@ -39,12 +39,8 @@ UTSBASE	= ../..
 #
 MODULE		= ib
 OBJECTS		= $(IB_OBJS:%=$(OBJS_DIR)/%)
-LINTS		= $(IB_OBJS:%.o=$(LINTS_DIR)/%.ln)
 ROOTMODULE	= $(ROOT_DRV_DIR)/$(MODULE)
 CONF_SRCDIR	= $(UTSBASE)/common/io/ib/ibnex
-WARLOCK_OUT	= $(IB_OBJS:%.o=%.ll)
-WARLOCK_OK	= $(MODULE).ok
-WLCMD_DIR	= $(UTSBASE)/common/io/warlock
 
 #
 #	Include common rules.
@@ -55,19 +51,13 @@ include $(UTSBASE)/intel/Makefile.intel
 #	Define targets
 #
 ALL_TARGET	= $(BINARY) $(SRC_CONFILE)
-LINT_TARGET	= $(MODULE).lint
 INSTALL_TARGET	= $(BINARY) $(ROOTMODULE) $(ROOT_CONFFILE)
 
 #
 #	Overrides.
 #
 
-CERRWARN	+= -_gcc=-Wno-uninitialized
-
-# 
-# lint pass one enforcement 
-# 
-CFLAGS += $(CCVERBOSE)
+CERRWARN	+= $(CNOWARN_UNINIT)
 
 #
 #	depends on misc/ibtl
@@ -75,14 +65,11 @@ CFLAGS += $(CCVERBOSE)
 LDFLAGS	+= -dy -Nmisc/ibdm -Nmisc/ibtl
 
 #
-# For now, disable these lint checks; maintainers should endeavor
-# to investigate and remove these for maximum lint coverage.
+# For now, disable these warnings; maintainers should endeavor
+# to investigate and remove these for maximum coverage.
 # Please do not carry these forward to new Makefiles.
 #
-LINTTAGS	+= -erroff=E_SUSPICIOUS_COMPARISON
-LINTTAGS	+= -erroff=E_BAD_PTR_CAST_ALIGN
-LINTTAGS	+= -erroff=E_PTRDIFF_OVERFLOW
-LINTTAGS	+= -erroff=E_ASSIGN_NARROW_CONV
+CFLAGS		+= $(CCVERBOSE)
 
 #
 #	Default build targets.
@@ -94,16 +81,8 @@ def:		$(DEF_DEPS)
 all:		$(ALL_DEPS)
 
 clean:		$(CLEAN_DEPS)
-		$(RM) $(WARLOCK_OUT) $(WARLOCK_OK)
 
 clobber:	$(CLOBBER_DEPS)
-		$(RM) $(WARLOCK_OUT) $(WARLOCK_OK)
-
-lint:		$(LINT_DEPS)
-
-modlintlib:	$(MODLINTLIB_DEPS)
-
-clean.lint:	$(CLEAN_LINT_DEPS)
 
 install:	$(INSTALL_DEPS)
 
@@ -111,31 +90,3 @@ install:	$(INSTALL_DEPS)
 #	Include common targets.
 #
 include $(UTSBASE)/intel/Makefile.targ
-
-#
-#	Defines for local commands.
-#
-WARLOCK		= warlock
-WLCC		= wlcc
-TOUCH		= touch
-TEST		= test
-
-IBDM_FILES = $(IBDM_OBJS:%.o=../ibdm/%.ll)
-
-warlock: $(WARLOCK_OK)
-
-$(WARLOCK_OK): $(WARLOCK_OUT) $(WLCMD_DIR)/ib.wlcmd ibdm_files
-	$(WARLOCK) -c $(WLCMD_DIR)/ib.wlcmd $(WARLOCK_OUT)  \
-		-l $(IBDM_FILES) -l ../warlock/ddi_dki_impl.ll
-	$(TOUCH) $@
-
-%.ll: $(UTSBASE)/common/io/ib/ibnex/%.c \
-		$(UTSBASE)/common/sys/ib/ibnex/ibnex.h \
-		$(UTSBASE)/common/sys/ib/ibnex/ibnex_devctl.h
-	$(WLCC)  $(CPPFLAGS) -DDEBUG -o $@ $<
-
-ibdm_files :
-	@cd ../ibdm; pwd; $(MAKE) warlock
-
-warlock_ddi.files:
-	@cd ../warlock; pwd; $(MAKE) warlock

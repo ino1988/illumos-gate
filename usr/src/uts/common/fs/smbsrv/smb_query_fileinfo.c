@@ -21,6 +21,7 @@
 
 /*
  * Copyright (c) 2007, 2010, Oracle and/or its affiliates. All rights reserved.
+ * Copyright 2017 Nexenta Systems, Inc.  All rights reserved.
  */
 
 #include <smbsrv/smb_kproto.h>
@@ -70,14 +71,7 @@
  */
 #define	SMB_STREAM_ENCODE_FIXED_SZ	24
 
-typedef struct smb_queryinfo {
-	smb_node_t	*qi_node;	/* NULL for pipes */
-	smb_attr_t	qi_attr;
-	boolean_t	qi_delete_on_close;
-	uint32_t	qi_namelen;
-	char		qi_shortname[SMB_SHORTNAMELEN];
-	char		qi_name[MAXPATHLEN];
-} smb_queryinfo_t;
+/* See smb_queryinfo_t in smb_ktypes.h */
 #define	qi_mtime	qi_attr.sa_vattr.va_mtime
 #define	qi_ctime	qi_attr.sa_vattr.va_ctime
 #define	qi_atime	qi_attr.sa_vattr.va_atime
@@ -94,12 +88,10 @@ static boolean_t smb_query_pipe_valid_infolev(smb_request_t *, uint16_t);
 
 static int smb_query_encode_response(smb_request_t *, smb_xa_t *,
     uint16_t, smb_queryinfo_t *);
-static void smb_encode_stream_info(smb_request_t *, smb_xa_t *,
-    smb_queryinfo_t *);
-static boolean_t smb_stream_fits(smb_request_t *, smb_xa_t *, char *, uint32_t);
+static boolean_t smb_stream_fits(smb_request_t *, mbuf_chain_t *,
+    char *, uint32_t);
 static int smb_query_pathname(smb_request_t *, smb_node_t *, boolean_t,
     smb_queryinfo_t *);
-static void smb_query_shortname(smb_node_t *, smb_queryinfo_t *);
 
 int smb_query_passthru;
 
@@ -157,8 +149,7 @@ smb_pre_query_information(smb_request_t *sr)
 
 	rc = smbsr_decode_data(sr, "%S", sr, &fqi->fq_path.pn_path);
 
-	DTRACE_SMB_2(op__QueryInformation__start, smb_request_t *, sr,
-	    smb_fqi_t *, fqi);
+	DTRACE_SMB_START(op__QueryInformation, smb_request_t *, sr);
 
 	return ((rc == 0) ? SDRC_SUCCESS : SDRC_ERROR);
 }
@@ -166,7 +157,7 @@ smb_pre_query_information(smb_request_t *sr)
 void
 smb_post_query_information(smb_request_t *sr)
 {
-	DTRACE_SMB_1(op__QueryInformation__done, smb_request_t *, sr);
+	DTRACE_SMB_DONE(op__QueryInformation, smb_request_t *, sr);
 }
 
 smb_sdrc_t
@@ -195,7 +186,7 @@ smb_pre_query_information2(smb_request_t *sr)
 	int rc;
 	rc = smbsr_decode_vwv(sr, "w", &sr->smb_fid);
 
-	DTRACE_SMB_1(op__QueryInformation2__start, smb_request_t *, sr);
+	DTRACE_SMB_START(op__QueryInformation2, smb_request_t *, sr);
 
 	return ((rc == 0) ? SDRC_SUCCESS : SDRC_ERROR);
 }
@@ -203,7 +194,7 @@ smb_pre_query_information2(smb_request_t *sr)
 void
 smb_post_query_information2(smb_request_t *sr)
 {
-	DTRACE_SMB_1(op__QueryInformation2__done, smb_request_t *, sr);
+	DTRACE_SMB_DONE(op__QueryInformation2, smb_request_t *, sr);
 }
 
 smb_sdrc_t
@@ -251,6 +242,7 @@ smb_query_by_fid(smb_request_t *sr, smb_xa_t *xa, uint16_t infolev)
 		return (-1);
 	}
 
+	sr->user_cr = smb_ofile_getcred(sr->fid_ofile);
 	qinfo = kmem_alloc(sizeof (smb_queryinfo_t), KM_SLEEP);
 
 	switch (sr->fid_ofile->f_ftype) {
@@ -298,6 +290,21 @@ smb_query_by_path(smb_request_t *sr, smb_xa_t *xa, uint16_t infolev)
 	smb_pathname_t	*pn;
 	int		rc;
 
+	/*
+	 * The function smb_query_fileinfo is used here and in
+	 * smb_query_by_fid.  That common function needs this
+	 * one to call it with a NULL fid_ofile, so check here.
+	 * Note: smb_query_by_fid enforces the opposite.
+	 *
+	 * In theory we could ASSERT this, but whether we have
+	 * fid_ofile set here depends on what sequence of SMB
+	 * commands the client has sent in this message, so
+	 * let's be cautious and handle it as an error.
+	 */
+	if (sr->fid_ofile != NULL)
+		return (-1);
+
+
 	/* VALID, but not yet supported */
 	if (infolev == SMB_FILE_ACCESS_INFORMATION) {
 		smbsr_error(sr, 0, ERRDOS, ERROR_INVALID_LEVEL);
@@ -322,11 +329,7 @@ smb_query_by_path(smb_request_t *sr, smb_xa_t *xa, uint16_t infolev)
 	}
 
 	if (rc != 0) {
-		if (rc == ENOENT)
-			smbsr_error(sr, NT_STATUS_OBJECT_NAME_NOT_FOUND,
-			    ERRDOS, ERROR_FILE_NOT_FOUND);
-		else
-			smbsr_errno(sr, rc);
+		smbsr_errno(sr, rc);
 
 		kmem_free(qinfo, sizeof (smb_queryinfo_t));
 		return (-1);
@@ -383,12 +386,11 @@ smb_query_encode_response(smb_request_t *sr, smb_xa_t *xa,
 {
 	uint16_t dattr;
 	u_offset_t datasz, allocsz;
-	uint32_t isdir;
+	uint32_t status;
 
 	dattr = qinfo->qi_attr.sa_dosattr & FILE_ATTRIBUTE_MASK;
 	datasz = qinfo->qi_attr.sa_vattr.va_size;
 	allocsz = qinfo->qi_attr.sa_allocsz;
-	isdir = ((dattr & FILE_ATTRIBUTE_DIRECTORY) != 0);
 
 	switch (infolev) {
 	case SMB_QUERY_INFORMATION:
@@ -470,7 +472,7 @@ smb_query_encode_response(smb_request_t *sr, smb_xa_t *xa,
 		    (uint64_t)datasz,
 		    qinfo->qi_attr.sa_vattr.va_nlink,
 		    qinfo->qi_delete_on_close,
-		    (uint8_t)isdir);
+		    qinfo->qi_isdir);
 		break;
 
 	case SMB_QUERY_FILE_EA_INFO:
@@ -503,7 +505,7 @@ smb_query_encode_response(smb_request_t *sr, smb_xa_t *xa,
 		    (uint64_t)datasz,
 		    qinfo->qi_attr.sa_vattr.va_nlink,
 		    qinfo->qi_delete_on_close,
-		    isdir,
+		    qinfo->qi_isdir,
 		    0);
 
 		(void) smb_mbc_encodef(&xa->rep_data_mb, "%lu",
@@ -521,7 +523,9 @@ smb_query_encode_response(smb_request_t *sr, smb_xa_t *xa,
 	case SMB_QUERY_FILE_STREAM_INFO:
 	case SMB_FILE_STREAM_INFORMATION:
 		(void) smb_mbc_encodef(&xa->rep_param_mb, "w", 0);
-		smb_encode_stream_info(sr, xa, qinfo);
+		status = smb_query_stream_info(sr, &xa->rep_data_mb, qinfo);
+		if (status)
+			smbsr_status(sr, status, 0, 0);
 		break;
 
 	case SMB_QUERY_FILE_COMPRESSION_INFO:
@@ -610,21 +614,21 @@ smb_query_encode_response(smb_request_t *sr, smb_xa_t *xa,
  * a warning code is set (NT_STATUS_BUFFER_OVERFLOW). The next_offset
  * value in the last returned entry must be 0.
  */
-static void
-smb_encode_stream_info(smb_request_t *sr, smb_xa_t *xa, smb_queryinfo_t *qinfo)
+uint32_t
+smb_query_stream_info(smb_request_t *sr, mbuf_chain_t *mbc,
+	smb_queryinfo_t *qinfo)
 {
 	char *stream_name;
 	uint32_t next_offset;
 	uint32_t stream_nlen;
 	uint32_t pad;
 	u_offset_t datasz, allocsz;
-	boolean_t is_dir;
 	smb_streaminfo_t *sinfo, *sinfo_next;
 	int rc = 0;
 	boolean_t done = B_FALSE;
 	boolean_t eos = B_FALSE;
-	uint16_t odid;
 	smb_odir_t *od = NULL;
+	uint32_t status = 0;
 
 	smb_node_t *fnode = qinfo->qi_node;
 	smb_attr_t *attr = &qinfo->qi_attr;
@@ -639,44 +643,53 @@ smb_encode_stream_info(smb_request_t *sr, smb_xa_t *xa, smb_queryinfo_t *qinfo)
 
 	sinfo = kmem_alloc(sizeof (smb_streaminfo_t), KM_SLEEP);
 	sinfo_next = kmem_alloc(sizeof (smb_streaminfo_t), KM_SLEEP);
-	is_dir = ((attr->sa_dosattr & FILE_ATTRIBUTE_DIRECTORY) != 0);
 	datasz = attr->sa_vattr.va_size;
 	allocsz = attr->sa_allocsz;
 
-	odid = smb_odir_openat(sr, fnode);
-	if (odid != 0)
-		od = smb_tree_lookup_odir(sr->tid_tree, odid);
-	if (od != NULL)
-		rc = smb_odir_read_streaminfo(sr, od, sinfo, &eos);
-
-	if ((od == NULL) || (rc != 0) || (eos))
+	status = smb_odir_openat(sr, fnode, &od);
+	switch (status) {
+	case 0:
+		break;
+	case NT_STATUS_OBJECT_NAME_NOT_FOUND:
+	case NT_STATUS_NO_SUCH_FILE:
+	case NT_STATUS_NOT_SUPPORTED:
+		/* No streams. */
+		status = 0;
 		done = B_TRUE;
+		break;
+	default:
+		return (status);
+	}
+
+	if (!done) {
+		rc = smb_odir_read_streaminfo(sr, od, sinfo, &eos);
+		if ((rc != 0) || (eos))
+			done = B_TRUE;
+	}
 
 	/* If not a directory, encode an entry for the unnamed stream. */
-	if (!is_dir) {
+	if (qinfo->qi_isdir == 0) {
 		stream_name = "::$DATA";
 		stream_nlen = smb_ascii_or_unicode_strlen(sr, stream_name);
 		next_offset = SMB_STREAM_ENCODE_FIXED_SZ + stream_nlen +
 		    smb_ascii_or_unicode_null_len(sr);
 
 		/* Can unnamed stream fit in response buffer? */
-		if (MBC_ROOM_FOR(&xa->rep_data_mb, next_offset) == 0) {
+		if (MBC_ROOM_FOR(mbc, next_offset) == 0) {
 			done = B_TRUE;
-			smbsr_warn(sr, NT_STATUS_BUFFER_OVERFLOW,
-			    ERRDOS, ERROR_MORE_DATA);
+			status = NT_STATUS_BUFFER_OVERFLOW;
 		} else {
 			/* Can first named stream fit in rsp buffer? */
-			if (!done && !smb_stream_fits(sr, xa, sinfo->si_name,
+			if (!done && !smb_stream_fits(sr, mbc, sinfo->si_name,
 			    next_offset)) {
 				done = B_TRUE;
-				smbsr_warn(sr, NT_STATUS_BUFFER_OVERFLOW,
-				    ERRDOS, ERROR_MORE_DATA);
+				status = NT_STATUS_BUFFER_OVERFLOW;
 			}
 
 			if (done)
 				next_offset = 0;
 
-			(void) smb_mbc_encodef(&xa->rep_data_mb, "%llqqu", sr,
+			(void) smb_mbc_encodef(mbc, "%llqqu", sr,
 			    next_offset, stream_nlen, datasz, allocsz,
 			    stream_name);
 		}
@@ -702,11 +715,10 @@ smb_encode_stream_info(smb_request_t *sr, smb_xa_t *xa, smb_queryinfo_t *qinfo)
 			next_offset += pad;
 
 			/* Can next named stream fit in response buffer? */
-			if (!smb_stream_fits(sr, xa, sinfo_next->si_name,
+			if (!smb_stream_fits(sr, mbc, sinfo_next->si_name,
 			    next_offset)) {
 				done = B_TRUE;
-				smbsr_warn(sr, NT_STATUS_BUFFER_OVERFLOW,
-				    ERRDOS, ERROR_MORE_DATA);
+				status = NT_STATUS_BUFFER_OVERFLOW;
 			}
 		}
 
@@ -715,7 +727,7 @@ smb_encode_stream_info(smb_request_t *sr, smb_xa_t *xa, smb_queryinfo_t *qinfo)
 			pad = 0;
 		}
 
-		rc = smb_mbc_encodef(&xa->rep_data_mb, "%llqqu#.",
+		(void) smb_mbc_encodef(mbc, "%llqqu#.",
 		    sr, next_offset, stream_nlen,
 		    sinfo->si_size, sinfo->si_alloc_size,
 		    sinfo->si_name, pad);
@@ -729,6 +741,8 @@ smb_encode_stream_info(smb_request_t *sr, smb_xa_t *xa, smb_queryinfo_t *qinfo)
 		smb_odir_close(od);
 		smb_odir_release(od);
 	}
+
+	return (status);
 }
 
 /*
@@ -744,7 +758,8 @@ smb_encode_stream_info(smb_request_t *sr, smb_xa_t *xa, smb_queryinfo_t *qinfo)
  *	+ alignment padding
  */
 static boolean_t
-smb_stream_fits(smb_request_t *sr, smb_xa_t *xa, char *name, uint32_t offset)
+smb_stream_fits(smb_request_t *sr, mbuf_chain_t *mbc,
+	char *name, uint32_t offset)
 {
 	uint32_t len, pad;
 
@@ -754,7 +769,7 @@ smb_stream_fits(smb_request_t *sr, smb_xa_t *xa, char *name, uint32_t offset)
 	pad = smb_pad_align(len, 8);
 	len += pad;
 
-	return (MBC_ROOM_FOR(&xa->rep_data_mb, offset + len) != 0);
+	return (MBC_ROOM_FOR(mbc, offset + len) != 0);
 }
 
 /*
@@ -781,7 +796,11 @@ smb_query_fileinfo(smb_request_t *sr, smb_node_t *node, uint16_t infolev,
 
 	(void) bzero(qinfo, sizeof (smb_queryinfo_t));
 
-	if (smb_node_getattr(sr, node, &qinfo->qi_attr) != 0) {
+	/* See: smb_query_encode_response */
+	qinfo->qi_attr.sa_mask = SMB_AT_ALL;
+	rc = smb_node_getattr(sr, node, sr->user_cr, sr->fid_ofile,
+	    &qinfo->qi_attr);
+	if (rc != 0) {
 		smbsr_error(sr, NT_STATUS_INTERNAL_ERROR,
 		    ERRDOS, ERROR_INTERNAL_ERROR);
 		return (-1);
@@ -790,6 +809,7 @@ smb_query_fileinfo(smb_request_t *sr, smb_node_t *node, uint16_t infolev,
 	qinfo->qi_node = node;
 	qinfo->qi_delete_on_close =
 	    (node->flags & NODE_FLAGS_DELETE_ON_CLOSE) != 0;
+	qinfo->qi_isdir = smb_node_is_dir(node);
 
 	/*
 	 * The number of links reported should be the number of
@@ -890,7 +910,7 @@ smb_query_pathname(smb_request_t *sr, smb_node_t *node, boolean_t include_share,
  * using smb_mangle(), otherwise, convert the original name to
  * upper-case and return it as the alternative name.
  */
-static void
+void
 smb_query_shortname(smb_node_t *node, smb_queryinfo_t *qinfo)
 {
 	char *namep;
@@ -925,6 +945,7 @@ smb_query_pipeinfo(smb_request_t *sr, smb_opipe_t *opipe, uint16_t infolev,
 	qinfo->qi_node = NULL;
 	qinfo->qi_attr.sa_vattr.va_nlink = 1;
 	qinfo->qi_delete_on_close = 1;
+	qinfo->qi_isdir = 0;
 
 	if ((infolev == SMB_INFO_STANDARD) ||
 	    (infolev == SMB_INFO_QUERY_EA_SIZE) ||

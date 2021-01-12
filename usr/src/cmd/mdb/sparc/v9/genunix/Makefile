@@ -38,6 +38,7 @@ KMODSRCS = \
 
 MODSRCS = \
 	$(COMMONSRCS) \
+	gcore.c \
 	typegraph.c
 
 #
@@ -67,8 +68,10 @@ CPPFLAGS += -I$(SRC)/uts/sparc/v9
 
 CERRWARN += -_gcc=-Wno-char-subscripts
 CERRWARN += -_gcc=-Wno-unused-label
-CERRWARN += -_gcc=-Wno-uninitialized
+CERRWARN += $(CNOWARN_UNINIT)
 CERRWARN += -_gcc=-Wno-parentheses
 CERRWARN += -_gcc=-Wno-type-limits
+
+LINTFLAGS64 += -erroff=E_EMPTY_TRANSLATION_UNIT
 
 MODSRCS_DIR = ../../../sparc/modules/genunix

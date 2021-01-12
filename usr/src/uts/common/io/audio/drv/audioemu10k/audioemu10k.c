@@ -827,6 +827,11 @@ emu10k_reset_rec(emu10k_portc_t *portc)
 	case 65536:
 		sz = 31;
 		break;
+	default:
+		/*
+		 * Can't really reach here, but this keeps the compiler quiet.
+		 */
+		return;
 	}
 	emu10k_write_reg(devc, ADCBA, 0, portc->buf_paddr);
 	emu10k_write_reg(devc, ADCBS, 0, sz);
@@ -1913,6 +1918,8 @@ static struct {
 	{ 0x8, 0x1001, "SB0400", "Audigy 2 Value",
 	    SB_AUDIGY2VAL | SB_71 | SB_NOEXP },
 	{ 0x8, 0x1021, "SB0610", "Audigy 4",
+	    SB_AUDIGY2VAL | SB_71 | SB_NOEXP },
+	{ 0x8, 0x1024, "SB1550", "Audigy RX",
 	    SB_AUDIGY2VAL | SB_71 | SB_NOEXP },
 	{ 0x8, 0x2001, "SB0530", "Audigy 2 ZS Notebook",
 	    SB_AUDIGY2VAL | SB_71 },

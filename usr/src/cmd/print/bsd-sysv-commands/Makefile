@@ -22,7 +22,7 @@
 # Copyright 2009 Sun Microsystems, Inc.  All rights reserved.
 # Use is subject to license terms.
 #
-#
+# Copyright (c) 2018, Joyent, Inc.
 
 include		../Makefile.sp
 
@@ -60,12 +60,15 @@ CPPFLAGS +=	-I.
 CPPFLAGS +=	-I../../../lib/print/libpapi-common/common
 CPPFLAGS +=	-I$(ROOT)/usr/include
 CPPFLAGS +=	-I../../lp/include
-LDLIBS +=	$(LIBLP) -lpapi -lc
+LDLIBS +=	$(LIBLP) $(LDSTACKPROTECT) -lpapi -lc
 in.lpd:=	CFLAGS +=	-DSOLARIS_PRIVATE_POST_0_9
 in.lpd:=	LDLIBS +=	-lnsl -lsocket
 
 CERRWARN +=	-_gcc=-Wno-unused-variable
-CERRWARN +=	-_gcc=-Wno-uninitialized
+CERRWARN +=	$(CNOWARN_UNINIT)
+
+# not linted
+SMATCH=off
 
 all:	$(BINPROGS) $(SBINPROGS)
 
@@ -82,14 +85,14 @@ $(ROOTUSRUCB)/%:	$(ROOTUSRUCB) %
 $(ROOTLIBLPBIN)/%:	%
 	$(INS.file)
 
-$(ROOTUCBSYMLINKS):	
+$(ROOTUCBSYMLINKS):
 	$(RM) $@; $(SYMLINK) ../bin/$(@F) $@
 
 #	usr/lib links
 ROOTUSRLIBSYMLINKS =	$(SBINPROGS:%=$(ROOTLIB)/%)
 $(ROOTLIB)/%:	$(ROOTLIB) %
 
-$(ROOTUSRLIBSYMLINKS):	
+$(ROOTUSRLIBSYMLINKS):
 	$(RM) $@; $(SYMLINK) ../sbin/$(@F) $@
 
 .KEEP_STATE:
@@ -101,7 +104,7 @@ install:	$(ROOTLIBLPPROGS) \
 check:	$(CHKMANIFEST)
 
 clean:
-	$(RM) $(OBJS) 
+	$(RM) $(OBJS)
 
 CLOBBERFILES += $(BINPROGS) $(SBINPROGS) $(LIBPRINTPROGS)
 

@@ -20,7 +20,7 @@
  */
 
 /*
- * Copyright (c) 2011, 2014 by Delphix. All rights reserved.
+ * Copyright (c) 2011, 2015 by Delphix. All rights reserved.
  * Copyright (c) 2013 Steven Hartland. All rights reserved.
  */
 
@@ -48,14 +48,12 @@
 #include <sys/zio_compress.h>
 #include <sys/zfeature.h>
 #include <sys/dmu_tx.h>
-#undef ZFS_MAXNAMELEN
 #undef verify
-#include <libzfs.h>
+#include <libzutil.h>
 
 extern boolean_t zfeature_checks_disable;
 
 const char cmdname[] = "zhack";
-libzfs_handle_t *g_zfs;
 static importargs_t g_importargs;
 static char *g_pool;
 static boolean_t g_readonly;
@@ -106,7 +104,7 @@ fatal(spa_t *spa, void *tag, const char *fmt, ...)
 /* ARGSUSED */
 static int
 space_delta_cb(dmu_object_type_t bonustype, void *data,
-    uint64_t *userp, uint64_t *groupp)
+    uint64_t *userp, uint64_t *groupp, uint64_t *projectp)
 {
 	/*
 	 * Is it a valid type of object to track?
@@ -122,86 +120,50 @@ space_delta_cb(dmu_object_type_t bonustype, void *data,
  * Target is the dataset whose pool we want to open.
  */
 static void
-import_pool(const char *target, boolean_t readonly)
+zhack_import(char *target, boolean_t readonly)
 {
 	nvlist_t *config;
-	nvlist_t *pools;
-	int error;
-	char *sepp;
-	spa_t *spa;
-	nvpair_t *elem;
 	nvlist_t *props;
-	const char *name;
+	int error;
 
 	kernel_init(readonly ? FREAD : (FREAD | FWRITE));
-	g_zfs = libzfs_init();
-	ASSERT(g_zfs != NULL);
 
 	dmu_objset_register_type(DMU_OST_ZFS, space_delta_cb);
 
 	g_readonly = readonly;
-
-	/*
-	 * If we only want readonly access, it's OK if we find
-	 * a potentially-active (ie, imported into the kernel) pool from the
-	 * default cachefile.
-	 */
-	if (readonly && spa_open(target, &spa, FTAG) == 0) {
-		spa_close(spa, FTAG);
-		return;
-	}
-
-	g_importargs.unique = B_TRUE;
 	g_importargs.can_be_active = readonly;
 	g_pool = strdup(target);
-	if ((sepp = strpbrk(g_pool, "/@")) != NULL)
-		*sepp = '\0';
-	g_importargs.poolname = g_pool;
-	pools = zpool_search_import(g_zfs, &g_importargs);
 
-	if (nvlist_empty(pools)) {
-		if (!g_importargs.can_be_active) {
-			g_importargs.can_be_active = B_TRUE;
-			if (zpool_search_import(g_zfs, &g_importargs) != NULL ||
-			    spa_open(target, &spa, FTAG) == 0) {
-				fatal(spa, FTAG, "cannot import '%s': pool is "
-				    "active; run " "\"zpool export %s\" "
-				    "first\n", g_pool, g_pool);
-			}
-		}
-
-		fatal(NULL, FTAG, "cannot import '%s': no such pool "
-		    "available\n", g_pool);
-	}
-
-	elem = nvlist_next_nvpair(pools, NULL);
-	name = nvpair_name(elem);
-	verify(nvpair_value_nvlist(elem, &config) == 0);
+	error = zpool_find_config(NULL, target, &config, &g_importargs,
+	    &libzpool_config_ops);
+	if (error)
+		fatal(NULL, FTAG, "cannot import '%s'", target);
 
 	props = NULL;
 	if (readonly) {
-		verify(nvlist_alloc(&props, NV_UNIQUE_NAME, 0) == 0);
-		verify(nvlist_add_uint64(props,
+		VERIFY(nvlist_alloc(&props, NV_UNIQUE_NAME, 0) == 0);
+		VERIFY(nvlist_add_uint64(props,
 		    zpool_prop_to_name(ZPOOL_PROP_READONLY), 1) == 0);
 	}
 
 	zfeature_checks_disable = B_TRUE;
-	error = spa_import(name, config, props, ZFS_IMPORT_NORMAL);
+	error = spa_import(target, config, props,
+	    (readonly ?  ZFS_IMPORT_SKIP_MMP : ZFS_IMPORT_NORMAL));
 	zfeature_checks_disable = B_FALSE;
 	if (error == EEXIST)
 		error = 0;
 
 	if (error)
-		fatal(NULL, FTAG, "can't import '%s': %s", name,
+		fatal(NULL, FTAG, "can't import '%s': %s", target,
 		    strerror(error));
 }
 
 static void
-zhack_spa_open(const char *target, boolean_t readonly, void *tag, spa_t **spa)
+zhack_spa_open(char *target, boolean_t readonly, void *tag, spa_t **spa)
 {
 	int err;
 
-	import_pool(target, readonly);
+	zhack_import(target, readonly);
 
 	zfeature_checks_disable = B_TRUE;
 	err = spa_open(target, spa, tag);
@@ -294,8 +256,8 @@ zhack_feature_enable_sync(void *arg, dmu_tx_t *tx)
 	feature_enable_sync(spa, feature, tx);
 
 	spa_history_log_internal(spa, "zhack enable feature", tx,
-	    "guid=%s can_readonly=%u",
-	    feature->fi_guid, feature->fi_can_readonly);
+	    "guid=%s flags=%x",
+	    feature->fi_guid, feature->fi_flags);
 }
 
 static void
@@ -314,9 +276,7 @@ zhack_do_feature_enable(int argc, char **argv)
 	 */
 	desc = NULL;
 	feature.fi_uname = "zhack";
-	feature.fi_mos = B_FALSE;
-	feature.fi_can_readonly = B_FALSE;
-	feature.fi_activate_on_enable = B_FALSE;
+	feature.fi_flags = 0;
 	feature.fi_depends = nodeps;
 	feature.fi_feature = SPA_FEATURE_NONE;
 
@@ -324,7 +284,7 @@ zhack_do_feature_enable(int argc, char **argv)
 	while ((c = getopt(argc, argv, "rmd:")) != -1) {
 		switch (c) {
 		case 'r':
-			feature.fi_can_readonly = B_TRUE;
+			feature.fi_flags |= ZFEATURE_FLAG_READONLY_COMPAT;
 			break;
 		case 'd':
 			desc = strdup(optarg);
@@ -413,7 +373,7 @@ zhack_do_feature_ref(int argc, char **argv)
 	 * disk later.
 	 */
 	feature.fi_uname = "zhack";
-	feature.fi_mos = B_FALSE;
+	feature.fi_flags = 0;
 	feature.fi_desc = NULL;
 	feature.fi_depends = nodeps;
 	feature.fi_feature = SPA_FEATURE_NONE;
@@ -422,7 +382,7 @@ zhack_do_feature_ref(int argc, char **argv)
 	while ((c = getopt(argc, argv, "md")) != -1) {
 		switch (c) {
 		case 'm':
-			feature.fi_mos = B_TRUE;
+			feature.fi_flags |= ZFEATURE_FLAG_MOS;
 			break;
 		case 'd':
 			decr = B_TRUE;
@@ -455,10 +415,10 @@ zhack_do_feature_ref(int argc, char **argv)
 
 	if (0 == zap_contains(mos, spa->spa_feat_for_read_obj,
 	    feature.fi_guid)) {
-		feature.fi_can_readonly = B_FALSE;
+		feature.fi_flags &= ~ZFEATURE_FLAG_READONLY_COMPAT;
 	} else if (0 == zap_contains(mos, spa->spa_feat_for_write_obj,
 	    feature.fi_guid)) {
-		feature.fi_can_readonly = B_TRUE;
+		feature.fi_flags |= ZFEATURE_FLAG_READONLY_COMPAT;
 	} else {
 		fatal(spa, FTAG, "feature is not enabled: %s", feature.fi_guid);
 	}
@@ -564,7 +524,6 @@ main(int argc, char **argv)
 		    "changes may not be committed to disk\n");
 	}
 
-	libzfs_fini(g_zfs);
 	kernel_fini();
 
 	return (rv);

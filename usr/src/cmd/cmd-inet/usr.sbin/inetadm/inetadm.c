@@ -24,8 +24,6 @@
  * Use is subject to license terms.
  */
 
-#pragma ident	"%Z%%M%	%I%	%E% SMI"
-
 /*
  * inetadm - administer services controlled by inetd and print out inetd
  * service related information.
@@ -812,8 +810,8 @@ modify_inst_props_cb(void *data, scf_walkinfo_t *wip)
 
 		switch (mod[j].ip_type) {
 		case INET_TYPE_INTEGER:
-			if (uu_strtoint(value, &new_int, sizeof (new_int), NULL,
-			    NULL, NULL) == -1)
+			if (uu_strtoint(value, &new_int, sizeof (new_int), 0,
+			    0, 0) == -1)
 				uu_die(gettext("Error: \"%s\" is not a valid "
 				    "integer value.\n"), value);
 
@@ -940,8 +938,8 @@ modify_defaults(int argc, char *argv[])
 
 		switch (mod[j].ip_type) {
 		case INET_TYPE_INTEGER:
-			if (uu_strtoint(value, &new_int, sizeof (new_int), NULL,
-			    NULL, NULL) == -1)
+			if (uu_strtoint(value, &new_int, sizeof (new_int), 0,
+			    0, 0) == -1)
 				uu_die(gettext("Error: \"%s\" is not a valid "
 				    "integer value.\n"), value);
 
@@ -1026,6 +1024,7 @@ main(int argc, char *argv[])
 			} else {
 				usage(B_FALSE);
 			}
+			break;
 		default:
 			usage(B_FALSE);
 		}

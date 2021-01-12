@@ -22,6 +22,7 @@
 # Copyright 2009 Sun Microsystems, Inc.  All rights reserved.
 # Use is subject to license terms.
 #
+# Copyright (c) 2018, Joyent, Inc.
 
 LIBRARY= pci.a
 VERS= .1
@@ -49,13 +50,15 @@ LDLIBS +=	-lc -ldevice -ldevinfo -lrcm
 
 CERRWARN +=	-_gcc=-Wno-parentheses
 CERRWARN +=	-_gcc=-Wno-char-subscripts
-CERRWARN +=	-_gcc=-Wno-uninitialized
+CERRWARN +=	$(CNOWARN_UNINIT)
+
+# not linted
+SMATCH=off
 
 .KEEP_STATE:
 
 all: $(LIBS)
 
-lint:   lintcheck
 
 # Create target directories
 $(USR_LIB_DIR):

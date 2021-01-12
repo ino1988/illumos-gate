@@ -1,6 +1,7 @@
 /*
  * Copyright 2008 Sun Microsystems, Inc.  All rights reserved.
  * Use is subject to license terms.
+ * Copyright 2015, Joyent, Inc.
  */
 
 /*
@@ -74,7 +75,7 @@ struct cb_ops	ptc_cb_ops = {
 	nodev,			/* dump */
 	ptcread,		/* read */
 	ptcwrite,		/* write */
-	ptcioctl, 		/* ioctl */
+	ptcioctl,		/* ioctl */
 	nodev,			/* devmap */
 	nodev,			/* mmap */
 	nodev,			/* segmap */
@@ -168,7 +169,7 @@ ptc_attach(dev_info_t *devi, ddi_attach_cmd_t cmd)
 	for (pty_num = 0; pty_num < npty; pty_num++) {
 		(void) sprintf(name, "pty%c%c", *pty_bank, *pty_digit);
 		if (ddi_create_minor_node(devi, name, S_IFCHR,
-		    pty_num, DDI_PSEUDO, NULL) == DDI_FAILURE) {
+		    pty_num, DDI_PSEUDO, 0) == DDI_FAILURE) {
 			ddi_remove_minor_node(devi, NULL);
 			return (-1);
 		}
@@ -974,11 +975,8 @@ ptcioctl(dev_t dev, int cmd, intptr_t data, int flag, struct cred *cred,
 
 
 int
-ptcpoll(dev_t dev,
-	short events,
-	int anyyet,
-	short *reventsp,
-	struct pollhead **phpp)
+ptcpoll(dev_t dev, short events, int anyyet, short *reventsp,
+    struct pollhead **phpp)
 {
 	struct pty *pty = &pty_softc[getminor(dev)];
 	pollhead_t *php = &ptcph;
@@ -988,7 +986,10 @@ ptcpoll(dev_t dev,
 #ifdef lint
 	anyyet = anyyet;
 #endif
-	polllock(php, &pty->ptc_lock);
+	if (polllock(php, &pty->ptc_lock) != 0) {
+		*reventsp = POLLNVAL;
+		return (0);
+	}
 
 	ASSERT(MUTEX_HELD(&pty->ptc_lock));
 

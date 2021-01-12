@@ -20,6 +20,7 @@
  */
 
 /*
+ * Copyright 2020 Oxide Computer Company
  * Copyright (c) 2013 Gary Mills
  *
  * Copyright (c) 1988, 2010, Oracle and/or its affiliates. All rights reserved.
@@ -99,6 +100,7 @@
 #include <sys/tty.h>
 #include <sys/types.h>
 #include <sys/utsname.h>
+#include <sys/bootbanner.h>
 
 #include <bsm/adt_event.h>
 #include <bsm/libbsm.h>
@@ -410,17 +412,17 @@ static struct	pidlist {
 
 /*
  * The following structure contains a set of modes for /dev/syscon
- * and should match the default contents of /etc/ioctl.syscon.  It should also
- * be kept in-sync with base_termios in uts/common/io/ttcompat.c.
+ * and should match the default contents of /etc/ioctl.syscon.
  */
 static struct termios	dflt_termios = {
-	BRKINT|ICRNL|IXON|IMAXBEL,			/* iflag */
-	OPOST|ONLCR|TAB3,				/* oflag */
-	CS8|CREAD|B9600,				/* cflag */
-	ISIG|ICANON|ECHO|ECHOE|ECHOK|ECHOCTL|ECHOKE|IEXTEN, /* lflag */
-	CINTR, CQUIT, CERASE, CKILL, CEOF, 0, 0, 0,
-	0, 0, 0, 0, 0, 0, 0, 0,
-	0, 0, 0
+	.c_iflag = BRKINT|ICRNL|IXON|IMAXBEL,
+	.c_oflag = OPOST|ONLCR|TAB3,
+	.c_cflag = CS8|CREAD|B9600,
+	.c_lflag = ISIG|ICANON|ECHO|ECHOE|ECHOK|ECHOCTL|ECHOKE|IEXTEN,
+	.c_cc = { CINTR, CQUIT, CERASE, CKILL, CEOF, 0, 0, 0,
+	    CSTART, CSTOP, CSWTCH, CDSUSP, CRPRNT, CFLUSH, CWERASE, CLNEXT,
+	    CSTATUS, CERASE2, 0
+	}
 };
 
 static struct termios	stored_syscon_termios;
@@ -600,6 +602,7 @@ static int	startd_failure_rate_critical();
 static char	*audit_boot_msg();
 static int	audit_put_record(int, int, char *);
 static void	update_boot_archive(int new_state);
+static void	init_bootbanner_print(const char *, uint_t);
 
 int
 main(int argc, char *argv[])
@@ -669,36 +672,35 @@ main(int argc, char *argv[])
 	st_init();
 
 	if (booting && print_banner) {
-		struct utsname un;
-		char buf[BUFSIZ], *isa;
-		long ret;
-		int bits = 32;
-
 		/*
 		 * We want to print the boot banner as soon as
 		 * possible.  In the global zone, the kernel does it,
 		 * but we do not have that luxury in non-global zones,
 		 * so we will print it here.
 		 */
+#ifdef	LEGACY_BANNER
+		struct utsname un;
+		char buf[BUFSIZ];
+		const char *bits;
+		int r;
+
 		(void) uname(&un);
-		ret = sysinfo(SI_ISALIST, buf, sizeof (buf));
-		if (ret != -1L && ret <= sizeof (buf)) {
-			for (isa = strtok(buf, " "); isa;
-			    isa = strtok(NULL, " ")) {
-				if (strcmp(isa, "sparcv9") == 0 ||
-				    strcmp(isa, "amd64") == 0) {
-					bits = 64;
-					break;
-				}
-			}
+		if ((r = sysinfo(SI_ADDRESS_WIDTH, buf, sizeof (buf))) > 0 &&
+		    r < sizeof (buf)) {
+			bits = buf;
+		} else {
+			bits = "64";
 		}
 
 		console(B_FALSE,
-		    "\n\n%s Release %s Version %s %d-bit\r\n",
+		    "\n\n%s Release %s Version %s %s-bit\r\n",
 		    un.sysname, un.release, un.version, bits);
 		console(B_FALSE,
 		    "Copyright (c) 1983, 2010, Oracle and/or its affiliates."
 		    " All rights reserved.\r\n");
+#else
+		bootbanner_print(init_bootbanner_print, 0);
+#endif
 	}
 
 	/*
@@ -912,6 +914,14 @@ main(int argc, char *argv[])
 	}
 
 	/*NOTREACHED*/
+}
+
+static void
+init_bootbanner_print(const char *line, uint_t num)
+{
+	const char *pfx = (num == 0) ? "\n\n" : "";
+
+	console(B_FALSE, "%s%s\r\n", pfx, line);
 }
 
 static void

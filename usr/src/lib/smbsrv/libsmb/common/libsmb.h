@@ -21,7 +21,8 @@
 
 /*
  * Copyright (c) 2007, 2010, Oracle and/or its affiliates. All rights reserved.
- * Copyright 2011 Nexenta Systems, Inc.  All rights reserved.
+ * Copyright 2019 Nexenta by DDN, Inc. All rights reserved.
+ * Copyright 2020 RackTop Systems, Inc.
  */
 
 #ifndef	_LIBSMB_H
@@ -32,31 +33,31 @@ extern "C" {
 #endif
 
 #include <sys/types.h>
+#include <sys/inttypes.h>
 #include <sys/list.h>
 #include <sys/avl.h>
 #include <arpa/inet.h>
-#include <net/if.h>
-#include <inet/tcp.h>
-#include <uuid/uuid.h>
+#include <net/if.h>	/* LIFNAMSIZ */
 #include <netdb.h>
 #include <stdlib.h>
 #include <libscf.h>
 #include <libshare.h>
-#include <sqlite/sqlite.h>
 #include <uuid/uuid.h>
 #include <synch.h>
+#include <stdarg.h>
+
+#include <smb/nterror.h>
+#include <smb/ntstatus.h>
+#include <smb/wintypes.h>
 
 #include <smbsrv/string.h>
 #include <smbsrv/smb_idmap.h>
 #include <smbsrv/netbios.h>
 #include <smbsrv/smb_share.h>
-#include <smb/nterror.h>
-#include <smb/ntstatus.h>
 #include <smbsrv/smb_door.h>
 #include <smbsrv/alloc.h>
 #include <smbsrv/hash_table.h>
 #include <smbsrv/msgbuf.h>
-#include <smbsrv/wintypes.h>
 #include <smbsrv/smb_xdr.h>
 #include <smbsrv/smbinfo.h>
 #include <smbsrv/ntifs.h>
@@ -131,6 +132,7 @@ typedef enum {
 	SMB_CI_SYNC_ENABLE,
 
 	SMB_CI_SECURITY,
+	SMB_CI_NETBIOS_ENABLE,
 	SMB_CI_NBSCOPE,
 	SMB_CI_SYS_CMNT,
 	SMB_CI_LM_LEVEL,
@@ -140,6 +142,7 @@ typedef enum {
 	SMB_CI_DYNDNS_ENABLE,
 
 	SMB_CI_MACHINE_PASSWD,
+	SMB_CI_MACHINE_UUID,
 	SMB_CI_KPASSWD_SRV,
 	SMB_CI_KPASSWD_DOMAIN,
 	SMB_CI_KPASSWD_SEQNUM,
@@ -151,6 +154,15 @@ typedef enum {
 	SMB_CI_DISPOSITION,
 	SMB_CI_DFS_STDROOT_NUM,
 	SMB_CI_TRAVERSE_MOUNTS,
+	SMB_CI_SMB2_ENABLE_OLD, /* obsolete */
+	SMB_CI_INITIAL_CREDITS,
+	SMB_CI_MAXIMUM_CREDITS,
+	SMB_CI_MAX_PROTOCOL,
+	SMB_CI_ENCRYPT,
+	SMB_CI_MIN_PROTOCOL,
+	SMB_CI_BYPASS_TRAVERSE_CHECKING,
+	SMB_CI_ENCRYPT_CIPHER,
+
 	SMB_CI_MAX
 } smb_cfg_id_t;
 
@@ -171,11 +183,13 @@ extern int smb_smf_set_opaque_property(smb_scfhandle_t *, char *,
 extern int smb_smf_get_opaque_property(smb_scfhandle_t *, char *,
     void *, size_t);
 extern int smb_smf_create_service_pgroup(smb_scfhandle_t *, char *);
+extern int smb_smf_delete_property(smb_scfhandle_t *, char *);
 extern int smb_smf_restart_service(void);
 extern int smb_smf_maintenance_mode(void);
 
 /* ZFS interface */
-int smb_getdataset(const char *, char *, size_t);
+struct libzfs_handle;
+int smb_getdataset(struct libzfs_handle *, const char *, char *, size_t);
 
 /* Configuration management functions  */
 extern int smb_config_get(smb_cfg_id_t, char *, int);
@@ -189,8 +203,11 @@ extern int smb_config_setstr(smb_cfg_id_t, char *);
 extern int smb_config_setnum(smb_cfg_id_t, int64_t);
 extern int smb_config_setbool(smb_cfg_id_t, boolean_t);
 
+extern boolean_t smb_config_get_ads_enable(void);
+extern int smb_config_get_debug(void);
 extern uint8_t smb_config_get_fg_flag(void);
 extern char *smb_config_get_localsid(void);
+extern int smb_config_get_localuuid(uuid_t);
 extern int smb_config_secmode_fromstr(char *);
 extern char *smb_config_secmode_tostr(int);
 extern int smb_config_get_secmode(void);
@@ -200,7 +217,15 @@ extern int smb_config_refresh_idmap(void);
 extern int smb_config_getip(smb_cfg_id_t, smb_inaddr_t *);
 extern void smb_config_get_version(smb_version_t *);
 uint32_t smb_config_get_execinfo(char *, char *, size_t);
+extern void smb_config_get_negtok(uchar_t *, uint32_t *);
 
+extern int smb_config_check_protocol(char *);
+extern uint32_t smb_config_get_max_protocol(void);
+extern uint32_t smb_config_get_min_protocol(void);
+extern void smb_config_upgrade(void);
+extern uint16_t smb31_config_get_encrypt_cipher(void);
+
+extern smb_cfg_val_t smb_config_get_require(smb_cfg_id_t);
 
 extern void smb_load_kconfig(smb_kmod_cfg_t *kcfg);
 extern uint32_t smb_crc_gen(uint8_t *, size_t);
@@ -213,6 +238,7 @@ extern void smb_update_netlogon_seqnum(void);
 #define	SMB_PASSWD_MAXLEN	127
 #define	SMB_USERNAME_MAXLEN	40
 
+/* See also: smb_joininfo_xdr() */
 typedef struct smb_joininfo {
 	char domain_name[MAXHOSTNAMELEN];
 	char domain_username[SMB_USERNAME_MAXLEN + 1];
@@ -220,10 +246,19 @@ typedef struct smb_joininfo {
 	uint32_t mode;
 } smb_joininfo_t;
 
+/* See also: smb_joinres_xdr() */
+typedef struct smb_joinres {
+	uint32_t status;
+	int join_err;
+	char dc_name[MAXHOSTNAMELEN];
+} smb_joinres_t;
+
 /* APIs to communicate with SMB daemon via door calls */
-uint32_t smb_join(smb_joininfo_t *info);
+int smb_join(smb_joininfo_t *, smb_joinres_t *info);
 bool_t smb_joininfo_xdr(XDR *, smb_joininfo_t *);
+bool_t smb_joinres_xdr(XDR *, smb_joinres_t *);
 boolean_t smb_find_ads_server(char *, char *, int);
+void smb_notify_dc_changed(void);
 
 extern void smb_config_getdomaininfo(char *, char *, char *, char *, char *);
 extern void smb_config_setdomaininfo(char *, char *, char *, char *, char *);
@@ -290,6 +325,8 @@ void smb_tracef(const char *fmt, ...);
 
 const char *xlate_nt_status(unsigned int);
 
+void libsmb_redirect_syslog(__FILE_TAG *fp, int priority);
+
 /*
  * Authentication
  */
@@ -299,7 +336,7 @@ const char *xlate_nt_status(unsigned int);
 #define	SMBAUTH_HASH_SZ		16	/* also LM/NTLM/NTLMv2 Hash size */
 #define	SMBAUTH_LM_RESP_SZ	24	/* also NTLM Response size */
 #define	SMBAUTH_LM_PWD_SZ	14	/* LM password size */
-#define	SMBAUTH_V2_CLNT_CHALLENGE_SZ 8	/* both LMv2 and NTLMv2 */
+#define	SMBAUTH_CHAL_SZ		 8	/* both LMv2 and NTLMv2 */
 #define	SMBAUTH_SESSION_KEY_SZ	SMBAUTH_HASH_SZ
 #define	SMBAUTH_HEXHASH_SZ	(SMBAUTH_HASH_SZ * 2)
 
@@ -321,10 +358,10 @@ const char *xlate_nt_status(unsigned int);
  * 0x0004 The name is a W2K Domain name (a DNS name).
  */
 #define	SMBAUTH_NAME_TYPE_LIST_END		0x0000
-#define	SMBAUTH_NAME_TYPE_SERVER_NETBIOS 	0x0001
-#define	SMBAUTH_NAME_TYPE_DOMAIN_NETBIOS 	0x0002
+#define	SMBAUTH_NAME_TYPE_SERVER_NETBIOS	0x0001
+#define	SMBAUTH_NAME_TYPE_DOMAIN_NETBIOS	0x0002
 #define	SMBAUTH_NAME_TYPE_SERVER_DNS		0x0003
-#define	SMBAUTH_NAME_TYPE_DOMAIN_DNS 		0x0004
+#define	SMBAUTH_NAME_TYPE_DOMAIN_DNS		0x0004
 
 /*
  * smb_auth_name_entry_t
@@ -360,7 +397,7 @@ typedef struct smb_auth_data_blob {
 	unsigned char ndb_signature[4];
 	unsigned char ndb_reserved[4];
 	uint64_t ndb_timestamp;
-	unsigned char ndb_clnt_challenge[SMBAUTH_V2_CLNT_CHALLENGE_SZ];
+	unsigned char ndb_clnt_challenge[SMBAUTH_CHAL_SZ];
 	unsigned char ndb_unknown[4];
 	smb_auth_name_entry_t ndb_names[2];
 	unsigned char ndb_unknown2[4];
@@ -424,6 +461,7 @@ typedef struct smb_passwd {
 #define	SMB_PWC_DISABLE	0x01
 #define	SMB_PWC_ENABLE	0x02
 #define	SMB_PWC_NOLM	0x04
+#define	SMB_PWC_DELETE	0x08
 
 #define	SMB_PWE_SUCCESS		0
 #define	SMB_PWE_USER_UNKNOWN	1
@@ -478,10 +516,15 @@ extern int smb_auth_hmac_md5(unsigned char *, int, unsigned char *, int,
 
 extern int smb_auth_DES(unsigned char *, int, unsigned char *, int,
     unsigned char *, int);
+extern int smb_auth_RC4(unsigned char *, int, unsigned char *, int,
+    unsigned char *, int);
 
 extern int smb_auth_md4(unsigned char *, unsigned char *, int);
 extern int smb_auth_lm_hash(const char *, unsigned char *);
 extern int smb_auth_ntlm_hash(const char *, unsigned char *);
+extern void smb_auth_ntlm2_mkchallenge(char *, const char *, const char *);
+extern void smb_auth_ntlm2_kxkey(unsigned char *, const char *, const char *,
+    unsigned char *);
 
 extern int smb_auth_set_info(char *, char *,
     unsigned char *, char *, unsigned char *,
@@ -490,12 +533,10 @@ extern int smb_auth_set_info(char *, char *,
 extern int smb_auth_ntlmv2_hash(unsigned char *,
 	char *, char *, unsigned char *);
 
-extern int smb_auth_gen_session_key(smb_auth_info_t *, unsigned char *);
+boolean_t smb_auth_validate(smb_passwd_t *, char *, char *,
+    uchar_t *, uint_t, uchar_t *, uint_t, uchar_t *, uint_t, uchar_t *);
 
-boolean_t smb_auth_validate_lm(unsigned char *, uint32_t, smb_passwd_t *,
-    unsigned char *, int, char *, char *);
-boolean_t smb_auth_validate_nt(unsigned char *, uint32_t, smb_passwd_t *,
-    unsigned char *, int, char *, char *, uchar_t *);
+int smb_gen_random_passwd(char *passwd, size_t bufsz);
 
 /*
  * SMB authenticated IPC
@@ -506,14 +547,6 @@ extern void smb_ipc_get_passwd(uint8_t *, size_t);
 extern void smb_ipc_init(void);
 extern void smb_ipc_rollback(void);
 extern void smb_ipc_set(char *, uint8_t *);
-
-/*
- * SMB MAC Signing
- */
-
-#define	SMB_MAC_KEY_SZ	(SMBAUTH_SESSION_KEY_SZ + SMBAUTH_CS_MAXLEN)
-#define	SMB_SIG_OFFS	14	/* signature field offset within header */
-#define	SMB_SIG_SIZE	8	/* SMB signature size */
 
 /*
  * Signing flags:
@@ -537,38 +570,6 @@ extern void smb_ipc_set(char *, uint8_t *);
 #define	SMB_SCF_REQUIRED	0x02
 #define	SMB_SCF_STARTED		0x04
 #define	SMB_SCF_KEY_ISSET_THIS_LOGON	0x08
-
-/*
- * smb_sign_ctx
- *
- * SMB signing context.
- *
- *	ssc_seqnum				sequence number
- *	ssc_keylen				mac key length
- *	ssc_mid					multiplex id - reserved
- *	ssc_flags				flags
- *	ssc_mackey				mac key
- *	ssc_sign				mac signature
- *
- */
-typedef struct smb_sign_ctx {
-	unsigned int ssc_seqnum;
-	unsigned short ssc_keylen;
-	unsigned short ssc_mid;
-	unsigned int ssc_flags;
-	unsigned char ssc_mackey[SMB_MAC_KEY_SZ];
-	unsigned char ssc_sign[SMB_SIG_SIZE];
-} smb_sign_ctx_t;
-
-extern int smb_mac_init(smb_sign_ctx_t *sign_ctx, smb_auth_info_t *auth);
-extern int smb_mac_calc(smb_sign_ctx_t *sign_ctx,
-    const unsigned char *buf, size_t buf_len, unsigned char *mac_sign);
-extern int smb_mac_chk(smb_sign_ctx_t *sign_ctx,
-    const unsigned char *buf, size_t buf_len);
-extern int smb_mac_sign(smb_sign_ctx_t *sign_ctx,
-    unsigned char *buf, size_t buf_len);
-extern void smb_mac_inc_seqnum(smb_sign_ctx_t *sign_ctx);
-extern void smb_mac_dec_seqnum(smb_sign_ctx_t *sign_ctx);
 
 /*
  * Each domain is categorized using the enum values below.
@@ -637,6 +638,12 @@ typedef struct smb_trusted_domains {
 #define	SMB_DOMAIN_NO_MEMORY		6
 #define	SMB_DOMAIN_NO_CACHE		7
 
+typedef struct smb_dcinfo {
+	char			dc_name[MAXHOSTNAMELEN];
+	smb_inaddr_t		dc_addr;
+	uint32_t		dc_flags;
+} smb_dcinfo_t;
+
 /*
  * This structure could contain information about
  * the primary domain the name of selected domain controller
@@ -646,7 +653,7 @@ typedef struct smb_trusted_domains {
  * which only contains information about a single domain.
  */
 typedef struct smb_domainex {
-	char			d_dc[MAXHOSTNAMELEN];
+	smb_dcinfo_t		d_dci;
 	smb_domain_t		d_primary;
 	smb_trusted_domains_t	d_trusted;
 } smb_domainex_t;
@@ -667,17 +674,21 @@ void smb_domain_set_dns_info(char *, char *, char *, char *, char *,
     smb_domain_t *);
 void smb_domain_set_trust_info(char *, char *, char *,
     uint32_t, uint32_t, uint32_t, smb_domain_t *);
-void smb_domain_current_dc(char *buf, size_t len);
+void smb_domain_current_dc(smb_dcinfo_t *);
+void smb_domain_bad_dc(void);
 
 typedef struct smb_gsid {
 	smb_sid_t *gs_sid;
 	uint16_t gs_type;
 } smb_gsid_t;
 
+struct sqlite_vm;
+struct sqlite;
+
 typedef struct smb_giter {
-	sqlite_vm	*sgi_vm;
-	sqlite		*sgi_db;
-	uint32_t	sgi_nerr;
+	struct sqlite_vm	*sgi_vm;
+	struct sqlite		*sgi_db;
+	uint32_t		sgi_nerr;
 } smb_giter_t;
 
 typedef struct smb_group {
@@ -715,7 +726,9 @@ boolean_t smb_lgrp_itererror(smb_giter_t *);
 int smb_lgrp_iterate(smb_giter_t *, smb_group_t *);
 
 int smb_lookup_sid(const char *, lsa_account_t *);
+int smb_lookup_lsid(const char *, lsa_account_t *);
 int smb_lookup_name(const char *, sid_type_t, lsa_account_t *);
+int smb_lookup_lname(const char *, sid_type_t, lsa_account_t *);
 
 #define	SMB_LGRP_SUCCESS		0
 #define	SMB_LGRP_INVALID_ARG		1
@@ -862,6 +875,7 @@ typedef struct smb_account {
 	smb_sid_t	*a_sid;
 	smb_sid_t	*a_domsid;
 	uint32_t	a_rid;
+	uint32_t	a_flags;
 } smb_account_t;
 
 uint32_t smb_sam_lookup_name(char *, char *, uint16_t, smb_account_t *);
@@ -986,37 +1000,9 @@ int smb_reparse_svcget(const char *, const char *, char **);
 
 uint32_t smb_get_txid(void);
 
-#define	SMB_LOG_LINE_SZ		256
-
-typedef uint32_t	smb_log_hdl_t;
-
-typedef struct smb_log_item {
-	list_node_t	li_lnd;
-	char		li_msg[SMB_LOG_LINE_SZ];
-} smb_log_item_t;
-
-typedef struct smb_log {
-	smb_log_hdl_t	l_handle;
-	int		l_cnt;
-	int		l_max_cnt;
-	mutex_t		l_mtx;
-	list_t		l_list;
-	char		l_file[MAXPATHLEN];
-} smb_log_t;
-
-typedef struct smb_loglist_item {
-	list_node_t	lli_lnd;
-	smb_log_t	lli_log;
-} smb_loglist_item_t;
-
-typedef struct smb_loglist {
-	mutex_t		ll_mtx;
-	list_t		ll_list;
-} smb_loglist_t;
-
-smb_log_hdl_t smb_log_create(int, char *);
-void smb_log(smb_log_hdl_t, int, const char *, ...);
-void smb_log_dumpall(void);
+void smb_syslog(int, const char *, ...);
+void smb_vsyslog(int, const char *, va_list ap);
+char *smb_syslog_fmt_m(char *, int, const char *, int);
 
 #ifdef	__cplusplus
 }

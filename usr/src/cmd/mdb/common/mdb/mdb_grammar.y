@@ -25,7 +25,9 @@
  * Use is subject to license terms.
  */
 
-#pragma ident	"%Z%%M%	%I%	%E% SMI"
+/*
+ * Copyright (c) 2019, Joyent, Inc.  All rights reserved.
+ */
 
 #include <mdb/mdb_types.h>
 #include <mdb/mdb_debug.h>
@@ -110,6 +112,7 @@ yyexpand(int val)
 %left	MDB_TOK_LSHIFT MDB_TOK_RSHIFT
 %left	'-' '+'
 %left	'*' '%' '#'
+%left	MDB_TOK_MODULUS
 
 %right	MDB_COR_VALUE
 %right	MDB_OBJ_VALUE
@@ -297,8 +300,25 @@ expression:	expression '+' expression { $$ = $1 + $3; }
 			if ($3 == 0UL)
 				yyerror("attempted to divide by zero");
 
+			/*
+			 * Annoyingly, x86 generates a #DE when dividing
+			 * LONG_MIN by -1; check for this case explicitly.
+			 */
+			if ($1 == LONG_MIN && $3 == -1L)
+				yyerror("divide overflow");
+
 			$$ = (intmax_t)$1 / (intmax_t)$3;
 		}
+
+	|	expression MDB_TOK_MODULUS expression {
+
+			if ($3 == 0UL)
+				yyerror("attempted to divide by zero");
+
+			$$ = $1 % $3;
+		}
+
+
 
 	|	expression '&' expression { $$ = $1 & $3; }
 	|	expression '|' expression { $$ = $1 | $3; }

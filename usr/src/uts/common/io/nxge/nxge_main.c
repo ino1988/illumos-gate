@@ -20,6 +20,7 @@
  */
 /*
  * Copyright (c) 2006, 2010, Oracle and/or its affiliates. All rights reserved.
+ * Copyright 2016 OmniTI Computer Consulting, Inc. All rights reserved.
  */
 
 /*
@@ -3525,14 +3526,14 @@ nxge_dma_mem_alloc(p_nxge_t nxgep, dma_method_t method,
 
 			dma_p->dma_handle = NULL;
 			dma_p->acc_handle = NULL;
-			dma_p->alength = NULL;
+			dma_p->alength = 0;
 			dma_p->kaddrp = NULL;
 
 			return (NXGE_ERROR | NXGE_DDI_FAILED);
 		}
 
 		if (dma_p->ncookies != 1 ||
-		    (dma_p->dma_cookie.dmac_laddress == NULL)) {
+		    (dma_p->dma_cookie.dmac_laddress == 0)) {
 			NXGE_ERROR_MSG((nxgep, NXGE_ERR_CTL,
 			    "nxge_dma_mem_alloc:di_dma_addr_bind > 1 "
 			    "cookie or "
@@ -3645,13 +3646,13 @@ nxge_dma_mem_free(p_nxge_dma_common_t dma_p)
 		    dma_p->alength, dma_p->alength));
 
 		contig_mem_free(dma_p->orig_kaddrp, dma_p->orig_alength);
-		dma_p->orig_alength = NULL;
+		dma_p->orig_alength = 0;
 		dma_p->orig_kaddrp = NULL;
 		dma_p->contig_alloc_type = B_FALSE;
 	}
 #endif
 	dma_p->kaddrp = NULL;
-	dma_p->alength = NULL;
+	dma_p->alength = 0;
 }
 
 static void
@@ -3706,11 +3707,11 @@ nxge_dma_free_rx_data_buf(p_nxge_dma_common_t dma_p)
 		kaddr = (uint64_t)dma_p->orig_kaddrp;
 		buf_size = dma_p->orig_alength;
 		nxge_free_buf(CONTIG_MEM_ALLOC, kaddr, buf_size);
-		dma_p->orig_alength = NULL;
+		dma_p->orig_alength = 0;
 		dma_p->orig_kaddrp = NULL;
 		dma_p->contig_alloc_type = B_FALSE;
 		dma_p->kaddrp = NULL;
-		dma_p->alength = NULL;
+		dma_p->alength = 0;
 		return;
 	}
 #endif
@@ -5136,7 +5137,7 @@ nxge_set_priv_prop(p_nxge_t nxgep, const char *pr_name, uint_t pr_valsize,
 		return (err);
 	}
 
-	return (EINVAL);
+	return (ENOTSUP);
 }
 
 static int
@@ -5145,7 +5146,7 @@ nxge_get_priv_prop(p_nxge_t nxgep, const char *pr_name, uint_t pr_valsize,
 {
 	p_nxge_param_t	param_arr = nxgep->param_arr;
 	char		valstr[MAXNAMELEN];
-	int		err = EINVAL;
+	int		err = ENOTSUP;
 	uint_t		strsize;
 
 	NXGE_DEBUG_MSG((nxgep, NXGE_CTL,

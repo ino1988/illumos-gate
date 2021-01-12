@@ -24,7 +24,8 @@
 # Use is subject to license terms.
 #
 # Copyright 2012 DEY Storage Systems, Inc.  All rights reserved.
-# Copyright (c) 2013, Joyent, Inc. All rights reserved.
+# Copyright (c) 2018 Joyent, Inc.
+# Copyright 2020 Oxide Computer Company
 #
 
 @ MSG_NT_PRSTATUS		"[ NT_PRSTATUS ]"
@@ -48,6 +49,9 @@
 @ MSG_NT_ZONENAME		"[ NT_ZONENAME ]"
 @ MSG_NT_FDINFO			"[ NT_FDINFO ]"
 @ MSG_NT_SPYMASTER		"[ NT_SPYMASTER ]"
+@ MSG_NT_SECFLAGS		"[ NT_SECFLAGS ]"
+@ MSG_NT_LWPNAME		"[ NT_LWPNAME ]"
+@ MSG_NT_UPANIC			"[ NT_UPANIC ]"
 
 
 @ MSG_AUXV_AF_SUN_SETUGID		"AF_SUN_SETUGID"
@@ -100,6 +104,9 @@
 @ MSG_AUXV_AT_SUN_BRAND_AUX2		"SUN_BRAND_AUX2"
 @ MSG_AUXV_AT_SUN_BRAND_AUX3		"SUN_BRAND_AUX3"
 @ MSG_AUXV_AT_SUN_HWCAP2		"SUN_HWCAP2"
+@ MSG_AUXV_AT_SUN_COMMPAGE		"SUN_COMMPAGE"
+@ MSG_AUXV_AT_SUN_FPTYPE		"SUN_FPTYPE"
+@ MSG_AUXV_AT_SUN_FPSIZE		"SUN_FPSIZE"
 
 
 @ MSG_CC_CONTENT_STACK		"STACK"
@@ -277,6 +284,14 @@
 @ MSG_PROC_FLAG_SSYS		"SSYS"
 @ MSG_PROC_FLAG_SMSACCT		"SMSACCT"
 
+@ MSG_ASLR		"ASLR"
+@ MSG_FORBIDNULLMAP	"FORBIDNULLMAP"
+@ MSG_NOEXECSTACK	"NOEXECSTACK"
+
+@ MSG_MSG_VALID		"MSG_VALID"
+@ MSG_MSG_ERROR		"MSG_ERROR"
+@ MSG_MSG_TRUNC		"MSG_TRUNC"
+
 @ MSG_PS_NONE			"[ PS_NONE ]"
 @ MSG_PS_QUERY			"[ PS_QUERY ]"
 @ MSG_PS_MYID			"[ PS_MYID ]"
@@ -333,7 +348,7 @@
 @ MSG_REG_AMD64_R12		"[ r12 ]"
 @ MSG_REG_AMD64_R11		"[ r11 ]"
 @ MSG_REG_AMD64_R10		"[ r10 ]"
-@ MSG_REG_AMD64_R9 		"[ r9 ]" 
+@ MSG_REG_AMD64_R9		"[ r9 ]"
 @ MSG_REG_AMD64_R8		"[ r8 ]"
 @ MSG_REG_AMD64_RDI		"[ rdi ]"
 @ MSG_REG_AMD64_RSI		"[ rsi ]"
@@ -415,7 +430,7 @@
 @ MSG_SS_DISABLE		"SS_DISABLE"
 
 
-@ MSG_SI_NOINFO			"[ SI_DTRACE ]"
+@ MSG_SI_NOINFO			"[ SI_NOINFO ]"
 @ MSG_SI_DTRACE			"[ SI_DTRACE ]"
 @ MSG_SI_RCTL			"[ SI_RCTL ]"
 @ MSG_SI_USER			"[ SI_USER ]"
@@ -700,7 +715,7 @@
 @ MSG_SYS_FCNTL				"[ fcntl ]"			# 62
 @ MSG_SYS_FCNTL_ALT			"fcntl"
 @ MSG_SYS_ULIMIT			"[ ulimit ]"			# 63
-@ MSG_SYS_ULIMIT_ALT			"ulimit"	
+@ MSG_SYS_ULIMIT_ALT			"ulimit"
 @ MSG_SYS_RENAMEAT			"[ renameat ]"			# 64
 @ MSG_SYS_RENAMEAT_ALT			"renameat"
 @ MSG_SYS_UNLINKAT			"[ unlinkat ]"			# 65
@@ -724,7 +739,7 @@
 @ MSG_SYS_RCTLSYS			"[ rctlsys ]"			# 74
 @ MSG_SYS_RCTLSYS_ALT			"rctlsys	"
 @ MSG_SYS_SIDSYS			"[ sidsys ]"			# 75
-@ MSG_SYS_SIDSYS_ALT			"sidsys"	
+@ MSG_SYS_SIDSYS_ALT			"sidsys"
 @ MSG_SYS_76				"76"				# 76 (u)
 @ MSG_SYS_LWP_PARK			"[ lwp_park ]"			# 77
 @ MSG_SYS_LWP_PARK_ALT			"lwp_park"
@@ -815,10 +830,14 @@
 @ MSG_SYS_READV_ALT			"readv"
 @ MSG_SYS_WRITEV			"[ writev ]"			# 122
 @ MSG_SYS_WRITEV_ALT			"writev"
-@ MSG_SYS_123				"123"				# 123(u)
-@ MSG_SYS_124				"124"				# 124(u)
-@ MSG_SYS_125				"125"				# 125(u)
-@ MSG_SYS_126				"126"				# 126(u)
+@ MSG_SYS_PREADV			"[ preadv ]"			# 123
+@ MSG_SYS_PREADV_ALT			"preadv"
+@ MSG_SYS_PWRITEV			"[ pwritev ]"			# 124
+@ MSG_SYS_PWRITEV_ALT			"pwritev"
+@ MSG_SYS_UPANIC			"[ upanic ]"			# 125
+@ MSG_SYS_UPANIC_ALT			"upanic"
+@ MSG_SYS_GETRANDOM			"[ getrandom ]"			# 126
+@ MSG_SYS_GETRANDOM_ALT			"getrandom"
 @ MSG_SYS_MMAPOBJ			"[ mmapobj ]"			# 127
 @ MSG_SYS_MMAPOBJ_ALT			"mmapobj"
 @ MSG_SYS_SETRLIMIT			"[ setrlimit ]"			# 128

@@ -20,6 +20,7 @@
  */
 /*
  * Copyright (c) 1998, 2010, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2016 by Delphix. All rights reserved.
  */
 
 /*
@@ -540,8 +541,8 @@ static struct toktable {
 	{"nat_rport",		TOK_NATRPORT,		NEXTNUM},
 	{"encap",		TOK_ENCAP,		NEXTNUMSTR},
 
-	{"outbound",		TOK_FLAG_OUTBOUND,	NULL},
-	{"inbound",		TOK_FLAG_INBOUND,	NULL},
+	{"outbound",		TOK_FLAG_OUTBOUND,	0},
+	{"inbound",		TOK_FLAG_INBOUND,	0},
 
 	{"reserved_bits",	TOK_RESERVED,		NEXTNUM},
 	{"replay_value",	TOK_REPLAY_VALUE,	NEXTNUM},
@@ -1727,7 +1728,7 @@ doaddup(int cmd, int satype, char *argv[], char *ebuf)
 			switch (token) {
 			case TOK_SPI:
 				/*
-				 * If some cretin types in "spi 0" then he/she
+				 * If they type in "spi 0" then they
 				 * can type in another SPI.
 				 */
 				if (assoc->sadb_sa_spi != 0) {

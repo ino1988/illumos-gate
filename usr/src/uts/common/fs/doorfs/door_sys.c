@@ -21,6 +21,7 @@
 
 /*
  * Copyright (c) 2006, 2010, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2016 by Delphix. All rights reserved.
  */
 
 /*
@@ -80,7 +81,7 @@ size_t	door_max_arg = 16 * 1024;
  * door_upcall.  Need to guard against a process returning huge amounts
  * of data and getting the kernel stuck in kmem_alloc.
  */
-size_t	door_max_upcall_reply = 1024 * 1024;
+size_t	door_max_upcall_reply = 4 * 1024 * 1024;
 
 /*
  * Maximum number of descriptors allowed to be passed in a single
@@ -1496,7 +1497,7 @@ out:
 		mutex_enter(&door_knob);
 		DOOR_T_RELEASE(ct);
 
-		/* let the client know we have processed his message */
+		/* let the client know we have processed its message */
 		ct->d_args_done = 1;
 
 		if (error) {
@@ -2724,7 +2725,7 @@ door_translate_out(void)
  */
 static int
 door_results(kthread_t *caller, caddr_t data_ptr, size_t data_size,
-		door_desc_t *desc_ptr, uint_t desc_num)
+    door_desc_t *desc_ptr, uint_t desc_num)
 {
 	door_client_t	*ct = DOOR_CLIENT(caller->t_door);
 	door_upcall_t	*dup = ct->d_upcall;
@@ -3020,9 +3021,9 @@ door_copy(struct as *as, caddr_t src, caddr_t dest, uint_t len)
 		pfn_t	pfnum;
 
 		/* MMU mapping is already locked down */
-		AS_LOCK_ENTER(as, &as->a_lock, RW_READER);
+		AS_LOCK_ENTER(as, RW_READER);
 		pfnum = hat_getpfnum(as->a_hat, rdest);
-		AS_LOCK_EXIT(as, &as->a_lock);
+		AS_LOCK_EXIT(as);
 
 		/*
 		 * TODO: The pfn step should not be necessary - need

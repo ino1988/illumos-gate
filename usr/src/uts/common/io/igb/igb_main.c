@@ -26,6 +26,8 @@
 /*
  * Copyright (c) 2008, 2010, Oracle and/or its affiliates. All rights reserved.
  * Copyright 2013, Nexenta Systems, Inc. All rights reserved.
+ * Copyright 2016 Joyent, Inc.
+ * Copyright 2020 Oxide Computer Company
  */
 
 #include "igb_sw.h"
@@ -122,6 +124,13 @@ static int igb_fm_error_cb(dev_info_t *, ddi_fm_error_t *,
 static void igb_fm_init(igb_t *);
 static void igb_fm_fini(igb_t *);
 static void igb_release_multicast(igb_t *);
+static int igb_ufm_fill_image(ddi_ufm_handle_t *, void *arg, uint_t,
+    ddi_ufm_image_t *);
+static int igb_ufm_fill_slot(ddi_ufm_handle_t *, void *, uint_t, uint_t,
+    ddi_ufm_slot_t *);
+static int igb_ufm_getcaps(ddi_ufm_handle_t *, void *, ddi_ufm_cap_t *);
+static int igb_ufm_readimg(ddi_ufm_handle_t *, void *, uint_t, uint_t,
+    uint64_t, uint64_t, void *, uint64_t *);
 
 char *igb_priv_props[] = {
 	"_eee_support",
@@ -359,6 +368,13 @@ static adapter_info_t igb_i354_cap = {
 	0xfff00000		/* mask for RXDCTL register */
 };
 
+static ddi_ufm_ops_t igb_ufm_ops = {
+	.ddi_ufm_op_fill_image = igb_ufm_fill_image,
+	.ddi_ufm_op_fill_slot = igb_ufm_fill_slot,
+	.ddi_ufm_op_getcaps = igb_ufm_getcaps,
+	.ddi_ufm_op_readimg = igb_ufm_readimg
+};
+
 /*
  * Module Initialization Functions
  */
@@ -471,7 +487,7 @@ igb_attach(dev_info_t *devinfo, ddi_attach_cmd_t cmd)
 	 * Map PCI config space registers
 	 */
 	if (pci_config_setup(devinfo, &osdep->cfg_handle) != DDI_SUCCESS) {
-		igb_error(igb, "Failed to map PCI configurations");
+		igb_log(igb, IGB_LOG_ERROR, "Failed to map PCI configurations");
 		goto attach_fail;
 	}
 	igb->attach_progress |= ATTACH_PROGRESS_PCI_CONFIG;
@@ -480,7 +496,7 @@ igb_attach(dev_info_t *devinfo, ddi_attach_cmd_t cmd)
 	 * Identify the chipset family
 	 */
 	if (igb_identify_hardware(igb) != IGB_SUCCESS) {
-		igb_error(igb, "Failed to identify hardware");
+		igb_log(igb, IGB_LOG_ERROR, "Failed to identify hardware");
 		goto attach_fail;
 	}
 
@@ -488,7 +504,7 @@ igb_attach(dev_info_t *devinfo, ddi_attach_cmd_t cmd)
 	 * Map device registers
 	 */
 	if (igb_regs_map(igb) != IGB_SUCCESS) {
-		igb_error(igb, "Failed to map device registers");
+		igb_log(igb, IGB_LOG_ERROR, "Failed to map device registers");
 		goto attach_fail;
 	}
 	igb->attach_progress |= ATTACH_PROGRESS_REGS_MAP;
@@ -503,7 +519,7 @@ igb_attach(dev_info_t *devinfo, ddi_attach_cmd_t cmd)
 	 * Allocate interrupts
 	 */
 	if (igb_alloc_intrs(igb) != IGB_SUCCESS) {
-		igb_error(igb, "Failed to allocate interrupts");
+		igb_log(igb, IGB_LOG_ERROR, "Failed to allocate interrupts");
 		goto attach_fail;
 	}
 	igb->attach_progress |= ATTACH_PROGRESS_ALLOC_INTR;
@@ -515,7 +531,8 @@ igb_attach(dev_info_t *devinfo, ddi_attach_cmd_t cmd)
 	 * interrupts are allocated.
 	 */
 	if (igb_alloc_rings(igb) != IGB_SUCCESS) {
-		igb_error(igb, "Failed to allocate rx/tx rings or groups");
+		igb_log(igb, IGB_LOG_ERROR,
+		    "Failed to allocate rx/tx rings or groups");
 		goto attach_fail;
 	}
 	igb->attach_progress |= ATTACH_PROGRESS_ALLOC_RINGS;
@@ -524,7 +541,7 @@ igb_attach(dev_info_t *devinfo, ddi_attach_cmd_t cmd)
 	 * Add interrupt handlers
 	 */
 	if (igb_add_intr_handlers(igb) != IGB_SUCCESS) {
-		igb_error(igb, "Failed to add interrupt handlers");
+		igb_log(igb, IGB_LOG_ERROR, "Failed to add interrupt handlers");
 		goto attach_fail;
 	}
 	igb->attach_progress |= ATTACH_PROGRESS_ADD_INTR;
@@ -533,7 +550,8 @@ igb_attach(dev_info_t *devinfo, ddi_attach_cmd_t cmd)
 	 * Initialize driver parameters
 	 */
 	if (igb_init_driver_settings(igb) != IGB_SUCCESS) {
-		igb_error(igb, "Failed to initialize driver settings");
+		igb_log(igb, IGB_LOG_ERROR,
+		    "Failed to initialize driver settings");
 		goto attach_fail;
 	}
 
@@ -555,16 +573,22 @@ igb_attach(dev_info_t *devinfo, ddi_attach_cmd_t cmd)
 	 * Initialize the adapter
 	 */
 	if (igb_init(igb) != IGB_SUCCESS) {
-		igb_error(igb, "Failed to initialize adapter");
+		igb_log(igb, IGB_LOG_ERROR, "Failed to initialize adapter");
 		goto attach_fail;
 	}
 	igb->attach_progress |= ATTACH_PROGRESS_INIT_ADAPTER;
 
 	/*
+	 * Initialize sensors. This swallows any errors to ensure that access to
+	 * the network is still available.
+	 */
+	igb_init_sensors(igb);
+
+	/*
 	 * Initialize statistics
 	 */
 	if (igb_init_stats(igb) != IGB_SUCCESS) {
-		igb_error(igb, "Failed to initialize statistics");
+		igb_log(igb, IGB_LOG_ERROR, "Failed to initialize statistics");
 		goto attach_fail;
 	}
 	igb->attach_progress |= ATTACH_PROGRESS_STATS;
@@ -573,7 +597,7 @@ igb_attach(dev_info_t *devinfo, ddi_attach_cmd_t cmd)
 	 * Register the driver to the MAC
 	 */
 	if (igb_register_mac(igb) != IGB_SUCCESS) {
-		igb_error(igb, "Failed to register MAC");
+		igb_log(igb, IGB_LOG_ERROR, "Failed to register MAC");
 		goto attach_fail;
 	}
 	igb->attach_progress |= ATTACH_PROGRESS_MAC;
@@ -583,12 +607,27 @@ igb_attach(dev_info_t *devinfo, ddi_attach_cmd_t cmd)
 	 * initialized, enable interrupts.
 	 */
 	if (igb_enable_intrs(igb) != IGB_SUCCESS) {
-		igb_error(igb, "Failed to enable DDI interrupts");
+		igb_log(igb, IGB_LOG_ERROR, "Failed to enable DDI interrupts");
 		goto attach_fail;
 	}
 	igb->attach_progress |= ATTACH_PROGRESS_ENABLE_INTR;
 
-	igb_log(igb, "%s", igb_version);
+	/*
+	 * Only enable UFM support on function zero of the device as the images
+	 * are always device wide.
+	 */
+	if (igb->hw.bus.func == 0) {
+		if (ddi_ufm_init(devinfo, DDI_UFM_CURRENT_VERSION, &igb_ufm_ops,
+		    &igb->igb_ufmh, igb) != 0) {
+			igb_log(igb, IGB_LOG_ERROR, "Failed to enable DDI UFM "
+			    "support");
+			goto attach_fail;
+		}
+		igb->attach_progress |= ATTACH_PROGRESS_UFM;
+		ddi_ufm_update(igb->igb_ufmh);
+	}
+
+	igb_log(igb, IGB_LOG_INFO, "%s", igb_version);
 	atomic_or_32(&igb->igb_state, IGB_INITIALIZED);
 
 	/*
@@ -596,9 +635,9 @@ igb_attach(dev_info_t *devinfo, ddi_attach_cmd_t cmd)
 	 * default.
 	 */
 	if (igb->hw.mac.type == e1000_i350)
-		(void) e1000_set_eee_i350(&igb->hw);
+		(void) e1000_set_eee_i350(&igb->hw, B_FALSE, B_FALSE);
 	else if (igb->hw.mac.type == e1000_i354)
-		(void) e1000_set_eee_i354(&igb->hw);
+		(void) e1000_set_eee_i354(&igb->hw, B_FALSE, B_FALSE);
 
 	return (DDI_SUCCESS);
 
@@ -653,7 +692,7 @@ igb_detach(dev_info_t *devinfo, ddi_detach_cmd_t cmd)
 	 * Unregister MAC. If failed, we have to fail the detach
 	 */
 	if (mac_unregister(igb->mac_hdl) != 0) {
-		igb_error(igb, "Failed to unregister MAC");
+		igb_log(igb, IGB_LOG_ERROR, "Failed to unregister MAC");
 		return (DDI_FAILURE);
 	}
 	igb->attach_progress &= ~ATTACH_PROGRESS_MAC;
@@ -740,6 +779,10 @@ igb_quiesce(dev_info_t *devinfo)
 static void
 igb_unconfigure(dev_info_t *devinfo, igb_t *igb)
 {
+	if (igb->attach_progress & ATTACH_PROGRESS_UFM) {
+		ddi_ufm_fini(igb->igb_ufmh);
+	}
+
 	/*
 	 * Disable interrupt
 	 */
@@ -792,6 +835,11 @@ igb_unconfigure(dev_info_t *devinfo, igb_t *igb)
 		if (igb_check_acc_handle(igb->osdep.reg_handle) != DDI_FM_OK)
 			ddi_fm_service_impact(igb->dip, DDI_SERVICE_UNAFFECTED);
 	}
+
+	/*
+	 * Clean up sensors
+	 */
+	igb_fini_sensors(igb);
 
 	/*
 	 * Free multicast table
@@ -1153,7 +1201,8 @@ igb_resume(dev_info_t *devinfo)
 	 */
 	if (igb->attach_progress & ATTACH_PROGRESS_ENABLE_INTR) {
 		if (igb_enable_intrs(igb) != IGB_SUCCESS) {
-			igb_error(igb, "Failed to enable DDI interrupts");
+			igb_log(igb, IGB_LOG_ERROR,
+			    "Failed to enable DDI interrupts");
 			mutex_exit(&igb->gen_lock);
 			return (DDI_FAILURE);
 		}
@@ -1260,7 +1309,7 @@ igb_init_mac_address(igb_t *igb)
 	 * before we try to get MAC address from NVM.
 	 */
 	if (e1000_reset_hw(hw) != E1000_SUCCESS) {
-		igb_error(igb, "Adapter reset failed.");
+		igb_log(igb, IGB_LOG_ERROR, "Adapter reset failed.");
 		goto init_mac_fail;
 	}
 
@@ -1276,7 +1325,7 @@ igb_init_mac_address(igb_t *igb)
 		 * if it fails a second time its a real issue.
 		 */
 		if (e1000_validate_nvm_checksum(hw) < 0) {
-			igb_error(igb,
+			igb_log(igb, IGB_LOG_ERROR,
 			    "Invalid NVM checksum. Please contact "
 			    "the vendor to update the NVM.");
 			goto init_mac_fail;
@@ -1288,13 +1337,13 @@ igb_init_mac_address(igb_t *igb)
 	 * This function should handle SPARC case correctly.
 	 */
 	if (!igb_find_mac_address(igb)) {
-		igb_error(igb, "Failed to get the mac address");
+		igb_log(igb, IGB_LOG_ERROR, "Failed to get the mac address");
 		goto init_mac_fail;
 	}
 
 	/* Validate mac address */
 	if (!is_valid_mac_addr(hw->mac.addr)) {
-		igb_error(igb, "Invalid mac address");
+		igb_log(igb, IGB_LOG_ERROR, "Invalid mac address");
 		goto init_mac_fail;
 	}
 
@@ -1328,7 +1377,7 @@ igb_init_adapter(igb_t *igb)
 	 * default settings come from.
 	 */
 	if (igb_init_mac_address(igb) != IGB_SUCCESS) {
-		igb_error(igb, "Failed to initialize MAC address");
+		igb_log(igb, IGB_LOG_ERROR, "Failed to initialize MAC address");
 		goto init_adapter_fail;
 	}
 
@@ -1418,7 +1467,7 @@ igb_init_adapter(igb_t *igb)
 	 * into effect.
 	 */
 	if (e1000_reset_hw(hw) != E1000_SUCCESS) {
-		igb_error(igb, "Second reset failed");
+		igb_log(igb, IGB_LOG_ERROR, "Second reset failed");
 		goto init_adapter_fail;
 	}
 
@@ -1445,7 +1494,7 @@ igb_init_adapter(igb_t *igb)
 	 * Configure/Initialize hardware
 	 */
 	if (e1000_init_hw(hw) != E1000_SUCCESS) {
-		igb_error(igb, "Failed to initialize hardware");
+		igb_log(igb, IGB_LOG_ERROR, "Failed to initialize hardware");
 		goto init_adapter_fail;
 	}
 
@@ -1814,14 +1863,15 @@ igb_start(igb_t *igb, boolean_t alloc_buffer)
 
 	if (alloc_buffer) {
 		if (igb_alloc_rx_data(igb) != IGB_SUCCESS) {
-			igb_error(igb,
+			igb_log(igb, IGB_LOG_ERROR,
 			    "Failed to allocate software receive rings");
 			return (IGB_FAILURE);
 		}
 
 		/* Allocate buffers for all the rx/tx rings */
 		if (igb_alloc_dma(igb) != IGB_SUCCESS) {
-			igb_error(igb, "Failed to allocate DMA resource");
+			igb_log(igb, IGB_LOG_ERROR,
+			    "Failed to allocate DMA resource");
 			return (IGB_FAILURE);
 		}
 
@@ -1864,9 +1914,9 @@ igb_start(igb_t *igb, boolean_t alloc_buffer)
 		goto start_failure;
 
 	if (igb->hw.mac.type == e1000_i350)
-		(void) e1000_set_eee_i350(&igb->hw);
+		(void) e1000_set_eee_i350(&igb->hw, B_FALSE, B_FALSE);
 	else if (igb->hw.mac.type == e1000_i354)
-		(void) e1000_set_eee_i354(&igb->hw);
+		(void) e1000_set_eee_i354(&igb->hw, B_FALSE, B_FALSE);
 
 	for (i = igb->num_tx_rings - 1; i >= 0; i--)
 		mutex_exit(&igb->tx_rings[i].tx_lock);
@@ -2108,7 +2158,7 @@ igb_setup_rx_ring(igb_rx_ring_t *rx_ring)
 		rbd = &rx_data->rbd_ring[i];
 
 		rbd->read.pkt_addr = rcb->rx_buf.dma_address;
-		rbd->read.hdr_addr = NULL;
+		rbd->read.hdr_addr = 0;
 	}
 
 	/*
@@ -2615,7 +2665,8 @@ igb_init_unicst(igb_t *igb)
 	} else {
 		/* Re-configure the RAR registers */
 		for (slot = 0; slot < igb->unicst_total; slot++) {
-			e1000_rar_set_vmdq(hw, igb->unicst_addr[slot].mac.addr,
+			(void) e1000_rar_set_vmdq(hw,
+			    igb->unicst_addr[slot].mac.addr,
 			    slot, igb->vmdq_mode,
 			    igb->unicst_addr[slot].mac.group_index);
 		}
@@ -2660,7 +2711,7 @@ igb_unicst_set(igb_t *igb, const uint8_t *mac_addr,
 	/*
 	 * Set the unicast address to the RAR register
 	 */
-	e1000_rar_set(hw, (uint8_t *)mac_addr, slot);
+	(void) e1000_rar_set(hw, (uint8_t *)mac_addr, slot);
 
 	if (igb_check_acc_handle(igb->osdep.reg_handle) != DDI_FM_OK) {
 		ddi_fm_service_impact(igb->dip, DDI_SERVICE_DEGRADED);
@@ -2683,12 +2734,13 @@ igb_multicst_add(igb_t *igb, const uint8_t *multiaddr)
 	ASSERT(mutex_owned(&igb->gen_lock));
 
 	if ((multiaddr[0] & 01) == 0) {
-		igb_error(igb, "Illegal multicast address");
+		igb_log(igb, IGB_LOG_ERROR, "Illegal multicast address");
 		return (EINVAL);
 	}
 
 	if (igb->mcast_count >= igb->mcast_max_num) {
-		igb_error(igb, "Adapter requested more than %d mcast addresses",
+		igb_log(igb, IGB_LOG_ERROR,
+		    "Adapter requested more than %d mcast addresses",
 		    igb->mcast_max_num);
 		return (ENOENT);
 	}
@@ -2701,7 +2753,7 @@ igb_multicst_add(igb_t *igb, const uint8_t *multiaddr)
 
 		new_table = kmem_alloc(new_len, KM_NOSLEEP);
 		if (new_table == NULL) {
-			igb_error(igb,
+			igb_log(igb, IGB_LOG_ERROR,
 			    "Not enough memory to alloc mcast table");
 			return (ENOMEM);
 		}
@@ -2930,7 +2982,7 @@ igb_get_conf(igb_t *igb)
 		igb->num_rx_rings = 1;
 
 		if (igb->num_rx_groups > 1) {
-			igb_error(igb,
+			igb_log(igb, IGB_LOG_ERROR,
 			    "Invalid rx groups number. Please enable multiple "
 			    "rings first");
 			igb->num_rx_groups = 1;
@@ -2945,7 +2997,7 @@ igb_get_conf(igb_t *igb)
 			break;
 	}
 	if (i != igb->num_rx_groups) {
-		igb_error(igb,
+		igb_log(igb, IGB_LOG_ERROR,
 		    "Invalid rx groups number. Downgrade the rx group "
 		    "number to %d.", i);
 		igb->num_rx_groups = i;
@@ -3125,8 +3177,8 @@ igb_setup_link(igb_t *igb, boolean_t setup_hw)
 	}
 
 	if (invalid) {
-		igb_notice(igb, "Invalid link settings. Setup link to "
-		    "autonegotiation with full link capabilities.");
+		igb_log(igb, IGB_LOG_INFO, "Invalid link settings. Setup "
+		    "link to autonegotiation with full link capabilities.");
 		mac->autoneg = B_TRUE;
 		phy->autoneg_advertised = ADVERTISE_1000_FULL |
 		    ADVERTISE_100_FULL | ADVERTISE_100_HALF |
@@ -3886,8 +3938,8 @@ igb_set_loopback_mode(igb_t *igb, uint32_t mode)
 			(void) igb_reset(igb);
 			hw->phy.autoneg_wait_to_complete = B_FALSE;
 
-			IGB_DEBUGLOG_0(igb, "Set external loopback failed, "
-			    "reset to loopback none.");
+			igb_log(igb, IGB_LOG_INFO, "Set external loopback "
+			    "failed, reset to loopback none.");
 
 			return (B_FALSE);
 		}
@@ -4343,11 +4395,12 @@ igb_alloc_intrs(igb_t *igb)
 	rc = ddi_intr_get_supported_types(devinfo, &intr_types);
 
 	if (rc != DDI_SUCCESS) {
-		igb_log(igb,
+		igb_log(igb, IGB_LOG_ERROR,
 		    "Get supported interrupt types failed: %d", rc);
 		return (IGB_FAILURE);
 	}
-	IGB_DEBUGLOG_1(igb, "Supported interrupt types: %x", intr_types);
+	igb_log(igb, IGB_LOG_INFO, "Supported interrupt types: %x",
+	    intr_types);
 
 	igb->intr_type = 0;
 
@@ -4359,14 +4412,14 @@ igb_alloc_intrs(igb_t *igb)
 		if (rc == IGB_SUCCESS)
 			return (IGB_SUCCESS);
 
-		igb_log(igb,
+		igb_log(igb, IGB_LOG_INFO,
 		    "Allocate MSI-X failed, trying MSI interrupts...");
 	}
 
 	/* MSI-X not used, force rings to 1 */
 	igb->num_rx_rings = 1;
 	igb->num_tx_rings = 1;
-	igb_log(igb,
+	igb_log(igb, IGB_LOG_INFO,
 	    "MSI-X not used, force rx and tx queue number to 1");
 
 	/* Install MSI interrupts */
@@ -4377,7 +4430,7 @@ igb_alloc_intrs(igb_t *igb)
 		if (rc == IGB_SUCCESS)
 			return (IGB_SUCCESS);
 
-		igb_log(igb,
+		igb_log(igb, IGB_LOG_INFO,
 		    "Allocate MSI failed, trying Legacy interrupts...");
 	}
 
@@ -4388,7 +4441,7 @@ igb_alloc_intrs(igb_t *igb)
 		if (rc == IGB_SUCCESS)
 			return (IGB_SUCCESS);
 
-		igb_log(igb,
+		igb_log(igb, IGB_LOG_INFO,
 		    "Allocate Legacy interrupts failed");
 	}
 
@@ -4418,13 +4471,13 @@ igb_alloc_intr_handles(igb_t *igb, int intr_type)
 	case DDI_INTR_TYPE_FIXED:
 		request = 1;	/* Request 1 legacy interrupt handle */
 		minimum = 1;
-		IGB_DEBUGLOG_0(igb, "interrupt type: legacy");
+		igb_log(igb, IGB_LOG_INFO, "interrupt type: legacy");
 		break;
 
 	case DDI_INTR_TYPE_MSI:
 		request = 1;	/* Request 1 MSI interrupt handle */
 		minimum = 1;
-		IGB_DEBUGLOG_0(igb, "interrupt type: MSI");
+		igb_log(igb, IGB_LOG_INFO, "interrupt type: MSI");
 		break;
 
 	case DDI_INTR_TYPE_MSIX:
@@ -4436,16 +4489,17 @@ igb_alloc_intr_handles(igb_t *igb, int intr_type)
 		request = igb->num_rx_rings + igb->num_tx_rings;
 		orig = request;
 		minimum = 2;
-		IGB_DEBUGLOG_0(igb, "interrupt type: MSI-X");
+		igb_log(igb, IGB_LOG_INFO, "interrupt type: MSI-X");
 		break;
 
 	default:
-		igb_log(igb,
+		igb_log(igb, IGB_LOG_INFO,
 		    "invalid call to igb_alloc_intr_handles(): %d\n",
 		    intr_type);
 		return (IGB_FAILURE);
 	}
-	IGB_DEBUGLOG_2(igb, "interrupt handles requested: %d  minimum: %d",
+	igb_log(igb, IGB_LOG_INFO,
+	    "interrupt handles requested: %d  minimum: %d",
 	    request, minimum);
 
 	/*
@@ -4453,27 +4507,28 @@ igb_alloc_intr_handles(igb_t *igb, int intr_type)
 	 */
 	rc = ddi_intr_get_nintrs(devinfo, intr_type, &count);
 	if ((rc != DDI_SUCCESS) || (count < minimum)) {
-		igb_log(igb,
+		igb_log(igb, IGB_LOG_INFO,
 		    "Get supported interrupt number failed. "
 		    "Return: %d, count: %d", rc, count);
 		return (IGB_FAILURE);
 	}
-	IGB_DEBUGLOG_1(igb, "interrupts supported: %d", count);
+	igb_log(igb, IGB_LOG_INFO, "interrupts supported: %d", count);
 
 	/*
 	 * Get number of available interrupts
 	 */
 	rc = ddi_intr_get_navail(devinfo, intr_type, &avail);
 	if ((rc != DDI_SUCCESS) || (avail < minimum)) {
-		igb_log(igb,
+		igb_log(igb, IGB_LOG_INFO,
 		    "Get available interrupt number failed. "
 		    "Return: %d, available: %d", rc, avail);
 		return (IGB_FAILURE);
 	}
-	IGB_DEBUGLOG_1(igb, "interrupts available: %d", avail);
+	igb_log(igb, IGB_LOG_INFO, "interrupts available: %d", avail);
 
 	if (avail < request) {
-		igb_log(igb, "Request %d handles, %d available",
+		igb_log(igb, IGB_LOG_INFO,
+		    "Request %d handles, %d available",
 		    request, avail);
 		request = avail;
 	}
@@ -4490,17 +4545,18 @@ igb_alloc_intr_handles(igb_t *igb, int intr_type)
 	rc = ddi_intr_alloc(devinfo, igb->htable, intr_type, 0,
 	    request, &actual, DDI_INTR_ALLOC_NORMAL);
 	if (rc != DDI_SUCCESS) {
-		igb_log(igb, "Allocate interrupts failed. "
+		igb_log(igb, IGB_LOG_INFO, "Allocate interrupts failed. "
 		    "return: %d, request: %d, actual: %d",
 		    rc, request, actual);
 		goto alloc_handle_fail;
 	}
-	IGB_DEBUGLOG_1(igb, "interrupts actually allocated: %d", actual);
+	igb_log(igb, IGB_LOG_INFO, "interrupts actually allocated: %d", actual);
 
 	igb->intr_cnt = actual;
 
 	if (actual < minimum) {
-		igb_log(igb, "Insufficient interrupt handles allocated: %d",
+		igb_log(igb, IGB_LOG_INFO,
+		    "Insufficient interrupt handles allocated: %d",
 		    actual);
 		goto alloc_handle_fail;
 	}
@@ -4511,16 +4567,16 @@ igb_alloc_intr_handles(igb_t *igb, int intr_type)
 	if ((intr_type == DDI_INTR_TYPE_MSIX) && (orig > actual)) {
 		diff = orig - actual;
 		if (diff < igb->num_tx_rings) {
-			igb_log(igb,
+			igb_log(igb, IGB_LOG_INFO,
 			    "MSI-X vectors force Tx queue number to %d",
 			    igb->num_tx_rings - diff);
 			igb->num_tx_rings -= diff;
 		} else {
-			igb_log(igb,
+			igb_log(igb, IGB_LOG_INFO,
 			    "MSI-X vectors force Tx queue number to 1");
 			igb->num_tx_rings = 1;
 
-			igb_log(igb,
+			igb_log(igb, IGB_LOG_INFO,
 			    "MSI-X vectors force Rx queue number to %d",
 			    actual - 1);
 			igb->num_rx_rings = actual - 1;
@@ -4532,14 +4588,14 @@ igb_alloc_intr_handles(igb_t *igb, int intr_type)
 	 */
 	rc = ddi_intr_get_pri(igb->htable[0], &igb->intr_pri);
 	if (rc != DDI_SUCCESS) {
-		igb_log(igb,
+		igb_log(igb, IGB_LOG_INFO,
 		    "Get interrupt priority failed: %d", rc);
 		goto alloc_handle_fail;
 	}
 
 	rc = ddi_intr_get_cap(igb->htable[0], &igb->intr_cap);
 	if (rc != DDI_SUCCESS) {
-		igb_log(igb,
+		igb_log(igb, IGB_LOG_INFO,
 		    "Get interrupt cap failed: %d", rc);
 		goto alloc_handle_fail;
 	}
@@ -4580,7 +4636,7 @@ igb_add_intr_handlers(igb_t *igb)
 		    (void *)igb, NULL);
 
 		if (rc != DDI_SUCCESS) {
-			igb_log(igb,
+			igb_log(igb, IGB_LOG_INFO,
 			    "Add tx/other interrupt handler failed: %d", rc);
 			return (IGB_FAILURE);
 		}
@@ -4596,7 +4652,7 @@ igb_add_intr_handlers(igb_t *igb)
 			    (void *)rx_ring, NULL);
 
 			if (rc != DDI_SUCCESS) {
-				igb_log(igb,
+				igb_log(igb, IGB_LOG_INFO,
 				    "Add rx interrupt handler failed. "
 				    "return: %d, rx ring: %d", rc, i);
 				for (vector--; vector >= 0; vector--) {
@@ -4620,7 +4676,7 @@ igb_add_intr_handlers(igb_t *igb)
 			    (void *)tx_ring, NULL);
 
 			if (rc != DDI_SUCCESS) {
-				igb_log(igb,
+				igb_log(igb, IGB_LOG_INFO,
 				    "Add tx interrupt handler failed. "
 				    "return: %d, tx ring: %d", rc, i);
 				for (vector--; vector >= 0; vector--) {
@@ -4644,7 +4700,7 @@ igb_add_intr_handlers(igb_t *igb)
 		    (void *)igb, NULL);
 
 		if (rc != DDI_SUCCESS) {
-			igb_log(igb,
+			igb_log(igb, IGB_LOG_INFO,
 			    "Add MSI interrupt handler failed: %d", rc);
 			return (IGB_FAILURE);
 		}
@@ -4662,7 +4718,7 @@ igb_add_intr_handlers(igb_t *igb)
 		    (void *)igb, NULL);
 
 		if (rc != DDI_SUCCESS) {
-			igb_log(igb,
+			igb_log(igb, IGB_LOG_INFO,
 			    "Add legacy interrupt handler failed: %d", rc);
 			return (IGB_FAILURE);
 		}
@@ -4939,7 +4995,7 @@ igb_rem_intr_handlers(igb_t *igb)
 	for (i = 0; i < igb->intr_cnt; i++) {
 		rc = ddi_intr_remove_handler(igb->htable[i]);
 		if (rc != DDI_SUCCESS) {
-			IGB_DEBUGLOG_1(igb,
+			igb_log(igb, IGB_LOG_INFO,
 			    "Remove intr handler failed: %d", rc);
 		}
 	}
@@ -4957,7 +5013,7 @@ igb_rem_intrs(igb_t *igb)
 	for (i = 0; i < igb->intr_cnt; i++) {
 		rc = ddi_intr_free(igb->htable[i]);
 		if (rc != DDI_SUCCESS) {
-			IGB_DEBUGLOG_1(igb,
+			igb_log(igb, IGB_LOG_INFO,
 			    "Free intr failed: %d", rc);
 		}
 	}
@@ -4980,7 +5036,7 @@ igb_enable_intrs(igb_t *igb)
 		/* Call ddi_intr_block_enable() for MSI */
 		rc = ddi_intr_block_enable(igb->htable, igb->intr_cnt);
 		if (rc != DDI_SUCCESS) {
-			igb_log(igb,
+			igb_log(igb, IGB_LOG_ERROR,
 			    "Enable block intr failed: %d", rc);
 			return (IGB_FAILURE);
 		}
@@ -4989,7 +5045,7 @@ igb_enable_intrs(igb_t *igb)
 		for (i = 0; i < igb->intr_cnt; i++) {
 			rc = ddi_intr_enable(igb->htable[i]);
 			if (rc != DDI_SUCCESS) {
-				igb_log(igb,
+				igb_log(igb, IGB_LOG_ERROR,
 				    "Enable intr failed: %d", rc);
 				return (IGB_FAILURE);
 			}
@@ -5012,7 +5068,7 @@ igb_disable_intrs(igb_t *igb)
 	if (igb->intr_cap & DDI_INTR_FLAG_BLOCK) {
 		rc = ddi_intr_block_disable(igb->htable, igb->intr_cnt);
 		if (rc != DDI_SUCCESS) {
-			igb_log(igb,
+			igb_log(igb, IGB_LOG_ERROR,
 			    "Disable block intr failed: %d", rc);
 			return (IGB_FAILURE);
 		}
@@ -5020,7 +5076,7 @@ igb_disable_intrs(igb_t *igb)
 		for (i = 0; i < igb->intr_cnt; i++) {
 			rc = ddi_intr_disable(igb->htable[i]);
 			if (rc != DDI_SUCCESS) {
-				igb_log(igb,
+				igb_log(igb, IGB_LOG_ERROR,
 				    "Disable intr failed: %d", rc);
 				return (IGB_FAILURE);
 			}
@@ -5354,4 +5410,143 @@ igb_fm_ereport(igb_t *igb, char *detail)
 		ddi_fm_ereport_post(igb->dip, buf, ena, DDI_NOSLEEP,
 		    FM_VERSION, DATA_TYPE_UINT8, FM_EREPORT_VERS0, NULL);
 	}
+}
+
+static int
+igb_ufm_fill_image(ddi_ufm_handle_t *ufmh, void *arg, uint_t imgno,
+    ddi_ufm_image_t *imgp)
+{
+	igb_t *igb = arg;
+	const char *type;
+
+	if (imgno != 0) {
+		return (EINVAL);
+	}
+
+	ddi_ufm_image_set_desc(imgp, "NVM");
+	ddi_ufm_image_set_nslots(imgp, 1);
+	switch (igb->hw.nvm.type) {
+	case e1000_nvm_eeprom_spi:
+		type = "SPI EEPROM";
+		break;
+	case e1000_nvm_eeprom_microwire:
+		type = "Microwire EEPROM";
+		break;
+	case e1000_nvm_invm:
+		type = "Internal NVM";
+		break;
+	case e1000_nvm_flash_hw:
+	case e1000_nvm_flash_sw:
+		type = "Flash";
+		break;
+	default:
+		type = NULL;
+		break;
+	}
+
+	if (type != NULL) {
+		nvlist_t *nvl;
+
+		nvl = fnvlist_alloc();
+		fnvlist_add_string(nvl, "image-type", type);
+		/*
+		 * The DDI takes ownership of the nvlist_t at this point.
+		 */
+		ddi_ufm_image_set_misc(imgp, nvl);
+	}
+
+	return (0);
+}
+
+static int
+igb_ufm_fill_slot(ddi_ufm_handle_t *ufmh, void *arg, uint_t imgno,
+    uint_t slotno, ddi_ufm_slot_t *slotp)
+{
+	igb_t *igb = arg;
+	char *ver;
+
+	if (imgno != 0 || slotno != 0) {
+		return (EINVAL);
+	}
+
+	if (ddi_prop_lookup_string(DDI_DEV_T_ANY, igb->dip, DDI_PROP_DONTPASS,
+	    "nvm-version", &ver) == 0) {
+		ddi_ufm_slot_set_version(slotp, ver);
+		ddi_prop_free(ver);
+	} else {
+		ddi_ufm_slot_set_version(slotp, "unknown");
+	}
+
+	ddi_ufm_slot_set_attrs(slotp, DDI_UFM_ATTR_ACTIVE |
+	    DDI_UFM_ATTR_READABLE | DDI_UFM_ATTR_WRITEABLE);
+	ddi_ufm_slot_set_imgsize(slotp, igb->hw.nvm.word_size * 2);
+	return (0);
+}
+
+static int
+igb_ufm_getcaps(ddi_ufm_handle_t *ufmh, void *arg, ddi_ufm_cap_t *caps)
+{
+	igb_t *igb = arg;
+
+	*caps = 0;
+	if (igb->hw.nvm.type != e1000_nvm_none &&
+	    igb->hw.nvm.type != e1000_nvm_unknown) {
+		*caps |= DDI_UFM_CAP_REPORT;
+
+		if (igb->hw.nvm.ops.read != NULL) {
+			*caps |= DDI_UFM_CAP_READIMG;
+		}
+	}
+
+	return (0);
+}
+
+static int
+igb_ufm_readimg(ddi_ufm_handle_t *ufmh, void *arg, uint_t imgno, uint_t slotno,
+    uint64_t len, uint64_t offset, void *buf, uint64_t *nread)
+{
+	igb_t *igb = arg;
+	uint16_t wordoff, nwords, *buf16 = buf;
+	uint32_t imgsize = igb->hw.nvm.word_size * 2;
+	int ret;
+
+	if (imgno != 0 || slotno != 0) {
+		return (EINVAL);
+	}
+
+	if (len > imgsize || offset > imgsize || len + offset > imgsize) {
+		return (EINVAL);
+	}
+
+	if (igb->hw.nvm.ops.read == NULL) {
+		return (ENOTSUP);
+	}
+
+	/*
+	 * Hardware provides us a means to read 16-bit words. For the time
+	 * being, restrict offset and length to be 2 byte aligned. We should
+	 * probably reduce this restriction. We could probably just use a bounce
+	 * buffer.
+	 */
+	if ((offset % 2) != 0 || (len % 2) != 0) {
+		return (EINVAL);
+	}
+
+	wordoff = offset >> 1;
+	nwords = len >> 1;
+	mutex_enter(&igb->gen_lock);
+	ret = e1000_read_nvm(&igb->hw, wordoff, nwords, buf16);
+	mutex_exit(&igb->gen_lock);
+
+	if (ret == 0) {
+		uint16_t i;
+		*nread = len;
+		for (i = 0; i < nwords; i++) {
+			buf16[i] = LE_16(buf16[i]);
+		}
+	} else {
+		ret = EIO;
+	}
+
+	return (ret);
 }

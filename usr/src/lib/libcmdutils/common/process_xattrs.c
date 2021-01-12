@@ -23,6 +23,7 @@
  * Copyright 2008 Sun Microsystems, Inc.  All rights reserved.
  * Use is subject to license terms.
  * Copyright 2012 Milan Jurik. All rights reserved.
+ * Copyright (c) 2019, Joyent, Inc.
  */
 
 #include "libcmdutils.h"
@@ -70,7 +71,7 @@ get_attrdirs(int indfd, int outdfd, char *attrfile, int *sfd, int *tfd)
 
 /*
  * mv_xattrs - Copies the content of the extended attribute files. Then
- * 	moves the extended system attributes from the input attribute files
+ *	moves the extended system attributes from the input attribute files
  *      to the target attribute files. Moves the extended system attributes
  *	from source to the target file. This function returns 0 on success
  *	and nonzero on error.
@@ -162,8 +163,7 @@ mv_xattrs(char *cmd, char *infile, char *outfile, int sattr, int silent)
 			 * Gets non default extended system attributes from
 			 * source to copy to target.
 			 */
-			if (dp->d_name != NULL)
-				res = sysattr_list(cmd, sattrfd, dp->d_name);
+			res = sysattr_list(cmd, sattrfd, dp->d_name);
 
 			if (res != NULL &&
 			    get_attrdirs(indfd, outdfd, dp->d_name, &asfd,
@@ -218,8 +218,7 @@ mv_xattrs(char *cmd, char *infile, char *outfile, int sattr, int silent)
 			    "failed to move system attribute");
 	}
 error:
-	if (res != NULL)
-		nvlist_free(res);
+	nvlist_free(res);
 	if (silent == 0 && etext != NULL) {
 		if (!sattr)
 			(void) fprintf(stderr, dgettext(TEXT_DOMAIN,
@@ -246,8 +245,7 @@ done:
 		(void) close(indfd);
 	if (outdfd != -1)
 		(void) close(outdfd);
-	if (response != NULL)
-		nvlist_free(response);
+	nvlist_free(response);
 	if (etext != NULL)
 		return (1);
 	else
@@ -319,7 +317,6 @@ sysattr_list(char *cmd, int fd, char *fname)
 				return (response);
 		}
 	}
-	if (response != NULL)
-		nvlist_free(response);
+	nvlist_free(response);
 	return (NULL);
 }

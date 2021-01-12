@@ -26,7 +26,8 @@
 #
 
 #
-# Copyright (c) 2013 by Delphix. All rights reserved.
+# Copyright (c) 2013, 2016 by Delphix. All rights reserved.
+# Copyright 2019 Joyent, Inc.
 #
 
 . $STF_SUITE/tests/functional/clean_mirror/default.cfg
@@ -34,8 +35,8 @@
 
 verify_runnable "global"
 
-$DF -F zfs -h | $GREP "$TESTFS " >/dev/null
-[[ $? == 0 ]] && log_must $ZFS umount -f $TESTDIR
+df -F zfs -h | grep "$TESTFS " >/dev/null
+[[ $? == 0 ]] && log_must zfs umount -f $TESTDIR
 destroy_pool $TESTPOOL
 
 # recreate and destroy a zpool over the disks to restore the partitions to
@@ -44,6 +45,10 @@ if [[ -n $SINGLE_DISK ]]; then
 	log_must cleanup_devices $MIRROR_PRIMARY
 else
 	log_must cleanup_devices $MIRROR_PRIMARY $MIRROR_SECONDARY
+fi
+
+if [[ -d $TESTDIR ]]; then
+	log_must rmdir $TESTDIR
 fi
 
 log_pass

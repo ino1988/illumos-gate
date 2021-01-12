@@ -25,6 +25,10 @@
 
 /*
  * Copyright 2013 Nexenta Systems, Inc. All rights reserved.
+ * Copyright 2015 Toomas Soome <tsoome@me.com>
+ * Copyright 2015 Gary Mills
+ * Copyright (c) 2016 Martin Matuska. All rights reserved.
+ * Copyright 2018 OmniOS Community Edition (OmniOSce) Association.
  */
 
 #include <assert.h>
@@ -42,6 +46,7 @@
 
 #include <libbe.h>
 #include <libbe_priv.h>
+#include <libzfsbootenv.h>
 
 /*
  * Callback data used for zfs_iter calls.
@@ -51,7 +56,11 @@ typedef struct list_callback_data {
 	char *be_name;
 	be_node_list_t *be_nodes_head;
 	be_node_list_t *be_nodes;
+	be_dataset_list_t **be_datasets_tail;
+	be_snapshot_list_t **be_snapshots_tail;
 	char current_be[MAXPATHLEN];
+	struct be_defaults be_defaults;
+	uint64_t flags;
 } list_callback_data_t;
 
 /*
@@ -66,11 +75,18 @@ static int be_get_ds_data(zfs_handle_t *, char *, be_dataset_list_t *,
     be_node_list_t *);
 static int be_get_ss_data(zfs_handle_t *, char *, be_snapshot_list_t *,
     be_node_list_t *);
-static void be_sort_list(be_node_list_t **);
-static int be_qsort_compare_BEs(const void *, const void *);
+static int be_sort_list(be_node_list_t **,
+    int (*)(const void *, const void *));
+static int be_qsort_compare_BEs_name(const void *, const void *);
+static int be_qsort_compare_BEs_name_rev(const void *, const void *);
+static int be_qsort_compare_BEs_date(const void *, const void *);
+static int be_qsort_compare_BEs_date_rev(const void *, const void *);
+static int be_qsort_compare_BEs_space(const void *, const void *);
+static int be_qsort_compare_BEs_space_rev(const void *, const void *);
 static int be_qsort_compare_snapshots(const void *x, const void *y);
 static int be_qsort_compare_datasets(const void *x, const void *y);
 static void *be_list_alloc(int *, size_t);
+static int be_allocate_callback_nodes(list_callback_data_t *);
 
 /*
  * Private data.
@@ -106,7 +122,7 @@ static boolean_t zone_be = B_FALSE;
  *		Public
  */
 int
-be_list(char *be_name, be_node_list_t **be_nodes)
+be_list(char *be_name, be_node_list_t **be_nodes, uint64_t flags)
 {
 	int	ret = BE_SUCCESS;
 
@@ -123,11 +139,62 @@ be_list(char *be_name, be_node_list_t **be_nodes)
 		}
 	}
 
-	ret = _be_list(be_name, be_nodes);
+	ret = _be_list(be_name, be_nodes, flags);
 
 	be_zfs_fini();
 
 	return (ret);
+}
+
+/*
+ * Function:	be_sort
+ * Description:	Sort BE node list
+ * Parameters:
+ *		pointer to address of list head
+ *		sort order type
+ * Return:
+ *              BE_SUCCESS - Success
+ *              be_errno_t - Failure
+ * Side effect:
+ *		node list sorted by name
+ * Scope:
+ *		Public
+ */
+int
+be_sort(be_node_list_t **be_nodes, int order)
+{
+	int (*compar)(const void *, const void *) = be_qsort_compare_BEs_date;
+
+	if (be_nodes == NULL)
+		return (BE_ERR_INVAL);
+
+	switch (order) {
+	case BE_SORT_UNSPECIFIED:
+	case BE_SORT_DATE:
+		compar = be_qsort_compare_BEs_date;
+		break;
+	case BE_SORT_DATE_REV:
+		compar = be_qsort_compare_BEs_date_rev;
+		break;
+	case BE_SORT_NAME:
+		compar = be_qsort_compare_BEs_name;
+		break;
+	case BE_SORT_NAME_REV:
+		compar = be_qsort_compare_BEs_name_rev;
+		break;
+	case BE_SORT_SPACE:
+		compar = be_qsort_compare_BEs_space;
+		break;
+	case BE_SORT_SPACE_REV:
+		compar = be_qsort_compare_BEs_space_rev;
+		break;
+	default:
+		be_print_err(gettext("be_sort: invalid sort order %d\n"),
+		    order);
+		return (BE_ERR_INVAL);
+	}
+
+	return (be_sort_list(be_nodes, compar));
 }
 
 /* ******************************************************************** */
@@ -152,19 +219,20 @@ be_list(char *be_name, be_node_list_t **be_nodes)
  *		Semi-private (library wide use only)
  */
 int
-_be_list(char *be_name, be_node_list_t **be_nodes)
+_be_list(char *be_name, be_node_list_t **be_nodes, uint64_t flags)
 {
 	list_callback_data_t cb = { 0 };
 	be_transaction_data_t bt = { 0 };
 	int ret = BE_SUCCESS;
+	int sret;
 	zpool_handle_t *zphp;
 	char *rpool = NULL;
-	struct be_defaults be_defaults;
 
 	if (be_nodes == NULL)
 		return (BE_ERR_INVAL);
 
-	be_get_defaults(&be_defaults);
+	be_get_defaults(&cb.be_defaults);
+	cb.flags = flags;
 
 	if (be_find_current_be(&bt) != BE_SUCCESS) {
 		/*
@@ -186,7 +254,7 @@ _be_list(char *be_name, be_node_list_t **be_nodes)
 	if (be_name != NULL)
 		cb.be_name = strdup(be_name);
 
-	if (be_defaults.be_deflt_rpool_container && rpool != NULL) {
+	if (cb.be_defaults.be_deflt_rpool_container && rpool != NULL) {
 		if ((zphp = zpool_open(g_zfs, rpool)) == NULL) {
 			be_print_err(gettext("be_list: failed to "
 			    "open rpool (%s): %s\n"), rpool,
@@ -220,9 +288,9 @@ _be_list(char *be_name, be_node_list_t **be_nodes)
 
 	free(cb.be_name);
 
-	be_sort_list(be_nodes);
+	sret = be_sort(be_nodes, BE_SORT_DATE);
 
-	return (ret);
+	return ((ret == BE_SUCCESS) ? sret : ret);
 }
 
 /*
@@ -293,11 +361,9 @@ be_free_list(be_node_list_t *be_nodes)
  *		Semi-private (library wide use only)
  */
 int
-be_get_zone_be_list(
 /* LINTED */
-	char *zone_be_name,
-	char *zone_be_container_ds,
-	be_node_list_t **zbe_nodes)
+be_get_zone_be_list(char *zone_be_name, char *zone_be_container_ds,
+    be_node_list_t **zbe_nodes)
 {
 	zfs_handle_t *zhp = NULL;
 	list_callback_data_t cb = { 0 };
@@ -324,16 +390,14 @@ be_get_zone_be_list(
 
 	(void) strcpy(be_container_ds, zone_be_container_ds);
 
-	if (cb.be_nodes_head == NULL) {
-		if ((cb.be_nodes_head = be_list_alloc(&ret,
-		    sizeof (be_node_list_t))) == NULL) {
-			ZFS_CLOSE(zhp);
-			goto cleanup;
-		}
-		cb.be_nodes = cb.be_nodes_head;
+	if ((ret = be_allocate_callback_nodes(&cb)) != BE_SUCCESS) {
+		ZFS_CLOSE(zhp);
+		goto cleanup;
 	}
-	if (ret == 0)
+	if (ret == 0) {
+		be_get_defaults(&cb.be_defaults);
 		ret = zfs_iter_filesystems(zhp, be_add_children_callback, &cb);
+	}
 	ZFS_CLOSE(zhp);
 
 	*zbe_nodes = cb.be_nodes_head;
@@ -429,14 +493,10 @@ be_get_list_callback(zpool_handle_t *zlp, void *data)
 	 * within the pool
 	 */
 	if (cb->be_name != NULL) {
-		if (cb->be_nodes_head == NULL) {
-			if ((cb->be_nodes_head = be_list_alloc(&ret,
-			    sizeof (be_node_list_t))) == NULL) {
-				ZFS_CLOSE(zhp);
-				zpool_close(zlp);
-				return (ret);
-			}
-			cb->be_nodes = cb->be_nodes_head;
+		if ((ret = be_allocate_callback_nodes(cb)) != BE_SUCCESS) {
+			ZFS_CLOSE(zhp);
+			zpool_close(zlp);
+			return (ret);
 		}
 
 		if ((ret = be_get_node_data(zhp, cb->be_nodes, cb->be_name,
@@ -445,7 +505,9 @@ be_get_list_callback(zpool_handle_t *zlp, void *data)
 			zpool_close(zlp);
 			return (ret);
 		}
-		ret = zfs_iter_snapshots(zhp, be_add_children_callback, cb);
+		if (cb->flags & BE_LIST_SNAPSHOTS)
+			ret = zfs_iter_snapshots(zhp, B_FALSE,
+			    be_add_children_callback, cb);
 	}
 
 	if (ret == 0)
@@ -454,6 +516,38 @@ be_get_list_callback(zpool_handle_t *zlp, void *data)
 
 	zpool_close(zlp);
 	return (ret);
+}
+
+/*
+ * Function:	be_allocate_callback_nodes
+ * Description:	Function to create the be_nodes list in the callback data
+ *		structure, and set up tail pointers to the dataset and
+ *		snapshot lists.
+ * Parameters:
+ *		data - pointer to the callback data.
+ * Returns:
+ *		0 - Success
+ *		be_errno_t - Failure
+ * Scope:
+ *		Private
+ */
+static int
+be_allocate_callback_nodes(list_callback_data_t *cb)
+{
+	int ret = BE_SUCCESS;
+
+	if (cb->be_nodes_head != NULL)
+		return (BE_SUCCESS);
+
+	if ((cb->be_nodes_head = be_list_alloc(&ret, sizeof (be_node_list_t)))
+	    == NULL)
+		return (ret);
+
+	cb->be_nodes = cb->be_nodes_head;
+	cb->be_snapshots_tail = &cb->be_nodes->be_node_snapshots;
+	cb->be_datasets_tail = &cb->be_nodes->be_node_datasets;
+
+	return (BE_SUCCESS);
 }
 
 /*
@@ -478,9 +572,6 @@ be_add_children_callback(zfs_handle_t *zhp, void *data)
 	list_callback_data_t	*cb = (list_callback_data_t *)data;
 	char			*str = NULL, *ds_path = NULL;
 	int			ret = 0;
-	struct be_defaults be_defaults;
-
-	be_get_defaults(&be_defaults);
 
 	ds_path = str = strdup(zfs_get_name(zhp));
 
@@ -488,60 +579,38 @@ be_add_children_callback(zfs_handle_t *zhp, void *data)
 	 * get past the end of the container dataset plus the trailing "/"
 	 */
 	str = str + (strlen(be_container_ds) + 1);
-	if (be_defaults.be_deflt_rpool_container) {
+	if (cb->be_defaults.be_deflt_rpool_container) {
 		/* just skip if invalid */
 		if (!be_valid_be_name(str))
 			return (BE_SUCCESS);
 	}
 
-	if (cb->be_nodes_head == NULL) {
-		if ((cb->be_nodes_head = be_list_alloc(&ret,
-		    sizeof (be_node_list_t))) == NULL) {
-			ZFS_CLOSE(zhp);
-			return (ret);
-		}
-		cb->be_nodes = cb->be_nodes_head;
+	if (cb->be_nodes_head == NULL &&
+	    (ret = be_allocate_callback_nodes(cb)) != BE_SUCCESS) {
+		ZFS_CLOSE(zhp);
+		return (ret);
 	}
 
 	if (zfs_get_type(zhp) == ZFS_TYPE_SNAPSHOT && !zone_be) {
-		be_snapshot_list_t *snapshots = NULL;
-		if (cb->be_nodes->be_node_snapshots == NULL) {
-			if ((cb->be_nodes->be_node_snapshots =
-			    be_list_alloc(&ret, sizeof (be_snapshot_list_t)))
-			    == NULL || ret != BE_SUCCESS) {
-				ZFS_CLOSE(zhp);
-				return (ret);
-			}
-			cb->be_nodes->be_node_snapshots->be_next_snapshot =
-			    NULL;
-			snapshots = cb->be_nodes->be_node_snapshots;
-		} else {
-			for (snapshots = cb->be_nodes->be_node_snapshots;
-			    snapshots != NULL;
-			    snapshots = snapshots->be_next_snapshot) {
-				if (snapshots->be_next_snapshot != NULL)
-					continue;
-				/*
-				 * We're at the end of the list add the
-				 * new snapshot.
-				 */
-				if ((snapshots->be_next_snapshot =
-				    be_list_alloc(&ret,
-				    sizeof (be_snapshot_list_t))) == NULL ||
-				    ret != BE_SUCCESS) {
-					ZFS_CLOSE(zhp);
-					return (ret);
-				}
-				snapshots = snapshots->be_next_snapshot;
-				snapshots->be_next_snapshot = NULL;
-				break;
-			}
-		}
-		if ((ret = be_get_ss_data(zhp, str, snapshots,
-		    cb->be_nodes)) != BE_SUCCESS) {
+		be_snapshot_list_t *snapshot;
+
+		if ((snapshot = be_list_alloc(&ret,
+		    sizeof (be_snapshot_list_t))) == NULL ||
+		    ret != BE_SUCCESS) {
 			ZFS_CLOSE(zhp);
 			return (ret);
 		}
+
+		if ((ret = be_get_ss_data(zhp, str, snapshot,
+		    cb->be_nodes)) != BE_SUCCESS) {
+			free(snapshot);
+			ZFS_CLOSE(zhp);
+			return (ret);
+		}
+
+		snapshot->be_next_snapshot = NULL;
+		*cb->be_snapshots_tail = snapshot;
+		cb->be_snapshots_tail = &snapshot->be_next_snapshot;
 	} else if (strchr(str, '/') == NULL) {
 		if (cb->be_nodes->be_node_name != NULL) {
 			if ((cb->be_nodes->be_next_node =
@@ -571,46 +640,30 @@ be_add_children_callback(zfs_handle_t *zhp, void *data)
 			return (ret);
 		}
 	} else if (strchr(str, '/') != NULL && !zone_be) {
-		be_dataset_list_t *datasets = NULL;
-		if (cb->be_nodes->be_node_datasets == NULL) {
-			if ((cb->be_nodes->be_node_datasets =
-			    be_list_alloc(&ret, sizeof (be_dataset_list_t)))
-			    == NULL || ret != BE_SUCCESS) {
-				ZFS_CLOSE(zhp);
-				return (ret);
-			}
-			cb->be_nodes->be_node_datasets->be_next_dataset = NULL;
-			datasets = cb->be_nodes->be_node_datasets;
-		} else {
-			for (datasets = cb->be_nodes->be_node_datasets;
-			    datasets != NULL;
-			    datasets = datasets->be_next_dataset) {
-				if (datasets->be_next_dataset != NULL)
-					continue;
-				/*
-				 * We're at the end of the list add
-				 * the new dataset.
-				 */
-				if ((datasets->be_next_dataset =
-				    be_list_alloc(&ret,
-				    sizeof (be_dataset_list_t)))
-				    == NULL || ret != BE_SUCCESS) {
-					ZFS_CLOSE(zhp);
-					return (ret);
-				}
-				datasets = datasets->be_next_dataset;
-				datasets->be_next_dataset = NULL;
-				break;
-			}
-		}
+		be_dataset_list_t *dataset;
 
-		if ((ret = be_get_ds_data(zhp, str,
-		    datasets, cb->be_nodes)) != BE_SUCCESS) {
+		if ((dataset = be_list_alloc(&ret,
+		    sizeof (be_dataset_list_t))) == NULL ||
+		    ret != BE_SUCCESS) {
 			ZFS_CLOSE(zhp);
 			return (ret);
 		}
+
+		if ((ret = be_get_ds_data(zhp, str,
+		    dataset, cb->be_nodes)) != BE_SUCCESS) {
+			free(dataset);
+			ZFS_CLOSE(zhp);
+			return (ret);
+		}
+
+		dataset->be_next_dataset = NULL;
+		*cb->be_datasets_tail = dataset;
+		cb->be_datasets_tail = &dataset->be_next_dataset;
 	}
-	ret = zfs_iter_children(zhp, be_add_children_callback, cb);
+	if (cb->flags & BE_LIST_SNAPSHOTS)
+		ret = zfs_iter_children(zhp, be_add_children_callback, cb);
+	else
+		ret = zfs_iter_filesystems(zhp, be_add_children_callback, cb);
 	if (ret != 0) {
 		be_print_err(gettext("be_add_children_callback: "
 		    "encountered error: %s\n"),
@@ -626,34 +679,44 @@ be_add_children_callback(zfs_handle_t *zhp, void *data)
  * Description:	Sort BE node list
  * Parameters:
  *		pointer to address of list head
- * Returns:
- *		nothing
+ *		compare function
+ * Return:
+ *              BE_SUCCESS - Success
+ *              be_errno_t - Failure
  * Side effect:
  *		node list sorted by name
  * Scope:
  *		Private
  */
-static void
-be_sort_list(be_node_list_t **pstart)
+static int
+be_sort_list(be_node_list_t **pstart, int (*compar)(const void *, const void *))
 {
+	int ret = BE_SUCCESS;
 	size_t ibe, nbe;
 	be_node_list_t *p = NULL;
 	be_node_list_t **ptrlist = NULL;
+	be_node_list_t **ptrtmp;
 
-	if (pstart == NULL)
-		return;
+	if (pstart == NULL) /* Nothing to sort */
+		return (BE_SUCCESS);
 	/* build array of linked list BE struct pointers */
 	for (p = *pstart, nbe = 0; p != NULL; nbe++, p = p->be_next_node) {
-		ptrlist = realloc(ptrlist,
+		ptrtmp = realloc(ptrlist,
 		    sizeof (be_node_list_t *) * (nbe + 2));
+		if (ptrtmp == NULL) { /* out of memory */
+			be_print_err(gettext("be_sort_list: memory "
+			    "allocation failed\n"));
+			ret = BE_ERR_NOMEM;
+			goto free;
+		}
+		ptrlist = ptrtmp;
 		ptrlist[nbe] = p;
 	}
-	if (nbe == 0)
-		return;
+	if (nbe == 0) /* Nothing to sort */
+		return (BE_SUCCESS);
 	/* in-place list quicksort using qsort(3C) */
 	if (nbe > 1)	/* no sort if less than 2 BEs */
-		qsort(ptrlist, nbe, sizeof (be_node_list_t *),
-		    be_qsort_compare_BEs);
+		qsort(ptrlist, nbe, sizeof (be_node_list_t *), compar);
 
 	ptrlist[nbe] = NULL; /* add linked list terminator */
 	*pstart = ptrlist[0]; /* set new linked list header */
@@ -670,8 +733,10 @@ be_sort_list(be_node_list_t **pstart)
 			    malloc(sizeof (be_snapshot_list_t *) * (nmax + 1));
 			be_snapshot_list_t *p;
 
-			if (slist == NULL)
+			if (slist == NULL) {
+				ret = BE_ERR_NOMEM;
 				continue;
+			}
 			/* build array of linked list snapshot struct ptrs */
 			for (ns = 0, p = ptrlist[ibe]->be_node_snapshots;
 			    ns < nmax && p != NULL;
@@ -698,8 +763,10 @@ end_snapshot:
 			    malloc(sizeof (be_dataset_list_t *) * (nmax + 1));
 			be_dataset_list_t *p;
 
-			if (slist == NULL)
+			if (slist == NULL) {
+				ret = BE_ERR_NOMEM;
 				continue;
+			}
 			/* build array of linked list dataset struct ptrs */
 			for (ns = 0, p = ptrlist[ibe]->be_node_datasets;
 			    ns < nmax && p != NULL;
@@ -722,11 +789,40 @@ end_dataset:
 	}
 free:
 	free(ptrlist);
+	return (ret);
 }
 
 /*
- * Function:	be_qsort_compare_BEs
- * Description:	lexical compare of BE names for qsort(3C)
+ * Function:	be_qsort_compare_BEs_date
+ * Description:	compare BE creation times for qsort(3C)
+ *		will sort BE list from oldest to most recent
+ * Parameters:
+ *		x,y - BEs with names to compare
+ * Returns:
+ *		positive if x>y, negative if y>x, 0 if equal
+ * Scope:
+ *		Private
+ */
+static int
+be_qsort_compare_BEs_date(const void *x, const void *y)
+{
+	be_node_list_t *p = *(be_node_list_t **)x;
+	be_node_list_t *q = *(be_node_list_t **)y;
+
+	assert(p != NULL);
+	assert(q != NULL);
+
+	if (p->be_node_creation > q->be_node_creation)
+		return (1);
+	if (p->be_node_creation < q->be_node_creation)
+		return (-1);
+	return (0);
+}
+
+/*
+ * Function:	be_qsort_compare_BEs_date_rev
+ * Description:	compare BE creation times for qsort(3C)
+ *		will sort BE list from recent to oldest
  * Parameters:
  *		x,y - BEs with names to compare
  * Returns:
@@ -735,16 +831,93 @@ free:
  *		Private
  */
 static int
-be_qsort_compare_BEs(const void *x, const void *y)
+be_qsort_compare_BEs_date_rev(const void *x, const void *y)
+{
+	return (be_qsort_compare_BEs_date(y, x));
+}
+
+/*
+ * Function:	be_qsort_compare_BEs_name
+ * Description:	lexical compare of BE names for qsort(3C)
+ * Parameters:
+ *		x,y - BEs with names to compare
+ * Returns:
+ *		positive if x>y, negative if y>x, 0 if equal
+ * Scope:
+ *		Private
+ */
+static int
+be_qsort_compare_BEs_name(const void *x, const void *y)
 {
 	be_node_list_t *p = *(be_node_list_t **)x;
 	be_node_list_t *q = *(be_node_list_t **)y;
 
-	if (p == NULL || p->be_node_name == NULL)
-		return (1);
-	if (q == NULL || q->be_node_name == NULL)
-		return (-1);
+	assert(p != NULL);
+	assert(p->be_node_name != NULL);
+	assert(q != NULL);
+	assert(q->be_node_name != NULL);
+
 	return (strcmp(p->be_node_name, q->be_node_name));
+}
+
+/*
+ * Function:	be_qsort_compare_BEs_name_rev
+ * Description:	reverse lexical compare of BE names for qsort(3C)
+ * Parameters:
+ *		x,y - BEs with names to compare
+ * Returns:
+ *		positive if y>x, negative if x>y, 0 if equal
+ * Scope:
+ *		Private
+ */
+static int
+be_qsort_compare_BEs_name_rev(const void *x, const void *y)
+{
+	return (be_qsort_compare_BEs_name(y, x));
+}
+
+/*
+ * Function:	be_qsort_compare_BEs_space
+ * Description:	compare BE sizes for qsort(3C)
+ *		will sort BE list in growing order
+ * Parameters:
+ *		x,y - BEs with names to compare
+ * Returns:
+ *		positive if x>y, negative if y>x, 0 if equal
+ * Scope:
+ *		Private
+ */
+static int
+be_qsort_compare_BEs_space(const void *x, const void *y)
+{
+	be_node_list_t *p = *(be_node_list_t **)x;
+	be_node_list_t *q = *(be_node_list_t **)y;
+
+	assert(p != NULL);
+	assert(q != NULL);
+
+	if (p->be_space_used > q->be_space_used)
+		return (1);
+	if (p->be_space_used < q->be_space_used)
+		return (-1);
+	return (0);
+}
+
+/*
+ * Function:	be_qsort_compare_BEs_space_rev
+ * Description:	compare BE sizes for qsort(3C)
+ *		will sort BE list in shrinking
+ * Parameters:
+ *		x,y - BEs with names to compare
+ * Returns:
+ *		positive if y>x, negative if x>y, 0 if equal
+ * Scope:
+ *		Private
+ */
+static int
+be_qsort_compare_BEs_space_rev(const void *x, const void *y)
+{
+	return (be_qsort_compare_BEs_space(y, x));
 }
 
 /*
@@ -813,13 +986,8 @@ be_qsort_compare_datasets(const void *x, const void *y)
  *		Private
  */
 static int
-be_get_node_data(
-	zfs_handle_t *zhp,
-	be_node_list_t *be_node,
-	char *be_name,
-	const char *rpool,
-	char *current_be,
-	char *be_ds)
+be_get_node_data(zfs_handle_t *zhp, be_node_list_t *be_node, char *be_name,
+    const char *rpool, char *current_be, char *be_ds)
 {
 	char prop_buf[MAXPATHLEN];
 	nvlist_t *userprops = NULL;
@@ -868,11 +1036,23 @@ be_get_node_data(
 	be_node->be_space_used = zfs_prop_get_int(zhp, ZFS_PROP_USED);
 
 	if (getzoneid() == GLOBAL_ZONEID) {
+		char *nextboot;
+
 		if ((zphp = zpool_open(g_zfs, rpool)) == NULL) {
 			be_print_err(gettext("be_get_node_data: failed to open "
 			    "pool (%s): %s\n"), rpool,
 			    libzfs_error_description(g_zfs));
 			return (zfs_err_to_be_err(g_zfs));
+		}
+
+		/* Set nextboot info */
+		be_node->be_active_next = B_FALSE;
+		if (lzbe_get_boot_device(rpool, &nextboot) == 0) {
+			if (nextboot != NULL) {
+				if (strcmp(nextboot, be_ds) == 0)
+					be_node->be_active_next = B_TRUE;
+				free(nextboot);
+			}
 		}
 
 		(void) zpool_get_prop(zphp, ZPOOL_PROP_BOOTFS, prop_buf,
@@ -884,7 +1064,7 @@ be_get_node_data(
 				be_node->be_active_on_boot = B_TRUE;
 			else
 				be_node->be_active_on_boot = B_FALSE;
-		else if (prop_buf != NULL && strcmp(prop_buf, be_ds) == 0)
+		else if (strcmp(prop_buf, be_ds) == 0)
 			be_node->be_active_on_boot = B_TRUE;
 		else
 			be_node->be_active_on_boot = B_FALSE;
@@ -1155,7 +1335,7 @@ be_get_ss_data(
  *		size - The size of memory to allocate.
  * Returns:
  *		Success - A pointer to the allocated memory
- * 		Failure - NULL
+ *		Failure - NULL
  * Scope:
  *		Private
  */

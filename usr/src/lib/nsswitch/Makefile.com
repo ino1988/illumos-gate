@@ -22,6 +22,7 @@
 # Copyright 2006 Sun Microsystems, Inc.  All rights reserved.
 # Use is subject to license terms.
 #
+# Copyright (c) 2018, Joyent, Inc.
 
 include		$(SRC)/lib/Makefile.lib
 
@@ -30,21 +31,21 @@ SRCDIR =	../common
 ROOT32DYNLIB =	$(ROOTLIBDIR)/$(DYNLIB1)
 ROOT64DYNLIB =	$(ROOTLIBDIR64)/$(DYNLIB1)
 
-LINTFLAGS =	-ux
-LINTOUT =	lint.out
 
 CPPFLAGS +=	-D_REENTRANT
 
 CERRWARN +=	-_gcc=-Wno-switch
-CERRWARN +=	-_gcc=-Wno-uninitialized
+CERRWARN +=	$(CNOWARN_UNINIT)
 CERRWARN +=	-_gcc=-Wno-parentheses
 CERRWARN +=	-_gcc=-Wno-unused-variable
 CERRWARN +=	-_gcc=-Wno-address
 
+# not linted
+SMATCH=off
+
 LDLIBS +=	-lc
 HSONAME =
 
-CLEANFILES +=	$(LINTOUT)
 CLOBBERFILES +=	$(DYNLIB1)
 
 # Leaf target makefiles establish exactly what they will build by assigning to

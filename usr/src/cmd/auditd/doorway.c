@@ -102,7 +102,7 @@ static pthread_mutex_t	b_alloc_lock;
 static pthread_mutex_t	b_refcnt_lock;
 
 static void		input(void *, void *, int, door_desc_t *, int);
-static void		process(plugin_t *);
+static void		*process(void *);
 
 static audit_q_t	*qpool_withdraw(plugin_t *);
 static void		qpool_init(plugin_t *, int);
@@ -149,7 +149,7 @@ warn_or_fatal(int fatal, char *parting_shot)
  * otherwise it is a doorway.c code about a plugin.
  */
 static void
-report_error(auditd_rc_t rc, char *error_text, char *plugin_path)
+report_error(int rc, char *error_text, char *plugin_path)
 {
 	int		warn = 0;
 	char		rcbuf[100]; /* short error name string */
@@ -505,8 +505,7 @@ auditd_thread_init()
 			(void) pthread_cond_init(&(p->plg_cv), NULL);
 			p->plg_waiting = 0;
 
-			if (pthread_create(&(p->plg_tid), NULL,
-			    (void *(*)(void *))process, p)) {
+			if (pthread_create(&(p->plg_tid), NULL, process, p)) {
 				report_error(INTERNAL_SYS_ERROR,
 				    gettext("thread creation failed"),
 				    p->plg_path);
@@ -635,7 +634,8 @@ bpool_init()
  * be called as auditd is going down.
  */
 static void
-qpool_close(plugin_t *p) {
+qpool_close(plugin_t *p)
+{
 	audit_q_t	*q_node;
 	audit_rec_t	*b_node;
 
@@ -786,7 +786,7 @@ bpool_return(audit_rec_t *node)
 #if DEBUG
 	audit_rec_t	*copy = node;
 #endif
-	node = audit_release(&b_refcnt_lock, node); 	/* decrement ref cnt */
+	node = audit_release(&b_refcnt_lock, node);	/* decrement ref cnt */
 
 	if (node != NULL) {	/* NULL if ref cnt is not zero */
 		audit_enqueue(&b_pool, node);
@@ -1178,15 +1178,16 @@ input_exit:
 /*
  * process() -- pass a buffer to a plugin
  */
-static void
-process(plugin_t *p)
+static void *
+process(void *arg)
 {
+	plugin_t *p		= arg;
 	int			rc;
 	audit_rec_t		*b_node;
 	audit_q_t		*q_node;
 	auditd_rc_t		plugrc;
 	char			*error_string;
-	struct timespec 	delay;
+	struct timespec		delay;
 	int			sendsignal;
 	int			queue_len;
 	struct sched_param	param;
@@ -1313,4 +1314,5 @@ plugin_removed:
 	(void) pthread_mutex_lock(&plugin_mutex);
 	(void) unload_plugin(p);
 	(void) pthread_mutex_unlock(&plugin_mutex);
+	return (NULL);
 }

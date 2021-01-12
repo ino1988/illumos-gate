@@ -22,8 +22,10 @@
 /*
  * Copyright (c) 1999, 2010, Oracle and/or its affiliates. All rights reserved.
  */
+
 /*
- * Copyright (c) 2014, Joyent, Inc. All rights reserved.
+ * Copyright 2016 Joyent, Inc.
+ * Copyright 2018 Nexenta Systems, Inc.
  */
 
 #ifndef _THR_UBERDATA_H
@@ -55,6 +57,7 @@
 #include <sys/priocntl.h>
 #include <thread_db.h>
 #include <setjmp.h>
+#include <sys/thread.h>
 #include "libc_int.h"
 #include "tdb_agent.h"
 #include "thr_debug.h"
@@ -680,6 +683,8 @@ typedef struct ulwp {
 	void		*ul_unwind_ret;	/* used only by _ex_clnup_handler() */
 #endif
 	tumem_t		ul_tmem;	/* used only by umem */
+	uint_t		ul_ptinherit;	/* pthreads sched inherit value */
+	char		ul_ntoabuf[18];	/* thread-specific inet_ntoa buffer */
 } ulwp_t;
 
 #define	ul_cursig	ul_cp.s.cursig		/* deferred signal number */
@@ -862,7 +867,7 @@ typedef struct {
 typedef void (*_exithdlr_func_t) (void*);
 
 typedef struct _exthdlr {
-	struct _exthdlr 	*next;	/* next in handler list */
+	struct _exthdlr		*next;	/* next in handler list */
 	_exithdlr_func_t	hdlr;	/* handler itself */
 	void			*arg;	/* argument to handler */
 	void			*dso;	/* DSO associated with handler */
@@ -893,6 +898,37 @@ typedef struct {
 } atexit_root32_t;
 #endif	/* _SYSCALL32 */
 
+/*
+ * at_quick_exit() and quick_exit() data structures. The ISO/IEC C11 odd
+ * siblings of atexit()
+ */
+typedef void (*_quick_exithdlr_func_t)(void);
+
+typedef struct _qexthdlr {
+	struct _qexthdlr	*next;	/* next in handler list */
+	_quick_exithdlr_func_t	hdlr;	/* handler itself */
+} _qexthdlr_t;
+
+/*
+ * We add a pad on 32-bit systems to allow us to always have the structure size
+ * be 32-bytes which helps us deal with the compiler's alignment when building
+ * in ILP32 / LP64 systems.
+ */
+typedef struct {
+	mutex_t		exitfns_lock;
+	_qexthdlr_t	*head;
+#if !defined(_LP64)
+	uint32_t	pad;
+#endif
+} quickexit_root_t;
+
+#ifdef _SYSCALL32
+typedef struct {
+	mutex_t		exitfns_lock;
+	caddr32_t	head;
+	uint32_t	pad;
+} quickexit_root32_t;
+#endif /* _SYSCALL32 */
 
 /*
  * This is data that is global to all link maps (uberdata, aka super-global).
@@ -910,6 +946,7 @@ typedef struct uberdata {
 	siguaction_t	siguaction[NSIG];
 	bucket_t	bucket[NBUCKETS];
 	atexit_root_t	atexit_root;
+	quickexit_root_t quickexit_root;
 	tsd_metadata_t	tsd_metadata;
 	tls_metadata_t	tls_metadata;
 	/*
@@ -944,6 +981,7 @@ typedef struct uberdata {
 	robust_t	**robustlocks;	/* table of registered robust locks */
 	robust_t	*robustlist;	/* list of registered robust locks */
 	char	*progname;	/* the basename of the program, from argv[0] */
+	void	*ub_comm_page;	/* arch-specific comm page of kernel data */
 	struct uberdata **tdb_bootstrap;
 	tdb_t	tdb;		/* thread debug interfaces (for libc_db) */
 } uberdata_t;
@@ -1126,6 +1164,7 @@ typedef struct uberdata32 {
 	siguaction32_t	siguaction[NSIG];
 	bucket32_t	bucket[NBUCKETS];
 	atexit_root32_t	atexit_root;
+	quickexit_root32_t quickexit_root;
 	tsd_metadata32_t tsd_metadata;
 	tls_metadata32_t tls_metadata;
 	char		primary_map;
@@ -1156,6 +1195,7 @@ typedef struct uberdata32 {
 	caddr32_t	robustlocks;
 	caddr32_t	robustlist;
 	caddr32_t	progname;
+	caddr32_t	ub_comm_page;
 	caddr32_t	tdb_bootstrap;
 	tdb32_t		tdb;
 } uberdata32_t;
@@ -1194,6 +1234,7 @@ typedef	struct	_thrattr {
 	int	policy;
 	int	inherit;
 	size_t	guardsize;
+	char	name[THREAD_NAME_MAX];
 } thrattr_t;
 
 typedef	struct	_rwlattr {
@@ -1229,6 +1270,8 @@ extern	void	getgregs(ulwp_t *, gregset_t);
 extern	void	setgregs(ulwp_t *, gregset_t);
 extern	void	thr_panic(const char *);
 #pragma rarely_called(thr_panic)
+extern	void	mutex_panic(mutex_t *, const char *);
+#pragma rarely_called(mutex_panic)
 extern	ulwp_t	*find_lwp(thread_t);
 extern	void	finish_init(void);
 extern	void	update_sched(ulwp_t *);
@@ -1275,6 +1318,7 @@ extern	void	_flush_windows(void);
 #define	_flush_windows()
 #endif
 extern	void	set_curthread(void *);
+extern	void	ssp_init(void);
 
 /*
  * Utility function used when waking up many threads (more than MAXLWPS)
@@ -1451,7 +1495,7 @@ extern	int	rw_read_held(rwlock_t *);
 extern	int	rw_write_held(rwlock_t *);
 
 extern	int	_thrp_create(void *, size_t, void *(*)(void *), void *, long,
-			thread_t *, size_t);
+			thread_t *, size_t, const char *);
 extern	int	_thrp_suspend(thread_t, uchar_t);
 extern	int	_thrp_continue(thread_t, uchar_t);
 

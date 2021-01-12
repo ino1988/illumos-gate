@@ -20,6 +20,7 @@
  */
 /*
  * Copyright (c) 2001, 2010, Oracle and/or its affiliates. All rights reserved.
+ * Copyright 2020 Joyent, Inc.
  */
 
 #include <stdlib.h>
@@ -58,7 +59,7 @@ ns_hash(const char *str)
 
 static ns_hash_t *
 ns_scan_hash(ns_hashtype_t type, const char *service,
-		const char *str, ns_hash_t *idx)
+    const char *str, ns_hash_t *idx)
 {
 	while (idx) {
 		if (idx->h_type == type &&
@@ -77,7 +78,7 @@ ns_scan_hash(ns_hashtype_t type, const char *service,
 
 static ns_hash_t *
 ns_get_hash(const ns_config_t *config,
-	    ns_hashtype_t type, const char *service, const char *str)
+    ns_hashtype_t type, const char *service, const char *str)
 {
 	ns_hash_t	*idx, *hashp;
 	unsigned long	hash;
@@ -168,7 +169,7 @@ __s_api_destroy_hash(ns_config_t *config)
 
 int
 __s_api_add_map2hash(ns_config_t *config, ns_hashtype_t type,
-			ns_mapping_t *map)
+    ns_mapping_t *map)
 {
 	ns_hash_t	*idx, *newp;
 	unsigned long	hash;
@@ -201,7 +202,7 @@ __s_api_add_map2hash(ns_config_t *config, ns_hashtype_t type,
  * Assume space is the only legal whitespace.
  * attributeMap syntax:
  * attributeMap      = serviceId ":" origAttribute "="
- * 			attributes
+ *			attributes
  * origAttribute     = attribute
  * attributes        = wattribute *( space wattribute )
  * wattribute        = whsp newAttribute whsp
@@ -210,7 +211,7 @@ __s_api_add_map2hash(ns_config_t *config, ns_hashtype_t type,
  *
  * objectclassMap syntax:
  * objectclassMap    = serviceId ":" origObjectclass "="
- * 			objectclass
+ *			objectclass
  * origObjectclass   = objectclass
  * objectclass       = keystring
  */
@@ -295,7 +296,7 @@ __s_api_parse_map(char *cp, char **sid, char **origA, char ***mapA)
 }
 
 
-static void
+void
 __ns_ldap_freeASearchDesc(ns_ldap_search_desc_t *ptr)
 {
 	if (ptr == NULL)
@@ -324,11 +325,10 @@ typedef enum _ns_parse_state {
 static
 int
 __s_api_parseASearchDesc(const char *service,
-	char **cur, ns_ldap_search_desc_t **ret)
+    char **cur, ns_ldap_search_desc_t **ret)
 {
 	ns_ldap_search_desc_t	*ptr;
 	char			*sptr, *dptr;
-	char			buf[BUFSIZ];
 	int			i, rc;
 	ns_ldap_error_t		**errorp = NULL;
 	ns_ldap_error_t		*error = NULL;
@@ -456,7 +456,6 @@ __s_api_parseASearchDesc(const char *service,
 			state = P_FILTER;
 			break;
 		case P_SCOPE:
-			buf[0] = '\0';
 			if (*sptr == SEMITOK) {
 				/* no more SSD */
 				state = P_EXIT;
@@ -617,7 +616,7 @@ __s_api_parseASearchDesc(const char *service,
 
 static int
 __ns_ldap_saveSearchDesc(ns_ldap_search_desc_t ***sdlist,
-	int *cnt, int *max, ns_ldap_search_desc_t *ret)
+    int *cnt, int *max, ns_ldap_search_desc_t *ret)
 {
 	ns_ldap_search_desc_t	**tmplist;
 
@@ -664,7 +663,7 @@ int __ns_ldap_getSearchDescriptors(
 	int			cnt, max;
 	int			vers;
 	ns_config_t		*cfg;
-	ns_ldap_search_desc_t 	*ret;
+	ns_ldap_search_desc_t	*ret;
 
 	if ((desc == NULL) || (errorp == NULL))
 		return (NS_LDAP_INVALID_PARAM);
@@ -688,7 +687,7 @@ int __ns_ldap_getSearchDescriptors(
 		(void) snprintf(errstr, sizeof (errstr),
 		    gettext("No configuration information available."));
 		MKERROR(LOG_ERR, *errorp, NS_CONFIG_NOTLOADED, strdup(errstr),
-		    NULL);
+		    NS_LDAP_MEMORY);
 		return (NS_LDAP_CONFIG);
 	}
 
@@ -765,7 +764,7 @@ int __ns_ldap_getSearchDescriptors(
 		if (*srv != COLONTOK)
 			continue;
 		srv++;
-		while (srv != NULL && *srv != NULL) {
+		while (srv != NULL && *srv != '\0') {
 			/* Process 1 */
 			rc = __s_api_parseASearchDesc(service, &srv, &ret);
 			if (rc != NS_LDAP_SUCCESS) {
@@ -776,7 +775,7 @@ int __ns_ldap_getSearchDescriptors(
 				(void) __ns_ldap_freeParam(&param);
 				param = NULL;
 				MKERROR(LOG_ERR, *errorp, NS_CONFIG_SYNTAX,
-				    strdup(errstr), NULL);
+				    strdup(errstr), NS_LDAP_MEMORY);
 				return (rc);
 			}
 			if (ret != NULL) {

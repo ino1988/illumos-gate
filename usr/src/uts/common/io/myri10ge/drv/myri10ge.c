@@ -29,10 +29,10 @@
  * Use is subject to license terms.
  */
 
-#ifndef	lint
-static const char __idstring[] =
-	"@(#)$Id: myri10ge.c,v 1.186 2009-06-29 13:47:22 gallatin Exp $";
-#endif
+/*
+ * Copyright (c) 2014, Joyent, Inc.
+ * Copyright (c) 2016 by Delphix. All rights reserved.
+ */
 
 #define	MXGEFW_NDIS
 #include "myri10ge_var.h"
@@ -41,6 +41,8 @@ static const char __idstring[] =
 #include "mcp_gen_header.h"
 
 #define	MYRI10GE_MAX_ETHER_MTU 9014
+#define	MYRI10GE_MAX_GLD_MTU	9000
+#define	MYRI10GE_MIN_GLD_MTU	1500
 
 #define	MYRI10GE_ETH_STOPPED 0
 #define	MYRI10GE_ETH_STOPPING 1
@@ -74,7 +76,7 @@ static int myri10ge_lso_copy = 0;
 static mblk_t *myri10ge_send_wrapper(void *arg, mblk_t *mp);
 int myri10ge_tx_handles_initial = 128;
 
-static 	kmutex_t myri10ge_param_lock;
+static	kmutex_t myri10ge_param_lock;
 static void* myri10ge_db_lastfree;
 
 static int myri10ge_attach(dev_info_t *dip, ddi_attach_cmd_t cmd);
@@ -101,7 +103,7 @@ unsigned char myri10ge_broadcastaddr[] = { 0xff, 0xff, 0xff, 0xff, 0xff, 0xff };
 
 static ddi_dma_attr_t myri10ge_misc_dma_attr = {
 	DMA_ATTR_V0,			/* version number. */
-	(uint64_t)0, 			/* low address */
+	(uint64_t)0,			/* low address */
 	(uint64_t)0xffffffffffffffffULL, /* high address */
 	(uint64_t)0x7ffffff,		/* address counter max */
 	(uint64_t)4096,			/* alignment */
@@ -122,7 +124,7 @@ static ddi_dma_attr_t myri10ge_misc_dma_attr = {
 
 static ddi_dma_attr_t myri10ge_rx_jumbo_dma_attr = {
 	DMA_ATTR_V0,			/* version number. */
-	(uint64_t)0, 			/* low address */
+	(uint64_t)0,			/* low address */
 	(uint64_t)0xffffffffffffffffULL, /* high address */
 	(uint64_t)0x7ffffff,		/* address counter max */
 	(uint64_t)4096,			/* alignment */
@@ -137,7 +139,7 @@ static ddi_dma_attr_t myri10ge_rx_jumbo_dma_attr = {
 
 static ddi_dma_attr_t myri10ge_rx_std_dma_attr = {
 	DMA_ATTR_V0,			/* version number. */
-	(uint64_t)0, 			/* low address */
+	(uint64_t)0,			/* low address */
 	(uint64_t)0xffffffffffffffffULL, /* high address */
 	(uint64_t)0x7ffffff,		/* address counter max */
 #if defined sparc64 || defined __sparcv9
@@ -160,7 +162,7 @@ static ddi_dma_attr_t myri10ge_rx_std_dma_attr = {
 
 static ddi_dma_attr_t myri10ge_tx_dma_attr = {
 	DMA_ATTR_V0,			/* version number. */
-	(uint64_t)0, 			/* low address */
+	(uint64_t)0,			/* low address */
 	(uint64_t)0xffffffffffffffffULL, /* high address */
 	(uint64_t)0x7ffffff,		/* address counter max */
 	(uint64_t)1,			/* alignment */
@@ -193,8 +195,10 @@ static void myri10ge_watchdog(void *arg);
 
 #ifdef MYRICOM_PRIV
 int myri10ge_mtu = MYRI10GE_MAX_ETHER_MTU + MXGEFW_PAD + VLAN_TAGSZ;
+#define	MYRI10GE_DEFAULT_GLD_MTU	MYRI10GE_MAX_GLD_MTU
 #else
 int myri10ge_mtu = ETHERMAX + MXGEFW_PAD + VLAN_TAGSZ;
+#define	MYRI10GE_DEFAULT_GLD_MTU	MYRI10GE_MIN_GLD_MTU
 #endif
 int myri10ge_bigbufs_initial = 1024;
 int myri10ge_bigbufs_max = 4096;
@@ -389,8 +393,7 @@ myri10ge_pull_jpool(struct myri10ge_slice_state *ss)
 {
 	struct myri10ge_jpool_stuff *jpool = &ss->jpool;
 	struct myri10ge_jpool_entry *jtail, *j, *jfree;
-	volatile uintptr_t *putp;
-	uintptr_t put;
+	volatile void *putp;
 	int i;
 
 	/* find tail */
@@ -408,11 +411,10 @@ myri10ge_pull_jpool(struct myri10ge_slice_state *ss)
 	 */
 	for (i = 0; i < MYRI10GE_MAX_CPUS; i++) {
 		/* take per-CPU free list */
-		putp = (void *)&jpool->cpu[i & MYRI10GE_MAX_CPU_MASK].head;
-		if (*putp == NULL)
+		putp = &jpool->cpu[i & MYRI10GE_MAX_CPU_MASK].head;
+		jfree = atomic_swap_ptr(putp, NULL);
+		if (jfree == NULL)
 			continue;
-		put = atomic_swap_ulong(putp, 0);
-		jfree = (struct myri10ge_jpool_entry *)put;
 
 		/* append to pool */
 		if (jtail == NULL) {
@@ -1044,7 +1046,7 @@ myri10ge_reg_set(dev_info_t *dip, int *reg_set, int *span,
 #define	BUS_NUMBER(ip)		(ip[0] >> 16 & 0xff)
 #define	ADDRESS_SPACE(ip)	(ip[0] >> 24 & 0x03)
 #define	PCI_ADDR_HIGH(ip)	(ip[1])
-#define	PCI_ADDR_LOW(ip) 	(ip[2])
+#define	PCI_ADDR_LOW(ip)	(ip[2])
 #define	PCI_SPAN_HIGH(ip)	(ip[3])
 #define	PCI_SPAN_LOW(ip)	(ip[4])
 
@@ -1201,7 +1203,7 @@ abort:
 
 int
 myri10ge_send_cmd(struct myri10ge_priv *mgp, uint32_t cmd,
-		myri10ge_cmd_t *data)
+    myri10ge_cmd_t *data)
 {
 	mcp_cmd_t *buf;
 	char buf_bytes[sizeof (*buf) + 8];
@@ -1287,8 +1289,8 @@ myri10ge_dummy_rdma(struct myri10ge_priv *mgp, int enable)
 	buf[0] = mgp->cmd_dma.high;		/* confirm addr MSW */
 	buf[1] = mgp->cmd_dma.low;		/* confirm addr LSW */
 	buf[2] = htonl(0xffffffff);		/* confirm data */
-	buf[3] = htonl(mgp->cmd_dma.high); 	/* dummy addr MSW */
-	buf[4] = htonl(mgp->cmd_dma.low); 	/* dummy addr LSW */
+	buf[3] = htonl(mgp->cmd_dma.high);	/* dummy addr MSW */
+	buf[4] = htonl(mgp->cmd_dma.low);	/* dummy addr LSW */
 	buf[5] = htonl(enable);			/* enable? */
 
 
@@ -1349,7 +1351,7 @@ myri10ge_load_firmware(struct myri10ge_priv *mgp)
 	 * do not. Therefore the handoff copy must skip the first 8 bytes
 	 */
 	buf[3] = htonl(MYRI10GE_FW_OFFSET + 8); /* where the code starts */
-	buf[4] = htonl(size - 8); 	/* length of code */
+	buf[4] = htonl(size - 8);	/* length of code */
 	buf[5] = htonl(8);		/* where to copy to */
 	buf[6] = htonl(0);		/* where to jump to */
 
@@ -2130,15 +2132,15 @@ myri10ge_start_locked(struct myri10ge_priv *mgp)
 	}
 
 	/*
-	 * Tell the MCP how many buffers he has, and to
+	 * Tell the MCP how many buffers it has, and to
 	 *  bring the ethernet interface up
 	 *
 	 * Firmware needs the big buff size as a power of 2.  Lie and
-	 * tell him the buffer is larger, because we only use 1
+	 * tell it the buffer is larger, because we only use 1
 	 * buffer/pkt, and the mtu will prevent overruns
 	 */
 	big_pow2 = myri10ge_mtu + MXGEFW_PAD;
-	while ((big_pow2 & (big_pow2 - 1)) != 0)
+	while (!ISP2(big_pow2))
 		big_pow2++;
 
 	/* now give firmware buffers sizes, and MTU */
@@ -2555,7 +2557,7 @@ myri10ge_tx_done(struct myri10ge_slice_state *ss, uint32_t mcp_index)
 	}
 	if (tx->req == tx->done && tx->stop != NULL) {
 		/*
-		 * Nic has sent all pending requests, allow him
+		 * Nic has sent all pending requests, allow it
 		 * to stop polling this queue
 		 */
 		mutex_enter(&tx->lock);
@@ -2909,7 +2911,7 @@ myri10ge_pullup(struct myri10ge_slice_state *ss, mblk_t *mp)
 		return (DDI_FAILURE);
 	}
 	MYRI10GE_ATOMIC_SLICE_STAT_INC(xmit_pullup);
-	mac_hcksum_set(mp, start, stuff, NULL, NULL, tx_offload_flags);
+	mac_hcksum_set(mp, start, stuff, 0, 0, tx_offload_flags);
 	if (tx_offload_flags & HW_LSO)
 		DB_LSOMSS(mp) = (uint16_t)mss;
 	lso_info_set(mp, mss, tx_offload_flags);
@@ -4240,9 +4242,9 @@ myri10ge_enable_nvidia_ecrc(struct myri10ge_priv *mgp)
 	ddi_acc_handle_t handle;
 	unsigned long bus_number, dev_number, func_number;
 	unsigned long cfg_pa, paddr, base, pgoffset;
-	char 		*cvaddr, *ptr;
+	char		*cvaddr, *ptr;
 	uint32_t	*ptr32;
-	int 		retval = DDI_FAILURE;
+	int		retval = DDI_FAILURE;
 	int dontcare;
 	uint16_t read_vid, read_did, vendor_id, device_id;
 
@@ -4266,8 +4268,8 @@ myri10ge_enable_nvidia_ecrc(struct myri10ge_priv *mgp)
 	pci_config_teardown(&handle);
 
 	if (myri10ge_verbose) {
-		unsigned long 	bus_number, dev_number, func_number;
-		int 		reg_set, span;
+		unsigned long	bus_number, dev_number, func_number;
+		int		reg_set, span;
 		(void) myri10ge_reg_set(parent_dip, &reg_set, &span,
 		    &bus_number, &dev_number, &func_number);
 		if (myri10ge_verbose)
@@ -4697,7 +4699,8 @@ myri10ge_get_props(dev_info_t *dip)
 	myri10ge_mtu_override = ddi_prop_get_int(DDI_DEV_T_ANY, dip, 0,
 	    "myri10ge_mtu_override", myri10ge_mtu_override);
 
-	if (myri10ge_mtu_override >= 1500 && myri10ge_mtu_override <= 9000)
+	if (myri10ge_mtu_override >= MYRI10GE_MIN_GLD_MTU &&
+	    myri10ge_mtu_override <= MYRI10GE_MAX_GLD_MTU)
 		myri10ge_mtu = myri10ge_mtu_override +
 		    sizeof (struct ether_header) + MXGEFW_PAD + VLAN_TAGSZ;
 	else if (myri10ge_mtu_override != 0) {
@@ -4788,7 +4791,7 @@ static int
 myri10ge_find_cap(ddi_acc_handle_t handle, uint8_t *capptr, uint8_t capid)
 {
 	uint16_t	status;
-	uint8_t 	ptr;
+	uint8_t		ptr;
 
 	/* check to see if we have capabilities */
 	status = pci_config_get16(handle, PCI_CONF_STAT);
@@ -4995,7 +4998,6 @@ myri10ge_watchdog(void *arg)
 /*ARGSUSED*/
 static int
 myri10ge_get_coalesce(queue_t *q, mblk_t *mp, caddr_t cp, cred_t *credp)
-
 {
 	struct myri10ge_priv *mgp = (struct myri10ge_priv *)(void *)cp;
 	(void) mi_mpprintf(mp, "%d", mgp->intr_coal_delay);
@@ -5006,7 +5008,6 @@ myri10ge_get_coalesce(queue_t *q, mblk_t *mp, caddr_t cp, cred_t *credp)
 static int
 myri10ge_set_coalesce(queue_t *q, mblk_t *mp, char *value,
     caddr_t cp, cred_t *credp)
-
 {
 	struct myri10ge_priv *mgp = (struct myri10ge_priv *)(void *)cp;
 	char *end;
@@ -5026,7 +5027,6 @@ myri10ge_set_coalesce(queue_t *q, mblk_t *mp, char *value,
 /*ARGSUSED*/
 static int
 myri10ge_get_pauseparam(queue_t *q, mblk_t *mp, caddr_t cp, cred_t *credp)
-
 {
 	struct myri10ge_priv *mgp = (struct myri10ge_priv *)(void *)cp;
 	(void) mi_mpprintf(mp, "%d", mgp->pause);
@@ -5036,8 +5036,7 @@ myri10ge_get_pauseparam(queue_t *q, mblk_t *mp, caddr_t cp, cred_t *credp)
 /*ARGSUSED*/
 static int
 myri10ge_set_pauseparam(queue_t *q, mblk_t *mp, char *value,
-			caddr_t cp, cred_t *credp)
-
+    caddr_t cp, cred_t *credp)
 {
 	struct myri10ge_priv *mgp = (struct myri10ge_priv *)(void *)cp;
 	char *end;
@@ -5060,7 +5059,6 @@ myri10ge_set_pauseparam(queue_t *q, mblk_t *mp, char *value,
 /*ARGSUSED*/
 static int
 myri10ge_get_int(queue_t *q, mblk_t *mp, caddr_t cp, cred_t *credp)
-
 {
 	(void) mi_mpprintf(mp, "%d", *(int *)(void *)cp);
 	return (0);
@@ -5070,7 +5068,6 @@ myri10ge_get_int(queue_t *q, mblk_t *mp, caddr_t cp, cred_t *credp)
 static int
 myri10ge_set_int(queue_t *q, mblk_t *mp, char *value,
     caddr_t cp, cred_t *credp)
-
 {
 	char *end;
 	size_t new_value;
@@ -5367,8 +5364,66 @@ myri10ge_m_stat(void *arg, uint_t stat, uint64_t *val)
 	return (0);
 }
 
+/* ARGSUSED */
+static void
+myri10ge_m_propinfo(void *arg, const char *pr_name,
+    mac_prop_id_t pr_num, mac_prop_info_handle_t prh)
+{
+	switch (pr_num) {
+	case MAC_PROP_MTU:
+		mac_prop_info_set_default_uint32(prh, MYRI10GE_DEFAULT_GLD_MTU);
+		mac_prop_info_set_range_uint32(prh, MYRI10GE_MIN_GLD_MTU,
+		    MYRI10GE_MAX_GLD_MTU);
+		break;
+	default:
+		break;
+	}
+}
+
+/*ARGSUSED*/
+static int
+myri10ge_m_setprop(void *arg, const char *pr_name, mac_prop_id_t pr_num,
+    uint_t pr_valsize, const void *pr_val)
+{
+	int err = 0;
+	struct myri10ge_priv *mgp = arg;
+
+	switch (pr_num) {
+	case MAC_PROP_MTU: {
+		uint32_t mtu;
+		if (pr_valsize < sizeof (mtu)) {
+			err = EINVAL;
+			break;
+		}
+		bcopy(pr_val, &mtu, sizeof (mtu));
+		if (mtu > MYRI10GE_MAX_GLD_MTU ||
+		    mtu < MYRI10GE_MIN_GLD_MTU) {
+			err = EINVAL;
+			break;
+		}
+
+		mutex_enter(&mgp->intrlock);
+		if (mgp->running != MYRI10GE_ETH_STOPPED) {
+			err = EBUSY;
+			mutex_exit(&mgp->intrlock);
+			break;
+		}
+
+		myri10ge_mtu = mtu + sizeof (struct ether_header) +
+		    MXGEFW_PAD + VLAN_TAGSZ;
+		mutex_exit(&mgp->intrlock);
+		break;
+	}
+	default:
+		err = ENOTSUP;
+		break;
+	}
+
+	return (err);
+}
+
 static mac_callbacks_t myri10ge_m_callbacks = {
-	(MC_IOCTL | MC_GETCAPAB),
+	(MC_IOCTL | MC_GETCAPAB | MC_SETPROP | MC_PROPINFO),
 	myri10ge_m_stat,
 	myri10ge_m_start,
 	myri10ge_m_stop,
@@ -5378,7 +5433,12 @@ static mac_callbacks_t myri10ge_m_callbacks = {
 	NULL,
 	NULL,
 	myri10ge_m_ioctl,
-	myri10ge_m_getcapab
+	myri10ge_m_getcapab,
+	NULL,
+	NULL,
+	myri10ge_m_setprop,
+	NULL,
+	myri10ge_m_propinfo
 };
 
 
@@ -5437,7 +5497,7 @@ myri10ge_probe_slices(struct myri10ge_priv *mgp)
 	 */
 	while (mgp->num_slices > 1) {
 		/* make sure it is a power of two */
-		while (mgp->num_slices & (mgp->num_slices - 1))
+		while (!ISP2(mgp->num_slices))
 			mgp->num_slices--;
 		if (mgp->num_slices == 1)
 			return (0);
@@ -5961,7 +6021,7 @@ static int
 myri10ge_detach(dev_info_t *dip, ddi_detach_cmd_t cmd)
 {
 	struct myri10ge_priv	*mgp, *tmp;
-	int 			status, i, jbufs_alloced;
+	int			status, i, jbufs_alloced;
 
 	if (cmd == DDI_SUSPEND) {
 		status = myri10ge_suspend(dip);

@@ -23,6 +23,9 @@
 # Copyright 2009 Sun Microsystems, Inc.  All rights reserved.
 # Use is subject to license terms.
 #
+# Copyright 2018 Nexenta Systems, Inc.  All rights reserved.
+# Copyright (c) 2018, Joyent, Inc.
+#
 
 #
 # cmd/fs.d/smbclnt/smbutil/Makefile
@@ -30,30 +33,31 @@
 
 PROG=		smbutil
 
-include		$(SRC)/cmd/Makefile.cmd
-
-OBJS=   smbutil.o login.o lookup.o print.o status.o view.o
+OBJS=   smbutil.o discon.o info.o login.o lookup.o print.o status.o view.o \
+	shares_rpc.o srvsvc1_clnt.o srvsvc1_ndr.o
 
 SRCS=	$(OBJS:%.o=%.c)
+
+include		$(SRC)/cmd/Makefile.cmd
+
 POFILE=	smbutil_all.po
 POFILES= $(OBJS:%.o=%.po)
+
+CLEANFILES +=  srvsvc1_ndr.c
 CLOBBERFILES+=  $(POFILE) $(POFILES)
 
-C99MODE= $(C99_ENABLE)
+CSTD= $(CSTD_GNU99)
 
-LDLIBS += -lsmbfs -lnsl
+LDLIBS += -lmlrpc -lsmbfs -lnsl
 
 CPPFLAGS += -I$(SRC)/lib/libsmbfs \
 	-I$(SRC)/uts/common/smbclnt -I$(SRC)/uts/common
 
+# not linted
+SMATCH=off
+
 # Debugging
 ${NOT_RELEASE_BUILD} CPPFLAGS += -DDEBUG
-
-# uncomment these for dbx debugging
-#COPTFLAG = -g
-#CTF_FLAGS =
-#CTFCONVERT_O=
-#CTFMERGE_LIB=
 
 # disable some of the less important lint
 LINTFLAGS	+= -erroff=E_FUNC_RET_ALWAYS_IGNOR2
@@ -78,9 +82,12 @@ $(POFILE): $(POFILES)
 
 lint:	lint_SRCS
 
-clean :
-	$(RM) $(OBJS)
-
-.KEEP_STATE:
+clean:
+	$(RM) $(OBJS) $(CLEANFILES)
 
 include ../../../Makefile.targ
+
+srvsvc1_ndr.c : srvsvc1.ndl
+	$(NDRGEN) -Y $(ANSI_CPP) $(CPPFLAGS) srvsvc1.ndl
+
+.KEEP_STATE:

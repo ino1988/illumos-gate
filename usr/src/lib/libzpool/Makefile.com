@@ -20,7 +20,8 @@
 #
 #
 # Copyright (c) 2005, 2010, Oracle and/or its affiliates. All rights reserved.
-# Copyright (c) 2013 by Delphix. All rights reserved.
+# Copyright (c) 2013, 2016 by Delphix. All rights reserved.
+# Copyright 2020 Joyent, Inc.
 #
 
 LIBRARY= libzpool.a
@@ -28,59 +29,67 @@ VERS= .1
 
 # include the list of ZFS sources
 include ../../../uts/common/Makefile.files
-KERNEL_OBJS = kernel.o taskq.o util.o
+KERNEL_OBJS = kernel.o util.o
 DTRACE_OBJS = zfs.o
 
-OBJECTS=$(ZFS_COMMON_OBJS) $(ZFS_SHARED_OBJS) $(KERNEL_OBJS)
+OBJECTS=$(LUA_OBJS) $(ZFS_COMMON_OBJS) $(ZFS_SHARED_OBJS) $(KERNEL_OBJS)
 
 # include library definitions
 include ../../Makefile.lib
 
+LUA_SRCS=		$(LUA_OBJS:%.o=../../../uts/common/fs/zfs/lua/%.c)
 ZFS_COMMON_SRCS=	$(ZFS_COMMON_OBJS:%.o=../../../uts/common/fs/zfs/%.c)
 ZFS_SHARED_SRCS=	$(ZFS_SHARED_OBJS:%.o=../../../common/zfs/%.c)
 KERNEL_SRCS=		$(KERNEL_OBJS:%.o=../common/%.c)
 
-SRCS=$(ZFS_COMMON_SRCS) $(ZFS_SHARED_SRCS) $(KERNEL_SRCS)
+SRCS=$(LUA_SRCS) $(ZFS_COMMON_SRCS) $(ZFS_SHARED_SRCS) $(KERNEL_SRCS)
 SRCDIR=		../common
 
 # There should be a mapfile here
 MAPFILES =
 
-LIBS +=		$(LINTLIB)
+LIBS +=		$(DYNLIB)
 
 INCS += -I../common
 INCS += -I../../../uts/common/fs/zfs
+INCS += -I../../../uts/common/fs/zfs/lua
 INCS += -I../../../common/zfs
+INCS += -I../../../common/lz4
 INCS += -I../../../common
+INCS += -I../../libzutil/common
+
 
 CLEANFILES += ../common/zfs.h
 CLEANFILES += $(EXTPICS)
 
-$(LINTLIB) := SRCS=	$(SRCDIR)/$(LINTSRC)
-$(LINTLIB): ../common/zfs.h
+$(LIBS): ../common/zfs.h
 
-C99MODE=	-xc99=%all
-C99LMODE=	-Xc99=%all
+CSTD=	$(CSTD_GNU99)
 
-CFLAGS +=	-g $(CCVERBOSE) $(CNOGLOBAL)
-CFLAGS64 +=	-g $(CCVERBOSE)	$(CNOGLOBAL)
-LDLIBS +=	-lcmdutils -lumem -lavl -lnvpair -lz -lc -lsysevent -lmd
-CPPFLAGS +=	$(INCS)	-DDEBUG
+CFLAGS +=	$(CCGDEBUG) $(CCVERBOSE) $(CNOGLOBAL)
+CFLAGS64 +=	$(CCGDEBUG) $(CCVERBOSE) $(CNOGLOBAL)
+LDLIBS +=	-lcmdutils -lumem -lavl -lnvpair -lz -lc -lsysevent -lmd \
+		-lfakekernel -lzutil
+NATIVE_LIBS +=	libz.so
+CPPFLAGS.first =	-I$(SRC)/lib/libfakekernel/common
+CPPFLAGS +=	$(INCS)	-DDEBUG -D_FAKE_KERNEL
+
 
 CERRWARN +=	-_gcc=-Wno-parentheses
 CERRWARN +=	-_gcc=-Wno-switch
 CERRWARN +=	-_gcc=-Wno-type-limits
 CERRWARN +=	-_gcc=-Wno-unused-variable
-CERRWARN +=	-_gcc=-Wno-uninitialized
 CERRWARN +=	-_gcc=-Wno-empty-body
 CERRWARN +=	-_gcc=-Wno-unused-function
 CERRWARN +=	-_gcc=-Wno-unused-label
+
+# not linted
+SMATCH=off
 
 .KEEP_STATE:
 
 all: $(LIBS)
 
-lint: $(LINTLIB)
 
 include ../../Makefile.targ
 
@@ -90,7 +99,15 @@ pics/%.o: ../../../uts/common/fs/zfs/%.c ../common/zfs.h
 	$(COMPILE.c) -o $@ $<
 	$(POST_PROCESS_O)
 
+pics/%.o: ../../../uts/common/fs/zfs/lua/%.c
+	$(COMPILE.c) -o $@ $<
+	$(POST_PROCESS_O)
+
 pics/%.o: ../../../common/zfs/%.c ../common/zfs.h
+	$(COMPILE.c) -o $@ $<
+	$(POST_PROCESS_O)
+
+pics/%.o: ../../../common/lz4/%.c ../common/zfs.h
 	$(COMPILE.c) -o $@ $<
 	$(POST_PROCESS_O)
 

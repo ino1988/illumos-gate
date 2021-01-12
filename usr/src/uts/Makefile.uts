@@ -22,8 +22,10 @@
 #
 # Copyright (c) 1991, 2010, Oracle and/or its affiliates. All rights reserved.
 # Copyright (c) 2011 Bayard G. Bell. All rights reserved.
-# Copyright (c) 2011 by Delphix. All rights reserved.
+# Copyright (c) 2011,2017 by Delphix. All rights reserved.
 # Copyright (c) 2013 Andrew Stormont.  All rights reserved.
+# Copyright 2016 Hans Rosenfeld <rosenfeld@grumpf.hope-2000.org>
+# Copyright 2019 Joyent, Inc.
 #
 
 #
@@ -42,7 +44,7 @@ include $(SRC)/Makefile.master
 DTEXTDOM =
 
 #
-# 	Keep references to $(SRC)/common relative.
+#	Keep references to $(SRC)/common relative.
 COMMONBASE=	$(UTSBASE)/../common
 
 #
@@ -54,7 +56,7 @@ COMMONBASE=	$(UTSBASE)/../common
 #
 
 #
-#	DEF_BUILDS is for def, lint, sischeck, and install
+#	DEF_BUILDS is for def, sischeck, and install
 #	ALL_BUILDS is for everything else (all, clean, ...)
 #
 # The NOT_RELEASE_BUILD noise is to maintain compatibility with the
@@ -69,14 +71,6 @@ $(NOT_RELEASE_BUILD)DEF_BUILDSONLY64	= debug64
 ALL_BUILDS32				= obj32 debug32
 ALL_BUILDS64				= obj64 debug64
 ALL_BUILDSONLY64			= obj64 debug64
-
-#
-#	For modules in 64b dirs that aren't built 64b
-#	or modules in 64b dirs that aren't built 32b we
-#	need to create empty modlintlib files so global lint works
-#
-LINT32_BUILDS	= debug32
-LINT64_BUILDS	= debug64
 
 #
 #	Build class (32b or 64b)
@@ -100,8 +94,8 @@ OBJS_DIR	= $(OBJS_DIR_$(BUILD_TYPE))
 #	Create defaults so empty rules don't
 #	confuse make
 #
-CLASS_		= 32
-OBJS_DIR_	= debug32
+CLASS_		= 64
+OBJS_DIR_	= debug64
 
 #
 #	Build tools
@@ -133,56 +127,14 @@ LD_amd64_64	= $(amd64_LD)
 
 LD		= $(LD_$(MACH)_$(CLASS))
 
-LINT_sparc_32	= $(sparc_LINT)
-LINT_sparc_64	= $(sparcv9_LINT)
-
-LINT_i386_32	= $(i386_LINT)
-LINT_i386_64	= $(amd64_LINT)
-LINT_amd64_64	= $(amd64_LINT)
-
-LINT		= $(LINT_$(MACH)_$(CLASS))
-
 MODEL_32	= ilp32
 MODEL_64	= lp64
 MODEL		= $(MODEL_$(CLASS))
 
 #
-#	Build rules for linting the kernel.
-#
-LHEAD =	$(ECHO) "\n$@";
-
-# Note: egrep returns "failure" if there are no matches, which is
-# exactly the opposite of what we need.
-LGREP.2 =	if egrep -v ' (_init|_fini|_info) '; then false; else true; fi
-
-LTAIL =
-
-LINT.c =	$(LINT) -c -dirout=$(LINTS_DIR) $(LINTFLAGS) $(LINT_DEFS) $(CPPFLAGS)
-
-# Please do not add new erroff directives here.  If you need to disable
-# lint warnings in your module for things that cannot be fixed in any
-# reasonable manner, please augment LINTTAGS in your module Makefile
-# instead.
-LINTTAGS	= -erroff=E_INCONS_ARG_DECL2
-LINTTAGS	+= -erroff=E_INCONS_VAL_TYPE_DECL2
-
-LINTFLAGS_sparc_32	= $(LINTCCMODE) -nsxmuF -errtags=yes
-LINTFLAGS_sparc_64	= $(LINTFLAGS_sparc_32) -m64
-LINTFLAGS_i386_32	= $(LINTCCMODE) -nsxmuF -errtags=yes
-LINTFLAGS_i386_64	= $(LINTFLAGS_i386_32) -m64
-
-LINTFLAGS	= $(LINTFLAGS_$(MACH)_$(CLASS)) $(LINTTAGS)
-LINTFLAGS	+= $(C99LMODE)
-
-#
-#	Override this variable to modify the name of the lint target.
-#
-LINT_MODULE=	$(MODULE)
-
-#
 #	Build the compile/assemble lines:
 #
-EXTRA_OPTIONS		= 
+EXTRA_OPTIONS		=
 AS_DEFS			= -D_ASM -D__STDC__=0
 
 ALWAYS_DEFS_32		= -D_KERNEL -D_SYSCALL32 -D_DDI_STRICT
@@ -220,12 +172,44 @@ CERRWARN += -_gcc=-Wno-unknown-pragmas
 CERRWARN += -_gcc=-Wno-unused-parameter
 CERRWARN += -_gcc=-Wno-missing-field-initializers
 
+# gcc4 lacks -Wno-maybe-uninitialized
+CNOWARN_UNINIT = -_gcc4=-Wno-uninitialized \
+    -_gcc7=-Wno-maybe-uninitialized \
+    -_gcc8=-Wno-maybe-uninitialized
+
 # DEBUG v. -nd make for frequent unused variables, empty conditions, etc. in
 # -nd builds
 $(RELEASE_BUILD)CERRWARN += -_gcc=-Wno-unused
 $(RELEASE_BUILD)CERRWARN += -_gcc=-Wno-empty-body
 
-C99MODE = $(C99_ENABLE)
+CERRWARN += -_smatch=-p=illumos_kernel
+include $(SRC)/Makefile.smatch
+
+#
+# Unfortunately, _IOWR() is regularly used with a third argument of 0,
+# so we have to disable all these smatch checks.
+#
+SMOFF += sizeof
+
+#
+# Ensure that the standard function prologue remains at the very start
+# of a function, so DTrace fbt will instrument the right place.
+#
+CFLAGS_uts_i386 += -_gcc7=-fno-shrink-wrap
+CFLAGS_uts_i386 += -_gcc8=-fno-shrink-wrap
+CFLAGS_uts_i386 += -_gcc9=-fno-shrink-wrap
+
+#
+# retpoline support
+#
+CFLAGS_uts_i386 += -_gcc7=-mindirect-branch=thunk-extern
+CFLAGS_uts_i386 += -_gcc7=-mindirect-branch-register
+CFLAGS_uts_i386 += -_gcc8=-mindirect-branch=thunk-extern
+CFLAGS_uts_i386 += -_gcc8=-mindirect-branch-register
+CFLAGS_uts_i386 += -_gcc9=-mindirect-branch=thunk-extern
+CFLAGS_uts_i386 += -_gcc9=-mindirect-branch-register
+
+CSTD = $(CSTD_GNU99)
 
 CFLAGS_uts		=
 CFLAGS_uts		+= $(STAND_FLAGS_$(CLASS))
@@ -235,16 +219,20 @@ CFLAGS_uts		+= $(XAOPT)
 CFLAGS_uts		+= $(CTF_FLAGS_$(CLASS))
 CFLAGS_uts		+= $(CERRWARN)
 CFLAGS_uts		+= $(CCNOAUTOINLINE)
+CFLAGS_uts		+= $(CCNOREORDER)
+CFLAGS_uts		+= $(CCNOAGGRESSIVELOOPS)
 CFLAGS_uts		+= $(CGLOBALSTATIC)
 CFLAGS_uts		+= $(EXTRA_CFLAGS)
 CFLAGS_uts		+= $(CSOURCEDEBUGFLAGS)
 CFLAGS_uts		+= $(CUSERFLAGS)
+CFLAGS_uts		+= $(CFLAGS_uts_$(MACH))
+CFLAGS_uts		+= -_gcc=-fno-asynchronous-unwind-tables
 
 #
-#	Declare that $(OBJECTS) and $(LINTS) can be compiled in parallel.
-#	The DUMMY target is for those instances where OBJECTS and LINTS
-#	are empty (to avoid an unconditional .PARALLEL).
-.PARALLEL:	$(OBJECTS) $(LINTS) DUMMY
+#	Declare that $(OBJECTS) can be compiled in parallel.  The DUMMY target
+#	is for those instances where OBJECTS is empty (to avoid an
+#	unconditional .PARALLEL).
+.PARALLEL:	$(OBJECTS) DUMMY
 
 #
 #	Expanded dependencies
@@ -253,10 +241,7 @@ DEF_DEPS	= $(DEF_BUILDS:%=def.%)
 ALL_DEPS	= $(ALL_BUILDS:%=all.%)
 CLEAN_DEPS	= $(ALL_BUILDS:%=clean.%)
 CLOBBER_DEPS	= $(ALL_BUILDS:%=clobber.%)
-LINT_DEPS	= $(DEF_BUILDS:%=lint.%)
-MODLINTLIB_DEPS	= $(DEF_BUILDS:%=modlintlib.%)
 MODLIST_DEPS	= $(DEF_BUILDS:%=modlist.%)
-CLEAN_LINT_DEPS	= $(ALL_BUILDS:%=clean.lint.%)
 INSTALL_DEPS	= $(DEF_BUILDS:%=install.%)
 SYM_DEPS	= $(SYM_BUILDS:%=symcheck.%)
 SISCHECK_DEPS	= $(DEF_BUILDS:%=sischeck.%)
@@ -270,8 +255,7 @@ BINARY		= $(OBJS_DIR)/$(MODULE)
 #
 #	Default cleanup definitions
 #
-CLEANLINTFILES	= $(LINTS) $(MOD_LINT_LIB)
-CLEANFILES	= $(OBJECTS) $(CLEANLINTFILES)
+CLEANFILES	= $(OBJECTS)
 CLOBBERFILES	= $(BINARY) $(CLEANFILES)
 
 #
@@ -310,6 +294,17 @@ INS.conffile= \
 	$(RM) $@; $(INS) -s -m $(CFILEMODE) -f $(@D) $(SRC_CONFFILE)
 
 #
+# By default, instead of $VERSION, we use $(UTS_LABEL), which is by
+# default set to $RELEASE aka "5.11".
+#
+# $VERSION changes when the git HEAD changes, leading to annoying merge
+# uniquification conflicts when doing partial builds during development.
+# The information from $VERSION is available via "buildversion" anyway.
+#
+CTFCVTFLAGS = -X -l "$(UTS_LABEL)"
+CTFMRGFLAGS += -l "$(UTS_LABEL)"
+
+#
 # The CTF merge of child kernel modules is performed against one of the genunix
 # modules.  For Intel builds, all modules will be used with a single genunix:
 # the one built in intel/genunix.  For SPARC builds, a given
@@ -323,75 +318,31 @@ CTFMERGE_GUDIR_sparc	= sun4u
 CTFMERGE_GUDIR_i386	= intel
 CTFMERGE_GUDIR		= $(CTFMERGE_GUDIR_$(MACH))
 
-CTFMERGE_GENUNIX 	= \
+CTFMERGE_GENUNIX	= \
 	$(UTSBASE)/$(CTFMERGE_GUDIR)/genunix/$(OBJS_DIR)/genunix
 
 #
-# Used to uniquify a non-genunix module against genunix.  If used in patch
-# mode (PATCH_BUILD != "#"), the patch ID corresponding to the module being
-# built will be used as the label.  If no ID is available, or if patch mode
-# is not being used, the value of $VERSION will be used.
+# Used to uniquify a non-genunix module against genunix.
 #
 # For the ease of developers dropping modules onto possibly unrelated systems,
 # you can set NO_GENUNIX_UNIQUIFY= in the environment to skip uniquifying
 # against genunix.
 #
+#
 NO_GENUNIX_UNIQUIFY=$(POUND_SIGN)
-SKIP_GENUNIX_UNIQUIFY=no
-$(NO_GENUNIX_UNIQUIFY)SKIP_GENUNIX_UNIQUIFY=yes
+CTFMERGE_GENUNIX_DFLAG=-d $(CTFMERGE_GENUNIX)
+$(NO_GENUNIX_UNIQUIFY)CTFMERGE_GENUNIX_DFLAG=
 
-CTFMERGE_UNIQUIFY_AGAINST_GENUNIX	= \
-	@label="-L VERSION" ; \
-	uniq= ; \
-	if [ -z "$(PATCH_BUILD)" ] ; then \
-		uniq="-D BASE" ; \
-		set -- `$(CTFFINDMOD) -n -r -t $(PMTMO_FILE) $@` ; \
-		if [ "X$$1" != "X-" ] ; then \
-			label="-l $$1" ; \
-			if [ "$$2" != "fcs" ] ; then \
-				uniq="-D $$2" ; \
-			fi ; \
-		fi ; \
-	fi ; \
-	if [ "$(SKIP_GENUNIX_UNIQUIFY)" = "yes" ]; then \
-		uniq= ; \
-	else \
-		uniq="-d $(CTFMERGE_GENUNIX) $$uniq" ; \
-	fi ; \
-	cmd="$(CTFMERGE) $(CTFMRGFLAGS) $$label $$uniq" ; \
-	cmd="$$cmd -o $@ $(OBJECTS) $(CTFEXTRAOBJS)" ; \
-	echo $$cmd ; \
-	$$cmd
+CTFMERGE_UNIQUIFY_AGAINST_GENUNIX = \
+	$(CTFMERGE) $(CTFMRGFLAGS) $(CTFMERGE_GENUNIX_DFLAG) \
+	-o $@ $(OBJECTS) $(CTFEXTRAOBJS)
 
 #
-# Used to merge the genunix module.  genunix has special requirements in
-# patch mode.  In particular, it needs to be able to find the genunix used
-# in the previous version of the KU patch (or the FCS version of genunix in
-# the case of KU 1).
+# Used to merge the genunix module.
 #
-CTFMERGE_GENUNIX_MERGE		= \
-	@if [ -z "$(PATCH_BUILD)" ] ; then \
-		set -- `$(CTFFINDMOD) -b $(OBJS_DIR) -o patch,lastgu -n -r \
-		    -t $(PMTMO_FILE) $(GENUNIX) || true` '' ; \
-		msg= ; \
-		if [ $$$(POUND_SIGN) -eq 1 ] ; \
-		    then msg="Error in $(CTFFINDMOD)" ; \
-		elif [ "X$$1" = "X-" ] ; then msg="Did not get label" ; \
-		elif [ "X$$2" = "X-" ] ; then msg="Did not get withfile" ; \
-		fi ; \
-		if [ -n "$$msg" ] ; then \
-			echo "make ctf: $$msg - removing $(GENUNIX)" ; \
-			$(RM) $(GENUNIX) ; \
-			exit 1 ; \
-		fi ; \
-		label="-l $$1" ; \
-		with="-w $$2" ; \
-	else \
-		label="-L VERSION" ; \
-	fi ; \
-	cmd="$(CTFMERGE) $(CTFMRGFLAGS) $$label $$with -o $@" ; \
-	echo $$cmd "$(OBJECTS) $(CTFEXTRAOBJS) $(IPCTF_TARGET)"; \
-	$$cmd $(OBJECTS) $(CTFEXTRAOBJS) $(IPCTF_TARGET)
+CTFMERGE_GENUNIX_MERGE = \
+	$(CTFMERGE) $(CTFMRGFLAGS) -o $@ \
+	$(OBJECTS) $(CTFEXTRAOBJS) $(IPCTF_TARGET)
 
 #
 # We ctfmerge the ip objects into genunix to maximize the number of common types
@@ -456,6 +407,7 @@ ROOT_FONT_DIR_32	= $(ROOT_MOD_DIR)/fonts
 ROOT_DACF_DIR_32	= $(ROOT_MOD_DIR)/dacf
 ROOT_CRYPTO_DIR_32	= $(ROOT_MOD_DIR)/crypto
 ROOT_MAC_DIR_32		= $(ROOT_MOD_DIR)/mac
+ROOT_CC_DIR_32		= $(ROOT_MOD_DIR)/cc
 ROOT_KICONV_DIR_32	= $(ROOT_MOD_DIR)/kiconv
 
 ROOT_KERN_DIR_64	= $(ROOT_MOD_DIR)/$(SUBDIR64)
@@ -483,6 +435,7 @@ ROOT_FONT_DIR_64	= $(ROOT_MOD_DIR)/fonts/$(SUBDIR64)
 ROOT_DACF_DIR_64	= $(ROOT_MOD_DIR)/dacf/$(SUBDIR64)
 ROOT_CRYPTO_DIR_64	= $(ROOT_MOD_DIR)/crypto/$(SUBDIR64)
 ROOT_MAC_DIR_64		= $(ROOT_MOD_DIR)/mac/$(SUBDIR64)
+ROOT_CC_DIR_64		= $(ROOT_MOD_DIR)/cc/$(SUBDIR64)
 ROOT_KICONV_DIR_64	= $(ROOT_MOD_DIR)/kiconv/$(SUBDIR64)
 
 ROOT_KERN_DIR		= $(ROOT_KERN_DIR_$(CLASS))
@@ -510,7 +463,9 @@ ROOT_FONT_DIR		= $(ROOT_FONT_DIR_$(CLASS))
 ROOT_DACF_DIR		= $(ROOT_DACF_DIR_$(CLASS))
 ROOT_CRYPTO_DIR		= $(ROOT_CRYPTO_DIR_$(CLASS))
 ROOT_MAC_DIR		= $(ROOT_MAC_DIR_$(CLASS))
+ROOT_CC_DIR		= $(ROOT_CC_DIR_$(CLASS))
 ROOT_KICONV_DIR		= $(ROOT_KICONV_DIR_$(CLASS))
+ROOT_FIRMWARE_DIR	= $(ROOT_MOD_DIR)/firmware
 
 ROOT_MOD_DIRS_32	= $(ROOT_BRAND_DIR_32) $(ROOT_DRV_DIR_32)
 ROOT_MOD_DIRS_32	= $(ROOT_BRAND_DIR_32) $(ROOT_DRV_DIR_32)
@@ -527,7 +482,9 @@ ROOT_MOD_DIRS_32        += $(ROOT_EMLXS_FW_DIR_32)
 ROOT_MOD_DIRS_32	+= $(ROOT_CPU_DIR_32) $(ROOT_FONT_DIR_32)
 ROOT_MOD_DIRS_32	+= $(ROOT_TOD_DIR_32) $(ROOT_DACF_DIR_32)
 ROOT_MOD_DIRS_32	+= $(ROOT_CRYPTO_DIR_32) $(ROOT_MAC_DIR_32)
+ROOT_MOD_DIRS_32	+= $(ROOT_CC_DIR_32)
 ROOT_MOD_DIRS_32	+= $(ROOT_KICONV_DIR_32)
+ROOT_MOD_DIRS_32	+= $(ROOT_FIRMWARE_DIR)
 
 USR_MOD_DIR		= $(ROOT)/usr/kernel
 
@@ -619,23 +576,12 @@ PARALLEL_KMODS = $(DRV_KMODS) $(EXEC_KMODS) $(FS_KMODS) $(SCHED_KMODS) \
 		 $(MMU_KMODS) $(DACF_KMODS) $(EXPORT_KMODS) $(IPP_KMODS) \
 		 $(CRYPTO_KMODS) $(PCBE_KMODS) \
 		 $(DRV_KMODS_$(CLASS)) $(MISC_KMODS_$(CLASS)) $(MAC_KMODS) \
-		 $(BRAND_KMODS) $(KICONV_KMODS) \
+		 $(BRAND_KMODS) $(KICONV_KMODS) $(CC_KMODS) \
 		 $(SOCKET_KMODS)
 
 KMODS = $(GENUNIX_KMODS) $(PARALLEL_KMODS)
 
 $(PARALLEL_KMODS): $(GENUNIX_KMODS)
-
-LINT_KMODS = $(DRV_KMODS) $(EXEC_KMODS) $(FS_KMODS) $(SCHED_KMODS) \
-	  $(TOD_KMODS) $(STRMOD_KMODS) $(SYS_KMODS) $(MISC_KMODS) \
-	  $(MACH_KMODS) $(GSS_KMODS) $(DACF_KMODS) $(IPP_KMODS) \
-	  $(CRYPTO_KMODS) $(PCBE_KMODS) \
-	  $(DRV_KMODS_$(CLASS)) $(MISC_KMODS_$(CLASS)) $(MAC_KMODS) \
-	  $(BRAND_KMODS) $(KICONV_KMODS) $(SOCKET_KMODS)
-
-THIS_YEAR:sh=	/bin/date +%Y
-$(OBJS_DIR)/logsubr.o	:= CPPFLAGS += -DTHIS_YEAR=$(THIS_YEAR)
-$(OBJS_DIR)/logsubr.ln	:= CPPFLAGS += -DTHIS_YEAR=$(THIS_YEAR)
 
 #
 #	Files to be compiled with -xa, to generate basic block execution
@@ -659,7 +605,6 @@ $(BB_FILES)	:= XAOPT = -xa
 #	$(RELEASE_BUILD) is on for a number of the late beta and fcs builds.
 #
 $(NOT_RELEASE_BUILD)$(OBJS_DIR)/unix_bb.o   := CPPFLAGS     += -DKCOV
-$(NOT_RELEASE_BUILD)$(OBJS_DIR)/unix_bb.ln  := CPPFLAGS     += -DKCOV
 
 #
 #	Do not let unix_bb.o get compiled with -xa!

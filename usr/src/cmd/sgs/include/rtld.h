@@ -21,6 +21,7 @@
 
 /*
  * Copyright (c) 1995, 2010, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2017, Joyent, Inc.
  */
 #ifndef	_RTLD_H
 #define	_RTLD_H
@@ -719,7 +720,10 @@ struct rt_map {
 	Capchain	*rt_capchain;	/* capabilities chain data */
 	uint_t		rt_cntl;	/* link-map control list we belong to */
 	uint_t		rt_aflags;	/* auditor flags, see LML_TFLG_AUD_ */
+	Rt_cond		rt_cv;		/* for waiting on flags changes */
+	Rt_lock		rt_lock;	/* for coordinating flags changes */
 					/* address of _init */
+	thread_t	rt_init_thread;	/* thread id in this lm's _init */
 	void		(*rt_init)(void);
 					/* address of _fini */
 	void		(*rt_fini)(void);
@@ -1109,8 +1113,8 @@ struct sresult {
  * hardware name, thus this structure is a little simpler.
  *
  * Note, the amd64 version of elf_rtbndr assumes that the sc_hw_1 value is at
- * offset zero. If you are changing this structure in a way that invalidates
- * this you need to update that code.
+ * offset zero and sc_hw_2 is at offset 8. If you are changing this structure
+ * in a way that invalidates this, you need to update that code.
  */
 typedef	struct {
 	elfcap_mask_t	sc_hw_1;	/* CA_SUNW_HW_1 capabilities */

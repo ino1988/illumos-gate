@@ -20,9 +20,10 @@
  */
 /*
  * Copyright (c) 2010, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2017 by Delphix. All rights reserved.
  */
 /*
- * Copyright (c) 2013, Joyent, Inc.  All rights reserved.
+ * Copyright 2019, Joyent, Inc.
  */
 
 #ifndef _SYS_APIC_COMMON_H
@@ -83,7 +84,7 @@ extern uchar_t	apic_io_vectbase[MAX_IO_APIC];
 extern uchar_t	apic_io_vectend[MAX_IO_APIC];
 extern uchar_t	apic_io_ver[MAX_IO_APIC];
 extern int	apic_io_max;
-extern int 	apic_nvidia_io_max;
+extern int	apic_nvidia_io_max;
 extern int apic_setspl_delay;		/* apic_setspl - delay enable	*/
 extern int apic_clkvect;
 
@@ -114,6 +115,8 @@ extern int	apic_panic_on_nmi;
 extern int	apic_panic_on_apic_error;
 
 extern int	apic_verbose;
+
+extern int	apic_pir_vect;
 
 #ifdef DEBUG
 extern int	apic_debug;
@@ -152,7 +155,6 @@ extern lock_t	apic_nmi_lock;
 extern lock_t	apic_error_lock;
 
 /* Patchable global variables. */
-extern int	apic_kmdb_on_nmi;	/* 0 - no, 1 - yes enter kmdb */
 extern uint32_t	apic_divide_reg_init;	/* 0 - divide by 2 */
 
 extern apic_intrmap_ops_t *apic_vt_ops;
@@ -165,7 +167,7 @@ extern int	apic_stretch_ISR;	/* IPL of 3 matches nothing now */
 
 extern cyclic_id_t apic_cyclic_id;
 
-extern void apic_nmi_intr(caddr_t arg, struct regs *rp);
+extern uint_t apic_nmi_intr(caddr_t arg, caddr_t);
 extern int	apic_clkinit();
 extern hrtime_t apic_gettime();
 extern hrtime_t apic_gethrtime();
@@ -181,11 +183,13 @@ extern void	apic_unset_idlecpu(processorid_t cpun);
 extern void	apic_shutdown(int cmd, int fcn);
 extern void	apic_preshutdown(int cmd, int fcn);
 extern processorid_t	apic_get_next_processorid(processorid_t cpun);
-extern uint_t	apic_calibrate(volatile uint32_t *, uint16_t *);
+extern uint64_t	apic_calibrate();
+extern int	apic_get_pir_ipivect(void);
+extern void	apic_send_pir_ipi(processorid_t);
 
 extern int apic_error_intr();
 extern void apic_cpcovf_mask_clear(void);
-extern int cmci_cpu_setup(cpu_setup_t what, int cpuid, void *arg);
+extern void apic_cmci_setup(processorid_t, boolean_t);
 extern void apic_intrmap_init(int apic_mode);
 extern processorid_t apic_find_cpu(int flag);
 extern processorid_t apic_get_next_bind_cpu(void);
@@ -196,6 +200,15 @@ extern int	apic_msix_enable;
 
 extern uint32_t apic_get_localapicid(uint32_t cpuid);
 extern uchar_t apic_get_ioapicid(uchar_t ioapicindex);
+
+typedef enum nmi_action {
+	NMI_ACTION_UNSET,
+	NMI_ACTION_PANIC,
+	NMI_ACTION_IGNORE,
+	NMI_ACTION_KMDB
+} nmi_action_t;
+
+extern nmi_action_t nmi_action;
 
 #ifdef	__cplusplus
 }

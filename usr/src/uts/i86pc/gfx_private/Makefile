@@ -22,6 +22,8 @@
 # uts/i86pc/gfx_private/Makefile
 # Copyright 2007 Sun Microsystems, Inc.  All rights reserved.
 # Use is subject to license terms.
+# Copyright 2015 Igor Kozhukhov <ikozhukhov@gmail.com>
+# Copyright 2019 OmniOS Community Edition (OmniOSce) Association.
 #
 
 #
@@ -37,11 +39,8 @@ UTSBASE	= ../..
 #	Define the module and object file sets.
 #
 MODULE		= gfx_private
-OBJECTS		= $(GFX_PRIVATE_OBJS:%=$(OBJS_DIR)/%) $(OBJS_DIR)/$(VGATEXT_FONT).o
-LINTS		= $(GFX_PRIVATE_OBJS:%.o=$(LINTS_DIR)/%.ln)
+OBJECTS		= $(GFX_PRIVATE_OBJS:%=$(OBJS_DIR)/%)
 ROOTMODULE	= $(ROOT_PSM_MISC_DIR)/$(MODULE)
-VGATEXT_FONT	= 8859-1
-VGATEXT_SRC	= $(UTSBASE)/intel/io/vgatext
 GFXP_VGATEXT	= gfxp_vgatext
 GFXP_VGATEXT_SRC	= $(UTSBASE)/i86pc/io/gfx_private
 
@@ -59,22 +58,15 @@ include $(UTSBASE)/i86pc/Makefile.i86pc
 #	Define targets
 #
 ALL_TARGET	= $(BINARY)
-LINT_TARGET	= $(MODULE).lint
 INSTALL_TARGET	= $(BINARY) $(ROOTMODULE)
 
 #
-# For now, disable these lint checks; maintainers should endeavor
-# to investigate and remove these for maximum lint coverage.
+# For now, disable these checks; maintainers should endeavor
+# to investigate and remove these for maximum coverage.
 # Please do not carry these forward to new Makefiles.
 #
-LINTTAGS	+= -erroff=E_BAD_PTR_CAST_ALIGN
-LINTTAGS	+= -erroff=E_STATIC_UNUSED
-LINTTAGS	+= -erroff=E_ASSIGN_NARROW_CONV
-
-CERRWARN	+= -_gcc=-Wno-uninitialized
+CERRWARN	+= $(CNOWARN_UNINIT)
 CERRWARN	+= -_gcc=-Wno-parentheses
-
-CLOBBERFILES	+= $(OBJS_DIR)/$(VGATEXT_FONT).c
 
 #
 #	Default build targets.
@@ -89,23 +81,7 @@ clean:		$(CLEAN_DEPS)
 
 clobber:	$(CLOBBER_DEPS)
 
-lint:		$(LINT_DEPS)
-
-modlintlib:	$(MODLINTLIB_DEPS)
-
-clean.lint:	$(CLEAN_LINT_DEPS)
-
 install:	$(INSTALL_DEPS)
-
-# Custom targets and rules
-
-$(OBJS_DIR)/$(VGATEXT_FONT).c:	$(VGATEXT_SRC)/$(VGATEXT_FONT).bdf
-	awk -f $(VGATEXT_SRC)/bdf_to_c.awk	\
-		$(VGATEXT_SRC)/$(VGATEXT_FONT).bdf > $@
-
-$(OBJS_DIR)/$(VGATEXT_FONT).o:	$(OBJS_DIR)/$(VGATEXT_FONT).c
-	$(COMPILE.c) -o $@ $<
-	$(CTFCONVERT_O)
 
 #
 #	Include common targets.

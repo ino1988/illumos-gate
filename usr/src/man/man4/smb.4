@@ -1,15 +1,26 @@
 '\" te
 .\" Copyright (c) 2009, Sun Microsystems, Inc. All Rights Reserved.
-.\" Copyright 2011, Nexenta Systems, Inc. All Rights Reserved.
-.\" The contents of this file are subject to the terms of the Common Development and Distribution License (the "License"). You may not use this file except in compliance with the License. You can obtain a copy of the license at usr/src/OPENSOLARIS.LICENSE or http://www.opensolaris.org/os/licensing.
-.\"  See the License for the specific language governing permissions and limitations under the License. When distributing Covered Code, include this CDDL HEADER in each file and include the License file at usr/src/OPENSOLARIS.LICENSE. If applicable, add the following below this CDDL HEADER, with the
-.\" fields enclosed by brackets "[]" replaced with your own identifying information: Portions Copyright [yyyy] [name of copyright owner]
-.TH SMB 4 "Sep 25, 2009"
+.\" Copyright 2017, Nexenta Systems, Inc. All Rights Reserved.
+.\" Copyright 2020, RackTop Systems, Inc. All Rights Reserved.
+.\" The contents of this file are subject to the terms of the
+.\" Common Development and Distribution License (the "License").
+.\" You may not use this file except in compliance with the License.
+.\"
+.\" You can obtain a copy of the license at usr/src/OPENSOLARIS.LICENSE
+.\" or http://www.opensolaris.org/os/licensing.
+.\" See the License for the specific language governing permissions
+.\" and limitations under the License.
+.\"
+.\" When distributing Covered Code, include this CDDL HEADER in each
+.\" file and include the License file at usr/src/OPENSOLARIS.LICENSE.
+.\" If applicable, add the following below this CDDL HEADER, with the
+.\" fields enclosed by brackets "[]" replaced with your own identifying
+.\" information: Portions Copyright [yyyy] [name of copyright owner]
+.\"
+.TH SMB 4 "December 28, 2020"
 .SH NAME
 smb \- configuration properties for Solaris CIFS server
 .SH DESCRIPTION
-.sp
-.LP
 Behavior of the Solaris CIFS server is defined by property values that are
 stored in the Service Management Facility, \fBsmf\fR(5).
 .sp
@@ -43,6 +54,22 @@ By default, no value is set.
 .RS 4n
 Specifies the full path for the SMD autohome map file, \fBsmbautohome\fR. The
 default path is \fB/etc\fR.
+.RE
+
+.sp
+.ne 2
+.na
+\fB\fBbypass_traverse_checking\fR\fR
+.ad
+.sp .6
+.RS 4n
+When set, allows the SMB server to bypass ACL "traverse" checks.
+The default value is \fBtrue\fR, for Windows compatibility.
+If this parameter is \fBfalse\fR, ACL checks require that
+"traverse" (directory execute) is granted on every directory
+above the directory the SMB client tries to access.
+Windows shares are normally setup with the higher level
+directories not specifically granting such access.
 .RE
 
 .sp
@@ -101,7 +128,70 @@ value is \fBfalse\fR.
 .sp
 .ne 2
 .na
-\fB\fBipv6_enabled\fR\fR
+\fB\fBencrypt\fR\fR
+.ad
+.sp .6
+.RS 4n
+Controls SMB3 Encryption. For requests on a particular share, the server's
+behavior is controlled by the stricter of this option and the per-share
+"encrypt" option.
+.sp
+When set to \fBdisabled\fR, the server will not ask clients to encrypt requests.
+When set to \fBenabled\fR, the server will ask clients to encrypt requests,
+but will not require that they do so. Any message that can be encrypted
+will be encrypted.
+When set to \fBrequired\fR, the server will deny access to or disconnect
+any client that does not support encryption or fails to encrypt requests
+that they should.
+.sp
+In other words, the \fBenabled\fR behavior is that any message that CAN
+be encrypted SHOULD be encrypted, while the \fBrequired\fR behavior is that any
+message that CAN be encrypted MUST be encrypted.
+.RE
+
+.sp
+.ne 2
+.na
+\fB\fBencrypt_cipher\fR\fR
+.ad
+.sp .6
+.RS 4n
+Specifies the maximum SMB 3.1.1 encryption cipher. This property is only used
+when encryption is On (see \fBencrypt\fR property) and negotiated SMB dialect is
+3.1.1 or higher (see \fBmax_protocol\fR property). Otherwise it is ignored.
+.sp
+When the property is set the valid values are aes-128-ccm and aes-128-gcm.
+If aes-128-gcm is selected both CCM and GCM are allowed, but GCM is preferred.
+If aes-128-ccm is selected it is the only allowed cipher. If the property is not
+set explicitly the default value is used - aes-128-gcm.
+.sp
+The property can be set to one of these values:
+.sp
+.ne 2
+.na
+\fBaes128-ccm\fR
+.ad
+.RS 13n
+The only allowed cipher is AES-128-CCM. It is the only cipher used for SMB 3.0.2
+dialect. In SMB 3.1.1 it is deprecated.
+.RE
+
+.sp
+.ne 2
+.na
+\fBaes128-gcm\fR
+.ad
+.RS 13n
+Both AES-128-CCM and AES-128-GCM ciphers are allowed, but AES-128-GCM is
+preferred.
+.RE
+
+.RE
+
+.sp
+.ne 2
+.na
+\fB\fBipv6_enable\fR\fR
 .ad
 .sp .6
 .RS 4n
@@ -118,7 +208,7 @@ are \fBtrue\fR and \fBfalse\fR. The default value is \fBfalse\fR.
 .RS 4n
 Specifies the number of seconds before an idle SMB connection is dropped by the
 Solaris CIFS server. If set to 0, idle connections are not dropped. Valid
-values are 0 and from 20 seconds and above. The default value is 5400 seconds.
+values are 0 and from 20 seconds and above. The default value is 0.
 .RE
 
 .sp
@@ -305,6 +395,30 @@ The UID of the Unix user.
 .sp
 .ne 2
 .na
+\fB\fBmax_protocol\fR\fR
+.ad
+.sp .6
+.RS 4n
+Specifies the maximum SMB protocol level that the SMB service
+should allow clients to negotiate.  The default value is \fB2.1\fR.
+Valid settings include: \fB1\fR, \fB2.1\fR, \fB3.0\fR
+.RE
+
+.sp
+.ne 2
+.na
+\fB\fBmin_protocol\fR\fR
+.ad
+.sp .6
+.RS 4n
+Specifies the minimum SMB protocol level that the SMB service
+should allow clients to negotiate.  The default value is \fB1\fR.
+Valid settings include: \fB1\fR, \fB2.1\fR, \fB3.0\fR
+.RE
+
+.sp
+.ne 2
+.na
 \fB\fBmax_workers\fR\fR
 .ad
 .sp .6
@@ -331,6 +445,21 @@ networks that are on the same physical network. When you specify a NetBIOS
 scope identifier, the server filters the number of machines that are listed in
 the browser display to make it easier to find other hosts. The value is a text
 string that represents a domain name. By default, no value is set.
+.RE
+
+.sp
+.ne 2
+.na
+\fB\fBoplock_enable\fR\fR
+.ad
+.sp .6
+.RS 4n
+Controls whether "oplocks" may be granted by the SMB server.
+The term "oplock" is short for "opportunistic lock", which is
+the legacy name for cache delegations in SMB.
+By default, oplocks are enabled.
+Note that if oplocks are disabled, file I/O performance may be
+severely reduced.
 .RE
 
 .sp
@@ -459,8 +588,6 @@ set.
 .RE
 
 .SH ATTRIBUTES
-.sp
-.LP
 See the \fBattributes\fR(5) man page for descriptions of the following
 attributes:
 .sp
@@ -476,7 +603,5 @@ Interface Stability	Uncommitted
 .TE
 
 .SH SEE ALSO
-.sp
-.LP
 \fBsharectl\fR(1M), \fBsmbadm\fR(1M), \fBsmbd\fR(1M), \fBsmbstat\fR(1M),
 \fBattributes\fR(5), \fBsmf\fR(5)

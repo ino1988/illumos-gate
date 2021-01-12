@@ -24,7 +24,7 @@
  */
 
 /*	Copyright (c) 1984, 1986, 1987, 1988, 1989 AT&T	*/
-/*	  All Rights Reserved  	*/
+/*	  All Rights Reserved	*/
 
 /*
  * University Copyright- Copyright (c) 1982, 1986, 1988
@@ -37,6 +37,7 @@
  */
 
 /* Copyright (c) 2013, OmniTI Computer Consulting, Inc. All rights reserved. */
+/* Copyright 2020 Joyent, Inc. */
 
 #ifndef	_SYS_FCNTL_H
 #define	_SYS_FCNTL_H
@@ -85,6 +86,12 @@ extern "C" {
 #define	O_NOFOLLOW	0x20000	/* don't follow symlinks */
 #define	O_NOLINKS	0x40000	/* don't allow multiple hard links */
 #define	O_CLOEXEC	0x800000	/* set the close-on-exec flag */
+#if !defined(_STRICT_SYMBOLS) || defined(_XPG7)
+#define	O_DIRECTORY	0x1000000	/* fail if not a directory */
+#endif
+#if !defined(_STRICT_SYMBOLS)
+#define	O_DIRECT	0x2000000	/* direct disk access hint */
+#endif
 
 /*
  * fcntl(2) requests
@@ -145,6 +152,7 @@ extern "C" {
  * the large and small file environments; therefore, the #defined values must
  * as well.
  * The NBMAND forms are private and should not be used.
+ * The FLOCK forms are also private and should not be used.
  */
 
 #if defined(_LP64) || _FILE_OFFSET_BITS == 32
@@ -155,6 +163,13 @@ extern "C" {
 #define	F_FREESP	11	/* Free file space */
 #define	F_GETLK		14	/* Get file lock */
 #define	F_SETLK_NBMAND	42	/* private */
+#if !defined(_STRICT_SYMBOLS)
+#define	F_OFD_GETLK	47	/* Get file lock owned by file */
+#define	F_OFD_SETLK	48	/* Set file lock owned by file */
+#define	F_OFD_SETLKW	49	/* Set file lock owned by file and wait */
+#define	F_FLOCK		53	/* private - set flock owned by file */
+#define	F_FLOCKW	54	/* private - set flock owned by file and wait */
+#endif	/* _STRICT_SYMBOLS */
 #else
 /* ILP32 large file application compilation environment version */
 #define	F_SETLK		34	/* Set file lock */
@@ -163,9 +178,16 @@ extern "C" {
 #define	F_FREESP	27	/* Free file space */
 #define	F_GETLK		33	/* Get file lock */
 #define	F_SETLK_NBMAND	44	/* private */
+#if !defined(_STRICT_SYMBOLS)
+#define	F_OFD_GETLK	50	/* Get file lock owned by file */
+#define	F_OFD_SETLK	51	/* Set file lock owned by file */
+#define	F_OFD_SETLKW	52	/* Set file lock owned by file and wait */
+#define	F_FLOCK		55	/* private - set flock owned by file */
+#define	F_FLOCKW	56	/* private - set flock owned by file and wait */
+#endif	/* _STRICT_SYMBOLS */
 #endif /* _LP64 || _FILE_OFFSET_BITS == 32 */
 
-#if 	defined(_LARGEFILE64_SOURCE)
+#if	defined(_LARGEFILE64_SOURCE)
 
 #if !defined(_LP64) || defined(_KERNEL)
 /*
@@ -180,6 +202,13 @@ extern "C" {
 #define	F_FREESP64	27	/* Free file space */
 #define	F_GETLK64	33	/* Get file lock */
 #define	F_SETLK64_NBMAND	44	/* private */
+#if !defined(_STRICT_SYMBOLS)
+#define	F_OFD_GETLK64	50	/* Get file lock owned by file */
+#define	F_OFD_SETLK64	51	/* Set file lock owned by file */
+#define	F_OFD_SETLKW64	52	/* Set file lock owned by file and wait */
+#define	F_FLOCK64	55	/* private - set flock owned by file */
+#define	F_FLOCKW64	56	/* private - set flock owned by file and wait */
+#endif	/* _STRICT_SYMBOLS */
 #else
 #define	F_SETLK64	6	/* Set file lock */
 #define	F_SETLKW64	7	/* Set file lock and wait */
@@ -187,6 +216,13 @@ extern "C" {
 #define	F_FREESP64	11	/* Free file space */
 #define	F_GETLK64	14	/* Get file lock */
 #define	F_SETLK64_NBMAND	42	/* private */
+#if !defined(_STRICT_SYMBOLS)
+#define	F_OFD_GETLK64	47	/* Get file lock owned by file */
+#define	F_OFD_SETLK64	48	/* Set file lock owned by file */
+#define	F_OFD_SETLKW64	49	/* Set file lock owned by file and wait */
+#define	F_FLOCK64	53	/* private - set flock owned by file */
+#define	F_FLOCKW64	54	/* private - set flock owned by file and wait */
+#endif /* _STRICT_SYMBOLS */
 #endif /* !_LP64 || _KERNEL */
 
 #endif /* _LARGEFILE64_SOURCE */
@@ -230,7 +266,7 @@ typedef struct flock32 {
 
 /* transitional large file interface version */
 
-#if 	defined(_LARGEFILE64_SOURCE)
+#if	defined(_LARGEFILE64_SOURCE)
 
 typedef struct flock64 {
 	short	l_type;

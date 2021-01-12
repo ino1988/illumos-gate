@@ -40,7 +40,6 @@ UTSBASE	= ../..
 #
 MODULE		= kaio
 OBJECTS		= $(KAIO_OBJS:%=$(OBJS_DIR)/%)
-LINTS		= $(KAIO_OBJS:%.o=$(LINTS_DIR)/%.ln)
 ROOTMODULE	= $(ROOT_SYS_DIR)/$(MODULE)
 
 #
@@ -52,7 +51,6 @@ include $(UTSBASE)/sparc/Makefile.sparc
 #	Define targets
 #
 ALL_TARGET	= $(BINARY)
-LINT_TARGET	= $(MODULE).lint
 INSTALL_TARGET	= $(BINARY) $(ROOTMODULE)
 
 #
@@ -63,21 +61,14 @@ $(MODSTUBS_O)	:= AS_CPPFLAGS += -DKAIO_MODULE
 CLEANFILES	+= $(MODSTUBS_O)
 
 #
-# lint pass one enforcement
-#
-CFLAGS += $(CCVERBOSE)
-
-#
-# For now, disable these lint checks; maintainers should endeavor
-# to investigate and remove these for maximum lint coverage.
+# For now, disable these warnings; maintainers should endeavor
+# to investigate and remove these for maximum coverage.
 # Please do not carry these forward to new Makefiles.
 #
-LINTTAGS	+= -erroff=E_BAD_PTR_CAST_ALIGN
-LINTTAGS	+= -erroff=E_ASSIGN_NARROW_CONV
-
+CFLAGS		+= $(CCVERBOSE)
 CERRWARN	+= -_gcc=-Wno-parentheses
 CERRWARN	+= -_gcc=-Wno-unused-label
-CERRWARN	+= -_gcc=-Wno-uninitialized
+CERRWARN	+= $(CNOWARN_UNINIT)
 
 #
 #	Default build targets.
@@ -91,12 +82,6 @@ all:		$(ALL_DEPS)
 clean:		$(CLEAN_DEPS)
 
 clobber:	$(CLOBBER_DEPS)
-
-lint:		$(LINT_DEPS)
-
-modlintlib:	$(MODLINTLIB_DEPS)
-
-clean.lint:	$(CLEAN_LINT_DEPS)
 
 install:	$(INSTALL_DEPS)
 

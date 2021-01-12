@@ -20,6 +20,8 @@
  */
 /*
  * Copyright (c) 2007, 2010, Oracle and/or its affiliates. All rights reserved.
+ * Copyright 2019 Nexenta by DDN, Inc. All rights reserved.
+ * Copyright (c) 2016 by Delphix. All rights reserved.
  */
 
 /*
@@ -38,15 +40,15 @@
  * +-------------------+       +-------------------+      +-------------------+
  * |     SESSION       |<----->|     SESSION       |......|      SESSION      |
  * +-------------------+       +-------------------+      +-------------------+
- *          |
- *          |
- *          v
- * +-------------------+       +-------------------+      +-------------------+
- * |       USER        |<----->|       USER        |......|       USER        |
- * +-------------------+       +-------------------+      +-------------------+
- *          |
- *          |
- *          v
+ *   |          |
+ *   |          |
+ *   |          v
+ *   |  +-------------------+     +-------------------+   +-------------------+
+ *   |  |       USER        |<--->|       USER        |...|       USER        |
+ *   |  +-------------------+     +-------------------+   +-------------------+
+ *   |
+ *   |
+ *   v
  * +-------------------+       +-------------------+      +-------------------+
  * |       TREE        |<----->|       TREE        |......|       TREE        |
  * +-------------------+       +-------------------+      +-------------------+
@@ -67,57 +69,95 @@
  * User State Machine
  * ------------------
  *
- *    +-----------------------------+	 T0
- *    |  SMB_USER_STATE_LOGGED_IN   |<----------- Creation/Allocation
+ *
+ *		    | T0:  Creation/Allocation
+ *		    |	   (1st session setup)
+ *		    v
+ *    +-----------------------------+
+ *    |  SMB_USER_STATE_LOGGING_ON  |<----------+
+ *    +-----------------------------+	 addl. session setup
+ *		    |		|	(more proc. required)
+ *		    | T2	|		^
+ *		    |		|		| T1: (cont.)
+ *		    |		+------->-------?
+ *		    v				| T3: (fail)
+ *    +-----------------------------+		v
+ *    |  SMB_USER_STATE_LOGGED_ON   |	    (logged off)
  *    +-----------------------------+
  *		    |
- *		    | T1
+ *		    | T4
  *		    |
  *		    v
  *    +-----------------------------+
  *    |  SMB_USER_STATE_LOGGING_OFF |
  *    +-----------------------------+
  *		    |
- *		    | T2
+ *		    | T5
  *		    |
  *		    v
- *    +-----------------------------+    T3
+ *    +-----------------------------+    T6
  *    |  SMB_USER_STATE_LOGGED_OFF  |----------> Deletion/Free
  *    +-----------------------------+
  *
- * SMB_USER_STATE_LOGGED_IN
+ * SMB_USER_STATE_LOGGING_ON
  *
  *    While in this state:
- *      - The user is queued in the list of users of his session.
+ *      - The user is in the list of users for their session.
+ *      - References will be given out ONLY for session setup.
+ *      - This user can not access anything yet.
+ *
+ * SMB_USER_STATE_LOGGED_ON
+ *
+ *    While in this state:
+ *      - The user is in the list of users for their session.
  *      - References will be given out if the user is looked up.
  *      - The user can access files and pipes.
  *
  * SMB_USER_STATE_LOGGING_OFF
  *
  *    While in this state:
- *      - The user is queued in the list of users of his session.
+ *      - The user is in the list of users for their session.
  *      - References will not be given out if the user is looked up.
  *      - The trees the user connected are being disconnected.
  *      - The resources associated with the user remain.
  *
- * SMB_USER_STATE_LOGGING_OFF
+ * SMB_USER_STATE_LOGGED_OFF
  *
  *    While in this state:
- *      - The user is queued in the list of users of his session.
+ *      - The user is queued in the list of users of their session.
  *      - References will not be given out if the user is looked up.
  *      - The user has no more trees connected.
  *      - The resources associated with the user remain.
  *
  * Transition T0
  *
- *    This transition occurs in smb_user_login(). A new user is created and
- *    added to the list of users of a session.
+ *    First request in an SMB Session Setup sequence creates a
+ *    new user object and adds it to the list of users for
+ *    this session.  User UID is assigned and returned.
  *
  * Transition T1
  *
- *    This transition occurs in smb_user_logoff().
+ *    Subsequent SMB Session Setup requests (on the same UID
+ *    assigned in T0) update the state of this user object,
+ *    communicating with smbd for the crypto work.
  *
  * Transition T2
+ *
+ *    If the SMB Session Setup sequence is successful, T2
+ *    makes the new user object available for requests.
+ *
+ * Transition T3
+ *
+ *    If an Session Setup request gets an error other than
+ *    the expected "more processing required", then T3
+ *    leads to state "LOGGED_OFF" and then tear-down of the
+ *    partially constructed user.
+ *
+ * Transition T4
+ *
+ *    Normal SMB User Logoff request, or session tear-down.
+ *
+ * Transition T5
  *
  *    This transition occurs in smb_user_release(). The resources associated
  *    with the user are deleted as well as the user. For the transition to
@@ -128,7 +168,7 @@
  * --------
  *
  *    The state machine of the user structures is controlled by 3 elements:
- *      - The list of users of the session he belongs to.
+ *      - The list of users of the session they belong to.
  *      - The mutex embedded in the structure itself.
  *      - The reference count.
  *
@@ -141,7 +181,9 @@
  *    Rules of access to a user structure:
  *
  *    1) In order to avoid deadlocks, when both (mutex and lock of the session
- *       list) have to be entered, the lock must be entered first.
+ *       list) have to be entered, the lock must be entered first. Additionally,
+ *       one may NOT flush the deleteq of either the tree list or the ofile list
+ *       while the user mutex is held.
  *
  *    2) All actions applied to a user require a reference count.
  *
@@ -152,7 +194,7 @@
  *    number of references to the user in other structures (such as an smb
  *    request). The reference count is not incremented in these 2 instances:
  *
- *    1) The user is logged in. An user is anchored by his state. If there's
+ *    1) The user is logged in. An user is anchored by their state. If there's
  *       no activity involving a user currently logged in, the reference
  *       count of that user is zero.
  *
@@ -168,19 +210,90 @@
 
 #define	ADMINISTRATORS_SID	"S-1-5-32-544"
 
-static boolean_t smb_user_is_logged_in(smb_user_t *);
+/* Don't leak object addresses */
+#define	SMB_USER_SSNID(u) \
+	((uintptr_t)&smb_cache_user ^ (uintptr_t)(u))
+
+static void smb_user_delete(void *);
 static int smb_user_enum_private(smb_user_t *, smb_svcenum_t *);
-static smb_tree_t *smb_user_get_tree(smb_llist_t *, smb_tree_t *);
-static void smb_user_setcred(smb_user_t *, cred_t *, uint32_t);
-static void smb_user_nonauth_logon(uint32_t);
-static void smb_user_auth_logoff(uint32_t);
+static void smb_user_auth_logoff(smb_user_t *);
+static void smb_user_logoff_tq(void *);
 
 /*
  * Create a new user.
+ *
+ * For SMB2 and later, session IDs (u_ssnid) need to be unique among all
+ * current and "recent" sessions.  The session ID is derived from the
+ * address of the smb_user object (obscured by XOR with a constant).
+ * This adds a 3-bit generation number in the low bits, incremented
+ * when we allocate an smb_user_t from its kmem cache, so it can't
+ * be confused with a (recent) previous incarnation of this object.
  */
 smb_user_t *
-smb_user_login(
-    smb_session_t	*session,
+smb_user_new(smb_session_t *session)
+{
+	smb_user_t	*user;
+	uint_t		gen;	// generation (low 3 bits of ssnid)
+	uint32_t	ucount;
+
+	ASSERT(session);
+	ASSERT(session->s_magic == SMB_SESSION_MAGIC);
+
+	user = kmem_cache_alloc(smb_cache_user, KM_SLEEP);
+	gen = (user->u_ssnid + 1) & 7;
+	bzero(user, sizeof (smb_user_t));
+
+	user->u_refcnt = 1;
+	user->u_session = session;
+	user->u_server = session->s_server;
+	user->u_logon_time = gethrestime_sec();
+
+	if (smb_idpool_alloc(&session->s_uid_pool, &user->u_uid))
+		goto errout;
+	user->u_ssnid = SMB_USER_SSNID(user) + gen;
+
+	mutex_init(&user->u_mutex, NULL, MUTEX_DEFAULT, NULL);
+	user->u_state = SMB_USER_STATE_LOGGING_ON;
+	user->u_magic = SMB_USER_MAGIC;
+
+	smb_llist_enter(&session->s_user_list, RW_WRITER);
+	ucount = smb_llist_get_count(&session->s_user_list);
+	smb_llist_insert_tail(&session->s_user_list, user);
+	smb_llist_exit(&session->s_user_list);
+	smb_server_inc_users(session->s_server);
+
+	/*
+	 * If we added the first user to the session, cancel the
+	 * timeout that was started in smb_session_receiver().
+	 */
+	if (ucount == 0) {
+		timeout_id_t tmo = NULL;
+
+		smb_rwx_rwenter(&session->s_lock, RW_WRITER);
+		tmo = session->s_auth_tmo;
+		session->s_auth_tmo = NULL;
+		smb_rwx_rwexit(&session->s_lock);
+
+		if (tmo != NULL)
+			(void) untimeout(tmo);
+	}
+
+	return (user);
+
+errout:
+	if (user->u_uid != 0)
+		smb_idpool_free(&session->s_uid_pool, user->u_uid);
+	kmem_cache_free(smb_cache_user, user);
+	return (NULL);
+}
+
+/*
+ * Fill in the details of a user, meaning a transition
+ * from state LOGGING_ON to state LOGGED_ON.
+ */
+int
+smb_user_logon(
+    smb_user_t		*user,
     cred_t		*cr,
     char		*domain_name,
     char		*account_name,
@@ -188,20 +301,31 @@ smb_user_login(
     uint32_t		privileges,
     uint32_t		audit_sid)
 {
-	smb_user_t	*user;
+	ksocket_t authsock = NULL;
+	timeout_id_t tmo = NULL;
 
-	ASSERT(session);
-	ASSERT(session->s_magic == SMB_SESSION_MAGIC);
+	ASSERT(user->u_magic == SMB_USER_MAGIC);
 	ASSERT(cr);
 	ASSERT(account_name);
 	ASSERT(domain_name);
 
-	user = kmem_cache_alloc(session->s_server->si_cache_user, KM_SLEEP);
-	bzero(user, sizeof (smb_user_t));
-	user->u_refcnt = 1;
-	user->u_session = session;
-	user->u_server = session->s_server;
-	user->u_logon_time = gethrestime_sec();
+	mutex_enter(&user->u_mutex);
+
+	if (user->u_state != SMB_USER_STATE_LOGGING_ON) {
+		mutex_exit(&user->u_mutex);
+		return (-1);
+	}
+
+	/*
+	 * In the transition from LOGGING_ON to LOGGED_ON,
+	 * we always have an auth. socket to close.
+	 */
+	authsock = user->u_authsock;
+	user->u_authsock = NULL;
+	tmo = user->u_auth_tmo;
+	user->u_auth_tmo = NULL;
+
+	user->u_state = SMB_USER_STATE_LOGGED_ON;
 	user->u_flags = flags;
 	user->u_name_len = strlen(account_name) + 1;
 	user->u_domain_len = strlen(domain_name) + 1;
@@ -209,109 +333,93 @@ smb_user_login(
 	user->u_domain = smb_mem_strdup(domain_name);
 	user->u_audit_sid = audit_sid;
 
-	if (!smb_idpool_alloc(&session->s_uid_pool, &user->u_uid)) {
-		if (!smb_idpool_constructor(&user->u_tid_pool)) {
-			smb_llist_constructor(&user->u_tree_list,
-			    sizeof (smb_tree_t), offsetof(smb_tree_t, t_lnd));
-			mutex_init(&user->u_mutex, NULL, MUTEX_DEFAULT, NULL);
-			smb_user_setcred(user, cr, privileges);
-			user->u_state = SMB_USER_STATE_LOGGED_IN;
-			user->u_magic = SMB_USER_MAGIC;
-			smb_llist_enter(&session->s_user_list, RW_WRITER);
-			smb_llist_insert_tail(&session->s_user_list, user);
-			smb_llist_exit(&session->s_user_list);
-			smb_server_inc_users(session->s_server);
-			return (user);
-		}
-		smb_idpool_free(&session->s_uid_pool, user->u_uid);
-	}
-	smb_mem_free(user->u_name);
-	smb_mem_free(user->u_domain);
-	kmem_cache_free(session->s_server->si_cache_user, user);
-	return (NULL);
-}
+	smb_user_setcred(user, cr, privileges);
 
-/*
- * Create a new user based on an existing user, used to support
- * additional SessionSetupX requests for a user on a session.
- *
- * Assumes the caller has a reference on the original user from
- * a user_lookup_by_x call.
- */
-smb_user_t *
-smb_user_dup(
-    smb_user_t		*orig_user)
-{
-	smb_user_t	*user;
+	mutex_exit(&user->u_mutex);
 
-	ASSERT(orig_user->u_magic == SMB_USER_MAGIC);
-	ASSERT(orig_user->u_refcnt);
+	/* Timeout callback takes u_mutex. See untimeout(9f) */
+	if (tmo != NULL)
+		(void) untimeout(tmo);
 
-	user = smb_user_login(orig_user->u_session, orig_user->u_cred,
-	    orig_user->u_domain, orig_user->u_name, orig_user->u_flags,
-	    orig_user->u_privileges, orig_user->u_audit_sid);
+	/* This close can block, so not under the mutex. */
+	if (authsock != NULL)
+		smb_authsock_close(user, authsock);
 
-	if (user)
-		smb_user_nonauth_logon(orig_user->u_audit_sid);
-
-	return (user);
+	return (0);
 }
 
 /*
  * smb_user_logoff
  *
- * Change the user state and disconnect trees.
+ * Change the user state to "logging off" and disconnect trees.
  * The user list must not be entered or modified here.
+ *
+ * We remain in state "logging off" until the last ref. is gone,
+ * then smb_user_release takes us to state "logged off".
  */
 void
 smb_user_logoff(
     smb_user_t		*user)
 {
+	ksocket_t authsock = NULL;
+	timeout_id_t tmo = NULL;
+
 	ASSERT(user->u_magic == SMB_USER_MAGIC);
 
 	mutex_enter(&user->u_mutex);
 	ASSERT(user->u_refcnt);
 	switch (user->u_state) {
-	case SMB_USER_STATE_LOGGED_IN: {
+	case SMB_USER_STATE_LOGGING_ON:
+		authsock = user->u_authsock;
+		user->u_authsock = NULL;
+		tmo = user->u_auth_tmo;
+		user->u_auth_tmo = NULL;
+		user->u_state = SMB_USER_STATE_LOGGING_OFF;
+		mutex_exit(&user->u_mutex);
+
+		/* Timeout callback takes u_mutex. See untimeout(9f) */
+		if (tmo != NULL)
+			(void) untimeout(tmo);
+		/* This close can block, so not under the mutex. */
+		if (authsock != NULL)
+			smb_authsock_close(user, authsock);
+		break;
+
+	case SMB_USER_STATE_LOGGED_ON:
 		/*
 		 * The user is moved into a state indicating that the log off
 		 * process has started.
 		 */
 		user->u_state = SMB_USER_STATE_LOGGING_OFF;
 		mutex_exit(&user->u_mutex);
-		/*
-		 * All the trees hanging off of this user are disconnected.
-		 */
-		smb_user_disconnect_trees(user);
-		smb_user_auth_logoff(user->u_audit_sid);
-		mutex_enter(&user->u_mutex);
-		user->u_state = SMB_USER_STATE_LOGGED_OFF;
-		smb_server_dec_users(user->u_server);
+		smb_session_disconnect_owned_trees(user->u_session, user);
+		smb_user_auth_logoff(user);
 		break;
-	}
+
 	case SMB_USER_STATE_LOGGED_OFF:
 	case SMB_USER_STATE_LOGGING_OFF:
+		mutex_exit(&user->u_mutex);
 		break;
 
 	default:
 		ASSERT(0);
+		mutex_exit(&user->u_mutex);
 		break;
 	}
-	mutex_exit(&user->u_mutex);
 }
 
 /*
- * Take a reference on a user.
+ * Take a reference on a user.  Do not return a reference unless the user is in
+ * the logged-in state.
  */
 boolean_t
 smb_user_hold(smb_user_t *user)
 {
-	ASSERT(user);
-	ASSERT(user->u_magic == SMB_USER_MAGIC);
+	SMB_USER_VALID(user);
 
 	mutex_enter(&user->u_mutex);
 
-	if (smb_user_is_logged_in(user)) {
+	if (user->u_state == SMB_USER_STATE_LOGGED_ON) {
 		user->u_refcnt++;
 		mutex_exit(&user->u_mutex);
 		return (B_TRUE);
@@ -319,6 +427,19 @@ smb_user_hold(smb_user_t *user)
 
 	mutex_exit(&user->u_mutex);
 	return (B_FALSE);
+}
+
+/*
+ * Unconditionally take a reference on a user.
+ */
+void
+smb_user_hold_internal(smb_user_t *user)
+{
+	SMB_USER_VALID(user);
+
+	mutex_enter(&user->u_mutex);
+	user->u_refcnt++;
+	mutex_exit(&user->u_mutex);
 }
 
 /*
@@ -331,25 +452,32 @@ void
 smb_user_release(
     smb_user_t		*user)
 {
-	ASSERT(user->u_magic == SMB_USER_MAGIC);
+	smb_session_t *ssn = user->u_session;
+
+	SMB_USER_VALID(user);
+
+	/* flush the tree list delete queue */
+	smb_llist_flush(&ssn->s_tree_list);
 
 	mutex_enter(&user->u_mutex);
 	ASSERT(user->u_refcnt);
 	user->u_refcnt--;
 
-	/* flush the tree list's delete queue */
-	smb_llist_flush(&user->u_tree_list);
-
 	switch (user->u_state) {
-	case SMB_USER_STATE_LOGGED_OFF:
-		if (user->u_refcnt == 0)
-			smb_session_post_user(user->u_session, user);
-		break;
-
-	case SMB_USER_STATE_LOGGED_IN:
 	case SMB_USER_STATE_LOGGING_OFF:
+		if (user->u_refcnt == 0) {
+			smb_session_t *ssn = user->u_session;
+			user->u_state = SMB_USER_STATE_LOGGED_OFF;
+			smb_llist_post(&ssn->s_user_list, user,
+			    smb_user_delete);
+		}
 		break;
 
+	case SMB_USER_STATE_LOGGING_ON:
+	case SMB_USER_STATE_LOGGED_ON:
+		break;
+
+	case SMB_USER_STATE_LOGGED_OFF:
 	default:
 		ASSERT(0);
 		break;
@@ -357,246 +485,75 @@ smb_user_release(
 	mutex_exit(&user->u_mutex);
 }
 
+/*
+ * Timeout handler for user logons that stay too long in
+ * state SMB_USER_STATE_LOGGING_ON.  This is setup by a
+ * timeout call in smb_authsock_open, and called in a
+ * callout thread, so schedule a taskq job to do the
+ * real work of logging off this user.
+ */
 void
-smb_user_post_tree(smb_user_t *user, smb_tree_t *tree)
+smb_user_auth_tmo(void *arg)
 {
+	smb_user_t *user = arg;
+	smb_request_t *sr;
+
 	SMB_USER_VALID(user);
-	SMB_TREE_VALID(tree);
-	ASSERT(tree->t_refcnt == 0);
-	ASSERT(tree->t_state == SMB_TREE_STATE_DISCONNECTED);
-	ASSERT(tree->t_user == user);
 
-	smb_llist_post(&user->u_tree_list, tree, smb_tree_dealloc);
-}
+	/*
+	 * If we can't allocate a request, it means the
+	 * session is being torn down, so nothing to do.
+	 */
+	sr = smb_request_alloc(user->u_session, 0);
+	if (sr == NULL)
+		return;
 
-
-/*
- * Find a tree by tree-id.
- */
-smb_tree_t *
-smb_user_lookup_tree(
-    smb_user_t		*user,
-    uint16_t		tid)
-
-{
-	smb_tree_t	*tree;
-
-	ASSERT(user);
-	ASSERT(user->u_magic == SMB_USER_MAGIC);
-
-	smb_llist_enter(&user->u_tree_list, RW_READER);
-	tree = smb_llist_head(&user->u_tree_list);
-
-	while (tree) {
-		ASSERT(tree->t_magic == SMB_TREE_MAGIC);
-		ASSERT(tree->t_user == user);
-
-		if (tree->t_tid == tid) {
-			if (smb_tree_hold(tree)) {
-				smb_llist_exit(&user->u_tree_list);
-				return (tree);
-			} else {
-				smb_llist_exit(&user->u_tree_list);
-				return (NULL);
-			}
-		}
-
-		tree = smb_llist_next(&user->u_tree_list, tree);
+	/*
+	 * Check user state, and take a hold if it's
+	 * still logging on.  If not, we're done.
+	 */
+	mutex_enter(&user->u_mutex);
+	if (user->u_state != SMB_USER_STATE_LOGGING_ON) {
+		mutex_exit(&user->u_mutex);
+		smb_request_free(sr);
+		return;
 	}
+	/* smb_user_hold_internal */
+	user->u_refcnt++;
+	mutex_exit(&user->u_mutex);
 
-	smb_llist_exit(&user->u_tree_list);
-	return (NULL);
+	/*
+	 * The user hold is given to the SR, and released in
+	 * smb_user_logoff_tq / smb_request_free
+	 */
+	sr->uid_user = user;
+	sr->user_cr = user->u_cred;
+	sr->sr_state = SMB_REQ_STATE_SUBMITTED;
+
+	(void) taskq_dispatch(
+	    user->u_server->sv_worker_pool,
+	    smb_user_logoff_tq, sr, TQ_SLEEP);
 }
 
 /*
- * Find the first connected tree that matches the specified sharename.
- * If the specified tree is NULL the search starts from the beginning of
- * the user's tree list.  If a tree is provided the search starts just
- * after that tree.
+ * Helper for smb_user_auth_tmo()
  */
-smb_tree_t *
-smb_user_lookup_share(
-    smb_user_t		*user,
-    const char		*sharename,
-    smb_tree_t		*tree)
+static void
+smb_user_logoff_tq(void *arg)
 {
-	ASSERT(user);
-	ASSERT(user->u_magic == SMB_USER_MAGIC);
-	ASSERT(sharename);
+	smb_request_t	*sr = arg;
 
-	smb_llist_enter(&user->u_tree_list, RW_READER);
+	SMB_REQ_VALID(sr);
 
-	if (tree) {
-		ASSERT(tree->t_magic == SMB_TREE_MAGIC);
-		ASSERT(tree->t_user == user);
-		tree = smb_llist_next(&user->u_tree_list, tree);
-	} else {
-		tree = smb_llist_head(&user->u_tree_list);
-	}
+	mutex_enter(&sr->sr_mutex);
+	sr->sr_worker = curthread;
+	sr->sr_state = SMB_REQ_STATE_ACTIVE;
+	mutex_exit(&sr->sr_mutex);
 
-	while (tree) {
-		ASSERT(tree->t_magic == SMB_TREE_MAGIC);
-		ASSERT(tree->t_user == user);
-		if (smb_strcasecmp(tree->t_sharename, sharename, 0) == 0) {
-			if (smb_tree_hold(tree)) {
-				smb_llist_exit(&user->u_tree_list);
-				return (tree);
-			}
-		}
-		tree = smb_llist_next(&user->u_tree_list, tree);
-	}
+	smb_user_logoff(sr->uid_user);
 
-	smb_llist_exit(&user->u_tree_list);
-	return (NULL);
-}
-
-/*
- * Find the first connected tree that matches the specified volume name.
- * If the specified tree is NULL the search starts from the beginning of
- * the user's tree list.  If a tree is provided the search starts just
- * after that tree.
- */
-smb_tree_t *
-smb_user_lookup_volume(
-    smb_user_t		*user,
-    const char		*name,
-    smb_tree_t		*tree)
-{
-	ASSERT(user);
-	ASSERT(user->u_magic == SMB_USER_MAGIC);
-	ASSERT(name);
-
-	smb_llist_enter(&user->u_tree_list, RW_READER);
-
-	if (tree) {
-		ASSERT(tree->t_magic == SMB_TREE_MAGIC);
-		ASSERT(tree->t_user == user);
-		tree = smb_llist_next(&user->u_tree_list, tree);
-	} else {
-		tree = smb_llist_head(&user->u_tree_list);
-	}
-
-	while (tree) {
-		ASSERT(tree->t_magic == SMB_TREE_MAGIC);
-		ASSERT(tree->t_user == user);
-
-		if (smb_strcasecmp(tree->t_volume, name, 0) == 0) {
-			if (smb_tree_hold(tree)) {
-				smb_llist_exit(&user->u_tree_list);
-				return (tree);
-			}
-		}
-
-		tree = smb_llist_next(&user->u_tree_list, tree);
-	}
-
-	smb_llist_exit(&user->u_tree_list);
-	return (NULL);
-}
-
-/*
- * Disconnect all trees that match the specified client process-id.
- */
-void
-smb_user_close_pid(
-    smb_user_t		*user,
-    uint16_t		pid)
-{
-	smb_tree_t	*tree;
-
-	ASSERT(user);
-	ASSERT(user->u_magic == SMB_USER_MAGIC);
-
-	tree = smb_user_get_tree(&user->u_tree_list, NULL);
-	while (tree) {
-		smb_tree_t *next;
-		ASSERT(tree->t_user == user);
-		smb_tree_close_pid(tree, pid);
-		next = smb_user_get_tree(&user->u_tree_list, tree);
-		smb_tree_release(tree);
-		tree = next;
-	}
-}
-
-/*
- * Disconnect all trees that this user has connected.
- */
-void
-smb_user_disconnect_trees(
-    smb_user_t		*user)
-{
-	smb_tree_t	*tree;
-
-	ASSERT(user);
-	ASSERT(user->u_magic == SMB_USER_MAGIC);
-
-	tree = smb_user_get_tree(&user->u_tree_list, NULL);
-	while (tree) {
-		ASSERT(tree->t_user == user);
-		smb_tree_disconnect(tree, B_TRUE);
-		smb_tree_release(tree);
-		tree = smb_user_get_tree(&user->u_tree_list, NULL);
-	}
-}
-
-/*
- * Disconnect all trees that match the specified share name.
- */
-void
-smb_user_disconnect_share(
-    smb_user_t		*user,
-    const char		*sharename)
-{
-	smb_tree_t	*tree;
-	smb_tree_t	*next;
-
-	ASSERT(user);
-	ASSERT(user->u_magic == SMB_USER_MAGIC);
-	ASSERT(user->u_refcnt);
-
-	tree = smb_user_lookup_share(user, sharename, NULL);
-	while (tree) {
-		ASSERT(tree->t_magic == SMB_TREE_MAGIC);
-		smb_session_cancel_requests(user->u_session, tree, NULL);
-		smb_tree_disconnect(tree, B_TRUE);
-		next = smb_user_lookup_share(user, sharename, tree);
-		smb_tree_release(tree);
-		tree = next;
-	}
-}
-
-/*
- * Close a file by its unique id.
- */
-int
-smb_user_fclose(smb_user_t *user, uint32_t uniqid)
-{
-	smb_llist_t	*tree_list;
-	smb_tree_t	*tree;
-	int		rc = ENOENT;
-
-	ASSERT(user);
-	ASSERT(user->u_magic == SMB_USER_MAGIC);
-
-	tree_list = &user->u_tree_list;
-	ASSERT(tree_list);
-
-	smb_llist_enter(tree_list, RW_READER);
-	tree = smb_llist_head(tree_list);
-
-	while ((tree != NULL) && (rc == ENOENT)) {
-		ASSERT(tree->t_user == user);
-
-		if (smb_tree_hold(tree)) {
-			rc = smb_tree_fclose(tree, uniqid);
-			smb_tree_release(tree);
-		}
-
-		tree = smb_llist_next(tree_list, tree);
-	}
-
-	smb_llist_exit(tree_list);
-	return (rc);
+	sr->sr_state = SMB_REQ_STATE_COMPLETED;
+	smb_request_free(sr);
 }
 
 /*
@@ -606,12 +563,14 @@ smb_user_fclose(smb_user_t *user, uint32_t uniqid)
 boolean_t
 smb_user_is_admin(smb_user_t *user)
 {
+#ifdef	_KERNEL
 	char		sidstr[SMB_SID_STRSZ];
 	ksidlist_t	*ksidlist;
 	ksid_t		ksid1;
 	ksid_t		*ksid2;
-	boolean_t	rc = B_FALSE;
 	int		i;
+#endif	/* _KERNEL */
+	boolean_t	rc = B_FALSE;
 
 	ASSERT(user);
 	ASSERT(user->u_cred);
@@ -619,6 +578,7 @@ smb_user_is_admin(smb_user_t *user)
 	if (SMB_USER_IS_ADMIN(user))
 		return (B_TRUE);
 
+#ifdef	_KERNEL
 	bzero(&ksid1, sizeof (ksid_t));
 	(void) strlcpy(sidstr, ADMINISTRATORS_SID, SMB_SID_STRSZ);
 	ASSERT(smb_sid_splitstr(sidstr, &ksid1.ks_rid) == 0);
@@ -647,6 +607,7 @@ smb_user_is_admin(smb_user_t *user)
 	} while (i++ < ksidlist->ksl_nsid);
 
 	ksid_rele(&ksid1);
+#endif	/* _KERNEL */
 	return (rc);
 }
 
@@ -688,9 +649,7 @@ smb_user_namecmp(smb_user_t *user, const char *name)
 int
 smb_user_enum(smb_user_t *user, smb_svcenum_t *svcenum)
 {
-	smb_tree_t	*tree;
-	smb_tree_t	*next;
-	int		rc;
+	int		rc = 0;
 
 	ASSERT(user);
 	ASSERT(user->u_magic == SMB_USER_MAGIC);
@@ -698,49 +657,10 @@ smb_user_enum(smb_user_t *user, smb_svcenum_t *svcenum)
 	if (svcenum->se_type == SMB_SVCENUM_TYPE_USER)
 		return (smb_user_enum_private(user, svcenum));
 
-	tree = smb_user_get_tree(&user->u_tree_list, NULL);
-	while (tree) {
-		ASSERT(tree->t_user == user);
-
-		rc = smb_tree_enum(tree, svcenum);
-		if (rc != 0) {
-			smb_tree_release(tree);
-			break;
-		}
-
-		next = smb_user_get_tree(&user->u_tree_list, tree);
-		smb_tree_release(tree);
-		tree = next;
-	}
-
 	return (rc);
 }
 
 /* *************************** Static Functions ***************************** */
-
-/*
- * Determine whether or not a user is logged in.
- * Typically, a reference can only be taken on a logged-in user.
- *
- * This is a private function and must be called with the user
- * mutex held.
- */
-static boolean_t
-smb_user_is_logged_in(smb_user_t *user)
-{
-	switch (user->u_state) {
-	case SMB_USER_STATE_LOGGED_IN:
-		return (B_TRUE);
-
-	case SMB_USER_STATE_LOGGING_OFF:
-	case SMB_USER_STATE_LOGGED_OFF:
-		return (B_FALSE);
-
-	default:
-		ASSERT(0);
-		return (B_FALSE);
-	}
-}
 
 /*
  * Delete a user.  The tree list should be empty.
@@ -748,73 +668,64 @@ smb_user_is_logged_in(smb_user_t *user)
  * Remove the user from the session's user list before freeing resources
  * associated with the user.
  */
-void
+static void
 smb_user_delete(void *arg)
 {
 	smb_session_t	*session;
 	smb_user_t	*user = (smb_user_t *)arg;
+	uint32_t	ucount;
 
 	SMB_USER_VALID(user);
 	ASSERT(user->u_refcnt == 0);
 	ASSERT(user->u_state == SMB_USER_STATE_LOGGED_OFF);
+	ASSERT(user->u_authsock == NULL);
+	ASSERT(user->u_auth_tmo == NULL);
 
 	session = user->u_session;
+
+	smb_server_dec_users(session->s_server);
 	smb_llist_enter(&session->s_user_list, RW_WRITER);
 	smb_llist_remove(&session->s_user_list, user);
 	smb_idpool_free(&session->s_uid_pool, user->u_uid);
+	ucount = smb_llist_get_count(&session->s_user_list);
 	smb_llist_exit(&session->s_user_list);
 
+	/*
+	 * When the last smb_user_t object goes away, schedule a timeout
+	 * after which we'll terminate this session if the client hasn't
+	 * authenticated another smb_user_t on this session by then.
+	 */
+	if (ucount == 0) {
+		smb_rwx_rwenter(&session->s_lock, RW_WRITER);
+		if (session->s_state == SMB_SESSION_STATE_NEGOTIATED &&
+		    session->s_auth_tmo == NULL) {
+			session->s_auth_tmo =
+			    timeout((tmo_func_t)smb_session_disconnect,
+			    session, SEC_TO_TICK(smb_session_auth_tmo));
+		}
+		smb_rwx_cvbcast(&session->s_lock);
+		smb_rwx_rwexit(&session->s_lock);
+	}
+
+	/*
+	 * This user is no longer on s_user_list, however...
+	 *
+	 * This is called via smb_llist_post, which means it may run
+	 * BEFORE smb_user_release drops u_mutex (if another thread
+	 * flushes the delete queue before we do).  Synchronize.
+	 */
 	mutex_enter(&user->u_mutex);
 	mutex_exit(&user->u_mutex);
 
 	user->u_magic = (uint32_t)~SMB_USER_MAGIC;
 	mutex_destroy(&user->u_mutex);
-	smb_llist_destructor(&user->u_tree_list);
-	smb_idpool_destructor(&user->u_tid_pool);
 	if (user->u_cred)
 		crfree(user->u_cred);
 	if (user->u_privcred)
 		crfree(user->u_privcred);
 	smb_mem_free(user->u_name);
 	smb_mem_free(user->u_domain);
-	kmem_cache_free(user->u_server->si_cache_user, user);
-}
-
-/*
- * Get the next connected tree in the list.  A reference is taken on
- * the tree, which can be released later with smb_tree_release().
- *
- * If the specified tree is NULL the search starts from the beginning of
- * the tree list.  If a tree is provided the search starts just after
- * that tree.
- *
- * Returns NULL if there are no connected trees in the list.
- */
-static smb_tree_t *
-smb_user_get_tree(
-    smb_llist_t		*tree_list,
-    smb_tree_t		*tree)
-{
-	ASSERT(tree_list);
-
-	smb_llist_enter(tree_list, RW_READER);
-
-	if (tree) {
-		ASSERT(tree->t_magic == SMB_TREE_MAGIC);
-		tree = smb_llist_next(tree_list, tree);
-	} else {
-		tree = smb_llist_head(tree_list);
-	}
-
-	while (tree) {
-		if (smb_tree_hold(tree))
-			break;
-
-		tree = smb_llist_next(tree_list, tree);
-	}
-
-	smb_llist_exit(tree_list);
-	return (tree);
+	kmem_cache_free(smb_cache_user, user);
 }
 
 cred_t *
@@ -829,13 +740,14 @@ smb_user_getprivcred(smb_user_t *user)
 	return ((user->u_privcred)? user->u_privcred : user->u_cred);
 }
 
+#ifdef	_KERNEL
 /*
  * Assign the user cred and privileges.
  *
  * If the user has backup and/or restore privleges, dup the cred
  * and add those privileges to this new privileged cred.
  */
-static void
+void
 smb_user_setcred(smb_user_t *user, cred_t *cr, uint32_t privileges)
 {
 	cred_t *privcred = NULL;
@@ -843,6 +755,57 @@ smb_user_setcred(smb_user_t *user, cred_t *cr, uint32_t privileges)
 	ASSERT(cr);
 	crhold(cr);
 
+	/*
+	 * See smb.4 bypass_traverse_checking
+	 *
+	 * For historical reasons, the Windows privilege is named
+	 * SeChangeNotifyPrivilege, though the description is
+	 * "Bypass traverse checking".
+	 */
+	if ((privileges & SMB_USER_PRIV_CHANGE_NOTIFY) != 0) {
+		(void) crsetpriv(cr, PRIV_FILE_DAC_SEARCH, NULL);
+	}
+
+	/*
+	 * Window's "take ownership privilege" is similar to our
+	 * PRIV_FILE_CHOWN privilege. It's normally given to members of the
+	 * "Administrators" group, which normally includes the the local
+	 * Administrator (like root) and when joined to a domain,
+	 * "Domain Admins".
+	 */
+	if ((privileges & SMB_USER_PRIV_TAKE_OWNERSHIP) != 0) {
+		(void) crsetpriv(cr,
+		    PRIV_FILE_CHOWN,
+		    PRIV_FILE_CHOWN_SELF,
+		    NULL);
+	}
+
+	/*
+	 * Bypass ACL for READ accesses.
+	 */
+	if ((privileges & SMB_USER_PRIV_READ_FILE) != 0) {
+		(void) crsetpriv(cr, PRIV_FILE_DAC_READ, NULL);
+	}
+
+	/*
+	 * Bypass ACL for WRITE accesses.
+	 * Include FILE_OWNER, as it covers WRITE_ACL and DELETE.
+	 */
+	if ((privileges & SMB_USER_PRIV_WRITE_FILE) != 0) {
+		(void) crsetpriv(cr,
+		    PRIV_FILE_DAC_WRITE,
+		    PRIV_FILE_OWNER,
+		    NULL);
+	}
+
+	/*
+	 * These privileges are used only when a file is opened with
+	 * 'backup intent'. These allow users to bypass certain access
+	 * controls. Administrators typically have these privileges,
+	 * and they are used during recursive take-ownership operations.
+	 * Some commonly used tools use 'backup intent' to administrate
+	 * files that do not grant explicit permissions to Administrators.
+	 */
 	if (privileges & (SMB_USER_PRIV_BACKUP | SMB_USER_PRIV_RESTORE))
 		privcred = crdup(cr);
 
@@ -865,6 +828,7 @@ smb_user_setcred(smb_user_t *user, cred_t *cr, uint32_t privileges)
 	user->u_privcred = privcred;
 	user->u_privileges = privileges;
 }
+#endif	/* _KERNEL */
 
 /*
  * Private function to support smb_user_enum.
@@ -934,7 +898,6 @@ smb_user_netinfo_init(smb_user_t *user, smb_netuserinfo_t *info)
 	info->ui_native_os = session->native_os;
 	info->ui_ipaddr = session->ipaddr;
 	info->ui_numopens = session->s_file_cnt;
-	info->ui_smb_uid = user->u_uid;
 	info->ui_logon_time = user->u_logon_time;
 	info->ui_flags = user->u_flags;
 	info->ui_posix_uid = crgetuid(user->u_cred);
@@ -968,40 +931,34 @@ smb_user_netinfo_fini(smb_netuserinfo_t *info)
 	bzero(info, sizeof (smb_netuserinfo_t));
 }
 
+/*
+ * Tell smbd this user is going away so it can clean up their
+ * audit session, autohome dir, etc.
+ *
+ * Note that when we're shutting down, smbd will already have set
+ * smbd.s_shutting_down and therefore will ignore door calls.
+ * Skip this during shutdown to reduce upcall noise.
+ */
 static void
-smb_user_nonauth_logon(uint32_t audit_sid)
+smb_user_auth_logoff(smb_user_t *user)
 {
-	(void) smb_kdoor_upcall(SMB_DR_USER_NONAUTH_LOGON,
+	smb_server_t *sv = user->u_server;
+	uint32_t audit_sid;
+
+	if (sv->sv_state != SMB_SERVER_STATE_RUNNING)
+		return;
+
+	audit_sid = user->u_audit_sid;
+	(void) smb_kdoor_upcall(sv, SMB_DR_USER_AUTH_LOGOFF,
 	    &audit_sid, xdr_uint32_t, NULL, NULL);
 }
 
-static void
-smb_user_auth_logoff(uint32_t audit_sid)
+boolean_t
+smb_is_same_user(cred_t *cr1, cred_t *cr2)
 {
-	(void) smb_kdoor_upcall(SMB_DR_USER_AUTH_LOGOFF,
-	    &audit_sid, xdr_uint32_t, NULL, NULL);
-}
+	ksid_t *ks1 = crgetsid(cr1, KSID_USER);
+	ksid_t *ks2 = crgetsid(cr2, KSID_USER);
 
-smb_token_t *
-smb_get_token(smb_logon_t *user_info)
-{
-	smb_token_t	*token;
-	int		rc;
-
-	token = kmem_zalloc(sizeof (smb_token_t), KM_SLEEP);
-
-	rc = smb_kdoor_upcall(SMB_DR_USER_AUTH_LOGON,
-	    user_info, smb_logon_xdr, token, smb_token_xdr);
-
-	if (rc != 0) {
-		kmem_free(token, sizeof (smb_token_t));
-		return (NULL);
-	}
-
-	if (!smb_token_valid(token)) {
-		smb_token_free(token);
-		return (NULL);
-	}
-
-	return (token);
+	return (ks1->ks_rid == ks2->ks_rid &&
+	    strcmp(ks1->ks_domain->kd_name, ks2->ks_domain->kd_name) == 0);
 }

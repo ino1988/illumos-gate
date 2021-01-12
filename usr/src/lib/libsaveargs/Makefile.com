@@ -22,6 +22,7 @@
 # Copyright 2007 Sun Microsystems, Inc.  All rights reserved.
 # Use is subject to license terms.
 #
+# Copyright (c) 2019, Joyent, Inc.
 
 #
 # The build process for libsaveargs is sightly different from that used by other
@@ -59,8 +60,14 @@ LINKTEST_OBJ = objs/linktest_stand.o
 CLOBBERFILES_standalone = $(LINKTEST_OBJ)
 CLOBBERFILES += $(CLOBBERFILES_$(CURTYPE))
 
+#
+# The standalone environment currently does not support the stack
+# protector.
+#
+$(STANDLIBRARY) := STACKPROTECT = none
+
 LIBS_standalone	= $(STANDLIBRARY)
-LIBS_library = $(DYNLIB) $(LINTLIB)
+LIBS_library = $(DYNLIB)
 LIBS = $(LIBS_$(CURTYPE))
 
 MAPFILES =	$(COMDIR)/mapfile-vers
@@ -74,7 +81,6 @@ ASFLAGS_standalone = -DDIS_STANDALONE
 ASFLAGS_library =
 ASFLAGS += -P $(ASFLAGS_$(CURTYPE)) -D_ASM
 
-$(LINTLIB) := SRCS = $(COMDIR)/$(LINTSRC)
 
 # We want the thread-specific errno in the library, but we don't want it in
 # the standalone.  $(DTS_ERRNO) is designed to add -D_TS_ERRNO to $(CPPFLAGS),

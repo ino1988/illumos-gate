@@ -21,8 +21,8 @@
 
 /*
  * Copyright (c) 2003, 2010, Oracle and/or its affiliates. All rights reserved.
- * Copyright (c) 2013, Joyent, Inc. All rights reserved.
- * Copyright (c) 2012 by Delphix. All rights reserved.
+ * Copyright (c) 2018, Joyent, Inc.
+ * Copyright (c) 2012, 2016 by Delphix. All rights reserved.
  */
 
 #include <sys/types.h>
@@ -115,8 +115,10 @@
 #define	DT_VERS_1_11	DT_VERSION_NUMBER(1, 11, 0)
 #define	DT_VERS_1_12	DT_VERSION_NUMBER(1, 12, 0)
 #define	DT_VERS_1_12_1	DT_VERSION_NUMBER(1, 12, 1)
-#define	DT_VERS_LATEST	DT_VERS_1_12_1
-#define	DT_VERS_STRING	"Sun D 1.12.1"
+#define	DT_VERS_1_13	DT_VERSION_NUMBER(1, 13, 0)
+#define	DT_VERS_1_14	DT_VERSION_NUMBER(1, 14, 0)
+#define	DT_VERS_LATEST	DT_VERS_1_14
+#define	DT_VERS_STRING	"Sun D 1.14"
 
 const dt_version_t _dtrace_versions[] = {
 	DT_VERS_1_0,	/* D API 1.0.0 (PSARC 2001/466) Solaris 10 FCS */
@@ -142,6 +144,8 @@ const dt_version_t _dtrace_versions[] = {
 	DT_VERS_1_11,	/* D API 1.11 */
 	DT_VERS_1_12,	/* D API 1.12 */
 	DT_VERS_1_12_1,	/* D API 1.12.1 */
+	DT_VERS_1_13,	/* D API 1.13 */
+	DT_VERS_1_14,	/* D API 1.14 */
 	0
 };
 
@@ -399,6 +403,8 @@ static const dt_ident_t _dtrace_globals[] = {
 	&dt_idops_func, "void(@, ...)" },
 { "this", DT_IDENT_PTR, 0, 0, DT_ATTR_STABCMN, DT_VERS_1_0,
 	&dt_idops_type, "void" },
+{ "threadname", DT_IDENT_SCALAR, 0, DIF_VAR_THREADNAME,
+	DT_ATTR_STABCMN, DT_VERS_1_14, &dt_idops_type, "string" },
 { "tid", DT_IDENT_SCALAR, 0, DIF_VAR_TID, DT_ATTR_STABCMN, DT_VERS_1_0,
 	&dt_idops_type, "id_t" },
 { "timestamp", DT_IDENT_SCALAR, 0, DIF_VAR_TIMESTAMP,
@@ -425,8 +431,8 @@ static const dt_ident_t _dtrace_globals[] = {
 	&dt_idops_type, "uid_t" },
 { "umod", DT_IDENT_ACTFUNC, 0, DT_ACT_UMOD, DT_ATTR_STABCMN,
 	DT_VERS_1_2, &dt_idops_func, "_usymaddr(uintptr_t)" },
-{ "uregs", DT_IDENT_ARRAY, 0, DIF_VAR_UREGS, DT_ATTR_STABCMN, DT_VERS_1_0,
-	&dt_idops_regs, NULL },
+{ "uregs", DT_IDENT_ARRAY, DT_IDFLG_WRITE, DIF_VAR_UREGS, DT_ATTR_STABCMN,
+	DT_VERS_1_0, &dt_idops_regs, NULL },
 { "ustack", DT_IDENT_ACTFUNC, 0, DT_ACT_USTACK, DT_ATTR_STABCMN, DT_VERS_1_0,
 	&dt_idops_func, "stack(...)" },
 { "ustackdepth", DT_IDENT_SCALAR, 0, DIF_VAR_USTACKDEPTH,
@@ -1134,13 +1140,13 @@ alloc:
 	 * Add intrinsic pointer types that are needed to initialize printf
 	 * format dictionary types (see table in dt_printf.c).
 	 */
-	(void) ctf_add_pointer(dmp->dm_ctfp, CTF_ADD_ROOT,
+	(void) ctf_add_pointer(dmp->dm_ctfp, CTF_ADD_ROOT, NULL,
 	    ctf_lookup_by_name(dmp->dm_ctfp, "void"));
 
-	(void) ctf_add_pointer(dmp->dm_ctfp, CTF_ADD_ROOT,
+	(void) ctf_add_pointer(dmp->dm_ctfp, CTF_ADD_ROOT, NULL,
 	    ctf_lookup_by_name(dmp->dm_ctfp, "char"));
 
-	(void) ctf_add_pointer(dmp->dm_ctfp, CTF_ADD_ROOT,
+	(void) ctf_add_pointer(dmp->dm_ctfp, CTF_ADD_ROOT, NULL,
 	    ctf_lookup_by_name(dmp->dm_ctfp, "int"));
 
 	if (ctf_update(dmp->dm_ctfp) != 0) {
@@ -1200,11 +1206,11 @@ alloc:
 	ctc.ctc_argc = 0;
 	ctc.ctc_flags = 0;
 
-	dtp->dt_type_func = ctf_add_function(dmp->dm_ctfp,
+	dtp->dt_type_func = ctf_add_funcptr(dmp->dm_ctfp,
 	    CTF_ADD_ROOT, &ctc, NULL);
 
-	dtp->dt_type_fptr = ctf_add_pointer(dmp->dm_ctfp,
-	    CTF_ADD_ROOT, dtp->dt_type_func);
+	dtp->dt_type_fptr = ctf_add_pointer(dmp->dm_ctfp, CTF_ADD_ROOT, NULL,
+	    dtp->dt_type_func);
 
 	/*
 	 * We also insert CTF definitions for the special D intrinsic types

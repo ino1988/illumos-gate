@@ -21,6 +21,8 @@
 /*
  * Copyright 2010 Sun Microsystems, Inc.  All rights reserved.
  * Use is subject to license terms.
+ * Copyright (c) 2016 by Delphix. All rights reserved.
+ * Copyright 2018 Joyent, Inc.
  */
 
 /*
@@ -690,7 +692,7 @@ page_retire_transient_ue(page_t *pp)
 	ASSERT(!hat_page_is_mapped(pp));
 
 	/*
-	 * If this page is a repeat offender, retire him under the
+	 * If this page is a repeat offender, retire it under the
 	 * "two strikes and you're out" rule. The caller is responsible
 	 * for scrubbing the page to try to clear the error.
 	 */
@@ -850,9 +852,8 @@ page_retire_incr_pend_count(void *datap)
 {
 	PR_INCR_KSTAT(pr_pending);
 
-	if ((datap == &kvp) || (datap == &zvp)) {
+	if (datap == &kvp || datap == &kvps[KV_ZVP] || datap == &kvps[KV_VVP])
 		PR_INCR_KSTAT(pr_pending_kas);
-	}
 }
 
 void
@@ -860,9 +861,8 @@ page_retire_decr_pend_count(void *datap)
 {
 	PR_DECR_KSTAT(pr_pending);
 
-	if ((datap == &kvp) || (datap == &zvp)) {
+	if (datap == &kvp || datap == &kvps[KV_ZVP] || datap == &kvps[KV_VVP])
 		PR_DECR_KSTAT(pr_pending_kas);
-	}
 }
 
 /*

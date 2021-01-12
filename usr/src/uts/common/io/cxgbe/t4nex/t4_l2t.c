@@ -30,6 +30,7 @@
 #include <sys/stream.h>
 #include <sys/strsun.h>
 #include <sys/ethernet.h>
+#include <sys/containerof.h>
 #include <inet/ip.h>
 #include <inet/ipclassifier.h>
 #include <inet/tcp.h>
@@ -103,10 +104,6 @@ jhash_2words(u32 a, u32 b, u32 initval)
 	return (jhash_3words(a, b, 0, initval));
 }
 
-#ifndef container_of
-#define	container_of(p, s, f) ((s *)(((uint8_t *)(p)) - offsetof(s, f)))
-#endif
-
 #if defined(__GNUC__)
 #define	likely(x)	__builtin_expect((x), 1)
 #define	unlikely(x)	__builtin_expect((x), 0)
@@ -128,9 +125,10 @@ enum {
 
 struct l2t_data {
 	krwlock_t lock;
+	u_int l2t_size;
 	volatile uint_t nfree;	 /* number of free entries */
 	struct l2t_entry *rover; /* starting point for next allocation */
-	struct l2t_entry l2tab[L2T_SIZE];
+	struct l2t_entry l2tab[];
 };
 
 #define	VLAN_NONE	0xfff
@@ -138,6 +136,8 @@ struct l2t_data {
 #define	SIN(x)		((struct sockaddr_in *)(x))
 #define	SINADDR(x)	(SIN(x)->sin_addr.s_addr)
 #define	atomic_read(x) atomic_add_int_nv(x, 0)
+
+#ifdef TCP_OFFLOAD_ENABLE
 /*
  * Allocate a free L2T entry.
  * Must be called with l2t_data.lockatomic_load_acq_int held.
@@ -153,7 +153,7 @@ alloc_l2e(struct l2t_data *d)
 		return (NULL);
 
 	/* there's definitely a free entry */
-	for (e = d->rover, end = &d->l2tab[L2T_SIZE]; e != end; ++e)
+	for (e = d->rover, end = &d->l2tab[d->l2t_size]; e != end; ++e)
 		if (atomic_read(&e->refcnt) == 0)
 			goto found;
 
@@ -190,6 +190,7 @@ write_l2e(adapter_t *sc, struct l2t_entry *e, int sync)
 {
 	mblk_t *m;
 	struct cpl_l2t_write_req *req;
+	int idx = e->idx + sc->vres.l2t.start;
 
 	ASSERT(MUTEX_HELD(&e->lock));
 
@@ -201,10 +202,10 @@ write_l2e(adapter_t *sc, struct l2t_entry *e, int sync)
 
 	/* LINTED: E_CONSTANT_CONDITION */
 	INIT_TP_WR(req, 0);
-	OPCODE_TID(req) = htonl(MK_OPCODE_TID(CPL_L2T_WRITE_REQ, e->idx |
+	OPCODE_TID(req) = htonl(MK_OPCODE_TID(CPL_L2T_WRITE_REQ, idx |
 	    V_SYNC_WR(sync) | V_TID_QID(sc->sge.fwq.abs_id)));
 	req->params = htons(V_L2T_W_PORT(e->lport) | V_L2T_W_NOREPLY(!sync));
-	req->l2t_idx = htons(e->idx);
+	req->l2t_idx = htons(idx);
 	req->vlan = htons(e->vlan);
 	(void) memcpy(req->dst_mac, e->dmac, sizeof (req->dst_mac));
 
@@ -217,20 +218,29 @@ write_l2e(adapter_t *sc, struct l2t_entry *e, int sync)
 
 	return (0);
 }
+#endif
 
 struct l2t_data *
 t4_init_l2t(struct adapter *sc)
 {
-	int i;
+	int i, l2t_size;
 	struct l2t_data *d;
 
-	d = kmem_zalloc(sizeof (*d), KM_SLEEP);
+	l2t_size = sc->vres.l2t.size;
+	if(l2t_size < 1)
+		return (NULL);
+
+	d = kmem_zalloc(sizeof(*d) + l2t_size * sizeof (struct l2t_entry), KM_SLEEP);
+	if (!d)
+		return (NULL);
+
+	d->l2t_size = l2t_size;
 
 	d->rover = d->l2tab;
-	(void) atomic_swap_uint(&d->nfree, L2T_SIZE);
+	(void) atomic_swap_uint(&d->nfree, l2t_size);
 	rw_init(&d->lock, NULL, RW_DRIVER, NULL);
 
-	for (i = 0; i < L2T_SIZE; i++) {
+	for (i = 0; i < l2t_size; i++) {
 		/* LINTED: E_ASSIGN_NARROW_CONV */
 		d->l2tab[i].idx = i;
 		d->l2tab[i].state = L2T_STATE_UNUSED;
@@ -238,7 +248,9 @@ t4_init_l2t(struct adapter *sc)
 		(void) atomic_swap_uint(&d->l2tab[i].refcnt, 0);
 	}
 
+#ifdef TCP_OFFLOAD_ENABLE
 	(void) t4_register_cpl_handler(sc, CPL_L2T_WRITE_RPL, do_l2t_write_rpl);
+#endif
 
 	return (d);
 }
@@ -256,7 +268,7 @@ t4_free_l2t(struct l2t_data *d)
 	return (0);
 }
 
-#ifndef TCP_OFFLOAD_DISABLE
+#ifdef TCP_OFFLOAD_ENABLE
 static inline void
 l2t_hold(struct l2t_data *d, struct l2t_entry *e)
 {
@@ -326,21 +338,6 @@ arpq_enqueue(struct l2t_entry *e, mblk_t *m)
 	else
 		e->arpq_head = m;
 	e->arpq_tail = m;
-}
-
-static inline void
-send_pending(struct adapter *sc, struct l2t_entry *e)
-{
-	mblk_t *m, *next;
-
-	ASSERT(MUTEX_HELD(&e->lock));
-
-	for (m = e->arpq_head; m; m = next) {
-		next = m->b_next;
-		m->b_next = NULL;
-		(void) t4_wrq_tx(sc, MBUF_EQ(m), m);
-	}
-	e->arpq_head = e->arpq_tail = NULL;
 }
 
 int
@@ -421,7 +418,7 @@ t4_l2e_free(struct l2t_entry *e)
 	}
 	mutex_exit(&e->lock);
 
-	d = container_of(e, struct l2t_data, l2tab[e->idx]);
+	d = __containerof(e, struct l2t_data, l2tab[e->idx]);
 	atomic_inc_uint(&d->nfree);
 
 }
@@ -440,24 +437,13 @@ do_l2t_write_rpl(struct sge_iq *iq, const struct rss_header *rss, mblk_t *m)
 	struct adapter *sc = iq->adapter;
 	const struct cpl_l2t_write_rpl *rpl = (const void *)(rss + 1);
 	unsigned int tid = GET_TID(rpl);
-	unsigned int idx = tid & (L2T_SIZE - 1);
+	unsigned int idx = tid % L2T_SIZE;
 
 	if (likely(rpl->status != CPL_ERR_NONE)) {
 		cxgb_printf(sc->dip, CE_WARN,
 		    "Unexpected L2T_WRITE_RPL status %u for entry %u",
 		    rpl->status, idx);
 		return (-EINVAL);
-	}
-
-	if (tid & F_SYNC_WR) {
-		struct l2t_entry *e = &sc->l2t->l2tab[idx];
-
-		mutex_enter(&e->lock);
-		if (e->state != L2T_STATE_SWITCHING) {
-			send_pending(sc, e);
-			e->state = L2T_STATE_VALID;
-		}
-		mutex_exit(&e->lock);
 	}
 
 	return (0);

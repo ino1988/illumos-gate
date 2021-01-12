@@ -21,11 +21,12 @@
 
 /*
  * Copyright (c) 1989, 2010, Oracle and/or its affiliates. All rights reserved.
- * Copyright (c) 2013, Joyent, Inc. All rights reserved.
+ * Copyright 2017, Joyent, Inc.
+ * Copyright 2020 OmniOS Community Edition (OmniOSce) Association.
  */
 
 /*	Copyright (c) 1984, 1986, 1987, 1988, 1989 AT&T	*/
-/*	  All Rights Reserved  	*/
+/*	  All Rights Reserved	*/
 
 #include <sys/types.h>
 #include <sys/t_lock.h>
@@ -65,6 +66,19 @@
 #include <sys/copyops.h>
 #include <sys/time.h>
 #include <sys/msacct.h>
+#include <sys/flock_impl.h>
+#include <sys/stropts.h>
+#include <sys/strsubr.h>
+#include <sys/pathname.h>
+#include <sys/mode.h>
+#include <sys/socketvar.h>
+#include <sys/autoconf.h>
+#include <sys/dtrace.h>
+#include <sys/timod.h>
+#include <sys/fs/namenode.h>
+#include <netinet/udp.h>
+#include <netinet/tcp.h>
+#include <inet/cc.h>
 #include <vm/as.h>
 #include <vm/rm.h>
 #include <vm/seg.h>
@@ -145,6 +159,11 @@ prchoose(proc_t *p)
 		if (VSTOPPED(t)) {	/* virtually stopped */
 			if (t_req == NULL)
 				t_req = t;
+			continue;
+		}
+
+		/* If this is a process kernel thread, ignore it. */
+		if ((t->t_proc_flag & TP_KTHREAD) != 0) {
 			continue;
 		}
 
@@ -703,7 +722,6 @@ pr_p_lock(prnode_t *pnp)
 		mutex_enter(&p->p_lock);
 	}
 	p->p_proc_flag |= P_PR_LOCK;
-	THREAD_KPRI_REQUEST();
 	return (p);
 }
 
@@ -810,7 +828,6 @@ prunmark(proc_t *p)
 
 	cv_signal(&pr_pid_cv[p->p_slot]);
 	p->p_proc_flag &= ~P_PR_LOCK;
-	THREAD_KPRI_RELEASE();
 }
 
 void
@@ -919,6 +936,29 @@ prgetstatus(proc_t *p, pstatus_t *sp, zone_t *zp)
 	sp->pr_flags = sp->pr_lwp.pr_flags;
 }
 
+/*
+ * Query mask of held signals for a given thread.
+ *
+ * This makes use of schedctl_sigblock() to query if userspace has requested
+ * that all maskable signals be held.  While it would be tempting to call
+ * schedctl_finish_sigblock() and apply that update to t->t_hold, it cannot be
+ * done safely without the risk of racing with the thread under consideration.
+ */
+void
+prgethold(kthread_t *t, sigset_t *sp)
+{
+	k_sigset_t set;
+
+	if (schedctl_sigblock(t)) {
+		set.__sigbits[0] = FILLSET0 & ~CANTMASK0;
+		set.__sigbits[1] = FILLSET1 & ~CANTMASK1;
+		set.__sigbits[2] = FILLSET2 & ~CANTMASK2;
+	} else {
+		set = t->t_hold;
+	}
+	sigktou(&set, sp);
+}
+
 #ifdef _SYSCALL32_IMPL
 void
 prgetlwpstatus32(kthread_t *t, lwpstatus32_t *sp, zone_t *zp)
@@ -980,8 +1020,7 @@ prgetlwpstatus32(kthread_t *t, lwpstatus32_t *sp, zone_t *zp)
 	sp->pr_lwpid = t->t_tid;
 	sp->pr_cursig  = lwp->lwp_cursig;
 	prassignset(&sp->pr_lwppend, &t->t_sig);
-	schedctl_finish_sigblock(t);
-	prassignset(&sp->pr_lwphold, &t->t_hold);
+	prgethold(t, &sp->pr_lwphold);
 	if (t->t_whystop == PR_FAULTED) {
 		siginfo_kto32(&lwp->lwp_siginfo, &sp->pr_info);
 		if (t->t_whatstop == FLTPAGE)
@@ -1212,8 +1251,7 @@ prgetlwpstatus(kthread_t *t, lwpstatus_t *sp, zone_t *zp)
 	sp->pr_lwpid = t->t_tid;
 	sp->pr_cursig  = lwp->lwp_cursig;
 	prassignset(&sp->pr_lwppend, &t->t_sig);
-	schedctl_finish_sigblock(t);
-	prassignset(&sp->pr_lwphold, &t->t_hold);
+	prgethold(t, &sp->pr_lwphold);
 	if (t->t_whystop == PR_FAULTED)
 		bcopy(&lwp->lwp_siginfo,
 		    &sp->pr_info, sizeof (k_siginfo_t));
@@ -1376,12 +1414,16 @@ prnsegs(struct as *as, int reserved)
 	int n = 0;
 	struct seg *seg;
 
-	ASSERT(as != &kas && AS_WRITE_HELD(as, &as->a_lock));
+	ASSERT(as != &kas && AS_WRITE_HELD(as));
 
 	for (seg = AS_SEGFIRST(as); seg != NULL; seg = AS_SEGNEXT(as, seg)) {
 		caddr_t eaddr = seg->s_base + pr_getsegsize(seg, reserved);
 		caddr_t saddr, naddr;
 		void *tmp = NULL;
+
+		if ((seg->s_flags & S_HOLE) != 0) {
+			continue;
+		}
 
 		for (saddr = seg->s_base; saddr < eaddr; saddr = naddr) {
 			(void) pr_getprot(seg, reserved, &tmp,
@@ -1448,6 +1490,57 @@ pr_u64tos(uint64_t n, char *s)
 	} while (cp > cbuf);
 
 	return (len);
+}
+
+file_t *
+pr_getf(proc_t *p, uint_t fd, short *flag)
+{
+	uf_entry_t *ufp;
+	uf_info_t *fip;
+	file_t *fp;
+
+	ASSERT(MUTEX_HELD(&p->p_lock) && (p->p_proc_flag & P_PR_LOCK));
+
+	fip = P_FINFO(p);
+
+	if (fd >= fip->fi_nfiles)
+		return (NULL);
+
+	mutex_exit(&p->p_lock);
+	mutex_enter(&fip->fi_lock);
+	UF_ENTER(ufp, fip, fd);
+	if ((fp = ufp->uf_file) != NULL && fp->f_count > 0) {
+		if (flag != NULL)
+			*flag = ufp->uf_flag;
+		ufp->uf_refcnt++;
+	} else {
+		fp = NULL;
+	}
+	UF_EXIT(ufp);
+	mutex_exit(&fip->fi_lock);
+	mutex_enter(&p->p_lock);
+
+	return (fp);
+}
+
+void
+pr_releasef(proc_t *p, uint_t fd)
+{
+	uf_entry_t *ufp;
+	uf_info_t *fip;
+
+	ASSERT(MUTEX_HELD(&p->p_lock) && (p->p_proc_flag & P_PR_LOCK));
+
+	fip = P_FINFO(p);
+
+	mutex_exit(&p->p_lock);
+	mutex_enter(&fip->fi_lock);
+	UF_ENTER(ufp, fip, fd);
+	ASSERT3U(ufp->uf_refcnt, >, 0);
+	ufp->uf_refcnt--;
+	UF_EXIT(ufp);
+	mutex_exit(&fip->fi_lock);
+	mutex_enter(&p->p_lock);
 }
 
 void
@@ -1559,6 +1652,18 @@ pr_iol_newbuf(list_t *iolhead, size_t itemsize)
 	return (new);
 }
 
+void
+pr_iol_freelist(list_t *iolhead)
+{
+	piol_t	*iol;
+
+	while ((iol = list_head(iolhead)) != NULL) {
+		list_remove(iolhead, iol);
+		kmem_free(iol, iol->piol_size);
+	}
+	list_destroy(iolhead);
+}
+
 int
 pr_iol_copyout_and_free(list_t *iolhead, caddr_t *tgt, int errin)
 {
@@ -1619,7 +1724,7 @@ prgetmap(proc_t *p, int reserved, list_t *iolhead)
 	struct vattr vattr;
 	uint_t prot;
 
-	ASSERT(as != &kas && AS_WRITE_HELD(as, &as->a_lock));
+	ASSERT(as != &kas && AS_WRITE_HELD(as));
 
 	/*
 	 * Request an initial buffer size that doesn't waste memory
@@ -1637,6 +1742,10 @@ prgetmap(proc_t *p, int reserved, list_t *iolhead)
 		caddr_t eaddr = seg->s_base + pr_getsegsize(seg, reserved);
 		caddr_t saddr, naddr;
 		void *tmp = NULL;
+
+		if ((seg->s_flags & S_HOLE) != 0) {
+			continue;
+		}
 
 		for (saddr = seg->s_base; saddr < eaddr; saddr = naddr) {
 			prot = pr_getprot(seg, reserved, &tmp,
@@ -1730,7 +1839,7 @@ prgetmap32(proc_t *p, int reserved, list_t *iolhead)
 	struct vattr vattr;
 	uint_t prot;
 
-	ASSERT(as != &kas && AS_WRITE_HELD(as, &as->a_lock));
+	ASSERT(as != &kas && AS_WRITE_HELD(as));
 
 	/*
 	 * Request an initial buffer size that doesn't waste memory
@@ -1748,6 +1857,10 @@ prgetmap32(proc_t *p, int reserved, list_t *iolhead)
 		caddr_t eaddr = seg->s_base + pr_getsegsize(seg, reserved);
 		caddr_t saddr, naddr;
 		void *tmp = NULL;
+
+		if ((seg->s_flags & S_HOLE) != 0) {
+			continue;
+		}
 
 		for (saddr = seg->s_base; saddr < eaddr; saddr = naddr) {
 			prot = pr_getprot(seg, reserved, &tmp,
@@ -1840,7 +1953,7 @@ prpdsize(struct as *as)
 	struct seg *seg;
 	size_t size;
 
-	ASSERT(as != &kas && AS_WRITE_HELD(as, &as->a_lock));
+	ASSERT(as != &kas && AS_WRITE_HELD(as));
 
 	if ((seg = AS_SEGFIRST(as)) == NULL)
 		return (0);
@@ -1851,6 +1964,10 @@ prpdsize(struct as *as)
 		caddr_t saddr, naddr;
 		void *tmp = NULL;
 		size_t npage;
+
+		if ((seg->s_flags & S_HOLE) != 0) {
+			continue;
+		}
 
 		for (saddr = seg->s_base; saddr < eaddr; saddr = naddr) {
 			(void) pr_getprot(seg, 0, &tmp, &saddr, &naddr, eaddr);
@@ -1870,7 +1987,7 @@ prpdsize32(struct as *as)
 	struct seg *seg;
 	size_t size;
 
-	ASSERT(as != &kas && AS_WRITE_HELD(as, &as->a_lock));
+	ASSERT(as != &kas && AS_WRITE_HELD(as));
 
 	if ((seg = AS_SEGFIRST(as)) == NULL)
 		return (0);
@@ -1881,6 +1998,10 @@ prpdsize32(struct as *as)
 		caddr_t saddr, naddr;
 		void *tmp = NULL;
 		size_t npage;
+
+		if ((seg->s_flags & S_HOLE) != 0) {
+			continue;
+		}
 
 		for (saddr = seg->s_base; saddr < eaddr; saddr = naddr) {
 			(void) pr_getprot(seg, 0, &tmp, &saddr, &naddr, eaddr);
@@ -1909,15 +2030,15 @@ prpdread(proc_t *p, uint_t hatid, struct uio *uiop)
 	int error;
 
 again:
-	AS_LOCK_ENTER(as, &as->a_lock, RW_WRITER);
+	AS_LOCK_ENTER(as, RW_WRITER);
 
 	if ((seg = AS_SEGFIRST(as)) == NULL) {
-		AS_LOCK_EXIT(as, &as->a_lock);
+		AS_LOCK_EXIT(as);
 		return (0);
 	}
 	size = prpdsize(as);
 	if (uiop->uio_resid < size) {
-		AS_LOCK_EXIT(as, &as->a_lock);
+		AS_LOCK_EXIT(as);
 		return (E2BIG);
 	}
 
@@ -1932,6 +2053,10 @@ again:
 		caddr_t eaddr = seg->s_base + pr_getsegsize(seg, 0);
 		caddr_t saddr, naddr;
 		void *tmp = NULL;
+
+		if ((seg->s_flags & S_HOLE) != 0) {
+			continue;
+		}
 
 		for (saddr = seg->s_base; saddr < eaddr; saddr = naddr) {
 			struct vnode *vp;
@@ -1965,7 +2090,7 @@ again:
 			 */
 			if (next > (uintptr_t)buf + size) {
 				pr_getprot_done(&tmp);
-				AS_LOCK_EXIT(as, &as->a_lock);
+				AS_LOCK_EXIT(as);
 
 				kmem_free(buf, size);
 
@@ -2034,7 +2159,7 @@ again:
 		ASSERT(tmp == NULL);
 	} while ((seg = AS_SEGNEXT(as, seg)) != NULL);
 
-	AS_LOCK_EXIT(as, &as->a_lock);
+	AS_LOCK_EXIT(as);
 
 	ASSERT((uintptr_t)pmp <= (uintptr_t)buf + size);
 	error = uiomove(buf, (caddr_t)pmp - buf, UIO_READ, uiop);
@@ -2056,15 +2181,15 @@ prpdread32(proc_t *p, uint_t hatid, struct uio *uiop)
 	int error;
 
 again:
-	AS_LOCK_ENTER(as, &as->a_lock, RW_WRITER);
+	AS_LOCK_ENTER(as, RW_WRITER);
 
 	if ((seg = AS_SEGFIRST(as)) == NULL) {
-		AS_LOCK_EXIT(as, &as->a_lock);
+		AS_LOCK_EXIT(as);
 		return (0);
 	}
 	size = prpdsize32(as);
 	if (uiop->uio_resid < size) {
-		AS_LOCK_EXIT(as, &as->a_lock);
+		AS_LOCK_EXIT(as);
 		return (E2BIG);
 	}
 
@@ -2079,6 +2204,10 @@ again:
 		caddr_t eaddr = seg->s_base + pr_getsegsize(seg, 0);
 		caddr_t saddr, naddr;
 		void *tmp = NULL;
+
+		if ((seg->s_flags & S_HOLE) != 0) {
+			continue;
+		}
 
 		for (saddr = seg->s_base; saddr < eaddr; saddr = naddr) {
 			struct vnode *vp;
@@ -2112,7 +2241,7 @@ again:
 			 */
 			if (next > (uintptr_t)buf + size) {
 				pr_getprot_done(&tmp);
-				AS_LOCK_EXIT(as, &as->a_lock);
+				AS_LOCK_EXIT(as);
 
 				kmem_free(buf, size);
 
@@ -2181,7 +2310,7 @@ again:
 		ASSERT(tmp == NULL);
 	} while ((seg = AS_SEGNEXT(as, seg)) != NULL);
 
-	AS_LOCK_EXIT(as, &as->a_lock);
+	AS_LOCK_EXIT(as);
 
 	ASSERT((uintptr_t)pmp <= (uintptr_t)buf + size);
 	error = uiomove(buf, (caddr_t)pmp - buf, UIO_READ, uiop);
@@ -2336,15 +2465,546 @@ prgetpsinfo(proc_t *p, psinfo_t *psp)
 			psp->pr_rssize = 0;
 		} else {
 			mutex_exit(&p->p_lock);
-			AS_LOCK_ENTER(as, &as->a_lock, RW_READER);
+			AS_LOCK_ENTER(as, RW_READER);
 			psp->pr_size = btopr(as->a_resvsize) *
 			    (PAGESIZE / 1024);
 			psp->pr_rssize = rm_asrss(as) * (PAGESIZE / 1024);
 			psp->pr_pctmem = rm_pctmemory(as);
-			AS_LOCK_EXIT(as, &as->a_lock);
+			AS_LOCK_EXIT(as);
 			mutex_enter(&p->p_lock);
 		}
 	}
+}
+
+static size_t
+prfdinfomisc(list_t *data, uint_t type, const void *val, size_t vlen)
+{
+	pr_misc_header_t *misc;
+	size_t len;
+
+	len = PRFDINFO_ROUNDUP(sizeof (*misc) + vlen);
+
+	if (data != NULL) {
+		misc = pr_iol_newbuf(data, len);
+		misc->pr_misc_type = type;
+		misc->pr_misc_size = len;
+		misc++;
+		bcopy((char *)val, (char *)misc, vlen);
+	}
+
+	return (len);
+}
+
+/*
+ * There's no elegant way to determine if a character device
+ * supports TLI, so just check a hardcoded list of known TLI
+ * devices.
+ */
+
+static boolean_t
+pristli(vnode_t *vp)
+{
+	static const char *tlidevs[] = {
+	    "udp", "udp6", "tcp", "tcp6"
+	};
+	char *devname;
+	uint_t i;
+
+	ASSERT(vp != NULL);
+
+	if (vp->v_type != VCHR || vp->v_stream == NULL || vp->v_rdev == 0)
+		return (B_FALSE);
+
+	if ((devname = mod_major_to_name(getmajor(vp->v_rdev))) == NULL)
+		return (B_FALSE);
+
+	for (i = 0; i < ARRAY_SIZE(tlidevs); i++) {
+		if (strcmp(devname, tlidevs[i]) == 0)
+			return (B_TRUE);
+	}
+
+	return (B_FALSE);
+}
+
+static size_t
+prfdinfopath(proc_t *p, vnode_t *vp, list_t *data, cred_t *cred)
+{
+	char *pathname;
+	size_t pathlen;
+	size_t sz = 0;
+
+	/*
+	 * The global zone's path to a file in a non-global zone can exceed
+	 * MAXPATHLEN.
+	 */
+	pathlen = MAXPATHLEN * 2 + 1;
+	pathname = kmem_alloc(pathlen, KM_SLEEP);
+
+	if (vnodetopath(NULL, vp, pathname, pathlen, cred) == 0) {
+		sz += prfdinfomisc(data, PR_PATHNAME,
+		    pathname, strlen(pathname) + 1);
+	}
+
+	kmem_free(pathname, pathlen);
+
+	return (sz);
+}
+
+static size_t
+prfdinfotlisockopt(vnode_t *vp, list_t *data, cred_t *cred)
+{
+	strcmd_t strcmd;
+	int32_t rval;
+	size_t sz = 0;
+
+	strcmd.sc_cmd = TI_GETMYNAME;
+	strcmd.sc_timeout = 1;
+	strcmd.sc_len = STRCMDBUFSIZE;
+
+	if (VOP_IOCTL(vp, _I_CMD, (intptr_t)&strcmd, FKIOCTL, cred,
+	    &rval, NULL) == 0 && strcmd.sc_len > 0) {
+		sz += prfdinfomisc(data, PR_SOCKETNAME, strcmd.sc_buf,
+		    strcmd.sc_len);
+	}
+
+	strcmd.sc_cmd = TI_GETPEERNAME;
+	strcmd.sc_timeout = 1;
+	strcmd.sc_len = STRCMDBUFSIZE;
+
+	if (VOP_IOCTL(vp, _I_CMD, (intptr_t)&strcmd, FKIOCTL, cred,
+	    &rval, NULL) == 0 && strcmd.sc_len > 0) {
+		sz += prfdinfomisc(data, PR_PEERSOCKNAME, strcmd.sc_buf,
+		    strcmd.sc_len);
+	}
+
+	return (sz);
+}
+
+static size_t
+prfdinfosockopt(vnode_t *vp, list_t *data, cred_t *cred)
+{
+	sonode_t *so;
+	socklen_t vlen;
+	size_t sz = 0;
+	uint_t i;
+
+	if (vp->v_stream != NULL) {
+		so = VTOSO(vp->v_stream->sd_vnode);
+
+		if (so->so_version == SOV_STREAM)
+			so = NULL;
+	} else {
+		so = VTOSO(vp);
+	}
+
+	if (so == NULL)
+		return (0);
+
+	DTRACE_PROBE1(sonode, sonode_t *, so);
+
+	/* prmisc - PR_SOCKETNAME */
+
+	struct sockaddr_storage buf;
+	struct sockaddr *name = (struct sockaddr *)&buf;
+
+	vlen = sizeof (buf);
+	if (SOP_GETSOCKNAME(so, name, &vlen, cred) == 0 && vlen > 0)
+		sz += prfdinfomisc(data, PR_SOCKETNAME, name, vlen);
+
+	/* prmisc - PR_PEERSOCKNAME */
+
+	vlen = sizeof (buf);
+	if (SOP_GETPEERNAME(so, name, &vlen, B_FALSE, cred) == 0 && vlen > 0)
+		sz += prfdinfomisc(data, PR_PEERSOCKNAME, name, vlen);
+
+	/* prmisc - PR_SOCKOPTS_BOOL_OPTS */
+
+	static struct boolopt {
+		int		level;
+		int		opt;
+		int		bopt;
+	} boolopts[] = {
+		{ SOL_SOCKET, SO_DEBUG,		PR_SO_DEBUG },
+		{ SOL_SOCKET, SO_REUSEADDR,	PR_SO_REUSEADDR },
+#ifdef SO_REUSEPORT
+		/* SmartOS and OmniOS have SO_REUSEPORT */
+		{ SOL_SOCKET, SO_REUSEPORT,	PR_SO_REUSEPORT },
+#endif
+		{ SOL_SOCKET, SO_KEEPALIVE,	PR_SO_KEEPALIVE },
+		{ SOL_SOCKET, SO_DONTROUTE,	PR_SO_DONTROUTE },
+		{ SOL_SOCKET, SO_BROADCAST,	PR_SO_BROADCAST },
+		{ SOL_SOCKET, SO_OOBINLINE,	PR_SO_OOBINLINE },
+		{ SOL_SOCKET, SO_DGRAM_ERRIND,	PR_SO_DGRAM_ERRIND },
+		{ SOL_SOCKET, SO_ALLZONES,	PR_SO_ALLZONES },
+		{ SOL_SOCKET, SO_MAC_EXEMPT,	PR_SO_MAC_EXEMPT },
+		{ SOL_SOCKET, SO_MAC_IMPLICIT,	PR_SO_MAC_IMPLICIT },
+		{ SOL_SOCKET, SO_EXCLBIND,	PR_SO_EXCLBIND },
+		{ SOL_SOCKET, SO_VRRP,		PR_SO_VRRP },
+		{ IPPROTO_UDP, UDP_NAT_T_ENDPOINT,
+		    PR_UDP_NAT_T_ENDPOINT }
+	};
+	prsockopts_bool_opts_t opts;
+	int val;
+
+	if (data != NULL) {
+		opts.prsock_bool_opts = 0;
+
+		for (i = 0; i < ARRAY_SIZE(boolopts); i++) {
+			vlen = sizeof (val);
+			if (SOP_GETSOCKOPT(so, boolopts[i].level,
+			    boolopts[i].opt, &val, &vlen, 0, cred) == 0 &&
+			    val != 0) {
+				opts.prsock_bool_opts |= boolopts[i].bopt;
+			}
+		}
+	}
+
+	sz += prfdinfomisc(data, PR_SOCKOPTS_BOOL_OPTS, &opts, sizeof (opts));
+
+	/* prmisc - PR_SOCKOPT_LINGER */
+
+	struct linger l;
+
+	vlen = sizeof (l);
+	if (SOP_GETSOCKOPT(so, SOL_SOCKET, SO_LINGER, &l, &vlen,
+	    0, cred) == 0 && vlen > 0) {
+		sz += prfdinfomisc(data, PR_SOCKOPT_LINGER, &l, vlen);
+	}
+
+	/* prmisc - PR_SOCKOPT_* int types */
+
+	static struct sopt {
+		int		level;
+		int		opt;
+		int		bopt;
+	} sopts[] = {
+		{ SOL_SOCKET, SO_TYPE,		PR_SOCKOPT_TYPE },
+		{ SOL_SOCKET, SO_SNDBUF,	PR_SOCKOPT_SNDBUF },
+		{ SOL_SOCKET, SO_RCVBUF,	PR_SOCKOPT_RCVBUF }
+	};
+
+	for (i = 0; i < ARRAY_SIZE(sopts); i++) {
+		vlen = sizeof (val);
+		if (SOP_GETSOCKOPT(so, sopts[i].level, sopts[i].opt,
+		    &val, &vlen, 0, cred) == 0 && vlen > 0) {
+			sz += prfdinfomisc(data, sopts[i].bopt, &val, vlen);
+		}
+	}
+
+	/* prmisc - PR_SOCKOPT_IP_NEXTHOP */
+
+	in_addr_t nexthop_val;
+
+	vlen = sizeof (nexthop_val);
+	if (SOP_GETSOCKOPT(so, IPPROTO_IP, IP_NEXTHOP,
+	    &nexthop_val, &vlen, 0, cred) == 0 && vlen > 0) {
+		sz += prfdinfomisc(data, PR_SOCKOPT_IP_NEXTHOP,
+		    &nexthop_val, vlen);
+	}
+
+	/* prmisc - PR_SOCKOPT_IPV6_NEXTHOP */
+
+	struct sockaddr_in6 nexthop6_val;
+
+	vlen = sizeof (nexthop6_val);
+	if (SOP_GETSOCKOPT(so, IPPROTO_IPV6, IPV6_NEXTHOP,
+	    &nexthop6_val, &vlen, 0, cred) == 0 && vlen > 0) {
+		sz += prfdinfomisc(data, PR_SOCKOPT_IPV6_NEXTHOP,
+		    &nexthop6_val, vlen);
+	}
+
+	/* prmisc - PR_SOCKOPT_TCP_CONGESTION */
+
+	char cong[CC_ALGO_NAME_MAX];
+
+	vlen = sizeof (cong);
+	if (SOP_GETSOCKOPT(so, IPPROTO_TCP, TCP_CONGESTION,
+	    &cong, &vlen, 0, cred) == 0 && vlen > 0) {
+		sz += prfdinfomisc(data, PR_SOCKOPT_TCP_CONGESTION, cong, vlen);
+	}
+
+	/* prmisc - PR_SOCKFILTERS_PRIV */
+
+	struct fil_info fi;
+
+	vlen = sizeof (fi);
+	if (SOP_GETSOCKOPT(so, SOL_FILTER, FIL_LIST,
+	    &fi, &vlen, 0, cred) == 0 && vlen != 0) {
+		pr_misc_header_t *misc;
+		size_t len;
+
+		/*
+		 * We limit the number of returned filters to 32.
+		 * This is the maximum number that pfiles will print
+		 * anyway.
+		 */
+		vlen = MIN(32, fi.fi_pos + 1);
+		vlen *= sizeof (fi);
+
+		len = PRFDINFO_ROUNDUP(sizeof (*misc) + vlen);
+		sz += len;
+
+		if (data != NULL) {
+			/*
+			 * So that the filter list can be built incrementally,
+			 * prfdinfomisc() is not used here. Instead we
+			 * allocate a buffer directly on the copyout list using
+			 * pr_iol_newbuf()
+			 */
+			misc = pr_iol_newbuf(data, len);
+			misc->pr_misc_type = PR_SOCKFILTERS_PRIV;
+			misc->pr_misc_size = len;
+			misc++;
+			len = vlen;
+			if (SOP_GETSOCKOPT(so, SOL_FILTER, FIL_LIST,
+			    misc, &vlen, 0, cred) == 0) {
+				/*
+				 * In case the number of filters has reduced
+				 * since the first call, explicitly zero out
+				 * any unpopulated space.
+				 */
+				if (vlen < len)
+					bzero(misc + vlen, len - vlen);
+			} else {
+				/* Something went wrong, zero out the result */
+				bzero(misc, vlen);
+			}
+		}
+	}
+
+	return (sz);
+}
+
+typedef struct prfdinfo_nm_path_cbdata {
+	proc_t		*nmp_p;
+	u_offset_t	nmp_sz;
+	list_t		*nmp_data;
+} prfdinfo_nm_path_cbdata_t;
+
+static int
+prfdinfo_nm_path(const struct namenode *np, cred_t *cred, void *arg)
+{
+	prfdinfo_nm_path_cbdata_t *cb = arg;
+
+	cb->nmp_sz += prfdinfopath(cb->nmp_p, np->nm_vnode, cb->nmp_data, cred);
+
+	return (0);
+}
+
+u_offset_t
+prgetfdinfosize(proc_t *p, vnode_t *vp, cred_t *cred)
+{
+	u_offset_t sz;
+
+	/*
+	 * All fdinfo files will be at least this big -
+	 * sizeof fdinfo struct + zero length trailer
+	 */
+	sz = offsetof(prfdinfo_t, pr_misc) + sizeof (pr_misc_header_t);
+
+	/* Pathname */
+	switch (vp->v_type) {
+	case VDOOR: {
+		prfdinfo_nm_path_cbdata_t cb = {
+			.nmp_p		= p,
+			.nmp_data	= NULL,
+			.nmp_sz		= 0
+		};
+
+		(void) nm_walk_mounts(vp, prfdinfo_nm_path, cred, &cb);
+		sz += cb.nmp_sz;
+		break;
+	}
+	case VSOCK:
+		break;
+	default:
+		sz += prfdinfopath(p, vp, NULL, cred);
+	}
+
+	/* Socket options */
+	if (vp->v_type == VSOCK)
+		sz += prfdinfosockopt(vp, NULL, cred);
+
+	/* TLI/XTI sockets */
+	if (pristli(vp))
+		sz += prfdinfotlisockopt(vp, NULL, cred);
+
+	return (sz);
+}
+
+int
+prgetfdinfo(proc_t *p, vnode_t *vp, prfdinfo_t *fdinfo, cred_t *cred,
+    cred_t *file_cred, list_t *data)
+{
+	vattr_t vattr;
+	int error;
+
+	/*
+	 * The buffer has been initialised to zero by pr_iol_newbuf().
+	 * Initialise defaults for any values that should not default to zero.
+	 */
+	fdinfo->pr_uid = (uid_t)-1;
+	fdinfo->pr_gid = (gid_t)-1;
+	fdinfo->pr_size = -1;
+	fdinfo->pr_locktype = F_UNLCK;
+	fdinfo->pr_lockpid = -1;
+	fdinfo->pr_locksysid = -1;
+	fdinfo->pr_peerpid = -1;
+
+	/* Offset */
+
+	/*
+	 * pr_offset has already been set from the underlying file_t.
+	 * Check if it is plausible and reset to -1 if not.
+	 */
+	if (fdinfo->pr_offset != -1 &&
+	    VOP_SEEK(vp, 0, (offset_t *)&fdinfo->pr_offset, NULL) != 0)
+		fdinfo->pr_offset = -1;
+
+	/*
+	 * Attributes
+	 *
+	 * We have two cred_t structures available here.
+	 * 'cred' is the caller's credential, and 'file_cred' is the credential
+	 * for the file being inspected.
+	 *
+	 * When looking up the file attributes, file_cred is used in order
+	 * that the correct ownership is set for doors and FIFOs. Since the
+	 * caller has permission to read the fdinfo file in proc, this does
+	 * not expose any additional information.
+	 */
+	vattr.va_mask = AT_STAT;
+	if (VOP_GETATTR(vp, &vattr, 0, file_cred, NULL) == 0) {
+		fdinfo->pr_major = getmajor(vattr.va_fsid);
+		fdinfo->pr_minor = getminor(vattr.va_fsid);
+		fdinfo->pr_rmajor = getmajor(vattr.va_rdev);
+		fdinfo->pr_rminor = getminor(vattr.va_rdev);
+		fdinfo->pr_ino = (ino64_t)vattr.va_nodeid;
+		fdinfo->pr_size = (off64_t)vattr.va_size;
+		fdinfo->pr_mode = VTTOIF(vattr.va_type) | vattr.va_mode;
+		fdinfo->pr_uid = vattr.va_uid;
+		fdinfo->pr_gid = vattr.va_gid;
+		if (vp->v_type == VSOCK)
+			fdinfo->pr_fileflags |= sock_getfasync(vp);
+	}
+
+	/* locks */
+
+	flock64_t bf;
+
+	bzero(&bf, sizeof (bf));
+	bf.l_type = F_WRLCK;
+
+	if (VOP_FRLOCK(vp, F_GETLK, &bf,
+	    (uint16_t)(fdinfo->pr_fileflags & 0xffff), 0, NULL,
+	    cred, NULL) == 0 && bf.l_type != F_UNLCK) {
+		fdinfo->pr_locktype = bf.l_type;
+		fdinfo->pr_lockpid = bf.l_pid;
+		fdinfo->pr_locksysid = bf.l_sysid;
+	}
+
+	/* peer cred */
+
+	k_peercred_t kpc;
+
+	switch (vp->v_type) {
+	case VFIFO:
+	case VSOCK: {
+		int32_t rval;
+
+		error = VOP_IOCTL(vp, _I_GETPEERCRED, (intptr_t)&kpc,
+		    FKIOCTL, cred, &rval, NULL);
+		break;
+	}
+	case VCHR: {
+		struct strioctl strioc;
+		int32_t rval;
+
+		if (vp->v_stream == NULL) {
+			error = ENOTSUP;
+			break;
+		}
+		strioc.ic_cmd = _I_GETPEERCRED;
+		strioc.ic_timout = INFTIM;
+		strioc.ic_len = (int)sizeof (k_peercred_t);
+		strioc.ic_dp = (char *)&kpc;
+
+		error = strdoioctl(vp->v_stream, &strioc, FNATIVE | FKIOCTL,
+		    STR_NOSIG | K_TO_K, cred, &rval);
+		break;
+	}
+	default:
+		error = ENOTSUP;
+		break;
+	}
+
+	if (error == 0 && kpc.pc_cr != NULL) {
+		proc_t *peerp;
+
+		fdinfo->pr_peerpid = kpc.pc_cpid;
+
+		crfree(kpc.pc_cr);
+
+		mutex_enter(&pidlock);
+		if ((peerp = prfind(fdinfo->pr_peerpid)) != NULL) {
+			user_t *up;
+
+			mutex_enter(&peerp->p_lock);
+			mutex_exit(&pidlock);
+
+			up = PTOU(peerp);
+			bcopy(up->u_comm, fdinfo->pr_peername,
+			    MIN(sizeof (up->u_comm),
+			    sizeof (fdinfo->pr_peername) - 1));
+
+			mutex_exit(&peerp->p_lock);
+		} else {
+			mutex_exit(&pidlock);
+		}
+	}
+
+	/* pathname */
+
+	switch (vp->v_type) {
+	case VDOOR: {
+		prfdinfo_nm_path_cbdata_t cb = {
+			.nmp_p		= p,
+			.nmp_data	= data,
+			.nmp_sz		= 0
+		};
+
+		(void) nm_walk_mounts(vp, prfdinfo_nm_path, cred, &cb);
+		break;
+	}
+	case VSOCK:
+		/*
+		 * Don't attempt to determine the path for a socket as the
+		 * vnode has no associated v_path. It will cause a linear scan
+		 * of the dnlc table and result in no path being found.
+		 */
+		break;
+	default:
+		(void) prfdinfopath(p, vp, data, cred);
+	}
+
+	/* socket options */
+	if (vp->v_type == VSOCK)
+		(void) prfdinfosockopt(vp, data, cred);
+
+	/* TLI/XTI stream sockets */
+	if (pristli(vp))
+		(void) prfdinfotlisockopt(vp, data, cred);
+
+	/*
+	 * Add a terminating header with a zero size.
+	 */
+	pr_misc_header_t *misc;
+
+	misc = pr_iol_newbuf(data, sizeof (*misc));
+	misc->pr_misc_size = 0;
+	misc->pr_misc_type = (uint_t)-1;
+
+	return (0);
 }
 
 #ifdef _SYSCALL32_IMPL
@@ -2469,13 +3129,13 @@ prgetpsinfo32(proc_t *p, psinfo32_t *psp)
 			psp->pr_rssize = 0;
 		} else {
 			mutex_exit(&p->p_lock);
-			AS_LOCK_ENTER(as, &as->a_lock, RW_READER);
+			AS_LOCK_ENTER(as, RW_READER);
 			psp->pr_size = (size32_t)
 			    (btopr(as->a_resvsize) * (PAGESIZE / 1024));
 			psp->pr_rssize = (size32_t)
 			    (rm_asrss(as) * (PAGESIZE / 1024));
 			psp->pr_pctmem = rm_pctmemory(as);
-			AS_LOCK_EXIT(as, &as->a_lock);
+			AS_LOCK_EXIT(as);
 			mutex_enter(&p->p_lock);
 		}
 	}
@@ -2563,7 +3223,6 @@ prgetlwpsinfo(kthread_t *t, lwpsinfo_t *psp)
 void
 prgetlwpsinfo32(kthread_t *t, lwpsinfo32_t *psp)
 {
-	proc_t *p = ttoproc(t);
 	klwp_t *lwp = ttolwp(t);
 	sobj_ops_t *sobj;
 	char c, state;
@@ -2571,7 +3230,7 @@ prgetlwpsinfo32(kthread_t *t, lwpsinfo32_t *psp)
 	int retval, niceval;
 	hrtime_t hrutime, hrstime;
 
-	ASSERT(MUTEX_HELD(&p->p_lock));
+	ASSERT(MUTEX_HELD(&ttoproc(t)->p_lock));
 
 	bzero(psp, sizeof (*psp));
 
@@ -2642,7 +3301,7 @@ prgetlwpsinfo32(kthread_t *t, lwpsinfo32_t *psp)
 #define	PR_COPY_TIMESPEC(s, d, field)				\
 	TIMESPEC_TO_TIMESPEC32(&d->field, &s->field);
 
-#define	PR_COPY_BUF(s, d, field)	 			\
+#define	PR_COPY_BUF(s, d, field)				\
 	bcopy(s->field, d->field, sizeof (d->field));
 
 #define	PR_IGNORE_FIELD(s, d, field)
@@ -3313,7 +3972,7 @@ pr_free_watched_pages(proc_t *p)
 		return;
 
 	ASSERT(MUTEX_NOT_HELD(&curproc->p_lock));
-	AS_LOCK_ENTER(as, &as->a_lock, RW_WRITER);
+	AS_LOCK_ENTER(as, RW_WRITER);
 
 	pwp = avl_first(&as->a_wpage);
 
@@ -3342,7 +4001,7 @@ pr_free_watched_pages(proc_t *p)
 	avl_destroy(&as->a_wpage);
 	p->p_wprot = NULL;
 
-	AS_LOCK_EXIT(as, &as->a_lock);
+	AS_LOCK_EXIT(as);
 }
 
 /*
@@ -3352,7 +4011,7 @@ pr_free_watched_pages(proc_t *p)
  */
 static int
 set_watched_page(proc_t *p, caddr_t vaddr, caddr_t eaddr,
-	ulong_t flags, ulong_t oflags)
+    ulong_t flags, ulong_t oflags)
 {
 	struct as *as = p->p_as;
 	avl_tree_t *pwp_tree;
@@ -3376,7 +4035,7 @@ set_watched_page(proc_t *p, caddr_t vaddr, caddr_t eaddr,
 		newpwp = pwp;
 	}
 
-	AS_LOCK_ENTER(as, &as->a_lock, RW_WRITER);
+	AS_LOCK_ENTER(as, RW_WRITER);
 
 	/*
 	 * Search for an existing watched page to contain the watched area.
@@ -3391,7 +4050,7 @@ set_watched_page(proc_t *p, caddr_t vaddr, caddr_t eaddr,
 
 again:
 	if (avl_numnodes(pwp_tree) > prnwatch) {
-		AS_LOCK_EXIT(as, &as->a_lock);
+		AS_LOCK_EXIT(as);
 		while (newpwp != NULL) {
 			pwp = newpwp->wp_list;
 			kmem_free(newpwp, sizeof (struct watched_page));
@@ -3464,7 +4123,7 @@ again:
 	if ((vaddr = pwp->wp_vaddr + PAGESIZE) < eaddr)
 		goto again;
 
-	AS_LOCK_EXIT(as, &as->a_lock);
+	AS_LOCK_EXIT(as);
 
 	/*
 	 * Free any pages we may have over-allocated
@@ -3491,7 +4150,7 @@ clear_watched_page(proc_t *p, caddr_t vaddr, caddr_t eaddr, ulong_t flags)
 	avl_tree_t *tree;
 	avl_index_t where;
 
-	AS_LOCK_ENTER(as, &as->a_lock, RW_WRITER);
+	AS_LOCK_ENTER(as, RW_WRITER);
 
 	if (p->p_flag & SVFWAIT)
 		tree = &p->p_wpage;
@@ -3556,7 +4215,7 @@ clear_watched_page(proc_t *p, caddr_t vaddr, caddr_t eaddr, ulong_t flags)
 		pwp = AVL_NEXT(tree, pwp);
 	}
 
-	AS_LOCK_EXIT(as, &as->a_lock);
+	AS_LOCK_EXIT(as);
 }
 
 /*
@@ -3568,7 +4227,7 @@ getwatchprot(struct as *as, caddr_t addr, uint_t *prot)
 	struct watched_page *pwp;
 	struct watched_page tpw;
 
-	ASSERT(AS_LOCK_HELD(as, &as->a_lock));
+	ASSERT(AS_LOCK_HELD(as));
 
 	tpw.wp_vaddr = (caddr_t)((uintptr_t)addr & (uintptr_t)PAGEMASK);
 	if ((pwp = avl_find(&as->a_wpage, &tpw, NULL)) != NULL)
@@ -3837,7 +4496,7 @@ pr_getsegsize(struct seg *seg, int reserved)
 
 uint_t
 pr_getprot(struct seg *seg, int reserved, void **tmp,
-	caddr_t *saddrp, caddr_t *naddrp, caddr_t eaddr)
+    caddr_t *saddrp, caddr_t *naddrp, caddr_t eaddr)
 {
 	struct as *as = seg->s_as;
 
@@ -3855,7 +4514,7 @@ pr_getprot(struct seg *seg, int reserved, void **tmp,
 
 	s.data = seg->s_data;
 
-	ASSERT(AS_WRITE_HELD(as, &as->a_lock));
+	ASSERT(AS_WRITE_HELD(as));
 	ASSERT(saddr >= seg->s_base && saddr < eaddr);
 	ASSERT(eaddr <= seg->s_base + seg->s_size);
 
@@ -3969,7 +4628,7 @@ pr_getpagesize(struct seg *seg, caddr_t saddr, caddr_t *naddrp, caddr_t eaddr)
 {
 	ssize_t pagesize, hatsize;
 
-	ASSERT(AS_WRITE_HELD(seg->s_as, &seg->s_as->a_lock));
+	ASSERT(AS_WRITE_HELD(seg->s_as));
 	ASSERT(IS_P2ALIGNED(saddr, PAGESIZE));
 	ASSERT(IS_P2ALIGNED(eaddr, PAGESIZE));
 	ASSERT(saddr < eaddr);
@@ -4009,7 +4668,7 @@ prgetxmap(proc_t *p, list_t *iolhead)
 	struct vattr vattr;
 	uint_t prot;
 
-	ASSERT(as != &kas && AS_WRITE_HELD(as, &as->a_lock));
+	ASSERT(as != &kas && AS_WRITE_HELD(as));
 
 	/*
 	 * Request an initial buffer size that doesn't waste memory
@@ -4032,6 +4691,9 @@ prgetxmap(proc_t *p, list_t *iolhead)
 		uint64_t npages;
 		uint64_t pagenum;
 
+		if ((seg->s_flags & S_HOLE) != 0) {
+			continue;
+		}
 		/*
 		 * Segment loop part one: iterate from the base of the segment
 		 * to its end, pausing at each address boundary (baddr) between
@@ -4155,6 +4817,18 @@ prgetcred(proc_t *p, prcred_t *pcrp)
 	mutex_exit(&p->p_crlock);
 }
 
+void
+prgetsecflags(proc_t *p, prsecflags_t *psfp)
+{
+	ASSERT(psfp != NULL);
+
+	psfp->pr_version = PRSECFLAGS_VERSION_CURRENT;
+	psfp->pr_lower = p->p_secflags.psf_lower;
+	psfp->pr_upper = p->p_secflags.psf_upper;
+	psfp->pr_effective = p->p_secflags.psf_effective;
+	psfp->pr_inherit = p->p_secflags.psf_inherit;
+}
+
 /*
  * Compute actual size of the prpriv_t structure.
  */
@@ -4193,7 +4867,7 @@ prgetxmap32(proc_t *p, list_t *iolhead)
 	struct vattr vattr;
 	uint_t prot;
 
-	ASSERT(as != &kas && AS_WRITE_HELD(as, &as->a_lock));
+	ASSERT(as != &kas && AS_WRITE_HELD(as));
 
 	/*
 	 * Request an initial buffer size that doesn't waste memory
@@ -4215,6 +4889,10 @@ prgetxmap32(proc_t *p, list_t *iolhead)
 		char *parr;
 		uint64_t npages;
 		uint64_t pagenum;
+
+		if ((seg->s_flags & S_HOLE) != 0) {
+			continue;
+		}
 
 		/*
 		 * Segment loop part one: iterate from the base of the segment

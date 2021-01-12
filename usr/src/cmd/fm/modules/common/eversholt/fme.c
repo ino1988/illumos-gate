@@ -22,6 +22,7 @@
 /*
  * Copyright (c) 2003, 2010, Oracle and/or its affiliates. All rights reserved.
  * Copyright 2012 Milan Jurik. All rights reserved.
+ * Copyright (c) 2018, Joyent, Inc.
  *
  * fme.c -- fault management exercise module
  *
@@ -37,6 +38,7 @@
 #include <libnvpair.h>
 #include <sys/fm/protocol.h>
 #include <fm/fmd_api.h>
+#include <fm/libtopo.h>
 #include "alloc.h"
 #include "out.h"
 #include "stats.h"
@@ -323,7 +325,7 @@ prune_propagations(const char *e0class, const struct ipath *e0ipp)
 
 static struct fme *
 newfme(const char *e0class, const struct ipath *e0ipp, fmd_hdl_t *hdl,
-	fmd_case_t *fmcase, fmd_event_t *ffep, nvlist_t *nvl)
+    fmd_case_t *fmcase, fmd_event_t *ffep, nvlist_t *nvl)
 {
 	struct cfgdata *cfgdata;
 	int init_size;
@@ -339,7 +341,7 @@ newfme(const char *e0class, const struct ipath *e0ipp, fmd_hdl_t *hdl,
 	ipathlastcomp(e0ipp);
 	pathstr = ipath2str(NULL, e0ipp);
 	cfgdata = config_snapshot();
-	platform_units_translate(0, cfgdata->cooked, NULL, NULL,
+	platform_unit_translate(0, cfgdata->cooked, TOPO_PROP_RESOURCE,
 	    &detector, pathstr);
 	FREE(pathstr);
 	structconfig_free(cfgdata->cooked);
@@ -350,6 +352,7 @@ newfme(const char *e0class, const struct ipath *e0ipp, fmd_hdl_t *hdl,
 			out(O_ALTFP|O_VERB2, "Unable to map \"%s\" ereport "
 			    "to component path, but silent discard allowed.",
 			    e0class);
+			fmd_case_close(hdl, fmcase);
 		} else {
 			Undiag_reason = UD_VAL_BADEVENTPATH;
 			(void) nvlist_lookup_nvlist(nvl, FM_EREPORT_DETECTOR,
@@ -390,7 +393,7 @@ newfme(const char *e0class, const struct ipath *e0ipp, fmd_hdl_t *hdl,
 	nvlist_free(detector);
 	pathstr = ipath2str(NULL, e0ipp);
 	cfgdata = config_snapshot();
-	platform_units_translate(0, cfgdata->cooked, NULL, NULL,
+	platform_unit_translate(0, cfgdata->cooked, TOPO_PROP_RESOURCE,
 	    &detector, pathstr);
 	FREE(pathstr);
 	platform_save_config(hdl, fmcase);
@@ -1701,8 +1704,7 @@ fme_receive_report(fmd_hdl_t *hdl, fmd_event_t *ffep,
 			ipath_print(O_ALTFP|O_NONL, eventstring, ipp);
 			out(O_ALTFP, " explained by FME%d]", fmep->id);
 
-			if (pre_peek_nvp)
-				nvlist_free(pre_peek_nvp);
+			nvlist_free(pre_peek_nvp);
 
 			if (ep->count == 1)
 				serialize_observation(fmep, eventstring, ipp);
@@ -2028,16 +2030,14 @@ node2fmri(struct node *n)
 	err = nvlist_add_nvlist_array(f, FM_FMRI_HC_LIST, pa, depth);
 	if (err == 0) {
 		for (i = 0; i < depth; i++)
-			if (pa[i] != NULL)
-				nvlist_free(pa[i]);
+			nvlist_free(pa[i]);
 		return (f);
 	}
 	failure = "addition of hc-pair array to FMRI failed";
 
 boom:
 	for (i = 0; i < depth; i++)
-		if (pa[i] != NULL)
-			nvlist_free(pa[i]);
+		nvlist_free(pa[i]);
 	nvlist_free(f);
 	out(O_DIE, "%s", failure);
 	/*NOTREACHED*/
@@ -2101,16 +2101,14 @@ ipath2fmri(struct ipath *ipath)
 	err = nvlist_add_nvlist_array(f, FM_FMRI_HC_LIST, pa, depth);
 	if (err == 0) {
 		for (i = 0; i < depth; i++)
-			if (pa[i] != NULL)
-				nvlist_free(pa[i]);
+			nvlist_free(pa[i]);
 		return (f);
 	}
 	failure = "addition of hc-pair array to FMRI failed";
 
 boom:
 	for (i = 0; i < depth; i++)
-		if (pa[i] != NULL)
-			nvlist_free(pa[i]);
+		nvlist_free(pa[i]);
 	nvlist_free(f);
 	out(O_DIE, "%s", failure);
 	/*NOTREACHED*/
@@ -2141,11 +2139,9 @@ static void publish_suspects(struct fme *fmep, struct rsl *srl);
 static void
 rslfree(struct rsl *freeme)
 {
-	if (freeme->asru != NULL)
-		nvlist_free(freeme->asru);
-	if (freeme->fru != NULL)
-		nvlist_free(freeme->fru);
-	if (freeme->rsrc != NULL && freeme->rsrc != freeme->asru)
+	nvlist_free(freeme->asru);
+	nvlist_free(freeme->fru);
+	if (freeme->rsrc != freeme->asru)
 		nvlist_free(freeme->rsrc);
 }
 
@@ -2186,7 +2182,8 @@ void
 get_resources(struct event *sp, struct rsl *rsrcs, struct config *croot)
 {
 	struct node *asrudef, *frudef;
-	nvlist_t *asru, *fru;
+	const struct ipath *asrupath, *frupath;
+	nvlist_t *asru = NULL, *fru = NULL;
 	nvlist_t *rsrc = NULL;
 	char *pathstr;
 
@@ -2198,19 +2195,29 @@ get_resources(struct event *sp, struct rsl *rsrcs, struct config *croot)
 	frudef = eventprop_lookup(sp, L_FRU);
 
 	/*
-	 * Create FMRIs based on those definitions
+	 * Create ipaths based on those definitions
 	 */
-	asru = node2fmri(asrudef);
-	fru = node2fmri(frudef);
-	pathstr = ipath2str(NULL, sp->ipp);
+	asrupath = ipath(asrudef);
+	frupath = ipath(frudef);
 
 	/*
 	 *  Allow for platform translations of the FMRIs
 	 */
-	platform_units_translate(is_defect(sp->t), croot, &asru, &fru, &rsrc,
-	    pathstr);
-
+	pathstr = ipath2str(NULL, sp->ipp);
+	platform_unit_translate(is_defect(sp->t), croot, TOPO_PROP_RESOURCE,
+	    &rsrc, pathstr);
 	FREE(pathstr);
+
+	pathstr = ipath2str(NULL, asrupath);
+	platform_unit_translate(is_defect(sp->t), croot, TOPO_PROP_ASRU,
+	    &asru, pathstr);
+	FREE(pathstr);
+
+	pathstr = ipath2str(NULL, frupath);
+	platform_unit_translate(is_defect(sp->t), croot, TOPO_PROP_FRU,
+	    &fru, pathstr);
+	FREE(pathstr);
+
 	rsrcs->suspect = sp;
 	rsrcs->asru = asru;
 	rsrcs->fru = fru;
@@ -3120,8 +3127,8 @@ fme_undiagnosable(struct fme *f)
 			fmd_case_add_ereport(f->hdl, f->fmcase, ep->ffep);
 
 		pathstr = ipath2str(NULL, ipath(platform_getpath(ep->nvp)));
-		platform_units_translate(0, f->config, NULL, NULL, &detector,
-		    pathstr);
+		platform_unit_translate(0, f->config, TOPO_PROP_RESOURCE,
+		    &detector, pathstr);
 		FREE(pathstr);
 
 		/* add defect */
@@ -4160,7 +4167,7 @@ causes_test(struct fme *fmep, struct event *ep,
 
 static enum fme_state
 hypothesise(struct fme *fmep, struct event *ep,
-	unsigned long long at_latest_by, unsigned long long *pdelay)
+    unsigned long long at_latest_by, unsigned long long *pdelay)
 {
 	enum fme_state rtr, otr;
 	unsigned long long my_delay;

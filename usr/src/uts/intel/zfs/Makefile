@@ -24,6 +24,12 @@
 #
 #	This makefile drives the production of the zfs file system
 #	kernel module.
+#
+# Copyright 2013 Saso Kiselkov. All rights reserved.
+#
+# Copyright (c) 2016 by Delphix. All rights reserved.
+#
+# Copyright 2019 Joyent, Inc.
 
 #
 #	Path to the base of the uts directory tree (usually /usr/src/uts).
@@ -36,8 +42,7 @@ ARCHDIR:sh = cd ..; basename `pwd`
 #	Define the module and object file sets.
 #
 MODULE		= zfs
-OBJECTS		= $(ZFS_OBJS:%=$(OBJS_DIR)/%)
-LINTS		= $(ZFS_OBJS:%.o=$(LINTS_DIR)/%.ln)
+OBJECTS		= $(ZFS_OBJS:%=$(OBJS_DIR)/%) $(LUA_OBJS:%=$(OBJS_DIR)/%)
 ROOTMODULE	= $(ROOT_DRV_DIR)/$(MODULE)
 ROOTLINK	= $(ROOT_FS_DIR)/$(MODULE)
 CONF_SRCDIR	= $(UTSBASE)/common/fs/zfs
@@ -51,33 +56,28 @@ include ../Makefile.$(ARCHDIR)
 #	Define targets
 #
 ALL_TARGET	= $(BINARY) $(SRC_CONFILE)
-LINT_TARGET	= $(MODULE).lint
 INSTALL_TARGET	= $(BINARY) $(ROOTMODULE) $(ROOTLINK) $(ROOT_CONFFILE)
 
 #
 #	Overrides and depends_on
 #
 MODSTUBS_DIR	 = $(OBJS_DIR)
-LDFLAGS		+= -dy -Nfs/specfs -Ncrypto/swrand -Nmisc/idmap -Nmisc/sha2
+LDFLAGS		+= -dy -Nfs/specfs -Ncrypto/swrand -Nmisc/idmap -Nmisc/sha2 \
+	-Nmisc/skein -Nmisc/edonr
 
 INC_PATH	+= -I$(UTSBASE)/common/fs/zfs
+INC_PATH	+= -I$(UTSBASE)/common/fs/zfs/lua
 INC_PATH	+= -I$(SRC)/common
 INC_PATH	+= -I$(COMMONBASE)/zfs
+INC_PATH	+= -I$(UTSBASE)/i86pc
 
-C99MODE=	-xc99=%all
 C99LMODE=	-Xc99=%all
 
 #
-# For now, disable these lint checks; maintainers should endeavor
-# to investigate and remove these for maximum lint coverage.
+# For now, disable these warnings; maintainers should endeavor
+# to investigate and remove these for maximum coverage.
 # Please do not carry these forward to new Makefiles.
 #
-LINTTAGS	+= -erroff=E_SUSPICIOUS_COMPARISON
-LINTTAGS	+= -erroff=E_BAD_PTR_CAST_ALIGN
-LINTTAGS	+= -erroff=E_SUPPRESSION_DIRECTIVE_UNUSED
-LINTTAGS	+= -erroff=E_STATIC_UNUSED
-LINTTAGS	+= -erroff=E_PTRDIFF_OVERFLOW
-LINTTAGS	+= -erroff=E_ASSIGN_NARROW_CONV
 
 CERRWARN	+= -_gcc=-Wno-type-limits
 CERRWARN	+= -_gcc=-Wno-switch
@@ -85,6 +85,17 @@ CERRWARN	+= -_gcc=-Wno-parentheses
 CERRWARN	+= -_gcc=-Wno-unused-variable
 CERRWARN	+= -_gcc=-Wno-unused-function
 CERRWARN	+= -_gcc=-Wno-unused-label
+
+# needs work
+SMOFF += all_func_returns,indenting
+$(OBJS_DIR)/llex.o := SMOFF += index_overflow
+$(OBJS_DIR)/metaslab.o := SMOFF += no_if_block
+$(OBJS_DIR)/zfs_vnops.o := SMOFF += signed
+# needs work
+$(OBJS_DIR)/zvol.o := SMOFF += deref_check,signed
+
+# false positive
+$(OBJS_DIR)/zfs_ctldir.o := SMOFF += strcpy_overflow
 
 #
 #	Default build targets.
@@ -98,12 +109,6 @@ all:		$(ALL_DEPS)
 clean:		$(CLEAN_DEPS)
 
 clobber:	$(CLOBBER_DEPS)
-
-lint:		$(LINT_DEPS)
-
-modlintlib:	$(MODLINTLIB_DEPS)
-
-clean.lint:	$(CLEAN_LINT_DEPS)
 
 install:	$(INSTALL_DEPS)
 

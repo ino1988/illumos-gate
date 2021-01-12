@@ -20,7 +20,8 @@
  */
 
 /*
- * Copyright (c) 2011, 2014 by Delphix. All rights reserved.
+ * Copyright (c) 2011, 2015 by Delphix. All rights reserved.
+ * Copyright (c) 2014 Integros [integros.com]
  */
 
 #include <sys/arc.h>
@@ -154,7 +155,7 @@ bptree_visit_cb(spa_t *spa, zilog_t *zilog, const blkptr_t *bp,
 	int err;
 	struct bptree_args *ba = arg;
 
-	if (BP_IS_HOLE(bp))
+	if (bp == NULL || BP_IS_HOLE(bp))
 		return (0);
 
 	err = ba->ba_func(ba->ba_arg, bp, ba->ba_tx);
@@ -210,7 +211,8 @@ bptree_iterate(objset_t *os, uint64_t obj, boolean_t free, bptree_itor_t func,
 	err = 0;
 	for (i = ba.ba_phys->bt_begin; i < ba.ba_phys->bt_end; i++) {
 		bptree_entry_phys_t bte;
-		int flags = TRAVERSE_PREFETCH_METADATA | TRAVERSE_POST;
+		int flags = TRAVERSE_PREFETCH_METADATA | TRAVERSE_POST
+		    | TRAVERSE_NO_DECRYPT;
 
 		err = dmu_read(os, obj, i * sizeof (bte), sizeof (bte),
 		    &bte, DMU_READ_NO_PREFETCH);
@@ -219,9 +221,10 @@ bptree_iterate(objset_t *os, uint64_t obj, boolean_t free, bptree_itor_t func,
 
 		if (zfs_free_leak_on_eio)
 			flags |= TRAVERSE_HARD;
-		zfs_dbgmsg("bptree index %d: traversing from min_txg=%lld "
+		zfs_dbgmsg("bptree index %lld: traversing from min_txg=%lld "
 		    "bookmark %lld/%lld/%lld/%lld",
-		    i, (longlong_t)bte.be_birth_txg,
+		    (longlong_t)i,
+		    (longlong_t)bte.be_birth_txg,
 		    (longlong_t)bte.be_zb.zb_objset,
 		    (longlong_t)bte.be_zb.zb_object,
 		    (longlong_t)bte.be_zb.zb_level,

@@ -20,8 +20,10 @@
  */
 /*
  * Copyright 2012 DEY Storage Systems, Inc.  All rights reserved.
- * Copyright 2014 Nexenta Systems, Inc.  All rights reserved.
+ * Copyright 2016 Nexenta Systems, Inc.  All rights reserved.
  * Copyright (c) 2009, 2010, Oracle and/or its affiliates. All rights reserved.
+ * Copyright 2019 Western Digital Corporation.
+ * Copyright 2020 Joyent, Inc.
  */
 
 #ifndef	_SYS_BLKDEV_H
@@ -78,8 +80,10 @@ typedef struct bd_handle *bd_handle_t;
 typedef struct bd_xfer bd_xfer_t;
 typedef struct bd_drive bd_drive_t;
 typedef struct bd_media bd_media_t;
+typedef struct bd_free_info bd_free_info_t;
 typedef struct bd_ops bd_ops_t;
 
+struct dkioc_free_list_s;
 
 struct bd_xfer {
 	/*
@@ -93,6 +97,8 @@ struct bd_xfer {
 	unsigned		x_ndmac;
 	caddr_t			x_kaddr;
 	unsigned		x_flags;
+	unsigned		x_qnum;
+	const struct dkioc_free_list_s *x_dfl;
 };
 
 #define	BD_XFER_POLL		(1U << 0)	/* no interrupts (dump) */
@@ -104,6 +110,46 @@ struct bd_drive {
 	boolean_t		d_hotpluggable;
 	int			d_target;
 	int			d_lun;
+	size_t			d_vendor_len;
+	char			*d_vendor;
+	size_t			d_product_len;
+	char			*d_product;
+	size_t			d_model_len;
+	char			*d_model;
+	size_t			d_serial_len;
+	char			*d_serial;
+	size_t			d_revision_len;
+	char			*d_revision;
+	uint8_t			d_eui64[8];
+	/* Added at the end to maintain binary compatibility */
+	uint32_t		d_qcount;
+
+	/*
+	 * Required starting alignment for free_space requests (in logical
+	 * blocks). Must be >= 1.
+	 */
+	uint64_t		d_free_align;
+
+	/*
+	 * Maximum number of segments supported in a free space request.
+	 * 0 implies no limit.
+	 */
+	uint64_t		d_max_free_seg;
+
+	/*
+	 * Maximum number of logical blocks allowed in a free space request.
+	 * 0 implies no limit.
+	 */
+	uint64_t		d_max_free_blks;
+
+	/*
+	 * Maximum number of logical blocks to free in a single segment.
+	 * 0 implies no limit. If no limit, d_max_free_blks must also be 0.
+	 * If > 0, d_max_free_seg_blks must be <= d_max_free_blks (basically
+	 * you can't set a bigger value of d_max_free_seg_blks than
+	 * d_max_free_blks).
+	 */
+	uint64_t		d_max_free_seg_blks;
 };
 
 struct bd_media {
@@ -131,17 +177,55 @@ struct bd_media {
 #define	BD_INFO_FLAG_HOTPLUGGABLE	(1U << 1)
 #define	BD_INFO_FLAG_READ_ONLY		(1U << 2)
 
+/*
+ * When adding a new version of the bd_ops_t struct, be sure to update
+ * BD_OPS_CURRENT_VERSION
+ */
+typedef enum {
+	BD_OPS_VERSION_0 = 0,
+	BD_OPS_VERSION_1 = 1,
+	BD_OPS_VERSION_2 = 2,
+} bd_version_t;
+#define	BD_OPS_CURRENT_VERSION BD_OPS_VERSION_2
+
 struct bd_ops {
-	int	o_version;
-	void	(*o_drive_info)(void *, bd_drive_t *);
-	int	(*o_media_info)(void *, bd_media_t *);
-	int	(*o_devid_init)(void *, dev_info_t *, ddi_devid_t *);
-	int	(*o_sync_cache)(void *, bd_xfer_t *);
-	int	(*o_read)(void *, bd_xfer_t *);
-	int	(*o_write)(void *, bd_xfer_t *);
+	bd_version_t	o_version;
+	void		(*o_drive_info)(void *, bd_drive_t *);
+	int		(*o_media_info)(void *, bd_media_t *);
+	int		(*o_devid_init)(void *, dev_info_t *, ddi_devid_t *);
+	int		(*o_sync_cache)(void *, bd_xfer_t *);
+	int		(*o_read)(void *, bd_xfer_t *);
+	int		(*o_write)(void *, bd_xfer_t *);
+	int		(*o_free_space)(void *, bd_xfer_t *);
 };
 
-#define	BD_OPS_VERSION_0		0
+struct bd_errstats {
+	/* these are managed by blkdev itself */
+	kstat_named_t	bd_softerrs;
+	kstat_named_t	bd_harderrs;
+	kstat_named_t	bd_transerrs;
+	kstat_named_t	bd_model;
+	kstat_named_t	bd_vid;
+	kstat_named_t	bd_pid;
+	kstat_named_t	bd_revision;
+	kstat_named_t	bd_serial;
+	kstat_named_t	bd_capacity;
+
+	/* the following are updated on behalf of the HW driver */
+	kstat_named_t	bd_rq_media_err;
+	kstat_named_t	bd_rq_ntrdy_err;
+	kstat_named_t	bd_rq_nodev_err;
+	kstat_named_t	bd_rq_recov_err;
+	kstat_named_t	bd_rq_illrq_err;
+	kstat_named_t	bd_rq_pfa_err;
+};
+
+#define	BD_ERR_MEDIA	0
+#define	BD_ERR_NTRDY	1
+#define	BD_ERR_NODEV	2
+#define	BD_ERR_RECOV	3
+#define	BD_ERR_ILLRQ	4
+#define	BD_ERR_PFA	5
 
 /*
  * Note, one handler *per* address.  Drivers with multiple targets at
@@ -153,6 +237,7 @@ int		bd_attach_handle(dev_info_t *, bd_handle_t);
 int		bd_detach_handle(bd_handle_t);
 void		bd_state_change(bd_handle_t);
 void		bd_xfer_done(bd_xfer_t *, int);
+void		bd_error(bd_xfer_t *, int);
 void		bd_mod_init(struct dev_ops *);
 void		bd_mod_fini(struct dev_ops *);
 

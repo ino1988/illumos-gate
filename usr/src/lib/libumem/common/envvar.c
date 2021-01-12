@@ -25,7 +25,8 @@
  */
 
 /*
- * Copyright (c) 2012 Joyent, Inc. All rights reserved.
+ * Copyright (c) 2019 Joyent, Inc.
+ * Copyright (c) 2015 by Delphix. All rights reserved.
  */
 
 #include <ctype.h>
@@ -225,6 +226,10 @@ static umem_env_item_t umem_debug_items[] = {
 	{ "allverbose",		"Private",	ITEM_FLAG,
 		"Enables writing all logged messages to stderr",
 		&umem_output,	2
+	},
+	{ "checknull",		"Private",	ITEM_FLAG,
+		"Abort if an allocation would return null",
+		&umem_flags,	UMF_CHECKNULL
 	},
 
 	{ NULL, "-- end of UMEM_DEBUG --",	ITEM_INVALID }
@@ -533,6 +538,13 @@ process_item(const umem_env_item_t *item, const char *item_arg)
 	case ITEM_UINT:
 	case ITEM_SIZE:
 		arg_required = 1;
+		break;
+
+	default:
+		/*
+		 * These are flags that aren't supported, so they'll error out
+		 * below.
+		 */
 		break;
 	}
 

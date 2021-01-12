@@ -21,8 +21,7 @@
 #
 # Copyright 2006 Sun Microsystems, Inc.  All rights reserved.
 # Use is subject to license terms.
-#
-# ident	"%Z%%M%	%I%	%E% SMI"
+# Copyright 2019 Peter Tribble.
 #
 #	This makefile drives the production of the oplkmdrv driver
 #	kernel module.
@@ -34,7 +33,7 @@
 #	Path to the base of the uts directory tree (usually /usr/src/uts).
 #
 UTSBASE	= ../../..
-INC_PATH	+= -I$(UTSBASE)/sun4u/starcat/
+INC_PATH	+= -I$(UTSBASE)/sun4u/opl/
 
 #
 #	Define the module and object file sets.
@@ -42,7 +41,6 @@ INC_PATH	+= -I$(UTSBASE)/sun4u/starcat/
 
 MODULE		= oplkmdrv
 OBJECTS		= $(OPLKM_OBJS:%=$(OBJS_DIR)/%)
-LINTS		= $(OPLKM_OBJS:%.o=$(LINTS_DIR)/%.ln)
 ROOTMODULE	= $(ROOT_OPL_DRV_DIR)/$(MODULE)
 CONF_SRCDIR	= $(UTSBASE)/sun4u/opl/io
 
@@ -55,12 +53,8 @@ include $(UTSBASE)/sun4u/opl/Makefile.opl
 #	Define targets
 #
 ALL_TARGET	= $(BINARY) $(SRC_CONFFILE)
-LINT_TARGET	= $(MODULE).lint
 INSTALL_TARGET	= $(BINARY) $(ROOTMODULE) $(ROOT_CONFFILE)
 
-#
-# lint pass one enforcement
-#
 CFLAGS += $(CCVERBOSE)
 
 #
@@ -85,12 +79,6 @@ all:		$(ALL_DEPS)
 clean:		$(CLEAN_DEPS)
 
 clobber:	$(CLOBBER_DEPS)
-
-lint:		$(LINT_DEPS)
-
-modlintlib:	$(MODLINTLIB_DEPS)
-
-clean.lint:	$(CLEAN_LINT_DEPS)
 
 install:	$(INSTALL_DEPS)
 

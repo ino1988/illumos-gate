@@ -24,7 +24,7 @@
  */
 
 /*	Copyright (c) 1984, 1986, 1987, 1988, 1989 AT&T	*/
-/*	  All Rights Reserved  	*/
+/*	  All Rights Reserved	*/
 
 #ifndef _SYS_EXEC_H
 #define	_SYS_EXEC_H
@@ -106,6 +106,7 @@ typedef struct uarg {
 	char	*auxp_brand; /* address of first brand auxv on user stack */
 	cred_t	*pfcred;
 	boolean_t scrubenv;
+	uintptr_t commpage;
 } uarg_t;
 
 /*
@@ -157,10 +158,11 @@ typedef struct uarg {
 #endif
 
 #define	INTPSZ	MAXPATHLEN
+#define	INTP_MAXDEPTH	5	/* Nested interpreter depth matches Linux */
 typedef struct intpdata {
 	char	*intp;
-	char	*intp_name;
-	char	*intp_arg;
+	char	*intp_name[INTP_MAXDEPTH];
+	char	*intp_arg[INTP_MAXDEPTH];
 } intpdata_t;
 
 #define	EXECSETID_SETID		0x1 /* setid exec */

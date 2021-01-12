@@ -25,6 +25,10 @@
 # Use is subject to license terms.
 #
 
+#
+# Copyright (c) 2015, 2016 by Delphix. All rights reserved.
+#
+
 . $STF_SUITE/include/libtest.shlib
 
 #
@@ -41,15 +45,15 @@ verify_runnable "global"
 
 function cleanup
 {
-	datasetexists $TESTPOOL && log_must $ZPOOL destroy $TESTPOOL
+	datasetexists $TESTPOOL && log_must zpool destroy $TESTPOOL
 }
 
 log_onexit cleanup
 
 set -A args "QuOta=none" "quota=non" "quota=abcd" "quota=0" "quota=" \
     "ResErVaTi0n=none" "reserV=none" "reservation=abcd" "reserv=" \
-    "recorDSize=64k" "recordsize=256K" "recordsize=256" \
-    "recsize=" "recsize=zero" "recordsize=0" \
+    "recorDSize=64k" "recordsize=2M" "recordsize=2048K" \
+    "recordsize=256" "recsize=" "recsize=zero" "recordsize=0" \
     "mountPoint=/tmp/tmpfile$$" "mountpoint=non0" "mountpoint=" \
     "mountpoint=LEGACY" "mounpoint=none" \
     "sharenfs=ON" "ShareNFS=off" "sharenfs=sss" \
@@ -73,7 +77,7 @@ log_assert "'zpool create -O' should return an error with badly formed parameter
 
 typeset -i i=0
 while (( $i < ${#args[*]} )); do
-	log_mustnot $ZPOOL create -O ${args[i]} -f $TESTPOOL $DISKS
+	log_mustnot zpool create -O ${args[i]} -f $TESTPOOL $DISKS
 	((i = i + 1))
 done
 

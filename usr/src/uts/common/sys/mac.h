@@ -21,7 +21,9 @@
 
 /*
  * Copyright (c) 2005, 2010, Oracle and/or its affiliates. All rights reserved.
- * Copyright (c) 2014, Joyent, Inc.  All rights reserved.
+ * Copyright 2018 Joyent, Inc.
+ * Copyright (c) 2015 Garrett D'Amore <garrett@damore.org>
+ * Copyright 2020 RackTop Systems, Inc.
  */
 
 #ifndef	_SYS_MAC_H
@@ -87,6 +89,13 @@ typedef enum {
 } link_flowctrl_t;
 
 typedef enum {
+	LINK_FEC_NONE		= 1 << 0,
+	LINK_FEC_AUTO		= 1 << 1,
+	LINK_FEC_RS		= 1 << 2,
+	LINK_FEC_BASE_R		= 1 << 3
+} link_fec_t;
+
+typedef enum {
 	LINK_TAGMODE_VLANONLY = 0,
 	LINK_TAGMODE_NORMAL
 } link_tagmode_t;
@@ -149,8 +158,11 @@ typedef enum {
  * Note that there are 2 sets of parameters: the *_EN_* values are
  * those that the Administrator configures for autonegotiation. The
  * _ADV_* values are those that are currently exposed over the wire.
+ *
+ * Please append properties to the end of this list. Do not reorder the list.
  */
 typedef enum {
+	MAC_PROP_PRIVATE = -1,
 	MAC_PROP_DUPLEX = 0x00000001,
 	MAC_PROP_SPEED,
 	MAC_PROP_STATUS,
@@ -213,8 +225,22 @@ typedef enum {
 	MAC_PROP_MAX_RXHWCLNT_AVAIL,
 	MAC_PROP_MAX_TXHWCLNT_AVAIL,
 	MAC_PROP_IB_LINKMODE,
+	MAC_PROP_VN_PROMISC_FILTERED,
 	MAC_PROP_SECONDARY_ADDRS,
-	MAC_PROP_PRIVATE = -1
+	MAC_PROP_ADV_40GFDX_CAP,
+	MAC_PROP_EN_40GFDX_CAP,
+	MAC_PROP_ADV_100GFDX_CAP,
+	MAC_PROP_EN_100GFDX_CAP,
+	MAC_PROP_ADV_2500FDX_CAP,
+	MAC_PROP_EN_2500FDX_CAP,
+	MAC_PROP_ADV_5000FDX_CAP,
+	MAC_PROP_EN_5000FDX_CAP,
+	MAC_PROP_ADV_25GFDX_CAP,
+	MAC_PROP_EN_25GFDX_CAP,
+	MAC_PROP_ADV_50GFDX_CAP,
+	MAC_PROP_EN_50GFDX_CAP,
+	MAC_PROP_EN_FEC_CAP,
+	MAC_PROP_ADV_FEC_CAP
 } mac_prop_id_t;
 
 /*
@@ -225,6 +251,17 @@ typedef enum {
 #define	MAC_PROP_MAP_KSTAT		0x0100
 #define	MAC_PROP_PERM_RW		(MAC_PROP_PERM_READ|MAC_PROP_PERM_WRITE)
 #define	MAC_PROP_FLAGS_RK		(MAC_PROP_PERM_READ|MAC_PROP_MAP_KSTAT)
+
+/*
+ * Valid LED mode bits
+ */
+typedef enum mac_led_mode {
+	MAC_LED_DEFAULT	= (1 << 0),
+	MAC_LED_OFF	= (1 << 1),
+	MAC_LED_IDENT	= (1 << 2),
+	MAC_LED_ON	= (1 << 3)
+} mac_led_mode_t;
+
 
 #ifdef	_KERNEL
 
@@ -370,7 +407,7 @@ typedef enum {
 typedef void		(*mac_notify_t)(void *, mac_notify_type_t);
 typedef void		(*mac_rx_t)(void *, mac_resource_handle_t, mblk_t *,
 			    boolean_t);
-typedef	mblk_t		*(*mac_receive_t)(void *, int);
+typedef	mblk_t		*(*mac_receive_t)(void *, size_t);
 
 /*
  * MAC resource types
@@ -587,6 +624,38 @@ typedef struct mactype_register_s {
 } mactype_register_t;
 
 /*
+ * Flags to describe the hardware emulation desired from a client when
+ * calling mac_hw_emul().
+ *
+ * MAC_HWCKSUM_EMUL
+ *
+ *	If an mblk is marked with HCK_* flags, then calculate those
+ *	checksums and update the checksum flags.
+ *
+ * MAC_IPCKSUM_EMUL
+ *
+ *	Like MAC_HWCKSUM_EMUL, except only calculate the IPv4 header
+ *	checksum. We still update both the IPv4 and ULP checksum
+ *	flags.
+ *
+ * MAC_LSO_EMUL
+ *
+ *	If an mblk is marked with HW_LSO, then segment the LSO mblk
+ *	into a new chain of mblks which reference the original data
+ *	block. This flag DOES NOT imply MAC_HWCKSUM_EMUL. If the
+ *	caller needs both then it must set both.
+ */
+typedef enum mac_emul {
+	MAC_HWCKSUM_EMUL = (1 << 0),
+	MAC_IPCKSUM_EMUL = (1 << 1),
+	MAC_LSO_EMUL = (1 << 2)
+} mac_emul_t;
+
+#define	MAC_HWCKSUM_EMULS	(MAC_HWCKSUM_EMUL | MAC_IPCKSUM_EMUL)
+#define	MAC_ALL_EMULS		(MAC_HWCKSUM_EMUL | MAC_IPCKSUM_EMUL | \
+				MAC_LSO_EMUL)
+
+/*
  * Driver interface functions.
  */
 extern int			mac_open_by_linkid(datalink_id_t,
@@ -607,7 +676,7 @@ extern uint_t			mac_addr_len(mac_handle_t);
 extern int			mac_type(mac_handle_t);
 extern int			mac_nativetype(mac_handle_t);
 
-extern void 			mac_unicst_update(mac_handle_t,
+extern void			mac_unicst_update(mac_handle_t,
 				    const uint8_t *);
 extern void			mac_capab_update(mac_handle_t);
 extern int			mac_pdata_update(mac_handle_t, void *,

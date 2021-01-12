@@ -79,6 +79,9 @@ CPL_MATCH_FN(no_match)
 	return (0);
 }
 
+static void command_complete(int s) __NORETURN;
+static void usage(void) __NORETURN;
+
 static void
 command_complete(int s)
 {
@@ -90,7 +93,7 @@ command_complete(int s)
 }
 
 static void
-usage()
+usage(void)
 {
 	if (!interactive) {
 		(void) fprintf(stderr, gettext("Usage:\t"
@@ -732,7 +735,7 @@ static keywdtab_t	idtypes[] = {
 	{SADB_X_IDENTTYPE_ADDR_RANGE,	"rangev4"},
 	{SADB_X_IDENTTYPE_ADDR_RANGE,	"rangev6"},
 	{SADB_X_IDENTTYPE_KEY_ID,	"keyid"},
-	{NULL,	0}
+	{0,				NULL}
 };
 
 static int
@@ -810,7 +813,7 @@ parse_cky(int argc, char **argv, uint64_t *ckyp)
 
 static int
 parse_addr_pr(int argc, char **argv, struct hostent **h1pp,
-	struct hostent **h2pp)
+    struct hostent **h2pp)
 {
 	int	rtn, consumed = 0;
 
@@ -900,7 +903,7 @@ static keywdtab_t	psfldtypes[] = {
 	{PSFLD_REMIDTYPE,	"remoteidtype"},
 	{PSFLD_MODE,		"ike_mode"},
 	{PSFLD_KEY,		"key"},
-	{NULL,	0}
+	{0,			NULL}
 };
 
 static int
@@ -926,7 +929,7 @@ static keywdtab_t	ikemodes[] = {
 	{IKE_XCHG_IDENTITY_PROTECT,	"main"},
 	{IKE_XCHG_AGGRESSIVE,		"aggressive"},
 	{IKE_XCHG_IP_AND_AGGR,		"both"},
-	{NULL,	0}
+	{0,				NULL}
 };
 
 static int
@@ -3345,7 +3348,7 @@ parseit(int argc, char **argv, char *notused, boolean_t notused_either)
 	case IKE_SVC_DUMP_AUTHALGS:
 	case IKE_SVC_DUMP_PS:
 	case IKE_SVC_DUMP_CERTCACHE:
-		if (argc != NULL) {
+		if (argc != 0) {
 			print_dump_help();
 			break;
 		}

@@ -40,7 +40,6 @@ UTSBASE	= ../..
 #
 MODULE		= xnbe
 OBJECTS		= $(XNBE_OBJS:%=$(OBJS_DIR)/%)
-LINTS		= $(XNBE_OBJS:%.o=$(LINTS_DIR)/%.ln)
 ROOTMODULE	= $(ROOT_PSM_DRV_DIR)/$(MODULE)
 
 #
@@ -52,7 +51,6 @@ include $(UTSBASE)/i86xpv/Makefile.i86xpv
 #	Define targets
 #
 ALL_TARGET	= $(BINARY)
-LINT_TARGET	= $(MODULE).lint
 INSTALL_TARGET	= $(BINARY) $(ROOTMODULE)
 
 #
@@ -70,7 +68,6 @@ ALL_BUILDS	= $(ALL_BUILDS64)
 # use Solaris specific code in xen public header files
 #
 CFLAGS		+= -D_SOLARIS
-LINTFLAGS	+= -D_SOLARIS
 
 #
 #	Default build targets.
@@ -81,17 +78,9 @@ def:		$(DEF_DEPS)
 
 all:		$(ALL_DEPS)
 
-# This build only 64-bit, but the lint32 below
-# needs corresponding clean/clobber deps.
-clean:		$(CLEAN_DEPS) clean.debug32
+clean:		$(CLEAN_DEPS)
 
-clobber:	$(CLOBBER_DEPS) clobber.debug32
-
-lint:		$(LINT_DEPS)
-
-modlintlib:	$(MODLINTLIB_DEPS) lint32
-
-clean.lint:	$(CLEAN_LINT_DEPS)
+clobber:	$(CLOBBER_DEPS)
 
 install:	$(INSTALL_DEPS)
 

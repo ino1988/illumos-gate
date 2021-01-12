@@ -20,6 +20,7 @@
 #
 #
 # Copyright (c) 1999, 2010, Oracle and/or its affiliates. All rights reserved.
+# Copyright 2020 Joyent, Inc.
 #
 # Definitions common to tool source.
 #
@@ -36,23 +37,45 @@ ROOTONBLDBINMACH=	$(ROOTONBLD)/bin/$(MACH)
 ROOTONBLDETC=		$(ROOTONBLD)/etc
 ROOTONBLDLIB=		$(ROOTONBLD)/lib
 ROOTONBLDLIBMACH=	$(ROOTONBLD)/lib/$(MACH)
+ROOTONBLDLIBMACH64=	$(ROOTONBLD)/lib/$(MACH)/64
 ROOTONBLDLIBPERL=	$(ROOTONBLD)/lib/perl
 ROOTONBLDLIBPY=		$(ROOTONBLD)/lib/python
-ROOTONBLDLIBPY_26=	$(ROOTONBLD)/lib/python2.6
 ROOTONBLDENV=		$(ROOTONBLD)/env
-ROOTONBLDGK=		$(ROOTONBLD)/gk
 ROOTONBLDMAN=		$(ROOTONBLD)/man
-ROOTONBLDMAN1=		$(ROOTONBLD)/man/man1
+ROOTONBLDMAN1ONBLD=	$(ROOTONBLD)/man/man1onbld
 ROOTONBLDETCABI=	$(ROOTONBLD)/etc/abi
 ROOTONBLDETCEXCEPT=	$(ROOTONBLD)/etc/exception_lists
+ROOTONBLDSHARE=		$(ROOTONBLD)/share
 
+CC =			$(NATIVECC)
+CCC =			$(NATIVECCC)
+CFLAGS =		$(NATIVE_CFLAGS)
 CPPFLAGS=		-D_TS_ERRNO
 ELFSIGN_O=		$(TRUE)
 LDLIBS=
-LDFLAGS=		$(MAPFILE.NES:%=-M%) $(MAPFILE.NED:%=-M%) \
-			    $(MAPFILE.PGA:%=-M%)
+LDFLAGS=		$(MAPFILE.NES:%=-Wl,-M%) $(MAPFILE.NED:%=-Wl,-M%) \
+			    $(MAPFILE.PGA:%=-Wl,-M%) \
+			    $(ZASSERTDEFLIB)=libc.so \
+			    $(BDIRECT)
+
+# To work around a bootstrapping problem, we can't rely on cw(1) knowing how
+# to translate -shared as we may be using an older one to build the current
+# tools.
+GSHARED = -_cc=-G -_gcc=-shared
+
+#
+# To work around a bootstrapping problem, we don't assume that the
+# compiler or environment are properly configured to make the stack
+# protector work. Disable it right now for the tools.
+#
+STACKPROTECT = none
+
+# Unset CW_LINKER so we run the default.  We don't set LD here to avoid taking
+# the journey through LD_ALTEXEC unnecessarily.
+CW_LINKER=
 
 ROOTONBLDPROG=		$(PROG:%=$(ROOTONBLDBIN)/%)
+ROOTONBLDSCRIPTS=	$(SCRIPTS:%=$(ROOTONBLDBIN)/%)
 ROOTONBLDMACHPROG=	$(PROG:%=$(ROOTONBLDBINMACH)/%)
 ROOTONBLDSHFILES=	$(SHFILES:%=$(ROOTONBLDBIN)/%)
 ROOTONBLDMAKEFILES=	$(MAKEFILES:%=$(ROOTONBLDBIN)/%)
@@ -60,12 +83,10 @@ ROOTONBLDMACHSHFILES=	$(SHFILES:%=$(ROOTONBLDBINMACH)/%)
 ROOTONBLDMACHBINARIES=	$(BINARIES:%=$(ROOTONBLDBINMACH)/%)
 ROOTONBLDETCFILES=	$(ETCFILES:%=$(ROOTONBLDETC)/%)
 ROOTONBLDENVFILES=	$(ENVFILES:%=$(ROOTONBLDENV)/%)
-ROOTONBLDGKFILES=	$(GKFILES:%=$(ROOTONBLDGK)/.%)
-ROOTONBLDGKSHFILES=	$(SHFILES:%=$(ROOTONBLDGK)/%)
 ROOTONBLDPERLFILES=	$(PERLFILES:%=$(ROOTONBLDBIN)/%)
 ROOTONBLDPERLMODULES=	$(PERLMODULES:%=$(ROOTONBLDLIBPERL)/%)
 ROOTONBLDPYFILES=	$(PYFILES:%=$(ROOTONBLDBIN)/%)
-ROOTONBLDMAN1FILES=	$(MAN1FILES:%=$(ROOTONBLDMAN1)/%)
+ROOTONBLDMAN1ONBLDFILES=$(MAN1ONBLDFILES:%=$(ROOTONBLDMAN1ONBLD)/%)
 ROOTONBLDABIAUDITFILES=	$(ABI_AUDITFILES:%=$(ROOTONBLDETCABI)/%)
 ROOTONBLDEXCEPTFILES=	$(EXCEPTFILES:%=$(ROOTONBLDETCEXCEPT)/%)
 
@@ -90,14 +111,8 @@ $(ROOTONBLDETC)/%: %
 $(ROOTONBLDLIBPERL)/%: %
 	$(INS.file)
 
-$(ROOTONBLDMAN1)/%: %
+$(ROOTONBLDMAN1ONBLD)/%: %
 	$(INS.file)
 
 $(ROOTONBLDENV)/%: %
-	$(INS.file)
-
-$(ROOTONBLDGK)/.%: %
-	$(INS.rename)
-
-$(ROOTONBLDGK)/%: %
 	$(INS.file)

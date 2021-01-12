@@ -24,11 +24,13 @@
  *
  * Copyright 2009 Sun Microsystems, Inc.  All rights reserved.
  * Use is subject to license terms.
+ * Copyright 2015 Nexenta Systems, Inc. All rights reserved.
+ * Copyright 2016 Toomas Soome <tsoome@me.com>
  */
 
 
 /*	Copyright (c) 1984, 1986, 1987, 1988, 1989 AT&T	*/
-/*	  All Rights Reserved  	*/
+/*	  All Rights Reserved	*/
 
 
 #ifndef _SYS_VTOC_H
@@ -79,14 +81,29 @@ extern "C" {
 #define	V_VAR		0x07		/* Var partition */
 #define	V_HOME		0x08		/* Home partition */
 #define	V_ALTSCTR	0x09		/* Alternate sector partition */
-#define	V_CACHE		0x0a		/* Cache (cachefs) partition */
+#define	V_CACHE		0x0a		/* CacheFS partition (obsolete) */
 
 /* Tags for EFI/GPT labels */
 #define	V_RESERVED	0x0b		/* SMI reserved data */
 #define	V_SYSTEM	0x0c		/* EFI/GPT system partition */
-#define	V_BIOS_BOOT	0x18		/* BIOS Boot partition */
 
-#define	V_UNKNOWN	0xff		/* Unknown partition */
+#define	V_VXVM_PUB	0x0e		/* VxVM public region */
+#define	V_VXVM_PRIV	0x0f		/* VxVM private region */
+
+#define	V_BIOS_BOOT	0x18		/* Grub2 BIOS Boot partition */
+
+/* NetBSD/mips defines this */
+#define	V_NETBSD_FFS	0xff
+
+/* FreeBSD tags: the high byte equals ELFOSABI_FREEBSD */
+#define	V_FREEBSD_BOOT		0x0900
+#define	V_FREEBSD_SWAP		0x0901
+#define	V_FREEBSD_UFS		0x0902
+#define	V_FREEBSD_VINUM		0x0903
+#define	V_FREEBSD_ZFS		0x0904
+#define	V_FREEBSD_NANDFS	0x0905
+
+#define	V_UNKNOWN	0xffff		/* Unknown partition */
 
 /*
  * Partition permission flags
@@ -271,15 +288,15 @@ struct vtoc32 {
 #define	vtoctovtoc32(v, v32)				\
 	{						\
 	int i;						\
-	v32.v_bootinfo[0]	= v.v_bootinfo[0];	\
-	v32.v_bootinfo[1]	= v.v_bootinfo[1];	\
-	v32.v_bootinfo[2]	= v.v_bootinfo[2];	\
-	v32.v_sanity		= v.v_sanity;		\
-	v32.v_version		= v.v_version;		\
+	v32.v_bootinfo[0]	= (uint32_t)v.v_bootinfo[0];	\
+	v32.v_bootinfo[1]	= (uint32_t)v.v_bootinfo[1];	\
+	v32.v_bootinfo[2]	= (uint32_t)v.v_bootinfo[2];	\
+	v32.v_sanity		= (uint32_t)v.v_sanity;		\
+	v32.v_version		= (uint32_t)v.v_version;		\
 	bcopy(v.v_volume, v32.v_volume, LEN_DKL_VVOL);	\
 	v32.v_sectorsz		= v.v_sectorsz;		\
 	v32.v_nparts		= v.v_nparts;		\
-	v32.v_version		= v.v_version;		\
+	v32.v_version		= (uint32_t)v.v_version;		\
 	for (i = 0; i < 10; i++)			\
 		v32.v_reserved[i] = v.v_reserved[i];	\
 	for (i = 0; i < V_NUMPAR; i++) {		\

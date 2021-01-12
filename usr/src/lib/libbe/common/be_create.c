@@ -21,10 +21,10 @@
 
 /*
  * Copyright (c) 2008, 2010, Oracle and/or its affiliates. All rights reserved.
- */
-
-/*
  * Copyright 2013 Nexenta Systems, Inc. All rights reserved.
+ * Copyright (c) 2014, 2015 by Delphix. All rights reserved.
+ * Copyright (c) 2016 Martin Matuska. All rights reserved.
+ * Copyright 2019 OmniOS Community Edition (OmniOSce) Association.
  */
 
 /*
@@ -354,8 +354,7 @@ be_init(nvlist_t *be_attrs)
 	}
 
 done:
-	if (bt.nbe_zfs_props != NULL)
-		nvlist_free(bt.nbe_zfs_props);
+	nvlist_free(bt.nbe_zfs_props);
 
 	be_zfs_fini();
 
@@ -486,7 +485,8 @@ be_destroy(nvlist_t *be_attrs)
 	 * Check if BE has snapshots and BE_DESTROY_FLAG_SNAPSHOTS
 	 * is not set.
 	 */
-	(void) zfs_iter_snapshots(zhp, be_has_snapshot_callback, &bs_found);
+	(void) zfs_iter_snapshots(zhp, B_FALSE, be_has_snapshot_callback,
+	    &bs_found);
 	if (!dd.destroy_snaps && bs_found) {
 		ZFS_CLOSE(zhp);
 		return (BE_ERR_SS_EXISTS);
@@ -612,6 +612,8 @@ be_copy(nvlist_t *be_attrs)
 	uuid_t		parent_uu = { 0 };
 	char		obe_root_ds[MAXPATHLEN];
 	char		nbe_root_ds[MAXPATHLEN];
+	char		obe_root_container[MAXPATHLEN];
+	char		nbe_root_container[MAXPATHLEN];
 	char		ss[MAXPATHLEN];
 	char		*new_mp = NULL;
 	char		*obe_name = NULL;
@@ -1096,8 +1098,14 @@ be_copy(nvlist_t *be_attrs)
 	/*
 	 * Update new BE's vfstab.
 	 */
-	if ((ret = be_update_vfstab(bt.nbe_name, bt.obe_zpool, bt.nbe_zpool,
-	    &fld, new_mp)) != BE_SUCCESS) {
+
+	be_make_root_container_ds(bt.obe_zpool, obe_root_container,
+	    sizeof (obe_root_container));
+	be_make_root_container_ds(bt.nbe_zpool, nbe_root_container,
+	    sizeof (nbe_root_container));
+
+	if ((ret = be_update_vfstab(bt.nbe_name, obe_root_container,
+	    nbe_root_container, &fld, new_mp)) != BE_SUCCESS) {
 		be_print_err(gettext("be_copy: failed to "
 		    "update new BE's vfstab (%s)\n"), bt.nbe_name);
 		goto done;
@@ -1169,8 +1177,7 @@ done:
 	ZFS_CLOSE(zhp);
 	be_free_fs_list(&fld);
 
-	if (bt.nbe_zfs_props != NULL)
-		nvlist_free(bt.nbe_zfs_props);
+	nvlist_free(bt.nbe_zfs_props);
 
 	free(bt.obe_altroot);
 	free(new_mp);
@@ -2092,8 +2099,7 @@ be_copy_zones(char *obe_name, char *obe_root_ds, char *nbe_root_ds)
 				    "failed to create zone BE clone for new "
 				    "zone BE %s\n"), new_zone_be_name);
 				ret = iret;
-				if (bt.nbe_zfs_props != NULL)
-					nvlist_free(bt.nbe_zfs_props);
+				nvlist_free(bt.nbe_zfs_props);
 				goto done;
 			}
 			/*
@@ -2118,8 +2124,7 @@ be_copy_zones(char *obe_name, char *obe_root_ds, char *nbe_root_ds)
 					    "failed to generate auto name "
 					    "for zone BE.\n"));
 					ret = BE_ERR_AUTONAME;
-					if (bt.nbe_zfs_props != NULL)
-						nvlist_free(bt.nbe_zfs_props);
+					nvlist_free(bt.nbe_zfs_props);
 					goto done;
 				}
 
@@ -2142,8 +2147,7 @@ be_copy_zones(char *obe_name, char *obe_root_ds, char *nbe_root_ds)
 					    zoneroot_ds,
 					    libzfs_error_description(g_zfs));
 					ret = zfs_err_to_be_err(g_zfs);
-					if (bt.nbe_zfs_props != NULL)
-						nvlist_free(bt.nbe_zfs_props);
+					nvlist_free(bt.nbe_zfs_props);
 					goto done;
 				}
 
@@ -2163,8 +2167,7 @@ be_copy_zones(char *obe_name, char *obe_root_ds, char *nbe_root_ds)
 					    "for new zone BE %s\n"),
 					    new_zone_be_name);
 					ret = iret;
-					if (bt.nbe_zfs_props != NULL)
-						nvlist_free(bt.nbe_zfs_props);
+					nvlist_free(bt.nbe_zfs_props);
 					goto done;
 				}
 			}
@@ -2179,14 +2182,12 @@ be_copy_zones(char *obe_name, char *obe_root_ds, char *nbe_root_ds)
 				free(bt.nbe_name);
 				bt.nbe_name = NULL;
 				ret = BE_ERR_AUTONAME;
-				if (bt.nbe_zfs_props != NULL)
-					nvlist_free(bt.nbe_zfs_props);
+				nvlist_free(bt.nbe_zfs_props);
 				goto done;
 			}
 		}
 
-		if (bt.nbe_zfs_props != NULL)
-			nvlist_free(bt.nbe_zfs_props);
+		nvlist_free(bt.nbe_zfs_props);
 
 		z_zhp = NULL;
 
@@ -2283,7 +2284,7 @@ be_clone_fs_callback(zfs_handle_t *zhp, void *data)
 	be_transaction_data_t	*bt = data;
 	zfs_handle_t	*zhp_ss = NULL;
 	char		prop_buf[MAXPATHLEN];
-	char		zhp_name[ZFS_MAXNAMELEN];
+	char		zhp_name[ZFS_MAX_DATASET_NAME_LEN];
 	char		clone_ds[MAXPATHLEN];
 	char		ss[MAXPATHLEN];
 	int		ret = 0;
@@ -2403,7 +2404,7 @@ be_send_fs_callback(zfs_handle_t *zhp, void *data)
 {
 	be_transaction_data_t	*bt = data;
 	recvflags_t	flags = { 0 };
-	char		zhp_name[ZFS_MAXNAMELEN];
+	char		zhp_name[ZFS_MAX_DATASET_NAME_LEN];
 	char		clone_ds[MAXPATHLEN];
 	sendflags_t	send_flags = { 0 };
 	int		pid, status, retval;
@@ -2480,7 +2481,7 @@ be_send_fs_callback(zfs_handle_t *zhp, void *data)
 	(void) close(srpipe[1]);
 
 	/* Receive dataset */
-	if (zfs_receive(g_zfs, clone_ds, &flags, srpipe[0], NULL) != 0) {
+	if (zfs_receive(g_zfs, clone_ds, NULL, &flags, srpipe[0], NULL) != 0) {
 		be_print_err(gettext("be_send_fs_callback: failed to "
 		    "recv dataset (%s)\n"), clone_ds);
 	}
@@ -2562,7 +2563,8 @@ be_destroy_callback(zfs_handle_t *zhp, void *data)
 		 * Iterate through this file system's snapshots and
 		 * destroy them before destroying the file system itself.
 		 */
-		if ((ret = zfs_iter_snapshots(zhp, be_destroy_callback, dd))
+		if ((ret = zfs_iter_snapshots(zhp, B_FALSE, be_destroy_callback,
+		    dd))
 		    != 0) {
 			ZFS_CLOSE(zhp);
 			return (ret);
@@ -2637,8 +2639,8 @@ be_demote_callback(zfs_handle_t *zhp, void *data)
 
 	for (i = 0; i < 2; i++) {
 
-		if (zfs_iter_snapshots(zhp, be_demote_find_clone_callback, &dd)
-		    != 0) {
+		if (zfs_iter_snapshots(zhp, B_FALSE,
+		    be_demote_find_clone_callback, &dd) != 0) {
 			be_print_err(gettext("be_demote_callback: "
 			    "failed to iterate snapshots for %s: %s\n"),
 			    zfs_get_name(zhp), libzfs_error_description(g_zfs));
@@ -2768,8 +2770,8 @@ static int
 be_demote_get_one_clone(zfs_handle_t *zhp, void *data)
 {
 	be_demote_data_t	*dd = data;
-	char			origin[ZFS_MAXNAMELEN];
-	char			ds_path[ZFS_MAXNAMELEN];
+	char			origin[ZFS_MAX_DATASET_NAME_LEN];
+	char			ds_path[ZFS_MAX_DATASET_NAME_LEN];
 
 	if (zfs_get_type(zhp) != ZFS_TYPE_FILESYSTEM) {
 		ZFS_CLOSE(zhp);
@@ -2843,7 +2845,7 @@ be_get_snap(char *origin, char **snap)
 	 */
 	cp = strrchr(origin, '@');
 	if (cp != NULL) {
-		if (cp[1] != NULL && cp[1] != '\0') {
+		if (cp[1] != '\0') {
 			cp[0] = '\0';
 			*snap = cp+1;
 		} else {
@@ -2944,8 +2946,8 @@ be_prep_clone_send_fs(zfs_handle_t *zhp, be_transaction_data_t *bt,
     char *clone_ds, int clone_ds_len)
 {
 	zprop_source_t	sourcetype;
-	char		source[ZFS_MAXNAMELEN];
-	char		zhp_name[ZFS_MAXNAMELEN];
+	char		source[ZFS_MAX_DATASET_NAME_LEN];
+	char		zhp_name[ZFS_MAX_DATASET_NAME_LEN];
 	char		mountpoint[MAXPATHLEN];
 	char		*child_fs = NULL;
 	char		*zhp_mountpoint = NULL;

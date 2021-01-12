@@ -30,7 +30,7 @@ OBJECTS= libfcoe.o
 
 include ../../Makefile.lib
 
-LIBS=	$(DYNLIB) $(LINTLIB)
+LIBS=	$(DYNLIB)
 
 SRCDIR =	../common
 
@@ -38,16 +38,12 @@ INCS +=		-I$(SRCDIR)
 INCS +=		-I$(SRC)/uts/common/sys/fcoe
 
 LDLIBS +=	-lc -ldladm -lscf
-C99MODE=	-xc99=%all
-C99LMODE=	-Xc99=%all
+CSTD=	$(CSTD_GNU99)
 CPPFLAGS +=	$(INCS) -D_REENTRANT
-
-$(LINTLIB) := SRCS=	$(SRCDIR)/$(LINTSRC)
 
 .KEEP_STATE:
 
 all: $(LIBS)
 
-lint: lintcheck
 
 include ../../Makefile.targ

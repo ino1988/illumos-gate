@@ -22,6 +22,8 @@
 # Copyright 2007 Sun Microsystems, Inc.  All rights reserved.
 # Use is subject to license terms.
 #
+# Copyright (c) 2018, Joyent, Inc.
+#
 
 FSTYPE=		udfs
 LIBPROG=	fsdb
@@ -32,24 +34,26 @@ include		../../Makefile.fstype
 # still export a number of "yy*" (libl) interfaces.  Reduce all other symbols
 # to local scope.
 MAPFILES +=	$(MAPFILE.INT) $(MAPFILE.LEX) $(MAPFILE.NGB)
-MAPOPTS =	$(MAPFILES:%=-M%)
+MAPOPTS =	$(MAPFILES:%=-Wl,-M%)
 
 CPPFLAGS +=	-D_LARGEFILE_SOURCE -D_FILE_OFFSET_BITS=64
+CPPFLAGS +=	-I../fstyp
 LDLIBS +=	-lmalloc -ll -ladm
 LDFLAGS +=	$(MAPOPTS)
 YFLAGS =	"-d"
 
-LINTFLAGS +=	-erroff=E_STATIC_UNUSED
-LINTFLAGS64 +=	-erroff=E_STATIC_UNUSED
-
 CERRWARN +=	-_gcc=-Wno-implicit-function-declaration
 CERRWARN +=	-_gcc=-Wno-unused-label
 CERRWARN +=	-_gcc=-Wno-unused-variable
-CERRWARN +=	-_gcc=-Wno-uninitialized
+CERRWARN +=	$(CNOWARN_UNINIT)
 CERRWARN +=	-_gcc=-Wno-unused-value
 CERRWARN +=	-_gcc=-Wno-unused-function
 
-SRCS=	fsdb.c ud_lib.c
+
+# not linted
+SMATCH=off
+
+SRCS=	fsdb.c ../fstyp/ud_lib.c
 
 fsdb : fsdb_yacc.o fsdb_lex.o ud_lib.o fsdb.o $(MAPFILES)
 	$(LINK.c) -o $@ fsdb.o fsdb_yacc.o fsdb_lex.o \
@@ -60,17 +64,9 @@ fsdb.o : fsdb.c
 	$(COMPILE.c) -o $@ fsdb.c
 	$(POST_PROCESS_O)
 
-ud_lib.o : ud_lib.c ud_lib.h
-	$(COMPILE.c) -o $@ ud_lib.c
+ud_lib.o : ../fstyp/ud_lib.c ../fstyp/ud_lib.h
+	$(COMPILE.c) -o $@ ../fstyp/ud_lib.c
 	$(POST_PROCESS_O)
-
-ud_lib.c : ../fstyp/ud_lib.c
-	$(RM) $@
-	$(CP) ../fstyp/ud_lib.c $@
-
-ud_lib.h : ../fstyp/ud_lib.h
-	$(RM) $@
-	$(CP) ../fstyp/ud_lib.h $@
 
 y.tab.c : fsdb_yacc.y
 	$(YACC.y) fsdb_yacc.y
@@ -87,7 +83,7 @@ fsdb_lex.o : lex.yy.c
 	$(POST_PROCESS_O)
 
 clean :
-	$(RM) ud_lib.c ud_lib.h fsdb.o ud_lib.o fsdb_yacc.o fsdb_lex.o
+	$(RM) fsdb.o ud_lib.o fsdb_yacc.o fsdb_lex.o
 	$(RM) fsdb_yacc.c fsdb_lex.c y.tab.c y.tab.h lex.yy.c
 
 # for messaging catalog
@@ -100,18 +96,9 @@ catalog:        $(POFILE)
 
 CATSRCS=	$(SRCS) lex.yy.c y.tab.c
 
-$(POFILE):      $(CATSRCS)
+$(POFILE):      $(CATSRCS) ../fstyp/ud_lib.h
 	$(RM) $@
 	$(COMPILE.cpp) $(CATSRCS)   > $(POFILE).i
 	$(XGETTEXT) $(XGETFLAGS)        $(POFILE).i
 	$(SED) "/^domain/d" messages.po >  $@
 	$(RM) $(POFILE).i messages.po
-
-lint: y.tab.c lex.yy.c ud_lib.c ud_lib.h
-	$(LINT.c) -mu $(SRCS)
-
-putback :
-	-cstyle -p fsdb.c
-	-keywords fsdb.c
-	-keywords Makefile
-

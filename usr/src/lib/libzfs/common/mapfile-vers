@@ -18,9 +18,14 @@
 #
 # CDDL HEADER END
 #
+
+#
 # Copyright (c) 2006, 2010, Oracle and/or its affiliates. All rights reserved.
-# Copyright 2011 Nexenta Systems, Inc. All rights reserved.
-# Copyright (c) 2013 by Delphix. All rights reserved.
+# Copyright (c) 2011, 2017 by Delphix. All rights reserved.
+# Copyright 2016 Nexenta Systems, Inc.
+# Copyright 2020 Joyent, Inc.
+#
+
 #
 # MAPFILE HEADER START
 #
@@ -46,7 +51,7 @@ SYMBOL_VERSION SUNWprivate_1.1 {
 	fletcher_4_incremental_native;
 	fletcher_4_incremental_byteswap;
 	libzfs_add_handle;
-	libzfs_dataset_cmp;
+	libzfs_config_ops;
 	libzfs_errno;
 	libzfs_error_action;
 	libzfs_error_description;
@@ -67,21 +72,30 @@ SYMBOL_VERSION SUNWprivate_1.1 {
 	zfs_close;
 	zfs_create;
 	zfs_create_ancestors;
+	zfs_crypto_attempt_load_keys;
+	zfs_crypto_get_encryption_root;
+	zfs_crypto_load_key;
+	zfs_crypto_rewrap;
+	zfs_crypto_unload_key;
 	zfs_dataset_exists;
 	zfs_deleg_share_nfs;
 	zfs_destroy;
 	zfs_destroy_snaps;
 	zfs_destroy_snaps_nvl;
 	zfs_expand_proplist;
+	zfs_foreach_mountpoint;
 	zfs_get_handle;
 	zfs_get_holds;
+	zfs_get_hole_count;
 	zfs_get_name;
 	zfs_get_pool_handle;
+	zfs_get_pool_name;
 	zfs_get_user_props;
 	zfs_get_type;
 	zfs_handle_dup;
 	zfs_history_event_names;
 	zfs_hold;
+	zfs_init_libshare_arg;
 	zfs_is_mounted;
 	zfs_is_shared;
 	zfs_is_shared_nfs;
@@ -97,7 +111,6 @@ SYMBOL_VERSION SUNWprivate_1.1 {
 	zfs_mount;
 	zfs_name_to_prop;
 	zfs_name_valid;
-	zfs_nicenum;
 	zfs_nicestrtonum;
 	zfs_open;
 	zfs_path_to_zhandle;
@@ -121,6 +134,7 @@ SYMBOL_VERSION SUNWprivate_1.1 {
 	zfs_prop_is_string;
 	zfs_prop_readonly;
 	zfs_prop_set;
+	zfs_prop_set_list;
 	zfs_prop_string_to_index;
 	zfs_prop_to_name;
 	zfs_prop_user;
@@ -132,11 +146,14 @@ SYMBOL_VERSION SUNWprivate_1.1 {
 	zfs_receive;
 	zfs_refresh_properties;
 	zfs_release;
+	zfs_remap_indirects;
 	zfs_rename;
 	zfs_rollback;
 	zfs_save_arguments;
 	zfs_send;
 	zfs_send_one;
+	zfs_send_resume;
+	zfs_send_resume_token_to_nvlist;
 	zfs_share;
 	zfs_shareall;
 	zfs_share_nfs;
@@ -152,6 +169,7 @@ SYMBOL_VERSION SUNWprivate_1.1 {
 	zfs_spa_version_map;
 	zfs_standard_error;
 	zfs_type_to_name;
+	zfs_uninit_libshare;
 	zfs_unmount;
 	zfs_unmountall;
 	zfs_unshare;
@@ -168,23 +186,23 @@ SYMBOL_VERSION SUNWprivate_1.1 {
 	zfs_userquota_prop_prefixes;
 	zfs_zpl_version_map;
 	zpool_add;
+	zpool_checkpoint;
 	zpool_clear;
 	zpool_clear_label;
 	zpool_close;
 	zpool_create;
 	zpool_destroy;
 	zpool_disable_datasets;
-	zpool_dump_ddt;
+	zpool_discard_checkpoint;
 	zpool_enable_datasets;
 	zpool_expand_proplist;
 	zpool_explain_recover;
 	zpool_export;
 	zpool_export_force;
-	zpool_find_import;
-	zpool_find_import_cached;
 	zpool_find_vdev;
 	zpool_find_vdev_by_physpath;
 	zpool_fru_set;
+	zpool_get_bootenv;
 	zpool_get_config;
 	zpool_get_errlog;
 	zpool_get_features;
@@ -196,11 +214,11 @@ SYMBOL_VERSION SUNWprivate_1.1 {
 	zpool_get_prop_int;
 	zpool_get_state;
 	zpool_get_status;
-	zpool_history_unpack;
 	zpool_import;
 	zpool_import_props;
 	zpool_import_status;
 	zpool_in_use;
+	zpool_initialize;
 	zpool_is_bootable;
 	zpool_iter;
 	zpool_label_disk;
@@ -210,6 +228,7 @@ SYMBOL_VERSION SUNWprivate_1.1 {
 	zpool_obj_to_path;
 	zpool_open;
 	zpool_open_canfail;
+	zpool_pool_state_to_name;
 	zpool_print_unsup_feat;
 	zpool_prop_align_right;
 	zpool_prop_column_name;
@@ -219,14 +238,16 @@ SYMBOL_VERSION SUNWprivate_1.1 {
 	zpool_prop_to_name;
 	zpool_prop_unsupported;
 	zpool_prop_values;
-	zpool_read_label;
 	zpool_refresh_stats;
 	zpool_reguid;
 	zpool_reopen;
 	zpool_scan;
-	zpool_search_import;
+	zpool_set_bootenv;
 	zpool_set_prop;
+	zpool_skip_pool;
 	zpool_state_to_name;
+	zpool_sync_one;
+	zpool_trim;
 	zpool_unmount_datasets;
 	zpool_upgrade;
 	zpool_vdev_attach;
@@ -234,10 +255,12 @@ SYMBOL_VERSION SUNWprivate_1.1 {
 	zpool_vdev_degrade;
 	zpool_vdev_detach;
 	zpool_vdev_fault;
+	zpool_vdev_indirect_size;
 	zpool_vdev_name;
 	zpool_vdev_offline;
 	zpool_vdev_online;
 	zpool_vdev_remove;
+	zpool_vdev_remove_cancel;
 	zpool_vdev_split;
 	zprop_free_list;
 	zprop_get_list;

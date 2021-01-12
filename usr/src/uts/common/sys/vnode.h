@@ -21,11 +21,13 @@
 
 /*
  * Copyright (c) 1988, 2010, Oracle and/or its affiliates. All rights reserved.
- * Copyright (c) 2013, Joyent, Inc. All rights reserved.
+ * Copyright (c) 2018, Joyent, Inc.
+ * Copyright (c) 2011, 2017 by Delphix. All rights reserved.
+ * Copyright 2017 RackTop Systems.
  */
 
 /*	Copyright (c) 1983, 1984, 1985, 1986, 1987, 1988, 1989 AT&T	*/
-/*	  All Rights Reserved  	*/
+/*	  All Rights Reserved	*/
 
 /*
  * University Copyright- Copyright (c) 1982, 1986, 1988
@@ -53,6 +55,7 @@
 #include <sys/list.h>
 #ifdef	_KERNEL
 #include <sys/buf.h>
+#include <sys/sdt.h>
 #endif	/* _KERNEL */
 
 #ifdef	__cplusplus
@@ -221,6 +224,59 @@ struct vsd_node {
  * In particular, file systems should not access other fields; they may
  * change or even be removed.  The functionality which was once provided
  * by these fields is available through vn_* functions.
+ *
+ * VNODE PATH THEORY:
+ * In each vnode, the v_path field holds a cached version of the canonical
+ * filesystem path which that node represents.  Because vnodes lack contextual
+ * information about their own name or position in the VFS hierarchy, this path
+ * must be calculated when the vnode is instantiated by operations such as
+ * fop_create, fop_lookup, or fop_mkdir.  During said operations, both the
+ * parent vnode (and its cached v_path) and future name are known, so the
+ * v_path of the resulting object can easily be set.
+ *
+ * The caching nature of v_path is complicated in the face of directory
+ * renames.  Filesystem drivers are responsible for calling vn_renamepath when
+ * a fop_rename operation succeeds.  While the v_path on the renamed vnode will
+ * be updated, existing children of the directory (direct, or at deeper levels)
+ * will now possess v_path caches which are stale.
+ *
+ * It is expensive (and for non-directories, impossible) to recalculate stale
+ * v_path entries during operations such as vnodetopath.  The best time during
+ * which to correct such wrongs is the same as when v_path is first
+ * initialized: during fop_create/fop_lookup/fop_mkdir/etc, where adequate
+ * context is available to generate the current path.
+ *
+ * In order to quickly detect stale v_path entries (without full lookup
+ * verification) to trigger a v_path update, the v_path_stamp field has been
+ * added to vnode_t.  As part of successful fop_create/fop_lookup/fop_mkdir
+ * operations, where the name and parent vnode are available, the following
+ * rules are used to determine updates to the child:
+ *
+ * 1. If the parent lacks a v_path, clear any existing v_path and v_path_stamp
+ *    on the child.  Until the parent v_path is refreshed to a valid state, the
+ *    child v_path must be considered invalid too.
+ *
+ * 2. If the child lacks a v_path (implying v_path_stamp == 0), it inherits the
+ *    v_path_stamp value from its parent and its v_path is updated.
+ *
+ * 3. If the child v_path_stamp is less than v_path_stamp in the parent, it is
+ *    an indication that the child v_path is stale.  The v_path is updated and
+ *    v_path_stamp in the child is set to the current hrtime().
+ *
+ *    It does _not_ inherit the parent v_path_stamp in order to propagate the
+ *    the time of v_path invalidation through the directory structure.  This
+ *    prevents concurrent invalidations (operating with a now-incorrect v_path)
+ *    at deeper levels in the tree from persisting.
+ *
+ * 4. If the child v_path_stamp is greater or equal to the parent, no action
+ *    needs to be taken.
+ *
+ * Note that fop_rename operations do not follow this ruleset.  They perform an
+ * explicit update of v_path and v_path_stamp (setting it to the current time)
+ *
+ * With these constraints in place, v_path invalidations and updates should
+ * proceed in a timely manner as vnodes are accessed.  While there still are
+ * limited cases where vnodetopath operations will fail, the risk is minimized.
  */
 
 struct fem_head;	/* from fem.h */
@@ -247,6 +303,7 @@ typedef struct vnode {
 	void		*v_locality;	/* hook for locality info */
 	struct fem_head	*v_femhead;	/* fs monitoring */
 	char		*v_path;	/* cached path */
+	hrtime_t	v_path_stamp;	/* timestamp for cached path */
 	uint_t		v_rdcnt;	/* open for read count  (VREG only) */
 	uint_t		v_wrcnt;	/* open for write count (VREG only) */
 	u_longlong_t	v_mmap_read;	/* mmap read count */
@@ -284,6 +341,7 @@ typedef struct vnode {
 
 #define	IS_SWAPVP(vp)	(((vp)->v_flag & (VISSWAP | VSWAPLIKE)) != 0)
 
+#ifdef _KERNEL
 typedef struct vn_vfslocks_entry {
 	rwstlock_t ve_lock;
 	void *ve_vpvfs;
@@ -292,6 +350,7 @@ typedef struct vn_vfslocks_entry {
 	char pad[64 - sizeof (rwstlock_t) - 2 * sizeof (void *) - \
 	    sizeof (uint32_t)];
 } vn_vfslocks_entry_t;
+#endif
 
 /*
  * The following two flags are used to lock the v_vfsmountedhere field
@@ -348,6 +407,14 @@ typedef struct vn_vfslocks_entry {
 #define	V_SYSATTR	0x40000	/* vnode is a GFS system attribute */
 
 /*
+ * Indication that VOP_LOOKUP operations on this vnode may yield results from a
+ * different VFS instance.  The main use of this is to suppress v_path
+ * calculation logic when filesystems such as procfs emit results which defy
+ * expectations about normal VFS behavior.
+ */
+#define	VTRAVERSE	0x80000
+
+/*
  * Vnode attributes.  A bit-mask is supplied as part of the
  * structure to indicate the attributes the caller wants to
  * set (setattr) or extract (getattr).
@@ -402,6 +469,8 @@ typedef struct xoptattr {
 	uint64_t	xoa_generation;
 	uint8_t		xoa_offline;
 	uint8_t		xoa_sparse;
+	uint8_t		xoa_projinherit;
+	uint64_t	xoa_projid;
 } xoptattr_t;
 
 /*
@@ -584,11 +653,14 @@ typedef vattr_t		vattr32_t;
 #define	XAT0_GEN	0x00004000	/* object generation number */
 #define	XAT0_OFFLINE	0x00008000	/* offline */
 #define	XAT0_SPARSE	0x00010000	/* sparse */
+#define	XAT0_PROJINHERIT	0x00020000	/* Create with parent projid */
+#define	XAT0_PROJID	0x00040000	/* Project ID */
 
 #define	XAT0_ALL_ATTRS	(XAT0_CREATETIME|XAT0_ARCHIVE|XAT0_SYSTEM| \
     XAT0_READONLY|XAT0_HIDDEN|XAT0_NOUNLINK|XAT0_IMMUTABLE|XAT0_APPENDONLY| \
     XAT0_NODUMP|XAT0_OPAQUE|XAT0_AV_QUARANTINED|  XAT0_AV_MODIFIED| \
-    XAT0_AV_SCANSTAMP|XAT0_REPARSE|XATO_GEN|XAT0_OFFLINE|XAT0_SPARSE)
+    XAT0_AV_SCANSTAMP|XAT0_REPARSE|XATO_GEN|XAT0_OFFLINE|XAT0_SPARSE| \
+    XAT0_PROJINHERIT | XAT0_PROJID)
 
 /* Support for XAT_* optional attributes */
 #define	XVA_MASK		0xffffffff	/* Used to mask off 32 bits */
@@ -625,6 +697,8 @@ typedef vattr_t		vattr32_t;
 #define	XAT_GEN			((XAT0_INDEX << XVA_SHFT) | XAT0_GEN)
 #define	XAT_OFFLINE		((XAT0_INDEX << XVA_SHFT) | XAT0_OFFLINE)
 #define	XAT_SPARSE		((XAT0_INDEX << XVA_SHFT) | XAT0_SPARSE)
+#define	XAT_PROJINHERIT		((XAT0_INDEX << XVA_SHFT) | XAT0_PROJINHERIT)
+#define	XAT_PROJID		((XAT0_INDEX << XVA_SHFT) | XAT0_PROJID)
 
 /*
  * The returned attribute map array (xva_rtnattrmap[]) is located past the
@@ -724,7 +798,12 @@ typedef enum symfollow	symfollow_t;
 typedef enum vcexcl	vcexcl_t;
 typedef enum create	create_t;
 
-/* Vnode Events - Used by VOP_VNEVENT */
+/*
+ * Vnode Events - Used by VOP_VNEVENT
+ * The VE_PRE_RENAME_* events fire before the rename operation and are
+ * primarily used for specialized applications, such as NFSv4 delegation, which
+ * need to know about rename before it occurs.
+ */
 typedef enum vnevent	{
 	VE_SUPPORT	= 0,	/* Query */
 	VE_RENAME_SRC	= 1,	/* Rename, with vnode as source */
@@ -735,7 +814,10 @@ typedef enum vnevent	{
 	VE_LINK		= 6, 	/* Link with vnode's name as source */
 	VE_RENAME_DEST_DIR	= 7, 	/* Rename with vnode as target dir */
 	VE_MOUNTEDOVER	= 8, 	/* File or Filesystem got mounted over vnode */
-	VE_TRUNCATE = 9		/* Truncate */
+	VE_TRUNCATE = 9,	/* Truncate */
+	VE_PRE_RENAME_SRC = 10,	/* Pre-rename, with vnode as source */
+	VE_PRE_RENAME_DEST = 11, /* Pre-rename, with vnode as target/dest. */
+	VE_PRE_RENAME_DEST_DIR = 12 /* Pre-rename with vnode as target dir */
 } vnevent_t;
 
 /*
@@ -1283,6 +1365,11 @@ void vn_setpath(vnode_t *rootvp, struct vnode *startvp, struct vnode *vp,
     const char *path, size_t plen);
 void vn_renamepath(vnode_t *dvp, vnode_t *vp, const char *nm, size_t len);
 
+/* Private vnode manipulation functions */
+void vn_clearpath(vnode_t *, hrtime_t);
+void vn_updatepath(vnode_t *, vnode_t *, const char *);
+
+
 /* Vnode event notification */
 void	vnevent_rename_src(vnode_t *, vnode_t *, char *, caller_context_t *);
 void	vnevent_rename_dest(vnode_t *, vnode_t *, char *, caller_context_t *);
@@ -1294,6 +1381,12 @@ void	vnevent_rename_dest_dir(vnode_t *, caller_context_t *ct);
 void	vnevent_mountedover(vnode_t *, caller_context_t *);
 void	vnevent_truncate(vnode_t *, caller_context_t *);
 int	vnevent_support(vnode_t *, caller_context_t *);
+void	vnevent_pre_rename_src(vnode_t *, vnode_t *, char *,
+	    caller_context_t *);
+void	vnevent_pre_rename_dest(vnode_t *, vnode_t *, char *,
+	    caller_context_t *);
+void	vnevent_pre_rename_dest_dir(vnode_t *, vnode_t *, char *,
+	    caller_context_t *);
 
 /* Vnode specific data */
 void vsd_create(uint_t *, void (*)(void *));
@@ -1323,15 +1416,40 @@ u_longlong_t	fs_new_caller_id();
 
 int	vn_vmpss_usepageio(vnode_t *);
 
+/* Empty v_path placeholder */
+extern char *vn_vpath_empty;
+
 /*
  * Needed for use of IS_VMODSORT() in kernel.
  */
 extern uint_t pvn_vmodsort_supported;
 
-#define	VN_HOLD(vp)	{ \
-	mutex_enter(&(vp)->v_lock); \
-	(vp)->v_count++; \
-	mutex_exit(&(vp)->v_lock); \
+/*
+ * All changes to v_count should be done through VN_HOLD() or VN_RELE(), or
+ * one of their variants. This makes it possible to ensure proper locking,
+ * and to guarantee that all modifications are accompanied by a firing of
+ * the vn-hold or vn-rele SDT DTrace probe.
+ *
+ * Example DTrace command for tracing vnode references using these probes:
+ *
+ * dtrace -q -n 'sdt:::vn-hold,sdt:::vn-rele
+ * {
+ *	this->vp = (vnode_t *)arg0;
+ *	printf("%s %s(%p[%s]) %d\n", execname, probename, this->vp,
+ *	    this->vp->v_path == NULL ? "NULL" : stringof(this->vp->v_path),
+ *	    this->vp->v_count)
+ * }'
+ */
+#define	VN_HOLD_LOCKED(vp) {			\
+	ASSERT(mutex_owned(&(vp)->v_lock));	\
+	(vp)->v_count++;			\
+	DTRACE_PROBE1(vn__hold, vnode_t *, vp);	\
+}
+
+#define	VN_HOLD(vp)	{		\
+	mutex_enter(&(vp)->v_lock);	\
+	VN_HOLD_LOCKED(vp);		\
+	mutex_exit(&(vp)->v_lock);	\
 }
 
 #define	VN_RELE(vp)	{ \
@@ -1340,6 +1458,13 @@ extern uint_t pvn_vmodsort_supported;
 
 #define	VN_RELE_ASYNC(vp, taskq)	{ \
 	vn_rele_async(vp, taskq); \
+}
+
+#define	VN_RELE_LOCKED(vp) {			\
+	ASSERT(mutex_owned(&(vp)->v_lock));	\
+	ASSERT((vp)->v_count >= 1);		\
+	(vp)->v_count--;			\
+	DTRACE_PROBE1(vn__rele, vnode_t *, vp);	\
 }
 
 #define	VN_SET_VFS_TYPE_DEV(vp, vfsp, type, dev)	{ \
@@ -1364,6 +1489,7 @@ extern struct vnode kvps[];
 typedef enum {
 	KV_KVP,		/* vnode for all segkmem pages */
 	KV_ZVP,		/* vnode for all ZFS pages */
+	KV_VVP,		/* vnode for all VMM pages */
 #if defined(__sparc)
 	KV_MPVP,	/* vnode for all page_t meta-pages */
 	KV_PROMVP,	/* vnode for all PROM pages */

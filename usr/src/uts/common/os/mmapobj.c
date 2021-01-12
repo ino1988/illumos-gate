@@ -21,6 +21,7 @@
 /*
  * Copyright 2009 Sun Microsystems, Inc.  All rights reserved.
  * Use is subject to license terms.
+ * Copyright 2014 Joyent, Inc.  All rights reserved.
  */
 
 #include <sys/types.h>
@@ -67,8 +68,9 @@
  *
  * Having mmapobj interpret and map objects will allow the kernel to make the
  * best decision for where to place the mappings for said objects.  Thus, we
- * can make optimizations inside of the kernel for specific platforms or
- * cache mapping information to make mapping objects faster.
+ * can make optimizations inside of the kernel for specific platforms or cache
+ * mapping information to make mapping objects faster.  The cache is ignored
+ * if ASLR is enabled.
  *
  * The lib_va_hash will be one such optimization.  For each ELF object that
  * mmapobj is asked to interpret, we will attempt to cache the information
@@ -717,7 +719,7 @@ mmapobj_lookup_start_addr(struct lib_va *lvp)
  */
 static caddr_t
 mmapobj_alloc_start_addr(struct lib_va **lvpp, size_t len, int use_lib_va,
-    size_t align, vattr_t *vap)
+    int randomize, size_t align, vattr_t *vap)
 {
 	proc_t *p = curproc;
 	struct as *as = p->p_as;
@@ -732,6 +734,7 @@ mmapobj_alloc_start_addr(struct lib_va **lvpp, size_t len, int use_lib_va,
 	size_t lib_va_len;
 
 	ASSERT(lvpp != NULL);
+	ASSERT((randomize & use_lib_va) != 1);
 
 	MOBJ_STAT_ADD(alloc_start);
 	model = get_udatamodel();
@@ -747,6 +750,10 @@ mmapobj_alloc_start_addr(struct lib_va **lvpp, size_t len, int use_lib_va,
 	if (align > 1) {
 		ma_flags |= MAP_ALIGN;
 	}
+
+	if (randomize != 0)
+		ma_flags |= _MAP_RANDOMIZE;
+
 	if (use_lib_va) {
 		/*
 		 * The first time through, we need to setup the lib_va arenas.
@@ -860,7 +867,14 @@ nolibva:
 	 * If we don't have an expected base address, or the one that we want
 	 * to use is not available or acceptable, go get an acceptable
 	 * address range.
+	 *
+	 * If ASLR is enabled, we should never have used the cache, and should
+	 * also start our real work here, in the consequent of the next
+	 * condition.
 	 */
+	if (randomize != 0)
+		ASSERT(base == NULL);
+
 	if (base == NULL || as_gap(as, len, &base, &len, 0, NULL) ||
 	    valid_usr_range(base, len, PROT_ALL, as, as->a_userlimit) !=
 	    RANGE_OKAY || OVERLAPS_STACK(base + len, p)) {
@@ -1126,10 +1140,23 @@ mmapobj_map_ptload(struct vnode *vp, caddr_t addr, size_t len, size_t zfodlen,
 		zfodbase = (caddr_t)P2ROUNDUP(end, PAGESIZE);
 		zfoddiff = (uintptr_t)zfodbase - end;
 		if (zfoddiff) {
+			/*
+			 * Before we go to zero the remaining space on the last
+			 * page, make sure we have write permission.
+			 *
+			 * We need to be careful how we zero-fill the last page
+			 * if the protection does not include PROT_WRITE. Using
+			 * as_setprot() can cause the VM segment code to call
+			 * segvn_vpage(), which must allocate a page struct for
+			 * each page in the segment. If we have a very large
+			 * segment, this may fail, so we check for that, even
+			 * though we ignore other return values from as_setprot.
+			 */
 			MOBJ_STAT_ADD(zfoddiff);
 			if ((prot & PROT_WRITE) == 0) {
-				(void) as_setprot(as, (caddr_t)end,
-				    zfoddiff, prot | PROT_WRITE);
+				if (as_setprot(as, (caddr_t)end, zfoddiff,
+				    prot | PROT_WRITE) == ENOMEM)
+					return (ENOMEM);
 				MOBJ_STAT_ADD(zfoddiff_nowrite);
 			}
 			if (on_fault(&ljb)) {
@@ -1208,6 +1235,14 @@ mmapobj_map_elf(struct vnode *vp, caddr_t start_addr, mmapobj_result_t *mrp,
 		if (MR_GET_TYPE(mrp[i].mr_flags) == MR_PADDING) {
 			continue;
 		}
+
+		/* Can't execute code from "noexec" mounted filesystem. */
+		if (((vp->v_vfsp->vfs_flag & VFS_NOEXEC) != 0) &&
+		    ((mrp[i].mr_prot & PROT_EXEC) != 0)) {
+			MOBJ_STAT_ADD(noexec_fs);
+			return (EACCES);
+		}
+
 		p_memsz = mrp[i].mr_msize;
 		p_filesz = mrp[i].mr_fsize;
 		zfodlen = p_memsz - p_filesz;
@@ -1470,7 +1505,7 @@ check_exec_addrs(int loadable, mmapobj_result_t *mrp, caddr_t start_addr)
 			 * segdev and the type is neither MAP_SHARED
 			 * nor MAP_PRIVATE.
 			 */
-			AS_LOCK_ENTER(as, &as->a_lock, RW_READER);
+			AS_LOCK_ENTER(as, RW_READER);
 			seg = as_findseg(as, myaddr, 0);
 			MOBJ_STAT_ADD(exec_addr_mapped);
 			if (seg && seg->s_ops == &segdev_ops &&
@@ -1480,7 +1515,7 @@ check_exec_addrs(int loadable, mmapobj_result_t *mrp, caddr_t start_addr)
 			    myaddr + mylen <=
 			    seg->s_base + seg->s_size) {
 				MOBJ_STAT_ADD(exec_addr_devnull);
-				AS_LOCK_EXIT(as, &as->a_lock);
+				AS_LOCK_EXIT(as);
 				(void) as_unmap(as, myaddr, mylen);
 				ret = as_map(as, myaddr, mylen, segvn_create,
 				    &crargs);
@@ -1493,7 +1528,7 @@ check_exec_addrs(int loadable, mmapobj_result_t *mrp, caddr_t start_addr)
 					return (ret);
 				}
 			} else {
-				AS_LOCK_EXIT(as, &as->a_lock);
+				AS_LOCK_EXIT(as);
 				as_rangeunlock(as);
 				mmapobj_unmap_exec(mrp, i, start_addr);
 				MOBJ_STAT_ADD(exec_addr_in_use);
@@ -1511,7 +1546,7 @@ check_exec_addrs(int loadable, mmapobj_result_t *mrp, caddr_t start_addr)
  * Return 0 on success or error on failure.
  */
 static int
-process_phdr(Ehdr *ehdrp, caddr_t phdrbase, int nphdrs, mmapobj_result_t *mrp,
+process_phdrs(Ehdr *ehdrp, caddr_t phdrbase, int nphdrs, mmapobj_result_t *mrp,
     vnode_t *vp, uint_t *num_mapped, size_t padding, cred_t *fcred)
 {
 	int i;
@@ -1567,7 +1602,7 @@ process_phdr(Ehdr *ehdrp, caddr_t phdrbase, int nphdrs, mmapobj_result_t *mrp,
 		}
 	}
 
-	if (padding != 0) {
+	if ((padding != 0) || secflag_enabled(curproc, PROC_SEC_ASLR)) {
 		use_lib_va = 0;
 	}
 	if (e_type == ET_DYN) {
@@ -1577,7 +1612,8 @@ process_phdr(Ehdr *ehdrp, caddr_t phdrbase, int nphdrs, mmapobj_result_t *mrp,
 			return (error);
 		}
 		/* Check to see if we already have a description for this lib */
-		lvp = lib_va_find(&vattr);
+		if (!secflag_enabled(curproc, PROC_SEC_ASLR))
+			lvp = lib_va_find(&vattr);
 
 		if (lvp != NULL) {
 			MOBJ_STAT_ADD(lvp_found);
@@ -1687,7 +1723,9 @@ process_phdr(Ehdr *ehdrp, caddr_t phdrbase, int nphdrs, mmapobj_result_t *mrp,
 		 */
 		ASSERT(lvp ? use_lib_va == 0 : 1);
 		start_addr = mmapobj_alloc_start_addr(&lvp, len,
-		    use_lib_va, align, &vattr);
+		    use_lib_va,
+		    secflag_enabled(curproc, PROC_SEC_ASLR),
+		    align, &vattr);
 		if (start_addr == NULL) {
 			if (lvp) {
 				lib_va_release(lvp);
@@ -2012,7 +2050,7 @@ doelfwork(Ehdr *ehdrp, vnode_t *vp, mmapobj_result_t *mrp,
 	}
 
 	/* Now process the phdr's */
-	error = process_phdr(ehdrp, phbasep, nphdrs, mrp, vp, num_mapped,
+	error = process_phdrs(ehdrp, phbasep, nphdrs, mrp, vp, num_mapped,
 	    padding, fcred);
 	kmem_free(phbasep, phsizep);
 	return (error);
@@ -2061,8 +2099,12 @@ doaoutwork(vnode_t *vp, mmapobj_result_t *mrp,
 		is_library = 1;
 	}
 
-	/* Can't execute code from "noexec" mounted filesystem. */
-	if (((vp->v_vfsp->vfs_flag & VFS_NOEXEC) != 0) && (is_library == 0)) {
+	/*
+	 * Can't execute code from "noexec" mounted filesystem.  Unlike ELF,
+	 * aout libraries are always mapped with something PROT_EXEC, so this
+	 * doesn't need to be checked for specific parts
+	 */
+	if ((vp->v_vfsp->vfs_flag & VFS_NOEXEC) != 0) {
 		MOBJ_STAT_ADD(aout_noexec);
 		return (EACCES);
 	}
@@ -2298,7 +2340,8 @@ mmapobj_map_interpret(vnode_t *vp, mmapobj_result_t *mrp,
 	 * for this library.  This is the fast path and only used for
 	 * ET_DYN ELF files (dynamic libraries).
 	 */
-	if (padding == 0 && (lvp = lib_va_find(&vattr)) != NULL) {
+	if (padding == 0 && !secflag_enabled(curproc, PROC_SEC_ASLR) &&
+	    ((lvp = lib_va_find(&vattr)) != NULL)) {
 		int num_segs;
 
 		model = get_udatamodel();

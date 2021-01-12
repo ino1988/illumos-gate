@@ -23,8 +23,6 @@
  * Use is subject to license terms.
  */
 
-#pragma ident	"%Z%%M%	%I%	%E% SMI"
-
 #include "librcm_impl.h"
 #include "librcm_event.h"
 
@@ -74,7 +72,7 @@ rcm_alloc_handle(char *modname, uint_t flag, void *arg, rcm_handle_t **hdp)
 
 	if (modname) {
 		(void) snprintf(namebuf, MAXPATHLEN, "%s%s", modname,
-			RCM_MODULE_SUFFIX);
+		    RCM_MODULE_SUFFIX);
 
 		if ((hd->modname = strdup(namebuf)) == NULL) {
 			free(hd);
@@ -137,8 +135,8 @@ rcm_get_info(rcm_handle_t *hd, char *rsrcname, uint_t flag, rcm_info_t **infop)
 	/*
 	 * rsrcname may be NULL if requesting dr operations or modinfo
 	 */
-	if ((rsrcname == NULL) &&
-	    ((flag & RCM_DR_OPERATION|RCM_MOD_INFO) == 0)) {
+	if (rsrcname == NULL &&
+	    (flag & (RCM_DR_OPERATION | RCM_MOD_INFO)) == 0) {
 		errno = EINVAL;
 		return (RCM_FAILURE);
 	}
@@ -545,8 +543,7 @@ rcm_free_info(rcm_info_t *info)
 	while (info) {
 		rcm_info_t *tmp = info->next;
 
-		if (info->info)
-			nvlist_free(info->info);
+		nvlist_free(info->info);
 		free(info);
 
 		info = tmp;
@@ -900,7 +897,7 @@ rcm_is_script(char *filename)
 	char *tmp;
 
 	if (((tmp = strstr(filename, RCM_MODULE_SUFFIX)) != NULL) &&
-		(tmp[strlen(RCM_MODULE_SUFFIX)] == '\0'))
+	    (tmp[strlen(RCM_MODULE_SUFFIX)] == '\0'))
 		return (0);
 	else
 		return (1);
@@ -1260,8 +1257,7 @@ retry:
 out:
 	if (nvl_packed)
 		free(nvl_packed);
-	if (ret)
-		nvlist_free(ret);
+	nvlist_free(ret);
 	dprintf((stderr, "daemon call is done. error = %d, errno = %s\n", error,
 	    strerror(errno)));
 	return (error);
@@ -1450,8 +1446,7 @@ rcm_generate_nvlist(int cmd, rcm_handle_t *hd, char **rsrcnames, uint_t flag,
 fail:
 	if (buf)
 		free(buf);
-	if (nvl)
-		nvlist_free(nvl);
+	nvlist_free(nvl);
 	if (*nvl_packed)
 		free(*nvl_packed);
 	*nvl_packed = NULL;

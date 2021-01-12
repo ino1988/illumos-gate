@@ -21,6 +21,8 @@
 /*
  * Copyright 2009 Sun Microsystems, Inc.  All rights reserved.
  * Use is subject to license terms.
+ * Copyright 2018 Joyent, Inc.
+ * Copyright 2017 RackTop Systems.
  */
 
 #ifndef _VM_SEG_KMEM_H
@@ -42,7 +44,7 @@ extern "C" {
  * VM - Kernel Segment Driver
  */
 
-#if defined(_KERNEL)
+#if defined(_KERNEL) || defined(_FAKE_KERNEL)
 
 extern char *kernelheap;	/* start of primary kernel heap */
 extern char *ekernelheap;	/* end of primary kernel heap */
@@ -63,12 +65,18 @@ extern vmem_t *static_arena;	/* arena for caches to import static memory */
 extern vmem_t *static_alloc_arena;	/* arena for allocating static memory */
 extern vmem_t *zio_arena;	/* arena for zio caches */
 extern vmem_t *zio_alloc_arena;	/* arena for zio caches */
+
+#if defined(__amd64)
+extern struct seg kvmmseg;	/* Segment for vmm mappings */
+extern vmem_t *kvmm_arena;	/* arena for vmm VA */
+extern void segkmem_kvmm_init(void *, size_t);
+#endif
+
 extern struct vnode kvps[];
 /*
- * segkmem page vnodes
+ * segkmem page vnodes (please don't add more defines here...)
  */
 #define	kvp		(kvps[KV_KVP])
-#define	zvp		(kvps[KV_ZVP])
 #if defined(__sparc)
 #define	mpvp		(kvps[KV_MPVP])
 #define	promvp		(kvps[KV_PROMVP])
@@ -81,16 +89,14 @@ extern void *segkmem_xalloc(vmem_t *, void *, size_t, int, uint_t,
 extern void *segkmem_alloc(vmem_t *, size_t, int);
 extern void *segkmem_alloc_permanent(vmem_t *, size_t, int);
 extern void segkmem_free(vmem_t *, void *, size_t);
-extern void segkmem_xfree(vmem_t *, void *, size_t, void (*)(page_t *));
+extern void segkmem_xfree(vmem_t *, void *, size_t,
+    struct vnode *, void (*)(page_t *));
 
 extern void *boot_alloc(void *, size_t, uint_t);
 extern void boot_mapin(caddr_t addr, size_t size);
 extern void kernelheap_init(void *, void *, char *, void *, void *);
 extern void segkmem_gc(void);
 
-extern void *segkmem_zio_alloc(vmem_t *, size_t, int);
-extern int segkmem_zio_create(struct seg *);
-extern void segkmem_zio_free(vmem_t *, void *, size_t);
 extern void segkmem_zio_init(void *, size_t);
 
 /*
@@ -136,7 +142,9 @@ extern size_t	segkmem_kmemlp_max;
 #define	IS_KMEM_VA_LARGEPAGE(vaddr)				        \
 	(((vaddr) >= heap_lp_base) && ((vaddr) < heap_lp_end))
 
-#endif	/* _KERNEL */
+extern struct seg_ops segkmem_ops;
+
+#endif	/* _KERNEL || _FAKE_KERNEL */
 
 #ifdef	__cplusplus
 }

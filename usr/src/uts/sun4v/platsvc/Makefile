@@ -35,9 +35,8 @@ UTSBASE	= ../..
 #
 # Define the module and object file sets.
 #
-MODULE		= platsvc 
+MODULE		= platsvc
 OBJECTS		= $(PLATSVC_OBJS:%=$(OBJS_DIR)/%)
-LINTS		= $(PLATSVC_OBJS:%.o=$(LINTS_DIR)/%.ln)
 ROOTMODULE	= $(ROOT_PSM_MISC_DIR)/$(MODULE)
 
 #
@@ -49,14 +48,9 @@ include $(UTSBASE)/sun4v/Makefile.sun4v
 # Define targets
 #
 ALL_TARGET	= $(BINARY)
-LINT_TARGET	= $(MODULE).lint
 INSTALL_TARGET	= $(BINARY) $(ROOTMODULE)
 
-#
-# lint pass one enforcement
-#
-CFLAGS		+= $(CCVERBOSE)
-CERRWARN	+= -_gcc=-Wno-uninitialized
+CERRWARN	+= $(CNOWARN_UNINIT)
 
 #
 # Turn on doubleword alignment for 64 bit registers
@@ -80,12 +74,6 @@ all:		$(ALL_DEPS)
 clean:		$(CLEAN_DEPS)
 
 clobber:	$(CLOBBER_DEPS)
-
-lint:		$(LINT_DEPS)
-
-modlintlib:	$(MODLINTLIB_DEPS)
-
-clean.lint:	$(CLEAN_LINT_DEPS)
 
 install:	$(INSTALL_DEPS)
 

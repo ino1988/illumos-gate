@@ -23,7 +23,7 @@
 # Copyright 2007 Sun Microsystems, Inc.  All rights reserved.
 # Use is subject to license terms.
 #
-# ident	"%Z%%M%	%I%	%E% SMI"
+# Copyright 2016 RackTop Systems.
 #
 
 LIBRARY=	pam_smb_passwd.a
@@ -32,11 +32,13 @@ OBJECTS=	smb_passwd.o
 
 include		../../Makefile.pam_modules
 
-LDLIBS		+= -lpam -lc
-LDLIBS		+= -L$(ROOT)/usr/lib/smbsrv -lsmb
+# These are in LDLIBS32/64 so they come before -lsmb
+LDLIBS32 += -L$(ROOT)/usr/lib/smbsrv
+LDLIBS64 += -L$(ROOT)/usr/lib/smbsrv/$(MACH64)
+
+LDLIBS		+= -lsmb -lpam -lc
 
 all:	$(LIBS)
 
-lint:	lintcheck
 
 include	$(SRC)/lib/Makefile.targ

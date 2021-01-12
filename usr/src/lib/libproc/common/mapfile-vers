@@ -21,8 +21,10 @@
 #
 # Copyright (c) 2006, 2010, Oracle and/or its affiliates. All rights reserved.
 # Copyright 2012 DEY Storage Systems, Inc.  All rights reserved.
-# Copyright (c) 2013, Joyent, Inc. All rights reserved.
+# Copyright 2018 Joyent, Inc.
 # Copyright (c) 2013 by Delphix. All rights reserved.
+# Copyright (c) 2019 Carlos Neira <cneirabustos@gmail.com>
+# Copyright 2020 OmniOS Community Edition (OmniOSce) Association.
 #
 
 #
@@ -126,14 +128,17 @@ SYMBOL_VERSION SUNWprivate_1.1 {
 	Pgrab_file;
 	Pgrab_ops;
 	Pisprocdir;
+	Pissyscall;
 	Pissyscall_prev;
 	Plmid;
+	Plmid_to_ctf;
 	Plmid_to_loadobj;
 	Plmid_to_map;
 	Plookup_by_addr;
 	Plookup_by_name;
 	Plwp_alt_stack;
 	Plwp_getfpregs;
+	Plwp_getname;
 	Plwp_getpsinfo;
 	Plwp_getregs;
 	Plwp_getspymaster;
@@ -156,6 +161,7 @@ SYMBOL_VERSION SUNWprivate_1.1 {
 	Ppltdest;
 	Ppriv;
 	Pprivinfo;
+	Ppriv_free;
 	Ppsinfo;
 	Pputareg;
 	pr_access;
@@ -200,14 +206,22 @@ SYMBOL_VERSION SUNWprivate_1.1 {
 	proc_arg_xgrab;
 	proc_arg_xpsinfo;
 	proc_content2str;
+	proc_dmodelname;
+	proc_fdinfo_free;
+	proc_fdinfo_misc;
+	proc_fdinfowalk;
+	proc_fdwalk;
 	proc_finistdio;
 	proc_fltname;
 	proc_fltset2str;
 	proc_flushstdio;
+	proc_free_priv;
 	proc_get_auxv;
 	proc_get_cred;
+	proc_get_fdinfo;
 	proc_get_priv;
 	proc_get_psinfo;
+        proc_get_secflags;
 	proc_get_status;
 	proc_initstdio;
 	proc_lwp_in_set;
@@ -274,6 +288,8 @@ SYMBOL_VERSION SUNWprivate_1.1 {
 	ps_ptread		{ FLAGS = NODYNSORT };	# Alias of ps_pread
 	ps_ptwrite		{ FLAGS = NODYNSORT };	# Alias of ps_pwrite
 	ps_pwrite;
+	Psecflags;
+        Psecflags_free;
 	Pstack_iter;
 	Pstate;
 	Pstatus;
@@ -291,6 +307,8 @@ SYMBOL_VERSION SUNWprivate_1.1 {
 	Punsetflags;
 	Pupdate_maps;
 	Pupdate_syms;
+	Pupanic;
+	Pupanic_free;
 	Pwait;
 	Pwrite;
 	Pxcreate;

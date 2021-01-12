@@ -19,8 +19,12 @@
 # CDDL HEADER END
 #
 #
+# Copyright 2015 Gary Mills
 # Copyright 2008 Sun Microsystems, Inc.  All rights reserved.
 # Use is subject to license terms.
+#
+# Copyright (c) 2018, Joyent, Inc.
+# Copyright 2019 OmniOS Community Edition (OmniOSce) Association.
 #
 
 PROG=		yacc
@@ -37,6 +41,13 @@ YACCPAR=	yaccpar
 
 include ../../../../lib/Makefile.lib
 
+COMPATLINKS=	usr/ccs/lib/liby.so
+COMPATLINKS64=	usr/ccs/lib/$(MACH64)/liby.so
+
+$(ROOT)/usr/ccs/lib/liby.so := COMPATLINKTARGET=../../lib/liby.so.1
+$(ROOT)/usr/ccs/lib/$(MACH64)/liby.so:= \
+	COMPATLINKTARGET=../../../lib/$(MACH64)/liby.so.1
+
 SRCDIR =	../common
 
 # Override default source file derivation rule (in Makefile.lib)
@@ -46,40 +57,34 @@ COMSRCS=	$(COMOBJS:%.o=../common/%.c)
 LIBSRCS=	$(OBJECTS:%.o=../common/%.c)
 SRCS=		$(COMSRCS) $(LIBSRCS)
 
-LIBS =          $(DYNLIB) $(LINTLIB)
+LIBS =          $(DYNLIB)
 
 # Tune ZDEFS to ignore undefined symbols for building the yacc shared library
 # since these symbols (mainly yyparse) are to be resolved elsewhere.
 #
 $(DYNLIB):= ZDEFS = $(ZNODEFS)
 $(DYNLIBCCC):= ZDEFS = $(ZNODEFS)
-LINTSRCS=	../common/llib-l$(LIBNAME)
 
 INCLIST=	-I../../include -I../../include/$(MACH)
 CPPFLAGS=	$(INCLIST) $(DEFLIST) $(CPPFLAGS.master)
-LDLIBS=		$(LDLIBS.cmd)
-BUILD.AR=	$(AR) $(ARFLAGS) $@ `$(LORDER) $(OBJS) | $(TSORT)`
-LINTFLAGS=	-amux
-LINTPOUT=	lint.out
+$(PROG):=	LDLIBS = $(LDLIBS.cmd)
 
-C99MODE= $(C99_ENABLE)
+CSTD= $(CSTD_GNU99)
 CFLAGS += $(CCVERBOSE)
 CFLAGS64 += $(CCVERBOSE)
 CERRWARN += -_gcc=-Wno-parentheses
-CERRWARN += -_gcc=-Wno-uninitialized
+CERRWARN += $(CNOWARN_UNINIT)
 
-$(LINTLIB):=	LINTFLAGS = -nvx
+# not linted
+SMATCH=off
+
 $(ROOTPROG):= FILEMODE = 0555
 
 ROOTYACCPAR=	$(YACCPAR:%=$(ROOTSHLIBCCS)/%)
 
-ROOTLINTDIR=	$(ROOTLIBDIR)
-ROOTLINT=	$(LINTSRCS:../common/%=$(ROOTLINTDIR)/%)
-
 DYNLINKLIBDIR=	$(ROOTLIBDIR)
 DYNLINKLIB=	$(LIBLINKS:%=$(DYNLINKLIBDIR)/%)
 
-$(DYNLIB) :=	LDLIBS += -lc
+LDLIBS += -lc
 
-CLEANFILES +=	$(LINTPOUT)
 CLOBBERFILES +=	$(LIBS) $(LIBRARY)

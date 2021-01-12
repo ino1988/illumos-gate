@@ -12,10 +12,20 @@
 #
 # Copyright (c) 2012 by Delphix. All rights reserved.
 # Copyright 2014 Garrett D'Amore <garrett@damore.org>
+# Copyright 2019 Joyent, Inc.
 #
 
 .PARALLEL: $(SUBDIRS)
 
-SUBDIRS = libc-tests os-tests test-runner util-tests zfs-tests
+SUBDIRS = \
+	crypto-tests \
+	elf-tests \
+	libc-tests \
+	net-tests \
+	os-tests \
+	smbclient-tests \
+	test-runner \
+	util-tests \
+	zfs-tests
 
 include Makefile.com

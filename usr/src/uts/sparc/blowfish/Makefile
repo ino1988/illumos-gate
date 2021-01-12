@@ -18,6 +18,7 @@
 #
 # CDDL HEADER END
 #
+# Copyright 2014 Garrett D'Amore <garrett@damore.org>
 #
 # Copyright 2008 Sun Microsystems, Inc.  All rights reserved.
 # Use is subject to license terms.
@@ -39,7 +40,6 @@ COM_DIR = $(COMMONBASE)/crypto
 #
 MODULE		= blowfish
 OBJECTS		= $(BLOWFISHPROV_OBJS:%=$(OBJS_DIR)/%)
-LINTS		= $(BLOWFISHPROV_OBJS:%.o=$(LINTS_DIR)/%.ln)
 ROOTMODULE	= $(ROOT_CRYPTO_DIR)/$(MODULE)
 
 #
@@ -47,14 +47,10 @@ ROOTMODULE	= $(ROOT_CRYPTO_DIR)/$(MODULE)
 #
 include $(UTSBASE)/sparc/Makefile.sparc
 
-#	set signing mode
-ELFSIGN_MOD	= $(ELFSIGN_CRYPTO)
-
 #
 #	Define targets
 #
 ALL_TARGET	= $(BINARY)
-LINT_TARGET	= $(MODULE).lint
 INSTALL_TARGET	= $(BINARY) $(ROOTMODULE)
 
 #
@@ -62,23 +58,16 @@ INSTALL_TARGET	= $(BINARY) $(ROOTMODULE)
 #
 LDFLAGS += -dy -Nmisc/kcf
 
-#
-# lint pass one enforcement
-#
-CFLAGS		+= $(CCVERBOSE) -I$(COM_DIR)
+CFLAGS		+= -I$(COM_DIR)
 CPPFLAGS	+= -DCRYPTO_PROVIDER_NAME=\"$(MODULE)\"
-LINTFLAGS	+= -I$(COM_DIR)
 
 #
-# For now, disable these lint checks; maintainers should endeavor
-# to investigate and remove these for maximum lint coverage.
+# For now, disable these warnings; maintainers should endeavor
+# to investigate and remove these for maximum coverage.
 # Please do not carry these forward to new Makefiles.
 #
-LINTTAGS	+= -erroff=E_BAD_PTR_CAST_ALIGN
-LINTTAGS	+= -erroff=E_ASSIGN_NARROW_CONV
-LINTTAGS	+= -erroff=E_SUPPRESSION_DIRECTIVE_UNUSED
-
-CERRWARN	+= -_gcc=-Wno-uninitialized
+CFLAGS		+= $(CCVERBOSE)
+CERRWARN	+= $(CNOWARN_UNINIT)
 CERRWARN	+= -_gcc=-Wno-parentheses
 
 #
@@ -93,12 +82,6 @@ all:		$(ALL_DEPS)
 clean:		$(CLEAN_DEPS)
 
 clobber:	$(CLOBBER_DEPS)
-
-lint:		$(LINT_DEPS)
-
-modlintlib:	$(MODLINTLIB_DEPS)
-
-clean.lint:	$(CLEAN_LINT_DEPS)
 
 install:	$(INSTALL_DEPS)
 

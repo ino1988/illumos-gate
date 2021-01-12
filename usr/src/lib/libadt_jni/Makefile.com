@@ -22,8 +22,7 @@
 # Copyright 2006 Sun Microsystems, Inc.  All rights reserved.
 # Use is subject to license terms.
 #
-# ident	"%Z%%M%	%I%	%E% SMI"
-#
+# Copyright (c) 2018, Joyent, Inc.
 
 LIBRARY=	libadt_jni.a
 VERS=		.1
@@ -33,36 +32,24 @@ OBJECTS=	adt_jni.o	\
 
 include		$(SRC)/lib/Makefile.lib
 
-LIBS =		$(DYNLIB) $(LINTLIB)
+LIBS =		$(DYNLIB)
 
 SRCDIR =	../common
 
 CPPFLAGS +=	-I$(JAVA_ROOT)/include -I$(JAVA_ROOT)/include/solaris
 CPPFLAGS +=	-D_REENTRANT
 
+# not linted
+SMATCH=off
+
 DYNFLAGS +=
 LDLIBS +=	-lc -lbsm
 
-CLEANFILES=	$(LINTOUT) $(LINTLIB)
-CLOBBERFILES +=
-
-$(LINTLIB) :=	SRCS=../common/llib-ladt_jni
-
-LINTSRC=	$(LINTLIB:%.ln=%)
-ROOTLINTDIR=	$(ROOTLIBDIR)
-ROOTLINT=	$(LINTSRC:%=$(ROOTLINTDIR)/%)
-
 .KEEP_STATE:
 
-lint:		lintcheck
 
 include		$(SRC)/lib/Makefile.targ
 
 pics/%.o: ../common/%.c
 	$(COMPILE.c) -o $@ $<
 	$(POST_PROCESS_O)
-
-# install rule for lint library target
-$(ROOTLINTDIR)/%: ../common/%
-	$(INS.file)
-

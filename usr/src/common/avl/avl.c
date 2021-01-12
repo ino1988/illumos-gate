@@ -24,7 +24,8 @@
  */
 
 /*
- * Copyright (c) 2014 by Delphix. All rights reserved.
+ * Copyright 2015 Nexenta Systems, Inc.  All rights reserved.
+ * Copyright (c) 2015 by Delphix. All rights reserved.
  */
 
 /*
@@ -635,14 +636,17 @@ avl_add(avl_tree_t *tree, void *new_node)
 	/*
 	 * This is unfortunate.  We want to call panic() here, even for
 	 * non-DEBUG kernels.  In userland, however, we can't depend on anything
-	 * in libc or else the rtld build process gets confused.  So, all we can
-	 * do in userland is resort to a normal ASSERT().
+	 * in libc or else the rtld build process gets confused.
+	 * Thankfully, rtld provides us with its own assfail() so we can use
+	 * that here.  We use assfail() directly to get a nice error message
+	 * in the core - much like what panic() does for crashdumps.
 	 */
 	if (avl_find(tree, new_node, &where) != NULL)
 #ifdef _KERNEL
 		panic("avl_find() succeeded inside avl_add()");
 #else
-		ASSERT(0);
+		(void) assfail("avl_find() succeeded inside avl_add()",
+		    __FILE__, __LINE__);
 #endif
 	avl_insert(tree, new_node, where);
 }
@@ -948,8 +952,8 @@ avl_is_empty(avl_tree_t *tree)
 
 /*
  * Post-order tree walk used to visit all tree nodes and destroy the tree
- * in post order. This is used for destroying a tree without paying any cost
- * for rebalancing it.
+ * in post order. This is used for removing all the nodes from a tree without
+ * paying any cost for rebalancing it.
  *
  * example:
  *

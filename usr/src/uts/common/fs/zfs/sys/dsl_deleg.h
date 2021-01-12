@@ -20,7 +20,7 @@
  */
 /*
  * Copyright (c) 2007, 2010, Oracle and/or its affiliates. All rights reserved.
- * Copyright (c) 2013 by Delphix. All rights reserved.
+ * Copyright (c) 2013, 2015 by Delphix. All rights reserved.
  */
 
 #ifndef	_SYS_DSL_DELEG_H
@@ -51,12 +51,23 @@ extern "C" {
 #define	ZFS_DELEG_PERM_VSCAN		"vscan"
 #define	ZFS_DELEG_PERM_USERQUOTA	"userquota"
 #define	ZFS_DELEG_PERM_GROUPQUOTA	"groupquota"
+#define	ZFS_DELEG_PERM_USEROBJQUOTA	"userobjquota"
+#define	ZFS_DELEG_PERM_GROUPOBJQUOTA	"groupobjquota"
 #define	ZFS_DELEG_PERM_USERUSED		"userused"
 #define	ZFS_DELEG_PERM_GROUPUSED	"groupused"
+#define	ZFS_DELEG_PERM_USEROBJUSED	"userobjused"
+#define	ZFS_DELEG_PERM_GROUPOBJUSED	"groupobjused"
 #define	ZFS_DELEG_PERM_HOLD		"hold"
 #define	ZFS_DELEG_PERM_RELEASE		"release"
 #define	ZFS_DELEG_PERM_DIFF		"diff"
 #define	ZFS_DELEG_PERM_BOOKMARK		"bookmark"
+#define	ZFS_DELEG_PERM_REMAP		"remap"
+#define	ZFS_DELEG_PERM_LOAD_KEY		"load-key"
+#define	ZFS_DELEG_PERM_CHANGE_KEY	"change-key"
+#define	ZFS_DELEG_PERM_PROJECTUSED	"projectused"
+#define	ZFS_DELEG_PERM_PROJECTQUOTA	"projectquota"
+#define	ZFS_DELEG_PERM_PROJECTOBJUSED	"projectobjused"
+#define	ZFS_DELEG_PERM_PROJECTOBJQUOTA	"projectobjquota"
 
 /*
  * Note: the names of properties that are marked delegatable are also

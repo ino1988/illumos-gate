@@ -21,6 +21,7 @@
 /*
  * Copyright 2009 Sun Microsystems, Inc.  All rights reserved.
  * Use is subject to license terms.
+ * Copyright (c) 2016 by Delphix. All rights reserved.
  */
 
 /*
@@ -97,7 +98,7 @@ static char *cmdName;
 static char *
 getExecBasename(char *execFullname)
 {
-	char 				*lastSlash, *execBasename;
+	char	*lastSlash, *execBasename;
 
 	/* guard against '/' at end of command invocation */
 	for (;;) {
@@ -188,7 +189,7 @@ objectRules_t objectRules[] = {
 	{PATH, 0, 0, ENABLE|DISABLE|OVERRIDE,
 	    SHOW|LIST|MODIFY|FAILOVER|ADD|REMOVE, 0,
 	    "initiator-port name"},
-	{0, 0, 0, 0, 0, NULL}
+	{0, 0, 0, 0, 0, 0, NULL}
 };
 
 /*
@@ -206,7 +207,7 @@ optionRules_t optionRules[] = {
 	{PATH, ENABLE, "itl", B_TRUE, NULL},
 	{PATH, DISABLE, "itl", B_TRUE, NULL},
 	{PATH, OVERRIDE, "itlc", B_TRUE, NULL},
-	{0, 0, 0, 0, 0}
+	{0, 0, NULL, 0, NULL}
 };
 
 
@@ -312,7 +313,7 @@ showMpathSupport(int operandLen, char *operand[])
 	MP_DEVICE_PRODUCT_PROPERTIES		devProps;
 	boolean_t				bListIt = B_FALSE;
 	int					op, i, j;
-	MP_LOAD_BALANCE_TYPE 			lb;
+	MP_LOAD_BALANCE_TYPE			lb;
 
 
 	if ((mpstatus = MP_GetPluginOidList(&pPluginOidList)) !=
@@ -571,7 +572,7 @@ showMpathSupport(int operandLen, char *operand[])
  * ****************************************************************************
  *
  * modifyMpathSupport -
- * 	mpathadm modify mpath-support [options] <mpath-support name>, ...
+ *	mpathadm modify mpath-support [options] <mpath-support name>, ...
  *
  * operandLen	- number of operands user passed into the cli
  * operand	- pointer to operand list from user
@@ -587,7 +588,7 @@ modifyMpathSupport(int operandLen, char *operand[], cmdOptions_t *options)
 	MP_OID_LIST		*pPluginOidList;
 	boolean_t		bFoundIt = B_FALSE;
 	MP_OID			pluginOid;
-	cmdOptions_t 		*optionList = options;
+	cmdOptions_t		*optionList = options;
 	char			*cmdStr = getTextString(TEXT_UNKNOWN);
 	int			op, i, lbValue;
 
@@ -723,7 +724,7 @@ modifyMpathSupport(int operandLen, char *operand[], cmdOptions_t *options)
  * ****************************************************************************
  *
  * listLogicalUnit -
- * 	mpathadm list {logical-unit | LU} [options] [<logical-unit name>, ...]
+ *	mpathadm list {logical-unit | LU} [options] [<logical-unit name>, ...]
  *
  * operandLen	- number of operands user passed into the cli
  * operand	- pointer to operand list from user
@@ -1058,13 +1059,13 @@ switch (optionList->optval) {
  * ****************************************************************************
  *
  * compareLUName -
- * 	compare names directly and via devid if no match directly
+ *	compare names directly and via devid if no match directly
  *
  * cmpString		- first string to compare
  * deviceProperty	- string from properties
  * sizeToCompare	- size of deviceProperty
  *
- * returns 	B_TRUE if the strings match either directly or via devid
+ * returns	B_TRUE if the strings match either directly or via devid
  *		B_FALSE otherwise
  *
  * ****************************************************************************
@@ -1074,7 +1075,7 @@ compareLUName(MP_CHAR *cmpString, MP_CHAR *deviceProperty)
 {
 
 	boolean_t				isSame = B_FALSE;
-	int 					fd1, fd2;
+	int					fd1, fd2;
 	ddi_devid_t				devid1 = NULL, devid2 = NULL;
 
 	if (0 == strcmp(cmpString, deviceProperty)) {
@@ -1122,17 +1123,17 @@ compareLUName(MP_CHAR *cmpString, MP_CHAR *deviceProperty)
  * ****************************************************************************
  *
  * listIndivudualLogicalUnit -
- * 	Used by list logical unit cli.
+ *	Used by list logical unit cli.
  *	Displays info about an LU
  *
  * luOid	- LU to list
- * luProps	- properties of he LU to list
+ * luProps	- properties of the LU to list
  *
  * ****************************************************************************
  */
 int
 listIndividualLogicalUnit(MP_OID luOid,
-	MP_MULTIPATH_LOGICAL_UNIT_PROPERTIES luProps)
+    MP_MULTIPATH_LOGICAL_UNIT_PROPERTIES luProps)
 {
 	MP_PATH_LOGICAL_UNIT_PROPERTIES		pathProps;
 	MP_OID_LIST				*pPathOidListArray;
@@ -1188,7 +1189,7 @@ listIndividualLogicalUnit(MP_OID luOid,
  * ****************************************************************************
  *
  * showLogicalUnit -
- * 	mpathadm show {logical-unit | LU} <logical-unit name>, ...
+ *	mpathadm show {logical-unit | LU} <logical-unit name>, ...
  *
  * operandLen	- number of operands user passed into the cli
  * operand	- pointer to operand list from user
@@ -1261,24 +1262,24 @@ showLogicalUnit(int operandLen, char *operand[])
  * ****************************************************************************
  *
  * showIndivudualLogicalUnit -
- * 	Used by show logical unit cli.
+ *	Used by show logical unit cli.
  *	Displays info about an LU
  *
  * luOid	- LU to show
- * luProps	- properties of he LU to show
+ * luProps	- properties of the LU to show
  * pluginProps	- propertis of the plugin this LU belongs to
  *
  * ****************************************************************************
  */
 int
 showIndividualLogicalUnit(MP_OID luOid,
-	MP_MULTIPATH_LOGICAL_UNIT_PROPERTIES luProps,
-	MP_PLUGIN_PROPERTIES pluginProps)
+    MP_MULTIPATH_LOGICAL_UNIT_PROPERTIES luProps,
+    MP_PLUGIN_PROPERTIES pluginProps)
 {
 	MP_PATH_LOGICAL_UNIT_PROPERTIES		pathProps;
 	MP_TARGET_PORT_GROUP_PROPERTIES		tpgProps;
-	MP_TARGET_PORT_PROPERTIES 		tportProps;
-	MP_INITIATOR_PORT_PROPERTIES 		initProps;
+	MP_TARGET_PORT_PROPERTIES		tportProps;
+	MP_INITIATOR_PORT_PROPERTIES		initProps;
 	MP_OID_LIST	*pPathOidListArray, *pTPGOidListArray,
 	    *pTportOidListArray;
 	MP_STATUS				mpstatus = MP_STATUS_SUCCESS;
@@ -1523,7 +1524,7 @@ showIndividualLogicalUnit(MP_OID luOid,
  * ****************************************************************************
  *
  * modifyLogicalUnit -
- * 	mpathadm modify {logical-unit | LU} [options] <logical-unit name>, ...
+ *	mpathadm modify {logical-unit | LU} [options] <logical-unit name>, ...
  *
  * operandLen	- number of operands user passed into the cli
  * operand	- pointer to operand list from user
@@ -1536,7 +1537,7 @@ modifyLogicalUnit(int operandLen, char *operand[], cmdOptions_t *options)
 {
 	MP_STATUS				mpstatus = MP_STATUS_SUCCESS;
 	MP_OID					luOid;
-	cmdOptions_t 				*optionList = options;
+	cmdOptions_t				*optionList = options;
 	char	*cmdStr = getTextString(TEXT_UNKNOWN);
 	int					op;
 
@@ -1625,7 +1626,7 @@ modifyLogicalUnit(int operandLen, char *operand[], cmdOptions_t *options)
  * ****************************************************************************
  *
  * failoverLogicalUnit -
- * 	mpathadm failover {logical-unit | LU} <logical-unit name>, ...
+ *	mpathadm failover {logical-unit | LU} <logical-unit name>, ...
  *
  * operand	- pointer to operand list from user
  *
@@ -1758,7 +1759,7 @@ getLogicalUnitOid(MP_CHAR *luFileName, MP_OID *pluOid)
 
 	int					i, lu;
 
-	int 					fd1, fd2;
+	int					fd1, fd2;
 	ddi_devid_t				devid1, devid2;
 
 	if (NULL == pluOid) {
@@ -1881,7 +1882,7 @@ getLogicalUnitOid(MP_CHAR *luFileName, MP_OID *pluOid)
  * ****************************************************************************
  *
  * listInitiatorPort -
- * 	mpathadm list initiator-port [<initiator-port name>, ...]
+ *	mpathadm list initiator-port [<initiator-port name>, ...]
  *
  * operandLen	- number of operands user passed into the cli
  * operand	- pointer to operand list from user
@@ -1892,7 +1893,7 @@ int
 listInitiatorPort(int operandLen, char *operand[])
 {
 	MP_STATUS				mpstatus = MP_STATUS_SUCCESS;
-	MP_INITIATOR_PORT_PROPERTIES 		initProps;
+	MP_INITIATOR_PORT_PROPERTIES		initProps;
 	MP_OID_LIST	*pPluginOidList, *pInitOidList;
 	boolean_t				bListIt = B_FALSE;
 	boolean_t				*foundOp;
@@ -2004,7 +2005,7 @@ listInitiatorPort(int operandLen, char *operand[])
  * ****************************************************************************
  *
  * listIndividualInitiatorPort -
- * 	used by listInitiatorPort to list info for one init port
+ *	used by listInitiatorPort to list info for one init port
  *
  * initProps	- properties of initiator port to list
  *
@@ -2029,7 +2030,7 @@ listIndividualInitiatorPort(MP_INITIATOR_PORT_PROPERTIES initProps)
  * ****************************************************************************
  *
  * showInitiatorPort -
- * 	mpathadm show initiator-port <initiator-port name>, ...
+ *	mpathadm show initiator-port <initiator-port name>, ...
  *
  * operandLen	- number of operands user passed into the cli
  * operand	- pointer to operand list from user
@@ -2040,7 +2041,7 @@ int
 showInitiatorPort(int operandLen, char *operand[])
 {
 	MP_STATUS				mpstatus = MP_STATUS_SUCCESS;
-	MP_INITIATOR_PORT_PROPERTIES 		initProps;
+	MP_INITIATOR_PORT_PROPERTIES		initProps;
 	MP_OID_LIST	*pPluginOidList, *pInitOidList;
 	boolean_t	bListIt = B_FALSE, bFoundIt = B_FALSE;
 	int		op, i, iport;
@@ -2136,7 +2137,7 @@ showInitiatorPort(int operandLen, char *operand[])
  * ****************************************************************************
  *
  * showIndividualInitiatorPort -
- * 	used by showInitiatorPort to show info for one init port
+ *	used by showInitiatorPort to show info for one init port
  *
  * initProps	- properties of initiator port to show
  *
@@ -2168,7 +2169,7 @@ showIndividualInitiatorPort(MP_INITIATOR_PORT_PROPERTIES initProps)
  * ****************************************************************************
  *
  * enablePath -
- * 	mpathadm enable path -i <initiator-port>
+ *	mpathadm enable path -i <initiator-port>
  *		-t <target-port name> -l <logical-unit name>
  *
  * options	- pointer to option list from user
@@ -2181,7 +2182,7 @@ enablePath(cmdOptions_t *options)
 	MP_STATUS				mpstatus = MP_STATUS_SUCCESS;
 	MP_OID					pathOid;
 
-	cmdOptions_t 				*optionList = options;
+	cmdOptions_t				*optionList = options;
 	boolean_t   bHaveInit = B_FALSE, bHaveTarg = B_FALSE, bHaveLu = B_FALSE;
 
 	for (; optionList->optval; optionList++) {
@@ -2251,7 +2252,7 @@ enablePath(cmdOptions_t *options)
  * ****************************************************************************
  *
  * disablePath -
- * 	mpathadm disable path -i <initiator-port>
+ *	mpathadm disable path -i <initiator-port>
  *		-t <target-port name> -l <logical-unit name>
  *
  * options	- pointer to option list from user
@@ -2264,7 +2265,7 @@ disablePath(cmdOptions_t *options)
 	MP_STATUS				mpstatus = MP_STATUS_SUCCESS;
 	MP_OID					pathOid;
 
-	cmdOptions_t 				*optionList = options;
+	cmdOptions_t				*optionList = options;
 	boolean_t	bHaveInit = B_FALSE, bHaveTarg = B_FALSE,
 	    bHaveLu = B_FALSE;
 
@@ -2336,7 +2337,7 @@ disablePath(cmdOptions_t *options)
  * ****************************************************************************
  *
  * overridePath -
- * 	mpathadm override path {-i <initiator-port>
+ *	mpathadm override path {-i <initiator-port>
  *		-t <target-port name> | -c} <logical-unit name>
  *
  * options	- pointer to option list from user
@@ -2350,7 +2351,7 @@ overridePath(cmdOptions_t *options)
 	MP_OID					pathOid, luOid;
 	boolean_t				bCancelOverride = B_FALSE;
 	MP_CHAR					pLuDeviceFileName[256];
-	cmdOptions_t 				*optionList = options;
+	cmdOptions_t				*optionList = options;
 
 	/* First check to see if we have the cancel option, */
 	/* May as well save off the lun while we're at it */
@@ -2446,7 +2447,7 @@ boolean_t
 getPathOid(cmdOptions_t *options, MP_OID *pPathOid)
 {
 	MP_STATUS				mpstatus = MP_STATUS_SUCCESS;
-	MP_MULTIPATH_LOGICAL_UNIT_PROPERTIES 	luProps;
+	MP_MULTIPATH_LOGICAL_UNIT_PROPERTIES	luProps;
 	MP_PATH_LOGICAL_UNIT_PROPERTIES		pathProps;
 	MP_INITIATOR_PORT_PROPERTIES		initProps;
 	MP_TARGET_PORT_PROPERTIES		targProps;
@@ -2460,7 +2461,7 @@ getPathOid(cmdOptions_t *options, MP_OID *pPathOid)
 	MP_CHAR					luDeviceFileName[256];
 	boolean_t	bHaveTarg = B_FALSE, bHaveLu = B_FALSE,
 	    bHaveInit = B_FALSE;
-	cmdOptions_t 				*optionList = options;
+	cmdOptions_t				*optionList = options;
 
 	int					i, lu, pa;
 	if (NULL == pPathOid) {
@@ -2622,7 +2623,7 @@ getPathOid(cmdOptions_t *options, MP_OID *pPathOid)
  * ****************************************************************************
  *
  * getLbValueFromString
- * 	Gets the MP_LOAD_BALANCE_TYPE specified load balance type string
+ *	Gets the MP_LOAD_BALANCE_TYPE specified load balance type string
  *
  * lbStr	- load balance string defined in the .h file
  *		This is what users will be required to feed into the
@@ -2712,7 +2713,7 @@ getLbValueFromString(char *lbStr)
  * ****************************************************************************
  *
  * displayLogicalUnitNameTypeString
- * 	Displays the text equivalent string for the MP_LOGICAL_UNIT_NAME_TYPE
+ *	Displays the text equivalent string for the MP_LOGICAL_UNIT_NAME_TYPE
  *	specified load balance type
  *
  * typeVal	- load balance type defined in the MPAPI spec
@@ -2757,7 +2758,7 @@ displayLogicalUnitNameTypeString(MP_LOGICAL_UNIT_NAME_TYPE typeVal)
  * ****************************************************************************
  *
  * displayLoadBalanceString
- * 	Displays the text equivalent string for the MP_LOAD_BALANCE_TYPE
+ *	Displays the text equivalent string for the MP_LOAD_BALANCE_TYPE
  *	specified load balance type
  *
  * lbVal	- load balance type defined in the MPAPI spec
@@ -2855,7 +2856,7 @@ displayLoadBalanceString(MP_LOAD_BALANCE_TYPE lbVal)
  * ****************************************************************************
  *
  * displayTransportTypeString
- * 	Displays the text equivalent string for the MP_PORT_TRANSPORT_TYPE
+ *	Displays the text equivalent string for the MP_PORT_TRANSPORT_TYPE
  *	specified load balance type
  *
  * transportTypeVal	- transport type defined in the MPAPI spec
@@ -2899,7 +2900,7 @@ displayTransportTypeString(MP_PORT_TRANSPORT_TYPE transportTypeVal)
  * ****************************************************************************
  *
  * getMpStatusStr
- * 	Gets the string description for the specified load balance type value
+ *	Gets the string description for the specified load balance type value
  *
  * mpstatus	- MP_STATUS value
  *
@@ -2963,7 +2964,7 @@ getMpStatusStr(MP_STATUS mpstatus)
  * ****************************************************************************
  *
  * GetPathStateStr
- * 	Gets the string description for the specified path state type value
+ *	Gets the string description for the specified path state type value
  *
  * pathState	- MP_PATH_STATE values
  *
@@ -3020,7 +3021,7 @@ getPathStateStr(MP_PATH_STATE pathState)
  * ****************************************************************************
  *
  * getAccessStateStr
- * 	Gets the string description for the specified access state type value
+ *	Gets the string description for the specified access state type value
  *
  * accessState	- MP_ACCESS_STATE_TYPE values
  *
@@ -3068,7 +3069,7 @@ getAccessStateStr(MP_ACCESS_STATE_TYPE accessState)
  * ****************************************************************************
  *
  * displayArray
- * 	Print out the specified array.
+ *	Print out the specified array.
  *
  * arrayToDisplay	- array to display
  * arraySize		- size of array to display
@@ -3093,7 +3094,7 @@ displayArray(MP_CHAR *arrayToDisplay, int arraySize)
  * ****************************************************************************
  *
  * getStringArray
- * 	Return a null terminated array for the specified array as a string,
+ *	Return a null terminated array for the specified array as a string,
  *	This is used for inputting into the %s in formatted strings.
  *
  * arrayToDisplay	- array to display
@@ -3128,8 +3129,8 @@ getStringArray(MP_CHAR *arrayToDisplay, int arraySize)
  * ****************************************************************************
  *
  * displayWideArray
- * 	Print out the specified wide character array as a string,
- * 	adding the null termination
+ *	Print out the specified wide character array as a string,
+ *	adding the null termination
  *
  * arrayToDisplay	- array to display
  * arraySize		- size of array to display
@@ -3154,7 +3155,7 @@ displayWideArray(MP_WCHAR *arrayToDisplay, int arraySize)
  * ****************************************************************************
  *
  * listfunc
- * 	Used by cmdparse for list clis
+ *	Used by cmdparse for list clis
  *
  * ****************************************************************************
  */
@@ -3163,7 +3164,7 @@ static int
 listFunc(int operandLen, char *operand[], int object, cmdOptions_t *options,
     void *addArgs)
 {
-	int 					ret = 0;
+	int	ret = 0;
 
 	switch (object) {
 		case MPATH_SUPPORT:
@@ -3190,7 +3191,7 @@ listFunc(int operandLen, char *operand[], int object, cmdOptions_t *options,
  * ****************************************************************************
  *
  * showFunc
- * 	used bycmdparse for show clis
+ *	used bycmdparse for show clis
  *
  * ****************************************************************************
  */
@@ -3199,7 +3200,7 @@ static int
 showFunc(int operandLen, char *operand[], int object, cmdOptions_t *options,
     void *addArgs)
 {
-	int 					ret = 0;
+	int	ret = 0;
 
 	switch (object) {
 		case MPATH_SUPPORT:
@@ -3224,7 +3225,7 @@ showFunc(int operandLen, char *operand[], int object, cmdOptions_t *options,
  * ****************************************************************************
  *
  * modifyFunc
- * 	Used by cmdparse for midify clis
+ *	Used by cmdparse for midify clis
  *
  *
  * ****************************************************************************
@@ -3234,7 +3235,7 @@ static int
 modifyFunc(int operandLen, char *operand[], int object, cmdOptions_t *options,
     void *addArgs)
 {
-	int 					ret = 0;
+	int	ret = 0;
 
 	switch (object) {
 		case MPATH_SUPPORT:
@@ -3257,7 +3258,7 @@ modifyFunc(int operandLen, char *operand[], int object, cmdOptions_t *options,
  * ****************************************************************************
  *
  * enableFunc
- * 	Used by cmdpars for enable clis
+ *	Used by cmdpars for enable clis
  *
  * ****************************************************************************
  */
@@ -3266,7 +3267,7 @@ static int
 enableFunc(int operandLen, char *operand[], int object, cmdOptions_t *options,
     void *addArgs)
 {
-	int 					ret = 0;
+	int	ret = 0;
 
 	switch (object) {
 		case PATH:
@@ -3285,7 +3286,7 @@ enableFunc(int operandLen, char *operand[], int object, cmdOptions_t *options,
  * ****************************************************************************
  *
  * disableFunc
- * 	Used by cmdpars for disable clis
+ *	Used by cmdpars for disable clis
  *
  * ****************************************************************************
  */
@@ -3294,7 +3295,7 @@ static int
 disableFunc(int operandLen, char *operand[], int object, cmdOptions_t *options,
     void *addArgs)
 {
-	int 					ret = 0;
+	int	ret = 0;
 
 	switch (object) {
 		case PATH:
@@ -3313,7 +3314,7 @@ disableFunc(int operandLen, char *operand[], int object, cmdOptions_t *options,
  * ****************************************************************************
  *
  * failoverFunc
- * 	Used by cmdpars for failover clis
+ *	Used by cmdpars for failover clis
  *
  * ****************************************************************************
  */
@@ -3322,7 +3323,7 @@ static int
 failoverFunc(int operandLen, char *operand[], int object, cmdOptions_t *options,
     void *addArgs)
 {
-	int 					ret = 0;
+	int	ret = 0;
 
 	switch (object) {
 		case LOGICAL_UNIT:
@@ -3341,17 +3342,17 @@ failoverFunc(int operandLen, char *operand[], int object, cmdOptions_t *options,
  * ****************************************************************************
  *
  * overrideFunc
- * 	Used by cmdpars for override clis
+ *	Used by cmdpars for override clis
  *
  * ****************************************************************************
  */
 /*ARGSUSED*/
 static int
 overrideFunc(int operandLen, char *operand[],
-	int object, cmdOptions_t *options,
+    int object, cmdOptions_t *options,
     void *addArgs)
 {
-	int 					ret = 0;
+	int	ret = 0;
 
 	switch (object) {
 		case PATH:
@@ -3377,11 +3378,11 @@ overrideFunc(int operandLen, char *operand[],
 int
 main(int argc, char *argv[])
 {
-	synTables_t 			synTables;
-	char 				versionString[VERSION_STRING_MAX_LEN];
-	int 				ret;
-	int 				funcRet;
-	void 				*subcommandArgs = NULL;
+	synTables_t			synTables;
+	char				versionString[VERSION_STRING_MAX_LEN];
+	int				ret;
+	int				funcRet;
+	void				*subcommandArgs = NULL;
 
 	/* set global command name */
 	cmdName = getExecBasename(argv[0]);

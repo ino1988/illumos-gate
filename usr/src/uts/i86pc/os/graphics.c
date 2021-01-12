@@ -103,6 +103,8 @@ progressbar_init()
 	(void) BOP_GETPROP(bootops, "console", cons);
 	if (strncmp(cons, "graphics", strlen("graphics")) != 0)
 		return;
+	if (BOP_GETPROPLEN(bootops, "efi-systab") > 0)
+		return;
 
 	graphics_mode = 1;
 
@@ -217,7 +219,7 @@ progressbar_key_abort(ldi_ident_t li)
 		    != 0)
 				cmn_err(CE_NOTE,
 				    "!ldi_ioctl for KD_RESETTEXT failed");
-		(void) ldi_close(hdl, NULL, kcred);
+		(void) ldi_close(hdl, 0, kcred);
 	}
 #endif
 }

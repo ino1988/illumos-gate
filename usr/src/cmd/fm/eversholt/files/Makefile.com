@@ -25,7 +25,7 @@
 
 .SUFFIXES: .eft .esc
 
-ESC=$(SRC)/cmd/fm/eversholt/esc/$(MACH)/esc
+ESC=$(SRC)/cmd/fm/eversholt/native/$(MACH)/esc
 
 include $(SRC)/cmd/Makefile.cmd
 
@@ -34,6 +34,13 @@ ROOT_COMMON_EFT_FILES= $(EFT_COMMON_FILES:%=$(ROOT_EFT_ROOT)/%)
 USR_PLAT_FM_DIR= $(ROOT)/usr/platform/$(EFT_PLAT)/lib/fm
 USR_PLAT_EFT_DIR= $(USR_PLAT_FM_DIR)/eft
 USR_PLAT_EFT_FILES= $(EFT_PLAT_FILES:%=$(USR_PLAT_EFT_DIR)/%)
+
+#
+# Override the built-in ESC pre-processor with a reference to the one we
+# have set in Makefile.master. This ensures that we use the same cpp
+# throughout the build.
+#
+ESC_ENV=_ESC_CPP=$(CPP)
 
 #
 # Default target - specify before including Makefile.rootdirs which would
@@ -57,7 +64,7 @@ ESCFLAGS= -D_ESC -I$(ROOT)/usr/include
 pciexrc.eft := ESCFLAGS += -I$(SRC)/uts/sun4v/io/px
 
 %.eft: ../common/%.esc
-	$(ESC) $(ESCFLAGS) -o $@ $<
+	$(ESC_ENV) $(ESC) $(ESCFLAGS) -o $@ $<
 
 %.eft: %.esc
-	$(ESC) $(ESCFLAGS) -o $@ $<
+	$(ESC_ENV) $(ESC) $(ESCFLAGS) -o $@ $<

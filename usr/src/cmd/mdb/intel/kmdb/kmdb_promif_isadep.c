@@ -24,14 +24,13 @@
  * Use is subject to license terms.
  */
 
-#pragma ident	"%Z%%M%	%I%	%E% SMI"
-
 /*
  * "PROM" interface
  */
 
 #include <sys/types.h>
 #include <sys/promif.h>
+#include <sys/salib.h>
 
 #include <kmdb/kmdb_promif_impl.h>
 #include <kmdb/kmdb_kdi.h>
@@ -84,18 +83,49 @@ kmdb_prom_free_ddi_prop(char *val)
 {
 }
 
+/*
+ * This function is actually about checking if we are using
+ * local console versus serial console. Serial console can be named
+ * "ttyX" where X is [a-d], or "usb-serial".
+ */
 int
 kmdb_prom_stdout_is_framebuffer(kmdb_auxv_t *kav)
 {
 	char *dev;
 
 	/*
-	 * We can't use the official promif version, as we need to ensure that
-	 * property lookups come from our property cache.
+	 * The property "output-device" value is set in property cache, and
+	 * is based on either "output-device" or "console" properties from
+	 * the actual system. We can't use the official promif version, as we
+	 * need to ensure that property lookups come from our property cache.
 	 */
 
 	if ((dev = kmdb_prom_get_ddi_prop(kav, "output-device")) == NULL)
 		return (0);
 
-	return (strcmp(dev, "screen") == 0);
+	if (strncmp(dev, "tty", 3) == 0)
+		return (0);
+	if (strcmp(dev, "usb-serial") == 0)
+		return (0);
+
+	/* Anything else is classified as local console. */
+	return (1);
+}
+
+void
+kmdb_prom_get_tem_size(kmdb_auxv_t *kav, ushort_t *rows, ushort_t *cols)
+{
+	char *val;
+	unsigned long u;
+
+	val = kmdb_prom_get_ddi_prop(kav, "screen-#rows");
+	if (val != NULL) {
+		u = strtoul(val, NULL, 10);
+		*rows = (ushort_t)u;
+	}
+	val = kmdb_prom_get_ddi_prop(kav, "screen-#cols");
+	if (val != NULL) {
+		u = strtoul(val, NULL, 10);
+		*cols = (ushort_t)u;
+	}
 }

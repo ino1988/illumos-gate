@@ -20,11 +20,12 @@
  * CDDL HEADER END
  */
 /*	Copyright (c) 1988 AT&T	*/
-/*	  All Rights Reserved  	*/
+/*	  All Rights Reserved	*/
 
 
 /*
  * Copyright 2014 Garrett D'Amore <garrett@damore.org>
+ * Copyright 2014 PALO, Richard.
  *
  * Copyright 2004 Sun Microsystems, Inc.  All rights reserved.
  * Use is subject to license terms.
@@ -46,6 +47,7 @@
 #define	_ISO_STRING_ISO_H
 
 #include <sys/feature_tests.h>
+#include <sys/null.h>
 
 #ifdef	__cplusplus
 extern "C" {
@@ -63,14 +65,6 @@ typedef unsigned long	size_t;		/* size of something in bytes */
 typedef unsigned int	size_t;		/* (historical version) */
 #endif
 #endif	/* !_SIZE_T */
-
-#ifndef	NULL
-#if defined(_LP64)
-#define	NULL	0L
-#else
-#define	NULL	0
-#endif
-#endif
 
 extern int memcmp(const void *, const void *, size_t);
 extern void *memcpy(void *_RESTRICT_KYWD, const void *_RESTRICT_KYWD, size_t);
@@ -152,6 +146,32 @@ extern char *strstr(const char *, const char *);
 #if __cplusplus >= 199711L
 }
 #endif /* end of namespace std */
+
+/*
+ * ISO C11 Annex K functions are not allowed to be in the standard
+ * namespace; however, it is implementation-defined as to whether or
+ * not they are in the global namespace and we opt to make them
+ * available to software.
+ */
+#if __EXT1_VISIBLE
+
+#ifndef	_RSIZE_T_DEFINED
+#define	_RSIZE_T_DEFINED
+#if __cplusplus >= 199711L
+typedef std::size_t rsize_t;
+#else
+typedef size_t rsize_t;
+#endif
+#endif
+
+#ifndef	_ERRNO_T_DEFINED
+#define	_ERRNO_T_DEFINED
+typedef int errno_t;
+#endif
+
+/* ISO/IEC 9899:2011 K.3.7.4.1.1 */
+extern errno_t memset_s(void *, rsize_t, int, rsize_t);
+#endif	/* __EXT1_VISIBLE */
 
 #ifdef	__cplusplus
 }

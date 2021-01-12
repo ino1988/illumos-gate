@@ -627,15 +627,21 @@ is_dep_init(Rt_map *dlmp, Rt_map *clmp)
 	if ((dlmp == clmp) || (rtld_flags & RT_FL_INITFIRST))
 		return;
 
+	(void) rt_mutex_lock(&dlmp->rt_lock);
+	while (dlmp->rt_init_thread != rt_thr_self() && (FLAGS(dlmp) &
+	    (FLG_RT_RELOCED | FLG_RT_INITCALL | FLG_RT_INITDONE)) ==
+	    (FLG_RT_RELOCED | FLG_RT_INITCALL)) {
+		leave(LIST(dlmp), 0);
+		(void) _lwp_cond_wait(&dlmp->rt_cv, (mutex_t *)&dlmp->rt_lock);
+		(void) rt_mutex_unlock(&dlmp->rt_lock);
+		(void) enter(0);
+		(void) rt_mutex_lock(&dlmp->rt_lock);
+	}
+	(void) rt_mutex_unlock(&dlmp->rt_lock);
+
 	if ((FLAGS(dlmp) & (FLG_RT_RELOCED | FLG_RT_INITDONE)) ==
 	    (FLG_RT_RELOCED | FLG_RT_INITDONE))
 		return;
-
-	if ((FLAGS(dlmp) & (FLG_RT_RELOCED | FLG_RT_INITCALL)) ==
-	    (FLG_RT_RELOCED | FLG_RT_INITCALL)) {
-		DBG_CALL(Dbg_util_no_init(dlmp));
-		return;
-	}
 
 	if ((tobj = calloc(2, sizeof (Rt_map *))) != NULL) {
 		tobj[0] = dlmp;
@@ -717,6 +723,7 @@ call_init(Rt_map **tobj, int flag)
 			continue;
 
 		FLAGS(lmp) |= FLG_RT_INITCALL;
+		lmp->rt_init_thread = rt_thr_self();
 
 		/*
 		 * Establish an initfirst state if necessary - no other inits
@@ -752,7 +759,11 @@ call_init(Rt_map **tobj, int flag)
 		 * signifies that a .fini must be called should it exist.
 		 * Clear the sort field for use in later .fini processing.
 		 */
+		(void) rt_mutex_lock(&lmp->rt_lock);
 		FLAGS(lmp) |= FLG_RT_INITDONE;
+		lmp->rt_init_thread = (thread_t)0;
+		(void) _lwp_cond_broadcast(&lmp->rt_cv);
+		(void) rt_mutex_unlock(&lmp->rt_lock);
 		SORTVAL(lmp) = -1;
 
 		/*
@@ -1312,7 +1323,7 @@ create_cntl(Lm_list *lml, int dlopen)
 
 		if ((lmc = alist_append(&lml->lm_lists, NULL, sizeof (Lm_cntl),
 		    AL_CNT_LMLISTS)) == NULL)
-			return (NULL);
+			return (0);
 
 		return ((Aliste)((char *)lmc - (char *)lml->lm_lists));
 	}
@@ -1985,7 +1996,7 @@ ld_generic_env(const char *s1, size_t len, const char *s2, Word *lmflags,
 	} else if (select & SEL_ACT_SPEC_2) {
 		/*
 		 * variables can be: ENV_FLG_
-		 * 	AUDIT_ARGS, BINDING, CONFGEN, LOADFLTR, PROFILE,
+		 *	AUDIT_ARGS, BINDING, CONFGEN, LOADFLTR, PROFILE,
 		 *	SIGNAL, TRACE_OBJS
 		 */
 		switch (variable) {
@@ -2842,7 +2853,7 @@ int
 printf(const char *format, ...)
 {
 	va_list	args;
-	char 	buffer[ERRSIZE];
+	char	buffer[ERRSIZE];
 	Prfbuf	prf;
 
 	va_start(args, format);
@@ -3061,7 +3072,6 @@ eprintf(Lm_list *lml, Error error, const char *format, ...)
 	va_end(args);
 }
 
-#if	DEBUG
 /*
  * Provide assfail() for ASSERT() statements.  See <sys/debug.h> for further
  * details.
@@ -3078,11 +3088,11 @@ void
 assfail3(const char *msg, uintmax_t a, const char *op, uintmax_t b,
     const char *f, int l)
 {
-	(void) printf("assertion failed: %s (%llu %s %llu), "
-	    "file: %s, line: %d\n", msg, a, op, b, f, l);
+	(void) printf("assertion failed: %s (0x%llx %s 0x%llx), "
+	    "file: %s, line: %d\n", msg, (unsigned long long)a, op,
+	    (unsigned long long)b, f, l);
 	(void) _lwp_kill(_lwp_self(), SIGABRT);
 }
-#endif
 
 /*
  * Exit.  If we arrive here with a non zero status it's because of a fatal

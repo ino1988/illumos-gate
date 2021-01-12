@@ -18,11 +18,12 @@
 #
 # CDDL HEADER END
 #
+
 #
 # Copyright (c) 1989, 2010, Oracle and/or its affiliates. All rights reserved.
-# Copyright 2012 Nexenta Systems, Inc. All rights reserved.
+# Copyright 2018 Nexenta Systems, Inc.
 #
-# include global definitions
+
 include ../Makefile.master
 
 #
@@ -76,15 +77,13 @@ install_h	:=	TARGET= install_h
 clean		:=	TARGET= clean
 clobber		:=	TARGET= clobber
 clobber_h	:=	TARGET= clobber
-lint		:=	TARGET= lint
-clean.lint	:=	TARGET= clean.lint
 check		:=	TARGET= check
 modlist		:=	TARGET= modlist
 modlist		:=	NO_STATE= -K $$MODSTATE$$$$
 
 .KEEP_STATE:
 
-def all lint: all_h $(PMTMO_FILE) $($(MACH)_ARCHITECTURES)
+def all: all_h $(PMTMO_FILE) $($(MACH)_ARCHITECTURES)
 
 install: all_h install_dirs $(PMTMO_FILE) $($(MACH)_ARCHITECTURES)
 
@@ -131,8 +130,7 @@ $(PMTMO_FILE) pmtmo_file: $(PATCH_MAKEUP_TABLE)
 # the architecture/machine dependent subdirectories are in completely
 # isomorphic locations.
 #
-COMMON_HDRDIRS= common/avs \
-		common/c2 \
+COMMON_HDRDIRS= common/c2 \
 		common/des \
 		common/fs \
 		common/gssapi \
@@ -145,7 +143,6 @@ COMMON_HDRDIRS= common/avs \
 		common/inet/sockmods/netpacket \
 		common/io/bpf/net \
 		common/io/fibre-channel/fca/qlc \
-		common/io/lvm/md \
 		common/ipp \
 		common/net \
 		common/netinet \
@@ -164,13 +161,11 @@ COMMON_HDRDIRS= common/avs \
 # Subset of COMMON_HDRDIRS in which at least one header is generated
 # at runtime (e.g., rpcgen), and in which "make clean" should run.
 # Other directories should be included here, but do not yet have the
-# necessary Makefile support (make clean).  See 6414855.
+# necessary Makefile support (make clean).
 #
-DYNHDRDIRS =	common/avs \
-		common/gssapi \
+DYNHDRDIRS =	common/gssapi \
 		common/idmap \
 		common/io/fibre-channel/fca/qlc \
-		common/io/lvm/md \
 		common/klm \
 		common/rpc \
 		common/rpcsvc \
@@ -205,7 +200,7 @@ clean clobber: $($(MACH)_ARCHITECTURES) $(DYNHDRDIRS)
 # testing convenience
 clobber_h: $(DYNHDRDIRS)
 
-clean.lint modlist: $($(MACH)_ARCHITECTURES)
+modlist: $($(MACH)_ARCHITECTURES)
 
 #
 # Cross-reference customization: build a cross-reference over all of

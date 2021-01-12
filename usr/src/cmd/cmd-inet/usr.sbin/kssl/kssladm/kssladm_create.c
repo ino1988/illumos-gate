@@ -108,14 +108,14 @@ kmf_to_kssl(int nxkey, KMF_RAW_KEY_DATA *rsa, int ncerts,
 		{CKA_ID,	NULL, 0}
 	};
 	kssl_object_attribute_t kssl_tmpl_attrs[MAX_ATTR_CNT] = {
-		{SUN_CKA_MODULUS, NULL, 0},
-		{SUN_CKA_PUBLIC_EXPONENT, NULL, 0},
-		{SUN_CKA_PRIVATE_EXPONENT, NULL, 0},
-		{SUN_CKA_PRIME_1, NULL, 0},
-		{SUN_CKA_PRIME_2, NULL, 0},
-		{SUN_CKA_EXPONENT_1, NULL, 0},
-		{SUN_CKA_EXPONENT_2, NULL, 0},
-		{SUN_CKA_COEFFICIENT, NULL, 0}
+		{SUN_CKA_MODULUS, 0, 0},
+		{SUN_CKA_PUBLIC_EXPONENT, 0, 0},
+		{SUN_CKA_PRIVATE_EXPONENT, 0, 0},
+		{SUN_CKA_PRIME_1, 0, 0},
+		{SUN_CKA_PRIME_2, 0, 0},
+		{SUN_CKA_EXPONENT_1, 0, 0},
+		{SUN_CKA_EXPONENT_2, 0, 0},
+		{SUN_CKA_COEFFICIENT, 0, 0}
 	};
 	KMF_BIGINT priv_key_bignums[MAX_ATTR_CNT];
 	int attr_cnt;
@@ -577,7 +577,7 @@ load_from_pkcs11(KMF_HANDLE_T kmfh,
 	KMF_X509_DER_CERT cert;
 	KMF_KEY_HANDLE key, rawkey;
 	KMF_CREDENTIAL creds;
-	KMF_DATA iddata = { NULL, 0 };
+	KMF_DATA iddata = { 0, NULL };
 	kssl_params_t *kssl_params = NULL;
 	uint32_t ncerts, nkeys;
 	char *err, *idstr = NULL;

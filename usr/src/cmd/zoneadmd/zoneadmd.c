@@ -22,6 +22,7 @@
 /*
  * Copyright (c) 2003, 2010, Oracle and/or its affiliates. All rights reserved.
  * Copyright 2014 Nexenta Systems, Inc. All rights reserved.
+ * Copyright (c) 2016 by Delphix. All rights reserved.
  */
 
 /*
@@ -350,7 +351,7 @@ filter_bootargs(zlog_t *zlogp, const char *inargs, char *outargs,
 	 * We preserve compatibility with the Solaris system boot behavior,
 	 * which allows:
 	 *
-	 * 	# reboot kernel/unix -s -m verbose
+	 *	# reboot kernel/unix -s -m verbose
 	 *
 	 * In this example, kernel/unix tells the booter what file to
 	 * boot.  We don't want reboot in a zone to be gratuitously different,
@@ -522,7 +523,7 @@ notify_zonestatd(zoneid_t zoneid)
 	params.desc_ptr = NULL;
 	params.desc_num = 0;
 	params.rbuf = NULL;
-	params.rsize = NULL;
+	params.rsize = 0;
 	(void) door_call(fd, &params);
 	(void) close(fd);
 }
@@ -817,6 +818,7 @@ zone_bootup(zlog_t *zlogp, const char *bootargs, int zstate)
 	dladm_status_t status;
 	char errmsg[DLADM_STRSIZE];
 	int err;
+	boolean_t restart_init;
 
 	if (brand_prestatechg(zlogp, zstate, Z_BOOT) != 0)
 		return (-1);
@@ -872,6 +874,9 @@ zone_bootup(zlog_t *zlogp, const char *bootargs, int zstate)
 		brand_close(bh);
 		goto bad;
 	}
+
+	/* See if this zone's brand should restart init if it dies. */
+	restart_init = brand_restartinit(bh);
 
 	brand_close(bh);
 
@@ -936,6 +941,12 @@ zone_bootup(zlog_t *zlogp, const char *bootargs, int zstate)
 
 	if (zone_setattr(zoneid, ZONE_ATTR_BOOTARGS, nbootargs, 0) == -1) {
 		zerror(zlogp, B_TRUE, "could not set zone boot arguments");
+		goto bad;
+	}
+
+	if (!restart_init && zone_setattr(zoneid, ZONE_ATTR_INITNORESTART,
+	    NULL, 0) == -1) {
+		zerror(zlogp, B_TRUE, "could not set zone init-no-restart");
 		goto bad;
 	}
 
@@ -1363,7 +1374,7 @@ server(void *cookie, char *args, size_t alen, door_desc_t *dp,
 				abort();
 			/*
 			 * We could have two clients racing to halt this
-			 * zone; the second client loses, but his request
+			 * zone; the second client loses, but its request
 			 * doesn't fail, since the zone is now in the desired
 			 * state.
 			 */
@@ -1459,7 +1470,7 @@ server(void *cookie, char *args, size_t alen, door_desc_t *dp,
 		case Z_READY:
 			/*
 			 * We could have two clients racing to ready this
-			 * zone; the second client loses, but his request
+			 * zone; the second client loses, but its request
 			 * doesn't fail, since the zone is now in the desired
 			 * state.
 			 */
@@ -1541,7 +1552,7 @@ server(void *cookie, char *args, size_t alen, door_desc_t *dp,
 		case Z_BOOT:
 			/*
 			 * We could have two clients racing to boot this
-			 * zone; the second client loses, but his request
+			 * zone; the second client loses, but its request
 			 * doesn't fail, since the zone is now in the desired
 			 * state.
 			 */
@@ -1657,20 +1668,20 @@ setup_door(zlog_t *zlogp)
  * vnodes we could be dealing with.  Our strategy is as follows:
  *
  * - If the file we opened is a regular file (common case):
- * 	There is no fattach(3c)ed door, so we have a chance of becoming
- * 	the managing zoneadmd. We attempt to lock the file: if it is
- * 	already locked, that means someone else raced us here, so we
- * 	lose and give up.  zoneadm(1m) will try to contact the zoneadmd
- * 	that beat us to it.
+ *	There is no fattach(3c)ed door, so we have a chance of becoming
+ *	the managing zoneadmd. We attempt to lock the file: if it is
+ *	already locked, that means someone else raced us here, so we
+ *	lose and give up.  zoneadm(1m) will try to contact the zoneadmd
+ *	that beat us to it.
  *
  * - If the file we opened is a namefs file:
- * 	This means there is already an established door fattach(3c)'ed
- * 	to the rendezvous path.  We've lost the race, so we give up.
- * 	Note that in this case we also try to grab the file lock, and
- * 	will succeed in acquiring it since the vnode locked by the
- * 	"winning" zoneadmd was a regular one, and the one we locked was
- * 	the fattach(3c)'ed door node.  At any rate, no harm is done, and
- * 	we just return to zoneadm(1m) which knows to retry.
+ *	This means there is already an established door fattach(3c)'ed
+ *	to the rendezvous path.  We've lost the race, so we give up.
+ *	Note that in this case we also try to grab the file lock, and
+ *	will succeed in acquiring it since the vnode locked by the
+ *	"winning" zoneadmd was a regular one, and the one we locked was
+ *	the fattach(3c)'ed door node.  At any rate, no harm is done, and
+ *	we just return to zoneadm(1m) which knows to retry.
  */
 static int
 make_daemon_exclusive(zlog_t *zlogp)
@@ -2042,6 +2053,13 @@ main(int argc, char *argv[])
 	(void) sigaddset(&block_cld, SIGCHLD);
 	(void) sigprocmask(SIG_BLOCK, &block_cld, NULL);
 
+	/*
+	 * The parent only needs stderr after the fork, so close other fd's
+	 * that we inherited from zoneadm so that the parent doesn't have those
+	 * open while waiting. The child will close the rest after the fork.
+	 */
+	closefrom(3);
+
 	if ((ctfd = init_template()) == -1) {
 		zerror(zlogp, B_TRUE, "failed to create contract");
 		return (1);
@@ -2256,11 +2274,10 @@ main(int argc, char *argv[])
 
 child_out:
 	assert(pid == 0);
-	if (shstate != NULL) {
-		shstate->status = -1;
-		(void) sema_post(&shstate->sem);
-		(void) munmap((char *)shstate, shstatelen);
-	}
+
+	shstate->status = -1;
+	(void) sema_post(&shstate->sem);
+	(void) munmap((char *)shstate, shstatelen);
 
 	/*
 	 * This might trigger an unref notification, but if so,

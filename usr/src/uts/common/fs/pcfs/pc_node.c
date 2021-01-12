@@ -22,8 +22,9 @@
  * Copyright 2007 Sun Microsystems, Inc.  All rights reserved.
  * Use is subject to license terms.
  */
-
-#pragma ident	"%Z%%M%	%I%	%E% SMI"
+/*
+ * Copyright (c) 2017 by Delphix. All rights reserved.
+ */
 
 #include <sys/param.h>
 #include <sys/t_lock.h>
@@ -140,8 +141,7 @@ pc_getnode(
 	 * Cannot find node in active list. Allocate memory for a new node
 	 * initialize it, and put it on the active list.
 	 */
-	pcp = kmem_alloc(sizeof (struct pcnode), KM_SLEEP);
-	bzero(pcp, sizeof (struct pcnode));
+	pcp = kmem_zalloc(sizeof (struct pcnode), KM_SLEEP);
 	vp = vn_alloc(KM_SLEEP);
 	pcp->pc_vn = vp;
 	pcp->pc_entry = *ep;
@@ -262,7 +262,7 @@ retry:
 	}
 	ASSERT(!vn_has_cached_data(vp));
 
-	vp->v_count--;  /* release our hold from vn_rele */
+	VN_RELE_LOCKED(vp);
 	if (vp->v_count > 0) { /* Is this check still needed? */
 		PC_DPRINTF1(3, "pc_rele: pcp=0x%p HELD AGAIN!\n", (void *)pcp);
 		mutex_exit(&vp->v_lock);

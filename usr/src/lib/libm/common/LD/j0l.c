@@ -36,11 +36,10 @@
  *	y0(-ve)=y1(-ve)=yn(n,-ve) are NaN with invalid signal.
  */
 
-#pragma weak j0l = __j0l
-#pragma weak y0l = __y0l
+#pragma weak __j0l = j0l
+#pragma weak __y0l = y0l
 
 #include "libm.h"
-#include "libm_synonyms.h"
 
 #include "longdouble.h"
 
@@ -161,8 +160,10 @@ static GENERIC v0[8] = {
 };
 
 GENERIC
-y0l(x) GENERIC x; {
-	GENERIC z, d, s, c, ss, cc, u, v;
+y0l(GENERIC x)
+{
+	GENERIC z, s, c, ss, cc, u, v;
+	GENERIC d __unused;
 	int i;
 
 	if (isnanl(x))

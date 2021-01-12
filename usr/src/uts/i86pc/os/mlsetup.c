@@ -23,6 +23,7 @@
  *
  * Copyright (c) 1993, 2010, Oracle and/or its affiliates. All rights reserved.
  * Copyright (c) 2011 by Delphix. All rights reserved.
+ * Copyright 2019 Joyent, Inc.
  */
 /*
  * Copyright (c) 2010, Intel Corporation.
@@ -60,6 +61,11 @@
 #include <sys/archsystm.h>
 #include <sys/promif.h>
 #include <sys/pci_cfgspace.h>
+#include <sys/apic.h>
+#include <sys/apic_common.h>
+#include <sys/bootvfs.h>
+#include <sys/tsc.h>
+#include <sys/smt.h>
 #ifdef __xpv
 #include <sys/hypervisor.h>
 #else
@@ -75,6 +81,8 @@ extern uint32_t cpuid_feature_ecx_include;
 extern uint32_t cpuid_feature_ecx_exclude;
 extern uint32_t cpuid_feature_edx_include;
 extern uint32_t cpuid_feature_edx_exclude;
+
+nmi_action_t nmi_action = NMI_ACTION_UNSET;
 
 /*
  * Set console mode
@@ -100,6 +108,7 @@ void
 mlsetup(struct regs *rp)
 {
 	u_longlong_t prop_value;
+	char prop_str[BP_MAX_STRLEN];
 	extern struct classfuncs sys_classfuncs;
 	extern disp_t cpu0_disp;
 	extern char t0stack[];
@@ -144,6 +153,51 @@ mlsetup(struct regs *rp)
 		cpuid_feature_edx_exclude = 0;
 	else
 		cpuid_feature_edx_exclude = (uint32_t)prop_value;
+
+#if !defined(__xpv)
+	if (bootprop_getstr("nmi", prop_str, sizeof (prop_str)) == 0) {
+		if (strcmp(prop_str, "ignore") == 0) {
+			nmi_action = NMI_ACTION_IGNORE;
+		} else if (strcmp(prop_str, "panic") == 0) {
+			nmi_action = NMI_ACTION_PANIC;
+		} else if (strcmp(prop_str, "kmdb") == 0) {
+			nmi_action = NMI_ACTION_KMDB;
+		} else {
+			prom_printf("unix: ignoring unknown nmi=%s\n",
+			    prop_str);
+		}
+	}
+
+	/*
+	 * Check to see if KPTI has been explicitly enabled or disabled.
+	 * We have to check this before init_desctbls().
+	 */
+	if (bootprop_getval("kpti", &prop_value) == 0) {
+		kpti_enable = (uint64_t)(prop_value == 1);
+		prom_printf("unix: forcing kpti to %s due to boot argument\n",
+		    (kpti_enable == 1) ? "ON" : "OFF");
+	} else {
+		kpti_enable = 1;
+	}
+
+	if (bootprop_getval("pcid", &prop_value) == 0 && prop_value == 0) {
+		prom_printf("unix: forcing pcid to OFF due to boot argument\n");
+		x86_use_pcid = 0;
+	} else if (kpti_enable != 1) {
+		x86_use_pcid = 0;
+	}
+
+	/*
+	 * While we don't need to check this until later, we might as well do it
+	 * here.
+	 */
+	if (bootprop_getstr("smt_enabled", prop_str, sizeof (prop_str)) == 0) {
+		if (strcasecmp(prop_str, "false") == 0 ||
+		    strcmp(prop_str, "0") == 0)
+			smt_boot_disable = 1;
+	}
+
+#endif
 
 	/*
 	 * Initialize idt0, gdt0, ldt0_default, ktss0 and dftss.
@@ -226,15 +280,15 @@ mlsetup(struct regs *rp)
 	 */
 	if ((get_hwenv() & HW_XEN_HVM) == 0 &&
 	    is_x86_feature(x86_featureset, X86FSET_TSCP))
-		patch_tsc_read(X86_HAVE_TSCP);
+		patch_tsc_read(TSC_TSCP);
 	else if (cpuid_getvendor(CPU) == X86_VENDOR_AMD &&
 	    cpuid_getfamily(CPU) <= 0xf &&
 	    is_x86_feature(x86_featureset, X86FSET_SSE2))
-		patch_tsc_read(X86_TSC_MFENCE);
+		patch_tsc_read(TSC_RDTSC_MFENCE);
 	else if (cpuid_getvendor(CPU) == X86_VENDOR_Intel &&
 	    cpuid_getfamily(CPU) <= 6 &&
 	    is_x86_feature(x86_featureset, X86FSET_SSE2))
-		patch_tsc_read(X86_TSC_LFENCE);
+		patch_tsc_read(TSC_RDTSC_LFENCE);
 
 #endif	/* !__xpv */
 
@@ -245,7 +299,7 @@ mlsetup(struct regs *rp)
 	 * return 0.
 	 */
 	if (!is_x86_feature(x86_featureset, X86FSET_TSC))
-		patch_tsc_read(X86_NO_TSC);
+		patch_tsc_read(TSC_NONE);
 #endif	/* __i386 && !__xpv */
 
 #if defined(__amd64) && !defined(__xpv)
@@ -267,8 +321,17 @@ mlsetup(struct regs *rp)
 	if (is_x86_feature(x86_featureset, X86FSET_TSCP))
 		(void) wrmsr(MSR_AMD_TSCAUX, 0);
 
+	/*
+	 * Let's get the other %cr4 stuff while we're here. Note, we defer
+	 * enabling CR4_SMAP until startup_end(); however, that's importantly
+	 * before we start other CPUs. That ensures that it will be synced out
+	 * to other CPUs.
+	 */
 	if (is_x86_feature(x86_featureset, X86FSET_DE))
 		setcr4(getcr4() | CR4_DE);
+
+	if (is_x86_feature(x86_featureset, X86FSET_SMEP))
+		setcr4(getcr4() | CR4_SMEP);
 #endif /* __xpv */
 
 	/*
@@ -311,6 +374,8 @@ mlsetup(struct regs *rp)
 	p0.p_brkpageszc = 0;
 	p0.p_t1_lgrpid = LGRP_NONE;
 	p0.p_tr_lgrpid = LGRP_NONE;
+	psecflags_default(&p0.p_secflags);
+
 	sigorset(&p0.p_ignore, &ignoredefault);
 
 	CPU->cpu_thread = &t0;
@@ -325,11 +390,6 @@ mlsetup(struct regs *rp)
 	CPU->cpu_id = 0;
 
 	CPU->cpu_pri = 12;		/* initial PIL for the boot CPU */
-
-	/*
-	 * The kernel doesn't use LDTs unless a process explicitly requests one.
-	 */
-	p0.p_ldt_desc = null_sdesc;
 
 	/*
 	 * Initialize thread/cpu microstate accounting
@@ -351,12 +411,17 @@ mlsetup(struct regs *rp)
 	if (boothowto & RB_DEBUG)
 		kdi_idt_sync();
 
-	/*
-	 * Explicitly set console to text mode (0x3) if this is a boot
-	 * post Fast Reboot, and the console is set to CONS_SCREEN_TEXT.
-	 */
-	if (post_fastreboot && boot_console_type(NULL) == CONS_SCREEN_TEXT)
-		set_console_mode(0x3);
+	if (BOP_GETPROPLEN(bootops, "efi-systab") < 0) {
+		/*
+		 * In BIOS system, explicitly set console to text mode (0x3)
+		 * if this is a boot post Fast Reboot, and the console is set
+		 * to CONS_SCREEN_TEXT.
+		 */
+		if (post_fastreboot &&
+		    boot_console_type(NULL) == CONS_SCREEN_TEXT) {
+			set_console_mode(0x3);
+		}
+	}
 
 	/*
 	 * If requested (boot -d) drop into kmdb.
@@ -455,6 +520,7 @@ mlsetup(struct regs *rp)
 	 * Fill out cpu_ucode_info.  Update microcode if necessary.
 	 */
 	ucode_check(CPU);
+	cpuid_pass_ucode(CPU, x86_featureset);
 
 	if (workaround_errata(CPU) != 0)
 		panic("critical workaround(s) missing for boot cpu");
@@ -472,6 +538,10 @@ mach_modpath(char *path, const char *filename)
 	char *p;
 	const char isastr[] = "/amd64";
 	size_t isalen = strlen(isastr);
+
+	len = strlen(SYSTEM_BOOT_PATH "/kernel");
+	(void) strcpy(path, SYSTEM_BOOT_PATH "/kernel ");
+	path += len + 1;
 
 	if ((p = strrchr(filename, '/')) == NULL)
 		return;

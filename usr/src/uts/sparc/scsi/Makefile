@@ -41,10 +41,7 @@ UTSBASE	= ../..
 #
 MODULE		= scsi
 OBJECTS		= $(SCSI_OBJS:%=$(OBJS_DIR)/%)
-LINTS		= $(SCSI_OBJS:%.o=$(LINTS_DIR)/%.ln)
 ROOTMODULE	= $(ROOT_MISC_DIR)/$(MODULE)
-WARLOCK_OUT     = $(SCSI_OBJS:%.o=%.ll)
-WARLOCK_OK      = $(MODULE).ok
 
 #
 #	Include common rules.
@@ -55,26 +52,19 @@ include $(UTSBASE)/sparc/Makefile.sparc
 #	Define targets
 #
 ALL_TARGET	= $(BINARY)
-LINT_TARGET	= $(MODULE).lint
 INSTALL_TARGET	= $(BINARY) $(ROOTMODULE)
 
-# 
-# lint pass one enforcement 
-# 
-CFLAGS += $(CCVERBOSE)
+
 
 #
-# For now, disable these lint checks; maintainers should endeavor
-# to investigate and remove these for maximum lint coverage.
+# For now, disable these warnings; maintainers should endeavor
+# to investigate and remove these for maximum coverage.
 # Please do not carry these forward to new Makefiles.
 #
-LINTTAGS	+= -erroff=E_BAD_PTR_CAST_ALIGN
-LINTTAGS	+= -erroff=E_PTRDIFF_OVERFLOW
-LINTTAGS	+= -erroff=E_ASSIGN_NARROW_CONV
-
+CFLAGS		+= $(CCVERBOSE)
 CERRWARN	+= -_gcc=-Wno-parentheses
 CERRWARN	+= -_gcc=-Wno-switch
-CERRWARN	+= -_gcc=-Wno-uninitialized
+CERRWARN	+= $(CNOWARN_UNINIT)
 
 #
 #	Default build targets.
@@ -86,16 +76,8 @@ def:		$(DEF_DEPS)
 all:		$(ALL_DEPS)
 
 clean:		$(CLEAN_DEPS)
-		$(RM) $(WARLOCK_OUT) $(WARLOCK_OK)
 
 clobber:	$(CLOBBER_DEPS)
-		$(RM) $(WARLOCK_OUT) $(WARLOCK_OK)
-
-lint:		$(LINT_DEPS)
-
-modlintlib:	$(MODLINTLIB_DEPS)
-
-clean.lint:	$(CLEAN_LINT_DEPS)
 
 install:	$(INSTALL_DEPS)
 
@@ -103,23 +85,3 @@ install:	$(INSTALL_DEPS)
 #	Include common targets.
 #
 include $(UTSBASE)/sparc/Makefile.targ
-
-#
-#	Defines for local commands.
-#
-WLCC		= wlcc
-TOUCH		= touch
-
-#
-#	Warlock targets
-#
-warlock: $(WARLOCK_OK)
-
-$(WARLOCK_OK): $(WARLOCK_OUT)
-	$(TOUCH) $@
-
-%.ll: $(UTSBASE)/common/io/scsi/impl/%.c
-	$(WLCC) $(CPPFLAGS) -DDEBUG -o $@ $<
-
-%.ll: $(UTSBASE)/common/io/scsi/conf/%.c
-	$(WLCC) $(CPPFLAGS) -DDEBUG -o $@ $<

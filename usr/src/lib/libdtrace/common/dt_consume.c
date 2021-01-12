@@ -24,7 +24,7 @@
  */
 
 /*
- * Copyright (c) 2013, Joyent, Inc. All rights reserved.
+ * Copyright (c) 2017, Joyent, Inc. All rights reserved.
  * Copyright (c) 2012 by Delphix. All rights reserved.
  */
 
@@ -381,8 +381,10 @@ dt_stddev(uint64_t *data, uint64_t normal)
 	 * The standard approximation for standard deviation is
 	 * sqrt(average(x**2) - average(x)**2), i.e. the square root
 	 * of the average of the squares minus the square of the average.
+	 * When normalizing, we should divide the sum of x**2 by normal**2.
 	 */
 	dt_divide_128(data + 2, normal, avg_of_squares);
+	dt_divide_128(avg_of_squares, normal, avg_of_squares);
 	dt_divide_128(avg_of_squares, data[0], avg_of_squares);
 
 	norm_avg = (int64_t)data[1] / (int64_t)normal / (int64_t)data[0];
@@ -1275,7 +1277,7 @@ dt_print_stack(dtrace_hdl_t *dtp, FILE *fp, const char *format,
 			return (dt_set_errno(dtp, EDT_BADSTACKPC));
 		}
 
-		if (pc == NULL)
+		if (pc == 0)
 			break;
 
 		addr += size;
@@ -1363,7 +1365,7 @@ dt_print_ustack(dtrace_hdl_t *dtp, FILE *fp, const char *format,
 	if (P != NULL)
 		dt_proc_lock(dtp, P); /* lock handle while we perform lookups */
 
-	for (i = 0; i < depth && pc[i] != NULL; i++) {
+	for (i = 0; i < depth && pc[i] != 0; i++) {
 		const prmap_t *map;
 
 		if ((err = dt_printf(dtp, fp, "%*s", indent, "")) < 0)
@@ -3011,9 +3013,6 @@ dtrace_consume(dtrace_hdl_t *dtp, FILE *fp,
 				break;
 
 			timestamp = dt_buf_oldest(buf, dtp);
-			assert(timestamp >= dtp->dt_last_timestamp);
-			dtp->dt_last_timestamp = timestamp;
-
 			if (timestamp == buf->dtbd_timestamp) {
 				/*
 				 * We've reached the end of the time covered
@@ -3027,6 +3026,8 @@ dtrace_consume(dtrace_hdl_t *dtp, FILE *fp,
 					break;
 				continue;
 			}
+			assert(timestamp >= dtp->dt_last_timestamp);
+			dtp->dt_last_timestamp = timestamp;
 
 			if ((rval = dt_consume_cpu(dtp, fp,
 			    buf->dtbd_cpu, buf, B_TRUE, pf, rf, arg)) != 0)

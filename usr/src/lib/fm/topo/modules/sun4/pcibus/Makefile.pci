@@ -21,22 +21,28 @@
 
 #
 # Copyright (c) 2007, 2010, Oracle and/or its affiliates. All rights reserved.
+# Copyright (c) 2018, Joyent, Inc.
 #
 
 MODULE = pcibus
 CLASS = arch
 SUN4DIR = ../../sun4/$(MODULE)
 UTILDIR = ../../common/pcibus
+NICDIR = ../../common/nic
+USBDIR = ../../common/usb
 HBDIR = ../../common/hostbridge
+SHAREDDIR = ../../common/shared
 UTILSRCS = did.c did_hash.c did_props.c util.c
-PCISRCS = pcibus.c pcibus_labels.c pci_sun4.c pcibus_hba.c
+PCISRCS = pcibus.c pcibus_labels.c pci_sun4.c pcibus_hba.c pci_sensor.c
+SHAREDSRCS = topo_sensor.c
 
 MODULESRCS = $(PCISRCS) $(UTILSRCS) pci_$(ARCH).c
 
 include ../../Makefile.plugin
 
-LDLIBS += -ldevinfo -lsmbios
-CPPFLAGS += -I$(SUN4DIR) -I$(UTILDIR) -I$(HBDIR)
+LDLIBS += -ldevinfo -lsmbios -lpcidb
+CPPFLAGS += -I$(SUN4DIR) -I$(UTILDIR) -I$(HBDIR) -I$(NICDIR) -I$(USBDIR)
+CPPFLAGS += -I$(SHAREDDIR)
 
 %.o: $(SUN4DIR)/%.c
 	$(COMPILE.c) -o $@ $<
@@ -46,8 +52,6 @@ CPPFLAGS += -I$(SUN4DIR) -I$(UTILDIR) -I$(HBDIR)
 	$(COMPILE.c) -o $@ $<
 	$(CTFCONVERT_O)
 
-%.ln: $(SUN4DIR)/%.c
-	$(LINT.c) -c $<
-
-%.ln: $(UTILDIR)/%.c
-	$(LINT.c) -c $<
+%.o: $(SHAREDDIR)/%.c
+	$(COMPILE.c) -o $@ $<
+	$(CTFCONVERT_O)

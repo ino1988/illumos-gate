@@ -1,5 +1,5 @@
 /*	Copyright (c) 1984, 1986, 1987, 1988, 1989 AT&T	*/
-/*	  All Rights Reserved  	*/
+/*	  All Rights Reserved	*/
 
 
 /*
@@ -13,6 +13,14 @@
  *
  * Copyright 2009 Sun Microsystems, Inc.  All rights reserved.
  * Use is subject to license terms.
+ *
+ * Copyright 2013 Nexenta Systems, Inc.  All rights reserved.
+ *
+ * Copyright 2020 OmniOS Community Edition (OmniOSce) Association.
+ */
+
+/*
+ * Copyright (c) 2013, 2016 by Delphix. All rights reserved.
  */
 
 #ifndef _SYS_TIME_H
@@ -59,7 +67,7 @@ struct timeval {
 
 #define	TIMEVAL_TO_TIMEVAL32(tv32, tv)	{		\
 	(tv32)->tv_sec = (time32_t)(tv)->tv_sec;	\
-	(tv32)->tv_usec = (tv)->tv_usec;		\
+	(tv32)->tv_usec = (int32_t)(tv)->tv_usec;	\
 }
 
 #define	TIME32_MAX	INT32_MAX
@@ -68,7 +76,7 @@ struct timeval {
 #define	TIMEVAL_OVERFLOW(tv)	\
 	((tv)->tv_sec < TIME32_MIN || (tv)->tv_sec > TIME32_MAX)
 
-#endif	/* _SYSCALL32 || _KERNEL */
+#endif	/* _SYSCALL32 */
 
 #endif	/* _ASM */
 #endif	/* !defined(__XOPEN_OR_POSIX) || defined(_XPG4_2) ... */
@@ -241,6 +249,12 @@ struct itimerval32 {
 #define	MSEC2NSEC(m)	((hrtime_t)(m) * (NANOSEC / MILLISEC))
 #define	NSEC2MSEC(n)	((n) / (NANOSEC / MILLISEC))
 
+#define	USEC2NSEC(m)	((hrtime_t)(m) * (NANOSEC / MICROSEC))
+#define	NSEC2USEC(n)	((n) / (NANOSEC / MICROSEC))
+
+#define	NSEC2SEC(n)	((n) / (NANOSEC / SEC))
+#define	SEC2NSEC(m)	((hrtime_t)(m) * (NANOSEC / SEC))
+
 #endif /* !defined(__XOPEN_OR_POSIX) || defined(__EXTENSIONS__) */
 
 #ifndef	_ASM
@@ -250,7 +264,7 @@ struct itimerval32 {
  */
 typedef	longlong_t	hrtime_t;
 
-#ifdef _KERNEL
+#if defined(_KERNEL) || defined(_FAKE_KERNEL)
 
 #include <sys/time_impl.h>
 #include <sys/mutex.h>
@@ -344,14 +358,14 @@ extern	todinfo_t	utc_to_tod(time_t);
 extern	time_t		tod_to_utc(todinfo_t);
 extern	int		hr_clock_lock(void);
 extern	void		hr_clock_unlock(int);
-extern	hrtime_t 	gethrtime(void);
-extern	hrtime_t 	gethrtime_unscaled(void);
+extern	hrtime_t	gethrtime(void);
+extern	hrtime_t	gethrtime_unscaled(void);
 extern	hrtime_t	gethrtime_max(void);
 extern	hrtime_t	gethrtime_waitfree(void);
 extern	void		scalehrtime(hrtime_t *);
 extern	uint64_t	unscalehrtime(hrtime_t);
-extern	void 		gethrestime(timespec_t *);
-extern	time_t 		gethrestime_sec(void);
+extern	void		gethrestime(timespec_t *);
+extern	time_t		gethrestime_sec(void);
 extern	void		gethrestime_lasttick(timespec_t *);
 extern	void		hrt2ts(hrtime_t, timestruc_t *);
 extern	hrtime_t	ts2hrt(const timestruc_t *);
@@ -387,6 +401,7 @@ int futimesat(int, const char *, const struct timeval *);
 
 int getitimer(int, struct itimerval *);
 int utimes(const char *, const struct timeval *);
+
 #if defined(_XPG4_2)
 int setitimer(int, const struct itimerval *_RESTRICT_KYWD,
 	struct itimerval *_RESTRICT_KYWD);
@@ -396,6 +411,22 @@ int setitimer(int, struct itimerval *_RESTRICT_KYWD,
 #endif /* defined(_XPG2_2) */
 
 #endif /* !defined(_KERNEL) ... defined(_XPG4_2) */
+
+#if !defined(_KERNEL) && !defined(_STRICT_SYMBOLS)
+int futimes(int, const struct timeval *);
+int lutimes(const char *, const struct timeval *);
+
+#define	TIMESPEC_TO_TIMEVAL(tv, ts) { \
+	(tv)->tv_sec = (ts)->tv_sec; \
+	(tv)->tv_usec = (ts)->tv_nsec / 1000; \
+}
+
+#define	TIMEVAL_TO_TIMESPEC(tv, ts) { \
+	(ts)->tv_sec = (tv)->tv_sec; \
+	(ts)->tv_nsec = (tv)->tv_usec * 1000; \
+}
+
+#endif /* !defined(_KERNEL) && !defined(_STRICT_SYMBOLS) */
 
 /*
  * gettimeofday() and settimeofday() were included in SVr4 due to their
@@ -445,7 +476,7 @@ int gettimeofday(struct timeval *_RESTRICT_KYWD, void *_RESTRICT_KYWD);
  * non-X/Open applications, including this header will still make
  * visible these definitions.
  */
-#if !defined(_BOOT) && !defined(_KERNEL) && \
+#if !defined(_BOOT) && !defined(_KERNEL) && !defined(_FAKE_KERNEL) && \
 	!defined(__XOPEN_OR_POSIX) || defined(__EXTENSIONS__)
 #include <time.h>
 #endif
@@ -457,8 +488,9 @@ int gettimeofday(struct timeval *_RESTRICT_KYWD, void *_RESTRICT_KYWD);
  * beginning with XSH4v2.  Placement required after definition
  * for itimerval.
  */
-#if !defined(_KERNEL) && !defined(__XOPEN_OR_POSIX) || defined(_XPG4_2) || \
-	defined(__EXTENSIONS__)
+#if !defined(_KERNEL) && !defined(_FAKE_KERNEL) && \
+	!defined(__XOPEN_OR_POSIX) || \
+	defined(_XPG4_2) || defined(__EXTENSIONS__)
 #include <sys/select.h>
 #endif
 

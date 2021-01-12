@@ -11,11 +11,17 @@
 
 #
 # Copyright 2011, Richard Lowe
-# Copyright (c) 2012, Joyent, Inc.  All rights reserved.
-# Copyright 2013 Nexenta Systems, Inc.  All rights reserved.
+# Copyright 2020 Joyent, Inc.
+# Copyright 2015 Nexenta Systems, Inc.  All rights reserved.
+# Copyright (c) 2013, 2016 by Delphix. All rights reserved.
+# Copyright 2016 Toomas Soome <tsoome@me.com>
+# Copyright 2018 Nexenta Systems, Inc.
+# Copyright (c) 2017, Chris Fraire <cfraire@me.com>.
+# Copyright 2020 Peter Tribble
+# Copyright 2019 OmniOS Community Edition (OmniOSce) Association.
 #
 
-include		$(SRC)//Makefile.master
+include		$(SRC)/Makefile.master
 
 MANSECT=	1m
 
@@ -51,17 +57,11 @@ _MANFILES=	6to4relay.1m		\
 		beadm.1m		\
 		boot.1m			\
 		bootadm.1m		\
-		bootconfchk.1m		\
 		busstat.1m		\
-		cachefsd.1m		\
-		cachefslog.1m		\
-		cachefspack.1m		\
-		cachefsstat.1m		\
-		cachefswssize.1m	\
 		captoinfo.1m		\
 		catman.1m		\
+		ccidadm.1m		\
 		cfgadm.1m		\
-		cfgadm_ac.1m		\
 		cfgadm_cardbus.1m	\
 		cfgadm_fp.1m		\
 		cfgadm_ib.1m		\
@@ -69,9 +69,7 @@ _MANFILES=	6to4relay.1m		\
 		cfgadm_sata.1m		\
 		cfgadm_sbd.1m		\
 		cfgadm_scsi.1m		\
-		cfgadm_sysctrl.1m	\
 		cfgadm_usb.1m		\
-		cfsadmin.1m		\
 		chat.1m			\
 		check-hostname.1m	\
 		check-permissions.1m	\
@@ -79,6 +77,7 @@ _MANFILES=	6to4relay.1m		\
 		clear_locks.1m		\
 		clinfo.1m		\
 		clri.1m			\
+		connstat.1m		\
 		consadm.1m		\
 		conv_lp.1m		\
 		conv_lpd.1m		\
@@ -104,6 +103,7 @@ _MANFILES=	6to4relay.1m		\
 		dfshares.1m		\
 		dfshares_nfs.1m		\
 		dhcpagent.1m		\
+		diskinfo.1m		\
 		disks.1m		\
 		diskscan.1m		\
 		dispadmin.1m		\
@@ -114,11 +114,6 @@ _MANFILES=	6to4relay.1m		\
 		dns-sd.1m		\
 		domainname.1m		\
 		drvconfig.1m		\
-		dsbitmap.1m		\
-		dscfg.1m		\
-		dscfgadm.1m		\
-		dscfglockd.1m		\
-		dsstat.1m		\
 		dtrace.1m		\
 		dumpadm.1m		\
 		editmap.1m		\
@@ -141,7 +136,6 @@ _MANFILES=	6to4relay.1m		\
 		format.1m		\
 		fruadm.1m		\
 		fsck.1m			\
-		fsck_cachefs.1m		\
 		fsck_pcfs.1m		\
 		fsck_udfs.1m		\
 		fsck_ufs.1m		\
@@ -176,7 +170,7 @@ _MANFILES=	6to4relay.1m		\
 		halt.1m			\
 		hextoalabel.1m		\
 		hostconfig.1m		\
-		ickey.1m		\
+		hotplug.1m		\
 		id.1m			\
 		idmap.1m		\
 		idmapd.1m		\
@@ -184,9 +178,6 @@ _MANFILES=	6to4relay.1m		\
 		if_mpadm.1m		\
 		ifconfig.1m		\
 		ifparse.1m		\
-		iiadm.1m		\
-		iicpbmp.1m		\
-		iicpshd.1m		\
 		ikeadm.1m		\
 		ikecert.1m		\
 		in.chargend.1m		\
@@ -219,6 +210,7 @@ _MANFILES=	6to4relay.1m		\
 		init.1m			\
 		inityp2l.1m		\
 		install.1m		\
+		installboot.1m		\
 		installf.1m		\
 		installgrub.1m		\
 		intrd.1m		\
@@ -292,25 +284,7 @@ _MANFILES=	6to4relay.1m		\
 		mailwrapper.1m		\
 		makedbm.1m		\
 		makemap.1m		\
-		mdmonitord.1m		\
-		medstat.1m		\
-		metaclear.1m		\
-		metadb.1m		\
-		metadevadm.1m		\
-		metahs.1m		\
-		metaimport.1m		\
-		metainit.1m		\
-		metaoffline.1m		\
-		metaparam.1m		\
-		metarecover.1m		\
-		metarename.1m		\
-		metareplace.1m		\
-		metaroot.1m		\
-		metaset.1m		\
-		metassist.1m		\
-		metastat.1m		\
-		metasync.1m		\
-		metattach.1m		\
+		mdnsd.1m		\
 		mkdevalloc.1m		\
 		mkdevmaps.1m		\
 		mkfifo.1m		\
@@ -325,7 +299,6 @@ _MANFILES=	6to4relay.1m		\
 		modload.1m		\
 		modunload.1m		\
 		mount.1m		\
-		mount_cachefs.1m	\
 		mount_hsfs.1m		\
 		mount_nfs.1m		\
 		mount_pcfs.1m		\
@@ -343,6 +316,7 @@ _MANFILES=	6to4relay.1m		\
 		ncheck.1m		\
 		ncheck_ufs.1m		\
 		ndd.1m			\
+		ndp.1m			\
 		ndmpadm.1m		\
 		ndmpd.1m		\
 		ndmpstat.1m		\
@@ -357,11 +331,11 @@ _MANFILES=	6to4relay.1m		\
 		nfsmapid.1m		\
 		nfsstat.1m		\
 		nlsadmin.1m		\
-		nscadm.1m		\
 		nscd.1m			\
 		nwamd.1m		\
 		passmgmt.1m		\
 		pbind.1m		\
+		pcitool.1m		\
 		picld.1m		\
 		ping.1m			\
 		pkgadd.1m		\
@@ -431,11 +405,6 @@ _MANFILES=	6to4relay.1m		\
 		route.1m		\
 		routeadm.1m		\
 		rpc.bootparamd.1m	\
-		rpc.mdcommd.1m		\
-		rpc.metad.1m		\
-		rpc.metamedd.1m		\
-		rpc.metamhd.1m		\
-		rpc.rexd.1m		\
 		rpc.rstatd.1m		\
 		rpc.rusersd.1m		\
 		rpc.rwalld.1m		\
@@ -459,11 +428,9 @@ _MANFILES=	6to4relay.1m		\
 		savecore.1m		\
 		sbdadm.1m		\
 		scadm.1m		\
-		scmadm.1m		\
 		sdpadm.1m		\
 		sendmail.1m		\
 		setuname.1m		\
-		sftp-server.1m		\
 		share.1m		\
 		share_nfs.1m		\
 		shareall.1m		\
@@ -478,18 +445,10 @@ _MANFILES=	6to4relay.1m		\
 		smbios.1m		\
 		smbstat.1m		\
 		smrsh.1m		\
-		smtnrhdb.1m		\
-		smtnrhtp.1m		\
-		smtnzonecfg.1m		\
-		sndradm.1m		\
-		sndrd.1m		\
-		sndrsyncd.1m		\
 		snoop.1m		\
 		soconfig.1m		\
 		sppptun.1m		\
 		spray.1m		\
-		ssh-keysign.1m		\
-		sshd.1m			\
 		statd.1m		\
 		stmfadm.1m		\
 		stmsboot.1m		\
@@ -499,7 +458,6 @@ _MANFILES=	6to4relay.1m		\
 		sttydefs.1m		\
 		su.1m			\
 		sulogin.1m		\
-		svadm.1m		\
 		svc.configd.1m		\
 		svc.ipfd.1m		\
 		svc.startd.1m		\
@@ -533,6 +491,7 @@ _MANFILES=	6to4relay.1m		\
 		ttymon.1m		\
 		tunefs.1m		\
 		txzonemgr.1m		\
+		tzreload.1m		\
 		tzselect.1m		\
 		uadmin.1m		\
 		ucodeadm.1m		\
@@ -557,15 +516,10 @@ _MANFILES=	6to4relay.1m		\
 		vscanadm.1m		\
 		vscand.1m		\
 		wall.1m			\
-		wanboot_keygen.1m	\
-		wanboot_keymgmt.1m	\
-		wanboot_p12split.1m	\
-		wanbootutil.1m		\
 		whodo.1m		\
 		wificonfig.1m		\
 		wpad.1m			\
 		wracct.1m		\
-		wusbadm.1m		\
 		ypbind.1m		\
 		ypinit.1m		\
 		ypmake.1m		\
@@ -579,18 +533,24 @@ _MANFILES=	6to4relay.1m		\
 		zdb.1m			\
 		zdump.1m		\
 		zfs.1m			\
+		zfs-program.1m		\
 		zic.1m			\
 		zoneadm.1m		\
 		zoneadmd.1m		\
 		zonecfg.1m		\
+		zonestatd.1m		\
 		zpool.1m		\
-		zstreamdump.1m
+		zstreamdump.1m		\
+		ztest.1m
 
 i386_MANFILES=				\
-		lms.1m
+		acpidump.1m		\
+		acpixtract.1m		\
+		nvmeadm.1m		\
+		pptadm.1m		\
+		rdmsr.1m
 
-sparc_MANFILES=	cvcd.1m			\
-		dcs.1m			\
+sparc_MANFILES=	dcs.1m			\
 		drd.1m			\
 		efdaemon.1m		\
 		ldmad.1m		\
@@ -610,6 +570,7 @@ MANLINKS=	acctcon1.1m			\
 		acctprc1.1m			\
 		acctprc2.1m			\
 		acctwtmp.1m			\
+		audlinks.1m			\
 		bootparamd.1m			\
 		chargefee.1m			\
 		ckpacct.1m			\
@@ -627,8 +588,6 @@ MANLINKS=	acctcon1.1m			\
 		intro.1m			\
 		kadmin.local.1m			\
 		lastlogin.1m			\
-		metadetach.1m			\
-		metaonline.1m			\
 		monacct.1m			\
 		nulladm.1m			\
 		poweroff.1m			\
@@ -640,7 +599,6 @@ MANLINKS=	acctcon1.1m			\
 		rdisc.1m			\
 		reject.1m			\
 		restricted_shell.1m		\
-		rexd.1m				\
 		rexecd.1m			\
 		rlogind.1m			\
 		routed.1m			\
@@ -713,6 +671,7 @@ turnacct.1m			:= LINKSRC = acctsh.1m
 
 dcopy.1m			:= LINKSRC = clri.1m
 
+audlinks.1m			:= LINKSRC = devfsadm.1m
 devfsadmd.1m			:= LINKSRC = devfsadm.1m
 
 fcadm.1m			:= LINKSRC = fcinfo.1m
@@ -725,6 +684,7 @@ hal-find-by-property.1m		:= LINKSRC = hal-find.1m
 hal-set-property.1m		:= LINKSRC = hal-get-property.1m
 
 poweroff.1m			:= LINKSRC = halt.1m
+
 
 comsat.1m			:= LINKSRC = in.comsat.1m
 fingerd.1m			:= LINKSRC = in.fingerd.1m
@@ -746,10 +706,6 @@ kadmin.local.1m			:= LINKSRC = kadmin.1m
 
 unlink.1m			:= LINKSRC = link.1m
 
-metaonline.1m			:= LINKSRC = metaoffline.1m
-
-metadetach.1m			:= LINKSRC = metattach.1m
-
 umount.1m			:= LINKSRC = mount.1m
 
 umount_smbfs.1m			:= LINKSRC = mount_smbfs.1m
@@ -761,7 +717,6 @@ grpck.1m			:= LINKSRC = pwck.1m
 quotaoff.1m			:= LINKSRC = quotaon.1m
 
 bootparamd.1m			:= LINKSRC = rpc.bootparamd.1m
-rexd.1m				:= LINKSRC = rpc.rexd.1m
 rstatd.1m			:= LINKSRC = rpc.rstatd.1m
 rusersd.1m			:= LINKSRC = rpc.rusersd.1m
 rwalld.1m			:= LINKSRC = rpc.rwalld.1m

@@ -20,6 +20,7 @@
  */
 /*
  * Copyright (c) 2003, 2010, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2016 by Delphix. All rights reserved.
  */
 
 #include <sys/ib/mgt/ibcm/ibcm_impl.h>
@@ -481,7 +482,7 @@ ibcm_handle_get_path(ibt_path_attr_t *attrp, ibt_path_flags_t flags,
 	if (func != NULL) {		/* Non-Blocking */
 		IBTF_DPRINTF_L3(cmlog, "ibcm_handle_get_path: Non Blocking");
 		if (taskq_dispatch(ibcm_taskq, ibcm_process_async_get_paths,
-		    path_tq, TQ_NOSLEEP) == 0) {
+		    path_tq, TQ_NOSLEEP) == TASKQID_INVALID) {
 			IBTF_DPRINTF_L2(cmlog, "ibcm_handle_get_path: "
 			    "Failed to dispatch the TaskQ");
 			kmem_free(path_tq, len);
@@ -1621,7 +1622,7 @@ ibcm_get_multi_pathrec(ibcm_path_tqargs_t *p_arg, ibtl_cm_port_list_t *sl,
 
 			/*
 			 * If SGID and/or DGID is specified by user, make sure
-			 * he gets his primary-path on those node points.
+			 * they get their primary-path on those node points.
 			 */
 			for (i = 0; i < num_rec; i++, pr_resp++) {
 				IBTF_DPRINTF_L3(cmlog, "ibcm_get_multi_pathrec:"
@@ -4039,7 +4040,7 @@ ibcm_val_ipattr(ibt_ip_path_attr_t *attrp, ibt_path_flags_t flags)
 	}
 
 	/* Validate the destination info */
-	if ((attrp->ipa_ndst == 0) || (attrp->ipa_ndst == NULL)) {
+	if ((attrp->ipa_ndst == 0) || (attrp->ipa_dst_ip == NULL)) {
 		IBTF_DPRINTF_L2(cmlog, "ibcm_val_ipattr: DstIP Not provided "
 		    "dst_ip %p, ndst %d", attrp->ipa_dst_ip, attrp->ipa_ndst);
 		return (IBT_INVALID_PARAM);
@@ -4168,7 +4169,7 @@ ibcm_get_ip_path(ibt_clnt_hdl_t ibt_hdl, ibt_path_flags_t flags,
 	sleep_flag = ((func == NULL) ? TQ_SLEEP : TQ_NOSLEEP);
 	ret = taskq_dispatch(ibcm_taskq, ibcm_process_get_ip_paths, path_tq,
 	    sleep_flag);
-	if (ret == 0) {
+	if (ret == TASKQID_INVALID) {
 		IBTF_DPRINTF_L2(cmlog, "ibcm_get_ip_path: Failed to dispatch "
 		    "the TaskQ");
 		if (func == NULL) {		/* Blocking */

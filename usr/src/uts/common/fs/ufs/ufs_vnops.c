@@ -21,11 +21,12 @@
 
 /*
  * Copyright (c) 1984, 2010, Oracle and/or its affiliates. All rights reserved.
- * Copyright (c) 2013, Joyent, Inc. All rights reserved.
+ * Copyright 2018 Joyent, Inc.
+ * Copyright (c) 2016 by Delphix. All rights reserved.
  */
 
 /*	Copyright (c) 1983, 1984, 1985, 1986, 1987, 1988, 1989 AT&T	*/
-/*	  All Rights Reserved  	*/
+/*	  All Rights Reserved	*/
 
 /*
  * Portions of this source code were derived from Berkeley 4.3 BSD
@@ -101,7 +102,7 @@
 
 static struct instats ins;
 
-static 	int ufs_getpage_ra(struct vnode *, u_offset_t, struct seg *, caddr_t);
+static	int ufs_getpage_ra(struct vnode *, u_offset_t, struct seg *, caddr_t);
 static	int ufs_getpage_miss(struct vnode *, u_offset_t, size_t, struct seg *,
 		caddr_t, struct page **, size_t, enum seg_rw, int);
 static	int ufs_open(struct vnode **, int, struct cred *, caller_context_t *);
@@ -182,7 +183,6 @@ static	int ufs_setsecattr(struct vnode *, vsecattr_t *, int, struct cred *,
 static	int ufs_priv_access(void *, int, struct cred *);
 static	int ufs_eventlookup(struct vnode *, char *, struct cred *,
     struct vnode **);
-extern int as_map_locked(struct as *, caddr_t, size_t, int ((*)()), void *);
 
 /*
  * For lockfs: ulockfs begin/end is now inlined in the ufs_xxx functions.
@@ -245,7 +245,7 @@ struct dump {
 	struct inode	*ip;		/* the file we contain */
 	daddr_t		fsbs;		/* number of blocks stored */
 	struct timeval32 time;		/* time stamp for the struct */
-	daddr32_t 	dblk[1];	/* place holder for block info */
+	daddr32_t	dblk[1];	/* place holder for block info */
 };
 
 static struct dump *dump_info = NULL;
@@ -274,7 +274,7 @@ ufs_open(struct vnode **vpp, int flag, struct cred *cr, caller_context_t *ct)
 /*ARGSUSED*/
 static int
 ufs_close(struct vnode *vp, int flag, int count, offset_t offset,
-	struct cred *cr, caller_context_t *ct)
+    struct cred *cr, caller_context_t *ct)
 {
 	cleanlocks(vp, ttoproc(curthread)->p_pid, 0);
 	cleanshares(vp, ttoproc(curthread)->p_pid);
@@ -301,7 +301,7 @@ ufs_close(struct vnode *vp, int flag, int count, offset_t offset,
 /*ARGSUSED*/
 static int
 ufs_read(struct vnode *vp, struct uio *uiop, int ioflag, struct cred *cr,
-	struct caller_context *ct)
+    struct caller_context *ct)
 {
 	struct inode *ip = VTOI(vp);
 	struct ufsvfs *ufsvfsp;
@@ -431,7 +431,7 @@ ufs_check_rewrite(struct inode *ip, struct uio *uiop, int ioflag)
 /*ARGSUSED*/
 static int
 ufs_write(struct vnode *vp, struct uio *uiop, int ioflag, cred_t *cr,
-	caller_context_t *ct)
+    caller_context_t *ct)
 {
 	struct inode *ip = VTOI(vp);
 	struct ufsvfs *ufsvfsp;
@@ -656,76 +656,6 @@ out:
  * Used to keep swap files from blowing the page cache on a server.
  */
 int stickyhack = 1;
-
-/*
- * Free behind hacks.  The pager is busted.
- * XXX - need to pass the information down to writedone() in a flag like B_SEQ
- * or B_FREE_IF_TIGHT_ON_MEMORY.
- */
-int	freebehind = 1;
-int	smallfile = 0;
-u_offset_t smallfile64 = 32 * 1024;
-
-/*
- * While we should, in most cases, cache the pages for write, we
- * may also want to cache the pages for read as long as they are
- * frequently re-usable.
- *
- * If cache_read_ahead = 1, the pages for read will go to the tail
- * of the cache list when they are released, otherwise go to the head.
- */
-int	cache_read_ahead = 0;
-
-/*
- * Freebehind exists  so that as we read  large files  sequentially we
- * don't consume most of memory with pages  from a few files. It takes
- * longer to re-read from disk multiple small files as it does reading
- * one large one sequentially.  As system  memory grows customers need
- * to retain bigger chunks   of files in  memory.   The advent of  the
- * cachelist opens up of the possibility freeing pages  to the head or
- * tail of the list.
- *
- * Not freeing a page is a bet that the page will be read again before
- * it's segmap slot is needed for something else. If we loose the bet,
- * it means some  other thread is  burdened with the  page free we did
- * not do. If we win we save a free and reclaim.
- *
- * Freeing it at the tail  vs the head of cachelist  is a bet that the
- * page will survive until the next  read.  It's also saying that this
- * page is more likely to  be re-used than a  page freed some time ago
- * and never reclaimed.
- *
- * Freebehind maintains a  range of  file offset [smallfile1; smallfile2]
- *
- *            0 < offset < smallfile1 : pages are not freed.
- *   smallfile1 < offset < smallfile2 : pages freed to tail of cachelist.
- *   smallfile2 < offset              : pages freed to head of cachelist.
- *
- * The range  is  computed  at most  once  per second  and  depends on
- * freemem  and  ncpus_online.  Both parameters  are   bounded to be
- * >= smallfile && >= smallfile64.
- *
- * smallfile1 = (free memory / ncpu) / 1000
- * smallfile2 = (free memory / ncpu) / 10
- *
- * A few examples values:
- *
- *       Free Mem (in Bytes) [smallfile1; smallfile2]  [smallfile1; smallfile2]
- *                                 ncpus_online = 4          ncpus_online = 64
- *       ------------------  -----------------------   -----------------------
- *             1G                   [256K;  25M]               [32K; 1.5M]
- *            10G                   [2.5M; 250M]              [156K; 15M]
- *           100G                    [25M; 2.5G]              [1.5M; 150M]
- *
- */
-
-#define	SMALLFILE1_D 1000
-#define	SMALLFILE2_D 10
-static u_offset_t smallfile1 = 32 * 1024;
-static u_offset_t smallfile2 = 32 * 1024;
-static clock_t smallfile_update = 0; /* lbolt value of when to recompute */
-uint_t smallfile1_d = SMALLFILE1_D;
-uint_t smallfile2_d = SMALLFILE2_D;
 
 /*
  * wrip does the real work of write requests for ufs.
@@ -1303,7 +1233,7 @@ out:
 	 *   --------------------------
 	 *   always@	  IATTCHG|IBDWRITE
 	 *
-	 * @ - 	If we are doing synchronous write the only time we should
+	 * @ -	If we are doing synchronous write the only time we should
 	 *	not be sync'ing the ip here is if we have the stickyhack
 	 *	activated, the file is marked with the sticky bit and
 	 *	no exec bit, the file length has not been changed and
@@ -1350,10 +1280,9 @@ rdip(struct inode *ip, struct uio *uio, int ioflag, cred_t *cr)
 	int error = 0;
 	int doupdate = 1;
 	uint_t flags;
-	int dofree, directio_status;
+	int directio_status;
 	krw_t rwtype;
 	o_mode_t type;
-	clock_t	now;
 
 	vp = ITOV(ip);
 
@@ -1420,26 +1349,6 @@ rdip(struct inode *ip, struct uio *uio, int ioflag, cred_t *cr)
 			n = (int)diff;
 
 		/*
-		 * We update smallfile2 and smallfile1 at most every second.
-		 */
-		now = ddi_get_lbolt();
-		if (now >= smallfile_update) {
-			uint64_t percpufreeb;
-			if (smallfile1_d == 0) smallfile1_d = SMALLFILE1_D;
-			if (smallfile2_d == 0) smallfile2_d = SMALLFILE2_D;
-			percpufreeb = ptob((uint64_t)freemem) / ncpus_online;
-			smallfile1 = percpufreeb / smallfile1_d;
-			smallfile2 = percpufreeb / smallfile2_d;
-			smallfile1 = MAX(smallfile1, smallfile);
-			smallfile1 = MAX(smallfile1, smallfile64);
-			smallfile2 = MAX(smallfile1, smallfile2);
-			smallfile_update = now + hz;
-		}
-
-		dofree = freebehind &&
-		    ip->i_nextr == (off & PAGEMASK) && off > smallfile1;
-
-		/*
 		 * At this point we can enter ufs_getpage() in one of two
 		 * ways:
 		 * 1) segmap_getmapflt() calls ufs_getpage() when the
@@ -1470,19 +1379,6 @@ rdip(struct inode *ip, struct uio *uio, int ioflag, cred_t *cr)
 		flags = 0;
 		if (!error) {
 			/*
-			 * If  reading sequential  we won't need  this
-			 * buffer again  soon.  For  offsets in  range
-			 * [smallfile1,  smallfile2] release the pages
-			 * at   the  tail  of the   cache list, larger
-			 * offsets are released at the head.
-			 */
-			if (dofree) {
-				flags = SM_FREE | SM_ASYNC;
-				if ((cache_read_ahead == 0) &&
-				    (off > smallfile2))
-					flags |=  SM_DONTNEED;
-			}
-			/*
 			 * In POSIX SYNC (FSYNC and FDSYNC) read mode,
 			 * we want to make sure that the page which has
 			 * been read, is written on disk if it is dirty.
@@ -1490,7 +1386,6 @@ rdip(struct inode *ip, struct uio *uio, int ioflag, cred_t *cr)
 			 * be flushed out.
 			 */
 			if ((ioflag & FRSYNC) && (ioflag & (FSYNC|FDSYNC))) {
-				flags &= ~SM_ASYNC;
 				flags |= SM_WRITE;
 			}
 			if (vpm_enable) {
@@ -1992,7 +1887,7 @@ ufs_ioctl(
 /* ARGSUSED */
 static int
 ufs_getattr(struct vnode *vp, struct vattr *vap, int flags,
-	struct cred *cr, caller_context_t *ct)
+    struct cred *cr, caller_context_t *ct)
 {
 	struct inode *ip = VTOI(vp);
 	struct ufsvfs *ufsvfsp;
@@ -2100,12 +1995,8 @@ ufs_priv_access(void *vip, int mode, struct cred *cr)
 
 /*ARGSUSED4*/
 static int
-ufs_setattr(
-	struct vnode *vp,
-	struct vattr *vap,
-	int flags,
-	struct cred *cr,
-	caller_context_t *ct)
+ufs_setattr(struct vnode *vp, struct vattr *vap, int flags, struct cred *cr,
+    caller_context_t *ct)
 {
 	struct inode *ip = VTOI(vp);
 	struct ufsvfs *ufsvfsp = ip->i_ufsvfs;
@@ -2437,7 +2328,7 @@ out:
 /*ARGSUSED*/
 static int
 ufs_access(struct vnode *vp, int mode, int flags, struct cred *cr,
-	caller_context_t *ct)
+    caller_context_t *ct)
 {
 	struct inode *ip = VTOI(vp);
 
@@ -2461,7 +2352,7 @@ ufs_access(struct vnode *vp, int mode, int flags, struct cred *cr,
 /* ARGSUSED */
 static int
 ufs_readlink(struct vnode *vp, struct uio *uiop, struct cred *cr,
-	caller_context_t *ct)
+    caller_context_t *ct)
 {
 	struct inode *ip = VTOI(vp);
 	struct ufsvfs *ufsvfsp;
@@ -2616,8 +2507,7 @@ nolockout:
 
 /* ARGSUSED */
 static int
-ufs_fsync(struct vnode *vp, int syncflag, struct cred *cr,
-	caller_context_t *ct)
+ufs_fsync(struct vnode *vp, int syncflag, struct cred *cr, caller_context_t *ct)
 {
 	struct inode *ip = VTOI(vp);
 	struct ufsvfs *ufsvfsp = ip->i_ufsvfs;
@@ -2722,8 +2612,8 @@ int ufs_lookup_idle_count = 2;	/* Number of inodes to idle each time */
 /* ARGSUSED */
 static int
 ufs_lookup(struct vnode *dvp, char *nm, struct vnode **vpp,
-	struct pathname *pnp, int flags, struct vnode *rdir, struct cred *cr,
-	caller_context_t *ct, int *direntflags, pathname_t *realpnp)
+    struct pathname *pnp, int flags, struct vnode *rdir, struct cred *cr,
+    caller_context_t *ct, int *direntflags, pathname_t *realpnp)
 {
 	struct inode *ip;
 	struct inode *sip;
@@ -2907,8 +2797,8 @@ out:
 /*ARGSUSED*/
 static int
 ufs_create(struct vnode *dvp, char *name, struct vattr *vap, enum vcexcl excl,
-	int mode, struct vnode **vpp, struct cred *cr, int flag,
-	caller_context_t *ct, vsecattr_t *vsecp)
+    int mode, struct vnode **vpp, struct cred *cr, int flag,
+    caller_context_t *ct, vsecattr_t *vsecp)
 {
 	struct inode *ip;
 	struct inode *xip;
@@ -3192,8 +3082,8 @@ out:
 extern int ufs_idle_max;
 /*ARGSUSED*/
 static int
-ufs_remove(struct vnode *vp, char *nm, struct cred *cr,
-	caller_context_t *ct, int flags)
+ufs_remove(struct vnode *vp, char *nm, struct cred *cr, caller_context_t *ct,
+    int flags)
 {
 	struct inode *ip = VTOI(vp);
 	struct ufsvfs *ufsvfsp	= ip->i_ufsvfs;
@@ -3259,7 +3149,7 @@ out:
 /*ARGSUSED*/
 static int
 ufs_link(struct vnode *tdvp, struct vnode *svp, char *tnm, struct cred *cr,
-	caller_context_t *ct, int flags)
+    caller_context_t *ct, int flags)
 {
 	struct inode *sip;
 	struct inode *tdp = VTOI(tdvp);
@@ -3354,14 +3244,8 @@ clock_t	 ufs_rename_backoff_delay = 1;
 
 /*ARGSUSED*/
 static int
-ufs_rename(
-	struct vnode *sdvp,		/* old (source) parent vnode */
-	char *snm,			/* old (source) entry name */
-	struct vnode *tdvp,		/* new (target) parent vnode */
-	char *tnm,			/* new (target) entry name */
-	struct cred *cr,
-	caller_context_t *ct,
-	int flags)
+ufs_rename(struct vnode *sdvp, char *snm, struct vnode *tdvp, char *tnm,
+    struct cred *cr, caller_context_t *ct, int flags)
 {
 	struct inode *sip = NULL;	/* source inode */
 	struct inode *ip = NULL;	/* check inode */
@@ -3371,7 +3255,7 @@ ufs_rename(
 	struct vnode *tvp = NULL;	/* target vnode, if it exists */
 	struct vnode *realvp;
 	struct ufsvfs *ufsvfsp;
-	struct ulockfs *ulp;
+	struct ulockfs *ulp = NULL;
 	struct ufs_slot slot;
 	timestruc_t now;
 	int error;
@@ -3389,26 +3273,24 @@ ufs_rename(
 	if (VOP_REALVP(tdvp, &realvp, ct) == 0)
 		tdvp = realvp;
 
+	/* Must do this before taking locks in case of DNLC miss */
 	terr = ufs_eventlookup(tdvp, tnm, cr, &tvp);
 	serr = ufs_eventlookup(sdvp, snm, cr, &svp);
 
 	if ((serr == 0) && ((terr == 0) || (terr == ENOENT))) {
 		if (tvp != NULL)
-			vnevent_rename_dest(tvp, tdvp, tnm, ct);
+			vnevent_pre_rename_dest(tvp, tdvp, tnm, ct);
 
 		/*
 		 * Notify the target directory of the rename event
 		 * if source and target directories are not the same.
 		 */
 		if (sdvp != tdvp)
-			vnevent_rename_dest_dir(tdvp, ct);
+			vnevent_pre_rename_dest_dir(tdvp, svp, tnm, ct);
 
 		if (svp != NULL)
-			vnevent_rename_src(svp, sdvp, snm, ct);
+			vnevent_pre_rename_src(svp, sdvp, snm, ct);
 	}
-
-	if (tvp != NULL)
-		VN_RELE(tvp);
 
 	if (svp != NULL)
 		VN_RELE(svp);
@@ -3416,7 +3298,7 @@ ufs_rename(
 retry_rename:
 	error = ufs_lockfs_begin(ufsvfsp, &ulp, ULOCKFS_RENAME_MASK);
 	if (error)
-		goto out;
+		goto unlock;
 
 	if (ulp)
 		TRANS_BEGIN_CSYNC(ufsvfsp, issync, TOP_RENAME,
@@ -3712,6 +3594,9 @@ retry_firstlock:
 		goto errout;
 	}
 
+	if (error == 0 && tvp != NULL)
+		vnevent_rename_dest(tvp, tdvp, tnm, ct);
+
 	/*
 	 * Unlink the source.
 	 * Remove the source entry.  ufs_dirremove() checks that the entry
@@ -3723,6 +3608,16 @@ retry_firstlock:
 	    DR_RENAME, cr)) == ENOENT)
 		error = 0;
 
+	if (error == 0) {
+		vnevent_rename_src(ITOV(sip), sdvp, snm, ct);
+		/*
+		 * Notify the target directory of the rename event
+		 * if source and target directories are not the same.
+		 */
+		if (sdvp != tdvp)
+			vnevent_rename_dest_dir(tdvp, ct);
+	}
+
 errout:
 	if (slot.fbp)
 		fbrelse(slot.fbp, S_OTHER);
@@ -3732,23 +3627,25 @@ errout:
 		rw_exit(&sdp->i_rwlock);
 	}
 
-	VN_RELE(ITOV(sip));
-
 unlock:
+	if (tvp != NULL)
+		VN_RELE(tvp);
+	if (sip != NULL)
+		VN_RELE(ITOV(sip));
+
 	if (ulp) {
 		TRANS_END_CSYNC(ufsvfsp, error, issync, TOP_RENAME, trans_size);
 		ufs_lockfs_end(ulp);
 	}
 
-out:
 	return (error);
 }
 
 /*ARGSUSED*/
 static int
 ufs_mkdir(struct vnode *dvp, char *dirname, struct vattr *vap,
-	struct vnode **vpp, struct cred *cr, caller_context_t *ct, int flags,
-	vsecattr_t *vsecp)
+    struct vnode **vpp, struct cred *cr, caller_context_t *ct, int flags,
+    vsecattr_t *vsecp)
 {
 	struct inode *ip;
 	struct inode *xip;
@@ -3825,7 +3722,7 @@ out:
 /*ARGSUSED*/
 static int
 ufs_rmdir(struct vnode *vp, char *nm, struct vnode *cdir, struct cred *cr,
-	caller_context_t *ct, int flags)
+    caller_context_t *ct, int flags)
 {
 	struct inode *ip = VTOI(vp);
 	struct ufsvfs *ufsvfsp = ip->i_ufsvfs;
@@ -3887,13 +3784,8 @@ out:
 
 /* ARGSUSED */
 static int
-ufs_readdir(
-	struct vnode *vp,
-	struct uio *uiop,
-	struct cred *cr,
-	int *eofp,
-	caller_context_t *ct,
-	int flags)
+ufs_readdir(struct vnode *vp, struct uio *uiop, struct cred *cr, int *eofp,
+    caller_context_t *ct, int flags)
 {
 	struct iovec *iovp;
 	struct inode *ip;
@@ -4096,14 +3988,8 @@ out:
 
 /*ARGSUSED*/
 static int
-ufs_symlink(
-	struct vnode *dvp,		/* ptr to parent dir vnode */
-	char *linkname,			/* name of symbolic link */
-	struct vattr *vap,		/* attributes */
-	char *target,			/* target path */
-	struct cred *cr,		/* user credentials */
-	caller_context_t *ct,
-	int flags)
+ufs_symlink(struct vnode *dvp, char *linkname, struct vattr *vap, char *target,
+    struct cred *cr, caller_context_t *ct, int flags)
 {
 	struct inode *ip, *dip = VTOI(dvp);
 	struct ufsvfs *ufsvfsp = dip->i_ufsvfs;
@@ -4286,8 +4172,8 @@ out:
  */
 int
 ufs_rdwri(enum uio_rw rw, int ioflag, struct inode *ip, caddr_t base,
-	ssize_t len, offset_t offset, enum uio_seg seg, int *aresid,
-	struct cred *cr)
+    ssize_t len, offset_t offset, enum uio_seg seg, int *aresid,
+    struct cred *cr)
 {
 	struct uio auio;
 	struct iovec aiov;
@@ -4419,8 +4305,7 @@ ufs_rwunlock(struct vnode *vp, int write_lock, caller_context_t *ctp)
 
 /* ARGSUSED */
 static int
-ufs_seek(struct vnode *vp, offset_t ooff, offset_t *noffp,
-	caller_context_t *ct)
+ufs_seek(struct vnode *vp, offset_t ooff, offset_t *noffp, caller_context_t *ct)
 {
 	return ((*noffp < 0 || *noffp > MAXOFFSET_T) ? EINVAL : 0);
 }
@@ -4428,8 +4313,8 @@ ufs_seek(struct vnode *vp, offset_t ooff, offset_t *noffp,
 /* ARGSUSED */
 static int
 ufs_frlock(struct vnode *vp, int cmd, struct flock64 *bfp, int flag,
-	offset_t offset, struct flk_callback *flk_cbp, struct cred *cr,
-	caller_context_t *ct)
+    offset_t offset, struct flk_callback *flk_cbp, struct cred *cr,
+    caller_context_t *ct)
 {
 	struct inode *ip = VTOI(vp);
 
@@ -4451,7 +4336,7 @@ ufs_frlock(struct vnode *vp, int cmd, struct flock64 *bfp, int flag,
 /* ARGSUSED */
 static int
 ufs_space(struct vnode *vp, int cmd, struct flock64 *bfp, int flag,
-	offset_t offset, cred_t *cr, caller_context_t *ct)
+    offset_t offset, cred_t *cr, caller_context_t *ct)
 {
 	struct ufsvfs *ufsvfsp = VTOI(vp)->i_ufsvfs;
 	struct ulockfs *ulp;
@@ -4513,20 +4398,20 @@ ufs_space(struct vnode *vp, int cmd, struct flock64 *bfp, int flag,
 /*ARGSUSED*/
 static int
 ufs_getpage(struct vnode *vp, offset_t off, size_t len, uint_t *protp,
-	page_t *plarr[], size_t plsz, struct seg *seg, caddr_t addr,
-	enum seg_rw rw, struct cred *cr, caller_context_t *ct)
+    page_t *plarr[], size_t plsz, struct seg *seg, caddr_t addr,
+    enum seg_rw rw, struct cred *cr, caller_context_t *ct)
 {
 	u_offset_t	uoff = (u_offset_t)off; /* type conversion */
 	u_offset_t	pgoff;
 	u_offset_t	eoff;
-	struct inode 	*ip = VTOI(vp);
+	struct inode	*ip = VTOI(vp);
 	struct ufsvfs	*ufsvfsp = ip->i_ufsvfs;
-	struct fs 	*fs;
+	struct fs	*fs;
 	struct ulockfs	*ulp;
 	page_t		**pl;
 	caddr_t		pgaddr;
 	krw_t		rwtype;
-	int 		err;
+	int		err;
 	int		has_holes;
 	int		beyond_eof;
 	int		seqmode;
@@ -4877,7 +4762,7 @@ out:
 /* ARGSUSED */
 static int
 ufs_getpage_miss(struct vnode *vp, u_offset_t off, size_t len, struct seg *seg,
-	caddr_t addr, page_t *pl[], size_t plsz, enum seg_rw rw, int seq)
+    caddr_t addr, page_t *pl[], size_t plsz, enum seg_rw rw, int seq)
 {
 	struct inode	*ip = VTOI(vp);
 	page_t		*pp;
@@ -5095,7 +4980,7 @@ int	ufs_delay = 1;
 /*ARGSUSED*/
 static int
 ufs_putpage(struct vnode *vp, offset_t off, size_t len, int flags,
-	struct cred *cr, caller_context_t *ct)
+    struct cred *cr, caller_context_t *ct)
 {
 	struct inode *ip = VTOI(vp);
 	int err = 0;
@@ -5177,12 +5062,8 @@ errout:
  */
 /*ARGSUSED*/
 static int
-ufs_putpages(
-	struct vnode *vp,
-	offset_t off,
-	size_t len,
-	int flags,
-	struct cred *cr)
+ufs_putpages(struct vnode *vp, offset_t off, size_t len, int flags,
+    struct cred *cr)
 {
 	u_offset_t io_off;
 	u_offset_t eoff;
@@ -5320,7 +5201,7 @@ ufs_putpages(
 	return (err);
 }
 
-static void
+static int
 ufs_iodone(buf_t *bp)
 {
 	struct inode *ip;
@@ -5342,6 +5223,7 @@ ufs_iodone(buf_t *bp)
 
 	mutex_exit(&ip->i_tlock);
 	iodone(bp);
+	return (0);
 }
 
 /*
@@ -5352,13 +5234,8 @@ ufs_iodone(buf_t *bp)
  */
 /*ARGSUSED*/
 int
-ufs_putapage(
-	struct vnode *vp,
-	page_t *pp,
-	u_offset_t *offp,
-	size_t *lenp,		/* return values */
-	int flags,
-	struct cred *cr)
+ufs_putapage(struct vnode *vp, page_t *pp, u_offset_t *offp, size_t *lenp,
+    int flags, struct cred *cr)
 {
 	u_offset_t io_off;
 	u_offset_t off;
@@ -5426,7 +5303,7 @@ ufs_putapage(
 		}
 		/*
 		 * If the pager is trying to push a page in the bad range
-		 * just tell him to try again later when things are better.
+		 * just tell it to try again later when things are better.
 		 */
 		if (flags & B_ASYNC) {
 			err = EAGAIN;
@@ -5538,7 +5415,7 @@ ufs_putapage(
 	/* write throttle */
 
 	ASSERT(bp->b_iodone == NULL);
-	bp->b_iodone = (int (*)())ufs_iodone;
+	bp->b_iodone = ufs_iodone;
 	mutex_enter(&ip->i_tlock);
 	ip->i_writes += bp->b_bcount;
 	mutex_exit(&ip->i_tlock);
@@ -5589,16 +5466,9 @@ uint64_t ufs_map_lockfs_retry_cnt;
 
 /* ARGSUSED */
 static int
-ufs_map(struct vnode *vp,
-	offset_t off,
-	struct as *as,
-	caddr_t *addrp,
-	size_t len,
-	uchar_t prot,
-	uchar_t maxprot,
-	uint_t flags,
-	struct cred *cr,
-	caller_context_t *ct)
+ufs_map(struct vnode *vp, offset_t off, struct as *as, caddr_t *addrp,
+    size_t len, uchar_t prot, uchar_t maxprot, uint_t flags, struct cred *cr,
+    caller_context_t *ct)
 {
 	struct segvn_crargs vn_a;
 	struct ufsvfs *ufsvfsp = VTOI(vp)->i_ufsvfs;
@@ -5653,7 +5523,7 @@ retry_map:
 	 * deadlock between ufs_read/ufs_map/pagefault when a quiesce is
 	 * pending.
 	 */
-	while (!AS_LOCK_TRYENTER(as, &as->a_lock, RW_WRITER)) {
+	while (!AS_LOCK_TRYENTER(as, RW_WRITER)) {
 		ufs_map_alock_retry_cnt++;
 		delay(RETRY_LOCK_DELAY);
 	}
@@ -5669,7 +5539,7 @@ retry_map:
 		 * as->a_lock and wait for ulp->ul_fs_lock status to change.
 		 */
 		ufs_map_lockfs_retry_cnt++;
-		AS_LOCK_EXIT(as, &as->a_lock);
+		AS_LOCK_EXIT(as);
 		as_rangeunlock(as);
 		if (error == EIO)
 			goto out;
@@ -5714,16 +5584,9 @@ out:
 
 /* ARGSUSED */
 static int
-ufs_addmap(struct vnode *vp,
-	offset_t off,
-	struct as *as,
-	caddr_t addr,
-	size_t	len,
-	uchar_t  prot,
-	uchar_t  maxprot,
-	uint_t    flags,
-	struct cred *cr,
-	caller_context_t *ct)
+ufs_addmap(struct vnode *vp, offset_t off, struct as *as, caddr_t addr,
+    size_t len, uchar_t  prot, uchar_t  maxprot, uint_t    flags,
+    struct cred *cr, caller_context_t *ct)
 {
 	struct inode *ip = VTOI(vp);
 
@@ -5740,8 +5603,8 @@ ufs_addmap(struct vnode *vp,
 /*ARGSUSED*/
 static int
 ufs_delmap(struct vnode *vp, offset_t off, struct as *as, caddr_t addr,
-	size_t len, uint_t prot,  uint_t maxprot,  uint_t flags,
-	struct cred *cr, caller_context_t *ct)
+    size_t len, uint_t prot,  uint_t maxprot,  uint_t flags, struct cred *cr,
+    caller_context_t *ct)
 {
 	struct inode *ip = VTOI(vp);
 
@@ -5750,7 +5613,7 @@ ufs_delmap(struct vnode *vp, offset_t off, struct as *as, caddr_t addr,
 	}
 
 	mutex_enter(&ip->i_tlock);
-	ip->i_mapcnt -= btopr(len); 	/* Count released mappings */
+	ip->i_mapcnt -= btopr(len);	/* Count released mappings */
 	ASSERT(ip->i_mapcnt >= 0);
 	mutex_exit(&ip->i_tlock);
 	return (0);
@@ -5763,9 +5626,17 @@ struct pollhead ufs_pollhd;
 /* ARGSUSED */
 int
 ufs_poll(vnode_t *vp, short ev, int any, short *revp, struct pollhead **phpp,
-	caller_context_t *ct)
+    caller_context_t *ct)
 {
 	struct ufsvfs	*ufsvfsp;
+
+	/*
+	 * Regular files reject epollers (and edge-triggered pollers).
+	 * See the comment in fs_poll() for a more detailed explanation.
+	 */
+	if (fs_reject_epoll() || (ev & POLLET) != 0) {
+		return (EPERM);
+	}
 
 	*revp = 0;
 	ufsvfsp = VTOI(vp)->i_ufsvfs;
@@ -5801,7 +5672,9 @@ ufs_poll(vnode_t *vp, short ev, int any, short *revp, struct pollhead **phpp,
 	if ((ev & POLLPRI) && (*revp & (POLLERR|POLLHUP)))
 		*revp |= POLLPRI;
 out:
-	*phpp = !any && !*revp ? &ufs_pollhd : (struct pollhead *)NULL;
+	if (*revp == 0 && ! any) {
+		*phpp = &ufs_pollhd;
+	}
 
 	return (0);
 }
@@ -5809,13 +5682,13 @@ out:
 /* ARGSUSED */
 static int
 ufs_l_pathconf(struct vnode *vp, int cmd, ulong_t *valp, struct cred *cr,
-	caller_context_t *ct)
+    caller_context_t *ct)
 {
 	struct ufsvfs	*ufsvfsp = VTOI(vp)->i_ufsvfs;
 	struct ulockfs	*ulp = NULL;
-	struct inode 	*sip = NULL;
+	struct inode	*sip = NULL;
 	int		error;
-	struct inode 	*ip = VTOI(vp);
+	struct inode	*ip = VTOI(vp);
 	int		issync;
 
 	error = ufs_lockfs_begin(ufsvfsp, &ulp, ULOCKFS_PATHCONF_MASK);
@@ -5923,7 +5796,7 @@ int ufs_pageio_writes, ufs_pageio_reads;
 /*ARGSUSED*/
 static int
 ufs_pageio(struct vnode *vp, page_t *pp, u_offset_t io_off, size_t io_len,
-	int flags, struct cred *cr, caller_context_t *ct)
+    int flags, struct cred *cr, caller_context_t *ct)
 {
 	struct inode *ip = VTOI(vp);
 	struct ufsvfs *ufsvfsp;
@@ -6404,7 +6277,7 @@ save_dblks(struct inode *ip, struct ufsvfs *ufsvfsp,  daddr32_t *storeblk,
 /* ARGSUSED */
 static int
 ufs_getsecattr(struct vnode *vp, vsecattr_t *vsap, int flag,
-	struct cred *cr, caller_context_t *ct)
+    struct cred *cr, caller_context_t *ct)
 {
 	struct inode	*ip = VTOI(vp);
 	struct ulockfs	*ulp;
@@ -6436,7 +6309,7 @@ ufs_getsecattr(struct vnode *vp, vsecattr_t *vsap, int flag,
 /* ARGSUSED */
 static int
 ufs_setsecattr(struct vnode *vp, vsecattr_t *vsap, int flag, struct cred *cr,
-	caller_context_t *ct)
+    caller_context_t *ct)
 {
 	struct inode	*ip = VTOI(vp);
 	struct ulockfs	*ulp = NULL;

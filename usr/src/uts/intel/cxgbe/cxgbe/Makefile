@@ -28,7 +28,6 @@ UTSBASE = ../../..
 #
 MODULE		= cxgbe
 OBJECTS		= $(CXGBE_OBJS:%=$(OBJS_DIR)/%)
-LINTS		= $(CXGBE_OBJS:%.o=$(LINTS_DIR)/%.ln)
 ROOTMODULE	= $(ROOT_DRV_DIR)/$(MODULE)
 
 #
@@ -40,24 +39,15 @@ include $(UTSBASE)/intel/Makefile.intel
 # Define targets
 #
 ALL_TARGET = $(BINARY)
-LINT_TARGET = $(MODULE).lint
 INSTALL_TARGET = $(BINARY) $(ROOTMODULE)
 
-CFLAGS += -g -I$(UTSBASE)/common/io/cxgbe -I$(UTSBASE)/common/io/cxgbe/common \
+CFLAGS += -I$(UTSBASE)/common/io/cxgbe -I$(UTSBASE)/common/io/cxgbe/common \
 	-I$(UTSBASE)/common/io/cxgbe/t4nex -I$(UTSBASE)/common/io/cxgbe/shared
-CFLAGS += -xc99=%all
 
 #
 # Driver depends
 #
 LDFLAGS += -dy -N misc/mac -N drv/ip
-
-#
-# Lint
-#
-LINTFLAGS += -I$(UTSBASE)/common/io/cxgbe -I$(UTSBASE)/common/io/cxgbe/common \
-	-I$(UTSBASE)/common/io/cxgbe/t4nex -I$(UTSBASE)/common/io/cxgbe/shared
-LINTFLAGS += -Xc99=%all
 
 #
 # Default build targets.
@@ -71,12 +61,6 @@ all:		$(ALL_DEPS)
 clean:		$(CLEAN_DEPS)
 
 clobber:	$(CLOBBER_DEPS)
-
-lint:		$(LINT_DEPS)
-
-modlintlib:	$(MODLINTLIB_DEPS)
-
-clean.lint:	$(CLEAN_LINT_DEPS)
 
 install:	$(INSTALL_DEPS)
 

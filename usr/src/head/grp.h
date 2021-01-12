@@ -20,7 +20,7 @@
  * CDDL HEADER END
  */
 /*	Copyright (c) 1988 AT&T	*/
-/*	  All Rights Reserved  	*/
+/*	  All Rights Reserved	*/
 
 
 /*
@@ -28,6 +28,8 @@
  *
  * Copyright 2004 Sun Microsystems, Inc.  All rights reserved.
  * Use is subject to license terms.
+ *
+ * Copyright 2020 Joyent, Inc.
  */
 
 #ifndef _GRP_H
@@ -62,6 +64,7 @@ extern struct group *fgetgrent_r(FILE *, struct group *, char *, int);
 
 extern struct group *fgetgrent(FILE *);		/* MT-unsafe */
 extern int initgroups(const char *, gid_t);
+extern int getgrouplist(const char *, gid_t, gid_t *, int *);
 #endif /* defined(__EXTENSIONS__) || !defined(__XOPEN_OR_POSIX) */
 
 #if defined(__EXTENSIONS__) || !defined(__XOPEN_OR_POSIX) || defined(_XPG4_2)
@@ -114,9 +117,10 @@ extern struct group *getgrent(void);		/* MT-unsafe */
 #ifdef __PRAGMA_REDEFINE_EXTNAME
 #pragma redefine_extname getgrgid_r __posix_getgrgid_r
 #pragma redefine_extname getgrnam_r __posix_getgrnam_r
-extern int getgrgid_r(gid_t, struct group *, char *, int, struct group **);
-extern int getgrnam_r(const char *, struct group *, char *, int,
-							struct group **);
+extern int getgrgid_r(gid_t, struct group *, char *,
+    size_t, struct group **);
+extern int getgrnam_r(const char *, struct group *, char *,
+    size_t, struct group **);
 #else  /* __PRAGMA_REDEFINE_EXTNAME */
 
 extern int __posix_getgrgid_r(gid_t, struct group *, char *, size_t,
@@ -124,27 +128,19 @@ extern int __posix_getgrgid_r(gid_t, struct group *, char *, size_t,
 extern int __posix_getgrnam_r(const char *, struct group *, char *, size_t,
     struct group **);
 
-#ifdef __lint
-
-#define	getgrgid_r __posix_getgrgid_r
-#define	getgrnam_r __posix_getgrnam_r
-
-#else	/* !__lint */
-
 static int
-getgrgid_r(gid_t __gid, struct group *__grp, char *__buf, int __len,
+getgrgid_r(gid_t __gid, struct group *__grp, char *__buf, size_t __len,
     struct group **__res)
 {
 	return (__posix_getgrgid_r(__gid, __grp, __buf, __len, __res));
 }
 static int
-getgrnam_r(const char *__cb, struct group *__grp, char *__buf, int __len,
+getgrnam_r(const char *__cb, struct group *__grp, char *__buf, size_t __len,
     struct group **__res)
 {
 	return (__posix_getgrnam_r(__cb, __grp, __buf, __len, __res));
 }
 
-#endif /* !__lint */
 #endif /* __PRAGMA_REDEFINE_EXTNAME */
 
 #else  /* (_POSIX_C_SOURCE - 0 >= 199506L) || ... */

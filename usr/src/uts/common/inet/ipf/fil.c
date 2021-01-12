@@ -4,6 +4,8 @@
  * See the IPFILTER.LICENCE file for details on licencing.
  *
  * Copyright (c) 2003, 2010, Oracle and/or its affiliates. All rights reserved.
+ *
+ * Copyright (c) 2014, Joyent, Inc.  All rights reserved.
  */
 
 #if defined(KERNEL) || defined(_KERNEL)
@@ -101,7 +103,8 @@ struct file;
 #include "netinet/ip_compat.h"
 #ifdef	USE_INET6
 # include <netinet/icmp6.h>
-# if !SOLARIS && defined(_KERNEL) && !defined(__osf__) && !defined(__hpux)
+# if !defined(SOLARIS) && defined(_KERNEL) && !defined(__osf__) && \
+	!defined(__hpux)
 #  include <netinet6/in6_var.h>
 # endif
 #endif
@@ -134,6 +137,9 @@ struct file;
 # endif
 #endif
 #include "netinet/ipl.h"
+#if defined(_KERNEL)
+#include <sys/sunddi.h>
+#endif
 /* END OF INCLUDES */
 
 #if !defined(lint)
@@ -4072,7 +4078,7 @@ size_t size;
 	caddr_t ca;
 	int err;
 
-# if SOLARIS
+# ifdef SOLARIS
 	err = COPYIN(src, (caddr_t)&ca, sizeof(ca));
 	if (err != 0)
 		return err;
@@ -4102,7 +4108,7 @@ size_t size;
 	caddr_t ca;
 	int err;
 
-# if SOLARIS
+# ifdef SOLARIS
 	err = COPYIN(dst, (caddr_t)&ca, sizeof(ca));
 	if (err != 0)
 		return err;
@@ -5696,6 +5702,54 @@ static	int	fr_objbytes[NUM_OBJ_TYPES][2] = {
 
 
 /* ------------------------------------------------------------------------ */
+/* Function:    fr_getzoneid                                                */
+/* Returns:     int     - 0 = success, else failure                         */
+/* Parameters:  idsp(I) - pointer to ipf_devstate_t                         */
+/*              data(I) - pointer to ioctl data                             */
+/*                                                                          */
+/* Set the zone ID in idsp based on the zone name in ipfzoneobj.  Further   */
+/* ioctls will act on the IPF stack for that zone ID.                       */
+/* ------------------------------------------------------------------------ */
+#if defined(_KERNEL)
+int fr_setzoneid(idsp, data)
+ipf_devstate_t *idsp;
+void *data;
+{
+	int error = 0;
+	ipfzoneobj_t ipfzo;
+	zone_t *zone;
+
+	error = BCOPYIN(data, &ipfzo, sizeof(ipfzo));
+	if (error != 0)
+		return EFAULT;
+
+	if (memchr(ipfzo.ipfz_zonename, '\0', ZONENAME_MAX) == NULL)
+		return EFAULT;
+
+	/*
+	 * The global zone doesn't have a GZ-controlled stack, so no
+	 * sense in going any further
+	 */
+	if (strcmp(ipfzo.ipfz_zonename, "global") == 0)
+		return ENODEV;
+
+	if ((zone = zone_find_by_name(ipfzo.ipfz_zonename)) == NULL)
+		return ENODEV;
+
+	/*
+	 * Store the zone ID that to control, and whether it's the
+	 * GZ-controlled stack that's wanted
+	 */
+	idsp->ipfs_zoneid = zone->zone_id;
+	idsp->ipfs_gz = (ipfzo.ipfz_gz == 1) ? B_TRUE : B_FALSE;
+	zone_rele(zone);
+
+	return error;
+}
+#endif
+
+
+/* ------------------------------------------------------------------------ */
 /* Function:    fr_inobj                                                    */
 /* Returns:     int     - 0 = success, else failure                         */
 /* Parameters:  data(I) - pointer to ioctl data                             */
@@ -5924,7 +5978,7 @@ fr_info_t *fin;
 	int dosum;
 	ipf_stack_t *ifs = fin->fin_ifs;
 
-#if SOLARIS && defined(_KERNEL) && (SOLARIS2 >= 6)
+#if defined(SOLARIS) && defined(_KERNEL) && (SOLARIS2 >= 6)
 	net_handle_t net_data_p;
 	if (fin->fin_v == 4)
 		net_data_p = ifs->ifs_ipf_ipv4;
@@ -5948,7 +6002,7 @@ fr_info_t *fin;
 	dosum = 0;
 	sum = 0;
 
-#if SOLARIS && defined(_KERNEL) && (SOLARIS2 >= 6)
+#if defined(SOLARIS) && defined(_KERNEL) && (SOLARIS2 >= 6)
 	ASSERT(fin->fin_m != NULL);
 	if (NET_IS_HCK_L4_FULL(net_data_p, fin->fin_m) ||
 	    NET_IS_HCK_L4_PART(net_data_p, fin->fin_m)) {
@@ -5987,7 +6041,7 @@ fr_info_t *fin;
 		if (dosum)
 			sum = fr_cksum(fin->fin_m, fin->fin_ip,
 				       fin->fin_p, fin->fin_dp);
-#if SOLARIS && defined(_KERNEL) && (SOLARIS2 >= 6)
+#if defined(SOLARIS) && defined(_KERNEL) && (SOLARIS2 >= 6)
 	}
 #endif
 #if !defined(_KERNEL)

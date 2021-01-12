@@ -22,6 +22,7 @@
 #
 # Copyright (c) 2010, Oracle and/or its affiliates. All rights reserved.
 # Copyright 2012 Nexenta Systems, Inc. All rights reserved.
+# Copyright 2019 OmniOS Community Edition (OmniOSce) Association.
 #
 
 set name=pkg.fmri value=pkg:/storage/stmf@$(PKGVERS)
@@ -67,20 +68,13 @@ file path=kernel/drv/$(ARCH64)/pppt group=sys
 file path=kernel/drv/$(ARCH64)/qlt group=sys
 file path=kernel/drv/$(ARCH64)/stmf group=sys
 file path=kernel/drv/$(ARCH64)/stmf_sbd group=sys
-$(i386_ONLY)file path=kernel/drv/fct group=sys
 file path=kernel/drv/fct.conf group=sys
-$(i386_ONLY)file path=kernel/drv/pppt group=sys
 file path=kernel/drv/pppt.conf group=sys
-$(i386_ONLY)file path=kernel/drv/qlt group=sys
 file path=kernel/drv/qlt.conf group=sys
-$(i386_ONLY)file path=kernel/drv/stmf group=sys
 file path=kernel/drv/stmf.conf group=sys
-$(i386_ONLY)file path=kernel/drv/stmf_sbd group=sys
 file path=kernel/drv/stmf_sbd.conf group=sys
 file path=kernel/kmdb/$(ARCH64)/stmf group=sys mode=0555
 file path=kernel/kmdb/$(ARCH64)/stmf_sbd group=sys mode=0555
-$(i386_ONLY)file path=kernel/kmdb/stmf group=sys mode=0555
-$(i386_ONLY)file path=kernel/kmdb/stmf_sbd group=sys mode=0555
 file path=lib/svc/manifest/system/stmf.xml group=sys mode=0444 \
     variant.opensolaris.zone=global
 file path=lib/svc/method/svc-stmf mode=0555 variant.opensolaris.zone=global
@@ -99,15 +93,10 @@ file path=usr/include/sys/stmf_defines.h
 file path=usr/include/sys/stmf_ioctl.h
 file path=usr/lib/$(ARCH64)/libstmf.so.1
 file path=usr/lib/$(ARCH64)/libstmfproxy.so.1
-file path=usr/lib/$(ARCH64)/llib-lstmf.ln
 file path=usr/lib/libstmf.so.1
 file path=usr/lib/libstmfproxy.so.1
-file path=usr/lib/llib-lstmf
-file path=usr/lib/llib-lstmf.ln
 file path=usr/lib/mdb/kvm/$(ARCH64)/stmf.so group=sys mode=0555
 file path=usr/lib/mdb/kvm/$(ARCH64)/stmf_sbd.so group=sys mode=0555
-$(i386_ONLY)file path=usr/lib/mdb/kvm/stmf.so group=sys mode=0555
-$(i386_ONLY)file path=usr/lib/mdb/kvm/stmf_sbd.so group=sys mode=0555
 file path=usr/sbin/sbdadm mode=0555
 file path=usr/sbin/stmfadm mode=0555
 file path=usr/share/man/man1m/sbdadm.1m

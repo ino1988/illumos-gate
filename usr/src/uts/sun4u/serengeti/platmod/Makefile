@@ -41,7 +41,6 @@ UTSBASE = ../../..
 #
 MODULE		= platmod
 OBJECTS		= $(SERENGETI_OBJS:%=$(OBJS_DIR)/%)
-LINTS		= $(SERENGETI_OBJS:%.o=$(LINTS_DIR)/%.ln)
 ROOTMODULE	= $(ROOT_SERENGETI_MISC_DIR)/$(MODULE)
 
 PLAT_DIR	= .
@@ -61,7 +60,6 @@ CLEANFILES	+= $(PLATLIB) $(SYM_MOD)
 #	Define targets
 #
 ALL_TARGET	= $(SYM_MOD)
-LINT_TARGET	= $(MODULE).lint
 INSTALL_TARGET	= $(BINARY) $(ROOTMODULE)
 
 #
@@ -69,14 +67,15 @@ INSTALL_TARGET	= $(BINARY) $(ROOTMODULE)
 #
 ALL_BUILDS	= $(ALL_BUILDSONLY64)
 DEF_BUILDS	= $(DEF_BUILDSONLY64)
-CLEANLINTFILES	+= $(LINT32_FILES)
 
 #
-# lint pass one enforcement
+# For now, disable these warnings; maintainers should endeavor
+# to investigate and remove these for maximum coverage.
+# Please do not carry these forward to new Makefiles.
 #
 CFLAGS += $(CCVERBOSE)
 CERRWARN += -_gcc=-Wno-unused-variable
-CERRWARN += -_gcc=-Wno-uninitialized
+CERRWARN += $(CNOWARN_UNINIT)
 
 #
 #	Default build targets.
@@ -91,20 +90,13 @@ clean:		$(CLEAN_DEPS)
 
 clobber:	$(CLOBBER_DEPS)
 
-lint:		$(LINT_DEPS)
-
-modlintlib:	$(MODLINTLIB_DEPS)
-
-clean.lint:	$(CLEAN_LINT_DEPS)
-
 install:	$(INSTALL_DEPS)
 
 check:
 
-LINT_LIB_DIR	=$(SERENGETI_LINT_LIB_DIR)
 
-$(PLATLIB):	$(BINARY)
-	$(BUILD.SO) $(BINARY)
+$(PLATLIB):	$(OBJECTS)
+	$(BUILD.SO) $(OBJECTS)
 
 $(SYM_MOD):	$(UNIX_O) $(PLATLIB)
 	@echo "resolving symbols against unix.o"

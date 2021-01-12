@@ -39,7 +39,7 @@ include ../../Makefile.lib
 
 GREP= find . \( -name SCCS -prune -o -name '*.[ch]' \) -print | sort | xargs grep
 
-sparcv9_C_PICFLAGS =  -K PIC
+sparcv9_C_PICFLAGS =  $(sparcv9_C_BIGPICFLAGS)
 TEXT_DOMAIN = SUNW_OST_NETRPC
 POFILE = mech_krb5.po
 POFILES = generic.po
@@ -55,11 +55,10 @@ all :=          TARGET= all
 clean :=        TARGET= clean
 clobber :=      TARGET= clobber
 install :=      TARGET= install
-lint :=         TARGET= lint
 
 .KEEP_STATE:
 
-all clean lint:    $(SUBDIRS)
+all clean:    $(SUBDIRS)
 
 install: install_dir all .WAIT $(SUBDIRS)
 

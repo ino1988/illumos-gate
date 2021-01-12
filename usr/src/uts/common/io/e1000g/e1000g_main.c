@@ -25,7 +25,7 @@
 /*
  * Copyright 2012 DEY Storage Systems, Inc.  All rights reserved.
  * Copyright 2013 Nexenta Systems, Inc.  All rights reserved.
- * Copyright (c) 2014, Joyent, Inc.  All rights reserved.
+ * Copyright (c) 2018, Joyent, Inc.
  */
 
 /*
@@ -65,8 +65,8 @@ static int e1000g_quiesce(dev_info_t *);
  */
 static int e1000g_resume(dev_info_t *);
 static int e1000g_suspend(dev_info_t *);
-static uint_t e1000g_intr_pciexpress(caddr_t);
-static uint_t e1000g_intr(caddr_t);
+static uint_t e1000g_intr_pciexpress(caddr_t, caddr_t);
+static uint_t e1000g_intr(caddr_t, caddr_t);
 static void e1000g_intr_work(struct e1000g *, uint32_t);
 #pragma inline(e1000g_intr_work)
 static int e1000g_init(struct e1000g *);
@@ -494,6 +494,11 @@ e1000g_attach(dev_info_t *devinfo, ddi_attach_cmd_t cmd)
 	}
 
 	/*
+	 * Disable ULP support
+	 */
+	(void) e1000_disable_ulp_lpt_lp(hw, TRUE);
+
+	/*
 	 * Initialize interrupts
 	 */
 	if (e1000g_add_intrs(Adapter) != DDI_SUCCESS) {
@@ -705,6 +710,19 @@ e1000g_regs_map(struct e1000g *Adapter)
 			goto regs_map_fail;
 		}
 		break;
+	case e1000_pch_spt:
+	case e1000_pch_cnp:
+	case e1000_pch_tgp:
+		/*
+		 * On the SPT, the device flash is actually in BAR0, not a
+		 * separate BAR. Therefore we end up setting the
+		 * ich_flash_handle to be the same as the register handle.
+		 * We mark the same to reduce the confusion in the other
+		 * functions and macros. Though this does make the set up and
+		 * tear-down path slightly more complicated.
+		 */
+		osdep->ich_flash_handle = osdep->reg_handle;
+		hw->flash_address = hw->hw_addr;
 	default:
 		break;
 	}
@@ -764,7 +782,7 @@ e1000g_regs_map(struct e1000g *Adapter)
 regs_map_fail:
 	if (osdep->reg_handle != NULL)
 		ddi_regs_map_free(&osdep->reg_handle);
-	if (osdep->ich_flash_handle != NULL)
+	if (osdep->ich_flash_handle != NULL && hw->mac.type < e1000_pch_spt)
 		ddi_regs_map_free(&osdep->ich_flash_handle);
 	return (DDI_FAILURE);
 }
@@ -892,6 +910,9 @@ e1000g_setup_max_mtu(struct e1000g *Adapter)
 	/* pch2 can do jumbo frames up to 9K */
 	case e1000_pch2lan:
 	case e1000_pch_lpt:
+	case e1000_pch_spt:
+	case e1000_pch_cnp:
+	case e1000_pch_tgp:
 		Adapter->max_mtu = MAXIMUM_MTU_9K;
 		break;
 	/* types with a special limit */
@@ -1086,6 +1107,11 @@ e1000g_unattach(dev_info_t *devinfo, struct e1000g *Adapter)
 	private_devi_list_t *devi_node;
 	int result;
 
+	if (Adapter->e1000g_blink != NULL) {
+		ddi_periodic_delete(Adapter->e1000g_blink);
+		Adapter->e1000g_blink = NULL;
+	}
+
 	if (Adapter->attach_progress & ATTACH_PROGRESS_ENABLE_INTR) {
 		(void) e1000g_disable_intrs(Adapter);
 	}
@@ -1124,7 +1150,8 @@ e1000g_unattach(dev_info_t *devinfo, struct e1000g *Adapter)
 	if (Adapter->attach_progress & ATTACH_PROGRESS_REGS_MAP) {
 		if (Adapter->osdep.reg_handle != NULL)
 			ddi_regs_map_free(&Adapter->osdep.reg_handle);
-		if (Adapter->osdep.ich_flash_handle != NULL)
+		if (Adapter->osdep.ich_flash_handle != NULL &&
+		    Adapter->shared.mac.type < e1000_pch_spt)
 			ddi_regs_map_free(&Adapter->osdep.ich_flash_handle);
 		if (Adapter->osdep.io_reg_handle != NULL)
 			ddi_regs_map_free(&Adapter->osdep.io_reg_handle);
@@ -1247,6 +1274,9 @@ e1000g_init_locks(struct e1000g *Adapter)
 
 	mutex_init(&rx_ring->rx_lock, NULL,
 	    MUTEX_DRIVER, DDI_INTR_PRI(Adapter->intr_pri));
+
+	mutex_init(&Adapter->e1000g_led_lock, NULL,
+	    MUTEX_DRIVER, DDI_INTR_PRI(Adapter->intr_pri));
 }
 
 static void
@@ -1254,6 +1284,8 @@ e1000g_destroy_locks(struct e1000g *Adapter)
 {
 	e1000g_tx_ring_t *tx_ring;
 	e1000g_rx_ring_t *rx_ring;
+
+	mutex_destroy(&Adapter->e1000g_led_lock);
 
 	tx_ring = Adapter->tx_ring;
 	mutex_destroy(&tx_ring->tx_lock);
@@ -1455,6 +1487,12 @@ e1000g_init(struct e1000g *Adapter)
 	} else if (hw->mac.type == e1000_pch2lan) {
 		pba = E1000_PBA_26K;
 	} else if (hw->mac.type == e1000_pch_lpt) {
+		pba = E1000_PBA_26K;
+	} else if (hw->mac.type == e1000_pch_spt) {
+		pba = E1000_PBA_26K;
+	} else if (hw->mac.type == e1000_pch_cnp) {
+		pba = E1000_PBA_26K;
+	} else if (hw->mac.type == e1000_pch_tgp) {
 		pba = E1000_PBA_26K;
 	} else {
 		/*
@@ -1681,6 +1719,12 @@ e1000g_link_up(struct e1000g *Adapter)
 	switch (hw->phy.media_type) {
 	case e1000_media_type_copper:
 		if (hw->mac.get_link_status) {
+			/*
+			 * SPT and newer devices need a bit of extra time before
+			 * we ask them.
+			 */
+			if (hw->mac.type >= e1000_pch_spt)
+				msec_delay(50);
 			(void) e1000_check_for_link(hw);
 			if ((E1000_READ_REG(hw, E1000_STATUS) &
 			    E1000_STATUS_LU)) {
@@ -1826,7 +1870,7 @@ static mblk_t *e1000g_poll_ring(void *arg, int bytes_to_pickup)
 	e1000g_rx_ring_t	*rx_ring = (e1000g_rx_ring_t *)arg;
 	mblk_t			*mp = NULL;
 	mblk_t			*tail;
-	struct e1000g 		*adapter;
+	struct e1000g		*adapter;
 
 	adapter = rx_ring->adapter;
 
@@ -1937,6 +1981,41 @@ start_fail:
 	return (DDI_FAILURE);
 }
 
+/*
+ * The I219 has the curious property that if the descriptor rings are not
+ * emptied before resetting the hardware or before changing the device state
+ * based on runtime power management, it'll cause the card to hang. This can
+ * then only be fixed by a PCI reset. As such, for the I219 and it alone, we
+ * have to flush the rings if we're in this state.
+ */
+static void
+e1000g_flush_desc_rings(struct e1000g *Adapter)
+{
+	struct e1000_hw	*hw = &Adapter->shared;
+	u16		hang_state;
+	u32		fext_nvm11, tdlen;
+
+	/* First, disable MULR fix in FEXTNVM11 */
+	fext_nvm11 = E1000_READ_REG(hw, E1000_FEXTNVM11);
+	fext_nvm11 |= E1000_FEXTNVM11_DISABLE_MULR_FIX;
+	E1000_WRITE_REG(hw, E1000_FEXTNVM11, fext_nvm11);
+
+	/* do nothing if we're not in faulty state, or if the queue is empty */
+	tdlen = E1000_READ_REG(hw, E1000_TDLEN(0));
+	hang_state = pci_config_get16(Adapter->osdep.cfg_handle,
+	    PCICFG_DESC_RING_STATUS);
+	if (!(hang_state & FLUSH_DESC_REQUIRED) || !tdlen)
+		return;
+	e1000g_flush_tx_ring(Adapter);
+
+	/* recheck, maybe the fault is caused by the rx ring */
+	hang_state = pci_config_get16(Adapter->osdep.cfg_handle,
+	    PCICFG_DESC_RING_STATUS);
+	if (hang_state & FLUSH_DESC_REQUIRED)
+		e1000g_flush_rx_ring(Adapter);
+
+}
+
 static void
 e1000g_m_stop(void *arg)
 {
@@ -1999,6 +2078,14 @@ e1000g_stop(struct e1000g *Adapter, boolean_t global)
 
 	/* Clean the pending rx jumbo packet fragment */
 	e1000g_rx_clean(Adapter);
+
+	/*
+	 * The I219, eg. the pch_spt, has bugs such that we must ensure that
+	 * rings are flushed before we do anything else. This must be done
+	 * before we release DMA resources.
+	 */
+	if (Adapter->shared.mac.type >= e1000_pch_spt)
+		e1000g_flush_desc_rings(Adapter);
 
 	if (global) {
 		e1000g_release_dma_resources(Adapter);
@@ -2218,7 +2305,7 @@ e1000g_global_reset(struct e1000g *Adapter)
  * bit is set.
  */
 static uint_t
-e1000g_intr_pciexpress(caddr_t arg)
+e1000g_intr_pciexpress(caddr_t arg, caddr_t arg1 __unused)
 {
 	struct e1000g *Adapter;
 	uint32_t icr;
@@ -2256,7 +2343,7 @@ e1000g_intr_pciexpress(caddr_t arg)
  * bit is set or not.
  */
 static uint_t
-e1000g_intr(caddr_t arg)
+e1000g_intr(caddr_t arg, caddr_t arg1 __unused)
 {
 	struct e1000g *Adapter;
 	uint32_t icr;
@@ -2448,16 +2535,16 @@ e1000g_init_unicst(struct e1000g *Adapter)
 
 		/*
 		 * The common code does not correctly calculate the number of
-		 * rar's that could be reserved by firmware for the pch_lpt
-		 * macs. The interface has one primary rar, and 11 additional
-		 * ones. Those 11 additional ones are not always available.
-		 * According to the datasheet, we need to check a few of the
-		 * bits set in the FWSM register. If the value is zero,
-		 * everything is available. If the value is 1, none of the
+		 * rar's that could be reserved by firmware for the pch_lpt and
+		 * pch_spt macs. The interface has one primary rar, and 11
+		 * additional ones. Those 11 additional ones are not always
+		 * available.  According to the datasheet, we need to check a
+		 * few of the bits set in the FWSM register. If the value is
+		 * zero, everything is available. If the value is 1, none of the
 		 * additional registers are available. If the value is 2-7, only
 		 * that number are available.
 		 */
-		if (hw->mac.type == e1000_pch_lpt) {
+		if (hw->mac.type >= e1000_pch_lpt) {
 			uint32_t locked, rar;
 
 			locked = E1000_READ_REG(hw, E1000_FWSM) &
@@ -2494,12 +2581,12 @@ e1000g_init_unicst(struct e1000g *Adapter)
 		/* Workaround for an erratum of 82571 chipst */
 		if ((hw->mac.type == e1000_82571) &&
 		    (e1000_get_laa_state_82571(hw) == B_TRUE))
-			e1000_rar_set(hw, hw->mac.addr, LAST_RAR_ENTRY);
+			(void) e1000_rar_set(hw, hw->mac.addr, LAST_RAR_ENTRY);
 
 		/* Re-configure the RAR registers */
 		for (slot = 0; slot < Adapter->unicst_total; slot++)
 			if (Adapter->unicst_addr[slot].mac.set == 1)
-				e1000_rar_set(hw,
+				(void) e1000_rar_set(hw,
 				    Adapter->unicst_addr[slot].mac.addr, slot);
 	}
 
@@ -2541,7 +2628,7 @@ e1000g_unicst_set(struct e1000g *Adapter, const uint8_t *mac_addr,
 	} else {
 		bcopy(mac_addr, Adapter->unicst_addr[slot].mac.addr,
 		    ETHERADDRL);
-		e1000_rar_set(hw, (uint8_t *)mac_addr, slot);
+		(void) e1000_rar_set(hw, (uint8_t *)mac_addr, slot);
 		Adapter->unicst_addr[slot].mac.set = 1;
 	}
 
@@ -2557,7 +2644,7 @@ e1000g_unicst_set(struct e1000g *Adapter, const uint8_t *mac_addr,
 				    (slot << 1) + 1, 0);
 				E1000_WRITE_FLUSH(hw);
 			} else {
-				e1000_rar_set(hw, (uint8_t *)mac_addr,
+				(void) e1000_rar_set(hw, (uint8_t *)mac_addr,
 				    LAST_RAR_ENTRY);
 			}
 	}
@@ -2832,8 +2919,8 @@ static int
 e1000g_rx_ring_intr_enable(mac_intr_handle_t intrh)
 {
 	e1000g_rx_ring_t	*rx_ring = (e1000g_rx_ring_t *)intrh;
-	struct e1000g 		*adapter = rx_ring->adapter;
-	struct e1000_hw 	*hw = &adapter->shared;
+	struct e1000g		*adapter = rx_ring->adapter;
+	struct e1000_hw		*hw = &adapter->shared;
 	uint32_t		intr_mask;
 
 	rw_enter(&adapter->chip_lock, RW_READER);
@@ -2865,8 +2952,8 @@ static int
 e1000g_rx_ring_intr_disable(mac_intr_handle_t intrh)
 {
 	e1000g_rx_ring_t	*rx_ring = (e1000g_rx_ring_t *)intrh;
-	struct e1000g 		*adapter = rx_ring->adapter;
-	struct e1000_hw 	*hw = &adapter->shared;
+	struct e1000g		*adapter = rx_ring->adapter;
+	struct e1000_hw		*hw = &adapter->shared;
 
 	rw_enter(&adapter->chip_lock, RW_READER);
 
@@ -3062,6 +3149,110 @@ e1000g_fill_group(void *arg, mac_ring_type_t rtype, const int grp_index,
 	mintr->mi_disable = e1000g_rx_group_intr_disable;
 }
 
+static void
+e1000g_led_blink(void *arg)
+{
+	e1000g_t *e1000g = arg;
+
+	mutex_enter(&e1000g->e1000g_led_lock);
+	VERIFY(e1000g->e1000g_emul_blink);
+	if (e1000g->e1000g_emul_state) {
+		(void) e1000_led_on(&e1000g->shared);
+	} else {
+		(void) e1000_led_off(&e1000g->shared);
+	}
+	e1000g->e1000g_emul_state = !e1000g->e1000g_emul_state;
+	mutex_exit(&e1000g->e1000g_led_lock);
+}
+
+static int
+e1000g_led_set(void *arg, mac_led_mode_t mode, uint_t flags)
+{
+	e1000g_t *e1000g = arg;
+
+	if (flags != 0)
+		return (EINVAL);
+
+	if (mode != MAC_LED_DEFAULT &&
+	    mode != MAC_LED_IDENT &&
+	    mode != MAC_LED_OFF &&
+	    mode != MAC_LED_ON)
+		return (ENOTSUP);
+
+	mutex_enter(&e1000g->e1000g_led_lock);
+
+	if ((mode == MAC_LED_IDENT || mode == MAC_LED_OFF ||
+	    mode == MAC_LED_ON) &&
+	    !e1000g->e1000g_led_setup) {
+		if (e1000_setup_led(&e1000g->shared) != E1000_SUCCESS) {
+			mutex_exit(&e1000g->e1000g_led_lock);
+			return (EIO);
+		}
+
+		e1000g->e1000g_led_setup = B_TRUE;
+	}
+
+	if (mode != MAC_LED_IDENT && e1000g->e1000g_blink != NULL) {
+		ddi_periodic_t id = e1000g->e1000g_blink;
+		e1000g->e1000g_blink = NULL;
+		mutex_exit(&e1000g->e1000g_led_lock);
+		ddi_periodic_delete(id);
+		mutex_enter(&e1000g->e1000g_led_lock);
+	}
+
+	switch (mode) {
+	case MAC_LED_DEFAULT:
+		if (e1000g->e1000g_led_setup) {
+			if (e1000_cleanup_led(&e1000g->shared) !=
+			    E1000_SUCCESS) {
+				mutex_exit(&e1000g->e1000g_led_lock);
+				return (EIO);
+			}
+			e1000g->e1000g_led_setup = B_FALSE;
+		}
+		break;
+	case MAC_LED_IDENT:
+		if (e1000g->e1000g_emul_blink) {
+			if (e1000g->e1000g_blink != NULL)
+				break;
+
+			/*
+			 * Note, we use a 200 ms period here as that's what
+			 * section 10.1.3 8254x Intel Manual (PCI/PCI-X Family
+			 * of Gigabit Ethernet Controllers Software Developer's
+			 * Manual) indicates that the optional blink hardware
+			 * operates at.
+			 */
+			e1000g->e1000g_blink =
+			    ddi_periodic_add(e1000g_led_blink, e1000g,
+			    200ULL * (NANOSEC / MILLISEC), DDI_IPL_0);
+		} else if (e1000_blink_led(&e1000g->shared) != E1000_SUCCESS) {
+			mutex_exit(&e1000g->e1000g_led_lock);
+			return (EIO);
+		}
+		break;
+	case MAC_LED_OFF:
+		if (e1000_led_off(&e1000g->shared) != E1000_SUCCESS) {
+			mutex_exit(&e1000g->e1000g_led_lock);
+			return (EIO);
+		}
+		break;
+	case MAC_LED_ON:
+		if (e1000_led_on(&e1000g->shared) != E1000_SUCCESS) {
+			mutex_exit(&e1000g->e1000g_led_lock);
+			return (EIO);
+		}
+		break;
+	default:
+		mutex_exit(&e1000g->e1000g_led_lock);
+		return (ENOTSUP);
+	}
+
+	mutex_exit(&e1000g->e1000g_led_lock);
+	return (0);
+
+}
+
 static boolean_t
 e1000g_m_getcapab(void *arg, mac_capab_t cap, void *cap_data)
 {
@@ -3102,6 +3293,44 @@ e1000g_m_getcapab(void *arg, mac_capab_t cap, void *cap_data)
 		cap_rings->mr_gnum = 1;
 		cap_rings->mr_rget = e1000g_fill_ring;
 		cap_rings->mr_gget = e1000g_fill_group;
+		break;
+	}
+	case MAC_CAPAB_LED: {
+		mac_capab_led_t *cap_led = cap_data;
+
+		cap_led->mcl_flags = 0;
+		cap_led->mcl_modes = MAC_LED_DEFAULT;
+		if (Adapter->shared.mac.ops.blink_led != NULL &&
+		    Adapter->shared.mac.ops.blink_led !=
+		    e1000_null_ops_generic) {
+			cap_led->mcl_modes |= MAC_LED_IDENT;
+		}
+
+		if (Adapter->shared.mac.ops.led_off != NULL &&
+		    Adapter->shared.mac.ops.led_off !=
+		    e1000_null_ops_generic) {
+			cap_led->mcl_modes |= MAC_LED_OFF;
+		}
+
+		if (Adapter->shared.mac.ops.led_on != NULL &&
+		    Adapter->shared.mac.ops.led_on !=
+		    e1000_null_ops_generic) {
+			cap_led->mcl_modes |= MAC_LED_ON;
+		}
+
+		/*
+		 * Some hardware doesn't support blinking natively as they're
+		 * missing the optional blink circuit. If they have both off and
+		 * on then we'll emulate it ourselves.
+		 */
+		if (((cap_led->mcl_modes & MAC_LED_IDENT) == 0) &&
+		    ((cap_led->mcl_modes & MAC_LED_OFF) != 0) &&
+		    ((cap_led->mcl_modes & MAC_LED_ON) != 0)) {
+			cap_led->mcl_modes |= MAC_LED_IDENT;
+			Adapter->e1000g_emul_blink = B_TRUE;
+		}
+
+		cap_led->mcl_set = e1000g_led_set;
 		break;
 	}
 	default:
@@ -4417,7 +4646,7 @@ e1000g_local_timer(void *ws)
 		    (ether_addr.mac.addr[2] != hw->mac.addr[3]) ||
 		    (ether_addr.mac.addr[1] != hw->mac.addr[4]) ||
 		    (ether_addr.mac.addr[0] != hw->mac.addr[5])) {
-			e1000_rar_set(hw, hw->mac.addr, 0);
+			(void) e1000_rar_set(hw, hw->mac.addr, 0);
 		}
 	}
 
@@ -5982,9 +6211,9 @@ e1000g_intr_add(struct e1000g *Adapter, int intr_type)
 	 * devices.
 	 */
 	if (Adapter->shared.mac.type < e1000_82571)
-		intr_handler = (ddi_intr_handler_t *)e1000g_intr;
+		intr_handler = e1000g_intr;
 	else
-		intr_handler = (ddi_intr_handler_t *)e1000g_intr_pciexpress;
+		intr_handler = e1000g_intr_pciexpress;
 
 	/* Call ddi_intr_add_handler() */
 	for (x = 0; x < actual; x++) {

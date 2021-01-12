@@ -20,6 +20,8 @@
 #
 #
 # Copyright (c) 2009, 2010, Oracle and/or its affiliates. All rights reserved.
+# Copyright 2018 OmniOS Community Edition (OmniOSce) Association.
+# Copyright (c) 2018, Joyent, Inc.
 #
 
 LIBRARY =	ioctl.a
@@ -27,40 +29,48 @@ VERS =
 OBJECTS =	ioctl.o
 
 PYSRCS=		__init__.py util.py dataset.py \
-	allow.py unallow.py \
-	userspace.py groupspace.py holds.py table.py
-
+		allow.py unallow.py \
+		userspace.py groupspace.py holds.py table.py
 
 include ../../Makefile.lib
 
-LIBLINKS = 
+LIBLINKS =
 SRCDIR =	../common
-ROOTLIBDIR=	$(ROOT)/usr/lib/python2.6/vendor-packages/zfs
-PYTHON=		$(PYTHON_26)
+ROOTLIBDIR=	$(ROOT)/usr/lib/python$(PYVER)/vendor-packages/zfs
+ROOTLIBDIR64=	$(ROOTLIBDIR)/64
 PYOBJS=		$(PYSRCS:%.py=$(SRCDIR)/%.pyc)
 PYFILES=	$(PYSRCS) $(PYSRCS:%.py=%.pyc)
 ROOTPYZFSFILES= $(PYFILES:%=$(ROOTLIBDIR)/%)
 
-C99MODE=        -xc99=%all
-C99LMODE=       -Xc99=%all
+CSTD=        $(CSTD_GNU99)
 
 LIBS =		$(DYNLIB)
-LDLIBS +=	-lc -lnvpair -lpython2.6 -lzfs
+LDLIBS +=	-lc -lnvpair -lpython$(PYVER)$(PYSUFFIX) -lzfs
+NATIVE_LIBS +=	libpython$(PYVER)$(PYSUFFIX).so
 CFLAGS +=	$(CCVERBOSE)
 CERRWARN +=	-_gcc=-Wno-unused-variable
-CPPFLAGS +=	-I$(ADJUNCT_PROTO)/usr/include/python2.6
+CPPFLAGS +=	\
+	-I$(ADJUNCT_PROTO)/usr/include/python$(PYVER)$(PYSUFFIX)
 CPPFLAGS +=	-I../../../uts/common/fs/zfs
 CPPFLAGS +=	-I../../../common/zfs
 
+# needs work
+SMOFF += all_func_returns
+
 .KEEP_STATE:
 
-all: $(PYOBJS) $(LIBS)
-
-install: all $(ROOTPYZFSFILES)
+all:
 
 $(ROOTLIBDIR)/%: %
 	$(INS.pyfile)
 
-lint: lintcheck
+$(ROOTLIBDIR)/%: ../common/%
+	$(INS.pyfile)
+
+$(ROOTLIBDIR64)/%: %
+	$(INS.pyfile)
+
+$(ROOTLIBDIR64)/%: ../common/%
+	$(INS.pyfile)
 
 include ../../Makefile.targ

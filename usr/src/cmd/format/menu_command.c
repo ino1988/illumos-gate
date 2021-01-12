@@ -22,6 +22,9 @@
  * Copyright (c) 1993, 2010, Oracle and/or its affiliates. All rights reserved.
  * Copyright 2012 Milan Jurik. All rights reserved.
  * Copyright 2014 Toomas Soome <tsoome@me.com>
+ * Copyright 2015 Nexenta Systems, Inc. All rights reserved.
+ * Copyright 2016 Igor Kozhukhov <ikozhukhov@gmail.com>
+ * Copyright (c) 2016 by Delphix. All rights reserved.
  */
 
 /*
@@ -82,6 +85,11 @@ slist_t	ptag_choices[] = {
 	{ "reserved",	"",	V_RESERVED	},
 	{ "system",	"",	V_SYSTEM	},
 	{ "BIOS_boot",	"",	V_BIOS_BOOT	},
+	{ "FreeBSD boot", "",	V_FREEBSD_BOOT	},
+	{ "FreeBSD swap", "",	V_FREEBSD_SWAP	},
+	{ "FreeBSD UFS", "",	V_FREEBSD_UFS	},
+	{ "FreeBSD ZFS", "",	V_FREEBSD_ZFS	},
+
 	{ NULL }
 };
 
@@ -239,7 +247,7 @@ c_disk()
 	}
 
 	/*
-	 * Determine total number of disks, and ask the user which disk he
+	 * Determine total number of disks, and ask the user which disk they
 	 * would like to make current.
 	 */
 
@@ -413,7 +421,7 @@ c_type()
 	index = input(FIO_INT, "Specify disk type (enter its number)", ':',
 	    &ioparam, defltptr, DATA_INPUT);
 	/*
-	 * Find the type s/he chose.
+	 * Find the type they chose.
 	 */
 	if (index == auto_conf_choice) {
 		float			scaled;
@@ -566,17 +574,21 @@ c_type()
 		 */
 		new_partitiontable(tptr, oldtype);
 	} else if ((index == other_choice) && (cur_label == L_TYPE_EFI)) {
+		uint64_t start_lba = cur_parts->etoc->efi_first_u_lba;
+		uint64_t reserved;
+
+		reserved = efi_reserved_sectors(cur_parts->etoc);
 		maxLBA = get_mlba();
 		cur_parts->etoc->efi_last_lba = maxLBA;
-		cur_parts->etoc->efi_last_u_lba = maxLBA - 34;
+		cur_parts->etoc->efi_last_u_lba = maxLBA - start_lba;
 		for (i = 0; i < cur_parts->etoc->efi_nparts; i++) {
 			cur_parts->etoc->efi_parts[i].p_start = 0;
 			cur_parts->etoc->efi_parts[i].p_size = 0;
 			cur_parts->etoc->efi_parts[i].p_tag = V_UNASSIGNED;
 		}
 		cur_parts->etoc->efi_parts[8].p_start =
-		    maxLBA - 34 - (1024 * 16);
-		cur_parts->etoc->efi_parts[8].p_size = (1024 * 16);
+		    maxLBA - start_lba - reserved;
+		cur_parts->etoc->efi_parts[8].p_size = reserved;
 		cur_parts->etoc->efi_parts[8].p_tag = V_RESERVED;
 		if (write_label()) {
 			err_print("Write label failed\n");
@@ -1093,9 +1105,9 @@ currently being used for swapping.\n");
 	 * Print the time so that the user will know when format started.
 	 * Lock out interrupts.  This could be a problem, since it could
 	 * cause the user to sit for quite awhile with no control, but we
-	 * don't have any other good way of keeping his gun from going off.
+	 * don't have any other good way of keeping their gun from going off.
 	 */
-	clock = time((time_t *)0);
+	clock = time(NULL);
 	fmt_print("Beginning format. The current time is %s\n",
 	    ctime(&clock));
 	enter_critical();
@@ -1118,7 +1130,7 @@ currently being used for swapping.\n");
 				cur_flags |= LABEL_DIRTY;
 		}
 	} else if (cur_disk->label_type == L_TYPE_EFI) {
-		if (start < 34) {
+		if (start < cur_parts->etoc->efi_first_u_lba) {
 			if (cur_disk->disk_flags & DSK_LABEL)
 				cur_flags |= LABEL_DIRTY;
 		}
@@ -1551,9 +1563,9 @@ c_label()
 	 */
 	if (expert_mode) {
 #if defined(_SUNOS_VTOC_8)
-		int 		i;
+		int		i;
 #endif
-		int 		choice;
+		int		choice;
 		u_ioparam_t		ioparam;
 		struct extvtoc	vtoc;
 		struct dk_label	label;
@@ -1620,7 +1632,8 @@ c_label()
 		(void) memset((char *)&label, 0, sizeof (struct dk_label));
 
 		(void) strcpy(x86_devname, cur_disk->disk_name);
-		if (cur_ctype->ctype_ctype == DKC_DIRECT)
+		if (cur_ctype->ctype_ctype == DKC_DIRECT ||
+		    cur_ctype->ctype_ctype == DKC_BLKDEV)
 			dptr = auto_direct_get_geom_label(cur_file,  &label);
 		else
 			dptr = auto_sense(cur_file, 1, &label);
@@ -1670,7 +1683,7 @@ c_label()
 			}
 		}
 
-		if (get_disk_info(cur_file, &efinfo) != 0) {
+		if (get_disk_info(cur_file, &efinfo, cur_disk) != 0) {
 			return (-1);
 		}
 		(void) memset((char *)&label, 0, sizeof (struct dk_label));
@@ -1696,7 +1709,7 @@ c_label()
 			return (-1);
 		}
 		if (efi_write(cur_file, vtoc64) != 0) {
-			err_check(vtoc64);
+			efi_err_check(vtoc64);
 			err_print("Warning: error writing EFI.\n");
 			return (-1);
 		} else {
@@ -1830,7 +1843,7 @@ c_defect()
 
 	/*
 	 * If the user has modified the working list but not committed
-	 * it, warn him that he is probably making a mistake.
+	 * it, warn them that they are probably making a mistake.
 	 */
 	if (work_list.flags & LIST_DIRTY) {
 		if (!EMBEDDED_SCSI) {
@@ -1996,7 +2009,7 @@ Unknown disk type in backup label\n");
 				plist->pinfo_next = parts;
 			}
 			parts->pinfo_name = alloc_string("original");
-			for (i = 0; i < NDKMAP; i++)
+			for (i = 0; i < NDKMAP; i++) {
 
 #if defined(_SUNOS_VTOC_8)
 				parts->pinfo_map[i] = label.dkl_map[i];
@@ -2009,6 +2022,7 @@ Unknown disk type in backup label\n");
 #else
 #error No VTOC layout defined.
 #endif /* defined(_SUNOS_VTOC_8) */
+			}
 			parts->vtoc = label.dkl_vtoc;
 		}
 		/*
@@ -2056,7 +2070,7 @@ c_verify_efi()
 	struct	partition_info	tmp_pinfo;
 	int status;
 
-	status = read_efi_label(cur_file, &efi_info);
+	status = read_efi_label(cur_file, &efi_info, cur_disk);
 	if (status != 0) {
 		err_print("Warning: Could not read label.\n");
 		return (-1);
@@ -2081,11 +2095,21 @@ c_verify_efi()
 	fmt_print("\n");
 
 	fmt_print("bytes/sector	=  %d\n", cur_blksz);
-	fmt_print("sectors = %llu\n", cur_parts->etoc->efi_last_lba);
+	fmt_print("sectors = %llu\n", cur_parts->etoc->efi_last_lba + 1);
 	fmt_print("accessible sectors = %llu\n",
+	    cur_parts->etoc->efi_last_u_lba -
+	    cur_parts->etoc->efi_first_u_lba -
+	    efi_reserved_sectors(cur_parts->etoc) + 1);
+	fmt_print("first usable sector = %llu\n",
+	    cur_parts->etoc->efi_first_u_lba);
+	fmt_print("last usable sector = %llu\n",
 	    cur_parts->etoc->efi_last_u_lba);
 
 	print_map(&tmp_pinfo);
+
+	free(efi_info.vendor);
+	free(efi_info.product);
+	free(efi_info.revision);
 	return (0);
 }
 

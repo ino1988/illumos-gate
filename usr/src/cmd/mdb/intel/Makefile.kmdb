@@ -22,6 +22,8 @@
 # Copyright 2009 Sun Microsystems, Inc.  All rights reserved.
 # Use is subject to license terms.
 #
+# Copyright 2019 Joyent, Inc.
+#
 
 PROMSRCS += \
 	prom_env.c \
@@ -36,8 +38,6 @@ KMDBSRCS += \
 	kmdb_fault_isadep.c \
 	kmdb_kdi_isadep.c \
 	kmdb_promif_isadep.c \
-	kvm_cpu_amd.c \
-	kvm_cpu_p4.c \
 	kvm_isadep.c
 
 KMDBML += \
@@ -56,6 +56,8 @@ $(CTXOFFUSERS) $(CTXOFFUSERS:%.o=%.ln): kmdb_context_off.h
 
 kaif_activate.o kaif_activate.ln := CPPFLAGS += -D_MACHDEP -D_KMEMUSER
 
+$(RELEASE_BUILD)kaif.o := CERRWARN += -_gcc=-Wno-unused
+
 STANDLIBS += \
 	../libstandctf/libstandctf.so \
 	$(SRC)/lib/libumem/$(MACHDIR)/libstandumem.so \
@@ -66,6 +68,7 @@ KMDBLIBS = $(STANDLIBS) ../mdb_ks/kmod/mdb_ks
 MAPFILE_SOURCES = \
 	$(MAPFILE_SOURCES_COMMON) \
 	../../kmdb/kmdb_dpi_isadep.h \
+	../../mdb/mdb_x86util.h \
 	$(MAPFILE_SOURCES_$(MACH))
 
 %.o: ../../../../../uts/intel/promif/%.c

@@ -13,6 +13,9 @@
 # Copyright 2011, Richard Lowe
 # Copyright 2012 Nexenta Systems, Inc. All rights reserved.
 # Copyright 2013, OmniTI Computer Consulting, Inc.
+# Copyright 2017 Peter Tribble
+# Copyright 2018, Joyent, Inc.
+# Copyright 2020 OmniOS Community Edition (OmniOSce) Association.
 #
 
 file path=usr/share/man/man2/Intro.2
@@ -53,11 +56,11 @@ file path=usr/share/man/man2/getdents.2
 file path=usr/share/man/man2/getgroups.2
 file path=usr/share/man/man2/getisax.2
 file path=usr/share/man/man2/getitimer.2
-file path=usr/share/man/man2/getlabel.2
 file path=usr/share/man/man2/getmsg.2
 file path=usr/share/man/man2/getpflags.2
 file path=usr/share/man/man2/getpid.2
 file path=usr/share/man/man2/getppriv.2
+file path=usr/share/man/man2/getrandom.2
 file path=usr/share/man/man2/getrlimit.2
 file path=usr/share/man/man2/getsid.2
 file path=usr/share/man/man2/getuid.2
@@ -148,6 +151,7 @@ file path=usr/share/man/man2/umask.2
 file path=usr/share/man/man2/umount.2
 file path=usr/share/man/man2/uname.2
 file path=usr/share/man/man2/unlink.2
+file path=usr/share/man/man2/upanic.2
 file path=usr/share/man/man2/ustat.2
 file path=usr/share/man/man2/utime.2
 file path=usr/share/man/man2/utimes.2
@@ -178,10 +182,10 @@ link path=usr/share/man/man2/faccessat.2 target=access.2
 link path=usr/share/man/man2/facl.2 target=acl.2
 link path=usr/share/man/man2/fchdir.2 target=chdir.2
 link path=usr/share/man/man2/fchmod.2 target=chmod.2
+link path=usr/share/man/man2/fchmodat.2 target=chmod.2
 link path=usr/share/man/man2/fchown.2 target=chown.2
 link path=usr/share/man/man2/fchownat.2 target=chown.2
 link path=usr/share/man/man2/fchroot.2 target=chroot.2
-link path=usr/share/man/man2/fgetlabel.2 target=getlabel.2
 link path=usr/share/man/man2/fork1.2 target=fork.2
 link path=usr/share/man/man2/forkall.2 target=fork.2
 link path=usr/share/man/man2/forkallx.2 target=fork.2
@@ -189,6 +193,8 @@ link path=usr/share/man/man2/forkx.2 target=fork.2
 link path=usr/share/man/man2/fstat.2 target=stat.2
 link path=usr/share/man/man2/fstatat.2 target=stat.2
 link path=usr/share/man/man2/fstatvfs.2 target=statvfs.2
+link path=usr/share/man/man2/futimens.2 target=utimes.2
+link path=usr/share/man/man2/futimes.2 target=utimes.2
 link path=usr/share/man/man2/futimesat.2 target=utimes.2
 link path=usr/share/man/man2/getaudit_addr.2 target=getaudit.2
 link path=usr/share/man/man2/getegid.2 target=getuid.2
@@ -203,17 +209,25 @@ link path=usr/share/man/man2/getrctl.2 target=setrctl.2
 link path=usr/share/man/man2/gettaskid.2 target=settaskid.2
 link path=usr/share/man/man2/intro.2 target=Intro.2
 link path=usr/share/man/man2/lchown.2 target=chown.2
+link path=usr/share/man/man2/linkat.2 target=link.2
 link path=usr/share/man/man2/lstat.2 target=stat.2
+link path=usr/share/man/man2/lutimes.2 target=utimes.2
+link path=usr/share/man/man2/mkdirat.2 target=mkdir.2
+link path=usr/share/man/man2/mknodat.2 target=mknod.2
 link path=usr/share/man/man2/openat.2 target=open.2
 link path=usr/share/man/man2/pathconf.2 target=fpathconf.2
 link path=usr/share/man/man2/pipe2.2 target=pipe.2
+link path=usr/share/man/man2/ppoll.2 target=poll.2
 link path=usr/share/man/man2/pread.2 target=read.2
+link path=usr/share/man/man2/preadv.2 target=read.2
 link path=usr/share/man/man2/pset_assign.2 target=pset_create.2
 link path=usr/share/man/man2/pset_destroy.2 target=pset_create.2
 link path=usr/share/man/man2/pset_getattr.2 target=pset_setattr.2
 link path=usr/share/man/man2/putacct.2 target=getacct.2
 link path=usr/share/man/man2/putpmsg.2 target=putmsg.2
 link path=usr/share/man/man2/pwrite.2 target=write.2
+link path=usr/share/man/man2/pwritev.2 target=write.2
+link path=usr/share/man/man2/readlinkat.2 target=readlink.2
 link path=usr/share/man/man2/readv.2 target=read.2
 link path=usr/share/man/man2/renameat.2 target=rename.2
 link path=usr/share/man/man2/sbrk.2 target=brk.2
@@ -234,8 +248,10 @@ link path=usr/share/man/man2/setustack.2 target=getustack.2
 link path=usr/share/man/man2/shmat.2 target=shmop.2
 link path=usr/share/man/man2/shmdt.2 target=shmop.2
 link path=usr/share/man/man2/sigsendset.2 target=sigsend.2
+link path=usr/share/man/man2/symlinkat.2 target=symlink.2
 link path=usr/share/man/man2/umount2.2 target=umount.2
 link path=usr/share/man/man2/unlinkat.2 target=unlink.2
+link path=usr/share/man/man2/utimensat.2 target=utimes.2
 link path=usr/share/man/man2/vforkx.2 target=vfork.2
 link path=usr/share/man/man2/wracct.2 target=getacct.2
 link path=usr/share/man/man2/writev.2 target=write.2

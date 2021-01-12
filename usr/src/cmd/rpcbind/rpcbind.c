@@ -312,7 +312,7 @@ main(int argc, char *argv[])
 	ipv6flag = Is_ipv6present();
 	rpcb_check_init();
 
-	nc_handle = setnetconfig(); 	/* open netconfig file */
+	nc_handle = setnetconfig();	/* open netconfig file */
 	if (nc_handle == NULL) {
 		syslog(LOG_ERR, "could not read /etc/netconfig");
 		exit(1);
@@ -323,8 +323,8 @@ main(int argc, char *argv[])
 	}
 	endnetconfig(nc_handle);
 
-	if ((loopback_dg[0] == NULL) && (loopback_vc[0] == NULL) &&
-	    (loopback_vc_ord[0] == NULL)) {
+	if ((loopback_dg[0] == '\0') && (loopback_vc[0] == '\0') &&
+	    (loopback_vc_ord[0] == '\0')) {
 		syslog(LOG_ERR, "could not find loopback transports");
 		exit(1);
 	}
@@ -617,7 +617,7 @@ init_transport(struct netconfig *nconf)
 		PMAPLIST *pml;
 
 		if (!svc_register(my_xprt, PMAPPROG, PMAPVERS,
-		    pmap_service, NULL)) {
+		    pmap_service, 0)) {
 			syslog(LOG_ERR, "could not register on %s",
 			    nconf->nc_netid);
 			goto error;
@@ -1058,7 +1058,7 @@ static boolean_t
 get_smf_prop(const char *var, boolean_t def_val)
 {
 	scf_simple_prop_t *prop;
-	uint8_t *val;
+	uint8_t *val = NULL;
 	boolean_t res = def_val;
 
 	prop = scf_simple_prop_get(NULL, NULL, "config", var);
@@ -1081,7 +1081,7 @@ static int
 get_smf_iprop(const char *var, int def_val, int min, int max)
 {
 	scf_simple_prop_t *prop;
-	int64_t *val;
+	int64_t *val = NULL;
 	int res = def_val;
 
 	prop = scf_simple_prop_get(NULL, NULL, "config", var);

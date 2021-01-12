@@ -18,12 +18,14 @@
  *
  * CDDL HEADER END
  */
+
 /*
  * Copyright 2010 Sun Microsystems, Inc.  All rights reserved.
  * Use is subject to license terms.
  */
+
 /*
- * Copyright 2012 Nexenta Systems, Inc. All rights reserved.
+ * Copyright 2018 Nexenta Systems, Inc.
  */
 
 #include <sys/systm.h>
@@ -133,6 +135,11 @@ rfs4_attr_init()
 	struct statvfs64 sb;
 
 	rfs4_init_compound_state(&cs);
+	/*
+	 * This is global state checking, called once. We might be in
+	 * non-global-zone context here (say a modload happens from a zone
+	 * process) so in this case, we want the global-zone root vnode.
+	 */
 	cs.vp = rootvp;
 	cs.fh.nfs_fh4_val = NULL;
 	cs.cr = kcred;
@@ -209,7 +216,7 @@ rfs4_attr_init()
 /* ARGSUSED */
 static int
 rfs4_fattr4_supported_attrs(nfs4_attr_cmd_t cmd, struct nfs4_svgetit_arg *sarg,
-	union nfs4_attr_u *na)
+    union nfs4_attr_u *na)
 {
 	int	error = 0;
 
@@ -251,7 +258,7 @@ static nfs_ftype4 vt_to_nf4[] = {
 /* ARGSUSED */
 static int
 rfs4_fattr4_type(nfs4_attr_cmd_t cmd, struct nfs4_svgetit_arg *sarg,
-	union nfs4_attr_u *na)
+    union nfs4_attr_u *na)
 {
 	int		error = 0;
 
@@ -357,7 +364,7 @@ fattr4_get_fh_expire_type(struct exportinfo *exi, uint32_t *fh_expire_typep)
 /* ARGSUSED */
 static int
 rfs4_fattr4_fh_expire_type(nfs4_attr_cmd_t cmd, struct nfs4_svgetit_arg *sarg,
-	union nfs4_attr_u *na)
+    union nfs4_attr_u *na)
 {
 	uint32_t fh_expire_type;
 	int error = 0;
@@ -396,6 +403,7 @@ fattr4_get_change(struct nfs4_svgetit_arg *sarg, fattr4_change *changep)
 	struct compound_state *cs = sarg->cs;
 	vnode_t *vp = cs->vp;
 	nfsstat4 status;
+	timespec_t vis_change;
 
 	if ((vap->va_mask & AT_CTIME) == 0) {
 		if (sarg->rdattr_error && (vp == NULL)) {
@@ -408,14 +416,22 @@ fattr4_get_change(struct nfs4_svgetit_arg *sarg, fattr4_change *changep)
 		if (status != NFS4_OK)
 			return (geterrno4(status));
 	}
-	NFS4_SET_FATTR4_CHANGE(*changep, vap->va_ctime)
+	NFS4_SET_FATTR4_CHANGE(*changep, vap->va_ctime);
+
+	if (nfs_visible_change(cs->exi, vp, &vis_change)) {
+		fattr4_change visch;
+		NFS4_SET_FATTR4_CHANGE(visch, vis_change);
+		if (visch > *changep)
+			*changep = visch;
+	}
+
 	return (0);
 }
 
 /* ARGSUSED */
 static int
 rfs4_fattr4_change(nfs4_attr_cmd_t cmd, struct nfs4_svgetit_arg *sarg,
-	union nfs4_attr_u *na)
+    union nfs4_attr_u *na)
 {
 	int error = 0;
 	fattr4_change change;
@@ -453,7 +469,7 @@ rfs4_fattr4_change(nfs4_attr_cmd_t cmd, struct nfs4_svgetit_arg *sarg,
 /* ARGSUSED */
 static int
 rfs4_fattr4_size(nfs4_attr_cmd_t cmd, struct nfs4_svgetit_arg *sarg,
-	union nfs4_attr_u *na)
+    union nfs4_attr_u *na)
 {
 	int	error = 0;
 
@@ -490,7 +506,7 @@ rfs4_fattr4_size(nfs4_attr_cmd_t cmd, struct nfs4_svgetit_arg *sarg,
 /* ARGSUSED */
 static int
 rfs4_fattr4_link_support(nfs4_attr_cmd_t cmd, struct nfs4_svgetit_arg *sarg,
-	union nfs4_attr_u *na)
+    union nfs4_attr_u *na)
 {
 	int error = 0;
 
@@ -525,7 +541,7 @@ rfs4_fattr4_link_support(nfs4_attr_cmd_t cmd, struct nfs4_svgetit_arg *sarg,
 /* ARGSUSED */
 static int
 rfs4_fattr4_symlink_support(nfs4_attr_cmd_t cmd, struct nfs4_svgetit_arg *sarg,
-	union nfs4_attr_u *na)
+    union nfs4_attr_u *na)
 {
 	int error = 0;
 
@@ -556,7 +572,7 @@ rfs4_fattr4_symlink_support(nfs4_attr_cmd_t cmd, struct nfs4_svgetit_arg *sarg,
 /* ARGSUSED */
 static int
 rfs4_fattr4_named_attr(nfs4_attr_cmd_t cmd, struct nfs4_svgetit_arg *sarg,
-	union nfs4_attr_u *na)
+    union nfs4_attr_u *na)
 {
 	int error = 0;
 	ulong_t val;
@@ -626,7 +642,7 @@ rfs4_fattr4_named_attr(nfs4_attr_cmd_t cmd, struct nfs4_svgetit_arg *sarg,
 /* ARGSUSED */
 static int
 rfs4_fattr4_fsid(nfs4_attr_cmd_t cmd, struct nfs4_svgetit_arg *sarg,
-	union nfs4_attr_u *na)
+    union nfs4_attr_u *na)
 {
 	int error = 0;
 	int *pmaj = (int *)&na->fsid.major;
@@ -681,7 +697,7 @@ rfs4_fattr4_fsid(nfs4_attr_cmd_t cmd, struct nfs4_svgetit_arg *sarg,
 /* ARGSUSED */
 static int
 rfs4_fattr4_unique_handles(nfs4_attr_cmd_t cmd, struct nfs4_svgetit_arg *sarg,
-	union nfs4_attr_u *na)
+    union nfs4_attr_u *na)
 {
 	/*
 	 * XXX
@@ -718,7 +734,7 @@ rfs4_fattr4_unique_handles(nfs4_attr_cmd_t cmd, struct nfs4_svgetit_arg *sarg,
 /* ARGSUSED */
 static int
 rfs4_fattr4_lease_time(nfs4_attr_cmd_t cmd, struct nfs4_svgetit_arg *sarg,
-	union nfs4_attr_u *na)
+    union nfs4_attr_u *na)
 {
 	int error = 0;
 
@@ -749,7 +765,7 @@ rfs4_fattr4_lease_time(nfs4_attr_cmd_t cmd, struct nfs4_svgetit_arg *sarg,
 /* ARGSUSED */
 static int
 rfs4_fattr4_rdattr_error(nfs4_attr_cmd_t cmd, struct nfs4_svgetit_arg *sarg,
-	union nfs4_attr_u *na)
+    union nfs4_attr_u *na)
 {
 	int error = 0;
 
@@ -798,7 +814,7 @@ rfs4fhcmp(nfs_fh4 *wirefh, nfs_fh4 *srvfh)
 /* ARGSUSED */
 static int
 rfs4_fattr4_filehandle(nfs4_attr_cmd_t cmd, struct nfs4_svgetit_arg *sarg,
-	union nfs4_attr_u *na)
+    union nfs4_attr_u *na)
 {
 	nfs_fh4 *fh;
 
@@ -861,7 +877,7 @@ rfs4_fattr4_filehandle(nfs4_attr_cmd_t cmd, struct nfs4_svgetit_arg *sarg,
 /* ARGSUSED */
 static int
 rfs4_fattr4_acl(nfs4_attr_cmd_t cmd, struct nfs4_svgetit_arg *sarg,
-	union nfs4_attr_u *na)
+    union nfs4_attr_u *na)
 {
 	int error = 0;
 	vsecattr_t vs_native, vs_ace4;
@@ -1047,7 +1063,7 @@ rfs4_fattr4_acl(nfs4_attr_cmd_t cmd, struct nfs4_svgetit_arg *sarg,
 /* ARGSUSED */
 static int
 rfs4_fattr4_aclsupport(nfs4_attr_cmd_t cmd, struct nfs4_svgetit_arg *sarg,
-	union nfs4_attr_u *na)
+    union nfs4_attr_u *na)
 {
 	int error = 0;
 
@@ -1079,7 +1095,7 @@ rfs4_fattr4_aclsupport(nfs4_attr_cmd_t cmd, struct nfs4_svgetit_arg *sarg,
 /* ARGSUSED */
 static int
 rfs4_fattr4_archive(nfs4_attr_cmd_t cmd, struct nfs4_svgetit_arg *sarg,
-	union nfs4_attr_u *na)
+    union nfs4_attr_u *na)
 {
 	return (ENOTSUP);
 }
@@ -1087,7 +1103,7 @@ rfs4_fattr4_archive(nfs4_attr_cmd_t cmd, struct nfs4_svgetit_arg *sarg,
 /* ARGSUSED */
 static int
 rfs4_fattr4_cansettime(nfs4_attr_cmd_t cmd, struct nfs4_svgetit_arg *sarg,
-	union nfs4_attr_u *na)
+    union nfs4_attr_u *na)
 {
 	int error = 0;
 
@@ -1125,7 +1141,7 @@ rfs4_fattr4_cansettime(nfs4_attr_cmd_t cmd, struct nfs4_svgetit_arg *sarg,
 /* ARGSUSED */
 static int
 rfs4_fattr4_case_insensitive(nfs4_attr_cmd_t cmd, struct nfs4_svgetit_arg *sarg,
-	union nfs4_attr_u *na)
+    union nfs4_attr_u *na)
 {
 	int error = 0;
 
@@ -1159,7 +1175,7 @@ rfs4_fattr4_case_insensitive(nfs4_attr_cmd_t cmd, struct nfs4_svgetit_arg *sarg,
 /* ARGSUSED */
 static int
 rfs4_fattr4_case_preserving(nfs4_attr_cmd_t cmd, struct nfs4_svgetit_arg *sarg,
-	union nfs4_attr_u *na)
+    union nfs4_attr_u *na)
 {
 	int error = 0;
 
@@ -1194,7 +1210,7 @@ rfs4_fattr4_case_preserving(nfs4_attr_cmd_t cmd, struct nfs4_svgetit_arg *sarg,
 /* ARGSUSED */
 static int
 rfs4_fattr4_chown_restricted(nfs4_attr_cmd_t cmd, struct nfs4_svgetit_arg *sarg,
-	union nfs4_attr_u *na)
+    union nfs4_attr_u *na)
 {
 	int error = 0;
 	ulong_t val;
@@ -1244,7 +1260,7 @@ rfs4_fattr4_chown_restricted(nfs4_attr_cmd_t cmd, struct nfs4_svgetit_arg *sarg,
 /* ARGSUSED */
 static int
 rfs4_fattr4_fileid(nfs4_attr_cmd_t cmd, struct nfs4_svgetit_arg *sarg,
-	union nfs4_attr_u *na)
+    union nfs4_attr_u *na)
 {
 	int	error = 0;
 
@@ -1292,22 +1308,29 @@ rfs4_get_mntdfileid(nfs4_attr_cmd_t cmd, struct nfs4_svgetit_arg *sarg)
 	vp = sarg->cs->vp;
 	sarg->mntdfid_set = FALSE;
 
-	/* VROOT object, must untraverse */
-	if (vp->v_flag & VROOT) {
+	/*
+	 * VROOT object or zone's root, must untraverse.
+	 *
+	 * NOTE: Not doing reality checks on curzone vs. compound
+	 * state vnode because it will mismatch once at initialization
+	 * if a non-global-zone triggers the module load, BUT in that case
+	 * the vp is literally "/" which has VROOT set.
+	 */
+	if ((vp->v_flag & VROOT) || VN_IS_CURZONEROOT(vp)) {
 
 		/* extra hold for vp since untraverse might rele */
 		VN_HOLD(vp);
-		stubvp = untraverse(vp);
+		stubvp = untraverse(vp, ZONE_ROOTVP());
 
 		/*
-		 * If vp/stubvp are same, we must be at system
+		 * If vp/stubvp are same, we must be at system-or-zone
 		 * root because untraverse returned same vp
 		 * for a VROOT object.  sarg->vap was setup
 		 * before we got here, so there's no need to do
 		 * another getattr -- just use the one in sarg.
 		 */
 		if (VN_CMP(vp, stubvp)) {
-			ASSERT(VN_CMP(vp, rootdir));
+			ASSERT(VN_IS_CURZONEROOT(vp));
 			vap = sarg->vap;
 		} else {
 			va.va_mask = AT_NODEID;
@@ -1352,7 +1375,7 @@ rfs4_get_mntdfileid(nfs4_attr_cmd_t cmd, struct nfs4_svgetit_arg *sarg)
 /* ARGSUSED */
 static int
 rfs4_fattr4_mounted_on_fileid(nfs4_attr_cmd_t cmd,
-	struct nfs4_svgetit_arg *sarg, union nfs4_attr_u *na)
+    struct nfs4_svgetit_arg *sarg, union nfs4_attr_u *na)
 {
 	int	error = 0;
 
@@ -1366,10 +1389,10 @@ rfs4_fattr4_mounted_on_fileid(nfs4_attr_cmd_t cmd,
 		break;		/* this attr is supported */
 	case NFS4ATTR_GETIT:
 	case NFS4ATTR_VERIT:
-		if (! sarg->mntdfid_set)
+		if (!sarg->mntdfid_set)
 			error = rfs4_get_mntdfileid(cmd, sarg);
 
-		if (! error && sarg->mntdfid_set) {
+		if (!error && sarg->mntdfid_set) {
 			if (cmd == NFS4ATTR_GETIT)
 				na->mounted_on_fileid = sarg->mounted_on_fileid;
 			else
@@ -1391,7 +1414,7 @@ rfs4_fattr4_mounted_on_fileid(nfs4_attr_cmd_t cmd,
 /* ARGSUSED */
 static int
 rfs4_fattr4_files_avail(nfs4_attr_cmd_t cmd, struct nfs4_svgetit_arg *sarg,
-	union nfs4_attr_u *na)
+    union nfs4_attr_u *na)
 {
 	int	error = 0;
 
@@ -1431,7 +1454,7 @@ rfs4_fattr4_files_avail(nfs4_attr_cmd_t cmd, struct nfs4_svgetit_arg *sarg,
 /* ARGSUSED */
 static int
 rfs4_fattr4_files_free(nfs4_attr_cmd_t cmd, struct nfs4_svgetit_arg *sarg,
-	union nfs4_attr_u *na)
+    union nfs4_attr_u *na)
 {
 	int	error = 0;
 
@@ -1471,7 +1494,7 @@ rfs4_fattr4_files_free(nfs4_attr_cmd_t cmd, struct nfs4_svgetit_arg *sarg,
 /* ARGSUSED */
 static int
 rfs4_fattr4_files_total(nfs4_attr_cmd_t cmd, struct nfs4_svgetit_arg *sarg,
-	union nfs4_attr_u *na)
+    union nfs4_attr_u *na)
 {
 	int	error = 0;
 
@@ -1571,7 +1594,7 @@ rfs4_free_fs_locations4(fs_locations4 *fsls4)
 /* ARGSUSED */
 static int
 rfs4_fattr4_fs_locations(nfs4_attr_cmd_t cmd, struct nfs4_svgetit_arg *sarg,
-	union nfs4_attr_u *na)
+    union nfs4_attr_u *na)
 {
 	int error = 0;
 	fs_locations4 *fsl;
@@ -1586,6 +1609,10 @@ rfs4_fattr4_fs_locations(nfs4_attr_cmd_t cmd, struct nfs4_svgetit_arg *sarg,
 		break;  /* this attr is supported */
 
 	case NFS4ATTR_GETIT:
+	{
+		kstat_named_t *stat =
+		    sarg->cs->exi->exi_ne->ne_globals->svstat[NFS_V4];
+
 		fsl = fetch_referral(sarg->cs->vp, sarg->cs->cr);
 		if (fsl == NULL)
 			(void) memset(&(na->fs_locations), 0,
@@ -1594,9 +1621,9 @@ rfs4_fattr4_fs_locations(nfs4_attr_cmd_t cmd, struct nfs4_svgetit_arg *sarg,
 			na->fs_locations = *fsl;
 			kmem_free(fsl, sizeof (fs_locations4));
 		}
-		global_svstat_ptr[4][NFS_REFERRALS].value.ui64++;
+		stat[NFS_REFERRALS].value.ui64++;
 		break;
-
+	}
 	case NFS4ATTR_FREEIT:
 		if (sarg->op == NFS4ATTR_SETIT || sarg->op == NFS4ATTR_VERIT)
 			error = EINVAL;
@@ -1617,7 +1644,7 @@ rfs4_fattr4_fs_locations(nfs4_attr_cmd_t cmd, struct nfs4_svgetit_arg *sarg,
 /* ARGSUSED */
 static int
 rfs4_fattr4_hidden(nfs4_attr_cmd_t cmd, struct nfs4_svgetit_arg *sarg,
-	union nfs4_attr_u *na)
+    union nfs4_attr_u *na)
 {
 	return (ENOTSUP);
 }
@@ -1625,7 +1652,7 @@ rfs4_fattr4_hidden(nfs4_attr_cmd_t cmd, struct nfs4_svgetit_arg *sarg,
 /* ARGSUSED */
 static int
 rfs4_fattr4_homogeneous(nfs4_attr_cmd_t cmd, struct nfs4_svgetit_arg *sarg,
-	union nfs4_attr_u *na)
+    union nfs4_attr_u *na)
 {
 	int error = 0;
 
@@ -1659,7 +1686,7 @@ rfs4_fattr4_homogeneous(nfs4_attr_cmd_t cmd, struct nfs4_svgetit_arg *sarg,
 /* ARGSUSED */
 static int
 rfs4_fattr4_maxfilesize(nfs4_attr_cmd_t cmd, struct nfs4_svgetit_arg *sarg,
-	union nfs4_attr_u *na)
+    union nfs4_attr_u *na)
 {
 	int error = 0;
 	ulong_t val;
@@ -1737,7 +1764,7 @@ rfs4_fattr4_maxfilesize(nfs4_attr_cmd_t cmd, struct nfs4_svgetit_arg *sarg,
 /* ARGSUSED */
 static int
 rfs4_fattr4_maxlink(nfs4_attr_cmd_t cmd, struct nfs4_svgetit_arg *sarg,
-	union nfs4_attr_u *na)
+    union nfs4_attr_u *na)
 {
 	int error = 0;
 	ulong_t val;
@@ -1784,7 +1811,7 @@ rfs4_fattr4_maxlink(nfs4_attr_cmd_t cmd, struct nfs4_svgetit_arg *sarg,
 /* ARGSUSED */
 static int
 rfs4_fattr4_maxname(nfs4_attr_cmd_t cmd, struct nfs4_svgetit_arg *sarg,
-	union nfs4_attr_u *na)
+    union nfs4_attr_u *na)
 {
 	int error = 0;
 	ulong_t val;
@@ -1831,7 +1858,7 @@ rfs4_fattr4_maxname(nfs4_attr_cmd_t cmd, struct nfs4_svgetit_arg *sarg,
 /* ARGSUSED */
 static int
 rfs4_fattr4_maxread(nfs4_attr_cmd_t cmd, struct nfs4_svgetit_arg *sarg,
-	union nfs4_attr_u *na)
+    union nfs4_attr_u *na)
 {
 	int error = 0;
 
@@ -1865,7 +1892,7 @@ rfs4_fattr4_maxread(nfs4_attr_cmd_t cmd, struct nfs4_svgetit_arg *sarg,
 /* ARGSUSED */
 static int
 rfs4_fattr4_maxwrite(nfs4_attr_cmd_t cmd, struct nfs4_svgetit_arg *sarg,
-	union nfs4_attr_u *na)
+    union nfs4_attr_u *na)
 {
 	int error = 0;
 
@@ -1899,7 +1926,7 @@ rfs4_fattr4_maxwrite(nfs4_attr_cmd_t cmd, struct nfs4_svgetit_arg *sarg,
 /* ARGSUSED */
 static int
 rfs4_fattr4_mimetype(nfs4_attr_cmd_t cmd, struct nfs4_svgetit_arg *sarg,
-	union nfs4_attr_u *na)
+    union nfs4_attr_u *na)
 {
 	return (ENOTSUP);
 }
@@ -1907,7 +1934,7 @@ rfs4_fattr4_mimetype(nfs4_attr_cmd_t cmd, struct nfs4_svgetit_arg *sarg,
 /* ARGSUSED */
 static int
 rfs4_fattr4_mode(nfs4_attr_cmd_t cmd, struct nfs4_svgetit_arg *sarg,
-	union nfs4_attr_u *na)
+    union nfs4_attr_u *na)
 {
 	int	error = 0;
 
@@ -1950,7 +1977,7 @@ rfs4_fattr4_mode(nfs4_attr_cmd_t cmd, struct nfs4_svgetit_arg *sarg,
 /* ARGSUSED */
 static int
 rfs4_fattr4_no_trunc(nfs4_attr_cmd_t cmd, struct nfs4_svgetit_arg *sarg,
-	union nfs4_attr_u *na)
+    union nfs4_attr_u *na)
 {
 	int error = 0;
 
@@ -1984,7 +2011,7 @@ rfs4_fattr4_no_trunc(nfs4_attr_cmd_t cmd, struct nfs4_svgetit_arg *sarg,
 /* ARGSUSED */
 static int
 rfs4_fattr4_numlinks(nfs4_attr_cmd_t cmd, struct nfs4_svgetit_arg *sarg,
-	union nfs4_attr_u *na)
+    union nfs4_attr_u *na)
 {
 	int	error = 0;
 
@@ -2024,7 +2051,7 @@ rfs4_fattr4_numlinks(nfs4_attr_cmd_t cmd, struct nfs4_svgetit_arg *sarg,
 /* ARGSUSED */
 static int
 rfs4_fattr4_owner(nfs4_attr_cmd_t cmd, struct nfs4_svgetit_arg *sarg,
-	union nfs4_attr_u *na)
+    union nfs4_attr_u *na)
 {
 	int	error = 0;
 	uid_t	uid;
@@ -2136,7 +2163,7 @@ rfs4_fattr4_owner(nfs4_attr_cmd_t cmd, struct nfs4_svgetit_arg *sarg,
 /* ARGSUSED */
 static int
 rfs4_fattr4_owner_group(nfs4_attr_cmd_t cmd, struct nfs4_svgetit_arg *sarg,
-	union nfs4_attr_u *na)
+    union nfs4_attr_u *na)
 {
 	int	error = 0;
 	gid_t	gid;
@@ -2252,7 +2279,7 @@ rfs4_fattr4_owner_group(nfs4_attr_cmd_t cmd, struct nfs4_svgetit_arg *sarg,
 /* ARGSUSED */
 static int
 rfs4_fattr4_quota_avail_hard(nfs4_attr_cmd_t cmd, struct nfs4_svgetit_arg *sarg,
-	union nfs4_attr_u *na)
+    union nfs4_attr_u *na)
 {
 	return (ENOTSUP);
 }
@@ -2260,7 +2287,7 @@ rfs4_fattr4_quota_avail_hard(nfs4_attr_cmd_t cmd, struct nfs4_svgetit_arg *sarg,
 /* ARGSUSED */
 static int
 rfs4_fattr4_quota_avail_soft(nfs4_attr_cmd_t cmd, struct nfs4_svgetit_arg *sarg,
-	union nfs4_attr_u *na)
+    union nfs4_attr_u *na)
 {
 	return (ENOTSUP);
 }
@@ -2268,7 +2295,7 @@ rfs4_fattr4_quota_avail_soft(nfs4_attr_cmd_t cmd, struct nfs4_svgetit_arg *sarg,
 /* ARGSUSED */
 static int
 rfs4_fattr4_quota_used(nfs4_attr_cmd_t cmd, struct nfs4_svgetit_arg *sarg,
-	union nfs4_attr_u *na)
+    union nfs4_attr_u *na)
 {
 	return (ENOTSUP);
 }
@@ -2276,7 +2303,7 @@ rfs4_fattr4_quota_used(nfs4_attr_cmd_t cmd, struct nfs4_svgetit_arg *sarg,
 /* ARGSUSED */
 static int
 rfs4_fattr4_rawdev(nfs4_attr_cmd_t cmd, struct nfs4_svgetit_arg *sarg,
-	union nfs4_attr_u *na)
+    union nfs4_attr_u *na)
 {
 	int	error = 0;
 
@@ -2320,7 +2347,7 @@ rfs4_fattr4_rawdev(nfs4_attr_cmd_t cmd, struct nfs4_svgetit_arg *sarg,
 /* ARGSUSED */
 static int
 rfs4_fattr4_space_avail(nfs4_attr_cmd_t cmd, struct nfs4_svgetit_arg *sarg,
-	union nfs4_attr_u *na)
+    union nfs4_attr_u *na)
 {
 	int	error = 0;
 
@@ -2367,7 +2394,7 @@ rfs4_fattr4_space_avail(nfs4_attr_cmd_t cmd, struct nfs4_svgetit_arg *sarg,
 /* ARGSUSED */
 static int
 rfs4_fattr4_space_free(nfs4_attr_cmd_t cmd, struct nfs4_svgetit_arg *sarg,
-	union nfs4_attr_u *na)
+    union nfs4_attr_u *na)
 {
 	int	error = 0;
 
@@ -2414,7 +2441,7 @@ rfs4_fattr4_space_free(nfs4_attr_cmd_t cmd, struct nfs4_svgetit_arg *sarg,
 /* ARGSUSED */
 static int
 rfs4_fattr4_space_total(nfs4_attr_cmd_t cmd, struct nfs4_svgetit_arg *sarg,
-	union nfs4_attr_u *na)
+    union nfs4_attr_u *na)
 {
 	int	error = 0;
 
@@ -2461,7 +2488,7 @@ rfs4_fattr4_space_total(nfs4_attr_cmd_t cmd, struct nfs4_svgetit_arg *sarg,
 /* ARGSUSED */
 static int
 rfs4_fattr4_space_used(nfs4_attr_cmd_t cmd, struct nfs4_svgetit_arg *sarg,
-	union nfs4_attr_u *na)
+    union nfs4_attr_u *na)
 {
 	int	error = 0;
 
@@ -2502,7 +2529,7 @@ rfs4_fattr4_space_used(nfs4_attr_cmd_t cmd, struct nfs4_svgetit_arg *sarg,
 /* ARGSUSED */
 static int
 rfs4_fattr4_system(nfs4_attr_cmd_t cmd, struct nfs4_svgetit_arg *sarg,
-	union nfs4_attr_u *na)
+    union nfs4_attr_u *na)
 {
 	return (ENOTSUP);
 }
@@ -2510,7 +2537,7 @@ rfs4_fattr4_system(nfs4_attr_cmd_t cmd, struct nfs4_svgetit_arg *sarg,
 /* ARGSUSED */
 static int
 rfs4_fattr4_time_access(nfs4_attr_cmd_t cmd, struct nfs4_svgetit_arg *sarg,
-	union nfs4_attr_u *na)
+    union nfs4_attr_u *na)
 {
 	int	error = 0;
 	timestruc_t atime;
@@ -2557,7 +2584,7 @@ rfs4_fattr4_time_access(nfs4_attr_cmd_t cmd, struct nfs4_svgetit_arg *sarg,
 /* ARGSUSED */
 static int
 rfs4_fattr4_time_access_set(nfs4_attr_cmd_t cmd, struct nfs4_svgetit_arg *sarg,
-	union nfs4_attr_u *na)
+    union nfs4_attr_u *na)
 {
 	int	error = 0;
 	settime4 *ta;
@@ -2601,7 +2628,7 @@ rfs4_fattr4_time_access_set(nfs4_attr_cmd_t cmd, struct nfs4_svgetit_arg *sarg,
 /* ARGSUSED */
 static int
 rfs4_fattr4_time_backup(nfs4_attr_cmd_t cmd, struct nfs4_svgetit_arg *sarg,
-	union nfs4_attr_u *na)
+    union nfs4_attr_u *na)
 {
 	return (ENOTSUP);
 }
@@ -2609,7 +2636,7 @@ rfs4_fattr4_time_backup(nfs4_attr_cmd_t cmd, struct nfs4_svgetit_arg *sarg,
 /* ARGSUSED */
 static int
 rfs4_fattr4_time_create(nfs4_attr_cmd_t cmd, struct nfs4_svgetit_arg *sarg,
-	union nfs4_attr_u *na)
+    union nfs4_attr_u *na)
 {
 	return (ENOTSUP);
 }
@@ -2617,7 +2644,7 @@ rfs4_fattr4_time_create(nfs4_attr_cmd_t cmd, struct nfs4_svgetit_arg *sarg,
 /* ARGSUSED */
 static int
 rfs4_fattr4_time_delta(nfs4_attr_cmd_t cmd, struct nfs4_svgetit_arg *sarg,
-	union nfs4_attr_u *na)
+    union nfs4_attr_u *na)
 {
 	int error = 0;
 
@@ -2653,7 +2680,7 @@ rfs4_fattr4_time_delta(nfs4_attr_cmd_t cmd, struct nfs4_svgetit_arg *sarg,
 /* ARGSUSED */
 static int
 rfs4_fattr4_time_metadata(nfs4_attr_cmd_t cmd, struct nfs4_svgetit_arg *sarg,
-	union nfs4_attr_u *na)
+    union nfs4_attr_u *na)
 {
 	int	error = 0;
 	timestruc_t ctime;
@@ -2698,7 +2725,7 @@ rfs4_fattr4_time_metadata(nfs4_attr_cmd_t cmd, struct nfs4_svgetit_arg *sarg,
 /* ARGSUSED */
 static int
 rfs4_fattr4_time_modify(nfs4_attr_cmd_t cmd, struct nfs4_svgetit_arg *sarg,
-	union nfs4_attr_u *na)
+    union nfs4_attr_u *na)
 {
 	int	error = 0;
 	timestruc_t mtime;
@@ -2745,7 +2772,7 @@ rfs4_fattr4_time_modify(nfs4_attr_cmd_t cmd, struct nfs4_svgetit_arg *sarg,
 /* ARGSUSED */
 static int
 rfs4_fattr4_time_modify_set(nfs4_attr_cmd_t cmd, struct nfs4_svgetit_arg *sarg,
-	union nfs4_attr_u *na)
+    union nfs4_attr_u *na)
 {
 	int	error = 0;
 	settime4 *tm;

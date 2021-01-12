@@ -22,8 +22,6 @@
 # Copyright 2006 Sun Microsystems, Inc.  All rights reserved.
 # Use is subject to license terms.
 #
-# ident	"%Z%%M%	%I%	%E% SMI"
-#
 
 LIBRARY = libsmbios.a
 VERS = .1
@@ -46,7 +44,7 @@ COMMON_SRCDIR = ../../../common/smbios
 COMMON_HDR = $(SRC)/uts/common/sys/smbios.h
 
 SRCS = $(COMMON_OBJS:%.o=$(COMMON_SRCDIR)/%.c) $(LIB_OBJS:%.o=../common/%.c)
-LIBS = $(DYNLIB) $(LINTLIB)
+LIBS = $(DYNLIB)
 
 SRCDIR = ../common
 
@@ -54,15 +52,15 @@ CLEANFILES += ../common/smb_tables.c
 
 CPPFLAGS += -I../common -I$(COMMON_SRCDIR)
 CFLAGS += $(CCVERBOSE)
-LDLIBS += -lc
+LDLIBS += -ldevinfo -lc
+CFLAGS += $(C_BIGPICFLAGS)
+CFLAGS64 += $(C_BIGPICFLAGS64)
 
-$(LINTLIB) := SRCS = $(SRCDIR)/$(LINTSRC)
 
 .KEEP_STATE:
 
 all: $(LIBS)
 
-lint: lintcheck
 
 include ../../Makefile.targ
 

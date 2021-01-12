@@ -254,9 +254,13 @@ check_usb(dev_info_t *dip, void *arg)
 	immu_devi_t *immu_devi;
 
 
+	/*
+	 * It's not clear if xHCI really needs these quirks; however, to be on
+	 * the safe side until we know for certain we add it to the list below.
+	 */
 	if (drv == NULL ||
 	    (strcmp(drv, "uhci") != 0 && strcmp(drv, "ohci") != 0 &&
-	    strcmp(drv, "ehci") != 0)) {
+	    strcmp(drv, "ehci") != 0 && strcmp(drv, "xhci") != 0)) {
 		return;
 	}
 
@@ -687,9 +691,9 @@ blacklisted_smbios(void)
 		strptr = &black_array[i];
 		if (strcmp(*strptr++, "SMBIOS") == 0) {
 			if (strcmp(*strptr++, mfg) == 0 &&
-			    ((char *)strptr == '\0' ||
+			    (*strptr[0] == '\0' ||
 			    strcmp(*strptr++, product) == 0) &&
-			    ((char *)strptr == '\0' ||
+			    (*strptr[0] == '\0' ||
 			    strcmp(*strptr++, version) == 0)) {
 				return (B_TRUE);
 			}

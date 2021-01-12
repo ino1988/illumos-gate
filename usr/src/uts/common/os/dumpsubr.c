@@ -21,6 +21,8 @@
 
 /*
  * Copyright (c) 1998, 2010, Oracle and/or its affiliates. All rights reserved.
+ * Copyright 2018 Joyent, Inc.
+ * Copyright 2018 Nexenta Systems, Inc. All rights reserved.
  */
 
 #include <sys/types.h>
@@ -70,8 +72,11 @@
 #include <vm/seg_kmem.h>
 #include <sys/clock_impl.h>
 #include <sys/hold_page.h>
+#include <sys/cpu.h>
 
 #include <bzip2/bzlib.h>
+
+#define	ONE_GIG	(1024 * 1024 * 1024UL)
 
 /*
  * Crash dump time is dominated by disk write time.  To reduce this,
@@ -137,7 +142,7 @@ uint_t dump_plat_mincpu = MINCPU_NOT_SET;
 
 /* tunables for pre-reserved heap */
 uint_t dump_kmem_permap = 1024;
-uint_t dump_kmem_pages = 8;
+uint_t dump_kmem_pages = 0;
 
 /* Define multiple buffers per helper to avoid stalling */
 #define	NCBUF_PER_HELPER	2
@@ -342,6 +347,7 @@ typedef struct dumpsync {
 	uint_t neednl;			/* will need to print a newline */
 	uint_t percent;			/* dump progress */
 	uint_t percent_done;		/* dump progress reported */
+	int sec_done;			/* dump progress last report time */
 	cqueue_t freebufq;		/* free kmem bufs for writing */
 	cqueue_t mainq;			/* input for main task */
 	cqueue_t helperq;		/* input for helpers */
@@ -436,6 +442,15 @@ typedef struct dumpbuf {
 dumpbuf_t dumpbuf;		/* I/O buffer */
 
 /*
+ * For parallel dump, defines maximum time main task thread will wait
+ * for at least one helper to register in dumpcfg.helpermap, before
+ * assuming there are no helpers and falling back to serial mode.
+ * Value is chosen arbitrary and provides *really* long wait for any
+ * available helper to register.
+ */
+#define	DUMP_HELPER_MAX_WAIT	1000	/* millisec */
+
+/*
  * The dump I/O buffer must be at least one page, at most xfer_size
  * bytes, and should scale with physmem in between.  The transfer size
  * passed in will either represent a global default (maxphys) or the
@@ -487,8 +502,8 @@ dumpbuf_resize(void)
 
 /*
  * dump_update_clevel is called when dumpadm configures the dump device.
- * 	Calculate number of helpers and buffers.
- * 	Allocate the minimum configuration for now.
+ *	Calculate number of helpers and buffers.
+ *	Allocate the minimum configuration for now.
  *
  * When the dump file is configured we reserve a minimum amount of
  * memory for use at crash time. But we reserve VA for all the memory
@@ -508,15 +523,15 @@ dumpbuf_resize(void)
  * The actual values are defined via DUMP_PLAT_*_MINCPU macros.
  *
  * Architecture		Threshold	Algorithm
- * sun4u       		<  51		parallel lzjb
- * sun4u       		>= 51		parallel bzip2(*)
- * sun4u OPL   		<  8		parallel lzjb
- * sun4u OPL   		>= 8		parallel bzip2(*)
- * sun4v       		<  128		parallel lzjb
- * sun4v       		>= 128		parallel bzip2(*)
+ * sun4u		<  51		parallel lzjb
+ * sun4u		>= 51		parallel bzip2(*)
+ * sun4u OPL		<  8		parallel lzjb
+ * sun4u OPL		>= 8		parallel bzip2(*)
+ * sun4v		<  128		parallel lzjb
+ * sun4v		>= 128		parallel bzip2(*)
  * x86			< 11		parallel lzjb
  * x86			>= 11		parallel bzip2(*)
- * 32-bit      		N/A		single-threaded lzjb
+ * 32-bit		N/A		single-threaded lzjb
  *
  * (*) bzip2 is only chosen if there is sufficient available
  * memory for buffers at dump time. See dumpsys_get_maxmem().
@@ -677,11 +692,23 @@ dump_update_clevel()
 	}
 
 	/*
-	 * Reserve memory for kmem allocation calls made during crash
-	 * dump.  The hat layer allocates memory for each mapping
-	 * created, and the I/O path allocates buffers and data structs.
-	 * Add a few pages for safety.
+	 * Reserve memory for kmem allocation calls made during crash dump.  The
+	 * hat layer allocates memory for each mapping created, and the I/O path
+	 * allocates buffers and data structs.
+	 *
+	 * On larger systems, we easily exceed the lower amount, so we need some
+	 * more space; the cut-over point is relatively arbitrary.  If we run
+	 * out, the only impact is that kmem state in the dump becomes
+	 * inconsistent.
 	 */
+
+	if (dump_kmem_pages == 0) {
+		if (physmem > (16 * ONE_GIG) / PAGESIZE)
+			dump_kmem_pages = 20;
+		else
+			dump_kmem_pages = 8;
+	}
+
 	kmem_dump_init((new->ncmap * dump_kmem_permap) +
 	    (dump_kmem_pages * PAGESIZE));
 
@@ -1228,7 +1255,7 @@ dumpinit(vnode_t *vp, char *name, int justchecking)
 				if (IS_SWAPVP(common_specvp(cvp)))
 					error = EBUSY;
 				else if ((error = VOP_IOCTL(cdev_vp,
-				    DKIOCDUMPINIT, NULL, FKIOCTL, kcred,
+				    DKIOCDUMPINIT, 0, FKIOCTL, kcred,
 				    NULL, NULL)) != 0)
 					dumpfini();
 			}
@@ -1273,7 +1300,7 @@ dumpfini(void)
 	if (is_zfs &&
 	    (cdev_vp = makespecvp(VTOS(dumpvp)->s_dev, VCHR)) != NULL) {
 		if (VOP_OPEN(&cdev_vp, FREAD | FWRITE, kcred, NULL) == 0) {
-			(void) VOP_IOCTL(cdev_vp, DKIOCDUMPFINI, NULL, FKIOCTL,
+			(void) VOP_IOCTL(cdev_vp, DKIOCDUMPFINI, 0, FKIOCTL,
 			    kcred, NULL, NULL);
 			(void) VOP_CLOSE(cdev_vp, FREAD | FWRITE, 1, 0,
 			    kcred, NULL);
@@ -1407,7 +1434,7 @@ dump_as(struct as *as)
 {
 	struct seg *seg;
 
-	AS_LOCK_ENTER(as, &as->a_lock, RW_READER);
+	AS_LOCK_ENTER(as, RW_READER);
 	for (seg = AS_SEGFIRST(as); seg; seg = AS_SEGNEXT(as, seg)) {
 		if (seg->s_as != as)
 			break;
@@ -1415,7 +1442,7 @@ dump_as(struct as *as)
 			continue;
 		SEGOP_DUMP(seg);
 	}
-	AS_LOCK_EXIT(as, &as->a_lock);
+	AS_LOCK_EXIT(as);
 
 	if (seg != NULL)
 		cmn_err(CE_WARN, "invalid segment %p in address space %p",
@@ -2285,39 +2312,64 @@ dumpsys_main_task(void *arg)
 	cbuf_t *cp;
 	pgcnt_t baseoff, pfnoff;
 	pfn_t base, pfn;
-	int sec, i, dumpserial;
+	boolean_t dumpserial;
+	int i;
 
 	/*
 	 * Fall back to serial mode if there are no helpers.
 	 * dump_plat_mincpu can be set to 0 at any time.
 	 * dumpcfg.helpermap must contain at least one member.
+	 *
+	 * It is possible that the helpers haven't registered
+	 * in helpermap yet; wait up to DUMP_HELPER_MAX_WAIT for
+	 * at least one helper to register.
 	 */
-	dumpserial = 1;
-
+	dumpserial = B_TRUE;
 	if (dump_plat_mincpu != 0 && dumpcfg.clevel != 0) {
-		for (i = 0; i < BT_BITOUL(NCPU); ++i) {
-			if (dumpcfg.helpermap[i] != 0) {
-				dumpserial = 0;
+		hrtime_t hrtmax = MSEC2NSEC(DUMP_HELPER_MAX_WAIT);
+		hrtime_t hrtstart = gethrtime();
+
+		for (;;) {
+			for (i = 0; i < BT_BITOUL(NCPU); ++i) {
+				if (dumpcfg.helpermap[i] != 0) {
+					dumpserial = B_FALSE;
+					break;
+				}
+			}
+
+			if ((!dumpserial) ||
+			    ((gethrtime() - hrtstart) >= hrtmax)) {
 				break;
+			}
+
+			SMT_PAUSE();
+		}
+
+		if (dumpserial) {
+			dumpcfg.clevel = 0;
+			if (dumpcfg.helper[0].lzbuf == NULL) {
+				dumpcfg.helper[0].lzbuf =
+				    dumpcfg.helper[1].page;
 			}
 		}
 	}
 
-	if (dumpserial) {
-		dumpcfg.clevel = 0;
-		if (dumpcfg.helper[0].lzbuf == NULL)
-			dumpcfg.helper[0].lzbuf = dumpcfg.helper[1].page;
-	}
-
 	dump_init_memlist_walker(&mlw);
 
-	/* CONSTCOND */
-	while (1) {
+	for (;;) {
+		int sec = (gethrtime() - ds->start) / NANOSEC;
 
-		if (ds->percent > ds->percent_done) {
+		/*
+		 * Render a simple progress display on the system console to
+		 * make clear to the operator that the system has not hung.
+		 * Emit an update when dump progress has advanced by one
+		 * percent, or when no update has been drawn in the last
+		 * second.
+		 */
+		if (ds->percent > ds->percent_done || sec > ds->sec_done) {
+			ds->sec_done = sec;
 			ds->percent_done = ds->percent;
-			sec = (gethrtime() - ds->start) / 1000 / 1000 / 1000;
-			uprintf("^\r%2d:%02d %3d%% done",
+			uprintf("^\rdumping: %2d:%02d %3d%% done",
 			    sec / 60, sec % 60, ds->percent);
 			ds->neednl = 1;
 		}
@@ -2444,11 +2496,10 @@ dumpsys_main_task(void *arg)
 			 */
 			if (dumpserial) {
 				dumpsys_lzjb_page(dumpcfg.helper, cp);
-				break;
+			} else {
+				/* pass mapped pages to a helper */
+				CQ_PUT(helperq, cp, CBUF_INREADY);
 			}
-
-			/* pass mapped pages to a helper */
-			CQ_PUT(helperq, cp, CBUF_INREADY);
 
 			/* the last page was done */
 			if (bitnum >= dumpcfg.bitmapsize)
@@ -2501,8 +2552,7 @@ dumpsys_main_task(void *arg)
 			break;
 
 		} /* end switch */
-
-	} /* end while(1) */
+	}
 }
 
 #ifdef	COLLECT_METRICS
@@ -2555,8 +2605,12 @@ dumpsys_metrics(dumpsync_t *ds, char *buf, size_t size)
 	P("Found small pages,%ld\n", cfg->foundsm);
 
 	P("Compression level,%d\n", cfg->clevel);
-	P("Compression type,%s %s\n", cfg->clevel == 0 ? "serial" : "parallel",
+	P("Compression type,%s %s", cfg->clevel == 0 ? "serial" : "parallel",
 	    cfg->clevel >= DUMP_CLEVEL_BZIP2 ? "bzip2" : "lzjb");
+	if (cfg->clevel >= DUMP_CLEVEL_BZIP2)
+		P(" (level %d)\n", dump_bzip2_level);
+	else
+		P("\n");
 	P("Compression ratio,%d.%02d\n", compress_ratio / 100, compress_ratio %
 	    100);
 	P("nhelper_used,%d\n", cfg->nhelper_used);
@@ -2834,7 +2888,7 @@ dumpsys(void)
 		}
 		++dumpcfg.nhelper_used;
 		hp->helper = FREEHELPER;
-		hp->taskqid = NULL;
+		hp->taskqid = 0;
 		hp->ds = ds;
 		bzero(&hp->perpage, sizeof (hp->perpage));
 		if (dumpcfg.clevel >= DUMP_CLEVEL_BZIP2)
@@ -3069,7 +3123,7 @@ dump_set_uuid(const char *uuidstr)
 
 	(void) strncpy(dump_osimage_uuid, uuidstr, 36 + 1);
 
-	cmn_err(CE_CONT, "?This Solaris instance has UUID %s\n",
+	cmn_err(CE_CONT, "?This illumos instance has UUID %s\n",
 	    dump_osimage_uuid);
 
 	return (0);

@@ -26,31 +26,27 @@
 LIBRARY =	libsecdb.a
 VERS =		.1
 OBJECTS =	secdb.o getauthattr.o getexecattr.o getprofattr.o \
-	 	getuserattr.o chkauthattr.o
+		getuserattr.o chkauthattr.o
 
 include ../../Makefile.lib
 
 # Install this library in the root filesystem
 include ../../Makefile.rootfs
 
-LIBS =		$(DYNLIB) $(LINTLIB)
+LIBS =		$(DYNLIB)
 LDLIBS +=	-lnsl -lc
 
 SRCDIR =	../common
-$(LINTLIB) :=	SRCS = $(SRCDIR)/$(LINTSRC)
 
 CFLAGS +=	$(CCVERBOSE)
 CPPFLAGS +=	-D_REENTRANT
-LINTFLAGS +=	-DPIC
-LINTFLAGS64 +=	-DPIC
 
 CERRWARN +=	-_gcc=-Wno-parentheses
-CERRWARN +=	-_gcc=-Wno-uninitialized
+CERRWARN +=	$(CNOWARN_UNINIT)
 
 .KEEP_STATE:
 
 all: $(LIBS)
 
-lint: lintcheck
 
 include ../../Makefile.targ

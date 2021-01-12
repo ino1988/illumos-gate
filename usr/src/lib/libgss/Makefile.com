@@ -21,6 +21,7 @@
 #
 # Copyright (c) 1999, 2010, Oracle and/or its affiliates. All rights reserved.
 #
+# Copyright (c) 2018, Joyent, Inc.
 
 LIBRARY = libgss.a
 VERS = .1
@@ -87,37 +88,33 @@ SRCS +=		$(GSSCREDOBJ:%.o=$(GSSCRED_DIR)/%.c) \
 		$(KRB5OBJ:%.o=$(KRB5DIR)/%.c) \
 		$(KRB5ETOBJ:%.o=$(KRB5ETDIR)/%.c) \
 		$(UTSGSSOBJ:%.o=$(UTSGSSDIR)/%.c)
-GSSLINTSRC =	$(GSSOBJECTS:%.o=$(SRCDIR)/%.c) \
-		$(GSSCREDOBJ:%.o=$(GSSCRED_DIR)/%.c) \
-		$(UTSGSSOBJ:%.o=$(UTSGSSDIR)/%.c)
 OBJECTS =	$(GSSOBJECTS) $(GSSCREDOBJ) $(KRB5OBJ) $(UTSGSSOBJ) $(KRB5ETOBJ)
 
 # include library definitions
 include ../../Makefile.lib
 
-LIBS =	$(DYNLIB) $(LINTLIB)
+LIBS =	$(DYNLIB)
 
-$(LINTLIB):=	SRCS = $(SRCDIR)/$(LINTSRC)
-LDLIBS += 	-lc
+LDLIBS +=	-lc
 
-CPPFLAGS += 	-I$(GSSCRED_DIR) -I$(SRC)/uts/common/gssapi/include \
-		 -I$(SRC)/uts/common/gssapi/mechs/krb5/include \
-		 -I$(SRC)/uts/common/gssapi/ \
-		 -I$(SRC)/lib/gss_mechs/mech_krb5/include/ \
+CPPFLAGS +=	-I$(GSSCRED_DIR) -I$(SRC)/uts/common/gssapi/include \
+		-I$(SRC)/uts/common/gssapi/mechs/krb5/include \
+		-I$(SRC)/uts/common/gssapi/ \
+		-I$(SRC)/lib/gss_mechs/mech_krb5/include/ \
 		-DHAVE_STDLIB_H
 
 CERRWARN +=	-_gcc=-Wno-unused-function
-CERRWARN +=	-_gcc=-Wno-uninitialized
+CERRWARN +=	$(CNOWARN_UNINIT)
 CERRWARN +=	-_gcc=-Wno-parentheses
 CERRWARN +=	-_gcc=-Wno-empty-body
+
+# not linted
+SMATCH=off
 
 .KEEP_STATE:
 
 all: $(LIBS)
 
-lintcheck:=	SRCS= $(GSSLINTSRC)
-
-lint:  lintcheck
 
 $(GSSCREDOBJ:%.o=pics/%.o):
 	$(COMPILE.c) -o $@ $(@:pics/%.o=$(GSSCRED_DIR)/%.c)
@@ -237,7 +234,7 @@ pics/ss_err.o: $(KRB5ETDIR)/ss_err.c
 # used by rpcsec module
 pics/gen_oids.o: $(SRC)/uts/common/gssapi/gen_oids.c
 	$(COMPILE.c) -o $@ $(SRC)/uts/common/gssapi/gen_oids.c
-	$(POST_PROCESS_O)	
+	$(POST_PROCESS_O)
 
 # include library targets
 include ../../Makefile.targ

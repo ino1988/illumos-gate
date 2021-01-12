@@ -20,6 +20,7 @@
  */
 /*
  * Copyright (c) 2010, Oracle and/or its affiliates. All rights reserved.
+ * Copyright 2014 Nexenta Systems, Inc.  All rights reserved.
  */
 
 
@@ -244,7 +245,7 @@ idmap_stat
 idmap_init_ad(idmap_nm_handle_t *p)
 {
 	idmap_stat	rc = IDMAP_SUCCESS;
-	idmap_ad_disc_ds_t	*dc = NULL;
+	ad_disc_ds_t	*dc = NULL;
 	ad_disc_t	ad_ctx;
 
 	ad_ctx = ad_disc_init();
@@ -902,9 +903,10 @@ idmap_set_namemap(idmap_nm_handle_t *p, char *winname, char *unixname,
 
 		if (p->windomain == NULL) {
 			fullname = strdup(winname);
-			if (fullname == NULL)
+			if (fullname == NULL) {
 				rc = IDMAP_ERR_MEMORY;
 				goto cleanup;
+			}
 		} else {
 			fullname = malloc(strlen(winname) +
 			    strlen(p->windomain) + 2);
@@ -1011,7 +1013,7 @@ idmap_get_namemap(idmap_nm_handle_t *p, int *is_source_ad, char **winname,
 	if (*winname != NULL) {
 		*is_source_ad = IDMAP_YES;
 
-		if (p->is_ad == NULL) {
+		if (p->is_ad == FALSE) {
 			rc = IDMAP_ERR_ARG;
 			namemap_log(
 			    gettext("AD namemaps are not active."));
@@ -1032,7 +1034,7 @@ idmap_get_namemap(idmap_nm_handle_t *p, int *is_source_ad, char **winname,
 
 		*is_source_ad = IDMAP_NO;
 
-		if (p->is_nldap == NULL) {
+		if (p->is_nldap == FALSE) {
 			rc = IDMAP_ERR_ARG;
 			namemap_log(
 			    gettext("Native ldap namemaps aren't active."));

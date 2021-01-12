@@ -22,6 +22,7 @@
 # Copyright 2006 Sun Microsystems, Inc.  All rights reserved.
 # Use is subject to license terms.
 #
+# Copyright (c) 2018, Joyent, Inc.
 
 LIBRARY=	libcurses.a
 VERS=	.2
@@ -82,22 +83,21 @@ SRCS=		$(XCURSES:%.o=../src/libc/xcurses/%.c) \
 		$(MKS:%.o=../src/libc/mks/%.c) \
 		$(WIDE:%.o=../src/libc/wide/%.c)
 
-LIBS =		$(DYNLIB) $(LINTLIB)
+LIBS =		$(DYNLIB)
 
 # definitions for install target
 ROOTLIBDIR=	$(ROOT)/usr/xpg4/lib
 ROOTLIBDIR64=	$(ROOT)/usr/xpg4/lib/$(MACH64)
 ROOTLIBS=	$(LIBS:%=$(ROOTLIBDIR)/%)
 
-$(LINTLIB):= SRCS=../src/libc/llib-lcurses
-
-LINTSRC=	$(LINTLIB:%.ln=%)
-
 LDLIBS += -lc
 
 CPPFLAGS = -I../h -I../src/libc/xcurses $(CPPFLAGS.master)
-CERRWARN += -_gcc=-Wno-uninitialized
+CERRWARN += $(CNOWARN_UNINIT)
 CERRWARN += -_gcc=-Wno-unused-value
+
+# not linted
+SMATCH=off
 
 #
 # If and when somebody gets around to messaging this, CLOBBERFILE should not
@@ -109,7 +109,6 @@ CLOBBERFILES=	libcurses.so libcurses.so$(VERS)
 
 all: $(LIBS)
 
-lint: lintcheck
 
 #
 # Include library targets
@@ -127,11 +126,3 @@ objs/%.o pics/%.o:	../src/libc/mks/%.c
 objs/%.o pics/%.o:	../src/libc/wide/%.c
 	$(COMPILE.c) -o $@ $<
 	$(POST_PROCESS_O)
-
-# install rule for lint library target
-$(ROOTLINTDIR)/%: ../src/libc/%
-	$(INS.file)
-
-# install rule for 64 bit lint library target
-$(ROOTLINTDIR64)/%: ../src/libc/%
-	$(INS.file)

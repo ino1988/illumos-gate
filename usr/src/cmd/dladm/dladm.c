@@ -18,8 +18,11 @@
  *
  * CDDL HEADER END
  */
+
 /*
  * Copyright (c) 2005, 2010, Oracle and/or its affiliates. All rights reserved.
+ * Copyright 2016 Nexenta Systems, Inc.
+ * Copyright 2020 Peter Tribble.
  */
 
 #include <stdio.h>
@@ -192,7 +195,6 @@ static ofmt_cb_t print_lacp_cb, print_phys_one_mac_cb;
 static ofmt_cb_t print_xaggr_cb, print_aggr_stats_cb;
 static ofmt_cb_t print_phys_one_hwgrp_cb, print_wlan_attr_cb;
 static ofmt_cb_t print_wifi_status_cb, print_link_attr_cb;
-static void dladm_ofmt_check(ofmt_status_t, boolean_t, ofmt_handle_t);
 
 typedef void cmdfunc_t(int, char **, const char *);
 
@@ -220,7 +222,7 @@ static cmdfunc_t do_add_bridge, do_remove_bridge, do_show_bridge;
 static cmdfunc_t do_create_iptun, do_modify_iptun, do_delete_iptun;
 static cmdfunc_t do_show_iptun, do_up_iptun, do_down_iptun;
 
-static void 	do_up_vnic_common(int, char **, const char *, boolean_t);
+static void	do_up_vnic_common(int, char **, const char *, boolean_t);
 
 static int show_part(dladm_handle_t, datalink_id_t, void *);
 
@@ -316,9 +318,9 @@ static cmd_t	cmds[] = {
 	    "    show-secobj      [-pP] [-o <field>,...] [<secobj>,...]\n" },
 	{ "init-linkprop",	do_init_linkprop,	NULL		},
 	{ "init-secobj",	do_init_secobj,		NULL		},
-	{ "create-vlan", 	do_create_vlan,
+	{ "create-vlan",	do_create_vlan,
 	    "    create-vlan      [-ft] -l <link> -v <vid> [link]"	},
-	{ "delete-vlan", 	do_delete_vlan,
+	{ "delete-vlan",	do_delete_vlan,
 	    "    delete-vlan      [-t] <link>"				},
 	{ "show-vlan",		do_show_vlan,
 	    "    show-vlan        [-pP] [-o <field>,..] [<link>]\n"	},
@@ -337,7 +339,8 @@ static cmd_t	cmds[] = {
 	{ "delete-phys",	do_delete_phys,
 	    "    delete-phys      <link>"				},
 	{ "show-phys",		do_show_phys,
-	    "    show-phys        [-pP] [-o <field>,..] [-H] [<link>]\n"},
+	    "    show-phys        [-m | -H | -P] [[-p] [-o <field>[,...]] "
+	    "[<link>]\n"						},
 	{ "init-phys",		do_init_phys,		NULL		},
 	{ "show-linkmap",	do_show_linkmap,	NULL		},
 	{ "create-vnic",	do_create_vnic,
@@ -421,7 +424,7 @@ static const struct option lopts[] = {
 	{"bw-limit",	required_argument,	0, 'b'},
 	{"mac-address",	required_argument,	0, 'm'},
 	{"slot",	required_argument,	0, 'n'},
-	{ 0, 0, 0, 0 }
+	{ NULL, 0, NULL, 0 }
 };
 
 static const struct option show_lopts[] = {
@@ -434,7 +437,7 @@ static const struct option show_lopts[] = {
 	{"output",	required_argument,	0, 'o'},
 	{"persistent",	no_argument,		0, 'P'},
 	{"lacp",	no_argument,		0, 'L'},
-	{ 0, 0, 0, 0 }
+	{ NULL, 0, NULL, 0 }
 };
 
 static const struct option iptun_lopts[] = {
@@ -445,7 +448,7 @@ static const struct option iptun_lopts[] = {
 	{"parsable",	no_argument,		0, 'p'},
 	{"parseable",	no_argument,		0, 'p'},
 	{"persistent",	no_argument,		0, 'P'},
-	{ 0, 0, 0, 0 }
+	{ NULL, 0, NULL, 0 }
 };
 
 static char * const iptun_addropts[] = {
@@ -473,7 +476,7 @@ static const struct option prop_longopts[] = {
 	{"parsable",	no_argument,		0, 'c'  },
 	{"parseable",	no_argument,		0, 'c'  },
 	{"persistent",	no_argument,		0, 'P'  },
-	{ 0, 0, 0, 0 }
+	{ NULL, 0, NULL, 0 }
 };
 
 static const struct option wifi_longopts[] = {
@@ -493,7 +496,7 @@ static const struct option wifi_longopts[] = {
 	{"root-dir",	required_argument,	0, 'R'  },
 	{"persistent",	no_argument,		0, 'P'  },
 	{"file",	required_argument,	0, 'f'  },
-	{ 0, 0, 0, 0 }
+	{ NULL, 0, NULL, 0 }
 };
 
 static const struct option showeth_lopts[] = {
@@ -501,7 +504,7 @@ static const struct option showeth_lopts[] = {
 	{"parseable",	no_argument,		0, 'p'	},
 	{"extended",	no_argument,		0, 'x'	},
 	{"output",	required_argument,	0, 'o'	},
-	{ 0, 0, 0, 0 }
+	{ NULL, 0, NULL, 0 }
 };
 
 static const struct option vnic_lopts[] = {
@@ -515,7 +518,7 @@ static const struct option vnic_lopts[] = {
 	{"mac-prefix",	required_argument,	0, 'r'	},
 	{"vrid",	required_argument,	0, 'V'	},
 	{"address-family",	required_argument,	0, 'A'	},
-	{ 0, 0, 0, 0 }
+	{ NULL, 0, NULL, 0 }
 };
 
 static const struct option part_lopts[] = {
@@ -525,7 +528,7 @@ static const struct option part_lopts[] = {
 	{"force",	no_argument,		0, 'f'  },
 	{"root-dir",	required_argument,	0, 'R'  },
 	{"prop",	required_argument,	0, 'p'  },
-	{ 0, 0, 0, 0 }
+	{ NULL, 0, NULL, 0 }
 };
 
 static const struct option show_part_lopts[] = {
@@ -534,13 +537,13 @@ static const struct option show_part_lopts[] = {
 	{"link",	required_argument,	0, 'l'  },
 	{"persistent",	no_argument,		0, 'P'  },
 	{"output",	required_argument,	0, 'o'  },
-	{ 0, 0, 0, 0 }
+	{ NULL, 0, NULL, 0 }
 };
 
 static const struct option etherstub_lopts[] = {
 	{"temporary",	no_argument,		0, 't'	},
 	{"root-dir",	required_argument,	0, 'R'	},
-	{ 0, 0, 0, 0 }
+	{ NULL, 0, NULL, 0 }
 };
 
 static const struct option usage_opts[] = {
@@ -548,7 +551,7 @@ static const struct option usage_opts[] = {
 	{"format",	required_argument,	0, 'F'	},
 	{"start",	required_argument,	0, 's'	},
 	{"stop",	required_argument,	0, 'e'	},
-	{ 0, 0, 0, 0 }
+	{ NULL, 0, NULL, 0 }
 };
 
 static const struct option simnet_lopts[] = {
@@ -556,7 +559,7 @@ static const struct option simnet_lopts[] = {
 	{"root-dir",	required_argument,	0, 'R'	},
 	{"media",	required_argument,	0, 'm'	},
 	{"peer",	required_argument,	0, 'p'	},
-	{ 0, 0, 0, 0 }
+	{ NULL, 0, NULL, 0 }
 };
 
 static const struct option bridge_lopts[] = {
@@ -568,7 +571,7 @@ static const struct option bridge_lopts[] = {
 	{ "link",		required_argument,	0, 'l'	},
 	{ "max-age",		required_argument,	0, 'm'	},
 	{ "priority",		required_argument,	0, 'p'	},
-	{ NULL, NULL, 0, 0 }
+	{ NULL, 0, NULL, 0 }
 };
 
 static const struct option bridge_show_lopts[] = {
@@ -580,7 +583,7 @@ static const struct option bridge_show_lopts[] = {
 	{ "parseable",	no_argument,		0, 'p' },
 	{ "statistics",	no_argument,		0, 's' },
 	{ "trill",	no_argument,		0, 't' },
-	{ 0, 0, 0, 0 }
+	{ NULL, 0, NULL, 0 }
 };
 
 /*
@@ -617,7 +620,7 @@ static const ofmt_field_t ether_fields[] = {
 { "REM_FAULT",	17,
 	offsetof(ether_fields_buf_t, eth_rem_fault), print_default_cb},
 {NULL,		0,
-	0, 	NULL}}
+	0,	NULL}}
 ;
 
 typedef struct print_ether_state {
@@ -649,8 +652,8 @@ static const ofmt_field_t link_s_fields[] = {
 { "IERRORS",	10,		LINK_S_IERRORS,	print_link_stats_cb},
 { "OPACKETS",	12,		LINK_S_OPKTS,	print_link_stats_cb},
 { "OBYTES",	12,		LINK_S_OBYTES,	print_link_stats_cb},
-{ "OERRORS",	8,		LINK_S_OERRORS,	print_link_stats_cb}}
-;
+{ "OERRORS",	8,		LINK_S_OERRORS,	print_link_stats_cb},
+{ NULL,		0,		0,		NULL}};
 
 typedef struct link_args_s {
 	char		*link_s_link;
@@ -665,8 +668,8 @@ typedef struct link_fields_buf_s {
 	char link_class[DLADM_STRSIZE];
 	char link_mtu[11];
 	char link_state[DLADM_STRSIZE];
-	char link_bridge[MAXLINKNAMELEN];
-	char link_over[MAXLINKNAMELEN];
+	char link_bridge[MAXLINKNAMELEN * MAXPORT];
+	char link_over[MAXLINKNAMELEN * MAXPORT];
 	char link_phys_state[DLADM_STRSIZE];
 	char link_phys_media[DLADM_STRSIZE];
 	char link_phys_speed[DLADM_STRSIZE];
@@ -691,7 +694,7 @@ static const ofmt_field_t link_fields[] = {
 	offsetof(link_fields_buf_t, link_state), print_default_cb},
 { "BRIDGE",	11,
     offsetof(link_fields_buf_t, link_bridge), print_default_cb},
-{ "OVER",	DLPI_LINKNAME_MAX,
+{ "OVER",	30,
 	offsetof(link_fields_buf_t, link_over), print_default_cb},
 { NULL,		0, 0, NULL}}
 ;
@@ -710,7 +713,7 @@ typedef struct laggr_fields_buf_s {
 
 typedef struct laggr_args_s {
 	int			laggr_lport; /* -1 indicates the aggr itself */
-	const char 		*laggr_link;
+	const char		*laggr_link;
 	dladm_aggr_grp_attr_t	*laggr_ginfop;
 	dladm_status_t		*laggr_status;
 	pktsum_t		*laggr_pktsumtot; /* -s only */
@@ -833,7 +836,7 @@ static const ofmt_field_t phys_fields[] = {
 	offsetof(link_fields_buf_t, link_phys_device), print_default_cb},
 { "FLAGS",	7,
 	offsetof(link_fields_buf_t, link_flags), print_default_cb},
-{ NULL,		0, NULL, 0}}
+{ NULL,		0, 0, NULL}}
 ;
 
 /*
@@ -1115,7 +1118,7 @@ typedef struct  usage_fields_buf_s {
 	char	usage_rbytes[10];
 	char	usage_opackets[9];
 	char	usage_obytes[10];
-	char	usage_bandwidth[14];
+	char	usage_bandwidth[15];
 } usage_fields_buf_t;
 
 static const ofmt_field_t usage_fields[] = {
@@ -1131,7 +1134,7 @@ static const ofmt_field_t usage_fields[] = {
 	offsetof(usage_fields_buf_t, usage_opackets), print_default_cb},
 { "OBYTES",	11,
 	offsetof(usage_fields_buf_t, usage_obytes), print_default_cb},
-{ "BANDWIDTH",	15,
+{ "BANDWIDTH",	16,
 	offsetof(usage_fields_buf_t, usage_bandwidth), print_default_cb},
 { NULL,		0, 0, NULL}}
 ;
@@ -1147,7 +1150,7 @@ typedef struct  usage_l_fields_buf_s {
 	char	usage_l_etime[13];
 	char	usage_l_rbytes[8];
 	char	usage_l_obytes[8];
-	char	usage_l_bandwidth[14];
+	char	usage_l_bandwidth[15];
 } usage_l_fields_buf_t;
 
 static const ofmt_field_t usage_l_fields[] = {
@@ -1162,7 +1165,7 @@ static const ofmt_field_t usage_l_fields[] = {
 	offsetof(usage_l_fields_buf_t, usage_l_rbytes), print_default_cb},
 { "OBYTES",	9,
 	offsetof(usage_l_fields_buf_t, usage_l_obytes), print_default_cb},
-{ "BANDWIDTH",	15,
+{ "BANDWIDTH",	16,
 	offsetof(usage_l_fields_buf_t, usage_l_bandwidth), print_default_cb},
 { NULL,		0, 0, NULL}}
 ;
@@ -1532,7 +1535,7 @@ show_usage_time(dladm_usage_t *usage, void *arg)
 {
 	show_usage_state_t	*state = (show_usage_state_t *)arg;
 	char			buf[DLADM_STRSIZE];
-	usage_l_fields_buf_t 	ubuf;
+	usage_l_fields_buf_t	ubuf;
 	time_t			time;
 	double			bw;
 	dladm_status_t		status;
@@ -1721,7 +1724,7 @@ do_show_usage(int argc, char *argv[], const char *use)
 		die("show-usage requires a file");
 
 	if (optind == (argc-1)) {
-		uint32_t 	flags;
+		uint32_t	flags;
 
 		resource = argv[optind];
 		if (!state.us_showall &&
@@ -1751,7 +1754,7 @@ do_show_usage(int argc, char *argv[], const char *use)
 		    &ofmt);
 
 	}
-	dladm_ofmt_check(oferr, state.us_parsable, ofmt);
+	ofmt_check(oferr, state.us_parsable, ofmt, die, warn);
 	state.us_ofmt = ofmt;
 
 	if (d_arg) {
@@ -2683,7 +2686,7 @@ print_link_topology(show_state_t *state, datalink_id_t linkid,
 			(void) strlcat(lbuf->link_over, tmpbuf,
 			    sizeof (lbuf->link_over));
 			if (i != (ginfo.lg_nports - 1)) {
-				(void) strlcat(lbuf->link_over, " ",
+				(void) strlcat(lbuf->link_over, ",",
 				    sizeof (lbuf->link_over));
 			}
 		}
@@ -2746,7 +2749,7 @@ print_link_topology(show_state_t *state, datalink_id_t linkid,
 			(void) strlcat(lbuf->link_over, tmpbuf,
 			    sizeof (lbuf->link_over));
 			if (i != nports - 1) {
-				(void) strlcat(lbuf->link_over, " ",
+				(void) strlcat(lbuf->link_over, ",",
 				    sizeof (lbuf->link_over));
 			}
 		}
@@ -2986,7 +2989,7 @@ print_aggr_info(show_grp_state_t *state, const char *link,
 static boolean_t
 print_xaggr_cb(ofmt_arg_t *ofarg, char *buf, uint_t bufsize)
 {
-	const laggr_args_t 	*l = ofarg->ofmt_cbarg;
+	const laggr_args_t	*l = ofarg->ofmt_cbarg;
 	boolean_t		is_port = (l->laggr_lport >= 0);
 	char			tmpbuf[DLADM_STRSIZE];
 	const char		*objname;
@@ -3172,7 +3175,7 @@ static boolean_t
 print_aggr_stats_cb(ofmt_arg_t *ofarg, char *buf, uint_t bufsize)
 {
 	const laggr_args_t	*l = ofarg->ofmt_cbarg;
-	int 			portnum;
+	int			portnum;
 	boolean_t		is_port = (l->laggr_lport >= 0);
 	dladm_aggr_port_attr_t	*portp;
 	dladm_status_t		*stat, status;
@@ -3388,7 +3391,6 @@ do_show_link(int argc, char *argv[], const char *use)
 {
 	int		option;
 	boolean_t	s_arg = B_FALSE;
-	boolean_t	S_arg = B_FALSE;
 	boolean_t	i_arg = B_FALSE;
 	uint32_t	flags = DLADM_OPT_ACTIVE;
 	boolean_t	p_arg = B_FALSE;
@@ -3410,7 +3412,7 @@ do_show_link(int argc, char *argv[], const char *use)
 	bzero(&state, sizeof (state));
 
 	opterr = 0;
-	while ((option = getopt_long(argc, argv, ":pPsSi:o:",
+	while ((option = getopt_long(argc, argv, ":pPsi:o:",
 	    show_lopts, NULL)) != -1) {
 		switch (option) {
 		case 'p':
@@ -3431,12 +3433,6 @@ do_show_link(int argc, char *argv[], const char *use)
 
 			flags = DLADM_OPT_PERSIST;
 			break;
-		case 'S':
-			if (S_arg)
-				die_optdup(option);
-
-			S_arg = B_TRUE;
-			break;
 		case 'o':
 			o_arg = B_TRUE;
 			fields_str = optarg;
@@ -3455,17 +3451,11 @@ do_show_link(int argc, char *argv[], const char *use)
 		}
 	}
 
-	if (i_arg && !(s_arg || S_arg))
-		die("the option -i can be used only with -s or -S");
-
-	if (s_arg && S_arg)
-		die("the -s option cannot be used with -S");
+	if (i_arg && !s_arg)
+		die("the option -i can be used only with -s");
 
 	if (s_arg && flags != DLADM_OPT_ACTIVE)
 		die("the option -P cannot be used with -s");
-
-	if (S_arg && (p_arg || flags != DLADM_OPT_ACTIVE))
-		die("the option -%c cannot be used with -S", p_arg ? 'p' : 'P');
 
 	/* get link name (optional last argument) */
 	if (optind == (argc-1)) {
@@ -3491,11 +3481,6 @@ do_show_link(int argc, char *argv[], const char *use)
 	if (p_arg && !o_arg)
 		die("-p requires -o");
 
-	if (S_arg) {
-		dladm_continuous(handle, linkid, NULL, interval, LINK_REPORT);
-		return;
-	}
-
 	if (p_arg && strcasecmp(fields_str, "all") == 0)
 		die("\"-o all\" is invalid with -p");
 
@@ -3518,8 +3503,11 @@ do_show_link(int argc, char *argv[], const char *use)
 	}
 	if (state.ls_parsable)
 		ofmtflags |= OFMT_PARSABLE;
+	else
+		ofmtflags |= OFMT_WRAP;
+
 	oferr = ofmt_open(fields_str, link_fields, ofmtflags, 0, &ofmt);
-	dladm_ofmt_check(oferr, state.ls_parsable, ofmt);
+	ofmt_check(oferr, state.ls_parsable, ofmt, die, warn);
 	state.ls_ofmt = ofmt;
 
 	if (linkid == DATALINK_ALL_LINKID) {
@@ -3685,7 +3673,7 @@ do_show_aggr(int argc, char *argv[], const char *use)
 	if (state.gs_parsable)
 		ofmtflags |= OFMT_PARSABLE;
 	oferr = ofmt_open(fields_str, pf, ofmtflags, 0, &ofmt);
-	dladm_ofmt_check(oferr, state.gs_parsable, ofmt);
+	ofmt_check(oferr, state.gs_parsable, ofmt, die, warn);
 	state.gs_ofmt = ofmt;
 
 	if (s_arg) {
@@ -3719,6 +3707,7 @@ print_phys_default(show_state_t *state, datalink_id_t linkid,
 	if (status != DLADM_STATUS_OK)
 		goto done;
 
+	bzero(&pattr, sizeof (pattr));
 	(void) snprintf(pattr.link_phys_device,
 	    sizeof (pattr.link_phys_device), "%s", dpa.dp_dev);
 	(void) dladm_media2str(media, pattr.link_phys_media);
@@ -3838,7 +3827,7 @@ print_phys_one_hwgrp_cb(ofmt_arg_t *ofarg, char *buf, uint_t bufsize)
 	case PHYS_H_RINGS:
 		ringstr[0] = '\0';
 		for (i = 0; i < attr->hg_n_rings; i++) {
-			uint_t 	index = attr->hg_rings[i];
+			uint_t	index = attr->hg_rings[i];
 
 			if (start == -1) {
 				start = index;
@@ -3986,6 +3975,8 @@ iptun_process_addrarg(char *addrarg, iptun_params_t *params)
 	while (*addrarg != '\0') {
 		switch (getsubopt(&addrarg, iptun_addropts, &addrval)) {
 		case IPTUN_LOCAL:
+			if (addrval == NULL)
+				die("tunnel source address value is missing");
 			params->iptun_param_flags |= IPTUN_PARAM_LADDR;
 			if (strlcpy(params->iptun_param_laddr, addrval,
 			    sizeof (params->iptun_param_laddr)) >=
@@ -3993,6 +3984,9 @@ iptun_process_addrarg(char *addrarg, iptun_params_t *params)
 				die("tunnel source address is too long");
 			break;
 		case IPTUN_REMOTE:
+			if (addrval == NULL)
+				die("tunnel destination address value "
+				    "is missing");
 			params->iptun_param_flags |= IPTUN_PARAM_RADDR;
 			if (strlcpy(params->iptun_param_raddr, addrval,
 			    sizeof (params->iptun_param_raddr)) >=
@@ -4155,7 +4149,7 @@ do_show_iptun(int argc, char *argv[], const char *use)
 
 	oferr = ofmt_open(fields_str, iptun_fields, ofmtflags,
 	    DLADM_DEFAULT_COL, &ofmt);
-	dladm_ofmt_check(oferr, state.ls_parsable, ofmt);
+	ofmt_check(oferr, state.ls_parsable, ofmt, die, warn);
 
 	state.ls_ofmt = ofmt;
 	state.ls_flags = flags;
@@ -4520,7 +4514,7 @@ do_show_phys(int argc, char *argv[], const char *use)
 	if (state.ls_parsable)
 		ofmtflags |= OFMT_PARSABLE;
 	oferr = ofmt_open(fields_str, pf, ofmtflags, 0, &ofmt);
-	dladm_ofmt_check(oferr, state.ls_parsable, ofmt);
+	ofmt_check(oferr, state.ls_parsable, ofmt, die, warn);
 	state.ls_ofmt = ofmt;
 
 	if (linkid == DATALINK_ALL_LINKID) {
@@ -4599,7 +4593,7 @@ do_show_vlan(int argc, char *argv[], const char *use)
 	if (state.ls_parsable)
 		ofmtflags |= OFMT_PARSABLE;
 	oferr = ofmt_open(fields_str, vlan_fields, ofmtflags, 0, &ofmt);
-	dladm_ofmt_check(oferr, state.ls_parsable, ofmt);
+	ofmt_check(oferr, state.ls_parsable, ofmt, die, warn);
 	state.ls_ofmt = ofmt;
 
 	if (linkid == DATALINK_ALL_LINKID) {
@@ -4885,7 +4879,7 @@ do_up_vnic_common(int argc, char *argv[], const char *use, boolean_t vlan)
 {
 	datalink_id_t	linkid = DATALINK_ALL_LINKID;
 	dladm_status_t	status;
-	char 		*type;
+	char		*type;
 
 	type = vlan ? "vlan" : "vnic";
 
@@ -5216,7 +5210,7 @@ do_show_vnic_common(int argc, char *argv[], const char *use,
 	if (state.vs_parsable)
 		ofmtflags |= OFMT_PARSABLE;
 	oferr = ofmt_open(fields_str, pf, ofmtflags, 0, &ofmt);
-	dladm_ofmt_check(oferr, state.vs_parsable, ofmt);
+	ofmt_check(oferr, state.vs_parsable, ofmt, die, warn);
 	state.vs_ofmt = ofmt;
 
 	if (s_arg) {
@@ -5601,7 +5595,7 @@ do_show_simnet(int argc, char *argv[], const char *use)
 	if (state.ls_parsable)
 		ofmtflags |= OFMT_PARSABLE;
 	oferr = ofmt_open(fields_str, simnet_fields, ofmtflags, 0, &ofmt);
-	dladm_ofmt_check(oferr, state.ls_parsable, ofmt);
+	ofmt_check(oferr, state.ls_parsable, ofmt, die, warn);
 	state.ls_ofmt = ofmt;
 
 	if (linkid == DATALINK_ALL_LINKID) {
@@ -5629,7 +5623,7 @@ link_stats(datalink_id_t linkid, uint_t interval, char *fields_str,
 	if (state->ls_parsable)
 		ofmtflags |= OFMT_PARSABLE;
 	oferr = ofmt_open(fields_str, link_s_fields, ofmtflags, 0, &ofmt);
-	dladm_ofmt_check(oferr, state->ls_parsable, ofmt);
+	ofmt_check(oferr, state->ls_parsable, ofmt, die, warn);
 	state->ls_ofmt = ofmt;
 
 	/*
@@ -5940,7 +5934,7 @@ parse_wifi_fields(char *str, ofmt_handle_t *ofmt, uint_t cmdtype,
 
 	oferr = ofmt_open(str, template, (parsable ? OFMT_PARSABLE : 0),
 	    0, ofmt);
-	dladm_ofmt_check(oferr, parsable, *ofmt);
+	ofmt_check(oferr, parsable, *ofmt, die, warn);
 	return (0);
 }
 
@@ -6194,7 +6188,7 @@ parse_wlan_keys(char *str, dladm_wlan_key_t **keys, uint_t *key_countp)
 	char			*field, *token, *lasts = NULL, c;
 
 	token = str;
-	while ((c = *token++) != NULL) {
+	while ((c = *token++) != '\0') {
 		if (c == ',')
 			nfields++;
 	}
@@ -6558,7 +6552,7 @@ static boolean_t
 print_linkprop_cb(ofmt_arg_t *ofarg, char *buf, uint_t bufsize)
 {
 	linkprop_args_t		*arg = ofarg->ofmt_cbarg;
-	char 			*propname = arg->ls_propname;
+	char			*propname = arg->ls_propname;
 	show_linkprop_state_t	*statep = arg->ls_state;
 	char			*ptr = statep->ls_line;
 	char			*lim = ptr + MAX_PROP_LINE;
@@ -6750,7 +6744,7 @@ do_show_linkprop(int argc, char **argv, const char *use)
 		ofmtflags |= OFMT_WRAP;
 
 	oferr = ofmt_open(fields_str, linkprop_fields, ofmtflags, 0, &ofmt);
-	dladm_ofmt_check(oferr, state.ls_parsable, ofmt);
+	ofmt_check(oferr, state.ls_parsable, ofmt, die, warn);
 	state.ls_ofmt = ofmt;
 
 	if (linkid == DATALINK_ALL_LINKID) {
@@ -7379,7 +7373,7 @@ do_delete_secobj(int argc, char **argv, const char *use)
 		die("secure object name required");
 
 	token = argv[optind];
-	while ((c = *token++) != NULL) {
+	while ((c = *token++) != '\0') {
 		if (c == ',')
 			nfields++;
 	}
@@ -7521,7 +7515,7 @@ do_show_secobj(int argc, char **argv, const char *use)
 	if (state.ss_parsable)
 		ofmtflags |= OFMT_PARSABLE;
 	oferr = ofmt_open(fields_str, secobj_fields, ofmtflags, 0, &ofmt);
-	dladm_ofmt_check(oferr, state.ss_parsable, ofmt);
+	ofmt_check(oferr, state.ss_parsable, ofmt, die, warn);
 	state.ss_ofmt = ofmt;
 
 	flags = state.ss_persist ? DLADM_OPT_PERSIST : 0;
@@ -7532,7 +7526,7 @@ do_show_secobj(int argc, char **argv, const char *use)
 		token = argv[optind];
 		if (token == NULL)
 			die("secure object name required");
-		while ((c = *token++) != NULL) {
+		while ((c = *token++) != '\0') {
 			if (c == ',')
 				obj_fields++;
 		}
@@ -7616,9 +7610,9 @@ do_init_linkprop(int argc, char **argv, const char *use)
 static void
 do_show_ether(int argc, char **argv, const char *use)
 {
-	int 			option;
+	int			option;
 	datalink_id_t		linkid;
-	print_ether_state_t 	state;
+	print_ether_state_t	state;
 	char			*fields_str = NULL;
 	ofmt_handle_t		ofmt;
 	ofmt_status_t		oferr;
@@ -7653,7 +7647,7 @@ do_show_ether(int argc, char **argv, const char *use)
 		ofmtflags |= OFMT_PARSABLE;
 	oferr = ofmt_open(fields_str, ether_fields, ofmtflags,
 	    DLADM_DEFAULT_COL, &ofmt);
-	dladm_ofmt_check(oferr, state.es_parsable, ofmt);
+	ofmt_check(oferr, state.es_parsable, ofmt, die, warn);
 	state.es_ofmt = ofmt;
 
 	if (state.es_link == NULL) {
@@ -7682,8 +7676,9 @@ show_etherprop(dladm_handle_t dh, datalink_id_t linkid, void *arg)
 	}
 
 	status = dladm_ether_info(dh, linkid, &eattr);
-	if (status != DLADM_STATUS_OK)
-		goto cleanup;
+	if (status != DLADM_STATUS_OK) {
+		return (DLADM_WALK_CONTINUE);
+	}
 
 	(void) strlcpy(ebuf.eth_ptype, "current", sizeof (ebuf.eth_ptype));
 
@@ -7705,7 +7700,6 @@ show_etherprop(dladm_handle_t dh, datalink_id_t linkid, void *arg)
 	if (statep->es_extended)
 		show_ether_xprop(arg, &eattr);
 
-cleanup:
 	dladm_ether_info_done(&eattr);
 	return (DLADM_WALK_CONTINUE);
 }
@@ -8727,7 +8721,7 @@ do_show_bridge(int argc, char **argv, const char *use)
 	if (parsable)
 		ofmtflags |= OFMT_PARSABLE;
 	oferr = ofmt_open(fields_str, field_arr, ofmtflags, 0, &ofmt);
-	dladm_ofmt_check(oferr, brstate.state.ls_parsable, ofmt);
+	ofmt_check(oferr, brstate.state.ls_parsable, ofmt, die, warn);
 	brstate.state.ls_ofmt = ofmt;
 
 	for (;;) {
@@ -9055,29 +9049,6 @@ print_default_cb(ofmt_arg_t *ofarg, char *buf, uint_t bufsize)
 	return (B_TRUE);
 }
 
-static void
-dladm_ofmt_check(ofmt_status_t oferr, boolean_t parsable,
-    ofmt_handle_t ofmt)
-{
-	char buf[OFMT_BUFSIZE];
-
-	if (oferr == OFMT_SUCCESS)
-		return;
-	(void) ofmt_strerror(ofmt, oferr, buf, sizeof (buf));
-	/*
-	 * All errors are considered fatal in parsable mode.
-	 * NOMEM errors are always fatal, regardless of mode.
-	 * For other errors, we print diagnostics in human-readable
-	 * mode and processs what we can.
-	 */
-	if (parsable || oferr == OFMT_ENOFIELDS) {
-		ofmt_close(ofmt);
-		die(buf);
-	} else {
-		warn(buf);
-	}
-}
-
 /*
  * Called from the walker dladm_walk_datalink_id() for each IB partition to
  * display IB partition specific information.
@@ -9275,7 +9246,7 @@ do_show_part(int argc, char *argv[], const char *use)
 	if (state.ps_parsable)
 		ofmtflags |= OFMT_PARSABLE;
 	oferr = ofmt_open(fields_str, part_fields, ofmtflags, 0, &ofmt);
-	dladm_ofmt_check(oferr, state.ps_parsable, ofmt);
+	ofmt_check(oferr, state.ps_parsable, ofmt, die, warn);
 	state.ps_ofmt = ofmt;
 
 	/*
@@ -9447,7 +9418,7 @@ do_show_ib(int argc, char *argv[], const char *use)
 	if (state.is_parsable)
 		ofmtflags |= OFMT_PARSABLE;
 	oferr = ofmt_open(fields_str, ib_fields, ofmtflags, 0, &ofmt);
-	dladm_ofmt_check(oferr, state.is_parsable, ofmt);
+	ofmt_check(oferr, state.is_parsable, ofmt, die, warn);
 	state.is_ofmt = ofmt;
 
 	/*

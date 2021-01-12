@@ -30,11 +30,6 @@
 #ifndef	_AVL_H
 #define	_AVL_H
 
-/*
- * This is a private header file.  Applications should not directly include
- * this file.
- */
-
 #ifdef	__cplusplus
 extern "C" {
 #endif
@@ -43,9 +38,9 @@ extern "C" {
 #include <sys/avl_impl.h>
 
 /*
- * This is a generic implementation of AVL trees for use in the Solaris kernel.
- * The interfaces provide an efficient way of implementing an ordered set of
- * data structures.
+ * This is a generic implementation of AVL trees for use in the illumos. The
+ * interfaces provide an efficient way of implementing an ordered set of data
+ * structures.
  *
  * AVL trees provide an alternative to using an ordered linked list. Using AVL
  * trees will usually be faster, however they requires more storage. An ordered
@@ -57,7 +52,7 @@ extern "C" {
  *	---------	 --------	--------
  *	lookup		   O(n)		O(log(n))
  *
- *	insert 1 node	 constant	constant
+ *	insert 1 node	 constant	O(log(n))
  *
  *	delete 1 node	 constant	between constant and O(log(n))
  *
@@ -105,6 +100,13 @@ extern "C" {
  * as is needed for any linked list implementation.
  */
 
+/*
+ * AVL comparator helpers
+ */
+#define	AVL_ISIGN(a)	(((a) > 0) - ((a) < 0))
+#define	AVL_CMP(a, b)	(((a) > (b)) - ((a) < (b)))
+#define	AVL_PCMP(a, b)	\
+	(((uintptr_t)(a) > (uintptr_t)(b)) - ((uintptr_t)(a) < (uintptr_t)(b)))
 
 /*
  * Type used for the root of the AVL tree.

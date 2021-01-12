@@ -21,6 +21,7 @@
 
 #
 # Copyright (c) 2006, 2010, Oracle and/or its affiliates. All rights reserved.
+# Copyright 2013 Saso Kiselkov. All rights reserved.
 #
 
 include		$(SRC)/lib/Makefile.lib
@@ -29,20 +30,19 @@ $(SPARC_BLD)CAPDIR = capabilities
 
 SUBDIRS=	$(MACH) $(BUILD64) $(MACH64)
 
-HDRS =		md4.h md5.h sha1.h sha2.h
+HDRS =		md4.h md5.h sha1.h sha2.h skein.h
 HDRDIR =	common
 
 all :=		TARGET= all
 clean :=	TARGET= clean
 clobber :=	TARGET= clobber
 install :=	TARGET= install
-lint :=		TARGET= lint
 
 .KEEP_STATE:
 
 .PARALLEL:	$(SUBDIRS)
 
-all clean clobber install lint: \
+all clean clobber install: \
 		$(CAPDIR) .WAIT $(SUBDIRS)
 
 install_h:	$(ROOTHDRS)

@@ -18,11 +18,13 @@
  *
  * CDDL HEADER END
  */
+
 /*
  * Copyright 2009 Sun Microsystems, Inc.  All rights reserved.
  * Use is subject to license terms.
  *
- * Copyright 2014 Nexenta Systems, Inc.  All rights reserved.
+ * Copyright 2015 Nexenta Systems, Inc.  All rights reserved.
+ * Copyright 2016 Joyent, Inc.
  */
 
 #include <sys/param.h>
@@ -63,7 +65,7 @@
 uint32_t panicbuf_log = PANICBUFSIZE;
 uint32_t panicbuf_index = PANICBUFSIZE;
 
-static int aask, aok;
+int aask, aok;
 static int ce_to_sl[CE_IGNORE] = { SL_NOTE, SL_NOTE, SL_WARN, SL_FATAL };
 static char ce_prefix[CE_IGNORE][10] = { "", "NOTICE: ", "WARNING: ", "" };
 static char ce_suffix[CE_IGNORE][2] = { "", "\n", "\n", "" };
@@ -246,27 +248,35 @@ uprintf(const char *fmt, ...)
 }
 
 static void
-vzdcmn_err(zoneid_t zoneid, int ce, const char *fmt, va_list adx,
+vzdcmn_err(zoneid_t zoneid, void *site, int ce, const char *fmt, va_list adx,
     dev_info_t *dip)
 {
 	if (ce == CE_PANIC)
 		vpanic(fmt, adx);
-	if ((uint_t)ce < CE_IGNORE)
+	if ((uint_t)ce < CE_IGNORE) {
 		cprintf(fmt, adx, ce_to_sl[ce] | SL_CONSOLE,
-		    ce_prefix[ce], ce_suffix[ce], caller(), 0, 0, 0,
+		    ce_prefix[ce], ce_suffix[ce], site, 0, 0, 0,
 		    zoneid, dip);
+	}
 }
 
 void
 vzcmn_err(zoneid_t zoneid, int ce, const char *fmt, va_list adx)
 {
-	vzdcmn_err(zoneid, ce, fmt, adx, NULL);
+	vzdcmn_err(zoneid, caller(), ce, fmt, adx, NULL);
 }
 
 void
 vcmn_err(int ce, const char *fmt, va_list adx)
 {
-	vzdcmn_err(GLOBAL_ZONEID, ce, fmt, adx, NULL);
+	vzdcmn_err(GLOBAL_ZONEID, caller(), ce, fmt, adx, NULL);
+}
+
+/*PRINTFLIKE3*/
+void
+vdev_err(dev_info_t *dip, int ce, const char *fmt, va_list adx)
+{
+	vzdcmn_err(GLOBAL_ZONEID, caller(), ce, fmt, adx, dip);
 }
 
 /*PRINTFLIKE2*/
@@ -276,7 +286,7 @@ cmn_err(int ce, const char *fmt, ...)
 	va_list adx;
 
 	va_start(adx, fmt);
-	vzdcmn_err(GLOBAL_ZONEID, ce, fmt, adx, NULL);
+	vzdcmn_err(GLOBAL_ZONEID, caller(), ce, fmt, adx, NULL);
 	va_end(adx);
 }
 
@@ -287,7 +297,7 @@ zcmn_err(zoneid_t zoneid, int ce, const char *fmt, ...)
 	va_list adx;
 
 	va_start(adx, fmt);
-	vzdcmn_err(zoneid, ce, fmt, adx, NULL);
+	vzdcmn_err(zoneid, caller(), ce, fmt, adx, NULL);
 	va_end(adx);
 }
 
@@ -298,7 +308,7 @@ dev_err(dev_info_t *dip, int ce, char *fmt, ...)
 	va_list adx;
 
 	va_start(adx, fmt);
-	vzdcmn_err(GLOBAL_ZONEID, ce, fmt, adx, dip);
+	vzdcmn_err(GLOBAL_ZONEID, caller(), ce, fmt, adx, dip);
 	va_end(adx);
 }
 

@@ -24,13 +24,7 @@
 # Copyright 2004 Sun Microsystems, Inc.  All rights reserved.
 # Use is subject to license terms.
 #
-
-#
-#	This makefile drives the production of the hpcsvc "misc"
-#	kernel module.
-#
-#	intel architecture dependent
-#
+# Copyright (c) 2018, Joyent, Inc.
 
 #
 #	Path to the base of the uts directory tree (usually /usr/src/uts).
@@ -42,7 +36,6 @@ UTSBASE	= ../..
 #
 MODULE		= hpcsvc
 OBJECTS		= $(HPCSVC_OBJS:%=$(OBJS_DIR)/%)
-LINTS		= $(HPCSVC_OBJS:%.o=$(LINTS_DIR)/%.ln)
 ROOTMODULE	= $(ROOT_MISC_DIR)/$(MODULE)
 
 #
@@ -54,7 +47,6 @@ include $(UTSBASE)/intel/Makefile.intel
 #	Define targets
 #
 ALL_TARGET	= $(BINARY)
-LINT_TARGET	= $(MODULE).lint
 INSTALL_TARGET	= $(BINARY) $(ROOTMODULE)
 
 #
@@ -63,7 +55,10 @@ INSTALL_TARGET	= $(BINARY) $(ROOTMODULE)
 DEBUG_FLGS	=
 DEBUG_DEFS	+= $(DEBUG_FLGS)
 
-CERRWARN	+= -_gcc=-Wno-uninitialized
+CERRWARN	+= $(CNOWARN_UNINIT)
+
+# needs work
+$(OBJS_DIR)/hpcsvc.o := SMOFF += all_func_returns
 
 #
 #	Default build targets.
@@ -77,12 +72,6 @@ all:		$(ALL_DEPS)
 clean:		$(CLEAN_DEPS)
 
 clobber:	$(CLOBBER_DEPS)
-
-lint:		$(LINT_DEPS)
-
-modlintlib:	$(MODLINTLIB_DEPS)
-
-clean.lint:	$(CLEAN_LINT_DEPS)
 
 install:	$(INSTALL_DEPS)
 

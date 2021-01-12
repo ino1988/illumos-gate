@@ -22,11 +22,12 @@
 # Copyright 2008 Sun Microsystems, Inc.  All rights reserved.
 # Use is subject to license terms.
 #
+# Copyright (c) 2018, Joyent, Inc.
 
 #
 # This make file will build mech_dh.so.1. This shared object
 # contains all the functionality needed to support Diffie-Hellman GSS-API
-# mechanism. 
+# mechanism.
 #
 
 LIBRARY= mech_dh.a
@@ -48,10 +49,13 @@ CPPFLAGS += -I../mech -I../crypto -I$(SRC)/uts/common/gssapi/include
 
 CERRWARN +=	-_gcc=-Wno-parentheses
 CERRWARN +=	-_gcc=-Wno-unused-variable
-CERRWARN +=	-_gcc=-Wno-uninitialized
+CERRWARN +=	$(CNOWARN_UNINIT)
 
-$(PICS) := 	CFLAGS += $(XFFLAG)
-$(PICS) := 	CCFLAGS += $(XFFLAG)
+# needs work
+SMATCH=off
+
+$(PICS) :=	CFLAGS += $(XFFLAG)
+$(PICS) :=	CCFLAGS += $(XFFLAG)
 $(PICS) :=	CFLAGS64 += $(XFFLAG)
 $(PICS) :=	CCFLAGS64 += $(XFFLAG)
 
@@ -62,7 +66,7 @@ LIBNAME = $(LIBRARY:%.a=%)
 
 MAPFILES =	../mapfile-vers
 
-LDLIBS +=  -lgss -lnsl -lc 
+LDLIBS +=  -lgss -lnsl -lc
 
 RPCGEN += -C
 SED = sed
@@ -74,17 +78,6 @@ SRCS=	$(CSRCS)
 
 ROOTLIBDIR = $(ROOT)/usr/lib/gss
 ROOTLIBDIR64 = $(ROOT)/usr/lib/$(MACH64)/gss
-
-#LINTFLAGS += -dirout=lint -errfmt=simple
-#LINTFLAGS64 += -dirout=lint -errfmt=simple -errchk all
-LINTOUT =	lint.out
-LINTSRC =	$(LINTLIB:%.ln=%)
-ROOTLINTDIR =	$(ROOTLIBDIR)
-#ROOTLINT = 	$(LINTSRC:%=$(ROOTLINTDIR)/%)
-
-CLEANFILES += $(LINTOUT) $(LINTLIB)
-
-lint: lintcheck
 
 $(ROOTLIBDIR):
 	$(INS.dir)

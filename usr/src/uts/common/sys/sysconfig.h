@@ -19,18 +19,17 @@
  * CDDL HEADER END
  */
 /*	Copyright (c) 1984, 1986, 1987, 1988, 1989 AT&T	*/
-/*	  All Rights Reserved  	*/
+/*	  All Rights Reserved	*/
 
 
 /*
  * Copyright 2007 Sun Microsystems, Inc.  All rights reserved.
  * Use is subject to license terms.
+ * Copyright 2016 Joyent, Inc.
  */
 
 #ifndef _SYS_SYSCONFIG_H
 #define	_SYS_SYSCONFIG_H
-
-#pragma ident	"%Z%%M%	%I%	%E% SMI"	/* SVr4.0 1.5 */
 
 #ifdef	__cplusplus
 extern "C" {
@@ -102,6 +101,9 @@ extern int	mach_sysconfig(int);
 #define	_CONFIG_SYMLOOP_MAX	46	/* maximum # of symlinks in pathname */
 
 #define	_CONFIG_EPHID_MAX	47	/* maximum ephemeral uid */
+#define	_CONFIG_UADDR_MAX	48	/* maximum user address */
+
+#define	_CONFIG_NPROC_NCPU	49	/* NCPU (sometimes > NPROC_MAX) */
 
 #ifdef	__cplusplus
 }

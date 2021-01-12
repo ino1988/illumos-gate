@@ -4066,7 +4066,7 @@ u_32_t nflags;
 #endif
 	}
 
-#if SOLARIS && defined(_KERNEL)
+#if defined(SOLARIS) && defined(_KERNEL)
 	net_handle_t net_data_p = ifs->ifs_ipf_ipv4;
 #endif
 
@@ -4393,7 +4393,7 @@ u_32_t nflags;
 #endif
 	}
 
-#if SOLARIS && defined(_KERNEL)
+#if defined(SOLARIS) && defined(_KERNEL)
 	net_handle_t net_data_p = ifs->ifs_ipf_ipv4;
 #endif
 
@@ -4479,7 +4479,7 @@ u_32_t nflags;
 			fix_outcksum(csump, nat->nat_sumd[0]);
 	}
 
-#if SOLARIS && defined(_KERNEL)
+#if defined(SOLARIS) && defined(_KERNEL)
 	if (nflags & IPN_TCPUDP &&
 	    NET_IS_HCK_L4_PART(net_data_p, fin->fin_m)) {
 		/*
@@ -4747,6 +4747,8 @@ ipf_stack_t *ifs;
 	ipnat_t *np;
 	SPL_INT(s);
 
+	sum1 = 0;
+	sum2 = 0;
 	if (ifs->ifs_fr_running <= 0)
 		return;
 
@@ -5533,7 +5535,16 @@ ipf_stack_t *ifs;
 		RWLOCK_EXIT(&ifs->ifs_ipf_nat);
 		return EINVAL;
 	}
- 
+
+	/*
+	 * Note, this loop is based on the number of items that a user
+	 * requested. The user can request any number, potentially far more than
+	 * the number of items that actually exist. If a user does that, we'll
+	 * break out of this by setting the value of count to 1 which terminates
+	 * the loop.  This should be fine from an ioctl perspective, because the
+	 * last entry that we insert will be the zero entry which terminates the
+	 * chain.
+	 */
 	dst = itp->igi_data;
 	for (count = itp->igi_nitems; count > 0; count--) {
 		/*
@@ -5594,6 +5605,7 @@ ipf_stack_t *ifs;
 				error = EFAULT;
 			if (t->ipt_data == NULL) {
 				ipf_freetoken(t, ifs);
+				count = 1;
 				break;
 			} else {
 				if (hm != NULL) {
@@ -5603,6 +5615,7 @@ ipf_stack_t *ifs;
 				}
 				if (nexthm->hm_next == NULL) {
 					ipf_freetoken(t, ifs);
+					count = 1;
 					break;
 				}
 				dst += sizeof(*nexthm);
@@ -5617,6 +5630,7 @@ ipf_stack_t *ifs;
 				error = EFAULT;
 			if (t->ipt_data == NULL) {
 				ipf_freetoken(t, ifs);
+				count = 1;
 				break;
 			} else {
 				if (ipn != NULL) {
@@ -5626,6 +5640,7 @@ ipf_stack_t *ifs;
 				}
 				if (nextipnat->in_next == NULL) {
 					ipf_freetoken(t, ifs);
+					count = 1;
 					break;
 				}
 				dst += sizeof(*nextipnat);
@@ -5640,12 +5655,14 @@ ipf_stack_t *ifs;
 				error = EFAULT;
 			if (t->ipt_data == NULL) {
 				ipf_freetoken(t, ifs);
+				count = 1;
 				break;
 			} else {
 				if (nat != NULL)
 					fr_natderef(&nat, ifs);
 				if (nextnat->nat_next == NULL) {
 					ipf_freetoken(t, ifs);
+					count = 1;
 					break;
 				}
 				dst += sizeof(*nextnat);

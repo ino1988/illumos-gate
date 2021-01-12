@@ -25,7 +25,9 @@
 #
 
 #
-# Copyright (c) 2012 by Delphix. All rights reserved.
+# Copyright (c) 2012, 2016 by Delphix. All rights reserved.
+# Copyright 2017 RackTop Systems.
+# Copyright 2020 Joyent, Inc.
 #
 
 PROG= zhack
@@ -35,18 +37,24 @@ OBJS= $(PROG).o
 include ../../Makefile.cmd
 include ../../Makefile.ctf
 
-INCS += -I../../../lib/libzpool/common
+INCS +=	-I../../../lib/libzpool/common
 INCS +=	-I../../../uts/common/fs/zfs
+INCS +=	-I../../../uts/common/fs/zfs/lua
 INCS +=	-I../../../common/zfs
+INCS += -I../../../lib/libzutil/common
 
-LDLIBS += -lzpool -lumem -lnvpair -lzfs
+LDLIBS += -lzpool -lumem -lnvpair -lzutil
 
-C99MODE=	-xc99=%all
+CSTD=	$(CSTD_GNU99)
 C99LMODE=	-Xc99=%all
 
 CFLAGS += $(CCVERBOSE)
 CFLAGS64 += $(CCVERBOSE)
+CPPFLAGS.first = -I$(SRC)/lib/libfakekernel/common -D_FAKE_KERNEL
 CPPFLAGS += -D_LARGEFILE64_SOURCE=1 -D_REENTRANT -DDEBUG $(INCS)
+
+LINTFLAGS += -erroff=E_STATIC_UNUSED
+LINTFLAGS64 += -erroff=E_STATIC_UNUSED
 
 .KEEP_STATE:
 

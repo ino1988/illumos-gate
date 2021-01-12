@@ -47,6 +47,9 @@ const pci_class_strings_t class_pci[] = {
 	1, 6, 2,	"Serial Storage Bus Interface",		"sata",
 	1, 7, 0,	"Serial Attached SCSI Controller",	"sas",
 	1, 7, 1,	"Serial Storage Bus Interface",		"sas",
+	1, 8, 0,	"Non-Volatile memory controller",	"unknown",
+	1, 8, 1,	"NVMHCI",				"unknown",
+	1, 8, 2,	"NVM Express",				"nvme",
 	1, 0x80, 0,	"Mass storage controller",		"unknown",
 
 	2, 0, 0,	"Ethernet controller",			"etherne",
@@ -160,6 +163,7 @@ const pci_class_strings_t class_pci[] = {
 	12, 3, 0,	"Universal Serial Bus UHCI compliant",	"usb",
 	12, 3, 0x10,	"Universal Serial Bus OHCI compliant",	"usb",
 	12, 3, 0x20,	"Universal Serial Bus EHCI compliant",	"usb",
+	12, 3, 0x30,	"Universal Serial Bus XHCI compliant",	"usb",
 	12, 3, 0x80,	"Universal Serial Bus generic HCD",	"usb",
 	12, 3, 0xFE,	"Universal Serial Bus device",		"usb",
 	12, 4, 0,	"Fibre Channel",			"fibre",

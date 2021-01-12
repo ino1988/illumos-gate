@@ -24,6 +24,11 @@
 # Copyright 2009 Sun Microsystems, Inc.  All rights reserved.
 # Use is subject to license terms.
 #
+
+#
+# Copyright (c) 2014, 2016 by Delphix. All rights reserved.
+#
+
 . $STF_SUITE/include/libtest.shlib
 . $STF_SUITE/tests/functional/cli_root/zpool_add/zpool_add.kshlib
 
@@ -87,8 +92,8 @@ while (( $i < ${#keywords[*]} )); do
 		for vdev in "${poolarray[@]}"; do
 			create_pool "$TESTPOOL" "${disk}s${SLICE6}"
 			log_must poolexists "$TESTPOOL"
-			log_must $ZPOOL add -f "$TESTPOOL" ${keywords[i]} $vdev
-			log_must iscontained "$TESTPOOL" "$vdev"
+			log_must zpool add -f "$TESTPOOL" ${keywords[i]} $vdev
+			log_must vdevs_in_pool "$TESTPOOL" "$vdev"
 			destroy_pool "$TESTPOOL"
 		done
 
@@ -98,8 +103,8 @@ while (( $i < ${#keywords[*]} )); do
 			create_pool "$TESTPOOL" "${keywords[i]}" \
 				"${disk}s${SLICE4}" "${disk}s${SLICE5}"
 			log_must poolexists "$TESTPOOL"
-			log_must $ZPOOL add "$TESTPOOL" ${keywords[i]} $vdev
-			log_must iscontained "$TESTPOOL" "$vdev"
+			log_must zpool add "$TESTPOOL" ${keywords[i]} $vdev
+			log_must vdevs_in_pool "$TESTPOOL" "$vdev"
 			destroy_pool "$TESTPOOL"
 		done
 
@@ -109,8 +114,8 @@ while (( $i < ${#keywords[*]} )); do
 			create_pool "$TESTPOOL" "${keywords[i]}" \
 				"${disk}s${SLICE4}" "${disk}s${SLICE5}"
 			log_must poolexists "$TESTPOOL"
-			log_must $ZPOOL add "$TESTPOOL" ${keywords[i]} $vdev
-			log_must iscontained "$TESTPOOL" "$vdev"
+			log_must zpool add "$TESTPOOL" ${keywords[i]} $vdev
+			log_must vdevs_in_pool "$TESTPOOL" "$vdev"
 			destroy_pool "$TESTPOOL"
 		done
 

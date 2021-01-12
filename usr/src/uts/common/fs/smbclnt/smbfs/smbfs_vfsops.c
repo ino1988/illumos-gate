@@ -35,6 +35,8 @@
 /*
  * Copyright (c) 2008, 2010, Oracle and/or its affiliates. All rights reserved.
  * Copyright 2013, Joyent, Inc. All rights reserved.
+ * Copyright (c) 2016 by Delphix. All rights reserved.
+ * Copyright 2017 Nexenta Systems, Inc.  All rights reserved.
  */
 
 #include <sys/systm.h>
@@ -50,6 +52,7 @@
 #include <sys/statvfs.h>
 #include <sys/errno.h>
 #include <sys/debug.h>
+#include <sys/disp.h>
 #include <sys/cmn_err.h>
 #include <sys/modctl.h>
 #include <sys/policy.h>
@@ -58,6 +61,7 @@
 #include <sys/vfs_opreg.h>
 #include <sys/mntent.h>
 #include <sys/priv.h>
+#include <sys/taskq.h>
 #include <sys/tsol/label.h>
 #include <sys/tsol/tndb.h>
 #include <inet/ip.h>
@@ -72,12 +76,43 @@
 #include <smbfs/smbfs_node.h>
 #include <smbfs/smbfs_subr.h>
 
+#ifndef	_KERNEL
+
+#include <libfksmbfs.h>
+
+#define	STRUCT_DECL(s, a) struct s a
+#define	STRUCT_FGET(handle, field) ((handle).field)
+#define	_init(v)	fksmbfs_init(v)
+#define	_fini(v)	fksmbfs_fini(v)
+
+#endif	/* !_KERNEL */
+
+/*
+ * Should smbfs mount enable "-o acl" by default?  There are good
+ * arguments for both.  The most common use case is individual users
+ * accessing files on some SMB server, for which "noacl" is the more
+ * convenient default.  A less common use case is data migration,
+ * where the "acl" option might be a desirable default.  We'll make
+ * the common use case the default.  This default can be changed via
+ * /etc/system, and/or set per-mount via the "acl" mount option.
+ */
+int smbfs_default_opt_acl = 0;
+
+/*
+ * How many taskq threads per-mount should we use.
+ * Just one is fine (until we do more async work).
+ */
+int smbfs_tq_nthread = 1;
+
 /*
  * Local functions definitions.
  */
 int		smbfsinit(int fstyp, char *name);
 void		smbfsfini();
+
+#ifdef	_KERNEL
 static int	smbfs_mount_label_policy(vfs_t *, void *, int, cred_t *);
+#endif	/* _KERNEL */
 
 /*
  * SMBFS Mount options table for MS_OPTIONSTR
@@ -99,10 +134,14 @@ static mntopt_t mntopts[] = {
  */
 	{ MNTOPT_INTR,		intr_cancel,	NULL,	MO_DEFAULT, 0 },
 	{ MNTOPT_NOINTR,	nointr_cancel,	NULL,	0,	0 },
-	{ MNTOPT_ACL,		acl_cancel,	NULL,	MO_DEFAULT, 0 },
+	{ MNTOPT_ACL,		acl_cancel,	NULL,	0,	0 },
 	{ MNTOPT_NOACL,		noacl_cancel,	NULL,	0,	0 },
 	{ MNTOPT_XATTR,		xattr_cancel,	NULL,	MO_DEFAULT, 0 },
-	{ MNTOPT_NOXATTR,	noxattr_cancel, NULL,	0,	0 }
+	{ MNTOPT_NOXATTR,	noxattr_cancel, NULL,	0,	0 },
+#ifndef	_KERNEL
+	/* See vfs_optionisset MNTOPT_NOAC below. */
+	{ MNTOPT_NOAC,		NULL,		NULL,	0,	0 },
+#endif	/* !_KERNEL */
 };
 
 static mntopts_t smbfs_mntopts = {
@@ -120,6 +159,7 @@ static vfsdef_t vfw = {
 	&smbfs_mntopts			/* mount options table prototype */
 };
 
+#ifdef	_KERNEL
 static struct modlfs modlfs = {
 	&mod_fsops,
 	"SMBFS filesystem",
@@ -129,6 +169,7 @@ static struct modlfs modlfs = {
 static struct modlinkage modlinkage = {
 	MODREV_1, (void *)&modlfs, NULL
 };
+#endif	/* _KERNEL */
 
 /*
  * Mutex to protect the following variables:
@@ -201,7 +242,12 @@ _init(void)
 		return (error);
 	}
 
+#ifdef	_KERNEL
 	error = mod_install((struct modlinkage *)&modlinkage);
+#else	/* _KERNEL */
+	error = fake_installfs(&vfw);
+#endif	/* _KERNEL */
+
 	return (error);
 }
 
@@ -223,7 +269,11 @@ _fini(void)
 	if (smbfs_mountcount)
 		return (EBUSY);
 
+#ifdef	_KERNEL
 	error = mod_remove(&modlinkage);
+#else	/* _KERNEL */
+	error = fake_removefs(&vfw);
+#endif	/* _KERNEL */
 	if (error)
 		return (error);
 
@@ -246,17 +296,19 @@ _fini(void)
 /*
  * Return information about the module
  */
+#ifdef	_KERNEL
 int
 _info(struct modinfo *modinfop)
 {
 	return (mod_info((struct modlinkage *)&modlinkage, modinfop));
 }
+#endif	/* _KERNEL */
 
 /*
  * Initialize the vfs structure
  */
 
-int smbfsfstyp;
+int smbfs_fstyp;
 vfsops_t *smbfs_vfsops = NULL;
 
 static const fs_operation_def_t smbfs_vfsops_template[] = {
@@ -271,6 +323,10 @@ static const fs_operation_def_t smbfs_vfsops_template[] = {
 	{ NULL, NULL }
 };
 
+/*
+ * This is the VFS switch initialization routine, normally called
+ * via vfssw[x].vsw_init by vfsinit() or mod_install
+ */
 int
 smbfsinit(int fstyp, char *name)
 {
@@ -278,7 +334,7 @@ smbfsinit(int fstyp, char *name)
 
 	error = vfs_setfsops(fstyp, smbfs_vfsops_template, &smbfs_vfsops);
 	if (error != 0) {
-		zcmn_err(GLOBAL_ZONEID, CE_WARN,
+		cmn_err(CE_WARN,
 		    "smbfsinit: bad vfs ops template");
 		return (error);
 	}
@@ -286,12 +342,12 @@ smbfsinit(int fstyp, char *name)
 	error = vn_make_ops(name, smbfs_vnodeops_template, &smbfs_vnodeops);
 	if (error != 0) {
 		(void) vfs_freevfsops_by_type(fstyp);
-		zcmn_err(GLOBAL_ZONEID, CE_WARN,
+		cmn_err(CE_WARN,
 		    "smbfsinit: bad vnode ops template");
 		return (error);
 	}
 
-	smbfsfstyp = fstyp;
+	smbfs_fstyp = fstyp;
 
 	return (0);
 }
@@ -300,7 +356,7 @@ void
 smbfsfini()
 {
 	if (smbfs_vfsops) {
-		(void) vfs_freevfsops_by_type(smbfsfstyp);
+		(void) vfs_freevfsops_by_type(smbfs_fstyp);
 		smbfs_vfsops = NULL;
 	}
 	if (smbfs_vnodeops) {
@@ -315,8 +371,10 @@ smbfs_free_smi(smbmntinfo_t *smi)
 	if (smi == NULL)
 		return;
 
+#ifdef	_KERNEL
 	if (smi->smi_zone_ref.zref_zone != NULL)
 		zone_rele_ref(&smi->smi_zone_ref, ZONE_REF_SMBFS);
+#endif	/* _KERNEL */
 
 	if (smi->smi_share != NULL)
 		smb_share_rele(smi->smi_share);
@@ -338,21 +396,26 @@ smbfs_mount(vfs_t *vfsp, vnode_t *mvp, struct mounta *uap, cred_t *cr)
 {
 	char		*data = uap->dataptr;
 	int		error;
-	smbnode_t 	*rtnp = NULL;	/* root of this fs */
-	smbmntinfo_t 	*smi = NULL;
-	dev_t 		smbfs_dev;
-	int 		version;
-	int 		devfd;
-	zone_t		*zone = curproc->p_zone;
+	smbnode_t	*rtnp = NULL;	/* root of this fs */
+	smbmntinfo_t	*smi = NULL;
+	dev_t		smbfs_dev;
+	int		version;
+	int		devfd;
+	zone_t		*zone = curzone;
+#ifdef	_KERNEL
 	zone_t		*mntzone = NULL;
-	smb_share_t 	*ssp = NULL;
-	smb_cred_t 	scred;
+#else	/* _KERNEL */
+	short		minclsyspri = MINCLSYSPRI;
+#endif	/* _KERNEL */
+	smb_share_t	*ssp = NULL;
+	smb_cred_t	scred;
 	int		flags, sec;
-
 	STRUCT_DECL(smbfs_args, args);		/* smbfs mount arguments */
 
+#ifdef	_KERNEL
 	if ((error = secpolicy_fs_mount(cr, mvp, vfsp)) != 0)
 		return (error);
+#endif	/* _KERNEL */
 
 	if (mvp->v_type != VDIR)
 		return (ENOTDIR);
@@ -363,11 +426,17 @@ smbfs_mount(vfs_t *vfsp, vnode_t *mvp, struct mounta *uap, cred_t *cr)
 	 * uap->datalen might be different from sizeof (args)
 	 * in a compatible situation.
 	 */
+#ifdef	_KERNEL
 	STRUCT_INIT(args, get_udatamodel());
 	bzero(STRUCT_BUF(args), SIZEOF_STRUCT(smbfs_args, DATAMODEL_NATIVE));
 	if (copyin(data, STRUCT_BUF(args), MIN(uap->datalen,
 	    SIZEOF_STRUCT(smbfs_args, DATAMODEL_NATIVE))))
 		return (EFAULT);
+#else	/* _KERNEL */
+	bzero(&args, sizeof (args));
+	if (copyin(data, &args, MIN(uap->datalen, sizeof (args))))
+		return (EFAULT);
+#endif	/* _KERNEL */
 
 	/*
 	 * Check mount program version
@@ -418,6 +487,7 @@ smbfs_mount(vfs_t *vfsp, vnode_t *mvp, struct mounta *uap, cred_t *cr)
 	 * See: ssp, smi, rtnp, mntzone
 	 */
 
+#ifdef	_KERNEL
 	/*
 	 * Determine the zone we're being mounted into.
 	 */
@@ -461,6 +531,7 @@ smbfs_mount(vfs_t *vfsp, vnode_t *mvp, struct mounta *uap, cred_t *cr)
 			vfs_setmntopt(vfsp, MNTOPT_RO, NULL, 0);
 		}
 	}
+#endif	/* _KERNEL */
 
 	/* Prevent unload. */
 	atomic_inc_32(&smbfs_mountcount);
@@ -483,6 +554,7 @@ smbfs_mount(vfs_t *vfsp, vnode_t *mvp, struct mounta *uap, cred_t *cr)
 	smi->smi_share = ssp;
 	ssp = NULL;
 
+#ifdef	_KERNEL
 	/*
 	 * Convert the anonymous zone hold acquired via zone_hold() above
 	 * into a zone reference.
@@ -491,35 +563,66 @@ smbfs_mount(vfs_t *vfsp, vnode_t *mvp, struct mounta *uap, cred_t *cr)
 	zone_hold_ref(mntzone, &smi->smi_zone_ref, ZONE_REF_SMBFS);
 	zone_rele(mntzone);
 	mntzone = NULL;
+#else	/* _KERNEL */
+	smi->smi_zone_ref.zref_zone = curzone;
+#endif	/* _KERNEL */
 
 	/*
 	 * Initialize option defaults
 	 */
-	smi->smi_flags	= SMI_LLOCK;
 	smi->smi_acregmin = SEC2HR(SMBFS_ACREGMIN);
 	smi->smi_acregmax = SEC2HR(SMBFS_ACREGMAX);
 	smi->smi_acdirmin = SEC2HR(SMBFS_ACDIRMIN);
 	smi->smi_acdirmax = SEC2HR(SMBFS_ACDIRMAX);
+	smi->smi_flags	= SMI_LLOCK;
+#ifndef	_KERNEL
+	/* Always direct IO with fakekernel */
+	smi->smi_flags	|= SMI_DIRECTIO;
+#endif	/* _KERNEL */
 
 	/*
 	 * All "generic" mount options have already been
 	 * handled in vfs.c:domount() - see mntopts stuff.
 	 * Query generic options using vfs_optionisset().
+	 * Give ACL an adjustable system-wide default.
 	 */
+	if (smbfs_default_opt_acl ||
+	    vfs_optionisset(vfsp, MNTOPT_ACL, NULL))
+		smi->smi_flags |= SMI_ACL;
+	if (vfs_optionisset(vfsp, MNTOPT_NOACL, NULL))
+		smi->smi_flags &= ~SMI_ACL;
 	if (vfs_optionisset(vfsp, MNTOPT_INTR, NULL))
 		smi->smi_flags |= SMI_INT;
-	if (vfs_optionisset(vfsp, MNTOPT_ACL, NULL))
-		smi->smi_flags |= SMI_ACL;
 
 	/*
 	 * Get the mount options that come in as smbfs_args,
 	 * starting with args.flags (SMBFS_MF_xxx)
 	 */
 	flags = STRUCT_FGET(args, flags);
-	smi->smi_uid 	= STRUCT_FGET(args, uid);
-	smi->smi_gid 	= STRUCT_FGET(args, gid);
 	smi->smi_fmode	= STRUCT_FGET(args, file_mode) & 0777;
 	smi->smi_dmode	= STRUCT_FGET(args, dir_mode) & 0777;
+#ifdef	_KERNEL
+	smi->smi_uid	= STRUCT_FGET(args, uid);
+	smi->smi_gid	= STRUCT_FGET(args, gid);
+#else	/* _KERNEL */
+	/*
+	 * Need uid/gid to match our fake cred we'll fail in
+	 * smbfs_access_rwx later.
+	 */
+	smi->smi_uid	= crgetuid(cr);
+	smi->smi_gid	= crgetgid(cr);
+
+	/*
+	 * Our user-level do_mount() passes the mount options sting
+	 * as-is, where the real mount program would convert some
+	 * of those options to bits set in smbfs_args.flags.
+	 * To avoid replicating all that conversion code, this
+	 * uses the generic vfs option support to handle those
+	 * option flag bits we need, i.e.: "noac"
+	 */
+	if (vfs_optionisset(vfsp, MNTOPT_NOAC, NULL))
+		flags |= SMBFS_MF_NOAC;
+#endif	/* _KERNEL */
 
 	/*
 	 * Hande the SMBFS_MF_xxx flags.
@@ -590,14 +693,18 @@ smbfs_mount(vfs_t *vfsp, vnode_t *mvp, struct mounta *uap, cred_t *cr)
 	mutex_exit(&smbfs_minor_lock);
 
 	vfsp->vfs_dev	= smbfs_dev;
-	vfs_make_fsid(&vfsp->vfs_fsid, smbfs_dev, smbfsfstyp);
+	vfs_make_fsid(&vfsp->vfs_fsid, smbfs_dev, smbfs_fstyp);
 	vfsp->vfs_data	= (caddr_t)smi;
-	vfsp->vfs_fstype = smbfsfstyp;
+	vfsp->vfs_fstype = smbfs_fstyp;
 	vfsp->vfs_bsize = MAXBSIZE;
 	vfsp->vfs_bcount = 0;
 
 	smi->smi_vfsp	= vfsp;
 	smbfs_zonelist_add(smi);	/* undo in smbfs_freevfs */
+
+	/* PSARC 2007/227 VFS Feature Registration */
+	vfs_set_feature(vfsp, VFSFT_XVATTR);
+	vfs_set_feature(vfsp, VFSFT_SYSATTR_VIEWS);
 
 	/*
 	 * Create the root vnode, which we need in unmount
@@ -612,6 +719,14 @@ smbfs_mount(vfs_t *vfsp, vnode_t *mvp, struct mounta *uap, cred_t *cr)
 	smi->smi_root = rtnp;
 
 	/*
+	 * Create a taskq for async work (i.e. putpage)
+	 */
+	smi->smi_taskq = taskq_create_proc("smbfs",
+	    smbfs_tq_nthread, minclsyspri,
+	    smbfs_tq_nthread, smbfs_tq_nthread * 2,
+	    zone->zone_zsched, TASKQ_PREPOPULATE);
+
+	/*
 	 * NFS does other stuff here too:
 	 *   async worker threads
 	 *   init kstats
@@ -620,6 +735,7 @@ smbfs_mount(vfs_t *vfsp, vnode_t *mvp, struct mounta *uap, cred_t *cr)
 	 */
 	return (0);
 
+#ifdef	_KERNEL
 errout:
 	vfsp->vfs_data = NULL;
 	if (smi != NULL)
@@ -632,6 +748,7 @@ errout:
 		smb_share_rele(ssp);
 
 	return (error);
+#endif	/* _KERNEL */
 }
 
 /*
@@ -645,8 +762,10 @@ smbfs_unmount(vfs_t *vfsp, int flag, cred_t *cr)
 
 	smi = VFTOSMI(vfsp);
 
+#ifdef	_KERNEL
 	if (secpolicy_fs_unmount(cr, vfsp) != 0)
 		return (EPERM);
+#endif	/* _KERNEL */
 
 	if ((flag & MS_FORCE) == 0) {
 		smbfs_rflush(vfsp, cr);
@@ -680,15 +799,6 @@ smbfs_unmount(vfs_t *vfsp, int flag, cred_t *cr)
 	vfsp->vfs_flag |= VFS_UNMOUNTED;
 
 	/*
-	 * Shutdown any outstanding I/O requests on this share,
-	 * and force a tree disconnect.  The share object will
-	 * continue to hang around until smb_share_rele().
-	 * This should also cause most active nodes to be
-	 * released as their operations fail with EIO.
-	 */
-	smb_share_kill(smi->smi_share);
-
-	/*
 	 * If we hold the root VP (and we normally do)
 	 * then it's safe to release it now.
 	 */
@@ -709,6 +819,21 @@ smbfs_unmount(vfs_t *vfsp, int flag, cred_t *cr)
 	 * after their last vn_rele.
 	 */
 	smbfs_destroy_table(vfsp);
+
+	/*
+	 * Shutdown any outstanding I/O requests on this share,
+	 * and force a tree disconnect.  The share object will
+	 * continue to hang around until smb_share_rele().
+	 * This should also cause most active nodes to be
+	 * released as their operations fail with EIO.
+	 */
+	smb_share_kill(smi->smi_share);
+
+	/*
+	 * Any async taskq work should be giving up.
+	 * Wait for those to exit.
+	 */
+	taskq_destroy(smi->smi_taskq);
 
 	/*
 	 * Delete our kstats...
@@ -860,8 +985,6 @@ cache_hit:
 	return (error);
 }
 
-static kmutex_t smbfs_syncbusy;
-
 /*
  * Flush dirty smbfs files for file system vfsp.
  * If vfsp == NULL, all smbfs files are flushed.
@@ -870,14 +993,25 @@ static kmutex_t smbfs_syncbusy;
 static int
 smbfs_sync(vfs_t *vfsp, short flag, cred_t *cr)
 {
+
 	/*
-	 * Cross-zone calls are OK here, since this translates to a
-	 * VOP_PUTPAGE(B_ASYNC), which gets picked up by the right zone.
+	 * SYNC_ATTR is used by fsflush() to force old filesystems like UFS
+	 * to sync metadata, which they would otherwise cache indefinitely.
+	 * Semantically, the only requirement is that the sync be initiated.
+	 * Assume the server-side takes care of attribute sync.
 	 */
-	if (!(flag & SYNC_ATTR) && mutex_tryenter(&smbfs_syncbusy) != 0) {
-		smbfs_rflush(vfsp, cr);
-		mutex_exit(&smbfs_syncbusy);
+	if (flag & SYNC_ATTR)
+		return (0);
+
+	if (vfsp == NULL) {
+		/*
+		 * Flush ALL smbfs mounts in this zone.
+		 */
+		smbfs_flushall(cr);
+		return (0);
 	}
+
+	smbfs_rflush(vfsp, cr);
 
 	return (0);
 }
@@ -888,7 +1022,6 @@ smbfs_sync(vfs_t *vfsp, short flag, cred_t *cr)
 int
 smbfs_vfsinit(void)
 {
-	mutex_init(&smbfs_syncbusy, NULL, MUTEX_DEFAULT, NULL);
 	return (0);
 }
 
@@ -898,7 +1031,6 @@ smbfs_vfsinit(void)
 void
 smbfs_vfsfini(void)
 {
-	mutex_destroy(&smbfs_syncbusy);
 }
 
 void
@@ -926,6 +1058,7 @@ smbfs_freevfs(vfs_t *vfsp)
 	atomic_dec_32(&smbfs_mountcount);
 }
 
+#ifdef	_KERNEL
 /*
  * smbfs_mount_label_policy:
  *	Determine whether the mount is allowed according to MAC check,
@@ -985,7 +1118,7 @@ smbfs_mount_label_policy(vfs_t *vfsp, void *ipaddr, int addr_type, cred_t *cr)
 	 * mounts into the global zone itself; restrict these to
 	 * read-only.)
 	 *
-	 * If the requestor is in some other zone, but his label
+	 * If the requestor is in some other zone, but their label
 	 * dominates the server, then allow read-down.
 	 *
 	 * Otherwise, access is denied.
@@ -1016,3 +1149,4 @@ out:
 	label_rele(zlabel);
 	return (retv);
 }
+#endif	/* _KERNEL */

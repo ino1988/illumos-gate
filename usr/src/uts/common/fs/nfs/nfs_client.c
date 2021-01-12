@@ -18,11 +18,18 @@
  *
  * CDDL HEADER END
  */
+
 /*
  * Copyright (c) 1986, 2010, Oracle and/or its affiliates. All rights reserved.
- *
- *  	Copyright (c) 1983,1984,1985,1986,1987,1988,1989  AT&T.
+ */
+
+/*
+ *	Copyright (c) 1983,1984,1985,1986,1987,1988,1989  AT&T.
  *	All rights reserved.
+ */
+
+/*
+ * Copyright 2018 Nexenta Systems, Inc.
  */
 
 #include <sys/param.h>
@@ -60,6 +67,7 @@
 
 #include <nfs/nfs.h>
 #include <nfs/nfs_clnt.h>
+#include <nfs/nfs_cmd.h>
 
 #include <nfs/rnode.h>
 #include <nfs/nfs_acl.h>
@@ -1354,8 +1362,8 @@ nfs_async_manager_stop(vfs_t *vfsp)
 
 int
 nfs_async_readahead(vnode_t *vp, u_offset_t blkoff, caddr_t addr,
-	struct seg *seg, cred_t *cr, void (*readahead)(vnode_t *,
-	u_offset_t, caddr_t, struct seg *, cred_t *))
+    struct seg *seg, cred_t *cr, void (*readahead)(vnode_t *,
+    u_offset_t, caddr_t, struct seg *, cred_t *))
 {
 	rnode_t *rp;
 	mntinfo_t *mi;
@@ -1454,8 +1462,8 @@ noasync:
 
 int
 nfs_async_putapage(vnode_t *vp, page_t *pp, u_offset_t off, size_t len,
-	int flags, cred_t *cr, int (*putapage)(vnode_t *, page_t *,
-	u_offset_t, size_t, int, cred_t *))
+    int flags, cred_t *cr, int (*putapage)(vnode_t *, page_t *,
+    u_offset_t, size_t, int, cred_t *))
 {
 	rnode_t *rp;
 	mntinfo_t *mi;
@@ -1576,8 +1584,8 @@ noasync:
 
 int
 nfs_async_pageio(vnode_t *vp, page_t *pp, u_offset_t io_off, size_t io_len,
-	int flags, cred_t *cr, int (*pageio)(vnode_t *, page_t *, u_offset_t,
-	size_t, int, cred_t *))
+    int flags, cred_t *cr, int (*pageio)(vnode_t *, page_t *, u_offset_t,
+    size_t, int, cred_t *))
 {
 	rnode_t *rp;
 	mntinfo_t *mi;
@@ -1709,7 +1717,7 @@ noasync:
 
 void
 nfs_async_readdir(vnode_t *vp, rddir_cache *rdc, cred_t *cr,
-	int (*readdir)(vnode_t *, rddir_cache *, cred_t *))
+    int (*readdir)(vnode_t *, rddir_cache *, cred_t *))
 {
 	rnode_t *rp;
 	mntinfo_t *mi;
@@ -1806,8 +1814,7 @@ noasync:
 
 void
 nfs_async_commit(vnode_t *vp, page_t *plist, offset3 offset, count3 count,
-	cred_t *cr, void (*commit)(vnode_t *, page_t *, offset3, count3,
-	cred_t *))
+    cred_t *cr, void (*commit)(vnode_t *, page_t *, offset3, count3, cred_t *))
 {
 	rnode_t *rp;
 	mntinfo_t *mi;
@@ -2797,7 +2804,7 @@ nfs_mi_zonelist_remove(mntinfo_t *mi)
  * NFS Client initialization routine.  This routine should only be called
  * once.  It performs the following tasks:
  *	- Initalize all global locks
- * 	- Call sub-initialization routines (localize access to variables)
+ *	- Call sub-initialization routines (localize access to variables)
  */
 int
 nfs_clntinit(void)
@@ -2828,6 +2835,8 @@ nfs_clntinit(void)
 
 	nfs4_clnt_init();
 
+	nfscmd_init();
+
 #ifdef DEBUG
 	nfs_clntup = B_TRUE;
 #endif
@@ -2847,6 +2856,7 @@ nfs_clntfini(void)
 	nfs_subrfini();
 	nfs_vfsfini();
 	nfs4_clnt_fini();
+	nfscmd_fini();
 }
 
 /*
@@ -3223,11 +3233,13 @@ nfs_free_mi(mntinfo_t *mi)
 	mutex_destroy(&mi->mi_lock);
 	mutex_destroy(&mi->mi_remap_lock);
 	mutex_destroy(&mi->mi_async_lock);
+	mutex_destroy(&mi->mi_rnodes_lock);
 	cv_destroy(&mi->mi_failover_cv);
 	cv_destroy(&mi->mi_async_work_cv[NFS_ASYNC_QUEUE]);
 	cv_destroy(&mi->mi_async_work_cv[NFS_ASYNC_PGOPS_QUEUE]);
 	cv_destroy(&mi->mi_async_reqs_cv);
 	cv_destroy(&mi->mi_async_cv);
+	list_destroy(&mi->mi_rnodes);
 	zone_rele_ref(&mi->mi_zone_ref, ZONE_REF_NFS);
 	kmem_free(mi, sizeof (*mi));
 }
@@ -3345,7 +3357,7 @@ nfs_free_delmapcall(nfs_delmapcall_t *delmap_call)
  * Returns:
  *	0 if the caller wasn't found
  *	1 if the caller was found, removed and freed.  *errp is set to what
- * 	the result of the delmap was.
+ *	the result of the delmap was.
  */
 int
 nfs_find_and_delete_delmapcall(rnode_t *rp, int *errp)

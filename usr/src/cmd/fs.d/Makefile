@@ -19,6 +19,8 @@
 # CDDL HEADER END
 #
 # Copyright (c) 1990, 2010, Oracle and/or its affiliates. All rights reserved.
+# Copyright (c) 2018, Joyent, Inc.
+# Copyright 2015 Nexenta Systems, Inc. All rights reserved.
 #
 
 # The filesystem independent utilities clri, fsdb, dcopy, labelit, and mkfs
@@ -38,8 +40,8 @@ DEFAULTFILES=	fs.dfl
 
 include ../Makefile.cmd
 
-SUBDIR1= lofs zfs
-SUBDIR2= dev fd pcfs nfs hsfs proc ctfs udfs ufs tmpfs cachefs \
+SUBDIR1= bootfs lofs zfs
+SUBDIR2= dev fd pcfs nfs hsfs proc ctfs udfs ufs tmpfs \
 		autofs mntfs objfs sharefs smbclnt reparsed
 SUBDIRS= $(SUBDIR1) $(SUBDIR2)
 I18NDIRS= $(SUBDIR2)
@@ -83,9 +85,13 @@ CPPFLAGS += -D_LARGEFILE64_SOURCE
 CERRWARN += -_gcc=-Wno-implicit-function-declaration
 CERRWARN += -_gcc=-Wno-parentheses
 CERRWARN += -_gcc=-Wno-unused-variable
-CERRWARN += -_gcc=-Wno-uninitialized
+CERRWARN += $(CNOWARN_UNINIT)
 CERRWARN += -_gcc=-Wno-unused-function
 
+# not linted
+SMATCH=off
+
+$(DFPROG) :=	LDLIBS += -lcmdutils
 $(SPPROG) :=	LDLIBS += -lkstat
 
 $(ROOTETCMNTTAB) := FILEMODE = 444

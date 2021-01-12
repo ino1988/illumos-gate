@@ -21,6 +21,7 @@
 /*
  * Copyright 2008 Sun Microsystems, Inc.  All rights reserved.
  * Use is subject to license terms.
+ * Copyright (c) 2016 by Delphix. All rights reserved.
  */
 
 #include <sys/param.h>
@@ -566,7 +567,7 @@ boot_ufs_read(int fd, caddr_t buf, size_t count)
 	while (i > 0) {
 		/* If we need to reload the buffer, do so */
 		if ((j = filep->fi_count) == 0) {
-			getblock(filep, buf, i, &rcount);
+			(void) getblock(filep, buf, i, &rcount);
 			i -= rcount;
 			buf += rcount;
 			filep->fi_offset += rcount;
@@ -696,11 +697,11 @@ boot_ufs_open(char *filename, int flags)
 
 	inode = find(filep, filename);
 	if (inode == (ino_t)0) {
-		boot_ufs_close(filep->fi_filedes);
+		(void) boot_ufs_close(filep->fi_filedes);
 		return (-1);
 	}
 	if (openi(filep, inode)) {
-		boot_ufs_close(filep->fi_filedes);
+		(void) boot_ufs_close(filep->fi_filedes);
 		return (-1);
 	}
 
@@ -719,7 +720,7 @@ boot_ufs_lseek(int fd, off_t addr, int whence)
 {
 	fileid_t *filep;
 
-	/* Make sure user knows what file he is talking to */
+	/* Make sure user knows what file they're talking to */
 	if (!(filep = find_fp(fd)))
 		return (-1);
 
@@ -792,7 +793,7 @@ boot_ufs_close(int fd)
 {
 	fileid_t *filep;
 
-	/* Make sure user knows what file he is talking to */
+	/* Make sure user knows what file they're talking to */
 	if (!(filep = find_fp(fd)))
 		return (-1);
 
@@ -944,7 +945,8 @@ boot_ufs_getdents(int fd, struct dirent *dep, unsigned size)
 					size -= n;
 					cnt += 1;
 
-					(void) strcpy(dep->d_name, dp->d_name);
+					(void) strlcpy(dep->d_name, dp->d_name,
+					    strlen(dp->d_name) + 1);
 					dep->d_off = dir.loc;
 					dep->d_reclen = (ushort_t)n;
 

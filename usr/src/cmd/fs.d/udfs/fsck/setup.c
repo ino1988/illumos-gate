@@ -4,7 +4,7 @@
  */
 
 /*	Copyright (c) 1983, 1984, 1985, 1986, 1987, 1988, 1989 AT&T	*/
-/*	  All Rights Reserved  	*/
+/*	  All Rights Reserved	*/
 
 /*
  * Copyright (c) 1980, 1986, 1990 The Regents of the University of California.
@@ -24,8 +24,6 @@
  * IMPLIED WARRANTIES, INCLUDING, WITHOUT LIMITATION, THE IMPLIED
  * WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE.
  */
-
-#pragma ident	"%Z%%M%	%I%	%E% SMI"
 
 #define	DKTYPENAMES
 #include <stdio.h>
@@ -73,7 +71,7 @@ extern char	*tagerrs[];
 #define	POWEROF2(num)	(((num) & ((num) - 1)) == 0)
 
 extern int	mflag;
-extern char 	hotroot;
+extern char	hotroot;
 
 char avdbuf[MAXBSIZE];		/* buffer for anchor volume descriptor */
 char *main_vdbuf;		/* buffer for entire main volume sequence */
@@ -134,7 +132,7 @@ restat:
 			errexit(gettext("Can't open checklist file: %s\n"),
 				VFSTAB);
 		}
-		while (getvfsent(vfstab, &vfsbuf) == NULL) {
+		while (getvfsent(vfstab, &vfsbuf) == 0) {
 			if (strcmp(devstr, vfsbuf.vfs_mountp) == 0) {
 				if (strcmp(vfsbuf.vfs_fstype,
 				    MNTTYPE_UDFS) != 0) {
@@ -210,7 +208,7 @@ restat:
 		fswritefd = -1;
 		if (preen && !debug)
 			pfatal(gettext("(NO WRITE ACCESS)\n"));
-			(void) printf(gettext(" (NO WRITE)"));
+		(void) printf(gettext(" (NO WRITE)"));
 	}
 	if (preen == 0)
 		(void) printf("\n");

@@ -21,24 +21,24 @@
 #
 # Copyright (c) 1999, 2010, Oracle and/or its affiliates. All rights reserved.
 #
-
+# Copyright (c) 2018, Joyent, Inc.
 
 #
 # This make file will build mech_spnego.so.1. This shared object
 # contains all the functionality needed to support the SPNEGO GSS-API
-# mechanism. 
+# mechanism.
 #
 
-LIBRARY = 	mech_spnego.a
-VERS = 		.1
-OBJECTS = 	spnego_mech.o spnego_disp_status.o spnego_kerrs.o
+LIBRARY =	mech_spnego.a
+VERS =		.1
+OBJECTS =	spnego_mech.o spnego_disp_status.o spnego_kerrs.o
 
 # include library definitions
 include ../../../Makefile.lib
 
-LIBS = 		$(DYNLIB)
+LIBS =		$(DYNLIB)
 ROOTLIBDIR =	$(ROOT)/usr/lib/gss
-ROOTLIBDIR64 = 	$(ROOT)/usr/lib/$(MACH64)/gss
+ROOTLIBDIR64 =	$(ROOT)/usr/lib/$(MACH64)/gss
 SRCDIR =	../mech
 
 MAPFILES =	../mapfile-vers
@@ -48,11 +48,12 @@ CPPFLAGS += -I$(SRC)/uts/common/gssapi/include $(DEBUG) -I$(SRC)/lib/gss_mechs/m
 CERRWARN +=	-_gcc=-Wno-unused-function
 CERRWARN +=	-_gcc=-Wno-type-limits
 
+# needs work
+SMATCH=off
+
 .KEEP_STATE:
 
 all: $(LIBS)
-
-lint: lintcheck
 
 # include library targets
 include ../../../Makefile.targ

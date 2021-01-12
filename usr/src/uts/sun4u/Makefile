@@ -21,6 +21,7 @@
 #
 # Copyright 2009 Sun Microsystems, Inc.  All rights reserved.
 # Use is subject to license terms.
+# Copyright 2015 Igor Kozhukhov <ikozhukhov@gmail.com>
 #
 #	This makefile drives the production of all implementation architecture
 #	dependent modules for the sun4u architecture.
@@ -30,42 +31,18 @@ UTSBASE = ..
 
 include Makefile.sun4u
 
-#
-#	The following are SPARC specific (rather than sun4u) specific modules
-#	which are required for the sun4u kernel to completely lint. They are
-#	not involved in the build in any other way. In order to minimize
-#	build time, it is assumed that they are up to date. But since sun4u
-#	is really a separate architecture we cannot use the v7 sparc modules.
-#
-SPARC_LIB_DIR	 = $(UTSBASE)/sparc/lint-libs/$(OBJS_DIR)
-
-SPARC_LINTS	 =
-
-#
-#
-#
-LINT_LIBS	 = $(LINT_LIB) \
-		   $(LINT_KMODS:%=$(LINT_LIB_DIR)/llib-l%.ln) \
-		   $(SPARC_LINTS:%=$(SPARC_LIB_DIR)/llib-l%.ln)
-
-
 def		:=	TARGET= def
 def.prereq	:=	TARGET= def
 all		:=	TARGET= all
 all.prereq	:=	TARGET= all
 install		:=	TARGET= install
-install.prereq	:=	TARGET= all
+install.prereq	:=	TARGET= install
 install_h	:=	TARGET= install_h
 install_h.prere	:=	TARGET= install_h
 clean		:=	TARGET= clean
 clobber		:=	TARGET= clobber
-lint		:=	TARGET= lint
-lint.prereq	:=	TARGET= lint
-lintlib		:=	TARGET= lintlib
-modlintlib	:=	TARGET= modlintlib
 modlist		:=	TARGET= modlist
 modlist	modlist.sparc :=	NO_STATE= -K $$MODSTATE$$$$
-clean.lint	:=	TARGET= clean.lint
 check		:=	TARGET= check
 
 .KEEP_STATE:
@@ -78,7 +55,7 @@ check		:=	TARGET= check
 # in parallel
 .NO_PARALLEL:	$(CPU_KMODS)
 
-def all clean clobber clean.lint: genassym unix .WAIT \
+def all clean clobber: genassym unix .WAIT \
 	$(KMODS) $(XMODS) $(IMPLEMENTATIONS)
 
 clobber: clobber.targ
@@ -95,10 +72,6 @@ modlist.sparc:
 install: install_platforms genassym unix .WAIT $(KMODS) \
 	$(XMODS) $(IMPLEMENTATIONS)
 
-lintlib:	unix
-
-modlintlib:	$(LINT_KMODS)
-
 genassym unix $(KMODS):	FRC
 	@cd $@; pwd; $(MAKE) $(NO_STATE) $(TARGET)
 
@@ -112,7 +85,7 @@ genassym unix $(KMODS):	FRC
 PRIVS_C = $(UTSBASE)/common/os/priv_const.c
 
 $(PRIVS_C): $(PRIVS_AWK) $(PRIVS_DEF)
-	$(NAWK) -f $(PRIVS_AWK) < $(PRIVS_DEF) cfile=$@
+	$(AWK) -f $(PRIVS_AWK) < $(PRIVS_DEF) cfile=$@
 
 CLOBBERFILES += $(PRIVS_C)
 
@@ -154,19 +127,6 @@ all.prereq def.prereq install.prereq: genassym genunix unix
 #
 install_h.prereq: FRC
 	@cd sys; pwd; $(MAKE) $(TARGET)
-
-#
-# sun4u/unix and sun4u/genunix should be linted first since sparc does global
-# cross-check with these lint libraries. The sun4u/unix and sun4u/genunix can be
-# linted in parallel.
-#
-LINT_PREREQ = unix.lint genunix.lint
-lint.prereq: $(LINT_PREREQ)
-
-.PARALLEL:  $(LINT_PREREQ)
-
-$(LINT_PREREQ):
-	@cd $(@:%.lint=%); pwd; $(MAKE) $(TARGET)
 
 #
 # Nothing to do with any other prerequisites
@@ -257,19 +217,6 @@ $(USR_DESKTOP_SBIN_DIR):	$(USR_DESKTOP_DIR)
 
 $(USR_DESKTOP_LIB_DIR):		$(USR_DESKTOP_DIR)
 	-$(INS.dir)
-
-#
-#	Full kernel lint target.
-#
-LINT_TARGET	= globallint
-
-globallint:
-	@pwd
-	@-$(ECHO) "\nSUN4U KERNEL: global crosschecks:"
-	@-$(LINT) $(LINTFLAGS) $(LINT_LIBS) 2>&1 | $(LGREP.2)
-
-lint:	lintlib .WAIT modlintlib .WAIT $(SPARC_LINTS) $(LINT_DEPS) \
-	$(IMPLEMENTATIONS) $(CPU_KMODS)
 
 include ../Makefile.targ
 

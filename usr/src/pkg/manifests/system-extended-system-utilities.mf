@@ -22,6 +22,8 @@
 #
 # Copyright (c) 2010, Oracle and/or its affiliates. All rights reserved.
 # Copyright 2012 Nexenta Systems, Inc. All rights reserved.
+# Copyright 2016 RackTop Systems.
+# Copyright 2020 Joyent, Inc.
 #
 
 set name=pkg.fmri value=pkg:/system/extended-system-utilities@$(PKGVERS)
@@ -62,6 +64,7 @@ $(i386_ONLY)file path=usr/bin/$(ARCH32)/ppgsz mode=0555
 $(i386_ONLY)file path=usr/bin/$(ARCH32)/ppriv mode=0555
 $(i386_ONLY)file path=usr/bin/$(ARCH32)/preap mode=0555
 $(i386_ONLY)file path=usr/bin/$(ARCH32)/prun mode=0555
+$(i386_ONLY)file path=usr/bin/$(ARCH32)/psecflags mode=0555
 $(i386_ONLY)file path=usr/bin/$(ARCH32)/psig mode=0555
 $(i386_ONLY)file path=usr/bin/$(ARCH32)/pstack mode=0555
 $(i386_ONLY)file path=usr/bin/$(ARCH32)/pstop mode=0555
@@ -82,6 +85,7 @@ file path=usr/bin/$(ARCH64)/ppgsz mode=0555
 file path=usr/bin/$(ARCH64)/ppriv mode=0555
 file path=usr/bin/$(ARCH64)/preap mode=0555
 file path=usr/bin/$(ARCH64)/prun mode=0555
+file path=usr/bin/$(ARCH64)/psecflags mode=0555
 file path=usr/bin/$(ARCH64)/psig mode=0555
 file path=usr/bin/$(ARCH64)/pstack mode=0555
 file path=usr/bin/$(ARCH64)/pstop mode=0555
@@ -96,9 +100,7 @@ file path=usr/bin/banner mode=0555
 file path=usr/bin/batch mode=0555
 file path=usr/bin/bc mode=0555
 file path=usr/bin/bdiff mode=0755
-file path=usr/bin/bfs mode=0555
 file path=usr/bin/cal mode=0555
-file path=usr/bin/calendar mode=0555
 file path=usr/bin/col mode=0555
 file path=usr/bin/compress mode=0555
 file path=usr/bin/csplit mode=0555
@@ -107,6 +109,7 @@ file path=usr/bin/diff mode=0555
 file path=usr/bin/diff3 mode=0555
 file path=usr/bin/dircmp mode=0555
 file path=usr/bin/dos2unix mode=0555
+file path=usr/bin/etdump mode=0555
 file path=usr/bin/expand mode=0555
 file path=usr/bin/factor mode=0555
 file path=usr/bin/kstat mode=0555
@@ -115,10 +118,10 @@ file path=usr/bin/lastcomm mode=0555
 file path=usr/bin/lgrpinfo mode=0555
 file path=usr/bin/look mode=0755
 file path=usr/bin/mkfifo mode=0555
-file path=usr/bin/nawk mode=0555
 file path=usr/bin/newform mode=0555
 file path=usr/bin/news mode=0555
 file path=usr/bin/nl mode=0555
+file path=usr/bin/oawk mode=0555
 file path=usr/bin/pack mode=0555
 file path=usr/bin/pginfo mode=0555
 file path=usr/bin/pgstat mode=0555
@@ -166,9 +169,7 @@ file path=usr/share/man/man1/awk.1
 file path=usr/share/man/man1/banner.1
 file path=usr/share/man/man1/bc.1
 file path=usr/share/man/man1/bdiff.1
-file path=usr/share/man/man1/bfs.1
 file path=usr/share/man/man1/cal.1
-file path=usr/share/man/man1/calendar.1
 file path=usr/share/man/man1/col.1
 file path=usr/share/man/man1/compress.1
 file path=usr/share/man/man1/csplit.1
@@ -185,10 +186,10 @@ file path=usr/share/man/man1/lgrpinfo.1
 file path=usr/share/man/man1/look.1
 file path=usr/share/man/man1/madv.so.1.1
 file path=usr/share/man/man1/mpss.so.1.1
-file path=usr/share/man/man1/nawk.1
 file path=usr/share/man/man1/newform.1
 file path=usr/share/man/man1/news.1
 file path=usr/share/man/man1/nl.1
+file path=usr/share/man/man1/oawk.1
 file path=usr/share/man/man1/pack.1
 file path=usr/share/man/man1/pargs.1
 file path=usr/share/man/man1/plgrp.1
@@ -197,6 +198,7 @@ file path=usr/share/man/man1/pmap.1
 file path=usr/share/man/man1/ppgsz.1
 file path=usr/share/man/man1/ppriv.1
 file path=usr/share/man/man1/preap.1
+file path=usr/share/man/man1/psecflags.1
 file path=usr/share/man/man1/ptree.1
 file path=usr/share/man/man1/sdiff.1
 file path=usr/share/man/man1/sort.1
@@ -216,9 +218,17 @@ file path=usr/share/man/man1m/mount_pcfs.1m
 file path=usr/share/man/man1m/projadd.1m
 file path=usr/share/man/man1m/projdel.1m
 file path=usr/share/man/man1m/projmod.1m
-hardlink path=usr/bin/oawk target=../../usr/bin/awk
+$(i386_ONLY)hardlink path=usr/bin/$(ARCH32)/pauxv \
+    target=../../../usr/bin/$(ARCH32)/pargs
+$(i386_ONLY)hardlink path=usr/bin/$(ARCH32)/penv \
+    target=../../../usr/bin/$(ARCH32)/pargs
+hardlink path=usr/bin/$(ARCH64)/pauxv target=../../../usr/bin/$(ARCH64)/pargs
+hardlink path=usr/bin/$(ARCH64)/penv target=../../../usr/bin/$(ARCH64)/pargs
+hardlink path=usr/bin/nawk target=../../usr/bin/awk
 hardlink path=usr/bin/pargs target=../../usr/lib/isaexec
+hardlink path=usr/bin/pauxv target=../../usr/lib/isaexec
 hardlink path=usr/bin/pcred target=../../usr/lib/isaexec
+hardlink path=usr/bin/penv target=../../usr/lib/isaexec
 hardlink path=usr/bin/pfiles target=../../usr/lib/isaexec
 hardlink path=usr/bin/pflags target=../../usr/lib/isaexec
 hardlink path=usr/bin/pldd target=../../usr/lib/isaexec
@@ -229,6 +239,7 @@ hardlink path=usr/bin/ppgsz target=../../usr/lib/isaexec
 hardlink path=usr/bin/ppriv target=../../usr/lib/isaexec
 hardlink path=usr/bin/preap target=../../usr/lib/isaexec
 hardlink path=usr/bin/prun target=../../usr/lib/isaexec
+hardlink path=usr/bin/psecflags target=../../usr/lib/isaexec
 hardlink path=usr/bin/psig target=../../usr/lib/isaexec
 hardlink path=usr/bin/pstack target=../../usr/lib/isaexec
 hardlink path=usr/bin/pstop target=../../usr/lib/isaexec
@@ -247,6 +258,8 @@ license cr_Sun license=cr_Sun
 license lic_CDDL license=lic_CDDL
 license usr/src/cmd/compress/THIRDPARTYLICENSE \
     license=usr/src/cmd/compress/THIRDPARTYLICENSE
+license usr/src/cmd/etdump/THIRDPARTYLICENSE \
+    license=usr/src/cmd/etdump/THIRDPARTYLICENSE
 license usr/src/cmd/lastcomm/THIRDPARTYLICENSE \
     license=usr/src/cmd/lastcomm/THIRDPARTYLICENSE
 license usr/src/cmd/look/THIRDPARTYLICENSE \
@@ -272,10 +285,14 @@ link path=usr/proc/bin/pwait target=../../bin/pwait
 link path=usr/proc/bin/pwdx target=../../bin/pwdx
 link path=usr/share/man/man1/hashcheck.1 target=spell.1
 link path=usr/share/man/man1/hashmake.1 target=spell.1
+link path=usr/share/man/man1/nawk.1 target=awk.1
+link path=usr/share/man/man1/pauxv.1 target=pargs.1
 link path=usr/share/man/man1/pcat.1 target=pack.1
+link path=usr/share/man/man1/penv.1 target=pargs.1
 link path=usr/share/man/man1/spellin.1 target=spell.1
 link path=usr/share/man/man1/uncompress.1 target=compress.1
 link path=usr/share/man/man1/unexpand.1 target=expand.1
 link path=usr/share/man/man1/unpack.1 target=pack.1
 link path=usr/share/man/man1/zcat.1 target=compress.1
 depend fmri=runtime/perl$(PERL_PKGVERS) type=require
+depend fmri=runtime/perl$(PERL_PKGVERS)/module/sun-solaris type=require

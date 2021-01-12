@@ -23,8 +23,9 @@
  * Copyright 2008 Sun Microsystems, Inc.  All rights reserved.
  * Use is subject to license terms.
  */
-
-#pragma ident	"%Z%%M%	%I%	%E% SMI"
+/*
+ * Copyright 2018 Joyent, Inc.
+ */
 
 #include "lint.h"
 #include "thr_uberdata.h"
@@ -44,6 +45,22 @@ typedef struct  __once {
 } __once_t;
 
 #define	once_flag	oflag.pad32_flag[1]
+
+static int
+_thr_setinherit(pthread_t tid, int inherit)
+{
+	ulwp_t *ulwp;
+	int error = 0;
+
+	if ((ulwp = find_lwp(tid)) == NULL) {
+		error = ESRCH;
+	} else {
+		ulwp->ul_ptinherit = inherit;
+		ulwp_unlock(ulwp, curthread->ul_uberdata);
+	}
+
+	return (error);
+}
 
 static int
 _thr_setparam(pthread_t tid, int policy, int prio)
@@ -88,7 +105,7 @@ _thr_setparam(pthread_t tid, int policy, int prio)
 #pragma weak _pthread_create = pthread_create
 int
 pthread_create(pthread_t *thread, const pthread_attr_t *attr,
-	void * (*start_routine)(void *), void *arg)
+    void * (*start_routine)(void *), void *arg)
 {
 	ulwp_t		*self = curthread;
 	const thrattr_t	*ap = attr? attr->__pthread_attrp : def_thrattr();
@@ -111,17 +128,27 @@ pthread_create(pthread_t *thread, const pthread_attr_t *attr,
 
 	flag = ap->scope | ap->detachstate | ap->daemonstate | THR_SUSPENDED;
 	error = _thrp_create(ap->stkaddr, ap->stksize, start_routine, arg,
-	    flag, &tid, ap->guardsize);
+	    flag, &tid, ap->guardsize, ap->name);
 	if (error == 0) {
+		/*
+		 * Record the original inheritance value for
+		 * pthread_attr_get_np(). We should always be able to find the
+		 * thread.
+		 */
+		(void) _thr_setinherit(tid, ap->inherit);
+
 		if (ap->inherit == PTHREAD_EXPLICIT_SCHED &&
 		    (ap->policy != self->ul_policy ||
-		    ap->prio != (self->ul_epri? self->ul_epri : self->ul_pri)))
+		    ap->prio != (self->ul_epri ? self->ul_epri :
+		    self->ul_pri))) {
 			/*
 			 * The SUSv3 specification requires pthread_create()
 			 * to fail with EPERM if it cannot set the scheduling
 			 * policy and parameters on the new thread.
 			 */
 			error = _thr_setparam(tid, ap->policy, ap->prio);
+		}
+
 		if (error) {
 			/*
 			 * We couldn't determine this error before
@@ -150,6 +177,14 @@ pthread_create(pthread_t *thread, const pthread_attr_t *attr,
 	return (error);
 }
 
+static void
+_mutex_unlock_wrap(void *ptr)
+{
+	mutex_t *mp = ptr;
+
+	(void) mutex_unlock(mp);
+}
+
 /*
  * pthread_once: calls given function only once.
  * it synchronizes via mutex in pthread_once_t structure
@@ -165,7 +200,7 @@ pthread_once(pthread_once_t *once_control, void (*init_routine)(void))
 	if (once->once_flag == PTHREAD_ONCE_NOTDONE) {
 		(void) mutex_lock(&once->mlock);
 		if (once->once_flag == PTHREAD_ONCE_NOTDONE) {
-			pthread_cleanup_push(mutex_unlock, &once->mlock);
+			pthread_cleanup_push(_mutex_unlock_wrap, &once->mlock);
 			(*init_routine)();
 			pthread_cleanup_pop(0);
 			membar_producer();
@@ -243,7 +278,7 @@ thr_getprio(thread_t tid, int *priority)
  */
 int
 pthread_setschedparam(pthread_t tid,
-	int policy, const struct sched_param *param)
+    int policy, const struct sched_param *param)
 {
 	return (_thr_setparam(tid, policy, param->sched_priority));
 }

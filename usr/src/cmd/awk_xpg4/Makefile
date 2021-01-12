@@ -25,6 +25,7 @@
 #
 # cmd/awk_xpg4/Makefile
 #
+# Copyright (c) 2018, Joyent, Inc.
 
 # NOTE: this is nawk in usr/src/cmd/awk_xpg4 to reside as /usr/xpg4/bin/awk
 
@@ -43,10 +44,13 @@ CPPFLAGS += -D_FILE_OFFSET_BITS=64
 CFLAGS += $(CCVERBOSE)
 CERRWARN += -_gcc=-Wno-unused-label
 CERRWARN += -_gcc=-Wno-parentheses
-CERRWARN += -_gcc=-Wno-uninitialized
+CERRWARN += $(CNOWARN_UNINIT)
 YFLAGS += -d
 LDLIBS += -lm
 CLEANFILES= awk.c y.tab.h
+
+# not linted
+SMATCH=off
 
 # for messaging catalog
 
@@ -70,8 +74,8 @@ $(POFILE): $(POFILES)
 
 install: all $(ROOTXPG4PROG)
 
-values-xpg4.o: ../../lib/common/common/values-xpg4.c
-	$(COMPILE.c) -o $@ ../../lib/common/common/values-xpg4.c
+values-xpg4.o: ../../lib/crt/common/values-xpg4.c
+	$(COMPILE.c) -o $@ ../../lib/crt/common/values-xpg4.c
 
 clean:
 	$(RM) $(OBJS) $(XPG4) $(CLEANFILES)

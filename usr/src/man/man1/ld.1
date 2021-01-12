@@ -1,11 +1,11 @@
 '\" te
 .\" Copyright 1989 AT&T
 .\" Copyright (c) 2009, Sun Microsystems, Inc. All Rights Reserved
-.\" Copyright (c) 2012, Joyent, Inc. All Rights Reserved
+.\" Copyright 2019 Joyent, Inc.
 .\" The contents of this file are subject to the terms of the Common Development and Distribution License (the "License").  You may not use this file except in compliance with the License. You can obtain a copy of the license at usr/src/OPENSOLARIS.LICENSE or http://www.opensolaris.org/os/licensing.
 .\"  See the License for the specific language governing permissions and limitations under the License. When distributing Covered Code, include this CDDL HEADER in each file and include the License file at usr/src/OPENSOLARIS.LICENSE.  If applicable, add the following below this CDDL HEADER, with
 .\" the fields enclosed by brackets "[]" replaced with your own identifying information: Portions Copyright [yyyy] [name of copyright owner]
-.TH LD 1 "Sep 10, 2013"
+.TH LD 1 "May 13, 2017"
 .SH NAME
 ld \- link-editor for object files
 .SH SYNOPSIS
@@ -20,11 +20,11 @@ ld \- link-editor for object files
 [\fB-Q\fR y | n] [\fB-R\fR \fIpath\fR] [\fB-s\fR] [\fB-S\fR \fIsupportlib\fR] [\fB-t\fR]
 [\fB-u\fR \fIsymname\fR] [\fB-V\fR] [\fB-Y P\fR\fI,dirlist\fR] [\fB-z\fR absexec]
 [\fB-z\fR allextract | defaultextract | weakextract ] [\fB-z\fR altexec64]
-[\fB-z\fR assert-deflib ] [ \fB-z\fR assert-deflib=\fIlibname\fR ]
+[\fB-z\fR aslr[=\fIstate\fR]] [\fB-z\fR assert-deflib] [ \fB-z\fR assert-deflib=\fIlibname\fR]
 [\fB-z\fR combreloc | nocombreloc ] [\fB-z\fR defs | nodefs]
 [\fB-z\fR direct | nodirect] [\fB-z\fR endfiltee]
 [\fB-z\fR fatal-warnings | nofatal-warnings ] [\fB-z\fR finiarray=\fIfunction\fR]
-[\fB-z\fR globalaudit] [\fB-z\fR groupperm | nogroupperm] 
+[\fB-z\fR globalaudit] [\fB-z\fR groupperm | nogroupperm]
 [\fB-z\fR guidance[=\fIid1\fR,\fIid2\fR...] [\fB-z\fR help ]
 [\fB-z\fR ignore | record] [\fB-z\fR initarray=\fIfunction\fR] [\fB-z\fR initfirst]
 [\fB-z\fR interpose] [\fB-z\fR lazyload | nolazyload]
@@ -34,12 +34,12 @@ ld \- link-editor for object files
 [\fB-z\fR nopartial] [\fB-z\fR noversion] [\fB-z\fR now] [\fB-z\fR origin]
 [\fB-z\fR preinitarray=\fIfunction\fR] [\fB-z\fR redlocsym] [\fB-z\fR relaxreloc]
 [\fB-z\fR rescan-now] [\fB-z\fR recan] [\fB-z\fR rescan-start \fI\&...\fR \fB-z\fR rescan-end]]
-[\fB-z\fR target=sparc|x86] [\fB-z\fR text | textwarn | textoff]
+[\fB-z\fR symbolcap] [\fB-z\fR target=sparc|x86] [\fB-z\fR text | textwarn | textoff]
+[\fB-z\fR type=\fIexec\fR|\fIkmod\fR|\fIreloc\fR|\fIshared\fR]
 [\fB-z\fR verbose] [\fB-z\fR wrap=\fIsymbol\fR] \fIfilename\fR...
 .fi
 
 .SH DESCRIPTION
-.sp
 .LP
 The link-editor, \fBld\fR, combines relocatable object files by resolving
 symbol references to symbol definitions, together with performing relocations.
@@ -104,7 +104,6 @@ Similarly, only objects of a single machine type are allowed. See the
 \fB-32\fR, \fB-64\fR and \fB-z target\fR options, and the \fBLD_NOEXEC_64\fR
 environment variable.
 .SS "Static Executables"
-.sp
 .LP
 The creation of static executables has been discouraged for many releases. In
 fact, 64-bit system archive libraries have never been provided. Because a
@@ -115,7 +114,7 @@ drawbacks.
 .TP
 .ie t \(bu
 .el o
-The executable is immune to the benefits of system patches delivered as shared
+The executable is immune to the benefits of system updates delivered as shared
 objects. The executable therefore, must be rebuilt to take advantage of many
 system improvements.
 .RE
@@ -140,7 +139,6 @@ executables is no longer achievable without specialized system knowledge.
 However, the capability of \fBld\fR to process static linking options, and the
 processing of archive libraries, remains unchanged.
 .SH OPTIONS
-.sp
 .LP
 The following options are supported.
 .sp
@@ -845,6 +843,23 @@ link-editor\fR in \fILinker and Libraries Guide\fR.
 .sp
 .ne 2
 .na
+\fB-z\fR \fBaslr[=\fIstate\fR]\fR
+.ad
+.sp .6
+.RS 4n
+Specify whether the executable's address space should be randomized on
+execution.  If \fIstate\fR is "enabled" randomization will always occur when
+this executable is run (regardless of inherited settings).  If \fIstate\fR is
+"disabled" randomization will never occur when this executable is run.  If
+\fIstate\fR is omitted, ASLR is enabled.
+
+An executable that should simply use the settings inherited from its
+environment should not use this flag at all.
+.RE
+
+.sp
+.ne 2
+.na
 \fB\fB-z\fR \fBcombreloc\fR | \fBnocombreloc\fR\fR
 .ad
 .sp .6
@@ -973,8 +988,8 @@ the link-editor to exit prematurely.
 .ad
 .sp .6
 .RS 4n
-Appends an entry to the \fB\&.finiarray\fR section of the object being built.
-If no \fB\&.finiarray\fR section is present, a section is created. The new
+Appends an entry to the \fB\&.fini_array\fR section of the object being built.
+If no \fB\&.fini_array\fR section is present, a section is created. The new
 entry is initialized to point to \fIfunction\fR. See \fIInitialization and
 Termination Sections\fR in \fILinker and Libraries Guide\fR.
 .RE
@@ -1147,8 +1162,8 @@ contributes to the link-edit, must reference an eliminated section.
 .ad
 .sp .6
 .RS 4n
-Appends an entry to the \fB\&.initarray\fR section of the object being built.
-If no \fB\&.initarray\fR section is present, a section is created. The new
+Appends an entry to the \fB\&.init_array\fR section of the object being built.
+If no \fB\&.init_array\fR section is present, a section is created. The new
 entry is initialized to point to \fIfunction\fR. See \fIInitialization and
 Termination Sections\fR in \fILinker and Libraries Guide\fR.
 .RE
@@ -1472,7 +1487,7 @@ no new members are extracted.
 \fB-z\fR \fBrescan\fR is a position independent option. The link-editor defers
 the rescan operation until after it has processed the entire command line, and
 then initiates a final rescan operation over all archives seen on the command
-line. The \fB-z\fR \fBrescan\fR operation can interact          incorrectly
+line. The \fB-z\fR \fBrescan\fR operation can interact incorrectly
 with objects that contain initialization (.init) or finalization (.fini)
 sections, preventing the code in those sections from running. For this reason,
 \fB-z\fR \fBrescan\fR is deprecated, and use of \fB-z\fR \fBrescan-now\fR is
@@ -1497,10 +1512,32 @@ advised.
 Defines an archive rescan group. This is a positional construct, and is
 processed by the link-editor immediately upon encountering the closing
 delimiter option.  Archives found within the group delimiter options are
-reprocessed as a group in an attempt to locate  additional archive members that
-resolve symbol references. This archive rescanning  is repeated  until a  pass
-over the archives On the occurs in  which no  new  members are extracted.
+reprocessed as a group in an attempt to locate additional archive members that
+resolve symbol references. This archive rescanning is repeated until a pass
+over the archives occurs in which no new members are extracted.
 Archive rescan groups cannot be nested.
+.RE
+
+.sp
+.ne 2
+.na
+\fB\fB-z\fR \fBsymbolcap\fR\fR
+.ad
+.sp .6
+.RS 4n
+Specifies that a relocatable object that defines object capabilities
+should have those converted to symbol capabilities. A relocatable object
+that does not have any object capabilities will ignore this option.
+.sp
+Symbol capabilities provide a means for multiple implementations of a
+function to co-exist and have one picked at runtime based upon the
+hardware capabilities of the system. When \fB-z symbolcap\fR is invoked,
+all global functions are converted into local functions that have the
+corresponding capability name appended to them and an undefined symbol
+with the original name left in the resulting relocatable object. At
+runtime, the global symbol will be bound to the corresponding
+implementation that is appropriate based on the capabilities of the
+system.
 .RE
 
 .sp
@@ -1569,6 +1606,56 @@ executable.
 .sp
 .ne 2
 .na
+\fB-z\fR \fBtype=exec|kmod|reloc|shared\fR
+.ad
+.sp .6
+.RS 4n
+Specifies the type of object to create.
+
+.sp
+.ne 2
+.na
+exec
+.ad
+.sp .6
+.RS 4n
+Dynamic executable
+.RE
+
+.sp
+.ne 2
+.na
+reloc
+.ad
+.sp .6
+.RS 4n
+Relocatable object
+.RE
+
+.sp
+.ne 2
+.na
+shared
+.ad
+.sp .6
+.RS 4n
+Dynamic shared object
+.RE
+
+.sp
+.ne 2
+.na
+kmod
+.ad
+.sp .6
+.RS 4n
+illumos kernel module
+.RE
+.RE
+
+.sp
+.ne 2
+.na
 \fB\fB-z\fR \fBverbose\fR\fR
 .ad
 .sp .6
@@ -1629,7 +1716,6 @@ occurring.
 .RE
 
 .SH ENVIRONMENT VARIABLES
-.sp
 .ne 2
 .na
 \fB\fBLD_ALTEXEC\fR\fR
@@ -1758,7 +1844,6 @@ Notice that environment variable-names that begin with the
 characters '\fBLD_\fR' are reserved for possible future enhancements to \fBld\fR and
 \fBld.so.1\fR(1).
 .SH FILES
-.sp
 .ne 2
 .na
 \fB\fBlib\fIx\fR.so\fR\fR
@@ -1808,7 +1893,6 @@ defining memory layouts, aligning bss, and defining non-executable stacks.
 .RE
 
 .SH ATTRIBUTES
-.sp
 .LP
 See \fBattributes\fR(5) for descriptions of the following attributes:
 .sp
@@ -1824,7 +1908,6 @@ Interface Stability	Committed
 .TE
 
 .SH SEE ALSO
-.sp
 .LP
 \fBas\fR(1), \fBcrle\fR(1), \fBgprof\fR(1), \fBld.so.1\fR(1), \fBldd\fR(1),
 \fBmcs\fR(1), \fBpvs\fR(1), \fBexec\fR(2), \fBstat\fR(2), \fBdlopen\fR(3C),
@@ -1834,7 +1917,6 @@ Interface Stability	Committed
 .LP
 \fILinker and Libraries Guide\fR
 .SH NOTES
-.sp
 .LP
 Default options applied by \fBld\fR are maintained for historic reasons. In
 today's programming environment, where dynamic objects dominate, alternative

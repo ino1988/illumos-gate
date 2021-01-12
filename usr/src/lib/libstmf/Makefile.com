@@ -22,6 +22,7 @@
 # Copyright 2009 Sun Microsystems, Inc.  All rights reserved.
 # Use is subject to license terms.
 #
+# Copyright (c) 2018, Joyent, Inc.
 
 LIBRARY= libstmf.a
 VERS= .1
@@ -30,25 +31,25 @@ OBJECTS= stmf.o store.o
 
 include ../../Makefile.lib
 
-LIBS=	$(DYNLIB) $(LINTLIB)
+LIBS=	$(DYNLIB)
 
 SRCDIR =	../common
 
 INCS += -I$(SRCDIR)
 
-C99MODE=	-xc99=%all
-C99LMODE=	-Xc99=%all
+CSTD=	$(CSTD_GNU99)
 LDLIBS +=	-lc -lnvpair -lscf -lm
 CPPFLAGS +=	$(INCS) -D_REENTRANT
 
 CERRWARN +=	-_gcc=-Wno-unused-label
 
-$(LINTLIB) := SRCS=	$(SRCDIR)/$(LINTSRC)
+# not linted
+SMATCH=off
+
 
 .KEEP_STATE:
 
 all: $(LIBS)
 
-lint: lintcheck
 
 include ../../Makefile.targ

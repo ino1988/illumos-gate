@@ -22,8 +22,6 @@
 # Copyright 2006 Sun Microsystems, Inc.  All rights reserved.
 # Use is subject to license terms.
 #
-# ident	"%Z%%M%	%I%	%E% SMI"
-#
 # lib/nsswitch/dns/Makefile.com
 
 LIBRARY =	libnss_dns.a
@@ -40,11 +38,19 @@ include		../../Makefile.com
 # install this library in the root filesystem
 include ../../../Makefile.rootfs
 
+DYNLIB1 =	nss_dns.so$(VERS)
+
+COMPATLINKS=	usr/lib/$(DYNLIB1)
+COMPATLINKS64=	usr/lib/$(MACH64)/$(DYNLIB1)
+
+$(ROOT)/usr/lib/$(DYNLIB1) := COMPATLINKTARGET=../../lib/$(DYNLIB1)
+$(ROOT)/usr/lib/$(MACH64)/$(DYNLIB1):= \
+	COMPATLINKTARGET=../../../lib/$(MACH64)/$(DYNLIB1)
+
 # Appropriate libresolv loaded at runtime. This is the default, to be dlopened
 # if no libresolv was provided by the application.
 CPPFLAGS +=	-DNSS_DNS_LIBRESOLV=\"libresolv.so.2\"
 
-LINTFLAGS +=	-erroff=E_GLOBAL_COULD_BE_STATIC2
 
-LDLIBS +=	-lnsl
-DYNLIB1 =	nss_dns.so$(VERS)
+LDLIBS +=	-lnsl -lsocket
+

@@ -22,6 +22,8 @@
 /*
  * Copyright 2010 Sun Microsystems, Inc.  All rights reserved.
  * Use is subject to license terms.
+ * Copyright 2017 OmniTI Computer Consulting, Inc. All rights reserved.
+ * Copyright 2018 Joyent, Inc.
  */
 /* Copyright (c) 1990 Mentat Inc. */
 
@@ -245,7 +247,7 @@ repeat_ire:
 			 * Older than 20 minutes. Drop the path MTU information.
 			 */
 			mutex_enter(&dce->dce_lock);
-			dce->dce_flags &= ~(DCEF_PMTU|DCEF_TOO_SMALL_PMTU);
+			dce->dce_flags &= ~DCEF_PMTU;
 			dce->dce_last_change_time = TICK_TO_SEC(now);
 			mutex_exit(&dce->dce_lock);
 			dce_increment_generation(dce);
@@ -865,8 +867,16 @@ ip_output_cksum_v6(iaflags_t ixaflags, mblk_t *mp, ip6_t *ip6h,
 		    ixa->ixa_raw_cksum_offset);
 		cksum = htons(protocol);
 	} else if (protocol == IPPROTO_ICMPV6) {
-		cksump = IPH_ICMPV6_CHECKSUMP(ip6h, ip_hdr_length);
-		cksum = IP_ICMPV6_CSUM_COMP;	/* Pseudo-header cksum */
+		/*
+		 * Currently we assume no HW support for ICMP checksum calc.
+		 *
+		 * When HW support is advertised for ICMP, we'll want the
+		 * following to be set:
+		 * cksump = IPH_ICMPV6_CHECKSUMP(ip6h, ip_hdr_length);
+		 * cksum = IP_ICMPV6_CSUM_COMP;		Pseudo-header cksum
+		 */
+
+		return (ip_output_sw_cksum_v6(mp, ip6h, ixa));
 	} else {
 	ip_hdr_cksum:
 		/* No IP header checksum for IPv6 */
@@ -1013,7 +1023,7 @@ ire_send_wire_v6(ire_t *ire, mblk_t *mp, void *iph_arg,
 	 */
 	if (pktlen > ixa->ixa_fragsize ||
 	    (ixaflags & (IXAF_IPSEC_SECURE|IXAF_IPV6_ADD_FRAGHDR))) {
-		uint32_t ident;
+		uint32_t ident = 0;
 
 		if (ixaflags & IXAF_IPSEC_SECURE)
 			pktlen += ipsec_out_extra_length(ixa);

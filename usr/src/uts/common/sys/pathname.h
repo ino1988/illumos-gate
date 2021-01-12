@@ -24,7 +24,7 @@
  */
 
 /*	Copyright (c) 1983, 1984, 1985, 1986, 1987, 1988, 1989 AT&T	*/
-/*	  All Rights Reserved  	*/
+/*	  All Rights Reserved	*/
 
 /*
  * Portions of this source code were derived from Berkeley 4.3 BSD
@@ -67,6 +67,7 @@ typedef struct pathname {
 #define	pn_pathleft(pnp)	((pnp)->pn_pathlen)
 
 extern void	pn_alloc(struct pathname *);
+extern void	pn_alloc_sz(struct pathname *, size_t);
 extern int	pn_get(char *, enum uio_seg, struct pathname *);
 extern int	pn_get_buf(char *, enum uio_seg, struct pathname *,
 			void *, size_t);

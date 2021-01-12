@@ -19,7 +19,9 @@
 # CDDL HEADER END
 #
 # Copyright (c) 2007, 2010, Oracle and/or its affiliates. All rights reserved.
-# 
+# Copyright 2014 Nexenta Systems, Inc.  All rights reserved.
+#
+# Copyright (c) 2018, Joyent, Inc.
 
 LIBRARY= libsmbns.a
 VERS= .1
@@ -48,11 +50,15 @@ SRCS=   $(OBJS_COMMON:%.o=$(SRCDIR)/%.c)	\
 	$(OBJS_SHARED:%.o=$(SRC)/common/smbsrv/%.c)
 
 LDLIBS +=	$(MACH_LDLIBS)
-LDLIBS +=	-lsmb -lgss -lcmdutils -lldap -lresolv -lnsl -lsocket
-LDLIBS +=	-lc -lcryptoutil
+LDLIBS +=	-lsmb -lads -lgss -lcmdutils -lldap \
+		-lsocket -lnsl -lc
 CPPFLAGS +=	-D_REENTRANT
+CPPFLAGS +=	-Dsyslog=smb_syslog
 CERRWARN +=	-_gcc=-Wno-unused-function
-CERRWARN +=	-_gcc=-Wno-uninitialized
+CERRWARN +=	$(CNOWARN_UNINIT)
+
+# not linted
+SMATCH=off
 
 # DYNLIB libraries do not have lint libs and are not linted
 $(DYNLIB) :=	LDLIBS += -lkrb5

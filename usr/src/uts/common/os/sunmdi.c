@@ -20,6 +20,8 @@
  */
 /*
  * Copyright (c) 2000, 2010, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2014 Nexenta Systems Inc. All rights reserved.
+ * Copyright (c) 2018, Joyent, Inc.
  */
 
 /*
@@ -1477,11 +1479,10 @@ i_mdi_client_free(mdi_vhci_t *vh, mdi_client_t *ct)
 	mutex_destroy(&ct->ct_mutex);
 	kmem_free(ct, sizeof (*ct));
 
-	if (cdip != NULL) {
-		MDI_VHCI_CLIENT_UNLOCK(vh);
-		(void) i_mdi_devinfo_remove(vdip, cdip, flags);
-		MDI_VHCI_CLIENT_LOCK(vh);
-	}
+	MDI_VHCI_CLIENT_UNLOCK(vh);
+	(void) i_mdi_devinfo_remove(vdip, cdip, flags);
+	MDI_VHCI_CLIENT_LOCK(vh);
+
 	return (rv);
 }
 
@@ -1741,6 +1742,12 @@ mdi_set_lb_policy(dev_info_t *cdip, client_lb_t lb)
 	return (rv);
 }
 
+static void
+mdi_failover_cb(void *arg)
+{
+	(void)i_mdi_failover(arg);
+}
+
 /*
  * mdi_failover():
  *		failover function called by the vHCI drivers to initiate
@@ -1848,8 +1855,7 @@ mdi_failover(dev_info_t *vdip, dev_info_t *cdip, int flags)
 		 * Submit the initiate failover request via CPR safe
 		 * taskq threads.
 		 */
-		(void) taskq_dispatch(mdi_taskq, (task_func_t *)i_mdi_failover,
-		    ct, KM_SLEEP);
+		(void) taskq_dispatch(mdi_taskq, mdi_failover_cb, ct, KM_SLEEP);
 		return (MDI_ACCEPT);
 	} else {
 		/*
@@ -3239,13 +3245,13 @@ mdi_pi_free(mdi_pathinfo_t *pip, int flags)
 	MDI_CLIENT_LOCK(ct);
 	MDI_CLIENT_CLEAR_PATH_FREE_IN_PROGRESS(ct);
 
+	rv = MDI_SUCCESS;
 	if (!MDI_PI_IS_INITING(pip)) {
 		f = vh->vh_ops->vo_pi_uninit;
 		if (f != NULL) {
 			rv = (*f)(vh->vh_dip, pip, 0);
 		}
-	} else
-		rv = MDI_SUCCESS;
+	}
 
 	/*
 	 * If vo_pi_uninit() completed successfully.
@@ -3656,23 +3662,11 @@ i_mdi_pi_state_change(mdi_pathinfo_t *pip, mdi_pathinfo_state_t state, int flag)
 					if ((rv != NDI_SUCCESS) &&
 					    (MDI_CLIENT_STATE(ct) ==
 					    MDI_CLIENT_STATE_DEGRADED)) {
-						/*
-						 * ndi_devi_online failed.
-						 * Reset client flags to
-						 * offline.
-						 */
 						MDI_DEBUG(1, (MDI_WARN, cdip,
 						    "!ndi_devi_online failed "
 						    "error %x", rv));
-						MDI_CLIENT_SET_OFFLINE(ct);
 					}
-					if (rv != NDI_SUCCESS) {
-						/* Reset the path state */
-						MDI_PI_LOCK(pip);
-						MDI_PI(pip)->pi_state =
-						    MDI_PI_OLD_STATE(pip);
-						MDI_PI_UNLOCK(pip);
-					}
+					rv = NDI_SUCCESS;
 				}
 				break;
 
@@ -3901,6 +3895,7 @@ i_mdi_pi_offline(mdi_pathinfo_t *pip, int flags)
 	ASSERT(vh->vh_ops);
 	f = vh->vh_ops->vo_pi_state_change;
 
+	rv = MDI_SUCCESS;
 	if (f != NULL) {
 		MDI_PI_UNLOCK(pip);
 		if ((rv = (*f)(vdip, pip, MDI_PATHINFO_STATE_OFFLINE, 0,
@@ -4002,9 +3997,9 @@ i_mdi_pi_online(mdi_pathinfo_t *pip, int flags)
 	MDI_PI_SET_ONLINING(pip)
 	MDI_PI_UNLOCK(pip);
 	f = vh->vh_ops->vo_pi_state_change;
+	rv = MDI_SUCCESS;
 	if (f != NULL)
-		rv = (*f)(vh->vh_dip, pip, MDI_PATHINFO_STATE_ONLINE, 0,
-		    flags);
+		rv = (*f)(vh->vh_dip, pip, MDI_PATHINFO_STATE_ONLINE, 0, flags);
 	MDI_CLIENT_LOCK(ct);
 	MDI_PI_LOCK(pip);
 	cv_broadcast(&MDI_PI(pip)->pi_state_cv);
@@ -4012,7 +4007,6 @@ i_mdi_pi_online(mdi_pathinfo_t *pip, int flags)
 	if (rv == MDI_SUCCESS) {
 		dev_info_t	*cdip = ct->ct_dip;
 
-		rv = MDI_SUCCESS;
 		i_mdi_client_update_state(ct);
 		if (MDI_CLIENT_STATE(ct) == MDI_CLIENT_STATE_OPTIMAL ||
 		    MDI_CLIENT_STATE(ct) == MDI_CLIENT_STATE_DEGRADED) {
@@ -5446,7 +5440,7 @@ mdi_phci_retire_notify(dev_info_t *dip, int *constraint)
  * last path to any client, check that constraints
  * have been applied.
  *
- * If constraint is 0, we aren't going to retire the 
+ * If constraint is 0, we aren't going to retire the
  * pHCI. However we still need to go through the paths
  * calling e_ddi_retire_finalize() to clear their
  * contract barriers.
@@ -6306,6 +6300,7 @@ i_mdi_enable_disable_path(mdi_pathinfo_t *pip, mdi_vhci_t *vh, int flags,
 	 * Do a callback into the mdi consumer to let it
 	 * know that path is about to get enabled/disabled.
 	 */
+	rv = MDI_SUCCESS;
 	if (f != NULL) {
 		rv = (*f)(vh->vh_dip, pip, 0,
 			MDI_PI_EXT_STATE(pip),
@@ -8040,8 +8035,7 @@ vhcache_to_mainnvl(mdi_vhci_cache_t *vhcache)
 
 	rw_exit(&vhcache->vhcache_lock);
 out:
-	if (nvl)
-		nvlist_free(nvl);
+	nvlist_free(nvl);
 	return (NULL);
 }
 

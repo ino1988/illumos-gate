@@ -21,7 +21,9 @@
 #
 # Copyright (c) 2010, Oracle and/or its affiliates. All rights reserved.
 #
+# Copyright 2019 Joyent, Inc.
 #
+
 
 #
 #	Path to the base of the uts directory tree (usually /usr/src/uts).
@@ -33,12 +35,9 @@ UTSBASE	= ../..
 #
 MODULE		= sol_ofs
 OBJECTS		= $(SOL_OFS_OBJS:%=$(OBJS_DIR)/%)
-LINTS		= $(SOL_OFS_OBJS:%.o=$(LINTS_DIR)/%.ln)
 ROOTMODULE	= $(ROOT_MISC_DIR)/$(MODULE)
 LDFLAGS		+= -dy -Nmisc/ibtl -Nmisc/ibcm
-WARLOCK_OUT	= $(SOL_OFS:%.o=%.ll)
-WARLOCK_OK	= $(MODULE).ok
-WLCMD_DIR	= $(UTSBASE)/common/io/warlock
+
 #
 #	Include common rules.
 #
@@ -48,23 +47,24 @@ include $(UTSBASE)/intel/Makefile.intel
 #	Define targets
 #
 ALL_TARGET	= $(BINARY)
-LINT_TARGET	= $(MODULE).lint
 INSTALL_TARGET	= $(BINARY) $(ROOTMODULE)
 
 #
-# For now, disable these lint checks; maintainers should endeavor
-# to investigate and remove these for maximum lint coverage.
+# For now, disable these warnings; maintainers should endeavor
+# to investigate and remove these for maximum coverage.
 # Please do not carry these forward to new Makefiles.
 #
-LINTTAGS	+= -erroff=E_BAD_PTR_CAST_ALIGN
-LINTTAGS	+= -erroff=E_PTRDIFF_OVERFLOW
-LINTTAGS	+= -erroff=E_STATIC_UNUSED
-LINTTAGS	+= -erroff=E_CONST_TRUNCATED_BY_ASSIGN
 
-CERRWARN	+= -_gcc=-Wno-uninitialized
+CERRWARN	+= $(CNOWARN_UNINIT)
 CERRWARN	+= -_gcc=-Wno-parentheses
 CERRWARN	+= -_gcc=-Wno-type-limits
 CERRWARN	+= -_gcc=-Wno-unused-variable
+
+# needs work
+$(OBJS_DIR)/sol_cma.o := SMOFF += deref_check
+
+# false positive
+SMOFF += signed
 
 #
 #	Default build targets.
@@ -76,16 +76,8 @@ def:		$(DEF_DEPS)
 all:		$(ALL_DEPS)
 
 clean:		$(CLEAN_DEPS)
-		$(RM) $(WARLOCK_OUT) $(WARLOCK_OK)
 
 clobber:	$(CLOBBER_DEPS)
-		$(RM) $(WARLOCK_OUT) $(WARLOCK_OK)
-
-lint:		$(LINT_DEPS)
-
-modlintlib:	$(MODLINTLIB_DEPS)
-
-clean.lint:	$(CLEAN_LINT_DEPS)
 
 install:	$(INSTALL_DEPS)
 
@@ -93,25 +85,3 @@ install:	$(INSTALL_DEPS)
 #	Include common targets.
 #
 include $(UTSBASE)/intel/Makefile.targ
-
-#
-#       Defines for local commands.
-#
-WARLOCK         = warlock
-WLCC            = wlcc
-TOUCH           = touch
-TEST            = test
-
-warlock: $(WARLOCK_OK)
-
-$(WARLOCK_OK): $(WARLOCK_OUT) $(WLCMD_DIR)/sol_ofs.wlcmd warlock_ddi.files
-	$(WARLOCK) -c $(WLCMD_DIR)/sol_ofs.wlcmd $(WARLOCK_OUT) \
-		-l ../warlock/ddi_dki_impl.ll
-	$(TOUCH) $@
-
-%.ll: $(UTSBASE)/common/io/ib/clients/of/sol_ofs/%.c \
-	$(UTSBASE)/common/sys/ib/clients/of/sol_ofs/sol_uverbs.h
-	$(WLCC)  $(CPPFLAGS) -DDEBUG -o $@ $<
-
-warlock_ddi.files:
-	@cd ../warlock; pwd; $(MAKE) warlock

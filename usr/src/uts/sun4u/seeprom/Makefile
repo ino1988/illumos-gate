@@ -35,7 +35,6 @@ UTSBASE	= ../..
 #
 MODULE		= seeprom
 OBJECTS		= $(SEEPROM_OBJS:%=$(OBJS_DIR)/%)
-LINTS		= $(SEEPROM_OBJS:%.o=$(LINTS_DIR)/%.ln)
 ROOTMODULE	= $(ROOT_PSM_DRV_DIR)/$(MODULE)
 
 #
@@ -43,27 +42,14 @@ ROOTMODULE	= $(ROOT_PSM_DRV_DIR)/$(MODULE)
 #
 include $(UTSBASE)/sun4u/Makefile.sun4u
 
-# 
-# lint pass one enforcement 
-# 
-CFLAGS += $(CCVERBOSE)
-
 LDFLAGS += -dy -N misc/i2c_svc
 
-#
-# For now, disable these lint checks; maintainers should endeavor
-# to investigate and remove these for maximum lint coverage.
-# Please do not carry these forward to new Makefiles.
-#
-LINTTAGS	+= -erroff=E_SUPPRESSION_DIRECTIVE_UNUSED
-
-CERRWARN	+= -_gcc=-Wno-uninitialized
+CERRWARN	+= $(CNOWARN_UNINIT)
 
 #
 #	Define targets
 #
 ALL_TARGET	= $(BINARY)
-LINT_TARGET	= $(MODULE).lint
 INSTALL_TARGET	= $(BINARY) $(ROOTMODULE)
 
 .KEEP_STATE:
@@ -76,44 +62,9 @@ clean:		$(CLEAN_DEPS)
 
 clobber:	$(CLOBBER_DEPS)
 
-lint:		$(LINT_DEPS)
-
-modlintlib:	$(MODLINTLIB_DEPS)
-
-clean.lint:	$(CLEAN_LINT_DEPS)
-
 install:	$(INSTALL_DEPS)
 
 #
 #	Include common targets.
 #
 include $(UTSBASE)/sun4u/Makefile.targ
-
-#
-#	Defines for local commands.
-#
-WLCC		= wlcc
-TOUCH		= touch
-WARLOCK		= warlock
-
-#
-#	Warlock targets
-#
-
-SEEPROM_FILES = $(SEEPROM_OBJS:%.o=%.ll)
-
-warlock: $(MODULE).ok 
-	warlock -c seeprom.wlcmd $(SEEPROM_FILES) \
-		-l ../../sparc/warlock/ddi_dki_impl.ll
-	$(TOUCH) $@
-
-# i2c_svc_files warlock_ddi_files
-
-warlock_with_svc: $(SEEPROM_FILES) 	
-	$(WARLOCK) -c seeprom.wlcmd $(SEEPROM_FILES) ../i2c_svc/i2c_svc.ll \
-		-l ../../sparc/warlock/ddi_dki_impl.ll
-
-%.ok:	$(SEEPROM_FILES)
-
-%.ll: $(UTSBASE)/sun4u/io/i2c/clients/%.c
-	$(WLCC) $(CFLAGS) $(CPPFLAGS) -DDEBUG -o $@ $< 

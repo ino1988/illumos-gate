@@ -38,7 +38,6 @@ UTSBASE	= ../..
 #
 MODULE		= xdb
 OBJECTS		= $(XDB_OBJS:%=$(OBJS_DIR)/%)
-LINTS		= $(XDB_OBJS:%.o=$(LINTS_DIR)/%.ln)
 ROOTMODULE	= $(ROOT_PSM_DRV_DIR)/$(MODULE)
 
 #
@@ -50,10 +49,8 @@ include $(UTSBASE)/i86xpv/Makefile.i86xpv
 #	Define targets
 #
 ALL_TARGET	= $(BINARY)
-LINT_TARGET	= $(MODULE).lint
 INSTALL_TARGET	= $(BINARY) $(ROOTMODULE)
 
-LINTTAGS	+= -erroff=E_BAD_PTR_CAST_ALIGN
 
 CERRWARN	+= -_gcc=-Wno-switch
 
@@ -72,17 +69,9 @@ def:		$(DEF_DEPS)
 
 all:		$(ALL_DEPS)
 
-# This build only 64-bit, but the lint32 below
-# needs corresponding clean/clobber deps.
-clean:		$(CLEAN_DEPS) clean.debug32
+clean:		$(CLEAN_DEPS)
 
-clobber:	$(CLOBBER_DEPS) clobber.debug32
-
-lint:		$(LINT_DEPS)
-
-modlintlib:	$(MODLINTLIB_DEPS) lint32
-
-clean.lint:	$(CLEAN_LINT_DEPS)
+clobber:	$(CLOBBER_DEPS)
 
 install:	$(INSTALL_DEPS)
 

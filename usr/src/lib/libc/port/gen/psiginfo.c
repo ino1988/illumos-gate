@@ -18,6 +18,9 @@
  *
  * CDDL HEADER END
  */
+/*
+ * Copyright 2015 Circonus, Inc.  All rights reserved.
+ */
 
 /*
  * Copyright 2008 Sun Microsystems, Inc.  All rights reserved.
@@ -26,8 +29,6 @@
 
 /*	Copyright (c) 1988 AT&T	*/
 /*	  All Rights Reserved  	*/
-
-#pragma ident	"%Z%%M%	%I%	%E% SMI"
 
 /*
  * Print the name of the siginfo indicated by "sig", along with the
@@ -46,20 +47,27 @@
 #define	strsignal(i)	(_libc_gettext(_sys_siglistp[i]))
 
 void
-psiginfo(siginfo_t *sip, char *s)
+psiginfo(const siginfo_t *sip, const char *s)
 {
 	char buf[256];
 	char *c;
+	size_t l = 0;
 	const struct siginfolist *listp;
 
-	if (sip == 0)
+	if (sip == NULL)
 		return;
+
+	if (s != NULL && *s != '\0') {
+		l = snprintf(buf, sizeof (buf), _libc_gettext("%s : "), s);
+		if (l > sizeof (buf))
+			l = sizeof (buf);
+	}
 
 
 	if (sip->si_code <= 0) {
-		(void) snprintf(buf, sizeof (buf),
-		    _libc_gettext("%s : %s ( from process  %d )\n"),
-		    s, strsignal(sip->si_signo), sip->si_pid);
+		(void) snprintf(buf + l, sizeof (buf) - l,
+		    _libc_gettext("%s ( from process  %d )\n"),
+		    strsignal(sip->si_signo), sip->si_pid);
 	} else if (((listp = &_sys_siginfolist[sip->si_signo-1]) != NULL) &&
 	    sip->si_code <= listp->nsiginfo) {
 		c = _libc_gettext(listp->vsiginfo[sip->si_code-1]);
@@ -68,21 +76,20 @@ psiginfo(siginfo_t *sip, char *s)
 		case SIGBUS:
 		case SIGILL:
 		case SIGFPE:
-			(void) snprintf(buf, sizeof (buf),
-			    _libc_gettext("%s : %s ( [%p] %s)\n"),
-			    s, strsignal(sip->si_signo),
+			(void) snprintf(buf + l, sizeof (buf) - l,
+			    _libc_gettext("%s ( [%p] %s)\n"),
+			    strsignal(sip->si_signo),
 			    sip->si_addr, c);
 			break;
 		default:
-			(void) snprintf(buf, sizeof (buf),
-			    _libc_gettext("%s : %s (%s)\n"),
-			    s, strsignal(sip->si_signo), c);
+			(void) snprintf(buf + l, sizeof (buf) - l,
+			    _libc_gettext("%s (%s)\n"),
+			    strsignal(sip->si_signo), c);
 			break;
 		}
 	} else {
-		(void) snprintf(buf, sizeof (buf),
-		    _libc_gettext("%s : %s\n"),
-		    s, strsignal(sip->si_signo));
+		(void) snprintf(buf + l, sizeof (buf) - l,
+		    _libc_gettext("%s\n"), strsignal(sip->si_signo));
 	}
 	(void) write(2, buf, strlen(buf));
 }

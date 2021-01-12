@@ -20,6 +20,7 @@
  */
 /*
  * Copyright (c) 1995, 2010, Oracle and/or its affiliates. All rights reserved.
+ * Copyright 2019 Joyent, Inc.
  */
 
 /*
@@ -55,7 +56,7 @@ extern u_longlong_t randtick(void);
 	mtype = (flags & PG_NORELOC) ? MTYPE_NORELOC : MTYPE_RELOC;
 
 /* mtype init for page_get_replacement_page */
-#define	MTYPE_PGR_INIT(mtype, flags, pp, mnode, pgcnt)			\
+#define	MTYPE_PGR_INIT(mtype, flags, pp, pgcnt)			\
 	mtype = (flags & PG_NORELOC) ? MTYPE_NORELOC : MTYPE_RELOC;
 
 #define	MNODETYPE_2_PFN(mnode, mtype, pfnlo, pfnhi)			\
@@ -415,7 +416,7 @@ typedef	struct {
 }
 
 #define	PLCNT_DECR(pp, mn, mtype, szc, flags) {				\
-	long	cnt = ((-1) << PAGE_BSZS_SHIFT(szc));			\
+	long	cnt = ((ULONG_MAX) << PAGE_BSZS_SHIFT(szc));		\
 	PLCNT_DO(pp, mn, mtype, szc, cnt, flags);			\
 }
 
@@ -472,6 +473,7 @@ typedef	struct {
 	spgcnt_t _cnt = (spgcnt_t)(cnt);				       \
 	int _mn;							       \
 	pgcnt_t _np;							       \
+	rv = 0;								       \
 	if (&plat_mem_node_intersect_range != NULL) {			       \
 		for (_mn = 0; _mn < max_mem_nodes; _mn++) {		       \
 			plat_mem_node_intersect_range((pfn), _cnt, _mn, &_np); \
@@ -526,7 +528,7 @@ extern plcnt_t	plcnt;
  * if allocation from the RELOC pool failed and there is sufficient cage
  * memory, attempt to allocate from the NORELOC pool.
  */
-#define	MTYPE_NEXT(mnode, mtype, flags) { 				\
+#define	MTYPE_NEXT(mnode, mtype, flags) {				\
 	if (!(flags & (PG_NORELOC | PGI_NOCAGE | PGI_RELOCONLY)) &&	\
 	    (kcage_freemem >= kcage_lotsfree)) {			\
 		if (plcnt[mnode][MTYPE_NORELOC].plc_mt_pgmax == 0) {	\
@@ -628,6 +630,7 @@ switch (consistent_coloring) {						\
 		cmn_err(CE_WARN,					\
 			"AS_2_BIN: bad consistent coloring value");	\
 		/* assume default algorithm -> continue */		\
+		/* FALLTHROUGH */					\
 	case 0: {                                                       \
 		uint32_t ndx, new;					\
 		int slew = 0;						\
@@ -695,9 +698,6 @@ typedef struct {
 /* allocation size to ensure vm_cpu_data_t resides in its own cache line */
 #define	VM_CPU_DATA_PADSIZE						\
 	(P2ROUNDUP(sizeof (vm_cpu_data_t), L2CACHE_ALIGN_MAX))
-
-/* for boot cpu before kmem is initialized */
-extern char	vm_cpu_data0[];
 
 /*
  * Function to get an ecache color bin: F(as, cnt, vcolor).

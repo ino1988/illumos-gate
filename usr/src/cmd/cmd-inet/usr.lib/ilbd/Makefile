@@ -20,6 +20,7 @@
 #
 # Copyright (c) 2009, 2010, Oracle and/or its affiliates. All rights reserved.
 #
+# Copyright (c) 2018, Joyent, Inc.
 
 ILBD=		ilbd
 PROG=		$(ILBD)
@@ -50,10 +51,13 @@ CPPFLAGS +=	-I$(LIB_INC)
 CPPFLAGS +=	-I$(SRC)/uts/common
 
 CERRWARN +=	-_gcc=-Wno-switch
-CERRWARN +=	-_gcc=-Wno-uninitialized
+CERRWARN +=	$(CNOWARN_UNINIT)
 CERRWARN +=	-_gcc=-Wno-unused-label
 
-C99MODE =      $(C99_ENABLE)
+# not linted
+SMATCH=off
+
+CSTD =      $(CSTD_GNU99)
 
 # I18n
 POFILE =        $(ILBD).po

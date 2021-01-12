@@ -18,15 +18,10 @@
 #
 # CDDL HEADER END
 
-
-#
-#
-#ident	"%Z%%M%	%I%	%E% SMI"
 #
 # Copyright 2008 Sun Microsystems, Inc.  All rights reserved.
 # Use is subject to license terms.
 #
-# lib/nsswitch/ldap/Makefile.com
 
 LIBRARY =	libnss_ldap.a
 VERS =		.1
@@ -61,7 +56,5 @@ OBJECTS =	getauthattr.o	\
 include		../../Makefile.com
 
 CPPFLAGS +=	-I../../../libsldap/common
-LDLIBS +=	-lsldap -lnsl -lsocket -lldap
-LINTFLAGS +=	-erroff=E_GLOBAL_COULD_BE_STATIC2 
-LINTFLAGS64 +=	-erroff=E_GLOBAL_COULD_BE_STATIC2 
+LDLIBS +=	-lsldap -lnsl -lldap
 DYNLIB1 =	nss_ldap.so$(VERS)

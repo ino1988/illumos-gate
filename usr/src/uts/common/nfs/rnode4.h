@@ -24,7 +24,7 @@
  */
 
 /*	Copyright (c) 1983, 1984, 1985, 1986, 1987, 1988, 1989 AT&T	*/
-/*	  All Rights Reserved  	*/
+/*	  All Rights Reserved	*/
 
 #ifndef	_NFS_RNODE4_H
 #define	_NFS_RNODE4_H
@@ -216,7 +216,7 @@ typedef struct r4hashq {
  * be held whenever any kind of access of r_size is made.
  *
  * Lock ordering:
- * 	r_rwlock > r_lkserlock > r_os_lock > r_statelock > r_statev4_lock
+ *	r_rwlock > r_lkserlock > r_os_lock > r_statelock > r_statev4_lock
  *	vnode_t::v_lock > r_os_lock
  */
 struct exportinfo;	/* defined in nfs/export.h */
@@ -308,11 +308,11 @@ typedef struct rnode4 {
 					/* delegation has been recalled by */
 					/* the server during open with */
 					/* CLAIM_PREVIOUS */
-	unsigned 	r_deleg_return_pending:1;
+	unsigned	r_deleg_return_pending:1;
 					/* delegreturn is pending, don't use */
 					/* the delegation stateid, set in */
 					/* nfs4_dlistadd */
-	unsigned 	r_deleg_return_inprog:1;
+	unsigned	r_deleg_return_inprog:1;
 					/* delegreturn is in progress, may */
 					/* only be set by nfs4delegreturn. */
 	nfs_rwlock_t    r_deleg_recall_lock;
@@ -336,6 +336,8 @@ typedef struct rnode4 {
 	nfs4_stub_type_t	r_stub_type;
 					/* e.g. mirror-mount or referral */
 	uint_t		r_inmap;	/* to serialize read/write and mmap */
+	list_node_t	r_mi_link;	/* linkage into list of rnodes for */
+					/* this mntinfo */
 } rnode4_t;
 
 #define	r_vnode	r_svnode.sv_r_vnode
@@ -393,12 +395,6 @@ extern long nrnode;
 #define	NFS4_INITIAL_DELAY_INTERVAL	 1
 #define	NFS4_MAX_DELAY_INTERVAL		20
 
-/* Used for check_rtable4 */
-#define	NFSV4_RTABLE4_OK		0
-#define	NFSV4_RTABLE4_NOT_FREE_LIST	1
-#define	NFSV4_RTABLE4_DIRTY_PAGES	2
-#define	NFSV4_RTABLE4_POS_R_COUNT	3
-
 extern rnode4_t	*r4find(r4hashq_t *, nfs4_sharedfh_t *, struct vfs *);
 extern rnode4_t	*r4find_unlocked(nfs4_sharedfh_t *, struct vfs *);
 extern void	r4flush(struct vfs *, cred_t *);
@@ -444,11 +440,12 @@ extern void	nfs4_clear_open_streams(rnode4_t *);
  *
  * The caller must not be holding the rnode r_statelock mutex.
  */
-#define	PURGE_ATTRCACHE4_LOCKED(rp)				\
+#define	PURGE_ATTRCACHE4_LOCKED(rp)	{			\
 	rp->r_time_attr_inval = gethrtime();			\
 	rp->r_time_attr_saved = rp->r_time_attr_inval;		\
 	rp->r_pathconf.pc4_xattr_valid = 0;			\
-	rp->r_pathconf.pc4_cache_valid = 0;
+	rp->r_pathconf.pc4_cache_valid = 0;			\
+}
 
 #define	PURGE_ATTRCACHE4(vp)	{				\
 	rnode4_t *rp = VTOR4(vp);				\
