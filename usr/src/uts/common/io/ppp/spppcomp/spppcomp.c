@@ -3,6 +3,7 @@
  *
  * Copyright 2009 Sun Microsystems, Inc.  All rights reserved.
  * Use is subject to license terms.
+ * Copyright (c) 2016 by Delphix. All rights reserved.
  *
  * Permission to use, copy, modify, and distribute this software and its
  * documentation is hereby granted, provided that the above copyright
@@ -101,10 +102,10 @@ static const char buildtime[] = "Built " __DATE__ " at " __TIME__
 
 static int	spppcomp_open(queue_t *, dev_t *, int, int, cred_t *);
 static int	spppcomp_close(queue_t *, int, cred_t *);
-static void	spppcomp_rput(queue_t *, mblk_t *);
-static void	spppcomp_rsrv(queue_t *);
-static void	spppcomp_wput(queue_t *, mblk_t *);
-static void	spppcomp_wsrv(queue_t *);
+static int	spppcomp_rput(queue_t *, mblk_t *);
+static int	spppcomp_rsrv(queue_t *);
+static int	spppcomp_wput(queue_t *, mblk_t *);
+static int	spppcomp_wsrv(queue_t *);
 
 #define	PPPCOMP_MI_MINPSZ	(0)
 #define	PPPCOMP_MI_MAXPSZ	(INFPSZ)
@@ -121,8 +122,8 @@ static struct module_info spppcomp_modinfo = {
 };
 
 static struct qinit spppcomp_rinit = {
-	(int (*)())spppcomp_rput, /* qi_putp */
-	(int (*)())spppcomp_rsrv, /* qi_srvp */
+	spppcomp_rput,		/* qi_putp */
+	spppcomp_rsrv,		/* qi_srvp */
 	spppcomp_open,		/* qi_qopen */
 	spppcomp_close,		/* qi_qclose */
 	NULL,			/* qi_qadmin */
@@ -131,8 +132,8 @@ static struct qinit spppcomp_rinit = {
 };
 
 static struct qinit spppcomp_winit = {
-	(int (*)())spppcomp_wput, /* qi_putp */
-	(int (*)())spppcomp_wsrv, /* qi_srvp */
+	spppcomp_wput,		/* qi_putp */
+	spppcomp_wsrv,		/* qi_srvp */
 	NULL,			/* qi_qopen */
 	NULL,			/* qi_qclose */
 	NULL,			/* qi_qadmin */
@@ -312,7 +313,7 @@ spppcomp_close(queue_t *q, int flag, cred_t *credp)
  *	most processing will be performed here in-line, and deferral
  *	occurs only when necessary.
  */
-static void
+static int
 spppcomp_wput(queue_t *q, mblk_t *mp)
 {
 	sppp_comp_t *cp = q->q_ptr;
@@ -374,6 +375,7 @@ spppcomp_wput(queue_t *q, mblk_t *mp)
 			freemsg(mp);
 		break;
 	}
+	return (0);
 }
 
 /*
@@ -385,7 +387,7 @@ spppcomp_wput(queue_t *q, mblk_t *mp)
  * Description:
  *    Write-side service procedure.
  */
-static void
+static int
 spppcomp_wsrv(queue_t *q)
 {
 	mblk_t		*mp;
@@ -403,6 +405,7 @@ spppcomp_wsrv(queue_t *q)
 		    (mp = spppcomp_outpkt(q, mp)) != NULL)
 			putnext(q, mp);
 	}
+	return (0);
 }
 
 /*
@@ -1144,7 +1147,7 @@ spppcomp_mctl(queue_t *q, mblk_t *mp)
  *	more and we're in an interrupt context (on the theory that
  *	we're hogging the CPU in this case).
  */
-static void
+static int
 spppcomp_rput(queue_t *q, mblk_t *mp)
 {
 	sppp_comp_t		*cp = q->q_ptr;
@@ -1186,7 +1189,7 @@ spppcomp_rput(queue_t *q, mblk_t *mp)
 				cp->cp_lastfinish = gethrtime();
 			}
 		} else {
-			/* Deferring; give him a clean slate */
+			/* Deferring; provide a clean slate */
 			cp->cp_fastin = 0;
 #ifdef SPC_DEBUG
 			cp->cp_in_queued++;
@@ -1266,6 +1269,7 @@ spppcomp_rput(queue_t *q, mblk_t *mp)
 			freemsg(mp);
 		break;
 	}
+	return (0);
 }
 
 /*
@@ -1283,7 +1287,7 @@ spppcomp_rput(queue_t *q, mblk_t *mp)
  *	it will put the unprocessed data on the queue for later
  *	handling.
  */
-static void
+static int
 spppcomp_rsrv(queue_t *q)
 {
 	mblk_t		*mp;
@@ -1301,6 +1305,7 @@ spppcomp_rsrv(queue_t *q)
 		    (mp = spppcomp_inpkt(q, mp)) != NULL)
 			putnext(q, mp);
 	}
+	return (0);
 }
 
 /*

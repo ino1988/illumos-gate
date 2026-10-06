@@ -22,12 +22,11 @@
 /*
  * Copyright 2008 Sun Microsystems, Inc.  All rights reserved.
  * Use is subject to license terms.
+ * Copyright 2019 Peter Tribble.
  */
 
 #ifndef	_SYS_PROMIF_H
 #define	_SYS_PROMIF_H
-
-#pragma ident	"%Z%%M%	%I%	%E% SMI"
 
 #include <sys/types.h>
 #include <sys/obpdefs.h>
@@ -64,8 +63,8 @@ extern "C" {
  * allow the promif routines to allocate and free memory allocated from
  * the bottom 32-bits of the 64-bit address space:
  *
- * 	void *promplat_alloc(size_t);
- * 	void promplat_free(void *, size_t);
+ *	void *promplat_alloc(size_t);
+ *	void promplat_free(void *, size_t);
  *
  * The alloc function should guarantee that it will never return an
  * invalid pointer.
@@ -185,7 +184,6 @@ extern	int		prom_getversion(void);
 extern	int		prom_is_openprom(void);
 extern	int		prom_is_p1275(void);
 extern	int		prom_version_name(char *buf, int buflen);
-extern	int		prom_version_check(char *buf, size_t len, pnode_t *n);
 
 extern	void		*prom_mon_id(void);	/* SMCC/OBP platform centric */
 
@@ -197,20 +195,6 @@ extern	char		*prom_bootargs(void);
 extern	void		prom_interpret(char *str, uintptr_t arg1,
 			    uintptr_t arg2, uintptr_t arg3, uintptr_t arg4,
 			    uintptr_t arg5);
-
-/*
- * Return code values from prom_version_check:
- *
- * This routine uses past-prediction mode to determine if the firmware
- * on the current system is 64-bit ready.
- *
- * return code 2 could happen on a board-based server with a slave CPU board
- * running down-rev firmware and the current master running adequate fw.
- */
-#define	PROM_VER64_OK		0	/* Prom is 64-bit ready (or n/a) */
-#define	PROM_VER64_UPGRADE	1	/* Down-rev firmware is running */
-#define	PROM_VER64_SUGGEST	2	/* Down-rev firmware detected .. */
-					/* .. but not currently active */
 
 /*
  * Administrative group: OBP only.
@@ -282,20 +266,16 @@ extern	int		prom_seek(int fd, u_longlong_t offset);
 extern	void		prom_writestr(const char *buf, size_t bufsize);
 extern	void		prom_pnode_to_pathname(pnode_t, char *);
 
-/*PRINTFLIKE1*/
 extern	void		prom_printf(const char *fmt, ...)
-	__PRINTFLIKE(1);
-#pragma rarely_called(prom_printf)
+	__KPRINTFLIKE(1);
 
 extern	void		prom_vprintf(const char *fmt, __va_list adx)
-	__VPRINTFLIKE(1);
-#pragma rarely_called(prom_vprintf)
+	__KVPRINTFLIKE(1);
 
-/*PRINTFLIKE2*/
 extern	char		*prom_sprintf(char *s, const char *fmt, ...)
-	__PRINTFLIKE(2);
+	__KPRINTFLIKE(2);
 extern	char		*prom_vsprintf(char *s, const char *fmt, __va_list adx)
-	__VPRINTFLIKE(2);
+	__KVPRINTFLIKE(2);
 
 #define	PROM_WALK_CONTINUE	0	/* keep walking to next node */
 #define	PROM_WALK_TERMINATE	1	/* abort walk now */

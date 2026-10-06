@@ -15,10 +15,6 @@
  * OF OR IN CONNECTION WITH THE USE OR PERFORMANCE OF THIS SOFTWARE.
  */
 
-#if defined(LIBC_SCCS) && !defined(lint)
-static const char rcsid[] = "$Id: getnetent_r.c,v 1.6 2005/09/03 12:41:38 marka Exp $";
-#endif /* LIBC_SCCS and not lint */
-
 #include <port_before.h>
 #if !defined(_REENTRANT) || !defined(DO_PTHREADS)
 	static int getnetent_r_not_required = 0;
@@ -34,7 +30,7 @@ static const char rcsid[] = "$Id: getnetent_r.c,v 1.6 2005/09/03 12:41:38 marka 
 
 #ifdef NET_R_RETURN
 
-static NET_R_RETURN 
+static NET_R_RETURN
 copy_netent(struct netent *, struct netent *, NET_R_COPY_ARGS);
 
 NET_R_RETURN
@@ -158,7 +154,7 @@ copy_netent(struct netent *ne, struct netent *nptr, NET_R_COPY_ARGS) {
 	}
 	len += strlen(ne->n_name) + 1;
 	len += numptr * sizeof(char*);
-	
+
 	if (len > (int)buflen) {
 		errno = ERANGE;
 		return (NET_R_BAD);

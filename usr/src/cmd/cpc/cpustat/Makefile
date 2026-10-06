@@ -22,50 +22,45 @@
 # Copyright 2009 Sun Microsystems, Inc.  All rights reserved.
 # Use is subject to license terms.
 #
+# Copyright (c) 2018, Joyent, Inc.
+# Copyright 2025 Hans Rosenfeld
 
 PROG =		cpustat
 OBJS =		$(PROG).o caps.o time.o setgrp.o strtoset.o
 SRCS =		$(OBJS:%.o=../common/%.c)
 
+CLEANFILES =	$(OBJS)
+
 include ../../Makefile.cmd
-
-STATCOMMONDIR = $(SRC)/cmd/stat/common
-
-STAT_COMMON_OBJS = timestamp.o
-STAT_COMMON_SRCS = $(STAT_COMMON_OBJS:%.o=$(STATCOMMONDIR)/%.c)
-SRCS += $(STAT_COMMON_SRCS)
+include $(SRC)/cmd/stat/Makefile.stat
 
 CFLAGS		+= $(CCVERBOSE) $(CTF_FLAGS)
-CERRWARN	+= -_gcc=-Wno-uninitialized
-CPPFLAGS	+= -D_REENTRANT -I$(SRC)/lib/libcpc/common -I$(STATCOMMONDIR)
+CERRWARN	+= $(CNOWARN_UNINIT)
+CPPFLAGS	+= -D_REENTRANT -I$(SRC)/lib/libcpc/common
 LDLIBS +=	-lcpc -lkstat
+
+# not linted
+SMATCH=off
 
 .KEEP_STATE:
 
 all:	$(PROG)
 
-$(PROG): $(OBJS) $(STAT_COMMON_OBJS)
-	$(LINK.c) $(OBJS) $(STAT_COMMON_OBJS) -o $@ $(LDLIBS)
+$(PROG): $(OBJS)
+	$(LINK.c) $(OBJS) -o $@ $(LDLIBS)
 	$(POST_PROCESS)
-	$(CTFMERGE) -L VERSION -o $@ $(OBJS) $(STAT_COMMON_OBJS)
 
 install: all $(ROOTUSRSBINPROG)
 
 clean:
-	$(RM) $(OBJS) $(STAT_COMMON_OBJS)
-
-lint:	lint_SRCS
+	$(RM) $(CLEANFILES)
 
 strip: all
 	$(STRIP) $(PROG)
 
 %.o:	../common/%.c
 	$(COMPILE.c) $<
-	$(CTFCONVERT_O)
-
-%.o:	$(STATCOMMONDIR)/%.c
-	$(COMPILE.c) $<
-	$(CTFCONVERT_O)
+	$(POST_PROCESS_O)
 
 POFILES =	../common/$(PROG).po ../common/caps.po
 POFILE =	$(PROG)_cmd.po

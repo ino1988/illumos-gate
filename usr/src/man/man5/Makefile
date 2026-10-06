@@ -11,193 +11,205 @@
 
 #
 # Copyright 2011, Richard Lowe
-# Copyright (c) 2012 by Delphix. All rights reserved.
-# Copyright 2014 Nexenta Systems, Inc.
-# Copyright 2014 Garrett D'Amore <garrett@damore.org>
+# Copyright 2015, Joyent, Inc.
+# Copyright 2018 Nexenta Systems, Inc.
+# Copyright 2018 Gary Mills
+# Copyright 2021 OmniOS Community Edition (OmniOSce) Association.
+# Copyright 2022 Garrett D'Amore <garrett@dmaore.org>
 #
 
 include		$(SRC)/Makefile.master
 
 MANSECT=	5
 
-MANFILES=	Intro.5			\
-		acl.5			\
-		ad.5			\
-		ascii.5			\
-		attributes.5		\
-		audit_binfile.5		\
-		audit_remote.5		\
-		audit_syslog.5		\
-		brands.5		\
-		cancellation.5		\
-		charmap.5		\
-		condition.5		\
-		crypt_bsdbf.5		\
-		crypt_bsdmd5.5		\
-		crypt_sha256.5		\
-		crypt_sha512.5		\
-		crypt_sunmd5.5		\
-		crypt_unix.5		\
-		device_clean.5		\
-		dhcp.5			\
-		environ.5		\
-		eqn.5			\
-		eqnchar.5		\
-		extendedFILE.5		\
-		filesystem.5		\
-		fnmatch.5		\
-		formats.5		\
-		fsattr.5		\
-		grub.5			\
-		gss_auth_rules.5	\
-		hal.5			\
-		iconv.5			\
-		iconv_unicode.5		\
-		ieee802.3.5		\
-		ieee802.11.5		\
-		ipfilter.5		\
-		isalist.5		\
-		kerberos.5		\
-		krb5_auth_rules.5	\
-		krb5envvar.5		\
-		largefile.5		\
-		lf64.5			\
-		lfcompile.5		\
-		lfcompile64.5		\
-		locale.5		\
-		man.5			\
-		mandoc_char.5		\
-		mandoc_roff.5		\
-		mdoc.5			\
-		me.5			\
-		mech_spnego.5		\
-		mm.5			\
-		ms.5			\
-		mutex.5			\
-		nfssec.5		\
-		pam_allow.5		\
-		pam_authtok_check.5	\
-		pam_authtok_get.5	\
-		pam_authtok_store.5	\
-		pam_deny.5		\
-		pam_dhkeys.5		\
-		pam_dial_auth.5		\
-		pam_krb5.5		\
-		pam_krb5_migrate.5	\
-		pam_ldap.5		\
-		pam_list.5		\
-		pam_passwd_auth.5	\
-		pam_rhosts_auth.5	\
-		pam_roles.5		\
-		pam_sample.5		\
-		pam_smb_passwd.5	\
-		pam_smbfs_login.5	\
-		pam_timestamp.5		\
-		pam_tsol_account.5	\
-		pam_unix_account.5	\
-		pam_unix_auth.5		\
-		pam_unix_cred.5		\
-		pam_unix_session.5	\
-		pkcs11_kernel.5		\
-		pkcs11_softtoken.5	\
-		pkcs11_tpm.5		\
-		privileges.5		\
-		prof.5			\
-		rbac.5			\
-		regex.5			\
-		regexp.5		\
-		resource_controls.5	\
-		smf.5			\
-		smf_bootstrap.5		\
-		smf_method.5		\
-		smf_restarter.5		\
-		smf_security.5		\
-		smf_template.5		\
-		standards.5		\
-		sticky.5		\
-		tbl.5			\
-		tecla.5			\
-		term.5			\
-		threads.5		\
-		trusted_extensions.5	\
-		vgrindefs.5		\
-		zones.5			\
-		zpool-features.5
+_MANFILES=	Intro.5				\
+		NISLDAPmapping.5		\
+		a.out.5				\
+		admin.5				\
+		alias.5				\
+		aliases.5			\
+		au.5				\
+		audit.log.5			\
+		audit_class.5			\
+		audit_event.5			\
+		auth_attr.5			\
+		autofs.5			\
+		bart_manifest.5			\
+		bart_rules.5			\
+		bootparams.5			\
+		cardbus.5			\
+		compver.5			\
+		contents.5			\
+		contract.5			\
+		copyright.5			\
+		core.5				\
+		crypt.conf.5			\
+		crypto_certs.5			\
+		ctf.5				\
+		d_passwd.5			\
+		dacf.conf.5			\
+		dat.conf.5			\
+		default_fs.5			\
+		defaultdomain.5			\
+		defaultrouter.5			\
+		depend.5			\
+		device_allocate.5		\
+		device_contract.5		\
+		device_maps.5			\
+		devices.5			\
+		dfstab.5			\
+		dhcp_inittab.5			\
+		dialups.5			\
+		dir_ufs.5			\
+		driver.conf.5			\
+		ethers.5			\
+		exec_attr.5			\
+		fdi.5				\
+		format.dat.5			\
+		fspec.5				\
+		fstypes.5			\
+		ftp.5				\
+		ftpusers.5			\
+		fx_dptbl.5			\
+		gateways.5			\
+		group.5				\
+		gsscred.conf.5			\
+		hba.conf.5			\
+		holidays.5			\
+		hosts.5				\
+		hosts.equiv.5			\
+		hosts_access.5			\
+		hosts_options.5			\
+		ib.5				\
+		ike.config.5			\
+		ike.preshared.5			\
+		ipf.5				\
+		ipmon.5				\
+		ipnat.5				\
+		ippool.5			\
+		inet_type.5			\
+		inetd.conf.5			\
+		init.5				\
+		init.d.5			\
+		inittab.5			\
+		ipaddrsel.conf.5		\
+		ipnodes.5			\
+		issue.5				\
+		kadm5.acl.5			\
+		kdc.conf.5			\
+		keytables.5			\
+		krb5.conf.5			\
+		ldapfilter.conf.5		\
+		ldapsearchprefs.conf.5		\
+		ldaptemplates.conf.5		\
+		logadm.conf.5			\
+		logindevperm.5			\
+		loginlog.5			\
+		magic.5				\
+		mailer.conf.5			\
+		mech.5				\
+		menu.lst.5			\
+		mnttab.5			\
+		mpapi.conf.5			\
+		ndmp.5				\
+		ndpd.conf.5			\
+		netconfig.5			\
+		netgroup.5			\
+		netid.5				\
+		netmasks.5			\
+		netrc.5				\
+		networks.5			\
+		nfs.5				\
+		nfslog.conf.5			\
+		nfssec.conf.5			\
+		nodename.5			\
+		nologin.5			\
+		note.5				\
+		notrouter.5			\
+		nscd.conf.5			\
+		nsmbrc.5			\
+		nss.5				\
+		nsswitch.conf.5			\
+		overlay_files.5			\
+		packingrules.5			\
+		pam.conf.5			\
+		passwd.5			\
+		path_to_inst.5			\
+		pci.5				\
+		phones.5			\
+		pkginfo.5			\
+		pkgmap.5			\
+		policy.conf.5			\
+		power.conf.5			\
+		printers.5			\
+		printers.conf.5			\
+		priv_names.5			\
+		proc.5				\
+		process.5			\
+		prof_attr.5			\
+		profile.5			\
+		project.5			\
+		protocols.5			\
+		prototype.5			\
+		pseudo.5			\
+		publickey.5			\
+		queuedefs.5			\
+		rcmscript.5			\
+		remote.5			\
+		resolv.conf.5			\
+		rmtab.5				\
+		rpc.5				\
+		rt_dptbl.5			\
+		sasl_appname.conf.5		\
+		scsi.5				\
+		securenets.5			\
+		sendmail.5			\
+		service_bundle.5		\
+		service_provider.conf.5		\
+		services.5			\
+		shadow.5			\
+		sharetab.5			\
+		shells.5			\
+		slp.conf.5			\
+		slpd.reg.5			\
+		smb.5				\
+		smbautohome.5			\
+		smhba.conf.5			\
+		sock2path.d.5			\
+		space.5				\
+		sulog.5				\
+		syslog.conf.5			\
+		system.5			\
+		term.5				\
+		terminfo.5			\
+		timezone.5			\
+		ts_dptbl.5			\
+		ttydefs.5			\
+		ttysrch.5			\
+		tzfile.5			\
+		ufsdump.5			\
+		updaters.5			\
+		user_attr.5			\
+		utmp.5				\
+		utmpx.5				\
+		vfstab.5			\
+		warn.conf.5			\
+		ypfiles.5			\
+		yppasswdd.5			\
+		ypserv.5			\
+		zoneinfo.5
 
-MANLINKS=	ANSI.5		\
-		C++.5		\
-		C.5		\
-		CSI.5		\
-		ISO.5		\
-		MT-Level.5	\
-		POSIX.1.5	\
-		POSIX.2.5	\
-		POSIX.5		\
-		RBAC.5		\
-		SUS.5		\
-		SUSv2.5		\
-		SUSv3.5		\
-		SVID.5		\
-		SVID3.5		\
-		XNS.5		\
-		XNS4.5		\
-		XNS5.5		\
-		XPG.5		\
-		XPG3.5		\
-		XPG4.5		\
-		XPG4v2.5	\
-		advance.5	\
-		architecture.5	\
-		availability.5	\
-		compile.5	\
-		intro.5		\
-		pthreads.5	\
-		stability.5	\
-		standard.5	\
-		step.5		\
-		teclarc.5
+i386_MANFILES=	bhyve_config.5			\
+		loader.conf.5			\
+		sysbus.5
 
-intro.5		:= LINKSRC = Intro.5
+MANFILES=	$(_MANFILES) $($(MACH)_MANFILES)
 
-CSI.5		:= LINKSRC = attributes.5
-MT-Level.5	:= LINKSRC = attributes.5
-architecture.5	:= LINKSRC = attributes.5
-availability.5	:= LINKSRC = attributes.5
-stability.5	:= LINKSRC = attributes.5
-standard.5	:= LINKSRC = attributes.5
-
-RBAC.5		:= LINKSRC = rbac.5
-
-advance.5	:= LINKSRC = regexp.5
-compile.5	:= LINKSRC = regexp.5
-step.5		:= LINKSRC = regexp.5
-
-ANSI.5		:= LINKSRC = standards.5
-C++.5		:= LINKSRC = standards.5
-C.5		:= LINKSRC = standards.5
-ISO.5		:= LINKSRC = standards.5
-POSIX.1.5	:= LINKSRC = standards.5
-POSIX.2.5	:= LINKSRC = standards.5
-POSIX.5		:= LINKSRC = standards.5
-SUS.5		:= LINKSRC = standards.5
-SUSv2.5		:= LINKSRC = standards.5
-SUSv3.5		:= LINKSRC = standards.5
-SVID.5		:= LINKSRC = standards.5
-SVID3.5		:= LINKSRC = standards.5
-XNS.5		:= LINKSRC = standards.5
-XNS4.5		:= LINKSRC = standards.5
-XNS5.5		:= LINKSRC = standards.5
-XPG.5		:= LINKSRC = standards.5
-XPG3.5		:= LINKSRC = standards.5
-XPG4.5		:= LINKSRC = standards.5
-XPG4v2.5	:= LINKSRC = standards.5
-
-teclarc.5	:= LINKSRC = tecla.5
-
-pthreads.5	:= LINKSRC = threads.5
+i386_MANLINK_SRC=	Manlink.i386
 
 .KEEP_STATE:
 
 include		$(SRC)/man/Makefile.man
 
-install:	$(ROOTMANFILES) $(ROOTMANLINKS)
+install:	$(ROOTMANFILES) $(MANLINK_SRCS)
+	$(MANLINK_INSTALL)

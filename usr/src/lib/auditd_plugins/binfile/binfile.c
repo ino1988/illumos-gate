@@ -263,7 +263,7 @@ loadauditlist(char *dirstr, char *minfreestr)
 	dirlist_t	*thisdir;
 	int		node_count = 0;
 	int		rc;
-	int		temp_minfree;
+	int		temp_minfree = 0;
 
 	static dirlist_t	*activeList = NULL;	/* directory list */
 
@@ -333,7 +333,7 @@ loadauditlist(char *dirstr, char *minfreestr)
 	}
 	if (rc == -2) {
 		(void) pthread_mutex_lock(&log_mutex);
-		DPRINT((dbfp, "loadauditlist:  close / open audit.log(4)\n"));
+		DPRINT((dbfp, "loadauditlist:  close / open audit.log(5)\n"));
 		if (open_log(listhead) == 0) {
 			openNewFile = 1;	/* try again later */
 		} else {
@@ -691,7 +691,8 @@ spacecheck(dirlist_t *thisdir, int test_limit, size_t next_buf_size)
  * INT_MAX.  Defaults to 0 if the value is invalid or is missing.
  */
 static void
-save_maxsize(char *maxsize) {
+save_maxsize(char *maxsize)
+{
 	/*
 	 * strtol() returns a long which could be larger than int so
 	 * store here for sanity checking first
@@ -713,11 +714,11 @@ save_maxsize(char *maxsize) {
 		 */
 		if ((errno == ERANGE) ||
 		    ((proposed_maxsize != 0) &&
-			(proposed_maxsize < FSIZE_MIN)) ||
+		    (proposed_maxsize < FSIZE_MIN)) ||
 		    (proposed_maxsize > INT_MAX)) {
 			binfile_maxsize = 0;
 			DPRINT((dbfp, "binfile: p_fsize parameter out of "
-					"range: %s\n", maxsize));
+			    "range: %s\n", maxsize));
 			/*
 			 * Inform administrator of the error via
 			 * syslog
@@ -933,7 +934,7 @@ auditd_plugin(const char *input, size_t in_len, uint64_t sequence, char **error)
 
 /*
  * It may be called multiple times as auditd handles SIGHUP and SIGUSR1
- * corresponding to the audit(1M) flags -s and -n
+ * corresponding to the audit(8) flags -s and -n
  *
  * kvlist is NULL only if auditd caught a SIGUSR1 (audit -n), so after the first
  * time open is called; the reason is -s if kvlist != NULL and -n otherwise.

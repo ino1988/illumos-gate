@@ -1,6 +1,7 @@
 /*
  * Copyright 2005 Sun Microsystems, Inc.  All rights reserved.
  * Use is subject to license terms.
+ * Copyright (c) 2016 by Delphix. All rights reserved.
  */
 
 /*	Copyright (c) 1983, 1984, 1985, 1986, 1987, 1988, 1989 AT&T	*/
@@ -11,8 +12,6 @@
  * All rights reserved.  The Berkeley Software License Agreement
  * specifies the terms and conditions for redistribution.
  */
-
-#pragma ident	"%Z%%M%	%I%	%E% SMI"
 
 #include "sh.h"
 #include "sh.dir.h"
@@ -29,9 +28,15 @@ void	dtildepr(tchar *, tchar *);
 void	dfree(struct directory *);
 void	dnewcwd(struct directory *);
 
+int	didchdir;
+bool	loginsh;
+bool	havhash2;
+struct varent shvhed;
+struct directory *dcwd;
 struct	directory dhead;		/* "head" of loop */
 int	printd;				/* force name to be printed */
 static tchar *fakev[] = { S_dirs, NOSTR };
+char	xhash2[HSHSIZ / 8];
 
 /*
  * dinit - initialize current working directory
@@ -49,7 +54,7 @@ dinit(tchar *hp)
 	/*
 	 * If this is a login shell, we should have a home directory.  But,
 	 * if we got here via 'su - <user>' where the user has no directory
-	 * in his passwd file, then su has passed HOME=<nothing>, so hp is
+	 * in their passwd file, then su has passed HOME=<nothing>, so hp is
 	 * non-null, but has zero length.  Thus, we do not know the current
 	 * working directory based on the home directory.
 	 */

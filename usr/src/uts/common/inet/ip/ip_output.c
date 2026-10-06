@@ -21,6 +21,9 @@
 
 /*
  * Copyright (c) 2009, 2010, Oracle and/or its affiliates. All rights reserved.
+ * Copyright 2018 Joyent, Inc.
+ * Copyright 2024 Oxide Computer Company
+ * Copyright 2026 Bill Sommerfeld <sommerfeld@hamachi.org>
  */
 /* Copyright (c) 1990 Mentat Inc. */
 
@@ -244,8 +247,8 @@ conn_ip_output(mblk_t *mp, ip_xmit_attr_t *ixa)
 
 				break;
 			}
-			/* FALLTHROUGH */
 		}
+		/* FALLTHROUGH */
 		default:
 			ip_drop_output("ipIfStatsOutDiscards - verify nce",
 			    mp, NULL);
@@ -656,9 +659,10 @@ ip_verify_lso(ill_t *ill, ip_xmit_attr_t *ixa)
 
 	if (ixa->ixa_flags & IXAF_LSO_CAPAB) {
 		/*
-		 * Not unsable any more.
+		 * Not usable any more?
 		 */
-		if ((ixa->ixa_flags & IXAF_IPSEC_SECURE) ||
+		if (!dohwcksum ||
+		    (ixa->ixa_flags & IXAF_IPSEC_SECURE) ||
 		    (ixa->ixa_ire->ire_type & (IRE_LOCAL | IRE_LOOPBACK)) ||
 		    (ixa->ixa_ire->ire_flags & RTF_MULTIRT) ||
 		    ((ixa->ixa_flags & IXAF_IS_IPV4) ?
@@ -672,13 +676,15 @@ ip_verify_lso(ill_t *ill, ip_xmit_attr_t *ixa)
 		/*
 		 * Capability has changed, refresh the copy in ixa.
 		 */
-		if (lsoc->ill_lso_max != new_lsoc->ill_lso_max) {
+		if (lsoc->ill_lso_max_tcpv4 != new_lsoc->ill_lso_max_tcpv4 ||
+		    lsoc->ill_lso_max_tcpv6 != new_lsoc->ill_lso_max_tcpv6) {
 			*lsoc = *new_lsoc;
 
 			return (B_FALSE);
 		}
 	} else { /* Was not usable */
-		if (!(ixa->ixa_flags & IXAF_IPSEC_SECURE) &&
+		if (dohwcksum &&
+		    !(ixa->ixa_flags & IXAF_IPSEC_SECURE) &&
 		    !(ixa->ixa_ire->ire_type & (IRE_LOCAL | IRE_LOOPBACK)) &&
 		    !(ixa->ixa_ire->ire_flags & RTF_MULTIRT) &&
 		    ((ixa->ixa_flags & IXAF_IS_IPV4) ?
@@ -1099,7 +1105,7 @@ ire_send_local_v4(ire_t *ire, mblk_t *mp, void *iph_arg,
 	    int, 1);
 
 	if (HOOKS4_INTERESTED_LOOPBACK_OUT(ipst)) {
-		int error;
+		int error = 0;
 
 		DTRACE_PROBE4(ip4__loopback__out__start, ill_t *, NULL,
 		    ill_t *, ill, ipha_t *, ipha, mblk_t *, mp);
@@ -1148,6 +1154,7 @@ ire_send_local_v4(ire_t *ire, mblk_t *mp, void *iph_arg,
 	/* Map ixa to ira including IPsec policies */
 	ipsec_out_to_in(ixa, ill, &iras);
 	iras.ira_pktlen = pktlen;
+	iras.ira_ttl = ipha->ipha_ttl;
 
 	if (!IS_SIMPLE_IPH(ipha)) {
 		ip_output_local_options(ipha, ipst);
@@ -1155,7 +1162,7 @@ ire_send_local_v4(ire_t *ire, mblk_t *mp, void *iph_arg,
 	}
 
 	if (HOOKS4_INTERESTED_LOOPBACK_IN(ipst)) {
-		int error;
+		int error = 0;
 
 		DTRACE_PROBE4(ip4__loopback__in__start, ill_t *, ill,
 		    ill_t *, NULL, ipha_t *, ipha, mblk_t *, mp);
@@ -1737,6 +1744,13 @@ ip_output_cksum_v4(iaflags_t ixaflags, mblk_t *mp, ipha_t *ipha,
 #endif
 			sctph->sh_chksum = sctp_cksum(mp, ip_hdr_length);
 		goto ip_hdr_cksum;
+	} else if (protocol == IPPROTO_ICMP) {
+		/*
+		 * Note that we always calculate a SW checksum for ICMP. In the
+		 * future, if HW support for ICMP is advertised, we can change
+		 * this.
+		 */
+		return (ip_output_sw_cksum_v4(mp, ipha, ixa));
 	} else {
 	ip_hdr_cksum:
 		/* Calculate IPv4 header checksum */
@@ -1898,7 +1912,7 @@ ire_send_wire_v4(ire_t *ire, mblk_t *mp, void *iph_arg,
 	/*
 	 * Verify any IPv4 options.
 	 *
-	 * The presense of IP options also forces the network stack to
+	 * The presence of IP options also forces the network stack to
 	 * calculate the checksum in software.  This is because:
 	 *
 	 * Wrap around: certain partial-checksum NICs (eri, ce) limit
@@ -2356,12 +2370,6 @@ ip_postfrag_multirt_v4(mblk_t *mp, nce_t *nce, iaflags_t ixaflags,
 			error = ENOBUFS;
 			continue;
 		}
-		/* Preserve HW checksum for this copy */
-		DB_CKSUMSTART(mp1) = DB_CKSUMSTART(mp);
-		DB_CKSUMSTUFF(mp1) = DB_CKSUMSTUFF(mp);
-		DB_CKSUMEND(mp1) = DB_CKSUMEND(mp);
-		DB_CKSUMFLAGS(mp1) = DB_CKSUMFLAGS(mp);
-		DB_LSOMSS(mp1) = DB_LSOMSS(mp);
 
 		ire1->ire_ob_pkt_count++;
 		err = ip_xmit(mp1, nce1, ixaflags, pkt_len, xmit_hint, szone,

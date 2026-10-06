@@ -25,9 +25,7 @@
  */
 
 /*	Copyright (c) 1988 AT&T	*/
-/*	  All Rights Reserved  	*/
-
-#pragma ident	"%Z%%M%	%I%	%E% SMI"
+/*	  All Rights Reserved	*/
 
 #include <ar.h>
 #include <stdlib.h>
@@ -36,14 +34,14 @@
 #include "member.h"
 
 int
-elf_end(Elf * elf)
+elf_end(Elf *elf)
 {
-	Elf_Scn *	s;
-	Dnode *	d;
-	Elf_Void *		trail = 0;
-	int			rc;
+	Elf_Scn		*s;
+	Dnode		*d;
+	Elf_Void	*trail = NULL;
+	int		rc;
 
-	if (elf == 0)
+	if (elf == NULL)
 		return (0);
 
 	ELFWLOCK(elf)
@@ -53,24 +51,23 @@ elf_end(Elf * elf)
 		return (rc);
 	}
 
-#ifndef __lock_lint
 	while (elf->ed_activ == 0) {
-		for (s = elf->ed_hdscn; s != 0; s = s->s_next) {
+		for (s = elf->ed_hdscn; s != NULL; s = s->s_next) {
 			if (s->s_myflags & SF_ALLOC) {
-				if (trail != 0)
+				if (trail != NULL)
 					free(trail);
 				trail = (Elf_Void *)s;
 			}
 
 			if ((s->s_myflags & SF_READY) == 0)
 				continue;
-			for (d = s->s_hdnode; d != 0; ) {
+			for (d = s->s_hdnode; d != NULL; ) {
 				register Dnode	*t;
 
-				if (d->db_buf != 0)
+				if (d->db_buf != NULL)
 					free(d->db_buf);
-				if ((t = d->db_raw) != 0) {
-					if (t->db_buf != 0)
+				if ((t = d->db_raw) != NULL) {
+					if (t->db_buf != NULL)
 						free(t->db_buf);
 					if (t->db_myflags & DBF_ALLOC)
 						free(t);
@@ -81,16 +78,17 @@ elf_end(Elf * elf)
 				d = t;
 			}
 		}
-		if (trail != 0) {
+		if (trail != NULL) {
 			free(trail);
-			trail = 0;
+			trail = NULL;
 		}
 
 		{
 			register Memlist	*l;
 			register Memident	*i;
 
-			for (l = elf->ed_memlist; l; l = (Memlist *)trail) {
+			for (l = elf->ed_memlist; l != NULL;
+			    l = (Memlist *)trail) {
 				trail = (Elf_Void *)l->m_next;
 				for (i = (Memident *)(l + 1); i < l->m_free;
 				    i++)
@@ -117,17 +115,20 @@ elf_end(Elf * elf)
 		 * we don't release it at all, it's not ours to release.
 		 */
 
-		if (elf->ed_parent == 0) {
-			if (elf->ed_vm != 0)
+		if (elf->ed_parent == NULL) {
+			if (elf->ed_vm != NULL)
 				free(elf->ed_vm);
 			else if ((elf->ed_myflags & EDF_MEMORY) == 0)
 				_elf_unmap(elf->ed_image, elf->ed_imagesz);
 		}
+
 		trail = (Elf_Void *)elf;
 		elf = elf->ed_parent;
 		ELFUNLOCK(trail)
 		free(trail);
-		if (elf == 0)
+		trail = NULL;
+
+		if (elf == NULL)
 			break;
 		/*
 		 * If parent is inactive we close
@@ -137,20 +138,9 @@ elf_end(Elf * elf)
 		--elf->ed_activ;
 	}
 
-	if (elf) {
+	if (elf != NULL) {
 		ELFUNLOCK(elf)
 	}
-#else
-	/*
-	 * This sill stuff is here to make warlock happy
-	 * durring it's lock checking.  The problem is that it
-	 * just can't track the multiple dynamic paths through
-	 * the above loop so we just give it a simple one it can
-	 * look at.
-	 */
-	_elf_unmap(elf->ed_image, elf->ed_imagesz);
-	ELFUNLOCK(elf)
-#endif
 
 	return (0);
 }

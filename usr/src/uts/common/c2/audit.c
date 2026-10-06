@@ -21,6 +21,7 @@
 
 /*
  * Copyright (c) 1992, 2010, Oracle and/or its affiliates. All rights reserved.
+ * Copyright 2026 Oxide Computer Company
  */
 
 /*
@@ -61,7 +62,6 @@
 #include <sys/devpolicy.h>
 #include <sys/crypto/ioctladmin.h>
 #include <sys/cred_impl.h>
-#include <inet/kssl/kssl.h>
 #include <net/pfpolicy.h>
 
 static void add_return_token(caddr_t *, unsigned int scid, int err, int rval);
@@ -411,7 +411,7 @@ audit_symlink(struct pathname *pnp, struct pathname *sympath)
  *			the specified file/directory attr) should be audited or
  *			ignored.
  *
- * returns: 	1 - if audit policy and object attributes indicate that
+ * returns:	1 - if audit policy and object attributes indicate that
  *			file/directory is effectively public. read events for
  *			the file should not be audited.
  *		0 - otherwise
@@ -526,7 +526,7 @@ audit_exit(int code, int what)
 /*
  * ROUTINE:	AUDIT_CORE_START
  * PURPOSE:
- * CALLBY: 	PSIG
+ * CALLBY:	PSIG
  * NOTE:
  * TODO:
  */
@@ -727,7 +727,7 @@ audit_strputmsg(struct vnode *vp, struct strbuf *mctl, struct strbuf *mdata,
 
 void
 audit_closef(struct file *fp)
-{	/* AUDIT_CLOSEF */
+{
 	f_audit_data_t *fad;
 	t_audit_data_t *tad;
 	int success;
@@ -795,10 +795,10 @@ audit_closef(struct file *fp)
 	} else {
 #ifdef _LP64
 		au_write((caddr_t *)&(ad), au_to_arg64(
-			1, "no path: fp", (uint64_t)fp));
+		    1, "no path: fp", (uint64_t)fp));
 #else
 		au_write((caddr_t *)&(ad), au_to_arg32(
-			1, "no path: fp", (uint32_t)fp));
+		    1, "no path: fp", (uint32_t)fp));
 #endif
 	}
 
@@ -928,7 +928,7 @@ audit_ipcget(int type, void *vp)
 		return;
 
 	switch (type) {
-	case NULL:
+	case 0:
 		au_uwrite(au_to_ipc_perm((struct kipc_perm *)vp));
 		break;
 	case AT_IPC_MSG:
@@ -1270,6 +1270,56 @@ audit_exec(
 }
 
 /*
+ * ROUTINE:	AUDIT_SPAWN
+ * PURPOSE:	Records the details of a spawn(2) call: the path of the
+ *		program that was (or would have been) executed, the attributes
+ *		of that program when the caller supplies them and, subject
+ *		to the same policies as for exec, the argument strings and
+ *		environment variables. The child's pid, or the error, is
+ *		carried by the return token. spawn(2) combines what are
+ *		otherwise two separately audited operations - fork and exec -
+ *		and the child itself never passes through system call entry,
+ *		so this single record must serve both purposes.
+ * CALLBY:	SPAWN
+ * NOTE:	The path is recorded as a path token built from the string the
+ *		child exec'd. Unlike an ordinary exec there is no name lookup
+ *		here, so it carries no attribute-path sections. vattr is the
+ *		exec'd file's attributes, gathered by the child, and is NULL if
+ *		they could not be read, in which case the attribute token is
+ *		omitted.
+ * TODO:
+ * QUESTION:
+ */
+
+void
+audit_spawn(const char *path, struct vattr *vattr, const char *argstr,
+    const char *envstr, ssize_t argc, ssize_t envc)
+{
+	t_audit_data_t *tad;
+	au_kcontext_t	*kctx = GET_KCTX_PZ;
+	struct audit_path	*app;
+
+	tad = U2A(u);
+
+	/* if not auditing this event, then do nothing */
+	if (!tad->tad_flag)
+		return;
+
+	app = au_pathmake(path);
+	au_uwrite(au_to_path(app));
+	au_pathrele(app);
+
+	if (vattr != NULL)
+		au_uwrite(au_to_attr(vattr));
+
+	if ((kctx->auk_policy & AUDIT_ARGV) != 0)
+		au_uwrite(au_to_exec_args(argstr, argc));
+
+	if (kctx->auk_policy & AUDIT_ARGE)
+		au_uwrite(au_to_exec_env(envstr, envc));
+}
+
+/*
  * ROUTINE:	AUDIT_ENTERPROM
  * PURPOSE:
  * CALLBY:	KBDINPUT
@@ -1298,7 +1348,7 @@ audit_enterprom(int flg)
 	else
 		au_write((caddr_t *)&(rp), au_to_return32(ECANCELED, 0));
 
-	AUDIT_ASYNC_FINISH(rp, AUE_ENTERPROM, NULL, NULL);
+	AUDIT_ASYNC_FINISH(rp, AUE_ENTERPROM, 0, NULL);
 }
 
 
@@ -1331,7 +1381,7 @@ audit_exitprom(int flg)
 	else
 		au_write((caddr_t *)&(rp), au_to_return32(ECANCELED, 0));
 
-	AUDIT_ASYNC_FINISH(rp, AUE_EXITPROM, NULL, NULL);
+	AUDIT_ASYNC_FINISH(rp, AUE_EXITPROM, 0, NULL);
 }
 
 struct fcntla {
@@ -1598,10 +1648,7 @@ add_return_token(caddr_t *ad, unsigned int scid, int err, int rval)
 
 /*ARGSUSED*/
 void
-audit_fdsend(fd, fp, error)
-	int fd;
-	struct file *fp;
-	int error;		/* ignore for now */
+audit_fdsend(int fd, struct file *fp, int error)
 {
 	t_audit_data_t *tad;	/* current thread */
 	f_audit_data_t *fad;	/* per file audit structure */
@@ -1670,6 +1717,71 @@ audit_priv(int priv, const priv_set_t *set, int flag)
 		if (priv != PRIV_NONE)
 			priv_addset(target, priv);
 	}
+}
+
+/*
+ * Audit the psecflags() system call; the set name, current value, and delta
+ * are put in the audit trail.
+ */
+void
+audit_psecflags(proc_t *p,
+    psecflagwhich_t which,
+    const secflagdelta_t *psd)
+{
+	t_audit_data_t *tad;
+	secflagset_t new;
+	const secflagset_t *old;
+	const char *s;
+	cred_t *cr;
+	pid_t pid;
+	const auditinfo_addr_t	*ainfo;
+	const psecflags_t *psec = &p->p_secflags;
+
+	tad = U2A(u);
+
+	if (tad->tad_flag == 0)
+		return;
+
+	switch (which) {
+	case PSF_EFFECTIVE:
+		s = "effective";
+		old = &psec->psf_effective;
+		break;
+	case PSF_INHERIT:
+		s = "inherit";
+		old = &psec->psf_inherit;
+		break;
+	case PSF_LOWER:
+		s = "lower";
+		old = &psec->psf_lower;
+		break;
+	case PSF_UPPER:
+		s = "upper";
+		old = &psec->psf_upper;
+		break;
+	}
+
+	secflags_copy(&new, old);
+	secflags_apply_delta(&new, psd);
+
+	au_uwrite(au_to_secflags(s, *old));
+	au_uwrite(au_to_secflags(s, new));
+
+	ASSERT(mutex_owned(&p->p_lock));
+	mutex_enter(&p->p_crlock);
+
+	pid = p->p_pid;
+	crhold(cr = p->p_cred);
+	mutex_exit(&p->p_crlock);
+
+	if ((ainfo = crgetauinfo(cr)) == NULL) {
+		crfree(cr);
+		return;
+	}
+
+	AUDIT_SETPROC_GENERIC(&(u_ad), cr, ainfo, pid);
+
+	crfree(cr);
 }
 
 /*
@@ -1749,9 +1861,7 @@ audit_devpolicy(int nitems, const devplcysys_t *items)
 
 /*ARGSUSED*/
 void
-audit_fdrecv(fd, fp)
-	int fd;
-	struct file *fp;
+audit_fdrecv(int fd, struct file *fp)
 {
 	t_audit_data_t *tad;	/* current thread */
 	f_audit_data_t *fad;	/* per file audit structure */
@@ -1939,79 +2049,6 @@ audit_cryptoadm(int cmd, char *module_name, crypto_mech_name_t *mech_names,
 	AS_INC(as_kernel, 1, kctx);
 
 	au_close(kctx, (caddr_t *)&ad, AU_OK, AUE_CRYPTOADM, tad->tad_evmod,
-	    NULL);
-}
-
-/*
- * Audit the kernel SSL administration command. The address and the
- * port number for the SSL instance, and the proxy port are put in the
- * audit trail.
- */
-void
-audit_kssl(int cmd, void *params, int error)
-{
-	cred_t			*cr = CRED();
-	t_audit_data_t		*tad;
-	token_t			*ad = NULL;
-	const auditinfo_addr_t	*ainfo = crgetauinfo(cr);
-	au_kcontext_t		*kctx = GET_KCTX_PZ;
-
-	tad = U2A(u);
-
-	if (ainfo == NULL)
-		return;
-
-	tad->tad_event = AUE_CONFIGKSSL;
-
-	if (audit_success(kctx, tad, error, NULL) != AU_OK)
-		return;
-
-	/* Add subject information */
-	AUDIT_SETSUBJ((caddr_t *)&ad, cr, ainfo, kctx);
-
-	switch (cmd) {
-	case KSSL_ADD_ENTRY: {
-		char buf[32];
-		kssl_params_t *kp = (kssl_params_t *)params;
-		struct sockaddr_in6 *saddr = &kp->kssl_addr;
-
-		au_write((caddr_t *)&ad, au_to_text("op=KSSL_ADD_ENTRY"));
-		au_write((caddr_t *)&ad,
-		    au_to_in_addr_ex((int32_t *)&saddr->sin6_addr));
-		(void) snprintf(buf, sizeof (buf), "SSL port=%d",
-		    saddr->sin6_port);
-		au_write((caddr_t *)&ad, au_to_text(buf));
-
-		(void) snprintf(buf, sizeof (buf), "proxy port=%d",
-		    kp->kssl_proxy_port);
-		au_write((caddr_t *)&ad, au_to_text(buf));
-		break;
-	}
-
-	case KSSL_DELETE_ENTRY: {
-		char buf[32];
-		struct sockaddr_in6 *saddr = (struct sockaddr_in6 *)params;
-
-		au_write((caddr_t *)&ad, au_to_text("op=KSSL_DELETE_ENTRY"));
-		au_write((caddr_t *)&ad,
-		    au_to_in_addr_ex((int32_t *)&saddr->sin6_addr));
-		(void) snprintf(buf, sizeof (buf), "SSL port=%d",
-		    saddr->sin6_port);
-		au_write((caddr_t *)&ad, au_to_text(buf));
-		break;
-	}
-
-	default:
-		return;
-	}
-
-	/* add a return token */
-	add_return_token((caddr_t *)&ad, tad->tad_scid, error, 0);
-
-	AS_INC(as_generated, 1, kctx);
-	AS_INC(as_kernel, 1, kctx);
-
-	au_close(kctx, (caddr_t *)&ad, AU_OK, AUE_CONFIGKSSL, tad->tad_evmod,
 	    NULL);
 }
 

@@ -21,6 +21,7 @@
 /*
  * Copyright (c) 1990, 2010, Oracle and/or its affiliates. All rights reserved.
  * Copyright 2014 Garrett D'Amore <garrett@damore.org>
+ * Copyright 2022 RackTop Systems, Inc.
  */
 
 #ifndef	_SYS_SCSI_IMPL_TRANSPORT_H
@@ -510,7 +511,7 @@ dev_info_t	*scsi_hba_iport_find(
  *				scsi_device_hba_private_[gs]et(9F).  The HBA
  *				driver must maintain a private representation
  *				of the scsi_device(9S) unit-address - typically
- *				established during tran_tgt_init(9F) based on
+ *				established during tran_tgt_init(9E) based on
  *				property values.
  *
  * SCSI_HBA_TRAN_PHCI		The host adapter is an mpxio/scsi_vhci pHCI.
@@ -652,6 +653,9 @@ int	scsi_hba_tgtmap_tgt_remove(
 				char			*tgt_addr);
 
 void	scsi_hba_tgtmap_destroy(scsi_hba_tgtmap_t	*tgt_map);
+
+void	scsi_hba_tgtmap_scan_luns(scsi_hba_tgtmap_t	*tgt_map,
+				char			*tgt_addr);
 
 
 /*

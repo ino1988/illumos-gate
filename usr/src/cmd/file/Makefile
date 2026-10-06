@@ -22,6 +22,7 @@
 # Copyright 2007 Sun Microsystems, Inc.  All rights reserved.
 # Use is subject to license terms.
 #
+# Copyright (c) 2018, Joyent, Inc.
 
 PROG= file
 XPG4PROG= file
@@ -37,16 +38,13 @@ SRCS=	file.c elf_read.c magicutils.c $(ELFCAP)/elfcap.c
 
 include ../Makefile.cmd
 
-CERRWARN += -_gcc=-Wno-uninitialized
+CSTD=	$(CSTD_GNU99)
+
+CERRWARN += $(CNOWARN_UNINIT)
 CERRWARN += -_gcc=-Wno-type-limits
 
 POFILE= file_all.po
 POFILES= $(SRCS:%.c=%.po)
-
-# The debug binary can be built using the flag
-# -D COPTFLAG=-g CGLOBALSTATIC=
-# This will avoid the multiple symbols definition error
-# for static global variables in elf_read32.o and elf_read64.o
 
 LDLIBS += -lelf
 CPPFLAGS += -I$(ELFCAP) -I$(SGSRTCID)
@@ -98,11 +96,14 @@ $(POFILE):	$(POFILES)
 	$(RM) $@
 	cat $(POFILES) > $@
 
-install: all $(ROOTPROG) $(ROOTXPG4PROG) $(ROOTETCMAGIC)
+$(ROOTPROG) := INSLINKTARGET=../has/bin/$(PROG)
+
+$(ROOTPROG):
+	$(INS.symlink)
+
+install: all $(ROOTPROG) $(ROOTHASBINPROG) $(ROOTXPG4PROG) $(ROOTETCMAGIC)
 
 clean:
 	$(RM) $(OBJS) $(XPG4OBJS)
-
-lint: lint_SRCS
 
 include ../Makefile.targ

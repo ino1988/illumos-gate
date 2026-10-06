@@ -22,10 +22,9 @@
 /*
  * Copyright 2004 Sun Microsystems, Inc.  All rights reserved.
  * Use is subject to license terms.
+ * Copyright 2015 Nexenta Systems, Inc. All rights reserved.
+ * Copyright 2021 Oxide Computer Company
  */
-
-#pragma ident	"%Z%%M%	%I%	%E% SMI"
-
 
 #include <stdio.h>
 #include <stdlib.h>
@@ -72,7 +71,7 @@ kstat_open(void)
 	kstat_ctl_t *kc;
 	int kd;
 
-	kd = open("/dev/kstat", O_RDONLY);
+	kd = open("/dev/kstat", O_RDONLY | O_CLOEXEC);
 	if (kd == -1)
 		return (NULL);
 	kstat_zalloc((void **)&kc, sizeof (kstat_ctl_t), 0);
@@ -127,7 +126,8 @@ kstat_read(kstat_ctl_t *kc, kstat_t *ksp, void *data)
 		 * resize your buffer and try again.  In practice,
 		 * this almost always converges in two passes.
 		 */
-		if (errno == ENOMEM && (ksp->ks_flags & KSTAT_FLAG_VAR_SIZE)) {
+		if (errno == ENOMEM && (ksp->ks_flags &
+		    (KSTAT_FLAG_VAR_SIZE | KSTAT_FLAG_LONGSTRINGS))) {
 			kstat_zalloc(&ksp->ks_data, ksp->ks_data_size, 1);
 			if (ksp->ks_data != NULL)
 				continue;
@@ -299,7 +299,8 @@ kstat_chain_update(kstat_ctl_t *kc)
 }
 
 kstat_t *
-kstat_lookup(kstat_ctl_t *kc, char *ks_module, int ks_instance, char *ks_name)
+kstat_lookup(kstat_ctl_t *kc, const char *ks_module, int ks_instance,
+    const char *ks_name)
 {
 	kstat_t *ksp;
 
@@ -316,7 +317,7 @@ kstat_lookup(kstat_ctl_t *kc, char *ks_module, int ks_instance, char *ks_name)
 }
 
 void *
-kstat_data_lookup(kstat_t *ksp, char *name)
+kstat_data_lookup(kstat_t *ksp, const char *name)
 {
 	int i, size;
 	char *namep, *datap;

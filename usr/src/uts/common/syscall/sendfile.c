@@ -21,6 +21,7 @@
 
 /*
  * Copyright (c) 2001, 2010, Oracle and/or its affiliates. All rights reserved.
+ * Copyright 2022 Garrett D'Amore
  */
 
 #include <sys/types.h>
@@ -68,8 +69,6 @@
 
 extern int sosendfile64(file_t *, file_t *, const struct ksendfilevec64 *,
 		ssize32_t *);
-extern int nl7c_sendfilev(struct sonode *, u_offset_t *, struct sendfilevec *,
-		int, ssize_t *);
 extern int snf_segmap(file_t *, vnode_t *, u_offset_t, u_offset_t, ssize_t *,
 		boolean_t);
 extern sotpi_info_t *sotpi_sototpi(struct sonode *);
@@ -82,7 +81,7 @@ extern sotpi_info_t *sotpi_sototpi(struct sonode *);
  * 64 bit kernel or 32 bit kernel. For 32 bit apps, we can't transfer
  * more than 2GB of data.
  */
-int
+static int
 sendvec_chunk64(file_t *fp, u_offset_t *fileoff, struct ksendfilevec64 *sfv,
     int copy_cnt, ssize32_t *count)
 {
@@ -343,9 +342,9 @@ sendvec_chunk64(file_t *fp, u_offset_t *fileoff, struct ksendfilevec64 *sfv,
 	return (0);
 }
 
-ssize32_t
+static ssize32_t
 sendvec64(file_t *fp, const struct ksendfilevec64 *vec, int sfvcnt,
-	size32_t *xferred, int fildes)
+    size32_t *xferred, int fildes)
 {
 	u_offset_t		fileoff;
 	int			copy_cnt;
@@ -390,7 +389,7 @@ sendvec64(file_t *fp, const struct ksendfilevec64 *vec, int sfvcnt,
 }
 #endif
 
-int
+static int
 sendvec_small_chunk(file_t *fp, u_offset_t *fileoff, struct sendfilevec *sfv,
     int copy_cnt, ssize_t total_size, int maxblk, ssize_t *count)
 {
@@ -680,7 +679,7 @@ sendvec_small_chunk(file_t *fp, u_offset_t *fileoff, struct sendfilevec *sfv,
 }
 
 
-int
+static int
 sendvec_chunk(file_t *fp, u_offset_t *fileoff, struct sendfilevec *sfv,
     int copy_cnt, ssize_t *count)
 {
@@ -702,14 +701,18 @@ sendvec_chunk(file_t *fp, u_offset_t *fileoff, struct sendfilevec *sfv,
 #endif
 	mblk_t	*dmp = NULL;
 	char	*buf = NULL;
-	size_t  extra;
+	size_t  extra = 0;
 	int maxblk, wroff, tail_len;
 	struct sonode *so;
 	stdata_t *stp;
 	struct nmsghdr msg;
 
+	maxblk = 0;
+	wroff = 0;
 	fflag = fp->f_flag;
 	vp = fp->f_vnode;
+	so = NULL;
+	stp = NULL;
 
 	if (vp->v_type == VSOCK) {
 		so = VTOSO(vp);
@@ -953,12 +956,26 @@ sendvec_chunk(file_t *fp, u_offset_t *fileoff, struct sendfilevec *sfv,
 					if (socket_setsockopt(VTOSO(vp),
 					    SOL_SOCKET, SO_SND_COPYAVOID,
 					    &on, sizeof (on), CRED()) == 0)
-					segmapit = 1;
+						segmapit = 1;
 				}
 			}
 
 			if (segmapit) {
+				struct vattr va;
 				boolean_t nowait;
+
+				va.va_mask = AT_SIZE;
+				error = VOP_GETATTR(readvp, &va, 0, kcred,
+				    NULL);
+				if (error != 0 || sfv_off >= va.va_size) {
+					VOP_RWUNLOCK(readvp, V_WRITELOCK_FALSE,
+					    NULL);
+					releasef(sfv->sfv_fd);
+					return (error);
+				}
+				/* Read as much as possible. */
+				if (sfv_off + sfv_len > va.va_size)
+					sfv_len = va.va_size - sfv_off;
 
 				nowait = (sfv->sfv_flag & SFV_NOWAIT) != 0;
 				error = snf_segmap(fp, readvp, sfv_off,
@@ -1123,7 +1140,7 @@ sendfilev(int opcode, int fildes, const struct sendfilevec *vec, int sfvcnt,
 	int first_vector_error = 0;
 	file_t *fp;
 	struct vnode *vp;
-	struct sonode *so;
+	struct sonode *so = NULL;
 	u_offset_t fileoff;
 	int copy_cnt;
 	const struct sendfilevec *copy_vec;
@@ -1159,6 +1176,17 @@ sendfilev(int opcode, int fildes, const struct sendfilevec *vec, int sfvcnt,
 			maxblk = so->so_proto_props.sopp_maxblk;
 		} else {
 			maxblk = (int)vp->v_stream->sd_maxblk;
+		}
+
+		/*
+		 * We need to make sure that the socket that we're sending on
+		 * supports sendfile behavior. sockfs doesn't know that the APIs
+		 * we want to use are coming from sendfile, so we can't rely on
+		 * it to check for us.
+		 */
+		if ((so->so_mode & SM_SENDFILESUPP) == 0) {
+			error = EOPNOTSUPP;
+			goto err;
 		}
 		break;
 	case VREG:
@@ -1290,16 +1318,9 @@ sendfilev(int opcode, int fildes, const struct sendfilevec *vec, int sfvcnt,
 		 * Future zero copy code will plugin into sendvec_chunk
 		 * only because doing zero copy for files smaller then
 		 * pagesize is useless.
-		 *
-		 * Note, if socket has NL7C enabled then call NL7C's
-		 * senfilev() function to consume the sfv[].
 		 */
 		if (is_sock) {
-			if (!SOCK_IS_NONSTR(so) &&
-			    _SOTOTPI(so)->sti_nl7c_flags != 0) {
-				error = nl7c_sendfilev(so, &fileoff,
-				    sfv, copy_cnt, &count);
-			} else if ((total_size <= (4 * maxblk)) &&
+			if ((total_size <= (4 * maxblk)) &&
 			    error == 0) {
 				error = sendvec_small_chunk(fp,
 				    &fileoff, sfv, copy_cnt,
@@ -1316,12 +1337,13 @@ sendfilev(int opcode, int fildes, const struct sendfilevec *vec, int sfvcnt,
 
 
 #ifdef _SYSCALL32_IMPL
-	if (get_udatamodel() == DATAMODEL_ILP32)
-		copy_vec = (const struct sendfilevec *)((char *)copy_vec +
-		    (copy_cnt * sizeof (ksendfilevec32_t)));
-	else
+		if (get_udatamodel() == DATAMODEL_ILP32) {
+			copy_vec = (const struct sendfilevec *)
+			    ((char *)copy_vec +
+			    (copy_cnt * sizeof (ksendfilevec32_t)));
+		} else
 #endif
-		copy_vec += copy_cnt;
+			copy_vec += copy_cnt;
 		sfvcnt -= copy_cnt;
 
 	/* Process all vector members up to first error */

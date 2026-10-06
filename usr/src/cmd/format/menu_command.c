@@ -22,6 +22,9 @@
  * Copyright (c) 1993, 2010, Oracle and/or its affiliates. All rights reserved.
  * Copyright 2012 Milan Jurik. All rights reserved.
  * Copyright 2014 Toomas Soome <tsoome@me.com>
+ * Copyright 2015 Nexenta Systems, Inc. All rights reserved.
+ * Copyright 2016 Igor Kozhukhov <ikozhukhov@gmail.com>
+ * Copyright (c) 2016 by Delphix. All rights reserved.
  */
 
 /*
@@ -64,6 +67,7 @@
 extern	struct menu_item menu_partition[];
 extern	struct menu_item menu_analyze[];
 extern	struct menu_item menu_defect[];
+int	prot_type;
 
 /*
  * Choices for the p_tag vtoc field
@@ -82,6 +86,11 @@ slist_t	ptag_choices[] = {
 	{ "reserved",	"",	V_RESERVED	},
 	{ "system",	"",	V_SYSTEM	},
 	{ "BIOS_boot",	"",	V_BIOS_BOOT	},
+	{ "FreeBSD boot", "",	V_FREEBSD_BOOT	},
+	{ "FreeBSD swap", "",	V_FREEBSD_SWAP	},
+	{ "FreeBSD UFS", "",	V_FREEBSD_UFS	},
+	{ "FreeBSD ZFS", "",	V_FREEBSD_ZFS	},
+
 	{ NULL }
 };
 
@@ -104,7 +113,7 @@ slist_t	pflag_choices[] = {
  * disks that were found at startup time.
  */
 int
-c_disk()
+c_disk(void)
 {
 	struct disk_info	*disk;
 	u_ioparam_t		ioparam;
@@ -117,7 +126,7 @@ c_disk()
 	int			more = 0;
 	int			more_quit = 0;
 	int			one_line = 0;
-	int			tty_lines;
+	int			tty_lines = 24;
 
 /*
  * This buffer holds the check() prompt that verifies we've got the right
@@ -150,7 +159,7 @@ c_disk()
 		/*
 		 * Convert the token into an integer.
 		 */
-		if (geti(cleantoken, &index, (int *)NULL))
+		if (geti(cleantoken, &index, NULL))
 			return (0);
 
 		/*
@@ -166,7 +175,7 @@ c_disk()
 	fmt_print("\n\nAVAILABLE DISK SELECTIONS:\n");
 
 	i = 0;
-	if ((option_f == (char *)NULL) && isatty(0) == 1 && isatty(1) == 1) {
+	if ((option_f == NULL) && isatty(0) == 1 && isatty(1) == 1) {
 		/*
 		 * We have a real terminal for std input and output, enable
 		 * more style of output for disk selection list.
@@ -239,7 +248,7 @@ c_disk()
 	}
 
 	/*
-	 * Determine total number of disks, and ask the user which disk he
+	 * Determine total number of disks, and ask the user which disk they
 	 * would like to make current.
 	 */
 
@@ -350,7 +359,7 @@ exit:
  * in the data file.
  */
 int
-c_type()
+c_type(void)
 {
 	struct disk_type	*type, *tptr, *oldtype;
 	u_ioparam_t		ioparam;
@@ -363,7 +372,7 @@ c_type()
 	struct dk_label		label;
 	struct efi_info		efi_info;
 	uint64_t		maxLBA;
-	char			volname[LEN_DKL_VVOL];
+	char			volname[LEN_DKL_VVOL + 1];
 	int			volinit = 0;
 
 	/*
@@ -413,7 +422,7 @@ c_type()
 	index = input(FIO_INT, "Specify disk type (enter its number)", ':',
 	    &ioparam, defltptr, DATA_INPUT);
 	/*
-	 * Find the type s/he chose.
+	 * Find the type they chose.
 	 */
 	if (index == auto_conf_choice) {
 		float			scaled;
@@ -467,13 +476,11 @@ c_type()
 			    nparts++) {
 				if (cur_parts->etoc->efi_parts[nparts].p_tag ==
 				    V_RESERVED) {
-					if (cur_parts->etoc->efi_parts[nparts].
-					    p_name) {
-						(void) strcpy(volname,
-						    cur_parts->etoc->efi_parts
-						    [nparts].p_name);
-						volinit = 1;
-					}
+					(void) memcpy(volname,
+					    cur_parts->etoc->efi_parts
+					    [nparts].p_name, LEN_DKL_VVOL);
+					volname[LEN_DKL_VVOL] = '\0';
+					volinit = 1;
 					break;
 				}
 			}
@@ -494,7 +501,7 @@ c_type()
 				(void) strcpy(
 				    cur_parts->etoc->efi_parts[nparts].p_name,
 				    volname);
-				(void) strlcpy(cur_disk->v_volume, volname,
+				(void) memcpy(cur_disk->v_volume, volname,
 				    LEN_DKL_VVOL);
 				break;
 				}
@@ -566,17 +573,21 @@ c_type()
 		 */
 		new_partitiontable(tptr, oldtype);
 	} else if ((index == other_choice) && (cur_label == L_TYPE_EFI)) {
+		uint64_t start_lba = cur_parts->etoc->efi_first_u_lba;
+		uint64_t reserved;
+
+		reserved = efi_reserved_sectors(cur_parts->etoc);
 		maxLBA = get_mlba();
 		cur_parts->etoc->efi_last_lba = maxLBA;
-		cur_parts->etoc->efi_last_u_lba = maxLBA - 34;
+		cur_parts->etoc->efi_last_u_lba = maxLBA - start_lba;
 		for (i = 0; i < cur_parts->etoc->efi_nparts; i++) {
 			cur_parts->etoc->efi_parts[i].p_start = 0;
 			cur_parts->etoc->efi_parts[i].p_size = 0;
 			cur_parts->etoc->efi_parts[i].p_tag = V_UNASSIGNED;
 		}
 		cur_parts->etoc->efi_parts[8].p_start =
-		    maxLBA - 34 - (1024 * 16);
-		cur_parts->etoc->efi_parts[8].p_size = (1024 * 16);
+		    maxLBA - start_lba - reserved;
+		cur_parts->etoc->efi_parts[8].p_size = reserved;
 		cur_parts->etoc->efi_parts[8].p_tag = V_RESERVED;
 		if (write_label()) {
 			err_print("Write label failed\n");
@@ -681,7 +692,7 @@ c_type()
  * the partition menu.
  */
 int
-c_partition()
+c_partition(void)
 {
 
 	/*
@@ -725,7 +736,7 @@ c_partition()
  * current disk.
  */
 int
-c_current()
+c_current(void)
 {
 
 	/*
@@ -784,7 +795,7 @@ c_current()
  * to format and verify any portion of the disk.
  */
 int
-c_format()
+c_format(void)
 {
 	diskaddr_t		start, end;
 	time_t			clock;
@@ -1093,9 +1104,9 @@ currently being used for swapping.\n");
 	 * Print the time so that the user will know when format started.
 	 * Lock out interrupts.  This could be a problem, since it could
 	 * cause the user to sit for quite awhile with no control, but we
-	 * don't have any other good way of keeping his gun from going off.
+	 * don't have any other good way of keeping their gun from going off.
 	 */
-	clock = time((time_t *)0);
+	clock = time(NULL);
 	fmt_print("Beginning format. The current time is %s\n",
 	    ctime(&clock));
 	enter_critical();
@@ -1118,7 +1129,7 @@ currently being used for swapping.\n");
 				cur_flags |= LABEL_DIRTY;
 		}
 	} else if (cur_disk->label_type == L_TYPE_EFI) {
-		if (start < 34) {
+		if (start < cur_parts->etoc->efi_first_u_lba) {
 			if (cur_disk->disk_flags & DSK_LABEL)
 				cur_flags |= LABEL_DIRTY;
 		}
@@ -1206,7 +1217,7 @@ currently being used for swapping.\n");
  * to reallocate sectors on the disk that have gone bad.
  */
 int
-c_repair()
+c_repair(void)
 {
 	diskaddr_t	bn;
 	int		status;
@@ -1264,7 +1275,7 @@ c_repair()
 	}
 	bn = input(FIO_BN,
 	    "Enter absolute block number of defect", ':',
-	    &ioparam, (int *)NULL, DATA_INPUT);
+	    &ioparam, NULL, DATA_INPUT);
 	/*
 	 * Check to see if there is a mounted file system over the
 	 * specified sector.  If there is, make sure the user is
@@ -1278,9 +1289,9 @@ c_repair()
 	 * check for partitions being used for swapping in format zone
 	 */
 	if (checkswap(bn, bn)) {
-		if (check("Repair is in a partition which is currently \
-being used for swapping.\ncontinue"))
-		return (-1);
+		if (check("Repair is in a partition which is currently "
+		    "being used for swapping.\ncontinue"))
+			return (-1);
 	}
 
 	if (checkdevinuse(cur_disk->disk_name, bn, bn, 0, 0)) {
@@ -1403,7 +1414,7 @@ This block doesn't appear to be bad.  Repair it anyway")) {
 		} else if (cur_ctype->ctype_flags & CF_WLIST) {
 			kill_deflist(&cur_list);
 			if (*cur_ops->op_ex_cur != NULL) {
-				(*cur_ops->op_ex_cur)(&cur_list);
+				(void) (*cur_ops->op_ex_cur)(&cur_list);
 				fmt_print("Current list updated\n");
 			}
 		} else {
@@ -1427,7 +1438,7 @@ This block doesn't appear to be bad.  Repair it anyway")) {
  * cylinder/head/sector format.
  */
 int
-c_show()
+c_show(void)
 {
 	u_ioparam_t	ioparam;
 	diskaddr_t	bn;
@@ -1449,7 +1460,7 @@ c_show()
 		ioparam.io_bounds.upper = cur_parts->etoc->efi_last_lba;
 	}
 	bn = input(FIO_BN, "Enter a disk block", ':',
-	    &ioparam, (int *)NULL, DATA_INPUT);
+	    &ioparam, NULL, DATA_INPUT);
 	/*
 	 * Echo it back.
 	 */
@@ -1464,7 +1475,7 @@ c_show()
  * primary and backup labels onto the current disk.
  */
 int
-c_label()
+c_label(void)
 {
 	int			status;
 	int			deflt, *defltptr = NULL;
@@ -1551,9 +1562,9 @@ c_label()
 	 */
 	if (expert_mode) {
 #if defined(_SUNOS_VTOC_8)
-		int 		i;
+		int		i;
 #endif
-		int 		choice;
+		int		choice;
 		u_ioparam_t		ioparam;
 		struct extvtoc	vtoc;
 		struct dk_label	label;
@@ -1597,7 +1608,7 @@ c_label()
 			    "Changing to SMI label will erase all\n"
 			    "current partitions.\n");
 			if (check("Continue"))
-			return (-1);
+				return (-1);
 #if defined(_FIRMWARE_NEEDS_FDISK)
 			fmt_print("You must use fdisk to delete the current "
 			    "EFI partition and create a new\n"
@@ -1608,19 +1619,20 @@ c_label()
 		}
 
 #if defined(_FIRMWARE_NEEDS_FDISK)
-		if (!(((cur_disk->fdisk_part.systid != SUNIXOS) ||
-		    (cur_disk->fdisk_part.systid != SUNIXOS2)) &&
-		    (cur_disk->fdisk_part.numsect > 0))) {
+		if ((cur_disk->fdisk_part.systid != SUNIXOS &&
+		    cur_disk->fdisk_part.systid != SUNIXOS2) ||
+		    cur_disk->fdisk_part.numsect == 0) {
 			fmt_print("You must use fdisk to create a Solaris "
 			    "partition before you can convert the label.\n");
 			return (-1);
 		}
 #endif
 
-		(void) memset((char *)&label, 0, sizeof (struct dk_label));
+		(void) memset(&label, 0, sizeof (struct dk_label));
 
 		(void) strcpy(x86_devname, cur_disk->disk_name);
-		if (cur_ctype->ctype_ctype == DKC_DIRECT)
+		if (cur_ctype->ctype_ctype == DKC_DIRECT ||
+		    cur_ctype->ctype_ctype == DKC_BLKDEV)
 			dptr = auto_direct_get_geom_label(cur_file,  &label);
 		else
 			dptr = auto_sense(cur_file, 1, &label);
@@ -1643,7 +1655,8 @@ c_label()
 			cur_dtype = dptr;
 			cur_parts = dptr->dtype_plist;
 
-			if (status = write_label())
+			status = write_label();
+			if (status != 0)
 				err_print("Label failed.\n");
 			else
 				cur_disk->disk_flags &= ~DSK_LABEL_DIRTY;
@@ -1670,7 +1683,7 @@ c_label()
 			}
 		}
 
-		if (get_disk_info(cur_file, &efinfo) != 0) {
+		if (get_disk_info(cur_file, &efinfo, cur_disk) != 0) {
 			return (-1);
 		}
 		(void) memset((char *)&label, 0, sizeof (struct dk_label));
@@ -1696,7 +1709,7 @@ c_label()
 			return (-1);
 		}
 		if (efi_write(cur_file, vtoc64) != 0) {
-			err_check(vtoc64);
+			efi_err_check(vtoc64);
 			err_print("Warning: error writing EFI.\n");
 			return (-1);
 		} else {
@@ -1743,7 +1756,8 @@ expert_end:
 	 * return status.
 	 */
 	fmt_print("\n");
-	if (status = write_label())
+	status = write_label();
+	if (status != 0)
 		err_print("Label failed.\n");
 	return (status);
 }
@@ -1753,7 +1767,7 @@ expert_end:
  * the analyze menu.
  */
 int
-c_analyze()
+c_analyze(void)
 {
 
 	/*
@@ -1779,7 +1793,7 @@ c_analyze()
  * the defect menu.
  */
 int
-c_defect()
+c_defect(void)
 {
 	int	i;
 
@@ -1830,15 +1844,15 @@ c_defect()
 
 	/*
 	 * If the user has modified the working list but not committed
-	 * it, warn him that he is probably making a mistake.
+	 * it, warn them that they are probably making a mistake.
 	 */
 	if (work_list.flags & LIST_DIRTY) {
 		if (!EMBEDDED_SCSI) {
-			err_print(
-		"Warning: working defect list modified; but not committed.\n");
-			if (!check(
-		"Do you wish to commit changes to current defect list"))
-			(void) do_commit();
+			err_print("Warning: working defect list modified; "
+			    "but not committed.\n");
+			if (!check("Do you wish to commit changes to current "
+			    "defect list"))
+				(void) do_commit();
 		}
 	}
 	return (0);
@@ -1852,7 +1866,7 @@ c_defect()
  * the current defect list is written out if a backup label is found.
  */
 int
-c_backup()
+c_backup(void)
 {
 	struct	dk_label label;
 	struct	disk_type *dtype;
@@ -1927,7 +1941,7 @@ c_backup()
 			continue;
 		}
 
-		(void *) memcpy((char *)&label, buf, sizeof (struct dk_label));
+		(void) memcpy((char *)&label, buf, sizeof (struct dk_label));
 
 		/*
 		 * Verify that it is a reasonable label.
@@ -1996,7 +2010,7 @@ Unknown disk type in backup label\n");
 				plist->pinfo_next = parts;
 			}
 			parts->pinfo_name = alloc_string("original");
-			for (i = 0; i < NDKMAP; i++)
+			for (i = 0; i < NDKMAP; i++) {
 
 #if defined(_SUNOS_VTOC_8)
 				parts->pinfo_map[i] = label.dkl_map[i];
@@ -2009,6 +2023,7 @@ Unknown disk type in backup label\n");
 #else
 #error No VTOC layout defined.
 #endif /* defined(_SUNOS_VTOC_8) */
+			}
 			parts->vtoc = label.dkl_vtoc;
 		}
 		/*
@@ -2050,13 +2065,13 @@ Unknown disk type in backup label\n");
  * This routine is called by c_verify() for an EFI labeled disk
  */
 static int
-c_verify_efi()
+c_verify_efi(void)
 {
 	struct efi_info efi_info;
 	struct	partition_info	tmp_pinfo;
 	int status;
 
-	status = read_efi_label(cur_file, &efi_info);
+	status = read_efi_label(cur_file, &efi_info, cur_disk);
 	if (status != 0) {
 		err_print("Warning: Could not read label.\n");
 		return (-1);
@@ -2069,23 +2084,29 @@ c_verify_efi()
 	}
 	tmp_pinfo.etoc = efi_info.e_parts;
 	fmt_print("\n");
-	if (cur_parts->etoc->efi_parts[8].p_name) {
-		fmt_print("Volume name = <%8s>\n",
-		    cur_parts->etoc->efi_parts[8].p_name);
-	} else {
-		fmt_print("Volume name = <        >\n");
-	}
+	fmt_print("Volume name = <%8s>\n",
+	    cur_parts->etoc->efi_parts[8].p_name);
 	fmt_print("ascii name  = ");
 	print_efi_string(efi_info.vendor, efi_info.product,
 	    efi_info.revision, efi_info.capacity);
 	fmt_print("\n");
 
 	fmt_print("bytes/sector	=  %d\n", cur_blksz);
-	fmt_print("sectors = %llu\n", cur_parts->etoc->efi_last_lba);
+	fmt_print("sectors = %llu\n", cur_parts->etoc->efi_last_lba + 1);
 	fmt_print("accessible sectors = %llu\n",
+	    cur_parts->etoc->efi_last_u_lba -
+	    cur_parts->etoc->efi_first_u_lba -
+	    efi_reserved_sectors(cur_parts->etoc) + 1);
+	fmt_print("first usable sector = %llu\n",
+	    cur_parts->etoc->efi_first_u_lba);
+	fmt_print("last usable sector = %llu\n",
 	    cur_parts->etoc->efi_last_u_lba);
 
 	print_map(&tmp_pinfo);
+
+	free(efi_info.vendor);
+	free(efi_info.product);
+	free(efi_info.revision);
 	return (0);
 }
 
@@ -2094,7 +2115,7 @@ c_verify_efi()
  * to read the labels on the current disk.
  */
 int
-c_verify()
+c_verify(void)
 {
 	struct	dk_label p_label, b_label, *label;
 	struct	partition_info tmp_pinfo;
@@ -2191,7 +2212,7 @@ Warning: Primary label on disk appears to be different from\ncurrent label.\n");
 		    1, buf, F_NORMAL, NULL))
 			continue;
 
-		(void *) memcpy((char *)&b_label, buf,
+		(void) memcpy((char *)&b_label, buf,
 		    sizeof (struct dk_label));
 
 		/*
@@ -2329,7 +2350,7 @@ Warning: Check the current partitioning and 'label' the disk or use the\n\
  * displays the resulting vendor, product id and revision level.
  */
 int
-c_inquiry()
+c_inquiry(void)
 {
 	char			inqbuf[255];
 	struct scsi_inquiry	*inq;
@@ -2361,7 +2382,7 @@ c_inquiry()
  * primary and backup labels onto the current disk.
  */
 int
-c_volname()
+c_volname(void)
 {
 	int	 status;
 	char	*prompt;
@@ -2508,7 +2529,8 @@ being used for swapping.\n\n");
 	 * return status.
 	 */
 	fmt_print("\n");
-	if (status = write_label())
+	status = write_label();
+	if (status != 0)
 		err_print("Label failed.\n");
 	return (status);
 }

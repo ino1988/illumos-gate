@@ -183,7 +183,7 @@ hxge_enable_rxdma_channel(p_hxge_t hxgep, uint16_t channel,
     int n_init_kick)
 {
 	hpi_handle_t		handle;
-	rdc_desc_cfg_t 		rdc_desc;
+	rdc_desc_cfg_t		rdc_desc;
 	rdc_rcr_cfg_b_t		*cfgb_p;
 	hpi_status_t		rs = HPI_SUCCESS;
 
@@ -351,11 +351,7 @@ hxge_rxbuf_pp_to_vp(p_hxge_t hxgep, p_rx_rbr_ring_t rbr_p,
 	    "==> hxge_rxbuf_pp_to_vp: buf_pp $%p btype %d",
 	    pkt_buf_addr_pp, pktbufsz_type));
 
-#if defined(__i386)
-	pktbuf_pp = (uint64_t)(uint32_t)pkt_buf_addr_pp;
-#else
 	pktbuf_pp = (uint64_t)pkt_buf_addr_pp;
-#endif
 
 	switch (pktbufsz_type) {
 	case 0:
@@ -548,13 +544,8 @@ found_index:
 	    "block_index %d ",
 	    total_index, dvma_addr, offset, block_size, block_index));
 
-#if defined(__i386)
-	*pkt_buf_addr_p = (uint64_t *)((uint32_t)bufinfo[anchor_index].kaddr +
-	    (uint32_t)offset);
-#else
 	*pkt_buf_addr_p = (uint64_t *)((uint64_t)bufinfo[anchor_index].kaddr +
 	    offset);
-#endif
 
 	HXGE_DEBUG_MSG((hxgep, RX2_CTL,
 	    "==> hxge_rxbuf_pp_to_vp: "
@@ -1697,13 +1688,8 @@ hxge_receive_packet(p_hxge_t hxgep, p_rx_rcr_ring_t rcr_p,
 
 	pktbufsz_type = ((rcr_entry & RCR_PKTBUFSZ_MASK) >>
 	    RCR_PKTBUFSZ_SHIFT);
-#if defined(__i386)
-	pkt_buf_addr_pp = (uint64_t *)(uint32_t)((rcr_entry &
-	    RCR_PKT_BUF_ADDR_MASK) << RCR_PKT_BUF_ADDR_SHIFT);
-#else
 	pkt_buf_addr_pp = (uint64_t *)((rcr_entry & RCR_PKT_BUF_ADDR_MASK) <<
 	    RCR_PKT_BUF_ADDR_SHIFT);
-#endif
 
 	HXGE_DEBUG_MSG((hxgep, RX2_CTL,
 	    "==> hxge_receive_packet: entryp $%p entry 0x%0llx "
@@ -1733,13 +1719,8 @@ hxge_receive_packet(p_hxge_t hxgep, p_rx_rcr_ring_t rcr_p,
 	}
 
 	/* shift 6 bits to get the full io address */
-#if defined(__i386)
-	pkt_buf_addr_pp = (uint64_t *)((uint32_t)pkt_buf_addr_pp <<
-	    RCR_PKT_BUF_ADDR_SHIFT_FULL);
-#else
 	pkt_buf_addr_pp = (uint64_t *)((uint64_t)pkt_buf_addr_pp <<
 	    RCR_PKT_BUF_ADDR_SHIFT_FULL);
-#endif
 	HXGE_DEBUG_MSG((hxgep, RX2_CTL,
 	    "==> (rbr) hxge_receive_packet: entry 0x%0llx "
 	    "full pkt_buf_addr_pp $%p l2_len %d",
@@ -1900,7 +1881,7 @@ hxge_receive_packet(p_hxge_t hxgep, p_rx_rcr_ring_t rcr_p,
 		rdc_stats->ierrors++;
 		/* Update error stats */
 		rdc_stats->errlog.compl_err_type = error_type;
-		HXGE_FM_REPORT_ERROR(hxgep, NULL, HXGE_FM_EREPORT_RDMC_RCR_ERR);
+		HXGE_FM_REPORT_ERROR(hxgep, 0, HXGE_FM_EREPORT_RDMC_RCR_ERR);
 
 		if (error_type & RCR_CTRL_FIFO_DED) {
 			rdc_stats->ctrl_fifo_ecc_err++;
@@ -2510,13 +2491,6 @@ hxge_map_rxdma_channel(p_hxge_t hxgep, uint16_t channel,
 	}
 	goto hxge_map_rxdma_channel_exit;
 
-hxge_map_rxdma_channel_fail3:
-	/* Free rbr, rcr */
-	HXGE_ERROR_MSG((hxgep, HXGE_ERR_CTL,
-	    "==> hxge_map_rxdma_channel: free rbr/rcr (status 0x%x channel %d)",
-	    status, channel));
-	hxge_unmap_rxdma_channel_cfg_ring(hxgep, *rcr_p, *rx_mbox_p);
-
 hxge_map_rxdma_channel_fail2:
 	/* Free buffer blocks */
 	HXGE_ERROR_MSG((hxgep, HXGE_ERR_CTL,
@@ -2561,13 +2535,13 @@ hxge_map_rxdma_channel_cfg_ring(p_hxge_t hxgep, uint16_t dma_channel,
     p_hxge_dma_common_t *dma_mbox_cntl_p, p_rx_rbr_ring_t *rbr_p,
     p_rx_rcr_ring_t *rcr_p, p_rx_mbox_t *rx_mbox_p)
 {
-	p_rx_rbr_ring_t 	rbrp;
-	p_rx_rcr_ring_t 	rcrp;
-	p_rx_mbox_t 		mboxp;
-	p_hxge_dma_common_t 	cntl_dmap;
-	p_hxge_dma_common_t 	dmap;
-	p_rx_msg_t 		*rx_msg_ring;
-	p_rx_msg_t 		rx_msg_p;
+	p_rx_rbr_ring_t		rbrp;
+	p_rx_rcr_ring_t		rcrp;
+	p_rx_mbox_t		mboxp;
+	p_hxge_dma_common_t	cntl_dmap;
+	p_hxge_dma_common_t	dmap;
+	p_rx_msg_t		*rx_msg_ring;
+	p_rx_msg_t		rx_msg_p;
 	rdc_rbr_cfg_a_t		*rcfga_p;
 	rdc_rbr_cfg_b_t		*rcfgb_p;
 	rdc_rcr_cfg_a_t		*cfga_p;
@@ -2580,7 +2554,7 @@ hxge_map_rxdma_channel_cfg_ring(p_hxge_t hxgep, uint16_t dma_channel,
 	uint32_t		bkaddr;
 	hxge_status_t		status = HXGE_OK;
 	int			i;
-	uint32_t 		hxge_port_rcr_size;
+	uint32_t		hxge_port_rcr_size;
 
 	HXGE_DEBUG_MSG((hxgep, MEM2_CTL,
 	    "==> hxge_map_rxdma_channel_cfg_ring"));
@@ -2746,13 +2720,8 @@ hxge_map_rxdma_channel_cfg_ring(p_hxge_t hxgep, uint16_t dma_channel,
 	rcrp->comp_wt_index = 0;
 	rcrp->rcr_desc_rd_head_p = rcrp->rcr_desc_first_p =
 	    (p_rcr_entry_t)DMA_COMMON_VPTR(rcrp->rcr_desc);
-#if defined(__i386)
-	rcrp->rcr_desc_rd_head_pp = rcrp->rcr_desc_first_pp =
-	    (p_rcr_entry_t)(uint32_t)DMA_COMMON_IOADDR(rcrp->rcr_desc);
-#else
 	rcrp->rcr_desc_rd_head_pp = rcrp->rcr_desc_first_pp =
 	    (p_rcr_entry_t)DMA_COMMON_IOADDR(rcrp->rcr_desc);
-#endif
 	rcrp->rcr_desc_last_p = rcrp->rcr_desc_rd_head_p +
 	    (hxge_port_rcr_size - 1);
 	rcrp->rcr_desc_last_pp = rcrp->rcr_desc_rd_head_pp +
@@ -2960,19 +2929,11 @@ hxge_map_rxdma_channel_buf_ring(p_hxge_t hxgep, uint16_t channel,
 	for (i = 0; i < rbrp->num_blocks; i++, dma_bufp++) {
 		bsize = dma_bufp->block_size;
 		nblocks = dma_bufp->nblocks;
-#if defined(__i386)
-		ring_info->buffer[i].dvma_addr = (uint32_t)dma_bufp->ioaddr_pp;
-#else
 		ring_info->buffer[i].dvma_addr = (uint64_t)dma_bufp->ioaddr_pp;
-#endif
 		ring_info->buffer[i].buf_index = i;
 		ring_info->buffer[i].buf_size = dma_bufp->alength;
 		ring_info->buffer[i].start_index = index;
-#if defined(__i386)
-		ring_info->buffer[i].kaddr = (uint32_t)dma_bufp->kaddrp;
-#else
 		ring_info->buffer[i].kaddr = (uint64_t)dma_bufp->kaddrp;
-#endif
 
 		HXGE_DEBUG_MSG((hxgep, MEM2_CTL,
 		    " hxge_map_rxdma_channel_buf_ring: map channel %d "
@@ -3048,7 +3009,6 @@ hxge_map_rxdma_channel_buf_ring_fail1:
 		}
 	}
 
-hxge_map_rxdma_channel_buf_ring_fail:
 	MUTEX_DESTROY(&rbrp->post_lock);
 	MUTEX_DESTROY(&rbrp->lock);
 	KMEM_FREE(ring_info, sizeof (rxring_info_t));
@@ -3535,7 +3495,7 @@ hxge_rxdma_handle_sys_errors(p_hxge_t hxgep)
 	if (stat.bits.rx_ctrl_fifo_ded) {
 		/* Global fatal error encountered */
 		statsp->ctrl_fifo_ded++;
-		HXGE_FM_REPORT_ERROR(hxgep, NULL,
+		HXGE_FM_REPORT_ERROR(hxgep, 0,
 		    HXGE_FM_EREPORT_RDMC_CTRL_FIFO_DED);
 		HXGE_ERROR_MSG((hxgep, HXGE_ERR_CTL,
 		    "==> hxge_rxdma_handle_sys_errors: "
@@ -3553,7 +3513,7 @@ hxge_rxdma_handle_sys_errors(p_hxge_t hxgep)
 	if (stat.bits.rx_data_fifo_ded) {
 		/* Global fatal error encountered */
 		statsp->data_fifo_ded++;
-		HXGE_FM_REPORT_ERROR(hxgep, NULL,
+		HXGE_FM_REPORT_ERROR(hxgep, 0,
 		    HXGE_FM_EREPORT_RDMC_DATA_FIFO_DED);
 		HXGE_ERROR_MSG((hxgep, HXGE_ERR_CTL,
 		    "==> hxge_rxdma_handle_sys_errors: "
@@ -3576,7 +3536,7 @@ static hxge_status_t
 hxge_rxdma_fatal_err_recover(p_hxge_t hxgep, uint16_t channel)
 {
 	hpi_handle_t		handle;
-	hpi_status_t 		rs = HPI_SUCCESS;
+	hpi_status_t		rs = HPI_SUCCESS;
 	p_rx_rbr_ring_t		rbrp;
 	p_rx_rcr_ring_t		rcrp;
 	p_rx_mbox_t		mboxp;
@@ -3641,13 +3601,8 @@ hxge_rxdma_fatal_err_recover(p_hxge_t hxgep, uint16_t channel)
 	rcrp->comp_wt_index = 0;
 	rcrp->rcr_desc_rd_head_p = rcrp->rcr_desc_first_p =
 	    (p_rcr_entry_t)DMA_COMMON_VPTR(rcrp->rcr_desc);
-#if defined(__i386)
-	rcrp->rcr_desc_rd_head_pp = rcrp->rcr_desc_first_pp =
-	    (p_rcr_entry_t)(uint32_t)DMA_COMMON_IOADDR(rcrp->rcr_desc);
-#else
 	rcrp->rcr_desc_rd_head_pp = rcrp->rcr_desc_first_pp =
 	    (p_rcr_entry_t)DMA_COMMON_IOADDR(rcrp->rcr_desc);
-#endif
 
 	rcrp->rcr_desc_last_p = rcrp->rcr_desc_rd_head_p +
 	    (hxge_port_rcr_size - 1);

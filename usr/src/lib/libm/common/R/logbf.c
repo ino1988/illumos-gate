@@ -27,22 +27,21 @@
  * Use is subject to license terms.
  */
 
-#if defined(ELFOBJ)
-#pragma weak logbf = __logbf
-#endif
+#pragma weak __logbf = logbf
 
 #include "libm.h"
 #include "xpg6.h"	/* __xpg6 */
 #define	_C99SUSv3_logb	_C99SUSv3_logb_subnormal_is_like_ilogb
 
-#if defined(USE_FPSCALE) || defined(__x86)
+#if defined(__x86)
 static const float two25 = 33554432.0F;
 #else
 /*
  * v: a non-zero subnormal |x|
  */
 static int
-ilogbf_subnormal(unsigned v) {
+ilogbf_subnormal(unsigned v)
+{
 	int r = -126 - 23;
 
 	if (v & 0xffff0000)
@@ -54,34 +53,35 @@ ilogbf_subnormal(unsigned v) {
 	v <<= 1;
 	return (r + ((0xffffaa50 >> v) & 0x3));
 }
-#endif	/* defined(USE_FPSCALE) */
+#endif	/* defined(__x86) */
 
 static float
-raise_division(float t) {
-#pragma STDC FENV_ACCESS ON
+raise_division(float t)
+{
 	static const float zero = 0.0F;
 	return (t / zero);
 }
 
 float
-logbf(float x) {
-	int k = *((int *) &x) & ~0x80000000;
+logbf(float x)
+{
+	int k = *((int *)&x) & ~0x80000000;
 
 	if (k < 0x00800000) {
 		if (k == 0)
 			return (raise_division(-1.0F));
 		else if ((__xpg6 & _C99SUSv3_logb) != 0) {
-#if defined(USE_FPSCALE) || defined(__x86)
+#if defined(__x86)
 			x *= two25;
-			return ((float) (((*((int *) &x) & 0x7f800000) >> 23) -
-				152));
+			return ((float)(((*((int *)&x) & 0x7f800000) >> 23) -
+			    152));
 #else
-			return ((float) ilogbf_subnormal(k));
+			return ((float)ilogbf_subnormal(k));
 #endif
 		} else
 			return (-126.F);
 	} else if (k < 0x7f800000)
-		return ((float) ((k >> 23) - 127));
+		return ((float)((k >> 23) - 127));
 	else
 		return (x * x);
 }

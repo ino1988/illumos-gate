@@ -21,9 +21,9 @@
 /*
  * Copyright 2007 Sun Microsystems, Inc.  All rights reserved.
  * Use is subject to license terms.
+ *
+ * Copyright 2018 Joyent, Inc.
  */
-
-#pragma ident	"%Z%%M%	%I%	%E% SMI"
 
 /*
  * Kernel/Debugger Interface (KDI) routines.  Called during debugger under
@@ -113,12 +113,6 @@ kdi_dreg_set(int reg, ulong_t value)
 	}
 }
 
-void
-kdi_flush_caches(void)
-{
-	reload_cr3();
-}
-
 extern void kdi_slave_entry(void);
 
 void
@@ -153,7 +147,6 @@ kdi_slave_wait(void)
  * Note that kmdb entry relies on the fake cpu_t having zero cpu_idt/cpu_id.
  */
 
-#if defined(__amd64)
 
 void *
 boot_kdi_tmpinit(void)
@@ -173,38 +166,3 @@ boot_kdi_tmpfini(void *old)
 {
 	wrmsr(MSR_AMD_GSBASE, (uint64_t)old);
 }
-
-#elif defined(__i386)
-
-void *
-boot_kdi_tmpinit(void)
-{
-	cpu_t *cpu = kobj_zalloc(sizeof (*cpu), KM_TMP);
-	uintptr_t old;
-	desctbr_t b_gdtr;
-	user_desc_t *bgdt;
-
-	cpu->cpu_self = cpu;
-
-	rd_gdtr(&b_gdtr);
-	bgdt = (user_desc_t *)(b_gdtr.dtr_base);
-
-	set_usegd(&bgdt[GDT_BGSTMP],
-	    cpu, sizeof (*cpu), SDT_MEMRWA, SEL_KPL, SDP_BYTES, SDP_OP32);
-
-	/*
-	 * Now switch %gs to point at it.
-	 */
-	old = getgs();
-	setgs(KMDBGS_SEL);
-
-	return ((void *)old);
-}
-
-void
-boot_kdi_tmpfini(void *old)
-{
-	setgs((uintptr_t)old);
-}
-
-#endif	/* __i386 */

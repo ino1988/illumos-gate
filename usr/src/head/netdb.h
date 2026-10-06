@@ -6,7 +6,7 @@
  */
 
 /*	Copyright (c) 1983, 1984, 1985, 1986, 1987, 1988, 1989 AT&T	*/
-/*	  All Rights Reserved  	*/
+/*	  All Rights Reserved	*/
 
 /*
  * BIND 4.9.3:
@@ -123,7 +123,10 @@ struct addrinfo {
 	struct addrinfo *ai_next;	/* next structure in linked list */
 };
 
-
+/*
+ * The flag 0x8000 is currently reserved for private use between libnsl and
+ * libsocket. See lib/libsocket/inet/getaddrinfo.c for more information.
+ */
 /* addrinfo flags */
 #define	AI_PASSIVE	0x0008	/* intended for bind() + listen() */
 #define	AI_CANONNAME	0x0010	/* return canonical version of host */

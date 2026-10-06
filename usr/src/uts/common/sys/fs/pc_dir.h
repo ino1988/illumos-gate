@@ -26,8 +26,6 @@
 #ifndef	_SYS_FS_PC_DIR_H
 #define	_SYS_FS_PC_DIR_H
 
-#pragma ident	"%Z%%M%	%I%	%E% SMI"
-
 #include <sys/dirent.h>
 
 #ifdef	__cplusplus
@@ -63,8 +61,8 @@ struct pctime {
 #define	YEARMASK	0x7F
 
 struct pcdir {
-	char pcd_filename[PCFNAMESIZE];	/* file name */
-	char pcd_ext[PCFEXTSIZE];	/* file extension */
+	char pcd_filename[PCFNAMESIZE] __nonstring; /* file name */
+	char pcd_ext[PCFEXTSIZE] __nonstring; /* file extension */
 	uchar_t	pcd_attr;		/* file attributes */
 	uchar_t	pcd_ntattr;		/* reserved for NT attributes */
 	uchar_t	pcd_crtime_msec;	/* milliseconds after the minute */

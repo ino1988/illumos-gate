@@ -26,7 +26,7 @@
 
 
 /*
- * smbios(7D) driver
+ * smbios(4D) driver
  *
  * This pseudo-driver makes available a snapshot of the system's SMBIOS image
  * that can be accessed using libsmbios.  Clients may access a snapshot using
@@ -126,8 +126,14 @@ smb_uiomove(smb_clone_t *cp, uio_t *uio)
 		smbios_entry_t *ep = kmem_zalloc(cp->c_eplen, KM_SLEEP);
 		size_t eprlen = MIN(len, cp->c_eplen - off);
 
-		smbios_info_smbios(cp->c_hdl, ep);
-		ep->smbe_staddr = (uint32_t)cp->c_eplen;
+		switch (smbios_info_smbios(cp->c_hdl, ep)) {
+		case SMBIOS_ENTRY_POINT_21:
+			ep->ep21.smbe_staddr = (uint32_t)cp->c_eplen;
+			break;
+		case SMBIOS_ENTRY_POINT_30:
+			ep->ep30.smbe_staddr = (uint64_t)cp->c_eplen;
+			break;
+		}
 		smbios_checksum(cp->c_hdl, ep);
 
 		err = uiomove((char *)ep + off, eprlen, UIO_READ, uio);
@@ -181,8 +187,10 @@ smb_segmap(dev_t dev, off_t off, struct as *as, caddr_t *addrp, off_t len,
 	if ((prot & PROT_WRITE) && (flags & MAP_SHARED))
 		return (EACCES);
 
-	if (off < 0 || off + len < off || off + len > cp->c_eplen + cp->c_stlen)
+	if (off < 0 || sum_overflows_off(off, len) ||
+	    off + len > cp->c_eplen + cp->c_stlen) {
 		return (ENXIO);
+	}
 
 	as_rangelock(as);
 	map_addr(&addr, alen, 0, 1, 0);

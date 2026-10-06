@@ -44,10 +44,8 @@
 
 static void tavor_qp_send_doorbell(tavor_state_t *state, uint32_t nda,
     uint32_t nds, uint32_t qpn, uint32_t fence, uint32_t nopcode);
-#pragma inline(tavor_qp_send_doorbell)
 static void tavor_qp_recv_doorbell(tavor_state_t *state, uint32_t nda,
     uint32_t nds, uint32_t qpn, uint32_t credits);
-#pragma inline(tavor_qp_recv_doorbell)
 static uint32_t tavor_wr_get_immediate(ibt_send_wr_t *wr);
 static int tavor_wr_bind_check(tavor_state_t *state, ibt_send_wr_t *wr);
 static int tavor_wqe_send_build(tavor_state_t *state, tavor_qphdl_t qp,
@@ -109,17 +107,12 @@ tavor_post_send(tavor_state_t *state, tavor_qphdl_t qp,
 	uint_t				maxdb = TAVOR_QP_MAXDESC_PER_DB;
 	int				status;
 
-	TAVOR_TNF_ENTER(tavor_post_send);
-
 	/*
 	 * Check for user-mappable QP memory.  Note:  We do not allow kernel
 	 * clients to post to QP memory that is accessible directly by the
 	 * user.  If the QP memory is user accessible, then return an error.
 	 */
 	if (qp->qp_is_umap) {
-		TNF_PROBE_0(tavor_post_send_inv_usrmapped_type,
-		    TAVOR_TNF_ERROR, "");
-		TAVOR_TNF_EXIT(tavor_post_send);
 		return (IBT_QP_HDL_INVALID);
 	}
 
@@ -136,9 +129,6 @@ tavor_post_send(tavor_state_t *state, tavor_qphdl_t qp,
 	    (qp->qp_state == TAVOR_QP_INIT) ||
 	    (qp->qp_state == TAVOR_QP_RTR)) {
 		mutex_exit(&qp->qp_lock);
-		TNF_PROBE_0(tavor_post_send_inv_qpstate_fail,
-		    TAVOR_TNF_ERROR, "");
-		TAVOR_TNF_EXIT(tavor_post_send);
 		return (IBT_QP_STATE_INVALID);
 	}
 
@@ -197,8 +187,6 @@ tavor_post_send(tavor_state_t *state, tavor_qphdl_t qp,
 			 */
 			if (qp->qp_sq_wqhdr->wq_full != 0) {
 				status = IBT_QP_FULL;
-				TNF_PROBE_0_DEBUG(tavor_post_send_sqfull,
-				    TAVOR_TNF_TRACE, "");
 				break;
 			}
 
@@ -228,8 +216,6 @@ tavor_post_send(tavor_state_t *state, tavor_qphdl_t qp,
 			status = tavor_wqe_send_build(state, qp,
 			    &wr[wrindx], desc, &desc_sz);
 			if (status != DDI_SUCCESS) {
-				TNF_PROBE_0(tavor_post_send_bldwqe_fail,
-				    TAVOR_TNF_ERROR, "");
 				break;
 			}
 
@@ -383,7 +369,6 @@ tavor_post_send(tavor_state_t *state, tavor_qphdl_t qp,
 	mutex_exit(&qp->qp_sq_wqhdr->wq_wrid_wql->wql_lock);
 	mutex_exit(&qp->qp_lock);
 
-	TAVOR_TNF_EXIT(tavor_post_send);
 	return (status);
 }
 
@@ -406,17 +391,12 @@ tavor_post_recv(tavor_state_t *state, tavor_qphdl_t qp,
 	uint_t				maxdb = TAVOR_QP_MAXDESC_PER_DB;
 	int				status;
 
-	TAVOR_TNF_ENTER(tavor_post_recv);
-
 	/*
 	 * Check for user-mappable QP memory.  Note:  We do not allow kernel
 	 * clients to post to QP memory that is accessible directly by the
 	 * user.  If the QP memory is user accessible, then return an error.
 	 */
 	if (qp->qp_is_umap) {
-		TNF_PROBE_0(tavor_post_recv_inv_usrmapped_type,
-		    TAVOR_TNF_ERROR, "");
-		TAVOR_TNF_EXIT(tavor_post_recv);
 		return (IBT_QP_HDL_INVALID);
 	}
 
@@ -430,9 +410,6 @@ tavor_post_recv(tavor_state_t *state, tavor_qphdl_t qp,
 	 */
 	if (qp->qp_srq_en == TAVOR_QP_SRQ_ENABLED) {
 		mutex_exit(&qp->qp_lock);
-		TNF_PROBE_0(tavor_post_recv_fail_qp_on_srq,
-		    TAVOR_TNF_ERROR, "");
-		TAVOR_TNF_EXIT(tavor_post_recv);
 		return (IBT_SRQ_IN_USE);
 	}
 
@@ -441,9 +418,6 @@ tavor_post_recv(tavor_state_t *state, tavor_qphdl_t qp,
 	 */
 	if (qp->qp_state == TAVOR_QP_RESET) {
 		mutex_exit(&qp->qp_lock);
-		TNF_PROBE_0(tavor_post_recv_inv_qpstate_fail,
-		    TAVOR_TNF_ERROR, "");
-		TAVOR_TNF_EXIT(tavor_post_recv);
 		return (IBT_QP_STATE_INVALID);
 	}
 
@@ -500,8 +474,6 @@ tavor_post_recv(tavor_state_t *state, tavor_qphdl_t qp,
 			 */
 			if (qp->qp_rq_wqhdr->wq_full != 0) {
 				status = IBT_QP_FULL;
-				TNF_PROBE_0_DEBUG(tavor_post_recv_rqfull,
-				    TAVOR_TNF_TRACE, "");
 				break;
 			}
 
@@ -531,8 +503,6 @@ tavor_post_recv(tavor_state_t *state, tavor_qphdl_t qp,
 			status = tavor_wqe_recv_build(state, qp, &wr[wrindx],
 			    desc, &desc_sz);
 			if (status != DDI_SUCCESS) {
-				TNF_PROBE_0(tavor_post_recv_bldwqe_fail,
-				    TAVOR_TNF_ERROR, "");
 				break;
 			}
 
@@ -639,7 +609,6 @@ tavor_post_recv(tavor_state_t *state, tavor_qphdl_t qp,
 	mutex_exit(&qp->qp_rq_wqhdr->wq_wrid_wql->wql_lock);
 	mutex_exit(&qp->qp_lock);
 
-	TAVOR_TNF_EXIT(tavor_post_recv);
 	return (status);
 }
 
@@ -659,17 +628,12 @@ tavor_post_srq(tavor_state_t *state, tavor_srqhdl_t srq,
 	uint_t				maxdb = TAVOR_QP_MAXDESC_PER_DB;
 	int				status;
 
-	TAVOR_TNF_ENTER(tavor_post_srq);
-
 	/*
 	 * Check for user-mappable QP memory.  Note:  We do not allow kernel
 	 * clients to post to QP memory that is accessible directly by the
 	 * user.  If the QP memory is user accessible, then return an error.
 	 */
 	if (srq->srq_is_umap) {
-		TNF_PROBE_0(tavor_post_srq_inv_usrmapped_type,
-		    TAVOR_TNF_ERROR, "");
-		TAVOR_TNF_EXIT(tavor_post_srq);
 		return (IBT_SRQ_HDL_INVALID);
 	}
 
@@ -683,9 +647,6 @@ tavor_post_srq(tavor_state_t *state, tavor_srqhdl_t srq,
 	 */
 	if (srq->srq_state == TAVOR_SRQ_STATE_ERROR) {
 		mutex_exit(&srq->srq_lock);
-		TNF_PROBE_0(tavor_post_srq_inv_srqstate_fail,
-		    TAVOR_TNF_ERROR, "");
-		TAVOR_TNF_EXIT(tavor_post_srq);
 		return (IBT_QP_STATE_INVALID);
 	}
 
@@ -736,8 +697,6 @@ tavor_post_srq(tavor_state_t *state, tavor_srqhdl_t srq,
 			 */
 			if (srq->srq_wridlist->wl_free_list_indx == -1) {
 				status = IBT_QP_FULL;
-				TNF_PROBE_0_DEBUG(tavor_post_srq_wqfull,
-				    TAVOR_TNF_TRACE, "");
 				break;
 			}
 
@@ -771,8 +730,6 @@ tavor_post_srq(tavor_state_t *state, tavor_srqhdl_t srq,
 			status = tavor_wqe_srq_build(state, srq, &wr[wrindx],
 			    desc);
 			if (status != DDI_SUCCESS) {
-				TNF_PROBE_0(tavor_post_recv_bldwqe_fail,
-				    TAVOR_TNF_ERROR, "");
 				break;
 			}
 
@@ -879,7 +836,6 @@ tavor_post_srq(tavor_state_t *state, tavor_srqhdl_t srq,
 	mutex_exit(&srq->srq_wrid_wql->wql_lock);
 	mutex_exit(&srq->srq_lock);
 
-	TAVOR_TNF_EXIT(tavor_post_srq);
 	return (status);
 }
 
@@ -900,9 +856,6 @@ tavor_qp_send_doorbell(tavor_state_t *state, uint32_t nda, uint32_t nds,
 	    ((uint64_t)fence << TAVOR_QPSNDDB_F_SHIFT) |
 	    ((uint64_t)nopcode << TAVOR_QPSNDDB_NOPCODE_SHIFT) |
 	    ((uint64_t)qpn << TAVOR_QPSNDDB_QPN_SHIFT) | nds;
-
-	TNF_PROBE_1_DEBUG(tavor_qp_send_doorbell, TAVOR_TNF_TRACE, "",
-	    tnf_ulong, doorbell, doorbell);
 
 	/* Write the doorbell to UAR */
 	TAVOR_UAR_DOORBELL(state, (uint64_t *)&state->ts_uar->send,
@@ -925,9 +878,6 @@ tavor_qp_recv_doorbell(tavor_state_t *state, uint32_t nda, uint32_t nds,
 	    TAVOR_QPRCVDB_NDA_SHIFT) |
 	    ((uint64_t)nds << TAVOR_QPRCVDB_NDS_SHIFT) |
 	    ((uint64_t)qpn << TAVOR_QPRCVDB_QPN_SHIFT) | credits;
-
-	TNF_PROBE_1_DEBUG(tavor_qp_recv_doorbell, TAVOR_TNF_TRACE, "",
-	    tnf_ulong, doorbell, doorbell);
 
 	/* Write the doorbell to UAR */
 	TAVOR_UAR_DOORBELL(state, (uint64_t *)&state->ts_uar->recv,
@@ -954,8 +904,6 @@ tavor_wqe_send_build(tavor_state_t *state, tavor_qphdl_t qp,
 	uint32_t			nds;
 	int				i, num_ds, status;
 
-	TAVOR_TNF_ENTER(tavor_wqe_send_build);
-
 	ASSERT(MUTEX_HELD(&qp->qp_lock));
 
 	/* Initialize the information for the Data Segments */
@@ -973,9 +921,6 @@ tavor_wqe_send_build(tavor_state_t *state, tavor_qphdl_t qp,
 	case IBT_UD_SRV:
 		/* Ensure that work request transport type matches QP type */
 		if (qp->qp_serv_type != TAVOR_QP_UD) {
-			TNF_PROBE_0(tavor_wqe_send_build_inv_servtype_fail,
-			    TAVOR_TNF_ERROR, "");
-			TAVOR_TNF_EXIT(tavor_wqe_send_build);
 			return (IBT_QP_SRV_TYPE_INVALID);
 		}
 
@@ -984,9 +929,6 @@ tavor_wqe_send_build(tavor_state_t *state, tavor_qphdl_t qp,
 		 * "Send" operation is valid
 		 */
 		if (wr->wr_opcode != IBT_WRC_SEND) {
-			TNF_PROBE_0(tavor_wqe_send_build_inv_optype_fail,
-			    TAVOR_TNF_ERROR, "");
-			TAVOR_TNF_EXIT(tavor_wqe_send_build);
 			return (IBT_QP_OP_TYPE_INVALID);
 		}
 
@@ -997,7 +939,6 @@ tavor_wqe_send_build(tavor_state_t *state, tavor_qphdl_t qp,
 		 */
 		if (qp->qp_is_special) {
 			status = tavor_wqe_mlx_build(state, qp, wr, desc, size);
-			TAVOR_TNF_EXIT(tavor_wqe_send_build);
 			return (status);
 		}
 
@@ -1011,9 +952,6 @@ tavor_wqe_send_build(tavor_state_t *state, tavor_qphdl_t qp,
 		    sizeof (tavor_hw_snd_wqe_nextctrl_t));
 		ah = (tavor_ahhdl_t)wr->wr.ud.udwr_dest->ud_ah;
 		if (ah == NULL) {
-			TNF_PROBE_0(tavor_wqe_send_build_invahhdl_fail,
-			    TAVOR_TNF_ERROR, "");
-			TAVOR_TNF_EXIT(tavor_wqe_send_build);
 			return (IBT_AH_HDL_INVALID);
 		}
 
@@ -1034,9 +972,6 @@ tavor_wqe_send_build(tavor_state_t *state, tavor_qphdl_t qp,
 	case IBT_RC_SRV:
 		/* Ensure that work request transport type matches QP type */
 		if (qp->qp_serv_type != TAVOR_QP_RC) {
-			TNF_PROBE_0(tavor_wqe_send_build_inv_servtype_fail,
-			    TAVOR_TNF_ERROR, "");
-			TAVOR_TNF_EXIT(tavor_wqe_send_build);
 			return (IBT_QP_SRV_TYPE_INVALID);
 		}
 
@@ -1051,9 +986,6 @@ tavor_wqe_send_build(tavor_state_t *state, tavor_qphdl_t qp,
 		    (wr->wr_opcode != IBT_WRC_CSWAP) &&
 		    (wr->wr_opcode != IBT_WRC_FADD) &&
 		    (wr->wr_opcode != IBT_WRC_BIND)) {
-			TNF_PROBE_0(tavor_wqe_send_build_inv_optype_fail,
-			    TAVOR_TNF_ERROR, "");
-			TAVOR_TNF_EXIT(tavor_wqe_send_build);
 			return (IBT_QP_OP_TYPE_INVALID);
 		}
 
@@ -1129,9 +1061,6 @@ tavor_wqe_send_build(tavor_state_t *state, tavor_qphdl_t qp,
 		if (wr->wr_opcode == IBT_WRC_BIND) {
 			status = tavor_wr_bind_check(state, wr);
 			if (status != DDI_SUCCESS) {
-				TNF_PROBE_0(tavor_wqe_send_build_bind_fail,
-				    TAVOR_TNF_ERROR, "");
-				TAVOR_TNF_EXIT(tavor_wqe_send_build);
 				return (status);
 			}
 
@@ -1160,9 +1089,6 @@ tavor_wqe_send_build(tavor_state_t *state, tavor_qphdl_t qp,
 	case IBT_UC_SRV:
 		/* Ensure that work request transport type matches QP type */
 		if (qp->qp_serv_type != TAVOR_QP_UC) {
-			TNF_PROBE_0(tavor_wqe_send_build_inv_servtype_fail,
-			    TAVOR_TNF_ERROR, "");
-			TAVOR_TNF_EXIT(tavor_wqe_send_build);
 			return (IBT_QP_SRV_TYPE_INVALID);
 		}
 
@@ -1175,9 +1101,6 @@ tavor_wqe_send_build(tavor_state_t *state, tavor_qphdl_t qp,
 		if ((wr->wr_opcode != IBT_WRC_SEND) &&
 		    (wr->wr_opcode != IBT_WRC_RDMAW) &&
 		    (wr->wr_opcode != IBT_WRC_BIND)) {
-			TNF_PROBE_0(tavor_wqe_send_build_inv_optype_fail,
-			    TAVOR_TNF_ERROR, "");
-			TAVOR_TNF_EXIT(tavor_wqe_send_build);
 			return (IBT_QP_OP_TYPE_INVALID);
 		}
 
@@ -1218,9 +1141,6 @@ tavor_wqe_send_build(tavor_state_t *state, tavor_qphdl_t qp,
 		if (wr->wr_opcode == IBT_WRC_BIND) {
 			status = tavor_wr_bind_check(state, wr);
 			if (status != DDI_SUCCESS) {
-				TNF_PROBE_0(tavor_wqe_send_build_bind_fail,
-				    TAVOR_TNF_ERROR, "");
-				TAVOR_TNF_EXIT(tavor_wqe_send_build);
 				return (status);
 			}
 
@@ -1247,9 +1167,6 @@ tavor_wqe_send_build(tavor_state_t *state, tavor_qphdl_t qp,
 		break;
 
 	default:
-		TNF_PROBE_0(tavor_wqe_send_build_inv_tranport_fail,
-		    TAVOR_TNF_ERROR, "");
-		TAVOR_TNF_EXIT(tavor_wqe_send_build);
 		return (IBT_QP_SRV_TYPE_INVALID);
 	}
 
@@ -1259,9 +1176,6 @@ tavor_wqe_send_build(tavor_state_t *state, tavor_qphdl_t qp,
 	 * Start by checking for a valid number of SGL entries
 	 */
 	if (nds > qp->qp_sq_sgl) {
-		TNF_PROBE_0(tavor_wqe_send_build_toomanysgl_fail,
-		    TAVOR_TNF_ERROR, "");
-		TAVOR_TNF_EXIT(tavor_wqe_send_build);
 		return (IBT_QP_SGL_LEN_INVALID);
 	}
 
@@ -1291,7 +1205,6 @@ tavor_wqe_send_build(tavor_state_t *state, tavor_qphdl_t qp,
 	/* Return the size of descriptor (in 16-byte chunks) */
 	*size = ((uintptr_t)&ds[num_ds] - (uintptr_t)desc) >> 4;
 
-	TAVOR_TNF_EXIT(tavor_wqe_send_build);
 	return (DDI_SUCCESS);
 }
 
@@ -1447,8 +1360,6 @@ tavor_wqe_mlx_build(tavor_state_t *state, tavor_qphdl_t qp,
 	uint32_t		desc_sz, udav_sz;
 	int			i, num_ds;
 
-	TAVOR_TNF_ENTER(tavor_wqe_mlx_build);
-
 	ASSERT(MUTEX_HELD(&qp->qp_lock));
 
 	/* Initialize the information for the Data Segments */
@@ -1462,9 +1373,6 @@ tavor_wqe_mlx_build(tavor_state_t *state, tavor_qphdl_t qp,
 	 */
 	ah = (tavor_ahhdl_t)wr->wr.ud.udwr_dest->ud_ah;
 	if (ah == NULL) {
-		TNF_PROBE_0(tavor_wqe_mlx_build_invahhdl_fail,
-		    TAVOR_TNF_ERROR, "");
-		TAVOR_TNF_EXIT(tavor_wqe_mlx_build);
 		return (IBT_AH_HDL_INVALID);
 	}
 	mutex_enter(&ah->ah_lock);
@@ -1483,9 +1391,6 @@ tavor_wqe_mlx_build(tavor_state_t *state, tavor_qphdl_t qp,
 	 */
 	if ((udav.rlid == IB_LID_PERMISSIVE) &&
 	    (qp->qp_is_special == TAVOR_QP_GSI)) {
-		TNF_PROBE_0(tavor_wqe_mlx_build_permissiveLIDonQP1_fail,
-		    TAVOR_TNF_ERROR, "");
-		TAVOR_TNF_EXIT(tavor_wqe_mlx_build);
 		return (IBT_AH_HDL_INVALID);
 	}
 
@@ -1545,9 +1450,6 @@ tavor_wqe_mlx_build(tavor_state_t *state, tavor_qphdl_t qp,
 		 * combination of global routine (GRH) and QP0 is not allowed.
 		 */
 		if (qp->qp_is_special == TAVOR_QP_SMI) {
-			TNF_PROBE_0(tavor_wqe_mlx_build_GRHonQP0_fail,
-			    TAVOR_TNF_ERROR, "");
-			TAVOR_TNF_EXIT(tavor_wqe_mlx_build);
 			return (IBT_AH_HDL_INVALID);
 		}
 		grh = (ib_grh_t *)((uintptr_t)lrh + sizeof (ib_lrh_hdr_t));
@@ -1586,9 +1488,6 @@ tavor_wqe_mlx_build(tavor_state_t *state, tavor_qphdl_t qp,
 	 * Start by checking for a valid number of SGL entries
 	 */
 	if (nds > qp->qp_sq_sgl) {
-		TNF_PROBE_0(tavor_wqe_mlx_build_toomanysgl_fail,
-		    TAVOR_TNF_ERROR, "");
-		TAVOR_TNF_EXIT(tavor_wqe_mlx_build);
 		return (IBT_QP_SGL_LEN_INVALID);
 	}
 
@@ -1660,7 +1559,6 @@ tavor_wqe_mlx_build(tavor_state_t *state, tavor_qphdl_t qp,
 	/* Return the size of descriptor (in 16-byte chunks) */
 	*size = ((uintptr_t)&ds[num_ds] - (uintptr_t)desc) >> 0x4;
 
-	TAVOR_TNF_EXIT(tavor_wqe_mlx_build);
 	return (DDI_SUCCESS);
 }
 
@@ -1808,17 +1706,12 @@ tavor_wqe_recv_build(tavor_state_t *state, tavor_qphdl_t qp,
 	tavor_hw_wqe_sgl_t	*ds;
 	int			i, num_ds;
 
-	TAVOR_TNF_ENTER(tavor_wqe_recv_build);
-
 	ASSERT(MUTEX_HELD(&qp->qp_lock));
 
 	/* Check that work request transport type is valid */
 	if ((qp->qp_serv_type != TAVOR_QP_UD) &&
 	    (qp->qp_serv_type != TAVOR_QP_RC) &&
 	    (qp->qp_serv_type != TAVOR_QP_UC)) {
-		TNF_PROBE_0(tavor_build_recv_wqe_inv_servtype_fail,
-		    TAVOR_TNF_ERROR, "");
-		TAVOR_TNF_EXIT(tavor_build_recv_wqe);
 		return (IBT_QP_SRV_TYPE_INVALID);
 	}
 
@@ -1829,9 +1722,6 @@ tavor_wqe_recv_build(tavor_state_t *state, tavor_qphdl_t qp,
 
 	/* Check for valid number of SGL entries */
 	if (wr->wr_nds > qp->qp_rq_sgl) {
-		TNF_PROBE_0(tavor_wqe_recv_build_toomanysgl_fail,
-		    TAVOR_TNF_ERROR, "");
-		TAVOR_TNF_EXIT(tavor_wqe_recv_build);
 		return (IBT_QP_SGL_LEN_INVALID);
 	}
 
@@ -1861,7 +1751,6 @@ tavor_wqe_recv_build(tavor_state_t *state, tavor_qphdl_t qp,
 	/* Return the size of descriptor (in 16-byte chunks) */
 	*size = ((uintptr_t)&ds[num_ds] - (uintptr_t)desc) >> 0x4;
 
-	TAVOR_TNF_EXIT(tavor_wqe_recv_build);
 	return (DDI_SUCCESS);
 }
 
@@ -1925,8 +1814,6 @@ tavor_wqe_srq_build(tavor_state_t *state, tavor_srqhdl_t srq,
 	ibt_wr_ds_t		end_sgl;
 	int			i, num_ds;
 
-	TAVOR_TNF_ENTER(tavor_wqe_recv_build);
-
 	ASSERT(MUTEX_HELD(&srq->srq_lock));
 
 	/* Fill in the Data Segments (SGL) for the Recv WQE */
@@ -1936,9 +1823,6 @@ tavor_wqe_srq_build(tavor_state_t *state, tavor_srqhdl_t srq,
 
 	/* Check for valid number of SGL entries */
 	if (wr->wr_nds > srq->srq_wq_sgl) {
-		TNF_PROBE_0(tavor_wqe_srq_build_toomanysgl_fail,
-		    TAVOR_TNF_ERROR, "");
-		TAVOR_TNF_EXIT(tavor_wqe_srq_build);
 		return (IBT_QP_SGL_LEN_INVALID);
 	}
 
@@ -1978,7 +1862,6 @@ tavor_wqe_srq_build(tavor_state_t *state, tavor_srqhdl_t srq,
 		TAVOR_WQE_BUILD_DATA_SEG_SRQ(srq, &ds[num_ds], &end_sgl);
 	}
 
-	TAVOR_TNF_EXIT(tavor_wqe_srq_build);
 	return (DDI_SUCCESS);
 }
 
@@ -2087,8 +1970,6 @@ tavor_wqe_sync(void *hdl, uint_t sync_from, uint_t sync_to,
 	uint32_t		qsize;
 	int			status;
 
-	TAVOR_TNF_ENTER(tavor_wqe_sync);
-
 	if (sync_type == TAVOR_WR_SRQ) {
 		srq = (tavor_srqhdl_t)hdl;
 		is_sync_req = srq->srq_sync;
@@ -2103,7 +1984,6 @@ tavor_wqe_sync(void *hdl, uint_t sync_from, uint_t sync_to,
 
 	/* Determine if the work queues need to be synced or not */
 	if (is_sync_req == 0) {
-		TAVOR_TNF_EXIT(tavor_wqe_sync);
 		return;
 	}
 
@@ -2155,8 +2035,6 @@ tavor_wqe_sync(void *hdl, uint_t sync_from, uint_t sync_to,
 
 		status = ddi_dma_sync(dmahdl, offset, length, flag);
 		if (status != DDI_SUCCESS) {
-			TNF_PROBE_0(tavor_wqe_sync_fail, TAVOR_TNF_ERROR, "");
-			TAVOR_TNF_EXIT(tavor_wqe_sync);
 			return;
 		}
 	} else {
@@ -2166,9 +2044,6 @@ tavor_wqe_sync(void *hdl, uint_t sync_from, uint_t sync_to,
 		if (length) {
 			status = ddi_dma_sync(dmahdl, offset, length, flag);
 			if (status != DDI_SUCCESS) {
-				TNF_PROBE_0(tavor_wqe_sync_fail,
-				    TAVOR_TNF_ERROR, "");
-				TAVOR_TNF_EXIT(tavor_wqe_sync);
 				return;
 			}
 		}
@@ -2178,13 +2053,9 @@ tavor_wqe_sync(void *hdl, uint_t sync_from, uint_t sync_to,
 		length = (size_t)((uintptr_t)wqe_top - (uintptr_t)wqe_from);
 		status = ddi_dma_sync(dmahdl, offset, length, flag);
 		if (status != DDI_SUCCESS) {
-			TNF_PROBE_0(tavor_wqe_sync_fail, TAVOR_TNF_ERROR, "");
-			TAVOR_TNF_EXIT(tavor_wqe_sync);
 			return;
 		}
 	}
-
-	TAVOR_TNF_EXIT(tavor_wqe_sync);
 }
 
 
@@ -2203,23 +2074,15 @@ tavor_wr_bind_check(tavor_state_t *state, ibt_send_wr_t *wr)
 	tavor_rsrc_t		*mpt;
 	uint32_t		new_rkey;
 
-	TAVOR_TNF_ENTER(tavor_wr_bind_check);
-
 	/* Check for a valid Memory Window handle in the WR */
 	mw = (tavor_mwhdl_t)wr->wr.rc.rcwr.bind->bind_ibt_mw_hdl;
 	if (mw == NULL) {
-		TNF_PROBE_0(tavor_wr_bind_check_invmwhdl_fail,
-		    TAVOR_TNF_ERROR, "");
-		TAVOR_TNF_EXIT(tavor_wr_bind_check);
 		return (IBT_MW_HDL_INVALID);
 	}
 
 	/* Check for a valid Memory Region handle in the WR */
 	mr = (tavor_mrhdl_t)wr->wr.rc.rcwr.bind->bind_ibt_mr_hdl;
 	if (mr == NULL) {
-		TNF_PROBE_0(tavor_wr_bind_check_invmrhdl_fail,
-		    TAVOR_TNF_ERROR, "");
-		TAVOR_TNF_EXIT(tavor_wr_bind_check);
 		return (IBT_MR_HDL_INVALID);
 	}
 
@@ -2234,9 +2097,6 @@ tavor_wr_bind_check(tavor_state_t *state, ibt_send_wr_t *wr)
 	if ((mr->mr_is_umem) && (mr->mr_umemcookie == NULL)) {
 		mutex_exit(&mr->mr_lock);
 		mutex_exit(&mw->mr_lock);
-		TNF_PROBE_0(tavor_wr_bind_check_invmrhdl2_fail,
-		    TAVOR_TNF_ERROR, "");
-		TAVOR_TNF_EXIT(tavor_wr_bind_check);
 		return (IBT_MR_HDL_INVALID);
 	}
 
@@ -2244,9 +2104,6 @@ tavor_wr_bind_check(tavor_state_t *state, ibt_send_wr_t *wr)
 	if (mw->mr_rkey != wr->wr.rc.rcwr.bind->bind_rkey) {
 		mutex_exit(&mr->mr_lock);
 		mutex_exit(&mw->mr_lock);
-		TNF_PROBE_0(tavor_wr_bind_check_invrkey_fail,
-		    TAVOR_TNF_ERROR, "");
-		TAVOR_TNF_EXIT(tavor_wr_bind_check);
 		return (IBT_MR_RKEY_INVALID);
 	}
 
@@ -2254,9 +2111,6 @@ tavor_wr_bind_check(tavor_state_t *state, ibt_send_wr_t *wr)
 	if (mr->mr_lkey != wr->wr.rc.rcwr.bind->bind_lkey) {
 		mutex_exit(&mr->mr_lock);
 		mutex_exit(&mw->mr_lock);
-		TNF_PROBE_0(tavor_wr_bind_check_invlkey_fail,
-		    TAVOR_TNF_ERROR, "");
-		TAVOR_TNF_EXIT(tavor_wr_bind_check);
 		return (IBT_MR_LKEY_INVALID);
 	}
 
@@ -2273,18 +2127,12 @@ tavor_wr_bind_check(tavor_state_t *state, ibt_send_wr_t *wr)
 		if ((vaddr < reg_start_addr) || (vaddr > reg_end_addr)) {
 			mutex_exit(&mr->mr_lock);
 			mutex_exit(&mw->mr_lock);
-			TNF_PROBE_0(tavor_wr_bind_check_inv_vaddr_fail,
-			    TAVOR_TNF_ERROR, "");
-			TAVOR_TNF_EXIT(tavor_wr_bind_check);
 			return (IBT_MR_VA_INVALID);
 		}
 		vaddr = (vaddr + len) - 1;
 		if (vaddr > reg_end_addr) {
 			mutex_exit(&mr->mr_lock);
 			mutex_exit(&mw->mr_lock);
-			TNF_PROBE_0(tavor_wr_bind_check_invlen_fail,
-			    TAVOR_TNF_ERROR, "");
-			TAVOR_TNF_EXIT(tavor_wr_bind_check);
 			return (IBT_MR_LEN_INVALID);
 		}
 	}
@@ -2300,9 +2148,6 @@ tavor_wr_bind_check(tavor_state_t *state, ibt_send_wr_t *wr)
 	    !(mr->mr_accflag & IBT_MR_LOCAL_WRITE)) {
 		mutex_exit(&mr->mr_lock);
 		mutex_exit(&mw->mr_lock);
-		TNF_PROBE_0(tavor_wr_bind_check_invflags_fail,
-		    TAVOR_TNF_ERROR, "");
-		TAVOR_TNF_EXIT(tavor_wr_bind_check);
 		return (IBT_MR_ACCESS_REQ_INVALID);
 	}
 
@@ -2315,7 +2160,6 @@ tavor_wr_bind_check(tavor_state_t *state, ibt_send_wr_t *wr)
 
 	mutex_exit(&mr->mr_lock);
 	mutex_exit(&mw->mr_lock);
-	TAVOR_TNF_EXIT(tavor_wr_bind_check);
 	return (DDI_SUCCESS);
 }
 
@@ -2332,8 +2176,6 @@ tavor_wrid_from_reset_handling(tavor_state_t *state, tavor_qphdl_t qp)
 	uint_t			create_new_swq = 0, create_new_rwq = 0;
 	uint_t			create_wql = 0;
 	uint_t			qp_srq_en;
-
-	TAVOR_TNF_ENTER(tavor_wrid_from_reset_handling);
 
 	/*
 	 * For each of this QP's Work Queues, make sure we have a (properly
@@ -2355,9 +2197,6 @@ tavor_wrid_from_reset_handling(tavor_state_t *state, tavor_qphdl_t qp)
 			 * header, then drop the lock(s) and return failure.
 			 */
 			tavor_wrid_wqhdr_unlock_both(qp);
-			TNF_PROBE_0(tavor_wrid_from_reset_handling_wqhdr_fail,
-			    TAVOR_TNF_ERROR, "");
-			TAVOR_TNF_EXIT(tavor_wrid_from_reset_handling);
 			return (ibc_get_ci_failure(0));
 		}
 	}
@@ -2384,9 +2223,6 @@ tavor_wrid_from_reset_handling(tavor_state_t *state, tavor_qphdl_t qp)
 		}
 
 		tavor_wrid_wqhdr_unlock_both(qp);
-		TNF_PROBE_0(tavor_wrid_from_reset_handling_wridlist_fail,
-		    TAVOR_TNF_ERROR, "");
-		TAVOR_TNF_EXIT(tavor_wrid_from_reset_handling);
 		return (ibc_get_ci_failure(0));
 	}
 	_NOTE(NOW_INVISIBLE_TO_OTHER_THREADS(*s_wridlist))
@@ -2456,9 +2292,6 @@ tavor_wrid_from_reset_handling(tavor_state_t *state, tavor_qphdl_t qp)
 #endif
 
 			tavor_wrid_wqhdr_unlock_both(qp);
-			TNF_PROBE_0(tavor_wrid_from_reset_handling_wqhdr_fail,
-			    TAVOR_TNF_ERROR, "");
-			TAVOR_TNF_EXIT(tavor_wrid_from_reset_handling);
 			return (ibc_get_ci_failure(0));
 		}
 	}
@@ -2540,9 +2373,6 @@ tavor_wrid_from_reset_handling(tavor_state_t *state, tavor_qphdl_t qp)
 #endif
 
 		tavor_wrid_wqhdr_unlock_both(qp);
-		TNF_PROBE_0(tavor_wrid_from_reset_handling_wridlist_fail,
-		    TAVOR_TNF_ERROR, "");
-		TAVOR_TNF_EXIT(tavor_wrid_from_reset_handling);
 		return (ibc_get_ci_failure(0));
 	}
 	_NOTE(NOW_INVISIBLE_TO_OTHER_THREADS(*r_wridlist))
@@ -2600,7 +2430,6 @@ tavor_wrid_from_reset_handling(tavor_state_t *state, tavor_qphdl_t qp)
 	_NOTE(NOW_VISIBLE_TO_OTHER_THREADS(*swq))
 
 	tavor_wrid_wqhdr_unlock_both(qp);
-	TAVOR_TNF_EXIT(tavor_wrid_from_reset_handling);
 	return (DDI_SUCCESS);
 }
 
@@ -2613,8 +2442,6 @@ void
 tavor_wrid_to_reset_handling(tavor_state_t *state, tavor_qphdl_t qp)
 {
 	uint_t		free_wqhdr = 0;
-
-	TAVOR_TNF_ENTER(tavor_wrid_to_reset_handling);
 
 	/*
 	 * For each of this QP's Work Queues, move the WRID "container" to
@@ -2668,8 +2495,6 @@ tavor_wrid_to_reset_handling(tavor_state_t *state, tavor_qphdl_t qp)
 	}
 	tavor_wrid_wqhdr_unlock_both(qp);
 	mutex_exit(&qp->qp_rq_cqhdl->cq_lock);
-
-	TAVOR_TNF_EXIT(tavor_wrid_to_reset_handling);
 }
 
 
@@ -2683,8 +2508,6 @@ tavor_wrid_add_entry(tavor_workq_hdr_t *wq, uint64_t wrid, uint32_t wqeaddrsz,
 {
 	tavor_wrid_entry_t	*wre_tmp;
 	uint32_t		head, tail, size;
-
-	TAVOR_TNF_ENTER(tavor_wrid_add_entry);
 
 	ASSERT(MUTEX_HELD(&wq->wq_wrid_wql->wql_lock));
 
@@ -2725,7 +2548,6 @@ tavor_wrid_add_entry(tavor_workq_hdr_t *wq, uint64_t wrid, uint32_t wqeaddrsz,
 	if (head == tail) {
 		wq->wq_wrid_post->wl_full = 1;
 	}
-	TAVOR_TNF_EXIT(tavor_wrid_add_entry);
 }
 
 /*
@@ -2738,8 +2560,6 @@ tavor_wrid_add_entry_srq(tavor_srqhdl_t srq, uint64_t wrid, uint_t signaled_dbd)
 	tavor_wrid_entry_t	*wre;
 	uint64_t		*wl_wqe;
 	uint32_t		wqe_index;
-
-	TAVOR_TNF_ENTER(tavor_wrid_add_entry_srq);
 
 	/*
 	 * Find the next available WQE from the SRQ free_list.  Then update the
@@ -2766,8 +2586,6 @@ tavor_wrid_add_entry_srq(tavor_srqhdl_t srq, uint64_t wrid, uint_t signaled_dbd)
 	/* Update the free list index */
 	srq->srq_wridlist->wl_free_list_indx = ddi_get32(
 	    srq->srq_wridlist->wl_acchdl, (uint32_t *)wl_wqe);
-
-	TAVOR_TNF_EXIT(tavor_wrid_add_entry_srq);
 }
 
 
@@ -2783,8 +2601,6 @@ tavor_wrid_get_entry(tavor_cqhdl_t cq, tavor_hw_cqe_t *cqe,
 	tavor_wrid_entry_t	*wre_tmp;
 	uint64_t		wrid;
 	uint_t			send_or_recv, qpnum, error, opcode;
-
-	TAVOR_TNF_ENTER(tavor_wrid_get_entry);
 
 	/* Lock the list of work queues associated with this CQ */
 	mutex_enter(&cq->cq_wrid_wqhdr_lock);
@@ -2847,7 +2663,6 @@ tavor_wrid_get_entry(tavor_cqhdl_t cq, tavor_hw_cqe_t *cqe,
 	mutex_exit(&wq->wq_wrid_wql->wql_lock);
 	mutex_exit(&cq->cq_wrid_wqhdr_lock);
 
-	TAVOR_TNF_EXIT(tavor_wrid_get_entry);
 	return (wrid);
 }
 
@@ -2865,8 +2680,6 @@ tavor_wrid_find_match(tavor_workq_hdr_t *wq, tavor_cqhdl_t cq,
 	uint32_t		wqeaddr_size;
 	uint32_t		head, tail, size;
 	int			found = 0, last_container;
-
-	TAVOR_TNF_ENTER(tavor_wrid_find_match);
 
 	ASSERT(MUTEX_HELD(&wq->wq_wrid_wql->wql_lock));
 
@@ -2985,7 +2798,6 @@ tavor_wrid_find_match(tavor_workq_hdr_t *wq, tavor_cqhdl_t cq,
 	/* Ensure that we've actually found what we were searching for */
 	ASSERT(curr != NULL);
 
-	TAVOR_TNF_EXIT(tavor_wrid_find_match);
 	return (curr);
 }
 
@@ -3058,8 +2870,6 @@ tavor_wrid_cq_reap(tavor_cqhdl_t cq)
 
 	ASSERT(MUTEX_HELD(&cq->cq_lock));
 
-	TAVOR_TNF_ENTER(tavor_wrid_cq_reap);
-
 	/* Lock the list of work queues associated with this CQ */
 	mutex_enter(&cq->cq_wrid_wqhdr_lock);
 
@@ -3083,7 +2893,6 @@ tavor_wrid_cq_reap(tavor_cqhdl_t cq)
 	cq->cq_wrid_reap_head = cq->cq_wrid_reap_tail = NULL;
 
 	mutex_exit(&cq->cq_wrid_wqhdr_lock);
-	TAVOR_TNF_EXIT(tavor_wrid_cq_reap);
 }
 
 
@@ -3100,8 +2909,6 @@ tavor_wrid_cq_force_reap(tavor_cqhdl_t cq)
 	void			*cookie = NULL;
 
 	ASSERT(MUTEX_HELD(&cq->cq_lock));
-
-	TAVOR_TNF_ENTER(tavor_wrid_cq_reap);
 
 	/*
 	 * The first step is to walk the "reapable" list and free up those
@@ -3150,7 +2957,6 @@ tavor_wrid_cq_force_reap(tavor_cqhdl_t cq)
 	avl_destroy(treep);
 
 	mutex_exit(&cq->cq_wrid_wqhdr_lock);
-	TAVOR_TNF_EXIT(tavor_wrid_cq_reap);
 }
 
 
@@ -3262,8 +3068,6 @@ tavor_wrid_reaplist_add(tavor_cqhdl_t cq, tavor_workq_hdr_t *wq)
 {
 	ASSERT(MUTEX_HELD(&cq->cq_wrid_wqhdr_lock));
 
-	TAVOR_TNF_ENTER(tavor_wrid_reaplist_add);
-
 	mutex_enter(&wq->wq_wrid_wql->wql_lock);
 
 	/*
@@ -3315,8 +3119,6 @@ tavor_wrid_wqhdr_find(tavor_cqhdl_t cq, uint_t qpn, uint_t wq_type)
 	tavor_workq_hdr_t	*curr;
 	tavor_workq_compare_t	cmp;
 
-	TAVOR_TNF_ENTER(tavor_wrid_wqhdr_find);
-
 	ASSERT(MUTEX_HELD(&cq->cq_wrid_wqhdr_lock));
 
 	/*
@@ -3332,7 +3134,6 @@ tavor_wrid_wqhdr_find(tavor_cqhdl_t cq, uint_t qpn, uint_t wq_type)
 #endif
 	curr = avl_find(&cq->cq_wrid_wqhdr_avl_tree, &cmp, NULL);
 
-	TAVOR_TNF_EXIT(tavor_wrid_wqhdr_find);
 	return (curr);
 }
 
@@ -3347,8 +3148,6 @@ tavor_wrid_wqhdr_create(tavor_state_t *state, tavor_cqhdl_t cq, uint_t qpn,
 {
 	tavor_workq_hdr_t	*wqhdr_tmp;
 
-	TAVOR_TNF_ENTER(tavor_wrid_wqhdr_create);
-
 	ASSERT(MUTEX_HELD(&cq->cq_wrid_wqhdr_lock));
 
 	/*
@@ -3361,7 +3160,6 @@ tavor_wrid_wqhdr_create(tavor_state_t *state, tavor_cqhdl_t cq, uint_t qpn,
 	wqhdr_tmp = (tavor_workq_hdr_t *)kmem_zalloc(
 	    sizeof (tavor_workq_hdr_t), KM_NOSLEEP);
 	if (wqhdr_tmp == NULL) {
-		TAVOR_TNF_EXIT(tavor_wrid_wqhdr_create);
 		return (NULL);
 	}
 	_NOTE(NOW_INVISIBLE_TO_OTHER_THREADS(*wqhdr_tmp))
@@ -3372,7 +3170,6 @@ tavor_wrid_wqhdr_create(tavor_state_t *state, tavor_cqhdl_t cq, uint_t qpn,
 		wqhdr_tmp->wq_wrid_wql = tavor_wrid_wql_create(state);
 		if (wqhdr_tmp->wq_wrid_wql == NULL) {
 			kmem_free(wqhdr_tmp, sizeof (tavor_workq_hdr_t));
-			TAVOR_TNF_EXIT(tavor_wrid_wqhdr_create);
 			return (NULL);
 		}
 	}
@@ -3383,7 +3180,6 @@ tavor_wrid_wqhdr_create(tavor_state_t *state, tavor_cqhdl_t cq, uint_t qpn,
 	/* Chain the newly allocated work queue header to the CQ's list */
 	tavor_cq_wqhdr_add(cq, wqhdr_tmp);
 
-	TAVOR_TNF_EXIT(tavor_wrid_wqhdr_create);
 	return (wqhdr_tmp);
 }
 
@@ -3397,14 +3193,11 @@ tavor_wrid_wql_create(tavor_state_t *state)
 {
 	tavor_wq_lock_t *wql;
 
-	TAVOR_TNF_ENTER(tavor_wrid_wql_create);
-
 	/*
 	 * Allocate the WQL and initialize it.
 	 */
 	wql = kmem_zalloc(sizeof (tavor_wq_lock_t), KM_NOSLEEP);
 	if (wql == NULL) {
-		TAVOR_TNF_EXIT(tavor_wrid_wqhdr_create);
 		return (NULL);
 	}
 
@@ -3414,7 +3207,6 @@ tavor_wrid_wql_create(tavor_state_t *state)
 	/* Add refcount to WQL */
 	tavor_wql_refcnt_inc(wql);
 
-	TAVOR_TNF_EXIT(tavor_wrid_wql_create);
 	return (wql);
 }
 
@@ -3529,8 +3321,6 @@ tavor_wrid_list_reap(tavor_wrid_list_hdr_t *wridlist)
 	tavor_wrid_list_hdr_t	*prev, *next;
 	uint32_t		size;
 
-	TAVOR_TNF_ENTER(tavor_wrid_list_reap);
-
 	/* Get the back pointer to the work queue header (see below) */
 	wqhdr = wridlist->wl_wqhdr;
 	mutex_enter(&wqhdr->wq_wrid_wql->wql_lock);
@@ -3570,7 +3360,6 @@ tavor_wrid_list_reap(tavor_wrid_list_hdr_t *wridlist)
 
 	mutex_exit(&wqhdr->wq_wrid_wql->wql_lock);
 
-	TAVOR_TNF_EXIT(tavor_wrid_list_reap);
 	return (consume_wqhdr);
 }
 

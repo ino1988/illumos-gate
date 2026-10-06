@@ -18,10 +18,16 @@
  *
  * CDDL HEADER END
  */
+
 /*
  * Copyright 2009 Sun Microsystems, Inc.  All rights reserved.
  * Use is subject to license terms.
+ */
+
+/*
  * Copyright (c) 2012, Joyent, Inc. All rights reserved.
+ * Copyright 2017 Nexenta Systems, Inc.
+ * Copyright 2024 Sebastian Wiedenroth
  */
 
 #ifndef _LIBDISKMGT_H
@@ -307,7 +313,6 @@ typedef enum {
 #define	DM_DISK_UP		1
 #define	DM_DISK_DOWN		0
 
-#define	DM_CLUSTERED		"clustered"
 #define	DM_DRVTYPE		"drvtype"
 #define	DM_FAILING		"failing"
 #define	DM_LOADED		"loaded"	/* also in media */
@@ -327,6 +332,7 @@ typedef enum {
 #define	DM_PRODUCT_ID		"product_id"
 #define	DM_REMOVABLE		"removable"	/* also in media */
 #define	DM_RPM			"rpm"
+#define	DM_SERIAL		"serial"
 #define	DM_SOLIDSTATE		"solid_state"
 #define	DM_STATUS		"status"
 #define	DM_SYNC_SPEED		"sync_speed"
@@ -349,9 +355,13 @@ typedef enum {
 #define	DM_PATH_STATE		"path_state"
 
 #define	DM_CTYPE_ATA		"ata"
+#define	DM_CTYPE_FIBRE		"fibre"
+#define	DM_CTYPE_LOFI		"lofi"
+#define	DM_CTYPE_NVME		"nvme"
+#define	DM_CTYPE_SATA		"sata"
 #define	DM_CTYPE_SCSI		"scsi"
-#define	DM_CTYPE_FIBRE		"fibre channel"
 #define	DM_CTYPE_USB		"usb"
+#define	DM_CTYPE_XEN		"xen"
 #define	DM_CTYPE_UNKNOWN	"unknown"
 
 /* media */
@@ -394,7 +404,6 @@ typedef enum {
 #define	DM_USED_BY		"used_by"
 #define	DM_USED_NAME		"used_name"
 #define	DM_USE_MOUNT		"mount"
-#define	DM_USE_SVM		"svm"
 #define	DM_USE_LU		"lu"
 #define	DM_USE_DUMP		"dump"
 #define	DM_USE_VXVM		"vxvm"

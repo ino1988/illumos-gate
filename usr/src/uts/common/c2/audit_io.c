@@ -20,6 +20,7 @@
  */
 /*
  * Copyright (c) 1992, 2010, Oracle and/or its affiliates. All rights reserved.
+ * Copyright 2020 The University of Queensland
  */
 
 /*
@@ -72,8 +73,7 @@ static int state_if_not_part[] = {
  * Add the au_membuf to the descriptor chain and free the chain passed in.
  */
 void
-au_uwrite(m)
-	token_t *m;
+au_uwrite(token_t *m)
 {
 	au_write(&(u_ad), m);
 }
@@ -231,9 +231,9 @@ void
 au_close_time(au_kcontext_t *kctx, token_t *dchain, int flag, au_event_t e_type,
     au_emod_t e_mod, timestruc_t *etime)
 {
-	token_t 	*record;	/* au_membuf chain == the record */
+	token_t		*record;	/* au_membuf chain == the record */
 	int		byte_count;
-	token_t 	*m;		/* for potential sequence token */
+	token_t		*m;		/* for potential sequence token */
 	adr_t		hadr;		/* handle for header token */
 	adr_t		sadr;		/* handle for sequence token */
 	size_t		zone_length;	/* length of zonename token */
@@ -548,6 +548,15 @@ au_door_upcall(au_kcontext_t *kctx, au_dbuf_t *aubuf)
 
 		retry = 0;
 		mutex_enter(&(kctx->auk_svc_lock));
+		/*
+		 * Only holding auk_svc_lock prevents this from changing, so
+		 * we need to double-check that the vp isn't NULL before we
+		 * call door_upcall (which will blindly deref it).
+		 */
+		if (kctx->auk_current_vp == NULL) {
+			mutex_exit(&(kctx->auk_svc_lock));
+			return (-1);
+		}
 		rc = door_upcall(kctx->auk_current_vp, &darg, NULL,
 		    SIZE_MAX, 0);
 		if (rc != 0) {
@@ -616,7 +625,8 @@ au_doormsg(au_kcontext_t *kctx, uint32_t message_code, void *message)
  * records in buffers of up to auk_queue.buflen in size.
  */
 int
-au_doorio(au_kcontext_t *kctx) {
+au_doorio(au_kcontext_t *kctx)
+{
 	off_t		off;	/* space used in buffer */
 	ssize_t		used;	/* space used in au_membuf */
 	token_t		*cAR;	/* current AR being processed */
@@ -812,7 +822,7 @@ audit_async_start(label_t *jb, au_event_t event, int sorf)
 	if (sorf & AUM_FAIL)
 		failure = kctx->auk_info.ai_namask.as_failure & estate;
 
-	if ((success | failure) == NULL)
+	if ((success | failure) == 0)
 		return (1);
 
 	ASSERT(tad->tad_errjmp == NULL);

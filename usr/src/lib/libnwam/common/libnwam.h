@@ -20,6 +20,7 @@
  */
 /*
  * Copyright (c) 2008, 2010, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2016, Chris Fraire <cfraire@me.com>.
  */
 
 /*
@@ -447,6 +448,8 @@ typedef enum {
 #define	NWAM_NCU_PROP_IPV6_ADDRSRC		"ipv6-addrsrc"
 #define	NWAM_NCU_PROP_IPV6_ADDR			"ipv6-addr"
 #define	NWAM_NCU_PROP_IPV6_DEFAULT_ROUTE	"ipv6-default-route"
+#define	NWAM_NCU_PROP_IP_PRIMARY		"ip-primary"
+#define	NWAM_NCU_PROP_IP_REQHOST		"ip-reqhost"
 
 /* Some properties should only be set on creation */
 #define	NWAM_NCU_PROP_SETONCE(prop)	\
@@ -964,10 +967,15 @@ typedef enum {
 } nwam_object_type_t;
 
 typedef struct nwam_event *nwam_event_t;
+/*
+ * Be aware the first element have to be of type long! See msgsnd(2).
+ * Different size of long in 32-bit and 64-bit will be handled by kernel system
+ * call. Data followed the long have to be the same in 32-bit and 64-bit.
+ */
 struct nwam_event {
-	int nwe_type;
+	long nwe_type;
 	uint32_t nwe_size;
-
+	uint32_t nwe_pad1;
 	union {
 		struct nwam_event_object_action {
 			nwam_object_type_t nwe_object_type;

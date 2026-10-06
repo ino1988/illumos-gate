@@ -23,8 +23,6 @@
  * Use is subject to license terms.
  */
 
-#pragma ident	"%Z%%M%	%I%	%E% SMI"
-
 #include <stdio.h>
 #include <unistd.h>
 #include <stdlib.h>
@@ -369,7 +367,7 @@ print_desc(uint32_t addr, int32_t id)
 	 * find out the type of tag
 	 * and print the descriptor
 	 */
-	if (addr != NULL) {
+	if (addr != 0) {
 		if ((baddr = getblk(addr & (~bmask))) == NULL) {
 			(void) fprintf(stdout,
 				gettext("Could not read block %x\n"),
@@ -814,6 +812,8 @@ get_blkno(uint32_t inode, uint32_t *blkno, uint64_t off)
 			return (1);
 		}
 		desc_type = SWAP_16(fe->fe_icb_tag.itag_flags) & 0x7;
+		sad = NULL;
+		lad = NULL;
 		if (desc_type == ICB_FLAG_SHORT_AD) {
 			elen = sizeof (struct short_ad);
 			/* LINTED */
@@ -842,14 +842,21 @@ get_blkno(uint32_t inode, uint32_t *blkno, uint64_t off)
 		in = inode;
 		de_count = nent;
 		for (d = 0, i = 0; i < nent; i++) {
-			if (desc_type == ICB_FLAG_SHORT_AD) {
+			switch (desc_type) {
+			case ICB_FLAG_SHORT_AD:
 				prn = 0;
 				bno = SWAP_32(sad->sad_ext_loc);
 				len = SWAP_32(sad->sad_ext_len);
-			} else if (desc_type == ICB_FLAG_LONG_AD) {
+				break;
+			case ICB_FLAG_LONG_AD:
 				prn = SWAP_16(lad->lad_ext_prn);
 				bno = SWAP_32(lad->lad_ext_loc);
 				len = SWAP_32(lad->lad_ext_len);
+				break;
+			default:
+				prn = 0;
+				bno = 0;
+				len = 0;
 			}
 			flags = len >> 30;
 			if (flags == 0x3) {

@@ -22,6 +22,7 @@
 /*
  * Copyright (c) 2008, 2010, Oracle and/or its affiliates. All rights reserved.
  * Copyright 2012 OmniTI Computer Consulting, Inc.  All rights reserved.
+ * Copyright 2021 OmniOS Community Edition (OmniOSce) Association.
  */
 
 #include <Python.h>
@@ -49,8 +50,8 @@ enum {
 
 PyObject *beCreateSnapshot(PyObject *, PyObject *);
 PyObject *beCopy(PyObject *, PyObject *);
-PyObject *beList(PyObject *, PyObject *);
-PyObject *beActivate(PyObject *, PyObject *);
+PyObject *beList(PyObject *, PyObject *, PyObject *);
+PyObject *beActivate(PyObject *, PyObject *, PyObject *);
 PyObject *beDestroy(PyObject *, PyObject *);
 PyObject *beDestroySnapshot(PyObject *, PyObject *);
 PyObject *beRename(PyObject *, PyObject *);
@@ -59,7 +60,6 @@ PyObject *beUnmount(PyObject *, PyObject *);
 PyObject *bePrintErrors(PyObject *, PyObject *);
 PyObject *beGetErrDesc(PyObject *, PyObject *);
 char *beMapLibbePyErrorToString(int);
-void initlibbe_py();
 
 static boolean_t convertBEInfoToDictionary(be_node_list_t *be,
     PyObject **listDict);
@@ -93,7 +93,6 @@ static boolean_t convertPyArgsToNvlist(nvlist_t **nvList, int numArgs, ...);
  * Scope:
  *      Public
  */
-/* ARGSUSED */
 PyObject *
 beCreateSnapshot(PyObject *self, PyObject *args)
 {
@@ -159,7 +158,6 @@ beCreateSnapshot(PyObject *self, PyObject *args)
  * Scope:
  *      Public
  */
-/* ARGSUSED */
 PyObject *
 beCopy(PyObject *self, PyObject *args)
 {
@@ -202,9 +200,15 @@ beCopy(PyObject *self, PyObject *args)
 			    NULL, NULL));
 		}
 		while (PyDict_Next(beNameProperties, &pos, &pkey, &pvalue)) {
+#if PY_MAJOR_VERSION >= 3
+			if (!convertPyArgsToNvlist(&beProps, 2,
+			    PyUnicode_AsUTF8(pkey),
+			    PyUnicode_AsUTF8(pvalue))) {
+#else
 			if (!convertPyArgsToNvlist(&beProps, 2,
 			    PyString_AsString(pkey),
 			    PyString_AsString(pvalue))) {
+#endif
 				nvlist_free(beProps);
 				nvlist_free(beAttrs);
 				return (Py_BuildValue("[iss]", BE_PY_ERR_NVLIST,
@@ -222,7 +226,7 @@ beCopy(PyObject *self, PyObject *args)
 		    NULL, NULL));
 	}
 
-	if (beProps != NULL) nvlist_free(beProps);
+	nvlist_free(beProps);
 
 	if (trgtBeName == NULL) {
 		/*
@@ -269,7 +273,8 @@ beCopy(PyObject *self, PyObject *args)
  *              to gather information about Boot Environments
  * Parameters:
  *   args -     pointer to a python object containing:
- *     beName - The name of the BE to list (optional)
+ *     bename  - The name of the BE to list (optional)
+ *     nosnaps - boolean indicating whether to exclude snapshots (optional)
  *
  * Returns a pointer to a python object. That Python object will consist of
  * the return code and a list of Dicts or NULL.
@@ -278,16 +283,19 @@ beCopy(PyObject *self, PyObject *args)
  * Scope:
  *      Public
  */
-/* ARGSUSED */
 PyObject *
-beList(PyObject *self, PyObject *args)
+beList(PyObject *self, PyObject *args, PyObject *keywds)
 {
 	char	*beName = NULL;
+	int	noSnaps = 0;
 	int	ret = BE_PY_SUCCESS;
 	be_node_list_t *list = NULL;
 	be_node_list_t *be = NULL;
 	PyObject *dict = NULL;
 	PyObject *listOfDicts = NULL;
+	uint64_t listopts = BE_LIST_SNAPSHOTS;
+
+	static char *kwlist[] = {"bename", "nosnaps", NULL};
 
 	if ((listOfDicts = PyList_New(0)) == NULL) {
 		ret = BE_PY_ERR_DICT;
@@ -295,12 +303,16 @@ beList(PyObject *self, PyObject *args)
 		goto done;
 	}
 
-	if (!PyArg_ParseTuple(args, "|z", &beName)) {
+	if (!PyArg_ParseTupleAndKeywords(args, keywds, "|zi",
+	    kwlist, &beName, &noSnaps)) {
 		ret = BE_PY_ERR_PARSETUPLE;
 		goto done;
 	}
 
-	if ((ret = be_list(beName, &list)) != BE_SUCCESS) {
+	if (noSnaps)
+		listopts &= ~BE_LIST_SNAPSHOTS;
+
+	if ((ret = be_list(beName, &list, listopts)) != BE_SUCCESS) {
 		goto done;
 	}
 
@@ -398,7 +410,10 @@ done:
  *              to activate a Boot Environment
  * Parameters:
  *   args -     pointer to a python object containing:
- *     beName - The name of the BE to activate
+ *     bename    - The name of the BE to activate
+ *     temporary - If True, perform a temporary BE activation
+ *                 If False, remove a temporary BE activation
+ *                 If not present, do nothing in regard to temporary activation
  *
  * Returns a pointer to a python object:
  *      BE_SUCCESS - Success
@@ -406,28 +421,36 @@ done:
  * Scope:
  *      Public
  */
-/* ARGSUSED */
 PyObject *
-beActivate(PyObject *self, PyObject *args)
+beActivate(PyObject *self, PyObject *args, PyObject *keywds)
 {
 	char		*beName = NULL;
 	int		ret = BE_PY_SUCCESS;
 	nvlist_t	*beAttrs = NULL;
+	int		temp = -1;
 
-	if (!PyArg_ParseTuple(args, "z", &beName)) {
-		return (Py_BuildValue("i", BE_PY_ERR_PARSETUPLE));
+	static char *kwlist[] = {"bename", "temporary", NULL};
+
+	if (!PyArg_ParseTupleAndKeywords(args, keywds, "z|i",
+	    kwlist, &beName, &temp)) {
+		ret = BE_PY_ERR_PARSETUPLE;
+		goto done;
 	}
 
-	if (!convertPyArgsToNvlist(&beAttrs, 2, BE_ATTR_ORIG_BE_NAME, beName)) {
-		nvlist_free(beAttrs);
-		return (Py_BuildValue("i", BE_PY_ERR_NVLIST));
+	if (!convertPyArgsToNvlist(&beAttrs, 2, BE_ATTR_ORIG_BE_NAME, beName) ||
+	    beAttrs == NULL) {
+		ret = BE_PY_ERR_NVLIST;
+		goto done;
 	}
 
-	if (beAttrs == NULL) {
-		return (Py_BuildValue("i", BE_PY_ERR_NVLIST));
+	if (temp != -1 && nvlist_add_boolean_value(beAttrs,
+	    BE_ATTR_ACTIVE_NEXTBOOT, temp == 0 ? B_FALSE : B_TRUE) != 0) {
+		ret = BE_PY_ERR_NVLIST;
+		goto done;
 	}
 
 	ret = be_activate(beAttrs);
+done:
 	nvlist_free(beAttrs);
 	return (Py_BuildValue("i", ret));
 }
@@ -446,7 +469,6 @@ beActivate(PyObject *self, PyObject *args)
  * Scope:
  *      Public
  */
-/* ARGSUSED */
 PyObject *
 beDestroy(PyObject *self, PyObject *args)
 {
@@ -505,7 +527,6 @@ beDestroy(PyObject *self, PyObject *args)
  * Scope:
  *      Public
  */
-/* ARGSUSED */
 PyObject *
 beDestroySnapshot(PyObject *self, PyObject *args)
 {
@@ -549,7 +570,6 @@ beDestroySnapshot(PyObject *self, PyObject *args)
  * Scope:
  *      Public
  */
-/* ARGSUSED */
 PyObject *
 beRename(PyObject *self, PyObject *args)
 {
@@ -594,7 +614,6 @@ beRename(PyObject *self, PyObject *args)
  * Scope:
  *      Public
  */
-/* ARGSUSED */
 PyObject *
 beMount(PyObject *self, PyObject *args)
 {
@@ -637,11 +656,10 @@ beMount(PyObject *self, PyObject *args)
  * Scope:
  *      Public
  */
-/* ARGSUSED */
 PyObject *
 beUnmount(PyObject *self, PyObject *args)
 {
-	char 		*beName = NULL;
+	char		*beName = NULL;
 	int		force_unmount = 0;
 	int		unmount_flags = 0;
 	int		ret = BE_PY_SUCCESS;
@@ -692,7 +710,6 @@ beUnmount(PyObject *self, PyObject *args)
  * Scope:
  *      Public
  */
-/* ARGSUSED */
 PyObject *
 beRollback(PyObject *self, PyObject *args)
 {
@@ -738,7 +755,6 @@ beRollback(PyObject *self, PyObject *args)
  * Scope:
  *      Public
  */
-/* ARGSUSED */
 PyObject *
 bePrintErrors(PyObject *self, PyObject *args)
 {
@@ -763,7 +779,6 @@ bePrintErrors(PyObject *self, PyObject *args)
  * Scope:
  *      Public
  */
-/* ARGSUSED */
 PyObject *
 beGetErrDesc(PyObject *self, PyObject *args)
 {
@@ -797,7 +812,6 @@ beGetErrDesc(PyObject *self, PyObject *args)
  * Scope:
  *      Public
  */
-/* ARGSUSED */
 PyObject *
 beVerifyBEName(PyObject *self, PyObject *args)
 {
@@ -823,21 +837,21 @@ convertBEInfoToDictionary(be_node_list_t *be, PyObject **listDict)
 {
 	if (be->be_node_name != NULL) {
 		if (PyDict_SetItemString(*listDict, BE_ATTR_ORIG_BE_NAME,
-		    PyString_FromString(be->be_node_name)) != 0) {
+		    PyUnicode_FromString(be->be_node_name)) != 0) {
 			return (B_FALSE);
 		}
 	}
 
 	if (be->be_rpool != NULL) {
 		if (PyDict_SetItemString(*listDict, BE_ATTR_ORIG_BE_POOL,
-		    PyString_FromString(be->be_rpool)) != 0) {
+		    PyUnicode_FromString(be->be_rpool)) != 0) {
 			return (B_FALSE);
 		}
 	}
 
 	if (be->be_mntpt != NULL) {
 		if (PyDict_SetItemString(*listDict, BE_ATTR_MOUNTPOINT,
-		    PyString_FromString(be->be_mntpt)) != 0) {
+		    PyUnicode_FromString(be->be_mntpt)) != 0) {
 			return (B_FALSE);
 		}
 	}
@@ -857,6 +871,16 @@ convertBEInfoToDictionary(be_node_list_t *be, PyObject **listDict)
 		return (B_FALSE);
 	}
 
+	if (PyDict_SetItemString(*listDict, BE_ATTR_ACTIVE_NEXTBOOT,
+	    (be->be_active_next ? Py_True : Py_False)) != 0) {
+		return (B_FALSE);
+	}
+
+	if (PyDict_SetItemString(*listDict, BE_ATTR_GLOBAL_ACTIVE,
+	    (be->be_global_active ? Py_True : Py_False)) != 0) {
+		return (B_FALSE);
+	}
+
 	if (be->be_space_used != 0) {
 		if (PyDict_SetItemString(*listDict, BE_ATTR_SPACE,
 		    PyLong_FromUnsignedLongLong(be->be_space_used)) != 0) {
@@ -866,12 +890,12 @@ convertBEInfoToDictionary(be_node_list_t *be, PyObject **listDict)
 
 	if (be->be_root_ds != NULL) {
 		if (PyDict_SetItemString(*listDict, BE_ATTR_ROOT_DS,
-		    PyString_FromString(be->be_root_ds)) != 0) {
+		    PyUnicode_FromString(be->be_root_ds)) != 0) {
 			return (B_FALSE);
 		}
 	}
 
-	if (be->be_node_creation != NULL) {
+	if (be->be_node_creation != 0) {
 		if (PyDict_SetItemString(*listDict, BE_ATTR_DATE,
 		    PyLong_FromLong(be->be_node_creation)) != 0) {
 			return (B_FALSE);
@@ -880,14 +904,14 @@ convertBEInfoToDictionary(be_node_list_t *be, PyObject **listDict)
 
 	if (be->be_policy_type != NULL) {
 		if (PyDict_SetItemString(*listDict, BE_ATTR_POLICY,
-		    PyString_FromString(be->be_policy_type)) != 0) {
+		    PyUnicode_FromString(be->be_policy_type)) != 0) {
 			return (B_FALSE);
 		}
 	}
 
 	if (be->be_uuid_str != NULL) {
 		if (PyDict_SetItemString(*listDict, BE_ATTR_UUID_STR,
-		    PyString_FromString(be->be_uuid_str)) != 0) {
+		    PyUnicode_FromString(be->be_uuid_str)) != 0) {
 			return (B_FALSE);
 		}
 	}
@@ -900,7 +924,7 @@ convertDatasetInfoToDictionary(be_dataset_list_t *ds, PyObject **listDict)
 {
 	if (ds->be_dataset_name != NULL) {
 		if (PyDict_SetItemString(*listDict, BE_ATTR_DATASET,
-		    PyString_FromString(ds->be_dataset_name)) != 0) {
+		    PyUnicode_FromString(ds->be_dataset_name)) != 0) {
 			return (B_FALSE);
 		}
 	}
@@ -912,7 +936,7 @@ convertDatasetInfoToDictionary(be_dataset_list_t *ds, PyObject **listDict)
 
 	if (ds->be_ds_mntpt != NULL) {
 		if (PyDict_SetItemString(*listDict, BE_ATTR_MOUNTPOINT,
-		    PyString_FromString(ds->be_ds_mntpt)) != 0) {
+		    PyUnicode_FromString(ds->be_ds_mntpt)) != 0) {
 			return (B_FALSE);
 		}
 	}
@@ -932,19 +956,19 @@ convertDatasetInfoToDictionary(be_dataset_list_t *ds, PyObject **listDict)
 
 	if (ds->be_dataset_name != 0) {
 		if (PyDict_SetItemString(*listDict, BE_ATTR_DATASET,
-		    PyString_FromString(ds->be_dataset_name)) != 0) {
+		    PyUnicode_FromString(ds->be_dataset_name)) != 0) {
 			return (B_FALSE);
 		}
 	}
 
 	if (ds->be_ds_plcy_type != NULL) {
 		if (PyDict_SetItemString(*listDict, BE_ATTR_POLICY,
-		    PyString_FromString(ds->be_ds_plcy_type)) != 0) {
+		    PyUnicode_FromString(ds->be_ds_plcy_type)) != 0) {
 			return (B_FALSE);
 		}
 	}
 
-	if (ds->be_ds_creation != NULL) {
+	if (ds->be_ds_creation != 0) {
 		if (PyDict_SetItemString(*listDict, BE_ATTR_DATE,
 		    PyLong_FromLong(ds->be_ds_creation)) != 0) {
 			return (B_FALSE);
@@ -959,12 +983,12 @@ convertSnapshotInfoToDictionary(be_snapshot_list_t *ss, PyObject **listDict)
 {
 	if (ss->be_snapshot_name != NULL) {
 		if (PyDict_SetItemString(*listDict, BE_ATTR_SNAP_NAME,
-		    PyString_FromString(ss->be_snapshot_name)) != 0) {
+		    PyUnicode_FromString(ss->be_snapshot_name)) != 0) {
 			return (B_FALSE);
 		}
 	}
 
-	if (ss->be_snapshot_creation != NULL) {
+	if (ss->be_snapshot_creation != 0) {
 		if (PyDict_SetItemString(*listDict, BE_ATTR_DATE,
 		    PyLong_FromLong(ss->be_snapshot_creation)) != 0) {
 			return (B_FALSE);
@@ -973,7 +997,7 @@ convertSnapshotInfoToDictionary(be_snapshot_list_t *ss, PyObject **listDict)
 
 	if (ss->be_snapshot_type != NULL) {
 		if (PyDict_SetItemString(*listDict, BE_ATTR_POLICY,
-		    PyString_FromString(ss->be_snapshot_type)) != 0) {
+		    PyUnicode_FromString(ss->be_snapshot_type)) != 0) {
 			return (B_FALSE);
 		}
 	}
@@ -1018,6 +1042,7 @@ convertPyArgsToNvlist(nvlist_t **nvList, int numArgs, ...)
 			(void) printf("nvlist_add_string failed for %s (%s).\n",
 			    pt, pt2);
 			nvlist_free(*nvList);
+			*nvList = NULL;
 			return (B_FALSE);
 		}
 	}
@@ -1045,7 +1070,7 @@ beMapLibbePyErrorToString(int errCode)
 	switch (errCode) {
 	case BE_PY_ERR_APPEND:
 		return ("Unable to append a dictionary to a list "
-		    "of dictinaries.");
+		    "of dictionaries.");
 	case BE_PY_ERR_DICT:
 		return ("Creation of a Python dictionary failed.");
 	case BE_PY_ERR_LIST:
@@ -1066,30 +1091,65 @@ beMapLibbePyErrorToString(int errCode)
 /* Private python initialization structure */
 
 static struct PyMethodDef libbeMethods[] = {
-	{"beCopy", (PyCFunction)beCopy, METH_VARARGS, "Create/Copy a BE."},
-	{"beCreateSnapshot", (PyCFunction)beCreateSnapshot, METH_VARARGS,
+	{"beCopy", beCopy, METH_VARARGS, "Create/Copy a BE."},
+	{"beCreateSnapshot", beCreateSnapshot, METH_VARARGS,
 	    "Create a snapshot."},
-	{"beDestroy", (PyCFunction)beDestroy, METH_VARARGS, "Destroy a BE."},
-	{"beDestroySnapshot", (PyCFunction)beDestroySnapshot, METH_VARARGS,
+	{"beDestroy", beDestroy, METH_VARARGS, "Destroy a BE."},
+	{"beDestroySnapshot", beDestroySnapshot, METH_VARARGS,
 	    "Destroy a snapshot."},
-	{"beMount", (PyCFunction)beMount, METH_VARARGS, "Mount a BE."},
-	{"beUnmount", (PyCFunction)beUnmount, METH_VARARGS, "Unmount a BE."},
-	{"beList", (PyCFunction)beList, METH_VARARGS, "List BE info."},
-	{"beRename", (PyCFunction)beRename, METH_VARARGS, "Rename a BE."},
-	{"beActivate", (PyCFunction)beActivate, METH_VARARGS, "Activate a BE."},
-	{"beRollback", (PyCFunction)beRollback, METH_VARARGS, "Rollback a BE."},
-	{"bePrintErrors", (PyCFunction)bePrintErrors, METH_VARARGS,
+	{"beMount", beMount, METH_VARARGS, "Mount a BE."},
+	{"beUnmount", beUnmount, METH_VARARGS, "Unmount a BE."},
+	{"beList", (PyCFunction)(uintptr_t)beList, METH_VARARGS | METH_KEYWORDS,
+	    "List BE info."},
+	{"beRename", beRename, METH_VARARGS, "Rename a BE."},
+	{"beActivate", (PyCFunction)(uintptr_t)beActivate,
+	    METH_VARARGS | METH_KEYWORDS, "Activate a BE."},
+	{"beRollback", beRollback, METH_VARARGS, "Rollback a BE."},
+	{"bePrintErrors", bePrintErrors, METH_VARARGS,
 	    "Enable/disable error printing."},
-	{"beGetErrDesc", (PyCFunction)beGetErrDesc, METH_VARARGS,
+	{"beGetErrDesc", beGetErrDesc, METH_VARARGS,
 	    "Map Error codes to strings."},
-	{"beVerifyBEName", (PyCFunction)beVerifyBEName, METH_VARARGS,
+	{"beVerifyBEName", beVerifyBEName, METH_VARARGS,
 	    "Verify BE name."},
 	{NULL, NULL, 0, NULL}
 };
 
-void
-initlibbe_py()
+#if PY_MAJOR_VERSION >= 3
+static struct PyModuleDef libbe_module = {
+	PyModuleDef_HEAD_INIT,
+	"libbe_py",
+	NULL,
+	-1,
+	libbeMethods
+};
+#endif
+
+static PyObject *
+moduleinit()
 {
 	/* PyMODINIT_FUNC; */
+#if PY_MAJOR_VERSION >= 3
+	return (PyModule_Create(&libbe_module));
+#else
+	/*
+	 * Python2 module initialisation functions are void and may not return
+	 * a value. However, they will set an exception if appropriate.
+	 */
 	(void) Py_InitModule("libbe_py", libbeMethods);
+	return (NULL);
+#endif
 }
+
+#if PY_MAJOR_VERSION >= 3
+PyMODINIT_FUNC
+PyInit_libbe_py(void)
+{
+	return (moduleinit());
+}
+#else
+PyMODINIT_FUNC
+initlibbe_py(void)
+{
+	(void) moduleinit();
+}
+#endif

@@ -28,16 +28,16 @@
 
 include $(SRC)/Makefile.master
 include $(SRC)/cmd/Makefile.cmd
+include $(SRC)/cmd/Makefile.ctf
 
 SRCS=		fwflash.c
 HDRS=		fwflash.h
 
 PROG=		$(SRCS:%.c=%)
 OBJS=		$(SRCS:%.c=%.o)
-LINTFILE=	$(SRCS:%.c=%.ln)
 POFILES=	$(SRCS:%.c=%.po)
 
-POFILE= 	fwflash_msg.po
+POFILE=		fwflash_msg.po
 
 HDRDIR=../common
 SRCDIR=../common
@@ -56,7 +56,7 @@ CFLAGS += -D_POSIX_PTHREAD_SEMANTICS
 LDLIBS += -ldevinfo -lumem -lscf
 
 
-$(ROOTUSRINCLDFWFLASH)/%:  $(HDRDIR)/% 
+$(ROOTUSRINCLDFWFLASH)/%:  $(HDRDIR)/%
 	$(INS.file)
 
 
@@ -66,12 +66,13 @@ $(PROG): install_h $(OBJS)
 
 %.o: $(SRCDIR)/%.c
 	$(COMPILE.c) $(CFLAGS) -o $@ $<
+	$(CTFCONVERT_O)
 
 
 all:	$(PROG)
 
-clean: 
-	$(RM) $(POFILE) $(POFILES) $(LINTFILE) $(PROG)
+clean:
+	$(RM) $(POFILE) $(POFILES) $(PROG)
 
 clobber: clean
 	$(RM) $(OBJS)
@@ -82,6 +83,4 @@ install: all $(ROOTUSRSBIN) $(ROOTUSRSBIN)/$(PROG)
 
 install_h:$(ROOTUSRINCLDFWFLASH) $(ROOTHDRS)
 
-lint: $(LINTFILE)	
-
-_msg msg:	$(POFILE)
+_msg:	$(POFILE)

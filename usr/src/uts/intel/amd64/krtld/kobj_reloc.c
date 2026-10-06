@@ -22,9 +22,10 @@
 /*
  * Copyright 2007 Sun Microsystems, Inc.  All rights reserved.
  * Use is subject to license terms.
+ *
+ * Copyright 2020 Joyent, Inc.
+ * Copyright 2025 Oxide Computer Company
  */
-
-#pragma ident	"%Z%%M%	%I%	%E% SMI"
 
 /*
  * x86 relocation code.
@@ -40,62 +41,18 @@
 #include <sys/elf.h>
 #include <sys/kobj.h>
 #include <sys/kobj_impl.h>
-#include <sys/tnf.h>
-#include <sys/tnf_probe.h>
+#include <sys/sdt_impl.h>
 
 #include "reloc.h"
-
-
-/*
- * Probe Discovery
- */
-
-#define	PROBE_MARKER_SYMBOL	"__tnf_probe_version_1"
-#define	TAG_MARKER_SYMBOL	"__tnf_tag_version_1"
-
-extern int tnf_splice_probes(int, tnf_probe_control_t *, tnf_tag_data_t *);
-
-/*
- * The kernel run-time linker calls this to try to resolve a reference
- * it can't otherwise resolve.  We see if it's marking a probe control
- * block; if so, we do the resolution and return 0.  If not, we return
- * 1 to show that we can't resolve it, either.
- */
-static int
-tnf_reloc_resolve(char *symname, Addr *value_p,
-    Elf64_Sxword *addend_p,
-    long offset,
-    tnf_probe_control_t **probelist,
-    tnf_tag_data_t **taglist)
-{
-	if (strcmp(symname, PROBE_MARKER_SYMBOL) == 0) {
-		*addend_p = 0;
-		((tnf_probe_control_t *)offset)->next = *probelist;
-		*probelist = (tnf_probe_control_t *)offset;
-		return (0);
-	}
-	if (strcmp(symname, TAG_MARKER_SYMBOL) == 0) {
-		*addend_p = 0;
-		*value_p = (Addr)*taglist;
-		*taglist = (tnf_tag_data_t *)offset;
-		return (0);
-	}
-	return (1);
-}
-
-#define	SDT_NOP		0x90
-#define	SDT_NOPS	5
 
 static int
 sdt_reloc_resolve(struct module *mp, char *symname, uint8_t *instr)
 {
 	sdt_probedesc_t *sdp;
-	int i;
 
 	/*
-	 * The "statically defined tracing" (SDT) provider for DTrace uses
-	 * a mechanism similar to TNF, but somewhat simpler.  (Surprise,
-	 * surprise.)  The SDT mechanism works by replacing calls to the
+	 * The "statically defined tracing" (SDT) provider for DTrace.
+	 * The SDT mechanism works by replacing calls to the
 	 * undefined routine __dtrace_probe_[name] with nop instructions.
 	 * The relocations are logged, and SDT itself will later patch the
 	 * running binary appropriately.
@@ -113,27 +70,85 @@ sdt_reloc_resolve(struct module *mp, char *symname, uint8_t *instr)
 	sdp->sdpd_next = mp->sdt_probes;
 	mp->sdt_probes = sdp;
 
-	for (i = 0; i < SDT_NOPS; i++)
-		instr[i - 1] = SDT_NOP;
+	/*
+	 * The compiler may emit the probe call as a tail call (/sibling call).
+	 * On x86 that means instead of a CALL instruction, we get a JMP.  In
+	 * that case, we also need to patch in a RET instruction instead of just
+	 * NOPs.
+	 */
+	const boolean_t is_tailcall = instr[-1] != SDT_CALL;
+	instr[-1] = SDT_NOP;
+	instr[0] = SDT_NOP;
+	instr[1] = SDT_NOP;
+	instr[2] = SDT_NOP;
+	instr[SDT_OFF_RET_IDX] = is_tailcall ? SDT_RET : SDT_NOP;
 
 	return (0);
 }
 
+
+/*
+ * We're relying on the fact that the call we're replacing is
+ * call (e8) plus 4 bytes of address, making a 5 byte instruction
+ */
+#define	NOP_INSTR	0x90
+#define	SMAP_NOPS	5
+
+/*
+ * Currently the only call replaced as a hot inline
+ * is smap_enable() and smap_disable(). If more are needed
+ * we should probably come up with an sdt probe like prefix
+ * and look for those instead of exact call names.
+ */
+static int
+smap_reloc_resolve(struct module *mp, char *symname, uint8_t *instr)
+{
+	uint_t symlen;
+	hotinline_desc_t *hid;
+
+	if (strcmp(symname, "smap_enable") == 0 ||
+	    strcmp(symname, "smap_disable") == 0) {
+
+#ifdef	KOBJ_DEBUG
+		if (kobj_debug & D_RELOCATIONS) {
+			_kobj_printf(ops, "smap_reloc_resolve: %s relocating "
+			    "enable/disable_smap\n", mp->filename);
+		}
+#endif
+
+		hid = kobj_alloc(sizeof (hotinline_desc_t), KM_WAIT);
+		symlen = strlen(symname) + 1;
+		hid->hid_symname = kobj_alloc(symlen, KM_WAIT);
+		bcopy(symname, hid->hid_symname, symlen);
+
+		/*
+		 * We backtrack one byte here to consume the call
+		 * instruction itself.
+		 */
+		hid->hid_instr_offset = (uintptr_t)instr - 1;
+		hid->hid_next = mp->hi_calls;
+		mp->hi_calls = hid;
+
+		memset((void *)hid->hid_instr_offset, NOP_INSTR, SMAP_NOPS);
+
+		return (0);
+	}
+
+	return (1);
+}
+
 int
-/* ARGSUSED2 */
-do_relocate(struct module *mp, char *reltbl, Word relshtype, int nreloc,
-	int relocsize, Addr baseaddr)
+do_relocate(struct module *mp, char *reltbl, int nreloc, int relocsize,
+    Addr baseaddr)
 {
 	unsigned long stndx;
-	unsigned long off;	/* can't be register for tnf_reloc_resolve() */
+	unsigned long off;
 	register unsigned long reladdr, rend;
 	register unsigned int rtype;
 	unsigned long value;
 	Elf64_Sxword addend;
-	Sym *symref;
+	Sym *symref = NULL;
 	int err = 0;
-	tnf_probe_control_t *probelist = NULL;
-	tnf_tag_data_t *taglist = NULL;
 	int symnum;
 	reladdr = (unsigned long)reltbl;
 	rend = reladdr + nreloc * relocsize;
@@ -161,10 +176,9 @@ do_relocate(struct module *mp, char *reltbl, Word relshtype, int nreloc,
 		if ((rtype > R_AMD64_NUM) || IS_TLS_INS(rtype)) {
 			_kobj_printf(ops, "krtld: invalid relocation type %d",
 			    rtype);
-			_kobj_printf(ops, " at 0x%llx:", off);
+			_kobj_printf(ops, " at 0x%lx:", off);
 			_kobj_printf(ops, " file=%s\n", mp->filename);
-			err = 1;
-			continue;
+			return (-1);
 		}
 
 
@@ -182,8 +196,8 @@ do_relocate(struct module *mp, char *reltbl, Word relshtype, int nreloc,
 			    (mp->symtbl+(stndx * mp->symhdr->sh_entsize));
 			_kobj_printf(ops, "krtld:\t%s",
 			    conv_reloc_amd64_type(rtype));
-			_kobj_printf(ops, "\t0x%8llx", off);
-			_kobj_printf(ops, " 0x%8llx", addend);
+			_kobj_printf(ops, "\t0x%8lx", off);
+			_kobj_printf(ops, " %8lld", (longlong_t)addend);
 			_kobj_printf(ops, "  %s\n",
 			    (const char *)mp->strings + symp->st_name);
 		}
@@ -213,9 +227,9 @@ do_relocate(struct module *mp, char *reltbl, Word relshtype, int nreloc,
 			} else {
 				/*
 				 * It's global. Allow weak references.  If
-				 * the symbol is undefined, give TNF (the
-				 * kernel probes facility) a chance to see
-				 * if it's a probe site, and fix it up if so.
+				 * the symbol is undefined, give dtrace
+				 * a chance to see if it's a probe site,
+				 * and fix it up if so.
 				 */
 				if (symref->st_shndx == SHN_UNDEF &&
 				    sdt_reloc_resolve(mp, mp->strings +
@@ -223,9 +237,11 @@ do_relocate(struct module *mp, char *reltbl, Word relshtype, int nreloc,
 					continue;
 
 				if (symref->st_shndx == SHN_UNDEF &&
-				    tnf_reloc_resolve(mp->strings +
-				    symref->st_name, &symref->st_value,
-				    &addend, off, &probelist, &taglist) != 0) {
+				    smap_reloc_resolve(mp, mp->strings +
+				    symref->st_name, (uint8_t *)off) == 0)
+					continue;
+
+				if (symref->st_shndx == SHN_UNDEF) {
 					if (ELF_ST_BIND(symref->st_info)
 					    != STB_WEAK) {
 						_kobj_printf(ops,
@@ -257,8 +273,8 @@ do_relocate(struct module *mp, char *reltbl, Word relshtype, int nreloc,
 
 #ifdef	KOBJ_DEBUG
 		if (kobj_debug & D_RELOCATIONS) {
-			_kobj_printf(ops, "krtld:\t\t\t\t0x%8llx", off);
-			_kobj_printf(ops, " 0x%8llx\n", value);
+			_kobj_printf(ops, "krtld:\t\t\t\t0x%8lx", off);
+			_kobj_printf(ops, " 0x%8lx\n", value);
 		}
 #endif
 
@@ -271,9 +287,6 @@ do_relocate(struct module *mp, char *reltbl, Word relshtype, int nreloc,
 	if (err)
 		return (-1);
 
-	if (tnf_splice_probes(mp->flags & KOBJ_PRIM, probelist, taglist))
-		mp->flags |= KOBJ_TNF_PROBE;
-
 	return (0);
 }
 
@@ -285,7 +298,7 @@ do_relocations(struct module *mp)
 	uint_t nreloc;
 
 	/* do the relocations */
-	for (shn = 1; shn < mp->hdr.e_shnum; shn++) {
+	for (shn = 1; shn < mp->shnum; shn++) {
 		rshp = (Shdr *)
 		    (mp->shdrs + shn * mp->hdr.e_shentsize);
 		if (rshp->sh_type == SHT_REL) {
@@ -300,7 +313,7 @@ do_relocations(struct module *mp)
 			    mp->filename);
 			return (-1);
 		}
-		if (rshp->sh_info >= mp->hdr.e_shnum) {
+		if (rshp->sh_info >= mp->shnum) {
 			_kobj_printf(ops, "do_relocations: %s sh_info ",
 			    mp->filename);
 			_kobj_printf(ops, "out of range %d\n", shn);
@@ -326,8 +339,8 @@ do_relocations(struct module *mp)
 		}
 #endif
 
-		if (do_relocate(mp, (char *)rshp->sh_addr, rshp->sh_type,
-		    nreloc, rshp->sh_entsize, shp->sh_addr) < 0) {
+		if (do_relocate(mp, (char *)rshp->sh_addr, nreloc,
+		    rshp->sh_entsize, shp->sh_addr) < 0) {
 			_kobj_printf(ops,
 			    "do_relocations: %s do_relocate failed\n",
 			    mp->filename);

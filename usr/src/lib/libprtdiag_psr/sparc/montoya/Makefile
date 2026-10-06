@@ -24,7 +24,6 @@
 #
 # lib/libprtdiag_psr/sparc/montoya/Makefile
 
-UTSCLOSED = ../../../../uts
 UTSBASE   = ../../../../../src/uts
 
 PLATFORM_OBJECTS= montoya.o
@@ -40,7 +39,6 @@ IFLAGS +=  -I ../../../libprtdiag/inc
 IFLAGS += -I$(SRC)/cmd/picl/plugins/inc
 LDLIBS += -lpicl
 
-LINTFLAGS += $(IFLAGS)
 
 PLATFORM=SUNW,Netra-CP3060
 

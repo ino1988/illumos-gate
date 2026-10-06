@@ -26,7 +26,7 @@
  */
 
 /*	Copyright (c) 1984, 1986, 1987, 1988, 1989 AT&T	*/
-/*	  All Rights Reserved  	*/
+/*	  All Rights Reserved	*/
 
 #ifndef _SYS_MKDEV_H
 #define	_SYS_MKDEV_H
@@ -93,6 +93,7 @@ extern minor_t __minor(const int, const dev_t);
 
 #define	OLDDEV 0	/* old device format */
 #define	NEWDEV 1	/* new device format */
+#define	COMPATDEV 2	/* 32-bit compat format */
 
 #define	makedev(maj, min)	(__makedev(NEWDEV, maj, min))
 #define	major(dev)		(__major(NEWDEV, dev))

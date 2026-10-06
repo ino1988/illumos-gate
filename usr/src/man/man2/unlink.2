@@ -1,14 +1,49 @@
-'\" te
-.\" Copyright (c) 2007, Sun Microsystems, Inc.  All Rights Reserved.
+.\"
+.\" Sun Microsystems, Inc. gratefully acknowledges The Open Group for
+.\" permission to reproduce portions of its copyrighted documentation.
+.\" Original documentation from The Open Group can be obtained online at
+.\" http://www.opengroup.org/bookstore/.
+.\"
+.\" The Institute of Electrical and Electronics Engineers and The Open
+.\" Group, have given us permission to reprint portions of their
+.\" documentation.
+.\"
+.\" In the following statement, the phrase ``this text'' refers to portions
+.\" of the system documentation.
+.\"
+.\" Portions of this text are reprinted and reproduced in electronic form
+.\" in the SunOS Reference Manual, from IEEE Std 1003.1, 2004 Edition,
+.\" Standard for Information Technology -- Portable Operating System
+.\" Interface (POSIX), The Open Group Base Specifications Issue 6,
+.\" Copyright (C) 2001-2004 by the Institute of Electrical and Electronics
+.\" Engineers, Inc and The Open Group.  In the event of any discrepancy
+.\" between these versions and the original IEEE and The Open Group
+.\" Standard, the original IEEE and The Open Group Standard is the referee
+.\" document.  The original Standard can be obtained online at
+.\" http://www.opengroup.org/unix/online.html.
+.\"
+.\" This notice shall appear on any product containing this material.
+.\"
+.\" The contents of this file are subject to the terms of the
+.\" Common Development and Distribution License (the "License").
+.\" You may not use this file except in compliance with the License.
+.\"
+.\" You can obtain a copy of the license at usr/src/OPENSOLARIS.LICENSE
+.\" or http://www.opensolaris.org/os/licensing.
+.\" See the License for the specific language governing permissions
+.\" and limitations under the License.
+.\"
+.\" When distributing Covered Code, include this CDDL HEADER in each
+.\" file and include the License file at usr/src/OPENSOLARIS.LICENSE.
+.\" If applicable, add the following below this CDDL HEADER, with the
+.\" fields enclosed by brackets "[]" replaced with your own identifying
+.\" information: Portions Copyright [yyyy] [name of copyright owner]
+.\"
+.\"
 .\" Copyright 1989 AT&T
 .\" Portions Copyright (c) 1992, X/Open Company Limited  All Rights Reserved.
-.\" Sun Microsystems, Inc. gratefully acknowledges The Open Group for permission to reproduce portions of its copyrighted documentation. Original documentation from The Open Group can be obtained online at
-.\" http://www.opengroup.org/bookstore/.
-.\" The Institute of Electrical and Electronics Engineers and The Open Group, have given us permission to reprint portions of their documentation. In the following statement, the phrase "this text" refers to portions of the system documentation. Portions of this text are reprinted and reproduced in electronic form in the Sun OS Reference Manual, from IEEE Std 1003.1, 2004 Edition, Standard for Information Technology -- Portable Operating System Interface (POSIX), The Open Group Base Specifications Issue 6, Copyright (C) 2001-2004 by the Institute of Electrical and Electronics Engineers, Inc and The Open Group. In the event of any discrepancy between these versions and the original IEEE and The Open Group Standard, the original IEEE and The Open Group Standard is the referee document. The original Standard can be obtained online at http://www.opengroup.org/unix/online.html.
-.\"  This notice shall appear on any product containing this material.
-.\" The contents of this file are subject to the terms of the Common Development and Distribution License (the "License").  You may not use this file except in compliance with the License.
-.\" You can obtain a copy of the license at usr/src/OPENSOLARIS.LICENSE or http://www.opensolaris.org/os/licensing.  See the License for the specific language governing permissions and limitations under the License.
-.\" When distributing Covered Code, include this CDDL HEADER in each file and include the License file at usr/src/OPENSOLARIS.LICENSE.  If applicable, add the following below this CDDL HEADER, with the fields enclosed by brackets "[]" replaced with your own identifying information: Portions Copyright [yyyy] [name of copyright owner]
+.\" Copyright (c) 2007, Sun Microsystems, Inc.  All Rights Reserved.
+.\"
 .TH UNLINK 2 "May 18, 2007"
 .SH NAME
 unlink, unlinkat \- remove directory entry
@@ -37,7 +72,7 @@ link.
 .sp
 .LP
 The \fBunlinkat()\fR function also removes a link to a file. See
-\fBfsattr\fR(5). If the \fIflag\fR argument is 0, the behavior of
+\fBfsattr\fR(7). If the \fIflag\fR argument is 0, the behavior of
 \fBunlinkat()\fR is the same as \fBunlink()\fR except in the processing of its
 \fIpath\fR argument. If \fIpath\fR is absolute, \fBunlinkat()\fR behaves the
 same as \fBunlink()\fR and the \fIdirfd\fR argument is unused. If \fIpath\fR is
@@ -64,7 +99,7 @@ If the \fIpath\fR argument is a directory and the filesystem supports
 \fBunlink()\fR and \fBunlinkat()\fR on directories, the directory is unlinked
 from its parent with no cleanup being performed.  In UFS, the disconnected
 directory will be found the next time the filesystem is checked with
-\fBfsck\fR(1M). The \fBunlink()\fR and \fBunlinkat()\fR functions will not fail
+\fBfsck\fR(8). The \fBunlink()\fR and \fBunlinkat()\fR functions will not fail
 simply because a directory is not empty. The user with appropriate privileges
 can orphan a non-empty directory without generating an error message.
 .sp
@@ -246,7 +281,7 @@ Applications should use \fBrmdir\fR(2) to remove a directory.
 .SH ATTRIBUTES
 .sp
 .LP
-See \fBattributes\fR(5) for descriptions of the following attributes:
+See \fBattributes\fR(7) for descriptions of the following attributes:
 .sp
 
 .sp
@@ -266,5 +301,12 @@ MT-Level	Async-Signal-Safe
 .SH SEE ALSO
 .sp
 .LP
-\fBrm\fR(1), \fBclose\fR(2), \fBlink\fR(2), \fBopen\fR(2), \fBrmdir\fR(2),
-\fBremove\fR(3C), \fBattributes\fR(5), \fBprivileges\fR(5), \fBfsattr\fR(5)
+.BR rm (1),
+.BR close (2),
+.BR link (2),
+.BR open (2),
+.BR rmdir (2),
+.BR remove (3C),
+.BR attributes (7),
+.BR fsattr (7),
+.BR privileges (7)

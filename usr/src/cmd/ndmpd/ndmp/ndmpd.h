@@ -1,5 +1,6 @@
 /*
  * Copyright (c) 2007, 2010, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2015 by Delphix. All rights reserved.
  */
 
 /*
@@ -10,10 +11,10 @@
  * Redistribution and use in source and binary forms, with or without
  * modification, are permitted provided that the following conditions
  * are met:
- * 	- Redistributions of source code must retain the above copyright
+ *	- Redistributions of source code must retain the above copyright
  *	  notice, this list of conditions and the following disclaimer.
  *
- * 	- Redistributions in binary form must reproduce the above copyright
+ *	- Redistributions in binary form must reproduce the above copyright
  *	  notice, this list of conditions and the following disclaimer in
  *	  the documentation and/or other materials provided with the
  *	  distribution.
@@ -456,9 +457,9 @@ typedef struct {
 
 typedef struct ndmpd_zfs_args {
 	zfs_type_t nz_type;			/* type of ZFS dataset */
-	char nz_dataset[ZFS_MAXNAMELEN];	/* dataset name */
-	char nz_snapname[ZFS_MAXNAMELEN];	/* snapname (following '@') */
-	char nz_fromsnap[ZFS_MAXNAMELEN];	/* snap of L-1 bkup */
+	char nz_dataset[ZFS_MAX_DATASET_NAME_LEN]; /* dataset name */
+	char nz_snapname[ZFS_MAX_DATASET_NAME_LEN]; /* snapname (following @) */
+	char nz_fromsnap[ZFS_MAX_DATASET_NAME_LEN]; /* snap of L-1 bkup */
 	char nz_snapprop[ZFS_MAXPROPLEN];	/* contents of snap incr prop */
 	boolean_t nz_ndmpd_snap;		/* ndmpd-generated snap? */
 
@@ -997,7 +998,7 @@ extern int ndmp_backup_extract_params(ndmpd_session_t *,
     ndmpd_module_params_t *);
 extern int ndmp_restore_extract_params(ndmpd_session_t *,
     ndmpd_module_params_t *);
-extern int ndmp_tar_reader(ndmp_tar_reader_arg_t *);
+extern void *ndmp_tar_reader(void *);
 
 extern int tape_open(char *, int);
 extern int tape_is_at_bot(ndmpd_session_t *);

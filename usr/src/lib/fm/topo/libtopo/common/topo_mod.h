@@ -22,6 +22,10 @@
 /*
  * Copyright (c) 2006, 2010, Oracle and/or its affiliates. All rights reserved.
  */
+/*
+ * Copyright 2020 Joyent, Inc.
+ * Copyright 2023 Oxide Computer Company
+ */
 
 #ifndef _TOPO_MOD_H
 #define	_TOPO_MOD_H
@@ -32,6 +36,8 @@
 #include <libnvpair.h>
 #include <libdevinfo.h>
 #include <smbios.h>
+#include <pcidb.h>
+#include <stdarg.h>
 
 #ifdef __cplusplus
 extern "C" {
@@ -77,6 +83,7 @@ extern int topo_mod_enumerate(topo_mod_t *, tnode_t *, const char *,
     const char *, topo_instance_t, topo_instance_t, void *);
 extern int topo_mod_enummap(topo_mod_t *mod, tnode_t *, const char *,
     const char *);
+extern char *topo_mod_product(topo_mod_t *);
 extern void topo_mod_release(topo_mod_t *, tnode_t *);
 extern void topo_mod_setspecific(topo_mod_t *, void *);
 extern void *topo_mod_getspecific(topo_mod_t *);
@@ -88,10 +95,14 @@ extern nvlist_t *topo_mod_devfmri(topo_mod_t *, int, const char *,
 extern nvlist_t *topo_mod_hcfmri(topo_mod_t *, tnode_t *, int, const char *,
     topo_instance_t, nvlist_t *, nvlist_t *, const char *, const char *,
     const char *);
+extern nvlist_t *topo_mod_hcfmri_extend(topo_mod_t *, nvlist_t *, int,
+    const char *, topo_instance_t);
 extern nvlist_t *topo_mod_memfmri(topo_mod_t *, int, uint64_t, uint64_t,
     const char *, int);
 extern nvlist_t *topo_mod_modfmri(topo_mod_t *, int, const char *);
 extern nvlist_t *topo_mod_pkgfmri(topo_mod_t *, int, const char *);
+extern nvlist_t *topo_mod_pciefmri(topo_mod_t *, tnode_t *, int,
+    const char *, topo_instance_t, const nvlist_t *);
 extern nvlist_t *topo_mod_swfmri(topo_mod_t *, int,
     char *, char *, nvlist_t *,
     char *, char *, char *, char *, int64_t,
@@ -124,6 +135,7 @@ extern di_node_t topo_mod_devinfo(topo_mod_t *);
 extern ipmi_handle_t *topo_mod_ipmi_hold(topo_mod_t *);
 extern void topo_mod_ipmi_rele(topo_mod_t *);
 extern smbios_hdl_t *topo_mod_smbios(topo_mod_t *);
+extern pcidb_hdl_t *topo_mod_pcidb(topo_mod_t *);
 extern di_prom_handle_t topo_mod_prominfo(topo_mod_t *);
 extern nvlist_t *topo_mod_auth(topo_mod_t *, tnode_t *);
 
@@ -215,14 +227,21 @@ extern void *topo_mod_zalloc(topo_mod_t *, size_t);
 extern void topo_mod_free(topo_mod_t *, void *, size_t);
 extern char *topo_mod_strdup(topo_mod_t *, const char *);
 extern void topo_mod_strfree(topo_mod_t *, char *);
+extern void topo_mod_strfreev(topo_mod_t *, char **, uint_t);
 extern int topo_mod_nvalloc(topo_mod_t *, nvlist_t **, uint_t);
 extern int topo_mod_nvdup(topo_mod_t *, nvlist_t *, nvlist_t **);
+extern int topo_mod_vasprintf(topo_mod_t *, char **, const char *,
+    va_list) __VPRINTFLIKE(3);
+extern int topo_mod_asprintf(topo_mod_t *, char **, const char *,
+    ...) __PRINTFLIKE(3);
 
 extern void topo_mod_clrdebug(topo_mod_t *);
 extern void topo_mod_setdebug(topo_mod_t *);
-extern void topo_mod_dprintf(topo_mod_t *, const char *, ...);
+extern void topo_mod_dprintf(topo_mod_t *, const char *, ...) __PRINTFLIKE(2);
 extern const char *topo_mod_errmsg(topo_mod_t *);
 extern int topo_mod_errno(topo_mod_t *);
+extern char *topo_mod_clean_str(topo_mod_t *, const char *);
+extern char *topo_mod_clean_strn(topo_mod_t *, const char *, size_t);
 
 /*
  * Topo node utilities: callable from module enumeration, topo_mod_enumerate()
@@ -239,7 +258,7 @@ extern void topo_node_setspecific(tnode_t *, void *);
 extern void *topo_node_getspecific(tnode_t *);
 extern int topo_node_asru_set(tnode_t *node, nvlist_t *, int, int *);
 extern int topo_node_fru_set(tnode_t *node, nvlist_t *, int, int *);
-extern int topo_node_label_set(tnode_t *node, char *, int *);
+extern int topo_node_label_set(tnode_t *node, const char *, int *);
 
 #define	TOPO_ASRU_COMPUTE	0x0001	/* Compute ASRU dynamically */
 #define	TOPO_FRU_COMPUTE	0x0002	/* Compute FRU dynamically */
@@ -248,11 +267,22 @@ extern int topo_prop_inherit(tnode_t *, const char *, const char *, int *);
 extern int topo_pgroup_create(tnode_t *, const topo_pgroup_info_t *, int *);
 
 /*
+ * Conveience property group and property creation.
+ */
+extern int topo_create_props(topo_mod_t *, tnode_t *, int,
+    const topo_pgroup_info_t *, ...);
+
+/*
  * Topo property method registration
  */
 extern int topo_prop_method_register(tnode_t *, const char *, const char *,
     topo_type_t, const char *, const nvlist_t *, int *);
 extern void topo_prop_method_unregister(tnode_t *, const char *, const char *);
+
+extern tnode_t *topo_mod_create_ufm(topo_mod_t *, tnode_t *, topo_instance_t,
+    const char *, topo_ufm_slot_info_t *);
+extern tnode_t *topo_mod_create_ufm_slot(topo_mod_t *, tnode_t *,
+    topo_ufm_slot_info_t *);
 
 /*
  * This enum definition is used to define a set of error tags associated with
@@ -281,10 +311,31 @@ typedef enum topo_mod_errno {
     EMOD_NONCANON,		/* non-canonical component name requested */
     EMOD_MOD_NOENT,		/* module lookup failed */
     EMOD_UKNOWN_ENUM,		/* unknown enumeration error */
+    EMOD_DIGRAPH_MAXSZ,		/* max digraph size exceeded */
     EMOD_END			/* end of mod errno list (to ease auto-merge) */
 } topo_mod_errno_t;
 
 extern int topo_mod_seterrno(topo_mod_t *, int);
+
+/*
+ * Function used by a module to try and open a file based on FM's search path.
+ */
+extern int topo_mod_file_search(topo_mod_t *, const char *file, int oflags);
+
+extern topo_method_f topo_mod_hc_occupied;
+
+/*
+ * Directed Graph topology interfaces
+ */
+extern topo_digraph_t *topo_digraph_new(topo_hdl_t *, topo_mod_t *,
+    const char *);
+extern void topo_digraph_destroy(topo_digraph_t *);
+
+extern topo_vertex_t *topo_vertex_new(topo_mod_t *, const char *,
+    topo_instance_t);
+extern void topo_vertex_destroy(topo_mod_t *mod, topo_vertex_t *vtx);
+
+extern int topo_edge_new(topo_mod_t *, topo_vertex_t *, topo_vertex_t *);
 
 #ifdef	__cplusplus
 }

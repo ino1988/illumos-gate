@@ -113,6 +113,7 @@ HTMLENTS = \
 	SmfValueNDMP.html \
 	AuthReadNDMP.html \
 	SmfValueNWAM.html \
+	SmfValueProcSec.html \
 	SmfValueRouting.html \
 	SmfValueSMB.html \
 	AuthReadSMB.html \
@@ -147,9 +148,6 @@ HTMLENTS = \
 	LabelPrint.html \
 	LabelRange.html \
 	LabelServer.html \
-	LabelWinDowngrade.html \
-	LabelWinNoView.html \
-	LabelWinUpgrade.html \
 	PrintAdmin.html \
 	PrintCancel.html \
 	PrintHeader.html \
@@ -206,4 +204,4 @@ $(DIRS):
 $(MSGDIR)/%: %
 	$(INS.file)
 
-clean clobber lint:
+clean clobber:

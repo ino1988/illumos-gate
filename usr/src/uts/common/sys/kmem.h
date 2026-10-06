@@ -22,6 +22,8 @@
 /*
  * Copyright (c) 1988, 2010, Oracle and/or its affiliates. All rights reserved.
  * Copyright (c) 2012 by Delphix. All rights reserved.
+ * Copyright 2013 Nexenta Systems, Inc.  All rights reserved.
+ * Copyright 2022 Joyent, Inc.
  */
 
 /*	Copyright (c) 1984, 1986, 1987, 1988, 1989 AT&T */
@@ -47,11 +49,12 @@ extern "C" {
 #define	KM_PANIC	0x0002	/* if memory cannot be allocated, panic */
 #define	KM_PUSHPAGE	0x0004	/* can block for memory; may use reserve */
 #define	KM_NORMALPRI	0x0008  /* with KM_NOSLEEP, lower priority allocation */
+#define	KM_NOSLEEP_LAZY	(KM_NOSLEEP | KM_NORMALPRI)  /* Syntactic sugar. */
 #define	KM_VMFLAGS	0x00ff	/* flags that must match VM_* flags */
 
 #define	KM_FLAGS	0xffff	/* all settable kmem flags */
 
-#ifdef _KERNEL
+#if defined(_KERNEL) || defined(_FAKE_KERNEL)
 
 extern void *kmem_alloc(size_t size, int kmflags);
 extern void *kmem_zalloc(size_t size, int kmflags);
@@ -60,6 +63,7 @@ extern void *kmem_alloc_tryhard(size_t size, size_t *alloc_size, int kmflags);
 extern void kmem_dump_init(size_t);
 extern void kmem_dump_begin(void);
 extern size_t kmem_dump_finish(char *buf, size_t size);
+extern void *kmem_rezalloc(void *, size_t, size_t, int);
 
 #endif	/* _KERNEL */
 
@@ -94,7 +98,7 @@ typedef enum kmem_cbrc {
 	KMEM_CBRC_DONT_KNOW
 } kmem_cbrc_t;
 
-#ifdef _KERNEL
+#if defined(_KERNEL) || defined(_FAKE_KERNEL)
 
 /*
  * Helps clients implementing the move() callback to recognize known objects by
@@ -127,7 +131,8 @@ extern void kmem_cache_destroy(kmem_cache_t *);
 extern void *kmem_cache_alloc(kmem_cache_t *, int);
 extern void kmem_cache_free(kmem_cache_t *, void *);
 extern uint64_t kmem_cache_stat(kmem_cache_t *, char *);
-extern void kmem_cache_reap_now(kmem_cache_t *);
+extern boolean_t kmem_cache_reap_active(void);
+extern void kmem_cache_reap_soon(kmem_cache_t *);
 extern void kmem_cache_move_notify(kmem_cache_t *, void *);
 
 #endif	/* _KERNEL */

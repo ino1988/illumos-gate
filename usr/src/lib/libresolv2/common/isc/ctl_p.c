@@ -1,7 +1,3 @@
-#if !defined(lint) && !defined(SABER)
-static const char rcsid[] = "$Id: ctl_p.c,v 1.4 2005/04/27 04:56:35 sra Exp $";
-#endif /* not lint */
-
 /*
  * Copyright (c) 2004 by Internet Systems Consortium, Inc. ("ISC")
  * Copyright (c) 1998,1999 by Internet Software Consortium.
@@ -146,7 +142,7 @@ ctl_sa_ntop(const struct sockaddr *sa,
 	    }
 #ifndef NO_SOCKADDR_UN
 	case AF_UNIX: {
-		const struct sockaddr_un *un = 
+		const struct sockaddr_un *un =
 					      (const struct sockaddr_un *) sa;
 		unsigned int x = sizeof un->sun_path;
 

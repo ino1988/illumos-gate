@@ -23,13 +23,12 @@
 # Copyright 2004 Sun Microsystems, Inc.  All rights reserved.
 # Use is subject to license terms.
 #
-#ident	"%Z%%M%	%I%	%E% SMI"
+# Copyright 2022 Garrett D'Amore
 #
 
 include $(SRC)/Makefile.master
 
-SUBDIRS_sparc = findfp
-SUBDIRS = scripts setdynflag $(SUBDIRS_$(MACH))
+SUBDIRS = scripts setdynflag
 
 .PARALLEL: $(SUBDIRS)
 

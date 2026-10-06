@@ -22,6 +22,9 @@
 /*
  * Copyright 2009 Sun Microsystems, Inc.  All rights reserved.
  * Use is subject to license terms.
+ * Copyright 2015, Joyent, Inc.
+ * Copyright (c) 2016 by Delphix. All rights reserved.
+ * Copyright 2024 Oxide Computer Company
  */
 
 #include "lint.h"
@@ -30,7 +33,7 @@
 #include <sys/sdt.h>
 #include <atomic.h>
 
-#if defined(THREAD_DEBUG)
+#if defined(DEBUG)
 #define	INCR32(x)	(((x) != UINT32_MAX)? (x)++ : 0)
 #define	INCR(x)		((x)++)
 #define	DECR(x)		((x)--)
@@ -486,14 +489,14 @@ queue_alloc(void)
 		qp->qh_lock.mutex_flag = LOCK_INITED;
 		qp->qh_lock.mutex_magic = MUTEX_MAGIC;
 		qp->qh_hlist = &qp->qh_def_root;
-#if defined(THREAD_DEBUG)
+#if defined(DEBUG)
 		qp->qh_hlen = 1;
 		qp->qh_hmax = 1;
 #endif
 	}
 }
 
-#if defined(THREAD_DEBUG)
+#if defined(DEBUG)
 
 /*
  * Debugging: verify correctness of a sleep queue.
@@ -543,11 +546,11 @@ QVERIFY(queue_head_t *qp)
 	ASSERT(qp->qh_qlen == cnt);
 }
 
-#else	/* THREAD_DEBUG */
+#else	/* DEBUG */
 
 #define	QVERIFY(qp)
 
-#endif	/* THREAD_DEBUG */
+#endif	/* DEBUG */
 
 /*
  * Acquire a queue head.
@@ -1779,7 +1782,7 @@ stall(void)
  */
 int
 mutex_lock_queue(ulwp_t *self, tdb_mutex_stats_t *msp, mutex_t *mp,
-	timespec_t *tsp)
+    timespec_t *tsp)
 {
 	uberdata_t *udp = curthread->ul_uberdata;
 	queue_head_t *qp;
@@ -2268,9 +2271,16 @@ mutex_lock_impl(mutex_t *mp, timespec_t *tsp)
 		 * us that the signal handlers are safe by setting:
 		 *	export _THREAD_ASYNC_SAFE=1
 		 * we return EDEADLK rather than actually deadlocking.
+		 *
+		 * A lock may explicitly override this with the
+		 * LOCK_DEADLOCK flag which is currently set for POSIX
+		 * NORMAL mutexes as the specification requires deadlock
+		 * behavior and applications _do_ rely on that for their
+		 * correctness guarantees.
 		 */
 		if (tsp == NULL &&
-		    MUTEX_OWNER(mp) == self && !self->ul_async_safe) {
+		    MUTEX_OWNER(mp) == self && !self->ul_async_safe &&
+		    (mp->mutex_flag & LOCK_DEADLOCK) == 0) {
 			DTRACE_PROBE2(plockstat, mutex__error, mp, EDEADLK);
 			return (EDEADLK);
 		}
@@ -2314,15 +2324,48 @@ mutex_lock(mutex_t *mp)
 	return (mutex_lock_impl(mp, NULL));
 }
 
+#pragma weak pthread_mutex_enter_np = mutex_enter
+void
+mutex_enter(mutex_t *mp)
+{
+	int ret;
+	int attr = mp->mutex_type & ALL_ATTRIBUTES;
+
+	/*
+	 * Require LOCK_ERRORCHECK, accept LOCK_RECURSIVE.
+	 */
+	if (attr != LOCK_ERRORCHECK &&
+	    attr != (LOCK_ERRORCHECK | LOCK_RECURSIVE)) {
+		mutex_panic(mp, "mutex_enter: bad mutex type");
+	}
+	ret = mutex_lock(mp);
+	if (ret == EDEADLK) {
+		mutex_panic(mp, "recursive mutex_enter");
+	} else if (ret == EAGAIN) {
+		mutex_panic(mp, "excessive recursive mutex_enter");
+	} else if (ret != 0) {
+		mutex_panic(mp, "unknown mutex_enter failure");
+	}
+}
+
 int
-pthread_mutex_timedlock(pthread_mutex_t *_RESTRICT_KYWD mp,
-	const struct timespec *_RESTRICT_KYWD abstime)
+pthread_mutex_clocklock(pthread_mutex_t *restrict mp, clockid_t clock,
+    const struct timespec *restrict abstime)
 {
 	timespec_t tslocal;
 	int error;
 
 	ASSERT(!curthread->ul_critical || curthread->ul_bindflags);
-	abstime_to_reltime(CLOCK_REALTIME, abstime, &tslocal);
+
+	switch (clock) {
+	case CLOCK_REALTIME:
+	case CLOCK_HIGHRES:
+		break;
+	default:
+		return (EINVAL);
+	}
+
+	abstime_to_reltime(clock, abstime, &tslocal);
 	error = mutex_lock_impl((mutex_t *)mp, &tslocal);
 	if (error == ETIME)
 		error = ETIMEDOUT;
@@ -2330,18 +2373,41 @@ pthread_mutex_timedlock(pthread_mutex_t *_RESTRICT_KYWD mp,
 }
 
 int
-pthread_mutex_reltimedlock_np(pthread_mutex_t *_RESTRICT_KYWD mp,
-	const struct timespec *_RESTRICT_KYWD reltime)
+pthread_mutex_timedlock(pthread_mutex_t *restrict mp,
+    const struct timespec *restrict abstime)
+{
+	return (pthread_mutex_clocklock(mp, CLOCK_REALTIME, abstime));
+}
+
+int
+pthread_mutex_relclocklock_np(pthread_mutex_t *restrict mp, clockid_t clock,
+    const struct timespec *restrict reltime)
 {
 	timespec_t tslocal;
 	int error;
 
 	ASSERT(!curthread->ul_critical || curthread->ul_bindflags);
+
+	switch (clock) {
+	case CLOCK_REALTIME:
+	case CLOCK_HIGHRES:
+		break;
+	default:
+		return (EINVAL);
+	}
+
 	tslocal = *reltime;
 	error = mutex_lock_impl((mutex_t *)mp, &tslocal);
 	if (error == ETIME)
 		error = ETIMEDOUT;
 	return (error);
+}
+
+int
+pthread_mutex_reltimedlock_np(pthread_mutex_t *restrict mp,
+    const struct timespec *restrict reltime)
+{
+	return (pthread_mutex_relclocklock_np(mp, CLOCK_REALTIME, reltime));
 }
 
 #pragma weak pthread_mutex_trylock = mutex_trylock
@@ -2571,6 +2637,26 @@ fast_unlock:
 	/* else do it the long way */
 slow_unlock:
 	return (mutex_unlock_internal(mp, 0));
+}
+
+#pragma weak pthread_mutex_exit_np = mutex_exit
+void
+mutex_exit(mutex_t *mp)
+{
+	int ret;
+	int attr = mp->mutex_type & ALL_ATTRIBUTES;
+
+	if (attr != LOCK_ERRORCHECK &&
+	    attr != (LOCK_ERRORCHECK | LOCK_RECURSIVE)) {
+		mutex_panic(mp, "mutex_exit: bad mutex type");
+	}
+	ret = mutex_unlock(mp);
+	if (ret == EPERM) {
+		mutex_panic(mp, "mutex_exit: not owner");
+	} else if (ret != 0) {
+		mutex_panic(mp, "unknown mutex_exit failure");
+	}
+
 }
 
 /*
@@ -3096,12 +3182,15 @@ heldlock_exit(void)
 }
 
 #pragma weak _cond_init = cond_init
-/* ARGSUSED2 */
 int
-cond_init(cond_t *cvp, int type, void *arg)
+cond_init(cond_t *cvp, int type, void *arg __unused)
 {
 	if (type != USYNC_THREAD && type != USYNC_PROCESS)
 		return (EINVAL);
+
+	/*
+	 * This memset initializes cond_clock to CLOCK_REALTIME.
+	 */
 	(void) memset(cvp, 0, sizeof (*cvp));
 	cvp->cond_type = (uint16_t)type;
 	cvp->cond_magic = COND_MAGIC;
@@ -3529,8 +3618,7 @@ cond_wait(cond_t *cvp, mutex_t *mp)
  * pthread_cond_wait() is a cancellation point.
  */
 int
-pthread_cond_wait(pthread_cond_t *_RESTRICT_KYWD cvp,
-	pthread_mutex_t *_RESTRICT_KYWD mp)
+pthread_cond_wait(pthread_cond_t *restrict cvp, pthread_mutex_t *restrict mp)
 {
 	int error;
 
@@ -3542,9 +3630,9 @@ pthread_cond_wait(pthread_cond_t *_RESTRICT_KYWD cvp,
  * cond_timedwait() is a cancellation point but __cond_timedwait() is not.
  */
 int
-__cond_timedwait(cond_t *cvp, mutex_t *mp, const timespec_t *abstime)
+__cond_timedwait(cond_t *cvp, mutex_t *mp, clockid_t clock_id,
+    const timespec_t *abstime)
 {
-	clockid_t clock_id = cvp->cond_clockid;
 	timespec_t reltime;
 	int error;
 
@@ -3570,13 +3658,14 @@ __cond_timedwait(cond_t *cvp, mutex_t *mp, const timespec_t *abstime)
 	return (error);
 }
 
-int
-cond_timedwait(cond_t *cvp, mutex_t *mp, const timespec_t *abstime)
+static int
+cond_clockwait(cond_t *cvp, mutex_t *mp, clockid_t clock,
+    const timespec_t *abstime)
 {
 	int error;
 
 	_cancelon();
-	error = __cond_timedwait(cvp, mp, abstime);
+	error = __cond_timedwait(cvp, mp, clock, abstime);
 	if (error == EINTR)
 		_canceloff();
 	else
@@ -3585,16 +3674,54 @@ cond_timedwait(cond_t *cvp, mutex_t *mp, const timespec_t *abstime)
 }
 
 /*
- * pthread_cond_timedwait() is a cancellation point.
+ * This is a function internal to libc that determines the clockid to return for
+ * a cond_t. The cond_t (and the pthreads / C equivalent) encode a clock id that
+ * should be used as a timing source. When using the static initializers, which
+ * set this to zero, cond_clockid will end up set to __CLOCK_REALTIME0 which
+ * isn't really used in the system any more. Consumers of the clockid call this
+ * to translate this. Note, we fail open such that if someone has corrupted the
+ * clockid it will end up in a well known clock to continue the traditional
+ * system behavior.
+ */
+static clockid_t
+cond_clock(cond_t *cvp)
+{
+	if (cvp->cond_clockid != CLOCK_REALTIME &&
+	    cvp->cond_clockid != CLOCK_MONOTONIC) {
+		return (CLOCK_REALTIME);
+	}
+
+	return (cvp->cond_clockid);
+}
+
+int
+cond_timedwait(cond_t *cvp, mutex_t *mp, const timespec_t *abstime)
+{
+	return (cond_clockwait(cvp, mp, cond_clock(cvp), abstime));
+}
+
+/*
+ * pthread_cond_timedwait() and pthread_cond_clockwait() are cancellation
+ * points. We need to check for cancellation before we evaluate whether the
+ * clock is valid.
  */
 int
-pthread_cond_timedwait(pthread_cond_t *_RESTRICT_KYWD cvp,
-	pthread_mutex_t *_RESTRICT_KYWD mp,
-	const struct timespec *_RESTRICT_KYWD abstime)
+pthread_cond_clockwait(pthread_cond_t *restrict cvp,
+    pthread_mutex_t *restrict mp, clockid_t clock,
+    const struct timespec *restrict abstime)
 {
 	int error;
 
-	error = cond_timedwait((cond_t *)cvp, (mutex_t *)mp, abstime);
+	switch (clock) {
+	case CLOCK_REALTIME:
+	case CLOCK_HIGHRES:
+		break;
+	default:
+		return (EINVAL);
+	}
+
+	/* We need to translate between the native threads errors and POSIX */
+	error = cond_clockwait((cond_t *)cvp, (mutex_t *)mp, clock, abstime);
 	if (error == ETIME)
 		error = ETIMEDOUT;
 	else if (error == EINTR)
@@ -3602,8 +3729,20 @@ pthread_cond_timedwait(pthread_cond_t *_RESTRICT_KYWD cvp,
 	return (error);
 }
 
+int
+pthread_cond_timedwait(pthread_cond_t *restrict cvp,
+    pthread_mutex_t *restrict mp, const struct timespec *restrict abstime)
+{
+	cond_t *cond = (cond_t *)cvp;
+	return (pthread_cond_clockwait(cvp, mp, cond_clock(cond), abstime));
+}
+
 /*
  * cond_reltimedwait() is a cancellation point but __cond_reltimedwait() is not.
+ *
+ * Note, this function does not actually consume the clock id. Internally all
+ * waits are based upon the highres clock in the system and therefore the actual
+ * clock used is ignored at this point.
  */
 int
 __cond_reltimedwait(cond_t *cvp, mutex_t *mp, const timespec_t *reltime)
@@ -3632,11 +3771,19 @@ cond_reltimedwait(cond_t *cvp, mutex_t *mp, const timespec_t *reltime)
 }
 
 int
-pthread_cond_reltimedwait_np(pthread_cond_t *_RESTRICT_KYWD cvp,
-	pthread_mutex_t *_RESTRICT_KYWD mp,
-	const struct timespec *_RESTRICT_KYWD reltime)
+pthread_cond_relclockwait_np(pthread_cond_t *restrict cvp,
+    pthread_mutex_t *restrict mp, clockid_t clock,
+    const struct timespec *restrict reltime)
 {
 	int error;
+
+	switch (clock) {
+	case CLOCK_REALTIME:
+	case CLOCK_HIGHRES:
+		break;
+	default:
+		return (EINVAL);
+	}
 
 	error = cond_reltimedwait((cond_t *)cvp, (mutex_t *)mp, reltime);
 	if (error == ETIME)
@@ -3644,6 +3791,15 @@ pthread_cond_reltimedwait_np(pthread_cond_t *_RESTRICT_KYWD cvp,
 	else if (error == EINTR)
 		error = 0;
 	return (error);
+}
+
+int
+pthread_cond_reltimedwait_np(pthread_cond_t *restrict cvp,
+    pthread_mutex_t *restrict mp, const struct timespec *restrict reltime)
+{
+	cond_t *cond = (cond_t *)cvp;
+	return (pthread_cond_relclockwait_np(cvp, mp, cond_clock(cond),
+	    reltime));
 }
 
 #pragma weak pthread_cond_signal = cond_signal
@@ -3674,11 +3830,11 @@ cond_signal(cond_t *cvp)
 		return (error);
 
 	/*
-	 * Move someone from the condvar sleep queue to the mutex sleep
-	 * queue for the mutex that he will acquire on being waked up.
-	 * We can do this only if we own the mutex he will acquire.
-	 * If we do not own the mutex, or if his ul_cv_wake flag
-	 * is set, just dequeue and unpark him.
+	 * Move some thread from the condvar sleep queue to the mutex sleep
+	 * queue for the mutex that it will acquire on being waked up.
+	 * We can do this only if we own the mutex it will acquire.
+	 * If we do not own the mutex, or if its ul_cv_wake flag
+	 * is set, just dequeue and unpark it.
 	 */
 	qp = queue_lock(cvp, CV);
 	ulwpp = queue_slot(qp, &prev, &more);
@@ -3690,26 +3846,26 @@ cond_signal(cond_t *cvp)
 	ulwp = *ulwpp;
 
 	/*
-	 * Inform the thread that he was the recipient of a cond_signal().
-	 * This lets him deal with cond_signal() and, concurrently,
+	 * Inform the thread that it was the recipient of a cond_signal().
+	 * This lets it deal with cond_signal() and, concurrently,
 	 * one or more of a cancellation, a UNIX signal, or a timeout.
 	 * These latter conditions must not consume a cond_signal().
 	 */
 	ulwp->ul_signalled = 1;
 
 	/*
-	 * Dequeue the waiter but leave his ul_sleepq non-NULL
-	 * while we move him to the mutex queue so that he can
+	 * Dequeue the waiter but leave its ul_sleepq non-NULL
+	 * while we move it to the mutex queue so that it can
 	 * deal properly with spurious wakeups.
 	 */
 	queue_unlink(qp, ulwpp, prev);
 
-	mp = ulwp->ul_cvmutex;		/* the mutex he will acquire */
+	mp = ulwp->ul_cvmutex;		/* the mutex it will acquire */
 	ulwp->ul_cvmutex = NULL;
 	ASSERT(mp != NULL);
 
 	if (ulwp->ul_cv_wake || !MUTEX_OWNED(mp, self)) {
-		/* just wake him up */
+		/* just wake it up */
 		lwpid = ulwp->ul_lwpid;
 		no_preempt(self);
 		ulwp->ul_sleepq = NULL;
@@ -3718,7 +3874,7 @@ cond_signal(cond_t *cvp)
 		(void) __lwp_unpark(lwpid);
 		preempt(self);
 	} else {
-		/* move him to the mutex queue */
+		/* move it to the mutex queue */
 		mqp = queue_lock(mp, MX);
 		enqueue(mqp, ulwp, 0);
 		mp->mutex_waiters = 1;
@@ -3833,18 +3989,18 @@ cond_broadcast(cond_t *cvp)
 			break;
 		ASSERT(ulwp->ul_wchan == cvp);
 		queue_unlink(qp, &qrp->qr_head, NULL);
-		mp = ulwp->ul_cvmutex;		/* his mutex */
+		mp = ulwp->ul_cvmutex;		/* its mutex */
 		ulwp->ul_cvmutex = NULL;
 		ASSERT(mp != NULL);
 		if (ulwp->ul_cv_wake || !MUTEX_OWNED(mp, self)) {
-			/* just wake him up */
+			/* just wake it up */
 			ulwp->ul_sleepq = NULL;
 			ulwp->ul_wchan = NULL;
 			if (nlwpid == maxlwps)
 				lwpid = alloc_lwpids(lwpid, &nlwpid, &maxlwps);
 			lwpid[nlwpid++] = ulwp->ul_lwpid;
 		} else {
-			/* move him to the mutex queue */
+			/* move it to the mutex queue */
 			if (mp != mp_cache) {
 				mp_cache = mp;
 				if (mqp != NULL)
@@ -3882,7 +4038,7 @@ cond_destroy(cond_t *cvp)
 	return (0);
 }
 
-#if defined(THREAD_DEBUG)
+#if defined(DEBUG)
 void
 assert_no_libc_locks_held(void)
 {

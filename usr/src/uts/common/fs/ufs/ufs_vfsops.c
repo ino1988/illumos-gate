@@ -18,13 +18,17 @@
  *
  * CDDL HEADER END
  */
+
 /*
  * Copyright 2009 Sun Microsystems, Inc.  All rights reserved.
  * Use is subject to license terms.
+ * Copyright 2016 Nexenta Systems, Inc.
+ * Copyright (c) 2017 by Delphix. All rights reserved.
+ * Copyright 2024 Oxide Computer Company
  */
 
 /*	Copyright (c) 1983, 1984, 1985, 1986, 1987, 1988, 1989 AT&T	*/
-/*	  All Rights Reserved  	*/
+/*	  All Rights Reserved	*/
 
 /*
  * University Copyright- Copyright (c) 1982, 1986, 1988
@@ -194,7 +198,7 @@ static vfsdef_t vfw = {
 	VFSDEF_VERSION,
 	"ufs",
 	ufsinit,
-	VSW_HASPROTO|VSW_CANREMOUNT|VSW_STATS|VSW_CANLOFI,
+	VSW_HASPROTO|VSW_CANREMOUNT|VSW_STATS|VSW_CANLOFI|VSW_MOUNTDEV,
 	&ufs_mntopts
 };
 
@@ -256,8 +260,7 @@ static int mountfs(struct vfs *, enum whymountroot, struct vnode *, char *,
 
 static int
 ufs_mount(struct vfs *vfsp, struct vnode *mvp, struct mounta *uap,
-	struct cred *cr)
-
+    struct cred *cr)
 {
 	char *data = uap->dataptr;
 	int datalen = uap->datalen;
@@ -794,7 +797,7 @@ int ufs_mount_timeout = 60000;	/* default to 1 minute */
 
 static int
 mountfs(struct vfs *vfsp, enum whymountroot why, struct vnode *devvp,
-	char *path, cred_t *cr, int isroot, void *raw_argsp, int args_len)
+    char *path, cred_t *cr, int isroot, void *raw_argsp, int args_len)
 {
 	dev_t dev = devvp->v_rdev;
 	struct fs *fsp;
@@ -981,7 +984,7 @@ mountfs(struct vfs *vfsp, enum whymountroot why, struct vnode *devvp,
 			 */
 			if (!(vfsp->vfs_flag & VFS_RDONLY)) {
 				cmn_err(CE_WARN, "Error accessing ufs "
-				    "log for %s; Please run fsck(1M)", path);
+				    "log for %s; Please run fsck(8)", path);
 				goto out;
 			}
 		}
@@ -1373,15 +1376,15 @@ out:
 static int
 ufs_unmount(struct vfs *vfsp, int fflag, struct cred *cr)
 {
-	dev_t 		dev		= vfsp->vfs_dev;
+	dev_t		dev		= vfsp->vfs_dev;
 	struct ufsvfs	*ufsvfsp	= (struct ufsvfs *)vfsp->vfs_data;
 	struct fs	*fs		= ufsvfsp->vfs_fs;
 	struct ulockfs	*ulp		= &ufsvfsp->vfs_ulockfs;
-	struct vnode 	*bvp, *vp;
+	struct vnode	*bvp, *vp;
 	struct buf	*bp;
 	struct inode	*ip, *inext, *rip;
 	union ihead	*ih;
-	int 		error, flag, i;
+	int		error, flag, i;
 	struct lockfs	lockfs;
 	int		poll_events = POLLPRI;
 	extern struct pollhead ufs_pollhd;
@@ -2068,6 +2071,16 @@ errout:
 }
 
 static int
+ufs_syncfs(vfs_t *vfsp, uint64_t flags, cred_t *cr)
+{
+	if (flags != 0) {
+		return (ENOTSUP);
+	}
+
+	return (ufs_fioffs(vfsp, cr));
+}
+
+static int
 ufsinit(int fstype, char *name)
 {
 	static const fs_operation_def_t ufs_vfsops_template[] = {
@@ -2078,6 +2091,7 @@ ufsinit(int fstype, char *name)
 		VFSNAME_SYNC,		{ .vfs_sync = ufs_sync },
 		VFSNAME_VGET,		{ .vfs_vget = ufs_vget },
 		VFSNAME_MOUNTROOT,	{ .vfs_mountroot = ufs_mountroot },
+		VFSNAME_SYNCFS,		{ .vfs_syncfs = ufs_syncfs },
 		NULL,			NULL
 	};
 	int error;
@@ -2100,199 +2114,3 @@ ufsinit(int fstype, char *name)
 	ufs_iinit();
 	return (0);
 }
-
-#ifdef __sparc
-
-/*
- * Mounting a mirrored SVM volume is only supported on ufs,
- * this is special-case boot code to support that configuration.
- * At this point, we have booted and mounted root on a
- * single component of the mirror.  Complete the boot
- * by configuring SVM and converting the root to the
- * dev_t of the mirrored root device.  This dev_t conversion
- * only works because the underlying device doesn't change.
- */
-int
-ufs_remountroot(struct vfs *vfsp)
-{
-	struct ufsvfs *ufsvfsp;
-	struct ulockfs *ulp;
-	dev_t new_rootdev;
-	dev_t old_rootdev;
-	struct vnode *old_rootvp;
-	struct vnode *new_rootvp;
-	int error, sberror = 0;
-	struct inode	*ip;
-	union ihead	*ih;
-	struct buf	*bp;
-	int i;
-
-	old_rootdev = rootdev;
-	old_rootvp = rootvp;
-
-	new_rootdev = getrootdev();
-	if (new_rootdev == (dev_t)NODEV) {
-		return (ENODEV);
-	}
-
-	new_rootvp = makespecvp(new_rootdev, VBLK);
-
-	error = VOP_OPEN(&new_rootvp,
-	    (vfsp->vfs_flag & VFS_RDONLY) ? FREAD : FREAD|FWRITE, CRED(), NULL);
-	if (error) {
-		cmn_err(CE_CONT,
-		    "Cannot open mirrored root device, error %d\n", error);
-		return (error);
-	}
-
-	if (vfs_lock(vfsp) != 0) {
-		return (EBUSY);
-	}
-
-	ufsvfsp = (struct ufsvfs *)vfsp->vfs_data;
-	ulp = &ufsvfsp->vfs_ulockfs;
-
-	mutex_enter(&ulp->ul_lock);
-	atomic_inc_ulong(&ufs_quiesce_pend);
-
-	(void) ufs_quiesce(ulp);
-	(void) ufs_flush(vfsp);
-
-	/*
-	 * Convert root vfs to new dev_t, including vfs hash
-	 * table and fs id.
-	 */
-	vfs_root_redev(vfsp, new_rootdev, ufsfstype);
-
-	ufsvfsp->vfs_devvp = new_rootvp;
-	ufsvfsp->vfs_dev = new_rootdev;
-
-	bp = ufsvfsp->vfs_bufp;
-	bp->b_edev = new_rootdev;
-	bp->b_dev = cmpdev(new_rootdev);
-
-	/*
-	 * The buffer for the root inode does not contain a valid b_vp
-	 */
-	(void) bfinval(new_rootdev, 0);
-
-	/*
-	 * Here we hand-craft inodes with old root device
-	 * references to refer to the new device instead.
-	 */
-	mutex_enter(&ufs_scan_lock);
-
-	for (i = 0, ih = ihead; i < inohsz; i++, ih++) {
-		mutex_enter(&ih_lock[i]);
-		for (ip = ih->ih_chain[0];
-		    ip != (struct inode *)ih;
-		    ip = ip->i_forw) {
-			if (ip->i_ufsvfs != ufsvfsp)
-				continue;
-			if (ip == ufsvfsp->vfs_qinod)
-				continue;
-			if (ip->i_dev == old_rootdev) {
-				ip->i_dev = new_rootdev;
-			}
-
-			if (ip->i_devvp == old_rootvp) {
-				ip->i_devvp = new_rootvp;
-			}
-		}
-		mutex_exit(&ih_lock[i]);
-	}
-
-	mutex_exit(&ufs_scan_lock);
-
-	/*
-	 * Make Sure logging structures are using the new device
-	 * if logging is enabled.  Also start any logging thread that
-	 * needs to write to the device and couldn't earlier.
-	 */
-	if (ufsvfsp->vfs_log) {
-		buf_t		*bp, *tbp;
-		ml_unit_t	*ul = ufsvfsp->vfs_log;
-		struct fs	*fsp = ufsvfsp->vfs_fs;
-
-		/*
-		 * Update the main logging structure.
-		 */
-		ul->un_dev = new_rootdev;
-
-		/*
-		 * Get a new bp for the on disk structures.
-		 */
-		bp = ul->un_bp;
-		tbp = ngeteblk(dbtob(LS_SECTORS));
-		tbp->b_edev = new_rootdev;
-		tbp->b_dev = cmpdev(new_rootdev);
-		tbp->b_blkno = bp->b_blkno;
-		bcopy(bp->b_un.b_addr, tbp->b_un.b_addr, DEV_BSIZE);
-		bcopy(bp->b_un.b_addr, tbp->b_un.b_addr + DEV_BSIZE, DEV_BSIZE);
-		bp->b_flags |= (B_STALE | B_AGE);
-		brelse(bp);
-		ul->un_bp = tbp;
-
-		/*
-		 * Allocate new circular buffers.
-		 */
-		alloc_rdbuf(&ul->un_rdbuf, MAPBLOCKSIZE, MAPBLOCKSIZE);
-		alloc_wrbuf(&ul->un_wrbuf, ldl_bufsize(ul));
-
-		/*
-		 * Clear the noroll bit which indicates that logging
-		 * can't roll the log yet and start the logmap roll thread
-		 * unless the filesystem is still read-only in which case
-		 * remountfs() will do it when going to read-write.
-		 */
-		ASSERT(ul->un_flags & LDL_NOROLL);
-
-		if (!fsp->fs_ronly) {
-			ul->un_flags &= ~LDL_NOROLL;
-			logmap_start_roll(ul);
-		}
-
-		/*
-		 * Start the reclaim thread if needed.
-		 */
-		if (!fsp->fs_ronly && (fsp->fs_reclaim &
-		    (FS_RECLAIM|FS_RECLAIMING))) {
-			fsp->fs_reclaim &= ~FS_RECLAIM;
-			fsp->fs_reclaim |= FS_RECLAIMING;
-			ufs_thread_start(&ufsvfsp->vfs_reclaim,
-			    ufs_thread_reclaim, vfsp);
-			TRANS_SBWRITE(ufsvfsp, TOP_SBUPDATE_UPDATE);
-			if (sberror = geterror(ufsvfsp->vfs_bufp)) {
-				refstr_t	*mntpt;
-				mntpt = vfs_getmntpoint(vfsp);
-				cmn_err(CE_WARN,
-				    "Remountroot failed to update Reclaim"
-				    "state for filesystem %s "
-				    "Error writing SuperBlock %d",
-				    refstr_value(mntpt), error);
-				refstr_rele(mntpt);
-			}
-		}
-	}
-
-	rootdev = new_rootdev;
-	rootvp = new_rootvp;
-
-	atomic_dec_ulong(&ufs_quiesce_pend);
-	cv_broadcast(&ulp->ul_cv);
-	mutex_exit(&ulp->ul_lock);
-
-	vfs_unlock(vfsp);
-
-	error = VOP_CLOSE(old_rootvp, FREAD, 1, (offset_t)0, CRED(), NULL);
-	if (error) {
-		cmn_err(CE_CONT,
-		    "close of root device component failed, error %d\n",
-		    error);
-	}
-	VN_RELE(old_rootvp);
-
-	return (sberror ? sberror : error);
-}
-
-#endif	/* __sparc */

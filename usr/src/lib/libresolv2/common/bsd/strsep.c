@@ -1,8 +1,3 @@
-#if defined(LIBC_SCCS) && !defined(lint)
-static const char sccsid[] = "strsep.c	8.1 (Berkeley) 6/4/93";
-static const char rcsid[] = "$Id: strsep.c,v 1.2 2005/04/27 04:56:12 sra Exp $";
-#endif /* LIBC_SCCS and not lint */
-
 /*
  * Copyright (c) 1990, 1993
  *	The Regents of the University of California.  All rights reserved.
@@ -48,7 +43,7 @@ int __strsep_unneeded__;
 
 /*%
  * Get next token from string *stringp, where tokens are possibly-empty
- * strings separated by characters from delim.  
+ * strings separated by characters from delim.
  *
  * Writes NULs into the string at *stringp to end tokens.
  * delim need not remain constant from call to call.

@@ -28,7 +28,7 @@ include	$(SRC)/Makefile.psm
 LIBRARY=	libpiclenvd.a
 VERS=		.1
 
-OBJECTS=	piclenvd.o piclenvsetup.o 
+OBJECTS=	piclenvd.o piclenvsetup.o
 
 # include library definitions
 include $(SRC)/lib/Makefile.lib
@@ -51,19 +51,13 @@ ROOTCONF=       $(CONF:%=$(ROOTLIBDIR)/%)
 $(ROOTCONF)	:= FILEMODE = 0644
 INFOS=          envmodel.info
 
-LINTSRC =	$(LINTLIB:%.ln=%)
-ROOTLINTDIR =	$(ROOTLIBDIR)
-ROOTLINT =	$(LINTSRC:%=$(ROOTLINTDIR)/%)
-
-CLEANFILES=	$(LINTOUT) $(LINTLIB)
-
 CFLAGS +=	$(CCVERBOSE)
 CPPFLAGS +=     -I$(SRC)/cmd/picl/plugins/lib/picld_pluginutil
 DYNFLAGS +=	-R/usr/platform/\$$PLATFORM/lib/picl/plugins:/usr/platform/sun4u/lib/picl/plugins:/usr/lib/picl/plugins
 LDLIBS +=	-L$(SRC)/lib/libpicltree/$(MACH)
 LDLIBS +=	-L$(SRC)/cmd/picl/plugins/common/devtree
 LDLIBS +=       -L$(SRC)/cmd/picl/plugins/lib/picld_pluginutil/$(MACH)
-LDLIBS +=	-L$(ROOT)/usr/lib/picl/plugins -lpicldevtree -lpicltree
+LDLIBS +=	-L$(ROOT)/usr/lib/picl/plugins -lpicltree
 LDLIBS +=	-lpicld_pluginutil -lc
 
 .KEEP_STATE:
@@ -77,7 +71,6 @@ all :=		TARGET= all
 install :=	TARGET= install
 clean :=	TARGET= clean
 clobber :=	TARGET= clobber
-lint :=		TARGET= lint
 _msg :=		TARGET= _msg
 
 all: $(LIBS) $(LIBLINKS)
@@ -105,11 +98,7 @@ $(LIBLINKS):	FRC
 include $(SRC)/lib/Makefile.targ
 include	$(SRC)/cmd/picl/plugins/Makefile.targ
 
-$(ROOTLINTDIR)/%: ../%
-	$(INS.file)
-
 lint :
-	$(LINT.c) $(SRCS)
 
 $(SUBDIRS): FRC
 	@cd $@; pwd; $(MAKE) $(TARGET)

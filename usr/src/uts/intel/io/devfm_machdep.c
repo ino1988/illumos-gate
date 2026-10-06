@@ -21,6 +21,8 @@
 /*
  * Copyright 2009 Sun Microsystems, Inc.  All rights reserved.
  * Use is subject to license terms.
+ * Copyright (c) 2018, Joyent, Inc.
+ * Copyright 2023 Oxide Computer Company
  */
 
 #include <sys/stat.h>
@@ -32,6 +34,7 @@
 #include <sys/devfm.h>
 
 #include <sys/cpu_module.h>
+#include <io/amdzen/amdzen_topo.h>
 
 #define	ANY_ID		(uint_t)-1
 
@@ -47,10 +50,10 @@ typedef struct fm_cmi_walk_t
 	uint_t	chipid;		/* chipid to match during walk */
 	uint_t	coreid;		/* coreid to match */
 	uint_t	strandid;	/* strandid to match */
-	int	(*cbfunc)(cmi_hdl_t, void *, void *);  	/* callback function */
+	int	(*cbfunc)(cmi_hdl_t, void *, void *);	/* callback function */
 	cmi_hdl_t *hdls;	/* allocated array to save the handles */
-	int	nhdl_max;	/* allocated array size */
-	int	nhdl;		/* handles saved */
+	uint_t	nhdl_max;	/* allocated array size */
+	uint_t	nhdl;		/* handles saved */
 } fm_cmi_walk_t;
 
 extern int x86gentopo_legacy;
@@ -150,6 +153,7 @@ populate_cpu(nvlist_t **nvlp, cmi_hdl_t hdl)
 {
 	uint_t	fm_chipid;
 	uint16_t smbios_id;
+	const char *idstr;
 
 	(void) nvlist_alloc(nvlp, NV_UNIQUE_NAME, KM_SLEEP);
 
@@ -203,9 +207,18 @@ populate_cpu(nvlist_t **nvlp, cmi_hdl_t hdl)
 	    FM_PHYSCPU_INFO_CPU_ID, DATA_TYPE_INT32,
 	    (int32_t)cmi_hdl_logical_id(hdl),
 	    NULL);
+
+	/*
+	 * Do this separately so that way if there is no ident string we do not
+	 * trigger an error.
+	 */
+	if ((idstr = cmi_hdl_chipident(hdl)) != NULL) {
+		fm_payload_set(*nvlp,
+		    FM_PHYSCPU_INFO_CHIP_IDENTSTR, DATA_TYPE_STRING, idstr,
+		    NULL);
+	}
 }
 
-/*ARGSUSED*/
 int
 fm_ioctl_physcpu_info(int cmd, nvlist_t *invl, nvlist_t **onvlp)
 {
@@ -294,11 +307,10 @@ fm_ioctl_cpu_retire(int cmd, nvlist_t *invl, nvlist_t **onvlp)
 }
 
 /*
- * Retrun the value of x86gentopo_legacy variable as an nvpair.
+ * Return the value of x86gentopo_legacy variable as an nvpair.
  *
  * The caller is responsible for freeing the nvlist.
  */
-/* ARGSUSED */
 int
 fm_ioctl_gentopo_legacy(int cmd, nvlist_t *invl, nvlist_t **onvlp)
 {
@@ -318,4 +330,259 @@ fm_ioctl_gentopo_legacy(int cmd, nvlist_t *invl, nvlist_t **onvlp)
 	*onvlp = nvl;
 
 	return (0);
+}
+
+/*
+ * This is an internal bound on the maximum number of caches that we expect to
+ * encounter to reduce dynamic allocation.
+ */
+#define	FM_MAX_CACHES	0x10
+
+static int
+fm_cmi_cache_err_to_errno(cmi_errno_t cmi)
+{
+	switch (cmi) {
+	case CMIERR_C_NODATA:
+		return (ENOTSUP);
+	/*
+	 * Right now, CMIERR_C_BADCACHENO is explicitly not mapped to EINVAL
+	 * (which is what it maps to in cmi_hw.c.). This discrepancy exists
+	 * because there's nothing in a user request here that'd end up
+	 * resulting in an invalid value, it can only occur because we asked
+	 * for a cache that we were told exists, but doesn't actually. If we
+	 * returned EINVAL, the user would be wondering what was invalid about
+	 * their request.
+	 */
+	case CMIERR_C_BADCACHENO:
+	default:
+		return (EIO);
+	}
+}
+
+static int
+fm_populate_cache(cmi_hdl_t hdl, nvlist_t *nvl, uint_t cpuno)
+{
+	int ret;
+	cmi_errno_t err;
+	uint32_t ncache;
+	nvlist_t *caches[FM_MAX_CACHES];
+	char buf[32];
+
+	err = cmi_cache_ncaches(hdl, &ncache);
+	if (err != CMI_SUCCESS) {
+		return (fm_cmi_cache_err_to_errno(err));
+	}
+
+	/*
+	 * Our promise to userland is that if we skip a value here then there
+	 * are no caches.
+	 */
+	if (ncache == 0) {
+		return (0);
+	} else if (ncache > FM_MAX_CACHES) {
+		return (EOVERFLOW);
+	}
+
+	bzero(caches, sizeof (caches));
+	for (uint32_t i = 0; i < ncache; i++) {
+		x86_cache_t c;
+		fm_cache_info_type_t type = 0;
+
+		(void) nvlist_alloc(&caches[i], NV_UNIQUE_NAME, KM_SLEEP);
+		err = cmi_cache_info(hdl, i, &c);
+		if (err != CMI_SUCCESS) {
+			ret = fm_cmi_cache_err_to_errno(err);
+			goto cleanup;
+		}
+
+		fnvlist_add_uint32(caches[i], FM_CACHE_INFO_LEVEL, c.xc_level);
+		switch (c.xc_type) {
+		case X86_CACHE_TYPE_DATA:
+			type = FM_CACHE_INFO_T_DATA;
+			break;
+		case X86_CACHE_TYPE_INST:
+			type = FM_CACHE_INFO_T_INSTR;
+			break;
+		case X86_CACHE_TYPE_UNIFIED:
+			type = FM_CACHE_INFO_T_DATA | FM_CACHE_INFO_T_INSTR |
+			    FM_CACHE_INFO_T_UNIFIED;
+			break;
+		default:
+			break;
+		}
+		fnvlist_add_uint32(caches[i], FM_CACHE_INFO_TYPE,
+		    (uint32_t)type);
+		fnvlist_add_uint64(caches[i], FM_CACHE_INFO_NSETS, c.xc_nsets);
+		fnvlist_add_uint32(caches[i], FM_CACHE_INFO_NWAYS, c.xc_nways);
+		fnvlist_add_uint32(caches[i], FM_CACHE_INFO_LINE_SIZE,
+		    c.xc_line_size);
+		fnvlist_add_uint64(caches[i], FM_CACHE_INFO_TOTAL_SIZE,
+		    c.xc_size);
+		if ((c.xc_flags & X86_CACHE_F_FULL_ASSOC) != 0) {
+			fnvlist_add_boolean(caches[i],
+			    FM_CACHE_INFO_FULLY_ASSOC);
+		}
+		fnvlist_add_uint64(caches[i], FM_CACHE_INFO_ID, c.xc_id);
+		fnvlist_add_uint32(caches[i], FM_CACHE_INFO_X86_APIC_SHIFT,
+		    c.xc_apic_shift);
+	}
+
+	(void) snprintf(buf, sizeof (buf), "%u", cpuno);
+	fnvlist_add_nvlist_array(nvl, buf, caches, (uint_t)ncache);
+	ret = 0;
+
+cleanup:
+	for (uint32_t i = 0; i < ncache; i++) {
+		nvlist_free(caches[i]);
+	}
+	return (ret);
+}
+
+/*
+ * Gather all of the different per-CPU leaves and return them as a series of
+ * nvlists.
+ */
+int
+fm_ioctl_cache_info(int cmd, nvlist_t *invl, nvlist_t **onvlp)
+{
+	int ret = 0;
+	fm_cmi_walk_t walk;
+	nvlist_t *nvl;
+
+	if (cmd != FM_IOC_CACHE_INFO) {
+		return (ENOTTY);
+	}
+
+	walk_init(&walk, ANY_ID, ANY_ID, ANY_ID, NULL);
+	cmi_hdl_walk(select_cmi_hdl, &walk, NULL, NULL);
+	if (walk.nhdl == 0) {
+		walk_fini(&walk);
+		return (ENOENT);
+	}
+
+	(void) nvlist_alloc(&nvl, NV_UNIQUE_NAME, KM_SLEEP);
+	fnvlist_add_uint32(nvl, FM_CACHE_INFO_NCPUS, walk.nhdl);
+
+	for (uint_t i = 0; i < walk.nhdl; i++) {
+		if ((ret = fm_populate_cache(walk.hdls[i], nvl, i)) != 0) {
+			break;
+		}
+		cmi_hdl_rele(walk.hdls[i]);
+	}
+	walk_fini(&walk);
+
+	if (ret == 0) {
+		*onvlp = nvl;
+	} else {
+		nvlist_free(nvl);
+	}
+
+	return (ret);
+}
+
+/*
+ * For AMD processors, we can ask the amdzen driver for the bus number of the
+ * northbridge of each processor (see the block comment in amdzen.c for more
+ * details) and use this to determine the range of allocated PCI bus numbers.
+ */
+static const char *topo_zen_dev = "/devices/pseudo/amdzen@0:topo";
+static int
+fm_physcpu_pci_amd(nvlist_t **onvlp)
+{
+	extern struct modlinkage devfm_modlinkage;
+	const int ldi_flags = FREAD | FNOCTTY;
+	amdzen_topo_base_t base;
+	nvlist_t *nvl = NULL;
+	ldi_handle_t lh = NULL;
+	ldi_ident_t li;
+	uint32_t ndf = 0;
+	int rval, err = 0;
+
+	VERIFY0(ldi_ident_from_mod(&devfm_modlinkage, &li));
+
+	err = ldi_open_by_name(topo_zen_dev, ldi_flags, kcred, &lh, li);
+	if (err != 0) {
+		cmn_err(CE_WARN, "!devfm: ldi open of '%s' failed",
+		    topo_zen_dev);
+		goto out;
+	}
+
+	err = ldi_ioctl(lh, AMDZEN_TOPO_IOCTL_BASE, (intptr_t)&base,
+	    ldi_flags | FKIOCTL, kcred, &rval);
+	if (err != 0) {
+		cmn_err(CE_WARN, "!devfm: failed to get base Zen topology");
+		goto out;
+	}
+
+	(void) nvlist_alloc(&nvl, NV_UNIQUE_NAME, KM_SLEEP);
+
+	ndf = base.atb_ndf;
+	nvlist_t **dfs = kmem_zalloc(sizeof (nvlist_t *) * ndf, KM_SLEEP);
+
+	for (uint32_t i = 0; i < ndf; i++) {
+		amdzen_topo_df_t df;
+
+		(void) nvlist_alloc(&dfs[i], NV_UNIQUE_NAME, KM_SLEEP);
+
+		df.atd_dfno = i;
+		df.atd_df_buf_nents = 0;
+		df.atd_df_ents = NULL;
+
+		err = ldi_ioctl(lh, AMDZEN_TOPO_IOCTL_DF, (intptr_t)&df,
+		    ldi_flags | FKIOCTL, kcred, &rval);
+		if (err != 0) {
+			cmn_err(CE_WARN, "!devfm: failed to get information "
+			    "for Zen DF %u - skipping", i);
+			goto out;
+		}
+
+		fm_payload_set(dfs[i],
+		    FM_PCI_DATA_CHIP_ID, DATA_TYPE_INT32,
+		    (int32_t)df.atd_sockid,
+		    FM_PCI_DATA_NB_BUSNO, DATA_TYPE_UINT32,
+		    (int32_t)df.atd_nb_busno,
+		    NULL);
+	}
+	fnvlist_add_nvlist_array(nvl, FM_PCI_DATA_DFS,
+	    dfs, (uint_t)ndf);
+	err = 0;
+
+out:
+	if (lh != NULL)
+		VERIFY0(ldi_close(lh, ldi_flags, kcred));
+	ldi_ident_release(li);
+
+	for (uint32_t i = 0; i < ndf; i++)
+		nvlist_free(dfs[i]);
+
+	if (err == 0)
+		*onvlp = nvl;
+	else
+		nvlist_free(nvl);
+
+	return (err);
+}
+
+/*
+ * Generate information about the PCI configuration of physical CPUs. This is
+ * intended to be CPU vendor agnostic but is currently only implemented for AMD
+ * processors and returns an array of data fabric information which consists of
+ * the mapping between physical CPUs and their northbridge PCI bus number. The
+ * shape of these data will likely change once support for Intel processors is
+ * added here.
+ */
+int
+fm_ioctl_pci_data(int cmd, nvlist_t *invl __unused, nvlist_t **onvlp)
+{
+	if (cmd != FM_IOC_PCI_DATA)
+		return (ENOTTY);
+
+	switch (cpuid_getvendor(CPU)) {
+	case X86_VENDOR_AMD:
+		return (fm_physcpu_pci_amd(onvlp));
+	case X86_VENDOR_Intel:
+		return (ENOTSUP);
+	}
+
+	return (ENOTSUP);
 }

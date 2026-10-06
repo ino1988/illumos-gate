@@ -27,6 +27,8 @@
  */
 
 #include "lint.h"
+#include "thr_uberdata.h"
+#include <errno.h>
 #include <stdlib.h>
 #include <wchar.h>
 #include <locale.h>
@@ -45,13 +47,19 @@ mbtowc_l(wchar_t *_RESTRICT_KYWD pwc, const char *_RESTRICT_KYWD s, size_t n,
 		return (0);
 	}
 	rval = mbrtowc_l(pwc, s, n, &mbs, loc);
-	if (rval == (size_t)-1 || rval == (size_t)-2)
+	switch (rval) {
+	case (size_t)-2:
+		errno = EILSEQ;
+		/* FALLTHROUGH */
+	case (size_t)-1:
 		return (-1);
-	return ((int)rval);
+	default:
+		return ((int)rval);
+	}
 }
 
 int
 mbtowc(wchar_t *_RESTRICT_KYWD pwc, const char *_RESTRICT_KYWD s, size_t n)
 {
-	return (mbtowc_l(pwc, s, n, uselocale(NULL)));
+	return (mbtowc_l(pwc, s, n, __curlocale()));
 }

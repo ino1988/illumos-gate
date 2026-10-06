@@ -25,6 +25,11 @@
 # Use is subject to license terms.
 #
 
+#
+# Copyright (c) 2016 by Delphix. All rights reserved.
+# Copyright 2019 Joyent, Inc.
+#
+
 . $STF_SUITE/include/libtest.shlib
 
 #
@@ -41,7 +46,7 @@ verify_runnable "global"
 
 function cleanup
 {
-	log_must $ZFS set sharenfs=off $TESTPOOL/$TESTFS
+	log_must zfs set sharenfs=off $TESTPOOL/$TESTFS
 	is_shared $TESTPOOL/$TESTFS && \
 		log_must unshare_fs $TESTPOOL/$TESTFS
 }
@@ -58,17 +63,22 @@ log_onexit cleanup
 
 cleanup
 
+# /var/nfs is the default nfs log directory in illumos.
+if [[ ! -d /var/nfs ]]; then
+	log_must mkdir /var/nfs
+fi
+
 typeset -i i=0
 while (( i < ${#shareopts[*]} ))
 do
-	log_must $ZFS set sharenfs="${shareopts[i]}" $TESTPOOL/$TESTFS
+	log_must zfs set sharenfs="${shareopts[i]}" $TESTPOOL/$TESTFS
 
 	option=`get_prop sharenfs $TESTPOOL/$TESTFS`
 	if [[ $option != ${shareopts[i]} ]]; then
 		log_fail "get sharenfs failed. ($option != ${shareopts[i]})"
 	fi
 
-	$SHARE | $GREP $option > /dev/null 2>&1
+	share | grep $option > /dev/null 2>&1
 	if (( $? != 0 )); then
 		log_fail "The '$option' option was not found in share output."
 	fi

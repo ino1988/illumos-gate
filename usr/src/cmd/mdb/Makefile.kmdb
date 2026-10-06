@@ -39,7 +39,7 @@ include ../../../Makefile.kmdb.files
 OBJS += mdb_lex.o mdb_grammar.o
 
 .NO_PARALLEL:
-.PARALLEL: kmdb_modlinktest.o kmdb_terminfo.c $(ALLOBJS) $(ALLOBJS:%.o=%.ln)
+.PARALLEL: kmdb_modlinktest.o kmdb_terminfo.c $(ALLOBJS)
 
 SRCINCDIRS	+= . .. ../.. ../../../common ../../../common/libstand
 OSINCDIRS	+= $(SRC)/uts/$(MMU) $(SRC)/uts/$(ISADIR)
@@ -54,12 +54,18 @@ CPPFLAGS += -D_MDB -D_KMDB $(INCDIRS:%=-I%) $(ARCHOPTS)
 
 #
 # kmdb is a kernel module, so we'll use the kernel's build flags.
-CFLAGS += $(STAND_FLAGS_32)
 CFLAGS64 += $(STAND_FLAGS_64)
 
-ASFLAGS += -P -D_ASM $(INCDIRS:%=-I%) $(ARCHOPTS)
+ASFLAGS += -D_ASM $(INCDIRS:%=-I%) $(ARCHOPTS)
+ASFLAGS64 += -D_ASM $(INCDIRS:%=-I%) $(ARCHOPTS)
 
-SUBDIR64_sparc		= sparcv9
+CSTD=	$(CSTD_GNU99)
+
+#
+# kmdb has bootstrapping challenges with the stack protector.
+#
+STACKPROTECT = none
+
 SUBDIR64_i386		= amd64
 SUBDIR64		= $(SUBDIR64_$(MACH))
 
@@ -82,25 +88,6 @@ SUPPORTED_TERMS	= \
 	xterm \
 	xterms
 
-LINTFLAGS += -n -errtags=yes
-
-# The prom interfaces (the prom_* files) are compiled with -D_KERNEL, which
-# teaches them about the kernel version of the synchronization functions, while
-# the core of kmdb, which is compiled without -D_KERNEL, knows about the
-# userland versions.  Even though nobody actually uses either one, lint
-# complains that both know about different versions.  The same thing applies
-# to the driver, parts of which are executed directly by the kernel, and other
-# parts which are called by kmdb via the auxv.
-ALLLINTFLAGS = $(LINTFLAGS) \
-	-xerroff=E_FUNC_DECL_VAR_ARG2 \
-	-xerroff=E_INCONS_ARG_DECL \
-	-xerroff=E_INCONS_ARG_DECL2 \
-	-xerroff=E_INCONS_ARG_USED2 \
-	-xerroff=E_INCONS_VAL_TYPE_DECL2 \
-	-xerroff=E_INCONS_VAL_TYPE_USED2
-
-CERRWARN += -_gcc=-Wno-uninitialized
-CERRWARN += -_gcc=-Wno-unused-label
 CERRWARN += -_gcc=-Wno-char-subscripts
 CERRWARN += -_gcc=-Wno-clobbered
 CERRWARN += -_gcc=-Wno-unused-variable
@@ -121,12 +108,14 @@ MAPFILE_SOURCES_COMMON = \
 	../../../common/mdb/mdb_whatis.h
 
 mdb_lex.o mdb_grammar.o := CCVERBOSE =
+# because of labels from yacc
+mdb_lex.o mdb_grammar.o := CERRWARN += -_gcc=-Wno-unused-label
 
-kmdb_ctf_open.o kmdb_ctf_open.ln	:= CPPFLAGS += -I$(SRC)/common/ctf
+kmdb_ctf_open.o := CPPFLAGS += -I$(SRC)/common/ctf
 
-PROMTGTS	= $(PROMOBJS) $(PROMOBJS:%.o=%.ln)
-VERSTGTS	= $(VERSOBJS) $(VERSOBJS:%.o=%.ln)
-KCTLTGTS	= $(KCTLOBJS) $(KCTLOBJS:%.o=%.ln)
+PROMTGTS	= $(PROMOBJS)
+VERSTGTS	= $(VERSOBJS)
+KCTLTGTS	= $(KCTLOBJS)
 
 $(PROMTGTS) := CPPFLAGS += -D_BOOT -D_KERNEL -D_MACHDEP $(PROMINCDIRS:%=-I%) \
 	-Dassfail=kmdb_prom_assfail
@@ -136,7 +125,7 @@ $(VERSTGTS) := CPPFLAGS += -DKMDB_VERSION='$(KMDB_VERSION)'
 $(KCTLTGTS) := CPPFLAGS += -D_KERNEL
 $(KCTLTGTS) := ASFLAGS += -D_KERNEL
 
-ffs.o ffs.ln := CPPFLAGS += -Dffs=mdb_ffs
+ffs.o := CPPFLAGS += -Dffs=mdb_ffs
 
 $(ROOTMISC) $(ROOTMISC64) := FILEMODE = 0755
 

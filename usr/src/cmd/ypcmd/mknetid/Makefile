@@ -23,6 +23,7 @@
 # Copyright 1994, 2002 Sun Microsystems, Inc.  All rights reserved.
 # Use is subject to license terms.
 #
+# Copyright (c) 2018, Joyent, Inc.
 
 PROG = mknetid
 
@@ -30,16 +31,19 @@ include ../../Makefile.cmd
 
 LDLIBS += -lnsl
 
-OBJS = mknetid.o getname.o 
+OBJS = mknetid.o getname.o
 SRCS = $(OBJS:.o=.c)
 
 CERRWARN += -_gcc=-Wno-implicit-function-declaration
 CERRWARN += -_gcc=-Wno-parentheses
 CERRWARN += -_gcc=-Wno-unused-function
 
+# not linted
+SMATCH=off
+
 .KEEP_STATE:
 
-all: $(PROG) 
+all: $(PROG)
 
 $(PROG): $(OBJS)
 	$(LINK.c) $(OBJS) -o $@ $(LDLIBS)
@@ -47,7 +51,7 @@ $(PROG): $(OBJS)
 
 install: all $(ROOTUSRSBINPROG)
 
-clean: 
+clean:
 	$(RM) $(OBJS)
 
 lint:
@@ -56,7 +60,7 @@ lint:
 cstyle:
 	${CSTYLE} ${SRCS}
 
-clobber: clean 
+clobber: clean
 	$(RM) $(PROG)
 
 FRC:

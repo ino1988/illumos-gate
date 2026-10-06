@@ -25,14 +25,14 @@
 
 /*	Copyright (c) 1990, 1991 UNIX System Laboratories, Inc. */
 /*	Copyright (c) 1984, 1986, 1987, 1988, 1989, 1990 AT&T   */
-/*		All Rights Reserved   				*/
+/*		All Rights Reserved				*/
 /*								*/
-/*	Copyright (c) 1987, 1988 Microsoft Corporation  	*/
-/*		All Rights Reserved   				*/
+/*	Copyright (c) 1987, 1988 Microsoft Corporation		*/
+/*		All Rights Reserved				*/
 /*								*/
 
 /*
- * Copyright 2012 Joyent, Inc. All rights reserved.
+ * Copyright 2018 Joyent, Inc.
  */
 
 #include <sys/types.h>
@@ -81,8 +81,6 @@
 #include <sys/debugreg.h>
 #include <sys/modctl.h>
 #include <sys/aio_impl.h>
-#include <sys/tnf.h>
-#include <sys/tnf_probe.h>
 #include <sys/cred.h>
 #include <sys/mman.h>
 #include <sys/x86_archext.h>
@@ -113,24 +111,24 @@ static const char *trap_type_mnemonic[] = {
 };
 
 static const char *trap_type[] = {
-	"Divide error",				/* trap id 0 	*/
+	"Divide error",				/* trap id 0	*/
 	"Debug",				/* trap id 1	*/
 	"NMI interrupt",			/* trap id 2	*/
-	"Breakpoint",				/* trap id 3 	*/
-	"Overflow",				/* trap id 4 	*/
-	"BOUND range exceeded",			/* trap id 5 	*/
-	"Invalid opcode",			/* trap id 6 	*/
-	"Device not available",			/* trap id 7 	*/
-	"Double fault",				/* trap id 8 	*/
-	"Coprocessor segment overrun",		/* trap id 9 	*/
-	"Invalid TSS",				/* trap id 10 	*/
-	"Segment not present",			/* trap id 11 	*/
-	"Stack segment fault",			/* trap id 12 	*/
-	"General protection",			/* trap id 13 	*/
-	"Page fault",				/* trap id 14 	*/
-	"Reserved",				/* trap id 15 	*/
-	"x87 floating point error",		/* trap id 16 	*/
-	"Alignment check",			/* trap id 17 	*/
+	"Breakpoint",				/* trap id 3	*/
+	"Overflow",				/* trap id 4	*/
+	"BOUND range exceeded",			/* trap id 5	*/
+	"Invalid opcode",			/* trap id 6	*/
+	"Device not available",			/* trap id 7	*/
+	"Double fault",				/* trap id 8	*/
+	"Coprocessor segment overrun",		/* trap id 9	*/
+	"Invalid TSS",				/* trap id 10	*/
+	"Segment not present",			/* trap id 11	*/
+	"Stack segment fault",			/* trap id 12	*/
+	"General protection",			/* trap id 13	*/
+	"Page fault",				/* trap id 14	*/
+	"Reserved",				/* trap id 15	*/
+	"x87 floating point error",		/* trap id 16	*/
+	"Alignment check",			/* trap id 17	*/
 	"Machine check",			/* trap id 18	*/
 	"SIMD floating point exception",	/* trap id 19	*/
 };
@@ -213,7 +211,7 @@ die(uint_t type, struct regs *rp, caddr_t addr, processorid_t cpuid)
 
 	curthread->t_panic_trap = &ti;
 
-	if (type == T_PGFLT && addr < (caddr_t)KERNELBASE) {
+	if (type == T_PGFLT && addr < (caddr_t)kernelbase) {
 		panic("BAD TRAP: type=%x (#%s %s) rp=%p addr=%p "
 		    "occurred in module \"%s\" due to %s",
 		    type, trap_mnemonic, trap_name, (void *)rp, (void *)addr,
@@ -283,6 +281,7 @@ instr_is_other_syscall(caddr_t pc, int which)
 	return (0);
 }
 
+#ifdef DEBUG
 static const char *
 syscall_insn_string(int syscall_insn)
 {
@@ -297,6 +296,7 @@ syscall_insn_string(int syscall_insn)
 		return ("Unknown");
 	}
 }
+#endif /* DEBUG */
 
 static int
 ldt_rewrite_syscall(struct regs *rp, proc_t *p, int syscall_insn)
@@ -362,8 +362,6 @@ instr_is_lcall_syscall(caddr_t pc)
 	return (0);
 }
 
-#ifdef __amd64
-
 /*
  * In the first revisions of amd64 CPUs produced by AMD, the LAHF and
  * SAHF instructions were not implemented in 64-bit mode. Later revisions
@@ -414,7 +412,6 @@ emulate_lsahf(struct regs *rp, uchar_t instr)
 	}
 	rp->r_pc += LSAHFSIZE;
 }
-#endif /* __amd64 */
 
 #ifdef OPTERON_ERRATUM_91
 
@@ -480,56 +477,32 @@ trap(struct regs *rp, caddr_t addr, processorid_t cpuid)
 	int watchcode;
 	int watchpage;
 	caddr_t vaddr;
-	int singlestep_twiddle;
 	size_t sz;
 	int ta;
-#ifdef __amd64
 	uchar_t instr;
-#endif
 
 	ASSERT_STACK_ALIGNED();
 
+	errcode = 0;
+	mstate = 0;
+	rw = S_OTHER;
 	type = rp->r_trapno;
 	CPU_STATS_ADDQ(CPU, sys, trap, 1);
 	ASSERT(ct->t_schedflag & TS_DONT_SWAP);
 
 	if (type == T_PGFLT) {
-
 		errcode = rp->r_err;
-		if (errcode & PF_ERR_WRITE)
+		if (errcode & PF_ERR_WRITE) {
 			rw = S_WRITE;
-		else if ((caddr_t)rp->r_pc == addr ||
-		    (mmu.pt_nx != 0 && (errcode & PF_ERR_EXEC)))
+		} else if ((caddr_t)rp->r_pc == addr ||
+		    (mmu.pt_nx != 0 && (errcode & PF_ERR_EXEC))) {
 			rw = S_EXEC;
-		else
+		} else {
 			rw = S_READ;
-
-#if defined(__i386)
-		/*
-		 * Pentium Pro work-around
-		 */
-		if ((errcode & PF_ERR_PROT) && pentiumpro_bug4046376) {
-			uint_t	attr;
-			uint_t	priv_violation;
-			uint_t	access_violation;
-
-			if (hat_getattr(addr < (caddr_t)kernelbase ?
-			    curproc->p_as->a_hat : kas.a_hat, addr, &attr)
-			    == -1) {
-				errcode &= ~PF_ERR_PROT;
-			} else {
-				priv_violation = (errcode & PF_ERR_USER) &&
-				    !(attr & PROT_USER);
-				access_violation = (errcode & PF_ERR_WRITE) &&
-				    !(attr & PROT_WRITE);
-				if (!priv_violation && !access_violation)
-					goto cleanup;
-			}
 		}
-#endif /* __i386 */
-
-	} else if (type == T_SGLSTP && lwp != NULL)
+	} else if (type == T_SGLSTP && lwp != NULL) {
 		lwp->lwp_pcb.pcb_drstat = (uintptr_t)addr;
+	}
 
 	if (tdebug)
 		showregs(type, rp, addr);
@@ -568,9 +541,6 @@ trap(struct regs *rp, caddr_t addr, processorid_t cpuid)
 			mstate = LMS_TRAP;
 			break;
 		}
-		/* Kernel probe */
-		TNF_PROBE_1(thread_state, "thread", /* CSTYLED */,
-		    tnf_microstate, state, mstate);
 		mstate = new_mstate(ct, mstate);
 
 		bzero(&siginfo, sizeof (siginfo));
@@ -605,11 +575,11 @@ trap(struct regs *rp, caddr_t addr, processorid_t cpuid)
 			siginfo.si_addr  = (caddr_t)rp->r_pc;
 			siginfo.si_trapno = type & ~USER;
 			fault = FLTILL;
-			break;
 		} else {
 			(void) die(type, rp, addr, cpuid);
 			/*NOTREACHED*/
 		}
+		break;
 
 	case T_PGFLT:		/* system page fault */
 		/*
@@ -622,6 +592,34 @@ trap(struct regs *rp, caddr_t addr, processorid_t cpuid)
 			ct->t_ontrap->ot_trap |= OT_DATA_ACCESS;
 			rp->r_pc = ct->t_ontrap->ot_trampoline;
 			goto cleanup;
+		}
+
+		/*
+		 * If we have an Instruction fault in kernel mode, then that
+		 * means we've tried to execute a user page (SMEP) or both of
+		 * PAE and NXE are enabled. In either case, given that it's a
+		 * kernel fault, we should panic immediately and not try to make
+		 * any more forward progress. This indicates a bug in the
+		 * kernel, which if execution continued, could be exploited to
+		 * wreak havoc on the system.
+		 */
+		if (errcode & PF_ERR_EXEC) {
+			(void) die(type, rp, addr, cpuid);
+		}
+
+		/*
+		 * We need to check if SMAP is in play. If SMAP is in play, then
+		 * any access to a user page will show up as a protection
+		 * violation. To see if SMAP is enabled we first check if it's a
+		 * user address and whether we have the feature flag set. If we
+		 * do and the interrupted registers do not allow for user
+		 * accesses (PS_ACHK is not enabled), then we need to die
+		 * immediately.
+		 */
+		if (addr < (caddr_t)kernelbase &&
+		    is_x86_feature(x86_featureset, X86FSET_SMAP) == B_TRUE &&
+		    (rp->r_ps & PS_ACHK) == 0) {
+			(void) die(type, rp, addr, cpuid);
 		}
 
 		/*
@@ -785,28 +783,6 @@ trap(struct regs *rp, caddr_t addr, processorid_t cpuid)
 
 		ASSERT(!(curthread->t_flag & T_WATCHPT));
 		watchpage = (pr_watch_active(p) && pr_is_watchpage(addr, rw));
-#ifdef __i386
-		/*
-		 * In 32-bit mode, the lcall (system call) instruction fetches
-		 * one word from the stack, at the stack pointer, because of the
-		 * way the call gate is constructed.  This is a bogus
-		 * read and should not be counted as a read watchpoint.
-		 * We work around the problem here by testing to see if
-		 * this situation applies and, if so, simply jumping to
-		 * the code in locore.s that fields the system call trap.
-		 * The registers on the stack are already set up properly
-		 * due to the match between the call gate sequence and the
-		 * trap gate sequence.  We just have to adjust the pc.
-		 */
-		if (watchpage && addr == (caddr_t)rp->r_sp &&
-		    rw == S_READ && instr_is_lcall_syscall((caddr_t)rp->r_pc)) {
-			extern void watch_syscall(void);
-
-			rp->r_pc += LCALLSIZE;
-			watch_syscall();	/* never returns */
-			/* NOTREACHED */
-		}
-#endif /* __i386 */
 		vaddr = addr;
 		if (!watchpage || (sz = instr_size(rp, &vaddr, rw)) <= 0)
 			fault_type = (errcode & PF_ERR_PROT)? F_PROT: F_INVAL;
@@ -926,7 +902,6 @@ trap(struct regs *rp, caddr_t addr, processorid_t cpuid)
 		    ldt_rewrite_syscall(rp, p, X86FSET_ASYSC))
 			goto out;
 
-#ifdef __amd64
 		/*
 		 * Emulate the LAHF and SAHF instructions if needed.
 		 * See the instr_is_lsahf function for details.
@@ -936,7 +911,6 @@ trap(struct regs *rp, caddr_t addr, processorid_t cpuid)
 			emulate_lsahf(rp, instr);
 			goto out;
 		}
-#endif
 
 		/*FALLTHROUGH*/
 
@@ -966,55 +940,30 @@ trap(struct regs *rp, caddr_t addr, processorid_t cpuid)
 		fault = FLTIOVF;
 		break;
 
+	/*
+	 * When using an eager FPU on x86, the #NM trap is no longer meaningful.
+	 * Userland should not be able to trigger it. Anything that does
+	 * represents a fatal error in the kernel and likely in the register
+	 * state of the system. User FPU state should always be valid.
+	 */
 	case T_NOEXTFLT + USER:	/* math coprocessor not available */
-		if (tudebug && tudebugfpe)
-			showregs(type, rp, addr);
-		if (fpnoextflt(rp)) {
-			siginfo.si_signo = SIGILL;
-			siginfo.si_code  = ILL_ILLOPC;
-			siginfo.si_addr  = (caddr_t)rp->r_pc;
-			fault = FLTILL;
-		}
+	case T_NOEXTFLT:
+		(void) die(type, rp, addr, cpuid);
 		break;
 
-	case T_EXTOVRFLT:	/* extension overrun fault */
-		/* check if we took a kernel trap on behalf of user */
-		{
-			extern  void ndptrap_frstor(void);
-			if (rp->r_pc != (uintptr_t)ndptrap_frstor) {
-				sti(); /* T_EXTOVRFLT comes in via cmninttrap */
-				(void) die(type, rp, addr, cpuid);
-			}
-			type |= USER;
-		}
-		/*FALLTHROUGH*/
-	case T_EXTOVRFLT + USER:	/* extension overrun fault */
-		if (tudebug && tudebugfpe)
-			showregs(type, rp, addr);
-		if (fpextovrflt(rp)) {
-			siginfo.si_signo = SIGSEGV;
-			siginfo.si_code  = SEGV_MAPERR;
-			siginfo.si_addr  = (caddr_t)rp->r_pc;
-			fault = FLTBOUNDS;
-		}
-		break;
-
+	/*
+	 * Kernel threads leveraging floating point need to mask the exceptions
+	 * or ensure that they cannot happen. There is no recovery from this.
+	 */
 	case T_EXTERRFLT:	/* x87 floating point exception pending */
-		/* check if we took a kernel trap on behalf of user */
-		{
-			extern  void ndptrap_frstor(void);
-			if (rp->r_pc != (uintptr_t)ndptrap_frstor) {
-				sti(); /* T_EXTERRFLT comes in via cmninttrap */
-				(void) die(type, rp, addr, cpuid);
-			}
-			type |= USER;
-		}
-		/*FALLTHROUGH*/
+		sti(); /* T_EXTERRFLT comes in via cmninttrap */
+		(void) die(type, rp, addr, cpuid);
+		break;
 
 	case T_EXTERRFLT + USER: /* x87 floating point exception pending */
 		if (tudebug && tudebugfpe)
 			showregs(type, rp, addr);
-		if (sicode = fpexterrflt(rp)) {
+		if ((sicode = fpexterrflt(rp)) != 0) {
 			siginfo.si_signo = SIGFPE;
 			siginfo.si_code  = sicode;
 			siginfo.si_addr  = (caddr_t)rp->r_pc;
@@ -1063,58 +1012,35 @@ trap(struct regs *rp, caddr_t addr, processorid_t cpuid)
 
 	case T_SGLSTP: /* single step/hw breakpoint exception */
 
-		/* Now evaluate how we got here */
+#if !defined(__xpv)
+		/*
+		 * We'd never normally get here, as kmdb handles its own single
+		 * step traps.  There is one nasty exception though, as
+		 * described in more detail in sys_sysenter().  Note that
+		 * checking for all four locations covers both the KPTI and the
+		 * non-KPTI cases correctly: the former will never be found at
+		 * (brand_)sys_sysenter, and vice versa.
+		 */
 		if (lwp != NULL && (lwp->lwp_pcb.pcb_drstat & DR_SINGLESTEP)) {
-			/*
-			 * i386 single-steps even through lcalls which
-			 * change the privilege level. So we take a trap at
-			 * the first instruction in privileged mode.
-			 *
-			 * Set a flag to indicate that upon completion of
-			 * the system call, deal with the single-step trap.
-			 *
-			 * The same thing happens for sysenter, too.
-			 */
-			singlestep_twiddle = 0;
-			if (rp->r_pc == (uintptr_t)sys_sysenter ||
-			    rp->r_pc == (uintptr_t)brand_sys_sysenter) {
-				singlestep_twiddle = 1;
-#if defined(__amd64)
-				/*
-				 * Since we are already on the kernel's
-				 * %gs, on 64-bit systems the sysenter case
-				 * needs to adjust the pc to avoid
-				 * executing the swapgs instruction at the
-				 * top of the handler.
-				 */
-				if (rp->r_pc == (uintptr_t)sys_sysenter)
-					rp->r_pc = (uintptr_t)
-					    _sys_sysenter_post_swapgs;
-				else
-					rp->r_pc = (uintptr_t)
-					    _brand_sys_sysenter_post_swapgs;
-#endif
-			}
-#if defined(__i386)
-			else if (rp->r_pc == (uintptr_t)sys_call ||
-			    rp->r_pc == (uintptr_t)brand_sys_call) {
-				singlestep_twiddle = 1;
-			}
-#endif
-			else {
-				/* not on sysenter/syscall; uregs available */
-				if (tudebug && tudebugbpt)
-					showregs(type, rp, (caddr_t)0);
-			}
-			if (singlestep_twiddle) {
+			if (rp->r_pc == (greg_t)brand_sys_sysenter ||
+			    rp->r_pc == (greg_t)sys_sysenter ||
+			    rp->r_pc == (greg_t)tr_brand_sys_sysenter ||
+			    rp->r_pc == (greg_t)tr_sys_sysenter) {
+
+				rp->r_pc += 0x3; /* sizeof (swapgs) */
+
 				rp->r_ps &= ~PS_T; /* turn off trace */
 				lwp->lwp_pcb.pcb_flags |= DEBUG_PENDING;
 				ct->t_post_sys = 1;
 				aston(curthread);
 				goto cleanup;
+			} else {
+				if (tudebug && tudebugbpt)
+					showregs(type, rp, (caddr_t)0);
 			}
 		}
-		/* XXX - needs review on debugger interface? */
+#endif /* !__xpv */
+
 		if (boothowto & RB_DEBUG)
 			debug_enter((char *)NULL);
 		else
@@ -1440,12 +1366,23 @@ trap(struct regs *rp, caddr_t addr, processorid_t cpuid)
 
 		ct->t_sig_check = 0;
 
-		mutex_enter(&p->p_lock);
+		/*
+		 * As in other code paths that check against TP_CHANGEBIND,
+		 * we perform the check first without p_lock held -- only
+		 * acquiring p_lock in the unlikely event that it is indeed
+		 * set.  This is safe because we are doing this after the
+		 * astoff(); if we are racing another thread setting
+		 * TP_CHANGEBIND on us, we will pick it up on a subsequent
+		 * lap through.
+		 */
 		if (curthread->t_proc_flag & TP_CHANGEBIND) {
-			timer_lwpbind();
-			curthread->t_proc_flag &= ~TP_CHANGEBIND;
+			mutex_enter(&p->p_lock);
+			if (curthread->t_proc_flag & TP_CHANGEBIND) {
+				timer_lwpbind();
+				curthread->t_proc_flag &= ~TP_CHANGEBIND;
+			}
+			mutex_exit(&p->p_lock);
 		}
-		mutex_exit(&p->p_lock);
 
 		/*
 		 * for kaio requests that are on the per-process poll queue,
@@ -1527,10 +1464,6 @@ out:	/* We can't get here from a system trap */
 		preempt();
 	prunstop();
 	(void) new_mstate(ct, mstate);
-
-	/* Kernel probe */
-	TNF_PROBE_1(thread_state, "thread", /* CSTYLED */,
-	    tnf_microstate, state, LMS_USER);
 
 	return;
 
@@ -1692,19 +1625,17 @@ showregs(uint_t type, struct regs *rp, caddr_t addr)
 	 * this clause can be deleted when lint bug 4870403 is fixed
 	 * (lint thinks that bit 32 is illegal in a %b format string)
 	 */
-	printf("cr0: %x cr4: %b\n",
+	printf("cr0: %x  cr4: %b\n",
 	    (uint_t)getcr0(), (uint_t)getcr4(), FMT_CR4);
 #else
-	printf("cr0: %b cr4: %b\n",
+	printf("cr0: %b  cr4: %b\n",
 	    (uint_t)getcr0(), FMT_CR0, (uint_t)getcr4(), FMT_CR4);
 #endif	/* __lint */
 
-	printf("cr2: %lx", getcr2());
+	printf("cr2: %lx  ", getcr2());
 #if !defined(__xpv)
-	printf("cr3: %lx", getcr3());
-#if defined(__amd64)
+	printf("cr3: %lx  ", getcr3());
 	printf("cr8: %lx\n", getcr8());
-#endif
 #endif
 	printf("\n");
 
@@ -1715,7 +1646,6 @@ showregs(uint_t type, struct regs *rp, caddr_t addr)
 static void
 dumpregs(struct regs *rp)
 {
-#if defined(__amd64)
 	const char fmt[] = "\t%3s: %16lx %3s: %16lx %3s: %16lx\n";
 
 	printf(fmt, "rdi", rp->r_rdi, "rsi", rp->r_rsi, "rdx", rp->r_rdx);
@@ -1733,21 +1663,6 @@ dumpregs(struct regs *rp)
 
 	printf("\t%3s: %16lx\n", " ss", rp->r_ss);
 
-#elif defined(__i386)
-	const char fmt[] = "\t%3s: %8lx %3s: %8lx %3s: %8lx %3s: %8lx\n";
-
-	printf(fmt, " gs", rp->r_gs, " fs", rp->r_fs,
-	    " es", rp->r_es, " ds", rp->r_ds);
-	printf(fmt, "edi", rp->r_edi, "esi", rp->r_esi,
-	    "ebp", rp->r_ebp, "esp", rp->r_esp);
-	printf(fmt, "ebx", rp->r_ebx, "edx", rp->r_edx,
-	    "ecx", rp->r_ecx, "eax", rp->r_eax);
-	printf(fmt, "trp", rp->r_trapno, "err", rp->r_err,
-	    "eip", rp->r_eip, " cs", rp->r_cs);
-	printf("\t%3s: %8lx %3s: %8lx %3s: %8lx\n",
-	    "efl", rp->r_efl, "usp", rp->r_uesp, " ss", rp->r_ss);
-
-#endif	/* __i386 */
 }
 
 /*
@@ -1767,47 +1682,17 @@ instr_is_iret(caddr_t pc)
 
 #else
 
-#if defined(__amd64)
 	static const uint8_t iret_insn[2] = { 0x48, 0xcf };	/* iretq */
 
-#elif defined(__i386)
-	static const uint8_t iret_insn[1] = { 0xcf };		/* iret */
-#endif	/* __i386 */
 	return (bcmp(pc, iret_insn, sizeof (iret_insn)) == 0);
 
 #endif	/* __xpv */
 }
 
-#if defined(__i386)
 
 /*
- * Test to see if the instruction is part of __SEGREGS_POP
- *
- * Note carefully the appallingly awful dependency between
- * the instruction sequence used in __SEGREGS_POP and these
- * instructions encoded here.
- */
-static int
-instr_is_segregs_pop(caddr_t pc)
-{
-	static const uint8_t movw_0_esp_gs[4] = { 0x8e, 0x6c, 0x24, 0x0 };
-	static const uint8_t movw_4_esp_fs[4] = { 0x8e, 0x64, 0x24, 0x4 };
-	static const uint8_t movw_8_esp_es[4] = { 0x8e, 0x44, 0x24, 0x8 };
-	static const uint8_t movw_c_esp_ds[4] = { 0x8e, 0x5c, 0x24, 0xc };
-
-	if (bcmp(pc, movw_0_esp_gs, sizeof (movw_0_esp_gs)) == 0 ||
-	    bcmp(pc, movw_4_esp_fs, sizeof (movw_4_esp_fs)) == 0 ||
-	    bcmp(pc, movw_8_esp_es, sizeof (movw_8_esp_es)) == 0 ||
-	    bcmp(pc, movw_c_esp_ds, sizeof (movw_c_esp_ds)) == 0)
-		return (1);
-
-	return (0);
-}
-
-#endif	/* __i386 */
-
-/*
- * Test to see if the instruction is part of _sys_rtt.
+ * Test to see if the instruction is part of _sys_rtt (or the KPTI trampolines
+ * which are used by _sys_rtt).
  *
  * Again on the hypervisor if we try to IRET to user land with a bad code
  * or stack selector we will get vectored through xen_failsafe_callback.
@@ -1818,6 +1703,19 @@ static int
 instr_is_sys_rtt(caddr_t pc)
 {
 	extern void _sys_rtt(), _sys_rtt_end();
+
+#if !defined(__xpv)
+	extern void tr_sysc_ret_start(), tr_sysc_ret_end();
+	extern void tr_intr_ret_start(), tr_intr_ret_end();
+
+	if ((uintptr_t)pc >= (uintptr_t)tr_sysc_ret_start &&
+	    (uintptr_t)pc <= (uintptr_t)tr_sysc_ret_end)
+		return (1);
+
+	if ((uintptr_t)pc >= (uintptr_t)tr_intr_ret_start &&
+	    (uintptr_t)pc <= (uintptr_t)tr_intr_ret_end)
+		return (1);
+#endif
 
 	if ((uintptr_t)pc < (uintptr_t)_sys_rtt ||
 	    (uintptr_t)pc > (uintptr_t)_sys_rtt_end)
@@ -1834,7 +1732,7 @@ instr_is_sys_rtt(caddr_t pc)
  *
  * This can happen in a couple of ways: someone - either accidentally or
  * on purpose - creates (setcontext(2), lwp_create(2)) or modifies
- * (signal(2)) a ucontext that contains silly segment register values.
+ * (signal(3C)) a ucontext that contains silly segment register values.
  * Or someone - either accidentally or on purpose - modifies the prgregset_t
  * of a subject process via /proc to contain silly segment register values.
  *
@@ -1909,8 +1807,7 @@ kern_gpfault(struct regs *rp)
 
 	}
 
-#if defined(__amd64)
-	if (trp == NULL && lwp->lwp_pcb.pcb_rupdate != 0) {
+	if (trp == NULL && PCB_NEED_UPDATE_SEGS(&lwp->lwp_pcb)) {
 
 		/*
 		 * This is the common case -- we're trying to load
@@ -1927,13 +1824,6 @@ kern_gpfault(struct regs *rp)
 		trp = lwptoregs(lwp);
 		ASSERT((caddr_t)trp == (caddr_t)rp->r_sp);
 	}
-
-#elif defined(__i386)
-
-	if (trp == NULL && instr_is_segregs_pop(pc))
-		trp = lwptoregs(lwp);
-
-#endif	/* __i386 */
 
 	if (trp == NULL)
 		return (1);
@@ -1984,7 +1874,6 @@ kern_gpfault(struct regs *rp)
  */
 
 #if !defined(__xpv)
-#if defined(__amd64)
 
 static void
 dump_tss(void)
@@ -2005,32 +1894,6 @@ dump_tss(void)
 	printf(tss_fmt, "tss_ist7", (void *)tss->tss_ist7);
 }
 
-#elif defined(__i386)
-
-static void
-dump_tss(void)
-{
-	const char tss_fmt[] = "tss.%s:\t0x%p\n";  /* Format string */
-	tss_t *tss = CPU->cpu_tss;
-
-	printf(tss_fmt, "tss_link", (void *)(uintptr_t)tss->tss_link);
-	printf(tss_fmt, "tss_esp0", (void *)(uintptr_t)tss->tss_esp0);
-	printf(tss_fmt, "tss_ss0", (void *)(uintptr_t)tss->tss_ss0);
-	printf(tss_fmt, "tss_esp1", (void *)(uintptr_t)tss->tss_esp1);
-	printf(tss_fmt, "tss_ss1", (void *)(uintptr_t)tss->tss_ss1);
-	printf(tss_fmt, "tss_esp2", (void *)(uintptr_t)tss->tss_esp2);
-	printf(tss_fmt, "tss_ss2", (void *)(uintptr_t)tss->tss_ss2);
-	printf(tss_fmt, "tss_cr3", (void *)(uintptr_t)tss->tss_cr3);
-	printf(tss_fmt, "tss_eip", (void *)(uintptr_t)tss->tss_eip);
-	printf(tss_fmt, "tss_eflags", (void *)(uintptr_t)tss->tss_eflags);
-	printf(tss_fmt, "tss_eax", (void *)(uintptr_t)tss->tss_eax);
-	printf(tss_fmt, "tss_ebx", (void *)(uintptr_t)tss->tss_ebx);
-	printf(tss_fmt, "tss_ecx", (void *)(uintptr_t)tss->tss_ecx);
-	printf(tss_fmt, "tss_edx", (void *)(uintptr_t)tss->tss_edx);
-	printf(tss_fmt, "tss_esp", (void *)(uintptr_t)tss->tss_esp);
-}
-
-#endif	/* __amd64 */
 #endif	/* !__xpv */
 
 #if defined(TRAPTRACE)
@@ -2047,29 +1910,36 @@ dump_ttrace(void)
 	trap_trace_ctl_t *ttc;
 	trap_trace_rec_t *rec;
 	uintptr_t current;
-	int i, j, k;
+	int i, j;
 	int n = NCPU;
-#if defined(__amd64)
 	const char banner[] =
-	    "\ncpu          address    timestamp "
-	    "type  vc  handler   pc\n";
-	const char fmt1[] = "%3d %016lx %12llx ";
-#elif defined(__i386)
-	const char banner[] =
-	    "\ncpu  address     timestamp type  vc  handler   pc\n";
-	const char fmt1[] = "%3d %08lx %12llx ";
-#endif
-	const char fmt2[] = "%4s %3x ";
-	const char fmt3[] = "%8s ";
+	    "CPU          ADDRESS    TIMESTAMP TYPE  VC HANDLER          PC\n";
+	/* Define format for the CPU, ADDRESS, and TIMESTAMP fields */
+	const char fmt1[] = "%3d %016lx %12llx";
+	char data1[34];	/* length of string formatted by fmt1 + 1 */
+	/* Define format for the TYPE and VC fields */
+	const char fmt2[] = "%4s %3x";
+	const char fmt2s[] = "%4s %3s";
+	char data2[9];	/* length of string formatted by fmt2 + 1 */
+	/*
+	 * Define format for the HANDLER field. Width is arbitrary, but should
+	 * be enough for common handler's names, and leave enough space for
+	 * the PC field, especially when we are in kmdb.
+	 */
+	const char fmt3h[] = "#%-15s";
+	const char fmt3p[] = "%-16p";
+	const char fmt3s[] = "%-16s";
+	char data3[17];	/* length of string formatted by fmt3* + 1 */
 
 	if (ttrace_nrec == 0)
 		return;
 
+	printf("\n");
 	printf(banner);
 
 	for (i = 0; i < n; i++) {
 		ttc = &trap_trace_ctl[i];
-		if (ttc->ttc_first == NULL)
+		if (ttc->ttc_first == (uintptr_t)NULL)
 			continue;
 
 		current = ttc->ttc_next - sizeof (trap_trace_rec_t);
@@ -2085,7 +1955,7 @@ dump_ttrace(void)
 				current =
 				    ttc->ttc_limit - sizeof (trap_trace_rec_t);
 
-			if (current == NULL)
+			if (current == (uintptr_t)NULL)
 				continue;
 
 			rec = (trap_trace_rec_t *)current;
@@ -2093,24 +1963,19 @@ dump_ttrace(void)
 			if (rec->ttr_stamp == 0)
 				break;
 
-			printf(fmt1, i, (uintptr_t)rec, rec->ttr_stamp);
+			(void) snprintf(data1, sizeof (data1), fmt1, i,
+			    (uintptr_t)rec, rec->ttr_stamp);
 
 			switch (rec->ttr_marker) {
 			case TT_SYSCALL:
 			case TT_SYSENTER:
 			case TT_SYSC:
 			case TT_SYSC64:
-#if defined(__amd64)
 				sys = &sysent32[rec->ttr_sysnum];
 				switch (rec->ttr_marker) {
 				case TT_SYSC64:
 					sys = &sysent[rec->ttr_sysnum];
-					/*FALLTHROUGH*/
-#elif defined(__i386)
-				sys = &sysent[rec->ttr_sysnum];
-				switch (rec->ttr_marker) {
-				case TT_SYSC64:
-#endif
+					/* FALLTHROUGH */
 				case TT_SYSC:
 					stype = "sysc";	/* syscall */
 					break;
@@ -2121,24 +1986,40 @@ dump_ttrace(void)
 					stype = "syse";	/* sysenter */
 					break;
 				default:
+					stype = "";
 					break;
 				}
-				printf(fmt2, "sysc", rec->ttr_sysnum);
+				(void) snprintf(data2, sizeof (data2), fmt2,
+				    stype, rec->ttr_sysnum);
 				if (sys != NULL) {
 					sym = kobj_getsymname(
 					    (uintptr_t)sys->sy_callc,
 					    &off);
-					if (sym != NULL)
-						printf(fmt3, sym);
-					else
-						printf("%p ", sys->sy_callc);
+					if (sym != NULL) {
+						(void) snprintf(data3,
+						    sizeof (data3), fmt3s, sym);
+					} else {
+						(void) snprintf(data3,
+						    sizeof (data3), fmt3p,
+						    sys->sy_callc);
+					}
 				} else {
-					printf(fmt3, "unknown");
+					(void) snprintf(data3, sizeof (data3),
+					    fmt3s, "unknown");
 				}
 				break;
 
 			case TT_INTERRUPT:
-				printf(fmt2, "intr", rec->ttr_vector);
+				if (rec->ttr_regs.r_trapno == T_SOFTINT) {
+					(void) snprintf(data2, sizeof (data2),
+					    fmt2s, "intr", "-");
+					(void) snprintf(data3, sizeof (data3),
+					    fmt3s, "(fakesoftint)");
+					break;
+				}
+
+				(void) snprintf(data2, sizeof (data2), fmt2,
+				    "intr", rec->ttr_vector);
 				if (get_intr_handler != NULL)
 					vec = (struct autovec *)
 					    (*get_intr_handler)
@@ -2150,31 +2031,41 @@ dump_ttrace(void)
 				if (vec != NULL) {
 					sym = kobj_getsymname(
 					    (uintptr_t)vec->av_vector, &off);
-					if (sym != NULL)
-						printf(fmt3, sym);
-					else
-						printf("%p ", vec->av_vector);
+					if (sym != NULL) {
+						(void) snprintf(data3,
+						    sizeof (data3), fmt3s, sym);
+					} else {
+						(void) snprintf(data3,
+						    sizeof (data3), fmt3p,
+						    vec->av_vector);
+					}
 				} else {
-					printf(fmt3, "unknown ");
+					(void) snprintf(data3, sizeof (data3),
+					    fmt3s, "unknown");
 				}
 				break;
 
 			case TT_TRAP:
 			case TT_EVENT:
 				type = rec->ttr_regs.r_trapno;
-				printf(fmt2, "trap", type);
-				if (type < TRAP_TYPES)
-					printf("     #%s ",
-					    trap_type_mnemonic[type]);
-				else
+				(void) snprintf(data2, sizeof (data2), fmt2,
+				    "trap", type);
+				if (type < TRAP_TYPES) {
+					(void) snprintf(data3, sizeof (data3),
+					    fmt3h, trap_type_mnemonic[type]);
+				} else {
 					switch (type) {
 					case T_AST:
-						printf(fmt3, "ast");
+						(void) snprintf(data3,
+						    sizeof (data3), fmt3s,
+						    "ast");
 						break;
 					default:
-						printf(fmt3, "");
+						(void) snprintf(data3,
+						    sizeof (data3), fmt3s, "");
 						break;
 					}
+				}
 				break;
 
 			default:
@@ -2182,10 +2073,13 @@ dump_ttrace(void)
 			}
 
 			sym = kobj_getsymname(rec->ttr_regs.r_pc, &off);
-			if (sym != NULL)
-				printf("%s+%lx\n", sym, off);
-			else
-				printf("%lx\n", rec->ttr_regs.r_pc);
+			if (sym != NULL) {
+				printf("%s %s %s %s+%lx\n", data1, data2, data3,
+				    sym, off);
+			} else {
+				printf("%s %s %s %lx\n", data1, data2, data3,
+				    rec->ttr_regs.r_pc);
+			}
 
 			if (ttrace_dump_nregs-- > 0) {
 				int s;

@@ -20,7 +20,10 @@
  */
 /*
  * Copyright (c) 2003, 2010, Oracle and/or its affiliates. All rights reserved.
- * Copyright 2013, Joyent, Inc. All rights reserved.
+ * Copyright 2016 Joyent, Inc.
+ * Copyright (c) 2016 by Delphix. All rights reserved.
+ * Copyright 2022 Oxide Computer Company
+ * Copyright 2023 RackTop Systems, Inc.
  */
 
 #include <sys/types.h>
@@ -65,6 +68,19 @@
 
 int priv_debug = 0;
 int priv_basic_test = -1;
+
+/*
+ * Unlinking or creating new hard links to directories was historically allowed
+ * in some file systems; e.g., UFS allows root users to do it, at the cost of
+ * almost certain file system corruption that will require fsck to fix.
+ *
+ * Most modern operating systems and file systems (e.g., ZFS) do not allow this
+ * behaviour anymore, and we have elected to stamp it out entirely for
+ * compatibility and safety reasons.  An attempt to unlink a directory will
+ * fail with EPERM, as described in the standard.  During this transition, one
+ * can turn the behaviour back on, at their own risk, with this tuneable:
+ */
+int priv_allow_linkdir = 0;
 
 /*
  * This file contains the majority of the policy routines.
@@ -866,8 +882,8 @@ secpolicy_fs_unmount(cred_t *cr, struct vfs *vfsp)
 }
 
 /*
- * Quotas are a resource, but if one has the ability to mount a filesystem, he
- * should be able to modify quotas on it.
+ * Quotas are a resource, but if one has the ability to mount a filesystem,
+ * they should be able to modify quotas on it.
  */
 int
 secpolicy_fs_quota(const cred_t *cr, const vfs_t *vfsp)
@@ -894,6 +910,23 @@ secpolicy_fs_config(const cred_t *cr, const vfs_t *vfsp)
 int
 secpolicy_fs_linkdir(const cred_t *cr, const vfs_t *vfsp)
 {
+	if (priv_allow_linkdir == 0) {
+		/*
+		 * By default, this policy check will now always return EPERM
+		 * unless overridden.
+		 *
+		 * We do so without triggering auditing or allowing privilege
+		 * debugging for two reasons: first, we intend eventually to
+		 * deprecate the PRIV_SYS_LINKDIR privilege entirely and remove
+		 * the use of this policy check from the file systems; second,
+		 * for privilege debugging in particular, because it would be
+		 * confusing to report an unlink() failure as the result of a
+		 * missing privilege when in fact we are simply no longer
+		 * allowing the operation at all.
+		 */
+		return (EPERM);
+	}
+
 	return (PRIV_POLICY(cr, PRIV_SYS_LINKDIR, B_FALSE, EPERM, NULL));
 }
 
@@ -1198,11 +1231,36 @@ secpolicy_vnode_utime_modify(const cred_t *cred)
 int
 secpolicy_vnode_setdac(const cred_t *cred, uid_t owner)
 {
+	boolean_t allzone = (owner == 0);
+
 	if (owner == cred->cr_uid)
 		return (0);
 
-	return (PRIV_POLICY(cred, PRIV_FILE_OWNER, owner == 0, EPERM, NULL));
+	return (PRIV_POLICY(cred, PRIV_FILE_OWNER, allzone, EPERM, NULL));
 }
+
+/*
+ * Name:	secpolicy_vnode_setdac3()
+ *
+ * Normal:	Variant of secpolicy_vnode_setdac() that conditionally
+ *		grants implicit rights to the owner of a file.
+ *		allzone privilege needed when modifying root owned object.
+ *
+ * Output:	EPERM - if access denied.
+ */
+
+int
+secpolicy_vnode_setdac3(const cred_t *cred, uid_t owner,
+    boolean_t owner_implicit_rights)
+{
+	boolean_t allzone = (owner == 0);
+
+	if (owner_implicit_rights && owner == cred->cr_uid)
+		return (0);
+
+	return (PRIV_POLICY(cred, PRIV_FILE_OWNER, allzone, EPERM, NULL));
+}
+
 /*
  * Name:	secpolicy_vnode_stky_modify()
  *
@@ -1363,7 +1421,7 @@ secpolicy_xvattr(xvattr_t *xvap, uid_t owner, cred_t *cr, vtype_t vtype)
  * this is required because vop_access function should lock the
  * node for reading.  A three argument function should be defined
  * which accepts the following argument:
- * 	A pointer to the internal "node" type (inode *)
+ *	A pointer to the internal "node" type (inode *)
  *	vnode access bits (VREAD|VWRITE|VEXEC)
  *	a pointer to the credential
  *
@@ -1384,13 +1442,14 @@ secpolicy_xvattr(xvattr_t *xvap, uid_t owner, cred_t *cr, vtype_t vtype)
 
 int
 secpolicy_vnode_setattr(cred_t *cr, struct vnode *vp, struct vattr *vap,
-	const struct vattr *ovap, int flags,
-	int unlocked_access(void *, int, cred_t *),
-	void *node)
+    const struct vattr *ovap, int flags,
+    int unlocked_access(void *, int, cred_t *),
+    void *node)
 {
 	int mask = vap->va_mask;
 	int error = 0;
 	boolean_t skipaclchk = (flags & ATTR_NOACLCHECK) ? B_TRUE : B_FALSE;
+	boolean_t implicit = (flags & ATTR_NOIMPLICIT) ? B_FALSE : B_TRUE;
 
 	if (mask & AT_SIZE) {
 		if (vp->v_type == VDIR) {
@@ -1418,7 +1477,8 @@ secpolicy_vnode_setattr(cred_t *cr, struct vnode *vp, struct vattr *vap,
 		 * In the specific case of creating a set-uid root
 		 * file, we need even more permissions.
 		 */
-		if ((error = secpolicy_vnode_setdac(cr, ovap->va_uid)) != 0)
+		error = secpolicy_vnode_setdac3(cr, ovap->va_uid, implicit);
+		if (error != 0)
 			goto out;
 
 		if ((error = secpolicy_setid_setsticky_clear(vp, vap,
@@ -1435,8 +1495,8 @@ secpolicy_vnode_setattr(cred_t *cr, struct vnode *vp, struct vattr *vap,
 		 *
 		 * If you are the file owner:
 		 *	chown to other uid		FILE_CHOWN_SELF
-		 *	chown to gid (non-member) 	FILE_CHOWN_SELF
-		 *	chown to gid (member) 		<none>
+		 *	chown to gid (non-member)	FILE_CHOWN_SELF
+		 *	chown to gid (member)		<none>
 		 *
 		 * Instead of PRIV_FILE_CHOWN_SELF, FILE_CHOWN is also
 		 * acceptable but the first one is reported when debugging.
@@ -1446,7 +1506,9 @@ secpolicy_vnode_setattr(cred_t *cr, struct vnode *vp, struct vattr *vap,
 		 *	chown from other to any		PRIV_FILE_CHOWN
 		 *
 		 */
-		if (cr->cr_uid != ovap->va_uid) {
+		if (!implicit) {
+			checkpriv = B_TRUE;
+		} else if (cr->cr_uid != ovap->va_uid) {
 			checkpriv = B_TRUE;
 		} else {
 			if (((mask & AT_UID) && vap->va_uid != ovap->va_uid) ||
@@ -1726,6 +1788,19 @@ int
 secpolicy_pset(const cred_t *cr)
 {
 	return (PRIV_POLICY(cr, PRIV_SYS_RES_CONFIG, B_FALSE, EPERM, NULL));
+}
+
+/* Process security flags */
+int
+secpolicy_psecflags(const cred_t *cr, proc_t *tp, proc_t *sp)
+{
+	if (PRIV_POLICY(cr, PRIV_PROC_SECFLAGS, B_FALSE, EPERM, NULL) != 0)
+		return (EPERM);
+
+	if (!prochasprocperm(tp, sp, cr))
+		return (EPERM);
+
+	return (0);
 }
 
 /*
@@ -2056,7 +2131,7 @@ secpolicy_rpcmod_open(const cred_t *cr)
 	if (PRIV_POLICY_ONLY(cr, PRIV_SYS_NFS, B_FALSE))
 		return (secpolicy_nfs(cr));
 	else
-		return (secpolicy_net_config(cr, NULL));
+		return (secpolicy_net_config(cr, B_FALSE));
 }
 
 int
@@ -2069,6 +2144,12 @@ int
 secpolicy_tasksys(const cred_t *cr)
 {
 	return (PRIV_POLICY(cr, PRIV_PROC_TASKID, B_FALSE, EPERM, NULL));
+}
+
+int
+secpolicy_meminfo(const cred_t *cr)
+{
+	return (PRIV_POLICY(cr, PRIV_PROC_MEMINFO, B_FALSE, EPERM, NULL));
 }
 
 int
@@ -2386,6 +2467,19 @@ secpolicy_gart_map(const cred_t *cr)
 		return (PRIV_POLICY(cr, PRIV_GRAPHICS_MAP, B_FALSE, EPERM,
 		    NULL));
 	}
+}
+
+/*
+ * secpolicy_hwmanip
+ *
+ * Determine if the subject can observe and manipulate a hardware device with a
+ * dangerous blunt hammer, often suggests they can do something destructive.
+ * Requires all privileges.
+ */
+int
+secpolicy_hwmanip(const cred_t *cr)
+{
+	return (secpolicy_require_set(cr, PRIV_FULLSET, NULL, KLPDARG_NONE));
 }
 
 /*

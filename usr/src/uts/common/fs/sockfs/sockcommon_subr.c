@@ -24,6 +24,7 @@
  */
 /*
  * Copyright 2014, OmniTI Computer Consulting, Inc. All rights reserved.
+ * Copyright 2019 Joyent, Inc.
  */
 
 #include <sys/types.h>
@@ -664,7 +665,7 @@ so_dequeue_msg(struct sonode *so, mblk_t **mctlp, struct uio *uiop,
 	mblk_t	*savemp, *savemptail;
 	mblk_t	*new_msg_head;
 	mblk_t	*new_msg_last_head;
-	mblk_t	*last_tail;
+	mblk_t	*last_tail = NULL;
 	boolean_t partial_read;
 	boolean_t reset_atmark = B_FALSE;
 	int more = 0;
@@ -924,6 +925,11 @@ try_again:
 			mutex_exit(&so->so_lock);
 			return (error);
 		}
+
+		/* See if new data has arrived in the meantime */
+		if (so->so_rcv_head != NULL)
+			goto again1;
+
 		/*
 		 * No pending data. Return right away for nonblocking
 		 * socket, otherwise sleep waiting for data.
@@ -940,9 +946,6 @@ try_again:
 					goto done;
 				}
 
-				if (so->so_rcv_head != NULL) {
-					goto again1;
-				}
 				so->so_rcv_wakeup = B_TRUE;
 				so->so_rcv_wanted = uiop->uio_resid;
 				if (so->so_rcvtimeo == 0) {
@@ -1697,6 +1700,12 @@ socket_getopt_common(struct sonode *so, int level, int option_name,
 			value = sogeterr(so, B_TRUE);
 			mutex_exit(&so->so_lock);
 			break;
+		/*
+		 * While SO_DOMAIN and SO_TYPE are here, SO_PROTOCOL (aka
+		 * SO_PROTOYPE) is not implemented in the common layer because
+		 * some socket modules support setting the protocol and
+		 * therefore we must ask the module directly.
+		 */
 		case SO_DOMAIN:
 			value = so->so_family;
 			break;
@@ -2276,9 +2285,9 @@ so_tpi_fallback(struct sonode *so, struct cred *cr)
 	fbfunc = sp->sp_smod_info->smod_proto_fallback_func;
 
 	/*
-	 * Cannot fallback if the socket has active filters
+	 * Cannot fallback if the socket has active filters or a krecv callback.
 	 */
-	if (so->so_filter_active > 0)
+	if (so->so_filter_active > 0 || so->so_krecv_cb != NULL)
 		return (EINVAL);
 
 	switch (so->so_family) {
@@ -2455,4 +2464,54 @@ out:
 		freemsg(arg.soqa_urgmark_mp);
 
 	return (error);
+}
+
+int
+so_krecv_set(sonode_t *so, so_krecv_f cb, void *arg)
+{
+	int ret;
+
+	if (cb == NULL && arg != NULL)
+		return (EINVAL);
+
+	SO_BLOCK_FALLBACK(so, so_krecv_set(so, cb, arg));
+
+	mutex_enter(&so->so_lock);
+	if (so->so_state & SS_FALLBACK_COMP) {
+		mutex_exit(&so->so_lock);
+		SO_UNBLOCK_FALLBACK(so);
+		return (ENOTSUP);
+	}
+
+	ret = so_lock_read(so, 0);
+	VERIFY(ret == 0);
+	/*
+	 * Other consumers may actually care about getting extant data delivered
+	 * to them, when they come along, they should figure out the best API
+	 * for that.
+	 */
+	so_rcv_flush(so);
+
+	so->so_krecv_cb = cb;
+	so->so_krecv_arg = arg;
+
+	so_unlock_read(so);
+	mutex_exit(&so->so_lock);
+	SO_UNBLOCK_FALLBACK(so);
+
+	return (0);
+}
+
+void
+so_krecv_unblock(sonode_t *so)
+{
+	mutex_enter(&so->so_lock);
+	VERIFY(so->so_krecv_cb != NULL);
+
+	so->so_rcv_queued = 0;
+	(void) so_check_flow_control(so);
+	/*
+	 * so_check_flow_control() always drops so->so_lock, so we won't
+	 * need to drop it ourselves.
+	 */
 }

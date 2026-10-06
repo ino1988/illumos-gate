@@ -19,8 +19,9 @@
  * CDDL HEADER END
  */
 /*
- * Copyright 2011 Nexenta Systems, Inc.  All rights reserved.
  * Copyright (c) 2007, 2010, Oracle and/or its affiliates. All rights reserved.
+ * Copyright 2019 Nexenta by DDN, Inc. All rights reserved.
+ * Copyright 2022-2023 RackTop Systems, Inc.
  */
 
 /*
@@ -46,6 +47,8 @@
 #include <auth_attr.h>
 #include <locale.h>
 #include <smbsrv/libsmb.h>
+#include <smbsrv/libsmbns.h>
+#include "smbadm.h"
 
 #if !defined(TEXT_DOMAIN)
 #define	TEXT_DOMAIN "SYS_TEST"
@@ -59,17 +62,25 @@ typedef enum {
 	HELP_GET,
 	HELP_JOIN,
 	HELP_LIST,
+	HELP_LIST_DOMAINS,
+	HELP_LIST_SESS,
+	HELP_LIST_TREES,
+	HELP_LIST_OFILES,
+	HELP_CLOSE_SESS,
+	HELP_CLOSE_OFILE,
 	HELP_LOOKUP,
 	HELP_RENAME,
 	HELP_SET,
 	HELP_SHOW,
 	HELP_USER_DISABLE,
-	HELP_USER_ENABLE
+	HELP_USER_ENABLE,
+	HELP_USER_DELETE
 } smbadm_help_t;
 
 #define	SMBADM_CMDF_NONE	0x00
-#define	SMBADM_CMDF_USER	0x01
-#define	SMBADM_CMDF_GROUP	0x02
+#define	SMBADM_CMDF_USER	0x01	/* needs smb_pwd_init */
+#define	SMBADM_CMDF_GROUP	0x02	/* needs smb_lgrp_start */
+#define	SMBADM_CMDF_KMOD	0x04	/* needs smb_kmod_bind */
 #define	SMBADM_CMDF_TYPEMASK	0x0F
 
 typedef enum {
@@ -96,16 +107,18 @@ static char *progname;
 
 static boolean_t smbadm_checkauth(const char *);
 
-static void smbadm_usage(boolean_t);
-static int smbadm_join_workgroup(const char *);
-static int smbadm_join_domain(const char *, const char *);
+static void smbadm_usage(boolean_t) __NORETURN;
+static int smbadm_join_workgroup(const char *, boolean_t);
+static int smbadm_join_domain(const char *, const char *,
+    const char *, boolean_t);
 static void smbadm_extract_domain(char *, char **, char **);
+static void smbadm_update_groups(smbadm_grp_action_t);
 
 static int smbadm_join(int, char **);
 static int smbadm_list(int, char **);
 static int smbadm_lookup(int, char **);
-static void smbadm_lookup_name(char *);
-static void smbadm_lookup_sid(char *);
+static void smbadm_lookup_name(char *, boolean_t);
+static void smbadm_lookup_sid(char *, boolean_t);
 static int smbadm_group_create(int, char **);
 static int smbadm_group_delete(int, char **);
 static int smbadm_group_rename(int, char **);
@@ -117,37 +130,55 @@ static int smbadm_group_addmember(int, char **);
 static int smbadm_group_delmember(int, char **);
 static int smbadm_group_add_del_member(char *, char *, smbadm_grp_action_t);
 
+static int smbadm_user_delete(int, char **);
 static int smbadm_user_disable(int, char **);
 static int smbadm_user_enable(int, char **);
 
+/* Please keep the order consistent with smbadm(8) man page */
 static smbadm_cmdinfo_t smbadm_cmdtable[] =
 {
-	{ "add-member",		smbadm_group_addmember,	HELP_ADD_MEMBER,
-		SMBADM_CMDF_GROUP,	SMBADM_ACTION_AUTH },
 	{ "create",		smbadm_group_create,	HELP_CREATE,
 		SMBADM_CMDF_GROUP,	SMBADM_ACTION_AUTH },
 	{ "delete",		smbadm_group_delete,	HELP_DELETE,
 		SMBADM_CMDF_GROUP,	SMBADM_ACTION_AUTH },
+	{ "rename",		smbadm_group_rename,	HELP_RENAME,
+		SMBADM_CMDF_GROUP,	SMBADM_ACTION_AUTH },
+	{ "show",		smbadm_group_show,	HELP_SHOW,
+		SMBADM_CMDF_GROUP,	SMBADM_ACTION_AUTH },
+	{ "get",		smbadm_group_getprop,	HELP_GET,
+		SMBADM_CMDF_GROUP,	SMBADM_ACTION_AUTH },
+	{ "set",		smbadm_group_setprop,	HELP_SET,
+		SMBADM_CMDF_GROUP,	SMBADM_ACTION_AUTH },
+	{ "add-member",		smbadm_group_addmember,	HELP_ADD_MEMBER,
+		SMBADM_CMDF_GROUP,	SMBADM_ACTION_AUTH },
+	{ "remove-member",	smbadm_group_delmember,	HELP_DEL_MEMBER,
+		SMBADM_CMDF_GROUP,	SMBADM_ACTION_AUTH },
+	{ "delete-user",	smbadm_user_delete,	HELP_USER_DELETE,
+		SMBADM_CMDF_USER,	SMBADM_ACTION_AUTH },
 	{ "disable-user",	smbadm_user_disable,	HELP_USER_DISABLE,
 		SMBADM_CMDF_USER,	SMBADM_ACTION_AUTH },
 	{ "enable-user",	smbadm_user_enable,	HELP_USER_ENABLE,
 		SMBADM_CMDF_USER,	SMBADM_ACTION_AUTH },
-	{ "get",		smbadm_group_getprop,	HELP_GET,
-		SMBADM_CMDF_GROUP,	SMBADM_ACTION_AUTH },
 	{ "join",		smbadm_join,		HELP_JOIN,
-		SMBADM_CMDF_NONE,	SMBADM_VALUE_AUTH },
+		SMBADM_CMDF_GROUP,	SMBADM_VALUE_AUTH },
+	/* "list" is now an alias for "list-domains" */
 	{ "list",		smbadm_list,		HELP_LIST,
 		SMBADM_CMDF_NONE,	SMBADM_BASIC_AUTH },
+	{ "list-domains",	smbadm_list,		HELP_LIST_DOMAINS,
+		SMBADM_CMDF_NONE,	SMBADM_BASIC_AUTH },
+
+	{ "list-sessions",	cmd_list_sess,		HELP_LIST_SESS,
+		SMBADM_CMDF_KMOD,	SMBADM_BASIC_AUTH },
+	{ "list-trees",		cmd_list_trees,		HELP_LIST_TREES,
+		SMBADM_CMDF_KMOD,	SMBADM_BASIC_AUTH },
+	{ "list-ofiles",	cmd_list_ofiles,	HELP_LIST_OFILES,
+		SMBADM_CMDF_KMOD,	SMBADM_BASIC_AUTH },
+	{ "close-session",	cmd_close_sess,	HELP_CLOSE_SESS,
+		SMBADM_CMDF_KMOD,	SMBADM_BASIC_AUTH },
+	{ "close-ofile",	cmd_close_ofile,	HELP_CLOSE_OFILE,
+		SMBADM_CMDF_KMOD,	SMBADM_BASIC_AUTH },
 	{ "lookup",		smbadm_lookup,		HELP_LOOKUP,
 		SMBADM_CMDF_NONE,	SMBADM_BASIC_AUTH },
-	{ "remove-member",	smbadm_group_delmember,	HELP_DEL_MEMBER,
-		SMBADM_CMDF_GROUP,	SMBADM_ACTION_AUTH },
-	{ "rename",		smbadm_group_rename,	HELP_RENAME,
-		SMBADM_CMDF_GROUP,	SMBADM_ACTION_AUTH },
-	{ "set",		smbadm_group_setprop,	HELP_SET,
-		SMBADM_CMDF_GROUP,	SMBADM_ACTION_AUTH },
-	{ "show",		smbadm_group_show,	HELP_SHOW,
-		SMBADM_CMDF_GROUP,	SMBADM_ACTION_AUTH },
 };
 
 #define	SMBADM_NCMD	(sizeof (smbadm_cmdtable) / sizeof (smbadm_cmdtable[0]))
@@ -172,6 +203,10 @@ static smbadm_prop_handle_t *smbadm_prop_gethandle(char *pname);
 static boolean_t smbadm_chkprop_priv(smbadm_prop_t *prop);
 static int smbadm_setprop_tkowner(char *gname, smbadm_prop_t *prop);
 static int smbadm_getprop_tkowner(char *gname, smbadm_prop_t *prop);
+static int smbadm_setprop_readfile(char *gname, smbadm_prop_t *prop);
+static int smbadm_getprop_readfile(char *gname, smbadm_prop_t *prop);
+static int smbadm_setprop_writefile(char *gname, smbadm_prop_t *prop);
+static int smbadm_getprop_writefile(char *gname, smbadm_prop_t *prop);
 static int smbadm_setprop_backup(char *gname, smbadm_prop_t *prop);
 static int smbadm_getprop_backup(char *gname, smbadm_prop_t *prop);
 static int smbadm_setprop_restore(char *gname, smbadm_prop_t *prop);
@@ -180,12 +215,16 @@ static int smbadm_setprop_desc(char *gname, smbadm_prop_t *prop);
 static int smbadm_getprop_desc(char *gname, smbadm_prop_t *prop);
 
 static smbadm_prop_handle_t smbadm_ptable[] = {
-	{"backup",	"on | off", 	smbadm_setprop_backup,
-	smbadm_getprop_backup,	smbadm_chkprop_priv 	},
-	{"restore",	"on | off",	smbadm_setprop_restore,
+	{"backup",	"on|off",	smbadm_setprop_backup,
+	smbadm_getprop_backup,	smbadm_chkprop_priv	},
+	{"restore",	"on|off",	smbadm_setprop_restore,
 	smbadm_getprop_restore,	smbadm_chkprop_priv	},
-	{"take-ownership", "on | off",	smbadm_setprop_tkowner,
+	{"take-ownership", "on|off",	smbadm_setprop_tkowner,
 	smbadm_getprop_tkowner,	smbadm_chkprop_priv	},
+	{"bypass-read", "on|off",	smbadm_setprop_readfile,
+	smbadm_getprop_readfile,	smbadm_chkprop_priv	},
+	{"bypass-write", "on|off",	smbadm_setprop_writefile,
+	smbadm_getprop_writefile,	smbadm_chkprop_priv	},
 	{"description",	"<string>",	smbadm_setprop_desc,
 	smbadm_getprop_desc,	NULL			},
 };
@@ -205,68 +244,93 @@ smbadm_cmdusage(FILE *fp, smbadm_cmdinfo_t *cmd)
 	switch (cmd->usage) {
 	case HELP_ADD_MEMBER:
 		(void) fprintf(fp,
-		    gettext("\t%s -m member [[-m member] ...] group\n"),
+		    gettext("\t%s -m <member> [-m <member>]... <group>\n"),
 		    cmd->name);
 		return;
 
 	case HELP_CREATE:
-		(void) fprintf(fp, gettext("\t%s [-d description] group\n"),
+		(void) fprintf(fp, gettext("\t%s [-d <description>] <group>\n"),
 		    cmd->name);
 		return;
 
 	case HELP_DELETE:
-		(void) fprintf(fp, gettext("\t%s group\n"), cmd->name);
+		(void) fprintf(fp, gettext("\t%s <group>\n"), cmd->name);
 		return;
 
+	case HELP_USER_DELETE:
 	case HELP_USER_DISABLE:
 	case HELP_USER_ENABLE:
-		(void) fprintf(fp, gettext("\t%s user\n"), cmd->name);
+		(void) fprintf(fp, gettext("\t%s <username>\n"), cmd->name);
 		return;
 
 	case HELP_GET:
-		(void) fprintf(fp, gettext("\t%s [[-p property] ...] group\n"),
+		(void) fprintf(fp, gettext("\t%s [-p <property>]... <group>\n"),
 		    cmd->name);
 		return;
 
 	case HELP_JOIN:
-		(void) fprintf(fp, gettext("\t%s -u username domain\n"
-		    "\t%s -w workgroup\n"), cmd->name, cmd->name);
+#if 0	/* Don't document "-p" yet, still needs work (NEX-11960) */
+		(void) fprintf(fp, gettext("\t%s [-y] -p <domain>\n"
+		    "\t%s [-y] [-c container] -u <username domain>\n"
+		    "\t%s [-y] -w <workgroup>\n"),
+		    cmd->name, cmd->name, cmd->name);
+#else
+		(void) fprintf(fp, gettext(
+		    "\t%s [-y] [-c container] -u <username> <domain>\n"
+		    "\t%s [-y] -w <workgroup>\n"), cmd->name, cmd->name);
+#endif
 		return;
 
 	case HELP_LIST:
-		(void) fprintf(fp, gettext("\t%s\n"), cmd->name);
-		(void) fprintf(fp,
-		    gettext("\t\t[*] primary domain\n"));
-		(void) fprintf(fp, gettext("\t\t[.] local domain\n"));
-		(void) fprintf(fp, gettext("\t\t[-] other domains\n"));
-		(void) fprintf(fp,
-		    gettext("\t\t[+] selected domain controller\n"));
+		(void) fprintf(fp, gettext(
+		    "\t%s  (alias for list-domains)\n"), cmd->name);
 		return;
+
+	case HELP_LIST_DOMAINS:
+		(void) fprintf(fp, gettext("\t%s\n"), cmd->name);
+		return;
+
+	case HELP_LIST_SESS:
+	case HELP_LIST_TREES:
+	case HELP_LIST_OFILES:
+		(void) fprintf(fp, gettext(
+		    "\t%s [-p] [-o field,...]\n"), cmd->name);
+		return;
+
+	case HELP_CLOSE_SESS:
+		(void) fprintf(fp, gettext(
+		    "\t%s <client_name> [user_name]\n"), cmd->name);
+		return;
+
+	case HELP_CLOSE_OFILE:
+		(void) fprintf(fp, gettext("\t%s <File_ID>\n"), cmd->name);
+		return;
+
 
 	case HELP_LOOKUP:
 		(void) fprintf(fp,
-		    gettext("\t%s user-or-group-name\n"),
+		    gettext("\t%s [-p] <account-name>\n"),
 		    cmd->name);
 		return;
 
 	case HELP_DEL_MEMBER:
 		(void) fprintf(fp,
-		    gettext("\t%s -m member [[-m member] ...] group\n"),
+		    gettext("\t%s -m <member> [-m <member>]... <group>\n"),
 		    cmd->name);
 		return;
 
 	case HELP_RENAME:
-		(void) fprintf(fp, gettext("\t%s group new-group\n"),
+		(void) fprintf(fp, gettext("\t%s <group> <new-group>\n"),
 		    cmd->name);
 		return;
 
 	case HELP_SET:
-		(void) fprintf(fp, gettext("\t%s -p property=value "
-		    "[[-p property=value] ...] group\n"), cmd->name);
+		(void) fprintf(fp, gettext("\t%s -p <property>=<value> "
+		    "[-p <property>=<value>]... <group>\n"), cmd->name);
 		return;
 
 	case HELP_SHOW:
-		(void) fprintf(fp, gettext("\t%s [-m] [-p] [group]\n"),
+		(void) fprintf(fp, gettext("\t%s [-mps] [<group>]\n"),
 		    cmd->name);
 		return;
 
@@ -287,10 +351,8 @@ smbadm_usage(boolean_t requested)
 
 	if (curcmd == NULL) {
 		(void) fprintf(fp,
-		    gettext("usage: %s [-h | <command> [options]]\n"),
+		    gettext("usage: %s <subcommand> <args> ...\n"),
 		    progname);
-		(void) fprintf(fp,
-		    gettext("where 'command' is one of the following:\n\n"));
 
 		for (i = 0; i < SMBADM_NCMD; i++)
 			smbadm_cmdusage(fp, &smbadm_cmdtable[i]);
@@ -408,7 +470,7 @@ smbadm_confirm(const char *prompt, const char *dflt)
 }
 
 static boolean_t
-smbadm_join_prompt(const char *domain)
+smbadm_join_confirm(const char *domain)
 {
 	(void) printf(gettext("After joining %s the smb service will be "
 	    "restarted automatically.\n"), domain);
@@ -454,48 +516,37 @@ smbadm_join(int argc, char **argv)
 	char buf[MAXHOSTNAMELEN * 2];
 	char *domain = NULL;
 	char *username = NULL;
+	char *container = NULL;
 	uint32_t mode = 0;
-	char option;
+	boolean_t confirm = B_TRUE;
+	int option;
 
-	while ((option = getopt(argc, argv, "u:w:")) != -1) {
+	while ((option = getopt(argc, argv, "c:pu:wy")) != -1) {
+		if (mode != 0) {
+			(void) fprintf(stderr, gettext(
+			    "join options are mutually exclusive\n"));
+			smbadm_usage(B_FALSE);
+		}
 		switch (option) {
-		case 'w':
-			if (mode != 0) {
-				(void) fprintf(stderr,
-				    gettext("-u and -w must only appear "
-				    "once and are mutually exclusive\n"));
-				smbadm_usage(B_FALSE);
-			}
-
-			mode = SMB_SECMODE_WORKGRP;
-			domain = optarg;
+		case 'c':
+			container = optarg;
+			break;
+		case 'p':
+			mode = SMB_SECMODE_DOMAIN;
+			/* leave username = NULL */
 			break;
 
 		case 'u':
-			if (mode != 0) {
-				(void) fprintf(stderr,
-				    gettext("-u and -w must only appear "
-				    "once and are mutually exclusive\n"));
-				smbadm_usage(B_FALSE);
-			}
-
 			mode = SMB_SECMODE_DOMAIN;
 			username = optarg;
+			break;
 
-			if ((domain = argv[optind]) == NULL) {
-				/*
-				 * The domain was not specified as a separate
-				 * argument, check for the combination forms.
-				 */
-				(void) strlcpy(buf, username, sizeof (buf));
-				smbadm_extract_domain(buf, &username, &domain);
-			}
+		case 'w':
+			mode = SMB_SECMODE_WORKGRP;
+			break;
 
-			if ((username == NULL) || (*username == '\0')) {
-				(void) fprintf(stderr,
-				    gettext("missing username\n"));
-				smbadm_usage(B_FALSE);
-			}
+		case 'y':
+			confirm = B_FALSE;
 			break;
 
 		default:
@@ -504,16 +555,28 @@ smbadm_join(int argc, char **argv)
 		}
 	}
 
+	if (optind < argc)
+		domain = argv[optind];
+
+	if (username != NULL && domain == NULL) {
+		/*
+		 * The domain was not specified as a separate
+		 * argument, check for the combination forms.
+		 */
+		(void) strlcpy(buf, username, sizeof (buf));
+		smbadm_extract_domain(buf, &username, &domain);
+	}
+
 	if ((domain == NULL) || (*domain == '\0')) {
 		(void) fprintf(stderr, gettext("missing %s name\n"),
 		    (mode == SMB_SECMODE_WORKGRP) ? "workgroup" : "domain");
 		smbadm_usage(B_FALSE);
 	}
 
-	if (mode == SMB_SECMODE_WORKGRP)
-		return (smbadm_join_workgroup(domain));
-	else
-		return (smbadm_join_domain(domain, username));
+	if (mode == SMB_SECMODE_WORKGRP) {
+		return (smbadm_join_workgroup(domain, confirm));
+	}
+	return (smbadm_join_domain(domain, container, username, confirm));
 }
 
 /*
@@ -522,11 +585,13 @@ smbadm_join(int argc, char **argv)
  * with no formal membership mechanism.
  */
 static int
-smbadm_join_workgroup(const char *workgroup)
+smbadm_join_workgroup(const char *workgroup, boolean_t confirm)
 {
 	smb_joininfo_t jdi;
+	smb_joinres_t jdres;
 	uint32_t status;
 
+	bzero(&jdres, sizeof (jdres));
 	bzero(&jdi, sizeof (jdi));
 	jdi.mode = SMB_SECMODE_WORKGRP;
 	(void) strlcpy(jdi.domain_name, workgroup, sizeof (jdi.domain_name));
@@ -537,10 +602,11 @@ smbadm_join_workgroup(const char *workgroup)
 		smbadm_usage(B_FALSE);
 	}
 
-	if (!smbadm_join_prompt(jdi.domain_name))
+	if (confirm && !smbadm_join_confirm(jdi.domain_name))
 		return (0);
 
-	if ((status = smb_join(&jdi)) != NT_STATUS_SUCCESS) {
+	smbadm_update_groups(SMBADM_GRP_DELMEMBER); // before "un-join"
+	if ((status = smb_join(&jdi, &jdres)) != NT_STATUS_SUCCESS) {
 		(void) fprintf(stderr, gettext("failed to join %s: %s\n"),
 		    jdi.domain_name, xlate_nt_status(status));
 		return (1);
@@ -559,29 +625,55 @@ smbadm_join_workgroup(const char *workgroup)
  *
  * The '+' character is invalid within a username.  We allow the password
  * to be appended to the username using '+' as a scripting convenience.
+ * See details above smbadm_join()
  */
 static int
-smbadm_join_domain(const char *domain, const char *username)
+smbadm_join_domain(const char *domain, const char *container,
+    const char *username, boolean_t confirm)
 {
 	smb_joininfo_t jdi;
-	uint32_t status;
-	char *prompt;
+	smb_joinres_t jdres;
+	char *passwd_prompt;
 	char *p;
-	int len;
+	int len, rc;
 
+	bzero(&jdres, sizeof (jdres));
 	bzero(&jdi, sizeof (jdi));
 	jdi.mode = SMB_SECMODE_DOMAIN;
 	(void) strlcpy(jdi.domain_name, domain, sizeof (jdi.domain_name));
 	(void) strtrim(jdi.domain_name, " \t\n");
+	if (container != NULL) {
+		if (strlcpy(jdi.container_name, container,
+		    sizeof (jdi.container_name)) >=
+		    sizeof (jdi.container_name)) {
+			(void) fprintf(stderr, gettext("container name is "
+			    "too long\n"));
+			smbadm_usage(B_FALSE);
+		}
+	}
 
 	if (smb_name_validate_domain(jdi.domain_name) != ERROR_SUCCESS) {
 		(void) fprintf(stderr, gettext("domain name is invalid\n"));
 		smbadm_usage(B_FALSE);
 	}
 
-	if (!smbadm_join_prompt(jdi.domain_name))
+	if (confirm && !smbadm_join_confirm(jdi.domain_name))
 		return (0);
 
+	/*
+	 * Note: username is null for "unsecure join"
+	 * (join using a pre-created computer account)
+	 * Not implemented.
+	 */
+	if (username == NULL) {
+		(void) fprintf(stderr,
+		    gettext("username missing\n"));
+		smbadm_usage(B_FALSE);
+	}
+
+	/*
+	 * Check for "username+password" as described above.
+	 */
 	if ((p = strchr(username, '+')) != NULL) {
 		++p;
 
@@ -597,49 +689,120 @@ smbadm_join_domain(const char *domain, const char *username)
 		    sizeof (jdi.domain_username));
 	}
 
-	if (smb_name_validate_account(jdi.domain_username) != ERROR_SUCCESS) {
+	if (smb_name_validate_account(jdi.domain_username)
+	    != ERROR_SUCCESS) {
 		(void) fprintf(stderr,
 		    gettext("username contains invalid characters\n"));
 		smbadm_usage(B_FALSE);
 	}
 
 	if (*jdi.domain_passwd == '\0') {
-		prompt = gettext("Enter domain password: ");
+		if (isatty(fileno(stdin))) {
+			passwd_prompt = gettext("Enter domain password: ");
+			if ((p = getpassphrase(passwd_prompt)) == NULL) {
+				(void) fprintf(stderr, gettext(
+				    "missing password\n"));
+				smbadm_usage(B_FALSE);
+			}
 
-		if ((p = getpassphrase(prompt)) == NULL) {
-			(void) fprintf(stderr, gettext("missing password\n"));
-			smbadm_usage(B_FALSE);
+			(void) strlcpy(jdi.domain_passwd, p,
+			    sizeof (jdi.domain_passwd));
+		} else {
+			/* Just read from stdin, no prompt. */
+			char *pbuf = NULL;
+			size_t pblen = 0;
+			len = getline(&pbuf, &pblen, stdin);
+
+			/* trim the ending newline if it exists */
+			if (len > 0 && pbuf[len - 1] == '\n') {
+				pbuf[len - 1] = '\0';
+				len--;
+			}
+			if (len <= 0) {
+				(void) fprintf(stderr, gettext(
+				    "missing password\n"));
+				smbadm_usage(B_FALSE);
+			}
+			(void) strlcpy(jdi.domain_passwd, pbuf,
+			    sizeof (jdi.domain_passwd));
 		}
-
-		(void) strlcpy(jdi.domain_passwd, p,
-		    sizeof (jdi.domain_passwd));
 	}
 
 	(void) printf(gettext("Joining %s ... this may take a minute ...\n"),
 	    jdi.domain_name);
 
-	status = smb_join(&jdi);
-
-	switch (status) {
-	case NT_STATUS_SUCCESS:
-		(void) printf(gettext("Successfully joined %s\n"),
-		    jdi.domain_name);
+	rc = smb_join(&jdi, &jdres);
+	if (rc != 0) {
+		(void) printf(gettext("Cannot call the SMB service. "
+		    " (error %d: %s) "
+		    "Please check the service status "
+		    "(svcs -vx network/smb/server)\n"),
+		    rc, strerror(rc));
 		bzero(&jdi, sizeof (jdi));
+		return (1);
+	}
+
+	switch (jdres.status) {
+	case NT_STATUS_SUCCESS:
+		(void) printf(gettext(
+		    "Successfully joined domain %s using AD server %s\n"),
+		    jdi.domain_name, jdres.dc_name);
+		bzero(&jdi, sizeof (jdi));
+		smbadm_update_groups(SMBADM_GRP_ADDMEMBER); // after join
 		smbadm_restart_service();
 		return (0);
 
 	case NT_STATUS_DOMAIN_CONTROLLER_NOT_FOUND:
-		(void) fprintf(stderr,
-		    gettext("failed to find any domain controllers for %s\n"),
+		/* See: smb_ads_lookup_msdcs */
+		(void) fprintf(stderr, gettext(
+		    "failed to find any AD servers for domain: %s\n"),
 		    jdi.domain_name);
-		bzero(&jdi, sizeof (jdi));
-		return (1);
+		goto common;
+
+	case NT_STATUS_BAD_NETWORK_PATH:
+		/* See: smbrdr_ctx_new / smb_ctx_resolve */
+		(void) fprintf(stderr, gettext(
+		    "failed to resolve address of AD server: %s\n"),
+		    jdres.dc_name);
+		goto common;
+
+	case NT_STATUS_NETWORK_ACCESS_DENIED:
+		/* See: smbrdr_ctx_new / smb_ctx_get_ssn */
+		(void) fprintf(stderr, gettext(
+		    "failed to authenticate with AD server: %s\n"),
+		    jdres.dc_name);
+		goto common;
+
+	case NT_STATUS_BAD_NETWORK_NAME:
+		/*
+		 * See: smbrdr_ctx_new / smb_ctx_get_tree
+		 * and: ndr_rpc_bind / smb_fh_open
+		 */
+		(void) fprintf(stderr, gettext(
+		    "failed connecting to services on AD server: %s\n"),
+		    jdres.dc_name);
+		goto common;
 
 	default:
-		(void) fprintf(stderr, gettext("failed to join %s: %s\n"),
-		    jdi.domain_name, xlate_nt_status(status));
-		(void) fprintf(stderr, gettext("Please refer to the system log"
-		    " for more information.\n"));
+		(void) fprintf(stderr, gettext(
+		    "failed to join domain %s\n"),
+		    jdi.domain_name);
+		if (jdres.dc_name[0] != '\0') {
+			(void) fprintf(stderr, gettext(
+			    "using AD server: %s\n"),
+			    jdres.dc_name);
+		}
+		/* FALLTHROUGH */
+	common:
+		if (jdres.join_err != 0) {
+			(void) fprintf(stderr, "%s\n",
+			    smb_ads_strerror(jdres.join_err));
+		} else if (jdres.status != 0) {
+			(void) fprintf(stderr, "(%s)\n",
+			    xlate_nt_status(jdres.status));
+		}
+		(void) fprintf(stderr, gettext("Please refer to the "
+		    "service log for more information.\n"));
 		bzero(&jdi, sizeof (jdi));
 		return (1);
 	}
@@ -682,6 +845,70 @@ smbadm_extract_domain(char *arg, char **username, char **domain)
 			*username = p;
 			*domain = arg;
 		}
+	}
+}
+
+/*
+ * smbadm_update_groups
+ * Add or remove "Domain Admins@mydomain" to/from the
+ * local administrators group.
+ *
+ * Similar to: smbadm_group_add_del_member
+ */
+static void
+smbadm_update_groups(smbadm_grp_action_t act)
+{
+	char sidstr[SMB_SID_STRSZ];
+	char gname[] = "administrators"; // must be writable
+	smb_gsid_t msid;
+	int rc;
+
+	/*
+	 * Compose the (well-known) SID for "Domain Admins"
+	 * which is {domain-SID}-512
+	 */
+	rc = smb_config_getstr(SMB_CI_DOMAIN_SID, sidstr, sizeof (sidstr));
+	if (rc != 0) {
+		(void) fprintf(stderr,
+		    gettext("Update local groups: no domain SID\n"));
+		return;
+	}
+	(void) strlcat(sidstr, "-512", sizeof (sidstr));
+
+	msid.gs_type = SidTypeGroup;
+	msid.gs_sid = smb_sid_fromstr(sidstr);
+	if (msid.gs_sid == NULL) {
+		(void) fprintf(stderr,
+		    gettext("Update local groups: no memory for SID\n"));
+		return;
+	}
+
+	switch (act) {
+	case SMBADM_GRP_ADDMEMBER:
+		rc = smb_lgrp_add_member(gname,
+		    msid.gs_sid, msid.gs_type);
+		// suppress "already in group"
+		if (rc == SMB_LGRP_MEMBER_IN_GROUP)
+			rc = 0;
+		break;
+	case SMBADM_GRP_DELMEMBER:
+		rc = smb_lgrp_del_member(gname,
+		    msid.gs_sid, msid.gs_type);
+		// supress "not in group"
+		if (rc == SMB_LGRP_MEMBER_NOT_IN_GROUP)
+			rc = 0;
+		break;
+	default:
+		rc = SMB_LGRP_INTERNAL_ERROR;
+		break;
+	}
+
+	smb_sid_free(msid.gs_sid);
+
+	if (rc != SMB_LGRP_SUCCESS) {
+		(void) fprintf(stderr,
+		    gettext("Update local groups: can't update DB, %s\n"),
+		    smb_lgrp_strerror(rc));
 	}
 }
 
@@ -729,10 +956,11 @@ smbadm_list(int argc, char **argv)
 	    (!smb_inet_iszero(&srvipaddr))) {
 		(void) smb_inet_ntop(&srvipaddr, ipstr,
 		    SMB_IPSTRLEN(srvipaddr.a_family));
-		(void) printf(gettext("\t[+%s.%s] [%s]\n"),
-		    srvname, fqdn, ipstr);
+		(void) printf(gettext("\t[+%s] [%s]\n"),
+		    srvname, ipstr);
 	}
 
+	/* Print the local and domain SID. */
 	smb_domain_show();
 	return (0);
 }
@@ -746,23 +974,37 @@ static int
 smbadm_lookup(int argc, char **argv)
 {
 	int i;
+	boolean_t parsable = B_FALSE;
+	char option;
 
 	if (argc < 2) {
 		(void) fprintf(stderr, gettext("missing account name\n"));
 		smbadm_usage(B_FALSE);
 	}
 
-	for (i = 1; i < argc; i++) {
+	while ((option = getopt(argc, argv, "p")) != -1) {
+		switch (option) {
+		case 'p':
+			parsable = B_TRUE;
+			break;
+
+		default:
+			smbadm_usage(B_FALSE);
+			break;
+		}
+	}
+
+	for (i = optind; i < argc; i++) {
 		if (strncmp(argv[i], "S-1-", 4) == 0)
-			smbadm_lookup_sid(argv[i]);
+			smbadm_lookup_sid(argv[i], parsable);
 		else
-			smbadm_lookup_name(argv[i]);
+			smbadm_lookup_name(argv[i], parsable);
 	}
 	return (0);
 }
 
 static void
-smbadm_lookup_name(char *name)
+smbadm_lookup_name(char *name, boolean_t parsable)
 {
 	lsa_account_t	acct;
 	int rc;
@@ -778,11 +1020,16 @@ smbadm_lookup_name(char *name)
 		    name, xlate_nt_status(acct.a_status));
 		return;
 	}
-	(void) printf("\t%s\n", acct.a_sid);
+	if (parsable) {
+		(void) printf("%s:%u:%s:%s\n",
+		    acct.a_sid, acct.a_sidtype, acct.a_name, acct.a_domain);
+	} else {
+		(void) printf("\t%s\n", acct.a_sid);
+	}
 }
 
 static void
-smbadm_lookup_sid(char *sidstr)
+smbadm_lookup_sid(char *sidstr, boolean_t parsable)
 {
 	lsa_account_t	acct;
 	int rc;
@@ -798,7 +1045,12 @@ smbadm_lookup_sid(char *sidstr)
 		    sidstr, xlate_nt_status(acct.a_status));
 		return;
 	}
-	(void) printf("\t%s\\%s\n", acct.a_domain, acct.a_name);
+	if (parsable) {
+		(void) printf("%s:%u:%s:%s\n",
+		    acct.a_sid, acct.a_sidtype, acct.a_name, acct.a_domain);
+	} else {
+		(void) printf("\t%s\\%s\n", acct.a_domain, acct.a_name);
+	}
 }
 
 /*
@@ -811,7 +1063,7 @@ smbadm_group_create(int argc, char **argv)
 {
 	char *gname = NULL;
 	char *desc = NULL;
-	char option;
+	int option;
 	int status;
 
 	while ((option = getopt(argc, argv, "d:")) != -1) {
@@ -849,7 +1101,7 @@ smbadm_group_create(int argc, char **argv)
  * Dump group members details.
  */
 static void
-smbadm_group_dump_members(smb_gsid_t *members, int num)
+smbadm_group_dump_members(smb_gsid_t *members, int num, boolean_t show_sids)
 {
 	char		sidstr[SMB_SID_STRSZ];
 	lsa_account_t	acct;
@@ -864,7 +1116,8 @@ smbadm_group_dump_members(smb_gsid_t *members, int num)
 	for (i = 0; i < num; i++) {
 		smb_sid_tostr(members[i].gs_sid, sidstr);
 
-		if (smb_lookup_sid(sidstr, &acct) == 0) {
+		if (!show_sids &&
+		    smb_lookup_sid(sidstr, &acct) == 0) {
 			if (acct.a_status == NT_STATUS_SUCCESS)
 				smbadm_group_show_name(acct.a_domain,
 				    acct.a_name);
@@ -929,7 +1182,8 @@ smbadm_group_dump_privs(smb_privset_t *privs)
  * Dump group details.
  */
 static void
-smbadm_group_dump(smb_group_t *grp, boolean_t show_mem, boolean_t show_privs)
+smbadm_group_dump(smb_group_t *grp, boolean_t show_mem, boolean_t show_privs,
+    boolean_t show_sids)
 {
 	char sidstr[SMB_SID_STRSZ];
 
@@ -942,7 +1196,8 @@ smbadm_group_dump(smb_group_t *grp, boolean_t show_mem, boolean_t show_privs)
 		smbadm_group_dump_privs(grp->sg_privs);
 
 	if (show_mem)
-		smbadm_group_dump_members(grp->sg_members, grp->sg_nmembers);
+		smbadm_group_dump_members(grp->sg_members, grp->sg_nmembers,
+		    show_sids);
 }
 
 /*
@@ -953,22 +1208,24 @@ static int
 smbadm_group_show(int argc, char **argv)
 {
 	char *gname = NULL;
-	boolean_t show_privs;
-	boolean_t show_members;
-	char option;
+	boolean_t show_members = B_FALSE;
+	boolean_t show_privs = B_FALSE;
+	boolean_t show_sids = B_FALSE;
+	int option;
 	int status;
 	smb_group_t grp;
 	smb_giter_t gi;
 
-	show_privs = show_members = B_FALSE;
-
-	while ((option = getopt(argc, argv, "mp")) != -1) {
+	while ((option = getopt(argc, argv, "mps")) != -1) {
 		switch (option) {
 		case 'm':
 			show_members = B_TRUE;
 			break;
 		case 'p':
 			show_privs = B_TRUE;
+			break;
+		case 's':
+			show_sids = B_TRUE;
 			break;
 
 		default:
@@ -983,7 +1240,8 @@ smbadm_group_show(int argc, char **argv)
 	if (strcmp(gname, "*")) {
 		status = smb_lgrp_getbyname(gname, &grp);
 		if (status == SMB_LGRP_SUCCESS) {
-			smbadm_group_dump(&grp, show_members, show_privs);
+			smbadm_group_dump(&grp, show_members, show_privs,
+			    show_sids);
 			smb_lgrp_free(&grp);
 		} else {
 			(void) fprintf(stderr,
@@ -1000,7 +1258,7 @@ smbadm_group_show(int argc, char **argv)
 	}
 
 	while ((status = smb_lgrp_iterate(&gi, &grp)) == SMB_LGRP_SUCCESS) {
-		smbadm_group_dump(&grp, show_members, show_privs);
+		smbadm_group_dump(&grp, show_members, show_privs, show_sids);
 		smb_lgrp_free(&grp);
 	}
 
@@ -1008,7 +1266,7 @@ smbadm_group_show(int argc, char **argv)
 
 	if ((status != SMB_LGRP_NO_MORE) || smb_lgrp_itererror(&gi)) {
 		if (status != SMB_LGRP_NO_MORE)
-			syslog(LOG_ERR, "smb_lgrp_iterate: %s",
+			smb_syslog(LOG_ERR, "smb_lgrp_iterate: %s",
 			    smb_lgrp_strerror(status));
 
 		(void) fprintf(stderr,
@@ -1097,9 +1355,9 @@ smbadm_group_setprop(int argc, char **argv)
 	char *gname = NULL;
 	smbadm_prop_t props[SMBADM_NPROP];
 	smbadm_prop_handle_t *phandle;
-	char option;
+	int option;
 	int pcnt = 0;
-	int ret;
+	int ret = 0;
 	int p;
 
 	bzero(props, SMBADM_NPROP * sizeof (smbadm_prop_t));
@@ -1157,9 +1415,9 @@ smbadm_group_getprop(int argc, char **argv)
 	char *gname = NULL;
 	smbadm_prop_t props[SMBADM_NPROP];
 	smbadm_prop_handle_t *phandle;
-	char option;
+	int option;
 	int pcnt = 0;
-	int ret;
+	int ret = 0;
 	int p;
 
 	bzero(props, SMBADM_NPROP * sizeof (smbadm_prop_t));
@@ -1219,7 +1477,7 @@ smbadm_group_addmember(int argc, char **argv)
 {
 	char *gname = NULL;
 	char **mname;
-	char option;
+	int option;
 	int mcnt = 0;
 	int ret = 0;
 	int i;
@@ -1276,7 +1534,7 @@ smbadm_group_delmember(int argc, char **argv)
 {
 	char *gname = NULL;
 	char **mname;
-	char option;
+	int option;
 	int mcnt = 0;
 	int ret = 0;
 	int i;
@@ -1328,25 +1586,26 @@ smbadm_group_delmember(int argc, char **argv)
 
 static int
 smbadm_group_add_del_member(char *gname, char *mname,
-	smbadm_grp_action_t act)
+    smbadm_grp_action_t act)
 {
 	lsa_account_t	acct;
 	smb_gsid_t msid;
 	char *sidstr;
-	char *act_str;
+	char *act_str = NULL;
 	int rc;
 
 	if (strncmp(mname, "S-1-", 4) == 0) {
 		/*
 		 * We are given a SID.  Just use it.
 		 *
-		 * We'e like the real account type if we can get it,
+		 * We'd like the real account type if we can get it,
 		 * but don't want to error out if we can't get it.
+		 * Lacking other info, assume it's a group.
 		 */
 		sidstr = mname;
 		rc = smb_lookup_sid(sidstr, &acct);
 		if ((rc != 0) || (acct.a_status != NT_STATUS_SUCCESS))
-			acct.a_sidtype = SidTypeUnknown;
+			acct.a_sidtype = SidTypeGroup;
 	} else {
 		rc = smb_lookup_name(mname, SidTypeUnknown, &acct);
 		if ((rc != 0) || (acct.a_status != NT_STATUS_SUCCESS)) {
@@ -1389,6 +1648,27 @@ smbadm_group_add_del_member(char *gname, char *mname,
 		return (1);
 	}
 	return (0);
+}
+
+static int
+smbadm_user_delete(int argc, char **argv)
+{
+	int error;
+	char *user = NULL;
+
+	user = argv[optind];
+	if (optind >= argc || user == NULL || *user == '\0') {
+		(void) fprintf(stderr, gettext("missing user name\n"));
+		smbadm_usage(B_FALSE);
+	}
+
+	error = smb_pwd_setcntl(user, SMB_PWC_DELETE);
+	if (error == SMB_PWE_SUCCESS)
+		(void) printf(gettext("%s has been deleted.\n"), user);
+	else
+		(void) fprintf(stderr, "%s\n", smbadm_pwd_strerror(error));
+
+	return (error);
 }
 
 static int
@@ -1447,16 +1727,10 @@ main(int argc, char **argv)
 
 	progname = basename(argv[0]);
 
-	if (getzoneid() != GLOBAL_ZONEID) {
-		(void) fprintf(stderr,
-		    gettext("cannot execute in non-global zone\n"));
-		return (0);
-	}
-
 	if (is_system_labeled()) {
 		(void) fprintf(stderr,
 		    gettext("Trusted Extensions not supported\n"));
-		return (0);
+		return (1);
 	}
 
 	if (argc < 2) {
@@ -1511,22 +1785,26 @@ smbadm_init(void)
 {
 	int rc;
 
-	switch (curcmd->flags & SMBADM_CMDF_TYPEMASK) {
-	case SMBADM_CMDF_GROUP:
+	if ((curcmd->flags & SMBADM_CMDF_KMOD) != 0) {
+		if ((rc = smb_kmod_bind(B_FALSE)) != 0) {
+			(void) fprintf(stderr,
+			    gettext("failed to open driver (%s)\n"),
+			    strerror(rc));
+			return (1);
+		}
+	}
+
+	if ((curcmd->flags & SMBADM_CMDF_GROUP) != 0) {
 		if ((rc = smb_lgrp_start()) != SMB_LGRP_SUCCESS) {
 			(void) fprintf(stderr,
 			    gettext("failed to initialize (%s)\n"),
 			    smb_lgrp_strerror(rc));
 			return (1);
 		}
-		break;
+	}
 
-	case SMBADM_CMDF_USER:
+	if ((curcmd->flags & SMBADM_CMDF_USER) != 0) {
 		smb_pwd_init(B_FALSE);
-		break;
-
-	default:
-		break;
 	}
 
 	return (0);
@@ -1535,17 +1813,17 @@ smbadm_init(void)
 static void
 smbadm_fini(void)
 {
-	switch (curcmd->flags & SMBADM_CMDF_TYPEMASK) {
-	case SMBADM_CMDF_GROUP:
+
+	if ((curcmd->flags & SMBADM_CMDF_KMOD) != 0) {
+		smb_kmod_unbind();
+	}
+
+	if ((curcmd->flags & SMBADM_CMDF_GROUP) != 0) {
 		smb_lgrp_stop();
-		break;
+	}
 
-	case SMBADM_CMDF_USER:
+	if ((curcmd->flags & SMBADM_CMDF_USER) != 0) {
 		smb_pwd_fini();
-		break;
-
-	default:
-		break;
 	}
 }
 
@@ -1723,6 +2001,30 @@ static int
 smbadm_getprop_tkowner(char *gname, smbadm_prop_t *prop)
 {
 	return (smbadm_group_getpriv(gname, SE_TAKE_OWNERSHIP_LUID, prop));
+}
+
+static int
+smbadm_setprop_readfile(char *gname, smbadm_prop_t *prop)
+{
+	return (smbadm_group_setpriv(gname, SE_READ_FILE_LUID, prop));
+}
+
+static int
+smbadm_getprop_readfile(char *gname, smbadm_prop_t *prop)
+{
+	return (smbadm_group_getpriv(gname, SE_READ_FILE_LUID, prop));
+}
+
+static int
+smbadm_setprop_writefile(char *gname, smbadm_prop_t *prop)
+{
+	return (smbadm_group_setpriv(gname, SE_WRITE_FILE_LUID, prop));
+}
+
+static int
+smbadm_getprop_writefile(char *gname, smbadm_prop_t *prop)
+{
+	return (smbadm_group_getpriv(gname, SE_WRITE_FILE_LUID, prop));
 }
 
 static int

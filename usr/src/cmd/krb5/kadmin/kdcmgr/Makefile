@@ -21,6 +21,7 @@
 # Copyright 2007 Sun Microsystems, Inc.  All rights reserved.
 # Use is subject to license terms.
 #
+# Copyright (c) 2018, Joyent, Inc.
 
 PROG=	kdcmgr
 KLPROG=	klookup
@@ -35,7 +36,9 @@ include ../../../Makefile.cmd
 POFILE=		$(SSRCS:%.sh=%.po)
 
 CERRWARN +=	-_gcc=-Wno-implicit-function-declaration
-CERRWARN +=	-_gcc=-Wno-uninitialized
+
+# not linted
+SMATCH=off
 
 LDLIBS	+=	-lresolv -lnsl
 
@@ -52,9 +55,6 @@ install: $(PROG) $(KRB5SBINPROG) $(KRB5LIBKLPROG)
 $(KLPROG):	$(OBJS)
 	$(LINK.c) $(OBJS) -o $@ $(LDLIBS)
 	$(POST_PROCESS)
-
-lint:
-	$(LINT.c) $(CSRCS) $(LDLIBS)
 
 clean:
 	$(RM) $(OBJS)

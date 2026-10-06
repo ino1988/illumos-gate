@@ -20,7 +20,10 @@
  */
 /*
  * Copyright 2010 Sun Microsystems, Inc.  All rights reserved.
+ * Copyright 2015 Nexenta Systems, Inc.  All rights reserved.
  * Use is subject to license terms.
+ * Copyright 2018, Joyent, Inc.
+ * Copyright 2023-2025 RackTop Systems, Inc.
  */
 
 
@@ -219,6 +222,8 @@ typedef enum dprov_mech_type {
 	SHA512_HMAC_MECH_INFO_TYPE,	/* SUN_CKM_SHA512_HMAC */
 	SHA512_HMAC_GEN_MECH_INFO_TYPE,	/* SUN_CKM_SHA512_HMAC_GENERAL */
 	SHA512_MECH_INFO_TYPE,		/* SUN_CKM_SHA512 */
+	SHA512_224_MECH_INFO_TYPE,	/* SUN_CKM_SHA512_224 */
+	SHA512_256_MECH_INFO_TYPE,	/* SUN_CKM_SHA512_256 */
 
 	DES_CBC_MECH_INFO_TYPE,		/* SUN_CKM_DES_CBC */
 	DES3_CBC_MECH_INFO_TYPE,	/* SUN_CKM_DES3_CBC */
@@ -228,6 +233,7 @@ typedef enum dprov_mech_type {
 	BLOWFISH_CBC_MECH_INFO_TYPE,	/* SUN_CKM_BLOWFISH_CBC */
 	BLOWFISH_ECB_MECH_INFO_TYPE,	/* SUN_CKM_BLOWFISH_ECB */
 	AES_CBC_MECH_INFO_TYPE,		/* SUN_CKM_AES_CBC */
+	AES_CMAC_MECH_INFO_TYPE,	/* SUN_CKM_AES_CMAC */
 	AES_ECB_MECH_INFO_TYPE,		/* SUN_CKM_AES_ECB */
 	AES_CTR_MECH_INFO_TYPE,		/* SUN_CKM_AES_CTR */
 	AES_CCM_MECH_INFO_TYPE,		/* SUN_CKM_AES_CCM */
@@ -427,6 +433,14 @@ static crypto_mech_info_t dprov_mech_info_tab[] = {
 	    CRYPTO_FG_ENCRYPT_MAC_ATOMIC | CRYPTO_FG_MAC_DECRYPT_ATOMIC,
 	    SHA2_HMAC_MIN_KEY_LEN, SHA2_HMAC_MAX_KEY_LEN,
 	    CRYPTO_KEYSIZE_UNIT_IN_BYTES},
+	/* SHA512_224 */
+	{SUN_CKM_SHA512_224, SHA512_224_MECH_INFO_TYPE,
+	    CRYPTO_FG_DIGEST | CRYPTO_FG_DIGEST_ATOMIC, 0, 0,
+	    CRYPTO_KEYSIZE_UNIT_IN_BITS},
+	/* SHA512_256 */
+	{SUN_CKM_SHA512_256, SHA512_256_MECH_INFO_TYPE,
+	    CRYPTO_FG_DIGEST | CRYPTO_FG_DIGEST_ATOMIC, 0, 0,
+	    CRYPTO_KEYSIZE_UNIT_IN_BITS},
 	/* DES-CBC */
 	{SUN_CKM_DES_CBC, DES_CBC_MECH_INFO_TYPE,
 	    CRYPTO_FG_ENCRYPT | CRYPTO_FG_DECRYPT | CRYPTO_FG_ENCRYPT_MAC |
@@ -476,6 +490,14 @@ static crypto_mech_info_t dprov_mech_info_tab[] = {
 	    CRYPTO_FG_DECRYPT_ATOMIC | CRYPTO_FG_ENCRYPT_MAC_ATOMIC |
 	    CRYPTO_FG_MAC_DECRYPT_ATOMIC,
 	    AES_MIN_KEY_LEN, AES_MAX_KEY_LEN, CRYPTO_KEYSIZE_UNIT_IN_BYTES},
+	/* AES-CMAC */
+	{SUN_CKM_AES_CMAC, AES_CMAC_MECH_INFO_TYPE,
+	    CRYPTO_FG_ENCRYPT | CRYPTO_FG_ENCRYPT_MAC |
+	    CRYPTO_FG_ENCRYPT_ATOMIC | CRYPTO_FG_ENCRYPT_MAC_ATOMIC |
+	    CRYPTO_FG_MAC | CRYPTO_FG_MAC_ATOMIC |
+	    CRYPTO_FG_SIGN | CRYPTO_FG_SIGN_ATOMIC |
+	    CRYPTO_FG_VERIFY | CRYPTO_FG_VERIFY_ATOMIC,
+	    AES_MIN_KEY_LEN, AES_MAX_KEY_LEN, CRYPTO_KEYSIZE_UNIT_IN_BYTES},
 	/* AES-ECB */
 	{SUN_CKM_AES_ECB, AES_ECB_MECH_INFO_TYPE,
 	    CRYPTO_FG_ENCRYPT | CRYPTO_FG_DECRYPT | CRYPTO_FG_ENCRYPT_MAC |
@@ -510,6 +532,7 @@ static crypto_mech_info_t dprov_mech_info_tab[] = {
 	    CRYPTO_FG_MAC_DECRYPT | CRYPTO_FG_ENCRYPT_ATOMIC |
 	    CRYPTO_FG_DECRYPT_ATOMIC | CRYPTO_FG_ENCRYPT_MAC_ATOMIC |
 	    CRYPTO_FG_MAC_DECRYPT_ATOMIC |
+	    CRYPTO_FG_MAC | CRYPTO_FG_MAC_ATOMIC |
 	    CRYPTO_FG_SIGN | CRYPTO_FG_SIGN_ATOMIC |
 	    CRYPTO_FG_VERIFY | CRYPTO_FG_VERIFY_ATOMIC,
 	    AES_MIN_KEY_LEN, AES_MAX_KEY_LEN, CRYPTO_KEYSIZE_UNIT_IN_BYTES},
@@ -1768,7 +1791,7 @@ dprov_attach(dev_info_t *dip, ddi_attach_cmd_t cmd)
 	softc = ddi_get_soft_state(statep, instance);
 	mutex_init(&softc->ds_lock, NULL, MUTEX_DRIVER, NULL);
 	softc->ds_dip = dip;
-	softc->ds_prov_handle = NULL;
+	softc->ds_prov_handle = 0;
 
 	/* create minor node */
 	(void) sprintf(devname, "dprov%d", instance);
@@ -1865,7 +1888,7 @@ dprov_detach(dev_info_t *dip, ddi_detach_cmd_t cmd)
 		return (DDI_FAILURE);
 
 	/* unregister from the crypto framework */
-	if (softc->ds_prov_handle != NULL)
+	if (softc->ds_prov_handle != 0)
 		if ((ret = crypto_unregister_provider(
 		    softc->ds_prov_handle)) != CRYPTO_SUCCESS) {
 			cmn_err(CE_WARN, "dprov_detach: "
@@ -1937,7 +1960,9 @@ dprov_digest_init(crypto_ctx_t *ctx, crypto_mechanism_t *mechanism,
 	    mechanism->cm_type != SHA1_MECH_INFO_TYPE &&
 	    mechanism->cm_type != SHA256_MECH_INFO_TYPE &&
 	    mechanism->cm_type != SHA384_MECH_INFO_TYPE &&
-	    mechanism->cm_type != SHA512_MECH_INFO_TYPE) {
+	    mechanism->cm_type != SHA512_MECH_INFO_TYPE &&
+	    mechanism->cm_type != SHA512_224_MECH_INFO_TYPE &&
+	    mechanism->cm_type != SHA512_256_MECH_INFO_TYPE) {
 		cmn_err(CE_WARN, "dprov_digest_init: unexpected mech type "
 		    "0x%llx\n", (unsigned long long)mechanism->cm_type);
 		return (CRYPTO_MECHANISM_INVALID);
@@ -2110,7 +2135,8 @@ dprov_valid_mac_mech(crypto_mech_type_t mech_type)
 	    mech_type == SHA384_HMAC_GEN_MECH_INFO_TYPE ||
 	    mech_type == SHA512_HMAC_MECH_INFO_TYPE ||
 	    mech_type == SHA512_HMAC_GEN_MECH_INFO_TYPE ||
-	    mech_type == AES_GMAC_MECH_INFO_TYPE);
+	    mech_type == AES_GMAC_MECH_INFO_TYPE ||
+	    mech_type == AES_CMAC_MECH_INFO_TYPE);
 }
 
 static int
@@ -2302,6 +2328,7 @@ dprov_valid_cipher_mech(crypto_mech_type_t mech_type)
 	    mech_type == BLOWFISH_CBC_MECH_INFO_TYPE ||
 	    mech_type == BLOWFISH_ECB_MECH_INFO_TYPE ||
 	    mech_type == AES_CBC_MECH_INFO_TYPE ||
+	    mech_type == AES_CMAC_MECH_INFO_TYPE ||
 	    mech_type == AES_ECB_MECH_INFO_TYPE ||
 	    mech_type == AES_CTR_MECH_INFO_TYPE ||
 	    mech_type == AES_CCM_MECH_INFO_TYPE ||
@@ -2644,7 +2671,9 @@ dprov_valid_sign_verif_mech(crypto_mech_type_t mech_type)
 	    mech_type == SHA384_RSA_PKCS_MECH_INFO_TYPE ||
 	    mech_type == SHA512_RSA_PKCS_MECH_INFO_TYPE ||
 	    mech_type == ECDSA_SHA1_MECH_INFO_TYPE ||
-	    mech_type == ECDSA_MECH_INFO_TYPE);
+	    mech_type == ECDSA_MECH_INFO_TYPE ||
+	    mech_type == AES_CMAC_MECH_INFO_TYPE ||
+	    mech_type == AES_GMAC_MECH_INFO_TYPE);
 }
 
 static int
@@ -4295,6 +4324,73 @@ dprov_free_context(crypto_ctx_t *ctx)
 }
 
 /*
+ * Helper for SHA* _HMAC_GEN_MECH_INFO_TYPE
+ * The mech. param is just a length, 32-bit or 64-bit.
+ * Note: umech was already copied in.  Just need to
+ * copyin the parameter pointed to by umech.
+ */
+static int
+copyin_sha_hmac_mech(crypto_mechanism_t *umech, crypto_mechanism_t *kmech,
+    int *out_error, int mode)
+{
+	STRUCT_DECL(crypto_mechanism, mech);
+	size_t uparam_len, kparam_len;
+	caddr_t pp;
+	char *kparam;
+	ulong_t lparam;
+	int rv;
+	int error = 0;
+
+	STRUCT_INIT(mech, mode);
+	bcopy(umech, STRUCT_BUF(mech), STRUCT_SIZE(mech));
+	pp = STRUCT_FGETP(mech, cm_param);
+	uparam_len = STRUCT_FGET(mech, cm_param_len);
+
+	if (pp == NULL) {
+		rv = CRYPTO_MECHANISM_PARAM_INVALID;
+		goto out;
+	}
+
+	if ((mode & DATAMODEL_MASK) == DATAMODEL_ILP32) {
+		size32_t iparam;
+		if (uparam_len != sizeof (iparam)) {
+			rv = CRYPTO_MECHANISM_PARAM_INVALID;
+			goto out;
+		}
+		if (copyin((char *)pp, &iparam, sizeof (iparam)) != 0) {
+			error = EFAULT;
+			rv = CRYPTO_FAILED;
+			goto out;
+		}
+		lparam = iparam;
+	} else {
+		if (uparam_len != sizeof (lparam)) {
+			rv = CRYPTO_MECHANISM_PARAM_INVALID;
+			goto out;
+		}
+		if (copyin((char *)pp, &lparam, sizeof (lparam)) != 0) {
+			error = EFAULT;
+			rv = CRYPTO_FAILED;
+			goto out;
+		}
+	}
+
+	kparam_len = sizeof (lparam);
+	if ((kparam = kmem_alloc(kparam_len, KM_NOSLEEP)) == NULL) {
+		rv = CRYPTO_HOST_MEMORY;
+		goto out;
+	}
+	bcopy(&lparam, kparam, kparam_len);
+
+	kmech->cm_param = kparam;
+	kmech->cm_param_len = kparam_len;
+	rv = CRYPTO_SUCCESS;
+out:
+	*out_error = error;
+	return (rv);
+}
+
+/*
  * Resource control checks don't need to be done. Why? Because this routine
  * knows the size of the structure, and it can't be overridden by a user.
  * This is different from the crypto module, which has no knowledge of
@@ -4731,6 +4827,13 @@ dprov_copyin_mechanism(crypto_provider_handle_t provider,
 	kmech->cm_param_len = 0;
 
 	switch (kmech->cm_type) {
+	case SHA1_HMAC_GEN_MECH_INFO_TYPE:
+	case SHA256_HMAC_GEN_MECH_INFO_TYPE:
+	case SHA384_HMAC_GEN_MECH_INFO_TYPE:
+	case SHA512_HMAC_GEN_MECH_INFO_TYPE:
+		rv = copyin_sha_hmac_mech(umech, kmech, &error, mode);
+		goto out;
+
 	case DES_CBC_MECH_INFO_TYPE:
 	case DES3_CBC_MECH_INFO_TYPE:
 		expected_param_len = DES_BLOCK_LEN;
@@ -5026,7 +5129,7 @@ dprov_taskq_dispatch(dprov_state_t *softc, dprov_req_t *taskq_req,
     task_func_t *func, int kmflag)
 {
 	if (taskq_dispatch(softc->ds_taskq, func, taskq_req,
-	    kmflag == KM_NOSLEEP ? TQ_NOSLEEP : TQ_SLEEP) == (taskqid_t)0) {
+	    kmflag == KM_NOSLEEP ? TQ_NOSLEEP : TQ_SLEEP) == TASKQID_INVALID) {
 		kmem_free(taskq_req, sizeof (dprov_req_t));
 		return (CRYPTO_HOST_MEMORY);
 	} else
@@ -6750,7 +6853,7 @@ dprov_random_task(dprov_req_t *taskq_req)
 
 	switch (taskq_req->dr_type) {
 
-	DPROV_REQ_RANDOM_SEED:
+	case DPROV_REQ_RANDOM_SEED:
 		/*
 		 * Since we don't really generate random numbers
 		 * nothing to do.
@@ -8434,6 +8537,7 @@ free_derived_key:
 					error = CRYPTO_TEMPLATE_INCONSISTENT;
 					break;
 				}
+				break;
 			default:
 				error = CRYPTO_MECHANISM_INVALID;
 			}
@@ -9138,8 +9242,6 @@ dprov_create_object_from_template(dprov_state_t *softc,
 
 	/* allocate new object */
 	object = kmem_zalloc(sizeof (dprov_object_t), KM_SLEEP);
-	if (object == NULL)
-		return (CRYPTO_HOST_MEMORY);
 
 	/* is it a token object? */
 	/* check CKA_TOKEN attribute value */
@@ -9150,9 +9252,11 @@ dprov_create_object_from_template(dprov_state_t *softc,
 		for (i = 0; i < DPROV_MAX_OBJECTS; i++)
 			if (softc->ds_objects[i] == NULL)
 				break;
-		if (i == DPROV_MAX_OBJECTS)
+		if (i == DPROV_MAX_OBJECTS) {
+			kmem_free(object, sizeof (dprov_object_t));
 			/* no free slot */
 			return (CRYPTO_HOST_MEMORY);
+		}
 		softc->ds_objects[i] = object;
 		object->do_token_idx = i;
 		DPROV_OBJECT_REFHOLD(object);
@@ -9498,7 +9602,7 @@ dprov_object_is_token(dprov_object_t *object)
  */
 static int
 dprov_get_object_attr_scalar_common(dprov_object_t *object, uint64_t attr_type,
-				    void *value, size_t value_len)
+    void *value, size_t value_len)
 {
 	int attr_idx;
 	size_t oa_value_len;

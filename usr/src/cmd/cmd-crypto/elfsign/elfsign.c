@@ -142,7 +142,7 @@ main(int argc, char **argv)
 	char *scmd = NULL;
 	char *opts;		/* The set of flags for cmd */
 	int errflag = 0;	/* We had an options parse error */
-	char c;			/* current getopts flag */
+	int c;			/* current getopts flag */
 	ret_t (*action)(char *);	/* Function pointer for the action */
 	ret_t ret;
 
@@ -736,7 +736,7 @@ create_csr(char *dn)
 	KMF_X509_NAME csrSubject;
 	KMF_CSR_DATA csr;
 	KMF_ALGORITHM_INDEX sigAlg = KMF_ALGID_MD5WithRSA;
-	KMF_DATA signedCsr = { NULL, 0 };
+	KMF_DATA signedCsr = { 0, NULL };
 	char *err;
 	KMF_ATTRIBUTE	attrlist[16];
 	KMF_ENCODE_FORMAT	format;

@@ -18,13 +18,15 @@
  *
  * CDDL HEADER END
  */
+
 /*
  * Copyright (c) 1989, 2010, Oracle and/or its affiliates. All rights reserved.
- * Copyright 2011 Nexenta Systems, Inc.  All rights reserved.
+ * Copyright (c) 2012, 2016 by Delphix. All rights reserved.
+ * Copyright 2016 Nexenta Systems, Inc.  All rights reserved.
  */
 
 /*	Copyright (c) 1984, 1986, 1987, 1988, 1989 AT&T	*/
-/*	  All Rights Reserved  	*/
+/*	  All Rights Reserved	*/
 
 /*
  * University Copyright- Copyright (c) 1982, 1986, 1988
@@ -36,10 +38,6 @@
  * contributors.
  */
 
-/*
- * Copyright (c) 2012 by Delphix. All rights reserved.
- */
-
 #include <stdio.h>
 #include <stdio_ext.h>
 #include <stdlib.h>
@@ -48,9 +46,11 @@
 #include <string.h>
 #include <syslog.h>
 #include <netconfig.h>
+#include <netdir.h>
 #include <unistd.h>
 #include <netdb.h>
 #include <rpc/rpc.h>
+#include <rpc/svc.h>
 #include <netinet/in.h>
 #include <sys/param.h>
 #include <sys/resource.h>
@@ -68,6 +68,7 @@
 #include <limits.h>
 #include <rpcsvc/daemon_utils.h>
 #include <priv_utils.h>
+#include "smfcfg.h"
 #include "sm_statd.h"
 
 
@@ -80,6 +81,9 @@
 #define	current1	"statmon/sm/"
 #define	backup1		"statmon/sm.bak/"
 #define	state1		"statmon/state"
+
+extern int	daemonize_init(void);
+extern void	daemonize_fini(int fd);
 
 /*
  * User and group IDs to run as.  These are hardwired, rather than looked
@@ -95,6 +99,7 @@ static char statd_home[MAXPATHLEN];
 
 int debug;
 int regfiles_only = 0;		/* 1 => use symlinks in statmon, 0 => don't */
+int statd_port = 0;
 char hostname[MAXHOSTNAMELEN];
 
 /*
@@ -120,11 +125,14 @@ int  pathix = 0;  /* # of -p entries */
 mutex_t crash_lock;
 int die;
 int in_crash;
-cond_t crash_finish;
 mutex_t sm_trylock;
 rwlock_t thr_rwlock;
 cond_t retrywait;
 mutex_t name_addrlock;
+
+mutex_t merges_lock;
+cond_t merges_cond;
+boolean_t in_merges;
 
 /* forward references */
 static void set_statmon_owner(void);
@@ -134,41 +142,41 @@ static int nftw_owner(const char *, const struct stat *, int, struct FTW *);
 
 /*
  * statd protocol
- * 	commands:
- * 		SM_STAT
- * 			returns stat_fail to caller
- * 		SM_MON
- * 			adds an entry to the monitor_q and the record_q
+ *	commands:
+ *		SM_STAT
+ *			returns stat_fail to caller
+ *		SM_MON
+ *			adds an entry to the monitor_q and the record_q.
  *			This message is sent by the server lockd to the server
  *			statd, to indicate that a new client is to be monitored.
  *			It is also sent by the server lockd to the client statd
  *			to indicate that a new server is to be monitored.
- * 		SM_UNMON
- * 			removes an entry from the monitor_q and the record_q
- * 		SM_UNMON_ALL
- * 			removes all entries from a particular host from the
- * 			monitor_q and the record_q.  Our statd has this
- * 			disabled.
- * 		SM_SIMU_CRASH
- * 			simulate a crash.  removes everything from the
- * 			record_q and the recovery_q, then calls statd_init()
- * 			to restart things.  This message is sent by the server
+ *		SM_UNMON
+ *			removes an entry from the monitor_q and the record_q
+ *		SM_UNMON_ALL
+ *			removes all entries from a particular host from the
+ *			monitor_q and the record_q.  Our statd has this
+ *			disabled.
+ *		SM_SIMU_CRASH
+ *			simulate a crash.  Removes everything from the
+ *			record_q and the recovery_q, then calls statd_init()
+ *			to restart things.  This message is sent by the server
  *			lockd to the server statd to have all clients notified
  *			that they should reclaim locks.
- * 		SM_NOTIFY
+ *		SM_NOTIFY
  *			Sent by statd on server to statd on client during
  *			crash recovery.  The client statd passes the info
  *			to its lockd so it can attempt to reclaim the locks
  *			held on the server.
  *
  * There are three main hash tables used to keep track of things.
- * 	mon_table
- * 		table that keeps track hosts statd must watch.  If one of
- * 		these hosts crashes, then any locks held by that host must
- * 		be released.
- * 	record_table
- * 		used to keep track of all the hostname files stored in
- * 		the directory /var/statmon/sm.  These are client hosts who
+ *	mon_table
+ *		table that keeps track hosts statd must watch.  If one of
+ *		these hosts crashes, then any locks held by that host must
+ *		be released.
+ *	record_table
+ *		used to keep track of all the hostname files stored in
+ *		the directory /var/statmon/sm.  These are client hosts who
  *		are holding or have held a lock at some point.  Needed
  *		to determine if a file needs to be created for host in
  *		/var/statmon/sm.
@@ -184,9 +192,7 @@ static int nftw_owner(const char *, const struct stat *, int, struct FTW *);
  */
 
 static void
-sm_prog_1(rqstp, transp)
-	struct svc_req *rqstp;
-	SVCXPRT *transp;
+sm_prog_1(struct svc_req *rqstp, SVCXPRT *transp)
 {
 	union {
 		struct sm_name sm_stat_1_arg;
@@ -204,7 +210,7 @@ sm_prog_1(rqstp, transp)
 	} result;
 
 	bool_t (*xdr_argument)(), (*xdr_result)();
-	char *(*local)();
+	void (*local)(void *, void *);
 
 	/*
 	 * Dispatch according to which protocol is being used:
@@ -221,7 +227,7 @@ sm_prog_1(rqstp, transp)
 		case NSMADDRPROC1_REG:
 			xdr_argument = xdr_reg1args;
 			xdr_result = xdr_reg1res;
-			local = (char *(*)()) nsmaddrproc1_reg;
+			local = nsmaddrproc1_reg;
 			break;
 
 		case NSMADDRPROC1_UNREG: /* Not impl. */
@@ -239,37 +245,37 @@ sm_prog_1(rqstp, transp)
 		case SM_STAT:
 			xdr_argument = xdr_sm_name;
 			xdr_result = xdr_sm_stat_res;
-			local = (char *(*)()) sm_stat_svc;
+			local = sm_stat_svc;
 			break;
 
 		case SM_MON:
 			xdr_argument = xdr_mon;
 			xdr_result = xdr_sm_stat_res;
-			local = (char *(*)()) sm_mon_svc;
+			local = sm_mon_svc;
 			break;
 
 		case SM_UNMON:
 			xdr_argument = xdr_mon_id;
 			xdr_result = xdr_sm_stat;
-			local = (char *(*)()) sm_unmon_svc;
+			local = sm_unmon_svc;
 			break;
 
 		case SM_UNMON_ALL:
 			xdr_argument = xdr_my_id;
 			xdr_result = xdr_sm_stat;
-			local = (char *(*)()) sm_unmon_all_svc;
+			local = sm_unmon_all_svc;
 			break;
 
 		case SM_SIMU_CRASH:
 			xdr_argument = xdr_void;
 			xdr_result = xdr_void;
-			local = (char *(*)()) sm_simu_crash_svc;
+			local = sm_simu_crash_svc;
 			break;
 
 		case SM_NOTIFY:
 			xdr_argument = xdr_stat_chge;
 			xdr_result = xdr_void;
-			local = (char *(*)()) sm_notify_svc;
+			local = sm_notify_svc;
 			break;
 
 		default:
@@ -299,29 +305,29 @@ sm_prog_1(rqstp, transp)
  * Remove all files under directory path_dir.
  */
 static int
-remove_dir(path_dir)
-char *path_dir;
+remove_dir(char *path_dir)
 {
 	DIR	*dp;
 	struct dirent   *dirp;
 	char tmp_path[MAXPATHLEN];
 
-	if ((dp = opendir(path_dir)) == (DIR *)NULL) {
+	if ((dp = opendir(path_dir)) == NULL) {
 		if (debug)
-		    syslog(LOG_ERR,
-			"warning: open directory %s failed: %m\n", path_dir);
+			syslog(LOG_ERR,
+			    "warning: open directory %s failed: %m\n",
+			    path_dir);
 		return (1);
 	}
 
 	while ((dirp = readdir(dp)) != NULL) {
 		if (strcmp(dirp->d_name, ".") != 0 &&
-			strcmp(dirp->d_name, "..") != 0) {
+		    strcmp(dirp->d_name, "..") != 0) {
 			if (strlen(path_dir) + strlen(dirp->d_name) +2 >
-				MAXPATHLEN) {
+			    MAXPATHLEN) {
 
-				syslog(LOG_ERR,
-		"statd: remove dir %s/%s failed.  Pathname too long.\n",
-				path_dir, dirp->d_name);
+				syslog(LOG_ERR, "statd: remove dir %s/%s "
+				    "failed.  Pathname too long.\n", path_dir,
+				    dirp->d_name);
 
 				continue;
 			}
@@ -341,9 +347,7 @@ char *path_dir;
  * Symlinks, if any, are preserved.
  */
 void
-copydir_from_to(from_dir, to_dir)
-char *from_dir;
-char *to_dir;
+copydir_from_to(char *from_dir, char *to_dir)
 {
 	int	n;
 	DIR	*dp;
@@ -351,16 +355,17 @@ char *to_dir;
 	char rname[MAXNAMELEN + 1];
 	char path[MAXPATHLEN+MAXNAMELEN+2];
 
-	if ((dp = opendir(from_dir)) == (DIR *)NULL) {
+	if ((dp = opendir(from_dir)) == NULL) {
 		if (debug)
-		    syslog(LOG_ERR,
-			"warning: open directory %s failed: %m\n", from_dir);
+			syslog(LOG_ERR,
+			    "warning: open directory %s failed: %m\n",
+			    from_dir);
 		return;
 	}
 
 	while ((dirp = readdir(dp)) != NULL) {
 		if (strcmp(dirp->d_name, ".") == 0 ||
-			strcmp(dirp->d_name, "..") == 0) {
+		    strcmp(dirp->d_name, "..") == 0) {
 			continue;
 		}
 
@@ -376,9 +381,8 @@ char *to_dir;
 			n = readlink(path, rname, MAXNAMELEN);
 			if (n <= 0) {
 				if (debug >= 2) {
-				    (void) printf(
-					"copydir_from_to: can't read link %s\n",
-					path);
+					(void) printf("copydir_from_to: can't "
+					    "read link %s\n", path);
 				}
 				continue;
 			}
@@ -422,7 +426,7 @@ init_hostname(void)
 
 	host_name_count = lifn.lifn_count;
 
-	host_name = (char **)malloc(host_name_count * sizeof (char *));
+	host_name = malloc(host_name_count * sizeof (char *));
 	if (host_name == NULL) {
 		perror("statd -a can't get ip configuration\n");
 		close(sock);
@@ -430,6 +434,100 @@ init_hostname(void)
 	}
 	close(sock);
 	return (0);
+}
+
+static void
+thr_statd_merges(void)
+{
+	/*
+	 * Get other aliases from each interface.
+	 */
+	merge_hosts();
+
+	/*
+	 * Get all of the configured IP addresses.
+	 */
+	merge_ips();
+
+	/*
+	 * Notify the waiters.
+	 */
+	(void) mutex_lock(&merges_lock);
+	in_merges = B_FALSE;
+	(void) cond_broadcast(&merges_cond);
+	(void) mutex_unlock(&merges_lock);
+}
+
+/*
+ * This function is called for each configured network type to
+ * bind and register our RPC service programs.
+ *
+ * On TCP or UDP, we may want to bind SM_PROG on a specific port
+ * (when statd_port is specified) in which case we'll use the
+ * variant of svc_tp_create() that lets us pass a bind address.
+ */
+static void
+sm_svc_tp_create(struct netconfig *nconf)
+{
+	char port_str[8];
+	struct nd_hostserv hs;
+	struct nd_addrlist *al = NULL;
+	SVCXPRT *xprt = NULL;
+
+	/*
+	 * If statd_port is set and this is an inet transport,
+	 * bind this service on the specified port.  The TLI way
+	 * to create such a bind address is netdir_getbyname()
+	 * with the special "host" HOST_SELF_BIND.  This builds
+	 * an all-zeros IP address with the specified port.
+	 */
+	if (statd_port != 0 &&
+	    (strcmp(nconf->nc_protofmly, NC_INET) == 0 ||
+	    strcmp(nconf->nc_protofmly, NC_INET6) == 0)) {
+		int err;
+
+		snprintf(port_str, sizeof (port_str), "%u",
+		    (unsigned short)statd_port);
+
+		hs.h_host = HOST_SELF_BIND;
+		hs.h_serv = port_str;
+		err = netdir_getbyname((struct netconfig *)nconf, &hs, &al);
+		if (err == 0 && al != NULL) {
+			xprt = svc_tp_create_addr(sm_prog_1, SM_PROG, SM_VERS,
+			    nconf, al->n_addrs);
+			netdir_free(al, ND_ADDRLIST);
+		}
+		if (xprt == NULL) {
+			syslog(LOG_ERR, "statd: unable to create "
+			    "(SM_PROG, SM_VERS) on transport %s (port %d)",
+			    nconf->nc_netid, statd_port);
+		}
+		/* fall-back to default bind */
+	}
+	if (xprt == NULL) {
+		/*
+		 * Had statd_port=0, or non-inet transport,
+		 * or the bind to a specific port failed.
+		 * Do a default bind.
+		 */
+		xprt = svc_tp_create(sm_prog_1, SM_PROG, SM_VERS, nconf);
+	}
+	if (xprt == NULL) {
+		syslog(LOG_ERR, "statd: unable to create "
+		    "(SM_PROG, SM_VERS) for transport %s",
+		    nconf->nc_netid);
+		return;
+	}
+
+	/*
+	 * Also register the NSM_ADDR program on this
+	 * transport handle (same dispatch function).
+	 */
+	if (!svc_reg(xprt, NSM_ADDR_PROGRAM, NSM_ADDR_V1, sm_prog_1, nconf)) {
+		syslog(LOG_ERR, "statd: failed to register "
+		    "(NSM_ADDR_PROGRAM, NSM_ADDR_V1) for "
+		    "netconfig %s", nconf->nc_netid);
+	}
 }
 
 int
@@ -442,7 +540,11 @@ main(int argc, char *argv[])
 	struct rlimit rl;
 	int mode;
 	int sz;
+	int pipe_fd = -1;
+	int ret;
 	int connmaxrec = RPC_MAXDATASIZE;
+	struct netconfig *nconf;
+	NCONF_HANDLE *nc;
 
 	addrix = 0;
 	pathix = 0;
@@ -451,7 +553,14 @@ main(int argc, char *argv[])
 	if (init_hostname() < 0)
 		exit(1);
 
-	while ((c = getopt(argc, argv, "Dd:a:G:p:rU:")) != EOF)
+	ret = nfs_smf_get_iprop("statd_port", &statd_port,
+	    DEFAULT_INSTANCE, SCF_TYPE_INTEGER, STATD);
+	if (ret != SA_OK) {
+		syslog(LOG_ERR, "Reading of statd_port from SMF "
+		    "failed, using default value");
+	}
+
+	while ((c = getopt(argc, argv, "Dd:a:G:p:P:rU:")) != EOF)
 		switch (c) {
 		case 'd':
 			(void) sscanf(optarg, "%d", &debug);
@@ -513,7 +622,15 @@ main(int argc, char *argv[])
 				pathix++;
 			} else {
 				(void) fprintf(stderr,
-				"statd: -p pathname is too long.\n");
+				    "statd: -p pathname is too long.\n");
+			}
+			break;
+		case 'P':
+			(void) sscanf(optarg, "%d", &statd_port);
+			if (statd_port < 1 || statd_port > UINT16_MAX) {
+				(void) fprintf(stderr,
+				    "statd: -P port invalid.\n");
+				statd_port = 0;
 			}
 			break;
 		case 'r':
@@ -521,7 +638,7 @@ main(int argc, char *argv[])
 			break;
 		default:
 			(void) fprintf(stderr,
-			"statd [-d level] [-D]\n");
+			    "statd [-d level] [-D]\n");
 			return (1);
 		}
 
@@ -552,20 +669,8 @@ main(int argc, char *argv[])
 	(void) enable_extended_FILE_stdio(-1, -1);
 
 	if (!debug) {
-		ppid = fork();
-		if (ppid == -1) {
-			(void) fprintf(stderr, "statd: fork failure\n");
-			(void) fflush(stderr);
-			abort();
-		}
-		if (ppid != 0) {
-			exit(0);
-		}
-		closefrom(0);
-		(void) open("/dev/null", O_RDONLY);
-		(void) open("/dev/null", O_WRONLY);
-		(void) dup(1);
-		(void) setsid();
+		pipe_fd = daemonize_init();
+
 		openlog("statd", LOG_PID, LOG_DAEMON);
 	}
 
@@ -588,11 +693,20 @@ main(int argc, char *argv[])
 		exit(0);
 	}
 
-	/* Get other aliases from each interface. */
-	merge_hosts();
+	mutex_init(&merges_lock, USYNC_THREAD, NULL);
+	cond_init(&merges_cond, USYNC_THREAD, NULL);
+	in_merges = B_TRUE;
 
-	/* Get all of the configured IP addresses. */
-	merge_ips();
+	/*
+	 * Create thr_statd_merges() thread to populate the host_name list
+	 * asynchronously.
+	 */
+	if (thr_create(NULL, 0, (void *(*)(void *))thr_statd_merges, NULL,
+	    THR_DETACHED, NULL) != 0) {
+		syslog(LOG_ERR, "statd: unable to create thread for "
+		    "thr_statd_merges().");
+		exit(1);
+	}
 
 	/*
 	 * Set to automatic mode such that threads are automatically
@@ -613,16 +727,29 @@ main(int argc, char *argv[])
 		syslog(LOG_INFO, "unable to set maximum RPC record size");
 	}
 
-	if (!svc_create(sm_prog_1, SM_PROG, SM_VERS, "netpath")) {
-		syslog(LOG_ERR,
-	    "statd: unable to create (SM_PROG, SM_VERS) for netpath.");
-		exit(1);
+	/*
+	 * Enumerate network transports and create service listeners
+	 * as appropriate for each.
+	 */
+	if ((nc = setnetconfig()) == NULL) {
+		syslog(LOG_ERR, "setnetconfig failed: %m");
+		return (-1);
 	}
+	while ((nconf = getnetconfig(nc)) != NULL) {
 
-	if (!svc_create(sm_prog_1, NSM_ADDR_PROGRAM, NSM_ADDR_V1, "netpath")) {
-		syslog(LOG_ERR,
-	"statd: unable to create (NSM_ADDR_PROGRAM, NSM_ADDR_V1) for netpath.");
+		/*
+		 * Skip things like tpi_raw, invisible...
+		 */
+		if ((nconf->nc_flag & NC_VISIBLE) == 0)
+			continue;
+		if (nconf->nc_semantics != NC_TPI_CLTS &&
+		    nconf->nc_semantics != NC_TPI_COTS &&
+		    nconf->nc_semantics != NC_TPI_COTS_ORD)
+			continue;
+
+		sm_svc_tp_create(nconf);
 	}
+	(void) endnetconfig(nc);
 
 	/*
 	 * Make sure /var/statmon and any alternate (-p) statmon
@@ -655,7 +782,6 @@ main(int argc, char *argv[])
 	rwlock_init(&thr_rwlock, USYNC_THREAD, NULL);
 	mutex_init(&crash_lock, USYNC_THREAD, NULL);
 	mutex_init(&name_addrlock, USYNC_THREAD, NULL);
-	cond_init(&crash_finish, USYNC_THREAD, NULL);
 	cond_init(&retrywait, USYNC_THREAD, NULL);
 	sm_inithash();
 	die = 0;
@@ -668,12 +794,17 @@ main(int argc, char *argv[])
 	in_crash = 1;
 	statd_init();
 
+	/*
+	 * statd is up and running as far as we are concerned.
+	 */
+	daemonize_fini(pipe_fd);
+
 	if (debug)
 		(void) printf("Starting svc_run\n");
 	svc_run();
 	syslog(LOG_ERR, "statd: svc_run returned\n");
 	/* NOTREACHED */
-	thr_exit((void *) 1);
+	thr_exit((void *)1);
 	return (0);
 
 }
@@ -714,7 +845,7 @@ set_statmon_owner(void)
 	}
 
 	__fini_daemon_priv(PRIV_PROC_EXEC, PRIV_PROC_SESSION,
-	    PRIV_FILE_LINK_ANY, PRIV_PROC_INFO, (char *)NULL);
+	    PRIV_FILE_LINK_ANY, PRIV_PROC_INFO, NULL);
 }
 
 /*
@@ -724,7 +855,7 @@ set_statmon_owner(void)
  */
 
 static void
-copy_client_names()
+copy_client_names(void)
 {
 	int i;
 	char buf[MAXPATHLEN+SM_MAXPATHLEN];
@@ -798,7 +929,7 @@ one_statmon_owner(const char *dir)
 /*ARGSUSED3*/
 static int
 nftw_owner(const char *path, const struct stat *statp, int info,
-	struct FTW *ftw)
+    struct FTW *ftw)
 {
 	if (!(info == FTW_F || info == FTW_D))
 		return (0);

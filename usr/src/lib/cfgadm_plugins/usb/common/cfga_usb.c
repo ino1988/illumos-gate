@@ -21,8 +21,9 @@
 /*
  * Copyright 2008 Sun Microsystems, Inc.  All rights reserved.
  * Use is subject to license terms.
+ * Copyright 2018 OmniOS Community Edition (OmniOSce) Association.
+ * Copyright 2022 Oxide Computer Company
  */
-
 
 #include "cfga_usb.h"
 
@@ -36,11 +37,11 @@ extern cfga_usb_ret_t	usb_rcm_online(const char *, char **, char *,
 extern cfga_usb_ret_t	usb_rcm_remove(const char *, char **, char *,
 			    cfga_flags_t);
 static int		usb_confirm(struct cfga_confirm *, char *);
-static char 		*usb_get_devicepath(const char *);
+static char		*usb_get_devicepath(const char *);
 
 /*
  * This file contains the entry points to the plugin as defined in the
- * config_admin(3X) man page.
+ * config_admin(3CFGADM) man page.
  */
 
 /*
@@ -529,7 +530,7 @@ setup_for_devctl_cmd(const char *ap_id, devctl_hdl_t *devctl_hdl,
 	}
 
 	/* Set up to pass port number down to driver */
-	if (nvlist_alloc(user_nvlistp, NV_UNIQUE_NAME_TYPE, NULL) != 0) {
+	if (nvlist_alloc(user_nvlistp, NV_UNIQUE_NAME_TYPE, 0) != 0) {
 		DPRINTF("setup_for_devctl: nvlist_alloc failed, errno: %d\n",
 		    errno);
 		*user_nvlistp = NULL;	/* Prevent possible incorrect free in */
@@ -621,7 +622,7 @@ device_connected(devctl_hdl_t hdl, nvlist_t *list, ap_ostate_t *ostate)
  */
 cfga_usb_ret_t
 do_control_ioctl(const char *ap_id, uint_t subcommand, uint_t arg,
-	void **descrp, size_t *sizep)
+    void **descrp, size_t *sizep)
 {
 	int			fd = -1;
 	uint_t			port;
@@ -802,7 +803,7 @@ set_configuration(const char *ap_id, uint_t config, char *driver,
 	}
 
 	/* Notify hubd that it needs to refresh its db.  */
-	if ((rv = do_control_ioctl(ap_id, HUBD_REFRESH_DEVDB, NULL,
+	if ((rv = do_control_ioctl(ap_id, HUBD_REFRESH_DEVDB, 0,
 	    (void **)&dev_path, &size)) != CFGA_USB_OK) {
 		DPRINTF("set_configuration: HUBD_REFRESH_DEVDB failed\n");
 		goto bailout;
@@ -831,7 +832,7 @@ get_config(const char *ap_id, uint_t *config)
 	uint_t		*config_val = NULL;
 	cfga_usb_ret_t	rv;
 
-	if ((rv = do_control_ioctl(ap_id, HUBD_GET_CURRENT_CONFIG, NULL,
+	if ((rv = do_control_ioctl(ap_id, HUBD_GET_CURRENT_CONFIG, 0,
 	    (void **)&config_val, &size)) != CFGA_USB_OK) {
 		DPRINTF("get_config: get current config descr failed\n");
 		goto bailout;
@@ -888,19 +889,21 @@ fill_in_ap_info(const char *ap_id, char *info_buf, size_t info_size)
 {
 	char			*mfg_str = NULL;	/* iManufacturer */
 	char			*prod_str = NULL;	/* iProduct */
+	char			*serial_str = NULL;	/* iSerialNumber */
 	char			*cfg_descr = NULL;	/* iConfiguration */
 	uint_t			config;			/* curr cfg index */
 	size_t			size;			/* tmp stuff */
 	boolean_t		flag;		/* wether to print ":" or not */
 	boolean_t		free_mfg_str = B_FALSE;
 	boolean_t		free_prod_str = B_FALSE;
+	boolean_t		free_serial_str = B_FALSE;
 	boolean_t		free_cfg_str = B_FALSE;
 	cfga_usb_ret_t		rv = CFGA_USB_OK;
 	usb_dev_descr_t		*dev_descrp = NULL;	/* device descriptor */
 
 	DPRINTF("fill_in_ap_info:\n");
 
-	if ((rv = do_control_ioctl(ap_id, USB_DESCR_TYPE_DEV, NULL,
+	if ((rv = do_control_ioctl(ap_id, USB_DESCR_TYPE_DEV, 0,
 	    (void **)&dev_descrp, &size)) != CFGA_USB_OK) {
 		DPRINTF("fill_in_ap_info: get dev descr failed\n");
 		return (rv);
@@ -937,6 +940,22 @@ fill_in_ap_info(const char *ap_id, char *info_buf, size_t info_size)
 		free_prod_str = B_TRUE;
 	}
 
+	/* iSerialNumber */
+	serial_str = USB_UNDEF_STR;
+	if (dev_descrp->iSerialNumber != 0) {
+		if ((rv = do_control_ioctl(ap_id, USB_DESCR_TYPE_STRING,
+		    HUBD_SERIALNO_STR, (void **)&serial_str,
+		    &size)) != CFGA_USB_OK) {
+			if (rv == CFGA_USB_ZEROLEN) {
+				rv = CFGA_USB_OK;
+			} else {
+				DPRINTF("getting iSerialNumber failed\n");
+				goto bailout;
+			}
+		}
+		free_serial_str = B_TRUE;
+	}
+
 	/* Current conifguration */
 	if ((rv = get_config(ap_id, &config)) != CFGA_USB_OK) {
 		DPRINTF("get_config failed\n");
@@ -967,8 +986,9 @@ fill_in_ap_info(const char *ap_id, char *info_buf, size_t info_size)
 
 	/* Dump local buf into passed-in buf. */
 	(void) snprintf(info_buf, info_size,
-	    "Mfg: %s  Product: %s  NConfigs: %d  Config: %d  %s%s", mfg_str,
-	    prod_str, dev_descrp->bNumConfigurations, config,
+	    "Mfg: %s  Product: %s  Serial: %s  NConfigs: %d  Config: %d  %s%s",
+	    mfg_str, prod_str, serial_str,
+	    dev_descrp->bNumConfigurations, config,
 	    (flag == B_TRUE) ? ": " : "", cfg_descr);
 
 bailout:
@@ -982,6 +1002,10 @@ bailout:
 
 	if ((free_prod_str == B_TRUE) && prod_str) {
 		free(prod_str);
+	}
+
+	if ((free_serial_str == B_TRUE) && serial_str) {
+		free(serial_str);
 	}
 
 	if ((free_cfg_str == B_TRUE) && cfg_descr) {
@@ -1224,7 +1248,7 @@ cfga_private_func(
 	char			*msg;
 	nvlist_t		*list = NULL;
 	ap_ostate_t		ostate;
-	devctl_hdl_t 		hdl = NULL;
+	devctl_hdl_t		hdl = NULL;
 	cfga_usb_ret_t		rv;
 	usb_dev_descr_t		*dev_descrp = NULL;
 	char			*driver = NULL;
@@ -1382,7 +1406,7 @@ cfga_private_func(
 		/*
 		 * Check that the option setting selected is in range.
 		 */
-		if ((rv = do_control_ioctl(ap_id, USB_DESCR_TYPE_DEV, NULL,
+		if ((rv = do_control_ioctl(ap_id, USB_DESCR_TYPE_DEV, 0,
 		    (void **)&dev_descrp, &size)) != CFGA_USB_OK) {
 			DPRINTF("cfga_private_func: get dev descr failed\n");
 			goto bailout;
@@ -1474,14 +1498,12 @@ cfga_list_ext(
 	DPRINTF("cfga_list_ext:\n");
 
 	if ((rv = verify_params(ap_id, options, errstring)) != CFGA_USB_OK) {
-		(void) cfga_help(NULL, options, flags);
 		goto bailout;
 	}
 
 	if (ap_id_list == NULL || nlistp == NULL) {
 		DPRINTF("cfga_list_ext: list = NULL or nlistp = NULL\n");
 		rv = CFGA_USB_INTERNAL_ERROR;
-		(void) cfga_help(NULL, options, flags);
 		goto bailout;
 	}
 
@@ -1594,7 +1616,7 @@ cfga_list_ext(
 	(*ap_id_list)->ap_class[0] = '\0';	/* Filled by libcfgadm */
 	(*ap_id_list)->ap_busy = devctl_ap_state.ap_in_transition;
 	(*ap_id_list)->ap_status_time = devctl_ap_state.ap_last_change;
-	(*ap_id_list)->ap_info[0] = NULL;
+	(*ap_id_list)->ap_info[0] = '\0';
 
 	if ((*ap_id_list)->ap_r_state == CFGA_STAT_CONNECTED) {
 		char *str_p;
@@ -1608,7 +1630,7 @@ cfga_list_ext(
 		}
 
 		/* Fill in ap_type */
-		if ((rv = do_control_ioctl(ap_id, HUBD_GET_CFGADM_NAME, NULL,
+		if ((rv = do_control_ioctl(ap_id, HUBD_GET_CFGADM_NAME, 0,
 		    (void **)&str_p, &size)) != CFGA_USB_OK) {
 			DPRINTF("cfga_list_ext: do_control_ioctl failed\n");
 			goto bailout;
@@ -1726,7 +1748,7 @@ usb_get_devicepath(const char *ap_id)
 	size_t		size;
 	cfga_usb_ret_t	rv;
 
-	rv = do_control_ioctl(ap_id, HUBD_GET_DEVICE_PATH, NULL,
+	rv = do_control_ioctl(ap_id, HUBD_GET_DEVICE_PATH, 0,
 	    (void **)&devpath, &size);
 
 	if (rv == CFGA_USB_OK) {
@@ -1734,6 +1756,6 @@ usb_get_devicepath(const char *ap_id)
 		return (devpath);
 	} else {
 		DPRINTF("usb_get_devicepath: get device path ioctl failed\n");
-		return ((char *)NULL);
+		return (NULL);
 	}
 }

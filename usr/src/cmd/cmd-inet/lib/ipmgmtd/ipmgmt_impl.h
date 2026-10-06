@@ -21,6 +21,8 @@
 
 /*
  * Copyright (c) 2010, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2016, Chris Fraire <cfraire@me.com>.
+ * Copyright 2021 Tintri by DDN, Inc. All rights reserved.
  */
 
 #ifndef	_IPMGMT_IMPL_H
@@ -49,6 +51,8 @@ extern void	ipmgmt_log(int, const char *, ...);
 extern int	ipmgmt_cpfile(const char *, const char *, boolean_t);
 
 /* ipmgmt_persist.c */
+extern boolean_t ipmgmt_persist_if_exists(const char *, sa_family_t);
+extern void ipmgmt_get_group_interface(const char *, char *, size_t);
 
 /*
  * following are the list of DB walker callback functions and the callback
@@ -58,25 +62,22 @@ extern int	ipmgmt_cpfile(const char *, const char *, boolean_t);
 extern db_wfunc_t	ipmgmt_db_getprop, ipmgmt_db_resetprop;
 
 /* following functions take ipadm_dbwrite_cbarg_t as callback argument */
-extern db_wfunc_t	ipmgmt_db_add, ipmgmt_db_update;
+extern db_wfunc_t	ipmgmt_db_add, ipmgmt_db_update, ipmgmt_db_update_if;
 
 typedef struct {
-	char		*cb_ifname;
-	ipadm_if_info_t	*cb_ifinfo;
-} ipmgmt_getif_cbarg_t;
-extern db_wfunc_t	ipmgmt_db_getif;
-
-typedef struct {
-	char		*cb_aobjname;
-	char		*cb_ifname;
+	char	*cb_ifname;
+	char	*cb_aobjname;
 	nvlist_t	*cb_onvl;
-	int		cb_ocnt;
-} ipmgmt_getaddr_cbarg_t;
+	int	cb_ocnt;
+} ipmgmt_get_cbarg_t;
+extern db_wfunc_t	ipmgmt_db_getif;
 extern db_wfunc_t	ipmgmt_db_getaddr;
 
 typedef struct {
 	sa_family_t	cb_family;
 	char		*cb_ifname;
+	boolean_t	cb_ipv4exists;
+	boolean_t	cb_ipv6exists;
 } ipmgmt_if_cbarg_t;
 extern db_wfunc_t	ipmgmt_db_setif, ipmgmt_db_resetif;
 
@@ -97,14 +98,17 @@ extern db_wfunc_t	ipmgmt_db_initif;
  * A linked list of address object nodes. Each node in the list tracks
  * following information for the address object identified by `am_aobjname'.
  *	- interface on which the address is created
- * 	- logical interface number on which the address is created
+ *	- logical interface number on which the address is created
  *	- address family
  *	- `am_nextnum' identifies the next number to use to generate user part
  *	  of `aobjname'.
  *	- address type (static, dhcp or addrconf)
  *	- `am_flags' indicates if this addrobj in active and/or persist config
- *	- if `am_atype' is IPADM_ADDR_IPV6_ADDRCONF then `am_ifid' holds the
- *	  interface-id used to configure auto-configured addresses
+ *	- other, ipadm_addr_type_t-specific values are cached in
+ *	  am_addr_cache (see type ipmgmt_addr_cache_u):
+ *	  -	ipv6: ipmgmt_am_linklocal (macro)
+ *	  -	ipv6: ipmgmt_am_ifid (macro)
+ *	  -	dhcp: ipmgmt_am_reqhost (macro)
  */
 typedef struct ipmgmt_aobjmap_s {
 	struct ipmgmt_aobjmap_s	*am_next;
@@ -115,9 +119,15 @@ typedef struct ipmgmt_aobjmap_s {
 	ipadm_addr_type_t	am_atype;
 	uint32_t		am_nextnum;
 	uint32_t		am_flags;
-	boolean_t		am_linklocal;
-	struct sockaddr_storage	am_ifid;
+	ipmgmt_addr_type_cache_u	am_atype_cache;
 } ipmgmt_aobjmap_t;
+
+#define	ipmgmt_am_linklocal \
+    am_atype_cache.ipmgmt_ipv6_cache_s.ipmgmt_linklocal
+#define	ipmgmt_am_ifid \
+    am_atype_cache.ipmgmt_ipv6_cache_s.ipmgmt_ifid
+#define	ipmgmt_am_reqhost \
+    am_atype_cache.ipmgmt_dhcp_cache_s.ipmgmt_reqhost
 
 /* linked list of `aobjmap' nodes, protected by RW lock */
 typedef struct ipmgmt_aobjmap_list_s {
@@ -171,11 +181,13 @@ typedef struct scf_resources {
 	scf_transaction_entry_t	*sr_ent;
 } scf_resources_t;
 
+extern int		ipmgmt_update_family_nvp(nvlist_t *,
+			    sa_family_t, uint_t);
 extern int		ipmgmt_db_walk(db_wfunc_t *, void *, ipadm_db_op_t);
 extern int		ipmgmt_aobjmap_op(ipmgmt_aobjmap_t *, uint32_t);
 extern boolean_t	ipmgmt_aobjmap_init(void *, nvlist_t *, char *,
 			    size_t, int *);
-extern int 		ipmgmt_persist_aobjmap(ipmgmt_aobjmap_t *,
+extern int		ipmgmt_persist_aobjmap(ipmgmt_aobjmap_t *,
 			    ipadm_db_op_t);
 extern boolean_t	ipmgmt_ngz_firstboot_postinstall();
 extern int		ipmgmt_persist_if(ipmgmt_if_arg_t *);

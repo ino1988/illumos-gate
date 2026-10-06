@@ -25,12 +25,16 @@
  */
 /*
  * Copyright 2012 DEY Storage Systems, Inc.  All rights reserved.
- * Copyright (c) 2013, Joyent, Inc. All rights reserved.
+ * Copyright 2018 Joyent, Inc.
  * Copyright (c) 2013 by Delphix. All rights reserved.
+ * Copyright 2020 OmniOS Community Edition (OmniOSce) Association.
+ * Copyright 2026 Oxide Computer Company
+ * Copyright 2026 Carsten Grzemba
  */
 
 #define	_STRUCTURED_PROC	1
 
+#include <assert.h>
 #include <stdlib.h>
 #include <ctype.h>
 #include <string.h>
@@ -44,37 +48,11 @@
 #include <sys/systeminfo.h>
 #include <sys/proc.h>
 #include <sys/utsname.h>
-
-#include <sys/old_procfs.h>
+#include <core_shstrtab.h>
 
 #include "Pcontrol.h"
 #include "P32ton.h"
-
-typedef enum {
-	STR_NONE,
-	STR_CTF,
-	STR_SYMTAB,
-	STR_DYNSYM,
-	STR_STRTAB,
-	STR_DYNSTR,
-	STR_SHSTRTAB,
-	STR_NUM
-} shstrtype_t;
-
-static const char *shstrtab_data[] = {
-	"",
-	".SUNW_ctf",
-	".symtab",
-	".dynsym",
-	".strtab",
-	".dynstr",
-	".shstrtab"
-};
-
-typedef struct shstrtab {
-	int	sst_ndx[STR_NUM];
-	int	sst_cur;
-} shstrtab_t;
+#include "proc_fd.h"
 
 typedef struct {
 	struct ps_prochandle *P;
@@ -94,31 +72,27 @@ typedef struct {
 	off64_t		*fd_doff;
 } fditer_t;
 
-static void
-shstrtab_init(shstrtab_t *s)
-{
-	bzero(&s->sst_ndx, sizeof (s->sst_ndx));
-	s->sst_cur = 1;
-}
-
 static int
-shstrtab_ndx(shstrtab_t *s, shstrtype_t type)
+gc_pwrite64(int fd, const void *buf, size_t len, off64_t off)
 {
-	int ret;
+	int err;
 
-	if ((ret = s->sst_ndx[type]) != 0 || type == STR_NONE)
-		return (ret);
+	err = pwrite64(fd, buf, len, off);
 
-	ret = s->sst_ndx[type] = s->sst_cur;
-	s->sst_cur += strlen(shstrtab_data[type]) + 1;
+	if (err < 0)
+		return (err);
 
-	return (ret);
-}
+	/*
+	 * We will take a page from ZFS's book here and use the otherwise
+	 * unused EBADE to mean a short write.  Typically this will actually
+	 * result from ENOSPC or EDQUOT, but we can't be sure.
+	 */
+	if (err < len) {
+		errno = EBADE;
+		return (-1);
+	}
 
-static size_t
-shstrtab_size(const shstrtab_t *s)
-{
-	return (s->sst_cur);
+	return (0);
 }
 
 int
@@ -126,275 +100,21 @@ Pgcore(struct ps_prochandle *P, const char *fname, core_content_t content)
 {
 	int fd;
 	int err;
+	int saved_errno;
 
 	if ((fd = creat64(fname, 0666)) < 0)
 		return (-1);
 
 	if ((err = Pfgcore(P, fd, content)) != 0) {
+		saved_errno = errno;
 		(void) close(fd);
 		(void) unlink(fname);
+		errno = saved_errno;
 		return (err);
 	}
 
 	return (close(fd));
 }
-
-/*
- * Since we don't want to use the old-school procfs interfaces, we use the
- * new-style data structures we already have to construct the old-style
- * data structures. We include these data structures in core files for
- * backward compatability.
- */
-
-static void
-mkprstatus(struct ps_prochandle *P, const lwpstatus_t *lsp,
-    const lwpsinfo_t *lip, prstatus_t *psp)
-{
-	bzero(psp, sizeof (*psp));
-
-	if (lsp->pr_flags & PR_STOPPED)
-		psp->pr_flags = 0x0001;
-	if (lsp->pr_flags & PR_ISTOP)
-		psp->pr_flags = 0x0002;
-	if (lsp->pr_flags & PR_DSTOP)
-		psp->pr_flags = 0x0004;
-	if (lsp->pr_flags & PR_ASLEEP)
-		psp->pr_flags = 0x0008;
-	if (lsp->pr_flags & PR_FORK)
-		psp->pr_flags = 0x0010;
-	if (lsp->pr_flags & PR_RLC)
-		psp->pr_flags = 0x0020;
-	/*
-	 * Note that PR_PTRACE (0x0040) from <sys/old_procfs.h> is never set;
-	 * PR_PCOMPAT corresponds to PR_PTRACE in the newer <sys/procfs.h>.
-	 */
-	if (lsp->pr_flags & PR_PCINVAL)
-		psp->pr_flags = 0x0080;
-	if (lsp->pr_flags & PR_ISSYS)
-		psp->pr_flags = 0x0100;
-	if (lsp->pr_flags & PR_STEP)
-		psp->pr_flags = 0x0200;
-	if (lsp->pr_flags & PR_KLC)
-		psp->pr_flags = 0x0400;
-	if (lsp->pr_flags & PR_ASYNC)
-		psp->pr_flags = 0x0800;
-	if (lsp->pr_flags & PR_PTRACE)
-		psp->pr_flags = 0x1000;
-	if (lsp->pr_flags & PR_MSACCT)
-		psp->pr_flags = 0x2000;
-	if (lsp->pr_flags & PR_BPTADJ)
-		psp->pr_flags = 0x4000;
-	if (lsp->pr_flags & PR_ASLWP)
-		psp->pr_flags = 0x8000;
-
-	psp->pr_why = lsp->pr_why;
-	psp->pr_what = lsp->pr_what;
-	psp->pr_info = lsp->pr_info;
-	psp->pr_cursig = lsp->pr_cursig;
-	psp->pr_nlwp = P->status.pr_nlwp;
-	psp->pr_sigpend = P->status.pr_sigpend;
-	psp->pr_sighold = lsp->pr_lwphold;
-	psp->pr_altstack = lsp->pr_altstack;
-	psp->pr_action = lsp->pr_action;
-	psp->pr_pid = P->status.pr_pid;
-	psp->pr_ppid = P->status.pr_ppid;
-	psp->pr_pgrp = P->status.pr_pgid;
-	psp->pr_sid = P->status.pr_sid;
-	psp->pr_utime = P->status.pr_utime;
-	psp->pr_stime = P->status.pr_stime;
-	psp->pr_cutime = P->status.pr_cutime;
-	psp->pr_cstime = P->status.pr_cstime;
-	(void) strncpy(psp->pr_clname, lsp->pr_clname, sizeof (psp->pr_clname));
-	psp->pr_syscall = lsp->pr_syscall;
-	psp->pr_nsysarg = lsp->pr_nsysarg;
-	bcopy(lsp->pr_sysarg, psp->pr_sysarg, sizeof (psp->pr_sysarg));
-	psp->pr_who = lsp->pr_lwpid;
-	psp->pr_lwppend = lsp->pr_lwppend;
-	psp->pr_oldcontext = (ucontext_t *)lsp->pr_oldcontext;
-	psp->pr_brkbase = (caddr_t)P->status.pr_brkbase;
-	psp->pr_brksize = P->status.pr_brksize;
-	psp->pr_stkbase = (caddr_t)P->status.pr_stkbase;
-	psp->pr_stksize = P->status.pr_stksize;
-	psp->pr_processor = (short)lip->pr_onpro;
-	psp->pr_bind = (short)lip->pr_bindpro;
-	psp->pr_instr = lsp->pr_instr;
-	bcopy(lsp->pr_reg, psp->pr_reg, sizeof (psp->pr_sysarg));
-}
-
-static void
-mkprpsinfo(struct ps_prochandle *P, prpsinfo_t *psp)
-{
-	bzero(psp, sizeof (*psp));
-	psp->pr_state = P->psinfo.pr_lwp.pr_state;
-	psp->pr_sname = P->psinfo.pr_lwp.pr_sname;
-	psp->pr_zomb = (psp->pr_state == SZOMB);
-	psp->pr_nice = P->psinfo.pr_lwp.pr_nice;
-	psp->pr_flag = P->psinfo.pr_lwp.pr_flag;
-	psp->pr_uid = P->psinfo.pr_uid;
-	psp->pr_gid = P->psinfo.pr_gid;
-	psp->pr_pid = P->psinfo.pr_pid;
-	psp->pr_ppid = P->psinfo.pr_ppid;
-	psp->pr_pgrp = P->psinfo.pr_pgid;
-	psp->pr_sid = P->psinfo.pr_sid;
-	psp->pr_addr = (caddr_t)P->psinfo.pr_addr;
-	psp->pr_size = P->psinfo.pr_size;
-	psp->pr_rssize = P->psinfo.pr_rssize;
-	psp->pr_wchan = (caddr_t)P->psinfo.pr_lwp.pr_wchan;
-	psp->pr_start = P->psinfo.pr_start;
-	psp->pr_time = P->psinfo.pr_time;
-	psp->pr_pri = P->psinfo.pr_lwp.pr_pri;
-	psp->pr_oldpri = P->psinfo.pr_lwp.pr_oldpri;
-	psp->pr_cpu = P->psinfo.pr_lwp.pr_cpu;
-	psp->pr_ottydev = cmpdev(P->psinfo.pr_ttydev);
-	psp->pr_lttydev = P->psinfo.pr_ttydev;
-	(void) strncpy(psp->pr_clname, P->psinfo.pr_lwp.pr_clname,
-	    sizeof (psp->pr_clname));
-	(void) strncpy(psp->pr_fname, P->psinfo.pr_fname,
-	    sizeof (psp->pr_fname));
-	bcopy(&P->psinfo.pr_psargs, &psp->pr_psargs,
-	    sizeof (psp->pr_psargs));
-	psp->pr_syscall = P->psinfo.pr_lwp.pr_syscall;
-	psp->pr_ctime = P->psinfo.pr_ctime;
-	psp->pr_bysize = psp->pr_size * PAGESIZE;
-	psp->pr_byrssize = psp->pr_rssize * PAGESIZE;
-	psp->pr_argc = P->psinfo.pr_argc;
-	psp->pr_argv = (char **)P->psinfo.pr_argv;
-	psp->pr_envp = (char **)P->psinfo.pr_envp;
-	psp->pr_wstat = P->psinfo.pr_wstat;
-	psp->pr_pctcpu = P->psinfo.pr_pctcpu;
-	psp->pr_pctmem = P->psinfo.pr_pctmem;
-	psp->pr_euid = P->psinfo.pr_euid;
-	psp->pr_egid = P->psinfo.pr_egid;
-	psp->pr_aslwpid = 0;
-	psp->pr_dmodel = P->psinfo.pr_dmodel;
-}
-
-#ifdef _LP64
-
-static void
-mkprstatus32(struct ps_prochandle *P, const lwpstatus_t *lsp,
-    const lwpsinfo_t *lip, prstatus32_t *psp)
-{
-	bzero(psp, sizeof (*psp));
-
-	if (lsp->pr_flags & PR_STOPPED)
-		psp->pr_flags = 0x0001;
-	if (lsp->pr_flags & PR_ISTOP)
-		psp->pr_flags = 0x0002;
-	if (lsp->pr_flags & PR_DSTOP)
-		psp->pr_flags = 0x0004;
-	if (lsp->pr_flags & PR_ASLEEP)
-		psp->pr_flags = 0x0008;
-	if (lsp->pr_flags & PR_FORK)
-		psp->pr_flags = 0x0010;
-	if (lsp->pr_flags & PR_RLC)
-		psp->pr_flags = 0x0020;
-	/*
-	 * Note that PR_PTRACE (0x0040) from <sys/old_procfs.h> is never set;
-	 * PR_PCOMPAT corresponds to PR_PTRACE in the newer <sys/procfs.h>.
-	 */
-	if (lsp->pr_flags & PR_PCINVAL)
-		psp->pr_flags = 0x0080;
-	if (lsp->pr_flags & PR_ISSYS)
-		psp->pr_flags = 0x0100;
-	if (lsp->pr_flags & PR_STEP)
-		psp->pr_flags = 0x0200;
-	if (lsp->pr_flags & PR_KLC)
-		psp->pr_flags = 0x0400;
-	if (lsp->pr_flags & PR_ASYNC)
-		psp->pr_flags = 0x0800;
-	if (lsp->pr_flags & PR_PTRACE)
-		psp->pr_flags = 0x1000;
-	if (lsp->pr_flags & PR_MSACCT)
-		psp->pr_flags = 0x2000;
-	if (lsp->pr_flags & PR_BPTADJ)
-		psp->pr_flags = 0x4000;
-	if (lsp->pr_flags & PR_ASLWP)
-		psp->pr_flags = 0x8000;
-
-	psp->pr_why = lsp->pr_why;
-	psp->pr_what = lsp->pr_what;
-	siginfo_n_to_32(&lsp->pr_info, &psp->pr_info);
-	psp->pr_cursig = lsp->pr_cursig;
-	psp->pr_nlwp = P->status.pr_nlwp;
-	psp->pr_sigpend = P->status.pr_sigpend;
-	psp->pr_sighold = lsp->pr_lwphold;
-	stack_n_to_32(&lsp->pr_altstack, &psp->pr_altstack);
-	sigaction_n_to_32(&lsp->pr_action, &psp->pr_action);
-	psp->pr_pid = P->status.pr_pid;
-	psp->pr_ppid = P->status.pr_ppid;
-	psp->pr_pgrp = P->status.pr_pgid;
-	psp->pr_sid = P->status.pr_sid;
-	timestruc_n_to_32(&P->status.pr_utime, &psp->pr_utime);
-	timestruc_n_to_32(&P->status.pr_stime, &psp->pr_stime);
-	timestruc_n_to_32(&P->status.pr_cutime, &psp->pr_cutime);
-	timestruc_n_to_32(&P->status.pr_cstime, &psp->pr_cstime);
-	(void) strncpy(psp->pr_clname, lsp->pr_clname, sizeof (psp->pr_clname));
-	psp->pr_syscall = lsp->pr_syscall;
-	psp->pr_nsysarg = lsp->pr_nsysarg;
-	bcopy(lsp->pr_sysarg, psp->pr_sysarg, sizeof (psp->pr_sysarg));
-	psp->pr_who = lsp->pr_lwpid;
-	psp->pr_lwppend = lsp->pr_lwppend;
-	psp->pr_oldcontext = (caddr32_t)lsp->pr_oldcontext;
-	psp->pr_brkbase = (caddr32_t)P->status.pr_brkbase;
-	psp->pr_brksize = P->status.pr_brksize;
-	psp->pr_stkbase = (caddr32_t)P->status.pr_stkbase;
-	psp->pr_stksize = P->status.pr_stksize;
-	psp->pr_processor = (short)lip->pr_onpro;
-	psp->pr_bind = (short)lip->pr_bindpro;
-	psp->pr_instr = lsp->pr_instr;
-	bcopy(lsp->pr_reg, psp->pr_reg, sizeof (psp->pr_sysarg));
-}
-
-static void
-mkprpsinfo32(struct ps_prochandle *P, prpsinfo32_t *psp)
-{
-	bzero(psp, sizeof (*psp));
-	psp->pr_state = P->psinfo.pr_lwp.pr_state;
-	psp->pr_sname = P->psinfo.pr_lwp.pr_sname;
-	psp->pr_zomb = (psp->pr_state == SZOMB);
-	psp->pr_nice = P->psinfo.pr_lwp.pr_nice;
-	psp->pr_flag = P->psinfo.pr_lwp.pr_flag;
-	psp->pr_uid = P->psinfo.pr_uid;
-	psp->pr_gid = P->psinfo.pr_gid;
-	psp->pr_pid = P->psinfo.pr_pid;
-	psp->pr_ppid = P->psinfo.pr_ppid;
-	psp->pr_pgrp = P->psinfo.pr_pgid;
-	psp->pr_sid = P->psinfo.pr_sid;
-	psp->pr_addr = (caddr32_t)P->psinfo.pr_addr;
-	psp->pr_size = P->psinfo.pr_size;
-	psp->pr_rssize = P->psinfo.pr_rssize;
-	psp->pr_wchan = (caddr32_t)P->psinfo.pr_lwp.pr_wchan;
-	timestruc_n_to_32(&P->psinfo.pr_start, &psp->pr_start);
-	timestruc_n_to_32(&P->psinfo.pr_time, &psp->pr_time);
-	psp->pr_pri = P->psinfo.pr_lwp.pr_pri;
-	psp->pr_oldpri = P->psinfo.pr_lwp.pr_oldpri;
-	psp->pr_cpu = P->psinfo.pr_lwp.pr_cpu;
-	psp->pr_ottydev = cmpdev(P->psinfo.pr_ttydev);
-	psp->pr_lttydev = prcmpldev(P->psinfo.pr_ttydev);
-	(void) strncpy(psp->pr_clname, P->psinfo.pr_lwp.pr_clname,
-	    sizeof (psp->pr_clname));
-	(void) strncpy(psp->pr_fname, P->psinfo.pr_fname,
-	    sizeof (psp->pr_fname));
-	bcopy(&P->psinfo.pr_psargs, &psp->pr_psargs,
-	    sizeof (psp->pr_psargs));
-	psp->pr_syscall = P->psinfo.pr_lwp.pr_syscall;
-	timestruc_n_to_32(&P->psinfo.pr_ctime, &psp->pr_ctime);
-	psp->pr_bysize = psp->pr_size * PAGESIZE;
-	psp->pr_byrssize = psp->pr_rssize * PAGESIZE;
-	psp->pr_argc = P->psinfo.pr_argc;
-	psp->pr_argv = (caddr32_t)P->psinfo.pr_argv;
-	psp->pr_envp = (caddr32_t)P->psinfo.pr_envp;
-	psp->pr_wstat = P->psinfo.pr_wstat;
-	psp->pr_pctcpu = P->psinfo.pr_pctcpu;
-	psp->pr_pctmem = P->psinfo.pr_pctmem;
-	psp->pr_euid = P->psinfo.pr_euid;
-	psp->pr_egid = P->psinfo.pr_egid;
-	psp->pr_aslwpid = 0;
-	psp->pr_dmodel = P->psinfo.pr_dmodel;
-}
-
-#endif	/* _LP64 */
 
 static int
 write_note(int fd, uint_t type, const void *desc, size_t descsz, off64_t *offp)
@@ -414,12 +134,12 @@ write_note(int fd, uint_t type, const void *desc, size_t descsz, off64_t *offp)
 	n.nhdr.n_namesz = 5;
 	n.nhdr.n_descsz = roundup(descsz, 4);
 
-	if (pwrite64(fd, &n, sizeof (n), *offp) != sizeof (n))
+	if (gc_pwrite64(fd, &n, sizeof (n), *offp) != 0)
 		return (-1);
 
 	*offp += sizeof (n);
 
-	if (pwrite64(fd, desc, n.nhdr.n_descsz, *offp) != n.nhdr.n_descsz)
+	if (gc_pwrite64(fd, desc, n.nhdr.n_descsz, *offp) != 0)
 		return (-1);
 
 	*offp += n.nhdr.n_descsz;
@@ -428,62 +148,14 @@ write_note(int fd, uint_t type, const void *desc, size_t descsz, off64_t *offp)
 }
 
 static int
-old_per_lwp(void *data, const lwpstatus_t *lsp, const lwpsinfo_t *lip)
+per_lwp(void *data, const lwpstatus_t *lsp, const lwpsinfo_t *lip)
 {
 	pgcore_t *pgc = data;
 	struct ps_prochandle *P = pgc->P;
-
-	/*
-	 * Legacy core files don't contain information about zombie LWPs.
-	 * We use Plwp_iter_all() so that we get the lwpsinfo_t structure
-	 * more cheaply.
-	 */
-	if (lsp == NULL)
-		return (0);
-
-	if (P->status.pr_dmodel == PR_MODEL_NATIVE) {
-		prstatus_t prstatus;
-		mkprstatus(P, lsp, lip, &prstatus);
-		if (write_note(pgc->pgc_fd, NT_PRSTATUS, &prstatus,
-		    sizeof (prstatus_t), pgc->pgc_doff) != 0)
-			return (0);
-		if (write_note(pgc->pgc_fd, NT_PRFPREG, &lsp->pr_fpreg,
-		    sizeof (prfpregset_t), pgc->pgc_doff) != 0)
-			return (1);
-#ifdef _LP64
-	} else {
-		prstatus32_t pr32;
-		prfpregset32_t pf32;
-		mkprstatus32(P, lsp, lip, &pr32);
-		if (write_note(pgc->pgc_fd, NT_PRSTATUS, &pr32,
-		    sizeof (prstatus32_t), pgc->pgc_doff) != 0)
-			return (1);
-		prfpregset_n_to_32(&lsp->pr_fpreg, &pf32);
-		if (write_note(pgc->pgc_fd, NT_PRFPREG, &pf32,
-		    sizeof (prfpregset32_t), pgc->pgc_doff) != 0)
-			return (1);
-#endif	/* _LP64 */
-	}
-
-#ifdef sparc
-	{
-		prxregset_t xregs;
-		if (Plwp_getxregs(P, lsp->pr_lwpid, &xregs) == 0 &&
-		    write_note(pgc->pgc_fd, NT_PRXREG, &xregs,
-		    sizeof (prxregset_t), pgc->pgc_doff) != 0)
-			return (1);
-	}
-#endif	/* sparc */
-
-	return (0);
-}
-
-static int
-new_per_lwp(void *data, const lwpstatus_t *lsp, const lwpsinfo_t *lip)
-{
-	pgcore_t *pgc = data;
-	struct ps_prochandle *P = pgc->P;
+	prlwpname_t name = { 0, "" };
 	psinfo_t ps;
+	prxregset_t *xregs;
+	size_t size;
 
 	/*
 	 * If lsp is NULL this indicates that this is a zombie LWP in
@@ -516,40 +188,21 @@ new_per_lwp(void *data, const lwpstatus_t *lsp, const lwpsinfo_t *lip)
 #endif	/* _LP64 */
 	}
 
-#ifdef sparc
-	{
-		prxregset_t xregs;
-		gwindows_t gwins;
-		size_t size;
+	if (Plwp_getxregs(P, lsp->pr_lwpid, &xregs, &size) == 0) {
+		if (write_note(pgc->pgc_fd, NT_PRXREG, xregs, size,
+		    pgc->pgc_doff) != 0)
+			return (1);
 
-		if (Plwp_getxregs(P, lsp->pr_lwpid, &xregs) == 0) {
-			if (write_note(pgc->pgc_fd, NT_PRXREG, &xregs,
-			    sizeof (prxregset_t), pgc->pgc_doff) != 0)
-				return (1);
-		}
-
-		if (Plwp_getgwindows(P, lsp->pr_lwpid, &gwins) == 0 &&
-		    gwins.wbcnt > 0) {
-			size = sizeof (gwins) - sizeof (gwins.wbuf) +
-			    gwins.wbcnt * sizeof (gwins.wbuf[0]);
-
-			if (write_note(pgc->pgc_fd, NT_GWINDOWS, &gwins, size,
-			    pgc->pgc_doff) != 0)
-				return (1);
-		}
-
+		Plwp_freexregs(P, xregs, size);
 	}
-#ifdef __sparcv9
-	if (P->status.pr_dmodel == PR_MODEL_LP64) {
-		asrset_t asrs;
-		if (Plwp_getasrs(P, lsp->pr_lwpid, asrs) == 0) {
-			if (write_note(pgc->pgc_fd, NT_ASRS, &asrs,
-			    sizeof (asrset_t), pgc->pgc_doff) != 0)
-				return (1);
-		}
+
+	if (Plwp_getname(P, lsp->pr_lwpid, name.pr_lwpname,
+	    sizeof (name.pr_lwpname)) == 0) {
+		name.pr_lwpid = lsp->pr_lwpid;
+		if (write_note(pgc->pgc_fd, NT_LWPNAME, &name,
+		    sizeof (name), pgc->pgc_doff) != 0)
+			return (1);
 	}
-#endif	/* __sparcv9 */
-#endif	/* sparc */
 
 	if (!(lsp->pr_flags & PR_AGENT))
 		return (0);
@@ -576,14 +229,66 @@ new_per_lwp(void *data, const lwpstatus_t *lsp, const lwpsinfo_t *lip)
 }
 
 static int
-iter_fd(void *data, prfdinfo_t *fdinfo)
+iter_fd(void *data, const prfdinfo_t *fdinfo)
 {
 	fditer_t *iter = data;
+	prfdinfo_core_t core;
+	int ret = 0;
 
-	if (write_note(iter->fd_fd, NT_FDINFO, fdinfo,
-	    sizeof (*fdinfo), iter->fd_doff) != 0)
+	if (proc_fdinfo_to_core(fdinfo, &core) != 0)
+		return (1);
+
+	ret = write_note(iter->fd_fd, NT_FDINFO, &core,
+	    sizeof (core), iter->fd_doff);
+
+	if (ret != 0)
 		return (1);
 	return (0);
+}
+
+/*
+ * Look for sections that begin with the string '.debug_'. In particular, this
+ * will catch all DWARF related sections and it will catch those that different
+ * folks use that are not related to DWARF, but still begin with this prefix
+ * (e.g. .debug_gdb_scripts). Notably though, this does not catch something like
+ * stabs (though it could). This really is filtering based on the section name,
+ * less so intent.
+ */
+static boolean_t
+is_debug_section(file_info_t *fptr, GElf_Shdr *shdr)
+{
+	if (shdr->sh_name == 0 || shdr->sh_name > fptr->file_shstrsz)
+		return (B_FALSE);
+
+	if (strncmp(fptr->file_shstrs + shdr->sh_name, ".debug_",
+	    strlen(".debug_")) != 0) {
+		return (B_FALSE);
+	}
+
+	return (B_TRUE);
+}
+
+static uint_t
+count_debug(file_info_t *fptr)
+{
+	uint_t count = 0;
+	Elf_Scn *scn = NULL;
+
+	if (fptr->file_elf == NULL || fptr->file_shstrsz <= 1) {
+		return (0);
+	}
+
+	while ((scn = elf_nextscn(fptr->file_elf, scn)) != NULL) {
+		GElf_Shdr shdr;
+
+		if (gelf_getshdr(scn, &shdr) == NULL)
+			continue;
+
+		if (is_debug_section(fptr, &shdr))
+			count++;
+	}
+
+	return (count);
 }
 
 static uint_t
@@ -591,14 +296,15 @@ count_sections(pgcore_t *pgc)
 {
 	struct ps_prochandle *P = pgc->P;
 	file_info_t *fptr;
-	uint_t cnt;
 	uint_t nshdrs = 0;
 
-	if (!(pgc->pgc_content & (CC_CONTENT_CTF | CC_CONTENT_SYMTAB)))
+	if (!(pgc->pgc_content & (CC_CONTENT_CTF | CC_CONTENT_SYMTAB |
+	    CC_CONTENT_DEBUG))) {
 		return (0);
+	}
 
-	fptr = list_next(&P->file_head);
-	for (cnt = P->num_files; cnt > 0; cnt--, fptr = list_next(fptr)) {
+	for (fptr = list_head(&P->file_head); fptr != NULL;
+	    fptr = list_next(&P->file_head, fptr)) {
 		int hit_symtab = 0;
 
 		Pbuild_file_symtab(P, fptr);
@@ -627,13 +333,16 @@ count_sections(pgcore_t *pgc)
 		    fptr->file_symtab.sym_strs != NULL) {
 			nshdrs += 2;
 		}
+
+		if ((pgc->pgc_content & CC_CONTENT_DEBUG) != 0)
+			nshdrs += count_debug(fptr);
 	}
 
 	return (nshdrs == 0 ? 0 : nshdrs + 2);
 }
 
 static int
-write_shdr(pgcore_t *pgc, shstrtype_t name, uint_t type, ulong_t flags,
+write_shdr(pgcore_t *pgc, const char *name, uint_t type, ulong_t flags,
     uintptr_t addr, ulong_t offset, size_t size, uint_t link, uint_t info,
     uintptr_t addralign, uintptr_t entsize)
 {
@@ -641,7 +350,9 @@ write_shdr(pgcore_t *pgc, shstrtype_t name, uint_t type, ulong_t flags,
 		Elf32_Shdr shdr;
 
 		bzero(&shdr, sizeof (shdr));
-		shdr.sh_name = shstrtab_ndx(&pgc->pgc_shstrtab, name);
+		if (!shstrtab_ndx(&pgc->pgc_shstrtab, name, &shdr.sh_name)) {
+			return (-1);
+		}
 		shdr.sh_type = type;
 		shdr.sh_flags = flags;
 		shdr.sh_addr = (Elf32_Addr)addr;
@@ -652,8 +363,8 @@ write_shdr(pgcore_t *pgc, shstrtype_t name, uint_t type, ulong_t flags,
 		shdr.sh_addralign = addralign;
 		shdr.sh_entsize = entsize;
 
-		if (pwrite64(pgc->pgc_fd, &shdr, sizeof (shdr),
-		    *pgc->pgc_soff) != sizeof (shdr))
+		if (gc_pwrite64(pgc->pgc_fd, &shdr, sizeof (shdr),
+		    *pgc->pgc_soff) != 0)
 			return (-1);
 
 		*pgc->pgc_soff += sizeof (shdr);
@@ -662,7 +373,9 @@ write_shdr(pgcore_t *pgc, shstrtype_t name, uint_t type, ulong_t flags,
 		Elf64_Shdr shdr;
 
 		bzero(&shdr, sizeof (shdr));
-		shdr.sh_name = shstrtab_ndx(&pgc->pgc_shstrtab, name);
+		if (!shstrtab_ndx(&pgc->pgc_shstrtab, name, &shdr.sh_name)) {
+			return (-1);
+		}
 		shdr.sh_type = type;
 		shdr.sh_flags = flags;
 		shdr.sh_addr = addr;
@@ -673,8 +386,8 @@ write_shdr(pgcore_t *pgc, shstrtype_t name, uint_t type, ulong_t flags,
 		shdr.sh_addralign = addralign;
 		shdr.sh_entsize = entsize;
 
-		if (pwrite64(pgc->pgc_fd, &shdr, sizeof (shdr),
-		    *pgc->pgc_soff) != sizeof (shdr))
+		if (gc_pwrite64(pgc->pgc_fd, &shdr, sizeof (shdr),
+		    *pgc->pgc_soff) != 0)
 			return (-1);
 
 		*pgc->pgc_soff += sizeof (shdr);
@@ -699,26 +412,68 @@ dump_symtab(pgcore_t *pgc, file_info_t *fptr, uint_t index, int dynsym)
 		return (0);
 
 	size = sym->sym_hdr_pri.sh_size;
-	if (pwrite64(pgc->pgc_fd, sym->sym_data_pri->d_buf, size,
-	    *pgc->pgc_doff) != size)
+	if (gc_pwrite64(pgc->pgc_fd, sym->sym_data_pri->d_buf, size,
+	    *pgc->pgc_doff) != 0)
 		return (-1);
 
-	if (write_shdr(pgc, symname, symtype, 0, addr, *pgc->pgc_doff, size,
-	    index + 1, sym->sym_hdr_pri.sh_info, sym->sym_hdr_pri.sh_addralign,
-	    sym->sym_hdr_pri.sh_entsize) != 0)
+	if (write_shdr(pgc, shstrtab_data[symname], symtype, 0, addr,
+	    *pgc->pgc_doff, size, index + 1, sym->sym_hdr_pri.sh_info,
+	    sym->sym_hdr_pri.sh_addralign, sym->sym_hdr_pri.sh_entsize) != 0)
 		return (-1);
 
 	*pgc->pgc_doff += roundup(size, 8);
 
 	size = sym->sym_strhdr.sh_size;
-	if (pwrite64(pgc->pgc_fd, sym->sym_strs, size, *pgc->pgc_doff) != size)
+	if (gc_pwrite64(pgc->pgc_fd, sym->sym_strs, size, *pgc->pgc_doff) != 0)
 		return (-1);
 
-	if (write_shdr(pgc, strname, SHT_STRTAB, SHF_STRINGS, addr,
-	    *pgc->pgc_doff, size, 0, 0, 1, 0) != 0)
+	if (write_shdr(pgc, shstrtab_data[strname], SHT_STRTAB, SHF_STRINGS,
+	    addr, *pgc->pgc_doff, size, 0, 0, 1, 0) != 0)
 		return (-1);
 
 	*pgc->pgc_doff += roundup(size, 8);
+
+	return (0);
+}
+
+static int
+dump_debug(pgcore_t *pgc, file_info_t *fptr, uint_t *indexp)
+{
+	Elf_Scn *scn = NULL;
+
+	if (fptr->file_elf == NULL || fptr->file_shstrsz <= 1) {
+		return (0);
+	}
+
+	while ((scn = elf_nextscn(fptr->file_elf, scn)) != NULL) {
+		GElf_Shdr shdr;
+		Elf_Data *data;
+
+		if (gelf_getshdr(scn, &shdr) == NULL)
+			continue;
+
+		if (!is_debug_section(fptr, &shdr))
+			continue;
+
+		if ((data = elf_getdata(scn, NULL)) == NULL) {
+			return (-1);
+		}
+
+		if (gc_pwrite64(pgc->pgc_fd, data->d_buf, data->d_size,
+		    *pgc->pgc_doff) != 0)
+			return (-1);
+
+		if (write_shdr(pgc, fptr->file_shstrs + shdr.sh_name,
+		    shdr.sh_type, shdr.sh_flags,
+		    fptr->file_map->map_pmap.pr_vaddr, *pgc->pgc_doff,
+		    data->d_size, 0, shdr.sh_info, shdr.sh_addralign,
+		    shdr.sh_entsize) != 0) {
+			return (-1);
+		}
+
+		*indexp = *indexp + 1;
+		*pgc->pgc_doff += roundup(data->d_size, 8);
+	}
 
 	return (0);
 }
@@ -728,14 +483,15 @@ dump_sections(pgcore_t *pgc)
 {
 	struct ps_prochandle *P = pgc->P;
 	file_info_t *fptr;
-	uint_t cnt;
 	uint_t index = 1;
 
-	if (!(pgc->pgc_content & (CC_CONTENT_CTF | CC_CONTENT_SYMTAB)))
+	if (!(pgc->pgc_content & (CC_CONTENT_CTF | CC_CONTENT_SYMTAB |
+	    CC_CONTENT_DEBUG))) {
 		return (0);
+	}
 
-	fptr = list_next(&P->file_head);
-	for (cnt = P->num_files; cnt > 0; cnt--, fptr = list_next(fptr)) {
+	for (fptr = list_head(&P->file_head); fptr != NULL;
+	    fptr = list_next(&P->file_head, fptr)) {
 		int hit_symtab = 0;
 
 		Pbuild_file_symtab(P, fptr);
@@ -773,14 +529,14 @@ dump_sections(pgcore_t *pgc)
 			 * Write the CTF data that we've read out of the
 			 * file itself into the core file.
 			 */
-			if (pwrite64(pgc->pgc_fd, fptr->file_ctf_buf,
-			    fptr->file_ctf_size, *pgc->pgc_doff) !=
-			    fptr->file_ctf_size)
+			if (gc_pwrite64(pgc->pgc_fd, fptr->file_ctf_buf,
+			    fptr->file_ctf_size, *pgc->pgc_doff) != 0)
 				return (-1);
 
-			if (write_shdr(pgc, STR_CTF, SHT_PROGBITS, 0,
-			    fptr->file_map->map_pmap.pr_vaddr, *pgc->pgc_doff,
-			    fptr->file_ctf_size, symindex, 0, 4, 0) != 0)
+			if (write_shdr(pgc, shstrtab_data[STR_CTF],
+			    SHT_PROGBITS, 0, fptr->file_map->map_pmap.pr_vaddr,
+			    *pgc->pgc_doff, fptr->file_ctf_size, symindex, 0,
+			    4, 0) != 0)
 				return (-1);
 
 			index++;
@@ -794,6 +550,11 @@ dump_sections(pgcore_t *pgc)
 			if (dump_symtab(pgc, fptr, index, 0) != 0)
 				return (-1);
 			index += 2;
+		}
+
+		if ((pgc->pgc_content & CC_CONTENT_DEBUG) != 0 &&
+		    dump_debug(pgc, fptr, &index) != 0) {
+			return (-1);
 		}
 	}
 
@@ -877,6 +638,18 @@ dump_map(void *data, const prmap_t *pmp, const char *name)
 	n = 0;
 	while (n < pmp->pr_size) {
 		size_t csz = MIN(pmp->pr_size - n, pgc->pgc_chunksz);
+		ssize_t ret;
+
+		/*
+		 * If we happen to have a PROT_NONE mapping, don't try to read
+		 * from the address space.
+		 */
+		if ((pmp->pr_mflags & (MA_READ | MA_WRITE | MA_EXEC)) == 0) {
+			bzero(pgc->pgc_chunk, csz);
+			ret = csz;
+		} else {
+			ret = Pread(P, pgc->pgc_chunk, csz, pmp->pr_vaddr + n);
+		}
 
 		/*
 		 * If we can't read out part of the victim's address
@@ -886,11 +659,10 @@ dump_map(void *data, const prmap_t *pmp, const char *name)
 		 * PF_SUNW_FAILURE flag and store the errno where the
 		 * mapping would have been.
 		 */
-		if (Pread(P, pgc->pgc_chunk, csz, pmp->pr_vaddr + n) != csz ||
-		    pwrite64(pgc->pgc_fd, pgc->pgc_chunk, csz,
-		    *pgc->pgc_doff + n) != csz) {
+		if (ret != csz || gc_pwrite64(pgc->pgc_fd, pgc->pgc_chunk, csz,
+		    *pgc->pgc_doff + n) != 0) {
 			int err = errno;
-			(void) pwrite64(pgc->pgc_fd, &err, sizeof (err),
+			(void) gc_pwrite64(pgc->pgc_fd, &err, sizeof (err),
 			    *pgc->pgc_doff);
 			*pgc->pgc_doff += roundup(sizeof (err), 8);
 
@@ -908,8 +680,8 @@ dump_map(void *data, const prmap_t *pmp, const char *name)
 
 exclude:
 	if (P->status.pr_dmodel == PR_MODEL_NATIVE) {
-		if (pwrite64(pgc->pgc_fd, &phdr, sizeof (phdr),
-		    *pgc->pgc_poff) != sizeof (phdr))
+		if (gc_pwrite64(pgc->pgc_fd, &phdr, sizeof (phdr),
+		    *pgc->pgc_poff) != 0)
 			return (1);
 
 		*pgc->pgc_poff += sizeof (phdr);
@@ -925,8 +697,8 @@ exclude:
 		phdr32.p_offset = (Elf32_Off)phdr.p_offset;
 		phdr32.p_filesz = (Elf32_Word)phdr.p_filesz;
 
-		if (pwrite64(pgc->pgc_fd, &phdr32, sizeof (phdr32),
-		    *pgc->pgc_poff) != sizeof (phdr32))
+		if (gc_pwrite64(pgc->pgc_fd, &phdr32, sizeof (phdr32),
+		    *pgc->pgc_poff) != 0)
 			return (1);
 
 		*pgc->pgc_poff += sizeof (phdr32);
@@ -942,7 +714,6 @@ write_shstrtab(struct ps_prochandle *P, pgcore_t *pgc)
 	off64_t off = *pgc->pgc_doff;
 	size_t size = 0;
 	shstrtab_t *s = &pgc->pgc_shstrtab;
-	int i, ndx;
 
 	if (shstrtab_size(s) == 1)
 		return (0);
@@ -950,19 +721,21 @@ write_shstrtab(struct ps_prochandle *P, pgcore_t *pgc)
 	/*
 	 * Preemptively stick the name of the shstrtab in the string table.
 	 */
-	(void) shstrtab_ndx(&pgc->pgc_shstrtab, STR_SHSTRTAB);
+	if (!shstrtab_ndx(&pgc->pgc_shstrtab,
+	    shstrtab_data[STR_SHSTRTAB], NULL)) {
+		return (1);
+	}
 	size = shstrtab_size(s);
 
 	/*
 	 * Dump all the strings that we used being sure we include the
 	 * terminating null character.
 	 */
-	for (i = 0; i < STR_NUM; i++) {
-		if ((ndx = s->sst_ndx[i]) != 0 || i == STR_NONE) {
-			const char *str = shstrtab_data[i];
-			size_t len = strlen(str) + 1;
-			if (pwrite64(pgc->pgc_fd, str, len, off + ndx) != len)
-				return (1);
+	for (shstrtab_ent_t *ent = list_head(&s->sst_names); ent != NULL;
+	    ent = list_next(&s->sst_names, ent)) {
+		if (gc_pwrite64(pgc->pgc_fd, ent->sste_name, ent->sste_len,
+		    off + ent->sste_offset) != 0) {
+			return (1);
 		}
 	}
 
@@ -970,15 +743,18 @@ write_shstrtab(struct ps_prochandle *P, pgcore_t *pgc)
 		Elf32_Shdr shdr;
 
 		bzero(&shdr, sizeof (shdr));
-		shdr.sh_name = shstrtab_ndx(&pgc->pgc_shstrtab, STR_SHSTRTAB);
+		if (!shstrtab_ndx(&pgc->pgc_shstrtab,
+		    shstrtab_data[STR_SHSTRTAB], &shdr.sh_name)) {
+			return (1);
+		}
 		shdr.sh_size = size;
 		shdr.sh_offset = *pgc->pgc_doff;
 		shdr.sh_addralign = 1;
 		shdr.sh_flags = SHF_STRINGS;
 		shdr.sh_type = SHT_STRTAB;
 
-		if (pwrite64(pgc->pgc_fd, &shdr, sizeof (shdr),
-		    *pgc->pgc_soff) != sizeof (shdr))
+		if (gc_pwrite64(pgc->pgc_fd, &shdr, sizeof (shdr),
+		    *pgc->pgc_soff) != 0)
 			return (1);
 
 		*pgc->pgc_soff += sizeof (shdr);
@@ -987,15 +763,18 @@ write_shstrtab(struct ps_prochandle *P, pgcore_t *pgc)
 		Elf64_Shdr shdr;
 
 		bzero(&shdr, sizeof (shdr));
-		shdr.sh_name = shstrtab_ndx(&pgc->pgc_shstrtab, STR_SHSTRTAB);
+		if (!shstrtab_ndx(&pgc->pgc_shstrtab,
+		    shstrtab_data[STR_SHSTRTAB], &shdr.sh_name)) {
+			return (1);
+		}
 		shdr.sh_size = size;
 		shdr.sh_offset = *pgc->pgc_doff;
 		shdr.sh_addralign = 1;
 		shdr.sh_flags = SHF_STRINGS;
 		shdr.sh_type = SHT_STRTAB;
 
-		if (pwrite64(pgc->pgc_fd, &shdr, sizeof (shdr),
-		    *pgc->pgc_soff) != sizeof (shdr))
+		if (gc_pwrite64(pgc->pgc_fd, &shdr, sizeof (shdr),
+		    *pgc->pgc_soff) != 0)
 			return (1);
 
 		*pgc->pgc_soff += sizeof (shdr);
@@ -1010,6 +789,7 @@ write_shstrtab(struct ps_prochandle *P, pgcore_t *pgc)
 /*
  * Don't explicity stop the process; that's up to the consumer.
  */
+#define	NOTES_SECTIONS 1
 int
 Pfgcore(struct ps_prochandle *P, int fd, core_content_t content)
 {
@@ -1035,6 +815,7 @@ Pfgcore(struct ps_prochandle *P, int fd, core_content_t content)
 	(void) Prd_agent(P);
 	(void) Ppsinfo(P);
 
+	(void) memset(&pgc, 0, sizeof (pgc));
 	pgc.P = P;
 	pgc.pgc_fd = fd;
 	pgc.pgc_poff = &poff;
@@ -1045,13 +826,15 @@ Pfgcore(struct ps_prochandle *P, int fd, core_content_t content)
 	if ((pgc.pgc_chunk = malloc(pgc.pgc_chunksz)) == NULL)
 		return (-1);
 
-	shstrtab_init(&pgc.pgc_shstrtab);
+	if (!shstrtab_init(&pgc.pgc_shstrtab)) {
+		goto err;
+	}
 
 	/*
-	 * There are two PT_NOTE program headers for ancillary data, and
-	 * one for each mapping.
+	 * There is one PT_NOTE program header for ancillary data, and one
+	 * program header for each mapping.
 	 */
-	nphdrs = 2 + P->map_count;
+	nphdrs = NOTES_SECTIONS + P->map_count;
 	nshdrs = count_sections(&pgc);
 
 	(void) Pplatform(P, plat, sizeof (plat));
@@ -1120,7 +903,7 @@ Pfgcore(struct ps_prochandle *P, int fd, core_content_t content)
 			ehdr.e_shoff = ehdr.e_phoff + ehdr.e_phentsize * nphdrs;
 		}
 
-		if (pwrite64(fd, &ehdr, sizeof (ehdr), 0) != sizeof (ehdr))
+		if (gc_pwrite64(fd, &ehdr, sizeof (ehdr), 0) != 0)
 			goto err;
 
 		poff = ehdr.e_phoff;
@@ -1178,7 +961,7 @@ Pfgcore(struct ps_prochandle *P, int fd, core_content_t content)
 			ehdr.e_shoff = ehdr.e_phoff + ehdr.e_phentsize * nphdrs;
 		}
 
-		if (pwrite64(fd, &ehdr, sizeof (ehdr), 0) != sizeof (ehdr))
+		if (gc_pwrite64(fd, &ehdr, sizeof (ehdr), 0) != 0)
 			goto err;
 
 		poff = ehdr.e_phoff;
@@ -1193,95 +976,14 @@ Pfgcore(struct ps_prochandle *P, int fd, core_content_t content)
 	/*
 	 * Write the zero indexed section if it exists.
 	 */
-	if (nshdrs > 0 && write_shdr(&pgc, STR_NONE, 0, 0, 0, 0,
+	if (nshdrs > 0 && write_shdr(&pgc, shstrtab_data[STR_NONE], 0, 0, 0, 0,
 	    nshdrs >= SHN_LORESERVE ? nshdrs : 0,
 	    nshdrs - 1 >= SHN_LORESERVE ? nshdrs - 1 : 0,
 	    nphdrs >= PN_XNUM ? nphdrs : 0, 0, 0) != 0)
 		goto err;
 
 	/*
-	 * Construct the old-style note header and section.
-	 */
-
-	if (P->status.pr_dmodel == PR_MODEL_NATIVE) {
-		prpsinfo_t prpsinfo;
-
-		mkprpsinfo(P, &prpsinfo);
-		if (write_note(fd, NT_PRPSINFO, &prpsinfo, sizeof (prpsinfo_t),
-		    &doff) != 0) {
-			goto err;
-		}
-		if (write_note(fd, NT_AUXV, P->auxv,
-		    P->nauxv * sizeof (P->auxv[0]), &doff) != 0) {
-			goto err;
-		}
-#ifdef _LP64
-	} else {
-		prpsinfo32_t pi32;
-		auxv32_t *av32;
-		size_t size = sizeof (auxv32_t) * P->nauxv;
-		int i;
-
-		mkprpsinfo32(P, &pi32);
-		if (write_note(fd, NT_PRPSINFO, &pi32, sizeof (prpsinfo32_t),
-		    &doff) != 0) {
-			goto err;
-		}
-
-		if ((av32 = malloc(size)) == NULL)
-			goto err;
-
-		for (i = 0; i < P->nauxv; i++) {
-			auxv_n_to_32(&P->auxv[i], &av32[i]);
-		}
-
-		if (write_note(fd, NT_AUXV, av32, size, &doff) != 0) {
-			free(av32);
-			goto err;
-		}
-
-		free(av32);
-#endif	/* _LP64 */
-	}
-
-	if (write_note(fd, NT_PLATFORM, plat, platlen, &doff) != 0)
-		goto err;
-
-	if (Plwp_iter_all(P, old_per_lwp, &pgc) != 0)
-		goto err;
-
-	if (P->status.pr_dmodel == PR_MODEL_ILP32) {
-		Elf32_Phdr phdr;
-
-		bzero(&phdr, sizeof (phdr));
-		phdr.p_type = PT_NOTE;
-		phdr.p_flags = PF_R;
-		phdr.p_offset = (Elf32_Off)boff;
-		phdr.p_filesz = doff - boff;
-		boff = doff;
-
-		if (pwrite64(fd, &phdr, sizeof (phdr), poff) != sizeof (phdr))
-			goto err;
-		poff += sizeof (phdr);
-#ifdef _LP64
-	} else {
-		Elf64_Phdr phdr;
-
-		bzero(&phdr, sizeof (phdr));
-		phdr.p_type = PT_NOTE;
-		phdr.p_flags = PF_R;
-		phdr.p_offset = boff;
-		phdr.p_filesz = doff - boff;
-		boff = doff;
-
-		if (pwrite64(fd, &phdr, sizeof (phdr), poff) != sizeof (phdr))
-			goto err;
-		poff += sizeof (phdr);
-#endif	/* _LP64 */
-	}
-
-	/*
-	 * Construct the new-style note header and section.
+	 * Construct the note header and section.
 	 */
 
 	if (P->status.pr_dmodel == PR_MODEL_NATIVE) {
@@ -1367,10 +1069,10 @@ Pfgcore(struct ps_prochandle *P, int fd, core_content_t content)
 		pprivsz = PRIV_PRPRIV_SIZE(ppriv);
 
 		if (write_note(fd, NT_PRPRIV, ppriv, pprivsz, &doff) != 0) {
-			free(ppriv);
+			Ppriv_free(P, ppriv);
 			goto err;
 		}
-		free(ppriv);
+		Ppriv_free(P, ppriv);
 
 		if ((pinfo = getprivimplinfo()) == NULL)
 			goto err;
@@ -1391,6 +1093,37 @@ Pfgcore(struct ps_prochandle *P, int fd, core_content_t content)
 
 		if (Pfdinfo_iter(P, iter_fd, &iter) != 0)
 			goto err;
+	}
+
+
+	{
+		prsecflags_t *psf = NULL;
+
+		if (Psecflags(P, &psf) != 0)
+			goto err;
+
+		if (write_note(fd, NT_SECFLAGS, psf,
+		    sizeof (prsecflags_t), &doff) != 0) {
+			Psecflags_free(psf);
+			goto err;
+		}
+
+		Psecflags_free(psf);
+	}
+
+	{
+		prcwd_t *cwd = NULL;
+
+		if (Pcwd(P, &cwd) != 0)
+			goto err;
+
+		if (write_note(fd, NT_CWD, cwd,
+		    sizeof (prcwd_t), &doff) != 0) {
+			Pcwd_free(cwd);
+			goto err;
+		}
+
+		Pcwd_free(cwd);
 	}
 
 #if defined(__i386) || defined(__amd64)
@@ -1419,7 +1152,7 @@ Pfgcore(struct ps_prochandle *P, int fd, core_content_t content)
 	}
 #endif	/* __i386 || __amd64 */
 
-	if (Plwp_iter_all(P, new_per_lwp, &pgc) != 0)
+	if (Plwp_iter_all(P, per_lwp, &pgc) != 0)
 		goto err;
 
 	if (P->status.pr_dmodel == PR_MODEL_ILP32) {
@@ -1432,7 +1165,7 @@ Pfgcore(struct ps_prochandle *P, int fd, core_content_t content)
 		phdr.p_filesz = doff - boff;
 		boff = doff;
 
-		if (pwrite64(fd, &phdr, sizeof (phdr), poff) != sizeof (phdr))
+		if (gc_pwrite64(fd, &phdr, sizeof (phdr), poff) != 0)
 			goto err;
 		poff += sizeof (phdr);
 #ifdef _LP64
@@ -1446,7 +1179,7 @@ Pfgcore(struct ps_prochandle *P, int fd, core_content_t content)
 		phdr.p_filesz = doff - boff;
 		boff = doff;
 
-		if (pwrite64(fd, &phdr, sizeof (phdr), poff) != sizeof (phdr))
+		if (gc_pwrite64(fd, &phdr, sizeof (phdr), poff) != 0)
 			goto err;
 		poff += sizeof (phdr);
 #endif	/* _LP64 */
@@ -1467,6 +1200,7 @@ Pfgcore(struct ps_prochandle *P, int fd, core_content_t content)
 		goto err;
 
 	free(pgc.pgc_chunk);
+	shstrtab_fini(&pgc.pgc_shstrtab);
 
 	return (0);
 
@@ -1476,6 +1210,8 @@ err:
 	 */
 	(void) ftruncate64(fd, 0);
 	free(pgc.pgc_chunk);
+	shstrtab_fini(&pgc.pgc_shstrtab);
+
 	return (-1);
 }
 
@@ -1493,6 +1229,7 @@ static const char *content_str[] = {
 	"dism",		/* CC_CONTENT_DISM */
 	"ctf",		/* CC_CONTENT_CTF */
 	"symtab",	/* CC_CONTENT_SYMTAB */
+	"debug"		/* CC_CONTENT_DEBUG */
 };
 
 static uint_t ncontent_str = sizeof (content_str) / sizeof (content_str[0]);

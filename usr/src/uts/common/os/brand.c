@@ -20,6 +20,8 @@
  */
 /*
  * Copyright (c) 2006, 2010, Oracle and/or its affiliates. All rights reserved.
+ * Copyright 2019 Joyent, Inc.
+ * Copyright 2026 Oxide Computer Company
  */
 
 #include <sys/kmem.h>
@@ -494,7 +496,7 @@ brand_solaris_cmd(int cmd, uintptr_t arg1, uintptr_t arg2, uintptr_t arg3,
 	switch ((cmd)) {
 	case B_EXEC_NATIVE:
 		err = exec_common((char *)arg1, (const char **)arg2,
-		    (const char **)arg3, EBA_NATIVE);
+		    (const char **)arg3, NULL, EBA_NATIVE, UIO_USERSPACE);
 		return (err);
 
 	/*
@@ -600,7 +602,7 @@ restoreexecenv(struct execenv *ep, stack_t *sp)
 /*ARGSUSED*/
 int
 brand_solaris_elfexec(vnode_t *vp, execa_t *uap, uarg_t *args,
-    intpdata_t *idatap, int level, long *execsz, int setid, caddr_t exec_file,
+    intpdata_t *idatap, int level, size_t *execsz, int setid, caddr_t exec_file,
     cred_t *cred, int brand_action, struct brand *pbrand, char *bname,
     char *brandlib, char *brandlib32, char *brandlinker, char *brandlinker32)
 {
@@ -672,13 +674,13 @@ brand_solaris_elfexec(vnode_t *vp, execa_t *uap, uarg_t *args,
 	orig_sigaltstack.ss_flags = lwp->lwp_sigaltstack.ss_flags;
 
 	if (args->to_model == DATAMODEL_NATIVE) {
-		err = elfexec(nvp, uap, args, idatap, level + 1, execsz,
+		err = elfexec(nvp, uap, args, idatap, INTP_MAXDEPTH + 1, execsz,
 		    setid, exec_file, cred, brand_action);
 	}
 #if defined(_LP64)
 	else {
-		err = elf32exec(nvp, uap, args, idatap, level + 1, execsz,
-		    setid, exec_file, cred, brand_action);
+		err = elf32exec(nvp, uap, args, idatap, INTP_MAXDEPTH + 1,
+		    execsz, setid, exec_file, cred, brand_action);
 	}
 #endif  /* _LP64 */
 	VN_RELE(nvp);
@@ -718,8 +720,8 @@ brand_solaris_elfexec(vnode_t *vp, execa_t *uap, uarg_t *args,
 		}
 	}
 	/* Make sure the emulator has an entry point */
-	ASSERT(sed.sed_entry != NULL);
-	ASSERT(sed.sed_phdr != NULL);
+	ASSERT(sed.sed_entry != 0);
+	ASSERT(sed.sed_phdr != 0);
 
 	bzero(&env, sizeof (env));
 	if (args->to_model == DATAMODEL_NATIVE) {
@@ -834,19 +836,19 @@ brand_solaris_elfexec(vnode_t *vp, execa_t *uap, uarg_t *args,
 			 */
 			sedp->sed_ldentry = ehdr.e_entry;
 			sedp->sed_entry = ehdr.e_entry;
-			sedp->sed_lddata = NULL;
-			sedp->sed_base = NULL;
+			sedp->sed_lddata = 0;
+			sedp->sed_base = 0;
 		} else {
 			/*
 			 * A shared object with no interpreter, we use
 			 * the calculated address from above.
 			 */
 			sedp->sed_ldentry = sedp->sed_entry;
-			sedp->sed_entry = NULL;
-			sedp->sed_phdr = NULL;
-			sedp->sed_phent = NULL;
-			sedp->sed_phnum = NULL;
-			sedp->sed_lddata = NULL;
+			sedp->sed_entry = 0;
+			sedp->sed_phdr = 0;
+			sedp->sed_phent = 0;
+			sedp->sed_phnum = 0;
+			sedp->sed_lddata = 0;
 			sedp->sed_base = voffset;
 
 			if (ehdr.e_type == ET_DYN) {
@@ -980,7 +982,7 @@ brand_solaris_elfexec(vnode_t *vp, execa_t *uap, uarg_t *args,
 		}
 
 		up->u_auxv[i].a_un.a_val = val;
-		if (val == NULL) {
+		if (val == 0) {
 			/* Hide the entry for static binaries */
 			up->u_auxv[i].a_type = AT_IGNORE;
 		}

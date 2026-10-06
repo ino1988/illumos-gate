@@ -27,17 +27,14 @@
 #ifndef	_DBOOT_PRINTF_H
 #define	_DBOOT_PRINTF_H
 
-#pragma ident	"%Z%%M%	%I%	%E% SMI"
-
 #ifdef	__cplusplus
 extern "C" {
 #endif
 
 /*
  * Very primitive printf. This only understands the following simple formats:
- *        %%, %c, %s, %d, %ld, %lld, %x, %lx, %llx, %p
+ *        %%, %b, %c, %d, %o, %p, %s, %x and size specifiers l, ll, j, z
  */
-/*PRINTFLIKE1*/
 extern void dboot_printf(char *fmt, ...)
     __KPRINTFLIKE(1);
 
@@ -45,9 +42,8 @@ extern void dboot_printf(char *fmt, ...)
  * Primitive version of panic, prints a message, waits for a keystroke,
  * then resets the system
  */
-/*PRINTFLIKE1*/
 extern void dboot_panic(char *fmt, ...)
-    __KPRINTFLIKE(1);
+    __KPRINTFLIKE(1) __NORETURN;
 
 
 #ifdef	__cplusplus

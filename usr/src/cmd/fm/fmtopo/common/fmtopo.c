@@ -21,7 +21,8 @@
 
 /*
  * Copyright (c) 2004, 2010, Oracle and/or its affiliates. All rights reserved.
- * Copyright (c) 2013, Joyent, Inc. All rights reserved.
+ * Copyright (c) 2019, Joyent, Inc. All rights reserved.
+ * Copyright 2023 Oxide Computer Company
  */
 
 
@@ -42,7 +43,6 @@
 #define	FMTOPO_EXIT_USAGE	2
 
 #define	STDERR	"stderr"
-#define	DOTS	"..."
 #define	ALL	"all"
 
 static const char *g_pname;
@@ -50,12 +50,13 @@ static const char *g_fmri = NULL;
 
 static const char *opt_R = "/";
 static const char *opt_s = FM_FMRI_SCHEME_HC;
-static const char optstr[] = "bCdem:P:pR:s:StVx";
+static const char optstr[] = "bCdelm:P:pR:s:StVx";
 static const char *opt_m;
 
 static int opt_b = 0;
 static int opt_d = 0;
 static int opt_e = 0;
+static int opt_l = 0;
 static int opt_p = 0;
 static int opt_S = 0;
 static int opt_t = 0;
@@ -77,7 +78,7 @@ static int
 usage(FILE *fp)
 {
 	(void) fprintf(fp,
-	    "Usage: %s [-bCedpSVx] [-P group.property[=type:value]] "
+	    "Usage: %s [-bCedlpSVx] [-P group.property[=type:value]] "
 	    "[-R root] [-m method] [-s scheme] [fmri]\n", g_pname);
 
 	(void) fprintf(fp,
@@ -85,12 +86,13 @@ usage(FILE *fp)
 	    "\t-C  dump core after completing execution\n"
 	    "\t-d  set debug mode for libtopo modules\n"
 	    "\t-e  display FMRIs as paths using esc/eft notation\n"
+	    "\t-l  list available schemes rather than print a tree\n"
 	    "\t-m  execute given method\n"
 	    "\t-P  get/set specified properties\n"
 	    "\t-p  display of FMRI protocol properties\n"
 	    "\t-R  set root directory for libtopo plug-ins and other files\n"
 	    "\t-s  display topology for the specified FMRI scheme\n"
-	    "\t-S  display FMRI status (present/usable)\n"
+	    "\t-S  display FMRI status (present/usable/occupied)\n"
 	    "\t-V  set verbose mode\n"
 	    "\t-x  display a xml formatted topology\n");
 
@@ -128,6 +130,7 @@ static void
 print_node(topo_hdl_t *thp, tnode_t *node, nvlist_t *nvl, const char *fmri)
 {
 	int err, ret;
+	boolean_t is_occupied;
 
 	(void) printf("%s\n", (char *)fmri);
 
@@ -175,6 +178,13 @@ print_node(topo_hdl_t *thp, tnode_t *node, nvlist_t *nvl, const char *fmri)
 		else
 			(void) printf("\tUnusable: %s\n",
 			    ret ? "true" : "false");
+
+		ret = topo_node_occupied(node, &is_occupied);
+		if (ret == 0)
+			(void) printf("\tOccupied: %s\n",
+			    is_occupied ? "true" : "false");
+		else if (ret != ETOPO_METHOD_NOTSUP)
+			(void) printf("\tOccupied: -\n");
 	}
 }
 
@@ -240,7 +250,7 @@ print_prop_nameval(topo_hdl_t *thp, tnode_t *node, nvlist_t *nvl)
 {
 	int err;
 	topo_type_t type;
-	char *tstr, *propn, buf[48], *factype;
+	char *tstr, *propn, *factype;
 	nvpair_t *pv_nvp;
 	int i;
 	uint_t nelem;
@@ -365,8 +375,7 @@ print_prop_nameval(topo_hdl_t *thp, tnode_t *node, nvlist_t *nvl)
 			}
 uint32_def:
 			(void) printf(" 0x%x", val);
-			if (rsrc != NULL)
-				nvlist_free(rsrc);
+			nvlist_free(rsrc);
 			break;
 		}
 		case DATA_TYPE_INT64: {
@@ -390,12 +399,7 @@ uint32_def:
 		case DATA_TYPE_STRING: {
 			char *val;
 			(void) nvpair_value_string(pv_nvp, &val);
-			if (!opt_V && strlen(val) > 48) {
-				(void) snprintf(buf, 48, "%s...", val);
-				(void) printf(" %s", buf);
-			} else {
-				(void) printf(" %s", val);
-			}
+			(void) printf(" %s", val);
 			break;
 		}
 		case DATA_TYPE_NVLIST: {
@@ -403,19 +407,13 @@ uint32_def:
 			char *fmri;
 			(void) nvpair_value_nvlist(pv_nvp, &val);
 			if (topo_fmri_nvl2str(thp, val, &fmri, &err) != 0) {
-				if (opt_V)
-					nvlist_print(stdout, nvl);
+				(void) fprintf(stderr, "failed to convert "
+				    "FMRI to string: (%s)\n",
+				    topo_strerror(err));
+				nvlist_print(stdout, nvl);
 				break;
 			}
-
-			if (!opt_V && strlen(fmri) > 48) {
-				(void) snprintf(buf, 48, "%s", fmri);
-				(void) snprintf(&buf[45], 4, "%s", DOTS);
-				(void) printf(" %s", buf);
-			} else {
-				(void) printf(" %s", fmri);
-			}
-
+			(void) printf(" %s", fmri);
 			topo_hdl_strfree(thp, fmri);
 			break;
 		}
@@ -435,7 +433,7 @@ uint32_def:
 			(void) nvpair_value_uint32_array(pv_nvp, &val, &nelem);
 			(void) printf(" [ ");
 			for (i = 0; i < nelem; i++)
-				(void) printf("%u ", val[i]);
+				(void) printf("0x%x ", val[i]);
 			(void) printf("]");
 			break;
 		}
@@ -455,7 +453,7 @@ uint32_def:
 			(void) nvpair_value_uint64_array(pv_nvp, &val, &nelem);
 			(void) printf(" [ ");
 			for (i = 0; i < nelem; i++)
-				(void) printf("%llu ", val[i]);
+				(void) printf("0x%llx ", val[i]);
 			(void) printf("]");
 			break;
 		}
@@ -466,6 +464,29 @@ uint32_def:
 			(void) printf(" [ ");
 			for (i = 0; i < nelem; i++)
 				(void) printf("\"%s\" ", val[i]);
+			(void) printf("]");
+			break;
+		}
+		case DATA_TYPE_NVLIST_ARRAY: {
+			nvlist_t **val;
+			char *fmri;
+			int ret;
+
+			(void) nvpair_value_nvlist_array(pv_nvp, &val, &nelem);
+			(void) printf(" [ ");
+			for (i = 0; i < nelem; i++) {
+				ret = topo_fmri_nvl2str(thp, val[i], &fmri,
+				    &err);
+				if (ret != 0) {
+					(void) fprintf(stderr, "failed to "
+					    "convert FMRI to string (%s)\n",
+					    topo_strerror(err));
+					nvlist_print(stdout, val[i]);
+					break;
+				}
+				(void) printf("\"%s\" ", fmri);
+				topo_hdl_strfree(thp, fmri);
+			}
 			(void) printf("]");
 			break;
 		}
@@ -482,7 +503,6 @@ print_pgroup(topo_hdl_t *thp, tnode_t *node, const char *pgn, char *dstab,
     char *nstab, int32_t version)
 {
 	int err;
-	char buf[30];
 	topo_pgroup_info_t *pgi = NULL;
 
 	if (pgn == NULL)
@@ -499,11 +519,6 @@ print_pgroup(topo_hdl_t *thp, tnode_t *node, const char *pgn, char *dstab,
 	if (dstab == NULL || nstab == NULL || version == -1) {
 		(void) printf("  group: %-30s version: - stability: -/-\n",
 		    pgn);
-	} else if (!opt_V && strlen(pgn) > 30) {
-		(void) snprintf(buf, 26, "%s", pgn);
-		(void) snprintf(&buf[27], 4, "%s", DOTS);
-		(void) printf("  group: %-30s version: %-3d stability: %s/%s\n",
-		    buf, version, nstab, dstab);
 	} else {
 		(void) printf("  group: %-30s version: %-3d stability: %s/%s\n",
 		    pgn, version, nstab, dstab);
@@ -880,7 +895,8 @@ static void
 get_pargs(int argc, char *argv[])
 {
 	struct prop_args *pp;
-	char c, *s, *p;
+	char *s, *p;
+	int c;
 	int i = 0;
 
 	if ((pargs = malloc(sizeof (struct prop_args *) * pcnt)) == NULL) {
@@ -949,6 +965,34 @@ get_pargs(int argc, char *argv[])
 		free(pargs);
 		pargs = NULL;
 	}
+}
+
+static int
+walk_schemes_cb(topo_hdl_t *thp, const topo_scheme_info_t *info, void *arg)
+{
+	const char *type;
+	char unknown[32];
+
+	if (g_fmri != NULL && fnmatch(g_fmri, info->tsi_scheme, 0) != 0) {
+		return (TOPO_WALK_NEXT);
+	}
+
+	switch (info->tsi_type) {
+	case TOPO_SCHEME_TREE:
+		type = "tree";
+		break;
+	case TOPO_SCHEME_DIGRAPH:
+		type = "directed graph";
+		break;
+	default:
+		(void) snprintf(unknown, sizeof (unknown), "unknown (0x%x)",
+		    info->tsi_type);
+		type = unknown;
+		break;
+	}
+
+	(void) printf("%-15s %s\n", type, info->tsi_scheme);
+	return (TOPO_WALK_NEXT);
 }
 
 static int
@@ -1211,6 +1255,9 @@ main(int argc, char *argv[])
 			case 'e':
 				opt_e++;
 				break;
+			case 'l':
+				opt_l++;
+				break;
 			case 'm':
 				opt_m = optarg;
 				break;
@@ -1286,6 +1333,13 @@ main(int argc, char *argv[])
 			return (fmtopo_exit(thp, uuid, FMTOPO_EXIT_USAGE));
 		}
 
+		if (opt_l) {
+			(void) fprintf(stderr,
+			    "%s: -l and -x cannot be specified together\n",
+			    g_pname);
+			return (fmtopo_exit(thp, uuid, FMTOPO_EXIT_USAGE));
+		}
+
 		err = 0;
 		if (topo_xml_print(thp, stdout, opt_s, &err) < 0)
 			(void) fprintf(stderr, "%s: failed to print xml "
@@ -1294,6 +1348,20 @@ main(int argc, char *argv[])
 
 		return (fmtopo_exit(thp, uuid, err ? FMTOPO_EXIT_ERROR :
 		    FMTOPO_EXIT_SUCCESS));
+	}
+
+	if (opt_l) {
+		if (opt_b || opt_e || opt_m || pcnt > 0 || opt_p || opt_V ||
+		    opt_S || opt_x) {
+			(void) fprintf(stderr,
+			    "%s: -l may only be used with -c, -d, and -R\n",
+			    g_pname);
+			return (fmtopo_exit(thp, uuid, FMTOPO_EXIT_USAGE));
+		}
+
+		(void) printf("%-15s %s\n", "TYPE", "NAME");
+		(void) topo_scheme_walk(thp, walk_schemes_cb, NULL);
+		return (fmtopo_exit(thp, uuid, FMTOPO_EXIT_SUCCESS));
 	}
 
 	if (opt_t || walk_topo(thp, uuid) < 0) {

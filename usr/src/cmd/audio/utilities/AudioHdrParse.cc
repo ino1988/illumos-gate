@@ -22,9 +22,9 @@
 /*
  * Copyright 2005 Sun Microsystems, Inc.  All rights reserved.
  * Use is subject to license terms.
+ *
+ * Copyright 2019 RackTop Systems.
  */
-
-#pragma ident	"%Z%%M%	%I%	%E% SMI"
 
 #include <stdio.h>
 #include <string.h>
@@ -142,7 +142,7 @@ EncodingString() const
 		switch (encoding) {
 		case ULAW:
 			// XXX - See bug 1121000
-			// XXX - (void) strcat(str, "µ-law");
+			// XXX - (void) strcat(str, "Î¼-law");
 			(void) strcat(str, "u-law");
 			break;
 		case ALAW:
@@ -235,6 +235,7 @@ static char		*lib_hz = NULL;
 			return (AUDIO_ERR_BADARG);
 		}
 		delete khz;
+		/* FALLTHROUGH */
 	case 1:
 		rate = irint(r);
 		break;
@@ -406,8 +407,12 @@ static char		*lib_linear = NULL;
 		estr = to_lowercase(estrbuf);
 		if ((strcmp(estr, "ulaw") == 0) ||
 		    (strcmp(estr, "u-law") == 0) ||
-		    (strcmp(estr, "µlaw") == 0) ||
-		    (strcmp(estr, "µ-law") == 0) ||
+		    /*
+		     * NB: These characters are literal latin-1 MICRO SIGN
+		     * maintained for compatibility
+		     */
+		    (strcmp(estr, "\xb5law") == 0) ||
+		    (strcmp(estr, "\xb5-law") == 0) ||
 		    (strcmp(estr, "mulaw") == 0) ||
 		    (strcmp(estr, "mu-law") == 0) ||
 		    (strcoll(estr, lib_ulaw) == 0)) {
@@ -641,6 +646,6 @@ FormatParse(
 	if (!err)
 		*this = newhdr;
 errret:
-	delete pstr;
+	delete[] pstr;
 	return (err);
 }

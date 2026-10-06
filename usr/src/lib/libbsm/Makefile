@@ -20,6 +20,7 @@
 #
 #
 # Copyright (c) 1992, 2010, Oracle and/or its affiliates. All rights reserved.
+# Copyright 2025 Oxide Computer Company
 #
 
 include ../Makefile.lib
@@ -34,7 +35,6 @@ clean :=	TARGET= clean
 clobber :=	TARGET= clobber
 delete :=	TARGET= delete
 install :=	TARGET= install
-lint :=		TARGET= lint
 package :=	TARGET= package
 
 .KEEP_STATE:
@@ -45,20 +45,20 @@ COMMONDIR = common
 # Macros for libbsm header files. These define user-level only interfaces.
 #
 GENHDRS = audit_uevents.h
-HDRS = libbsm.h devices.h devalloc.h adt.h adt_event.h audit_private.h 
+HDRS = libbsm.h devices.h devalloc.h adt.h adt_event.h audit_private.h
 GENSRCS =	$(COMMONDIR)/adt_xlate.c $(COMMONDIR)/adt_event.h
 COMMONHDRS =	$(HDRS:%=$(COMMONDIR)/%)
-ROOTHDRDIR = 	$(ROOT)/usr/include/bsm
-ROOTCHDRS = 	$(HDRS:%=$(ROOTHDRDIR)/%)
-ROOTHDRS = 	$(GENHDRS:%=$(ROOTHDRDIR)/%)
+ROOTHDRDIR =	$(ROOT)/usr/include/bsm
+ROOTCHDRS =	$(HDRS:%=$(ROOTHDRDIR)/%)
+ROOTHDRS =	$(GENHDRS:%=$(ROOTHDRDIR)/%)
 
 CHECKCHDRS =	$(COMMONHDRS:%.h=%.check)
 CHECKHDRS =	$(GENHDRS:%.h=%.check)
 
-$(ROOTHDRS) := 	FILEMODE = 0644
+$(ROOTHDRS) :=	FILEMODE = 0644
 $(ROOTCHDRS) :=	FILEMODE = 0644
 
-all install lint package: $(GENSRCS) $(SUBDIRS)
+all install package: $(GENSRCS) $(SUBDIRS)
 clean clobber delete: $(SUBDIRS)
 
 #
@@ -67,8 +67,8 @@ clean clobber delete: $(SUBDIRS)
 # from here.
 #
 
-ROOTETCSECURITY = 	$(ROOT)/etc/security
-$(ROOTETCSECURITY) := 	DIRMODE = 0755
+ROOTETCSECURITY =	$(ROOT)/etc/security
+$(ROOTETCSECURITY) :=	DIRMODE = 0755
 
 ESFILES =		audit_class audit_event
 ESSRC =			$(ESFILES:%=%.txt)
@@ -124,8 +124,6 @@ AUDITXML =	auditxml
 
 install: install_dirs install_data
 
-#		$(ROOTUSRLIB) $(ROOTLIBS) $(ROOTLINKS)
-
 install_h: $(ROOTHDRDIR) $(ROOTHDRS) $(ROOTCHDRS)
 
 check:	$(CHECKHDRS) $(CHECKCHDRS)
@@ -148,7 +146,7 @@ clean_files:
 	-$(RM) $(CLEANFILES)
 
 $(GENSRCS): $(ADTXMLFILE) $(AUDITXML)
-	$(PERL) $(AUDITXML) -o $(COMMONDIR) $(ADTXMLFILE)
+	$(PERL) -I. $(AUDITXML) -o $(COMMONDIR) $(ADTXMLFILE)
 
 $(ETCSECURITYFILES) $(RESA): \
 	$(ETCSECURITY) \
@@ -176,7 +174,7 @@ $(ROOTDTDDIR)/% $(ROOTXSLDIR)/%: %
 $(AUDITDIRS):
 	$(INS.dir)
 
-$(ARSYMLNK): 
+$(ARSYMLNK):
 	$(RM) $@
 	$(SYMLINK) ../../../../var/audit $@
 
@@ -199,6 +197,8 @@ adt_xlate.po: $(COMMONDIR)/adt_xlate.c
 	$(XGETTEXT) $(XGETFLAGS_ADT) $(COMMONDIR)/adt_xlate.c
 	$(SED) "/^domain/d" < messages.po > adt_xlate.po
 	$(RM) messages.po
+
+$(SUBDIRS):	$(GENSRCS)
 
 $(SUBDIRS):	FRC
 	@cd $@; pwd; $(MAKE) $(TARGET)

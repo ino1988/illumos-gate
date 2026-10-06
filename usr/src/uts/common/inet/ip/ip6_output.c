@@ -22,6 +22,10 @@
 /*
  * Copyright 2010 Sun Microsystems, Inc.  All rights reserved.
  * Use is subject to license terms.
+ * Copyright 2017 OmniTI Computer Consulting, Inc. All rights reserved.
+ * Copyright 2018 Joyent, Inc.
+ * Copyright 2025 Bill Sommerfeld <sommerfeld@hamachi.org>
+ * Copyright 2026 Oxide Computer Company
  */
 /* Copyright (c) 1990 Mentat Inc. */
 
@@ -245,7 +249,7 @@ repeat_ire:
 			 * Older than 20 minutes. Drop the path MTU information.
 			 */
 			mutex_enter(&dce->dce_lock);
-			dce->dce_flags &= ~(DCEF_PMTU|DCEF_TOO_SMALL_PMTU);
+			dce->dce_flags &= ~DCEF_PMTU;
 			dce->dce_last_change_time = TICK_TO_SEC(now);
 			mutex_exit(&dce->dce_lock);
 			dce_increment_generation(dce);
@@ -493,6 +497,7 @@ ire_send_local_v6(ire_t *ire, mblk_t *mp, void *iph_arg,
 	/* Map ixa to ira including IPsec policies */
 	ipsec_out_to_in(ixa, ill, &iras);
 	iras.ira_pktlen = pktlen;
+	iras.ira_ttl = ip6h->ip6_hlim;
 
 	ire->ire_ib_pkt_count++;
 	BUMP_MIB(ill->ill_ip_mib, ipIfStatsHCInReceives);
@@ -826,7 +831,8 @@ ip_output_cksum_v6(iaflags_t ixaflags, mblk_t *mp, ip6_t *ip6h,
 
 #define	iphs    ((uint16_t *)ip6h)
 
-	if ((ixaflags & IXAF_NO_HW_CKSUM) || !ILL_HCKSUM_CAPABLE(ill) ||
+	if ((ixaflags & (IXAF_NO_HW_CKSUM|IXAF_SET_RAW_CKSUM)) ||
+	    !ILL_HCKSUM_CAPABLE(ill) ||
 	    !dohwcksum) {
 		return (ip_output_sw_cksum_v6(mp, ip6h, ixa));
 	}
@@ -856,17 +862,17 @@ ip_output_cksum_v6(iaflags_t ixaflags, mblk_t *mp, ip6_t *ip6h,
 #endif
 			sctph->sh_chksum = sctp_cksum(mp, ip_hdr_length);
 		goto ip_hdr_cksum;
-	} else if (ixa->ixa_flags & IXAF_SET_RAW_CKSUM) {
-		/*
-		 * icmp has placed length and routing
-		 * header adjustment in the checksum field.
-		 */
-		cksump = (uint16_t *)(((uint8_t *)ip6h) + ip_hdr_length +
-		    ixa->ixa_raw_cksum_offset);
-		cksum = htons(protocol);
 	} else if (protocol == IPPROTO_ICMPV6) {
-		cksump = IPH_ICMPV6_CHECKSUMP(ip6h, ip_hdr_length);
-		cksum = IP_ICMPV6_CSUM_COMP;	/* Pseudo-header cksum */
+		/*
+		 * Currently we assume no HW support for ICMP checksum calc.
+		 *
+		 * When HW support is advertised for ICMP, we'll want the
+		 * following to be set:
+		 * cksump = IPH_ICMPV6_CHECKSUMP(ip6h, ip_hdr_length);
+		 * cksum = IP_ICMPV6_CSUM_COMP;		Pseudo-header cksum
+		 */
+
+		return (ip_output_sw_cksum_v6(mp, ip6h, ixa));
 	} else {
 	ip_hdr_cksum:
 		/* No IP header checksum for IPv6 */
@@ -1013,7 +1019,7 @@ ire_send_wire_v6(ire_t *ire, mblk_t *mp, void *iph_arg,
 	 */
 	if (pktlen > ixa->ixa_fragsize ||
 	    (ixaflags & (IXAF_IPSEC_SECURE|IXAF_IPV6_ADD_FRAGHDR))) {
-		uint32_t ident;
+		uint32_t ident = 0;
 
 		if (ixaflags & IXAF_IPSEC_SECURE)
 			pktlen += ipsec_out_extra_length(ixa);
@@ -1062,6 +1068,7 @@ ire_send_wire_v6(ire_t *ire, mblk_t *mp, void *iph_arg,
 				bzero(&iras, sizeof (iras));
 				/* Map ixa to ira including IPsec policies */
 				ipsec_out_to_in(ixa, ill, &iras);
+				iras.ira_ttl = ip6h->ip6_hlim;
 
 				ip_drop_output("ICMP6_PKT_TOO_BIG", mp, ill);
 				icmp_pkt2big_v6(mp, ixa->ixa_fragsize, B_TRUE,
@@ -1284,12 +1291,6 @@ ip_postfrag_multirt_v6(mblk_t *mp, nce_t *nce, iaflags_t ixaflags,
 			error = ENOBUFS;
 			continue;
 		}
-		/* Preserve HW checksum for this copy */
-		DB_CKSUMSTART(mp1) = DB_CKSUMSTART(mp);
-		DB_CKSUMSTUFF(mp1) = DB_CKSUMSTUFF(mp);
-		DB_CKSUMEND(mp1) = DB_CKSUMEND(mp);
-		DB_CKSUMFLAGS(mp1) = DB_CKSUMFLAGS(mp);
-		DB_LSOMSS(mp1) = DB_LSOMSS(mp);
 
 		ire1->ire_ob_pkt_count++;
 		err = ip_xmit(mp1, nce1, ixaflags, pkt_len, xmit_hint, szone,

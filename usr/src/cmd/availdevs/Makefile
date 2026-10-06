@@ -32,13 +32,8 @@ ROOTCMDDIR=	$(ROOTLIB)/zfs
 
 INCS += -I$(ADJUNCT_PROTO)/usr/include/libxml2
 
-#
-# There is no lint library for libxml2, so we need to avoid linking against
-# it during lint, as well as turning off the warnings lint would generate.
-#
-LDLIBS += -lzfs_jni -lnvpair -lzfs
-all install := LDLIBS += -lxml2
-LINTFLAGS += -xerroff=E_NAME_USED_NOT_DEF2
+LDLIBS += -lzfs_jni -lnvpair -lzfs -lxml2
+NATIVE_LIBS += libxml2.so
 
 CPPFLAGS += $(INCS) -D_LARGEFILE64_SOURCE=1 -D_REENTRANT
 $(NOT_RELEASE_BUILD) CPPFLAGS += -DDEBUG
@@ -50,7 +45,5 @@ all: $(PROG)
 install: all $(ROOTCMD)
 
 clean:
-
-lint: lint_PROG
 
 include ../Makefile.targ

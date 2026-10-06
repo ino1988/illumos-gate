@@ -1322,8 +1322,7 @@ fmd_case_destroy_suspects(fmd_case_impl_t *cip)
 	if (cip->ci_proxy_asru)
 		fmd_free(cip->ci_proxy_asru, sizeof (uint8_t) *
 		    cip->ci_nsuspects);
-	if (cip->ci_diag_de)
-		nvlist_free(cip->ci_diag_de);
+	nvlist_free(cip->ci_diag_de);
 	if (cip->ci_diag_asru)
 		fmd_free(cip->ci_diag_asru, sizeof (uint8_t) *
 		    cip->ci_nsuspects);
@@ -1573,9 +1572,9 @@ fmd_case_rele_locked(fmd_case_t *cp)
 }
 
 int
-fmd_case_insert_principal(fmd_case_t *cp, fmd_event_t *ep)
+fmd_case_insert_principal(void *cp, fmd_event_t *ep)
 {
-	fmd_case_impl_t *cip = (fmd_case_impl_t *)cp;
+	fmd_case_impl_t *cip = cp;
 	fmd_case_item_t *cit;
 	fmd_event_t *oep;
 	uint_t state;
@@ -1612,9 +1611,9 @@ fmd_case_insert_principal(fmd_case_t *cp, fmd_event_t *ep)
 }
 
 int
-fmd_case_insert_event(fmd_case_t *cp, fmd_event_t *ep)
+fmd_case_insert_event(void *cp, fmd_event_t *ep)
 {
-	fmd_case_impl_t *cip = (fmd_case_impl_t *)cp;
+	fmd_case_impl_t *cip = cp;
 	fmd_case_item_t *cit;
 	uint_t state;
 	int new;
@@ -2431,8 +2430,7 @@ fmd_case_set_de_fmri(fmd_case_t *cp, nvlist_t *nvl)
 {
 	fmd_case_impl_t *cip = (fmd_case_impl_t *)cp;
 
-	if (cip->ci_diag_de)
-		nvlist_free(cip->ci_diag_de);
+	nvlist_free(cip->ci_diag_de);
 	cip->ci_diag_de = nvl;
 }
 

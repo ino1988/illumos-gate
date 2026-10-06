@@ -21,10 +21,12 @@
 /*
  * Copyright 2010 Sun Microsystems, Inc.  All rights reserved.
  * Use is subject to license terms.
+ *
+ * Copyright 2019 Nexenta by DDN, Inc. All rights reserved.
  */
 
 /*	Copyright (c) 1984, 1986, 1987, 1988, 1989 AT&T	*/
-/*	  All Rights Reserved  	*/
+/*	  All Rights Reserved	*/
 
 
 #include	<stdio.h>
@@ -46,6 +48,7 @@
 #include	<sys/mntent.h>
 #include	<sys/ctfs.h>
 #include	<locale.h>
+#include	<priv.h>
 #include	<stdarg.h>
 #include	<sys/mount.h>
 #include	<sys/objfs.h>
@@ -77,17 +80,6 @@ int	lofscnt;		/* presence of lofs prohibits parallel */
 int	exitcode;
 char	resolve[MAXPATHLEN];
 static  char ibuf[BUFSIZ];
-
-/*
- * Currently, mounting cachefs's simultaneous uncovers various problems.
- * For the short term, we serialize cachefs activity while we fix
- * these cachefs bugs.
- */
-#define	CACHEFS_BUG
-#ifdef	CACHEFS_BUG
-#include	<sys/fs/cachefs_fs.h>	/* for BACKMNT_NAME */
-int	cachefs_running;	/* parallel cachefs not supported yet */
-#endif
 
 /*
  * The basic mount struct that describes an mnttab entry.
@@ -148,15 +140,15 @@ static void	cleanup(int);
 
 static mountent_t	**make_mntarray(char **, int);
 static mountent_t	*getmntall();
-static mountent_t 	*new_mountent(struct mnttab *);
+static mountent_t	*new_mountent(struct mnttab *);
 static mountent_t	*getmntlast(mountent_t *, char *, char *);
 
 int
 main(int argc, char **argv)
 {
-	int 	cc;
+	int	cc;
 	struct mnttab  mget;
-	char 	*mname, *is_special;
+	char	*mname, *is_special;
 	int	fscnt;
 	mountent_t	*mp;
 
@@ -339,7 +331,7 @@ main(int argc, char **argv)
 void
 doexec(struct mnttab *ment)
 {
-	int 	ret;
+	int	ret;
 
 #ifdef DEBUG
 	if (dflg)
@@ -352,7 +344,7 @@ doexec(struct mnttab *ment)
 		char	full_path[FULLPATH_MAX];
 		char	alter_path[FULLPATH_MAX];
 		char	*newargv[ARGV_MAX];
-		int 	ii;
+		int	ii;
 
 		if (strlen(ment->mnt_fstype) > (size_t)FSTYPE_MAX) {
 			fprintf(stderr, gettext(
@@ -396,6 +388,17 @@ doexec(struct mnttab *ment)
 			printf("\n");
 			fflush(stdout);
 			exit(0);
+		}
+
+		/*
+		 * Some file system types need pfexec.
+		 */
+		if (strcmp(ment->mnt_fstype, "smbfs") == 0 &&
+		    setpflags(PRIV_PFEXEC, 1) != 0) {
+			(void) fprintf(stderr,
+			    gettext("umount: unable to set PFEXEC flag: %s\n"),
+			    strerror(errno));
+			/* Keep going as best we can */
 		}
 
 		/* Try to exec the fstype dependent umount. */
@@ -569,8 +572,8 @@ getmntlast(mountent_t *mlist, char *specp, char *mntp)
 int
 parumount(char **mntlist, int count)
 {
-	int 		maxfd = OPEN_MAX;
-	struct rlimit 	rl;
+	int		maxfd = OPEN_MAX;
+	struct rlimit	rl;
 	mountent_t	**mntarray, **ml, *mp;
 
 	/*
@@ -658,8 +661,8 @@ parumount(char **mntlist, int count)
 mountent_t **
 make_mntarray(char **mntlist, int count)
 {
-	mountent_t 	*mp, **mpp;
-	int 		ndx;
+	mountent_t	*mp, **mpp;
+	int		ndx;
 	char		*cp;
 
 	if (count > 0)
@@ -818,23 +821,6 @@ do_umounts(mountent_t **mntarray)
 		while (nrun >= maxrun && (dowait() != -1))	/* throttle */
 			;
 
-#ifdef CACHEFS_BUG
-		/*
-		 * If this is the back file system, then let cachefs/umount
-		 * unmount it.
-		 */
-		if (strstr(mp->ment.mnt_mountp, BACKMNT_NAME))
-			continue;
-
-
-		if (mp->ment.mnt_fstype &&
-		    (strcmp(mp->ment.mnt_fstype, "cachefs") == 0)) {
-			while (cachefs_running && (dowait() != -1))
-					;
-			cachefs_running = 1;
-		}
-#endif
-
 		if ((pid = fork()) == -1) {
 			perror("fork");
 			cleanup(-1);
@@ -894,7 +880,7 @@ int
 dowait(void)
 {
 	int		wstat, child, ret;
-	mountent_t 	*mp, *prevp;
+	mountent_t	*mp, *prevp;
 
 	if ((child = wait(&wstat)) == -1)
 		return (-1);
@@ -943,12 +929,6 @@ dowait(void)
 	if (mp->ment.mnt_fstype &&
 	    (strcmp(mp->ment.mnt_fstype, MNTTYPE_LOFS) == 0))
 		lofscnt--;
-
-#ifdef CACHEFS_BUG
-	if (mp->ment.mnt_fstype &&
-	    (strcmp(mp->ment.mnt_fstype, "cachefs") == 0))
-		cachefs_running = 0;
-#endif
 
 	return (ret);
 }

@@ -25,6 +25,11 @@
  */
 
 /*
+ * Copyright 2019 Joyent, Inc.
+ * Copyright 2024 Oxide Computer Company
+ */
+
+/*
  * The Secure SunOS audit reduction tool - auditreduce.
  * Document SM0071 is the primary source of information on auditreduce.
  *
@@ -226,8 +231,7 @@ mfork(audit_pcb_t *pcb, int nsp, int lo, int hi)
 		/*
 		 * Allocate the nodes below us in the process tree.
 		 */
-		pcb->pcb_below = (audit_pcb_t *)
-			a_calloc(tofork, sizeof (*pcb));
+		pcb->pcb_below = (audit_pcb_t *)a_calloc(tofork, sizeof (*pcb));
 		nnsp = nsp / tofork;	/* # of pcbs per forked process */
 		nrem = nsp % tofork;	/* remainder to spread around */
 		/*
@@ -240,18 +244,20 @@ mfork(audit_pcb_t *pcb, int nsp, int lo, int hi)
 			pcbn->pcb_time = -1;
 			if (pipe(fildes)) {
 				perror(gettext(
-					"auditreduce: couldn't get a pipe"));
+				    "auditreduce: couldn't get a pipe"));
 				return (-1);
 			}
 			/*
 			 * Convert descriptors to streams.
 			 */
 			if ((pcbn->pcb_fpr = fdopen(fildes[0], "r")) == NULL) {
-	perror(gettext("auditreduce: couldn't get read stream for pipe"));
+				perror(gettext("auditreduce: couldn't get read "
+				    "stream for pipe"));
 				return (-1);
 			}
 			if ((pcbn->pcb_fpw = fdopen(fildes[1], "w")) == NULL) {
-	perror(gettext("auditreduce: couldn't get write stream for pipe"));
+				perror(gettext("auditreduce: couldn't get "
+				    "write stream for pipe"));
 				return (-1);
 			}
 			if ((procno = fork()) == -1) {
@@ -400,8 +406,10 @@ c_close(audit_pcb_t *pcb, int	i)
 	for (j = 0; j <= i; j++) {
 		pcbt = &pcb->pcb_below[j];
 		if (fclose(pcbt->pcb_fpr) == EOF) {
-			if (!f_quiet)
-		perror(gettext("auditreduce: initial close on pipe failed"));
+			if (!f_quiet) {
+				perror(gettext("auditreduce: initial close "
+				    "on pipe failed"));
+			}
 		}
 		/*
 		 * Free the buffer allocated to hold incoming records.
@@ -426,8 +434,10 @@ static void
 p_close(audit_pcb_t *pcbn)
 {
 	if (fclose(pcbn->pcb_fpw) == EOF) {
-		if (!f_quiet)
-		perror(gettext("auditreduce: close for write pipe failed"));
+		if (!f_quiet) {
+			perror(gettext("auditreduce: close for write "
+			    "pipe failed"));
+		}
 	}
 }
 
@@ -447,13 +457,15 @@ audit_stats(void)
 {
 	struct rlimit rl;
 
-	if (getrlimit(RLIMIT_NOFILE, &rl) != -1)
+	if (getrlimit(RLIMIT_NOFILE, &rl) != -1) {
 		(void) fprintf(stderr,
 		    gettext("%s The system allows %d files per process.\n"),
 		    ar, rl.rlim_cur);
+	}
 	(void) fprintf(stderr, gettext(
-"%s There were %d file(s) %d file group(s) %d process(es) %d layer(s).\n"),
-		ar, filenum, pcbnum, total_procs, total_layers);
+	    "%s There were %d file(s) %d file group(s) %d process(es) "
+	    "%d layer(s).\n"),
+	    ar, filenum, pcbnum, total_procs, total_layers);
 }
 
 
@@ -614,8 +626,8 @@ delete_infiles(void)
 				if (unlink(fcb->fcb_file)) {
 					if (f_verbose) {
 						(void) sprintf(errbuf, gettext(
-						"%s delete on %s failed"),
-						ar, fcb->fcb_file);
+						    "%s delete on %s failed"),
+						    ar, fcb->fcb_file);
 					}
 					perror(errbuf);
 				}
@@ -643,16 +655,17 @@ rm_outfile(void)
 	if (f_outfile) {
 		if (unlink(f_outtemp) == -1) {
 			(void) sprintf(errbuf,
-				gettext("%s delete on %s failed"),
-				ar, f_outtemp);
+			    gettext("%s delete on %s failed"),
+			    ar, f_outtemp);
 			perror(errbuf);
 		}
 	}
 #else
 	(void) fprintf(stderr,
-gettext("%s Warning: Incomplete audit file may have been generated - %s\n"),
-		ar,
-		(f_outfile == NULL) ? gettext("standard output") : f_outfile);
+	    gettext(
+	    "%s Warning: Incomplete audit file may have been generated - %s\n"),
+	    ar,
+	    (f_outfile == NULL) ? gettext("standard output") : f_outfile);
 #endif
 }
 
@@ -726,16 +739,16 @@ write_file_token(time_t when)
 	    adr_count(&adr)) {
 		if (when == f_start) {
 			(void) sprintf(errbuf,
-				gettext("%s error writing header to %s. "),
-				ar,
-				f_outfile ? f_outfile :
-					gettext("standard output"));
+			    gettext("%s error writing header to %s. "),
+			    ar,
+			    f_outfile ? f_outfile :
+			    gettext("standard output"));
 		} else {
 			(void) sprintf(errbuf,
-				gettext("%s error writing trailer to %s. "),
-				ar,
-				f_outfile ? f_outfile :
-					gettext("standard output"));
+			    gettext("%s error writing trailer to %s. "),
+			    ar,
+			    f_outfile ? f_outfile :
+			    gettext("standard output"));
 		}
 		perror(errbuf);
 		return (-1);
@@ -772,7 +785,7 @@ write_trailer(void)
 static int
 rename_outfile(void)
 {
-	char	f_newfile[MAXFILELEN];
+	static char f_newfile[MAXFILELEN];
 	char	buf1[15], buf2[15];
 	char	*f_file, *f_nfile, *f_time, *f_name;
 
@@ -804,7 +817,7 @@ rename_outfile(void)
 
 #if AUDIT_FILE
 		(void) fprintf(stderr, "rename_outfile: <%s> --> <%s>\n",
-			f_outfile, f_newfile);
+		    f_outfile, f_newfile);
 #endif
 
 #if AUDIT_RENAME
@@ -1031,10 +1044,11 @@ chld_handler(int sig)
 					    gettext("core dumped\n"));
 			}
 
-			if (WHIBYTE(status) != 0 && WLOBYTE(status) == 0)
-				(void) fprintf(stderr, gettext(
-					"return code %d\n"),
-					WHIBYTE(status));
+			if (WHIBYTE(status) != 0 && WLOBYTE(status) == 0) {
+				(void) fprintf(stderr,
+				    gettext("return code %d\n"),
+				    WHIBYTE(status));
+			}
 
 			/*
 			 * Get rid of outfile - it is suspect.

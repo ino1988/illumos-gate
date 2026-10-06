@@ -380,8 +380,7 @@ nwam_alloc_object_list(void *list)
 void
 nwam_free_object_list(void *list)
 {
-	if (list != NULL)
-		nvlist_free(list);
+	nvlist_free(list);
 }
 
 nwam_error_t
@@ -526,9 +525,6 @@ nwam_get_prop_value(void *list, const char *name, nwam_value_t *valuep)
 	*valuep = NULL;
 
 	if ((nverr = nvlist_lookup_nvpair(list, name, &prop)) != 0) {
-		/* convert EINVAL to NOT_FOUND */
-		if (nverr == EINVAL)
-			return (NWAM_ENTITY_NOT_FOUND);
 		return (nwam_errno_to_nwam_error(nverr));
 	}
 

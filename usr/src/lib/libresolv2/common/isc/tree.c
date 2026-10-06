@@ -1,7 +1,3 @@
-#ifndef LINT
-static const char rcsid[] = "$Id: tree.c,v 1.4 2005/04/27 04:56:39 sra Exp $";
-#endif
-
 /*%
  * tree - balanced binary tree library
  *
@@ -99,7 +95,7 @@ tree_init(tree **ppr_tree) {
 	*ppr_tree = NULL;
 	RETV
 }
-	
+
 tree_t
 tree_srch(tree **ppr_tree, int (*pfi_compare)(tree_t, tree_t), tree_t	p_user) {
 	ENTER("tree_srch")

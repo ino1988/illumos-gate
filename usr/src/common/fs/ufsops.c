@@ -22,6 +22,9 @@
 /*
  * Copyright 2008 Sun Microsystems, Inc.  All rights reserved.
  * Use is subject to license terms.
+ * Copyright (c) 2016 by Delphix. All rights reserved.
+ * Copyright 2022 Oxide Computer Company
+ * Copyright 2025 MNX Cloud, Inc.
  */
 
 #include <sys/types.h>
@@ -33,12 +36,9 @@
 #include <sys/sysmacros.h>
 #include <sys/bootvfs.h>
 #include <sys/filep.h>
-
-#ifdef	_BOOT
-#include "../common/util.h"
-#else
+#include <sys/kmem.h>
+#include <sys/kobj.h>
 #include <sys/sunddi.h>
-#endif
 
 extern void *bkmem_alloc(size_t);
 extern void bkmem_free(void *, size_t);
@@ -47,16 +47,7 @@ extern void cf_close(fileid_t *);
 extern void cf_seek(fileid_t *, off_t, int);
 extern int cf_read(fileid_t *, caddr_t, size_t);
 
-int bootrd_debug;
-#ifdef _BOOT
-#define	dprintf	if (bootrd_debug) printf
-#else
-#define	printf	kobj_printf
-#define	dprintf	if (bootrd_debug) kobj_printf
-
-/* PRINTLIKE */
-extern void kobj_printf(char *, ...);
-#endif
+extern int bootrd_debug;
 
 /*
  * This fd is used when talking to the device file itself.
@@ -68,15 +59,15 @@ static fileid_t *head;
 devid_t		*ufs_devp;
 
 struct dirinfo {
-	int 	loc;
+	int	loc;
 	fileid_t *fi;
 };
 
 static	int	bufs_close(int);
 static	void	bufs_closeall(int);
-static 	ino_t	find(fileid_t *filep, char *path);
+static	ino_t	find(fileid_t *filep, char *path);
 static	ino_t	dlook(fileid_t *filep, char *path);
-static 	daddr32_t	sbmap(fileid_t *filep, daddr32_t bn);
+static	daddr32_t	sbmap(fileid_t *filep, daddr32_t bn);
 static  struct direct *readdir(struct dirinfo *dstuff);
 static	void set_cache(int, void *, uint_t);
 static	void *get_cache(int);
@@ -150,12 +141,14 @@ find(fileid_t *filep, char *path)
 	int len, r;
 	devid_t	*devp;
 
+	inode = 0;
 	if (path == NULL || *path == '\0') {
-		printf("null path\n");
-		return ((ino_t)0);
+		kobj_printf("null path\n");
+		return (inode);
 	}
 
-	dprintf("openi: %s\n", path);
+	if (bootrd_debug)
+		kobj_printf("openi: %s\n", path);
 
 	bzero(lpath, sizeof (lpath));
 	bcopy(path, lpath, strlen(path));
@@ -289,7 +282,8 @@ dlook(fileid_t *filep, char *path)
 	if (path == NULL || *path == '\0')
 		return (0);
 
-	dprintf("dlook: %s\n", path);
+	if (bootrd_debug)
+		kobj_printf("dlook: %s\n", path);
 
 	if ((ip->i_smode & IFMT) != IFDIR) {
 		return (0);
@@ -307,8 +301,8 @@ dlook(fileid_t *filep, char *path)
 			return (dp->d_ino);
 		}
 		/* Allow "*" to print all names at that level, w/out match */
-		if (strcmp(path, "*") == 0)
-			dprintf("%s\n", dp->d_name);
+		if (strcmp(path, "*") == 0 && bootrd_debug)
+			kobj_printf("%s\n", dp->d_name);
 	}
 	return (0);
 }
@@ -332,7 +326,8 @@ readdir(struct dirinfo *dstuff)
 			return (NULL);
 		}
 		off = blkoff(&devp->un_fs.di_fs, dstuff->loc);
-		dprintf("readdir: off = 0x%x\n", off);
+		if (bootrd_debug)
+			kobj_printf("readdir: off = 0x%x\n", off);
 		if (off == 0) {
 			lbn = lblkno(&devp->un_fs.di_fs, dstuff->loc);
 			d = sbmap(filep, lbn);
@@ -352,7 +347,8 @@ readdir(struct dirinfo *dstuff)
 		dstuff->loc += dp->d_reclen;
 		if (dp->d_ino == 0)
 			continue;
-		dprintf("readdir: name = %s\n", dp->d_name);
+		if (bootrd_debug)
+			kobj_printf("readdir: name = %s\n", dp->d_name);
 		return (dp);
 	}
 }
@@ -370,7 +366,9 @@ getblock(fileid_t *filep, caddr_t buf, int count, int *rcount)
 	daddr32_t lbn;
 	devid_t	*devp;
 
-	dprintf("getblock: buf 0x%p, count 0x%x\n", (void *)buf, count);
+	if (bootrd_debug)
+		kobj_printf("getblock: buf 0x%p, count 0x%x\n",
+		    (void *)buf, count);
 
 	devp = filep->fi_devp;
 	p = filep->fi_memp;
@@ -379,7 +377,7 @@ getblock(fileid_t *filep, caddr_t buf, int count, int *rcount)
 		/* find the amt left to be read in the file */
 		diff = filep->fi_inode->i_size - filep->fi_offset;
 		if (diff <= 0) {
-			printf("Short read\n");
+			kobj_printf("Short read\n");
 			return (-1);
 		}
 
@@ -435,7 +433,8 @@ getblock_noopt(fileid_t *filep)
 	daddr32_t lbn;
 	devid_t	*devp;
 
-	dprintf("getblock_noopt: start\n");
+	if (bootrd_debug)
+		kobj_printf("getblock_noopt: start\n");
 
 	devp = filep->fi_devp;
 	p = filep->fi_memp;
@@ -444,7 +443,7 @@ getblock_noopt(fileid_t *filep)
 		/* find the amt left to be read in the file */
 		diff = filep->fi_inode->i_size - filep->fi_offset;
 		if (diff <= 0) {
-			printf("Short read\n");
+			kobj_printf("Short read\n");
 			return (-1);
 		}
 
@@ -508,8 +507,11 @@ bufs_read(int fd, caddr_t buf, size_t count)
 	n = buf;
 	while (i > 0) {
 		if (filep->fi_flags & FI_COMPRESSED) {
-			if ((j = cf_read(filep, buf, count)) < 0)
+			int rval;
+
+			if ((rval = cf_read(filep, buf, count)) < 0)
 				return (0); /* encountered an error */
+			j = (size_t)rval;
 			if (j < i)
 				i = j; /* short read, must have hit EOF */
 		} else {
@@ -570,17 +572,20 @@ bufs_mountroot(char *str)
 	head->fi_offset = 0;
 
 	if (diskread(head)) {
-		printf("failed to read superblock\n");
+		kobj_printf("failed to read superblock\n");
 		(void) bufs_closeall(1);
 		return (-1);
 	}
 
 	if (ufs_devp->un_fs.di_fs.fs_magic != FS_MAGIC) {
-		dprintf("fs magic = 0x%x\n", ufs_devp->un_fs.di_fs.fs_magic);
+		if (bootrd_debug)
+			kobj_printf("fs magic = 0x%x\n",
+			    ufs_devp->un_fs.di_fs.fs_magic);
 		(void) bufs_closeall(1);
 		return (-1);
 	}
-	dprintf("mountroot succeeded\n");
+	if (bootrd_debug)
+		kobj_printf("mountroot succeeded\n");
 	return (0);
 }
 
@@ -606,15 +611,15 @@ bufs_unmountroot(void)
  *	to the file itself.
  */
 
-/*ARGSUSED*/
 static int
-bufs_open(char *filename, int flags)
+bufs_open(char *filename, int flags __unused)
 {
 	fileid_t	*filep;
 	ino_t	inode;
 	static int	filedes = 1;
 
-	dprintf("open: %s\n", filename);
+	if (bootrd_debug)
+		kobj_printf("open: %s\n", filename);
 
 	/* build and link a new file descriptor */
 	filep = (fileid_t *)bkmem_alloc(sizeof (fileid_t));
@@ -633,13 +638,14 @@ bufs_open(char *filename, int flags)
 	filep->fi_flags = 0;
 
 	inode = find(filep, (char *)filename);
-	if (inode == (ino_t)0) {
-		dprintf("open: cannot find %s\n", filename);
+	if (inode == 0) {
+		if (bootrd_debug)
+			kobj_printf("open: cannot find %s\n", filename);
 		(void) bufs_close(filep->fi_filedes);
 		return (-1);
 	}
 	if (openi(filep, inode)) {
-		printf("open: cannot open %s\n", filename);
+		kobj_printf("open: cannot open %s\n", filename);
 		(void) bufs_close(filep->fi_filedes);
 		return (-1);
 	}
@@ -661,7 +667,7 @@ bufs_lseek(int fd, off_t addr, int whence)
 {
 	fileid_t *filep;
 
-	/* Make sure user knows what file he is talking to */
+	/* Make sure user knows what file they are talking to */
 	if (!(filep = find_fp(fd)))
 		return (-1);
 
@@ -677,7 +683,8 @@ bufs_lseek(int fd, off_t addr, int whence)
 			break;
 		default:
 		case SEEK_END:
-			printf("lseek(): invalid whence value %d\n", whence);
+			kobj_printf("lseek(): invalid whence value %d\n",
+			    whence);
 			break;
 		}
 		filep->fi_blocknum = addr / DEV_BSIZE;
@@ -738,7 +745,7 @@ bufs_close(int fd)
 {
 	fileid_t *filep;
 
-	/* Make sure user knows what file he is talking to */
+	/* Make sure user knows what file they are talking to */
 	if (!(filep = find_fp(fd)))
 		return (-1);
 
@@ -756,30 +763,41 @@ bufs_close(int fd)
 		cf_close(filep);
 		bkmem_free((char *)filep, sizeof (fileid_t));
 
+		/*
+		 * Some files are opened and closed in early boot, for example
+		 * when doing a microcode update on the boot CPU. In that case
+		 * the inode cache will contain memory allocated from boot
+		 * pages, which will be invalid once kmem is initialised.
+		 * Until kmem is ready, clear the inode cache when closing a
+		 * file.
+		 */
+		if (kmem_ready == 0)
+			free_cache();
+
 		return (0);
 	} else {
 		/* Big problem */
-		printf("\nFile descrip %d not allocated!", fd);
+		kobj_printf("\nFile descrip %d not allocated!", fd);
 		return (-1);
 	}
 }
 
-/*ARGSUSED*/
 static void
-bufs_closeall(int flag)
+bufs_closeall(int flag __unused)
 {
 	fileid_t *filep = head;
 
 	while ((filep = filep->fi_forw) != head)
 		if (filep->fi_taken)
 			if (bufs_close(filep->fi_filedes))
-				printf("Filesystem may be inconsistent.\n");
+				kobj_printf(
+				    "Filesystem may be inconsistent.\n");
 
 	ufs_devp->di_taken = 0;
 	bkmem_free((char *)ufs_devp, sizeof (devid_t));
 	bkmem_free((char *)head, sizeof (fileid_t));
-	ufs_devp = (devid_t *)NULL;
-	head = (fileid_t *)NULL;
+	ufs_devp = NULL;
+	head = NULL;
 	free_cache();
 }
 

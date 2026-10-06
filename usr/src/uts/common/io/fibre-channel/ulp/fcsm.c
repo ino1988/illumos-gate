@@ -64,8 +64,7 @@ static clock_t		fcsm_offline_ticks;
 
 
 #ifdef DEBUG
-uint32_t		fcsm_debug = (SMDL_TRACE | SMDL_IO |
-    SMDL_ERR | SMDL_INFO);
+uint32_t		fcsm_debug = 0;
 #endif
 
 
@@ -431,7 +430,7 @@ fcsm_attach(dev_info_t *dip, ddi_attach_cmd_t cmd)
 
 		/* Create a minor node */
 		if (ddi_create_minor_node(fcsm_dip, "fcsm", S_IFCHR,
-		    NULL, DDI_PSEUDO, 0) == DDI_SUCCESS) {
+		    0, DDI_PSEUDO, 0) == DDI_SUCCESS) {
 			/* Announce presence of the device */
 			mutex_exit(&fcsm_global_mutex);
 			ddi_report_dev(dip);
@@ -2095,8 +2094,8 @@ fcsm_alloc_cmd(fcsm_t *fcsm, uint32_t cmd_len, uint32_t resp_len, int sleep)
 		if (rval != DDI_SUCCESS) {
 			(void) fc_ulp_uninit_packet(
 			    (opaque_t)pinfo->port_handle, pkt);
-			kmem_cache_free(fcsm->sm_cmd_cache, (void *)cmd);
 			fcsm_free_cmd_dma(cmd);
+			kmem_cache_free(fcsm->sm_cmd_cache, (void *)cmd);
 			return (NULL);
 		}
 
@@ -2105,8 +2104,8 @@ fcsm_alloc_cmd(fcsm_t *fcsm, uint32_t cmd_len, uint32_t resp_len, int sleep)
 		if (real_len < cmd_len) {
 			(void) fc_ulp_uninit_packet(
 			    (opaque_t)pinfo->port_handle, pkt);
-			kmem_cache_free(fcsm->sm_cmd_cache, (void *)cmd);
 			fcsm_free_cmd_dma(cmd);
+			kmem_cache_free(fcsm->sm_cmd_cache, (void *)cmd);
 			return (NULL);
 		}
 
@@ -2117,8 +2116,8 @@ fcsm_alloc_cmd(fcsm_t *fcsm, uint32_t cmd_len, uint32_t resp_len, int sleep)
 		if (rval != DDI_DMA_MAPPED) {
 			(void) fc_ulp_uninit_packet(
 			    (opaque_t)pinfo->port_handle, pkt);
-			kmem_cache_free(fcsm->sm_cmd_cache, (void *)cmd);
 			fcsm_free_cmd_dma(cmd);
+			kmem_cache_free(fcsm->sm_cmd_cache, (void *)cmd);
 			return (NULL);
 		}
 
@@ -2128,8 +2127,8 @@ fcsm_alloc_cmd(fcsm_t *fcsm, uint32_t cmd_len, uint32_t resp_len, int sleep)
 		    pinfo->port_cmd_dma_attr->dma_attr_sgllen) {
 			(void) fc_ulp_uninit_packet(
 			    (opaque_t)pinfo->port_handle, pkt);
-			kmem_cache_free(fcsm->sm_cmd_cache, (void *)cmd);
 			fcsm_free_cmd_dma(cmd);
+			kmem_cache_free(fcsm->sm_cmd_cache, (void *)cmd);
 			return (NULL);
 		}
 
@@ -2142,8 +2141,8 @@ fcsm_alloc_cmd(fcsm_t *fcsm, uint32_t cmd_len, uint32_t resp_len, int sleep)
 		if (cp == NULL) {
 			(void) fc_ulp_uninit_packet(
 			    (opaque_t)pinfo->port_handle, pkt);
-			kmem_cache_free(fcsm->sm_cmd_cache, (void *)cmd);
 			fcsm_free_cmd_dma(cmd);
+			kmem_cache_free(fcsm->sm_cmd_cache, (void *)cmd);
 			return (NULL);
 		}
 
@@ -2168,8 +2167,8 @@ fcsm_alloc_cmd(fcsm_t *fcsm, uint32_t cmd_len, uint32_t resp_len, int sleep)
 		if (rval != DDI_SUCCESS) {
 			(void) fc_ulp_uninit_packet(
 			    (opaque_t)pinfo->port_handle, pkt);
-			kmem_cache_free(fcsm->sm_cmd_cache, (void *)cmd);
 			fcsm_free_cmd_dma(cmd);
+			kmem_cache_free(fcsm->sm_cmd_cache, (void *)cmd);
 			return (NULL);
 		}
 
@@ -2178,8 +2177,8 @@ fcsm_alloc_cmd(fcsm_t *fcsm, uint32_t cmd_len, uint32_t resp_len, int sleep)
 		if (real_len < resp_len) {
 			(void) fc_ulp_uninit_packet(
 			    (opaque_t)pinfo->port_handle, pkt);
-			kmem_cache_free(fcsm->sm_cmd_cache, (void *)cmd);
 			fcsm_free_cmd_dma(cmd);
+			kmem_cache_free(fcsm->sm_cmd_cache, (void *)cmd);
 			return (NULL);
 		}
 
@@ -2190,8 +2189,8 @@ fcsm_alloc_cmd(fcsm_t *fcsm, uint32_t cmd_len, uint32_t resp_len, int sleep)
 		if (rval != DDI_DMA_MAPPED) {
 			(void) fc_ulp_uninit_packet(
 			    (opaque_t)pinfo->port_handle, pkt);
-			kmem_cache_free(fcsm->sm_cmd_cache, (void *)cmd);
 			fcsm_free_cmd_dma(cmd);
+			kmem_cache_free(fcsm->sm_cmd_cache, (void *)cmd);
 			return (NULL);
 		}
 
@@ -2201,8 +2200,8 @@ fcsm_alloc_cmd(fcsm_t *fcsm, uint32_t cmd_len, uint32_t resp_len, int sleep)
 		    pinfo->port_resp_dma_attr->dma_attr_sgllen) {
 			(void) fc_ulp_uninit_packet(
 			    (opaque_t)pinfo->port_handle, pkt);
-			kmem_cache_free(fcsm->sm_cmd_cache, (void *)cmd);
 			fcsm_free_cmd_dma(cmd);
+			kmem_cache_free(fcsm->sm_cmd_cache, (void *)cmd);
 			return (NULL);
 		}
 
@@ -2215,8 +2214,8 @@ fcsm_alloc_cmd(fcsm_t *fcsm, uint32_t cmd_len, uint32_t resp_len, int sleep)
 		if (cp == NULL) {
 			(void) fc_ulp_uninit_packet(
 			    (opaque_t)pinfo->port_handle, pkt);
-			kmem_cache_free(fcsm->sm_cmd_cache, (void *)cmd);
 			fcsm_free_cmd_dma(cmd);
+			kmem_cache_free(fcsm->sm_cmd_cache, (void *)cmd);
 			return (NULL);
 		}
 

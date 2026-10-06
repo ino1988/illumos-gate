@@ -21,6 +21,7 @@
 
 /*
  * Copyright (c) 2012 Gary Mills
+ * Copyright 2020 Joyent, Inc.
  *
  * Copyright 2007 Sun Microsystems, Inc.  All rights reserved.
  * Use is subject to license terms.
@@ -93,12 +94,12 @@ dboot_puts(char *s)
 }
 
 static void
-dboot_putnum(uint64_t x, uint_t is_signed, uint8_t base)
+dboot_putnum(uintmax_t x, boolean_t is_signed, uint8_t base)
 {
 	char buffer[64];	/* digits in reverse order */
 	int i;
 
-	if (is_signed && (int64_t)x < 0) {
+	if (is_signed && (intmax_t)x < 0) {
 		bcons_putchar('-');
 		x = -x;
 	}
@@ -114,16 +115,15 @@ dboot_putnum(uint64_t x, uint_t is_signed, uint8_t base)
 }
 
 /*
- * very primitive printf - only does %s, %d, %x, %lx, or %%
+ * Very primitive printf - only does a subset of the standard format characters.
  */
 static void
 do_dboot_printf(char *fmt, va_list args)
 {
 	char *s;
-	uint64_t x;
+	uintmax_t x;
 	uint8_t base;
 	uint8_t size;
-	uint_t is_signed = 1;
 
 	if (fmt == NULL) {
 		dboot_puts("dboot_printf(): 1st arg is NULL\n");
@@ -149,6 +149,10 @@ again:
 			bcons_putchar(x);
 			break;
 
+		case 'j':
+			size = sizeof (uintmax_t);
+			goto again;
+
 		case 's':
 			s = va_arg(args, char *);
 			if (s == NULL)
@@ -159,7 +163,7 @@ again:
 
 		case 'p':
 			x = va_arg(args, ulong_t);
-			dboot_putnum(x, !is_signed, 16);
+			dboot_putnum(x, B_FALSE, 16);
 			break;
 
 		case 'l':
@@ -176,8 +180,12 @@ again:
 				x = va_arg(args, long);
 			else
 				x = va_arg(args, long long);
-			dboot_putnum(x, is_signed, 10);
+			dboot_putnum(x, B_TRUE, 10);
 			break;
+
+		case 'u':
+			base = 10;
+			goto unsigned_num;
 
 		case 'b':
 			base = 2;
@@ -192,12 +200,16 @@ again:
 unsigned_num:
 			if (size == 0)
 				x = va_arg(args, uint_t);
-			else if (size == sizeof (long))
+			else if (size == sizeof (ulong_t))
 				x = va_arg(args, ulong_t);
 			else
 				x = va_arg(args, unsigned long long);
-			dboot_putnum(x, !is_signed, base);
+			dboot_putnum(x, B_FALSE, base);
 			break;
+
+		case 'z':
+			size = sizeof (size_t);
+			goto again;
 
 		default:
 			dboot_puts("dboot_printf(): unknown % escape\n");

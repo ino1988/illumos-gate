@@ -22,6 +22,7 @@
 /*
  * Copyright 2013 Garrett D'Amore <garrett@damore.org>
  * Copyright (c) 1998, 2010, Oracle and/or its affiliates. All rights reserved.
+ * Copyright 2026 Oxide Computer Company
  */
 
 #include <unistd.h>
@@ -770,10 +771,10 @@ update_sacadm_db(void)
 }
 
 /*
- * Determine which port monitor entries already exist by invoking pmadm(1m)
+ * Determine which port monitor entries already exist by invoking pmadm(8)
  * to list all configured 'ttymon' port monitor entries.
- * Do not explicitly report errors from executing pmadm(1m) or sacadm(1m)
- * commands to remain compatible with the ports(1m) implementation.
+ * Do not explicitly report errors from executing pmadm(8) or sacadm(8)
+ * commands to remain compatible with the ports(8) implementation.
  */
 static int
 load_ttymondb(void)
@@ -930,7 +931,7 @@ delete_port_monitor(int port)
 		return;
 	}
 
-	/* some other sacadm(1m) error, log and return */
+	/* some other sacadm(8) error, log and return */
 	if (sac_exitval != 0) {
 		devfsadm_print(VERBOSE_MID, "sacadm: (%s) %s\n",
 		    SAC_EID(sac_exitval), SAC_EMSG(sac_exitval));
@@ -940,7 +941,7 @@ delete_port_monitor(int port)
 	if (devfsadm_noupdate() == DEVFSADM_FALSE) {
 		(void) sprintf(cmdline,
 		    "/usr/sbin/sacadm -r -p ttymon%d", PM_NUM(port));
-		if (sac_exitval = execute(cmdline)) {
+		if ((sac_exitval = execute(cmdline)) != 0) {
 			devfsadm_print(VERBOSE_MID,
 			    "failed to remove port monitor ttymon%d\n",
 			    PM_NUM(port));
@@ -973,7 +974,7 @@ add_port_monitor(int port)
 		    " -V`\" -y \"Ports %d-%d\"", PM_NUM(port), PM_SLOT(port),
 		    PM_SLOT(port) + (PM_GRPSZ - 1));
 		if (devfsadm_noupdate() == DEVFSADM_FALSE) {
-			if (sac_exitval = execute(cmdline)) {
+			if ((sac_exitval = execute(cmdline)) != 0) {
 				devfsadm_print(VERBOSE_MID,
 				    "failed to add port monitor ttymon%d\n",
 				    PM_NUM(port));

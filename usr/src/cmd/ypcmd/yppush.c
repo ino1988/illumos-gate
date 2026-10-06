@@ -28,8 +28,9 @@
  * 4.3 BSD under license from the Regents of the University of
  * California.
  */
-
-#pragma ident	"%Z%%M%	%I%	%E% SMI"
+/*
+ * Copyright (c) 2016 by Delphix. All rights reserved.
+ */
 
 #define	_SVID_GETTOD
 #include	<sys/time.h>
@@ -993,7 +994,7 @@ get_xfr_response(SVCXPRT *transp)
  * This sends a message to a single ypserv process.  The return value is
  * a state value.  If the RPC call fails because of a version
  * mismatch, we'll assume that we're talking to a version 1 ypserv process,
- * and will send him an old "YPPROC_GET" request, as was defined in the
+ * and will send it an old "YPPROC_GET" request, as was defined in the
  * earlier version of yp_prot.h
  */
 static unsigned short

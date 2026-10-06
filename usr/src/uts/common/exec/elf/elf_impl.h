@@ -22,11 +22,12 @@
  * Copyright 2006 Sun Microsystems, Inc.  All rights reserved.
  * Use is subject to license terms.
  */
+/*
+ * Copyright 2019 Joyent, Inc.
+ */
 
 #ifndef _ELF_ELF_IMPL_H
 #define	_ELF_ELF_IMPL_H
-
-#pragma ident	"%Z%%M%	%I%	%E% SMI"
 
 #ifdef	__cplusplus
 extern "C" {
@@ -71,6 +72,17 @@ typedef struct {
 	char	name[8];
 } Note;
 
+typedef struct {
+	vnode_t		*ecc_vp;
+	proc_t		*ecc_p;
+	cred_t		*ecc_credp;
+	rlim64_t	ecc_rlimit;
+	core_content_t	ecc_content;
+	u_offset_t	ecc_doffset;
+	void		*ecc_buf;
+	size_t		ecc_bufsz;
+} elf_core_ctx_t;
+
 #ifdef	_ELF32_COMPAT
 /*
  * These are defined only for the 32-bit compatibility
@@ -79,11 +91,10 @@ typedef struct {
 #define	elfexec	elf32exec
 #define	elfnote	elf32note
 #define	elfcore	elf32core
+#define	elfreadhdr		elf32readhdr
 #define	mapexec_brand		mapexec32_brand
 #define	setup_note_header	setup_note_header32
 #define	write_elfnotes		write_elfnotes32
-#define	setup_old_note_header	setup_old_note_header32
-#define	write_old_elfnotes	write_old_elfnotes32
 
 #if defined(__sparc)
 #define	gwindows_t	gwindows32_t
@@ -108,18 +119,12 @@ typedef struct {
 #endif
 #define	prfpregset_t	prfpregset32_t
 
-#define	oprgetstatus	oprgetstatus32
-#define	oprgetpsinfo	oprgetpsinfo32
 #define	prgetprfpregs	prgetprfpregs32
 
 #endif	/*	_ELF32_COMPAT	*/
 
 extern int elfnote(vnode_t *, offset_t *, int, int, void *, rlim64_t, cred_t *);
-extern void setup_old_note_header(Phdr *, proc_t *);
 extern void setup_note_header(Phdr *, proc_t *);
-
-extern int write_old_elfnotes(proc_t *, int, vnode_t *, offset_t,
-    rlim64_t, cred_t *);
 
 extern int write_elfnotes(proc_t *, int, vnode_t *, offset_t,
     rlim64_t, cred_t *, core_content_t);

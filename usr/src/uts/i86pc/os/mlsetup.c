@@ -23,6 +23,8 @@
  *
  * Copyright (c) 1993, 2010, Oracle and/or its affiliates. All rights reserved.
  * Copyright (c) 2011 by Delphix. All rights reserved.
+ * Copyright 2019 Joyent, Inc.
+ * Copyright 2024 Oxide Computer Company
  */
 /*
  * Copyright (c) 2010, Intel Corporation.
@@ -60,6 +62,11 @@
 #include <sys/archsystm.h>
 #include <sys/promif.h>
 #include <sys/pci_cfgspace.h>
+#include <sys/apic.h>
+#include <sys/apic_common.h>
+#include <sys/bootvfs.h>
+#include <sys/tsc.h>
+#include <sys/smt.h>
 #ifdef __xpv
 #include <sys/hypervisor.h>
 #else
@@ -75,6 +82,8 @@ extern uint32_t cpuid_feature_ecx_include;
 extern uint32_t cpuid_feature_ecx_exclude;
 extern uint32_t cpuid_feature_edx_include;
 extern uint32_t cpuid_feature_edx_exclude;
+
+nmi_action_t nmi_action = NMI_ACTION_UNSET;
 
 /*
  * Set console mode
@@ -100,6 +109,7 @@ void
 mlsetup(struct regs *rp)
 {
 	u_longlong_t prop_value;
+	char prop_str[BP_MAX_STRLEN];
 	extern struct classfuncs sys_classfuncs;
 	extern disp_t cpu0_disp;
 	extern char t0stack[];
@@ -145,131 +155,55 @@ mlsetup(struct regs *rp)
 	else
 		cpuid_feature_edx_exclude = (uint32_t)prop_value;
 
+#if !defined(__xpv)
+	if (bootprop_getstr("nmi", prop_str, sizeof (prop_str)) == 0) {
+		if (strcmp(prop_str, "ignore") == 0) {
+			nmi_action = NMI_ACTION_IGNORE;
+		} else if (strcmp(prop_str, "panic") == 0) {
+			nmi_action = NMI_ACTION_PANIC;
+		} else if (strcmp(prop_str, "kmdb") == 0) {
+			nmi_action = NMI_ACTION_KMDB;
+		} else {
+			prom_printf("unix: ignoring unknown nmi=%s\n",
+			    prop_str);
+		}
+	}
+
+	/*
+	 * Check to see if KPTI has been explicitly enabled or disabled.
+	 * We have to check this before init_desctbls().
+	 */
+	if (bootprop_getval("kpti", &prop_value) == 0) {
+		kpti_enable = (uint64_t)(prop_value == 1);
+		prom_printf("unix: forcing kpti to %s due to boot argument\n",
+		    (kpti_enable == 1) ? "ON" : "OFF");
+	} else {
+		kpti_enable = 1;
+	}
+
+	if (bootprop_getval("pcid", &prop_value) == 0 && prop_value == 0) {
+		prom_printf("unix: forcing pcid to OFF due to boot argument\n");
+		x86_use_pcid = 0;
+	} else if (kpti_enable != 1) {
+		x86_use_pcid = 0;
+	}
+
+	/*
+	 * While we don't need to check this until later, we might as well do it
+	 * here.
+	 */
+	if (bootprop_getstr("smt_enabled", prop_str, sizeof (prop_str)) == 0) {
+		if (strcasecmp(prop_str, "false") == 0 ||
+		    strcmp(prop_str, "0") == 0)
+			smt_boot_disable = 1;
+	}
+
+#endif
+
 	/*
 	 * Initialize idt0, gdt0, ldt0_default, ktss0 and dftss.
 	 */
 	init_desctbls();
-
-	/*
-	 * lgrp_init() and possibly cpuid_pass1() need PCI config
-	 * space access
-	 */
-#if defined(__xpv)
-	if (DOMAIN_IS_INITDOMAIN(xen_info))
-		pci_cfgspace_init();
-#else
-	pci_cfgspace_init();
-	/*
-	 * Initialize the platform type from CPU 0 to ensure that
-	 * determine_platform() is only ever called once.
-	 */
-	determine_platform();
-#endif
-
-	/*
-	 * The first lightweight pass (pass0) through the cpuid data
-	 * was done in locore before mlsetup was called.  Do the next
-	 * pass in C code.
-	 *
-	 * The x86_featureset is initialized here based on the capabilities
-	 * of the boot CPU.  Note that if we choose to support CPUs that have
-	 * different feature sets (at which point we would almost certainly
-	 * want to set the feature bits to correspond to the feature
-	 * minimum) this value may be altered.
-	 */
-	cpuid_pass1(cpu[0], x86_featureset);
-
-#if !defined(__xpv)
-	if ((get_hwenv() & HW_XEN_HVM) != 0)
-		xen_hvm_init();
-
-	/*
-	 * Before we do anything with the TSCs, we need to work around
-	 * Intel erratum BT81.  On some CPUs, warm reset does not
-	 * clear the TSC.  If we are on such a CPU, we will clear TSC ourselves
-	 * here.  Other CPUs will clear it when we boot them later, and the
-	 * resulting skew will be handled by tsc_sync_master()/_slave();
-	 * note that such skew already exists and has to be handled anyway.
-	 *
-	 * We do this only on metal.  This same problem can occur with a
-	 * hypervisor that does not happen to virtualise a TSC that starts from
-	 * zero, regardless of CPU type; however, we do not expect hypervisors
-	 * that do not virtualise TSC that way to handle writes to TSC
-	 * correctly, either.
-	 */
-	if (get_hwenv() == HW_NATIVE &&
-	    cpuid_getvendor(CPU) == X86_VENDOR_Intel &&
-	    cpuid_getfamily(CPU) == 6 &&
-	    (cpuid_getmodel(CPU) == 0x2d || cpuid_getmodel(CPU) == 0x3e) &&
-	    is_x86_feature(x86_featureset, X86FSET_TSC)) {
-		(void) wrmsr(REG_TSC, 0UL);
-	}
-
-	/*
-	 * Patch the tsc_read routine with appropriate set of instructions,
-	 * depending on the processor family and architecure, to read the
-	 * time-stamp counter while ensuring no out-of-order execution.
-	 * Patch it while the kernel text is still writable.
-	 *
-	 * Note: tsc_read is not patched for intel processors whose family
-	 * is >6 and for amd whose family >f (in case they don't support rdtscp
-	 * instruction, unlikely). By default tsc_read will use cpuid for
-	 * serialization in such cases. The following code needs to be
-	 * revisited if intel processors of family >= f retains the
-	 * instruction serialization nature of mfence instruction.
-	 * Note: tsc_read is not patched for x86 processors which do
-	 * not support "mfence". By default tsc_read will use cpuid for
-	 * serialization in such cases.
-	 *
-	 * The Xen hypervisor does not correctly report whether rdtscp is
-	 * supported or not, so we must assume that it is not.
-	 */
-	if ((get_hwenv() & HW_XEN_HVM) == 0 &&
-	    is_x86_feature(x86_featureset, X86FSET_TSCP))
-		patch_tsc_read(X86_HAVE_TSCP);
-	else if (cpuid_getvendor(CPU) == X86_VENDOR_AMD &&
-	    cpuid_getfamily(CPU) <= 0xf &&
-	    is_x86_feature(x86_featureset, X86FSET_SSE2))
-		patch_tsc_read(X86_TSC_MFENCE);
-	else if (cpuid_getvendor(CPU) == X86_VENDOR_Intel &&
-	    cpuid_getfamily(CPU) <= 6 &&
-	    is_x86_feature(x86_featureset, X86FSET_SSE2))
-		patch_tsc_read(X86_TSC_LFENCE);
-
-#endif	/* !__xpv */
-
-#if defined(__i386) && !defined(__xpv)
-	/*
-	 * Some i386 processors do not implement the rdtsc instruction,
-	 * or at least they do not implement it correctly. Patch them to
-	 * return 0.
-	 */
-	if (!is_x86_feature(x86_featureset, X86FSET_TSC))
-		patch_tsc_read(X86_NO_TSC);
-#endif	/* __i386 && !__xpv */
-
-#if defined(__amd64) && !defined(__xpv)
-	patch_memops(cpuid_getvendor(CPU));
-#endif	/* __amd64 && !__xpv */
-
-#if !defined(__xpv)
-	/* XXPV	what, if anything, should be dorked with here under xen? */
-
-	/*
-	 * While we're thinking about the TSC, let's set up %cr4 so that
-	 * userland can issue rdtsc, and initialize the TSC_AUX value
-	 * (the cpuid) for the rdtscp instruction on appropriately
-	 * capable hardware.
-	 */
-	if (is_x86_feature(x86_featureset, X86FSET_TSC))
-		setcr4(getcr4() & ~CR4_TSD);
-
-	if (is_x86_feature(x86_featureset, X86FSET_TSCP))
-		(void) wrmsr(MSR_AMD_TSCAUX, 0);
-
-	if (is_x86_feature(x86_featureset, X86FSET_DE))
-		setcr4(getcr4() | CR4_DE);
-#endif /* __xpv */
 
 	/*
 	 * initialize t0
@@ -311,6 +245,8 @@ mlsetup(struct regs *rp)
 	p0.p_brkpageszc = 0;
 	p0.p_t1_lgrpid = LGRP_NONE;
 	p0.p_tr_lgrpid = LGRP_NONE;
+	psecflags_default(&p0.p_secflags);
+
 	sigorset(&p0.p_ignore, &ignoredefault);
 
 	CPU->cpu_thread = &t0;
@@ -327,9 +263,130 @@ mlsetup(struct regs *rp)
 	CPU->cpu_pri = 12;		/* initial PIL for the boot CPU */
 
 	/*
-	 * The kernel doesn't use LDTs unless a process explicitly requests one.
+	 * Ensure that we have set the necessary feature bits before setting up
+	 * PCI config space access.
 	 */
-	p0.p_ldt_desc = null_sdesc;
+	cpuid_execpass(cpu[0], CPUID_PASS_PRELUDE, x86_featureset);
+
+	/*
+	 * lgrp_init() and possibly cpuid_pass1() need PCI config
+	 * space access
+	 */
+#if defined(__xpv)
+	if (DOMAIN_IS_INITDOMAIN(xen_info))
+		pci_cfgspace_init();
+#else
+	pci_cfgspace_init();
+	/*
+	 * Initialize the platform type from CPU 0 to ensure that
+	 * determine_platform() is only ever called once.
+	 */
+	determine_platform();
+#endif
+
+	/*
+	 * While the BIOS may have already applied some microcode updates, we
+	 * may have more recent updates available that we'd like to apply.  The
+	 * application of said microcode may end up resulting in architecturally
+	 * visible changes (e.g., changed MSR or CPUID bits) which we'd like to
+	 * have in place before we start querying the CPU for its capabilities.
+	 * So we first run the IDENT pass to determine the specific CPU vendor,
+	 * model, rev etc., fill out cpu_ucode_info and update the microcode, if
+	 * necessary.
+	 */
+	cpuid_execpass(cpu[0], CPUID_PASS_IDENT, NULL);
+	ucode_init();
+	ucode_check_boot();
+
+	/*
+	 * Now we're ready to run the BASIC cpuid pass.
+	 *
+	 * The x86_featureset is initialized here based on the capabilities of
+	 * the boot CPU.  Note that if we choose to support CPUs that have
+	 * different feature sets (at which point we would almost certainly want
+	 * to set the feature bits to correspond to the feature minimum) this
+	 * value may be altered.
+	 */
+	cpuid_execpass(cpu[0], CPUID_PASS_BASIC, x86_featureset);
+
+#if !defined(__xpv)
+	if ((get_hwenv() & HW_XEN_HVM) != 0)
+		xen_hvm_init();
+
+	/*
+	 * Before we do anything with the TSCs, we need to work around
+	 * Intel erratum BT81.  On some CPUs, warm reset does not
+	 * clear the TSC.  If we are on such a CPU, we will clear TSC ourselves
+	 * here.  Other CPUs will clear it when we boot them later, and the
+	 * resulting skew will be handled by tsc_sync_master()/_slave();
+	 * note that such skew already exists and has to be handled anyway.
+	 *
+	 * We do this only on metal.  This same problem can occur with a
+	 * hypervisor that does not happen to virtualise a TSC that starts from
+	 * zero, regardless of CPU type; however, we do not expect hypervisors
+	 * that do not virtualise TSC that way to handle writes to TSC
+	 * correctly, either.
+	 */
+	if (get_hwenv() == HW_NATIVE &&
+	    cpuid_getvendor(CPU) == X86_VENDOR_Intel &&
+	    cpuid_getfamily(CPU) == 6 &&
+	    (cpuid_getmodel(CPU) == 0x2d || cpuid_getmodel(CPU) == 0x3e) &&
+	    is_x86_feature(x86_featureset, X86FSET_TSC)) {
+		(void) wrmsr(REG_TSC, 0UL);
+	}
+
+	/*
+	 * Patch the tsc_read routine with appropriate set of instructions,
+	 * depending on the processor family and architecure, to read the
+	 * time-stamp counter while ensuring no out-of-order execution.
+	 * Patch it while the kernel text is still writable.
+	 *
+	 * The Xen hypervisor does not correctly report whether rdtscp is
+	 * supported or not, so we must assume that it is not.
+	 */
+	if ((get_hwenv() & HW_XEN_HVM) == 0 &&
+	    is_x86_feature(x86_featureset, X86FSET_TSCP)) {
+		patch_tsc_read(TSC_TSCP);
+	} else if (is_x86_feature(x86_featureset, X86FSET_LFENCE_SER)) {
+		ASSERT(is_x86_feature(x86_featureset, X86FSET_SSE2));
+		patch_tsc_read(TSC_RDTSC_LFENCE);
+	}
+
+#endif	/* !__xpv */
+
+
+#if !defined(__xpv)
+	patch_memops(cpuid_getvendor(CPU));
+#endif	/* !__xpv */
+
+#if !defined(__xpv)
+	/* XXPV	what, if anything, should be dorked with here under xen? */
+
+	/*
+	 * While we're thinking about the TSC, let's set up %cr4 so that
+	 * userland can issue rdtsc, and initialize the TSC_AUX value
+	 * (the cpuid) for the rdtscp instruction on appropriately
+	 * capable hardware.
+	 */
+	if (is_x86_feature(x86_featureset, X86FSET_TSC))
+		setcr4(getcr4() & ~CR4_TSD);
+
+	if (is_x86_feature(x86_featureset, X86FSET_TSCP))
+		(void) wrmsr(MSR_AMD_TSCAUX, 0);
+
+	/*
+	 * Let's get the other %cr4 stuff while we're here. Note, we defer
+	 * enabling CR4_SMAP until startup_end(); however, that's importantly
+	 * before we start other CPUs. That ensures that it will be synced out
+	 * to other CPUs.
+	 */
+	if (is_x86_feature(x86_featureset, X86FSET_DE))
+		setcr4(getcr4() | CR4_DE);
+
+	if (is_x86_feature(x86_featureset, X86FSET_SMEP))
+		setcr4(getcr4() | CR4_SMEP);
+#endif /* __xpv */
+
 
 	/*
 	 * Initialize thread/cpu microstate accounting
@@ -351,12 +408,17 @@ mlsetup(struct regs *rp)
 	if (boothowto & RB_DEBUG)
 		kdi_idt_sync();
 
-	/*
-	 * Explicitly set console to text mode (0x3) if this is a boot
-	 * post Fast Reboot, and the console is set to CONS_SCREEN_TEXT.
-	 */
-	if (post_fastreboot && boot_console_type(NULL) == CONS_SCREEN_TEXT)
-		set_console_mode(0x3);
+	if (BOP_GETPROPLEN(bootops, "efi-systab") < 0) {
+		/*
+		 * In BIOS system, explicitly set console to text mode (0x3)
+		 * if this is a boot post Fast Reboot, and the console is set
+		 * to CONS_SCREEN_TEXT.
+		 */
+		if (post_fastreboot &&
+		    boot_console_type(NULL) == CONS_SCREEN_TEXT) {
+			set_console_mode(0x3);
+		}
+	}
 
 	/*
 	 * If requested (boot -d) drop into kmdb.
@@ -384,11 +446,6 @@ mlsetup(struct regs *rp)
 #else	/* __xpv */
 	/* Flag PLAT_DR_FEATURE_ENABLED should only be set by DR driver. */
 	plat_dr_options &= ~PLAT_DR_FEATURE_ENABLED;
-#ifndef	__amd64
-	/* Only enable CPU/memory DR on 64 bits kernel. */
-	plat_dr_options &= ~PLAT_DR_FEATURE_MEMORY;
-	plat_dr_options &= ~PLAT_DR_FEATURE_CPU;
-#endif	/* __amd64 */
 #endif	/* __xpv */
 
 	/*
@@ -451,11 +508,6 @@ mlsetup(struct regs *rp)
 
 	ASSERT_STACK_ALIGNED();
 
-	/*
-	 * Fill out cpu_ucode_info.  Update microcode if necessary.
-	 */
-	ucode_check(CPU);
-
 	if (workaround_errata(CPU) != 0)
 		panic("critical workaround(s) missing for boot cpu");
 }
@@ -472,6 +524,10 @@ mach_modpath(char *path, const char *filename)
 	char *p;
 	const char isastr[] = "/amd64";
 	size_t isalen = strlen(isastr);
+
+	len = strlen(SYSTEM_BOOT_PATH "/kernel");
+	(void) strcpy(path, SYSTEM_BOOT_PATH "/kernel ");
+	path += len + 1;
 
 	if ((p = strrchr(filename, '/')) == NULL)
 		return;

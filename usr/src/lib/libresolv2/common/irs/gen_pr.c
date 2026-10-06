@@ -15,10 +15,6 @@
  * OF OR IN CONNECTION WITH THE USE OR PERFORMANCE OF THIS SOFTWARE.
  */
 
-#if !defined(LINT) && !defined(CODECENTER)
-static const char rcsid[] = "$Id: gen_pr.c,v 1.3 2005/04/27 04:56:24 sra Exp $";
-#endif
-
 /* Imports */
 
 #include "port_before.h"
@@ -133,7 +129,7 @@ pr_byname(struct irs_pr *this, const char *name) {
 	struct irs_rule *rule;
 	struct protoent *rval;
 	struct irs_pr *pr;
-	
+
 	rval = NULL;
 	for (rule = pvt->rules; rule; rule = rule->next) {
 		pr = rule->inst->pr;
@@ -150,7 +146,7 @@ pr_bynumber(struct irs_pr *this, int proto) {
 	struct irs_rule *rule;
 	struct protoent *rval;
 	struct irs_pr *pr;
-	
+
 	rval = NULL;
 	for (rule = pvt->rules; rule; rule = rule->next) {
 		pr = rule->inst->pr;

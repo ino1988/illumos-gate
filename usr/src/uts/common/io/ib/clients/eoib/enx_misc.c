@@ -23,6 +23,10 @@
  * Copyright (c) 2010, Oracle and/or its affiliates. All rights reserved.
  */
 
+/*
+ * Copyright 2023 Oxide Computer Company
+ */
+
 #include <sys/types.h>
 #include <sys/kmem.h>
 #include <sys/ksynch.h>
@@ -64,7 +68,10 @@ eibnx_cleanup_port_nodes(eibnx_thr_info_t *info)
 	 */
 	mutex_enter(&ss->nx_nodeq_lock);
 	prev = NULL;
-	for (node = ss->nx_nodeq; node; node = node->nc_next) {
+	node = ss->nx_nodeq;
+	while (node != NULL) {
+		eibnx_nodeq_t *next = node->nc_next;
+
 		if (node->nc_info != info) {
 			prev = node;
 		} else {
@@ -75,6 +82,7 @@ eibnx_cleanup_port_nodes(eibnx_thr_info_t *info)
 			}
 			kmem_free(node, sizeof (eibnx_nodeq_t));
 		}
+		node = next;
 	}
 	mutex_exit(&ss->nx_nodeq_lock);
 
@@ -460,7 +468,6 @@ eibnx_configure_node(eibnx_thr_info_t *ti, eibnx_gw_info_t *gwi,
 	eibnx_t *ss = enx_global_ss;
 	dev_info_t *child_dip;
 	char *node_name;
-	int circular;
 	int ret;
 
 	/*
@@ -469,12 +476,12 @@ eibnx_configure_node(eibnx_thr_info_t *ti, eibnx_gw_info_t *gwi,
 	if ((node_name = eibnx_make_nodename(ti, gwi->gw_portid)) == NULL)
 		return (ENX_E_FAILURE);
 
-	ndi_devi_enter(ss->nx_dip, &circular);
+	ndi_devi_enter(ss->nx_dip);
 
 	if (child_dip = ndi_devi_findchild(ss->nx_dip, node_name)) {
 		ret = eibnx_update_child(ti, gwi, child_dip);
 		if (ret == ENX_E_SUCCESS) {
-			ndi_devi_exit(ss->nx_dip, circular);
+			ndi_devi_exit(ss->nx_dip);
 			kmem_free(node_name, MAXNAMELEN);
 
 			if (childp) {
@@ -509,7 +516,7 @@ eibnx_configure_node(eibnx_thr_info_t *ti, eibnx_gw_info_t *gwi,
 		ddi_set_parent_data(child_dip, NULL);
 		(void) ndi_devi_free(child_dip);
 
-		ndi_devi_exit(ss->nx_dip, circular);
+		ndi_devi_exit(ss->nx_dip);
 		kmem_free(node_name, MAXNAMELEN);
 
 		return (ENX_E_FAILURE);
@@ -517,7 +524,7 @@ eibnx_configure_node(eibnx_thr_info_t *ti, eibnx_gw_info_t *gwi,
 
 	eibnx_enqueue_child(ti, gwi, node_name, child_dip);
 
-	ndi_devi_exit(ss->nx_dip, circular);
+	ndi_devi_exit(ss->nx_dip);
 
 	if (childp) {
 		*childp = child_dip;
@@ -616,7 +623,7 @@ eibnx_make_nodename(eibnx_thr_info_t *info, uint16_t gw_portid)
 {
 	char *name;
 
-	if (info->ti_ident[0] == NULL)
+	if (info->ti_ident[0] == '\0')
 		return (NULL);
 
 	name = kmem_zalloc(MAXNAMELEN, KM_SLEEP);

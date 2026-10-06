@@ -19,6 +19,8 @@
  * CDDL HEADER END
  */
 /*
+ * Copyright 2019 Joyent, Inc.
+ * Copyright 2011-2021 Tintri by DDN, Inc. All rights reserved.
  * Copyright 2009 Sun Microsystems, Inc.  All rights reserved.
  * Use is subject to license terms.
  */
@@ -60,28 +62,20 @@
 #define	_SMBSRV_MBUF_H
 
 /*
- * PBSHORTCUT This file should be removed from the PB port but is required
- * for now to get it to compile. This file has also been modified.
+ * This mbuf simulation should be replaced with (native) mblk_t support.
  */
 
 #include <sys/types.h>
 #include <sys/param.h>
-#include <sys/list.h>
+#include <sys/kmem.h>
 #include <smbsrv/string.h>
-#include <smbsrv/alloc.h>
 
 #ifdef __cplusplus
 extern "C" {
 #endif
 
 #define	MSIZE		256
-#define	MCLBYTES	2048
-#define	MCLSHIFT	11
-#define	MCLOFSET	(MCLBYTES - 1)
-
-#define	NBPG 4096
-#define	CLBYTES		NBPG
-#define	PB_PAGESIZE 4096
+#define	MCLBYTES	8192
 
 /*
  * Mbufs are of a single size, MSIZE (machine/machparam.h), which
@@ -97,11 +91,20 @@ extern "C" {
 #define	MINCLSIZE	(MHLEN + MLEN)	/* smallest amount to put in cluster */
 
 /*
+ * How much prepend space to put in the first mbuf of a chain.
+ * In SMB we only prepend a 4-byte NBT header, but let's keep the
+ * data part aligned the same as M_ALIGN() does below (8-byte)
+ */
+#define	MH_PREPEND_SPACE	8
+
+/*
  * Macros for type conversion
  * mtod(m,t) -	convert mbuf pointer to data pointer of correct type
  */
 #define	mtod(m, t)	((t)((m)->m_data))
 
+struct mbuf;
+typedef	void m_ext_free_t(struct mbuf *);
 
 /* header at beginning of each mbuf: */
 struct m_hdr {
@@ -119,13 +122,12 @@ struct	pkthdr {
 };
 
 
-/* XXX probably do not need m_ext */
-
 /* description of external storage mapped into mbuf, valid if M_EXT set */
 struct m_ext {
-	caddr_t	ext_buf;		/* start of buffer */
-	int	(*ext_ref)();		/* refcount adjust function */
-	uint_t	ext_size;		/* size of buffer, for ext_free */
+	caddr_t		ext_buf;	/* start of external buffer */
+	uint_t		ext_size;	/* size of external buffer */
+	m_ext_free_t	*ext_free;	/* free function */
+	void		*ext_arg1;	/* free func arg */
 };
 
 typedef struct mbuf {
@@ -195,6 +197,7 @@ typedef struct mbuf {
 #define	M_DONTWAIT	M_NOWAIT
 #define	M_WAIT		M_WAITOK
 
+/* BEGIN CSTYLED */
 
 /*
  * mbuf allocation/deallocation macros:
@@ -208,7 +211,7 @@ typedef struct mbuf {
  */
 
 #define	MGET(m, how, type) { \
-	m = MEM_ZALLOC("mbuf", sizeof (struct mbuf)); \
+	m = smb_mbuf_alloc(); \
 	(m)->m_next = (struct mbuf *)NULL; \
 	(m)->m_nextpkt = (struct mbuf *)NULL; \
 	(m)->m_data = (m)->m_dat; \
@@ -217,7 +220,7 @@ typedef struct mbuf {
 }
 
 #define	MGETHDR(m, how, type) { \
-	m = MEM_ZALLOC("mbuf", sizeof (struct mbuf)); \
+	m = smb_mbuf_alloc(); \
 	(m)->m_type = (MT_HEADER); \
 	(m)->m_next = (struct mbuf *)NULL; \
 	(m)->m_nextpkt = (struct mbuf *)NULL; \
@@ -225,15 +228,13 @@ typedef struct mbuf {
 	(m)->m_flags = M_PKTHDR; \
 }
 
-extern	int mclref();
-extern	int mclrefnoop();
 #define	MCLGET(m, how) \
 	{ \
-		(m)->m_ext.ext_buf = MEM_ZALLOC("mbuf", MCLBYTES);	\
+		(m)->m_ext.ext_buf = smb_mbufcl_alloc();	\
 		(m)->m_data = (m)->m_ext.ext_buf;		\
 		(m)->m_flags |= M_EXT;				\
 		(m)->m_ext.ext_size = MCLBYTES;			\
-		(m)->m_ext.ext_ref = mclref;			\
+		(m)->m_ext.ext_free = smb_mbufcl_free;		\
 	}
 
 /*
@@ -243,31 +244,66 @@ extern	int mclrefnoop();
  */
 #define	MFREE(m, nn) \
 	{ \
-		if ((m)->m_flags & M_EXT) {		    \
-			(*((m)->m_ext.ext_ref))((m)->m_ext.ext_buf,	\
-			    (m)->m_ext.ext_size, -1);			\
-			(m)->m_ext.ext_buf = 0;				\
-		}							\
-		(nn) = (m)->m_next;					\
-		(m)->m_next = 0;					\
-		MEM_FREE("mbuf", m);					\
+		if ((m)->m_flags & M_EXT) {			\
+			(m)->m_ext.ext_free(m);			\
+			(m)->m_ext.ext_buf = NULL;		\
+		}						\
+		(nn) = (m)->m_next;				\
+		(m)->m_next = 0;				\
+		smb_mbuf_free(m);				\
 	}
 
-
+/*
+ * Set the m_data pointer of a newly allocated mbuf to place an object of the
+ * specified size at the end of the mbuf, longword aligned.
+ */
+#define	M_ALIGN(m, len) \
+	{ (m)->m_data += (MLEN - (len)) &~ (sizeof (int64_t) - 1); }
 
 /*
  * As above, for mbufs allocated with m_gethdr/MGETHDR
  * or initialized by M_COPY_PKTHDR.
  */
 #define	MH_ALIGN(m, len) \
-	{ (m)->m_data += (MHLEN - (len)) &~ (sizeof (int32_t) - 1); }
+	{ (m)->m_data += (MHLEN - (len)) &~ (sizeof (int64_t) - 1); }
+
+/*
+ * Return the address of the start of the buffer associated with an mbuf,
+ * handling external storage, packet-header mbufs, and regular data mbufs.
+ * BSD calls this M_START but that conflicts with stream.h (sigh)
+ */
+#define	MB_START(m)							\
+	(((m)->m_flags & M_EXT) ? (m)->m_ext.ext_buf :			\
+	 ((m)->m_flags & M_PKTHDR) ? &(m)->m_pktdat[0] :		\
+	 &(m)->m_dat[0])
+
+/*
+ * Return the size of the buffer associated with an mbuf, handling external
+ * storage, packet-header mbufs, and regular data mbufs.
+ */
+#define	M_SIZE(m)							\
+	(((m)->m_flags & M_EXT) ? (m)->m_ext.ext_size :			\
+	 ((m)->m_flags & M_PKTHDR) ? MHLEN : MLEN)
+
+/*
+ * Compute the amount of space available before the current start of data in
+ * an mbuf.
+ */
+#define	M_LEADINGSPACE(m)	((m)->m_data - MB_START(m))
+
+/*
+ * Compute the amount of space available after the end of data in an mbuf.
+ */
+#define	M_TRAILINGSPACE(m)						\
+	((MB_START(m) + M_SIZE(m)) - ((m)->m_data + (m)->m_len))
+
+/* END CSTYLED */
 
 #define	SMB_MBC_MAGIC		0x4D42435F
 #define	SMB_MBC_VALID(p)	ASSERT((p)->mbc_magic == SMB_MBC_MAGIC)
 
 typedef struct mbuf_chain {
 	uint32_t		mbc_magic;
-	list_node_t		mbc_lnd;
 	volatile uint32_t	flags;		/* Various flags */
 	struct mbuf_chain	*shadow_of;	/* I'm shadowing someone */
 	mbuf_t			*chain;		/* Start of chain */
@@ -275,10 +311,19 @@ typedef struct mbuf_chain {
 	int32_t			chain_offset;	/* Current offset into chain */
 } mbuf_chain_t;
 
+mbuf_t *smb_mbuf_alloc_ext(caddr_t, int, m_ext_free_t, void *);
+
+mbuf_t *smb_mbuf_alloc(void);
+void smb_mbuf_free(mbuf_t *);
+
+void *smb_mbufcl_alloc(void);
+void smb_mbufcl_free(mbuf_t *);
+
+mbuf_t *m_prepend(struct mbuf *m, int plen, int how);
+void m_adjust(mbuf_t *, int);
 mbuf_t *m_free(mbuf_t *);
 void m_freem(mbuf_t *);
-int mbc_moveout(mbuf_chain_t *, caddr_t, int, int *);
-int smb_mbc_init(void);
+void smb_mbc_init(void);
 void smb_mbc_fini(void);
 mbuf_chain_t *smb_mbc_alloc(uint32_t);
 void smb_mbc_free(mbuf_chain_t *);

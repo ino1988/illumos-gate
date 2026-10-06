@@ -25,6 +25,9 @@
 /*
  * Copyright 2011 Bayard G. Bell <buffer.g.overflow@gmail.com>.
  * All rights reserved. Use is subject to license terms.
+ * Copyright 2020 Joyent, Inc.
+ * Copyright 2025 MNX Cloud, Inc.
+ * Copyright 2025 Oxide Computer Company
  */
 
 /*
@@ -66,7 +69,6 @@
 #include <sys/fs/decomp.h>
 #include <sys/callb.h>
 #include <sys/cmn_err.h>
-#include <sys/tnf_probe.h>
 #include <sys/zmod.h>
 
 #include <krtld/reloc.h>
@@ -137,10 +139,6 @@ extern int alloc_gottable(struct module *, caddr_t *, caddr_t *);
 #if !defined(_OBP)
 extern int kobj_boot_mountroot(void);
 #endif
-
-static void tnf_unsplice_probes(uint_t, struct modctl *);
-extern tnf_probe_control_t *__tnf_probe_list_head;
-extern tnf_tag_data_t *__tnf_tag_list_head;
 
 extern int modrootloaded;
 extern int swaploaded;
@@ -258,13 +256,6 @@ static char *suppress_sym_list[] =
 static kobj_notify_list_t *kobj_notifiers[KOBJ_NOTIFY_MAX + 1];
 
 /*
- * TNF probe management globals
- */
-tnf_probe_control_t	*__tnf_probe_list_head = NULL;
-tnf_tag_data_t		*__tnf_tag_list_head = NULL;
-int			tnf_changed_probe_list = 0;
-
-/*
  * Prefix for statically defined tracing (SDT) DTrace probes.
  */
 const char		*sdt_prefix = "__dtrace_probe_";
@@ -297,14 +288,15 @@ int standalone = 1;			/* an unwholey kernel? */
 int use_iflush;				/* iflush after relocations */
 
 /*
- * _kobj_printf()
+ * _kobj_printf() and _vkobj_printf()
  *
  * Common printf function pointer. Can handle only one conversion
  * specification in the format string. Some of the functions invoked
  * through this function pointer cannot handle more that one conversion
  * specification in the format string.
  */
-void (*_kobj_printf)(void *, const char *, ...);	/* printf routine */
+void (*_kobj_printf)(void *, const char *, ...) __KPRINTFLIKE(2);
+void (*_vkobj_printf)(void *, const char *, va_list) __KVPRINTFLIKE(2);
 
 /*
  * Standalone function pointers for use within krtld.
@@ -413,16 +405,16 @@ kobj_init(
 		goto fail;
 	}
 #else
-	{
-		/* on x86, we always boot with a ramdisk */
-		(void) kobj_boot_mountroot();
-
-		/*
-		 * Now that the ramdisk is mounted, finish boot property
-		 * initialization.
-		 */
-		boot_prop_finish();
+	/* on x86, we always boot with a ramdisk */
+	if (kobj_boot_mountroot() != 0) {
+		goto fail;
 	}
+
+	/*
+	 * Now that the ramdisk is mounted, finish boot property
+	 * initialization.
+	 */
+	read_bootenvrc();
 
 #if !defined(_UNIX_KRTLD)
 	/*
@@ -431,9 +423,8 @@ kobj_init(
 	 * about the executable. In particular, it does not read in, map or
 	 * otherwise look at the program headers. We fake all that up now.
 	 *
-	 * We do this early as DTrace static probes and tnf probes both call
-	 * undefined references.  We have to process those relocations before
-	 * calling any of them.
+	 * We do this early as DTrace static probes call undefined references.
+	 * We have to process those relocations before calling any of them.
 	 *
 	 * OBP tells kobj_start() where the ELF image is in memory, so it
 	 * synthesized bootaux before kobj_init() was called
@@ -509,7 +500,7 @@ kobj_init(
 #ifdef	KOBJ_DEBUG
 	if (kobj_debug & D_DEBUG)
 		_kobj_printf(ops,
-		    "krtld: transferring control to: 0x%p\n", entry);
+		    "krtld: transferring control to: 0x%lx\n", entry);
 #endif
 
 	/*
@@ -530,7 +521,7 @@ kobj_init(
 #ifdef	KOBJ_DEBUG
 	if (kobj_debug & D_DEBUG)
 		_kobj_printf(ops,
-		    "krtld: really transferring control to: 0x%p\n", entry);
+		    "krtld: really transferring control to: 0x%lx\n", entry);
 #endif
 
 	/* restore printf/bcopy/bzero vectors before returning */
@@ -855,9 +846,9 @@ load_exec(val_t *bootaux, char *filename)
 	if (kobj_debug & D_LOADING) {
 		_kobj_printf(ops, "krtld: file=%s\n", mp->filename);
 		_kobj_printf(ops, "\ttext: 0x%p", mp->text);
-		_kobj_printf(ops, " size: 0x%x\n", mp->text_size);
+		_kobj_printf(ops, " size: 0x%lx\n", mp->text_size);
 		_kobj_printf(ops, "\tdata: 0x%p", mp->data);
-		_kobj_printf(ops, " dsize: 0x%x\n", mp->data_size);
+		_kobj_printf(ops, " dsize: 0x%lx\n", mp->data_size);
 	}
 #endif /* KOBJ_DEBUG */
 
@@ -884,6 +875,20 @@ load_exec(val_t *bootaux, char *filename)
 	return (mp);
 }
 
+static boolean_t
+is_extended_ehdr(const Ehdr *hdr)
+{
+	/*
+	 * If any of e_shnum, e_shstrndx, or e_phnum are at their sentinel
+	 * value, this indicates that an extended ELF header is in use. That
+	 * means that one or more of these values is too large to fit in the
+	 * elf header and the true values for those are in the first section
+	 * header.
+	 */
+	return ((hdr->e_shnum == 0 && hdr->e_shoff != 0) ||
+	    hdr->e_phnum == PN_XNUM || hdr->e_shstrndx == SHN_XINDEX);
+}
+
 /*
  * Set up the linker module (if it's compiled in, LDNAME is NULL)
  */
@@ -898,6 +903,7 @@ load_linker(val_t *bootaux)
 	Sym *sp;
 	int shsize;
 	char *dlname = (char *)bootaux[BA_LDNAME].ba_ptr;
+	Ehdr *ehdr = (Ehdr *)bootaux[BA_LDELF].ba_ptr;
 
 	/*
 	 * On some architectures, krtld is compiled into the kernel.
@@ -905,17 +911,31 @@ load_linker(val_t *bootaux)
 	if (dlname == NULL)
 		return;
 
+	/*
+	 * We don't support loading the linker from an ELF object which uses an
+	 * extended header. That's identified by looking for sentinel values in
+	 * selected header fields.
+	 */
+	if (is_extended_ehdr(ehdr)) {
+		bop_panic(
+		    "linker %s has an extended ELF header; unable to load.",
+		    dlname);
+	}
+
 	cp = add_primary(dlname, KOBJ_LM_PRIMARY);
 
 	mp = kobj_zalloc(sizeof (struct module), KM_WAIT);
 
 	cp->mod_mp = mp;
-	mp->hdr = *(Ehdr *)bootaux[BA_LDELF].ba_ptr;
-	shsize = mp->hdr.e_shentsize * mp->hdr.e_shnum;
+	mp->hdr = *ehdr;
+	mp->shnum = mp->hdr.e_shnum;
+	mp->phnum = mp->hdr.e_phnum;
+	mp->shstrndx = mp->hdr.e_shstrndx;
+	shsize = mp->hdr.e_shentsize * mp->shnum;
 	mp->shdrs = kobj_alloc(shsize, KM_WAIT);
 	bcopy(bootaux[BA_LDSHDR].ba_ptr, mp->shdrs, shsize);
 
-	for (i = 1; i < (int)mp->hdr.e_shnum; i++) {
+	for (i = 1; i < (int)mp->shnum; i++) {
 		shp = (Shdr *)(mp->shdrs + (i * mp->hdr.e_shentsize));
 
 		if (shp->sh_flags & SHF_ALLOC) {
@@ -966,9 +986,9 @@ load_linker(val_t *bootaux)
 	if (kobj_debug & D_LOADING) {
 		_kobj_printf(ops, "krtld: file=%s\n", mp->filename);
 		_kobj_printf(ops, "\ttext:0x%p", mp->text);
-		_kobj_printf(ops, " size: 0x%x\n", mp->text_size);
+		_kobj_printf(ops, " size: 0x%lx\n", mp->text_size);
 		_kobj_printf(ops, "\tdata:0x%p", mp->data);
-		_kobj_printf(ops, " dsize: 0x%x\n", mp->data_size);
+		_kobj_printf(ops, " dsize: 0x%lx\n", mp->data_size);
 	}
 #endif /* KOBJ_DEBUG */
 
@@ -1028,12 +1048,10 @@ kobj_notify_remove(kobj_notify_list_t *knp)
 
 	mutex_enter(&kobj_lock);
 
-	/* LINTED */
-	if (tknp = knp->kn_next)
+	if ((tknp = knp->kn_next) != NULL)
 		tknp->kn_prev = knp->kn_prev;
 
-	/* LINTED */
-	if (tknp = knp->kn_prev)
+	if ((tknp = knp->kn_prev) != NULL)
 		tknp->kn_next = knp->kn_next;
 	else
 		*knl = knp->kn_next;
@@ -1132,6 +1150,47 @@ add_primary(const char *filename, int lmid)
 }
 
 static int
+kobj_load_elfhdr(struct _buf *file, struct module *mp)
+{
+	if (kobj_read_file(file, (char *)&mp->hdr, sizeof (mp->hdr), 0) < 0) {
+		_kobj_printf(ops, "kobj_load_elfhdr: %s read header failed\n",
+		    mp->filename);
+		return (-1);
+	}
+
+	mp->shnum = mp->hdr.e_shnum;
+	mp->shstrndx = mp->hdr.e_shstrndx;
+	mp->phnum = mp->hdr.e_phnum;
+
+	/*
+	 * If there is an extended ELF header we need to read in the first
+	 * section header to access the values for fields that don't fit in
+	 * the standard header.
+	 */
+	if (is_extended_ehdr(&mp->hdr)) {
+		Shdr hdr0;
+
+		if (mp->hdr.e_shoff == 0 ||
+		    kobj_read_file(file, (char *)&hdr0, sizeof (hdr0),
+		    mp->hdr.e_shoff) < 0) {
+			_kobj_printf(ops,
+			    "kobj_load_elfhdr: %s read ext header failed\n",
+			    mp->filename);
+			return (-1);
+		}
+
+		if (mp->shnum == 0)
+			mp->shnum = hdr0.sh_size;
+		if (mp->shstrndx == SHN_XINDEX)
+			mp->shstrndx = hdr0.sh_link;
+		if (mp->phnum == PN_XNUM && hdr0.sh_info != 0)
+			mp->phnum = hdr0.sh_info;
+	}
+
+	return (0);
+}
+
+static int
 bind_primary(val_t *bootaux, int lmid)
 {
 	struct modctl_list *linkmap = kobj_lm_lookup(lmid);
@@ -1174,7 +1233,6 @@ bind_primary(val_t *bootaux, int lmid)
 		if (mp->flags & KOBJ_EXEC) {
 			Dyn *dyn;
 			Word relasz = 0, relaent = 0;
-			Word shtype;
 			char *rela = NULL;
 
 			for (dyn = (Dyn *)bootaux[BA_DYNAMIC].ba_ptr;
@@ -1189,11 +1247,9 @@ bind_primary(val_t *bootaux, int lmid)
 					relaent = dyn->d_un.d_val;
 					break;
 				case DT_RELA:
-					shtype = SHT_RELA;
 					rela = (char *)dyn->d_un.d_ptr;
 					break;
 				case DT_REL:
-					shtype = SHT_REL;
 					rela = (char *)dyn->d_un.d_ptr;
 					break;
 				}
@@ -1210,8 +1266,8 @@ bind_primary(val_t *bootaux, int lmid)
 				_kobj_printf(ops, "krtld: relocating: file=%s "
 				    "KOBJ_EXEC\n", mp->filename);
 #endif
-			if (do_relocate(mp, rela, shtype, relasz/relaent,
-			    relaent, (Addr)mp->text) < 0)
+			if (do_relocate(mp, rela, relasz/relaent, relaent,
+			    (Addr)mp->text) < 0)
 				return (-1);
 		} else {
 			if (do_relocations(mp) < 0)
@@ -1237,10 +1293,9 @@ bind_primary(val_t *bootaux, int lmid)
 			file = kobj_open_file(mp->filename);
 			if (file == (struct _buf *)-1)
 				return (-1);
-			if (kobj_read_file(file, (char *)&mp->hdr,
-			    sizeof (mp->hdr), 0) < 0)
+			if (kobj_load_elfhdr(file, mp) < 0)
 				return (-1);
-			n = mp->hdr.e_shentsize * mp->hdr.e_shnum;
+			n = mp->hdr.e_shentsize * mp->shnum;
 			mp->shdrs = kobj_alloc(n, KM_WAIT);
 			if (kobj_read_file(file, mp->shdrs, n,
 			    mp->hdr.e_shoff) < 0)
@@ -1570,7 +1625,7 @@ kobj_export_ksyms(struct module *mp)
 	/*
 	 * Fill in the new section headers (symtab and strtab).
 	 */
-	mp->hdr.e_shnum = 2;
+	mp->shnum = 2;
 	mp->symtbl_section = 0;
 
 	mp->symhdr->sh_type = SHT_SYMTAB;
@@ -1614,7 +1669,7 @@ kobj_export_ksyms(struct module *mp)
 		uint_t	shn;
 		Shdr	*shp;
 
-		for (shn = 1; shn < omp->hdr.e_shnum; shn++) {
+		for (shn = 1; shn < omp->shnum; shn++) {
 			shp = (Shdr *)(omp->shdrs + shn * omp->hdr.e_shentsize);
 			switch (shp->sh_type) {
 			case SHT_RELA:
@@ -1626,7 +1681,7 @@ kobj_export_ksyms(struct module *mp)
 				break;
 			}
 		}
-		kobj_free(omp->shdrs, omp->hdr.e_shentsize * omp->hdr.e_shnum);
+		kobj_free(omp->shdrs, omp->hdr.e_shentsize * omp->shnum);
 	}
 	/*
 	 * Discard the old symbol table and our copy of the module strucure.
@@ -1756,7 +1811,7 @@ do_dynamic(struct module *mp, struct _buf *file)
 
 	/* find and validate the dynamic section (if any) */
 
-	for (dshp = NULL, shn = 1; shn < mp->hdr.e_shnum; shn++) {
+	for (dshp = NULL, shn = 1; shn < mp->shnum; shn++) {
 		shp = (Shdr *)(mp->shdrs + shn * mp->hdr.e_shentsize);
 		switch (shp->sh_type) {
 		case SHT_DYNAMIC:
@@ -1777,7 +1832,7 @@ do_dynamic(struct module *mp, struct _buf *file)
 	if (dshp == NULL)
 		return (0);
 
-	if (dshp->sh_link > mp->hdr.e_shnum) {
+	if (dshp->sh_link > mp->shnum) {
 		_kobj_printf(ops, "krtld: get_dynamic: %s, ", mp->filename);
 		_kobj_printf(ops, "no section for sh_link %d\n", dshp->sh_link);
 		return (-1);
@@ -1897,13 +1952,12 @@ kobj_load_module(struct modctl *modp, int use_path)
 	mp->filename = kobj_alloc(strlen(file->_name) + 1, KM_WAIT);
 	(void) strcpy(mp->filename, file->_name);
 
-	if (kobj_read_file(file, (char *)&mp->hdr, sizeof (mp->hdr), 0) < 0) {
-		_kobj_printf(ops, "kobj_load_module: %s read header failed\n",
-		    modname);
+	if (kobj_load_elfhdr(file, mp) != 0) {
 		kobj_free(mp->filename, strlen(file->_name) + 1);
 		kobj_free(mp, sizeof (*mp));
 		goto bad;
 	}
+
 	for (i = 0; i < SELFMAG; i++) {
 		if (mp->hdr.e_ident[i] != ELFMAG[i]) {
 			if (_moddebug & MODDEBUG_ERRMSG)
@@ -1954,7 +2008,7 @@ kobj_load_module(struct modctl *modp, int use_path)
 		goto bad;
 	}
 
-	n = mp->hdr.e_shentsize * mp->hdr.e_shnum;
+	n = mp->hdr.e_shentsize * mp->shnum;
 	mp->shdrs = kobj_alloc(n, KM_WAIT);
 
 	if (kobj_read_file(file, mp->shdrs, n, mp->hdr.e_shoff) < 0) {
@@ -2011,9 +2065,9 @@ kobj_load_module(struct modctl *modp, int use_path)
 	if (kobj_debug & D_LOADING) {
 		_kobj_printf(ops, "krtld: file=%s\n", mp->filename);
 		_kobj_printf(ops, "\ttext:0x%p", mp->text);
-		_kobj_printf(ops, " size: 0x%x\n", mp->text_size);
+		_kobj_printf(ops, " size: 0x%lx\n", mp->text_size);
 		_kobj_printf(ops, "\tdata:0x%p", mp->data);
-		_kobj_printf(ops, " dsize: 0x%x\n", mp->data_size);
+		_kobj_printf(ops, " dsize: 0x%lx\n", mp->data_size);
 	}
 #endif /* KOBJ_DEBUG */
 
@@ -2101,6 +2155,7 @@ kobj_load_primary_module(struct modctl *modp)
 	if (kobj_load_module(modp, 0) != 0)
 		return (-1);
 
+	dep = NULL;
 	mp = modp->mod_mp;
 	mp->flags |= KOBJ_PRIM;
 
@@ -2116,7 +2171,8 @@ kobj_load_primary_module(struct modctl *modp)
 		return (-1);
 	}
 
-	add_dependent(mp, dep->mod_mp);
+	if (dep != NULL)
+		add_dependent(mp, dep->mod_mp);
 
 	/*
 	 * Relocate it.  This module may not be part of a link map, so we
@@ -2178,6 +2234,7 @@ static void
 free_module_data(struct module *mp)
 {
 	struct module_list *lp, *tmp;
+	hotinline_desc_t *hid, *next;
 	int ksyms_exported = 0;
 
 	lp = mp->head;
@@ -2185,6 +2242,15 @@ free_module_data(struct module *mp)
 		tmp = lp;
 		lp = lp->next;
 		kobj_free((char *)tmp, sizeof (*tmp));
+	}
+
+	/* release hotinlines */
+	hid = mp->hi_calls;
+	while (hid != NULL) {
+		next = hid->hid_next;
+		kobj_free(hid->hid_symname, strlen(hid->hid_symname) + 1);
+		kobj_free(hid, sizeof (hotinline_desc_t));
+		hid = next;
 	}
 
 	rw_enter(&ksyms_lock, RW_WRITER);
@@ -2218,7 +2284,7 @@ free_module_data(struct module *mp)
 		uint_t shn;
 		Shdr *shp;
 
-		for (shn = 1; shn < mp->hdr.e_shnum; shn++) {
+		for (shn = 1; shn < mp->shnum; shn++) {
 			shp = (Shdr *)(mp->shdrs + shn * mp->hdr.e_shentsize);
 			switch (shp->sh_type) {
 			case SHT_RELA:
@@ -2229,10 +2295,9 @@ free_module_data(struct module *mp)
 				break;
 			}
 		}
-err_free_done:
+
 		if (!(mp->flags & KOBJ_PRIM)) {
-			kobj_free(mp->shdrs,
-			    mp->hdr.e_shentsize * mp->hdr.e_shnum);
+			kobj_free(mp->shdrs, mp->hdr.e_shentsize * mp->shnum);
 		}
 	}
 
@@ -2389,7 +2454,7 @@ get_progbits(struct module *mp, struct _buf *file)
 	data = ALIGN((uintptr_t)mp->data, dp->align);
 
 	/* now loop though sections assigning addresses and loading the data */
-	for (shn = 1; shn < mp->hdr.e_shnum; shn++) {
+	for (shn = 1; shn < mp->shnum; shn++) {
 		shp = (Shdr *)(mp->shdrs + shn * mp->hdr.e_shentsize);
 		if (!(shp->sh_flags & SHF_ALLOC))
 			continue;
@@ -2440,7 +2505,7 @@ done:
 	 * buffer was unallocated.
 	 */
 	if (err != 0) {
-		kobj_free(mp->shdrs, mp->hdr.e_shentsize * mp->hdr.e_shnum);
+		kobj_free(mp->shdrs, mp->hdr.e_shentsize * mp->shnum);
 		mp->shdrs = NULL;
 	}
 
@@ -2473,22 +2538,29 @@ static int
 get_syms(struct module *mp, struct _buf *file)
 {
 	uint_t		shn;
-	Shdr	*shp;
+	Shdr		*shp;
 	uint_t		i;
-	Sym	*sp, *ksp;
+	Sym		*sp, *ksp;
+	Shdr		*symxhdr = NULL;
+	Elf32_Word	*symxtbl = NULL;
 	char		*symname;
 	int		dosymtab = 0;
+	int		err = -1;
 
 	/*
 	 * Find the interesting sections.
 	 */
-	for (shn = 1; shn < mp->hdr.e_shnum; shn++) {
+	for (shn = 1; shn < mp->shnum; shn++) {
 		shp = (Shdr *)(mp->shdrs + shn * mp->hdr.e_shentsize);
 		switch (shp->sh_type) {
 		case SHT_SYMTAB:
 			mp->symtbl_section = shn;
 			mp->symhdr = shp;
 			dosymtab++;
+			break;
+
+		case SHT_SYMTAB_SHNDX:
+			symxhdr = shp;
 			break;
 
 		case SHT_RELA:
@@ -2533,7 +2605,7 @@ get_syms(struct module *mp, struct _buf *file)
 	/*
 	 * get the associated string table header
 	 */
-	if ((mp->symhdr == 0) || (mp->symhdr->sh_link >= mp->hdr.e_shnum))
+	if (mp->symhdr == NULL || mp->symhdr->sh_link >= mp->shnum)
 		return (-1);
 	mp->strhdr = (Shdr *)
 	    (mp->shdrs + mp->symhdr->sh_link * mp->hdr.e_shentsize);
@@ -2554,10 +2626,28 @@ get_syms(struct module *mp, struct _buf *file)
 	mp->strings = (char *)(mp->chains + mp->nsyms);
 
 	if (kobj_read_file(file, mp->symtbl,
-	    mp->symhdr->sh_size, mp->symhdr->sh_offset) < 0 ||
-	    kobj_read_file(file, mp->strings,
-	    mp->strhdr->sh_size, mp->strhdr->sh_offset) < 0)
+	    mp->symhdr->sh_size, mp->symhdr->sh_offset) < 0) {
+		_kobj_printf(ops, "%s failed to read symbol table\n",
+		    file->_name);
 		return (-1);
+	}
+	if (kobj_read_file(file, mp->strings,
+	    mp->strhdr->sh_size, mp->strhdr->sh_offset) < 0) {
+		_kobj_printf(ops, "%s failed to read string table\n",
+		    file->_name);
+		return (-1);
+	}
+
+	if (symxhdr != NULL) {
+		symxtbl = kobj_zalloc(symxhdr->sh_size, KM_WAIT|KM_SCRATCH);
+		if (kobj_read_file(file, (char *)symxtbl, symxhdr->sh_size,
+		    symxhdr->sh_offset) < 0) {
+			_kobj_printf(ops,
+			    "%s failed to read symbol shndx table\n",
+			    file->_name);
+			goto out;
+		}
+	}
 
 	/*
 	 * loop through the symbol table adjusting values to account
@@ -2565,25 +2655,43 @@ get_syms(struct module *mp, struct _buf *file)
 	 * fill in the hash table.
 	 */
 	for (i = 1; i < mp->nsyms; i++) {
+		Elf32_Word shndx;
+
 		sp = (Sym *)(mp->symtbl + i * mp->symhdr->sh_entsize);
-		if (sp->st_shndx < SHN_LORESERVE) {
-			if (sp->st_shndx >= mp->hdr.e_shnum) {
+
+		/*
+		 * If the section header value is the sentinel value SHN_XINDEX
+		 * and we found a SHT_SYMTAB_SHNDX section, look up the
+		 * real index from there.
+		 */
+		shndx = sp->st_shndx;
+		if (shndx == SHN_XINDEX && symxhdr != NULL) {
+			if (i * sizeof (Elf32_Word) >= symxhdr->sh_size) {
+				_kobj_printf(ops,
+				    "%s extended shndx out of range ",
+				    file->_name);
+				_kobj_printf(ops, "in symbol %d\n", i);
+				goto out;
+			}
+			shndx = symxtbl[i];
+		}
+
+		if (shndx < SHN_LORESERVE) {
+			if (shndx >= mp->shnum) {
 				_kobj_printf(ops, "%s bad shndx ",
 				    file->_name);
 				_kobj_printf(ops, "in symbol %d\n", i);
-				return (-1);
+				goto out;
 			}
-			shp = (Shdr *)
-			    (mp->shdrs +
-			    sp->st_shndx * mp->hdr.e_shentsize);
+			shp = (Shdr *)(mp->shdrs + shndx * mp->hdr.e_shentsize);
 			if (!(mp->flags & KOBJ_EXEC))
 				sp->st_value += shp->sh_addr;
 		}
 
-		if (sp->st_name == 0 || sp->st_shndx == SHN_UNDEF)
+		if (sp->st_name == 0 || shndx == SHN_UNDEF)
 			continue;
 		if (sp->st_name >= mp->strhdr->sh_size)
-			return (-1);
+			goto out;
 
 		symname = mp->strings + sp->st_name;
 
@@ -2619,7 +2727,13 @@ get_syms(struct module *mp, struct _buf *file)
 		sym_insert(mp, symname, i);
 	}
 
-	return (0);
+	err = 0;
+
+out:
+	if (symxhdr != NULL)
+		kobj_free(symxtbl, symxhdr->sh_size);
+
+	return (err);
 }
 
 static int
@@ -2633,15 +2747,15 @@ get_ctf(struct module *mp, struct _buf *file)
 	if (_moddebug & MODDEBUG_NOCTF)
 		return (0); /* do not attempt to even load CTF data */
 
-	if (mp->hdr.e_shstrndx >= mp->hdr.e_shnum) {
+	if (mp->shstrndx >= mp->shnum) {
 		_kobj_printf(ops, "krtld: get_ctf: %s, ",
 		    mp->filename);
-		_kobj_printf(ops, "corrupt e_shstrndx %u\n",
-		    mp->hdr.e_shstrndx);
+		_kobj_printf(ops, "corrupt shstrndx %u\n",
+		    mp->shstrndx);
 		return (-1);
 	}
 
-	shp = (Shdr *)(mp->shdrs + mp->hdr.e_shstrndx * mp->hdr.e_shentsize);
+	shp = (Shdr *)(mp->shdrs + mp->shstrndx * mp->hdr.e_shentsize);
 	shstrlen = shp->sh_size;
 	shstrtab = kobj_alloc(shstrlen, KM_WAIT|KM_TMP);
 
@@ -2649,12 +2763,12 @@ get_ctf(struct module *mp, struct _buf *file)
 		_kobj_printf(ops, "krtld: get_ctf: %s, ",
 		    mp->filename);
 		_kobj_printf(ops, "error reading section %u\n",
-		    mp->hdr.e_shstrndx);
+		    mp->shstrndx);
 		kobj_free(shstrtab, shstrlen);
 		return (-1);
 	}
 
-	for (i = 0; i < mp->hdr.e_shnum; i++) {
+	for (i = 0; i < mp->shnum; i++) {
 		shp = (Shdr *)(mp->shdrs + i * mp->hdr.e_shentsize);
 
 		if (shp->sh_size != 0 && shp->sh_name < shstrlen &&
@@ -2697,7 +2811,7 @@ crypto_es_hash(struct module *mp, char *hash, char *shstrtab)
 
 	SHA1Init(&ctx);
 
-	for (shn = 1; shn < mp->hdr.e_shnum; shn++) {
+	for (shn = 1; shn < mp->shnum; shn++) {
 		shp = (Shdr *)(mp->shdrs + shn * mp->hdr.e_shentsize);
 		if (!(shp->sh_flags & SHF_ALLOC) || shp->sh_size == 0)
 			continue;
@@ -2713,10 +2827,10 @@ crypto_es_hash(struct module *mp, char *hash, char *shstrtab)
 		if (kobj_debug & D_DEBUG)
 			_kobj_printf(ops,
 			    "krtld: crypto_es_hash: updating hash with"
-			    " %s data size=%d\n", shstrtab + shp->sh_name,
-			    shp->sh_size);
+			    " %s data size=%lx\n", shstrtab + shp->sh_name,
+			    (size_t)shp->sh_size);
 #endif
-		ASSERT(shp->sh_addr != NULL);
+		ASSERT(shp->sh_addr != 0);
 		SHA1Update(&ctx, (const uint8_t *)shp->sh_addr, shp->sh_size);
 	}
 
@@ -2737,15 +2851,15 @@ get_signature(struct module *mp, struct _buf *file)
 	Shdr *shp;
 	uint_t i;
 
-	if (mp->hdr.e_shstrndx >= mp->hdr.e_shnum) {
+	if (mp->shstrndx >= mp->shnum) {
 		_kobj_printf(ops, "krtld: get_signature: %s, ",
 		    mp->filename);
-		_kobj_printf(ops, "corrupt e_shstrndx %u\n",
-		    mp->hdr.e_shstrndx);
+		_kobj_printf(ops, "corrupt shstrndx %u\n",
+		    mp->shstrndx);
 		return;
 	}
 
-	shp = (Shdr *)(mp->shdrs + mp->hdr.e_shstrndx * mp->hdr.e_shentsize);
+	shp = (Shdr *)(mp->shdrs + mp->shstrndx * mp->hdr.e_shentsize);
 	shstrlen = shp->sh_size;
 	shstrtab = kobj_alloc(shstrlen, KM_WAIT|KM_TMP);
 
@@ -2753,12 +2867,12 @@ get_signature(struct module *mp, struct _buf *file)
 		_kobj_printf(ops, "krtld: get_signature: %s, ",
 		    mp->filename);
 		_kobj_printf(ops, "error reading section %u\n",
-		    mp->hdr.e_shstrndx);
+		    mp->shstrndx);
 		kobj_free(shstrtab, shstrlen);
 		return;
 	}
 
-	for (i = 0; i < mp->hdr.e_shnum; i++) {
+	for (i = 0; i < mp->shnum; i++) {
 		shp = (Shdr *)(mp->shdrs + i * mp->hdr.e_shentsize);
 		if (shp->sh_size != 0 && shp->sh_name < shstrlen &&
 		    strcmp(shstrtab + shp->sh_name,
@@ -2867,7 +2981,7 @@ do_dependents(struct modctl *modp, char *modname, size_t modnamelen)
 
 			_kobj_printf(ops, "%s: dependency ", modp->mod_modname);
 			_kobj_printf(ops, "'%s' too long ", dep);
-			_kobj_printf(ops, "(max %d chars)\n", modnamelen);
+			_kobj_printf(ops, "(max %d chars)\n", (int)modnamelen);
 
 			kobj_free(dep, p - d + 1);
 
@@ -3032,8 +3146,18 @@ do_symbols(struct module *mp, Elf64_Addr bss_base)
 		if (sp->st_shndx == SHN_UNDEF) {
 			resolved = 0;
 
+			/*
+			 * Skip over sdt probes and smap calls,
+			 * they're relocated later.
+			 */
 			if (strncmp(name, sdt_prefix, strlen(sdt_prefix)) == 0)
 				continue;
+#if defined(__x86)
+			if (strcmp(name, "smap_enable") == 0 ||
+			    strcmp(name, "smap_disable") == 0)
+				continue;
+#endif /* defined(__x86) */
+
 
 			/*
 			 * If it's not a weak reference and it's
@@ -3080,7 +3204,7 @@ do_symbols(struct module *mp, Elf64_Addr bss_base)
 	}
 	if (err)
 		return (err);
-	if (assign == 0 && mp->bss == NULL) {
+	if (assign == 0 && mp->bss == 0) {
 		mp->bss_align = bss_align;
 		mp->bss_size = bss_ptr;
 	} else if (resolved) {
@@ -3144,6 +3268,12 @@ kobj_getsymname(uintptr_t value, ulong_t *offset)
 
 	struct modctl_list *lp;
 	struct module *mp;
+
+	/*
+	 * Trap handler got us there, but we may not have whole kernel yet.
+	 */
+	if (standalone)
+		return (NULL);
 
 	/*
 	 * Loop through the primary kernel modules.
@@ -3371,26 +3501,26 @@ sym_insert(struct module *mp, char *name, symid_t index)
 	symid_t *ip;
 
 #ifdef KOBJ_DEBUG
-		if (kobj_debug & D_SYMBOLS) {
-			static struct module *lastmp = NULL;
-			Sym *sp;
-			if (lastmp != mp) {
-				_kobj_printf(ops,
-				    "krtld: symbol entry: file=%s\n",
-				    mp->filename);
-				_kobj_printf(ops,
-				    "krtld:\tsymndx\tvalue\t\t"
-				    "symbol name\n");
-				lastmp = mp;
-			}
-			sp = (Sym *)(mp->symtbl +
-			    index * mp->symhdr->sh_entsize);
-			_kobj_printf(ops, "krtld:\t[%3d]", index);
-			_kobj_printf(ops, "\t0x%lx", sp->st_value);
-			_kobj_printf(ops, "\t%s\n", name);
+	if (kobj_debug & D_SYMBOLS) {
+		static struct module *lastmp = NULL;
+		Sym *sp;
+		if (lastmp != mp) {
+			_kobj_printf(ops,
+			    "krtld: symbol entry: file=%s\n",
+			    mp->filename);
+			_kobj_printf(ops,
+			    "krtld:\tsymndx\tvalue\t\t"
+			    "symbol name\n");
+			lastmp = mp;
 		}
-
+		sp = (Sym *)(mp->symtbl +
+		    index * mp->symhdr->sh_entsize);
+		_kobj_printf(ops, "krtld:\t[%3d]", index);
+		_kobj_printf(ops, "\t0x%lx", sp->st_value);
+		_kobj_printf(ops, "\t%s\n", name);
+	}
 #endif
+
 	for (ip = &mp->buckets[kobj_hash_name(name) % mp->hashsize]; *ip;
 	    ip = &mp->chains[*ip]) {
 		;
@@ -3787,7 +3917,7 @@ kobj_comp_setup(struct _buf *file, struct compinfo *cip)
 	hdr = kobj_comphdr(file);
 	if (hdr->ch_magic != CH_MAGIC_ZLIB || hdr->ch_version != CH_VERSION ||
 	    hdr->ch_algorithm != CH_ALG_ZLIB || hdr->ch_fsize == 0 ||
-	    (hdr->ch_blksize & (hdr->ch_blksize - 1)) != 0) {
+	    !ISP2(hdr->ch_blksize)) {
 		kobj_free(file->_dbuf, cip->fsize);
 		return (-1);
 	}
@@ -3819,7 +3949,7 @@ kobj_read_file(struct _buf *file, char *buf, uint_t size, uint_t off)
 	if (_moddebug & MODDEBUG_ERRMSG) {
 		_kobj_printf(ops, "kobj_read_file: size=%x,", size);
 		_kobj_printf(ops, " offset=%x at", off);
-		_kobj_printf(ops, " buf=%x\n", buf);
+		_kobj_printf(ops, " buf=%lx\n", (uintptr_t)buf);
 	}
 
 	/*
@@ -3862,7 +3992,7 @@ kobj_read_file(struct _buf *file, char *buf, uint_t size, uint_t off)
 
 		if (dlen != size) {
 			_kobj_printf(ops, "kobj_read_file: z_uncompress "
-			    "failed to uncompress (size returned 0x%x , "
+			    "failed to uncompress (size returned 0x%lx , "
 			    "expected size: 0x%x)\n", dlen, size);
 			return (-1);
 		}
@@ -4133,7 +4263,7 @@ kobj_segbrk(caddr_t *spp, size_t size, size_t align, caddr_t limit)
 		npva = (uintptr_t)BOP_ALLOC(ops, (caddr_t)pva,
 		    alloc_size, alloc_align);
 
-		if (npva == NULL) {
+		if (npva == 0) {
 			_kobj_printf(ops, "BOP_ALLOC failed, 0x%lx bytes",
 			    alloc_size);
 			_kobj_printf(ops, " aligned %lx", alloc_align);
@@ -4454,87 +4584,6 @@ expand_libmacro(char *tail, char *path, char *pathend)
 	return (NULL);
 }
 
-static void
-tnf_add_notifyunload(kobj_notify_f *fp)
-{
-	kobj_notify_list_t *entry;
-
-	entry = kobj_alloc(sizeof (kobj_notify_list_t), KM_WAIT);
-	entry->kn_type = KOBJ_NOTIFY_MODUNLOADING;
-	entry->kn_func = fp;
-	(void) kobj_notify_add(entry);
-}
-
-/* ARGSUSED */
-static void
-tnf_unsplice_probes(uint_t what, struct modctl *mod)
-{
-	tnf_probe_control_t **p;
-	tnf_tag_data_t **q;
-	struct module *mp = mod->mod_mp;
-
-	if (!(mp->flags & KOBJ_TNF_PROBE))
-		return;
-
-	for (p = &__tnf_probe_list_head; *p; )
-		if (kobj_addrcheck(mp, (char *)*p) == 0)
-			*p = (*p)->next;
-		else
-			p = &(*p)->next;
-
-	for (q = &__tnf_tag_list_head; *q; )
-		if (kobj_addrcheck(mp, (char *)*q) == 0)
-			*q = (tnf_tag_data_t *)(*q)->tag_version;
-		else
-			q = (tnf_tag_data_t **)&(*q)->tag_version;
-
-	tnf_changed_probe_list = 1;
-}
-
-int
-tnf_splice_probes(int boot_load, tnf_probe_control_t *plist,
-    tnf_tag_data_t *tlist)
-{
-	int result = 0;
-	static int add_notify = 1;
-
-	if (plist) {
-		tnf_probe_control_t *pl;
-
-		for (pl = plist; pl->next; )
-			pl = pl->next;
-
-		if (!boot_load)
-			mutex_enter(&mod_lock);
-		tnf_changed_probe_list = 1;
-		pl->next = __tnf_probe_list_head;
-		__tnf_probe_list_head = plist;
-		if (!boot_load)
-			mutex_exit(&mod_lock);
-		result = 1;
-	}
-
-	if (tlist) {
-		tnf_tag_data_t *tl;
-
-		for (tl = tlist; tl->tag_version; )
-			tl = (tnf_tag_data_t *)tl->tag_version;
-
-		if (!boot_load)
-			mutex_enter(&mod_lock);
-		tl->tag_version = (tnf_tag_version_t *)__tnf_tag_list_head;
-		__tnf_tag_list_head = tlist;
-		if (!boot_load)
-			mutex_exit(&mod_lock);
-		result = 1;
-	}
-	if (!boot_load && result && add_notify) {
-		tnf_add_notifyunload(tnf_unsplice_probes);
-		add_notify = 0;
-	}
-	return (result);
-}
-
 char *kobj_file_buf;
 int kobj_file_bufsize;
 
@@ -4613,9 +4662,8 @@ kobj_boot_close(int fd)
 #endif
 }
 
-/*ARGSUSED*/
 static int
-kobj_boot_seek(int fd, off_t hi, off_t lo)
+kobj_boot_seek(int fd, off_t hi __unused, off_t lo)
 {
 #if defined(_OBP)
 	return (BOP_SEEK(fd, lo) == -1 ? -1 : 0);

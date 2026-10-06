@@ -40,10 +40,10 @@
  * Copyright 2007 Sun Microsystems, Inc.  All rights reserved.
  * Use is subject to license terms.
  *
+ * Copyright 2017 RackTop Systems.
+ *
  * Sun elects to use this software under the MPL license.
  */
-
-#pragma ident	"%Z%%M%	%I%	%E% SMI"
 
 /* $Id: mpmontg.c,v 1.20 2006/08/29 02:41:38 nelson%bolyard.com Exp $ */
 
@@ -56,7 +56,7 @@
  * published by Springer Verlag.
  */
 
-#define MP_USING_CACHE_SAFE_MOD_EXP 1 
+#define MP_USING_CACHE_SAFE_MOD_EXP 1
 #ifndef _KERNEL
 #include <string.h>
 #include <stddef.h> /* ptrdiff_t */
@@ -104,12 +104,12 @@ mp_err s_mp_redc(mp_int *T, mp_mont_modulus *mmm)
   for (i = 0; i < MP_USED(&mmm->N); ++i ) {
     mp_digit m_i = MP_DIGIT(T, i) * mmm->n0prime;
     /* T += N * m_i * (MP_RADIX ** i); */
-    MP_CHECKOK( s_mp_mul_d_add_offset(&mmm->N, m_i, T, i) );
+    s_mp_mul_d_add_offset(&mmm->N, m_i, T, i);
   }
   s_mp_clamp(T);
 
   /* T /= R */
-  s_mp_div_2d(T, mmm->b); 
+  s_mp_div_2d(T, mmm->b);
 
   if ((res = s_mp_cmp(T, &mmm->N)) >= 0) {
     /* T = T - N */
@@ -127,7 +127,7 @@ CLEANUP:
 }
 
 #if !defined(MP_ASSEMBLY_MUL_MONT) && !defined(MP_MONT_USE_MP_MUL)
-mp_err s_mp_mul_mont(const mp_int *a, const mp_int *b, mp_int *c, 
+mp_err s_mp_mul_mont(const mp_int *a, const mp_int *b, mp_int *c,
 	           mp_mont_modulus *mmm)
 {
   mp_digit *pb;
@@ -174,7 +174,7 @@ mp_err s_mp_mul_mont(const mp_int *a, const mp_int *b, mp_int *c,
     }
   }
   s_mp_clamp(c);
-  s_mp_div_2d(c, mmm->b); 
+  s_mp_div_2d(c, mmm->b);
   if (s_mp_cmp(c, &mmm->N) >= 0) {
     MP_CHECKOK( s_mp_sub(c, &mmm->N) );
   }

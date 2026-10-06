@@ -21,7 +21,6 @@
  */
 /*
  * Copyright 1991 Sun Microsystems, Inc.
- * #ident	"%Z%%M%	%I%	%E% SMI"
  */
 
 %/*
@@ -90,7 +89,7 @@ program RUSERSPROG {
 %
 %/*
 % * This is the structure used in version 2 of the rusersd RPC service.
-% * It corresponds to the utmp structure for BSD sytems.
+% * It corresponds to the utmp structure for BSD systems.
 % */
 %struct ru_utmp {
 %	char	ut_line[8];		/* tty name */

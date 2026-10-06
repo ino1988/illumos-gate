@@ -23,22 +23,14 @@
  * Copyright 2006 Sun Microsystems, Inc.  All rights reserved.
  * Use is subject to license terms.
  */
-
 /*
- * FILE NOTICE BEGIN
- *
- * This file should not be modified.  If you wish to modify it or have it
- * modified, please contact Sun Microsystems at <LFI149367@-sun-.-com->
- * (without anti-spam dashes)
- *
- * FILE NOTICE END
+ * Copyright 2015, Joyent, Inc.
  */
-
-#pragma ident	"%Z%%M%	%I%	%E% SMI"
 
 #include <sys/cpuvar.h>
 #include <sys/stack.h>
 #include <vm/seg_kp.h>
+#include <sys/machparam.h>
 #include <sys/proc.h>
 #include <sys/pset.h>
 #include <sys/sysmacros.h>
@@ -51,7 +43,7 @@ thread_create_intr(cpu_t *cp)
 {
 	kthread_t *tp;
 
-	tp = thread_create(NULL, 0,
+	tp = thread_create(NULL, LL_INTR_STKSZ,
 	    (void (*)())thread_create_intr, NULL, 0, &p0, TS_ONPROC, 0);
 
 	/*
@@ -84,7 +76,7 @@ thread_create_intr(cpu_t *cp)
 	tp->t_bind_cpu = PBIND_NONE;	/* no USER-requested binding */
 	tp->t_bind_pset = PS_NONE;
 
-#if defined(__i386) || defined(__amd64)
+#if defined(__x86)
 	tp->t_stk -= STACK_ALIGN;
 	*(tp->t_stk) = 0;		/* terminate intr thread stack */
 #endif
@@ -97,9 +89,12 @@ thread_create_intr(cpu_t *cp)
 }
 
 /*
- * Allocate a given number of interrupt threads for a given CPU.
- * These threads will get freed by cpu_destroy_bound_threads()
- * when CPU gets unconfigured.
+ * Allocate a given number of interrupt threads for a given CPU.  These threads
+ * will get freed by cpu_destroy_bound_threads() when the CPU gets unconfigured.
+ *
+ * Note, high level interrupts are always serviced using cpu_intr_stack and are
+ * not allowed to block. Low level interrupts or soft-interrupts use the
+ * kthread_t's that we create through the calls to thread_create_intr().
  */
 void
 cpu_intr_alloc(cpu_t *cp, int n)
@@ -110,6 +105,6 @@ cpu_intr_alloc(cpu_t *cp, int n)
 		thread_create_intr(cp);
 
 	cp->cpu_intr_stack = (caddr_t)segkp_get(segkp, INTR_STACK_SIZE,
-		KPD_HASREDZONE | KPD_NO_ANON | KPD_LOCKED) +
-		INTR_STACK_SIZE - SA(MINFRAME);
+	    KPD_HASREDZONE | KPD_NO_ANON | KPD_LOCKED) +
+	    INTR_STACK_SIZE - SA(MINFRAME);
 }

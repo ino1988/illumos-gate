@@ -21,6 +21,7 @@
 /*
  * Copyright 2010 Sun Microsystems, Inc.  All rights reserved.
  * Use is subject to license terms.
+ * Copyright (c) 2016 by Delphix. All rights reserved.
  */
 
 #include <sys/types.h>
@@ -34,11 +35,11 @@ char *v2path, *kernname, *systype;
 char *my_own_name = "boot";
 char v2args_buf[V2ARGS_BUF_SZ];
 char *v2args = v2args_buf;
-char *mfg_name;
+extern char *mfg_name;
 char *impl_arch_name;
 char *bootp_response;
 char *module_path;
-int  cache_state;
+extern int  cache_state;
 uint64_t memlistextent;		/* replacement for old member of bootops */
 
 /*  These are the various memory lists */
@@ -228,7 +229,7 @@ bgetprop(struct bootops *bop, char *name, void *buf)
 }
 
 /*
- *  If the user wants the first property in the list, he passes in a
+ *  If the user wants the first property in the list, they pass in a
  *  null string.  The routine will always return a ptr to the name of the
  *  next prop, except when there are no more props.  In that case, it will
  *  return a null string.

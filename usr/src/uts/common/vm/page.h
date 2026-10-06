@@ -20,10 +20,11 @@
  */
 /*
  * Copyright (c) 1986, 2010, Oracle and/or its affiliates. All rights reserved.
+ * Copyright 2021 Oxide Computer Company
  */
 
 /*	Copyright (c) 1984, 1986, 1987, 1988, 1989 AT&T	*/
-/*	  All Rights Reserved  	*/
+/*	  All Rights Reserved	*/
 
 /*
  * University Copyright- Copyright (c) 1982, 1986, 1988
@@ -340,13 +341,13 @@ struct as;
  *
  * So, as a quick summary:
  *
- * 	pse_mutex[]'s protect the p_selock and p_cv fields.
+ *	pse_mutex[]'s protect the p_selock and p_cv fields.
  *
- * 	p_selock protects the p_free, p_age, p_vnode, p_offset and p_hash,
+ *	p_selock protects the p_free, p_age, p_vnode, p_offset and p_hash,
  *
- * 	ph_mutex[]'s protect the page_hash[] array and its chains.
+ *	ph_mutex[]'s protect the page_hash[] array and its chains.
  *
- * 	vph_mutex[]'s protect the v_pages field and the vp page chains.
+ *	vph_mutex[]'s protect the v_pages field and the vp page chains.
  *
  *	First lock the page, then the hash chain, then the vnode chain.  When
  *	this is not possible `trylocks' must be used.  Sleeping while holding
@@ -634,7 +635,7 @@ typedef	page_t	devpage_t;
 extern pad_mutex_t ph_mutex[];
 
 #define	PAGE_HASH_MUTEX(x) \
-	&(ph_mutex[((x) ^ ((x) >> PH_SHIFT_SIZE) + ((x) << 3)) & \
+	&(ph_mutex[((x) ^ (((x) >> PH_SHIFT_SIZE) + ((x) << 3))) & \
 		(PH_TABLE_SIZE - 1)].pad_mutex)
 
 /*
@@ -751,7 +752,7 @@ void	page_vpadd(page_t **, page_t *);
 void	page_vpsub(page_t **, page_t *);
 int	page_lock(page_t *, se_t, kmutex_t *, reclaim_t);
 int	page_lock_es(page_t *, se_t, kmutex_t *, reclaim_t, int);
-void page_lock_clr_exclwanted(page_t *);
+void	page_lock_clr_exclwanted(page_t *);
 int	page_trylock(page_t *, se_t);
 int	page_try_reclaim_lock(page_t *, se_t, int);
 int	page_tryupgrade(page_t *);
@@ -762,6 +763,7 @@ void	page_lock_delete(page_t *);
 int	page_deleted(page_t *);
 int	page_pp_lock(page_t *, int, int);
 void	page_pp_unlock(page_t *, int, int);
+int	page_xresv(pgcnt_t, uint_t, int (*)(void));
 int	page_resv(pgcnt_t, uint_t);
 void	page_unresv(pgcnt_t);
 void	page_pp_useclaim(page_t *, page_t *, uint_t);
@@ -1078,7 +1080,7 @@ typedef struct kpm_hlk {
  * The state about how a kpm page is mapped and whether it is ready to go
  * is indicated by the following 1 byte kpm_spage structure. This byte is
  * split into two 4-bit parts - kp_mapped and kp_mapped_go.
- * 	- kp_mapped == 1	the page is mapped cacheable
+ *	- kp_mapped == 1	the page is mapped cacheable
  *	- kp_mapped == 2	the page is mapped non-cacheable
  *	- kp_mapped_go == 1	the mapping is ready to be dropped in
  *	- kp_mapped_go == 0	the mapping is not ready to be dropped in.
@@ -1216,6 +1218,10 @@ void page_capture_unregister_callback(uint_t index);
 int page_trycapture(page_t *pp, uint_t szc, uint_t flags, void *datap);
 void page_unlock_capture(page_t *pp);
 int page_capture_unretire_pp(page_t *);
+
+extern size_t page_coloring_init(uint_t, int, int);
+extern void page_coloring_setup(caddr_t);
+extern void page_set_colorequiv_arr(void);
 
 extern int memsegs_trylock(int);
 extern void memsegs_lock(int);

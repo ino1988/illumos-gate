@@ -35,8 +35,6 @@
 #ifndef	_POOL_H
 #define	_POOL_H
 
-#pragma ident	"%Z%%M%	%I%	%E% SMI"
-
 #include <sys/procset.h>
 #include <sys/types.h>
 #include <sys/pool.h>
@@ -46,7 +44,7 @@ extern "C" {
 #endif
 
 /*
- * Library versioning support (c.f. elf_version(3e)).
+ * Library versioning support (c.f. elf_version(3elf)).
  *
  * You can enquire about the version number of the library
  * by passing POOL_VER_NONE.  POOL_VER_CURRENT is the current

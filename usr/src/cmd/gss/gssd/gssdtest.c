@@ -20,6 +20,7 @@
  * CDDL HEADER END
  */
 /*
+ * Copyright 2017 Gary Mills
  * Copyright 2003 Sun Microsystems, Inc.  All rights reserved.
  * Use is subject to license terms.
  */
@@ -210,7 +211,7 @@ do_gssdtest(char *buf)
 			printf(gettext("Loop Count is %d \n"), i);
 			/*
 			 * if (i > 53)
-			 * 	printf ("Loop counter is greater than 55\n");
+			 *	printf ("Loop counter is greater than 55\n");
 			 */
 			_gss_acquire_cred(argc, argv);
 			_gss_init_sec_context(argc, argv);
@@ -1294,9 +1295,7 @@ char **argv;
 	OM_UINT32 status;
 	gss_ctx_id_t *context_handle;
 	OM_uint32 minor_status;
-	uid_t uid;
 
-	uid = (uid_t) getuid();
 
 	/* parse the command line to determine the variable input argument */
 
@@ -1931,7 +1930,7 @@ char **argv;
 	else
 		mechType = gss_str2oid((char *)GSS_KRB5_MECH_OID);
 
-	if (mechType == NULL || mechType->length == NULL) {
+	if (mechType == NULL || mechType->length == 0) {
 		FREE(nameType->elements, nameType->length);
 		FREE(nameType, sizeof (gss_OID_desc));
 		printf(gettext("improperly formated mech OID\n"));

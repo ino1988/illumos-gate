@@ -21,6 +21,7 @@
 /*
  * Copyright 2010 Sun Microsystems, Inc.  All rights reserved.
  * Use is subject to license terms.
+ * Copyright 2017 Joyent, Inc.
  */
 
 #include <sys/types.h>
@@ -144,7 +145,7 @@ kphysm_add_memory_dynamic(pfn_t base, pgcnt_t npgs)
 	void		*mapva;
 	void		*metabase = (void *)base;
 	pgcnt_t		nkpmpgs = 0;
-	offset_t	kpm_pages_off;
+	offset_t	kpm_pages_off = 0;
 
 	cmn_err(CE_CONT,
 	    "?kphysm_add_memory_dynamic: adding %ldK at 0x%" PRIx64 "\n",
@@ -410,7 +411,7 @@ mapalloc:
 	 *
 	 * If a memseg is reused, invalidate memseg pointers in
 	 * all cpu vm caches.  We need to do this this since the check
-	 * 	pp >= seg->pages && pp < seg->epages
+	 *	pp >= seg->pages && pp < seg->epages
 	 * used in various places is not atomic and so the first compare
 	 * can happen before reuse and the second compare after reuse.
 	 * The invalidation ensures that a memseg is not deferenced while
@@ -508,7 +509,7 @@ mapalloc:
 	 * Recalculate the paging parameters now total_pages has changed.
 	 * This will also cause the clock hands to be reset before next use.
 	 */
-	setupclock(1);
+	setupclock();
 
 	memsegs_unlock(1);
 
@@ -1638,7 +1639,7 @@ delthr_get_freemem(struct mem_handle *mhp)
 		 * Put pressure on pageout.
 		 */
 		page_needfree(free_get);
-		cv_signal(&proc_pageout->p_cv);
+		WAKE_PAGEOUT_SCANNER(delthr);
 
 		mutex_enter(&mhp->mh_mutex);
 		(void) cv_reltimedwait(&mhp->mh_cv, &mhp->mh_mutex,
@@ -2642,7 +2643,7 @@ kphysm_del_cleanup(struct mem_handle *mhp)
 {
 	struct memdelspan	*mdsp;
 	struct memseg		*seg;
-	struct memseg   	**segpp;
+	struct memseg		**segpp;
 	struct memseg		*seglist;
 	pfn_t			p_end;
 	uint64_t		avmem;
@@ -2699,7 +2700,7 @@ kphysm_del_cleanup(struct mem_handle *mhp)
 	 * Recalculate the paging parameters now total_pages has changed.
 	 * This will also cause the clock hands to be reset before next use.
 	 */
-	setupclock(1);
+	setupclock();
 
 	memsegs_unlock(1);
 

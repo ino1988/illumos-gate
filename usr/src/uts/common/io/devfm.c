@@ -23,6 +23,10 @@
  * Use is subject to license terms.
  */
 
+/*
+ * Copyright 2023 Oxide Computer Company
+ */
+
 #include <sys/stat.h>
 #include <sys/types.h>
 #include <sys/param.h>
@@ -45,7 +49,9 @@ extern int fm_get_paddr(nvlist_t *, uint64_t *);
 extern int fm_ioctl_physcpu_info(int, nvlist_t *, nvlist_t **);
 extern int fm_ioctl_cpu_retire(int, nvlist_t *, nvlist_t **);
 extern int fm_ioctl_gentopo_legacy(int, nvlist_t *, nvlist_t **);
+extern int fm_ioctl_pci_data(int, nvlist_t *, nvlist_t **);
 #endif /* __x86 */
+extern int fm_ioctl_cache_info(int, nvlist_t *, nvlist_t **);
 
 static int fm_ioctl_versions(int, nvlist_t *, nvlist_t **);
 static int fm_ioctl_page_retire(int, nvlist_t *, nvlist_t **);
@@ -75,6 +81,8 @@ static const fm_vers_t fm_versions[] = {
 	{ FM_CPU_OP_VERSION, 1 },
 	{ FM_CPU_INFO_VERSION, 1 },
 	{ FM_TOPO_LEGACY_VERSION, 1 },
+	{ FM_CACHE_INFO_VERSION, 1 },
+	{ FM_CPU_PCI_VERSION, 1 },
 	{ NULL, 0 }
 };
 
@@ -97,7 +105,11 @@ static const fm_subr_t fm_subrs[] = {
 	    fm_ioctl_cpu_retire },
 	{ FM_IOC_GENTOPO_LEGACY, B_FALSE, FM_TOPO_LEGACY_VERSION,
 	    fm_ioctl_gentopo_legacy },
+	{ FM_IOC_PCI_DATA, B_TRUE, FM_CPU_PCI_VERSION,
+	    fm_ioctl_pci_data },
 #endif	/* __x86 */
+	{ FM_IOC_CACHE_INFO, B_FALSE, FM_CACHE_INFO_VERSION,
+	    fm_ioctl_cache_info },
 	{ -1, B_FALSE, NULL, NULL },
 };
 
@@ -298,12 +310,10 @@ fm_ioctl(dev_t dev, int cmd, intptr_t data, int flag, cred_t *cred, int *rvalp)
 
 	err = subr->func(cmd, invl, &onvl);
 
-	if (invl != NULL)
-		nvlist_free(invl);
+	nvlist_free(invl);
 
 	if (err != 0) {
-		if (onvl != NULL)
-			nvlist_free(onvl);
+		nvlist_free(onvl);
 		return (err);
 	}
 
@@ -392,7 +402,7 @@ static struct modldrv modldrv = {
 	&mod_driverops, "fault management driver", &fm_ops,
 };
 
-static struct modlinkage modlinkage = {
+struct modlinkage devfm_modlinkage = {
 	MODREV_1, &modldrv, NULL
 };
 
@@ -403,7 +413,7 @@ _init(void)
 	int ret;
 
 
-	if ((ret = mod_install(&modlinkage)) == 0) {
+	if ((ret = mod_install(&devfm_modlinkage)) == 0) {
 		(void) nvlist_alloc(&fm_vers_nvl, NV_UNIQUE_NAME, KM_SLEEP);
 		for (p = fm_versions; p->interface != NULL; p++)
 			(void) nvlist_add_uint32(fm_vers_nvl, p->interface,
@@ -416,7 +426,7 @@ _init(void)
 int
 _info(struct modinfo *modinfop)
 {
-	return (mod_info(&modlinkage, modinfop));
+	return (mod_info(&devfm_modlinkage, modinfop));
 }
 
 int
@@ -424,9 +434,8 @@ _fini(void)
 {
 	int ret;
 
-	if ((ret = mod_remove(&modlinkage)) == 0) {
-		if (fm_vers_nvl != NULL)
-			nvlist_free(fm_vers_nvl);
+	if ((ret = mod_remove(&devfm_modlinkage)) == 0) {
+		nvlist_free(fm_vers_nvl);
 	}
 
 	return (ret);

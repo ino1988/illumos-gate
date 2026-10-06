@@ -26,38 +26,27 @@
 
 include ../Makefile.lib
 
-HDRS =		libinetutil.h ofmt.h
+HDRS =		libinetutil.h
 HDRDIR =	common
 SUBDIRS	=	$(MACH)
 $(BUILD64)SUBDIRS += $(MACH64)
 
-POFILE =	libinetutil.po
-MSGFILES =	common/ofmt.c
-XGETFLAGS =	-a
-
-all := 		TARGET = all
+all :=		TARGET = all
 clean :=	TARGET = clean
 clobber :=	TARGET = clobber
 install	:=	TARGET = install
-lint :=		TARGET = lint
 
 .KEEP_STATE:
 
-all clean clobber install lint: $(SUBDIRS)
+all clean clobber install: $(SUBDIRS)
 
 install_h:	$(ROOTHDRS)
 
 check:		$(CHECKHDRS)
-
-$(POFILE):	$(MSGFILES)
-		$(BUILDPO.msgfiles)
-
-_msg:		$(MSGDOMAINPOFILE)
 
 $(SUBDIRS): FRC
 	@cd $@; pwd; $(MAKE) $(TARGET)
 
 FRC:
 
-include $(SRC)/Makefile.msg.targ
 include ../Makefile.targ

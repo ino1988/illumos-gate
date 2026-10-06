@@ -18,9 +18,11 @@
  *
  * CDDL HEADER END
  */
+
 /*
  * Copyright 2008 Sun Microsystems, Inc.  All rights reserved.
  * Use is subject to license terms.
+ * Copyright 2016 Nexenta Systems, Inc.
  */
 
 #ifndef	_SYS_BOOTCONF_H
@@ -59,7 +61,7 @@ struct bsys_mem {
 	struct memlist *physinstalled;	/* amt of physmem installed */
 	struct memlist *physavail;	/* amt of physmem avail for use */
 	struct memlist *virtavail;	/* amt of virtmem avail for use */
-	uint_t		extent; 	/* number of bytes in the space */
+	uint_t		extent;		/* number of bytes in the space */
 };
 
 #define	BO_VERSION	9		/* bootops interface revision # */
@@ -108,6 +110,7 @@ extern void bop_enter_mon(void);
 extern void bop_fini(void);
 
 extern void bop_printf(void *ops, const char *fmt, ...);
+extern void vbop_printf(void *ops, const char *fmt, va_list);
 extern void bop_putsarg(const char *fmt, char *arg);
 extern void bop_panic(const char *s);
 
@@ -198,7 +201,6 @@ extern struct bootobj rootfs;
 extern struct bootobj swapfile;
 
 extern char obp_bootpath[BO_MAXOBJNAME];
-extern char svm_bootpath[BO_MAXOBJNAME];
 
 extern dev_t getrootdev(void);
 extern void getfsname(char *, char *, size_t);

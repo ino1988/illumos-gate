@@ -21,6 +21,10 @@
 
 /*
  * Copyright (c) 1990, 2010, Oracle and/or its affiliates. All rights reserved.
+ * Copyright 2011, Joyent, Inc. All rights reserved.
+ * Copyright (c) 2019 Peter Tribble.
+ * Copyright (c) 2022 Sachidananda Urs <sacchi@gmail.com>
+ * Copyright 2022 Oxide Computer Company
  */
 
 /*	Copyright (c) 1984, 1986, 1987, 1988, 1989 AT&T	*/
@@ -34,6 +38,7 @@
 #include <sys/systeminfo.h>
 #include <sys/types.h>
 #include <sys/stat.h>
+#include <err.h>
 #include "prtconf.h"
 
 struct prt_opts	opts;
@@ -42,12 +47,8 @@ static char	new_path[MAXPATHLEN];
 
 #define	INDENT_LENGTH	4
 
-#ifdef	__x86
-static const char *usage = "%s [ -V | -x | -abcdvpPD ] [ <device_path > ]\n";
-#else
 static const char *usage =
-	"%s [ -F | -V | -x | -abcdvpPD ][ <device_path > ]\n";
-#endif	/* __x86 */
+	"%s [ -F | -m | -V | -x | -abcdvpPD ] [ <device_path > ]\n";
 
 static void
 setpname(const char *name)
@@ -56,7 +57,7 @@ setpname(const char *name)
 
 	if (name == NULL)
 		opts.o_progname = "prtconf";
-	else if (p = strrchr(name, '/'))
+	else if ((p = strrchr(name, '/')) != NULL)
 		opts.o_progname = (const char *) p + 1;
 	else
 		opts.o_progname = name;
@@ -64,7 +65,7 @@ setpname(const char *name)
 
 /*PRINTFLIKE1*/
 void
-dprintf(const char *fmt, ...)
+dbgprintf(const char *fmt, ...)
 {
 	if (dbg.d_debug) {
 		va_list ap;
@@ -80,85 +81,6 @@ indent_to_level(int ilev)
 	(void) printf("%*s", INDENT_LENGTH * ilev, "");
 }
 
-static void
-cleanup_path(const char *input_path, char *path)
-{
-	char	*ptr, *ptr2;
-	size_t	len;
-
-	if ((input_path == NULL) || (path == NULL))
-		return;
-
-	(void) strcpy(path, input_path);
-
-	/*LINTED*/
-	while (1) {
-		len = strlen(path);
-		if (len == 0)
-			break;
-
-		/* change substring "//" into "/" */
-		if (ptr = strstr(path, "//")) {
-			len = strlen(ptr + 1);
-			(void) memmove(ptr, ptr + 1, len + 1);
-			continue;
-		}
-		/* change substring "/./" into "/" */
-		if (ptr = strstr(path, "/./")) {
-			len = strlen(ptr + 2);
-			(void) memmove(ptr, ptr + 2, len + 1);
-			continue;
-		}
-
-		/* change substring "/<foo>/../" into "/" */
-		if (ptr = strstr(path, "/../")) {
-			len = strlen(ptr + 3);
-			*ptr = '\0';
-			ptr2 = strrchr(path, (int)'/');
-			if (ptr2 == NULL) {
-				/* path had a leading "/../" */
-				ptr2 = path;
-			}
-			(void) memmove(ptr2, ptr + 3, len + 1);
-			continue;
-		}
-
-		/* change trailing "/<foo>/.." into "/" */
-		if ((len >= 3) &&
-		    (path[len - 3] == '/') &&
-		    (path[len - 2] == '.') &&
-		    (path[len - 1] == '.')) {
-			path[len - 3] = '\0';
-			ptr2 = strrchr(path, (int)'/');
-			if (ptr2 != NULL) {
-				ptr2[1] = '\0';
-			} else {
-				/* path was "/.." */
-				path[0] = '/';
-				path[1] = '\0';
-			}
-			continue;
-		}
-
-		/* change trailing "/." into "/" */
-		if ((len >= 2) &&
-		    (path[len - 2] == '/') &&
-		    (path[len - 1] == '.')) {
-			path[len - 1] = '\0';
-			continue;
-		}
-
-		/* remove trailing "/" unless it's the root */
-		if ((len > 1) && (path[len - 1] == '/')) {
-			path[len - 1] = '\0';
-			continue;
-		}
-
-		break;
-	}
-}
-
-
 /*
  * debug version has two more flags:
  *	-L force load driver
@@ -166,9 +88,9 @@ cleanup_path(const char *input_path, char *path)
  */
 
 #ifdef	DEBUG
-static const char *optstring = "abcdDvVxpPFf:M:dLuC";
+static const char *optstring = "abcdDvVxmpPFf:M:LuC";
 #else
-static const char *optstring = "abcdDvVxpPFf:uC";
+static const char *optstring = "abcdDvVxmpPFf:uC";
 #endif	/* DEBUG */
 
 int
@@ -200,6 +122,9 @@ main(int argc, char *argv[])
 			break;
 		case 'v':
 			++opts.o_verbose;
+			break;
+		case 'm':
+			++opts.o_memory;
 			break;
 		case 'p':
 			++opts.o_prominfo;
@@ -241,6 +166,14 @@ main(int argc, char *argv[])
 
 	(void) uname(&opts.o_uts);
 
+	if (opts.o_verbose || opts.o_pciid) {
+		opts.o_pcidb = pcidb_open(PCIDB_VERSION);
+		if (opts.o_pcidb == NULL) {
+			warn("pcidb facility not available, PCI names will "
+			    "not be translated");
+		}
+	}
+
 	if (opts.o_fbname)
 		return (do_fbname());
 
@@ -248,7 +181,7 @@ main(int argc, char *argv[])
 		return (do_promversion());
 
 	if (opts.o_prom_ready64)
-		return (do_prom_version64());
+		return (0);
 
 	if (opts.o_productinfo)
 		return (do_productinfo());
@@ -274,7 +207,7 @@ main(int argc, char *argv[])
 			return (1);
 		}
 
-		if (error = stat(path, &sinfo)) {
+		if ((error = stat(path, &sinfo)) != 0) {
 
 			/* an invalid path was specified */
 			(void) fprintf(stderr, "%s: invalid path specified\n",
@@ -290,8 +223,12 @@ main(int argc, char *argv[])
 		} else if ((sinfo.st_mode & S_IFMT) == S_IFDIR) {
 			size_t	len, plen;
 
-			/* clean up the path */
-			cleanup_path(path, new_path);
+			if (realpath(path, new_path) == NULL) {
+				(void) fprintf(stderr, "%s: invalid device"
+				    " path specified\n",
+				    opts.o_progname);
+				return (1);
+			}
 
 			len = strlen(new_path);
 			plen = strlen("/devices");
@@ -338,34 +275,41 @@ main(int argc, char *argv[])
 		return (0);
 	}
 
-	ret = sysinfo(SI_HW_PROVIDER, hw_provider, sizeof (hw_provider));
-	/*
-	 * If 0 bytes are returned (the system returns '1', for the \0),
-	 * we're probably on x86, default to Oracle.
-	 */
-	if (ret <= 1) {
-		(void) strncpy(hw_provider, "Oracle Corporation",
+	if (!opts.o_memory) {
+		ret = sysinfo(SI_HW_PROVIDER, hw_provider,
 		    sizeof (hw_provider));
+		/*
+		 * If 0 bytes are returned (the system returns '1', for the \0),
+		 * we're probably on x86, default to "Unknown Hardware Vendor".
+		 */
+		if (ret <= 1) {
+			(void) strncpy(hw_provider, "Unknown Hardware Vendor",
+			    sizeof (hw_provider));
+		}
+		(void) printf("System Configuration:  %s  %s\n", hw_provider,
+		    opts.o_uts.machine);
 	}
-	(void) printf("System Configuration:  %s  %s\n", hw_provider,
-	    opts.o_uts.machine);
 
 	pagesize = sysconf(_SC_PAGESIZE);
 	npages = sysconf(_SC_PHYS_PAGES);
-	(void) printf("Memory size: ");
-	if (pagesize == -1 || npages == -1)
-		(void) printf("unable to determine\n");
-	else {
-		const int64_t kbyte = 1024;
+	if (pagesize == -1 || npages == -1) {
+		if (opts.o_memory) {
+			(void) printf("0\n");
+			return (1);
+		} else {
+			(void) printf("Memory size: unable to determine\n");
+		}
+	} else {
 		const int64_t mbyte = 1024 * 1024;
 		int64_t ii = (int64_t)pagesize * npages;
 
-		if (ii >= mbyte)
-			(void) printf("%ld Megabytes\n",
+		if (opts.o_memory) {
+			(void) printf("%ld\n", (long)((ii+mbyte-1) / mbyte));
+			return (0);
+		} else {
+			(void) printf("Memory size: %ld Megabytes\n",
 			    (long)((ii+mbyte-1) / mbyte));
-		else
-			(void) printf("%ld Kilobytes\n",
-			    (long)((ii+kbyte-1) / kbyte));
+		}
 	}
 
 	if (opts.o_prominfo) {

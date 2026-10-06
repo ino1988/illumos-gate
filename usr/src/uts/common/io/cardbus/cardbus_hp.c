@@ -30,6 +30,10 @@
  */
 
 /*
+ * Copyright 2023 Oxide Computer Company
+ */
+
+/*
  * Cardbus hotplug module
  */
 
@@ -61,7 +65,7 @@
 #define	HPC_MAX_OCCUPANTS 8
 typedef struct hpc_occupant_info {
 	int	i;
-	char 	*id[HPC_MAX_OCCUPANTS];
+	char	*id[HPC_MAX_OCCUPANTS];
 } hpc_occupant_info_t;
 #endif
 
@@ -342,7 +346,7 @@ cardbus_event_handler(caddr_t slot_arg, uint_t event_mask)
 
 static int
 cardbus_pci_control(caddr_t ops_arg, hpc_slot_t slot_hdl, int request,
-			caddr_t arg)
+    caddr_t arg)
 {
 	cbus_t *cbp;
 	int rval = HPC_SUCCESS;
@@ -454,7 +458,7 @@ cardbus_pci_control(caddr_t ops_arg, hpc_slot_t slot_hdl, int request,
  */
 static int
 cardbus_new_slot_state(dev_info_t *dip, hpc_slot_t hdl,
-			hpc_slot_info_t *slot_info, int slot_state)
+    hpc_slot_info_t *slot_info, int slot_state)
 {
 	int cb_instance;
 	cbus_t *cbp;
@@ -619,14 +623,13 @@ create_occupant_props(dev_info_t *self, dev_t dev)
 {
 	hpc_occupant_info_t occupant;
 	int i;
-	int circular;
 
 	occupant.i = 0;
 
-	ndi_devi_enter(self, &circular);
+	ndi_devi_enter(self);
 	ddi_walk_devs(ddi_get_child(self), cardbus_list_occupants,
 	    (void *)&occupant);
-	ndi_devi_exit(self, circular);
+	ndi_devi_exit(self);
 
 	if (occupant.i == 0) {
 		char *c[] = { "" };
@@ -666,7 +669,6 @@ cardbus_configure_ap(cbus_t *cbp)
 	int rv = HPC_SUCCESS;
 	hpc_slot_state_t rstate;
 	struct cardbus_config_ctrl ctrl;
-	int circular_count;
 
 	/*
 	 * check for valid request:
@@ -690,10 +692,10 @@ cardbus_configure_ap(cbus_t *cbp)
 		ctrl.dip = NULL;
 		ctrl.op = PCICFG_OP_ONLINE;
 
-		ndi_devi_enter(self, &circular_count);
+		ndi_devi_enter(self);
 		ddi_walk_devs(ddi_get_child(self),
 		    cbus_configure, (void *)&ctrl);
-		ndi_devi_exit(self, circular_count);
+		ndi_devi_exit(self);
 
 		if (cardbus_debug) {
 			cardbus_dump_pci_config(self);
@@ -752,9 +754,9 @@ cardbus_configure_ap(cbus_t *cbp)
 	ctrl.dip = NULL;
 	ctrl.op = PCICFG_OP_ONLINE;
 
-	ndi_devi_enter(self, &circular_count);
+	ndi_devi_enter(self);
 	ddi_walk_devs(ddi_get_child(self), cbus_configure, (void *)&ctrl);
-	ndi_devi_exit(self, circular_count);
+	ndi_devi_exit(self);
 
 	if (cardbus_debug) {
 		cardbus_dump_pci_config(self);
@@ -1111,7 +1113,7 @@ cardbus_close(dev_t dev, int flags, int otyp, cred_t *credp)
 /*ARGSUSED*/
 int
 cardbus_ioctl(dev_t dev, int cmd, intptr_t arg, int mode, cred_t *credp,
-		int *rvalp)
+    int *rvalp)
 {
 	cbus_t *cbp;
 	dev_info_t *self;
@@ -1223,9 +1225,9 @@ cardbus_ioctl(dev_t dev, int cmd, intptr_t arg, int mode, cred_t *credp,
 
 		/*
 		 * check for valid request:
-		 * 	1. It is a hotplug slot.
-		 * 	2. The slot has no occupant that is in
-		 * 	the 'configured' state.
+		 *	1. It is a hotplug slot.
+		 *	2. The slot has no occupant that is in
+		 *	the 'configured' state.
 		 *
 		 * The lower 8 bits of the minor number is the PCI
 		 * device number for the slot.
@@ -1324,7 +1326,7 @@ cardbus_ioctl(dev_t dev, int cmd, intptr_t arg, int mode, cred_t *credp,
 
 		/*
 		 * check for valid request:
-		 * 	1. It is a hotplug slot.
+		 *	1. It is a hotplug slot.
 		 */
 		if (cbp->slot_handle == NULL) {
 			rv = ENXIO;
@@ -1370,23 +1372,23 @@ cardbus_ioctl(dev_t dev, int cmd, intptr_t arg, int mode, cred_t *credp,
 	case DEVCTL_AP_CONTROL:
 		/*
 		 * HPC control functions:
-		 * 	HPC_CTRL_ENABLE_SLOT/HPC_CTRL_DISABLE_SLOT
-		 * 		Changes the state of the slot and preserves
-		 * 		the state across the reboot.
-		 * 	HPC_CTRL_ENABLE_AUTOCFG/HPC_CTRL_DISABLE_AUTOCFG
-		 * 		Enables or disables the auto configuration
-		 * 		of hot plugged occupant if the hardware
-		 * 		supports notification of the hot plug
-		 * 		events.
-		 * 	HPC_CTRL_GET_LED_STATE/HPC_CTRL_SET_LED_STATE
-		 * 		Controls the state of an LED.
-		 * 	HPC_CTRL_GET_SLOT_INFO
-		 * 		Get slot information data structure
-		 * 		(hpc_slot_info_t).
-		 * 	HPC_CTRL_GET_BOARD_TYPE
-		 * 		Get board type information (hpc_board_type_t).
-		 * 	HPC_CTRL_GET_CARD_INFO
-		 * 		Get card information (hpc_card_info_t).
+		 *	HPC_CTRL_ENABLE_SLOT/HPC_CTRL_DISABLE_SLOT
+		 *		Changes the state of the slot and preserves
+		 *		the state across the reboot.
+		 *	HPC_CTRL_ENABLE_AUTOCFG/HPC_CTRL_DISABLE_AUTOCFG
+		 *		Enables or disables the auto configuration
+		 *		of hot plugged occupant if the hardware
+		 *		supports notification of the hot plug
+		 *		events.
+		 *	HPC_CTRL_GET_LED_STATE/HPC_CTRL_SET_LED_STATE
+		 *		Controls the state of an LED.
+		 *	HPC_CTRL_GET_SLOT_INFO
+		 *		Get slot information data structure
+		 *		(hpc_slot_info_t).
+		 *	HPC_CTRL_GET_BOARD_TYPE
+		 *		Get board type information (hpc_board_type_t).
+		 *	HPC_CTRL_GET_CARD_INFO
+		 *		Get card information (hpc_card_info_t).
 		 *
 		 * These control functions are used by the cfgadm plug-in
 		 * to implement "-x" and "-v" options.
@@ -1454,7 +1456,7 @@ cardbus_ioctl(dev_t dev, int cmd, intptr_t arg, int mode, cred_t *credp,
 #endif
 		/*
 		 * check for valid request:
-		 * 	1. It is a hotplug slot.
+		 *	1. It is a hotplug slot.
 		 */
 		if (cbp->slot_handle == NULL) {
 			rv = ENXIO;
@@ -1686,47 +1688,49 @@ struct cardbus_pci_desc {
 	char	*fmt;
 };
 
+#define	CFG_GET(f)	((int(*)())(uintptr_t)f)
+
 static struct cardbus_pci_desc generic_pci_cfg[] = {
-	    { "VendorId    =", 0, (int(*)())pci_config_get16, "%s 0x%04x" },
-	    { "DeviceId    =", 2, (int(*)())pci_config_get16, "%s 0x%04x" },
-	    { "Command     =", 4, (int(*)())pci_config_get16, "%s 0x%04x" },
-	    { "Status      =", 6, (int(*)())pci_config_get16, "%s 0x%04x" },
-	    { "Latency     =", 0xd, (int(*)())pci_config_get8, "%s 0x%02x" },
-	    { "BASE0       =", 0x10, (int(*)())pci_config_get32, "%s 0x%08x" },
-	    { "BASE1       =", 0x14, (int(*)())pci_config_get32, "%s 0x%08x" },
-	    { "BASE2       =", 0x18, (int(*)())pci_config_get32, "%s 0x%08x" },
-	    { "BASE3       =", 0x1c, (int(*)())pci_config_get32, "%s 0x%08x" },
-	    { "BASE4       =", 0x20, (int(*)())pci_config_get32, "%s 0x%08x" },
-	    { "CIS Pointer =", 0x28, (int(*)())pci_config_get32, "%s 0x%08x" },
-	    { "ILINE       =", 0x3c, (int(*)())pci_config_get8, "%s 0x%02x" },
-	    { "IPIN        =", 0x3d, (int(*)())pci_config_get8, "%s 0x%02x" },
+	    { "VendorId    =", 0, CFG_GET(pci_config_get16), "%s 0x%04x" },
+	    { "DeviceId    =", 2, CFG_GET(pci_config_get16), "%s 0x%04x" },
+	    { "Command     =", 4, CFG_GET(pci_config_get16), "%s 0x%04x" },
+	    { "Status      =", 6, CFG_GET(pci_config_get16), "%s 0x%04x" },
+	    { "Latency     =", 0xd, CFG_GET(pci_config_get8), "%s 0x%02x" },
+	    { "BASE0       =", 0x10, CFG_GET(pci_config_get32), "%s 0x%08x" },
+	    { "BASE1       =", 0x14, CFG_GET(pci_config_get32), "%s 0x%08x" },
+	    { "BASE2       =", 0x18, CFG_GET(pci_config_get32), "%s 0x%08x" },
+	    { "BASE3       =", 0x1c, CFG_GET(pci_config_get32), "%s 0x%08x" },
+	    { "BASE4       =", 0x20, CFG_GET(pci_config_get32), "%s 0x%08x" },
+	    { "CIS Pointer =", 0x28, CFG_GET(pci_config_get32), "%s 0x%08x" },
+	    { "ILINE       =", 0x3c, CFG_GET(pci_config_get8), "%s 0x%02x" },
+	    { "IPIN        =", 0x3d, CFG_GET(pci_config_get8), "%s 0x%02x" },
 	    { NULL, 0, NULL, NULL }
 };
 
 static struct cardbus_pci_desc cardbus_pci_cfg[] = {
-	    { "VendorId    =", 0, (int(*)())pci_config_get16, "%s 0x%04x" },
-	    { "DeviceId    =", 2, (int(*)())pci_config_get16, "%s 0x%04x" },
-	    { "Command     =", 4, (int(*)())pci_config_get16, "%s 0x%04x" },
-	    { "Status      =", 6, (int(*)())pci_config_get16, "%s 0x%04x" },
-	    { "CacheLineSz =", 0xc, (int(*)())pci_config_get8, "%s 0x%02x" },
-	    { "Latency     =", 0xd, (int(*)())pci_config_get8, "%s 0x%02x" },
-	    { "MemBase Addr=", 0x10, (int(*)())pci_config_get32, "%s 0x%08x" },
-	    { "Pri Bus     =", 0x18, (int(*)())pci_config_get8, "%s 0x%02x" },
-	    { "Sec Bus     =", 0x19, (int(*)())pci_config_get8, "%s 0x%02x" },
-	    { "Sub Bus     =", 0x1a, (int(*)())pci_config_get8, "%s 0x%02x" },
-	    { "CBus Latency=", 0x1b, (int(*)())pci_config_get8, "%s 0x%02x" },
-	    { "Mem0 Base   =", 0x1c, (int(*)())pci_config_get32, "%s 0x%08x" },
-	    { "Mem0 Limit  =", 0x20, (int(*)())pci_config_get32, "%s 0x%08x" },
-	    { "Mem1 Base   =", 0x24, (int(*)())pci_config_get32, "%s 0x%08x" },
-	    { "Mem1 Limit  =", 0x28, (int(*)())pci_config_get32, "%s 0x%08x" },
-	    { "I/O0 Base   =", 0x2c, (int(*)())pci_config_get32, "%s 0x%08x" },
-	    { "I/O0 Limit  =", 0x30, (int(*)())pci_config_get32, "%s 0x%08x" },
-	    { "I/O1 Base   =", 0x34, (int(*)())pci_config_get32, "%s 0x%08x" },
-	    { "I/O1 Limit  =", 0x38, (int(*)())pci_config_get32, "%s 0x%08x" },
-	    { "ILINE       =", 0x3c, (int(*)())pci_config_get8, "%s 0x%02x" },
-	    { "IPIN        =", 0x3d, (int(*)())pci_config_get8, "%s 0x%02x" },
-	    { "Bridge Ctrl =", 0x3e, (int(*)())pci_config_get16, "%s 0x%04x" },
-	    { "Legacy Addr =", 0x44, (int(*)())pci_config_get32, "%s 0x%08x" },
+	    { "VendorId    =", 0, CFG_GET(pci_config_get16), "%s 0x%04x" },
+	    { "DeviceId    =", 2, CFG_GET(pci_config_get16), "%s 0x%04x" },
+	    { "Command     =", 4, CFG_GET(pci_config_get16), "%s 0x%04x" },
+	    { "Status      =", 6, CFG_GET(pci_config_get16), "%s 0x%04x" },
+	    { "CacheLineSz =", 0xc, CFG_GET(pci_config_get8), "%s 0x%02x" },
+	    { "Latency     =", 0xd, CFG_GET(pci_config_get8), "%s 0x%02x" },
+	    { "MemBase Addr=", 0x10, CFG_GET(pci_config_get32), "%s 0x%08x" },
+	    { "Pri Bus     =", 0x18, CFG_GET(pci_config_get8), "%s 0x%02x" },
+	    { "Sec Bus     =", 0x19, CFG_GET(pci_config_get8), "%s 0x%02x" },
+	    { "Sub Bus     =", 0x1a, CFG_GET(pci_config_get8), "%s 0x%02x" },
+	    { "CBus Latency=", 0x1b, CFG_GET(pci_config_get8), "%s 0x%02x" },
+	    { "Mem0 Base   =", 0x1c, CFG_GET(pci_config_get32), "%s 0x%08x" },
+	    { "Mem0 Limit  =", 0x20, CFG_GET(pci_config_get32), "%s 0x%08x" },
+	    { "Mem1 Base   =", 0x24, CFG_GET(pci_config_get32), "%s 0x%08x" },
+	    { "Mem1 Limit  =", 0x28, CFG_GET(pci_config_get32), "%s 0x%08x" },
+	    { "I/O0 Base   =", 0x2c, CFG_GET(pci_config_get32), "%s 0x%08x" },
+	    { "I/O0 Limit  =", 0x30, CFG_GET(pci_config_get32), "%s 0x%08x" },
+	    { "I/O1 Base   =", 0x34, CFG_GET(pci_config_get32), "%s 0x%08x" },
+	    { "I/O1 Limit  =", 0x38, CFG_GET(pci_config_get32), "%s 0x%08x" },
+	    { "ILINE       =", 0x3c, CFG_GET(pci_config_get8), "%s 0x%02x" },
+	    { "IPIN        =", 0x3d, CFG_GET(pci_config_get8), "%s 0x%02x" },
+	    { "Bridge Ctrl =", 0x3e, CFG_GET(pci_config_get16), "%s 0x%04x" },
+	    { "Legacy Addr =", 0x44, CFG_GET(pci_config_get32), "%s 0x%08x" },
 	    { NULL, 0, NULL, NULL }
 };
 
@@ -1796,7 +1800,7 @@ cardbus_dump_pci_config(dev_info_t *dip)
 void
 cardbus_dump_socket(dev_info_t *dip)
 {
-	ddi_acc_handle_t 	iohandle;
+	ddi_acc_handle_t	iohandle;
 	caddr_t		ioaddr;
 	ddi_device_acc_attr_t attr;
 	attr.devacc_attr_version = DDI_DEVICE_ATTR_V0;

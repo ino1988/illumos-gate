@@ -21,6 +21,7 @@
 
 #
 # Copyright (c) 1992, 2010, Oracle and/or its affiliates. All rights reserved.
+# Copyright 2019 OmniOS Community Edition (OmniOSce) Association.
 #
 
 BASEPLAT =	i386
@@ -48,7 +49,7 @@ P_ASOBJS=	boot.o		boot_elf.o	caller.o
 
 S_ASOBJS=
 
-CRTSRCS=	../../../../lib/common/i386
+CRTSRCS=	../../../../lib/crt/i386
 CRTI=		pics/crti.o
 CRTN=		pics/crtn.o
 CRTS=		$(CRTI)		$(CRTN)
@@ -56,14 +57,12 @@ CRTS=		$(CRTI)		$(CRTN)
 include		$(SRC)/Makefile.master
 
 # This is safe because linking is done only with the primary compiler.
-MAPFILE-ORDER =		../common/mapfile-order-devpro
-$(__GNUC)MAPFILE-ORDER =	../common/mapfile-order-gcc
+MAPFILE-ORDER =	../common/mapfile-order-gcc
 
 include		$(SRC)/cmd/sgs/rtld/Makefile.com
 
 # Add any machine specific flags.
 
-ADBGENCFLAGS +=	-erroff=%all
 ADBGENFLAGS +=	-milp32
 ADBSUB=		$(ADBSUB32)
 SONAME=		/lib/ld.so.1
@@ -74,9 +73,7 @@ SGSMSGTARG +=	$(SGSMSGINTEL) $(SGSMSGINTEL32) $(SGSMSG32)
 
 all:		$(RTLD)
 
-install:	all $(ROOTDYNLIB)
-
-lint:		$(LINTOUT32)
+install:	all $(ROOTDYNLIB) $(ROOTCOMPATLINKS)
 
 adbmacros:	adb .WAIT $(ADBSCRIPTS)
 

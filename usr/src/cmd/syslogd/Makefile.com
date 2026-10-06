@@ -21,25 +21,26 @@
 # Copyright 2009 Sun Microsystems, Inc.  All rights reserved.
 # Use is subject to license terms.
 #
+# Copyright (c) 2018, Joyent, Inc.
 
-PROG= 		syslogd
+PROG=		syslogd
 ROTATESCRIPT=	newsyslog
 CONFIGFILE=	syslog.conf
-TXTS= 		syslog.conf
+TXTS=		syslog.conf
 PRODUCT=	$(PROG) $(ROTATESCRIPT)
 OBJS=		syslogd.o queue.o list.o conf.o
 SRCS=		$(OBJS:%.o=../%.c)
-LLOBJS=		$(OBJS:%.o=%.ll)
 
 include ../../Makefile.cmd
 
-$(PROG) lint 	:= LDLIBS += -lscf -lnsl
-CERRWARN	+= -_gcc=-Wno-uninitialized
+$(PROG)		:= LDLIBS += -lscf -lnsl
+CERRWARN	+= $(CNOWARN_UNINIT)
+
+# not linted
+SMATCH=off
+
 CPPFLAGS	+= -D_POSIX_PTHREAD_SEMANTICS -D_REENTRANT
 CFLAGS		+= -DNDEBUG
-
-# there's some extra utility code defined but not used.
-LINTFLAGS	+= -erroff=E_NAME_DEF_NOT_USED2
 
 VARSYSLOG=	syslog
 VARAUTHLOG=	authlog
@@ -50,7 +51,7 @@ ROOTLIBROTATE=	$(ROTATESCRIPT:%=$(ROOTLIB)/%)
 ROOTVARSYSLOG=	$(VARSYSLOG:%=$(ROOTVARLOGD)/%)
 ROOTVARAUTHLOG=	$(VARAUTHLOG:%=$(ROOTVARLOGD)/%)
 
-$(ROOTUSRSBINPROG) 	:= FILEMODE = 0555
+$(ROOTUSRSBINPROG)	:= FILEMODE = 0555
 $(ROOTUSRLIBROTATE)	:= FILEMODE = 0555
 $(ROOTETCCONFIG)	:= FILEMODE = 0644
 $(ROOTVARSYSLOG)	:= FILEMODE = 0644
@@ -67,13 +68,9 @@ $(ROOTLIB)/%:	../%
 
 .KEEP_STATE:
 
-.SUFFIXES:	$(SUFFIXES) .ll
-
-.c.ll:
-	$(CC) $(CFLAGS) $(CPPFLAGS) -Zll -o $@ $<
+.SUFFIXES:	$(SUFFIXES)
 
 .PARALLEL: $(OBJS)
-
 
 $(VARSYSLOG) $(VARAUTHLOG):
 	$(ECHO) '\c' > $@
@@ -92,9 +89,5 @@ logfiles: $(ROOTVARSYSLOG) $(ROOTVARAUTHLOG)
 
 clean:
 	$(RM) $(OBJS) $(LLOBJS) $(VARSYSLOG) $(VARAUTHLOG)
-
-lint:	lint_SRCS
-
-lock_lint:	$(LLOBJS)
 
 include ../../Makefile.targ

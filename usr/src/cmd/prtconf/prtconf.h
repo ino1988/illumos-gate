@@ -22,6 +22,7 @@
  * Copyright 2009 Sun Microsystems, Inc.  All rights reserved.
  * Use is subject to license terms.
  * Copyright (c) 2012 Joyent, Inc.  All rights reserved.
+ * Copyright (c) 2019 Peter Tribble.
  */
 
 #ifndef	_PRT_CONF_H
@@ -37,23 +38,23 @@ extern "C" {
 
 extern void init_priv_data(struct di_priv_data *);
 extern void dump_priv_data(int, di_node_t);
-extern int print_pciid(di_node_t, di_prom_handle_t, pcidb_hdl_t *);
+extern void print_pciid(const char *, uint16_t, uint16_t, pcidb_hdl_t *);
 extern void indent_to_level(int);
 extern void prtconf_devinfo();
 extern int do_fbname();
 extern int do_promversion();
-extern int do_prom_version64(void);
 extern int do_prominfo();
 void indent_to_level(int);
 extern int do_productinfo();
 
-extern void dprintf(const char *, ...);
+extern void dbgprintf(const char *, ...);
 
 struct prt_opts {
 	int o_verbose;
 	int o_drv_name;
 	int o_pseudodevs;
 	int o_fbname;
+	int o_memory;
 	int o_noheader;
 	int o_prominfo;
 	int o_productinfo;
@@ -69,6 +70,7 @@ struct prt_opts {
 	const char *o_promdev;
 	const char *o_progname;
 	struct utsname o_uts;
+	pcidb_hdl_t *o_pcidb;
 };
 
 struct prt_dbg {

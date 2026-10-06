@@ -22,13 +22,13 @@
 # Copyright 2009 Sun Microsystems, Inc.  All rights reserved.
 # Use is subject to license terms.
 #
+# Copyright (c) 2018, Joyent, Inc.
 
 PROG	=	inetd
 MANIFEST=	inetd.xml inetd-upgrade.xml
 SVCMETHOD=	inetd-upgrade
 
 OBJS	= inetd.o tlx.o config.o util.o contracts.o repval.o wait.o env.o
-SRCS	= $(OBJS:%.o=%.c)
 
 include ../../../Makefile.cmd
 include ../../Makefile.cmd-inet
@@ -40,15 +40,13 @@ CPPFLAGS  += -D_FILE_OFFSET_BITS=64 -I$(CMDINETCOMMONDIR) -D_REENTRANT
 $(RELEASE_BUILD)CPPFLAGS +=     -DNDEBUG
 
 CERRWARN += -_gcc=-Wno-switch
-CERRWARN += -_gcc=-Wno-unused-label
+
+SMOFF += kmalloc_wrong_size
 
 LDLIBS    += -lsocket -lnsl -lrestart -lscf -lcontract -linetutil \
 		-lwrap -linetsvc -luutil -lumem -lbsm
 
 CLOBBERFILES += $(SVCMETHOD)
-
-# lint doesn't like the unused _umem_*_init()
-lint_SRCS := LINTFLAGS += -xerroff=E_NAME_DEF_NOT_USED2
 
 .PARALLEL:	$(OBJS)
 .WAIT:		$(PROG)
@@ -70,7 +68,5 @@ check:		$(CHKMANIFEST)
 
 clean:
 		$(RM) $(OBJS)
-
-lint:		lint_SRCS
 
 include ../../../Makefile.targ

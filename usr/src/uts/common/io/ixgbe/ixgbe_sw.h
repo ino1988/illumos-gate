@@ -26,6 +26,9 @@
 /*
  * Copyright (c) 2008, 2010, Oracle and/or its affiliates. All rights reserved.
  * Copyright (c) 2013 Saso Kiselkov. All rights reserved.
+ * Copyright 2016 OmniTI Computer Consulting, Inc. All rights reserved.
+ * Copyright 2019 Joyent, Inc.
+ * Copyright 2026 Oxide Computer Company
  */
 
 #ifndef	_IXGBE_SW_H
@@ -72,7 +75,10 @@ extern "C" {
 #include <sys/fm/util.h>
 #include <sys/disp.h>
 #include <sys/fm/io/ddi.h>
+#include <sys/ddi_ufm.h>
 #include "ixgbe_api.h"
+#include "ixgbe_e610.h"
+#include "ixgbe_common.h"
 
 #define	MODULE_NAME			"ixgbe"	/* module name */
 
@@ -87,8 +93,10 @@ extern "C" {
 #define	IXGBE_INTR_ADJUST		0x40
 #define	IXGBE_ERROR			0x80
 
-#define	MAX_NUM_UNICAST_ADDRESSES 	0x80
-#define	MAX_NUM_MULTICAST_ADDRESSES 	0x1000
+#define	MAX_NUM_UNICAST_ADDRESSES	0x80
+#define	MAX_NUM_MULTICAST_ADDRESSES	0x1000
+#define	MAX_NUM_VLAN_FILTERS		0x40
+
 #define	IXGBE_INTR_NONE			0
 #define	IXGBE_INTR_MSIX			1
 #define	IXGBE_INTR_MSI			2
@@ -194,21 +202,24 @@ extern "C" {
 /*
  * Bit flags for attach_progress
  */
-#define	ATTACH_PROGRESS_PCI_CONFIG	0x0001	/* PCI config setup */
-#define	ATTACH_PROGRESS_REGS_MAP	0x0002	/* Registers mapped */
-#define	ATTACH_PROGRESS_PROPS		0x0004	/* Properties initialized */
-#define	ATTACH_PROGRESS_ALLOC_INTR	0x0008	/* Interrupts allocated */
-#define	ATTACH_PROGRESS_ALLOC_RINGS	0x0010	/* Rings allocated */
-#define	ATTACH_PROGRESS_ADD_INTR	0x0020	/* Intr handlers added */
-#define	ATTACH_PROGRESS_LOCKS		0x0040	/* Locks initialized */
-#define	ATTACH_PROGRESS_INIT		0x0080	/* Device initialized */
-#define	ATTACH_PROGRESS_STATS		0x0200	/* Kstats created */
-#define	ATTACH_PROGRESS_MAC		0x0800	/* MAC registered */
-#define	ATTACH_PROGRESS_ENABLE_INTR	0x1000	/* DDI interrupts enabled */
-#define	ATTACH_PROGRESS_FM_INIT		0x2000	/* FMA initialized */
-#define	ATTACH_PROGRESS_SFP_TASKQ	0x4000	/* SFP taskq created */
-#define	ATTACH_PROGRESS_LINK_TIMER	0x8000	/* link check timer */
-#define	ATTACH_PROGRESS_OVERTEMP_TASKQ	0x10000 /* Over-temp taskq created */
+#define	ATTACH_PROGRESS_PCI_CONFIG	(1 << 0) /* PCI config setup */
+#define	ATTACH_PROGRESS_REGS_MAP	(1 << 1) /* Registers mapped */
+#define	ATTACH_PROGRESS_PROPS		(1 << 2) /* Properties initialized */
+#define	ATTACH_PROGRESS_ALLOC_INTR	(1 << 3) /* Interrupts allocated */
+#define	ATTACH_PROGRESS_ALLOC_RINGS	(1 << 4) /* Rings allocated */
+#define	ATTACH_PROGRESS_ADD_INTR	(1 << 5) /* Intr handlers added */
+#define	ATTACH_PROGRESS_LOCKS		(1 << 6) /* Locks initialized */
+#define	ATTACH_PROGRESS_INIT		(1 << 7) /* Device initialized */
+#define	ATTACH_PROGRESS_STATS		(1 << 8) /* Kstats created */
+#define	ATTACH_PROGRESS_MAC		(1 << 9) /* MAC registered */
+#define	ATTACH_PROGRESS_ENABLE_INTR	(1 << 10) /* DDI interrupts enabled */
+#define	ATTACH_PROGRESS_FM_INIT		(1 << 11) /* FMA initialized */
+#define	ATTACH_PROGRESS_SFP_TASKQ	(1 << 12) /* SFP taskq created */
+#define	ATTACH_PROGRESS_LINK_TIMER	(1 << 13) /* link check timer */
+#define	ATTACH_PROGRESS_OVERTEMP_TASKQ	(1 << 14) /* Over-temp taskq created */
+#define	ATTACH_PROGRESS_PHY_TASKQ	(1 << 15) /* Ext. PHY taskq created */
+#define	ATTACH_PROGRESS_UFM		(1 << 16) /* UFM support */
+#define	ATTACH_PROGRESS_ACI		(1 << 17) /* ACI support */
 
 #define	PROP_DEFAULT_MTU		"default_mtu"
 #define	PROP_FLOW_CONTROL		"flow_control"
@@ -301,7 +312,7 @@ typedef struct adapter_info {
 
 enum ioc_reply {
 	IOC_INVAL = -1,	/* bad, NAK with EINVAL */
-	IOC_DONE, 	/* OK, reply sent */
+	IOC_DONE,	/* OK, reply sent */
 	IOC_ACK,	/* OK, just send ACK */
 	IOC_REPLY	/* OK, just send reply */
 };
@@ -384,6 +395,15 @@ typedef union ixgbe_ether_addr {
 	} mac;
 } ixgbe_ether_addr_t;
 
+/*
+ * The list of VLANs an Rx group will accept.
+ */
+typedef struct ixgbe_vlan {
+	list_node_t		ixvl_link;
+	uint16_t		ixvl_vid;   /* The VLAN ID */
+	uint_t			ixvl_refs;  /* Number of users of this VLAN */
+} ixgbe_vlan_t;
+
 typedef enum {
 	USE_NONE,
 	USE_COPY,
@@ -394,6 +414,7 @@ typedef struct ixgbe_tx_context {
 	uint32_t		hcksum_flags;
 	uint32_t		ip_hdr_len;
 	uint32_t		mac_hdr_len;
+	uint32_t		l3_proto;
 	uint32_t		l4_proto;
 	uint32_t		mss;
 	uint32_t		l4_hdr_len;
@@ -503,10 +524,6 @@ typedef struct ixgbe_tx_ring {
 	uint32_t		recycle_fail;
 	uint32_t		stall_watchdog;
 
-#ifdef IXGBE_DEBUG
-	/*
-	 * Debug statistics
-	 */
 	uint32_t		stat_overload;
 	uint32_t		stat_fail_no_tbd;
 	uint32_t		stat_fail_no_tcb;
@@ -514,7 +531,7 @@ typedef struct ixgbe_tx_ring {
 	uint32_t		stat_reschedule;
 	uint32_t		stat_break_tbd_limit;
 	uint32_t		stat_lso_header_fail;
-#endif
+
 	uint64_t		stat_obytes;
 	uint64_t		stat_opackets;
 
@@ -578,14 +595,10 @@ typedef struct ixgbe_rx_ring {
 
 	kmutex_t		rx_lock;	/* Rx access lock */
 
-#ifdef IXGBE_DEBUG
-	/*
-	 * Debug statistics
-	 */
 	uint32_t		stat_frame_error;
 	uint32_t		stat_cksum_error;
 	uint32_t		stat_exceed_pkt;
-#endif
+
 	uint64_t		stat_rbytes;
 	uint64_t		stat_ipackets;
 
@@ -594,6 +607,7 @@ typedef struct ixgbe_rx_ring {
 
 	struct ixgbe		*ixgbe;		/* Pointer to ixgbe struct */
 } ixgbe_rx_ring_t;
+
 /*
  * Software Receive Ring Group
  */
@@ -601,6 +615,8 @@ typedef struct ixgbe_rx_group {
 	uint32_t		index;		/* Group index */
 	mac_group_handle_t	group_handle;   /* call back group handle */
 	struct ixgbe		*ixgbe;		/* Pointer to ixgbe struct */
+	boolean_t		aupe;		/* AUPE bit */
+	list_t			vlans;		/* list of VLANs to allow */
 } ixgbe_rx_group_t;
 
 /*
@@ -616,11 +632,17 @@ typedef struct ixgbe_intr_vector {
 	int	other_cnt;	/* count other interrupt */
 } ixgbe_intr_vector_t;
 
+typedef enum {
+	IXGBE_ACI_WARN_MOD_POWER	= 1 << 0,
+	IXGBE_ACI_WARN_PHY_LOAD		= 1 << 1,
+	IXGBE_ACI_WARN_MOD_QUAL		= 1 << 2
+} ixgbe_aci_warn_t;
+
 /*
  * Software adapter state
  */
 typedef struct ixgbe {
-	int 			instance;
+	int			instance;
 	mac_handle_t		mac_hdl;
 	dev_info_t		*dip;
 	struct ixgbe_hw		hw;
@@ -629,6 +651,7 @@ typedef struct ixgbe {
 	adapter_info_t		*capab;	/* adapter hardware capabilities */
 	ddi_taskq_t		*sfp_taskq;	/* sfp-change taskq */
 	ddi_taskq_t		*overtemp_taskq; /* overtemp taskq */
+	ddi_taskq_t		*phy_taskq;	/* external PHY taskq */
 	uint32_t		eims;		/* interrupt mask setting */
 	uint32_t		eimc;		/* interrupt mask clear */
 	uint32_t		eicr;		/* interrupt cause reg */
@@ -643,6 +666,8 @@ typedef struct ixgbe {
 	uint32_t		loopback_mode;
 	uint32_t		default_mtu;
 	uint32_t		max_frame_size;
+	ixgbe_link_speed	speeds_supported;
+	uint64_t		phys_supported;
 
 	uint32_t		rcb_pending;
 
@@ -665,6 +690,7 @@ typedef struct ixgbe {
 	 */
 	ixgbe_rx_group_t	*rx_groups;	/* Array of rx groups */
 	uint32_t		num_rx_groups;	/* Number of rx groups in use */
+	uint32_t		rx_def_group;	/* Default Rx group index */
 
 	/*
 	 * Transmit Rings
@@ -677,8 +703,8 @@ typedef struct ixgbe {
 	boolean_t		tx_ring_init;
 	boolean_t		tx_head_wb_enable; /* Tx head wrtie-back */
 	boolean_t		tx_hcksum_enable; /* Tx h/w cksum offload */
-	boolean_t 		lso_enable; 	/* Large Segment Offload */
-	boolean_t 		mr_enable; 	/* Multiple Tx and Rx Ring */
+	boolean_t		lso_enable;	/* Large Segment Offload */
+	boolean_t		mr_enable;	/* Multiple Tx and Rx Ring */
 	boolean_t		relax_order_enable; /* Relax Order */
 	uint32_t		classify_mode;	/* Classification mode */
 	uint32_t		tx_copy_thresh;	/* Tx copy threshold */
@@ -718,6 +744,9 @@ typedef struct ixgbe {
 	uint32_t		mcast_count;
 	struct ether_addr	mcast_table[MAX_NUM_MULTICAST_ADDRESSES];
 
+	boolean_t		vlft_enabled; /* VLAN filtering enabled? */
+	boolean_t		vlft_init;    /* VLAN filtering initialized? */
+
 	ulong_t			sys_page_size;
 
 	boolean_t		link_check_complete;
@@ -725,14 +754,41 @@ typedef struct ixgbe {
 	ddi_periodic_t		periodic_id; /* for link check timer func */
 
 	/*
+	 * ACI Firmware related
+	 */
+	struct ixgbe_aci_event	aci_event;
+	uint16_t		aci_intrs;
+	uint16_t		lse_mask;
+	uint32_t		aci_events;
+	ixgbe_aci_warn_t	aci_warn;
+
+	/*
+	 * LED related constants.
+	 */
+	boolean_t		ixgbe_led_active;
+	boolean_t		ixgbe_led_blink;
+	uint32_t		ixgbe_led_reg;
+	uint32_t		ixgbe_led_index;
+
+	/*
+	 * UFM state
+	 */
+	ddi_ufm_handle_t	*ixgbe_ufmh;
+	struct ixgbe_nvm_version	ixgbe_vers;
+
+	/*
 	 * Kstat definitions
 	 */
 	kstat_t			*ixgbe_ks;
 
 	uint32_t		param_en_10000fdx_cap:1,
+				param_en_5000fdx_cap:1,
+				param_en_2500fdx_cap:1,
 				param_en_1000fdx_cap:1,
 				param_en_100fdx_cap:1,
 				param_adv_10000fdx_cap:1,
+				param_adv_5000fdx_cap:1,
+				param_adv_2500fdx_cap:1,
 				param_adv_1000fdx_cap:1,
 				param_adv_100fdx_cap:1,
 				param_pause_cap:1,
@@ -743,13 +799,15 @@ typedef struct ixgbe {
 				param_adv_asym_pause_cap:1,
 				param_adv_rem_fault:1,
 				param_lp_10000fdx_cap:1,
+				param_lp_5000fdx_cap:1,
+				param_lp_2500fdx_cap:1,
 				param_lp_1000fdx_cap:1,
 				param_lp_100fdx_cap:1,
 				param_lp_autoneg_cap:1,
 				param_lp_pause_cap:1,
 				param_lp_asym_pause_cap:1,
 				param_lp_rem_fault:1,
-				param_pad_to_32:12;
+				param_pad_to_32:6;
 } ixgbe_t;
 
 typedef struct ixgbe_stat {
@@ -766,11 +824,17 @@ typedef struct ixgbe_stat {
 	kstat_named_t tx_fail_no_tbd;	/* Tx Fail Desc Ring Empty */
 	kstat_named_t tx_fail_dma_bind;	/* Tx Fail DMA bind */
 	kstat_named_t tx_reschedule;	/* Tx Reschedule */
+	kstat_named_t tx_break_tbd_limit; /* Reached single xmit desc limit */
+	kstat_named_t tx_lso_header_fail; /* New mblk for last LSO hdr frag */
 
 	kstat_named_t gprc;	/* Good Packets Received Count */
 	kstat_named_t gptc;	/* Good Packets Xmitted Count */
 	kstat_named_t gor;	/* Good Octets Received Count */
 	kstat_named_t got;	/* Good Octets Xmitd Count */
+	kstat_named_t qor;	/* Queue Octets Received */
+	kstat_named_t qot;	/* Queue Octets Transmitted */
+	kstat_named_t qpr;	/* Queue Packets Received */
+	kstat_named_t qpt;	/* Queue Packets Transmitted */
 	kstat_named_t prc64;	/* Packets Received - 64b */
 	kstat_named_t prc127;	/* Packets Received - 65-127b */
 	kstat_named_t prc255;	/* Packets Received - 127-255b */
@@ -783,10 +847,6 @@ typedef struct ixgbe_stat {
 	kstat_named_t ptc511;	/* Packets Xmitted (255-511b) */
 	kstat_named_t ptc1023;	/* Packets Xmitted (512-1023b) */
 	kstat_named_t ptc1522;	/* Packets Xmitted (1024-1522b */
-	kstat_named_t qprc[16];	/* Queue Packets Received Count */
-	kstat_named_t qptc[16];	/* Queue Packets Transmitted Count */
-	kstat_named_t qbrc[16];	/* Queue Bytes Received Count */
-	kstat_named_t qbtc[16];	/* Queue Bytes Transmitted Count */
 
 	kstat_named_t crcerrs;	/* CRC Error Count */
 	kstat_named_t illerrc;	/* Illegal Byte Error Count */
@@ -814,6 +874,7 @@ typedef struct ixgbe_stat {
 	kstat_named_t mptc;	/* Multicast Packets Xmited Count */
 	kstat_named_t bptc;	/* Broadcast Packets Xmited Count */
 	kstat_named_t lroc;	/* LRO Packets Received Count */
+	kstat_named_t dev_gone;	/* Number of device gone events encountered */
 } ixgbe_stat_t;
 
 /*
@@ -850,6 +911,11 @@ void ixgbe_fill_group(void *arg, mac_ring_type_t, const int,
     mac_group_info_t *, mac_group_handle_t);
 int ixgbe_rx_ring_intr_enable(mac_intr_handle_t);
 int ixgbe_rx_ring_intr_disable(mac_intr_handle_t);
+
+int ixgbe_transceiver_info(void *, uint_t, mac_transceiver_info_t *);
+int ixgbe_transceiver_read(void *, uint_t, uint_t, void *, size_t, off_t,
+    size_t *);
+mac_ether_media_t ixgbe_phy_to_media(ixgbe_t *);
 
 /*
  * Function prototypes in ixgbe_gld.c

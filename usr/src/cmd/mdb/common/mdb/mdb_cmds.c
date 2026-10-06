@@ -26,8 +26,12 @@
 
 /*
  * Copyright (c) 2012 by Delphix. All rights reserved.
- * Copyright (c) 2013 Joyent, Inc. All rights reserved.
+ * Copyright 2021 Joyent, Inc.
  * Copyright (c) 2013 Josef 'Jeff' Sipek <jeffpc@josefsipek.net>
+ * Copyright (c) 2015, 2017 by Delphix. All rights reserved.
+ * Copyright 2018 OmniOS Community Edition (OmniOSce) Association.
+ * Copyright 2025 Oxide Computer Company
+ * Copyright 2025 Edgecast Cloud LLC
  */
 
 #include <sys/elf.h>
@@ -69,6 +73,7 @@
 #include <mdb/mdb_macalias.h>
 #include <mdb/mdb_tab.h>
 #include <mdb/mdb_typedef.h>
+#include <mdb/mdb_linkerset.h>
 #ifdef _KMDB
 #include <kmdb/kmdb_kdi.h>
 #endif
@@ -197,6 +202,94 @@ write_uint64(mdb_tgt_as_t as, mdb_tgt_addr_t addr, uint64_t n, uint_t rdback)
 	return (addr + sizeof (n));
 }
 
+/*
+ * Writes to objects of size 1, 2, 4, or 8 bytes. The function
+ * doesn't care if the object is a number or not (e.g. it could
+ * be a byte array, or a struct) as long as the size of the write
+ * is one of the aforementioned ones.
+ */
+static mdb_tgt_addr_t
+write_var_uint(mdb_tgt_as_t as, mdb_tgt_addr_t addr, uint64_t val, size_t size,
+    uint_t rdback)
+{
+	if (size < sizeof (uint64_t)) {
+		uint64_t max_num = 1ULL << (size * NBBY);
+
+		if (val >= max_num) {
+			uint64_t write_len = 0;
+
+			/* count bytes needed for val */
+			while (val != 0) {
+				write_len++;
+				val >>= NBBY;
+			}
+
+			mdb_warn("value too big for the length of the write: "
+			    "supplied %llu bytes but maximum is %llu bytes\n",
+			    (u_longlong_t)write_len, (u_longlong_t)size);
+			return (addr);
+		}
+	}
+
+	switch (size) {
+	case 1:
+		return (write_uint8(as, addr, val, rdback));
+	case 2:
+		return (write_uint16(as, addr, val, rdback));
+	case 4:
+		return (write_uint32(as, addr, val, rdback));
+	case 8:
+		return (write_uint64(as, addr, val, rdback));
+	default:
+		mdb_warn("writes of size %u are not supported\n ", size);
+		return (addr);
+	}
+}
+
+static mdb_tgt_addr_t
+write_ctf_uint(mdb_tgt_as_t as, mdb_tgt_addr_t addr, uint64_t n, uint_t rdback)
+{
+	mdb_ctf_id_t mid;
+	size_t size;
+	ssize_t type_size;
+	int kind;
+
+	if (mdb_ctf_lookup_by_addr(addr, &mid) != 0) {
+		mdb_warn("no CTF data found at this address\n");
+		return (addr);
+	}
+
+	kind = mdb_ctf_type_kind(mid);
+	if (kind == CTF_ERR) {
+		mdb_warn("CTF data found but type kind could not be read");
+		return (addr);
+	}
+
+	if (kind == CTF_K_TYPEDEF) {
+		mdb_ctf_id_t temp_id;
+		if (mdb_ctf_type_resolve(mid, &temp_id) != 0) {
+			mdb_warn("failed to resolve type");
+			return (addr);
+		}
+		kind = mdb_ctf_type_kind(temp_id);
+	}
+
+	if (kind != CTF_K_INTEGER && kind != CTF_K_POINTER &&
+	    kind != CTF_K_ENUM) {
+		mdb_warn("CTF type should be integer, pointer, or enum\n");
+		return (addr);
+	}
+
+	type_size = mdb_ctf_type_size(mid);
+	if (type_size < 0) {
+		mdb_warn("CTF data found but size could not be read");
+		return (addr);
+	}
+	size = type_size;
+
+	return (write_var_uint(as, addr, n, size, rdback));
+}
+
 static int
 write_arglist(mdb_tgt_as_t as, mdb_tgt_addr_t addr,
     int argc, const mdb_arg_t *argv)
@@ -221,11 +314,17 @@ write_arglist(mdb_tgt_as_t as, mdb_tgt_addr_t addr,
 	case 'w':
 		write_value = write_uint16;
 		break;
+	case 'z':
+		write_value = write_ctf_uint;
+		break;
 	case 'W':
 		write_value = write_uint32;
 		break;
 	case 'Z':
 		write_value = write_uint64;
+		break;
+	default:
+		write_value = NULL;
 		break;
 	}
 
@@ -252,7 +351,7 @@ write_arglist(mdb_tgt_as_t as, mdb_tgt_addr_t addr,
 			mdb_warn("failed to write %llr at address 0x%llx",
 			    value, addr);
 			mdb.m_incr = 0;
-			break;
+			return (DCMD_ERR);
 		}
 
 		mdb.m_incr = naddr - addr;
@@ -341,6 +440,10 @@ match_arglist(mdb_tgt_as_t as, uint_t flags, mdb_tgt_addr_t addr,
 	case 'M':
 		match_value = match_uint64;
 		break;
+	default:
+		mdb_warn("unknown match value %c\n",
+		    argv->a_un.a_char);
+		return (DCMD_ERR);
 	}
 
 	for (argv++, i = 1; i < argc; i++, argv++) {
@@ -486,7 +589,7 @@ print_common(mdb_tgt_as_t as, uint_t flags, int argc, const mdb_arg_t *argv)
 	mdb_tgt_addr_t addr = mdb_nv_get_value(mdb.m_dot);
 
 	if (argc != 0 && argv->a_type == MDB_TYPE_CHAR) {
-		if (strchr("vwWZ", argv->a_un.a_char))
+		if (strchr("vwzWZ", argv->a_un.a_char))
 			return (write_arglist(as, addr, argc, argv));
 		if (strchr("lLM", argv->a_un.a_char))
 			return (match_arglist(as, flags, addr, argc, argv));
@@ -520,8 +623,7 @@ cmd_print_phys(uintptr_t x, uint_t flags, int argc, const mdb_arg_t *argv)
 
 /*ARGSUSED*/
 static int
-cmd_print_value(uintptr_t addr, uint_t flags,
-	int argc, const mdb_arg_t *argv)
+cmd_print_value(uintptr_t addr, uint_t flags, int argc, const mdb_arg_t *argv)
 {
 	uintmax_t ndot, dot = mdb_get_dot();
 	const char *tgt_argv[1];
@@ -1428,9 +1530,9 @@ map_name(const mdb_map_t *map, const char *name)
 		return ("[ stack ]");
 	if (map->map_flags & MDB_TGT_MAP_ANON)
 		return ("[ anon ]");
-	if (map->map_name != NULL)
-		return (map->map_name);
-	return ("[ unknown ]");
+	if (map->map_name[0] == '\0')
+		return ("[ unknown ]");
+	return (map->map_name);
 }
 
 /*ARGSUSED*/
@@ -1638,7 +1740,7 @@ showrev_objectversions(int showall)
 }
 
 /*
- * Display information similar to what showrev(1M) displays when invoked
+ * Display information similar to what showrev(8) displays when invoked
  * with no arguments.
  */
 static int
@@ -1655,7 +1757,7 @@ showrev_sysinfo(void)
 	}
 
 	/*
-	 * Match the order of the showrev(1M) output and put "Application
+	 * Match the order of the showrev(8) output and put "Application
 	 * architecture" before "Kernel version"
 	 */
 	if ((s = mdb_tgt_isa(mdb.m_target)) != NULL)
@@ -1864,14 +1966,14 @@ cmd_findsym(uintptr_t addr, uint_t flags, int argc, const mdb_arg_t *argv)
 		} else
 			value = argv[i].a_un.a_val;
 
-		if (value != NULL)
+		if (value != (uintptr_t)NULL)
 			symlist[len++] = value;
 	}
 
 	if (flags & DCMD_ADDRSPEC)
 		symlist[len++] = addr;
 
-	symlist[len] = NULL;
+	symlist[len] = (uintptr_t)NULL;
 
 	if (optg)
 		type = MDB_TGT_BIND_GLOBAL | MDB_TGT_TYPE_FUNC;
@@ -1922,6 +2024,7 @@ cmd_dis(uintptr_t addr, uint_t flags, int argc, const mdb_arg_t *argv)
 	int i;
 
 	uint_t opt_f = FALSE;		/* File-mode off by default */
+	uint_t opt_p = FALSE;		/* Physical mode off by default */
 	uint_t opt_w = FALSE;		/* Window mode off by default */
 	uint_t opt_a = FALSE;		/* Raw-address mode off by default */
 	uint_t opt_b = FALSE;		/* Address & symbols off by default */
@@ -1930,6 +2033,7 @@ cmd_dis(uintptr_t addr, uint_t flags, int argc, const mdb_arg_t *argv)
 
 	i = mdb_getopts(argc, argv,
 	    'f', MDB_OPT_SETBITS, TRUE, &opt_f,
+	    'p', MDB_OPT_SETBITS, TRUE, &opt_p,
 	    'w', MDB_OPT_SETBITS, TRUE, &opt_w,
 	    'a', MDB_OPT_SETBITS, TRUE, &opt_a,
 	    'b', MDB_OPT_SETBITS, TRUE, &opt_b,
@@ -1992,13 +2096,28 @@ cmd_dis(uintptr_t addr, uint_t flags, int argc, const mdb_arg_t *argv)
 	/*
 	 * If the state is IDLE (i.e. no address space), turn on -f.
 	 */
-	if (mdb_tgt_status(tgt, &st) == 0 && st.st_state == MDB_TGT_IDLE)
+	if (mdb_tgt_status(tgt, &st) == 0 && st.st_state == MDB_TGT_IDLE) {
+		if (opt_p) {
+			mdb_warn("cannot use -p (physical address mode) when "
+			    "operating on a file\n");
+			return (DCMD_ERR);
+		}
 		opt_f = TRUE;
+	}
+
+	if (opt_f && opt_p) {
+		mdb_warn("-f (file mode) and -p (physical address mode) "
+		    "cannot be used together\n");
+		return (DCMD_ERR);
+	}
+
 
 	if (opt_f)
 		as = MDB_TGT_AS_FILE;
+	else if (opt_p)
+		as = MDB_TGT_AS_PHYS;
 	else
-		as = MDB_TGT_AS_VIRT;
+		as = MDB_TGT_AS_VIRT_I;
 
 	if (opt_w == FALSE) {
 		n++;
@@ -2071,6 +2190,48 @@ cmd_dis(uintptr_t addr, uint_t flags, int argc, const mdb_arg_t *argv)
 
 	mdb_set_dot(addr);
 	return (DCMD_OK);
+}
+
+static void
+dis_help(void)
+{
+	static const char dis_desc[] =
+"Disassembles instructions starting at the final argument or the current\n"
+"value of dot. If the address is the start of a function, the entire\n"
+"function is disassembled, or else a window of instructions before and after\n"
+"the disassembled address are displayed.\n"
+"\n";
+
+	static const char dis_opts[] =
+"  -a         Print instruction addresses as numeric values instead of \n"
+"             symbolic values.\n"
+"  -b         Print instruction addresses as both numeric and symbolic "
+"values.\n"
+"  -f         Read instructions from the target's object file instead of the \n"
+"             target's virtual address space.\n"
+"  -p         Read instructions from the target's physical address space\n"
+"             rather than its virtual address space.\n"
+"  -n instr   Display 'instr' instructions before and after the given "
+"address.\n"
+"  -w         Force window behavior, even at the start of a function.\n"
+"\n";
+
+	static const char dis_examples[] =
+"  ::dis\n"
+"  clock::dis\n"
+"  ::dis gethrtime\n"
+"  set_freemem+0x16::dis -n 4\n"
+"\n";
+
+	mdb_printf("%s", dis_desc);
+	(void) mdb_dec_indent(2);
+	mdb_printf("%<b>OPTIONS%</b>\n");
+	(void) mdb_inc_indent(2);
+	mdb_printf("%s", dis_opts);
+	(void) mdb_dec_indent(2);
+	mdb_printf("%<b>EXAMPLES%</b>\n");
+	(void) mdb_inc_indent(2);
+	(void) mdb_printf("%s", dis_examples);
 }
 
 /*ARGSUSED*/
@@ -2175,6 +2336,7 @@ cmd_dump(uintptr_t addr, uint_t flags, int argc, const mdb_arg_t *argv)
 	uint_t phys = FALSE;
 	uint_t file = FALSE;
 	uintptr_t group = 4;
+	uintptr_t length = 0;
 	uintptr_t width = 1;
 	mdb_tgt_status_t st;
 	int error;
@@ -2183,6 +2345,7 @@ cmd_dump(uintptr_t addr, uint_t flags, int argc, const mdb_arg_t *argv)
 	    'e', MDB_OPT_SETBITS, MDB_DUMP_ENDIAN, &dflags,
 	    'f', MDB_OPT_SETBITS, TRUE, &file,
 	    'g', MDB_OPT_UINTPTR, &group,
+	    'l', MDB_OPT_UINTPTR, &length,
 	    'p', MDB_OPT_SETBITS, TRUE, &phys,
 	    'q', MDB_OPT_CLRBITS, MDB_DUMP_ASCII, &dflags,
 	    'r', MDB_OPT_SETBITS, MDB_DUMP_RELATIVE, &dflags,
@@ -2195,8 +2358,11 @@ cmd_dump(uintptr_t addr, uint_t flags, int argc, const mdb_arg_t *argv)
 
 	if ((phys && file) ||
 	    (width == 0) || (width > 0x10) ||
-	    (group == 0) || (group > 0x100))
+	    (group == 0) || (group > 0x100) ||
+	    (mdb.m_dcount > 1 && length > 0))
 		return (DCMD_USAGE);
+	if (length == 0)
+		length = mdb.m_dcount;
 
 	/*
 	 * If neither -f nor -p were specified and the state is IDLE (i.e. no
@@ -2208,13 +2374,13 @@ cmd_dump(uintptr_t addr, uint_t flags, int argc, const mdb_arg_t *argv)
 
 	dflags |= MDB_DUMP_GROUP(group) | MDB_DUMP_WIDTH(width);
 	if (phys)
-		error = mdb_dump64(mdb_get_dot(), mdb.m_dcount, dflags,
+		error = mdb_dump64(mdb_get_dot(), length, dflags,
 		    mdb_partial_pread, NULL);
 	else if (file)
-		error = mdb_dumpptr(addr, mdb.m_dcount, dflags,
+		error = mdb_dumpptr(addr, length, dflags,
 		    mdb_partial_xread, (void *)mdb_tgt_fread);
 	else
-		error = mdb_dumpptr(addr, mdb.m_dcount, dflags,
+		error = mdb_dumpptr(addr, length, dflags,
 		    mdb_partial_xread, (void *)mdb_tgt_vread);
 
 	return (((flags & DCMD_LOOP) || (error == -1)) ? DCMD_ABORT : DCMD_OK);
@@ -2246,7 +2412,7 @@ cmd_head(uintptr_t addr, uint_t flags, int argc, const mdb_arg_t *argv)
 	const char *c;
 	mdb_pipe_t p;
 
-	if (!flags & DCMD_PIPE)
+	if (!(flags & DCMD_PIPE))
 		return (DCMD_USAGE);
 
 	if (argc == 1 || argc == 2) {
@@ -2538,8 +2704,9 @@ tgt_status(const mdb_tgt_status_t *tsp)
 		return (DCMD_OK);
 
 	if (tsp->st_pc != 0) {
-		if (mdb_dis_ins2str(mdb.m_disasm, mdb.m_target, MDB_TGT_AS_VIRT,
-		    buf, sizeof (buf), tsp->st_pc) != tsp->st_pc)
+		if (mdb_dis_ins2str(mdb.m_disasm, mdb.m_target,
+		    MDB_TGT_AS_VIRT_I, buf, sizeof (buf), tsp->st_pc) !=
+		    tsp->st_pc)
 			format = "target stopped at:\n%-#16a%8T%s\n";
 		else
 			format = "target stopped at %a:\n";
@@ -2647,11 +2814,6 @@ cmd_step(uintptr_t addr, uint_t flags, int argc, const mdb_arg_t *argv)
 			name = "step (out)";
 			argv++;
 			argc--;
-		} else if (strcmp(argv->a_un.a_str, "branch") == 0) {
-			func = &mdb_tgt_step_branch;
-			name = "step (branch)";
-			argv++;
-			argc--;
 		} else if (strcmp(argv->a_un.a_str, "over") == 0) {
 			func = &mdb_tgt_next;
 			name = "step (over)";
@@ -2697,7 +2859,7 @@ cmd_run(uintptr_t addr, uint_t flags, int argc, const mdb_arg_t *argv)
 			mdb_warn("failed to create new target");
 		return (DCMD_ERR);
 	}
-	return (cmd_cont(NULL, 0, 0, NULL));
+	return (cmd_cont(0, 0, 0, NULL));
 }
 #endif
 
@@ -2717,7 +2879,7 @@ ve_delete(mdb_tgt_t *t, mdb_tgt_spec_desc_t *sp, int vid, void *data)
 	if (vid < 0)
 		return (0); /* skip over target implementation events */
 
-	if (sp->spec_base != NULL) {
+	if (sp->spec_base != 0) {
 		(void) mdb_tgt_vespec_info(t, vid, &spec, NULL, 0);
 		if (sp->spec_base - spec.spec_base < spec.spec_size)
 			status = mdb_tgt_vespec_delete(t, vid);
@@ -2744,7 +2906,7 @@ ve_delete_spec(mdb_tgt_spec_desc_t *sp)
 	    (mdb_tgt_vespec_f *)ve_delete, sp);
 
 	if (sp->spec_size == 0) {
-		if (sp->spec_id != 0 || sp->spec_base != NULL)
+		if (sp->spec_id != 0 || sp->spec_base != 0)
 			mdb_warn("no traced events matched description\n");
 	}
 
@@ -2780,11 +2942,100 @@ cmd_delete(uintptr_t addr, uint_t flags, int argc, const mdb_arg_t *argv)
 		spec.spec_base = mdb_get_dot();
 	else if (argv->a_type == MDB_TYPE_STRING &&
 	    strcmp(argv->a_un.a_str, "all") != 0)
-		spec.spec_id = (int)(intmax_t)strtonum(argv->a_un.a_str, 10);
+		spec.spec_id = (int)(intmax_t)mdb_strtonum(argv->a_un.a_str,
+		    10);
 	else if (argv->a_type == MDB_TYPE_IMMEDIATE)
 		spec.spec_id = (int)(intmax_t)argv->a_un.a_val;
 
 	return (ve_delete_spec(&spec));
+}
+
+static int
+cmd_write(uintptr_t addr, uint_t flags, int argc, const mdb_arg_t *argv)
+{
+	mdb_tgt_as_t as;
+	int rdback = mdb.m_flags & MDB_FL_READBACK;
+	mdb_tgt_addr_t naddr;
+	size_t forced_size = 0;
+	boolean_t opt_p, opt_o, opt_l;
+	uint64_t val = 0;
+	int i;
+
+	opt_p = opt_o = opt_l = B_FALSE;
+
+	i = mdb_getopts(argc, argv,
+	    'p', MDB_OPT_SETBITS, B_TRUE, &opt_p,
+	    'o', MDB_OPT_SETBITS, B_TRUE, &opt_o,
+	    'l', MDB_OPT_UINTPTR_SET, &opt_l, (uintptr_t *)&forced_size, NULL);
+
+	if (!(flags & DCMD_ADDRSPEC))
+		return (DCMD_USAGE);
+
+	if (opt_p && opt_o) {
+		mdb_warn("-o and -p are incompatible\n");
+		return (DCMD_USAGE);
+	}
+
+	argc -= i;
+	argv += i;
+
+	if (argc == 0)
+		return (DCMD_USAGE);
+
+	switch (argv[0].a_type) {
+	case MDB_TYPE_STRING:
+		val = mdb_strtoull(argv[0].a_un.a_str);
+		break;
+	case MDB_TYPE_IMMEDIATE:
+		val = argv[0].a_un.a_val;
+		break;
+	default:
+		return (DCMD_USAGE);
+	}
+
+	if (opt_p)
+		as = MDB_TGT_AS_PHYS;
+	else if (opt_o)
+		as = MDB_TGT_AS_FILE;
+	else
+		as = MDB_TGT_AS_VIRT;
+
+	if (opt_l)
+		naddr = write_var_uint(as, addr, val, forced_size, rdback);
+	else
+		naddr = write_ctf_uint(as, addr, val, rdback);
+
+	if (addr == naddr) {
+		mdb_warn("failed to write %llr at address %#llx", val, addr);
+		return (DCMD_ERR);
+	}
+
+	return (DCMD_OK);
+}
+
+void
+write_help(void)
+{
+	mdb_printf(
+	    "-l length  force a write with the specified length in bytes\n"
+	    "-o         write data to the object file location specified\n"
+	    "-p         write data to the physical address specified\n"
+	    "\n"
+	    "Attempts to write the given value to the address provided.\n"
+	    "If -l is not specified, the address must be the position of a\n"
+	    "symbol that is either of integer, pointer, or enum type. The\n"
+	    "type and the size of the symbol are inferred by the CTF found\n"
+	    "in the provided address. The length of the write is guaranteed\n"
+	    "to be the inferred size of the symbol.\n"
+	    "\n"
+	    "If no CTF data exists, or the address provided is not a symbol\n"
+	    "of integer or pointer type, then the write fails. At that point\n"
+	    "the user can force the write by using the '-l' option and\n"
+	    "specifying its length.\n"
+	    "\n"
+	    "Note that forced writes with a length that are bigger than\n"
+	    "the size of the biggest data pointer supported are not allowed."
+	    "\n");
 }
 
 static void
@@ -2854,6 +3105,8 @@ dump_help(void)
 #endif
 	    "-g n  display bytes in groups of n\n"
 	    "      (default is 4; n must be a power of 2, divide line width)\n"
+	    "-l n  display n bytes\n"
+	    "      (default is 1; rounded up to multiple of line width)\n"
 	    "-p    dump from physical memory\n"
 	    "-q    don't print ASCII\n"
 	    "-r    use relative numbering (automatically sets -u)\n"
@@ -2864,6 +3117,174 @@ dump_help(void)
 	    "      (default is to align output at paragraph boundary)\n"
 	    "-w n  display n 16-byte paragraphs per line\n"
 	    "      (default is 1, maximum is 16)\n");
+}
+
+static void
+bitx_help(void)
+{
+	mdb_printf(
+	    "Extract bits from an integer or, with the optional third\n"
+	    "argument, set the value in the provided bit range and show\n"
+	    "the result.\n\n"
+	    "Bit positions are inclusive and specified with the high bit\n"
+	    "first.\n");
+}
+
+static int
+cmd_bitx(uintptr_t addr, uint_t flags, int argc, const mdb_arg_t *argv)
+{
+	uint64_t val = addr;
+	uint8_t high, low;
+
+	if (!(flags & DCMD_ADDRSPEC))
+		return (DCMD_USAGE);
+
+	if (argc != 2 && argc != 3)
+		return (DCMD_USAGE);
+
+	high = (uint8_t)mdb_argtoull(&argv[0]);
+	low = (uint8_t)mdb_argtoull(&argv[1]);
+
+	if (high > 63 || low > 63) {
+		mdb_warn("bit positions must be in the range [0,%r]\n", 63);
+		return (DCMD_ERR);
+	}
+
+	if (high < low) {
+		mdb_warn("high bit must not be less than the low bit\n");
+		return (DCMD_ERR);
+	}
+
+	uint64_t mask = (1ULL << (high - low + 1)) - 1ULL;
+
+	if (argc == 3) {
+		uint64_t nval = (uint64_t)mdb_argtoull(&argv[2]);
+
+		if ((~mask & nval) != 0) {
+			mdb_warn(
+			    "value (%lr) too large for bit range [%r:%r]\n",
+			    nval, high, low);
+			return (DCMD_ERR);
+		}
+
+		val &= ~(mask << low);
+		val |= nval << low;
+
+		mdb_nv_set_value(mdb.m_dot, val);
+	} else {
+		val = ((val >> low) & mask);
+	}
+	mdb_printf("%lr\n", val);
+
+	return (DCMD_OK);
+}
+
+/* "DESCRIPTION" section text for ::bcmp */
+static void
+bcmp_help(void)
+{
+	mdb_printf(
+	    "-n Number of bytes to compare\n"
+	    "\n"
+	    "Both addr2 and -n arguments are required.\n"
+	    "\n"
+	    "Output is silent if both memory areas are identical. If they\n"
+	    "are not identical, the offset of the first differing byte prints\n"
+	    "on stdout or a pipe and dot is set to (addr + the offset).\n");
+}
+
+/* Actual implementation of ::bcmp */
+static int
+cmd_bcmp(uintptr_t addr, uint_t flags, int argc, const mdb_arg_t *argv)
+{
+	uintptr_t other_addr = 0;
+	uint64_t length = 0;
+	uintptr_t high_addr, low_addr;
+
+	if (argc < 1 || argc > 3 || !(flags & DCMD_ADDRSPEC) ||
+	    argv[0].a_type != MDB_TYPE_STRING || argv[0].a_un.a_str[0] == '-') {
+		return (DCMD_USAGE);
+	}
+
+	if (dis_str2addr(argv[0].a_un.a_str, &other_addr) == -1)
+		return (DCMD_ERR);
+	argv++;
+	argc--;
+
+	if (mdb_getopts(argc, argv, 'n', MDB_OPT_UINT64, &length, NULL) !=
+	    argc) {
+		return (DCMD_USAGE);
+	}
+
+	/* Cap the length to (2 ^ 31 - 1) bytes for now. */
+	if (length > INT_MAX || length == 0) {
+		mdb_warn("Lengths not [1..0t%d]/[1..0x%x] are unsupported.\n",
+		    INT_MAX, INT_MAX);
+		return (DCMD_ERR);
+	}
+
+	if (addr > other_addr) {
+		high_addr = addr;
+		low_addr = other_addr;
+	} else {
+		high_addr = other_addr;
+		low_addr = addr;
+	}
+
+	if (high_addr - low_addr < length) {
+		mdb_warn("Segments are overlapping for length %r.\n", length);
+		return (DCMD_ERR);
+	}
+
+	/* Check for bounds at the higher address, which means wrapping? */
+	if (high_addr + length < high_addr) {
+		mdb_warn("High-address segment would wrap around\n");
+		return (DCMD_ERR);
+	}
+
+	/*
+	 * Okay, we can finally start the comparison. Be deliberate, we can
+	 * make this faster later.
+	 *
+	 * For now, read them in 1KiB at a time.
+	 */
+	uintptr_t offset = 0;
+#define	BCMP_CHUNK_SIZE 1024
+	uint8_t *chunk = mdb_alloc(BCMP_CHUNK_SIZE, UM_SLEEP | UM_GC);
+	uint8_t *other_chunk = mdb_alloc(BCMP_CHUNK_SIZE, UM_SLEEP | UM_GC);
+	while (offset < length) {
+		size_t readsize = (length - offset > BCMP_CHUNK_SIZE) ?
+		    BCMP_CHUNK_SIZE : length - offset;
+		size_t chunk_offset = 0;
+
+		if (mdb_vread(chunk, readsize, addr + offset) == -1) {
+			mdb_warn("Read failure 0x%p, length %d\n",
+			    addr + offset, readsize);
+			return (DCMD_ERR);
+		}
+		if (mdb_vread(other_chunk, readsize, other_addr + offset) ==
+		    -1) {
+			mdb_warn("Read failure 0x%p, length %d\n",
+			    other_addr + offset, readsize);
+			return (DCMD_ERR);
+		}
+		/* Like I said, we can make this faster later. */
+		while (chunk_offset < readsize) {
+			if (chunk[chunk_offset] != other_chunk[chunk_offset])
+				break;
+			chunk_offset++;
+		}
+		offset += chunk_offset;
+		if (chunk_offset < readsize) {
+			mdb_printf("%lr\n", offset);
+			/* Set the dot so someone can utter "/B" immediately. */
+			mdb_set_dot(addr + offset);
+			break; /* out of while loop, to return DCMD_OK... */
+		}
+	}
+#undef BCMP_CHUNK_SIZE
+
+	return (DCMD_OK);
 }
 
 /*
@@ -2916,15 +3337,21 @@ const mdb_dcmd_t mdb_dcmd_builtins[] = {
 	{ ":z", NULL, "delete all traced software events", cmd_zapall },
 	{ "array", ":[type count] [variable]", "print each array element's "
 	    "address", cmd_array },
+	{ "bitx", ":<high bit> <low bit> [new value]",
+	    "extract bits from, or set bits in, a value", cmd_bitx, bitx_help },
+	{ "bcmp", ":<addr2> <-n count>",
+	    "compare two disjoint sections of memory", cmd_bcmp, bcmp_help},
 	{ "bp", "?[+/-dDestT] [-c cmd] [-n count] sym ...", "breakpoint at the "
 	    "specified addresses or symbols", cmd_bp, bp_help },
-	{ "dcmds", NULL, "list available debugger commands", cmd_dcmds },
+	{ "dcmds", "[[-n] pattern]",
+	    "list available debugger commands", cmd_dcmds, cmd_dcmds_help },
 	{ "delete", "?[id|all]", "delete traced software events", cmd_delete },
-	{ "dis", "?[-abfw] [-n cnt] [addr]", "disassemble near addr", cmd_dis },
+	{ "dis", "?[-abfpw] [-n cnt] [addr]", "disassemble near addr", cmd_dis,
+	    dis_help },
 	{ "disasms", NULL, "list available disassemblers", cmd_disasms },
 	{ "dismode", "[mode]", "get/set disassembly mode", cmd_dismode },
 	{ "dmods", "[-l] [mod]", "list loaded debugger modules", cmd_dmods },
-	{ "dump", "?[-eqrstu] [-f|-p] [-g bytes] [-w paragraphs]",
+	{ "dump", "?[-eqrstu] [-f|-p] [-g bytes] [-l bytes] [-w paragraphs]",
 	    "dump memory from specified address", cmd_dump, dump_help },
 	{ "echo", "args ...", "echo arguments", cmd_echo },
 	{ "enum", "?[-ex] enum [name]", "print an enumeration", cmd_enum,
@@ -2945,6 +3372,8 @@ const mdb_dcmd_t mdb_dcmd_builtins[] = {
 	    head_help },
 	{ "help", "[cmd]", "list commands/command help", cmd_help, NULL,
 	    cmd_help_tab },
+	{ "linkerset", "[name]", "display linkersets", cmd_linkerset,
+	    linkerset_help, cmd_linkerset_tab },
 	{ "list", "?type member [variable]",
 	    "walk list using member as link pointer", cmd_list, NULL,
 	    mdb_tab_complete_mt },
@@ -2977,8 +3406,9 @@ const mdb_dcmd_t mdb_dcmd_builtins[] = {
 	{ "status", NULL, "print summary of current target", cmd_notsup },
 	{ "term", NULL, "display current terminal type", cmd_term },
 	{ "typeset", "[+/-t] var ...", "set variable attributes", cmd_typeset },
-	{ "typedef", "[-c model | -d | -l | -r file ] [type] [name]",
+	{ "typedef", "[-c model | -d | -l | -r file | -w file ] [type] [name]",
 		"create synthetic types", cmd_typedef, cmd_typedef_help },
+	{ "typelist", NULL, "list known types", cmd_typelist },
 	{ "unset", "[name ...]", "unset variables", cmd_unset },
 	{ "vars", "[-npt]", "print listing of variables", cmd_vars },
 	{ "version", NULL, "print debugger version string", cmd_version },
@@ -2986,11 +3416,15 @@ const mdb_dcmd_t mdb_dcmd_builtins[] = {
 	    cmd_vtop },
 	{ "walk", "?name [variable]", "walk data structure", cmd_walk, NULL,
 	    cmd_walk_tab },
-	{ "walkers", NULL, "list available walkers", cmd_walkers },
+	{ "walkers", "[[-n] pattern]", "list available walkers",
+	    cmd_walkers, cmd_walkers_help },
 	{ "whatis", ":[-aikqv]", "given an address, return information",
 	    cmd_whatis, whatis_help },
 	{ "whence", "[-v] name ...", "show source of walk or dcmd", cmd_which },
 	{ "which", "[-v] name ...", "show source of walk or dcmd", cmd_which },
+	{ "write", "?[-op] [-l len] value",
+	    "write value to the provided memory location", cmd_write,
+	    write_help },
 	{ "xdata", NULL, "print list of external data buffers", cmd_xdata },
 
 #ifdef _KMDB
@@ -3019,8 +3453,8 @@ const mdb_dcmd_t mdb_dcmd_builtins[] = {
 	 */
 	{ "?", "fmt-list", "format data from object file", cmd_print_object },
 	{ "$>", "[file]", "log session to a file", cmd_old_log },
-	{ "$g", "?", "get/set C++ demangling options", cmd_demflags },
-	{ "$G", NULL, "enable/disable C++ demangling support", cmd_demangle },
+	{ "$g", "?", "get/set demangling options", cmd_demflags },
+	{ "$G", NULL, "enable/disable demangling support", cmd_demangle },
 	{ "$i", NULL, "print signals that are ignored", cmd_notsup },
 	{ "$l", NULL, "print the representative thread's lwp id", cmd_notsup },
 	{ "$p", ":", "change debugger target context", cmd_context },

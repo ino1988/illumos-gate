@@ -25,13 +25,11 @@
  */
 
 /*	Copyright (c) 1984, 1986, 1987, 1988, 1989 AT&T	*/
-/*	  All Rights Reserved  	*/
+/*	  All Rights Reserved	*/
 
 
 #ifndef _SYS_FAULT_H
 #define	_SYS_FAULT_H
-
-#pragma ident	"%Z%%M%	%I%	%E% SMI"
 
 #ifdef	__cplusplus
 extern "C" {
@@ -42,7 +40,7 @@ extern "C" {
  * hardware faults.  Setting the appropriate flags in a process's
  * set of traced faults via /proc causes the process to stop each
  * time one of the designated faults occurs so that a debugger can
- * take action.  See proc(4) for details.
+ * take action.  See proc(5) for details.
  */
 
 	/* fault enumeration must begin with 1 */

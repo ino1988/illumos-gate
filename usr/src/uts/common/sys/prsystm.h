@@ -25,10 +25,11 @@
  */
 
 /*	Copyright (c) 1984, 1986, 1987, 1988, 1989 AT&T	*/
-/*	  All Rights Reserved  	*/
+/*	  All Rights Reserved	*/
 
 /*
- * Copyright (c) 2013, Joyent, Inc. All rights reserved.
+ * Copyright 2019 Joyent, Inc.
+ * Copyright 2020 OmniOS Community Edition (OmniOSce) Association.
  */
 
 #ifndef _SYS_PRSYSTM_H
@@ -53,6 +54,9 @@ struct psinfo;
 struct lwpsinfo;
 struct prcred;
 struct prpriv;
+struct prsecflags;
+struct prfdinfo;
+struct prxregset;
 
 struct seg;
 struct regs;
@@ -74,17 +78,16 @@ extern void prgetlwpstatus(kthread_t *, struct lwpstatus *, zone_t *);
 extern void prgetpsinfo(proc_t *, struct psinfo *);
 extern void prgetlwpsinfo(kthread_t *, struct lwpsinfo *);
 extern void prgetprfpregs(klwp_t *, struct prfpregset *);
-extern void prgetprxregs(klwp_t *, caddr_t);
-extern int  prgetprxregsize(proc_t *);
-#if defined(__lint)
-/* Work around lint confusion between old and new prcred definitions */
-extern void prgetcred();
-#else
+extern void prgetprxregs(klwp_t *, struct prxregset *);
+extern size_t prgetprxregsize(proc_t *);
 extern void prgetcred(proc_t *, struct prcred *);
-#endif
 extern void prgetpriv(proc_t *, struct prpriv *);
 extern size_t prgetprivsize(void);
-extern int  prnsegs(struct as *, int);
+extern void prgetsecflags(proc_t *, struct prsecflags *);
+extern uint_t prnsegs(struct as *, int);
+extern u_offset_t prgetfdinfosize(proc_t *, vnode_t *, cred_t *);
+extern int prgetfdinfo(proc_t *, vnode_t *, struct prfdinfo *, cred_t *,
+    cred_t *, list_t *);
 extern void prexit(proc_t *);
 extern void prfree(proc_t *);
 extern void prlwpexit(kthread_t *);
@@ -108,9 +111,9 @@ extern int  pr_watch_emul(struct regs *, caddr_t, enum seg_rw);
 extern void pr_free_watched_pages(proc_t *);
 extern int  pr_allstopped(proc_t *, int);
 #if defined(__sparc)
-struct gwindows;
+struct _gwindows;
 extern	int	prnwindows(klwp_t *);
-extern	void	prgetwindows(klwp_t *, struct gwindows *);
+extern	void	prgetwindows(klwp_t *, struct _gwindows *);
 #if defined(__sparcv9) /* 32-bit adb macros should not see these defs */
 extern	void	prgetasregs(klwp_t *, asrset_t);
 extern	void	prsetasregs(klwp_t *, asrset_t);

@@ -23,8 +23,6 @@
  * Use is subject to license terms.
  */
 
-#pragma ident	"%Z%%M%	%I%	%E% SMI"
-
 #include <sys/types.h>
 #include <sys/systeminfo.h>
 
@@ -65,7 +63,7 @@ typedef struct fmd_scheme_opd {
 typedef struct fmd_scheme {
 	struct fmd_scheme *sch_next;    /* next scheme on list of schemes */
 	char *sch_name;			/* name of this scheme (fmri prefix) */
-	void *sch_dlp;			/* libdl(3DL) shared library handle */
+	void *sch_dlp;			/* libdl shared library handle */
 	int sch_err;			/* if negative entry, errno to return */
 	fmd_scheme_ops_t sch_ops;	/* scheme function pointers */
 } fmd_scheme_t;
@@ -77,6 +75,11 @@ fmd_scheme_notsup(void)
 {
 	errno = ENOTSUP;
 	return (-1);
+}
+
+static void
+fmd_scheme_vnop(void)
+{
 }
 
 static int
@@ -91,7 +94,7 @@ fmd_scheme_nop(void)
  */
 static const fmd_scheme_ops_t _fmd_scheme_default_ops = {
 	(int (*)())fmd_scheme_nop,		/* sop_init */
-	(void (*)())fmd_scheme_nop,		/* sop_fini */
+	(void (*)())fmd_scheme_vnop,		/* sop_fini */
 	(ssize_t (*)())fmd_scheme_notsup,	/* sop_nvl2str */
 };
 

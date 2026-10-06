@@ -161,7 +161,6 @@
 static int
 read_safe(int fd, struct frame *fp, struct frame **savefp, uintptr_t *savepc)
 {
-
 	uintptr_t newfp;
 
 	if ((uintptr_t)fp & (sizeof (void *) - 1))
@@ -192,9 +191,9 @@ walkcontext(const ucontext_t *uptr, int (*operate_func)(uintptr_t, int, void *),
 	ucontext_t *oldctx = uptr->uc_link;
 
 	int	fd;
-	int 	sig;
+	int	sig;
 #if defined(__sparc)
-	int 	signo = 0;
+	int	signo = 0;
 #endif
 
 	struct frame *savefp;
@@ -227,7 +226,7 @@ walkcontext(const ucontext_t *uptr, int (*operate_func)(uintptr_t, int, void *),
 	 */
 #if defined(__sparc)
 
-	uintptr_t special_pc = NULL;
+	uintptr_t special_pc = (uintptr_t)NULL;
 	int special_size = 0;
 
 	extern void thr_sighndlrinfo(void (**func)(), int *funcsize);
@@ -346,7 +345,6 @@ async_filenoprintf(int filenum, const char *format, ...)
 static int
 display_stack_info(uintptr_t pc, int signo, void *arg)
 {
-
 	char buffer[MAX_LINE];
 	char sigbuf[SIG2STR_MAX];
 
@@ -394,9 +392,8 @@ typedef struct backtrace {
 	int	bt_actcount;
 } backtrace_t;
 
-/* ARGSUSED */
 static int
-callback(uintptr_t pc, int signo, void *arg)
+callback(uintptr_t pc, int signo __unused, void *arg)
 {
 	backtrace_t *bt = (backtrace_t *)arg;
 
@@ -415,8 +412,8 @@ callback(uintptr_t pc, int signo, void *arg)
 int
 backtrace(void **buffer, int count)
 {
-	backtrace_t 	bt;
-	ucontext_t 	u;
+	backtrace_t	bt;
+	ucontext_t	u;
 
 	bt.bt_buffer = buffer;
 	bt.bt_maxcount = count;

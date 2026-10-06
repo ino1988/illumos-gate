@@ -23,7 +23,9 @@
  * Copyright (c) 1999, 2010, Oracle and/or its affiliates. All rights reserved.
  * Copyright (c) 2013 David Hoeppner. All rights reserved.
  * Copyright 2013 Nexenta Systems, Inc.  All rights reserved.
- * Copyright (c) 2013, Joyent, Inc. All rights reserved.
+ * Copyright 2016 Joyent, Inc.
+ * Copyright 2020 Peter Tribble.
+ * Copyright 2025 Edgecast Cloud LLC.
  */
 
 /*
@@ -78,14 +80,49 @@ static boolean_t g_jflg = B_FALSE;
 static boolean_t g_lflg = B_FALSE;
 static boolean_t g_pflg = B_FALSE;
 static boolean_t g_qflg = B_FALSE;
+static boolean_t g_Vflg = B_FALSE;
 static ks_pattern_t	g_ks_class = {"*", 0};
 
-/* Return zero if a selector did match */
-static int	g_matched = 1;
+static boolean_t g_matched = B_FALSE;
 
 /* Sorted list of kstat instances */
 static list_t	instances_list;
 static list_t	selector_list;
+
+static boolean_t
+invalid_value(char *str)
+{
+	/* Empty string is same as "*" */
+	if (str == NULL)
+		return (B_TRUE);
+	if (strchr(str, '*') != NULL)
+		return (B_TRUE);
+
+	/* regex is enclosed between // */
+	if (str[0] == '/') {
+		size_t s = strlen(str);
+		if (str[s - 1] == '/')
+			return (B_TRUE);
+	}
+	return (B_FALSE);
+}
+
+static boolean_t
+invalid_values(ks_selector_t *selector)
+{
+	/*
+	 * -V needs exact match of module and statistics or
+	 *  name and statistics.
+	 */
+	if ((!invalid_value(selector->ks_module.pstr) ||
+	    !invalid_value(selector->ks_name.pstr)) &&
+	    !invalid_value(selector->ks_statistic.pstr))
+		return (B_FALSE);
+
+	(void) fprintf(stderr, gettext(
+	    "-V needs exact module or name, and statistics\n"));
+	return (B_TRUE);
+}
 
 int
 main(int argc, char **argv)
@@ -124,7 +161,7 @@ main(int argc, char **argv)
 	/*
 	 * Parse named command line arguments.
 	 */
-	while ((c = getopt(argc, argv, "h?CqjlpT:m:i:n:s:c:")) != EOF)
+	while ((c = getopt(argc, argv, "h?CqjlpT:Vm:i:n:s:c:")) != EOF)
 		switch (c) {
 		case 'h':
 		case '?':
@@ -138,6 +175,13 @@ main(int argc, char **argv)
 			g_qflg = B_TRUE;
 			break;
 		case 'j':
+			/*
+			 * If we're printing JSON, we're going to force numeric
+			 * representation to be in the C locale to assure that
+			 * the decimal point is compliant with RFC 7159 (i.e.,
+			 * ASCII 0x2e).
+			 */
+			(void) setlocale(LC_NUMERIC, "C");
 			g_jflg = B_TRUE;
 			break;
 		case 'l':
@@ -157,6 +201,9 @@ main(int argc, char **argv)
 			default:
 				errflg = B_TRUE;
 			}
+			break;
+		case 'V':
+			g_Vflg = B_TRUE;
 			break;
 		case 'm':
 			nselflg = B_TRUE;
@@ -187,6 +234,17 @@ main(int argc, char **argv)
 			break;
 		}
 
+	if (g_Vflg && !g_pflg) {
+		(void) fprintf(stderr, gettext(
+		    "-V can only be used with -p\n"));
+		errflg = B_TRUE;
+	}
+	if (g_Vflg && (g_timestamp_fmt != NODATE ||
+	    g_lflg || g_jflg || g_cflg)) {
+		(void) fprintf(stderr, gettext(
+		    "-jlCT and -V are mutually exclusive\n"));
+		errflg = B_TRUE;
+	}
 	if (g_qflg && (g_jflg || g_pflg)) {
 		(void) fprintf(stderr, gettext(
 		    "-q and -lpj are mutually exclusive\n"));
@@ -255,6 +313,12 @@ main(int argc, char **argv)
 				}
 			}
 
+			/*
+			 * With -V, only do allow exact matches.
+			 */
+			if (g_Vflg && invalid_values(uselector)) {
+				exit(2);
+			}
 			uselflg = B_TRUE;
 			list_insert_tail(&selector_list, uselector);
 		} else {
@@ -299,6 +363,12 @@ main(int argc, char **argv)
 			free(nselector);
 		}
 	} else {
+		/*
+		 * With -V, only do allow exact matches.
+		 */
+		if (g_Vflg && invalid_values(nselector)) {
+			exit(2);
+		}
 		list_insert_tail(&selector_list, nselector);
 	}
 
@@ -341,7 +411,10 @@ main(int argc, char **argv)
 
 	(void) kstat_close(kc);
 
-	return (g_matched);
+	/*
+	 * Return a non-zero exit code if we didn't match anything.
+	 */
+	return (g_matched ? 0 : 1);
 }
 
 /*
@@ -352,10 +425,10 @@ usage(void)
 {
 	(void) fprintf(stderr, gettext(
 	    "Usage:\n"
-	    "kstat [ -Cjlpq ] [ -T d|u ] [ -c class ]\n"
+	    "kstat [ -Cjlq ] [ -p [ -V ]] [ -T d|u ] [ -c class ]\n"
 	    "      [ -m module ] [ -i instance ] [ -n name ] [ -s statistic ]\n"
 	    "      [ interval [ count ] ]\n"
-	    "kstat [ -Cjlpq ] [ -T d|u ] [ -c class ]\n"
+	    "kstat [ -Cjlq ] [ -p [ -V ]] [ -T d|u ] [ -c class ]\n"
 	    "      [ module[:instance[:name[:statistic]]] ... ]\n"
 	    "      [ interval [ count ] ]\n"));
 }
@@ -509,7 +582,7 @@ static kstat_raw_reader_t
 lookup_raw_kstat_fn(char *module, char *name)
 {
 	char		key[KSTAT_STRLEN * 2];
-	register char 	*f, *t;
+	register char	*f, *t;
 	int		n = 0;
 
 	for (f = module, t = key; *f != '\0'; f++, t++) {
@@ -658,7 +731,6 @@ ks_instances_read(kstat_ctl_t *kc)
 		    offsetof(ks_nvpair_t, nv_next));
 
 		SAVE_HRTIME_X(ksi, "crtime", kp->ks_crtime);
-		SAVE_HRTIME_X(ksi, "snaptime", kp->ks_snaptime);
 		if (g_pflg) {
 			SAVE_STRING_X(ksi, "class", kp->ks_class);
 		}
@@ -678,6 +750,8 @@ ks_instances_read(kstat_ctl_t *kc)
 #endif
 			continue;
 		}
+
+		SAVE_HRTIME_X(ksi, "snaptime", kp->ks_snaptime);
 
 		switch (kp->ks_type) {
 		case KSTAT_TYPE_RAW:
@@ -742,8 +816,9 @@ ks_value_print(ks_nvpair_t *nvpair)
 /*
  * Print a single instance.
  */
+/*ARGSUSED*/
 static void
-ks_instance_print(ks_instance_t *ksi, ks_nvpair_t *nvpair)
+ks_instance_print(ks_instance_t *ksi, ks_nvpair_t *nvpair, boolean_t last)
 {
 	if (g_headerflg) {
 		if (!g_pflg) {
@@ -755,11 +830,14 @@ ks_instance_print(ks_instance_t *ksi, ks_nvpair_t *nvpair)
 	}
 
 	if (g_pflg) {
-		(void) fprintf(stdout, KS_PFMT,
-		    ksi->ks_module, ksi->ks_instance,
-		    ksi->ks_name, nvpair->name);
+		if (!g_Vflg) {
+			(void) fprintf(stdout, KS_PFMT,
+			    ksi->ks_module, ksi->ks_instance,
+			    ksi->ks_name, nvpair->name);
+		}
 		if (!g_lflg) {
-			(void) putchar(g_cflg ? ':': '\t');
+			if (!g_Vflg)
+				(void) putchar(g_cflg ? ':': '\t');
 			ks_value_print(nvpair);
 		}
 	} else {
@@ -771,16 +849,82 @@ ks_instance_print(ks_instance_t *ksi, ks_nvpair_t *nvpair)
 }
 
 /*
+ * Print a C string as a JSON string.
+ */
+static void
+ks_print_json_string(const char *str)
+{
+	char c;
+
+	(void) putchar('"');
+
+	while ((c = *str++) != '\0') {
+		/*
+		 * For readability, we use the allowed alternate escape
+		 * sequence for quote, question mark, reverse solidus (look
+		 * it up!), newline and tab -- and use the universal escape
+		 * sequence for all other control characters.
+		 */
+		switch (c) {
+		case '"':
+		case '?':
+		case '\\':
+			(void) fprintf(stdout, "\\%c", c);
+			break;
+
+		case '\n':
+			(void) fprintf(stdout, "\\n");
+			break;
+
+		case '\t':
+			(void) fprintf(stdout, "\\t");
+			break;
+
+		default:
+			/*
+			 * By escaping those characters for which isprint(3C)
+			 * is false, we escape both the RFC 7159 mandated
+			 * escaped range of 0x01 through 0x1f as well as DEL
+			 * (0x7f -- the control character that RFC 7159 forgot)
+			 * and then everything else that's unprintable for
+			 * good measure.
+			 */
+			if (!isprint(c)) {
+				(void) fprintf(stdout, "\\u%04hhx", (uint8_t)c);
+				break;
+			}
+
+			(void) putchar(c);
+			break;
+		}
+	}
+
+	(void) putchar('"');
+}
+
+/*
  * Print a single instance in JSON format.
  */
 static void
-ks_instance_print_json(ks_instance_t *ksi, ks_nvpair_t *nvpair)
+ks_instance_print_json(ks_instance_t *ksi, ks_nvpair_t *nvpair, boolean_t last)
 {
+	static int headers;
+
 	if (g_headerflg) {
-		(void) fprintf(stdout, JSON_FMT,
-		    ksi->ks_module, ksi->ks_instance,
-		    ksi->ks_name, ksi->ks_class,
-		    ksi->ks_type);
+		if (headers++ > 0)
+			(void) fprintf(stdout, ", ");
+
+		(void) fprintf(stdout, "{\n\t\"module\": ");
+		ks_print_json_string(ksi->ks_module);
+
+		(void) fprintf(stdout,
+		    ",\n\t\"instance\": %d,\n\t\"name\": ", ksi->ks_instance);
+		ks_print_json_string(ksi->ks_name);
+
+		(void) fprintf(stdout, ",\n\t\"class\": ");
+		ks_print_json_string(ksi->ks_class);
+
+		(void) fprintf(stdout, ",\n\t\"type\": %d,\n", ksi->ks_type);
 
 		if (ksi->ks_snaptime == 0)
 			(void) fprintf(stdout, "\t\"snaptime\": 0,\n");
@@ -793,15 +937,25 @@ ks_instance_print_json(ks_instance_t *ksi, ks_nvpair_t *nvpair)
 		g_headerflg = B_FALSE;
 	}
 
-	(void) fprintf(stdout, KS_JFMT, nvpair->name);
-	if (nvpair->data_type == KSTAT_DATA_STRING) {
-		(void) putchar('\"');
+	(void) fprintf(stdout, "\t\t");
+	ks_print_json_string(nvpair->name);
+	(void) fprintf(stdout, ": ");
+
+	switch (nvpair->data_type) {
+	case KSTAT_DATA_CHAR:
+		ks_print_json_string(nvpair->value.c);
+		break;
+
+	case KSTAT_DATA_STRING:
+		ks_print_json_string(KSTAT_NAMED_STR_PTR(nvpair));
+		break;
+
+	default:
 		ks_value_print(nvpair);
-		(void) putchar('\"');
-	} else {
-		ks_value_print(nvpair);
+		break;
 	}
-	if (nvpair != list_tail(&ksi->ks_nvlist))
+
+	if (!last)
 		(void) putchar(',');
 
 	(void) putchar('\n');
@@ -813,11 +967,11 @@ ks_instance_print_json(ks_instance_t *ksi, ks_nvpair_t *nvpair)
 static void
 ks_instances_print(void)
 {
-	ks_selector_t	*selector;
-	ks_instance_t	*ksi, *ktmp;
-	ks_nvpair_t	*nvpair, *ntmp;
-	void		(*ks_print_fn)(ks_instance_t *, ks_nvpair_t *);
-	char		*ks_number;
+	ks_selector_t *selector;
+	ks_instance_t *ksi, *ktmp;
+	ks_nvpair_t *nvpair, *ntmp, *next;
+	void (*ks_print_fn)(ks_instance_t *, ks_nvpair_t *, boolean_t);
+	char *ks_number;
 
 	if (g_timestamp_fmt != NODATE)
 		print_timestamp(g_timestamp_fmt);
@@ -848,25 +1002,48 @@ ks_instances_print(void)
 
 			free(ks_number);
 
-			/* Finally iterate over each statistic */
 			g_headerflg = B_TRUE;
+
+			/*
+			 * Find our first statistic to print.
+			 */
 			for (nvpair = list_head(&ksi->ks_nvlist);
 			    nvpair != NULL;
 			    nvpair = list_next(&ksi->ks_nvlist, nvpair)) {
-				if (!ks_match(nvpair->name,
+				if (ks_match(nvpair->name,
 				    &selector->ks_statistic))
-					continue;
+					break;
+			}
 
-				g_matched = 0;
+			while (nvpair != NULL) {
+				boolean_t last;
+
+				/*
+				 * Find the next statistic to print so we can
+				 * indicate to the print function if this
+				 * statistic is the last to be printed for
+				 * this instance.
+				 */
+				for (next = list_next(&ksi->ks_nvlist, nvpair);
+				    next != NULL;
+				    next = list_next(&ksi->ks_nvlist, next)) {
+					if (ks_match(next->name,
+					    &selector->ks_statistic))
+						break;
+				}
+
+				g_matched = B_TRUE;
+				last = next == NULL ? B_TRUE : B_FALSE;
+
 				if (!g_qflg)
-					(*ks_print_fn)(ksi, nvpair);
+					(*ks_print_fn)(ksi, nvpair, last);
+
+				nvpair = next;
 			}
 
 			if (!g_headerflg) {
 				if (g_jflg) {
 					(void) fprintf(stdout, "\t}\n}");
-					if (ksi != list_tail(&instances_list))
-						(void) putchar(',');
 				} else if (!g_pflg) {
 					(void) putchar('\n');
 				}
@@ -1214,171 +1391,6 @@ save_sfmmu_tsbsize_stat(kstat_t *kp, ks_instance_t *ksi)
 }
 #endif
 
-#ifdef __sparc
-static void
-save_simmstat(kstat_t *kp, ks_instance_t *ksi)
-{
-	uchar_t	*simmstat;
-	char	*simm_buf;
-	char	*list = NULL;
-	int	i;
-
-	assert(kp->ks_data_size == sizeof (uchar_t) * SIMM_COUNT);
-
-	for (i = 0, simmstat = (uchar_t *)(kp->ks_data); i < SIMM_COUNT - 1;
-	    i++, simmstat++) {
-		if (list == NULL) {
-			(void) asprintf(&simm_buf, "%d,", *simmstat);
-		} else {
-			(void) asprintf(&simm_buf, "%s%d,", list, *simmstat);
-			free(list);
-		}
-		list = simm_buf;
-	}
-
-	(void) asprintf(&simm_buf, "%s%d", list, *simmstat);
-	SAVE_STRING_X(ksi, "status", simm_buf);
-	free(list);
-	free(simm_buf);
-}
-#endif
-
-#ifdef __sparc
-/*
- * Helper function for save_temperature().
- */
-static char *
-short_array_to_string(short *shortp, int len)
-{
-	char	*list = NULL;
-	char	*list_buf;
-
-	for (; len > 1; len--, shortp++) {
-		if (list == NULL) {
-			(void) asprintf(&list_buf, "%hd,", *shortp);
-		} else {
-			(void) asprintf(&list_buf, "%s%hd,", list, *shortp);
-			free(list);
-		}
-		list = list_buf;
-	}
-
-	(void) asprintf(&list_buf, "%s%hd", list, *shortp);
-	free(list);
-	return (list_buf);
-}
-
-static void
-save_temperature(kstat_t *kp, ks_instance_t *ksi)
-{
-	struct temp_stats *temps = (struct temp_stats *)(kp->ks_data);
-	char	*buf;
-
-	assert(kp->ks_data_size == sizeof (struct temp_stats));
-
-	SAVE_UINT32(ksi, temps, index);
-
-	buf = short_array_to_string(temps->l1, L1_SZ);
-	SAVE_STRING_X(ksi, "l1", buf);
-	free(buf);
-
-	buf = short_array_to_string(temps->l2, L2_SZ);
-	SAVE_STRING_X(ksi, "l2", buf);
-	free(buf);
-
-	buf = short_array_to_string(temps->l3, L3_SZ);
-	SAVE_STRING_X(ksi, "l3", buf);
-	free(buf);
-
-	buf = short_array_to_string(temps->l4, L4_SZ);
-	SAVE_STRING_X(ksi, "l4", buf);
-	free(buf);
-
-	buf = short_array_to_string(temps->l5, L5_SZ);
-	SAVE_STRING_X(ksi, "l5", buf);
-	free(buf);
-
-	SAVE_INT32(ksi, temps, max);
-	SAVE_INT32(ksi, temps, min);
-	SAVE_INT32(ksi, temps, state);
-	SAVE_INT32(ksi, temps, temp_cnt);
-	SAVE_INT32(ksi, temps, shutdown_cnt);
-	SAVE_INT32(ksi, temps, version);
-	SAVE_INT32(ksi, temps, trend);
-	SAVE_INT32(ksi, temps, override);
-}
-#endif
-
-#ifdef __sparc
-static void
-save_temp_over(kstat_t *kp, ks_instance_t *ksi)
-{
-	short	*sh = (short *)(kp->ks_data);
-	char	*value;
-
-	assert(kp->ks_data_size == sizeof (short));
-
-	(void) asprintf(&value, "%hu", *sh);
-	SAVE_STRING_X(ksi, "override", value);
-	free(value);
-}
-#endif
-
-#ifdef __sparc
-static void
-save_ps_shadow(kstat_t *kp, ks_instance_t *ksi)
-{
-	uchar_t	*uchar = (uchar_t *)(kp->ks_data);
-
-	assert(kp->ks_data_size == SYS_PS_COUNT);
-
-	SAVE_CHAR_X(ksi, "core_0", *uchar++);
-	SAVE_CHAR_X(ksi, "core_1", *uchar++);
-	SAVE_CHAR_X(ksi, "core_2", *uchar++);
-	SAVE_CHAR_X(ksi, "core_3", *uchar++);
-	SAVE_CHAR_X(ksi, "core_4", *uchar++);
-	SAVE_CHAR_X(ksi, "core_5", *uchar++);
-	SAVE_CHAR_X(ksi, "core_6", *uchar++);
-	SAVE_CHAR_X(ksi, "core_7", *uchar++);
-	SAVE_CHAR_X(ksi, "pps_0", *uchar++);
-	SAVE_CHAR_X(ksi, "clk_33", *uchar++);
-	SAVE_CHAR_X(ksi, "clk_50", *uchar++);
-	SAVE_CHAR_X(ksi, "v5_p", *uchar++);
-	SAVE_CHAR_X(ksi, "v12_p", *uchar++);
-	SAVE_CHAR_X(ksi, "v5_aux", *uchar++);
-	SAVE_CHAR_X(ksi, "v5_p_pch", *uchar++);
-	SAVE_CHAR_X(ksi, "v12_p_pch", *uchar++);
-	SAVE_CHAR_X(ksi, "v3_pch", *uchar++);
-	SAVE_CHAR_X(ksi, "v5_pch", *uchar++);
-	SAVE_CHAR_X(ksi, "p_fan", *uchar++);
-}
-#endif
-
-#ifdef __sparc
-static void
-save_fault_list(kstat_t *kp, ks_instance_t *ksi)
-{
-	struct ft_list *fault;
-	char	name[KSTAT_STRLEN + 7];
-	int	i;
-
-	for (i = 1, fault = (struct ft_list *)(kp->ks_data);
-	    i <= 999999 && i <= kp->ks_data_size / sizeof (struct ft_list);
-	    i++, fault++) {
-		(void) snprintf(name, sizeof (name), "unit_%d", i);
-		SAVE_INT32_X(ksi, name, fault->unit);
-		(void) snprintf(name, sizeof (name), "type_%d", i);
-		SAVE_INT32_X(ksi, name, fault->type);
-		(void) snprintf(name, sizeof (name), "fclass_%d", i);
-		SAVE_INT32_X(ksi, name, fault->fclass);
-		(void) snprintf(name, sizeof (name), "create_time_%d", i);
-		SAVE_HRTIME_X(ksi, name, fault->create_time);
-		(void) snprintf(name, sizeof (name), "msg_%d", i);
-		SAVE_STRING_X(ksi, name, fault->msg);
-	}
-}
-#endif
-
 static void
 save_named(kstat_t *kp, ks_instance_t *ksi)
 {
@@ -1386,6 +1398,16 @@ save_named(kstat_t *kp, ks_instance_t *ksi)
 	int	n;
 
 	for (n = kp->ks_ndata, knp = KSTAT_NAMED_PTR(kp); n > 0; n--, knp++) {
+		/*
+		 * Annoyingly, some drivers have kstats with uninitialized
+		 * members (which kstat_install(9F) is sadly powerless to
+		 * prevent, and kstat_read(3KSTAT) unfortunately does nothing
+		 * to stop).  To prevent these from confusing us to be
+		 * KSTAT_DATA_CHAR statistics, we skip over them.
+		 */
+		if (knp->name[0] == '\0')
+			continue;
+
 		switch (knp->data_type) {
 		case KSTAT_DATA_CHAR:
 			nvpair_insert(ksi, knp->name,

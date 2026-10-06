@@ -18,17 +18,20 @@
 #
 # CDDL HEADER END
 
-
-#
-
 #
 # Copyright (c) 2010, Oracle and/or its affiliates. All rights reserved.
 # Copyright 2014 Nexenta Systems, Inc. All rights reserved.
+# Copyright 2020 Joyent, Inc.
+# Copyright 2025 Edgecast Cloud LLC.
 #
 
 PROG= zoneadmd
 
 include ../Makefile.cmd
+include ../Makefile.cmd.64
+include ../Makefile.ctf
+
+CSTD= $(CSTD_GNU99)
 
 ROOTCMDDIR=	$(ROOTLIB)/zones
 
@@ -38,9 +41,6 @@ POFILE=zoneadmd_all.po
 POFILES= $(OBJS:%.o=%.po)
 
 CFLAGS += $(CCVERBOSE)
-CERRWARN += -_gcc=-Wno-switch
-CERRWARN += -_gcc=-Wno-parentheses
-CERRWARN += -_gcc=-Wno-uninitialized
 
 LDLIBS += -lsocket -lzonecfg -lnsl -ldevinfo -ldevice -lnvpair \
 	-lgen -lbsm -lcontract -lzfs -luuid -lbrand -ldladm -ltsnet -ltsol \
@@ -65,8 +65,6 @@ $(POFILE): $(POFILES)
 
 clean:
 	$(RM) $(OBJS)
-
-lint:	lint_SRCS
 
 check:
 	$(CSTYLE) -p -P $(SRCS:%=%)

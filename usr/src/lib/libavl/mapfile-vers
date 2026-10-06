@@ -39,7 +39,14 @@
 
 $mapfile_version 2
 
-SYMBOL_VERSION SUNWprivate_1.1 {
+SYMBOL_VERSION ILLUMOS_1.1 {
+    global:
+	avl_update;
+	avl_update_gt;
+	avl_update_lt;
+} ILLUMOS_1.0;
+
+SYMBOL_VERSION ILLUMOS_1.0 {
     global:
 	avl_add;
 	avl_create;
@@ -56,6 +63,9 @@ SYMBOL_VERSION SUNWprivate_1.1 {
 	avl_remove;
 	avl_swap;
 	avl_walk;
+};
+
+SYMBOL_VERSION SUNWprivate_1.1 {
     local:
 	*;
 };

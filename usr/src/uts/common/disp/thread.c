@@ -21,7 +21,8 @@
 
 /*
  * Copyright (c) 1991, 2010, Oracle and/or its affiliates. All rights reserved.
- * Copyright (c) 2013, Joyent, Inc.  All rights reserved.
+ * Copyright 2021 Joyent, Inc.
+ * Copyright 2021 Oxide Computer Company
  */
 
 #include <sys/types.h>
@@ -53,7 +54,6 @@
 #include <sys/vtrace.h>
 #include <sys/callb.h>
 #include <c2/audit.h>
-#include <sys/tnf.h>
 #include <sys/sobject.h>
 #include <sys/cpupart.h>
 #include <sys/pset.h>
@@ -74,6 +74,8 @@
 #include <sys/waitq.h>
 #include <sys/cpucaps.h>
 #include <sys/kiconv.h>
+#include <sys/ctype.h>
+#include <sys/smt.h>
 
 struct kmem_cache *thread_cache;	/* cache of free threads */
 struct kmem_cache *lwp_cache;		/* cache of free lwps */
@@ -83,7 +85,7 @@ struct kmem_cache *turnstile_cache;	/* cache of free turnstiles */
  * allthreads is only for use by kmem_readers.  All kernel loops can use
  * the current thread as a start/end point.
  */
-static kthread_t *allthreads = &t0;	/* circular list of all threads */
+kthread_t *allthreads = &t0;	/* circular list of all threads */
 
 static kcondvar_t reaper_cv;		/* synchronization var */
 kthread_t	*thread_deathrow;	/* circular list of reapable threads */
@@ -180,7 +182,7 @@ thread_init(void)
 		mutex_init(lp, NULL, MUTEX_DEFAULT, NULL);
 	}
 
-#if defined(__i386) || defined(__amd64)
+#if defined(__x86)
 	thread_cache = kmem_cache_create("thread_cache", sizeof (kthread_t),
 	    PTR24_ALIGN, NULL, NULL, NULL, NULL, NULL, 0);
 
@@ -443,10 +445,6 @@ thread_create(
 	t->t_dtrace_vtime = 1;	/* assure vtimestamp is always non-zero */
 
 	CPU_STATS_ADDQ(CPU, sys, nthreads, 1);
-#ifndef NPROBE
-	/* Kernel probe */
-	tnf_thread_create(t);
-#endif /* NPROBE */
 	LOCK_INIT_CLEAR(&t->t_lock);
 
 	/*
@@ -486,15 +484,9 @@ thread_create(
 	curthread->t_prev = t;
 
 	/*
-	 * Threads should never have a NULL t_cpu pointer so assign it
-	 * here.  If the thread is being created with state TS_RUN a
-	 * better CPU may be chosen when it is placed on the run queue.
-	 *
-	 * We need to keep kernel preemption disabled when setting all
-	 * three fields to keep them in sync.  Also, always create in
-	 * the default partition since that's where kernel threads go
-	 * (if this isn't a kernel thread, t_cpupart will be changed
-	 * in lwp_create before setting the thread runnable).
+	 * We'll always create in the default partition since that's where
+	 * kernel threads go (we'll change this later if needed, in
+	 * lwp_create()).
 	 */
 	t->t_cpupart = &cp_default;
 
@@ -503,20 +495,23 @@ thread_create(
 	 * Since the kernel does not (presently) allocate its memory
 	 * in a locality aware fashion, the root is an appropriate home.
 	 * If this thread is later associated with an lwp, it will have
-	 * it's lgroup re-assigned at that time.
+	 * its lgroup re-assigned at that time.
 	 */
 	lgrp_move_thread(t, &cp_default.cp_lgrploads[LGRP_ROOTID], 1);
 
 	/*
-	 * Inherit the current cpu.  If this cpu isn't part of the chosen
-	 * lgroup, a new cpu will be chosen by cpu_choose when the thread
-	 * is ready to run.
+	 * If the current CPU is in the default cpupart, use it.  Otherwise,
+	 * pick one that is; before entering the dispatcher code, we'll
+	 * make sure to keep the invariant that ->t_cpu is set.  (In fact, we
+	 * rely on this, in ht_should_run(), in the call tree of
+	 * disp_lowpri_cpu().)
 	 */
-	if (CPU->cpu_part == &cp_default)
+	if (CPU->cpu_part == &cp_default) {
 		t->t_cpu = CPU;
-	else
-		t->t_cpu = disp_lowpri_cpu(cp_default.cp_cpulist, t->t_lpl,
-		    t->t_pri, NULL);
+	} else {
+		t->t_cpu = cp_default.cp_cpulist;
+		t->t_cpu = disp_lowpri_cpu(t->t_cpu, t, t->t_pri);
+	}
 
 	t->t_disp_queue = t->t_cpu->cpu_disp;
 	kpreempt_enable();
@@ -601,12 +596,6 @@ thread_exit(void)
 	ASSERT(t->t_schedctl == NULL);
 	if (t->t_door)
 		door_slam();	/* in case thread did an upcall */
-
-#ifndef NPROBE
-	/* Kernel probe */
-	if (t->t_tnf_tpdp)
-		tnf_thread_exit();
-#endif /* NPROBE */
 
 	thread_rele(t);
 	t->t_preempt++;
@@ -747,10 +736,6 @@ thread_free(kthread_t *t)
 	}
 	if (audit_active)
 		audit_thread_free(t);
-#ifndef NPROBE
-	if (t->t_tnf_tpdp)
-		tnf_thread_free(t);
-#endif /* NPROBE */
 	if (t->t_cldata) {
 		CL_EXITCLASS(t->t_cid, (caddr_t *)t->t_cldata);
 	}
@@ -790,6 +775,11 @@ thread_free(kthread_t *t)
 	mutex_enter(&pidlock);
 	nthread--;
 	mutex_exit(&pidlock);
+
+	if (t->t_name != NULL) {
+		kmem_free(t->t_name, THREAD_NAME_MAX);
+		t->t_name = NULL;
+	}
 
 	/*
 	 * Free thread, lwp and stack.  This needs to be done carefully, since
@@ -864,12 +854,12 @@ thread_zone_destroy(zoneid_t zoneid, void *unused)
 
 	/*
 	 * Guard against race condition in mutex_owner_running:
-	 * 	thread=owner(mutex)
-	 * 	<interrupt>
-	 * 				thread exits mutex
-	 * 				thread exits
-	 * 				thread reaped
-	 * 				thread struct freed
+	 *	thread=owner(mutex)
+	 *	<interrupt>
+	 *				thread exits mutex
+	 *				thread exits
+	 *				thread reaped
+	 *				thread struct freed
 	 * cpu = thread->t_cpu <- BAD POINTER DEREFERENCE.
 	 * A cross call to all cpus will cause the interrupt handler
 	 * to reset the PC if it is in mutex_owner_running, refreshing
@@ -926,12 +916,12 @@ thread_reaper()
 
 		/*
 		 * Guard against race condition in mutex_owner_running:
-		 * 	thread=owner(mutex)
-		 * 	<interrupt>
-		 * 				thread exits mutex
-		 * 				thread exits
-		 * 				thread reaped
-		 * 				thread struct freed
+		 *	thread=owner(mutex)
+		 *	<interrupt>
+		 *				thread exits mutex
+		 *				thread exits
+		 *				thread reaped
+		 *				thread struct freed
 		 * cpu = thread->t_cpu <- BAD POINTER DEREFERENCE.
 		 * A cross call to all cpus will cause the interrupt handler
 		 * to reset the PC if it is in mutex_owner_running, refreshing
@@ -1025,53 +1015,139 @@ reapq_add(kthread_t *t)
 	mutex_exit(&reaplock);
 }
 
-/*
- * Install thread context ops for the current thread.
- */
-void
-installctx(
-	kthread_t *t,
-	void	*arg,
-	void	(*save)(void *),
-	void	(*restore)(void *),
-	void	(*fork)(void *, void *),
-	void	(*lwp_create)(void *, void *),
-	void	(*exit)(void *),
-	void	(*free)(void *, int))
+static struct ctxop *
+ctxop_find_by_tmpl(kthread_t *t, const struct ctxop_template *ct, void *arg)
+{
+	struct ctxop *ctx, *head;
+
+	ASSERT(MUTEX_HELD(&t->t_ctx_lock));
+	ASSERT(curthread->t_preempt > 0);
+
+	if (t->t_ctx == NULL) {
+		return (NULL);
+	}
+
+	ctx = head = t->t_ctx;
+	do {
+		if (ctx->save_op == ct->ct_save &&
+		    ctx->restore_op == ct->ct_restore &&
+		    ctx->fork_op == ct->ct_fork &&
+		    ctx->lwp_create_op == ct->ct_lwp_create &&
+		    ctx->exit_op == ct->ct_exit &&
+		    ctx->free_op == ct->ct_free &&
+		    ctx->arg == arg) {
+			return (ctx);
+		}
+
+		ctx = ctx->next;
+	} while (ctx != head);
+
+	return (NULL);
+}
+
+static void
+ctxop_detach_chain(kthread_t *t, struct ctxop *ctx)
+{
+	ASSERT(t != NULL);
+	ASSERT(t->t_ctx != NULL);
+	ASSERT(ctx != NULL);
+	ASSERT(ctx->next != NULL && ctx->prev != NULL);
+
+	ctx->prev->next = ctx->next;
+	ctx->next->prev = ctx->prev;
+	if (ctx->next == ctx) {
+		/* last remaining item */
+		t->t_ctx = NULL;
+	} else if (ctx == t->t_ctx) {
+		/* fix up head of list */
+		t->t_ctx = ctx->next;
+	}
+	ctx->next = ctx->prev = NULL;
+}
+
+struct ctxop *
+ctxop_allocate(const struct ctxop_template *ct, void *arg)
 {
 	struct ctxop *ctx;
 
+	/*
+	 * No changes have been made to the interface yet, so we expect all
+	 * callers to use the original revision.
+	 */
+	VERIFY3U(ct->ct_rev, ==, CTXOP_TPL_REV);
+
 	ctx = kmem_alloc(sizeof (struct ctxop), KM_SLEEP);
-	ctx->save_op = save;
-	ctx->restore_op = restore;
-	ctx->fork_op = fork;
-	ctx->lwp_create_op = lwp_create;
-	ctx->exit_op = exit;
-	ctx->free_op = free;
+	ctx->save_op = ct->ct_save;
+	ctx->restore_op = ct->ct_restore;
+	ctx->fork_op = ct->ct_fork;
+	ctx->lwp_create_op = ct->ct_lwp_create;
+	ctx->exit_op = ct->ct_exit;
+	ctx->free_op = ct->ct_free;
 	ctx->arg = arg;
-	ctx->next = t->t_ctx;
-	t->t_ctx = ctx;
+	ctx->save_ts = 0;
+	ctx->restore_ts = 0;
+	ctx->next = ctx->prev = NULL;
+
+	return (ctx);
 }
 
-/*
- * Remove the thread context ops from a thread.
- */
-int
-removectx(
-	kthread_t *t,
-	void	*arg,
-	void	(*save)(void *),
-	void	(*restore)(void *),
-	void	(*fork)(void *, void *),
-	void	(*lwp_create)(void *, void *),
-	void	(*exit)(void *),
-	void	(*free)(void *, int))
+void
+ctxop_free(struct ctxop *ctx)
 {
-	struct ctxop *ctx, *prev_ctx;
+	if (ctx->free_op != NULL)
+		(ctx->free_op)(ctx->arg, 0);
+
+	kmem_free(ctx, sizeof (struct ctxop));
+}
+
+void
+ctxop_attach(kthread_t *t, struct ctxop *ctx)
+{
+	ASSERT(ctx->next == NULL && ctx->prev == NULL);
 
 	/*
+	 * Keep ctxops in a doubly-linked list to allow traversal in both
+	 * directions.  Using only the newest-to-oldest ordering was adequate
+	 * previously, but reversing the order for restore_op actions is
+	 * necessary if later-added ctxops depends on earlier ones.
+	 *
+	 * One example of such a dependency:  Hypervisor software handling the
+	 * guest FPU expects that it save FPU state prior to host FPU handling
+	 * and consequently handle the guest logic _after_ the host FPU has
+	 * been restored.
+	 *
+	 * The t_ctx member points to the most recently added ctxop or is NULL
+	 * if no ctxops are associated with the thread.  The 'next' pointers
+	 * form a loop of the ctxops in newest-to-oldest order.  The 'prev'
+	 * pointers form a loop in the reverse direction, where t_ctx->prev is
+	 * the oldest entry associated with the thread.
+	 *
+	 * The protection of kpreempt_disable is required to safely perform the
+	 * list insertion, since there are inconsistent states between some of
+	 * the pointer assignments.
+	 */
+	kpreempt_disable();
+	if (t->t_ctx == NULL) {
+		ctx->next = ctx;
+		ctx->prev = ctx;
+	} else {
+		struct ctxop *head = t->t_ctx, *tail = t->t_ctx->prev;
+
+		ctx->next = head;
+		ctx->prev = tail;
+		head->prev = ctx;
+		tail->next = ctx;
+	}
+	t->t_ctx = ctx;
+	kpreempt_enable();
+}
+
+void
+ctxop_detach(kthread_t *t, struct ctxop *ctx)
+{
+	/*
 	 * The incoming kthread_t (which is the thread for which the
-	 * context ops will be removed) should be one of the following:
+	 * context ops will be detached) should be one of the following:
 	 *
 	 * a) the current thread,
 	 *
@@ -1092,62 +1168,125 @@ removectx(
 	 * and the target thread from racing with each other during lwp exit.
 	 */
 	mutex_enter(&t->t_ctx_lock);
-	prev_ctx = NULL;
 	kpreempt_disable();
-	for (ctx = t->t_ctx; ctx != NULL; ctx = ctx->next) {
-		if (ctx->save_op == save && ctx->restore_op == restore &&
-		    ctx->fork_op == fork && ctx->lwp_create_op == lwp_create &&
-		    ctx->exit_op == exit && ctx->free_op == free &&
-		    ctx->arg == arg) {
-			if (prev_ctx)
-				prev_ctx->next = ctx->next;
-			else
-				t->t_ctx = ctx->next;
-			mutex_exit(&t->t_ctx_lock);
-			if (ctx->free_op != NULL)
-				(ctx->free_op)(ctx->arg, 0);
-			kmem_free(ctx, sizeof (struct ctxop));
-			kpreempt_enable();
-			return (1);
+
+	VERIFY(t->t_ctx != NULL);
+
+#ifdef	DEBUG
+	/* Check that provided `ctx` is actually present in the t_ctx chain */
+	struct ctxop *head, *cur;
+	head = cur = t->t_ctx;
+	for (;;) {
+		if (cur == ctx) {
+			break;
 		}
-		prev_ctx = ctx;
+		cur = cur->next;
+		/* If we wrap, having not found `ctx`, this assert will fail */
+		ASSERT3P(cur, !=, head);
 	}
+#endif /* DEBUG */
+
+	ctxop_detach_chain(t, ctx);
+
+	mutex_exit(&t->t_ctx_lock);
+	kpreempt_enable();
+}
+
+void
+ctxop_install(kthread_t *t, const struct ctxop_template *ct, void *arg)
+{
+	ctxop_attach(t, ctxop_allocate(ct, arg));
+}
+
+int
+ctxop_remove(kthread_t *t, const struct ctxop_template *ct, void *arg)
+{
+	struct ctxop *ctx;
+
+	/*
+	 * ctxop_remove() shares the same requirements for the acted-upon thread
+	 * as ctxop_detach()
+	 */
+	ASSERT(t == curthread || ttoproc(t)->p_stat == SIDL ||
+	    ttoproc(t)->p_agenttp == curthread || t->t_state == TS_STOPPED);
+
+	/*
+	 * Serialize modifications to t->t_ctx to prevent the agent thread
+	 * and the target thread from racing with each other during lwp exit.
+	 */
+	mutex_enter(&t->t_ctx_lock);
+	kpreempt_disable();
+
+	ctx = ctxop_find_by_tmpl(t, ct, arg);
+	if (ctx != NULL) {
+		ctxop_detach_chain(t, ctx);
+		ctxop_free(ctx);
+	}
+
 	mutex_exit(&t->t_ctx_lock);
 	kpreempt_enable();
 
+	if (ctx != NULL) {
+		return (1);
+	}
 	return (0);
 }
 
 void
 savectx(kthread_t *t)
 {
-	struct ctxop *ctx;
-
 	ASSERT(t == curthread);
-	for (ctx = t->t_ctx; ctx != 0; ctx = ctx->next)
-		if (ctx->save_op != NULL)
-			(ctx->save_op)(ctx->arg);
+
+	if (t->t_ctx != NULL) {
+		struct ctxop *ctx, *head;
+
+		/* Forward traversal */
+		ctx = head = t->t_ctx;
+		do {
+			if (ctx->save_op != NULL) {
+				ctx->save_ts = gethrtime_unscaled();
+				(ctx->save_op)(ctx->arg);
+			}
+			ctx = ctx->next;
+		} while (ctx != head);
+	}
 }
 
 void
 restorectx(kthread_t *t)
 {
-	struct ctxop *ctx;
-
 	ASSERT(t == curthread);
-	for (ctx = t->t_ctx; ctx != 0; ctx = ctx->next)
-		if (ctx->restore_op != NULL)
-			(ctx->restore_op)(ctx->arg);
+
+	if (t->t_ctx != NULL) {
+		struct ctxop *ctx, *tail;
+
+		/* Backward traversal (starting at the tail) */
+		ctx = tail = t->t_ctx->prev;
+		do {
+			if (ctx->restore_op != NULL) {
+				ctx->restore_ts = gethrtime_unscaled();
+				(ctx->restore_op)(ctx->arg);
+			}
+			ctx = ctx->prev;
+		} while (ctx != tail);
+	}
 }
 
 void
 forkctx(kthread_t *t, kthread_t *ct)
 {
-	struct ctxop *ctx;
+	if (t->t_ctx != NULL) {
+		struct ctxop *ctx, *head;
 
-	for (ctx = t->t_ctx; ctx != NULL; ctx = ctx->next)
-		if (ctx->fork_op != NULL)
-			(ctx->fork_op)(t, ct);
+		/* Forward traversal */
+		ctx = head = t->t_ctx;
+		do {
+			if (ctx->fork_op != NULL) {
+				(ctx->fork_op)(t, ct);
+			}
+			ctx = ctx->next;
+		} while (ctx != head);
+	}
 }
 
 /*
@@ -1158,11 +1297,18 @@ forkctx(kthread_t *t, kthread_t *ct)
 void
 lwp_createctx(kthread_t *t, kthread_t *ct)
 {
-	struct ctxop *ctx;
+	if (t->t_ctx != NULL) {
+		struct ctxop *ctx, *head;
 
-	for (ctx = t->t_ctx; ctx != NULL; ctx = ctx->next)
-		if (ctx->lwp_create_op != NULL)
-			(ctx->lwp_create_op)(t, ct);
+		/* Forward traversal */
+		ctx = head = t->t_ctx;
+		do {
+			if (ctx->lwp_create_op != NULL) {
+				(ctx->lwp_create_op)(t, ct);
+			}
+			ctx = ctx->next;
+		} while (ctx != head);
+	}
 }
 
 /*
@@ -1175,11 +1321,18 @@ lwp_createctx(kthread_t *t, kthread_t *ct)
 void
 exitctx(kthread_t *t)
 {
-	struct ctxop *ctx;
+	if (t->t_ctx != NULL) {
+		struct ctxop *ctx, *head;
 
-	for (ctx = t->t_ctx; ctx != NULL; ctx = ctx->next)
-		if (ctx->exit_op != NULL)
-			(ctx->exit_op)(t);
+		/* Forward traversal */
+		ctx = head = t->t_ctx;
+		do {
+			if (ctx->exit_op != NULL) {
+				(ctx->exit_op)(t);
+			}
+			ctx = ctx->next;
+		} while (ctx != head);
+	}
 }
 
 /*
@@ -1189,14 +1342,21 @@ exitctx(kthread_t *t)
 void
 freectx(kthread_t *t, int isexec)
 {
-	struct ctxop *ctx;
-
 	kpreempt_disable();
-	while ((ctx = t->t_ctx) != NULL) {
-		t->t_ctx = ctx->next;
-		if (ctx->free_op != NULL)
-			(ctx->free_op)(ctx->arg, isexec);
-		kmem_free(ctx, sizeof (struct ctxop));
+	if (t->t_ctx != NULL) {
+		struct ctxop *ctx, *head;
+
+		ctx = head = t->t_ctx;
+		t->t_ctx = NULL;
+		do {
+			struct ctxop *next = ctx->next;
+
+			if (ctx->free_op != NULL) {
+				(ctx->free_op)(ctx->arg, isexec);
+			}
+			kmem_free(ctx, sizeof (struct ctxop));
+			ctx = next;
+		} while (ctx != head);
 	}
 	kpreempt_enable();
 }
@@ -1211,17 +1371,22 @@ freectx(kthread_t *t, int isexec)
 void
 freectx_ctx(struct ctxop *ctx)
 {
-	struct ctxop *nctx;
+	struct ctxop *head = ctx;
 
 	ASSERT(ctx != NULL);
 
 	kpreempt_disable();
+
+	head = ctx;
 	do {
-		nctx = ctx->next;
-		if (ctx->free_op != NULL)
+		struct ctxop *next = ctx->next;
+
+		if (ctx->free_op != NULL) {
 			(ctx->free_op)(ctx->arg, 0);
+		}
 		kmem_free(ctx, sizeof (struct ctxop));
-	} while ((ctx = nctx) != NULL);
+		ctx = next;
+	} while (ctx != head);
 	kpreempt_enable();
 }
 
@@ -1246,16 +1411,12 @@ setrun_locked(kthread_t *t)
 		waitq_setrun(t);
 	} else if (t->t_state == TS_STOPPED) {
 		/*
-		 * All of the sending of SIGCONT (TC_XSTART) and /proc
-		 * (TC_PSTART) and lwp_continue() (TC_CSTART) must have
-		 * requested that the thread be run.
 		 * Just calling setrun() is not sufficient to set a stopped
-		 * thread running.  TP_TXSTART is always set if the thread
-		 * is not stopped by a jobcontrol stop signal.
-		 * TP_TPSTART is always set if /proc is not controlling it.
-		 * TP_TCSTART is always set if lwp_suspend() didn't stop it.
-		 * The thread won't be stopped unless one of these
-		 * three mechanisms did it.
+		 * thread running.  All bits indicating that a thread can be
+		 * run, which we group as TS_ALLSTART, must be set.  Any cleared
+		 * bits under this mask are reasons the thread is not currently
+		 * runnable.  The thread won't be stopped except for one of
+		 * those reasons.
 		 *
 		 * These flags must be set before calling setrun_locked(t).
 		 * They can't be passed as arguments because the streams
@@ -1319,6 +1480,8 @@ thread_unpin()
 
 	itp = t->t_intr;		/* interrupted thread */
 	t->t_intr = NULL;		/* clear interrupt ptr */
+
+	smt_end_intr();
 
 	/*
 	 * Get state from interrupt thread for the one
@@ -1398,7 +1561,7 @@ thread_create_intr(struct cpu *cp)
 	tp->t_bind_cpu = PBIND_NONE;	/* no USER-requested binding */
 	tp->t_bind_pset = PS_NONE;
 
-#if defined(__i386) || defined(__amd64)
+#if defined(__x86)
 	tp->t_stk -= STACK_ALIGN;
 	*(tp->t_stk) = 0;		/* terminate intr thread stack */
 #endif
@@ -1416,7 +1579,7 @@ thread_create_intr(struct cpu *cp)
 static kmutex_t		tsd_mutex;	 /* linked list spin lock */
 static uint_t		tsd_nkeys;	 /* size of destructor array */
 /* per-key destructor funcs */
-static void 		(**tsd_destructor)(void *);
+static void		(**tsd_destructor)(void *);
 /* list of tsd_thread's */
 static struct tsd_thread	*tsd_list;
 
@@ -1998,7 +2161,7 @@ stkinfo_end(kthread_t *t)
 	/* search until no pattern in the stack */
 	if (t->t_stk > t->t_stkbase) {
 		/* stack grows down */
-#if defined(__i386) || defined(__amd64)
+#if defined(__x86)
 		/*
 		 * 6 longs are pushed on stack, see thread_load(). Skip
 		 * them, so if kthread has never run, percent is zero.
@@ -2126,4 +2289,76 @@ stkinfo_percent(caddr_t t_stk, caddr_t t_stkbase, caddr_t sp)
 		percent = 100;
 	}
 	return (percent);
+}
+
+/*
+ * NOTE: This will silently truncate a name > THREAD_NAME_MAX - 1 characters
+ * long.  It is expected that callers (acting on behalf of userland clients)
+ * will perform any required checks to return the correct error semantics.
+ * It is also expected callers on behalf of userland clients have done
+ * any necessary permission checks.
+ */
+int
+thread_setname(kthread_t *t, const char *name)
+{
+	char *buf = NULL;
+
+	/*
+	 * We optimistically assume that a thread's name will only be set
+	 * once and so allocate memory in preparation of setting t_name.
+	 * If it turns out a name has already been set, we just discard (free)
+	 * the buffer we just allocated and reuse the current buffer
+	 * (as all should be THREAD_NAME_MAX large).
+	 *
+	 * Such an arrangement means over the lifetime of a kthread_t, t_name
+	 * is either NULL or has one value (the address of the buffer holding
+	 * the current thread name).   The assumption is that most kthread_t
+	 * instances will not have a name assigned, so dynamically allocating
+	 * the memory should minimize the footprint of this feature, but by
+	 * having the buffer persist for the life of the thread, it simplifies
+	 * usage in highly constrained situations (e.g. dtrace).
+	 */
+	if (name != NULL && name[0] != '\0') {
+		for (size_t i = 0; name[i] != '\0'; i++) {
+			if (!isprint(name[i]))
+				return (EINVAL);
+		}
+
+		buf = kmem_zalloc(THREAD_NAME_MAX, KM_SLEEP);
+		(void) strlcpy(buf, name, THREAD_NAME_MAX);
+	}
+
+	mutex_enter(&ttoproc(t)->p_lock);
+	if (t->t_name == NULL) {
+		t->t_name = buf;
+	} else {
+		if (buf != NULL) {
+			(void) strlcpy(t->t_name, name, THREAD_NAME_MAX);
+			kmem_free(buf, THREAD_NAME_MAX);
+		} else {
+			bzero(t->t_name, THREAD_NAME_MAX);
+		}
+	}
+	mutex_exit(&ttoproc(t)->p_lock);
+	return (0);
+}
+
+int
+thread_vsetname(kthread_t *t, const char *fmt, ...)
+{
+	char name[THREAD_NAME_MAX];
+	va_list va;
+	int rc;
+
+	va_start(va, fmt);
+	rc = vsnprintf(name, sizeof (name), fmt, va);
+	va_end(va);
+
+	if (rc < 0)
+		return (EINVAL);
+
+	if (rc >= sizeof (name))
+		return (ENAMETOOLONG);
+
+	return (thread_setname(t, name));
 }

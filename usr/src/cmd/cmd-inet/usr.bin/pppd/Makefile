@@ -4,6 +4,7 @@
 #
 # cmd/cmd-inet/usr.bin/pppd/Makefile
 #
+# Copyright (c) 2019, Joyent, Inc.
 
 include		../../../Makefile.cmd
 include		Makefile.def
@@ -50,7 +51,10 @@ OBJS +=		chap_ms.o
 EXOBJS +=	mschap_test.o
 CLOBBERFILES +=	mschap_test
 
-CERRWARN +=	-_gcc=-Wno-uninitialized
+CERRWARN +=	$(CNOWARN_UNINIT)
+
+# main() is too hairy for smatch
+SMATCH=off
 
 # This is used *only* for testing the portability of the libraries
 # required for MS-CHAPv1.  It is not needed in any normal system and
@@ -78,10 +82,6 @@ mschap_test:	mschap_test.o chap_ms.o
 	@echo "  xx xx xx xx xx xx xx xx"
 	@echo "  00"
 
-LINTFLAGS +=	-erroff=E_NAME_DEF_NOT_USED2
-
-SRCS=		$(OBJS:%.o=%.c)
-
 .PARALLEL:	$(OBJS)
 
 $(PROG):	$(OBJS)
@@ -106,18 +106,8 @@ $(SUBDIRS):	FRC
 
 FRC:
 
-LINTOBJS=$(OBJS:%.o=%.ln)
-CLOBBERFILES +=	$(LINTOBJS)
-
 clean:		$(SUBDIRS)
 	$(RM) $(OBJS) $(EXOBJS)
-
-sha1.ln:=	LINTFLAGS += -erroff=E_SUPPRESSION_DIRECTIVE_UNUSED
-
-# Not using the default lint target here so that we can disable
-# warnings per module as needed.
-lint:		$(SUBDIRS) $(LINTOBJS)
-	$(LINT.c) $(LINTOBJS) $(LDLIBS)
 
 clobber:	$(SUBDIRS)
 

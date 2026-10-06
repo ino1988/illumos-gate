@@ -21,6 +21,7 @@
 /*
  * Copyright (c) 1992, 2010, Oracle and/or its affiliates. All rights reserved.
  * Copyright 2014, Joyent, Inc. All rights reserved.
+ * Copyright 2015 Nexenta Systems, Inc. All rights reserved.
  */
 
 /*
@@ -197,6 +198,8 @@ struct {
 	kstat_named_t pagesfree;
 	kstat_named_t pageslocked;
 	kstat_named_t pagestotal;
+	kstat_named_t lowmemscan;
+	kstat_named_t nthrottle;
 } system_pages_kstat = {
 	{ "physmem",		KSTAT_DATA_ULONG },
 	{ "nalloc",		KSTAT_DATA_ULONG },
@@ -204,20 +207,22 @@ struct {
 	{ "nalloc_calls",	KSTAT_DATA_ULONG },
 	{ "nfree_calls",	KSTAT_DATA_ULONG },
 	{ "kernelbase",		KSTAT_DATA_ULONG },
-	{ "econtig", 		KSTAT_DATA_ULONG },
-	{ "freemem", 		KSTAT_DATA_ULONG },
-	{ "availrmem", 		KSTAT_DATA_ULONG },
-	{ "lotsfree", 		KSTAT_DATA_ULONG },
-	{ "desfree", 		KSTAT_DATA_ULONG },
-	{ "minfree", 		KSTAT_DATA_ULONG },
-	{ "fastscan", 		KSTAT_DATA_ULONG },
-	{ "slowscan", 		KSTAT_DATA_ULONG },
-	{ "nscan", 		KSTAT_DATA_ULONG },
-	{ "desscan", 		KSTAT_DATA_ULONG },
-	{ "pp_kernel", 		KSTAT_DATA_ULONG },
-	{ "pagesfree", 		KSTAT_DATA_ULONG },
-	{ "pageslocked", 	KSTAT_DATA_ULONG },
+	{ "econtig",		KSTAT_DATA_ULONG },
+	{ "freemem",		KSTAT_DATA_ULONG },
+	{ "availrmem",		KSTAT_DATA_ULONG },
+	{ "lotsfree",		KSTAT_DATA_ULONG },
+	{ "desfree",		KSTAT_DATA_ULONG },
+	{ "minfree",		KSTAT_DATA_ULONG },
+	{ "fastscan",		KSTAT_DATA_ULONG },
+	{ "slowscan",		KSTAT_DATA_ULONG },
+	{ "nscan",		KSTAT_DATA_ULONG },
+	{ "desscan",		KSTAT_DATA_ULONG },
+	{ "pp_kernel",		KSTAT_DATA_ULONG },
+	{ "pagesfree",		KSTAT_DATA_ULONG },
+	{ "pageslocked",	KSTAT_DATA_ULONG },
 	{ "pagestotal",		KSTAT_DATA_ULONG },
+	{ "low_mem_scan",	KSTAT_DATA_ULONG },
+	{ "n_throttle",		KSTAT_DATA_ULONG },
 };
 
 static int header_kstat_update(kstat_t *, int);
@@ -637,7 +642,7 @@ default_kstat_update(kstat_t *ksp, int rw)
 	 * way of determining how much space is needed to hold the snapshot:
 	 */
 	if (ksp->ks_data != NULL && ksp->ks_type == KSTAT_TYPE_NAMED &&
-	    (ksp->ks_flags & KSTAT_FLAG_VAR_SIZE)) {
+	    (ksp->ks_flags & (KSTAT_FLAG_VAR_SIZE | KSTAT_FLAG_LONGSTRINGS))) {
 
 		/*
 		 * Add in the space required for the strings
@@ -911,6 +916,8 @@ system_pages_kstat_update(kstat_t *ksp, int rw)
 	system_pages_kstat.pageslocked.value.ul	= (ulong_t)(availrmem_initial -
 	    availrmem);
 	system_pages_kstat.pagestotal.value.ul	= (ulong_t)total_pages;
+	system_pages_kstat.lowmemscan.value.ul	= (ulong_t)low_mem_scan;
+	system_pages_kstat.nthrottle.value.ul	= (ulong_t)n_throttle;
 	/*
 	 * pp_kernel represents total pages used by the kernel since the
 	 * startup. This formula takes into account the boottime kernel
@@ -1152,32 +1159,21 @@ kstat_install(kstat_t *ksp)
 	}
 
 	if (ksp->ks_type == KSTAT_TYPE_NAMED && ksp->ks_data != NULL) {
-		int has_long_strings = 0;
 		uint_t i;
 		kstat_named_t *knp = KSTAT_NAMED_PTR(ksp);
 
 		for (i = 0; i < ksp->ks_ndata; i++, knp++) {
 			if (knp->data_type == KSTAT_DATA_STRING) {
-				has_long_strings = 1;
+				ksp->ks_flags |= KSTAT_FLAG_LONGSTRINGS;
 				break;
 			}
-		}
-		/*
-		 * It is an error for a named kstat with fields of
-		 * KSTAT_DATA_STRING to be non-virtual.
-		 */
-		if (has_long_strings && !(ksp->ks_flags & KSTAT_FLAG_VIRTUAL)) {
-			panic("kstat_install('%s', %d, '%s'): "
-			    "named kstat containing KSTAT_DATA_STRING "
-			    "is not virtual",
-			    ksp->ks_module, ksp->ks_instance,
-			    ksp->ks_name);
 		}
 		/*
 		 * The default snapshot routine does not handle KSTAT_WRITE
 		 * for long strings.
 		 */
-		if (has_long_strings && (ksp->ks_flags & KSTAT_FLAG_WRITABLE) &&
+		if ((ksp->ks_flags & KSTAT_FLAG_LONGSTRINGS) &&
+		    (ksp->ks_flags & KSTAT_FLAG_WRITABLE) &&
 		    (ksp->ks_snapshot == default_kstat_snapshot)) {
 			panic("kstat_install('%s', %d, '%s'): "
 			    "named kstat containing KSTAT_DATA_STRING "

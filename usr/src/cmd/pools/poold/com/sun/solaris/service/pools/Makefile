@@ -23,16 +23,13 @@
 # Copyright 2003 Sun Microsystems, Inc.  All rights reserved.
 # Use is subject to license terms.
 #
-#ident	"%Z%%M%	%I%	%E% SMI"
-#
 # cmd/pools/poold/com/sun/solaris/service/pools/Makefile
 
 include $(SRC)/cmd/Makefile.cmd
 
 CLASSPATH =	$(SRC)/cmd/pools/poold
-JAVAFLAGS +=	-source 1.4
 
-		
+
 SOURCE =	PoolInternal.java \
 		Component.java \
 		Configuration.java \

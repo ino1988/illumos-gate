@@ -20,6 +20,8 @@
  */
 /*
  * Copyright (c) 1990, 2010, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2016 by Delphix. All rights reserved.
+ * Copyright 2019 Peter Tribble.
  */
 
 
@@ -147,7 +149,7 @@
  * doing dma in chunks of 2048 works OK.
  * The reason for making this a global variable is that there could be
  * situations under which the customer would like to get full performance
- * from floppy. He may not be having IFB boards that cause underrun errors.
+ * from floppy. They may not be having IFB boards that cause underrun errors.
  * Under those conditions we could set this value to a much higher value
  * by editing /etc/system file.
  */
@@ -255,7 +257,7 @@ extern void call_debug();
  * a suspended device until the cpr implementation changes..
  */
 
-#define	CHECK_AND_WAIT_FD_STATE_SUSPENDED(fdc) 	\
+#define	CHECK_AND_WAIT_FD_STATE_SUSPENDED(fdc)	\
 		{\
 			while (fdc->c_un->un_state == FD_STATE_SUSPENDED) {\
 				cv_wait(&fdc->c_suspend_cv, \
@@ -322,31 +324,31 @@ static struct fd_char fdtypes[] = {
 		-1,		/* (NA) # steps per data track */
 	},
 	{	/* struct fd_char fdchar_highdens */
-		0, 		/* medium */
-		500, 		/* transfer rate */
-		80, 		/* number of cylinders */
-		2, 		/* number of heads */
-		512, 		/* sector size */
-		18, 		/* sectors per track */
-		-1, 		/* (NA) # steps per data track */
+		0,		/* medium */
+		500,		/* transfer rate */
+		80,		/* number of cylinders */
+		2,		/* number of heads */
+		512,		/* sector size */
+		18,		/* sectors per track */
+		-1,		/* (NA) # steps per data track */
 	},
 	{	/* struct fd_char fdchar_meddens */
-		1, 		/* medium */
-		500, 		/* transfer rate */
-		77, 		/* number of cylinders */
-		2, 		/* number of heads */
-		1024, 		/* sector size */
-		8, 		/* sectors per track */
-		-1, 		/* (NA) # steps per data track */
+		1,		/* medium */
+		500,		/* transfer rate */
+		77,		/* number of cylinders */
+		2,		/* number of heads */
+		1024,		/* sector size */
+		8,		/* sectors per track */
+		-1,		/* (NA) # steps per data track */
 	},
 	{	/* struct fd_char fdchar_lowdens  */
-		0, 		/* medium */
-		250, 		/* transfer rate */
-		80, 		/* number of cylinders */
-		2, 		/* number of heads */
-		512, 		/* sector size */
-		9, 		/* sectors per track */
-		-1, 		/* (NA) # steps per data track */
+		0,		/* medium */
+		250,		/* transfer rate */
+		80,		/* number of cylinders */
+		2,		/* number of heads */
+		512,		/* sector size */
+		9,		/* sectors per track */
+		-1,		/* (NA) # steps per data track */
 	}
 };
 
@@ -386,18 +388,18 @@ static struct packed_label fdlbl_high_21 = {
 
 static struct packed_label fdlbl_high_80 = {
 	{ "3.5\" floppy cyl 80 alt 0 hd 2 sec 18" },
-	300, 				/* rotations per minute */
-	80, 				/* # physical cylinders */
-	0, 				/* alternates per cylinder */
-	1, 				/* interleave factor */
-	80, 				/* # of data cylinders */
-	0, 				/* # of alternate cylinders */
-	2, 				/* # of heads in this partition */
-	18, 				/* # of 512 byte sectors per track */
+	300,				/* rotations per minute */
+	80,				/* # physical cylinders */
+	0,				/* alternates per cylinder */
+	1,				/* interleave factor */
+	80,				/* # of data cylinders */
+	0,				/* # of alternate cylinders */
+	2,				/* # of heads in this partition */
+	18,				/* # of 512 byte sectors per track */
 	{
-		{ 0, 79 * 2 * 18 }, 	/* part 0 - all but last cyl */
-		{ 79, 1 * 2 * 18 }, 	/* part 1 - just the last cyl */
-		{ 0, 80 * 2 * 18 }, 	/* part 2 - "the whole thing" */
+		{ 0, 79 * 2 * 18 },	/* part 0 - all but last cyl */
+		{ 79, 1 * 2 * 18 },	/* part 1 - just the last cyl */
+		{ 0, 80 * 2 * 18 },	/* part 2 - "the whole thing" */
 	},
 	{	0,			/* version */
 		"",			/* volume label */
@@ -416,14 +418,14 @@ static struct packed_label fdlbl_high_80 = {
  */
 static struct packed_label fdlbl_medium_80 = {
 	{ "3.5\" floppy cyl 77 alt 0 hd 2 sec 8" },
-	360, 				/* rotations per minute */
-	77, 				/* # physical cylinders */
-	0, 				/* alternates per cylinder */
-	1, 				/* interleave factor */
-	77, 				/* # of data cylinders */
-	0, 				/* # of alternate cylinders */
-	2, 				/* # of heads in this partition */
-	16, 				/* # of 512 byte sectors per track */
+	360,				/* rotations per minute */
+	77,				/* # physical cylinders */
+	0,				/* alternates per cylinder */
+	1,				/* interleave factor */
+	77,				/* # of data cylinders */
+	0,				/* # of alternate cylinders */
+	2,				/* # of heads in this partition */
+	16,				/* # of 512 byte sectors per track */
 	{
 		{ 0, 76 * 2 * 8 * 2 },  /* part 0 - all but last cyl */
 		{ 76, 1 * 2 * 8 * 2 },  /* part 1 - just the last cyl */
@@ -442,18 +444,18 @@ static struct packed_label fdlbl_medium_80 = {
 
 static struct packed_label fdlbl_low_80 = {
 	{ "3.5\" floppy cyl 80 alt 0 hd 2 sec 9" },
-	300, 				/* rotations per minute */
-	80, 				/* # physical cylinders */
-	0, 				/* alternates per cylinder */
-	1, 				/* interleave factor */
-	80, 				/* # of data cylinders */
-	0, 				/* # of alternate cylinders */
-	2, 				/* # of heads in this partition */
-	9, 				/* # of 512 byte sectors per track */
+	300,				/* rotations per minute */
+	80,				/* # physical cylinders */
+	0,				/* alternates per cylinder */
+	1,				/* interleave factor */
+	80,				/* # of data cylinders */
+	0,				/* # of alternate cylinders */
+	2,				/* # of heads in this partition */
+	9,				/* # of 512 byte sectors per track */
 	{
-		{ 0, 79 * 2 * 9 }, 	/* part 0 - all but last cyl */
-		{ 79, 1 * 2 * 9 }, 	/* part 1 - just the last cyl */
-		{ 0, 80 * 2 * 9 }, 	/* part 2 - "the whole thing" */
+		{ 0, 79 * 2 * 9 },	/* part 0 - all but last cyl */
+		{ 79, 1 * 2 * 9 },	/* part 1 - just the last cyl */
+		{ 0, 80 * 2 * 9 },	/* part 2 - "the whole thing" */
 	},
 	{	0,			/* version */
 		"",			/* volume label */
@@ -472,57 +474,57 @@ static struct fdcmdinfo {
 	uchar_t nrsltbytes;	/* number of bytes in result */
 	uchar_t cmdtype;		/* characteristics */
 } fdcmds[] = {
-	"", 0, 0, 0, 			/* - */
-	"", 0, 0, 0, 			/* - */
-	"read_track", 9, 7, 1, 		/* 2 */
-	"specify", 3, 0, 3, 		/* 3 */
-	"sense_drv_status", 2, 1, 3, 	/* 4 */
-	"write", 9, 7, 1, 		/* 5 */
-	"read", 9, 7, 1, 		/* 6 */
-	"recalibrate", 2, 0, 2, 		/* 7 */
-	"sense_int_status", 1, 2, 3, 	/* 8 */
-	"write_del", 9, 7, 1, 		/* 9 */
-	"read_id", 2, 7, 2, 		/* A */
-	"motor_on/off", 1, 0, 4, 	/* B */
-	"read_del", 9, 7, 1, 		/* C */
-	"format_track", 10, 7, 1, 	/* D */
-	"dump_reg", 1, 10, 4, 		/* E */
-	"seek", 3, 0, 2, 		/* F */
-	"", 0, 0, 0, 			/* - */
-	"", 0, 0, 0, 			/* - */
-	"", 0, 0, 0, 			/* - */
-	"configure", 4, 0, 4, 		/* 13 */
+	"", 0, 0, 0,			/* - */
+	"", 0, 0, 0,			/* - */
+	"read_track", 9, 7, 1,		/* 2 */
+	"specify", 3, 0, 3,		/* 3 */
+	"sense_drv_status", 2, 1, 3,	/* 4 */
+	"write", 9, 7, 1,		/* 5 */
+	"read", 9, 7, 1,		/* 6 */
+	"recalibrate", 2, 0, 2,		/* 7 */
+	"sense_int_status", 1, 2, 3,	/* 8 */
+	"write_del", 9, 7, 1,		/* 9 */
+	"read_id", 2, 7, 2,		/* A */
+	"motor_on/off", 1, 0, 4,	/* B */
+	"read_del", 9, 7, 1,		/* C */
+	"format_track", 10, 7, 1,	/* D */
+	"dump_reg", 1, 10, 4,		/* E */
+	"seek", 3, 0, 2,		/* F */
+	"", 0, 0, 0,			/* - */
+	"", 0, 0, 0,			/* - */
+	"", 0, 0, 0,			/* - */
+	"configure", 4, 0, 4,		/* 13 */
 	/* relative seek */
 };
 
 static struct cb_ops fd_cb_ops = {
-	fd_open, 		/* open */
-	fd_close, 		/* close */
-	fd_strategy, 		/* strategy */
-	nodev, 			/* print */
-	nodev, 			/* dump */
-	fd_read, 		/* read */
-	fd_write, 		/* write */
-	fd_ioctl, 		/* ioctl */
-	nodev, 			/* devmap */
-	nodev, 			/* mmap */
-	nodev, 			/* segmap */
-	nochpoll, 		/* poll */
-	fd_prop_op, 		/* cb_prop_op */
-	0, 			/* streamtab  */
+	fd_open,		/* open */
+	fd_close,		/* close */
+	fd_strategy,		/* strategy */
+	nodev,			/* print */
+	nodev,			/* dump */
+	fd_read,		/* read */
+	fd_write,		/* write */
+	fd_ioctl,		/* ioctl */
+	nodev,			/* devmap */
+	nodev,			/* mmap */
+	nodev,			/* segmap */
+	nochpoll,		/* poll */
+	fd_prop_op,		/* cb_prop_op */
+	0,			/* streamtab  */
 	D_NEW | D_MP		/* Driver compatibility flag */
 };
 
 static struct dev_ops	fd_ops = {
-	DEVO_REV, 		/* devo_rev, */
-	0, 			/* refcnt  */
-	fd_info, 		/* info */
-	nulldev, 		/* identify */
-	nulldev, 		/* probe */
-	fd_attach, 		/* attach */
-	fd_detach, 		/* detach */
-	nodev, 			/* reset */
-	&fd_cb_ops, 		/* driver operations */
+	DEVO_REV,		/* devo_rev, */
+	0,			/* refcnt  */
+	fd_info,		/* info */
+	nulldev,		/* identify */
+	nulldev,		/* probe */
+	fd_attach,		/* attach */
+	fd_detach,		/* detach */
+	nodev,			/* reset */
+	&fd_cb_ops,		/* driver operations */
 	(struct bus_ops *)0,	/* bus operations */
 	fd_power,		/* power */
 	ddi_quiesce_not_supported,	/* devo_quiesce */
@@ -556,8 +558,8 @@ static int tosec = 16;  /* long timeouts for sundiag for now */
 extern struct mod_ops mod_driverops;
 static struct modldrv modldrv = {
 	&mod_driverops,		/* Type of module. driver here */
-	"Floppy Driver", 	/* Name of the module. */
-	&fd_ops, 		/* Driver ops vector */
+	"Floppy Driver",	/* Name of the module. */
+	&fd_ops,		/* Driver ops vector */
 };
 
 static struct modlinkage modlinkage = {
@@ -594,8 +596,8 @@ _fini(void)
 static int
 fd_attach(dev_info_t *dip, ddi_attach_cmd_t cmd)
 {
-	struct 			fdctlr *fdc;
-	struct 			driver_minor_data *dmdp;
+	struct			fdctlr *fdc;
+	struct			driver_minor_data *dmdp;
 	int			instance = ddi_get_instance(dip);
 	int			hard_intr_set = 0;
 
@@ -1115,7 +1117,7 @@ fd_attach_register_interrupts(dev_info_t *dip, struct fdctlr *fdc, int *hard)
 
 /*
  * Make sure the drive is present
- * 	- acquires the low level lock
+ * - acquires the low level lock
  */
 static int
 fd_attach_check_drive(struct fdctlr *fdc)
@@ -1267,7 +1269,8 @@ fd_cleanup(dev_info_t *dip, struct fdctlr *fdc, int hard, int locks)
 		 * Need to turn off motor (includes select/LED for South Bridge
 		 * chipset) just in case it was on when timer was removed
 		 */
-		fdmotoff(fdc);
+		if (fdc->c_un != (struct fdunit *)NULL)
+			fdmotoff(fdc);
 	}
 	if (fdc->c_timeid)
 		(void) untimeout(fdc->c_timeid);
@@ -1446,7 +1449,7 @@ fd_prop_op(dev_t dev, dev_info_t *dip, ddi_prop_op_t prop_op, int mod_flags,
 	 * request is passed to ddi_prop_op.
 	 */
 	if (dev == DDI_DEV_T_ANY) {
-pass:  		return (ddi_prop_op(dev, dip, prop_op, mod_flags,
+pass:		return (ddi_prop_op(dev, dip, prop_op, mod_flags,
 		    name, valuep, lengthp));
 	} else {
 		fdc = fd_getctlr(dev);
@@ -1478,7 +1481,7 @@ fd_open(dev_t *devp, int flag, int otyp, cred_t *cred_p)
 	struct dk_map32 *dkm;
 	uchar_t	pbit;
 	int	err, part_is_open;
-	int 	unit;
+	int	unit;
 
 	dev = *devp;
 	fdc = fd_getctlr(dev);
@@ -1869,7 +1872,7 @@ fdmotoff(void *arg)
 /* ARGSUSED */
 static int
 fd_ioctl(dev_t dev, int cmd, intptr_t arg, int flag,
-	cred_t *cred_p, int *rval_p)
+    cred_t *cred_p, int *rval_p)
 {
 	union {
 		struct dk_cinfo dki;
@@ -2556,7 +2559,7 @@ fd_ioctl(dev_t dev, int cmd, intptr_t arg, int flag,
 /*
  * fdrawioctl
  *
- * 	- acquires the low level lock
+ * - acquires the low level lock
  */
 
 static int
@@ -6122,7 +6125,7 @@ fd_check_media(dev_t dev, enum dkio_state state)
 
 /*
  * fd_get_media_info :
- * 	Collects medium information for
+ *	Collects medium information for
  *	DKIOCGMEDIAINFO ioctl.
  */
 
@@ -6286,7 +6289,7 @@ create_pm_components(dev_info_t *dip)
 
 /*
  * set_data_count_register(struct fdctlr *fdc, uint32_t count)
- * 	Set the data count in appropriate dma register.
+ *	Set the data count in appropriate dma register.
  */
 
 static void
@@ -6332,7 +6335,7 @@ set_data_count_register(struct fdctlr *fdc, uint32_t count)
 
 /*
  * get_data_count_register(struct fdctlr *fdc)
- * 	Read the data count from appropriate dma register.
+ *	Read the data count from appropriate dma register.
  */
 
 static uint32_t
@@ -6378,7 +6381,7 @@ get_data_count_register(struct fdctlr *fdc)
 
 /*
  * reset_dma_controller(struct fdctlr *fdc)
- * 	Reset and initialize the dma controller.
+ *	Reset and initialize the dma controller.
  */
 
 static void
@@ -6421,7 +6424,7 @@ get_dma_control_register(struct fdctlr *fdc)
 
 /*
  * set_data_address_register(struct fdctlr *fdc)
- * 	Set the data address in appropriate dma register.
+ *	Set the data address in appropriate dma register.
  */
 static void
 set_data_address_register(struct fdctlr *fdc, uint32_t address)
@@ -6491,7 +6494,7 @@ set_data_address_register(struct fdctlr *fdc, uint32_t address)
 
 /*
  * set_dma_mode(struct fdctlr *fdc, int val)
- * 	Set the appropriate dma direction and registers.
+ *	Set the appropriate dma direction and registers.
  */
 static void
 set_dma_mode(struct fdctlr *fdc, int val)
@@ -6550,7 +6553,7 @@ release_sb_dma(struct fdctlr *fdc)
 	dma_reg = (struct sb_dma_reg *)fdc->c_dma_regs;
 	/* Unmask all the channels to release the DMA controller */
 	ddi_put8(fdc->c_handlep_dma,
-	    &dma_reg->sb_dma_regs[DMAC1_ALLMASK], NULL);
+	    &dma_reg->sb_dma_regs[DMAC1_ALLMASK], 0);
 	fdc->sb_dma_lock = 0;
 }
 

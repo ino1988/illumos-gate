@@ -20,6 +20,10 @@
  */
 
 /*
+ * Copyright (c) 2017 Peter Tribble.
+ */
+
+/*
  * Copyright 2009 Sun Microsystems, Inc.  All rights reserved.
  * Use is subject to license terms.
  */
@@ -74,7 +78,7 @@ static char	mylocal[PATH_MAX];
 static int	mapmode = MAPNONE;
 static char	*maptype = "";
 static mode_t	d_mode = BADMODE;
-static char 	*d_owner = BADOWNER;
+static char	*d_owner = BADOWNER;
 static char	*d_group = BADGROUP;
 
 /*
@@ -149,7 +153,9 @@ gpkgmap(struct cfent *ept, FILE *fp)
 	(void) strcpy(ept->ainfo.group, d_group);
 	ept->ainfo.major = BADMAJOR;
 	ept->ainfo.minor = BADMINOR;
-	ept->cinfo.cksum = ept->cinfo.modtime = ept->cinfo.size = (-1L);
+	ept->cinfo.cksum = -1L;
+	ept->cinfo.modtime = -1L;
+	ept->cinfo.size = -1L;
 
 	ept->npkgs = 0;
 
@@ -168,19 +174,19 @@ readline:
 	first_char = B_FALSE;
 
 	switch (c) {
-	    case EOF:
+	case EOF:
 		return (0);
 
-	    case '0':
-	    case '1':
-	    case '2':
-	    case '3':
-	    case '4':
-	    case '5':
-	    case '6':
-	    case '7':
-	    case '8':
-	    case '9':
+	case '0':
+	case '1':
+	case '2':
+	case '3':
+	case '4':
+	case '5':
+	case '6':
+	case '7':
+	case '8':
+	case '9':
 		if (ept->volno) {
 			setErrstr(pkg_gt(ERR_BAD_VOLUME_NUMBER));
 			goto error;
@@ -194,11 +200,11 @@ readline:
 
 		goto readline;
 
-	    case ':':
-	    case '#':
+	case ':':
+	case '#':
 		(void) getend(fp);
 		/*FALLTHRU*/
-	    case '\n':
+	case '\n':
 		/*
 		 * Since we are going to scan the next line,
 		 * we need to reset volume number and first_char.
@@ -207,12 +213,12 @@ readline:
 		first_char = B_TRUE;
 		goto readline;
 
-	    case 'i':
+	case 'i':
 		ept->ftype = (char)c;
 		c = eatwhite(fp);
 		/*FALLTHRU*/
-	    case '.':
-	    case '/':
+	case '.':
+	case '/':
 		(void) ungetc(c, fp);
 
 		if (getstr(fp, "=", PATH_MAX, mypath)) {
@@ -248,17 +254,17 @@ readline:
 		}
 		return (1);
 
-	    case '?':
-	    case 'f':
-	    case 'v':
-	    case 'e':
-	    case 'l':
-	    case 's':
-	    case 'p':
-	    case 'c':
-	    case 'b':
-	    case 'd':
-	    case 'x':
+	case '?':
+	case 'f':
+	case 'v':
+	case 'e':
+	case 'l':
+	case 's':
+	case 'p':
+	case 'c':
+	case 'b':
+	case 'd':
+	case 'x':
 		ept->ftype = (char)c;
 		if (getstr(fp, NULL, CLSSIZ, ept->pkg_class)) {
 			setErrstr(pkg_gt(ERR_CANNOT_READ_CLASS_TOKEN));
@@ -278,7 +284,7 @@ readline:
 					setErrstr(pkg_gt(ERR_READLINK));
 				} else {
 					setErrstr(
-						pkg_gt(ERR_CANT_READ_LCLPATH));
+					    pkg_gt(ERR_CANT_READ_LCLPATH));
 				}
 				goto error;
 			}
@@ -292,7 +298,7 @@ readline:
 			(void) ungetc(c, fp);
 		break;
 
-	    default:
+	default:
 		setErrstr(pkg_gt(ERR_UNKNOWN_FTYPE));
 error:
 		(void) getend(fp);
@@ -354,16 +360,16 @@ error:
 		if (mapmode != MAPNONE) {
 			if (mapvar(mapmode, ept->ainfo.owner)) {
 				(void) snprintf(getErrbufAddr(),
-					getErrbufSize(),
-					pkg_gt(ERR_NOVAR),
-					maptype, ept->ainfo.owner);
+				    getErrbufSize(),
+				    pkg_gt(ERR_NOVAR),
+				    maptype, ept->ainfo.owner);
 				setErrstr(getErrbufAddr());
 				goto error;
 			}
 			if (mapvar(mapmode, ept->ainfo.group)) {
 				(void) snprintf(getErrbufAddr(),
-					getErrbufSize(), pkg_gt(ERR_NOVAR),
-					maptype, ept->ainfo.group);
+				    getErrbufSize(), pkg_gt(ERR_NOVAR),
+				    maptype, ept->ainfo.group);
 				setErrstr(getErrbufAddr());
 				goto error;
 			}
@@ -373,8 +379,8 @@ error:
 	if (strchr("ifve", ept->ftype)) {
 		/* look for content description */
 		if (!getlnum(fp, 10, (fsblkcnt_t *)&ept->cinfo.size, BADCONT) &&
-		(getnum(fp, 10, (long *)&ept->cinfo.cksum, BADCONT) ||
-		getnum(fp, 10, (long *)&ept->cinfo.modtime, BADCONT))) {
+		    (getnum(fp, 10, (long *)&ept->cinfo.cksum, BADCONT) ||
+		    getnum(fp, 10, (long *)&ept->cinfo.modtime, BADCONT))) {
 			setErrstr(pkg_gt(ERR_CANNOT_READ_CONTENT_INFO));
 			goto error;
 		}
@@ -389,7 +395,6 @@ end:
 		return (-1);
 	}
 
-done:
 	return (1);
 }
 
@@ -450,9 +455,9 @@ getvalmode(FILE *fp, mode_t *d, long bad, int map)
 
 			if ((map) && (mapvar(mapmode, tempmode))) {
 				(void) snprintf(getErrbufAddr(),
-						getErrbufSize(),
-						pkg_gt(ERR_NOVAR),
-						maptype, tempmode);
+				    getErrbufSize(),
+				    pkg_gt(ERR_NOVAR),
+				    maptype, tempmode);
 				setErrstr(getErrbufAddr());
 				return (2);
 			}
@@ -474,14 +479,14 @@ getvalmode(FILE *fp, mode_t *d, long bad, int map)
 				while (tempmode[n] && !isspace(tempmode[n])) {
 					if (!isdigit(tempmode[n])) {
 						setErrstr(
-							pkg_gt(ERR_MODEALPHA));
+						    pkg_gt(ERR_MODEALPHA));
 						return (2);
 					}
 
 					if (strchr("89abcdefABCDEF",
 					    tempmode[n])) {
 						setErrstr(
-							pkg_gt(ERR_BASEINVAL));
+						    pkg_gt(ERR_BASEINVAL));
 						return (2);
 					}
 					n++;
@@ -626,9 +631,9 @@ eatwhite(FILE *fp)
 	/* this test works around a side effect of getc() */
 	if (feof(fp))
 		return (EOF);
-	do
+	do {
 		c = getc(fp);
-	while ((c == ' ') || (c == '\t'));
+	} while ((c == ' ') || (c == '\t'));
 	return (c);
 }
 
@@ -686,19 +691,19 @@ readline:
 	}
 
 	switch (c) {
-	    case '\0':
+	case '\0':
 		return (0);
 
-	    case '0':
-	    case '1':
-	    case '2':
-	    case '3':
-	    case '4':
-	    case '5':
-	    case '6':
-	    case '7':
-	    case '8':
-	    case '9':
+	case '0':
+	case '1':
+	case '2':
+	case '3':
+	case '4':
+	case '5':
+	case '6':
+	case '7':
+	case '8':
+	case '9':
 		if (ept->volno) {
 			setErrstr(pkg_gt(ERR_BAD_VOLUME_NUMBER));
 			goto error;
@@ -713,11 +718,11 @@ readline:
 
 		goto readline;
 
-	    case ':':
-	    case '#':
+	case ':':
+	case '#':
 		(void) findendvfp(&vfpGetCurrCharPtr(vfp));
 		/*FALLTHRU*/
-	    case '\n':
+	case '\n':
 		/*
 		 * Since we are going to scan the next line,
 		 * we need to reset volume number and first_char.
@@ -726,14 +731,14 @@ readline:
 		first_char = B_TRUE;
 		goto readline;
 
-	    case 'i':
+	case 'i':
 		ept->ftype = (char)c;
 		while (((c = vfpGetcNoInc(vfp)) != '\0') &&
-						(isspace(vfpGetc(vfp))))
+		    (isspace(vfpGetc(vfp))))
 			;
 		/*FALLTHRU*/
-	    case '.':
-	    case '/':
+	case '.':
+	case '/':
 		vfpDecCurrPtr(vfp);
 
 		if (getstrvfp(&vfpGetCurrCharPtr(vfp), "=", PATH_MAX, mypath)) {
@@ -744,7 +749,7 @@ readline:
 		c = vfpGetc(vfp);
 		if (c == '=') {
 			if (getstrvfp(&vfpGetCurrCharPtr(vfp), NULL, PATH_MAX,
-							mylocal)) {
+			    mylocal)) {
 				setErrstr(pkg_gt(ERR_CANT_READ_LCLPATH));
 				goto error;
 			}
@@ -756,11 +761,11 @@ readline:
 		if (ept->ftype == 'i') {
 			/* content info might exist */
 			if (!getlnumvfp(&vfpGetCurrCharPtr(vfp), 10,
-				(fsblkcnt_t *)&ept->cinfo.size, BADCONT) &&
+			    (fsblkcnt_t *)&ept->cinfo.size, BADCONT) &&
 			    (getnumvfp(&vfpGetCurrCharPtr(vfp), 10,
-				(long *)&ept->cinfo.cksum, BADCONT) ||
+			    (long *)&ept->cinfo.cksum, BADCONT) ||
 			    getnumvfp(&vfpGetCurrCharPtr(vfp), 10,
-				(long *)&ept->cinfo.modtime, BADCONT))) {
+			    (long *)&ept->cinfo.modtime, BADCONT))) {
 				setErrstr(pkg_gt(ERR_CANNOT_READ_CONTENT_INFO));
 				goto error;
 			}
@@ -772,20 +777,20 @@ readline:
 		}
 		return (1);
 
-	    case '?':
-	    case 'f':
-	    case 'v':
-	    case 'e':
-	    case 'l':
-	    case 's':
-	    case 'p':
-	    case 'c':
-	    case 'b':
-	    case 'd':
-	    case 'x':
+	case '?':
+	case 'f':
+	case 'v':
+	case 'e':
+	case 'l':
+	case 's':
+	case 'p':
+	case 'c':
+	case 'b':
+	case 'd':
+	case 'x':
 		ept->ftype = (char)c;
 		if (getstrvfp(&vfpGetCurrCharPtr(vfp), NULL,
-						CLSSIZ, ept->pkg_class)) {
+		    CLSSIZ, ept->pkg_class)) {
 			setErrstr(pkg_gt(ERR_CANNOT_READ_CLASS_TOKEN));
 			goto error;
 		}
@@ -799,12 +804,12 @@ readline:
 		if (c == '=') {
 			/* local path */
 			if (getstrvfp(&vfpGetCurrCharPtr(vfp), NULL,
-							PATH_MAX, mylocal)) {
+			    PATH_MAX, mylocal)) {
 				if (ept->ftype == 's' || ept->ftype == 'l') {
 					setErrstr(pkg_gt(ERR_READLINK));
 				} else {
 					setErrstr(
-						pkg_gt(ERR_CANT_READ_LCLPATH));
+					    pkg_gt(ERR_CANT_READ_LCLPATH));
 				}
 				goto error;
 			}
@@ -819,7 +824,7 @@ readline:
 		}
 		break;
 
-	    default:
+	default:
 		setErrstr(pkg_gt(ERR_UNKNOWN_FTYPE));
 error:
 		(void) findendvfp(&vfpGetCurrCharPtr(vfp));
@@ -827,7 +832,7 @@ error:
 	}
 
 	if (((ept->ftype == 's') || (ept->ftype == 'l')) &&
-					(ept->ainfo.local == NULL)) {
+	    (ept->ainfo.local == NULL)) {
 		setErrstr(pkg_gt(ERR_NO_LINKSOURCE));
 		goto error;
 	}
@@ -837,9 +842,9 @@ error:
 		ept->ainfo.minor = BADMINOR;
 
 		if (getnumvfp(&vfpGetCurrCharPtr(vfp), 10,
-				(long *)&ept->ainfo.major, BADMAJOR) ||
+		    (long *)&ept->ainfo.major, BADMAJOR) ||
 		    getnumvfp(&vfpGetCurrCharPtr(vfp), 10,
-				(long *)&ept->ainfo.minor, BADMINOR)) {
+		    (long *)&ept->ainfo.minor, BADMINOR)) {
 			setErrstr(pkg_gt(ERR_CANNOT_READ_MM_DEVNUMS));
 			goto error;
 		}
@@ -856,14 +861,13 @@ error:
 	 * We just return BAD??? if there was no entry at all.
 	 */
 	if ((ept->ftype == 'd') || (ept->ftype == 'x') || (ept->ftype == 'c') ||
-		(ept->ftype == 'b') || (ept->ftype == 'p') ||
-		(ept->ftype == 'f') || (ept->ftype == 'v') ||
-		(ept->ftype == 'e')) {
+	    (ept->ftype == 'b') || (ept->ftype == 'p') ||
+	    (ept->ftype == 'f') || (ept->ftype == 'v') ||
+	    (ept->ftype == 'e')) {
 		int retval;
 
 		retval = getvalmodevfp(&vfpGetCurrCharPtr(vfp),
-				&(ept->ainfo.mode),
-				CURMODE, (mapmode != MAPNONE));
+		    &(ept->ainfo.mode), CURMODE, (mapmode != MAPNONE));
 
 		if (retval == 1) {
 			goto end;	/* nothing else on the line */
@@ -892,15 +896,15 @@ error:
 		if (mapmode != MAPNONE) {
 			if (mapvar(mapmode, ept->ainfo.owner)) {
 				(void) snprintf(getErrbufAddr(),
-					getErrbufSize(), pkg_gt(ERR_NOVAR),
-					maptype, ept->ainfo.owner);
+				    getErrbufSize(), pkg_gt(ERR_NOVAR),
+				    maptype, ept->ainfo.owner);
 				setErrstr(getErrbufAddr());
 				goto error;
 			}
 			if (mapvar(mapmode, ept->ainfo.group)) {
 				(void) snprintf(getErrbufAddr(),
-					getErrbufSize(), pkg_gt(ERR_NOVAR),
-					maptype, ept->ainfo.group);
+				    getErrbufSize(), pkg_gt(ERR_NOVAR),
+				    maptype, ept->ainfo.group);
 				setErrstr(getErrbufAddr());
 				goto error;
 			}
@@ -908,14 +912,14 @@ error:
 	}
 
 	if ((ept->ftype == 'i') || (ept->ftype == 'f') ||
-			(ept->ftype == 'v') || (ept->ftype == 'e')) {
+	    (ept->ftype == 'v') || (ept->ftype == 'e')) {
 		/* look for content description */
 		if (!getlnumvfp(&vfpGetCurrCharPtr(vfp), 10,
-				(fsblkcnt_t *)&ept->cinfo.size, BADCONT) &&
-		(getnumvfp(&vfpGetCurrCharPtr(vfp), 10,
-				(long *)&ept->cinfo.cksum, BADCONT) ||
-		getnumvfp(&vfpGetCurrCharPtr(vfp), 10,
-				(long *)&ept->cinfo.modtime, BADCONT))) {
+		    (fsblkcnt_t *)&ept->cinfo.size, BADCONT) &&
+		    (getnumvfp(&vfpGetCurrCharPtr(vfp), 10,
+		    (long *)&ept->cinfo.cksum, BADCONT) ||
+		    getnumvfp(&vfpGetCurrCharPtr(vfp), 10,
+		    (long *)&ept->cinfo.modtime, BADCONT))) {
 			setErrstr(pkg_gt(ERR_CANNOT_READ_CONTENT_INFO));
 			goto error;
 		}
@@ -930,7 +934,6 @@ end:
 		return (-1);
 	}
 
-done:
 	return (1);
 }
 
@@ -996,7 +999,7 @@ getvalmodevfp(char **cp, mode_t *d, long bad, int map)
 
 	if ((map) && (mapvar(mapmode, tempmode))) {
 		(void) snprintf(getErrbufAddr(), getErrbufSize(),
-				pkg_gt(ERR_NOVAR), maptype, tempmode);
+		    pkg_gt(ERR_NOVAR), maptype, tempmode);
 		setErrstr(getErrbufAddr());
 		return (2);
 	}

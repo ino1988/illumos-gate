@@ -22,6 +22,7 @@
 # Copyright 2008 Sun Microsystems, Inc.  All rights reserved.
 # Use is subject to license terms.
 #
+# Copyright (c) 2018, Joyent, Inc.
 
 PROG= kdb5_ldap_util
 
@@ -30,13 +31,10 @@ OBJS	= \
 	kdb5_ldap_policy.o \
 	kdb5_ldap_realm.o \
 	kdb5_ldap_services.o \
-	kdb5_ldap_util.o
+	kdb5_ldap_util.o \
+	getdate.o
 
-GETDATE	= $(SRC)/cmd/krb5/kadmin/cli/getdate.o
-
-SRCS	= $(OBJS:.o=.c)
-
-DEFS =  -DHAVE_LIBSOCKET=1 -DHAVE_LIBNSL=1 -DHAVE_PWD_H=1 -DHAVE_COMPILE=1 -DHAVE_STEP=1 
+DEFS =  -DHAVE_LIBSOCKET=1 -DHAVE_LIBNSL=1 -DHAVE_PWD_H=1 -DHAVE_COMPILE=1 -DHAVE_STEP=1
 
 include $(SRC)/cmd/Makefile.cmd
 include $(SRC)/lib/gss_mechs/mech_krb5/Makefile.mech_krb5
@@ -61,9 +59,14 @@ CPPFLAGS += \
 		$(DEFS)
 
 CERRWARN +=	-_gcc=-Wno-unused-variable
-CERRWARN +=	-_gcc=-Wno-unused-label
 CERRWARN +=	-_gcc=-Wno-unused-function
 CERRWARN +=	-_gcc=-Wno-implicit-function-declaration
+
+# because of labels from yacc
+getdate.o := CERRWARN += -_gcc=-Wno-unused-label
+
+# not linted
+SMATCH=off
 
 LDFLAGS += $(KRUNPATH) $(KERBRUNPATH)
 LDLIBS += -L $(ROOT_KLIBDIR) -L $(KRB5LIB) -lkadm5srv -lkdb -lkdb_ldap \
@@ -73,8 +76,8 @@ LDLIBS += -L $(ROOT_KLIBDIR) -L $(KRB5LIB) -lkadm5srv -lkdb -lkdb_ldap \
 
 all: $(PROG)
 
-$(PROG):       $(OBJS) $(GETDATE)
-	$(LINK.c) $(OBJS) $(GETDATE) -o $@ $(LDLIBS)
+$(PROG):       $(OBJS)
+	$(LINK.c) $(OBJS) -o $@ $(LDLIBS)
 	$(POST_PROCESS)
 
 install: $(KRB5SBINPROG)
@@ -82,13 +85,17 @@ install: $(KRB5SBINPROG)
 clean:
 	$(RM) $(OBJS)
 
-lint: lint_SRCS
-
 include $(SRC)/cmd/Makefile.targ
 
-$(POFILE): $(DERIVED_FILES) .WAIT $(POFILES) 
-	$(RM) $@ 
-	$(CAT) $(POFILES) > $@ 
+%.o:	$(SRC)/cmd/krb5/kadmin/cli/%.y
+	$(YACC.y) $<
+	$(COMPILE.c) -o $@ y.tab.c $(CTFCONVERT_HOOK)
+	$(POST_PROCESS_O)
+	$(RM) y.tab.c
+
+$(POFILE): $(DERIVED_FILES) .WAIT $(POFILES)
+	$(RM) $@
+	$(CAT) $(POFILES) > $@
 
 generic.po:
 	$(RM) messages.po

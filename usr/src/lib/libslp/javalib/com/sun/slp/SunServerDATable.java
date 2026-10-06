@@ -139,7 +139,7 @@ class SunServerDATable extends ServerDATable {
 	attrs.addElement(attr);
 
 	vals = new Vector();
-	vals.addElement(new Integer(version));
+	vals.addElement(Integer.valueOf(version));
 	attr = new ServiceLocationAttribute(SunDATable.VERSION_ID, vals);
 	attrs.addElement(attr);
 
@@ -178,7 +178,7 @@ class SunServerDATable extends ServerDATable {
 	    // If there, then get the old timestamp.
 
 	    if (formerAttrs != null && !(formerAttrs.size() <= 0)) {
-	
+
 		// Get the timestamp into a long.
 
 		attr = (ServiceLocationAttribute)formerAttrs.elementAt(0);
@@ -357,7 +357,7 @@ class SunServerDATable extends ServerDATable {
 	buf.append("(");
 	buf.append(SunDATable.VERSION_ID);
 	buf.append("=");
-	buf.append((new Integer(Defaults.version)).toString());
+	buf.append((Integer.valueOf(Defaults.version)).toString());
 	buf.append(")");
 
 	// Add closing paren if there were any scopes.

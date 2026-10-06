@@ -27,9 +27,9 @@
  * OBLIGATION TO PROVIDE MAINTENANCE, SUPPORT, UPDATES, ENHANCEMENTS,
  * OR MODIFICATIONS.
  */
-
-#pragma ident	"%Z%%M%	%I%	%E% SMI"
-#define RCSID	"$Id: ccp.c,v 1.30 2000/04/15 01:27:11 masputra Exp $"
+/*
+ * Copyright (c) 2016 by Delphix. All rights reserved.
+ */
 
 #include <stdlib.h>
 #include <string.h>
@@ -38,10 +38,6 @@
 #include "fsm.h"
 #include "ccp.h"
 #include <net/ppp-comp.h>
-
-#if !defined(lint) && !defined(_lint)
-static const char rcsid[] = RCSID;
-#endif
 
 /*
  * Command-line options.
@@ -277,7 +273,7 @@ setdeflate(argv, opt)
     if ((rbits != 0 && (rbits <= DEFLATE_MIN_SIZE || rbits > def_rmax))
 	|| (abits != 0 && (abits <= DEFLATE_MIN_SIZE || abits > def_amax))) {
 	option_error("deflate option values must be 0 or {%d,%d} .. {%d,%d}",
-		     DEFLATE_MIN_SIZE+1, DEFLATE_MIN_SIZE+1, 
+		     DEFLATE_MIN_SIZE+1, DEFLATE_MIN_SIZE+1,
 		     def_rmax, def_amax);
 	return 0;
     }
@@ -489,9 +485,9 @@ ccp_codereject(f, code, id, inp, len)
 
     case CCP_RESETACK:
 	/*
-	 * Peer must have sent us CCP Reset-Request but then code-rejected
-	 * when we sent CCP Reset-Ack.  He's a moron, be we have to obey
-	 * his wishes.
+	 * Peer must have sent us CCP Reset-Request but then code-rejected when
+	 * we sent CCP Reset-Ack.  It seems to have changed its mind, and we
+	 * have to obey its wishes.
 	 */
 	ccp_localstate[f->unit] |= RACK_REJECTED;
 	notice("peer has erroneously rejected CCP Reset-Ack");
@@ -786,7 +782,7 @@ ccp_nakci(f, p, len)
 	no.deflate = 1;
 	/*
 	 * Peer wants us to use a different code size or something.
-	 * Stop asking for Deflate if we don't understand his suggestion.
+	 * Stop asking for Deflate if we don't understand its suggestion.
 	 */
 	if (p[1] != CILEN_DEFLATE
 	    || DEFLATE_METHOD(p[2]) != DEFLATE_METHOD_VAL
@@ -805,7 +801,7 @@ ccp_nakci(f, p, len)
 	/*
 	 * Peer wants us to use a different code size or something.
 	 * Stop asking for Deflate using the old algorithm number if
-	 * we don't understand his suggestion.  (Note that this will
+	 * we don't understand its suggestion.  (Note that this will
 	 * happen if the peer is running Magnalink instead of
 	 * old-style Deflate.)
 	 */

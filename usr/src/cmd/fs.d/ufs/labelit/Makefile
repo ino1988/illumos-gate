@@ -20,12 +20,10 @@
 # CDDL HEADER END
 #
 #
-#ident	"%Z%%M%	%I%	%E% SMI"
-#
 # Copyright (c) 1989,1996,2001 by Sun Microsystems, Inc.
 # All rights reserved.
 #
-# cmd/fs.d/ufs/labelit/Makefile
+# Copyright (c) 2018, Joyent, Inc.
 
 FSTYPE=		ufs
 LIBPROG=	labelit
@@ -35,6 +33,5 @@ include		../../Makefile.fstype
 
 CPPFLAGS +=	-D_LARGEFILE64_SOURCE
 
-lint :=		PROG=$(LIBPROG)
-
-lint:		lint_PROG
+# not linted
+SMATCH=off

@@ -24,8 +24,6 @@
  * Use is subject to license terms.
  */
 
-#pragma ident	"%Z%%M%	%I%	%E% SMI"
-
 /*
  * This file contains the common part of the functions string_to_decimal,
  * func_to_decimal, and file_to_decimal.  Much of this code has been dupli-
@@ -52,11 +50,14 @@
  *    char *good = *ppc - 1;
  *    int current;
  *    int nread;
+ *    locale_t loc;
  *
  *    If the first character can be read successfully, then current is set
  *    to the value of the first character, cp is set to *ppc, (char)current
  *    is stored at *cp, and nread = 1.  If the first character cannot be
  *    read successfully, then current = EOF and nread = 0.
+ *    loc should be set to the desired locale in which to perform the
+ *    conversion.
  *
  * 3. The macro NEXT is defined to expand to code that implements
  *    the following logic:
@@ -118,7 +119,7 @@
 	if (fortran_conventions > 0)
 		decpt = '.';
 	else
-		decpt = *(localeconv()->decimal_point);
+		decpt = *(localeconv_l(loc)->decimal_point);
 
 	/* input is invalid until we find something */
 	pd->fpclass = fp_signaling;
@@ -131,7 +132,7 @@
 	*pechar = NULL;
 
 	/* skip white space */
-	while (isspace(current)) {
+	while (isspace_l(current, loc)) {
 		spacefound = 1;
 		NEXT;
 	}
@@ -302,13 +303,13 @@
 				/* accept parenthesized string */
 				NEXT;
 				if (fortran_conventions < 0) {
-					while ((isalnum(current) ||
+					while ((isalnum_l(current, loc) ||
 					    current == '_') &&
 					    ids < DECIMAL_STRING_LENGTH - 1) {
 						pd->ds[ids++] = (char)current;
 						NEXT;
 					}
-					while (isalnum(current) ||
+					while (isalnum_l(current, loc) ||
 					    current == '_') {
 						pd->more = 1;
 						NEXT;

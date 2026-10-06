@@ -21,6 +21,7 @@
 
 /*
  * Copyright (c) 2010, Oracle and/or its affiliates. All rights reserved.
+ * Copyright 2017 Joyent, Inc.
  */
 
 /*
@@ -225,7 +226,7 @@ sol_uverbs_event_file_read(uverbs_ufile_uobj_t *ufile, struct uio *uiop,
  *      sol_uverbs_event_file_poll
  * Input:
  *      ufile	- user file for desired completion channel event file
- *      events 	- The events that may occur.
+ *      events	- The events that may occur.
  *	anyyet	- A flag that is non-zero if any files in the set
  *		  of descriptors has an event waiting.
  *	ct	- Pointer to the callers context.
@@ -237,7 +238,7 @@ sol_uverbs_event_file_read(uverbs_ufile_uobj_t *ufile, struct uio *uiop,
  *      Zero on success, else error code.
  *		EINVAL    - Vnode does not point to valid event file.
  * Description:
- * 	Support for event channel polling interface, allows use of completion
+ *	Support for event channel polling interface, allows use of completion
  *	channel in asynchronous type environment.  If events may be read
  *      without blocking indicate a POLLIN | POLLRDNORM event; otherwise if
  *	no other descriptors in the set have data waiting, set the pollhead
@@ -280,9 +281,9 @@ sol_uverbs_event_file_poll(uverbs_ufile_uobj_t *ufile, short events,
 	}
 
 	/*
-	 * If we didn't get an event
+	 * If we didn't get an event or are edge-triggered
 	 */
-	if (revent == 0 && !anyyet) {
+	if ((revent == 0 && !anyyet) || (events & POLLET)) {
 		SOL_OFS_DPRINTF_L5(sol_uverbs_dbg_str, "event_file_poll "
 		    "Event entry NOT available");
 
@@ -407,6 +408,7 @@ uverbs_release_event_file(sol_ofs_uobj_t *uobj)
 
 	mutex_exit(&ufile->lock);
 
+	pollhead_clean(&ufile->poll_head);
 	cv_destroy(&ufile->poll_wait);
 	mutex_destroy(&ufile->lock);
 	sol_ofs_uobj_free(uobj);
@@ -416,7 +418,7 @@ uverbs_release_event_file(sol_ofs_uobj_t *uobj)
  * Function:
  *      uverbs_ibt_to_ofa_event_code
  * Input:
- *      code 	- The OFA event code.
+ *      code	- The OFA event code.
  * Output:
  *      The OFED event code.
  * Returns:
@@ -569,7 +571,7 @@ uverbs_async_qp_event_handler(void *clnt_private, ibt_hca_hdl_t hca_hdl,
 /* ARGSUSED */
 void
 uverbs_async_cq_event_handler(void *clnt_private, ibt_hca_hdl_t hca_hdl,
-	enum ib_event_type code, ibt_async_event_t *event)
+    enum ib_event_type code, ibt_async_event_t *event)
 {
 	uverbs_ucq_uobj_t	*ucq;
 
@@ -611,7 +613,7 @@ uverbs_async_cq_event_handler(void *clnt_private, ibt_hca_hdl_t hca_hdl,
 /* ARGSUSED */
 void
 uverbs_async_srq_event_handler(void *clnt_private, ibt_hca_hdl_t hca_hdl,
-	enum ib_event_type code, ibt_async_event_t *event)
+    enum ib_event_type code, ibt_async_event_t *event)
 {
 	uverbs_usrq_uobj_t	*usrq;
 
@@ -653,7 +655,7 @@ uverbs_async_srq_event_handler(void *clnt_private, ibt_hca_hdl_t hca_hdl,
 /* ARGSUSED */
 void
 uverbs_async_unaff_event_handler(void *clnt_private, ibt_hca_hdl_t hca_hdl,
-	enum ib_event_type code, ibt_async_event_t *event)
+    enum ib_event_type code, ibt_async_event_t *event)
 {
 	sol_ofs_uobj_table_t	*uo_tbl = &uverbs_uctxt_uo_tbl;
 	sol_ofs_uobj_blk_t	*blk;
@@ -712,7 +714,7 @@ uverbs_async_unaff_event_handler(void *clnt_private, ibt_hca_hdl_t hca_hdl,
  */
 void
 uverbs_async_event_handler(void *clnt_private, ibt_hca_hdl_t hca_hdl,
-	ibt_async_code_t code, ibt_async_event_t *event)
+    ibt_async_code_t code, ibt_async_event_t *event)
 {
 	enum ib_event_type		ofa_type;
 	sol_uverbs_ib_event_handler_t	*handler;
@@ -802,9 +804,9 @@ uverbs_async_event_handler(void *clnt_private, ibt_hca_hdl_t hca_hdl,
  * Function:
  *      uverbs_async_event_common
  * Input:
- *      uctxt       	- Pointer to the user context associated with the
+ *      uctxt	- Pointer to the user context associated with the
  *			affiliated event.
- *	element 	- The users handle to the associated object.
+ *	element		- The users handle to the associated object.
  *	event           - The event type.
  *	uobj_list       - The list to enqueue the asynchronous event.
  *      counter         - The counter to track the event delivery.
@@ -878,13 +880,13 @@ uverbs_async_event_common(uverbs_uctxt_uobj_t  *uctxt, uint64_t element,
  * Returns:
  *      None
  * Description:
- * 	Release any completion and asynchronous events that may
+ *	Release any completion and asynchronous events that may
  *	be queued to the specified completion channel/UCQ but not
  *	yet reaped.
  */
 void
 uverbs_release_ucq_channel(uverbs_uctxt_uobj_t *uctxt,
-	uverbs_ufile_uobj_t *ufile, uverbs_ucq_uobj_t   *ucq)
+    uverbs_ufile_uobj_t *ufile, uverbs_ucq_uobj_t   *ucq)
 {
 	uverbs_event_t	*evt;
 	llist_head_t	*entry;
@@ -1043,7 +1045,7 @@ uverbs_release_uqp_uevents(uverbs_ufile_uobj_t *ufile, uverbs_uqp_uobj_t *uqp)
  */
 void
 uverbs_release_usrq_uevents(uverbs_ufile_uobj_t *ufile,
-						uverbs_usrq_uobj_t *usrq)
+    uverbs_usrq_uobj_t *usrq)
 {
 	uverbs_event_t	*evt;
 	llist_head_t	*entry;

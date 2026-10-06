@@ -27,12 +27,12 @@
 PROG= ramdiskadm
 OBJS= main.o utils.o
 SRCS= $(OBJS:%.o=%.c)
-POFILES= $(OBJS:%.o=%.po) 
+POFILES= $(OBJS:%.o=%.po)
 
 include ../Makefile.cmd
 
 LDLIBS	+= -ldevinfo
-CERRWARN += -_gcc=-Wno-uninitialized
+CERRWARN += $(CNOWARN_UNINIT)
 
 .KEEP_STATE:
 

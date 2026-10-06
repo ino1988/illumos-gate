@@ -21,10 +21,11 @@
 
 /*
  * Copyright (c) 2008, 2010, Oracle and/or its affiliates. All rights reserved.
- */
-
-/*
  * Copyright 2013 Nexenta Systems, Inc. All rights reserved.
+ * Copyright 2016 Toomas Soome <tsoome@me.com>
+ * Copyright (c) 2015 by Delphix. All rights reserved.
+ * Copyright 2022 OmniOS Community Edition (OmniOSce) Association.
+ * Copyright (c) 2018, Joyent, Inc.
  */
 
 
@@ -57,6 +58,9 @@
 
 #include <libbe.h>
 #include <libbe_priv.h>
+#include <boot_utils.h>
+#include <ficl.h>
+#include <ficlplatform/emu.h>
 
 /* Private function prototypes */
 static int update_dataset(char *, int, char *, char *, char *);
@@ -81,6 +85,212 @@ typedef struct zone_be_name_cb_data {
 /* ********************************************************************	*/
 /*			Public Functions				*/
 /* ******************************************************************** */
+
+/*
+ * Callback for ficl to suppress all output from ficl, as we do not
+ * want to confuse user with messages from ficl, and we are only
+ * checking results from function calls.
+ */
+/*ARGSUSED*/
+static void
+ficlSuppressTextOutput(ficlCallback *cb, char *text)
+{
+	/* This function is intentionally doing nothing. */
+}
+
+/*
+ * Function:	be_get_boot_args
+ * Description:	Returns the fast boot argument string for enumerated BE.
+ * Parameters:
+ *		fbarg - pointer to argument string.
+ *		entry - index of BE.
+ * Returns:
+ *		fast boot argument string.
+ * Scope:
+ *		Public
+ */
+int
+be_get_boot_args(char **fbarg, int entry)
+{
+	be_node_list_t *node, *be_nodes = NULL;
+	be_transaction_data_t bt = {0};
+	char *mountpoint = NULL;
+	boolean_t be_mounted = B_FALSE;
+	int ret = BE_SUCCESS;
+	int index;
+	ficlVm *vm;
+
+	*fbarg = NULL;
+	if (!be_zfs_init())
+		return (BE_ERR_INIT);
+
+	/*
+	 * need pool name, menu.lst has entries from our pool only
+	 */
+	ret = be_find_current_be(&bt);
+	if (ret != BE_SUCCESS) {
+		be_zfs_fini();
+		return (ret);
+	}
+
+	/*
+	 * be_get_boot_args() is for loader, fail with grub will trigger
+	 * normal boot.
+	 */
+	if (be_has_grub()) {
+		ret = BE_ERR_INIT;
+		goto done;
+	}
+
+	ret = _be_list(NULL, &be_nodes, BE_LIST_DEFAULT);
+	if (ret != BE_SUCCESS)
+		goto done;
+
+	/*
+	 * iterate through be_nodes,
+	 * if entry == -1, stop if be_active_on_boot,
+	 * else stop if index == entry.
+	 */
+	index = 0;
+	for (node = be_nodes; node != NULL; node = node->be_next_node) {
+		if (strcmp(node->be_rpool, bt.obe_zpool) != 0)
+			continue;
+		if (entry == BE_ENTRY_DEFAULT &&
+		    node->be_active_on_boot == B_TRUE)
+			break;
+		if (index == entry)
+			break;
+		index++;
+	}
+	if (node == NULL) {
+		be_free_list(be_nodes);
+		ret = BE_ERR_NOENT;
+		goto done;
+	}
+
+	/* try to mount inactive be */
+	if (node->be_active == B_FALSE) {
+		ret = _be_mount(node->be_node_name, &mountpoint,
+		    BE_MOUNT_FLAG_NO_ZONES);
+		if (ret != BE_SUCCESS && ret != BE_ERR_MOUNTED) {
+			be_free_list(be_nodes);
+			goto done;
+		} else
+			be_mounted = B_TRUE;
+	}
+
+	vm = bf_init("", ficlSuppressTextOutput);
+	if (vm != NULL) {
+		/*
+		 * zfs MAXNAMELEN is 256, so we need to pick buf large enough
+		 * to contain such names.
+		 */
+		char buf[MAXNAMELEN * 2];
+		char *kernel_options = NULL;
+		char *kernel = NULL;
+		char *tmp;
+		zpool_handle_t *zph;
+
+		/*
+		 * just try to interpret following words. on error
+		 * we will be missing kernelname, and will get out.
+		 */
+		(void) snprintf(buf, sizeof (buf), "set currdev=zfs:%s:",
+		    node->be_root_ds);
+		ret = ficlVmEvaluate(vm, buf);
+		if (ret != FICL_VM_STATUS_OUT_OF_TEXT) {
+			be_print_err(gettext("be_get_boot_args: error "
+			    "interpreting boot config: %d\n"), ret);
+			bf_fini();
+			ret = BE_ERR_NO_MENU;
+			goto cleanup;
+		}
+		(void) snprintf(buf, sizeof (buf),
+		    "include /boot/forth/loader.4th");
+		ret = ficlVmEvaluate(vm, buf);
+		if (ret != FICL_VM_STATUS_OUT_OF_TEXT) {
+			be_print_err(gettext("be_get_boot_args: error "
+			    "interpreting boot config: %d\n"), ret);
+			bf_fini();
+			ret = BE_ERR_NO_MENU;
+			goto cleanup;
+		}
+		(void) snprintf(buf, sizeof (buf), "start");
+		ret = ficlVmEvaluate(vm, buf);
+		if (ret != FICL_VM_STATUS_OUT_OF_TEXT) {
+			be_print_err(gettext("be_get_boot_args: error "
+			    "interpreting boot config: %d\n"), ret);
+			bf_fini();
+			ret = BE_ERR_NO_MENU;
+			goto cleanup;
+		}
+		(void) snprintf(buf, sizeof (buf), "boot");
+		ret = ficlVmEvaluate(vm, buf);
+		bf_fini();
+		if (ret != FICL_VM_STATUS_OUT_OF_TEXT) {
+			be_print_err(gettext("be_get_boot_args: error "
+			    "interpreting boot config: %d\n"), ret);
+			ret = BE_ERR_NO_MENU;
+			goto cleanup;
+		}
+
+		kernel_options = getenv("boot-args");
+		kernel = getenv("kernelname");
+
+		if (kernel == NULL) {
+			be_print_err(gettext("be_get_boot_args: no kernel\n"));
+			ret = BE_ERR_NOENT;
+			goto cleanup;
+		}
+
+		if ((zph = zpool_open(g_zfs, node->be_rpool)) == NULL) {
+			be_print_err(gettext("be_get_boot_args: failed to "
+			    "open root pool (%s): %s\n"), node->be_rpool,
+			    libzfs_error_description(g_zfs));
+			ret = zfs_err_to_be_err(g_zfs);
+			goto cleanup;
+		}
+		ret = zpool_get_physpath(zph, buf, sizeof (buf));
+		zpool_close(zph);
+		if (ret != 0) {
+			be_print_err(gettext("be_get_boot_args: failed to "
+			    "get physpath\n"));
+			goto cleanup;
+		}
+
+		/* zpool_get_physpath() can return space separated list */
+		tmp = buf;
+		tmp = strsep(&tmp, " ");
+
+		if (kernel_options == NULL || *kernel_options == '\0')
+			(void) asprintf(fbarg, "/ %s "
+			    "-B zfs-bootfs=%s,bootpath=\"%s\"\n", kernel,
+			    node->be_root_ds, tmp);
+		else
+			(void) asprintf(fbarg, "/ %s %s "
+			    "-B zfs-bootfs=%s,bootpath=\"%s\"\n", kernel,
+			    kernel_options, node->be_root_ds, tmp);
+
+		if (*fbarg == NULL)
+			ret = BE_ERR_NOMEM;
+		else
+			ret = 0;
+	} else
+		ret = BE_ERR_NOMEM;
+cleanup:
+	if (be_mounted == B_TRUE)
+		(void) _be_unmount(node->be_node_name, BE_UNMOUNT_FLAG_FORCE);
+	be_free_list(be_nodes);
+done:
+	free(mountpoint);
+	free(bt.obe_name);
+	free(bt.obe_root_ds);
+	free(bt.obe_zpool);
+	free(bt.obe_snap_name);
+	free(bt.obe_altroot);
+	be_zfs_fini();
+	return (ret);
+}
 
 /*
  * Function:	be_max_avail
@@ -197,15 +407,23 @@ be_get_defaults(struct be_defaults *defaults)
 {
 	void	*defp;
 
+	defaults->be_deflt_grub = B_FALSE;
 	defaults->be_deflt_rpool_container = B_FALSE;
 	defaults->be_deflt_bename_starts_with[0] = '\0';
 
 	if ((defp = defopen_r(BE_DEFAULTS)) != NULL) {
 		const char *res = defread_r(BE_DFLT_BENAME_STARTS, defp);
-		if (res != NULL && res[0] != NULL) {
+		if (res != NULL && res[0] != '\0') {
 			(void) strlcpy(defaults->be_deflt_bename_starts_with,
-			    res, ZFS_MAXNAMELEN);
+			    res, ZFS_MAX_DATASET_NAME_LEN);
 			defaults->be_deflt_rpool_container = B_TRUE;
+		}
+		if (be_is_isa("i386")) {
+			res = defread_r(BE_DFLT_BE_HAS_GRUB, defp);
+			if (res != NULL && res[0] != '\0') {
+				if (strcasecmp(res, "true") == 0)
+					defaults->be_deflt_grub = B_TRUE;
+			}
 		}
 		defclose_r(defp);
 	}
@@ -221,17 +439,19 @@ be_get_defaults(struct be_defaults *defaults)
  *		be_root_ds - pointer to buffer to return BE root dataset in.
  *		be_root_ds_size - size of be_root_ds
  * Returns:
- *		None
+ *		BE_SUCCESS - Success
+ *		be_errno_t - Failure
  * Scope:
  *		Semi-private (library wide use only)
  */
-void
+int
 be_make_root_ds(const char *zpool, const char *be_name, char *be_root_ds,
     int be_root_ds_size)
 {
 	struct be_defaults be_defaults;
 	be_get_defaults(&be_defaults);
-	char	*root_ds = NULL;
+
+	assert(zpool != NULL);
 
 	if (getzoneid() == GLOBAL_ZONEID) {
 		if (be_defaults.be_deflt_rpool_container) {
@@ -243,18 +463,30 @@ be_make_root_ds(const char *zpool, const char *be_name, char *be_root_ds,
 		}
 	} else {
 		/*
-		 * In non-global zone we can use path from mounted root dataset
-		 * to generate BE's root dataset string.
+		 * In a non-global zone we can use the path from the mounted
+		 * root dataset to generate the BE's root dataset string.
 		 */
-		if ((root_ds = be_get_ds_from_dir("/")) != NULL) {
-			(void) snprintf(be_root_ds, be_root_ds_size, "%s/%s",
-			    dirname(root_ds), be_name);
-		} else {
+		char *root_ds = be_get_ds_from_dir("/");
+
+		if (root_ds == NULL) {
 			be_print_err(gettext("be_make_root_ds: zone root "
 			    "dataset is not mounted\n"));
-			return;
+			return (BE_ERR_NOTMOUNTED);
 		}
+		if (strncmp(root_ds, zpool, strlen(zpool)) != 0 ||
+		    root_ds[strlen(zpool)] != '/') {
+			/*
+			 * This pool is not the one that contains the zone
+			 * root.
+			 */
+			return (BE_ERR_ACCESS);
+		}
+
+		(void) snprintf(be_root_ds, be_root_ds_size, "%s/%s",
+		    dirname(root_ds), be_name);
 	}
+
+	return (BE_SUCCESS);
 }
 
 /*
@@ -266,17 +498,17 @@ be_make_root_ds(const char *zpool, const char *be_name, char *be_root_ds,
  *			dataset in.
  *		container_ds_size - size of container_ds
  * Returns:
- *		None
+ *		BE_SUCCESS - Success
+ *		be_errno_t - Failure
  * Scope:
  *		Semi-private (library wide use only)
  */
-void
-be_make_container_ds(const char *zpool,  char *container_ds,
+int
+be_make_container_ds(const char *zpool, char *container_ds,
     int container_ds_size)
 {
 	struct be_defaults be_defaults;
 	be_get_defaults(&be_defaults);
-	char	*root_ds = NULL;
 
 	if (getzoneid() == GLOBAL_ZONEID) {
 		if (be_defaults.be_deflt_rpool_container) {
@@ -287,15 +519,62 @@ be_make_container_ds(const char *zpool,  char *container_ds,
 			    "%s/%s", zpool, BE_CONTAINER_DS_NAME);
 		}
 	} else {
-		if ((root_ds = be_get_ds_from_dir("/")) != NULL) {
-			(void) strlcpy(container_ds, dirname(root_ds),
-			    container_ds_size);
-		} else {
+		char *root_ds = be_get_ds_from_dir("/");
+
+		if (root_ds == NULL) {
 			be_print_err(gettext("be_make_container_ds: zone root "
 			    "dataset is not mounted\n"));
-			return;
+			return (BE_ERR_NOTMOUNTED);
 		}
+		if (strncmp(root_ds, zpool, strlen(zpool)) != 0 ||
+		    root_ds[strlen(zpool)] != '/') {
+			/*
+			 * This pool is not the one that contains the zone
+			 * root.
+			 */
+			return (BE_ERR_ACCESS);
+		}
+		(void) strlcpy(container_ds, dirname(root_ds),
+		    container_ds_size);
 	}
+
+	return (BE_SUCCESS);
+}
+
+/*
+ * Function:	be_make_root_container_ds
+ * Description:	Generate string for the BE root container dataset given a pool
+ *              name.
+ * Parameters:
+ *		zpool - pointer zpool name.
+ *		container_ds - pointer to buffer in which to return result
+ *		container_ds_size - size of container_ds
+ * Returns:
+ *		BE_SUCCESS - Success
+ *		be_errno_t - Failure
+ * Scope:
+ *		Semi-private (library wide use only)
+ */
+int
+be_make_root_container_ds(const char *zpool, char *container_ds,
+    int container_ds_size)
+{
+	char *root;
+	int ret;
+
+	if ((ret = be_make_container_ds(zpool, container_ds,
+	    container_ds_size)) != BE_SUCCESS) {
+		return (ret);
+	}
+
+	/* If the container DS ends with /ROOT, remove it.  */
+
+	if ((root = strrchr(container_ds, '/')) != NULL &&
+	    strcmp(root + 1, BE_CONTAINER_DS_NAME) == 0) {
+		*root = '\0';
+	}
+
+	return (BE_SUCCESS);
 }
 
 /*
@@ -316,7 +595,7 @@ be_make_container_ds(const char *zpool,  char *container_ds,
 char *
 be_make_name_from_ds(const char *dataset, char *rc_loc)
 {
-	char	ds[ZFS_MAXNAMELEN];
+	char	ds[ZFS_MAX_DATASET_NAME_LEN];
 	char	*tok = NULL;
 	char	*name = NULL;
 	struct be_defaults be_defaults;
@@ -467,7 +746,12 @@ be_append_menu(char *be_name, char *be_root_pool, char *boot_pool,
 		    "%s%s", pool_mntpnt, BE_SPARC_MENU);
 	}
 
-	be_make_root_ds(be_root_pool, be_name, be_root_ds, sizeof (be_root_ds));
+	if ((ret = be_make_root_ds(be_root_pool, be_name, be_root_ds,
+	    sizeof (be_root_ds))) != BE_SUCCESS) {
+		be_print_err(gettext("%s: failed to get BE container dataset "
+		    "for %s/%s\n"), __func__, be_root_pool, be_name);
+		goto cleanup;
+	}
 
 	/*
 	 * Iterate through menu first to make sure the BE doesn't already
@@ -722,7 +1006,12 @@ be_remove_menu(char *be_name, char *be_root_pool, char *boot_pool)
 		boot_pool = be_root_pool;
 
 	/* Get name of BE's root dataset */
-	be_make_root_ds(be_root_pool, be_name, be_root_ds, sizeof (be_root_ds));
+	if ((ret = be_make_root_ds(be_root_pool, be_name, be_root_ds,
+	    sizeof (be_root_ds))) != BE_SUCCESS) {
+		be_print_err(gettext("%s: failed to get BE container dataset "
+		    "for %s/%s\n"), __func__, be_root_pool, be_name);
+		return (ret);
+	}
 
 	/* Get handle to pool dataset */
 	if ((zhp = zfs_open(g_zfs, be_root_pool, ZFS_TYPE_DATASET)) == NULL) {
@@ -1303,7 +1592,7 @@ be_change_grub_default(char *be_name, char *be_root_pool)
 {
 	zfs_handle_t	*zhp = NULL;
 	char	grub_file[MAXPATHLEN];
-	char	*temp_grub;
+	char	*temp_grub = NULL;
 	char	*pool_mntpnt = NULL;
 	char	*ptmp_mntpnt = NULL;
 	char	*orig_mntpnt = NULL;
@@ -1332,7 +1621,12 @@ be_change_grub_default(char *be_name, char *be_root_pool)
 	}
 
 	/* Generate string for BE's root dataset */
-	be_make_root_ds(be_root_pool, be_name, be_root_ds, sizeof (be_root_ds));
+	if ((ret = be_make_root_ds(be_root_pool, be_name, be_root_ds,
+	    sizeof (be_root_ds))) != BE_SUCCESS) {
+		be_print_err(gettext("%s: failed to get BE container dataset "
+		    "for %s/%s\n"), __func__, be_root_pool, be_name);
+		return (ret);
+	}
 
 	/* Get handle to pool dataset */
 	if ((zhp = zfs_open(g_zfs, be_root_pool, ZFS_TYPE_DATASET)) == NULL) {
@@ -1601,10 +1895,18 @@ be_update_menu(char *be_orig_name, char *be_new_name, char *be_root_pool,
 		    "%s%s", pool_mntpnt, BE_SPARC_MENU);
 	}
 
-	be_make_root_ds(be_root_pool, be_orig_name, be_root_ds,
-	    sizeof (be_root_ds));
-	be_make_root_ds(be_root_pool, be_new_name, be_new_root_ds,
-	    sizeof (be_new_root_ds));
+	if ((ret = be_make_root_ds(be_root_pool, be_orig_name, be_root_ds,
+	    sizeof (be_root_ds))) != BE_SUCCESS) {
+		be_print_err(gettext("%s: failed to get BE container dataset "
+		    "for %s/%s\n"), __func__, be_root_pool, be_orig_name);
+		goto cleanup;
+	}
+	if ((ret = be_make_root_ds(be_root_pool, be_new_name, be_new_root_ds,
+	    sizeof (be_new_root_ds))) != BE_SUCCESS) {
+		be_print_err(gettext("%s: failed to get BE container dataset "
+		    "for %s/%s\n"), __func__, be_root_pool, be_new_name);
+		goto cleanup;
+	}
 
 	if ((ret = be_open_menu(be_root_pool, menu_file,
 	    &menu_fp, "r", B_TRUE)) != BE_SUCCESS) {
@@ -1820,7 +2122,7 @@ be_has_menu_entry(char *be_dataset, char *be_root_pool, int *entry)
 {
 	zfs_handle_t *zhp = NULL;
 	char		menu_file[MAXPATHLEN];
-	FILE		*menu_fp;
+	FILE		*menu_fp = NULL;
 	char		line[BUFSIZ];
 	char		*last;
 	char		*rpool_mntpnt = NULL;
@@ -1892,7 +2194,6 @@ be_has_menu_entry(char *be_dataset, char *be_root_pool, int *entry)
 				tok = strtok_r(last, BE_WHITE_SPACE, &last);
 				if (tok != NULL && strcmp(tok,
 				    be_dataset) == 0) {
-					(void) fclose(menu_fp);
 					/*
 					 * The entry number needs to be
 					 * decremented here because the title
@@ -2100,7 +2401,7 @@ be_update_zone_vfstab(zfs_handle_t *zhp, char *be_name, char *old_rc_loc,
 char *
 be_auto_snap_name(void)
 {
-	time_t		utc_tm = NULL;
+	time_t		utc_tm = 0;
 	struct tm	*gmt_tm = NULL;
 	char		gmt_time_str[64];
 	char		*auto_snap_name = NULL;
@@ -2287,7 +2588,7 @@ be_valid_auto_snap_name(char *name)
 	}
 
 	/* Get the next field, which is the reserved field. */
-	if (c[1] == NULL || c[1] == '\0') {
+	if (c[1] == '\0') {
 		free(policy);
 		return (B_FALSE);
 	}
@@ -2306,7 +2607,7 @@ be_valid_auto_snap_name(char *name)
 	}
 
 	/* The remaining string should be the date field */
-	if (c[1] == NULL || c[1] == '\0') {
+	if (c[1] == '\0') {
 		free(policy);
 		return (B_FALSE);
 	}
@@ -2411,7 +2712,7 @@ be_print_err(char *prnt_str, ...)
 /*
  * Function:	be_find_current_be
  * Description:	Find the currently "active" BE. Fill in the
- * 		passed in be_transaction_data_t reference with the
+ *		passed in be_transaction_data_t reference with the
  *		active BE's data.
  * Paramters:
  *		none
@@ -2468,24 +2769,14 @@ be_zpool_find_current_be_callback(zpool_handle_t *zlp, void *data)
 	zfs_handle_t		*zhp = NULL;
 	const char		*zpool =  zpool_get_name(zlp);
 	char			be_container_ds[MAXPATHLEN];
-	char			*zpath = NULL;
 
 	/*
 	 * Generate string for BE container dataset
 	 */
-	if (getzoneid() != GLOBAL_ZONEID) {
-		if ((zpath = be_get_ds_from_dir("/")) != NULL) {
-			(void) strlcpy(be_container_ds, dirname(zpath),
-			    sizeof (be_container_ds));
-		} else {
-			be_print_err(gettext(
-			    "be_zpool_find_current_be_callback: "
-			    "zone root dataset is not mounted\n"));
-			return (0);
-		}
-	} else {
-		be_make_container_ds(zpool, be_container_ds,
-		    sizeof (be_container_ds));
+	if (be_make_container_ds(zpool, be_container_ds,
+	    sizeof (be_container_ds)) != BE_SUCCESS) {
+		zpool_close(zlp);
+		return (0);
 	}
 
 	/*
@@ -2619,7 +2910,10 @@ be_check_be_roots_callback(zpool_handle_t *zlp, void *data)
 	char		be_container_ds[MAXPATHLEN];
 
 	/* Generate string for this pool's BE root container dataset */
-	be_make_container_ds(zpool, be_container_ds, sizeof (be_container_ds));
+	if (be_make_container_ds(zpool, be_container_ds,
+	    sizeof (be_container_ds)) != BE_SUCCESS) {
+		return (0);
+	}
 
 	/*
 	 * If dataset lives under the BE root container dataset
@@ -2908,11 +3202,16 @@ be_err_to_str(int err)
 boolean_t
 be_has_grub(void)
 {
-	/*
-	 * TODO: This will need to be expanded to check for the existence of
-	 * grub if and when there is grub support for SPARC.
-	 */
-	return (be_is_isa("i386"));
+	static struct be_defaults be_defaults;
+	static boolean_t be_deflts_set = B_FALSE;
+
+	/* Cache the defaults, because be_has_grub is used often. */
+	if (be_deflts_set == B_FALSE) {
+		be_get_defaults(&be_defaults);
+		be_deflts_set = B_TRUE;
+	}
+
+	return (be_defaults.be_deflt_grub);
 }
 
 /*
@@ -2971,6 +3270,33 @@ be_get_default_isa(void)
 			if (i < 0 || i > ARCH_LENGTH)
 				return (NULL);
 		}
+	}
+	return (default_inst);
+}
+
+/*
+ * Function: be_get_platform
+ * Description:
+ *      Returns the platfom name
+ * Parameters:
+ *		none
+ * Returns:
+ *		NULL - the platform name returned by sysinfo() was too
+ *			long for local variables
+ *		char * - pointer to a string containing the platform name
+ * Scope:
+ *		Semi-private (library wide use only)
+ */
+char *
+be_get_platform(void)
+{
+	int	i;
+	static char	default_inst[ARCH_LENGTH] = "";
+
+	if (default_inst[0] == '\0') {
+		i = sysinfo(SI_PLATFORM, default_inst, ARCH_LENGTH);
+		if (i < 0 || i > ARCH_LENGTH)
+			return (NULL);
 	}
 	return (default_inst);
 }
@@ -3036,7 +3362,7 @@ be_run_cmd(char *command, char *stderr_buf, int stderr_bufsize,
 	    (stderr_bufsize <= 0) || (stdout_bufsize <  0) ||
 	    ((stdout_buf != NULL) ^ (stdout_bufsize != 0))) {
 		return (BE_ERR_INVAL);
-}
+	}
 
 	/* Set up command so popen returns stderr, not stdout */
 	if (snprintf(cmdline, BUFSIZ, "%s 2> %s", command,
@@ -3087,7 +3413,11 @@ be_run_cmd(char *command, char *stderr_buf, int stderr_bufsize,
 		rval = BE_ERR_EXTCMD;
 	} else if (WIFEXITED(exit_status)) {
 		exit_status = (int)((char)WEXITSTATUS(exit_status));
-		if (exit_status != 0) {
+		/*
+		 * error code BC_NOUPDT means more recent version
+		 * is installed
+		 */
+		if (exit_status != BC_SUCCESS && exit_status != BC_NOUPDT) {
 			(void) snprintf(oneline, BUFSIZ, gettext("be_run_cmd: "
 			    "command terminated with error status: %d\n"),
 			    exit_status);
@@ -3138,6 +3468,7 @@ update_dataset(char *dataset, int dataset_len, char *be_name,
 {
 	char	*ds = NULL;
 	char	*sub_ds = NULL;
+	int	ret;
 
 	/* Tear off the BE container dataset */
 	if ((ds = be_make_name_from_ds(dataset, old_rc_loc)) == NULL) {
@@ -3148,7 +3479,10 @@ update_dataset(char *dataset, int dataset_len, char *be_name,
 	sub_ds = strchr(ds, '/');
 
 	/* Generate the BE root dataset name */
-	be_make_root_ds(new_rc_loc, be_name, dataset, dataset_len);
+	if ((ret = be_make_root_ds(new_rc_loc, be_name, dataset,
+	    dataset_len)) != BE_SUCCESS) {
+		return (ret);
+	}
 
 	/* If a subordinate dataset name was found, append it */
 	if (sub_ds != NULL)
@@ -3427,7 +3761,7 @@ be_get_auto_name(char *obe_name, char *be_container_ds, boolean_t zone_be)
 			    "be_get_zone_be_list failed\n"));
 			return (NULL);
 		}
-	} else if (_be_list(NULL, &be_nodes) != BE_SUCCESS) {
+	} else if (_be_list(NULL, &be_nodes, BE_LIST_DEFAULT) != BE_SUCCESS) {
 		be_print_err(gettext("be_get_auto_name: be_list failed\n"));
 		return (NULL);
 	}
@@ -3655,9 +3989,9 @@ be_create_menu(
 	if (mkdirp(menu_path,
 	    S_IRWXU | S_IRGRP | S_IXGRP | S_IROTH | S_IXOTH) == -1 &&
 	    errno != EEXIST) {
-		free(menu_path);
 		be_print_err(gettext("be_create_menu: Failed to create the %s "
 		    "directory: %s\n"), menu_path, strerror(errno));
+		free(menu_path);
 		return (errno_to_be_err(errno));
 	}
 	free(menu_path);
@@ -3719,7 +4053,7 @@ be_create_menu(
 	/*
 	 * Now we need to add all the BE's back into the the file.
 	 */
-	if (_be_list(NULL, &be_nodes) == BE_SUCCESS) {
+	if (_be_list(NULL, &be_nodes, BE_LIST_DEFAULT) == BE_SUCCESS) {
 		while (be_nodes != NULL) {
 			if (strcmp(pool, be_nodes->be_rpool) == 0) {
 				(void) be_append_menu(be_nodes->be_node_name,

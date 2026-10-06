@@ -145,7 +145,7 @@ main(int argc, char **argv)
 		if (argc > 1)
 			fprintf(stderr, "%s: Illegal option %s in input\n",
 			    callname, string);
-			usage();
+		usage();
 	}
 
 	/* open image file in read write only if necessary */
@@ -334,6 +334,7 @@ updatelabel(void)
 		 * after update unix volume descriptor,
 		 * fall thru to update the iso primary vol descriptor
 		 */
+		/* FALLTHROUGH */
 	case 1:
 		copystring(sysid, (char *)ISO_sys_id(iso_buf), 32);
 		copystring(volid, (char *)ISO_vol_id(iso_buf), 32);

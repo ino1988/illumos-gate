@@ -21,10 +21,15 @@
 
 /*
  * Copyright (c) 2007, 2010, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2016 by Delphix. All rights reserved.
  */
 /*
  * Copyright (c) 2010, Intel Corporation.
  * All rights reserved.
+ */
+
+/*
+ * Copyright (c) 2018, Joyent, Inc.
  */
 
 #include <sys/types.h>
@@ -204,7 +209,7 @@ cms_load_modctl(modctl_t *modp)
 			return (cms);
 	}
 
-	if ((ver = modlookup_by_modctl(modp, "_cms_api_version")) == NULL) {
+	if ((ver = modlookup_by_modctl(modp, "_cms_api_version")) == 0) {
 		cmn_err(CE_WARN, "cpu model-specific module '%s' is invalid:  "
 		    "no _cms_api_version", modp->mod_modname);
 		return (NULL);
@@ -223,7 +228,7 @@ cms_load_modctl(modctl_t *modp)
 		    "version %d, kernel requires API version %d",
 		    modp->mod_modname, CMS_API_VERSION_TOPRINT(apiver),
 		    CMS_API_VERSION_TOPRINT(CMS_API_VERSION));
-	return (NULL);
+		return (NULL);
 	}
 
 	if ((ops = cms_getops(modp)) == NULL)
@@ -385,7 +390,7 @@ cms_load_specific(cmi_hdl_t hdl, void **datap)
 
 		/*
 		 * The module failed or declined to init, so release
-		 * it and potentially change i to be equal to he number
+		 * it and potentially change i to be equal to the number
 		 * of suffices actually used in the last module path.
 		 */
 		cms_rele(cms);

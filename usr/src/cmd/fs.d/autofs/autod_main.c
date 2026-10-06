@@ -104,6 +104,7 @@ time_t timenow;
 int verbose = 0;
 int trace = 0;
 int automountd_nobrowse = 0;
+int did_fork_exec;
 
 int
 main(argc, argv)
@@ -201,12 +202,12 @@ main(argc, argv)
 	 * mounts and executable automount maps
 	 */
 	if ((did_fork_exec = door_create(automountd_do_fork_exec,
-	    NULL, NULL)) == -1) {
+	    NULL, 0)) == -1) {
 		syslog(LOG_ERR, "door_create failed: %m, Exiting.");
 		exit(errno);
 	}
 	if ((did_exec_map = door_create(automountd_do_exec_map,
-	    NULL, NULL)) == -1) {
+	    NULL, 0)) == -1) {
 		syslog(LOG_ERR, "door_create failed: %m, Exiting.");
 		if (door_revoke(did_fork_exec) == -1) {
 			syslog(LOG_ERR, "failed to door_revoke(%d) %m",

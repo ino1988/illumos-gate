@@ -12,14 +12,26 @@
 #
 
 #
-# Copyright (c) 2012 by Delphix. All rights reserved.
+# Copyright (c) 2012, 2016 by Delphix. All rights reserved.
 # Copyright 2014, OmniTI Computer Consulting, Inc. All rights reserved.
+# Copyright 2021 Tintri by DDN, Inc. All rights reserved.
+# Copyright 2020 OmniOS Community Edition (OmniOSce) Association.
+# Copyright 2026 Gordon W. Ross
 #
 
+export LC_ALL=C.UTF-8
+export PATH="/usr/bin"
+export NOINUSE_CHECK=1
 export STF_SUITE="/opt/zfs-tests"
+export COMMON="$STF_SUITE/runfiles/common.run"
 export STF_TOOLS="/opt/test-runner/stf"
+export PATHDIR=""
 runner="/opt/test-runner/bin/run"
 auto_detect=false
+
+if [[ -z "$TESTFAIL_CALLBACKS" ]] ; then
+	export TESTFAIL_CALLBACKS="$STF_SUITE/callbacks/zfs_dbgmsg"
+fi
 
 function fail
 {
@@ -29,15 +41,16 @@ function fail
 
 function find_disks
 {
-	typeset all_disks=$(echo '' | sudo /usr/sbin/format | awk \
+	typeset all_disks=$(echo '' | sudo -k format | awk \
 	    '/c[0-9]/ {print $2}')
-	typeset used_disks=$(/sbin/zpool status | awk \
-	    '/c[0-9]*t[0-9a-f]*d[0-9]/ {print $1}' | sed 's/s[0-9]//g')
+	typeset used_disks=$(zpool status | awk \
+	    '/c[0-9]+(t[0-9a-fA-F]+)?d[0-9]+/ {print $1}' | sed -E \
+	    's/(s|p)[0-9]+//g')
 
 	typeset disk used avail_disks
 	for disk in $all_disks; do
 		for used in $used_disks; do
-			[[ "$disk" = "$used" ]] && continue 2
+			[[ "$disk" == "$used" ]] && continue 2
 		done
 		[[ -n $avail_disks ]] && avail_disks="$avail_disks $disk"
 		[[ -z $avail_disks ]] && avail_disks="$disk"
@@ -48,7 +61,7 @@ function find_disks
 
 function find_rpool
 {
-	typeset ds=$(/usr/sbin/mount | awk '/^\/ / {print $3}')
+	typeset ds=$(mount | awk '/^\/ / {print $3}')
 	echo ${ds%%/*}
 }
 
@@ -57,40 +70,122 @@ function find_runfile
 	typeset distro=
 	if [[ -d /opt/delphix && -h /etc/delphix/version ]]; then
 		distro=delphix
-	elif [[ 0 -ne $(grep -c OpenIndiana /etc/release 2>/dev/null) ]]; then
+	elif grep -qs OpenIndiana /etc/release; then
 		distro=openindiana
-	elif [[ 0 -ne $(grep -c OmniOS /etc/release 2>/dev/null) ]]; then
+	elif grep -qs OmniOS /etc/release; then
 		distro=omnios
 	fi
 
-	[[ -n $distro ]] && echo $STF_SUITE/runfiles/$distro.run
+	[[ -n $distro ]] && echo $COMMON,$STF_SUITE/runfiles/$distro.run
 }
 
 function verify_id
 {
-	[[ $(id -u) = "0" ]] && fail "This script must not be run as root."
+	[[ $(id -u) == "0" ]] && fail "This script must not be run as root."
 
-	sudo -n id >/dev/null 2>&1
-	[[ $? -eq 0 ]] || fail "User must be able to sudo without a password."
-
-	typeset -i priv_cnt=$(ppriv $$ | egrep -v \
-	    ": basic$|	L:| <none>|$$:" | wc -l)
-	[[ $priv_cnt -ne 0 ]] && fail "User must only have basic privileges."
+	sudo -k -n id >/dev/null 2>&1 ||
+		fail "User must be able to sudo without a password."
 }
 
 function verify_disks
 {
 	typeset disk
+	typeset path
+	typeset -lu expected_size
+	typeset -lu size
+	typeset -lu first_size=0
+	typeset first_disk=""
+
+	# Ensure disks are large enough for the tests: no less than 10GB
+	# and large enough for a crash dump plus overheads: the disk partition
+	# table (about 34k), zpool with 4.5MB for pool label and 128k for pool
+	# data, so we round up pool data + labels to 5MB.
+	expected_size=$(sudo -k -n dumpadm -epH)
+	(( expected_size = expected_size + 5 * 1024 * 1024 ))
+
+	if (( expected_size < 10 * 1024 * 1024 * 1024 )); then
+		(( expected_size = 10 * 1024 * 1024 * 1024 ))
+	fi
+
 	for disk in $DISKS; do
-		sudo /usr/sbin/prtvtoc /dev/rdsk/${disk}s0 >/dev/null 2>&1
-		[[ $? -eq 0 ]] || return 1
+		case $disk in
+		/*) path=$disk;;
+		*) path=/dev/rdsk/${disk}
+		esac
+		set -A disksize $(sudo -k prtvtoc $path 2>&1 |
+			awk '$3 == "bytes/sector" ||
+			    ($3 == "accessible" && $4 == "sectors") {print $2}')
+
+		if [[ (-n "${disksize[0]}") && (-n "${disksize[1]}") ]]; then
+			(( size = disksize[0] * disksize[1] ))
+		else
+			return 1
+		fi
+		if (( size <  expected_size )); then
+			(( size = expected_size / 1024 / 1024 / 1024 ))
+			fail "$disk is too small, need at least ${size}GB"
+		fi
+
+		if [[ -z $first_disk ]]; then
+			first_disk=$disk
+			first_size=$size
+			first_blocksize=${disksize[0]}
+		else
+			if (( size != first_size )); then
+				echo "Warning: $disk and $first_disk are" \
+				    "different sizes."
+				echo "Tests that mirror disks (e.g." \
+				    "zpool_scrub, zpool_resilver) require all"
+				echo "disks to be the same size and may fail" \
+				    "with 'device is too small'."
+			fi
+			if (( disksize[0] != first_blocksize )); then
+				echo "Warning: $disk and $first_disk have" \
+				    "different block sizes" \
+				    "(${disksize[0]} vs ${first_blocksize})."
+				echo "Some tests require all disks to present" \
+				    "the same block size and may fail."
+			fi
+		fi
 	done
 	return 0
 }
 
-verify_id
+function create_links
+{
+	typeset dir=$1
+	typeset file_list=$2
 
-while getopts ac:q c; do
+	[[ -n $PATHDIR ]] || fail "PATHDIR wasn't correctly set"
+
+	for i in $file_list; do
+		[[ ! -e $PATHDIR/$i ]] || fail "$i already exists"
+		ln -s $dir/$i $PATHDIR/$i || fail "Couldn't link $i"
+	done
+
+}
+
+function constrain_path
+{
+	. $STF_SUITE/include/commands.cfg
+
+	PATHDIR=$(/usr/bin/mktemp -d /var/tmp/constrained_path.XXXX)
+	chmod 755 $PATHDIR || fail "Couldn't chmod $PATHDIR"
+
+	create_links "/usr/bin" "$USR_BIN_FILES"
+	create_links "/usr/sbin" "$USR_SBIN_FILES"
+	create_links "/sbin" "$SBIN_FILES"
+	create_links "/opt/zfs-tests/bin" "$ZFSTEST_FILES"
+
+	# Special case links
+	ln -s /usr/gnu/bin/dd $PATHDIR/gnu_dd
+}
+
+constrain_path
+export PATH=$PATHDIR
+
+verify_id
+while getopts ac:l:qT: c; do
 	case $c in
 	'a')
 		auto_detect=true
@@ -98,9 +193,22 @@ while getopts ac:q c; do
 	'c')
 		runfile=$OPTARG
 		[[ -f $runfile ]] || fail "Cannot read file: $runfile"
+		if [[ -z $runfiles ]]; then
+			runfiles=$runfile
+		else
+			runfiles+=",$runfile"
+		fi
+		;;
+	'l')
+		logfile=$OPTARG
+		[[ -f $logfile ]] || fail "Cannot read file: $logfile"
+		xargs+=" -l $logfile"
 		;;
 	'q')
-		quiet='-q'
+		xargs+=" -q"
+		;;
+	'T')
+		xargs+=" -T $OPTARG"
 		;;
 	esac
 done
@@ -115,22 +223,29 @@ else
 	verify_disks || fail "Couldn't verify all the disks in \$DISKS"
 fi
 
-# Add the rpool to $KEEP according to its contents. It's ok to list it twice.
+# Add the root pool to $KEEP according to its contents.
+# It's ok to list it twice.
 if [[ -z $KEEP ]]; then
-	export KEEP="^$(find_rpool)\$"
+	KEEP="$(find_rpool)"
 else
-	export KEEP="^$(echo $KEEP | sed 's/ /|$/')\$"
-	KEEP+="|^$(find_rpool)\$"
+	KEEP+=" $(find_rpool)"
 fi
 
-[[ -z $runfile ]] && runfile=$(find_runfile)
-[[ -z $runfile ]] && fail "Couldn't determine distro"
+export __ZFS_POOL_EXCLUDE="$KEEP"
+export KEEP="^$(echo $KEEP | sed 's/ /$|^/g')\$"
+
+[[ -z $runfiles ]] && runfiles=$(find_runfile)
+[[ -z $runfiles ]] && fail "Couldn't determine distro"
 
 . $STF_SUITE/include/default.cfg
 
 num_disks=$(echo $DISKS | awk '{print NF}')
-[[ $num_disks -lt 3 ]] && fail "Not enough disks to run ZFS Test Suite"
+(( num_disks < 3 )) && fail "Not enough disks to run ZFS Test Suite"
 
-$runner $quiet -c $runfile
+# Ensure user has only basic privileges.
+ppriv -s EIP=basic -e $runner -c $runfiles $xargs
+ret=$?
 
-exit $?
+rm -rf $PATHDIR || fail "Couldn't remove $PATHDIR"
+
+exit $ret

@@ -24,10 +24,11 @@
  *
  * Copyright 2009 Sun Microsystems, Inc.  All rights reserved.
  * Use is subject to license terms.
+ * Copyright (c) 2016 by Delphix. All rights reserved.
  */
 
 /*	Copyright (c) 1984, 1986, 1987, 1988, 1989 AT&T	*/
-/*	  All Rights Reserved  	*/
+/*	  All Rights Reserved	*/
 
 #include <sys/resource.h>
 #include <sys/stat.h>
@@ -101,8 +102,9 @@ static int not_this_project(char *);
 static char *mkjobname(time_t);
 static time_t parse_time(char *);
 static time_t gtime(struct tm *);
-void atabort(char *)__NORETURN;
-void yyerror(void);
+static void escapestr(const char *);
+void atabort(const char *) __NORETURN;
+int yyerror(const char *);
 extern int yyparse(void);
 
 extern void	audit_at_delete(char *, char *, int);
@@ -111,10 +113,10 @@ extern int	audit_cron_is_anc_name(char *);
 extern int	audit_cron_delete_anc_file(char *, char *);
 
 /*
- * Error in getdate(3G)
+ * Error in getdate(3C)
  */
-static char 	*errlist[] = {
-/* 0 */ 	"",
+static char	*errlist[] = {
+/* 0 */	"",
 /* 1 */	"getdate: The DATEMSK environment variable is not set",
 /* 2 */	"getdate: Error on \"open\" of the template file",
 /* 3 */	"getdate: Error on \"stat\" of the template file",
@@ -418,8 +420,7 @@ main(int argc, char **argv)
 
 
 static char *
-mkjobname(t)
-time_t t;
+mkjobname(time_t t)
 {
 	int i, fd;
 	char *name;
@@ -448,8 +449,7 @@ catch(int x)
 
 
 void
-atabort(msg)
-char *msg;
+atabort(const char *msg)
 {
 	fprintf(stderr, "at: %s\n", gettext(msg));
 
@@ -462,10 +462,11 @@ yywrap(void)
 	return (1);
 }
 
-void
-yyerror(void)
+int
+yyerror(const char *s)
 {
-	atabort(BADTIME);
+	atabort(s);
+	return (0);
 }
 
 /*
@@ -513,8 +514,7 @@ leap(int year)
  * return time from time structure
  */
 static time_t
-gtime(tptr)
-struct	tm *tptr;
+gtime(struct tm *tptr)
 {
 	int i;
 	long	tv;
@@ -543,6 +543,23 @@ struct	tm *tptr;
 	tv = 60 * tv + tptr->tm_min;
 	tv = 60 * tv + tptr->tm_sec;
 	return (tv);
+}
+
+/*
+ * Escape a string to be used inside the job shell script.
+ */
+static void
+escapestr(const char *str)
+{
+	char c;
+	(void) putchar('\'');
+	while ((c = *str++) != '\0') {
+		if (c != '\'')
+			(void) putchar(c);
+		else
+			(void) fputs("'\\''", stdout); /* ' -> '\'' */
+	}
+	(void) putchar('\'');
 }
 
 /*
@@ -584,7 +601,7 @@ copy(char *jobfile, FILE *inputfile, int when)
 	/*
 	 * Fix for 1053807:
 	 * Determine what shell we should use to run the job. If the user
-	 * didn't explicitly request that his/her current shell be over-
+	 * didn't explicitly request that their current shell be over-
 	 * ridden (shflag or cshflag), then we use the current shell.
 	 */
 	if (cshflag)
@@ -633,12 +650,12 @@ copy(char *jobfile, FILE *inputfile, int when)
 	}
 
 	for (ep = environ; *ep; ep++) {
-		if (strchr(*ep, '\'') != NULL)
-			continue;
 		if ((val = strchr(*ep, '=')) == NULL)
 			continue;
 		*val++ = '\0';
-		printf("export %s; %s='%s'\n", *ep, *ep, val);
+		(void) printf("export %s; %s=", *ep, *ep);
+		escapestr(val);
+		(void) putchar('\n');
 		*--val = '=';
 	}
 	if ((pfp = fopen(pname1, "r")) == NULL &&
@@ -678,7 +695,7 @@ copy(char *jobfile, FILE *inputfile, int when)
 			if (seteuid(effeusr) < 0) {
 				atabort(CANTCHUID);
 			}
-			printf("%s", dirbuf);
+			escapestr(dirbuf);
 			break;
 		case 'm':
 			printf("%o", um);
@@ -718,9 +735,9 @@ out:
 	fflush(NULL);
 }
 
+/* remove jobs that are specified */
 static int
 remove_jobs(int argc, char **argv, char *login)
-/* remove jobs that are specified */
 {
 	int		i, r;
 	int		error = 0;
@@ -739,7 +756,7 @@ remove_jobs(int argc, char **argv, char *login)
 	for (i = 0; i < argc; i++)
 		if (strchr(argv[i], '/') != NULL) {
 			fprintf(stderr, "at: %s: not a valid job-id\n",
-					argv[i]);
+			    argv[i]);
 		} else if (stat(argv[i], &buf)) {
 			fprintf(stderr, "at: %s: ", argv[i]);
 			perror("");
@@ -940,6 +957,7 @@ parse_time(char *t)
 		case 12:	/* CCYYMMDDhhmm */
 			century = atoi_for2(t);
 			t += 2;
+			/* FALLTHROUGH */
 		case 10:	/* YYMMDDhhmm */
 			tm.tm_year = atoi_for2(t);
 			t += 2;
@@ -948,6 +966,7 @@ parse_time(char *t)
 					tm.tm_year += 100;
 			} else
 				tm.tm_year += (century - 19) * 100;
+			/* FALLTHROUGH */
 		case 8:		/* MMDDhhmm */
 			tm.tm_mon = atoi_for2(t) - 1;
 			t += 2;
@@ -971,7 +990,8 @@ parse_time(char *t)
 }
 
 static int
-atoi_for2(char *p) {
+atoi_for2(char *p)
+{
 	int value;
 
 	value = (*p - '0') * 10 + *(p+1) - '0';

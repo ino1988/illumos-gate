@@ -21,6 +21,7 @@
 /*
  * Copyright 2010 Sun Microsystems, Inc.  All rights reserved.
  * Use is subject to license terms.
+ * Copyright (c) 2016 by Delphix. All rights reserved.
  */
 
 /*
@@ -133,6 +134,7 @@ typedef struct nbt_name_reply {
 	boolean_t		reply_ready;
 } nbt_name_reply_t;
 
+char smb_node_type;
 static nbt_name_reply_t reply_queue;
 static mutex_t rq_mtx;
 static cond_t rq_cv;
@@ -183,14 +185,14 @@ smb_end_node_challenge(nbt_name_reply_t *reply_info)
 	struct resource_record	*answer;
 	struct name_question	question;
 	addr_entry_t		*addr;
-	struct name_entry 	*destination;
+	struct name_entry	*destination;
 	struct name_packet	packet;
-	struct timespec 	st;
+	struct timespec		st;
 
 	/*
 	 * The response packet has in it the address of the presumed owner
 	 * of the name.  Challenge that owner.  If owner either does not
-	 * respond or indicates that he no longer owns the name, claim the
+	 * respond or indicates that they no longer own the name, claim the
 	 * name.  Otherwise, the name cannot be claimed.
 	 */
 
@@ -232,10 +234,10 @@ smb_name_get_reply(uint16_t tid, uint32_t timeout)
 {
 	uint16_t		info;
 	struct resource_record	*answer;
-	nbt_name_reply_t 	*reply;
-	uint32_t 		wait_time, to_save; /* in millisecond */
-	struct timeval 		wt;
-	timestruc_t 		to;
+	nbt_name_reply_t	*reply;
+	uint32_t		wait_time, to_save; /* in millisecond */
+	struct timeval		wt;
+	timestruc_t		to;
 
 	to_save = timeout;
 	reply = malloc(sizeof (nbt_name_reply_t));
@@ -328,12 +330,12 @@ smb_netbios_process_response(uint16_t tid, addr_entry_t *addr,
 {
 	int			rc = 0;
 	uint16_t		info;
-	nbt_name_reply_t 	*reply;
+	nbt_name_reply_t	*reply;
 	struct resource_record	*answer;
-	struct name_entry 	*name;
-	struct name_entry 	*entry;
-	struct name_question 	*question;
-	uint32_t 		ttl;
+	struct name_entry	*name;
+	struct name_entry	*entry;
+	struct name_question	*question;
+	uint32_t		ttl;
 
 	if ((reply = smb_name_get_reply(tid, timeout)) == 0) {
 		return (0); /* No reply: retry */
@@ -437,7 +439,7 @@ smb_netbios_process_response(uint16_t tid, addr_entry_t *addr,
 		 * address of the presumed owner of the
 		 * name.  Challenge that owner.  If
 		 * owner either does not respond or
-		 * indicates that he no longer owns the
+		 * indicates that they no longer own the
 		 * name, claim the name.  Otherwise,
 		 * the name cannot be claimed.
 		 */
@@ -481,18 +483,14 @@ smb_name_buf_from_packet(unsigned char *buf, int n_buf,
     struct name_packet *npb)
 {
 	addr_entry_t		*raddr;
-	unsigned char 		*heap = buf;
-	unsigned char 		*end_heap = heap + n_buf;
-	unsigned char 		*dnptrs[32];
+	unsigned char		*heap = buf;
+	unsigned char		*end_heap = heap + n_buf;
 	unsigned char		comp_name_buf[MAX_NAME_LENGTH];
 	unsigned int		tmp;
 	int			i, step;
 
 	if (n_buf < NAME_HEADER_SIZE)
 		return (-1);		/* no header, impossible */
-
-	dnptrs[0] = heap;
-	dnptrs[1] = 0;
 
 	BE_OUT16(heap, npb->name_trn_id);
 	heap += 2;
@@ -1263,8 +1261,8 @@ smb_send_name_query_request(int bcast, struct name_question *question)
 	uint16_t		tid;
 	addr_entry_t		*destination;
 	struct name_packet	packet;
-	int 			i, addr_num;
-	struct timespec 	st;
+	int			i, addr_num;
+	struct timespec		st;
 
 	if (bcast == BROADCAST) {
 		if (bcast_num == 0)
@@ -1328,8 +1326,8 @@ smb_send_name_query_response(addr_entry_t *addr,
 	struct name_packet	packet;
 	struct resource_record	answer;
 	uint16_t		attr;
-	unsigned char 		data[MAX_DATAGRAM_LENGTH];
-	unsigned char 		*scan = data;
+	unsigned char		data[MAX_DATAGRAM_LENGTH];
+	unsigned char		*scan = data;
 	uint32_t		ret_addr;
 
 	packet.name_trn_id = original_packet->name_trn_id;
@@ -1384,11 +1382,11 @@ smb_send_node_status_response(addr_entry_t *addr,
 {
 	uint32_t		net_ipaddr;
 	int64_t			max_connections;
-	struct arpreq 		arpreq;
+	struct arpreq		arpreq;
 	struct name_packet	packet;
 	struct resource_record	answer;
-	unsigned char 		*scan;
-	unsigned char 		*scan_end;
+	unsigned char		*scan;
+	unsigned char		*scan_end;
 	unsigned char		data[MAX_NETBIOS_REPLY_DATA_SIZE];
 	boolean_t scan_done = B_FALSE;
 	smb_inaddr_t ipaddr;
@@ -1526,7 +1524,7 @@ smb_name_Bnode_add_name(struct name_entry *name)
 {
 	struct name_question		question;
 	struct resource_record		additional;
-	unsigned char 			data[8];
+	unsigned char			data[8];
 	uint16_t			attr;
 	addr_entry_t			*addr;
 	int rc = 0;
@@ -1624,7 +1622,7 @@ smb_name_Pnode_add_name(struct name_entry *name)
 {
 	struct name_question		question;
 	struct resource_record		additional;
-	unsigned char 			data[8];
+	unsigned char			data[8];
 	uint16_t			attr;
 	addr_entry_t			*addr;
 	int rc = 0;
@@ -1664,7 +1662,7 @@ smb_name_Pnode_refresh_name(struct name_entry *name)
 {
 	struct name_question		question;
 	struct resource_record		additional;
-	unsigned char 			data[8];
+	unsigned char			data[8];
 	uint16_t			attr;
 	addr_entry_t			*addr;
 	int rc = 0;
@@ -1831,10 +1829,10 @@ smb_name_Hnode_delete_name(struct name_entry *name)
 static void
 smb_name_process_Bnode_packet(struct name_packet *packet, addr_entry_t *addr)
 {
-	struct name_entry 	*name;
-	struct name_entry 	*entry;
-	struct name_question 	*question;
-	struct resource_record 	*additional;
+	struct name_entry	*name;
+	struct name_entry	*entry;
+	struct name_question	*question;
+	struct resource_record	*additional;
 
 	question = packet->question;
 	additional = packet->additional;
@@ -1911,10 +1909,10 @@ smb_name_process_Bnode_packet(struct name_packet *packet, addr_entry_t *addr)
 static void
 smb_name_process_Pnode_packet(struct name_packet *packet, addr_entry_t *addr)
 {
-	struct name_entry 	*name;
-	struct name_entry 	*entry;
-	struct name_question 	*question;
-	struct resource_record 	*additional;
+	struct name_entry	*name;
+	struct name_entry	*entry;
+	struct name_question	*question;
+	struct resource_record	*additional;
 
 	question = packet->question;
 	additional = packet->additional;
@@ -2385,7 +2383,7 @@ smb_netbios_name_service(void *arg)
 	int			len;
 	int			flag = 1;
 	char			*buf;
-	worker_param_t 		*worker_param;
+	worker_param_t		*worker_param;
 	smb_inaddr_t		ipaddr;
 
 	/*

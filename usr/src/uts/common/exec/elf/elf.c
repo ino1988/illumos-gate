@@ -24,9 +24,11 @@
  */
 
 /*	Copyright (c) 1984, 1986, 1987, 1988, 1989 AT&T	*/
-/*	  All Rights Reserved  	*/
+/*	   All Rights Reserved	*/
 /*
- * Copyright (c) 2013, Joyent, Inc.  All rights reserved.
+ * Copyright 2019, Joyent, Inc.
+ * Copyright 2023 Oxide Computer Company
+ * Copyright 2026 Carsten Grzemba
  */
 
 #include <sys/types.h>
@@ -42,6 +44,7 @@
 #include <sys/kmem.h>
 #include <sys/proc.h>
 #include <sys/pathname.h>
+#include <sys/policy.h>
 #include <sys/cmn_err.h>
 #include <sys/systm.h>
 #include <sys/elf.h>
@@ -65,84 +68,49 @@
 #include "elf_impl.h"
 #include <sys/sdt.h>
 #include <sys/siginfo.h>
+#include <sys/random.h>
+
+#include <core_shstrtab.h>
+
+#if defined(__x86)
+#include <sys/comm_page_util.h>
+#include <sys/fp.h>
+#endif /* defined(__x86) */
+
 
 extern int at_flags;
+extern volatile size_t aslr_max_brk_skew;
 
 #define	ORIGIN_STR	"ORIGIN"
 #define	ORIGIN_STR_SIZE	6
 
-static int getelfhead(vnode_t *, cred_t *, Ehdr *, int *, int *, int *);
-static int getelfphdr(vnode_t *, cred_t *, const Ehdr *, int, caddr_t *,
-    ssize_t *);
-static int getelfshdr(vnode_t *, cred_t *, const Ehdr *, int, int, caddr_t *,
-    ssize_t *, caddr_t *, ssize_t *);
-static size_t elfsize(Ehdr *, int, caddr_t, uintptr_t *);
-static int mapelfexec(vnode_t *, Ehdr *, int, caddr_t,
-    Phdr **, Phdr **, Phdr **, Phdr **, Phdr *,
-    caddr_t *, caddr_t *, intptr_t *, intptr_t *, size_t, long *, size_t *);
+static int getelfhead(vnode_t *, cred_t *, Ehdr *, uint_t *, uint_t *,
+    uint_t *);
+static int getelfphdr(vnode_t *, cred_t *, const Ehdr *, uint_t, caddr_t *,
+    size_t *);
+static int getelfshdr(vnode_t *, cred_t *, const Ehdr *, uint_t, uint_t,
+    caddr_t *, size_t *, caddr_t *, size_t *);
+static size_t elfsize(const Ehdr *, uint_t, const caddr_t, uintptr_t *);
+static int mapelfexec(vnode_t *, Ehdr *, uint_t, caddr_t, Phdr **, Phdr **,
+    Phdr **, Phdr **, Phdr *, caddr_t *, caddr_t *, intptr_t *, uintptr_t *,
+    size_t, size_t *, size_t *);
 
-typedef enum {
-	STR_CTF,
-	STR_SYMTAB,
-	STR_DYNSYM,
-	STR_STRTAB,
-	STR_DYNSTR,
-	STR_SHSTRTAB,
-	STR_NUM
-} shstrtype_t;
 
-static const char *shstrtab_data[] = {
-	".SUNW_ctf",
-	".symtab",
-	".dynsym",
-	".strtab",
-	".dynstr",
-	".shstrtab"
-};
-
-typedef struct shstrtab {
-	int	sst_ndx[STR_NUM];
-	int	sst_cur;
-} shstrtab_t;
-
-static void
-shstrtab_init(shstrtab_t *s)
-{
-	bzero(&s->sst_ndx, sizeof (s->sst_ndx));
-	s->sst_cur = 1;
-}
-
-static int
-shstrtab_ndx(shstrtab_t *s, shstrtype_t type)
-{
-	int ret;
-
-	if ((ret = s->sst_ndx[type]) != 0)
-		return (ret);
-
-	ret = s->sst_ndx[type] = s->sst_cur;
-	s->sst_cur += strlen(shstrtab_data[type]) + 1;
-
-	return (ret);
-}
-
-static size_t
-shstrtab_size(const shstrtab_t *s)
-{
-	return (s->sst_cur);
-}
-
-static void
-shstrtab_dump(const shstrtab_t *s, char *buf)
-{
-	int i, ndx;
-
-	*buf = '\0';
-	for (i = 0; i < STR_NUM; i++) {
-		if ((ndx = s->sst_ndx[i]) != 0)
-			(void) strcpy(buf + ndx, shstrtab_data[i]);
-	}
-}
+#ifdef _ELF32_COMPAT
+/* Link against the non-compat instances when compiling the 32-bit version. */
+extern size_t elf_datasz_max;
+extern size_t elf_zeropg_sz;
+extern void elf_ctx_resize_scratch(elf_core_ctx_t *, size_t);
+extern uint_t elf_nphdr_max;
+extern uint_t elf_nshdr_max;
+extern size_t elf_shstrtab_max;
+#else
+size_t elf_datasz_max = 1 * 1024 * 1024;
+size_t elf_zeropg_sz = 4 * 1024;
+uint_t elf_nphdr_max = 1000;
+uint_t elf_nshdr_max = 10000;
+size_t elf_shstrtab_max = 100 * 1024;
+#endif
 
 static int
 dtrace_safe_phdr(Phdr *phdrp, struct uarg *args, uintptr_t base)
@@ -162,6 +130,57 @@ dtrace_safe_phdr(Phdr *phdrp, struct uarg *args, uintptr_t base)
 	return (0);
 }
 
+static int
+handle_secflag_dt(proc_t *p, uint_t dt, uint_t val)
+{
+	uint_t flag;
+
+	switch (dt) {
+	case DT_SUNW_ASLR:
+		flag = PROC_SEC_ASLR;
+		break;
+	default:
+		return (EINVAL);
+	}
+
+	if (val == 0) {
+		if (secflag_isset(p->p_secflags.psf_lower, flag))
+			return (EPERM);
+		if ((secpolicy_psecflags(CRED(), p, p) != 0) &&
+		    secflag_isset(p->p_secflags.psf_inherit, flag))
+			return (EPERM);
+
+		secflag_clear(&p->p_secflags.psf_effective, flag);
+	} else {
+		if (!secflag_isset(p->p_secflags.psf_upper, flag))
+			return (EPERM);
+
+		if ((secpolicy_psecflags(CRED(), p, p) != 0) &&
+		    !secflag_isset(p->p_secflags.psf_inherit, flag))
+			return (EPERM);
+
+		secflag_set(&p->p_secflags.psf_effective, flag);
+	}
+
+	return (0);
+}
+
+#ifndef _ELF32_COMPAT
+void
+elf_ctx_resize_scratch(elf_core_ctx_t *ctx, size_t sz)
+{
+	size_t target = MIN(sz, elf_datasz_max);
+
+	if (target > ctx->ecc_bufsz) {
+		if (ctx->ecc_buf != NULL) {
+			kmem_free(ctx->ecc_buf, ctx->ecc_bufsz);
+		}
+		ctx->ecc_buf = kmem_alloc(target, KM_SLEEP);
+		ctx->ecc_bufsz = target;
+	}
+}
+#endif /* _ELF32_COMPAT */
+
 /*
  * Map in the executable pointed to by vp. Returns 0 on success.
  */
@@ -170,22 +189,20 @@ mapexec_brand(vnode_t *vp, uarg_t *args, Ehdr *ehdr, Addr *uphdr_vaddr,
     intptr_t *voffset, caddr_t exec_file, int *interp, caddr_t *bssbase,
     caddr_t *brkbase, size_t *brksize, uintptr_t *lddatap)
 {
-	size_t		len;
+	size_t		len, phdrsize;
 	struct vattr	vat;
 	caddr_t		phdrbase = NULL;
-	ssize_t		phdrsize;
-	int		nshdrs, shstrndx, nphdrs;
+	uint_t		nshdrs, shstrndx, nphdrs;
 	int		error = 0;
 	Phdr		*uphdr = NULL;
 	Phdr		*junk = NULL;
 	Phdr		*dynphdr = NULL;
 	Phdr		*dtrphdr = NULL;
-	uintptr_t	lddata;
-	long		execsz;
-	intptr_t	minaddr;
+	uintptr_t	lddata, minaddr;
+	size_t		execsz;
 
 	if (lddatap != NULL)
-		*lddatap = NULL;
+		*lddatap = 0;
 
 	if (error = execpermissions(vp, &vat, args)) {
 		uprintf("%s: Cannot execute %s\n", exec_file, args->pathname);
@@ -212,6 +229,8 @@ mapexec_brand(vnode_t *vp, uarg_t *args, Ehdr *ehdr, Addr *uphdr_vaddr,
 	    &junk, &dtrphdr, NULL, bssbase, brkbase, voffset, &minaddr,
 	    len, &execsz, brksize)) {
 		uprintf("%s: Cannot map %s\n", exec_file, args->pathname);
+		if (uphdr != NULL && uphdr->p_flags == 0)
+			kmem_free(uphdr, sizeof (Phdr));
 		kmem_free(phdrbase, phdrsize);
 		return (error);
 	}
@@ -231,6 +250,9 @@ mapexec_brand(vnode_t *vp, uarg_t *args, Ehdr *ehdr, Addr *uphdr_vaddr,
 
 	if (uphdr != NULL) {
 		*uphdr_vaddr = uphdr->p_vaddr;
+
+		if (uphdr->p_flags == 0)
+			kmem_free(uphdr, sizeof (Phdr));
 	} else {
 		*uphdr_vaddr = (Addr)-1;
 	}
@@ -239,40 +261,40 @@ mapexec_brand(vnode_t *vp, uarg_t *args, Ehdr *ehdr, Addr *uphdr_vaddr,
 	return (error);
 }
 
-/*ARGSUSED*/
 int
 elfexec(vnode_t *vp, execa_t *uap, uarg_t *args, intpdata_t *idatap,
-    int level, long *execsz, int setid, caddr_t exec_file, cred_t *cred,
+    int level, size_t *execsz, int setid, caddr_t exec_file, cred_t *cred,
     int brand_action)
 {
 	caddr_t		phdrbase = NULL;
-	caddr_t 	bssbase = 0;
-	caddr_t 	brkbase = 0;
+	caddr_t		bssbase = 0;
+	caddr_t		brkbase = 0;
 	size_t		brksize = 0;
-	ssize_t		dlnsize;
+	size_t		dlnsize;
 	aux_entry_t	*aux;
 	int		error;
 	ssize_t		resid;
 	int		fd = -1;
 	intptr_t	voffset;
-	Phdr		*dyphdr = NULL;
+	Phdr		*intphdr = NULL;
+	Phdr		*dynamicphdr = NULL;
 	Phdr		*stphdr = NULL;
 	Phdr		*uphdr = NULL;
 	Phdr		*junk = NULL;
 	size_t		len;
-	ssize_t		phdrsize;
-	int		postfixsize = 0;
-	int		i, hsize;
+	size_t		postfixsize = 0;
+	size_t		i;
 	Phdr		*phdrp;
 	Phdr		*dataphdrp = NULL;
 	Phdr		*dtrphdr;
 	Phdr		*capphdr = NULL;
 	Cap		*cap = NULL;
-	ssize_t		capsize;
+	size_t		capsize;
 	int		hasu = 0;
 	int		hasauxv = 0;
-	int		hasdy = 0;
+	int		hasintp = 0;
 	int		branded = 0;
+	boolean_t	dynuphdr = B_FALSE;
 
 	struct proc *p = ttoproc(curthread);
 	struct user *up = PTOU(p);
@@ -285,7 +307,8 @@ elfexec(vnode_t *vp, execa_t *uap, uarg_t *args, intpdata_t *idatap,
 		struct execenv	exenv;
 	} *bigwad;	/* kmem_alloc this behemoth so we don't blow stack */
 	Ehdr		*ehdrp;
-	int		nshdrs, shstrndx, nphdrs;
+	uint_t		nshdrs, shstrndx, nphdrs;
+	size_t		phdrsize;
 	char		*dlnp;
 	char		*pathbufp;
 	rlim64_t	limit;
@@ -328,7 +351,7 @@ elfexec(vnode_t *vp, execa_t *uap, uarg_t *args, intpdata_t *idatap,
 	} else {
 		args->to_model = DATAMODEL_LP64;
 		args->stk_prot &= ~PROT_EXEC;
-#if defined(__i386) || defined(__amd64)
+#if defined(__x86)
 		args->dat_prot &= ~PROT_EXEC;
 #endif
 		*execsz = btopr(SINCR) + btopr(SSIZE) + btopr(NCARGS64-1);
@@ -344,8 +367,14 @@ elfexec(vnode_t *vp, execa_t *uap, uarg_t *args, intpdata_t *idatap,
 	 * We do this because now the brand library can just check
 	 * args->to_model to see if the target is 32-bit or 64-bit without
 	 * having do duplicate all the code above.
+	 *
+	 * The level checks associated with brand handling below are used to
+	 * prevent a loop since the brand elfexec function typically comes back
+	 * through this function. We must check <= here since the nested
+	 * handling in the #! interpreter code will increment the level before
+	 * calling gexec to run the final elfexec interpreter.
 	 */
-	if ((level < 2) &&
+	if ((level <= INTP_MAXDEPTH) &&
 	    (brand_action != EBA_NATIVE) && (PROC_IS_BRANDED(p))) {
 		error = BROP(p)->b_elfexec(vp, uap, args,
 		    idatap, level + 1, execsz, setid, exec_file, cred,
@@ -359,12 +388,12 @@ elfexec(vnode_t *vp, execa_t *uap, uarg_t *args, intpdata_t *idatap,
 	 * determine any non-default stack protections,
 	 * and still have this code be machine independent.
 	 */
-	hsize = ehdrp->e_phentsize;
+	const uint_t hsize = ehdrp->e_phentsize;
 	phdrp = (Phdr *)phdrbase;
 	for (i = nphdrs; i > 0; i--) {
 		switch (phdrp->p_type) {
 		case PT_INTERP:
-			hasauxv = hasdy = 1;
+			hasauxv = hasintp = 1;
 			break;
 		case PT_PHDR:
 			hasu = 1;
@@ -383,6 +412,9 @@ elfexec(vnode_t *vp, execa_t *uap, uarg_t *args, intpdata_t *idatap,
 			break;
 		case PT_SUNWCAP:
 			capphdr = phdrp;
+			break;
+		case PT_DYNAMIC:
+			dynamicphdr = phdrp;
 			break;
 		}
 		phdrp = (Phdr *)((caddr_t)phdrp + hsize);
@@ -417,16 +449,17 @@ elfexec(vnode_t *vp, execa_t *uap, uarg_t *args, intpdata_t *idatap,
 		 *	AT_BASE
 		 *	AT_FLAGS
 		 *	AT_PAGESZ
-		 *	AT_SUN_LDSECURE
+		 *	AT_SUN_AUXFLAGS
 		 *	AT_SUN_HWCAP
 		 *	AT_SUN_HWCAP2
-		 *	AT_SUN_PLATFORM
-		 *	AT_SUN_EXECNAME
+		 *	AT_SUN_HWCAP3
+		 *	AT_SUN_PLATFORM (added in stk_copyout)
+		 *	AT_SUN_EXECNAME (added in stk_copyout)
 		 *	AT_NULL
 		 *
-		 * total == 9
+		 * total == 10
 		 */
-		if (hasdy && hasu) {
+		if (hasintp && hasu) {
 			/*
 			 * Has PT_INTERP & PT_PHDR - the auxvectors that
 			 * will be built are:
@@ -439,8 +472,8 @@ elfexec(vnode_t *vp, execa_t *uap, uarg_t *args, intpdata_t *idatap,
 			 *
 			 * total = 5
 			 */
-			args->auxsize = (9 + 5) * sizeof (aux_entry_t);
-		} else if (hasdy) {
+			args->auxsize = (10 + 5) * sizeof (aux_entry_t);
+		} else if (hasintp) {
 			/*
 			 * Has PT_INTERP but no PT_PHDR
 			 *
@@ -449,9 +482,9 @@ elfexec(vnode_t *vp, execa_t *uap, uarg_t *args, intpdata_t *idatap,
 			 *
 			 * total = 2
 			 */
-			args->auxsize = (9 + 2) * sizeof (aux_entry_t);
+			args->auxsize = (10 + 2) * sizeof (aux_entry_t);
 		} else {
-			args->auxsize = 9 * sizeof (aux_entry_t);
+			args->auxsize = 10 * sizeof (aux_entry_t);
 		}
 	} else {
 		args->auxsize = 0;
@@ -464,6 +497,18 @@ elfexec(vnode_t *vp, execa_t *uap, uarg_t *args, intpdata_t *idatap,
 	if (args->emulator != NULL)
 		args->auxsize += sizeof (aux_entry_t);
 
+	/*
+	 * On supported kernels (x86_64) make room in the auxv for the
+	 * AT_SUN_COMMPAGE entry.  This will go unpopulated on i86xpv systems
+	 * which do not provide such functionality.
+	 *
+	 * Additionally cover the floating point information AT_SUN_FPSIZE and
+	 * AT_SUN_FPTYPE.
+	 */
+#if defined(__amd64)
+	args->auxsize += 3 * sizeof (aux_entry_t);
+#endif /* defined(__amd64) */
+
 	if ((brand_action != EBA_NATIVE) && (PROC_IS_BRANDED(p))) {
 		branded = 1;
 		/*
@@ -473,17 +518,67 @@ elfexec(vnode_t *vp, execa_t *uap, uarg_t *args, intpdata_t *idatap,
 		args->auxsize += 4 * sizeof (aux_entry_t);
 	}
 
+	/* If the binary has an explicit ASLR flag, it must be honoured */
+	if ((dynamicphdr != NULL) && (dynamicphdr->p_filesz > 0)) {
+		const size_t dynfilesz = dynamicphdr->p_filesz;
+		const size_t dynoffset = dynamicphdr->p_offset;
+		Dyn *dyn, *dp;
+
+		if (dynoffset > MAXOFFSET_T ||
+		    dynfilesz > MAXOFFSET_T ||
+		    dynoffset + dynfilesz > MAXOFFSET_T) {
+			uprintf("%s: cannot read full .dynamic section\n",
+			    exec_file);
+			error = EINVAL;
+			goto out;
+		}
+
+#define	DYN_STRIDE	100
+		for (i = 0; i < dynfilesz; i += sizeof (*dyn) * DYN_STRIDE) {
+			const size_t remdyns = (dynfilesz - i) / sizeof (*dyn);
+			const size_t ndyns = MIN(DYN_STRIDE, remdyns);
+			const size_t dynsize = ndyns * sizeof (*dyn);
+
+			dyn = kmem_alloc(dynsize, KM_SLEEP);
+
+			if ((error = vn_rdwr(UIO_READ, vp, (caddr_t)dyn,
+			    (ssize_t)dynsize, (offset_t)(dynoffset + i),
+			    UIO_SYSSPACE, 0, (rlim64_t)0,
+			    CRED(), NULL)) != 0) {
+				uprintf("%s: cannot read .dynamic section\n",
+				    exec_file);
+				goto out;
+			}
+
+			for (dp = dyn; dp < (dyn + ndyns); dp++) {
+				if (dp->d_tag == DT_SUNW_ASLR) {
+					if ((error = handle_secflag_dt(p,
+					    DT_SUNW_ASLR,
+					    dp->d_un.d_val)) != 0) {
+						uprintf("%s: error setting "
+						    "security-flag from "
+						    "DT_SUNW_ASLR: %d\n",
+						    exec_file, error);
+						goto out;
+					}
+				}
+			}
+
+			kmem_free(dyn, dynsize);
+		}
+	}
+
 	/* Hardware/Software capabilities */
 	if (capphdr != NULL &&
 	    (capsize = capphdr->p_filesz) > 0 &&
 	    capsize <= 16 * sizeof (*cap)) {
-		int ncaps = capsize / sizeof (*cap);
+		const uint_t ncaps = capsize / sizeof (*cap);
 		Cap *cp;
 
 		cap = kmem_alloc(capsize, KM_SLEEP);
 		if ((error = vn_rdwr(UIO_READ, vp, (caddr_t)cap,
-		    capsize, (offset_t)capphdr->p_offset,
-		    UIO_SYSSPACE, 0, (rlim64_t)0, CRED(), &resid)) != 0) {
+		    (ssize_t)capsize, (offset_t)capphdr->p_offset,
+		    UIO_SYSSPACE, 0, (rlim64_t)0, CRED(), NULL)) != 0) {
 			uprintf("%s: Cannot read capabilities section\n",
 			    exec_file);
 			goto out;
@@ -501,6 +596,7 @@ elfexec(vnode_t *vp, execa_t *uap, uarg_t *args, intpdata_t *idatap,
 	aux = bigwad->elfargs;
 	/*
 	 * Move args to the user's stack.
+	 * This can fill in the AT_SUN_PLATFORM and AT_SUN_EXECNAME aux entries.
 	 */
 	if ((error = exec_args(uap, args, idatap, (void **)&aux)) != 0) {
 		if (error == -1) {
@@ -522,12 +618,21 @@ elfexec(vnode_t *vp, execa_t *uap, uarg_t *args, intpdata_t *idatap,
 
 	dtrphdr = NULL;
 
-	if ((error = mapelfexec(vp, ehdrp, nphdrs, phdrbase, &uphdr, &dyphdr,
+	error = mapelfexec(vp, ehdrp, nphdrs, phdrbase, &uphdr, &intphdr,
 	    &stphdr, &dtrphdr, dataphdrp, &bssbase, &brkbase, &voffset, NULL,
-	    len, execsz, &brksize)) != 0)
+	    len, execsz, &brksize);
+
+	/*
+	 * Our uphdr has been dynamically allocated if (and only if) its
+	 * program header flags are clear.  To avoid leaks, this must be
+	 * checked regardless of whether mapelfexec() emitted an error.
+	 */
+	dynuphdr = (uphdr != NULL && uphdr->p_flags == 0);
+
+	if (error != 0)
 		goto bad;
 
-	if (uphdr != NULL && dyphdr == NULL)
+	if (uphdr != NULL && intphdr == NULL)
 		goto bad;
 
 	if (dtrphdr != NULL && dtrace_safe_phdr(dtrphdr, args, voffset) != 0) {
@@ -535,23 +640,29 @@ elfexec(vnode_t *vp, execa_t *uap, uarg_t *args, intpdata_t *idatap,
 		goto bad;
 	}
 
-	if (dyphdr != NULL) {
+	if (intphdr != NULL) {
 		size_t		len;
 		uintptr_t	lddata;
 		char		*p;
 		struct vnode	*nvp;
 
-		dlnsize = dyphdr->p_filesz;
+		dlnsize = intphdr->p_filesz;
 
-		if (dlnsize > MAXPATHLEN || dlnsize <= 0)
+		/*
+		 * Make sure none of the component pieces of dlnsize result in
+		 * an oversized or zeroed result.
+		 */
+		if (intphdr->p_filesz > MAXPATHLEN || dlnsize > MAXPATHLEN ||
+		    dlnsize == 0 || dlnsize < intphdr->p_filesz) {
 			goto bad;
+		}
 
 		/*
 		 * Read in "interpreter" pathname.
 		 */
-		if ((error = vn_rdwr(UIO_READ, vp, dlnp, dyphdr->p_filesz,
-		    (offset_t)dyphdr->p_offset, UIO_SYSSPACE, 0, (rlim64_t)0,
-		    CRED(), &resid)) != 0) {
+		if ((error = vn_rdwr(UIO_READ, vp, dlnp,
+		    (ssize_t)intphdr->p_filesz, (offset_t)intphdr->p_offset,
+		    UIO_SYSSPACE, 0, (rlim64_t)0, CRED(), &resid)) != 0) {
 			uprintf("%s: Cannot obtain interpreter pathname\n",
 			    exec_file);
 			goto bad;
@@ -570,6 +681,15 @@ elfexec(vnode_t *vp, execa_t *uap, uarg_t *args, intpdata_t *idatap,
 
 			if (strncmp(++p, ORIGIN_STR, ORIGIN_STR_SIZE))
 				continue;
+
+			/*
+			 * We don't support $ORIGIN on setid programs to close
+			 * a potential attack vector.
+			 */
+			if ((setid & EXECSETID_SETID) != 0) {
+				error = ENOEXEC;
+				goto bad;
+			}
 
 			curlen = 0;
 			len = p - dlnp - 1;
@@ -687,9 +807,10 @@ elfexec(vnode_t *vp, execa_t *uap, uarg_t *args, intpdata_t *idatap,
 
 		dtrphdr = NULL;
 
-		error = mapelfexec(nvp, ehdrp, nphdrs, phdrbase, &junk, &junk,
+		error = mapelfexec(nvp, ehdrp, nphdrs, phdrbase, NULL, &junk,
 		    &junk, &dtrphdr, NULL, NULL, NULL, &voffset, NULL, len,
 		    execsz, NULL);
+
 		if (error || junk != NULL) {
 			VN_RELE(nvp);
 			uprintf("%s: Cannot map %s\n", exec_file, dlnp);
@@ -716,8 +837,14 @@ elfexec(vnode_t *vp, execa_t *uap, uarg_t *args, intpdata_t *idatap,
 
 	if (hasauxv) {
 		int auxf = AF_SUN_HWCAPVERIFY;
+#if defined(__amd64)
+		size_t fpsize;
+		int fptype;
+#endif /* defined(__amd64) */
+
 		/*
-		 * Note: AT_SUN_PLATFORM was filled in via exec_args()
+		 * Note: AT_SUN_PLATFORM and AT_SUN_EXECNAME were filled in via
+		 * exec_args()
 		 */
 		ADDAUX(aux, AT_BASE, voffset)
 		ADDAUX(aux, AT_FLAGS, at_flags)
@@ -758,23 +885,22 @@ elfexec(vnode_t *vp, execa_t *uap, uarg_t *args, intpdata_t *idatap,
 		    ((char *)&aux->a_type -
 		    (char *)bigwad->elfargs));
 		ADDAUX(aux, AT_SUN_AUXFLAGS, auxf);
+
 		/*
 		 * Hardware capability flag word (performance hints)
 		 * Used for choosing faster library routines.
 		 * (Potentially different between 32-bit and 64-bit ABIs)
 		 */
-#if defined(_LP64)
 		if (args->to_model == DATAMODEL_NATIVE) {
 			ADDAUX(aux, AT_SUN_HWCAP, auxv_hwcap)
 			ADDAUX(aux, AT_SUN_HWCAP2, auxv_hwcap_2)
+			ADDAUX(aux, AT_SUN_HWCAP3, auxv_hwcap_3)
 		} else {
 			ADDAUX(aux, AT_SUN_HWCAP, auxv_hwcap32)
 			ADDAUX(aux, AT_SUN_HWCAP2, auxv_hwcap32_2)
+			ADDAUX(aux, AT_SUN_HWCAP3, auxv_hwcap32_3)
 		}
-#else
-		ADDAUX(aux, AT_SUN_HWCAP, auxv_hwcap)
-		ADDAUX(aux, AT_SUN_HWCAP2, auxv_hwcap_2)
-#endif
+
 		if (branded) {
 			/*
 			 * Reserve space for the brand-private aux vectors,
@@ -789,9 +915,50 @@ elfexec(vnode_t *vp, execa_t *uap, uarg_t *args, intpdata_t *idatap,
 			ADDAUX(aux, AT_SUN_BRAND_AUX3, 0)
 		}
 
+		/*
+		 * Add the comm page auxv entry, mapping it in if needed. Also
+		 * take care of the FPU entries.
+		 */
+#if defined(__amd64)
+		if (args->commpage != (uintptr_t)NULL ||
+		    (args->commpage = (uintptr_t)comm_page_mapin()) !=
+		    (uintptr_t)NULL) {
+			ADDAUX(aux, AT_SUN_COMMPAGE, args->commpage)
+		} else {
+			/*
+			 * If the comm page cannot be mapped, pad out the auxv
+			 * to satisfy later size checks.
+			 */
+			ADDAUX(aux, AT_NULL, 0)
+		}
+
+		fptype = AT_386_FPINFO_NONE;
+		fpu_auxv_info(&fptype, &fpsize);
+		if (fptype != AT_386_FPINFO_NONE) {
+			ADDAUX(aux, AT_SUN_FPTYPE, fptype)
+			ADDAUX(aux, AT_SUN_FPSIZE, fpsize)
+		} else {
+			ADDAUX(aux, AT_NULL, 0)
+			ADDAUX(aux, AT_NULL, 0)
+		}
+#endif /* defined(__amd64) */
+
 		ADDAUX(aux, AT_NULL, 0)
-		postfixsize = (char *)aux - (char *)bigwad->elfargs;
-		ASSERT(postfixsize == args->auxsize);
+		postfixsize = (uintptr_t)aux - (uintptr_t)bigwad->elfargs;
+
+		/*
+		 * We make assumptions above when we determine how many aux
+		 * vector entries we will be adding. However, if we have an
+		 * invalid elf file, it is possible that mapelfexec might
+		 * behave differently (but not return an error), in which case
+		 * the number of aux entries we actually add will be different.
+		 * We detect that now and error out.
+		 */
+		if (postfixsize != args->auxsize) {
+			DTRACE_PROBE2(elfexec_badaux, size_t, postfixsize,
+			    size_t, args->auxsize);
+			goto bad;
+		}
 		ASSERT(postfixsize <= __KERN_NAUXV_IMPL * sizeof (aux_entry_t));
 	}
 
@@ -815,8 +982,9 @@ elfexec(vnode_t *vp, execa_t *uap, uarg_t *args, intpdata_t *idatap,
 	}
 
 	bzero(up->u_auxv, sizeof (up->u_auxv));
+	up->u_commpagep = args->commpage;
 	if (postfixsize) {
-		int num_auxv;
+		size_t num_auxv;
 
 		/*
 		 * Copy the aux vector to the user stack.
@@ -881,6 +1049,8 @@ bad:
 	if (error == 0)
 		error = ENOEXEC;
 out:
+	if (dynuphdr)
+		kmem_free(uphdr, sizeof (Phdr));
 	if (phdrbase != NULL)
 		kmem_free(phdrbase, phdrsize);
 	if (cap != NULL)
@@ -893,32 +1063,23 @@ out:
  * Compute the memory size requirement for the ELF file.
  */
 static size_t
-elfsize(Ehdr *ehdrp, int nphdrs, caddr_t phdrbase, uintptr_t *lddata)
+elfsize(const Ehdr *ehdrp, uint_t nphdrs, const caddr_t phdrbase,
+    uintptr_t *lddata)
 {
-	size_t	len;
-	Phdr	*phdrp = (Phdr *)phdrbase;
-	int	hsize = ehdrp->e_phentsize;
-	int	first = 1;
-	int	dfirst = 1;	/* first data segment */
-	uintptr_t loaddr = 0;
+	const Phdr *phdrp = (Phdr *)phdrbase;
+	const uint_t hsize = ehdrp->e_phentsize;
+	boolean_t dfirst = B_TRUE;
+	uintptr_t loaddr = UINTPTR_MAX;
 	uintptr_t hiaddr = 0;
-	uintptr_t lo, hi;
-	int	i;
+	uint_t i;
 
 	for (i = nphdrs; i > 0; i--) {
 		if (phdrp->p_type == PT_LOAD) {
-			lo = phdrp->p_vaddr;
-			hi = lo + phdrp->p_memsz;
-			if (first) {
-				loaddr = lo;
-				hiaddr = hi;
-				first = 0;
-			} else {
-				if (loaddr > lo)
-					loaddr = lo;
-				if (hiaddr < hi)
-					hiaddr = hi;
-			}
+			const uintptr_t lo = phdrp->p_vaddr;
+			const uintptr_t hi = lo + phdrp->p_memsz;
+
+			loaddr = MIN(lo, loaddr);
+			hiaddr = MAX(hi, hiaddr);
 
 			/*
 			 * save the address of the first data segment
@@ -928,16 +1089,18 @@ elfsize(Ehdr *ehdrp, int nphdrs, caddr_t phdrbase, uintptr_t *lddata)
 			if ((lddata != NULL) && dfirst &&
 			    (phdrp->p_flags & PF_W)) {
 				*lddata = lo;
-				dfirst = 0;
+				dfirst = B_FALSE;
 			}
 		}
 		phdrp = (Phdr *)((caddr_t)phdrp + hsize);
 	}
 
-	len = hiaddr - (loaddr & PAGEMASK);
-	len = roundup(len, PAGESIZE);
+	if (hiaddr <= loaddr) {
+		/* No non-zero PT_LOAD segment found */
+		return (0);
+	}
 
-	return (len);
+	return (roundup(hiaddr - (loaddr & PAGEMASK), PAGESIZE));
 }
 
 /*
@@ -947,8 +1110,8 @@ elfsize(Ehdr *ehdrp, int nphdrs, caddr_t phdrbase, uintptr_t *lddata)
  *	EINVAL	Format recognized but execution not supported
  */
 static int
-getelfhead(vnode_t *vp, cred_t *credp, Ehdr *ehdr, int *nshdrs, int *shstrndx,
-    int *nphdrs)
+getelfhead(vnode_t *vp, cred_t *credp, Ehdr *ehdr, uint_t *nshdrs,
+    uint_t *shstrndx, uint_t *nphdrs)
 {
 	int error;
 	ssize_t resid;
@@ -988,7 +1151,7 @@ getelfhead(vnode_t *vp, cred_t *credp, Ehdr *ehdr, int *nshdrs, int *shstrndx,
 
 	/*
 	 * If e_shnum, e_shstrndx, or e_phnum is its sentinel value, we need
-	 * to read in the section header at index zero to acces the true
+	 * to read in the section header at index zero to access the true
 	 * values for those fields.
 	 */
 	if ((*nshdrs == 0 && ehdr->e_shoff != 0) ||
@@ -1000,8 +1163,9 @@ getelfhead(vnode_t *vp, cred_t *credp, Ehdr *ehdr, int *nshdrs, int *shstrndx,
 
 		if ((error = vn_rdwr(UIO_READ, vp, (caddr_t)&shdr,
 		    sizeof (shdr), (offset_t)ehdr->e_shoff, UIO_SYSSPACE, 0,
-		    (rlim64_t)0, credp, &resid)) != 0)
+		    (rlim64_t)0, credp, NULL)) != 0) {
 			return (error);
+		}
 
 		if (*nshdrs == 0)
 			*nshdrs = shdr.sh_size;
@@ -1014,33 +1178,29 @@ getelfhead(vnode_t *vp, cred_t *credp, Ehdr *ehdr, int *nshdrs, int *shstrndx,
 	return (0);
 }
 
-#ifdef _ELF32_COMPAT
-extern size_t elf_nphdr_max;
+/*
+ * We use members through p_flags on 32-bit files and p_memsz on 64-bit files,
+ * so e_phentsize must be at least large enough to include those members.
+ */
+#if !defined(_LP64) || defined(_ELF32_COMPAT)
+#define	MINPHENTSZ	(offsetof(Phdr, p_flags) + \
+			sizeof (((Phdr *)NULL)->p_flags))
 #else
-size_t elf_nphdr_max = 1000;
+#define	MINPHENTSZ	(offsetof(Phdr, p_memsz) + \
+			sizeof (((Phdr *)NULL)->p_memsz))
 #endif
 
 static int
-getelfphdr(vnode_t *vp, cred_t *credp, const Ehdr *ehdr, int nphdrs,
-    caddr_t *phbasep, ssize_t *phsizep)
+getelfphdr(vnode_t *vp, cred_t *credp, const Ehdr *ehdr, uint_t nphdrs,
+    caddr_t *phbasep, size_t *phsizep)
 {
-	ssize_t resid, minsize;
 	int err;
 
 	/*
-	 * Since we're going to be using e_phentsize to iterate down the
-	 * array of program headers, it must be 8-byte aligned or else
-	 * a we might cause a misaligned access. We use all members through
-	 * p_flags on 32-bit ELF files and p_memsz on 64-bit ELF files so
-	 * e_phentsize must be at least large enough to include those
-	 * members.
+	 * Ensure that e_phentsize is large enough for required fields to be
+	 * accessible and will maintain 8-byte alignment.
 	 */
-#if !defined(_LP64) || defined(_ELF32_COMPAT)
-	minsize = offsetof(Phdr, p_flags) + sizeof (((Phdr *)NULL)->p_flags);
-#else
-	minsize = offsetof(Phdr, p_memsz) + sizeof (((Phdr *)NULL)->p_memsz);
-#endif
-	if (ehdr->e_phentsize < minsize || (ehdr->e_phentsize & 3))
+	if (ehdr->e_phentsize < MINPHENTSZ || (ehdr->e_phentsize & 3))
 		return (EINVAL);
 
 	*phsizep = nphdrs * ehdr->e_phentsize;
@@ -1052,9 +1212,9 @@ getelfphdr(vnode_t *vp, cred_t *credp, const Ehdr *ehdr, int nphdrs,
 		*phbasep = kmem_alloc(*phsizep, KM_SLEEP);
 	}
 
-	if ((err = vn_rdwr(UIO_READ, vp, *phbasep, *phsizep,
+	if ((err = vn_rdwr(UIO_READ, vp, *phbasep, (ssize_t)*phsizep,
 	    (offset_t)ehdr->e_phoff, UIO_SYSSPACE, 0, (rlim64_t)0,
-	    credp, &resid)) != 0) {
+	    credp, NULL)) != 0) {
 		kmem_free(*phbasep, *phsizep);
 		*phbasep = NULL;
 		return (err);
@@ -1063,21 +1223,14 @@ getelfphdr(vnode_t *vp, cred_t *credp, const Ehdr *ehdr, int nphdrs,
 	return (0);
 }
 
-#ifdef _ELF32_COMPAT
-extern size_t elf_nshdr_max;
-extern size_t elf_shstrtab_max;
-#else
-size_t elf_nshdr_max = 10000;
-size_t elf_shstrtab_max = 100 * 1024;
-#endif
-
+#define	MINSHDRSZ	(offsetof(Shdr, sh_entsize) + \
+			sizeof (((Shdr *)NULL)->sh_entsize))
 
 static int
-getelfshdr(vnode_t *vp, cred_t *credp, const Ehdr *ehdr,
-    int nshdrs, int shstrndx, caddr_t *shbasep, ssize_t *shsizep,
-    char **shstrbasep, ssize_t *shstrsizep)
+getelfshdr(vnode_t *vp, cred_t *credp, const Ehdr *ehdr, uint_t nshdrs,
+    uint_t shstrndx, caddr_t *shbasep, size_t *shsizep, char **shstrbasep,
+    size_t *shstrsizep)
 {
-	ssize_t resid, minsize;
 	int err;
 	Shdr *shdr;
 
@@ -1089,10 +1242,10 @@ getelfshdr(vnode_t *vp, cred_t *credp, const Ehdr *ehdr,
 	 * must be at least large enough to include that member. The index
 	 * of the string table section must also be valid.
 	 */
-	minsize = offsetof(Shdr, sh_entsize) + sizeof (shdr->sh_entsize);
-	if (ehdr->e_shentsize < minsize || (ehdr->e_shentsize & 3) ||
-	    shstrndx >= nshdrs)
+	if (ehdr->e_shentsize < MINSHDRSZ || (ehdr->e_shentsize & 3) ||
+	    nshdrs == 0 || shstrndx >= nshdrs) {
 		return (EINVAL);
+	}
 
 	*shsizep = nshdrs * ehdr->e_shentsize;
 
@@ -1103,16 +1256,16 @@ getelfshdr(vnode_t *vp, cred_t *credp, const Ehdr *ehdr,
 		*shbasep = kmem_alloc(*shsizep, KM_SLEEP);
 	}
 
-	if ((err = vn_rdwr(UIO_READ, vp, *shbasep, *shsizep,
+	if ((err = vn_rdwr(UIO_READ, vp, *shbasep, (ssize_t)*shsizep,
 	    (offset_t)ehdr->e_shoff, UIO_SYSSPACE, 0, (rlim64_t)0,
-	    credp, &resid)) != 0) {
+	    credp, NULL)) != 0) {
 		kmem_free(*shbasep, *shsizep);
 		return (err);
 	}
 
 	/*
-	 * Pull the section string table out of the vnode; fail if the size
-	 * is zero.
+	 * Grab the section string table.  Walking through the shdrs is
+	 * pointless if their names cannot be interrogated.
 	 */
 	shdr = (Shdr *)(*shbasep + shstrndx * ehdr->e_shentsize);
 	if ((*shstrsizep = shdr->sh_size) == 0) {
@@ -1130,9 +1283,9 @@ getelfshdr(vnode_t *vp, cred_t *credp, const Ehdr *ehdr,
 		*shstrbasep = kmem_alloc(*shstrsizep, KM_SLEEP);
 	}
 
-	if ((err = vn_rdwr(UIO_READ, vp, *shstrbasep, *shstrsizep,
+	if ((err = vn_rdwr(UIO_READ, vp, *shstrbasep, (ssize_t)*shstrsizep,
 	    (offset_t)shdr->sh_offset, UIO_SYSSPACE, 0, (rlim64_t)0,
-	    credp, &resid)) != 0) {
+	    credp, NULL)) != 0) {
 		kmem_free(*shbasep, *shsizep);
 		kmem_free(*shstrbasep, *shstrsizep);
 		return (err);
@@ -1147,42 +1300,62 @@ getelfshdr(vnode_t *vp, cred_t *credp, const Ehdr *ehdr,
 	return (0);
 }
 
+int
+elfreadhdr(vnode_t *vp, cred_t *credp, Ehdr *ehdrp, uint_t *nphdrs,
+    caddr_t *phbasep, size_t *phsizep)
+{
+	int error;
+	uint_t nshdrs, shstrndx;
+
+	if ((error = getelfhead(vp, credp, ehdrp, &nshdrs, &shstrndx,
+	    nphdrs)) != 0 ||
+	    (error = getelfphdr(vp, credp, ehdrp, *nphdrs, phbasep,
+	    phsizep)) != 0) {
+		return (error);
+	}
+	return (0);
+}
+
 static int
 mapelfexec(
 	vnode_t *vp,
 	Ehdr *ehdr,
-	int nphdrs,
+	uint_t nphdrs,
 	caddr_t phdrbase,
 	Phdr **uphdr,
-	Phdr **dyphdr,
+	Phdr **intphdr,
 	Phdr **stphdr,
 	Phdr **dtphdr,
 	Phdr *dataphdrp,
 	caddr_t *bssbase,
 	caddr_t *brkbase,
 	intptr_t *voffset,
-	intptr_t *minaddr,
+	uintptr_t *minaddrp,
 	size_t len,
-	long *execsz,
+	size_t *execsz,
 	size_t *brksize)
 {
 	Phdr *phdr;
-	int i, prot, error;
+	int error, page, prot;
 	caddr_t addr = NULL;
-	size_t zfodsz;
-	int ptload = 0;
-	int page;
+	caddr_t minaddr = (caddr_t)UINTPTR_MAX;
+	uint_t i;
+	size_t zfodsz, memsz;
+	boolean_t ptload = B_FALSE;
 	off_t offset;
-	int hsize = ehdr->e_phentsize;
-	caddr_t mintmp = (caddr_t)-1;
+	const uint_t hsize = ehdr->e_phentsize;
 	extern int use_brk_lpg;
 
 	if (ehdr->e_type == ET_DYN) {
+		secflagset_t flags = 0;
 		/*
 		 * Obtain the virtual address of a hole in the
 		 * address space to map the "interpreter".
 		 */
-		map_addr(&addr, len, (offset_t)0, 1, 0);
+		if (secflag_enabled(curproc, PROC_SEC_ASLR))
+			flags |= _MAP_RANDOMIZE;
+
+		map_addr(&addr, len, (offset_t)0, 1, flags);
 		if (addr == NULL)
 			return (ENOMEM);
 		*voffset = (intptr_t)addr;
@@ -1205,14 +1378,12 @@ mapelfexec(
 	} else {
 		*voffset = 0;
 	}
+
 	phdr = (Phdr *)phdrbase;
 	for (i = nphdrs; i > 0; i--) {
 		switch (phdr->p_type) {
 		case PT_LOAD:
-			if ((*dyphdr != NULL) && (*uphdr == NULL))
-				return (0);
-
-			ptload = 1;
+			ptload = B_TRUE;
 			prot = PROT_USER;
 			if (phdr->p_flags & PF_R)
 				prot |= PROT_READ;
@@ -1223,12 +1394,49 @@ mapelfexec(
 
 			addr = (caddr_t)((uintptr_t)phdr->p_vaddr + *voffset);
 
+			if (*intphdr != NULL && uphdr != NULL &&
+			    *uphdr == NULL) {
+				/*
+				 * The PT_PHDR program header is, strictly
+				 * speaking, optional.  If we find that this
+				 * is missing, we will determine the location
+				 * of the program headers based on the address
+				 * of the lowest PT_LOAD segment (namely, this
+				 * one):  we subtract the p_offset to get to
+				 * the ELF header and then add back the program
+				 * header offset to get to the program headers.
+				 * We then cons up a Phdr that corresponds to
+				 * the (missing) PT_PHDR, setting the flags
+				 * to 0 to denote that this is artificial and
+				 * should (must) be freed by the caller.
+				 */
+				Phdr *cons;
+
+				cons = kmem_zalloc(sizeof (Phdr), KM_SLEEP);
+
+				cons->p_flags = 0;
+				cons->p_type = PT_PHDR;
+				cons->p_vaddr = ((uintptr_t)addr -
+				    phdr->p_offset) + ehdr->e_phoff;
+
+				*uphdr = cons;
+			}
+
+			/*
+			 * The ELF spec dictates that p_filesz may not be
+			 * larger than p_memsz in PT_LOAD segments.
+			 */
+			if (phdr->p_filesz > phdr->p_memsz) {
+				error = EINVAL;
+				goto bad;
+			}
+
 			/*
 			 * Keep track of the segment with the lowest starting
 			 * address.
 			 */
-			if (addr < mintmp)
-				mintmp = addr;
+			if (addr < minaddr)
+				minaddr = addr;
 
 			zfodsz = (size_t)phdr->p_memsz - phdr->p_filesz;
 
@@ -1248,14 +1456,22 @@ mapelfexec(
 			if (brksize != NULL && use_brk_lpg &&
 			    zfodsz != 0 && phdr == dataphdrp &&
 			    (prot & PROT_WRITE)) {
-				size_t tlen = P2NPHASE((uintptr_t)addr +
+				const size_t tlen = P2NPHASE((uintptr_t)addr +
 				    phdr->p_filesz, PAGESIZE);
 
 				if (zfodsz > tlen) {
+					const caddr_t taddr = addr +
+					    phdr->p_filesz + tlen;
+
+					/*
+					 * Since a hole in the AS large enough
+					 * for this object as calculated by
+					 * elfsize() is available, we do not
+					 * need to fear overflow for 'taddr'.
+					 */
 					curproc->p_brkpageszc =
 					    page_szc(map_pgsz(MAPPGSZ_HEAP,
-					    curproc, addr + phdr->p_filesz +
-					    tlen, zfodsz - tlen, 0));
+					    curproc, taddr, zfodsz - tlen, 0));
 				}
 			}
 
@@ -1264,6 +1480,13 @@ mapelfexec(
 				uint_t	szc = curproc->p_brkpageszc;
 				size_t pgsz = page_get_pagesize(szc);
 				caddr_t ebss = addr + phdr->p_memsz;
+				/*
+				 * If we need extra space to keep the BSS an
+				 * integral number of pages in size, some of
+				 * that space may fall beyond p_brkbase, so we
+				 * need to set p_brksize to account for it
+				 * being (logically) part of the brk.
+				 */
 				size_t extra_zfodsz;
 
 				ASSERT(pgsz > PAGESIZE);
@@ -1290,13 +1513,18 @@ mapelfexec(
 				*brkbase = addr + phdr->p_memsz;
 			}
 
-			*execsz += btopr(phdr->p_memsz);
+			memsz = btopr(phdr->p_memsz);
+			if ((*execsz + memsz) < *execsz) {
+				error = ENOMEM;
+				goto bad;
+			}
+			*execsz += memsz;
 			break;
 
 		case PT_INTERP:
 			if (ptload)
 				goto bad;
-			*dyphdr = phdr;
+			*intphdr = phdr;
 			break;
 
 		case PT_SHLIB:
@@ -1304,9 +1532,12 @@ mapelfexec(
 			break;
 
 		case PT_PHDR:
-			if (ptload)
+			if (ptload || phdr->p_flags == 0)
 				goto bad;
-			*uphdr = phdr;
+
+			if (uphdr != NULL)
+				*uphdr = phdr;
+
 			break;
 
 		case PT_NULL:
@@ -1325,9 +1556,34 @@ mapelfexec(
 		phdr = (Phdr *)((caddr_t)phdr + hsize);
 	}
 
-	if (minaddr != NULL) {
-		ASSERT(mintmp != (caddr_t)-1);
-		*minaddr = (intptr_t)mintmp;
+	if (minaddrp != NULL) {
+		ASSERT(minaddr != (caddr_t)UINTPTR_MAX);
+		*minaddrp = (uintptr_t)minaddr;
+	}
+
+	if (brkbase != NULL && secflag_enabled(curproc, PROC_SEC_ASLR)) {
+		size_t off;
+		uintptr_t base = (uintptr_t)*brkbase;
+		uintptr_t oend = base + *brksize;
+
+		ASSERT(ISP2(aslr_max_brk_skew));
+
+		(void) random_get_pseudo_bytes((uint8_t *)&off, sizeof (off));
+		base += P2PHASE(off, aslr_max_brk_skew);
+		base = P2ROUNDUP(base, PAGESIZE);
+		*brkbase = (caddr_t)base;
+		/*
+		 * Above, we set *brksize to account for the possibility we
+		 * had to grow the 'brk' in padding out the BSS to a page
+		 * boundary.
+		 *
+		 * We now need to adjust that based on where we now are
+		 * actually putting the brk.
+		 */
+		if (oend > base)
+			*brksize = oend - base;
+		else
+			*brksize = 0;
 	}
 
 	return (0);
@@ -1378,20 +1634,34 @@ elfnote(vnode_t *vp, offset_t *offsetp, int type, int descsz, void *desc,
  * Copy the section data from one vnode to the section of another vnode.
  */
 static void
-copy_scn(Shdr *src, vnode_t *src_vp, Shdr *dst, vnode_t *dst_vp, Off *doffset,
-    void *buf, size_t size, cred_t *credp, rlim64_t rlimit)
+elf_copy_scn(elf_core_ctx_t *ctx, const Shdr *src, vnode_t *src_vp, Shdr *dst)
 {
-	ssize_t resid;
-	size_t len, n = src->sh_size;
-	offset_t off = 0;
+	size_t n = src->sh_size;
+	u_offset_t off = 0;
+	const u_offset_t soff = src->sh_offset;
+	const u_offset_t doff = ctx->ecc_doffset;
+	void *buf = ctx->ecc_buf;
+	vnode_t *dst_vp = ctx->ecc_vp;
+	cred_t *credp = ctx->ecc_credp;
+
+	/* Protect the copy loop below from overflow on the offsets */
+	if (n > OFF_MAX || (n + soff) > OFF_MAX || (n + doff) > OFF_MAX ||
+	    (n + soff) < n || (n + doff) < n) {
+		dst->sh_size = 0;
+		dst->sh_offset = 0;
+		return;
+	}
 
 	while (n != 0) {
-		len = MIN(size, n);
-		if (vn_rdwr(UIO_READ, src_vp, buf, len, src->sh_offset + off,
+		const size_t len = MIN(ctx->ecc_bufsz, n);
+		ssize_t resid;
+
+		if (vn_rdwr(UIO_READ, src_vp, buf, (ssize_t)len,
+		    (offset_t)(soff + off),
 		    UIO_SYSSPACE, 0, (rlim64_t)0, credp, &resid) != 0 ||
-		    resid >= len ||
-		    core_write(dst_vp, UIO_SYSSPACE, *doffset + off,
-		    buf, len - resid, rlimit, credp) != 0) {
+		    resid >= len || resid < 0 ||
+		    core_write(dst_vp, UIO_SYSSPACE, (offset_t)(doff + off),
+		    buf, len - resid, ctx->ecc_rlimit, credp) != 0) {
 			dst->sh_size = 0;
 			dst->sh_offset = 0;
 			return;
@@ -1403,62 +1673,314 @@ copy_scn(Shdr *src, vnode_t *src_vp, Shdr *dst, vnode_t *dst_vp, Off *doffset,
 		off += len - resid;
 	}
 
-	*doffset += src->sh_size;
+	ctx->ecc_doffset += src->sh_size;
 }
 
-#ifdef _ELF32_COMPAT
-extern size_t elf_datasz_max;
-#else
-size_t elf_datasz_max = 1 * 1024 * 1024;
-#endif
-
 /*
- * This function processes mappings that correspond to load objects to
- * examine their respective sections for elfcore(). It's called once with
- * v set to NULL to count the number of sections that we're going to need
- * and then again with v set to some allocated buffer that we fill in with
- * all the section data.
+ * Walk sections for a given ELF object, counting (or copying) those of
+ * interest (CTF, symtab, strtab, .debug_*).
  */
 static int
-process_scns(core_content_t content, proc_t *p, cred_t *credp, vnode_t *vp,
-    Shdr *v, int nv, rlim64_t rlimit, Off *doffsetp, int *nshdrsp)
+elf_process_obj_scns(elf_core_ctx_t *ctx, vnode_t *mvp, caddr_t saddr,
+    Shdr *v, uint_t idx, const uint_t remain, shstrtab_t *shstrtab,
+    uint_t *countp)
+{
+	Ehdr ehdr;
+	const core_content_t content = ctx->ecc_content;
+	cred_t *credp = ctx->ecc_credp;
+	Shdr *ctf = NULL, *symtab = NULL, *strtab = NULL;
+	uintptr_t off = 0;
+	uint_t nshdrs, shstrndx, nphdrs, count, extra;
+	u_offset_t *doffp = &ctx->ecc_doffset;
+	boolean_t ctf_link = B_FALSE;
+	caddr_t shbase;
+	size_t shsize, shstrsize;
+	char *shstrbase;
+	int error = 0;
+	const boolean_t justcounting = (v == NULL);
+
+	/*
+	 * remain must be less than UINT_MAX so we can check for count
+	 * exceeding it.
+	 */
+	ASSERT3U(remain, <, UINT_MAX);
+
+	*countp = count = 0;
+
+	if ((content &
+	    (CC_CONTENT_CTF | CC_CONTENT_SYMTAB | CC_CONTENT_DEBUG)) == 0) {
+		return (0);
+	}
+
+	if (getelfhead(mvp, credp, &ehdr, &nshdrs, &shstrndx, &nphdrs) != 0 ||
+	    getelfshdr(mvp, credp, &ehdr, nshdrs, shstrndx, &shbase, &shsize,
+	    &shstrbase, &shstrsize) != 0) {
+		return (0);
+	}
+
+	/* Starting at index 1 skips SHT_NULL which is expected at index 0 */
+	off = ehdr.e_shentsize;
+	for (uint_t i = 1; i < nshdrs; i++, off += ehdr.e_shentsize) {
+		Shdr *shdr, *symchk = NULL, *strchk;
+		const char *name;
+
+		shdr = (Shdr *)(shbase + off);
+		if (shdr->sh_name >= shstrsize || shdr->sh_type == SHT_NULL)
+			continue;
+
+		name = shstrbase + shdr->sh_name;
+
+		if (ctf == NULL && (content & CC_CONTENT_CTF) != 0 &&
+		    strcmp(name, shstrtab_data[STR_CTF]) == 0) {
+			ctf = shdr;
+			if (ctf->sh_link != 0 && ctf->sh_link < nshdrs) {
+				/* check linked symtab below */
+				symchk = (Shdr *)(shbase +
+				    shdr->sh_link * ehdr.e_shentsize);
+				ctf_link = B_TRUE;
+			} else {
+				continue;
+			}
+		} else if (symtab == NULL &&
+		    (content & CC_CONTENT_SYMTAB) != 0 &&
+		    strcmp(name, shstrtab_data[STR_SYMTAB]) == 0) {
+			symchk = shdr;
+		} else if ((content & CC_CONTENT_DEBUG) != 0 &&
+		    strncmp(name, ".debug_", strlen(".debug_")) == 0) {
+			/*
+			 * The design of the above check is intentional. In
+			 * particular, we want to capture any sections that
+			 * begin with '.debug_' for a few reasons:
+			 *
+			 * 1) Various revisions to the DWARF spec end up
+			 * changing the set of section headers that exist. This
+			 * ensures that we don't need to change the kernel to
+			 * get a new version.
+			 *
+			 * 2) Other software uses .debug_ sections for things
+			 * which aren't DWARF. This allows them to be captured
+			 * as well.
+			 */
+			count++;
+
+			if (count > remain) {
+				error = ENOMEM;
+				goto done;
+			}
+
+			if (justcounting)
+				continue;
+
+			elf_ctx_resize_scratch(ctx, shdr->sh_size);
+
+			if (!shstrtab_ndx(shstrtab, name, &v[idx].sh_name)) {
+				error = ENOMEM;
+				goto done;
+			}
+
+			v[idx].sh_addr = (Addr)(uintptr_t)saddr;
+			v[idx].sh_type = shdr->sh_type;
+			v[idx].sh_addralign = shdr->sh_addralign;
+			*doffp = roundup(*doffp, v[idx].sh_addralign);
+			v[idx].sh_offset = *doffp;
+			v[idx].sh_size = shdr->sh_size;
+			v[idx].sh_link = 0;
+			v[idx].sh_entsize = shdr->sh_entsize;
+			v[idx].sh_info = shdr->sh_info;
+
+			elf_copy_scn(ctx, shdr, mvp, &v[idx]);
+			idx++;
+
+			continue;
+		} else {
+			continue;
+		}
+
+		ASSERT(symchk != NULL);
+		if ((symchk->sh_type != SHT_DYNSYM &&
+		    symchk->sh_type != SHT_SYMTAB) ||
+		    symchk->sh_link == 0 || symchk->sh_link >= nshdrs) {
+			ctf_link = B_FALSE;
+			continue;
+		}
+		strchk = (Shdr *)(shbase + symchk->sh_link * ehdr.e_shentsize);
+		if (strchk->sh_type != SHT_STRTAB) {
+			ctf_link = B_FALSE;
+			continue;
+		}
+		symtab = symchk;
+		strtab = strchk;
+
+		if (symtab != NULL && ctf != NULL &&
+		    (content & CC_CONTENT_DEBUG) == 0) {
+			/* No other shdrs are of interest at this point */
+			break;
+		}
+	}
+
+	extra = 0;
+	if (ctf != NULL)
+		extra += 1;
+	if (symtab != NULL)
+		extra += 2;
+
+	if (remain < extra || count > remain - extra) {
+		error = ENOMEM;
+		goto done;
+	}
+
+	count += extra;
+
+	if (justcounting)
+		goto done;
+
+	/* output CTF section */
+	if (ctf != NULL) {
+		elf_ctx_resize_scratch(ctx, ctf->sh_size);
+
+		if (!shstrtab_ndx(shstrtab,
+		    shstrtab_data[STR_CTF], &v[idx].sh_name)) {
+			error = ENOMEM;
+			goto done;
+		}
+		v[idx].sh_addr = (Addr)(uintptr_t)saddr;
+		v[idx].sh_type = SHT_PROGBITS;
+		v[idx].sh_addralign = 4;
+		*doffp = roundup(*doffp, v[idx].sh_addralign);
+		v[idx].sh_offset = *doffp;
+		v[idx].sh_size = ctf->sh_size;
+
+		if (ctf_link) {
+			/*
+			 * The linked symtab (and strtab) will be output
+			 * immediately after this CTF section.  Its shdr index
+			 * directly follows this one.
+			 */
+			v[idx].sh_link = idx + 1;
+			ASSERT(symtab != NULL);
+		} else {
+			v[idx].sh_link = 0;
+		}
+		elf_copy_scn(ctx, ctf, mvp, &v[idx]);
+		idx++;
+	}
+
+	/* output SYMTAB/STRTAB sections */
+	if (symtab != NULL) {
+		shstrtype_t symtab_type, strtab_type;
+		uint_t symtab_name, strtab_name;
+
+		elf_ctx_resize_scratch(ctx,
+		    MAX(symtab->sh_size, strtab->sh_size));
+
+		if (symtab->sh_type == SHT_DYNSYM) {
+			symtab_type = STR_DYNSYM;
+			strtab_type = STR_DYNSTR;
+		} else {
+			symtab_type = STR_SYMTAB;
+			strtab_type = STR_STRTAB;
+		}
+
+		if (!shstrtab_ndx(shstrtab,
+		    shstrtab_data[symtab_type], &symtab_name)) {
+			error = ENOMEM;
+			goto done;
+		}
+		if (!shstrtab_ndx(shstrtab,
+		    shstrtab_data[strtab_type], &strtab_name)) {
+			error = ENOMEM;
+			goto done;
+		}
+
+		v[idx].sh_name = symtab_name;
+		v[idx].sh_type = symtab->sh_type;
+		v[idx].sh_addr = symtab->sh_addr;
+		if (ehdr.e_type == ET_DYN || v[idx].sh_addr == 0)
+			v[idx].sh_addr += (Addr)(uintptr_t)saddr;
+		v[idx].sh_addralign = symtab->sh_addralign;
+		*doffp = roundup(*doffp, v[idx].sh_addralign);
+		v[idx].sh_offset = *doffp;
+		v[idx].sh_size = symtab->sh_size;
+		v[idx].sh_link = idx + 1;
+		v[idx].sh_entsize = symtab->sh_entsize;
+		v[idx].sh_info = symtab->sh_info;
+
+		elf_copy_scn(ctx, symtab, mvp, &v[idx]);
+		idx++;
+
+		v[idx].sh_name = strtab_name;
+		v[idx].sh_type = SHT_STRTAB;
+		v[idx].sh_flags = SHF_STRINGS;
+		v[idx].sh_addr = strtab->sh_addr;
+		if (ehdr.e_type == ET_DYN || v[idx].sh_addr == 0)
+			v[idx].sh_addr += (Addr)(uintptr_t)saddr;
+		v[idx].sh_addralign = strtab->sh_addralign;
+		*doffp = roundup(*doffp, v[idx].sh_addralign);
+		v[idx].sh_offset = *doffp;
+		v[idx].sh_size = strtab->sh_size;
+
+		elf_copy_scn(ctx, strtab, mvp, &v[idx]);
+		idx++;
+	}
+
+done:
+	kmem_free(shstrbase, shstrsize);
+	kmem_free(shbase, shsize);
+
+	if (error == 0)
+		*countp = count;
+
+	return (error);
+}
+
+/*
+ * Walk mappings in process address space, examining those which correspond to
+ * loaded objects.  It is called twice from elfcore: Once to simply count
+ * relevant sections, and again later to copy those sections once an adequate
+ * buffer has been allocated for the shdr details.
+ */
+static int
+elf_process_scns(elf_core_ctx_t *ctx, Shdr *v, const uint_t nv, uint_t *nshdrsp)
 {
 	vnode_t *lastvp = NULL;
 	struct seg *seg;
-	int i, j;
-	void *data = NULL;
-	size_t datasz = 0;
+	uint_t remain, idx;
 	shstrtab_t shstrtab;
-	struct as *as = p->p_as;
+	struct as *as = ctx->ecc_p->p_as;
 	int error = 0;
+	const boolean_t justcounting = (v == NULL);
 
-	if (v != NULL)
-		shstrtab_init(&shstrtab);
+	ASSERT(AS_WRITE_HELD(as));
 
-	i = 1;
+	if (justcounting) {
+		ASSERT(nv == 0);
+		/*
+		 * In the counting case, set remain to UINT_MAX so that we
+		 * allow up to that many sections. Note that remain is
+		 * decremented immediately below to account for the SHT_NULL
+		 * section at index zero and so we do not end up passing
+		 * UINT_MAX as the 'remain' value to elf_process_obj_scns().
+		 * Once we've finished counting, we further check that there
+		 * is at least one array slot available for shstrtab.
+		 */
+		remain = UINT_MAX;
+	} else {
+		ASSERT(nv != 0);
+		remain = nv;
+
+		if (!shstrtab_init(&shstrtab))
+			return (ENOMEM);
+	}
+
+	/* Per the ELF spec, shdr index 0 is reserved. */
+	idx = 1;
+	remain--;
 	for (seg = AS_SEGFIRST(as); seg != NULL; seg = AS_SEGNEXT(as, seg)) {
-		uint_t prot;
 		vnode_t *mvp;
 		void *tmp = NULL;
-		caddr_t saddr = seg->s_base;
-		caddr_t naddr;
-		caddr_t eaddr;
+		caddr_t saddr = seg->s_base, naddr, eaddr;
 		size_t segsize;
-
-		Ehdr ehdr;
-		int nshdrs, shstrndx, nphdrs;
-		caddr_t shbase;
-		ssize_t shsize;
-		char *shstrbase;
-		ssize_t shstrsize;
-
-		Shdr *shdr;
-		const char *name;
-		size_t sz;
-		uintptr_t off;
-
-		int ctf_ndx = 0;
-		int symtab_ndx = 0;
+		uint_t count, prot;
 
 		/*
 		 * Since we're just looking for text segments of load
@@ -1470,8 +1992,9 @@ process_scns(core_content_t content, proc_t *p, cred_t *credp, vnode_t *vp,
 		if (seg->s_ops != &segvn_ops ||
 		    SEGOP_GETVP(seg, seg->s_base, &mvp) != 0 ||
 		    mvp == lastvp || mvp == NULL || mvp->v_type != VREG ||
-		    (segsize = pr_getsegsize(seg, 1)) == 0)
+		    (segsize = pr_getsegsize(seg, 1)) == 0) {
 			continue;
+		}
 
 		eaddr = saddr + segsize;
 		prot = pr_getprot(seg, 1, &tmp, &saddr, &naddr, eaddr);
@@ -1484,250 +2007,102 @@ process_scns(core_content_t content, proc_t *p, cred_t *credp, vnode_t *vp,
 		if ((prot & (PROT_WRITE | PROT_EXEC)) != PROT_EXEC)
 			continue;
 
-		if (getelfhead(mvp, credp, &ehdr, &nshdrs, &shstrndx,
-		    &nphdrs) != 0 ||
-		    getelfshdr(mvp, credp, &ehdr, nshdrs, shstrndx,
-		    &shbase, &shsize, &shstrbase, &shstrsize) != 0)
-			continue;
+		error = elf_process_obj_scns(ctx, mvp, saddr, v, idx, remain,
+		    &shstrtab, &count);
+		if (error != 0)
+			goto done;
 
-		off = ehdr.e_shentsize;
-		for (j = 1; j < nshdrs; j++, off += ehdr.e_shentsize) {
-			Shdr *symtab = NULL, *strtab;
-
-			shdr = (Shdr *)(shbase + off);
-
-			if (shdr->sh_name >= shstrsize)
-				continue;
-
-			name = shstrbase + shdr->sh_name;
-
-			if (strcmp(name, shstrtab_data[STR_CTF]) == 0) {
-				if ((content & CC_CONTENT_CTF) == 0 ||
-				    ctf_ndx != 0)
-					continue;
-
-				if (shdr->sh_link > 0 &&
-				    shdr->sh_link < nshdrs) {
-					symtab = (Shdr *)(shbase +
-					    shdr->sh_link * ehdr.e_shentsize);
-				}
-
-				if (v != NULL && i < nv - 1) {
-					if (shdr->sh_size > datasz &&
-					    shdr->sh_size <= elf_datasz_max) {
-						if (data != NULL)
-							kmem_free(data, datasz);
-
-						datasz = shdr->sh_size;
-						data = kmem_alloc(datasz,
-						    KM_SLEEP);
-					}
-
-					v[i].sh_name = shstrtab_ndx(&shstrtab,
-					    STR_CTF);
-					v[i].sh_addr = (Addr)(uintptr_t)saddr;
-					v[i].sh_type = SHT_PROGBITS;
-					v[i].sh_addralign = 4;
-					*doffsetp = roundup(*doffsetp,
-					    v[i].sh_addralign);
-					v[i].sh_offset = *doffsetp;
-					v[i].sh_size = shdr->sh_size;
-					if (symtab == NULL)  {
-						v[i].sh_link = 0;
-					} else if (symtab->sh_type ==
-					    SHT_SYMTAB &&
-					    symtab_ndx != 0) {
-						v[i].sh_link =
-						    symtab_ndx;
-					} else {
-						v[i].sh_link = i + 1;
-					}
-
-					copy_scn(shdr, mvp, &v[i], vp,
-					    doffsetp, data, datasz, credp,
-					    rlimit);
-				}
-
-				ctf_ndx = i++;
-
-				/*
-				 * We've already dumped the symtab.
-				 */
-				if (symtab != NULL &&
-				    symtab->sh_type == SHT_SYMTAB &&
-				    symtab_ndx != 0)
-					continue;
-
-			} else if (strcmp(name,
-			    shstrtab_data[STR_SYMTAB]) == 0) {
-				if ((content & CC_CONTENT_SYMTAB) == 0 ||
-				    symtab != 0)
-					continue;
-
-				symtab = shdr;
-			}
-
-			if (symtab != NULL) {
-				if ((symtab->sh_type != SHT_DYNSYM &&
-				    symtab->sh_type != SHT_SYMTAB) ||
-				    symtab->sh_link == 0 ||
-				    symtab->sh_link >= nshdrs)
-					continue;
-
-				strtab = (Shdr *)(shbase +
-				    symtab->sh_link * ehdr.e_shentsize);
-
-				if (strtab->sh_type != SHT_STRTAB)
-					continue;
-
-				if (v != NULL && i < nv - 2) {
-					sz = MAX(symtab->sh_size,
-					    strtab->sh_size);
-					if (sz > datasz &&
-					    sz <= elf_datasz_max) {
-						if (data != NULL)
-							kmem_free(data, datasz);
-
-						datasz = sz;
-						data = kmem_alloc(datasz,
-						    KM_SLEEP);
-					}
-
-					if (symtab->sh_type == SHT_DYNSYM) {
-						v[i].sh_name = shstrtab_ndx(
-						    &shstrtab, STR_DYNSYM);
-						v[i + 1].sh_name = shstrtab_ndx(
-						    &shstrtab, STR_DYNSTR);
-					} else {
-						v[i].sh_name = shstrtab_ndx(
-						    &shstrtab, STR_SYMTAB);
-						v[i + 1].sh_name = shstrtab_ndx(
-						    &shstrtab, STR_STRTAB);
-					}
-
-					v[i].sh_type = symtab->sh_type;
-					v[i].sh_addr = symtab->sh_addr;
-					if (ehdr.e_type == ET_DYN ||
-					    v[i].sh_addr == 0)
-						v[i].sh_addr +=
-						    (Addr)(uintptr_t)saddr;
-					v[i].sh_addralign =
-					    symtab->sh_addralign;
-					*doffsetp = roundup(*doffsetp,
-					    v[i].sh_addralign);
-					v[i].sh_offset = *doffsetp;
-					v[i].sh_size = symtab->sh_size;
-					v[i].sh_link = i + 1;
-					v[i].sh_entsize = symtab->sh_entsize;
-					v[i].sh_info = symtab->sh_info;
-
-					copy_scn(symtab, mvp, &v[i], vp,
-					    doffsetp, data, datasz, credp,
-					    rlimit);
-
-					v[i + 1].sh_type = SHT_STRTAB;
-					v[i + 1].sh_flags = SHF_STRINGS;
-					v[i + 1].sh_addr = symtab->sh_addr;
-					if (ehdr.e_type == ET_DYN ||
-					    v[i + 1].sh_addr == 0)
-						v[i + 1].sh_addr +=
-						    (Addr)(uintptr_t)saddr;
-					v[i + 1].sh_addralign =
-					    strtab->sh_addralign;
-					*doffsetp = roundup(*doffsetp,
-					    v[i + 1].sh_addralign);
-					v[i + 1].sh_offset = *doffsetp;
-					v[i + 1].sh_size = strtab->sh_size;
-
-					copy_scn(strtab, mvp, &v[i + 1], vp,
-					    doffsetp, data, datasz, credp,
-					    rlimit);
-				}
-
-				if (symtab->sh_type == SHT_SYMTAB)
-					symtab_ndx = i;
-				i += 2;
-			}
+		VERIFY3U(count, <=, remain);
+		if (!justcounting) {
+			VERIFY3U(idx + count, <=, nv);
 		}
 
-		kmem_free(shstrbase, shstrsize);
-		kmem_free(shbase, shsize);
-
+		remain -= count;
+		idx += count;
 		lastvp = mvp;
 	}
 
-	if (v == NULL) {
-		if (i == 1)
+	if (justcounting) {
+		if (idx == 1) {
+			/* No sections found */
 			*nshdrsp = 0;
-		else
-			*nshdrsp = i + 1;
-		goto done;
+		} else if (remain < 1) {
+			/* No space for the shrstrtab at the end */
+			*nshdrsp = 0;
+			return (ENOMEM);
+		} else {
+			/* Include room for the shrstrtab at the end */
+			*nshdrsp = idx + 1;
+		}
+		return (0);
 	}
 
-	if (i != nv - 1) {
+	if (remain != 1) {
 		cmn_err(CE_WARN, "elfcore: core dump failed for "
-		    "process %d; address space is changing", p->p_pid);
+		    "process %d; address space is changing",
+		    ctx->ecc_p->p_pid);
 		error = EIO;
 		goto done;
 	}
 
-	v[i].sh_name = shstrtab_ndx(&shstrtab, STR_SHSTRTAB);
-	v[i].sh_size = shstrtab_size(&shstrtab);
-	v[i].sh_addralign = 1;
-	*doffsetp = roundup(*doffsetp, v[i].sh_addralign);
-	v[i].sh_offset = *doffsetp;
-	v[i].sh_flags = SHF_STRINGS;
-	v[i].sh_type = SHT_STRTAB;
-
-	if (v[i].sh_size > datasz) {
-		if (data != NULL)
-			kmem_free(data, datasz);
-
-		datasz = v[i].sh_size;
-		data = kmem_alloc(datasz,
-		    KM_SLEEP);
-	}
-
-	shstrtab_dump(&shstrtab, data);
-
-	if ((error = core_write(vp, UIO_SYSSPACE, *doffsetp,
-	    data, v[i].sh_size, rlimit, credp)) != 0)
+	if (!shstrtab_ndx(&shstrtab, shstrtab_data[STR_SHSTRTAB],
+	    &v[idx].sh_name)) {
+		error = ENOMEM;
 		goto done;
+	}
+	v[idx].sh_size = shstrtab_size(&shstrtab);
+	v[idx].sh_addralign = 1;
+	v[idx].sh_offset = ctx->ecc_doffset;
+	v[idx].sh_flags = SHF_STRINGS;
+	v[idx].sh_type = SHT_STRTAB;
 
-	*doffsetp += v[i].sh_size;
+	elf_ctx_resize_scratch(ctx, v[idx].sh_size);
+	VERIFY3U(ctx->ecc_bufsz, >=, v[idx].sh_size);
+	shstrtab_dump(&shstrtab, ctx->ecc_buf);
+
+	error = core_write(ctx->ecc_vp, UIO_SYSSPACE, ctx->ecc_doffset,
+	    ctx->ecc_buf, v[idx].sh_size, ctx->ecc_rlimit, ctx->ecc_credp);
+	if (error == 0)
+		ctx->ecc_doffset += v[idx].sh_size;
 
 done:
-	if (data != NULL)
-		kmem_free(data, datasz);
+	if (!justcounting)
+		shstrtab_fini(&shstrtab);
 
 	return (error);
 }
+
+
+#define	NOTES_SECTIONS 1
 
 int
 elfcore(vnode_t *vp, proc_t *p, cred_t *credp, rlim64_t rlimit, int sig,
     core_content_t content)
 {
-	offset_t poffset, soffset;
-	Off doffset;
-	int error, i, nphdrs, nshdrs;
-	int overflow = 0;
+	u_offset_t poffset, soffset, doffset;
+	int error;
+	uint_t i, nphdrs, nshdrs;
 	struct seg *seg;
 	struct as *as = p->p_as;
-	union {
-		Ehdr ehdr;
-		Phdr phdr[1];
-		Shdr shdr[1];
-	} *bigwad;
-	size_t bigsize;
-	size_t phdrsz, shdrsz;
+	void *bigwad, *zeropg = NULL;
+	size_t bigsize, phdrsz, shdrsz;
 	Ehdr *ehdr;
-	Phdr *v;
-	caddr_t brkbase;
-	size_t brksize;
-	caddr_t stkbase;
-	size_t stksize;
-	int ntries = 0;
+	Phdr *phdr;
+	Shdr shdr0;
+	caddr_t brkbase, stkbase;
+	size_t brksize, stksize;
+	boolean_t overflowed = B_FALSE, retried = B_FALSE;
 	klwp_t *lwp = ttolwp(curthread);
+	elf_core_ctx_t ctx = {
+		.ecc_vp = vp,
+		.ecc_p = p,
+		.ecc_credp = credp,
+		.ecc_rlimit = rlimit,
+		.ecc_content = content,
+		.ecc_doffset = 0,
+		.ecc_buf = NULL,
+		.ecc_bufsz = 0
+	};
 
 top:
 	/*
@@ -1737,36 +2112,42 @@ top:
 	ASSERT(p == ttoproc(curthread));
 	prstop(0, 0);
 
-	AS_LOCK_ENTER(as, &as->a_lock, RW_WRITER);
-	nphdrs = prnsegs(as, 0) + 2;		/* two CORE note sections */
+	AS_LOCK_ENTER(as, RW_WRITER);
+
+	nphdrs = prnsegs(as, 0) + NOTES_SECTIONS;
 
 	/*
 	 * Count the number of section headers we're going to need.
 	 */
-	nshdrs = 0;
-	if (content & (CC_CONTENT_CTF | CC_CONTENT_SYMTAB)) {
-		(void) process_scns(content, p, credp, NULL, NULL, NULL, 0,
-		    NULL, &nshdrs);
-	}
-	AS_LOCK_EXIT(as, &as->a_lock);
+	nshdrs = error = 0;
+	if (content & (CC_CONTENT_CTF | CC_CONTENT_SYMTAB | CC_CONTENT_DEBUG))
+		error = elf_process_scns(&ctx, NULL, 0, &nshdrs);
+	AS_LOCK_EXIT(as);
 
-	ASSERT(nshdrs == 0 || nshdrs > 1);
+	if (error != 0)
+		return (error);
 
 	/*
-	 * The core file contents may required zero section headers, but if
+	 * The core file contents may require zero section headers, but if
 	 * we overflow the 16 bits allotted to the program header count in
 	 * the ELF header, we'll need that program header at index zero.
 	 */
 	if (nshdrs == 0 && nphdrs >= PN_XNUM)
 		nshdrs = 1;
 
+	/*
+	 * Allocate a buffer which is sized adequately to hold the ehdr, phdrs
+	 * or shdrs needed to produce the core file.  It is used for the three
+	 * tasks sequentially, not simultaneously, so it does not need space
+	 * for all three data at once, only the largest one.
+	 */
+	VERIFY3U(nphdrs, >=, NOTES_SECTIONS);
 	phdrsz = nphdrs * sizeof (Phdr);
 	shdrsz = nshdrs * sizeof (Shdr);
-
-	bigsize = MAX(sizeof (*bigwad), MAX(phdrsz, shdrsz));
+	bigsize = MAX(sizeof (Ehdr), MAX(phdrsz, shdrsz));
 	bigwad = kmem_alloc(bigsize, KM_SLEEP);
 
-	ehdr = &bigwad->ehdr;
+	ehdr = (Ehdr *)bigwad;
 	bzero(ehdr, sizeof (*ehdr));
 
 	ehdr->e_ident[EI_MAG0] = ELFMAG0;
@@ -1781,7 +2162,7 @@ top:
 #if defined(__sparc)
 	ehdr->e_ident[EI_DATA] = ELFDATA2MSB;
 	ehdr->e_machine = EM_SPARC;
-#elif defined(__i386) || defined(__i386_COMPAT)
+#elif defined(__i386_COMPAT)
 	ehdr->e_ident[EI_DATA] = ELFDATA2LSB;
 	ehdr->e_machine = EM_386;
 #else
@@ -1802,6 +2183,11 @@ top:
 
 #endif	/* !defined(_LP64) || defined(_ELF32_COMPAT) */
 
+	poffset = sizeof (Ehdr);
+	soffset = sizeof (Ehdr) + phdrsz;
+	doffset = sizeof (Ehdr) + phdrsz + shdrsz;
+	bzero(&shdr0, sizeof (shdr0));
+
 	/*
 	 * If the count of program headers or section headers or the index
 	 * of the section string table can't fit in the mere 16 bits
@@ -1809,50 +2195,49 @@ top:
 	 * extended formats and put the real values in the section header
 	 * as index 0.
 	 */
-	ehdr->e_version = EV_CURRENT;
-	ehdr->e_ehsize = sizeof (Ehdr);
-
-	if (nphdrs >= PN_XNUM)
+	if (nphdrs >= PN_XNUM) {
 		ehdr->e_phnum = PN_XNUM;
-	else
+		shdr0.sh_info = nphdrs;
+	} else {
 		ehdr->e_phnum = (unsigned short)nphdrs;
-
-	ehdr->e_phoff = sizeof (Ehdr);
-	ehdr->e_phentsize = sizeof (Phdr);
+	}
 
 	if (nshdrs > 0) {
-		if (nshdrs >= SHN_LORESERVE)
+		if (nshdrs >= SHN_LORESERVE) {
 			ehdr->e_shnum = 0;
-		else
+			shdr0.sh_size = nshdrs;
+		} else {
 			ehdr->e_shnum = (unsigned short)nshdrs;
+		}
 
-		if (nshdrs - 1 >= SHN_LORESERVE)
+		if (nshdrs - 1 >= SHN_LORESERVE) {
 			ehdr->e_shstrndx = SHN_XINDEX;
-		else
+			shdr0.sh_link = nshdrs - 1;
+		} else {
 			ehdr->e_shstrndx = (unsigned short)(nshdrs - 1);
+		}
 
-		ehdr->e_shoff = ehdr->e_phoff + ehdr->e_phentsize * nphdrs;
+		ehdr->e_shoff = soffset;
 		ehdr->e_shentsize = sizeof (Shdr);
 	}
 
+	ehdr->e_ident[EI_VERSION] = EV_CURRENT;
+	ehdr->e_version = EV_CURRENT;
+	ehdr->e_ehsize = sizeof (Ehdr);
+	ehdr->e_phoff = poffset;
+	ehdr->e_phentsize = sizeof (Phdr);
+
 	if (error = core_write(vp, UIO_SYSSPACE, (offset_t)0, ehdr,
-	    sizeof (Ehdr), rlimit, credp))
+	    sizeof (Ehdr), rlimit, credp)) {
 		goto done;
+	}
 
-	poffset = sizeof (Ehdr);
-	soffset = sizeof (Ehdr) + phdrsz;
-	doffset = sizeof (Ehdr) + phdrsz + shdrsz;
+	phdr = (Phdr *)bigwad;
+	bzero(phdr, phdrsz);
 
-	v = &bigwad->phdr[0];
-	bzero(v, phdrsz);
-
-	setup_old_note_header(&v[0], p);
-	v[0].p_offset = doffset = roundup(doffset, sizeof (Word));
-	doffset += v[0].p_filesz;
-
-	setup_note_header(&v[1], p);
-	v[1].p_offset = doffset = roundup(doffset, sizeof (Word));
-	doffset += v[1].p_filesz;
+	setup_note_header(&phdr[0], p);
+	phdr[0].p_offset = doffset = roundup(doffset, sizeof (Word));
+	doffset += phdr[0].p_filesz;
 
 	mutex_enter(&p->p_lock);
 
@@ -1864,13 +2249,19 @@ top:
 
 	mutex_exit(&p->p_lock);
 
-	AS_LOCK_ENTER(as, &as->a_lock, RW_WRITER);
-	i = 2;
+	AS_LOCK_ENTER(as, RW_WRITER);
+
+	i = NOTES_SECTIONS;
+
 	for (seg = AS_SEGFIRST(as); seg != NULL; seg = AS_SEGNEXT(as, seg)) {
 		caddr_t eaddr = seg->s_base + pr_getsegsize(seg, 0);
 		caddr_t saddr, naddr;
 		void *tmp = NULL;
 		extern struct seg_ops segspt_shmops;
+
+		if ((seg->s_flags & S_HOLE) != 0) {
+			continue;
+		}
 
 		for (saddr = seg->s_base; saddr < eaddr; saddr = naddr) {
 			uint_t prot;
@@ -1880,21 +2271,23 @@ top:
 
 			prot = pr_getprot(seg, 0, &tmp, &saddr, &naddr, eaddr);
 			prot &= PROT_READ | PROT_WRITE | PROT_EXEC;
-			if ((size = (size_t)(naddr - saddr)) == 0)
+			if ((size = (size_t)(naddr - saddr)) == 0) {
+				ASSERT(tmp == NULL);
 				continue;
-			if (i == nphdrs) {
-				overflow++;
-				continue;
+			} else if (i == nphdrs) {
+				pr_getprot_done(&tmp);
+				overflowed = B_TRUE;
+				break;
 			}
-			v[i].p_type = PT_LOAD;
-			v[i].p_vaddr = (Addr)(uintptr_t)saddr;
-			v[i].p_memsz = size;
+			phdr[i].p_type = PT_LOAD;
+			phdr[i].p_vaddr = (Addr)(uintptr_t)saddr;
+			phdr[i].p_memsz = size;
 			if (prot & PROT_READ)
-				v[i].p_flags |= PF_R;
+				phdr[i].p_flags |= PF_R;
 			if (prot & PROT_WRITE)
-				v[i].p_flags |= PF_W;
+				phdr[i].p_flags |= PF_W;
 			if (prot & PROT_EXEC)
-				v[i].p_flags |= PF_X;
+				phdr[i].p_flags |= PF_X;
 
 			/*
 			 * Figure out which mappings to include in the core.
@@ -1956,20 +2349,23 @@ top:
 			}
 
 			doffset = roundup(doffset, sizeof (Word));
-			v[i].p_offset = doffset;
-			v[i].p_filesz = size;
+			phdr[i].p_offset = doffset;
+			phdr[i].p_filesz = size;
 			doffset += size;
 exclude:
 			i++;
 		}
-		ASSERT(tmp == NULL);
+		VERIFY(tmp == NULL);
+		if (overflowed)
+			break;
 	}
-	AS_LOCK_EXIT(as, &as->a_lock);
+	AS_LOCK_EXIT(as);
 
-	if (overflow || i != nphdrs) {
-		if (ntries++ == 0) {
+	if (overflowed || i != nphdrs) {
+		if (!retried) {
+			retried = B_TRUE;
+			overflowed = B_FALSE;
 			kmem_free(bigwad, bigsize);
-			overflow = 0;
 			goto top;
 		}
 		cmn_err(CE_WARN, "elfcore: core dump failed for "
@@ -1979,26 +2375,31 @@ exclude:
 	}
 
 	if ((error = core_write(vp, UIO_SYSSPACE, poffset,
-	    v, phdrsz, rlimit, credp)) != 0)
+	    phdr, phdrsz, rlimit, credp)) != 0) {
 		goto done;
+	}
 
-	if ((error = write_old_elfnotes(p, sig, vp, v[0].p_offset, rlimit,
-	    credp)) != 0)
+	if ((error = write_elfnotes(p, sig, vp, phdr[0].p_offset, rlimit,
+	    credp, content)) != 0) {
 		goto done;
+	}
 
-	if ((error = write_elfnotes(p, sig, vp, v[1].p_offset, rlimit,
-	    credp, content)) != 0)
-		goto done;
-
-	for (i = 2; i < nphdrs; i++) {
+	for (i = NOTES_SECTIONS; i < nphdrs; i++) {
 		prkillinfo_t killinfo;
 		sigqueue_t *sq;
 		int sig, j;
 
-		if (v[i].p_filesz == 0)
+		if (phdr[i].p_filesz == 0)
 			continue;
 
 		/*
+		 * If we hit a region that was mapped PROT_NONE then we cannot
+		 * continue dumping this normally as the kernel would be unable
+		 * to read from the page and that would result in us failing to
+		 * dump the page. As such, any region mapped PROT_NONE, we dump
+		 * as a zero-filled page such that this is still represented in
+		 * the map.
+		 *
 		 * If dumping out this segment fails, rather than failing
 		 * the core dump entirely, we reset the size of the mapping
 		 * to zero to indicate that the data is absent from the core
@@ -2006,11 +2407,34 @@ exclude:
 		 * this from mappings that were excluded due to the core file
 		 * content settings.
 		 */
-		if ((error = core_seg(p, vp, v[i].p_offset,
-		    (caddr_t)(uintptr_t)v[i].p_vaddr, v[i].p_filesz,
-		    rlimit, credp)) == 0) {
-			continue;
+		if ((phdr[i].p_flags & (PF_R | PF_W | PF_X)) == 0) {
+			size_t towrite = phdr[i].p_filesz;
+			size_t curoff = 0;
+
+			if (zeropg == NULL) {
+				zeropg = kmem_zalloc(elf_zeropg_sz, KM_SLEEP);
+			}
+
+			error = 0;
+			while (towrite != 0) {
+				size_t len = MIN(towrite, elf_zeropg_sz);
+
+				error = core_write(vp, UIO_SYSSPACE,
+				    phdr[i].p_offset + curoff, zeropg, len,
+				    rlimit, credp);
+				if (error != 0)
+					break;
+
+				towrite -= len;
+				curoff += len;
+			}
+		} else {
+			error = core_seg(p, vp, phdr[i].p_offset,
+			    (caddr_t)(uintptr_t)phdr[i].p_vaddr,
+			    phdr[i].p_filesz, rlimit, credp);
 		}
+		if (error == 0)
+			continue;
 
 		if ((sig = lwp->lwp_cursig) == 0) {
 			/*
@@ -2020,14 +2444,14 @@ exclude:
 			 * bytes. This undocumented interface will let us
 			 * understand the nature of the failure.
 			 */
-			(void) core_write(vp, UIO_SYSSPACE, v[i].p_offset,
+			(void) core_write(vp, UIO_SYSSPACE, phdr[i].p_offset,
 			    &error, sizeof (error), rlimit, credp);
 
-			v[i].p_filesz = 0;
-			v[i].p_flags |= PF_SUNW_FAILURE;
+			phdr[i].p_filesz = 0;
+			phdr[i].p_flags |= PF_SUNW_FAILURE;
 			if ((error = core_write(vp, UIO_SYSSPACE,
-			    poffset + sizeof (v[i]) * i, &v[i], sizeof (v[i]),
-			    rlimit, credp)) != 0)
+			    poffset + sizeof (Phdr) * i, &phdr[i],
+			    sizeof (Phdr), rlimit, credp)) != 0)
 				goto done;
 
 			continue;
@@ -2069,15 +2493,15 @@ exclude:
 		}
 #endif
 
-		(void) core_write(vp, UIO_SYSSPACE, v[i].p_offset,
+		(void) core_write(vp, UIO_SYSSPACE, phdr[i].p_offset,
 		    &killinfo, sizeof (killinfo), rlimit, credp);
 
 		/*
 		 * For the segment on which we took the signal, indicate that
 		 * its data now refers to a siginfo.
 		 */
-		v[i].p_filesz = 0;
-		v[i].p_flags |= PF_SUNW_FAILURE | PF_SUNW_KILLED |
+		phdr[i].p_filesz = 0;
+		phdr[i].p_flags |= PF_SUNW_FAILURE | PF_SUNW_KILLED |
 		    PF_SUNW_SIGINFO;
 
 		/*
@@ -2085,50 +2509,46 @@ exclude:
 		 * is due to a signal.
 		 */
 		for (j = i + 1; j < nphdrs; j++) {
-			v[j].p_filesz = 0;
-			v[j].p_flags |= PF_SUNW_FAILURE | PF_SUNW_KILLED;
+			phdr[j].p_filesz = 0;
+			phdr[j].p_flags |= PF_SUNW_FAILURE | PF_SUNW_KILLED;
 		}
 
 		/*
 		 * Finally, write out our modified program headers.
 		 */
 		if ((error = core_write(vp, UIO_SYSSPACE,
-		    poffset + sizeof (v[i]) * i, &v[i],
-		    sizeof (v[i]) * (nphdrs - i), rlimit, credp)) != 0)
+		    poffset + sizeof (Phdr) * i, &phdr[i],
+		    sizeof (Phdr) * (nphdrs - i), rlimit, credp)) != 0) {
 			goto done;
+		}
 
 		break;
 	}
 
 	if (nshdrs > 0) {
-		bzero(&bigwad->shdr[0], shdrsz);
+		Shdr *shdr = (Shdr *)bigwad;
 
-		if (nshdrs >= SHN_LORESERVE)
-			bigwad->shdr[0].sh_size = nshdrs;
-
-		if (nshdrs - 1 >= SHN_LORESERVE)
-			bigwad->shdr[0].sh_link = nshdrs - 1;
-
-		if (nphdrs >= PN_XNUM)
-			bigwad->shdr[0].sh_info = nphdrs;
-
+		bzero(shdr, shdrsz);
 		if (nshdrs > 1) {
-			AS_LOCK_ENTER(as, &as->a_lock, RW_WRITER);
-			if ((error = process_scns(content, p, credp, vp,
-			    &bigwad->shdr[0], nshdrs, rlimit, &doffset,
-			    NULL)) != 0) {
-				AS_LOCK_EXIT(as, &as->a_lock);
+			ctx.ecc_doffset = doffset;
+			AS_LOCK_ENTER(as, RW_WRITER);
+			error = elf_process_scns(&ctx, shdr, nshdrs, NULL);
+			AS_LOCK_EXIT(as);
+			if (error != 0)
 				goto done;
-			}
-			AS_LOCK_EXIT(as, &as->a_lock);
 		}
+		/* Copy any extended format data destined for the first shdr */
+		bcopy(&shdr0, shdr, sizeof (shdr0));
 
-		if ((error = core_write(vp, UIO_SYSSPACE, soffset,
-		    &bigwad->shdr[0], shdrsz, rlimit, credp)) != 0)
-			goto done;
+		error = core_write(vp, UIO_SYSSPACE, soffset, shdr, shdrsz,
+		    rlimit, credp);
 	}
 
 done:
+	if (zeropg != NULL)
+		kmem_free(zeropg, elf_zeropg_sz);
+	if (ctx.ecc_bufsz != 0)
+		kmem_free(ctx.ecc_buf, ctx.ecc_bufsz);
 	kmem_free(bigwad, bigsize);
 	return (error);
 }
@@ -2153,7 +2573,7 @@ static struct modlexec modlexec = {
 
 #ifdef	_LP64
 extern int elf32exec(vnode_t *vp, execa_t *uap, uarg_t *args,
-			intpdata_t *idatap, int level, long *execsz,
+			intpdata_t *idatap, int level, size_t *execsz,
 			int setid, caddr_t exec_file, cred_t *cred,
 			int brand_action);
 extern int elf32core(vnode_t *vp, proc_t *p, cred_t *credp,

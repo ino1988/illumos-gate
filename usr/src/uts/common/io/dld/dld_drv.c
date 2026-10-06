@@ -20,6 +20,11 @@
  */
 /*
  * Copyright (c) 2005, 2010, Oracle and/or its affiliates. All rights reserved.
+ * Copyright 2015, Joyent Inc.
+ * Copyright (c) 2017, Joyent, Inc.
+ * Copyright 2025 MNX Cloud, Inc.
+ * Copyright 2025 Oxide Computer Company
+ * Copyright 2026 Edgecast Cloud LLC.
  */
 
 /*
@@ -346,8 +351,8 @@ drv_ioc_attr(void *karg, intptr_t arg, int mode, cred_t *cred, int *rvalp)
 	if ((err = dls_devnet_hold_tmp(diap->dia_linkid, &dlh)) != 0)
 		return (err);
 
-	if ((err = mac_perim_enter_by_macname(
-	    dls_devnet_mac(dlh), &mph)) != 0) {
+	if ((err = mac_perim_enter_by_macname(dls_devnet_mac(dlh),
+	    &mph)) != 0) {
 		dls_devnet_rele_tmp(dlh);
 		return (err);
 	}
@@ -359,7 +364,6 @@ drv_ioc_attr(void *karg, intptr_t arg, int mode, cred_t *cred, int *rvalp)
 	}
 
 	mac_sdu_get(dlp->dl_mh, NULL, &diap->dia_max_sdu);
-
 	dls_link_rele(dlp);
 	mac_perim_exit(mph);
 	dls_devnet_rele_tmp(dlh);
@@ -623,6 +627,50 @@ done:
 }
 
 /*
+ * Calculate caller's allowed permissions to a property.
+ */
+static uint_t
+dld_macprop_perm_mask(dls_dl_handle_t dlh, const dld_ioc_macprop_t *prop,
+    const cred_t *cred)
+{
+	const zoneid_t zid = crgetzoneid(cred);
+	const boolean_t is_owner = zid == dls_devnet_getownerzid(dlh);
+	const boolean_t is_in_zone = zid == dls_devnet_getzid(dlh);
+	const boolean_t is_in_global = zid == GLOBAL_ZONEID;
+	uint_t mask = 0;
+
+	/* If the zone owns the datalink device, it should have full access. */
+	if (is_owner) {
+		mask = MAC_PROP_PERM_RW;
+	}
+
+	switch (prop->pr_num) {
+	case MAC_PROP_MTU:
+	case MAC_PROP_STATUS:
+		/*
+		 * These properties remain readable inside a zone which has been
+		 * assigned (but does not own) a datalink device.
+		 */
+		if (is_in_zone) {
+			mask |= MAC_PROP_PERM_READ;
+		}
+		break;
+	case MAC_PROP_ZONE:
+		/*
+		 * Actors outside global zone are not allowed to change the zone
+		 * ownership property.
+		 */
+		if (!is_in_global) {
+			mask &= ~MAC_PROP_PERM_WRITE;
+		}
+		break;
+	default:
+		break;
+	}
+	return (mask);
+}
+
+/*
  * DLDIOC_SET/GETMACPROP
  */
 static int
@@ -630,22 +678,21 @@ drv_ioc_prop_common(dld_ioc_macprop_t *prop, intptr_t arg, boolean_t set,
     cred_t *cred, int mode)
 {
 	int			err = EINVAL;
-	dls_dl_handle_t 	dlh = NULL;
+	dls_dl_handle_t		dlh = NULL;
 	dls_link_t		*dlp = NULL;
 	mac_perim_handle_t	mph = NULL;
 	dld_ioc_macprop_t	*kprop;
 	datalink_id_t		linkid;
 	datalink_class_t	class;
-	zoneid_t		zoneid = crgetzoneid(cred);
 	uint_t			dsize;
 
 	/*
-	 * We only use pr_valsize from prop, as the caller only did a
-	 * copyin() for sizeof (dld_ioc_prop_t), which doesn't cover
-	 * the property data.  We copyin the full dld_ioc_prop_t
-	 * including the data into kprop down below.
+	 * We only use pr_valsize from prop. The caller only did a copyin()
+	 * for sizeof (dld_ioc_prop_t), which will not cover any property
+	 * data.  We copyin the bits starting at pr_val to guard against a
+	 * changing dld_ioc_prop_t header.
 	 */
-	dsize = sizeof (dld_ioc_macprop_t) + prop->pr_valsize - 1;
+	dsize = DLD_MACPROP_BUFSIZE(prop->pr_valsize);
 	if (dsize < prop->pr_valsize)
 		return (EINVAL);
 
@@ -654,10 +701,15 @@ drv_ioc_prop_common(dld_ioc_macprop_t *prop, intptr_t arg, boolean_t set,
 	 * a buffer for kernel use as this data was not part of the
 	 * prop allocation and copyin() done by the framework.
 	 */
-	if ((kprop = kmem_alloc(dsize, KM_NOSLEEP)) == NULL)
+	if ((kprop = kmem_alloc(dsize, KM_NOSLEEP_LAZY)) == NULL)
 		return (ENOMEM);
 
-	if (ddi_copyin((void *)arg, kprop, dsize, mode) != 0) {
+	/* Just assign the previously copied-in header. */
+	*kprop = *prop;
+
+	/* copyin() ONLY the `pr_val` data here. */
+	if (ddi_copyin((void *)(arg + offsetof(dld_ioc_macprop_t, pr_val)),
+	    &(kprop->pr_val), prop->pr_valsize, mode) != 0) {
 		err = EFAULT;
 		goto done;
 	}
@@ -677,12 +729,10 @@ drv_ioc_prop_common(dld_ioc_macprop_t *prop, intptr_t arg, boolean_t set,
 	if ((err = dls_link_hold(dls_devnet_mac(dlh), &dlp)) != 0)
 		goto done;
 
-	/*
-	 * Don't allow a process to get or set properties of a link if that
-	 * link doesn't belong to that zone.
-	 */
-	if (zoneid != dls_devnet_getownerzid(dlh)) {
-		err = ENOENT;
+	const uint_t perm_req = set ? MAC_PROP_PERM_RW : MAC_PROP_PERM_READ;
+	const uint_t perm_mask = dld_macprop_perm_mask(dlh, kprop, cred);
+	if ((perm_req & perm_mask) != perm_req) {
+		err = EACCES;
 		goto done;
 	}
 
@@ -697,10 +747,6 @@ drv_ioc_prop_common(dld_ioc_macprop_t *prop, intptr_t arg, boolean_t set,
 		if (set) {
 			dld_ioc_zid_t *dzp = (dld_ioc_zid_t *)kprop->pr_val;
 
-			if (zoneid != GLOBAL_ZONEID) {
-				err = EACCES;
-				goto done;
-			}
 			err = dls_devnet_setzid(dlh, dzp->diz_zid);
 		} else {
 			kprop->pr_perm_flags = MAC_PROP_PERM_RW;
@@ -716,8 +762,18 @@ drv_ioc_prop_common(dld_ioc_macprop_t *prop, intptr_t arg, boolean_t set,
 			else
 				err = drv_ioc_clrap(linkid);
 		} else {
-			if (kprop->pr_valsize == 0)
-				return (ENOBUFS);
+			/*
+			 * You might think that the earlier call to
+			 * mac_prop_check_size() should catch this but
+			 * it can't. The autopush prop uses 0 as a
+			 * sentinel value to clear the prop. This
+			 * check ensures we don't allow a get with a
+			 * valsize of 0.
+			 */
+			if (kprop->pr_valsize == 0) {
+				err = ENOBUFS;
+				goto done;
+			}
 
 			kprop->pr_perm_flags = MAC_PROP_PERM_RW;
 			err = drv_ioc_getap(linkid, dlap);
@@ -790,6 +846,9 @@ drv_ioc_prop_common(dld_ioc_macprop_t *prop, intptr_t arg, boolean_t set,
 	}
 	}
 
+	/* Properly communicate allowed permissions */
+	kprop->pr_perm_flags &= perm_mask;
+
 done:
 	if (!set && ddi_copyout(kprop, (void *)arg, dsize, mode) != 0)
 		err = EFAULT;
@@ -838,7 +897,7 @@ drv_ioc_getprop(void *karg, intptr_t arg, int mode, cred_t *cred, int *rvalp)
  * DLDIOC_RENAME.
  *
  * This function handles two cases of link renaming. See more in comments above
- * dls_datalink_rename().
+ * dls_devnet_rename().
  */
 /* ARGSUSED */
 static int
@@ -1309,6 +1368,204 @@ drv_ioc_secobj_unset(void *karg, intptr_t arg, int mode, cred_t *cred,
 	return (0);
 }
 
+/* ARGSUSED */
+static int
+drv_ioc_gettran(void *karg, intptr_t arg, int mode, cred_t *cred,
+    int *rvalp)
+{
+	int			ret = 0;
+	mac_perim_handle_t	mph = NULL;
+	dls_dl_handle_t		dlh = NULL;
+	dls_link_t		*dlp = NULL;
+	dld_ioc_gettran_t	*dgt = karg;
+
+	if ((ret = dls_devnet_hold_tmp(dgt->dgt_linkid, &dlh)) != 0)
+		goto done;
+
+	if ((ret = mac_perim_enter_by_macname(dls_devnet_mac(dlh), &mph)) != 0)
+		goto done;
+
+	if ((ret = dls_link_hold(dls_devnet_mac(dlh), &dlp)) != 0)
+		goto done;
+
+	/*
+	 * Make sure that this link belongs to the zone.
+	 */
+	if (crgetzoneid(cred) != dls_devnet_getownerzid(dlh)) {
+		ret = ENOENT;
+		goto done;
+	}
+
+	if (dgt->dgt_tran_id == DLDIOC_GETTRAN_GETNTRAN) {
+		ret = mac_transceiver_count(dlp->dl_mh, &dgt->dgt_tran_id);
+	} else {
+		ret = mac_transceiver_info(dlp->dl_mh, dgt->dgt_tran_id,
+		    &dgt->dgt_present, &dgt->dgt_usable);
+	}
+
+done:
+	if (dlp != NULL)
+		dls_link_rele(dlp);
+
+	if (mph != NULL)
+		mac_perim_exit(mph);
+
+	if (dlh != NULL)
+		dls_devnet_rele_tmp(dlh);
+
+	return (ret);
+}
+
+/* ARGSUSED */
+static int
+drv_ioc_readtran(void *karg, intptr_t arg, int mode, cred_t *cred,
+    int *rvalp)
+{
+	int			ret = 0;
+	mac_perim_handle_t	mph = NULL;
+	dls_dl_handle_t		dlh = NULL;
+	dls_link_t		*dlp = NULL;
+	dld_ioc_tranio_t	*dti = karg;
+	uint8_t			buf[256];
+	size_t			nr;
+
+	/*
+	 * Be strict for the moment
+	 */
+	if (dti->dti_nbytes != 256 || dti->dti_off != 0)
+		return (EINVAL);
+
+	if ((ret = dls_devnet_hold_tmp(dti->dti_linkid, &dlh)) != 0)
+		goto done;
+
+	if ((ret = mac_perim_enter_by_macname(dls_devnet_mac(dlh), &mph)) != 0)
+		goto done;
+
+	if ((ret = dls_link_hold(dls_devnet_mac(dlh), &dlp)) != 0)
+		goto done;
+
+	/*
+	 * Make sure that this link belongs to the zone.
+	 */
+	if (crgetzoneid(cred) != dls_devnet_getownerzid(dlh)) {
+		ret = ENOENT;
+		goto done;
+	}
+
+	bzero(buf, sizeof (buf));
+	if ((ret = mac_transceiver_read(dlp->dl_mh, dti->dti_tran_id,
+	    dti->dti_page, buf, dti->dti_nbytes, dti->dti_off, &nr)) == 0) {
+		dti->dti_nbytes = nr;
+		ret = ddi_copyout(buf, (void *)(uintptr_t)dti->dti_buf,
+		    sizeof (buf), mode);
+	}
+
+done:
+	if (dlp != NULL)
+		dls_link_rele(dlp);
+
+	if (mph != NULL)
+		mac_perim_exit(mph);
+
+	if (dlh != NULL)
+		dls_devnet_rele_tmp(dlh);
+
+	return (ret);
+}
+
+/* ARGSUSED */
+static int
+drv_ioc_getled(void *karg, intptr_t arg, int mode, cred_t *cred,
+    int *rvalp)
+{
+	int			ret = 0;
+	mac_perim_handle_t	mph = NULL;
+	dls_dl_handle_t		dlh = NULL;
+	dls_link_t		*dlp = NULL;
+	dld_ioc_led_t		*dil = karg;
+
+	if ((mode & FREAD) == 0)
+		return (EBADF);
+
+	if ((ret = dls_devnet_hold_tmp(dil->dil_linkid, &dlh)) != 0)
+		goto done;
+
+	if ((ret = mac_perim_enter_by_macname(dls_devnet_mac(dlh), &mph)) != 0)
+		goto done;
+
+	if ((ret = dls_link_hold(dls_devnet_mac(dlh), &dlp)) != 0)
+		goto done;
+
+	/*
+	 * Make sure that this link belongs to the zone.
+	 */
+	if (crgetzoneid(cred) != dls_devnet_getownerzid(dlh)) {
+		ret = ENOENT;
+		goto done;
+	}
+
+	ret = mac_led_get(dlp->dl_mh, &dil->dil_supported, &dil->dil_active);
+
+done:
+	if (dlp != NULL)
+		dls_link_rele(dlp);
+
+	if (mph != NULL)
+		mac_perim_exit(mph);
+
+	if (dlh != NULL)
+		dls_devnet_rele_tmp(dlh);
+
+	return (ret);
+}
+
+/* ARGSUSED */
+static int
+drv_ioc_setled(void *karg, intptr_t arg, int mode, cred_t *cred,
+    int *rvalp)
+{
+	int			ret = 0;
+	mac_perim_handle_t	mph = NULL;
+	dls_dl_handle_t		dlh = NULL;
+	dls_link_t		*dlp = NULL;
+	dld_ioc_led_t		*dil = karg;
+
+	if ((mode & FWRITE) == 0)
+		return (EBADF);
+
+	if ((ret = dls_devnet_hold_tmp(dil->dil_linkid, &dlh)) != 0)
+		goto done;
+
+	if ((ret = mac_perim_enter_by_macname(dls_devnet_mac(dlh), &mph)) != 0)
+		goto done;
+
+	if ((ret = dls_link_hold(dls_devnet_mac(dlh), &dlp)) != 0)
+		goto done;
+
+	/*
+	 * Make sure that this link belongs to the zone.
+	 */
+	if (crgetzoneid(cred) != dls_devnet_getownerzid(dlh)) {
+		ret = ENOENT;
+		goto done;
+	}
+
+	ret = mac_led_set(dlp->dl_mh, dil->dil_active);
+
+done:
+	if (dlp != NULL)
+		dls_link_rele(dlp);
+
+	if (mph != NULL)
+		mac_perim_exit(mph);
+
+	if (dlh != NULL)
+		dls_devnet_rele_tmp(dlh);
+
+	return (ret);
+}
+
+
 /*
  * Note that ioctls that modify links have a NULL di_priv_func(), as
  * privileges can only be checked after we know the class of the link being
@@ -1348,6 +1605,14 @@ static dld_ioc_info_t drv_ioc_list[] = {
 	    drv_ioc_getprop, NULL},
 	{DLDIOC_GETHWGRP, DLDCOPYINOUT, sizeof (dld_ioc_hwgrpget_t),
 	    drv_ioc_hwgrpget, NULL},
+	{DLDIOC_GETTRAN, DLDCOPYINOUT, sizeof (dld_ioc_gettran_t),
+	    drv_ioc_gettran, NULL },
+	{DLDIOC_READTRAN, DLDCOPYINOUT, sizeof (dld_ioc_tranio_t),
+	    drv_ioc_readtran, NULL },
+	{DLDIOC_GETLED, DLDCOPYINOUT, sizeof (dld_ioc_led_t),
+	    drv_ioc_getled, NULL },
+	{DLDIOC_SETLED, DLDCOPYIN, sizeof (dld_ioc_led_t),
+	    drv_ioc_setled, secpolicy_dl_config}
 };
 
 typedef struct dld_ioc_modentry {
@@ -1376,7 +1641,8 @@ static dld_ioc_modentry_t dld_ioc_modtable[] = {
 	{SIMNET_IOC,	"simnet", 0, NULL, 0},
 	{BRIDGE_IOC,	"bridge", 0, NULL, 0},
 	{IPTUN_IOC,	"iptun", 0, NULL, 0},
-	{IBPART_IOC,	"ibp", -1, NULL, 0}
+	{IBPART_IOC,	"ibp", -1, NULL, 0},
+	{OVERLAY_IOC,	"overlay", 0, NULL, 0}
 };
 #define	DLDIOC_CNT	\
 	(sizeof (dld_ioc_modtable) / sizeof (dld_ioc_modentry_t))

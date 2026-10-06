@@ -21,21 +21,29 @@
 # Copyright 2008 Sun Microsystems, Inc.  All rights reserved.
 # Use is subject to license terms.
 #
+# Copyright (c) 2018, Joyent, Inc.
 
 PROG =		wpad
 MANIFEST =	wpa.xml
 OBJS =		wpa_supplicant.o wpa.o wpa_enc.o eloop.o \
 		driver_wifi.o l2_packet.o
-SRCS = 		$(OBJS:%.o=%.c)
+SRCS =		$(OBJS:%.o=%.c)
 
 include	../../../Makefile.cmd
 
 ROOTMANIFESTDIR = $(ROOTSVCNETWORK)
 
-LDLIBS    += 	-ldladm -ldlpi
+# The wpa_enc.c file is not ported to the OpenSSL 3.x API yet and so we need to
+# make sure the deprecated 1.x API is fully available for it.  Once the
+# wpa_enc.c file is adapted for OpenSSL 3.x this should be updated or removed.
+# See also https://www.illumos.org/issues/16917
+CPPFLAGS +=	-DOPENSSL_API_COMPAT=10101
+
+LDLIBS +=	-ldladm -ldlpi
+NATIVE_LIBS +=	libcrypto.so
 all install := LDLIBS += -lcrypto
 
-LINTFLAGS += 	-u
+SMOFF += all_func_returns
 
 .KEEP_STATE:
 
@@ -53,7 +61,5 @@ check:		$(CHKMANIFEST)
 
 clean:
 		$(RM) $(OBJS)
-
-lint:		lint_SRCS
 
 include ../../../Makefile.targ

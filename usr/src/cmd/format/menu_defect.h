@@ -27,15 +27,10 @@
 #ifndef	_MENU_DEFECT_H
 #define	_MENU_DEFECT_H
 
-#pragma ident	"%Z%%M%	%I%	%E% SMI"
-
 #ifdef	__cplusplus
 extern "C" {
 #endif
 
-/*
- *	Prototypes for ANSI C compilers
- */
 int	d_restore(void);
 int	d_original(void);
 int	d_extract(void);

@@ -23,6 +23,7 @@
 # Copyright 2004 Sun Microsystems, Inc.  All rights reserved.
 # Use is subject to license terms.
 #
+# Copyright (c) 2018, Joyent, Inc.
 
 FSTYPE=		ufs
 LIBPROG=	df
@@ -37,8 +38,10 @@ LDLIBS += -ladm
 
 CERRWARN +=	-_gcc=-Wno-implicit-function-declaration
 CERRWARN +=	-_gcc=-Wno-parentheses
-CERRWARN +=	-_gcc=-Wno-unused-label
 CERRWARN +=	-_gcc=-Wno-unused-function
+
+# not linted
+SMATCH=off
 
 # for messaging catalogue file
 #
@@ -55,5 +58,3 @@ $(LIBPROG):	$(OBJS)
 
 clean:
 		$(RM) $(LIBPROG).o
-
-lint:		lint_SRCS

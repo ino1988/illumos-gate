@@ -22,7 +22,8 @@
  * Copyright (c) 2004, 2010, Oracle and/or its affiliates. All rights reserved.
  */
 /*
- * Copyright (c) 2012, Joyent, Inc.  All rights reserved.
+ * Copyright 2019 Joyent, Inc.
+ * Copyright 2022 Oxide Computer Co.
  */
 
 
@@ -39,6 +40,7 @@
 #include <sys/modctl.h>
 #include <sys/ddi.h>
 #include <sys/sunddi.h>
+#include <sys/policy.h>
 
 #include <sys/auxv.h>
 #include <sys/cpuid_drv.h>
@@ -113,8 +115,7 @@ cpuid_read(dev_t dev, uio_t *uio, cred_t *cr)
 	struct cpuid_regs crs;
 	int error = 0;
 
-	if (!is_x86_feature(x86_featureset, X86FSET_CPUID))
-		return (ENXIO);
+	ASSERT(is_x86_feature(x86_featureset, X86FSET_CPUID));
 
 	if (uio->uio_resid & (sizeof (crs) - 1))
 		return (EINVAL);
@@ -168,20 +169,52 @@ cpuid_ioctl(dev_t dev, int cmd, intptr_t arg, int mode, cred_t *cr, int *rval)
 		if (strcmp(areq, architecture) == 0) {
 			STRUCT_FSET(h, cgh_hwcap[0], auxv_hwcap);
 			STRUCT_FSET(h, cgh_hwcap[1], auxv_hwcap_2);
+			STRUCT_FSET(h, cgh_hwcap[2], auxv_hwcap_3);
 #if defined(_SYSCALL32_IMPL)
 		} else if (strcmp(areq, architecture_32) == 0) {
 			STRUCT_FSET(h, cgh_hwcap[0], auxv_hwcap32);
 			STRUCT_FSET(h, cgh_hwcap[1], auxv_hwcap32_2);
+			STRUCT_FSET(h, cgh_hwcap[2], auxv_hwcap32_3);
 #endif
 		} else {
 			STRUCT_FSET(h, cgh_hwcap[0], 0);
 			STRUCT_FSET(h, cgh_hwcap[1], 0);
+			STRUCT_FSET(h, cgh_hwcap[2], 0);
 		}
 		if (ddi_copyout(STRUCT_BUF(h),
 		    (void *)arg, STRUCT_SIZE(h), mode))
 			return (EFAULT);
 		return (0);
 	}
+
+#ifdef __x86
+	case CPUID_RDMSR: {
+		struct cpuid_rdmsr crm = { 0, };
+		label_t label;
+
+		if (secpolicy_sys_config(cr, B_FALSE) != 0)
+			return (EPERM);
+
+		if (ddi_copyin((void *)arg, &crm, sizeof (crm), mode))
+			return (EFAULT);
+
+		kpreempt_disable();
+
+		if (on_fault(&label)) {
+			kpreempt_enable();
+			return (ENOENT);
+		}
+
+		crm.cr_msr_val = rdmsr(crm.cr_msr_nr);
+
+		no_fault();
+		kpreempt_enable();
+
+		if (ddi_copyout(&crm, (void *)arg, sizeof (crm), mode))
+			return (EFAULT);
+		return (0);
+	}
+#endif
 
 	default:
 		return (ENOTTY);

@@ -20,10 +20,12 @@
  */
 /*
  * Copyright (c) 2005, 2010, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2015, Joyent, Inc.
+ * Copyright (c) 2017 by Delphix. All rights reserved.
  */
 
 /*	Copyright (c) 1983, 1984, 1985, 1986, 1987, 1988, 1989 AT&T	*/
-/*	  All Rights Reserved  	*/
+/*	  All Rights Reserved	*/
 
 /*
  * University Copyright- Copyright (c) 1982, 1986, 1988
@@ -66,18 +68,19 @@
 /*
  * We want to be able to identify files that are referenced only by the DNLC.
  * When adding a reference from the DNLC, call VN_HOLD_DNLC instead of VN_HOLD,
- * since multiple DNLC references should only be counted once in v_count. This
- * file contains only two(2) calls to VN_HOLD, renamed VN_HOLD_CALLER in the
- * hope that no one will mistakenly add a VN_HOLD to this file. (Unfortunately
- * it is not possible to #undef VN_HOLD and retain VN_HOLD_CALLER. Ideally a
- * Makefile rule would grep uncommented C tokens to check that VN_HOLD is
- * referenced only once in this file, to define VN_HOLD_CALLER.)
+ * since multiple DNLC references should only be counted once in v_count. The
+ * VN_HOLD macro itself is aliased to VN_HOLD_CALLER in this file to help
+ * differentiate the behaviors.  (Unfortunately it is not possible to #undef
+ * VN_HOLD and retain VN_HOLD_CALLER. Ideally a Makefile rule would grep
+ * uncommented C tokens to check that VN_HOLD is referenced only once in this
+ * file, to define VN_HOLD_CALLER.)
  */
 #define	VN_HOLD_CALLER	VN_HOLD
 #define	VN_HOLD_DNLC(vp)	{	\
 	mutex_enter(&(vp)->v_lock);	\
-	if ((vp)->v_count_dnlc == 0)	\
-		(vp)->v_count++;	\
+	if ((vp)->v_count_dnlc == 0) {	\
+		VN_HOLD_LOCKED(vp);	\
+	}				\
 	(vp)->v_count_dnlc++;		\
 	mutex_exit(&(vp)->v_lock);	\
 }
@@ -253,7 +256,7 @@ vnode_t negative_cache_vnode;
  */
 #define	dnlc_free(ncp) \
 { \
-	kmem_free((ncp), sizeof (ncache_t) + (ncp)->namlen); \
+	kmem_free((ncp), NCACHE_SIZE((ncp)->namlen)); \
 	atomic_dec_32(&dnlc_nentries); \
 }
 
@@ -404,11 +407,10 @@ dnlc_init()
 	dc_head.dch_prev = (dircache_t *)&dc_head;
 
 	/*
-	 * Initialise the reference count of the negative cache vnode to 1
-	 * so that it never goes away (VOP_INACTIVE isn't called on it).
+	 * Put a hold on the negative cache vnode so that it never goes away
+	 * (VOP_INACTIVE isn't called on it).
 	 */
-	negative_cache_vnode.v_count = 1;
-	negative_cache_vnode.v_count_dnlc = 0;
+	vn_reinit(&negative_cache_vnode);
 
 	/*
 	 * Initialise kstats - both the old compatability raw kind and
@@ -458,7 +460,7 @@ dnlc_enter(vnode_t *dp, const char *name, vnode_t *vp)
 	VN_HOLD_DNLC(dp);
 	ncp->vp = vp;
 	VN_HOLD_DNLC(vp);
-	bcopy(name, ncp->name, namlen + 1); /* name and null */
+	bcopy(name, ncp->name, namlen);
 	ncp->hash = hash;
 	hp = &nc_hash[hash & nc_hashmask];
 
@@ -532,7 +534,7 @@ dnlc_update(vnode_t *dp, const char *name, vnode_t *vp)
 	VN_HOLD_DNLC(dp);
 	ncp->vp = vp;
 	VN_HOLD_DNLC(vp);
-	bcopy(name, ncp->name, namlen + 1); /* name and null */
+	bcopy(name, ncp->name, namlen);
 	ncp->hash = hash;
 	hp = &nc_hash[hash & nc_hashmask];
 
@@ -633,7 +635,7 @@ dnlc_lookup(vnode_t *dp, const char *name)
 			 * put a hold on it.
 			 */
 			vp = ncp->vp;
-			VN_HOLD_CALLER(vp); /* VN_HOLD 1 of 2 in this file */
+			VN_HOLD_CALLER(vp);
 			mutex_exit(&hp->hash_lock);
 			ncstats.hits++;
 			ncs.ncs_hits.value.ui64++;
@@ -921,50 +923,6 @@ dnlc_fs_purge1(vnodeops_t *vop)
 }
 
 /*
- * Perform a reverse lookup in the DNLC.  This will find the first occurrence of
- * the vnode.  If successful, it will return the vnode of the parent, and the
- * name of the entry in the given buffer.  If it cannot be found, or the buffer
- * is too small, then it will return NULL.  Note that this is a highly
- * inefficient function, since the DNLC is constructed solely for forward
- * lookups.
- */
-vnode_t *
-dnlc_reverse_lookup(vnode_t *vp, char *buf, size_t buflen)
-{
-	nc_hash_t *nch;
-	ncache_t *ncp;
-	vnode_t *pvp;
-
-	if (!doingcache)
-		return (NULL);
-
-	for (nch = nc_hash; nch < &nc_hash[nc_hashsz]; nch++) {
-		mutex_enter(&nch->hash_lock);
-		ncp = nch->hash_next;
-		while (ncp != (ncache_t *)nch) {
-			/*
-			 * We ignore '..' entries since it can create
-			 * confusion and infinite loops.
-			 */
-			if (ncp->vp == vp && !(ncp->namlen == 2 &&
-			    0 == bcmp(ncp->name, "..", 2)) &&
-			    ncp->namlen < buflen) {
-				bcopy(ncp->name, buf, ncp->namlen);
-				buf[ncp->namlen] = '\0';
-				pvp = ncp->dp;
-				/* VN_HOLD 2 of 2 in this file */
-				VN_HOLD_CALLER(pvp);
-				mutex_exit(&nch->hash_lock);
-				return (pvp);
-			}
-			ncp = ncp->hash_next;
-		}
-		mutex_exit(&nch->hash_lock);
-	}
-
-	return (NULL);
-}
-/*
  * Utility routine to search for a cache entry. Return the
  * ncache entry if found, NULL otherwise.
  */
@@ -996,7 +954,7 @@ dnlc_reduce_cache(void *reduce_percent)
 	if (dnlc_reduce_idle && (dnlc_nentries >= ncsize || reduce_percent)) {
 		dnlc_reduce_idle = 0;
 		if ((taskq_dispatch(system_taskq, do_dnlc_reduce_cache,
-		    reduce_percent, TQ_NOSLEEP)) == NULL)
+		    reduce_percent, TQ_NOSLEEP)) == TASKQID_INVALID)
 			dnlc_reduce_idle = 1;
 	}
 }
@@ -1019,7 +977,7 @@ dnlc_get(uchar_t namlen)
 		dnlc_max_nentries_cnt++; /* keep a statistic */
 		return (NULL);
 	}
-	ncp = kmem_alloc(sizeof (ncache_t) + namlen, KM_NOSLEEP);
+	ncp = kmem_alloc(NCACHE_SIZE(namlen), KM_NOSLEEP);
 	if (ncp == NULL) {
 		return (NULL);
 	}
@@ -1299,7 +1257,7 @@ dnlc_dir_add_entry(dcanchor_t *dcap, const char *name, uint64_t handle)
 	 * dnlc_dir_reclaim() is called as a result of memory shortage.
 	 */
 	DNLC_DIR_HASH(name, hash, namlen);
-	dep = kmem_alloc(sizeof (dcentry_t) - 1 + namlen, KM_NOSLEEP);
+	dep = kmem_alloc(DCENTTRY_SIZE(namlen), KM_NOSLEEP);
 	if (dep == NULL) {
 #ifdef DEBUG
 		/*
@@ -1310,7 +1268,7 @@ dnlc_dir_add_entry(dcanchor_t *dcap, const char *name, uint64_t handle)
 		 * performance running a debug kernel.
 		 * This random error only occurs in debug mode.
 		 */
-		dep = kmem_alloc(sizeof (dcentry_t) - 1 + namlen, KM_NOSLEEP);
+		dep = kmem_alloc(DCENTTRY_SIZE(namlen), KM_NOSLEEP);
 		if (dep != NULL)
 			goto ok;
 #endif
@@ -1320,7 +1278,7 @@ dnlc_dir_add_entry(dcanchor_t *dcap, const char *name, uint64_t handle)
 		 * called with.
 		 */
 		dnlc_dir_reclaim(NULL);
-		dep = kmem_alloc(sizeof (dcentry_t) - 1 + namlen, KM_NOSLEEP);
+		dep = kmem_alloc(DCENTTRY_SIZE(namlen), KM_NOSLEEP);
 		if (dep == NULL) {
 			/*
 			 * still no memory, better delete this cache
@@ -1353,7 +1311,7 @@ ok:
 		    dnlc_dir_max_size) {
 			mutex_exit(&dcap->dca_lock);
 			dnlc_dir_purge(dcap);
-			kmem_free(dep, sizeof (dcentry_t) - 1 + namlen);
+			kmem_free(dep, DCENTTRY_SIZE(namlen));
 			ncs.ncs_dir_add_max.value.ui64++;
 			return (DTOOBIG);
 		}
@@ -1390,7 +1348,7 @@ ok:
 		return (DOK);
 	} else {
 		mutex_exit(&dcap->dca_lock);
-		kmem_free(dep, sizeof (dcentry_t) - 1 + namlen);
+		kmem_free(dep, DCENTTRY_SIZE(namlen));
 		return (DNOCACHE);
 	}
 }
@@ -1523,8 +1481,7 @@ dnlc_dir_abort(dircache_t *dcp)
 		nhp = dcp->dc_namehash[i];
 		while (nhp != NULL) { /* for each chained entry */
 			dep = nhp->de_next;
-			kmem_free(nhp, sizeof (dcentry_t) - 1 +
-			    nhp->de_namelen);
+			kmem_free(nhp, DCENTTRY_SIZE(nhp->de_namelen));
 			nhp = dep;
 		}
 	}
@@ -1620,8 +1577,7 @@ dnlc_dir_rem_entry(dcanchor_t *dcap, const char *name, uint64_t *handlep)
 				}
 				te = *prevpp;
 				*prevpp = (*prevpp)->de_next;
-				kmem_free(te, sizeof (dcentry_t) - 1 +
-				    te->de_namelen);
+				kmem_free(te, DCENTTRY_SIZE(te->de_namelen));
 
 				/*
 				 * If the total number of entries

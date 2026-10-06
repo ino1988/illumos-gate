@@ -22,6 +22,7 @@
 # Copyright 2008 Sun Microsystems, Inc.  All rights reserved.
 # Use is subject to license terms.
 #
+# Copyright (c) 2018, Joyent, Inc.
 
 LIBRARY=	libpicld_pluginutil.a
 VERS=		.1
@@ -35,38 +36,29 @@ SRCS=		$(OBJECTS:%.o=../%.c)
 
 CLOBBERFILES +=	$(LIBLINKS)
 
-LIBS =		$(DYNLIB) $(LINTLIB)
+LIBS =		$(DYNLIB)
 
-LINTFLAGS =	-uxmn -I.. -I$(SRC)/lib/libpicl -I$(SRC)/lib/libpicltree
-LINTFLAGS +=	-D_REENTRANT
-LINTOUT=	lint.out
-
-LINTSRC =       $(LINTLIB:%.ln=%)
-ROOTLINTDIR =   $(ROOTLIBDIR)
-ROOTLINT =      $(LINTSRC:%=$(ROOTLINTDIR)/%)
-
-CLEANFILES=	$(LINTOUT) $(LINTLIB)
+CLEANFILES=	$(LINTOUT)
 
 XGETFLAGS += -a
 POFILE=	picld_pluginutil.po
 
 CPPFLAGS +=	-I.. -I$(SRC)/lib/libpicl -I$(SRC)/lib/libpicltree
 CFLAGS +=	$(CCVERBOSE)
-CERRWARN +=	-_gcc=-Wno-uninitialized
+CERRWARN +=	$(CNOWARN_UNINIT)
+
+SMOFF += all_func_returns
+
 CPPFLAGS +=	-D_REENTRANT
 DYNFLAGS +=	$(ZNOLAZYLOAD)
 LDLIBS +=	-L$(SRC)/lib/libpicltree/$(MACH)
 LDLIBS +=	-lc -lpicltree
-
-$(LINTLIB) :=	SRCS = ../llib-lpicld_pluginutil
-$(LINTLIB) :=	LINTFLAGS = -nvx -I..
 
 .KEEP_STATE:
 
 all : $(LIBS)
 
 lint :
-	$(LINT.c) $(SRCS)
 
 %.po:	../%.c
 	$(CP) $< $<.i
@@ -85,6 +77,3 @@ include $(SRC)/lib/Makefile.targ
 pics/%.o:	../%.c
 	$(COMPILE.c) -o $@ $<
 	$(POST_PROCESS_O)
-
-$(ROOTLINTDIR)/%: ../%
-	$(INS.file)

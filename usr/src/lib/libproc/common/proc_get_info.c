@@ -22,8 +22,10 @@
  * Copyright 2006 Sun Microsystems, Inc.  All rights reserved.
  * Use is subject to license terms.
  */
-
-#pragma ident	"%Z%%M%	%I%	%E% SMI"
+/*
+ * Copyright 2015, Joyent, Inc.
+ * Copyright 2024 Oxide Computer Company
+ */
 
 #include <stdio.h>
 #include <stdlib.h>
@@ -31,6 +33,8 @@
 #include <fcntl.h>
 #include <string.h>
 #include <limits.h>
+#include <sys/secflags.h>
+#include <errno.h>
 
 #include "Pcontrol.h"
 
@@ -65,6 +69,33 @@ proc_get_cred(pid_t pid, prcred_t *credp, int ngroups)
 		(void) close(fd);
 	}
 	return (rv);
+}
+
+int
+proc_get_secflags(pid_t pid, prsecflags_t **psf)
+{
+	char fname[PATH_MAX];
+	int fd;
+	int rv = -1;
+
+	if ((*psf = calloc(1, sizeof (prsecflags_t))) == NULL)
+		return (-1);
+
+	(void) snprintf(fname, sizeof (fname), "%s/%d/secflags",
+	    procfs_path, (int)pid);
+	if ((fd = open(fname, O_RDONLY)) >= 0) {
+		if (read(fd, *psf, sizeof (prsecflags_t)) ==
+		    sizeof (prsecflags_t))
+			rv = 0;
+		(void) close(fd);
+	}
+	return (rv);
+}
+
+void
+proc_free_priv(prpriv_t *prv)
+{
+	free(prv);
 }
 
 /*
@@ -187,4 +218,58 @@ proc_get_auxv(pid_t pid, auxv_t *pauxv, int naux)
 		(void) close(fd);
 	}
 	return (rv);
+}
+
+int
+proc_get_lwpsinfo(pid_t pid, uint_t thr, lwpsinfo_t *lwpip)
+{
+	char fname[PATH_MAX];
+	int fd;
+	int rv = -1;
+
+	(void) snprintf(fname, sizeof (fname), "%s/%d/lwp/%u/lwpsinfo",
+	    procfs_path, (int)pid, thr);
+	if ((fd = open(fname, O_RDONLY)) >= 0) {
+		if (read(fd, lwpip, sizeof (*lwpip)) == sizeof (*lwpip))
+			rv = 0;
+		(void) close(fd);
+	}
+	return (rv);
+}
+
+int
+proc_get_lwpstatus(pid_t pid, uint_t thr, lwpstatus_t *lwp)
+{
+	char fname[PATH_MAX];
+	int fd;
+	int rv = -1;
+
+	(void) snprintf(fname, sizeof (fname), "%s/%d/lwp/%u/lwpstatus",
+	    procfs_path, (int)pid, thr);
+	if ((fd = open(fname, O_RDONLY)) >= 0) {
+		if (read(fd, lwp, sizeof (*lwp)) == sizeof (*lwp))
+			rv = 0;
+		(void) close(fd);
+	}
+	return (rv);
+}
+
+ssize_t
+proc_get_cwd(pid_t pid, char *cwd, size_t len)
+{
+	ssize_t ret;
+	char fname[PATH_MAX];
+
+	if (len == 0) {
+		errno = EINVAL;
+		return (-1);
+	}
+
+	(void) snprintf(fname, sizeof (fname), "%s/%d/path/cwd",
+	    procfs_path, (int)pid);
+
+	if ((ret = readlink(fname, cwd, len - 1)) > 0)
+		cwd[ret] = '\0';
+
+	return (ret);
 }

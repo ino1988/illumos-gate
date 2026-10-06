@@ -128,7 +128,7 @@ cleanup:
  *
  * Note: this function is used for adding service principals to the
  * local /etc/krb5/krb5.keytab (unless KRB5_KTNAME has been set to something
- * different, see krb5envvar(5)) file when the client belongs to an AD domain.
+ * different, see krb5envvar(7)) file when the client belongs to an AD domain.
  * The keytab file is populated differently for an AD domain as the various
  * service principals share the same key material, unlike MIT based
  * implementations.
@@ -213,7 +213,7 @@ krb5_kt_add_ad_entries(krb5_context ctx, char **sprincs_str, char *domain,
 		goto cleanup;
 
 	code = krb5_get_permitted_enctypes(ctx, &enctypes);
-	if (code != 0 || *enctypes == NULL)
+	if (code != 0 || *enctypes == 0)
 		goto cleanup;
 
 	for (tprinc = sprincs_str; *tprinc; tprinc++) {
@@ -441,7 +441,7 @@ krb5_kt_ad_validate(krb5_context ctx, char *sprinc_str, uint_t flags,
 		goto cleanup;
 
 	code = krb5_get_permitted_enctypes(ctx, &enctypes);
-	if (code != 0 || *enctypes == NULL)
+	if (code != 0 || *enctypes == 0)
 		goto cleanup;
 
 	if ((code = krb5_kt_start_seq_get(ctx, kt, &cursor)) != 0)

@@ -649,7 +649,8 @@ errorq_drain(errorq_t *eqp)
 	 * errorq elements on the dump list.  Find the tail of
 	 * the list ready for append.
 	 */
-	if (panicstr && (dep = eqp->eq_dump) != NULL) {
+	dep = eqp->eq_dump;
+	if (panicstr && dep != NULL) {
 		while (dep->eqe_dump != NULL)
 			dep = dep->eqe_dump;
 	}
@@ -744,6 +745,7 @@ errorq_panic_drain(uint_t what)
 	uint64_t loggedtmp;
 	uint64_t logged = 0;
 
+	dep = NULL;
 	for (eqp = errorq_list; eqp != NULL; eqp = eqp->eq_next) {
 		if ((eqp->eq_flags & (ERRORQ_VITAL | ERRORQ_NVLIST)) != what)
 			continue; /* do not drain this queue on this pass */
@@ -944,7 +946,7 @@ errorq_cancel(errorq_t *eqp, errorq_elem_t *eqep)
 
 /*
  * Write elements on the dump list of each nvlist errorq to the dump device.
- * Upon reboot, fmd(1M) will extract and replay them for diagnosis.
+ * Upon reboot, fmd(8) will extract and replay them for diagnosis.
  */
 void
 errorq_dump(void)

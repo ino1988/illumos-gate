@@ -26,7 +26,7 @@
 #
 
 #
-# Copyright (c) 2013 by Delphix. All rights reserved.
+# Copyright (c) 2013, 2016 by Delphix. All rights reserved.
 #
 
 . $STF_SUITE/include/libtest.shlib
@@ -34,7 +34,7 @@
 
 #
 # DESCRIPTION:
-# Ensure that the fsdb(1M) utility fails on a ZFS file system.
+# Ensure that the fsdb(8) utility fails on a ZFS file system.
 #
 # STRATEGY:
 # 1. Populate a ZFS directory with a number of files.
@@ -46,18 +46,18 @@ verify_runnable "global"
 
 function cleanup
 {
-	$RM -rf $TESTDIR/*
+	rm -rf $TESTDIR/*
 }
 
 log_onexit cleanup
 
-log_assert "Ensure that the fsdb(1M) utility fails on a ZFS file system."
+log_assert "Ensure that the fsdb(8) utility fails on a ZFS file system."
 
 populate_dir $NUM_FILES
-inode_num=`$LS -li $TESTDIR/$TESTFILE.0 | $AWK '{print $1}'`
+inode_num=`ls -li $TESTDIR/$TESTFILE.0 | awk '{print $1}'`
 [[ -z $inode_num ]] && \
     log_fail "Failed to determine inode of file: $TESTDIR/$TESTFILE.0"
 
-log_mustnot $ECHO ":inode $inode_num" | $FSDB /dev/rdsk/${DISK}s0
+log_mustnot echo ":inode $inode_num" | fsdb /dev/rdsk/${DISK}s0
 
-log_pass "fsdb(1M) returned an error as expected."
+log_pass "fsdb(8) returned an error as expected."

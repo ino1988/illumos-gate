@@ -22,6 +22,7 @@
 /*
  * Copyright (c) 2004-2012 Emulex. All rights reserved.
  * Use is subject to license terms.
+ * Copyright 2020 RackTop Systems, Inc.
  */
 
 #include <emlxs.h>
@@ -978,6 +979,8 @@ emlxs_port_offline(emlxs_port_t *port, uint32_t scope)
 	 * (e.g. RSCN)
 	 */
 	if (linkdown) {
+		hba->flag &= ~FC_GPIO_LINK_UP;
+
 		mutex_enter(&EMLXS_PORT_LOCK);
 
 		port->flag &= EMLXS_PORT_LINKDOWN_MASK;
@@ -1554,6 +1557,10 @@ emlxs_port_online(emlxs_port_t *vport)
 		(void) strlcpy(linkspeed, "16Gb", sizeof (linkspeed));
 		state |= FC_STATE_16GBIT_SPEED;
 		break;
+	case LA_32GHZ_LINK:
+		(void) strlcpy(linkspeed, "32Gb", sizeof (linkspeed));
+		state |= FC_STATE_32GBIT_SPEED;
+		break;
 	default:
 		(void) snprintf(linkspeed, sizeof (linkspeed), "unknown(0x%x)",
 		    hba->linkspeed);
@@ -1621,6 +1628,8 @@ emlxs_port_online(emlxs_port_t *vport)
 		/* Flush any pending ub buffers */
 		emlxs_ub_flush(vport);
 	}
+
+	hba->flag |= FC_GPIO_LINK_UP;
 
 	return;
 
@@ -2021,8 +2030,6 @@ emlxs_offline(emlxs_hba_t *hba, uint32_t reset_requested)
 	rval = 0;
 
 	EMLXS_MSGF(EMLXS_CONTEXT, &emlxs_offline_msg, NULL);
-
-done:
 
 	return (rval);
 

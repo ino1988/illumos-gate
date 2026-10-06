@@ -22,6 +22,8 @@
 /*
  * Copyright 2010 Sun Microsystems, Inc.  All rights reserved.
  * Use is subject to license terms.
+ * Copyright 2018 Joyent, Inc.
+ * Copyright 2026 Oxide Computer Company
  */
 
 #include <sys/strsun.h>
@@ -113,7 +115,7 @@ flow_stat_update(kstat_t *ksp, int rw)
 
 	for (i = 0; i < fep->fe_rx_srs_cnt; i++) {
 		mac_srs = (mac_soft_ring_set_t *)fep->fe_rx_srs[i];
-		if (mac_srs == NULL) 		/* Multicast flow */
+		if (mac_srs == NULL)		/* Multicast flow */
 			break;
 		mac_rx_stat = &mac_srs->srs_rx.sr_stat;
 
@@ -127,7 +129,7 @@ flow_stat_update(kstat_t *ksp, int rw)
 	}
 
 	mac_srs = (mac_soft_ring_set_t *)fep->fe_tx_srs;
-	if (mac_srs == NULL) 		/* Multicast flow */
+	if (mac_srs == NULL)		/* Multicast flow */
 		goto done;
 	mac_tx_stat = &mac_srs->srs_tx.st_stat;
 
@@ -229,7 +231,7 @@ mac_flow_create(flow_desc_t *fd, mac_resource_props_t *mrp, char *name,
 		cv_init(&flent->fe_cv, NULL, CV_DEFAULT, NULL);
 
 		/* Initialize the receiver function to a safe routine */
-		flent->fe_cb_fn = (flow_fn_t)mac_pkt_drop;
+		flent->fe_cb_fn = (flow_fn_t)mac_rx_def;
 		flent->fe_index = -1;
 	}
 	(void) strlcpy(flent->fe_flow_name, name, MAXFLOWNAMELEN);
@@ -759,20 +761,19 @@ mac_flow_modify(flow_tab_t *ft, flow_entry_t *flent, mac_resource_props_t *mrp)
 		    !(changed_mask & MRP_CPUS) &&
 		    !(mcip_mrp->mrp_mask & MRP_CPUS_USERSPEC)) {
 			mac_fanout_setup(mcip, flent, mcip_mrp,
-			    mac_rx_deliver, mcip, NULL, NULL);
+			    mac_rx_deliver, mcip, NULL);
 		}
 	}
 	if (mrp->mrp_mask & MRP_PRIORITY)
 		mac_flow_update_priority(mcip, flent);
 
 	if (changed_mask & MRP_CPUS)
-		mac_fanout_setup(mcip, flent, mrp, mac_rx_deliver, mcip, NULL,
-		    NULL);
+		mac_fanout_setup(mcip, flent, mrp, mac_rx_deliver, mcip, NULL);
 
 	if (mrp->mrp_mask & MRP_POOL) {
 		pool_lock();
 		cpupart = mac_pset_find(mrp, &use_default);
-		mac_fanout_setup(mcip, flent, mrp, mac_rx_deliver, mcip, NULL,
+		mac_fanout_setup(mcip, flent, mrp, mac_rx_deliver, mcip,
 		    cpupart);
 		mac_set_pool_effective(use_default, cpupart, mrp, emrp);
 		pool_unlock();
@@ -1186,7 +1187,7 @@ mac_rename_flow(flow_entry_t *fep, const char *new_name)
 int
 mac_link_flow_init(mac_client_handle_t mch, flow_entry_t *sub_flow)
 {
-	mac_client_impl_t 	*mcip = (mac_client_impl_t *)mch;
+	mac_client_impl_t	*mcip = (mac_client_impl_t *)mch;
 	mac_impl_t		*mip = mcip->mci_mip;
 	int			err;
 
@@ -1203,7 +1204,7 @@ mac_link_flow_init(mac_client_handle_t mch, flow_entry_t *sub_flow)
 
 /*
  * mac_link_flow_add()
- * Used by flowadm(1m) or kernel mac clients for creating flows.
+ * Used by flowadm(8) or kernel mac clients for creating flows.
  */
 int
 mac_link_flow_add(datalink_id_t linkid, char *flow_name,
@@ -1320,7 +1321,7 @@ bail:
 void
 mac_link_flow_clean(mac_client_handle_t mch, flow_entry_t *sub_flow)
 {
-	mac_client_impl_t 	*mcip = (mac_client_impl_t *)mch;
+	mac_client_impl_t	*mcip = (mac_client_impl_t *)mch;
 	mac_impl_t		*mip = mcip->mci_mip;
 	boolean_t		last_subflow;
 
@@ -1343,7 +1344,7 @@ mac_link_flow_clean(mac_client_handle_t mch, flow_entry_t *sub_flow)
 
 	/*
 	 * Delete the SRSs associated with this subflow. If this is being
-	 * driven by flowadm(1M) then the subflow will be deleted by
+	 * driven by flowadm(8) then the subflow will be deleted by
 	 * dls_rem_flow. However if this is a result of the interface being
 	 * unplumbed then the subflow itself won't be deleted.
 	 */
@@ -1369,7 +1370,7 @@ mac_link_flow_clean(mac_client_handle_t mch, flow_entry_t *sub_flow)
 
 /*
  * mac_link_flow_remove()
- * Used by flowadm(1m) or kernel mac clients for removing flows.
+ * Used by flowadm(8) or kernel mac clients for removing flows.
  */
 int
 mac_link_flow_remove(char *flow_name)
@@ -1438,7 +1439,7 @@ int
 mac_link_flow_modify(char *flow_name, mac_resource_props_t *mrp)
 {
 	flow_entry_t		*flent;
-	mac_client_impl_t 	*mcip;
+	mac_client_impl_t	*mcip;
 	int			err = 0;
 	mac_perim_handle_t	mph;
 	datalink_id_t		linkid;
@@ -1493,7 +1494,6 @@ mac_link_flow_modify(char *flow_name, mac_resource_props_t *mrp)
 		(void) mac_flow_modify_props(flent, mrp);
 	}
 
-done:
 	mac_perim_exit(mph);
 	return (err);
 }
@@ -2499,4 +2499,24 @@ mac_flow_tab_info_get(flow_mask_t mask)
 			return (&flow_tab_info_list[i]);
 	}
 	return (NULL);
+}
+
+/*
+ * Is the target bandwidth control enabled?
+ */
+boolean_t
+mac_bw_ctl_is_enabled(const mac_bw_ctl_t *bw)
+{
+	ASSERT(MUTEX_HELD(&bw->mac_bw_lock));
+	return ((bw->mac_bw_state & BW_ENABLED) != 0);
+}
+
+/*
+ * Has the target bandwidth control gone past its limit in the current tick?
+ */
+boolean_t
+mac_bw_ctl_is_enforced(const mac_bw_ctl_t *bw)
+{
+	ASSERT(MUTEX_HELD(&bw->mac_bw_lock));
+	return ((bw->mac_bw_state & BW_ENFORCED) != 0);
 }

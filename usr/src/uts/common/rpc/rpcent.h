@@ -39,8 +39,6 @@
 #ifndef _RPC_RPCENT_H
 #define	_RPC_RPCENT_H
 
-#pragma ident	"%Z%%M%	%I%	%E% SMI"
-
 #ifdef	__cplusplus
 extern "C" {
 #endif
@@ -51,7 +49,6 @@ struct rpcent {
 	int	r_number;	/* rpc program number */
 };
 
-#ifdef __STDC__
 extern struct rpcent *getrpcbyname_r
 		(const char *,	  struct rpcent *, char *, int);
 extern struct rpcent *getrpcbynumber_r
@@ -64,18 +61,6 @@ extern struct rpcent *getrpcbynumber(const int);
 extern struct rpcent *getrpcent(void);
 extern void setrpcent(const int);
 extern void endrpcent(void);
-#else
-extern struct rpcent *getrpcbyname_r();
-extern struct rpcent *getrpcbynumber_r();
-extern struct rpcent *getrpcent_r();
-
-/* Old interfaces that return a pointer to a static area;  MT-unsafe */
-extern struct rpcent *getrpcbyname();
-extern struct rpcent *getrpcbynumber();
-extern struct rpcent *getrpcent();
-extern void setrpcent();
-extern void endrpcent();
-#endif
 
 #ifdef	__cplusplus
 }

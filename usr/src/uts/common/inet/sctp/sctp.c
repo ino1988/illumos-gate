@@ -23,6 +23,10 @@
  * Copyright (c) 2004, 2010, Oracle and/or its affiliates. All rights reserved.
  */
 
+/*
+ * Copyright 2026 Oxide Computer Company
+ */
+
 #include <sys/types.h>
 #include <sys/stream.h>
 #include <sys/strsubr.h>
@@ -783,7 +787,7 @@ sctp_init_values(sctp_t *sctp, sctp_t *psctp, int sleep)
 	int	err;
 	int	cnt;
 	sctp_stack_t	*sctps = sctp->sctp_sctps;
-	conn_t 	*connp;
+	conn_t	*connp;
 
 	connp = sctp->sctp_connp;
 
@@ -912,6 +916,16 @@ sctp_init_values(sctp_t *sctp, sctp_t *psctp, int sleep)
 			goto failure;
 		}
 	}
+
+	/*
+	 * Derive the IP version from the socket family, as the other
+	 * transports do. The common socket option code keys on it. An
+	 * association may have both IPv4 and IPv6 peers, so this does not
+	 * describe the wire format used for any particular destination,
+	 * which is tracked per peer address.
+	 */
+	connp->conn_ipversion = (connp->conn_family == AF_INET6) ?
+	    IPV6_VERSION : IPV4_VERSION;
 
 	sctp->sctp_understands_asconf = B_TRUE;
 	sctp->sctp_understands_addip = B_TRUE;
@@ -1788,7 +1802,7 @@ sctp_find_next_tq(sctp_t *sctp)
 	for (try = 0; try < sctps->sctps_recvq_tq_list_cur_sz; try++) {
 		tq = sctps->sctps_recvq_tq_list[next_tq];
 		if (taskq_dispatch(tq, sctp_process_recvq, sctp,
-		    TQ_NOSLEEP) != NULL) {
+		    TQ_NOSLEEP) != TASKQID_INVALID) {
 			sctp->sctp_recvq_tq = tq;
 			return (B_TRUE);
 		}
@@ -1803,7 +1817,8 @@ sctp_find_next_tq(sctp_t *sctp)
 	 */
 	sctp_inc_taskq(sctps);
 	tq = sctps->sctps_recvq_tq_list[sctps->sctps_recvq_tq_list_cur_sz - 1];
-	if (taskq_dispatch(tq, sctp_process_recvq, sctp, TQ_NOSLEEP) != NULL) {
+	if (taskq_dispatch(tq, sctp_process_recvq, sctp, TQ_NOSLEEP) !=
+	    TASKQID_INVALID) {
 		sctp->sctp_recvq_tq = tq;
 		return (B_TRUE);
 	}

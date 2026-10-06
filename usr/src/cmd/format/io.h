@@ -97,19 +97,16 @@ typedef	char TOKEN[TOKEN_SIZE+1];		/* token type */
 #define	COMMENT_CHAR	'#'			/* comment character */
 
 
-/*
- *	Prototypes for ANSI C
- */
 char	*gettoken(char *inbuf);
 void	clean_token(char *cleantoken, char *token);
 int	geti(char *str, int *iptr, int *wild);
 uint64_t	input(int, char *, int, u_ioparam_t *, int *, int);
 int	find_value(slist_t *slist, char *match_str, int *match_value);
 char	*find_string(slist_t *slist, int match_value);
-void	fmt_print(char *format, ...);
-void	nolog_print(char *format, ...);
-void	log_print(char *format, ...);
-void	err_print(char *format, ...);
+void	fmt_print(char *format, ...) __PRINTFLIKE(1);
+void	nolog_print(char *format, ...) __PRINTFLIKE(1);
+void	log_print(char *format, ...) __PRINTFLIKE(1);
+void	err_print(char *format, ...) __PRINTFLIKE(1);
 void	print_buf(char *buf, int nbytes);
 void	pr_diskline(struct disk_info *disk, int num);
 void	pr_dblock(void (*func)(char *, ...), diskaddr_t bn);

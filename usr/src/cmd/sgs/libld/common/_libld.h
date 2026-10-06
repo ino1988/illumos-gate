@@ -24,6 +24,7 @@
  *	  All Rights Reserved
  *
  * Copyright (c) 1989, 2010, Oracle and/or its affiliates. All rights reserved.
+ * Copyright 2024 Oxide Computer Company
  */
 
 /*
@@ -199,7 +200,7 @@ typedef struct {
 	const Rel_entry	*mr_reloc_table;
 
 	Word		(* mr_init_rel)(Rel_desc *, Word *, void *);
-	void 		(* mr_mach_eflags)(Ehdr *, Ofl_desc *);
+	void		(* mr_mach_eflags)(Ehdr *, Ofl_desc *);
 	void		(* mr_mach_make_dynamic)(Ofl_desc *, size_t *);
 	void		(* mr_mach_update_odynamic)(Ofl_desc *, Dyn **);
 	Xword		(* mr_calc_plt_addr)(Sym_desc *, Ofl_desc *);
@@ -298,19 +299,6 @@ typedef struct sym_s_list {
 	Word		sl_hval;
 	Sym_desc	*sl_sdp;
 } Sym_s_list;
-
-/*
- * ld heap management structure
- */
-typedef struct _ld_heap Ld_heap;
-struct _ld_heap {
-	Ld_heap		*lh_next;
-	void		*lh_free;
-	void		*lh_end;
-};
-
-#define	HEAPBLOCK	0x800000	/* default allocation block size */
-#define	HEAPALIGN	0x8		/* heap blocks alignment requirement */
 
 /*
  * Dynamic per-symbol filtee string table descriptor.  This associates filtee
@@ -460,6 +448,7 @@ typedef struct {
 #define	AL_CNT_SEGMENTS		20	/* ofl_segs */
 
 #define	AL_CNT_ASSDEFLIB	4	/* ofl_assdeflib exceptions count */
+#define	AL_CNT_MAPASSERT	10	/* mapfile assertions */
 
 /*
  * Return codes for {tls|got}_fixups() routines
@@ -649,7 +638,6 @@ typedef struct {
 extern char		*Plibpath;
 extern char		*Llibdir;
 extern char		*Ulibdir;
-extern Ld_heap		*ld_heap;
 extern APlist		*lib_support;
 extern int		demangle_flag;
 extern const Msg	reject[];
@@ -666,11 +654,17 @@ extern int		cap_names_match(Alist *, Alist *);
 
 extern void		lds_atexit(Ofl_desc *, int);
 
-extern void		libld_free(void *);
-extern void		*libld_malloc(size_t);
-extern void		*libld_realloc(void *, size_t);
+/*
+ * Note that libld has a long history of assuming that all allocations are
+ * 0-initialized.  libld_malloc must maintain this.
+ */
+#define	libld_free(x)		free(x)
+#define	libld_malloc(x)		calloc(1, x)
+#define	libld_realloc(x, s)	realloc(x, s)
+#define	libld_calloc(n, s)	calloc(n, s)
 
 extern int		isdavl_compare(const void *, const void *);
+extern int		osdesc_compare(const Os_desc *, const Os_desc *);
 
 extern Sdf_desc		*sdf_add(const char *, APlist **);
 extern Sdf_desc		*sdf_find(const char *, APlist *);
@@ -754,6 +748,7 @@ extern Sdf_desc		*sdf_find(const char *, APlist *);
 #define	ld_sym_nodirect		ld64_sym_nodirect
 #define	ld_sym_process		ld64_sym_process
 #define	ld_sym_resolve		ld64_sym_resolve
+#define	ld_sym_reducable	ld64_sym_reducable
 #define	ld_sym_spec		ld64_sym_spec
 #define	ld_targ			ld64_targ
 #define	ld_targ_init_sparc	ld64_targ_init_sparc
@@ -852,6 +847,7 @@ extern Sdf_desc		*sdf_find(const char *, APlist *);
 #define	ld_sym_nodirect		ld32_sym_nodirect
 #define	ld_sym_process		ld32_sym_process
 #define	ld_sym_resolve		ld32_sym_resolve
+#define	ld_sym_reducable	ld32_sym_reducable
 #define	ld_sym_spec		ld32_sym_spec
 #define	ld_targ			ld32_targ
 #define	ld_targ_init_sparc	ld32_targ_init_sparc
@@ -878,8 +874,8 @@ extern int		dbg_setup(Ofl_desc *, const char *, int);
 
 extern uintptr_t	ld_add_actrel(Word, Rel_desc *, Ofl_desc *);
 extern uintptr_t	ld_add_libdir(Ofl_desc *, const char *);
-extern void 		ld_adj_movereloc(Ofl_desc *, Rel_desc *);
-extern Sym_desc * 	ld_am_I_partial(Rel_desc *, Xword);
+extern void		ld_adj_movereloc(Ofl_desc *, Rel_desc *);
+extern Sym_desc *	ld_am_I_partial(Rel_desc *, Xword);
 extern void		ld_ar_member(Ar_desc *, Elf_Arsym *, Ar_aux *,
 			    Ar_mem *);
 extern Ar_desc		*ld_ar_setup(const char *, Elf *, Ofl_desc *);
@@ -997,6 +993,7 @@ extern uintptr_t	ld_sym_nodirect(Is_desc *, Ifl_desc *, Ofl_desc *);
 extern uintptr_t	ld_sym_process(Is_desc *, Ifl_desc *, Ofl_desc *);
 extern uintptr_t	ld_sym_resolve(Sym_desc *, Sym *, Ifl_desc *,
 			    Ofl_desc *, int, Word, sd_flag_t);
+extern Boolean		ld_sym_reducable(Ofl_desc *, Sym_desc *);
 extern uintptr_t	ld_sym_spec(Ofl_desc *);
 
 extern Target		ld_targ;

@@ -70,6 +70,12 @@ static void iscsi_notice_key_values(iscsi_conn_t *icp);
  * +--------------------------------------------------------------------+
  */
 
+void
+iscsi_login_cb(void *arg)
+{
+	(void) iscsi_login_start(arg);
+}
+
 /*
  * iscsi_login_start - connect and perform iscsi protocol login
  */
@@ -235,7 +241,7 @@ login_retry:
 			goto login_start;
 		} else {
 			if (ddi_taskq_dispatch(isp->sess_login_taskq,
-			    (void(*)())iscsi_login_start, itp, DDI_SLEEP) !=
+			    iscsi_login_cb, itp, DDI_SLEEP) !=
 			    DDI_SUCCESS) {
 				iscsi_login_end(icp,
 				    ISCSI_STATUS_LOGIN_TIMED_OUT, itp);
@@ -402,8 +408,7 @@ iscsi_login(iscsi_conn_t *icp, uint8_t *status_class, uint8_t *status_detail)
 	icp->conn_current_stage = ISCSI_INITIAL_LOGIN_STAGE;
 	icp->conn_partial_response = 0;
 
-	if (isp->sess_auth.auth_buffers &&
-	    isp->sess_auth.num_auth_buffers) {
+	if (isp->sess_auth.num_auth_buffers != 0) {
 
 		auth_client = (IscsiAuthClient *)isp->
 		    sess_auth.auth_buffers[0].address;
@@ -431,19 +436,16 @@ iscsi_login(iscsi_conn_t *icp, uint8_t *status_class, uint8_t *status_detail)
 			goto iscsi_login_done;
 		}
 
-		if (isp->sess_auth.username &&
-		    (iscsiAuthClientSetUsername(auth_client,
-		    isp->sess_auth.username) !=
-		    iscsiAuthStatusNoError)) {
+		if (iscsiAuthClientSetUsername(auth_client,
+		    isp->sess_auth.username) != iscsiAuthStatusNoError) {
 			cmn_err(CE_WARN, "iscsi connection(%u) login failed - "
 			    "unable to set username", icp->conn_oid);
 			goto iscsi_login_done;
 		}
 
-		if (isp->sess_auth.password &&
-		    (iscsiAuthClientSetPassword(auth_client,
+		if (iscsiAuthClientSetPassword(auth_client,
 		    isp->sess_auth.password, isp->sess_auth.password_length) !=
-		    iscsiAuthStatusNoError)) {
+		    iscsiAuthStatusNoError) {
 			cmn_err(CE_WARN, "iscsi connection(%u) login failed - "
 			    "unable to set password", icp->conn_oid);
 			goto iscsi_login_done;
@@ -684,9 +686,10 @@ iscsi_make_login_pdu(iscsi_conn_t *icp, idm_pdu_t *text_pdu,
 	isp = icp->conn_sess;
 	ASSERT(isp != NULL);
 
-	auth_client =
-	    (isp->sess_auth.auth_buffers && isp->sess_auth.num_auth_buffers) ?
-	    (IscsiAuthClient *)isp->sess_auth.auth_buffers[0].address : NULL;
+	if (isp->sess_auth.num_auth_buffers != 0) {
+		auth_client =
+		    (IscsiAuthClient *)isp->sess_auth.auth_buffers[0].address;
+	}
 
 	/*
 	 * initialize the PDU header
@@ -719,8 +722,7 @@ iscsi_make_login_pdu(iscsi_conn_t *icp, idm_pdu_t *text_pdu,
 	 * * and we need to decide what stage to start in.
 	 */
 	if (icp->conn_current_stage == ISCSI_INITIAL_LOGIN_STAGE) {
-		if ((isp->sess_hba->hba_name) &&
-		    (isp->sess_hba->hba_name[0])) {
+		if (isp->sess_hba->hba_name[0] != '\0') {
 			if (!iscsi_add_text(text_pdu, max_data_length,
 			    "InitiatorName",
 			    (char *)isp->sess_hba->hba_name)) {
@@ -733,8 +735,7 @@ iscsi_make_login_pdu(iscsi_conn_t *icp, idm_pdu_t *text_pdu,
 			return (ISCSI_STATUS_INTERNAL_ERROR);
 		}
 
-		if ((isp->sess_hba->hba_alias) &&
-		    (isp->sess_hba->hba_alias[0])) {
+		if (isp->sess_hba->hba_alias[0] != '\0') {
 			if (!iscsi_add_text(text_pdu, max_data_length,
 			    "InitiatorAlias",
 			    (char *)isp->sess_hba->hba_alias)) {
@@ -1078,9 +1079,10 @@ iscsi_process_login_response(iscsi_conn_t *icp,
 	isp = icp->conn_sess;
 	ASSERT(isp != NULL);
 
-	auth_client =
-	    (isp->sess_auth.auth_buffers && isp->sess_auth.num_auth_buffers) ?
-	    (IscsiAuthClient *) isp->sess_auth.auth_buffers[0].address : NULL;
+	if (isp->sess_auth.num_auth_buffers != 0) {
+		auth_client =
+		    (IscsiAuthClient *)isp->sess_auth.auth_buffers[0].address;
+	}
 	transit = ilrhp->flags & ISCSI_FLAG_LOGIN_TRANSIT;
 
 	/* verify the initial buffer was big enough to hold everything */
@@ -2066,6 +2068,7 @@ iscsi_login_failure_str(uchar_t status_class, uchar_t status_detail)
 		default:
 			break;
 		}
+		break;
 	case 0x01:
 		switch (status_detail) {
 		case 0x01:
@@ -2077,6 +2080,7 @@ iscsi_login_failure_str(uchar_t status_class, uchar_t status_detail)
 		default:
 			break;
 		}
+		break;
 	case 0x02:
 		switch (status_detail) {
 		case 0x00:
@@ -2116,6 +2120,7 @@ iscsi_login_failure_str(uchar_t status_class, uchar_t status_detail)
 		default:
 			break;
 		}
+		break;
 	case 0x03:
 		switch (status_detail) {
 		case 0x00:
@@ -2129,6 +2134,7 @@ iscsi_login_failure_str(uchar_t status_class, uchar_t status_detail)
 		default:
 			break;
 		}
+		break;
 	}
 	return ("Unknown login response received.");
 }

@@ -27,6 +27,7 @@
 
 # Copyright 2010, Richard Lowe
 # Copyright 2014 Garrett D'Amore <garrett@damore.org>
+# Copyright 2021 OmniOS Community Edition (OmniOSce) Association.
 
 #
 # The 'checks' package contains various checks that may be run
@@ -41,4 +42,7 @@ __all__ = [
 	'JStyle',
 	'Keywords',
 	'ManLint',
-	'Mapfile']
+	'Mapfile',
+	'ShellLint',
+	'SpellCheck',
+	'WsCheck']

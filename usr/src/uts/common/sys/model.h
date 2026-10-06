@@ -27,8 +27,6 @@
 #ifndef	_SYS_MODEL_H
 #define	_SYS_MODEL_H
 
-#pragma ident	"%Z%%M%	%I%	%E% SMI"
-
 #ifdef	__cplusplus
 extern "C" {
 #endif
@@ -39,7 +37,7 @@ extern "C" {
 
 #include <sys/isa_defs.h>
 
-#if defined(_KERNEL) || defined(_KMEMUSER)
+#if defined(_KERNEL) || defined(_FAKE_KERNEL) || defined(_KMEMUSER)
 
 /*
  * These bits are used in various places to specify the data model
@@ -158,20 +156,17 @@ typedef unsigned int model_t;
 #define	STRUCT_HANDLE(struct_type, handle)				\
 	struct {							\
 		struct struct_type *ptr;				\
-	} handle = { NULL }
+		model_t	model;						\
+	} handle = { NULL, DATAMODEL_ILP32 }
 
 #define	STRUCT_DECL(struct_type, handle)				\
 	struct struct_type __##handle##_buf;				\
 	STRUCT_HANDLE(struct_type, handle)
 
-#ifdef	__lint
 #define	STRUCT_SET_HANDLE(handle, umodel, addr)				\
-	(void) (umodel);						\
+	(handle).model = (model_t)(umodel) & DATAMODEL_MASK;		\
+	ASSERT(((umodel) & DATAMODEL_MASK) == DATAMODEL_ILP32);		\
 	(handle).ptr = (addr)
-#else
-#define	STRUCT_SET_HANDLE(handle, umodel, addr)				\
-	(handle).ptr = (addr)
-#endif	/* __lint */
 
 #define	STRUCT_INIT(handle, umodel)					\
 	STRUCT_SET_HANDLE(handle, umodel, &__##handle##_buf)

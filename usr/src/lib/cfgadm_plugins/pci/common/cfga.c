@@ -24,8 +24,6 @@
  * Use is subject to license terms.
  */
 
-#pragma ident	"%Z%%M%	%I%	%E% SMI"
-
 /*
  *	Plugin Library for PCI Hot-Plug Controller
  */
@@ -67,9 +65,6 @@
 #include <librcm.h>
 #include "../../../../common/pci/pci_strings.h"
 
-extern const struct pci_class_strings_s class_pci[];
-extern int class_pci_items;
-
 /*
  * Set the version number
  */
@@ -86,7 +81,7 @@ int cfga_version = CFGA_HSL_V2;
 /*
  *	DEBUGING LEVEL
  *
- * 	External routines:  1 - 2
+ *	External routines:  1 - 2
  *	Internal routines:  3 - 4
  */
 #ifdef	PCIHP_DBG
@@ -332,7 +327,7 @@ get_occupants(const char *ap_id, hpc_occupant_info_t *occupant)
 			break;
 		}
 		occupant->id[occupant->i] = (char *)malloc(
-			strlen(prop_data) + sizeof ("/devices"));
+		    strlen(prop_data) + sizeof ("/devices"));
 		(void) snprintf(occupant->id[occupant->i], strlen(prop_data) +
 		    sizeof ("/devices"), "/devices%s", prop_data);
 		DBG(1, ("%s\n", occupant->id[occupant->i]));
@@ -706,8 +701,7 @@ cfga_change_state(cfga_cmd_t state_change_cmd, const char *ap_id,
 			rv = CFGA_ERROR;
 			cfga_err(errstring, CMD_SLOT_CONFIGURE, 0);
 			if ((rs == AP_RSTATE_DISCONNECTED) &&
-					(devctl_ap_disconnect(dcp, NULL)
-								== -1)) {
+			    (devctl_ap_disconnect(dcp, NULL) == -1)) {
 				rv = CFGA_ERROR;
 				cfga_err(errstring,
 				    CMD_SLOT_CONFIGURE, 0);
@@ -1038,19 +1032,19 @@ cfga_private_func(const char *function, const char *ap_id,
 	switch (i) {
 		case ENABLE_SLOT:
 			build_control_data(&iocdata,
-				HPC_CTRL_ENABLE_SLOT, 0);
+			    HPC_CTRL_ENABLE_SLOT, 0);
 			break;
 		case DISABLE_SLOT:
 			build_control_data(&iocdata,
-				HPC_CTRL_DISABLE_SLOT, 0);
+			    HPC_CTRL_DISABLE_SLOT, 0);
 			break;
 		case ENABLE_AUTOCNF:
 			build_control_data(&iocdata,
-				HPC_CTRL_ENABLE_AUTOCFG, 0);
+			    HPC_CTRL_ENABLE_AUTOCFG, 0);
 			break;
 		case DISABLE_AUTOCNF:
 			build_control_data(&iocdata,
-				HPC_CTRL_DISABLE_AUTOCFG, 0);
+			    HPC_CTRL_DISABLE_AUTOCFG, 0);
 			break;
 		case LED:
 			/* set mode */
@@ -1082,11 +1076,10 @@ cfga_private_func(const char *function, const char *ap_id,
 				len = strlen(func_strs[MODE]);
 				if ((strncmp(str, func_strs[MODE], len) == 0) &&
 				    (*(str+(len)) == '=')) {
-				    for (str = (str+(++len)), i = 0;
-					*str != NULL; i++, str++) {
+					for (str = (str+(++len)), i = 0;
+					    *str != '\0'; i++, str++) {
 						buf[i] = *str;
-
-				    }
+					}
 				}
 				buf[i] = '\0';
 				DBG(2, ("buf_mode= %s\n", buf));
@@ -1111,6 +1104,7 @@ cfga_private_func(const char *function, const char *ap_id,
 				return (prt_led_mode(ap_id, repeat, errstring,
 				    msgp));
 			}
+			/* FALLTHROUGH */
 		default:
 			DBG(1, ("default\n"));
 			errno = EINVAL;
@@ -1278,10 +1272,9 @@ find_physical_slot_names(const char *devcomp, struct searcharg *slotarg)
 
 	DBG(1, ("find_physical_slot_names\n"));
 
-	if ((root_node = di_init("/", DINFOCPYALL|DINFOPATH))
-		== DI_NODE_NIL) {
+	if ((root_node = di_init("/", DINFOCPYALL|DINFOPATH)) == DI_NODE_NIL) {
 		DBG(1, ("di_init() failed\n"));
-		return (NULL);
+		return (-1);
 	}
 
 	slotarg->devpath = (char *)devcomp;
@@ -1289,15 +1282,15 @@ find_physical_slot_names(const char *devcomp, struct searcharg *slotarg)
 	if ((slotarg->promp = di_prom_init()) == DI_PROM_HANDLE_NIL) {
 		DBG(1, ("di_prom_init() failed\n"));
 		di_fini(root_node);
-		return (NULL);
+		return (-1);
 	}
 
 	(void) di_walk_minor(root_node, "ddi_ctl:attachment_point:pci",
-		0, (void *)slotarg, find_slotname);
+	    0, (void *)slotarg, find_slotname);
 
 	di_prom_fini(slotarg->promp);
 	di_fini(root_node);
-	if (slotarg->slotnames[0] != NULL)
+	if (*slotarg->slotnames[0] != '\0')
 		return (0);
 	else
 		return (-1);
@@ -1306,7 +1299,7 @@ find_physical_slot_names(const char *devcomp, struct searcharg *slotarg)
 static void
 get_type(hpc_board_type_t boardtype, hpc_card_info_t cardinfo, char *buf)
 {
-	int i;
+	size_t i;
 
 	DBG(1, ("class: %i\n", cardinfo.base_class));
 	DBG(1, ("subclass: %i\n", cardinfo.sub_class));
@@ -1689,6 +1682,7 @@ cont:
 
 	if ((*cs)->ap_info[0] == '\0') {
 		/* slot_names of bus node  */
+		memset(&slotname_arg, 0, sizeof (slotname_arg));
 		if (find_physical_slot_names(ap_id, &slotname_arg) != -1)
 			(void) strcpy((*cs)->ap_info,
 			    slotname_arg.slotnames[slotname_arg.minor]);

@@ -4,15 +4,13 @@
  */
 
 /*	Copyright (c) 1984, 1986, 1987, 1988, 1989 AT&T	*/
-/*	  All Rights Reserved  	*/
+/*	  All Rights Reserved	*/
 
 /*
  * Copyright (c) 1980 Regents of the University of California.
  * All rights reserved. The Berkeley software License Agreement
  * specifies the terms and conditions for redistribution.
  */
-
-#pragma ident	"%Z%%M%	%I%	%E% SMI"
 
 #include "refer..c"
 #include <locale.h>
@@ -49,7 +47,7 @@ doref(char *line1)
 	int stat, nf, nr, query = 0, alph, digs;
 
 again:
-	buff[0] = dbuff[0] = NULL;
+	buff[0] = dbuff[0] = '\0';
 	if (biblio && Iline == 1 && line1[0] == '%')
 		strcat(dbuff, line1);
 	while (input(line)) {		/* get query */
@@ -137,6 +135,8 @@ again:
 			while (*p != '\n')
 				p++;
 			*++p = 0;
+			/* FALLTHROUGH */
+
 		case 1:
 			if (endpush)
 				if (nr = chkdup(answer)) {

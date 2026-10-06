@@ -1,6 +1,7 @@
 /*
  * Copyright (c) 2004 by Internet Systems Consortium, Inc. ("ISC")
  * Copyright (c) 1996-1999 by Internet Software Consortium.
+ * Copyright 2018 Joyent, Inc.
  *
  * Permission to use, copy, modify, and distribute this software for any
  * purpose with or without fee is hereby granted, provided that the above
@@ -14,12 +15,6 @@
  * ACTION OF CONTRACT, NEGLIGENCE OR OTHER TORTIOUS ACTION, ARISING OUT
  * OF OR IN CONNECTION WITH THE USE OR PERFORMANCE OF THIS SOFTWARE.
  */
-
-#ifndef lint
-static const char rcsid[] = "$Id: ns_print.c,v 1.12 2009/03/03 05:29:58 each Exp $";
-#endif
-
-/* Import. */
 
 #include "port_before.h"
 
@@ -177,11 +172,11 @@ ns_sprintrrf(const u_char *msg, size_t msglen,
 		rdata += len;
 		T(addstr(" ", 1, &buf, &buflen));
 
-		    
+
 		/* Second word, optional in ISDN records. */
 		if (type == ns_t_isdn && rdata == edata)
 			break;
-		    
+
 		T(len = charstr(rdata, edata, &buf, &buflen));
 		if (len == 0)
 			goto formerr;
@@ -599,7 +594,7 @@ ns_sprintrrf(const u_char *msg, size_t msglen,
 			}
 			else
 				leader = " ";
-	
+
 			for (n = 0; n < len; n += 48) {
 				T(addstr(leader, strlen(leader),
 					 &buf, &buflen));
@@ -688,7 +683,7 @@ ns_sprintrrf(const u_char *msg, size_t msglen,
 		if (rdata >= edata) goto formerr;
 		T(addstr(" ", 1, &buf, &buflen));
 		T(addname(msg, msglen, &rdata, origin, &buf, &buflen));
-		
+
 		break;
 	    }
 
@@ -731,7 +726,7 @@ ns_sprintrrf(const u_char *msg, size_t msglen,
 	case ns_t_nsec3:
 	case ns_t_nsec3param: {
 		u_int t, w, l, j, k, c;
-		
+
 		len = SPRINTF((tmp, "%u ", *rdata));
 		T(addstr(tmp, len, &buf, &buflen));
 		rdata++;
@@ -879,7 +874,7 @@ ns_sprintrrf(const u_char *msg, size_t msglen,
 			T(addstr(str, strlen(str), &buf, &buflen));
 		} else {
 			len = b64_ntop(rdata, edata-rdata, base64_dhcid, siz);
-		
+
 			if (len < 0)
 				goto formerr;
 
@@ -900,6 +895,7 @@ ns_sprintrrf(const u_char *msg, size_t msglen,
 			if (len > 15)
 				T(addstr(" )", 2, &buf, &buflen));
 		}
+		break;
 	}
 
 	case ns_t_ipseckey: {
@@ -907,7 +903,7 @@ ns_sprintrrf(const u_char *msg, size_t msglen,
 		unsigned int siz;
 		char base64_key[8192];
 		const char *leader;
-	
+
 		if (rdlen < 2)
 			goto formerr;
 
@@ -937,7 +933,7 @@ ns_sprintrrf(const u_char *msg, size_t msglen,
 		len = SPRINTF((tmp, "%u ", *rdata));
 		T(addstr(tmp, len, &buf, &buflen));
 		rdata++;
-		
+
 		len = SPRINTF((tmp, "%u ", *rdata));
 		T(addstr(tmp, len, &buf, &buflen));
 		rdata++;
@@ -991,6 +987,7 @@ ns_sprintrrf(const u_char *msg, size_t msglen,
 			if (len > 15)
 				T(addstr(" )", 2, &buf, &buflen));
 		}
+		break;
 	}
 
 	case ns_t_hip: {
@@ -998,7 +995,7 @@ ns_sprintrrf(const u_char *msg, size_t msglen,
 		char base64_key[NS_MD5RSA_MAX_BASE64];
 		unsigned int siz;
 		const char *leader = "\n\t\t\t\t\t";
-		
+
 		hip_len = *rdata++;
 		algorithm = *rdata++;
 		key_len = ns_get16(rdata);
@@ -1024,7 +1021,7 @@ ns_sprintrrf(const u_char *msg, size_t msglen,
 				goto formerr;
 
 			T(addstr(base64_key, len, &buf, &buflen));
-				
+
 			rdata += key_len;
 			while (rdata < edata) {
 				T(addstr(leader, strlen(leader), &buf, &buflen));

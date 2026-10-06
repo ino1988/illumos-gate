@@ -26,9 +26,9 @@
 
 /*	Copyright (c) 1984, 1986, 1987, 1988, 1989 AT&T	*/
 /*	  All Rights Reserved  	*/
-
-
-#pragma ident	"%Z%%M%	%I%	%E% SMI"
+/*
+ * Copyright (c) 2016 by Delphix. All rights reserved.
+ */
 
 #include "uucp.h"
 
@@ -48,8 +48,8 @@ char *rmtname;
 	 */
 	if (fork() == 0) {	/* can't vfork() */
 		/*
-		 * hide the uid of the initiator of this job so that he
-		 * doesn't get notified about things that don't concern him.
+		 * hide the uid of the initiator of this job so that it
+		 * doesn't get notified about things that don't concern it.
 		 */
 		(void) setuid(geteuid());
 		euucico(rmtname);
@@ -124,8 +124,8 @@ char	*rmtname;
 		for (i = 3; i < maxfiles; i++)
 			(void) close(i);
 		/*
-		 * hide the uid of the initiator of this job so that he
-		 * doesn't get notified about things that don't concern him.
+		 * hide the uid of the initiator of this job so that it
+		 * doesn't get notified about things that don't concern it.
 		 */
 		(void) setuid(geteuid());
 		(void) execle(UUXQT, "UUXQT", opt, (char *) 0, Env);

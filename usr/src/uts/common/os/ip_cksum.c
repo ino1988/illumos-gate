@@ -21,6 +21,9 @@
 /*
  * Copyright 2009 Sun Microsystems, Inc.  All rights reserved.
  * Use is subject to license terms.
+ * Copyright 2021 Joyent, Inc.
+ * Copyright 2022 Garrett D'Amore
+ * Copyright 2025 Oxide Computer Company
  */
 /* Copyright (c) 1990 Mentat Inc. */
 
@@ -34,12 +37,9 @@
 #include <sys/vtrace.h>
 #include <inet/sctp_crc32.h>
 #include <inet/ip.h>
+#include <inet/ip6.h>
 
-#include <sys/multidata.h>
-#include <sys/multidata_impl.h>
-
-extern unsigned int 	ip_ocsum(ushort_t *address, int halfword_count,
-    unsigned int sum);
+extern unsigned int ip_ocsum(ushort_t *, int, unsigned int);
 
 /*
  * Checksum routine for Internet Protocol family headers.
@@ -180,6 +180,7 @@ ip_cksum(mblk_t *mp, int offset, uint_t sum)
 	if (dp->db_struioflag & STRUIO_IP)
 		psum = *(ushort_t *)dp->db_struioun.data;
 slow:
+	DTRACE_PROBE(ip_cksum_slow);
 	pmp = 0;
 slow1:
 	mlen = 0;
@@ -400,136 +401,6 @@ sctp_cksum(mblk_t *mp, int offset)
 	return (crc32);
 }
 
-/*
- * Routine to compute Internet checksum (16-bit 1's complement) of a given
- * Multidata packet descriptor.  As in the non-Multidata routine, this doesn't
- * 1's complement the result, such that it may be used to compute partial
- * checksums.  Since it works on buffer spans rather than mblks, this routine
- * does not handle existing partial checksum value as in the STRUIO_IP special
- * mblk case (supporting this is rather trivial, but is perhaps of no use at
- * the moment unless synchronous streams and delayed checksum calculation are
- * revived.)
- *
- * Note also here that the given Multidata packet descriptor must refer to
- * a header buffer, i.e. it must have a header fragment.  In addition, the
- * offset must lie within the boundary of the header fragment.  For the
- * outbound tcp (MDT) case, this will not be an issue because the stack
- * ensures that such conditions are met, and that there is no need whatsoever
- * to compute partial checksums on an arbitrary offset that is not part of
- * the header fragment.  We may need to revisit this routine to handle all
- * cases of the inbound (MDR) case, especially when we need to perform partial
- * checksum calculation due to padded bytes (non-zeroes) in the frame.
- */
-uint_t
-ip_md_cksum(pdesc_t *pd, int offset, uint_t sum)
-{
-	pdescinfo_t	*pdi = &pd->pd_pdi;
-	uchar_t		*reg_start, *reg_end;
-	ssize_t		mlen, i;
-	ushort_t	*w;
-	boolean_t	byteleft = B_FALSE;
-
-	ASSERT((pdi->flags & PDESC_HAS_REF) != 0);
-	ASSERT(pdi->hdr_rptr != NULL && pdi->hdr_wptr != NULL);
-	ASSERT(offset <= PDESC_HDRL(pdi));
-
-	for (i = 0; i < pdi->pld_cnt + 1; i++) {
-		if (i == 0) {
-			reg_start = pdi->hdr_rptr;
-			reg_end = pdi->hdr_wptr;
-		} else {
-			reg_start = pdi->pld_ary[i - 1].pld_rptr;
-			reg_end = pdi->pld_ary[i - 1].pld_wptr;
-			offset = 0;
-		}
-
-		w = (ushort_t *)(reg_start + offset);
-		mlen = reg_end - (uchar_t *)w;
-
-		if (mlen > 0 && byteleft) {
-			/*
-			 * There is a byte left from the last
-			 * segment; add it into the checksum.
-			 * Don't have to worry about a carry-
-			 * out here because we make sure that
-			 * high part of (32 bit) sum is small
-			 * below.
-			 */
-#ifdef _LITTLE_ENDIAN
-			sum += *(uchar_t *)w << 8;
-#else
-			sum += *(uchar_t *)w;
-#endif
-			w = (ushort_t *)((char *)w + 1);
-			mlen--;
-			byteleft = B_FALSE;
-		}
-
-		if (mlen == 0)
-			continue;
-
-		if (is_even(w)) {
-			sum = ip_ocsum(w, mlen >> 1, sum);
-			w += mlen >> 1;
-			/*
-			 * If we had an odd number of bytes,
-			 * then the last byte goes in the high
-			 * part of the sum, and we take the
-			 * first byte to the low part of the sum
-			 * the next time around the loop.
-			 */
-			if (is_odd(mlen)) {
-#ifdef _LITTLE_ENDIAN
-				sum += *(uchar_t *)w;
-#else
-				sum += *(uchar_t *)w << 8;
-#endif
-				byteleft = B_TRUE;
-			}
-		} else {
-			ushort_t swsum;
-#ifdef _LITTLE_ENDIAN
-			sum += *(uchar_t *)w;
-#else
-			sum += *(uchar_t *)w << 8;
-#endif
-			mlen--;
-			w = (ushort_t *)(1 + (uintptr_t)w);
-
-			/* Do a separate checksum and copy operation */
-			swsum = ip_ocsum(w, mlen >> 1, 0);
-			sum += ((swsum << 8) & 0xffff) | (swsum >> 8);
-			w += mlen >> 1;
-			/*
-			 * If we had an even number of bytes,
-			 * then the last byte goes in the low
-			 * part of the sum.  Otherwise we had an
-			 * odd number of bytes and we take the first
-			 * byte to the low part of the sum the
-			 * next time around the loop.
-			 */
-			if (is_odd(mlen)) {
-#ifdef _LITTLE_ENDIAN
-				sum += *(uchar_t *)w << 8;
-#else
-				sum += *(uchar_t *)w;
-#endif
-			} else {
-				byteleft = B_TRUE;
-			}
-		}
-	}
-
-	/*
-	 * Add together high and low parts of sum and carry to get cksum.
-	 * Have to be careful to not drop the last carry here.
-	 */
-	sum = (sum & 0xffff) + (sum >> 16);
-	sum = (sum & 0xffff) + (sum >> 16);
-
-	return (sum);
-}
-
 /* Return the IP checksum for the IP header at "iph". */
 uint16_t
 ip_csum_hdr(ipha_t *ipha)
@@ -555,4 +426,111 @@ ip_csum_hdr(ipha_t *ipha)
 	if (sum == 0xffff)
 		sum = 0;
 	return ((uint16_t)sum);
+}
+
+/*
+ * This function takes an mblk and IPv6 header as input and returns
+ * three pieces of information.
+ *
+ * 'hdr_length_ptr': The IPv6 header length including extension headers.
+ *
+ * 'nethdrpp': A pointer to the "next hedader" value, aka the
+ *             transport header. This argument may be set to NULL if
+ *             only the length is desired.
+ *
+ * return: Whether or not the header is well formed.
+ *
+ * This function assumes the IPv6 header along with all extensions are
+ * contained solely in this mblk: i.e., there is no b_cont walking.
+ */
+boolean_t
+ip_hdr_length_nexthdr_v6(mblk_t *mp, ip6_t *ip6h, uint16_t *hdr_length_ptr,
+    uint8_t **nexthdrpp)
+{
+	uint16_t length;
+	uint_t	ehdrlen;
+	uint8_t	*nexthdrp;
+	uint8_t *whereptr;
+	uint8_t *endptr;
+	ip6_dest_t *desthdr;
+	ip6_rthdr_t *rthdr;
+	ip6_frag_t *fraghdr;
+
+	if (IPH_HDR_VERSION(ip6h) != IPV6_VERSION)
+		return (B_FALSE);
+	length = IPV6_HDR_LEN;
+	whereptr = ((uint8_t *)&ip6h[1]); /* point to next hdr */
+	endptr = mp->b_wptr;
+
+	nexthdrp = &ip6h->ip6_nxt;
+	while (whereptr < endptr) {
+		/* Is there enough left for len + nexthdr? */
+		if (whereptr + MIN_EHDR_LEN > endptr)
+			break;
+
+		switch (*nexthdrp) {
+		case IPPROTO_HOPOPTS:
+		case IPPROTO_DSTOPTS:
+			/* Assumes the headers are identical for hbh and dst */
+			desthdr = (ip6_dest_t *)whereptr;
+			ehdrlen = 8 * (desthdr->ip6d_len + 1);
+			if ((uchar_t *)desthdr +  ehdrlen > endptr)
+				return (B_FALSE);
+			nexthdrp = &desthdr->ip6d_nxt;
+			break;
+		case IPPROTO_ROUTING:
+			rthdr = (ip6_rthdr_t *)whereptr;
+			ehdrlen =  8 * (rthdr->ip6r_len + 1);
+			if ((uchar_t *)rthdr +  ehdrlen > endptr)
+				return (B_FALSE);
+			nexthdrp = &rthdr->ip6r_nxt;
+			break;
+		case IPPROTO_FRAGMENT:
+			fraghdr = (ip6_frag_t *)whereptr;
+			ehdrlen = sizeof (ip6_frag_t);
+			if ((uchar_t *)&fraghdr[1] > endptr)
+				return (B_FALSE);
+			nexthdrp = &fraghdr->ip6f_nxt;
+			break;
+		case IPPROTO_NONE:
+			/* No next header means we're finished */
+		default:
+			*hdr_length_ptr = length;
+
+			if (nexthdrpp != NULL)
+				*nexthdrpp = nexthdrp;
+
+			return (B_TRUE);
+		}
+		length += ehdrlen;
+		whereptr += ehdrlen;
+		*hdr_length_ptr = length;
+
+		if (nexthdrpp != NULL)
+			*nexthdrpp = nexthdrp;
+	}
+	switch (*nexthdrp) {
+	case IPPROTO_HOPOPTS:
+	case IPPROTO_DSTOPTS:
+	case IPPROTO_ROUTING:
+	case IPPROTO_FRAGMENT:
+		/*
+		 * If any know extension headers are still to be processed,
+		 * the packet's malformed (or at least all the IP header(s) are
+		 * not in the same mblk - and that should never happen.
+		 */
+		return (B_FALSE);
+
+	default:
+		/*
+		 * If we get here, we know that all of the IP headers were in
+		 * the same mblk, even if the ULP header is in the next mblk.
+		 */
+		*hdr_length_ptr = length;
+
+		if (nexthdrpp != NULL)
+			*nexthdrpp = nexthdrp;
+
+		return (B_TRUE);
+	}
 }

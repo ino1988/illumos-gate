@@ -1,6 +1,7 @@
-/*	$Id: out.h,v 1.21 2011/07/17 15:24:25 kristaps Exp $ */
+/* $Id: out.h,v 1.34 2020/04/03 11:35:01 schwarze Exp $ */
 /*
  * Copyright (c) 2009, 2010, 2011 Kristaps Dzonsons <kristaps@bsd.lv>
+ * Copyright (c) 2014, 2017, 2018 Ingo Schwarze <schwarze@openbsd.org>
  *
  * Permission to use, copy, modify, and distribute this software for any
  * purpose with or without fee is hereby granted, provided that the above
@@ -13,9 +14,9 @@
  * WHATSOEVER RESULTING FROM LOSS OF USE, DATA OR PROFITS, WHETHER IN AN
  * ACTION OF CONTRACT, NEGLIGENCE OR OTHER TORTIOUS ACTION, ARISING OUT OF
  * OR IN CONNECTION WITH THE USE OR PERFORMANCE OF THIS SOFTWARE.
+ *
+ * Utilities for use by multiple mandoc(1) formatters.
  */
-#ifndef OUT_H
-#define OUT_H
 
 enum	roffscale {
 	SCALE_CM, /* centimeters (c) */
@@ -33,7 +34,10 @@ enum	roffscale {
 
 struct	roffcol {
 	size_t		 width; /* width of cell */
+	size_t		 nwidth; /* max. width of number in cell */
 	size_t		 decimal; /* decimal position in cell */
+	size_t		 spacing; /* spacing after the column */
+	int		 flags; /* layout flags, see tbl_cell */
 };
 
 struct	roffsu {
@@ -41,31 +45,26 @@ struct	roffsu {
 	double		  scale;
 };
 
+typedef	size_t	(*tbl_sulen)(const struct roffsu *, void *);
 typedef	size_t	(*tbl_strlen)(const char *, void *);
 typedef	size_t	(*tbl_len)(size_t, void *);
 
 struct	rofftbl {
+	tbl_sulen	 sulen; /* calculate scaling unit length */
 	tbl_strlen	 slen; /* calculate string length */
 	tbl_len		 len; /* produce width of empty space */
 	struct roffcol	*cols; /* master column specifiers */
-	void		*arg; /* passed to slen and len */
+	void		*arg; /* passed to sulen, slen, and len */
 };
 
-__BEGIN_DECLS
-
-#define	SCALE_VS_INIT(p, v) \
-	do { (p)->unit = SCALE_VS; \
-	     (p)->scale = (v); } \
-	while (/* CONSTCOND */ 0)
-
 #define	SCALE_HS_INIT(p, v) \
-	do { (p)->unit = SCALE_BU; \
+	do { (p)->unit = SCALE_EN; \
 	     (p)->scale = (v); } \
 	while (/* CONSTCOND */ 0)
 
-int	  	  a2roffsu(const char *, struct roffsu *, enum roffscale);
-void	  	  tblcalc(struct rofftbl *tbl, const struct tbl_span *);
 
-__END_DECLS
+struct	tbl_span;
 
-#endif /*!OUT_H*/
+const char	 *a2roffsu(const char *, struct roffsu *, enum roffscale);
+void		  tblcalc(struct rofftbl *,
+			const struct tbl_span *, size_t, size_t);

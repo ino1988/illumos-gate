@@ -40,6 +40,7 @@
 #include <signal.h>
 #include <sys/wait.h>
 #include <sys/file.h>
+#include <sys/hexdump.h>
 
 #include <glib.h>
 #include <dbus/dbus.h>
@@ -71,7 +72,7 @@
 	((c) >= 'a' && (c) <= 'z') ||            \
 	((c) == '_'))
 
-gboolean 
+gboolean
 hal_util_remove_trailing_slash (gchar *path)
 {
 	gchar *c = NULL;
@@ -85,7 +86,7 @@ hal_util_remove_trailing_slash (gchar *path)
 		HAL_WARNING (("Invalid path %s", path));
 		return 1;
 	}
-	if (*(c+1) == '\0') 
+	if (*(c+1) == '\0')
 		*c = '\0';
 
 	return TRUE;
@@ -159,7 +160,7 @@ hal_util_get_normalized_path (const gchar *path1, const gchar *path2)
 	}
 
 	if ((p1-path1) < 0) {
-		HAL_ERROR (("Could not normalize '%s' and '%s', return 'NULL'", path1, path2)); 
+		HAL_ERROR (("Could not normalize '%s' and '%s', return 'NULL'", path1, path2));
 		return NULL;
 	}
 
@@ -322,7 +323,7 @@ hal_util_get_bcd2_from_file (const gchar *directory, const gchar *file, gint *re
 	for (; i < len; i++) {
 		if (g_ascii_isspace (buf[i]))
 			break;
-		if (num_prec == 2)	        /* Only care about two digits 
+		if (num_prec == 2)	        /* Only care about two digits
 						 * of precision */
 			break;
 		right *= 16;
@@ -368,7 +369,7 @@ hal_util_get_string_from_file (const gchar *directory, const gchar *file)
 	gchar *result;
 	gsize len;
 	gint i;
-	
+
 	f = NULL;
 	result = NULL;
 
@@ -385,7 +386,7 @@ hal_util_get_string_from_file (const gchar *directory, const gchar *file)
 		HAL_ERROR (("Cannot read from '%s'", path));
 		goto out;
 	}
-       
+
 	len = strlen (buf);
 	if (len>0)
 		buf[len-1] = '\0';
@@ -431,7 +432,7 @@ hal_util_compute_udi (HalDeviceStore *store, gchar *dst, gsize dstsize, const gc
 	g_vsnprintf (buf, sizeof (buf), format, args);
 	va_end (args);
 
-	g_strcanon (buf, 
+	g_strcanon (buf,
 		    "/_"
 		    "abcdefghijklmnopqrstuvwxyz"
 		    "ABCDEFGHIJKLMNOPQRSTUVWXYZ"
@@ -470,7 +471,7 @@ hal_util_path_ascend (gchar *path)
 
 static gboolean _grep_can_reuse = FALSE;
 
-void 
+void
 hal_util_grep_discard_existing_data (void)
 {
 	_grep_can_reuse = FALSE;
@@ -566,7 +567,7 @@ out:
 }
 
 gchar *
-hal_util_grep_string_elem_from_file (const gchar *directory, const gchar *file, 
+hal_util_grep_string_elem_from_file (const gchar *directory, const gchar *file,
 				     const gchar *linestart, guint elem, gboolean reuse)
 {
 	gchar *line;
@@ -592,7 +593,7 @@ hal_util_grep_string_elem_from_file (const gchar *directory, const gchar *file,
 		}
 		j++;
 	}
-	
+
 out:
 	if (tokens != NULL)
 		g_strfreev (tokens);
@@ -601,7 +602,7 @@ out:
 }
 
 gint
-hal_util_grep_int_elem_from_file (const gchar *directory, const gchar *file, 
+hal_util_grep_int_elem_from_file (const gchar *directory, const gchar *file,
 				  const gchar *linestart, guint elem, guint base, gboolean reuse)
 {
 	gchar *endptr;
@@ -647,8 +648,8 @@ out:
  *                              extracted and the property was set
  */
 gboolean
-hal_util_set_string_elem_from_file (HalDevice *d, const gchar *key, 
-				    const gchar *directory, const gchar *file, 
+hal_util_set_string_elem_from_file (HalDevice *d, const gchar *key,
+				    const gchar *directory, const gchar *file,
 				    const gchar *linestart, guint elem, gboolean reuse)
 {
 	gboolean res;
@@ -687,8 +688,8 @@ out:
  *                              extracted and the property was set
  */
 gboolean
-hal_util_set_int_elem_from_file (HalDevice *d, const gchar *key, 
-				 const gchar *directory, const gchar *file, 
+hal_util_set_int_elem_from_file (HalDevice *d, const gchar *key,
+				 const gchar *directory, const gchar *file,
 				 const gchar *linestart, guint elem, guint base, gboolean reuse)
 {
 	gchar *endptr;
@@ -705,9 +706,9 @@ hal_util_set_int_elem_from_file (HalDevice *d, const gchar *key,
 	value = strtol (strvalue, &endptr, base);
 	if (endptr == strvalue)
 		goto out;
-	
+
 	res = hal_device_property_set_int (d, key, value);
-	
+
 out:
 	return res;
 
@@ -744,8 +745,8 @@ out:
  *                              extracted and the property was set
  */
 gboolean
-hal_util_set_bool_elem_from_file (HalDevice *d, const gchar *key, 
-				  const gchar *directory, const gchar *file, 
+hal_util_set_bool_elem_from_file (HalDevice *d, const gchar *key,
+				  const gchar *directory, const gchar *file,
 				  const gchar *linestart, guint elem, const gchar *expected, gboolean reuse)
 {
 	gchar *line;
@@ -796,7 +797,7 @@ hal_util_dup_strv_from_g_slist (GSList *strlist)
 	}
 	strv[j] = NULL;
 
-	return strv;	
+	return strv;
 }
 
 /* -------------------------------------------------------------------------------------------------------------- */
@@ -815,9 +816,9 @@ typedef struct {
 
 static void callout_do_next (Callout *c);
 
-static void 
-callout_terminated (HalDevice *d, guint32 exit_type, 
-                   gint return_code, gchar **error, 
+static void
+callout_terminated (HalDevice *d, guint32 exit_type,
+                   gint return_code, gchar **error,
                    gpointer data1, gpointer data2)
 {
 	Callout *c;
@@ -857,7 +858,7 @@ callout_do_next (Callout *c)
 }
 
 static void
-hal_callout_device (HalDevice *d, HalCalloutsDone callback, gpointer userdata1, gpointer userdata2, 
+hal_callout_device (HalDevice *d, HalCalloutsDone callback, gpointer userdata1, gpointer userdata2,
 		    GSList *programs, gchar **extra_env)
 {
 	Callout *c;
@@ -883,7 +884,7 @@ hal_util_callout_device_add (HalDevice *d, HalCalloutsDone callback, gpointer us
 	if ((programs = hal_device_property_get_strlist (d, "info.callouts.add")) == NULL) {
 		callback (d, userdata1, userdata2);
 		goto out;
-	}	
+	}
 
 	HAL_INFO (("Add callouts for udi=%s", d->udi));
 
@@ -901,7 +902,7 @@ hal_util_callout_device_remove (HalDevice *d, HalCalloutsDone callback, gpointer
 	if ((programs = hal_device_property_get_strlist (d, "info.callouts.remove")) == NULL) {
 		callback (d, userdata1, userdata2);
 		goto out;
-	}	
+	}
 
 	HAL_INFO (("Remove callouts for udi=%s", d->udi));
 
@@ -919,7 +920,7 @@ hal_util_callout_device_preprobe (HalDevice *d, HalCalloutsDone callback, gpoint
 	if ((programs = hal_device_property_get_strlist (d, "info.callouts.preprobe")) == NULL) {
 		callback (d, userdata1, userdata2);
 		goto out;
-	}	
+	}
 
 	HAL_INFO (("Preprobe callouts for udi=%s", d->udi));
 
@@ -944,7 +945,7 @@ hal_util_strdup_valid_utf8 (const char *str)
 		*endchar = '?';
 		count++;
 	}
-	
+
 	if (strlen(newstr) == count)
 		return NULL;
 	else
@@ -954,43 +955,8 @@ hal_util_strdup_valid_utf8 (const char *str)
 void
 hal_util_hexdump (const void *mem, unsigned int size)
 {
-	unsigned int i;
-	unsigned int j;
-	unsigned int n;
-	const char *buf = (const char *) mem;
-
-	n = 0;
-	printf ("Dumping %d=0x%x bytes\n", size, size);
-	while (n < size) {
-
-		printf ("0x%04x: ", n);
-
-		j = n;
-		for (i = 0; i < 16; i++) {
-			if (j >= size)
-				break;
-			printf ("%02x ", buf[j]);
-			j++;
-		}
-		
-		for ( ; i < 16; i++) {
-			printf ("   ");
-		}
-		
-		printf ("   ");
-		
-		j = n;
-		for (i = 0; i < 16; i++) {
-			if (j >= size)
-				break;
-			printf ("%c", isprint(buf[j]) ? buf[j] : '.');
-			j++;
-		}
-
-		printf ("\n");
-		
-		n += 16;
-	}
+	(void) printf ("Dumping %d=0x%x bytes\n", size, size);
+	(void) hexdump_file(mem, size, HDF_DEFAULT, stdout);
 }
 
 gboolean

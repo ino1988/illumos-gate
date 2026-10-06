@@ -149,7 +149,7 @@ sysevent_evc_bind(const char *channel, evchan_t **scpp, uint32_t flags)
 	/*
 	 * Enable sysevent driver.  Fallback if the device link doesn't exist;
 	 * this situation can arise if a channel is bound early in system
-	 * startup, prior to devfsadm(1M) being invoked.
+	 * startup, prior to devfsadm(8) being invoked.
 	 */
 	EV_FD(scp) = open(DEVSYSEVENT, O_RDWR);
 	if (EV_FD(scp) == -1) {
@@ -217,7 +217,7 @@ sysevent_evc_unbind(evchan_t *scp)
 	 * Unsubscribe, if we are in the process which did the bind.
 	 */
 	if (EV_PID(scp) == getpid()) {
-		uargs.sid.name = NULL;
+		uargs.sid.name = (uintptr_t)NULL;
 		uargs.sid.len = 0;
 		/*
 		 * The unsubscribe ioctl will block until all door upcalls have
@@ -705,7 +705,7 @@ sysevent_evc_unsubscribe(evchan_t *scp, const char *sid)
 	if (strcmp(sid, EVCH_ALLSUB) == 0) {
 		all_subscribers++;
 		/* Indicates all subscriber id's for this channel */
-		uargs.sid.name = NULL;
+		uargs.sid.name = (uintptr_t)NULL;
 		uargs.sid.len = 0;
 	} else {
 		uargs.sid.name = (uintptr_t)sid;

@@ -20,7 +20,7 @@
  * CDDL HEADER END
  */
 /*	Copyright (c) 1988 AT&T	*/
-/*	  All Rights Reserved  	*/
+/*	  All Rights Reserved	*/
 
 /*
  * Copyright 2014 Garrett D'Amore <garrett@damore.org>
@@ -79,7 +79,7 @@ namespace std {
 
 #if defined(__i386) || defined(__amd64) || \
 	defined(__sparc) || defined(__sparcv9)
-#if defined(_LP64) || defined(_I32LPx)
+#if defined(_LP64)
 typedef long	jmp_buf[_JBLEN];
 #else
 typedef int	jmp_buf[_JBLEN];
@@ -89,9 +89,7 @@ typedef int	jmp_buf[_JBLEN];
 #endif
 
 extern int setjmp(jmp_buf) __RETURNS_TWICE;
-#pragma unknown_control_flow(setjmp)
 extern int _setjmp(jmp_buf) __RETURNS_TWICE;
-#pragma unknown_control_flow(_setjmp)
 extern void longjmp(jmp_buf, int) __NORETURN;
 extern void _longjmp(jmp_buf, int) __NORETURN;
 

@@ -22,9 +22,8 @@
 /*
  * Copyright 2005 Sun Microsystems, Inc.  All rights reserved.
  * Use is subject to license terms.
+ * Copyright 2025 Oxide Computer Company
  */
-
-#pragma ident	"%Z%%M%	%I%	%E% SMI"
 
 #include <mdb/mdb_types.h>
 #include <mdb/mdb_argvec.h>
@@ -209,18 +208,12 @@ argvec_process_opt(const mdb_opt_t *opt, const mdb_arg_t *arg)
 		*opt->opt_flag = TRUE;
 		/* FALLTHROUGH */
 	case MDB_OPT_UINTPTR:
-		if (arg->a_type == MDB_TYPE_STRING)
-			uip = (uintptr_t)mdb_strtoull(arg->a_un.a_str);
-		else
-			uip = (uintptr_t)arg->a_un.a_val;
+		uip = (uintptr_t)mdb_argtoull(arg);
 		*((uintptr_t *)opt->opt_valp) = uip;
 		break;
 
 	case MDB_OPT_UINT64:
-		if (arg->a_type == MDB_TYPE_STRING)
-			ui64 = mdb_strtoull(arg->a_un.a_str);
-		else
-			ui64 = arg->a_un.a_val;
+		ui64 = (uint64_t)mdb_argtoull(arg);
 		*((uint64_t *)opt->opt_valp) = ui64;
 		break;
 
@@ -380,6 +373,21 @@ mdb_getopts(int argc, const mdb_arg_t *argv, ...)
 	va_end(alist);
 
 	return (argvec_getopts(opts, argv, argc));
+}
+
+u_longlong_t
+mdb_argtoull(const mdb_arg_t *arg)
+{
+	switch (arg->a_type) {
+	case MDB_TYPE_STRING:
+		return (mdb_strtoull(arg->a_un.a_str));
+	case MDB_TYPE_IMMEDIATE:
+		return (arg->a_un.a_val);
+	case MDB_TYPE_CHAR:
+		return (arg->a_un.a_char);
+	}
+	/* NOTREACHED */
+	return (0);
 }
 
 /*

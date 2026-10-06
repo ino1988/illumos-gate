@@ -12,9 +12,47 @@
 #
 # Copyright (c) 2012 by Delphix. All rights reserved.
 # Copyright 2014 Garrett D'Amore <garrett@damore.org>
+# Copyright 2014 Nexenta Systems, Inc. All rights reserved.
+# Copyright 2017 Jason King
+# Copyright 2020 Joyent, Inc.
+# Copyright 2022 OmniOS Community Edition (OmniOSce) Association.
+# Copyright 2025 Edgecast Cloud LLC
 #
 
-SUBDIRS = dladm printf xargs
-SUBDIRS = dladm libnvpair_json printf xargs
+SUBDIRS =		\
+	ar		\
+	awk		\
+	chown		\
+	cpio		\
+	cpmvln		\
+	ctf		\
+	date		\
+	demangle	\
+	dis		\
+	dladm		\
+	du		\
+	find		\
+	grep_xpg4	\
+	head		\
+	iconv		\
+	libcustr	\
+	libdhcputil	\
+	libjedec	\
+	libnvpair_json	\
+	libsff		\
+	make		\
+	mdb		\
+	mergeq		\
+	pcidb		\
+	pcieadm		\
+	printf		\
+	pwd		\
+	rm		\
+	sed		\
+	sleep		\
+	smbios		\
+	svr4pkg		\
+	workq		\
+	xargs
 
 include $(SRC)/test/Makefile.com

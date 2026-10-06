@@ -24,26 +24,37 @@
  * Use is subject to license terms.
  */
 
-#pragma ident	"%Z%%M%	%I%	%E% SMI"
-
-#pragma weak _siglongjmp = siglongjmp
+/*
+ * Copyright 2023 Oxide Computer Company
+ */
 
 #include "lint.h"
 #include <sys/types.h>
 #include <sys/ucontext.h>
 #include <setjmp.h>
 #include <ucontext.h>
+#include <strings.h>
+#include <upanic.h>
+#include "sigjmp_struct.h"
+#include "libc.h"
+
+#pragma weak _siglongjmp = siglongjmp
 
 void
 siglongjmp(sigjmp_buf env, int val)
 {
-	/* LINTED alignment */
-	ucontext_t *ucp = (ucontext_t *)env;
+	const char *msg = "siglongjmp(): setcontext() returned";
+	ucontext_t *ucp = SIGJMP2UCONTEXT(env);
 
 	if (val)
 		ucp->uc_mcontext.gregs[REG_R0] = val;
 	else
 		ucp->uc_mcontext.gregs[REG_R0] = 1;
 
+	/*
+	 * While unlikely, it is possible that setcontext() may fail for some
+	 * reason. If that happens, we will kill the process.
+	 */
 	(void) setcontext(ucp);
+	upanic(msg, strlen(msg) + 1);
 }

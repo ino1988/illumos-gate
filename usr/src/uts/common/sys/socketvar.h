@@ -21,10 +21,11 @@
 
 /*
  * Copyright (c) 1996, 2010, Oracle and/or its affiliates. All rights reserved.
+ * Copyright 2015 Joyent, Inc.
  */
 
 /*	Copyright (c) 1983, 1984, 1985, 1986, 1987, 1988, 1989 AT&T	*/
-/*	  All Rights Reserved  	*/
+/*	  All Rights Reserved	*/
 
 /*
  * University Copyright- Copyright (c) 1982, 1986, 1988
@@ -34,6 +35,10 @@
  * University Acknowledgment- Portions of this document are derived from
  * software developed by the University of California, Berkeley, and its
  * contributors.
+ */
+/*
+ * Copyright 2015 Nexenta Systems, Inc. All rights reserved.
+ * Copyright 2020 OmniOS Community Edition (OmniOSce) Association.
  */
 
 #ifndef _SYS_SOCKETVAR_H
@@ -99,6 +104,7 @@ struct sockaddr_ux {
 
 typedef struct sonodeops sonodeops_t;
 typedef struct sonode sonode_t;
+typedef boolean_t (*so_krecv_f)(sonode_t *, mblk_t *, size_t, int, void *);
 
 struct sodirect_s;
 
@@ -132,7 +138,7 @@ struct sodirect_s;
 struct sonode {
 	struct	vnode	*so_vnode;	/* vnode associated with this sonode */
 
-	sonodeops_t 	*so_ops;	/* operations vector for this sonode */
+	sonodeops_t	*so_ops;	/* operations vector for this sonode */
 	void		*so_priv;	/* sonode private data */
 
 	krwlock_t	so_fallback_rwlock;
@@ -146,12 +152,12 @@ struct sonode {
 
 	uint_t		so_state;	/* internal state flags SS_*, below */
 	uint_t		so_mode;	/* characteristics on socket. SM_* */
-	ushort_t 	so_flag;	/* flags, see below */
+	ushort_t	so_flag;	/* flags, see below */
 	int		so_count;	/* count of opened references */
 
 	sock_connid_t	so_proto_connid; /* protocol generation number */
 
-	ushort_t 	so_error;	/* error affecting connection */
+	ushort_t	so_error;	/* error affecting connection */
 
 	struct sockparams *so_sockparams;	/* vnode or socket module */
 	/* Needed to recreate the same socket for accept */
@@ -220,7 +226,7 @@ struct sonode {
 
 	/* Communication channel with protocol */
 	sock_lower_handle_t	so_proto_handle;
-	sock_downcalls_t 	*so_downcalls;
+	sock_downcalls_t	*so_downcalls;
 
 	struct sock_proto_props	so_proto_props; /* protocol settings */
 	boolean_t		so_flowctrld;	/* Flow controlled */
@@ -228,7 +234,7 @@ struct sonode {
 	kcondvar_t		so_copy_cv;	/* Copy cond variable */
 
 	/* kernel sockets */
-	ksocket_callbacks_t 	so_ksock_callbacks;
+	ksocket_callbacks_t	so_ksock_callbacks;
 	void			*so_ksock_cb_arg;	/* callback argument */
 	kcondvar_t		so_closing_cv;
 
@@ -241,6 +247,10 @@ struct sonode {
 	struct sof_instance	*so_filter_top;		/* top of stack */
 	struct sof_instance	*so_filter_bottom;	/* bottom of stack */
 	clock_t			so_filter_defertime;	/* time when deferred */
+
+	/* Kernel direct receive callbacks */
+	so_krecv_f		so_krecv_cb;		/* recv callback */
+	void			*so_krecv_arg;		/* recv cb arg */
 };
 
 #define	SO_HAVE_DATA(so)						\
@@ -426,7 +436,7 @@ typedef struct smod_info {
 	int		smod_version;
 	char		*smod_name;
 	uint_t		smod_refcnt;		/* # of entries */
-	size_t		smod_uc_version; 	/* upcall version */
+	size_t		smod_uc_version;	/* upcall version */
 	size_t		smod_dc_version;	/* down call version */
 	so_proto_create_func_t	smod_proto_create_func;
 	so_proto_fallback_func_t smod_proto_fallback_func;
@@ -501,11 +511,12 @@ extern void sockparams_ephemeral_drop_last_ref(struct sockparams *);
 
 extern struct sockparams *sockparams_create(int, int, int, char *, char *, int,
     int, int, int *);
-extern void 	sockparams_destroy(struct sockparams *);
-extern int 	sockparams_add(struct sockparams *);
+extern void	sockparams_destroy(struct sockparams *);
+extern int	sockparams_add(struct sockparams *);
 extern int	sockparams_delete(int, int, int);
 extern int	sockparams_new_filter(struct sof_entry *);
 extern void	sockparams_filter_cleanup(struct sof_entry *);
+extern int	sockparams_copyout_socktable(uintptr_t);
 
 extern void smod_init(void);
 extern void smod_add(smod_info_t *);
@@ -585,7 +596,7 @@ extern smod_info_t *smod_lookup_byname(const char *);
 
 /*
  * Used to traverse the list of AF_UNIX sockets to construct the kstat
- * for netstat(1m).
+ * for netstat(8).
  */
 struct socklist {
 	kmutex_t	sl_lock;
@@ -622,7 +633,7 @@ typedef struct snf_req {
 	int		sr_lowat;
 	int		sr_operation;
 	struct vnode	*sr_vp;
-	file_t 		*sr_fp;
+	file_t		*sr_fp;
 	ssize_t		sr_maxpsz;
 	u_offset_t	sr_file_off;
 	u_offset_t	sr_file_size;
@@ -648,7 +659,7 @@ struct sendfile_queue {
 
 /* Socket network operations switch */
 struct sonodeops {
-	int 	(*sop_init)(struct sonode *, struct sonode *, cred_t *,
+	int	(*sop_init)(struct sonode *, struct sonode *, cred_t *,
 		    int);
 	int	(*sop_accept)(struct sonode *, int, cred_t *, struct sonode **);
 	int	(*sop_bind)(struct sonode *, struct sockaddr *, socklen_t,
@@ -669,13 +680,13 @@ struct sonodeops {
 	int	(*sop_shutdown)(struct sonode *, int, cred_t *);
 	int	(*sop_getsockopt)(struct sonode *, int, int, void *,
 		    socklen_t *, int, cred_t *);
-	int 	(*sop_setsockopt)(struct sonode *, int, int, const void *,
+	int	(*sop_setsockopt)(struct sonode *, int, int, const void *,
 		    socklen_t, cred_t *);
-	int 	(*sop_ioctl)(struct sonode *, int, intptr_t, int,
+	int	(*sop_ioctl)(struct sonode *, int, intptr_t, int,
 		    cred_t *, int32_t *);
-	int 	(*sop_poll)(struct sonode *, short, int, short *,
+	int	(*sop_poll)(struct sonode *, short, int, short *,
 		    struct pollhead **);
-	int 	(*sop_close)(struct sonode *, int, cred_t *);
+	int	(*sop_close)(struct sonode *, int, cred_t *);
 };
 
 #define	SOP_INIT(so, flag, cr, flags)	\
@@ -867,13 +878,18 @@ extern int sockprinterr;
 
 #endif /* defined(DEBUG) */
 
-extern struct vfsops			sock_vfsops;
 extern struct vnodeops			*socket_vnodeops;
 extern const struct fs_operation_def	socket_vnodeops_template[];
 
+extern vfs_t				*sock_vfsp;
 extern dev_t				sockdev;
 
 extern krwlock_t			sockconf_lock;
+
+/*
+ * sockfs vfsops
+ */
+extern int	sockfs_statvfs(vfs_t *, struct statvfs64 *);
 
 /*
  * sockfs functions
@@ -898,6 +914,8 @@ extern void	fdbuf_free(struct fdbuf *);
 extern mblk_t	*fdbuf_allocmsg(int, struct fdbuf *);
 extern int	fdbuf_create(void *, int, struct fdbuf **);
 extern void	so_closefds(void *, t_uscalar_t, int, int);
+extern void	so_truncatecmsg(void *, t_uscalar_t, uint_t);
+
 extern int	so_getfdopt(void *, t_uscalar_t, int, void **, int *);
 t_uscalar_t	so_optlen(void *, t_uscalar_t, int);
 extern void	so_cmsg2opt(void *, t_uscalar_t, int, mblk_t *);
@@ -942,13 +960,28 @@ extern struct sonode	*socreate(struct sockparams *, int, int, int, int,
 extern int	so_copyin(const void *, void *, size_t, int);
 extern int	so_copyout(const void *, void *, size_t, int);
 
+/*
+ * Functions to manipulate the use of direct receive callbacks. This should not
+ * be used outside of sockfs and ksocket. These are generally considered a use
+ * once interface for a socket and will cause all outstanding data on the socket
+ * to be flushed.
+ */
+extern int	so_krecv_set(sonode_t *, so_krecv_f, void *);
+extern void	so_krecv_unblock(sonode_t *);
+
 #endif
 
 /*
  * Internal structure for obtaining sonode information from the socklist.
  * These types match those corresponding in the sonode structure.
- * This is not a published interface, and may change at any time.
+ * This is not a published interface, and may change at any time.  It is
+ * used for passing information back up to the kstat consumers. By converting
+ * kernel addresses to strings, we should be able to pass information from
+ * the kernel to userland regardless of n-bit kernel we are using.
  */
+
+#define	ADRSTRLEN (2 * sizeof (uint64_t) + 1)
+
 struct sockinfo {
 	uint_t		si_size;		/* real length of this struct */
 	short		si_family;
@@ -966,6 +999,10 @@ struct sockinfo {
 	char		si_faddr_sun_path[MAXPATHLEN + 1];
 	boolean_t	si_faddr_noxlate;
 	zoneid_t	si_szoneid;
+	char		si_son_straddr[ADRSTRLEN];
+	char		si_lvn_straddr[ADRSTRLEN];
+	char		si_fvn_straddr[ADRSTRLEN];
+	uint64_t	si_inode;
 };
 
 /*
@@ -975,6 +1012,7 @@ struct sockinfo {
 #define	SOCKCONFIG_REMOVE_SOCK		1
 #define	SOCKCONFIG_ADD_FILTER		2
 #define	SOCKCONFIG_REMOVE_FILTER	3
+#define	SOCKCONFIG_GET_SOCKTABLE	4
 
 /*
  * Data structures for configuring socket filters.
@@ -1013,6 +1051,24 @@ struct sockconfig_filter_props {
 	sof_socktuple_t	*sfp_socktuple;
 };
 
+/*
+ * Data structures for the in-kernel socket configuration table.
+ */
+typedef struct sockconfig_socktable_entry {
+	int		se_family;
+	int		se_type;
+	int		se_protocol;
+	int		se_refcnt;
+	int		se_flags;
+	char		se_modname[MODMAXNAMELEN];
+	char		se_strdev[MAXPATHLEN];
+} sockconfig_socktable_entry_t;
+
+typedef struct sockconfig_socktable {
+	uint_t		num_of_entries;
+	sockconfig_socktable_entry_t *st_entries;
+} sockconfig_socktable_t;
+
 #ifdef	_SYSCALL32
 
 typedef struct sof_socktuple32 {
@@ -1029,6 +1085,11 @@ struct sockconfig_filter_props32 {
 	uint32_t	sfp_socktuple_cnt;
 	caddr32_t	sfp_socktuple;
 };
+
+typedef struct sockconfig_socktable32 {
+	uint_t		num_of_entries;
+	caddr32_t	st_entries;
+} sockconfig_socktable32_t;
 
 #endif	/* _SYSCALL32 */
 

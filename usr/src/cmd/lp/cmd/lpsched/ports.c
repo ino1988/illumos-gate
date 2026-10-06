@@ -25,6 +25,7 @@
 /*
  * Copyright 2009 Sun Microsystems, Inc.  All rights reserved.
  * Use is subject to license terms.
+ * Copyright (c) 2016 by Delphix. All rights reserved.
  */
 
 #include "termio.h"
@@ -72,7 +73,15 @@ open_dialup(char *ptype, PRINTER *pp)
 		"230400",
 		"307200",
 		"460800",
-		"921600"
+		"921600",
+		"1000000",
+		"1152000",
+		"1500000",
+		"2000000",
+		"2500000",
+		"3000000",
+		"3500000",
+		"4000000"
 	};
 
 	struct termio		tio;
@@ -118,7 +127,7 @@ open_dialup(char *ptype, PRINTER *pp)
 	 * override the default in the interface progam.
 	 * Putting the override in ".stty" allows the user
 	 * to override us (although it would be probably be
-	 * silly for him or her to do so.)
+	 * silly for them to do so.)
 	 */
 	if (ioctl(1, TCGETS, &tios) < 0) {
 		ioctl(1, TCGETA, &tio);

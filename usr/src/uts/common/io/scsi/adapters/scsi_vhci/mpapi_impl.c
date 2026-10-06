@@ -20,6 +20,9 @@
  */
 /*
  * Copyright (c) 2006, 2010, Oracle and/or its affiliates. All rights reserved.
+ * Copyright 2021 Racktop Systems, Inc.
+ * Copyright 2023 Oxide Computer Company
+ * Copyright 2025 Hans Rosenfeld
  */
 
 /*
@@ -116,6 +119,8 @@ static int vhci_enable_path(struct scsi_vhci *, mp_iocdata_t *,
 static int vhci_disable_path(struct scsi_vhci *, mp_iocdata_t *,
     void *, void *, int);
 static int vhci_send_uscsi_cmd(dev_t dev, struct scsi_vhci *, mp_iocdata_t *,
+    void *, void *, int);
+static int vhci_set_lu_loadbalance_type(struct scsi_vhci *, mp_iocdata_t *,
     void *, void *, int);
 static int vhci_mpapi_validate(void *, mp_iocdata_t *, int, cred_t *);
 static uint64_t vhci_mpapi_create_oid(mpapi_priv_t *, uint8_t);
@@ -244,10 +249,6 @@ vhci_mpapi_validate(void *udata, mp_iocdata_t *mpioc, int mode, cred_t *credp)
 	case MP_GET_DRIVER_PROP:
 	{
 		olen = sizeof (mp_driver_prop_t);
-		/* Adjust olen to account for the caddr_t in 32-bit mode */
-		if (mode32 == 1) {
-			olen -= 4;
-		}
 
 		if ((mpioc->mp_obuf == NULL) ||
 		    (mpioc->mp_olen < olen) ||
@@ -282,10 +283,6 @@ vhci_mpapi_validate(void *udata, mp_iocdata_t *mpioc, int mode, cred_t *credp)
 	case MP_GET_LU_PROP:
 	{
 		olen = sizeof (mp_logical_unit_prop_t);
-		/* Adjust olen to account for the caddr_t in 32-bit mode */
-		if (mode32 == 1) {
-			olen -= 4;
-		}
 
 		if ((mpioc->mp_ilen != sizeof (uint64_t)) ||
 		    (mpioc->mp_ibuf == NULL) ||
@@ -304,10 +301,6 @@ vhci_mpapi_validate(void *udata, mp_iocdata_t *mpioc, int mode, cred_t *credp)
 	case MP_GET_PATH_PROP:
 	{
 		olen = sizeof (mp_path_prop_t);
-		/* Adjust olen to account for the caddr_t in 32-bit mode */
-		if (mode32 == 1) {
-			olen -= 4;
-		}
 
 		if ((mpioc->mp_ilen != sizeof (uint64_t)) ||
 		    (mpioc->mp_ibuf == NULL) ||
@@ -380,10 +373,6 @@ vhci_mpapi_validate(void *udata, mp_iocdata_t *mpioc, int mode, cred_t *credp)
 	case MP_GET_PROPRIETARY_LOADBALANCE_PROP:
 	{
 		olen = sizeof (mp_proprietary_loadbalance_prop_t);
-		/* Adjust olen to account for the caddr_t in 32-bit mode */
-		if (mode32 == 1) {
-			olen -= 4;
-		}
 
 		if ((mpioc->mp_ilen != sizeof (uint64_t)) ||
 		    (mpioc->mp_ibuf == NULL) ||
@@ -503,6 +492,20 @@ vhci_mpapi_validate(void *udata, mp_iocdata_t *mpioc, int mode, cred_t *credp)
 	}
 	break;
 
+	case MP_SET_LU_LOADBALANCE_TYPE:
+	{
+		if (drv_priv(credp) != 0) {
+			rval = EPERM;
+			break;
+		}
+		if ((mpioc->mp_ilen != sizeof (mp_set_lu_lb_type_req_t)) ||
+		    (mpioc->mp_ibuf == NULL) ||
+		    (mpioc->mp_xfer != MP_XFER_WRITE)) {
+			rval = EINVAL;
+		}
+	}
+	break;
+
 	default:
 	{
 		rval = EINVAL;
@@ -572,7 +575,7 @@ vhci_get_dev_prod_list(struct scsi_vhci *vhci, mp_iocdata_t *mpioc,
     void *input_data, void *output_data, int mode)
 {
 	int			count = 0, rval = 0;
-	int			list_len = mpioc->mp_olen/sizeof (uint64_t);
+	int			list_len = mpioc->mp_olen / sizeof (uint64_t);
 	uint64_t		*oid_list = (uint64_t *)(output_data);
 	mpapi_item_list_t	*ilist;
 
@@ -665,7 +668,7 @@ vhci_get_lu_list(struct scsi_vhci *vhci, mp_iocdata_t *mpioc,
     void *input_data, void *output_data, int mode)
 {
 	int			count = 0, rval = 0;
-	int			list_len = mpioc->mp_olen/sizeof (uint64_t);
+	int			list_len = mpioc->mp_olen / sizeof (uint64_t);
 	uint64_t		*oid_list = (uint64_t *)(output_data);
 	mpapi_item_list_t	*ilist;
 	mpapi_lu_data_t		*ld;
@@ -715,7 +718,7 @@ vhci_get_lu_list_from_tpg(struct scsi_vhci *vhci, mp_iocdata_t *mpioc,
     void *input_data, void *output_data, int mode)
 {
 	int			count = 0, rval = 0;
-	int			list_len = mpioc->mp_olen/sizeof (uint64_t);
+	int			list_len = mpioc->mp_olen / sizeof (uint64_t);
 	uint64_t		*oid_list = (uint64_t *)(output_data);
 	uint64_t		*oid = (uint64_t *)(input_data);
 	mpapi_item_list_t	*ilist, *tpg_lu_list = NULL;
@@ -788,7 +791,7 @@ vhci_get_tpg_list_for_lu(struct scsi_vhci *vhci, mp_iocdata_t *mpioc,
     void *input_data, void *output_data, int mode)
 {
 	int			count = 0, rval = 0;
-	int			list_len = mpioc->mp_olen/sizeof (uint64_t);
+	int			list_len = mpioc->mp_olen / sizeof (uint64_t);
 	uint64_t		*oid_list = (uint64_t *)(output_data);
 	uint64_t		*oid = (uint64_t *)(input_data);
 	mpapi_item_list_t	*ilist, *mplu_tpg_list = NULL;
@@ -907,7 +910,7 @@ vhci_get_path_list_for_mp_lu(struct scsi_vhci *vhci, mp_iocdata_t *mpioc,
     void *input_data, void *output_data, int mode)
 {
 	int			count = 0, rval = 0;
-	int			list_len = mpioc->mp_olen/sizeof (uint64_t);
+	int			list_len = mpioc->mp_olen / sizeof (uint64_t);
 	uint64_t		*oid_list = (uint64_t *)(output_data);
 	uint64_t		*oid = (uint64_t *)(input_data);
 	mpapi_item_list_t	*ilist, *mplu_path_list = NULL;
@@ -992,7 +995,7 @@ vhci_get_path_list_for_init_port(struct scsi_vhci *vhci, mp_iocdata_t *mpioc,
     void *input_data, void *output_data, int mode)
 {
 	int			count = 0, rval = 0;
-	int			list_len = mpioc->mp_olen/sizeof (uint64_t);
+	int			list_len = mpioc->mp_olen / sizeof (uint64_t);
 	uint64_t		*oid_list = (uint64_t *)(output_data);
 	uint64_t		*oid = (uint64_t *)(input_data);
 	mpapi_item_list_t	*ilist, *mpinit_path_list = NULL;
@@ -1095,7 +1098,7 @@ vhci_get_path_list_for_target_port(struct scsi_vhci *vhci, mp_iocdata_t *mpioc,
     void *input_data, void *output_data, int mode)
 {
 	int			count = 0, rval = 0;
-	int			list_len = mpioc->mp_olen/sizeof (uint64_t);
+	int			list_len = mpioc->mp_olen / sizeof (uint64_t);
 	uint64_t		*oid_list = (uint64_t *)(output_data);
 	uint64_t		*oid = (uint64_t *)(input_data);
 	mpapi_item_list_t	*ilist, *mptp_path_list = NULL;
@@ -1226,7 +1229,7 @@ vhci_get_init_port_list(struct scsi_vhci *vhci, mp_iocdata_t *mpioc,
     void *input_data, void *output_data, int mode)
 {
 	int			count = 0, rval = 0;
-	int			list_len = mpioc->mp_olen/sizeof (uint64_t);
+	int			list_len = mpioc->mp_olen / sizeof (uint64_t);
 	uint64_t		*oid_list = (uint64_t *)(output_data);
 	mpapi_item_list_t	*ilist;
 	mpapi_initiator_data_t	*initd;
@@ -1461,7 +1464,7 @@ vhci_get_target_port_list_for_tpg(struct scsi_vhci *vhci, mp_iocdata_t *mpioc,
     void *input_data, void *output_data, int mode)
 {
 	int			count = 0, rval = 0;
-	int			list_len = mpioc->mp_olen/sizeof (uint64_t);
+	int			list_len = mpioc->mp_olen / sizeof (uint64_t);
 	uint64_t		*oid_list = (uint64_t *)(output_data);
 	uint64_t		*oid = (uint64_t *)(input_data);
 	mpapi_item_list_t	*ilist, *tpg_tp_list = NULL;
@@ -1686,7 +1689,7 @@ vhci_get_prop_lb_list(struct scsi_vhci *vhci, mp_iocdata_t *mpioc,
 	int		rval = 0;
 	uint64_t	*oid_list = (uint64_t *)(output_data);
 
-	oid_list[0] = NULL;
+	oid_list[0] = 0;
 
 	if (ddi_copyout(output_data, (void *)mpioc->mp_obuf,
 	    (sizeof (uint64_t)), mode) != 0) {
@@ -1898,7 +1901,7 @@ vhci_mpapi_hold_pip(struct scsi_vhci *vhci, mpapi_item_list_t *ilist, int flags)
  */
 static mp_uscsi_cmd_t *
 vhci_init_uscsi_cmd(struct scsi_vhci *vhci,
-	mp_iocdata_t *mpioc, uint64_t *oid, mpapi_item_list_t **list)
+    mp_iocdata_t *mpioc, uint64_t *oid, mpapi_item_list_t **list)
 {
 	int			arq_enabled;
 	mp_uscsi_cmd_t		*mp_uscmdp;
@@ -1923,7 +1926,7 @@ vhci_init_uscsi_cmd(struct scsi_vhci *vhci,
 
 	/* lock the pip */
 	if ((pip = vhci_mpapi_hold_pip(vhci, ilist,
-	    (MDI_SELECT_STANDBY_PATH|MDI_SELECT_ONLINE_PATH))) == 0) {
+	    (MDI_SELECT_STANDBY_PATH | MDI_SELECT_ONLINE_PATH))) == 0) {
 		VHCI_DEBUG(1, (CE_WARN, NULL,
 		    "vhci_init_uscsi_cmd: exit PATH_UNAVAIL"));
 		mpioc->mp_errno = MP_DRVR_PATH_UNAVAILABLE;
@@ -2062,6 +2065,75 @@ vhci_send_uscsi_cmd(dev_t dev, struct scsi_vhci *vhci, mp_iocdata_t *mpioc,
 	return (rval);
 }
 
+static int vhci_set_lu_loadbalance_type(struct scsi_vhci *vhci,
+    mp_iocdata_t *mpioc, void *input_data, void *output_data, int mode)
+{
+	int			rval = 0, held = 0;
+	mp_set_lu_lb_type_req_t	mp_set_lu_lb_type;
+	mpapi_item_list_t	*lu_list;
+	mpapi_lu_data_t		*lu;
+	scsi_vhci_lun_t		*svl;
+	uint32_t		lb_type;
+	uint64_t		lu_oid;
+
+	lu_list =
+	    vhci->mp_priv->obj_hdr_list[MP_OBJECT_TYPE_MULTIPATH_LU]->head;
+
+	rval = ddi_copyin(mpioc->mp_ibuf, &mp_set_lu_lb_type, mpioc->mp_ilen,
+	    mode);
+	if (rval != DDI_SUCCESS) {
+		VHCI_DEBUG(1, (CE_WARN, NULL, "vhci_set_lu_loadbalance_type:"
+		    "Unable to copyin mpioc: %d", rval));
+		return (EFAULT);
+	}
+
+	lu_oid = mp_set_lu_lb_type.luId;
+	lb_type = mp_set_lu_lb_type.desiredType;
+
+	VHCI_DEBUG(1, (CE_NOTE, NULL, "vhci_set_lu_loadbalance_type: lu_oid: "
+	    "%lx, lb_type: %x\n", (long)lu_oid, lb_type));
+
+	while ((lu_list != NULL) && (lu_oid != lu_list->item->oid.raw_oid))
+		lu_list = lu_list->next;
+
+	if (lu_list == NULL) {
+		VHCI_DEBUG(1, (CE_WARN, NULL, "vhci_set_lu_loadbalance_type: "
+		    "OID NOT FOUND"));
+		mpioc->mp_errno = MP_DRVR_INVALID_ID;
+		return (EINVAL);
+	}
+
+	lu = (mpapi_lu_data_t *)lu_list->item->idata;
+	svl = lu->resp;
+
+	VHCI_HOLD_LUN(svl, VH_SLEEP, held);
+	if (lb_type == LOAD_BALANCE_NONE) {
+		lu->prop.currentLoadBalanceType =
+		    MP_DRVR_LOAD_BALANCE_TYPE_NONE;
+	} else if (lb_type == LOAD_BALANCE_RR) {
+		lu->prop.currentLoadBalanceType =
+		    MP_DRVR_LOAD_BALANCE_TYPE_ROUNDROBIN;
+	} else if (lb_type == LOAD_BALANCE_LBA) {
+		lu->prop.currentLoadBalanceType =
+		    MP_DRVR_LOAD_BALANCE_TYPE_LBA_REGION;
+	} else {
+		mpioc->mp_errno = MP_DRVR_ILLEGAL_LOAD_BALANCING_TYPE;
+		VHCI_RELEASE_LUN(svl);
+		return (EINVAL);
+	}
+
+	rval = mdi_set_lb_policy(svl->svl_dip, lb_type);
+	VHCI_RELEASE_LUN(svl);
+
+	if (rval != MDI_SUCCESS) {
+		VHCI_DEBUG(1, (CE_WARN, NULL, "vhci_set_lu_loadbalance_type: "
+		    "SET LOADBALANCE POLICY FAILED: %x:", rval));
+		return (EIO);
+	}
+
+	return (rval);
+}
+
 /* ARGSUSED */
 static int
 vhci_enable_path(struct scsi_vhci *vhci, mp_iocdata_t *mpioc,
@@ -2149,7 +2221,7 @@ vhci_disable_path(struct scsi_vhci *vhci, mp_iocdata_t *mpioc,
 /* ARGSUSED */
 static int
 vhci_mpapi_ioctl(dev_t dev, struct scsi_vhci *vhci, void *udata,
-	mp_iocdata_t *mpioc, int mode, cred_t *credp)
+    mp_iocdata_t *mpioc, int mode, cred_t *credp)
 {
 	int		rval = 0;
 	uint64_t	oid;
@@ -2308,6 +2380,10 @@ vhci_mpapi_ioctl(dev_t dev, struct scsi_vhci *vhci, void *udata,
 	case MP_SEND_SCSI_CMD:
 		rval = vhci_send_uscsi_cmd(dev, vhci, mpioc,
 		    input_data, output_data, mode);
+		break;
+	case MP_SET_LU_LOADBALANCE_TYPE:
+		rval = vhci_set_lu_loadbalance_type(vhci, mpioc, input_data,
+		    output_data, mode);
 		break;
 	default:
 		rval = EINVAL;
@@ -2636,7 +2712,7 @@ vhci_mpapi_create_item(struct scsi_vhci *vhci, uint8_t obj_type, void* res)
 				VHCI_DEBUG(1, (CE_WARN, NULL,
 				    "vhci_mpapi_create_item: initiator-"
 				    "-interconnect-type prop not found"));
-				len = strlen("UNKNOWN")+1;
+				len = strlen("UNKNOWN") + 1;
 				interconnect = kmem_zalloc(len, KM_SLEEP);
 				(void) strlcpy(interconnect, "UNKNOWN", len);
 				prop_not_ddi_alloced = 1;
@@ -2708,8 +2784,8 @@ vhci_mpapi_create_item(struct scsi_vhci *vhci, uint8_t obj_type, void* res)
 			    vhci_mpapi_create_oid(vhci->mp_priv, obj_type);
 			tport = kmem_zalloc(sizeof (mpapi_tport_data_t),
 			    KM_SLEEP);
-			tgt_port_res = kmem_zalloc(strlen(res)+1, KM_SLEEP);
-			(void) strlcpy(tgt_port_res, res, strlen(res)+1);
+			tgt_port_res = kmem_zalloc(strlen(res) + 1, KM_SLEEP);
+			(void) strlcpy(tgt_port_res, res, strlen(res) + 1);
 			tport->resp = tgt_port_res;
 			tport->valid = 1;
 			tport->prop.id = item->oid.raw_oid;
@@ -2732,8 +2808,8 @@ vhci_mpapi_create_item(struct scsi_vhci *vhci, uint8_t obj_type, void* res)
 			    vhci_mpapi_create_oid(vhci->mp_priv, obj_type);
 			tpg = kmem_zalloc(
 			    sizeof (mpapi_tpg_data_t), KM_SLEEP);
-			tpg_res = kmem_zalloc(strlen(res)+1, KM_SLEEP);
-			(void) strlcpy(tpg_res, res, strlen(res)+1);
+			tpg_res = kmem_zalloc(strlen(res) + 1, KM_SLEEP);
+			(void) strlcpy(tpg_res, res, strlen(res) + 1);
 			tpg->resp = tpg_res;
 			tpg->valid = 1;
 			tpg->prop.id = item->oid.raw_oid;
@@ -4468,7 +4544,7 @@ static int
 vhci_mpapi_chk_last_path(mdi_pathinfo_t *pip)
 {
 	dev_info_t	*pdip = NULL, *cdip = NULL;
-	int		count = 0, circular;
+	int		count = 0;
 	mdi_pathinfo_t	*ret_pip;
 
 	if (pip == NULL) {
@@ -4482,7 +4558,7 @@ vhci_mpapi_chk_last_path(mdi_pathinfo_t *pip)
 		return (-1);
 	}
 
-	ndi_devi_enter(cdip, &circular);
+	ndi_devi_enter(cdip);
 	ret_pip = mdi_get_next_phci_path(cdip, NULL);
 
 	while ((ret_pip != NULL) && (count < 2)) {
@@ -4498,7 +4574,7 @@ vhci_mpapi_chk_last_path(mdi_pathinfo_t *pip)
 		mdi_pi_unlock(ret_pip);
 		ret_pip = mdi_get_next_phci_path(cdip, ret_pip);
 	}
-	ndi_devi_exit(cdip, circular);
+	ndi_devi_exit(cdip);
 
 	if (count > 1) {
 		return (0);

@@ -26,10 +26,10 @@
 #
 
 #
-# Copyright (c) 2012 by Delphix. All rights reserved.
+# Copyright (c) 2012, 2016 by Delphix. All rights reserved.
+# Copyright 2015 Nexenta Systems, Inc.  All rights reserved.
 #
 
-. $STF_SUITE/include/libtest.shlib
 . $STF_SUITE/tests/functional/cli_root/zpool_upgrade/zpool_upgrade.kshlib
 
 #
@@ -45,7 +45,7 @@ verify_runnable "global"
 
 function cleanup
 {
-	for config in $CONFIGS ; do
+	for config in $CONFIGS; do
 		destroy_upgraded_pool $config
 	done
 }
@@ -55,35 +55,28 @@ log_onexit cleanup
 
 TEST_POOLS=
 # Now build all of our pools
-for config in $CONFIGS
-do
-	POOL_NAME=$(eval $ECHO \$ZPOOL_VERSION_${config}_NAME)
+for config in $CONFIGS; do
+	typeset -n pool_name=ZPOOL_VERSION_${config}_NAME
 
-	TEST_POOLS="$TEST_POOLS $POOL_NAME"
+	TEST_POOLS="$TEST_POOLS $pool_name"
 	create_old_pool $config
-	# a side effect of the check_pool here, is that we get a checksum written
-	# called /$TESTPOOL/pool-checksums.$POOL.pre
-	check_pool $POOL_NAME pre > /dev/null
+	check_pool $pool_name pre > /dev/null
 done
 
 # upgrade them all at once
 export __ZFS_POOL_RESTRICT="$TEST_POOLS"
-log_must $ZPOOL upgrade -a
+log_must zpool upgrade -a
 unset __ZFS_POOL_RESTRICT
 
 # verify their contents then destroy them
-for config in $CONFIGS
-do
-	POOL_NAME=$(eval $ECHO \$ZPOOL_VERSION_${config}_NAME)
+for config in $CONFIGS ; do
+	typeset -n pool_name=ZPOOL_VERSION_${config}_NAME
 
-	check_pool $POOL_NAME post > /dev/null
-
-	# a side effect of the check_pool here, is that we get a checksum written
-	# called /$TESTPOOL/pool-checksums.$POOL_NAME.post
-	log_must $DIFF /$TESTPOOL/pool-checksums.$POOL_NAME.pre \
-		/$TESTPOOL/pool-checksums.$POOL_NAME.post
-
-	$RM /$TESTPOOL/pool-checksums.$POOL_NAME.pre /$TESTPOOL/pool-checksums.$POOL_NAME.post
+	check_pool $pool_name post > /dev/null
+	log_must diff /$TESTPOOL/pool-checksums.$pool_name.pre \
+	    /$TESTPOOL/pool-checksums.$pool_name.post
+	rm /$TESTPOOL/pool-checksums.$pool_name.pre \
+	    /$TESTPOOL/pool-checksums.$pool_name.post
 	destroy_upgraded_pool $config
 done
 

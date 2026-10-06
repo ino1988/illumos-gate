@@ -19,7 +19,7 @@
  * CDDL HEADER END
  */
 /*	Copyright (c) 1984, 1986, 1987, 1988, 1989 AT&T	*/
-/*	  All rights reserved.  	*/
+/*	  All rights reserved.		*/
 
 
 /*
@@ -27,7 +27,11 @@
  * Use is subject to license terms.
  */
 
-#pragma ident	"%Z%%M%	%I%	%E% SMI"
+/*
+ * Copyright 2015, Joyent, Inc.
+ * Copyright (c) 2017 by Delphix. All rights reserved.
+ * Copyright 2024 Oxide Computer Company
+ */
 
 /*
  * FIFOFS file system vnode operations.  This file system
@@ -433,7 +437,7 @@ done:
 /*ARGSUSED*/
 int
 fifo_close(vnode_t *vp, int flag, int count, offset_t offset, cred_t *crp,
-	caller_context_t *ct)
+    caller_context_t *ct)
 {
 	fifonode_t	*fnp		= VTOF(vp);
 	fifonode_t	*fn_dest	= fnp->fn_dest;
@@ -562,11 +566,11 @@ fifo_close(vnode_t *vp, int flag, int count, offset_t offset, cred_t *crp,
 	/*
 	 * If this a pipe and this is the first end to close,
 	 * then we have a bit of cleanup work to do.
-	 * 	Mark both ends of pipe as closed.
-	 * 	Wake up anybody blocked at the other end and for named pipes,
+	 *	Mark both ends of pipe as closed.
+	 *	Wake up anybody blocked at the other end and for named pipes,
 	 *	Close down this end of the stream
 	 *	Allow other opens/closes to continue
-	 * 	force an unmount of other end.
+	 *	force an unmount of other end.
 	 * Otherwise if this is last close,
 	 *	flush messages,
 	 *	close down the stream
@@ -654,7 +658,7 @@ fifo_close(vnode_t *vp, int flag, int count, offset_t offset, cred_t *crp,
 
 static int
 fifo_read(struct vnode *vp, struct uio *uiop, int ioflag, struct cred *crp,
-	caller_context_t *ct)
+    caller_context_t *ct)
 {
 	fifonode_t	*fnp		= VTOF(vp);
 	fifonode_t	*fn_dest;
@@ -811,11 +815,10 @@ done:
 	 * vnode update access time
 	 */
 	if (error == 0) {
-		time_t now = gethrestime_sec();
+		gethrestime(&fnp->fn_atime);
 
 		if (fnp->fn_flag & ISPIPE)
-			fnp->fn_dest->fn_atime = now;
-		fnp->fn_atime = now;
+			fnp->fn_dest->fn_atime = fnp->fn_atime;
 	}
 	TRACE_2(TR_FAC_FIFO, TR_FIFOREAD_OUT,
 	    "fifo_read out:%p error %d", vp, error);
@@ -840,7 +843,7 @@ done:
 /*ARGSUSED*/
 static int
 fifo_write(vnode_t *vp, uio_t *uiop, int ioflag, cred_t *crp,
-	caller_context_t *ct)
+    caller_context_t *ct)
 {
 	struct fifonode	*fnp, *fn_dest;
 	fifolock_t	*fn_lock;
@@ -1086,7 +1089,8 @@ done:
 	 * make sure there were no errors and some data was transferred
 	 */
 	if (error == 0 && write_size != uiop->uio_resid) {
-		time_t now = gethrestime_sec();
+		timestruc_t now;
+		gethrestime(&now);
 
 		if (fnp->fn_flag & ISPIPE) {
 			fn_dest->fn_mtime = fn_dest->fn_ctime = now;
@@ -1110,8 +1114,8 @@ epipe:
 
 /*ARGSUSED6*/
 static int
-fifo_ioctl(vnode_t *vp, int cmd, intptr_t arg, int mode,
-	cred_t *cr, int *rvalp, caller_context_t *ct)
+fifo_ioctl(vnode_t *vp, int cmd, intptr_t arg, int mode, cred_t *cr,
+    int *rvalp, caller_context_t *ct)
 {
 	/*
 	 * Just a quick check
@@ -1124,9 +1128,24 @@ fifo_ioctl(vnode_t *vp, int cmd, intptr_t arg, int mode,
 	    fifo_strioctl(vp, cmd, arg, mode, cr, rvalp));
 }
 
+static inline int
+fifo_ioctl_getpeercred(fifonode_t *fnp, intptr_t arg, int mode)
+{
+	k_peercred_t *kp = (k_peercred_t *)arg;
+
+	if (mode == FKIOCTL && fnp->fn_pcredp != NULL) {
+		crhold(fnp->fn_pcredp);
+		kp->pc_cr = fnp->fn_pcredp;
+		kp->pc_cpid = fnp->fn_cpid;
+		return (0);
+	} else {
+		return (ENOTSUP);
+	}
+}
+
 static int
-fifo_fastioctl(vnode_t *vp, int cmd, intptr_t arg, int mode,
-	cred_t *cr, int *rvalp)
+fifo_fastioctl(vnode_t *vp, int cmd, intptr_t arg, int mode, cred_t *cr,
+    int *rvalp)
 {
 	fifonode_t	*fnp		= VTOF(vp);
 	fifonode_t	*fn_dest;
@@ -1343,6 +1362,10 @@ fifo_fastioctl(vnode_t *vp, int cmd, intptr_t arg, int mode,
 		*rvalp = 0;
 		break;
 
+	case _I_GETPEERCRED:
+		error = fifo_ioctl_getpeercred(fnp, arg, mode);
+		break;
+
 	/*
 	 * invalid calls for stream head or fifos
 	 */
@@ -1383,24 +1406,15 @@ stream_mode:
  * FIFO is in STREAMS mode; STREAMS framework does most of the work.
  */
 static int
-fifo_strioctl(vnode_t *vp, int cmd, intptr_t arg, int mode,
-	cred_t *cr, int *rvalp)
+fifo_strioctl(vnode_t *vp, int cmd, intptr_t arg, int mode, cred_t *cr,
+    int *rvalp)
 {
 	fifonode_t	*fnp = VTOF(vp);
 	int		error;
 	fifolock_t	*fn_lock;
 
-	if (cmd == _I_GETPEERCRED) {
-		if (mode == FKIOCTL && fnp->fn_pcredp != NULL) {
-			k_peercred_t *kp = (k_peercred_t *)arg;
-			crhold(fnp->fn_pcredp);
-			kp->pc_cr = fnp->fn_pcredp;
-			kp->pc_cpid = fnp->fn_cpid;
-			return (0);
-		} else {
-			return (ENOTSUP);
-		}
-	}
+	if (cmd == _I_GETPEERCRED)
+		return (fifo_ioctl_getpeercred(fnp, arg, mode));
 
 	error = strioctl(vp, cmd, arg, mode, U_TO_K, cr, rvalp);
 
@@ -1439,7 +1453,7 @@ fifo_strioctl(vnode_t *vp, int cmd, intptr_t arg, int mode,
  */
 int
 fifo_getattr(vnode_t *vp, vattr_t *vap, int flags, cred_t *crp,
-	caller_context_t *ct)
+    caller_context_t *ct)
 {
 	int		error		= 0;
 	fifonode_t	*fnp		= VTOF(vp);
@@ -1455,24 +1469,18 @@ fifo_getattr(vnode_t *vp, vattr_t *vap, int flags, cred_t *crp,
 			return (error);
 		mutex_enter(&fn_lock->flk_lock);
 		/* set current times from fnode, even if older than vnode */
-		vap->va_atime.tv_sec = fnp->fn_atime;
-		vap->va_atime.tv_nsec = 0;
-		vap->va_mtime.tv_sec = fnp->fn_mtime;
-		vap->va_mtime.tv_nsec = 0;
-		vap->va_ctime.tv_sec = fnp->fn_ctime;
-		vap->va_ctime.tv_nsec = 0;
+		vap->va_atime = fnp->fn_atime;
+		vap->va_mtime = fnp->fn_mtime;
+		vap->va_ctime = fnp->fn_ctime;
 	} else {
 		/*
 		 * for non-attached/ordinary pipes
 		 */
 		vap->va_mode = 0;
 		mutex_enter(&fn_lock->flk_lock);
-		vap->va_atime.tv_sec = fnp->fn_atime;
-		vap->va_atime.tv_nsec = 0;
-		vap->va_mtime.tv_sec = fnp->fn_mtime;
-		vap->va_mtime.tv_nsec = 0;
-		vap->va_ctime.tv_sec = fnp->fn_ctime;
-		vap->va_ctime.tv_nsec = 0;
+		vap->va_atime = fnp->fn_atime;
+		vap->va_mtime = fnp->fn_mtime;
+		vap->va_ctime = fnp->fn_ctime;
 		vap->va_uid = crgetuid(crp);
 		vap->va_gid = crgetgid(crp);
 		vap->va_nlink = 0;
@@ -1515,12 +1523,8 @@ fifo_getattr(vnode_t *vp, vattr_t *vap, int flags, cred_t *crp,
  * Otherwise, set the time and return 0.
  */
 int
-fifo_setattr(
-	vnode_t			*vp,
-	vattr_t			*vap,
-	int			flags,
-	cred_t			*crp,
-	caller_context_t	*ctp)
+fifo_setattr(vnode_t *vp, vattr_t *vap, int flags, cred_t *crp,
+    caller_context_t *ctp)
 {
 	fifonode_t	*fnp	= VTOF(vp);
 	int		error	= 0;
@@ -1532,10 +1536,10 @@ fifo_setattr(
 		fn_lock = fnp->fn_lock;
 		mutex_enter(&fn_lock->flk_lock);
 		if (vap->va_mask & AT_ATIME)
-			fnp->fn_atime = vap->va_atime.tv_sec;
+			fnp->fn_atime = vap->va_atime;
 		if (vap->va_mask & AT_MTIME)
-			fnp->fn_mtime = vap->va_mtime.tv_sec;
-		fnp->fn_ctime = gethrestime_sec();
+			fnp->fn_mtime = vap->va_mtime;
+		gethrestime(&fnp->fn_ctime);
 		mutex_exit(&fn_lock->flk_lock);
 	}
 	return (error);
@@ -1576,6 +1580,17 @@ fifo_create(struct vnode *dvp, char *name, vattr_t *vap, enum vcexcl excl,
 	return (EEXIST);
 }
 
+static boolean_t
+fifo_hres_gt(const timestruc_t *targ, const timestruc_t *base)
+{
+	if (targ->tv_sec > base->tv_sec) {
+		return (B_TRUE);
+	}
+
+	return (targ->tv_sec == base->tv_sec &&
+	    targ->tv_nsec > base->tv_nsec);
+}
+
 /*
  * If shadowing a vnode, apply the VOP_FSYNC to it.
  * Otherwise, return 0.
@@ -1593,12 +1608,12 @@ fifo_fsync(vnode_t *vp, int syncflag, cred_t *crp, caller_context_t *ct)
 	va.va_mask = AT_MTIME | AT_ATIME;
 	if (VOP_GETATTR(fnp->fn_realvp, &va, 0, crp, ct) == 0) {
 		va.va_mask = 0;
-		if (fnp->fn_mtime > va.va_mtime.tv_sec) {
-			va.va_mtime.tv_sec = fnp->fn_mtime;
+		if (fifo_hres_gt(&fnp->fn_mtime, &va.va_mtime)) {
+			va.va_mtime = fnp->fn_mtime;
 			va.va_mask = AT_MTIME;
 		}
-		if (fnp->fn_atime > va.va_atime.tv_sec) {
-			va.va_atime.tv_sec = fnp->fn_atime;
+		if (fifo_hres_gt(&fnp->fn_atime, &va.va_atime)) {
+			va.va_atime = fnp->fn_atime;
 			va.va_mask |= AT_ATIME;
 		}
 		if (va.va_mask != 0)
@@ -1620,7 +1635,8 @@ fifo_inactive(vnode_t *vp, cred_t *crp, caller_context_t *ct)
 	mutex_enter(&ftable_lock);
 	mutex_enter(&vp->v_lock);
 	ASSERT(vp->v_count >= 1);
-	if (--vp->v_count != 0) {
+	VN_RELE_LOCKED(vp);
+	if (vp->v_count != 0) {
 		/*
 		 * Somebody accessed the fifo before we got a chance to
 		 * remove it.  They will remove it when they do a vn_rele.
@@ -1758,7 +1774,7 @@ fifo_realvp(vnode_t *vp, vnode_t **vpp, caller_context_t *ct)
 /* ARGSUSED */
 int
 fifo_poll(vnode_t *vp, short events, int anyyet, short *reventsp,
-	pollhead_t **phpp, caller_context_t *ct)
+    pollhead_t **phpp, caller_context_t *ct)
 {
 	fifonode_t	*fnp, *fn_dest;
 	fifolock_t	*fn_lock;
@@ -1773,7 +1789,10 @@ fifo_poll(vnode_t *vp, short events, int anyyet, short *reventsp,
 	fn_dest		= fnp->fn_dest;
 	fn_lock		= fnp->fn_lock;
 
-	polllock(&stp->sd_pollist, &fn_lock->flk_lock);
+	if (polllock(&stp->sd_pollist, &fn_lock->flk_lock) != 0) {
+		*reventsp = POLLNVAL;
+		return (0);
+	}
 
 	/*
 	 * see if FIFO/pipe open
@@ -1832,17 +1851,16 @@ fifo_poll(vnode_t *vp, short events, int anyyet, short *reventsp,
 	}
 
 	/*
-	 * if we happened to get something, return
+	 * if we happened to get something and we're not edge-triggered, return
 	 */
-
-	if ((*reventsp = (short)retevents) != 0) {
+	if ((*reventsp = (short)retevents) != 0 && !(events & POLLET)) {
 		mutex_exit(&fnp->fn_lock->flk_lock);
 		return (0);
 	}
 
 	/*
-	 * If poll() has not found any events yet, set up event cell
-	 * to wake up the poll if a requested event occurs on this
+	 * If poll() has not found any events yet or we're edge-triggered, set
+	 * up event cell to wake up the poll if a requested event occurs on this
 	 * pipe/fifo.
 	 */
 	if (!anyyet) {
@@ -1869,7 +1887,7 @@ stream_mode:
 /* ARGSUSED */
 int
 fifo_pathconf(vnode_t *vp, int cmd, ulong_t *valp, cred_t *cr,
-	caller_context_t *ct)
+    caller_context_t *ct)
 {
 	ulong_t val;
 	int error = 0;
@@ -1943,7 +1961,7 @@ fifo_pathconf(vnode_t *vp, int cmd, ulong_t *valp, cred_t *cr,
  */
 int
 fifo_setsecattr(struct vnode *vp, vsecattr_t *vsap, int flag, struct cred *crp,
-	caller_context_t *ct)
+    caller_context_t *ct)
 {
 	int error;
 
@@ -1968,7 +1986,7 @@ fifo_setsecattr(struct vnode *vp, vsecattr_t *vsap, int flag, struct cred *crp,
  */
 int
 fifo_getsecattr(struct vnode *vp, vsecattr_t *vsap, int flag, struct cred *crp,
-	caller_context_t *ct)
+    caller_context_t *ct)
 {
 	if (VTOF(vp)->fn_realvp)
 		return (VOP_GETSECATTR(VTOF(vp)->fn_realvp, vsap, flag,

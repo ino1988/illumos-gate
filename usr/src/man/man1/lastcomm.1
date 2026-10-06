@@ -4,7 +4,7 @@
 .\" The contents of this file are subject to the terms of the Common Development and Distribution License (the "License").  You may not use this file except in compliance with the License.
 .\" You can obtain a copy of the license at usr/src/OPENSOLARIS.LICENSE or http://www.opensolaris.org/os/licensing.  See the License for the specific language governing permissions and limitations under the License.
 .\" When distributing Covered Code, include this CDDL HEADER in each file and include the License file at usr/src/OPENSOLARIS.LICENSE.  If applicable, add the following below this CDDL HEADER, with the fields enclosed by brackets "[]" replaced with your own identifying information: Portions Copyright [yyyy] [name of copyright owner]
-.TH LASTCOMM 1 "Jan 10, 2000"
+.TH LASTCOMM 1 "May 13, 2017"
 .SH NAME
 lastcomm \- display the last commands executed, in reverse order
 .SH SYNOPSIS
@@ -15,14 +15,13 @@ lastcomm \- display the last commands executed, in reverse order
 .fi
 
 .SH DESCRIPTION
-.sp
 .LP
 The \fBlastcomm\fR command gives information on previously executed commands.
 \fBlastcomm\fR with no arguments displays information about all the commands
 recorded during the current accounting file's lifetime. If called with
 arguments, \fBlastcomm\fR only displays accounting entries with a matching
 \fIcommand-name\fR, \fIuser-name\fR, or \fIterminal-name\fR. If extended
-process accounting is active (see \fBacctadm\fR(1M)) and is recording the
+process accounting is active (see \fBacctadm\fR(8)) and is recording the
 appropriate data items, \fBlastcomm\fR attempts to take data from the current
 extended process accounting file. If standard process accounting is active,
 \fBlastcomm\fR takes data from the current standard accounting file (see
@@ -97,7 +96,6 @@ The amount of \fBCPU\fR time used by the process (in seconds).
 The date and time the process exited.
 .RE
 .SH OPTIONS
-.sp
 .LP
 The following options are supported:
 .sp
@@ -159,7 +157,6 @@ example% \fBlastcomm root\fR
 produces a listing of all the commands executed by user \fBroot\fR.
 
 .SH FILES
-.sp
 .ne 2
 .na
 \fB\fB/var/adm/pacct\fR\fR
@@ -178,7 +175,10 @@ extended accounting file
 .RE
 
 .SH SEE ALSO
-.sp
 .LP
-\fBlast\fR(1), \fBacctadm\fR(1M), \fBacct\fR(2), \fBacct.h\fR(3HEAD),
-\fBsigvec\fR(3UCB), \fBcore\fR(4), \fBattributes\fR(5)
+.BR last (1),
+.BR acct (2),
+.BR acct.h (3HEAD),
+.BR core (5),
+.BR attributes (7),
+.BR acctadm (8)

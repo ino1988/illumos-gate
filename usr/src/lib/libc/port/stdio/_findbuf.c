@@ -25,15 +25,19 @@
  */
 
 /*	Copyright (c) 1988 AT&T	*/
-/*	  All Rights Reserved  	*/
+/*	  All Rights Reserved	*/
 
-#pragma ident	"%Z%%M%	%I%	%E% SMI"
+/*
+ * Copyright 2020 Robert Mustacchi
+ * Copyright 2022 OmniOS Community Edition (OmniOSce) Association.
+ */
 
 
 #define	_LARGEFILE64_SOURCE	1
 
 #include "lint.h"
 #include "file64.h"
+#include <errno.h>
 #include <stdlib.h>
 #include <stdio.h>
 #include <sys/types.h>
@@ -51,53 +55,61 @@
 Uchar *
 _findbuf(FILE *iop)
 {
-	int fd = GET_FD(iop);
+	int fd = _get_fd(iop);
 	Uchar *buf;
 	int size = BUFSIZ;
 	Uchar *endbuf;
-	int tty = -1;
+	int tty, err;
 
-	struct stat64 stbuf;		/* used to get file system block size */
+	/*
+	 * isatty(3C) will set errno as a side-effect of returning 0. Hide this
+	 * from callers so that they do not see errno changing for no apparent
+	 * reason.
+	 */
+	err = errno;
+	tty = isatty(fd);
+	errno = err;
 
-	if (iop->_flag & _IONBF)	/* need a small buffer, at least */
-	{
-	trysmall:;
+	if (iop->_flag & _IONBF) {	/* need a small buffer, at least */
+	trysmall:
 		size = _SMBFSZ - PUSHBACK;
-		if (fd < _NFILE)
+		if (fd >= 0 && fd < _NFILE) {
 			buf = _smbuf[fd];
-		else if ((buf = (Uchar *)malloc(_SMBFSZ * sizeof (Uchar))) !=
-		    NULL)
+		} else if ((buf = (Uchar *)malloc(_SMBFSZ * sizeof (Uchar))) !=
+		    NULL) {
 			iop->_flag |= _IOMYBUF;
-	}
-#ifndef _STDIO_ALLOCATE
-	else if (fd < 2 && (tty = isatty(fd))) {
-		buf = (fd == 0) ? _sibuf : _sobuf; /* special buffer */
-						/* for std{in,out} */
-	}
-#endif
-	else {
+		}
+	} else if (fd >= 0 && fd < 2 && tty != 0) {
+		/* Use special buffers for standard in and standard out */
+		buf = (fd == 0) ? _sibuf : _sobuf;
+	} else {
+
 		/*
-		 * The operating system can tell us the
-		 * right size for a buffer;
-		 * avoid 0-size buffers as returned for some
-		 * special files (doors)
+		 * The operating system can tell us the right size for a buffer;
+		 * avoid 0-size buffers as returned for some special files
+		 * (doors). Use the default buffer size for memory streams.
 		 */
-		if (fstat64(fd, &stbuf) == 0 && stbuf.st_blksize > 0)
+		struct stat64 stbuf;
+
+		if (fd != -1 && fstat64(fd, &stbuf) == 0 && stbuf.st_blksize >
+		    0) {
 			size = stbuf.st_blksize;
+		}
 
 		if ((buf = (Uchar *)malloc(sizeof (Uchar)*(size+_SMBFSZ))) !=
-		    NULL)
+		    NULL) {
 			iop->_flag |= _IOMYBUF;
-		else
+		} else {
 			goto trysmall;
+		}
 	}
 	if (buf == NULL)
-		return (NULL); 	/* malloc() failed */
+		return (NULL);	/* malloc() failed */
 	iop->_base = buf + PUSHBACK;	/* bytes for pushback */
 	iop->_ptr = buf + PUSHBACK;
 	endbuf = iop->_base + size;
 	_setbufend(iop, endbuf);
-	if (!(iop->_flag & _IONBF) && ((tty != -1) ? tty : isatty(fd)))
+	if (!(iop->_flag & _IONBF) && tty != 0)
 		iop->_flag |= _IOLBF;
 	return (endbuf);
 }

@@ -23,15 +23,15 @@
 # Copyright 2009 Sun Microsystems, Inc.  All rights reserved.
 # Use is subject to license terms.
 #
+# Copyright 2022 Garrett D'Amore
+#
 
 include $(SRC)/Makefile.master
 
 .KEEP_STATE:
 
-sparc_MACHDIR = sparc
 i386_MACHDIR = intel
 
-sparc_SUBDIRS = sparc sun4u sun4v
 i386_SUBDIRS = intel i86pc i86xpv
 
 MACHDIR = $($(MACH)_MACHDIR)
@@ -39,22 +39,20 @@ SUBDIRS = tools $($(MACH)_SUBDIRS) demo
 TARGET =
 
 all := TARGET = all
-clean.lint := TARGET = clean.lint
 clean := TARGET = clean
 clobber := TARGET = clobber
 dmods := TARGET = dmods
 install := TARGET = install
 install_h := TARGET = install_h
-lint := TARGET = lint
 
-all lint: $(SUBDIRS)
+all: $(SUBDIRS)
 
 dmods install: install_h $(SUBDIRS)
 
 install_h: FRC
 	@cd common/mdb; pwd; $(MAKE) install_h
 
-clean.lint clean: $(SUBDIRS)
+clean: $(SUBDIRS)
 
 clobber: $(SUBDIRS)
 
@@ -69,5 +67,5 @@ FRC:
 # Cross-reference customization: build the cross-reference only over the
 # source directories, and ignore Makefiles and machine-generated source.
 #
-XRDIRS = common $(sparc_SUBDIRS) $(i386_SUBDIRS)
+XRDIRS = common $(i386_SUBDIRS)
 XRDEL = mdb_lex.c mdb_grammar.c Makefile*

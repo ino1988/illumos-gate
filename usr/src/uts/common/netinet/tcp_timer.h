@@ -1,6 +1,7 @@
 /*
  * Copyright (c) 1982, 1986 Regents of the University of California.
  * All rights reserved.
+ * Copyright (c) 2016 by Delphix. All rights reserved.
  *
  * Redistribution and use in source and binary forms are permitted
  * provided that the above copyright notice and this paragraph are
@@ -20,7 +21,6 @@
 #ifndef	_NETINET_TCP_TIMER_H
 #define	_NETINET_TCP_TIMER_H
 
-#pragma ident	"%Z%%M%	%I%	%E% SMI"
 /* tcp_timer.h 1.13 89/06/16 SMI; from UCB 7.6 6/29/88 */
 
 #ifdef	__cplusplus
@@ -51,7 +51,7 @@ extern "C" {
  * and the window is too small to bother sending anything, then we start
  * the TCPT_PERSIST timer.  When it expires, if the window is nonzero,
  * we go to transmit state.  Otherwise, at intervals send a single byte
- * into the peer's window to force him to update our window information.
+ * into the peer's window to force it to update our window information.
  * We do this at most as often as TCPT_PERSMIN time intervals,
  * but no more frequently than the current estimate of round-trip
  * packet time.  The TCPT_PERSIST timer is cleared whenever we receive

@@ -20,6 +20,7 @@
  */
 /*
  * Copyright (c) 2007, 2010, Oracle and/or its affiliates. All rights reserved.
+ * Copyright 2022 Tintri by DDN, Inc. All rights reserved.
  */
 
 #include <sys/types.h>
@@ -75,31 +76,101 @@ static smb_audit_t *smbd_audit_unlink(uint32_t);
 
 /*
  * Invoked at user logon due to SmbSessionSetupX.  Authenticate the
- * user, start an audit session and audit the event.
+ * user.
+ *
+ * On error, returns NULL, and status in user_info->lg_status.
+ *
+ * Equivalent to smbd_krb5ssp_work().
  */
 smb_token_t *
 smbd_user_auth_logon(smb_logon_t *user_info)
 {
-	smb_token_t *token;
+	smb_token_t *token = NULL;
+	smb_logon_t tmp_user;
+	char *p;
+	char *buf = NULL;
+
+	if (user_info->lg_username == NULL ||
+	    user_info->lg_domain == NULL ||
+	    user_info->lg_workstation == NULL) {
+		user_info->lg_status = NT_STATUS_INVALID_PARAMETER;
+		return (NULL);
+	}
+
+	/*
+	 * Avoid modifying the caller-provided struct because it
+	 * may or may not point to allocated strings etc.
+	 * Copy to tmp_user, auth, then copy the (out) lg_status
+	 * member back to the caller-provided struct.
+	 */
+	tmp_user = *user_info;
+	if (tmp_user.lg_username[0] == '\0') {
+		tmp_user.lg_flags |= SMB_ATF_ANON;
+		tmp_user.lg_e_username = "anonymous";
+	} else {
+		tmp_user.lg_e_username = tmp_user.lg_username;
+	}
+
+	/* Handle user@domain format. */
+	if (tmp_user.lg_domain[0] == '\0' &&
+	    (p = strchr(tmp_user.lg_e_username, '@')) != NULL) {
+		buf = strdup(tmp_user.lg_e_username);
+		if (buf == NULL) {
+			user_info->lg_status = NT_STATUS_NO_MEMORY;
+			return (NULL);
+		}
+		p = buf + (p - tmp_user.lg_e_username);
+		*p = '\0';
+		tmp_user.lg_e_domain = p + 1;
+		tmp_user.lg_e_username = buf;
+	} else {
+		tmp_user.lg_e_domain = tmp_user.lg_domain;
+	}
+
+	token = smb_logon(&tmp_user);
+
+	if (token == NULL && tmp_user.lg_status == 0) /* should not happen */
+		user_info->lg_status = NT_STATUS_INTERNAL_ERROR;
+	else
+		user_info->lg_status = tmp_user.lg_status;
+
+	user_info->lg_status = smbd_logon_final(token,
+	    &user_info->lg_clnt_ipaddr, tmp_user.lg_e_username,
+	    tmp_user.lg_e_domain, user_info->lg_status);
+
+	free(buf);
+
+	if (user_info->lg_status != 0) {
+		smb_token_destroy(token);
+		token = NULL;
+	}
+	return (token);
+}
+
+/* Start an audit session and audit the event. */
+static boolean_t
+smbd_logon_audit(smb_token_t *token, smb_inaddr_t *ipaddr, char *username,
+    char *domain)
+{
 	smb_audit_t *entry;
-	adt_session_data_t *ah;
+	adt_session_data_t *ah = NULL;
 	adt_event_data_t *event;
 	au_tid_addr_t termid;
 	char sidbuf[SMB_SID_STRSZ];
-	char *username;
-	char *domain;
 	uid_t uid;
 	gid_t gid;
 	char *sid;
 	int status;
 	int retval;
 
-	if ((token = smb_logon(user_info)) == NULL) {
+	assert(username != NULL);
+	assert(domain != NULL);
+
+	if (token == NULL) {
 		uid = ADT_NO_ATTRIB;
 		gid = ADT_NO_ATTRIB;
 		sid = NT_NULL_SIDSTR;
-		username = user_info->lg_e_username;
-		domain = user_info->lg_e_domain;
+		/* use the 'default' username and domain we were given */
 		status = ADT_FAILURE;
 		retval = ADT_FAIL_VALUE_AUTH;
 	} else {
@@ -115,27 +186,24 @@ smbd_user_auth_logon(smb_logon_t *user_info)
 
 	if (adt_start_session(&ah, NULL, 0)) {
 		syslog(LOG_AUTH | LOG_ALERT, "adt_start_session: %m");
-		smb_token_destroy(token);
-		return (NULL);
+		goto errout;
 	}
 
 	if ((event = adt_alloc_event(ah, ADT_smbd_session)) == NULL) {
 		syslog(LOG_AUTH | LOG_ALERT,
 		    "adt_alloc_event(ADT_smbd_session): %m");
-		(void) adt_end_session(ah);
-		smb_token_destroy(token);
-		return (NULL);
+		goto errout;
 	}
 
 	(void) memset(&termid, 0, sizeof (au_tid_addr_t));
-	termid.at_port = user_info->lg_local_port;
+	termid.at_port = IPPORT_SMB;
 
-	if (user_info->lg_clnt_ipaddr.a_family == AF_INET) {
-		termid.at_addr[0] = user_info->lg_clnt_ipaddr.a_ipv4;
+	if (ipaddr->a_family == AF_INET) {
+		termid.at_addr[0] = ipaddr->a_ipv4;
 		termid.at_type = AU_IPv4;
 	} else {
-		bcopy(&user_info->lg_clnt_ipaddr.a_ip, termid.at_addr,
-		    IPV6_ADDR_LEN);
+		bcopy(&ipaddr->a_ip, termid.at_addr,
+		    sizeof (in6_addr_t));
 		termid.at_type = AU_IPv6;
 	}
 	adt_set_termid(ah, &termid);
@@ -143,9 +211,7 @@ smbd_user_auth_logon(smb_logon_t *user_info)
 	if (adt_set_user(ah, uid, gid, uid, gid, NULL, ADT_NEW)) {
 		syslog(LOG_AUTH | LOG_ALERT, "adt_set_user: %m");
 		adt_free_event(event);
-		(void) adt_end_session(ah);
-		smb_token_destroy(token);
-		return (NULL);
+		goto errout;
 	}
 
 	event->adt_smbd_session.domain = domain;
@@ -160,9 +226,7 @@ smbd_user_auth_logon(smb_logon_t *user_info)
 	if (token) {
 		if ((entry = malloc(sizeof (smb_audit_t))) == NULL) {
 			syslog(LOG_ERR, "smbd_user_auth_logon: %m");
-			(void) adt_end_session(ah);
-			smb_token_destroy(token);
-			return (NULL);
+			goto errout;
 		}
 
 		entry->sa_handle = ah;
@@ -171,12 +235,37 @@ smbd_user_auth_logon(smb_logon_t *user_info)
 		entry->sa_username = strdup(username);
 		entry->sa_domain = strdup(domain);
 
-		smb_autohome_add(token);
 		smbd_audit_link(entry);
 		token->tkn_audit_sid = entry->sa_audit_sid;
 	}
 
-	return (token);
+	return (B_TRUE);
+errout:
+	(void) adt_end_session(ah);
+	return (B_FALSE);
+}
+
+/*
+ * Handles all of the work needed to be done after SMB authentication,
+ * regardless of the auth flavor (Kerberos or NTLM).
+ *
+ * This should return the original status to the caller, unless something
+ * here causes us to turn what would be a success into a failure
+ * (or we decide we should override the original error for some reason).
+ */
+uint32_t
+smbd_logon_final(smb_token_t *token, smb_inaddr_t *ipaddr, char *username,
+    char *domain, uint32_t status)
+{
+	assert(token != NULL || status != 0);
+
+	if (!smbd_logon_audit(token, ipaddr, username, domain) && status == 0)
+		return (NT_STATUS_AUDIT_FAILED);
+
+	if (status == 0)
+		smb_autohome_add(token);
+
+	return (status);
 }
 
 /*
@@ -204,9 +293,11 @@ smbd_user_nonauth_logon(uint32_t audit_sid)
 }
 
 /*
- * Invoked at user logoff due to SmbLogoffX.  If this is the final
+ * Invoked at user logoff due to SMB Logoff.  If this is the final
  * logoff for this user on the session, audit the event and terminate
  * the audit session.
+ *
+ * This is called to logoff both NTLMSSP and KRB5SSP authentications.
  */
 void
 smbd_user_auth_logoff(uint32_t audit_sid)

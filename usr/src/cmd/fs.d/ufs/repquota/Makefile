@@ -23,6 +23,7 @@
 # Copyright (c) 1989,1996 by Sun Microsystems, Inc.
 # All rights reserved.
 #
+# Copyright (c) 2018, Joyent, Inc.
 
 FSTYPE=		ufs
 LIBPROG=	repquota
@@ -36,9 +37,10 @@ include		../../Makefile.fstype
 CPPFLAGS +=	-D_LARGEFILE64_SOURCE
 
 CERRWARN +=	-_gcc=-Wno-type-limits
-CERRWARN +=	-_gcc=-Wno-uninitialized
+CERRWARN +=	$(CNOWARN_UNINIT)
 
-lint:		lint_PROG
+# not linted
+SMATCH=off
 
 $(ROOTUSRSBIN)/$(LIBPROG):
 		-$(RM) $@; $(SYMLINK) $(LINKVALUE) $@

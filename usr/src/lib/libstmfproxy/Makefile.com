@@ -30,23 +30,19 @@ OBJECTS= stmftransport.o
 
 include ../../Makefile.lib
 
-LIBS=	$(DYNLIB) $(LINTLIB)
+LIBS=	$(DYNLIB)
 
 SRCDIR =	../common
 
 INCS += -I$(SRCDIR)
 
-C99MODE=	-xc99=%all
-C99LMODE=	-Xc99=%all
+CSTD=	$(CSTD_GNU99)
 LDLIBS +=	-lc -lsocket -lnsl
 CPPFLAGS +=	$(INCS) -D_REENTRANT
 
-$(LINTLIB) := SRCS=	$(SRCDIR)/$(LINTSRC)
 
 .KEEP_STATE:
 
 all: $(LIBS)
-
-#lint: lintcheck
 
 include ../../Makefile.targ

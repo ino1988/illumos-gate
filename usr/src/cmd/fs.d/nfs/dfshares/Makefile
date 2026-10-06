@@ -22,6 +22,7 @@
 #
 # Copyright (c) 1989 by Sun Microsystems, Inc.
 #
+# Copyright (c) 2018, Joyent, Inc.
 
 FSTYPE=		nfs
 LIBPROG=	dfshares
@@ -29,13 +30,14 @@ ATTMK=		$(LIBPROG)
 
 include		../../Makefile.fstype
 
-OBJS= 		$(LIBPROG).o
+OBJS=		$(LIBPROG).o clnt_subr.o
 SRCS=		$(OBJS:%.o=%.c)
 
 LDLIBS +=	-lrpcsvc -lnsl
-CERRWARN +=	-_gcc=-Wno-unused-variable
-CERRWARN +=	-_gcc=-Wno-implicit-function-declaration
-CERRWARN +=	-_gcc=-Wno-parentheses
+CPPFLAGS +=	-I../lib
+
+clnt_subr.o:	../lib/clnt_subr.c
+	$(COMPILE.c)	../lib/clnt_subr.c
 
 $(LIBPROG):	$(OBJS)
 		$(LINK.c) -o $@ $(OBJS) $(LDLIBS)

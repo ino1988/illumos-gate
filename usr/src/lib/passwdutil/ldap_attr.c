@@ -21,6 +21,8 @@
 /*
  * Copyright 2009 Sun Microsystems, Inc.  All rights reserved.
  * Use is subject to license terms.
+ * Copyright (c) 2016 by Delphix. All rights reserved.
+ * Copyright 2024 OmniOS Community Edition (OmniOSce) Association.
  */
 
 #include <stdio.h>
@@ -70,12 +72,13 @@
 		i++; \
 	}
 
-int ldap_getattr(char *name, attrlist *item, pwu_repository_t *rep);
-int ldap_getpwnam(char *name, attrlist *items, pwu_repository_t *rep,
+int ldap_getattr(const char *name, attrlist *item, pwu_repository_t *rep);
+int ldap_getpwnam(const char *name, attrlist *items, pwu_repository_t *rep,
     void **buf);
 int ldap_update(attrlist *items, pwu_repository_t *rep, void *buf);
-int ldap_putpwnam(char *name, char *oldpw, pwu_repository_t *rep, void *buf);
-int ldap_user_to_authenticate(char *name, pwu_repository_t *rep,
+int ldap_putpwnam(const char *name, const char *oldpw, pwu_repository_t *rep,
+    void *buf);
+int ldap_user_to_authenticate(const char *name, pwu_repository_t *rep,
 	char **auth_user, int *privileged);
 
 /*
@@ -180,16 +183,16 @@ free_ldapbuf(ldapbuf_t *p)
  *
  * If the Shadow Update functionality is enabled, then we check to
  * see if the caller has 0 as the euid or has all zone privs. If so,
- * the caller would be able to modify shadow(4) data stored on the
+ * the caller would be able to modify shadow(5) data stored on the
  * LDAP server. Otherwise, when LDAP Shadow Update is not enabled,
  * we can't determine whether the user is "privileged" in the LDAP
  * sense. The operation should be attempted and will succeed if the
  * user had privileges. For our purposes, we say that the user is
- * privileged if he/she is attempting to change another user's
+ * privileged if they are attempting to change another user's
  * password attributes.
  */
 int
-ldap_user_to_authenticate(char *user, pwu_repository_t *rep,
+ldap_user_to_authenticate(const char *user, pwu_repository_t *rep,
 	char **auth_user, int *privileged)
 {
 	struct passwd *pw;
@@ -285,7 +288,7 @@ ldap_user_to_authenticate(char *user, pwu_repository_t *rep,
  */
 /*ARGSUSED*/
 int
-ldap_getattr(char *name, attrlist *items, pwu_repository_t *rep)
+ldap_getattr(const char *name, attrlist *items, pwu_repository_t *rep)
 {
 	attrlist *w;
 	int res;
@@ -383,7 +386,6 @@ ldap_getattr(char *name, attrlist *items, pwu_repository_t *rep)
 		}
 	}
 
-out:
 	free_ldapbuf(ldapbuf);
 	free(ldapbuf);
 	return (res);
@@ -402,7 +404,7 @@ out:
  */
 /*ARGSUSED*/
 int
-ldap_getpwnam(char *name, attrlist *items, pwu_repository_t *rep,
+ldap_getpwnam(const char *name, attrlist *items, pwu_repository_t *rep,
     void **buf)
 {
 	ldapbuf_t *ldapbuf;
@@ -814,7 +816,7 @@ ldap_update(attrlist *items, pwu_repository_t *rep, void *buf)
 				 * We take care not to update lstchg if the
 				 * user has no password, otherwise the user
 				 * might not be required to provide a password
-				 * the next time [s]he logs in.
+				 * the next time they log in.
 				 *
 				 * Also, if lstchg != -1 (i.e., not set)
 				 * we keep the old value.
@@ -1135,7 +1137,8 @@ out:
  */
 /*ARGSUSED*/
 int
-ldap_putpwnam(char *name, char *oldpw, pwu_repository_t *rep, void *buf)
+ldap_putpwnam(const char *name, const char *oldpw, pwu_repository_t *rep,
+    void *buf)
 {
 	int res;
 	char *dn;	/* dn of user whose attributes we are changing */

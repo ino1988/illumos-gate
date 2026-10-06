@@ -55,8 +55,8 @@ typedef struct rrwlock {
 	kmutex_t	rr_lock;
 	kcondvar_t	rr_cv;
 	kthread_t	*rr_writer;
-	refcount_t	rr_anon_rcount;
-	refcount_t	rr_linked_rcount;
+	zfs_refcount_t	rr_anon_rcount;
+	zfs_refcount_t	rr_linked_rcount;
 	boolean_t	rr_writer_wanted;
 	boolean_t	rr_track_all;
 } rrwlock_t;
@@ -70,6 +70,7 @@ void rrw_init(rrwlock_t *rrl, boolean_t track_all);
 void rrw_destroy(rrwlock_t *rrl);
 void rrw_enter(rrwlock_t *rrl, krw_t rw, void *tag);
 void rrw_enter_read(rrwlock_t *rrl, void *tag);
+void rrw_enter_read_prio(rrwlock_t *rrl, void *tag);
 void rrw_enter_write(rrwlock_t *rrl);
 void rrw_exit(rrwlock_t *rrl, void *tag);
 boolean_t rrw_held(rrwlock_t *rrl, krw_t rw);

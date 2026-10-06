@@ -29,6 +29,10 @@
  *	  All Rights Reserved
  */
 
+/*
+ * Copyright (c) 2018, Joyent, Inc.
+ */
+
 #include <memory.h>
 #include <malloc.h>
 #include <limits.h>
@@ -155,7 +159,6 @@ test_size(Lword hi)
 static size_t
 _elf_upd_lib(Elf * elf)
 {
-	NOTE(ASSUMING_PROTECTED(*elf))
 	Lword		hi;
 	Lword		hibit;
 	Elf_Scn *	s;
@@ -340,7 +343,6 @@ _elf_upd_lib(Elf * elf)
 static size_t
 _elf_upd_usr(Elf * elf)
 {
-	NOTE(ASSUMING_PROTECTED(*elf))
 	Lword		hi;
 	Elf_Scn *	s;
 	register Lword	sz;
@@ -455,7 +457,6 @@ _elf_upd_usr(Elf * elf)
 static size_t
 wrt(Elf * elf, Xword outsz, unsigned fill, int update_cmd)
 {
-	NOTE(ASSUMING_PROTECTED(*elf))
 	Elf_Data		dst, src;
 	unsigned		flag;
 	Xword			hi, sz;
@@ -745,9 +746,6 @@ _elfxx_update(Elf * elf, Elf_Cmd cmd)
 	size_t		sz;
 	unsigned	u;
 	Ehdr		*eh = elf->ed_ehdr;
-
-	if (elf == 0)
-		return (-1);
 
 	ELFWLOCK(elf)
 	switch (cmd) {

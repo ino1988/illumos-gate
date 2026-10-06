@@ -20,6 +20,7 @@
  */
 
 /*
+ * Copyright 2026 Oxide Computer Company
  * Copyright (c) 2013 Gary Mills
  * Copyright (c) 1998, 2010, Oracle and/or its affiliates. All rights reserved.
  */
@@ -29,6 +30,7 @@
 #include <sys/varargs.h>
 #include <sys/systm.h>
 #include <sys/cmn_err.h>
+#include <sys/panic.h>
 #include <sys/stream.h>
 #include <sys/strsubr.h>
 #include <sys/strsun.h>
@@ -42,6 +44,7 @@
 #include <sys/utsname.h>
 #include <sys/id_space.h>
 #include <sys/zone.h>
+#include <sys/bootbanner.h>
 
 log_zone_t log_global;
 queue_t *log_consq;
@@ -100,6 +103,8 @@ static void log_cons_destructor(void *, void *);
 void
 log_enter(void)
 {
+	if (panicstr != NULL)
+		return;
 	if (rw_owner(&log_rwlock) != curthread)
 		rw_enter(&log_rwlock, RW_WRITER);
 	log_rwlock_depth++;
@@ -108,6 +113,8 @@ log_enter(void)
 void
 log_exit(void)
 {
+	if (panicstr != NULL)
+		return;
 	if (--log_rwlock_depth == 0)
 		rw_exit(&log_rwlock);
 }
@@ -181,6 +188,14 @@ log_zonefree(zoneid_t zoneid, void *arg)
 	kmem_free(lzp, sizeof (log_zone_t));
 }
 
+static void
+log_bootbanner_print(const char *line, uint_t num)
+{
+	const char *pfx = (num == 0) ? "\r" : "";
+
+	printf("%s%s\n", pfx, line);
+}
+
 void
 log_init(void)
 {
@@ -188,7 +203,7 @@ log_init(void)
 
 	/*
 	 * Create a backlog queue to consume console messages during periods
-	 * when there is no console reader (e.g. before syslogd(1M) starts).
+	 * when there is no console reader (e.g. before syslogd(8) starts).
 	 */
 	log_backlogq = log_consq = log_makeq(0, LOG_HIWAT, NULL);
 
@@ -206,7 +221,7 @@ log_init(void)
 	log_intrq = log_makeq(0, LOG_HIWAT, (void *)ipltospl(SPL8));
 
 	/*
-	 * Create a queue to hold the most recent 8K of console messages.
+	 * Create a queue to hold the most recent 64K of console messages.
 	 * Useful for debugging.  Required by the "$<msgbuf" adb macro.
 	 */
 	log_recentq = log_makeq(0, LOG_RECENTSIZE, NULL);
@@ -245,12 +260,16 @@ log_init(void)
 	log_update(&log_backlog, log_backlogq, SL_CONSOLE, log_console);
 
 	/*
-	 * Now that logging is enabled, emit the SunOS banner.
+	 * Now that logging is enabled, emit the boot banner.
 	 */
+#ifdef	LEGACY_BANNER
 	printf("\rSunOS Release %s Version %s %u-bit\n",
 	    utsname.release, utsname.version, NBBY * (uint_t)sizeof (void *));
 	printf("Copyright (c) 1983, 2010, Oracle and/or its affiliates. "
 	    "All rights reserved.\n");
+#else
+	bootbanner_print(log_bootbanner_print);
+#endif
 #ifdef DEBUG
 	printf("DEBUG enabled\n");
 #endif
@@ -491,7 +510,7 @@ log_console(log_t *lp, log_ctl_t *lc)
 
 mblk_t *
 log_makemsg(int mid, int sid, int level, int sl, int pri, void *msg,
-	size_t size, int on_intr)
+    size_t size, int on_intr)
 {
 	mblk_t *mp = NULL;
 	mblk_t *mp2;
@@ -611,12 +630,22 @@ log_sendmsg(mblk_t *mp, zoneid_t zoneid)
 	 * from these log_ctl_t structures; it only uses ttime from log_ctl_t's
 	 * that contain good data.
 	 *
+	 * While panicking, use the timestamps that panicsys() captured once
+	 * the other CPUs had been stopped and hres_lock released, rather than
+	 * reading the clock again here. The clock readers are seqlock readers
+	 * of hres_lock, and getting a panic message to the console should not
+	 * depend on that lock.
 	 */
-	lc->ltime = ddi_get_lbolt();
-	if (timechanged) {
-		lc->ttime = gethrestime_sec();
+	if (panicstr != NULL) {
+		lc->ltime = (clock_t)panic_lbolt64;
+		lc->ttime = panic_hrestime.tv_sec;
 	} else {
-		lc->ttime = 0;
+		lc->ltime = ddi_get_lbolt();
+		if (timechanged) {
+			lc->ttime = gethrestime_sec();
+		} else {
+			lc->ttime = 0;
+		}
 	}
 
 	flags = lc->flags & lzp->lz_active;
@@ -667,7 +696,7 @@ log_sendmsg(mblk_t *mp, zoneid_t zoneid)
 				if (lp->log_q == log_consq) {
 					console_printf(log_overflow_msg,
 					    lp->log_minor,
-					    " -- is syslogd(1M) running?");
+					    " -- is syslogd(8) running?");
 				} else {
 					printf(log_overflow_msg,
 					    lp->log_minor, "");

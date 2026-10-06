@@ -33,6 +33,7 @@
 #include <sys/sa.h>
 #include <sys/rrwlock.h>
 #include <sys/zfs_ioctl.h>
+#include <sys/dsl_dataset.h>
 
 #ifdef	__cplusplus
 extern "C" {
@@ -59,6 +60,7 @@ struct zfsvfs {
 	zilog_t		*z_log;		/* intent log pointer */
 	uint_t		z_acl_mode;	/* acl chmod/mode behavior */
 	uint_t		z_acl_inherit;	/* acl inheritance behavior */
+	boolean_t	z_acl_implicit;	/* acl implicit owner rights */
 	zfs_case_t	z_case;		/* case-sense */
 	boolean_t	z_utf8;		/* utf8-only */
 	int		z_norm;		/* normalization flags */
@@ -68,6 +70,7 @@ struct zfsvfs {
 	krwlock_t	z_teardown_inactive_lock;
 	list_t		z_all_znodes;	/* all vnodes in the fs */
 	kmutex_t	z_znodes_lock;	/* lock for z_all_znodes */
+	vnode_t		*z_rootdir;	/* mount root directory pointer */
 	vnode_t		*z_ctldir;	/* .zfs directory pointer */
 	boolean_t	z_show_ctldir;	/* expose .zfs in the root dir */
 	boolean_t	z_issnap;	/* true if this is a snapshot */
@@ -75,15 +78,22 @@ struct zfsvfs {
 	boolean_t	z_use_fuids;	/* version allows fuids */
 	boolean_t	z_replay;	/* set during ZIL replay */
 	boolean_t	z_use_sa;	/* version allow system attributes */
+	boolean_t	z_draining;	/* is true when drain is active */
+	boolean_t	z_drain_cancel; /* signal the unlinked drain to stop */
 	uint64_t	z_version;	/* ZPL version */
 	uint64_t	z_shares_dir;	/* hidden shares dir */
 	kmutex_t	z_lock;
 	uint64_t	z_userquota_obj;
 	uint64_t	z_groupquota_obj;
+	uint64_t	z_userobjquota_obj;
+	uint64_t	z_groupobjquota_obj;
+	uint64_t	z_projectquota_obj;
+	uint64_t	z_projectobjquota_obj;
 	uint64_t	z_replay_eof;	/* New end of file - replay only */
 	sa_attr_type_t	*z_attr_table;	/* SA attr mapping->id */
 #define	ZFS_OBJ_MTX_SZ	64
 	kmutex_t	z_hold_mtx[ZFS_OBJ_MTX_SZ];	/* znode hold locks */
+	taskqid_t	z_drain_task;	/* task id for the unlink drain task */
 };
 
 /*
@@ -134,24 +144,27 @@ typedef struct zfid_long {
 #define	SHORT_FID_LEN	(sizeof (zfid_short_t) - sizeof (uint16_t))
 #define	LONG_FID_LEN	(sizeof (zfid_long_t) - sizeof (uint16_t))
 
-extern uint_t zfs_fsyncer_key;
-
 extern int zfs_suspend_fs(zfsvfs_t *zfsvfs);
-extern int zfs_resume_fs(zfsvfs_t *zfsvfs, const char *osname);
+extern int zfs_resume_fs(zfsvfs_t *zfsvfs, struct dsl_dataset *ds);
 extern int zfs_userspace_one(zfsvfs_t *zfsvfs, zfs_userquota_prop_t type,
     const char *domain, uint64_t rid, uint64_t *valuep);
 extern int zfs_userspace_many(zfsvfs_t *zfsvfs, zfs_userquota_prop_t type,
     uint64_t *cookiep, void *vbuf, uint64_t *bufsizep);
 extern int zfs_set_userquota(zfsvfs_t *zfsvfs, zfs_userquota_prop_t type,
     const char *domain, uint64_t rid, uint64_t quota);
-extern boolean_t zfs_owner_overquota(zfsvfs_t *zfsvfs, struct znode *,
-    boolean_t isgroup);
-extern boolean_t zfs_fuid_overquota(zfsvfs_t *zfsvfs, boolean_t isgroup,
-    uint64_t fuid);
+extern boolean_t zfs_id_overblockquota(zfsvfs_t *zfsvfs, uint64_t usedobj,
+    uint64_t id);
+extern boolean_t zfs_id_overobjquota(zfsvfs_t *zfsvfs, uint64_t usedobj,
+    uint64_t id);
+extern boolean_t zfs_id_overquota(zfsvfs_t *zfsvfs, uint64_t usedobj,
+    uint64_t id);
 extern int zfs_set_version(zfsvfs_t *zfsvfs, uint64_t newvers);
-extern int zfsvfs_create(const char *name, zfsvfs_t **zfvp);
+extern int zfsvfs_create(const char *name, boolean_t readony, zfsvfs_t **zfvp);
+extern int zfsvfs_create_impl(zfsvfs_t **zfvp, zfsvfs_t *zfsvfs, objset_t *os);
 extern void zfsvfs_free(zfsvfs_t *zfsvfs);
 extern int zfs_check_global_label(const char *dsname, const char *hexsl);
+extern int zfs_get_temporary_prop(dsl_dataset_t *ds, zfs_prop_t zfs_prop,
+    uint64_t *val, char *setpoint);
 
 #ifdef	__cplusplus
 }

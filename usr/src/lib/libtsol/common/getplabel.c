@@ -23,8 +23,6 @@
  * Use is subject to license terms.
  */
 
-#pragma ident	"%Z%%M%	%I%	%E% SMI"
-
 #include	<stdlib.h>
 #include	<zone.h>
 #include 	<tsol/label.h>
@@ -33,7 +31,7 @@
 #include	<sys/zone.h>
 
 /*
- * getplabel(2TSOL) - get process sensitivity label
+ * getplabel(3TSOL) - get process sensitivity label
  */
 
 int

@@ -25,14 +25,17 @@
  */
 
 /*	Copyright (c) 1983, 1984, 1985, 1986, 1987, 1988, 1989 AT&T	*/
-/*	  All Rights Reserved  	*/
+/*	  All Rights Reserved	*/
+
+/*
+ * Copyright 2015, Joyent, Inc.
+ * Copyright 2024 Bill Sommerfeld <sommerfeld@hamachi.org>
+ */
 
 /*
  * Portions of this source code were derived from Berkeley 4.3 BSD
  * under license from the Regents of the University of California.
  */
-
-#pragma ident	"%Z%%M%	%I%	%E% SMI"
 
 #include <stdio.h>
 #include <string.h>
@@ -63,22 +66,10 @@
 #include <libinetutil.h>
 #include "ping.h"
 
-void check_reply6(struct addrinfo *, struct msghdr *, int, ushort_t);
-extern void find_dstaddr(ushort_t, union any_in_addr *);
 static int IPv6_hdrlen(ip6_t *, int, uint8_t *);
-extern boolean_t is_a_target(struct addrinfo *, union any_in_addr *);
 static void pr_ext_headers(struct msghdr *);
-extern char *pr_name(char *, int);
-extern char *pr_protocol(int);
 static void pr_rthdr(unsigned char *);
 static char *pr_type6(uchar_t);
-extern void schedule_sigalrm();
-extern void send_scheduled_probe();
-extern boolean_t seq_match(ushort_t, int, ushort_t);
-void set_ancillary_data(struct msghdr *, int, union any_in_addr *, int, uint_t);
-extern void sigalrm_handler();
-extern void tvsub(struct timeval *, struct timeval *);
-
 
 /*
  * Initialize the msghdr for specifying the hoplimit, outgoing interface and
@@ -236,7 +227,7 @@ set_ancillary_data(struct msghdr *msgp, int hoplimit,
 		 * therefore let's use bcopy, instead of assignment.
 		 */
 		(void) bcopy(&in6addr_any, &pktinfop->ipi6_addr,
-		sizeof (struct in6_addr));
+		    sizeof (struct in6_addr));
 
 		/*
 		 *  We can assume pktinfop->ipi6_ifindex is 32 bit aligned.
@@ -271,9 +262,10 @@ check_reply6(struct addrinfo *ai_dst, struct msghdr *msg, int cc,
 	struct timeval *tp;
 	int64_t triptime;
 	boolean_t valid_reply = _B_FALSE;
-	boolean_t reply_matched_current_target;	/* Is the source address of */
-						/* this reply same as where */
-						/* we're sending currently? */
+	boolean_t reply_matched_current_target = _B_FALSE; /* Is the source */
+						/* address of this reply same */
+						/* as where we're sending */
+						/* currently? */
 	boolean_t last_reply_from_targetaddr = _B_FALSE; /* Is this stats, */
 						/* probe all with npackets>0 */
 						/* and we received reply for */
@@ -309,22 +301,20 @@ check_reply6(struct addrinfo *ai_dst, struct msghdr *msg, int cc,
 	/* LINTED */
 	intp = (int32_t *)buf;
 
-	/* get time now for most accurate time calculation */
-	(void) gettimeofday(&tv, (struct timezone *)NULL);
+	ping_gettime(msg, &tv);
 
 	/* Ignore packets > 64k or control buffers that don't fit */
 	if (msg->msg_flags & (MSG_TRUNC|MSG_CTRUNC)) {
 		if (verbose) {
 			Printf("Truncated message: msg_flags 0x%x from %s\n",
-			    msg->msg_flags,
-			    pr_name((char *)&from6->sin6_addr, AF_INET6));
+			    msg->msg_flags, pr_name6(from6));
 		}
 		return;
 	}
 	if (cc < ICMP6_MINLEN) {
 		if (verbose) {
 			Printf("packet too short (%d bytes) from %s\n", cc,
-			    pr_name((char *)&from6->sin6_addr, AF_INET6));
+			    pr_name6(from6));
 		}
 		return;
 	}
@@ -339,9 +329,7 @@ check_reply6(struct addrinfo *ai_dst, struct msghdr *msg, int cc,
 		if (cc_left < sizeof (ip6_t)) {
 			if (verbose) {
 				Printf("packet too short (%d bytes) from %s\n",
-				    cc,
-				    pr_name((char *)&from6->sin6_addr,
-					AF_INET6));
+				    cc, pr_name6(from6));
 			}
 			return;
 		}
@@ -360,9 +348,7 @@ check_reply6(struct addrinfo *ai_dst, struct msghdr *msg, int cc,
 		if (cc_left < sizeof (struct udphdr)) {
 			if (verbose) {
 				Printf("packet too short (%d bytes) from %s\n",
-				    cc,
-				    pr_name((char *)&from6->sin6_addr,
-					AF_INET6));
+				    cc, pr_name6(from6));
 			}
 			return;
 		}
@@ -389,8 +375,8 @@ check_reply6(struct addrinfo *ai_dst, struct msghdr *msg, int cc,
 			nreceived++;
 			reply_matched_current_target =
 			    seq_match(current_targetaddr->starting_seq_num,
-				current_targetaddr->num_sent,
-				ntohs(up->uh_dport));
+			    current_targetaddr->num_sent,
+			    ntohs(up->uh_dport));
 			if (reply_matched_current_target) {
 				current_targetaddr->got_reply = _B_TRUE;
 				nreceived_last_target++;
@@ -481,20 +467,18 @@ check_reply6(struct addrinfo *ai_dst, struct msghdr *msg, int cc,
 		dst_addr.addr6 = ip6h->ip6_dst;
 		if (valid_reply) {
 			Printf("%d bytes from %s: ", cc,
-			    pr_name((char *)&from6->sin6_addr, AF_INET6));
+			    pr_name6(from6));
 			Printf("udp_port=%d. ", ntohs(up->uh_dport));
 			print_newline = _B_TRUE;
 		} else if (is_a_target(ai_dst, &dst_addr)|| verbose) {
 			if (icmp6->icmp6_code >= A_CNT(unreach6)) {
 				Printf("ICMPv6 %d Unreachable from gateway "
 				    "%s\n", icmp6->icmp6_code,
-				    pr_name((char *)&from6->sin6_addr,
-					AF_INET6));
+				    pr_name6(from6));
 			} else {
 				Printf("ICMPv6 %s from gateway %s\n",
 				    unreach6[icmp6->icmp6_code],
-				    pr_name((char *)&from6->sin6_addr,
-					AF_INET6));
+				    pr_name6(from6));
 			}
 			Printf(" for %s from %s", pr_protocol(last_hdr),
 			    pr_name((char *)&ip6h->ip6_src, AF_INET6));
@@ -548,8 +532,7 @@ check_reply6(struct addrinfo *ai_dst, struct msghdr *msg, int cc,
 		if (cc_left < sizeof (ip6_t)) {
 			if (verbose) {
 				Printf("packet too short (%d bytes) from %s\n",
-				    cc, pr_name((char *)&from6->sin6_addr,
-				    AF_INET6));
+				    cc, pr_name6(from6));
 			}
 			return;
 		}
@@ -558,7 +541,7 @@ check_reply6(struct addrinfo *ai_dst, struct msghdr *msg, int cc,
 		dst_addr.addr6 = ip6h->ip6_dst;
 		if (is_a_target(ai_dst, &dst_addr) || verbose) {
 			Printf("ICMPv6 packet too big from %s\n",
-			    pr_name((char *)&from6->sin6_addr, AF_INET6));
+			    pr_name6(from6));
 
 			Printf(" for %s from %s", pr_protocol(last_hdr),
 			    pr_name((char *)&ip6h->ip6_src, AF_INET6));
@@ -582,9 +565,7 @@ check_reply6(struct addrinfo *ai_dst, struct msghdr *msg, int cc,
 		if (cc_left < sizeof (ip6_t)) {
 			if (verbose) {
 				Printf("packet too short (%d bytes) from %s\n",
-				    cc,
-				    pr_name((char *)&from6->sin6_addr,
-					AF_INET6));
+				    cc, pr_name6(from6));
 			}
 			return;
 		}
@@ -594,14 +575,11 @@ check_reply6(struct addrinfo *ai_dst, struct msghdr *msg, int cc,
 		if (is_a_target(ai_dst, &dst_addr) || verbose) {
 			if (icmp6->icmp6_code >= A_CNT(timexceed6)) {
 				Printf("ICMPv6 %d time exceeded from %s\n",
-				    icmp6->icmp6_code,
-				    pr_name((char *)&from6->sin6_addr,
-					AF_INET6));
+				    icmp6->icmp6_code, pr_name6(from6));
 			} else {
 				Printf("ICMPv6 %s from %s\n",
 				    timexceed6[icmp6->icmp6_code],
-				    pr_name((char *)&from6->sin6_addr,
-					AF_INET6));
+				    pr_name6(from6));
 			}
 			Printf(" for %s from %s", pr_protocol(last_hdr),
 			    pr_name((char *)&ip6h->ip6_src, AF_INET6));
@@ -625,9 +603,7 @@ check_reply6(struct addrinfo *ai_dst, struct msghdr *msg, int cc,
 		if (cc_left < sizeof (ip6_t)) {
 			if (verbose) {
 				Printf("packet too short (%d bytes) from %s\n",
-				    cc,
-				    pr_name((char *)&from6->sin6_addr,
-					AF_INET6));
+				    cc, pr_name6(from6));
 			}
 			return;
 		}
@@ -637,14 +613,11 @@ check_reply6(struct addrinfo *ai_dst, struct msghdr *msg, int cc,
 		if (is_a_target(ai_dst, &dst_addr) || verbose) {
 			if (icmp6->icmp6_code >= A_CNT(param_prob6)) {
 				Printf("ICMPv6 %d parameter problem from %s\n",
-				    icmp6->icmp6_code,
-				    pr_name((char *)&from6->sin6_addr,
-					AF_INET6));
+				    icmp6->icmp6_code, pr_name6(from6));
 			} else {
 				Printf("ICMPv6 %s from %s\n",
 				    param_prob6[icmp6->icmp6_code],
-				    pr_name((char *)&from6->sin6_addr,
-					AF_INET6));
+				    pr_name6(from6));
 			}
 			icmp6->icmp6_pptr = ntohl(icmp6->icmp6_pptr);
 			Printf(" in byte %d", icmp6->icmp6_pptr);
@@ -692,8 +665,8 @@ check_reply6(struct addrinfo *ai_dst, struct msghdr *msg, int cc,
 			nreceived++;
 			reply_matched_current_target =
 			    seq_match(current_targetaddr->starting_seq_num,
-				current_targetaddr->num_sent,
-				ntohs(icmp6->icmp6_seq));
+			    current_targetaddr->num_sent,
+			    ntohs(icmp6->icmp6_seq));
 			if (reply_matched_current_target) {
 				current_targetaddr->got_reply = _B_TRUE;
 				nreceived_last_target++;
@@ -807,8 +780,7 @@ check_reply6(struct addrinfo *ai_dst, struct msghdr *msg, int cc,
 			Printf("%d bytes from %s: ", cc,
 			    pr_name((char *)&dst_addr.addr6,  AF_INET6));
 		} else {
-			Printf("%d bytes from %s: ", cc,
-			    pr_name((char *)&from6->sin6_addr, AF_INET6));
+			Printf("%d bytes from %s: ", cc, pr_name6(from6));
 		}
 		Printf("icmp_seq=%d. ", ntohs(icmp6->icmp6_seq));
 
@@ -857,16 +829,14 @@ check_reply6(struct addrinfo *ai_dst, struct msghdr *msg, int cc,
 		if (cc_left < sizeof (nd_redirect_t) - ICMP6_MINLEN) {
 			if (verbose) {
 				Printf("packet too short (%d bytes) from %s\n",
-				    cc,
-				    pr_name((char *)&from6->sin6_addr,
-					AF_INET6));
+				    cc, pr_name6(from6));
 			}
 			return;
 		}
 		dst_addr.addr6 = nd_rdrct->nd_rd_dst;
 		if (is_a_target(ai_dst, &dst_addr) || verbose) {
 			Printf("ICMPv6 redirect from gateway %s\n",
-			    pr_name((char *)&from6->sin6_addr, AF_INET6));
+			    pr_name6(from6));
 
 			Printf(" to %s",
 			    pr_name((char *)&nd_rdrct->nd_rd_target, AF_INET6));
@@ -877,8 +847,7 @@ check_reply6(struct addrinfo *ai_dst, struct msghdr *msg, int cc,
 
 	default:
 		if (verbose) {
-			Printf("%d bytes from %s:\n", cc,
-			    pr_name((char *)&from6->sin6_addr, AF_INET6));
+			Printf("%d bytes from %s:\n", cc, pr_name6(from6));
 			Printf("icmp6_type=%d (%s) ", icmp6->icmp6_type,
 			    pr_type6(icmp6->icmp6_type));
 			Printf("icmp6_code=%d\n", icmp6->icmp6_code);
@@ -952,7 +921,7 @@ IPv6_hdrlen(ip6_t *ip6h, int pkt_len, uint8_t *last_hdr_rtrn)
 
 	length = sizeof (ip6_t);
 
-	whereptr = ((uint8_t *)&ip6h[1]); 	/* point to next hdr */
+	whereptr = ((uint8_t *)&ip6h[1]);	/* point to next hdr */
 	endptr = ((uint8_t *)ip6h) + pkt_len;
 
 	nexthdr = ip6h->ip6_nxt;

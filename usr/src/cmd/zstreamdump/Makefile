@@ -22,30 +22,30 @@
 # Copyright 2009 Sun Microsystems, Inc.  All rights reserved.
 # Use is subject to license terms.
 #
+# Copyright (c) 2018, Joyent, Inc.
+# Copyright 2024 Oxide Computer Company
 
 PROG=		zstreamdump
-OBJS=		zstreamdump.o
-SRCS=		$(OBJS:%.o=%.c)
+OBJS=		zstreamdump.o $(HEXDUMP_OBJS)
 POFILE=		zstreamdump.po
 
 include ../Makefile.cmd
+include $(SRC)/common/hexdump/Makefile.com
 
 INCS +=	-I../../uts/common/fs/zfs
 INCS +=	-I../../common/zfs
 
 LDLIBS += -lzfs -lnvpair
 
-C99MODE=	-xc99=%all
-C99LMODE=	-Xc99=%all
+CSTD=	$(CSTD_GNU99)
 
 CPPFLAGS += -D_LARGEFILE64_SOURCE=1 -D_REENTRANT $(INCS)
 $(NOT_RELEASE_BUILD)CPPFLAGS += -DDEBUG
 
-# lint complains about unused _umem_* functions
-LINTFLAGS += -xerroff=E_NAME_DEF_NOT_USED2 
-LINTFLAGS64 += -xerroff=E_NAME_DEF_NOT_USED2 
-
 CERRWARN += -_gcc=-Wno-switch
+
+# not linted
+SMATCH=off
 
 .KEEP_STATE:
 
@@ -62,8 +62,7 @@ install: all $(ROOTUSRSBINPROG)
 clean:
 	$(RM) $(OBJS)
 
-lint:	lint_SRCS
-
 FRC:
 
+include $(SRC)/common/hexdump/Makefile.targ
 include ../Makefile.targ

@@ -112,7 +112,7 @@ queue, \fBbp\fR will be \fINULL\fR and we fall out of the \fBfor\fR loop (line
 28               (void)insq(q, bp, mp);
 29               /* End of region that must be protected */
 30               break;
-          . . .
+          ...
 31              }
 32    }
 33   }
@@ -127,7 +127,9 @@ by using STREAMS functions or by implementing your own locking.
 .SH SEE ALSO
 .sp
 .LP
-\fBputq\fR(9F), \fBrmvq\fR(9F), \fBmsgb\fR(9S)
+.BR putq (9F),
+.BR rmvq (9F),
+.BR msgb (9S)
 .sp
 .LP
 \fIWriting Device Drivers\fR

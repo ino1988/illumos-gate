@@ -24,7 +24,7 @@ PROGS = run
 CMDS = $(PROGS:%=$(ROOTBIN)/%)
 $(CMDS) := FILEMODE = 0555
 
-all lint clean clobber:
+all clean clobber:
 
 install: $(CMDS)
 
@@ -33,5 +33,5 @@ $(CMDS): $(ROOTBIN)
 $(ROOTBIN):
 	$(INS.dir)
 
-$(ROOTBIN)/%: %.py
-	$(INS.rename)
+$(ROOTBIN)/%: %
+	$(INS.pyfile)

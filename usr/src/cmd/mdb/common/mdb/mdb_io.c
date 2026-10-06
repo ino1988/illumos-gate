@@ -24,7 +24,10 @@
  */
 
 /*
- * Copyright (c) 2012, Joyent, Inc. All rights reserved.
+ * Copyright 2020 Joyent, Inc.
+ * Copyright (c) 2016 by Delphix. All rights reserved.
+ * Copyright 2022 Oxide Computer Company
+ * Copyright 2026 Edgecast Cloud LLC.
  */
 
 /*
@@ -101,7 +104,9 @@ typedef enum {
 	SZ_SHORT,		/* format %h? */
 	SZ_INT,			/* format %? */
 	SZ_LONG,		/* format %l? */
-	SZ_LONGLONG		/* format %ll? */
+	SZ_LONGLONG,		/* format %ll? */
+	SZ_SIZE,		/* format %z? */
+	SZ_INTMAX,		/* format %j? */
 } intsize_t;
 
 /*
@@ -154,14 +159,21 @@ typedef struct {
 #define	CTRL(c)	((c) & 0x01f)
 #endif
 
+#define	IOB_AUTOWRAP(iob)	\
+	((mdb.m_flags & MDB_FL_AUTOWRAP) && \
+	((iob)->iob_flags & MDB_IOB_AUTOWRAP))
+
 /*
  * Define macro for determining if we should automatically wrap to the next
  * line of output, based on the amount of consumed buffer space and the
- * specified size of the next thing to be inserted (n).
+ * specified size of the next thing to be inserted (n) -- being careful to
+ * not force a spurious wrap if we're autoindented and already at the margin.
  */
 #define	IOB_WRAPNOW(iob, n)	\
-	(((iob)->iob_flags & MDB_IOB_AUTOWRAP) && ((iob)->iob_nbytes != 0) && \
-	((n) + (iob)->iob_nbytes > (iob)->iob_cols))
+	(IOB_AUTOWRAP(iob) && (iob)->iob_nbytes != 0 && \
+	((n) + (iob)->iob_nbytes > (iob)->iob_cols) &&  \
+	!(((iob)->iob_flags & MDB_IOB_INDENT) && \
+	(iob)->iob_nbytes == (iob)->iob_margin))
 
 /*
  * Define prompt string and string to erase prompt string for iob_pager
@@ -230,9 +242,9 @@ iob_read(mdb_iob_t *iob, mdb_io_t *io)
 	return (len);
 }
 
-/*ARGSUSED*/
 static void
-iob_winch(int sig, siginfo_t *sip, ucontext_t *ucp, void *data)
+iob_winch(int sig, siginfo_t *sip __unused, ucontext_t *ucp __unused,
+    void *data)
 {
 	siglongjmp(*((sigjmp_buf *)data), sig);
 }
@@ -413,7 +425,7 @@ void
 mdb_iob_destroy(mdb_iob_t *iob)
 {
 	/*
-	 * Don't flush a pipe, since it may cause a context swith when the
+	 * Don't flush a pipe, since it may cause a context switch when the
 	 * other side has already been destroyed.
 	 */
 	if (!mdb_iob_isapipe(iob))
@@ -627,6 +639,10 @@ iob_size2str(intsize_t size)
 		return ("long");
 	case SZ_LONGLONG:
 		return ("long long");
+	case SZ_SIZE:
+		return ("size");
+	case SZ_INTMAX:
+		return ("int max");
 	}
 	return ("");
 }
@@ -694,6 +710,10 @@ fmt_switch:
 	case 'I':
 		return ("IPv4 address");
 
+	case 'j':
+		size = SZ_INTMAX;
+		goto fmt_switch;
+
 	case 'l':
 		if (size >= SZ_LONG)
 			size = SZ_LONGLONG;
@@ -751,6 +771,10 @@ fmt_switch:
 	case 'Y':
 		return ("time_t");
 
+	case 'z':
+		size = SZ_SIZE;
+		goto fmt_switch;
+
 	case '<':
 		return ("terminal attribute");
 
@@ -775,6 +799,20 @@ iob_int2str(varglist_t *ap, intsize_t size, int base, uint_t flags, int *zero,
 	uintmax_t i;
 
 	switch (size) {
+	case SZ_INTMAX:
+		if (flags & NTOS_UNSIGNED)
+			i = (uintmax_t)VA_ARG(ap, uintmax_t);
+		else
+			i = (intmax_t)VA_ARG(ap, intmax_t);
+		break;
+
+	case SZ_SIZE:
+		if (flags & NTOS_UNSIGNED)
+			i = (size_t)VA_ARG(ap, size_t);
+		else
+			i = (ssize_t)VA_ARG(ap, ssize_t);
+		break;
+
 	case SZ_LONGLONG:
 		if (flags & NTOS_UNSIGNED)
 			i = (u_longlong_t)VA_ARG(ap, u_longlong_t);
@@ -839,7 +877,7 @@ static const char *
 iob_addr2str(uintptr_t addr)
 {
 	static char buf[MDB_TGT_SYM_NAMLEN];
-	char *name = buf;
+	size_t buflen = sizeof (buf);
 	longlong_t offset;
 	GElf_Sym sym;
 
@@ -847,8 +885,27 @@ iob_addr2str(uintptr_t addr)
 	    MDB_TGT_SYM_FUZZY, buf, sizeof (buf), &sym, NULL) == -1)
 		return (NULL);
 
-	if (mdb.m_demangler != NULL && (mdb.m_flags & MDB_FL_DEMANGLE))
-		name = (char *)mdb_dem_convert(mdb.m_demangler, buf);
+	if (mdb.m_demangler != NULL && (mdb.m_flags & MDB_FL_DEMANGLE)) {
+		/*
+		 * The mdb demangler attempts to either return us our original
+		 * name or a pointer to something it has changed. If it has
+		 * returned our original name, we want to update buf with that
+		 * so we can later modify it. Unfortunately if we find we exceed
+		 * the buffer, there's not an easy way to warn the user about
+		 * this, so we just truncate the symbol with a '???' and return
+		 * it. To someone finding this due to having seen that in a
+		 * symbol, sorry.
+		 */
+		const char *dem = mdb_dem_convert(mdb.m_demangler, buf);
+		if (dem != buf) {
+			if (strlcpy(buf, dem, buflen) >= buflen) {
+				buf[buflen - 1] = '?';
+				buf[buflen - 2] = '?';
+				buf[buflen - 3] = '?';
+				return (buf);
+			}
+		}
+	}
 
 	/*
 	 * Here we provide a little cooperation between the %a formatting code
@@ -860,17 +917,25 @@ iob_addr2str(uintptr_t addr)
 	 * query for us with a different address.  We detect this case by
 	 * comparing the initial characters of buf to the special PLT= string.
 	 */
-	if (sym.st_value != addr && strncmp(name, "PLT=", 4) != 0) {
+	if (sym.st_value != addr && strncmp(buf, "PLT=", 4) != 0) {
 		if (sym.st_value > addr)
 			offset = -(longlong_t)(sym.st_value - addr);
 		else
 			offset = (longlong_t)(addr - sym.st_value);
 
-		(void) strcat(name, numtostr(offset, mdb.m_radix,
-		    NTOS_SIGNPOS | NTOS_SHOWBASE));
+		/*
+		 * See the earlier note in this function about how we handle
+		 * demangler output for why we've dealt with things this way.
+		 */
+		if (strlcat(buf, numtostr(offset, mdb.m_radix,
+		    NTOS_SIGNPOS | NTOS_SHOWBASE), buflen) >= buflen) {
+			buf[buflen - 1] = '?';
+			buf[buflen - 2] = '?';
+			buf[buflen - 3] = '?';
+		}
 	}
 
-	return (name);
+	return (buf);
 }
 
 /*
@@ -893,6 +958,14 @@ iob_bytes2str(varglist_t *ap, intsize_t size)
 	char u;
 
 	switch (size) {
+	case SZ_INTMAX:
+		n = (uintmax_t)VA_ARG(ap, uintmax_t);
+		break;
+
+	case SZ_SIZE:
+		n = (size_t)VA_ARG(ap, size_t);
+		break;
+
 	case SZ_LONGLONG:
 		n = (u_longlong_t)VA_ARG(ap, u_longlong_t);
 		break;
@@ -903,6 +976,7 @@ iob_bytes2str(varglist_t *ap, intsize_t size)
 
 	case SZ_SHORT:
 		n = (ushort_t)VA_ARG(ap, uint_t);
+		break;
 
 	default:
 		n = (uint_t)VA_ARG(ap, uint_t);
@@ -1159,8 +1233,8 @@ iob_getvar(const char *s, size_t len)
 /*
  * The iob_doprnt function forms the main engine of the debugger's output
  * formatting capabilities.  Note that this is NOT exactly compatible with
- * the printf(3S) family, nor is it intended to be so.  We support some
- * extensions and format characters not supported by printf(3S), and we
+ * the printf(3C) family, nor is it intended to be so.  We support some
+ * extensions and format characters not supported by printf(3C), and we
  * explicitly do NOT provide support for %C, %S, %ws (wide-character strings),
  * do NOT provide for the complete functionality of %f, %e, %E, %g, %G
  * (alternate double formats), and do NOT support %.x (precision specification).
@@ -1332,6 +1406,10 @@ iob_doprnt(mdb_iob_t *iob, const char *format, varglist_t *ap)
 			u.str = iob_inaddr2str(u.ui32);
 			break;
 
+		case 'j':
+			size = SZ_INTMAX;
+			goto fmt_switch;
+
 		case 'l':
 			if (size >= SZ_LONG)
 				size = SZ_LONGLONG;
@@ -1448,6 +1526,10 @@ iob_doprnt(mdb_iob_t *iob, const char *format, varglist_t *ap)
 			u.str = iob_time2str(&u.tm);
 			break;
 
+		case 'z':
+			size = SZ_SIZE;
+			goto fmt_switch;
+
 		case '<':
 			/*
 			 * Used to turn attributes on (<b>), to turn them
@@ -1513,7 +1595,17 @@ iob_doprnt(mdb_iob_t *iob, const char *format, varglist_t *ap)
 		/*
 		 * If the string and the option altstr won't fit on this line
 		 * and auto-wrap is set (default), skip to the next line.
+		 * If the string contains \n, and the \n terminated substring
+		 * + altstr is shorter than the above, use the shorter lf_len.
 		 */
+		if (u.str != NULL) {
+			char *np = strchr(u.str, '\n');
+			if (np != NULL) {
+				int lf_len = (np - u.str) + altlen;
+				if (lf_len < width)
+					width = lf_len;
+			}
+		}
 		if (IOB_WRAPNOW(iob, width))
 			mdb_iob_nl(iob);
 
@@ -1616,17 +1708,17 @@ spbuf_write(mdb_io_t *io, const void *buf, size_t buflen)
 }
 
 static const mdb_io_ops_t spbuf_ops = {
-	no_io_read,
-	spbuf_write,
-	no_io_seek,
-	no_io_ctl,
-	no_io_close,
-	no_io_name,
-	no_io_link,
-	no_io_unlink,
-	no_io_setattr,
-	no_io_suspend,
-	no_io_resume
+	.io_read = no_io_read,
+	.io_write = spbuf_write,
+	.io_seek = no_io_seek,
+	.io_ctl = no_io_ctl,
+	.io_close = no_io_close,
+	.io_name = no_io_name,
+	.io_link = no_io_link,
+	.io_unlink = no_io_unlink,
+	.io_setattr = no_io_setattr,
+	.io_suspend = no_io_suspend,
+	.io_resume = no_io_resume
 };
 
 /*
@@ -1672,17 +1764,17 @@ null_io_write(mdb_io_t *io, const void *buf, size_t nbytes)
 }
 
 static const mdb_io_ops_t null_ops = {
-	no_io_read,
-	null_io_write,
-	no_io_seek,
-	no_io_ctl,
-	no_io_close,
-	no_io_name,
-	no_io_link,
-	no_io_unlink,
-	no_io_setattr,
-	no_io_suspend,
-	no_io_resume
+	.io_read = no_io_read,
+	.io_write = null_io_write,
+	.io_seek = no_io_seek,
+	.io_ctl = no_io_ctl,
+	.io_close = no_io_close,
+	.io_name = no_io_name,
+	.io_link = no_io_link,
+	.io_unlink = no_io_unlink,
+	.io_setattr = no_io_setattr,
+	.io_suspend = no_io_suspend,
+	.io_resume = no_io_resume,
 };
 
 mdb_io_t *
@@ -1758,6 +1850,27 @@ mdb_iob_snprintf(char *buf, size_t nbytes, const char *format, ...)
 	return (nbytes);
 }
 
+/*
+ * Return how many bytes we can copy into our buffer, limited by either cols or
+ * bufsiz depending on whether AUTOWRAP is on.  Note that typically,
+ * mdb_iob_set_autowrap() will have already checked for an existing
+ * "->iob_nbytes > ->iob_cols" situation, but we double check here anyway.
+ */
+static size_t
+iob_bufleft(mdb_iob_t *iob)
+{
+	if (IOB_AUTOWRAP(iob)) {
+		if (iob->iob_cols < iob->iob_nbytes) {
+			mdb_iob_nl(iob);
+			ASSERT(iob->iob_cols >= iob->iob_nbytes);
+		}
+		return (iob->iob_cols - iob->iob_nbytes);
+	}
+
+	ASSERT(iob->iob_bufsiz >= iob->iob_nbytes);
+	return (iob->iob_bufsiz - iob->iob_nbytes);
+}
+
 void
 mdb_iob_nputs(mdb_iob_t *iob, const char *s, size_t nbytes)
 {
@@ -1791,20 +1904,11 @@ mdb_iob_nputs(mdb_iob_t *iob, const char *s, size_t nbytes)
 	}
 
 	/*
-	 * For a given string component, we determine how many bytes (n) we can
-	 * copy into our buffer (limited by either cols or bufsiz depending
-	 * on whether AUTOWRAP is on), copy a chunk into the buffer, and
+	 * For a given string component, we copy a chunk into the buffer, and
 	 * flush the buffer if we reach the end of a line.
 	 */
 	while (nleft != 0) {
-		if (iob->iob_flags & MDB_IOB_AUTOWRAP) {
-			ASSERT(iob->iob_cols >= iob->iob_nbytes);
-			n = iob->iob_cols - iob->iob_nbytes;
-		} else {
-			ASSERT(iob->iob_bufsiz >= iob->iob_nbytes);
-			n = iob->iob_bufsiz - iob->iob_nbytes;
-		}
-
+		n = iob_bufleft(iob);
 		m = MIN(nleft, n); /* copy at most n bytes in this pass */
 
 		bcopy(q, iob->iob_bufp, m);
@@ -1815,10 +1919,11 @@ mdb_iob_nputs(mdb_iob_t *iob, const char *s, size_t nbytes)
 		iob->iob_nbytes += m;
 
 		if (m == n && nleft != 0) {
-			if (iob->iob_flags & MDB_IOB_AUTOWRAP)
+			if (IOB_AUTOWRAP(iob)) {
 				mdb_iob_nl(iob);
-			else
+			} else {
 				mdb_iob_flush(iob);
+			}
 		}
 	}
 }
@@ -1864,14 +1969,7 @@ mdb_iob_fill(mdb_iob_t *iob, int c, size_t nfill)
 	ASSERT(iob->iob_flags & MDB_IOB_WRONLY);
 
 	while (nfill != 0) {
-		if (iob->iob_flags & MDB_IOB_AUTOWRAP) {
-			ASSERT(iob->iob_cols >= iob->iob_nbytes);
-			n = iob->iob_cols - iob->iob_nbytes;
-		} else {
-			ASSERT(iob->iob_bufsiz >= iob->iob_nbytes);
-			n = iob->iob_bufsiz - iob->iob_nbytes;
-		}
-
+		n = iob_bufleft(iob);
 		m = MIN(nfill, n); /* fill at most n bytes in this pass */
 
 		for (i = 0; i < m; i++)
@@ -1881,10 +1979,11 @@ mdb_iob_fill(mdb_iob_t *iob, int c, size_t nfill)
 		nfill -= m;
 
 		if (m == n && nfill != 0) {
-			if (iob->iob_flags & MDB_IOB_AUTOWRAP)
+			if (IOB_AUTOWRAP(iob)) {
 				mdb_iob_nl(iob);
-			else
+			} else {
 				mdb_iob_flush(iob);
+			}
 		}
 	}
 }
@@ -1892,7 +1991,7 @@ mdb_iob_fill(mdb_iob_t *iob, int c, size_t nfill)
 void
 mdb_iob_ws(mdb_iob_t *iob, size_t n)
 {
-	if (iob->iob_nbytes + n < iob->iob_cols)
+	if (!IOB_AUTOWRAP(iob) || iob->iob_nbytes + n < iob->iob_cols)
 		mdb_iob_fill(iob, ' ', n);
 	else
 		mdb_iob_nl(iob);
@@ -2148,6 +2247,26 @@ mdb_iob_stack_size(mdb_iob_stack_t *stk)
 }
 
 /*
+ * This only enables autowrap for iobs that are already autowrap themselves such
+ * as mdb.m_out typically.
+ *
+ * Note that we might be the middle of the iob buffer at this point, and
+ * specifically, iob->iob_nbytes could be more than iob->iob_cols.  As that's
+ * not a valid situation, we may need to do an autowrap *now*.
+ *
+ * In theory, we would need to do this across all MDB_IOB_AUTOWRAP iob's;
+ * instead, we have a failsafe in iob_bufleft().
+ */
+void
+mdb_iob_set_autowrap(mdb_iob_t *iob)
+{
+	mdb.m_flags |= MDB_FL_AUTOWRAP;
+	if (IOB_WRAPNOW(iob, 0))
+		mdb_iob_nl(iob);
+	ASSERT(iob->iob_cols >= iob->iob_nbytes);
+}
+
+/*
  * Stub functions for i/o backend implementors: these stubs either act as
  * pass-through no-ops or return ENOTSUP as appropriate.
  */
@@ -2246,14 +2365,14 @@ no_io_resume(mdb_io_t *io)
 /*
  * Iterate over the varargs. The first item indicates the mode:
  * MDB_TBL_PRNT
- * 	pull out the next vararg as a const char * and pass it and the
- * 	remaining varargs to iob_doprnt; if we want to print the column,
- * 	direct the output to mdb.m_out otherwise direct it to mdb.m_null
+ *	pull out the next vararg as a const char * and pass it and the
+ *	remaining varargs to iob_doprnt; if we want to print the column,
+ *	direct the output to mdb.m_out otherwise direct it to mdb.m_null
  *
  * MDB_TBL_FUNC
- * 	pull out the next vararg as type mdb_table_print_f and the
- * 	following one as a void * argument to the function; call the
- * 	function with the given argument if we want to print the column
+ *	pull out the next vararg as type mdb_table_print_f and the
+ *	following one as a void * argument to the function; call the
+ *	function with the given argument if we want to print the column
  *
  * The second item indicates the flag; if the flag is set in the flags
  * argument, then the column is printed. A flag value of 0 indicates

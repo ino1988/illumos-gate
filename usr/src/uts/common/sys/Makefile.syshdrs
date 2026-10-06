@@ -18,8 +18,12 @@
 #
 # CDDL HEADER END
 #
+
+#
 # Copyright (c) 2005, 2010, Oracle and/or its affiliates. All rights reserved.
-# Copyright 2013 Garrett D'Amore <garrett@damore.org>
+# Copyright 2014 Garrett D'Amore <garrett@damore.org>
+# Copyright 2016 Nexenta Systems, Inc.
+# Copyright 2019 Joyent, Inc.
 #
 
 # Common definitions for open and closed headers.
@@ -45,6 +49,9 @@ fm/io/%.check:	fm/io/%.h
 	$(DOT_H_CHECK)
 
 fs/%.check:	fs/%.h
+	$(DOT_H_CHECK)
+
+gpio/%.check:	gpio/%.h
 	$(DOT_H_CHECK)
 
 ib/%.check:		ib/%.h
@@ -101,7 +108,7 @@ idm/%.check:		idm/%.h
 iscsit/%.check:		iscsit/%.h
 	$(DOT_H_CHECK)
 
-lvm/%.check:	lvm/%.h
+nvme/%.check:		nvme/%.h
 	$(DOT_H_CHECK)
 
 scsi/%.check:		scsi/%.h
@@ -143,13 +150,13 @@ usb/hubd/%.check:	usb/hubd/%.h
 usb/clients/hid/%.check:	usb/clients/hid/%.h
 	$(DOT_H_CHECK)
 
-usb/clients/hwarc/%.check:	usb/clients/hwarc/%.h
-	$(DOT_H_CHECK)
-
 usb/clients/mass_storage/%.check:	usb/clients/mass_storage/%.h
 	$(DOT_H_CHECK)
 
 usb/clients/printer/%.check:  usb/clients/printer/%.h
+	$(DOT_H_CHECK)
+
+usb/clients/ccid/%.check:	usb/clients/ccid/%.h
 	$(DOT_H_CHECK)
 
 usb/clients/usbcdc/%.check:	usb/clients/usbcdc/%.h
@@ -172,18 +179,11 @@ tsol/%.check:	tsol/%.h
 
 ROOTDIR=	$(ROOT)/usr/include/sys
 
-ROOTDKTPDIR=	$(ROOTDIR)/dktp
-
-sparc_ROOTDIRS=	$(ROOTDKTPDIR) $(ROOTDIR)/scsi/adapters \
-		$(ROOTDIR)/scsi/targets
-
-i386_ROOTDIRS=	$(ROOTDKTPDIR) $(ROOTDIR)/scsi/adapters $(ROOTDIR)/scsi/targets \
-		$(ROOTDIR)/agp $(ROOTDIR)/sata
-
 ROOTDIRS=			\
 	$(ROOTDIR)		\
 	$(ROOTDIR)/audio	\
 	$(ROOTDIR)/av		\
+	$(ROOTDIR)/dktp		\
 	$(ROOTDIR)/hotplug	\
 	$(ROOTDIR)/hotplug/pci	\
 	$(ROOTDIR)/crypto	\
@@ -198,6 +198,8 @@ ROOTDIRS=			\
 	$(ROOTDIR)/fm/fs	\
 	$(ROOTDIR)/fm/io	\
 	$(ROOTDIR)/fs		\
+	$(ROOTDIR)/gpio		\
+	$(ROOTDIR)/i2c		\
 	$(ROOTDIR)/ib		\
 	$(ROOTDIR)/ib/adapters/tavor	\
 	$(ROOTDIR)/ib/adapters/hermon	\
@@ -216,11 +218,14 @@ ROOTDIRS=			\
 	$(ROOTDIR)/ib/clients/of/sol_ucma	\
 	$(ROOTDIR)/idm		\
 	$(ROOTDIR)/iscsit	\
-	$(ROOTDIR)/lvm		\
+	$(ROOTDIR)/nvme		\
+	$(ROOTDIR)/sata		\
 	$(ROOTDIR)/scsi		\
+	$(ROOTDIR)/scsi/adapters	\
 	$(ROOTDIR)/scsi/conf	\
 	$(ROOTDIR)/scsi/generic	\
 	$(ROOTDIR)/scsi/impl	\
+	$(ROOTDIR)/scsi/targets	\
 	$(ROOTDIR)/sdcard	\
 	$(ROOTDIR)/sysevent     \
 	$(ROOTDIR)/contract     \
@@ -229,15 +234,13 @@ ROOTDIRS=			\
 	$(ROOTDIR)/usb/clients	\
 	$(ROOTDIR)/usb/clients/audio  \
 	$(ROOTDIR)/usb/clients/hid \
-	$(ROOTDIR)/usb/clients/hwarc \
 	$(ROOTDIR)/usb/clients/mass_storage	\
 	$(ROOTDIR)/usb/clients/printer  \
 	$(ROOTDIR)/usb/clients/usbcdc  \
 	$(ROOTDIR)/usb/clients/video/usbvc  \
 	$(ROOTDIR)/usb/clients/usbinput/usbwcm \
+	$(ROOTDIR)/usb/clients/ccid \
 	$(ROOTDIR)/usb/clients/ugen  \
-	$(ROOTDIR)/uwb \
-	$(ROOTDIR)/uwb/uwba \
 	$(ROOTDIR)/1394         \
 	$(ROOTDIR)/rsm		\
 	$(ROOTDIR)/tsol		\
@@ -255,6 +258,8 @@ ROOTAVHDRS= $(AVHDRS:%=$(ROOTDIR)/av/%)
 ROOTCRYPTOHDRS= $(CRYPTOHDRS:%=$(ROOTDIR)/crypto/%)
 
 ROOTDCAMHDRS= $(DCAMHDRS:%=$(ROOTDIR)/dcam/%)
+
+ROOTI2CHDRS= $(I2CHDRS:%=$(ROOTDIR)/i2c/%)
 
 ROOTIBHDRS= $(IBHDRS:%=$(ROOTDIR)/ib/%)
 ROOTIBDHDRS= $(IBDHDRS:%=$(ROOTDIR)/ib/clients/ibd/%)
@@ -284,8 +289,9 @@ ROOTFMIOHDRS= $(FMIOHDRS:%=$(ROOTDIR)/fm/io/%)
 ROOTFMFSHDRS= $(FMFSHDRS:%=$(ROOTDIR)/fm/fs/%)
 
 ROOTFSHDRS= $(FSHDRS:%=$(ROOTDIR)/fs/%)
+ROOTGPIOHDRS= $(GPIOHDRS:%=$(ROOTDIR)/gpio/%)
 
-ROOTLVMHDRS= $(ALL_LVMHDRS:%=$(ROOTDIR)/lvm/%)
+ROOTNVMEHDRS= $(NVMEHDRS:%=$(ROOTDIR)/nvme/%)
 
 ROOTSCSIHDRS= $(SCSIHDRS:%=$(ROOTDIR)/scsi/%)
 ROOTSATAGENHDRS= $(SATAGENHDRS:%=$(ROOTDIR)/sata/%)
@@ -293,7 +299,6 @@ ROOTSCSICONFHDRS= $(SCSICONFHDRS:%=$(ROOTDIR)/scsi/conf/%)
 ROOTSCSIGENHDRS= $(SCSIGENHDRS:%=$(ROOTDIR)/scsi/generic/%)
 ROOTSCSIIMPLHDRS= $(SCSIIMPLHDRS:%=$(ROOTDIR)/scsi/impl/%)
 ROOTSCSITARGETSHDRS= $(SCSITARGETSHDRS:%=$(ROOTDIR)/scsi/targets/%)
-ROOTSCSICADHDRS= $(SCSICADHDRS:%=$(ROOTDIR)/scsi/adapters/%)
 ROOTSCSIADHDRS= $(SCSICADHDRS:%=$(ROOTDIR)/scsi/adapters/%)
 ROOTSCSIVHCIHDRS= $(SCSIVHCIHDRS:%=$(ROOTDIR)/scsi/adapters/%)
 ROOTSCSIISCSIHDRS= $(SCSIISCSIHDRS:%=$(ROOTDIR)/scsi/adapters/%)
@@ -311,41 +316,35 @@ ROOTCONTRACTHDRS= $(CONTRACTHDRS:%=$(ROOTDIR)/contract/%)
 ROOTXHDRS= $(XHDRS:%=$(ROOTDIR)/%)
 
 ROOTUSBHDRS= $(USBHDRS:%=$(ROOTDIR)/usb/%)
-ROOTUWBHDRS= $(UWBHDRS:%=$(ROOTDIR)/uwb/%)
-ROOTUWBAHDRS= $(UWBAHDRS:%=$(ROOTDIR)/uwb/uwba/%)
 ROOTUSBAUDHDRS= $(USBAUDHDRS:%=$(ROOTDIR)/usb/clients/audio/%)
 ROOTUSBHUBDHDRS= $(USBHUBDHDRS:%=$(ROOTDIR)/usb/hubd/%)
 ROOTUSBHIDHDRS = $(USBHIDHDRS:%=$(ROOTDIR)/usb/clients/hid/%)
-ROOTUSBHWARCHDRS = $(USBHWARCHDRS:%=$(ROOTDIR)/usb/clients/hwarc/%)
 ROOTUSBMSHDRS= $(USBMSHDRS:%=$(ROOTDIR)/usb/clients/mass_storage/%)
 ROOTUSBPRNHDRS= $(USBPRNHDRS:%=$(ROOTDIR)/usb/clients/printer/%)
 ROOTUSBCDCHDRS= $(USBCDCHDRS:%=$(ROOTDIR)/usb/clients/usbcdc/%)
 ROOTUSBVIDHDRS= $(USBVIDHDRS:%=$(ROOTDIR)/usb/clients/video/usbvc/%)
 ROOTUSBWCMHDRS= $(USBWCMHDRS:%=$(ROOTDIR)/usb/clients/usbinput/usbwcm/%)
+ROOTUSBCCIDHDRS= $(USBCCIDHDRS:%=$(ROOTDIR)/usb/clients/ccid/%)
 ROOTUGENHDRS= $(UGENHDRS:%=$(ROOTDIR)/usb/clients/ugen/%)
 
 ROOT1394HDRS= $(I1394HDRS:%=$(ROOTDIR)/1394/%)
 
 ROOTRSMHDRS= $(RSMHDRS:%=$(ROOTDIR)/rsm/%)
 
-ROOTSDKTPHDRS= $(SDKTPHDRS:%=$(ROOTDIR)/dktp/%)
 ROOTDKTPHDRS= $(DKTPHDRS:%=$(ROOTDIR)/dktp/%)
-ROOTPCHDRS= $(PCHDRS:%=$(ROOTDIR)/%)
 ROOTHOTPLUGHDRS= $(HOTPLUGHDRS:%=$(ROOTDIR)/hotplug/%)
 ROOTHOTPLUGPCIHDRS= $(HOTPLUGPCIHDRS:%=$(ROOTDIR)/hotplug/pci/%)
 
 ROOTTSOLHDRS= $(TSOLHDRS:%=$(ROOTDIR)/tsol/%)
 
-sparc_ROOTHDRS=	$(ROOTSDKTPHDRS) $(ROOTSCSICADHDRS) $(ROOTSCSITARGETSHDRS) \
+sparc_ROOTHDRS=	\
 		$(ROOTUSBHDRS) $(ROOTUSBHUBDHDRS) \
 		$(ROOTUSBAUDHDRS) $(ROOTUSBHIDHDRS) $(ROOTUSBMSHDRS) \
-		$(ROOTUSBPRNHDRS) $(ROOTUGENHDRS) $(ROOTUSBVIDHDRS) \
-		$(ROOTUWBHDRS) $(ROOTUWBAHDRS) $(ROOTUSBHWARCHDRS)
+		$(ROOTUSBPRNHDRS) $(ROOTUGENHDRS) $(ROOTUSBVIDHDRS)
 
-i386_ROOTHDRS=	$(ROOTDKTPHDRS) $(ROOTPCHDRS) $(ROOTSCSITARGETSHDRS)	\
-		$(ROOTSCSIVHCIHDRS) $(ROOTHOTPLUGHDRS) \
-		$(ROOTHOTPLUGPCIHDRS) $(ROOTSATAGENHDRS) \
-		$(ROOTUWBHDRS) $(ROOTUWBAHDRS) $(ROOTUSBHWARCHDRS)
+i386_ROOTHDRS=	\
+		$(ROOTHOTPLUGHDRS) \
+		$(ROOTHOTPLUGPCIHDRS)
 
 # install rules
 $(ROOTDIR)/%: %
@@ -426,9 +425,6 @@ $(ROOTDIR)/ib/adapters/hermon/%:	ib/adapters/hermon/%
 $(ROOTDIR)/ib/adapters/%:	ib/adapters/%
 	$(INS.file)
 
-$(ROOTDIR)/lvm/%: lvm/%
-	$(INS.file)
-
 $(ROOTDIR)/scsi/%:		scsi/%
 	$(INS.file)
 
@@ -482,4 +478,3 @@ $(ROOTDIR)/tsol/%:	tsol/%
 
 $(ROOTDIRS):
 	$(INS.dir)
-

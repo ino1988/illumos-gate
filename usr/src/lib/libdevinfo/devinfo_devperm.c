@@ -22,6 +22,8 @@
  * Copyright (c) 2011 Gary Mills
  *
  * Copyright (c) 2003, 2010, Oracle and/or its affiliates. All rights reserved.
+ *
+ * Copyright 2026 Oxide Computer Company
  */
 
 #define	_POSIX_PTHREAD_SEMANTICS	/* for getgrnam_r */
@@ -42,6 +44,7 @@
 #include <stdarg.h>
 #include <syslog.h>
 #include <sys/acl.h>
+#include <sys/param.h>
 #include <sys/types.h>
 #include <sys/stat.h>
 #include <sys/ddi.h>
@@ -87,7 +90,7 @@ static int
 setdevaccess(char *dev, uid_t uid, gid_t gid, mode_t mode,
     void (*errmsg)(char *))
 {
-	int err = 0, local_errno;
+	int err = 0, local_errno = 0;
 	char errstring[MAX_LINELEN];
 	struct stat st;
 
@@ -587,14 +590,15 @@ di_devperm_login(const char *ttyn, uid_t uid, gid_t gid,
 		return (-1);
 	}
 
-	if (getgrnam_r("tty", &grp, grbuf, NSS_BUFLEN_GROUP, &grpp) != 0) {
+	if (getgrnam_r("tty", &grp, grbuf, NSS_BUFLEN_GROUP, &grpp) == 0 &&
+	    grpp != NULL) {
 		tty_gid = grpp->gr_gid;
 	} else {
 		/*
-		 * this should never happen, but if it does set
-		 * group to tty's traditional value.
+		 * This should never happen, but if it does fall back to
+		 * the traditional tty group id.
 		 */
-		tty_gid = 7;
+		tty_gid = GID_TTY;
 	}
 
 	/* set the login console device permission */
@@ -676,7 +680,7 @@ getnexttoken(char *next, char **nextp, char **tokenpp, char *tchar)
 			;
 		if (*cp1 == '=' || *cp1 == ':' || *cp1 == '&' || *cp1 == '|' ||
 		    *cp1 == ';' || *cp1 == '\n' || *cp1 == '\0') {
-			*cp = NULL;	/* terminate token */
+			*cp = '\0';	/* terminate token */
 			cp = cp1;
 		}
 	}
@@ -959,7 +963,7 @@ devfs_read_minor_perm(void (*errcb)(minorperm_err_t, int))
 
 static struct mperm *
 i_devfs_read_minor_perm_by_driver(char *drvname,
-	void (*errcb)(minorperm_err_t mp_err, int key))
+    void (*errcb)(minorperm_err_t mp_err, int key))
 {
 	return (i_devfs_read_minor_perm(drvname, errcb));
 }
@@ -1010,7 +1014,7 @@ i_devfs_add_perm_entry(nvlist_t *nvl, struct mperm *mp)
 
 static nvlist_t *
 i_devfs_minor_perm_nvlist(struct mperm *mplist,
-	void (*errcb)(minorperm_err_t, int))
+    void (*errcb)(minorperm_err_t, int))
 {
 	int err;
 	struct mperm *mp;
@@ -1037,8 +1041,7 @@ i_devfs_minor_perm_nvlist(struct mperm *mplist,
  * Done at boot time via devfsadm
  */
 int
-devfs_load_minor_perm(struct mperm *mplist,
-	void (*errcb)(minorperm_err_t, int))
+devfs_load_minor_perm(struct mperm *mplist, void (*errcb)(minorperm_err_t, int))
 {
 	int err;
 	char *buf = NULL;
@@ -1066,7 +1069,7 @@ devfs_load_minor_perm(struct mperm *mplist,
  */
 static int
 i_devfs_update_minor_perm(char *drv, int ctl,
-	void (*errcb)(minorperm_err_t, int))
+    void (*errcb)(minorperm_err_t, int))
 {
 	int err;
 	char *buf;
@@ -1095,15 +1098,13 @@ i_devfs_update_minor_perm(char *drv, int ctl,
 }
 
 int
-devfs_add_minor_perm(char *drv,
-	void (*errcb)(minorperm_err_t, int))
+devfs_add_minor_perm(char *drv, void (*errcb)(minorperm_err_t, int))
 {
 	return (i_devfs_update_minor_perm(drv, MODADDMINORPERM, errcb));
 }
 
 int
-devfs_rm_minor_perm(char *drv,
-	void (*errcb)(minorperm_err_t, int))
+devfs_rm_minor_perm(char *drv, void (*errcb)(minorperm_err_t, int))
 {
 	return (i_devfs_update_minor_perm(drv, MODREMMINORPERM, errcb));
 }

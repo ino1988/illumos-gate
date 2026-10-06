@@ -24,6 +24,11 @@
  * Use is subject to license terms.
  */
 
+/*
+ * Copyright 2019 Joyent, Inc.
+ * Copyright 2020 OmniOS Community Edition (OmniOSce) Association.
+ */
+
 #ifndef	_INET_IP_STACK_H
 #define	_INET_IP_STACK_H
 
@@ -64,6 +69,9 @@ typedef struct ip_stat {
 	kstat_named_t   ip_ire_reclaim_deleted;
 	kstat_named_t   ip_nce_reclaim_calls;
 	kstat_named_t   ip_nce_reclaim_deleted;
+	kstat_named_t   ip_nce_mcast_reclaim_calls;
+	kstat_named_t   ip_nce_mcast_reclaim_deleted;
+	kstat_named_t   ip_nce_mcast_reclaim_tqfail;
 	kstat_named_t   ip_dce_reclaim_calls;
 	kstat_named_t   ip_dce_reclaim_deleted;
 	kstat_named_t	ip_tcp_in_full_hw_cksum_err;
@@ -78,6 +86,7 @@ typedef struct ip_stat {
 	kstat_named_t	conn_in_recvslla;
 	kstat_named_t	conn_in_recvucred;
 	kstat_named_t	conn_in_recvttl;
+	kstat_named_t	conn_in_recvtos;
 	kstat_named_t	conn_in_recvhopopts;
 	kstat_named_t	conn_in_recvhoplimit;
 	kstat_named_t	conn_in_recvdstopts;
@@ -143,7 +152,7 @@ struct ip_stack {
 
 	uint_t			ips_src_generation;	/* Both IPv4 and IPv6 */
 
-	struct mod_prop_info_s	*ips_propinfo_tbl; 	/* ip tunables table */
+	struct mod_prop_info_s	*ips_propinfo_tbl;	/* ip tunables table */
 
 	mib2_ipIfStatsEntry_t	ips_ip_mib;	/* SNMP fixed size info */
 	mib2_icmp_t	ips_icmp_mib;
@@ -200,26 +209,30 @@ struct ip_stack {
 
 /* ip.c */
 	/* Following protected by igmp_timer_lock */
-	int 		ips_igmp_time_to_next;	/* Time since last timeout */
-	int 		ips_igmp_timer_scheduled_last;
+	int		ips_igmp_time_to_next;	/* Time since last timeout */
+	int		ips_igmp_timer_scheduled_last;
 	int		ips_igmp_deferred_next;
 	timeout_id_t	ips_igmp_timeout_id;
 	boolean_t	ips_igmp_timer_setter_active;
+	boolean_t	ips_igmp_timer_quiesce;
 
 	/* Following protected by mld_timer_lock */
-	int 		ips_mld_time_to_next;	/* Time since last timeout */
-	int 		ips_mld_timer_scheduled_last;
+	int		ips_mld_time_to_next;	/* Time since last timeout */
+	int		ips_mld_timer_scheduled_last;
 	int		ips_mld_deferred_next;
 	timeout_id_t	ips_mld_timeout_id;
 	boolean_t	ips_mld_timer_setter_active;
+	boolean_t	ips_mld_timer_quiesce;
 
 	/* Protected by igmp_slowtimeout_lock */
 	timeout_id_t	ips_igmp_slowtimeout_id;
 	kmutex_t	ips_igmp_slowtimeout_lock;
+	boolean_t	ips_igmp_slowtimeout_quiesce;
 
 	/* Protected by mld_slowtimeout_lock */
 	timeout_id_t	ips_mld_slowtimeout_id;
 	kmutex_t	ips_mld_slowtimeout_lock;
+	boolean_t	ips_mld_slowtimeout_quiesce;
 
 	/* IPv4 forwarding table */
 	struct radix_node_head *ips_ip_ftable;
@@ -243,8 +256,8 @@ struct ip_stack {
 
 	uint32_t	ips_ip6_ftable_hash_size;
 
-	ire_stats_t 	ips_ire_stats_v4;	/* IPv4 ire statistics */
-	ire_stats_t 	ips_ire_stats_v6;	/* IPv6 ire statistics */
+	ire_stats_t	ips_ire_stats_v4;	/* IPv4 ire statistics */
+	ire_stats_t	ips_ire_stats_v6;	/* IPv6 ire statistics */
 
 	/* Count how many condemned objects for kmem_cache callbacks */
 	uint32_t	ips_num_ire_condemned;
@@ -340,7 +353,7 @@ struct ip_stack {
 	 * reg_vif_num is protected by numvifs_mutex
 	 */
 	/* Whether or not special PIM assert processing is enabled. */
-	ushort_t	ips_reg_vif_num; 	/* Index to Register vif */
+	ushort_t	ips_reg_vif_num;	/* Index to Register vif */
 	int		ips_pim_assert;
 
 	union ill_g_head_u *ips_ill_g_heads;   /* ILL List Head */

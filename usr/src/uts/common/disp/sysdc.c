@@ -20,7 +20,7 @@
  */
 /*
  * Copyright (c) 2009, 2010, Oracle and/or its affiliates. All rights reserved.
- * Copyright (c) 2012 by Delphix. All rights reserved.
+ * Copyright (c) 2012, 2015 by Delphix. All rights reserved.
  */
 
 /*
@@ -192,32 +192,6 @@
  *	A thread joining the SDC class can specify the SDC_THREAD_BATCH
  *	flag.  This flag currently has no effect, but marks threads which
  *	do bulk processing.
- *
- * - t_kpri_req
- *
- *	The TS and FSS scheduling classes pay attention to t_kpri_req,
- *	which provides a simple form of priority inheritance for
- *	synchronization primitives (such as rwlocks held as READER) which
- *	cannot be traced to a unique thread.  The SDC class does not honor
- *	t_kpri_req, for a few reasons:
- *
- *	1.  t_kpri_req is notoriously inaccurate.  A measure of its
- *	    inaccuracy is that it needs to be cleared every time a thread
- *	    returns to user mode, because it is frequently non-zero at that
- *	    point.  This can happen because "ownership" of synchronization
- *	    primitives that use t_kpri_req can be silently handed off,
- *	    leaving no opportunity to will the t_kpri_req inheritance.
- *
- *	2.  Unlike in TS and FSS, threads in SDC *will* eventually run at
- *	    kernel priority.  This means that even if an SDC thread
- *	    is holding a synchronization primitive and running at low
- *	    priority, its priority will eventually be raised above 60,
- *	    allowing it to drive on and release the resource.
- *
- *	3.  The first consumer of SDC uses the taskq subsystem, which holds
- *	    a reader lock for the duration of the task's execution.  This
- *	    would mean that SDC threads would never drop below kernel
- *	    priority in practice, which defeats one of the purposes of SDC.
  *
  * - Why not FSS?
  *
@@ -393,7 +367,7 @@ sysdc_initparam(void)
 	sysdc_minDC = 1;
 	sysdc_maxDC = SYSDC_DC_MAX;
 	sysdc_minpri = 0;
-	sysdc_maxpri = maxclsyspri;
+	sysdc_maxpri = maxclsyspri - 1;
 
 	/* break parameters */
 	if (sysdc_max_pset_DC > SYSDC_DC_MAX) {

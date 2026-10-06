@@ -20,6 +20,8 @@
  */
 /*
  * Copyright (c) 1992, 2010, Oracle and/or its affiliates. All rights reserved.
+ * Copyright 2018 Nexenta Systems, Inc.  All rights reserved.
+ * Copyright 2026 Oxide Computer Company
  */
 
 #ifndef _BSM_AUDIT_KEVENTS_H
@@ -138,8 +140,8 @@ extern "C" {
 #define	AUE_SHMCTL_SET		93	/* =ip shmctl(2): IPC_SET command */
 #define	AUE_SHMCTL_STAT		94	/* =ip shmctl(2): IPC_STAT command */
 #define	AUE_SHMGET		95	/* =ip shmget(2) */
-#define	AUE_SHMAT 		96	/* =ip shmat(2) */
-#define	AUE_SHMDT 		97	/* =ip shmdt(2) */
+#define	AUE_SHMAT		96	/* =ip shmat(2) */
+#define	AUE_SHMDT		97	/* =ip shmdt(2) */
 #define	AUE_SEMCTL		98	/* =ip semctl(2): illegal command */
 #define	AUE_SEMCTL_RMID		99	/* =ip semctl(2): IPC_RMID command */
 #define	AUE_SEMCTL_SET		100	/* =ip semctl(2): IPC_SET command */
@@ -322,7 +324,7 @@ extern "C" {
 #define	AUE_FCHOWNAT		284	/* =no obsolete */
 #define	AUE_FUTIMESAT		285	/* =no obsolete */
 #define	AUE_UNLINKAT		286	/* =no obsolete */
-#define	AUE_CLOCK_SETTIME	287	/* =as clock_settime(3RT) */
+#define	AUE_CLOCK_SETTIME	287	/* =as clock_settime(3C) */
 #define	AUE_NTP_ADJTIME		288	/* =as ntp_adjtime(2) */
 #define	AUE_SETPPRIV		289	/* =pm setppriv(2) */
 #define	AUE_MODDEVPLCY		290	/* =as modctl(2) */
@@ -347,13 +349,17 @@ extern "C" {
 #define	AUE_FACCESSAT		309	/* =no obsolete */
 #define	AUE_AUDITON_GETAMASK	310	/* =aa */
 #define	AUE_AUDITON_SETAMASK	311	/* =as */
-
-
+#define	AUE_PSECFLAGS		312	/* =pm psecflags */
+#define	AUE_SACL		313	/* =sa SACL auditing (reserved) */
+#define	AUE_AUDITON_GETPINFO	314	/* =aa */
+#define	AUE_AUDITON_SETPMASK	315	/* =as */
+#define	AUE_AUDITON_GETKAUDIT	316	/* =aa */
+#define	AUE_AUDITON_SETKAUDIT	317	/* =as */
+#define	AUE_AUDITON_OTHER	318	/* =aa */
+#define	AUE_SPAWN		319	/* =ps,ex spawn(2) */
 
 /* NOTE: update MAX_KEVENTS below if events are added. */
-
-#define	MAX_KEVENTS		311
-
+#define	MAX_KEVENTS		319
 
 #ifdef __cplusplus
 }

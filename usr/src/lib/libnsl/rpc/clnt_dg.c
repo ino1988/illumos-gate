@@ -26,6 +26,7 @@
  */
 /*
  * Copyright 2014 Nexenta Systems, Inc.  All rights reserved.
+ * Copyright (c) 2016 by Delphix. All rights reserved.
  */
 
 /* Copyright (c) 1983, 1984, 1985, 1986, 1987, 1988, 1989 AT&T */
@@ -34,6 +35,9 @@
  * Portions of this source code were derived from Berkeley
  * 4.3 BSD under license from the Regents of the University of
  * California.
+ */
+/*
+ * Copyright 2014 Shruti V Sampat <shrutisampat@gmail.com>
  */
 
 /*
@@ -55,7 +59,7 @@
 #include <sys/types.h>
 #include <sys/stat.h>
 #include <strings.h>
-
+#include <note.h>
 
 extern int __rpc_timeval_to_msec(struct timeval *);
 extern bool_t xdr_opaque_auth(XDR *, struct opaque_auth *);
@@ -226,7 +230,7 @@ clnt_dg_create(const int fd, struct netbuf *svcaddr, const rpcprog_t program,
 	/*
 	 * By default, closeit is always FALSE. It is users responsibility
 	 * to do a t_close on it, else the user may use clnt_control
-	 * to let clnt_destroy do it for him/her.
+	 * to let clnt_destroy do it for them.
 	 */
 	cu->cu_closeit = FALSE;
 	cu->cu_fd = fd;
@@ -682,9 +686,7 @@ clnt_dg_send(CLIENT *cl, rpcproc_t proc, xdrproc_t xargs, caddr_t argsp)
 static void
 clnt_dg_geterr(CLIENT *cl, struct rpc_err *errp)
 {
-/* LINTED pointer alignment */
-	struct cu_data *cu = (struct cu_data *)cl->cl_private;
-
+        NOTE(ARGUNUSED(cl))
 	*errp = rpc_callerr;
 }
 
@@ -750,7 +752,7 @@ clnt_dg_control(CLIENT *cl, int request, char *info)
 /* LINTED pointer alignment */
 		*(struct timeval *)info = cu->cu_total;
 		break;
-	case CLGET_SERVER_ADDR:		/* Give him the fd address */
+	case CLGET_SERVER_ADDR:		/* Give it the fd address */
 		/* Now obsolete. Only for backword compatibility */
 		(void) memcpy(info, cu->cu_raddr.buf, (size_t)cu->cu_raddr.len);
 		break;

@@ -1,6 +1,7 @@
-/*	$Id: html.h,v 1.49 2013/08/08 20:07:47 schwarze Exp $ */
+/* $Id: html.h,v 1.109 2021/09/09 14:47:24 schwarze Exp $ */
 /*
- * Copyright (c) 2008, 2009, 2010, 2011 Kristaps Dzonsons <kristaps@bsd.lv>
+ * Copyright (c) 2017, 2018, 2019, 2020 Ingo Schwarze <schwarze@openbsd.org>
+ * Copyright (c) 2008-2011, 2014 Kristaps Dzonsons <kristaps@bsd.lv>
  *
  * Permission to use, copy, modify, and distribute this software for any
  * purpose with or without fee is hereby granted, provided that the above
@@ -13,28 +14,22 @@
  * WHATSOEVER RESULTING FROM LOSS OF USE, DATA OR PROFITS, WHETHER IN AN
  * ACTION OF CONTRACT, NEGLIGENCE OR OTHER TORTIOUS ACTION, ARISING OUT OF
  * OR IN CONNECTION WITH THE USE OR PERFORMANCE OF THIS SOFTWARE.
+ *
+ * Internal interfaces for mandoc(1) HTML formatters.
+ * For use by the individual HTML formatters only.
  */
-#ifndef HTML_H
-#define HTML_H
-
-__BEGIN_DECLS
 
 enum	htmltag {
 	TAG_HTML,
 	TAG_HEAD,
-	TAG_BODY,
 	TAG_META,
-	TAG_TITLE,
-	TAG_DIV,
-	TAG_H1,
-	TAG_H2,
-	TAG_SPAN,
 	TAG_LINK,
-	TAG_BR,
-	TAG_A,
+	TAG_STYLE,
+	TAG_TITLE,
+	TAG_BODY,
+	TAG_DIV,
+	TAG_SECTION,
 	TAG_TABLE,
-	TAG_TBODY,
-	TAG_COL,
 	TAG_TR,
 	TAG_TD,
 	TAG_LI,
@@ -43,71 +38,46 @@ enum	htmltag {
 	TAG_DL,
 	TAG_DT,
 	TAG_DD,
-	TAG_BLOCKQUOTE,
+	TAG_H1,
+	TAG_H2,
 	TAG_P,
 	TAG_PRE,
+	TAG_A,
 	TAG_B,
-	TAG_I,
+	TAG_CITE,
 	TAG_CODE,
+	TAG_I,
 	TAG_SMALL,
+	TAG_SPAN,
+	TAG_VAR,
+	TAG_BR,
+	TAG_HR,
+	TAG_MARK,
+	TAG_MATH,
+	TAG_MROW,
+	TAG_MI,
+	TAG_MN,
+	TAG_MO,
+	TAG_MSUP,
+	TAG_MSUB,
+	TAG_MSUBSUP,
+	TAG_MFRAC,
+	TAG_MSQRT,
+	TAG_MFENCED,
+	TAG_MTABLE,
+	TAG_MTR,
+	TAG_MTD,
+	TAG_MUNDEROVER,
+	TAG_MUNDER,
+	TAG_MOVER,
 	TAG_MAX
-};
-
-enum	htmlattr {
-	ATTR_HTTPEQUIV,
-	ATTR_CONTENT,
-	ATTR_NAME,
-	ATTR_REL,
-	ATTR_HREF,
-	ATTR_TYPE,
-	ATTR_MEDIA,
-	ATTR_CLASS,
-	ATTR_STYLE,
-	ATTR_WIDTH,
-	ATTR_ID,
-	ATTR_SUMMARY,
-	ATTR_ALIGN,
-	ATTR_COLSPAN,
-	ATTR_MAX
-};
-
-enum	htmlfont {
-	HTMLFONT_NONE = 0,
-	HTMLFONT_BOLD,
-	HTMLFONT_ITALIC,
-	HTMLFONT_BI,
-	HTMLFONT_MAX
 };
 
 struct	tag {
 	struct tag	 *next;
+	int		  refcnt;
+	int		  closed;
 	enum htmltag	  tag;
-};
-
-struct tagq {
-	struct tag	 *head;
-};
-
-struct	htmlpair {
-	enum htmlattr	  key;
-	const char	 *val;
-};
-
-#define	PAIR_INIT(p, t, v) \
-	do { \
-		(p)->key = (t); \
-		(p)->val = (v); \
-	} while (/* CONSTCOND */ 0)
-
-#define	PAIR_ID_INIT(p, v)	PAIR_INIT(p, ATTR_ID, v)
-#define	PAIR_CLASS_INIT(p, v)	PAIR_INIT(p, ATTR_CLASS, v)
-#define	PAIR_HREF_INIT(p, v)	PAIR_INIT(p, ATTR_HREF, v)
-#define	PAIR_STYLE_INIT(p, h)	PAIR_INIT(p, ATTR_STYLE, (h)->buf)
-#define	PAIR_SUMMARY_INIT(p, v)	PAIR_INIT(p, ATTR_SUMMARY, v)
-
-enum	htmltype { 
-	HTML_HTML_4_01_STRICT,
-	HTML_XHTML_1_0_STRICT
 };
 
 struct	html {
@@ -117,50 +87,56 @@ struct	html {
 #define	HTML_KEEP	 (1 << 2)
 #define	HTML_PREKEEP	 (1 << 3)
 #define	HTML_NONOSPACE	 (1 << 4) /* never add spaces */
-#define	HTML_LITERAL	 (1 << 5) /* literal (e.g., <PRE>) context */
 #define	HTML_SKIPCHAR	 (1 << 6) /* skip the next character */
-	struct tagq	  tags; /* stack of open tags */
+#define	HTML_NOSPLIT	 (1 << 7) /* do not break line before .An */
+#define	HTML_SPLIT	 (1 << 8) /* break line before .An */
+#define	HTML_NONEWLINE	 (1 << 9) /* No line break in nofill mode. */
+#define	HTML_BUFFER	 (1 << 10) /* Collect a word to see if it fits. */
+#define	HTML_TOCDONE	 (1 << 11) /* The TOC was already written. */
+	size_t		  indent; /* current output indentation level */
+	int		  noindent; /* indent disabled by <pre> */
+	size_t		  col; /* current output byte position */
+	size_t		  bufcol; /* current buf byte position */
+	char		  buf[80]; /* output buffer */
+	struct tag	 *tag; /* last open tag */
 	struct rofftbl	  tbl; /* current table */
 	struct tag	 *tblt; /* current open table scope */
-	struct mchars	 *symtab; /* character-escapes */
-	char		 *base_man; /* base for manpage href */
+	char		 *base_man1; /* bases for manpage href */
+	char		 *base_man2;
 	char		 *base_includes; /* base for include href */
 	char		 *style; /* style-sheet URI */
-	char		  buf[BUFSIZ]; /* see bufcat and friends */
-	size_t		  buflen; 
 	struct tag	 *metaf; /* current open font scope */
-	enum htmlfont	  metal; /* last used font */
-	enum htmlfont	  metac; /* current font mode */
-	enum htmltype	  type; /* output media type */
+	enum mandoc_esc	  metal; /* last used font */
+	enum mandoc_esc	  metac; /* current font mode */
 	int		  oflags; /* output options */
 #define	HTML_FRAGMENT	 (1 << 0) /* don't emit HTML/HEAD/BODY */
+#define	HTML_TOC	 (1 << 1) /* emit a table of contents */
 };
 
+
+struct	roff_node;
+struct	tbl_span;
+struct	eqn_box;
+
+void		  roff_html_pre(struct html *, const struct roff_node *);
+
+void		  print_gen_comment(struct html *, struct roff_node *);
 void		  print_gen_decls(struct html *);
 void		  print_gen_head(struct html *);
-struct tag	 *print_otag(struct html *, enum htmltag, 
-				int, const struct htmlpair *);
+struct tag	 *print_otag(struct html *, enum htmltag, const char *, ...);
+struct tag	 *print_otag_id(struct html *, enum htmltag, const char *,
+			struct roff_node *);
 void		  print_tagq(struct html *, const struct tag *);
 void		  print_stagq(struct html *, const struct tag *);
+void		  print_tagged_text(struct html *, const char *,
+			struct roff_node *);
 void		  print_text(struct html *, const char *);
 void		  print_tblclose(struct html *);
 void		  print_tbl(struct html *, const struct tbl_span *);
-void		  print_eqn(struct html *, const struct eqn *);
+void		  print_eqn(struct html *, const struct eqn_box *);
+void		  print_endline(struct html *);
 
-void		  bufcat_fmt(struct html *, const char *, ...);
-void		  bufcat(struct html *, const char *);
-void		  bufcat_id(struct html *, const char *);
-void		  bufcat_style(struct html *, 
-			const char *, const char *);
-void		  bufcat_su(struct html *, const char *, 
-			const struct roffsu *);
-void		  bufinit(struct html *);
-void		  buffmt_man(struct html *, 
-			const char *, const char *);
-void		  buffmt_includes(struct html *, const char *);
-
-int		  html_strlen(const char *);
-
-__END_DECLS
-
-#endif /*!HTML_H*/
+void		  html_close_paragraph(struct html *);
+enum roff_tok	  html_fillmode(struct html *, enum roff_tok);
+char		 *html_make_id(const struct roff_node *, int);
+int		  html_setfont(struct html *, enum mandoc_esc);

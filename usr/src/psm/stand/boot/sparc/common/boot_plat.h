@@ -21,6 +21,7 @@
 /*
  * Copyright 2010 Sun Microsystems, Inc.  All rights reserved.
  * Use is subject to license terms.
+ * Copyright 2019 Peter Tribble.
  */
 
 #ifndef _BOOT_PLAT_H
@@ -45,7 +46,6 @@ extern int	verbosemode;
 extern char	filename[];
 extern char	*const defname;
 extern char	*const defname64;
-extern char	wanboot_arguments[];
 
 extern int	bootprog(char *, char *, boolean_t);
 extern char	*choose_default_filename(char *, char *);
@@ -91,7 +91,6 @@ extern int  vac;
 
 extern void	fiximp(void);
 extern void	retain_nvram_page();
-extern int	cpu_is_ultrasparc_1(void);
 
 
 /* memlist.c */

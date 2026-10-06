@@ -23,20 +23,25 @@
 # Copyright 2010 Sun Microsystems, Inc.  All rights reserved.
 # Use is subject to license terms.
 #
-
-# Don't generate separate sections for this module
-pics/debugdata.o :=	XFFLAG=
+# Copyright 2019 OmniOS Community Edition (OmniOSce) Association.
+#
+# Copyright (c) 2019, Joyent, Inc.
+#
 
 # Since we use RTLD rather than DYNLIB, we must explicitly hook in ctfmerge.
 $(RTLD) :=	CTFMERGE_POST = $(CTFMERGE_LIB)
 
-pics/%.o:	%.s
-		$(BUILD.s)
-		$(POST_PROCESS_O)
+pics/%.o:	%.S
+		$(COMPILE.s) -o $@ $<
+		$(POST_PROCESS_S_O)
 
 pics/%.o:	$(CRTSRCS)/%.s
-		$(BUILD.s)
-		$(POST_PROCESS_O)
+		$(COMPILE.s) -o $@ $<
+		$(POST_PROCESS_S_O)
+
+pics/%.o:	$(CRTSRCS)/%.S
+		$(COMPILE.s) -o $@ $<
+		$(POST_PROCESS_S_O)
 
 pics/%.o:	%.c
 		$(COMPILE.c) -o $@ $<
@@ -46,19 +51,19 @@ pics/%.o:	../common/%.c
 		$(COMPILE.c) -o $@ $<
 		$(POST_PROCESS_O)
 
-pics/%.o:	$(VAR_AVLDIR)/%.c
+pics/%.o:	$(SRC)/common/avl/%.c
 		$(COMPILE.c) -o $@ $<
 		$(POST_PROCESS_O)
 
-pics/%.o:	$(VAR_DTRDIR)/%.c
+pics/%.o:	$(SRC)/common/dtrace/%.c
 		$(COMPILE.c) -o $@ $<
 		$(POST_PROCESS_O)
 
-pics/%.o:	$(SGSTOOLS)/common/%.c
+pics/%.o:	$(SGSCOMMON)/%.c
 		$(COMPILE.c) -o $@ $<
 		$(POST_PROCESS_O)
 
-pics/%.o:	$(SRCBASE)/uts/$(PLAT)/krtld/%.c
+pics/%.o:	$(SRC)/uts/$(PLAT)/krtld/%.c
 		$(COMPILE.c) -o $@ $<
 		$(POST_PROCESS_O)
 
@@ -67,17 +72,9 @@ pics/elfcap.o:	$(ELFCAP)/elfcap.c
 		$(POST_PROCESS_O)
 
 $(RTLD):	pics $(PICS) $(CRTS)
-		$(LD_USE_PROTO)ld -o $@ -dy -G $(DYNFLAGS) $(CRTI) $(PICS) \
+		$(LD) -o $@ -dy $(GSHARED) $(DYNFLAGS) $(CRTI) $(PICS) \
 		    $(LDLIBS) $(CRTN)
 		$(POST_PROCESS_SO)
-
-delete:
-		-$(RM) $(RTLD)
-
-lint:		$(SGSLINTOUT)
-
-lint :=		CPICLIB=
-lint :=		CLIB=-lc
 
 $(ROOTFS_LIBDIR)/%:	%
 		$(INS.file)
@@ -86,7 +83,6 @@ $(ETCLIBDIR)/%:		%
 		$(INS.file)
 
 include		$(SRC)/lib/Makefile.targ
-include		$(SRC)/cmd/sgs/Makefile.targ
 
 # Derived source and header files (messaging).
 

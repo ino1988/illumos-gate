@@ -22,6 +22,7 @@
 /*
  * Copyright 2010 Sun Microsystems, Inc.  All rights reserved.
  * Use is subject to license terms.
+ * Copyright 2018 Joyent, Inc.
  */
 
 #ifdef DEBUG
@@ -82,9 +83,7 @@ mblk_t		*xnb_copy_to_peer(xnb_t *, mblk_t *);
 
 static void		setup_gop(xnb_t *, gnttab_copy_t *, uchar_t *,
     size_t, size_t, size_t, grant_ref_t);
-#pragma inline(setup_gop)
 static boolean_t	is_foreign(void *);
-#pragma inline(is_foreign)
 
 #define	INVALID_GRANT_HANDLE	((grant_handle_t)-1)
 #define	INVALID_GRANT_REF	((grant_ref_t)-1)
@@ -251,8 +250,8 @@ xnb_software_csum(xnb_t *xnbp, mblk_t *mp)
 	 * because it doesn't cover all of the interesting cases :-(
 	 */
 	mac_hcksum_set(mp, 0, 0, 0, 0, HCK_FULLCKSUM);
-
-	return (mac_fix_cksum(mp));
+	mac_hw_emul(&mp, NULL, NULL, MAC_HWCKSUM_EMUL);
+	return (mp);
 }
 
 mblk_t *
@@ -665,6 +664,7 @@ xnb_to_peer(xnb_t *xnbp, mblk_t *mp)
 	 * to transfer them.
 	 */
 
+	len = 0;
 	mutex_enter(&xnbp->xnb_rx_lock);
 
 	/*

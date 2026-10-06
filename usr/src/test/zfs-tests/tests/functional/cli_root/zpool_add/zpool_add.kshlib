@@ -25,49 +25,11 @@
 #
 
 #
-# Copyright (c) 2012 by Delphix. All rights reserved.
+# Copyright (c) 2012, 2016 by Delphix. All rights reserved.
 #
 
 . $STF_SUITE/include/libtest.shlib
 . $STF_SUITE/tests/functional/cli_root/zpool_add/zpool_add.cfg
-
-#
-# check if the <pool> contains <vdev> ...
-#
-# $1 pool
-# $2..n <vdev> ...
-#
-# Return 0 if <vdev> are contained in the <pool>; 1 if not used; 2 if pool
-# name is missing
-#
-function iscontained
-{
-	typeset pool=$1
-	typeset vdev
-
-        if [[ -z $pool ]]; then
-                log_note "Missing pool name."
-                return 2
-        fi
-
-	shift
-
-	for vdev in $@; do
-
-# remove /dev/dsk in vdev if there is
-		$ECHO $vdev | $GREP "^/dev/dsk" >/dev/null 2>&1
-		(( $? == 0 )) && \
-			vdev=${vdev##*/}
-
-		$ZPOOL status "$pool" | $AWK '$1 == vdevname {exit 1}' \
-			vdevname=$vdev >/dev/null 2>&1
-		(( $? != 1 )) && \
-			return 1
-	done
-
-	return 0;
-
-}
 
 #
 # Find the storage device in /etc/vfstab
@@ -80,16 +42,16 @@ function find_vfstab_dev
 	typeset vfstabdevs=""
 	typeset line
 
-	$CAT $vfstab | $GREP "^/dev/dsk" >$tmpfile
+	cat $vfstab | grep "^/dev/dsk" >$tmpfile
 	while read -r line
 	do
-		vfstabdev=`$ECHO "$line" | $AWK '{print $1}'`
+		vfstabdev=`echo "$line" | awk '{print $1}'`
 		vfstabdev=${vfstabdev%%:}
 		vfstabdevs="$vfstabdev $vfstabdevs"
 	done <$tmpfile
 
-	$RM -f $tmpfile
-	$ECHO $vfstabdevs
+	rm -f $tmpfile
+	echo $vfstabdevs
 }
 
 #
@@ -103,16 +65,16 @@ function find_mnttab_dev
 	typeset mnttabdevs=""
 	typeset line
 
-	$CAT $mnttab | $GREP "^/dev/dsk" >$tmpfile
+	cat $mnttab | grep "^/dev/dsk" >$tmpfile
 	while read -r line
 	do
-		mnttabdev=`$ECHO "$line" | $AWK '{print $1}'`
+		mnttabdev=`echo "$line" | awk '{print $1}'`
 		mnttabdev=${mnttabdev%%:}
 		mnttabdevs="$mnttabdev $mnttabdevs"
 	done <$tmpfile
 
-	$RM -f $tmpfile
-	$ECHO $mnttabdevs
+	rm -f $tmpfile
+	echo $mnttabdevs
 }
 
 #
@@ -124,9 +86,9 @@ function save_dump_dev
 	typeset dumpdev
 	typeset fnd="Dump device"
 
-	dumpdev=`$DUMPADM | $GREP "$fnd" | $CUT -f2 -d : | \
-		$AWK '{print $1}'`
-	$ECHO $dumpdev
+	dumpdev=`dumpadm | grep "$fnd" | cut -f2 -d : | \
+		awk '{print $1}'`
+	echo $dumpdev
 }
 
 #

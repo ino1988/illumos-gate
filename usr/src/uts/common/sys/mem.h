@@ -23,6 +23,11 @@
  * Use is subject to license terms.
  */
 
+/*
+ * Copyright (c) 2015, Joyent, Inc.  All rights reserved.
+ * Copyright (c) 2017 James S Blachly, MD <james.blachly@gmail.com>
+ */
+
 #ifndef _SYS_MEM_H
 #define	_SYS_MEM_H
 
@@ -41,6 +46,7 @@ extern "C" {
 #define	M_NULL		2	/* /dev/null - EOF & Rathole */
 #define	M_ALLKMEM	3	/* /dev/allkmem - virtual kernel memory & I/O */
 #define	M_ZERO		12	/* /dev/zero - source of private memory */
+#define	M_FULL		13	/* /dev/full - write always ret ENOSPC */
 
 /*
  * Private ioctl for libkvm: translate virtual address to physical address.
@@ -62,7 +68,7 @@ typedef struct mem_vtop32 {
 #endif
 
 /*
- * Private ioctls for fmd(1M).  These interfaces are Sun Private.  Applications
+ * Private ioctls for fmd(8).  These interfaces are Sun Private.  Applications
  * and drivers should not make use of these interfaces: they can change without
  * notice and programs that consume them will fail to run on future releases.
  */
@@ -80,7 +86,7 @@ typedef struct mem_vtop32 {
 #define	MEM_SID			(('M' << 8) | 0x0B)
 
 /*
- * Bits returned from MEM_PAGE_GETERRORS ioctl for use by fmd(1M).
+ * Bits returned from MEM_PAGE_GETERRORS ioctl for use by fmd(8).
  */
 #define	MEM_PAGE_ERR_NONE	0x0
 #define	MEM_PAGE_ERR_MULTI_CE	0x1
@@ -127,6 +133,15 @@ typedef struct mem_info {
 extern pfn_t impl_obmem_pfnum(pfn_t);
 
 extern int plat_mem_do_mmio(struct uio *, enum uio_rw);
+
+typedef struct mm_logentry {
+	uintptr_t	mle_vaddr;	/* vaddr being written to */
+	size_t		mle_len;	/* length of write */
+	timespec_t	mle_hrestime;	/* hrestime at time of write */
+	hrtime_t	mle_hrtime;	/* hrtime at time of write */
+	pid_t		mle_pid;	/* pid of writing process */
+	char		mle_psargs[80];	/* psargs of writing process */
+} mm_logentry_t;
 
 #endif	/* _KERNEL */
 

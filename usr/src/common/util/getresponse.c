@@ -23,9 +23,6 @@
  * Use is subject to license terms.
  */
 
-#pragma ident	"%Z%%M%	%I%	%E% SMI"
-
-
 #include <stdio.h>
 #include <string.h>
 #include <stdlib.h>
@@ -43,13 +40,9 @@
 #define	DEFAULT_NOEXPR	"^[nN]"
 
 #define	FREE_MEM        \
-	if (yesstr)     \
 		free(yesstr);   \
-	if (nostr)      \
 		free(nostr);    \
-	if (yesexpr)    \
 		free(yesexpr);  \
-	if (noexpr)     \
 		free(noexpr)
 
 #define	SET_DEFAULT_STRS \
@@ -115,7 +108,22 @@ init_yes(void)
 		SET_DEFAULT_STRS;
 		fallback = 1;
 	}
+	if (fallback == 0) {
+		free(yesexpr);
+		free(noexpr);
+	}
 	return (0);
+}
+
+void
+fini_yes(void)
+{
+	free(yesstr);
+	free(nostr);
+	yesstr = DEFAULT_YESSTR;
+	nostr = DEFAULT_NOSTR;
+	regfree(&preg_yes);
+	regfree(&preg_no);
 }
 
 static int
@@ -125,11 +133,14 @@ yes_no(int (*func)(char *))
 	char    ans[LINE_MAX + 1];
 
 	/* Get user's answer */
-	for (i = 0; b = getchar(); i++) {
+	i = 0;
+	for (;;) {
+		b = getchar();
 		if (b == '\n' || b == '\0' || b == EOF)
 			break;
 		if (i < LINE_MAX)
 			ans[i] = b;
+		i++;
 	}
 	if (i >= LINE_MAX)
 		ans[LINE_MAX] = '\0';

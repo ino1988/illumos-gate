@@ -26,8 +26,6 @@
 #ifndef _NPI_RX_RD32_H
 #define	_NPI_RX_RD32_H
 
-#pragma ident	"%Z%%M%	%I%	%E% SMI"
-
 #ifdef	__cplusplus
 extern "C" {
 #endif
@@ -35,7 +33,6 @@ extern "C" {
 #include <npi.h>
 
 static uint32_t RXDMA_REG_READ32(npi_handle_t, uint32_t, int);
-#pragma inline(RXDMA_REG_READ32)
 
 /*
  * RXDMA_REG_READ32
@@ -43,9 +40,9 @@ static uint32_t RXDMA_REG_READ32(npi_handle_t, uint32_t, int);
  *	Read a 32-bit value from a DMC register.
  *
  * Arguments:
- * 	handle	The NPI handle to use.
- * 	offset	The offset into the DMA CSR (the register).
- * 	channel	The channel, which is used as a multiplicand.
+ *	handle	The NPI handle to use.
+ *	offset	The offset into the DMA CSR (the register).
+ *	channel	The channel, which is used as a multiplicand.
  *
  * Notes:
  *	If handle.regp is a virtual address (the address of a VR),

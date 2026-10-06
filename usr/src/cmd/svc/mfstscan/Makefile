@@ -33,9 +33,7 @@ SRCS =		mfstscan.c \
 		../common/manifest_find.c \
 		../common/manifest_hash.c
 
-POFILES = 	$(SRCS:.c=.po)
-
-ROOTLIBSVCBINPROG = $(ROOT)/lib/svc/bin/$(PROG)
+POFILES =	$(SRCS:.c=.po)
 
 include ../../Makefile.cmd
 
@@ -44,10 +42,7 @@ CPPFLAGS +=	-I../common
 LDLIBS +=	-lscf -luutil -lmd5
 CLOBBERFILES += $(POFILES)
 
-CERRWARN +=	-_gcc=-Wno-uninitialized
-CERRWARN +=	-_gcc=-Wno-unused-label
-
-lint := LINTFLAGS = -ux -erroff=E_GLOBAL_COULD_BE_STATIC2
+CERRWARN +=	$(CNOWARN_UNINIT)
 
 .KEEP_STATE:
 
@@ -62,13 +57,8 @@ $(POFILE): $(POFILES)
 
 install: all $(ROOTLIBSVCBINPROG)
 
-$(ROOTLIBSVCBIN)/%: %
-	$(INS.file)
-
 clean:
 	$(RM) $(OBJS)
-
-lint: lint_SRCS
 
 %.o: ../common/%.c
 	$(COMPILE.c) $(OUTPUT_OPTION) $< $(CTFCONVERT_HOOK)

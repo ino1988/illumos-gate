@@ -22,16 +22,19 @@
 #
 # Copyright (c) 2008, 2010, Oracle and/or its affiliates. All rights reserved.
 #
+# Copyright 2019 Joyent, Inc.
+#
 
 SRCS = $(OBJECTS:%.o=../common/%.c)
-C99MODE = $(C99_ENABLE)
+CSTD = $(CSTD_GNU99)
 CPPFLAGS += -I../common -I. -D_REENTRANT
 $(NOT_RELEASE_BUILD)CPPFLAGS += -DDEBUG
 CFLAGS += $(CCVERBOSE)
 
 CERRWARN += -_gcc=-Wno-type-limits
-CERRWARN += -_gcc=-Wno-uninitialized
-CERRWARN += -_gcc=-Wno-unused-label
+CERRWARN += $(CNOWARN_UNINIT)
+
+SMOFF += all_func_returns
 
 ROOTLIBDIR = $(ROOTSCSILIBDIR)
 ROOTLIBDIR64 = $(ROOTSCSILIBDIR)/$(MACH64)
@@ -48,9 +51,8 @@ LDLIBS += \
 	-lumem \
 	-lc
 
-LIBS =		$(DYNLIB) $(LINTLIB)
+LIBS =		$(DYNLIB)
 
 CLEANFILES += \
 	../common/ses_errno.c
 
-$(LINTLIB) :=	SRCS = $(SRCDIR)/$(LINTSRC)

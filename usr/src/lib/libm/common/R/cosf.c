@@ -26,7 +26,7 @@
  * Use is subject to license terms.
  */
 
-#pragma weak cosf = __cosf
+#pragma weak __cosf = cosf
 
 /*
  * See sincosf.c
@@ -76,7 +76,7 @@ cosf(float x)
 	double	y, z, w;
 	float	f;
 	int	n, ix, hx, hy;
-	volatile int i;
+	volatile int i __unused;
 
 	hx = *((int *)&x);
 	ix = hx & 0x7fffffff;

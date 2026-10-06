@@ -21,6 +21,7 @@
 /*
  * Copyright 2007 Sun Microsystems, Inc.  All rights reserved.
  * Use is subject to license terms.
+ * Copyright (c) 2016 by Delphix. All rights reserved.
  */
 
 /*	Copyright (c) 1984, 1986, 1987, 1988, 1989 AT&T	*/
@@ -28,8 +29,6 @@
 
 
 /* Copyright (c) 1979 Regents of the University of California */
-
-#pragma ident	"%Z%%M%	%I%	%E% SMI"
 
 #include "ex.h"
 #include "ex_temp.h"
@@ -99,6 +98,7 @@ gettext("Incomplete shell escape command - use 'shell' to get a shell"));
 					contread = 1;
 				}
 			}
+			/* FALLTHROUGH */
 		default:
 			if (up >= (unsigned char *)&uxb[UXBSIZE]) {
 tunix:
@@ -138,8 +138,8 @@ gettext("No previous command to substitute for !"));
 				 *
 				 * The user has just entered ":!!" which
 				 * means that though there is only technically
-				 * one '!' we know he really meant ":!!!". So
-				 * substitute the last command for him.
+				 * one '!' we know they really meant ":!!!". So
+				 * substitute the last command for them.
 				 */
 				fp = puxb;
 				if (*fp == 0) {
@@ -166,7 +166,7 @@ gettext("No previous command to substitute for !"));
 					error(gettext("Command too long"));
 				}
 				*up++ = c;
-			} 
+			}
 			break;
 
 		case '#':
@@ -390,7 +390,7 @@ vi_filter(int mode)
 			error(gettext("No more processes"));
 		}
 		if (pid2 == 0) {
-			extern unsigned char tfname[];		
+			extern unsigned char tfname[];
 			setrupt();
 			io = pvec[1];
 			close(pvec[0]);

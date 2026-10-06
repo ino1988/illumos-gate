@@ -4,6 +4,8 @@
  * See the IPFILTER.LICENCE file for details on licencing.
  *
  * Copyright (c) 2003, 2010, Oracle and/or its affiliates. All rights reserved.
+ *
+ * Copyright (c) 2014, Joyent, Inc.  All rights reserved.
  */
 
 #if defined(KERNEL) || defined(_KERNEL)
@@ -101,7 +103,8 @@ struct file;
 #include "netinet/ip_compat.h"
 #ifdef	USE_INET6
 # include <netinet/icmp6.h>
-# if !SOLARIS && defined(_KERNEL) && !defined(__osf__) && !defined(__hpux)
+# if !defined(SOLARIS) && defined(_KERNEL) && !defined(__osf__) && \
+	!defined(__hpux)
 #  include <netinet6/in6_var.h>
 # endif
 #endif
@@ -134,6 +137,9 @@ struct file;
 # endif
 #endif
 #include "netinet/ipl.h"
+#if defined(_KERNEL)
+#include <sys/sunddi.h>
+#endif
 /* END OF INCLUDES */
 
 #if !defined(lint)
@@ -186,7 +192,7 @@ int	fr_features = 0
 #endif
 	;
 
-#define	IPF_BUMP(x)	(x)++	
+#define	IPF_BUMP(x)	(x)++
 
 static	INLINE int	fr_ipfcheck __P((fr_info_t *, frentry_t *, int));
 static	INLINE int	fr_ipfcheck __P((fr_info_t *, frentry_t *, int));
@@ -789,7 +795,7 @@ fr_info_t *fin;
 	for (i = 0; ip6exthdr[i].ol_bit != 0; i++)
 		if (ip6exthdr[i].ol_val == IPPROTO_ESP) {
 			fin->fin_optmsk |= ip6exthdr[i].ol_bit;
-			break;			
+			break;
 		}
 }
 
@@ -818,7 +824,7 @@ fr_info_t *fin;
 	for (i = 0; ip6exthdr[i].ol_bit != 0; i++)
 		if (ip6exthdr[i].ol_val == IPPROTO_AH) {
 			fin->fin_optmsk |= ip6exthdr[i].ol_bit;
-			break;			
+			break;
 		}
 
 	ah = (authhdr_t *)fin->fin_dp;
@@ -1360,12 +1366,12 @@ fr_info_t *fin;
 		if (off != 0) {
 			fin->fin_flx |= FI_FRAGBODY;
 			off <<= 3;
-			if ((off + fin->fin_dlen > 65535) || 
+			if ((off + fin->fin_dlen > 65535) ||
 			    (fin->fin_dlen == 0) ||
 			    ((morefrag != 0) && ((fin->fin_dlen & 7) != 0))) {
-				/* 
+				/*
 				 * The length of the packet, starting at its
-				 * offset cannot exceed 65535 (0xffff) as the 
+				 * offset cannot exceed 65535 (0xffff) as the
 				 * length of an IP packet is only 16 bits.
 				 *
 				 * Any fragment that isn't the last fragment
@@ -2641,7 +2647,7 @@ ipf_stack_t *ifs;
 						IPF_BUMP(
 						ifs->ifs_frstats[out].fr_ret);
 					}
-					/* 
+					/*
 					 * we drop packet silently in case we
 					 * failed assemble fake response for it
 					 */
@@ -2653,7 +2659,7 @@ ipf_stack_t *ifs;
 					IPF_BUMP(
 					    ifs->ifs_frstats[out].fr_block);
 					RWLOCK_EXIT(&ifs->ifs_ipf_mutex);
-					
+
 					return (0);
 				}
 #endif	/* _KERNEL && SOLARIS2 >= 10 */
@@ -2679,7 +2685,7 @@ ipf_stack_t *ifs;
 						ifs->ifs_frstats[out].fr_ret);
 					}
 					else if (mp != NULL) {
-					/* 
+					/*
 					 * we drop packet silently in case we
 					 * failed assemble fake response for it
 					 */
@@ -2690,7 +2696,7 @@ ipf_stack_t *ifs;
 					IPF_BUMP(
 					    ifs->ifs_frstats[out].fr_block);
 					RWLOCK_EXIT(&ifs->ifs_ipf_mutex);
-					
+
 					return (0);
 				 }
 #endif /* _KERNEL && _SOLARIS2 >= 10 */
@@ -3529,10 +3535,8 @@ ipf_stack_t *ifs;
 			(void) frflushlist(set, unit, nfreedp, fp->fr_grp, ifs);
 		}
 
-		if (fp->fr_grhead != NULL) {
-			fr_delgroup(fp->fr_grhead, unit, set, ifs);
-			*fp->fr_grhead = '\0';
-		}
+		fr_delgroup(fp->fr_grhead, unit, set, ifs);
+		*fp->fr_grhead = '\0';
 
 		ASSERT(fp->fr_ref > 0);
 		fp->fr_next = NULL;
@@ -3799,7 +3803,7 @@ ipf_stack_t *ifs;
 			rval = newifp;
 		break;
 	case IPFSYNC_OLDIFP :
-		/* 
+		/*
 		 * If interface gets unplumbed it must be invalidated, which
 		 * means set all existing references to the interface to -1.
 		 * We don't want to invalidate references for wildcard
@@ -4033,7 +4037,7 @@ ipf_stack_t *ifs;
 
 	for (i = 0; i < rules; i++) {
 		fr_syncindex(rule_lists[i], ifp, newifp);
-	} 
+	}
 
 	/*
 	 * Update rule groups.
@@ -4072,7 +4076,7 @@ size_t size;
 	caddr_t ca;
 	int err;
 
-# if SOLARIS
+# ifdef SOLARIS
 	err = COPYIN(src, (caddr_t)&ca, sizeof(ca));
 	if (err != 0)
 		return err;
@@ -4102,7 +4106,7 @@ size_t size;
 	caddr_t ca;
 	int err;
 
-# if SOLARIS
+# ifdef SOLARIS
 	err = COPYIN(dst, (caddr_t)&ca, sizeof(ca));
 	if (err != 0)
 		return err;
@@ -5696,6 +5700,54 @@ static	int	fr_objbytes[NUM_OBJ_TYPES][2] = {
 
 
 /* ------------------------------------------------------------------------ */
+/* Function:    fr_getzoneid                                                */
+/* Returns:     int     - 0 = success, else failure                         */
+/* Parameters:  idsp(I) - pointer to ipf_devstate_t                         */
+/*              data(I) - pointer to ioctl data                             */
+/*                                                                          */
+/* Set the zone ID in idsp based on the zone name in ipfzoneobj.  Further   */
+/* ioctls will act on the IPF stack for that zone ID.                       */
+/* ------------------------------------------------------------------------ */
+#if defined(_KERNEL)
+int fr_setzoneid(idsp, data)
+ipf_devstate_t *idsp;
+void *data;
+{
+	int error = 0;
+	ipfzoneobj_t ipfzo;
+	zone_t *zone;
+
+	error = BCOPYIN(data, &ipfzo, sizeof(ipfzo));
+	if (error != 0)
+		return EFAULT;
+
+	if (memchr(ipfzo.ipfz_zonename, '\0', ZONENAME_MAX) == NULL)
+		return EFAULT;
+
+	/*
+	 * The global zone doesn't have a GZ-controlled stack, so no
+	 * sense in going any further
+	 */
+	if (strcmp(ipfzo.ipfz_zonename, "global") == 0)
+		return ENODEV;
+
+	if ((zone = zone_find_by_name(ipfzo.ipfz_zonename)) == NULL)
+		return ENODEV;
+
+	/*
+	 * Store the zone ID that to control, and whether it's the
+	 * GZ-controlled stack that's wanted
+	 */
+	idsp->ipfs_zoneid = zone->zone_id;
+	idsp->ipfs_gz = (ipfzo.ipfz_gz == 1) ? B_TRUE : B_FALSE;
+	zone_rele(zone);
+
+	return error;
+}
+#endif
+
+
+/* ------------------------------------------------------------------------ */
 /* Function:    fr_inobj                                                    */
 /* Returns:     int     - 0 = success, else failure                         */
 /* Parameters:  data(I) - pointer to ioctl data                             */
@@ -5924,7 +5976,7 @@ fr_info_t *fin;
 	int dosum;
 	ipf_stack_t *ifs = fin->fin_ifs;
 
-#if SOLARIS && defined(_KERNEL) && (SOLARIS2 >= 6)
+#if defined(SOLARIS) && defined(_KERNEL) && (SOLARIS2 >= 6)
 	net_handle_t net_data_p;
 	if (fin->fin_v == 4)
 		net_data_p = ifs->ifs_ipf_ipv4;
@@ -5948,7 +6000,7 @@ fr_info_t *fin;
 	dosum = 0;
 	sum = 0;
 
-#if SOLARIS && defined(_KERNEL) && (SOLARIS2 >= 6)
+#if defined(SOLARIS) && defined(_KERNEL) && (SOLARIS2 >= 6)
 	ASSERT(fin->fin_m != NULL);
 	if (NET_IS_HCK_L4_FULL(net_data_p, fin->fin_m) ||
 	    NET_IS_HCK_L4_PART(net_data_p, fin->fin_m)) {
@@ -5987,7 +6039,7 @@ fr_info_t *fin;
 		if (dosum)
 			sum = fr_cksum(fin->fin_m, fin->fin_ip,
 				       fin->fin_p, fin->fin_dp);
-#if SOLARIS && defined(_KERNEL) && (SOLARIS2 >= 6)
+#if defined(SOLARIS) && defined(_KERNEL) && (SOLARIS2 >= 6)
 	}
 #endif
 #if !defined(_KERNEL)
@@ -6398,7 +6450,11 @@ ipftuneable_alloc(ipf_stack_t *ifs)
 {
     ipftuneable_t *item;
 
-    KMALLOCS(ifs->ifs_ipf_tuneables, ipftuneable_t *,
+    /*
+     * We are being called as part of netstack creation and may not return
+     * NULL; use a sleeping allocation.
+     */
+    SLEEPING_KMALLOCS(ifs->ifs_ipf_tuneables, ipftuneable_t *,
 	sizeof (lcl_ipf_tuneables));
     bcopy(lcl_ipf_tuneables, ifs->ifs_ipf_tuneables,
 	sizeof (lcl_ipf_tuneables));
@@ -7301,7 +7357,7 @@ ipf_stack_t *ifs;
 		 * Now that we have ref, it's save to give up lock.
 		 */
 		RWLOCK_EXIT(&ifs->ifs_ipf_mutex);
- 
+
 		/*
 		 * Copy out data and clean up references and token as needed.
 		 */
@@ -7328,7 +7384,7 @@ ipf_stack_t *ifs;
 				break;
 			}
 		}
- 
+
 		if ((count == 1) || (error != 0))
 			break;
 

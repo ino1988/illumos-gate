@@ -20,7 +20,7 @@
  * CDDL HEADER END
  */
 /*	Copyright (c) 1988 AT&T	*/
-/*	  All Rights Reserved  	*/
+/*	  All Rights Reserved	*/
 
 
 /*
@@ -78,7 +78,7 @@ struct ut_exit_status {
  */
 struct utmp {
 	char ut_user[8];		/* User login name */
-	char ut_id[4]; 			/* /etc/inittab id(usually line #) */
+	char ut_id[4];			/* /etc/inittab id(usually line #) */
 	char ut_line[12];		/* device name (console, lnxx) */
 	short ut_pid;			/* short for compat. - process id */
 	short ut_type;			/* type of entry */

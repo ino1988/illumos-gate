@@ -25,6 +25,10 @@
  */
 
 /*
+ * Copyright 2019 Joyent, Inc.
+ */
+
+/*
  * Virtual CPU management.
  *
  * VCPUs can be controlled in one of two ways; through the domain itself
@@ -228,11 +232,7 @@ mp_set_cpu_context(vcpu_guest_context_t *vgc, cpu_t *cp)
 	 * sse_initial into it anyway.
 	 */
 
-#if defined(__amd64)
 	vgc->user_regs.cs = KCS_SEL | SEL_KPL;	/* force to ring 3 */
-#else
-	vgc->user_regs.cs = KCS_SEL;
-#endif
 	vgc->user_regs.ds = KDS_SEL;
 	vgc->user_regs.es = KDS_SEL;
 	vgc->user_regs.ss = KDS_SEL;
@@ -246,17 +246,9 @@ mp_set_cpu_context(vcpu_guest_context_t *vgc, cpu_t *cp)
 	else
 		iopl = 0;
 
-#if defined(__amd64)
 	vgc->user_regs.fs = 0;
 	vgc->user_regs.gs = 0;
 	vgc->user_regs.rflags = F_OFF | iopl;
-#elif defined(__i386)
-	vgc->user_regs.fs = KFS_SEL;
-	vgc->user_regs.gs = KGS_SEL;
-	vgc->user_regs.eflags = F_OFF | iopl;
-	vgc->event_callback_cs = vgc->user_regs.cs;
-	vgc->failsafe_callback_cs = vgc->user_regs.cs;
-#endif
 
 	/*
 	 * Initialize the trap_info_t from the IDT
@@ -291,14 +283,8 @@ mp_set_cpu_context(vcpu_guest_context_t *vgc, cpu_t *cp)
 
 	vgc->ctrlreg[0] = CR0_ENABLE_FPU_FLAGS(getcr0());
 
-#if defined(__i386)
-	if (mmu.pae_hat)
-		vgc->ctrlreg[3] =
-		    xen_pfn_to_cr3(pfn_to_mfn(kas.a_hat->hat_htable->ht_pfn));
-	else
-#endif
-		vgc->ctrlreg[3] =
-		    pa_to_ma(mmu_ptob(kas.a_hat->hat_htable->ht_pfn));
+	vgc->ctrlreg[3] =
+	    pa_to_ma(mmu_ptob(kas.a_hat->hat_htable->ht_pfn));
 
 	vgc->ctrlreg[4] = getcr4();
 
@@ -306,7 +292,6 @@ mp_set_cpu_context(vcpu_guest_context_t *vgc, cpu_t *cp)
 	vgc->failsafe_callback_eip = (uintptr_t)xen_failsafe_callback;
 	vgc->flags |= VGCF_failsafe_disables_events;
 
-#if defined(__amd64)
 	/*
 	 * XXPV should this be moved to init_cpu_syscall?
 	 */
@@ -315,7 +300,6 @@ mp_set_cpu_context(vcpu_guest_context_t *vgc, cpu_t *cp)
 
 	ASSERT(vgc->user_regs.gs == 0);
 	vgc->gs_base_kernel = (uintptr_t)cp;
-#endif
 
 	return (xen_vcpu_initialize(cp->cpu_id, vgc));
 }
@@ -365,15 +349,9 @@ mach_cpucontext_alloc(struct cpu *cp)
 
 	bzero(&vgc, sizeof (vgc));
 
-#ifdef __amd64
 	vgc.user_regs.rip = tp->t_pc;
 	vgc.user_regs.rsp = tp->t_sp;
 	vgc.user_regs.rbp = tp->t_sp - 2 * sizeof (greg_t);
-#else
-	vgc.user_regs.eip = tp->t_pc;
-	vgc.user_regs.esp = tp->t_sp;
-	vgc.user_regs.ebp = tp->t_sp - 2 * sizeof (greg_t);
-#endif
 	/*
 	 * XXPV	Fix resume, if Russ didn't already fix it.
 	 *
@@ -445,7 +423,6 @@ mach_cpucontext_reset(cpu_t *cp)
 static void
 pcb_to_user_regs(label_t *pcb, vcpu_guest_context_t *vgc)
 {
-#ifdef __amd64
 	vgc->user_regs.rip = pcb->val[REG_LABEL_PC];
 	vgc->user_regs.rsp = pcb->val[REG_LABEL_SP];
 	vgc->user_regs.rbp = pcb->val[REG_LABEL_BP];
@@ -454,14 +431,6 @@ pcb_to_user_regs(label_t *pcb, vcpu_guest_context_t *vgc)
 	vgc->user_regs.r13 = pcb->val[REG_LABEL_R13];
 	vgc->user_regs.r14 = pcb->val[REG_LABEL_R14];
 	vgc->user_regs.r15 = pcb->val[REG_LABEL_R15];
-#else /* __amd64 */
-	vgc->user_regs.eip = pcb->val[REG_LABEL_PC];
-	vgc->user_regs.esp = pcb->val[REG_LABEL_SP];
-	vgc->user_regs.ebp = pcb->val[REG_LABEL_BP];
-	vgc->user_regs.ebx = pcb->val[REG_LABEL_EBX];
-	vgc->user_regs.esi = pcb->val[REG_LABEL_ESI];
-	vgc->user_regs.edi = pcb->val[REG_LABEL_EDI];
-#endif /* __amd64 */
 }
 
 /*
@@ -486,13 +455,8 @@ mach_cpucontext_restore(cpu_t *cp)
 	 * stack pointer to account for the pop of xIP that returning from
 	 * longjmp() normally would do, and set the return value in xAX to 1.
 	 */
-#ifdef __amd64
 	vgc.user_regs.rax = 1;
 	vgc.user_regs.rsp += sizeof (ulong_t);
-#else
-	vgc.user_regs.eax = 1;
-	vgc.user_regs.esp += sizeof (ulong_t);
-#endif
 
 	vgc.kernel_sp = cp->cpu_thread->t_sp;
 
@@ -554,12 +518,15 @@ mach_cpu_pause(volatile char *safe)
 	}
 }
 
-void
-mach_cpu_halt(char *msg)
+int
+mach_cpu_halt(xc_arg_t arg1, xc_arg_t arg2 __unused, xc_arg_t arg3 __unused)
 {
+	char *msg = (char *)arg1;
+
 	if (msg)
 		prom_printf("%s\n", msg);
 	(void) xen_vcpu_down(CPU->cpu_id);
+	return (0);
 }
 
 /*ARGSUSED*/
@@ -680,6 +647,9 @@ poweroff_vcpu(struct cpu *cp)
 		ASSERT(cpu_phase[cp->cpu_id] == CPU_PHASE_SAFE);
 
 		CPUSET_DEL(cpu_ready_set, cp->cpu_id);
+
+		if (cp->cpu_flags & CPU_ENABLE)
+			ncpus_intr_enabled--;
 
 		cp->cpu_flags |= CPU_POWEROFF | CPU_OFFLINE;
 		cp->cpu_flags &=
@@ -836,6 +806,7 @@ vcpu_config_report(processorid_t id, uint_t newstate, int error)
 	size_t len;
 	char *ps;
 
+	ps = NULL;
 	switch (newstate) {
 	case P_ONLINE:
 		ps = PS_ONLINE;

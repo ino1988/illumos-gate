@@ -18,12 +18,17 @@
  *
  * CDDL HEADER END
  */
+
 /*
- *  Copyright (c) 1989, 2010, Oracle and/or its affiliates. All rights reserved.
+ * Copyright 2015 Nexenta Systems, Inc.  All rights reserved.
+ * Copyright (c) 1989, 2010, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2012 by Delphix. All rights reserved.
+ * Copyright 2012 Marcel Telka <marcel@telka.sk>
+ * Copyright 2018 OmniOS Community Edition (OmniOSce) Association.
  */
 
 /*	Copyright (c) 1983, 1984, 1985, 1986, 1987, 1988, 1989 AT&T	*/
-/*	  All Rights Reserved  	*/
+/*	All Rights Reserved	*/
 
 /*
  * Portions of this source code were derived from Berkeley 4.3 BSD
@@ -86,19 +91,22 @@ static void		svc_clts_ktattrs(SVCXPRT *, int, void **);
  * Server transport operations vector.
  */
 struct svc_ops svc_clts_op = {
-	svc_clts_krecv,		/* Get requests */
-	svc_clts_kgetargs,	/* Deserialize arguments */
-	svc_clts_ksend,		/* Send reply */
-	svc_clts_kfreeargs,	/* Free argument data space */
-	svc_clts_kdestroy,	/* Destroy transport handle */
-	svc_clts_kdup,		/* Check entry in dup req cache */
-	svc_clts_kdupdone,	/* Mark entry in dup req cache as done */
-	svc_clts_kgetres,	/* Get pointer to response buffer */
-	svc_clts_kfreeres,	/* Destroy pre-serialized response header */
-	svc_clts_kclone_destroy, /* Destroy a clone xprt */
-	svc_clts_kstart,	/* Tell `ready-to-receive' to rpcmod */
-	svc_clts_kclone_xprt,	/* transport specific clone xprt function */
-	svc_clts_ktattrs	/* Transport specific attributes. */
+	.xp_recv = svc_clts_krecv,
+	.xp_getargs = svc_clts_kgetargs,
+	.xp_reply = svc_clts_ksend,
+	.xp_freeargs = svc_clts_kfreeargs,
+	.xp_destroy = svc_clts_kdestroy,
+	.xp_dup = svc_clts_kdup,
+	.xp_dupdone = svc_clts_kdupdone,
+	.xp_getres = svc_clts_kgetres,
+	.xp_freeres = svc_clts_kfreeres,
+	.xp_clone_destroy = svc_clts_kclone_destroy,
+	.xp_start = svc_clts_kstart,
+	.xp_clone_xprt = svc_clts_kclone_xprt,
+	.xp_tattrs = svc_clts_ktattrs,
+	.xp_ctl = NULL,
+	.xp_hold = rpcmod_hold,
+	.xp_release = rpcmod_release
 };
 
 /*
@@ -342,6 +350,9 @@ svc_clts_krecv(SVCXPRT *clone_xprt, mblk_t *mp, struct rpc_msg *msg)
 			    = pkti->ipi6_addr;
 			((sin6_t *)(clone_xprt->xp_lcladdr.buf))->sin6_family
 			    = AF_INET6;
+			clone_xprt->xp_lcladdr.len = sizeof (sin6_t);
+			clone_xprt->xp_lcladdr.maxlen =
+			    clone_xprt->xp_lcladdr.len;
 		} else if (toh->level == IPPROTO_IP && toh->status == 0 &&
 		    toh->name == IP_RECVDSTADDR) {
 			dstopt += sizeof (struct T_opthdr);
@@ -349,6 +360,9 @@ svc_clts_krecv(SVCXPRT *clone_xprt, mblk_t *mp, struct rpc_msg *msg)
 			    = *(struct in_addr *)dstopt;
 			((sin_t *)(clone_xprt->xp_lcladdr.buf))->sin_family
 			    = AF_INET;
+			clone_xprt->xp_lcladdr.len = sizeof (sin_t);
+			clone_xprt->xp_lcladdr.maxlen =
+			    clone_xprt->xp_lcladdr.len;
 		}
 	}
 
@@ -382,6 +396,7 @@ svc_clts_krecv(SVCXPRT *clone_xprt, mblk_t *mp, struct rpc_msg *msg)
 	TRACE_0(TR_FAC_KRPC, TR_XDR_CALLMSG_START,
 	    "xdr_callmsg_start:");
 	if (! xdr_callmsg(xdrs, msg)) {
+		XDR_DESTROY(xdrs);
 		TRACE_1(TR_FAC_KRPC, TR_XDR_CALLMSG_END,
 		    "xdr_callmsg_end:(%S)", "bad");
 		RSSTAT_INCR(stats, rsxdrcall);
@@ -468,7 +483,7 @@ svc_clts_ksend(SVCXPRT *clone_xprt, struct rpc_msg *msg)
 		}
 
 		/*
-		 * Initialize the XDR decode stream.  Additional mblks
+		 * Initialize the XDR encode stream.  Additional mblks
 		 * will be allocated if necessary.  They will be UD_MAXSIZE
 		 * sized.
 		 */
@@ -489,6 +504,7 @@ svc_clts_ksend(SVCXPRT *clone_xprt, struct rpc_msg *msg)
 		if (!(xdr_replymsg(xdrs, msg) &&
 		    (!has_args || SVCAUTH_WRAP(&clone_xprt->xp_auth, xdrs,
 		    xdr_results, xdr_location)))) {
+			XDR_DESTROY(xdrs);
 			TRACE_1(TR_FAC_KRPC, TR_XDR_REPLYMSG_END,
 			    "xdr_replymsg_end:(%S)", "bad");
 			RPCLOG0(1, "xdr_replymsg/SVCAUTH_WRAP failed\n");
@@ -500,9 +516,12 @@ svc_clts_ksend(SVCXPRT *clone_xprt, struct rpc_msg *msg)
 	} else if (!(xdr_replymsg_body(xdrs, msg) &&
 	    (!has_args || SVCAUTH_WRAP(&clone_xprt->xp_auth, xdrs,
 	    xdr_results, xdr_location)))) {
+		XDR_DESTROY(xdrs);
 		RPCLOG0(1, "xdr_replymsg_body/SVCAUTH_WRAP failed\n");
 		goto out;
 	}
+
+	XDR_DESTROY(xdrs);
 
 	msgsz = (int)xmsgsize(ud->ud_resp->b_cont);
 
@@ -635,6 +654,8 @@ svc_clts_kfreeargs(SVCXPRT *clone_xprt, xdrproc_t xdr_args,
 	} else
 		retval = TRUE;
 
+	XDR_DESTROY(xdrs);
+
 	if (ud->ud_inmp) {
 		freemsg(ud->ud_inmp);
 		ud->ud_inmp = NULL;
@@ -658,14 +679,14 @@ svc_clts_kgetres(SVCXPRT *clone_xprt, int size)
 	 */
 	while ((mp = allocb(UD_INITSIZE, BPRI_LO)) == NULL) {
 		if (strwaitbuf(UD_INITSIZE, BPRI_LO)) {
-			return (FALSE);
+			return (NULL);
 		}
 	}
 
 	mp->b_cont = NULL;
 
 	/*
-	 * Initialize the XDR decode stream.  Additional mblks
+	 * Initialize the XDR encode stream.  Additional mblks
 	 * will be allocated if necessary.  They will be UD_MAXSIZE
 	 * sized.
 	 */
@@ -687,16 +708,19 @@ svc_clts_kgetres(SVCXPRT *clone_xprt, int size)
 	rply.acpted_rply.ar_stat = SUCCESS;
 
 	if (!xdr_replymsg_hdr(xdrs, &rply)) {
+		XDR_DESTROY(xdrs);
 		freeb(mp);
 		return (NULL);
 	}
 
 	buf = XDR_INLINE(xdrs, size);
 
-	if (buf == NULL)
+	if (buf == NULL) {
+		XDR_DESTROY(xdrs);
 		freeb(mp);
-	else
+	} else {
 		ud->ud_resp->b_cont = mp;
+	}
 
 	return (buf);
 }
@@ -709,6 +733,8 @@ svc_clts_kfreeres(SVCXPRT *clone_xprt)
 
 	if (ud->ud_resp == NULL || ud->ud_resp->b_cont == NULL)
 		return;
+
+	XDR_DESTROY(&clone_xprt->xp_xdrout);
 
 	/*
 	 * SVC_FREERES() is called whenever the server decides not to
@@ -733,18 +759,15 @@ svc_clts_kfreeres(SVCXPRT *clone_xprt)
  * to the service load so that there is likely to be a response entry
  * when the first retransmission comes in.
  */
-#define	MAXDUPREQS	1024
+#define	MAXDUPREQS	8192
 
 /*
- * This should be appropriately scaled to MAXDUPREQS.
+ * This should be appropriately scaled to MAXDUPREQS.  To produce as less as
+ * possible collisions it is suggested to set this to a prime.
  */
-#define	DRHASHSZ	257
+#define	DRHASHSZ	2053
 
-#if ((DRHASHSZ & (DRHASHSZ - 1)) == 0)
-#define	XIDHASH(xid)	((xid) & (DRHASHSZ - 1))
-#else
 #define	XIDHASH(xid)	((xid) % DRHASHSZ)
-#endif
 #define	DRHASH(dr)	XIDHASH((dr)->dr_xid)
 #define	REQTOXID(req)	((req)->rq_xprt->xp_xid)
 
@@ -781,7 +804,7 @@ struct dupreq *drmru;
  */
 static int
 svc_clts_kdup(struct svc_req *req, caddr_t res, int size, struct dupreq **drpp,
-	bool_t *dupcachedp)
+    bool_t *dupcachedp)
 {
 	struct rpc_clts_server *stats = CLONE2STATS(req->rq_xprt);
 	struct dupreq *dr;
@@ -912,7 +935,7 @@ svc_clts_kdup(struct svc_req *req, caddr_t res, int size, struct dupreq **drpp,
  */
 static void
 svc_clts_kdupdone(struct dupreq *dr, caddr_t res, void (*dis_resfree)(),
-	int size, int status)
+    int size, int status)
 {
 
 	ASSERT(dr->dr_resfree == NULL);

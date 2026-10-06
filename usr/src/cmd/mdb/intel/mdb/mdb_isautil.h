@@ -23,15 +23,19 @@
  * Copyright 2004 Sun Microsystems, Inc.  All rights reserved.
  * Use is subject to license terms.
  */
+/*
+ * Copyright (c) 2018, Joyent, Inc.  All rights reserved.
+ * Copyright 2025 Oxide Computer Company
+ */
 
 #ifndef _MDB_ISAUTIL_H
 #define	_MDB_ISAUTIL_H
 
-#pragma ident	"%Z%%M%	%I%	%E% SMI"
-
 #ifdef __cplusplus
 extern "C" {
 #endif
+
+typedef uchar_t mdb_instr_t;
 
 #ifdef __amd64
 #include <mdb/mdb_amd64util.h>
@@ -45,7 +49,7 @@ extern "C" {
 #define	mdb_isa_kvm_stack_iter	mdb_amd64_kvm_stack_iter
 
 #define	mdb_isa_kvm_frame	mdb_amd64_kvm_frame
-#define	mdb_isa_kvm_framev	mdb_amd64_kvm_framev
+#define	mdb_isa_prev_callcheck	mdb_amd64_prev_callcheck
 
 #else
 #include <mdb/mdb_ia32util.h>
@@ -59,7 +63,7 @@ extern "C" {
 #define	mdb_isa_kvm_stack_iter	mdb_ia32_kvm_stack_iter
 
 #define	mdb_isa_kvm_frame	mdb_ia32_kvm_frame
-#define	mdb_isa_kvm_framev	mdb_ia32_kvm_framev
+#define	mdb_isa_prev_callcheck	mdb_ia32_prev_callcheck
 
 #endif
 

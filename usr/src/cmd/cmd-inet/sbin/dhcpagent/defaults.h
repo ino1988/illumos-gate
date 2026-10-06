@@ -21,6 +21,8 @@
 /*
  * Copyright 2009 Sun Microsystems, Inc.  All rights reserved.
  * Use is subject to license terms.
+ * Copyright (c) 2016-2017, Chris Fraire <cfraire@me.com>.
+ * Copyright 2019 Joshua M. Clulow <josh@sysmgr.org>
  */
 
 #ifndef	DEFAULTS_H
@@ -39,11 +41,9 @@ extern "C" {
 #endif
 
 /*
- * tunable parameters -- keep in the same order as defaults[] in defaults.c
+ * Tunable parameters -- keep in the same order as defaults[] in defaults.c
  */
-
 enum {
-
 	DF_RELEASE_ON_SIGTERM,	/* send RELEASE on each if upon SIGTERM */
 	_UNUSED_DF_IGNORE_FAILED_ARP,
 	DF_OFFER_WAIT,		/* how long to wait to collect offers */
@@ -54,7 +54,13 @@ enum {
 	DF_DEBUG_LEVEL,		/* set debug level (undocumented) */
 	DF_VERBOSE,		/* set verbose mode (undocumented) */
 	DF_VERIFIED_LEASE_ONLY,	/* send RELEASE on SIGTERM and need verify */
-	DF_PARAM_IGNORE_LIST	/* our parameter ignore list */
+	DF_PARAM_IGNORE_LIST,	/* our parameter ignore list */
+	DF_REQUEST_FQDN,	/* request FQDN associated with interface */
+	DF_V4_DEFAULT_IAID_DUID,	/* IAID/DUID if no DF_CLIENT_ID */
+	DF_DNS_DOMAINNAME,	/* static domain name if not in --reqhost */
+	DF_ADOPT_DOMAINNAME,	/* adopt DHCP domain if not in --reqhost */
+	DF_SET_MTU,		/* set interface MTU (option 26) */
+	DF_CLASSLESS_ROUTES	/* manage additional routes (option 121) */
 };
 
 #define	DHCP_AGENT_DEFAULTS	"/etc/default/dhcpagent"

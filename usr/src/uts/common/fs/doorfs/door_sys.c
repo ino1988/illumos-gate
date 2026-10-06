@@ -21,6 +21,9 @@
 
 /*
  * Copyright (c) 2006, 2010, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2016 by Delphix. All rights reserved.
+ * Copyright 2021 Tintri by DDN, Inc. All rights reserved.
+ * Copyright 2026 OmniOS Community Edition (OmniOSce) Association.
  */
 
 /*
@@ -80,7 +83,7 @@ size_t	door_max_arg = 16 * 1024;
  * door_upcall.  Need to guard against a process returning huge amounts
  * of data and getting the kernel stuck in kmem_alloc.
  */
-size_t	door_max_upcall_reply = 1024 * 1024;
+size_t	door_max_upcall_reply = 4 * 1024 * 1024;
 
 /*
  * Maximum number of descriptors allowed to be passed in a single
@@ -400,7 +403,7 @@ door_create(void (*pc_cookie)(), void *data_cookie, uint_t attributes)
 	    &fd, NULL)) != 0)
 		return (set_errno(err));
 
-	f_setfd(fd, FD_CLOEXEC);
+	f_setfd_or(fd, FD_CLOEXEC);
 	return (fd);
 }
 
@@ -1113,6 +1116,19 @@ door_stack_copyout(const void *kaddr, void *uaddr, size_t count)
 }
 
 /*
+ * The IA32 ABI supplement 1.0 changed the required stack alignment to
+ * 16 bytes (from 4 bytes), so that code can make use of SSE instructions.
+ * This is already done for process entry, thread entry, and makecontext();
+ * We need to do this for door_return as well. The stack will be aligned to
+ * whatever the door_results is aligned.
+ * See: usr/src/lib/libc/i386/gen/makectxt.c for more details.
+ */
+#if defined(__amd64)
+#undef STACK_ALIGN32
+#define	STACK_ALIGN32 16
+#endif
+
+/*
  * Writes the stack layout for door_return() into the door_server_t of the
  * server thread.
  */
@@ -1496,7 +1512,7 @@ out:
 		mutex_enter(&door_knob);
 		DOOR_T_RELEASE(ct);
 
-		/* let the client know we have processed his message */
+		/* let the client know we have processed its message */
 		ct->d_args_done = 1;
 
 		if (error) {
@@ -2724,7 +2740,7 @@ door_translate_out(void)
  */
 static int
 door_results(kthread_t *caller, caddr_t data_ptr, size_t data_size,
-		door_desc_t *desc_ptr, uint_t desc_num)
+    door_desc_t *desc_ptr, uint_t desc_num)
 {
 	door_client_t	*ct = DOOR_CLIENT(caller->t_door);
 	door_upcall_t	*dup = ct->d_upcall;
@@ -3020,9 +3036,9 @@ door_copy(struct as *as, caddr_t src, caddr_t dest, uint_t len)
 		pfn_t	pfnum;
 
 		/* MMU mapping is already locked down */
-		AS_LOCK_ENTER(as, &as->a_lock, RW_READER);
+		AS_LOCK_ENTER(as, RW_READER);
 		pfnum = hat_getpfnum(as->a_hat, rdest);
-		AS_LOCK_EXIT(as, &as->a_lock);
+		AS_LOCK_EXIT(as);
 
 		/*
 		 * TODO: The pfn step should not be necessary - need
@@ -3092,6 +3108,7 @@ door_upcall(vnode_t *vp, door_arg_t *param, struct cred *cred,
 	door_client_t	*ct;		/* curthread door_data */
 	door_server_t	*st;		/* server thread door_data */
 	int		gotresults = 0;
+	int		needcleanup = 0;
 	int		cancel_pending;
 
 	if (vp->v_type != VDOOR) {
@@ -3192,6 +3209,7 @@ door_upcall(vnode_t *vp, door_arg_t *param, struct cred *cred,
 	dp->door_active++;
 
 	ct->d_error = DOOR_WAIT;
+	ct->d_args_done = 0;
 	st->d_caller = curthread;
 	st->d_active = dp;
 
@@ -3274,11 +3292,21 @@ shuttle_return:
 			cv_wait(&ct->d_cv, &door_knob);
 
 		/*
+		 * If the server has not processed our message, free the
+		 * descriptors.
+		 */
+		if (!ct->d_args_done) {
+			needcleanup = 1;
+			ct->d_args_done = 1;
+		}
+
+		/*
 		 * Find out if results were successfully copied.
 		 */
 		if (ct->d_error == 0)
 			gotresults = 1;
 	}
+	ASSERT(ct->d_args_done);
 	if (lwp) {
 		lwp->lwp_asleep = 0;		/* /proc */
 		lwp->lwp_sysabort = 0;		/* /proc */
@@ -3286,6 +3314,9 @@ shuttle_return:
 	if (--dp->door_active == 0 && (dp->door_flags & DOOR_DELAY))
 		door_deliver_unref(dp);
 	mutex_exit(&door_knob);
+
+	if (needcleanup)
+		door_fp_close(ct->d_fpp, ct->d_args.desc_num);
 
 	/*
 	 * Translate returned doors (if any)

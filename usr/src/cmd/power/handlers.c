@@ -19,6 +19,7 @@
  * CDDL HEADER END
  */
 /*
+ * Copyright 2015 Gary Mills
  * Copyright 2009 Sun Microsystems, Inc.  All rights reserved.
  * Use is subject to license terms.
  */
@@ -218,7 +219,7 @@ cpuidle(void)
 
 int
 S3_helper(char *whitelist, char *blacklist, int yes, int no, char *keyword,
-	char *behavior, int *didyes, int suppress)
+    char *behavior, int *didyes, int suppress)
 {
 	int oflags = SMB_O_NOCKSUM | SMB_O_NOVERS;
 	smbios_hdl_t *shp;
@@ -585,7 +586,7 @@ devpath(char **destp, char *src, int *errp)
 	 * When the path has ":anything", display an error for
 	 * a non-device or truncate a resolved+modifed path.
 	 */
-	if (cp = strchr(src, ':')) {
+	if ((cp = strchr(src, ':')) != NULL) {
 		if (devok == 0) {
 			mesg(MERR, "physical path may not contain "
 			    "a minor string (%s)\n", src);
@@ -714,7 +715,7 @@ static int
 vlist_append(int **vlistp, int *vcntp, int value)
 {
 	(*vcntp)++;
-	if (*vlistp = realloc(*vlistp, *vcntp * sizeof (**vlistp)))
+	if ((*vlistp = realloc(*vlistp, *vcntp * sizeof (**vlistp))) != NULL)
 		*(*vlistp + *vcntp - 1) = value;
 	else
 		mesg(MERR, alloc_fmt, "threshold list", strerror(errno));
@@ -735,13 +736,13 @@ vlist_append(int **vlistp, int *vcntp, int value)
 static int
 get_thresh(int **vlistp, int *vcntp)
 {
-	int argn, value, gci, grp_cnt = 0, paren = 0, nerr = 0;
+	int argn, value, gci = 0, grp_cnt = 0, paren = 0, nerr = 0;
 	char *rp, *src;
 
 	for (argn = 2; (src = LINEARG(argn)) != NULL; argn++) {
 		if (*src == LPAREN) {
 			gci = *vcntp;
-			if (nerr = vlist_append(vlistp, vcntp, 0))
+			if ((nerr = vlist_append(vlistp, vcntp, 0)) != 0)
 				break;
 			paren = 1;
 			src++;
@@ -771,8 +772,8 @@ get_thresh(int **vlistp, int *vcntp)
 
 /*
  * Set device thresholds from (3) formats:
- * 	path	"always-on"
- * 	path	time-spec: [0-9]+[{h,m,s}]
+ *	path	"always-on"
+ *	path	time-spec: [0-9]+[{h,m,s}]
  *	path	(ts1 ts2 ...)+
  */
 int
@@ -813,11 +814,12 @@ static int
 scan_int(char *src, int *dst)
 {
 	long lval;
+	const char *errstr;
 
 	errno = 0;
 
-	lval = strtol(LINEARG(1), NULL, 0);
-	if (errno || lval > INT_MAX || lval < 0) {
+	lval = strtonumx(LINEARG(1), 0, INT_MAX, &errstr, 0);
+	if (errstr != NULL) {
 		mesg(MERR, nerr_fmt, src);
 		return (NOUP);
 	}
@@ -881,7 +883,7 @@ static char open_fmt[] = "cannot open \"%s\", %s\n";
 
 /*
  * Verify the filesystem type for a regular statefile is "ufs"
- * or verify a block device is not in use as a mounted filesytem.
+ * or verify a block device is not in use as a mounted filesystem.
  * Returns 1 if any error, otherwise 0.
  */
 static int
@@ -1015,7 +1017,7 @@ ztop(char *arg, char *diskname)
 	}
 	arg += 14;
 	(void) strncpy(pool_name, arg, MAXPATHLEN);
-	if (p = strchr(pool_name, '/'))
+	if ((p = strchr(pool_name, '/')) != NULL)
 		*p = '\0';
 	STRCPYLIM(new_cc.cf_fs, p + 1, "statefile path");
 
@@ -1115,7 +1117,7 @@ sfpath(void)
 	char diskname[256];
 	struct stat stbuf;
 	int dir = 0;
-	dev_t dev;
+	dev_t dev = NODEV;
 
 	if (statefile) {
 		mesg(MERR, "ignored redundant statefile entry\n");

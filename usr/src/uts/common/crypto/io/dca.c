@@ -96,15 +96,6 @@ static void		dca_schedtimeout(void *);
 #endif
 
 /*
- * We want these inlined for performance.
- */
-#ifndef	DEBUG
-#pragma inline(dca_freereq, dca_getreq, dca_freework, dca_getwork)
-#pragma inline(dca_enqueue, dca_dequeue, dca_rmqueue, dca_done)
-#pragma inline(dca_reverse, dca_length)
-#endif
-
-/*
  * Device operations.
  */
 static struct dev_ops devops = {
@@ -414,12 +405,7 @@ static crypto_provider_info_t dca_prov_info2 = {
 };
 
 /* Convenience macros */
-/* Retrieve the softc and instance number from a SPI crypto context */
-#define	DCA_SOFTC_FROM_CTX(ctx, softc, instance) {		\
-	(softc) = (dca_t *)(ctx)->cc_provider;			\
-	(instance) = ddi_get_instance((softc)->dca_dip);	\
-}
-
+#define	DCA_SOFTC_FROM_CTX(ctx)	((dca_t *)(ctx)->cc_provider)
 #define	DCA_MECH_FROM_CTX(ctx) \
 	(((dca_request_t *)(ctx)->cc_provider_private)->dr_ctx.ctx_cm_type)
 
@@ -468,13 +454,11 @@ static struct ddi_device_acc_attr dca_devattr = {
 	DDI_STRICTORDER_ACC
 };
 
-#if !defined(i386) && !defined(__i386)
 static struct ddi_device_acc_attr dca_bufattr = {
 	DDI_DEVICE_ATTR_V0,
 	DDI_NEVERSWAP_ACC,
 	DDI_STRICTORDER_ACC
 };
-#endif
 
 static struct ddi_dma_attr dca_dmaattr = {
 	DMA_ATTR_V0,		/* dma_attr_version */
@@ -486,7 +470,7 @@ static struct ddi_dma_attr dca_dmaattr = {
 	0x1,			/* dma_attr_minxfer */
 	0x00ffffffUL,		/* dma_attr_maxxfer */
 	0xffffffffUL,		/* dma_attr_seg */
-#if defined(i386) || defined(__i386) || defined(__amd64)
+#if defined(__x86)
 	512,			/* dma_attr_sgllen */
 #else
 	1,			/* dma_attr_sgllen */
@@ -669,8 +653,8 @@ dca_attach(dev_info_t *dip, ddi_attach_cmd_t cmd)
 	dca = ddi_get_soft_state(dca_state, instance);
 	ASSERT(dca != NULL);
 	dca->dca_dip = dip;
-	WORKLIST(dca, MCR1)->dwl_prov = NULL;
-	WORKLIST(dca, MCR2)->dwl_prov = NULL;
+	WORKLIST(dca, MCR1)->dwl_prov = 0;
+	WORKLIST(dca, MCR2)->dwl_prov = 0;
 	/* figure pagesize */
 	dca->dca_pagesize = ddi_ptob(dip, 1);
 
@@ -861,11 +845,11 @@ dca_attach(dev_info_t *dip, ddi_attach_cmd_t cmd)
 
 failed:
 	/* unregister from the crypto framework */
-	if (WORKLIST(dca, MCR1)->dwl_prov != NULL) {
+	if (WORKLIST(dca, MCR1)->dwl_prov != 0) {
 		(void) crypto_unregister_provider(
 		    WORKLIST(dca, MCR1)->dwl_prov);
 	}
-	if (WORKLIST(dca, MCR2)->dwl_prov != NULL) {
+	if (WORKLIST(dca, MCR2)->dwl_prov != 0) {
 		(void) crypto_unregister_provider(
 		    WORKLIST(dca, MCR2)->dwl_prov);
 	}
@@ -930,7 +914,7 @@ dca_detach(dev_info_t *dip, ddi_detach_cmd_t cmd)
 	 * Unregister from kCF.
 	 * This needs to be done at the beginning of detach.
 	 */
-	if (WORKLIST(dca, MCR1)->dwl_prov != NULL) {
+	if (WORKLIST(dca, MCR1)->dwl_prov != 0) {
 		if (crypto_unregister_provider(
 		    WORKLIST(dca, MCR1)->dwl_prov) != CRYPTO_SUCCESS) {
 			dca_error(dca, "unable to unregister MCR1 from kcf");
@@ -938,7 +922,7 @@ dca_detach(dev_info_t *dip, ddi_detach_cmd_t cmd)
 		}
 	}
 
-	if (WORKLIST(dca, MCR2)->dwl_prov != NULL) {
+	if (WORKLIST(dca, MCR2)->dwl_prov != 0) {
 		if (crypto_unregister_provider(
 		    WORKLIST(dca, MCR2)->dwl_prov) != CRYPTO_SUCCESS) {
 			dca_error(dca, "unable to unregister MCR2 from kcf");
@@ -1248,7 +1232,7 @@ dca_uninit(dca_t *dca)
 		mutex_destroy(&wlp->dwl_freereqslock);
 		mutex_destroy(&wlp->dwl_freelock);
 		cv_destroy(&wlp->dwl_cv);
-		wlp->dwl_prov = NULL;
+		wlp->dwl_prov = 0;
 	}
 }
 
@@ -1672,24 +1656,6 @@ dca_newreq(dca_t *dca)
 	 * for driver hardening, allocate in whole pages.
 	 */
 	size = ROUNDUP(MAXPACKET, dca->dca_pagesize);
-#if defined(i386) || defined(__i386)
-	/*
-	 * Use kmem_alloc instead of ddi_dma_mem_alloc here since the latter
-	 * may fail on x86 platform if a physically contiguous memory chunk
-	 * cannot be found. From initial testing, we did not see performance
-	 * degradation as seen on Sparc.
-	 */
-	if ((reqp->dr_ibuf_kaddr = kmem_alloc(size, KM_SLEEP)) == NULL) {
-		dca_error(dca, "unable to alloc request ibuf memory");
-		dca_destroyreq(reqp);
-		return (NULL);
-	}
-	if ((reqp->dr_obuf_kaddr = kmem_alloc(size, KM_SLEEP)) == NULL) {
-		dca_error(dca, "unable to alloc request obuf memory");
-		dca_destroyreq(reqp);
-		return (NULL);
-	}
-#else
 	/*
 	 * We could kmem_alloc for Sparc too. However, it gives worse
 	 * performance when transferring more than one page data. For example,
@@ -1716,7 +1682,6 @@ dca_newreq(dca_t *dca)
 		dca_destroyreq(reqp);
 		return (NULL);
 	}
-#endif
 
 	/* Skip the used portion in the context page */
 	reqp->dr_offset = CTX_MAXLENGTH;
@@ -1750,10 +1715,6 @@ dca_newreq(dca_t *dca)
 void
 dca_destroyreq(dca_request_t *reqp)
 {
-#if defined(i386) || defined(__i386)
-	dca_t		*dca = reqp->dr_dca;
-	size_t		size = ROUNDUP(MAXPACKET, dca->dca_pagesize);
-#endif
 
 	/*
 	 * Clean up DMA for the context structure.
@@ -1773,19 +1734,6 @@ dca_destroyreq(dca_request_t *reqp)
 	/*
 	 * Clean up DMA for the scratch buffer.
 	 */
-#if defined(i386) || defined(__i386)
-	if (reqp->dr_ibuf_dmah) {
-		(void) ddi_dma_unbind_handle(reqp->dr_ibuf_dmah);
-		ddi_dma_free_handle(&reqp->dr_ibuf_dmah);
-	}
-	if (reqp->dr_obuf_dmah) {
-		(void) ddi_dma_unbind_handle(reqp->dr_obuf_dmah);
-		ddi_dma_free_handle(&reqp->dr_obuf_dmah);
-	}
-
-	kmem_free(reqp->dr_ibuf_kaddr, size);
-	kmem_free(reqp->dr_obuf_kaddr, size);
-#else
 	if (reqp->dr_ibuf_paddr) {
 		(void) ddi_dma_unbind_handle(reqp->dr_ibuf_dmah);
 	}
@@ -1806,7 +1754,6 @@ dca_destroyreq(dca_request_t *reqp)
 	if (reqp->dr_obuf_dmah) {
 		ddi_dma_free_handle(&reqp->dr_obuf_dmah);
 	}
-#endif
 	/*
 	 * These two DMA handles should have been unbinded in
 	 * dca_unbindchains() function
@@ -1932,7 +1879,7 @@ dca_bindchains(dca_request_t *reqp, size_t incnt, size_t outcnt)
 		reqp->dr_in_next = reqp->dr_chain_in_head.dc_next_paddr;
 		reqp->dr_in_len = reqp->dr_chain_in_head.dc_buffer_length;
 	} else {
-		reqp->dr_in_paddr = NULL;
+		reqp->dr_in_paddr = 0;
 		reqp->dr_in_next = 0;
 		reqp->dr_in_len = 0;
 	}
@@ -1965,7 +1912,7 @@ dca_bindchains(dca_request_t *reqp, size_t incnt, size_t outcnt)
 		reqp->dr_out_next = reqp->dr_chain_out_head.dc_next_paddr;
 		reqp->dr_out_len = reqp->dr_chain_out_head.dc_buffer_length;
 	} else {
-		reqp->dr_out_paddr = NULL;
+		reqp->dr_out_paddr = 0;
 		reqp->dr_out_next = 0;
 		reqp->dr_out_len = 0;
 	}
@@ -1983,7 +1930,7 @@ dca_unbindchains(dca_request_t *reqp)
 	int rv1 = DDI_SUCCESS;
 
 	/* Clear the input chain */
-	if (reqp->dr_chain_in_head.dc_buffer_paddr != NULL) {
+	if (reqp->dr_chain_in_head.dc_buffer_paddr != 0) {
 		(void) ddi_dma_unbind_handle(reqp->dr_chain_in_dmah);
 		reqp->dr_chain_in_head.dc_buffer_paddr = 0;
 	}
@@ -1993,7 +1940,7 @@ dca_unbindchains(dca_request_t *reqp)
 	}
 
 	/* Clear the output chain */
-	if (reqp->dr_chain_out_head.dc_buffer_paddr != NULL) {
+	if (reqp->dr_chain_out_head.dc_buffer_paddr != 0) {
 		(void) ddi_dma_unbind_handle(reqp->dr_chain_out_dmah);
 		reqp->dr_chain_out_head.dc_buffer_paddr = 0;
 	}
@@ -2016,7 +1963,7 @@ dca_bindchains_one(dca_request_t *reqp, size_t cnt, int dr_offset,
 	caddr_t			chain_kaddr_pre;
 	caddr_t			chain_kaddr;
 	uint32_t		chain_paddr;
-	int 			i;
+	int			i;
 
 	/* Advance past the context structure to the starting address */
 	chain_paddr = reqp->dr_ctx_paddr + dr_offset;
@@ -3694,11 +3641,8 @@ dca_encrypt_init(crypto_ctx_t *ctx, crypto_mechanism_t *mechanism,
 {
 	int error = CRYPTO_FAILED;
 	dca_t *softc;
-	/* LINTED E_FUNC_SET_NOT_USED */
-	int instance;
 
-	/* extract softc and instance number from context */
-	DCA_SOFTC_FROM_CTX(ctx, softc, instance);
+	softc = DCA_SOFTC_FROM_CTX(ctx);
 	DBG(softc, DENTRY, "dca_encrypt_init: started");
 
 	/* check mechanism */
@@ -3737,14 +3681,11 @@ dca_encrypt(crypto_ctx_t *ctx, crypto_data_t *plaintext,
 {
 	int error = CRYPTO_FAILED;
 	dca_t *softc;
-	/* LINTED E_FUNC_SET_NOT_USED */
-	int instance;
 
 	if (!ctx || !ctx->cc_provider || !ctx->cc_provider_private)
 		return (CRYPTO_OPERATION_NOT_INITIALIZED);
 
-	/* extract softc and instance number from context */
-	DCA_SOFTC_FROM_CTX(ctx, softc, instance);
+	softc = DCA_SOFTC_FROM_CTX(ctx);
 	DBG(softc, DENTRY, "dca_encrypt: started");
 
 	/* handle inplace ops */
@@ -3792,14 +3733,11 @@ dca_encrypt_update(crypto_ctx_t *ctx, crypto_data_t *plaintext,
 {
 	int error = CRYPTO_FAILED;
 	dca_t *softc;
-	/* LINTED E_FUNC_SET_NOT_USED */
-	int instance;
 
 	if (!ctx || !ctx->cc_provider || !ctx->cc_provider_private)
 		return (CRYPTO_OPERATION_NOT_INITIALIZED);
 
-	/* extract softc and instance number from context */
-	DCA_SOFTC_FROM_CTX(ctx, softc, instance);
+	softc = DCA_SOFTC_FROM_CTX(ctx);
 	DBG(softc, DENTRY, "dca_encrypt_update: started");
 
 	/* handle inplace ops */
@@ -3838,14 +3776,11 @@ dca_encrypt_final(crypto_ctx_t *ctx, crypto_data_t *ciphertext,
 {
 	int error = CRYPTO_FAILED;
 	dca_t *softc;
-	/* LINTED E_FUNC_SET_NOT_USED */
-	int instance;
 
 	if (!ctx || !ctx->cc_provider || !ctx->cc_provider_private)
 		return (CRYPTO_OPERATION_NOT_INITIALIZED);
 
-	/* extract softc and instance number from context */
-	DCA_SOFTC_FROM_CTX(ctx, softc, instance);
+	softc = DCA_SOFTC_FROM_CTX(ctx);
 	DBG(softc, DENTRY, "dca_encrypt_final: started");
 
 	/* check mechanism */
@@ -3928,11 +3863,8 @@ dca_decrypt_init(crypto_ctx_t *ctx, crypto_mechanism_t *mechanism,
 {
 	int error = CRYPTO_FAILED;
 	dca_t *softc;
-	/* LINTED E_FUNC_SET_NOT_USED */
-	int instance;
 
-	/* extract softc and instance number from context */
-	DCA_SOFTC_FROM_CTX(ctx, softc, instance);
+	softc = DCA_SOFTC_FROM_CTX(ctx);
 	DBG(softc, DENTRY, "dca_decrypt_init: started");
 
 	/* check mechanism */
@@ -3971,14 +3903,11 @@ dca_decrypt(crypto_ctx_t *ctx, crypto_data_t *ciphertext,
 {
 	int error = CRYPTO_FAILED;
 	dca_t *softc;
-	/* LINTED E_FUNC_SET_NOT_USED */
-	int instance;
 
 	if (!ctx || !ctx->cc_provider || !ctx->cc_provider_private)
 		return (CRYPTO_OPERATION_NOT_INITIALIZED);
 
-	/* extract softc and instance number from context */
-	DCA_SOFTC_FROM_CTX(ctx, softc, instance);
+	softc = DCA_SOFTC_FROM_CTX(ctx);
 	DBG(softc, DENTRY, "dca_decrypt: started");
 
 	/* handle inplace ops */
@@ -4027,14 +3956,11 @@ dca_decrypt_update(crypto_ctx_t *ctx, crypto_data_t *ciphertext,
 {
 	int error = CRYPTO_FAILED;
 	dca_t *softc;
-	/* LINTED E_FUNC_SET_NOT_USED */
-	int instance;
 
 	if (!ctx || !ctx->cc_provider || !ctx->cc_provider_private)
 		return (CRYPTO_OPERATION_NOT_INITIALIZED);
 
-	/* extract softc and instance number from context */
-	DCA_SOFTC_FROM_CTX(ctx, softc, instance);
+	softc = DCA_SOFTC_FROM_CTX(ctx);
 	DBG(softc, DENTRY, "dca_decrypt_update: started");
 
 	/* handle inplace ops */
@@ -4073,14 +3999,11 @@ dca_decrypt_final(crypto_ctx_t *ctx, crypto_data_t *plaintext,
 {
 	int error = CRYPTO_FAILED;
 	dca_t *softc;
-	/* LINTED E_FUNC_SET_NOT_USED */
-	int instance;
 
 	if (!ctx || !ctx->cc_provider || !ctx->cc_provider_private)
 		return (CRYPTO_OPERATION_NOT_INITIALIZED);
 
-	/* extract softc and instance number from context */
-	DCA_SOFTC_FROM_CTX(ctx, softc, instance);
+	softc = DCA_SOFTC_FROM_CTX(ctx);
 	DBG(softc, DENTRY, "dca_decrypt_final: started");
 
 	/* check mechanism */
@@ -4167,11 +4090,8 @@ dca_sign_init(crypto_ctx_t *ctx, crypto_mechanism_t *mechanism,
 {
 	int error = CRYPTO_FAILED;
 	dca_t *softc;
-	/* LINTED E_FUNC_SET_NOT_USED */
-	int instance;
 
-	/* extract softc and instance number from context */
-	DCA_SOFTC_FROM_CTX(ctx, softc, instance);
+	softc = DCA_SOFTC_FROM_CTX(ctx);
 	DBG(softc, DENTRY, "dca_sign_init: started\n");
 
 	if (ctx_template != NULL)
@@ -4208,14 +4128,11 @@ dca_sign(crypto_ctx_t *ctx, crypto_data_t *data,
 {
 	int error = CRYPTO_FAILED;
 	dca_t *softc;
-	/* LINTED E_FUNC_SET_NOT_USED */
-	int instance;
 
 	if (!ctx || !ctx->cc_provider || !ctx->cc_provider_private)
 		return (CRYPTO_OPERATION_NOT_INITIALIZED);
 
-	/* extract softc and instance number from context */
-	DCA_SOFTC_FROM_CTX(ctx, softc, instance);
+	softc = DCA_SOFTC_FROM_CTX(ctx);
 	DBG(softc, DENTRY, "dca_sign: started\n");
 
 	/* check mechanism */
@@ -4245,14 +4162,11 @@ dca_sign_update(crypto_ctx_t *ctx, crypto_data_t *data,
 {
 	int error = CRYPTO_MECHANISM_INVALID;
 	dca_t *softc;
-	/* LINTED E_FUNC_SET_NOT_USED */
-	int instance;
 
 	if (!ctx || !ctx->cc_provider || !ctx->cc_provider_private)
 		return (CRYPTO_OPERATION_NOT_INITIALIZED);
 
-	/* extract softc and instance number from context */
-	DCA_SOFTC_FROM_CTX(ctx, softc, instance);
+	softc = DCA_SOFTC_FROM_CTX(ctx);
 	DBG(softc, DENTRY, "dca_sign_update: started\n");
 
 	cmn_err(CE_WARN, "dca_sign_update: unexpected mech type "
@@ -4270,14 +4184,11 @@ dca_sign_final(crypto_ctx_t *ctx, crypto_data_t *signature,
 {
 	int error = CRYPTO_MECHANISM_INVALID;
 	dca_t *softc;
-	/* LINTED E_FUNC_SET_NOT_USED */
-	int instance;
 
 	if (!ctx || !ctx->cc_provider || !ctx->cc_provider_private)
 		return (CRYPTO_OPERATION_NOT_INITIALIZED);
 
-	/* extract softc and instance number from context */
-	DCA_SOFTC_FROM_CTX(ctx, softc, instance);
+	softc = DCA_SOFTC_FROM_CTX(ctx);
 	DBG(softc, DENTRY, "dca_sign_final: started\n");
 
 	cmn_err(CE_WARN, "dca_sign_final: unexpected mech type "
@@ -4332,11 +4243,8 @@ dca_sign_recover_init(crypto_ctx_t *ctx, crypto_mechanism_t *mechanism,
 {
 	int error = CRYPTO_FAILED;
 	dca_t *softc;
-	/* LINTED E_FUNC_SET_NOT_USED */
-	int instance;
 
-	/* extract softc and instance number from context */
-	DCA_SOFTC_FROM_CTX(ctx, softc, instance);
+	softc = DCA_SOFTC_FROM_CTX(ctx);
 	DBG(softc, DENTRY, "dca_sign_recover_init: started\n");
 
 	if (ctx_template != NULL)
@@ -4369,14 +4277,11 @@ dca_sign_recover(crypto_ctx_t *ctx, crypto_data_t *data,
 {
 	int error = CRYPTO_FAILED;
 	dca_t *softc;
-	/* LINTED E_FUNC_SET_NOT_USED */
-	int instance;
 
 	if (!ctx || !ctx->cc_provider || !ctx->cc_provider_private)
 		return (CRYPTO_OPERATION_NOT_INITIALIZED);
 
-	/* extract softc and instance number from context */
-	DCA_SOFTC_FROM_CTX(ctx, softc, instance);
+	softc = DCA_SOFTC_FROM_CTX(ctx);
 	DBG(softc, DENTRY, "dca_sign_recover: started\n");
 
 	/* check mechanism */
@@ -4404,10 +4309,7 @@ dca_sign_recover_atomic(crypto_provider_handle_t provider,
 {
 	int error = CRYPTO_FAILED;
 	dca_t *softc = (dca_t *)provider;
-	/* LINTED E_FUNC_SET_NOT_USED */
-	int instance;
 
-	instance = ddi_get_instance(softc->dca_dip);
 	DBG(softc, DENTRY, "dca_sign_recover_atomic: started\n");
 
 	if (ctx_template != NULL)
@@ -4443,11 +4345,8 @@ dca_verify_init(crypto_ctx_t *ctx, crypto_mechanism_t *mechanism,
 {
 	int error = CRYPTO_FAILED;
 	dca_t *softc;
-	/* LINTED E_FUNC_SET_NOT_USED */
-	int instance;
 
-	/* extract softc and instance number from context */
-	DCA_SOFTC_FROM_CTX(ctx, softc, instance);
+	softc = DCA_SOFTC_FROM_CTX(ctx);
 	DBG(softc, DENTRY, "dca_verify_init: started\n");
 
 	if (ctx_template != NULL)
@@ -4484,14 +4383,11 @@ dca_verify(crypto_ctx_t *ctx, crypto_data_t *data, crypto_data_t *signature,
 {
 	int error = CRYPTO_FAILED;
 	dca_t *softc;
-	/* LINTED E_FUNC_SET_NOT_USED */
-	int instance;
 
 	if (!ctx || !ctx->cc_provider || !ctx->cc_provider_private)
 		return (CRYPTO_OPERATION_NOT_INITIALIZED);
 
-	/* extract softc and instance number from context */
-	DCA_SOFTC_FROM_CTX(ctx, softc, instance);
+	softc = DCA_SOFTC_FROM_CTX(ctx);
 	DBG(softc, DENTRY, "dca_verify: started\n");
 
 	/* check mechanism */
@@ -4521,14 +4417,11 @@ dca_verify_update(crypto_ctx_t *ctx, crypto_data_t *data,
 {
 	int error = CRYPTO_MECHANISM_INVALID;
 	dca_t *softc;
-	/* LINTED E_FUNC_SET_NOT_USED */
-	int instance;
 
 	if (!ctx || !ctx->cc_provider || !ctx->cc_provider_private)
 		return (CRYPTO_OPERATION_NOT_INITIALIZED);
 
-	/* extract softc and instance number from context */
-	DCA_SOFTC_FROM_CTX(ctx, softc, instance);
+	softc = DCA_SOFTC_FROM_CTX(ctx);
 	DBG(softc, DENTRY, "dca_verify_update: started\n");
 
 	cmn_err(CE_WARN, "dca_verify_update: unexpected mech type "
@@ -4546,14 +4439,11 @@ dca_verify_final(crypto_ctx_t *ctx, crypto_data_t *signature,
 {
 	int error = CRYPTO_MECHANISM_INVALID;
 	dca_t *softc;
-	/* LINTED E_FUNC_SET_NOT_USED */
-	int instance;
 
 	if (!ctx || !ctx->cc_provider || !ctx->cc_provider_private)
 		return (CRYPTO_OPERATION_NOT_INITIALIZED);
 
-	/* extract softc and instance number from context */
-	DCA_SOFTC_FROM_CTX(ctx, softc, instance);
+	softc = DCA_SOFTC_FROM_CTX(ctx);
 	DBG(softc, DENTRY, "dca_verify_final: started\n");
 
 	cmn_err(CE_WARN, "dca_verify_final: unexpected mech type "
@@ -4608,11 +4498,8 @@ dca_verify_recover_init(crypto_ctx_t *ctx, crypto_mechanism_t *mechanism,
 {
 	int error = CRYPTO_MECHANISM_INVALID;
 	dca_t *softc;
-	/* LINTED E_FUNC_SET_NOT_USED */
-	int instance;
 
-	/* extract softc and instance number from context */
-	DCA_SOFTC_FROM_CTX(ctx, softc, instance);
+	softc = DCA_SOFTC_FROM_CTX(ctx);
 	DBG(softc, DENTRY, "dca_verify_recover_init: started\n");
 
 	if (ctx_template != NULL)
@@ -4644,14 +4531,11 @@ dca_verify_recover(crypto_ctx_t *ctx, crypto_data_t *signature,
 {
 	int error = CRYPTO_MECHANISM_INVALID;
 	dca_t *softc;
-	/* LINTED E_FUNC_SET_NOT_USED */
-	int instance;
 
 	if (!ctx || !ctx->cc_provider || !ctx->cc_provider_private)
 		return (CRYPTO_OPERATION_NOT_INITIALIZED);
 
-	/* extract softc and instance number from context */
-	DCA_SOFTC_FROM_CTX(ctx, softc, instance);
+	softc = DCA_SOFTC_FROM_CTX(ctx);
 	DBG(softc, DENTRY, "dca_verify_recover: started\n");
 
 	/* check mechanism */
@@ -4715,10 +4599,7 @@ dca_generate_random(crypto_provider_handle_t provider,
 {
 	int error = CRYPTO_FAILED;
 	dca_t *softc = (dca_t *)provider;
-	/* LINTED E_FUNC_SET_NOT_USED */
-	int instance;
 
-	instance = ddi_get_instance(softc->dca_dip);
 	DBG(softc, DENTRY, "dca_generate_random: started");
 
 	error = dca_rng(softc, buf, len, req);
@@ -4737,11 +4618,8 @@ dca_free_context(crypto_ctx_t *ctx)
 {
 	int error = CRYPTO_SUCCESS;
 	dca_t *softc;
-	/* LINTED E_FUNC_SET_NOT_USED */
-	int instance;
 
-	/* extract softc and instance number from context */
-	DCA_SOFTC_FROM_CTX(ctx, softc, instance);
+	softc = DCA_SOFTC_FROM_CTX(ctx);
 	DBG(softc, DENTRY, "dca_free_context: entered");
 
 	if (ctx->cc_provider_private == NULL)

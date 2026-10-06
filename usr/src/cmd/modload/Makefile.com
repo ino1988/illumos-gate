@@ -22,7 +22,8 @@
 # Copyright 2009 Sun Microsystems, Inc.  All rights reserved.
 # Use is subject to license terms.
 #
-# cmd/modload/Makefile.com
+# Copyright (c) 2018, Joyent, Inc.
+# Copyright 2020 OmniOS Community Edition (OmniOSce) Association.
 #
 # makefile for loadable module utilities
 
@@ -45,21 +46,14 @@ ROOTDRVPROG = $(DRVPROG:%=$(ROOTUSRSBIN)/%)
 DRVCOMMONOBJ = drvsubr.o $(PLCYOBJ)
 DRVCOMMONSRC = $(DRVCOMMONOBJ:%.o=../%.c)
 
+modunload		:= CSTD = $(CSTD_GNU17)
+
 OBJECTS = $(MODCOMMONOBJ) $(DRVCOMMONOBJ) $(PROG:%=%.o)
 SRCS = $(OBJECTS:%.o=../%.c)
 
 COMMONSRC = $(DRVCOMMONSRC) $(MODCOMMONSRC)
 
 CLOBBERFILES = $(PROG)
-
-# lint is complicated here by the fact that we
-# build multiple commands and with differing
-# common source, drvsubr vs modsubr/plcysubr
-#
-LINT_PROG= $(PROG:%=lint_%.c)
-LINTFLAGS += -erroff=E_NAME_DEF_NOT_USED2
-
-CERRWARN += -_gcc=-Wno-parentheses
 
 # install specifics
 
@@ -69,10 +63,6 @@ add_drv			:= LDLIBS += -ldevinfo -lelf
 rem_drv			:= LDLIBS += -ldevinfo
 update_drv		:= LDLIBS += -ldevinfo
 
-lint_add_drv.c		:= LDLIBS += -ldevinfo -lelf
-lint_rem_drv.c		:= LDLIBS += -ldevinfo
-lint_update_drv.c	:= LDLIBS += -ldevinfo
-
 .KEEP_STATE:
 
 %.o:	../%.c
@@ -81,35 +71,30 @@ lint_update_drv.c	:= LDLIBS += -ldevinfo
 all: $(PROG)
 
 add_drv:	add_drv.o $(DRVCOMMONOBJ)
-	$(LINK.c)  -o $@ add_drv.o $(DRVCOMMONOBJ) $(LDLIBS)
+	$(LINK.c) -o $@ add_drv.o $(DRVCOMMONOBJ) $(LDLIBS)
 	$(POST_PROCESS)
 
 rem_drv:	rem_drv.o $(DRVCOMMONOBJ)
-	$(LINK.c)  -o $@ rem_drv.o $(DRVCOMMONOBJ) $(LDLIBS)
+	$(LINK.c) -o $@ rem_drv.o $(DRVCOMMONOBJ) $(LDLIBS)
 	$(POST_PROCESS)
 
 update_drv:	update_drv.o $(DRVCOMMONOBJ)
-	$(LINK.c)  -o $@ update_drv.o $(DRVCOMMONOBJ) $(LDLIBS)
+	$(LINK.c) -o $@ update_drv.o $(DRVCOMMONOBJ) $(LDLIBS)
 	$(POST_PROCESS)
 
 modload:	modload.o $(MODCOMMONOBJ)
-	 $(LINK.c)  -o $@ modload.o $(MODCOMMONOBJ) $(LDLIBS)
+	$(LINK.c) -o $@ modload.o $(MODCOMMONOBJ) $(LDLIBS)
 	$(POST_PROCESS)
 
-modunload:	modunload.o $(MODCOMMONOBJ)
-	 $(LINK.c)  -o $@ modunload.o $(MODCOMMONOBJ) $(LDLIBS)
+modunload:	modunload.o
+	$(LINK.c) $^ -o $@ $(LDLIBS)
 	$(POST_PROCESS)
 
 modinfo:	modinfo.o $(MODCOMMONOBJ)
-	 $(LINK.c)  -o $@ modinfo.o $(MODCOMMONOBJ) $(LDLIBS)
+	$(LINK.c) -o $@ modinfo.o $(MODCOMMONOBJ) $(LDLIBS)
 	$(POST_PROCESS)
 
 clean:
 	$(RM) $(OBJECTS)
-
-lint_%.c:
-	$(LINT.c) $(@:lint_%.c=../%.c) $(COMMONSRC) $(LDLIBS)
-
-lint:	$(LINT_PROG)
 
 include ../../Makefile.targ

@@ -21,7 +21,8 @@
 
 /*
  * Copyright (c) 1989, 2010, Oracle and/or its affiliates. All rights reserved.
- * Copyright (c) 2012, Joyent Inc. All rights reserved.
+ * Copyright 2015, Joyent Inc.
+ * Copyright 2026 Oxide Computer Company
  */
 
 /*	Copyright (c) 1984, 1986, 1987, 1988, 1989 AT&T	*/
@@ -40,6 +41,7 @@
 #include <sys/vnode.h>
 #include <sys/pathname.h>
 #include <sys/file.h>
+#include <sys/flock.h>
 #include <sys/proc.h>
 #include <sys/var.h>
 #include <sys/cpuvar.h>
@@ -56,6 +58,9 @@
 #include <sys/rctl.h>
 #include <sys/port_impl.h>
 #include <sys/dtrace.h>
+#include <sys/stdbool.h>
+#include <sys/stdbit.h>
+#include <sys/spawn_impl.h>
 
 #include <c2/audit.h>
 #include <sys/nbmlock.h>
@@ -341,9 +346,7 @@ flist_grow(int maxfd)
 	uf_entry_t *src, *dst, *newlist, *oldlist, *newend, *oldend;
 	uf_rlist_t *urp;
 
-	for (newcnt = 1; newcnt <= maxfd; newcnt = (newcnt << 1) | 1)
-		continue;
-
+	newcnt = (1U << stdc_bit_width_ui(maxfd + 1)) - 1;
 	newlist = kmem_zalloc(newcnt * sizeof (uf_entry_t), KM_SLEEP);
 
 	mutex_enter(&fip->fi_lock);
@@ -385,6 +388,7 @@ flist_grow(int maxfd)
 		dst->uf_flag = src->uf_flag;
 		dst->uf_busy = src->uf_busy;
 		dst->uf_portfd = src->uf_portfd;
+		dst->uf_gen = src->uf_gen;
 	}
 
 	/*
@@ -574,13 +578,12 @@ is_active_fd(kthread_t *t, int fd)
 }
 
 /*
- * Convert a user supplied file descriptor into a pointer to a file
- * structure.  Only task is to check range of the descriptor (soft
- * resource limit was enforced at open time and shouldn't be checked
- * here).
+ * Convert a user supplied file descriptor into a pointer to a file structure.
+ * Only task is to check range of the descriptor (soft resource limit was
+ * enforced at open time and shouldn't be checked here).
  */
 file_t *
-getf(int fd)
+getf_gen(int fd, uf_entry_gen_t *genp)
 {
 	uf_info_t *fip = P_FINFO(curproc);
 	uf_entry_t *ufp;
@@ -606,12 +609,21 @@ getf(int fd)
 		return (NULL);
 	}
 	ufp->uf_refcnt++;
+	if (genp != NULL) {
+		*genp = ufp->uf_gen;
+	}
 
 	set_active_fd(fd);	/* record the active file descriptor */
 
 	UF_EXIT(ufp);
 
 	return (fp);
+}
+
+file_t *
+getf(int fd)
+{
+	return (getf_gen(fd, NULL));
 }
 
 /*
@@ -666,6 +678,7 @@ closeandsetf(int fd, file_t *newfp)
 			ASSERT(ufp->uf_flag == 0);
 			fd_reserve(fip, fd, 1);
 			ufp->uf_file = newfp;
+			ufp->uf_gen++;
 			UF_EXIT(ufp);
 			mutex_exit(&fip->fi_lock);
 			return (0);
@@ -766,7 +779,7 @@ closeandsetf(int fd, file_t *newfp)
 	 * catch a watchfd on device's pollhead list but not on fpollinfo list
 	 */
 	if (ufp->uf_fpollinfo != NULL)
-		checkwfdlist(fp->f_vnode, ufp->uf_fpollinfo);
+		checkwfdlist(fp->f_vnode, ufp->uf_fpollinfo, fd);
 #endif	/* DEBUG */
 
 	/*
@@ -851,27 +864,284 @@ flist_fork(uf_info_t *pfip, uf_info_t *cfip)
 	 */
 	cfip->fi_nfiles = nfiles = flist_minsize(pfip);
 
-	cfip->fi_list = kmem_zalloc(nfiles * sizeof (uf_entry_t), KM_SLEEP);
+	cfip->fi_list = nfiles == 0 ? NULL :
+	    kmem_zalloc(nfiles * sizeof (uf_entry_t), KM_SLEEP);
 
 	for (fd = 0, pufp = pfip->fi_list, cufp = cfip->fi_list; fd < nfiles;
 	    fd++, pufp++, cufp++) {
-		cufp->uf_file = pufp->uf_file;
-		cufp->uf_alloc = pufp->uf_alloc;
-		cufp->uf_flag = pufp->uf_flag;
-		cufp->uf_busy = pufp->uf_busy;
-		if (pufp->uf_file == NULL) {
-			ASSERT(pufp->uf_flag == 0);
-			if (pufp->uf_busy) {
-				/*
-				 * Grab locks to appease ASSERTs in fd_reserve
-				 */
-				mutex_enter(&cfip->fi_lock);
-				mutex_enter(&cufp->uf_lock);
-				fd_reserve(cfip, fd, -1);
-				mutex_exit(&cufp->uf_lock);
-				mutex_exit(&cfip->fi_lock);
-			}
+		boolean_t unreserve = B_FALSE;
+
+		/*
+		 * Check to see if FD_CLOFORK is set. In this case we 'close'
+		 * the file descriptor by simply not duplicating it and leaving
+		 * this entry as an empty descriptor. While we don't need to
+		 * close the underlying file_t, we do need to make sure we take
+		 * care of cleaning up our reservation. We do not reset the
+		 * generation either, simulating a setf here.
+		 */
+		if ((pufp->uf_flag & FD_CLOFORK) == 0) {
+			cufp->uf_file = pufp->uf_file;
+			cufp->uf_flag = pufp->uf_flag;
 		}
+		cufp->uf_busy = pufp->uf_busy;
+		cufp->uf_alloc = pufp->uf_alloc;
+		cufp->uf_gen = pufp->uf_gen;
+
+		/*
+		 * We may have to clean up our allocation tracking. This happens
+		 * either because we have no file due to the fact that we're
+		 * busy or because we had a file and FD_CLOFORK is set. If there
+		 * is no file and we're not busy, then the unreserve was already
+		 * taken care of.
+		 */
+		if (pufp->uf_file == NULL) {
+			ASSERT3U(pufp->uf_flag, ==, 0);
+			if (pufp->uf_busy) {
+				unreserve = B_TRUE;
+			}
+		} else if ((pufp->uf_flag & FD_CLOFORK) != 0) {
+			ASSERT3P(pufp->uf_file, !=, NULL);
+			unreserve = B_TRUE;
+		}
+
+		if (unreserve) {
+			/*
+			 * Grab locks to appease ASSERTs in fd_reserve
+			 */
+			mutex_enter(&cfip->fi_lock);
+			mutex_enter(&cufp->uf_lock);
+			fd_reserve(cfip, fd, -1);
+			mutex_exit(&cufp->uf_lock);
+			mutex_exit(&cfip->fi_lock);
+		}
+	}
+}
+
+/*
+ * Determine whether a spawned child needs a copy of one of its parent's file
+ * descriptors. Called with the entry's uf_lock held.
+ */
+static bool
+spawn_fd_keep(const uf_entry_t *ufp, int fd, const kspawn_param_t *ksp)
+{
+	if (ufp->uf_file == NULL)
+		return (false);
+
+	/*
+	 * Spawn is fork followed by exec, so a descriptor marked FD_CLOFORK
+	 * is never inherited, just as for fork.
+	 */
+	if ((ufp->uf_flag & FD_CLOFORK) != 0)
+		return (false);
+
+	/*
+	 * A descriptor survives into the exec'd image if it is not marked
+	 * close-on-exec and lies below any closefrom() bound.
+	 */
+	if ((ufp->uf_flag & FD_CLOEXEC) == 0 && fd < ksp->ksp_closefrom)
+		return (true);
+
+	/*
+	 * Anything else would not survive the file actions and exec but it
+	 * must still be copied if any action consumes it as a source.
+	 */
+	for (uint_t i = 0; i < ksp->ksp_nreffds; i++) {
+		if (ksp->ksp_reffds[i] == fd)
+			return (true);
+	}
+
+	return (false);
+}
+
+/*
+ * Duplicate file descriptors for a spawn(2) child.
+ *
+ * Unlike flist_fork(), the parent's other threads continue to run while the
+ * child is created, so each entry must be locked as it is examined and copied.
+ * Since the child will exec immediately after applying the file actions,
+ * descriptors that can play no part in the final picture are not copied at all
+ * as an optimisation.
+ *
+ * The child's table is also sized to cover only the descriptors being
+ * copied, so a sparse high-numbered descriptor in the parent does not cause
+ * every spawned child to create an enormous table.
+ */
+void
+flist_spawn(uf_info_t *pfip, uf_info_t *cfip, const kspawn_param_t *ksp)
+{
+	int fd, pnfiles, cnfiles, maxkept;
+	uf_entry_t *pufp, *cufp;
+
+	mutex_init(&cfip->fi_lock, NULL, MUTEX_DEFAULT, NULL);
+	cfip->fi_rlist = NULL;
+
+	mutex_enter(&pfip->fi_lock);
+	pnfiles = flist_minsize(pfip);
+	mutex_exit(&pfip->fi_lock);
+
+	/*
+	 * Find the highest descriptor that the child needs, so that we can
+	 * size its table. The decision for each descriptor is re-evaluated
+	 * under the lock in the second pass and an entry that changes in the
+	 * meantime is treated as if the change had happened before the spawn
+	 * and not copied.
+	 */
+	maxkept = -1;
+	for (fd = 0; fd < pnfiles; fd++) {
+		UF_ENTER(pufp, pfip, fd);
+		if (spawn_fd_keep(pufp, fd, ksp))
+			maxkept = fd;
+		UF_EXIT(pufp);
+	}
+
+	if (maxkept == -1) {
+		cfip->fi_nfiles = 0;
+		cfip->fi_list = NULL;
+		return;
+	}
+
+	/* The table size is kept of the form 2^n - 1 for fd_find(). */
+	cnfiles = (1U << stdc_bit_width_ui(maxkept + 1)) - 1;
+
+	cfip->fi_nfiles = cnfiles;
+	cfip->fi_list = kmem_zalloc(cnfiles * sizeof (uf_entry_t), KM_SLEEP);
+
+	/*
+	 * Copy the chosen descriptors, taking a hold on each underlying file.
+	 * The hold must be taken while the parent's entry is locked so that
+	 * none of the parent's threads could close the descriptor and
+	 * release the final reference while we work.
+	 */
+	for (fd = 0, cufp = cfip->fi_list; fd <= maxkept; fd++, cufp++) {
+		file_t *fp;
+
+		UF_ENTER(pufp, pfip, fd);
+		cufp->uf_gen = pufp->uf_gen;
+		if (spawn_fd_keep(pufp, fd, ksp)) {
+			fp = pufp->uf_file;
+			mutex_enter(&fp->f_tlock);
+			fp->f_count++;
+			mutex_exit(&fp->f_tlock);
+
+			cufp->uf_file = fp;
+			cufp->uf_flag = pufp->uf_flag;
+
+			mutex_enter(&cfip->fi_lock);
+			mutex_enter(&cufp->uf_lock);
+			fd_reserve(cfip, fd, 1);
+			mutex_exit(&cufp->uf_lock);
+			mutex_exit(&cfip->fi_lock);
+		}
+		UF_EXIT(pufp);
+	}
+}
+
+/*
+ * Trigger the resource control warning for a process that has tried to
+ * exceed its file descriptor limit.
+ */
+void
+fd_too_big(proc_t *p)
+{
+	mutex_enter(&p->p_lock);
+	(void) rctl_action(rctlproc_legacy[RLIMIT_NOFILE],
+	    p->p_rctls, p, RCA_SAFE);
+	mutex_exit(&p->p_lock);
+}
+
+/*
+ * Duplicate the open descriptor ofd onto nfd, as fcntl(ofd, F_DUP2FD, nfd)
+ * does. This is the shared implementation for the F_DUP2FD family of
+ * fcntl(2) commands and for spawn(2) FA_DUP2 file actions.
+ */
+int
+fdup2(int ofd, int nfd)
+{
+	proc_t *p = curproc;
+	file_t *fp;
+	int error;
+
+	if ((fp = getf(ofd)) == NULL)
+		return (EBADF);
+
+	if (ofd == nfd) {
+		uf_entry_t *ufp;
+
+		/*
+		 * This is only reached with equal descriptors from a spawn(2)
+		 * FA_DUP2 file action. posix_spawn_file_actions_adddup2()
+		 * requires FD_CLOEXEC and FD_CLOFORK to be cleared so the
+		 * descriptor survives the exec. The fcntl(2)/dup2() path never
+		 * arrives here with ofd == nfd since dup2() must leave those
+		 * flags unchanged.
+		 */
+		UF_ENTER(ufp, P_FINFO(p), ofd);
+		ufp->uf_flag &= ~(FD_CLOEXEC | FD_CLOFORK);
+		UF_EXIT(ufp);
+		releasef(ofd);
+		return (0);
+	}
+
+	if ((uint_t)nfd >= p->p_fno_ctl) {
+		releasef(ofd);
+		if (nfd >= 0)
+			fd_too_big(p);
+		return (EBADF);
+	}
+
+	/*
+	 * We can't hold our getf(ofd) across the call to closeandsetf()
+	 * because it creates a window for deadlock. If one thread is doing
+	 * dup2(a, b) while another is doing dup2(b, a), each one will block
+	 * waiting for the other to call releasef().
+	 */
+	mutex_enter(&fp->f_tlock);
+	fp->f_count++;
+	mutex_exit(&fp->f_tlock);
+	releasef(ofd);
+
+	if ((error = closeandsetf(nfd, fp)) != 0) {
+		mutex_enter(&fp->f_tlock);
+		if (fp->f_count > 1) {
+			fp->f_count--;
+			mutex_exit(&fp->f_tlock);
+		} else {
+			mutex_exit(&fp->f_tlock);
+			(void) closef(fp);
+		}
+	}
+
+	return (error);
+}
+
+/*
+ * Close all open file descriptors at or above lowfd. This is used to apply
+ * spawn(2) closefrom file actions in a spawned child which is still
+ * single-threaded.
+ */
+void
+closefrom_all(int lowfd)
+{
+	uf_info_t *fip = P_FINFO(curproc);
+	int fd, nfiles;
+
+	if (lowfd < 0)
+		lowfd = 0;
+
+	mutex_enter(&fip->fi_lock);
+	nfiles = fip->fi_nfiles;
+	mutex_exit(&fip->fi_lock);
+
+	for (fd = lowfd; fd < nfiles; fd++) {
+		uf_entry_t *ufp;
+		bool isopen;
+
+		UF_ENTER(ufp, fip, fd);
+		isopen = ufp->uf_file != NULL;
+		UF_EXIT(ufp);
+
+		if (isopen)
+			(void) closeandsetf(fd, NULL);
 	}
 }
 
@@ -952,6 +1222,8 @@ closef(file_t *fp)
 		return (error);
 	}
 	ASSERT(fp->f_count == 0);
+	/* Last reference, remove any OFD style lock for the file_t */
+	ofdcleanlock(fp);
 	mutex_exit(&fp->f_tlock);
 
 	/*
@@ -1025,6 +1297,9 @@ ufalloc_file(int start, file_t *fp)
 	fd_reserve(fip, fd, 1);
 	ASSERT(ufp->uf_file == NULL);
 	ufp->uf_file = fp;
+	if (fp != NULL) {
+		ufp->uf_gen++;
+	}
 	UF_EXIT(ufp);
 	mutex_exit(&fip->fi_lock);
 	return (fd);
@@ -1180,6 +1455,7 @@ setf(int fd, file_t *fp)
 	} else {
 		UF_ENTER(ufp, fip, fd);
 		ASSERT(ufp->uf_busy);
+		ufp->uf_gen++;
 	}
 	ASSERT(ufp->uf_fpollinfo == NULL);
 	ASSERT(ufp->uf_flag == 0);
@@ -1243,9 +1519,9 @@ f_getfd_error(int fd, int *flagp)
 		error = EBADF;
 	else {
 		UF_ENTER(ufp, fip, fd);
-		if ((fp = ufp->uf_file) == NULL)
+		if ((fp = ufp->uf_file) == NULL) {
 			error = EBADF;
-		else {
+		} else {
 			flag = ufp->uf_flag;
 			if ((fp->f_flag & FWRITE) && pr_isself(fp->f_vnode))
 				flag |= FD_CLOEXEC;
@@ -1271,24 +1547,29 @@ f_getfd(int fd)
 
 /*
  * Given a file descriptor and file flags, set the user's file flags.
- * At present, the only valid flag is FD_CLOEXEC.
+ * At present, the only valid flags are FD_CLOEXEC and FD_CLOFORK.
  * getf() may or may not have been called before calling f_setfd_error().
  */
-int
-f_setfd_error(int fd, int flags)
+static int
+f_setfd_int(int fd, int flags, bool or)
 {
 	uf_info_t *fip = P_FINFO(curproc);
 	uf_entry_t *ufp;
 	int error;
 
-	if ((uint_t)fd >= fip->fi_nfiles)
+	if ((uint_t)fd >= fip->fi_nfiles) {
 		error = EBADF;
-	else {
+	} else {
 		UF_ENTER(ufp, fip, fd);
-		if (ufp->uf_file == NULL)
+		if (ufp->uf_file == NULL) {
 			error = EBADF;
-		else {
-			ufp->uf_flag = flags & FD_CLOEXEC;
+		} else {
+			flags &= (FD_CLOEXEC | FD_CLOFORK);
+			if (or) {
+				ufp->uf_flag |= flags;
+			} else {
+				ufp->uf_flag = flags;
+			}
 			error = 0;
 		}
 		UF_EXIT(ufp);
@@ -1296,10 +1577,16 @@ f_setfd_error(int fd, int flags)
 	return (error);
 }
 
-void
-f_setfd(int fd, char flags)
+int
+f_setfd_error(int fd, int flags)
 {
-	(void) f_setfd_error(fd, flags);
+	return (f_setfd_int(fd, flags, false));
+}
+
+void
+f_setfd_or(int fd, short flags)
+{
+	(void) f_setfd_int(fd, flags, true);
 }
 
 #define	BADFD_MIN	3
@@ -1420,23 +1707,30 @@ fcnt_add(uf_info_t *fip, int incr)
 
 /*
  * This is called from exec to close all fd's that have the FD_CLOEXEC flag
- * set and also to close all self-open for write /proc file descriptors.
+ * set and also to close all self-open for write /proc file descriptors. In
+ * addition, we clear the close-on-fork flag from any file descriptors that have
+ * it present.
  */
 void
 close_exec(uf_info_t *fip)
 {
-	int fd;
-	file_t *fp;
-	fpollinfo_t *fpip;
-	uf_entry_t *ufp;
-	portfd_t *pfd;
+	uf_entry_t *ufp = fip->fi_list;
 
-	ufp = fip->fi_list;
-	for (fd = 0; fd < fip->fi_nfiles; fd++, ufp++) {
-		if ((fp = ufp->uf_file) != NULL &&
-		    ((ufp->uf_flag & FD_CLOEXEC) ||
-		    ((fp->f_flag & FWRITE) && pr_isself(fp->f_vnode)))) {
-			fpip = ufp->uf_fpollinfo;
+	for (int fd = 0; fd < fip->fi_nfiles; fd++, ufp++) {
+		file_t *fp;
+
+		/*
+		 * If this is a hole in the file descriptor space we can simply
+		 * skip it.
+		 */
+		if ((fp = ufp->uf_file) == NULL)
+			continue;
+
+		if ((ufp->uf_flag & FD_CLOEXEC) ||
+		    ((fp->f_flag & FWRITE) && pr_isself(fp->f_vnode))) {
+			portfd_t *pfd;
+			fpollinfo_t *fpip = ufp->uf_fpollinfo;
+
 			mutex_enter(&fip->fi_lock);
 			mutex_enter(&ufp->uf_lock);
 			fd_reserve(fip, fd, -1);
@@ -1465,6 +1759,26 @@ close_exec(uf_info_t *fip)
 			if (pfd)
 				port_close_fd(pfd);
 			(void) closef(fp);
+		} else if ((ufp->uf_flag & FD_CLOFORK) != 0) {
+			/*
+			 * We are in the case where a file descriptor has
+			 * FD_CLOFORK set and must clear it. This has a bit of a
+			 * history. In the original POSIX 2024 specification
+			 * FD_CLOFORK is noted to be preserved across an exec(2)
+			 * call. A process that has inherited this flag and
+			 * didn't put it there itself could be quite surprised
+			 * when a file descriptor disappears especially if this
+			 * refers to stdout, stdin, or stderr.
+			 *
+			 * Originally we implemented the POSIX version of this.
+			 * As other folks evaluated this, this issue was raised
+			 * and in general most implementations have agreed to
+			 * clear this on exec despite the original standard
+			 * wording.
+			 */
+			mutex_enter(&ufp->uf_lock);
+			ufp->uf_flag &= ~FD_CLOFORK;
+			mutex_exit(&ufp->uf_lock);
 		}
 	}
 
@@ -1488,8 +1802,8 @@ int
 fgetstartvp(int fd, char *path, vnode_t **startvpp)
 {
 	vnode_t		*startvp;
-	file_t 		*startfp;
-	char 		startchar;
+	file_t		*startfp;
+	char		startchar;
 
 	if (fd == AT_FDCWD && path == NULL)
 		return (EFAULT);
@@ -1535,7 +1849,7 @@ fsetattrat(int fd, char *path, int flags, struct vattr *vap)
 {
 	vnode_t		*startvp;
 	vnode_t		*vp;
-	int 		error;
+	int		error;
 
 	/*
 	 * Since we are never called to set the size of a file, we don't
@@ -1566,7 +1880,9 @@ fsetattrat(int fd, char *path, int flags, struct vattr *vap)
 		VN_HOLD(vp);
 	}
 
-	if (vn_is_readonly(vp)) {
+	if (vp->v_type == VLNK && (vap->va_mask & AT_MODE) != 0) {
+		error = EOPNOTSUPP;
+	} else if (vn_is_readonly(vp)) {
 		error = EROFS;
 	} else {
 		error = VOP_SETATTR(vp, vap, 0, CRED(), NULL);

@@ -21,9 +21,6 @@
  * WARRANTIES OF MERCHANTIBILITY AND FITNESS FOR A PARTICULAR PURPOSE.
  */
 
-#pragma ident	"%Z%%M%	%I%	%E% SMI"
-#define RCSID	"$Id: cbcp.c,v 1.10 1999/08/13 06:46:10 paulus Exp $"
-
 #include <stdio.h>
 #include <string.h>
 #include <sys/types.h>
@@ -33,10 +30,6 @@
 #include "cbcp.h"
 #include "fsm.h"
 #include "lcp.h"
-
-#if !defined(lint) && !defined(_lint)
-static const char rcsid[] = RCSID;
-#endif
 
 /*
  * Options.
@@ -81,7 +74,7 @@ struct protent cbcp_protent = {
 };
 
 /* Not static'd for plug-ins */
-cbcp_state cbcp[NUM_PPP];	
+cbcp_state cbcp[NUM_PPP];
 
 /* internal prototypes */
 
@@ -164,7 +157,7 @@ cbcp_input(unit, inpacket, pktlen)
     }
 
     len -= CBCP_MINLEN;
- 
+
     switch (code) {
     case CBCP_REQ:
         us->us_id = id;
@@ -240,7 +233,7 @@ cbcp_printpkt(p, plen, printer, arg)
     if (code >= 1 && code <= Dim(cbcp_codenames))
 	printer(arg, " %s", cbcp_codenames[code-1]);
     else
-	printer(arg, " code=0x%x", code); 
+	printer(arg, " code=0x%x", code);
 
     printer(arg, " id=0x%x", id);
 
@@ -277,7 +270,7 @@ cbcp_printpkt(p, plen, printer, arg)
 	    if (cichar >= 1 && cichar <= Dim(cbcp_optionnames))
 	    	printer(arg, " %s", cbcp_optionnames[cichar-1]);
 	    else
-	        printer(arg, " option=0x%x", cichar); 
+	        printer(arg, " option=0x%x", cichar);
 
 	    if (olen > 0) {
 	        GETCHAR(cichar, p);
@@ -437,13 +430,13 @@ cbcp_send(us, code, buf, len)
     outp = outpacket_buf;
 
     outlen = 4 + len;
-    
+
     MAKEHEADER(outp, PPP_CBCP);
 
     PUTCHAR(code, outp);
     PUTCHAR(us->us_id, outp);
     PUTSHORT(outlen, outp);
-    
+
     if (len > 0)
         BCOPY(buf, outp, len);
 
@@ -471,7 +464,7 @@ cbcp_recvack(us, pckt, len)
 		dbglog("CBCP: proceeding without callback");
 	    return;
 	}
-     
+
 	/* just ignore the delay time */
 	pckt++;
 

@@ -11,6 +11,8 @@
 
 /*
  * Copyright 2014 Garrett D'Amore <garrett@damore.org>
+ * Copyright 2025 Oxide Computer Company
+ * Copyright 2026 Bill Sommerfeld <sommerfeld@hamachi.org>
  */
 
 /*
@@ -57,10 +59,8 @@
  * was previously global.  We still have global data because some applications
  * have had those global objects compiled into them.  (Such applications will
  * be unable to benefit from uselocale(), btw.)  The legacy routines are
- * reimplemented as wrappers that use the appropriate locale object by
- * calling uselocale().  uselocale() when passed a NULL pointer returns the
- * thread-specific locale object if one is present, or the global locale
- * object otherwise.  Note that once the TSD data is set, the only way
+ * reimplemented as wrappers that retrieve the appropriate locale object by
+ * calling __curlocale().  Note that once the TSD data is set, the only way
  * to revert to the global locale is to pass the global locale LC_GLOBAL_LOCALE
  * to uselocale().
  *
@@ -78,6 +78,10 @@
  * Locale objects (global locales) established by setlocale() are also
  * never freed (for MT safety), but we will save previous locale objects
  * and reuse them when we can.
+ *
+ * We once used the tsdalloc() destructor callback to free
+ * thread-specific locales on thread exit, but that is at odds with
+ * both the POSIX spec and the behavior of other implementations.
  */
 
 typedef struct locdata *(*loadfn_t)(const char *);
@@ -97,6 +101,7 @@ extern struct lc_messages lc_messages_posix;
 extern struct lc_time lc_time_posix;
 extern struct lc_ctype lc_ctype_posix;
 extern struct lc_collate lc_collate_posix;
+extern struct _RuneLocale _DefaultRuneLocale;
 
 static struct _locale posix_locale = {
 	/* locdata */
@@ -127,6 +132,20 @@ __global_locale(void)
 }
 
 /*
+ * Locale data for hybrid C.UTF-8 locale having all the characteristics of
+ * default C/POSIX locale, except for LC_CTYPE data which is retrieved from
+ * cache/file as for other UTF-8 locales.
+ */
+static struct locdata cutf_locdata[LC_ALL] = {
+	{ "C.UTF-8", NULL }, /* unused */
+	{ "C.UTF-8", &lc_numeric_posix },
+	{ "C.UTF-8", &lc_time_posix },
+	{ "C.UTF-8", &lc_collate_posix },
+	{ "C.UTF-8", &lc_monetary_posix },
+	{ "C.UTF-8", &lc_messages_posix },
+};
+
+/*
  * Category names for getenv()  Note that this was modified
  * for Solaris.  See <iso/locale_iso.h>.
  */
@@ -145,7 +164,7 @@ static char *categories[7] = {
  * Prototypes.
  */
 static const char *get_locale_env(int);
-static struct locdata *locdata_get(int, const const char *);
+static struct locdata *locdata_get(int, const char *);
 static struct locdata *locdata_get_cache(int, const char *);
 static locale_t mklocname(locale_t);
 
@@ -273,6 +292,19 @@ locdata_get_cache(int category, const char *locname)
 	return (loc);
 }
 
+/* Charmap aliases, mostly found in Linux */
+static const struct {
+	const char *alias;
+	const char *name;
+} cmalias[] = {
+	{ "utf8", "UTF-8" },
+	{ "iso88591", "ISO8859-1" },
+	{ "iso885915", "ISO8859-15" },
+	{ "gb18030", "GB18030" },
+	{ "koi8r", "KOI8-R" },
+	{ NULL, NULL }
+};
+
 /*
  * Routine to get the locdata for a given category and locale.
  * This includes retrieving it from cache, retrieving it from
@@ -282,9 +314,11 @@ static struct locdata *
 locdata_get(int category, const char *locname)
 {
 	char scratch[ENCODING_LEN + 1];
-	char *slash;
+	char scratch2[ENCODING_LEN + 1];
+	const char *sep, *cm;
 	int cnt;
 	int len;
+	int i;
 
 	if (locname == NULL || *locname == 0) {
 		locname = get_locale_env(category);
@@ -294,13 +328,13 @@ locdata_get(int category, const char *locname)
 	 * Extract the locale name for the category if it is a composite
 	 * locale.
 	 */
-	if ((slash = strchr(locname, '/')) != NULL) {
-		for (cnt = category; cnt && slash != NULL; cnt--) {
-			locname = slash + 1;
-			slash = strchr(locname, '/');
+	if ((sep = strchr(locname, '/')) != NULL) {
+		for (cnt = category; cnt && sep != NULL; cnt--) {
+			locname = sep + 1;
+			sep = strchr(locname, '/');
 		}
-		if (slash) {
-			len = slash - locname + 1;
+		if (sep) {
+			len = sep - locname + 1;
 			if (len >= sizeof (scratch)) {
 				len = sizeof (scratch);
 			}
@@ -309,21 +343,90 @@ locdata_get(int category, const char *locname)
 		}
 		(void) strlcpy(scratch, locname, len);
 		locname = scratch;
+	} else if ((sep = strchr(locname, ';')) != NULL) {
+		/*
+		 * Accept glibc-style composite locale as libstdc++ expects.
+		 * glibc names composite locales using a semicolon-
+		 * separated list of <category>=<value> assignments.
+		 *
+		 * Segment the string at semicolons, checking if each segment
+		 * starts with the name of the category we're looking for,
+		 * followed by an equals sign.  Ignore everything else.
+		 */
+		const char *catname = categories[category];
+		size_t catlen = strlen(catname);
+		const char *locnameend = locname + strlen(locname);
+		const char *locp = locname; /* start of this entry */
+		const char *endp = sep;   /* end of this entry */
+		const char *value = NULL; /* start of match */
+		const char *endvalue = NULL; /* end of match */
+		size_t copylen;
+
+		for (;;) {
+			if (((endp - locp) > catlen) &&
+			    (memcmp(locp, catname, catlen) == 0) &&
+			    (locp[catlen] == '=')) {
+				value = &locp[catlen + 1];
+				endvalue = endp;
+			}
+			if (endp >= locnameend)
+				break;
+			locp = endp + 1;
+			endp = strchr(locp, ';');
+			if (endp == NULL)
+				endp = locnameend;
+		}
+
+		/* match glibc errno */
+		if (value == NULL) {
+			errno = EINVAL;
+			return (NULL);
+		}
+		copylen = endvalue - value;
+		/*
+		 * As real locale names are all shorter
+		 * than this, anything longer is
+		 * unparsable garbage.  Return failure.
+		 */
+		if (copylen > ENCODING_LEN) {
+			errno = ENOENT;
+			return (NULL);
+		}
+		if (copylen == 0) {
+			/*
+			 * glibc falls through to the
+			 * environment, so we must too..
+			 */
+			locname = get_locale_env(category);
+		} else {
+			memcpy(scratch, value, copylen);
+			scratch[copylen] = 0;
+			locname = scratch;
+		}
 	}
 
 	if ((strcmp(locname, "C") == 0) || (strcmp(locname, "POSIX") == 0))
 		return (posix_locale.locdata[category]);
 
-	return (locdata_get_cache(category, locname));
-}
+	/* Handle charmap aliases */
+	for (i = 0; cmalias[i].alias != NULL; i++) {
+		if ((cm = strstr(locname, cmalias[i].alias)) != NULL &&
+		    strlen(cm) == strlen(cmalias[i].alias)) {
+			len = cm - locname + 1;
+			if (len + strlen(cmalias[i].name) >= sizeof (scratch2))
+				break;
+			(void) strlcpy(scratch2, locname, len);
+			(void) strlcat(scratch2, cmalias[i].name,
+			    sizeof (scratch2));
+			locname = scratch2;
+			break;
+		}
+	}
 
-/* tsd destructor */
-static void
-freelocptr(void *arg)
-{
-	locale_t *locptr = arg;
-	if (*locptr != NULL)
-		freelocale(*locptr);
+	if ((strcmp(locname, "C.UTF-8") == 0) && (category != LC_CTYPE))
+		return (&cutf_locdata[category]);
+
+	return (locdata_get_cache(category, locname));
 }
 
 static const char *
@@ -364,15 +467,15 @@ __mb_cur_max_l(locale_t loc)
 unsigned char
 __mb_cur_max(void)
 {
-	return (__mb_cur_max_l(uselocale(NULL)));
+	return (__mb_cur_max_l(__curlocale()));
 }
 
 /*
- * Public interfaces.
+ * Do everything but set locname; used by duplocale and
+ * newlocale.
  */
-
-locale_t
-duplocale(locale_t src)
+static locale_t
+duplocale_noname(locale_t src)
 {
 	locale_t	loc;
 	int		i;
@@ -397,6 +500,18 @@ duplocale(locale_t src)
 	loc->numeric = loc->locdata[LC_NUMERIC]->l_data[0];
 	loc->time = loc->locdata[LC_TIME]->l_data[0];
 	return (loc);
+}
+
+/*
+ * Public interfaces.
+ */
+locale_t
+duplocale(locale_t src)
+{
+	locale_t loc = duplocale_noname(src);
+	if (loc == NULL)
+		return (NULL);
+	return (mklocname(loc));
 }
 
 void
@@ -427,9 +542,9 @@ newlocale(int catmask, const char *locname, locale_t base)
 	 * but we allow it.
 	 */
 	if (base == NULL || base == ___global_locale) {
-		loc = duplocale(___global_locale);
+		loc = duplocale_noname(___global_locale);
 	} else {
-		loc = duplocale(base);
+		loc = duplocale_noname(base);
 	}
 	if (loc == NULL) {
 		return (NULL);
@@ -463,13 +578,38 @@ newlocale(int catmask, const char *locname, locale_t base)
 	return (mklocname(loc));
 }
 
+/*
+ * Transitional implementation of __curlocale() based on code from uselocale().
+ * This is a placeholder to introduce this interface into libc.
+ *
+ * A future change will move the locale pointer into the ulwp_t structure and
+ * make __curlocale() an inline function.
+ */
+locale_t
+__curlocale(void)
+{
+	locale_t *locptr;
+
+	locptr = tsdalloc(_T_SETLOCALE, sizeof (locale_t), NULL);
+	/* Should never occur */
+	if (locptr == NULL) {
+		errno = EINVAL;
+		return (NULL);
+	}
+
+	if (*locptr != NULL)
+		return (*locptr);
+
+	return (___global_locale);
+}
+
 locale_t
 uselocale(locale_t loc)
 {
 	locale_t lastloc = ___global_locale;
 	locale_t *locptr;
 
-	locptr = tsdalloc(_T_SETLOCALE, sizeof (locale_t), freelocptr);
+	locptr = tsdalloc(_T_SETLOCALE, sizeof (locale_t), NULL);
 	/* Should never occur */
 	if (locptr == NULL) {
 		errno = EINVAL;
@@ -534,4 +674,50 @@ mklocname(locale_t loc)
 		    sizeof (loc->locname));
 	}
 	return (loc);
+}
+
+/*
+ * POSIX has several lifetime requirements that vary on the type of locale.
+ *
+ * If the locale is LC_GLOBAL_LOCALE, the returned string is required to live
+ * beyond the locale's use as the global locale. The specification suggests that
+ * this use a thread-local buffer and cautions that it may disappear when the
+ * thread terminates or another LC_GLOBAL_LOCALE call is made. In our case,
+ * because we will never free a locale that is set with setlocale() (see
+ * port/locale/setlocale.c), we can simply return the name of the locale
+ * directly.
+ *
+ * If the locale is any other locale, it is allowed to be invalidated by a call
+ * to uselocale() or newlocale().
+ *
+ * In both of these cases this means that we can simply return the string from
+ * the current object. POSIX importantly states that the application is not
+ * allowed to assume the name will stay the same across invocations and
+ * therefore it cannot be relied upon for serialization. However, it will work
+ * with setlocale() again.
+ */
+const char *
+getlocalename_l(int category, locale_t loc)
+{
+	if (loc == NULL) {
+		return (NULL);
+	}
+
+	switch (category) {
+	case LC_CTYPE:
+	case LC_NUMERIC:
+	case LC_TIME:
+	case LC_COLLATE:
+	case LC_MONETARY:
+	case LC_MESSAGES:
+		return (loc->locdata[category]->l_lname);
+	case LC_ALL:
+		return (loc->locname);
+	default:
+		/*
+		 * POSIX does not define any errors here so we can't indicate
+		 * anything via errno or similar.
+		 */
+		return (NULL);
+	}
 }

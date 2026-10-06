@@ -22,18 +22,18 @@
 /*
  * Copyright 2007 Sun Microsystems, Inc.  All rights reserved.
  * Use is subject to license terms.
+ *
+ * Copyright 2018 Joyent, Inc.
  */
 
 #ifndef _AMD64_SYS_KDI_REGS_H
 #define	_AMD64_SYS_KDI_REGS_H
 
-#pragma ident	"%Z%%M%	%I%	%E% SMI"
+#include <sys/stddef.h>
 
 #ifdef __cplusplus
 extern "C" {
 #endif
-
-#define	KDIREG_NGREG	31
 
 /*
  * A modified version of struct regs layout.
@@ -59,36 +59,72 @@ extern "C" {
 #define	KDIREG_FSBASE	17
 #define	KDIREG_GSBASE	18
 #define	KDIREG_KGSBASE	19
-#define	KDIREG_DS	20
-#define	KDIREG_ES	21
-#define	KDIREG_FS	22
-#define	KDIREG_GS	23
-#define	KDIREG_TRAPNO	24
-#define	KDIREG_ERR	25
-#define	KDIREG_RIP	26
-#define	KDIREG_CS	27
-#define	KDIREG_RFLAGS	28
-#define	KDIREG_RSP	29
-#define	KDIREG_SS	30
+#define	KDIREG_CR2	20
+#define	KDIREG_CR3	21
+#define	KDIREG_DS	22
+#define	KDIREG_ES	23
+#define	KDIREG_FS	24
+#define	KDIREG_GS	25
+#define	KDIREG_TRAPNO	26
+#define	KDIREG_ERR	27
+#define	KDIREG_RIP	28
+#define	KDIREG_CS	29
+#define	KDIREG_RFLAGS	30
+#define	KDIREG_RSP	31
+#define	KDIREG_SS	32
+
+#define	KDIREG_NGREG	(KDIREG_SS + 1)
 
 #define	KDIREG_PC	KDIREG_RIP
 #define	KDIREG_SP	KDIREG_RSP
 #define	KDIREG_FP	KDIREG_RBP
 
-#ifdef _ASM
+#if !defined(_ASM)
 
-/* Patch point for MSR clearing. */
-#define	KDI_MSR_PATCH \
-	nop; nop; nop; nop; \
-	nop; nop; nop; nop; \
-	nop; nop; nop; nop; \
-	nop; nop; nop; nop; \
-	nop
+/*
+ * Handy for debugging krs_gregs; keep in sync with the KDIREG_* above.
+ */
+typedef struct {
+	greg_t kr_savfp;
+	greg_t kr_savpc;
+	greg_t kr_rdi;
+	greg_t kr_rsi;
+	greg_t kr_rdx;
+	greg_t kr_rcx;
+	greg_t kr_r8;
+	greg_t kr_r9;
+	greg_t kr_rax;
+	greg_t kr_rbx;
+	greg_t kr_rbp;
+	greg_t r_r10;
+	greg_t r_r11;
+	greg_t r_r12;
+	greg_t r_r13;
+	greg_t r_r14;
+	greg_t r_r15;
+	greg_t kr_fsbase;
+	greg_t kr_gsbase;
+	greg_t kr_kgsbase;
+	greg_t kr_cr2;
+	greg_t kr_cr3;
+	greg_t kr_ds;
+	greg_t kr_es;
+	greg_t kr_fs;
+	greg_t kr_gs;
+	greg_t kr_trapno;
+	greg_t kr_err;
+	greg_t kr_rip;
+	greg_t kr_cs;
+	greg_t kr_rflags;
+	greg_t kr_rsp;
+	greg_t kr_ss;
+} kdiregs_t;
 
-#endif	/* _ASM */
+#if defined(_KERNEL)
+CTASSERT(offsetof(kdiregs_t, kr_ss) == ((KDIREG_NGREG - 1) * sizeof (greg_t)));
+#endif
 
-#define	KDI_MSR_PATCHOFF	8	/* bytes of code before patch point */
-#define	KDI_MSR_PATCHSZ		17	/* bytes in KDI_MSR_PATCH, above */
+#endif /* !_ASM */
 
 #ifdef __cplusplus
 }

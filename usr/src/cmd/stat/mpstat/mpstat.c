@@ -78,7 +78,7 @@ main(int argc, char **argv)
 	struct snapshot *new = NULL;
 	enum snapshot_types types = SNAP_CPUS;
 	hrtime_t start_n;
-	hrtime_t period_n;
+	hrtime_t period_n = 0;
 
 	(void) setlocale(LC_ALL, "");
 #if !defined(TEXT_DOMAIN)		/* Should be defined by cc -D */
@@ -110,7 +110,7 @@ main(int argc, char **argv)
 					usage();
 				display_pset = (int)strtol
 				    (optarg, &endptr, 10);
-				if (*endptr != NULL)
+				if (*endptr != '\0')
 					usage();
 				/*
 				 * Not valid to specify a negative processor
@@ -143,13 +143,13 @@ main(int argc, char **argv)
 
 	if (argc > optind) {
 		interval = (int)strtol(argv[optind], &endptr, 10);
-		if (*endptr != NULL)
+		if (*endptr != '\0')
 			usage();
 		period_n = (hrtime_t)interval * NANOSEC;
 		if (argc > optind + 1) {
 			iter = (unsigned int)strtoul
 			    (argv[optind + 1], &endptr, 10);
-			if (*endptr != NULL || iter < 0)
+			if (*endptr != '\0' || iter < 0)
 				usage();
 			if (iter == 0)
 				return (0);
@@ -314,7 +314,7 @@ agg_vm(struct pset_snapshot *p, kstat_t *ks)
 {
 	size_t i;
 
-	if (p->ps_nr_cpus == NULL)
+	if (p->ps_nr_cpus == 0)
 		return (NULL);
 
 	if (kstat_copy(&p->ps_cpus[0]->cs_vm, ks))
@@ -334,7 +334,7 @@ agg_sys(struct pset_snapshot *p, kstat_t *ks)
 {
 	size_t i;
 
-	if (p->ps_nr_cpus == NULL)
+	if (p->ps_nr_cpus == 0)
 		return (NULL);
 
 	if (kstat_copy(&p->ps_cpus[0]->cs_sys, ks))

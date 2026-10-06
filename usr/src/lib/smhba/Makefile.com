@@ -22,6 +22,7 @@
 # Copyright 2009 Sun Microsystems, Inc.  All rights reserved.
 # Use is subject to license terms.
 #
+# Copyright (c) 2018, Joyent, Inc.
 
 
 LIBRARY =	libSMHBAAPI.a
@@ -34,7 +35,7 @@ include ../../Makefile.lib
 
 HETCFILES=	$(CONFIGFILE:%=$(ROOTETC)/%)
 
-LIBS =		$(DYNLIB) $(LINTLIB)
+LIBS =		$(DYNLIB)
 SRCDIR=		../common
 
 INCS +=		-I$(SRCDIR)
@@ -46,12 +47,13 @@ CPPFLAGS +=	$(INCS)
 CPPFLAGS +=	-DPOSIX_THREADS
 
 CERRWARN +=	-_gcc=-Wno-unused-variable
-CERRWARN +=	-_gcc=-Wno-uninitialized
+CERRWARN +=	$(CNOWARN_UNINIT)
 CERRWARN +=	-_gcc=-Wno-unused-function
+
+SMOFF += indenting,all_func_returns
 
 LDLIBS +=	-lc
 
-$(LINTLIB) := SRCS=	$(SRCDIR)/$(LINTSRC)
 
 $(ROOTETC)/%:	../common/%
 	$(INS.file)
@@ -60,6 +62,5 @@ $(ROOTETC)/%:	../common/%
 
 all:	$(LIBS) $(HETCFILES)
 
-lint: lintcheck
 
 include ../../Makefile.targ

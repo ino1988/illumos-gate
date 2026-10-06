@@ -94,7 +94,7 @@ _caller(caddr_t cpc, int flags)
 #pragma weak _dlerror = dlerror
 
 /*
- * External entry for dlerror(3dl).  Returns a pointer to the string describing
+ * External entry for dlerror(3C).  Returns a pointer to the string describing
  * the last occurring error.  The last occurring error is cleared.
  */
 char *
@@ -169,12 +169,13 @@ hdl_add(Grp_hdl *ghp, Rt_map *lmp, uint_t dflags, int *alep)
 	gdp->gd_flags |= dflags;
 
 	if (DBG_ENABLED) {
-		if (ale == ALE_CREATE)
+		if (ale == ALE_CREATE) {
 			DBG_CALL(Dbg_file_hdl_action(ghp, lmp, DBG_DEP_ADD,
 			    gdp->gd_flags));
-		else if (gdp->gd_flags != oflags)
+		} else if (gdp->gd_flags != oflags) {
 			DBG_CALL(Dbg_file_hdl_action(ghp, lmp, DBG_DEP_UPDATE,
 			    gdp->gd_flags));
+		}
 	}
 
 	if (alep)
@@ -586,7 +587,7 @@ dlclose_check(void *handle, Rt_map *clmp)
 #pragma weak _dlclose = dlclose
 
 /*
- * External entry for dlclose(3dl).  Returns 0 for success, non-zero otherwise.
+ * External entry for dlclose(3C).  Returns 0 for success, non-zero otherwise.
  */
 int
 dlclose(void *handle)
@@ -745,7 +746,7 @@ dlmopen_core(Lm_list *lml, Lm_list *olml, const char *path, int mode,
 	 * provides flexibility should we be able to support dlopening more
 	 * than one object in the future.
 	 */
-	if (LM_FIX_NAME(clmp)(path, clmp, &palp, AL_CNT_NEEDED, orig) == NULL)
+	if (LM_FIX_NAME(clmp)(path, clmp, &palp, AL_CNT_NEEDED, orig) == 0)
 		return (NULL);
 
 	if ((palp->al_arritems > 1) && ((mode & RTLD_FIRST) == 0)) {
@@ -758,7 +759,7 @@ dlmopen_core(Lm_list *lml, Lm_list *olml, const char *path, int mode,
 	 * Establish a link-map control list for this request, and load the
 	 * associated object.
 	 */
-	if ((nlmco = create_cntl(lml, 1)) == NULL) {
+	if ((nlmco = create_cntl(lml, 1)) == 0) {
 		remove_alist(&palp, 1);
 		return (NULL);
 	}
@@ -866,10 +867,10 @@ dlmopen_intn(Lm_list *lml, const char *path, int mode, Rt_map *clmp,
 	 *
 	 *  LM_ID_BASE:		Operate on the PRIMARY (executables) link map
 	 *  LM_ID_LDSO:		Operation on ld.so.1's link map
-	 *  LM_ID_NEWLM: 	Create a new link-map.
+	 *  LM_ID_NEWLM:	Create a new link-map.
 	 */
 	if (lml == (Lm_list *)LM_ID_NEWLM) {
-		if ((lml = calloc(sizeof (Lm_list), 1)) == NULL)
+		if ((lml = calloc(1, sizeof (Lm_list))) == NULL)
 			return (NULL);
 
 		/*
@@ -1008,7 +1009,7 @@ dlmopen_check(Lm_list *lml, const char *path, int mode, Rt_map *clmp)
 #pragma weak _dlopen = dlopen
 
 /*
- * External entry for dlopen(3dl).  On success, returns a pointer (handle) to
+ * External entry for dlopen(3C).  On success, returns a pointer (handle) to
  * the structure containing information about the newly added object, ie. can
  * be used by dlsym(). On failure, returns a null pointer.
  */
@@ -1035,7 +1036,7 @@ dlopen(const char *path, int mode)
 #pragma weak _dlmopen = dlmopen
 
 /*
- * External entry for dlmopen(3dl).
+ * External entry for dlmopen(3C).
  */
 void *
 dlmopen(Lmid_t lmid, const char *path, int mode)
@@ -1555,7 +1556,7 @@ dladdr_core(Rt_map *almp, void *addr, Dl_info_t *dlip, void **info, int flags)
 #pragma weak _dladdr = dladdr
 
 /*
- * External entry for dladdr(3dl) and dladdr1(3dl).  Returns an information
+ * External entry for dladdr(3C) and dladdr1(3C).  Returns an information
  * structure that reflects the symbol closest to the address specified.
  */
 int
@@ -2177,7 +2178,7 @@ dlinfo_core(void *handle, int request, void *p, Rt_map *clmp)
 #pragma weak _dlinfo = dlinfo
 
 /*
- * External entry for dlinfo(3dl).
+ * External entry for dlinfo(3C).
  */
 int
 dlinfo(void *handle, int request, void *p)
@@ -2268,7 +2269,7 @@ dlinfo(void *handle, int request, void *p)
  *		incrementing a pointer. Hence, alist additions that occur
  *		in mid-traverse will not cause confusion.
  *
- * 	There is one limitation: We cannot continue operation if an object
+ *	There is one limitation: We cannot continue operation if an object
  *	is removed from the process from within a callback. We detect when
  *	this happens and return immediately with a -1 return value.
  *

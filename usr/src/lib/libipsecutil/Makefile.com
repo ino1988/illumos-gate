@@ -20,34 +20,36 @@
 #
 # Copyright 2009 Sun Microsystems, Inc.  All rights reserved.
 # Use is subject to license terms.
+# Copyright 2018, Joyent, Inc.
 #
 
 LIBRARY =	libipsecutil.a
 VERS =		.1
-OBJECTS =	ipsec_util.o algs.o ipsec_libssl_setup.o
+OBJECTS =	ipsec_util.o algs.o
 
 include ../../Makefile.lib
 
-LIBS +=		$(DYNLIB) $(LINTLIB)
+LIBS +=		$(DYNLIB)
 
 SRCDIR =	../common
 
-$(LINTLIB):=	SRCS = $(SRCDIR)/$(LINTSRC)
-LDLIBS +=	-ltecla -lsocket -lnsl -lc
+BERDIR = $(SRC)/lib/libkmf/ber_der/inc
+
+LDLIBS +=	-ltecla -lsocket -lnsl -lc -lkmf -lkmfberder
 LAZYLIBS = $(ZLAZYLOAD) -ltsol $(ZNOLAZYLOAD)
-lint := LAZYLIBS = -ltsol
 LDLIBS += $(LAZYLIBS)
 
 CFLAGS +=	$(CCVERBOSE)
-CPPFLAGS +=	-I$(SRCDIR)
+CPPFLAGS +=	-I$(SRCDIR) -I$(BERDIR)
 
 CERRWARN +=	-_gcc=-Wno-unused-function
-CERRWARN +=	-_gcc=-Wno-uninitialized
+CERRWARN +=	$(CNOWARN_UNINIT)
+
+SMOFF += shift_to_zero
 
 .KEEP_STATE:
 
 all: $(LIBS)
 
-lint: lintcheck
 
 include ../../Makefile.targ

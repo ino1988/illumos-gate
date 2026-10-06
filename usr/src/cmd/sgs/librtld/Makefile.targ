@@ -22,7 +22,8 @@
 # Copyright 2006 Sun Microsystems, Inc.  All rights reserved.
 # Use is subject to license terms.
 #
-# ident	"%Z%%M%	%I%	%E% SMI"
+# Copyright 2016 RackTop Systems.
+# Copyright 2019 OmniOS Community Edition (OmniOSce) Association.
 #
 
 pics/%.o:	../common/%.c
@@ -32,31 +33,17 @@ pics/%.o:	../common/%.c
 $(LIBLINKS):
 		-$(RM) $@; $(SYMLINK) $(DYNLIB) $@
 
-delete:
-		$(RM) $(DYNLIB)
+$(PICS):	pics
 
-# Special target for native builds (ie. when we need to build a version of ld
-# to build a version of ld :-).
-
-native:		$(SGSPROTO)/$(DYNLIB)
-
-$(SGSPROTO)/$(DYNLIB): \
-		pics .WAIT $$(PICS)
-		$(BUILD.SO)
-		$(POST_PROCESS_SO)
-		-@$(RM) $(SGSPROTO)/$(LIBLINKS)
-		$(SYMLINK) $(DYNLIB) $(SGSPROTO)/$(LIBLINKS)
 
 include		$(SRC)/lib/Makefile.targ
-include		$(SRC)/cmd/sgs/Makefile.targ
-
 
 # Derived source and header files (messaging).
 
 catalog:	$(BLTMESG)
 
-chkmsg:		$(LINTSRCS)
-		sh $(CHKMSG) $(CHKMSGFLAGS) $(LINTSRCS)
+chkmsg:		$(MSGSRCS)
+		sh $(CHKMSG) $(CHKMSGFLAGS) $(MSGSRCS)
 
 $(BLTDEFS) + \
 $(BLTDATA) + \

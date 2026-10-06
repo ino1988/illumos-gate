@@ -12,8 +12,6 @@
  * All rights reserved. The Berkeley software License Agreement
  * specifies the terms and conditions for redistribution.
  */
-  
-#pragma ident	"%Z%%M%	%I%	%E% SMI"
 
  /* t4.c: read table specification */
 # include "t..c"
@@ -62,10 +60,12 @@ while (c=get1char())
 		default:
 			if (c != tab)
 			error(gettext("bad table specification character"));
+			/* FALLTHROUGH */
 		case ' ': /* note this is also case tab */
 			continue;
 		case '\n':
 			if(sawchar==0) continue;
+			/* FALLTHROUGH */
 		case ',':
 		case '.': /* end of table specification */
 			ncol = max(ncol, icol);
@@ -96,7 +96,9 @@ while (c=get1char())
 			continue;
 		case 'C': case 'S': case 'R': case 'N': case 'L':  case 'A':
 			c += ('a'-'A');
+			/* FALLTHROUGH */
 		case '_': if (c=='_') c= '-';
+			/* FALLTHROUGH */
 		case '=': case '-':
 		case '^':
 		case 'c': case 's': case 'n': case 'r': case 'l':  case 'a':
@@ -235,12 +237,12 @@ while (c=get1char())
 			}
 
 			snp = cll [icol-1];
-		/* Dale Smith didn't like this check 
+		/* Dale Smith didn't like this check
 		 * possible to have two text blocks
 		 *  of different widths now ....
 			if (*snp)
 				{
-				fprintf(tabout, 
+				fprintf(tabout,
 				gettext("Ignored second width specification"));
 				continue;
 				}
@@ -273,7 +275,7 @@ while (c=get1char())
 			evenflg=1;
 			continue;
 		case '0': case '1': case '2': case '3': case '4':
-		case '5': case '6': case '7': case '8': case '9': 
+		case '5': case '6': case '7': case '8': case '9':
 			sn[0] = c;
 			snp=sn+1;
 			while (digit(*snp++ = c = get1char()))

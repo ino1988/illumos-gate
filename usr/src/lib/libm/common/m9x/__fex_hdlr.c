@@ -27,7 +27,6 @@
  * Use is subject to license terms.
  */
 
-#include "fenv_synonyms.h"
 #undef lint
 #include <signal.h>
 #include <siginfo.h>
@@ -57,10 +56,8 @@ extern int sigismember(const sigset_t *, int);
 void (*__mt_fex_sync)() = NULL; /* for synchronization with libmtsk */
 #pragma weak __mt_fex_sync
 
-#ifdef LIBM_MT_FEX_SYNC
 void (*__libm_mt_fex_sync)() = NULL; /* new, improved version of above */
 #pragma weak __libm_mt_fex_sync
-#endif
 
 /* private variables */
 static fex_handler_t main_handlers;
@@ -145,7 +142,6 @@ __fex_sync_with_libmtsk(int begin, int master)
 		__fex_update_te();
 }
 
-#ifdef LIBM_MT_FEX_SYNC
 /*
 *  The following function may be used for synchronization with any
 *  internal project that manages multiple threads
@@ -204,7 +200,6 @@ __fex_sync_with_threads(enum __libm_mt_fex_sync_actions action,
 		break;
 	}
 }
-#endif
 
 #if defined(__sparc)
 
@@ -228,8 +223,9 @@ static const unsigned int siam[][2] = {
 *  saved handler
 */
 static void
-__fex_hdlr(int sig, siginfo_t *sip, ucontext_t *uap)
+__fex_hdlr(int sig, siginfo_t *sip, void *arg)
 {
+	ucontext_t		*uap = arg;
 	struct fex_handler_data	*thr_handlers;
 	struct sigaction	act;
 	void			(*handler)(), (*siamp)();
@@ -390,8 +386,9 @@ extern int _sse_hw;
 *  saved handler
 */
 static void
-__fex_hdlr(int sig, siginfo_t *sip, ucontext_t *uap)
+__fex_hdlr(int sig, siginfo_t *sip, void *arg)
 {
+	ucontext_t		*uap = arg;
 	struct fex_handler_data	*thr_handlers;
 	struct sigaction	act;
 	void			(*handler)() = NULL, (*simd_handler[4])();
@@ -642,7 +639,7 @@ __fex_hdlr(int sig, siginfo_t *sip, ucontext_t *uap)
 	addr = (unsigned long)uap->uc_mcontext.fpregs.fp_reg_set.
 	    fpchip_state.state[3];
 #endif
-	accrued = uap->uc_mcontext.fpregs.fp_reg_set.fpchip_state.status & 
+	accrued = uap->uc_mcontext.fpregs.fp_reg_set.fpchip_state.status &
 	    ~te_bit[(int)e];
 	if (test_sse_hw)
 		accrued |= uap->uc_mcontext.fpregs.fp_reg_set.fpchip_state.
@@ -739,7 +736,7 @@ not_ieee:
 		break;
 #endif
 	default:
-		act.sa_handler(sig, &osip, uap);
+		act.sa_sigaction(sig, &osip, uap);
 	}
 }
 
@@ -819,11 +816,11 @@ __fex_update_te()
 
 	/* install __fex_hdlr as necessary */
 	if (!hdlr_installed && te) {
-		act.sa_handler = __fex_hdlr;
+		act.sa_sigaction = __fex_hdlr;
 		sigemptyset(&act.sa_mask);
 		act.sa_flags = SA_SIGINFO;
 		sigaction(SIGFPE, &act, &tmpact);
-		if (tmpact.sa_handler != __fex_hdlr)
+		if (tmpact.sa_sigaction != __fex_hdlr)
 		{
 			mutex_lock(&hdlr_lock);
 			oact = tmpact;
@@ -842,8 +839,6 @@ __fex_update_te()
 	/* synchronize with libmtsk */
 	__mt_fex_sync = __fex_sync_with_libmtsk;
 
-#ifdef LIBM_MT_FEX_SYNC
 	/* synchronize with other projects */
 	__libm_mt_fex_sync = __fex_sync_with_threads;
-#endif
 }

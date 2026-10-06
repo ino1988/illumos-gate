@@ -23,6 +23,10 @@
 # Copyright (c) 1989, 2010, Oracle and/or its affiliates. All rights reserved.
 # Copyright (c) 2012 by Delphix. All rights reserved.
 # Copyright 2014 Garrett D'Amore <garrett@damore.org>
+# Copyright 2015 OmniTI Computer Consulting, Inc. All rights reserved.
+# Copyright 2016 Toomas Soome <tsoome@me.com>
+# Copyright 2018 Joyent, Inc.
+# Copyright 2019 OmniOS Community Edition (OmniOSce) Association.
 #
 
 #
@@ -35,9 +39,9 @@ include Makefile.master
 # it defines TARGETDIRS and ROOTDIRS.
 include Targetdirs
 
-COMMON_SUBDIRS=	uts lib cmd ucblib ucbcmd psm man test
-sparc_SUBDIRS= stand
-i386_SUBDIRS= grub
+COMMON_SUBDIRS=	data uts lib cmd ucblib ucbcmd man test
+sparc_SUBDIRS= psm stand
+i386_SUBDIRS= grub boot
 
 #
 # sparc needs to build stand before psm
@@ -61,25 +65,18 @@ PARALLEL_HEADERS = sysheaders userheaders libheaders cmdheaders
 #
 # Directories that can be built in parallel
 #
-PARALLEL_DIRS = uts lib man
+PARALLEL_DIRS = data uts lib man
 
-# The check target also causes smf(5) service manifests to be validated.
+# The check target also causes smf(7) service manifests to be validated.
 CHKMFSTSUBDIRS=	cmd
 
 # And man page formats
 CHKMANSUBDIRS = man
 
-MSGSUBDIRS=	cmd ucbcmd lib
-DOMAINS= \
-	SUNW_OST_ADMIN \
-	SUNW_OST_NETRPC \
-	SUNW_OST_OSCMD \
-	SUNW_OST_OSLIB \
-	SUNW_OST_UCBCMD \
-	SUNW_OST_ZONEINFO
+# And test runfiles
+CHKTESTSUBDIRS = test
 
-MSGDDIRS=       $(DOMAINS:%=$(MSGROOT)/%)
-MSGDIRS=        $(MSGROOT) $(MSGDDIRS) $(MSGROOT)/LC_TIME
+MSGSUBDIRS=	cmd ucbcmd lib data
 
 all :=			TARGET= all
 install :=		TARGET= install
@@ -120,9 +117,9 @@ stage-licenses: install2
 
 install1: mapfiles closedbins sgs
 
-install2: install1 $(SUBDIRS)
+install2: install1 .WAIT $(SUBDIRS)
 
-_msg: _msgdirs rootdirs FRC
+_msg: rootdirs FRC
 	@for m in $(MSGSUBDIRS); do \
 		cd $$m; pwd; $(MAKE) _msg; cd ..; \
 	done
@@ -137,8 +134,17 @@ clobber_local:
 	@cd common/mapfiles; pwd; $(MAKE) clobber
 	@cd msg; pwd; $(MAKE) clobber
 
+# If the tarballs are included inside ON_CLOSED_BINS, use those to extract and
+# preserve the permissions (in case a distro ships them).
+
 closedbins: bldtools $(ROOTDIRS) FRC
 	@CLOSED_ROOT="$$ON_CLOSED_BINS/root_$(MACH)$${RELEASE_BUILD+-nd}"; \
+	if [ -f "$$ON_CLOSED_BINS/on-closed-bins$${RELEASE_BUILD+-nd}.$(MACH).tar.bz2" ]; then \
+		$(ECHO) "Extracting tarball $$ON_CLOSED_BINS/on-closed-bins$${RELEASE_BUILD+-nd}.$(MACH).tar.bz2"; \
+		(cd $(CODEMGR_WS); \
+		   $(TAR) xjpf $$ON_CLOSED_BINS/on-closed-bins$${RELEASE_BUILD+-nd}.$(MACH).tar.bz2); \
+		CLOSED_ROOT="$(CODEMGR_WS)/closed/root_$(MACH)$${RELEASE_BUILD+-nd}"; \
+	fi; \
 	if [ ! -d "$$CLOSED_ROOT" ]; then \
 		$(ECHO) "Error: ON_CLOSED_BINS must point to closed" \
 		    "binaries."; \
@@ -150,6 +156,7 @@ closedbins: bldtools $(ROOTDIRS) FRC
 	(cd $$CLOSED_ROOT; \
 	    $(TAR) cfX - $(CODEMGR_WS)/exception_lists/closed-bins .) | \
 	    (cd $(ROOT); $(TAR) xBpf -); \
+	$(CHMOD) 0400 $(ROOT)/etc/security/tsol/label_encodings; \
 	( cd $(ROOT); $(CTFSTRIP) $$(cd $$CLOSED_ROOT; $(FIND) \
 	    ./kernel ./usr/kernel ./platform/*/kernel -type f -a -perm -u+x | \
 	    $(EGREP) -vf $(CODEMGR_WS)/exception_lists/closed-bins) )
@@ -180,20 +187,26 @@ sgs: rootdirs .WAIT sysheaders userheaders .WAIT \
 #
 setup: closedbins bldtools sgs mapfiles
 
+#
+# Always build tools as non-DEBUG.
+# When nightly launches a build it first builds non-DEBUG tools and then
+# configures the environment so that these tools are used for building
+# subsequently. If a recursive build from usr/src then builds DEBUG tools,
+# the tools will be rebuilt using themselves resulting in a race condition
+# that can cause the build to fail - see https://www.illumos.org/issues/10462
+# for more details.
+# A manual build in usr/src/tools in a DEBUG bldenv will still do a DEBUG
+# tools build.
+#
 bldtools:
-	@cd tools; pwd; $(MAKE) install
+	@cd tools; pwd; $(MAKE) RELEASE_BUILD= install
 
 # /var/mail/:saved is a special case because of the colon in the name.
 #
 rootdirs: $(ROOTDIRS)
 	$(INS) -d -m 775 $(ROOT)/var/mail/:saved
 
-lint: FRC
-	$(MAKE) -f Makefile.lint
-
-_msgdirs:       $(MSGDIRS)
-
-$(ROOTDIRS) $(MSGDIRS):
+$(ROOTDIRS):
 	$(INS.dir)
 
 userheaders: FRC
@@ -206,10 +219,13 @@ sysheaders: FRC
 	@cd uts; pwd; $(MAKE) install_h
 
 cmdheaders: FRC
+	@cd cmd/devfsadm; pwd; $(MAKE) install_h
 	@cd cmd/fm; pwd; $(MAKE) install_h
 	@cd cmd/mdb; pwd; $(MAKE) install_h
 
-check:	$(CHKHDRSUBDIRS) $(CHKMFSTSUBDIRS) $(CHKMANSUBDIRS)
+FRC:
+
+check:	$(CHKHDRSUBDIRS) $(CHKMFSTSUBDIRS) $(CHKMANSUBDIRS) $(CHKTESTSUBDIRS)
 
 #
 # Cross-reference customization: skip all of the subdirectories that
@@ -218,52 +234,16 @@ check:	$(CHKHDRSUBDIRS) $(CHKMFSTSUBDIRS) $(CHKMANSUBDIRS)
 XRPRUNE = pkg prototypes
 XRINCDIRS = uts/common head ucbhead
 
-cscope.out tags: FRC
-	$(XREF) -f -x $@
+include Makefile.xref
 
-FRC:
+XREFFLAGS = -f -x
 
-#
-# Targets for reporting compiler versions; nightly uses these.
-#
-
+# used by nightly
 cc-version:
-	@if $($(MACH)_CC) -_versions >/dev/null 2>/dev/null; then \
-		$(ECHO) 32-bit compiler;			\
-		$(ECHO) $($(MACH)_CC);				\
-		$($(MACH)_CC) -_versions 2>&1 |			\
-		    $(EGREP) '^(cw|cc|gcc|primary|shadow)';	\
-	else							\
-		__COMPILER=`$($(MACH)_CC) -_compiler 2>/dev/null || $(TRUE)`;\
-		if [ -z "$$__COMPILER" ]; then			\
-			$(ECHO) No 32-bit compiler found;	\
-			exit 1;					\
-		else						\
-			$(ECHO) 32-bit compiler;		\
-			$(ECHO) $($(MACH)_CC);			\
-			$(ECHO) $$__COMPILER;			\
-			$($(MACH)_CC) -V 2>&1 | head -1;	\
-		fi;						\
-	fi
+	@$(CW) --versions $(CW_CC_COMPILERS) 2>&1
 
+# for older nightlies
 cc64-version:
-	@if $($(MACH64)_CC) -_versions >/dev/null 2>/dev/null; then \
-		$(ECHO) 64-bit compiler;			\
-		$(ECHO) $($(MACH64)_CC);			\
-		$($(MACH64)_CC) -_versions 2>&1 |		\
-		    $(EGREP) '^(cw|cc|gcc|primary|shadow)';	\
-	else							\
-		__COMPILER=`$($(MACH64)_CC) -_compiler 2>/dev/null || $(TRUE)`;\
-		if [ -z "$$__COMPILER" ]; then			\
-			$(ECHO) No 64-bit compiler found;	\
-			exit 1;					\
-		else						\
-			$(ECHO) 64-bit compiler;		\
-			$(ECHO) $($(MACH64)_CC);		\
-			$(ECHO) $$__COMPILER;			\
-			$($(MACH64)_CC) -V 2>&1 | head -1;	\
-		fi;						\
-	fi
 
 java-version:
 	@if [ -x "$(JAVAC)" ]; then			\
@@ -272,4 +252,14 @@ java-version:
 	else						\
 		$(ECHO) No Java compiler found;		\
 		exit 1;					\
+	fi
+
+openssl-version:
+	@if [ -x "$(OPENSSL)" ]; then				\
+		$(ECHO) $(OPENSSL);				\
+		$(OPENSSL) version;				\
+		$(OPENSSL) version -f |				\
+		    $(SED) -n '/_API/{s/.*_API/    API/;s/ -.*//;p;}'; \
+	else							\
+		$(ECHO) No OpenSSL utility found;		\
 	fi

@@ -29,8 +29,6 @@
 /*	  All Rights Reserved  	*/
 
 
-#pragma ident	"%Z%%M%	%I%	%E% SMI"
-
 /*
  * data base routines for the network listener process
  */
@@ -84,7 +82,7 @@ extern char  *New_cmd_lines; /* svc_code, cmd_line, mod_list (on reread)*/
  * all data base routines under read_dbf log there own errors and return -1
  * in case of an error.
  *
- * if 're_read' is non-zero, this stuff is being called to read a new 
+ * if 're_read' is non-zero, this stuff is being called to read a new
  * data base file after the listener's initialization.
  */
 
@@ -136,9 +134,9 @@ int	re_read;	/* zero means first time	*/
 	   || !(cmd_p = calloc(size, 1)))  {
 		DEBUG((1,"cannot calloc %u + %u bytes", size,
 			(Dbfentries+1)*(unsigned)sizeof(dbf_t)));
-		error( E_DBF_ALLOC, exit_flag);	/* if init, exit */	 
+		error( E_DBF_ALLOC, exit_flag);	/* if init, exit */
 
-		/* if still here, this is a re-read	*/	
+		/* if still here, this is a re-read	*/
 
 		if (dbf_p)
 			free(dbf_p);
@@ -152,8 +150,8 @@ int	re_read;	/* zero means first time	*/
 		error(E_DBF_IO, exit_flag | NO_MSG);
 
 		/* if still here, this is a re_read */
-		free(dbf_p);     
-		free(cmd_p);		
+		free(dbf_p);
+		free(cmd_p);
 		return(-1);
 	}
 
@@ -266,9 +264,9 @@ register char *cmd_p;
 			i = strlen(private_p);
 			if (i >= PRV_ADR_SZ) {
 				goto p_reject;
-			}	
+			}
 			Dbf_entries++;
-		} 
+		}
 
 		/*
 		 * legal, non-duplicate entry: copy it into internal data base
@@ -300,7 +298,7 @@ register char *cmd_p;
 		if (strlen(private_p) != 0) {
 			strcpy(cmd_p, private_p);
 			dbf_p->dbf_prv_adr = cmd_p;
-			cmd_p += strlen(private_p) + 1;	
+			cmd_p += strlen(private_p) + 1;
 		}
 		else
 			dbf_p->dbf_prv_adr = NULL;
@@ -328,7 +326,7 @@ p_reject:
 
 /*
  * scan_dbf:	Take a quick pass through the data base file to figure out
- *		approx. how many items in the file we'll need to 
+ *		approx. how many items in the file we'll need to
  *		allocate storage for.  Essentially, returns the number
  *		of non-null, non-comment lines in the data base file.
  *
@@ -389,7 +387,7 @@ register char *path;
  *		given buffer (up to DBFLINESZ bytes).
  *		Skips 'ignore' lines.
  *
- *		Returns:	0 = done, -1 = error, 
+ *		Returns:	0 = done, -1 = error,
  * 				other = cmd line size incl. terminating null.
  *				*svc_code_p = service code;
  *				*id_p = user id string;
@@ -532,7 +530,7 @@ int mflag;
 		DEBUG((9,"scan_line failed svc_code strchr"));
 		return(0);
 	}
-	*p = NULL;
+	*p = '\0';
 	*svc_code_p = bp;
 	nexttok = ++p;
 
@@ -540,7 +538,7 @@ int mflag;
 		DEBUG((9,"scan_line failed flags strchr"));
 		return(0);
 	}
-	*p = NULL;
+	*p = '\0';
 
 	while (*nexttok)  {
 		switch (*nexttok)  {
@@ -564,7 +562,7 @@ int mflag;
 		DEBUG((9,"scan_line failed id strchr"));
 		return(0);
 	}
-	*p = NULL;
+	*p = '\0';
 	*id_p = nexttok;
 	nexttok = ++p;
 
@@ -572,7 +570,7 @@ int mflag;
 		DEBUG((9,"scan_line failed res1 strchr"));
 		return(0);
 	}
-	*p = NULL;
+	*p = '\0';
 	*res1_p = nexttok;
 	nexttok = ++p;
 
@@ -580,7 +578,7 @@ int mflag;
 		DEBUG((9,"scan_line failed res2 strchr"));
 		return(0);
 	}
-	*p = NULL;
+	*p = '\0';
 	*res2_p = nexttok;
 	nexttok = ++p;
 
@@ -588,7 +586,7 @@ int mflag;
 		DEBUG((9,"scan_line failed res3 strchr"));
 		return(0);
 	}
-	*p = NULL;
+	*p = '\0';
 	*res3_p = nexttok;
 	nexttok = ++p;
 
@@ -596,7 +594,7 @@ int mflag;
 		DEBUG((9,"scan_line failed private strchr"));
 		return(0);
 	}
-	*p = NULL;
+	*p = '\0';
 	*private_p = nexttok;
 	nexttok = ++p;
 
@@ -604,7 +602,7 @@ int mflag;
 		DEBUG((9,"scan_line failed rpc strchr"));
 		return(0);
 	}
-	*p = NULL;
+	*p = '\0';
 
 	*prognum = -1;
 	*vernum = -1;
@@ -658,7 +656,7 @@ int mflag;
 		DEBUG((9,"scan_line failed sflags strchr"));
 		return(0);
 	}
-	*p = NULL;
+	*p = '\0';
 
 	*sflags = 0;
 	while (*nexttok)  {
@@ -698,7 +696,7 @@ int mflag;
 		DEBUG((9,"scan_line failed module strchr"));
 		return(0);
 	}
-	*p = NULL;
+	*p = '\0';
 	*module_p = nexttok;
 	nexttok = ++p;
 
@@ -869,7 +867,7 @@ register dbf_t	*dbp;
 /*
  *
  * getentry: Given a fd, this routine will return a
- *		    dbf entry.  If the entry doesn't exist it will 
+ *		    dbf entry.  If the entry doesn't exist it will
  *		    return NULL.
  */
 
@@ -914,7 +912,7 @@ register char *mp;
 	extern int errno;
 
 	DEBUG((9,"in pushmod:"));
-	if (!mp || *mp == NULL) {
+	if (!mp || *mp == '\0') {
 		DEBUG((9,"NULL list: exiting pushmod"));
 		return(0);
 	}

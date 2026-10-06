@@ -32,7 +32,7 @@
  * reboot path.  It loads the new kernel and boot archive into memory, builds
  * the data structure containing sufficient information about the new
  * kernel and boot archive to be passed to the fast reboot switcher
- * (see fb_swtch_src.s for details).  When invoked the switcher relocates
+ * (see fb_swtch_src.S for details).  When invoked the switcher relocates
  * the new kernel and boot archive to physically contiguous low memory,
  * similar to where the boot loader would have loaded them, and jumps to
  * the new kernel.
@@ -194,11 +194,7 @@ static ddi_dma_attr_t fastboot_below_1G_dma_attr = {
 static ddi_dma_attr_t fastboot_dma_attr = {
 	DMA_ATTR_V0,
 	0x0000000008000000ULL,	/* dma_attr_addr_lo: 128MB */
-#ifdef	__amd64
 	0xFFFFFFFFFFFFFFFFULL,	/* dma_attr_addr_hi: 2^64B */
-#else
-	0x0000000FFFFFFFFFULL,	/* dma_attr_addr_hi: 64GB */
-#endif	/* __amd64 */
 	0x00000000FFFFFFFFULL,	/* dma_attr_count_max */
 	0x0000000000001000ULL,	/* dma_attr_align: 4KB */
 	1,			/* dma_attr_burstsize */
@@ -322,12 +318,8 @@ fastboot_map_with_size(fastboot_info_t *nk, uintptr_t vstart, paddr_t pstart,
 			 * Program with either valid bit or PTP bits.
 			 */
 			if (l == nk->fi_top_level) {
-#ifdef	__amd64
 				ASSERT(nk->fi_top_level == 3);
 				table[index] = nk->fi_next_table_pa | ptp_bits;
-#else
-				table[index] = nk->fi_next_table_pa | PT_VALID;
-#endif	/* __amd64 */
 			} else {
 				table[index] = nk->fi_next_table_pa | ptp_bits;
 			}
@@ -497,7 +489,7 @@ fastboot_build_mbi(char *mdep, fastboot_info_t *nk)
 	if (nk->fi_mbi_size == 0) {
 		if ((nk->fi_new_mbi_va =
 		    (uintptr_t)contig_alloc(size, &fastboot_below_1G_dma_attr,
-		    PAGESIZE, 0)) == NULL) {
+		    PAGESIZE, 0)) == 0) {
 			cmn_err(CE_NOTE, fastboot_enomem_msg,
 			    (uint64_t)size, "1G");
 			return (-1);
@@ -605,11 +597,7 @@ fastboot_init_fields(fastboot_info_t *nk)
 		nk->fi_shift_amt = fastboot_shift_amt_pae;
 		nk->fi_ptes_per_table = 512;
 		nk->fi_lpagesize = (2 << 20);	/* 2M */
-#ifdef	__amd64
 		nk->fi_top_level = 3;
-#else
-		nk->fi_top_level = 2;
-#endif	/* __amd64 */
 	}
 }
 
@@ -705,7 +693,7 @@ fastboot_reserve_mem(fastboot_info_t *nk)
 	 */
 	if ((nk->fi_pagetable_va =
 	    (uintptr_t)contig_alloc(fastboot_pagetable_size,
-	    &fastboot_below_1G_dma_attr, PAGESIZE, 0)) == NULL) {
+	    &fastboot_below_1G_dma_attr, PAGESIZE, 0)) == 0) {
 		return;
 	}
 	nk->fi_pagetable_size = fastboot_pagetable_size;
@@ -714,7 +702,7 @@ fastboot_reserve_mem(fastboot_info_t *nk)
 	 * Reserve memory under PA 1G for multiboot structure.
 	 */
 	if ((nk->fi_new_mbi_va = (uintptr_t)contig_alloc(fastboot_mbi_size,
-	    &fastboot_below_1G_dma_attr, PAGESIZE, 0)) == NULL) {
+	    &fastboot_below_1G_dma_attr, PAGESIZE, 0)) == 0) {
 		return;
 	}
 	nk->fi_mbi_size = fastboot_mbi_size;
@@ -745,7 +733,7 @@ fastboot_free_file(fastboot_file_t *fb)
 	fsize_roundup = P2ROUNDUP_TYPED(fb->fb_size, PAGESIZE, size_t);
 	if (fsize_roundup) {
 		contig_free((void *)fb->fb_va, fsize_roundup);
-		fb->fb_va = NULL;
+		fb->fb_va = 0;
 		fb->fb_size = 0;
 	}
 }
@@ -1227,11 +1215,7 @@ load_kernel_retry:
 	 * address as we do the copying.
 	 */
 	if (newkernel.fi_has_pae) {
-#ifdef	__amd64
 		size_t size = MMU_PAGESIZE * 5;
-#else
-		size_t size = MMU_PAGESIZE * 4;
-#endif	/* __amd64 */
 
 		if (newkernel.fi_pagetable_size && newkernel.fi_pagetable_size
 		    < size) {
@@ -1243,7 +1227,7 @@ load_kernel_retry:
 		if (newkernel.fi_pagetable_size == 0) {
 			if ((newkernel.fi_pagetable_va = (uintptr_t)
 			    contig_alloc(size, &fastboot_below_1G_dma_attr,
-			    MMU_PAGESIZE, 0)) == NULL) {
+			    MMU_PAGESIZE, 0)) == 0) {
 				cmn_err(CE_NOTE, fastboot_enomem_msg,
 				    (uint64_t)size, "1G");
 				goto err_out;
@@ -1293,8 +1277,9 @@ err_out:
 
 /* ARGSUSED */
 static int
-fastboot_xc_func(fastboot_info_t *nk, xc_arg_t unused2, xc_arg_t unused3)
+fastboot_xc_func(xc_arg_t arg1, xc_arg_t arg2 __unused, xc_arg_t arg3 __unused)
 {
+	fastboot_info_t *nk = (fastboot_info_t *)arg1;
 	void (*fastboot_func)(fastboot_info_t *);
 	fastboot_file_t	*fb = &nk->fi_files[FASTBOOT_SWTCH];
 	fastboot_func = (void (*)())(fb->fb_va);
@@ -1372,11 +1357,11 @@ fast_reboot()
 		CPUSET_ZERO(cpuset);
 		CPUSET_ADD(cpuset, bootcpuid);
 		xc_priority((xc_arg_t)&newkernel, 0, 0, CPUSET2BV(cpuset),
-		    (xc_func_t)fastboot_xc_func);
+		    fastboot_xc_func);
 
 		panic_idle();
 	} else
-		(void) fastboot_xc_func(&newkernel, 0, 0);
+		(void) fastboot_xc_func((xc_arg_t)&newkernel, 0, 0);
 }
 
 
@@ -1569,7 +1554,7 @@ fastboot_update_and_load(int fcn, char *mdep)
 	if (fcn != AD_FASTREBOOT) {
 		/*
 		 * If user has explicitly requested reboot to prom,
-		 * or uadmin(1M) was invoked with other functions,
+		 * or uadmin(8) was invoked with other functions,
 		 * don't try to fast reboot after dumping.
 		 */
 		fastreboot_onpanic_disable();

@@ -18,12 +18,20 @@
  *
  * CDDL HEADER END
  */
+
 /*
  * Copyright 2008 Sun Microsystems, Inc.  All rights reserved.
  * Use is subject to license terms.
- *
+ */
+
+/*
  * Copyright (c) 1983,1984,1985,1986,1987,1988,1989  AT&T.
  * All rights reserved.
+ */
+
+/*
+ * Copyright 2018 Nexenta Systems, Inc.
+ * Copyright 2023 MNX Cloud, Inc.
  */
 
 #include <sys/types.h>
@@ -42,16 +50,6 @@
 #include <rpc/auth.h>
 #include <rpc/rpcsys.h>
 #include <rpc/svc.h>
-
-/*
- * This is filled in with an appropriate address for the
- * function that will traverse the rfs4_client_t table
- * and mark any matching IP Address as "forced_expire".
- *
- * It is the server init() function that plops the
- * function pointer.
- */
-void (*rfs4_client_clrst)(struct nfs4clrst_args *) = NULL;
 
 /* This filled in by nfssrv:_init() */
 void (*nfs_srv_quiesce_func)(void) = NULL;
@@ -80,8 +78,6 @@ nfs_export(void *arg)
 {
 	STRUCT_DECL(exportfs_args, ea);
 
-	if (!INGLOBALZONE(curproc))
-		return (set_errno(EPERM));
 	STRUCT_INIT(ea, get_udatamodel());
 	if (copyin(arg, STRUCT_BUF(ea), STRUCT_SIZE(ea)))
 		return (set_errno(EFAULT));
@@ -103,17 +99,6 @@ nfssys(enum nfssys_op opcode, void *arg)
 		struct nfs4clrst_args clr;
 		STRUCT_DECL(nfs4clrst_args, u_clr);
 
-		/*
-		 * If the server is not loaded then no point in
-		 * clearing nothing :-)
-		 */
-		if (rfs4_client_clrst == NULL) {
-			break;
-		}
-
-		if (!INGLOBALZONE(curproc))
-			return (set_errno(EPERM));
-
 		STRUCT_INIT(u_clr, get_udatamodel());
 
 		if (copyin(arg, STRUCT_BUF(u_clr), STRUCT_SIZE(u_clr)))
@@ -126,7 +111,7 @@ nfssys(enum nfssys_op opcode, void *arg)
 
 		clr.addr_type = STRUCT_FGET(u_clr, addr_type);
 		clr.ap = STRUCT_FGETP(u_clr, ap);
-		rfs4_client_clrst(&clr);
+		error = rfs4_clear_client_state(&clr);
 		break;
 	}
 
@@ -164,8 +149,6 @@ nfssys(enum nfssys_op opcode, void *arg)
 		struct rdma_svc_args rsa;
 		char netstore[20] = "tcp";
 
-		if (!INGLOBALZONE(curproc))
-			return (set_errno(EPERM));
 		if (get_udatamodel() != DATAMODEL_NATIVE) {
 			STRUCT_DECL(rdma_svc_args, ursa);
 
@@ -189,9 +172,6 @@ nfssys(enum nfssys_op opcode, void *arg)
 
 	case NFS_SVC: { /* NFS server daemon */
 		STRUCT_DECL(nfs_svc_args, nsa);
-
-		if (!INGLOBALZONE(curproc))
-			return (set_errno(EPERM));
 		STRUCT_INIT(nsa, get_udatamodel());
 
 		if (copyin(arg, STRUCT_BUF(nsa), STRUCT_SIZE(nsa)))
@@ -209,8 +189,6 @@ nfssys(enum nfssys_op opcode, void *arg)
 	case NFS_GETFH: { /* get a file handle */
 		STRUCT_DECL(nfs_getfh_args, nga);
 
-		if (!INGLOBALZONE(curproc))
-			return (set_errno(EPERM));
 		STRUCT_INIT(nga, get_udatamodel());
 		if (copyin(arg, STRUCT_BUF(nga), STRUCT_SIZE(nga)))
 			return (set_errno(EFAULT));

@@ -247,7 +247,7 @@ main(int argc, char *argv[])
 {
 	int		ret = 0;
 	int		idx = NULL_SUBCMD;
-	char		c;
+	int		c;
 	int		newargc = argc;
 	char		**newargv = NULL;
 	char		*objp;
@@ -434,7 +434,7 @@ main(int argc, char *argv[])
 				    newargv[optind-1]);
 				(void) fprintf(stderr, "\n");
 
-				/* fall through to default */
+				/* FALLTHROUGH */
 			default:
 				ret = 1;
 				break;

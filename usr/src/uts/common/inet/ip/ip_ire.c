@@ -543,7 +543,7 @@ ire_init_v4(ire_t *ire, uchar_t *addr, uchar_t *mask, uchar_t *gateway,
 
 	error = ire_init_common(ire, type, ill, zoneid, flags, IPV4_VERSION,
 	    gc, ipst);
-	if (error != NULL)
+	if (error != 0)
 		return (error);
 
 	/* Determine which function pointers to use */
@@ -2581,7 +2581,7 @@ retry:
 		mutex_exit(&ill->ill_lock);
 		rw_exit(&ill->ill_ipst->ips_ill_g_lock);
 	}
-done:
+
 	ASSERT(nce->nce_ill == ill);
 	if (need_refrele)
 		ill_refrele(ill);

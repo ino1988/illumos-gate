@@ -21,6 +21,9 @@
 /*
  * Copyright 2010 Sun Microsystems, Inc.  All rights reserved.
  * Use is subject to license terms.
+ *
+ * Copyright 2018 Joyent, Inc.
+ * Copyright 2024 Bill Sommerfeld <sommerfeld@hamachi.org>
  */
 
 #include <sys/isa_defs.h>
@@ -113,10 +116,13 @@ typedef pydb_agent_t *(*pydb_agent_create_f)(struct ps_prochandle *P, int vers);
 typedef void (*pydb_agent_destroy_f)(pydb_agent_t *py);
 typedef int (*pydb_pc_frameinfo_f)(pydb_agent_t *py, uintptr_t pc,
     uintptr_t frame_addr, char *fbuf, size_t bufsz);
+typedef int (*pydb_pc_frameinfo_argv_f)(pydb_agent_t *py, uintptr_t pc,
+    const long *argv, char *fbuf, size_t bufsz);
 
 static pydb_agent_create_f pydb_agent_create;
 static pydb_agent_destroy_f pydb_agent_destroy;
 static pydb_pc_frameinfo_f pydb_pc_frameinfo;
+static pydb_pc_frameinfo_argv_f pydb_pc_frameinfo_argv;
 
 static pydb_agent_t *load_libpython(struct ps_prochandle *P);
 static void reset_libpython(pydb_agent_t *);
@@ -137,7 +143,7 @@ static	int	thr_stack(const td_thrhandle_t *, void *);
 static	void	free_threadinfo(void);
 static	struct threadinfo *find_thread(id_t);
 static	int	all_call_stacks(pstack_handle_t *, int);
-static	void	tlhead(id_t, id_t);
+static	void	tlhead(id_t, id_t, const char *);
 static	int	print_frame(void *, prgregset_t, uint_t, const long *);
 static	void	print_zombie(struct ps_prochandle *, struct threadinfo *);
 static	void	print_syscall(const lwpstatus_t *, prgregset_t);
@@ -380,6 +386,7 @@ static int
 thread_call_stack(void *data, const lwpstatus_t *psp,
     const lwpsinfo_t *pip)
 {
+	char lwpname[THREAD_NAME_MAX] = "";
 	pstack_handle_t *h = data;
 	lwpstatus_t lwpstatus;
 	struct threadinfo *tip;
@@ -391,7 +398,10 @@ thread_call_stack(void *data, const lwpstatus_t *psp,
 	if ((tip = find_thread(pip->pr_lwpid)) == NULL)
 		return (0);
 
-	tlhead(tip->threadid, pip->pr_lwpid);
+	(void) Plwp_getname(h->proc, pip->pr_lwpid,
+	    lwpname, sizeof (lwpname));
+
+	tlhead(tip->threadid, pip->pr_lwpid, lwpname);
 	tip->threadid = 0;	/* finish eliminating tid */
 	if (psp)
 		call_stack(h, psp);
@@ -410,15 +420,19 @@ thread_call_stack(void *data, const lwpstatus_t *psp,
 
 static int
 lwp_call_stack(void *data,
-	const lwpstatus_t *psp, const lwpsinfo_t *pip)
+    const lwpstatus_t *psp, const lwpsinfo_t *pip)
 {
+	char lwpname[THREAD_NAME_MAX] = "";
 	pstack_handle_t *h = data;
 
 	if (!proc_lwp_in_set(h->lwps, pip->pr_lwpid))
 		return (0);
 	h->count++;
 
-	tlhead(0, pip->pr_lwpid);
+	(void) Plwp_getname(h->proc, pip->pr_lwpid,
+	    lwpname, sizeof (lwpname));
+
+	tlhead(0, pip->pr_lwpid, lwpname);
 	if (psp)
 		call_stack(h, psp);
 	else
@@ -462,7 +476,7 @@ all_call_stacks(pstack_handle_t *h, int dothreads)
 			if ((tid = tip->threadid) != 0) {
 				(void) memcpy(lwpstatus.pr_reg, tip->regs,
 				    sizeof (prgregset_t));
-				tlhead(tid, tip->lwpid);
+				tlhead(tid, tip->lwpid, NULL);
 				if (tip->state == TD_THR_ZOMBIE)
 					print_zombie(Pr, tip);
 				else
@@ -475,23 +489,49 @@ all_call_stacks(pstack_handle_t *h, int dothreads)
 	return (0);
 }
 
+/* The width of the header */
+#define	HEAD_WIDTH	(62)
 static void
-tlhead(id_t threadid, id_t lwpid)
+tlhead(id_t threadid, id_t lwpid, const char *name)
 {
+	char buf[128] = { 0 };
+	char num[16];
+	ssize_t amt = 0;
+	int i;
+
 	if (threadid == 0 && lwpid == 0)
 		return;
 
-	(void) printf("-----------------");
+	if (lwpid > 0) {
+		(void) snprintf(num, sizeof (num), "%d", (int)lwpid);
+		(void) strlcat(buf, "thread# ", sizeof (buf));
+		(void) strlcat(buf, num, sizeof (buf));
+	}
 
-	if (threadid && lwpid)
-		(void) printf("  lwp# %d / thread# %d  ",
-		    (int)lwpid, (int)threadid);
-	else if (threadid)
-		(void) printf("---------  thread# %d  ", (int)threadid);
-	else if (lwpid)
-		(void) printf("  lwp# %d  ------------", (int)lwpid);
+	if (threadid > 0) {
+		(void) snprintf(num, sizeof (num), "%d", (int)threadid);
+		if (lwpid > 0)
+			(void) strlcat(buf, " / ", sizeof (buf));
+		(void) strlcat(buf, "lwp# ", sizeof (buf));
+		(void) strlcat(buf, num, sizeof (buf));
+	}
 
-	(void) printf("--------------------\n");
+	if (name != NULL && strlen(name) > 0) {
+		(void) strlcat(buf, " [", sizeof (buf));
+		(void) strlcat(buf, name, sizeof (buf));
+		(void) strlcat(buf, "]", sizeof (buf));
+	}
+
+	amt = (HEAD_WIDTH - strlen(buf) - 2);
+	if (amt < 4)
+		amt = 4;
+
+	for (i = 0; i < amt / 2; i++)
+		(void) putc('-', stdout);
+	(void) printf(" %s ", buf);
+	for (i = 0; i < (amt / 2) + (amt % 2); i++)
+		(void) putc('-', stdout);
+	(void) putc('\n', stdout);
 }
 
 /*ARGSUSED*/
@@ -585,9 +625,13 @@ print_frame(void *cd, prgregset_t gregs, uint_t argc, const long *argv)
 	if (h->pydb != NULL && argc > 0) {
 		char buf_py[1024];
 		int rc;
-
-		rc = pydb_pc_frameinfo(h->pydb, pc, argv[0], buf_py,
-		    sizeof (buf_py));
+		if (pydb_pc_frameinfo_argv != NULL) {
+			rc = pydb_pc_frameinfo_argv(h->pydb, pc, argv, buf_py,
+			    sizeof (buf_py));
+		} else {
+			rc = pydb_pc_frameinfo(h->pydb, pc, argv[0], buf_py,
+			    sizeof (buf_py));
+		}
 		if (rc == 0) {
 			(void) printf("   %s", buf_py);
 		}
@@ -810,9 +854,12 @@ load_libpython(struct ps_prochandle *Pr)
 		    dlsym(libpython, "pydb_agent_destroy");
 		pydb_pc_frameinfo = (pydb_pc_frameinfo_f)
 		    dlsym(libpython, "pydb_pc_frameinfo");
+		pydb_pc_frameinfo_argv = (pydb_pc_frameinfo_argv_f)
+		    dlsym(libpython, "pydb_pc_frameinfo_argv");
 
 		if (pydb_agent_create == NULL || pydb_agent_destroy == NULL ||
-		    pydb_pc_frameinfo == NULL) {
+		    (pydb_pc_frameinfo == NULL &&
+		    pydb_pc_frameinfo_argv == NULL)) {
 			(void) dlclose(libpython);
 			libpython = NULL;
 			return (NULL);

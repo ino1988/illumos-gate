@@ -21,6 +21,7 @@
 
 #
 # Copyright (c) 2010, Oracle and/or its affiliates. All rights reserved.
+# Copyright 2018 Nexenta Systems, Inc.  All rights reserved.
 #
 
 include ../../../Makefile.master
@@ -28,8 +29,11 @@ include ../../../Makefile.master
 HDRS=	\
 	doserror.h		\
 	lmerr.h			\
+	ntaccess.h		\
 	nterror.h		\
-	ntstatus.h
+	ntstatus.h		\
+	winioctl.h		\
+	wintypes.h
 
 
 ROOTDIR= $(ROOT)/usr/include/smb

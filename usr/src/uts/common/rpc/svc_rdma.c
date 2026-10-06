@@ -20,6 +20,10 @@
  */
 /*
  * Copyright (c) 1983, 2010, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2012 by Delphix. All rights reserved.
+ * Copyright 2013 Nexenta Systems, Inc.  All rights reserved.
+ * Copyright 2012 Marcel Telka <marcel@telka.sk>
+ * Copyright 2018 OmniOS Community Edition (OmniOSce) Association.
  */
 /* Copyright (c) 1983, 1984, 1985, 1986, 1987, 1988, 1989 AT&T */
 /* All Rights Reserved */
@@ -80,7 +84,7 @@ uint32_t rdma_bufs_granted = RDMA_BUFS_GRANT;
  * RDMA transport specific data associated with SVCMASTERXPRT
  */
 struct rdma_data {
-	SVCMASTERXPRT 	*rd_xprt;	/* back ptr to SVCMASTERXPRT */
+	SVCMASTERXPRT	*rd_xprt;	/* back ptr to SVCMASTERXPRT */
 	struct rdma_svc_data rd_data;	/* rdma data */
 	rdma_mod_t	*r_mod;		/* RDMA module containing ops ptr */
 };
@@ -146,7 +150,9 @@ struct svc_ops rdma_svc_ops = {
 	svc_rdma_kclone_destroy,	/* Destroy a clone xprt */
 	svc_rdma_kstart,	/* Tell `ready-to-receive' to rpcmod */
 	svc_rdma_kclone_xprt,	/* Transport specific clone xprt */
-	svc_rdma_ktattrs	/* Get Transport Attributes */
+	svc_rdma_ktattrs,	/* Get Transport Attributes */
+	NULL,			/* Increment transport reference count */
+	NULL			/* Decrement transport reference count */
 };
 
 /*
@@ -256,6 +262,10 @@ svc_rdma_kcreate(char *netid, SVC_CALLOUT_TABLE *sct, int id,
 		mutex_init(&xprt->xp_thread_lock, NULL, MUTEX_DEFAULT, NULL);
 		xprt->xp_req_head = (mblk_t *)0;
 		xprt->xp_req_tail = (mblk_t *)0;
+		xprt->xp_full = FALSE;
+		xprt->xp_enable = FALSE;
+		xprt->xp_reqs = 0;
+		xprt->xp_size = 0;
 		xprt->xp_threads = 0;
 		xprt->xp_detached_threads = 0;
 
@@ -519,7 +529,7 @@ svc_rdma_krecv(SVCXPRT *clone_xprt, mblk_t *mp, struct rpc_msg *msg)
 
 		cllong->u.c_daddr3 = cllong->rb_longbuf.addr;
 
-		if (cllong->u.c_daddr == NULL) {
+		if (cllong->u.c_daddr == 0) {
 			DTRACE_PROBE(krpc__e__svcrdma__krecv__nomem);
 			rdma_buf_free(conn, &cllong->rb_longbuf);
 			clist_free(cllong);
@@ -1134,18 +1144,15 @@ svc_rdma_kfreeres(SVCXPRT *clone_xprt)
  * to the service load so that there is likely to be a response entry
  * when the first retransmission comes in.
  */
-#define	MAXDUPREQS	1024
+#define	MAXDUPREQS	8192
 
 /*
- * This should be appropriately scaled to MAXDUPREQS.
+ * This should be appropriately scaled to MAXDUPREQS.  To produce as less as
+ * possible collisions it is suggested to set this to a prime.
  */
-#define	DRHASHSZ	257
+#define	DRHASHSZ	2053
 
-#if ((DRHASHSZ & (DRHASHSZ - 1)) == 0)
-#define	XIDHASH(xid)	((xid) & (DRHASHSZ - 1))
-#else
 #define	XIDHASH(xid)	((xid) % DRHASHSZ)
-#endif
 #define	DRHASH(dr)	XIDHASH((dr)->dr_xid)
 #define	REQTOXID(req)	((req)->rq_xprt->xp_xid)
 
@@ -1171,7 +1178,7 @@ struct dupreq *rdmadrmru;
  */
 static int
 svc_rdma_kdup(struct svc_req *req, caddr_t res, int size, struct dupreq **drpp,
-	bool_t *dupcachedp)
+    bool_t *dupcachedp)
 {
 	struct dupreq *dr;
 	uint32_t xid;
@@ -1295,7 +1302,7 @@ svc_rdma_kdup(struct svc_req *req, caddr_t res, int size, struct dupreq **drpp,
  */
 static void
 svc_rdma_kdupdone(struct dupreq *dr, caddr_t res, void (*dis_resfree)(),
-	int size, int status)
+    int size, int status)
 {
 	ASSERT(dr->dr_resfree == NULL);
 	if (status == DUP_DONE) {

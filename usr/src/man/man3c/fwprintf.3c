@@ -1,17 +1,52 @@
-'\" te
-.\" Copyright (c) 1992, X/Open Company Limited. All Rights Reserved. Portions Copyright (c) 2003, Sun Microsystems, Inc. All Rights Reserved.
-.\" Sun Microsystems, Inc. gratefully acknowledges The Open Group for permission to reproduce portions of its copyrighted documentation. Original documentation from The Open Group can be obtained online at
+.\"
+.\" Sun Microsystems, Inc. gratefully acknowledges The Open Group for
+.\" permission to reproduce portions of its copyrighted documentation.
+.\" Original documentation from The Open Group can be obtained online at
 .\" http://www.opengroup.org/bookstore/.
-.\" The Institute of Electrical and Electronics Engineers and The Open Group, have given us permission to reprint portions of their documentation. In the following statement, the phrase "this text" refers to portions of the system documentation. Portions of this text are reprinted and reproduced in electronic form in the Sun OS Reference Manual, from IEEE Std 1003.1, 2004 Edition, Standard for Information Technology -- Portable Operating System Interface (POSIX), The Open Group Base Specifications Issue 6, Copyright (C) 2001-2004 by the Institute of Electrical and Electronics Engineers, Inc and The Open Group. In the event of any discrepancy between these versions and the original IEEE and The Open Group Standard, the original IEEE and The Open Group Standard is the referee document. The original Standard can be obtained online at http://www.opengroup.org/unix/online.html.
-.\"  This notice shall appear on any product containing this material.
-.\" The contents of this file are subject to the terms of the Common Development and Distribution License (the "License").  You may not use this file except in compliance with the License.
-.\" You can obtain a copy of the license at usr/src/OPENSOLARIS.LICENSE or http://www.opensolaris.org/os/licensing.  See the License for the specific language governing permissions and limitations under the License.
-.\" When distributing Covered Code, include this CDDL HEADER in each file and include the License file at usr/src/OPENSOLARIS.LICENSE.  If applicable, add the following below this CDDL HEADER, with the fields enclosed by brackets "[]" replaced with your own identifying information: Portions Copyright [yyyy] [name of copyright owner]
-.TH FWPRINTF 3C "Nov 1, 2003"
+.\"
+.\" The Institute of Electrical and Electronics Engineers and The Open
+.\" Group, have given us permission to reprint portions of their
+.\" documentation.
+.\"
+.\" In the following statement, the phrase ``this text'' refers to portions
+.\" of the system documentation.
+.\"
+.\" Portions of this text are reprinted and reproduced in electronic form
+.\" in the SunOS Reference Manual, from IEEE Std 1003.1, 2004 Edition,
+.\" Standard for Information Technology -- Portable Operating System
+.\" Interface (POSIX), The Open Group Base Specifications Issue 6,
+.\" Copyright (C) 2001-2004 by the Institute of Electrical and Electronics
+.\" Engineers, Inc and The Open Group.  In the event of any discrepancy
+.\" between these versions and the original IEEE and The Open Group
+.\" Standard, the original IEEE and The Open Group Standard is the referee
+.\" document.  The original Standard can be obtained online at
+.\" http://www.opengroup.org/unix/online.html.
+.\"
+.\" This notice shall appear on any product containing this material.
+.\"
+.\" The contents of this file are subject to the terms of the
+.\" Common Development and Distribution License (the "License").
+.\" You may not use this file except in compliance with the License.
+.\"
+.\" You can obtain a copy of the license at usr/src/OPENSOLARIS.LICENSE
+.\" or http://www.opensolaris.org/os/licensing.
+.\" See the License for the specific language governing permissions
+.\" and limitations under the License.
+.\"
+.\" When distributing Covered Code, include this CDDL HEADER in each
+.\" file and include the License file at usr/src/OPENSOLARIS.LICENSE.
+.\" If applicable, add the following below this CDDL HEADER, with the
+.\" fields enclosed by brackets "[]" replaced with your own identifying
+.\" information: Portions Copyright [yyyy] [name of copyright owner]
+.\"
+.\"
+.\" Copyright (c) 1992, X/Open Company Limited. All Rights Reserved.
+.\" Portions Copyright (c) 2003, Sun Microsystems, Inc. All Rights Reserved.
+.\"
+.TH FWPRINTF 3C "Feb 17, 2023"
 .SH NAME
 fwprintf, wprintf, swprintf \- print formatted wide-character output
 .SH SYNOPSIS
-.LP
 .nf
 #include <stdio.h>
 #include <wchar.h>
@@ -32,8 +67,6 @@ fwprintf, wprintf, swprintf \- print formatted wide-character output
 .fi
 
 .SH DESCRIPTION
-.sp
-.LP
 The \fBfwprintf()\fR function places output on the named output \fIstream\fR.
 The \fBwprintf()\fR function places output on the standard output stream
 \fBstdout\fR. The \fBswprintf()\fR function places output followed by the null
@@ -504,7 +537,7 @@ The \fBdouble\fR argument is converted in the style \fBf\fR or \fBe\fR (or in
 the style \fBE\fR in the case of a \fBG\fR conversion wide-character), with the
 precision specifying the number of significant digits. If an explicit precision
 is 0, it is taken as 1. The style used depends on the value converted; style
-\fBe\fR (or \fBE\fR \fB)\fR will be used only if the exponent resulting from
+\fBe\fR (or \fBE\fR) will be used only if the exponent resulting from
 such a conversion is less than \(mi4 or greater than or equal to the precision.
 Trailing zeros are removed from the fractional portion of the result; a radix
 character appears only if it is followed by a digit.
@@ -648,8 +681,6 @@ update between the call to a successful execution of \fBfwprintf()\fR or
 \fBfflush\fR(3C) or \fBfclose\fR(3C) on the same stream or a call to
 \fBexit\fR(3C) or \fBabort\fR(3C).
 .SH RETURN VALUES
-.sp
-.LP
 Upon successful completion, these functions return the number of
 wide-characters transmitted excluding the terminating null wide-character in
 the case of \fBswprintf()\fR or a negative value if an output error was
@@ -659,8 +690,6 @@ encountered.
 If \fIn\fR or more wide characters were requested to be written,
 \fBswprintf()\fR returns a negative value.
 .SH ERRORS
-.sp
-.LP
 For the conditions under which \fBfwprintf()\fR and \fBwprintf()\fR will fail
 and may fail, refer to \fBfputwc\fR(3C).
 .sp
@@ -698,7 +727,6 @@ Insufficient storage space is available.
 .RE
 
 .SH EXAMPLES
-.LP
 \fBExample 1 \fRPrint Language-dependent Date and Time Format.
 .sp
 .LP
@@ -759,9 +787,7 @@ Sonntag, 3. Juli, 10:02
 .in -2
 
 .SH ATTRIBUTES
-.sp
-.LP
-See \fBattributes\fR(5) for descriptions of the following attributes:
+See \fBattributes\fR(7) for descriptions of the following attributes:
 .sp
 
 .sp
@@ -777,13 +803,14 @@ MT-Level	MT-Safe with exceptions
 .TE
 
 .SH SEE ALSO
-.sp
-.LP
-\fBbtowc\fR(3C), \fBfputwc\fR(3C), \fBfwscanf\fR(3C), \fBmbrtowc\fR(3C),
-\fBsetlocale\fR(3C), \fBattributes\fR(5), \fBstandards\fR(5)
+.BR btowc (3C),
+.BR fputwc (3C),
+.BR fwscanf (3C),
+.BR mbrtowc (3C),
+.BR setlocale (3C),
+.BR attributes (7),
+.BR standards (7)
 .SH NOTES
-.sp
-.LP
 The \fBfwprintf()\fR, \fBwprintf()\fR, and \fBswprintf()\fR functions can be
 used safely in multithreaded applications, as long as \fBsetlocale\fR(3C) is
 not being called to change the locale.

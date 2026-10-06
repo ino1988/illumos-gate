@@ -23,6 +23,11 @@
  * Use is subject to license terms.
  */
 
+/*
+ * Copyright 2019 Joyent, Inc.
+ * Copyright 2026 Oxide Computer Company
+ */
+
 #ifndef	_MDB_KS_H
 #define	_MDB_KS_H
 
@@ -67,6 +72,7 @@ extern int mdb_devinfo2statep(uintptr_t, char *, uintptr_t *);
 extern int mdb_cpu2cpuid(uintptr_t);
 
 extern int mdb_cpuset_find(uintptr_t);
+extern int mdb_ncpu(void);
 
 extern hrtime_t mdb_gethrtime(void);
 extern int64_t mdb_get_lbolt(void);
@@ -139,6 +145,8 @@ extern const char *mdb_dlpi_prim(int);
 
 /* Generic function for working with MAC (network layer 2) addresses. */
 extern void mdb_mac_addr(const uint8_t *, size_t, char *, size_t);
+
+extern void mdb_print_buildversion(void);
 
 /*
  * Target-specific interfaces

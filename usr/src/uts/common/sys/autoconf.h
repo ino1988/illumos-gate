@@ -251,7 +251,7 @@ extern void impl_rem_dev_props(dev_info_t *);
 extern void add_class(char *, char *);
 
 extern int make_mbind(char *, int, char *, struct bind **);
-extern void delete_mbind(char *, struct bind **);
+extern void delete_mbind(const char *, struct bind **);
 extern void purge_mbind(int, struct bind **);
 
 extern void configure(void);
@@ -274,7 +274,7 @@ extern int exclude_level(int);
 
 extern major_t path_to_major(char *);
 extern void i_ddi_node_cache_init(void);
-extern dev_info_t *i_ddi_alloc_node(dev_info_t *, char *, pnode_t, int,
+extern dev_info_t *i_ddi_alloc_node(dev_info_t *, const char *, pnode_t, int,
     ddi_prop_t *, int);
 extern void i_ddi_forceattach_drivers(void);
 extern int i_ddi_io_initialized(void);

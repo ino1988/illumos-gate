@@ -29,7 +29,9 @@
  * From "@(#)pcicfg.c   1.31    99/06/18 SMI"
  */
 
-#pragma ident	"%Z%%M%	%I%	%E% SMI"
+/*
+ * Copyright 2023 Oxide Computer Company
+ */
 
 /*
  * Cardbus module
@@ -60,7 +62,7 @@
 
 #ifdef sparc
 #include <sys/ddi_subrdefs.h>
-#elif defined(__x86) || defined(__amd64)
+#elif defined(__x86)
 #include <sys/pci_intr_lib.h>
 #include <sys/mach_intr.h>
 #endif
@@ -315,7 +317,7 @@ cardbus_claim_pci_busnum(dev_info_t *dip, void *arg)
 
 static void
 cardbus_walk_node_child(dev_info_t *parent,
-	int (*f)(dev_info_t *, void *), void *arg)
+    int (*f)(dev_info_t *, void *), void *arg)
 {
 	dev_info_t *dip;
 	int ret;
@@ -576,7 +578,6 @@ cardbus_load_cardbus(dev_info_t *dip, uint_t socket, uint32_t pc_base)
 {
 #ifndef HOTPLUG
 	struct cardbus_config_ctrl ctrl;
-	int circular_count;
 #endif
 	int cb_instance;
 	cbus_t *cbp;
@@ -635,9 +636,9 @@ cardbus_load_cardbus(dev_info_t *dip, uint_t socket, uint32_t pc_base)
 #if defined(CARDBUS_DEBUG)
 	cardbus_err(dip, 8, "cardbus_load_cardbus: calling cbus_configure\n");
 #endif
-	ndi_devi_enter(dip, &circular_count);
+	ndi_devi_enter(dip);
 	ddi_walk_devs(ddi_get_child(dip), cbus_configure, (void *)&ctrl);
-	ndi_devi_exit(dip, circular_count);
+	ndi_devi_exit(dip);
 
 	if (ctrl.rv != NDI_SUCCESS) {
 		cardbus_err(dip, 1,
@@ -743,10 +744,8 @@ is_32bit_pccard(dev_info_t *dip)
 
 	len = sizeof (bus_type);
 	if (ddi_prop_op(DDI_DEV_T_ANY, ddi_get_parent(dip),
-		PROP_LEN_AND_VAL_BUF,
-		DDI_PROP_CANSLEEP | DDI_PROP_DONTPASS,
-		"device_type",
-		(caddr_t)&bus_type, &len) != DDI_SUCCESS)
+	    PROP_LEN_AND_VAL_BUF, DDI_PROP_CANSLEEP | DDI_PROP_DONTPASS,
+	    "device_type", (caddr_t)&bus_type, &len) != DDI_SUCCESS)
 		return (B_FALSE);
 
 	if ((strcmp(bus_type, "pci") != 0) &&
@@ -900,8 +899,8 @@ cardbus_revert_properties(dev_info_t *dip)
 
 static int
 cardbus_prop_op(dev_t dev, dev_info_t *dip, dev_info_t *ch_dip,
-		ddi_prop_op_t prop_op, int mod_flags,
-		char *name, caddr_t valuep, int *lengthp)
+    ddi_prop_op_t prop_op, int mod_flags,
+    char *name, caddr_t valuep, int *lengthp)
 {
 #if defined(CARDBUS_DEBUG)
 	if ((ch_dip != dip) || (cardbus_debug >= 9))
@@ -915,7 +914,7 @@ cardbus_prop_op(dev_t dev, dev_info_t *dip, dev_info_t *ch_dip,
 
 static int
 cardbus_ctlops(dev_info_t *dip, dev_info_t *rdip,
-	ddi_ctl_enum_t ctlop, void *arg, void *result)
+    ddi_ctl_enum_t ctlop, void *arg, void *result)
 {
 	pci_regspec_t *regs;
 	int	totreg, reglen;
@@ -1096,7 +1095,7 @@ cardbus_init_child_regs(dev_info_t *child)
 {
 	ddi_acc_handle_t config_handle;
 	uint16_t command_preserve, command;
-#if !defined(__i386) && !defined(__amd64)
+#if !defined(__x86)
 	uint8_t bcr;
 #endif
 	uint8_t header_type;
@@ -1143,7 +1142,7 @@ cardbus_init_child_regs(dev_info_t *child)
 	pci_config_put16(config_handle, PCI_CONF_COMM, command);
 	command = pci_config_get16(config_handle, PCI_CONF_COMM);
 
-#if !defined(__i386) && !defined(__amd64)
+#if !defined(__x86)
 	/*
 	 * If the device has a bus control register then program it
 	 * based on the settings in the command register.
@@ -1207,7 +1206,7 @@ cardbus_init_child_regs(dev_info_t *child)
 
 static int
 cardbus_initchild(dev_info_t *rdip, dev_info_t *dip, dev_info_t *child,
-		void *result)
+    void *result)
 {
 	char	name[MAXNAMELEN];
 	const char	*dname = ddi_driver_name(dip);
@@ -1269,7 +1268,7 @@ cardbus_initchild(dev_info_t *rdip, dev_info_t *dip, dev_info_t *child,
 		    kmem_zalloc(sizeof (struct cardbus_parent_private_data),
 		    KM_SLEEP);
 
-#elif defined(__x86) || defined(__amd64)
+#elif defined(__x86)
 		ppd = (struct cardbus_parent_private_data *)
 		    kmem_zalloc(sizeof (struct cardbus_parent_private_data)
 		    + sizeof (struct intrspec), KM_SLEEP);
@@ -1373,7 +1372,7 @@ cardbus_removechild(dev_info_t *dip)
 			    ppd->ppd.par_nreg * sizeof (struct regspec));
 #ifdef sparc
 		kmem_free(ppd, sizeof (struct cardbus_parent_private_data));
-#elif defined(__x86) || defined(__amd64)
+#elif defined(__x86)
 		kmem_free(ppd, sizeof (struct cardbus_parent_private_data) +
 		    sizeof (struct intrspec));
 #endif
@@ -1443,7 +1442,7 @@ find_token(char **cp, int *l, char *endc)
 	}
 
 	*endc = **cp;
-	**cp = NULL;
+	**cp = '\0';
 
 	return (cpp);
 }
@@ -1526,7 +1525,7 @@ token_to_dec(char *token, unsigned *val, int len)
 
 static void
 cardbus_add_prop(struct cb_deviceset_props *cdsp, int type, char *name,
-		caddr_t vp, int len)
+    caddr_t vp, int len)
 {
 	ddi_prop_t *propp;
 	int	pnlen = strlen(name) + 1;
@@ -1543,7 +1542,7 @@ cardbus_add_prop(struct cb_deviceset_props *cdsp, int type, char *name,
 
 static void
 cardbus_add_stringprop(struct cb_deviceset_props *cdsp, char *name,
-		char *vp, int len)
+    char *vp, int len)
 {
 	char	*nstr = kmem_zalloc(len + 1, KM_SLEEP);
 
@@ -1595,7 +1594,7 @@ cardbus_devprops_free(struct cb_deviceset_props *cbdp)
  * after the semi-colon is a setting equate.
  *
  * "binding_name=xXxXxX VendorID=NNNN DeviceID=NNNN; nodename=NewName
- * 					Prop=PropVal"
+ *					Prop=PropVal"
  *
  */
 static int
@@ -1605,11 +1604,10 @@ cardbus_parse_devprop(cbus_t *cbp, char *cp)
 	int	length;
 	char	*token = "beginning of line";
 	char	*ptoken = NULL, *quote;
-	char	eq = NULL;
+	char	eq = '\0';
 	struct cb_deviceset_props *cdsp;
 
-	cdsp = (struct cb_deviceset_props *)kmem_zalloc(sizeof (*cdsp),
-	    KM_SLEEP);
+	cdsp = kmem_zalloc(sizeof (*cdsp), KM_SLEEP);
 	length = strlen(cp);
 
 	while ((*cp) && (l < length)) {
@@ -1625,6 +1623,7 @@ cardbus_parse_devprop(cbus_t *cbp, char *cp)
 				cmn_err(CE_CONT, "cardbus_parse_devprop: "
 				    "escape not allowed outside "
 				    "of quotes at [%s]\n", token);
+				cardbus_devprops_free(cdsp);
 				return (DDI_FAILURE);
 
 			} /* if (!qm) */
@@ -1634,7 +1633,7 @@ cardbus_parse_devprop(cbus_t *cbp, char *cp)
 
 			l++;
 
-			*cpp = NULL;
+			*cpp = '\0';
 		} /* PARSE_ESCAPE */
 
 		/*
@@ -1645,7 +1644,7 @@ cardbus_parse_devprop(cbus_t *cbp, char *cp)
 			if (qm) {
 				quote = cp + 1;
 			} else {
-				*cp = NULL;
+				*cp = '\0';
 				if (state == PT_STATE_CHECK) {
 					if (strcmp(token, cb_nnamestr) == 0) {
 						cdsp->nodename = kmem_alloc(
@@ -1662,6 +1661,7 @@ cardbus_parse_devprop(cbus_t *cbp, char *cp)
 					    "cardbus_parse_devprop: "
 					    "unexpected string [%s] after "
 					    "[%s]\n", quote, token);
+					cardbus_devprops_free(cdsp);
 					return (DDI_FAILURE);
 				} else {
 					if (strcmp(token, cb_bnamestr) == 0) {
@@ -1852,7 +1852,7 @@ cardbus_device_props(cbus_t *cbp)
 
 static int
 cardbus_bus_map(dev_info_t *dip, dev_info_t *rdip, ddi_map_req_t *mp,
-		off_t offset, off_t len, caddr_t *vaddrp)
+    off_t offset, off_t len, caddr_t *vaddrp)
 {
 	register dev_info_t *pdip = (dev_info_t *)DEVI(dip)->devi_parent;
 	int	rc;
@@ -1904,8 +1904,8 @@ pcirp2rp(const pci_regspec_t *pci_rp, struct regspec *rp)
 
 static int
 cardbus_dma_allochdl(dev_info_t *dip, dev_info_t *rdip, ddi_dma_attr_t *attr,
-		int (*waitfp)(caddr_t), caddr_t arg,
-		ddi_dma_handle_t *handlep)
+    int (*waitfp)(caddr_t), caddr_t arg,
+    ddi_dma_handle_t *handlep)
 {
 	dev_info_t *pdip = ddi_get_parent(dip);
 
@@ -1926,7 +1926,7 @@ cardbus_dma_allochdl(dev_info_t *dip, dev_info_t *rdip, ddi_dma_attr_t *attr,
 
 static int
 cardbus_dma_freehdl(dev_info_t *dip, dev_info_t *rdip,
-		ddi_dma_handle_t handle)
+    ddi_dma_handle_t handle)
 {
 	dev_info_t *pdip = ddi_get_parent(dip);
 
@@ -1947,8 +1947,8 @@ cardbus_dma_freehdl(dev_info_t *dip, dev_info_t *rdip,
 
 static int
 cardbus_dma_bindhdl(dev_info_t *dip, dev_info_t *rdip,
-		ddi_dma_handle_t handle, struct ddi_dma_req *dmareq,
-		ddi_dma_cookie_t *cp, uint_t *ccountp)
+    ddi_dma_handle_t handle, struct ddi_dma_req *dmareq,
+    ddi_dma_cookie_t *cp, uint_t *ccountp)
 {
 	dev_info_t *pdip = ddi_get_parent(dip);
 
@@ -1970,7 +1970,7 @@ cardbus_dma_bindhdl(dev_info_t *dip, dev_info_t *rdip,
 
 static int
 cardbus_dma_unbindhdl(dev_info_t *dip, dev_info_t *rdip,
-		ddi_dma_handle_t handle)
+    ddi_dma_handle_t handle)
 {
 	dev_info_t *pdip = ddi_get_parent(dip);
 
@@ -1992,8 +1992,8 @@ cardbus_dma_unbindhdl(dev_info_t *dip, dev_info_t *rdip,
 
 static int
 cardbus_dma_flush(dev_info_t *dip, dev_info_t *rdip,
-		ddi_dma_handle_t handle, off_t off, size_t len,
-		uint_t cache_flags)
+    ddi_dma_handle_t handle, off_t off, size_t len,
+    uint_t cache_flags)
 {
 	dev_info_t *pdip = ddi_get_parent(dip);
 
@@ -2015,8 +2015,8 @@ cardbus_dma_flush(dev_info_t *dip, dev_info_t *rdip,
 
 static int
 cardbus_dma_win(dev_info_t *dip, dev_info_t *rdip,
-		ddi_dma_handle_t handle, uint_t win, off_t *offp,
-		size_t *lenp, ddi_dma_cookie_t *cookiep, uint_t *ccountp)
+    ddi_dma_handle_t handle, uint_t win, off_t *offp,
+    size_t *lenp, ddi_dma_cookie_t *cookiep, uint_t *ccountp)
 {
 	dev_info_t *pdip = ddi_get_parent(dip);
 	cardbus_err(dip, 6,
@@ -2037,7 +2037,7 @@ cardbus_dma_win(dev_info_t *dip, dev_info_t *rdip,
 
 static int
 cardbus_dma_map(dev_info_t *dip, dev_info_t *rdip,
-		struct ddi_dma_req *dmareqp, ddi_dma_handle_t *handlep)
+    struct ddi_dma_req *dmareqp, ddi_dma_handle_t *handlep)
 {
 	dev_info_t *pdip = ddi_get_parent(dip);
 
@@ -2059,7 +2059,7 @@ cardbus_dma_map(dev_info_t *dip, dev_info_t *rdip,
 
 static int
 cardbus_get_eventcookie(dev_info_t *dip, dev_info_t *rdip,
-		char *eventname, ddi_eventcookie_t *cookiep)
+    char *eventname, ddi_eventcookie_t *cookiep)
 {
 	cbus_t *cbp;
 	int	cb_instance;
@@ -2105,9 +2105,9 @@ cardbus_get_eventcookie(dev_info_t *dip, dev_info_t *rdip,
 
 static int
 cardbus_add_eventcall(dev_info_t *dip, dev_info_t *rdip,
-		ddi_eventcookie_t cookie, void (*callback)(dev_info_t *dip,
-		ddi_eventcookie_t cookie, void *arg, void *bus_impldata),
-		void *arg, ddi_callback_id_t *cb_id)
+    ddi_eventcookie_t cookie, void (*callback)(dev_info_t *dip,
+    ddi_eventcookie_t cookie, void *arg, void *bus_impldata),
+    void *arg, ddi_callback_id_t *cb_id)
 {
 	cbus_t *cbp;
 	int	cb_instance;
@@ -2189,7 +2189,7 @@ cardbus_remove_eventcall(dev_info_t *dip, ddi_callback_id_t cb_id)
 
 static int
 cardbus_post_event(dev_info_t *dip, dev_info_t *rdip,
-		ddi_eventcookie_t cookie, void *bus_impldata)
+    ddi_eventcookie_t cookie, void *bus_impldata)
 {
 	_NOTE(ARGUNUSED(rdip, cookie, bus_impldata))
 	cardbus_err(dip, 1, "cardbus_post_event()\n");
@@ -2214,7 +2214,7 @@ cardbus_get_pil(dev_info_t *dip)
 
 static int
 cardbus_intr_ops(dev_info_t *dip, dev_info_t *rdip, ddi_intr_op_t intr_op,
-	ddi_intr_handle_impl_t *hdlp, void *result)
+    ddi_intr_handle_impl_t *hdlp, void *result)
 {
 	int ret = DDI_SUCCESS;
 
@@ -2271,7 +2271,7 @@ cardbus_intr_ops(dev_info_t *dip, dev_info_t *rdip, ddi_intr_op_t intr_op,
 
 static int
 cardbus_enable_intr_impl(dev_info_t *dip, dev_info_t *rdip,
-		ddi_intr_handle_impl_t *hdlp)
+    ddi_intr_handle_impl_t *hdlp)
 {
 	anp_t *anp = (anp_t *)ddi_get_driver_private(dip);
 	set_irq_handler_t sih;
@@ -2294,7 +2294,7 @@ cardbus_enable_intr_impl(dev_info_t *dip, dev_info_t *rdip,
 
 	sih.socket = socket;
 	sih.handler_id = (unsigned)(long)rdip;
-	sih.handler = (f_tt *)hdlp->ih_cb_func;
+	sih.handler = (f_tt *)(uintptr_t)hdlp->ih_cb_func;
 	sih.arg1 = hdlp->ih_cb_arg1;
 	sih.arg2 = hdlp->ih_cb_arg2;
 	sih.irq = cardbus_get_pil(dip);
@@ -2307,7 +2307,7 @@ cardbus_enable_intr_impl(dev_info_t *dip, dev_info_t *rdip,
 
 static int
 cardbus_disable_intr_impl(dev_info_t *dip, dev_info_t *rdip,
-		ddi_intr_handle_impl_t *hdlp)
+    ddi_intr_handle_impl_t *hdlp)
 {
 	anp_t *anp = (anp_t *)ddi_get_driver_private(dip);
 	clear_irq_handler_t cih;
@@ -2330,7 +2330,7 @@ cardbus_disable_intr_impl(dev_info_t *dip, dev_info_t *rdip,
 
 	cih.socket = socket;
 	cih.handler_id = (unsigned)(long)rdip;
-	cih.handler = (f_tt *)hdlp->ih_cb_func;
+	cih.handler = (f_tt *)(uintptr_t)hdlp->ih_cb_func;
 
 	if ((*anp->an_if->pcif_clr_interrupt)(dip, &cih) != SUCCESS)
 		return (DDI_FAILURE);

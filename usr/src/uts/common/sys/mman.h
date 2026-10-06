@@ -25,6 +25,8 @@
  *
  * Copyright 2008 Sun Microsystems, Inc.  All rights reserved.
  * Use is subject to license terms.
+ * Copyright 2015 Joyent, Inc.  All rights reserved.
+ * Copyright 2022 Oxide Computer Company
  */
 
 /*	Copyright (c) 1983, 1984, 1985, 1986, 1987, 1988, 1989 AT&T	*/
@@ -44,6 +46,15 @@
 #define	_SYS_MMAN_H
 
 #include <sys/feature_tests.h>
+
+/*
+ * <sys/mman.h> has had a bit of a tortured symbol visibility history. In
+ * particular, when things were honored under __EXTENSIONS__ or not in the past
+ * wasn't very consistent. As this was not a header that was part of ISO-C it
+ * traditionally just checked around XOPEN/POSIX related feature tests. This
+ * makes the use of the standard _STRICT_POSIX something that actually is more
+ * restrictive than previously was used.
+ */
 
 #ifdef	__cplusplus
 extern "C" {
@@ -67,7 +78,7 @@ extern "C" {
 #define	PROT_EXEC	0x4		/* pages can be executed */
 
 #ifdef	_KERNEL
-#define	PROT_USER	0x8		/* pages are user accessable */
+#define	PROT_USER	0x8		/* pages are user accessible */
 #define	PROT_ZFOD	(PROT_READ | PROT_WRITE | PROT_EXEC | PROT_USER)
 #define	PROT_ALL	(PROT_READ | PROT_WRITE | PROT_EXEC | PROT_USER)
 #endif	/* _KERNEL */
@@ -80,35 +91,31 @@ extern "C" {
 #define	MAP_TYPE	0xf		/* mask for share type */
 
 /* other flags to mmap (or-ed in to MAP_SHARED or MAP_PRIVATE) */
+#define	MAP_FILE	0		/* map from file (default) */
 #define	MAP_FIXED	0x10		/* user assigns address */
+/* Not implemented */
+#define	MAP_RENAME	0x20		/* rename private pages to file */
 #define	MAP_NORESERVE	0x40		/* don't reserve needed swap area */
+/* Note that 0x80 is _MAP_LOW32, defined below */
 #define	MAP_ANON	0x100		/* map anonymous pages directly */
 #define	MAP_ANONYMOUS	MAP_ANON	/* (source compatibility) */
 #define	MAP_ALIGN	0x200		/* addr specifies alignment */
 #define	MAP_TEXT	0x400		/* map code segment */
 #define	MAP_INITDATA	0x800		/* map data segment */
 
+/*
+ * Internal to the kernel, extensions to mmap flags.
+ */
 #ifdef _KERNEL
 #define	_MAP_TEXTREPL	0x1000
+#define	_MAP_RANDOMIZE	0x2000
 #endif /* _KERNEL */
 
-/* these flags not yet implemented */
-#define	MAP_RENAME	0x20		/* rename private pages to file */
-
-#if	(_POSIX_C_SOURCE <= 2) && !defined(_XPG4_2)
-/* these flags are used by memcntl */
-#define	PROC_TEXT	(PROT_EXEC | PROT_READ)
-#define	PROC_DATA	(PROT_READ | PROT_WRITE | PROT_EXEC)
-#define	SHARED		0x10
-#define	PRIVATE		0x20
-#define	VALID_ATTR  (PROT_READ|PROT_WRITE|PROT_EXEC|SHARED|PRIVATE)
-#endif	/* (_POSIX_C_SOURCE <= 2) && !defined(_XPG4_2) */
-
-#if	(_POSIX_C_SOURCE <= 2) || defined(_XPG4_2)
-#ifdef	_KERNEL
-#define	PROT_EXCL	0x20
-#endif	/* _KERNEL */
-
+/*
+ * Extensions to mmap flags. These are available in the default compilation
+ * environment, but not in a strict environment.
+ */
+#if !defined(_STRICT_POSIX)
 #define	_MAP_LOW32	0x80	/* force mapping in lower 4G of address space */
 #define	MAP_32BIT	_MAP_LOW32
 
@@ -122,10 +129,9 @@ extern "C" {
  * unless the MAP_FIXED flag is given.
  */
 #define	_MAP_NEW	0x80000000	/* users should not need to use this */
-#endif	/* (_POSIX_C_SOURCE <= 2) */
+#endif	/* !defined(_STRICT_POSIX) */
 
-
-#if !defined(__XOPEN_OR_POSIX) || defined(__EXTENSIONS__)
+#if !defined(_STRICT_POSIX)
 /* External flags for mmapobj syscall (Exclusive of MAP_* flags above) */
 #define	MMOBJ_PADDING		0x10000
 #define	MMOBJ_INTERPRET		0x20000
@@ -144,9 +150,6 @@ extern "C" {
  *
  * MR_HDR_ELF being set indicates that the ELF header of the mapped object
  * is mapped at mr_addr + mr_offset.
- *
- * MR_HDR_AOUT being set indicates that the AOUT (4.x) header of the mapped
- * object is mapped at mr_addr + mr_offset.
  */
 
 /*
@@ -154,7 +157,6 @@ extern "C" {
  */
 #define	MR_PADDING	0x1
 #define	MR_HDR_ELF	0x2
-#define	MR_HDR_AOUT	0x3
 
 /*
  * Internal flags for mr_flags field below.
@@ -187,7 +189,7 @@ typedef struct mmapobj_result32 {
 } mmapobj_result32_t;
 #endif	/* defined(_KERNEL) || defined(_SYSCALL32) */
 #endif	/* !defined(_ASM) */
-#endif	/* !defined(__XOPEN_OR_POSIX) || defined(__EXTENSIONS__) */
+#endif	/* !defined(_STRICT_POSIX) */
 
 #if	!defined(_ASM) && !defined(_KERNEL)
 /*
@@ -220,34 +222,50 @@ typedef struct mmapobj_result32 {
 #endif
 
 /*
- * Except for old binaries mmap() will return the resultant
- * address of mapping on success and (caddr_t)-1 on error.
+ * Except for old binaries mmap() will return the resultant address of mapping
+ * on success and (void *)-1 on error.  illumos traditionally used a 'caddr_t'
+ * instead of a void * and did not require certain addresses to be const.
+ *
+ * Note, the following group of symbols are always visible since we have always
+ * exposed them and they appear to have been defined in most relevant versions
+ * of the specifications. While these are not strictly defined in ISO C, this
+ * header isn't a part of it and it isn't our job to guard against that.
  */
-#if (_POSIX_C_SOURCE > 2) || defined(_XPG4_2)
 extern void *mmap(void *, size_t, int, int, int, off_t);
 extern int munmap(void *, size_t);
 extern int mprotect(void *, size_t, int);
 extern int msync(void *, size_t, int);
-#if (!defined(_XPG4_2) || (_POSIX_C_SOURCE > 2)) || defined(__EXTENSIONS__)
-extern int mlock(const void *, size_t);
-extern int munlock(const void *, size_t);
-#endif	/* (!defined(_XPG4_2) || (_POSIX_C_SOURCE > 2))... */
-/* transitional large file interface version */
+
 #if	defined(_LARGEFILE64_SOURCE) && !((_FILE_OFFSET_BITS == 64) && \
 	    !defined(__PRAGMA_REDEFINE_EXTNAME))
 extern void *mmap64(void *, size_t, int, int, int, off64_t);
-#endif	/* _LARGEFILE64_SOURCE... */
-#else	/* (_POSIX_C_SOURCE > 2) || defined(_XPG4_2) */
-extern caddr_t mmap(caddr_t, size_t, int, int, int, off_t);
-extern int munmap(caddr_t, size_t);
-extern int mprotect(caddr_t, size_t, int);
-extern int msync(caddr_t, size_t, int);
-extern int mlock(caddr_t, size_t);
-extern int munlock(caddr_t, size_t);
+#endif  /* _LARGEFILE64_SOURCE... */
+
+/*
+ * These functions were all part of the older POSIX realtime suite and didn't
+ * make it into XPG until v5.
+ */
+
+#if !defined(_STRICT_POSIX) || (_POSIX_C_SOURCE > 2) || defined(_XPG5)
+extern int mlock(const void *, size_t);
+extern int munlock(const void *, size_t);
+extern int mlockall(int);
+extern int munlockall(void);
+extern int shm_open(const char *, int, mode_t);
+extern int shm_unlink(const char *);
+#endif	/* !_STRICT_POSIX || _POSIX_C_SOURCE > 2 || _XPG5 */
+
+#if !defined(_STRICT_POSIX) || defined(_XPG6)
+extern int posix_madvise(void *, size_t, int);
+#endif
+
+/*
+ * The following are extensions that we have added.
+ */
+#if !defined(_STRICT_POSIX)
 extern int mincore(caddr_t, size_t, char *);
-extern int memcntl(caddr_t, size_t, int, caddr_t, int, int);
-extern int madvise(caddr_t, size_t, int);
-#if !defined(__XOPEN_OR_POSIX) || defined(__EXTENSIONS__)
+extern int memcntl(void *, size_t, int, void *, int, int);
+extern int madvise(void *, size_t, int);
 extern int getpagesizes(size_t *, int);
 extern int getpagesizes2(size_t *, int);
 extern int mmapobj(int, uint_t, mmapobj_result_t *, uint_t *, void *);
@@ -256,53 +274,40 @@ extern int mmapobj(int, uint_t, mmapobj_result_t *, uint_t *, void *);
 extern int meminfo(const uint64_t *, int, const uint_t *, int, uint64_t *,
 	uint_t *);
 #endif /* defined(_INT64_TYPE) */
-#endif /* !defined(__XOPEN_OR_POSIX) || defined(__EXTENSIONS__) */
-/* transitional large file interface version */
-#ifdef	_LARGEFILE64_SOURCE
-extern caddr_t mmap64(caddr_t, size_t, int, int, int, off64_t);
-#endif
-#endif	/* (_POSIX_C_SOURCE > 2)  || defined(_XPG4_2) */
+#endif /* !defined(_STRICT_POSIX) */
 
-#if (!defined(_XPG4_2) || (_POSIX_C_SOURCE > 2)) || defined(__EXTENSIONS__)
-extern int mlockall(int);
-extern int munlockall(void);
-extern int shm_open(const char *, int, mode_t);
-extern int shm_unlink(const char *);
-#endif
-
-#if !defined(__XOPEN_OR_POSIX) || defined(_XPG6) || defined(__EXTENSIONS__)
-extern int posix_madvise(void *, size_t, int);
-#endif
 
 /* mmap failure value */
 #define	MAP_FAILED	((void *) -1)
 
-
 #endif	/* !_ASM && !_KERNEL */
 
-#if !defined(__XOPEN_OR_POSIX) || defined(__EXTENSIONS__)
+#if !defined(_STRICT_POSIX)
 #if !defined(_ASM)
 /*
  * structure for memcntl hat advise operations.
  */
 struct memcntl_mha {
-	uint_t 		mha_cmd;	/* command(s) */
+	uint_t		mha_cmd;	/* command(s) */
 	uint_t		mha_flags;
 	size_t		mha_pagesize;
 };
 
 #if defined(_SYSCALL32)
 struct memcntl_mha32 {
-	uint_t 		mha_cmd;	/* command(s) */
+	uint_t		mha_cmd;	/* command(s) */
 	uint_t		mha_flags;
 	size32_t	mha_pagesize;
 };
 #endif	/* _SYSCALL32 */
 #endif	/* !defined(_ASM) */
-#endif	/* !defined(__XOPEN_OR_POSIX) || defined(__EXTENSIONS__) */
 
-#if	(_POSIX_C_SOURCE <= 2) && !defined(_XPG4_2) || defined(__EXTENSIONS__)
-/* advice to madvise */
+/*
+ * advice to madvise
+ *
+ * Note, if more than 4 bits worth of advice (eg. 16) are specified then
+ * changes will be necessary to the struct vpage.
+ */
 #define	MADV_NORMAL		0	/* no further special treatment */
 #define	MADV_RANDOM		1	/* expect random page references */
 #define	MADV_SEQUENTIAL		2	/* expect sequential page references */
@@ -312,9 +317,11 @@ struct memcntl_mha32 {
 #define	MADV_ACCESS_DEFAULT	6	/* default access */
 #define	MADV_ACCESS_LWP		7	/* next LWP to access heavily */
 #define	MADV_ACCESS_MANY	8	/* many processes to access heavily */
-#endif	/* (_POSIX_C_SOURCE <= 2) && !defined(_XPG4_2) ...  */
+#define	MADV_PURGE		9	/* contents will be purged */
 
-#if !defined(__XOPEN_OR_POSIX) || defined(_XPG6) || defined(__EXTENSIONS__)
+#endif	/* !defined(_STRICT_POSIX) */
+
+#if !defined(_STRICT_POSIX) || defined(_XPG6)
 /* advice to posix_madvise */
 /* these values must be kept in sync with the MADV_* values, above */
 #define	POSIX_MADV_NORMAL	0	/* MADV_NORMAL */
@@ -324,15 +331,41 @@ struct memcntl_mha32 {
 #define	POSIX_MADV_DONTNEED	4	/* MADV_DONTNEED */
 #endif
 
-/* flags to msync */
+/* flags to msync, always visible to match the function */
 #define	MS_OLDSYNC	0x0		/* old value of MS_SYNC */
 					/* modified for UNIX98 compliance */
 #define	MS_SYNC		0x4		/* wait for msync */
 #define	MS_ASYNC	0x1		/* return immediately */
 #define	MS_INVALIDATE	0x2		/* invalidate caches */
 
-#if	(_POSIX_C_SOURCE <= 2) && !defined(_XPG4_2) || defined(__EXTENSIONS__)
-/* functions to mctl */
+#if !defined(_STRICT_POSIX) || (_POSIX_C_SOURCE > 2) || defined(_XPG5)
+/* flags to mlockall */
+#define	MCL_CURRENT	0x1		/* lock current mappings */
+#define	MCL_FUTURE	0x2		/* lock future mappings */
+#endif	/* !_STRICT_POSIX || _POSIX_C_SOURCE > 2 || _XPG5 */
+
+/*
+ * The following flags are older variants used by memcntl that if more generally
+ * visible under more generous rules basically conflict all over the place due
+ * to the use of common words. As such, these retain their original feature
+ * guards, as weird as they may be.
+ */
+#if	(_POSIX_C_SOURCE <= 2) && !defined(_XPG4_2)
+#define	SHARED		0x10	/* Use MEMCNTL_SHARED */
+#define	PRIVATE		0x20	/* Use MEMCNTL_PRIVATE */
+#define	VALID_ATTR	(PROT_READ|PROT_WRITE|PROT_EXEC|SHARED|PRIVATE)
+#endif	/* (_POSIX_C_SOURCE <= 2) && !defined(_XPG4_2) */
+
+#if !defined(_STRICT_POSIX)
+/* these flags are used by memcntl */
+#define	PROC_TEXT		(PROT_EXEC | PROT_READ)
+#define	PROC_DATA		(PROT_READ | PROT_WRITE | PROT_EXEC)
+#define	MEMCNTL_SHARED		0x10
+#define	MENCNTL_PRIVATE		0x20
+#define	MEMCNTL_VALID_ATTR	(PROT_READ |PROT_WRITE |PROT_EXEC | \
+				    MEMCNTL_SHARED | MEMCNTL_PRIVATE)
+
+/* functions to memcntl */
 #define	MC_SYNC		1		/* sync with backing store */
 #define	MC_LOCK		2		/* lock pages in memory */
 #define	MC_UNLOCK	3		/* unlock pages from memory */
@@ -340,6 +373,7 @@ struct memcntl_mha32 {
 #define	MC_LOCKAS	5		/* lock address space in memory */
 #define	MC_UNLOCKAS	6		/* unlock address space from memory */
 #define	MC_HAT_ADVISE	7		/* advise hat map size */
+#define	MC_INHERIT_ZERO	8		/* zero out regions on fork() */
 
 /* sub-commands for MC_HAT_ADVISE */
 #define	MHA_MAPSIZE_VA		0x1	/* set preferred page size */
@@ -348,17 +382,6 @@ struct memcntl_mha32 {
 					/* brk area and brk area itself */
 #define	MHA_MAPSIZE_STACK	0x4	/* set preferred page size */
 					/* processes main stack */
-
-#endif	/* (_POSIX_C_SOURCE <= 2) && !defined(_XPG4_2) ... */
-
-#if (!defined(_XPG4_2) || (_POSIX_C_SOURCE > 2)) || defined(__EXTENSIONS__)
-/* flags to mlockall */
-#define	MCL_CURRENT	0x1		/* lock current mappings */
-#define	MCL_FUTURE	0x2		/* lock future mappings */
-#endif /* (!defined(_XPG4_2) || (_POSIX_C_SOURCE)) || defined(__EXTENSIONS__) */
-
-#if !defined(__XOPEN_OR_POSIX) || defined(__EXTENSIONS__)
-
 /* definitions for meminfosys syscall */
 #define	MISYS_MEMINFO		0x0
 
@@ -409,7 +432,7 @@ typedef struct meminfo32 {
 /* maximum number of request types */
 #define	MAX_MEMINFO_REQ	31
 
-#endif /* !defined(__XOPEN_OR_POSIX) || defined(__EXTENSIONS__) */
+#endif /* !defined(_STRICT_POSIX) */
 
 #ifdef	__cplusplus
 }

@@ -387,7 +387,7 @@ class UARequester extends Object implements Locator {
 	    for (j = 0; j < m; j++) {
 		ServiceLocationAttribute attr =
 		    (ServiceLocationAttribute)attrList.elementAt(j);
-	
+
 		ServiceLocationAttribute.mergeDuplicateAttributes(attr,
 								  ht,
 								  ret,
@@ -557,7 +557,7 @@ class UARequester extends Object implements Locator {
 	    if (v.size() == 1) {
 		config.writeLog("single_exception",
 				new Object[] {
-		    new Integer(err)});
+		    Integer.valueOf(err)});
 		throw
 		    new ServiceLocationException((short)err,
 						 "remote_error",
@@ -565,7 +565,7 @@ class UARequester extends Object implements Locator {
 	    } else {
 		config.writeLog("multiple_exception",
 				new Object[] {
-		    new Integer(err)});
+		    Integer.valueOf(err)});
 	    }
 	}
     }

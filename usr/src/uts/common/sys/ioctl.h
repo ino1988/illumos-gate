@@ -25,12 +25,10 @@
  */
 
 /*	Copyright (c) 1984, 1986, 1987, 1988, 1989 AT&T	*/
-/*	  All Rights Reserved  	*/
+/*	  All Rights Reserved	*/
 
 #ifndef _SYS_IOCTL_H
 #define	_SYS_IOCTL_H
-
-#pragma ident	"%Z%%M%	%I%	%E% SMI"
 
 #ifdef	__cplusplus
 extern "C" {
@@ -66,6 +64,14 @@ extern "C" {
 #define	DIOCGETC	(DIOC|1)
 #define	DIOCGETB	(DIOC|2)
 #define	DIOCSETE	(DIOC|3)
+
+/*
+ * While ioctl was at one point only defined in <stropts.h> by POSIX, it was
+ * removed in Issue 8 (2024). We also have traditionally had a definition of
+ * this in <unistd.h>, which is namespaced. We add this here without namespacing
+ * to aid broader portability.
+ */
+extern int ioctl(int, int, ...);
 
 #ifdef	__cplusplus
 }

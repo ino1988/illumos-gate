@@ -26,7 +26,7 @@
 #
 
 #
-# Copyright (c) 2013 by Delphix. All rights reserved.
+# Copyright (c) 2013, 2016 by Delphix. All rights reserved.
 #
 
 . $STF_SUITE/tests/functional/slog/slog.kshlib
@@ -44,6 +44,7 @@ verify_runnable "global"
 
 log_assert "A raidz/raidz2 log is not supported."
 log_onexit cleanup
+log_must setup
 
 for type in "" "mirror" "raidz" "raidz2"
 do
@@ -51,7 +52,7 @@ do
 	do
 		for logtype in "raidz" "raidz1" "raidz2"
 		do
-			log_mustnot $ZPOOL create $TESTPOOL $type $VDEV \
+			log_mustnot zpool create $TESTPOOL $type $VDEV \
 				$spare $SDEV log $logtype $LDEV $LDEV2
 			ldev=$(random_get $LDEV $LDEV2)
 			log_mustnot verify_slog_device \

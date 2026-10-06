@@ -21,6 +21,8 @@
 /*
  * Copyright 2009 Sun Microsystems, Inc.  All rights reserved.
  * Use is subject to license terms.
+ * Copyright 2017 Joyent, Inc.
+ * Copyright 2026 Oxide Computer Company
  */
 
 /*
@@ -101,10 +103,6 @@
  *
  * ip_squeue_fanout can be accessed and changed using ndd on /dev/tcp or
  * /dev/ip.
- *
- * ip_squeue_worker_wait: global value for the sq_wait field for all squeues *
- * created. This is the time squeue code waits before waking up the worker
- * thread after queuing a request.
  */
 
 #include <sys/types.h>
@@ -142,13 +140,6 @@ kmutex_t		sqset_lock;
 
 static void (*ip_squeue_create_callback)(squeue_t *) = NULL;
 
-/*
- * ip_squeue_worker_wait: global value for the sq_wait field for all squeues
- *	created. This is the time squeue code waits before waking up the worker
- *	thread after queuing a request.
- */
-uint_t ip_squeue_worker_wait = 10;
-
 static squeue_t *ip_squeue_create(pri_t);
 static squeue_set_t *ip_squeue_set_create(processorid_t);
 static int ip_squeue_cpu_setup(cpu_setup_t, int, void *);
@@ -163,7 +154,7 @@ ip_squeue_create(pri_t pri)
 {
 	squeue_t *sqp;
 
-	sqp = squeue_create(ip_squeue_worker_wait, pri);
+	sqp = squeue_create(pri);
 	ASSERT(sqp != NULL);
 	if (ip_squeue_create_callback != NULL)
 		ip_squeue_create_callback(sqp);
@@ -257,9 +248,11 @@ ip_squeue_set_create(processorid_t id)
 }
 
 /*
- * Called by ill_ring_add() to find an squeue to associate with a new ring.
+ * Obtain a free squeue and set its worker and poll thread priorities, if
+ * required. A free squeue is one that is not already bound to an ill_t
+ * and that is not marked as "default". If a free squeue does not exist,
+ * then one is created.
  */
-
 squeue_t *
 ip_squeue_getfree(pri_t pri)
 {
@@ -508,9 +501,10 @@ ip_squeue_add_ring(ill_t *ill, void *mrp)
 	}
 
 	bzero(rx_ring, sizeof (ill_rx_ring_t));
-	rx_ring->rr_rx = (ip_mac_rx_t)mrfp->mrf_receive;
-	/* XXX: Hard code it to tcp accept for now */
-	rx_ring->rr_ip_accept = (ip_accept_t)ip_accept_tcp;
+	rx_ring->rr_rx = mrfp->mrf_receive;
+	rx_ring->rr_ip_accept = (ill->ill_isv6 != 0) ?
+	    (ip_accept_t)ip_accept_tcp_v6 :
+	    (ip_accept_t)ip_accept_tcp;
 
 	rx_ring->rr_intr_handle = mrfp->mrf_intr_handle;
 	rx_ring->rr_intr_enable = (ip_mac_intr_enable_t)mrfp->mrf_intr_enable;
@@ -683,7 +677,7 @@ ip_squeue_clean_all(ill_t *ill)
 squeue_t *
 ip_squeue_get(ill_rx_ring_t *ill_rx_ring)
 {
-	squeue_t 	*sqp;
+	squeue_t	*sqp;
 
 	if ((ill_rx_ring == NULL) || ((sqp = ill_rx_ring->rr_sqp) == NULL))
 		return (IP_SQUEUE_GET(CPU_PSEUDO_RANDOM()));

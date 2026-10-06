@@ -20,10 +20,11 @@
  * CDDL HEADER END
  */
 /*	Copyright (c) 1988 AT&T	*/
-/*	  All Rights Reserved  	*/
+/*	  All Rights Reserved	*/
 
 /*
  * Copyright 2014 Garrett D'Amore <garrett@damore.org>
+ * Copyright 2014 PALO, Richard.
  *
  * Copyright 1997-2003 Sun Microsystems, Inc.  All rights reserved.
  * Use is subject to license terms.
@@ -31,6 +32,8 @@
 
 #ifndef _MON_H
 #define	_MON_H
+
+#include <sys/null.h>
 
 #ifdef	__cplusplus
 extern "C" {
@@ -42,7 +45,7 @@ extern "C" {
  */
 #if !defined(_SIZE_T) || __cplusplus >= 199711L
 #define	_SIZE_T
-#if defined(_LP64) || defined(_I32LPx)
+#if defined(_LP64)
 typedef unsigned long size_t;	/* size of something in bytes */
 #else
 typedef unsigned int  size_t;	/* (historical version) */
@@ -65,14 +68,6 @@ typedef unsigned short WORD;
 #define	MON_OUT	"mon.out"
 #define	MPROGS0	(150 * sizeof (WORD))	/* 300 for pdp11, 600 for 32-bits */
 #define	MSCALE0	4
-
-#ifndef NULL
-#if defined(_LP64)
-#define	NULL	0L
-#else
-#define	NULL	0
-#endif
-#endif
 
 extern void monitor(int (*)(void), int (*)(void), WORD *, size_t, size_t);
 

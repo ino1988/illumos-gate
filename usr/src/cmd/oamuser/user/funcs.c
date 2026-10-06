@@ -21,6 +21,7 @@
 /*
  * Copyright (c) 1999, 2010, Oracle and/or its affiliates. All rights reserved.
  * Copyright (c) 2013 RackTop Systems.
+ * Copyright 2020 OmniOS Community Edition (OmniOSce) Association.
  */
 
 #include <stdio.h>
@@ -58,9 +59,8 @@ static const char priv[] = "privilege set";
 static const char auth[] = "authorization";
 static const char type[] = "user type";
 static const char lock[] = "lock_after_retries value";
+static const char roleauth[] = "roleauth";
 static const char label[] = "label";
-static const char idlecmd[] = "idlecmd value";
-static const char idletime[] = "idletime value";
 static const char auditflags[] = "audit mask";
 static char	  auditerr[256];
 
@@ -72,9 +72,8 @@ static const char *check_proj(const char *);
 static const char *check_privset(const char *);
 static const char *check_type(const char *);
 static const char *check_lock_after_retries(const char *);
+static const char *check_roleauth(const char *);
 static const char *check_label(const char *);
-static const char *check_idlecmd(const char *);
-static const char *check_idletime(const char *);
 static const char *check_auditflags(const char *);
 
 int nkeys;
@@ -88,11 +87,10 @@ static ua_key_t keys[] = {
 	{ USERATTR_DEFAULTPROJ_KW,	check_proj,	proj },
 	{ USERATTR_LIMPRIV_KW,	check_privset,	priv },
 	{ USERATTR_DFLTPRIV_KW,	check_privset,	priv },
-	{ USERATTR_LOCK_AFTER_RETRIES_KW, check_lock_after_retries,  lock },
+	{ USERATTR_LOCK_AFTER_RETRIES_KW, check_lock_after_retries, lock },
+	{ USERATTR_ROLEAUTH_KW,	check_roleauth, roleauth },
 	{ USERATTR_CLEARANCE,	check_label,	label },
 	{ USERATTR_MINLABEL,	check_label,	label },
-	{ USERATTR_IDLECMD_KW,	check_idlecmd,	idlecmd },
-	{ USERATTR_IDLETIME_KW,	check_idletime,	idletime },
 	{ USERATTR_AUDIT_FLAGS_KW, check_auditflags, auditflags },
 };
 
@@ -420,9 +418,22 @@ static const char *
 check_lock_after_retries(const char *keyval)
 {
 	if (keyval != NULL) {
-		if ((strcasecmp(keyval, "no") != 0) &&
-		    (strcasecmp(keyval, "yes") != 0) &&
-		    (*keyval != '\0'))   {
+		if (strcasecmp(keyval, USERATTR_LOCK_NO) != 0 &&
+		    strcasecmp(keyval, USERATTR_LOCK_YES) != 0 &&
+		    *keyval != '\0')   {
+			return (keyval);
+		}
+	}
+	return (NULL);
+}
+
+static const char *
+check_roleauth(const char *keyval)
+{
+	if (keyval != NULL) {
+		if (strcasecmp(keyval, USERATTR_ROLEAUTH_USER) != 0 &&
+		    strcasecmp(keyval, USERATTR_ROLEAUTH_ROLE) != 0 &&
+		    *keyval != '\0')   {
 			return (keyval);
 		}
 	}
@@ -443,33 +454,6 @@ check_label(const char *labelstr)
 
 	if (err == -1)
 		return (labelstr);
-
-	return (NULL);
-}
-
-static const char *
-check_idlecmd(const char *cmd)
-{
-	if ((strcmp(cmd, USERATTR_IDLECMD_LOCK_KW) != 0) &&
-	    (strcmp(cmd, USERATTR_IDLECMD_LOGOUT_KW) != 0)) {
-		return (cmd);
-	}
-
-	return (NULL);
-}
-
-static const char *
-check_idletime(const char *time)
-{
-	int		c;
-	unsigned char	*up = (unsigned char *)time;
-
-	c = *up;
-	while (c != '\0') {
-		if (!isdigit(c))
-			return (time);
-		c = *++up;
-	}
 
 	return (NULL);
 }

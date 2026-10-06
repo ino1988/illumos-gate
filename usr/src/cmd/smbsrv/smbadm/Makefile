@@ -22,19 +22,26 @@
 # Copyright 2010 Sun Microsystems, Inc.  All rights reserved.
 # Use is subject to license terms.
 #
+# Copyright 2019 Nexenta by DDN, Inc.  All rights reserved.
+# Copyright (c) 2018, Joyent, Inc.
+#
 
 PROG=	smbadm
 SRCS=	smbadm.c
 
 include ../../Makefile.cmd
+include ../../Makefile.ctf
 include ../Makefile.smbsrv.defs
 
-LDLIBS += -L$(ROOT)/usr/lib/smbsrv -lsmb -lsecdb -lumem
+OBJS=	smbadm.o smbinfo.o
+
+LDLIBS += -L$(ROOT)/usr/lib/smbsrv -lsmb -lsmbns \
+		 -lsecdb -lofmt -lcmdutils -lumem
 LDFLAGS += -R/usr/lib/smbsrv
 
 .KEEP_STATE:
 
-CERRWARN += -_gcc=-Wno-uninitialized
+SMOFF += free
 
 all:		$(PROG)
 

@@ -153,9 +153,12 @@ chk_timeout(vntsd_timeout_t *tmop)
 }
 
 /* reset timer */
-static boolean_t
-reset_timeout(vntsd_timeout_t *tmop, thread_t tid)
+static int
+reset_timeout(void *arg1, void *arg2)
 {
+	vntsd_timeout_t *tmop = arg1;
+	thread_t tid = (uintptr_t)arg2;
+
 	if (tmop->tid == tid) {
 		tmop->minutes = 0;
 	}
@@ -171,8 +174,8 @@ vntsd_reset_timer(thread_t tid)
 	}
 
 	(void) mutex_lock(&vntsdp->tmo_lock);
-	(void) vntsd_que_find(vntsdp->tmoq, (compare_func_t)reset_timeout,
-	    (void*)tid);
+	(void) vntsd_que_find(vntsdp->tmoq, reset_timeout,
+	    (void *)(uintptr_t)tid);
 	(void) mutex_unlock(&vntsdp->tmo_lock);
 }
 
@@ -358,7 +361,7 @@ main(int argc, char ** argv)
 		    "descriptor limit.");
 	(void) enable_extended_FILE_stdio(-1, -1);
 
-	vntsdp = calloc(sizeof (vntsd_t), 1);
+	vntsdp = calloc(1, sizeof (vntsd_t));
 	if (vntsdp == NULL) {
 		vntsd_log(VNTSD_ERR_NO_MEM, "main:vntsdp");
 		exit(1);

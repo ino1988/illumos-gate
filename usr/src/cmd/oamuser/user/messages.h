@@ -98,7 +98,7 @@ extern void errmsg(int, ...);
 /* ERROR: %s is the primary group name.  Choose another. */
 #define	M_SAME_GRP	20
 
-/* ERROR: Inconsistent password files.  See pwconv(1M). */
+/* ERROR: Inconsistent password files.  See pwconv(8). */
 #define	M_HOSED_FILES	21
 
 /* ERROR: %s is not a local user. */
@@ -151,5 +151,12 @@ extern void errmsg(int, ...);
 
 /* ERROR: %s is too long.  Choose another. */
 #define	M_TOO_LONG	38
+
+/*
+ * WARNING: Avoided creating ZFS filesystem as parent directory
+ * %s is not a ZFS mount point.
+ */
+#define	M_NO_ZFS_MOUNTPOINT	39
+
 
 #endif /* _MESSAGES_H */

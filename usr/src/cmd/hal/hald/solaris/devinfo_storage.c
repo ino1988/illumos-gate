@@ -266,7 +266,7 @@ devinfo_scsi_add(HalDevice *parent, di_node_t node, char *devfs_path, char *devi
         hal_device_set_udi (d, udi);
         hal_device_property_set_string (d, "info.udi", udi);
 
-	hal_device_property_set_int (d, "scsi.host", 
+	hal_device_property_set_int (d, "scsi.host",
 		hal_device_property_get_int (parent, "scsi_host.host"));
 	hal_device_property_set_int (d, "scsi.bus", 0);
 	PROP_INT(d, node, i, "target", "scsi.target");
@@ -582,7 +582,7 @@ devinfo_floppy_rescan_probing_done (HalDevice *d, guint32 exit_type, gint return
 
 	hotplug_event_process_queue ();
 }
-	
+
 /* lofi */
 
 HalDevice *
@@ -1325,7 +1325,7 @@ devinfo_storage_device_rescan (HalDevice *d)
 
 	drive_type = hal_device_property_get_string (d, "storage.drive_type");
 	is_floppy = (drive_type != NULL) && (strcmp (drive_type, "floppy") == 0);
-		
+
 	media_available = !hal_device_property_get_bool (d, "storage.removable") ||
 	    hal_device_property_get_bool (d, "storage.removable.media_available");
 
@@ -1350,7 +1350,7 @@ devinfo_storage_device_rescan (HalDevice *d)
 		hotplug_event_process_queue ();
 	} else if (is_floppy) {
 		HAL_INFO (("rescanning floppy %s", hal_device_get_udi (d)));
-		
+
 		hald_runner_run (d,
 				 "hald-probe-storage --only-check-for-media", NULL,
 				 DEVINFO_PROBE_STORAGE_TIMEOUT,
@@ -1427,7 +1427,7 @@ dos_to_dev(char *path, char **devpath, int *partnum)
 }
 
 static void
-devinfo_storage_cleanup_mountpoint_cb (HalDevice *d, guint32 exit_type, 
+devinfo_storage_cleanup_mountpoint_cb (HalDevice *d, guint32 exit_type,
 		       gint return_code, gchar **error,
 		       gpointer data1, gpointer data2)
 {
@@ -1522,19 +1522,17 @@ devinfo_storage_mnttab_event (HalDevice *hal_volume)
 
 		/* cleanup if was mounted by us */
 		if (hal_util_is_mounted_by_hald (mount_point)) {
-			char *cleanup_stdin;
 			char *extra_env[2];
 
 			HAL_INFO (("Cleaning up '%s'", mount_point));
 
 			extra_env[0] = g_strdup_printf ("HALD_CLEANUP=%s", mount_point);
 			extra_env[1] = NULL;
-			cleanup_stdin = "\n";
 
-			hald_runner_run_method (d, 
-						"hal-storage-cleanup-mountpoint", 
-						extra_env, 
-						cleanup_stdin, TRUE,
+			hald_runner_run_method (d,
+						"hal-storage-cleanup-mountpoint",
+						extra_env,
+						"", TRUE,
 						0,
 						devinfo_storage_cleanup_mountpoint_cb,
 						g_strdup (mount_point), NULL);
@@ -1550,7 +1548,7 @@ devinfo_storage_mnttab_event (HalDevice *hal_volume)
 }
 
 static void
-devinfo_volume_force_unmount_cb (HalDevice *d, guint32 exit_type, 
+devinfo_volume_force_unmount_cb (HalDevice *d, guint32 exit_type,
 		  gint return_code, gchar **error,
 		  gpointer data1, gpointer data2)
 {
@@ -1558,7 +1556,7 @@ devinfo_volume_force_unmount_cb (HalDevice *d, guint32 exit_type,
 
 	HAL_INFO (("devinfo_volume_force_unmount_cb for udi='%s', exit_type=%d, return_code=%d", hal_device_get_udi (d), exit_type, return_code));
 
-	if (exit_type == HALD_RUN_SUCCESS && error != NULL && 
+	if (exit_type == HALD_RUN_SUCCESS && error != NULL &&
 	    error[0] != NULL && error[1] != NULL) {
 		char *exp_name = NULL;
 		char *exp_detail = NULL;
@@ -1576,14 +1574,11 @@ devinfo_volume_force_unmount_cb (HalDevice *d, guint32 exit_type,
 static void
 devinfo_volume_force_unmount (HalDevice *d, void *end_token)
 {
-	const char *device_file;
 	const char *mount_point;
-	char *unmount_stdin;
 	char *extra_env[2];
 	extra_env[0] = "HAL_METHOD_INVOKED_BY_UID=0";
 	extra_env[1] = NULL;
 
-	device_file = hal_device_property_get_string (d, "block.device");
 	mount_point = hal_device_property_get_string (d, "volume.mount_point");
 
 	if (mount_point == NULL || strlen (mount_point) == 0 || !hal_util_is_mounted_by_hald (mount_point)) {
@@ -1592,13 +1587,11 @@ devinfo_volume_force_unmount (HalDevice *d, void *end_token)
 	}
 
 	HAL_INFO (("devinfo_volume_force_unmount for udi='%s'", hal_device_get_udi (d)));
-		
-	unmount_stdin = "\n";
-		
-	hald_runner_run_method (d, 
-				"hal-storage-unmount", 
-				extra_env, 
-				unmount_stdin, TRUE,
+
+	hald_runner_run_method (d,
+				"hal-storage-unmount",
+				extra_env,
+				"", TRUE,
 				0,
 				devinfo_volume_force_unmount_cb,
 				end_token, NULL);

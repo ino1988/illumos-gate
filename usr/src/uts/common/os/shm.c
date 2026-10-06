@@ -185,14 +185,14 @@ static struct sysent ipcshm_sysent = {
 #else	/* _SYSCALL32_IMPL */
 	SE_ARGC | SE_NOUNLOAD | SE_32RVAL1,
 #endif	/* _SYSCALL32_IMPL */
-	(int (*)())shmsys
+	(int (*)())(uintptr_t)shmsys
 };
 
 #ifdef	_SYSCALL32_IMPL
 static struct sysent ipcshm_sysent32 = {
 	4,
 	SE_ARGC | SE_NOUNLOAD | SE_32RVAL1,
-	(int (*)())shmsys
+	(int (*)())(uintptr_t)shmsys
 };
 #endif	/* _SYSCALL32_IMPL */
 
@@ -260,7 +260,7 @@ shmat(int shmid, caddr_t uaddr, int uflags, uintptr_t *rvp)
 	struct as *as = pp->p_as;
 	struct segvn_crargs	crargs;	/* segvn create arguments */
 	kmutex_t	*lock;
-	struct seg 	*segspt = NULL;
+	struct seg	*segspt = NULL;
 	caddr_t		addr = uaddr;
 	int		flags = (uflags & SHMAT_VALID_FLAGS_MASK);
 	int		useISM;
@@ -346,7 +346,7 @@ shmat(int shmid, caddr_t uaddr, int uflags, uintptr_t *rvp)
 		size = P2ROUNDUP(size, share_size);
 
 		align_hint = share_size;
-#if defined(__i386) || defined(__amd64)
+#if defined(__x86)
 		/*
 		 * For x86, we want to share as much of the page table tree
 		 * as possible. We use a large align_hint at first, but
@@ -364,7 +364,7 @@ shmat(int shmid, caddr_t uaddr, int uflags, uintptr_t *rvp)
 			while (size >= ptes_per_table * (uint64_t)align_hint)
 				align_hint *= ptes_per_table;
 		}
-#endif /* __i386 || __amd64 */
+#endif /* __x86 */
 
 #if defined(__sparcv9)
 		if (addr == 0 &&
@@ -626,7 +626,7 @@ shmctl(int shmid, int cmd, void *arg)
 	kshmid_t		*sp;	/* shared memory header ptr */
 	STRUCT_DECL(shmid_ds, ds);	/* for SVR4 IPC_SET */
 	int			error = 0;
-	struct cred 		*cr = CRED();
+	struct cred		*cr = CRED();
 	kmutex_t		*lock;
 	model_t			mdl = get_udatamodel();
 	struct shmid_ds64	ds64;

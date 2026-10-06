@@ -23,7 +23,7 @@
  */
 
 /*	Copyright (c) 1983, 1984, 1985, 1986, 1987, 1988, 1989 AT&T	*/
-/*	  All Rights Reserved  	*/
+/*	  All Rights Reserved	*/
 
 /*
  * University Copyright- Copyright (c) 1982, 1986, 1988
@@ -66,7 +66,7 @@ struct	sockaddr_un {
  */
 #if !defined(_SIZE_T) || __cplusplus >= 199711L
 #define	_SIZE_T
-#if defined(_LP64) || defined(_I32LPx)
+#if defined(_LP64)
 typedef	unsigned long	size_t;		/* size of something in bytes */
 #else
 typedef	unsigned int	size_t;		/* (historical version) */

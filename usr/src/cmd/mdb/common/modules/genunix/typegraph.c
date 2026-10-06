@@ -24,6 +24,10 @@
  */
 
 /*
+ * Copyright 2025 Oxide Computer Company
+ */
+
+/*
  * Postmortem type identification
  * ------------------------------
  *
@@ -219,9 +223,9 @@ typedef struct tg_node {
 	uintptr_t	tgn_base;	/* address base of object */
 	uintptr_t	tgn_limit;	/* address limit of object */
 	tg_edge_t	*tgn_incoming;	/* incoming edges */
-	tg_edge_t 	*tgn_outgoing;	/* outgoing edges */
-	tg_type_t 	*tgn_typelist;	/* conjectured typelist */
-	tg_type_t 	*tgn_fraglist;	/* type fragment list */
+	tg_edge_t	*tgn_outgoing;	/* outgoing edges */
+	tg_type_t	*tgn_typelist;	/* conjectured typelist */
+	tg_type_t	*tgn_fraglist;	/* type fragment list */
 	char		tgn_marked;	/* marked */
 	char		tgn_postmarked;	/* marked in postpass */
 	int		tgn_smaller;	/* size of next-smaller cache */
@@ -252,7 +256,7 @@ typedef struct tg_typeoffs {
 typedef struct tg_buildstate {
 	uintptr_t		tgbs_addr;	/* address of region */
 	uintptr_t		*tgbs_buf;	/* in-core copy of region */
-	size_t 			tgbs_ndx;	/* current pointer index */
+	size_t			tgbs_ndx;	/* current pointer index */
 	size_t			tgbs_nptrs;	/* number of pointers */
 	tg_node_t		*tgbs_src;	/* corresponding node */
 	struct tg_buildstate	*tgbs_next;	/* next stacked or free */
@@ -273,7 +277,7 @@ typedef struct tg_todo {
 } tg_todo_t;
 
 typedef struct tg_nodedata {
-	tg_node_t 		*tgd_next;	/* next node to fill in */
+	tg_node_t		*tgd_next;	/* next node to fill in */
 	size_t			tgd_size;	/* size of this node */
 } tg_nodedata_t;
 
@@ -316,7 +320,7 @@ struct {
  * new entry in tg_typetab[] is likely warranted.)
  */
 struct {
-	char 		*tgt_type_name;		/* filled in statically */
+	char		*tgt_type_name;		/* filled in statically */
 	char		*tgt_actual_name;	/* filled in statically */
 	mdb_ctf_id_t	tgt_type;		/* determined dynamically */
 	mdb_ctf_id_t	tgt_actual_type;	/* determined dynamically */
@@ -344,6 +348,14 @@ static hrtime_t tg_start;	/* start time */
 static int tg_improved;		/* flag indicating that we have improved */
 static int tg_built;		/* flag indicating that type graph is built */
 static uint_t tg_verbose;	/* flag to increase verbosity */
+
+struct typegraph_ctf_module {
+	unsigned int nsyms;
+	char *data;
+	uintptr_t bss;
+	size_t data_size;
+	size_t bss_size;
+};
 
 static mdb_ctf_id_t typegraph_type_offset(mdb_ctf_id_t, size_t,
     tg_edge_t *, const char **);
@@ -638,7 +650,7 @@ typegraph_hasfam(mdb_ctf_id_t type, mdb_ctf_id_t *atype)
 		return (0);
 
 	mdb_ctf_type_invalidate(&last);
-	mdb_ctf_member_iter(type, typegraph_lastmember, &last);
+	mdb_ctf_member_iter(type, typegraph_lastmember, &last, 0);
 
 	if (!mdb_ctf_type_valid(last))
 		return (0);
@@ -780,7 +792,7 @@ typegraph_type_offset(mdb_ctf_id_t type, size_t offset, tg_edge_t *e,
 		mdb_ctf_type_invalidate(&toffs.tgto_type);
 
 		mdb_ctf_member_iter(type,
-		    (mdb_ctf_member_f *)typegraph_offiter, &toffs);
+		    (mdb_ctf_member_f *)typegraph_offiter, &toffs, 0);
 
 		return (toffs.tgto_type);
 
@@ -818,7 +830,7 @@ typegraph_type_offset(mdb_ctf_id_t type, size_t offset, tg_edge_t *e,
 		 * Try to bust the union...
 		 */
 		if (mdb_ctf_member_iter(type,
-		    (mdb_ctf_member_f *)typegraph_union, &toffs) != 0) {
+		    (mdb_ctf_member_f *)typegraph_union, &toffs, 0) != 0) {
 			/*
 			 * There was at least one valid pointer in there.
 			 * Return "void *".
@@ -904,7 +916,7 @@ typegraph_couldbe(uintptr_t addr, mdb_ctf_id_t type)
 
 	rsize = mdb_ctf_type_size(rtype);
 
-	if (val == NULL || rsize == 0)
+	if (val == 0 || rsize == 0)
 		return (1);
 
 	/*
@@ -1000,12 +1012,13 @@ typegraph_estimate(uintptr_t addr, const kmem_cache_t *c, size_t *est)
 static int
 typegraph_estimate_modctl(uintptr_t addr, const struct modctl *m, size_t *est)
 {
-	struct module mod;
+	struct typegraph_ctf_module mod;
 
 	if (m->mod_mp == NULL)
 		return (WALK_NEXT);
 
-	if (mdb_vread(&mod, sizeof (mod), (uintptr_t)m->mod_mp) == -1) {
+	if (mdb_ctf_vread(&mod, "struct module", "struct typegraph_ctf_module",
+	    (uintptr_t)m->mod_mp, 0) == -1) {
 		mdb_warn("couldn't read modctl %p's module", addr);
 		return (WALK_NEXT);
 	}
@@ -1209,7 +1222,7 @@ typegraph_build_anchored(uintptr_t addr, size_t size, mdb_ctf_id_t type)
 	ssize_t rval;
 	int mask = sizeof (uintptr_t) - 1;
 
-	if (addr == NULL || size < sizeof (uintptr_t))
+	if (addr == 0 || size < sizeof (uintptr_t))
 		return;
 
 	/*
@@ -2275,14 +2288,15 @@ typegraph_allpass(int first)
 static int
 typegraph_modctl(uintptr_t addr, const struct modctl *m, int *ignored)
 {
-	struct module mod;
+	struct typegraph_ctf_module mod;
 	tg_node_t *node;
 	mdb_ctf_id_t type;
 
 	if (m->mod_mp == NULL)
 		return (WALK_NEXT);
 
-	if (mdb_vread(&mod, sizeof (mod), (uintptr_t)m->mod_mp) == -1) {
+	if (mdb_ctf_vread(&mod, "struct module", "struct typegraph_ctf_module",
+	    (uintptr_t)m->mod_mp, 0) == -1) {
 		mdb_warn("couldn't read modctl %p's module", addr);
 		return (WALK_NEXT);
 	}
@@ -2383,7 +2397,7 @@ typegraph(uintptr_t addr, uint_t flags, int argc, const mdb_arg_t *argv)
 
 	if (!mdb_prop_postmortem) {
 		mdb_warn("typegraph: can only be run on a system "
-		    "dump; see dumpadm(1M)\n");
+		    "dump; see dumpadm(8)\n");
 		return (DCMD_ERR);
 	}
 
@@ -2765,7 +2779,7 @@ int
 typeconflict_walk_step(mdb_walk_state_t *wsp)
 {
 	size_t ndx;
-	tg_node_t *node;
+	tg_node_t *node = NULL;
 
 	for (ndx = (size_t)wsp->walk_data; ndx < tg_nnodes; ndx++) {
 		node = &tg_node[ndx];
@@ -2793,7 +2807,7 @@ int
 typeunknown_walk_step(mdb_walk_state_t *wsp)
 {
 	size_t ndx;
-	tg_node_t *node;
+	tg_node_t *node = NULL;
 
 	for (ndx = (size_t)wsp->walk_data; ndx < tg_nnodes; ndx++) {
 		node = &tg_node[ndx];
@@ -2932,7 +2946,7 @@ findlocks_findmutex(const char *name, mdb_ctf_id_t type, ulong_t offs,
 
 	if (mdb_ctf_type_cmp(type, mutex) == 0) {
 		mdb_ctf_id_t ttype;
-		uintptr_t owner = NULL;
+		uintptr_t owner = 0;
 		tg_node_t *node;
 
 		if (mdb_pwalk("mutex_owner",
@@ -2943,7 +2957,7 @@ findlocks_findmutex(const char *name, mdb_ctf_id_t type, ulong_t offs,
 		/*
 		 * Check to see if the owner is a thread.
 		 */
-		if (owner == NULL || (node = typegraph_search(owner)) == NULL)
+		if (owner == 0 || (node = typegraph_search(owner)) == NULL)
 			return (0);
 
 		if (!mdb_ctf_type_valid(node->tgn_type))
@@ -2957,7 +2971,7 @@ findlocks_findmutex(const char *name, mdb_ctf_id_t type, ulong_t offs,
 		if (mdb_ctf_type_cmp(ttype, thread) != 0)
 			return (0);
 
-		if (fl->fl_thread != NULL && owner != fl->fl_thread)
+		if (fl->fl_thread != 0 && owner != fl->fl_thread)
 			return (0);
 
 		if (fl->fl_ndx >= fl->fl_nlocks) {
@@ -3004,7 +3018,8 @@ findlocks_findmutex(const char *name, mdb_ctf_id_t type, ulong_t offs,
 		fl->fl_depth++;
 	}
 
-	mdb_ctf_member_iter(type, (mdb_ctf_member_f *)findlocks_findmutex, fl);
+	mdb_ctf_member_iter(type, (mdb_ctf_member_f *)findlocks_findmutex, fl,
+	    0);
 
 	fl->fl_addr = addr;
 	fl->fl_parent = parent;
@@ -3139,7 +3154,7 @@ findlocks(uintptr_t addr, uint_t flags, int argc, const mdb_arg_t *argv)
 	mdb_printf("findlocks: nota bene: %slocks may be held",
 	    fl.fl_nlocks ? "other " : "");
 
-	if (addr == NULL) {
+	if (addr == 0) {
 		mdb_printf("\n");
 	} else {
 		mdb_printf(" by %p\n", addr);
@@ -3179,7 +3194,7 @@ findlocks(uintptr_t addr, uint_t flags, int argc, const mdb_arg_t *argv)
  * looking for nodes that satisfy the following criteria:
  *
  *  (a)	The node is an array.  That is, the node was either determined to
- * 	be of type CTF_K_ARRAY, or the node was inferred to be an array in
+ *	be of type CTF_K_ARRAY, or the node was inferred to be an array in
  *	pass2 of type identification (described above).
  *
  *  (b)	Each element of the array is a structure that is smaller than the
@@ -3275,7 +3290,7 @@ findfalse_findsync(const char *name, mdb_ctf_id_t type, ulong_t offs,
 		return (0);
 
 	if (mdb_ctf_member_iter(type,
-	    (mdb_ctf_member_f *)findfalse_findsync, NULL) != 0)
+	    (mdb_ctf_member_f *)findfalse_findsync, NULL, 0) != 0)
 		return (1);
 
 	return (0);

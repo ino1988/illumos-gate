@@ -22,9 +22,8 @@
 /*
  * Copyright 2005 Sun Microsystems, Inc.  All rights reserved.
  * Use is subject to license terms.
+ * Copyright 2025 Oxide Computer Company
  */
-
-#pragma ident	"%Z%%M%	%I%	%E% SMI"
 
 /*
  * MDB Regression Test Module
@@ -181,10 +180,7 @@ cmd_vread(uintptr_t addr, uint_t flags, int argc, const mdb_arg_t *argv)
 	if (!(flags & DCMD_ADDRSPEC) || argc != 1)
 		return (DCMD_USAGE);
 
-	if (argv->a_type == MDB_TYPE_STRING)
-		nbytes = (size_t)mdb_strtoull(argv->a_un.a_str);
-	else
-		nbytes = (size_t)argv->a_un.a_val;
+	nbytes = (size_t)mdb_argtoull(argv);
 
 	buf = mdb_alloc(nbytes, UM_SLEEP | UM_GC);
 	rbytes = mdb_vread(buf, nbytes, addr);
@@ -209,10 +205,7 @@ cmd_pread(uintptr_t addr, uint_t flags, int argc, const mdb_arg_t *argv)
 	if (!(flags & DCMD_ADDRSPEC) || argc != 1)
 		return (DCMD_USAGE);
 
-	if (argv->a_type == MDB_TYPE_STRING)
-		nbytes = (size_t)mdb_strtoull(argv->a_un.a_str);
-	else
-		nbytes = (size_t)argv->a_un.a_val;
+	nbytes = (size_t)mdb_argtoull(argv);
 
 	buf = mdb_alloc(nbytes, UM_SLEEP | UM_GC);
 	rbytes = mdb_pread(buf, nbytes, mdb_get_dot());
@@ -238,10 +231,7 @@ cmd_readsym(uintptr_t addr, uint_t flags, int argc, const mdb_arg_t *argv)
 	    argv->a_type != MDB_TYPE_STRING)
 		return (DCMD_USAGE);
 
-	if (argv[1].a_type == MDB_TYPE_STRING)
-		nbytes = (size_t)mdb_strtoull(argv[1].a_un.a_str);
-	else
-		nbytes = (size_t)argv[1].a_un.a_val;
+	nbytes = (size_t)mdb_argtoull(&argv[1]);
 
 	buf = mdb_alloc(nbytes, UM_SLEEP | UM_GC);
 	rbytes = mdb_readsym(buf, nbytes, argv->a_un.a_str);

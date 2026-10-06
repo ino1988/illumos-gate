@@ -21,10 +21,13 @@
 #
 # Copyright (c) 1997, 2010, Oracle and/or its affiliates. All rights reserved.
 # Copyright 2014 Garrett D'Amore <garrett@damore.org>
+# Copyright 2016 RackTop Systems.
+# Copyright 2021 Joyent, Inc.
 #
 
 # rebind basic build macros to 64-bit versions
 
+ASFLAGS=	$(ASFLAGS64)
 CFLAGS=		$(CFLAGS64)
 CCFLAGS=	$(CCFLAGS64)
 COPTFLAG=	$(COPTFLAG64)
@@ -36,7 +39,9 @@ COMPILE.d=	$(COMPILE64.d)
 COMPILE.b=	$(COMPILE64.b)
 LINK.c=		$(LINK64.c)
 LINK.cc=	$(LINK64.cc)
-LINT.c=		$(LINT64.c)
+NATIVE_CFLAGS=	$(NATIVE_CFLAGS64)
+NATIVE_CCFLAGS=	$(NATIVE_CCFLAGS64)
+NATIVE_ASFLAGS=	$(NATIVE_ASFLAGS64)
 
 CTF_FLAGS=	$(CTF_FLAGS_64)
 
@@ -49,36 +54,30 @@ LDLIBS.cmd =	$(LDLIBS64)
 LDLIBS.lib =	$(LDLIBS64)
 
 #
-# Override Makefile.master's settings of SFWLIBDIR and GCCLIBDIR
+# Override Makefile.master's settings of GCCLIBDIR
 #
-SFWLIBDIR=	$(SFWLIBDIR64)
 GCCLIBDIR=	$(GCCLIBDIR64)
 
 #
-# Override Makefile.master's settings of CC, CCC, AS and LINT
+# Override Makefile.master's settings
 #
-CC=		$($(MACH64)_CC)
-CCC=		$($(MACH64)_CCC)
-CPP=		$($(MACH64)_CPP)
-AS=		$($(MACH64)_AS)
-LD=		$($(MACH64)_LD)
-LINT=		$($(MACH64)_LINT)
+CC=		$(CC64)
+CCC=		$(CCC64)
+CPP=		$(CPP64)
+AS=		$(AS64)
+LD=		$(LD64)
+NATIVECC=	$(NATIVECC64)
+NATIVECCC=	$(NATIVECCC64)
+NATIVECPP=	$(NATIVECPP64)
+NATIVEAS=	$(NATIVEAS64)
+NATIVELD=	$(NATIVELD64)
 
-REAL_CC=	$(CW_CC_CMD:sh)
-REAL_CCC=	$(CW_CCC_CMD:sh)
-
-BUILD.SO=	$(CC) $(CFLAGS) -o $@ $(GSHARED) $(DYNFLAGS) \
-		$(PICS) $(EXTPICS) -L $(ROOTLIBDIR64) $(LDLIBS)
+BUILD.SO=	$(BUILD64.SO)
+BUILDCCC.SO=	$(BUILDCCC64.SO)
 
 #
 # ld(1) requires the -64 option to create a 64-bit filter solely from a mapfile
 #
 MAPFILECLASS=	-64
 
-CCNEEDED =		-lCrun
-$(__GNUC64)CCNEEDED =	-L$(GCCLIBDIR) -lstdc++
-$(__GNUC64)CCNEEDED +=	-lgcc_s
-
-BUILDCCC.SO=    $(CCC) $(CCFLAGS) -o $@ $(GSHARED) $(DYNFLAGS) \
-		$(PICS) $(EXTPICS) $(LDLIBS) $(CCNEEDED)
 MAPFILE.NGB =	$(MAPFILE.NGB_$(MACH64))

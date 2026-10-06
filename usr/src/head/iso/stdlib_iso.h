@@ -21,13 +21,14 @@
  */
 /*
  * Copyright 2014 Garrett D'Amore <garrett@damore.org>
+ * Copyright 2014 PALO, Richard.
  *
  * Copyright 2005 Sun Microsystems, Inc.  All rights reserved.
  * Use is subject to license terms.
  */
 
 /*	Copyright (c) 1988 AT&T	*/
-/*	  All Rights Reserved  	*/
+/*	  All Rights Reserved	*/
 
 
 /*
@@ -46,6 +47,7 @@
 #define	_ISO_STDLIB_ISO_H
 
 #include <sys/feature_tests.h>
+#include <sys/null.h>
 
 #ifdef	__cplusplus
 extern "C" {
@@ -72,20 +74,12 @@ typedef struct {
 
 #if !defined(_SIZE_T) || __cplusplus >= 199711L
 #define	_SIZE_T
-#if defined(_LP64) || defined(_I32LPx)
+#if defined(_LP64)
 typedef unsigned long	size_t;		/* size of something in bytes */
 #else
 typedef unsigned int    size_t;		/* (historical version) */
 #endif
 #endif	/* !_SIZE_T */
-
-#ifndef	NULL
-#if defined(_LP64)
-#define	NULL	0L
-#else
-#define	NULL	0
-#endif
-#endif
 
 #define	EXIT_FAILURE	1
 #define	EXIT_SUCCESS    0
@@ -115,7 +109,15 @@ typedef long	wchar_t;
 #endif	/* !_WCHAR_T */
 #endif	/* !defined(__cplusplus) ... */
 
-extern void abort(void) __NORETURN;
+#if !defined(_NORETURN_KYWD)
+#if __STDC_VERSION__ - 0 >= 201112L
+#define	_NORETURN_KYWD	_Noreturn
+#else
+#define	_NORETURN_KYWD
+#endif	/* __STDC_VERSION__ - 0 >= 201112L */
+#endif	/* !defined(_NORETURN_KYWD) */
+
+extern _NORETURN_KYWD void abort(void) __NORETURN;
 extern int abs(int);
 extern int atexit(void (*)(void));
 extern double atof(const char *);
@@ -131,10 +133,18 @@ extern "C++" {
 #endif /* __cplusplus >= 199711L && defined(__SUNPRO_CC) */
 extern void *calloc(size_t, size_t);
 extern div_t div(int, int);
-extern void exit(int)
+extern _NORETURN_KYWD void exit(int)
 	__NORETURN;
 extern void free(void *);
 extern char *getenv(const char *);
+/*
+ * Duplicated from math_iso.h for C++ abs() inlines below.
+ */
+#if __cplusplus >= 199711L
+extern double fabs(double);
+extern float fabsf(float);
+extern long double fabsl(long double);
+#endif
 extern long int labs(long);
 extern ldiv_t ldiv(long, long);
 extern void *malloc(size_t);
@@ -162,9 +172,22 @@ extern size_t wcstombs(char *_RESTRICT_KYWD, const wchar_t *_RESTRICT_KYWD,
 
 #if __cplusplus >= 199711L
 extern "C++" {
-	inline long   abs(long _l) { return labs(_l); }
-	inline ldiv_t div(long _l1, long _l2) { return ldiv(_l1, _l2); }
-}
+#undef	__X
+#undef	__Y
+	inline long   abs(long __X) { return labs(__X); }
+	inline ldiv_t div(long __X, long __Y) { return ldiv(__X, __Y); }
+/*
+ * For compatibility with GCC and GLIBCXX, let either stdlib.h or math.h
+ * provide both the integer and floating point abs() variants, regardless
+ * which is included first.
+ */
+#ifndef _CXX_ABS_FLOAT_DEFINED
+#define	_CXX_ABS_FLOAT_DEFINED
+	inline double abs(double __X) { return fabs(__X); }
+	inline float abs(float __X) { return fabsf(__X); }
+	inline long double abs(long double __X) { return fabsl(__X); }
+#endif /* !_CXX_ABS_FLOAT_DEFINED */
+} /* extern C++ */
 #endif /* __cplusplus */
 
 #if __cplusplus >= 199711L

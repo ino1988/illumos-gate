@@ -430,6 +430,7 @@ _filter_gethostbyaddr_r(const char *addr, int len, int type,
 		nss_initf	= _initf_ipnodes;
 		nss_db_root	= &db_root_ipnodes;
 		dbop		= NSS_DBOP_IPNODES_BYADDR;
+		break;
 	default:
 		return (NULL);
 	}
@@ -679,7 +680,7 @@ __s_api_ip2hostname(char *ipaddr, char **hostname) {
 
 /*
  * This function obtains data returned by an LDAP search request and puts it
- * in a string in the ldap_cachmgr(1) door call format.
+ * in a string in the ldap_cachemgr(8) door call format.
  *
  * INPUT:
  *     ld - a pointer to an LDAP structure used for a search operation,
@@ -1366,7 +1367,7 @@ __ns_ldap_getRootDSE(const char *server_addr,
 		 * Fallback to anonymous, non-SSL mode for backward
 		 * compatibility reasons. This mode should only be used when
 		 * this function (__ns_ldap_getRootDSE) is called from
-		 * ldap_cachemgr(1M).
+		 * ldap_cachemgr(8).
 		 */
 		syslog(LOG_WARNING,
 		    gettext("libsldap: Falling back to anonymous, non-SSL"
@@ -1964,7 +1965,7 @@ __ns_ldap_initAuth(const char *auth_mech,
  * and naming context. During all further operations on behalf
  * of the application requested a standalone schema libsldap will use
  * the information obtained by __ns_ldap_initStandalone() instead of
- * door_call(3C)ing ldap_cachemgr(1M).
+ * door_call(3C)ing ldap_cachemgr(8).
  *
  * INPUT:
  *     sa_conf - a structure describing where and in which way to obtain all

@@ -1,6 +1,4 @@
-#pragma ident	"%Z%%M%	%I%	%E% SMI"
-
-/*-
+/*
  * Copyright (c) 1990, 1993, 1994
  *	The Regents of the University of California.  All rights reserved.
  *
@@ -35,10 +33,6 @@
  * OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF
  * SUCH DAMAGE.
  */
-
-#if defined(LIBC_SCCS) && !defined(lint)
-static char sccsid[] = "@(#)hash_bigkey.c	8.5 (Berkeley) 11/2/95";
-#endif /* LIBC_SCCS and not lint */
 
 /*
  * PACKAGE: hash
@@ -77,7 +71,7 @@ static int32_t collect_data __P((HTAB *, PAGE16 *, int32_t));
 /*
  * Big_insert
  *
- * You need to do an insert and the key/data pair is greater than 
+ * You need to do an insert and the key/data pair is greater than
  * MINFILL * the bucket size
  *
  * Returns:
@@ -196,12 +190,10 @@ __find_bigpair(hashp, cursorp, key, size)
 	PAGE16 *pagep, *hold_pagep;
 	db_pgno_t  next_pgno;
 	int32_t ksize;
-	u_int16_t bytes;
 	int8_t *kkey;
 
 	ksize = size;
 	kkey = key;
-	bytes = 0;
 
 	hold_pagep = NULL;
 	/* Chances are, hashp->cpage is the base page. */

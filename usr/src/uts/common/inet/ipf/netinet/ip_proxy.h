@@ -9,13 +9,16 @@
  * Use is subject to license terms.
  */
 
-#pragma ident	"%Z%%M%	%I%	%E% SMI"
-
 #ifndef	__IP_PROXY_H__
 #define	__IP_PROXY_H__
 
-#ifndef SOLARIS
-#define SOLARIS (defined(sun) && (defined(__svr4__) || defined(__SVR4)))
+#ifdef	SOLARIS
+#undef	SOLARIS
+#endif
+#if (defined(sun) && (defined(__svr4__) || defined(__SVR4)))
+#define	SOLARIS	(1)
+#else
+#define	SOLARIS	(0)
 #endif
 
 #if defined(__STDC__) || defined(__GNUC__) || defined(_AIX51)
@@ -146,7 +149,7 @@ typedef	struct	aproxy	{
  * This is the scratch buffer size used to hold strings from the TCP stream
  * that we may want to parse.  It's an arbitrary size, really, but it must
  * be at least as large as IPF_FTPBUFSZ.
- */ 
+ */
 #define	FTP_BUFSZ	120
 
 /*

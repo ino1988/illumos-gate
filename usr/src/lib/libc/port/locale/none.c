@@ -41,7 +41,6 @@
 #include <stdlib.h>
 #include <string.h>
 #include <wchar.h>
-#include <note.h>
 #include "mblocal.h"
 #include "lctype.h"
 
@@ -60,10 +59,8 @@ _none_init(struct lc_ctype *lct)
 }
 
 int
-__mbsinit_ascii(const mbstate_t *unused)
+__mbsinit_ascii(const mbstate_t *unused __unused)
 {
-	_NOTE(ARGUNUSED(unused));
-
 	/*
 	 * Encoding is not state dependent - we are always in the
 	 * initial state.
@@ -73,10 +70,8 @@ __mbsinit_ascii(const mbstate_t *unused)
 
 size_t
 __mbrtowc_ascii(wchar_t *_RESTRICT_KYWD pwc, const char *_RESTRICT_KYWD s,
-    size_t n, mbstate_t *_RESTRICT_KYWD unused)
+    size_t n, mbstate_t *_RESTRICT_KYWD unused __unused, boolean_t zero)
 {
-	_NOTE(ARGUNUSED(unused));
-
 	if (s == NULL)
 		/* Reset to initial shift state (no-op) */
 		return (0);
@@ -85,15 +80,17 @@ __mbrtowc_ascii(wchar_t *_RESTRICT_KYWD pwc, const char *_RESTRICT_KYWD s,
 		return ((size_t)-2);
 	if (pwc != NULL)
 		*pwc = (unsigned char)*s;
-	return (*s == '\0' ? 0 : 1);
+	if (zero || *s != '\0') {
+		return (1);
+	} else {
+		return (0);
+	}
 }
 
 size_t
 __wcrtomb_ascii(char *_RESTRICT_KYWD s, wchar_t wc,
-    mbstate_t *_RESTRICT_KYWD unused)
+    mbstate_t *_RESTRICT_KYWD unused __unused)
 {
-	_NOTE(ARGUNUSED(unused));
-
 	if (s == NULL)
 		/* Reset to initial shift state (no-op) */
 		return (1);
@@ -107,12 +104,10 @@ __wcrtomb_ascii(char *_RESTRICT_KYWD s, wchar_t wc,
 
 size_t
 __mbsnrtowcs_ascii(wchar_t *_RESTRICT_KYWD dst, const char **_RESTRICT_KYWD src,
-    size_t nms, size_t len, mbstate_t *_RESTRICT_KYWD unused)
+    size_t nms, size_t len, mbstate_t *_RESTRICT_KYWD unused __unused)
 {
 	const char *s;
 	size_t nchr;
-
-	_NOTE(ARGUNUSED(unused));
 
 	if (dst == NULL) {
 		s = memchr(*src, '\0', nms);
@@ -134,12 +129,10 @@ __mbsnrtowcs_ascii(wchar_t *_RESTRICT_KYWD dst, const char **_RESTRICT_KYWD src,
 
 size_t
 __wcsnrtombs_ascii(char *_RESTRICT_KYWD dst, const wchar_t **_RESTRICT_KYWD src,
-    size_t nwc, size_t len, mbstate_t *_RESTRICT_KYWD unused)
+    size_t nwc, size_t len, mbstate_t *_RESTRICT_KYWD unused __unused)
 {
 	const wchar_t *s;
 	size_t nchr;
-
-	_NOTE(ARGUNUSED(unused));
 
 	if (dst == NULL) {
 		for (s = *src; nwc > 0 && *s != L'\0'; s++, nwc--) {

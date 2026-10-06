@@ -21,10 +21,14 @@
 
 /*
  * Copyright (c) 2009, 2010, Oracle and/or its affiliates. All rights reserved.
- */
-
-/*
  * Copyright 2013 Nexenta Systems, Inc. All rights reserved.
+ * Copyright 2015 Toomas Soome <tsoome@me.com>
+ * Copyright 2015 Gary Mills
+ * Copyright (c) 2015 by Delphix. All rights reserved.
+ * Copyright 2017 Jason King
+ * Copyright 2021 OmniOS Community Edition (OmniOSce) Association.
+ * Copyright (c) 2018, Joyent, Inc.
+ * Copyright 2023 Bill Sommerfeld <sommerfeld@alum.mit.edu>
  */
 
 /*
@@ -40,6 +44,8 @@
 #include <stdlib.h>
 #include <wchar.h>
 #include <sys/types.h>
+#include <sys/debug.h>
+#include <libcmdutils.h>
 
 #include "libbe.h"
 
@@ -55,6 +61,7 @@
 
 #define	DT_BUF_LEN (128)
 #define	NUM_COLS (6)
+CTASSERT(DT_BUF_LEN >= NN_NUMBUF_SZ);
 
 static int be_do_activate(int argc, char **argv);
 static int be_do_create(int argc, char **argv);
@@ -123,15 +130,16 @@ usage(void)
 	    "\n"
 	    "\tsubcommands:\n"
 	    "\n"
-	    "\tbeadm activate [-v] beName\n"
-	    "\tbeadm create [-a] [-d BE_desc]\n"
+	    "\tbeadm activate [-v] [-t | -T] beName\n"
+	    "\tbeadm create [-a | -t] [-d BE_desc]\n"
 	    "\t\t[-o property=value] ... [-p zpool] \n"
 	    "\t\t[-e nonActiveBe | beName@snapshot] [-v] beName\n"
 	    "\tbeadm create [-d BE_desc]\n"
 	    "\t\t[-o property=value] ... [-p zpool] [-v] beName@snapshot\n"
 	    "\tbeadm destroy [-Ffsv] beName \n"
 	    "\tbeadm destroy [-Fv] beName@snapshot \n"
-	    "\tbeadm list [[-a] | [-d] [-s]] [-H] [-v] [beName]\n"
+	    "\tbeadm list [-a | -ds] [-H]\n"
+	    "\t\t[-k|-K date | name | space] [-v] [beName]\n"
 	    "\tbeadm mount [-s ro|rw] [-v] beName [mountpoint]\n"
 	    "\tbeadm unmount [-fv] beName | mountpoint\n"
 	    "\tbeadm umount [-fv] beName | mountpoint\n"
@@ -162,12 +170,10 @@ main(int argc, char **argv)
 	(void) setlocale(LC_ALL, "");
 	(void) textdomain(TEXT_DOMAIN);
 
-	if (argc < 2) {
-		usage();
-		return (1);
-	}
-
-	cmdname = argv[1];
+	if (argc < 2)
+		cmdname = "list";
+	else
+		cmdname = argv[1];
 
 	/* Turn error printing off */
 	libbe_print_errors(B_FALSE);
@@ -207,7 +213,6 @@ init_hdr_cols(enum be_fmt be_fmt, struct hdr_info *hdr)
 	col[3].col_name = _("Space");
 	col[4].col_name = _("Policy");
 	col[5].col_name = _("Created");
-	col[6].col_name = NULL;
 
 	switch (be_fmt) {
 	case BE_FMT_ALL:
@@ -248,32 +253,6 @@ init_hdr_cols(enum be_fmt be_fmt, struct hdr_info *hdr)
 }
 
 static void
-nicenum(uint64_t num, char *buf, size_t buflen)
-{
-	uint64_t n = num;
-	int index = 0;
-	char u;
-
-	while (n >= 1024) {
-		n /= 1024;
-		index++;
-	}
-
-	u = " KMGTPE"[index];
-
-	if (index == 0) {
-		(void) snprintf(buf, buflen, "%llu", n);
-	} else {
-		int i;
-		for (i = 2; i >= 0; i--) {
-			if (snprintf(buf, buflen, "%.*f%c", i,
-			    (double)num / (1ULL << 10 * index), u) <= 5)
-				break;
-		}
-	}
-}
-
-static void
 count_widths(enum be_fmt be_fmt, struct hdr_info *hdr, be_node_list_t *be_nodes)
 {
 	size_t len[NUM_COLS];
@@ -285,7 +264,7 @@ count_widths(enum be_fmt be_fmt, struct hdr_info *hdr, be_node_list_t *be_nodes)
 		len[i] = hdr->cols[i].width;
 
 	for (cur_be = be_nodes; cur_be != NULL; cur_be = cur_be->be_next_node) {
-		char name[ZFS_MAXNAMELEN+1];
+		char name[ZFS_MAX_DATASET_NAME_LEN];
 		const char *be_name = cur_be->be_node_name;
 		const char *root_ds = cur_be->be_root_ds;
 		char *pos;
@@ -363,11 +342,12 @@ print_be_nodes(const char *be_name, boolean_t parsable, struct hdr_info *hdr,
 	be_node_list_t	*cur_be;
 
 	for (cur_be = nodes; cur_be != NULL; cur_be = cur_be->be_next_node) {
-		char active[3] = "-\0";
+		char active[4] = "-\0\0";
 		int ai = 0;
 		const char *datetime_fmt = "%F %R";
 		const char *name = cur_be->be_node_name;
 		const char *mntpt = cur_be->be_mntpt;
+		const char *uuid_str = cur_be->be_uuid_str;
 		be_snapshot_list_t *snap = NULL;
 		uint64_t used = cur_be->be_space_used;
 		time_t creation = cur_be->be_node_creation;
@@ -393,16 +373,19 @@ print_be_nodes(const char *be_name, boolean_t parsable, struct hdr_info *hdr,
 			active[ai++] = 'N';
 		if (cur_be->be_active_on_boot) {
 			if (!cur_be->be_global_active)
-				active[ai] = 'b';
+				active[ai++] = 'b';
 			else
-				active[ai] = 'R';
+				active[ai++] = 'R';
+		}
+		if (cur_be->be_active_next) {
+			active[ai] = 'T';
 		}
 
 		nicenum(used, buf, sizeof (buf));
 		if (parsable)
 			(void) printf("%s;%s;%s;%s;%llu;%s;%ld\n",
 			    name,
-			    cur_be->be_uuid_str,
+			    (uuid_str != NULL ? uuid_str: ""),
 			    active,
 			    (cur_be->be_mounted ? mntpt: ""),
 			    used,
@@ -429,7 +412,7 @@ print_be_snapshots(be_node_list_t *be, struct hdr_info *hdr, boolean_t parsable)
 
 	for (snap = be->be_node_snapshots; snap != NULL;
 	    snap = snap->be_next_snapshot) {
-		char name[ZFS_MAXNAMELEN+1];
+		char name[ZFS_MAX_DATASET_NAME_LEN];
 		const char *datetime_fmt = "%F %R";
 		const char *be_name = be->be_node_name;
 		const char *root_ds = be->be_root_ds;
@@ -491,7 +474,7 @@ print_fmt_nodes(const char *be_name, enum be_fmt be_fmt, boolean_t parsable,
 	be_node_list_t	*cur_be;
 
 	for (cur_be = nodes; cur_be != NULL; cur_be = cur_be->be_next_node) {
-		char active[3] = "-\0";
+		char active[4] = "-\0\0";
 		int ai = 0;
 		const char *datetime_fmt = "%F %R";
 		const char *name = cur_be->be_node_name;
@@ -514,7 +497,9 @@ print_fmt_nodes(const char *be_name, enum be_fmt be_fmt, boolean_t parsable,
 		if (cur_be->be_active)
 			active[ai++] = 'N';
 		if (cur_be->be_active_on_boot)
-			active[ai] = 'R';
+			active[ai++] = 'R';
+		if (cur_be->be_active_next)
+			active[ai++] = 'T';
 
 		nicenum(used, buf, sizeof (buf));
 		if (be_fmt & BE_FMT_DATASET)
@@ -625,6 +610,20 @@ be_nvl_alloc(nvlist_t **nvlp)
 }
 
 static int
+be_nvl_add_boolean(nvlist_t *nvl, const char *name, boolean_t val)
+{
+	assert(nvl != NULL);
+
+	if (nvlist_add_boolean_value(nvl, name, val) != 0) {
+		(void) fprintf(stderr, _("nvlist_add_boolean_value failed for "
+		    "%s (%s).\n"), name, val ? "true" : "false");
+		return (1);
+	}
+
+	return (0);
+}
+
+static int
 be_nvl_add_string(nvlist_t *nvl, const char *name, const char *val)
 {
 	assert(nvl != NULL);
@@ -673,11 +672,29 @@ be_do_activate(int argc, char **argv)
 	int		err = 1;
 	int		c;
 	char		*obe_name;
+	boolean_t	nextboot = B_FALSE;
+	boolean_t	do_nextboot = B_FALSE;
 
-	while ((c = getopt(argc, argv, "v")) != -1) {
+	while ((c = getopt(argc, argv, "vtT")) != -1) {
 		switch (c) {
 		case 'v':
 			libbe_print_errors(B_TRUE);
+			break;
+		case 't':
+			if (do_nextboot == B_TRUE) {
+				usage();
+				return (1);
+			}
+			nextboot = B_TRUE;
+			do_nextboot = B_TRUE;
+			break;
+		case 'T':
+			if (do_nextboot == B_TRUE) {
+				usage();
+				return (1);
+			}
+			nextboot = B_FALSE;
+			do_nextboot = B_TRUE;
 			break;
 		default:
 			usage();
@@ -701,11 +718,20 @@ be_do_activate(int argc, char **argv)
 	if (be_nvl_add_string(be_attrs, BE_ATTR_ORIG_BE_NAME, obe_name) != 0)
 		goto out;
 
+	if (do_nextboot == B_TRUE) {
+		if (be_nvl_add_boolean(be_attrs, BE_ATTR_ACTIVE_NEXTBOOT,
+		    nextboot) != 0)
+			goto out;
+	}
+
 	err = be_activate(be_attrs);
 
 	switch (err) {
 	case BE_SUCCESS:
-		(void) printf(_("Activated successfully\n"));
+		if (do_nextboot && nextboot == B_FALSE)
+			(void) printf(_("Temporary activation removed\n"));
+		else
+			(void) printf(_("Activated successfully\n"));
 		break;
 	case BE_ERR_BE_NOENT:
 		(void) fprintf(stderr, _("%s does not exist or appear "
@@ -735,6 +761,7 @@ be_do_create(int argc, char **argv)
 	nvlist_t	*be_attrs;
 	nvlist_t	*zfs_props = NULL;
 	boolean_t	activate = B_FALSE;
+	boolean_t	t_activate = B_FALSE;
 	boolean_t	is_snap = B_FALSE;
 	int		c;
 	int		err = 1;
@@ -747,7 +774,7 @@ be_do_create(int argc, char **argv)
 	char		*propval = NULL;
 	char		*strval = NULL;
 
-	while ((c = getopt(argc, argv, "ad:e:io:p:v")) != -1) {
+	while ((c = getopt(argc, argv, "ad:e:io:p:tv")) != -1) {
 		switch (c) {
 		case 'a':
 			activate = B_TRUE;
@@ -785,6 +812,9 @@ be_do_create(int argc, char **argv)
 		case 'p':
 			nbe_zpool = optarg;
 			break;
+		case 't':
+			t_activate = B_TRUE;
+			break;
 		case 'v':
 			libbe_print_errors(B_TRUE);
 			break;
@@ -792,6 +822,13 @@ be_do_create(int argc, char **argv)
 			usage();
 			goto out2;
 		}
+	}
+
+	if (activate && t_activate) {
+		(void) fprintf(stderr,
+		    _("create: -a and -t are mutually exclusive\n"));
+		usage();
+		goto out2;
 	}
 
 	argc -= optind;
@@ -907,6 +944,14 @@ be_do_create(int argc, char **argv)
 			err = be_do_activate(2, args);
 			goto out;
 		}
+		if (!is_snap && t_activate) {
+			char *args[] = { "activate", "-t", "", NULL };
+			args[2] = nbe_name;
+			optind = 1;
+
+			err = be_do_activate(3, args);
+			goto out;
+		}
 
 		(void) printf(_("Created successfully\n"));
 		break;
@@ -943,8 +988,7 @@ be_do_create(int argc, char **argv)
 out:
 	nvlist_free(be_attrs);
 out2:
-	if (zfs_props != NULL)
-		nvlist_free(zfs_props);
+	nvlist_free(zfs_props);
 
 	return (err);
 }
@@ -1062,7 +1106,7 @@ be_do_destroy(int argc, char **argv)
 	case BE_ERR_SS_EXISTS:
 		(void) fprintf(stderr, _("Unable to destroy %s: "
 		    "BE has snapshots.\nUse 'beadm destroy -s %s' or "
-		    "'zfs -r destroy <dataset>'.\n"), be_name, be_name);
+		    "'zfs destroy -r <dataset>'.\n"), be_name, be_name);
 		break;
 	default:
 		(void) fprintf(stderr, _("Unable to destroy %s.\n"), be_name);
@@ -1085,8 +1129,9 @@ be_do_list(int argc, char **argv)
 	int		err = 1;
 	int		c = 0;
 	char		*be_name = NULL;
+	be_sort_t	order = BE_SORT_UNSPECIFIED;
 
-	while ((c = getopt(argc, argv, "adsvH")) != -1) {
+	while ((c = getopt(argc, argv, "adk:svHK:")) != -1) {
 		switch (c) {
 		case 'a':
 			all = B_TRUE;
@@ -1094,6 +1139,39 @@ be_do_list(int argc, char **argv)
 		case 'd':
 			dsets = B_TRUE;
 			break;
+		case 'k':
+		case 'K':
+			if (order != BE_SORT_UNSPECIFIED) {
+				(void) fprintf(stderr, _("Sort key can be "
+				    "specified only once.\n"));
+				usage();
+				return (1);
+			}
+			if (strcmp(optarg, "date") == 0) {
+				if (c == 'k')
+					order = BE_SORT_DATE;
+				else
+					order = BE_SORT_DATE_REV;
+				break;
+			}
+			if (strcmp(optarg, "name") == 0) {
+				if (c == 'k')
+					order = BE_SORT_NAME;
+				else
+					order = BE_SORT_NAME_REV;
+				break;
+			}
+			if (strcmp(optarg, "space") == 0) {
+				if (c == 'k')
+					order = BE_SORT_SPACE;
+				else
+					order = BE_SORT_SPACE_REV;
+				break;
+			}
+			(void) fprintf(stderr, _("Unknown sort key: %s\n"),
+			    optarg);
+			usage();
+			return (1);
 		case 's':
 			snaps = B_TRUE;
 			break;
@@ -1134,10 +1212,26 @@ be_do_list(int argc, char **argv)
 	if (argc == 1)
 		be_name = argv[0];
 
-	err = be_list(be_name, &be_nodes);
+	err = be_list(be_name, &be_nodes,
+	    snaps ? BE_LIST_SNAPSHOTS : BE_LIST_DEFAULT);
 
 	switch (err) {
 	case BE_SUCCESS:
+		/* the default sort is ascending date, no need to sort twice */
+		if (order == BE_SORT_UNSPECIFIED)
+			order = BE_SORT_DATE;
+
+		if (order != BE_SORT_DATE) {
+			err = be_sort(&be_nodes, order);
+			if (err != BE_SUCCESS) {
+				(void) fprintf(stderr, _("Unable to sort Boot "
+				    "Environment\n"));
+				(void) fprintf(stderr, "%s\n",
+				    be_err_to_str(err));
+				break;
+			}
+		}
+
 		print_nodes(be_name, dsets, snaps, parsable, be_nodes);
 		break;
 	case BE_ERR_BE_NOENT:

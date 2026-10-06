@@ -20,6 +20,7 @@
 #
 # Copyright (c) 2009, 2010, Oracle and/or its affiliates. All rights reserved.
 #
+# Copyright (c) 2018, Joyent, Inc.
 
 ILBD=		ilbd
 PROG=		$(ILBD)
@@ -50,10 +51,12 @@ CPPFLAGS +=	-I$(LIB_INC)
 CPPFLAGS +=	-I$(SRC)/uts/common
 
 CERRWARN +=	-_gcc=-Wno-switch
-CERRWARN +=	-_gcc=-Wno-uninitialized
-CERRWARN +=	-_gcc=-Wno-unused-label
+CERRWARN +=	$(CNOWARN_UNINIT)
 
-C99MODE =      $(C99_ENABLE)
+# not linted
+SMATCH=off
+
+CSTD =      $(CSTD_GNU99)
 
 # I18n
 POFILE =        $(ILBD).po
@@ -63,7 +66,6 @@ all:=		TARGET= all
 install:=	TARGET= install
 clean:=		TARGET= clean
 clobber:=	TARGET= clobber
-lint:=		TARGET= lint
 
 
 LDLIBS +=	-lcmdutils -lsocket -lsecdb -lnsl -lilb -lscf -linetutil -lbsm
@@ -85,14 +87,11 @@ check:	$(CHKMANIFEST) $(CHECKHDRS)
 clean:
 	$(RM) $(OBJS)
 
-lint:
-	$(LINT.c) $(ILBD_SRCS) $(LDLIBS)
-
 $(POFILE):	$(POFILES)
 		$(RM) $@
 		$(CAT) $(POFILES) > $@
 
-all install clean clobber lint: $(ILBSUBDIRS)
+all install clean clobber: $(ILBSUBDIRS)
 
 include		../../../Makefile.targ
 

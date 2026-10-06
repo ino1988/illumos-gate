@@ -20,40 +20,28 @@
  * CDDL HEADER END
  */
 /*	Copyright (c) 1988 AT&T	*/
-/*	  All Rights Reserved  	*/
+/*	  All Rights Reserved	*/
 
 /*
  * Copyright 2014 Garrett D'Amore <garrett@damore.org>
+ * Copyright 2016 Joyent, Inc.
+ * Copyright 2018 OmniOS Community Edition (OmniOSce) Association.
+ * Copyright 2023 Oxide Computer Company
  *
  * Copyright 2004 Sun Microsystems, Inc.  All rights reserved.
  * Use is subject to license terms.
  */
 
-#ifndef	_ASSERT_H
-#define	_ASSERT_H
-
-#ifdef	__cplusplus
-extern "C" {
-#endif
-
-#if __STDC_VERSION__ - 0 >= 199901L
-extern void __assert_c99(const char *, const char *, int, const char *);
-#else
-extern void __assert(const char *, const char *, int);
-#endif /* __STDC_VERSION__ - 0 >= 199901L */
-
-#ifdef	__cplusplus
-}
-#endif
-
-#endif	/* _ASSERT_H */
-
 /*
  * Note that the ANSI C Standard requires all headers to be idempotent except
  * <assert.h> which is explicitly required not to be idempotent (section 4.1.2).
- * Therefore, it is by intent that the header guards (#ifndef _ASSERT_H) do
- * not span this entire file.
+ * We split up the idempotent sections into <iso/assert_iso.h> and leave the
+ * rest of this that should be impacted by NDEBUG here. There is no header
+ * guard.  This is intentional. For more information on the split, see
+ * <iso/assert_iso.h>.
  */
+
+#include <iso/assert_iso.h>
 
 #undef	assert
 
@@ -63,11 +51,11 @@ extern void __assert(const char *, const char *, int);
 
 #else
 
-#if __STDC_VERSION__ - 0 >= 199901L
+#if (__cplusplus - 0 >= 201103L) || (__STDC_VERSION__ - 0 >= 199901L)
 #define	assert(EX) (void)((EX) || \
 	(__assert_c99(#EX, __FILE__, __LINE__, __func__), 0))
 #else
 #define	assert(EX) (void)((EX) || (__assert(#EX, __FILE__, __LINE__), 0))
-#endif /* __STDC_VERSION__ - 0 >= 199901L */
+#endif /* __cplusplus - 0 >= 201103L || __STDC_VERSION__ - 0 >= 199901L */
 
 #endif	/* NDEBUG */

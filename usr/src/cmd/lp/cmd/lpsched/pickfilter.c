@@ -22,13 +22,13 @@
 /*
  * Copyright 1996 Sun Microsystems, Inc.  All rights reserved.
  * Use is subject to license terms.
+ * Copyright (c) 2016 by Delphix. All rights reserved.
+ * Copyright 2026 OmniOS Community Edition (OmniOSce) Association.
  */
 
 /*	Copyright (c) 1984, 1986, 1987, 1988, 1989 AT&T	*/
 /*	  All Rights Reserved  	*/
 
-
-#pragma ident	"%Z%%M%	%I%	%E% SMI"	/* SVr4.0 1.2.1.5	*/
 /* EMACS_MODES: !fill, lnumb, !overwrite, !nodelete, !picture */
 
 #include "string.h"
@@ -44,7 +44,7 @@
  * BUT we'll leave LP_SEP inside single quotes alone!
  *
  * This is to allow the following case (and the like) to work correctly:
- *	prtitle='standard input' 
+ *	prtitle='standard input'
  */
 
 void
@@ -88,6 +88,7 @@ pickfilter(RSTATUS *prs, CANDIDATE *pc, FSTATUS *pfs)
 	char *			pipes[2]	= { 0 , 0 };
 	char *			cp;
 	char *			output_type;
+	char			copiesbuf[sizeof (BIGGEST_NUMBER_S)];
 
 	char **			modes		= 0;
 	char **			parms		= 0;
@@ -250,7 +251,8 @@ pickfilter(RSTATUS *prs, CANDIDATE *pc, FSTATUS *pfs)
 
 	if (prs->request->copies > 1) {
 		*pp++ = PARM_COPIES;
-		sprintf ((*pp++ = BIGGEST_NUMBER_S), "%d", prs->request->copies);
+		sprintf (copiesbuf, "%d", prs->request->copies);
+		*pp++ = copiesbuf;
 	}
 
 	if (modes) {
@@ -329,7 +331,7 @@ pickfilter(RSTATUS *prs, CANDIDATE *pc, FSTATUS *pfs)
 
 	/*
 	 * Don't try using a filter if the user doesn't want
-	 * a filter to be used! He or she would rather see an
+	 * a filter to be used! They would rather see an
 	 * error message than (heaven forbid!) a filter being
 	 * used.
 	 */

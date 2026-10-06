@@ -27,9 +27,7 @@
  * Use is subject to license terms.
  */
 
-#if defined(ELFOBJ)
 #pragma weak fmin = __fmin
-#endif
 
 /*
  * fmin(x,y) returns the smaller of x and y.  If just one of the
@@ -52,7 +50,7 @@ __fmin(double x, double y) {
 		double d;
 	} xx, yy;
 	unsigned s;
-	
+
 	/* if y is nan, replace it by x */
 	if (y != y)
 		y = x;

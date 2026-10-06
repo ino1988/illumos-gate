@@ -22,9 +22,8 @@
 /*
  * Copyright 2004 Sun Microsystems, Inc.  All rights reserved.
  * Use is subject to license terms.
+ * Copyright 2025 Oxide Computer Company
  */
-
-#pragma ident	"%Z%%M%	%I%	%E% SMI"
 
 #include <mdb/mdb_modapi.h>
 #include <sys/rctl.h>
@@ -86,10 +85,7 @@ rctl(uintptr_t addr, uint_t flags, int argc, const mdb_arg_t *argv)
 	if (argc != 0) {
 		const mdb_arg_t *argp = &argv[0];
 
-		if (argp->a_type == MDB_TYPE_IMMEDIATE)
-			hndl = (rctl_hndl_t)argp->a_un.a_val;
-		else
-			hndl = (rctl_hndl_t)mdb_strtoull(argp->a_un.a_str);
+		hndl = (rctl_hndl_t)mdb_argtoull(argp);
 
 		if (rctl.rc_id != hndl)
 			return (DCMD_OK);
@@ -204,7 +200,7 @@ rctl_list(uintptr_t addr, uint_t flags, int argc, const mdb_arg_t *argv)
 	dict_data_t rdict;
 	int i;
 
-	rdict.dict_addr = NULL;
+	rdict.dict_addr = 0;
 
 	if (!(flags & DCMD_ADDRSPEC))
 		return (DCMD_USAGE);
@@ -218,11 +214,7 @@ rctl_list(uintptr_t addr, uint_t flags, int argc, const mdb_arg_t *argv)
 		 */
 		const mdb_arg_t *argp = &argv[0];
 
-		if (argp->a_type == MDB_TYPE_IMMEDIATE)
-			rdict.hndl = (rctl_hndl_t)argp->a_un.a_val;
-		else
-			rdict.hndl =
-			    (rctl_hndl_t)mdb_strtoull(argp->a_un.a_str);
+		rdict.hndl = (rctl_hndl_t)mdb_argtoull(argp);
 
 		if (mdb_walk("rctl_dict_list", (mdb_walk_cb_t)hndl2dict,
 		    &rdict) == -1) {
@@ -230,7 +222,7 @@ rctl_list(uintptr_t addr, uint_t flags, int argc, const mdb_arg_t *argv)
 			return (DCMD_ERR);
 		}
 		/* Couldn't find a rctl_dict_entry_t for this handle */
-		if (rdict.dict_addr == NULL)
+		if (rdict.dict_addr == 0)
 			return (DCMD_ERR);
 	} else
 		return (DCMD_USAGE);
@@ -337,7 +329,7 @@ rctl_dict_walk_step(mdb_walk_state_t *wsp)
 
 	dp = (uintptr_t)((dwd->curdict)[dwd->num_cur]);
 
-	while (dp != NULL) {
+	while (dp != 0) {
 		if (mdb_vread(&entry, sizeof (rctl_dict_entry_t), dp) == -1) {
 			mdb_warn("failed to read rctl_dict_entry_t structure "
 			    "at %p", dp);
@@ -422,7 +414,7 @@ rctl_set_walk_step(mdb_walk_state_t *wsp)
 	if (swd->hashcur >= swd->hashsize)
 		return (WALK_DONE);
 
-	if (wsp->walk_addr == NULL) {
+	if (wsp->walk_addr == 0) {
 		while (swd->hashcur < swd->hashsize) {
 			if (rhash[swd->hashcur] != NULL) {
 				break;
@@ -439,7 +431,7 @@ rctl_set_walk_step(mdb_walk_state_t *wsp)
 	}
 
 	if (mdb_vread(&rctl, sizeof (rctl_t), wsp->walk_addr) == -1) {
-		wsp->walk_addr = NULL;
+		wsp->walk_addr = 0;
 		mdb_warn("unable to read from %#p", wsp->walk_addr);
 		return (WALK_ERR);
 	}
@@ -487,7 +479,7 @@ rctl_val_walk_step(mdb_walk_state_t *wsp)
 
 	status = wsp->walk_callback(wsp->walk_addr, &val, wsp->walk_cbdata);
 
-	if ((wsp->walk_addr = (uintptr_t)val.rcv_next) == NULL)
+	if ((wsp->walk_addr = (uintptr_t)val.rcv_next) == 0)
 		return (WALK_DONE);
 
 	return (status);

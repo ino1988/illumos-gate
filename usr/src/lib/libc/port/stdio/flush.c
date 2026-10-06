@@ -21,10 +21,12 @@
 
 /*
  * Copyright (c) 1988, 2010, Oracle and/or its affiliates. All rights reserved.
+ * Copyright 2020 Robert Mustacchi
+ * Copyright 2025 Hans Rosenfeld
  */
 
 /*	Copyright (c) 1988 AT&T	*/
-/*	  All Rights Reserved  	*/
+/*	  All Rights Reserved	*/
 
 #include "lint.h"
 #include "mtlib.h"
@@ -42,6 +44,8 @@
 #include <stddef.h>
 #include <errno.h>
 #include <fcntl.h>
+#include <sys/debug.h>
+#include <limits.h>
 
 #define	_iob	__iob
 
@@ -376,7 +380,8 @@ rescan:
 	lastlink = *prev = hdr;
 	fp->_ptr = 0;
 	fp->_base = 0;
-	fp->_flag = 0377; /* claim the fp by setting low 8 bits */
+	/* claim the fp by setting low 8 bits */
+	fp->_flag = _DEF_FLAG_MASK;
 	if (threaded)
 		cancel_safe_mutex_unlock(&_first_link_lock);
 
@@ -387,11 +392,19 @@ static void
 isseekable(FILE *iop)
 {
 	struct stat64 fstatbuf;
-	int save_errno;
+	int fd, save_errno;
 
 	save_errno = errno;
 
-	if (fstat64(GET_FD(iop), &fstatbuf) != 0) {
+	/*
+	 * non-FILE based STREAMS are required to declare their own seekability
+	 * and therefore we should not try and test them below.
+	 */
+	fd = _get_fd(iop);
+	if (fd == -1) {
+		return;
+	}
+	if (fstat64(fd, &fstatbuf) != 0) {
 		/*
 		 * when we don't know what it is we'll
 		 * do the old behaviour and flush
@@ -545,8 +558,7 @@ _xflsbuf(FILE *iop)
 		_bufsync(iop, bufend);
 
 	if (n > 0) {
-		int fd = GET_FD(iop);
-		while ((num_wrote = write(fd, base, (size_t)n)) != n) {
+		while ((num_wrote = _xwrite(iop, base, (size_t)n)) != n) {
 			if (num_wrote <= 0) {
 				if (!cancel_active())
 					iop->_flag |= _IOERR;
@@ -600,8 +612,8 @@ _fflush_l_iops(void)		/* flush all buffers */
 		 * knowing that when it is 0, it isn't allocated and
 		 * cannot be allocated while we're holding the
 		 * _first_link_lock.  And when _IONBF is set (also the
-		 * case when _flag is 0377, or alloc in progress), we
-		 * also ignore it.
+		 * case when _flag is 0377 -- _DEF_FLAG_MASK, or alloc in
+		 * progress), we also ignore it.
 		 *
 		 * Ignore locked streams; it will appear as if
 		 * concurrent updates happened after fflush(NULL).  Note
@@ -662,7 +674,7 @@ _fflush_u(FILE *iop)
 
 	/* this portion is always assumed locked */
 	if (!(iop->_flag & _IOWRT)) {
-		(void) lseek64(GET_FD(iop), -iop->_cnt, SEEK_CUR);
+		(void) _xseek64(iop, -iop->_cnt, SEEK_CUR);
 		iop->_cnt = 0;
 		/* needed for ungetc & multibyte pushbacks */
 		iop->_ptr = iop->_base;
@@ -681,9 +693,9 @@ _fflush_u(FILE *iop)
 	return (res);
 }
 
-/* flush buffer and close stream */
-int
-fclose(FILE *iop)
+/* helper for fclose/fdclose/fcloseall */
+static int
+fclose_helper(FILE *iop, boolean_t doclose)
 {
 	int res = 0;
 	rmutex_t *lk;
@@ -697,25 +709,79 @@ fclose(FILE *iop)
 		FUNLOCKFILE(lk);
 		return (EOF);
 	}
+
 	/* Is not unbuffered and opened for read and/or write ? */
 	if (!(iop->_flag & _IONBF) && (iop->_flag & (_IOWRT | _IOREAD | _IORW)))
 		res = _fflush_u(iop);
-	if (close(GET_FD(iop)) < 0)
-		res = EOF;
+
+	if (doclose)
+		if (_xclose(iop) < 0)
+			res = EOF;
+
 	if (iop->_flag & _IOMYBUF) {
 		(void) free((char *)iop->_base - PUSHBACK);
 	}
+
 	iop->_base = NULL;
 	iop->_ptr = NULL;
 	iop->_cnt = 0;
 	iop->_flag = 0;			/* marks it as available */
 	FUNLOCKFILE(lk);
 
+	return (res);
+}
+
+/* flush buffer and close stream */
+int
+fclose(FILE *iop)
+{
+	int res = 0;
+
+	res = fclose_helper(iop, B_TRUE);
+
 	if (__libc_threaded)
 		cancel_safe_mutex_lock(&_first_link_lock);
 	fcloses++;
 	if (__libc_threaded)
 		cancel_safe_mutex_unlock(&_first_link_lock);
+
+	return (res);
+}
+
+/*
+ * fdclose() works like fclose(), except it doesn't close the underlying file
+ * descriptor.
+ *
+ * That is, however, not true for streams which aren't backed by a file
+ * descriptor such as memory streams, as indicated by them having a special
+ * ops vector, which we infer from the file descriptor being -1. In this case
+ * fdclose() returns EOF, sets errno to EOPNOTSUP, but still closes the FILE
+ * just like fclose() would. This is to make sure we're compatible with BSD.
+ */
+int
+fdclose(FILE *iop, int *fdp)
+{
+	int res = 0;
+	int fd = _get_fd(iop);
+
+	if (fd == -1) {
+		res = fclose_helper(iop, B_TRUE);
+		errno = ENOTSUP;
+	} else {
+		res = fclose_helper(iop, B_FALSE);
+	}
+
+	if (__libc_threaded)
+		cancel_safe_mutex_lock(&_first_link_lock);
+	fcloses++;
+	if (__libc_threaded)
+		cancel_safe_mutex_unlock(&_first_link_lock);
+
+	if (fdp != NULL)
+		*fdp = fd;
+
+	if (fd == -1)
+		res = EOF;
 
 	return (res);
 }
@@ -727,7 +793,6 @@ fcloseall(void)
 	FPDECL(iop);
 
 	struct _link_ *lp;
-	rmutex_t *lk;
 
 	if (__libc_threaded)
 		cancel_safe_mutex_lock(&_first_link_lock);
@@ -739,26 +804,7 @@ fcloseall(void)
 
 		FIRSTFP(lp, iop);
 		for (i = lp->niob; --i >= 0; NEXTFP(iop)) {
-			/* code stolen from fclose(), above */
-
-			FLOCKFILE(lk, iop);
-			if (iop->_flag == 0) {
-				FUNLOCKFILE(lk);
-				continue;
-			}
-
-			/* Not unbuffered and opened for read and/or write? */
-			if (!(iop->_flag & _IONBF) &&
-			    (iop->_flag & (_IOWRT | _IOREAD | _IORW)))
-				(void) _fflush_u(iop);
-			(void) close(GET_FD(iop));
-			if (iop->_flag & _IOMYBUF)
-				free((char *)iop->_base - PUSHBACK);
-			iop->_base = NULL;
-			iop->_ptr = NULL;
-			iop->_cnt = 0;
-			iop->_flag = 0;		/* marks it as available */
-			FUNLOCKFILE(lk);
+			(void) fclose_helper(iop, B_TRUE);
 			fcloses++;
 		}
 	} while ((lp = lp->next) != NULL);
@@ -781,7 +827,7 @@ close_fd(FILE *iop)
 	/* Is not unbuffered and opened for read and/or write ? */
 	if (!(iop->_flag & _IONBF) && (iop->_flag & (_IOWRT | _IOREAD | _IORW)))
 		res = _fflush_u(iop);
-	if (close(GET_FD(iop)) < 0)
+	if (_xclose(iop) < 0)
 		res = EOF;
 	if (iop->_flag & _IOMYBUF) {
 		(void) free((char *)iop->_base - PUSHBACK);
@@ -809,7 +855,8 @@ getiop(FILE *fp, rmutex_t *lk, mbstate_t *mb)
 		fp->_cnt = 0;
 		fp->_ptr = NULL;
 		fp->_base = NULL;
-		fp->_flag = 0377;	/* claim the fp by setting low 8 bits */
+		/* claim the fp by setting low 8 bits */
+		fp->_flag = _DEF_FLAG_MASK;
 		(void) memset(mb, 0, sizeof (mbstate_t));
 		FUNLOCKFILE(lk);
 		return (fp);
@@ -943,3 +990,176 @@ enable_extended_FILE_stdio(int fd, int action)
 	return (0);
 }
 #endif
+
+/*
+ * Wrappers around the various system calls that stdio needs to make on a file
+ * descriptor.
+ */
+static stdio_ops_t *
+get_stdops(FILE *iop)
+{
+#ifdef	_LP64
+	return (iop->_ops);
+#else
+	struct xFILEdata *dat = getxfdat(iop);
+	return (dat->_ops);
+#endif
+}
+
+static void
+set_stdops(FILE *iop, stdio_ops_t *ops)
+{
+#ifdef	_LP64
+	ASSERT3P(iop->_ops, ==, NULL);
+	iop->_ops = ops;
+#else
+	struct xFILEdata *dat = getxfdat(iop);
+	ASSERT3P(dat->_ops, ==, NULL);
+	dat->_ops = ops;
+#endif
+
+}
+
+static void
+clr_stdops(FILE *iop)
+{
+#ifdef	_LP64
+	iop->_ops = NULL;
+#else
+	struct xFILEdata *dat = getxfdat(iop);
+	dat->_ops = NULL;
+#endif
+
+}
+
+ssize_t
+_xread(FILE *iop, void *buf, size_t nbytes)
+{
+	stdio_ops_t *ops = get_stdops(iop);
+	if (ops != NULL) {
+		return (ops->std_read(iop, buf, nbytes));
+	}
+
+	return (read(_get_fd(iop), buf, nbytes));
+}
+
+ssize_t
+_xwrite(FILE *iop, const void *buf, size_t nbytes)
+{
+	stdio_ops_t *ops = get_stdops(iop);
+	if (ops != NULL) {
+		return (ops->std_write(iop, buf, nbytes));
+	}
+	return (write(_get_fd(iop), buf, nbytes));
+}
+
+off_t
+_xseek(FILE *iop, off_t off, int whence)
+{
+	stdio_ops_t *ops = get_stdops(iop);
+	if (ops != NULL) {
+		return (ops->std_seek(iop, off, whence));
+	}
+
+	return (lseek(_get_fd(iop), off, whence));
+}
+
+off64_t
+_xseek64(FILE *iop, off64_t off, int whence)
+{
+	stdio_ops_t *ops = get_stdops(iop);
+	if (ops != NULL) {
+		/*
+		 * The internal APIs only operate with an off_t. An off64_t in
+		 * an ILP32 environment may represent a value larger than they
+		 * can accept. As such, we try and catch such cases and error
+		 * about it before we get there.
+		 */
+		if (off > LONG_MAX || off < LONG_MIN) {
+			errno = EOVERFLOW;
+			return (-1);
+		}
+		return (ops->std_seek(iop, off, whence));
+	}
+
+	return (lseek64(_get_fd(iop), off, whence));
+}
+
+int
+_xclose(FILE *iop)
+{
+	stdio_ops_t *ops = get_stdops(iop);
+	if (ops != NULL) {
+		return (ops->std_close(iop));
+	}
+
+	return (close(_get_fd(iop)));
+}
+
+void *
+_xdata(FILE *iop)
+{
+	stdio_ops_t *ops = get_stdops(iop);
+	if (ops != NULL) {
+		return (ops->std_data);
+	}
+
+	return (NULL);
+}
+
+int
+_xassoc(FILE *iop, fread_t readf, fwrite_t writef, fseek_t seekf,
+    fclose_t closef, void *data)
+{
+	stdio_ops_t *ops = get_stdops(iop);
+
+	if (ops == NULL) {
+		ops = malloc(sizeof (*ops));
+		if (ops == NULL) {
+			return (-1);
+		}
+		set_stdops(iop, ops);
+	}
+
+	ops->std_read = readf;
+	ops->std_write = writef;
+	ops->std_seek = seekf;
+	ops->std_close = closef;
+	ops->std_data = data;
+
+	return (0);
+}
+
+void
+_xunassoc(FILE *iop)
+{
+	stdio_ops_t *ops = get_stdops(iop);
+	if (ops == NULL) {
+		return;
+	}
+	clr_stdops(iop);
+	free(ops);
+}
+
+int
+_get_fd(FILE *iop)
+{
+	/*
+	 * Streams with an ops vector (currently the memory stream family) do
+	 * not have an underlying file descriptor that we can give back to the
+	 * user. In such cases, return -1 to explicitly make sure that they'll
+	 * get an ebadf from things.
+	 */
+	if (get_stdops(iop) != NULL) {
+		return (-1);
+	}
+#ifdef  _LP64
+	return (iop->_file);
+#else
+	if (iop->__extendedfd) {
+		return (_file_get(iop));
+	} else {
+		return (iop->_magic);
+	}
+#endif
+}

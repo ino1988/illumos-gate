@@ -27,8 +27,6 @@
 /*	Copyright (c) 1988 AT&T	*/
 /*	  All Rights Reserved	*/
 
-#pragma ident	"%Z%%M%	%I%	%E% SMI"
-
 /*
  *	Memory management: malloc(), realloc(), free(), memalign().
  *
@@ -259,7 +257,6 @@ malloc_unlocked(size_t size)
 	ASSERT(ISBIT0(SIZE(tmp)));
 	protect(tmp);
 
-leftover:
 	/* if the leftover is enough for a new free piece */
 	if ((n = (SIZE(sp) - size)) >= MINSIZE + WORDSIZE) {
 		n -= WORDSIZE;

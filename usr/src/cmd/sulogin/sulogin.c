@@ -21,6 +21,7 @@
 
 /*
  * Copyright 2013 Nexenta Systems, Inc. All rights reserved.
+ * Copyright (c) 2016 by Delphix. All rights reserved.
  */
 
 /*
@@ -289,7 +290,7 @@ main(int argc, char **argv)
 			 * init() was invoked from a console that was not
 			 * the default console, nor was it an auxiliary.
 			 */
-			if (cttyname[0] == NULL)
+			if (cttyname[0] == '\0')
 				termhandler(0);
 				/* Never returns */
 
@@ -777,7 +778,7 @@ childcleanup(int sig)
 
 	/* Only need to kill the child that became the shell. */
 	for (i = 0; i < nchild; i++) {
-		/* Don't kill gramps before his time */
+		/* Don't kill grandparent before it's necessary */
 		if (pidlist[i] != getppid())
 			(void) sigsend(P_PID, pidlist[i], SIGHUP);
 	}

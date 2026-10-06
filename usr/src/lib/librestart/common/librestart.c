@@ -22,6 +22,7 @@
 /*
  * Copyright (c) 2004, 2010, Oracle and/or its affiliates. All rights reserved.
  * Copyright (c) 2013, Joyent, Inc. All rights reserved.
+ * Copyright 2024 Oxide Computer Company
  */
 
 #include <libintl.h>
@@ -53,6 +54,7 @@
 #include <syslog.h>
 #include <sys/corectl.h>
 #include <sys/machelf.h>
+#include <sys/secflags.h>
 #include <sys/task.h>
 #include <sys/types.h>
 #include <time.h>
@@ -188,7 +190,7 @@ static const struct restarter_state_transition_reason restarter_str[] = {
 	{
 	    restarter_str_bad_repo_state,
 	    "bad_repo_state",
-	    "an SMF repository inconsistecy exists"
+	    "an SMF repository inconsistency exists"
 	},
 
 	/*
@@ -2754,35 +2756,35 @@ out:
  *
  * If no method_context is defined, original init context is provided, where
  * the working directory is '/', and uid/gid are 0/0.  But if a method_context
- * is defined at any level the smf_method(5) method_context defaults are used.
+ * is defined at any level the smf_method(7) method_context defaults are used.
  *
  * Return an error message structure containing the error message
  * with context, and the error so the caller can make a decision
  * on what to do next.
  *
  * Error Types :
- * 	E2BIG		Too many values or entry is too big
- * 	EINVAL		Invalid value
- * 	EIO		an I/O error has occured
- * 	ENOENT		no entry for value
- * 	ENOMEM		out of memory
- * 	ENOTSUP		Version mismatch
- * 	ERANGE		value is out of range
- * 	EMFILE/ENFILE	out of file descriptors
+ *	E2BIG		Too many values or entry is too big
+ *	EINVAL		Invalid value
+ *	EIO		an I/O error has occured
+ *	ENOENT		no entry for value
+ *	ENOMEM		out of memory
+ *	ENOTSUP		Version mismatch
+ *	ERANGE		value is out of range
+ *	EMFILE/ENFILE	out of file descriptors
  *
- * 	SCF_ERROR_BACKEND_ACCESS
- * 	SCF_ERROR_CONNECTION_BROKEN
- * 	SCF_ERROR_DELETED
- * 	SCF_ERROR_CONSTRAINT_VIOLATED
- * 	SCF_ERROR_HANDLE_DESTROYED
- * 	SCF_ERROR_INTERNAL
- * 	SCF_ERROR_INVALID_ARGUMENT
- * 	SCF_ERROR_NO_MEMORY
- * 	SCF_ERROR_NO_RESOURCES
- * 	SCF_ERROR_NOT_BOUND
- * 	SCF_ERROR_NOT_FOUND
- * 	SCF_ERROR_NOT_SET
- * 	SCF_ERROR_TYPE_MISMATCH
+ *	SCF_ERROR_BACKEND_ACCESS
+ *	SCF_ERROR_CONNECTION_BROKEN
+ *	SCF_ERROR_DELETED
+ *	SCF_ERROR_CONSTRAINT_VIOLATED
+ *	SCF_ERROR_HANDLE_DESTROYED
+ *	SCF_ERROR_INTERNAL
+ *	SCF_ERROR_INVALID_ARGUMENT
+ *	SCF_ERROR_NO_MEMORY
+ *	SCF_ERROR_NO_RESOURCES
+ *	SCF_ERROR_NOT_BOUND
+ *	SCF_ERROR_NOT_FOUND
+ *	SCF_ERROR_NOT_SET
+ *	SCF_ERROR_TYPE_MISMATCH
  *
  */
 mc_error_t *
@@ -2799,9 +2801,19 @@ restarter_get_method_context(uint_t version, scf_instance_t *inst,
 	scf_type_t ty;
 	uint8_t use_profile;
 	int ret = 0;
-	int mc_used = 0;
 	mc_error_t *err = NULL;
 	struct method_context *cip;
+	enum {
+		MCF_FOUND =		1 << 0,
+		MCF_ENVIRONMENT =	1 << 1,
+		MCF_PROFILE =		1 << 2,
+		MCF_IDS =		1 << 3,
+		MCF_CWD =		1 << 4,
+		MCF_SECFLAGS =		1 << 5,
+		MCF_COREFILE =		1 << 6,
+		MCF_PROJECT =		1 << 7,
+		MCF_RESPOOL =		1 << 8,
+	} mc_flags = 0;
 
 	if ((err = malloc(sizeof (mc_error_t))) == NULL)
 		return (mc_error_create(NULL, ENOMEM, NULL));
@@ -2843,7 +2855,7 @@ restarter_get_method_context(uint_t version, scf_instance_t *inst,
 	    (prop = scf_property_create(h)) == NULL ||
 	    (val = scf_value_create(h)) == NULL) {
 		err = mc_error_create(err, scf_error(),
-		    "Failed to create repository object: %s\n",
+		    "Failed to create repository object: %s",
 		    scf_strerror(scf_error()));
 		goto out;
 	}
@@ -2873,7 +2885,8 @@ restarter_get_method_context(uint_t version, scf_instance_t *inst,
 		scf_pg_destroy(instpg);
 		instpg = NULL;
 	} else {
-		mc_used++;
+		/* Found a method_context */
+		mc_flags |= MCF_FOUND;
 	}
 
 	ret = get_environment(h, methpg, cip, prop, val);
@@ -2883,7 +2896,7 @@ restarter_get_method_context(uint_t version, scf_instance_t *inst,
 
 	switch (ret) {
 	case 0:
-		mc_used++;
+		mc_flags |= MCF_ENVIRONMENT;
 		break;
 	case ENOENT:
 		break;
@@ -2895,7 +2908,7 @@ restarter_get_method_context(uint_t version, scf_instance_t *inst,
 		goto out;
 	default:
 		err = mc_error_create(err, ret,
-		    "Get method environment failed : %s\n", scf_strerror(ret));
+		    "Get method environment failed: %s", scf_strerror(ret));
 		goto out;
 	}
 
@@ -2994,16 +3007,18 @@ restarter_get_method_context(uint_t version, scf_instance_t *inst,
 			goto out;
 		}
 
-		mc_used++;
 		ret = scf_value_get_boolean(val, &use_profile);
 		assert(ret == SCF_SUCCESS);
 
 		/* get ids & privileges */
-		if (use_profile)
+		if (use_profile) {
+			mc_flags |= MCF_PROFILE;
 			err = get_profile(pg, instpg, prop, val, cmdline,
 			    cip, err);
-		else
+		} else {
+			mc_flags |= MCF_IDS;
 			err = get_ids(pg, instpg, prop, val, cip, err);
+		}
 
 		if (err->type != 0)
 			goto out;
@@ -3040,7 +3055,7 @@ restarter_get_method_context(uint_t version, scf_instance_t *inst,
 			goto out;
 		}
 
-		mc_used++;
+		mc_flags |= MCF_CWD;
 		ret = scf_value_get_astring(val, cip->vbuf, cip->vbuf_sz);
 		assert(ret != -1);
 	} else {
@@ -3103,6 +3118,82 @@ restarter_get_method_context(uint_t version, scf_instance_t *inst,
 		}
 	}
 
+	/* get security flags */
+	if ((methpg != NULL && scf_pg_get_property(methpg,
+	    SCF_PROPERTY_SECFLAGS, prop) == SCF_SUCCESS) ||
+	    (instpg != NULL && scf_pg_get_property(instpg,
+	    SCF_PROPERTY_SECFLAGS, prop) == SCF_SUCCESS)) {
+		if (scf_property_get_value(prop, val) != SCF_SUCCESS) {
+			ret = scf_error();
+			switch (ret) {
+			case SCF_ERROR_CONNECTION_BROKEN:
+				err = mc_error_create(err, ret, RCBROKEN);
+				break;
+
+			case SCF_ERROR_CONSTRAINT_VIOLATED:
+				err = mc_error_create(err, ret,
+				    "\"%s\" property has multiple values.",
+				    SCF_PROPERTY_SECFLAGS);
+				break;
+
+			case SCF_ERROR_NOT_FOUND:
+				err = mc_error_create(err, ret,
+				    "\"%s\" property has no values.",
+				    SCF_PROPERTY_SECFLAGS);
+				break;
+
+			default:
+				bad_fail("scf_property_get_value", ret);
+			}
+
+			(void) strlcpy(cip->vbuf, ":default", cip->vbuf_sz);
+		} else {
+			ret = scf_value_get_astring(val, cip->vbuf,
+			    cip->vbuf_sz);
+			assert(ret != -1);
+		}
+		mc_flags |= MCF_SECFLAGS;
+	} else {
+		ret = scf_error();
+		switch (ret) {
+		case SCF_ERROR_NOT_FOUND:
+			/* okay if missing. */
+			(void) strlcpy(cip->vbuf, ":default", cip->vbuf_sz);
+			break;
+
+		case SCF_ERROR_CONNECTION_BROKEN:
+			err = mc_error_create(err, ret, RCBROKEN);
+			goto out;
+
+		case SCF_ERROR_DELETED:
+			err = mc_error_create(err, ret,
+			    "Property group could not be found");
+			goto out;
+
+		case SCF_ERROR_HANDLE_MISMATCH:
+		case SCF_ERROR_INVALID_ARGUMENT:
+		case SCF_ERROR_NOT_SET:
+		default:
+			bad_fail("scf_pg_get_property", ret);
+		}
+	}
+
+
+	if (scf_default_secflags(h, &cip->def_secflags) != 0) {
+		err = mc_error_create(err, EINVAL, "couldn't fetch "
+		    "default security-flags");
+		goto out;
+	}
+
+	if (strcmp(cip->vbuf, ":default") != 0) {
+		if (secflags_parse(NULL, cip->vbuf,
+		    &cip->secflag_delta) != 0) {
+			err = mc_error_create(err, EINVAL, "couldn't parse "
+			    "security flags: %s", cip->vbuf);
+			goto out;
+		}
+	}
+
 	/* get (optional) corefile pattern */
 	if ((methpg != NULL && scf_pg_get_property(methpg,
 	    SCF_PROPERTY_COREFILE_PATTERN, prop) == SCF_SUCCESS) ||
@@ -3144,7 +3235,7 @@ restarter_get_method_context(uint_t version, scf_instance_t *inst,
 			}
 		}
 
-		mc_used++;
+		mc_flags |= MCF_COREFILE;
 	} else {
 		ret = scf_error();
 		switch (ret) {
@@ -3206,7 +3297,7 @@ restarter_get_method_context(uint_t version, scf_instance_t *inst,
 				assert(ret != -1);
 			}
 
-			mc_used++;
+			mc_flags |= MCF_PROJECT;
 		} else {
 			(void) strcpy(cip->vbuf, ":default");
 		}
@@ -3293,7 +3384,7 @@ restarter_get_method_context(uint_t version, scf_instance_t *inst,
 				assert(ret != -1);
 			}
 
-			mc_used++;
+			mc_flags |= MCF_RESPOOL;
 		} else {
 			ret = scf_error();
 			switch (ret) {
@@ -3328,12 +3419,12 @@ restarter_get_method_context(uint_t version, scf_instance_t *inst,
 		}
 	}
 
-	/*
-	 * A method_context was not used for any configurable
-	 * elements or attributes, so reset and use the simple
-	 * defaults that provide historic init behavior.
-	 */
-	if (mc_used == 0) {
+	if ((mc_flags & ~MCF_FOUND) == 0) {
+		/*
+		 * A method_context was not used for any configurable
+		 * elements or attributes, so reset and use the simple
+		 * defaults that provide historic init behavior.
+		 */
 		free(cip->pwbuf);
 		free(cip->vbuf);
 		free(cip->working_dir);
@@ -3343,6 +3434,20 @@ restarter_get_method_context(uint_t version, scf_instance_t *inst,
 		cip->gid = 0;
 		cip->euid = (uid_t)-1;
 		cip->egid = (gid_t)-1;
+
+		if (scf_default_secflags(h, &cip->def_secflags) != 0) {
+			err = mc_error_create(err, EINVAL, "couldn't fetch "
+			    "default security-flags");
+			goto out;
+		}
+	} else if ((mc_flags & (MCF_PROFILE | MCF_IDS | MCF_CWD)) == 0) {
+		/*
+		 * A method context was used to configure some elements, but
+		 * not for any of profile/user/group/working_dir.
+		 * Reset the directory to '/' for historic init behaviour.
+		 */
+		free(cip->working_dir);
+		cip->working_dir = NULL;
 	}
 
 	*mcpp = cip;
@@ -3508,6 +3613,35 @@ restarter_set_method_context(struct method_context *cip, const char **fp)
 			ret = -1;
 			goto out;
 		}
+	}
+
+
+	if (psecflags(P_PID, P_MYID, PSF_INHERIT,
+	    &cip->def_secflags.ss_default) != 0) {
+		*fp = "psecflags (default inherit)";
+		ret = errno;
+		goto out;
+	}
+
+	if (psecflags(P_PID, P_MYID, PSF_LOWER,
+	    &cip->def_secflags.ss_lower) != 0) {
+		*fp = "psecflags (default lower)";
+		ret = errno;
+		goto out;
+	}
+
+	if (psecflags(P_PID, P_MYID, PSF_UPPER,
+	    &cip->def_secflags.ss_upper) != 0) {
+		*fp = "psecflags (default upper)";
+		ret = errno;
+		goto out;
+	}
+
+	if (psecflags(P_PID, P_MYID, PSF_INHERIT,
+	    &cip->secflag_delta) != 0) {
+		*fp = "psecflags (from manifest)";
+		ret = errno;
+		goto out;
 	}
 
 	if (restarter_rm_libs_loadable()) {

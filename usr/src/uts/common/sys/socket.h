@@ -19,9 +19,10 @@
  * CDDL HEADER END
  */
 /*
- * Copyright 2014 Garrett D'Amore <garrett@damore.org>
- *
  * Copyright (c) 1989, 2010, Oracle and/or its affiliates. All rights reserved.
+ * Copyright 2015, Joyent, Inc. All rights reserved.
+ * Copyright 2022 Garrett D'Amore
+ *
  */
 
 /*	Copyright (c) 1983, 1984, 1985, 1986, 1987, 1988, 1989 AT&T	*/
@@ -50,6 +51,16 @@
 #ifndef	_KERNEL
 #include <sys/netconfig.h>
 #endif	/* !_KERNEL */
+/*
+ * Historically, netinet/in.h included sys/stream.h, which pulled in
+ * several things.  The more troublesome namespace pollution was from
+ * sys/stream.h so that was removed.  To avoid having to fix lots of
+ * programs, pull in a few things that are now (for better or worse)
+ * expected by programs that include sys/socket.h
+ */
+#include <sys/param.h>
+#include <sys/cred.h>
+#include <sys/poll.h>
 #include <netinet/in.h>
 #endif	/* !defined(_XPG4_2) || defined(__EXTENSIONS__) */
 
@@ -113,6 +124,7 @@ typedef	void		*_RESTRICT_KYWD Psocklen_t;
 #define	SOCK_CLOEXEC	0x080000	/* like open(2) O_CLOEXEC for socket */
 #define	SOCK_NONBLOCK	0x100000	/* like O_NONBLOCK */
 #define	SOCK_NDELAY	0x200000	/* like O_NDELAY */
+#define	SOCK_CLOFORK	0x400000	/* set FD_CLOFORK on the socket */
 
 /*
  * Option flags per-socket.
@@ -149,7 +161,7 @@ typedef	void		*_RESTRICT_KYWD Psocklen_t;
 					/* when doing zero-copy */
 
 struct so_snd_bufinfo {
-	ushort_t	sbi_wroff; 	/* Write offset */
+	ushort_t	sbi_wroff;	/* Write offset */
 	ssize_t		sbi_maxblk;	/* Max size of a single mblk */
 	ssize_t		sbi_maxpsz;	/* Max total size of a mblk chain */
 	ushort_t	sbi_tail;	/* Extra space available at the end */
@@ -174,6 +186,7 @@ struct so_snd_bufinfo {
 #define	SO_ERROR	0x1007		/* get error status and clear */
 #define	SO_TYPE		0x1008		/* get socket type */
 #define	SO_PROTOTYPE	0x1009		/* get/set protocol type */
+#define	SO_PROTOCOL	SO_PROTOTYPE	/* POSIX name */
 #define	SO_ANON_MLP	0x100a		/* create MLP on anonymous bind */
 #define	SO_MAC_EXEMPT	0x100b		/* allow dominated unlabeled peers */
 #define	SO_DOMAIN	0x100c		/* get socket domain */
@@ -217,7 +230,7 @@ struct fil_info {
 #define	FILF_AUTO	0x2		/* automatic attach */
 #define	FILF_BYPASS	0x4		/* filter is not active */
 
-#ifdef	_KERNEL
+#if defined(_KERNEL) || defined(_FAKE_KERNEL)
 /*
  * new socket open flags to identify socket and acceptor streams
  */
@@ -288,7 +301,7 @@ struct	linger {
 #define	AF_LINK		25		/* Link-layer interface */
 #define	AF_INET6	26		/* Internet Protocol, Version 6 */
 #define	AF_KEY		27		/* Security Association DB socket */
-#define	AF_NCA		28		/* NCA socket */
+#define	AF_NCA		28		/* NCA socket (obsolete) */
 #define	AF_POLICY	29		/* Security Policy DB socket */
 #define	AF_INET_OFFLOAD	30		/* Sun private; do not use */
 #define	AF_TRILL	31		/* TRILL interface */
@@ -361,7 +374,7 @@ struct msghdr {
 #endif	/* defined(_XPG4_2) || defined(_KERNEL) */
 };
 
-#if	defined(_KERNEL)
+#if	defined(_KERNEL) || defined(_FAKE_KERNEL)
 
 /*
  *	N.B.:  we assume that omsghdr and nmsghdr are isomorphic, with
@@ -408,25 +421,30 @@ struct msghdr32 {
 #define	MSG_OOB		0x1		/* process out-of-band data */
 #define	MSG_PEEK	0x2		/* peek at incoming message */
 #define	MSG_DONTROUTE	0x4		/* send without using routing tables */
-/* Added for XPGv2 compliance */
 #define	MSG_EOR		0x8		/* Terminates a record */
 #define	MSG_CTRUNC	0x10		/* Control data truncated */
 #define	MSG_TRUNC	0x20		/* Normal data truncated */
 #define	MSG_WAITALL	0x40		/* Wait for complete recv or error */
-#define	MSG_DUPCTRL	0x800		/* Save control message for use with */
-					/* with left over data */
-/* End of XPGv2 compliance */
 #define	MSG_DONTWAIT	0x80		/* Don't block for this recv */
 #define	MSG_NOTIFICATION 0x100		/* Notification, not data */
+#define	MSG_NOSIGNAL	0x200		/* Don't generate SIGPIPE */
+#define	MSG_DUPCTRL	0x800		/* Save control message for use with */
+					/* with left over data */
+#define	MSG_CMSG_CLOEXEC	0x1000	/* FD_CLOEXEC w/ SCM_RIGHTS */
+#define	MSG_CMSG_CLOFORK	0x2000	/* FD_CLOFORK w/ SCM_RIGHTS */
 #define	MSG_XPG4_2	0x8000		/* Private: XPG4.2 flag */
 
+/* Obsolete but kept for compilation compatibility. Use IOV_MAX. */
 #define	MSG_MAXIOVLEN	16
 
 #ifdef _KERNEL
 
 /*
- * for kernel socket only
+ * Internal-only MSG_... flags
  */
+
+#define	MSG_SENDTO_NOXLATE	0x08000000	/* Skip so_ux_addr_xlate */
+
 #define	MSG_MBLK_QUICKRELE	0x10000000	/* free mblk chain */
 						/* in timely manner */
 #define	MSG_USERSPACE		0x20000000	/* buffer from user space */
@@ -531,7 +549,7 @@ extern int connect(int, const struct sockaddr *, socklen_t);
 extern int getpeername(int, struct sockaddr *_RESTRICT_KYWD, Psocklen_t);
 extern int getsockname(int, struct sockaddr *_RESTRICT_KYWD, Psocklen_t);
 extern int getsockopt(int, int, int, void *_RESTRICT_KYWD, Psocklen_t);
-extern int listen(int, int);	/* XXX - fixme???  where do I go */
+extern int listen(int, int);
 extern int socketpair(int, int, int, int *);
 extern ssize_t recv(int, void *, size_t, int);
 extern ssize_t recvfrom(int, void *_RESTRICT_KYWD, size_t, int,

@@ -22,12 +22,12 @@
 # Copyright 2010 Sun Microsystems, Inc.  All rights reserved.
 # Use is subject to license terms.
 #
-#
+# Copyright (c) 2018, Joyent, Inc.
 
 LIBRARY= fp.a
 VERS= .1
 
-OBJECTS = cfga_fp.o cfga_rcm.o cfga_cs.o cfga_utils.o 
+OBJECTS = cfga_fp.o cfga_rcm.o cfga_cs.o cfga_utils.o
 OBJECTS += cfga_cvt.o cfga_list.o cfga_rep.o
 
 # include library definitions
@@ -39,26 +39,21 @@ ROOTLIBDIR64=	$(ROOTLIBDIR)/$(MACH64)
 
 LIBS=	$(DYNLIB)
 
-LINTFLAGS +=	-DDEBUG
-LINTFLAGS64 +=	-DDEBUG
 
 CFLAGS +=	$(CCVERBOSE)
 CFLAGS64 +=	$(CCVERBOSE)
 
 CERRWARN +=	-_gcc=-Wno-parentheses
 CERRWARN +=	-_gcc=-Wno-char-subscripts
-CERRWARN +=	-_gcc=-Wno-uninitialized
+CERRWARN +=	$(CNOWARN_UNINIT)
 CERRWARN +=	-_gcc=-Wno-switch
 CERRWARN +=	-_gcc=-Wno-address
 
+# not linted
+SMATCH=off
+
 CPPFLAGS += -D_POSIX_PTHREAD_SEMANTICS
 
-LINTFLAGS += -erroff=E_SEC_SPRINTF_UNBOUNDED_COPY
-LINTFLAGS += -erroff=E_FUNC_RET_MAYBE_IGNORED2
-LINTFLAGS += -erroff=E_FUNC_RET_ALWAYS_IGNOR2
-LINTFLAGS += -erroff=E_BAD_FORMAT_ARG_TYPE2
-LINTFLAGS += -erroff=E_SEC_CREAT_WITHOUT_MODE
-LINTFLAGS64 += $(LINTFLAGS)
 
 LDLIBS +=	-lc -ldevice -ldevinfo -lrcm
 LDLIBS +=	-lHBAAPI -lgen
@@ -77,7 +72,6 @@ $(ROOTSVCMETHOD):= FILEMODE= 555
 
 all:	$(LIBS)
 
-lint:	lintcheck
 
 # Install rules
 

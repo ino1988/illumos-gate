@@ -20,6 +20,7 @@
 #
 
 #
+# Copyright 2015 Gary Mills
 # Copyright 2007 Sun Microsystems, Inc.  All rights reserved.
 # Use is subject to license terms.
 #
@@ -44,22 +45,23 @@ pics/%.o: ../common/%.c
 	$(COMPILE.c) -o $@ $<
 	$(POST_PROCESS_O)
 
-LIBS = $(DYNLIB) $(LINTLIB)
+LIBS = $(DYNLIB)
 
 CPPFLAGS += -DYP
 
 CERRWARN +=	-_gcc=-Wno-unused-variable
 CERRWARN +=	-_gcc=-Wno-switch
-CERRWARN +=	-_gcc=-Wno-uninitialized
+CERRWARN +=	$(CNOWARN_UNINIT)
 CERRWARN +=	-_gcc=-Wno-parentheses
 
-$(LINTLIB):= SRCS = $(SRCDIR)/$(LINTSRC)
 
 LDLIBS += -lnsl -lc
 
+# Needed so header files with relative paths will work
+CPPFLAGS += -I..
+
 .KEEP_STATE:
 
-lint:	lintcheck
 
 # include library targets
 include ../../Makefile.targ

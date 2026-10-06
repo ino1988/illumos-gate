@@ -1,6 +1,7 @@
 /*
  *  GRUB  --  GRand Unified Bootloader
  *  Copyright (C) 1999,2000,2001,2002,2003,2004  Free Software Foundation, Inc.
+ *  Copyright 2021 RackTop Systems, Inc.
  *
  *  This program is free software; you can redistribute it and/or modify
  *  it under the terms of the GNU General Public License as published by
@@ -23,8 +24,9 @@
  */
 
 /*
- * Copyright (c) 2013 by Delphix. All rights reserved.
+ * Copyright (c) 2012, 2015 by Delphix. All rights reserved.
  * Copyright (c) 2013 by Saso Kiselkov. All rights reserved.
+ * Copyright (c) 2014 Integros [integros.com]
  */
 
 /*
@@ -145,12 +147,14 @@ zio_checksum_info_t zio_checksum_table[ZIO_CHECKSUM_FUNCTIONS] = {
 	{{fletcher_4_native,	fletcher_4_byteswap},	1, 0,	"fletcher4"},
 	{{zio_checksum_SHA256,	zio_checksum_SHA256},	1, 0,	"SHA256"},
 	{{NULL,			NULL},			0, 0,	"zilog2"},
+	{{zio_checksum_off,	zio_checksum_off},	0, 0,	"noparity"},
+	{{zio_checksum_SHA512,	NULL},			0, 0,	"SHA512"}
 };
 
 /*
  * zio_checksum_verify: Provides support for checksum verification.
  *
- * Fletcher2, Fletcher4, and SHA256 are supported.
+ * Fletcher2, Fletcher4, SHA-256 and SHA-512/256 are supported.
  *
  * Return:
  * 	-1 = Failure
@@ -366,17 +370,23 @@ zio_read_data(blkptr_t *bp, void *buf, char *stack)
 			continue;
 
 		if (DVA_GET_GANG(&bp->blk_dva[i])) {
-			if (zio_read_gang(bp, &bp->blk_dva[i], buf, stack) == 0)
-				return (0);
+			if (zio_read_gang(bp, &bp->blk_dva[i], buf, stack) != 0)
+				continue;
 		} else {
 			/* read in a data block */
 			offset = DVA_GET_OFFSET(&bp->blk_dva[i]);
 			sector = DVA_OFFSET_TO_PHYS_SECTOR(offset);
-			if (devread(sector, 0, psize, buf) != 0)
-				return (0);
+			if (devread(sector, 0, psize, buf) == 0)
+				continue;
+		}
+
+		/* verify that the checksum matches */
+		if (zio_checksum_verify(bp, buf, psize) == 0) {
+			return (0);
 		}
 	}
 
+	grub_printf("could not read block due to EIO or ECKSUM\n");
 	return (1);
 }
 
@@ -497,11 +507,6 @@ zio_read(blkptr_t *bp, void *buf, char *stack)
 		return (ERR_FSYS_CORRUPT);
 	}
 
-	if (zio_checksum_verify(bp, buf, psize) != 0) {
-		grub_printf("checksum verification failed\n");
-		return (ERR_FSYS_CORRUPT);
-	}
-
 	if (comp != ZIO_COMPRESS_OFF) {
 		if (decomp_table[comp].decomp_func(buf, retbuf, psize,
 		    lsize) != 0) {
@@ -564,7 +569,7 @@ dmu_read(dnode_phys_t *dn, uint64_t blkid, void *buf, char *stack)
  */
 static int
 mzap_lookup(mzap_phys_t *zapobj, int objsize, const char *name,
-	uint64_t *value)
+    uint64_t *value)
 {
 	int i, chunks;
 	mzap_ent_phys_t *mzap_ent = zapobj->mz_chunk;
@@ -852,7 +857,7 @@ zap_iterate(dnode_phys_t *zap_dnode, zap_cb_t *cb, void *arg, char *stack)
  */
 static int
 dnode_get(dnode_phys_t *mdn, uint64_t objnum, uint8_t type, dnode_phys_t *buf,
-	char *stack)
+    char *stack)
 {
 	uint64_t blkid, blksz; /* the block id this object dnode is in */
 	int epbs; /* shift of number of dnodes in a block */
@@ -1049,6 +1054,7 @@ static const char *spa_feature_names[] = {
 	"com.delphix:extensible_dataset",
 	"com.delphix:embedded_data",
 	"org.open-zfs:large_blocks",
+	"org.illumos:sha512",
 	NULL
 };
 
@@ -1520,13 +1526,13 @@ vdev_get_bootpath(char *nv, uint64_t inguid, char *devid, char *bootpath,
  *	ERR_* - failure
  */
 static int
-check_pool_label(uint64_t sector, char *stack, char *outdevid,
-    char *outpath, uint64_t *outguid, uint64_t *outashift, uint64_t *outversion)
+check_pool_label(uint64_t sector, char *stack, char *outdevid, char *outpath,
+    uint64_t *outguid, uint64_t *outdiskguid, uint64_t *outashift,
+    uint64_t *outversion)
 {
 	vdev_phys_t *vdev;
 	uint64_t pool_state, txg = 0;
 	char *nvlist, *nv, *features;
-	uint64_t diskguid;
 
 	sector += (VDEV_SKIP_SIZE >> SPA_MINBLOCKSHIFT);
 
@@ -1567,13 +1573,13 @@ check_pool_label(uint64_t sector, char *stack, char *outdevid,
 	if (nvlist_lookup_value(nvlist, ZPOOL_CONFIG_VDEV_TREE, &nv,
 	    DATA_TYPE_NVLIST, NULL))
 		return (ERR_FSYS_CORRUPT);
-	if (nvlist_lookup_value(nvlist, ZPOOL_CONFIG_GUID, &diskguid,
+	if (nvlist_lookup_value(nvlist, ZPOOL_CONFIG_GUID, outdiskguid,
 	    DATA_TYPE_UINT64, NULL))
 		return (ERR_FSYS_CORRUPT);
 	if (nvlist_lookup_value(nv, ZPOOL_CONFIG_ASHIFT, outashift,
 	    DATA_TYPE_UINT64, NULL) != 0)
 		return (ERR_FSYS_CORRUPT);
-	if (vdev_get_bootpath(nv, diskguid, outdevid, outpath, 0))
+	if (vdev_get_bootpath(nv, *outdiskguid, outdevid, outpath, 0))
 		return (ERR_NO_BOOTPATH);
 	if (nvlist_lookup_value(nvlist, ZPOOL_CONFIG_POOL_GUID, outguid,
 	    DATA_TYPE_UINT64, NULL))
@@ -1622,7 +1628,7 @@ zfs_mount(void)
 	objset_phys_t *osp;
 	char tmp_bootpath[MAXNAMELEN];
 	char tmp_devid[MAXNAMELEN];
-	uint64_t tmp_guid, ashift, version;
+	uint64_t tmp_guid, tmp_vdev, ashift, version;
 	uint64_t adjpl = (uint64_t)part_length << SPA_MINBLOCKSHIFT;
 	int err = errnum; /* preserve previous errnum state */
 
@@ -1664,8 +1670,8 @@ zfs_mount(void)
 		    0, VDEV_UBERBLOCK_RING, ub_array) == 0)
 			continue;
 
-		if (check_pool_label(sector, stack, tmp_devid,
-		    tmp_bootpath, &tmp_guid, &ashift, &version))
+		if (check_pool_label(sector, stack, tmp_devid, tmp_bootpath,
+		    &tmp_guid, &tmp_vdev, &ashift, &version))
 			continue;
 
 		if (pool_guid == 0)
@@ -1690,6 +1696,8 @@ zfs_mount(void)
 		grub_memmove(&current_uberblock, ubbest, sizeof (uberblock_t));
 		grub_memmove(current_bootpath, tmp_bootpath, MAXNAMELEN);
 		grub_memmove(current_devid, tmp_devid, grub_strlen(tmp_devid));
+		current_bootguid = tmp_guid;
+		current_bootvdev = tmp_vdev;
 		is_zfs_mount = 1;
 		return (1);
 	}
@@ -1883,7 +1891,7 @@ zfs_read(char *buf, int len)
  * No-Op
  */
 int
-zfs_embed(int *start_sector, int needed_sectors)
+zfs_embed(unsigned long long *start_sector, int needed_sectors)
 {
 	return (1);
 }

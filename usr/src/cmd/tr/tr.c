@@ -52,7 +52,7 @@ STR s1 = { STRING1, NORMAL, 0, OOBCH, 0, { 0, OOBCH }, NULL, NULL };
 STR s2 = { STRING2, NORMAL, 0, OOBCH, 0, { 0, OOBCH }, NULL, NULL };
 
 static struct cset *setup(char *, STR *, int, int);
-static void usage(void);
+static void usage(void) __NORETURN;
 
 static wint_t
 cmap_lookup(struct cmap *cm, wint_t from)
@@ -87,12 +87,13 @@ main(int argc, char **argv)
 	int n, *p;
 	int Cflag, cflag, dflag, sflag, isstring2;
 	wint_t ch, cnt, lastch;
+	int c;
 
 	(void) setlocale(LC_ALL, "");
 
 	Cflag = cflag = dflag = sflag = 0;
-	while ((ch = getopt(argc, argv, "Ccdsu")) != -1)
-		switch ((char)ch) {
+	while ((c = getopt(argc, argv, "Ccdsu")) != -1)
+		switch (c) {
 		case 'C':
 			Cflag = 1;
 			cflag = 0;

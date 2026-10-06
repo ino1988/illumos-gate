@@ -21,6 +21,8 @@
 
 /*
  * Copyright (c) 2001, 2010, Oracle and/or its affiliates. All rights reserved.
+ * Copyright 2017 OmniOS Community Edition (OmniOSce) Association.
+ * Copyright 2014 Nexenta Systems, Inc.  All rights reserved.
  */
 
 #include <bsm/adt.h>
@@ -190,7 +192,23 @@ adt_get_mask_from_user(uid_t uid, au_mask_t *mask)
 		/* c2audit excluded */
 		mask->am_success = 0;
 		mask->am_failure = 0;
-	} else if (uid <= MAXUID) {
+		return (0);
+	}
+
+	/*
+	 * This function applies the 'attributable' mask, modified by
+	 * any per-user flags, to any user whose UID can be mapped to
+	 * a name via name services.
+	 * Others, such as users with Ephemeral UIDs, or NFS clients
+	 * using AUTH_SYS, get the 'non-attributable mask'.
+	 * This is true even if some _other_ system or service could
+	 * map the ID to a name, or if it could be inferred from
+	 * other records.
+	 * Note that it is possible for records to contain _only_
+	 * an ephemeral ID, which can't be mapped back to a name
+	 * once it becomes invalid (e.g. server reboot).
+	 */
+	if (uid <= MAXUID) {
 		if ((buff_sz = sysconf(_SC_GETPW_R_SIZE_MAX)) == -1) {
 			adt_write_syslog("couldn't determine maximum size of "
 			    "password buffer", errno);
@@ -199,18 +217,24 @@ adt_get_mask_from_user(uid_t uid, au_mask_t *mask)
 		if ((pwd_buff = calloc(1, (size_t)++buff_sz)) == NULL) {
 			return (-1);
 		}
-		if (getpwuid_r(uid, &pwd, pwd_buff, (int)buff_sz) == NULL) {
-			errno = EINVAL;	/* user doesn't exist */
+		/*
+		 * Ephemeral id's and id's that exist in a name service we
+		 * don't have configured (LDAP, NIS) can't be looked up,
+		 * but either way it's not an error.
+		 */
+		if (getpwuid_r(uid, &pwd, pwd_buff, (int)buff_sz) != NULL) {
+			if (au_user_mask(pwd.pw_name, mask)) {
+				free(pwd_buff);
+				errno = EFAULT; /* undetermined failure */
+				return (-1);
+			}
 			free(pwd_buff);
-			return (-1);
-		}
-		if (au_user_mask(pwd.pw_name, mask)) {
-			free(pwd_buff);
-			errno = EFAULT; /* undetermined failure */
-			return (-1);
+			return (0);
 		}
 		free(pwd_buff);
-	} else if (auditon(A_GETKMASK, (caddr_t)mask, sizeof (*mask)) == -1) {
+	}
+
+	if (auditon(A_GETKMASK, (caddr_t)mask, sizeof (*mask)) == -1) {
 			return (-1);
 	}
 
@@ -588,12 +612,42 @@ adt_set_mask(const adt_session_data_t *session_data, const au_mask_t *mask)
  * helpers for adt_load_termid
  */
 
+static dev_t
+adt_ports_to_at_port(in_port_t remote, in_port_t local)
+{
+	dev_t port;
+
+#ifdef _LP64
+	dev_t tmp;
+
+	/*
+	 * In 64-bit, at_port is a 64-bit value encoding major/minor
+	 * device numbers as 32-bits each. However when a 32-bit application
+	 * subsequently requests the audit address via getaudit_addr(), this
+	 * value must be capable of being compressed down to a 14-bit major and
+	 * 18-bit minor number or the call will fail.
+	 *
+	 * In order to construct a 32-bit compatible value, the top 14-bits of
+	 * the remote port are used for the major number and the remaining
+	 * 2-bits + local port are used for the minor.
+	 */
+
+	tmp = ((remote<<16) | (local));
+	port = (tmp & MAXMIN32);
+	port |= (((tmp >> NBITSMINOR32) & MAXMAJ32) << NBITSMINOR64);
+#else
+	port = ((remote<<16) | (local));
+#endif
+
+	return (port);
+}
+
 static void
 adt_do_ipv6_address(struct sockaddr_in6 *peer, struct sockaddr_in6 *sock,
     au_tid_addr_t *termid)
 {
-
-	termid->at_port = ((peer->sin6_port<<16) | (sock->sin6_port));
+	termid->at_port =
+	    adt_ports_to_at_port(peer->sin6_port, sock->sin6_port);
 	termid->at_type = AU_IPv6;
 	(void) memcpy(termid->at_addr, &peer->sin6_addr, 4 * sizeof (uint_t));
 }
@@ -602,9 +656,7 @@ static void
 adt_do_ipv4_address(struct sockaddr_in *peer, struct sockaddr_in *sock,
     au_tid_addr_t *termid)
 {
-
-	termid->at_port = ((peer->sin_port<<16) | (sock->sin_port));
-
+	termid->at_port = adt_ports_to_at_port(peer->sin_port, sock->sin_port);
 	termid->at_type = AU_IPv4;
 	termid->at_addr[0] = (uint32_t)peer->sin_addr.s_addr;
 	(void) memset(&(termid->at_addr[1]), 0, 3 * sizeof (uint_t));
@@ -700,24 +752,14 @@ adt_get_hostIP(const char *hostname, au_tid_addr_t *p_term)
 {
 	struct addrinfo	*ai = NULL;
 	int	tries = 3;
-	char	msg[512];
 	int	eai_err;
 
 	while ((tries-- > 0) &&
 	    ((eai_err = getaddrinfo(hostname, NULL, NULL, &ai)) != 0)) {
-		/*
-		 * getaddrinfo returns its own set of errors.
-		 * Log them here, so any subsequent syslogs will
-		 * have a context.  adt_get_hostIP callers can only
-		 * return errno, so subsequent syslogs may be lacking
-		 * that getaddrinfo failed.
-		 */
-		(void) snprintf(msg, sizeof (msg), "getaddrinfo(%s) "
-		    "failed[%s]", hostname, gai_strerror(eai_err));
-		adt_write_syslog(msg, 0);
+		DPRINTF(("getaddrinfo(%s) failed[%s]", hostname,
+		    gai_strerror(eai_err)));
 
 		if (eai_err != EAI_AGAIN) {
-
 			break;
 		}
 		/* see if resolution becomes available */
@@ -752,7 +794,7 @@ adt_get_hostIP(const char *hostname, au_tid_addr_t *p_term)
 			    errno);
 			goto try_interface;
 		}
-		adt_write_syslog("setting Audit IP address to kernel", 0);
+		DPRINTF(("setting Audit IP address to kernel"));
 		*p_term = audit_info.ai_termid;
 		return (0);
 	}
@@ -760,7 +802,9 @@ try_interface:
 	{
 		struct ifaddrlist al;
 		int	family;
+#ifdef C2_DEBUG
 		char	ntop[INET6_ADDRSTRLEN];
+#endif
 
 		/*
 		 * getaddrinfo has failed to map the hostname
@@ -793,10 +837,8 @@ try_interface:
 			(void) memcpy(p_term->at_addr, &al.addr.addr6, AU_IPv6);
 		}
 
-		(void) snprintf(msg, sizeof (msg), "mapping %s to %s",
-		    hostname, inet_ntop(family, &(al.addr), ntop,
-		    sizeof (ntop)));
-		adt_write_syslog(msg, 0);
+		DPRINTF(("mapping %s to %s", hostname,
+		    inet_ntop(family, &(al.addr), ntop, sizeof (ntop))));
 		return (0);
 	}
 }
@@ -1055,9 +1097,9 @@ adt_from_export_format(adt_internal_state_t *internal,
 	struct export_header	head;
 	struct export_link	link;
 	adr_t			context;
-	int32_t 		offset;
-	int32_t 		length;
-	int32_t 		version;
+	int32_t			offset;
+	int32_t			length;
+	int32_t			version;
 	size_t			label_len;
 	char			*p = (char *)external;
 

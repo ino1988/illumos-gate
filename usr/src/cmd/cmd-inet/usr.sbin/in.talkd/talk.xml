@@ -4,6 +4,8 @@
  Copyright 2009 Sun Microsystems, Inc.  All rights reserved.
  Use is subject to license terms.
 
+ Copyright 2016 Hans Rosenfeld <rosenfeld@grumpf.hope-2000.org>
+
  CDDL HEADER START
 
  The contents of this file are subject to the terms of the
@@ -49,7 +51,7 @@
 		name='inetd_start'
 		exec='/usr/sbin/in.talkd'
 		timeout_seconds='0'>
-		<method_context>
+		<method_context working_directory='/'>
 			<method_credential user='root' group='root' />
 		</method_context>
 	</exec_method>
@@ -79,8 +81,11 @@
 
 	<property_group name='firewall_config' type='com.sun,fw_configuration'>
 		<propval name='policy' type='astring' value='use_global' />
+		<propval name='block_policy' type='astring'
+			value='use_global' />
 		<propval name='apply_to' type='astring' value='' />
 		<propval name='exceptions' type='astring' value='' />
+		<propval name='target' type='astring' value='' />
 		<propval name='value_authorization' type='astring'
 			value='solaris.smf.value.firewall.config' />
 	</property_group>
@@ -97,9 +102,9 @@
 			</loctext>
 		</description>
 		<documentation>
-			<manpage title='in.talkd' section='1M'
+			<manpage title='in.talkd' section='8'
 				manpath='/usr/share/man' />
-			<manpage title='talkd' section='1M'
+			<manpage title='talkd' section='8'
 				manpath='/usr/share/man' />
 		</documentation>
 	</template>

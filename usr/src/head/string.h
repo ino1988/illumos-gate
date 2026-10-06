@@ -22,10 +22,12 @@
 /*
  * Copyright 2014 Garrett D'Amore <garrett@damore.org>
  * Copyright (c) 1989, 2010, Oracle and/or its affiliates. All rights reserved.
+ * Copyright 2020 Joyent, Inc.
+ * Copyright 2024 Oxide Computer company
  */
 
 /*	Copyright (c) 1988 AT&T	*/
-/*	  All Rights Reserved  	*/
+/*	  All Rights Reserved	*/
 
 #ifndef _STRING_H
 #define	_STRING_H
@@ -103,12 +105,14 @@ extern size_t strxfrm_l(char *_RESTRICT_KYWD, const char *_RESTRICT_KYWD,
     size_t, locale_t);
 extern int strcasecmp_l(const char *, const char *, locale_t);
 extern int strncasecmp_l(const char *, const char *, size_t, locale_t);
+extern char *strerror_l(int, locale_t);
 
 #endif /* defined(_STRICT_SYMBOLS) || defined(_XPG7) */
 
 #if !defined(_STRICT_SYMBOLS)
 
 /* Note that some of these are also declared in strings.h for XPG4_2+ */
+extern void explicit_bzero(void *, size_t);
 extern int uucopy(const void *_RESTRICT_KYWD, void *_RESTRICT_KYWD, size_t);
 extern int uucopystr(const void *_RESTRICT_KYWD, void *_RESTRICT_KYWD, size_t);
 extern int ffs(int);
@@ -118,6 +122,7 @@ extern int fls(int);
 extern int flsl(long);
 extern int flsll(long long);
 extern void *memmem(const void *, size_t, const void *, size_t);
+extern void *memrchr(const void *, int, size_t);
 extern char *strcasestr(const char *, const char *);
 extern char *strnstr(const char *, const char *, size_t);
 extern size_t strlcpy(char *, const char *, size_t);
@@ -127,7 +132,9 @@ extern char *strchrnul(const char *, int);
 extern char *strcasestr_l(const char *, const char *, locale_t);
 extern int strcasecmp(const char *, const char *);
 extern int strncasecmp(const char *, const char *, size_t);
-#endif /* defined(__EXTENSIONS__)... */
+extern const char *strerrorname_np(int);
+extern const char *strerrordesc_np(int);
+#endif /* !defined(__STRICT_SYMBOLS) */
 
 #if defined(__EXTENSIONS__) || \
 	(!defined(_STRICT_STDC) && !defined(__XOPEN_OR_POSIX)) || \
@@ -137,19 +144,15 @@ extern char *strdup(const char *);
 
 #if defined(__EXTENSIONS__) || \
 	(!defined(_STRICT_STDC) && !defined(__XOPEN_OR_POSIX))
-#if defined(__GNUC__)
 
-/*
- * gcc provides this inlining facility but Studio C does not.
- * We should use it exclusively once Studio C also provides it.
- */
-extern void *__builtin_alloca(size_t);
+#if defined(__GNUC__)
 
 #define	strdupa(s)							\
 	(__extension__(							\
 	{								\
 	char *__str = (char *)(s);					\
-	strcpy((char *)__builtin_alloca(strlen(__str) + 1), __str);	\
+	(__str = strcpy((char *)__builtin_alloca(strlen(__str) + 1),	\
+	    __str), __str);						\
 	}))
 
 #define	strndupa(s, n)							\
@@ -174,7 +177,7 @@ extern __thread char *__strdupa_str;
 extern __thread size_t __strdupa_len;
 
 #define	strdupa(s)							\
-	(__strdupa_str = (char *)(s), 					\
+	(__strdupa_str = (char *)(s),					\
 	strcpy((char *)__builtin_alloca(strlen(__strdupa_str) + 1),	\
 	    __strdupa_str))
 

@@ -398,6 +398,7 @@ char *cmdstr, *sgn;
 			} else if (cmdstr[1] != 'o') {
 				goto Default;
 			}
+			/* FALLTHROUGH */
 		    case 't':
 			if (cmdstr[1] != '\0')
 				goto Default;
@@ -586,7 +587,7 @@ map(c, maps, commch)
 						macpush(&b[1],maps == arrows);
 #ifdef MDEBUG
 						if (trace)
-							fprintf(trace, "return %d\n", c);	
+							fprintf(trace, "return %d\n", c);
 #endif
 						return(c);
 					}
@@ -611,7 +612,7 @@ map(c, maps, commch)
 			 * the <esc> (except when cursor is already
 			 * in the first column: i.e., outcol = 0).
 			 */
-			 if ((maps == immacs) 
+			 if ((maps == immacs)
 			 && strcmp(maps[d].descr, maps[d].cap)) {
 				switch (commch) {
 				  case 'R':
@@ -621,7 +622,7 @@ map(c, maps, commch)
 						if (outcol == 0)
 							st = (unsigned char *)"R";
 						else
-							st = (unsigned char *)"lR"; 
+							st = (unsigned char *)"lR";
 					break;
 				  case 'i':
 					if (!strcmp(maps[d].descr, "home"))
@@ -630,7 +631,7 @@ map(c, maps, commch)
 						if (outcol == 0)
 							st = (unsigned char *)"i";
 						else
-							st = (unsigned char *)"li"; 
+							st = (unsigned char *)"li";
 					break;
 				  case 'a':
 					if (!strcmp(maps[d].descr, "home"))
@@ -641,14 +642,14 @@ map(c, maps, commch)
 				  default:
 					st = (unsigned char *)"i";
 				}
-				if(strlen(vmacbuf)  + strlen(st) > BUFSIZE) 
+				if(strlen(vmacbuf)  + strlen(st) > BUFSIZE)
 					error(value(vi_TERSE) ?
 gettext("Macro too long") : gettext("Macro too long  - maybe recursive?"));
 				else
-					/* 
+					/*
 					 * Macros such as function keys are
 					 * performed by leaving the insert,
-					 * replace, or append mode, executing 
+					 * replace, or append mode, executing
 					 * the proper cursor movement commands
 					 * and returning to the mode we are
 					 * currently in (commch).
@@ -844,7 +845,7 @@ setalarm(void)
 	 * transmit faster than this.
 	 */
 
-	/* Open ft psuedo-device - we need our own copy. */
+	/* Open ft pseudo-device - we need our own copy. */
 	if (ftfd == 0) {
 		strcpy(ftname, "/dev/ft0");
 		while (ftfd <= 0 && ftname[7] <= '~') {

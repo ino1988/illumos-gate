@@ -24,8 +24,6 @@
  * Use is subject to license terms.
  */
 
-#pragma ident	"%Z%%M%	%I%	%E% SMI"
-
 /*
  *	priv_str_xlate.c - Privilege translation routines.
  */
@@ -35,6 +33,7 @@
 #pragma weak _priv_gettext = priv_gettext
 
 #include "lint.h"
+#include "thr_uberdata.h"
 #include <stdio.h>
 #include <stdlib.h>
 #include <ctype.h>
@@ -74,8 +73,8 @@ priv_basic(void)
  */
 priv_set_t *
 priv_str_to_set(const char *priv_names,
-		const char *separators,
-		const char **endptr)
+    const char *separators,
+    const char **endptr)
 {
 
 	char *base;
@@ -432,6 +431,7 @@ char *
 priv_gettext(const char *priv)
 {
 	char file[MAXPATHLEN];
+	locale_t curloc;
 	const char *loc;
 	char	*ret;
 
@@ -439,8 +439,8 @@ priv_gettext(const char *priv)
 	if (priv_getbyname(priv) < 0)
 		return (NULL);
 
-	if ((loc = setlocale(LC_MESSAGES, NULL)) == NULL)
-		loc = "C";
+	curloc = __curlocale();
+	loc = current_locale(curloc, LC_MESSAGES);
 
 	if (snprintf(file, sizeof (file),
 	    _DFLT_LOC_PATH "%s/LC_MESSAGES/priv_names", loc) < sizeof (file)) {

@@ -21,6 +21,8 @@
 /*
  * Copyright 2010 Sun Microsystems, Inc.  All rights reserved.
  * Use is subject to license terms.
+ * Copyright 2019 Joyent, Inc.
+ * Copyright 2025 Oxide Computer Company
  */
 
 #ifndef	_INET_IP_IMPL_H
@@ -51,11 +53,13 @@ extern "C" {
 #define	IP_HDR_CSUM_TTL_ADJUST	256
 #define	IP_TCP_CSUM_COMP	IPPROTO_TCP
 #define	IP_UDP_CSUM_COMP	IPPROTO_UDP
+#define	IP_ICMP_CSUM_COMP	IPPROTO_ICMP
 #define	IP_ICMPV6_CSUM_COMP	IPPROTO_ICMPV6
 #else
 #define	IP_HDR_CSUM_TTL_ADJUST	1
 #define	IP_TCP_CSUM_COMP	(IPPROTO_TCP << 8)
 #define	IP_UDP_CSUM_COMP	(IPPROTO_UDP << 8)
+#define	IP_ICMP_CSUM_COMP	(IPPROTO_ICMP << 8)
 #define	IP_ICMPV6_CSUM_COMP	(IPPROTO_ICMPV6 << 8)
 #endif
 
@@ -65,8 +69,14 @@ extern "C" {
 #define	UDP_CHECKSUM_OFFSET	6
 #define	UDP_CHECKSUM_SIZE	2
 
+#define	ICMP_CHECKSUM_OFFSET	2
+#define	ICMP_CHECKSUM_SIZE	2
+
 #define	ICMPV6_CHECKSUM_OFFSET	2
 #define	ICMPV6_CHECKSUM_SIZE	2
+
+#define	SCTP_CHECKSUM_OFFSET	8
+#define	SCTP_CHECKSUM_SIZE	4
 
 #define	IPH_TCPH_CHECKSUMP(ipha, hlen)	\
 	((uint16_t *)(((uchar_t *)(ipha)) + ((hlen) + TCP_CHECKSUM_OFFSET)))
@@ -158,11 +168,6 @@ extern "C" {
 
 #define	ILL_DIRECT_CAPABLE(ill)						\
 	(((ill)->ill_capabilities & ILL_CAPAB_DLD_DIRECT) != 0)
-
-/* This macro is used by the mac layer */
-#define	MBLK_RX_FANOUT_SLOWPATH(mp, ipha)				\
-	(DB_TYPE(mp) != M_DATA || DB_REF(mp) != 1 || !OK_32PTR(ipha) || \
-	(((uchar_t *)ipha + IP_SIMPLE_HDR_LENGTH) >= (mp)->b_wptr))
 
 /*
  * In non-global zone exclusive IP stacks, data structures such as IRE

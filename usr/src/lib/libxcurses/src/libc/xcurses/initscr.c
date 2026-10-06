@@ -24,10 +24,8 @@
  * Use is subject to license terms.
  */
 
-#pragma ident	"%Z%%M%	%I%	%E% SMI"
-
 /*
- * initscr.c		
+ * initscr.c
  *
  * XCurses Library
  *
@@ -52,7 +50,7 @@ static char noterm_msg[] = m_textstr(
 	202, "Unknown terminal \"%s\".\n", "E term"
 );
 static char dumb_msg[] = m_textstr(
-	3140, "Terminal \"%s\" has insufficent capabilities for Curses.\n", 
+	3140, "Terminal \"%s\" has insufficent capabilities for Curses.\n",
 	"E term"
 );
 
@@ -86,17 +84,17 @@ initscr()
 
 	/* We require some form of cursor positioning and the ability to
 	 * clear the end of a line.  These abilities should be sufficient
-	 * to provide minimum full screen support. 
+	 * to provide minimum full screen support.
 	 */
 	if (1 < lines
-	&& cursor_address == (char *) 0 
+	&& cursor_address == (char *) 0
 	&& row_address == (char *) 0
 	&& (cursor_up == (char *) 0 || cursor_down == (char *) 0)
 	&& (parm_up_cursor == (char *) 0 || parm_down_cursor == (char *) 0)) {
 		err = dumb_msg;
 		goto error_3;
 	}
-	
+
 	if ((1 < lines && cursor_address == (char *) 0)
 	&& column_address == (char *) 0
 	&& (cursor_left == (char *) 0 || cursor_right == (char *) 0)
@@ -113,7 +111,6 @@ initscr()
 	return __m_return_pointer("initscr", stdscr);
 error_3:
 	(void) delwin(stdscr);
-error_2:
 	(void) endwin();
 	(void) delscreen(sp);
 error_1:
@@ -124,7 +121,6 @@ error_1:
 		term = M_TERM_NAME;
 
 	(void) fprintf(stderr, m_strmsg(err), term);
-error_0:
 	exit(1);
 	return (0);	/* keep gcc happy */
 }

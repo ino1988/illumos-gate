@@ -21,6 +21,8 @@
 /*
  * Copyright 2008 Sun Microsystems, Inc.  All rights reserved.
  * Use is subject to license terms.
+ *
+ * Copyright 2019 Joyent, Inc.
  */
 
 #include <sys/types.h>
@@ -58,7 +60,7 @@ sockparams_walk_list(const char *symname, int argc, const mdb_arg_t *argv)
  * dcmd to print sockparams info.
  *
  * If no address is given then the default is to print all sockparams on the
- * global list (i.e., installed with soconfig(1)). To also print the ephemeral
+ * global list (i.e., installed with soconfig(8)). To also print the ephemeral
  * entries the '-e' flag should be used. Only ephemeral entries can be printed
  * by specifying the '-E' flag.
  */
@@ -78,7 +80,7 @@ sockparams_prt(uintptr_t addr, uint_t flags, int argc, const mdb_arg_t *argv)
 		 */
 		if (mdb_getopts(argc, argv,
 		    'e', MDB_OPT_SETBITS, 1, &opt_e,
-		    'E', MDB_OPT_SETBITS, 1, &opt_E) != argc)
+		    'E', MDB_OPT_SETBITS, 1, &opt_E, NULL) != argc)
 			return (DCMD_USAGE);
 
 		if (!opt_E) {
@@ -141,7 +143,7 @@ sockparams_help(void)
 	mdb_printf("Print sockparams information for a give sockparams ptr.\n"
 	    "Without the address, list available sockparams. Default "
 	    "behavior is to list only entries that were installed by the "
-	    "admin (via soconfig(1M)).\n\n"
+	    "admin (via soconfig(8)).\n\n"
 	    "Options:\n"
 	    "	-e:\t\tlist ephemeral sockparams\n"
 	    "	-E:\t\tonly list ephemeral sockparams\n");

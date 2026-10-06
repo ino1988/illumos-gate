@@ -1656,7 +1656,7 @@ KMF_RETURN
 kmf_get_cert_id_str(const KMF_DATA *SignedCert,	char **idstr)
 {
 	KMF_RETURN ret;
-	KMF_DATA ID = {NULL, 0};
+	KMF_DATA ID = { 0, NULL };
 	char tmpstr[256];
 	int i;
 
@@ -1759,7 +1759,7 @@ kmf_set_cert_pubkey(KMF_HANDLE_T handle,
 	KMF_RETURN ret = KMF_OK;
 	KMF_X509_SPKI *spki_ptr;
 	KMF_PLUGIN *plugin;
-	KMF_DATA KeyData = {NULL, 0};
+	KMF_DATA KeyData = { 0, NULL };
 
 	CLEAR_ERROR(handle, ret);
 	if (ret != KMF_OK)
@@ -1943,7 +1943,7 @@ kmf_set_cert_validity(KMF_X509_CERTIFICATE *CertData,
 		return (KMF_ERR_BAD_PARAMETER);
 
 	/* Set up validity fields */
-	if (notBefore == NULL)
+	if (notBefore == 0)
 		clock = time(NULL);
 	else
 		clock = notBefore;
@@ -2002,7 +2002,7 @@ set_integer(KMF_DATA *data, void *value, int length)
 static KMF_RETURN
 set_bigint(KMF_BIGINT *data, KMF_BIGINT *bigint)
 {
-	if (data == NULL || bigint == NULL || bigint->len == NULL)
+	if (data == NULL || bigint == NULL || bigint->len == 0)
 		return (KMF_ERR_BAD_PARAMETER);
 
 	data->val = malloc(bigint->len);

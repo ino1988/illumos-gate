@@ -22,10 +22,7 @@
 #
 # Copyright (c) 2010, Oracle and/or its affiliates. All rights reserved.
 #
-
-#
-# cmd/fs.d/smbclnt/smbiod-svc/Makefile
-#
+# Copyright (c) 2018, Joyent, Inc.
 
 FSTYPE=		smbfs
 TYPEPROG=	smbiod-svc
@@ -37,10 +34,12 @@ SRCS=	$(TYPEPROG).c
 POFILE=	$(TYPEPROG).po
 
 CFLAGS += $(CCVERBOSE)
-C99MODE= $(C99_ENABLE)
 
 CPPFLAGS += -I$(SRC)/lib/libsmbfs \
 	-I$(SRC)/uts/common/smbclnt -I$(SRC)/uts/common
+
+# not linted
+SMATCH=off
 
 # Debugging
 ${NOT_RELEASE_BUILD} CPPFLAGS += -DDEBUG
@@ -48,8 +47,6 @@ ${NOT_RELEASE_BUILD} CPPFLAGS += -DDEBUG
 all:	$(TYPEPROG)
 
 catalog:	$(POFILE)
-
-lint:	lint_SRCS
 
 clean:
 	$(RM) $(OBJS) $(POFILE)

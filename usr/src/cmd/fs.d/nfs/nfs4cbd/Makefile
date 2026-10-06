@@ -23,6 +23,7 @@
 # Copyright 2004 Sun Microsystems, Inc.  All rights reserved.
 # Use is subject to license terms.
 #
+# Copyright (c) 2018, Joyent, Inc.
 
 FSTYPE=		nfs
 TYPEPROG=	nfs4cbd
@@ -34,11 +35,14 @@ SRCS=	$(TYPEPROG).c ../../fslib.c ../lib/nfs_tbind.c ../lib/thrpool.c
 
 LDLIBS += -lnsl
 CPPFLAGS += -I. -I../.. -I../lib
-CFLAGS += $(CCVERBOSE) 
+CFLAGS += $(CCVERBOSE)
 
 CERRWARN += -_gcc=-Wno-unused-variable
 CERRWARN += -_gcc=-Wno-parentheses
 CERRWARN += -_gcc=-Wno-extra
+
+# not linted
+SMATCH=off
 
 .KEEP_STATE:
 
@@ -56,7 +60,5 @@ thrpool.o:	../lib/thrpool.c
 
 install:	$(TYPEPROG)
 
-lint:	lint_SRCS
-
-clean:     
+clean:
 	$(RM) $(OBJS)

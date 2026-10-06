@@ -20,6 +20,8 @@
  */
 /*
  * Copyright (c) 2008, 2010, Oracle and/or its affiliates. All rights reserved.
+ * Copyright 2016 Joyent, Inc.
+ * Copyright 2023 Oxide Computer Company
  */
 
 #ifndef	_DLS_MGMT_H
@@ -46,13 +48,16 @@ typedef enum {
 	DATALINK_CLASS_SIMNET		= 0x20,
 	DATALINK_CLASS_BRIDGE		= 0x40,
 	DATALINK_CLASS_IPTUN		= 0x80,
-	DATALINK_CLASS_PART		= 0x100
+	DATALINK_CLASS_PART		= 0x100,
+	DATALINK_CLASS_OVERLAY		= 0x200,
+	DATALINK_CLASS_MISC		= 0x400
 } datalink_class_t;
 
 #define	DATALINK_CLASS_ALL	(DATALINK_CLASS_PHYS |	\
 	DATALINK_CLASS_VLAN | DATALINK_CLASS_AGGR | DATALINK_CLASS_VNIC | \
 	DATALINK_CLASS_ETHERSTUB | DATALINK_CLASS_SIMNET | \
-	DATALINK_CLASS_BRIDGE | DATALINK_CLASS_IPTUN | DATALINK_CLASS_PART)
+	DATALINK_CLASS_BRIDGE | DATALINK_CLASS_IPTUN | DATALINK_CLASS_PART | \
+	DATALINK_CLASS_OVERLAY | DATALINK_CLASS_MISC)
 
 /*
  * A combination of flags and media.
@@ -111,10 +116,14 @@ typedef uint64_t	datalink_media_t;
 #define	DLMGMT_CMD_BASE			128
 
 /*
- * Indicate the link mapping is active or persistent
+ * Indicate if the link mapping is active, persistent, or transient. A
+ * transient link is an active link with a twist -- it is an active
+ * link which is destroyed along with the zone rather than reassigned
+ * to the GZ.
  */
 #define	DLMGMT_ACTIVE		0x01
 #define	DLMGMT_PERSIST		0x02
+#define	DLMGMT_TRANSIENT	0x04
 
 /* upcall argument */
 typedef struct dlmgmt_door_arg {
@@ -224,6 +233,7 @@ typedef struct dlmgmt_getattr_retval_s {
 	uint_t			lr_padding;
 	char			lr_attrval[MAXLINKATTRVALLEN];
 } dlmgmt_getattr_retval_t;
+
 
 #ifdef	__cplusplus
 }

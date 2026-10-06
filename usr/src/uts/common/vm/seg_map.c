@@ -124,6 +124,7 @@ static struct seg_ops segmap_ops = {
 	segmap_getmemid,	/* getmemid */
 	segmap_getpolicy,	/* getpolicy */
 	segmap_capable,		/* capable */
+	seg_inherit_notsup	/* inherit */
 };
 
 /*
@@ -332,12 +333,12 @@ segmap_create(struct seg *seg, void *argsp)
 	nfreelist = a->nfreelist;
 	if (nfreelist == 0)
 		nfreelist = max_ncpus;
-	else if (nfreelist < 0 || nfreelist > 4 * max_ncpus) {
+	else if (nfreelist > 4 * max_ncpus) {
 		cmn_err(CE_WARN, "segmap_create: nfreelist out of range "
 		"%d, using %d", nfreelist, max_ncpus);
 		nfreelist = max_ncpus;
 	}
-	if (nfreelist & (nfreelist - 1)) {
+	if (!ISP2(nfreelist)) {
 		/* round up nfreelist to the next power of two. */
 		nfreelist = 1 << (highbit(nfreelist));
 	}
@@ -852,7 +853,7 @@ segmap_getprot(struct seg *seg, caddr_t addr, size_t len, uint_t *protv)
 	struct segmap_data *smd = (struct segmap_data *)seg->s_data;
 	size_t pgno = seg_page(seg, addr + len) - seg_page(seg, addr) + 1;
 
-	ASSERT(seg->s_as && AS_LOCK_HELD(seg->s_as, &seg->s_as->a_lock));
+	ASSERT(seg->s_as && AS_LOCK_HELD(seg->s_as));
 
 	if (pgno != 0) {
 		do {

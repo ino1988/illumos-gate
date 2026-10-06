@@ -9,23 +9,22 @@
 # http://www.illumos.org/license/CDDL.
 #
 #
-# Copyright (c) 2014 Racktop Systems.
+# Copyright 2014, OmniTI Computer Consulting, Inc. All rights reserved.
+# Copyright 2016 RackTop Systems.
 #
 
 MODULE = Pg
 
 include $(SRC)/cmd/perl/Makefile.perl
 
-# Install module into arch independant directory
-ROOTPERLMODDIR = $(ROOTPERLDIR)/lib/Sun/Solaris
+PERLMOD = $(MODULE).pm
 
-include $(SRC)/cmd/perl/Makefile.targ
+# Install module into arch independent directory
+ROOTPERLMODDIR = $(ROOTPERLDIR)/lib/Sun/Solaris
 
 .KEEP_STATE:
 
-all: $(PERLMOD)
-
+all:
 install: $(ROOTPERLMOD)
 
-clean clobber:
-	$(RM) -r $(MACH)
+include $(SRC)/cmd/perl/Makefile.targ

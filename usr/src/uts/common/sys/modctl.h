@@ -20,6 +20,7 @@
  */
 /*
  * Copyright (c) 1990, 2010, Oracle and/or its affiliates. All rights reserved.
+ * Copyright 2025 Oxide Computer Company
  */
 
 #ifndef	_SYS_MODCTL_H
@@ -368,6 +369,8 @@ struct modconfig32 {
 
 /*
  * Parameters for modinfo
+ *
+ * Maximum string lengths include terminating NUL
  */
 #define	MODMAXNAMELEN 32		/* max module name length */
 #define	MODMAXLINKINFOLEN 32		/* max link info length */
@@ -428,18 +431,21 @@ struct modinfo32 {
 #endif /* _SYSCALL32 */
 
 /* Values for mi_info flags */
-#define	MI_INFO_ONE	1
-#define	MI_INFO_ALL	2
-#define	MI_INFO_CNT	4
+#define	MI_INFO_ONE	(1 << 0)
+#define	MI_INFO_ALL	(1 << 1)
+#define	MI_INFO_CNT	(1 << 2)
 #ifdef _KERNEL
-#define	MI_INFO_LINKAGE	8	/* used internally to extract modlinkage */
+/* used internally to extract modlinkage */
+#define	MI_INFO_LINKAGE	(1 << 3)
 #endif
 /*
  * MI_INFO_NOBASE indicates caller does not need mi_base. Failure to use this
  * flag may lead 32-bit apps to receive an EOVERFLOW error from modctl(MODINFO)
  * when used with a 64-bit kernel.
  */
-#define	MI_INFO_NOBASE	16
+#define	MI_INFO_NOBASE	(1 << 4)
+/* Query by-name, rather than by-id, when used with MI_INFO_ONE */
+#define	MI_INFO_BY_NAME	(1 << 5)
 
 /* Values for mi_state */
 #define	MI_LOADED	1
@@ -513,7 +519,7 @@ typedef struct modctl {
 	char		mod_delay_unload;	/* deferred unload */
 
 	struct modctl_list *mod_requisites;	/* mods this one depends on. */
-	void		*__unused;	/* NOTE: reuse (same size) is OK, */
+	void		*mod_unused;	/* NOTE: reuse (same size) is OK, */
 					/* deletion causes mdb.vs.core issues */
 	int		mod_loadcnt;	/* number of times mod was loaded */
 	int		mod_nenabled;	/* # of enabled DTrace probes in mod */
@@ -546,6 +552,7 @@ typedef int modid_t;
 extern kmutex_t mod_lock;
 
 extern char *systemfile;
+extern char *self_assembly;
 extern char **syscallnames;
 extern int moddebug;
 
@@ -603,7 +610,7 @@ extern struct dev_ops *mod_hold_dev_by_major(major_t);
 extern struct dev_ops *mod_hold_dev_by_devi(dev_info_t *);
 extern void	mod_rele_dev_by_devi(dev_info_t *);
 
-extern int make_devname(char *, major_t, int);
+extern int make_devname(const char *, major_t, int);
 extern int gmatch(const char *, const char *);
 
 extern void make_aliases(struct bind **);
@@ -615,19 +622,19 @@ extern void read_class_file(void);
 extern void setbootpath(char *);
 extern void setbootfstype(char *);
 
-extern int install_stubs_by_name(modctl_t *, char *);
+extern int install_stubs_by_name(modctl_t *, const char *);
 extern void install_stubs(modctl_t *);
 extern void uninstall_stubs(modctl_t *);
 extern void reset_stubs(modctl_t *);
 extern modctl_t *mod_getctl(struct modlinkage *);
-extern major_t mod_name_to_major(char *);
-extern modid_t mod_name_to_modid(char *);
+extern major_t mod_name_to_major(const char *);
+extern modid_t mod_name_to_modid(const char *);
 extern char *mod_major_to_name(major_t);
 extern void init_devnamesp(int);
 extern void init_syscallnames(int);
 
 extern char *mod_getsysname(int);
-extern int mod_getsysnum(char *);
+extern int mod_getsysnum(const char *);
 
 extern char *mod_containing_pc(caddr_t);
 extern int mod_in_autounload(void);
@@ -637,10 +644,7 @@ extern int dev_minorperm(dev_info_t *, char *, mperm_t *);
 extern void dev_devices_cleanup(void);
 
 /*
- * Declarations used for dynamic linking support routines.  Interfaces
- * are marked with the pragma "unknown_control_flow" to prevent tail call
- * optimization, so that implementations can reliably use caller() to
- * determine initiating module.
+ * Declarations used for dynamic linking support routines.
  */
 #define	KRTLD_MODE_FIRST	0x0001
 typedef	struct __ddi_modhandle	*ddi_modhandle_t;
@@ -649,7 +653,6 @@ extern ddi_modhandle_t		ddi_modopen(const char *,
 extern void			*ddi_modsym(ddi_modhandle_t,
 				    const char *, int *);
 extern int			ddi_modclose(ddi_modhandle_t);
-#pragma	unknown_control_flow(ddi_modopen, ddi_modsym, ddi_modclose)
 
 /*
  * Only the following are part of the DDI/DKI

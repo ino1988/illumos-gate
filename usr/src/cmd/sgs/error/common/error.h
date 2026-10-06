@@ -27,8 +27,6 @@
 #ifndef _ERROR_H
 #define	_ERROR_H
 
-#pragma ident	"%Z%%M%	%I%	%E% SMI"
-
 #ifdef  __cplusplus
 extern "C" {
 #endif
@@ -112,8 +110,8 @@ extern	int		class_count[];
 #define	TOTHEFILE	1	/* touch the file */
 #define	TOSTDOUT	2	/* just print them out (ho-hum) */
 
-FILE	*errorfile;	/* where error file comes from */
-FILE	*queryfile;	/* where the query responses from the user come from */
+extern FILE *errorfile;	/* where error file comes from */
+extern FILE *queryfile;	/* where the query responses from the user come from */
 
 extern	char	*currentfilename;
 extern	char	*processname;
@@ -170,14 +168,12 @@ extern struct lang_desc lang_table[];
  *	be touched, or if the function reference is to a
  *	function the user doesn't want recorded.
  */
-#define	IG_FILE1	"llib-lc"
-#define	IG_FILE2	"llib-port"
-#define	IG_FILE3	"/usr/lib/llib-lc"
-#define	IG_FILE4	"/usr/lib/llib-port"
+#define	IG_FILE1	"llib-port"
+#define	IG_FILE2	"/usr/lib/llib-port"
 
 #define	ERRORNAME	"/.errorrc"
-int	nignored;
-char	**names_ignored;
+extern int	nignored;
+extern char	**names_ignored;
 /*
  *	Structure definition for a full error
  */
@@ -206,7 +202,7 @@ extern	Eptr	*errors;
  */
 extern	int	nfiles;
 extern	Eptr	**files;	/* array of pointers into errors */
-boolean	*touchedfiles;			/* which files we touched */
+extern	boolean	*touchedfiles;	/* which files we touched */
 /*
  *	The langauge the compilation is in, as intuited from
  *	the flavor of error messages analyzed.

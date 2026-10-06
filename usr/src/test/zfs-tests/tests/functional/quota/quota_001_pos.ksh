@@ -26,7 +26,7 @@
 #
 
 #
-# Copyright (c) 2013 by Delphix. All rights reserved.
+# Copyright (c) 2013, 2016 by Delphix. All rights reserved.
 #
 
 . $STF_SUITE/include/libtest.shlib
@@ -56,13 +56,14 @@ log_assert "Verify that file size is limited by the file system quota"
 function cleanup
 {
 	[[ -e $TESTDIR/$TESTFILE1 ]] && \
-	    log_must $RM $TESTDIR/$TESTFILE1
+	    log_must rm $TESTDIR/$TESTFILE1
 	#
 	# Need to allow time for space to be released back to
 	# pool, otherwise next test will fail trying to set a
 	# quota which is less than the space used.
 	#
-	sleep 5
+	wait_freeing $TESTPOOL
+	sync_pool $TESTPOOL
 }
 
 log_onexit cleanup

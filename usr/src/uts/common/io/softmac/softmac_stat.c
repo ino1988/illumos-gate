@@ -21,6 +21,9 @@
 /*
  * Copyright 2009 Sun Microsystems, Inc.  All rights reserved.
  * Use is subject to license terms.
+ *
+ * Copyright 2015 Garrett D'Amore <garret@damore.org>
+ * Copyright 2016 Joyent, Inc.
  */
 
 #include <sys/types.h>
@@ -39,9 +42,9 @@ typedef struct i_softmac_stat_info_s {
  * Must be the same order as mac_driver_stat.
  */
 static i_softmac_stat_info_t	i_softmac_driver_si[] = {
-	{ MAC_STAT_IFSPEED,	"ifspeed", 	"link_speed"	},
+	{ MAC_STAT_IFSPEED,	"ifspeed",	"link_speed"	},
 	{ MAC_STAT_MULTIRCV,	"multircv",	NULL		},
-	{ MAC_STAT_BRDCSTRCV,	"brdcstrcv", 	NULL		},
+	{ MAC_STAT_BRDCSTRCV,	"brdcstrcv",	NULL		},
 	{ MAC_STAT_MULTIXMT,	"multixmt",	NULL		},
 	{ MAC_STAT_BRDCSTXMT,	"brdcstxmt",	NULL		},
 	{ MAC_STAT_NORCVBUF,	"norcvbuf",	"rx_no_buf"	},
@@ -67,7 +70,7 @@ static i_softmac_stat_info_t	i_softmac_driver_si[] = {
 static i_softmac_stat_info_t	i_softmac_ether_si[] = {
 	{ ETHER_STAT_ALIGN_ERRORS,	"align_errors",
 	    "alignment_err" },
-	{ ETHER_STAT_FCS_ERRORS, 	"fcs_errors",		"crc_err" },
+	{ ETHER_STAT_FCS_ERRORS,	"fcs_errors",		"crc_err" },
 	{ ETHER_STAT_FIRST_COLLISIONS,	"first_collisions",	NULL },
 	{ ETHER_STAT_MULTI_COLLISIONS,	"multi_collisions",	NULL },
 	{ ETHER_STAT_SQE_ERRORS,	"sqe_errors",		NULL },
@@ -78,8 +81,8 @@ static i_softmac_stat_info_t	i_softmac_ether_si[] = {
 	    "excessive_collisions" },
 	{ ETHER_STAT_MACXMT_ERRORS,	"macxmt_errors",	NULL },
 	{ ETHER_STAT_CARRIER_ERRORS,	"carrier_errors",	NULL },
-	{ ETHER_STAT_TOOLONG_ERRORS,	"toolong_errors", 	"length_err" },
-	{ ETHER_STAT_MACRCV_ERRORS, 	"macrcv_errors",
+	{ ETHER_STAT_TOOLONG_ERRORS,	"toolong_errors",	"length_err" },
+	{ ETHER_STAT_MACRCV_ERRORS,	"macrcv_errors",
 	    "Rx Error Count" },
 
 	{ ETHER_STAT_XCVR_ADDR,		"xcvr_addr",		NULL },
@@ -103,8 +106,8 @@ static i_softmac_stat_info_t	i_softmac_ether_si[] = {
 	{ ETHER_STAT_ADV_CAP_10FDX,	"adv_cap_10fdx",	NULL },
 	{ ETHER_STAT_ADV_CAP_10HDX,	"adv_cap_10hdx",	NULL },
 	{ ETHER_STAT_ADV_CAP_ASMPAUSE,	"adv_cap_asmpause",	NULL },
-	{ ETHER_STAT_ADV_CAP_PAUSE,	"adv_cap_pause", 	NULL },
-	{ ETHER_STAT_ADV_CAP_AUTONEG,	"adv_cap_autoneg", 	NULL },
+	{ ETHER_STAT_ADV_CAP_PAUSE,	"adv_cap_pause",	NULL },
+	{ ETHER_STAT_ADV_CAP_AUTONEG,	"adv_cap_autoneg",	NULL },
 
 	{ ETHER_STAT_LP_CAP_1000FDX,	"lp_cap_1000fdx",	NULL },
 	{ ETHER_STAT_LP_CAP_1000HDX,	"lp_cap_1000hdx",	NULL },
@@ -118,7 +121,7 @@ static i_softmac_stat_info_t	i_softmac_ether_si[] = {
 
 	{ ETHER_STAT_LINK_ASMPAUSE,	"link_asmpause",	NULL },
 	{ ETHER_STAT_LINK_PAUSE,	"link_pause",		NULL },
-	{ ETHER_STAT_LINK_AUTONEG,	"link_autoneg", 	NULL },
+	{ ETHER_STAT_LINK_AUTONEG,	"link_autoneg",		NULL },
 	{ ETHER_STAT_LINK_DUPLEX,	"link_duplex",		"duplex" },
 
 	{ ETHER_STAT_TOOSHORT_ERRORS,	"runt_errors",		NULL },
@@ -129,11 +132,43 @@ static i_softmac_stat_info_t	i_softmac_ether_si[] = {
 	{ ETHER_STAT_JABBER_ERRORS,	"jabber_errors",	NULL },
 	{ ETHER_STAT_CAP_100T4,		"cap_100T4",		NULL },
 	{ ETHER_STAT_ADV_CAP_100T4,	"adv_cap_100T4",	NULL },
-	{ ETHER_STAT_LP_CAP_100T4,	"lp_cap_100T4", 	NULL },
+	{ ETHER_STAT_LP_CAP_100T4,	"lp_cap_100T4",		NULL },
 
 	{ ETHER_STAT_CAP_10GFDX,	"cap_10gfdx",		NULL },
 	{ ETHER_STAT_ADV_CAP_10GFDX,	"adv_cap_10gfdx",	NULL },
-	{ ETHER_STAT_LP_CAP_1000FDX,	"lp_cap_10gfdx",	NULL }
+	{ ETHER_STAT_LP_CAP_1000FDX,	"lp_cap_10gfdx",	NULL },
+
+	{ ETHER_STAT_CAP_40GFDX,	"cap_40gfdx",		NULL },
+	{ ETHER_STAT_ADV_CAP_40GFDX,	"adv_cap_40gfdx",	NULL },
+	{ ETHER_STAT_LP_CAP_40GFDX,	"lp_cap_40gfdx",	NULL },
+
+	{ ETHER_STAT_CAP_100GFDX,	"cap_100gfdx",		NULL },
+	{ ETHER_STAT_ADV_CAP_100GFDX,	"adv_cap_100gfdx",	NULL },
+	{ ETHER_STAT_LP_CAP_100GFDX,	"lp_cap_100gfdx",	NULL },
+
+	{ ETHER_STAT_CAP_2500FDX,	"cap_2500fdx",		NULL },
+	{ ETHER_STAT_ADV_CAP_2500FDX,	"adv_cap_2500fdx",	NULL },
+	{ ETHER_STAT_LP_CAP_2500FDX,	"lp_cap_2500fdx",	NULL },
+
+	{ ETHER_STAT_CAP_5000FDX,	"cap_5000fdx",		NULL },
+	{ ETHER_STAT_ADV_CAP_5000FDX,	"adv_cap_5000fdx",	NULL },
+	{ ETHER_STAT_LP_CAP_5000FDX,	"lp_cap_5000fdx",	NULL },
+
+	{ ETHER_STAT_CAP_25GFDX,	"cap_25gfdx",		NULL },
+	{ ETHER_STAT_ADV_CAP_25GFDX,	"adv_cap_25gfdx",	NULL },
+	{ ETHER_STAT_LP_CAP_25GFDX,	"lp_cap_25gfdx",	NULL },
+
+	{ ETHER_STAT_CAP_50GFDX,	"cap_50gfdx",		NULL },
+	{ ETHER_STAT_ADV_CAP_50GFDX,	"adv_cap_50gfdx",	NULL },
+	{ ETHER_STAT_LP_CAP_50GFDX,	"lp_cap_50gfdx",	NULL },
+
+	{ ETHER_STAT_CAP_200GFDX,	"cap_200gfdx",		NULL },
+	{ ETHER_STAT_ADV_CAP_200GFDX,	"adv_cap_200gfdx",	NULL },
+	{ ETHER_STAT_LP_CAP_200GFDX,	"lp_cap_200gfdx",	NULL },
+
+	{ ETHER_STAT_CAP_400GFDX,	"cap_400gfdx",		NULL },
+	{ ETHER_STAT_ADV_CAP_400GFDX,	"adv_cap_400gfdx",	NULL },
+	{ ETHER_STAT_LP_CAP_400GFDX,	"lp_cap_400gfdx",	NULL },
 };
 
 #define	SOFTMAC_ETHER_SI_SZ						\
@@ -150,8 +185,10 @@ softmac_hold_dev_kstat(softmac_t *softmac)
 	uint_t		ppa;
 	kstat_t		*ksp;
 
-	if (ddi_parse(softmac->smac_devname, drv, &ppa) != DDI_SUCCESS)
+	if (ddi_parse_dlen(softmac->smac_devname, drv, MAXLINKNAMELEN, &ppa) !=
+	    DDI_SUCCESS) {
 		return (NULL);
+	}
 
 	/*
 	 * Find the kstat by the module name and the instance number.

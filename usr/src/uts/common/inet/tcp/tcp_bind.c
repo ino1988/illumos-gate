@@ -22,6 +22,8 @@
 /*
  * Copyright (c) 2010, Oracle and/or its affiliates. All rights reserved.
  * Copyright 2013 Nexenta Systems, Inc.  All rights reserved.
+ * Copyright (c) 2016 by Delphix. All rights reserved.
+ * Copyright 2024 Bill Sommerfeld <sommerfeld@hamachi.org>
  */
 
 #include <sys/types.h>
@@ -278,7 +280,7 @@ retry:
  * Return the next anonymous port in the privileged port range for
  * bind checking.  It starts at IPPORT_RESERVED - 1 and goes
  * downwards.  This is the same behavior as documented in the userland
- * library call rresvport(3N).
+ * library call rresvport(3SOCKET).
  *
  * TS note: skip multilevel ports.
  */
@@ -311,7 +313,7 @@ tcp_bind_select_lport(tcp_t *tcp, in_port_t *requested_port_ptr,
     boolean_t bind_to_req_port_only, cred_t *cr)
 {
 	in_port_t	mlp_port;
-	mlp_type_t 	addrtype, mlptype;
+	mlp_type_t	addrtype, mlptype;
 	boolean_t	user_specified;
 	in_port_t	allocated_port;
 	in_port_t	requested_port = *requested_port_ptr;
@@ -320,6 +322,7 @@ tcp_bind_select_lport(tcp_t *tcp, in_port_t *requested_port_ptr,
 	tcp_stack_t	*tcps = tcp->tcp_tcps;
 	in6_addr_t	v6addr = connp->conn_laddr_v6;
 
+	zone = NULL;
 	/*
 	 * XXX It's up to the caller to specify bind_to_req_port_only or not.
 	 */
@@ -351,7 +354,7 @@ tcp_bind_select_lport(tcp_t *tcp, in_port_t *requested_port_ptr,
 
 		/*
 		 * If the user went through one of the RPC interfaces to create
-		 * this socket and RPC is MLP in this zone, then give him an
+		 * this socket and RPC is MLP in this zone, then give them an
 		 * anonymous MLP.
 		 */
 		if (connp->conn_anon_mlp && is_system_labeled()) {
@@ -684,7 +687,7 @@ tcp_bindi(tcp_t *tcp, in_port_t port, const in6_addr_t *laddr,
 		if (connp->conn_anon_priv_bind) {
 			/*
 			 * loopmax =
-			 * 	(IPPORT_RESERVED-1) - tcp_min_anonpriv_port + 1
+			 *	(IPPORT_RESERVED-1) - tcp_min_anonpriv_port + 1
 			 */
 			loopmax = IPPORT_RESERVED -
 			    tcps->tcps_min_anonpriv_port;
@@ -735,6 +738,16 @@ tcp_bindi(tcp_t *tcp, in_port_t port, const in6_addr_t *laddr,
 			 */
 			if (!IPCL_BIND_ZONE_MATCH(lconnp, connp))
 				continue;
+
+			/*
+			 * allow multiple interface-specific binds to coexist.
+			 */
+			if (connp->conn_incoming_ifindex !=
+			    lconnp->conn_incoming_ifindex) {
+				if ((connp->conn_incoming_ifindex != 0) &&
+				    (lconnp->conn_incoming_ifindex != 0))
+					continue;
+			}
 
 			/*
 			 * If TCP_EXCLBIND is set for either the bound or

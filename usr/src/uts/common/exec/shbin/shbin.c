@@ -22,6 +22,7 @@
 /*
  * Copyright 2010 Sun Microsystems, Inc.  All rights reserved.
  * Use is subject to license terms.
+ * Copyright 2019 Joyent, Inc.
  */
 
 #include <sys/types.h>
@@ -54,7 +55,7 @@ shbinexec(
 	struct uarg *args,
 	struct intpdata *idatap,
 	int level,
-	long *execsz,
+	size_t *execsz,
 	int setid,
 	caddr_t exec_file,
 	struct cred *cred,
@@ -79,10 +80,8 @@ static char *shell_list[] =
 #if defined(__sparc)
 	"/usr/bin/sparcv9/ksh93",
 	"/usr/bin/sparcv7/ksh93",
-#elif defined(__amd64)
+#elif defined(__x86)
 	"/usr/bin/amd64/ksh93",
-	"/usr/bin/i86/ksh93",
-#elif defined(__i386)
 	"/usr/bin/i86/ksh93",
 #else
 #error "Unrecognized platform/CPU (use /usr/bin/ksh93 when in doubt)."
@@ -158,7 +157,7 @@ shbinexec(
 	struct uarg *args,
 	struct intpdata *idatap,
 	int level,
-	long *execsz,
+	size_t *execsz,
 	int setid,
 	caddr_t exec_file,
 	struct cred *cred,
@@ -215,14 +214,15 @@ shbinexec(
 	}
 
 	/*
-	 * Setup interpreter data
+	 * Set up interpreter data
 	 * "--" is passed to mark the end-of-arguments before adding
-	 * the scripts file name, preventing problems when a
-	 * a script's name starts with a '-' character.
+	 * the script's file name, preventing problems when a
+	 * script's name starts with a '-' character.
 	 */
+	bzero(&idata, sizeof (intpdata_t));
 	idata.intp = NULL;
-	idata.intp_name = shell_list[i];
-	idata.intp_arg = "--";
+	idata.intp_name[0] = shell_list[i];
+	idata.intp_arg[0] = "--";
 
 	opath = args->pathname;
 	args->pathname = resolvepn.pn_path;

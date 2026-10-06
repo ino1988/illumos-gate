@@ -24,7 +24,6 @@
 
 PROG=		vrrpd
 OBJS=		vrrpd.o
-SRCS=		$(OBJS:.o=.c)
 SVCMETHOD=	svc-vrrp
 MANIFEST=	vrrp.xml
 CFGFILES=	vrrp.conf
@@ -33,11 +32,11 @@ include ../../../Makefile.cmd
 
 ROOTMANIFESTDIR=	$(ROOTSVCNETWORK)
 
-$(ROOTETC)/inet/$(CFGFILES):= FILEMODE= 644 
-$(ROOTETC)/inet/$(CFGFILES):= OWNER= root 
-$(ROOTETC)/inet/$(CFGFILES):= GROUP= sys 
+$(ROOTETC)/inet/$(CFGFILES):= FILEMODE= 644
+$(ROOTETC)/inet/$(CFGFILES):= OWNER= root
+$(ROOTETC)/inet/$(CFGFILES):= GROUP= sys
 
-C99MODE=		$(C99_ENABLE)
+CSTD=		$(CSTD_GNU99)
 
 #
 # We need access to the ancillary data features which are only available
@@ -45,9 +44,8 @@ C99MODE=		$(C99_ENABLE)
 #
 CPPFLAGS += -D_XOPEN_SOURCE=600 -D__EXTENSIONS__
 LDLIBS += -lvrrpadm -lsocket -lnsl -ldladm -linetutil -lipadm -lsysevent -lnvpair -lsecdb
-LINTFLAGS += -erroff=E_INCONS_ARG_DECL2  -erroff=E_INCONS_ARG_USED2
 
-CERRWARN += -_gcc=-Wno-uninitialized
+CERRWARN += $(CNOWARN_UNINIT)
 
 #
 # Instrument vrrpd with CTF data to ease debugging.
@@ -77,7 +75,5 @@ check:	$(CHKMANIFEST)
 
 clean:
 	$(RM) $(OBJS)
-
-lint:	lint_SRCS
 
 include ../../../Makefile.targ

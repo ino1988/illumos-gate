@@ -20,12 +20,13 @@
  */
 
 /*
+ * Copyright 2025 Hans Rosenfeld
  * Copyright 2014 Garrett D'Amore <garrett@damore.org>
  * Copyright (c) 1989, 2010, Oracle and/or its affiliates. All rights reserved.
  */
 
 /*	Copyright (c) 1988 AT&T	*/
-/*	  All Rights Reserved  	*/
+/*	  All Rights Reserved	*/
 
 /*
  * User-visible pieces of the ANSI C standard I/O package.
@@ -255,7 +256,7 @@ extern FILE		*_lastbuf;
 
 #ifndef	_SSIZE_T
 #define	_SSIZE_T
-#if defined(_LP64) || defined(_I32LPx)
+#if defined(_LP64)
 typedef long	ssize_t;	/* size of something in bytes or -1 */
 #else
 typedef int	ssize_t;	/* (historical version) */
@@ -270,6 +271,7 @@ extern char	*tmpnam_r(char *);
 
 #if defined(__EXTENSIONS__) || \
 	(!defined(_STRICT_STDC) && !defined(__XOPEN_OR_POSIX))
+extern int fdclose(FILE *, int *);
 extern int fcloseall(void);
 extern void setbuffer(FILE *, char *, size_t);
 extern int setlinebuf(FILE *);
@@ -362,24 +364,25 @@ extern int	fseeko64(FILE *, off64_t, int);
 extern off64_t	ftello64(FILE *);
 #endif
 
-#if !defined(__lint)
+/*
+ * XPG7 symbols
+ */
+#if !defined(_STRICT_SYMBOLS) || defined(_XPG7)
+extern FILE	*fmemopen(void *_RESTRICT_KYWD, size_t,
+		    const char *_RESTRICT_KYWD);
+extern FILE	*open_memstream(char **, size_t *);
+
+extern int	dprintf(int, const char *_RESTRICT_KYWD, ...)
+	__PRINTFLIKE(2);
+extern int	vdprintf(int, const char *_RESTRICT_KYWD, __va_list)
+	__VPRINTFLIKE(2);
+#endif	/* !_STRICT_SYMBOLS || _XPG7 */
 
 #if defined(__EXTENSIONS__) || defined(_REENTRANT) || \
 	    (_POSIX_C_SOURCE - 0 >= 199506L)
-#ifndef	_LP64
-#define	getc_unlocked(p)	(--(p)->_cnt < 0 \
-					? __filbuf(p) \
-					: (int)*(p)->_ptr++)
-#define	putc_unlocked(x, p)	(--(p)->_cnt < 0 \
-					? __flsbuf((x), (p)) \
-					: (int)(*(p)->_ptr++ = \
-					(unsigned char) (x)))
-#endif	/* _LP64 */
 #define	getchar_unlocked()	getc_unlocked(stdin)
 #define	putchar_unlocked(x)	putc_unlocked((x), stdout)
 #endif	/* defined(__EXTENSIONS__) || defined(_REENTRANT).. */
-
-#endif	/* !defined(__lint) */
 
 #ifdef	__cplusplus
 }

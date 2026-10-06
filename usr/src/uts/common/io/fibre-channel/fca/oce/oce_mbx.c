@@ -21,6 +21,9 @@
 
 /* Copyright © 2003-2011 Emulex. All rights reserved.  */
 
+/*
+ * Copyright (c) 2018, Joyent, Inc.
+ */
 
 /*
  * Source file containing the implementation of MBOX
@@ -156,7 +159,7 @@ oce_mbox_wait(struct oce_dev *dev, uint32_t tmo_sec)
 		if (mbox_db.bits.ready) {
 			return (0);
 		}
-			drv_usecwait(5);
+		drv_usecwait(5);
 	}
 
 	return (ETIMEDOUT);
@@ -1450,7 +1453,6 @@ dma_alloc_fail:
 	ddi_dma_free_handle(&dma_handle);
 
 fail:
-alloc_err:
 	if (hdr.u0.req.opcode == OPCODE_WRITE_COMMON_FLASHROM) {
 		dev->cookie = 0;
 	}

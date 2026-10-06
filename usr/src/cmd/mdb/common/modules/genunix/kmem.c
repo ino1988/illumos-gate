@@ -24,8 +24,9 @@
  */
 
 /*
- * Copyright 2011 Joyent, Inc.  All rights reserved.
+ * Copyright 2018 Joyent, Inc.  All rights reserved.
  * Copyright (c) 2012 by Delphix. All rights reserved.
+ * Copyright 2025 Oxide Computer Company
  */
 
 #include <mdb/mdb_param.h>
@@ -116,7 +117,7 @@ kmem_cache_walk_init(mdb_walk_state_t *wsp)
 int
 kmem_cpu_cache_walk_init(mdb_walk_state_t *wsp)
 {
-	if (wsp->walk_addr == NULL) {
+	if (wsp->walk_addr == 0) {
 		mdb_warn("kmem_cpu_cache doesn't support global walks");
 		return (WALK_ERR);
 	}
@@ -245,7 +246,7 @@ kmem_slab_walk_init(mdb_walk_state_t *wsp)
 {
 	uintptr_t caddr = wsp->walk_addr;
 
-	if (caddr == NULL) {
+	if (caddr == 0) {
 		mdb_warn("kmem_slab doesn't support global walks\n");
 		return (WALK_ERR);
 	}
@@ -282,7 +283,7 @@ kmem_slab_walk_partial_init(mdb_walk_state_t *wsp)
 	uintptr_t caddr = wsp->walk_addr;
 	kmem_cache_t c;
 
-	if (caddr == NULL) {
+	if (caddr == 0) {
 		mdb_warn("kmem_slab_partial doesn't support global walks\n");
 		return (WALK_ERR);
 	}
@@ -788,7 +789,7 @@ kmem_hash_walk_init(mdb_walk_state_t *wsp)
 	size_t nelems;
 	size_t hsize;
 
-	if (addr == NULL) {
+	if (addr == 0) {
 		mdb_warn("kmem_hash doesn't support global walks\n");
 		return (WALK_ERR);
 	}
@@ -828,15 +829,15 @@ int
 kmem_hash_walk_step(mdb_walk_state_t *wsp)
 {
 	kmem_hash_walk_t *kmhw = wsp->walk_data;
-	uintptr_t addr = NULL;
+	uintptr_t addr = 0;
 
-	if ((addr = (uintptr_t)kmhw->kmhw_cur.bc_next) == NULL) {
+	if ((addr = (uintptr_t)kmhw->kmhw_cur.bc_next) == 0) {
 		while (kmhw->kmhw_pos < kmhw->kmhw_nelems) {
-			if ((addr = kmhw->kmhw_table[kmhw->kmhw_pos++]) != NULL)
+			if ((addr = kmhw->kmhw_table[kmhw->kmhw_pos++]) != 0)
 				break;
 		}
 	}
-	if (addr == NULL)
+	if (addr == 0)
 		return (WALK_DONE);
 
 	if (mdb_vread(&kmhw->kmhw_cur, sizeof (kmem_bufctl_t), addr) == -1) {
@@ -1010,7 +1011,7 @@ kmem_read_magazines(kmem_cache_t *cp, uintptr_t addr, int ncpus,
 	 * list plus at most two magazines per CPU (the loaded and the
 	 * spare).  Toss in 100 magazines as a fudge factor in case this
 	 * is live (the number "100" comes from the same fudge factor in
-	 * crash(1M)).
+	 * crash(8)).
 	 */
 	magmax = (cp->cache_full.ml_total + 2 * ncpus + 100) * magsize;
 	magbsize = offsetof(kmem_magazine_t, mag_round[magsize]);
@@ -1155,14 +1156,14 @@ kmem_walk_init_common(mdb_walk_state_t *wsp, int type)
 
 	size_t magmax, magcnt;
 	void **maglist = NULL;
-	uint_t chunksize, slabsize;
+	uint_t chunksize = 1, slabsize = 1;
 	int status = WALK_ERR;
 	uintptr_t addr = wsp->walk_addr;
 	const char *layered;
 
 	type &= ~KM_HASH;
 
-	if (addr == NULL) {
+	if (addr == 0) {
 		mdb_warn("kmem walk doesn't support global walks\n");
 		return (WALK_ERR);
 	}
@@ -1304,7 +1305,6 @@ kmem_walk_init_common(mdb_walk_state_t *wsp, int type)
 		status = WALK_ERR;
 	}
 
-out1:
 	if (status == WALK_ERR) {
 		if (kmw->kmw_valid)
 			mdb_free(kmw->kmw_valid, slabsize / chunksize);
@@ -1644,7 +1644,7 @@ kmem_walk_init(mdb_walk_state_t *wsp)
 	if (wsp->walk_arg != NULL)
 		wsp->walk_addr = (uintptr_t)wsp->walk_arg;
 
-	if (wsp->walk_addr == NULL)
+	if (wsp->walk_addr == 0)
 		KMEM_WALK_ALL("kmem", wsp);
 	return (kmem_walk_init_common(wsp, KM_ALLOCATED));
 }
@@ -1652,7 +1652,7 @@ kmem_walk_init(mdb_walk_state_t *wsp)
 int
 bufctl_walk_init(mdb_walk_state_t *wsp)
 {
-	if (wsp->walk_addr == NULL)
+	if (wsp->walk_addr == 0)
 		KMEM_WALK_ALL("bufctl", wsp);
 	return (kmem_walk_init_common(wsp, KM_ALLOCATED | KM_BUFCTL));
 }
@@ -1660,7 +1660,7 @@ bufctl_walk_init(mdb_walk_state_t *wsp)
 int
 freemem_walk_init(mdb_walk_state_t *wsp)
 {
-	if (wsp->walk_addr == NULL)
+	if (wsp->walk_addr == 0)
 		KMEM_WALK_ALL("freemem", wsp);
 	return (kmem_walk_init_common(wsp, KM_FREE));
 }
@@ -1668,7 +1668,7 @@ freemem_walk_init(mdb_walk_state_t *wsp)
 int
 freemem_constructed_walk_init(mdb_walk_state_t *wsp)
 {
-	if (wsp->walk_addr == NULL)
+	if (wsp->walk_addr == 0)
 		KMEM_WALK_ALL("freemem_constructed", wsp);
 	return (kmem_walk_init_common(wsp, KM_FREE | KM_CONSTRUCTED));
 }
@@ -1676,7 +1676,7 @@ freemem_constructed_walk_init(mdb_walk_state_t *wsp)
 int
 freectl_walk_init(mdb_walk_state_t *wsp)
 {
-	if (wsp->walk_addr == NULL)
+	if (wsp->walk_addr == 0)
 		KMEM_WALK_ALL("freectl", wsp);
 	return (kmem_walk_init_common(wsp, KM_FREE | KM_BUFCTL));
 }
@@ -1684,7 +1684,7 @@ freectl_walk_init(mdb_walk_state_t *wsp)
 int
 freectl_constructed_walk_init(mdb_walk_state_t *wsp)
 {
-	if (wsp->walk_addr == NULL)
+	if (wsp->walk_addr == 0)
 		KMEM_WALK_ALL("freectl_constructed", wsp);
 	return (kmem_walk_init_common(wsp,
 	    KM_FREE | KM_BUFCTL | KM_CONSTRUCTED));
@@ -1704,7 +1704,7 @@ bufctl_history_walk_init(mdb_walk_state_t *wsp)
 	kmem_bufctl_audit_t bc;
 	kmem_bufctl_audit_t bcn;
 
-	if (wsp->walk_addr == NULL) {
+	if (wsp->walk_addr == 0) {
 		mdb_warn("bufctl_history walk doesn't support global walks\n");
 		return (WALK_ERR);
 	}
@@ -1748,7 +1748,7 @@ bufctl_history_walk_step(mdb_walk_state_t *wsp)
 	uintptr_t baseaddr = wsp->walk_addr;
 	kmem_bufctl_audit_t bc;
 
-	if (addr == NULL)
+	if (addr == 0)
 		return (WALK_DONE);
 
 	if (mdb_vread(&bc, sizeof (bc), addr) == -1) {
@@ -1802,12 +1802,12 @@ kmem_log_walk_init(mdb_walk_state_t *wsp)
 	 * By default (global walk), walk the kmem_transaction_log.  Otherwise
 	 * read the log whose kmem_log_header_t is stored at walk_addr.
 	 */
-	if (lp == NULL && mdb_readvar(&lp, "kmem_transaction_log") == -1) {
+	if (lp == 0 && mdb_readvar(&lp, "kmem_transaction_log") == -1) {
 		mdb_warn("failed to read 'kmem_transaction_log'");
 		return (WALK_ERR);
 	}
 
-	if (lp == NULL) {
+	if (lp == 0) {
 		mdb_warn("log is disabled\n");
 		return (WALK_ERR);
 	}
@@ -1948,7 +1948,7 @@ allocdby_walk_init_common(mdb_walk_state_t *wsp, const char *walk)
 {
 	allocdby_walk_t *abw;
 
-	if (wsp->walk_addr == NULL) {
+	if (wsp->walk_addr == 0) {
 		mdb_warn("allocdby walk doesn't support global walks\n");
 		return (WALK_ERR);
 	}
@@ -2230,7 +2230,7 @@ whatis_walk_kmem(uintptr_t addr, void *ignored, whatis_info_t *wi)
 	size_t size = wi->wi_cache->cache_bufsize;
 
 	while (mdb_whatis_match(w, addr, size, &cur))
-		whatis_print_kmem(wi, cur, addr, NULL);
+		whatis_print_kmem(wi, cur, addr, 0);
 
 	return (WHATIS_WALKRET(w));
 }
@@ -2493,17 +2493,32 @@ whatis_modctl_match(mdb_whatis_t *w, const char *name,
 		mdb_whatis_report_address(w, cur, "in %s's %s\n", name, where);
 }
 
+struct kmem_ctf_module {
+	Shdr *symhdr;
+	char *symtbl;
+	unsigned int nsyms;
+	char *symspace;
+	size_t symsize;
+	char *text;
+	char *data;
+	uintptr_t bss;
+	size_t text_size;
+	size_t data_size;
+	size_t bss_size;
+};
+
 static int
 whatis_walk_modctl(uintptr_t addr, const struct modctl *m, mdb_whatis_t *w)
 {
 	char name[MODMAXNAMELEN];
-	struct module mod;
+	struct kmem_ctf_module mod;
 	Shdr shdr;
 
 	if (m->mod_mp == NULL)
 		return (WALK_NEXT);
 
-	if (mdb_vread(&mod, sizeof (mod), (uintptr_t)m->mod_mp) == -1) {
+	if (mdb_ctf_vread(&mod, "struct module", "struct kmem_ctf_module",
+	    (uintptr_t)m->mod_mp, 0) == -1) {
 		mdb_warn("couldn't read modctl %p's module", addr);
 		return (WALK_NEXT);
 	}
@@ -2717,7 +2732,7 @@ kmem_log(uintptr_t addr, uint_t flags, int argc, const mdb_arg_t *argv)
 		return (DCMD_ERR);
 	}
 
-	if (lhp == NULL) {
+	if (lhp == 0) {
 		mdb_warn("no kmem transaction log\n");
 		return (DCMD_ERR);
 	}
@@ -2750,12 +2765,12 @@ kmem_log(uintptr_t addr, uint_t flags, int argc, const mdb_arg_t *argv)
 	}
 
 	kmc = mdb_zalloc(sizeof (kmem_log_cpu_t) * NCPU, UM_SLEEP | UM_GC);
-	kmd.kmd_addr = NULL;
+	kmd.kmd_addr = 0;
 	kmd.kmd_cpu = kmc;
 
 	for (i = 0; i < NCPU; i++) {
 
-		if (cpu[i] == NULL)
+		if (cpu[i] == 0)
 			continue;
 
 		if (mdb_vread(&clh, sizeof (clh), clhp) == -1) {
@@ -2856,8 +2871,8 @@ bufctl(uintptr_t addr, uint_t flags, int argc, const mdb_arg_t *argv)
 	uint_t verbose = FALSE;
 	uint_t history = FALSE;
 	uint_t in_history = FALSE;
-	uintptr_t caller = NULL, thread = NULL;
-	uintptr_t laddr, haddr, baddr = NULL;
+	uintptr_t caller = 0, thread = 0;
+	uintptr_t laddr, haddr, baddr = 0;
 	hrtime_t earliest = 0, latest = 0;
 	int i, depth;
 	char c[MDB_SYM_NAMLEN];
@@ -2936,7 +2951,7 @@ bufctl(uintptr_t addr, uint_t flags, int argc, const mdb_arg_t *argv)
 	 */
 	depth = MIN(bc.bc_depth, KMEM_STACK_DEPTH);
 
-	if (caller != NULL) {
+	if (caller != 0) {
 		laddr = caller;
 		haddr = caller + sizeof (caller);
 
@@ -2958,7 +2973,7 @@ bufctl(uintptr_t addr, uint_t flags, int argc, const mdb_arg_t *argv)
 			return (DCMD_OK);
 	}
 
-	if (thread != NULL && (uintptr_t)bc.bc_thread != thread)
+	if (thread != 0 && (uintptr_t)bc.bc_thread != thread)
 		return (DCMD_OK);
 
 	if (earliest != 0 && bc.bc_timestamp < earliest)
@@ -3012,13 +3027,13 @@ typedef struct kmem_verify {
 	uint64_t *kmv_buf;		/* buffer to read cache contents into */
 	size_t kmv_size;		/* number of bytes in kmv_buf */
 	int kmv_corruption;		/* > 0 if corruption found. */
-	int kmv_besilent;		/* report actual corruption sites */
+	uint_t kmv_flags;		/* dcmd flags */
 	struct kmem_cache kmv_cache;	/* the cache we're operating on */
 } kmem_verify_t;
 
 /*
  * verify_pattern()
- * 	verify that buf is filled with the pattern pat.
+ *	verify that buf is filled with the pattern pat.
  */
 static int64_t
 verify_pattern(uint64_t *buf_arg, size_t size, uint64_t pat)
@@ -3045,8 +3060,8 @@ verify_buftag(kmem_buftag_t *btp, uintptr_t pat)
 
 /*
  * verify_free()
- * 	verify the integrity of a free block of memory by checking
- * 	that it is filled with 0xdeadbeef and that its buftag is sane.
+ *	verify the integrity of a free block of memory by checking
+ *	that it is filled with 0xdeadbeef and that its buftag is sane.
  */
 /*ARGSUSED1*/
 static int
@@ -3057,7 +3072,7 @@ verify_free(uintptr_t addr, const void *data, void *private)
 	int64_t corrupt;		/* corruption offset */
 	kmem_buftag_t *buftagp;		/* ptr to buftag */
 	kmem_cache_t *cp = &kmv->kmv_cache;
-	int besilent = kmv->kmv_besilent;
+	boolean_t besilent = !!(kmv->kmv_flags & (DCMD_LOOP | DCMD_PIPE_OUT));
 
 	/*LINTED*/
 	buftagp = KMEM_BUFTAG(cp, buf);
@@ -3103,14 +3118,16 @@ verify_free(uintptr_t addr, const void *data, void *private)
 
 	return (WALK_NEXT);
 corrupt:
+	if (kmv->kmv_flags & DCMD_PIPE_OUT)
+		mdb_printf("%p\n", addr);
 	kmv->kmv_corruption++;
 	return (WALK_NEXT);
 }
 
 /*
  * verify_alloc()
- * 	Verify that the buftag of an allocated buffer makes sense with respect
- * 	to the buffer.
+ *	Verify that the buftag of an allocated buffer makes sense with respect
+ *	to the buffer.
  */
 /*ARGSUSED1*/
 static int
@@ -3124,7 +3141,7 @@ verify_alloc(uintptr_t addr, const void *data, void *private)
 	uint32_t *ip = (uint32_t *)buftagp;
 	uint8_t *bp = (uint8_t *)buf;
 	int looks_ok = 0, size_ok = 1;	/* flags for finding corruption */
-	int besilent = kmv->kmv_besilent;
+	boolean_t besilent = !!(kmv->kmv_flags & (DCMD_LOOP | DCMD_PIPE_OUT));
 
 	/*
 	 * Read the buffer to check.
@@ -3182,6 +3199,9 @@ verify_alloc(uintptr_t addr, const void *data, void *private)
 
 	return (WALK_NEXT);
 corrupt:
+	if (kmv->kmv_flags & DCMD_PIPE_OUT)
+		mdb_printf("%p\n", addr);
+
 	kmv->kmv_corruption++;
 	return (WALK_NEXT);
 }
@@ -3200,10 +3220,18 @@ kmem_verify(uintptr_t addr, uint_t flags, int argc, const mdb_arg_t *argv)
 			return (DCMD_ERR);
 		}
 
+		if ((kmv.kmv_cache.cache_dump.kd_unsafe ||
+		    kmv.kmv_cache.cache_dump.kd_alloc_fails) &&
+		    !(flags & (DCMD_LOOP | DCMD_PIPE_OUT))) {
+			mdb_warn("WARNING: cache was used during dump: "
+			    "corruption may be incorrectly reported\n");
+		}
+
 		kmv.kmv_size = kmv.kmv_cache.cache_buftag +
 		    sizeof (kmem_buftag_t);
 		kmv.kmv_buf = mdb_alloc(kmv.kmv_size, UM_SLEEP | UM_GC);
 		kmv.kmv_corruption = 0;
+		kmv.kmv_flags = flags;
 
 		if ((kmv.kmv_cache.cache_flags & KMF_REDZONE)) {
 			check_alloc = 1;
@@ -3218,16 +3246,10 @@ kmem_verify(uintptr_t addr, uint_t flags, int argc, const mdb_arg_t *argv)
 			return (DCMD_ERR);
 		}
 
-		if (flags & DCMD_LOOP) {
-			/*
-			 * table mode, don't print out every corrupt buffer
-			 */
-			kmv.kmv_besilent = 1;
-		} else {
+		if (!(flags & (DCMD_LOOP | DCMD_PIPE_OUT))) {
 			mdb_printf("Summary for cache '%s'\n",
 			    kmv.kmv_cache.cache_name);
 			mdb_inc_indent(2);
-			kmv.kmv_besilent = 0;
 		}
 
 		if (check_alloc)
@@ -3235,31 +3257,31 @@ kmem_verify(uintptr_t addr, uint_t flags, int argc, const mdb_arg_t *argv)
 		if (check_free)
 			(void) mdb_pwalk("freemem", verify_free, &kmv, addr);
 
-		if (flags & DCMD_LOOP) {
-			if (kmv.kmv_corruption == 0) {
-				mdb_printf("%-*s %?p clean\n",
-				    KMEM_CACHE_NAMELEN,
-				    kmv.kmv_cache.cache_name, addr);
+		if (!(flags & DCMD_PIPE_OUT)) {
+			if (flags & DCMD_LOOP) {
+				if (kmv.kmv_corruption == 0) {
+					mdb_printf("%-*s %?p clean\n",
+					    KMEM_CACHE_NAMELEN,
+					    kmv.kmv_cache.cache_name, addr);
+				} else {
+					mdb_printf("%-*s %?p %d corrupt "
+					    "buffer%s\n", KMEM_CACHE_NAMELEN,
+					    kmv.kmv_cache.cache_name, addr,
+					    kmv.kmv_corruption,
+					    kmv.kmv_corruption > 1 ? "s" : "");
+				}
 			} else {
-				char *s = "";	/* optional s in "buffer[s]" */
-				if (kmv.kmv_corruption > 1)
-					s = "s";
+				/*
+				 * This is the more verbose mode, when the user
+				 * typed addr::kmem_verify.  If the cache was
+				 * clean, nothing will have yet been printed. So
+				 * say something.
+				 */
+				if (kmv.kmv_corruption == 0)
+					mdb_printf("clean\n");
 
-				mdb_printf("%-*s %?p %d corrupt buffer%s\n",
-				    KMEM_CACHE_NAMELEN,
-				    kmv.kmv_cache.cache_name, addr,
-				    kmv.kmv_corruption, s);
+				mdb_dec_indent(2);
 			}
-		} else {
-			/*
-			 * This is the more verbose mode, when the user has
-			 * type addr::kmem_verify.  If the cache was clean,
-			 * nothing will have yet been printed. So say something.
-			 */
-			if (kmv.kmv_corruption == 0)
-				mdb_printf("clean\n");
-
-			mdb_dec_indent(2);
 		}
 	} else {
 		/*
@@ -3267,8 +3289,23 @@ kmem_verify(uintptr_t addr, uint_t flags, int argc, const mdb_arg_t *argv)
 		 * kmem_cache's, specifying ourself as a callback for each...
 		 * this is the equivalent of '::walk kmem_cache .::kmem_verify'
 		 */
-		mdb_printf("%<u>%-*s %-?s %-20s%</b>\n", KMEM_CACHE_NAMELEN,
-		    "Cache Name", "Addr", "Cache Integrity");
+
+		if (!(flags & DCMD_PIPE_OUT)) {
+			uintptr_t dump_curr;
+			uintptr_t dump_end;
+
+			if (mdb_readvar(&dump_curr, "kmem_dump_curr") != -1 &&
+			    mdb_readvar(&dump_end, "kmem_dump_end") != -1 &&
+			    dump_curr == dump_end) {
+				mdb_warn("WARNING: exceeded kmem_dump_size; "
+				    "corruption may be incorrectly reported\n");
+			}
+
+			mdb_printf("%<u>%-*s %-?s %-20s%</b>\n",
+			    KMEM_CACHE_NAMELEN, "Cache Name", "Addr",
+			    "Cache Integrity");
+		}
+
 		(void) (mdb_walk_dcmd("kmem_cache", "kmem_verify", 0, NULL));
 	}
 
@@ -3302,7 +3339,7 @@ vmem_walk_init(mdb_walk_state_t *wsp)
 		return (WALK_ERR);
 	}
 
-	while (vaddr != NULL) {
+	while (vaddr != 0) {
 		vp = mdb_zalloc(sizeof (vmem_node_t), UM_SLEEP);
 		vp->vn_addr = vaddr;
 		vp->vn_next = head;
@@ -3321,7 +3358,7 @@ vmem_walk_init(mdb_walk_state_t *wsp)
 
 	for (vp = head; vp != NULL; vp = vp->vn_next) {
 
-		if ((paddr = (uintptr_t)vp->vn_vmem.vm_source) == NULL) {
+		if ((paddr = (uintptr_t)vp->vn_vmem.vm_source) == 0) {
 			vp->vn_sibling = root;
 			root = vp;
 			continue;
@@ -3470,7 +3507,7 @@ vmem_seg_walk_common_init(mdb_walk_state_t *wsp, uint8_t type, char *name)
 {
 	vmem_seg_walk_t *vsw;
 
-	if (wsp->walk_addr == NULL) {
+	if (wsp->walk_addr == 0) {
 		mdb_warn("vmem_%s does not support global walks\n", name);
 		return (WALK_ERR);
 	}
@@ -3587,7 +3624,7 @@ vmem(uintptr_t addr, uint_t flags, int argc, const mdb_arg_t *argv)
 		return (DCMD_ERR);
 	}
 
-	for (paddr = (uintptr_t)v.vm_source; paddr != NULL; ident += 2) {
+	for (paddr = (uintptr_t)v.vm_source; paddr != 0; ident += 2) {
 		if (mdb_vread(&parent, sizeof (parent), paddr) == -1) {
 			mdb_warn("couldn't trace %p's ancestry", addr);
 			ident = 0;
@@ -3654,7 +3691,7 @@ vmem_seg(uintptr_t addr, uint_t flags, int argc, const mdb_arg_t *argv)
 	int depth;
 	uintptr_t laddr, haddr;
 
-	uintptr_t caller = NULL, thread = NULL;
+	uintptr_t caller = 0, thread = 0;
 	uintptr_t minsize = 0, maxsize = 0;
 
 	hrtime_t earliest = 0, latest = 0;
@@ -3736,11 +3773,10 @@ vmem_seg(uintptr_t addr, uint_t flags, int argc, const mdb_arg_t *argv)
 	    (depth == 0 || depth > VMEM_STACK_DEPTH);
 
 	if (no_debug) {
-		if (caller != NULL || thread != NULL || earliest != 0 ||
-		    latest != 0)
+		if (caller != 0 || thread != 0 || earliest != 0 || latest != 0)
 			return (DCMD_OK);		/* not enough info */
 	} else {
-		if (caller != NULL) {
+		if (caller != 0) {
 			laddr = caller;
 			haddr = caller + sizeof (caller);
 
@@ -3764,7 +3800,7 @@ vmem_seg(uintptr_t addr, uint_t flags, int argc, const mdb_arg_t *argv)
 				return (DCMD_OK);
 		}
 
-		if (thread != NULL && (uintptr_t)vs.vs_thread != thread)
+		if (thread != 0 && (uintptr_t)vs.vs_thread != thread)
 			return (DCMD_OK);
 
 		if (earliest != 0 && vs.vs_timestamp < earliest)
@@ -3787,7 +3823,7 @@ vmem_seg(uintptr_t addr, uint_t flags, int argc, const mdb_arg_t *argv)
 	}
 
 	if (verbose) {
-		mdb_printf("%<b>%16p%</b> %4s %16p %16p %16d\n",
+		mdb_printf("%<b>%16p%</b> %4s %16p %16p %16ld\n",
 		    addr, type, vs.vs_start, vs.vs_end, sz);
 
 		if (no_debug)
@@ -3887,7 +3923,7 @@ kmalog(uintptr_t addr, uint_t flags, int argc, const mdb_arg_t *argv)
 	if (flags & DCMD_ADDRSPEC)
 		kma.kma_addr = addr;
 	else
-		kma.kma_addr = NULL;
+		kma.kma_addr = 0;
 
 	if (argc > 0) {
 		if (argv->a_type != MDB_TYPE_STRING)
@@ -3896,12 +3932,14 @@ kmalog(uintptr_t addr, uint_t flags, int argc, const mdb_arg_t *argv)
 			logname = "kmem_failure_log";
 		else if (strcmp(argv->a_un.a_str, "slab") == 0)
 			logname = "kmem_slab_log";
+		else if (strcmp(argv->a_un.a_str, "zerosized") == 0)
+			logname = "kmem_zerosized_log";
 		else
 			return (DCMD_USAGE);
 	}
 
 	if (mdb_readvar(&addr, logname) == -1) {
-		mdb_warn("failed to read %s log header pointer");
+		mdb_warn("failed to read %s log header pointer", logname);
 		return (DCMD_ERR);
 	}
 
@@ -3914,7 +3952,7 @@ kmalog(uintptr_t addr, uint_t flags, int argc, const mdb_arg_t *argv)
 }
 
 /*
- * As the final lure for die-hard crash(1M) users, we provide ::kmausers here.
+ * As the final lure for die-hard crash(8) users, we provide ::kmausers here.
  * The first piece is a structure which we use to accumulate kmem_cache_t
  * addresses of interest.  The kmc_add is used as a callback for the kmem_cache
  * walker; we either add all caches, or ones named explicitly as arguments.
@@ -4173,7 +4211,7 @@ kmausers(uintptr_t addr, uint_t flags, int argc, const mdb_arg_t *argv)
 		opt_f = TRUE;
 		kmu.kmu_addr = addr;
 	} else {
-		kmu.kmu_addr = NULL;
+		kmu.kmu_addr = 0;
 	}
 
 	if (opt_e)

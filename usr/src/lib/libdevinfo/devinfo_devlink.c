@@ -21,11 +21,14 @@
 /*
  * Copyright 2009 Sun Microsystems, Inc.  All rights reserved.
  * Use is subject to license terms.
+ * Copyright (c) 2016 by Delphix. All rights reserved.
+ * Copyright 2026 Oxide Computer Company
  */
 
 #include "libdevinfo.h"
 #include "devinfo_devlink.h"
 #include "device_info.h"
+#include <syslog.h>
 
 #undef	DEBUG
 #ifndef	DEBUG
@@ -35,6 +38,7 @@
 #endif
 
 #include <assert.h>
+#include <upanic.h>
 
 static mutex_t update_mutex = DEFAULTMUTEX; /* Protects update record lock */
 static mutex_t temp_file_mutex = DEFAULTMUTEX; /* for file creation tests */
@@ -66,7 +70,7 @@ static const char *skip_files[] = {
  *
  * This file contains two sets of interfaces which operate on the reverse
  * links database. One set (which includes di_devlink_open()/_close())
- * allows link generators like devfsadm(1M) and ucblinks(1B) (writers) to
+ * allows link generators like devfsadm(8) and ucblinks(1B) (writers) to
  * populate the database with /devices -> /dev mappings. Another set
  * of interfaces (which includes di_devlink_init()/_fini()) allows
  * applications (readers) to lookup the database for /dev links corresponding
@@ -203,9 +207,9 @@ get_db_path(
 	char *dir = NULL;
 
 #ifdef	DEBUG
-	if (dir = getenv(ALT_DB_DIR)) {
-		(void) dprintf(DBG_INFO, "get_db_path: alternate db dir: %s\n",
-		    dir);
+	if ((dir = getenv(ALT_DB_DIR)) != NULL) {
+		(void) devlink_dprintf(DBG_INFO,
+		    "get_db_path: alternate db dir: %s\n", dir);
 	}
 #endif
 	if (dir == NULL) {
@@ -230,7 +234,8 @@ open_db(struct di_devlink_handle *hdp, int flags)
 
 #ifdef	DEBUG
 	if (getenv(SKIP_DB)) {
-		(void) dprintf(DBG_INFO, "open_db: skipping database\n");
+		(void) devlink_dprintf(DBG_INFO,
+		    "open_db: skipping database\n");
 		return (-1);
 	}
 #endif
@@ -292,16 +297,32 @@ open_db(struct di_devlink_handle *hdp, int flags)
 		rv = invalid_db(hdp, sz, page_sz);
 	} else {
 		rv = init_hdr(hdp, page_sz, count);
+		/*
+		 * Start the running string CRC with the NIL string which
+		 * occupies the first byte of the string segment.
+		 */
+		DB(hdp)->str_crc = devlink_crc32(0, "", 1);
 	}
 
 	if (rv) {
-		(void) dprintf(DBG_ERR, "open_db: invalid DB(%s)\n", path);
+		(void) devlink_dprintf(DBG_ERR, "open_db: invalid DB(%s)\n",
+		    path);
 		(void) close_db(hdp);
 		return (-1);
-	} else {
-		(void) dprintf(DBG_STEP, "open_db: DB(%s): opened\n", path);
-		return (0);
 	}
+
+	/*
+	 * Verify database integrity before it is used.
+	 */
+	if (IS_RDONLY(flags) && !verify_db_crc(hdp)) {
+		(void) devlink_dprintf(DBG_ERR,
+		    "open_db: DB(%s): CRC mismatch\n", path);
+		(void) close_db(hdp);
+		return (-1);
+	}
+
+	(void) devlink_dprintf(DBG_STEP, "open_db: DB(%s): opened\n", path);
+	return (0);
 }
 
 /*
@@ -499,7 +520,8 @@ invalid_db(struct di_devlink_handle *hdp, size_t fsize, long page_sz)
 
 	sz = seg_size(hdp, DB_HEADER);
 	for (i = 0; i < DB_TYPES; i++) {
-		(void) dprintf(DBG_INFO, "N[%u] = %u\n", i, DB_NUM(hdp, i));
+		(void) devlink_dprintf(DBG_INFO, "N[%u] = %u\n", i,
+		    DB_NUM(hdp, i));
 		/* There must be at least 1 element of each type */
 		if (DB_NUM(hdp, i) < 1) {
 			return (1);
@@ -535,6 +557,148 @@ invalid_db(struct di_devlink_handle *hdp, size_t fsize, long page_sz)
 	return (0);
 }
 
+static const uint32_t devlink_crc32_table[256] = { CRC32_TABLE };
+
+static uint32_t
+devlink_crc32(uint32_t crc, const void *buf, size_t len)
+{
+	CRC32(crc, buf, len, crc, devlink_crc32_table);
+	return (crc);
+}
+
+/*
+ * A corrupt database has been detected. Report it, preserve the evidence by
+ * renaming the database aside, and panic to produce a core file. Renaming
+ * the database also allows the system to recover, since with no database
+ * present the next devfsadm invocation rebuilds it from the kernel and
+ * /dev.
+ */
+static void
+devlink_db_fault(struct di_devlink_handle *hdp, const char *fmt, ...)
+{
+	char msg[1024], from[PATH_MAX], to[PATH_MAX];
+	size_t len;
+	va_list ap;
+	int ret;
+
+	len = strlcpy(msg, "devlink DB corruption: ", sizeof (msg));
+
+	va_start(ap, fmt);
+	ret = vsnprintf(msg + len, sizeof (msg) - len, fmt, ap);
+	va_end(ap);
+	if (ret < 0)
+		msg[len] = '\0';
+
+	syslog(LOG_ALERT, "%s", msg);
+
+	if (hdp != NULL && DB_OPEN(hdp)) {
+		get_db_path(hdp, DB_RDWR(hdp) ? DB_TMP : DB_FILE,
+		    from, sizeof (from));
+		get_db_path(hdp, DB_CORRUPT, to, sizeof (to));
+		len = strlen(to);
+		(void) snprintf(to + len, sizeof (to) - len, ".%ld",
+		    (long)time(NULL));
+		if (rename(from, to) == 0) {
+			syslog(LOG_ALERT, "quarantined %s as %s", from, to);
+		} else {
+			syslog(LOG_ALERT, "failed to quarantine %s as %s: %s",
+			    from, to, strerror(errno));
+		}
+	}
+
+	upanic(msg, strlen(msg) + 1);
+}
+
+static uint32_t
+segment_crc(struct di_devlink_handle *hdp, db_seg_t seg, int prot)
+{
+	size_t len;
+
+	if (map_seg(hdp, 1, prot, seg) == NULL)
+		return (0);
+
+	len = DB_NUM(hdp, seg) * elem_sizes[seg];
+	return (devlink_crc32(0, DB_SEG(hdp, seg), len));
+}
+
+static bool
+verify_db_crc(struct di_devlink_handle *hdp)
+{
+	uint32_t crc;
+	int i;
+
+	for (i = 0; i < DB_TYPES; i++) {
+		crc = segment_crc(hdp, i, PROT_READ);
+		if (crc == DB_HDR(hdp)->crc[i])
+			continue;
+
+		syslog(LOG_WARNING, "devlink DB segment %d CRC mismatch "
+		    "(stored %08x, computed %08x)",
+		    i, DB_HDR(hdp)->crc[i], crc);
+
+		if (HDL_RDWR(hdp)) {
+			devlink_db_fault(hdp, "segment %d CRC mismatch "
+			    "(stored %08x, computed %08x); written by "
+			    "pid %u (%s) at %llu", i, DB_HDR(hdp)->crc[i],
+			    crc, DB_HDR(hdp)->writer_pid,
+			    DB_HDR(hdp)->writer_exec,
+			    (u_longlong_t)DB_HDR(hdp)->writer_time);
+		}
+		return (false);
+	}
+	return (true);
+}
+
+/*
+ * The database content is complete. Record the segment CRCs and the
+ * identity of this writer in the header, after verifying that the string
+ * segment still matches the CRC accumulated from the source strings as
+ * they were copied in. If there's a mismatch then something modified the
+ * mapping after the data was written. Finally, make the data segments
+ * read-only so that any stray store into the mapping before it is
+ * unmapped faults instead of corrupting the file.
+ */
+static void
+seal_db(struct di_devlink_handle *hdp, uint32_t *next)
+{
+	struct db_hdr *hp = DB_HDR(hdp);
+	const char *exec, *base;
+	uint32_t crc;
+	int i;
+
+	assert(HDL_RDWR(hdp) && DB_RDWR(hdp));
+
+	if (map_seg(hdp, 1, PROT_READ | PROT_WRITE, DB_STR) == NULL) {
+		SET_DB_ERR(hdp);
+		return;
+	}
+
+	crc = devlink_crc32(0, DB_SEG(hdp, DB_STR), next[DB_STR]);
+	if (crc != DB(hdp)->str_crc) {
+		devlink_db_fault(hdp, "string segment modified during "
+		    "write (computed %08x, expected %08x)",
+		    crc, DB(hdp)->str_crc);
+	}
+
+	for (i = 0; i < DB_TYPES; i++)
+		hp->crc[i] = segment_crc(hdp, i, PROT_READ | PROT_WRITE);
+
+	hp->writer_pid = (uint32_t)getpid();
+	hp->writer_time = (uint64_t)time(NULL);
+	if ((exec = getexecname()) != NULL) {
+		base = strrchr(exec, '/');
+		(void) strlcpy(hp->writer_exec,
+		    base != NULL ? base + 1 : exec, sizeof (hp->writer_exec));
+	}
+
+	for (i = 0; i < DB_TYPES; i++) {
+		if (DB_SEG(hdp, i) != NULL && mprotect(DB_SEG(hdp, i),
+		    seg_size(hdp, i), PROT_READ) == 0) {
+			DB_SEG_PROT(hdp, i) = PROT_READ;
+		}
+	}
+}
+
 static int
 read_nodes(struct di_devlink_handle *hdp, cache_node_t *pcnp, uint32_t nidx)
 {
@@ -549,13 +713,13 @@ read_nodes(struct di_devlink_handle *hdp, cache_node_t *pcnp, uint32_t nidx)
 	 * parent node should be NULL only for the root node
 	 */
 	if ((pcnp == NULL) ^ (nidx == DB_HDR(hdp)->root_idx)) {
-		(void) dprintf(DBG_ERR, "%s: invalid parent or index(%u)\n",
-		    fcn, nidx);
+		(void) devlink_dprintf(DBG_ERR,
+		    "%s: invalid parent or index(%u)\n", fcn, nidx);
 		SET_DB_ERR(hdp);
 		return (-1);
 	}
 
-	for (; dnp = get_node(hdp, nidx); nidx = dnp->sib) {
+	for (; (dnp = get_node(hdp, nidx)) != NULL; nidx = dnp->sib) {
 
 		path = get_string(hdp, dnp->path);
 
@@ -576,8 +740,8 @@ read_nodes(struct di_devlink_handle *hdp, cache_node_t *pcnp, uint32_t nidx)
 			break;
 		}
 
-		(void) dprintf(DBG_STEP, "%s: node[%u]: %s\n", fcn, nidx,
-		    cnp->path);
+		(void) devlink_dprintf(DBG_STEP, "%s: node[%u]: %s\n",
+		    fcn, nidx, cnp->path);
 	}
 
 	return (dnp ? -1 : 0);
@@ -594,13 +758,13 @@ read_minors(struct di_devlink_handle *hdp, cache_node_t *pcnp, uint32_t nidx)
 	assert(HDL_RDWR(hdp));
 
 	if (pcnp == NULL) {
-		(void) dprintf(DBG_ERR, "%s: minor[%u]: orphan minor\n", fcn,
-		    nidx);
+		(void) devlink_dprintf(DBG_ERR, "%s: minor[%u]: orphan minor\n",
+		    fcn, nidx);
 		SET_DB_ERR(hdp);
 		return (-1);
 	}
 
-	for (; dmp = get_minor(hdp, nidx); nidx = dmp->sib) {
+	for (; (dmp = get_minor(hdp, nidx)) != NULL; nidx = dmp->sib) {
 
 		name = get_string(hdp, dmp->name);
 		nodetype = get_string(hdp, dmp->nodetype);
@@ -611,8 +775,8 @@ read_minors(struct di_devlink_handle *hdp, cache_node_t *pcnp, uint32_t nidx)
 			break;
 		}
 
-		(void) dprintf(DBG_STEP, "%s: minor[%u]: %s\n", fcn, nidx,
-		    cmnp->name);
+		(void) devlink_dprintf(DBG_STEP, "%s: minor[%u]: %s\n",
+		    fcn, nidx, cmnp->name);
 
 		if (read_links(hdp, cmnp, dmp->link) != 0) {
 			break;
@@ -636,16 +800,23 @@ read_links(struct di_devlink_handle *hdp, cache_minor_t *pcmp, uint32_t nidx)
 
 	if (nidx != DB_NIL &&
 	    ((pcmp == NULL) ^ (nidx == DB_HDR(hdp)->dngl_idx))) {
-		(void) dprintf(DBG_ERR, "read_links: invalid minor or"
+		(void) devlink_dprintf(DBG_ERR, "read_links: invalid minor or"
 		    " index(%u)\n", nidx);
 		SET_DB_ERR(hdp);
 		return (-1);
 	}
 
-	for (; dlp = get_link(hdp, nidx); nidx = dlp->sib) {
+	for (; (dlp = get_link(hdp, nidx)) != NULL; nidx = dlp->sib) {
 
 		path = get_string(hdp, dlp->path);
 		content = get_string(hdp, dlp->content);
+
+		if (link_hash(hdp, path, 0) != NULL) {
+			(void) devlink_dprintf(DBG_ERR,
+			    "read_links: skipping duplicate link[%u]: "
+			    "%s\n", nidx, path ? path : "<NULL>");
+			continue;
+		}
 
 		clp = link_insert(hdp, pcmp, path, content, dlp->attr);
 		if (clp == NULL) {
@@ -653,7 +824,7 @@ read_links(struct di_devlink_handle *hdp, cache_minor_t *pcmp, uint32_t nidx)
 			break;
 		}
 
-		(void) dprintf(DBG_STEP, "read_links: link[%u]: %s%s\n",
+		(void) devlink_dprintf(DBG_STEP, "read_links: link[%u]: %s%s\n",
 		    nidx, clp->path, pcmp == NULL ? "(DANGLING)" : "");
 	}
 
@@ -701,8 +872,8 @@ di_devlink_close(di_devlink_handle_t *pp, int flag)
 	/*
 	 * update database with actual contents of /dev
 	 */
-	(void) dprintf(DBG_INFO, "di_devlink_close: update_count = %u\n",
-	    CACHE(hdp)->update_count);
+	(void) devlink_dprintf(DBG_INFO,
+	    "di_devlink_close: update_count = %u\n", CACHE(hdp)->update_count);
 
 	/*
 	 * For performance reasons, synchronization of the database
@@ -712,7 +883,7 @@ di_devlink_close(di_devlink_handle_t *pp, int flag)
 	 */
 	if (CACHE(hdp)->update_count == 0) {
 		CACHE(hdp)->update_count = 1;
-		(void) dprintf(DBG_INFO,
+		(void) devlink_dprintf(DBG_INFO,
 		    "di_devlink_close: synchronizing DB\n");
 		(void) synchronize_db(hdp);
 	}
@@ -728,7 +899,8 @@ di_devlink_close(di_devlink_handle_t *pp, int flag)
 	 * to the database only if it is not empty.
 	 */
 	if (CACHE_EMPTY(hdp)) {
-		(void) dprintf(DBG_INFO, "di_devlink_close: skipping write\n");
+		(void) devlink_dprintf(DBG_INFO,
+		    "di_devlink_close: skipping write\n");
 		(void) unlink(file);
 		handle_free(&hdp);
 		return (0);
@@ -751,10 +923,14 @@ di_devlink_close(di_devlink_handle_t *pp, int flag)
 	(void) write_links(hdp, NULL, CACHE(hdp)->dngl, next);
 	DB_HDR(hdp)->update_count = CACHE(hdp)->update_count;
 
+	if (!DB_ERR(hdp))
+		seal_db(hdp, next);
+
 	rv = close_db(hdp);
 
 	if (rv != 0 || DB_ERR(hdp) || rename(tmp, file) != 0) {
-		(void) dprintf(DBG_ERR, "di_devlink_close: %s error: %s\n",
+		(void) devlink_dprintf(DBG_ERR,
+		    "di_devlink_close: %s error: %s\n",
 		    rv ? "close_db" : "DB or rename", strerror(errno));
 		(void) unlink(tmp);
 		(void) unlink(file);
@@ -764,7 +940,8 @@ di_devlink_close(di_devlink_handle_t *pp, int flag)
 
 	handle_free(&hdp);
 
-	(void) dprintf(DBG_INFO, "di_devlink_close: wrote DB(%s)\n", file);
+	(void) devlink_dprintf(DBG_INFO, "di_devlink_close: wrote DB(%s)\n",
+	    file);
 
 	return (0);
 }
@@ -810,8 +987,8 @@ write_nodes(
 
 		/* parent node should only be NULL for root node */
 		if ((pdnp == NULL) ^ (cnp == CACHE_ROOT(hdp))) {
-			(void) dprintf(DBG_ERR, "%s: invalid parent for: %s\n",
-			    fcn, cnp->path);
+			(void) devlink_dprintf(DBG_ERR,
+			    "%s: invalid parent for: %s\n", fcn, cnp->path);
 			SET_DB_ERR(hdp);
 			break;
 		}
@@ -841,7 +1018,7 @@ write_nodes(
 			pdnp->child = idx;
 		}
 
-		(void) dprintf(DBG_STEP, "%s: node[%u]: %s\n", fcn, idx,
+		(void) devlink_dprintf(DBG_STEP, "%s: node[%u]: %s\n", fcn, idx,
 		    cnp->path);
 
 		if (write_minors(hdp, dnp, cnp->minor, next) != 0 ||
@@ -867,8 +1044,8 @@ write_minors(
 	assert(HDL_RDWR(hdp));
 
 	if (pdnp == NULL) {
-		(void) dprintf(DBG_ERR, "%s: no node for minor: %s\n", fcn,
-		    cmnp ? cmnp->name : "<NULL>");
+		(void) devlink_dprintf(DBG_ERR, "%s: no node for minor: %s\n",
+		    fcn, cmnp ? cmnp->name : "<NULL>");
 		SET_DB_ERR(hdp);
 		return (-1);
 	}
@@ -897,8 +1074,8 @@ write_minors(
 		dmp->sib = pdnp->minor;
 		pdnp->minor = idx;
 
-		(void) dprintf(DBG_STEP, "%s: minor[%u]: %s\n", fcn, idx,
-		    cmnp->name);
+		(void) devlink_dprintf(DBG_STEP, "%s: minor[%u]: %s\n",
+		    fcn, idx, cmnp->name);
 
 		if (write_links(hdp, dmp, cmnp->link, next) != 0) {
 			break;
@@ -923,7 +1100,8 @@ write_links(
 
 	/* A NULL minor if and only if the links are dangling */
 	if (clp != NULL && ((pdmp == NULL) ^ (clp == CACHE(hdp)->dngl))) {
-		(void) dprintf(DBG_ERR, "%s: invalid minor for link\n", fcn);
+		(void) devlink_dprintf(DBG_ERR, "%s: invalid minor for link\n",
+		    fcn);
 		SET_DB_ERR(hdp);
 		return (-1);
 	}
@@ -933,8 +1111,8 @@ write_links(
 		assert(clp->path != NULL);
 
 		if ((pdmp == NULL) ^ (clp->minor == NULL)) {
-			(void) dprintf(DBG_ERR, "%s: invalid minor for link"
-			    "(%s)\n", fcn, clp->path);
+			(void) devlink_dprintf(DBG_ERR,
+			    "%s: invalid minor for link(%s)\n", fcn, clp->path);
 			SET_DB_ERR(hdp);
 			break;
 		}
@@ -966,8 +1144,8 @@ write_links(
 			DB_HDR(hdp)->dngl_idx = idx;
 		}
 
-		(void) dprintf(DBG_STEP, "%s: link[%u]: %s%s\n", fcn, idx,
-		    clp->path, pdmp == NULL ? "(DANGLING)" : "");
+		(void) devlink_dprintf(DBG_STEP, "%s: link[%u]: %s%s\n",
+		    fcn, idx, clp->path, pdmp == NULL ? "(DANGLING)" : "");
 	}
 
 	return (clp ? -1 : 0);
@@ -983,14 +1161,15 @@ write_string(struct di_devlink_handle *hdp, const char *str, uint32_t *next)
 	assert(HDL_RDWR(hdp));
 
 	if (str == NULL) {
-		(void) dprintf(DBG_ERR, "write_string: NULL argument\n");
+		(void) devlink_dprintf(DBG_ERR,
+		    "write_string: NULL argument\n");
 		return (DB_NIL);
 	}
 
 	idx = next[DB_STR];
 	if (!VALID_STR(hdp, idx, str)) {
-		(void) dprintf(DBG_ERR, "write_string: invalid index[%u],"
-		    " string(%s)\n", idx, str);
+		(void) devlink_dprintf(DBG_ERR,
+		    "write_string: invalid index[%u], string(%s)\n", idx, str);
 		return (DB_NIL);
 	}
 
@@ -999,6 +1178,18 @@ write_string(struct di_devlink_handle *hdp, const char *str, uint32_t *next)
 	}
 
 	(void) strcpy(dstr, str);
+
+	/*
+	 * Verify that the string just written to the database file matches
+	 * the source.
+	 */
+	if (strcmp(dstr, str) != 0) {
+		devlink_db_fault(hdp, "write_string: post-write mismatch: "
+		    "wrote \"%s\", read back \"%s\"", str, dstr);
+	}
+
+	DB(hdp)->str_crc = devlink_crc32(DB(hdp)->str_crc, str,
+	    strlen(str) + 1);
 
 	next[DB_STR] += strlen(dstr) + 1;
 
@@ -1154,7 +1345,8 @@ rm_link_from_hash(struct di_devlink_handle *hdp, cache_link_t *clp)
 		}
 	}
 
-	dprintf(DBG_ERR, "rm_link_from_hash: link(%s) not found\n", clp->path);
+	devlink_dprintf(DBG_ERR, "rm_link_from_hash: link(%s) not found\n",
+	    clp->path);
 }
 
 static cache_link_t *
@@ -1296,8 +1488,9 @@ resolve_dangling_links(struct di_devlink_handle *hdp)
 			assert(clp->minor == NULL);
 			clp->minor = cmnp;
 		} else {
-			dprintf(DBG_INFO, "resolve_dangling_links: link(%s):"
-			    " unresolved\n", clp->path);
+			devlink_dprintf(DBG_INFO,
+			    "resolve_dangling_links: link(%s): unresolved\n",
+			    clp->path);
 			pp = &clp->sib;
 		}
 	}
@@ -1332,7 +1525,8 @@ minor_free(struct di_devlink_handle *hdp, cache_minor_t **pp)
 		return;
 
 	if (CACHE_LAST(hdp) == cmnp) {
-		dprintf(DBG_STEP, "minor_free: last_minor(%s)\n", cmnp->name);
+		devlink_dprintf(DBG_STEP, "minor_free: last_minor(%s)\n",
+		    cmnp->name);
 		CACHE_LAST(hdp) = NULL;
 	}
 
@@ -1391,8 +1585,8 @@ lookup_minor(
 	(void) snprintf(pdup, sizeof (pdup), "%s", minor_path);
 
 	if ((colon = minor_colon(pdup)) == NULL) {
-		(void) dprintf(DBG_ERR, "%s: invalid minor path(%s)\n", fcn,
-		    minor_path);
+		(void) devlink_dprintf(DBG_ERR, "%s: invalid minor path(%s)\n",
+		    fcn, minor_path);
 		errno = EINVAL;
 		return (NULL);
 	}
@@ -1403,7 +1597,8 @@ lookup_minor(
 	}
 
 	if ((vp = lookup_node(hdp, pdup, flags)) == NULL) {
-		(void) dprintf(DBG_ERR, "%s: node(%s) not found\n", fcn, pdup);
+		(void) devlink_dprintf(DBG_ERR, "%s: node(%s) not found\n",
+		    fcn, pdup);
 		return (NULL);
 	}
 	*colon = ':';
@@ -1429,7 +1624,7 @@ lookup_minor(
 		struct db_minor *dmp;
 
 		nidx = (((struct db_node *)vp)->minor);
-		for (; dmp = get_minor(hdp, nidx); nidx = dmp->sib) {
+		for (; (dmp = get_minor(hdp, nidx)) != NULL; nidx = dmp->sib) {
 			cp = get_string(hdp, dmp->name);
 			if (cp && strcmp(cp, colon + 1) == 0)
 				break;
@@ -1443,7 +1638,7 @@ lookup_node(struct di_devlink_handle *hdp, char *path, const int flags)
 {
 	struct tnode tnd = {NULL};
 
-	if (tnd.node = get_last_node(hdp, path, flags))
+	if ((tnd.node = get_last_node(hdp, path, flags)) != NULL)
 		return (tnd.node);
 
 	tnd.handle = hdp;
@@ -1465,8 +1660,8 @@ get_last_node(struct di_devlink_handle *hdp, const char *path, int flags)
 
 #ifdef	DEBUG
 	if (getenv(SKIP_LAST_CACHE)) {
-		(void) dprintf(DBG_INFO, "get_last_node: SKIPPING \"last\" "
-		    "node cache\n");
+		(void) devlink_dprintf(DBG_INFO,
+		    "get_last_node: SKIPPING \"last\" node cache\n");
 		return (NULL);
 	}
 #endif
@@ -1500,8 +1695,8 @@ get_last_minor(
 
 #ifdef	DEBUG
 	if (getenv(SKIP_LAST_CACHE)) {
-		(void) dprintf(DBG_INFO, "get_last_minor: SKIPPING \"last\" "
-		    "minor cache\n");
+		(void) devlink_dprintf(DBG_INFO,
+		    "get_last_minor: SKIPPING \"last\" minor cache\n");
 		return (NULL);
 	}
 #endif
@@ -1531,8 +1726,8 @@ set_last_minor(struct di_devlink_handle *hdp, cache_minor_t *cmnp, int flags)
 {
 #ifdef	DEBUG
 	if (getenv(SKIP_LAST_CACHE)) {
-		(void) dprintf(DBG_INFO, "set_last_minor: SKIPPING \"last\" "
-		    "minor cache\n");
+		(void) devlink_dprintf(DBG_INFO,
+		    "set_last_minor: SKIPPING \"last\" minor cache\n");
 		return;
 	}
 #endif
@@ -1580,7 +1775,7 @@ walk_tree(
 			(void) strlcat(buf, "/", sizeof (buf));
 		}
 
-		if (slash = strchr(cur, '/')) {
+		if ((slash = strchr(cur, '/')) != NULL) {
 			*slash = '\0';
 			(void) strlcat(buf, cur, sizeof (buf));
 			*slash = '/';
@@ -1645,7 +1840,8 @@ minor_delete(di_devlink_handle_t hdp, cache_minor_t *cmnp)
 	cache_minor_t **mpp;
 	const char *fcn = "minor_delete";
 
-	(void) dprintf(DBG_STEP, "%s: removing minor: %s\n", fcn, cmnp->name);
+	(void) devlink_dprintf(DBG_STEP, "%s: removing minor: %s\n",
+	    fcn, cmnp->name);
 
 	/* detach minor from node */
 	if (cmnp->node != NULL) {
@@ -1656,13 +1852,13 @@ minor_delete(di_devlink_handle_t hdp, cache_minor_t *cmnp)
 		}
 
 		if (*mpp == NULL) {
-			(void) dprintf(DBG_ERR, "%s: dangling minor: %s\n",
-			    fcn, cmnp->name);
+			(void) devlink_dprintf(DBG_ERR,
+			    "%s: dangling minor: %s\n", fcn, cmnp->name);
 		} else {
 			*mpp = cmnp->sib;
 		}
 	} else {
-		(void) dprintf(DBG_ERR, "%s: orphan minor(%s)\n", fcn,
+		(void) devlink_dprintf(DBG_ERR, "%s: orphan minor(%s)\n", fcn,
 		    cmnp->name);
 	}
 
@@ -1694,7 +1890,7 @@ delete_unused_nodes(di_devlink_handle_t hdp, cache_node_t *cnp)
 	if (cnp->minor != NULL || cnp->child != NULL)
 		return;
 
-	(void) dprintf(DBG_INFO, "%s: removing unused node: %s\n", fcn,
+	(void) devlink_dprintf(DBG_INFO, "%s: removing unused node: %s\n", fcn,
 	    cnp->path);
 
 	/* Unlink node from tree */
@@ -1706,15 +1902,15 @@ delete_unused_nodes(di_devlink_handle_t hdp, cache_node_t *cnp)
 		}
 
 		if (*npp == NULL) {
-			(void) dprintf(DBG_ERR, "%s: dangling node: %s\n", fcn,
-			    cnp->path);
+			(void) devlink_dprintf(DBG_ERR,
+			    "%s: dangling node: %s\n", fcn, cnp->path);
 		} else {
 			*npp = cnp->sib;
 		}
 	} else if (cnp == CACHE_ROOT(hdp)) {
 		CACHE_ROOT(hdp) = NULL;
 	} else {
-		(void) dprintf(DBG_ERR, "%s: orphan node (%s)\n", fcn,
+		(void) devlink_dprintf(DBG_ERR, "%s: orphan node (%s)\n", fcn,
 		    cnp->path);
 	}
 
@@ -1733,13 +1929,13 @@ rm_link(di_devlink_handle_t hdp, const char *link)
 
 	if (hdp == NULL || DB_ERR(hdp) || link == NULL || link[0] == '/' ||
 	    (!HDL_RDWR(hdp) && !HDL_RDONLY(hdp))) {
-		dprintf(DBG_ERR, "%s: %s: invalid args\n",
+		devlink_dprintf(DBG_ERR, "%s: %s: invalid args\n",
 		    fcn, link ? link : "<NULL>");
 		errno = EINVAL;
 		return (-1);
 	}
 
-	dprintf(DBG_STEP, "%s: link(%s)\n", fcn, link);
+	devlink_dprintf(DBG_STEP, "%s: link(%s)\n", fcn, link);
 
 	if ((clp = link_hash(hdp, link, UNLINK_FROM_HASH)) == NULL) {
 		return (0);
@@ -1767,7 +1963,8 @@ link_delete(di_devlink_handle_t hdp, cache_link_t *clp)
 	cache_link_t **pp;
 	const char *fcn = "link_delete";
 
-	(void) dprintf(DBG_STEP, "%s: removing link: %s\n", fcn, clp->path);
+	(void) devlink_dprintf(DBG_STEP, "%s: removing link: %s\n",
+	    fcn, clp->path);
 
 	if (clp->minor == NULL)
 		pp = &(CACHE(hdp)->dngl);
@@ -1780,7 +1977,7 @@ link_delete(di_devlink_handle_t hdp, cache_link_t *clp)
 	}
 
 	if (*pp == NULL) {
-		(void) dprintf(DBG_ERR, "%s: link(%s) not on list\n",
+		(void) devlink_dprintf(DBG_ERR, "%s: link(%s) not on list\n",
 		    fcn, clp->path);
 	} else {
 		*pp = clp->sib;
@@ -1802,7 +1999,7 @@ delete_unused_minor(di_devlink_handle_t hdp, cache_minor_t *cmnp)
 	if (cmnp->link != NULL)
 		return;
 
-	dprintf(DBG_STEP, "delete_unused_minor: removing minor(%s)\n",
+	devlink_dprintf(DBG_STEP, "delete_unused_minor: removing minor(%s)\n",
 	    cmnp->name);
 
 	minor_delete(hdp, cmnp);
@@ -1833,7 +2030,7 @@ add_link(
 	if (hdp == NULL || DB_ERR(hdp) || link == NULL ||
 	    link[0] == '/' || content == NULL || !link_flag(flags) ||
 	    (!HDL_RDWR(hdp) && !HDL_RDONLY(hdp))) {
-		dprintf(DBG_ERR, "%s: %s: invalid args\n",
+		devlink_dprintf(DBG_ERR, "%s: %s: invalid args\n",
 		    fcn, link ? link : "<NULL>");
 		errno = EINVAL;
 		return (NULL);
@@ -1851,8 +2048,9 @@ add_link(
 		const char *minor_path = NULL;
 
 		if (!is_minor_node(content, &minor_path)) {
-			(void) dprintf(DBG_ERR, "%s: invalid content(%s)"
-			    " for primary link\n", fcn, content);
+			(void) devlink_dprintf(DBG_ERR,
+			    "%s: invalid content(%s) for primary link\n",
+			    fcn, content);
 			errno = EINVAL;
 			return (NULL);
 		}
@@ -1942,13 +2140,13 @@ synchronize_db(di_devlink_handle_t hdp)
 			 */
 			(void) snprintf(pdup, sizeof (pdup), "%s", clp->path);
 			clp = clp->hash;
-			(void) dprintf(DBG_STEP, "%s: removing invalid link:"
-			    " %s\n", fcn, pdup);
+			(void) devlink_dprintf(DBG_STEP,
+			    "%s: removing invalid link: %s\n", fcn, pdup);
 			(void) di_devlink_rm_link(hdp, pdup);
 		}
 	}
 
-	(void) dprintf(DBG_STEP, "%s: update completed\n", fcn);
+	(void) devlink_dprintf(DBG_STEP, "%s: update completed\n", fcn);
 
 	return (0);
 }
@@ -1970,7 +2168,7 @@ di_devlink_init_impl(const char *root, const char *name, uint_t flags)
 		return (NULL);
 	}
 
-	(void) dprintf(DBG_INFO, "devlink_init_impl: success\n");
+	(void) devlink_dprintf(DBG_INFO, "devlink_init_impl: success\n");
 
 	return (devlink_snapshot(root));
 }
@@ -2000,7 +2198,7 @@ devlink_snapshot(const char *root_dir)
 
 	/*
 	 * We don't need to lock.  If a consumer wants the very latest db
-	 * then he must perform a di_devlink_init with the DI_MAKE_LINK
+	 * then it must perform a di_devlink_init with the DI_MAKE_LINK
 	 * flag to force a sync with devfsadm first.  Otherwise, the
 	 * current database file is opened and mmaped on demand: the rename
 	 * associated with a db update does not change the contents
@@ -2151,7 +2349,7 @@ cache_dev(struct di_devlink_handle *hdp)
 	assert(HDL_RDONLY(hdp));
 
 	if (hdp == NULL || !HDL_RDONLY(hdp)) {
-		dprintf(DBG_ERR, "cache_dev: invalid arg\n");
+		devlink_dprintf(DBG_ERR, "cache_dev: invalid arg\n");
 		return (-1);
 	}
 
@@ -2177,12 +2375,12 @@ walk_dev(struct di_devlink_handle *hdp, link_desc_t *linkp)
 	assert(HDL_RDONLY(hdp));
 
 	if (hdp == NULL || !HDL_RDONLY(hdp) || DB_OPEN(hdp)) {
-		dprintf(DBG_ERR, "walk_dev: invalid args\n");
+		devlink_dprintf(DBG_ERR, "walk_dev: invalid args\n");
 		return (-1);
 	}
 
 	if (CACHE_EMPTY(hdp) && cache_dev(hdp) != 0) {
-		dprintf(DBG_ERR, "walk_dev: /dev caching failed\n");
+		devlink_dprintf(DBG_ERR, "walk_dev: /dev caching failed\n");
 		return (-1);
 	}
 
@@ -2281,7 +2479,7 @@ walk_matching_links(struct di_devlink_handle *hdp, link_desc_t *linkp)
 	 */
 	for (;;) {
 		nidx = dmp ? dmp->link : DB_HDR(hdp)->dngl_idx;
-		for (; dlp = get_link(hdp, nidx); nidx = dlp->sib) {
+		for (; (dlp = get_link(hdp, nidx)) != NULL; nidx = dlp->sib) {
 			struct di_devlink vlink = {NULL};
 
 			vlink.rel_path = get_string(hdp, dlp->path);
@@ -2317,7 +2515,8 @@ visit_link(
 	 * but one of absolute or relative path must be set.
 	 */
 	if (vlp->rel_path == NULL && vlp->abs_path == NULL) {
-		(void) dprintf(DBG_ERR, "visit_link: invalid arguments\n");
+		(void) devlink_dprintf(DBG_ERR,
+		    "visit_link: invalid arguments\n");
 		return (DI_WALK_CONTINUE);
 	}
 
@@ -2395,7 +2594,7 @@ visit_link(
 	}
 
 	if (lstat(vlp->abs_path, &sbuf) < 0) {
-		dprintf(DBG_ERR, "visit_link: %s: lstat failed: %s\n",
+		devlink_dprintf(DBG_ERR, "visit_link: %s: lstat failed: %s\n",
 		    vlp->abs_path, strerror(errno));
 		return (DI_WALK_CONTINUE);
 	}
@@ -2546,13 +2745,13 @@ do_recurse(
 	 */
 	for (i = 0; i < N_SKIP_DIRS; i++) {
 		if (strcmp(rel, skip_dirs[i]) == 0) {
-			(void) dprintf(DBG_STEP, "do_recurse: skipping %s\n",
-			    dir);
+			(void) devlink_dprintf(DBG_STEP,
+			    "do_recurse: skipping %s\n", dir);
 			return (DI_WALK_CONTINUE);
 		}
 	}
 
-	(void) dprintf(DBG_STEP, "do_recurse: dir = %s\n", dir);
+	(void) devlink_dprintf(DBG_STEP, "do_recurse: dir = %s\n", dir);
 
 	if (finddev_readdir(dir, &handle) != 0)
 		return (DI_WALK_CONTINUE);
@@ -2576,7 +2775,7 @@ do_recurse(
 
 			rel = rel_path(hdp, cur);
 			if (rel == NULL || strcmp(rel, skip_files[i]) == 0) {
-				(void) dprintf(DBG_STEP,
+				(void) devlink_dprintf(DBG_STEP,
 				    "do_recurse: skipping %s\n", cur);
 				goto next_entry;
 			}
@@ -2588,12 +2787,13 @@ do_recurse(
 			} else if (S_ISLNK(sbuf.st_mode)) {
 				rv = rp->fcn(hdp, rp->data, cur);
 			} else {
-				(void) dprintf(DBG_STEP,
+				(void) devlink_dprintf(DBG_STEP,
 				    "do_recurse: Skipping entry: %s\n", cur);
 			}
 		} else {
-			(void) dprintf(DBG_ERR, "do_recurse: cur(%s): lstat"
-			    " failed: %s\n", cur, strerror(errno));
+			(void) devlink_dprintf(DBG_ERR,
+			    "do_recurse: cur(%s): lstat failed: %s\n",
+			    cur, strerror(errno));
 		}
 
 next_entry:
@@ -2617,8 +2817,8 @@ check_attr(uint32_t attr)
 		case A_SECONDARY:
 			return (1);
 		default:
-			dprintf(DBG_ERR, "check_attr: incorrect attr(%u)\n",
-			    attr);
+			devlink_dprintf(DBG_ERR,
+			    "check_attr: incorrect attr(%u)\n", attr);
 			return (0);
 	}
 }
@@ -2632,8 +2832,8 @@ attr2type(uint32_t attr)
 		case A_SECONDARY:
 			return (DI_SECONDARY_LINK);
 		default:
-			dprintf(DBG_ERR, "attr2type: incorrect attr(%u)\n",
-			    attr);
+			devlink_dprintf(DBG_ERR,
+			    "attr2type: incorrect attr(%u)\n", attr);
 			return (0);
 	}
 }
@@ -2873,8 +3073,8 @@ map_seg(
 	}
 
 	if (!VALID_INDEX(hdp, seg, idx)) {
-		(void) dprintf(DBG_ERR, "map_seg: seg(%d): invalid idx(%u)\n",
-		    seg, idx);
+		(void) devlink_dprintf(DBG_ERR,
+		    "map_seg: seg(%d): invalid idx(%u)\n", seg, idx);
 		return (NULL);
 	}
 
@@ -2884,7 +3084,8 @@ map_seg(
 	 */
 	if (DB_SEG(hdp, seg) != NULL) {
 		if (DB_SEG_PROT(hdp, seg) != prot) {
-			(void) dprintf(DBG_ERR, "map_seg: illegal access: "
+			(void) devlink_dprintf(DBG_ERR,
+			    "map_seg: illegal access: "
 			    "seg[%d]: idx=%u, seg_prot=%d, access=%d\n",
 			    seg, idx, DB_SEG_PROT(hdp, seg), prot);
 			return (NULL);
@@ -2903,20 +3104,21 @@ map_seg(
 
 	addr = mmap(0, slen, prot, MAP_SHARED, DB(hdp)->db_fd, off);
 	if (addr == MAP_FAILED) {
-		(void) dprintf(DBG_ERR, "map_seg: seg[%d]: mmap failed: %s\n",
-		    seg, strerror(errno));
-		(void) dprintf(DBG_ERR, "map_seg: args: len=%lu, prot=%d,"
-		    " fd=%d, off=%ld\n", (ulong_t)slen, prot, DB(hdp)->db_fd,
-		    off);
+		(void) devlink_dprintf(DBG_ERR,
+		    "map_seg: seg[%d]: mmap failed: %s\n", seg,
+		    strerror(errno));
+		(void) devlink_dprintf(DBG_ERR,
+		    "map_seg: args: len=%lu, prot=%d, fd=%d, off=%ld\n",
+		    (ulong_t)slen, prot, DB(hdp)->db_fd, off);
 		return (NULL);
 	}
 
 	DB_SEG(hdp, seg) = addr;
 	DB_SEG_PROT(hdp, seg) = prot;
 
-	(void) dprintf(DBG_STEP, "map_seg: seg[%d]: len=%lu, prot=%d, fd=%d, "
-	    "off=%ld, seg_base=%p\n", seg, (ulong_t)slen, prot, DB(hdp)->db_fd,
-	    off, (void *)addr);
+	(void) devlink_dprintf(DBG_STEP, "map_seg: seg[%d]: len=%lu, prot=%d, "
+	    "fd=%d, off=%ld, seg_base=%p\n", seg, (ulong_t)slen, prot,
+	    DB(hdp)->db_fd, off, (void *)addr);
 
 	return (DB_SEG(hdp, seg) + idx * elem_sizes[seg]);
 }
@@ -2969,9 +3171,9 @@ size_db(struct di_devlink_handle *hdp, long page_sz, uint32_t *count)
 	for (i = 0; i < DB_TYPES; i++) {
 		assert(count[i] >= 1);
 		sz += (((count[i] * elem_sizes[i]) / page_sz) + 1) * page_sz;
-		(void) dprintf(DBG_INFO, "N[%u]=%u\n", i, count[i]);
+		(void) devlink_dprintf(DBG_INFO, "N[%u]=%u\n", i, count[i]);
 	}
-	(void) dprintf(DBG_INFO, "DB size=%lu\n", (ulong_t)sz);
+	(void) devlink_dprintf(DBG_INFO, "DB size=%lu\n", (ulong_t)sz);
 
 	return (sz);
 }
@@ -3031,7 +3233,8 @@ static void
 count_string(const char *str, uint32_t *count)
 {
 	if (str == NULL) {
-		(void) dprintf(DBG_ERR, "count_string: NULL argument\n");
+		(void) devlink_dprintf(DBG_ERR,
+		    "count_string: NULL argument\n");
 		return;
 	}
 
@@ -3085,7 +3288,7 @@ enter_db_lock(struct di_devlink_handle *hdp, const char *root_dir)
 
 	get_db_path(hdp, DB_LOCK, lockfile, sizeof (lockfile));
 
-	dprintf(DBG_LCK, "enter_db_lock: %s BEGIN\n",
+	devlink_dprintf(DBG_LCK, "enter_db_lock: %s BEGIN\n",
 	    writer ? "update" : "snapshot");
 
 	/* Record locks are per-process. Protect against multiple threads. */
@@ -3106,7 +3309,8 @@ again:	if ((fd = open(lockfile,
 			/* If reader, signal once to get files created */
 			if (did_sync == 0) {
 				did_sync = 1;
-				dprintf(DBG_LCK, "enter_db_lock: %s OSYNC\n",
+				devlink_dprintf(DBG_LCK,
+				    "enter_db_lock: %s OSYNC\n",
 				    writer ? "update" : "snapshot");
 
 				/* signal to get files created */
@@ -3114,13 +3318,14 @@ again:	if ((fd = open(lockfile,
 				    DCA_DEVLINK_SYNC);
 				goto again;
 			}
-			dprintf(DBG_LCK, "enter_db_lock: %s OPENFAILD %s: "
-			    "WALK\n", writer ? "update" : "snapshot",
-			    strerror(errno));
+			devlink_dprintf(DBG_LCK,
+			    "enter_db_lock: %s OPENFAILD %s: WALK\n",
+			    writer ? "update" : "snapshot", strerror(errno));
 			(void) mutex_unlock(&update_mutex);
 			return (0);		/* success, but not locked */
 		} else {
-			dprintf(DBG_LCK, "enter_db_lock: %s OPENFAILD %s\n",
+			devlink_dprintf(DBG_LCK,
+			    "enter_db_lock: %s OPENFAILD %s\n",
 			    writer ? "update" : "snapshot", strerror(errno));
 			(void) mutex_unlock(&update_mutex);
 			return (-1);		/* failed */
@@ -3141,13 +3346,13 @@ again:	if ((fd = open(lockfile,
 
 	if (rv != -1) {
 		hdp->lock_fd = fd;
-		dprintf(DBG_LCK, "enter_db_lock: %s LOCKED\n",
+		devlink_dprintf(DBG_LCK, "enter_db_lock: %s LOCKED\n",
 		    writer ? "update" : "snapshot");
 		return (1);		/* success, locked */
 	}
 
 	(void) close(fd);
-	dprintf(DBG_ERR, "enter_db_lock: %s FAILED: %s: WALK\n",
+	devlink_dprintf(DBG_ERR, "enter_db_lock: %s FAILED: %s: WALK\n",
 	    writer ? "update" : "snapshot", strerror(errno));
 	(void) mutex_unlock(&update_mutex);
 	return (-1);
@@ -3171,10 +3376,10 @@ exit_db_lock(struct di_devlink_handle *hdp)
 	unlock.l_start = 0;
 	unlock.l_len = 0;
 
-	dprintf(DBG_LCK, "exit_db_lock : %s UNLOCKED\n",
+	devlink_dprintf(DBG_LCK, "exit_db_lock : %s UNLOCKED\n",
 	    writer ? "update" : "snapshot");
 	if (fcntl(hdp->lock_fd, F_SETLK, &unlock) == -1) {
-		dprintf(DBG_ERR, "exit_db_lock : %s failed: %s\n",
+		devlink_dprintf(DBG_ERR, "exit_db_lock : %s failed: %s\n",
 		    writer ? "update" : "snapshot", strerror(errno));
 	}
 
@@ -3243,7 +3448,7 @@ s_readlink(const char *link, char *buf, size_t blen)
 
 	return (0);
 bad:
-	dprintf(DBG_ERR, "s_readlink: %s: failed: %s\n",
+	devlink_dprintf(DBG_ERR, "s_readlink: %s: failed: %s\n",
 	    link, strerror(errno));
 	return (-1);
 }
@@ -3288,7 +3493,8 @@ devlink_create(const char *root, const char *name, int dca_devlink_flag)
 	do {
 		install = daemon_call(root, &dca);
 
-		dprintf(DBG_INFO, "daemon_call() retval=%d\n", dca.dca_error);
+		devlink_dprintf(DBG_INFO, "daemon_call() retval=%d\n",
+		    dca.dca_error);
 
 		/*
 		 * Retry only if door server isn't running
@@ -3311,7 +3517,7 @@ devlink_create(const char *root, const char *name, int dca_devlink_flag)
 	} while ((++i < MAX_DAEMON_ATTEMPTS) &&
 	    start_daemon(root, install) == 0);
 
-	dprintf(DBG_INFO, "devlink_create: can't start daemon\n");
+	devlink_dprintf(DBG_INFO, "devlink_create: can't start daemon\n");
 
 	assert(dca.dca_error == 0);
 
@@ -3365,7 +3571,7 @@ dca_init(const char *name, struct dca_off *dcp, int dca_flags)
 		return (-1);
 
 	dcp->dca_root = 0;
-	if (cp = strrchr(dcp->dca_name, ':')) {
+	if ((cp = strrchr(dcp->dca_name, ':')) != NULL) {
 		*cp++ = '\0';
 		dcp->dca_minor = cp - dcp->dca_name;
 	}
@@ -3381,7 +3587,7 @@ static int
 daemon_call(const char *root, struct dca_off *dcp)
 {
 	door_arg_t	arg;
-	int		fd, door_error;
+	int		fd, door_error = 0;
 	sigset_t	oset, nset;
 	char		synch_door[PATH_MAX];
 	struct stat	sb;
@@ -3439,14 +3645,14 @@ daemon_call(const char *root, struct dca_off *dcp)
 			dcp->dca_error = ENOTSUP;
 		else
 			dcp->dca_error = ENOENT;
-		dprintf(DBG_ERR, "stat failed: %s: no file or not root owned\n",
-		    synch_door);
+		devlink_dprintf(DBG_ERR,
+		    "stat failed: %s: no file or not root owned\n", synch_door);
 		return (install);
 	}
 
 	if ((fd = open(synch_door, O_RDONLY)) == -1) {
 		dcp->dca_error = errno;
-		dprintf(DBG_ERR, "open of %s failed: %s\n",
+		devlink_dprintf(DBG_ERR, "open of %s failed: %s\n",
 		    synch_door, strerror(errno));
 		return (install);
 	}
@@ -3559,15 +3765,15 @@ do_exec(const char *path, char *const argv[])
 	pid_t cpid;
 
 #ifdef	DEBUG
-	dprintf(DBG_INFO, "Executing %s\n\tArgument list:", path);
+	devlink_dprintf(DBG_INFO, "Executing %s\n\tArgument list:", path);
 	for (i = 0; argv[i] != NULL; i++) {
-		dprintf(DBG_INFO, " %s", argv[i]);
+		devlink_dprintf(DBG_INFO, " %s", argv[i]);
 	}
-	dprintf(DBG_INFO, "\n");
+	devlink_dprintf(DBG_INFO, "\n");
 #endif
 
 	if ((cpid = fork1()) == -1) {
-		dprintf(DBG_ERR, "fork1 failed: %s\n", strerror(errno));
+		devlink_dprintf(DBG_ERR, "fork1 failed: %s\n", strerror(errno));
 		return (-1);
 	}
 
@@ -3581,8 +3787,8 @@ do_exec(const char *path, char *const argv[])
 
 			(void) execv(path, argv);
 		} else {
-			dprintf(DBG_ERR, "open of /dev/null failed: %s\n",
-			    strerror(errno));
+			devlink_dprintf(DBG_ERR,
+			    "open of /dev/null failed: %s\n", strerror(errno));
 		}
 
 		_exit(-1);
@@ -3592,7 +3798,7 @@ do_exec(const char *path, char *const argv[])
 	if (waitpid(cpid, &i, 0) == cpid) {
 		if (WIFEXITED(i)) {
 			if (WEXITSTATUS(i) == 0) {
-				dprintf(DBG_STEP,
+				devlink_dprintf(DBG_STEP,
 				    "do_exec: child exited normally\n");
 				return (0);
 			} else
@@ -3603,10 +3809,11 @@ do_exec(const char *path, char *const argv[])
 			 */
 			errno = EINTR;
 		}
-		dprintf(DBG_ERR, "child terminated abnormally: %s\n",
+		devlink_dprintf(DBG_ERR, "child terminated abnormally: %s\n",
 		    strerror(errno));
 	} else {
-		dprintf(DBG_ERR, "waitpid failed: %s\n", strerror(errno));
+		devlink_dprintf(DBG_ERR, "waitpid failed: %s\n",
+		    strerror(errno));
 	}
 
 	return (-1);
@@ -3619,7 +3826,7 @@ walk_cache_links(di_devlink_handle_t hdp, cache_link_t *clp, link_desc_t *linkp)
 
 	assert(HDL_RDWR(hdp) || HDL_RDONLY(hdp));
 
-	dprintf(DBG_INFO, "walk_cache_links: initial link: %s\n",
+	devlink_dprintf(DBG_INFO, "walk_cache_links: initial link: %s\n",
 	    clp ? clp->path : "<NULL>");
 
 	/*
@@ -3640,7 +3847,7 @@ walk_cache_links(di_devlink_handle_t hdp, cache_link_t *clp, link_desc_t *linkp)
 
 			if (visit_link(hdp, linkp, &vlink)
 			    != DI_WALK_CONTINUE) {
-				dprintf(DBG_INFO, "walk_cache_links: "
+				devlink_dprintf(DBG_INFO, "walk_cache_links: "
 				    "terminating at link: %s\n", clp->path);
 				goto out;
 			}
@@ -3661,7 +3868,7 @@ walk_all_cache(di_devlink_handle_t hdp, link_desc_t *linkp)
 	int i;
 	cache_link_t *clp;
 
-	dprintf(DBG_INFO, "walk_all_cache: entered\n");
+	devlink_dprintf(DBG_INFO, "walk_all_cache: entered\n");
 
 	for (i = 0; i < CACHE(hdp)->hash_sz; i++) {
 		clp = CACHE_HASH(hdp, i);
@@ -3675,8 +3882,9 @@ walk_all_cache(di_devlink_handle_t hdp, link_desc_t *linkp)
 			vlink.type = attr2type(clp->attr);
 			if (visit_link(hdp, linkp, &vlink) !=
 			    DI_WALK_CONTINUE) {
-				dprintf(DBG_INFO, "walk_all_cache: terminating "
-				    "walk at link: %s\n", clp->path);
+				devlink_dprintf(DBG_INFO, "walk_all_cache: "
+				    "terminating walk at link: %s\n",
+				    clp->path);
 				return;
 			}
 		}
@@ -3693,7 +3901,7 @@ walk_cache_minor(di_devlink_handle_t hdp, const char *mpath, link_desc_t *linkp)
 	if ((cmnp = lookup_minor(hdp, mpath, NULL, TYPE_CACHE)) != NULL) {
 		(void) walk_cache_links(hdp, cmnp->link, linkp);
 	} else {
-		dprintf(DBG_ERR, "lookup minor failed: %s\n", mpath);
+		devlink_dprintf(DBG_ERR, "lookup minor failed: %s\n", mpath);
 	}
 }
 
@@ -3706,7 +3914,7 @@ walk_cache_node(di_devlink_handle_t hdp, const char *path, link_desc_t *linkp)
 	assert(path);
 
 	if ((cnp = lookup_node(hdp, (char *)path, TYPE_CACHE)) == NULL) {
-		dprintf(DBG_ERR, "lookup node failed: %s\n", path);
+		devlink_dprintf(DBG_ERR, "lookup node failed: %s\n", path);
 		return;
 	}
 
@@ -3730,7 +3938,7 @@ walk_cache_node(di_devlink_handle_t hdp, const char *path, link_desc_t *linkp)
  *		are selected.
  *		If neither flag is specified, all devlinks are selected.
  *
- * re		An extended regular expression in regex(5) format which
+ * re		An extended regular expression in regex(7) format which
  *		selects the /dev links to be returned. The regular
  *		expression should use link pathnames relative to
  *		/dev. i.e. without the leading "/dev/" prefix.
@@ -3738,11 +3946,11 @@ walk_cache_node(di_devlink_handle_t hdp, const char *path, link_desc_t *linkp)
  */
 int
 di_devlink_cache_walk(di_devlink_handle_t hdp,
-	const char *re,
-	const char *path,
-	uint_t flags,
-	void *arg,
-	int (*devlink_callback)(di_devlink_t, void *))
+    const char *re,
+    const char *path,
+    uint_t flags,
+    void *arg,
+    int (*devlink_callback)(di_devlink_t, void *))
 {
 	regex_t reg;
 	link_desc_t linkd = {NULL};
@@ -3837,7 +4045,7 @@ debug_print(debug_level_t msglevel, const char *fmt, va_list ap)
 /* ARGSUSED */
 /* PRINTFLIKE2 */
 void
-dprintf(debug_level_t msglevel, const char *fmt, ...)
+devlink_dprintf(debug_level_t msglevel, const char *fmt, ...)
 {
 	va_list ap;
 

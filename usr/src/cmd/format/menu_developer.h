@@ -27,15 +27,10 @@
 #ifndef	_MENU_DEVELOPER_H
 #define	_MENU_DEVELOPER_H
 
-#pragma ident	"%Z%%M%	%I%	%E% SMI"
-
 #ifdef	__cplusplus
 extern "C" {
 #endif
 
-/*
- *	Prototypes for ANSI
- */
 int	c_developer(void);
 int	dv_disk(void);
 int	dv_cont(void);

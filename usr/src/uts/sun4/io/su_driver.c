@@ -25,6 +25,8 @@
 /*
  * Copyright 2009 Sun Microsystems, Inc.  All rights reserved.
  * Use is subject to license terms.
+ * Copyright (c) 2016 by Delphix. All rights reserved.
+ * Copyright (c) 2019 Peter Tribble.
  */
 
 
@@ -199,9 +201,9 @@ int baudtable[] = {
 };
 
 static int asyopen(queue_t *rq, dev_t *dev, int flag, int sflag, cred_t *cr);
-static int asyclose(queue_t *q, int flag);
-static void asywput(queue_t *q, mblk_t *mp);
-static void asyrsrv(queue_t *q);
+static int asyclose(queue_t *q, int flag, cred_t *cr);
+static int asywput(queue_t *q, mblk_t *mp);
+static int asyrsrv(queue_t *q);
 
 struct module_info asy_info = {
 	0,
@@ -214,7 +216,7 @@ struct module_info asy_info = {
 
 static struct qinit asy_rint = {
 	putq,
-	(int (*)())asyrsrv,
+	asyrsrv,
 	asyopen,
 	asyclose,
 	NULL,
@@ -223,7 +225,7 @@ static struct qinit asy_rint = {
 };
 
 static struct qinit asy_wint = {
-	(int (*)())asywput,
+	asywput,
 	NULL,
 	NULL,
 	NULL,
@@ -245,7 +247,7 @@ static int asyprobe(dev_info_t *);
 static int asyattach(dev_info_t *, ddi_attach_cmd_t);
 static int asydetach(dev_info_t *, ddi_detach_cmd_t);
 
-static 	struct cb_ops cb_asy_ops = {
+static struct cb_ops cb_asy_ops = {
 	nodev,			/* cb_open */
 	nodev,			/* cb_close */
 	nodev,			/* cb_strategy */
@@ -361,8 +363,8 @@ asyprobe(dev_info_t *devi)
 
 	/*
 	 * Probe for the device:
-	 * 	Ser. int. uses bits 0,1,2; FIFO uses 3,6,7; 4,5 wired low.
-	 * 	If bit 4 or 5 appears on inb() ISR, board is not there.
+	 *	Ser. int. uses bits 0,1,2; FIFO uses 3,6,7; 4,5 wired low.
+	 *	If bit 4 or 5 appears on inb() ISR, board is not there.
 	 */
 	if (ddi_get8(handle, addr+ISR) & 0x30) {
 		ddi_regs_map_free(&handle);
@@ -380,7 +382,7 @@ asyprobe(dev_info_t *devi)
 static int
 asydetach(dev_info_t *devi, ddi_detach_cmd_t cmd)
 {
-	register int	instance;
+	int	instance;
 	struct asycom	*asy;
 	struct asyncline *async;
 	char		name[16];
@@ -471,7 +473,7 @@ asydetach(dev_info_t *devi, ddi_detach_cmd_t cmd)
 static int
 asyattach(dev_info_t *devi, ddi_attach_cmd_t cmd)
 {
-	register int	instance;
+	int	instance;
 	struct asycom	*asy;
 	struct asyncline *async;
 	char		name[40];
@@ -707,8 +709,7 @@ asyattach(dev_info_t *devi, ddi_attach_cmd_t cmd)
 		 * create the minor device for this node.
 		 */
 		if (ddi_create_minor_node(devi, "ssp", S_IFCHR,
-		    asy->asy_unit | RSC_DEVICE, DDI_PSEUDO, NULL)
-		    == DDI_FAILURE) {
+		    asy->asy_unit | RSC_DEVICE, DDI_PSEUDO, 0) == DDI_FAILURE) {
 			cmn_err(CE_WARN,
 			    "%s%d: Failed to create node rsc-console",
 			    ddi_get_name(devi), ddi_get_instance(devi));
@@ -730,7 +731,7 @@ asyattach(dev_info_t *devi, ddi_attach_cmd_t cmd)
 		 * serial instances.
 		 */
 		if (ddi_create_minor_node(devi, "lom-console", S_IFCHR,
-		    instance, DDI_NT_SERIAL_LOMCON, NULL) == DDI_FAILURE) {
+		    instance, DDI_NT_SERIAL_LOMCON, 0) == DDI_FAILURE) {
 			cmn_err(CE_WARN,
 			    "%s%d: Failed to create node lom-console",
 			    ddi_get_name(devi), ddi_get_instance(devi));
@@ -748,8 +749,7 @@ asyattach(dev_info_t *devi, ddi_attach_cmd_t cmd)
 		 * create the minor device for this node.
 		 */
 		if (ddi_create_minor_node(devi, "sspctl", S_IFCHR,
-		    asy->asy_unit | RSC_DEVICE, DDI_PSEUDO, NULL)
-		    == DDI_FAILURE) {
+		    asy->asy_unit | RSC_DEVICE, DDI_PSEUDO, 0) == DDI_FAILURE) {
 			cmn_err(CE_WARN, "%s%d: Failed to create rsc-control",
 			    ddi_get_name(devi), ddi_get_instance(devi));
 			goto error;
@@ -773,7 +773,7 @@ asyattach(dev_info_t *devi, ddi_attach_cmd_t cmd)
 			goto error;
 		}
 		asy->asy_flags |= ASY_IGNORE_CD;	/* ignore cd */
-		asy->asy_device_type = ASY_KEYBOARD; 	/* Device type */
+		asy->asy_device_type = ASY_KEYBOARD;	/* Device type */
 	} else if (ddi_getprop(DDI_DEV_T_ANY, devi, DDI_PROP_DONTPASS,
 	    "mouse", 0)) {
 		/*
@@ -795,14 +795,14 @@ asyattach(dev_info_t *devi, ddi_attach_cmd_t cmd)
 		/* serial-port */
 		(void) sprintf(name, "%c", (instance+'a'));
 		if (ddi_create_minor_node(devi, name, S_IFCHR, instance,
-		    DDI_NT_SERIAL_MB, NULL) == DDI_FAILURE) {
+		    DDI_NT_SERIAL_MB, 0) == DDI_FAILURE) {
 			goto error;
 		}
 		state = MINORNODE;
 		/* serial-port:dailout */
 		(void) sprintf(name, "%c,cu", (instance+'a'));
 		if (ddi_create_minor_node(devi, name, S_IFCHR, instance|OUTLINE,
-		    DDI_NT_SERIAL_MB_DO, NULL) == DDI_FAILURE) {
+		    DDI_NT_SERIAL_MB_DO, 0) == DDI_FAILURE) {
 			goto error;
 		}
 		/* Property for ignoring DCD */
@@ -876,11 +876,11 @@ error:
 
 static int
 asyinfo(dev_info_t *dip, ddi_info_cmd_t infocmd, void *arg,
-	void **result)
+    void **result)
 {
 	_NOTE(ARGUNUSED(dip))
-	register dev_t dev = (dev_t)arg;
-	register int instance, error;
+	dev_t dev = (dev_t)arg;
+	int instance, error;
 	struct asycom *asy;
 
 	if ((instance = UNIT(dev)) > max_asy_instance)
@@ -915,8 +915,8 @@ asyopen(queue_t *rq, dev_t *dev, int flag, int sflag, cred_t *cr)
 	struct asyncline *async;
 	int		mcr;
 	int		unit;
-	int 		len;
-	struct termios 	*termiosp;
+	int		len;
+	struct termios	*termiosp;
 
 #ifdef DEBUG
 	if (asydebug & ASY_DEBUG_CLOSE)
@@ -1106,7 +1106,7 @@ async_progress_check(void *arg)
  * Close routine.
  */
 static int
-asyclose(queue_t *q, int flag)
+asyclose(queue_t *q, int flag, cred_t *cr __unused)
 {
 	struct asyncline *async;
 	struct asycom	 *asy;
@@ -1143,7 +1143,7 @@ asyclose(queue_t *q, int flag)
 	 * write queue and there's a timer running, so we don't have to worry
 	 * about them.  For the untimed case, though, the user obviously made a
 	 * mistake, because these are handled immediately.  We'll terminate the
-	 * break now and honor his implicit request by discarding the rest of
+	 * break now and honor their implicit request by discarding the rest of
 	 * the data.
 	 */
 	if (!(async->async_flags & ASYNC_BREAK)) {
@@ -2375,7 +2375,7 @@ rv:
 	 * about an error- They do not track multiple errors. In fact,
 	 * you could consider them latched register bits if you like.
 	 * We are only interested in printing the error message once for
-	 * any cluster of overrun errrors.
+	 * any cluster of overrun errors.
 	 */
 	if (async->async_hw_overrun) {
 		if (async->async_flags & ASYNC_ISOPEN) {
@@ -2638,7 +2638,7 @@ async_nstart(struct asyncline *async, int mode)
 				 * Therefore, the wait period is:
 				 *
 				 * (#TSR bits + #THR bits) *
-				 * 	1 MICROSEC / baud rate
+				 *	1 MICROSEC / baud rate
 				 */
 				(void) timeout(async_restart, async,
 				    drv_usectohz(16 * MICROSEC /
@@ -3257,7 +3257,7 @@ async_ioctl(struct asyncline *async, queue_t *wq, mblk_t *mp, boolean_t iswput)
 	qreply(wq, mp);
 }
 
-static void
+static int
 asyrsrv(queue_t *q)
 {
 	mblk_t *bp;
@@ -3269,6 +3269,7 @@ asyrsrv(queue_t *q)
 		putnext(q, bp);
 	ASYSETSOFT(async->async_common);
 	async->async_polltid = 0;
+	return (0);
 }
 
 /*
@@ -3282,7 +3283,7 @@ asyrsrv(queue_t *q)
  * It expects that these functions are handled in upper module(s),
  * as we do in ldterm.
  */
-static void
+static int
 asywput(queue_t *q, mblk_t *mp)
 {
 	register struct asyncline *async;
@@ -3333,7 +3334,7 @@ asywput(queue_t *q, mblk_t *mp)
 			error = miocpullup(mp, sizeof (int));
 			if (error != 0) {
 				miocnak(q, mp, 0, error);
-				return;
+				return (0);
 			}
 
 			if (*(int *)mp->b_cont->b_rptr != 0) {
@@ -3497,6 +3498,7 @@ asywput(queue_t *q, mblk_t *mp)
 		freemsg(mp);
 		break;
 	}
+	return (0);
 }
 
 /*

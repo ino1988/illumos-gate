@@ -26,7 +26,8 @@
 #
 
 #
-# Copyright (c) 2012 by Delphix. All rights reserved.
+# Copyright (c) 2012, 2016 by Delphix. All rights reserved.
+# Copyright 2024 Jason King
 #
 
 . $STF_SUITE/include/libtest.shlib
@@ -46,25 +47,29 @@ verify_runnable "both"
 
 log_assert "Debugging features of zpool should succeed."
 
-log_must $ZPOOL -? > /dev/null 2>&1
+log_must zpool -? > /dev/null 2>&1
 
 if is_global_zone ; then
-	log_must $ZPOOL freeze $TESTPOOL
+	log_must zpool freeze $TESTPOOL
 else
-	log_mustnot $ZPOOL freeze $TESTPOOL
-	log_mustnot $ZPOOL freeze ${TESTPOOL%%/*}
+	log_mustnot zpool freeze $TESTPOOL
+	log_mustnot zpool freeze ${TESTPOOL%%/*}
 fi
 
-log_mustnot $ZPOOL freeze fakepool
+log_mustnot zpool freeze fakepool
+
+coreadm -p $TESTDIR/core.%f
+corefile=$TESTDIR/core.zpool
 
 # Remove corefile possibly left by previous failing run of this test.
-[[ -f core ]] && log_must rm -f core
+[[ -f $corefile ]] && log_must rm -f $corefile
 
 ZFS_ABORT=1; export ZFS_ABORT
-$ZPOOL > /dev/null 2>&1
+ulimit -c unlimited
+zpool > /dev/null 2>&1
 unset ZFS_ABORT
 
-[[ -f core ]] || log_fail "$ZPOOL did not dump core by request."
-[[ -f core ]] && log_must rm -f core
+[[ -f $corefile ]] || log_fail "zpool did not dump core by request."
+[[ -f $corefile ]] && log_must rm -f $corefile
 
 log_pass "Debugging features of zpool succeed."

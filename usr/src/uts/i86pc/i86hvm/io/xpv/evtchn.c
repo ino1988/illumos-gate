@@ -24,6 +24,10 @@
  * Use is subject to license terms.
  */
 
+/*
+ * Copyright (c) 2014 by Delphix. All rights reserved.
+ */
+
 #include <sys/types.h>
 #include <sys/xpv_support.h>
 #include <sys/hypervisor.h>
@@ -49,11 +53,7 @@ static volatile ulong_t *pending_events;
 static volatile ulong_t *masked_events;
 
 /* log2(NBBY * sizeof (ulong)) */
-#ifdef __amd64
 #define	EVTCHN_SHIFT	6
-#else /* __i386 */
-#define	EVTCHN_SHIFT	5
-#endif
 
 /* Atomically get and clear a ulong from memory. */
 #define	GET_AND_CLEAR(src, targ) {				\
@@ -268,7 +268,7 @@ again:
 		while (pending_word != 0) {
 			j = lowbit(pending_word) - 1;
 			port = (i << EVTCHN_SHIFT) + j;
-			pending_word = pending_word & ~(1 << j);
+			pending_word = pending_word & ~(1UL << j);
 
 			/*
 			 * If there is a handler registered for this event,

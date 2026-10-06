@@ -22,6 +22,7 @@
 # Copyright 2009 Sun Microsystems, Inc.  All rights reserved.
 # Use is subject to license terms.
 #
+# Copyright (c) 2018, Joyent, Inc.
 
 SBINPROG = gsscred
 
@@ -44,17 +45,20 @@ POFILES = generic.po
 
 ROOTBINPROG=		$(BINPROG:%=$(ROOTBIN)/%)
 
-COPTFLAG += $(XESS) $(INCDIRS) $(LIBPATH)
+COPTFLAG += $(INCDIRS) $(LIBPATH)
+
+# not linted
+SMATCH=off
 
 LDLIBS += -lgss
 
-$(GPROGS) := CPPFLAGS += -DSYSV -DSunOS=50 
+$(GPROGS) := CPPFLAGS += -DSYSV -DSunOS=50
 
 .KEEP_STATE:
 
 all: $(PROG)
 
-gsscred:	$(OBJS) 
+gsscred:	$(OBJS)
 	$(LINK.c) $(OBJS) -o $@ $(LDLIBS)
 	$(POST_PROCESS)
 
@@ -68,7 +72,7 @@ install: all $(DIRS) $(ROOTBINPROG) $(ROOTUSRSBIN)/gsscred
 
 install_h:
 
-clean: 
+clean:
 	$(RM) $(OBJS)
 	$(RM) $(PROG)
 

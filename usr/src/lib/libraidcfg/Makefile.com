@@ -23,8 +23,7 @@
 # Copyright 2008 Sun Microsystems, Inc.  All rights reserved.
 # Use is subject to license terms.
 #
-# lib/libraidcfg/Makefile.com
-#
+# Copyright (c) 2018, Joyent, Inc.
 
 LIBRARY =	libraidcfg.a
 VERS =		.1
@@ -32,14 +31,16 @@ OBJECTS =	raidcfg.o
 
 include ../../Makefile.lib
 
-LIBS =		$(DYNLIB) $(LINTLIB)
+LIBS =		$(DYNLIB)
 LDLIBS +=	-ldevinfo -lc
 
 SRCDIR =	../common
-$(LINTLIB):=	SRCS = $(LINTSRC:%=$(SRCDIR)/%)
 
 CFLAGS +=	$(CCVERBOSE)
 CERRWARN +=	-_gcc=-Wno-type-limits
+
+# not linted
+SMATCH=off
 
 .KEEP_STATE:
 
@@ -47,6 +48,5 @@ all: $(LIBS)
 
 SECLEVEL = standard
 
-lint: lintcheck
 
 include ../../Makefile.targ

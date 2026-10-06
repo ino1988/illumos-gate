@@ -21,6 +21,8 @@
 
 /*
  * Copyright (c) 2004, 2010, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2014 by Delphix. All rights reserved.
+ * Copyright 2018 Joyent, Inc.
  */
 
 #include <sys/types.h>
@@ -135,7 +137,7 @@ xen_flush_va(caddr_t va)
 	uint_t count;
 
 	if (IN_XPV_PANIC()) {
-		mmu_tlbflush_entry((caddr_t)va);
+		mmu_flush_tlb_page((uintptr_t)va);
 	} else {
 		t.cmd = MMUEXT_INVLPG_LOCAL;
 		t.arg1.linear_addr = (uintptr_t)va;
@@ -152,7 +154,7 @@ xen_gflush_va(caddr_t va, cpuset_t cpus)
 	uint_t count;
 
 	if (IN_XPV_PANIC()) {
-		mmu_tlbflush_entry((caddr_t)va);
+		mmu_flush_tlb_page((uintptr_t)va);
 		return;
 	}
 
@@ -475,7 +477,8 @@ htable_steal_active(hat_t *hat, uint_t cnt, uint_t threshold,
 				pte = x86pte_get(ht, e);
 				if (!PTE_ISVALID(pte))
 					continue;
-				hat_pte_unmap(ht, e, HAT_UNLOAD, pte, NULL);
+				hat_pte_unmap(ht, e, HAT_UNLOAD, pte, NULL,
+				    B_TRUE);
 			}
 
 			/*
@@ -568,7 +571,7 @@ htable_steal(uint_t cnt, boolean_t reap)
 	htable_t	*list = NULL;
 	htable_t	*ht;
 	uint_t		stolen = 0;
-	uint_t		pass;
+	uint_t		pass, passes;
 	uint_t		threshold;
 
 	/*
@@ -580,11 +583,26 @@ htable_steal(uint_t cnt, boolean_t reap)
 		htable_steal_passes = mmu.ptes_per_table;
 
 	/*
+	 * If we're stealing merely as part of kmem reaping (versus stealing
+	 * to assure forward progress), we don't want to actually steal any
+	 * active htables.  (Stealing active htables merely to give memory
+	 * back to the system can inadvertently kick off an htable crime wave
+	 * as active processes repeatedly steal htables from one another,
+	 * plummeting the system into a kind of HAT lawlessness that can
+	 * become so violent as to impede the one thing that can end it:  the
+	 * freeing of memory via ARC reclaim and other means.)  So if we're
+	 * reaping, we limit ourselves to the first pass that steals cached
+	 * htables that aren't in use -- which gives memory back, but averts
+	 * the entire breakdown of social order.
+	 */
+	passes = reap ? 0 : htable_steal_passes;
+
+	/*
 	 * Loop through all user hats. The 1st pass takes cached htables that
 	 * aren't in use. The later passes steal by removing mappings, too.
 	 */
 	atomic_inc_32(&htable_dont_cache);
-	for (pass = 0; pass <= htable_steal_passes && stolen < cnt; ++pass) {
+	for (pass = 0; pass <= passes && stolen < cnt; ++pass) {
 		threshold = pass * mmu.ptes_per_table / htable_steal_passes;
 
 		mutex_enter(&hat_list_lock);
@@ -603,11 +621,15 @@ htable_steal(uint_t cnt, boolean_t reap)
 			 * stale PTEs either here or under hat_unload() when we
 			 * steal and unload the same page table in competing
 			 * threads.
+			 *
+			 * We skip HATs that belong to CPUs, to make our lives
+			 * simpler.
 			 */
-			while (hat != NULL &&
-			    (hat->hat_flags &
-			    (HAT_VICTIM | HAT_SHARED | HAT_FREEING)) != 0)
+			while (hat != NULL && (hat->hat_flags &
+			    (HAT_VICTIM | HAT_SHARED | HAT_FREEING |
+			    HAT_PCP)) != 0) {
 				hat = hat->hat_next;
+			}
 
 			if (hat == NULL)
 				break;
@@ -649,9 +671,9 @@ htable_steal(uint_t cnt, boolean_t reap)
 				if (ht->ht_hat == NULL)
 					continue;
 				ASSERT(ht->ht_hat == hat);
-#if defined(__xpv) && defined(__amd64)
-				if (!(ht->ht_flags & HTABLE_VLP) &&
-				    ht->ht_level == mmu.max_level) {
+#if defined(__xpv)
+				ASSERT(!(ht->ht_flags & HTABLE_COPIED));
+				if (ht->ht_level == mmu.max_level) {
 					ptable_free(hat->hat_user_ptable);
 					hat->hat_user_ptable = PFN_INVALID;
 				}
@@ -761,7 +783,7 @@ htable_alloc(
 	htable_t	*shared)
 {
 	htable_t	*ht = NULL;
-	uint_t		is_vlp;
+	uint_t		is_copied;
 	uint_t		is_bare = 0;
 	uint_t		need_to_zero = 1;
 	int		kmflags = (can_steal_post_boot ? KM_NOSLEEP : KM_SLEEP);
@@ -769,8 +791,9 @@ htable_alloc(
 	if (level < 0 || level > TOP_LEVEL(hat))
 		panic("htable_alloc(): level %d out of range\n", level);
 
-	is_vlp = (hat->hat_flags & HAT_VLP) && level == VLP_LEVEL;
-	if (is_vlp || shared != NULL)
+	is_copied = (hat->hat_flags & HAT_COPIED) &&
+	    level == hat->hat_max_level;
+	if (is_copied || shared != NULL)
 		is_bare = 1;
 
 	/*
@@ -847,7 +870,7 @@ htable_alloc(
 			if (is_bare) {
 				ptable_free(ht->ht_pfn);
 				ht->ht_pfn = PFN_INVALID;
-#if defined(__xpv) && defined(__amd64)
+#if defined(__xpv)
 			/*
 			 * make stolen page table writable again in kpm
 			 */
@@ -868,7 +891,7 @@ htable_alloc(
 	if (ht == NULL)
 		panic("htable_alloc(): couldn't steal\n");
 
-#if defined(__amd64) && defined(__xpv)
+#if defined(__xpv)
 	/*
 	 * Under the 64-bit hypervisor, we have 2 top level page tables.
 	 * If this allocation fails, we'll resort to stealing.
@@ -912,10 +935,10 @@ htable_alloc(
 	}
 
 	/*
-	 * setup flags, etc. for VLP htables
+	 * setup flags, etc. for copied page tables.
 	 */
-	if (is_vlp) {
-		ht->ht_flags |= HTABLE_VLP;
+	if (is_copied) {
+		ht->ht_flags |= HTABLE_COPIED;
 		ASSERT(ht->ht_pfn == PFN_INVALID);
 		need_to_zero = 0;
 	}
@@ -937,7 +960,7 @@ htable_alloc(
 	if (need_to_zero)
 		x86pte_zero(ht, 0, mmu.ptes_per_table);
 
-#if defined(__amd64) && defined(__xpv)
+#if defined(__xpv)
 	if (!is_bare && kpm_vbase) {
 		(void) xen_kpm_page(ht->ht_pfn, PT_VALID);
 		if (level == mmu.max_level)
@@ -966,7 +989,7 @@ htable_free(htable_t *ht)
 	    !(ht->ht_flags & HTABLE_SHARED_PFN) &&
 	    (use_boot_reserve ||
 	    (!(hat->hat_flags & HAT_FREEING) && !htable_dont_cache))) {
-		ASSERT((ht->ht_flags & HTABLE_VLP) == 0);
+		ASSERT((ht->ht_flags & HTABLE_COPIED) == 0);
 		ASSERT(ht->ht_pfn != PFN_INVALID);
 		hat_enter(hat);
 		ht->ht_next = hat->hat_ht_cached;
@@ -981,9 +1004,9 @@ htable_free(htable_t *ht)
 	 */
 	if (ht->ht_flags & HTABLE_SHARED_PFN) {
 		ASSERT(ht->ht_pfn != PFN_INVALID);
-	} else if (!(ht->ht_flags & HTABLE_VLP)) {
+	} else if (!(ht->ht_flags & HTABLE_COPIED)) {
 		ptable_free(ht->ht_pfn);
-#if defined(__amd64) && defined(__xpv)
+#if defined(__xpv)
 		if (ht->ht_level == mmu.max_level && hat != NULL) {
 			ptable_free(hat->hat_user_ptable);
 			hat->hat_user_ptable = PFN_INVALID;
@@ -1093,15 +1116,15 @@ unlink_ptp(htable_t *higher, htable_t *old, uintptr_t vaddr)
 		    found, expect);
 
 	/*
-	 * When a top level VLP page table entry changes, we must issue
-	 * a reload of cr3 on all processors.
+	 * When a top level PTE changes for a copied htable, we must trigger a
+	 * hat_pcp_update() on all HAT CPUs.
 	 *
-	 * If we don't need do do that, then we still have to INVLPG against
-	 * an address covered by the inner page table, as the latest processors
+	 * If we don't need do do that, then we still have to INVLPG against an
+	 * address covered by the inner page table, as the latest processors
 	 * have TLB-like caches for non-leaf page table entries.
 	 */
 	if (!(hat->hat_flags & HAT_FREEING)) {
-		hat_tlb_inval(hat, (higher->ht_flags & HTABLE_VLP) ?
+		hat_tlb_inval(hat, (higher->ht_flags & HTABLE_COPIED) ?
 		    DEMAP_ALL_ADDR : old->ht_vaddr);
 	}
 
@@ -1130,15 +1153,12 @@ link_ptp(htable_t *higher, htable_t *new, uintptr_t vaddr)
 		panic("HAT: ptp not 0, found=" FMT_PTE, found);
 
 	/*
-	 * When any top level VLP page table entry changes, we must issue
-	 * a reload of cr3 on all processors using it.
+	 * When a top level PTE changes for a copied htable, we must trigger a
+	 * hat_pcp_update() on all HAT CPUs.
+	 *
 	 * We also need to do this for the kernel hat on PAE 32 bit kernel.
 	 */
-	if (
-#ifdef __i386
-	    (higher->ht_hat == kas.a_hat && higher->ht_level == VLP_LEVEL) ||
-#endif
-	    (higher->ht_flags & HTABLE_VLP))
+	if ((higher->ht_flags & HTABLE_COPIED) != 0)
 		hat_tlb_inval(higher->ht_hat, DEMAP_ALL_ADDR);
 }
 
@@ -1272,14 +1292,13 @@ htable_lookup(hat_t *hat, uintptr_t vaddr, level_t level)
 	ASSERT(level <= TOP_LEVEL(hat));
 
 	if (level == TOP_LEVEL(hat)) {
-#if defined(__amd64)
 		/*
 		 * 32 bit address spaces on 64 bit kernels need to check
 		 * for overflow of the 32 bit address space
 		 */
-		if ((hat->hat_flags & HAT_VLP) && vaddr >= ((uint64_t)1 << 32))
+		if ((hat->hat_flags & HAT_COPIED_32) &&
+		    vaddr >= ((uint64_t)1 << 32))
 			return (NULL);
-#endif
 		base = 0;
 	} else {
 		base = vaddr & LEVEL_MASK(level + 1);
@@ -1356,6 +1375,7 @@ htable_create(
 	if (level < 0 || level > TOP_LEVEL(hat))
 		panic("htable_create(): level %d out of range\n", level);
 
+	ht = NULL;
 	/*
 	 * Create the page tables in top down order.
 	 */
@@ -1523,16 +1543,12 @@ htable_attach(
 		if (offset > kernelbase)
 			offset -= kernelbase;
 		offset <<= MMU_PAGESHIFT;
-#if defined(__amd64)
 		offset += mmu.hole_start;	/* something in VA hole */
-#else
-		offset += 1ULL << 40;		/* something > 4 Gig */
-#endif
 		ASSERT(page_exists(&kvp, offset) == NULL);
 		(void) page_hashin(pp, &kvp, offset, NULL);
 	}
 	page_downgrade(pp);
-#if defined(__xpv) && defined(__amd64)
+#if defined(__xpv)
 	/*
 	 * Record in the page_t that is a pagetable for segkpm setup.
 	 */
@@ -1628,13 +1644,11 @@ htable_scan(htable_t *ht, uintptr_t *vap, uintptr_t eaddr)
 		found_pte = GET_PTE((x86pte_t *)pte_ptr);
 	x86pte_release_pagetable(ht);
 
-#if defined(__amd64)
 	/*
 	 * deal with VA hole on amd64
 	 */
 	if (l == mmu.max_level && va >= mmu.hole_start && va <= mmu.hole_end)
 		va = mmu.hole_end + va - mmu.hole_start;
-#endif /* __amd64 */
 
 	*vap = va;
 	return (found_pte);
@@ -1712,8 +1726,6 @@ htable_walk(
 	}
 
 	while (va < eaddr && va >= *vaddr) {
-		ASSERT(!IN_VA_HOLE(va));
-
 		/*
 		 *  Find lowest table with any entry for given address.
 		 */
@@ -1722,6 +1734,7 @@ htable_walk(
 			if (ht != NULL) {
 				pte = htable_scan(ht, &va, eaddr);
 				if (PTE_ISPAGE(pte, l)) {
+					VERIFY(!IN_VA_HOLE(va));
 					*vaddr = va;
 					*htp = ht;
 					return (pte);
@@ -1817,11 +1830,7 @@ htable_init()
 	 * To save on kernel VA usage, we avoid debug information in 32 bit
 	 * kernels.
 	 */
-#if defined(__amd64)
 	int	kmem_flags = KMC_NOHASH;
-#elif defined(__i386)
-	int	kmem_flags = KMC_NOHASH | KMC_NODEBUG;
-#endif
 
 	/*
 	 * initialize kmem caches
@@ -1860,10 +1869,8 @@ htable_e2va(htable_t *ht, uint_t entry)
 	/*
 	 * Need to skip over any VA hole in top level table
 	 */
-#if defined(__amd64)
 	if (ht->ht_level == mmu.max_level && va >= mmu.hole_start)
 		va += ((mmu.hole_end - mmu.hole_start) + 1);
-#endif
 
 	return (va);
 }
@@ -1897,26 +1904,6 @@ x86pte_cpu_fini(cpu_t *cpu)
 	cpu->cpu_hat_info = NULL;
 }
 
-#ifdef __i386
-/*
- * On 32 bit kernels, loading a 64 bit PTE is a little tricky
- */
-x86pte_t
-get_pte64(x86pte_t *ptr)
-{
-	volatile uint32_t *p = (uint32_t *)ptr;
-	x86pte_t t;
-
-	ASSERT(mmu.pae_hat != 0);
-	for (;;) {
-		t = p[0];
-		t |= (uint64_t)p[1] << 32;
-		if ((t & 0xffffffff) == p[0])
-			return (t);
-	}
-}
-#endif /* __i386 */
-
 /*
  * Disable preemption and establish a mapping to the pagetable with the
  * given pfn. This is optimized for there case where it's the same
@@ -1926,10 +1913,12 @@ static x86pte_t *
 x86pte_access_pagetable(htable_t *ht, uint_t index)
 {
 	/*
-	 * VLP pagetables are contained in the hat_t
+	 * HTABLE_COPIED pagetables are contained in the hat_t
 	 */
-	if (ht->ht_flags & HTABLE_VLP)
-		return (PT_INDEX_PTR(ht->ht_hat->hat_vlp_ptes, index));
+	if (ht->ht_flags & HTABLE_COPIED) {
+		ASSERT3U(index, <, ht->ht_hat->hat_num_copied);
+		return (PT_INDEX_PTR(ht->ht_hat->hat_copied_ptes, index));
+	}
 	return (x86pte_mapin(ht->ht_pfn, index, ht));
 }
 
@@ -1962,7 +1951,10 @@ x86pte_mapin(pfn_t pfn, uint_t index, htable_t *ht)
 	 * Disable preemption and grab the CPU's hci_mutex
 	 */
 	kpreempt_disable();
+
 	ASSERT(CPU->cpu_hat_info != NULL);
+	ASSERT(!(getcr4() & CR4_PCIDE));
+
 	mutex_enter(&CPU->cpu_hat_info->hci_mutex);
 	x = PWIN_TABLE(CPU->cpu_id);
 	pteptr = (x86pte_t *)PWIN_PTE_VA(x);
@@ -1997,7 +1989,7 @@ x86pte_mapin(pfn_t pfn, uint_t index, htable_t *ht)
 			else
 				*(x86pte32_t *)pteptr = newpte;
 			XPV_DISALLOW_PAGETABLE_UPDATES();
-			mmu_tlbflush_entry((caddr_t)(PWIN_VA(x)));
+			mmu_flush_tlb_kpage((uintptr_t)PWIN_VA(x));
 		}
 	}
 	return (PT_INDEX_PTR(PWIN_VA(x), index));
@@ -2009,10 +2001,7 @@ x86pte_mapin(pfn_t pfn, uint_t index, htable_t *ht)
 static void
 x86pte_release_pagetable(htable_t *ht)
 {
-	/*
-	 * nothing to do for VLP htables
-	 */
-	if (ht->ht_flags & HTABLE_VLP)
+	if (ht->ht_flags & HTABLE_COPIED)
 		return;
 
 	x86pte_mapout();
@@ -2113,7 +2102,7 @@ x86pte_set(htable_t *ht, uint_t entry, x86pte_t new, void *ptr)
 				xen_flush_va((caddr_t)addr);
 			else
 #endif
-				mmu_tlbflush_entry((caddr_t)addr);
+				mmu_flush_tlb_page(addr);
 			goto done;
 		}
 
@@ -2172,12 +2161,11 @@ x86pte_cas(htable_t *ht, uint_t entry, x86pte_t old, x86pte_t new)
 	maddr_t ma;
 
 	if (!IN_XPV_PANIC()) {
-		ASSERT(!(ht->ht_flags & HTABLE_VLP));	/* no VLP yet */
+		ASSERT(!(ht->ht_flags & HTABLE_COPIED));
 		ma = pa_to_ma(PT_INDEX_PHYSADDR(pfn_to_pa(ht->ht_pfn), entry));
 		t[0].ptr = ma | MMU_NORMAL_PT_UPDATE;
 		t[0].val = new;
 
-#if defined(__amd64)
 		/*
 		 * On the 64-bit hypervisor we need to maintain the user mode
 		 * top page table too.
@@ -2189,7 +2177,6 @@ x86pte_cas(htable_t *ht, uint_t entry, x86pte_t old, x86pte_t new)
 			t[1].val = new;
 			++cnt;
 		}
-#endif	/* __amd64 */
 
 		if (HYPERVISOR_mmu_update(t, cnt, &count, DOMID_SELF))
 			panic("HYPERVISOR_mmu_update() failed");
@@ -2209,14 +2196,17 @@ x86pte_cas(htable_t *ht, uint_t entry, x86pte_t old, x86pte_t new)
  * Invalidate a page table entry as long as it currently maps something that
  * matches the value determined by expect.
  *
- * Also invalidates any TLB entries and returns the previous value of the PTE.
+ * If tlb is set, also invalidates any TLB entries.
+ *
+ * Returns the previous value of the PTE.
  */
 x86pte_t
 x86pte_inval(
 	htable_t *ht,
 	uint_t entry,
 	x86pte_t expect,
-	x86pte_t *pte_ptr)
+	x86pte_t *pte_ptr,
+	boolean_t tlb)
 {
 	x86pte_t	*ptep;
 	x86pte_t	oldpte;
@@ -2265,7 +2255,7 @@ x86pte_inval(
 		found = CAS_PTE(ptep, oldpte, 0);
 		XPV_DISALLOW_PAGETABLE_UPDATES();
 	} while (found != oldpte);
-	if (oldpte & (PT_REF | PT_MOD))
+	if (tlb && (oldpte & (PT_REF | PT_MOD)))
 		hat_tlb_inval(ht->ht_hat, htable_e2va(ht, entry));
 
 done:
@@ -2326,7 +2316,7 @@ x86pte_update(
 /*
  * Copy page tables - this is just a little more complicated than the
  * previous routines. Note that it's also not atomic! It also is never
- * used for VLP pagetables.
+ * used for HTABLE_COPIED pagetables.
  */
 void
 x86pte_copy(htable_t *src, htable_t *dest, uint_t entry, uint_t count)
@@ -2338,8 +2328,8 @@ x86pte_copy(htable_t *src, htable_t *dest, uint_t entry, uint_t count)
 	x86pte_t pte;
 
 	ASSERT(khat_running);
-	ASSERT(!(dest->ht_flags & HTABLE_VLP));
-	ASSERT(!(src->ht_flags & HTABLE_VLP));
+	ASSERT(!(dest->ht_flags & HTABLE_COPIED));
+	ASSERT(!(src->ht_flags & HTABLE_COPIED));
 	ASSERT(!(src->ht_flags & HTABLE_SHARED_PFN));
 	ASSERT(!(dest->ht_flags & HTABLE_SHARED_PFN));
 
@@ -2353,6 +2343,8 @@ x86pte_copy(htable_t *src, htable_t *dest, uint_t entry, uint_t count)
 	} else {
 		uint_t x = PWIN_SRC(CPU->cpu_id);
 
+		ASSERT(!(getcr4() & CR4_PCIDE));
+
 		/*
 		 * Finish defining the src pagetable mapping
 		 */
@@ -2363,7 +2355,7 @@ x86pte_copy(htable_t *src, htable_t *dest, uint_t entry, uint_t count)
 			*pteptr = pte;
 		else
 			*(x86pte32_t *)pteptr = pte;
-		mmu_tlbflush_entry((caddr_t)(PWIN_VA(x)));
+		mmu_flush_tlb_kpage((uintptr_t)PWIN_VA(x));
 	}
 
 	/*
@@ -2397,13 +2389,11 @@ x86pte_copy(htable_t *src, htable_t *dest, uint_t entry, uint_t count)
 		if (pte != 0) {
 			set_pteval(pfn_to_pa(dest->ht_pfn), entry,
 			    dest->ht_level, pte);
-#ifdef __amd64
 			if (dest->ht_level == mmu.max_level &&
 			    htable_e2va(dest, entry) < HYPERVISOR_VIRT_END)
 				set_pteval(
 				    pfn_to_pa(dest->ht_hat->hat_user_ptable),
 				    entry, dest->ht_level, pte);
-#endif
 		}
 		--count;
 		++entry;
@@ -2422,7 +2412,7 @@ x86pte_zero(htable_t *dest, uint_t entry, uint_t count)
 	caddr_t dst_va;
 	size_t size;
 #ifdef __xpv
-	int x;
+	int x = 0;
 	x86pte_t newpte;
 #endif
 
@@ -2430,7 +2420,7 @@ x86pte_zero(htable_t *dest, uint_t entry, uint_t count)
 	 * Map in the page table to be zeroed.
 	 */
 	ASSERT(!(dest->ht_flags & HTABLE_SHARED_PFN));
-	ASSERT(!(dest->ht_flags & HTABLE_VLP));
+	ASSERT(!(dest->ht_flags & HTABLE_COPIED));
 
 	/*
 	 * On the hypervisor we don't use x86pte_access_pagetable() since
@@ -2451,12 +2441,7 @@ x86pte_zero(htable_t *dest, uint_t entry, uint_t count)
 
 	size = count << mmu.pte_size_shift;
 	ASSERT(size > BLOCKZEROALIGN);
-#ifdef __i386
-	if (!is_x86_feature(x86_featureset, X86FSET_SSE2))
-		bzero(dst_va, size);
-	else
-#endif
-		block_zero_no_xmm(dst_va, size);
+	block_zero_no_xmm(dst_va, size);
 
 #ifdef __xpv
 	if (kpm_vbase == NULL) {
@@ -2484,7 +2469,7 @@ hat_dump(void)
 	for (hat = kas.a_hat; hat != NULL; hat = hat->hat_next) {
 		for (h = 0; h < hat->hat_num_hash; ++h) {
 			for (ht = hat->hat_ht_hash[h]; ht; ht = ht->ht_next) {
-				if ((ht->ht_flags & HTABLE_VLP) == 0)
+				if ((ht->ht_flags & HTABLE_COPIED) == 0)
 					dump_page(ht->ht_pfn);
 			}
 		}

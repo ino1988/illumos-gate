@@ -25,6 +25,12 @@
  */
 
 /*
+ * Copyright (c) 2014 by Delphix. All rights reserved.
+ * Copyright 2018 Nexenta Systems, Inc.
+ * Copyright 2023 Oxide Computer Company
+ */
+
+/*
  * Xen virtual device driver interfaces
  */
 
@@ -146,8 +152,10 @@ typedef struct xd_cfg {
 #define	XD_DOM_ALL	(XD_DOM_ZERO | XD_DOM_GUEST)
 
 static i_xd_cfg_t xdci[] = {
+#ifndef XPV_HVM_DRIVER
 	{ XEN_CONSOLE, NULL, NULL, NULL, "xencons", NULL,
 	    "console", IPL_CONS, XD_DOM_ALL, },
+#endif
 
 	{ XEN_VNET, "vif", "device/vif", "backend/vif", "xnf", "xnb",
 	    "network", IPL_VIF, XD_DOM_ALL, },
@@ -158,6 +166,7 @@ static i_xd_cfg_t xdci[] = {
 	{ XEN_BLKTAP, "tap", NULL, "backend/tap", NULL, "xpvtap",
 	    "block", IPL_VBD, XD_DOM_ALL, },
 
+#ifndef XPV_HVM_DRIVER
 	{ XEN_XENBUS, NULL, NULL, NULL, "xenbus", NULL,
 	    NULL, 0, XD_DOM_ALL, },
 
@@ -166,6 +175,7 @@ static i_xd_cfg_t xdci[] = {
 
 	{ XEN_BALLOON, NULL, NULL, NULL, "balloon", NULL,
 	    NULL, 0, XD_DOM_ALL, },
+#endif
 
 	{ XEN_EVTCHN, NULL, NULL, NULL, "evtchn", NULL,
 	    NULL, 0, XD_DOM_ZERO, },
@@ -244,7 +254,7 @@ xvdi_init_dev(dev_info_t *dip)
 	char *xsname;
 	void *prop_str;
 	unsigned int prop_len;
-	char unitaddr[8];
+	char unitaddr[16];
 
 	devcls = ddi_prop_get_int(DDI_DEV_T_ANY, dip,
 	    DDI_PROP_DONTPASS, "devclass", XEN_INVAL);
@@ -325,7 +335,7 @@ xvdi_init_dev(dev_info_t *dip)
 	 * of the xenstore node containing the device configuration
 	 * and is contained in the 'vdev' property.
 	 * VIF devices are named using an incrementing integer.
-	 * VBD devices are either named using the 16-bit dev_t value
+	 * VBD devices are either named using the 32-bit dev_t value
 	 * for linux 'hd' and 'xvd' devices, or a simple integer value
 	 * in the range 0..767.  768 is the base value of the linux
 	 * dev_t namespace, the dev_t value for 'hda'.
@@ -580,7 +590,7 @@ errout2:
 	/* unmap ring page */
 	unmapop.host_addr = (uint64_t)(uintptr_t)ringva;
 	unmapop.handle = ring->xr_grant_hdl;
-	unmapop.dev_bus_addr = NULL;
+	unmapop.dev_bus_addr = 0;
 	(void) HYPERVISOR_grant_table_op(GNTTABOP_unmap_grant_ref, &unmapop, 1);
 	hat_release_mapping(kas.a_hat, ringva);
 errout1:
@@ -603,7 +613,7 @@ xvdi_unmap_ring(xendev_ring_t *ring)
 	impl_acc_hdl_free(ring->xr_acc_hdl);
 	unmapop.host_addr = (uint64_t)(uintptr_t)ring->xr_vaddr;
 	unmapop.handle = ring->xr_grant_hdl;
-	unmapop.dev_bus_addr = NULL;
+	unmapop.dev_bus_addr = 0;
 	(void) HYPERVISOR_grant_table_op(GNTTABOP_unmap_grant_ref, &unmapop, 1);
 	hat_release_mapping(kas.a_hat, ring->xr_vaddr);
 	vmem_xfree(heap_arena, ring->xr_vaddr, PAGESIZE);
@@ -836,19 +846,17 @@ xendev_enum_class(dev_info_t *parent, xendev_devclass_t devclass)
 		return;
 
 	if (xdcp->xsdev == NULL) {
-		int circ;
-
 		/*
 		 * Don't need to probe this kind of device from the
 		 * store, just create one if it doesn't exist.
 		 */
 
-		ndi_devi_enter(parent, &circ);
+		ndi_devi_enter(parent);
 		if (xvdi_find_dev(parent, devclass, DOMID_SELF, VDEV_NOXS)
 		    == NULL)
 			(void) xvdi_create_dev(parent, devclass,
 			    DOMID_SELF, VDEV_NOXS);
-		ndi_devi_exit(parent, circ);
+		ndi_devi_exit(parent);
 	} else {
 		/*
 		 * Probe this kind of device from the store, both
@@ -1744,8 +1752,7 @@ xvdi_post_event(dev_info_t *dip, xendev_hotplug_cmd_t hpc)
 	}
 
 failure:
-	if (attr_list != NULL)
-		nvlist_free(attr_list);
+	nvlist_free(attr_list);
 
 	return (err);
 }
@@ -1842,7 +1849,7 @@ i_xvdi_enum_worker(dev_info_t *parent, i_xd_cfg_t *xdcp,
 	char *path, *domain_path, *ep;
 	char **devices;
 	unsigned int ndevices;
-	int ldevices, j, circ;
+	int ldevices, j;
 	domid_t dom;
 	long tmplong;
 
@@ -1868,13 +1875,13 @@ i_xvdi_enum_worker(dev_info_t *parent, i_xd_cfg_t *xdcp,
 		(void) ddi_strtol(devices[j], &ep, 0, &tmplong);
 		vdev = tmplong;
 
-		ndi_devi_enter(parent, &circ);
+		ndi_devi_enter(parent);
 
 		if (xvdi_find_dev(parent, xdcp->devclass, dom, vdev) == NULL)
 			(void) xvdi_create_dev(parent, xdcp->devclass,
 			    dom, vdev);
 
-		ndi_devi_exit(parent, circ);
+		ndi_devi_exit(parent);
 	}
 	kmem_free(devices, ldevices);
 }
@@ -2333,7 +2340,7 @@ i_xvdi_probe_path_handler(void *arg)
 {
 	dev_info_t *parent;
 	char *path = arg, *p = NULL;
-	int i, vdev, circ;
+	int i, vdev;
 	i_xd_cfg_t *xdcp;
 	boolean_t frontend;
 	domid_t dom;
@@ -2398,7 +2405,7 @@ i_xvdi_probe_path_handler(void *arg)
 	parent = xendev_dip;
 	ASSERT(parent != NULL);
 
-	ndi_devi_enter(parent, &circ);
+	ndi_devi_enter(parent);
 
 	if (xvdi_find_dev(parent, xdcp->devclass, dom, vdev) == NULL) {
 		XVDI_DPRINTF(XVDI_DBG_PROBE,
@@ -2409,7 +2416,7 @@ i_xvdi_probe_path_handler(void *arg)
 		    "i_xvdi_probe_path_handler: %s already exists", path);
 	}
 
-	ndi_devi_exit(parent, circ);
+	ndi_devi_exit(parent);
 
 done:
 	kmem_free(path, strlen(path) + 1);

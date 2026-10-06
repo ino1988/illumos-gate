@@ -20,6 +20,7 @@
  */
 /*
  * Copyright (c) 2007, 2010, Oracle and/or its affiliates. All rights reserved.
+ * Copyright 2018 Nexenta Systems, Inc.  All rights reserved.
  */
 
 /*
@@ -39,12 +40,10 @@
 
 
 int
-init_mapping_system()
+init_mapping_system(void)
 {
 	int rc = 0;
 
-	if (rwlock_init(&_idmapdstate.rwlk_cfg, USYNC_THREAD, NULL) != 0)
-		return (-1);
 	if ((rc = load_config()) < 0)
 		return (rc);
 
@@ -61,13 +60,13 @@ init_mapping_system()
 }
 
 void
-fini_mapping_system()
+fini_mapping_system(void)
 {
 	fini_dbs();
 }
 
 int
-load_config()
+load_config(void)
 {
 	int rc;
 	if ((_idmapdstate.cfg = idmap_cfg_init()) == NULL) {
@@ -107,7 +106,7 @@ load_config()
 
 
 void
-reload_gcs()
+reload_gcs(void)
 {
 	int		i, j;
 	adutils_ad_t	**new_gcs;
@@ -119,8 +118,12 @@ reload_gcs()
 	int		num_trustfor = pgcfg->num_trusted_forests;
 	ad_disc_domainsinforest_t *domain_in_forest;
 
-	if (pgcfg->domain_name == NULL) {
-		/* No domain name specified - workgroup mode. */
+	if (pgcfg->use_ads == B_FALSE ||
+	    pgcfg->domain_name == NULL) {
+		/*
+		 * ADS disabled, or no domain name specified.
+		 * Not using adutils. (but still can use lsa)
+		 */
 		new_gcs = NULL;
 		new_num_gcs = 0;
 		goto out;
@@ -134,7 +137,7 @@ reload_gcs()
 		 * If that stops working we'll go into degraded mode anyways
 		 * when it does.
 		 */
-		degrade_svc(0,
+		idmapdlog(LOG_INFO,
 		    "Global Catalog servers not configured/discoverable");
 		return;
 	}
@@ -237,7 +240,6 @@ out:
  * domains in other forests.  However, we don't yet discover any DCs other
  * than the DCs for the joined domain.
  */
-static
 void
 reload_dcs(void)
 {
@@ -248,8 +250,12 @@ reload_dcs(void)
 	int		old_num_dcs = _idmapdstate.num_dcs;
 	idmap_pg_config_t *pgcfg = &_idmapdstate.cfg->pgcfg;
 
-	if (pgcfg->domain_name == NULL) {
-		/* No domain name specified - workgroup mode. */
+	if (pgcfg->use_ads == B_FALSE ||
+	    pgcfg->domain_name == NULL) {
+		/*
+		 * ADS disabled, or no domain name specified.
+		 * Not using adutils. (but still can use lsa)
+		 */
 		new_dcs = NULL;
 		new_num_dcs = 0;
 		goto out;
@@ -263,7 +269,7 @@ reload_dcs(void)
 		 * If that stops working we'll go into degraded mode anyways
 		 * when it does.
 		 */
-		degrade_svc(0,
+		idmapdlog(LOG_INFO,
 		    "Domain controller servers not configured/discoverable");
 		return;
 	}
@@ -324,14 +330,6 @@ nomem:
 	}
 }
 
-
-void
-reload_ad(void)
-{
-	reload_gcs();
-	reload_dcs();
-}
-
 void
 print_idmapdstate(void)
 {
@@ -350,6 +348,7 @@ print_idmapdstate(void)
 	pgcfg = &_idmapdstate.cfg->pgcfg;
 
 	idmapdlog(LOG_DEBUG, "list_size_limit=%llu", pgcfg->list_size_limit);
+	idmapdlog(LOG_DEBUG, "max_threads=%llu", pgcfg->max_threads);
 	idmapdlog(LOG_DEBUG, "default_domain=%s",
 	    CHECK_NULL(pgcfg->default_domain));
 	idmapdlog(LOG_DEBUG, "domain_name=%s", CHECK_NULL(pgcfg->domain_name));

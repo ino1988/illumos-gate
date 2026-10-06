@@ -21,6 +21,10 @@
 /*
  * Copyright (c) 2003, 2010, Oracle and/or its affiliates. All rights reserved.
  */
+/*
+ * Copyright 2013 Saso Kiselkov.  All rights reserved.
+ * Copyright 2023 RackTop Systems, Inc.
+ */
 
 #ifndef _SYS_CRYPTO_COMMON_H
 #define	_SYS_CRYPTO_COMMON_H
@@ -63,6 +67,12 @@ typedef struct crypto_mechanism32 {
 
 #endif  /* _SYSCALL32 */
 
+/*
+ * New structures that have internal pointers need a custom me_copyin_param
+ * and me_free_param function added to their kcf_mech_entry_t.
+ * See: kcf_copyin_*_param in kcf_mech_tabs.c.
+ */
+
 #ifdef _KERNEL
 /* CK_AES_CTR_PARAMS provides parameters to the CKM_AES_CTR mechanism */
 typedef struct CK_AES_CTR_PARAMS {
@@ -93,7 +103,7 @@ typedef struct CK_AES_GCM_PARAMS {
 
 /* CK_AES_GMAC_PARAMS provides parameters to the CKM_AES_GMAC mechanism */
 typedef struct CK_AES_GMAC_PARAMS {
-	uchar_t *pIv;
+	uchar_t *pIv;	/* Length is AES_GMAC_IV_LEN */
 	uchar_t *pAAD;
 	ulong_t ulAADLen;
 } CK_AES_GMAC_PARAMS;
@@ -194,6 +204,8 @@ typedef uint32_t crypto_keysize_unit_t;
 #define	SUN_CKM_SHA512			"CKM_SHA512"
 #define	SUN_CKM_SHA512_HMAC		"CKM_SHA512_HMAC"
 #define	SUN_CKM_SHA512_HMAC_GENERAL	"CKM_SHA512_HMAC_GENERAL"
+#define	SUN_CKM_SHA512_224		"CKM_SHA512_224"
+#define	SUN_CKM_SHA512_256		"CKM_SHA512_256"
 #define	SUN_CKM_DES_CBC			"CKM_DES_CBC"
 #define	SUN_CKM_DES3_CBC		"CKM_DES3_CBC"
 #define	SUN_CKM_DES_ECB			"CKM_DES_ECB"
@@ -201,6 +213,7 @@ typedef uint32_t crypto_keysize_unit_t;
 #define	SUN_CKM_BLOWFISH_CBC		"CKM_BLOWFISH_CBC"
 #define	SUN_CKM_BLOWFISH_ECB		"CKM_BLOWFISH_ECB"
 #define	SUN_CKM_AES_CBC			"CKM_AES_CBC"
+#define	SUN_CKM_AES_CMAC		"CKM_AES_CMAC"
 #define	SUN_CKM_AES_ECB			"CKM_AES_ECB"
 #define	SUN_CKM_AES_CTR			"CKM_AES_CTR"
 #define	SUN_CKM_AES_CCM			"CKM_AES_CCM"
@@ -301,22 +314,22 @@ typedef uint64_t crypto_attr_type_t;
 #define	SUN_CKA_SUBPRIME		0x00000131
 #define	SUN_CKA_BASE			0x00000132
 
-#define	CKK_EC			0x00000003
-#define	CKK_GENERIC_SECRET	0x00000010
-#define	CKK_RC4			0x00000012
-#define	CKK_AES			0x0000001F
-#define	CKK_DES			0x00000013
-#define	CKK_DES2		0x00000014
-#define	CKK_DES3		0x00000015
+#define	CKK_EC			0x00000003UL
+#define	CKK_GENERIC_SECRET	0x00000010UL
+#define	CKK_RC4			0x00000012UL
+#define	CKK_AES			0x0000001FUL
+#define	CKK_DES			0x00000013UL
+#define	CKK_DES2		0x00000014UL
+#define	CKK_DES3		0x00000015UL
 
-#define	CKO_PUBLIC_KEY		0x00000002
-#define	CKO_PRIVATE_KEY		0x00000003
-#define	CKA_CLASS		0x00000000
-#define	CKA_VALUE		0x00000011
-#define	CKA_KEY_TYPE		0x00000100
-#define	CKA_VALUE_LEN		0x00000161
-#define	CKA_EC_PARAMS		0x00000180
-#define	CKA_EC_POINT		0x00000181
+#define	CKO_PUBLIC_KEY		0x00000002UL
+#define	CKO_PRIVATE_KEY		0x00000003UL
+#define	CKA_CLASS		0x00000000UL
+#define	CKA_VALUE		0x00000011UL
+#define	CKA_KEY_TYPE		0x00000100UL
+#define	CKA_VALUE_LEN		0x00000161UL
+#define	CKA_EC_PARAMS		0x00000180UL
+#define	CKA_EC_POINT		0x00000181UL
 
 typedef uint32_t	crypto_object_id_t;
 
@@ -399,7 +412,7 @@ typedef enum {
 	CRYPTO_LOGICAL_PROVIDER
 } crypto_provider_type_t;
 
-typedef uint32_t 	crypto_provider_id_t;
+typedef uint32_t	crypto_provider_id_t;
 #define	KCF_PROVID_INVALID	((uint32_t)-1)
 
 typedef struct crypto_provider_entry {

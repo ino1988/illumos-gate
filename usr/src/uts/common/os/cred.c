@@ -20,13 +20,14 @@
  */
 /*
  * Copyright (c) 2013, Ira Cooper.  All rights reserved.
+ * Copyright 2020 Nexenta by DDN, Inc. All rights reserved.
  */
 /*
  * Copyright (c) 1989, 2010, Oracle and/or its affiliates. All rights reserved.
  */
 
 /*	Copyright (c) 1984, 1986, 1987, 1988, 1989 AT&T	*/
-/*	  All Rights Reserved  	*/
+/*	  All Rights Reserved	*/
 
 /*
  * University Copyright- Copyright (c) 1982, 1986, 1988
@@ -215,6 +216,8 @@ cred_init(void)
 	priv_fillset(&CR_LPRIV(kcred));
 	CR_IPRIV(kcred) = *priv_basic;
 
+	priv_addset(&CR_IPRIV(kcred), PRIV_PROC_SECFLAGS);
+
 	/* Not a basic privilege, if chown is not restricted add it to I0 */
 	if (!rstchown)
 		priv_addset(&CR_IPRIV(kcred), PRIV_FILE_CHOWN_SELF);
@@ -286,7 +289,7 @@ crget(void)
 {
 	cred_t *cr = kmem_cache_alloc(cred_cache, KM_SLEEP);
 
-	bcopy(kcred, cr, crsize);
+	bcopy(zone_kcred(), cr, crsize);
 	cr->cr_ref = 1;
 	zone_cred_hold(cr->cr_zone);
 	if (cr->cr_label)
@@ -375,7 +378,7 @@ crfree(cred_t *cr)
 /*
  * Copy a cred structure to a new one and free the old one.
  *	The new cred will have two references.  One for the calling process,
- * 	and one for the thread.
+ *	and one for the thread.
  */
 cred_t *
 crcopy(cred_t *cr)
@@ -402,7 +405,7 @@ crcopy(cred_t *cr)
 /*
  * Copy a cred structure to a new one and free the old one.
  *	The new cred will have two references.  One for the calling process,
- * 	and one for the thread.
+ *	and one for the thread.
  * This variation on crcopy uses a pre-allocated structure for the
  * "new" cred.
  */
@@ -1255,7 +1258,7 @@ eph_gid_alloc(zone_t *zone, int flags, gid_t *start, int count)
 
 void
 get_ephemeral_data(zone_t *zone, uid_t *min_uid, uid_t *last_uid,
-	gid_t *min_gid, gid_t *last_gid)
+    gid_t *min_gid, gid_t *last_gid)
 {
 	ephemeral_zsd_t *eph_zsd = get_ephemeral_zsd(zone);
 
@@ -1274,7 +1277,7 @@ get_ephemeral_data(zone_t *zone, uid_t *min_uid, uid_t *last_uid,
 
 void
 set_ephemeral_data(zone_t *zone, uid_t min_uid, uid_t last_uid,
-	gid_t min_gid, gid_t last_gid)
+    gid_t min_gid, gid_t last_gid)
 {
 	ephemeral_zsd_t *eph_zsd = get_ephemeral_zsd(zone);
 

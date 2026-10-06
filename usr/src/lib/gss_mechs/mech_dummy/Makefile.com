@@ -22,6 +22,7 @@
 # Copyright 2006 Sun Microsystems, Inc.  All rights reserved.
 # Use is subject to license terms.
 #
+# Copyright (c) 2018, Joyent, Inc.
 
 #
 # The mech_dummy shared object contains all the functionality needed to
@@ -38,10 +39,13 @@ include $(SRC)/lib/Makefile.lib
 MAPFILES =
 
 CPPFLAGS +=	-I../../libgss -I$(SRC)/uts/common/gssapi/include \
-	    	-I$(ROOT)/usr/include/gssapi
+		-I$(ROOT)/usr/include/gssapi
 
 CERRWARN +=	-_gcc=-Wno-parentheses
-CERRWARN +=	-_gcc=-Wno-uninitialized
+CERRWARN +=	$(CNOWARN_UNINIT)
+
+# needs work
+SMATCH=off
 
 SRCDIR =	../mech
 LIBS =		$(DYNLIB)
@@ -50,7 +54,5 @@ LDLIBS +=	-lgss -lc
 .KEEP_STATE:
 
 all: $(LIBS)
-
-lint: lintcheck
 
 include $(SRC)/lib/Makefile.targ

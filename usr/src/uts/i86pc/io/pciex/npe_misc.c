@@ -21,18 +21,16 @@
 
 /*
  * Copyright (c) 2005, 2010, Oracle and/or its affiliates. All rights reserved.
+ * Copyright 2015 Joyent, Inc.
  */
 
 /*
- *	Library file that has miscellaneous support for npe(7d)
+ *	Library file that has miscellaneous support for npe(4D)
  */
 
 #include <sys/conf.h>
 #include <sys/pci.h>
 #include <sys/sunndi.h>
-#include <sys/acpi/acpi.h>
-#include <sys/acpi/acpi_pci.h>
-#include <sys/acpica.h>
 #include <sys/pci_cap.h>
 #include <sys/pcie_impl.h>
 #include <sys/x86_archext.h>
@@ -44,7 +42,6 @@
 /*
  * Prototype declaration
  */
-void	npe_query_acpi_mcfg(dev_info_t *dip);
 void	npe_ck804_fix_aer_ptr(ddi_acc_handle_t cfg_hdl);
 int	npe_disable_empty_bridges_workaround(dev_info_t *child);
 void	npe_nvidia_error_workaround(ddi_acc_handle_t cfg_hdl);
@@ -55,74 +52,7 @@ void	npe_enable_htmsi_children(dev_info_t *dip);
 
 int	npe_enable_htmsi_flag = 1;
 
-/*
- * Default ecfga base address
- */
-int64_t npe_default_ecfga_base = 0xE0000000;
-
 extern uint32_t npe_aer_uce_mask;
-
-/*
- * Query the MCFG table using ACPI.  If MCFG is found, setup the
- * 'ecfg' property accordingly.  Otherwise, set the values
- * to the default values.
- */
-void
-npe_query_acpi_mcfg(dev_info_t *dip)
-{
-	MCFG_TABLE *mcfgp;
-	CFG_BASE_ADDR_ALLOC *cfg_baap;
-	char *cfg_baa_endp;
-	int64_t ecfginfo[4];
-	int ecfg_found = 0;
-
-	/* Query the MCFG table using ACPI */
-	if (AcpiGetTable(ACPI_SIG_MCFG, 1,
-	    (ACPI_TABLE_HEADER **)&mcfgp) == AE_OK) {
-
-		cfg_baap = (CFG_BASE_ADDR_ALLOC *)mcfgp->CfgBaseAddrAllocList;
-		cfg_baa_endp = ((char *)mcfgp) + mcfgp->Length;
-
-		while ((char *)cfg_baap < cfg_baa_endp) {
-			if (cfg_baap->base_addr != (uint64_t)0 &&
-			    cfg_baap->segment == 0) {
-				/*
-				 * Set up the 'ecfg' property to hold
-				 * base_addr, segment, and first/last bus.
-				 * We only do the first entry that maps
-				 * segment 0; nonzero segments are not yet
-				 * known, or handled.  If they appear,
-				 * we'll need to figure out which bus node
-				 * should have which entry by examining the
-				 * ACPI _SEG method on each bus node.
-				 */
-				ecfginfo[0] = cfg_baap->base_addr;
-				ecfginfo[1] = cfg_baap->segment;
-				ecfginfo[2] = cfg_baap->start_bno;
-				ecfginfo[3] = cfg_baap->end_bno;
-				(void) ndi_prop_update_int64_array(
-				    DDI_DEV_T_NONE, dip, "ecfg",
-				    ecfginfo, 4);
-				ecfg_found = 1;
-				break;
-			}
-			cfg_baap++;
-		}
-	}
-	if (ecfg_found)
-		return;
-	/*
-	 * If MCFG is not found or ecfga_base is not found in MCFG table,
-	 * set the property to the default values.
-	 */
-	ecfginfo[0] = npe_default_ecfga_base;
-	ecfginfo[1] = 0;		/* segment 0 */
-	ecfginfo[2] = 0;		/* first bus 0 */
-	ecfginfo[3] = 0xff;		/* last bus ff */
-	(void) ndi_prop_update_int64_array(DDI_DEV_T_NONE, dip,
-	    "ecfg", ecfginfo, 4);
-}
-
 
 /*
  * Enable reporting of AER capability next pointer.
@@ -154,21 +84,24 @@ npe_ck804_fix_aer_ptr(ddi_acc_handle_t cfg_hdl)
 int
 npe_disable_empty_bridges_workaround(dev_info_t *child)
 {
+	pcie_bus_t *bus_p = PCIE_DIP2BUS(child);
+
 	/*
 	 * Do not bind drivers to empty bridges.
 	 * Fail above, if the bridge is found to be hotplug capable
 	 */
 	if (ddi_driver_major(child) == ddi_name_to_major("pcieb") &&
-	    ddi_get_child(child) == NULL &&
-	    ddi_prop_get_int(DDI_DEV_T_ANY, child, DDI_PROP_DONTPASS,
-	    "pci-hotplug-type", INBAND_HPC_NONE) == INBAND_HPC_NONE)
+	    ddi_get_child(child) == NULL && bus_p->bus_hp_sup_modes ==
+	    PCIE_NONE_HP_MODE) {
 		return (1);
+	}
 
 	return (0);
 }
 
 void
-npe_nvidia_error_workaround(ddi_acc_handle_t cfg_hdl) {
+npe_nvidia_error_workaround(ddi_acc_handle_t cfg_hdl)
+{
 	uint32_t regs;
 	uint16_t vendor_id = pci_config_get16(cfg_hdl, PCI_CONF_VENID);
 	uint16_t dev_id = pci_config_get16(cfg_hdl, PCI_CONF_DEVID);
@@ -188,7 +121,8 @@ npe_nvidia_error_workaround(ddi_acc_handle_t cfg_hdl) {
 }
 
 void
-npe_intel_error_workaround(ddi_acc_handle_t cfg_hdl) {
+npe_intel_error_workaround(ddi_acc_handle_t cfg_hdl)
+{
 	uint32_t regs;
 	uint16_t vendor_id = pci_config_get16(cfg_hdl, PCI_CONF_VENID);
 	uint16_t dev_id = pci_config_get16(cfg_hdl, PCI_CONF_DEVID);
@@ -238,7 +172,8 @@ npe_intel_error_workaround(ddi_acc_handle_t cfg_hdl) {
  * RP is beneath.
  */
 boolean_t
-npe_child_is_pci(dev_info_t *dip) {
+npe_child_is_pci(dev_info_t *dip)
+{
 	char *dev_type;
 	boolean_t parent_is_pci, child_is_pciex;
 

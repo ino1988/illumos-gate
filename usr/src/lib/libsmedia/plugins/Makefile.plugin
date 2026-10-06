@@ -22,8 +22,6 @@
 # Copyright 2006 Sun Microsystems, Inc.  All rights reserved.
 # Use is subject to license terms.
 #
-# ident	"%Z%%M%	%I%	%E% SMI"
-#
 
 LIBS =		$(DYNLIB)
 
@@ -31,8 +29,6 @@ CPPFLAGS +=	-I../inc -I$(SRC)/cmd/smserverd/
 
 POFILE  = $(LIBRARY:%.a=%.po)
 POFILE_SRCS =  $(OBJECTS:%.o=common/%.c)
-SED	= /usr/bin/sed
-CP	= /usr/bin/cp
 
 SUBDIRS =	$(MACH)
 $(BUILD64)SUBDIRS += $(MACH64)
@@ -41,12 +37,11 @@ all :=		TARGET= all
 clean :=	TARGET= clean
 clobber :=	TARGET= clobber
 install :=	TARGET= install
-lint :=		TARGET= lint
 
-all install clean lint: $(SUBDIRS)
+all install clean: $(SUBDIRS)
 
 clobber : $(SUBDIRS)
-	$(RM) -f $(POFILE)
+	$(RM) $(POFILE)
 
 $(SUBDIRS): FRC
 	@cd $@; pwd; $(MAKE) $(TARGET)
@@ -64,4 +59,6 @@ $(POFILE) : $(POFILE_SRCS)
 	$(COMPILE.cpp) $(POFILE_SRCS) | $(XGETTEXT) $(XGETFLAGS) -
 	$(SED) -e '/^domain/d' messages.po > $@
 	$(RM) messages.po
- 
+
+
+include $(SRC)/Makefile.msg.targ

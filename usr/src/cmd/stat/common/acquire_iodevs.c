@@ -29,6 +29,7 @@
 #include <sys/dktp/fdisk.h>
 #include <stdlib.h>
 #include <stdarg.h>
+#include <stddef.h>
 #include <unistd.h>
 #include <strings.h>
 #include <errno.h>
@@ -147,9 +148,6 @@ find_parent(struct snapshot *ss, struct iodev_snapshot *iodev)
  * right position in the list. This index is an AVL tree of all the
  * iodev_snapshot in the list.
  */
-
-#define	offsetof(s, m)	(size_t)(&(((s *)0)->m))	/* for avl_create */
-
 static int
 avl_iodev_cmp(const void* is1, const void* is2)
 {
@@ -357,7 +355,7 @@ iodev_match(struct iodev_snapshot *dev, struct iodev_filter *df)
 		return (1);		/* pass */
 
 	/* no filtered names, pass if not floppy and skipped */
-	if (df->if_nr_names == NULL)
+	if (df->if_nr_names == 0)
 		return (!(df->if_skip_floppy && is_floppy));
 
 	isn = dev->is_name;
@@ -453,14 +451,14 @@ choose_iodevs(struct snapshot *ss, struct iodev_snapshot *iodevs,
 	 * don't want to fill the  remaining slots - it is just confusing
 	 * if we don that, it makes it look like the filter code is broken.
 	 */
-	if ((df->if_nr_names == NULL) || (nr_iodevs != nr_iodevs_orig)) {
+	if ((df->if_nr_names == 0) || (nr_iodevs != nr_iodevs_orig)) {
 		/* now insert any iodevs into the remaining slots */
 		pos = iodevs;
 		while (pos && nr_iodevs) {
 			tmp = pos;
 			pos = pos->is_next;
 
-			if (df && df->if_skip_floppy &&
+			if (df->if_skip_floppy &&
 			    strncmp(tmp->is_name, "fd", 2) == 0)
 				continue;
 
@@ -629,7 +627,7 @@ get_ids(struct iodev_snapshot *iodev, const char *pretty)
 
 static void
 get_pretty_name(enum snapshot_types types, struct iodev_snapshot *iodev,
-	kstat_ctl_t *kc)
+    kstat_ctl_t *kc)
 {
 	disk_list_t	*dl;
 	char		*pretty = NULL;
@@ -685,8 +683,7 @@ get_iodev_type(kstat_t *ksp)
 
 /* get the lun/target/initiator from the name, return 1 on success */
 static int
-get_lti(char *s,
-	char *lname, int *l, char *tname, int *t, char *iname, int *i)
+get_lti(char *s, char *lname, int *l, char *tname, int *t, char *iname, int *i)
 {
 	int  num = 0;
 

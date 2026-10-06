@@ -21,6 +21,8 @@
 /*
  * Copyright 2009 Sun Microsystems, Inc.  All rights reserved.
  * Use is subject to license terms.
+ * Copyright 2018 Joyent, Inc.
+ * Copyright 2026 Oxide Computer Company
  */
 
 #ifndef _SYS_PCI_IMPL_H
@@ -37,7 +39,7 @@ extern "C" {
 
 /*
  * There are two ways to access the PCI configuration space on X86
- * 	Access method 2 is the older method
+ *	Access method 2 is the older method
  *	Access method 1 is the newer method and is preferred because
  *	  of the problems in trying to lock the configuration space
  *	  for MP machines using method 2.  See PCI Local BUS Specification
@@ -50,7 +52,7 @@ extern "C" {
 #define	PCI_MECHANISM_UNKNOWN		-1
 #define	PCI_MECHANISM_NONE		0
 #if defined(__i386) || defined(__amd64)
-#define	PCI_MECHANISM_1 		1
+#define	PCI_MECHANISM_1			1
 #define	PCI_MECHANISM_2			2
 #else
 #error "Unknown processor type"
@@ -82,7 +84,7 @@ extern "C" {
 #define	PCI_CADDR2(device, indx) \
 		(0xc000 | (((device) & 0xf) <<  8) | (indx))
 
-typedef struct 	pci_acc_cfblk {
+typedef struct	pci_acc_cfblk {
 	uchar_t	c_busnum;		/* bus number */
 	uchar_t c_devnum;		/* device number */
 	uchar_t c_funcnum;		/* function number */
@@ -104,34 +106,18 @@ struct pci_bus_resource {
 	uchar_t sub_bus;	/* highest bus number beyond this bridge */
 	uchar_t root_addr;	/* legacy peer bus address assignment */
 	uchar_t num_cbb;	/* # of CardBus Bridges on the bus */
+	uchar_t num_bridge;	/* number of bridges under this bus */
 	boolean_t io_reprogram;	/* need io reprog on this bus */
 	boolean_t mem_reprogram;	/* need mem reprog on this bus */
 	boolean_t subtractive;	/* subtractive PPB */
-	uint_t mem_size;	/* existing children required MEM space size */
+	uint64_t mem_size;	/* existing children required MEM space size */
+	uint64_t pmem_size;	/* existing children required PMEM space size */
+	uint64_t mem_buffer;	/* memory available for proactively */
+				/* allocating to bridges for hotplug */
 	uint_t io_size;		/* existing children required I/O space size */
 };
 
 extern struct pci_bus_resource *pci_bus_res;
-
-/*
- * For now, x86-only to avoid conflicts with <sys/memlist_impl.h>
- */
-#define	memlist_find		memlist_find_pci
-#define	memlist_insert		memlist_insert_pci
-
-extern struct memlist *memlist_alloc(void);
-extern void memlist_free(struct memlist *);
-extern void memlist_free_all(struct memlist **);
-extern void memlist_insert(struct memlist **, uint64_t, uint64_t);
-extern int memlist_remove(struct memlist **, uint64_t, uint64_t);
-extern uint64_t memlist_find(struct memlist **, uint64_t, int);
-extern uint64_t memlist_find_with_startaddr(struct memlist **, uint64_t,
-    uint64_t, int);
-extern void memlist_dump(struct memlist *);
-extern void memlist_subsume(struct memlist **, struct memlist **);
-extern void memlist_merge(struct memlist **, struct memlist **);
-extern struct memlist *memlist_dup(struct memlist *);
-extern int memlist_count(struct memlist *);
 
 #endif /* __i386 || __amd64 */
 

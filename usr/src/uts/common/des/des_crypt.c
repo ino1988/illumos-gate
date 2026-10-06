@@ -25,7 +25,7 @@
  */
 
 /*	Copyright (c) 1983, 1984, 1985, 1986, 1987, 1988, 1989 AT&T	*/
-/*	  All Rights Reserved  	*/
+/*	  All Rights Reserved	*/
 
 /*
  * Portions of this source code were derived from Berkeley 4.3 BSD
@@ -245,7 +245,7 @@ static crypto_provider_info_t des_prov_info = {
 	des_mech_info_tab
 };
 
-static crypto_kcf_provider_handle_t des_prov_handle = NULL;
+static crypto_kcf_provider_handle_t des_prov_handle = 0;
 
 int
 _init(void)
@@ -1123,10 +1123,11 @@ des_common_init_ctx(des_ctx_t *des_ctx, crypto_spi_ctx_template_t *template,
 		 * Initialize key schedule.
 		 * Key length is stored in the key.
 		 */
-		if ((rv = init_keysched(key, keysched,
-		    strength)) != CRYPTO_SUCCESS)
+		rv = init_keysched(key, keysched, strength);
+		if (rv != CRYPTO_SUCCESS) {
 			kmem_free(keysched, size);
-
+			return (rv);
+		}
 		des_ctx->dc_flags |= PROVIDER_OWNS_KEY_SCHEDULE;
 		des_ctx->dc_keysched_len = size;
 	} else {

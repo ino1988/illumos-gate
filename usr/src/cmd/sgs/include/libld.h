@@ -24,6 +24,7 @@
  *	  All Rights Reserved
  *
  * Copyright (c) 1992, 2010, Oracle and/or its affiliates. All rights reserved.
+ * Copyright 2024 Oxide Computer Company
  */
 
 #ifndef	_LIBLD_H
@@ -105,7 +106,7 @@ typedef enum {
  */
 struct rel_cache {
 	APlist		*rc_list;	/* list of Rel_cachebuf */
-	Word		rc_cnt;		/* 	and count */
+	Word		rc_cnt;		/*	and count */
 };
 
 /*
@@ -147,7 +148,7 @@ typedef enum {
 	RLXREL_REJ_NONE = 0,	/* Replacement symbol was found */
 	RLXREL_REJ_TARGET,	/* Target sec disallows relaxed relocations */
 	RLXREL_REJ_SECTION,	/* Either there is no replacement section, */
-				/* 	or its attributes are incompatible */
+				/*	or its attributes are incompatible */
 	RLXREL_REJ_SYMBOL,	/* Replacement symbol not found */
 } Rlxrel_rej;
 
@@ -210,6 +211,7 @@ typedef	struct {
 	Caplist		oc_plat;	/* CA_SUNW_PLAT capabilities */
 	Caplist		oc_mach;	/* CA_SUNW_MACH capabilities */
 	Capstr		oc_id;		/* CA_SUNW_ID capability */
+	Capmask		oc_hw_3;	/* CA_SUNW_HW_3 capabilities */
 	oc_flag_t	oc_flags;
 } Objcapset;
 
@@ -261,15 +263,15 @@ struct ofl_desc {
 	APlist		*ofl_ents;	/* list of entrance descriptors */
 	avl_tree_t	ofl_ents_avl;	/* O(log N) access to named ent. desc */
 	APlist		*ofl_objs;	/* relocatable object file list */
-	Word		ofl_objscnt;	/* 	and count */
+	Word		ofl_objscnt;	/*	and count */
 	APlist		*ofl_ars;	/* archive library list */
-	Word		ofl_arscnt;	/* 	and count */
+	Word		ofl_arscnt;	/*	and count */
 	int		ofl_ars_gsandx; /* archive group argv index. 0 means */
 					/*	no current group, < 0 means */
 					/*	error reported. >0 is cur ndx */
 	Word		ofl_ars_gsndx;	/* current -zrescan-start ofl_ars ndx */
 	APlist		*ofl_sos;	/* shared object list */
-	Word		ofl_soscnt;	/* 	and count */
+	Word		ofl_soscnt;	/*	and count */
 	APlist		*ofl_soneed;	/* list of implicitly required .so's */
 	APlist		*ofl_socntl;	/* list of .so control definitions */
 	Rel_cache	ofl_outrels;	/* list of output relocations */
@@ -283,7 +285,7 @@ struct ofl_desc {
 	APlist		*ofl_ismove;	/* list of .SUNW_move sections */
 	APlist		*ofl_ismoverel;	/* list of relocation input section */
 					/* targeting to expanded area */
-	APlist		*ofl_parsyms; 	/* list of partially initialized */
+	APlist		*ofl_parsyms;	/* list of partially initialized */
 					/*	symbols (ie. move symbols) */
 	APlist		*ofl_extrarels;	/* relocation sections which have */
 					/*    a NULL sh_info */
@@ -406,6 +408,9 @@ struct ofl_desc {
 	avl_tree_t	*ofl_wrap;	/* -z wrap symbols */
 	ofl_guideflag_t	ofl_guideflags;	/* -z guide flags */
 	APlist		*ofl_assdeflib;	/* -z assert-deflib exceptions */
+	int		ofl_aslr;	/* -z aslr, -1 disable, 1 enable */
+	APlist		*ofl_symasserts; /* assertions about symbols */
+					/* from mapfiles */
 };
 
 #define	FLG_OF_DYNAMIC	0x00000001	/* generate dynamic output module */
@@ -466,6 +471,8 @@ struct ofl_desc {
 #define	FLG_OF_FATWARN	0x400000000000	/* make warnings fatal */
 #define	FLG_OF_ADEFLIB	0x800000000000	/* no libraries in default path */
 
+#define	FLG_OF_KMOD	0x1000000000000	/* output is a kernel module */
+
 /*
  * In the flags1 arena, establish any options that are applicable to archive
  * extraction first, and associate a mask.  These values are recorded with any
@@ -519,6 +526,7 @@ struct ofl_desc {
 #define	FLG_OF1_OVMACHCAP 0x0800000000	/* override CA_SUNW_MACH capability */
 #define	FLG_OF1_OVPLATCAP 0x1000000000	/* override CA_SUNW_PLAT capability */
 #define	FLG_OF1_OVIDCAP	0x2000000000	/* override CA_SUNW_ID capability */
+#define	FLG_OF1_OVHWCAP3 0x4000000000	/* override CA_SUNW_HW_3 capabilities */
 
 /*
  * Guidance flags. The flags with the FLG_OFG_NO_ prefix are used to suppress
@@ -535,6 +543,7 @@ struct ofl_desc {
 #define	FLG_OFG_NO_MF		0x00000008	/* use v2 mapfile syntax */
 #define	FLG_OFG_NO_TEXT		0x00000010	/* verify pure text segment */
 #define	FLG_OFG_NO_UNUSED	0x00000020	/* remove unused dependency */
+#define	FLG_OFG_NO_ASSERTS	0x00000040	/* suggest mapfile assertions */
 
 /*
  * Test to see if a guidance should be given for a given category
@@ -878,7 +887,7 @@ struct ifl_desc {			/* input file descriptor */
 #define	FLG_IF_DISPPEND 0x00000800	/* displacement relocation done */
 					/*	in the ld time. */
 #define	FLG_IF_DISPDONE 0x00001000	/* displacement relocation done */
-					/* 	at the run time */
+					/*	at the run time */
 #define	FLG_IF_MAPFILE	0x00002000	/* file is a mapfile */
 #define	FLG_IF_HSTRTAB	0x00004000	/* file has a string section */
 #define	FLG_IF_FILEREF	0x00008000	/* file contains a section which */
@@ -915,11 +924,11 @@ struct is_desc {			/* input section descriptor */
 	Elf_Data	*is_indata;	/* input sections raw data */
 	Is_desc		*is_symshndx;	/* related SHT_SYM_SHNDX section */
 	Is_desc		*is_comdatkeep;	/* If COMDAT section is discarded, */
-					/* 	this is section that was kept */
+					/*	this is section that was kept */
 	Word		is_scnndx;	/* original section index in file */
 	Word		is_ordndx;	/* index for section.  Used to decide */
 					/*	where to insert section when */
-					/* 	reordering sections */
+					/*	reordering sections */
 	Word		is_keyident;	/* key for SHF_{ORDERED|LINK_ORDER} */
 					/*	processing and ident used for */
 					/*	 placing/ordering sections */
@@ -989,11 +998,23 @@ struct os_desc {			/* Output section descriptor */
 					/*	by section symbol index */
 	Word		os_ordndx;	/* index for section.  Used to decide */
 					/*	where to insert section when */
-					/* 	reordering sections */
+					/*	reordering sections */
 	Xword		os_szoutrels;	/* size of output relocation section */
 	uint_t		os_namehash;	/* hash on section name */
 	uchar_t		os_flags;	/* various flags */
+	APlist		*os_mstrsyms;	/* symbols affected by string merge */
+	APlist		*os_mstrrels;	/* section relocs affected by... */
+	Str_tbl		*os_mstrtab;	/* merged string table */
+	Os_desc		*os_hashnext;	/* next hashed */
 };
+
+/*
+ * Hash of output section descriptors, by namehash.
+ */
+typedef struct os_desc_hash {
+	Os_desc		**osh_hashtab;	/* hash table itself */
+	size_t		osh_size;	/* number of elements in hash table */
+} os_desc_hash_t;
 
 #define	FLG_OS_KEY		0x01	/* section requires sort keys */
 #define	FLG_OS_OUTREL		0x02	/* output rel against this section */
@@ -1056,6 +1077,7 @@ struct sg_desc {			/* output segment descriptor */
 	Xword		sg_align;	/* LCM of sh_addralign */
 	Elf_Scn		*sg_fscn;	/* the SCN of the first section. */
 	avl_node_t	sg_avlnode;	/* AVL book-keeping */
+	os_desc_hash_t	*sg_hashtab;	/* hash table of output descriptors */
 };
 
 #define	FLG_SG_P_VADDR		0x0001	/* p_vaddr segment attribute set */
@@ -1066,7 +1088,7 @@ struct sg_desc {			/* output segment descriptor */
 #define	FLG_SG_P_FLAGS		0x0020	/* p_flags segment attribute set */
 #define	FLG_SG_P_TYPE		0x0040	/* p_type segment attribute set */
 #define	FLG_SG_IS_ORDER		0x0080	/* input section ordering is required */
-					/* 	for this segment. */
+					/*	for this segment. */
 #define	FLG_SG_NOHDR		0x0100	/* don't map ELF or phdrs into */
 					/*	this segment */
 #define	FLG_SG_EMPTY		0x0200	/* an empty segment specification */
@@ -1140,8 +1162,27 @@ typedef struct {
 	Move		*md_move;	/* original Move entry */
 	Xword		md_start;	/* start position */
 	Xword		md_len;		/* length of initialization */
-	Word 		md_oidx;	/* output Move entry index */
+	Word		md_oidx;	/* output Move entry index */
 } Mv_desc;
+
+#define	SYM_ASSERT_SIZE		0x01
+#define	SYM_ASSERT_BIND		0x02
+#define	SYM_ASSERT_TYPE		0x04
+#define	SYM_ASSERT_BITS		0x08
+#define	SYM_ASSERT_ALIAS	0x10
+
+typedef struct {
+	Sym_desc	*ass_sdp;
+	char		*ass_file;
+	Lineno		ass_lineno;
+	uchar_t		ass_type;
+	uchar_t		ass_bind;
+	Lword		ass_size;
+	Boolean		ass_bits;
+	const char	*ass_alias;
+	/* Assertions explicitly enabled by user */
+	uint_t		ass_enabled;
+} Ass_desc;
 
 /*
  * Symbol descriptor.
@@ -1162,6 +1203,7 @@ struct sym_desc {
 	Word		sd_shndx;	/* sect. index sym is associated w/ */
 	sd_flag_t	sd_flags;	/* state flags */
 	Half		sd_ref;		/* reference definition of symbol */
+	Ass_desc	*sd_ass;	/* pointer back to symbol assertions */
 };
 
 /*
@@ -1171,7 +1213,7 @@ struct sym_desc {
  * important for performance.
  */
 struct sym_aux {
-	APlist 		*sa_dfiles;	/* files where symbol is defined */
+	APlist		*sa_dfiles;	/* files where symbol is defined */
 	Sym		sa_sym;		/* copy of symtab entry */
 	const char	*sa_vfile;	/* first unavailable definition */
 	const char	*sa_rfile;	/* file with first symbol referenced */
@@ -1183,6 +1225,7 @@ struct sym_aux {
 	Half		sa_symspec;	/* special symbol ids */
 	Half		sa_overndx;	/* output file versioning index */
 	Half		sa_dverndx;	/* dependency versioning index */
+	Os_desc		*sa_boundsec;	/* output section of SECBOUND_ syms */
 };
 
 /*
@@ -1199,13 +1242,15 @@ struct sym_avlnode {
  * These are the ids for processing of `Special symbols'.  They are used
  * to set the sym->sd_aux->sa_symspec field.
  */
-#define	SDAUX_ID_ETEXT	1		/* etext && _etext symbol */
-#define	SDAUX_ID_EDATA	2		/* edata && _edata symbol */
-#define	SDAUX_ID_END	3		/* end, _end, && _END_ symbol */
-#define	SDAUX_ID_DYN	4		/* DYNAMIC && _DYNAMIC symbol */
-#define	SDAUX_ID_PLT	5		/* _PROCEDURE_LINKAGE_TABLE_ symbol */
-#define	SDAUX_ID_GOT	6		/* _GLOBAL_OFFSET_TABLE_ symbol */
-#define	SDAUX_ID_START	7		/* START_ && _START_ symbol */
+#define	SDAUX_ID_ETEXT		1	/* etext && _etext symbol */
+#define	SDAUX_ID_EDATA		2	/* edata && _edata symbol */
+#define	SDAUX_ID_END		3	/* end, _end, && _END_ symbol */
+#define	SDAUX_ID_DYN		4	/* DYNAMIC && _DYNAMIC symbol */
+#define	SDAUX_ID_PLT		5	/* _PROCEDURE_LINKAGE_TABLE_ symbol */
+#define	SDAUX_ID_GOT		6	/* _GLOBAL_OFFSET_TABLE_ symbol */
+#define	SDAUX_ID_START		7	/* START_ && _START_ symbol */
+#define	SDAUX_ID_SECBOUND_START	8	/* __start_<section> symbols */
+#define	SDAUX_ID_SECBOUND_STOP	9	/* __stop_<section> symbols */
 
 /*
  * Flags for sym_desc.sd_flags
@@ -1225,7 +1270,7 @@ struct sym_avlnode {
 #define	FLG_SY_NOTAVAIL	0x00000020	/* symbol is not available to the */
 					/*	application either because it */
 					/*	originates from an implicitly */
-					/* 	referenced shared object, or */
+					/*	referenced shared object, or */
 					/*	because it is not part of a */
 					/*	specified version. */
 #define	FLG_SY_REDUCED	0x00000040	/* a global is reduced to local */
@@ -1235,7 +1280,7 @@ struct sym_avlnode {
 #define	FLG_SY_MAPREF	0x00000200	/* symbol reference generated by user */
 					/*	from mapfile */
 #define	FLG_SY_REFRSD	0x00000400	/* symbols sd_ref has been raised */
-					/* 	due to a copy-relocs */
+					/*	due to a copy-relocs */
 					/*	weak-strong pairing */
 #define	FLG_SY_INTPOSE	0x00000800	/* symbol defines an interposer */
 #define	FLG_SY_INVALID	0x00001000	/* unwanted/erroneous symbol */
@@ -1310,6 +1355,8 @@ struct sym_avlnode {
 					/*    capabilities */
 #define	FLG_SY_DEFERRED	0x0200000000000	/* symbol should not be bound to */
 					/*	during BIND_NOW relocations */
+
+#define	FLG_SY_MAPASSRT	0x0400000000000 /* Symbol has attribute assertions */
 
 /*
  * A symbol can only be truly hidden if it is not a capabilities symbol.
@@ -1463,7 +1510,7 @@ typedef enum {
 /*
  * Structure to manage archive member caching.  Each archive has an archive
  * descriptor (Ar_desc) associated with it.  This contains pointers to the
- * archive symbol table (obtained by elf_getarsyms(3e)) and an auxiliary
+ * archive symbol table (obtained by elf_getarsym(3ELF)) and an auxiliary
  * structure (Ar_uax[]) that parallels this symbol table.  The member element
  * of this auxiliary table indicates whether the archive member associated with
  * the symbol offset has already been extracted (AREXTRACTED) or partially
@@ -1493,6 +1540,7 @@ typedef struct ar_desc {
 	dev_t		ad_stdev;	/* device id and inode number for */
 	ino_t		ad_stino;	/*	multiple inclusion checks */
 	ofl_flag_t	ad_flags;	/* archive specific cmd line flags */
+	Boolean		ad_allextract;	/* archive has been allextract'ed */
 } Ar_desc;
 
 /*

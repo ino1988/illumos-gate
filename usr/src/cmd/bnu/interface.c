@@ -161,8 +161,7 @@ char	*label;
  *	usetup - vanilla unix setup routine
  */
 static int
-usetup(role, fdreadp, fdwritep)
-int	*fdreadp, *fdwritep;
+usetup(int role, int *fdreadp, int *fdwritep)
 {
 	if (role == SLAVE)
 	{
@@ -177,7 +176,7 @@ int	*fdreadp, *fdwritep;
  *	uteardown - vanilla unix teardown routine
  */
 static int
-uteardown(role, fdread, fdwrite)
+uteardown(int role, int fdread, int fdwrite)
 {
 	int ret;
 	char *ttyn;
@@ -302,19 +301,19 @@ unsigned	nbytes;
 	}
 
 	if (info.tsdu <= 0 || nbytes <= info.tsdu)
-		return (t_snd(fd, buf, nbytes, NULL));
+		return (t_snd(fd, buf, nbytes, 0));
 
 	/* if get here, then there is a limit on transmit size	*/
 	/* (info.tsdu > 0) and buf exceeds it			*/
 	i = ret = 0;
 	while (nbytes >= info.tsdu) {
-		if ((ret = t_snd(fd,  &buf[i], info.tsdu, NULL)) != info.tsdu)
+		if ((ret = t_snd(fd,  &buf[i], info.tsdu, 0)) != info.tsdu)
 			return ((ret >= 0 ? (i + ret) : ret));
 		i += info.tsdu;
 		nbytes -= info.tsdu;
 	}
 	if (nbytes != 0) {
-		if ((ret = t_snd(fd,  &buf[i], nbytes, NULL)) != nbytes)
+		if ((ret = t_snd(fd,  &buf[i], nbytes, 0)) != nbytes)
 			return ((ssize_t)(ret >= 0 ? (i + ret) : ret));
 		i += nbytes;
 	}
@@ -325,14 +324,8 @@ unsigned	nbytes;
 /*
  *	tioctl - stub for tli ioctl routine
  */
-/*ARGSUSED*/
 static int
-#ifdef __STDC__
-tioctl(int fd, int request, ...)
-#else
-tioctl(fd, request, arg)
-int	fd, request;
-#endif
+tioctl(int fd __unused, int request __unused, ...)
 {
 	return (SUCCESS);
 }
@@ -342,8 +335,7 @@ int	fd, request;
  *	note blatant assumption that *fdreadp == *fdwritep == 0
  */
 static int
-tsetup(role, fdreadp, fdwritep)
-int	*fdreadp, *fdwritep;
+tsetup(int role, int *fdreadp, int *fdwritep)
 {
 
 	if (role == SLAVE) {
@@ -362,9 +354,8 @@ int	*fdreadp, *fdwritep;
 /*
  *	tteardown - tli shutdown routine
  */
-/*ARGSUSED*/
 static int
-tteardown(role, fdread, fdwrite)
+tteardown(int role __unused, int fdread, int fdwrite __unused)
 {
 	(void) t_unbind(fdread);
 	(void) t_close(fdread);

@@ -34,22 +34,18 @@ clean :=	TARGET= clean
 clobber :=	TARGET= clobber
 delete :=	TARGET= delete
 install :=	TARGET= install
-lint :=		TARGET= lint
 _msg :=		TARGET= _msg
 package :=	TARGET= package
 
-LIBRARY= 	libnls.a
+LIBRARY=	libnls.a
 TEXT_DOMAIN=	SUNW_OST_OSLIB
 XGETFLAGS=	-a
 POFILE=		$(LIBRARY:.a=.po)
 POFILES=	generic.po
 
-SED=	sed
-GREP=	grep
-
 .KEEP_STATE:
 
-all clean clobber delete install lint package: $(SUBDIRS)
+all clean clobber delete install package: $(SUBDIRS)
 
 # install rule for install_h target
 $(ROOTHDRDIR)/%: %
@@ -58,7 +54,7 @@ $(ROOTHDRDIR)/%: %
 install_h: $(ROOTHDRS)
 
 check: $(CHECKHDRS)
-	
+
 $(SUBDIRS):	FRC
 	@cd $@; pwd; $(MAKE) $(TARGET)
 

@@ -117,7 +117,6 @@ genkeypair_pkcs11(KMF_HANDLE_T kmfhandle,
 		return (kmfrv);
 	}
 
-cleanup:
 	if (kmfrv == KMF_OK) {
 		if (outPriKey != NULL)
 			*outPriKey = prik;
@@ -304,7 +303,7 @@ genkeypair_nss(KMF_HANDLE_T kmfhandle,
 	if (kmfrv != KMF_OK) {
 		return (kmfrv);
 	}
-cleanup:
+
 	if (kmfrv == KMF_OK) {
 		if (outPriKey != NULL)
 			*outPriKey = prik;
@@ -334,7 +333,7 @@ pk_genkeypair(int argc, char *argv[])
 	KMF_ENCODE_FORMAT fmt = KMF_FORMAT_ASN1;
 	KMF_KEY_ALG keyAlg = KMF_RSA;
 	KMF_ALGORITHM_INDEX sigAlg;
-	KMF_CREDENTIAL tokencred = {NULL, 0};
+	KMF_CREDENTIAL tokencred = { NULL, 0 };
 	KMF_OID *curveoid = NULL; /* ECC */
 	int y_flag = 0;
 

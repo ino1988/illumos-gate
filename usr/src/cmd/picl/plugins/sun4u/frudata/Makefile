@@ -43,7 +43,6 @@ LIBS =		$(DYNLIB)
 
 ROOTLIBDIR =	$(ROOT_PLAT_PLUGINDIR)
 
-CLEANFILES=	$(LINTOUT) $(LINTLIB)
 CLOBBERFILES += $(LIBLINKS)
 CSTYLE	=	cstyle -p -P
 HDRCHK	=	hdrchk
@@ -58,7 +57,7 @@ LDLIBS +=	-L$(SRC)/lib/libfruutils/$(MACH)
 LDLIBS +=	-L$(SRC)/cmd/picl/plugins/common/frutree
 LDLIBS +=	-L$(ROOT)/usr/lib/picl/plugins
 LDLIBS +=	-lc -lnvpair -lfruutils
-LDLIBS +=	-lpicltree -lpiclfrutree -lfruaccess -lpicld_pluginutil
+LDLIBS +=	-lpicltree -lfruaccess -lpicld_pluginutil
 LDLIBS +=	-R/usr/platform/\$$PLATFORM/lib/picl/plugins:/usr/platform/\$$PLATFORM/lib:/usr/platform/sun4u/lib/picl/plugins:/usr/lib/picl/plugins:/usr/platform/sun4u/lib
 .KEEP_STATE:
 
@@ -69,7 +68,6 @@ all :=		TARGET= all
 install :=	TARGET= install
 clean :=	TARGET= clean
 clobber :=	TARGET= clobber
-lint :=		TARGET= lint
 _msg :=		TARGET= _msg
 
 POFILE=		$(LIBRARY:.a=.po)
@@ -108,7 +106,6 @@ include $(SRC)/cmd/picl/plugins/Makefile.targ
 include $(SRC)/lib/Makefile.targ
 
 lint :
-	$(LINT.c) $(SRCS)
 
 $(SUBDIRS): FRC
 	@cd $@; pwd; $(MAKE) $(TARGET)

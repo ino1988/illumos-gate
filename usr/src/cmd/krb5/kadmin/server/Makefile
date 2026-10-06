@@ -2,6 +2,7 @@
 # Copyright 2009 Sun Microsystems, Inc.  All rights reserved.
 # Use is subject to license terms.
 #
+# Copyright (c) 2018, Joyent, Inc.
 
 PROG= kadmind
 MANIFEST=	kadmin.xml
@@ -40,12 +41,13 @@ CPPFLAGS += -I. -I$(SRC)/uts/common/gssapi/mechs/krb5/include \
 		-I$(KRB5IPROPDIR) \
 		-I$(SRC)/uts/common/gssapi/include/ $(DEFS)
 
-COPTFLAG += $(XESS) #-I$(KINCDIR) 
-
 CERRWARN += -_gcc=-Wno-implicit-function-declaration
 CERRWARN += -_gcc=-Wno-unused-variable
 CERRWARN += -_gcc=-Wno-parentheses
 CERRWARN += -_gcc=-Wno-unused-function
+
+# not linted
+SMATCH=off
 
 LDFLAGS += $(KRUNPATH) $(KERBRUNPATH)
 LDLIBS += -lgss -L$(KRB5LIB) \
@@ -79,8 +81,6 @@ check:	$(CHKMANIFEST)
 
 clean:
 	$(RM) $(OBJS) $(DERIVED_OBJS) $(ISRC)
-
-lint: lint_SRCS
 
 include ../../../Makefile.targ
 

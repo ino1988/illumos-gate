@@ -22,9 +22,8 @@
 /*
  * Copyright 2008 Sun Microsystems, Inc.  All rights reserved.
  * Use is subject to license terms.
+ * Copyright 2026 Oxide Computer Company
  */
-
-#pragma ident	"%Z%%M%	%I%	%E% SMI"
 
 #include <sys/types.h>
 #include <sys/systm.h>
@@ -88,9 +87,11 @@ scheduler_load(char *clname, sclass_t *clp)
 	char *tmp = clname + 1;
 
 	/* Check if class name is  "",  ".",  ".."  or  "`"  */
-	if (*clname == '\0' || *clname == '`' || (*clname == '.' && *tmp == '\0') ||
-	    (*clname == '.' && *tmp == '.' && *(++tmp) == '\0'))
+	if (*clname == '\0' || *clname == '`' ||
+	    (*clname == '.' && *tmp == '\0') ||
+	    (*clname == '.' && *tmp == '.' && *(++tmp) == '\0')) {
 		return (EINVAL);
+	}
 
 	if (LOADABLE_SCHED(clp)) {
 		rw_enter(clp->cl_lock, RW_READER);
@@ -154,7 +155,7 @@ getcidbyname_locked(char *clname, id_t *cidp)
 
 	ASSERT(MUTEX_HELD(&class_lock));
 
-	if (*clname == NULL)
+	if (*clname == '\0')
 		return (EINVAL);
 
 	for (clp = &sclass[0]; clp < &sclass[nclass]; clp++) {
@@ -357,9 +358,9 @@ vaparmsout(char *classp, pcparms_t *prmsp, pc_vaparms_t *vaparmsp,
 		return (EINVAL);
 
 	clname = sclass[prmsp->pc_cid].cl_name;
-	if ((seg == UIO_USERSPACE ? copyout : kcopy)(clname,
+	if (uio_copyout(clname,
 	    (void *)(uintptr_t)vaparmsp->pc_parms[0].pc_parm,
-	    MIN(strlen(clname) + 1, PC_CLNMSZ)))
+	    MIN(strlen(clname) + 1, PC_CLNMSZ), seg) != 0)
 		return (EFAULT);
 
 	return (0);

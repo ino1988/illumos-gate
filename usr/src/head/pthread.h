@@ -21,6 +21,8 @@
 
 /*
  * Copyright 2014 Garrett D'Amore <garrett@damore.org>
+ * Copyright 2018 Joyent, Inc.
+ * Copyright 2022 OmniOS Community Edition (OmniOSce) Association.
  *
  * Copyright 2008 Sun Microsystems, Inc.  All rights reserved.
  * Use is subject to license terms.
@@ -68,19 +70,16 @@ extern "C" {
 #define	PTHREAD_PROCESS_SHARED		1	/* = USYNC_PROCESS */
 #define	PTHREAD_PROCESS_PRIVATE		0	/* = USYNC_THREAD */
 
-#define	_DEFAULT_TYPE 			PTHREAD_PROCESS_PRIVATE
-#if !defined(__XOPEN_OR_POSIX) || defined(__EXTENSIONS__)
-#define	DEFAULT_TYPE			_DEFAULT_TYPE
-#endif
-
 /*
  * mutex types
- * keep these in synch which sys/synch.h lock flags
+ *
+ * _ERRORCHECK and _RERCURSIVE are kept in line with their corresponding values
+ * in sys/synch.h; however, in general these types have their own semantics.
  */
 #define	PTHREAD_MUTEX_NORMAL		0x0
 #define	PTHREAD_MUTEX_ERRORCHECK	0x2
 #define	PTHREAD_MUTEX_RECURSIVE		0x4
-#define	PTHREAD_MUTEX_DEFAULT		PTHREAD_MUTEX_NORMAL
+#define	PTHREAD_MUTEX_DEFAULT		0x8
 
 /*
  * Mutex protocol values. Keep these in synch with sys/synch.h lock types.
@@ -112,13 +111,21 @@ extern "C" {
  * should be consistent with the definition for pthread_mutex_t).
  */
 #define	PTHREAD_MUTEX_INITIALIZER		/* = DEFAULTMUTEX */	\
-	{{0, 0, 0, _DEFAULT_TYPE, _MUTEX_MAGIC}, {{{0}}}, 0}
+	{{0, 0, 0, PTHREAD_PROCESS_PRIVATE, _MUTEX_MAGIC}, {{{0}}}, 0}
+
+#define	PTHREAD_ERRORCHECK_MUTEX_INITIALIZER_NP /* = ERRORCHECKMUTEX */ \
+	{{0, 0, 0, PTHREAD_PROCESS_PRIVATE | PTHREAD_MUTEX_ERRORCHECK,  \
+	_MUTEX_MAGIC}, {{{0}}}, 0}
+
+#define	PTHREAD_RECURSIVE_MUTEX_INITIALIZER_NP  /* = RECURSIVEMUTEX */  \
+	{{0, 0, 0, PTHREAD_PROCESS_PRIVATE | PTHREAD_MUTEX_RECURSIVE |  \
+	PTHREAD_MUTEX_ERRORCHECK, _MUTEX_MAGIC}, {{{0}}}, 0}
 
 #define	PTHREAD_COND_INITIALIZER		/* = DEFAULTCV */	\
-	{{{0, 0, 0, 0}, _DEFAULT_TYPE, _COND_MAGIC}, 0}
+	{{{0, 0, 0, 0}, PTHREAD_PROCESS_PRIVATE, _COND_MAGIC}, 0}
 
 #define	PTHREAD_RWLOCK_INITIALIZER		/* = DEFAULTRWLOCK */	\
-	{0, _DEFAULT_TYPE, _RWL_MAGIC, PTHREAD_MUTEX_INITIALIZER,	\
+	{0, PTHREAD_PROCESS_PRIVATE, _RWL_MAGIC, PTHREAD_MUTEX_INITIALIZER, \
 	PTHREAD_COND_INITIALIZER, PTHREAD_COND_INITIALIZER}
 
 /* cancellation type and state */
@@ -142,6 +149,9 @@ extern "C" {
 
 /* barriers */
 #define	PTHREAD_BARRIER_SERIAL_THREAD	-2
+
+/* For pthread_{get,set}name_np(). */
+#define	PTHREAD_MAX_NAMELEN_NP (32)
 
 #ifndef	_ASM
 
@@ -213,6 +223,10 @@ extern int pthread_attr_setschedparam(pthread_attr_t *_RESTRICT_KYWD,
 		const struct sched_param *_RESTRICT_KYWD);
 extern int pthread_attr_getschedparam(const pthread_attr_t *_RESTRICT_KYWD,
 		struct sched_param *_RESTRICT_KYWD);
+extern int pthread_attr_setname_np(pthread_attr_t *_RESTRICT_KYWD,
+    const char *_RESTRICT_KYWD);
+extern int pthread_attr_getname_np(pthread_attr_t *_RESTRICT_KYWD,
+    char *_RESTRICT_KYWD, size_t);
 extern int pthread_create(pthread_t *_RESTRICT_KYWD,
 		const pthread_attr_t *_RESTRICT_KYWD, void * (*)(void *),
 		void *_RESTRICT_KYWD);
@@ -235,6 +249,8 @@ extern int pthread_key_delete(pthread_key_t);
 extern int pthread_setspecific(pthread_key_t, const void *);
 extern void *pthread_getspecific(pthread_key_t);
 extern pthread_t pthread_self(void);
+extern int pthread_setname_np(pthread_t, const char *);
+extern int pthread_getname_np(pthread_t, char *, size_t);
 
 /*
  * function prototypes - synchronization related calls
@@ -258,8 +274,12 @@ extern int pthread_mutex_init(pthread_mutex_t *_RESTRICT_KYWD,
 extern int pthread_mutex_consistent(pthread_mutex_t *);
 extern int pthread_mutex_destroy(pthread_mutex_t *);
 extern int pthread_mutex_lock(pthread_mutex_t *);
+extern int pthread_mutex_clocklock(pthread_mutex_t *_RESTRICT_KYWD,
+	clockid_t, const struct timespec *_RESTRICT_KYWD);
 extern int pthread_mutex_timedlock(pthread_mutex_t *_RESTRICT_KYWD,
 	const struct timespec *_RESTRICT_KYWD);
+extern int pthread_mutex_relclocklock_np(pthread_mutex_t *_RESTRICT_KYWD,
+	clockid_t, const struct timespec *_RESTRICT_KYWD);
 extern int pthread_mutex_reltimedlock_np(pthread_mutex_t *_RESTRICT_KYWD,
 	const struct timespec *_RESTRICT_KYWD);
 extern int pthread_mutex_unlock(pthread_mutex_t *);
@@ -283,8 +303,14 @@ extern int pthread_cond_broadcast(pthread_cond_t *);
 extern int pthread_cond_signal(pthread_cond_t *);
 extern int pthread_cond_wait(pthread_cond_t *_RESTRICT_KYWD,
 	pthread_mutex_t *_RESTRICT_KYWD);
+extern int pthread_cond_clockwait(pthread_cond_t *_RESTRICT_KYWD,
+	pthread_mutex_t *_RESTRICT_KYWD, clockid_t,
+	const struct timespec *_RESTRICT_KYWD);
 extern int pthread_cond_timedwait(pthread_cond_t *_RESTRICT_KYWD,
 	pthread_mutex_t *_RESTRICT_KYWD, const struct timespec *_RESTRICT_KYWD);
+extern int pthread_cond_relclockwait_np(pthread_cond_t *_RESTRICT_KYWD,
+	pthread_mutex_t *_RESTRICT_KYWD, clockid_t,
+	const struct timespec *_RESTRICT_KYWD);
 extern int pthread_cond_reltimedwait_np(pthread_cond_t *_RESTRICT_KYWD,
 	pthread_mutex_t *_RESTRICT_KYWD, const struct timespec *_RESTRICT_KYWD);
 extern int pthread_attr_getguardsize(const pthread_attr_t *_RESTRICT_KYWD,
@@ -299,14 +325,22 @@ extern int pthread_rwlock_init(pthread_rwlock_t *_RESTRICT_KYWD,
 	const pthread_rwlockattr_t *_RESTRICT_KYWD);
 extern int pthread_rwlock_destroy(pthread_rwlock_t *);
 extern int pthread_rwlock_rdlock(pthread_rwlock_t *);
+extern int pthread_rwlock_clockrdlock(pthread_rwlock_t *_RESTRICT_KYWD,
+	clockid_t, const struct timespec *_RESTRICT_KYWD);
 extern int pthread_rwlock_timedrdlock(pthread_rwlock_t *_RESTRICT_KYWD,
 	const struct timespec *_RESTRICT_KYWD);
+extern int pthread_rwlock_relclockrdlock_np(pthread_rwlock_t *_RESTRICT_KYWD,
+	clockid_t, const struct timespec *_RESTRICT_KYWD);
 extern int pthread_rwlock_reltimedrdlock_np(pthread_rwlock_t *_RESTRICT_KYWD,
 	const struct timespec *_RESTRICT_KYWD);
 extern int pthread_rwlock_tryrdlock(pthread_rwlock_t *);
 extern int pthread_rwlock_wrlock(pthread_rwlock_t *);
+extern int pthread_rwlock_clockwrlock(pthread_rwlock_t *_RESTRICT_KYWD,
+	clockid_t, const struct timespec *_RESTRICT_KYWD);
 extern int pthread_rwlock_timedwrlock(pthread_rwlock_t *_RESTRICT_KYWD,
 	const struct timespec *_RESTRICT_KYWD);
+extern int pthread_rwlock_relclockwrlock_np(pthread_rwlock_t *_RESTRICT_KYWD,
+	clockid_t, const struct timespec *_RESTRICT_KYWD);
 extern int pthread_rwlock_reltimedwrlock_np(pthread_rwlock_t *_RESTRICT_KYWD,
 	const struct timespec *_RESTRICT_KYWD);
 extern int pthread_rwlock_trywrlock(pthread_rwlock_t *);
@@ -336,6 +370,16 @@ extern int pthread_mutex_consistent_np(pthread_mutex_t *);
 extern int pthread_mutexattr_setrobust_np(pthread_mutexattr_t *, int);
 extern int pthread_mutexattr_getrobust_np(
 	const pthread_mutexattr_t *_RESTRICT_KYWD, int *_RESTRICT_KYWD);
+
+/*
+ * These are non-standardized extensions that we provide. Their origins are
+ * documented in their manual pages.
+ */
+#if !defined(_STRICT_SYMBOLS)
+extern int pthread_attr_get_np(pthread_t, pthread_attr_t *);
+extern void pthread_mutex_enter_np(pthread_mutex_t *);
+extern void pthread_mutex_exit_np(pthread_mutex_t *);
+#endif	/* !_STRICT_SYMBOLS */
 
 #endif	/* _ASM */
 

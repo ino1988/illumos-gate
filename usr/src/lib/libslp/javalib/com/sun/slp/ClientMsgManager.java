@@ -42,7 +42,7 @@ import java.util.*;
  * solicitation, and for forwarding of registrations and deregistrations
  * from the SA server to DAs. This class creates the appropriately
  * versioned message instance, based on the arguments. It also
- * sets the header variables. It is up to the caller to set the 
+ * sets the header variables. It is up to the caller to set the
  * instance variables in the object itself.
  *
  * @author James Kempf
@@ -51,7 +51,7 @@ import java.util.*;
 abstract class ClientMsgManager extends Object {
 
     // The class table contains classes registered for particular versions
-    //  and message types. 
+    //  and message types.
 
     private static Hashtable classTable = new Hashtable();
 
@@ -83,26 +83,26 @@ abstract class ClientMsgManager extends Object {
     // Return the appropriately versioned object, with instance variables
     //  set in the header.
 
-    static SrvLocMsg 
+    static SrvLocMsg
 	newInstance(String keyName,
 		    int version,
-		    boolean isTCP) 
+		    boolean isTCP)
 	throws ServiceLocationException {
 
 	try {
 
 	    // Get header class.
 
-	    Class msgClass = 
+	    Class msgClass =
 		(Class)classTable.get(makeClassKey(keyName, version));
 
 	    if (msgClass == null) {
-		throw 
+		throw
 		    new ServiceLocationException(
 				ServiceLocationException.INTERNAL_ERROR,
 				"cmm_creation_error",
 				new Object[] { keyName,
-						   new Integer(version)});
+						   Integer.valueOf(version)});
 
 	    }
 
@@ -121,13 +121,13 @@ abstract class ClientMsgManager extends Object {
 	    return msg;
 
 	} catch (Exception ex) {
-	    throw 
+	    throw
 		new ServiceLocationException(
 				ServiceLocationException.INTERNAL_ERROR,
 				"cmm_creation_exception",
-				new Object[] { ex, 
-						   keyName, 
-						   new Integer(version), 
+				new Object[] { ex,
+						   keyName,
+						   Integer.valueOf(version),
 						   ex.getMessage()});
 	}
     }

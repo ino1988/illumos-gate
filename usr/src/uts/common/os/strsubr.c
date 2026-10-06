@@ -19,12 +19,17 @@
  * CDDL HEADER END
  */
 /*	Copyright (c) 1984, 1986, 1987, 1988, 1989 AT&T	*/
-/*	  All Rights Reserved  	*/
+/*	  All Rights Reserved	*/
 
 
 /*
  * Copyright 2010 Sun Microsystems, Inc.  All rights reserved.
  * Use is subject to license terms.
+ * Copyright (c) 2016 by Delphix. All rights reserved.
+ * Copyright 2018 OmniOS Community Edition (OmniOSce) Association.
+ * Copyright 2018 Joyent, Inc.
+ * Copyright 2022 Garrett D'Amore
+ * Copyright 2025 Oxide Computer Company
  */
 
 #include <sys/types.h>
@@ -70,7 +75,6 @@
 #include <sys/sunldi_impl.h>
 #include <sys/strsun.h>
 #include <sys/isa_defs.h>
-#include <sys/multidata.h>
 #include <sys/pattr.h>
 #include <sys/strft.h>
 #include <sys/fs/snode.h>
@@ -109,7 +113,6 @@ typedef struct str_stat {
 	kstat_named_t	strwaits;
 	kstat_named_t	taskqfails;
 	kstat_named_t	bufcalls;
-	kstat_named_t	qhelps;
 	kstat_named_t	qremoved;
 	kstat_named_t	sqremoved;
 	kstat_named_t	bcwaits;
@@ -126,7 +129,6 @@ static str_stat_t str_statistics = {
 	{ "strwaits",		KSTAT_DATA_UINT64 },
 	{ "taskqfails",		KSTAT_DATA_UINT64 },
 	{ "bufcalls",		KSTAT_DATA_UINT64 },
-	{ "qhelps",		KSTAT_DATA_UINT64 },
 	{ "qremoved",		KSTAT_DATA_UINT64 },
 	{ "sqremoved",		KSTAT_DATA_UINT64 },
 	{ "bcwaits",		KSTAT_DATA_UINT64 },
@@ -359,7 +361,8 @@ static void esballoc_mblk_free(mblk_t *);
  *	for passthru read and write queues
  */
 
-static void pass_wput(queue_t *, mblk_t *);
+static int pass_rput(queue_t *, mblk_t *);
+static int pass_wput(queue_t *, mblk_t *);
 static queue_t *link_addpassthru(stdata_t *);
 static void link_rempassthru(queue_t *);
 
@@ -373,7 +376,7 @@ struct  module_info passthru_info = {
 };
 
 struct  qinit passthru_rinit = {
-	(int (*)())putnext,
+	pass_rput,
 	NULL,
 	NULL,
 	NULL,
@@ -383,7 +386,7 @@ struct  qinit passthru_rinit = {
 };
 
 struct  qinit passthru_winit = {
-	(int (*)()) pass_wput,
+	pass_wput,
 	NULL,
 	NULL,
 	NULL,
@@ -949,7 +952,7 @@ str_sendsig(vnode_t *vp, int event, uchar_t band, int error)
  */
 static void
 dosendsig(proc_t *proc, int events, int sevent, k_siginfo_t *info,
-	uchar_t band, int error)
+    uchar_t band, int error)
 {
 	ASSERT(MUTEX_HELD(&proc->p_lock));
 
@@ -1897,36 +1900,9 @@ mlink_file(vnode_t *vp, int cmd, struct file *fpdown, cred_t *crp, int *rvalp,
 	 */
 	error = strdoioctl(stp, &strioc, FNATIVE,
 	    K_TO_K | STR_NOERROR | STR_NOSIG, crp, rvalp);
-	if (error != 0) {
-		lbfree(linkp);
+	if (error != 0)
+		goto cleanup;
 
-		if (!(passyncq->sq_flags & SQ_BLOCKED))
-			blocksq(passyncq, SQ_BLOCKED, 0);
-		/*
-		 * Restore the stream head queue and then remove
-		 * the passq. Turn off STPLEX before we turn on
-		 * the stream by removing the passq.
-		 */
-		rq->q_ptr = _WR(rq)->q_ptr = stpdown;
-		setq(rq, &strdata, &stwdata, NULL, QMTSAFE, SQ_CI|SQ_CO,
-		    B_TRUE);
-
-		mutex_enter(&stpdown->sd_lock);
-		stpdown->sd_flag &= ~STPLEX;
-		mutex_exit(&stpdown->sd_lock);
-
-		link_rempassthru(passq);
-
-		mutex_enter(&stpdown->sd_lock);
-		stpdown->sd_flag &= ~STRPLUMB;
-		/* Wakeup anyone waiting for STRPLUMB to clear. */
-		cv_broadcast(&stpdown->sd_monitor);
-		mutex_exit(&stpdown->sd_lock);
-
-		mutex_exit(&muxifier);
-		netstack_rele(ss->ss_netstack);
-		return (error);
-	}
 	mutex_enter(&fpdown->f_tlock);
 	fpdown->f_count++;
 	mutex_exit(&fpdown->f_tlock);
@@ -1938,9 +1914,16 @@ mlink_file(vnode_t *vp, int cmd, struct file *fpdown, cred_t *crp, int *rvalp,
 
 	ASSERT((cmd == I_LINK) || (cmd == I_PLINK));
 	if (cmd == I_LINK) {
-		ldi_mlink_fp(stp, fpdown, lhlink, LINKNORMAL);
+		error = ldi_mlink_fp(stp, fpdown, lhlink, LINKNORMAL);
 	} else {
-		ldi_mlink_fp(stp, fpdown, lhlink, LINKPERSIST);
+		error = ldi_mlink_fp(stp, fpdown, lhlink, LINKPERSIST);
+	}
+
+	if (error != 0) {
+		mutex_enter(&fpdown->f_tlock);
+		fpdown->f_count--;
+		mutex_exit(&fpdown->f_tlock);
+		goto cleanup;
 	}
 
 	link_rempassthru(passq);
@@ -1972,6 +1955,36 @@ mlink_file(vnode_t *vp, int cmd, struct file *fpdown, cred_t *crp, int *rvalp,
 	*rvalp = linkp->li_lblk.l_index;
 	netstack_rele(ss->ss_netstack);
 	return (0);
+
+cleanup:
+	lbfree(linkp);
+
+	if (!(passyncq->sq_flags & SQ_BLOCKED))
+		blocksq(passyncq, SQ_BLOCKED, 0);
+	/*
+	 * Restore the stream head queue and then remove
+	 * the passq. Turn off STPLEX before we turn on
+	 * the stream by removing the passq.
+	 */
+	rq->q_ptr = _WR(rq)->q_ptr = stpdown;
+	setq(rq, &strdata, &stwdata, NULL, QMTSAFE, SQ_CI|SQ_CO,
+	    B_TRUE);
+
+	mutex_enter(&stpdown->sd_lock);
+	stpdown->sd_flag &= ~STPLEX;
+	mutex_exit(&stpdown->sd_lock);
+
+	link_rempassthru(passq);
+
+	mutex_enter(&stpdown->sd_lock);
+	stpdown->sd_flag &= ~STRPLUMB;
+	/* Wakeup anyone waiting for STRPLUMB to clear. */
+	cv_broadcast(&stpdown->sd_monitor);
+	mutex_exit(&stpdown->sd_lock);
+
+	mutex_exit(&muxifier);
+	netstack_rele(ss->ss_netstack);
+	return (error);
 }
 
 int
@@ -2228,9 +2241,9 @@ munlink(stdata_t *stp, linkinfo_t *linkp, int flag, cred_t *crp, int *rvalp,
 
 	/* clean up the layered driver linkages */
 	if ((flag & LINKTYPEMASK) == LINKNORMAL) {
-		ldi_munlink_fp(stp, fpdown, LINKNORMAL);
+		VERIFY0(ldi_munlink_fp(stp, fpdown, LINKNORMAL));
 	} else {
-		ldi_munlink_fp(stp, fpdown, LINKPERSIST);
+		VERIFY0(ldi_munlink_fp(stp, fpdown, LINKPERSIST));
 	}
 
 	link_rempassthru(passq);
@@ -2349,7 +2362,7 @@ mux_rmvedge(stdata_t *upstp, int muxid, str_stack_t *ss)
  */
 int
 devflg_to_qflag(struct streamtab *stp, uint32_t devflag, uint32_t *qflagp,
-	uint32_t *sqtypep)
+    uint32_t *sqtypep)
 {
 	uint32_t qflag = 0;
 	uint32_t sqtype = 0;
@@ -2462,6 +2475,17 @@ devflg_to_qflag(struct streamtab *stp, uint32_t devflag, uint32_t *qflagp,
 			goto bad;
 		qflag |= _QDIRECT;
 	}
+
+	/*
+	 * Private flag used to indicate that a streams module should only
+	 * be pushed once. The TTY streams modules have this flag since if
+	 * libc believes itself to be an xpg4 process then it will
+	 * automatically and unconditionally push them when a PTS device is
+	 * opened. If an application is not aware of this then without this
+	 * flag we would end up with duplicate modules.
+	 */
+	if (devflag & _D_SINGLE_INSTANCE)
+		qflag |= _QSINGLE_INSTANCE;
 
 	*qflagp = qflag;
 	*sqtypep = sqtype;
@@ -2991,7 +3015,7 @@ strwaitbuf(size_t size, int pri)
  *	GETWAIT		Check for read side errors, no M_READ
  *	WRITEWAIT	Check for write side errors.
  *	NOINTR		Do not return error if nonblocking or timeout.
- * 	STR_NOERROR	Ignore all errors except STPLEX.
+ *	STR_NOERROR	Ignore all errors except STPLEX.
  *	STR_NOSIG	Ignore/hold signals during the duration of the call.
  *	STR_PEEK	Pass through the strgeterr().
  */
@@ -4020,7 +4044,7 @@ esballoc_enqueue_mblk(mblk_t *mp)
 {
 
 	if (taskq_dispatch(system_taskq, (task_func_t *)esballoc_mblk_free, mp,
-	    TQ_NOSLEEP) == NULL) {
+	    TQ_NOSLEEP) == TASKQID_INVALID) {
 		mblk_t *first_mp = mp;
 		/*
 		 * System is low on resources and can't perform a non-sleeping
@@ -6390,7 +6414,7 @@ drain_syncq(syncq_t *sq)
 		sq->sq_svcflags &= ~SQ_SERVICE;
 
 	/*
-	 * If SQ_EXCL is set, someone else is processing this syncq - let him
+	 * If SQ_EXCL is set, someone else is processing this syncq - let them
 	 * finish the job.
 	 */
 	if (flags & SQ_EXCL) {
@@ -6615,9 +6639,9 @@ drain_syncq(syncq_t *sq)
  *
  * qdrain_syncq can be called (currently) from only one of two places:
  *	drain_syncq
- * 	putnext  (or some variation of it).
+ *	putnext  (or some variation of it).
  * and eventually
- * 	qwait(_sig)
+ *	qwait(_sig)
  *
  * If called from drain_syncq, we found it in the list of queues needing
  * service, so there is work to be done (or it wouldn't be in the list).
@@ -6637,8 +6661,8 @@ drain_syncq(syncq_t *sq)
  *
  * ASSUMES:
  *	One claim
- * 	QLOCK held
- * 	SQLOCK not held
+ *	QLOCK held
+ *	SQLOCK not held
  *	Will release QLOCK before returning
  */
 void
@@ -7092,11 +7116,11 @@ static int
 propagate_syncq(queue_t *qp)
 {
 	mblk_t		*bp, *head, *tail, *prev, *next;
-	syncq_t 	*sq;
+	syncq_t		*sq;
 	queue_t		*nqp;
 	syncq_t		*nsq;
 	boolean_t	isdriver;
-	int 		moved = 0;
+	int		moved = 0;
 	uint16_t	flags;
 	pri_t		priority = curthread->t_pri;
 #ifdef DEBUG
@@ -7129,7 +7153,7 @@ propagate_syncq(queue_t *qp)
 			/* debug macro */
 			SQ_PUTLOCKS_HELD(nsq);
 #ifdef DEBUG
-			func = (void (*)())nqp->q_qinfo->qi_putp;
+			func = (void (*)())(uintptr_t)nqp->q_qinfo->qi_putp;
 #endif
 		}
 
@@ -7801,12 +7825,19 @@ strsetuio(stdata_t *stp)
 	stp->sd_struiordq = wrq ? _RD(wrq) : 0;
 }
 
+static int
+pass_rput(queue_t *q, mblk_t *mp)
+{
+	putnext(q, mp);
+	return (0);
+}
+
 /*
  * pass_wput, unblocks the passthru queues, so that
  * messages can arrive at muxs lower read queue, before
  * I_LINK/I_UNLINK is acked/nacked.
  */
-static void
+static int
 pass_wput(queue_t *q, mblk_t *mp)
 {
 	syncq_t *sq;
@@ -7815,6 +7846,7 @@ pass_wput(queue_t *q, mblk_t *mp)
 	if (sq->sq_flags & SQ_BLOCKED)
 		unblocksq(sq, SQ_BLOCKED, 0);
 	putnext(q, mp);
+	return (0);
 }
 
 /*
@@ -8086,7 +8118,7 @@ strflushrq(vnode_t *vp, int flag)
 
 void
 strsetrputhooks(vnode_t *vp, uint_t flags,
-		msgfunc_t protofunc, msgfunc_t miscfunc)
+    msgfunc_t protofunc, msgfunc_t miscfunc)
 {
 	struct stdata *stp = vp->v_stream;
 
@@ -8378,17 +8410,6 @@ stream_runservice(stdata_t *stp)
 
 	stp->sd_svcflags &= ~STRS_WILLSERVICE;
 	mutex_exit(&stp->sd_qlock);
-	/*
-	 * Help backup background thread to drain the qhead/qtail list.
-	 */
-	while (qhead != NULL) {
-		STRSTAT(qhelps);
-		mutex_enter(&service_queue);
-		DQ(q, qhead, qtail, q_link);
-		mutex_exit(&service_queue);
-		if (q != NULL)
-			queue_service(q);
-	}
 }
 
 void
@@ -8446,96 +8467,6 @@ mblk_copycred(mblk_t *mp, const mblk_t *src)
 	/* Don't overwrite with NOPID */
 	if (cpid != NOPID)
 		dbp->db_cpid = cpid;
-}
-
-int
-hcksum_assoc(mblk_t *mp,  multidata_t *mmd, pdesc_t *pd,
-    uint32_t start, uint32_t stuff, uint32_t end, uint32_t value,
-    uint32_t flags, int km_flags)
-{
-	int rc = 0;
-
-	ASSERT(DB_TYPE(mp) == M_DATA || DB_TYPE(mp) == M_MULTIDATA);
-	if (mp->b_datap->db_type == M_DATA) {
-		/* Associate values for M_DATA type */
-		DB_CKSUMSTART(mp) = (intptr_t)start;
-		DB_CKSUMSTUFF(mp) = (intptr_t)stuff;
-		DB_CKSUMEND(mp) = (intptr_t)end;
-		DB_CKSUMFLAGS(mp) = flags;
-		DB_CKSUM16(mp) = (uint16_t)value;
-
-	} else {
-		pattrinfo_t pa_info;
-
-		ASSERT(mmd != NULL);
-
-		pa_info.type = PATTR_HCKSUM;
-		pa_info.len = sizeof (pattr_hcksum_t);
-
-		if (mmd_addpattr(mmd, pd, &pa_info, B_TRUE, km_flags) != NULL) {
-			pattr_hcksum_t *hck = (pattr_hcksum_t *)pa_info.buf;
-
-			hck->hcksum_start_offset = start;
-			hck->hcksum_stuff_offset = stuff;
-			hck->hcksum_end_offset = end;
-			hck->hcksum_cksum_val.inet_cksum = (uint16_t)value;
-			hck->hcksum_flags = flags;
-		} else {
-			rc = -1;
-		}
-	}
-	return (rc);
-}
-
-void
-hcksum_retrieve(mblk_t *mp, multidata_t *mmd, pdesc_t *pd,
-    uint32_t *start, uint32_t *stuff, uint32_t *end,
-    uint32_t *value, uint32_t *flags)
-{
-	ASSERT(DB_TYPE(mp) == M_DATA || DB_TYPE(mp) == M_MULTIDATA);
-	if (mp->b_datap->db_type == M_DATA) {
-		if (flags != NULL) {
-			*flags = DB_CKSUMFLAGS(mp) & HCK_FLAGS;
-			if ((*flags & (HCK_PARTIALCKSUM |
-			    HCK_FULLCKSUM)) != 0) {
-				if (value != NULL)
-					*value = (uint32_t)DB_CKSUM16(mp);
-				if ((*flags & HCK_PARTIALCKSUM) != 0) {
-					if (start != NULL)
-						*start =
-						    (uint32_t)DB_CKSUMSTART(mp);
-					if (stuff != NULL)
-						*stuff =
-						    (uint32_t)DB_CKSUMSTUFF(mp);
-					if (end != NULL)
-						*end =
-						    (uint32_t)DB_CKSUMEND(mp);
-				}
-			}
-		}
-	} else {
-		pattrinfo_t hck_attr = {PATTR_HCKSUM};
-
-		ASSERT(mmd != NULL);
-
-		/* get hardware checksum attribute */
-		if (mmd_getpattr(mmd, pd, &hck_attr) != NULL) {
-			pattr_hcksum_t *hck = (pattr_hcksum_t *)hck_attr.buf;
-
-			ASSERT(hck_attr.len >= sizeof (pattr_hcksum_t));
-			if (flags != NULL)
-				*flags = hck->hcksum_flags;
-			if (start != NULL)
-				*start = hck->hcksum_start_offset;
-			if (stuff != NULL)
-				*stuff = hck->hcksum_stuff_offset;
-			if (end != NULL)
-				*end = hck->hcksum_end_offset;
-			if (value != NULL)
-				*value = (uint32_t)
-				    hck->hcksum_cksum_val.inet_cksum;
-		}
-	}
 }
 
 void
@@ -8617,23 +8548,6 @@ bcksum(uchar_t *bp, int len, unsigned int psum)
 	 * checksum. The max psum value before normalization is 0x3FDFE.
 	 */
 	return ((psum >> 16) + (psum & 0xFFFF));
-}
-
-boolean_t
-is_vmloaned_mblk(mblk_t *mp, multidata_t *mmd, pdesc_t *pd)
-{
-	boolean_t rc;
-
-	ASSERT(DB_TYPE(mp) == M_DATA || DB_TYPE(mp) == M_MULTIDATA);
-	if (DB_TYPE(mp) == M_DATA) {
-		rc = (((mp)->b_datap->db_struioflag & STRUIO_ZC) != 0);
-	} else {
-		pattrinfo_t zcopy_attr = {PATTR_ZCOPY};
-
-		ASSERT(mmd != NULL);
-		rc = (mmd_getpattr(mmd, pd, &zcopy_attr) != NULL);
-	}
-	return (rc);
 }
 
 void

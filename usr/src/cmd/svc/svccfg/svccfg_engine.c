@@ -25,7 +25,7 @@
 
 
 /*
- * svccfg(1) interpreter and command execution engine.
+ * svccfg(8) interpreter and command execution engine.
  */
 
 #include <sys/mman.h>
@@ -467,13 +467,13 @@ fail:
 /*
  * Initialize svccfg state.  We recognize four environment variables:
  *
- * SVCCFG_REPOSITORY	Create a private instance of svc.configd(1M) to answer
+ * SVCCFG_REPOSITORY	Create a private instance of svc.configd(8) to answer
  *			requests for the specified repository file.
  * SVCCFG_DOOR_PATH	Directory for door creation.
  *
  * SVCCFG_DOOR		Rendezvous via an alternative repository door.
  *
- * SVCCFG_CONFIGD_PATH	Resolvable path to alternative svc.configd(1M) binary.
+ * SVCCFG_CONFIGD_PATH	Resolvable path to alternative svc.configd(8) binary.
  */
 void
 engine_init()
@@ -761,7 +761,7 @@ engine_import(uu_list_t *args)
 
 	if (progress_out != NULL)
 		(void) fprintf(progress_out,
-		    "Loading smf(5) service descriptions: ");
+		    "Loading smf(7) service descriptions: ");
 
 	failed_manifests = 0;
 	progress_count = 0;
@@ -793,11 +793,11 @@ engine_import(uu_list_t *args)
 	if (dirarg && total_manifests > 0) {
 		char *msg;
 
-		msg = "Loaded %d smf(5) service descriptions\n";
+		msg = "Loaded %d smf(7) service descriptions\n";
 		warn(gettext(msg), progress_count);
 
 		if (failed_manifests) {
-			msg = "%d smf(5) service descriptions failed to load\n";
+			msg = "%d smf(7) service descriptions failed to load\n";
 			warn(gettext(msg), failed_manifests);
 		}
 	}
@@ -835,6 +835,7 @@ int
 engine_cleanup(int flags)
 {
 	boolean_t		activity = B_TRUE;
+	int			dont_exit;
 	int			r = -1;
 
 	lscf_prep_hndl();
@@ -843,10 +844,16 @@ engine_cleanup(int flags)
 		activity = B_FALSE;
 	}
 
+	dont_exit = est->sc_cmd_flags & SC_CMD_DONT_EXIT;
+	est->sc_cmd_flags |= SC_CMD_DONT_EXIT;
+
 	if (scf_walk_fmri(g_hndl, 0, NULL, SCF_WALK_SERVICE|SCF_WALK_NOINSTANCE,
 	    lscf_service_cleanup, (void *)activity, NULL,
 	    uu_warn) == SCF_SUCCESS)
 		r = 0;
+
+	if (dont_exit == 0)
+		est->sc_cmd_flags &= ~SC_CMD_DONT_EXIT;
 
 	(void) lscf_hash_cleanup();
 

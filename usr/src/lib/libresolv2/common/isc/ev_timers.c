@@ -19,12 +19,6 @@
  * vix 09sep95 [initial]
  */
 
-#if !defined(LINT) && !defined(CODECENTER)
-static const char rcsid[] = "$Id: ev_timers.c,v 1.6 2005/04/27 04:56:36 sra Exp $";
-#endif
-
-/* Import. */
-
 #include "port_before.h"
 #include "fd_setsize.h"
 
@@ -479,7 +473,7 @@ idle_timeout(evContext opaqueCtx,
 
 	UNUSED(due);
 	UNUSED(inter);
-	
+
 	idle = evSubTime(ctx->lastEventTime, this->lastTouched);
 	if (evCmpTime(idle, this->max_idle) >= 0) {
 		(this->func)(opaqueCtx, this->uap, this->timer->due,

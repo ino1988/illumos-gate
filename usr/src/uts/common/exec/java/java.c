@@ -21,6 +21,7 @@
 /*
  * Copyright 2010 Sun Microsystems, Inc.  All rights reserved.
  * Use is subject to license terms.
+ * Copyright 2019 Joyent, Inc.
  */
 
 /*
@@ -55,7 +56,7 @@
  */
 #if defined(__sparc)
 char *jexec = "/usr/java/jre/lib/sparc/jexec";
-#elif defined(__i386) || defined(__i386_COMPAT)
+#elif defined(__x86)
 char *jexec = "/usr/java/jre/lib/i386/jexec";
 #else
 #error "Unknown ISA"
@@ -84,7 +85,7 @@ char *jexec_arg = "-jar";
 /*ARGSUSED3*/
 static int
 javaexec(vnode_t *vp, struct execa *uap, struct uarg *args,
-    struct intpdata *idatap, int level, long *execsz, int setid,
+    struct intpdata *idatap, int level, size_t *execsz, int setid,
     caddr_t execfile, cred_t *cred, int brand_action)
 {
 	struct intpdata idata;
@@ -144,10 +145,11 @@ javaexec(vnode_t *vp, struct execa *uap, struct uarg *args,
 	/*
 	 * Find and invoke the Java runtime environment on the file
 	 */
+	bzero(&idata, sizeof (intpdata_t));
 	idata.intp = NULL;
-	idata.intp_name = jexec;
-	idata.intp_arg = jexec_arg;
-	if (error = pn_get(idata.intp_name, UIO_SYSSPACE, &lookpn))
+	idata.intp_name[0] = jexec;
+	idata.intp_arg[0] = jexec_arg;
+	if (error = pn_get(idata.intp_name[0], UIO_SYSSPACE, &lookpn))
 		return (error);
 	pn_alloc(&resolvepn);
 	if (error = lookuppn(&lookpn, &resolvepn, FOLLOW, NULLVPP, &nvp)) {

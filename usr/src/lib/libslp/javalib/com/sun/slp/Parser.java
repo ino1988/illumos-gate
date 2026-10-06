@@ -137,7 +137,7 @@ abstract class Parser extends Object {
 
 	tk.resetSyntax();  		 // make all chars ordinary...
 	tk.wordChars('\177','\177');	 // treat controls as part of tokens
-	tk.wordChars('\000', SPACE);	
+	tk.wordChars('\000', SPACE);
 	tk.ordinaryChar(NOT);              // 'NOT' operator
 	tk.wordChars('"', '%');
 	tk.ordinaryChar(AND);              // 'AND' operator
@@ -371,7 +371,7 @@ abstract class Parser extends Object {
 		prex = parseFilter(tk, ev, locale, invert, eval);
 
 	    }
-	
+
 	    // We need to start off with something.
 
 	    if (mrex == null) {
@@ -451,7 +451,7 @@ abstract class Parser extends Object {
 		new ServiceLocationException(
 				ServiceLocationException.PARSE_ERROR,
 				"par_wild_op",
-				new Object[] {new Character(op)});
+				new Object[] {Character.valueOf(op)});
 
 	}
 
@@ -464,10 +464,10 @@ abstract class Parser extends Object {
 		new ServiceLocationException(
 				ServiceLocationException.PARSE_ERROR,
 				"par_bool_op",
-				new Object[] {new Character(op)});
+				new Object[] {Character.valueOf(op)});
 
 	}
-	
+
 	// Check for wrong operator with keyword.
 
 	if ((value == null || value.toString().length() <= 0) &&
@@ -476,7 +476,7 @@ abstract class Parser extends Object {
 		new ServiceLocationException(
 				ServiceLocationException.PARSE_ERROR,
 				"par_key_op",
-				new Object[] {new Character(op)});
+				new Object[] {Character.valueOf(op)});
 	}
 
 	if (eval) {
@@ -585,7 +585,7 @@ abstract class Parser extends Object {
 	StringBuffer buf = new StringBuffer();
 
 	// Parse until the next closing paren.
-	
+
 	do {
 	    int tok = tk.nextToken();
 

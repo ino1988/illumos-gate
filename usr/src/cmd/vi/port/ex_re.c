@@ -35,11 +35,11 @@
 /* from libgen */
 char *_compile(const char *, char *, char *, int);
 
-/* 
+/*
  * The compiled-regular-expression storage areas (re, scanre, and subre)
  * have been changed into dynamically allocated memory areas, in both the
  * Solaris and XPG4 versions.
- * 
+ *
  * In the Solaris version, which uses the original libgen(3g) compile()
  * and step() calls, these areas are allocated once, and then data are
  * copied between them subsequently, as they were in the original
@@ -80,7 +80,7 @@ global(k)
 	char	multi[MB_LEN_MAX + 1];
 	wchar_t	wc;
 	int	len;
-	
+
 
 	Cwas = Command;
 	/*
@@ -299,7 +299,7 @@ gettext("Substitute pattern match failed"));
 int
 compsub(int ch)
 {
-	int seof, c, uselastre; 
+	int seof, c, uselastre;
 	static int gsubf;
 	static unsigned char remem[RHSSIZE];
 	static int remflg = -1;
@@ -327,7 +327,7 @@ gettext("Missing regular expression for substitute"));
 
 	case '~':
 		uselastre = 1;
-		/* fall into ... */
+		/* FALLTHROUGH */
 	case '&':
 	redo:
 		if (re == NULL || re->Expbuf[1] == 0)
@@ -474,6 +474,7 @@ gettext("Replacement pattern too long - limit 256 characters"));
 				ungetchar(c);
 				goto endrhs;
 			}
+			/* FALLTHROUGH */
 
 		case '~':
 		case '&':
@@ -535,7 +536,7 @@ confirmed(line *a)
 	ugo(lcolumn(loc2) - c, '^');
 	flush();
 	cnt = 0;
-bkup:	
+bkup:
 	ch = c = getkey();
 again:
 	if (c == '\b') {
@@ -545,7 +546,7 @@ again:
 			putchar(' ');
 			putchar('\b' | QUOTE), flush();
 			cnt --;
-		} 
+		}
 		goto bkup;
 	}
 	if (c == '\r')
@@ -751,7 +752,6 @@ vi_compile(int eof, int oknl)
 #ifdef XPG4
 	/*
 	 * reset cflags to plain BRE
-	 * if \< and/or \> is specified, REG_WORDS is set.
 	 */
 	regcomp_flags = 0;
 #endif /* XPG4 */
@@ -843,15 +843,11 @@ complex:
 				}
 				(void) getchar();
 			}
-				
+
 			switch (c) {
 
 			case '<':
 			case '>':
-#ifdef XPG4
-				regcomp_flags = REG_WORDS;
-				/*FALLTHRU*/
-#endif /* XPG4 */
 			case '(':
 			case ')':
 			case '{':
@@ -862,7 +858,7 @@ complex:
 				*gp++ = '\\';
 				*gp++ = c;
 				continue;
-			
+
 			case 'n':
 				*gp++ = c;
 				continue;
@@ -935,7 +931,7 @@ gettext("Replacement pattern contains \\d - cannot use in re"));
 					c = getchar();
 				}
 
-				do { 
+				do {
 					if (!isascii(c) && c != EOF) {
 						ungetchar(c);
 						if ((len = _mbftowc(multi, &wc, getchar, &peekc)) >= 1) {
@@ -948,7 +944,7 @@ gettext("Replacement pattern contains \\d - cannot use in re"));
 						}
 						(void) getchar();
 					}
-				
+
 					if (gp >= &genbuf[LBSIZE-4])
 						goto complex;
 					if(c == '\\' && peekchar() == ']') {
@@ -986,6 +982,7 @@ cerror(value(vi_TERSE) ? (unsigned char *)gettext("No newlines in re's") :
 			}
 cerror(value(vi_TERSE) ? (unsigned char *)gettext("Badly formed re") :
 (unsigned char *)gettext("Missing closing delimiter for regular expression"));
+			/* FALLTHROUGH */
 
 		case '.':
 		case '~':
@@ -995,7 +992,7 @@ cerror(value(vi_TERSE) ? (unsigned char *)gettext("Badly formed re") :
 				goto magic;
 			if(c != '~')
 				*gp++ = '\\';
-defchar:
+			/* FALLTHROUGH */
 		default:
 			*gp++ = (value(vi_IGNORECASE) ? tolower(c) : c);
 			continue;
@@ -1035,14 +1032,15 @@ out:
 	    + regexc_size);
 #else /* !XPG4 */
 	(void) _compile((const char *)genbuf, (char *)re->Expbuf,
-		(char *)(re->Expbuf + sizeof (re->Expbuf)), 1); 
+		(char *)(re->Expbuf + sizeof (re->Expbuf)), 1);
 #endif /* XPG4 */
 
 	if(regerrno)
 		switch(regerrno) {
-	
+
 		case 42:
 cerror((unsigned char *)gettext("\\( \\) Imbalance"));
+			/* FALLTHROUGH */
 		case 43:
 cerror(value(vi_TERSE) ? (unsigned char *)gettext("Awash in \\('s!") :
 (unsigned char *)
@@ -1194,7 +1192,7 @@ void savere(struct regexp ** a)
 #else /* !XPG4 */
 	memcpy(*a, re, sizeof(struct regexp));
 #endif /* XPG4 */
-} 
+}
 
 
 /*

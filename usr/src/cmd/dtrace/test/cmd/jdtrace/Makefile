@@ -23,7 +23,6 @@
 # Copyright 2008 Sun Microsystems, Inc.  All rights reserved.
 # Use is subject to license terms.
 #
-# ident	"%Z%%M%	%I%	%E% SMI"
 
 PROG = jdtrace
 SRCS = jdtrace.c
@@ -67,17 +66,14 @@ clobber: clean
 	-$(RM) $(JDTRACE_JAR)
 	-$(RM) $(PROG)
 
-lint:
-
 install: all $(PROTO_JDTRACE_JAR) $(CMD) $(XLIST)
 
 $(PROG): $(SRCS)
 	$(LINK.c) -o $@ $(SRCS) $(LDLIBS)
 	$(POST_PROCESS) ; $(STRIP_STABS)
 
-JFLAGS= -g -cp $(CLASSPATH) -d $(CLASSDIR) -deprecation
-JFLAGS += -target 1.5
-JFLAGS += -Xlint
+JFLAGS= -g -cp $(CLASSPATH) -d $(CLASSDIR)
+JFLAGS += -source 7 -target 7 -Xlint:all,-options
 COMPILE.java=$(JAVAC) $(JFLAGS)
 JAVASRC= JDTrace.java Getopt.java
 

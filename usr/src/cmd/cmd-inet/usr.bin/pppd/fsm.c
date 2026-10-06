@@ -20,9 +20,6 @@
  * WARRANTIES OF MERCHANTIBILITY AND FITNESS FOR A PARTICULAR PURPOSE.
  */
 
-#pragma ident	"%Z%%M%	%I%	%E% SMI"
-#define RCSID	"$Id: fsm.c,v 1.17 1999/08/13 06:46:12 paulus Exp $"
-
 /*
  * TODO:
  * Randomize fsm id on link/init.
@@ -38,10 +35,6 @@
 
 #include "pppd.h"
 #include "fsm.h"
-
-#if !defined(lint) && !defined(_lint)
-static const char rcsid[] = RCSID;
-#endif
 
 static void fsm_timeout __P((void *));
 static void fsm_rconfreq __P((fsm *, int, u_char *, int));
@@ -375,28 +368,28 @@ fsm_input(f, inpacket, l)
     case CODE_CONFREQ:
 	fsm_rconfreq(f, id, inp, len);
 	break;
-    
+
     case CODE_CONFACK:
 	fsm_rconfack(f, id, inp, len);
 	break;
-    
+
     case CODE_CONFNAK:
     case CODE_CONFREJ:
 	fsm_rconfnakrej(f, code, id, inp, len);
 	break;
-    
+
     case CODE_TERMREQ:
 	fsm_rtermreq(f, id, inp, len);
 	break;
-    
+
     case CODE_TERMACK:
 	fsm_rtermack(f);
 	break;
-    
+
     case CODE_CODEREJ:
 	fsm_rcoderej(f, inp, len);
 	break;
-    
+
     default:
 	if (f->callbacks->extcode == NULL ||
 	    !(*f->callbacks->extcode)(f, code, id, inp, len))

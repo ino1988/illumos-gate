@@ -26,7 +26,8 @@
 #
 
 #
-# Copyright (c) 2013 by Delphix. All rights reserved.
+# Copyright (c) 2013, 2016 by Delphix. All rights reserved.
+# Copyright 2019 Joyent, Inc.
 #
 
 . $STF_SUITE/tests/functional/cache/cache.cfg
@@ -38,8 +39,8 @@ if ! $(is_physical_device $LDEV) ; then
 	log_unsupported "Only physical disk could be cache device"
 fi
 
-log_must $RM -rf $VDIR $VDIR2
-log_must $MKDIR -p $VDIR $VDIR2
-log_must $MKFILE $SIZE $VDEV $VDEV2
+log_must rm -rf $VDIR $VDIR2
+log_must mkdir -p $VDIR $VDIR2
+log_must mkfile $SIZE $VDEV $VDEV2 $FILEDEV
 
 log_pass

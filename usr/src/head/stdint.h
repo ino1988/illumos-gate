@@ -27,8 +27,6 @@
 #ifndef _STDINT_H
 #define	_STDINT_H
 
-#pragma ident	"%Z%%M%	%I%	%E% SMI"
-
 /*
  * This header was introduced by the ISO C Standard, ISO/IEC
  * 9899:1999 Programming language - C. It is a subset of the
@@ -36,5 +34,12 @@
  */
 
 #include <sys/stdint.h>
+
+#if __EXT1_VISIBLE
+/* ISO/IEC 9899:2011 K.3.4.4 */
+#ifndef	RSIZE_MAX
+#define	RSIZE_MAX (SIZE_MAX >> 1)
+#endif
+#endif	/* __EXT1_VISIBLE */
 
 #endif	/* _STDINT_H */

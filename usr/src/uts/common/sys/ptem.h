@@ -20,13 +20,11 @@
  * CDDL HEADER END
  */
 /*	Copyright (c) 1984, 1986, 1987, 1988, 1989 AT&T	*/
-/*	  All Rights Reserved  	*/
+/*	  All Rights Reserved	*/
 
 
 #ifndef _SYS_PTEM_H
 #define	_SYS_PTEM_H
-
-#pragma ident	"%Z%%M%	%I%	%E% SMI"	/* SVr4.0 11.7	*/
 
 #include <sys/termios.h>
 
@@ -36,7 +34,7 @@ extern "C" {
 
 /*
  * The ptem data structure used to define the global data
- * for the psuedo terminal emulation streams module
+ * for the pseudo terminal emulation streams module
  */
 struct ptem {
 	tcflag_t cflags;	/* copy of c_cflags */

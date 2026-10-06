@@ -28,8 +28,6 @@
  * Copyright 2011, Richard Lowe.
  */
 
-/* Functions in this file are duplicated in locallibm.il.  Keep them in sync */
-
 #ifndef _LIBM_INLINES_H
 #define	_LIBM_INLINES_H
 
@@ -42,7 +40,7 @@
 extern "C" {
 #endif
 
-extern __inline__ double
+extern __GNU_INLINE double
 __inline_sqrt(double d)
 {
 	double ret;
@@ -51,7 +49,7 @@ __inline_sqrt(double d)
 	return (ret);
 }
 
-extern __inline__ float
+extern __GNU_INLINE float
 __inline_sqrtf(float f)
 {
 	float ret;
@@ -60,7 +58,7 @@ __inline_sqrtf(float f)
 	return (ret);
 }
 
-extern __inline__ enum fp_class_type
+extern __GNU_INLINE enum fp_class_type
 fp_classf(float f)
 {
 	enum fp_class_type ret;
@@ -113,12 +111,13 @@ fp_classf(float f)
 #define	_HI_WORD(x)	((uint32_t *)&x)[0]
 #define	_LO_WORD(x)	((uint32_t *)&x)[1]
 
-extern __inline__ enum fp_class_type
+extern __GNU_INLINE enum fp_class_type
 fp_class(double d)
 {
 	enum fp_class_type ret;
 	uint32_t tmp;
 
+	/* BEGIN CSTYLED */
 	__asm__ __volatile__(
 	    "sethi %%hi(0x80000000),%1\n\t"	/* %1 gets 80000000 */
 	    "andn  %2,%1,%0\n\t"		/* %2-%0 gets abs(x) */
@@ -165,11 +164,12 @@ fp_class(double d)
 	    : "=&r" (ret), "=&r" (tmp)
 	    : "r" (_HI_WORD(d)), "r" (_LO_WORD(d))
 	    : "cc");
+	/* END CSTYLED */
 
 	return (ret);
 }
 
-extern __inline__ int
+extern __GNU_INLINE int
 __swapEX(int i)
 {
 	int ret;
@@ -201,13 +201,13 @@ __swapEX(int i)
  * compatibility
  */
 /* ARGSUSED */
-extern __inline__ enum fp_precision_type
+extern __GNU_INLINE enum fp_precision_type
 __swapRP(enum fp_precision_type i)
 {
 	return (0);
 }
 
-extern __inline__ enum fp_direction_type
+extern __GNU_INLINE enum fp_direction_type
 __swapRD(enum fp_direction_type d)
 {
 	enum fp_direction_type ret;
@@ -235,12 +235,13 @@ __swapRD(enum fp_direction_type d)
 	return (ret);
 }
 
-extern __inline__ int
+extern __GNU_INLINE int
 __swapTE(int i)
 {
 	int ret;
 	uint32_t fsr, tmp1, tmp2;
 
+	/* BEGIN CSTYLED */
 	__asm__ __volatile__(
 	    "and  %4,0x1f,%0\n\t"
 	    "sll  %0,23,%2\n\t"		/* shift input to TEM bit location */
@@ -258,23 +259,24 @@ __swapTE(int i)
 	    : "=r" (ret), "=m" (fsr), "=r" (tmp1), "=r" (tmp2)
 	    : "r" (i)
 	    : "cc");
+	/* END CSTYLED */
 
 	return (ret);
 }
 
-extern __inline__ double
+extern __GNU_INLINE double
 sqrt(double d)
 {
 	return (__inline_sqrt(d));
 }
 
-extern __inline__ float
+extern __GNU_INLINE float
 sqrtf(float f)
 {
 	return (__inline_sqrtf(f));
 }
 
-extern __inline__ double
+extern __GNU_INLINE double
 fabs(double d)
 {
 	double ret;
@@ -283,7 +285,7 @@ fabs(double d)
 	return (ret);
 }
 
-extern __inline__ float
+extern __GNU_INLINE float
 fabsf(float f)
 {
 	float ret;

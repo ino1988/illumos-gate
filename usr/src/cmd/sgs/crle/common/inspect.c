@@ -32,7 +32,7 @@
  * Each hash table is defined via a Hash_tbl structure.  These are organized:
  *
  *  c_strtbl	contains a hash entry for every file, directory, pathname and
- *		alternative path (dldump(3dl) image) processed.
+ *		alternative path (dldump(3C) image) processed.
  *		c_strsize and c_objnum maintain the size and count of the
  *		strings added to this table and are used to size the output
  *		configuration file.
@@ -97,8 +97,8 @@ enteralt(Crle_desc *crle, const char *path, const char *file, Half flags,
 	if (flags & RTC_OBJ_DUMP) {
 		char	_alter[PATH_MAX];
 
-		(void) strcpy(_alter, crle->c_objdir);
-		(void) realpath(_alter, _alter);
+		(void) strlcpy(alter, crle->c_objdir, sizeof (alter));
+		(void) realpath(alter, _alter);
 		(void) snprintf(alter, PATH_MAX, MSG_ORIG(MSG_FMT_PATH),
 		    _alter, file);
 		if (strcmp(alter, obj->o_path) == 0) {
@@ -107,9 +107,10 @@ enteralt(Crle_desc *crle, const char *path, const char *file, Half flags,
 			return (0);
 		}
 		obj->o_flags |= RTC_OBJ_DUMP;
-	} else
+	} else {
 		(void) snprintf(alter, PATH_MAX, MSG_ORIG(MSG_FMT_PATH),
 		    crle->c_objdir, file);
+	}
 	obj->o_flags |= RTC_OBJ_ALTER;
 
 	/*
@@ -119,8 +120,9 @@ enteralt(Crle_desc *crle, const char *path, const char *file, Half flags,
 	if (obj->o_alter) {
 		crle->c_strsize -= strlen(alter) + 1;
 		fmt = MSG_INTL(MSG_DIA_ALTUPDATE);
-	} else
+	} else {
 		fmt = MSG_INTL(MSG_DIA_ALTCREATE);
+	}
 
 	/*
 	 * Allocate the new alternative and update the string table size.
@@ -192,7 +194,7 @@ enterino(Crle_desc *crle, const char *name, struct stat *status, Half flags)
 	 * If an object descriptor doesn't yet exist create one.
 	 */
 	if ((obj = ent->e_obj) == NULL) {
-		if ((obj = calloc(sizeof (Hash_obj), 1)) == NULL)
+		if ((obj = calloc(1, sizeof (Hash_obj))) == NULL)
 			return (NULL);
 		obj->o_tbl = tbl;
 		obj->o_flags = flags;
@@ -364,7 +366,7 @@ enternoexistdir(Crle_desc *crle, const char *dir)
 	if (ent->e_id == 0) {
 		Hash_obj *	obj;
 
-		if ((obj = calloc(sizeof (Hash_obj), 1)) == NULL)
+		if ((obj = calloc(1, sizeof (Hash_obj))) == NULL)
 			return (NULL);
 		obj->o_flags = (RTC_OBJ_NOEXIST | RTC_OBJ_DIRENT);
 
@@ -397,8 +399,9 @@ _enterfile(Crle_desc *crle, const char *file, int off, Hash_ent *fent,
 		if ((nfile = malloc(size)) == NULL)
 			return (0);
 		(void) strcpy(nfile, file);
-	} else
+	} else {
 		nfile = (char *)file;
+	}
 
 	fent->e_key = (Addr)nfile;
 	fent->e_off = off;
@@ -462,7 +465,7 @@ enternoexistfile(Crle_desc *crle, const char *path, const char *file,
 	 * entry information.
 	 */
 	if (rent->e_id == 0) {
-		if ((obj = calloc(sizeof (Hash_obj), 1)) == NULL)
+		if ((obj = calloc(1, sizeof (Hash_obj))) == NULL)
 			return (NULL);
 		obj->o_flags = RTC_OBJ_NOEXIST;
 
@@ -519,7 +522,8 @@ enterfile(Crle_desc *crle, const char *opath, const char *ofile, Half flags,
 
 	if (strcmp(opath, rpath)) {
 		npath = rpath;
-		if (nfile = strrchr(npath, '/'))
+		nfile = strrchr(npath, '/');
+		if (nfile != NULL)
 			nfile++;
 		else
 			nfile = npath;
@@ -565,7 +569,7 @@ enterfile(Crle_desc *crle, const char *opath, const char *ofile, Half flags,
 	}
 
 	/*
-	 * Identify this entry and its directory as real paths.  If dldump(3dl)
+	 * Identify this entry and its directory as real paths.  If dldump(3C)
 	 * processing is required this flag is checked, as we only need to dump
 	 * the real pathname.  Many other objects may point to the same
 	 * alternative, but only one needs to be dumped.  In addition, during
@@ -736,7 +740,7 @@ inspect_file(Crle_desc *crle, const char *path, const char *file, Half flags,
 
 	/*
 	 * Dynamic executables can be examined to determine their dependencies,
-	 * dldump(3dl) their dependencies, and may even be dldump(3dl)'ed
+	 * dldump(3C) their dependencies, and may even be dldump(3C)'ed
 	 * themselves.
 	 *
 	 * If we come across an executable while searching a directory
@@ -785,7 +789,7 @@ inspect_file(Crle_desc *crle, const char *path, const char *file, Half flags,
 	if (flags & RTC_OBJ_ALTER) {
 		/*
 		 * If this object is marked as non-dumpable make sure we don't
-		 * create a dldump(3dl) alternative.  A user requested
+		 * create a dldump(3C) alternative.  A user requested
 		 * alternative is acceptable.
 		 */
 		if ((flags & RTC_OBJ_DUMP) && (dyflags & DF_1_NODUMP)) {
@@ -1028,9 +1032,9 @@ inspect(Crle_desc *crle, const char *name, Half flags)
 	} else {
 		size_t	off = file - name;
 
-		if (file == name)
+		if (file == name) {
 			dir = MSG_ORIG(MSG_DIR_ROOT);
-		else {
+		} else {
 			(void) strncpy(_dir, name, off);
 			_dir[off] = '\0';
 			dir = (const char *)_dir;
@@ -1090,7 +1094,8 @@ inspect(Crle_desc *crle, const char *name, Half flags)
 	/*
 	 * Make sure to propagate any RTC_OBJ_CMDLINE flag.
 	 */
-	if (ent = get_hash(crle->c_strtbl, (Addr)name, 0, HASH_FND_ENT))
+	ent = get_hash(crle->c_strtbl, (Addr)name, 0, HASH_FND_ENT);
+	if (ent != NULL)
 		ent->e_flags |= (flags & RTC_OBJ_CMDLINE);
 
 	return (0);

@@ -22,9 +22,8 @@
 /*
  * Copyright 2004 Sun Microsystems, Inc.  All rights reserved.
  * Use is subject to license terms.
+ * Copyright (c) 2016 by Delphix. All rights reserved.
  */
-
-#pragma ident	"%Z%%M%	%I%	%E% SMI"
 
 /*
  * This module implements the services provided by the rlogin daemon
@@ -110,7 +109,7 @@ static int		rlmodwput(queue_t *, mblk_t *);
 static int		rlmodwsrv(queue_t *);
 static int		rlmodrmsg(queue_t *, mblk_t *);
 static mblk_t		*make_expmblk(char);
-static int 		rlwinctl(queue_t *, mblk_t *);
+static int		rlwinctl(queue_t *, mblk_t *);
 static mblk_t		*rlwinsetup(queue_t *, mblk_t *, unsigned char *);
 
 static void		rlmod_timer(void *);
@@ -376,9 +375,9 @@ rlmodrput(queue_t *q, mblk_t *mp)
 	if ((mp->b_datap->db_type < QPCTL) &&
 	    /* ...and data is already queued... */
 	    ((q->q_first) ||
-		/* ...or currently disabled and this is M_DATA... */
-		((rmip->flags & RL_DISABLED) &&
-		    (mp->b_datap->db_type == M_DATA)))) {
+	    /* ...or currently disabled and this is M_DATA... */
+	    ((rmip->flags & RL_DISABLED) &&
+	    (mp->b_datap->db_type == M_DATA)))) {
 		/* ...delay delivery of the message */
 		(void) putq(q, mp);
 		TRACE_3(TR_FAC_RLOGINP, TR_RLOGINP_RPUT_OUT,
@@ -474,7 +473,7 @@ rlmodrput(queue_t *q, mblk_t *mp)
 		freemsg(mp);
 	}
 	TRACE_3(TR_FAC_RLOGINP, TR_RLOGINP_RPUT_OUT, "rlmodrput end: q %p, "
-		"mp %p, %s", q, mp, "done");
+	    "mp %p, %s", q, mp, "done");
 	return (0);
 }
 
@@ -497,8 +496,8 @@ rlmodrsrv(queue_t *q)
 			if (rmip->flags & RL_DISABLED) {
 				(void) putbq(q, mp);
 				TRACE_3(TR_FAC_RLOGINP, TR_RLOGINP_RSRV_OUT,
-					"rlmodrsrv end: q %p, mp %p, %s", q, mp,
-					"disabled");
+				    "rlmodrsrv end: q %p, mp %p, %s", q, mp,
+				    "disabled");
 				return (0);
 			}
 			if (!canputnext(q)) {
@@ -887,7 +886,7 @@ rlmodrmsg(queue_t *q, mblk_t *mp)
 				if ((pullupmsg(newmp, -1)) == 0) {
 					sz = msgdsize(newmp);
 					recover(q, newmp, sz);
-					return (NULL);
+					return (0);
 				}
 				/*
 				 * pullupmsg results in newmp consuming
@@ -943,7 +942,7 @@ rlmodrmsg(queue_t *q, mblk_t *mp)
 					if (rlwinsetup(q, mp, tmp) == NULL) {
 						sz = msgdsize(mp);
 						recover(q, mp, sz);
-						return (NULL);
+						return (0);
 					}
 					/*
 					 * We have successfully consumed the
@@ -977,7 +976,7 @@ out:
 	if (newmp) {
 		if (!canputnext(q)) {
 			(void) putbq(q, newmp);
-			return (NULL);
+			return (0);
 		} else {
 			putnext(q, newmp);
 		}
@@ -1000,7 +999,7 @@ rlwinctl(queue_t *q, mblk_t *mp)
 	TRACE_2(TR_FAC_RLOGINP, TR_RLOGINP_WINCTL_IN, "rlwinctl start: q %p, "
 	    "mp %p", q, mp);
 
-	rmip->oobdata[0] &= ~TIOCPKT_WINDOW; /* we know he heard */
+	rmip->oobdata[0] &= ~TIOCPKT_WINDOW; /* we know they heard */
 
 	if ((rl_msgp = mkiocb(TIOCSWINSZ)) == NULL) {
 		TRACE_2(TR_FAC_RLOGINP, TR_RLOGINP_WINCTL_OUT, "rlwinctl end: "
@@ -1053,7 +1052,7 @@ rlwinsetup(queue_t *q, mblk_t *mp, unsigned char *blk)
 	win.ws_ypixel = ntohs(win.ws_ypixel);
 	bcopy(&win, mp1->b_rptr, sizeof (struct winsize));
 
-	if ((rlwinctl(q, mp1)) == NULL) {
+	if ((rlwinctl(q, mp1)) == 0) {
 		freeb(mp1);
 		return (0);
 	}
@@ -1142,7 +1141,7 @@ tty_flow(queue_t *q, struct rlmod_info *rmip, mblk_t *mp)
 	 * If tty ioctl processing is done, check for stopmode
 	 */
 	stop = (ixon && (rmip->stopc == CTRL('s')) &&
-		(rmip->startc == CTRL('q')));
+	    (rmip->startc == CTRL('q')));
 	if (rmip->stopmode == TIOCPKT_NOSTOP) {
 		if (stop) {
 			cntl = rmip->oobdata[0] | TIOCPKT_DOSTOP;
@@ -1248,7 +1247,7 @@ rlmodwioctl(queue_t *q, mblk_t *mp)
 		else
 			rmip->flags &= ~RL_IOCPASSTHRU;
 
-		miocack(q, mp, NULL, 0);
+		miocack(q, mp, 0, 0);
 		break;
 
 	default:
@@ -1257,8 +1256,8 @@ rlmodwioctl(queue_t *q, mblk_t *mp)
 		} else {
 #ifdef DEBUG
 			cmn_err(CE_NOTE,
-				"rlmodwioctl: unexpected ioctl type 0x%x",
-				ioc->ioc_cmd);
+			    "rlmodwioctl: unexpected ioctl type 0x%x",
+			    ioc->ioc_cmd);
 #endif
 			miocnak(q, mp, 0, EINVAL);
 		}

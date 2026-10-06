@@ -24,8 +24,6 @@
  * Use is subject to license terms.
  */
 
-#pragma ident	"%Z%%M%	%I%	%E% SMI"
-
 #include <sys/time.h>
 #include <ipp/ipp.h>
 #include <ipp/ipp_impl.h>
@@ -101,7 +99,7 @@ byid_walk_step(
 	mdb_walk_state_t *wsp)
 {
 	int		status;
-	void 		*ptr;
+	void		*ptr;
 
 	if (mdb_vread(&ptr, sizeof (void *), wsp->walk_addr) == -1) {
 		mdb_warn("failed to read from address %p", wsp->walk_addr);
@@ -495,7 +493,7 @@ static int
 ref_walk_init(
 	mdb_walk_state_t *wsp)
 {
-	if (wsp->walk_addr == NULL)
+	if (wsp->walk_addr == 0)
 		return (WALK_DONE);
 
 	return (WALK_NEXT);
@@ -508,7 +506,7 @@ ref_walk_step(
 	ipp_ref_t	*rp;
 	int		status;
 
-	if (wsp->walk_addr == NULL)
+	if (wsp->walk_addr == 0)
 		return (WALK_DONE);
 
 	rp = mdb_alloc(sizeof (ipp_ref_t), UM_SLEEP);
@@ -570,7 +568,7 @@ dump_classes(
 	uint_t		nelt)
 {
 	ipp_class_t	*array;
-	ipp_class_t	*cp;
+	ipp_class_t	*cp = NULL;
 	uint_t		i;
 	boolean_t	first_time = B_TRUE;
 	char		buf[MAXNAMELEN];
@@ -603,7 +601,7 @@ dump_log(
 	uint_t		nelt)
 {
 	ipp_log_t	*array;
-	ipp_log_t	*lp;
+	ipp_log_t	*lp = NULL;
 	uint_t		i;
 	boolean_t	first_time = B_TRUE;
 	char		buf[MAXNAMELEN];

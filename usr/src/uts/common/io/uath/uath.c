@@ -4,6 +4,10 @@
  */
 
 /*
+ * Copyright 2019 Joyent, Inc.
+ */
+
+/*
  * Copyright (c) 2006 Sam Leffler, Errno Consulting
  * Copyright (c) 2008-2009 Weongyo Jeong <weongyo@freebsd.org>
  * All rights reserved.
@@ -94,7 +98,7 @@ uint32_t uath_dbg_flags = 0;
 #define	UATH_DEBUG \
 	uath_debug
 #else
-#define	UATH_DEBUG
+#define	UATH_DEBUG(...) (void)(0)
 #endif
 
 /*
@@ -237,12 +241,13 @@ static int	uath_loadsym(ddi_modhandle_t, char *, char **, size_t *);
 static int	uath_loadfirmware(struct uath_softc *);
 static int	uath_alloc_cmd_list(struct uath_softc *,
 		    struct uath_cmd *, int, int);
-static int 	uath_init_cmd_list(struct uath_softc *);
+static int	uath_init_cmd_list(struct uath_softc *);
 static void	uath_free_cmd_list(struct uath_cmd *, int);
 static int	uath_host_available(struct uath_softc *);
 static void	uath_get_capability(struct uath_softc *, uint32_t, uint32_t *);
 static int	uath_get_devcap(struct uath_softc *);
-static int	uath_get_devstatus(struct uath_softc *, uint8_t *);
+static int	uath_get_devstatus(struct uath_softc *,
+		    uint8_t [IEEE80211_ADDR_LEN]);
 static int	uath_get_status(struct uath_softc *, uint32_t, void *, int);
 
 static void	uath_cmd_lock_init(struct uath_cmd_lock *);
@@ -1530,12 +1535,12 @@ uath_tx_data_xfer(struct uath_softc *sc, mblk_t *mp)
 
 	req->bulk_len			= msgdsize(mp);
 	req->bulk_data			= mp;
-	req->bulk_client_private 	= (usb_opaque_t)sc;
+	req->bulk_client_private	= (usb_opaque_t)sc;
 	req->bulk_timeout		= UATH_DATA_TIMEOUT;
 	req->bulk_attributes		= USB_ATTRS_AUTOCLEARING;
 	req->bulk_cb			= uath_data_txeof;
 	req->bulk_exc_cb		= uath_data_txeof;
-	req->bulk_completion_reason 	= 0;
+	req->bulk_completion_reason	= 0;
 	req->bulk_cb_flags		= 0;
 
 	if ((err = usb_pipe_bulk_xfer(sc->tx_data_pipe, req, 0)) !=

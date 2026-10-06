@@ -4,6 +4,8 @@
  Copyright 2010 Sun Microsystems, Inc.  All rights reserved.
  Use is subject to license terms.
 
+ Copyright 2019 Joyent, Inc.
+
  CDDL HEADER START
 
  The contents of this file are subject to the terms of the
@@ -50,8 +52,7 @@
 	<!--
 		physical:default and physical:nwam are mutually exclusive.
 		Use a one-way dependency for now since two-way exclude_all
-		does not work; enforcement of single_instance in the future
-		will fix this.
+		does not work.
 	-->
 	<dependency
 		name='physical_nwam'
@@ -84,7 +85,7 @@
 			</loctext>
 		</common_name>
 		<documentation>
-			<manpage title='ifconfig' section='1M'
+			<manpage title='ifconfig' section='8'
 				manpath='/usr/share/man' />
 		</documentation>
 	</template>
@@ -98,7 +99,7 @@
 		name='start'
 		exec='/lib/svc/method/net-nwam start'
 		timeout_seconds='120' >
-		<method_context>
+		<method_context working_directory='/'>
 			<method_credential user='root' group='root'
 				supp_groups='netadm' privileges='zone' />
 		</method_context>
@@ -109,7 +110,7 @@
 		name='stop'
 		exec='/lib/svc/method/net-nwam stop'
 		timeout_seconds='60' >
-		<method_context>
+		<method_context working_directory='/'>
 			<method_credential user='root' group='root'
 				supp_groups='netadm' privileges='zone' />
 		</method_context>
@@ -120,7 +121,7 @@
 		name='refresh'
 		exec='/lib/svc/method/net-nwam refresh'
 		timeout_seconds='60' >
-		<method_context>
+		<method_context working_directory='/'>
 			<method_credential user='root' group='root'
 				supp_groups='netadm' privileges='zone' />
 		</method_context>
@@ -156,7 +157,7 @@
 			</loctext>
 		</common_name>
 		<documentation>
-			<manpage title='nwamd' section='1M'
+			<manpage title='nwamd' section='8'
 				manpath='/usr/share/man' />
 			<doc_link
 			    name='Network Auto-Magic OpenSolaris Project Page'

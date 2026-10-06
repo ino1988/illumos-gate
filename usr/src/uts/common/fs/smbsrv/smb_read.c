@@ -20,17 +20,11 @@
  */
 /*
  * Copyright (c) 2007, 2010, Oracle and/or its affiliates. All rights reserved.
+ * Copyright 2018 Nexenta Systems, Inc.  All rights reserved.
  */
 
 #include <smbsrv/smb_kproto.h>
 #include <smbsrv/smb_fsops.h>
-
-/*
- * There may be oplock break requests waiting to be sent after
- * a read raw request completes.
- */
-#define	SMB_OPLOCK_BREAKS_PENDING(sr) \
-	!list_is_empty(&(sr)->session->s_oplock_brkreqs)
 
 /*
  * The maximum number of bytes to return from SMB Core
@@ -79,8 +73,7 @@ smb_pre_read(smb_request_t *sr)
 	param->rw_count = (uint32_t)count;
 	param->rw_mincnt = 0;
 
-	DTRACE_SMB_2(op__Read__start, smb_request_t *, sr,
-	    smb_rw_param_t *, param);
+	DTRACE_SMB_START(op__Read, smb_request_t *, sr); /* arg.rw */
 
 	return ((rc == 0) ? SDRC_SUCCESS : SDRC_ERROR);
 }
@@ -88,8 +81,7 @@ smb_pre_read(smb_request_t *sr)
 void
 smb_post_read(smb_request_t *sr)
 {
-	DTRACE_SMB_2(op__Read__done, smb_request_t *, sr,
-	    smb_rw_param_t *, sr->arg.rw);
+	DTRACE_SMB_DONE(op__Read, smb_request_t *, sr); /* arg.rw */
 
 	kmem_free(sr->arg.rw, sizeof (smb_rw_param_t));
 }
@@ -165,8 +157,7 @@ smb_pre_lock_and_read(smb_request_t *sr)
 	param->rw_count = (uint32_t)count;
 	param->rw_mincnt = 0;
 
-	DTRACE_SMB_2(op__LockAndRead__start, smb_request_t *, sr,
-	    smb_rw_param_t *, param);
+	DTRACE_SMB_START(op__LockAndRead, smb_request_t *, sr); /* arg.rw */
 
 	return ((rc == 0) ? SDRC_SUCCESS : SDRC_ERROR);
 }
@@ -174,8 +165,7 @@ smb_pre_lock_and_read(smb_request_t *sr)
 void
 smb_post_lock_and_read(smb_request_t *sr)
 {
-	DTRACE_SMB_2(op__LockAndRead__done, smb_request_t *, sr,
-	    smb_rw_param_t *, sr->arg.rw);
+	DTRACE_SMB_DONE(op__LockAndRead, smb_request_t *, sr); /* arg.rw */
 
 	kmem_free(sr->arg.rw, sizeof (smb_rw_param_t));
 }
@@ -185,6 +175,7 @@ smb_com_lock_and_read(smb_request_t *sr)
 {
 	smb_rw_param_t *param = sr->arg.rw;
 	DWORD status;
+	uint32_t lk_pid;
 	uint16_t count;
 	int rc;
 
@@ -201,8 +192,11 @@ smb_com_lock_and_read(smb_request_t *sr)
 
 	sr->user_cr = smb_ofile_getcred(sr->fid_ofile);
 
+	/* Note: SMB1 locking uses 16-bit PIDs. */
+	lk_pid = sr->smb_pid & 0xFFFF;
+
 	status = smb_lock_range(sr, param->rw_offset, (uint64_t)param->rw_count,
-	    0, SMB_LOCK_TYPE_READWRITE);
+	    lk_pid, SMB_LOCK_TYPE_READWRITE, 0);
 
 	if (status != NT_STATUS_SUCCESS) {
 		smb_lock_range_error(sr, status);
@@ -225,145 +219,32 @@ smb_com_lock_and_read(smb_request_t *sr)
 }
 
 /*
- * The SMB_COM_READ_RAW protocol is a negotiated option introduced in
+ * The SMB_COM_READ_RAW protocol was a negotiated option introduced in
  * SMB Core Plus to maximize performance when reading a large block
- * of data from a server.  This request was extended in LM 0.12 to
- * support 64-bit offsets; the server can indicate support by setting
- * CAP_LARGE_FILES in the negotiated capabilities.
+ * of data from a server.  It's obsolete and no longer supported.
  *
- * The client must guarantee that there is (and will be) no other request
- * to the server for the duration of the SMB_COM_READ_RAW, since the
- * server response has no header or trailer. To help ensure that there
- * are no interruptions, we block all I/O for the session during read raw.
- *
- * If this is the first SMB request received since we sent an oplock break
- * to this client, we don't know if it's safe to send the raw data because
- * the requests may have crossed on the wire and the client may have
- * interpreted the oplock break as part of the raw data. To avoid problems,
- * we send a zero length session packet, which will force the client to
- * retry the read.
- *
- * Do not return errors from SmbReadRaw.
- * Read errors are handled by sending a zero length response.
+ * We keep a handler for it so the dtrace provider can see if
+ * the client tried to use this command.
  */
 smb_sdrc_t
 smb_pre_read_raw(smb_request_t *sr)
 {
-	smb_rw_param_t *param;
-	uint32_t off_low;
-	uint32_t off_high;
-	uint32_t timeout;
-	uint16_t count;
-	int rc;
-
-	param = kmem_zalloc(sizeof (smb_rw_param_t), KM_SLEEP);
-	sr->arg.rw = param;
-
-	if (sr->smb_wct == 8) {
-		rc = smbsr_decode_vwv(sr, "wlwwl2.", &sr->smb_fid,
-		    &off_low, &count, &param->rw_mincnt, &timeout);
-		if (rc == 0) {
-			param->rw_offset = (uint64_t)off_low;
-			param->rw_count = (uint32_t)count;
-		}
-	} else {
-		rc = smbsr_decode_vwv(sr, "wlwwl2.l", &sr->smb_fid,
-		    &off_low, &count, &param->rw_mincnt, &timeout, &off_high);
-		if (rc == 0) {
-			param->rw_offset = ((uint64_t)off_high << 32) | off_low;
-			param->rw_count = (uint32_t)count;
-		}
-	}
-
-	DTRACE_SMB_2(op__ReadRaw__start, smb_request_t *, sr,
-	    smb_rw_param_t *, param);
-
-	smb_rwx_rwenter(&sr->session->s_lock, RW_WRITER);
+	DTRACE_SMB_START(op__ReadRaw, smb_request_t *, sr);
 	return (SDRC_SUCCESS);
 }
 
 void
 smb_post_read_raw(smb_request_t *sr)
 {
-	mbuf_chain_t	*mbc;
-
-	if (sr->session->s_state == SMB_SESSION_STATE_READ_RAW_ACTIVE) {
-		if (SMB_OPLOCK_BREAKS_PENDING(sr)) {
-			sr->session->s_state =
-			    SMB_SESSION_STATE_OPLOCK_BREAKING;
-		} else {
-			sr->session->s_state = SMB_SESSION_STATE_NEGOTIATED;
-		}
-
-		while ((mbc = list_head(&sr->session->s_oplock_brkreqs)) !=
-		    NULL) {
-			SMB_MBC_VALID(mbc);
-			list_remove(&sr->session->s_oplock_brkreqs, mbc);
-			(void) smb_session_send(sr->session, 0, mbc);
-			smb_mbc_free(mbc);
-		}
-	}
-
-	DTRACE_SMB_2(op__ReadRaw__done, smb_request_t *, sr,
-	    smb_rw_param_t *, sr->arg.rw);
-
-	smb_rwx_rwexit(&sr->session->s_lock);
-	kmem_free(sr->arg.rw, sizeof (smb_rw_param_t));
+	DTRACE_SMB_DONE(op__ReadRaw, smb_request_t *, sr);
 }
 
 smb_sdrc_t
 smb_com_read_raw(smb_request_t *sr)
 {
-	smb_rw_param_t *param = sr->arg.rw;
-
-	if (!smb_raw_mode)
-		return (SDRC_DROP_VC);
-
-	switch (sr->session->s_state) {
-	case SMB_SESSION_STATE_NEGOTIATED:
-		sr->session->s_state = SMB_SESSION_STATE_READ_RAW_ACTIVE;
-		break;
-
-	case SMB_SESSION_STATE_OPLOCK_BREAKING:
-		(void) smb_session_send(sr->session, 0, NULL);
-		return (SDRC_NO_REPLY);
-
-	case SMB_SESSION_STATE_TERMINATED:
-	case SMB_SESSION_STATE_DISCONNECTED:
-		return (SDRC_NO_REPLY);
-
-	case SMB_SESSION_STATE_READ_RAW_ACTIVE:
-		sr->session->s_state = SMB_SESSION_STATE_NEGOTIATED;
-		return (SDRC_DROP_VC);
-
-	case SMB_SESSION_STATE_WRITE_RAW_ACTIVE:
-	case SMB_SESSION_STATE_CONNECTED:
-	case SMB_SESSION_STATE_ESTABLISHED:
-	default:
-		return (SDRC_DROP_VC);
-	}
-
-	smbsr_lookup_file(sr);
-	if (sr->fid_ofile == NULL) {
-		(void) smb_session_send(sr->session, 0, NULL);
-		return (SDRC_NO_REPLY);
-	}
-
-	sr->user_cr = smb_ofile_getcred(sr->fid_ofile);
-
-	if (param->rw_mincnt > param->rw_count)
-		param->rw_mincnt = 0;
-
-	if ((smb_common_read(sr, param) != 0) ||
-	    (SMB_OPLOCK_BREAKS_PENDING(sr))) {
-		(void) smb_session_send(sr->session, 0, NULL);
-		m_freem(sr->raw_data.chain);
-		sr->raw_data.chain = NULL;
-	} else {
-		(void) smb_session_send(sr->session, 0, &sr->raw_data);
-	}
-
-	return (SDRC_NO_REPLY);
+	smbsr_error(sr, NT_STATUS_NOT_SUPPORTED, ERRDOS,
+	    ERROR_NOT_SUPPORTED);
+	return (SDRC_ERROR);
 }
 
 /*
@@ -416,8 +297,7 @@ smb_pre_read_andx(smb_request_t *sr)
 
 	param->rw_mincnt = 0;
 
-	DTRACE_SMB_2(op__ReadX__start, smb_request_t *, sr,
-	    smb_rw_param_t *, param);
+	DTRACE_SMB_START(op__ReadX, smb_request_t *, sr); /* arg.rw */
 
 	return ((rc == 0) ? SDRC_SUCCESS : SDRC_ERROR);
 }
@@ -425,8 +305,7 @@ smb_pre_read_andx(smb_request_t *sr)
 void
 smb_post_read_andx(smb_request_t *sr)
 {
-	DTRACE_SMB_2(op__ReadX__done, smb_request_t *, sr,
-	    smb_rw_param_t *, sr->arg.rw);
+	DTRACE_SMB_DONE(op__ReadX, smb_request_t *, sr); /* arg.rw */
 
 	kmem_free(sr->arg.rw, sizeof (smb_rw_param_t));
 }
@@ -506,11 +385,8 @@ smb_com_read_andx(smb_request_t *sr)
  * function.  We can't move the fid lookup here because lock-and-read
  * requires the fid to do locking before attempting the read.
  *
- * Reading from a file should break oplocks on the file to LEVEL_II.
- * A call to smb_oplock_break(SMB_OPLOCK_BREAK_TO_LEVEL_II) is not
- * required as it is a no-op. If there's anything greater than a
- * LEVEL_II oplock on the file, the oplock MUST be owned by the ofile
- * on which the read is occuring and therefore would not be broken.
+ * Reading from a file does not break oplocks because any need for
+ * breaking before read is handled in open.
  *
  * Returns errno values.
  */
@@ -561,7 +437,8 @@ smb_common_read(smb_request_t *sr, smb_rw_param_t *param)
 		sr->raw_data.max_bytes = vdb->vdb_uio.uio_resid;
 		top = smb_mbuf_allocate(&vdb->vdb_uio);
 
-		rc = smb_fsop_read(sr, sr->user_cr, node, &vdb->vdb_uio);
+		rc = smb_fsop_read(sr, sr->user_cr, node, ofile,
+		    &vdb->vdb_uio, 0);
 
 		sr->raw_data.max_bytes -= vdb->vdb_uio.uio_resid;
 		smb_mbuf_trim(top, sr->raw_data.max_bytes);
@@ -569,7 +446,14 @@ smb_common_read(smb_request_t *sr, smb_rw_param_t *param)
 		break;
 
 	case STYPE_IPC:
+		sr->raw_data.max_bytes = vdb->vdb_uio.uio_resid;
+		top = smb_mbuf_allocate(&vdb->vdb_uio);
+
 		rc = smb_opipe_read(sr, &vdb->vdb_uio);
+
+		sr->raw_data.max_bytes -= vdb->vdb_uio.uio_resid;
+		smb_mbuf_trim(top, sr->raw_data.max_bytes);
+		MBC_ATTACH_MBUF(&sr->raw_data, top);
 		break;
 
 	default:

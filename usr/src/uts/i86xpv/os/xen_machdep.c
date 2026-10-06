@@ -157,7 +157,7 @@ xen_set_version(xen_version_t idx)
 	 * The revision is buried in the extraversion information that is
 	 * maintained by the hypervisor. For our purposes we expect that
 	 * the revision number is:
-	 * 	- the second character in the extraversion information
+	 *	- the second character in the extraversion information
 	 *	- one character long
 	 *	- numeric digit
 	 * If it isn't then we can't extract the revision and we leave it
@@ -234,7 +234,6 @@ xen_hypervisor_supports_solaris(xen_hypervisor_check_t check)
 static void
 xen_pte_workaround(void)
 {
-#if defined(__amd64)
 	extern int pt_kern;
 
 	if (XENVER_CURRENT(xv_major) != 3)
@@ -248,7 +247,6 @@ xen_pte_workaround(void)
 		return;
 
 	pt_kern = PT_USER;
-#endif
 }
 
 void
@@ -257,12 +255,7 @@ xen_set_callback(void (*func)(void), uint_t type, uint_t flags)
 	struct callback_register cb;
 
 	bzero(&cb, sizeof (cb));
-#if defined(__amd64)
 	cb.address = (ulong_t)func;
-#elif defined(__i386)
-	cb.address.cs = KCS_SEL;
-	cb.address.eip = (ulong_t)func;
-#endif
 	cb.type = type;
 	cb.flags = flags;
 
@@ -297,10 +290,8 @@ xen_init_callbacks(void)
 	 * system call handler
 	 * XXPV move to init_cpu_syscall?
 	 */
-#if defined(__amd64)
 	xen_set_callback(sys_syscall, CALLBACKTYPE_syscall,
 	    CALLBACKF_mask_events);
-#endif	/* __amd64 */
 }
 
 
@@ -637,9 +628,8 @@ xen_suspend_domain(void)
 	cmn_err(CE_NOTE, "domain restore/migrate completed");
 }
 
-/*ARGSUSED*/
-int
-xen_debug_handler(void *arg)
+uint_t
+xen_debug_handler(caddr_t arg __unused, caddr_t arg1 __unused)
 {
 	debug_enter("External debug event received");
 
@@ -712,7 +702,7 @@ retry:
 	 * harmless sysrq to the wrong domain...
 	 */
 	if (key == 'b')
-		(void) xen_debug_handler(NULL);
+		(void) xen_debug_handler(NULL, NULL);
 	else
 		cmn_err(CE_WARN, "Ignored sysrq %c", key);
 	return;
@@ -806,7 +796,7 @@ xen_shutdown(void *arg)
 /*ARGSUSED*/
 static void
 xen_shutdown_handler(struct xenbus_watch *watch, const char **vec,
-	unsigned int len)
+    unsigned int len)
 {
 	char *str;
 	xenbus_transaction_t xbt;
@@ -1044,7 +1034,6 @@ xen_set_trap_table(trap_info_t *table)
 	return (err);
 }
 
-#if defined(__amd64)
 void
 xen_set_segment_base(int reg, ulong_t value)
 {
@@ -1059,7 +1048,6 @@ xen_set_segment_base(int reg, ulong_t value)
 		    reg, value, -(int)err);
 	}
 }
-#endif	/* __amd64 */
 
 /*
  * Translate a hypervisor errcode to a Solaris error code.
@@ -1098,7 +1086,7 @@ xen_xlate_errcode(int error)
  * Caller responsible for preventing kernel preemption.
  */
 void
-xen_enable_user_iopl(void)
+xen_enable_user_iopl(void *arg __unused)
 {
 	physdev_set_iopl_t set_iopl;
 	set_iopl.iopl = 3;		/* user ring 3 */
@@ -1109,7 +1097,7 @@ xen_enable_user_iopl(void)
  * Drop PS_IOPL on current vcpu to kernel level
  */
 void
-xen_disable_user_iopl(void)
+xen_disable_user_iopl(void *arg __unused)
 {
 	physdev_set_iopl_t set_iopl;
 	set_iopl.iopl = 1;		/* kernel pseudo ring 1 */
@@ -1120,19 +1108,15 @@ int
 xen_gdt_setprot(cpu_t *cp, uint_t prot)
 {
 	int err;
-#if defined(__amd64)
 	int pt_bits = PT_VALID;
 	if (prot & PROT_WRITE)
 		pt_bits |= PT_WRITABLE;
-#endif
 
 	if ((err = as_setprot(&kas, (caddr_t)cp->cpu_gdt,
 	    MMU_PAGESIZE, prot)) != 0)
 		goto done;
 
-#if defined(__amd64)
 	err = xen_kpm_page(mmu_btop(cp->cpu_m.mcpu_gdtpa), pt_bits);
-#endif
 
 done:
 	if (err) {
@@ -1149,17 +1133,14 @@ xen_ldt_setprot(user_desc_t *ldt, size_t lsize, uint_t prot)
 {
 	int err;
 	caddr_t	lva = (caddr_t)ldt;
-#if defined(__amd64)
 	int pt_bits = PT_VALID;
 	pgcnt_t npgs;
 	if (prot & PROT_WRITE)
 		pt_bits |= PT_WRITABLE;
-#endif	/* __amd64 */
 
 	if ((err = as_setprot(&kas, (caddr_t)ldt, lsize, prot)) != 0)
 		goto done;
 
-#if defined(__amd64)
 
 	ASSERT(IS_P2ALIGNED(lsize, PAGESIZE));
 	npgs = mmu_btop(lsize);
@@ -1169,7 +1150,6 @@ xen_ldt_setprot(user_desc_t *ldt, size_t lsize, uint_t prot)
 			break;
 		lva += PAGESIZE;
 	}
-#endif	/* __amd64 */
 
 done:
 	if (err) {

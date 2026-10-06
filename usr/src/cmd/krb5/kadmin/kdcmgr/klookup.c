@@ -43,7 +43,7 @@
  * klooukp [ target [ RR_type ] ]
  *
  * Utitilizes DNS lookups to discover domain and realm information.  This CLI
- * is used primarily by kdcmgr(1M) and kclient(1M).
+ * is used primarily by kdcmgr(8) and kclient(8).
  */
 
 int
@@ -52,13 +52,15 @@ main(int argc, char **argv)
 {
 	unsigned char answer[NS_MAXMSG], *ansp = NULL, *end, a, b, c, d;
 	int len = 0, anslen, hostlen, nq, na, type, class;
-	int ttl, priority, weight, port, size;
+	int ttl __unused, priority __unused, weight __unused, port, size;
 	char name[NS_MAXDNAME], *cp, *typestr = NULL;
 	char nbuf[INET6_ADDRSTRLEN];
 	struct __res_state stat;
 	int found = 0;
 	int rr_type = T_A;
 	HEADER *h;
+
+	type = T_A;
 
 	if (argc > 3)
 		exit(1);

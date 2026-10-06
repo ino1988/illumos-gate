@@ -22,8 +22,7 @@
 # Copyright 2006 Sun Microsystems, Inc.  All rights reserved.
 # Use is subject to license terms.
 #
-# ident	"%Z%%M%	%I%	%E% SMI"
-#
+# Copyright (c) 2018, Joyent, Inc.
 
 LIBRARY =		libhttp-core.a
 VERS =			.1
@@ -32,7 +31,6 @@ OBJECTS = http-addr.o http-support.o http.o
 ROOTLIBDIR =	$(ROOT)/usr/lib/print
 
 include ../../../Makefile.lib
-include ../../../Makefile.rootfs
 
 SRCDIR =	../common
 
@@ -41,11 +39,13 @@ ROOTLIBDIR64=	$(ROOT)/usr/lib/print/$(MACH)
 
 LIBS =			$(DYNLIB)
 
-$(LINTLIB):=	SRCS = $(SRCDIR)/$(LINTSRC)
 
 CFLAGS +=	$(CCVERBOSE)
 CPPFLAGS +=	-I$(SRCDIR)
 CPPFLAGS +=	-I../../libpapi-common/common
+
+# not linted
+SMATCH=off
 
 MAPFILES =	$(SRCDIR)/mapfile
 
@@ -55,7 +55,6 @@ LDLIBS +=	-lsocket -lnsl -lc
 
 all:	$(LIBS)
 
-lint:	lintcheck
 
 $(ROOTLIBDIR):
 	$(INS.dir)

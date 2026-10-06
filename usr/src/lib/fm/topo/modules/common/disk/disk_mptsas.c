@@ -10,6 +10,7 @@
  */
 /*
  * Copyright (c) 2013, Joyent, Inc. All rights reserved.
+ * Copyright 2023 Racktop Systems, Inc.
  */
 
 #include <stdlib.h>
@@ -24,9 +25,9 @@
 #include <fm/topo_mod.h>
 #include <fm/topo_list.h>
 
-#include <sys/scsi/adapters/mpt_sas/mpi/mpi2_type.h>
-#include <sys/scsi/adapters/mpt_sas/mpi/mpi2.h>
-#include <sys/scsi/adapters/mpt_sas/mpi/mpi2_init.h>
+#include <sys/scsi/adapters/mpi/mpi2_type.h>
+#include <sys/scsi/adapters/mpi/mpi2.h>
+#include <sys/scsi/adapters/mpi/mpi2_init.h>
 #include <sys/scsi/adapters/mpt_sas/mptsas_ioctl.h>
 
 #include "disk.h"
@@ -77,7 +78,7 @@ get_sas_address(topo_mod_t *mod, char *devctl, uint32_t enclosure,
 	for (i = 0; i < gdi.DiskCount; i++) {
 		if (di[i].Enclosure == enclosure && di[i].Slot == slot) {
 			char sas[17]; /* 16 hex digits and NUL */
-			(void) snprintf(sas, 17, "%llx", di[i].SasAddress);
+			(void) snprintf(sas, 17, "%" PRIx64, di[i].SasAddress);
 			topo_mod_dprintf(mod, "found mpt_sas disk (%d/%d) "
 			    "with adddress %s\n", enclosure, slot, sas);
 			*sas_address = topo_mod_strdup(mod, sas);

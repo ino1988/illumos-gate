@@ -24,6 +24,8 @@
  *	  All Rights Reserved
  *
  * Copyright (c) 1989, 2010, Oracle and/or its affiliates. All rights reserved.
+ *
+ * Copyright 2020 Joyent, Inc.
  */
 
 /*
@@ -89,8 +91,6 @@ ld_eprintf(Ofl_desc *ofl, Error error, const char *format, ...)
 		ofl->ofl_flags |= FLG_OF_WARN;
 		break;
 	case ERR_GUIDANCE:
-		if ((ofl->ofl_guideflags & FLG_OFG_ENABLE) == 0)
-			return;
 		ofl->ofl_guideflags |= FLG_OFG_ISSUED;
 		ofl->ofl_flags |= FLG_OF_WARN;
 		break;
@@ -156,7 +156,7 @@ ld_main(int argc, char **argv, Half mach)
 	DBG_DELTATIME = DBG_TOTALTIME;
 
 	/* Output file descriptor */
-	if ((ofl = libld_calloc(1, sizeof (Ofl_desc))) == 0)
+	if ((ofl = libld_calloc(1, sizeof (Ofl_desc))) == NULL)
 		return (1);
 
 	/* Initialize target state */
@@ -175,7 +175,7 @@ ld_main(int argc, char **argv, Half mach)
 	/*
 	 * Build up linker version string
 	 */
-	if ((ofl->ofl_sgsid = (char *)libld_calloc(MSG_SGS_ID_SIZE +
+	if ((ofl->ofl_sgsid = libld_calloc(MSG_SGS_ID_SIZE +
 	    strlen(link_ver_string) + 1, 1)) == NULL)
 		return (1);
 	(void) strcpy(ofl->ofl_sgsid, MSG_ORIG(MSG_SGS_ID));
@@ -194,6 +194,7 @@ ld_main(int argc, char **argv, Half mach)
 			    MSG_INTL(MSG_GUIDE_SUMMARY));
 		return (1);
 	}
+
 	if (ofl->ofl_flags & FLG_OF_FATAL) {
 		ld_eprintf(ofl, ERR_FATAL, MSG_INTL(MSG_ARG_FLAGS));
 		/* If any ERR_GUIDANCE messages were issued, add a summary */
@@ -480,19 +481,28 @@ ld_main(int argc, char **argv, Half mach)
 	dbg_cleanup();
 
 	/* If any ERR_GUIDANCE messages were issued, add a summary */
-	if (ofl->ofl_guideflags & FLG_OFG_ISSUED)
+	if (ofl->ofl_guideflags & FLG_OFG_ISSUED) {
 		ld_eprintf(ofl, ERR_GUIDANCE, MSG_INTL(MSG_GUIDE_SUMMARY));
+		ofl->ofl_guideflags &= ~FLG_OFG_ISSUED;
+	}
 
 	/*
-	 * For performance reasons we don't actually free up the memory we've
-	 * allocated, it will be freed when we exit.
-	 *
-	 * But the below line can be uncommented if/when we want to measure how
-	 * our memory consumption and freeing are doing.  We should be able to
-	 * free all the memory that has been allocated as part of the link-edit
-	 * process.
+	 * One final check for any new warnings we found that should fail the
+	 * link edit.
 	 */
-	/* ld_ofl_cleanup(ofl); */
+	if ((ofl->ofl_flags & (FLG_OF_WARN | FLG_OF_FATWARN)) ==
+	    (FLG_OF_WARN | FLG_OF_FATWARN))
+		return (ld_exit(ofl));
+
+	/*
+	 * For performance reasons we didn't used to actually free up the
+	 * memory we'd allocated, since it'll be freed on exit.
+	 *
+	 * These calls does not free nearly as much memory as you would think
+	 * they do, unfortunately.
+	 */
+	ld_ofl_cleanup(ofl);
+	libld_free(ofl);
 	return (0);
 }
 
@@ -518,7 +528,6 @@ ifl_list_cleanup(APlist *apl)
 void
 ld_ofl_cleanup(Ofl_desc *ofl)
 {
-	Ld_heap		*chp, *php;
 	Ar_desc		*adp;
 	Aliste		idx;
 
@@ -531,9 +540,19 @@ ld_ofl_cleanup(Ofl_desc *ofl)
 		Ar_aux		*aup;
 		Elf_Arsym	*arsym;
 
+		/*
+		 * Free up member information for normally processed archives.
+		 * Archives processed under -z allextract have no member
+		 * information or symbol table, and members have already been
+		 * dealt with as input files.
+		 */
+		if (adp->ad_allextract == TRUE)
+			continue;
+
 		for (arsym = adp->ad_start, aup = adp->ad_aux;
-		    arsym->as_name; ++arsym, ++aup) {
-			if ((aup->au_mem) && (aup->au_mem != FLG_ARMEM_PROC)) {
+		    (arsym->as_name != NULL); ++arsym, ++aup) {
+			if ((aup->au_mem != NULL) &&
+			    (aup->au_mem != FLG_ARMEM_PROC)) {
 				(void) elf_end(aup->au_mem->am_elf);
 
 				/*
@@ -550,13 +569,8 @@ ld_ofl_cleanup(Ofl_desc *ofl)
 	(void) elf_end(ofl->ofl_elf);
 	(void) elf_end(ofl->ofl_welf);
 
-	for (chp = ld_heap, php = NULL; chp; php = chp, chp = chp->lh_next) {
-		if (php)
-			(void) munmap((void *)php,
-			    (size_t)php->lh_end - (size_t)php);
-	}
-	if (php)
-		(void) munmap((void *)php, (size_t)php->lh_end - (size_t)php);
-
-	ld_heap = NULL;
+	/*
+	 * Note that we don't free ofl itself here, just its contents.  The
+	 * ofl itself belongs to the caller.
+	 */
 }

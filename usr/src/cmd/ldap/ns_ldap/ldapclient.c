@@ -22,6 +22,7 @@
  * Copyright 2009 Sun Microsystems, Inc.  All rights reserved.
  * Use is subject to license terms.
  * Copyright 2012 Milan Jurik. All rights reserved.
+ * Copyright (c) 2016 by Delphix. All rights reserved.
  */
 
 /*
@@ -78,7 +79,7 @@
  *		generate (gen_profile). (formerly -P)
  *	profileTTL
  *		Client info TTL.  If set to 0 this information will not be
- *		automatically updated by the ldap_cachemgr(1M).
+ *		automatically updated by the ldap_cachemgr(8).
  *		(formerly -e)
  *	proxyDN
  *		Binding DN.  Ex. cn=client,ou=people,cd=eng,dc=sun,dc=com
@@ -1523,7 +1524,7 @@ client_init(clientopts_t *arglist)
 		cfg.SA_CRED = "proxy";
 		/*
 		 * We don't want to force users to always specify authentication
-		 * method when we can infer it. If users want SSL, he/she would
+		 * method when we can infer it. If users want SSL, they would
 		 * have to specify appropriate -a though.
 		 */
 		auth.type = NS_LDAP_AUTH_SIMPLE;
@@ -1963,7 +1964,7 @@ usage(void)
 	    gettext("<args> take the form of \'-a attrName=attrVal\' as "
 	    "described in the\n"),
 	    stderr);
-	CLIENT_FPUTS(gettext("man page: ldapclient(1M)\n"), stderr);
+	CLIENT_FPUTS(gettext("man page: ldapclient(8)\n"), stderr);
 }
 
 
@@ -2522,7 +2523,7 @@ adminCredCheck(clientopts_t *arglist)
 	}
 
 	/* Now let's check if we have the cred stuff we need */
-	if (adminDN == NULL || adminDN[0] == '\0') {
+	if (adminDN == NULL || adminDN[0] == NULL) {
 		CLIENT_FPUTS(
 		    gettext("Shadow Update is enabled, but "
 		    "no adminDN is configured.\n"), stderr);
@@ -2531,7 +2532,7 @@ adminCredCheck(clientopts_t *arglist)
 	}
 
 	/* If we need adminPassword (prompt) */
-	if (adminPassword == NULL || adminPassword[0] == '\0') {
+	if (adminPassword == NULL || adminPassword[0] == NULL) {
 		CLIENT_FPUTS(
 		    gettext("Shadow Update requires adminPassword\n"),
 		    stderr);

@@ -19,11 +19,10 @@
 #
 # CDDL HEADER END
 #
-#
-#ident	"%Z%%M%	%I%	%E% SMI"
-#
 # Copyright 2004 Sun Microsystems, Inc.  All rights reserved.
 # Use is subject to license terms.
+#
+# Copyright 2019 OmniOS Community Edition (OmniOSce) Association.
 #
 
 include ../Makefile.com
@@ -31,7 +30,6 @@ include ../Makefile.com
 .KEEP_STATE:
 
 all:		$(BLTDEFS) .WAIT $(DYNLIB)
-install package:	all $(ROOTDYNLIB)
-lint:		$(LINTOUT32)
+install:	all $(ROOTDYNLIB)
 
 include ../Makefile.targ

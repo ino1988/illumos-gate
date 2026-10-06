@@ -25,7 +25,7 @@
  */
 
 /*
- * Copyright (c) 2013 by Delphix. All rights reserved.
+ * Copyright (c) 2014, 2016 by Delphix. All rights reserved.
  * Copyright (c) 2013, Joyent, Inc. All rights reserved.
  */
 
@@ -48,19 +48,20 @@ extern "C" {
  * Solaris system and DTrace subsystem and are subject to change at any time
  * without notice.  Applications and drivers using these interfaces will fail
  * to run on future releases.  These interfaces should not be used for any
- * purpose except those expressly outlined in dtrace(7D) and libdtrace(3LIB).
+ * purpose except those expressly outlined in dtrace(4D) and libdtrace(3LIB).
  * Please refer to the "Solaris Dynamic Tracing Guide" for more information.
  */
 
 #define	DTRACE_VERSION	3		/* library ABI interface version */
 
 struct ps_prochandle;
+struct dt_node;
 typedef struct dtrace_hdl dtrace_hdl_t;
 typedef struct dtrace_prog dtrace_prog_t;
 typedef struct dtrace_vector dtrace_vector_t;
 typedef struct dtrace_aggdata dtrace_aggdata_t;
 
-#define	DTRACE_O_NODEV		0x01	/* do not open dtrace(7D) device */
+#define	DTRACE_O_NODEV		0x01	/* do not open dtrace(4D) device */
 #define	DTRACE_O_NOSYS		0x02	/* do not load /system/object modules */
 #define	DTRACE_O_LP64		0x04	/* force D compiler to be LP64 */
 #define	DTRACE_O_ILP32		0x08	/* force D compiler to be ILP32 */
@@ -111,7 +112,7 @@ typedef struct dtrace_proginfo {
 #define	DTRACE_C_CPP	0x0010	/* Preprocess input file with cpp(1) utility */
 #define	DTRACE_C_KNODEF	0x0020	/* Permit unresolved kernel symbols in DIFO */
 #define	DTRACE_C_UNODEF	0x0040	/* Permit unresolved user symbols in DIFO */
-#define	DTRACE_C_PSPEC	0x0080	/* Intepret ambiguous specifiers as probes */
+#define	DTRACE_C_PSPEC	0x0080	/* Interpret ambiguous specifiers as probes */
 #define	DTRACE_C_ETAGS	0x0100	/* Prefix error messages with error tags */
 #define	DTRACE_C_ARGREF	0x0200	/* Do not require all macro args to be used */
 #define	DTRACE_C_DEFARG	0x0800	/* Use 0/"" as value for unspecified args */
@@ -519,12 +520,16 @@ extern int dtrace_type_strcompile(dtrace_hdl_t *,
 extern int dtrace_type_fcompile(dtrace_hdl_t *,
     FILE *, dtrace_typeinfo_t *);
 
+extern struct dt_node *dt_compile_sugar(dtrace_hdl_t *,
+    struct dt_node *);
+
+
 /*
  * DTrace Probe Interface
  *
  * Library clients can use these functions to iterate over the set of available
  * probe definitions and inquire as to their attributes.  The probe iteration
- * interfaces report probes that are declared as well as those from dtrace(7D).
+ * interfaces report probes that are declared as well as those from dtrace(4D).
  */
 typedef struct dtrace_probeinfo {
 	dtrace_attribute_t dtp_attr;		/* name attributes */
@@ -544,7 +549,7 @@ extern int dtrace_probe_info(dtrace_hdl_t *,
 /*
  * DTrace Vector Interface
  *
- * The DTrace library normally speaks directly to dtrace(7D).  However,
+ * The DTrace library normally speaks directly to dtrace(4D).  However,
  * this communication may be vectored elsewhere.  Consumers who wish to
  * perform a vectored open must fill in the vector, and use the dtrace_vopen()
  * entry point to obtain a library handle.

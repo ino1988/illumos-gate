@@ -21,12 +21,13 @@
 /*
  * Copyright 2007 Sun Microsystems, Inc.  All rights reserved.
  * Use is subject to license terms.
+ *
+ * Copyright 2018 Joyent, Inc.
+ * Copyright 2022 Tintri by DDN, Inc. All rights reserved.
  */
 
 #ifndef _SYS_MACH_MMU_H
 #define	_SYS_MACH_MMU_H
-
-#pragma ident	"%Z%%M%	%I%	%E% SMI"
 
 #ifdef __cplusplus
 extern "C" {
@@ -59,6 +60,15 @@ extern "C" {
 #define	FOUR_GIG	((uint64_t)4 * ONE_GIG)
 
 #define	MMU_STD_PAGESIZE	4096
+
+/*
+ * Defines for 4 and 5 level Virtual address ranges
+ */
+#define	MMU_NPGOFFBITS		12
+#define	MMU_NPTIXBITS		9
+#define	MMU_MAX4LEVELVABITS	(4 * MMU_NPTIXBITS + MMU_NPGOFFBITS)
+#define	MMU_MAX5LEVELVABITS	(5 * MMU_NPTIXBITS + MMU_NPGOFFBITS)
+
 #ifdef __amd64
 #define	MMU_STD_PAGEMASK	0xFFFFFFFFFFFFF000ULL
 #else
@@ -131,6 +141,19 @@ extern "C" {
 #define	PT_NOCONSIST	(0x400)	/* PTE was created with HAT_LOAD_NOCONSIST */
 #define	PT_FOREIGN	(0x600)	/* MFN mapped on the hypervisor has no PFN */
 
+#ifndef _BOOT
+
+extern ulong_t getcr3(void);
+extern void setcr3(ulong_t);
+
+#define	getcr3_pa() (getcr3() & MMU_PAGEMASK)
+#define	getpcid() ((getcr4() & CR4_PCIDE) ? \
+	(getcr3() & MMU_PAGEOFFSET) : PCID_NONE)
+
+extern void mmu_invlpg(caddr_t);
+
+#endif
+
 #ifdef __xpv
 #include <sys/xen_mmu.h>
 #else
@@ -150,10 +173,6 @@ void set_pteval(paddr_t, uint_t, uint_t, x86pte_t);
 paddr_t make_ptable(x86pte_t *, uint_t);
 x86pte_t *find_pte(uint64_t, paddr_t *, uint_t, uint_t);
 x86pte_t *map_pte(paddr_t, uint_t);
-
-#ifndef _BOOT
-ulong_t getcr3();
-#endif
 
 extern uint_t *shift_amt;
 extern uint_t ptes_per_table;

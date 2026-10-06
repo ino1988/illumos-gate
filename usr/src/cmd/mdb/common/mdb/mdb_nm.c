@@ -23,6 +23,10 @@
  * Use is subject to license terms.
  */
 
+/*
+ * Copyright (c) 2018, Joyent, Inc.
+ */
+
 #include <sys/elf.h>
 #include <sys/elf_SPARC.h>
 
@@ -559,7 +563,7 @@ cmd_nm(uintptr_t addr, uint_t flags, int argc, const mdb_arg_t *argv)
 	int hwidth;
 	size_t nsyms = 0;
 
-	nm_sym_t *syms, *symp;
+	nm_sym_t *syms = NULL, *symp;
 
 	nm_iter_info_t nii;
 
@@ -785,7 +789,7 @@ cmd_nm(uintptr_t addr, uint_t flags, int argc, const mdb_arg_t *argv)
 		for (symp = syms; nsyms-- != 0; symp++) {
 			nii.nii_fp = symp->nm_fp;
 
-			callback(&nii, &symp->nm_sym, symp->nm_name,
+			(void) callback(&nii, &symp->nm_sym, symp->nm_name,
 			    &symp->nm_si, symp->nm_object);
 		}
 

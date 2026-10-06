@@ -45,13 +45,13 @@ extern "C" {
 #define	MAX_NUM_THRESHOLD	7
 
 /* the PKCS11 Mechanisms */
-#define	CKM_RC4			0x00000111
-#define	CKM_DES3_ECB		0x00000132
-#define	CKM_DES3_CBC		0x00000133
-#define	CKM_MD5			0x00000210
-#define	CKM_SHA_1		0x00000220
-#define	CKM_AES_ECB		0x00001081
-#define	CKM_AES_CBC		0x00001082
+#define	CKM_RC4			0x00000111UL
+#define	CKM_DES3_ECB		0x00000132UL
+#define	CKM_DES3_CBC		0x00000133UL
+#define	CKM_MD5			0x00000210UL
+#define	CKM_SHA_1		0x00000220UL
+#define	CKM_AES_ECB		0x00001081UL
+#define	CKM_AES_CBC		0x00001082UL
 
 /*
  * General Purpose Ioctls
@@ -1482,6 +1482,17 @@ typedef struct crypto_get_all_mechanism_info32 {
 
 #define	CRYPTO_GET_MECHANISM_LIST		CRYPTO(140)
 #define	CRYPTO_GET_ALL_MECHANISM_INFO		CRYPTO(141)
+
+#define	CRYPTO_GET_PROVIDER_BY_MECH		CRYPTO(142)
+
+typedef struct crypto_by_mech {
+	int rv;
+	int res;
+	crypto_mech_type_t mech_type;
+	uint_t mech_keylen;
+	crypto_func_group_t mech_fg;
+	crypto_session_id_t session_id;
+} crypto_by_mech_t;
 
 #ifdef	__cplusplus
 }

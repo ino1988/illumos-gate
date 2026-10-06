@@ -21,16 +21,18 @@
 /*
  * Copyright 2007 Sun Microsystems, Inc.  All rights reserved.
  * Use is subject to license terms.
+ *
+ * Copyright 2013 Nexenta Systems, Inc.  All rights reserved.
+ *
+ * Copyright 2018 Joyent, Inc.
  */
 
 /*	Copyright (c) 1984, 1986, 1987, 1988, 1989 AT&T	*/
-/*	  All Rights Reserved  	*/
+/*	  All Rights Reserved	*/
 
 
 #ifndef _SYS_DISP_H
 #define	_SYS_DISP_H
-
-#pragma ident	"%Z%%M%	%I%	%E% SMI"	/* SVr4.0 1.11	*/
 
 #include <sys/priocntl.h>
 #include <sys/thread.h>
@@ -63,11 +65,11 @@ typedef struct _disp {
 	/*
 	 * Priorities:
 	 *	disp_maxrunpri is the maximum run priority of runnable threads
-	 * 	on this queue.  It is -1 if nothing is runnable.
+	 *	on this queue.  It is -1 if nothing is runnable.
 	 *
 	 *	disp_max_unbound_pri is the maximum run priority of threads on
 	 *	this dispatch queue but runnable by any CPU.  This may be left
-	 * 	artificially high, then corrected when some CPU tries to take
+	 *	artificially high, then corrected when some CPU tries to take
 	 *	an unbound thread.  It is -1 if nothing is runnable.
 	 */
 	pri_t		disp_maxrunpri;	/* maximum run priority */
@@ -79,7 +81,7 @@ typedef struct _disp {
 	hrtime_t	disp_steal;	/* time when threads become stealable */
 } disp_t;
 
-#if defined(_KERNEL)
+#if defined(_KERNEL) || defined(_FAKE_KERNEL)
 
 #define	MAXCLSYSPRI	99
 #define	MINCLSYSPRI	60
@@ -95,6 +97,9 @@ extern int	nswapped;	/* number of swapped threads */
 extern	pri_t	minclsyspri;	/* minimum level of any system class */
 extern	pri_t	maxclsyspri;	/* maximum level of any system class */
 extern	pri_t	intr_pri;	/* interrupt thread priority base level */
+
+#endif	/* _KERNEL || _FAKE_KERNEL */
+#if defined(_KERNEL)
 
 /*
  * Minimum amount of time that a thread can remain runnable before it can
@@ -148,8 +153,7 @@ extern void		dq_srundec(kthread_t *);
 extern void		cpu_rechoose(kthread_t *);
 extern void		cpu_surrender(kthread_t *);
 extern void		kpreempt(int);
-extern struct cpu	*disp_lowpri_cpu(struct cpu *, struct lgrp_ld *, pri_t,
-			    struct cpu *);
+extern struct cpu	*disp_lowpri_cpu(struct cpu *, kthread_t *, pri_t);
 extern int		disp_bound_threads(struct cpu *, int);
 extern int		disp_bound_anythreads(struct cpu *, int);
 extern int		disp_bound_partition(struct cpu *, int);
@@ -163,6 +167,8 @@ extern void		resume_from_zombie(kthread_t *)
 				__NORETURN;
 extern void		disp_swapped_enq(kthread_t *);
 extern int		disp_anywork(void);
+
+extern struct cpu	*disp_choose_best_cpu(void);
 
 #define	KPREEMPT_SYNC		(-1)
 #define	kpreempt_disable()				\
@@ -179,6 +185,8 @@ extern int		disp_anywork(void);
 	}
 
 #endif	/* _KERNEL */
+
+#define	CPU_IDLE_PRI (-1)
 
 #ifdef	__cplusplus
 }

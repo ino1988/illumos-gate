@@ -24,7 +24,7 @@
  */
 
 /*	Copyright (c) 1983, 1984, 1985, 1986, 1987, 1988, 1989 AT&T	*/
-/*	  All Rights Reserved  	*/
+/*	  All Rights Reserved	*/
 
 /*
  * Portions of this source code were derived from Berkeley 4.3 BSD
@@ -67,10 +67,11 @@ typedef struct pathname {
 #define	pn_pathleft(pnp)	((pnp)->pn_pathlen)
 
 extern void	pn_alloc(struct pathname *);
-extern int	pn_get(char *, enum uio_seg, struct pathname *);
-extern int	pn_get_buf(char *, enum uio_seg, struct pathname *,
+extern void	pn_alloc_sz(struct pathname *, size_t);
+extern int	pn_get(const char *, enum uio_seg, struct pathname *);
+extern int	pn_get_buf(const char *, enum uio_seg, struct pathname *,
 			void *, size_t);
-extern int	pn_set(struct pathname *, char *);
+extern int	pn_set(struct pathname *, const char *);
 extern int	pn_insert(struct pathname *, struct pathname *, size_t);
 extern int	pn_getsymlink(vnode_t *, struct pathname *, cred_t *);
 extern int	pn_getcomponent(struct pathname *, char *);
@@ -80,11 +81,11 @@ extern int	pn_fixslash(struct pathname *);
 extern int	pn_addslash(struct pathname *);
 extern void	pn_free(struct pathname *);
 
-extern int lookupname(char *, enum uio_seg, int follow,
+extern int lookupname(const char *, enum uio_seg, int follow,
 		vnode_t **, vnode_t **);
-extern int lookupnameat(char *, enum uio_seg, int follow,
+extern int lookupnameat(const char *, enum uio_seg, int follow,
 		vnode_t **, vnode_t **, vnode_t *);
-extern int lookupnameatcred(char *, enum uio_seg, int follow,
+extern int lookupnameatcred(const char *, enum uio_seg, int follow,
 		vnode_t **, vnode_t **, vnode_t *, cred_t *);
 extern int lookuppn(struct pathname *, struct pathname *, int follow,
 		vnode_t **, vnode_t **);

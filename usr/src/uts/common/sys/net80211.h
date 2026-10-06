@@ -4,6 +4,10 @@
  */
 
 /*
+ * Copyright 2016 Hans Rosenfeld <rosenfeld@grumpf.hope-2000.org>
+ */
+
+/*
  * Copyright (c) 2001 Atsushi Onoe
  * Copyright (c) 2002-2005 Sam Leffler, Errno Consulting
  * All rights reserved.
@@ -44,6 +48,7 @@
 #include <sys/net80211_proto.h>
 #include <sys/net80211_crypto.h>
 #include <sys/net80211_ht.h>
+#include <sys/net80211_amrr.h>
 #include <net/wpa.h>
 
 /*
@@ -695,7 +700,7 @@ ieee80211_node_t *ieee80211_find_node(ieee80211_node_table_t *,
 ieee80211_node_t *ieee80211_find_node_with_ssid(ieee80211_node_table_t *,
 	const uint8_t *, uint32_t, const uint8_t *);
 ieee80211_node_t *ieee80211_find_txnode(ieee80211com_t *,
-	const uint8_t daddr[IEEE80211_ADDR_LEN]);
+	const uint8_t *daddr);
 ieee80211_node_t *ieee80211_find_rxnode(ieee80211com_t *,
 	const struct ieee80211_frame *);
 
@@ -708,7 +713,7 @@ extern int ieee80211_crypto_newkey(ieee80211com_t *, int, int,
 	struct ieee80211_key *);
 extern int ieee80211_crypto_delkey(ieee80211com_t *, struct ieee80211_key *);
 extern int ieee80211_crypto_setkey(ieee80211com_t *, struct ieee80211_key *,
-	const uint8_t macaddr[IEEE80211_ADDR_LEN]);
+	const uint8_t *macaddr);
 
 /* Helper Functions */
 int ieee80211_stat(ieee80211com_t *ic, uint_t stat, uint64_t *val);

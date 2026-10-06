@@ -29,8 +29,6 @@
 #ifndef	_ONCE_H
 #define	_ONCE_H
 
-#pragma ident	"%Z%%M%	%I%	%E% SMI"
-
 #include "ldefs.h"
 
 /* once.c */
@@ -73,9 +71,10 @@ int	peek = '\n';	/* next input character */
 CHR	*pushptr = pushc;
 CHR	*slptr = slist;
 
-#define	CNAME "/usr/share/lib/ccs/ncform"
-#define	RATNAME "/usr/share/lib/ccs/nrform"
-#define	EUCNAME "/usr/share/lib/ccs/nceucform"
+#define	NBASE "/usr/share/lib/ccs"
+#define	CNAME "ncform"
+#define	RATNAME "nrform"
+#define	EUCNAME "nceucform"
 
 int ccount = 1;
 int casecount = 1;

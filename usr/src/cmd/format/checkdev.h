@@ -27,15 +27,10 @@
 #ifndef	_CHECKDEV_H
 #define	_CHECKDEV_H
 
-#pragma ident	"%Z%%M%	%I%	%E% SMI"
-
 #ifdef	__cplusplus
 extern "C" {
 #endif
 
-/*
- *	Prototypes for ANSI C
- */
 int	checkmount(diskaddr_t start, diskaddr_t end);
 int	checkswap(diskaddr_t start, diskaddr_t end);
 int	check_label_with_mount(void);

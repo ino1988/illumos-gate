@@ -23,6 +23,7 @@
 # Copyright 2004 Sun Microsystems, Inc.  All rights reserved.
 # Use is subject to license terms.
 #
+# Copyright (c) 2018, Joyent, Inc.
 
 .KEEP_STATE:
 
@@ -35,22 +36,19 @@ OBJECTS =	errlog.o	\
 
 include	$(SRC)/lib/Makefile.lib
 
-SRCS	=	$(OBJECTS:%.o=../%.c)
-
-LINTFLAGS +=	-xsuF -errtags=yes
 CLEANFILES +=	$(LINTOUT)
-CLOBBERFILES += $(LINTLIB) $(LIBRARY)
+CLOBBERFILES += $(LIBRARY)
 
 CERRWARN	+= -_gcc=-Wno-parentheses
-CERRWARN	+= -_gcc=-Wno-unused-label
-CERRWARN	+= -_gcc=-Wno-uninitialized
+CERRWARN	+= $(CNOWARN_UNINIT)
+
+# not linted
+SMATCH=off
 
 objs/%.o: ../%.c
 	$(COMPILE.c) -o $@ $<
 	$(POST_PROCESS_O)
 
 all install:	$(LIBRARY)
-
-lint:	lintcheck
 
 include	$(SRC)/lib/Makefile.targ

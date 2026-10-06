@@ -22,7 +22,6 @@
 # Copyright 2006 Sun Microsystems, Inc.  All rights reserved.
 # Use is subject to license terms.
 #
-# ident	"%Z%%M%	%I%	%E% SMI"
 
 ISASRCDIR=.
 
@@ -30,7 +29,7 @@ include ../Makefile.com
 
 TYPES=library standalone
 
-INSTALL_DEPS_library =		$(ROOTLINKS) $(ROOTLINT) $(ROOTLIBS)
+INSTALL_DEPS_library =		$(ROOTLINKS) $(ROOTLIBS)
 INSTALL_DEPS_standalone =	$(ROOTLIBS)
 
 include ../Makefile.targ

@@ -20,6 +20,7 @@
  */
 /*
  * Copyright (c) 2007, 2010, Oracle and/or its affiliates. All rights reserved.
+ * Copyright 2017 Nexenta Systems, Inc.  All rights reserved.
  */
 
 /*
@@ -30,6 +31,8 @@
 #include <smbsrv/smb_kproto.h>
 #include <smbsrv/smb_fsops.h>
 #include <smbsrv/smb_vops.h>
+
+int smb_nt_create_enable_extended_response = 1;
 
 /*
  * smb_com_nt_create_andx
@@ -191,8 +194,8 @@ smb_pre_nt_create_andx(smb_request_t *sr)
 	if (rc == 0) {
 		if (NameLength == 0) {
 			op->fqi.fq_path.pn_path = "\\";
-		} else if (NameLength >= MAXPATHLEN) {
-			smbsr_error(sr, NT_STATUS_OBJECT_PATH_NOT_FOUND,
+		} else if (NameLength >= SMB_MAXPATHLEN) {
+			smbsr_error(sr, NT_STATUS_OBJECT_NAME_INVALID,
 			    ERRDOS, ERROR_PATH_NOT_FOUND);
 			rc = -1;
 		} else {
@@ -209,8 +212,7 @@ smb_pre_nt_create_andx(smb_request_t *sr)
 			op->op_oplock_level = SMB_OPLOCK_EXCLUSIVE;
 	}
 
-	DTRACE_SMB_2(op__NtCreateX__start, smb_request_t *, sr,
-	    struct open_param *, op);
+	DTRACE_SMB_START(op__NtCreateX, smb_request_t *, sr); /* arg.open */
 
 	return ((rc == 0) ? SDRC_SUCCESS : SDRC_ERROR);
 }
@@ -218,7 +220,7 @@ smb_pre_nt_create_andx(smb_request_t *sr)
 void
 smb_post_nt_create_andx(smb_request_t *sr)
 {
-	DTRACE_SMB_1(op__NtCreateX__done, smb_request_t *, sr);
+	DTRACE_SMB_DONE(op__NtCreateX, smb_request_t *, sr);
 
 	if (sr->arg.open.dir != NULL) {
 		smb_ofile_release(sr->arg.open.dir);
@@ -226,14 +228,30 @@ smb_post_nt_create_andx(smb_request_t *sr)
 	}
 }
 
+/*
+ * A lot like smb_nt_transact_create
+ */
 smb_sdrc_t
 smb_com_nt_create_andx(struct smb_request *sr)
 {
 	struct open_param	*op = &sr->arg.open;
-	unsigned char		DirFlag;
-	smb_attr_t		attr;
-	smb_node_t		*node;
-	int rc;
+	smb_attr_t		*ap = &op->fqi.fq_fattr;
+	smb_ofile_t		*of;
+	int			rc;
+	uint8_t			DirFlag;
+	uint32_t		status;
+
+	if (op->create_options & ~SMB_NTCREATE_VALID_OPTIONS) {
+		smbsr_error(sr, NT_STATUS_INVALID_PARAMETER,
+		    ERRDOS, ERROR_INVALID_PARAMETER);
+		return (SDRC_ERROR);
+	}
+
+	if (op->create_options & FILE_OPEN_BY_FILE_ID) {
+		smbsr_error(sr, NT_STATUS_NOT_SUPPORTED,
+		    ERRDOS, ERROR_NOT_SUPPORTED);
+		return (SDRC_ERROR);
+	}
 
 	if ((op->create_options & FILE_DELETE_ON_CLOSE) &&
 	    !(op->desired_access & DELETE)) {
@@ -263,8 +281,7 @@ smb_com_nt_create_andx(struct smb_request *sr)
 	if (op->rootdirfid == 0) {
 		op->fqi.fq_dnode = sr->tid_tree->t_snode;
 	} else {
-		op->dir = smb_ofile_lookup_by_fid(sr->tid_tree,
-		    (uint16_t)op->rootdirfid);
+		op->dir = smb_ofile_lookup_by_fid(sr, (uint16_t)op->rootdirfid);
 		if (op->dir == NULL) {
 			smbsr_error(sr, NT_STATUS_INVALID_HANDLE,
 			    ERRDOS, ERRbadfid);
@@ -273,71 +290,121 @@ smb_com_nt_create_andx(struct smb_request *sr)
 		op->fqi.fq_dnode = op->dir->f_node;
 	}
 
-	op->op_oplock_levelII = B_TRUE;
-
-	if (smb_common_open(sr) != NT_STATUS_SUCCESS)
+	status = smb_common_open(sr);
+	if (status != NT_STATUS_SUCCESS) {
+		smbsr_status(sr, status, 0, 0);
 		return (SDRC_ERROR);
+	}
+	if (op->op_oplock_level != SMB_OPLOCK_NONE) {
+		/* Oplock req. in op->op_oplock_level etc. */
+		smb1_oplock_acquire(sr, B_TRUE);
+	}
+
+	/*
+	 * NB: after the above smb_common_open() success,
+	 * we have a handle allocated (sr->fid_ofile).
+	 * If we don't return success, we must close it.
+	 */
+	of = sr->fid_ofile;
 
 	switch (sr->tid_tree->t_res_type & STYPE_MASK) {
 	case STYPE_DISKTREE:
 	case STYPE_PRINTQ:
 		if (op->create_options & FILE_DELETE_ON_CLOSE)
-			smb_ofile_set_delete_on_close(sr->fid_ofile);
-
-		node = sr->fid_ofile->f_node;
-		DirFlag = smb_node_is_dir(node) ? 1 : 0;
-		if (smb_node_getattr(sr, node, &attr) != 0) {
-			smbsr_error(sr, NT_STATUS_INTERNAL_ERROR,
-			    ERRDOS, ERROR_INTERNAL_ERROR);
-			return (SDRC_ERROR);
-		}
-
-		rc = smbsr_encode_result(sr, 34, 0, "bb.wbwlTTTTlqqwwbw",
-		    34,
-		    sr->andx_com,
-		    0x67,
-		    op->op_oplock_level,
-		    sr->smb_fid,
-		    op->action_taken,
-		    &attr.sa_crtime,
-		    &attr.sa_vattr.va_atime,
-		    &attr.sa_vattr.va_mtime,
-		    &attr.sa_vattr.va_ctime,
-		    op->dattr & FILE_ATTRIBUTE_MASK,
-		    attr.sa_allocsz,
-		    attr.sa_vattr.va_size,
-		    op->ftype,
-		    op->devstate,
-		    DirFlag,
-		    0);
+			smb_ofile_set_delete_on_close(sr, of);
+		DirFlag = smb_node_is_dir(of->f_node) ? 1 : 0;
 		break;
 
 	case STYPE_IPC:
-		rc = smbsr_encode_result(sr, 34, 0, "bb.wbwlqqqqlqqwwbw",
-		    34,
-		    sr->andx_com,
-		    0x67,
-		    0,
-		    sr->smb_fid,
-		    op->action_taken,
-		    0LL,
-		    0LL,
-		    0LL,
-		    0LL,
-		    FILE_ATTRIBUTE_NORMAL,
-		    0x1000LL,
-		    0LL,
-		    op->ftype,
-		    op->devstate,
-		    0,
-		    0);
+		DirFlag = 0;
 		break;
 
 	default:
 		smbsr_error(sr, NT_STATUS_INVALID_DEVICE_REQUEST,
 		    ERRDOS, ERROR_INVALID_FUNCTION);
-		return (SDRC_ERROR);
+		goto errout;
 	}
 
-	return ((rc == 0) ? SDRC_SUCCESS : SDRC_ERROR);
+	if ((op->nt_flags & NT_CREATE_FLAG_EXTENDED_RESPONSE) != 0 &&
+	    smb_nt_create_enable_extended_response != 0) {
+		uint32_t MaxAccess = 0;
+		if (of->f_node != NULL) {
+			smb_fsop_eaccess(sr, of->f_cr, of->f_node, &MaxAccess);
+		}
+		MaxAccess |= of->f_granted_access;
+
+		/*
+		 * Here is a really ugly protocol wart in SMB1:
+		 *
+		 * [MS-SMB] Sec. 2.2.4.9.2: Windows-based SMB servers
+		 * send 50 (0x32) words in the extended response although
+		 * they set the WordCount field to 0x2A.
+		 *
+		 * In other words, THEY LIE!  We really do need to encode
+		 * 50 words here, but lie and say we encoded 42 words.
+		 * This means we can't use smbsr_encode_result() to
+		 * build this response, because the rules it breaks
+		 * would cause errors in smbsr_check_result().
+		 *
+		 * And that's not all (it gets worse...)
+		 * Because of the bogus word count, some clients will
+		 * read the byte count from within what should be the
+		 * fileid field below.  Leave that zero, like Win7.
+		 *
+		 * Apparently the only really useful thing in this
+		 * extended response is MaxAccess.
+		 */
+		sr->smb_wct = 50; /* real word count */
+		sr->smb_bcc = 0;
+		rc = smb_mbc_encodef(&sr->reply,
+		    "bb.wbwlTTTTlqqwwb16.qllw",
+		    42,		/* fake word count (b) */
+		    sr->andx_com,		/* (b.) */
+		    0x87,	/* andx offset	   (w) */
+		    op->op_oplock_level,	/* (b) */
+		    sr->smb_fid,		/* (w) */
+		    op->action_taken,		/* (l) */
+		    &ap->sa_crtime,		/* (T) */
+		    &ap->sa_vattr.va_atime,	/* (T) */
+		    &ap->sa_vattr.va_mtime,	/* (T) */
+		    &ap->sa_vattr.va_ctime,	/* (T) */
+		    op->dattr & FILE_ATTRIBUTE_MASK, /* (l) */
+		    ap->sa_allocsz,		/* (q) */
+		    ap->sa_vattr.va_size,	/* (q) */
+		    op->ftype,			/* (w) */
+		    op->devstate,		/* (w) */
+		    DirFlag,			/* (b) */
+		    /* volume guid		  (16.) */
+		    0,	/* file ID (see above)	   (q) */
+		    MaxAccess,			/* (l) */
+		    0,		/* guest access	   (l) */
+		    0);		/* byte count	   (w) */
+	} else {
+		rc = smbsr_encode_result(
+		    sr, 34, 0, "bb.wbwlTTTTlqqwwbw",
+		    34,		/* word count	   (b) */
+		    sr->andx_com,		/* (b.) */
+		    0x67,	/* andx offset	   (w) */
+		    op->op_oplock_level,	/* (b) */
+		    sr->smb_fid,		/* (w) */
+		    op->action_taken,		/* (l) */
+		    &ap->sa_crtime,		/* (T) */
+		    &ap->sa_vattr.va_atime,	/* (T) */
+		    &ap->sa_vattr.va_mtime,	/* (T) */
+		    &ap->sa_vattr.va_ctime,	/* (T) */
+		    op->dattr & FILE_ATTRIBUTE_MASK, /* (l) */
+		    ap->sa_allocsz,		/* (q) */
+		    ap->sa_vattr.va_size,	/* (q) */
+		    op->ftype,			/* (w) */
+		    op->devstate,		/* (w) */
+		    DirFlag,			/* (b) */
+		    0);		/* byte count	   (w) */
+	}
+
+	if (rc == 0)
+		return (SDRC_SUCCESS);
+
+errout:
+	smb_ofile_close(of, 0);
+	return (SDRC_ERROR);
 }

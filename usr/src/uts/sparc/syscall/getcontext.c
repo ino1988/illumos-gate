@@ -25,7 +25,7 @@
  */
 
 /*	Copyright (c) 1984, 1986, 1987, 1988, 1989 AT&T	*/
-/*	  All Rights Reserved  	*/
+/*	  All Rights Reserved	*/
 
 #include <sys/param.h>
 #include <sys/types.h>
@@ -87,7 +87,7 @@ savecontext(ucontext_t *ucp, const k_sigset_t *mask)
 	 * been disabled for this LWP. If stack bounds checking is disabled
 	 * or the copyin() fails, we fall back to the legacy behavior.
 	 */
-	if (lwp->lwp_ustack == NULL ||
+	if (lwp->lwp_ustack == (uintptr_t)NULL ||
 	    copyin((void *)lwp->lwp_ustack, &ucp->uc_stack,
 	    sizeof (ucp->uc_stack)) != 0 ||
 	    ucp->uc_stack.ss_size == 0) {
@@ -176,7 +176,7 @@ int
 getsetcontext(int flag, void *arg)
 {
 	ucontext_t uc;
-	struct fq fpu_q[MAXFPQ]; /* to hold floating queue */
+	struct _fq fpu_q[MAXFPQ]; /* to hold floating queue */
 	fpregset_t *fpp;
 	gwindows_t *gwin = NULL;	/* to hold windows */
 	caddr_t xregs = NULL;
@@ -214,7 +214,7 @@ getsetcontext(int flag, void *arg)
 		 * a later setcontext(2).
 		 */
 		uc.uc_mcontext.fpregs.fpu_qcnt = 0;
-		uc.uc_mcontext.fpregs.fpu_q = (struct fq *)NULL;
+		uc.uc_mcontext.fpregs.fpu_q = (struct _fq *)NULL;
 
 		if (copyout(&uc, arg, sizeof (ucontext_t)))
 			return (set_errno(EFAULT));
@@ -255,7 +255,7 @@ getsetcontext(int flag, void *arg)
 			if ((fpp->fpu_q) && (fpp->fpu_qcnt)) {
 				if (fpp->fpu_qcnt > MAXFPQ ||
 				    fpp->fpu_q_entrysize <= 0 ||
-				    fpp->fpu_q_entrysize > sizeof (struct fq))
+				    fpp->fpu_q_entrysize > sizeof (struct _fq))
 					return (set_errno(EINVAL));
 				if (copyin(fpp->fpu_q, fpu_q,
 				    fpp->fpu_qcnt * fpp->fpu_q_entrysize))
@@ -384,7 +384,7 @@ savecontext32(ucontext32_t *ucp, const k_sigset_t *mask, struct fq32 *dfq)
 	 * been disabled for this LWP. If stack bounds checking is disabled
 	 * or the copyin() fails, we fall back to the legacy behavior.
 	 */
-	if (lwp->lwp_ustack == NULL ||
+	if (lwp->lwp_ustack == (uintptr_t)NULL ||
 	    copyin((void *)lwp->lwp_ustack, &ucp->uc_stack,
 	    sizeof (ucp->uc_stack)) != 0 ||
 	    ucp->uc_stack.ss_size == 0) {
@@ -410,7 +410,7 @@ savecontext32(ucontext32_t *ucp, const k_sigset_t *mask, struct fq32 *dfq)
 
 	if (ucp->uc_mcontext.fpregs.fpu_en == 0)
 		ucp->uc_flags &= ~UC_FPU;
-	ucp->uc_mcontext.gwins = (caddr32_t)NULL;
+	ucp->uc_mcontext.gwins = (caddr32_t)(uintptr_t)NULL;
 
 	/*
 	 * Save signal mask (the 32- and 64-bit sigset_t structures are
@@ -424,7 +424,7 @@ getsetcontext32(int flag, void *arg)
 {
 	ucontext32_t uc;
 	ucontext_t   ucnat;
-	struct fq fpu_qnat[MAXFPQ]; /* to hold "native" floating queue */
+	struct _fq fpu_qnat[MAXFPQ]; /* to hold "native" floating queue */
 	struct fq32 fpu_q[MAXFPQ]; /* to hold 32 bit floating queue */
 	fpregset32_t *fpp;
 	gwindows32_t *gwin = NULL;	/* to hold windows */
@@ -464,7 +464,7 @@ getsetcontext32(int flag, void *arg)
 		 * a later setcontext(2).
 		 */
 		uc.uc_mcontext.fpregs.fpu_qcnt = 0;
-		uc.uc_mcontext.fpregs.fpu_q = (caddr32_t)NULL;
+		uc.uc_mcontext.fpregs.fpu_q = (caddr32_t)(uintptr_t)NULL;
 
 		if (copyout(&uc, arg, sizeof (ucontext32_t)))
 			return (set_errno(EFAULT));

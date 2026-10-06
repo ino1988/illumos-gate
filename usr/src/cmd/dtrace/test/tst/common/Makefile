@@ -26,7 +26,9 @@
 
 #
 # Copyright (c) 2012 by Delphix. All rights reserved.
-# Copyright (c) 2013, Joyent, Inc. All rights reserved.
+# Copyright 2015 Nexenta Systems, Inc.  All rights reserved.
+# Copyright 2018 Joyent, Inc.
+# Copyright 2022 Oxide Computer Company
 #
 
 #
@@ -51,12 +53,14 @@ CLOBBERFILES += usdt/forker.h usdt/lazyprobe.h
 fasttrap/tst.fasttrap.exe := LDLIBS += -ldtrace
 fasttrap/tst.stack.exe := LDLIBS += -ldtrace
 
+ip/msnc.exe := LDLIBS += -lsocket
+
 sysevent/tst.post.exe := LDLIBS += -lsysevent
 sysevent/tst.post_chan.exe := LDLIBS += -lsysevent
 
 ustack/tst.bigstack.exe := COPTFLAG += -xO1
 
-GCC = $(ONBLD_TOOLS)/bin/$(MACH)/cw -_gcc
+CSTD = $(CSTD_GNU99)
 
 nfs/%.o: $(SNOOPDIR)/%.c
 	$(COMPILE.c) -o $@ $< -I$(SNOOPDIR)
@@ -74,14 +78,12 @@ nfs/tst.call3.exe: nfs/tst.call3.o nfs/$(RPCSVCOBJS)
 	$(LDLIBS) -lnsl -lrpcsvc
 	$(POST_PROCESS) ; $(STRIP_STABS)
 
-pid/tst.gcc.exe: pid/tst.gcc.c
-	$(GCC) -o pid/tst.gcc.exe pid/tst.gcc.c $(LDFLAGS)
-	$(POST_PROCESS) ; $(STRIP_STABS)
-
 json/tst.usdt.o: json/usdt.h
 
 json/usdt.h: json/usdt.d
 	$(DTRACE) -h -s json/usdt.d -o json/usdt.h
+
+CLOBBERFILES +=	json/usdt.h
 
 json/usdt.o: json/usdt.d json/tst.usdt.o
 	$(COMPILE.d) -o json/usdt.o -s json/usdt.d json/tst.usdt.o
@@ -91,9 +93,30 @@ json/tst.usdt.exe: json/tst.usdt.o json/usdt.o
 	$(POST_PROCESS) ; $(STRIP_STABS)
 
 #
-# Tests that use the next three programs rely on the binaries having
-# valid CTF data.
+# Tests that use the next programs rely on the binaries having valid CTF
+# data.
 #
+bitfields/tst.bitfields.exe: bitfields/tst.bitfields.c
+	$(COMPILE.c) $(CTF_FLAGS) -o bitfields/tst.bitfields.o bitfields/tst.bitfields.c
+	$(CTFCONVERT) -i -L VERSION bitfields/tst.bitfields.o
+	$(LINK.c) -o bitfields/tst.bitfields.exe bitfields/tst.bitfields.o $(LDLIBS)
+	$(CTFMERGE) -L VERSION -o $@ bitfields/tst.bitfields.o
+	$(POST_PROCESS) ; $(STRIP_STABS)
+
+offsetof/tst.anon.exe: offsetof/tst.anon.c
+	$(COMPILE.c) $(CTF_FLAGS) -o offsetof/tst.anon.o offsetof/tst.anon.c
+	$(CTFCONVERT) -i -L VERSION offsetof/tst.anon.o
+	$(LINK.c) -o offsetof/tst.anon.exe offsetof/tst.anon.o $(LDLIBS)
+	$(CTFMERGE) -L VERSION -o $@ offsetof/tst.anon.o
+	$(POST_PROCESS) ; $(STRIP_STABS)
+
+print/tst.anon.exe: print/tst.anon.c
+	$(COMPILE.c) $(CTF_FLAGS) -o print/tst.anon.o print/tst.anon.c
+	$(CTFCONVERT) -i -L VERSION print/tst.anon.o
+	$(LINK.c) -o print/tst.anon.exe print/tst.anon.o $(LDLIBS)
+	$(CTFMERGE) -L VERSION -o $@ print/tst.anon.o
+	$(POST_PROCESS) ; $(STRIP_STABS)
+
 uctf/tst.aouttype.exe: uctf/tst.aouttype.c
 	$(COMPILE.c) $(CTF_FLAGS) -o uctf/tst.aouttype.o uctf/tst.aouttype.c
 	$(CTFCONVERT) -i -L VERSION uctf/tst.aouttype.o

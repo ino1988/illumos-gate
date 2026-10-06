@@ -25,7 +25,7 @@
  */
 
 /*	Copyright (c) 1984, 1986, 1987, 1988, 1989 AT&T	*/
-/*	  All Rights Reserved  	*/
+/*	  All Rights Reserved	*/
 
 /*
  * University Copyright- Copyright (c) 1982, 1986, 1988
@@ -39,8 +39,6 @@
 
 #ifndef	_SYS_FS_UFS_FSDIR_H
 #define	_SYS_FS_UFS_FSDIR_H
-
-#pragma ident	"%Z%%M%	%I%	%E% SMI"
 
 #ifdef	__cplusplus
 extern "C" {
@@ -107,6 +105,19 @@ struct dirtemplate {
 	short		dotdot_namlen;
 	char		dotdot_name[4];		/* ditto */
 };
+
+/*
+ * Reduced structure for manipulating directories.
+ * Note, we are using __packed here to ensure the size of structure
+ * without changing the alignment.
+ */
+struct tmp_dir {
+	uint32_t	d_ino;		/* inode number of entry */
+	ushort_t	d_reclen;	/* length of this record */
+	ushort_t	d_namlen;	/* length of string in d_name */
+	char		d_name[4];	/* name must be no longer than this */
+} __packed;
+
 #endif
 
 #ifdef	__cplusplus

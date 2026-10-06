@@ -20,11 +20,15 @@
 #
 #
 # Copyright (c) 2007, 2010, Oracle and/or its affiliates. All rights reserved.
+# Copyright 2014 Nexenta Systems, Inc.  All rights reserved.
 #
+# Copyright (c) 2018, Joyent, Inc.
+# Copyright 2022-2023 RackTop Systems, Inc.
 
 PROG =		idmapd
 MANIFEST =	idmap.xml
 SERVEROBJS =				\
+	adspriv_impl.o			\
 	directory_provider_builtin.o	\
 	directory_provider_nsswitch.o	\
 	directory_provider_ad.o		\
@@ -35,13 +39,18 @@ SERVEROBJS =				\
 	idmapd.o			\
 	init.o				\
 	idmap_lsa.o			\
+	krb5_lookup.o			\
 	nldaputils.o			\
-	rpc_svc.o			\
 	server.o			\
 	wksids.o
 
+GENOBJS =				\
+	adspriv_srv.o			\
+	rpc_svc.o
+
 SERVERSRCS =	$(SERVEROBJS:%.o=%.c)
-OBJS =		$(SERVEROBJS)
+GENSRCS =	$(GENOBJS:%.o=%.c)
+OBJS =		$(SERVEROBJS) $(GENOBJS)
 SRCS =		$(SERVERSRCS)
 POFILES =	$(OBJS:%.o=%.po)
 
@@ -50,14 +59,15 @@ install :=	TARGET = install
 clean :=	TARGET = clean
 clobber :=	TARGET = clobber
 
-LIBSQLITE =	$(ROOT)/usr/lib/libsqlite.o
-SQLITELINT =	$(ROOT)/usr/lib/llib-lsqlite.ln
-
 include ../../Makefile.cmd
+include ../../Makefile.ctf
 
 CERRWARN +=	-_gcc=-Wno-type-limits
 CERRWARN +=	-_gcc=-Wno-switch
-CERRWARN +=	-_gcc=-Wno-uninitialized
+CERRWARN +=	$(CNOWARN_UNINIT)
+
+# not linted
+SMATCH=off
 
 TEXT_DOMAIN =	SUNW_OST_OSLIB
 XGETTEXT =	$(GNUXGETTEXT)
@@ -65,24 +75,34 @@ XGETFLAGS =	--foreign-user --strict -n -E --width=72 \
 		--omit-header --keyword=directoryError:2 \
 		--language=C --force-po
 
-C99MODE = $(C99_ENABLE)
+CSTD = $(CSTD_GNU99)
 POFILE =	$(PROG)_all.po
 
 RPC_MSGOUT_OPT = -DRPC_MSGOUT=idmap_rpc_msgout
 
 ROOTMANIFESTDIR = $(ROOTSVCSYSTEM)
 $(ROOTMANIFEST) := FILEMODE= 444
+RPCSVC= ../../../uts/common/rpcsvc
+ADS_CMN=../../../lib/libads/common
 
-INCS += -I. -I../../../lib/libidmap/common\
-	 -I../../../lib/libsldap/common\
+INCS += -I. -I../../../lib/libidmap/common \
+	 -I../../../lib/libsldap/common \
 	 -I../../../lib/libadutils/common \
+	 -I $(ADS_CMN) \
 	 -I../../../lib/smbsrv/libsmb/common
+
+# Should not have to do this, but the Kerberos includes are a mess.
+INCS += -I $(ROOT)/usr/include/kerberosv5
 
 $(OBJS) := CPPFLAGS += $(INCS) -D_REENTRANT
 $(POFILE) := CPPFLAGS += $(INCS)
 
 CFLAGS += $(CCVERBOSE)
-LDLIBS += -lsecdb \
+$(NOT_RELEASE_BUILD)CPPFLAGS += -DIDMAPD_DEBUG
+
+LDLIBS += \
+	-lsqlite-sys \
+	-lsecdb \
 	-lsocket \
 	-lnsl \
 	-lidmap \
@@ -91,6 +111,7 @@ LDLIBS += -lsecdb \
 	-lldap \
 	-luuid \
 	-ladutils \
+	-lads \
 	-lumem \
 	-lnvpair \
 	-luutil \
@@ -99,15 +120,10 @@ LDLIBS += -lsecdb \
 
 rpc_svc.o := CFLAGS += $(RPC_MSGOUT_OPT)
 
-$(PROG) := MAPFILES = $(MAPFILE.INT) $(MAPFILE.NGB)
-$(PROG) := LDFLAGS += $(MAPFILES:%=-M%) \
-	-R /usr/lib/smbsrv
+LDFLAGS += -R /usr/lib/smbsrv
 
 DIRMODE = 0755
 FILEMODE = 0555
-
-lint_SRCS := CPPFLAGS += $(INCS) -D_REENTRANT $(RPC_MSGOUT_OPT)
-lint := LDLIBS += $(SQLITELINT)
 
 .KEEP_STATE:
 
@@ -115,8 +131,8 @@ lint := LDLIBS += $(SQLITELINT)
 
 all: $(PROG)
 
-$(PROG): $(OBJS) $$(MAPFILES)
-	$(LINK.c) -o $@ $(OBJS) $(LIBSQLITE) $(LDLIBS)
+$(PROG): $(OBJS)
+	$(LINK.c) -o $@ $(OBJS) $(LDLIBS)
 	$(POST_PROCESS)
 
 $(POFILE): $(POFILES)
@@ -128,15 +144,18 @@ install: all $(ROOTLIBPROG) $(ROOTMANIFEST)
 check: $(CHKMANIFEST)
 
 clean:
-	$(RM) $(OBJS)
+	$(RM) $(OBJS) $(GENSRCS)
 
-clobber:
+RPCGENFLAGS = -CMN
 
-lint:   lint_SRCS
+adspriv_srv.o : adspriv_srv.c
 
-lint_SRCS:
+adspriv_srv.c:
+	$(RPCGEN) $(RPCGENFLAGS) -m $(ADS_CMN)/ads_priv.x > $@
+
+rpc_svc.o : rpc_svc.c
+
+rpc_svc.c : $(RPCSVC)/idmap_prot.x
+	$(RPCGEN) $(RPCGENFLAGS) -m $(RPCSVC)/idmap_prot.x > $@
 
 include ../../Makefile.targ
-
-FRC:
-

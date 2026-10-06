@@ -37,18 +37,17 @@ SRCS =		$(AES_SRC) $(ARCFOUR_SRC) $(BIGNUM_SRC) $(BLOWFISH_SRC) \
 
 SRCDIR =	$(SRC)/lib/pkcs11/libsoftcrypto/common
 
-LIBS =		$(DYNLIB) $(LINTLIB)
+LIBS =		$(DYNLIB)
 MAPFILEDIR =	../common
 
 CFLAGS +=	$(CCVERBOSE)
 
 CERRWARN +=	-_gcc=-Wno-type-limits
 CERRWARN +=	-_gcc=-Wno-parentheses
-CERRWARN +=	-_gcc=-Wno-uninitialized
+CERRWARN +=	$(CNOWARN_UNINIT)
 
 CPPFLAGS +=	-I$(CRYPTODIR) -I$(UTSDIR) -D_POSIX_PTHREAD_SEMANTICS
 LDLIBS +=	-lcryptoutil -lc
-LINTFLAGS +=	$(EXTRA_LINT_FLAGS)
 
 # Symbol capabilities objects are added for sun4u and sun4v.
 EXTPICS =	../capabilities/sun4u/sparc/pics/symcap.o \
@@ -58,8 +57,6 @@ EXTPICS =	../capabilities/sun4u/sparc/pics/symcap.o \
 
 all:		$(LIBS)
 
-lint:		$(SRCS)
-
-install:	all $(ROOTLIBS) $(ROOTLINKS) $(ROOTLINT)
+install:	all $(ROOTLIBS) $(ROOTLINKS)
 
 include		../Makefile.targ

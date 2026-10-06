@@ -21,6 +21,7 @@
 
 /*
  * Copyright 2014 Garrett D'Amore <garrett@damore.org>
+ * Copyright 2014 PALO, Richard.
  *
  * Copyright 2006 Sun Microsystems, Inc.  All rights reserved.
  * Use is subject to license terms.
@@ -42,6 +43,7 @@
 #define	_ISO_WCHAR_ISO_H
 
 #include <sys/feature_tests.h>
+#include <sys/null.h>
 #include <stdio_tag.h>
 #include <wchar_impl.h>
 #include <iso/time_iso.h>
@@ -102,20 +104,12 @@ typedef	long	wint_t;
 
 #if !defined(_SIZE_T) || __cplusplus >= 199711L
 #define	_SIZE_T
-#if defined(_LP64) || defined(_I32LPx)
+#if defined(_LP64)
 typedef	unsigned long	size_t;		/* size of something in bytes */
 #else
 typedef unsigned int	size_t;		/* (historical version) */
 #endif
 #endif  /* !defined(_SIZE_T) || __cplusplus >= 199711L */
-
-#ifndef NULL
-#if defined(_LP64)
-#define	NULL	0L
-#else
-#define	NULL	0
-#endif
-#endif /* !NULL */
 
 #ifndef WEOF
 #if __cplusplus >= 199711L

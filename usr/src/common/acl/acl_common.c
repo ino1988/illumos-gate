@@ -20,13 +20,17 @@
  */
 /*
  * Copyright (c) 2005, 2010, Oracle and/or its affiliates. All rights reserved.
- * Copyright 2011 Nexenta Systems, Inc.  All rights reserved.
+ * Copyright 2014 Nexenta Systems, Inc.  All rights reserved.
+ * Copyright 2023 RackTop Systems, Inc.
  */
 
 #include <sys/types.h>
 #include <sys/stat.h>
+#include <sys/errno.h>
 #include <sys/avl.h>
-#if defined(_KERNEL)
+#if defined(_KERNEL) || defined(_FAKE_KERNEL)
+#include <sys/debug.h>
+#include <sys/kmem.h>
 #include <sys/systm.h>
 #include <sys/sysmacros.h>
 #include <acl/acl_common.h>
@@ -221,7 +225,7 @@ cmp2acls(void *a, void *b)
 static void *
 cacl_realloc(void *ptr, size_t size, size_t new_size)
 {
-#if defined(_KERNEL)
+#if defined(_KERNEL) || defined(_FAKE_KERNEL)
 	void *tmp;
 
 	tmp = kmem_alloc(new_size, KM_SLEEP);
@@ -236,7 +240,7 @@ cacl_realloc(void *ptr, size_t size, size_t new_size)
 static int
 cacl_malloc(void **ptr, size_t size)
 {
-#if defined(_KERNEL)
+#if defined(_KERNEL) || defined(_FAKE_KERNEL)
 	*ptr = kmem_zalloc(size, KM_SLEEP);
 	return (0);
 #else
@@ -252,7 +256,7 @@ cacl_malloc(void **ptr, size_t size)
 static void
 cacl_free(void *ptr, size_t size)
 {
-#if defined(_KERNEL)
+#if defined(_KERNEL) || defined(_FAKE_KERNEL)
 	kmem_free(ptr, size);
 #else
 	free(ptr);
@@ -778,9 +782,9 @@ acevals_init(acevals_t *vals, uid_t key)
 static void
 ace_list_init(ace_list_t *al, int dfacl_flag)
 {
-	acevals_init(&al->user_obj, NULL);
-	acevals_init(&al->group_obj, NULL);
-	acevals_init(&al->other_obj, NULL);
+	acevals_init(&al->user_obj, 0);
+	acevals_init(&al->group_obj, 0);
+	acevals_init(&al->other_obj, 0);
 	al->numusers = 0;
 	al->numgroups = 0;
 	al->acl_mask = 0;
@@ -872,8 +876,8 @@ access_mask_check(ace_t *acep, int mask_bit, int isowner)
 			set_allow = ACL_WRITE_ATTRS_WRITER_SET_ALLOW;
 			err_allow = ACL_WRITE_ATTRS_WRITER_ERR_ALLOW;
 		} else {
-			if ((acep->a_access_mask & mask_bit) &&
-			    (acep->a_type & ACE_ACCESS_ALLOWED_ACE_TYPE)) {
+			if (((acep->a_access_mask & mask_bit) != 0) &&
+			    (acep->a_type == ACE_ACCESS_ALLOWED_ACE_TYPE)) {
 				return (ENOTSUP);
 			}
 			return (0);
@@ -1090,12 +1094,11 @@ ace_list_to_aent(ace_list_t *list, aclent_t **aclentp, int *aclcnt,
 
 	if ((list->seen & (USER_OBJ | GROUP_OBJ | OTHER_OBJ)) !=
 	    (USER_OBJ | GROUP_OBJ | OTHER_OBJ)) {
-		error = ENOTSUP;
-		goto out;
+		return (ENOTSUP);
 	}
+
 	if ((! list->hasmask) && (list->numusers + list->numgroups > 0)) {
-		error = ENOTSUP;
-		goto out;
+		return (ENOTSUP);
 	}
 
 	resultcount = 3 + list->numusers + list->numgroups;
@@ -1462,7 +1465,7 @@ convert_ace_to_aent(ace_t *acebufp, int acecnt, boolean_t isdir,
 	int error = 0;
 	aclent_t *aclentp, *dfaclentp;
 	int aclcnt, dfaclcnt;
-	int aclsz, dfaclsz;
+	int aclsz, dfaclsz = 0;
 
 	error = ln_ace_to_aent(acebufp, acecnt, owner, group,
 	    &aclentp, &aclcnt, &dfaclentp, &dfaclcnt, isdir);
@@ -1553,11 +1556,11 @@ acl_translate(acl_t *aclp, int target_flavor, boolean_t isdir, uid_t owner,
 
 out:
 
-#if !defined(_KERNEL)
+#if defined(_KERNEL) || defined(_FAKE_KERNEL)
+	return (error);
+#else
 	errno = error;
 	return (-1);
-#else
-	return (error);
 #endif
 }
 
@@ -1575,7 +1578,8 @@ acl_trivial_access_masks(mode_t mode, boolean_t isdir, trivial_acl_t *masks)
 	uint32_t write_mask = ACE_WRITE_DATA|ACE_APPEND_DATA;
 	uint32_t execute_mask = ACE_EXECUTE;
 
-	(void) isdir;	/* will need this later */
+	if (isdir)
+		write_mask |= ACE_DELETE_CHILD;
 
 	masks->deny1 = 0;
 	if (!(mode & S_IRUSR) && (mode & (S_IRGRP|S_IROTH)))
@@ -1633,7 +1637,7 @@ acl_trivial_access_masks(mode_t mode, boolean_t isdir, trivial_acl_t *masks)
 int
 acl_trivial_create(mode_t mode, boolean_t isdir, ace_t **acl, int *count)
 {
-	int 		index = 0;
+	int		index = 0;
 	int		error;
 	trivial_acl_t	masks;
 
@@ -1674,6 +1678,16 @@ acl_trivial_create(mode_t mode, boolean_t isdir, ace_t **acl, int *count)
 }
 
 /*
+ * Convenience macro for ACE rights implied for owner in a trivial ACL:
+ * write_owner/write_acl/write_attributes/write_xattr
+ */
+#define	ACE_OWNER_MASK	(\
+	ACE_WRITE_OWNER|\
+	ACE_WRITE_ACL|\
+	ACE_WRITE_ATTRIBUTES|\
+	ACE_WRITE_NAMED_ATTRS)
+
+/*
  * ace_trivial:
  * determine whether an ace_t acl is trivial
  *
@@ -1681,6 +1695,8 @@ acl_trivial_create(mode_t mode, boolean_t isdir, ace_t **acl, int *count)
  * owner, group, everyone entries.  ACL can't
  * have read_acl denied, and write_owner/write_acl/write_attributes
  * can only be owner@ entry.
+ *
+ * Returns zero if this is a "trivial" ACL, else 1.
  */
 int
 ace_trivial_common(void *acep, int aclcnt,
@@ -1691,8 +1707,11 @@ ace_trivial_common(void *acep, int aclcnt,
 	uint32_t mask;
 	uint16_t type;
 	uint64_t cookie = 0;
+	uint32_t owner_allow = 0;
+	uint32_t owner_deny = 0;
 
-	while (cookie = walk(acep, cookie, aclcnt, &flags, &type, &mask)) {
+	while ((cookie = walk(acep, cookie, aclcnt, &flags, &type, &mask))
+	    != 0) {
 		switch (flags & ACE_TYPE_FLAGS) {
 		case ACE_OWNER:
 		case ACE_GROUP|ACE_IDENTIFIER_GROUP:
@@ -1719,21 +1738,47 @@ ace_trivial_common(void *acep, int aclcnt,
 			return (1);
 
 		/*
-		 * Delete permissions are never set by default
+		 * Delete permission is never set by default
 		 */
-		if (mask & (ACE_DELETE|ACE_DELETE_CHILD))
+		if (mask & ACE_DELETE)
 			return (1);
+
+		/*
+		 * Child delete permission should be accompanied by write
+		 */
+		if ((mask & ACE_DELETE_CHILD) && !(mask & ACE_WRITE_DATA))
+			return (1);
+
 		/*
 		 * only allow owner@ to have
 		 * write_acl/write_owner/write_attributes/write_xattr/
 		 */
 		if (type == ACE_ACCESS_ALLOWED_ACE_TYPE &&
-		    (!(flags & ACE_OWNER) && (mask &
-		    (ACE_WRITE_OWNER|ACE_WRITE_ACL| ACE_WRITE_ATTRIBUTES|
-		    ACE_WRITE_NAMED_ATTRS))))
+		    (flags & ACE_OWNER) == 0 &&
+		    (mask & ACE_OWNER_MASK) != 0)
 			return (1);
 
+		/* Accumulate owner masks */
+		if ((flags & ACE_OWNER) != 0) {
+			if (type == ACE_ACCESS_ALLOWED_ACE_TYPE)
+				owner_allow |= mask;
+			if (type == ACE_ACCESS_DENIED_ACE_TYPE)
+				owner_deny |= mask;
+		}
 	}
+
+	/*
+	 * If owner was not allowed the usual implied rights,
+	 * then this should not be considered a trivial ACL.
+	 * In cases like mode 0745 we may have owner@ on
+	 * multiple ACEs, so we have to check the combined
+	 * access masks.
+	 */
+	if ((owner_deny & ACE_OWNER_MASK) != 0)
+		return (1);
+	if ((owner_allow & ACE_OWNER_MASK) != ACE_OWNER_MASK)
+		return (1);
+
 	return (0);
 }
 

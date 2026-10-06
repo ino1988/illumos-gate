@@ -19,17 +19,20 @@
  * CDDL HEADER END
  */
 /*	Copyright (c) 1984, 1986, 1987, 1988, 1989 AT&T	*/
-/*	  All Rights Reserved  	*/
+/*	All Rights Reserved	*/
 
 
 /*
  * Copyright (c) 1989, 2010, Oracle and/or its affiliates. All rights reserved.
  * Copyright 2011 Nexenta Systems, Inc.  All rights reserved.
+ * Copyright 2017 Joyent, Inc.
+ * Copyright 2024 Oxide Computer Company
  */
 
 /*
  * Generic vnode operations.
  */
+
 #include <sys/types.h>
 #include <sys/param.h>
 #include <sys/systm.h>
@@ -59,6 +62,9 @@
 #include <acl/acl_common.h>
 #include <sys/pathname.h>
 
+/* required for fs_reject_epoll */
+#include <sys/poll_impl.h>
+
 static callb_cpr_t *frlock_serialize_blocked(flk_cb_when_t, void *);
 
 /*
@@ -77,6 +83,16 @@ static kmutex_t reparsed_door_lock;
  */
 int
 fs_nosys()
+{
+	return (ENOSYS);
+}
+
+/*
+ * This is the version of syncfs that a file system gets by default if it
+ * doesn't support the entry point and has a valid sync routine.
+ */
+int
+fs_nosys_syncfs(vfs_t *vfsp, uint64_t flags, cred_t *cr)
 {
 	return (ENOSYS);
 }
@@ -112,44 +128,26 @@ fs_freevfs(vfs_t *vfsp)
 
 /* ARGSUSED */
 int
-fs_nosys_map(struct vnode *vp,
-	offset_t off,
-	struct as *as,
-	caddr_t *addrp,
-	size_t len,
-	uchar_t prot,
-	uchar_t maxprot,
-	uint_t flags,
-	struct cred *cr,
-	caller_context_t *ct)
+fs_nosys_map(struct vnode *vp, offset_t off, struct as *as, caddr_t *addrp,
+    size_t len, uchar_t prot, uchar_t maxprot, uint_t flags, struct cred *cr,
+    caller_context_t *ct)
 {
 	return (ENOSYS);
 }
 
 /* ARGSUSED */
 int
-fs_nosys_addmap(struct vnode *vp,
-	offset_t off,
-	struct as *as,
-	caddr_t addr,
-	size_t len,
-	uchar_t prot,
-	uchar_t maxprot,
-	uint_t flags,
-	struct cred *cr,
-	caller_context_t *ct)
+fs_nosys_addmap(struct vnode *vp, offset_t off, struct as *as, caddr_t addr,
+    size_t len, uchar_t prot, uchar_t maxprot, uint_t flags, struct cred *cr,
+    caller_context_t *ct)
 {
 	return (ENOSYS);
 }
 
 /* ARGSUSED */
 int
-fs_nosys_poll(vnode_t *vp,
-	register short events,
-	int anyyet,
-	register short *reventsp,
-	struct pollhead **phpp,
-	caller_context_t *ct)
+fs_nosys_poll(vnode_t *vp, short events, int anyyet, short *reventsp,
+    struct pollhead **phpp, caller_context_t *ct)
 {
 	return (ENOSYS);
 }
@@ -162,6 +160,16 @@ fs_nosys_poll(vnode_t *vp,
 /* ARGSUSED */
 int
 fs_sync(struct vfs *vfspp, short flag, cred_t *cr)
+{
+	return (0);
+}
+
+/*
+ * This should be used for file systems which do not need to support any kind of
+ * sync(2) style operation.
+ */
+int
+fs_syncfs_nop(vfs_t *vfspp, uint64_t flag, cred_t *cr)
 {
 	return (0);
 }
@@ -182,7 +190,7 @@ fs_fsync(vnode_t *vp, int syncflag, cred_t *cr, caller_context_t *ct)
 /* ARGSUSED */
 int
 fs_putpage(vnode_t *vp, offset_t off, size_t len, int flags, cred_t *cr,
-	caller_context_t *ctp)
+    caller_context_t *ctp)
 {
 	return (0);
 }
@@ -193,7 +201,7 @@ fs_putpage(vnode_t *vp, offset_t off, size_t len, int flags, cred_t *cr,
 /* ARGSUSED */
 int
 fs_ioctl(vnode_t *vp, int com, intptr_t data, int flag, cred_t *cred,
-	int *rvalp)
+    int *rvalp)
 {
 	return (0);
 }
@@ -231,7 +239,7 @@ fs_cmp(vnode_t *vp1, vnode_t *vp2, caller_context_t *ct)
 int
 fs_seek(vnode_t *vp, offset_t ooff, offset_t *noffp, caller_context_t *ct)
 {
-	return ((*noffp < 0 || *noffp > MAXOFFSET_T) ? EINVAL : 0);
+	return (*noffp < 0 ? EINVAL : 0);
 }
 
 /*
@@ -239,13 +247,13 @@ fs_seek(vnode_t *vp, offset_t ooff, offset_t *noffp, caller_context_t *ct)
  */
 /* ARGSUSED */
 int
-fs_frlock(register vnode_t *vp, int cmd, struct flock64 *bfp, int flag,
-	offset_t offset, flk_callback_t *flk_cbp, cred_t *cr,
-	caller_context_t *ct)
+fs_frlock(vnode_t *vp, int cmd, struct flock64 *bfp, int flag, offset_t offset,
+    flk_callback_t *flk_cbp, cred_t *cr, caller_context_t *ct)
 {
 	int frcmd;
 	int nlmid;
 	int error = 0;
+	boolean_t skip_lock = B_FALSE;
 	flk_callback_t serialize_callback;
 	int serialize = 0;
 	v_mode_t mode;
@@ -263,6 +271,17 @@ fs_frlock(register vnode_t *vp, int cmd, struct flock64 *bfp, int flag,
 			bfp->l_pid = ttoproc(curthread)->p_pid;
 			bfp->l_sysid = 0;
 		}
+		break;
+
+	case F_OFD_GETLK:
+		/*
+		 * TBD we do not support remote OFD locks at this time.
+		 */
+		if (flag & (F_REMOTELOCK | F_PXFSLOCK)) {
+			error = EOPNOTSUPP;
+			goto done;
+		}
+		skip_lock = B_TRUE;
 		break;
 
 	case F_SETLK_NBMAND:
@@ -326,6 +345,20 @@ fs_frlock(register vnode_t *vp, int cmd, struct flock64 *bfp, int flag,
 		}
 		break;
 
+	case F_OFD_SETLK:
+	case F_OFD_SETLKW:
+	case F_FLOCK:
+	case F_FLOCKW:
+		/*
+		 * TBD we do not support remote OFD locks at this time.
+		 */
+		if (flag & (F_REMOTELOCK | F_PXFSLOCK)) {
+			error = EOPNOTSUPP;
+			goto done;
+		}
+		skip_lock = B_TRUE;
+		break;
+
 	case F_HASREMOTELOCKS:
 		nlmid = GETNLMID(bfp->l_sysid);
 		if (nlmid != 0) {	/* booted as a cluster */
@@ -354,7 +387,11 @@ fs_frlock(register vnode_t *vp, int cmd, struct flock64 *bfp, int flag,
 		flk_cbp = &serialize_callback;
 	}
 
-	error = reclock(vp, bfp, frcmd, flag, offset, flk_cbp);
+	if (!skip_lock)
+		error = reclock(vp, bfp, frcmd, flag, offset, flk_cbp);
+
+	if (serialize && (frcmd & SLPFLCK) != 0)
+		flk_del_callback(&serialize_callback);
 
 done:
 	if (serialize)
@@ -388,31 +425,42 @@ frlock_serialize_blocked(flk_cb_when_t when, void *infop)
  */
 /* ARGSUSED */
 int
-fs_setfl(
-	vnode_t *vp,
-	int oflags,
-	int nflags,
-	cred_t *cr,
-	caller_context_t *ct)
+fs_setfl(vnode_t *vp, int oflags, int nflags, cred_t *cr, caller_context_t *ct)
 {
 	return (0);
 }
 
 /*
- * Return the answer requested to poll() for non-device files.
- * Only POLLIN, POLLRDNORM, and POLLOUT are recognized.
+ * Unlike poll(2), epoll should reject attempts to add normal files or
+ * directories to a given handle.  Most non-pseudo filesystems rely on
+ * fs_poll() as their implementation of polling behavior.  Exceptions to that
+ * rule (ufs) can use fs_reject_epoll(), so they don't require access to the
+ * inner details of poll.  Potential race conditions related to the poll module
+ * being loaded are avoided by implementing the check here in genunix.
  */
-struct pollhead fs_pollhd;
+boolean_t
+fs_reject_epoll()
+{
+	/* Check if the currently-active pollcache is epoll-enabled. */
+	return (curthread->t_pollcache != NULL &&
+	    (curthread->t_pollcache->pc_flag & PC_EPOLL) != 0);
+}
 
 /* ARGSUSED */
 int
-fs_poll(vnode_t *vp,
-	register short events,
-	int anyyet,
-	register short *reventsp,
-	struct pollhead **phpp,
-	caller_context_t *ct)
+fs_poll(vnode_t *vp, short events, int anyyet, short *reventsp,
+    struct pollhead **phpp, caller_context_t *ct)
 {
+	/*
+	 * Regular filesystems should reject epollers.  On the off chance that
+	 * a non-epoll consumer expresses the desire for edge-triggered
+	 * polling, we reject them too.  Yes, the expected error for this
+	 * really is EPERM.
+	 */
+	if (fs_reject_epoll() || (events & POLLET) != 0) {
+		return (EPERM);
+	}
+
 	*reventsp = 0;
 	if (events & POLLIN)
 		*reventsp |= POLLIN;
@@ -424,7 +472,7 @@ fs_poll(vnode_t *vp,
 		*reventsp |= POLLOUT;
 	if (events & POLLWRBAND)
 		*reventsp |= POLLWRBAND;
-	*phpp = !anyyet && !*reventsp ? &fs_pollhd : (struct pollhead *)NULL;
+
 	return (0);
 }
 
@@ -433,15 +481,11 @@ fs_poll(vnode_t *vp,
  */
 /* ARGSUSED */
 int
-fs_pathconf(
-	vnode_t *vp,
-	int cmd,
-	ulong_t *valp,
-	cred_t *cr,
-	caller_context_t *ct)
+fs_pathconf(vnode_t *vp, int cmd, ulong_t *valp, cred_t *cr,
+    caller_context_t *ct)
 {
-	register ulong_t val;
-	register int error = 0;
+	ulong_t val;
+	int error = 0;
 	struct statvfs64 vfsbuf;
 
 	switch (cmd) {
@@ -540,13 +584,8 @@ fs_pathconf(
  */
 /* ARGSUSED */
 void
-fs_dispose(
-	struct vnode *vp,
-	page_t *pp,
-	int fl,
-	int dn,
-	struct cred *cr,
-	caller_context_t *ct)
+fs_dispose(struct vnode *vp, page_t *pp, int fl, int dn, struct cred *cr,
+    caller_context_t *ct)
 {
 
 	ASSERT(fl == B_FREE || fl == B_INVAL);
@@ -559,13 +598,8 @@ fs_dispose(
 
 /* ARGSUSED */
 void
-fs_nodispose(
-	struct vnode *vp,
-	page_t *pp,
-	int fl,
-	int dn,
-	struct cred *cr,
-	caller_context_t *ct)
+fs_nodispose(struct vnode *vp, page_t *pp, int fl, int dn, struct cred *cr,
+    caller_context_t *ct)
 {
 	cmn_err(CE_PANIC, "fs_nodispose invoked");
 }
@@ -575,12 +609,8 @@ fs_nodispose(
  */
 /* ARGSUSED */
 int
-fs_fab_acl(
-	vnode_t *vp,
-	vsecattr_t *vsecattr,
-	int flag,
-	cred_t *cr,
-	caller_context_t *ct)
+fs_fab_acl(vnode_t *vp, vsecattr_t *vsecattr, int flag, cred_t *cr,
+    caller_context_t *ct)
 {
 	aclent_t	*aclentp;
 	struct vattr	vattr;
@@ -636,13 +666,8 @@ fs_fab_acl(
  */
 /* ARGSUSED4 */
 int
-fs_shrlock(
-	struct vnode *vp,
-	int cmd,
-	struct shrlock *shr,
-	int flag,
-	cred_t *cr,
-	caller_context_t *ct)
+fs_shrlock(struct vnode *vp, int cmd, struct shrlock *shr, int flag, cred_t *cr,
+    caller_context_t *ct)
 {
 	int error;
 
@@ -737,8 +762,8 @@ fs_acl_nontrivial(vnode_t *vp, cred_t *cr)
 {
 	ulong_t		acl_styles;
 	ulong_t		acl_flavor;
-	vsecattr_t 	vsecattr;
-	int 		error;
+	vsecattr_t	vsecattr;
+	int		error;
 	int		isnontrivial;
 
 	/* determine the forms of ACLs maintained */
@@ -1025,4 +1050,41 @@ reparse_kderef(const char *svc_type, const char *svc_data, char *buf,
 		kmem_free(door_args.rbuf, door_args.rsize);
 
 	return (err);
+}
+
+/*
+ * This routine is used to create a single vfs_t that is used globally in the
+ * system for a pseudo-file system that does not actually ever "mount", like
+ * sockfs or fifofs. This constructs a single vfs_t that will not be
+ * accidentally freed nor will it end up on a zone's list of file systems.
+ * Please do not add new file systems that need to use this. The kmem_zalloc
+ * explicitly takes care of ensuring the following (amongst others):
+ *
+ *  - This vfs_t is explicitly not linked on any list (vfs_next/prev are NULL)
+ *  - The vnode is not covered and has no flags
+ *  - There is no mount point, resource, or options
+ *  - There is no zone that nominally owns this
+ *  - There is no file system specific data
+ */
+vfs_t *
+fs_vfsp_global(struct vfsops *ops, dev_t dev, int fstype, uint_t bsize)
+{
+	vfs_t *vfsp = kmem_zalloc(sizeof (struct vfs), KM_SLEEP);
+
+	vfs_setops(vfsp, ops);
+	vfsp->vfs_bsize = bsize;
+	vfsp->vfs_fstype = fstype;
+	vfs_make_fsid(&vfsp->vfs_fsid, dev, fstype);
+	vfsp->vfs_dev = dev;
+
+	/*
+	 * We purposefully bump the reference on this vfs_t to one. This vfs_t
+	 * is intended to always exist regardless of surrounding activity.
+	 * Importantly this ensures that something that incidentally performs a
+	 * VFS_HOLD followed by a VFS_RELE on the vfs_t doesn't end up freeing
+	 * this.
+	 */
+	vfsp->vfs_count = 1;
+
+	return (vfsp);
 }

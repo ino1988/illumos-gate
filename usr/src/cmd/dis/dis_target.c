@@ -68,7 +68,7 @@ typedef struct sym_entry {
  * mess up symbol resolution (which uses the virtual address).
  */
 typedef struct dis_shnmap {
-	const char 	*dm_name;	/* name of section */
+	const char	*dm_name;	/* name of section */
 	uint64_t	dm_start;	/* virtual address of section */
 	size_t		dm_length;	/* address length */
 	boolean_t	dm_mapped;	/* did we assign the mapping */
@@ -157,6 +157,8 @@ sym_compare(const void *a, const void *b)
 	const sym_entry_t *symb = b;
 	const char *aname = syma->se_name;
 	const char *bname = symb->se_name;
+	size_t alen;
+	size_t blen;
 
 	if (syma->se_sym.st_value < symb->se_sym.st_value)
 		return (-1);
@@ -179,9 +181,9 @@ sym_compare(const void *a, const void *b)
 	 * For symbols with the same address and type, we sort them according to
 	 * a hierarchy:
 	 *
-	 * 	1. weak symbols (common name)
-	 * 	2. global symbols (external name)
-	 * 	3. local symbols
+	 *	1. weak symbols (common name)
+	 *	2. global symbols (external name)
+	 *	3. local symbols
 	 */
 	if (GELF_ST_BIND(syma->se_sym.st_info) !=
 	    GELF_ST_BIND(symb->se_sym.st_info)) {
@@ -224,10 +226,23 @@ sym_compare(const void *a, const void *b)
 		return (1);
 
 	/*
-	 * We really do have two identical symbols for some reason.  Just report
-	 * them as equal, and to the lucky one go the spoils.
+	 * We really do have two identical symbols, choose the one with the
+	 * shortest name if we can, heuristically taking it to be the most
+	 * representative.
 	 */
-	return (0);
+	alen = strlen(syma->se_name);
+	blen = strlen(symb->se_name);
+
+	if (alen < blen)
+		return (-1);
+	else if (alen > blen)
+		return (1);
+
+	/*
+	 * If all else fails, compare the names, so that we give a stable
+	 * sort
+	 */
+	return (strcmp(syma->se_name, symb->se_name));
 }
 
 /*
@@ -425,7 +440,7 @@ dis_tgt_create(const char *file)
 	int cmd;
 
 	if (elf_version(EV_CURRENT) == EV_NONE)
-		die("libelf(3ELF) out of date");
+		die("libelf out of date");
 
 	tgt = safe_malloc(sizeof (dis_tgt_t));
 
@@ -726,7 +741,6 @@ dis_tgt_lookup(dis_tgt_t *tgt, uint64_t addr, off_t *offset, int cache_result,
 	return (sym->se_name);
 }
 
-#if !defined(__sparc)
 /*
  * Given an address, return the starting offset of the next symbol in the file.
  * Only needed on variable length instruction architectures.
@@ -746,7 +760,6 @@ dis_tgt_next_symbol(dis_tgt_t *tgt, uint64_t addr)
 
 	return (0);
 }
-#endif
 
 /*
  * Iterate over all sections in the target, executing the given callback for

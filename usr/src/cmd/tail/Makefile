@@ -11,6 +11,7 @@
 
 #
 # Copyright 2010 Chris Love.  All rights reserved.
+# Copyright (c) 2018, Joyent, Inc.
 #
 
 
@@ -25,9 +26,9 @@ include ../Makefile.cmd
 CLOBBERFILES=	$(PROG)
 CPPFLAGS +=        -D_LARGEFILE_SOURCE -D_FILE_OFFSET_BITS=64
 
-C99MODE=	-xc99=%all
-C99LMODE=	-Xc99=%all
-LINTFLAGS +=	-I. -erroff=E_CONSTANT_CONDITION
+CSTD=	$(CSTD_GNU99)
+
+SMOFF += leaks
 
 # install rules
 $(ROOTINC)/% : %
@@ -37,7 +38,7 @@ $(ROOTINC)/% : %
 
 .PARALLEL: $(OBJS)
 
-all:		$(PROG) 
+all:		$(PROG)
 
 $(PROG):	$(OBJS)
 	$(LINK.c) $(OBJS) -o $@ $(LDLIBS)
@@ -48,8 +49,6 @@ install: all .WAIT $(ROOTPROG) $(ROOTXPG4PROG)
 $(ROOTXPG4PROG):
 	-$(RM) $@
 	-$(LN) -s ../../bin/$(PROG) $@
-
-lint: 	lint_SRCS
 
 clean:
 	$(RM) $(OBJS)

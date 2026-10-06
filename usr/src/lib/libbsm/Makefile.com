@@ -21,9 +21,10 @@
 #
 # Copyright (c) 1997, 2010, Oracle and/or its affiliates. All rights reserved.
 #
+# Copyright (c) 2018, Joyent, Inc.
 
 LIBRARY =	libbsm.a
-VERS = 		.1
+VERS =		.1
 OBJECTS=	adr.o \
 		adrf.o \
 		adrm.o \
@@ -73,20 +74,16 @@ include ../../Makefile.rootfs
 
 SRCDIR =	../common
 
-LIBS =	 	$(DYNLIB) $(LINTLIB)
-
-LINTSRC= $(LINTLIB:%.ln=%)
-$(LINTLIB) :=	SRCS = ../common/$(LINTSRC)
-ROOTLINTDIR=	$(ROOTLIBDIR)
-ROOTLINT=	$(LINTSRC:%=$(ROOTLINTDIR)/%)
-
-CLEANFILES +=	$(LINTOUT) $(LINTLIB)
+LIBS =		$(DYNLIB)
 
 CFLAGS	+=	$(CCVERBOSE)
 LDLIBS +=	-lsocket -lnsl -lmd -lc -lsecdb -ltsol -linetutil -lscf
 
 CERRWARN +=	-_gcc=-Wno-parentheses
-CERRWARN +=	-_gcc=-Wno-uninitialized
+CERRWARN +=	$(CNOWARN_UNINIT)
+
+# not linted
+SMATCH=off
 
 COMDIR=		../common
 AUDITD=		$(SRC)/cmd/auditd
@@ -103,7 +100,6 @@ TEXT_DOMAIN= SUNW_OST_OSLIB
 
 all: $(LIBS)
 
-lint: lintcheck
 
 # Include library targets
 #
@@ -112,7 +108,3 @@ include ../../Makefile.targ
 pics/%.o: ../common/%.c
 	$(COMPILE.c) -o $@ $<
 	$(POST_PROCESS_O)
-
-# install rule for lint library target
-$(ROOTLINTDIR)/%: ../common/%
-	$(INS.file)

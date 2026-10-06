@@ -19,11 +19,12 @@
  * CDDL HEADER END
  */
 /*	Copyright (c) 1988 AT&T	*/
-/*	  All Rights Reserved  	*/
+/*	  All Rights Reserved	*/
 
 
 /*
  * Copyright 2014 Garrett D'Amore <garrett@damore.org>
+ * Copyright 2023 Oxide Computer Company
  *
  * Copyright 2007 Sun Microsystems, Inc.  All rights reserved.
  * Use is subject to license terms.
@@ -32,10 +33,40 @@
 #ifndef _UCONTEXT_H
 #define	_UCONTEXT_H
 
-#include <sys/ucontext.h>
+/*
+ * The header <ucontext.h> and the functions: getcontext(), setcontext(),
+ * makecontext(), swapcontext(), were introduced by X/Open XPG4 Version 2
+ * (XPG4v2/SUSv1).  They were not defined in POSIX.1-1990 - POSIX.1-1995.
+ * They were carried into POSIX.1-2001 (SUSv3) but marked obsolescent,
+ * and where removed entirely from POSIX.1-2008 (SUSv4) and later.
+ * In summary, no version of POSIX predating XPG4v2 states any
+ * requirements about <ucontext.h> or its content.
+ *
+ * Note in particular that the standard does not require that we "hide"
+ * anything here for those older POSIX standards.  Programs written to
+ * those old standards shoud not include <ucontext.h>, and if they did,
+ * the result would be "implementation defined" behvior.
+ *
+ * The historical practice for this system is to expose the same content
+ * from this header for XPG4v2 and all earlier environments.
+ */
 
+#include <sys/ucontext.h>
+/*
+ * The file sys/regset.h defines indices in the gregset_t array,
+ * such as EIP on i386.  Those defines were historically exposed
+ * via sys/ucontext.h, sys/signal.h, etc. which caused surprises
+ * due to those defines unexpectedly polluting the namespace.
+ * On the other hand, several existing applications assume that
+ * the regset names are defined after an include <ucontext.h>.
+ * To solve both problems at once: <ucontext.h> (this file)
+ * DOES include sys/regset.h for you but <sys/ucontext.h>
+ * does NOT include sys/regset.h anymore.
+ */
 #if !defined(_XPG4_2) || defined(__EXTENSIONS__)
+#include <sys/regset.h>
 #include <sys/siginfo.h>
+#include <inttypes.h>
 #endif
 
 #ifdef	__cplusplus
@@ -51,13 +82,17 @@ extern "C" {
 #endif
 
 extern int getcontext(ucontext_t *) __RETURNS_TWICE;
-#pragma unknown_control_flow(getcontext)
-extern int setcontext(const ucontext_t *) __NORETURN;
+extern int setcontext(const ucontext_t *);
 extern int swapcontext(ucontext_t *_RESTRICT_KYWD,
 		const ucontext_t *_RESTRICT_KYWD);
 extern void makecontext(ucontext_t *, void(*)(), int, ...);
 
 #if !defined(_XPG4_2) || defined(__EXTENSIONS__)
+extern ucontext_t *ucontext_alloc(uint32_t);
+extern void ucontext_free(ucontext_t *);
+extern int getcontext_extd(ucontext_t *, uint32_t) __RETURNS_TWICE;
+extern int swapcontext_extd(ucontext_t *_RESTRICT_KYWD, uint32_t,
+		const ucontext_t *_RESTRICT_KYWD);
 extern int walkcontext(const ucontext_t *, int (*)(uintptr_t, int, void *),
     void *);
 extern int printstack(int);
@@ -68,7 +103,16 @@ extern int setustack(stack_t *);
 extern int stack_getbounds(stack_t *);
 extern int stack_setbounds(const stack_t *);
 extern int stack_inbounds(void *);
+
+/*
+ * Can only declare this if siginfo_t is declared.
+ * See <sys/signal.h> above and the conditions under which
+ * that includes <sys/siginfo.h> to give us siginfo_t.
+ */
+#if defined(__EXTENSIONS__) || \
+	!defined(_POSIX_C_SOURCE) || (_POSIX_C_SOURCE > 2)
 extern int stack_violation(int, const siginfo_t *, const ucontext_t *);
+#endif
 
 extern void *_stack_grow(void *);
 #endif	/* !_XPG4_2 || __EXTENSIONS__ */

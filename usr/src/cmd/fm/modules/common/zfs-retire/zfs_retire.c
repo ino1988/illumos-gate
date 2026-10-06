@@ -21,6 +21,10 @@
 /*
  * Copyright (c) 2006, 2010, Oracle and/or its affiliates. All rights reserved.
  */
+/*
+ * Copyright 2019 Joyent, Inc.
+ * Copyright 2024 OmniOS Community Edition (OmniOSce) Association.
+ */
 
 /*
  * The ZFS retire agent is responsible for managing hot spares across all pools.
@@ -121,13 +125,21 @@ find_vdev(libzfs_handle_t *zhdl, nvlist_t *nv, const char *search_fru,
 	}
 
 	if (nvlist_lookup_nvlist_array(nv, ZPOOL_CONFIG_L2CACHE,
-	    &child, &children) != 0)
-		return (NULL);
+	    &child, &children) == 0) {
+		for (c = 0; c < children; c++) {
+			if ((ret = find_vdev(zhdl, child[c], search_fru,
+			    search_guid)) != NULL)
+				return (ret);
+		}
+	}
 
-	for (c = 0; c < children; c++) {
-		if ((ret = find_vdev(zhdl, child[c], search_fru,
-		    search_guid)) != NULL)
-			return (ret);
+	if (nvlist_lookup_nvlist_array(nv, ZPOOL_CONFIG_SPARES,
+	    &child, &children) == 0) {
+		for (c = 0; c < children; c++) {
+			if ((ret = find_vdev(zhdl, child[c], search_fru,
+			    search_guid)) != NULL)
+				return (ret);
+		}
 	}
 
 	return (NULL);
@@ -212,55 +224,113 @@ find_by_fru(libzfs_handle_t *zhdl, const char *fru, nvlist_t **vdevp)
 }
 
 /*
+ * Callback for sorting spares by increasing size.
+ */
+static int
+sort_spares_by_size(const void *ap, const void *bp)
+{
+	nvlist_t *a = *(nvlist_t **)ap;
+	nvlist_t *b = *(nvlist_t **)bp;
+	vdev_stat_t *vsa, *vsb;
+	vdev_stat_t v0 = { 0 };
+	uint_t c;
+
+	if (nvlist_lookup_uint64_array(a, ZPOOL_CONFIG_VDEV_STATS,
+	    (uint64_t **)&vsa, &c) != 0) {
+		vsa = &v0;
+	}
+
+	if (nvlist_lookup_uint64_array(b, ZPOOL_CONFIG_VDEV_STATS,
+	    (uint64_t **)&vsb, &c) != 0) {
+		vsb = &v0;
+	}
+
+	if (vsa->vs_rsize > vsb->vs_rsize)
+		return (1);
+	if (vsa->vs_rsize < vsb->vs_rsize)
+		return (-1);
+	return (0);
+}
+
+/*
  * Given a vdev, attempt to replace it with every known spare until one
- * succeeds.
+ * succeeds. The spares are first sorted by increasing size so that the
+ * smallest possible replacement is used.
  */
 static void
 replace_with_spare(fmd_hdl_t *hdl, zpool_handle_t *zhp, nvlist_t *vdev)
 {
 	nvlist_t *config, *nvroot, *replacement;
-	nvlist_t **spares;
+	nvlist_t **spares, **sorted_spares;
 	uint_t s, nspares;
 	char *dev_name;
+	zprop_source_t source;
+	int ashift;
+	zfs_retire_data_t *zdp = fmd_hdl_getspecific(hdl);
+	libzfs_handle_t *zhdl = zdp->zrd_hdl;
 
 	config = zpool_get_config(zhp, NULL);
 	if (nvlist_lookup_nvlist(config, ZPOOL_CONFIG_VDEV_TREE,
-	    &nvroot) != 0)
+	    &nvroot) != 0) {
 		return;
+	}
 
 	/*
 	 * Find out if there are any hot spares available in the pool.
 	 */
 	if (nvlist_lookup_nvlist_array(nvroot, ZPOOL_CONFIG_SPARES,
-	    &spares, &nspares) != 0)
+	    &spares, &nspares) != 0) {
 		return;
+	}
+
+	/*
+	 * look up "ashift" pool property, we may need it for the replacement
+	 */
+	ashift = zpool_get_prop_int(zhp, ZPOOL_PROP_ASHIFT, &source);
 
 	replacement = fmd_nvl_alloc(hdl, FMD_SLEEP);
 
 	(void) nvlist_add_string(replacement, ZPOOL_CONFIG_TYPE,
 	    VDEV_TYPE_ROOT);
 
-	dev_name = zpool_vdev_name(NULL, zhp, vdev, B_FALSE);
+	dev_name = zpool_vdev_name(zhdl, zhp, vdev, B_FALSE);
 
 	/*
-	 * Try to replace each spare, ending when we successfully
-	 * replace it.
+	 * Try to replace each spare, starting with the smallest and ending
+	 * when we successfully replace it.
 	 */
+	sorted_spares = fmd_hdl_alloc(hdl, nspares * sizeof (nvlist_t *),
+	    FMD_SLEEP);
+	for (s = 0; s < nspares; s++)
+		sorted_spares[s] = spares[s];
+	qsort((void *)sorted_spares, nspares, sizeof (nvlist_t *),
+	    sort_spares_by_size);
+
 	for (s = 0; s < nspares; s++) {
+		nvlist_t *spare = sorted_spares[s];
 		char *spare_name;
 
-		if (nvlist_lookup_string(spares[s], ZPOOL_CONFIG_PATH,
-		    &spare_name) != 0)
+		if (nvlist_lookup_string(spare, ZPOOL_CONFIG_PATH,
+		    &spare_name) != 0) {
 			continue;
+		}
+
+		/* if set, add the "ashift" pool property to the spare nvlist */
+		if (source != ZPROP_SRC_DEFAULT) {
+			(void) nvlist_add_uint64(spare,
+			    ZPOOL_CONFIG_ASHIFT, ashift);
+		}
 
 		(void) nvlist_add_nvlist_array(replacement,
-		    ZPOOL_CONFIG_CHILDREN, &spares[s], 1);
+		    ZPOOL_CONFIG_CHILDREN, &spare, 1);
 
 		if (zpool_vdev_attach(zhp, dev_name, spare_name,
-		    replacement, B_TRUE) == 0)
+		    replacement, B_TRUE) == 0) {
 			break;
+		}
 	}
 
+	fmd_hdl_free(hdl, sorted_spares, nspares * sizeof (nvlist_t *));
 	free(dev_name);
 	nvlist_free(replacement);
 }
@@ -427,6 +497,14 @@ zfs_retire_recv(fmd_hdl_t *hdl, fmd_event_t *ep, nvlist_t *nvl,
 		    &retire) == 0 && retire == 0)
 			continue;
 
+		if (fmd_nvl_class_match(hdl, fault,
+		    "fault.io.disk.ssm-wearout") &&
+		    fmd_prop_get_int32(hdl, "ssm_wearout_skip_retire") ==
+		    FMD_B_TRUE) {
+			fmd_hdl_debug(hdl, "zfs-retire: ignoring SSM fault");
+			continue;
+		}
+
 		/*
 		 * While we subscribe to fault.fs.zfs.*, we only take action
 		 * for faults targeting a specific vdev (open failure or SERD
@@ -561,6 +639,7 @@ static const fmd_hdl_ops_t fmd_ops = {
 
 static const fmd_prop_t fmd_props[] = {
 	{ "spare_on_remove", FMD_TYPE_BOOL, "true" },
+	{ "ssm_wearout_skip_retire", FMD_TYPE_BOOL, "true"},
 	{ NULL, 0, NULL }
 };
 

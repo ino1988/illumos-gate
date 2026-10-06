@@ -4,7 +4,7 @@
  */
 
 /*	Copyright (c) 1983, 1984, 1985, 1986, 1987, 1988, 1989 AT&T	*/
-/*	  All Rights Reserved  	*/
+/*	  All Rights Reserved	*/
 
 /*
  * Copyright (c) 1980, 1986, 1990 The Regents of the University of California.
@@ -24,8 +24,6 @@
  * IMPLIED WARRANTIES, INCLUDING, WITHOUT LIMITATION, THE IMPLIED
  * WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE.
  */
-
-#pragma ident	"%Z%%M%	%I%	%E% SMI"
 
 #define	DKTYPENAMES
 #include <stdio.h>
@@ -73,7 +71,33 @@ extern char	*tagerrs[];
 #define	POWEROF2(num)	(((num) & ((num) - 1)) == 0)
 
 extern int	mflag;
-extern char 	hotroot;
+long fsbsize;
+static char hotroot;	/* checking root device */
+char *freemap;
+char *busymap;
+uint32_t part_start;
+uint32_t lvintlen;
+uint32_t lvintblock;
+uint32_t rootblock;
+uint32_t rootlen;
+uint32_t part_bmp_bytes;
+uint32_t part_bmp_sectors;
+uint32_t part_bmp_loc;
+int fsreadfd;
+int fswritefd;
+long secsize;
+long numdirs, numfiles, listmax;
+struct fileinfo *inphead, **inphash, *inpnext, *inplast;
+struct space_bmap_desc *spacep;
+static struct unall_desc *unallp;
+static struct pri_vol_desc *pvolp;
+static struct part_desc *partp;
+static struct phdr_desc *pheadp;
+static struct log_vol_desc *logvp;
+struct lvid_iu *lviup;
+static struct vdp_desc *volp;
+static struct anch_vol_desc_ptr *avdp;
+static struct iuvd_desc *iudp;
 
 char avdbuf[MAXBSIZE];		/* buffer for anchor volume descriptor */
 char *main_vdbuf;		/* buffer for entire main volume sequence */
@@ -89,7 +113,6 @@ setup(char *dev)
 	char *raw, *rawname(), *unrawname();
 	struct ustat ustatb;
 
-	havesb = 0;
 	if (stat("/", &statb) < 0)
 		errexit(gettext("Can't stat root\n"));
 	rootdev = statb.st_dev;
@@ -134,7 +157,7 @@ restat:
 			errexit(gettext("Can't open checklist file: %s\n"),
 				VFSTAB);
 		}
-		while (getvfsent(vfstab, &vfsbuf) == NULL) {
+		while (getvfsent(vfstab, &vfsbuf) == 0) {
 			if (strcmp(devstr, vfsbuf.vfs_mountp) == 0) {
 				if (strcmp(vfsbuf.vfs_fstype,
 				    MNTTYPE_UDFS) != 0) {
@@ -210,7 +233,7 @@ restat:
 		fswritefd = -1;
 		if (preen && !debug)
 			pfatal(gettext("(NO WRITE ACCESS)\n"));
-			(void) printf(gettext(" (NO WRITE)"));
+		(void) printf(gettext(" (NO WRITE)"));
 	}
 	if (preen == 0)
 		(void) printf("\n");
@@ -356,10 +379,12 @@ readvolseq(int32_t listerr)
 	int err;
 	long	freelen;
 	daddr_t avdp;
+	struct file_set_desc *fileset;
+	uint32_t filesetblock;
+	uint32_t filesetlen;
 
-	disk_size = get_last_block();
 	if (debug)
-		(void) printf("Disk partition size: %x\n", disk_size);
+		(void) printf("Disk partition size: %x\n", get_last_block());
 
 	/* LINTED */
 	avp = (struct anch_vol_desc_ptr *)avdbuf;
@@ -589,7 +614,6 @@ done:
 	if (debug)
 		(void) printf("Root at %x for %d bytes\n", rootblock, rootlen);
 
-	havesb = 1;
 	return (1);
 }
 

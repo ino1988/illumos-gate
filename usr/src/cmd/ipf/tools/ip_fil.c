@@ -7,13 +7,13 @@
  * Use is subject to license terms.
  */
 
-#if !defined(lint)
-static const char sccsid[] = "@(#)ip_fil.c	2.41 6/5/96 (C) 1993-2000 Darren Reed";
-static const char rcsid[] = "@(#)$Id: ip_fil.c,v 2.133.2.9 2005/01/08 14:22:18 darrenr Exp $";
+#ifdef SOLARIS
+#undef	SOLARIS
 #endif
-
-#ifndef	SOLARIS
-#define	SOLARIS	(defined(sun) && (defined(__svr4__) || defined(__SVR4)))
+#if (defined(sun) && (defined(__svr4__) || defined(__SVR4)))
+#define	SOLARIS	(1)
+#else
+#define	SOLARIS	(0)
 #endif
 
 #include <sys/param.h>
@@ -47,7 +47,7 @@ struct file;
 # include <sys/ptimers.h>
 #endif
 #include <sys/time.h>
-#if !SOLARIS
+#if !defined(SOLARIS)
 # if (NetBSD > 199609) || (OpenBSD > 199603) || (__FreeBSD_version >= 300000)
 #  include <sys/dirent.h>
 # else
@@ -319,6 +319,7 @@ int mode;
 			error = EPERM;
 			break;
 		}
+		/* FALLTHROUGH */
 	case SIOCIPFGETNEXT :
 	case SIOCIPFGET :
 		error = fr_ipftune(cmd, (void *)data, ifs);
@@ -1024,11 +1025,11 @@ ipf_stack_t *ifs;
 }
 
 
-/*    
+/*
  * This function is not meant to be random, rather just produce a
  * sequence of numbers that isn't linear to show "randomness".
  */
-u_32_t ipf_random() 
+u_32_t ipf_random()
 {
 	static u_int last = 0xa5a5a5a5;
 	static int calls = 0;

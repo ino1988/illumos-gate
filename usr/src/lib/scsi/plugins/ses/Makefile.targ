@@ -23,12 +23,13 @@
 # Copyright 2008 Sun Microsystems, Inc.  All rights reserved.
 # Use is subject to license terms.
 #
-#ident	"%Z%%M%	%I%	%E% SMI"
+# Copyright 2015 RackTop Systems.
+#
 
 all: $(PROG) $(DMODPROG)
 
 .NO_PARALLEL:
-.PARALLEL: $(OBJS) $(LINTFILES) $(DMOD_OBJS) $(DMODLINTFILES)
+.PARALLEL: $(OBJS) $(DMOD_OBJS)
 
 $(PROG): $(OBJS) $(APIMAP)
 	$(LINK.c) $(OBJS) -o $@ $(LDLIBS)
@@ -37,7 +38,7 @@ $(PROG): $(OBJS) $(APIMAP)
 
 $(DMODPROG): $(DMOD_OBJS)
 	-@mkdir -p $(@D)
-	$(LINK.c) $(DMOD_OBJS) -o $@
+	$(LINK.c) $(DMOD_OBJS) -o $@ $(LDLIBS)
 	$(POST_PROCESS)
 
 %.o: %.c
@@ -49,24 +50,11 @@ $(DMODPROG): $(DMOD_OBJS)
 	$(CTFCONVERT_O)
 
 clean:
-	$(RM) $(OBJS) $(DMOD_OBJS) $(LINTFILES) $(DMODLINTFILES) $(CLEANFILES)
+	$(RM) $(OBJS) $(DMOD_OBJS) $(CLEANFILES)
 
 clobber: clean
 	$(RM) $(PROG) $(DMODPROG)
 
-%.ln: %.c
-	$(LINT.c) -c $<
-
-%.ln: $(SRCDIR)/%.c
-	$(LINT.c) -c $<
-
-lint_prog: $(LINTFILES)
-	$(LINT) $(LINTFLAGS) $(LINTFILES) $(LDLIBS)
-
-lint_dmod: $(DMODLINTFILES)
-	$(LINT) $(LINTFLAGS) $(DMODLINTFILES) $(LDLIBS)
-
-lint: lint_prog $(DMODLINTTGT)
 
 install_h:
 

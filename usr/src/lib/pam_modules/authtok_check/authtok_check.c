@@ -21,6 +21,9 @@
 /*
  * Copyright 2009 Sun Microsystems, Inc.  All rights reserved.
  * Use is subject to license terms.
+ * Copyright (c) 2016 by Delphix. All rights reserved.
+ * Copyright 2023 OmniOS Community Edition (OmniOSce) Association.
+ * Copyright 2025 RackTop Systems, Inc.
  */
 
 #include <sys/types.h>
@@ -89,7 +92,7 @@ mutex_t dictlock = DEFAULTMUTEX;
  */
 struct pwdefaults {
 	boolean_t server_policy;	/* server policy flag from pam.conf */
-	uint_t minlength;	/* minimum password lenght */
+	uint_t minlength;	/* minimum password length */
 	uint_t maxlength;	/* maximum (significant) length */
 	boolean_t do_namecheck;	/* check password against user's gecos */
 	char db_location[MAXPATHLEN]; /* location of the generated database */
@@ -99,7 +102,7 @@ struct pwdefaults {
 	uint_t minalpha;	/* minimum alpha characters required */
 	uint_t minupper;	/* minimum uppercase characters required */
 	uint_t minlower;	/* minimum lowercase characters required */
-	uint_t minnonalpha; 	/* minimum special (non alpha) required */
+	uint_t minnonalpha;	/* minimum special (non alpha) required */
 	uint_t maxrepeat;	/* maximum number of repeating chars allowed */
 	uint_t minspecial;	/* punctuation characters */
 	uint_t mindigit;	/* minimum number of digits required */
@@ -144,18 +147,18 @@ defread_int(char *name, uint_t *ip, void *defp)
  * get system defaults with regard to maximum password length
  */
 int
-get_passwd_defaults(pam_handle_t *pamh, char *user, struct pwdefaults *p)
+get_passwd_defaults(pam_handle_t *pamh, const char *user, struct pwdefaults *p)
 {
 	char *q;
 	boolean_t minnonalpha_defined = B_FALSE;
 	pwu_repository_t *pwu_rep;
-	struct pam_repository *pam_rep;
+	const struct pam_repository *pam_rep;
 	attrlist attr[2];
 	int result;
-	char *progname;
-	void	*defp;
+	const char *progname;
+	void *defp;
 
-	(void) pam_get_item(pamh, PAM_SERVICE, (void **)&progname);
+	(void) pam_get_item(pamh, PAM_SERVICE, (const void **)&progname);
 
 	/* Module defaults */
 	p->minlength = MINLENGTH;
@@ -172,6 +175,79 @@ get_passwd_defaults(pam_handle_t *pamh, char *user, struct pwdefaults *p)
 	p->minspecial = 0;
 	p->mindigit = 0;
 	p->whitespace = B_TRUE;
+
+	/*
+	 * Determine the number of significant characters in a password
+	 *
+	 * we find out where the user information came from (which repository),
+	 * and which password-crypt-algorithm is to be used (based on the
+	 * old password, or the system default).
+	 *
+	 * If the user comes from a repository other than FILES/NIS
+	 * the module-flag "server_policy" means that we don't perform
+	 * any checks on the user, but let the repository decide instead.
+	 */
+
+	(void) pam_get_item(pamh, PAM_REPOSITORY, (const void **)&pam_rep);
+	if (pam_rep != NULL) {
+		if ((pwu_rep = calloc(1, sizeof (*pwu_rep))) == NULL)
+			return (PAM_BUF_ERR);
+		pwu_rep->type = pam_rep->type;
+		pwu_rep->scope = pam_rep->scope;
+		pwu_rep->scope_len = pam_rep->scope_len;
+	} else {
+		pwu_rep = PWU_DEFAULT_REP;
+	}
+
+	attr[0].type = ATTR_PASSWD; attr[0].next = &attr[1];
+	attr[1].type = ATTR_REP_NAME; attr[1].next = NULL;
+	result = __get_authtoken_attr(user, pwu_rep, attr);
+	if (pwu_rep != PWU_DEFAULT_REP)
+		free(pwu_rep);
+
+	if (result != PWU_SUCCESS) {
+		/*
+		 * In the unlikely event that we can't obtain any info about
+		 * the users password, we assume the most strict scenario.
+		 */
+		p->maxlength = _PASS_MAX_XPG;
+	} else {
+		char *oldpw = attr[0].data.val_s;
+		char *repository = attr[1].data.val_s;
+		if ((strcmp(repository, "files") == 0 ||
+		    strcmp(repository, "nis") == 0) ||
+		    p->server_policy == B_FALSE) {
+			char *salt;
+			/*
+			 * We currently need to supply this dummy to
+			 * crypt_gensalt(). This will change RSN.
+			 */
+			struct passwd dummy;
+
+			dummy.pw_name = strdup(user);
+			if (dummy.pw_name == NULL) {
+				free(attr[0].data.val_s);
+				free(attr[1].data.val_s);
+				return (PAM_BUF_ERR);
+			}
+
+			salt = crypt_gensalt(oldpw, &dummy);
+			free(dummy.pw_name);
+			if (salt && *salt == '$')
+				p->maxlength = _PASS_MAX;
+			else
+				p->maxlength = _PASS_MAX_XPG;
+
+			free(salt);
+
+			p->server_policy = B_FALSE; /* we perform checks */
+		} else {
+			/* not files or nis AND server_policy is set */
+			p->maxlength = _PASS_MAX;
+		}
+		free(attr[0].data.val_s);
+		free(attr[1].data.val_s);
+	}
 
 	if ((defp = defopen_r(PWADMIN)) == NULL)
 		return (PAM_SUCCESS);
@@ -245,73 +321,6 @@ get_passwd_defaults(pam_handle_t *pamh, char *user, struct pwdefaults *p)
 
 	defclose_r(defp);
 
-	/*
-	 * Determine the number of significant characters in a password
-	 *
-	 * we find out where the user information came from (which repository),
-	 * and which password-crypt-algorithm is to be used (based on the
-	 * old password, or the system default).
-	 *
-	 * If the user comes from a repository other than FILES/NIS
-	 * the module-flag "server_policy" means that we don't perform
-	 * any checks on the user, but let the repository decide instead.
-	 */
-
-	(void) pam_get_item(pamh, PAM_REPOSITORY, (void **)&pam_rep);
-	if (pam_rep != NULL) {
-		if ((pwu_rep = calloc(1, sizeof (*pwu_rep))) == NULL)
-			return (PAM_BUF_ERR);
-		pwu_rep->type = pam_rep->type;
-		pwu_rep->scope = pam_rep->scope;
-		pwu_rep->scope_len = pam_rep->scope_len;
-	} else {
-		pwu_rep = PWU_DEFAULT_REP;
-	}
-
-	attr[0].type = ATTR_PASSWD; attr[0].next = &attr[1];
-	attr[1].type = ATTR_REP_NAME; attr[1].next = NULL;
-	result = __get_authtoken_attr(user, pwu_rep, attr);
-	if (pwu_rep != PWU_DEFAULT_REP)
-		free(pwu_rep);
-
-	if (result != PWU_SUCCESS) {
-		/*
-		 * In the unlikely event that we can't obtain any info about
-		 * the users password, we assume the most strict scenario.
-		 */
-		p->maxlength = _PASS_MAX_XPG;
-	} else {
-		char *oldpw = attr[0].data.val_s;
-		char *repository = attr[1].data.val_s;
-		if ((strcmp(repository, "files") == 0 ||
-		    strcmp(repository, "nis") == 0) ||
-		    p->server_policy == B_FALSE) {
-			char *salt;
-			/*
-			 * We currently need to supply this dummy to
-			 * crypt_gensalt(). This will change RSN.
-			 */
-			struct passwd dummy;
-
-			dummy.pw_name = user;
-
-			salt = crypt_gensalt(oldpw, &dummy);
-			if (salt && *salt == '$')
-				p->maxlength = _PASS_MAX;
-			else
-				p->maxlength = _PASS_MAX_XPG;
-
-			free(salt);
-
-			p->server_policy = B_FALSE; /* we perform checks */
-		} else {
-			/* not files or nis AND server_policy is set */
-			p->maxlength = _PASS_MAX;
-		}
-		free(attr[0].data.val_s);
-		free(attr[1].data.val_s);
-	}
-
 	/* sanity check of the configured parameters */
 	if (p->minlength < p->mindigit + p->minspecial + p->minnonalpha +
 	    p->minalpha) {
@@ -331,7 +340,7 @@ get_passwd_defaults(pam_handle_t *pamh, char *user, struct pwdefaults *p)
 		syslog(LOG_ERR, "%s: pam_authtok_check: The configured "
 		    "minimum password length (PASSLENGTH=%d) is larger than "
 		    "the number of significant characters the current "
-		    "encryption algorithm uses (%d). See policy.conf(4) for "
+		    "encryption algorithm uses (%d). See policy.conf(5) for "
 		    "alternative password encryption algorithms.", progname);
 		/* this won't lead to failure */
 	}
@@ -359,10 +368,10 @@ free_passwd_defaults(struct pwdefaults *p)
  * of string "s", i.e. "ABCDE" vs. "DCBAE".
  */
 static int
-check_circular(s, t)
-	char *s, *t;
+check_circular(const char *s, const char *t)
 {
-	char c, *p, *o, *r, *buff, *ubuff, *pubuff;
+	const char *p;
+	char c, *u, *o, *r, *buff, *ubuff, *pubuff;
 	unsigned int i, j, k, l, m;
 	size_t len;
 	int ret = 0;
@@ -379,44 +388,49 @@ check_circular(s, t)
 
 	if (buff == NULL || ubuff == NULL || pubuff == NULL) {
 		syslog(LOG_ERR, "pam_authtok_check: out of memory.");
+		free(buff);
+		free(ubuff);
+		free(pubuff);
 		return (-1);
 	}
 
 	m = 2;
 	o = &ubuff[0];
-	for (p = s; c = *p++; *o++ = c)
+	for (p = s; c = *p++; *o++ = c) {
 		if (islower(c))
 			c = toupper(c);
+	}
 	*o = '\0';
 	o = &pubuff[0];
-	for (p = t; c = *p++; *o++ = c)
+	for (p = t; c = *p++; *o++ = c) {
 		if (islower(c))
 			c = toupper(c);
+	}
 
 	*o = '\0';
 
-	p = &ubuff[0];
+	u = &ubuff[0];
 	while (m--) {
 		for (k = 0; k  <  i; k++) {
-			c = *p++;
-			o = p;
+			c = *u++;
+			o = u;
 			l = i;
 			r = &buff[0];
 			while (--l)
 				*r++ = *o++;
 			*r++ = c;
 			*r = '\0';
-			p = &buff[0];
-			if (strcmp(p, pubuff) == 0) {
+			u = &buff[0];
+			if (strcmp(u, pubuff) == 0) {
 				ret = 1;
 				goto out;
 			}
 		}
-		p = p + i;
+		u = u + i;
 		r = &ubuff[0];
 		j = i;
 		while (j--)
-			*--p = *r++;	/* reverse test-string for m==0 pass */
+			*--u = *r++;	/* reverse test-string for m==0 pass */
 	}
 out:
 	(void) memset(buff, 0, len);
@@ -433,7 +447,7 @@ out:
  * count the different character classes present in the password.
  */
 int
-check_composition(char *pw, struct pwdefaults *pwdef, pam_handle_t *pamh,
+check_composition(const char *pw, struct pwdefaults *pwdef, pam_handle_t *pamh,
     int flags)
 {
 	uint_t alpha_cnt = 0;
@@ -445,13 +459,13 @@ check_composition(char *pw, struct pwdefaults *pwdef, pam_handle_t *pamh,
 	uint_t maxrepeat = 0;
 	uint_t repeat = 1;
 	int ret = 0;
-	char *progname;
+	const char *progname;
 	char errmsg[256];
 	char lastc = '\0';
 	uint_t significant = pwdef->maxlength;
-	char *w;
+	const char *w;
 
-	(void) pam_get_item(pamh, PAM_SERVICE, (void **)&progname);
+	(void) pam_get_item(pamh, PAM_SERVICE, (const void **)&progname);
 
 	/* go over the password gathering statistics */
 	for (w = pw; significant != 0 && *w != '\0'; w++, significant--) {
@@ -482,9 +496,9 @@ check_composition(char *pw, struct pwdefaults *pwdef, pam_handle_t *pamh,
 	 * characters) we give a modified error message. Otherwise, a
 	 * user entering FooBar1234 with PASSLENGTH=6, MINDIGIT=4, while
 	 * we're using the default UNIX crypt (8 chars significant),
-	 * would not understand what's going on when he's told that
+	 * would not understand what's going on when they're told that
 	 * "The password should contain at least 4 digits"...
-	 * Instead, we now well him
+	 * Instead, we now tell them
 	 * "The first 8 characters of the password should contain at least
 	 *  4 digits."
 	 */
@@ -600,8 +614,8 @@ out:
  * positions. Return 0 if OK, 1 otherwise
  */
 int
-check_diff(char *pw, char *opw, struct pwdefaults *pwdef, pam_handle_t *pamh,
-    int flags)
+check_diff(const char *pw, const char *opw, struct pwdefaults *pwdef,
+    pam_handle_t *pamh, int flags)
 {
 	size_t pwlen, opwlen, max;
 	unsigned int diff;	/* difference between old and new */
@@ -626,9 +640,10 @@ check_diff(char *pw, char *opw, struct pwdefaults *pwdef, pam_handle_t *pamh,
 	}
 
 	if (diff  < pwdef->mindiff) {
-		char *progname;
+		const char *progname;
 
-		(void) pam_get_item(pamh, PAM_SERVICE, (void **)&progname);
+		(void) pam_get_item(pamh, PAM_SERVICE,
+		    (const void **)&progname);
 
 		error(pamh, flags, dgettext(TEXT_DOMAIN,
 		    "%s: The first %d characters of the old and new passwords "
@@ -646,14 +661,14 @@ check_diff(char *pw, char *opw, struct pwdefaults *pwdef, pam_handle_t *pamh,
  * on a dictionary word and hence should be rejected.
  */
 int
-check_dictionary(char *pw, struct pwdefaults *pwdef, pam_handle_t *pamh,
+check_dictionary(const char *pw, struct pwdefaults *pwdef, pam_handle_t *pamh,
     int flags)
 {
 	int crack_ret;
 	int ret;
-	char *progname;
+	const char *progname;
 
-	(void) pam_get_item(pamh, PAM_SERVICE, (void **)&progname);
+	(void) pam_get_item(pamh, PAM_SERVICE, (const void **)&progname);
 
 	/* dictionary check isn't MT-safe */
 	(void) mutex_lock(&dictlock);
@@ -701,17 +716,17 @@ check_dictionary(char *pw, struct pwdefaults *pwdef, pam_handle_t *pamh,
 int
 pam_sm_chauthtok(pam_handle_t *pamh, int flags, int argc, const char **argv)
 {
-	int	debug = 0;
-	int	retcode = 0;
-	int	force_check = 0;
-	int 	i;
-	size_t	pwlen;
-	char	*usrname;
-	char	*pwbuf, *opwbuf;
+	int debug = 0;
+	int retcode = 0;
+	int force_check = 0;
+	int i;
+	size_t pwlen;
+	const char *usrname;
+	const char *pwbuf, *opwbuf;
 	pwu_repository_t *pwu_rep = PWU_DEFAULT_REP;
-	pam_repository_t *pwd_rep = NULL;
+	const pam_repository_t *pwd_rep = NULL;
 	struct pwdefaults pwdef;
-	char *progname;
+	const char *progname;
 
 	/* needs to be set before option processing */
 	pwdef.server_policy = B_FALSE;
@@ -733,15 +748,15 @@ pam_sm_chauthtok(pam_handle_t *pamh, int flags, int argc, const char **argv)
 	if ((flags & PAM_PRELIM_CHECK) == 0)
 		return (PAM_IGNORE);
 
-	(void) pam_get_item(pamh, PAM_SERVICE, (void **)&progname);
-	(void) pam_get_item(pamh, PAM_USER, (void **)&usrname);
+	(void) pam_get_item(pamh, PAM_SERVICE, (const void **)&progname);
+	(void) pam_get_item(pamh, PAM_USER, (const void **)&usrname);
 	if (usrname == NULL || *usrname == '\0') {
 		syslog(LOG_ERR, "pam_authtok_check: username name is empty");
 		return (PAM_USER_UNKNOWN);
 	}
 
-	(void) pam_get_item(pamh, PAM_AUTHTOK, (void **)&pwbuf);
-	(void) pam_get_item(pamh, PAM_OLDAUTHTOK, (void **)&opwbuf);
+	(void) pam_get_item(pamh, PAM_AUTHTOK, (const void **)&pwbuf);
+	(void) pam_get_item(pamh, PAM_OLDAUTHTOK, (const void **)&opwbuf);
 	if (pwbuf == NULL)
 		return (PAM_AUTHTOK_ERR);
 
@@ -842,7 +857,7 @@ pam_sm_chauthtok(pam_handle_t *pamh, int flags, int argc, const char **argv)
 	}
 
 	/* Check if new password is in history list. */
-	(void) pam_get_item(pamh, PAM_REPOSITORY, (void **)&pwd_rep);
+	(void) pam_get_item(pamh, PAM_REPOSITORY, (const void **)&pwd_rep);
 	if (pwd_rep != NULL) {
 		if ((pwu_rep = calloc(1, sizeof (*pwu_rep))) == NULL)
 			return (PAM_BUF_ERR);

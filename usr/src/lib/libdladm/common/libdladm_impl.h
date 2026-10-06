@@ -20,6 +20,11 @@
  */
 /*
  * Copyright (c) 2006, 2010, Oracle and/or its affiliates. All rights reserved.
+ * Copyright 2015, Joyent, Inc.
+ */
+
+/*
+ * Copyright 2020 OmniOS Community Edition (OmniOSce) Association.
  */
 
 #ifndef _LIBDLADM_IMPL_H
@@ -48,6 +53,7 @@ extern "C" {
 struct dladm_handle {
 	int dld_fd;	/* file descriptor to DLD_CONTROL_DEV */
 	int door_fd;	/* file descriptor to DLMGMT_DOOR */
+	kstat_ctl_t *dld_kcp;	/* for kstat consumers */
 };
 
 /* DLMGMT_DOOR can only be accessed by libdladm and dlmgmtd */
@@ -67,6 +73,14 @@ extern void		dladm_free_args(dladm_arg_list_t *);
 /*
  * Link attributes persisted by dlmgmtd.
  */
+
+/*
+ * Set for overlays only
+ */
+#define	FENCAP		"encap"		/* string */
+#define	FSEARCH		"search"	/* string */
+#define	FVNETID		"vnetid"	/* uint64_t */
+
 /*
  * Set for VLANs only
  */
@@ -114,7 +128,8 @@ extern void		dladm_free_args(dladm_arg_list_t *);
 /*
  * List of all the above attributes.
  */
-#define	DLADM_ATTR_NAMES	FVLANID, FLINKOVER, \
+#define	DLADM_ATTR_NAMES	FENCAP, FSEARCH, FVNETID, \
+				FVLANID, FLINKOVER, \
 				FKEY, FNPORTS, FPORTS, FPOLICY, \
 				FFIXMACADDR, FFORCE, FLACPMODE, FLACPTIMER, \
 				FMADDRTYPE, FMADDRLEN, FMADDRSLOT, \
@@ -167,6 +182,12 @@ typedef struct resource_prop_s {
  * Set for bridged links only
  */
 #define	FBRIDGE		"bridge"	/* string */
+
+/*
+ * For error lists
+ */
+extern dladm_status_t	dladm_errlist_append(dladm_errlist_t *,
+    const char *, ...);
 
 #ifdef	__cplusplus
 }

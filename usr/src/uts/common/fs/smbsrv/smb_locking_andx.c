@@ -21,6 +21,8 @@
 
 /*
  * Copyright (c) 2007, 2010, Oracle and/or its affiliates. All rights reserved.
+ * Copyright 2020 Tintri by DDN, Inc.  All rights reserved.
+ * Copyright 2022 RackTop Systems, Inc.
  */
 
 /*
@@ -211,18 +213,31 @@
 
 #include <smbsrv/smb_kproto.h>
 
+/*
+ * This is a somewhat arbitrary sanity limit on the length of the
+ * SMB2_LOCK_ELEMENT array.  It usually has length one or two.
+ */
+int smb_lock_max_elem = 1024;
+
 smb_sdrc_t
 smb_pre_locking_andx(smb_request_t *sr)
 {
-	DTRACE_SMB_1(op__LockingX__start, smb_request_t *, sr);
+	DTRACE_SMB_START(op__LockingX, smb_request_t *, sr);
 	return (SDRC_SUCCESS);
 }
 
 void
 smb_post_locking_andx(smb_request_t *sr)
 {
-	DTRACE_SMB_1(op__LockingX__done, smb_request_t *, sr);
+	DTRACE_SMB_DONE(op__LockingX, smb_request_t *, sr);
 }
+
+struct lreq {
+	uint64_t off;
+	uint64_t len;
+	uint32_t pid;
+	uint32_t reserved;
+};
 
 smb_sdrc_t
 smb_com_locking_andx(smb_request_t *sr)
@@ -233,15 +248,15 @@ smb_com_locking_andx(smb_request_t *sr)
 	uint32_t	timeout;	/* Milliseconds to wait for lock */
 	unsigned short	unlock_num;	/* # unlock range structs */
 	unsigned short	lock_num;	/* # lock range structs */
-	unsigned short	pid;		/* Process Id of owner */
-	uint32_t	offset32, length32;
-	uint64_t	offset64;
-	uint64_t	length64;
 	DWORD		result;
-	int 		rc;
+	int		rc;
 	uint32_t	ltype;
 	smb_ofile_t	*ofile;
-	uint8_t		brk;
+	uint16_t	tmp_pid;	/* locking uses 16-bit pids */
+	uint32_t	lrv_tot;
+	struct lreq	*lrv_ul;
+	struct lreq	*lrv_lk;
+	struct lreq	*lr;
 
 	rc = smbsr_decode_vwv(sr, "4.wbblww", &sr->smb_fid, &lock_type,
 	    &oplock_level, &timeout, &unlock_num, &lock_num);
@@ -254,22 +269,35 @@ smb_com_locking_andx(smb_request_t *sr)
 		return (SDRC_ERROR);
 	}
 	ofile = sr->fid_ofile;
+	if (ofile->f_node == NULL) {
+		smbsr_error(sr, NT_STATUS_INVALID_PARAMETER,
+		    ERRDOS, ERROR_INVALID_PARAMETER);
+		return (SDRC_ERROR);
+	}
+
+	if (unlock_num > smb_lock_max_elem ||
+	    lock_num > smb_lock_max_elem) {
+		smbsr_error(sr, NT_STATUS_INSUFFICIENT_RESOURCES,
+		    ERRDOS, ERROR_NO_SYSTEM_RESOURCES);
+		return (SDRC_ERROR);
+	}
 
 	if (lock_type & LOCKING_ANDX_SHARED_LOCK)
 		ltype = SMB_LOCK_TYPE_READONLY;
 	else
 		ltype = SMB_LOCK_TYPE_READWRITE;
 
-	pid = sr->smb_pid;	/* Save the original pid */
-
 	if (lock_type & LOCKING_ANDX_OPLOCK_RELEASE) {
-		if (oplock_level == 0)
-			brk = SMB_OPLOCK_BREAK_TO_NONE;
-		else
-			brk = SMB_OPLOCK_BREAK_TO_LEVEL_II;
-		smb_oplock_ack(ofile->f_node, ofile, brk);
+		smb1_oplock_ack_break(sr, oplock_level);
 		if (unlock_num == 0 && lock_num == 0)
 			return (SDRC_NO_REPLY);
+		/*
+		 * Don't allow combining other lock/unlock actions
+		 * with an oplock ACK (normally don't get here).
+		 */
+		smbsr_error(sr, NT_STATUS_INVALID_PARAMETER,
+		    ERRDOS, ERROR_INVALID_PARAMETER);
+		return (SDRC_ERROR);
 	}
 
 	/*
@@ -282,15 +310,6 @@ smb_com_locking_andx(smb_request_t *sr)
 		return (SDRC_ERROR);
 	}
 
-	/*
-	 * No support for cancel lock (smbtorture expects this)
-	 */
-	if (lock_type & LOCKING_ANDX_CANCEL_LOCK) {
-		smbsr_error(sr, NT_STATUS_INVALID_PARAMETER,
-		    ERRDOS, ERROR_INVALID_PARAMETER);
-		return (SDRC_ERROR);
-	}
-
 	if (lock_type & LOCKING_ANDX_LARGE_FILES) {
 		/*
 		 * negotiated protocol should be NT LM 0.12 or later
@@ -300,80 +319,95 @@ smb_com_locking_andx(smb_request_t *sr)
 			    ERRDOS, ERROR_INVALID_PARAMETER);
 			return (SDRC_ERROR);
 		}
+	}
 
-		for (i = 0; i < unlock_num; i++) {
+	/*
+	 * Parse the unlock, lock vectors.  Will parse all the
+	 * unlock + lock records into one array, and then use
+	 * pointers to the unlock and lock parts.
+	 */
+	lrv_tot = unlock_num + lock_num;
+	lrv_ul = smb_srm_zalloc(sr, lrv_tot * sizeof (*lrv_ul));
+	lrv_lk = &lrv_ul[unlock_num];
+
+	for (i = 0; i < lrv_tot; i++) {
+		lr = &lrv_ul[i];
+		if (lock_type & LOCKING_ANDX_LARGE_FILES) {
 			rc = smb_mbc_decodef(&sr->smb_data, "w2.QQ",
-			    &sr->smb_pid, &offset64, &length64);
-			if (rc) {
-				/*
-				 * This is the error returned by Windows 2000
-				 * even when STATUS32 has been negotiated.
-				 */
-				smbsr_error(sr, 0, ERRSRV, ERRerror);
-				return (SDRC_ERROR);
-			}
-
-			result = smb_unlock_range(sr, sr->fid_ofile->f_node,
-			    offset64, length64);
-			if (result != NT_STATUS_SUCCESS) {
-				smbsr_error(sr, NT_STATUS_RANGE_NOT_LOCKED,
-				    ERRDOS, ERROR_NOT_LOCKED);
-				return (SDRC_ERROR);
-			}
+			    &tmp_pid, &lr->off, &lr->len);
+		} else {
+			uint32_t	offset32, length32;
+			rc = smb_mbc_decodef(&sr->smb_data, "wll",
+			    &tmp_pid, &offset32, &length32);
+			lr->off = offset32;
+			lr->len = length32;
 		}
-
-		for (i = 0; i < lock_num; i++) {
-			rc = smb_mbc_decodef(&sr->smb_data, "w2.QQ",
-			    &sr->smb_pid, &offset64, &length64);
-			if (rc) {
-				smbsr_error(sr, 0, ERRSRV, ERRerror);
-				return (SDRC_ERROR);
-			}
-
-			result = smb_lock_range(sr, offset64, length64, timeout,
-			    ltype);
-			if (result != NT_STATUS_SUCCESS) {
-				smb_lock_range_error(sr, result);
-				return (SDRC_ERROR);
-			}
-		}
-	} else {
-		for (i = 0; i < unlock_num; i++) {
-			rc = smb_mbc_decodef(&sr->smb_data, "wll", &sr->smb_pid,
-			    &offset32, &length32);
-			if (rc) {
-				smbsr_error(sr, 0, ERRSRV, ERRerror);
-				return (SDRC_ERROR);
-			}
-
-			result = smb_unlock_range(sr, sr->fid_ofile->f_node,
-			    (uint64_t)offset32, (uint64_t)length32);
-			if (result != NT_STATUS_SUCCESS) {
-				smbsr_error(sr, NT_STATUS_RANGE_NOT_LOCKED,
-				    ERRDOS, ERROR_NOT_LOCKED);
-				return (SDRC_ERROR);
-			}
-		}
-
-		for (i = 0; i < lock_num; i++) {
-			rc = smb_mbc_decodef(&sr->smb_data, "wll", &sr->smb_pid,
-			    &offset32, &length32);
-			if (rc) {
-				smbsr_error(sr, 0, ERRSRV, ERRerror);
-				return (SDRC_ERROR);
-			}
-
-			result = smb_lock_range(sr, (uint64_t)offset32,
-			    (uint64_t)length32, timeout, ltype);
-			if (result != NT_STATUS_SUCCESS) {
-				smb_lock_range_error(sr, result);
-				return (SDRC_ERROR);
-			}
+		lr->pid = tmp_pid;	/* 16-bit PID */
+		if (rc) {
+			/*
+			 * This is the error returned by Windows 2000
+			 * even when STATUS32 has been negotiated.
+			 */
+			smbsr_error(sr, 0, ERRSRV, ERRerror);
+			return (SDRC_ERROR);
 		}
 	}
 
-	sr->smb_pid = pid;
-	if (smbsr_encode_result(sr, 2, 0, "bb.ww", 2, sr->andx_com, 7, 0))
+	/*
+	 * Cancel waiting locks.  MS-CIFS says one place that
+	 * this cancels all waiting locks for this FID+PID,
+	 * but smbtorture insists this cancels just one.
+	 * Tests with Windows 7 confirms that.
+	 */
+	if ((lock_type & LOCKING_ANDX_CANCEL_LOCK) != 0) {
+		lr = lrv_lk;
+
+		result = smb_lock_range_cancel(sr, lr->off, lr->len, lr->pid);
+
+		if (result != NT_STATUS_SUCCESS) {
+			smbsr_error(sr, 0, ERRDOS,
+			    ERROR_CANCEL_VIOLATION);
+			return (SDRC_ERROR);
+		}
+		goto out;
+	}
+
+	/*
+	 * Normal unlock and lock list
+	 */
+	for (i = 0; i < unlock_num; i++) {
+		lr = &lrv_ul[i];
+
+		result = smb_unlock_range(sr, lr->off, lr->len, lr->pid);
+		if (result != NT_STATUS_SUCCESS) {
+			smbsr_error(sr, NT_STATUS_RANGE_NOT_LOCKED,
+			    ERRDOS, ERROR_NOT_LOCKED);
+			return (SDRC_ERROR);
+		}
+	}
+	for (i = 0; i < lock_num; i++) {
+		lr = &lrv_lk[i];
+
+		result = smb_lock_range(sr, lr->off, lr->len, lr->pid,
+		    ltype, timeout);
+		if (result != NT_STATUS_SUCCESS) {
+			/*
+			 * Oh... we have to rollback.
+			 */
+			while (i > 0) {
+				--i;
+				lr = &lrv_lk[i];
+				(void) smb_unlock_range(sr,
+				    lr->off, lr->len, lr->pid);
+			}
+			smb_lock_range_error(sr, result);
+			return (SDRC_ERROR);
+		}
+	}
+
+out:
+	if (smbsr_encode_result(sr, 2, 0, "bb.ww",
+	    2, sr->andx_com, 0x27, 0) != 0)
 		return (SDRC_ERROR);
 	return (SDRC_SUCCESS);
 }

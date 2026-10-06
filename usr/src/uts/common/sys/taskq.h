@@ -21,6 +21,10 @@
 /*
  * Copyright 2009 Sun Microsystems, Inc.  All rights reserved.
  * Use is subject to license terms.
+ *
+ * Copyright 2013 Nexenta Systems, Inc.  All rights reserved.
+ * Copyright 2018, Joyent, Inc.
+ * Copyright 2023 RackTop Systems, Inc.
  */
 
 #ifndef	_SYS_TASKQ_H
@@ -49,6 +53,7 @@ struct proc;
 #define	TASKQ_DYNAMIC		0x0004	/* Use dynamic thread scheduling */
 #define	TASKQ_THREADS_CPU_PCT	0x0008	/* number of threads as % of ncpu */
 #define	TASKQ_DC_BATCH		0x0010	/* Taskq uses SDC in batch mode */
+#define	TASKQ_THREADS_LWP	0x0020	/* create LWP threads */
 
 /*
  * Flags for taskq_dispatch. TQ_SLEEP/TQ_NOSLEEP should be same as
@@ -60,7 +65,9 @@ struct proc;
 #define	TQ_NOALLOC	0x04	/* cannot allocate memory; may fail */
 #define	TQ_FRONT	0x08	/* Put task at the front of the queue */
 
-#ifdef _KERNEL
+#define	TASKQID_INVALID	((taskqid_t)0)
+
+#if defined(_KERNEL) || defined(_FAKE_KERNEL)
 
 extern taskq_t *system_taskq;
 
@@ -78,6 +85,8 @@ extern taskqid_t taskq_dispatch(taskq_t *, task_func_t, void *, uint_t);
 extern void	nulltask(void *);
 extern void	taskq_destroy(taskq_t *);
 extern void	taskq_wait(taskq_t *);
+void	taskq_wait_id(taskq_t *, taskqid_t);
+extern boolean_t taskq_empty(taskq_t *);
 extern void	taskq_suspend(taskq_t *);
 extern int	taskq_suspended(taskq_t *);
 extern void	taskq_resume(taskq_t *);

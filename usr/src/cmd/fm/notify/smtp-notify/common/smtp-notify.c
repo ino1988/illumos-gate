@@ -22,6 +22,11 @@
 /*
  * Copyright (c) 2010, Oracle and/or its affiliates. All rights reserved.
  */
+
+/*
+ * Copyright (c) 2018, Joyent, Inc.
+ */
+
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -777,7 +782,7 @@ main(int argc, char *argv[])
 	struct rlimit rlim;
 	struct sigaction act;
 	sigset_t set;
-	char c;
+	int c;
 	boolean_t run_fg = B_FALSE;
 
 	if ((nhdl = malloc(sizeof (nd_hdl_t))) == NULL) {
@@ -811,7 +816,7 @@ main(int argc, char *argv[])
 				break;
 			default:
 				free(nhdl);
-				return (usage(nhdl->nh_pname));
+				return (usage(argv[0]));
 			}
 		}
 	}

@@ -24,35 +24,41 @@
 #
 # Copyright (c) 1990 Mentat Inc.
 #
-# cmd/cmd-inet/usr.bin/netstat/Makefile
+# Copyright (c) 2018, Joyent, Inc.
+# Copyright 2019 OmniOS Community Edition (OmniOSce) Association.
+# Copyright 2025 Hans Rosenfeld
 
 PROG=		netstat
 
-LOCALOBJS=	netstat.o unix.o
+LOCALOBJS=	netstat.o
 COMMONOBJS=	compat.o
 
 include ../../../Makefile.cmd
+# netstat uses libproc to grab processes and extract information about their
+# sockets. In order to be able to grab 64-bit processes, netstat itself must
+# be built 64-bit.
+$(BUILD64) include ../../../Makefile.cmd.64
+
 include ../../Makefile.cmd-inet
 
 LOCALSRCS=	$(LOCALOBJS:%.o=%.c)
 COMMONSRCS=	$(CMDINETCOMMONDIR)/$(COMMONOBJS:%.o=%.c)
 
-STATCOMMONDIR = $(SRC)/cmd/stat/common
+OBJS=		$(LOCALOBJS) $(COMMONOBJS)
+SRCS=		$(LOCALSRCS) $(COMMONSRCS)
 
-STAT_COMMON_OBJS = timestamp.o
-STAT_COMMON_SRCS = $(STAT_COMMON_OBJS:%.o=$(STATCOMMONDIR)/%.c)
+CLEANFILES =	$(OBJS)
 
-OBJS=		$(LOCALOBJS) $(COMMONOBJS) $(STAT_COMMON_OBJS)
-SRCS=		$(LOCALSRCS) $(COMMONSRCS) $(STAT_COMMON_SRCS)
+include $(SRC)/cmd/stat/Makefile.stat
 
-CPPFLAGS += -DNDEBUG -I$(CMDINETCOMMONDIR) -I$(STATCOMMONDIR)
-CERRWARN += -_gcc=-Wno-uninitialized
-CERRWARN += -_gcc=-Wno-parentheses
-LDLIBS += -ldhcpagent -lsocket -lnsl -lkstat -ltsnet -ltsol
+CPPFLAGS += -DNDEBUG -I$(CMDINETCOMMONDIR)
+LDLIBS += -ldhcpagent -lsocket -lnsl -lkstat -ltsnet -ltsol -lproc
+
+CSTD=		$(CSTD_GNU99)
 
 .KEEP_STATE:
 
-all: $(PROG) $(NPROG) 
+all: $(PROG)
 
 ROOTPROG=   $(PROG:%=$(ROOTBIN)/%)
 
@@ -60,16 +66,10 @@ $(PROG): $(OBJS)
 	$(LINK.c) $(OBJS) -o $@ $(LDLIBS)
 	$(POST_PROCESS)
 
-%.o : $(STATCOMMONDIR)/%.c
-	$(COMPILE.c) -o $@ $<
-	$(POST_PROCESS_O)
-
-install: all $(ROOTPROG) 
+install: all $(ROOTPROG)
 
 clean:
-	$(RM) $(OBJS)
-
-lint:	lint_SRCS
+	$(RM) $(CLEANFILES)
 
 include ../../../Makefile.targ
 

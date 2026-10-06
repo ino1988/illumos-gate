@@ -361,7 +361,6 @@ probe_disc (int fd, LibHalContext *ctx, const char *udi, dbus_bool_t *has_data,
 	libhal_device_commit_changeset (ctx, cs, &error);
 	libhal_device_free_changeset (cs);
 
-out:
 	my_dbus_error_free (&error);
 
 	return (TRUE);
@@ -414,7 +413,7 @@ drop_privileges ()
 	priv_freeset(lPrivSet);
 }
 
-int 
+int
 main (int argc, char *argv[])
 {
 	int fd, rfd;

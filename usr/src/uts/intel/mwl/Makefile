@@ -22,6 +22,7 @@
 # Copyright 2009 Sun Microsystems, Inc.  All rights reserved.
 # Use is subject to license terms.
 #
+# Copyright (c) 2018, Joyent, Inc.
 
 #
 # This makefile drives the production of the rwd driver kernel module.
@@ -39,7 +40,6 @@ UTSBASE	= ../..
 #
 MODULE		= mwl
 OBJECTS		= $(MWL_OBJS:%=$(OBJS_DIR)/%)
-LINTS           = $(MWL_OBJS:%.o=$(LINTS_DIR)/%.ln)
 ROOTMODULE	= $(ROOT_DRV_DIR)/$(MODULE)
 
 #
@@ -51,21 +51,22 @@ include $(UTSBASE)/intel/Makefile.intel
 #	Define targets
 #
 ALL_TARGET	= $(BINARY)
-LINT_TARGET	= $(MODULE).lint
 INSTALL_TARGET	= $(BINARY) $(ROOTMODULE)
 
 #
 #	Driver depends on GLDv3 & wifi kernel support module.
 #
-LDFLAGS		+= -dy -Nmisc/mac -Nmisc/net80211
+LDFLAGS		+= -Nmisc/mac -Nmisc/net80211
 
 #
 #	Overrides
 #
-LINTTAGS	+= -erroff=E_BAD_PTR_CAST_ALIGN
 
-CERRWARN	+= -_gcc=-Wno-uninitialized
+CERRWARN	+= $(CNOWARN_UNINIT)
 CERRWARN	+= -_gcc=-Wno-unused-value
+
+# needs work
+SMOFF += return_cast
 
 #
 #	Default build targets.
@@ -79,12 +80,6 @@ all:		$(ALL_DEPS)
 clean:		$(CLEAN_DEPS)
 
 clobber:	$(CLOBBER_DEPS)
-
-lint:		$(LINT_DEPS)
-
-modlintlib:	$(MODLINTLIB_DEPS)
-
-clean.lint:	$(CLEAN_LINT_DEPS)
 
 install:	$(INSTALL_DEPS)
 

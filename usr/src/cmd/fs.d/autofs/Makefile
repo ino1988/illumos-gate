@@ -18,9 +18,12 @@
 #
 # CDDL HEADER END
 #
-# Copyright (c) 1992, 2010, Oracle and/or its affiliates. All rights reserved.
+
 #
-# cmd/fs.d/autofs/Makefile
+# Copyright (c) 1992, 2010, Oracle and/or its affiliates. All rights reserved.
+# Copyright 2015 RackTop Systems.
+# Copyright (c) 2018, Joyent, Inc.
+#
 
 FSTYPE=		autofs
 AUTO=		automount
@@ -73,17 +76,17 @@ LOCAL=		autod_main.o \
 TYPEOBJS=	$(LOCAL) $(COMMON) replica.o nfs_sec.o nfs_resolve.o nfs_subr.o \
 		$(FSLIB) webnfs_xdr.o webnfs_client.o selfcheck.o
 
-SHAREOBJS=	$(SHARESRCS:%.c=%.o)
+SHAREOBJS=	$(SHARE:%=%.o)
 
-UNSHAREOBJS=	$(UNSHARESRCS:%.c=%.o)
+UNSHAREOBJS=	$(UNSHARE:%=%.o)
 
 POFILE= autofs.po
-GREP= egrep
-SED= sed
 
-$(AUTO) := 	LDLIBS += -lnsl -lsldap -lscf
+$(AUTO) :=	LDLIBS += -lnsl -lsldap -lscf
 $(MOUNT):=	LDLIBS += -lscf
 $(TYPEPROG) :=	LDLIBS += -lrpcsvc -lsocket -lnsl -lsldap -lkstat -lscf
+
+CSTD=		$(CSTD_GNU99)
 
 CFLAGS +=	$(CCVERBOSE) -D_FILE_OFFSET_BITS=64
 CPPFLAGS=	-I. -I.. -I../nfs/lib $(CPPFLAGS.master) -D_REENTRANT  \
@@ -92,23 +95,14 @@ CPPFLAGS=	-I. -I.. -I../nfs/lib $(CPPFLAGS.master) -D_REENTRANT  \
 CERRWARN +=	-_gcc=-Wno-parentheses
 CERRWARN +=	-_gcc=-Wno-unused-variable
 CERRWARN +=	-_gcc=-Wno-switch
-CERRWARN +=	-_gcc=-Wno-uninitialized
-CERRWARN +=	-_gcc=-Wno-unused-label
+CERRWARN +=	$(CNOWARN_UNINIT)
 CERRWARN +=	-_gcc=-Wno-unused-function
+
+# not linted
+SMATCH=off
 
 OBJS=		$(AUTOOBJS) $(MOUNTOBJS) $(TYPEOBJS) \
 		$(SHAREOBJS) $(UNSHAREOBJS)
-
-AUTOSRCS=	automount.c $(COMMON:%.o=%.c) $(FSLIBSRC)
-MOUNTSRCS=	mount.c $(FSLIBSRC)
-TYPESRCS=	$(LOCAL:%.o=%.c) $(COMMON:%.o=%.c) \
-		../nfs/lib/replica.c ../nfs/lib/nfs_sec.c \
-		../nfs/lib/nfs_subr.c $(FSLIBSRC) ../nfs/lib/selfcheck.c \
-		../nfs/lib/nfs_resolve.c ../nfs/lib/smfcfg.c
-SHARESRCS=	$(SHARE:%=%.c)
-UNSHARESRCS=	$(UNSHARE:%=%.c)
-DFSHARESSRCS=	$(DFSHARES:%=%.sh)
-SRCS=		$(OBJS:%.o=%.c)
 
 nfs_sec.o :=	CPPFLAGS += -DWNFS_SEC_NEGO
 
@@ -125,11 +119,11 @@ $(TYPEPROG):	webnfs.h $(TYPEOBJS)
 		$(POST_PROCESS)
 
 $(SHARE):	$(SHAREOBJS)
-		$(LINK.c) -o $@ $(SHAREOBJS)
+		$(LINK.c) -o $@ $(SHAREOBJS) $(LDLIBS)
 		$(POST_PROCESS)
 
 $(UNSHARE):	$(UNSHAREOBJS)
-		$(LINK.c) -o $@ $(UNSHAREOBJS)
+		$(LINK.c) -o $@ $(UNSHAREOBJS) $(LDLIBS)
 		$(POST_PROCESS)
 
 $(ROOTSVCSYSTEM)/filesystem/%: %
@@ -144,11 +138,11 @@ XLINE= "program DUMP { version VERS \
 
 $(XFILE):	$(BUILDDIR)
 		$(RM) $(XFILE)
-		echo $(XLINE) > $(XFILE)
+		$(ECHO) $(XLINE) > $(XFILE)
 
 $(BUILDDIR):
 		$(RM) -r $(BUILDDIR)
-		mkdir $(BUILDDIR)
+		$(MKDIR) $(BUILDDIR)
 
 $(DUMP_PROTO):	$(BUILDDIR) $(XFILE)
 		cd $(BUILDDIR); $(RM) *.[ch] makefile.malloc_dump ; rpcgen -a `basename $(XFILE)
@@ -156,7 +150,7 @@ $(DUMP_PROTO):	$(BUILDDIR) $(XFILE)
 
 $(DUMP_PROG):	$(DUMP_PROTO)
 		$(RM) $@
-		cp $(DUMP_PROTO) $@
+		$(CP) $(DUMP_PROTO) $@
 
 clean_dump:
 		$(RM) -r $(BUILDDIR)
@@ -193,21 +187,16 @@ webnfs.h:	webnfs.x
 
 webnfs.x:	../nfs/lib/webnfs.x
 	$(RM) webnfs.x
-	cp ../nfs/lib/webnfs.x .
+	$(CP) ../nfs/lib/webnfs.x .
 
 catalog: $(POFILE)
 
 $(POFILE):
 	$(RM) messages.po
-	$(SED) -e 's/pr_msg/gettext/' `$(GREP) -l "pr_msg|gettext" *.[ch]` | \
+	$(SED) -e 's/pr_msg/gettext/' `$(EGREP) -l "pr_msg|gettext" *.[ch]` | \
 	$(XGETTEXT) $(XGETFLAGS) -
 	$(SED) -e '/^# msg/d' -e '/^domain/d' < messages.po > $@
 	$(RM) messages.po
-
-lint:
-	$(LINT.c) $(AUTOSRCS)
-	$(LINT.c) $(MOUNTSRCS)
-	$(LINT.c) $(TYPESRCS)
 
 clean:	clean_dump
 	$(RM) $(OBJS) webnfs_xdr.c webnfs_client.c webnfs.h webnfs.x

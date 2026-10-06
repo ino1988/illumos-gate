@@ -39,7 +39,7 @@ typedef unsigned short uint16_t;
 typedef unsigned char uint8_t;
 typedef unsigned char uchar_t;
 
-#if defined(_LP64) || defined(_I32LPx)
+#if defined(_LP64)
 typedef	unsigned long size_t;
 #else
 typedef	unsigned int size_t;
@@ -213,6 +213,7 @@ extern void fletcher_2_byteswap(const void *, uint64_t, zio_cksum_t *);
 extern void fletcher_4_native(const void *, uint64_t, zio_cksum_t *);
 extern void fletcher_4_byteswap(const void *, uint64_t, zio_cksum_t *);
 extern void zio_checksum_SHA256(const void *, uint64_t, zio_cksum_t *);
+extern void zio_checksum_SHA512(const void *, uint64_t, zio_cksum_t *);
 extern int lzjb_decompress(void *, void *, size_t, size_t);
 extern int lz4_decompress(void *, void *, size_t, size_t);
 

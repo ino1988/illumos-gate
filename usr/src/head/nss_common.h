@@ -46,7 +46,7 @@ extern "C" {
  * The name-service switch
  * -----------------------
  *
- * From nsswitch.conf(4):
+ * From nsswitch.conf(5):
  *
  *	    The operating system uses a number of "databases" of information
  *	    about hosts, users (passwd/shadow), groups and so forth.  Data for
@@ -71,7 +71,7 @@ extern "C" {
  *
  *    - Old style backend interfaces follow this pointer to function interface:
  *
- *     	A "backend" exists for useful <database, source> pairs.  Each backend
+ *	A "backend" exists for useful <database, source> pairs.  Each backend
  *	consists of whatever private data it needs and a set of functions
  *	that the switch engine may invoke on behalf of the frontend
  *	[e.g. the "nis" backend for "passwd" provides routines to lookup
@@ -203,7 +203,7 @@ extern "C" {
  * Backend routines return the following status codes to the switch engine:
  *
  * SUCCESS, UNAVAIL, NOTFOUND, TRYAGAIN (these are the same codes that may
- * be specified in the config information;  see nsswitch.conf(4))
+ * be specified in the config information;  see nsswitch.conf(5))
  *
  * The remaining conditions/errors are internally generated and if
  * necessary are translated, as to one of the above external errors,
@@ -349,7 +349,7 @@ enum nss_dbp_flags {
 };
 
 struct nss_db_params {
-	const char 		*name;		/* Mandatory: database name */
+	const char		*name;		/* Mandatory: database name */
 	const char		*config_name;	/* config-file database name */
 	const char		*default_config; /* Mandatory: default config */
 	unsigned		max_active_per_src;

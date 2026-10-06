@@ -23,28 +23,36 @@
  * Use is subject to license terms.
  */
 /*
- * Copyright (c) 2012, Joyent, Inc.  All rights reserved.
+ * Copyright (c) 2018, Joyent, Inc.  All rights reserved.
  * Copyright 2014 Nexenta Systems, Inc.  All rights reserved.
+ * Copyright 2025 Oxide Computer Company
  */
 
 #include <sys/types.h>
+#include <sys/types32.h>
 #include <sys/reg.h>
 #include <sys/privregs.h>
 #include <sys/stack.h>
 #include <sys/frame.h>
 
+#include <mdb/mdb_isautil.h>
 #include <mdb/mdb_ia32util.h>
 #include <mdb/mdb_target_impl.h>
 #include <mdb/mdb_kreg_impl.h>
+#include <mdb/mdb_stack.h>
 #include <mdb/mdb_debug.h>
 #include <mdb/mdb_modapi.h>
 #include <mdb/mdb_err.h>
 #include <mdb/mdb.h>
 
+#ifndef __amd64
 /*
  * We also define an array of register names and their corresponding
  * array indices.  This is used by the getareg and putareg entry points,
  * and also by our register variable discipline.
+ *
+ * When built into an amd64 mdb this won't be used as it's only a subset of
+ * mdb_amd64_kregs, hence the #ifdef.
  */
 const mdb_tgt_regdesc_t mdb_ia32_kregs[] = {
 	{ "savfp", KREG_SAVFP, MDB_TGT_R_EXPORT },
@@ -68,7 +76,7 @@ const mdb_tgt_regdesc_t mdb_ia32_kregs[] = {
 	{ "esi", KREG_ESI, MDB_TGT_R_EXPORT },
 	{ "si", KREG_ESI, MDB_TGT_R_EXPORT | MDB_TGT_R_16 },
 	{ "edi", KREG_EDI, MDB_TGT_R_EXPORT },
-	{ "di",	EDI, MDB_TGT_R_EXPORT | MDB_TGT_R_16 },
+	{ "di", KREG_EDI, MDB_TGT_R_EXPORT | MDB_TGT_R_16 },
 	{ "ebp", KREG_EBP, MDB_TGT_R_EXPORT },
 	{ "bp", KREG_EBP, MDB_TGT_R_EXPORT | MDB_TGT_R_16 },
 	{ "esp", KREG_ESP, MDB_TGT_R_EXPORT },
@@ -87,6 +95,7 @@ const mdb_tgt_regdesc_t mdb_ia32_kregs[] = {
 	{ "err", KREG_ERR, MDB_TGT_R_EXPORT | MDB_TGT_R_PRIV },
 	{ NULL, 0, 0 }
 };
+#endif
 
 void
 mdb_ia32_printregs(const mdb_tgt_gregset_t *gregs)
@@ -94,27 +103,27 @@ mdb_ia32_printregs(const mdb_tgt_gregset_t *gregs)
 	const kreg_t *kregs = &gregs->kregs[0];
 	kreg_t eflags = kregs[KREG_EFLAGS];
 
-	mdb_printf("%%cs = 0x%04x\t\t%%eax = 0x%0?p %A\n",
+	mdb_printf("%%cs = 0x%04x\t\t%%eax = 0x%08p %A\n",
 	    kregs[KREG_CS], kregs[KREG_EAX], kregs[KREG_EAX]);
 
-	mdb_printf("%%ds = 0x%04x\t\t%%ebx = 0x%0?p %A\n",
+	mdb_printf("%%ds = 0x%04x\t\t%%ebx = 0x%08p %A\n",
 	    kregs[KREG_DS], kregs[KREG_EBX], kregs[KREG_EBX]);
 
-	mdb_printf("%%ss = 0x%04x\t\t%%ecx = 0x%0?p %A\n",
+	mdb_printf("%%ss = 0x%04x\t\t%%ecx = 0x%08p %A\n",
 	    kregs[KREG_SS], kregs[KREG_ECX], kregs[KREG_ECX]);
 
-	mdb_printf("%%es = 0x%04x\t\t%%edx = 0x%0?p %A\n",
+	mdb_printf("%%es = 0x%04x\t\t%%edx = 0x%08p %A\n",
 	    kregs[KREG_ES], kregs[KREG_EDX], kregs[KREG_EDX]);
 
-	mdb_printf("%%fs = 0x%04x\t\t%%esi = 0x%0?p %A\n",
+	mdb_printf("%%fs = 0x%04x\t\t%%esi = 0x%08p %A\n",
 	    kregs[KREG_FS], kregs[KREG_ESI], kregs[KREG_ESI]);
 
-	mdb_printf("%%gs = 0x%04x\t\t%%edi = 0x%0?p %A\n\n",
+	mdb_printf("%%gs = 0x%04x\t\t%%edi = 0x%08p %A\n\n",
 	    kregs[KREG_GS], kregs[KREG_EDI], kregs[KREG_EDI]);
 
-	mdb_printf("%%eip = 0x%0?p %A\n", kregs[KREG_EIP], kregs[KREG_EIP]);
-	mdb_printf("%%ebp = 0x%0?p\n", kregs[KREG_EBP]);
-	mdb_printf("%%esp = 0x%0?p\n\n", kregs[KREG_ESP]);
+	mdb_printf("%%eip = 0x%08p %A\n", kregs[KREG_EIP], kregs[KREG_EIP]);
+	mdb_printf("%%ebp = 0x%08p\n", kregs[KREG_EBP]);
+	mdb_printf("%%esp = 0x%08p\n\n", kregs[KREG_ESP]);
 	mdb_printf("%%eflags = 0x%08x\n", eflags);
 
 	mdb_printf("  id=%u vip=%u vif=%u ac=%u vm=%u rf=%u nt=%u iopl=0x%x\n",
@@ -138,8 +147,8 @@ mdb_ia32_printregs(const mdb_tgt_gregset_t *gregs)
 	    (eflags & KREG_EFLAGS_PF_MASK) ? "PF" : "pf",
 	    (eflags & KREG_EFLAGS_CF_MASK) ? "CF" : "cf");
 
-#ifndef _KMDB
-	mdb_printf("  %%uesp = 0x%0?x\n", kregs[KREG_UESP]);
+#if !defined(__amd64) && !defined(_KMDB)
+	mdb_printf("  %%uesp = 0x%08x\n", kregs[KREG_UESP]);
 #endif
 	mdb_printf("%%trapno = 0x%x\n", kregs[KREG_TRAPNO]);
 	mdb_printf("   %%err = 0x%x\n", kregs[KREG_ERR]);
@@ -166,7 +175,8 @@ kvm_argcount(mdb_tgt_t *t, uintptr_t eip, ssize_t size)
 		M_ADD_IMM8  = 0x83	/* ADD imm8 to r/m32 */
 	};
 
-	if (mdb_tgt_vread(t, ins, sizeof (ins), eip) != sizeof (ins))
+	if (mdb_tgt_aread(t, MDB_TGT_AS_VIRT_I, ins, sizeof (ins), eip) !=
+	    sizeof (ins))
 		return (0);
 
 	if (ins[1] != M_MODRM_ESP)
@@ -185,7 +195,7 @@ kvm_argcount(mdb_tgt_t *t, uintptr_t eip, ssize_t size)
 		n = 0;
 	}
 
-	return (MIN((ssize_t)n, size) / sizeof (long));
+	return (MIN((ssize_t)n, size) / sizeof (uint32_t));
 }
 
 int
@@ -197,10 +207,10 @@ mdb_ia32_kvm_stack_iter(mdb_tgt_t *t, const mdb_tgt_gregset_t *gsp,
 	int got_pc = (gsp->kregs[KREG_EIP] != 0);
 	int err;
 
-	struct {
-		uintptr_t fr_savfp;
-		uintptr_t fr_savpc;
-		long fr_argv[32];
+	struct fr {
+		uintptr32_t fr_savfp;
+		uintptr32_t fr_savpc;
+		uint32_t fr_argv[32];
 	} fr;
 
 	uintptr_t fp = gsp->kregs[KREG_EBP];
@@ -210,6 +220,8 @@ mdb_ia32_kvm_stack_iter(mdb_tgt_t *t, const mdb_tgt_gregset_t *gsp,
 	ssize_t size;
 	uint_t argc;
 	int detect_exception_frames = 0;
+	int advance_tortoise = 1;
+	uintptr_t tortoise_fp = 0;
 #ifndef	_KMDB
 	int xp;
 
@@ -220,29 +232,49 @@ mdb_ia32_kvm_stack_iter(mdb_tgt_t *t, const mdb_tgt_gregset_t *gsp,
 	bcopy(gsp, &gregs, sizeof (gregs));
 
 	while (fp != 0) {
-
-		/*
-		 * Ensure progress (increasing fp), and prevent
-		 * endless loop with the same FP.
-		 */
-		if (fp <= lastfp) {
-			err = EMDB_STKFRAME;
-			goto badfp;
-		}
 		if (fp & (STACK_ALIGN - 1)) {
 			err = EMDB_STKALIGN;
 			goto badfp;
 		}
-		if ((size = mdb_tgt_vread(t, &fr, sizeof (fr), fp)) >=
-		    (ssize_t)(2 * sizeof (uintptr_t))) {
-			size -= (ssize_t)(2 * sizeof (uintptr_t));
+		if ((size = mdb_tgt_aread(t, MDB_TGT_AS_VIRT_S, &fr,
+		    sizeof (fr), fp)) >= (ssize_t)(2 * sizeof (uintptr32_t))) {
+			size -= (ssize_t)(2 * sizeof (uintptr32_t));
 			argc = kvm_argcount(t, fr.fr_savpc, size);
 		} else {
 			err = EMDB_NOMAP;
 			goto badfp;
 		}
 
-		if (got_pc && func(arg, pc, argc, fr.fr_argv, &gregs) != 0)
+		if (tortoise_fp == 0) {
+			tortoise_fp = fp;
+		} else {
+			/*
+			 * Advance tortoise_fp every other frame, so we detect
+			 * cycles with Floyd's tortoise/hare.
+			 */
+			if (advance_tortoise != 0) {
+				struct fr tfr;
+
+				if (mdb_tgt_aread(t, MDB_TGT_AS_VIRT_S, &tfr,
+				    sizeof (tfr), tortoise_fp) !=
+				    sizeof (tfr)) {
+					err = EMDB_NOMAP;
+					goto badfp;
+				}
+
+				tortoise_fp = tfr.fr_savfp;
+			}
+
+			if (fp == tortoise_fp) {
+				err = EMDB_STKFRAME;
+				goto badfp;
+			}
+		}
+
+		advance_tortoise = !advance_tortoise;
+
+		if (got_pc &&
+		    func(arg, pc, argc, (const long *)fr.fr_argv, &gregs) != 0)
 			break;
 
 		kregs[KREG_ESP] = kregs[KREG_EBP];
@@ -274,6 +306,12 @@ badfp:
 	return (set_errno(err));
 }
 
+#ifndef __amd64
+/*
+ * The functions mdb_ia32_step_out and mdb_ia32_next haven't yet been adapted
+ * to work when built for an amd64 mdb. They are unused by the amd64-only bhyve
+ * target, hence the #ifdef.
+ */
 /*
  * Determine the return address for the current frame.  Typically this is the
  * fr_savpc value from the current frame, but we also perform some special
@@ -301,7 +339,8 @@ mdb_ia32_step_out(mdb_tgt_t *t, uintptr_t *p, kreg_t pc, kreg_t fp, kreg_t sp,
 			fp = sp;
 	}
 
-	if (mdb_tgt_vread(t, &fr, sizeof (fr), fp) == sizeof (fr)) {
+	if (mdb_tgt_aread(t, MDB_TGT_AS_VIRT_S, &fr, sizeof (fr), fp) ==
+	    sizeof (fr)) {
 		*p = fr.fr_savpc;
 		return (0);
 	}
@@ -352,7 +391,8 @@ mdb_ia32_next(mdb_tgt_t *t, uintptr_t *p, kreg_t pc, mdb_instr_t curinstr)
 	 * read the subsequent Mod/RM byte to perform additional decoding.
 	 */
 	if (curinstr == M_CALL_REG) {
-		if (mdb_tgt_vread(t, &m, sizeof (m), pc + 1) != sizeof (m))
+		if (mdb_tgt_aread(t, MDB_TGT_AS_VIRT_I, &m, sizeof (m), pc + 1)
+		    != sizeof (m))
 			return (-1); /* errno is set for us */
 
 		/*
@@ -384,38 +424,89 @@ mdb_ia32_next(mdb_tgt_t *t, uintptr_t *p, kreg_t pc, mdb_instr_t curinstr)
 
 	return (set_errno(EAGAIN));
 }
+#endif
 
-/*ARGSUSED*/
 int
-mdb_ia32_kvm_frame(void *arglim, uintptr_t pc, uint_t argc, const long *argv,
+mdb_ia32_kvm_frame(void *argp, uintptr_t pc, uint_t argc, const long *argv,
     const mdb_tgt_gregset_t *gregs)
 {
-	argc = MIN(argc, (uint_t)arglim);
-	mdb_printf("%a(", pc);
+	mdb_stack_frame_hdl_t *hdl = argp;
+	uint64_t bp;
 
-	if (argc != 0) {
-		mdb_printf("%lr", *argv++);
-		for (argc--; argc != 0; argc--)
-			mdb_printf(", %lr", *argv++);
-	}
-
-	mdb_printf(")\n");
+	bp = gregs->kregs[KREG_EBP];
+	mdb_stack_frame(hdl, pc, bp, argc, argv);
 	return (0);
 }
 
-int
-mdb_ia32_kvm_framev(void *arglim, uintptr_t pc, uint_t argc, const long *argv,
-    const mdb_tgt_gregset_t *gregs)
+/*
+ * Check if the instruction immediately before the given program counter (pcp)
+ * is a CALL instruction in IA-32 (x86 32-bit) mode. Since x86 instructions are
+ * variable-length, we read the 8 bytes preceding the PC and look for specific
+ * call encodings at known offsets that would align with common call
+ * instruction lengths. Although x86 instructions can be up to 15 bytes long,
+ * for a CALL to reach that length would require a long sequence of prefixes.
+ * Of those, only the address-size prefix would affect where we need to look
+ * for the instruction, and such prefixes are extremely rare in real-world
+ * code.
+ */
+boolean_t
+mdb_ia32_prev_callcheck(uintptr_t pcp)
 {
-	argc = MIN(argc, (uint_t)arglim);
-	mdb_printf("%0?lr %a(", gregs->kregs[KREG_EBP], pc);
+	uint8_t buf[8];
 
-	if (argc != 0) {
-		mdb_printf("%lr", *argv++);
-		for (argc--; argc != 0; argc--)
-			mdb_printf(", %lr", *argv++);
-	}
+	/*
+	 * Ensure we can read 8 bytes before the PC. This accommodates the
+	 * largest call encoding we care about (far calls).
+	 */
+	if (pcp < 8 || mdb_vread(buf, sizeof (buf), pcp - 8) != sizeof (buf))
+		return (B_FALSE);
 
-	mdb_printf(")\n");
-	return (0);
+	/*
+	 * Direct near call: CALL rel32
+	 * Opcode: E8, followed by 4-byte PC-relative offset.
+	 */
+	if (buf[3] == 0xe8)
+		return (B_TRUE);
+
+	/*
+	 * Indirect near call: CALL r/m32
+	 * Opcode: FF /2 (i.e., reg field of ModR/M is 010).
+	 *
+	 * We're expecting the instruction to be exactly 2 bytes: FF 14,
+	 * with opcode at buf[5] and ModR/M at buf[6].
+	 *
+	 * buf[6] == 0x14 means:
+	 *  - mod = 00 (no displacement)
+	 *  - reg = 010 (CALL)
+	 *  - r/m = 100 (SIB follows — typically [esp])
+	 *
+	 * This form is common in PLT stubs like: CALL DWORD PTR [ESP]
+	 *
+	 * Other encodings of FF /2 are less plausible here:
+	 *  - mod = 01 - 8-bit displacement - unlikely for noreturn functions
+	 *  - mod = 10 - 32-bit displacement - would overlap with PC; invalid
+	 *  - mod = 00 with r/m != 100 - e.g., CALL EAX - would return to
+	 *    buf[7], not pcp
+	 */
+	if (buf[5] == 0xff && buf[6] == 0x14)
+		return (B_TRUE);
+
+	/*
+	 * Indirect absolute call: CALL DWORD PTR [disp32]
+	 * Encoding: FF 15 xx xx xx xx
+	 * Instruction is 6 bytes long; opcode at buf[2], ModR/M at buf[3].
+	 * Used to call through global function pointers.
+	 */
+	if (buf[2] == 0xff && buf[3] == 0x15)
+		return (B_TRUE);
+
+	/*
+	 * Far call (segment-based): CALL FAR ptr16:32
+	 * Opcode: 9A, followed by 6-byte far pointer.
+	 * Instruction is 7 bytes; opcode at buf[0].
+	 */
+	if (buf[0] == 0x9a)
+		return (B_TRUE);
+
+	return (B_FALSE);
 }

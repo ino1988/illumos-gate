@@ -20,23 +20,32 @@
 #
 #
 # Copyright (c) 2007, 2010, Oracle and/or its affiliates. All rights reserved.
-# Copyright 2012 Nexenta Systems, Inc.  All rights reserved.
+# Copyright 2014 Nexenta Systems, Inc.  All rights reserved.
+# Copyright (c) 2018, Joyent, Inc.
 #
 
 
 PROG=	smbd
-SRCS=				\
-	smbd_doorsvc.c		\
-	smbd_join.c		\
-	smbd_logon.c		\
-	smbd_main.c		\
-	smbd_nicmon.c		\
-	smbd_opipe_doorsvc.c	\
-	smbd_share_doorsvc.c	\
-	smbd_spool.c		\
-	smbd_vss.c
+OBJS=				\
+	smbd_authsvc.o		\
+	smbd_doorsvc.o		\
+	smbd_join.o		\
+	smbd_krb5lookup.o	\
+	smbd_krb5ssp.o		\
+	smbd_logon.o		\
+	smbd_main.o		\
+	smbd_nicmon.o		\
+	smbd_ntlmssp.o		\
+	smbd_pipesvc.o		\
+	smbd_share_doorsvc.o	\
+	smbd_spool.o		\
+	smbd_syslog.o		\
+	smbd_vss.o
+
+SRCS=	$(OBJS:%.o=%.c)
 
 include ../../Makefile.cmd
+include ../../Makefile.ctf
 
 MANIFEST=	server.xml
 SVCMETHOD=	svc-smbd
@@ -50,11 +59,26 @@ $(ROOTMANIFEST):= FILEMODE = 0444
 $(ROOTSVCMETHOD):= FILEMODE = 0555
 $(ROOTVARSMBDLL):= FILEMODE = 0755
 
-include ../Makefile.smbsrv.defs
+CFLAGS += $(CCVERBOSE)
+CPPFLAGS += -D_IPP_PRIVATE_STRUCTURES
+CPPFLAGS += -D_REENTRANT
+CPPFLAGS += -Dsyslog=smb_syslog
+$(NOT_RELEASE_BUILD)CPPFLAGS += -DDEBUG
 
-LDLIBS += -L$(ROOT)/usr/lib/smbsrv -lmlsvc -lmlrpc -lsmbns -lsmb \
-	-lzfs -lbsm -lsocket -lnsl -lscf -lumem -lcmdutils
+# Should not have to do this, but the Kerberos includes are a mess.
+CPPFLAGS += -I $(ROOT)/usr/include/kerberosv5
+
+# needs work
+SMOFF += all_func_returns,deref_check
+
+CSTD =       $(CSTD_GNU99)
+
 LDFLAGS += -R/usr/lib/smbsrv
+LDLIBS += -L$(ROOT)/usr/lib/smbsrv
+# prefer to keep libs ordered by dependence
+LDLIBS += -lmlsvc -lmlrpc -lsmbns -lsmb -lsmbfs -lgss
+LDLIBS += -lzfs -lbsm -lscf -lcmdutils -lsocket -lnsl -lumem
+$(PROG) := LDLIBS += -lkrb5
 
 $(ENABLE_SMB_PRINTING) CPPFLAGS += -DHAVE_CUPS
 
@@ -75,8 +99,6 @@ all:		$(PROG)
 clean:
 	$(RM) $(OBJS)
 
-lint:		lint_SRCS
-
 $(PROG):	$(OBJS)
 	$(LINK.c) -o $@ $(OBJS) $(LDLIBS)
 	$(POST_PROCESS)
@@ -89,3 +111,5 @@ include ../../Makefile.targ
 
 install: all .WAIT $(ROOTETCDEFAULTFILES) $(ROOTMANIFEST) \
 		$(ROOTSMBDFILE) ${ROOTSVCMETHOD} $(ROOTVARSMBDLL)
+
+.KEEP_STATE:

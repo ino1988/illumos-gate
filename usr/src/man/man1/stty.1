@@ -1,17 +1,51 @@
-'\" te
+.\"
+.\" Sun Microsystems, Inc. gratefully acknowledges The Open Group for
+.\" permission to reproduce portions of its copyrighted documentation.
+.\" Original documentation from The Open Group can be obtained online at
+.\" http://www.opengroup.org/bookstore/.
+.\"
+.\" The Institute of Electrical and Electronics Engineers and The Open
+.\" Group, have given us permission to reprint portions of their
+.\" documentation.
+.\"
+.\" In the following statement, the phrase ``this text'' refers to portions
+.\" of the system documentation.
+.\"
+.\" Portions of this text are reprinted and reproduced in electronic form
+.\" in the SunOS Reference Manual, from IEEE Std 1003.1, 2004 Edition,
+.\" Standard for Information Technology -- Portable Operating System
+.\" Interface (POSIX), The Open Group Base Specifications Issue 6,
+.\" Copyright (C) 2001-2004 by the Institute of Electrical and Electronics
+.\" Engineers, Inc and The Open Group.  In the event of any discrepancy
+.\" between these versions and the original IEEE and The Open Group
+.\" Standard, the original IEEE and The Open Group Standard is the referee
+.\" document.  The original Standard can be obtained online at
+.\" http://www.opengroup.org/unix/online.html.
+.\"
+.\" This notice shall appear on any product containing this material.
+.\"
+.\" The contents of this file are subject to the terms of the
+.\" Common Development and Distribution License (the "License").
+.\" You may not use this file except in compliance with the License.
+.\"
+.\" You can obtain a copy of the license at usr/src/OPENSOLARIS.LICENSE
+.\" or http://www.opensolaris.org/os/licensing.
+.\" See the License for the specific language governing permissions
+.\" and limitations under the License.
+.\"
+.\" When distributing Covered Code, include this CDDL HEADER in each
+.\" file and include the License file at usr/src/OPENSOLARIS.LICENSE.
+.\" If applicable, add the following below this CDDL HEADER, with the
+.\" fields enclosed by brackets "[]" replaced with your own identifying
+.\" information: Portions Copyright [yyyy] [name of copyright owner]
+.\"
+.\"
 .\" Copyright 1989 AT&T
+.\" Portions Copyright (c) 1992, X/Open Company Limited All Rights Reserved
 .\" Copyright (c) 2009, Sun Microsystems, Inc. All Rights Reserved
 .\" Copyright (c) 2014, Joyent, Inc. All Rights Reserved
-.\" Portions Copyright (c) 1992, X/Open Company Limited All Rights Reserved
-.\" Sun Microsystems, Inc. gratefully acknowledges The Open Group for permission to reproduce portions of its copyrighted documentation. Original documentation from The Open Group can be obtained online at  http://www.opengroup.org/bookstore/.
-.\" The Institute of Electrical and Electronics Engineers and The Open Group, have given us permission to reprint portions of their documentation. In the following statement, the phrase "this text" refers to portions of the system documentation. Portions of this text
-.\" are reprinted and reproduced in electronic form in the Sun OS Reference Manual, from IEEE Std 1003.1, 2004 Edition, Standard for Information Technology -- Portable Operating System Interface (POSIX), The Open Group Base Specifications Issue 6, Copyright (C) 2001-2004 by the Institute of Electrical
-.\" and Electronics Engineers, Inc and The Open Group. In the event of any discrepancy between these versions and the original IEEE and The Open Group Standard, the original IEEE and The Open Group Standard is the referee document. The original Standard can be obtained online at http://www.opengroup.org/unix/online.html.
-.\"  This notice shall appear on any product containing this material.
-.\" The contents of this file are subject to the terms of the Common Development and Distribution License (the "License").  You may not use this file except in compliance with the License. You can obtain a copy of the license at usr/src/OPENSOLARIS.LICENSE or http://www.opensolaris.org/os/licensing.
-.\"  See the License for the specific language governing permissions and limitations under the License. When distributing Covered Code, include this CDDL HEADER in each file and include the License file at usr/src/OPENSOLARIS.LICENSE.  If applicable, add the following below this CDDL HEADER, with
-.\" the fields enclosed by brackets "[]" replaced with your own identifying information: Portions Copyright [yyyy] [name of copyright owner]
-.TH STTY 1 "Jan 04, 2014"
+.\"
+.TH STTY 1 "Aug 13, 2021"
 .SH NAME
 stty \- set the options for a terminal
 .SH SYNOPSIS
@@ -46,7 +80,6 @@ stty \- set the options for a terminal
 .fi
 
 .SH DESCRIPTION
-.sp
 .LP
 The \fBstty\fR utility sets certain terminal I/O options for the device that is
 the current standard input. Without arguments, \fBstty\fR reports the settings
@@ -59,10 +92,10 @@ CTRL-h. In this case, recall that CTRL-h is the same as the BACKSPACE key). The
 sequence \fB^@\fR means that an option has a null value.
 .sp
 .LP
-See \fBtermio\fR(7I) for detailed information about the modes listed from
+See \fBtermio\fR(4I) for detailed information about the modes listed from
 \fBControl\fR \fBModes\fR through \fBLocal Modes\fR. For detailed information
 about the modes listed under \fBHardware\fR \fBFlow\fR \fBControl\fR
-\fBModes\fR and \fBClock Modes\fR, see \fBtermiox\fR(7I).
+\fBModes\fR and \fBClock Modes\fR, see \fBtermiox\fR(4I).
 .sp
 .LP
 Operands described in the \fBCombination Modes\fR section are implemented using
@@ -70,7 +103,6 @@ options in the earlier sections. Notice that many combinations of options make
 no sense, but no sanity checking is performed. Hardware flow control and clock
 modes options might not be supported by all hardware interfaces.
 .SH OPTIONS
-.sp
 .LP
 The following options are supported:
 .sp
@@ -94,11 +126,9 @@ it. Otherwise, it emits termio-type output.
 .RE
 
 .SH OPERANDS
-.sp
 .LP
 The following \fImode\fR operands are supported:
 .SS "Control Modes"
-.sp
 .ne 2
 .na
 \fB\fBparenb\fR(\fB-parenb\fR)\fR
@@ -132,7 +162,7 @@ Select odd (even) parity, or mark (space) parity if \fBparext\fR is enabled.
 \fB\fBcs5\fR \fBcs6\fR \fBcs7\fR \fBcs8\fR\fR
 .ad
 .RS 24n
-Select character size (see \fBtermio\fR(7I)).
+Select character size (see \fBtermio\fR(4I)).
 .RE
 
 .sp
@@ -238,6 +268,18 @@ bytes per character, and screen or display columns per character.
 .na
 \fB153600 230400 307200 460800\fR
 .ad
+.br
+.na
+\fB921600 1000000 1152000 1500000 \fR
+.ad
+.br
+.na
+\fB2000000 2500000 3000000 3500000 \fR
+.ad
+.br
+.na
+\fB4000000
+.ad
 .sp .6
 .RS 4n
 Set terminal baud rate to the number given, if possible. (All speeds are not
@@ -260,6 +302,18 @@ supported by all hardware interfaces.)
 .br
 .na
 \fB153600 230400 307200 460800\fR
+.ad
+.br
+.na
+\fB921600 1000000 1152000 1500000 \fR
+.ad
+.br
+.na
+\fB2000000 2500000 3000000 3500000 \fR
+.ad
+.br
+.na
+\fB4000000
 .ad
 .sp .6
 .RS 4n
@@ -285,6 +339,18 @@ the input baud rate is specified by the value of the output baud rate.
 .na
 \fB153600 230400 307200 460800\fR
 .ad
+.br
+.na
+\fB921600 1000000 1152000 1500000 \fR
+.ad
+.br
+.na
+\fB2000000 2500000 3000000 3500000 \fR
+.ad
+.br
+.na
+\fB4000000
+.ad
 .sp .6
 .RS 4n
 Set terminal output baud rate to the number given, if possible. (Not all
@@ -293,7 +359,6 @@ the line is hung up immediately.
 .RE
 
 .SS "Input Modes"
-.sp
 .ne 2
 .na
 \fB\fBignbrk\fR (\fB-ignbrk\fR)\fR
@@ -326,7 +391,7 @@ Ignore (do not ignore) parity errors.
 \fB\fBparmrk\fR (\fB-parmrk\fR)\fR
 .ad
 .RS 22n
-Mark (do not mark) parity errors (see \fBtermio\fR(7I)).
+Mark (do not mark) parity errors (see \fBtermio\fR(4I)).
 .RE
 
 .sp
@@ -427,7 +492,6 @@ stream overflows.
 .RE
 
 .SS "Output Modes"
-.sp
 .ne 2
 .na
 \fB\fBopost\fR (\fB-opost\fR)\fR
@@ -506,7 +570,7 @@ Fill characters are DELs (NULs).
 \fB\fBcr0 cr1 cr2 cr3\fR\fR
 .ad
 .RS 23n
-Select style of delay for carriage returns (see \fBtermio\fR(7I)).
+Select style of delay for carriage returns (see \fBtermio\fR(4I)).
 .RE
 
 .sp
@@ -515,7 +579,7 @@ Select style of delay for carriage returns (see \fBtermio\fR(7I)).
 \fB\fBnl0 nl1\fR\fR
 .ad
 .RS 23n
-Select style of delay for line-feeds (see \fBtermio\fR(7I)).
+Select style of delay for line-feeds (see \fBtermio\fR(4I)).
 .RE
 
 .sp
@@ -524,7 +588,7 @@ Select style of delay for line-feeds (see \fBtermio\fR(7I)).
 \fB\fBtab0 tab1 tab2 tab3\fR\fR
 .ad
 .RS 23n
-Select style of delay for horizontal tabs (see \fBtermio\fR(7I)).
+Select style of delay for horizontal tabs (see \fBtermio\fR(4I)).
 .RE
 
 .sp
@@ -533,7 +597,7 @@ Select style of delay for horizontal tabs (see \fBtermio\fR(7I)).
 \fB\fBbs0 bs1\fR\fR
 .ad
 .RS 23n
-Select style of delay for backspaces (see \fBtermio\fR(7I)).
+Select style of delay for backspaces (see \fBtermio\fR(4I)).
 .RE
 
 .sp
@@ -542,7 +606,7 @@ Select style of delay for backspaces (see \fBtermio\fR(7I)).
 \fB\fBff0 ff1\fR\fR
 .ad
 .RS 23n
-Select style of delay for form-feeds (see \fBtermio\fR(7I)).
+Select style of delay for form-feeds (see \fBtermio\fR(4I)).
 .RE
 
 .sp
@@ -551,11 +615,10 @@ Select style of delay for form-feeds (see \fBtermio\fR(7I)).
 \fB\fBvt0 vt1\fR\fR
 .ad
 .RS 23n
-Select style of delay for vertical tabs (see \fBtermio\fR(7I)).
+Select style of delay for vertical tabs (see \fBtermio\fR(4I)).
 .RE
 
 .SS "Local Modes"
-.sp
 .ne 2
 .na
 \fB\fBisig\fR(\fB-isig\fR)\fR
@@ -738,7 +801,6 @@ Use application mode (use line mode) on a synchronous line.
 .RE
 
 .SS "Hardware Flow Control Modes"
-.sp
 .ne 2
 .na
 \fB\fBrtsxoff\fR (\fB-rtsxoff\fR)\fR
@@ -784,7 +846,6 @@ Enable (disable) isochronous hardware flow control on input.
 .RE
 
 .SS "Clock Modes"
-.sp
 .ne 2
 .na
 \fB\fBxcibrg\fR\fR
@@ -941,7 +1002,6 @@ timing (DTE source) lead, CCITT V.24 circuit 128, no EIA-232-D pin.
 .RE
 
 .SS "Control Assignments"
-.sp
 .ne 2
 .na
 \fB\fIcontrol-character\fR \fIc\fR\fR
@@ -956,10 +1016,10 @@ Set \fIcontrol-character\fR to \fIc\fR, where:
 .ad
 .RS 21n
 is \fBctab\fR, \fBdiscard\fR, \fBdsusp\fR, \fBeof\fR, \fBeol\fR, \fBeol2\fR,
-\fBerase\fR, \fBintr\fR, \fBkill\fR, \fBlnext\fR, \fBquit\fR, \fBreprint\fR,
-\fBstart\fR, \fBstop\fR, \fBsusp\fR, \fBstatus\fR, \fBswtch\fR, or \fBwerase\fR
-(\fBctab\fR is used with \fB-stappl\fR, see \fBtermio\fR(7I)). For information
-on \fBswtch\fR, see NOTES.
+\fBerase\fR, \fBerase2\fR, \fBintr\fR, \fBkill\fR, \fBlnext\fR, \fBquit\fR,
+\fBreprint\fR, \fBstart\fR, \fBstop\fR, \fBsusp\fR, \fBstatus\fR, \fBswtch\fR,
+or \fBwerase\fR (\fBctab\fR is used with \fB-stappl\fR, see \fBtermio\fR(4I)).
+For information on \fBswtch\fR, see NOTES.
 .RE
 
 .sp
@@ -1025,7 +1085,6 @@ Set line discipline to \fIi\fR ( \fB0\fR< \fIi\fR <\fB127\fR).
 .RE
 
 .SS "Combination Modes"
-.sp
 .ne 2
 .na
 \fB\fIsaved\fR \fIsettings\fR\fR
@@ -1125,7 +1184,6 @@ stty cs8 -icanon min 1 time 0 -isig -xcase \e
 .RE
 
 .SS "/usr/bin/stty, /usr/xpg6/bin/stty"
-.sp
 .ne 2
 .na
 \fB\fBnl\fR (\fB-nl\fR)\fR
@@ -1136,7 +1194,6 @@ Unset (set) \fBicrnl\fR, \fBonlcr\fR. In addition \fB-nl\fR unsets \fBinlcr\fR,
 .RE
 
 .SS "/usr/xpg4/bin/stty"
-.sp
 .ne 2
 .na
 \fB\fBnl\fR (\fB-nl\fR)\fR
@@ -1180,7 +1237,8 @@ Preserve (expand to spaces) tabs when printing.
 \fB\fBek\fR\fR
 .ad
 .RS 24n
-Reset ERASE and KILL characters back to normal DEL and CTRL-u, respectively.
+Reset ERASE, ERASE2, and KILL characters back to normal DEL, CTRL-h, and CTRL-u,
+respectively.
 .RE
 
 .sp
@@ -1214,7 +1272,6 @@ Set normal asynchronous communications where clock settings are \fBxcibrg\fR,
 .RE
 
 .SS "Window Size"
-.sp
 .ne 2
 .na
 \fB\fBrows\fR \fIn\fR\fR
@@ -1261,7 +1318,6 @@ Set horizontal window size to \fIn\fR pixels.
 .RE
 
 .SH USAGE
-.sp
 .LP
 The \fB-g\fR flag is designed to facilitate the saving and restoring of
 terminal state from the shell level. For example, a program can:
@@ -1281,13 +1337,11 @@ stty $saveterm             # restore terminal state
 Since the \fB-a\fR format is so loosely specified, scripts that save and
 restore terminal settings should use the \fB-g\fR option.
 .SH ENVIRONMENT VARIABLES
-.sp
 .LP
-See \fBenviron\fR(5) for descriptions of the following environment variables
+See \fBenviron\fR(7) for descriptions of the following environment variables
 that affect the execution of \fBstty\fR: \fBLANG\fR, \fBLC_ALL\fR,
 \fBLC_CTYPE\fR, \fBLC_MESSAGES\fR, and \fBNLSPATH\fR.
 .SH EXIT STATUS
-.sp
 .LP
 The following exit values are returned:
 .sp
@@ -1309,13 +1363,9 @@ An error occurred.
 .RE
 
 .SH ATTRIBUTES
-.sp
 .LP
-See \fBattributes\fR(5) for descriptions of the following attributes:
+See \fBattributes\fR(7) for descriptions of the following attributes:
 .SS "/usr/xpg4/bin/stty"
-.sp
-
-.sp
 .TS
 box;
 c | c
@@ -1324,13 +1374,10 @@ ATTRIBUTE TYPE	ATTRIBUTE VALUE
 _
 Interface Stability	Committed
 _
-Standard	See \fBstandards\fR(5).
+Standard	See \fBstandards\fR(7).
 .TE
 
 .SS "/usr/xpg6/bin/stty"
-.sp
-
-.sp
 .TS
 box;
 c | c
@@ -1339,17 +1386,22 @@ ATTRIBUTE TYPE	ATTRIBUTE VALUE
 _
 Interface Stability	Committed
 _
-Standard	See \fBstandards\fR(5).
+Standard	See \fBstandards\fR(7).
 .TE
 
 .SH SEE ALSO
-.sp
 .LP
-\fBtabs\fR(1), \fBioctl\fR(2), \fBwrite\fR(2), \fBgetwidth\fR(3C),
-\fBattributes\fR(5), \fBenviron\fR(5), \fBstandards\fR(5), \fBldterm\fR(7M),
-\fBtermio\fR(7I), \fBtermiox\fR(7I)
+.BR tabs (1),
+.BR ioctl (2),
+.BR write (2),
+.BR getwidth (3C),
+.BR termio (4I),
+.BR termiox (4I),
+.BR ldterm (4M),
+.BR attributes (7),
+.BR environ (7),
+.BR standards (7)
 .SH NOTES
-.sp
 .LP
 Solaris does not support any of the actions implied by \fBswtch\fR, which was
 used by the \fBsxt\fR driver on System V release 4. Solaris allows the

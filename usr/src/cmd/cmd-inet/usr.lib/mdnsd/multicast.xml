@@ -4,6 +4,8 @@
  Copyright 2009 Sun Microsystems, Inc.  All rights reserved.
  Use is subject to license terms.
 
+ Copyright 2016 Hans Rosenfeld <rosenfeld@grumpf.hope-2000.org>
+
  CDDL HEADER START
 
  The contents of this file are subject to the terms of the
@@ -75,7 +77,7 @@
 		    name='start'
 		    exec='/usr/lib/inet/mdnsd'
 		    timeout_seconds='60'>
-		    <method_context>
+		    <method_context working_directory='/'>
 			    <method_credential user='root' group='root' />
 		    </method_context>
 		</exec_method>
@@ -88,9 +90,9 @@
 
 		<!-- to start stop mdns service -->
 		<property_group name='general' type='framework'>
-			<propval name='action_authorization' type='astring' 
+			<propval name='action_authorization' type='astring'
 				value='solaris.smf.manage.mdns' />
-			<propval name='value_authorization' type='astring' 
+			<propval name='value_authorization' type='astring'
 				value='solaris.smf.manage.mdns' />
 		</property_group>
 
@@ -127,15 +129,21 @@
 
 		<property_group name='firewall_config' type='com.sun,fw_configuration'>
 			<propval name='policy' type='astring' value='use_global' />
+			<propval name='block_policy' type='astring'
+				value='use_global' />
 			<propval name='apply_to' type='astring' value='' />
+			<propval name='apply_to_6' type='astring' value='' />
 			<propval name='exceptions' type='astring' value='' />
+			<propval name='exceptions_6' type='astring' value='' />
+			<propval name='target' type='astring' value='' />
+			<propval name='target_6' type='astring' value='' />
 			<propval name='value_authorization' type='astring'
 			    value='solaris.smf.value.firewall.config' />
 		</property_group>
-	
+
 	</instance>
 
-        <stability value='Unstable' />
+	<stability value='Unstable' />
 
 	<template>
 
@@ -144,7 +152,7 @@
 		</loctext>
 	</common_name>
 	<documentation>
-		<manpage title='mdnsd' section='1M' />
+		<manpage title='mdnsd' section='8' />
 		<doc_link name='Service Discovery OpenSolaris Project Page'
 		uri="http://opensolaris.org/os/project/nwam/service-discovery/"/>
 	</documentation>

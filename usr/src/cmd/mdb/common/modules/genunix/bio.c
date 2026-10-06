@@ -22,9 +22,8 @@
 /*
  * Copyright 2003 Sun Microsystems, Inc.  All rights reserved.
  * Use is subject to license terms.
+ * Copyright 2025 Oxide Computer Company
  */
-
-#pragma ident	"%Z%%M%	%I%	%E% SMI"
 
 #include <mdb/mdb_modapi.h>
 #include <sys/buf.h>
@@ -52,7 +51,7 @@ buf_walk_init(mdb_walk_state_t *wsp)
 
 	buf_walk_t *bwp;
 
-	if (wsp->walk_addr != NULL) {
+	if (wsp->walk_addr != 0) {
 		mdb_warn("only global buf walk supported\n");
 		return (WALK_ERR);
 	}
@@ -101,7 +100,7 @@ buf_walk_step(mdb_walk_state_t *wsp)
 	 * hbuf itself, advance to the next hash bucket.  When we reach
 	 * bw_nhbufs, we're done.
 	 */
-	while (wsp->walk_addr == NULL || wsp->walk_addr == (bwp->bw_hbufbase +
+	while (wsp->walk_addr == 0 || wsp->walk_addr == (bwp->bw_hbufbase +
 	    bwp->bw_hbufi * sizeof (struct hbuf))) {
 
 		if (++bwp->bw_hbufi == bwp->bw_nhbufs)
@@ -145,15 +144,12 @@ bufpagefind(uintptr_t addr, uint_t flags, int argc, const mdb_arg_t *argv)
 	if (argc != 1)
 		return (DCMD_USAGE);
 
-	if (argv->a_type == MDB_TYPE_IMMEDIATE)
-		arg = (uintptr_t)argv->a_un.a_val;
-	else
-		arg = (uintptr_t)mdb_strtoull(argv->a_un.a_str);
+	arg = (uintptr_t)mdb_argtoull(argv);
 
 	if (mdb_vread(&b, sizeof (buf_t), b_addr) == -1)
 		return (DCMD_ERR);
 
-	for (addr = (uintptr_t)b.b_pages; addr != NULL;
+	for (addr = (uintptr_t)b.b_pages; addr != 0;
 	    addr = (uintptr_t)p.p_next) {
 
 		if (addr == arg) {

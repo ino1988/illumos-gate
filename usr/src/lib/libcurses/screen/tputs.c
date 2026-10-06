@@ -22,14 +22,13 @@
 /*
  * Copyright 1997 Sun Microsystems, Inc.  All rights reserved.
  * Use is subject to license terms.
+ * Copyright (c) 2016 by Delphix. All rights reserved.
  */
 
 /*	Copyright (c) 1988 AT&T	*/
 /*	  All Rights Reserved  	*/
 
 /* Copyright (c) 1979 Regents of the University of California */
-
-#pragma ident	"%Z%%M%	%I%	%E% SMI"
 
 /*LINTLIBRARY*/
 
@@ -62,7 +61,7 @@ _tpad(char *cp, int affcnt, int (*outc)(char x))
 	 * in their terminfo entries, as that would break compatibility.
 	 * We therefore, do it here.
 	 *
-	 * When compatibility is to be broken, his will go away
+	 * When compatibility is to be broken, it will go away
 	 * and users will be informed that they MUST use mandatory
 	 * padding for flash and bell.
 	 */

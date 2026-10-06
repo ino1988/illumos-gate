@@ -20,6 +20,7 @@
 #
 # Copyright 2009 Sun Microsystems, Inc.  All rights reserved.
 # Use is subject to license terms.
+# Copyright 2016 Joyent, Inc.
 #
 # cmd/devfsadm/Makefile
 #
@@ -47,6 +48,11 @@ ROOTETCDEVFILES=$(ETCDEVFILES:%=$(ROOTETCDEV)/%)
 $(ROOTETCDEV) :=	DIRMODE=	755
 $(ROOTETCDEVFILES) :=	FILEMODE = 0644
 
+USRINCLUDEFILES=devfsadm.h
+ROOTUSRINCLUDE= $(ROOT)/usr/include
+ROOTUSRINCLUDEFILES=$(USRINCLUDEFILES:%=$(ROOTUSRINCLUDE)/%)
+$(ROOTUSRINCLUDEFILES) :=	FILEMODE = 0644
+
 .KEEP_STATE:
 
 all:	$(SUBDIRS) $(ETCDEVFILES)
@@ -56,12 +62,18 @@ clean lint _msg:	$(SUBDIRS)
 clobber: $(SUBDIRS)
 	$(RM) $(ROOTETCDEVFILES)
 
-install: $(SUBDIRS) $(ROOTETCDEFAULTFILES) $(ROOTETCDEVFILES)
+install_h: $(ROOTUSRINCLUDEFILES)
+
+install: $(SUBDIRS) install_h $(ROOTETCDEFAULTFILES) $(ROOTETCDEVFILES)
+
 
 $(ROOTETCDEV):
 	$(INS.dir)
 
 $(ROOTETCDEV)/% : % $(ROOTETCDEV)
+	$(INS.file)
+
+$(ROOTUSRINCLUDE)/% : %
 	$(INS.file)
 
 $(SUBDIRS):	FRC

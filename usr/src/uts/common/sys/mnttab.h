@@ -19,14 +19,14 @@
  * CDDL HEADER END
  */
 /*	Copyright (c) 1984, 1986, 1987, 1988, 1989 AT&T	*/
-/*	  All Rights Reserved  	*/
+/*	  All Rights Reserved	*/
 
 
 /*
- * Copyright 2014 Garrett D'Amore <garrett@damore.org>
- *
  * Copyright 2009 Sun Microsystems, Inc.  All rights reserved.
  * Use is subject to license terms.
+ * Copyright 2014 Garrett D'Amore <garrett@damore.org>
+ * Copyright 2025 Edgecast Cloud LLC.
  */
 
 #ifndef _SYS_MNTTAB_H
@@ -80,7 +80,7 @@ struct extmnttab {
 
 struct mntentbuf {
 	struct	extmnttab *mbuf_emp;
-	size_t 	mbuf_bufsize;
+	size_t	mbuf_bufsize;
 	char	*mbuf_buf;
 };
 
@@ -89,7 +89,7 @@ extern void	resetmnttab(FILE *);
 extern int	getmntent(FILE *, struct mnttab *);
 extern int	getextmntent(FILE *, struct extmnttab *, size_t);
 extern int	getmntany(FILE *, struct mnttab *, struct mnttab *);
-extern char	*hasmntopt(struct mnttab *, char *);
+extern char	*hasmntopt(const struct mnttab *, const char *);
 extern char	*mntopt(char **);
 #endif
 

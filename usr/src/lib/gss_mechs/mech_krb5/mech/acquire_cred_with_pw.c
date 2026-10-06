@@ -3,8 +3,6 @@
  * Use is subject to license terms.
  */
 
-#pragma ident	"%Z%%M%	%I%	%E% SMI"
-
 /*
  * Copyright 2000 by the Massachusetts Institute of Technology.
  * All Rights Reserved.
@@ -124,7 +122,7 @@ krb5_gss_cred_id_rec *cred;
 
 	cred->ccache = NULL;
 
-	if (password == NULL || password->length == NULL ||
+	if (password == NULL || password->length == 0 ||
 	    password->value == NULL)
 		pw = strdup("");
 	else if (*((char *)password->value + (password->length - 1)) == '\0')

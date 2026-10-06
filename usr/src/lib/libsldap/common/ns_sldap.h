@@ -20,6 +20,7 @@
  */
 /*
  * Copyright (c) 1999, 2010, Oracle and/or its affiliates. All rights reserved.
+ * Copyright 2017 Nexenta Systems, Inc.  All rights reserved.
  */
 
 
@@ -581,7 +582,7 @@ typedef struct ns_standalone_conf {
  * and naming context. During all further operations on behalf
  * of the application requested a standalone schema libsldap will use
  * the information obtained by __ns_ldap_initStandalone() instead of
- * door_call(3C)ing ldap_cachemgr(1M).
+ * door_call(3C)ing ldap_cachemgr(8).
  *
  * conf
  * 	A structure describing where and in which way to obtain all the
@@ -811,6 +812,12 @@ int __ns_ldap_freeError(
 int  __ns_ldap_uid2dn(
 	const char *uid,
 	char **userDN,
+	const ns_cred_t *cred,
+	ns_ldap_error_t ** errorp);
+
+int  __ns_ldap_dn2uid(
+	const char *dn,
+	char **userID,
 	const ns_cred_t *cred,
 	ns_ldap_error_t ** errorp);
 

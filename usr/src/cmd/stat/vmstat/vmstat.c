@@ -11,6 +11,10 @@
 /* from UCB 5.4 5/17/86 */
 /* from SunOS 4.1, SID 1.31 */
 
+/*
+ * Copyright (c) 2018, Joyent, Inc.
+ */
+
 #include <stdio.h>
 #include <stdlib.h>
 #include <stdarg.h>
@@ -155,21 +159,19 @@ main(int argc, char **argv)
 
 	if (argc > 0) {
 		long interval;
-		char *endptr;
+		const char *errstr;
 
-		errno = 0;
-		interval = strtol(argv[0], &endptr, 10);
+		interval = strtonum(argv[0], 1, MAXINT, &errstr);
 
-		if (errno > 0 || *endptr != '\0' || interval <= 0 ||
-		    interval > MAXINT)
+		if (errstr != NULL)
 			usage();
 		period_n = (hrtime_t)interval * NANOSEC;
 		if (period_n <= 0)
 			usage();
 		iter = MAXLONG;
 		if (argc > 1) {
-			iter = strtol(argv[1], NULL, 10);
-			if (errno > 0 || *endptr != '\0' || iter <= 0)
+			iter = strtonum(argv[1], 1, MAXLONG, &errstr);
+			if (errstr != NULL)
 				usage();
 		} else
 			forever = 1;
@@ -224,9 +226,6 @@ show_disk(void *v1, void *v2, void *d)
 	hrtime_t oldtime = new->is_crtime;
 	double hr_etime;
 	double reads, writes;
-
-	if (new == NULL)
-		return;
 
 	if (old)
 		oldtime = old->is_stats.wlastupdate;

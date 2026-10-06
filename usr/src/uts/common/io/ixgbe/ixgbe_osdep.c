@@ -24,10 +24,11 @@
 /*
  * Copyright 2009 Sun Microsystems, Inc.  All rights reserved.
  * Use is subject to license terms.
+ * Copyright (c) 2017, Joyent, Inc.
+ * Copyright 2026 Oxide Computer Company
  */
 
-#include "ixgbe_osdep.h"
-#include "ixgbe_api.h"
+#include "ixgbe_sw.h"
 
 uint16_t
 ixgbe_read_pci_cfg(struct ixgbe_hw *hw, uint32_t reg)
@@ -39,4 +40,87 @@ void
 ixgbe_write_pci_cfg(struct ixgbe_hw *hw, uint32_t reg, uint32_t val)
 {
 	pci_config_put16(OS_DEP(hw)->cfg_handle, reg, val);
+}
+
+/*
+ * This is our last line of defense against a hardware device that has decided
+ * to somehow disappear without our knowledge of it. To try and deal with this,
+ * we'll read the status register and see if it returns all 1s, indicating an
+ * invalid read. Note the status register is defined to have bits in all current
+ * revisions that are hardwired to zero.
+ */
+boolean_t
+ixgbe_removed(struct ixgbe_hw *hw)
+{
+	uint32_t val;
+
+	val = IXGBE_READ_REG(hw, IXGBE_STATUS);
+	if (val == PCI_EINVAL32) {
+		ixgbe_t *ixgbe = OS_DEP(hw)->ixgbe;
+
+		ixgbe_error(ixgbe, "failed to read status register: device "
+		    "may be gone");
+		if (ixgbe->ixgbe_ks != NULL) {
+			ixgbe_stat_t *s = ixgbe->ixgbe_ks->ks_data;
+			s->dev_gone.value.ui64++;
+		}
+		return (B_TRUE);
+	}
+	return (B_FALSE);
+}
+
+void *
+ixgbe_malloc(struct ixgbe_hw *hw, size_t len)
+{
+	VERIFY3U(len, !=, 0);
+	return (kmem_alloc(len, KM_SLEEP));
+}
+
+/*
+ * Simple calloc that panics on overflow.
+ */
+void *
+ixgbe_calloc(struct ixgbe_hw *hw, size_t nelem, size_t eltsize)
+{
+	VERIFY3U(nelem, !=, 0);
+	VERIFY3U(eltsize, !=, 0);
+
+	size_t total = nelem * eltsize;
+	VERIFY3U(total / nelem, ==, eltsize);
+
+	return (kmem_zalloc(total, KM_SLEEP));
+}
+
+void
+ixgbe_free(struct ixgbe_hw *hw, void *buf, size_t len)
+{
+	VERIFY3U(len, !=, 0);
+	return (kmem_free(buf, len));
+}
+
+void
+ixgbe_init_lock(struct ixgbe_hw *hw, struct ixgbe_lock *lock)
+{
+	ixgbe_t *ixgbe = OS_DEP(hw)->ixgbe;
+
+	mutex_init(&lock->il_mutex, NULL, MUTEX_DRIVER,
+	    DDI_INTR_PRI(ixgbe->intr_pri));
+}
+
+void
+ixgbe_destroy_lock(struct ixgbe_lock *lock)
+{
+	mutex_destroy(&lock->il_mutex);
+}
+
+void
+ixgbe_acquire_lock(struct ixgbe_lock *lock)
+{
+	mutex_enter(&lock->il_mutex);
+}
+
+void
+ixgbe_release_lock(struct ixgbe_lock *lock)
+{
+	mutex_exit(&lock->il_mutex);
 }

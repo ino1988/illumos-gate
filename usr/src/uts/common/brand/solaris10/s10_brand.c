@@ -22,6 +22,7 @@
 /*
  * Copyright (c) 2013, OmniTI Computer Consulting, Inc. All rights reserved.
  * Copyright (c) 2009, 2010, Oracle and/or its affiliates. All rights reserved.
+ * Copyright 2019 Joyent, Inc.
  */
 
 #include <sys/errno.h>
@@ -60,7 +61,7 @@ void	s10_forklwp(klwp_t *, klwp_t *);
 void	s10_freelwp(klwp_t *);
 void	s10_lwpexit(klwp_t *);
 int	s10_elfexec(vnode_t *, execa_t *, uarg_t *, intpdata_t *, int,
-	long *, int, caddr_t, cred_t *, int);
+		size_t *, int, caddr_t, cred_t *, int);
 void	s10_sigset_native_to_s10(sigset_t *);
 void	s10_sigset_s10_to_native(sigset_t *);
 
@@ -195,7 +196,7 @@ s10_amd64_correct_fsreg(klwp_t *l)
 	if (lwp_getdatamodel(l) == DATAMODEL_NATIVE) {
 		kpreempt_disable();
 		l->lwp_pcb.pcb_fs = LWPFS_SEL;
-		l->lwp_pcb.pcb_rupdate = 1;
+		PCB_SET_UPDATE_SEGS(&l->lwp_pcb);
 		lwptot(l)->t_post_sys = 1;	/* Guarantee update_sregs() */
 		kpreempt_enable();
 	}
@@ -389,8 +390,8 @@ s10_init_brand_data(zone_t *zone)
 
 int
 s10_elfexec(vnode_t *vp, execa_t *uap, uarg_t *args, intpdata_t *idatap,
-	int level, long *execsz, int setid, caddr_t exec_file, cred_t *cred,
-	int brand_action)
+    int level, size_t *execsz, int setid, caddr_t exec_file, cred_t *cred,
+    int brand_action)
 {
 	return (brand_solaris_elfexec(vp, uap, args, idatap, level, execsz,
 	    setid, exec_file, cred, brand_action, &s10_brand, S10_BRANDNAME,
@@ -500,7 +501,9 @@ _init(void)
 	s10_emulation_table[S10_SYS_dup] = 1;			/*  41 */
 	s10_emulation_table[S10_SYS_pipe] = 1;			/*  42 */
 	s10_emulation_table[SYS_ioctl] = 1;			/*  54 */
+	s10_emulation_table[SYS_fdsync] = 1;			/*  58 */
 	s10_emulation_table[SYS_execve] = 1;			/*  59 */
+	s10_emulation_table[SYS_fcntl] = 1;			/*  62 */
 	s10_emulation_table[SYS_acctctl] = 1;			/*  71 */
 	s10_emulation_table[S10_SYS_issetugid] = 1;		/*  75 */
 	s10_emulation_table[S10_SYS_fsat] = 1;			/*  76 */

@@ -46,7 +46,6 @@
 #undef NEED_PSELECT
 #undef HAVE_SA_LEN
 #undef HAVE_MINIMUM_IFREQ
-#define NEED_DAEMON 1
 #undef NEED_STRSEP
 #undef NEED_STRERROR
 #ifdef NEED_STRERROR
@@ -292,10 +291,6 @@ extern const struct in6_addr isc_in6addr_loopback;
 #define MAX(x,y) (((x) >= (y)) ? (x) : (y))
 #endif
 
-#ifdef NEED_DAEMON
-int daemon(int nochdir, int noclose);
-#endif
-
 #ifdef NEED_STRSEP
 char * strsep(char **stringp, const char *delim);
 #endif
@@ -433,7 +428,7 @@ int getnetgrent_r(NGR_R_CONST char **machinep, NGR_R_CONST char **userp,
 		  NGR_R_CONST char **domainp, NGR_R_ARGS);
 #endif
 
-/* setnetgrent and endnetgrent are defined in sunw_port_after.h 
+/* setnetgrent and endnetgrent are defined in sunw_port_after.h
 #ifdef SETNETGRENT_ARGS
 void setnetgrent(SETNETGRENT_ARGS);
 #else

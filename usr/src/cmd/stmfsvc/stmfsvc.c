@@ -70,7 +70,7 @@ optionTbl_t longOptions[] = {
 subCommandProps_t subcommands[] = {
 	{"start", svcStart, NULL, NULL, NULL, OPERAND_NONE, NULL},
 	{"stop", svcStop, NULL, NULL, NULL, OPERAND_NONE, NULL},
-	{NULL, 0, NULL, NULL, 0, NULL, 0, NULL}
+	{NULL, NULL, NULL, NULL, NULL, 0, NULL, NULL}
 };
 
 /* globals */
@@ -172,11 +172,11 @@ svcStart(int operandLen, char *operands[], cmdOptions_t *options,
 				    gettext("For information on reverting the "
 				    "stmf:default instance to a previously "
 				    "running configuration see the man page "
-				    "for svccfg(1M)"));
+				    "for svccfg(8)"));
 				(void) fprintf(stderr, "%s: %s\n", cmdName,
 				    gettext("After reverting the instance "
 				    "you must clear the service maintenance "
-				    "state. See the man page for svcadm(1M)"));
+				    "state. See the man page for svcadm(8)"));
 				break;
 		}
 		return (1);

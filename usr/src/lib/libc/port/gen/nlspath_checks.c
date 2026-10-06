@@ -24,8 +24,6 @@
  * Use is subject to license terms.
  */
 
-#pragma ident	"%Z%%M%	%I%	%E% SMI"
-
 #include "lint.h"
 #include "mtlib.h"
 #include <string.h>
@@ -231,7 +229,7 @@ nls_safe_open(const char *path, struct stat64 *statbuf, int *trust, int safe)
  * allows one use, but we don't want to break existing functional code,
  * even if it's buggy.
  */
-#define	STORE(buf, size, arg, val) 	if (arg * FORMAT_SIZE + 1 >= size ||\
+#define	STORE(buf, size, arg, val)	if (arg * FORMAT_SIZE + 1 >= size ||\
 					    (strict ? \
 					    (buf[arg*FORMAT_SIZE] != '\0' && \
 					    buf[arg*FORMAT_SIZE] != val) \
@@ -270,7 +268,7 @@ extract_format(const char *fmt, char *norm, size_t sz, int strict)
 
 	(void) memset(norm, '\0', sz);
 
-#ifdef DEBUG
+#ifdef NLS_DEBUG
 	printf("Format \"%s\" canonical form: ", fmt);
 #endif
 
@@ -462,7 +460,7 @@ done:
 			norm[arg*FORMAT_SIZE + 1] = flag;
 		}
 	}
-#ifdef DEBUG
+#ifdef NLS_DEBUG
 	for (t = 0; t < maxarg * FORMAT_SIZE; t += FORMAT_SIZE) {
 		printf("%c(%d)", norm[t], norm[t+1]);
 	}
@@ -549,7 +547,8 @@ check_format(const char *org, const char *new, int strict)
 
 			nlen *= FORMAT_SIZE;
 
-			for (n = nfmt; n = memchr(n, 'n', nfmt + nlen - n);
+			for (n = nfmt;
+			    (n = memchr(n, 'n', nfmt + nlen - n)) != NULL;
 			    n++) {
 				int off = (n - nfmt);
 
@@ -626,7 +625,7 @@ clean_env(void)
 	else if (issetugid()) {			/* Found and set-uid, clean */
 		int off = 1;
 
-		for (p++; (p[-off] = p[0]) != '\0'; p++)
+		for (p++; (p[-off] = p[0]) != NULL; p++)
 			if (**p == 'N' && nvmatch("NLSPATH", *p) != NULL)
 				off++;
 

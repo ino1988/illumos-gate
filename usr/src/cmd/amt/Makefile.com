@@ -26,16 +26,12 @@
 
 PROG=	amt
 OBJS=	amt.o
-SRCS=	$(OBJS:%.o=../%.c)
 
 include ../../Makefile.cmd
 
 LDLIBS +=	-lelf
 
-LINTFLAGS +=	-erroff=E_NAME_USED_NOT_DEF2
-LINTFLAGS64 +=	-erroff=E_NAME_USED_NOT_DEF2
-
-CERRWARN +=	-_gcc=-Wno-uninitialized
+CERRWARN +=	$(CNOWARN_UNINIT)
 
 CLEANFILES	+= $(PROG) $(OBJS)
 
@@ -46,8 +42,6 @@ all: $(PROG)
 $(PROG): $(OBJS)
 	$(LINK.c) $(OBJS) -o $@ $(LDLIBS)
 	$(POST_PROCESS)
-
-lint:	lint_SRCS
 
 %.o:	../%.c
 	$(COMPILE.c) $<

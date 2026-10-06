@@ -24,6 +24,8 @@
  *
  * Copyright 2010 Sun Microsystems, Inc.  All rights reserved.
  * Use is subject to license terms.
+ *
+ * Copyright 2021 RackTop Systems, Inc.
  */
 
 #include <sys/types.h>
@@ -31,10 +33,6 @@
 #include <errno.h>
 #include <fcntl.h>
 #include <synch.h>
-
-#include <kmfapiP.h>
-#include <ber_der.h>
-/* NSS related headers */
 
 #include <mps/nss.h>
 #include <mps/cert.h>
@@ -50,6 +48,9 @@
 #include <mps/pkcs12.h>
 #include <mps/p12plcy.h>
 #include <mps/prerror.h>
+
+#include <kmfapiP.h>
+#include <ber_der.h>
 
 #define	NSS_OK		0
 
@@ -1608,7 +1609,7 @@ p12u_ucs2_ascii_conversion_function(
 	unsigned int	*outBufLen,
 	PRBool		swapBytes)
 {
-	SECItem it = { 0 };
+	SECItem it = { siBuffer, NULL, 0 };
 	SECItem *dup = NULL;
 	PRBool ret;
 
@@ -1774,7 +1775,7 @@ NSS_ExportPK12(KMF_HANDLE_T handle, int numattr, KMF_ATTRIBUTE *attrlist)
 	CERTCertificate *nsscert = NULL;
 	CERTCertListNode* node = NULL;
 	PK11SlotInfo	*slot = NULL;
-	SECItem pwitem = {NULL, 0};
+	SECItem pwitem = { siBuffer, NULL, 0 };
 	KMF_CREDENTIAL *cred = NULL;
 	KMF_CREDENTIAL *p12cred = NULL;
 	char *certlabel = NULL;
@@ -2144,12 +2145,12 @@ NSS_StoreKey(KMF_HANDLE_T handle,
 	KMF_RETURN rv = KMF_OK;
 	KMF_HANDLE *kmfh = (KMF_HANDLE *)handle;
 	PK11SlotInfo *nss_slot = NULL;
-	KMF_CREDENTIAL cred = {NULL, 0};
+	KMF_CREDENTIAL cred = { NULL, 0 };
 	KMF_KEY_HANDLE *pubkey = NULL, *prikey = NULL;
 	KMF_RAW_KEY_DATA *rawkey = NULL;
 	char *keylabel = NULL;
 	SECStatus ckrv = SECSuccess;
-	SECItem nickname = {NULL, 0};
+	SECItem nickname = { siBuffer, NULL, 0 };
 	CERTCertificate *nss_cert = NULL;
 
 	if (kmfh == NULL || attrlist == NULL || numattr == 0) {
@@ -2195,7 +2196,7 @@ NSS_StoreKey(KMF_HANDLE_T handle,
 	if (rawkey != NULL) {
 		uchar_t ver = 0;
 		SECKEYPrivateKeyInfo rpk;
-		KMF_DATA derkey = {NULL, 0};
+		KMF_DATA derkey = { 0, NULL };
 		KMF_DATA *cert;
 
 		cert = kmf_get_attr_ptr(KMF_CERT_DATA_ATTR, attrlist, numattr);
@@ -2379,7 +2380,6 @@ NSS_StoreCert(KMF_HANDLE_T handle, int numattr, KMF_ATTRIBUTE *attrlist)
 
 	ret = store_cert(handle, nss_slot, cert, label, trust_flag);
 
-out:
 	if (nss_slot != NULL) {
 		PK11_FreeSlot(nss_slot);
 	}
@@ -2393,8 +2393,8 @@ NSS_ImportCert(KMF_HANDLE_T handle, int numattr, KMF_ATTRIBUTE *attrlist)
 {
 	KMF_RETURN ret = KMF_OK;
 	PK11SlotInfo *nss_slot = NULL;
-	KMF_DATA cert = {NULL, 0};
-	KMF_DATA cert_der = {NULL, 0};
+	KMF_DATA cert = { 0, NULL };
+	KMF_DATA cert_der = { 0, NULL };
 	KMF_DATA *cptr = NULL;
 	KMF_ENCODE_FORMAT format;
 	char *label = NULL;
@@ -2870,7 +2870,7 @@ NSS_FindCertInCRL(KMF_HANDLE_T handle, int numattr, KMF_ATTRIBUTE *attrlist)
 		cert = CERT_FindCertByNicknameOrEmailAddr(certHandle,
 		    certlabel);
 	} else {
-		SECItem derCert = { NULL, 0};
+		SECItem derCert = { siBuffer, NULL, 0 };
 
 		certdata = kmf_get_attr_ptr(KMF_CERT_DATA_ATTR,
 		    attrlist, numattr);

@@ -23,6 +23,7 @@
 # Copyright 2005 Sun Microsystems, Inc.  All rights reserved.
 # Use is subject to license terms.
 #
+# Copyright (c) 2018, Joyent, Inc.
 
 PROG= rmformat
 
@@ -34,9 +35,11 @@ SRCS= $(OBJS:.o=.c)
 
 LDLIBS +=	-lsmedia -lvolmgt -ladm -lefi
 
-CERRWARN += -_gcc=-Wno-uninitialized
+CERRWARN += $(CNOWARN_UNINIT)
 
-LINTFLAGS += -u
+# not linted
+SMATCH=off
+
 CPPFLAGS += -D_FILE_OFFSET_BITS=64
 
 $(ROOTBIN)/rmformat := FILEMODE = 04555
@@ -49,20 +52,15 @@ $(PROG): $(OBJS)
 	$(LINK.c) -o $(PROG) $(OBJS) $(LDLIBS)
 	$(POST_PROCESS)
 
-install: all $(ROOTPROG) 
+install: all $(ROOTPROG)
 
 clean:
 	$(RM) $(OBJS)
-
-lint: lint_SRCS
 
 $(POFILE) : $(SRCS)
 	$(RM) $@
 	$(COMPILE.cpp) $(SRCS) | $(XGETTEXT) $(XGETFLAGS) -
 	$(SED) -e '/^domain/d' messages.po > $@
 	$(RM) messages.po
-
-sb: $(SRCS)
-	$(COMPILE.c) -xsbfast $(SRCS)
 
 include ../Makefile.targ

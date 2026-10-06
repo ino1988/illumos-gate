@@ -2,21 +2,17 @@
   * safe_finger - finger client wrapper that protects against nasty stuff
   * from finger servers. Use this program for automatic reverse finger
   * probes, not the raw finger command.
-  * 
+  *
   * Build with: cc -o safe_finger safe_finger.c
-  * 
+  *
   * The problem: some programs may react to stuff in the first column. Other
   * programs may get upset by thrash anywhere on a line. File systems may
   * fill up as the finger server keeps sending data. Text editors may bomb
   * out on extremely long lines. The finger server may take forever because
   * it is somehow wedged. The code below takes care of all this badness.
-  * 
+  *
   * Author: Wietse Venema, Eindhoven University of Technology, The Netherlands.
   */
-
-#ifndef lint
-static char sccsid[] = "@(#) safe_finger.c 1.4 94/12/28 17:42:41";
-#endif
 
 /* System libraries */
 
@@ -24,6 +20,7 @@ static char sccsid[] = "@(#) safe_finger.c 1.4 94/12/28 17:42:41";
 #include <sys/stat.h>
 #include <signal.h>
 #include <stdio.h>
+#include <stdlib.h>
 #include <ctype.h>
 #include <pwd.h>
 
@@ -40,6 +37,7 @@ char    path[] = "PATH=/bin:/usr/bin:/usr/ucb:/usr/bsd:/etc:/usr/etc:/usr/sbin";
 #define	UNPRIV_NAME	"nobody"	/* Preferred privilege level */
 #define	UNPRIV_UGID	32767		/* Default uid and gid */
 
+void    perror_exit(char *text) __NORETURN;
 int     finger_pid;
 
 void    cleanup(sig)
@@ -136,8 +134,8 @@ char  **argv;
 
 /* perror_exit - report system error text and terminate */
 
-void    perror_exit(text)
-char   *text;
+void
+perror_exit(char *text)
 {
     perror(text);
     exit(1);

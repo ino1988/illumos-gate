@@ -19,7 +19,7 @@
  * CDDL HEADER END
  */
 /*
- * Copyright (c) 2012 Joyent, Inc.  All rights reserved.
+ * Copyright (c) 2019 Joyent, Inc.
  */
 
 /*
@@ -28,11 +28,15 @@
  * statement in lib/libumem/common/umem.c, particularly section eight.
  */
 
+#include <inttypes.h>
+#include <strings.h>
+#include <umem_impl.h>
+#include "umem_base.h"
+
 const int umem_genasm_supported = 0;
 
-/*ARGSUSED*/
-int
-umem_genasm(int *cp, int nc)
+boolean_t
+umem_genasm(int *alloc_sizes, umem_cache_t **caches, int ncaches)
 {
-	return (1);
+	return (B_FALSE);
 }

@@ -19,7 +19,7 @@
  * CDDL HEADER END
  */
 /*	Copyright (c) 1984, 1986, 1987, 1988, 1989 AT&T	*/
-/*	  All Rights Reserved  	*/
+/*	  All Rights Reserved	*/
 
 
 /*
@@ -70,10 +70,6 @@ static void yyerror(char *);
 static void errxx();
 static void *exprmalloc(size_t size);
 
-long atol();
-char *strcpy(), *strncpy();
-void exit();
-
 static char *ltoa();
 static char *lltoa();
 static char	**Av;
@@ -112,8 +108,7 @@ static	int pri[] = {
  *		numeric output, e.g., -00001 becomes -1
  */
 static void
-clean_buf(buf)
-	char *buf;
+clean_buf(char *buf)
 {
 	int i = 0;
 	int is_a_num = 1;
@@ -150,7 +145,7 @@ clean_buf(buf)
  */
 
 static int
-yylex()
+yylex(void)
 {
 	char *p;
 	int i;
@@ -170,8 +165,8 @@ yylex()
 	return (A_STRING);
 }
 
-static char
-*rel(oper, r1, r2) register char *r1, *r2;
+static char *
+rel(int oper, char *r1, char *r2)
 {
 	long long i, l1, l2;
 
@@ -242,11 +237,11 @@ static char
 	return (i ? "1": "0");
 }
 
-static char
-*arith(oper, r1, r2) char *r1, *r2;
+static char *
+arith(int oper, char *r1, char *r2)
 {
 	long long i1, i2;
-	register char *rv;
+	char *rv;
 
 	if (!(ematch(r1, "-\\{0,1\\}[0-9]*$") &&
 	    ematch(r2, "-\\{0,1\\}[0-9]*$")))
@@ -296,10 +291,9 @@ static char
 }
 
 static char
-*conj(oper, r1, r2)
-	char *r1, *r2;
+*conj(int oper, char *r1, char *r2)
 {
-	register char *rv;
+	char *rv;
 
 	switch (oper) {
 
@@ -388,7 +382,7 @@ match(char *s, char *p)
 
 
 /*
- * ematch 	- XCU4 mods involve calling compile/advance which simulate
+ * ematch	- XCU4 mods involve calling compile/advance which simulate
  *		  the obsolete compile/advance functions using regcomp/regexec
  */
 static int
@@ -441,7 +435,7 @@ ematch(char *s, char *p)
 		}
 		memcpy(tmptr, s, nmatch);
 		*(tmptr + nmatch) = '\0';
-		if ((nmbchars = mbstowcs(NULL, tmptr, NULL)) == -1) {
+		if ((nmbchars = mbstowcs(NULL, tmptr, 0)) == -1) {
 			yyerror("invalid multibyte character encountered");
 			if (tmptr1 != NULL)
 				free(tmptr1);

@@ -22,12 +22,12 @@
 /*
  * Copyright 2004 Sun Microsystems, Inc.  All rights reserved.
  * Use is subject to license terms.
+ *
+ * Copyright 2022 Oxide Computer Company
  */
 
 #ifndef	_MDB_STRING_H
 #define	_MDB_STRING_H
-
-#pragma ident	"%Z%%M%	%I%	%E% SMI"
 
 #include <sys/types.h>
 #include <strings.h>
@@ -42,7 +42,7 @@ extern "C" {
 #define	NTOS_SHOWBASE	0x8	/* Show base under appropriate circumstances */
 
 extern const char *numtostr(uintmax_t, int, uint_t);
-extern uintmax_t strtonum(const char *, int);
+extern uintmax_t mdb_strtonum(const char *, int);
 extern ulong_t strntoul(const char *, size_t, int);
 extern int strisnum(const char *);
 extern int strisbasenum(const char *);
@@ -70,6 +70,17 @@ extern const char *strbadid(const char *);
 extern int strisprint(const char *);
 
 extern char *mdb_inet_ntop(int, const void *, char *, size_t);
+
+/*
+ * This is a private version of mdb's strtoull that allows us to modify the
+ * behavior. We expect this will get more nuanced when C23 lands and therefore
+ * it is not currently part of the module API.
+ */
+typedef enum {
+	MDB_STRTOULL_F_BASE_C	= 1 << 0	/* Default to ISO C's radix */
+} mdb_strtoull_flags_t;
+extern u_longlong_t mdb_strtoullx(const char *, mdb_strtoull_flags_t);
+
 
 #ifdef	__cplusplus
 }

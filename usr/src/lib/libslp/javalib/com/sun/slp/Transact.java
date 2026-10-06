@@ -115,8 +115,8 @@ class Transact extends Object implements Runnable {
 	    // Create a new Transact multicast thread.
 
             // The final argument to the constructor of Transact determines
-            // whether to return after the first result or to continue to 
-            // gather more than one result.  The value to this field 
+            // whether to return after the first result or to continue to
+            // gather more than one result.  The value to this field
             // continueAfterFound MUST be set to 'true' or else multicast
             // based discovery will find the first result, not all results,
             // as it should.
@@ -341,7 +341,7 @@ class Transact extends Object implements Runnable {
 
 			config.writeLog("da_exception_trace",
 					new Object[] {
-			    new Short(ex.getErrorCode()),
+			    Short.valueOf(ex.getErrorCode()),
 				addr,
 				ex.getMessage()});
 
@@ -418,7 +418,7 @@ class Transact extends Object implements Runnable {
 	byte[] inbuf = new byte[Defaults.iReadMaxMTU];
 
 	// Construct the datagram packet to send.
-	
+
 	DatagramPacket dpReply =
 	    new DatagramPacket(inbuf, inbuf.length);
 	DatagramPacket dpRequest =
@@ -643,7 +643,7 @@ class Transact extends Object implements Runnable {
 		synchronized (s) {
 
 		    // Send the request.
-	
+
 		    dos.write(outbuf, 0, outbuf.length);
 
 		    // Read reply.
@@ -658,7 +658,7 @@ class Transact extends Object implements Runnable {
 		//  hosed.
 
 		uncacheSocket(addr, s);
-	
+
 		s = null;
 
 		if (!retry) {
@@ -704,8 +704,8 @@ class Transact extends Object implements Runnable {
 				ServiceLocationException.BUFFER_OVERFLOW,
 				"buffer_overflow",
 				new Object[] {
-		    new Integer(outbuf.length),
-			new Integer(config.getMTU())});
+		    Integer.valueOf(outbuf.length),
+			Integer.valueOf(config.getMTU())});
 	}
 
 	return outbuf;
@@ -731,7 +731,7 @@ class Transact extends Object implements Runnable {
 	}
 
 	// Check for invalid xid.
-	
+
 	if (mhdr.xid != rhdr.xid) {
 	    if (config.traceDrop()) {
 		config.writeLog("wrong_xid",
@@ -785,7 +785,7 @@ class Transact extends Object implements Runnable {
 		    new ServiceLocationException(
 				ServiceLocationException.VERSION_NOT_SUPPORTED,
 				"version_number_error",
-				new Object[] {new Integer(ver)});
+				new Object[] {Integer.valueOf(ver)});
 
 	    }
 
@@ -874,7 +874,7 @@ class Transact extends Object implements Runnable {
 
     static protected boolean
 	addPreviousResponder(SrvLocMsg msg, InetAddress addr) {
-			
+
 	// Add incoming result to the vector.
 
 	SrvLocHeader hdr = msg.getHeader();
@@ -938,7 +938,7 @@ class Transact extends Object implements Runnable {
 
 	if (ex != null && config.traceDATraffic()) {
 	    config.writeLog("sdat_active_err",
-			    new Object[] {new Integer(ex.getErrorCode()),
+			    new Object[] {Integer.valueOf(ex.getErrorCode()),
 					      ex.getMessage()});
 
 	    throw ex;
@@ -1219,7 +1219,7 @@ class Transact extends Object implements Runnable {
 
 		    send(ds, msg, addr);
 		    tries++;
-	
+
 		    lTimeSent = System.currentTimeMillis();
 		    continue; // since we did not receive anything, continue...
 

@@ -37,6 +37,13 @@
  * contributors.
  */
 
+/*
+ * Copyright (c) 2018, Joyent, Inc.
+ * Copyright 2023 Oxide computer Company
+ * Copyright 2024 Bill Sommerfeld <sommerfeld@hamachi.org>
+ */
+
+#include <assert.h>
 #include <stdio.h>
 #include <strings.h>
 #include <errno.h>
@@ -45,6 +52,9 @@
 #include <signal.h>
 #include <limits.h>
 #include <math.h>
+#include <locale.h>
+#include <thread.h>
+#include <synch.h>
 
 #include <sys/time.h>
 #include <sys/param.h>
@@ -53,6 +63,7 @@
 #include <sys/stropts.h>
 #include <sys/file.h>
 #include <sys/sysmacros.h>
+#include <sys/debug.h>
 
 #include <arpa/inet.h>
 #include <net/if.h>
@@ -153,7 +164,6 @@ static int eff_num_gw;			/* effective number of gateways */
 static int num_wraps = -1;		/* no of times 64K icmp_seq wrapped */
 static ushort_t dest_port = 32768 + 666; /* starting port for the UDP probes */
 static char *gw_list[MAXMAX_GWS];	/* list of gateways as user enters */
-static int interval = 1;		/* interval between transmissions */
 static int options;			/* socket options */
 static int moptions;			/* multicast options */
 int npackets;				/* number of packets to send */
@@ -164,6 +174,21 @@ static int timeout = TIMEOUT;		/* timeout value (sec) for probes */
 static struct if_entry out_if;		/* interface argument */
 int ident;				/* ID for this ping run */
 static hrtime_t t_last_probe_sent;	/* the time we sent the last probe */
+static timer_t timer;			/* timer for waiting */
+static volatile boolean_t timer_done = _B_FALSE; /* timer finished? */
+static struct itimerspec interval = { { 0, 0 }, { 1, 0 } }; /* Interval for */
+					/* -I. The default interval is 1s. */
+static hrtime_t mintime = NSEC2MSEC(500);	/* minimum time between pings */
+
+/*
+ * Globals for our name services warning. See ns_warning_thr() for more on why
+ * this exists.
+ */
+static mutex_t ns_lock = ERRORCHECKMUTEX; /* Protects the following data */
+static boolean_t ns_active = _B_FALSE;	/* Lookup is going on */
+static hrtime_t ns_starttime;		/* Time the lookup started */
+static int ns_sleeptime = 2;		/* Time in seconds between checks */
+static int ns_warntime = 2;		/* Time in seconds before warning */
 
 /*
  * This buffer stores the received packets. Currently it needs to be 32 bit
@@ -189,11 +214,8 @@ int64_t tsum2;			/* sum of squared times, for std. dev. */
 
 static struct targetaddr *build_targetaddr_list(struct addrinfo *,
     union any_in_addr *);
-extern void check_reply(struct addrinfo *, struct msghdr *, int, ushort_t);
-extern void check_reply6(struct addrinfo *, struct msghdr *, int, ushort_t);
-static struct targetaddr *create_targetaddr_item(int, union any_in_addr *,
+static struct targetaddr *create_targetaddr_item(struct sockaddr *,
     union any_in_addr *);
-void find_dstaddr(ushort_t, union any_in_addr *);
 static struct ifaddrlist *find_if(struct ifaddrlist *, int);
 static void finish();
 static void get_gwaddrs(char *[], int, union any_in_addr *,
@@ -201,30 +223,20 @@ static void get_gwaddrs(char *[], int, union any_in_addr *,
 static void get_hostinfo(char *, int, struct addrinfo **);
 static ushort_t in_cksum(ushort_t *, int);
 static int int_arg(char *s, char *what);
-boolean_t is_a_target(struct addrinfo *, union any_in_addr *);
 static void mirror_gws(union any_in_addr *, int);
+static void *ns_warning_thr(void *);
+static void parse_interval(const char *s);
 static void pinger(int, struct sockaddr *, struct msghdr *, int);
-char *pr_name(char *, int);
-char *pr_protocol(int);
 static void print_unknown_host_msg(const char *, const char *);
 static void recv_icmp_packet(struct addrinfo *, int, int, ushort_t, ushort_t);
 static void resolve_nodes(struct addrinfo **, struct addrinfo **,
     union any_in_addr **);
-void schedule_sigalrm();
 static void select_all_src_addrs(union any_in_addr **, struct addrinfo *,
     union any_in_addr *, union any_in_addr *);
 static void select_src_addr(union any_in_addr *, int, union any_in_addr *);
-void send_scheduled_probe();
-boolean_t seq_match(ushort_t, int, ushort_t);
-extern void set_ancillary_data(struct msghdr *, int, union any_in_addr *, int,
-    uint_t);
-extern void set_IPv4_options(int, union any_in_addr *, int, struct in_addr *,
-    struct in_addr *);
 static void set_nexthop(int, struct addrinfo *, int);
 static boolean_t setup_socket(int, int *, int *, int *, ushort_t *,
     struct addrinfo *);
-void sigalrm_handler();
-void tvsub(struct timeval *, struct timeval *);
 static void usage(char *);
 
 /*
@@ -248,6 +260,8 @@ main(int argc, char *argv[])
 	boolean_t has_sys_ip_config;
 
 	progname = argv[0];
+
+	(void) setlocale(LC_ALL, "");
 
 	/*
 	 * This program needs the net_icmpaccess privilege for creating
@@ -322,7 +336,7 @@ main(int argc, char *argv[])
 
 		case 'I':
 			stats = _B_TRUE;
-			interval = int_arg(optarg, "interval");
+			parse_interval(optarg);
 			break;
 
 		case 'i':
@@ -541,7 +555,7 @@ main(int argc, char *argv[])
 
 	/*
 	 * We should make sure datalen is reasonable.
-	 * 	IP_MAXPACKET >= IPv4/IPv6 header length +
+	 *	IP_MAXPACKET >= IPv4/IPv6 header length +
 	 *			IPv4 options/IPv6 routing header length +
 	 *			ICMP/ICMP6/UDP header length +
 	 *			datalen
@@ -689,6 +703,23 @@ main(int argc, char *argv[])
 		}
 	}
 
+	/* Create our timer for future use */
+	if (timer_create(CLOCK_REALTIME, NULL, &timer) != 0) {
+		Fprintf(stderr, "%s: failed to create timer: %s\n",
+		    progname, strerror(errno));
+		exit(EXIT_FAILURE);
+	}
+
+	/*
+	 * Finally start up the name services warning thread.
+	 */
+	if (thr_create(NULL, 0, ns_warning_thr, NULL,
+	    THR_DETACHED | THR_DAEMON, NULL) != 0) {
+		Fprintf(stderr, "%s: failed to create name services "
+		    "thread: %s\n", progname, strerror(errno));
+		exit(EXIT_FAILURE);
+	}
+
 	/* Let's get things going */
 	send_scheduled_probe();
 
@@ -731,18 +762,10 @@ build_targetaddr_list(struct addrinfo *ai_dst, union any_in_addr *src_addr_list)
 	nextp = &head;
 	for (aip = ai_dst, i = 0; aip != NULL; aip = aip->ai_next, i++) {
 		if (aip->ai_family == AF_INET && num_v4 != 0) {
-			targetaddr = create_targetaddr_item(aip->ai_family,
-			    (union any_in_addr *)
-			    /* LINTED E_BAD_PTR_CAST_ALIGN */
-			    &((struct sockaddr_in *)
-			    aip->ai_addr)->sin_addr,
+			targetaddr = create_targetaddr_item(aip->ai_addr,
 			    &src_addr_list[i]);
 		} else if (aip->ai_family == AF_INET6 && num_v6 != 0) {
-			targetaddr = create_targetaddr_item(aip->ai_family,
-			    (union any_in_addr *)
-			    /* LINTED E_BAD_PTR_CAST_ALIGN */
-			    &((struct sockaddr_in6 *)
-			    aip->ai_addr)->sin6_addr,
+			targetaddr = create_targetaddr_item(aip->ai_addr,
 			    &src_addr_list[i]);
 		} else {
 			continue;
@@ -759,24 +782,42 @@ build_targetaddr_list(struct addrinfo *ai_dst, union any_in_addr *src_addr_list)
 }
 
 /*
- * Given an address family, dst and src addresses, by also looking at the
- * options provided at the command line, this function creates a targetaddr
- * to be linked with others, forming a global targetaddr list. Each targetaddr
- * item contains information about probes sent to a specific IP address.
+ * Given a destination sockaddr (containing address family, address, and
+ * perhaps address scope) and a source address, this function creates a
+ * targetaddr structure that will become part of the global targetaddr
+ * list. Each targetaddr tracks the probes sent to a specific destination.
  */
 static struct targetaddr *
-create_targetaddr_item(int family, union any_in_addr *dst_addr,
-    union any_in_addr *src_addr)
+create_targetaddr_item(struct sockaddr *dst_addr, union any_in_addr *src_addr)
 {
 	struct targetaddr *targetaddr;
+	struct sockaddr_in *dst4 = (struct sockaddr_in *)dst_addr;
+	struct sockaddr_in6 *dst6 = (struct sockaddr_in6 *)dst_addr;
 
 	targetaddr = (struct targetaddr *)malloc(sizeof (struct targetaddr));
 	if (targetaddr == NULL) {
 		Fprintf(stderr, "%s: malloc %s\n", progname, strerror(errno));
 		exit(EXIT_FAILURE);
 	}
-	targetaddr->family = family;
-	targetaddr->dst_addr = *dst_addr;
+	targetaddr->family = dst_addr->sa_family;
+	switch (dst_addr->sa_family) {
+	case AF_INET:
+		memset(&targetaddr->dst_addr, 0, sizeof (targetaddr->dst_addr));
+		targetaddr->dst_addr.addr = dst4->sin_addr;
+		targetaddr->dst_scope = 0;
+		break;
+	case AF_INET6:
+		memset(&targetaddr->dst_addr, 0, sizeof (targetaddr->dst_addr));
+		targetaddr->dst_addr.addr6 = dst6->sin6_addr;
+		targetaddr->dst_scope = dst6->sin6_scope_id;
+
+		if (if_index != 0 && targetaddr->dst_scope != 0 &&
+		    if_index != targetaddr->dst_scope) {
+			Fprintf(stderr, "%s: warning: conflicting scopes; using"
+			    " %s\n", progname, pr_if(targetaddr->dst_scope));
+		}
+		break;
+	}
 	targetaddr->src_addr = *src_addr;
 	if (stats) {
 		/*
@@ -1142,8 +1183,8 @@ select_src_addr(union any_in_addr *dst_addr, int family,
     union any_in_addr *src_addr)
 {
 	struct sockaddr *sock;
-	struct sockaddr_in *sin;
-	struct sockaddr_in6 *sin6;
+	struct sockaddr_in *sin = NULL;
+	struct sockaddr_in6 *sin6 = NULL;
 	int tmp_fd;
 	size_t sock_len;
 
@@ -1202,8 +1243,10 @@ select_src_addr(union any_in_addr *dst_addr, int family,
 	}
 
 	if (family == AF_INET) {
+		assert(sin != NULL);
 		src_addr->addr = sin->sin_addr;
 	} else {
+		assert(sin6 != NULL);
 		src_addr->addr6 = sin6->sin6_addr;
 	}
 
@@ -1606,6 +1649,14 @@ setup_socket(int family, int *send_sockp, int *recv_sockp, int *if_index,
 		}
 	}
 
+	/* Ensure that timestamping is requested on the receive socket */
+	if (setsockopt(recv_sock, SOL_SOCKET, SO_TIMESTAMP,
+	    &on, sizeof (on)) == -1) {
+		Fprintf(stderr, "%s: warning: timing accuracy diminished -- "
+		    "setsockopt SO_TIMESTAMP failed %s", progname,
+		    strerror(errno));
+	}
+
 	*send_sockp = send_sock;
 	*recv_sockp = recv_sock;
 
@@ -1683,14 +1734,21 @@ void
 sigalrm_handler(void)
 {
 	/*
-	 * Guard againist denial-of-service attacks. Make sure ping doesn't
-	 * send probes for every SIGALRM it receives. Evil hacker can generate
-	 * SIGALRMs as fast as it can, but ping will ignore those which are
-	 * received too soon (earlier than 0.5 sec) after it sent the last
-	 * probe.  We use gethrtime() instead of gettimeofday() because
-	 * the latter is not linear and is prone to resetting or drifting
+	 * If we've been told that we're done, the timer should be cancelled
+	 * and not rescheduled, just return.
 	 */
-	if ((gethrtime() - t_last_probe_sent) < 500000000) {
+	if (timer_done == _B_TRUE)
+		return;
+
+	/*
+	 * Guard against denial-of-service attacks. Make sure ping doesn't send
+	 * probes for every SIGALRM it receives in the case of errant SIGALRMs.
+	 * ping will ignore those which are received too soon (the smaller of
+	 * 0.5 sec and the ping interval, if in effect) after it sent the last
+	 * probe.  We use gethrtime() instead of gettimeofday() because the
+	 * latter is not linear and is prone to resetting or drifting.
+	 */
+	if ((gethrtime() - t_last_probe_sent) < mintime) {
 		return;
 	}
 	send_scheduled_probe();
@@ -1704,10 +1762,12 @@ void
 schedule_sigalrm(void)
 {
 	int waittime;
+	struct itimerspec it;
 
+	bzero(&it, sizeof (struct itimerspec));
 	if (npackets == 0 ||
 	    current_targetaddr->num_sent < current_targetaddr->num_probes) {
-		(void) alarm(interval);
+		it = interval;
 	} else {
 		if (current_targetaddr->got_reply) {
 			waittime = 2 * tmax / MICROSEC;
@@ -1716,7 +1776,13 @@ schedule_sigalrm(void)
 		} else {
 			waittime = MAX_WAIT;
 		}
-		(void) alarm(waittime);
+		it.it_value.tv_sec = waittime;
+	}
+
+	if (timer_settime(timer, TIMER_RELTIME, &it, NULL) != 0) {
+		Fprintf(stderr, "%s: unexpected error updating time: %s\n",
+		    progname, strerror(errno));
+		exit(EXIT_FAILURE);
 	}
 }
 
@@ -1772,7 +1838,7 @@ send_scheduled_probe()
 		 * Did we reach the end of road?
 		 */
 		if (current_targetaddr == NULL) {
-			(void) alarm(0);	/* cancel alarm */
+			timer_done = _B_TRUE;
 			if (stats)
 				finish();
 			if (is_alive)
@@ -1797,6 +1863,8 @@ send_scheduled_probe()
 		} else {
 			to6.sin6_addr = current_targetaddr->dst_addr.addr6;
 		}
+		to6.sin6_scope_id = current_targetaddr->dst_scope;
+
 		/*
 		 * Setting the ancillary data once is enough, if we are
 		 * not using source routing through target (-l/-S). In
@@ -1806,13 +1874,21 @@ send_scheduled_probe()
 		 */
 		if (first_probe ||
 		    (send_reply && current_targetaddr->num_sent == 0)) {
+			int scope = if_index;
+			if (scope != 0 && to6.sin6_scope_id != 0)
+				/*
+				 * don't bother setting scope in ancillary data
+				 * as sin6_scope_id will override it.
+				 */
+				scope = 0;
+
 			if (send_reply) {
 				/* target is the middle gateway now */
 				gw_IP_list6[num_gw].addr6 =
 				    current_targetaddr->dst_addr.addr6;
 			}
 			set_ancillary_data(&msg6, hoplimit, gw_IP_list6,
-			    eff_num_gw, if_index);
+			    eff_num_gw, scope);
 			first_probe = _B_FALSE;
 		}
 		pinger(send_sock6, (struct sockaddr *)&to6, &msg6, AF_INET6);
@@ -1857,7 +1933,7 @@ send_scheduled_probe()
  */
 static void
 recv_icmp_packet(struct addrinfo *ai_dst, int recv_sock6, int recv_sock,
-ushort_t udp_src_port6, ushort_t udp_src_port)
+    ushort_t udp_src_port6, ushort_t udp_src_port)
 {
 	struct msghdr in_msg;
 	struct iovec iov;
@@ -1920,7 +1996,7 @@ ushort_t udp_src_port6, ushort_t udp_src_port)
 						    progname, strerror(errno));
 					}
 					continue;
-				} if (cc > 0) {
+				} else if (cc > 0) {
 					check_reply(ai_dst, &in_msg, cc,
 					    udp_src_port);
 				}
@@ -1933,7 +2009,7 @@ ushort_t udp_src_port6, ushort_t udp_src_port)
 		 */
 		if ((npackets > 0) && (current_targetaddr->next == NULL) &&
 		    (nreceived_last_target == npackets)) {
-			(void) alarm(0);	/* cancel alarm */
+			timer_done = _B_TRUE;
 			finish();
 		}
 	} /* infinite loop */
@@ -2110,17 +2186,10 @@ pr_name(char *addr, int family)
 	struct sockaddr_in sin;
 	struct sockaddr_in6 sin6;
 	struct sockaddr *sa;
-	static struct in6_addr prev_addr = IN6ADDR_ANY_INIT;
-	char *cp;
-	char abuf[INET6_ADDRSTRLEN];
-	static char buf[NI_MAXHOST + INET6_ADDRSTRLEN + 3];
-	uint_t slen, alen, hlen;
 
 	switch (family) {
 	case AF_INET:
 		(void) memset(&sin, 0, sizeof (sin));
-		slen = sizeof (struct sockaddr_in);
-		alen = sizeof (struct in_addr);
 		/* LINTED E_BAD_PTR_CAST_ALIGN */
 		sin.sin_addr = *(struct in_addr *)addr;
 		sin.sin_port = 0;
@@ -2128,28 +2197,66 @@ pr_name(char *addr, int family)
 		break;
 	case AF_INET6:
 		(void) memset(&sin6, 0, sizeof (sin6));
-		slen = sizeof (struct sockaddr_in6);
-		alen = sizeof (struct in6_addr);
 		/* LINTED E_BAD_PTR_CAST_ALIGN */
 		sin6.sin6_addr = *(struct in6_addr *)addr;
 		sin6.sin6_port = 0;
 		sa = (struct sockaddr *)&sin6;
 		break;
 	default:
+		sa = (struct sockaddr *)&sin6;
+		break;
+	}
+	sa->sa_family = family;
+	return (pr_name_sa(sa));
+}
+
+char *
+pr_name_sa(const struct sockaddr *sa)
+{
+	const struct sockaddr_in *sin = (struct sockaddr_in *)sa;
+	const struct sockaddr_in6 *sin6 = (struct sockaddr_in6 *)sa;
+	int family = sa->sa_family;
+	static struct in6_addr prev_addr = IN6ADDR_ANY_INIT;
+	static int prev_scope = 0;
+	char *cp;
+	char abuf[INET6_ADDRSTRLEN];
+	static char buf[NI_MAXHOST + INET6_ADDRSTRLEN + 3];
+	uint_t slen, alen, hlen;
+	char *addr;
+	int scope;
+
+	switch (family) {
+	case AF_INET:
+		slen = sizeof (struct sockaddr_in);
+		alen = sizeof (struct in_addr);
+		addr = (char *)&sin->sin_addr;
+		scope = 0;
+		break;
+	case AF_INET6:
+		slen = sizeof (struct sockaddr_in6);
+		alen = sizeof (struct in6_addr);
+		addr = (char *)&sin6->sin6_addr;
+		scope = sin6->sin6_scope_id;
+		break;
+	default:
 		(void) snprintf(buf, sizeof (buf), "<invalid address family>");
 		return (buf);
 	}
-	sa->sa_family = family;
 
 	/* compare with the buffered (previous) lookup */
-	if (memcmp(addr, &prev_addr, alen) != 0) {
+	if (scope != prev_scope || memcmp(addr, &prev_addr, alen) != 0) {
 		int flags = (nflag) ? NI_NUMERICHOST : NI_NAMEREQD;
+		mutex_enter(&ns_lock);
+		ns_active = _B_TRUE;
+		ns_starttime = gethrtime();
+		mutex_exit(&ns_lock);
 		if (getnameinfo(sa, slen, buf, sizeof (buf),
 		    NULL, 0, flags) != 0) {
 			/* getnameinfo() failed; return just the address */
-			if (inet_ntop(family, (const void*)addr,
-			    buf, sizeof (buf)) == NULL)
+			if (getnameinfo(sa, slen, buf, sizeof (buf),
+			    NULL, 0, NI_NUMERICHOST) != 0) {
 				buf[0] = 0;
+			}
 		} else if (!nflag) {
 			/* append numeric address to hostname string */
 			hlen = strlen(buf);
@@ -2158,11 +2265,27 @@ pr_name(char *addr, int family)
 			    inet_ntop(family, (const void *)addr, abuf,
 			    sizeof (abuf)));
 		}
+		mutex_enter(&ns_lock);
+		ns_active = _B_FALSE;
+		mutex_exit(&ns_lock);
 
 		/* LINTED E_BAD_PTR_CAST_ALIGN */
 		prev_addr = *(struct in6_addr *)addr;
+		prev_scope = scope;
 	}
 	return (buf);
+}
+
+char *
+pr_name4(const struct sockaddr_in *sin)
+{
+	return (pr_name_sa((const struct sockaddr *)sin));
+}
+
+char *
+pr_name6(const struct sockaddr_in6 *sin6)
+{
+	return (pr_name_sa((const struct sockaddr *)sin6));
 }
 
 /*
@@ -2196,6 +2319,27 @@ pr_protocol(int prot)
 	}
 
 	return (buf);
+}
+
+char *
+pr_if(int ifindex)
+{
+	static struct ifaddrlist *al = NULL;
+	static int count = 0;
+	static char errbuf[ERRBUFSIZE];
+	int i;
+
+	if (al == NULL) {
+		count = ifaddrlist(&al, AF_INET6, 0, errbuf);
+		if (count < 0)
+			count = 0;
+	}
+	for (i = 0; i < count; i++) {
+		if (al[i].index == ifindex)
+			return (al[i].device);
+	}
+	(void) sprintf(errbuf, "%d", ifindex);
+	return (errbuf);
 }
 
 /*
@@ -2393,7 +2537,7 @@ usage(char *cmdname)
 	Fprintf(stderr, "usage: %s host [timeout]\n", cmdname);
 	Fprintf(stderr,
 /* CSTYLED */
-"usage: %s -s [-l | U] [abdDLnRrv] [-A addr_family] [-c traffic_class]\n\t"
+"usage: %s -s [-l | -U] [-abdDLnRrv] [-A addr_family] [-c traffic_class]\n\t"
 "[-g gateway [-g gateway ...]] [-N nexthop] [-F flow_label] [-I interval]\n\t"
 "[-i interface] [-P tos] [-p port] [-t ttl] host [data_size] [npackets]\n",
 	    cmdname);
@@ -2419,10 +2563,120 @@ int_arg(char *s, char *what)
 	}
 
 	if (errno || *ep != '\0' || num < 0) {
-		(void) Fprintf(stderr, "%s: bad %s: %s\n",
-		    progname, what, s);
+		Fprintf(stderr, "%s: bad %s: %s\n", progname, what, s);
 		exit(EXIT_FAILURE);
 	}
 
 	return (num);
+}
+
+/*
+ * Parse the interval into a itimerspec. The interval used to originally be
+ * parsed as an integer argument. That means that one used to be able to specify
+ * an interval in hex. The strtod() family honors that at times, with strtod
+ * sometimes doing so depending on the compilation environment and strtof() and
+ * srtold() always doing that. To facilitiate that and not worry about a
+ * careless Makefile change breaking us, we instead just use strtold here, even
+ * though we really don't need the precision.
+ */
+static void
+parse_interval(const char *s)
+{
+	long double val;
+	char *end;
+
+	errno = 0;
+	val = strtold(s, &end);
+	if (errno != 0 || *end != '\0') {
+		Fprintf(stderr, "%s: bad interval: %s\n", progname, s);
+		exit(EXIT_FAILURE);
+	}
+
+	/*
+	 * Check values that we know are going to be bad. Anything greater than
+	 * INT_MAX, anything less than 0, look for specific NaNs. Also, clamp
+	 * the value at 0.01 seconds.
+	 */
+	if (val == NAN || val <= 0.0 || val >= INT_MAX) {
+		Fprintf(stderr, "%s: bad interval: %s\n", progname, s);
+		exit(EXIT_FAILURE);
+	}
+
+	if (val < 0.01L) {
+		Fprintf(stderr, "%s: interval too small: %Lf\n", progname, val);
+		exit(EXIT_FAILURE);
+	}
+
+	interval.it_value.tv_sec = (long)val;
+	interval.it_value.tv_nsec = (long)((val - interval.it_value.tv_sec) *
+	    NANOSEC);
+
+	if (interval.it_value.tv_sec == 0 &&
+	    interval.it_value.tv_nsec < mintime) {
+		mintime = interval.it_value.tv_nsec;
+	}
+}
+
+/*
+ * We should have an SO_TIMESTAMP message for this socket to indicate
+ * the actual time that the message took. If we don't we'll fall back to
+ * gettimeofday(); however, that can cause any delays due to DNS
+ * resolution and the like to end up wreaking havoc on us.
+ */
+void
+ping_gettime(struct msghdr *msg, struct timeval *tv)
+{
+	struct cmsghdr *cmsg;
+
+	for (cmsg = CMSG_FIRSTHDR(msg); cmsg != NULL;
+	    cmsg = CMSG_NXTHDR(msg, cmsg)) {
+		if (cmsg->cmsg_level == SOL_SOCKET &&
+		    cmsg->cmsg_type == SO_TIMESTAMP &&
+		    cmsg->cmsg_len == CMSG_LEN(sizeof (*tv))) {
+			bcopy(CMSG_DATA(cmsg), tv, sizeof (*tv));
+			return;
+		}
+	}
+
+	(void) gettimeofday(tv, (struct timezone *)NULL);
+}
+
+/*
+ * The purpose of this thread is to try and inform a user that we're blocked
+ * doing name lookups. For various reasons, ping has to try and look up the IP
+ * addresses it receives via name services unless the -n flag is specified. The
+ * irony of this is that when trying to use ping to actually diagnose a broken
+ * network, name services are unlikely to be available and that will result in a
+ * lot of confusion as to why pings seem like they're not working. As such, we
+ * basically wake up every 2 seconds and check whether or not we've hit such a
+ * condition where we should inform the user via stderr.
+ *
+ * Once they've been informed, we do not inform them again until approximately a
+ * minute of time has passed, in case that things are working intermittently.
+ */
+/*ARGSUSED*/
+static void *
+ns_warning_thr(void *unused)
+{
+	for (;;) {
+		hrtime_t now;
+
+		(void) sleep(ns_sleeptime);
+		now = gethrtime();
+		mutex_enter(&ns_lock);
+		if (ns_active == _B_TRUE &&
+		    now - ns_starttime >= ns_warntime * NANOSEC) {
+			Fprintf(stderr, "%s: warning: ICMP responses "
+			    "received, but name service lookups are "
+			    "taking a while. Use ping -n to disable "
+			    "name service lookups.\n",
+			    progname);
+			mutex_exit(&ns_lock);
+			return (NULL);
+		}
+		mutex_exit(&ns_lock);
+	}
+
+	/* LINTED: E_STMT_NOT_REACHED */
+	return (NULL);
 }

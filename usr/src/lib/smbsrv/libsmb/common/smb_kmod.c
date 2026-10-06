@@ -20,7 +20,9 @@
  */
 /*
  * Copyright (c) 2009, 2010, Oracle and/or its affiliates. All rights reserved.
- * Copyright 2011 Nexenta Systems, Inc.  All rights reserved.
+ * Copyright 2017 Nexenta Systems, Inc.  All rights reserved.
+ * Copyright 2017 Joyent, Inc.
+ * Copyright 2020-2023 RackTop Systems, Inc.
  */
 
 #include <sys/types.h>
@@ -39,27 +41,37 @@
 #include <smbsrv/smb_xdr.h>
 #include <smbsrv/smbinfo.h>
 #include <smbsrv/smb_ioctl.h>
-#include <smbsrv/smb_ioctl.h>
 #include <smbsrv/libsmb.h>
 
 #define	SMBDRV_DEVICE_PATH		"/dev/smbsrv"
-#define	SMB_IOC_DATA_SIZE		(256 * 1024)
 
-static int smb_kmod_ioctl(int, smb_ioc_header_t *, uint32_t);
+int smb_kmod_ioctl(int, smb_ioc_header_t *, uint32_t);
 
 
 int	smbdrv_fd = -1;
 
+/*
+ * Open the smbsrv driver.
+ * The smb daemon (smbd) opens the "control" device (/dev/smbsrv)
+ * and other consumers open the library device (/dev/smbsrv1)
+ */
 int
-smb_kmod_bind(void)
+smb_kmod_bind(boolean_t smbd)
 {
+	int fd;
+
 	if (smbdrv_fd != -1)
 		(void) close(smbdrv_fd);
 
-	if ((smbdrv_fd = open(SMBDRV_DEVICE_PATH, 0)) < 0) {
-		smbdrv_fd = -1;
-		return (errno);
+	if (smbd) {
+		fd = open(SMBDRV_DEVICE_PATH, 0);
+	} else {
+		fd = open(SMBDRV_DEVICE_PATH "1", 0);
 	}
+	if (fd < 0)
+		return (errno);
+
+	smbdrv_fd = fd;
 
 	return (0);
 }
@@ -70,10 +82,11 @@ smb_kmod_isbound(void)
 	return ((smbdrv_fd == -1) ? B_FALSE : B_TRUE);
 }
 
+/* See also: smbsrv smb_server_store_cfg */
 int
 smb_kmod_setcfg(smb_kmod_cfg_t *cfg)
 {
-	smb_ioc_cfg_t ioc;
+	smb_ioc_cfg_t ioc = {0};
 
 	ioc.maxworkers = cfg->skc_maxworkers;
 	ioc.maxconnections = cfg->skc_maxconnections;
@@ -84,11 +97,31 @@ smb_kmod_setcfg(smb_kmod_cfg_t *cfg)
 	ioc.oplock_enable = cfg->skc_oplock_enable;
 	ioc.sync_enable = cfg->skc_sync_enable;
 	ioc.secmode = cfg->skc_secmode;
+	ioc.netbios_enable = cfg->skc_netbios_enable;
 	ioc.ipv6_enable = cfg->skc_ipv6_enable;
 	ioc.print_enable = cfg->skc_print_enable;
 	ioc.traverse_mounts = cfg->skc_traverse_mounts;
+	ioc.short_names = cfg->skc_short_names;
+
+	ioc.max_protocol = cfg->skc_max_protocol;
+	ioc.min_protocol = cfg->skc_min_protocol;
 	ioc.exec_flags = cfg->skc_execflags;
+	ioc.negtok_len = cfg->skc_negtok_len;
+	ioc.max_opens = cfg->skc_max_opens;
+
 	ioc.version = cfg->skc_version;
+	ioc.initial_credits = cfg->skc_initial_credits;
+	ioc.maximum_credits = cfg->skc_maximum_credits;
+	ioc.encrypt = cfg->skc_encrypt;
+	ioc.encrypt_ciphers = cfg->skc_encrypt_ciphers;
+	ioc.sign_algs = cfg->skc_sign_algs;
+
+	(void) memcpy(ioc.machine_uuid, cfg->skc_machine_uuid, sizeof (uuid_t));
+	(void) memcpy(ioc.negtok, cfg->skc_negtok, sizeof (ioc.negtok));
+	(void) memcpy(ioc.native_os, cfg->skc_native_os,
+	    sizeof (ioc.native_os));
+	(void) memcpy(ioc.native_lm, cfg->skc_native_lm,
+	    sizeof (ioc.native_lm));
 
 	(void) strlcpy(ioc.nbdomain, cfg->skc_nbdomain, sizeof (ioc.nbdomain));
 	(void) strlcpy(ioc.fqdn, cfg->skc_fqdn, sizeof (ioc.fqdn));
@@ -201,6 +234,25 @@ smb_kmod_shareinfo(char *shrname, boolean_t *shortnames)
 		*shortnames = ioc.shortnames;
 	else
 		*shortnames = B_TRUE;
+
+	return (rc);
+}
+
+/*
+ * Does the client have any access in this share?
+ */
+int
+smb_kmod_shareaccess(smb_netuserinfo_t *ui, smb_share_t *si)
+{
+	smb_ioc_shareaccess_t ioc;
+	int rc;
+
+	bzero(&ioc, sizeof (ioc));
+	ioc.session_id	= ui->ui_session_id;
+	ioc.user_id	= ui->ui_user_id;
+	(void) strlcpy(ioc.shrname, si->shr_name, MAXNAMELEN);
+
+	rc = smb_kmod_ioctl(SMB_IOC_SHAREACCESS, &ioc.hdr, sizeof (ioc));
 
 	return (rc);
 }
@@ -443,7 +495,11 @@ smb_kmod_unbind(void)
 	}
 }
 
-static int
+/*
+ * Note: The user-space smbd-d provides it own version of this function
+ * which directly calls the "kernel" module code (in user space).
+ */
+int
 smb_kmod_ioctl(int cmd, smb_ioc_header_t *ioc, uint32_t len)
 {
 	int rc = EINVAL;

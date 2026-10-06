@@ -21,7 +21,8 @@
 /*
  * Copyright 2008 Sun Microsystems, Inc.  All rights reserved.
  * Use is subject to license terms.
- * Copyright 2012, Joyent, Inc.  All rights reserved.
+ *
+ * Copyright 2018 Joyent, Inc.
  */
 
 /*
@@ -180,7 +181,7 @@ wait_ignore_by_fmri(const char *fmri)
  *   wait_register is called after we have called fork(2), and know which pid we
  *   wish to monitor.  However, since the child may have already exited by the
  *   time we are called, we must handle the error cases from open(2)
- *   appropriately.  The am_parent flag is recorded to handle waitpid(2)
+ *   appropriately.  The am_parent flag is recorded to handle waitpid(3C)
  *   behaviour on removal; similarly, the direct flag is passed through to a
  *   potential call to wait_remove() to govern its behaviour in different
  *   contexts.
@@ -252,6 +253,8 @@ wait_register(pid_t pid, const char *inst_fmri, int am_parent, int direct)
 void *
 wait_thread(void *args)
 {
+	(void) pthread_setname_np(pthread_self(), "wait");
+
 	for (;;) {
 		port_event_t pe;
 		int fd;
@@ -291,7 +294,7 @@ wait_thread(void *args)
 			    psi.pr_lwp.pr_lwpid != 0) {
 				/*
 				 * We have determined, in accordance with the
-				 * definition in proc(4), this process is not a
+				 * definition in proc(5), this process is not a
 				 * zombie.  Reassociate.
 				 */
 				if (port_associate(port_fd, PORT_SOURCE_FD, fd,

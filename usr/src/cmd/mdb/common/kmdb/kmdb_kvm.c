@@ -21,6 +21,9 @@
 /*
  * Copyright (c) 2004, 2010, Oracle and/or its affiliates. All rights reserved.
  * Copyright (c) 2013 by Delphix. All rights reserved.
+ *
+ * Copyright 2019 Joyent, Inc.
+ * Copyright 2025 Oxide Computer Company
  */
 
 #include <kmdb/kmdb_kvm.h>
@@ -47,6 +50,7 @@
 #include <sys/kobj.h>
 #include <sys/kobj_impl.h>
 #include <sys/bitmap.h>
+#include <sys/uuid.h>
 #include <vm/as.h>
 
 static const char KMT_RTLD_NAME[] = "krtld";
@@ -283,6 +287,8 @@ kmt_vtop(mdb_tgt_t *t, mdb_tgt_as_t as, uintptr_t va, physaddr_t *pap)
 	case (uintptr_t)MDB_TGT_AS_IO:
 		return (set_errno(EINVAL));
 	case (uintptr_t)MDB_TGT_AS_VIRT:
+	case (uintptr_t)MDB_TGT_AS_VIRT_I:
+	case (uintptr_t)MDB_TGT_AS_VIRT_S:
 		if ((asp = (struct as *)kmt_read_kas(t)) == NULL)
 			return (-1); /* errno is set for us */
 		break;
@@ -549,9 +555,8 @@ kmt_dmod_status(char *msg, int state)
 static int
 kmt_status_dcmd(uintptr_t addr, uint_t flags, int argc, const mdb_arg_t *argv)
 {
-	kmt_data_t *kmt = mdb.m_target->t_data;
 	struct utsname uts;
-	char uuid[37];
+	char uuid[UUID_PRINTABLE_STRING_LENGTH];
 	kreg_t tt;
 
 	if (mdb_tgt_readsym(mdb.m_target, MDB_TGT_AS_VIRT, &uts, sizeof (uts),
@@ -567,20 +572,13 @@ kmt_status_dcmd(uintptr_t addr, uint_t flags, int argc, const mdb_arg_t *argv)
 	mdb_printf("operating system: %s %s (%s)\n",
 	    uts.release, uts.version, uts.machine);
 
-	if (mdb_tgt_readsym(mdb.m_target, MDB_TGT_AS_VIRT, uuid, sizeof (uuid),
-	    "genunix", "dump_osimage_uuid") != sizeof (uuid)) {
-		warn("failed to read 'dump_osimage_uuid' string from kernel\n");
-		(void) strcpy(uuid, "(error)");
-	} else if (*uuid == '\0') {
-		(void) strcpy(uuid, "(not set)");
-	} else if (uuid[36] != '\0') {
-		(void) strcpy(uuid, "(invalid)");
-	}
-	mdb_printf("image uuid: %s\n", uuid);
+	mdb_print_buildversion();
 
-	if (kmt->kmt_cpu != NULL) {
-		mdb_printf("CPU-specific support: %s\n",
-		    kmt_cpu_name(kmt->kmt_cpu));
+	if (mdb_readsym(uuid, sizeof (uuid),
+	    "dump_osimage_uuid") == sizeof (uuid) &&
+	    uuid[sizeof (uuid) - 1] == '\0') {
+		mdb_printf("image uuid: %s\n", uuid[0] != '\0' ?
+		    uuid : "(not set)");
 	}
 
 	mdb_printf("DTrace state: %s\n", (kmdb_kdi_dtrace_get_state() ==
@@ -612,9 +610,27 @@ kmt_switch(uintptr_t addr, uint_t flags, int argc, const mdb_arg_t *argv)
 	return (DCMD_OK);
 }
 
+static void
+kmt_stack_help(void)
+{
+	mdb_printf(
+	    "Options:\n"
+	    "  -n   do not resolve addresses to names\n"
+	    "  -s   show the size of each stack frame to the left\n"
+	    "  -t   where CTF is present, show types for functions and "
+	    "arguments\n"
+	    "  -v   include frame pointer information (this is the default "
+	    "for %<b>$C%</b>)\n"
+	    "\n"
+	    "If the optional %<u>cnt%</u> is given, no more than %<u>cnt%</u> "
+	    "arguments are shown\nfor each stack frame.\n");
+}
+
 static const mdb_dcmd_t kmt_dcmds[] = {
-	{ "$c", "?[cnt]", "print stack backtrace", kmt_stack },
-	{ "$C", "?[cnt]", "print stack backtrace", kmt_stackv },
+	{ "$c", "?[-nstv] [cnt]", "print stack backtrace", kmt_stack,
+	    kmt_stack_help },
+	{ "$C", "?[-nstv] [cnt]", "print stack backtrace", kmt_stackv,
+	    kmt_stack_help },
 	{ "$r", NULL, "print general-purpose registers", kmt_regs },
 	{ "$?", NULL, "print status and registers", kmt_regs },
 	{ ":x", ":", "change the active CPU", kmt_switch },
@@ -630,14 +646,16 @@ static const mdb_dcmd_t kmt_dcmds[] = {
 	{ "rdmsr", ":", "read an MSR", kmt_rdmsr },
 	{ "wrmsr", ": val", "write an MSR", kmt_wrmsr },
 	{ "rdpcicfg", ": bus dev func", "read a register in PCI config space",
-	kmt_rdpcicfg },
-	{ "wrpcicfg", ": bus dev func val", "write a register in PCI config "
-	"space", kmt_wrpcicfg },
+	    kmt_rdpcicfg },
+	{ "wrpcicfg", ": bus dev func val",
+	    "write a register in PCI config space", kmt_wrpcicfg },
 #endif
 	{ "noducttape", NULL, NULL, kmt_noducttape },
 	{ "regs", NULL, "print general-purpose registers", kmt_regs },
-	{ "stack", "?[cnt]", "print stack backtrace", kmt_stack },
-	{ "stackregs", "?", "print stack backtrace and registers", kmt_stackr },
+	{ "stack", "?[-nstv] [cnt]", "print stack backtrace", kmt_stack,
+	    kmt_stack_help },
+	{ "stackregs", "?[-nstv] [cnt]", "print stack backtrace and registers",
+	    kmt_stackr, kmt_stack_help },
 	{ "status", NULL, "print summary of current target", kmt_status_dcmd },
 	{ "switch", ":", "change the active CPU", kmt_switch },
 	{ NULL }
@@ -661,8 +679,8 @@ kmt_reg_disc_set(mdb_var_t *v, uintmax_t r)
 }
 
 static const mdb_nv_disc_t kmt_reg_disc = {
-	kmt_reg_disc_set,
-	kmt_reg_disc_get
+	.disc_get = kmt_reg_disc_get,
+	.disc_set = kmt_reg_disc_set
 };
 
 /*ARGSUSED*/
@@ -1029,7 +1047,6 @@ kmt_lookup_by_name(mdb_tgt_t *t, const char *obj, const char *name,
 	if (n == 0)
 		return (set_errno(EMDB_NOSYM));
 
-found:
 	bcopy(&sym, symp, sizeof (GElf_Sym));
 	sip->sym_id = symid;
 	sip->sym_table = MDB_TGT_SYMTAB;
@@ -1159,7 +1176,7 @@ kmt_mapping_iter(mdb_tgt_t *t, mdb_tgt_map_f *func, void *private)
 	m.map_cb = func;
 	m.map_data = private;
 
-	if ((kas = kmt_read_kas(t)) == NULL)
+	if ((kas = kmt_read_kas(t)) == 0)
 		return (-1); /* errno is set for us */
 
 	return (mdb_pwalk("seg", (mdb_walk_cb_t)kmt_mapping_walk, &m, kas));
@@ -1700,7 +1717,7 @@ static char *
 kmt_brkpt_info(mdb_tgt_t *t, mdb_sespec_t *sep, mdb_vespec_t *vep,
     mdb_tgt_spec_desc_t *sp, char *buf, size_t nbytes)
 {
-	uintptr_t addr = NULL;
+	uintptr_t addr = 0;
 
 	if (vep != NULL) {
 		kmt_bparg_t *ka = vep->ve_args;
@@ -1858,15 +1875,15 @@ kmt_brkpt_match(mdb_tgt_t *t, mdb_sespec_t *sep, mdb_tgt_status_t *tsp)
 }
 
 static const mdb_se_ops_t kmt_brkpt_ops = {
-	kmt_brkpt_ctor,		/* se_ctor */
-	kmt_brkpt_dtor,		/* se_dtor */
-	kmt_brkpt_info,		/* se_info */
-	kmt_brkpt_secmp,	/* se_secmp */
-	kmt_brkpt_vecmp,	/* se_vecmp */
-	kmt_brkpt_arm,		/* se_arm */
-	kmt_brkpt_disarm,	/* se_disarm */
-	kmt_brkpt_cont,		/* se_cont */
-	kmt_brkpt_match		/* se_match */
+	.se_ctor = kmt_brkpt_ctor,
+	.se_dtor = kmt_brkpt_dtor,
+	.se_info = kmt_brkpt_info,
+	.se_secmp = kmt_brkpt_secmp,
+	.se_vecmp = kmt_brkpt_vecmp,
+	.se_arm = kmt_brkpt_arm,
+	.se_disarm = kmt_brkpt_disarm,
+	.se_cont = kmt_brkpt_cont,
+	.se_match = kmt_brkpt_match,
 };
 
 static int
@@ -1948,6 +1965,10 @@ kmt_wapt_info(mdb_tgt_t *t, mdb_sespec_t *sep, mdb_vespec_t *vep,
 			fmt = "stop on %s of I/O port %p";
 		else
 			fmt = "stop on %s of I/O port [%p, %p)";
+		break;
+
+	default:
+		fmt = "stop on %s of unknown [%p, %p]";
 		break;
 	}
 
@@ -2067,15 +2088,15 @@ kmt_wapt_match(mdb_tgt_t *t, mdb_sespec_t *sep, mdb_tgt_status_t *tsp)
 }
 
 static const mdb_se_ops_t kmt_wapt_ops = {
-	kmt_wapt_ctor,		/* se_ctor */
-	kmt_wapt_dtor,		/* se_dtor */
-	kmt_wapt_info,		/* se_info */
-	kmt_wapt_secmp,		/* se_secmp */
-	kmt_wapt_vecmp,		/* se_vecmp */
-	kmt_wapt_arm,		/* se_arm */
-	kmt_wapt_disarm,	/* se_disarm */
-	kmt_wapt_cont,		/* se_cont */
-	kmt_wapt_match		/* se_match */
+	.se_ctor = kmt_wapt_ctor,
+	.se_dtor = kmt_wapt_dtor,
+	.se_info = kmt_wapt_info,
+	.se_secmp = kmt_wapt_secmp,
+	.se_vecmp = kmt_wapt_vecmp,
+	.se_arm = kmt_wapt_arm,
+	.se_disarm = kmt_wapt_disarm,
+	.se_cont = kmt_wapt_cont,
+	.se_match = kmt_wapt_match,
 };
 
 /*ARGSUSED*/
@@ -2134,15 +2155,15 @@ kmt_trap_match(mdb_tgt_t *t, mdb_sespec_t *sep, mdb_tgt_status_t *tsp)
 }
 
 static const mdb_se_ops_t kmt_trap_ops = {
-	kmt_trap_ctor,		/* se_ctor */
-	no_se_dtor,		/* se_dtor */
-	kmt_trap_info,		/* se_info */
-	no_se_secmp,		/* se_secmp */
-	no_se_vecmp,		/* se_vecmp */
-	no_se_arm,		/* se_arm */
-	no_se_disarm,		/* se_disarm */
-	no_se_cont,		/* se_cont */
-	kmt_trap_match		/* se_match */
+	.se_ctor = kmt_trap_ctor,
+	.se_dtor = no_se_dtor,
+	.se_info = kmt_trap_info,
+	.se_secmp = no_se_secmp,
+	.se_vecmp = no_se_vecmp,
+	.se_arm = no_se_arm,
+	.se_disarm = no_se_disarm,
+	.se_cont = no_se_cont,
+	.se_match = kmt_trap_match,
 };
 
 static void
@@ -2231,7 +2252,7 @@ kmt_add_sbrkpt(mdb_tgt_t *t, const char *fullname,
 
 	ka = mdb_alloc(sizeof (kmt_bparg_t), UM_SLEEP);
 	ka->ka_symbol = strdup(fullname);
-	ka->ka_addr = NULL;
+	ka->ka_addr = 0;
 	ka->ka_defbp = dbp;
 
 	return (mdb_tgt_vespec_insert(t, &kmt_brkpt_ops, spec_flags,
@@ -2349,8 +2370,7 @@ kmt_cpuid_disc_get(const mdb_var_t *v)
 }
 
 static const mdb_nv_disc_t kmt_cpuid_disc = {
-	NULL,
-	kmt_cpuid_disc_get
+	.disc_get = kmt_cpuid_disc_get
 };
 
 /*
@@ -2392,66 +2412,62 @@ kmt_destroy(mdb_tgt_t *t)
 	if (kmt->kmt_trapmap != NULL)
 		mdb_free(kmt->kmt_trapmap, BT_SIZEOFMAP(kmt->kmt_trapmax));
 
-	if (kmt->kmt_cpu != NULL)
-		kmt_cpu_destroy(kmt->kmt_cpu);
-
-	if (kmt != NULL)
-		mdb_free(kmt, sizeof (kmt_data_t));
+	mdb_free(kmt, sizeof (kmt_data_t));
 }
 
 static const mdb_tgt_ops_t kmt_ops = {
-	kmt_setflags,				/* t_setflags */
-	(int (*)()) mdb_tgt_notsup,		/* t_setcontext */
-	kmt_activate,				/* t_activate */
-	(void (*)()) mdb_tgt_nop,		/* t_deactivate */
-	kmt_periodic,				/* t_periodic */
-	kmt_destroy,				/* t_destroy */
-	kmt_name,				/* t_name */
-	(const char *(*)()) mdb_conf_isa,	/* t_isa */
-	kmt_platform,				/* t_platform */
-	kmt_uname,				/* t_uname */
-	kmt_dmodel,				/* t_dmodel */
-	(ssize_t (*)()) mdb_tgt_notsup,		/* t_aread */
-	(ssize_t (*)()) mdb_tgt_notsup,		/* t_awrite */
-	kmt_read,				/* t_vread */
-	kmt_write,				/* t_vwrite */
-	kmt_pread,				/* t_pread */
-	kmt_pwrite,				/* t_pwrite */
-	kmt_read,				/* t_fread */
-	kmt_write,				/* t_fwrite */
-	kmt_ioread,				/* t_ioread */
-	kmt_iowrite,				/* t_iowrite */
-	kmt_vtop,				/* t_vtop */
-	kmt_lookup_by_name,			/* t_lookup_by_name */
-	kmt_lookup_by_addr,			/* t_lookup_by_addr */
-	kmt_symbol_iter,			/* t_symbol_iter */
-	kmt_mapping_iter,			/* t_mapping_iter */
-	kmt_object_iter,			/* t_object_iter */
-	kmt_addr_to_map,			/* t_addr_to_map */
-	kmt_name_to_map,			/* t_name_to_map */
-	kmt_addr_to_ctf,			/* t_addr_to_ctf */
-	kmt_name_to_ctf,			/* t_name_to_ctf */
-	kmt_status,				/* t_status */
-	(int (*)()) mdb_tgt_notsup,		/* t_run */
-	kmt_step,				/* t_step */
-	kmt_step_out,				/* t_step_out */
-	kmt_step_branch,			/* t_step_branch */
-	kmt_next,				/* t_next */
-	kmt_continue,				/* t_cont */
-	(int (*)()) mdb_tgt_notsup,		/* t_signal */
-	kmt_add_vbrkpt,				/* t_add_vbrkpt */
-	kmt_add_sbrkpt,				/* t_add_sbrkpt */
-	kmt_add_pwapt,				/* t_add_pwapt */
-	kmt_add_vwapt,				/* t_add_vwapt */
-	kmt_add_iowapt,				/* t_add_iowapt */
-	(int (*)()) mdb_tgt_null,		/* t_add_sysenter */
-	(int (*)()) mdb_tgt_null,		/* t_add_sysexit */
-	(int (*)()) mdb_tgt_null,		/* t_add_signal */
-	kmt_add_trap,				/* t_add_fault */
-	kmt_getareg,				/* t_getareg */
-	kmt_putareg,				/* t_putareg */
-	(int (*)()) mdb_tgt_nop,		/* XXX t_stack_iter */
-	(int (*)()) mdb_tgt_notsup		/* t_auxv */
+	.t_setflags = kmt_setflags,
+	.t_setcontext = (int (*)())(uintptr_t)mdb_tgt_notsup,
+	.t_activate = kmt_activate,
+	.t_deactivate = (void (*)())(uintptr_t)mdb_tgt_nop,
+	.t_periodic = kmt_periodic,
+	.t_destroy = kmt_destroy,
+	.t_name = kmt_name,
+	.t_isa = (const char *(*)())mdb_conf_isa,
+	.t_platform = kmt_platform,
+	.t_uname = kmt_uname,
+	.t_dmodel = kmt_dmodel,
+	.t_aread = (ssize_t (*)())mdb_tgt_notsup,
+	.t_awrite = (ssize_t (*)())mdb_tgt_notsup,
+	.t_vread = kmt_read,
+	.t_vwrite = kmt_write,
+	.t_pread = kmt_pread,
+	.t_pwrite = kmt_pwrite,
+	.t_fread = kmt_read,
+	.t_fwrite = kmt_write,
+	.t_ioread = kmt_ioread,
+	.t_iowrite = kmt_iowrite,
+	.t_vtop = kmt_vtop,
+	.t_lookup_by_name = kmt_lookup_by_name,
+	.t_lookup_by_addr = kmt_lookup_by_addr,
+	.t_symbol_iter = kmt_symbol_iter,
+	.t_mapping_iter = kmt_mapping_iter,
+	.t_object_iter = kmt_object_iter,
+	.t_addr_to_map = kmt_addr_to_map,
+	.t_name_to_map = kmt_name_to_map,
+	.t_addr_to_ctf = kmt_addr_to_ctf,
+	.t_name_to_ctf = kmt_name_to_ctf,
+	.t_status = kmt_status,
+	.t_run = (int (*)())(uintptr_t)mdb_tgt_notsup,
+	.t_step = kmt_step,
+	.t_step_out = kmt_step_out,
+	.t_next = kmt_next,
+	.t_cont = kmt_continue,
+	.t_signal = (int (*)())(uintptr_t)mdb_tgt_notsup,
+	.t_add_vbrkpt = kmt_add_vbrkpt,
+	.t_add_sbrkpt = kmt_add_sbrkpt,
+	.t_add_pwapt = kmt_add_pwapt,
+	.t_add_vwapt = kmt_add_vwapt,
+	.t_add_iowapt = kmt_add_iowapt,
+	.t_add_sysenter = (int (*)())(uintptr_t)mdb_tgt_null,
+	.t_add_sysexit = (int (*)())(uintptr_t)mdb_tgt_null,
+	.t_add_signal = (int (*)())(uintptr_t)mdb_tgt_null,
+	.t_add_fault = kmt_add_trap,
+	.t_getareg = kmt_getareg,
+	.t_putareg = kmt_putareg,
+	.t_stack_iter = (int (*)())(uintptr_t)mdb_tgt_nop,	/* XXX */
+	.t_auxv = (int (*)())(uintptr_t)mdb_tgt_notsup,
+	.t_thread_name = (int (*)())(uintptr_t)mdb_tgt_notsup,
 };
 
 /*
@@ -2504,10 +2520,6 @@ kmt_sync(mdb_tgt_t *t)
 		(void) mdb_tgt_sespec_activate_all(t);
 	}
 
-	if (kmt->kmt_cpu_retry && ((kmt->kmt_cpu = kmt_cpu_create(t)) !=
-	    NULL || errno != EAGAIN))
-		kmt->kmt_cpu_retry = FALSE;
-
 	(void) mdb_tgt_status(t, &t->t_status);
 }
 
@@ -2536,16 +2548,10 @@ kmdb_kvm_create(mdb_tgt_t *t, int argc, const char *argv[])
 	kmt_init_isadep(t);
 
 	kmt->kmt_symavail = FALSE;
-	kmt->kmt_cpu_retry = TRUE;
 
 	bzero(&kmt_defbp_list, sizeof (mdb_list_t));
 
 	return (0);
-
-create_err:
-	kmt_destroy(t);
-
-	return (-1);
 }
 
 /*

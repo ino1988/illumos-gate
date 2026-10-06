@@ -20,10 +20,9 @@
 # CDDL HEADER END
 #
 #
-# ident	"%Z%%M%	%I%	%E% SMI"
-#
 # Copyright 1989-2002 Sun Microsystems, Inc.  All rights reserved.
 # Use is subject to license terms.
+# Copyright 2015 Igor Kozhukhov <ikozhukhov@gmail.com>
 #
 # cmd/lp/filter/postscript/dpost/Makefile
 #
@@ -43,7 +42,7 @@ COMMONOBJS =	$(COMMONDIR)/glob.o \
 		$(COMMONDIR)/request.o \
 		$(COMMONDIR)/tempnam.o
 
-TXTS=		README 
+TXTS=		README
 
 # dpost uses some floating point arithmetic, so if you're running on a system
 # without floating point hardware add the -f option to the definition of CFLAGS.
@@ -70,7 +69,7 @@ $(COMMONOBJS):	$$(@:%.o=%.c)
 
 ps_include.o:	ps_include.h
 ps_include.h:	ps_include.ps ps_include.awk
-		$(RM) $@; awk -f ps_include.awk ps_include.ps >$@
+		$(RM) $@; $(AWK) -f ps_include.awk ps_include.ps >$@
 
 clean:
 		$(RM) $(OBJS) ps_include.h

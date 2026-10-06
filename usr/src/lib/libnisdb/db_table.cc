@@ -24,6 +24,9 @@
  *
  * Copyright 2004 Sun Microsystems, Inc.  All rights reserved.
  * Use is subject to license terms.
+ *
+ * Copyright 2015 RackTop Systems.
+ * Copyright (c) 2016 by Delphix. All rights reserved.
  */
 
 #include <stdio.h>
@@ -74,7 +77,7 @@ __setMaxTimeT(void)
 	(void) memcpy(&maxTimeT, b, sizeof (time_t));
 
 	if (maxTimeT < 1)
-		maxTimeT = ~(1<<((8*sizeof (maxTimeT))-1));
+		maxTimeT = ~(1L<<((8*sizeof (maxTimeT))-1));
 }
 #pragma init(__setMaxTimeT)
 }
@@ -142,14 +145,14 @@ db_free_list::reset()
 	WRITEUNLOCKV(this, "wu db_free_list::reset");
 }
 
-/* Returns the location of a free entry, or NULL, if there aren't any. */
+/* Returns the location of a free entry, or 0, if there aren't any. */
 entryp
 db_free_list::pop()
 {
-	WRITELOCK(this, NULL, "w db_free_list::pop");
+	WRITELOCK(this, 0, "w db_free_list::pop");
 	if (head == NULL) {
-		WRITEUNLOCK(this, NULL, "wu db_free_list::pop");
-		return (NULL);
+		WRITEUNLOCK(this, 0, "wu db_free_list::pop");
+		return (0);
 	}
 	db_free_entry* old_head = head;
 	entryp found = head->where;
@@ -190,7 +193,7 @@ db_free_list::push(entryp tabloc)
  * n1 is the number of entries that should be in the freelist.
  * n2 is the number of entries actually found in the freelist.
  * [loc1...locn] are the entries.   n2 <= n1 because we never count beyond n1.
- * It is up to the caller to free the returned vector when he is through.
+ * It is up to the caller to free the returned vector when it is through.
 */
 long *
 db_free_list::stats(int nslots)
@@ -504,7 +507,7 @@ db_table::first_entry(entryp * where)
 {
 	ASSERTRHELD(table);
 	if (count == 0 || tab == NULL) {  /* empty table */
-		*where = NULL;
+		*where = 0;
 		return (NULL);
 	} else {
 		entryp i;
@@ -516,7 +519,7 @@ db_table::first_entry(entryp * where)
 			}
 		}
 	}
-	*where = NULL;
+	*where = 0;
 	return (NULL);
 }
 
@@ -538,7 +541,7 @@ db_table::next_entry(entryp prev, entryp* newentry)
 			return (tab[i]);
 		}
 	}
-	*newentry = NULL;
+	*newentry = 0;
 	return (NULL);
 }
 
@@ -659,7 +662,7 @@ db_table::add_entry(entry_object *obj, int initialLoad) {
 	 */
 	ASSERTWHELD(table);
 	entryp where = freelist.pop();
-	if (where == NULL) {				/* empty freelist */
+	if (where == 0) {				/* empty freelist */
 		if (last_used >= (table_size-1))	/* full (> is for 0) */
 			grow();
 		where = ++last_used;
@@ -673,7 +676,7 @@ db_table::add_entry(entry_object *obj, int initialLoad) {
 		tab[where] = new_entry(obj);
 		return (where);
 	} else {
-		return (NULL);
+		return (0);
 	}
 }
 
@@ -736,7 +739,7 @@ db_table::delete_entry(entryp where)
 /*
  * Returns statistics of table.
  * [vector_size][table_size][last_used][count][freelist].
- * It is up to the caller to free the returned vector when his is through.
+ * It is up to the caller to free the returned vector when it is through.
  * The free list is included if 'fl' is TRUE.
 */
 long *
@@ -1112,6 +1115,7 @@ db_table::dump(char *file)
 	else
 		ret = status;
 	READUNLOCK(this, ret, "ru db_table::dump");
+	return (ret);
 }
 
 /* Constructor that loads in the table from the given file */

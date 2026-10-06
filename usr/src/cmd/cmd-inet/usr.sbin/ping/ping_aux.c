@@ -25,14 +25,17 @@
  */
 
 /*	Copyright (c) 1983, 1984, 1985, 1986, 1987, 1988, 1989 AT&T	*/
-/*	  All Rights Reserved  	*/
+/*	  All Rights Reserved	*/
+
+/*
+ * Copyright 2015, Joyent, Inc.
+ * Copyright 2024 Bill Sommerfeld <sommerfeld@hamachi.org>
+ */
 
 /*
  * Portions of this source code were derived from Berkeley 4.3 BSD
  * under license from the Regents of the University of California.
  */
-
-#pragma ident	"%Z%%M%	%I%	%E% SMI"
 
 #include <stdio.h>
 #include <string.h>
@@ -75,22 +78,10 @@ struct ip_sourceroute {
 	uint8_t ipsr_addrs[1][sizeof (struct in_addr)];
 };
 
-void check_reply(struct addrinfo *, struct msghdr *, int, ushort_t);
-extern void find_dstaddr(ushort_t, union any_in_addr *);
-extern boolean_t is_a_target(struct addrinfo *, union any_in_addr *);
-extern char *pr_name(char *, int);
 static void pr_options(uchar_t *, int);
-extern char *pr_protocol(int);
 static void pr_rropt(uchar_t *, int, boolean_t);
 static void pr_tsopt(uchar_t *, int);
 static char *pr_type(int);
-extern void schedule_sigalrm();
-extern void send_scheduled_probe();
-extern boolean_t seq_match(ushort_t, int, ushort_t);
-extern void sigalrm_handler();
-void set_IPv4_options(int, union any_in_addr *, int, struct in_addr *,
-    struct in_addr *);
-extern void tvsub(struct timeval *, struct timeval *);
 
 /*
  * Set IPv4 options
@@ -233,9 +224,10 @@ check_reply(struct addrinfo *ai_dst, struct msghdr *msg, int cc,
 	int hlen, hlen1;
 	int64_t triptime;
 	boolean_t valid_reply = _B_FALSE;
-	boolean_t reply_matched_current_target;	/* Is the source address of */
-						/* this reply same as where */
-						/* we're sending currently? */
+	boolean_t reply_matched_current_target = _B_FALSE; /* Is the source */
+						/* address of this reply same */
+						/* as where we're sending */
+						/* currently? */
 	boolean_t last_reply_from_targetaddr = _B_FALSE; /* Is this stats, */
 						/* probe all with npackets>0 */
 						/* and we received reply for */
@@ -282,7 +274,7 @@ check_reply(struct addrinfo *ai_dst, struct msghdr *msg, int cc,
 	/* LINTED */
 	intp = (int32_t *)buf;
 
-	(void) gettimeofday(&tv, (struct timezone *)NULL);
+	ping_gettime(msg, &tv);
 
 	/* LINTED */
 	ip = (struct ip *)buf;
@@ -291,7 +283,7 @@ check_reply(struct addrinfo *ai_dst, struct msghdr *msg, int cc,
 	if ((cc < sizeof (struct ip)) || (cc < hlen + ICMP_MINLEN)) {
 		if (verbose) {
 			Printf("packet too short (%d bytes) from %s\n", cc,
-			    pr_name((char *)&from->sin_addr, AF_INET));
+			    pr_name4(from));
 		}
 		return;
 	}
@@ -320,8 +312,7 @@ check_reply(struct addrinfo *ai_dst, struct msghdr *msg, int cc,
 		    (cc_left < hlen1 + sizeof (struct udphdr))) {
 			if (verbose) {
 				Printf("packet too short (%d bytes) from %s\n",
-				    cc, pr_name((char *)&from->sin_addr,
-				    AF_INET));
+				    cc, pr_name4(from));
 			}
 			return;
 		}
@@ -352,8 +343,8 @@ check_reply(struct addrinfo *ai_dst, struct msghdr *msg, int cc,
 			nreceived++;
 			reply_matched_current_target =
 			    seq_match(current_targetaddr->starting_seq_num,
-				current_targetaddr->num_sent,
-				ntohs(up->uh_dport));
+			    current_targetaddr->num_sent,
+			    ntohs(up->uh_dport));
 			if (reply_matched_current_target) {
 				current_targetaddr->got_reply = _B_TRUE;
 				nreceived_last_target++;
@@ -444,19 +435,16 @@ check_reply(struct addrinfo *ai_dst, struct msghdr *msg, int cc,
 
 		dst_addr.addr = ip->ip_dst;
 		if (valid_reply) {
-			Printf("%d bytes from %s: ", cc,
-			    pr_name((char *)&from->sin_addr, AF_INET));
+			Printf("%d bytes from %s: ", cc, pr_name4(from));
 			Printf("udp_port=%d. ", ntohs(up->uh_dport));
 			print_newline = _B_TRUE;
 		} else if (is_a_target(ai_dst, &dst_addr) || verbose) {
 			if (icp->icmp_code >= A_CNT(unreach)) {
 				Printf("ICMP %d Unreachable from gateway %s\n",
-				    icp->icmp_code,
-				    pr_name((char *)&from->sin_addr, AF_INET));
+				    icp->icmp_code, pr_name4(from));
 			} else {
 				Printf("ICMP %s from gateway %s\n",
-				    unreach[icp->icmp_code],
-				    pr_name((char *)&from->sin_addr, AF_INET));
+				    unreach[icp->icmp_code], pr_name4(from));
 			}
 			Printf(" for %s from %s", pr_protocol(ip->ip_p),
 			    pr_name((char *)&ip->ip_src, AF_INET));
@@ -506,8 +494,7 @@ check_reply(struct addrinfo *ai_dst, struct msghdr *msg, int cc,
 		if (cc_left < sizeof (struct ip)) {
 			if (verbose) {
 				Printf("packet too short (%d bytes) from %s\n",
-				    cc, pr_name((char *)&from->sin_addr,
-				    AF_INET));
+				    cc, pr_name4(from));
 			}
 			return;
 		}
@@ -517,12 +504,10 @@ check_reply(struct addrinfo *ai_dst, struct msghdr *msg, int cc,
 		if (is_a_target(ai_dst, &dst_addr) || verbose) {
 			if (icp->icmp_code >= A_CNT(redirect)) {
 				Printf("ICMP %d redirect from gateway %s\n",
-				    icp->icmp_code,
-				    pr_name((char *)&from->sin_addr, AF_INET));
+				    icp->icmp_code, pr_name4(from));
 			} else {
 				Printf("ICMP %s redirect from gateway %s\n",
-				    redirect[icp->icmp_code],
-				    pr_name((char *)&from->sin_addr, AF_INET));
+				    redirect[icp->icmp_code], pr_name4(from));
 			}
 			Printf(" to %s",
 			    pr_name((char *)&icp->icmp_gwaddr, AF_INET));
@@ -552,8 +537,8 @@ check_reply(struct addrinfo *ai_dst, struct msghdr *msg, int cc,
 			nreceived++;
 			reply_matched_current_target =
 			    seq_match(current_targetaddr->starting_seq_num,
-				current_targetaddr->num_sent,
-				ntohs(icp->icmp_seq));
+			    current_targetaddr->num_sent,
+			    ntohs(icp->icmp_seq));
 			if (reply_matched_current_target) {
 				current_targetaddr->got_reply = _B_TRUE;
 				nreceived_last_target++;
@@ -665,8 +650,7 @@ check_reply(struct addrinfo *ai_dst, struct msghdr *msg, int cc,
 			Printf("%d bytes from %s: ", cc,
 			    pr_name((char *)&dst_addr.addr,  AF_INET));
 		} else {
-			Printf("%d bytes from %s: ", cc,
-			    pr_name((char *)&from->sin_addr, AF_INET));
+			Printf("%d bytes from %s: ", cc, pr_name4(from));
 		}
 		Printf("icmp_seq=%d. ", ntohs(icp->icmp_seq));
 
@@ -705,8 +689,7 @@ check_reply(struct addrinfo *ai_dst, struct msghdr *msg, int cc,
 		if (cc_left < sizeof (struct ip)) {
 			if (verbose) {
 				Printf("packet too short (%d bytes) from %s\n",
-				    cc, pr_name((char *)&from->sin_addr,
-				    AF_INET));
+				    cc, pr_name4(from));
 			}
 			return;
 		}
@@ -714,8 +697,7 @@ check_reply(struct addrinfo *ai_dst, struct msghdr *msg, int cc,
 		hlen1 = ip->ip_hl << 2;
 		dst_addr.addr = ip->ip_dst;
 		if (is_a_target(ai_dst, &dst_addr) || verbose) {
-			Printf("ICMP Source Quench from %s\n",
-			    pr_name((char *)&from->sin_addr, AF_INET));
+			Printf("ICMP Source Quench from %s\n", pr_name4(from));
 			Printf(" for %s from %s", pr_protocol(ip->ip_p),
 			    pr_name((char *)&ip->ip_src, AF_INET));
 			Printf(" to %s", pr_name((char *)&ip->ip_dst, AF_INET));
@@ -739,8 +721,7 @@ check_reply(struct addrinfo *ai_dst, struct msghdr *msg, int cc,
 		if (cc_left < sizeof (struct ip)) {
 			if (verbose) {
 				Printf("packet too short (%d bytes) from %s\n",
-				    cc, pr_name((char *)&from->sin_addr,
-				    AF_INET));
+				    cc, pr_name4(from));
 			}
 			return;
 		}
@@ -752,13 +733,12 @@ check_reply(struct addrinfo *ai_dst, struct msghdr *msg, int cc,
 			case ICMP_PARAMPROB_OPTABSENT:
 				Printf("ICMP Missing a Required Option "
 				    "parameter problem from %s\n",
-				    pr_name((char *)&from->sin_addr, AF_INET));
+				    pr_name4(from));
 				Printf(" option type = %d", icp->icmp_pptr);
 				break;
 			case ICMP_PARAMPROB_BADLENGTH:
 				Printf("ICMP Bad Length parameter problem "
-				    "from %s\n",
-				    pr_name((char *)&from->sin_addr, AF_INET));
+				    "from %s\n", pr_name4(from));
 				Printf(" in byte %d", icp->icmp_pptr);
 				if (icp->icmp_pptr <= hlen1) {
 					Printf(" (value 0x%x)",
@@ -768,7 +748,7 @@ check_reply(struct addrinfo *ai_dst, struct msghdr *msg, int cc,
 			case 0:
 			default:
 				Printf("ICMP Parameter Problem from %s\n",
-				    pr_name((char *)&from->sin_addr, AF_INET));
+				    pr_name4(from));
 				Printf(" in byte %d", icp->icmp_pptr);
 				if (icp->icmp_pptr <= hlen1) {
 					Printf(" (value 0x%x)",
@@ -800,8 +780,7 @@ check_reply(struct addrinfo *ai_dst, struct msghdr *msg, int cc,
 		if (cc_left < sizeof (struct ip)) {
 			if (verbose) {
 				Printf("packet too short (%d bytes) from %s\n",
-				    cc, pr_name((char *)&from->sin_addr,
-				    AF_INET));
+				    cc, pr_name4(from));
 			}
 			return;
 		}
@@ -811,12 +790,11 @@ check_reply(struct addrinfo *ai_dst, struct msghdr *msg, int cc,
 		if (is_a_target(ai_dst, &dst_addr) || verbose) {
 			if (icp->icmp_code >= A_CNT(timexceed)) {
 				Printf("ICMP %d time exceeded from %s\n",
-				    icp->icmp_code,
-				    pr_name((char *)&from->sin_addr, AF_INET));
+				    icp->icmp_code, pr_name4(from));
 			} else {
 				Printf("ICMP %s from %s\n",
 				    timexceed[icp->icmp_code],
-				    pr_name((char *)&from->sin_addr, AF_INET));
+				    pr_name4(from));
 			}
 			Printf(" for %s from %s", pr_protocol(ip->ip_p),
 			    pr_name((char *)&ip->ip_src, AF_INET));
@@ -837,8 +815,7 @@ check_reply(struct addrinfo *ai_dst, struct msghdr *msg, int cc,
 		if (cc_left < sizeof (struct id_ts)) {
 			if (verbose) {
 				Printf("packet too short (%d bytes) from %s\n",
-				    cc, pr_name((char *)&from->sin_addr,
-				    AF_INET));
+				    cc, pr_name4(from));
 			}
 			return;
 		}
@@ -863,8 +840,8 @@ check_reply(struct addrinfo *ai_dst, struct msghdr *msg, int cc,
 			nreceived++;
 			reply_matched_current_target =
 			    seq_match(current_targetaddr->starting_seq_num,
-				current_targetaddr->num_sent,
-				ntohs(icp->icmp_seq));
+			    current_targetaddr->num_sent,
+			    ntohs(icp->icmp_seq));
 			if (reply_matched_current_target) {
 				current_targetaddr->got_reply = _B_TRUE;
 				nreceived_last_target++;
@@ -977,8 +954,7 @@ check_reply(struct addrinfo *ai_dst, struct msghdr *msg, int cc,
 			Printf("%d bytes from %s: ", cc,
 			    pr_name((char *)&dst_addr.addr,  AF_INET));
 		} else {
-			Printf("%d bytes from %s: ", cc,
-			    pr_name((char *)&from->sin_addr, AF_INET));
+			Printf("%d bytes from %s: ", cc, pr_name4(from));
 		}
 		Printf("icmp_seq=%d. ", ntohs(icp->icmp_seq));
 		Printf("orig = %lu, recv = %lu, xmit = %lu ",
@@ -1041,8 +1017,7 @@ check_reply(struct addrinfo *ai_dst, struct msghdr *msg, int cc,
 
 	default:
 		if (verbose) {
-			Printf("%d bytes from %s:\n", cc,
-			    pr_name((char *)&from->sin_addr, AF_INET));
+			Printf("%d bytes from %s:\n", cc, pr_name4(from));
 			Printf("icmp_type=%d (%s) ",
 			    icp->icmp_type, pr_type(icp->icmp_type));
 			Printf("icmp_code=%d\n", icp->icmp_code);

@@ -26,10 +26,36 @@
 
 /*
  * Copyright 2012 Garrett D'Amore <garrett@damore.org>.  All rights reserved.
+ * Copyright 2019 Joyent, Inc.
+ * Copyright 2024 Oxide Computer Company
  */
 
 /*
- *	Host to PCI-Express local bus driver
+ *	npe (Nexus PCIe driver): Host to PCI-Express local bus driver
+ *
+ *	npe serves as the driver for PCIe Root Complexes and as the nexus driver
+ *	for PCIe devices. See also: npe(4D). For more information about hotplug,
+ *	see the big theory statement at uts/common/os/ddi_hp_impl.c.
+ *
+ *
+ *	NDI EVENT HANDLING SUPPORT
+ *
+ *	npe supports NDI event handling. The only available event is surprise
+ *	removal of a device. Child drivers can register surprise removal event
+ *	callbacks by requesting an event cookie using ddi_get_eventcookie for
+ *	the DDI_DEVI_REMOVE_EVENT and add their callback using
+ *	ddi_add_event_handler. For an example, see the nvme driver in
+ *	uts/common/io/nvme/nvme.c.
+ *
+ *	The NDI events in npe are retrieved using NDI_EVENT_NOPASS, which
+ *	prevent them from being propagated up the tree once they reach the npe's
+ *	bus_get_eventcookie operations. This is important because npe maintains
+ *	the state of PCIe devices and their receptacles, via the PCIe hotplug
+ *	controller driver (pciehpc).
+ *
+ *	Hot removal events are ultimately posted by the PCIe hotplug controller
+ *	interrupt handler for hotplug events. Events are posted using the
+ *	ndi_post_event interface.
  */
 
 #include <sys/conf.h>
@@ -71,6 +97,15 @@ static int	npe_intr_ops(dev_info_t *, dev_info_t *, ddi_intr_op_t,
 		    ddi_intr_handle_impl_t *, void *);
 static int	npe_fm_init(dev_info_t *, dev_info_t *, int,
 		    ddi_iblock_cookie_t *);
+static int	npe_bus_get_eventcookie(dev_info_t *, dev_info_t *, char *,
+		    ddi_eventcookie_t *);
+static int	npe_bus_add_eventcall(dev_info_t *, dev_info_t *,
+		    ddi_eventcookie_t, void (*)(dev_info_t *,
+		    ddi_eventcookie_t, void *, void *),
+		    void *, ddi_callback_id_t *);
+static int	npe_bus_remove_eventcall(dev_info_t *, ddi_callback_id_t);
+static int	npe_bus_post_event(dev_info_t *, dev_info_t *,
+		    ddi_eventcookie_t, void *);
 
 static int	npe_fm_callback(dev_info_t *, ddi_fm_error_t *, const void *);
 
@@ -101,10 +136,10 @@ struct bus_ops npe_bus_ops = {
 	ddi_dma_mctl,
 	npe_ctlops,
 	ddi_bus_prop_op,
-	0,			/* (*bus_get_eventcookie)();	*/
-	0,			/* (*bus_add_eventcall)();	*/
-	0,			/* (*bus_remove_eventcall)();	*/
-	0,			/* (*bus_post_event)();		*/
+	npe_bus_get_eventcookie,
+	npe_bus_add_eventcall,
+	npe_bus_remove_eventcall,
+	npe_bus_post_event,
 	0,			/* (*bus_intr_ctl)(); */
 	0,			/* (*bus_config)(); */
 	0,			/* (*bus_unconfig)(); */
@@ -174,7 +209,6 @@ static int npe_initchild(dev_info_t *child);
 /*
  * External support routine
  */
-extern void	npe_query_acpi_mcfg(dev_info_t *dip);
 extern void	npe_ck804_fix_aer_ptr(ddi_acc_handle_t cfg_hdl);
 extern int	npe_disable_empty_bridges_workaround(dev_info_t *child);
 extern void	npe_nvidia_error_workaround(ddi_acc_handle_t cfg_hdl);
@@ -270,12 +304,27 @@ npe_info(dev_info_t *dip, ddi_info_cmd_t cmd, void *arg, void **result)
 	return (ret);
 }
 
+/*
+ * See big theory statement at the top of this file for more information about
+ * surprise removal events.
+ */
+#define	NPE_EVENT_TAG_HOT_REMOVAL	0
+static ndi_event_definition_t npe_ndi_event_defs[1] = {
+	{NPE_EVENT_TAG_HOT_REMOVAL, DDI_DEVI_REMOVE_EVENT, EPL_KERNEL,
+	NDI_EVENT_POST_TO_ALL}
+};
+
+static ndi_event_set_t npe_ndi_events = {
+	NDI_EVENTS_REV1, ARRAY_SIZE(npe_ndi_event_defs), npe_ndi_event_defs
+};
+
 /*ARGSUSED*/
 static int
 npe_attach(dev_info_t *devi, ddi_attach_cmd_t cmd)
 {
 	int		instance = ddi_get_instance(devi);
 	pci_state_t	*pcip = NULL;
+	int		ret;
 
 	if (cmd == DDI_RESUME) {
 		/*
@@ -315,6 +364,22 @@ npe_attach(dev_info_t *devi, ddi_attach_cmd_t cmd)
 	if (pcie_init(devi, NULL) != DDI_SUCCESS)
 		goto fail1;
 
+	ret = ndi_event_alloc_hdl(pcip->pci_dip, NULL, &pcip->pci_ndi_event_hdl,
+	    NDI_SLEEP);
+	if (ret == NDI_SUCCESS) {
+		ret = ndi_event_bind_set(pcip->pci_ndi_event_hdl,
+		    &npe_ndi_events, NDI_SLEEP);
+		if (ret != NDI_SUCCESS) {
+			dev_err(pcip->pci_dip, CE_WARN, "npe:	failed to bind "
+			    "NDI event set (error=%d)", ret);
+			goto fail1;
+		}
+	} else {
+		dev_err(pcip->pci_dip, CE_WARN, "npe:	failed to allocate "
+		    "event handle (error=%d)", ret);
+		goto fail1;
+	}
+
 	/* Second arg: initialize for pci_express root nexus */
 	if (pcitool_init(devi, B_TRUE) != DDI_SUCCESS)
 		goto fail2;
@@ -330,7 +395,6 @@ npe_attach(dev_info_t *devi, ddi_attach_cmd_t cmd)
 	PCIE_DIP2PFD(devi) = kmem_zalloc(sizeof (pf_data_t), KM_SLEEP);
 	pcie_rc_init_pfd(devi, PCIE_DIP2PFD(devi));
 
-	npe_query_acpi_mcfg(devi);
 	ddi_report_dev(devi);
 	pcie_fab_init_bus(devi, PCIE_BUS_FINAL);
 
@@ -351,11 +415,36 @@ npe_detach(dev_info_t *devi, ddi_detach_cmd_t cmd)
 {
 	int instance = ddi_get_instance(devi);
 	pci_state_t *pcip;
+	int ret;
 
 	pcip = ddi_get_soft_state(npe_statep, ddi_get_instance(devi));
 
 	switch (cmd) {
 	case DDI_DETACH:
+
+		/*
+		 * Clean up event handling first, to ensure there are no
+		 * oustanding callbacks registered.
+		 */
+		ret = ndi_event_unbind_set(pcip->pci_ndi_event_hdl,
+		    &npe_ndi_events, NDI_SLEEP);
+		if (ret == NDI_SUCCESS) {
+			/* ndi_event_free_hdl always succeeds. */
+			(void) ndi_event_free_hdl(pcip->pci_ndi_event_hdl);
+		} else {
+			/*
+			 * The event set will only fail to unbind if there are
+			 * outstanding callbacks registered for it, which
+			 * probably means a child driver still has one
+			 * registered and thus was not cleaned up properly
+			 * before npe's detach routine was called. Consequently,
+			 * we should fail the detach here.
+			 */
+			dev_err(pcip->pci_dip, CE_WARN, "npe:	failed to "
+			    "unbind NDI event set (error=%d)", ret);
+			return (DDI_FAILURE);
+		}
+
 		pcie_fab_fini_bus(devi, PCIE_BUS_INITIAL);
 
 		/* Uninitialize pcitool support. */
@@ -372,6 +461,7 @@ npe_detach(dev_info_t *devi, ddi_detach_cmd_t cmd)
 
 		ddi_fm_fini(devi);
 		ddi_soft_state_free(npe_statep, instance);
+
 		return (DDI_SUCCESS);
 
 	case DDI_SUSPEND:
@@ -413,19 +503,19 @@ static int
 npe_bus_map(dev_info_t *dip, dev_info_t *rdip, ddi_map_req_t *mp,
     off_t offset, off_t len, caddr_t *vaddrp)
 {
-	int 		rnumber;
-	int		length;
+	int		rnumber;
 	int		space;
 	ddi_acc_impl_t	*ap;
 	ddi_acc_hdl_t	*hp;
 	ddi_map_req_t	mr;
 	pci_regspec_t	pci_reg;
 	pci_regspec_t	*pci_rp;
-	struct regspec	reg;
+	struct regspec64 reg;
 	pci_acc_cfblk_t	*cfp;
 	int		retval;
 	int64_t		*ecfginfo;
 	uint_t		nelem;
+	uint64_t	pci_rlength;
 
 	mr = *mp; /* Get private copy of request */
 	mp = &mr;
@@ -452,15 +542,15 @@ npe_bus_map(dev_info_t *dip, dev_info_t *rdip, ddi_map_req_t *mp,
 		 * make sure that everything is okay.
 		 */
 		if (ddi_prop_lookup_int_array(DDI_DEV_T_ANY, rdip,
-		    DDI_PROP_DONTPASS, "reg", (int **)&pci_rp,
-		    (uint_t *)&length) != DDI_PROP_SUCCESS)
+		    DDI_PROP_DONTPASS, "reg", (int **)&pci_rp, &nelem) !=
+		    DDI_PROP_SUCCESS)
 			return (DDI_FAILURE);
 
 		/*
 		 * validate the register number.
 		 */
-		length /= (sizeof (pci_regspec_t) / sizeof (int));
-		if (rnumber >= length) {
+		nelem /= (sizeof (pci_regspec_t) / sizeof (int));
+		if (rnumber >= nelem) {
 			ddi_prop_free(pci_rp);
 			return (DDI_FAILURE);
 		}
@@ -513,17 +603,11 @@ npe_bus_map(dev_info_t *dip, dev_info_t *rdip, ddi_map_req_t *mp,
 				return (DDI_SUCCESS);
 			}
 
+			pci_rp->pci_size_hi = 0;
 			pci_rp->pci_size_low = PCIE_CONF_HDR_SIZE;
 
 			/* FALLTHROUGH */
 		case PCI_ADDR_MEM64:
-			/*
-			 * MEM64 requires special treatment on map, to check
-			 * that the device is below 4G.  On unmap, however,
-			 * we can assume that everything is OK... the map
-			 * must have succeeded.
-			 */
-			/* FALLTHROUGH */
 		case PCI_ADDR_MEM32:
 			reg.regspec_bustype = 0;
 			break;
@@ -532,18 +616,23 @@ npe_bus_map(dev_info_t *dip, dev_info_t *rdip, ddi_map_req_t *mp,
 			return (DDI_FAILURE);
 		}
 
+		reg.regspec_addr = (uint64_t)pci_rp->pci_phys_mid << 32 |
+		    (uint64_t)pci_rp->pci_phys_low;
+		reg.regspec_size = (uint64_t)pci_rp->pci_size_hi << 32 |
+		    (uint64_t)pci_rp->pci_size_low;
+
 		/*
 		 * Adjust offset and length
 		 * A non-zero length means override the one in the regspec.
 		 */
-		pci_rp->pci_phys_low += (uint_t)offset;
+		if (reg.regspec_addr + offset < MAX(reg.regspec_addr, offset))
+			return (DDI_FAILURE);
+		reg.regspec_addr += offset;
 		if (len != 0)
-			pci_rp->pci_size_low = len;
+			reg.regspec_size = len;
 
-		reg.regspec_addr = pci_rp->pci_phys_low;
-		reg.regspec_size = pci_rp->pci_size_low;
-
-		mp->map_obj.rp = &reg;
+		mp->map_obj.rp = (struct regspec *)&reg;
+		mp->map_flags |= DDI_MF_EXT_REGSPEC;
 		retval = ddi_map(dip, mp, (off_t)0, (off_t)0, vaddrp);
 		if (DDI_FM_ACC_ERR_CAP(ddi_fm_capable(rdip)) &&
 		    mp->map_handlep->ah_acc.devacc_attr_access !=
@@ -604,7 +693,23 @@ npe_bus_map(dev_info_t *dip, dev_info_t *rdip, ddi_map_req_t *mp,
 				return (npe_setup_std_pcicfg_acc(rdip, mp, hp,
 				    offset, len));
 			} else {
-				pci_rp->pci_phys_low = ecfginfo[0];
+				uint64_t addr = (uint64_t)ecfginfo[0];
+
+				/*
+				 * The address for memory mapped configuration
+				 * space may theoretically be anywhere in the
+				 * processor's physical address space.
+				 *
+				 * We need to set both phys_mid and phys_low to
+				 * account for this. Because we are mapping a
+				 * single device, which has 1 KiB region and
+				 * alignment requirements, along with the fact
+				 * that we only allow for segment 0, means that
+				 * the offset will always fit in the lower
+				 * 32-bit word.
+				 */
+				pci_rp->pci_phys_mid = (uint32_t)(addr >> 32);
+				pci_rp->pci_phys_low = (uint32_t)addr;
 
 				ddi_prop_free(ecfginfo);
 
@@ -612,6 +717,7 @@ npe_bus_map(dev_info_t *dip, dev_info_t *rdip, ddi_map_req_t *mp,
 				    (cfp->c_devnum) << 15 |
 				    (cfp->c_funcnum << 12));
 
+				pci_rp->pci_size_hi = 0;
 				pci_rp->pci_size_low = PCIE_CONF_HDR_SIZE;
 			}
 		} else {
@@ -624,21 +730,15 @@ npe_bus_map(dev_info_t *dip, dev_info_t *rdip, ddi_map_req_t *mp,
 		}
 	}
 
-	length = pci_rp->pci_size_low;
-
 	/*
 	 * range check
 	 */
-	if ((offset >= length) || (len > length) || (offset + len > length))
+	pci_rlength = (uint64_t)pci_rp->pci_size_low |
+	    (uint64_t)pci_rp->pci_size_hi << 32;
+	if ((offset >= pci_rlength) || (len > pci_rlength) ||
+	    (offset + len > pci_rlength) || (offset + len < MAX(offset, len))) {
 		return (DDI_FAILURE);
-
-	/*
-	 * Adjust offset and length
-	 * A non-zero length means override the one in the regspec.
-	 */
-	pci_rp->pci_phys_low += (uint_t)offset;
-	if (len != 0)
-		pci_rp->pci_size_low = len;
+	}
 
 	/*
 	 * convert the pci regsec into the generic regspec used by the
@@ -650,16 +750,6 @@ npe_bus_map(dev_info_t *dip, dev_info_t *rdip, ddi_map_req_t *mp,
 		break;
 	case PCI_ADDR_CONFIG:
 	case PCI_ADDR_MEM64:
-		/*
-		 * We can't handle 64-bit devices that are mapped above
-		 * 4G or that are larger than 4G.
-		 */
-		if (pci_rp->pci_phys_mid != 0 || pci_rp->pci_size_hi != 0)
-			return (DDI_FAILURE);
-		/*
-		 * Other than that, we can treat them as 32-bit mappings
-		 */
-		/* FALLTHROUGH */
 	case PCI_ADDR_MEM32:
 		reg.regspec_bustype = 0;
 		break;
@@ -667,10 +757,23 @@ npe_bus_map(dev_info_t *dip, dev_info_t *rdip, ddi_map_req_t *mp,
 		return (DDI_FAILURE);
 	}
 
-	reg.regspec_addr = pci_rp->pci_phys_low;
-	reg.regspec_size = pci_rp->pci_size_low;
+	reg.regspec_addr = (uint64_t)pci_rp->pci_phys_mid << 32 |
+	    (uint64_t)pci_rp->pci_phys_low;
+	reg.regspec_size = pci_rlength;
 
-	mp->map_obj.rp = &reg;
+	/*
+	 * Adjust offset and length
+	 * A non-zero length means override the one in the regspec.
+	 */
+	if (reg.regspec_addr + offset < MAX(reg.regspec_addr, offset))
+		return (DDI_FAILURE);
+	reg.regspec_addr += offset;
+	if (len != 0)
+		reg.regspec_size = len;
+
+
+	mp->map_obj.rp = (struct regspec *)&reg;
+	mp->map_flags |= DDI_MF_EXT_REGSPEC;
 	retval = ddi_map(dip, mp, (off_t)0, (off_t)0, vaddrp);
 	if (retval == DDI_SUCCESS) {
 		/*
@@ -705,9 +808,8 @@ npe_bus_map(dev_info_t *dip, dev_info_t *rdip, ddi_map_req_t *mp,
 /*ARGSUSED*/
 static int
 npe_ctlops(dev_info_t *dip, dev_info_t *rdip,
-	ddi_ctl_enum_t ctlop, void *arg, void *result)
+    ddi_ctl_enum_t ctlop, void *arg, void *result)
 {
-	int		rn;
 	int		totreg;
 	uint_t		reglen;
 	pci_regspec_t	*drv_regp;
@@ -750,12 +852,27 @@ npe_ctlops(dev_info_t *dip, dev_info_t *rdip,
 		if (ctlop == DDI_CTLOPS_NREGS)
 			*(int *)result = totreg;
 		else if (ctlop == DDI_CTLOPS_REGSIZE) {
+			uint64_t val;
+			int rn;
+
 			rn = *(int *)arg;
 			if (rn >= totreg) {
 				ddi_prop_free(drv_regp);
 				return (DDI_FAILURE);
 			}
-			*(off_t *)result = drv_regp[rn].pci_size_low;
+			val = drv_regp[rn].pci_size_low |
+			    (uint64_t)drv_regp[rn].pci_size_hi << 32;
+			if (val > OFF_MAX) {
+				int ce = CE_NOTE;
+#ifdef DEBUG
+				ce = CE_WARN;
+#endif
+				dev_err(rdip, ce, "failed to get register "
+				    "size, value larger than OFF_MAX: 0x%"
+				    PRIx64 "\n", val);
+				return (DDI_FAILURE);
+			}
+			*(off_t *)result = (off_t)val;
 		}
 		ddi_prop_free(drv_regp);
 
@@ -1099,6 +1216,49 @@ npe_fm_init(dev_info_t *dip, dev_info_t *tdip, int cap,
 	*ibc = pcip->pci_fm_ibc;
 
 	return (pcip->pci_fmcap);
+}
+
+static int
+npe_bus_get_eventcookie(dev_info_t *dip, dev_info_t *rdip, char *eventname,
+    ddi_eventcookie_t *cookiep)
+{
+	pci_state_t *pcip = ddi_get_soft_state(npe_statep,
+	    ddi_get_instance(dip));
+
+	return (ndi_event_retrieve_cookie(pcip->pci_ndi_event_hdl, rdip,
+	    eventname, cookiep, NDI_EVENT_NOPASS));
+}
+
+static int
+npe_bus_add_eventcall(dev_info_t *dip, dev_info_t *rdip,
+    ddi_eventcookie_t cookie, void (*callback)(dev_info_t *dip,
+    ddi_eventcookie_t cookie, void *arg, void *bus_impldata),
+    void *arg, ddi_callback_id_t *cb_id)
+{
+	pci_state_t *pcip = ddi_get_soft_state(npe_statep,
+	    ddi_get_instance(dip));
+
+	return (ndi_event_add_callback(pcip->pci_ndi_event_hdl, rdip, cookie,
+	    callback, arg, NDI_SLEEP, cb_id));
+}
+
+static int
+npe_bus_remove_eventcall(dev_info_t *dip, ddi_callback_id_t cb_id)
+{
+	pci_state_t *pcip = ddi_get_soft_state(npe_statep,
+	    ddi_get_instance(dip));
+	return (ndi_event_remove_callback(pcip->pci_ndi_event_hdl, cb_id));
+}
+
+static int
+npe_bus_post_event(dev_info_t *dip, dev_info_t *rdip,
+    ddi_eventcookie_t cookie, void *impl_data)
+{
+	pci_state_t *pcip = ddi_get_soft_state(npe_statep,
+	    ddi_get_instance(dip));
+	return (ndi_event_do_callback(pcip->pci_ndi_event_hdl, rdip, cookie,
+	    impl_data));
+
 }
 
 /*ARGSUSED*/

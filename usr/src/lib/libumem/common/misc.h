@@ -27,13 +27,12 @@
 #ifndef	_MISC_H
 #define	_MISC_H
 
-#pragma ident	"%Z%%M%	%I%	%E% SMI"
-
 #include <sys/types.h>
 #include <sys/time.h>
 #include <thread.h>
 #include <pthread.h>
 #include <stdarg.h>
+#include <stddef.h>
 
 #ifdef	__cplusplus
 extern "C" {
@@ -43,14 +42,6 @@ extern uint_t umem_abort;		/* abort when errors occur */
 extern uint_t umem_output;		/* output error messages to stderr */
 extern caddr_t umem_min_stack;		/* max stack address for audit log */
 extern caddr_t umem_max_stack;		/* min stack address for audit log */
-
-/*
- * various utility functions
- * These are globally implemented.
- */
-
-#undef	offsetof
-#define	offsetof(s, m)	((size_t)(&(((s *)0)->m)))
 
 /*
  * a safe printf  -- do not use for error messages.
@@ -67,7 +58,6 @@ void log_message(const char *format, ...);
  */
 int highbit(ulong_t);
 int lowbit(ulong_t);
-#pragma no_side_effect(highbit, lowbit)
 
 /*
  * Converts a hrtime_t to a timestruc_t
@@ -94,8 +84,6 @@ void umem_error_enter(const char *);
  * prints error message and stack trace, then aborts.  Cannot return.
  */
 void umem_panic(const char *format, ...) __NORETURN;
-#pragma does_not_return(umem_panic)
-#pragma rarely_called(umem_panic)
 
 /*
  * like umem_err, but only aborts if umem_abort > 0
@@ -113,8 +101,6 @@ void umem_err_recoverable(const char *format, ...);
 #endif
 
 int __umem_assert_failed(const char *assertion, const char *file, int line);
-#pragma does_not_return(__umem_assert_failed)
-#pragma rarely_called(__umem_assert_failed)
 /*
  * These have architecture-specific implementations.
  */

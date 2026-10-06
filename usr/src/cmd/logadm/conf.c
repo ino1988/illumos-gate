@@ -22,6 +22,7 @@
 /*
  * Copyright (c) 2001, 2010, Oracle and/or its affiliates. All rights reserved.
  * Copyright 2013, Joyent, Inc. All rights reserved.
+ * Copyright 2018 Sebastian Wiedenroth
  */
 
 /*
@@ -82,6 +83,7 @@ struct confinfo {
 };
 
 #define	CONFF_DELETED	1	/* entry should be deleted on write back */
+#define	CONFF_TSONLY	2	/* entry should only be in timestamps file */
 
 static struct confinfo *Confinfo;	/* the entries in the config file */
 static struct confinfo *Confinfolast;	/* end of list */
@@ -178,6 +180,7 @@ conf_scan(const char *fname, char *buf, int buflen, int timescan)
 {
 	int ret = 1;
 	int lineno = 0;
+	int flags = 0;
 	char *line;
 	char *eline;
 	char *ebuf;
@@ -192,7 +195,7 @@ conf_scan(const char *fname, char *buf, int buflen, int timescan)
 	for (line = buf; line < ebuf; line = eline) {
 		char *ap;
 		struct opts *opts = NULL;
-		struct confinfo *cp;
+		struct confinfo *cp = NULL;
 
 		lineno++;
 		err_fileline(fname, lineno);
@@ -262,6 +265,14 @@ conf_scan(const char *fname, char *buf, int buflen, int timescan)
 		ArgsI = 0;
 		while (ap = nexttok(&line))
 			fillargs(ap);
+
+		/*
+		 * If there is no next token on the line, make sure that
+		 * we get a non-NULL Args array.
+		 */
+		if (Args == NULL)
+			fillargs(NULL);
+
 		Args[ArgsI] = NULL;
 
 		LOCAL_ERR_BEGIN {
@@ -290,7 +301,11 @@ conf_scan(const char *fname, char *buf, int buflen, int timescan)
 				 * the case where the logname is not the same as
 				 * the log file name.
 				 */
-				fillconflist(lineno, entry, opts, comment, 0);
+				flags = 0;
+				if (timescan && cp == NULL)
+					flags = CONFF_TSONLY;
+				fillconflist(lineno, entry, opts, comment,
+				    flags);
 			}
 		LOCAL_ERR_END }
 
@@ -428,7 +443,7 @@ conf_open(const char *cfname, const char *tfname, struct opts *cliopts)
 
 	/*
 	 * possible future enhancement:  go through and mark any entries:
-	 * 		logfile -P <date>
+	 *		logfile -P <date>
 	 * as DELETED if the logfile doesn't exist
 	 */
 
@@ -640,16 +655,13 @@ conf_print(FILE *cstream, FILE *tstream)
 		exclude_opts++;		/* -P option goes to config file */
 	} else {
 		(void) fprintf(tstream, gettext(
-		    "# This file holds internal data for logadm(1M).\n"
+		    "# This file holds internal data for logadm(8).\n"
 		    "# Do not edit.\n"));
 	}
 	for (cp = Confinfo; cp; cp = cp->cf_next) {
 		if (cp->cf_flags & CONFF_DELETED)
 			continue;
 		if (cp->cf_entry) {
-			opts_printword(cp->cf_entry, cstream);
-			if (cp->cf_opts)
-				opts_print(cp->cf_opts, cstream, exclude_opts);
 			/* output timestamps to tstream */
 			if (tstream != NULL && (timestamp =
 			    opts_optarg(cp->cf_opts, "P")) != NULL) {
@@ -658,6 +670,12 @@ conf_print(FILE *cstream, FILE *tstream)
 				opts_printword(timestamp, tstream);
 				(void) fprintf(tstream, "\n");
 			}
+			if (cp->cf_flags & CONFF_TSONLY)
+				continue;
+
+			opts_printword(cp->cf_entry, cstream);
+			if (cp->cf_opts)
+				opts_print(cp->cf_opts, cstream, exclude_opts);
 		}
 		if (cp->cf_com) {
 			if (cp->cf_entry)
@@ -669,6 +687,8 @@ conf_print(FILE *cstream, FILE *tstream)
 }
 
 #ifdef	TESTMODULE
+
+int Debug;
 
 /*
  * test main for conf module, usage: a.out conffile
@@ -687,7 +707,7 @@ main(int argc, char *argv[])
 	if (argc != 2)
 		err(EF_RAW, "usage: %s conffile\n", argv[0]);
 
-	conf_open(argv[1], argv[1], opts);
+	(void) conf_open(argv[1], argv[1], opts);
 
 	printf("conffile <%s>:\n", argv[1]);
 	conf_print(stdout, NULL);

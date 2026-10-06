@@ -524,7 +524,7 @@ natinfo_t *ni;
 		nat->nat_inport = port;
 		nat->nat_outport = port;
 	}
-	
+
 	ni->nai_port = port;
 	ni->nai_nport = dport;
 	return 0;
@@ -1781,7 +1781,7 @@ struct in6_addr *src , *dst;
 			nat->nat_ifps[1] = ifp;
 
 		nflags = nat->nat_flags;
- 
+
 		if (IP6_EQ(&nat->nat_inip6, src) &&
 		    IP6_EQ(&nat->nat_oip6, dst) &&
 		    (((p == 0) && (sflags == (nflags & NAT_TCPUDPICMP))) ||
@@ -2211,7 +2211,7 @@ u_32_t nflags;
 	int i;
 	ipf_stack_t *ifs = fin->fin_ifs;
 
-#if SOLARIS && defined(_KERNEL)
+#if defined(SOLARIS) && defined(_KERNEL)
 	net_handle_t net_data_p = ifs->ifs_ipf_ipv6;
 #endif
 
@@ -2227,7 +2227,7 @@ u_32_t nflags;
 	nat->nat_bytes[1] += fin->fin_plen;
 	nat->nat_pkts[1]++;
 	MUTEX_EXIT(&nat->nat_lock);
-	
+
 	if (!(fin->fin_flx & FI_SHORT) && (fin->fin_off == 0)) {
 		if ((nat->nat_outport != 0) && (nflags & IPN_TCPUDP)) {
 			tcp = fin->fin_dp;
@@ -2351,12 +2351,12 @@ u_32_t *passp;
 			 */
 			if ((fin->fin_flx & FI_ICMPQUERY) != 0) {
 				nflags = IPN_ICMPQUERY;
-				dport = icmp6->icmp6_id;	
+				dport = icmp6->icmp6_id;
 			} break;
 		default :
 			break;
 		}
-		
+
 		if ((nflags & IPN_TCPUDP)) {
 			tcp = fin->fin_dp;
 			dport = tcp->th_dport;
@@ -2493,7 +2493,7 @@ u_32_t nflags;
 	ipnat_t *np;
 	ipf_stack_t *ifs = fin->fin_ifs;
 
-#if SOLARIS && defined(_KERNEL)
+#if defined(SOLARIS) && defined(_KERNEL)
 	net_handle_t net_data_p = ifs->ifs_ipf_ipv6;
 #endif
 
@@ -2571,7 +2571,7 @@ u_32_t nflags;
 			fix_outcksum(csump, nat->nat_sumd[0]);
 	}
 
-#if SOLARIS && defined(_KERNEL)
+#if defined(SOLARIS) && defined(_KERNEL)
 	if (nflags & IPN_TCPUDP &&
 	    NET_IS_HCK_L4_PART(net_data_p, fin->fin_m)) {
 		/*
@@ -2580,7 +2580,7 @@ u_32_t nflags;
 		 * See IP_CKSUM_RECV().
 		 * Adjustment data should be the inverse of the IP address
 		 * changes, because db_cksum16 is supposed to be the complement
-		 * of the pesudo header.
+		 * of the pseudo header.
 		 */
 		csump = &fin->fin_m->b_datap->db_cksum16;
 		if (nat->nat_dir == NAT_OUTBOUND)

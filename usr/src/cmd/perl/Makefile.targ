@@ -9,43 +9,45 @@
 # http://www.illumos.org/license/CDDL.
 #
 #
-# Copyright (c) 2014 Racktop Systems.
-# Copyright 2014, OmniTI Computer Consulting, Inc. All rights reserved.
-#
+# Copyright 2015, OmniTI Computer Consulting, Inc. All rights reserved.
+# Copyright (c) 2016 Racktop Systems.
+# Copyright (c) 2018, Joyent, Inc.
 
-# Link against libc as perl solaris specs
-$(PERLEXT):= LDLIBS += -lc
-
+# Link against libc as per solaris specs
+PICS = $(MODULE).o
+LDLIBS += -lc
 # Allow for undefined symbols satisfied by perl
-$(PERLEXT):= ZDEFS =
+ZDEFS =
 
 $(ROOTPERLEXT) := FILEMODE = 0555
 $(ROOTPERLMOD) := FILEMODE = 0444
 
-# CFLAGS for perl, specifically.
-PCFLAGS= -D_LARGEFILE_SOURCE -D_FILE_OFFSET_BITS=64 -DPERL_USE_SAFE_PUTENV \
-	-D_TS_ERRNO
+SMATCH=off
 
-$(MACH):
-	$(INS.dir)
+.KEEP_STATE:
 
-$(PERLEXT): $(MACH)/$(MODULE).o
-	$(BUILD.SO) $(MACH)/$(MODULE).o
+$(PERLEXT): $(MODULE).o
+	$(BUILD.SO)
 
-$(MACH)/$(MODULE).o: $(MACH)/$(MODULE).c
+$(MODULE).o: $(MODULE).c
 	$(COMPILE.c) $(PCFLAGS) $(C_PICFLAGS) -I$(PERLINCDIR) $< -o $@
 
-$(MACH)/$(MODULE).c: $(MACH) $(MODULE).xs 
-	$(PERLDIR)/bin/xsubpp $(XSUBPPFLAGS) $(MODULE).xs >$@
+$(MODULE).c: $(PERLXS)
+	$(XSUBPP) $(XSUBPPFLAGS) $(PERLXS) -output $@
 
 $(ROOTPERLMODDIR):
 	$(INS.dir)
 
-$(ROOTPERLMOD): $(ROOTPERLMODDIR) $(MODULE).pm
-	$(RM) $@; $(INS) -s -m $(FILEMODE) -f $^
+$(ROOTPERLMOD): $(PERLMOD) $(ROOTPERLMODDIR)
+	$(RM) $@; $(INS) -s -m $(FILEMODE) -f $(@D) $(PERLMOD)
 
 $(ROOTPERLEXTDIR):
 	$(INS.dir)
 
-$(ROOTPERLEXT): $(ROOTPERLEXTDIR) $(MACH)/$(MODULE).so
-	$(RM) $@; $(INS) -s -m $(FILEMODE) -f $^
+$(ROOTPERLEXT): $(PERLEXT) $(ROOTPERLEXTDIR)
+	$(RM) $@; $(INS) -s -m $(FILEMODE) -f $(@D) $(PERLEXT)
+
+clean:
+	$(RM) $(CLEANFILES)
+
+clobber: clean

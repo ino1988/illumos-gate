@@ -19,10 +19,11 @@
 # CDDL HEADER END
 #
 #
-# ident	"%Z%%M%	%I%	%E% SMI"
-#
 # Copyright 2007 Sun Microsystems, Inc.  All rights reserved.
 # Use is subject to license terms.
+#
+# Copyright 2019 OmniOS Community Edition (OmniOSce) Association.
+#
 
 PROG=		lari
 
@@ -41,14 +42,12 @@ $(PROG):	$(PSRC)
 		$(SED) -e "s@TEXT_DOMAIN@\"SUNW_OST_SGS\"@" $(PSRC) > $@
 		$(CHMOD) +x $@
 
-install \
-package:	all $(VAR_SGSBINPROG) $(VAR_SGSCCSLINK)
+install:	all $(ROOTPROG) $(ROOTCCSBINLINK)
 
 clean:
 		$(RM) $(PROG)
 
-chkmsg \
-lint:
+chkmsg:
 
 catalog:	$(POFILE)
 

@@ -20,18 +20,20 @@
  */
 /*
  * Copyright (c) 2007, 2010, Oracle and/or its affiliates. All rights reserved.
+ * Copyright 2022 Tintri by DDN, Inc. All rights reserved.
  */
 
-#ifndef _KERNEL
+#if !defined(_KERNEL) && !defined(_FAKE_KERNEL)
 #include <stdio.h>
 #include <strings.h>
 #include <stdlib.h>
 #include <syslog.h>
-#include <smbsrv/libsmb.h>
-#else /* _KERNEL */
+#else	/* !_KERNEL && !_FAKE_KERNEL */
+#include <sys/int_limits.h> /* Needed for _FAKE_KERNEL */
 #include <sys/types.h>
+#include <sys/systm.h>
 #include <sys/sunddi.h>
-#endif /* _KERNEL */
+#endif	/* !_KERNEL && !_FAKE_KERNEL */
 
 #include <smbsrv/smb_sid.h>
 
@@ -49,7 +51,7 @@ smb_sid_isvalid(smb_sid_t *sid)
 		return (B_FALSE);
 
 	return ((sid->sid_revision == NT_SID_REVISION) &&
-	    (sid->sid_subauthcnt < NT_SID_SUBAUTH_MAX));
+	    (sid->sid_subauthcnt <= NT_SID_SUBAUTH_MAX));
 }
 
 /*
@@ -150,16 +152,24 @@ smb_sid_t *
 smb_sid_split(smb_sid_t *sid, uint32_t *rid)
 {
 	smb_sid_t *domsid;
+	int size;
 
 	if (!smb_sid_isvalid(sid) || (sid->sid_subauthcnt == 0))
 		return (NULL);
 
-	if ((domsid = smb_sid_dup(sid)) == NULL)
+	/*
+	 * We will reduce sid_subauthcnt by one, because
+	 * the domain SID does not include the RID.
+	 */
+	size = smb_sid_len(sid) - sizeof (uint32_t);
+	if ((domsid = smb_sid_alloc(size)) == NULL)
 		return (NULL);
 
-	--domsid->sid_subauthcnt;
+	bcopy(sid, domsid, size);
+	domsid->sid_subauthcnt = sid->sid_subauthcnt - 1;
+
 	if (rid)
-		*rid = domsid->sid_subauth[domsid->sid_subauthcnt];
+		*rid = sid->sid_subauth[sid->sid_subauthcnt - 1];
 
 	return (domsid);
 }
@@ -183,7 +193,7 @@ smb_sid_splitstr(char *strsid, uint32_t *rid)
 
 	*p++ = '\0';
 	if (rid) {
-#ifdef _KERNEL
+#if defined(_KERNEL) || defined(_FAKE_KERNEL)
 		unsigned long sua = 0;
 		(void) ddi_strtoul(p, NULL, 10, &sua);
 		*rid = (uint32_t)sua;
@@ -255,25 +265,6 @@ smb_sid_indomain(smb_sid_t *domain_sid, smb_sid_t *sid)
 	return (B_TRUE);
 }
 
-#ifndef _KERNEL
-/*
- * smb_sid_islocal
- *
- * Check a SID to see if it belongs to the local domain.
- */
-boolean_t
-smb_sid_islocal(smb_sid_t *sid)
-{
-	smb_domain_t di;
-	boolean_t islocal = B_FALSE;
-
-	if (smb_domain_lookup_type(SMB_DOMAIN_LOCAL, &di))
-		islocal = smb_sid_indomain(di.di_binsid, sid);
-
-	return (islocal);
-}
-#endif /* _KERNEL */
-
 /*
  * smb_sid_tostr
  *
@@ -322,12 +313,12 @@ smb_sid_tostr(const smb_sid_t *sid, char *strsid)
  * On success, a pointer to a SID is returned. Otherwise a null pointer
  * is returned.
  */
-#ifdef _KERNEL
+#if defined(_KERNEL) || defined(_FAKE_KERNEL)
 smb_sid_t *
 smb_sid_fromstr(const char *sidstr)
 {
 	smb_sid_t *sid;
-	smb_sid_t *retsid;
+	smb_sid_t *retsid = NULL;
 	const char *p;
 	int size;
 	uint8_t i;
@@ -339,35 +330,47 @@ smb_sid_fromstr(const char *sidstr)
 	if (strncmp(sidstr, "S-1-", 4) != 0)
 		return (NULL);
 
+	sua = 0;
+	(void) ddi_strtoul(&sidstr[4], (char **)&p, 10, &sua);
+
+	/*
+	 * If ddi_strtoul() did the right thing, *p will point at the first '-'
+	 * after the identifier authority.
+	 * The IdentifierAuthority can be up to 2^48, but all known ones
+	 * currently fit into a uint8_t.
+	 * TODO: support IdentifierAuthorities > 255 (those over UINT32_MAX are
+	 * hex-formatted).
+	 */
+	if (sua > UINT8_MAX || (*p != '-' && *p != '\0'))
+		return (NULL);
+
 	size = sizeof (smb_sid_t) + (NT_SID_SUBAUTH_MAX * sizeof (uint32_t));
 	sid = kmem_zalloc(size, KM_SLEEP);
-
 	sid->sid_revision = NT_SID_REVISION;
-	sua = 0;
-	(void) ddi_strtoul(&sidstr[4], 0, 10, &sua);
 	sid->sid_authority[5] = (uint8_t)sua;
 
-	for (i = 0, p = &sidstr[5]; i < NT_SID_SUBAUTH_MAX && *p; ++i) {
-		while (*p && *p == '-')
+	for (i = 0; i < NT_SID_SUBAUTH_MAX && *p; ++i) {
+		while (*p == '-')
 			++p;
 
-		if (*p < '0' || *p > '9') {
-			kmem_free(sid, size);
-			return (NULL);
-		}
+		if (*p < '0' || *p > '9')
+			goto out;
 
 		sua = 0;
-		(void) ddi_strtoul(p, 0, 10, &sua);
+		(void) ddi_strtoul(p, (char **)&p, 10, &sua);
+		if (sua > UINT32_MAX)
+			goto out;
 		sid->sid_subauth[i] = (uint32_t)sua;
 
-		while (*p && *p != '-')
-			++p;
+		if (*p != '\0' && *p != '-')
+			goto out;
 	}
 
 	sid->sid_subauthcnt = i;
 	retsid = smb_sid_dup(sid);
-	kmem_free(sid, size);
 
+out:
+	kmem_free(sid, size);
 	return (retsid);
 }
 #else /* _KERNEL */
@@ -378,6 +381,7 @@ smb_sid_fromstr(const char *sidstr)
 	const char *p;
 	int size;
 	uint8_t i;
+	unsigned long sua;
 
 	if (sidstr == NULL)
 		return (NULL);
@@ -385,17 +389,29 @@ smb_sid_fromstr(const char *sidstr)
 	if (strncmp(sidstr, "S-1-", 4) != 0)
 		return (NULL);
 
-	size = sizeof (smb_sid_t) + (NT_SID_SUBAUTH_MAX * sizeof (uint32_t));
+	sua = strtoul(&sidstr[4], (char **)&p, 10);
 
-	if ((sid = malloc(size)) == NULL)
+	/*
+	 * If strtoul() did the right thing, *p will point at the first '-'
+	 * after the identifier authority.
+	 * The IdentifierAuthority can be up to 2^48, but all known ones
+	 * currently fit into a uint8_t.
+	 * TODO: support IdentifierAuthorities > 255 (those over UINT32_MAX are
+	 * hex-formatted).
+	 */
+	if (sua > UINT8_MAX || (*p != '-' && *p != '\0'))
 		return (NULL);
 
-	bzero(sid, size);
-	sid->sid_revision = NT_SID_REVISION;
-	sid->sid_authority[5] = atoi(&sidstr[4]);
+	size = sizeof (smb_sid_t) + (NT_SID_SUBAUTH_MAX * sizeof (uint32_t));
 
-	for (i = 0, p = &sidstr[5]; i < NT_SID_SUBAUTH_MAX && *p; ++i) {
-		while (*p && *p == '-')
+	if ((sid = calloc(size, 1)) == NULL)
+		return (NULL);
+
+	sid->sid_revision = NT_SID_REVISION;
+	sid->sid_authority[5] = (uint8_t)sua;
+
+	for (i = 0; i < NT_SID_SUBAUTH_MAX && *p; ++i) {
+		while (*p == '-')
 			++p;
 
 		if (*p < '0' || *p > '9') {
@@ -403,10 +419,11 @@ smb_sid_fromstr(const char *sidstr)
 			return (NULL);
 		}
 
-		sid->sid_subauth[i] = strtoul(p, NULL, 10);
-
-		while (*p && *p != '-')
-			++p;
+		sid->sid_subauth[i] = strtoul(p, (char **)&p, 10);
+		if (*p != '\0' && *p != '-') {
+			free(sid);
+			return (NULL);
+		}
 	}
 
 	sid->sid_subauthcnt = i;
@@ -448,7 +465,7 @@ static smb_sid_t *
 smb_sid_alloc(size_t size)
 {
 	smb_sid_t *sid;
-#ifdef _KERNEL
+#if defined(_KERNEL) || defined(_FAKE_KERNEL)
 	sid = kmem_alloc(size, KM_SLEEP);
 #else
 	sid = malloc(size);
@@ -459,7 +476,7 @@ smb_sid_alloc(size_t size)
 void
 smb_sid_free(smb_sid_t *sid)
 {
-#ifdef _KERNEL
+#if defined(_KERNEL) || defined(_FAKE_KERNEL)
 	if (sid == NULL)
 		return;
 
@@ -468,20 +485,3 @@ smb_sid_free(smb_sid_t *sid)
 	free(sid);
 #endif
 }
-
-#ifndef _KERNEL
-void
-smb_ids_free(smb_ids_t *ids)
-{
-	smb_id_t *id;
-	int i;
-
-	if ((ids != NULL) && (ids->i_ids != NULL)) {
-		id = ids->i_ids;
-		for (i = 0; i < ids->i_cnt; i++, id++)
-			smb_sid_free(id->i_sid);
-
-		free(ids->i_ids);
-	}
-}
-#endif

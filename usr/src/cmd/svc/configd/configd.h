@@ -24,6 +24,10 @@
  * Use is subject to license terms.
  */
 
+/*
+ * Copyright (c) 2015, Joyent, Inc. All rights reserved.
+ */
+
 #ifndef	_CONFIGD_H
 #define	_CONFIGD_H
 
@@ -88,14 +92,9 @@ extern "C" {
 
 #define	CONFIGD_CORE	"core.%f.%t.%p"
 
-#ifndef NDEBUG
 #define	bad_error(f, e)							\
-	uu_warn("%s:%d: %s() returned bad error %d.  Aborting.\n",	\
-	    __FILE__, __LINE__, f, e);					\
-	abort()
-#else
-#define	bad_error(f, e)		abort()
-#endif
+	uu_panic("%s:%d: %s() returned bad error %d.  Aborting.\n",	\
+	    __FILE__, __LINE__, f, e);
 
 typedef enum backend_type {
 	BACKEND_TYPE_NORMAL		= 0,
@@ -789,7 +788,6 @@ rep_protocol_responseid_t backend_switch(int);
  * and exits with a "Database Bad" error code.
  */
 void backend_panic(const char *, ...) __NORETURN;
-#pragma rarely_called(backend_panic)
 
 backend_query_t *backend_query_alloc(void);
 void backend_query_append(backend_query_t *, const char *);

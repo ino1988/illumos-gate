@@ -3,8 +3,6 @@
  * Use is subject to license terms.
  */
 
-#pragma ident	"%Z%%M%	%I%	%E% SMI"
-
 /*
  * usr/src/cmd/cmd-inet/usr.bin/telnet/utilities.c
  */
@@ -959,7 +957,6 @@ common2:
 			    break;
 
 			default:
-			def_case:
 			    if (isprint(pointer[i]) && pointer[i] != '"') {
 				if (noquote) {
 				    (void) putc('"', NetTrace);

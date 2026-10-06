@@ -19,12 +19,13 @@
  * CDDL HEADER END
  */
 /*
+ * Copyright 2017 Joyent Inc
  * Copyright 2009 Sun Microsystems, Inc.  All rights reserved.
  * Use is subject to license terms.
  */
 
 /*	Copyright (c) 1983, 1984, 1985, 1986, 1987, 1988, 1989 AT&T	*/
-/*	  All Rights Reserved  	*/
+/*	  All Rights Reserved	*/
 
 /*
  * Portions of this source code were derived from Berkeley 4.3 BSD
@@ -59,6 +60,7 @@
 #include <sys/kmem.h>
 #include <sys/time.h>
 #include <sys/cmn_err.h>
+#include <sys/debug.h>
 
 #include <rpc/types.h>
 #include <rpc/xdr.h>
@@ -125,7 +127,7 @@ static int authdes_ncache = 0; /* number of current cached entries */
 static int authdes_ncachehits = 0; /* #times cache hit */
 static int authdes_ncachemisses = 0; /* #times cache missed */
 
-#define	NOT_DEAD(ptr)   ASSERT((((intptr_t)(ptr)) != 0xdeadbeef))
+#define	NOT_DEAD(ptr)   ASSERT((((intptr_t)(ptr)) != 0xdeadbeefdeadbeef))
 #define	IS_ALIGNED(ptr) ASSERT((((intptr_t)(ptr)) & 3) == 0)
 
 /*
@@ -159,6 +161,7 @@ _svcauth_des(struct svc_req *rqst, struct rpc_msg *msg)
 	}
 	mutex_exit(&authdes_lock);
 
+	CTASSERT(sizeof (struct area) <= RQCRED_SIZE);
 	/* LINTED pointer alignment */
 	area = (struct area *)rqst->rq_clntcred;
 	cred = (struct authdes_cred *)&area->area_cred;

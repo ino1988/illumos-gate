@@ -26,6 +26,9 @@
  * Portions Copyright 2007 Chad Mynhier
  * Copyright 2012 DEY Storage Systems, Inc.  All rights reserved.
  * Copyright (c) 2013 by Delphix. All rights reserved.
+ * Copyright 2015, Joyent, Inc.
+ * Copyright 2020 OmniOS Community Edition (OmniOSce) Association.
+ * Copyright 2026 Oxide Computer Company
  */
 
 #include <assert.h>
@@ -53,6 +56,9 @@
 #include <sys/syscall.h>
 #include <sys/sysmacros.h>
 #include <sys/systeminfo.h>
+#include <sys/secflags.h>
+#include <sys/mnttab.h>
+#include <sys/mkdev.h>
 
 #include "libproc.h"
 #include "Pcontrol.h"
@@ -63,6 +69,7 @@ int	_libproc_debug;		/* set non-zero to enable debugging printfs */
 int	_libproc_no_qsort;	/* set non-zero to inhibit sorting */
 				/* of symbol tables */
 int	_libproc_incore_elf;	/* only use in-core elf data */
+int	_libproc_test_fail_copyinargs; /* make Psyscall_copyinargs() fail */
 
 sigset_t blockable_sigs;	/* signals to block when we need to be safe */
 static	int	minfd;	/* minimum file descriptor returned by dupfd(fd, 0) */
@@ -80,7 +87,6 @@ static  prheader_t *read_lfile(struct ps_prochandle *, const char *);
  * Ops vector functions for live processes.
  */
 
-/*ARGSUSED*/
 static ssize_t
 Pread_live(struct ps_prochandle *P, void *buf, size_t n, uintptr_t addr,
     void *data)
@@ -88,7 +94,6 @@ Pread_live(struct ps_prochandle *P, void *buf, size_t n, uintptr_t addr,
 	return (pread(P->asfd, buf, n, (off_t)addr));
 }
 
-/*ARGSUSED*/
 static ssize_t
 Pwrite_live(struct ps_prochandle *P, const void *buf, size_t n, uintptr_t addr,
     void *data)
@@ -96,7 +101,6 @@ Pwrite_live(struct ps_prochandle *P, const void *buf, size_t n, uintptr_t addr,
 	return (pwrite(P->asfd, buf, n, (off_t)addr));
 }
 
-/*ARGSUSED*/
 static int
 Pread_maps_live(struct ps_prochandle *P, prmap_t **Pmapp, ssize_t *nmapp,
     void *data)
@@ -130,7 +134,6 @@ Pread_maps_live(struct ps_prochandle *P, prmap_t **Pmapp, ssize_t *nmapp,
 	return (0);
 }
 
-/*ARGSUSED*/
 static void
 Pread_aux_live(struct ps_prochandle *P, auxv_t **auxvp, int *nauxp, void *data)
 {
@@ -143,7 +146,7 @@ Pread_aux_live(struct ps_prochandle *P, auxv_t **auxvp, int *nauxp, void *data)
 	(void) snprintf(auxfile, sizeof (auxfile), "%s/%d/auxv",
 	    procfs_path, (int)P->pid);
 	if ((fd = open(auxfile, O_RDONLY)) < 0) {
-		dprintf("%s: failed to open %s: %s\n",
+		Pdprintf("%s: failed to open %s: %s\n",
 		    __func__, auxfile, strerror(errno));
 		return;
 	}
@@ -153,7 +156,7 @@ Pread_aux_live(struct ps_prochandle *P, auxv_t **auxvp, int *nauxp, void *data)
 	    (auxv = malloc(statb.st_size + sizeof (auxv_t))) != NULL) {
 		if ((naux = read(fd, auxv, statb.st_size)) < 0 ||
 		    (naux /= sizeof (auxv_t)) < 1) {
-			dprintf("%s: read failed: %s\n",
+			Pdprintf("%s: read failed: %s\n",
 			    __func__, strerror(errno));
 			free(auxv);
 		} else {
@@ -168,14 +171,18 @@ Pread_aux_live(struct ps_prochandle *P, auxv_t **auxvp, int *nauxp, void *data)
 	(void) close(fd);
 }
 
-/*ARGSUSED*/
 static int
 Pcred_live(struct ps_prochandle *P, prcred_t *pcrp, int ngroups, void *data)
 {
 	return (proc_get_cred(P->pid, pcrp, ngroups));
 }
 
-/*ARGSUSED*/
+static int
+Psecflags_live(struct ps_prochandle *P, prsecflags_t **psf, void *data)
+{
+	return (proc_get_secflags(P->pid, psf));
+}
+
 static int
 Ppriv_live(struct ps_prochandle *P, prpriv_t **pprv, void *data)
 {
@@ -190,7 +197,6 @@ Ppriv_live(struct ps_prochandle *P, prpriv_t **pprv, void *data)
 	return (0);
 }
 
-/*ARGSUSED*/
 static const psinfo_t *
 Ppsinfo_live(struct ps_prochandle *P, psinfo_t *psinfo, void *data)
 {
@@ -200,21 +206,18 @@ Ppsinfo_live(struct ps_prochandle *P, psinfo_t *psinfo, void *data)
 	return (psinfo);
 }
 
-/*ARGSUSED*/
 static prheader_t *
 Plstatus_live(struct ps_prochandle *P, void *data)
 {
 	return (read_lfile(P, "lstatus"));
 }
 
-/*ARGSUSED*/
 static prheader_t *
 Plpsinfo_live(struct ps_prochandle *P, void *data)
 {
 	return (read_lfile(P, "lpsinfo"));
 }
 
-/*ARGSUSED*/
 static char *
 Pplatform_live(struct ps_prochandle *P, char *s, size_t n, void *data)
 {
@@ -223,14 +226,12 @@ Pplatform_live(struct ps_prochandle *P, char *s, size_t n, void *data)
 	return (s);
 }
 
-/*ARGSUSED*/
 static int
 Puname_live(struct ps_prochandle *P, struct utsname *u, void *data)
 {
 	return (uname(u));
 }
 
-/*ARGSUSED*/
 static char *
 Pzonename_live(struct ps_prochandle *P, char *s, size_t n, void *data)
 {
@@ -255,13 +256,11 @@ stat_exec(const char *path, void *arg)
 	    stp->st_dev == st.st_dev && stp->st_ino == st.st_ino);
 }
 
-/*ARGSUSED*/
 static char *
 Pexecname_live(struct ps_prochandle *P, char *buf, size_t buflen, void *data)
 {
 	char exec_name[PATH_MAX];
-	char cwd[PATH_MAX];
-	char proc_cwd[64];
+	char cwd[PATH_MAX], *cwdp = NULL;
 	struct stat64 st;
 	int ret;
 
@@ -291,19 +290,87 @@ Pexecname_live(struct ps_prochandle *P, char *buf, size_t buflen, void *data)
 	 * target process.  This only works if the target process has
 	 * not changed its current directory since it was exec'd.
 	 */
-	(void) snprintf(proc_cwd, sizeof (proc_cwd),
-	    "%s/%d/path/cwd", procfs_path, (int)P->pid);
+	if (proc_get_cwd(P->pid, cwd, sizeof (cwd)) > 0)
+		cwdp = cwd;
 
-	if ((ret = readlink(proc_cwd, cwd, PATH_MAX - 1)) > 0)
-		cwd[ret] = '\0';
-
-	(void) Pfindexec(P, ret > 0 ? cwd : NULL, stat_exec, &st);
+	(void) Pfindexec(P, cwdp, stat_exec, &st);
 
 	return (NULL);
 }
 
+/*
+ * Snapshot the cwd for a process. Note, we assume that we do not have the
+ * process held per se (pwdx does not grab the process). If our caller wants to
+ * guarantee this, they are responsible for getting a hold.
+ */
+static int
+Pcwd_live(struct ps_prochandle *P, prcwd_t **cwdp, void *data)
+{
+	prcwd_t *cwd = NULL;
+	struct statvfs st;
+	FILE *tab = NULL;
+	struct extmnttab ent;
+	int ret;
+
+	cwd = calloc(1, sizeof (prcwd_t));
+	if (cwd == NULL)
+		goto err;
+
+	if (proc_get_cwd(P->pid, cwd->prcwd_cwd, sizeof (cwd->prcwd_cwd)) < 0)
+		goto err;
+
+	if (statvfs(cwd->prcwd_cwd, &st) != 0)
+		goto err;
+
+	cwd->prcwd_fsid = st.f_fsid;
+	(void) memcpy(cwd->prcwd_fsname, st.f_basetype, FSTYPSZ);
+
+	/*
+	 * Find the corresponding mountpoint based on the fsid. If we don't find
+	 * a match, that's weird, but we'll try to get folks something. There's
+	 * always a possibility of a race going on as we can't stop file system
+	 * mount points from changing during this operation. Similarly, in lieu
+	 * of erorring on overflow we opt to truncate as tihs would again be a
+	 * surprising situation based on system limits.
+	 */
+	if ((tab = fopen(MNTTAB, "r")) == NULL)
+		goto err;
+	resetmnttab(tab);
+	Pdprintf("found fsid %llx\n", cwd->prcwd_fsid);
+	while ((ret = getextmntent(tab, &ent, sizeof (struct extmnttab))) ==
+	    0) {
+		/*
+		 * statvfs(2) always returns the compressed 32-bit compatible
+		 * dev, even in an LP64 environment. We must explicitly attempt
+		 * to convert things as a result to this format as the normal
+		 * makedev() doesn't quite do the right thing.
+		 */
+		if (__makedev(COMPATDEV, ent.mnt_major, ent.mnt_minor) ==
+		    st.f_fsid) {
+			(void) strlcpy(cwd->prcwd_mntpt, ent.mnt_mountp,
+			    sizeof (cwd->prcwd_mntpt));
+			(void) strlcpy(cwd->prcwd_mntspec, ent.mnt_special,
+			    sizeof (cwd->prcwd_mntspec));
+			break;
+		}
+	}
+
+	if (ret > 0) {
+		errno = EIO;
+		goto err;
+	}
+
+	(void) fclose(tab);
+	*cwdp = cwd;
+	return (0);
+
+err:
+	(void) fclose(tab);
+	free(cwd);
+	return (-1);
+}
+
 #if defined(__i386) || defined(__amd64)
-/*ARGSUSED*/
 static int
 Pldt_live(struct ps_prochandle *P, struct ssd *pldt, int nldt, void *data)
 {
@@ -325,6 +392,8 @@ static const ps_ops_t P_live_ops = {
 	.pop_uname	= Puname_live,
 	.pop_zonename	= Pzonename_live,
 	.pop_execname	= Pexecname_live,
+	.pop_secflags	= Psecflags_live,
+	.pop_cwd	= Pcwd_live,
 #if defined(__i386) || defined(__amd64)
 	.pop_ldt	= Pldt_live
 #endif
@@ -389,7 +458,7 @@ dupfd(int fd, int dfd)
 	/*
 	 * Make fd be greater than 255 (the 32-bit stdio limit),
 	 * or at least make it greater than 2 so that the
-	 * program will work when spawned by init(1m).
+	 * program will work when spawned by init(8).
 	 * Also, if dfd is non-zero, dup the fd to be dfd.
 	 */
 	if ((mfd = minfd) == 0)
@@ -417,11 +486,11 @@ dupfd(int fd, int dfd)
  */
 struct ps_prochandle *
 Pxcreate(const char *file,	/* executable file name */
-	char *const *argv,	/* argument vector */
-	char *const *envp,	/* environment */
-	int *perr,	/* pointer to error return code */
-	char *path,	/* if non-null, holds exec path name on return */
-	size_t len)	/* size of the path buffer */
+    char *const *argv,		/* argument vector */
+    char *const *envp,		/* environment */
+    int *perr,			/* pointer to error return code */
+    char *path,		/* if non-null, holds exec path name on return */
+    size_t len)			/* size of the path buffer */
 {
 	char execpath[PATH_MAX];
 	char procname[PATH_MAX];
@@ -490,6 +559,7 @@ Pxcreate(const char *file,	/* executable file name */
 	P->agentstatfd = -1;
 	Pinit_ops(&P->ops, &P_live_ops);
 	Pinitsym(P);
+	Pinitfd(P);
 
 	/*
 	 * Open the /proc/pid files.
@@ -506,7 +576,7 @@ Pxcreate(const char *file,	/* executable file name */
 	(void) strcpy(fname, "as");
 	if ((fd = open(procname, (O_RDWR|O_EXCL))) < 0 ||
 	    (fd = dupfd(fd, 0)) < 0) {
-		dprintf("Pcreate: failed to open %s: %s\n",
+		Pdprintf("Pcreate: failed to open %s: %s\n",
 		    procname, strerror(errno));
 		rc = C_STRANGE;
 		goto bad;
@@ -516,7 +586,7 @@ Pxcreate(const char *file,	/* executable file name */
 	(void) strcpy(fname, "status");
 	if ((fd = open(procname, O_RDONLY)) < 0 ||
 	    (fd = dupfd(fd, 0)) < 0) {
-		dprintf("Pcreate: failed to open %s: %s\n",
+		Pdprintf("Pcreate: failed to open %s: %s\n",
 		    procname, strerror(errno));
 		rc = C_STRANGE;
 		goto bad;
@@ -526,7 +596,7 @@ Pxcreate(const char *file,	/* executable file name */
 	(void) strcpy(fname, "ctl");
 	if ((fd = open(procname, O_WRONLY)) < 0 ||
 	    (fd = dupfd(fd, 0)) < 0) {
-		dprintf("Pcreate: failed to open %s: %s\n",
+		Pdprintf("Pcreate: failed to open %s: %s\n",
 		    procname, strerror(errno));
 		rc = C_STRANGE;
 		goto bad;
@@ -558,7 +628,7 @@ Pxcreate(const char *file,	/* executable file name */
 			if (errno == EINTR || errno == ERESTART)
 				rc = C_INTR;
 			else {
-				dprintf("Pcreate: Psetrun failed: %s\n",
+				Pdprintf("Pcreate: Psetrun failed: %s\n",
 				    strerror(errno));
 				rc = C_STRANGE;
 			}
@@ -577,13 +647,13 @@ Pxcreate(const char *file,	/* executable file name */
 	(void) Psysentry(P, SYS_exit, 1);
 	(void) Psysentry(P, SYS_execve, 1);
 	if (Psetrun(P, 0, PRSABORT) == -1) {
-		dprintf("Pcreate: Psetrun failed: %s\n", strerror(errno));
+		Pdprintf("Pcreate: Psetrun failed: %s\n", strerror(errno));
 		rc = C_STRANGE;
 		goto bad;
 	}
 	(void) Pwait(P, 0);
 	if (P->state != PS_STOP) {
-		dprintf("Pcreate: Pwait failed: %s\n", strerror(errno));
+		Pdprintf("Pcreate: Pwait failed: %s\n", strerror(errno));
 		rc = C_STRANGE;
 		goto bad;
 	}
@@ -732,7 +802,6 @@ Pcreate_error(int error)
  * may be useful for clients that need to modify signal dispositions, terminal
  * attributes, or process group and session properties for each new victim.
  */
-/*ARGSUSED*/
 void
 Pcreate_callback(struct ps_prochandle *P)
 {
@@ -793,6 +862,7 @@ again:	/* Come back here if we lose it in the Window of Vulnerability */
 	P->agentstatfd = -1;
 	Pinit_ops(&P->ops, &P_live_ops);
 	Pinitsym(P);
+	Pinitfd(P);
 
 	/*
 	 * Open the /proc/pid files
@@ -832,7 +902,7 @@ again:	/* Come back here if we lose it in the Window of Vulnerability */
 			}
 			/* FALLTHROUGH */
 		default:
-			dprintf("Pgrab: failed to open %s: %s\n",
+			Pdprintf("Pgrab: failed to open %s: %s\n",
 			    procname, strerror(errno));
 			rc = G_STRANGE;
 			break;
@@ -852,7 +922,7 @@ again:	/* Come back here if we lose it in the Window of Vulnerability */
 			rc = G_NOFD;
 			break;
 		default:
-			dprintf("Pgrab: failed to open %s: %s\n",
+			Pdprintf("Pgrab: failed to open %s: %s\n",
 			    procname, strerror(errno));
 			rc = G_STRANGE;
 			break;
@@ -873,7 +943,7 @@ again:	/* Come back here if we lose it in the Window of Vulnerability */
 				rc = G_NOFD;
 				break;
 			default:
-				dprintf("Pgrab: failed to open %s: %s\n",
+				Pdprintf("Pgrab: failed to open %s: %s\n",
 				    procname, strerror(errno));
 				rc = G_STRANGE;
 				break;
@@ -984,7 +1054,7 @@ again:	/* Come back here if we lose it in the Window of Vulnerability */
 			if (errno == ENOENT)	/* No complaint about zombies */
 				rc = G_ZOMB;
 			else {
-				dprintf("Pgrab: failed to set RLC\n");
+				Pdprintf("Pgrab: failed to set RLC\n");
 				rc = G_STRANGE;
 			}
 			goto err;
@@ -1042,7 +1112,7 @@ again:	/* Come back here if we lose it in the Window of Vulnerability */
 			    (P->state != PS_STOP &&
 			    !(P->status.pr_flags & PR_DSTOP))) {
 				if (P->state != PS_RUN && errno != ENOENT) {
-					dprintf("Pgrab: failed to PCSTOP\n");
+					Pdprintf("Pgrab: failed to PCSTOP\n");
 					rc = G_STRANGE;
 				} else {
 					rc = G_ZOMB;
@@ -1056,7 +1126,7 @@ again:	/* Come back here if we lose it in the Window of Vulnerability */
 		 * should be an outstanding stop directive.
 		 */
 		if (!(P->status.pr_flags & (PR_ISTOP|PR_DSTOP))) {
-			dprintf("Pgrab: process is not stopped\n");
+			Pdprintf("Pgrab: process is not stopped\n");
 			rc = G_STRANGE;
 			goto err;
 		}
@@ -1171,6 +1241,7 @@ void
 Pfree(struct ps_prochandle *P)
 {
 	uint_t i;
+	fd_info_t *fip;
 
 	if (P->ucaddrs != NULL) {
 		free(P->ucaddrs);
@@ -1188,14 +1259,14 @@ Pfree(struct ps_prochandle *P)
 		free(P->hashtab);
 	}
 
-	while (P->num_fd > 0) {
-		fd_info_t *fip = list_next(&P->fd_head);
-		list_unlink(fip);
+	while ((fip = list_remove_head(&P->fd_head)) != NULL) {
+		proc_fdinfo_free(fip->fd_info);
 		free(fip);
-		P->num_fd--;
 	}
 	(void) mutex_unlock(&P->proc_lock);
 	(void) mutex_destroy(&P->proc_lock);
+
+	free(P->zoneroot);
 
 	if (P->agentctlfd >= 0)
 		(void) close(P->agentctlfd);
@@ -1292,6 +1363,42 @@ Pcred(struct ps_prochandle *P, prcred_t *pcrp, int ngroups)
 	return (P->ops.pop_cred(P, pcrp, ngroups, P->data));
 }
 
+/* Return an allocated prsecflags_t */
+int
+Psecflags(struct ps_prochandle *P, prsecflags_t **psf)
+{
+	int ret;
+
+	if ((ret = P->ops.pop_secflags(P, psf, P->data)) == 0) {
+		if ((*psf)->pr_version != PRSECFLAGS_VERSION_1) {
+			free(*psf);
+			*psf = NULL;
+			errno = EINVAL;
+			return (-1);
+		}
+	}
+
+	return (ret);
+}
+
+void
+Psecflags_free(prsecflags_t *psf)
+{
+	free(psf);
+}
+
+int
+Pcwd(struct ps_prochandle *P, prcwd_t **cwd)
+{
+	return (P->ops.pop_cwd(P, cwd, P->data));
+}
+
+void
+Pcwd_free(prcwd_t *cwd)
+{
+	free(cwd);
+}
+
 static prheader_t *
 Plstatus(struct ps_prochandle *P)
 {
@@ -1319,6 +1426,12 @@ Pldt(struct ps_prochandle *P, struct ssd *pldt, int nldt)
 
 }
 #endif	/* __i386 */
+
+void
+Ppriv_free(struct ps_prochandle *P, prpriv_t *prv)
+{
+	free(prv);
+}
 
 /*
  * Return a malloced process privilege structure in *pprv.
@@ -1470,7 +1583,7 @@ Preopen(struct ps_prochandle *P)
 	if ((fd = open(procname, O_RDWR)) < 0 ||
 	    close(P->asfd) < 0 ||
 	    (fd = dupfd(fd, P->asfd)) != P->asfd) {
-		dprintf("Preopen: failed to open %s: %s\n",
+		Pdprintf("Preopen: failed to open %s: %s\n",
 		    procname, strerror(errno));
 		if (fd >= 0)
 			(void) close(fd);
@@ -1482,7 +1595,7 @@ Preopen(struct ps_prochandle *P)
 	if ((fd = open(procname, O_RDONLY)) < 0 ||
 	    close(P->statfd) < 0 ||
 	    (fd = dupfd(fd, P->statfd)) != P->statfd) {
-		dprintf("Preopen: failed to open %s: %s\n",
+		Pdprintf("Preopen: failed to open %s: %s\n",
 		    procname, strerror(errno));
 		if (fd >= 0)
 			(void) close(fd);
@@ -1494,7 +1607,7 @@ Preopen(struct ps_prochandle *P)
 	if ((fd = open(procname, O_WRONLY)) < 0 ||
 	    close(P->ctlfd) < 0 ||
 	    (fd = dupfd(fd, P->ctlfd)) != P->ctlfd) {
-		dprintf("Preopen: failed to open %s: %s\n",
+		Pdprintf("Preopen: failed to open %s: %s\n",
 		    procname, strerror(errno));
 		if (fd >= 0)
 			(void) close(fd);
@@ -1536,7 +1649,7 @@ Preopen(struct ps_prochandle *P)
 			P->status.pr_lwp.pr_errno = 0;
 		}
 	} else {
-		dprintf("Preopen: expected REQUESTED or "
+		Pdprintf("Preopen: expected REQUESTED or "
 		    "SYSEXIT(SYS_execve) stop\n");
 	}
 
@@ -1623,21 +1736,21 @@ void
 Prelease(struct ps_prochandle *P, int flags)
 {
 	if (P->state == PS_DEAD) {
-		dprintf("Prelease: releasing handle %p PS_DEAD of pid %d\n",
+		Pdprintf("Prelease: releasing handle %p PS_DEAD of pid %d\n",
 		    (void *)P, (int)P->pid);
 		Pfree(P);
 		return;
 	}
 
 	if (P->state == PS_IDLE) {
-		file_info_t *fptr = list_next(&P->file_head);
-		dprintf("Prelease: releasing handle %p PS_IDLE of file %s\n",
+		file_info_t *fptr = list_head(&P->file_head);
+		Pdprintf("Prelease: releasing handle %p PS_IDLE of file %s\n",
 		    (void *)P, fptr->file_pname);
 		Pfree(P);
 		return;
 	}
 
-	dprintf("Prelease: releasing handle %p pid %d\n",
+	Pdprintf("Prelease: releasing handle %p pid %d\n",
 	    (void *)P, (int)P->pid);
 
 	if (P->ctlfd == -1) {
@@ -1712,7 +1825,7 @@ Prelease(struct ps_prochandle *P, int flags)
 		    P->status.pr_lwp.pr_flags & (PR_ISTOP|PR_DSTOP));
 
 		if (P->status.pr_lwp.pr_flags & (PR_ISTOP|PR_DSTOP))
-			dprintf("Prelease: failed to set process running\n");
+			Pdprintf("Prelease: failed to set process running\n");
 	}
 
 	Pfree(P);
@@ -1727,42 +1840,42 @@ prldump(const char *caller, lwpstatus_t *lsp)
 
 	switch (lsp->pr_why) {
 	case PR_REQUESTED:
-		dprintf("%s: REQUESTED\n", caller);
+		Pdprintf("%s: REQUESTED\n", caller);
 		break;
 	case PR_SIGNALLED:
-		dprintf("%s: SIGNALLED %s\n", caller,
+		Pdprintf("%s: SIGNALLED %s\n", caller,
 		    proc_signame(lsp->pr_what, name, sizeof (name)));
 		break;
 	case PR_FAULTED:
-		dprintf("%s: FAULTED %s\n", caller,
+		Pdprintf("%s: FAULTED %s\n", caller,
 		    proc_fltname(lsp->pr_what, name, sizeof (name)));
 		break;
 	case PR_SYSENTRY:
-		dprintf("%s: SYSENTRY %s\n", caller,
+		Pdprintf("%s: SYSENTRY %s\n", caller,
 		    proc_sysname(lsp->pr_what, name, sizeof (name)));
 		break;
 	case PR_SYSEXIT:
-		dprintf("%s: SYSEXIT %s\n", caller,
+		Pdprintf("%s: SYSEXIT %s\n", caller,
 		    proc_sysname(lsp->pr_what, name, sizeof (name)));
 		break;
 	case PR_JOBCONTROL:
-		dprintf("%s: JOBCONTROL %s\n", caller,
+		Pdprintf("%s: JOBCONTROL %s\n", caller,
 		    proc_signame(lsp->pr_what, name, sizeof (name)));
 		break;
 	case PR_SUSPENDED:
-		dprintf("%s: SUSPENDED\n", caller);
+		Pdprintf("%s: SUSPENDED\n", caller);
 		break;
 	default:
-		dprintf("%s: Unknown\n", caller);
+		Pdprintf("%s: Unknown\n", caller);
 		break;
 	}
 
 	if (lsp->pr_cursig)
-		dprintf("%s: p_cursig  = %d\n", caller, lsp->pr_cursig);
+		Pdprintf("%s: p_cursig  = %d\n", caller, lsp->pr_cursig);
 
 	bits = *((uint32_t *)&lsp->pr_lwppend);
 	if (bits)
-		dprintf("%s: pr_lwppend = 0x%.8X\n", caller, bits);
+		Pdprintf("%s: pr_lwppend = 0x%.8X\n", caller, bits);
 }
 
 /* debugging */
@@ -1775,7 +1888,7 @@ prdump(struct ps_prochandle *P)
 
 	bits = *((uint32_t *)&P->status.pr_sigpend);
 	if (bits)
-		dprintf("Pstopstatus: pr_sigpend = 0x%.8X\n", bits);
+		Pdprintf("Pstopstatus: pr_sigpend = 0x%.8X\n", bits);
 }
 
 /*
@@ -1787,8 +1900,8 @@ prdump(struct ps_prochandle *P)
  */
 int
 Pstopstatus(struct ps_prochandle *P,
-	long request,		/* PCNULL, PCDSTOP, PCSTOP, PCWSTOP */
-	uint_t msec)		/* if non-zero, timeout in milliseconds */
+    long request,		/* PCNULL, PCDSTOP, PCSTOP, PCWSTOP */
+    uint_t msec)		/* if non-zero, timeout in milliseconds */
 {
 	int ctlfd = (P->agentctlfd >= 0)? P->agentctlfd : P->ctlfd;
 	long ctl[3];
@@ -1818,7 +1931,7 @@ Pstopstatus(struct ps_prochandle *P,
 		}
 		break;
 	default:	/* corrupted state */
-		dprintf("Pstopstatus: corrupted state: %d\n", P->state);
+		Pdprintf("Pstopstatus: corrupted state: %d\n", P->state);
 		errno = EINVAL;
 		return (-1);
 	}
@@ -1863,11 +1976,11 @@ Pstopstatus(struct ps_prochandle *P,
 		switch (err) {
 		case EINTR:		/* user typed ctl-C */
 		case ERESTART:
-			dprintf("Pstopstatus: EINTR\n");
+			Pdprintf("Pstopstatus: EINTR\n");
 			break;
 		case EAGAIN:		/* we lost control of the the process */
 		case EOVERFLOW:
-			dprintf("Pstopstatus: PS_LOST, errno=%d\n", err);
+			Pdprintf("Pstopstatus: PS_LOST, errno=%d\n", err);
 			P->state = PS_LOST;
 			break;
 		default:		/* check for dead process */
@@ -1886,7 +1999,7 @@ Pstopstatus(struct ps_prochandle *P,
 				default:
 					errstr = "Pstopstatus PC???"; break;
 				}
-				dprintf("%s: %s\n", errstr, strerror(err));
+				Pdprintf("%s: %s\n", errstr, strerror(err));
 			}
 			deadcheck(P);
 			break;
@@ -1901,7 +2014,7 @@ Pstopstatus(struct ps_prochandle *P,
 		P->state = PS_RUN;
 		if (request == PCNULL || request == PCDSTOP || msec != 0)
 			return (0);
-		dprintf("Pstopstatus: process is not stopped\n");
+		Pdprintf("Pstopstatus: process is not stopped\n");
 		errno = EPROTO;
 		return (-1);
 	}
@@ -2052,8 +2165,8 @@ Pputareg(struct ps_prochandle *P, int regno, prgreg_t reg)
 
 int
 Psetrun(struct ps_prochandle *P,
-	int sig,	/* signal to pass to process */
-	int flags)	/* PRSTEP|PRSABORT|PRSTOP|PRCSIG|PRCFAULT */
+    int sig,	/* signal to pass to process */
+    int flags)	/* PRSTEP|PRSABORT|PRSTOP|PRCSIG|PRCFAULT */
 {
 	int ctlfd = (P->agentctlfd >= 0) ? P->agentctlfd : P->ctlfd;
 	int sbits = (PR_DSTOP | PR_ISTOP | PR_ASLEEP);
@@ -2116,7 +2229,7 @@ Psetrun(struct ps_prochandle *P,
 		/* If it is not in a jobcontrol stop, issue an error message */
 		if (errno != EBUSY ||
 		    P->status.pr_lwp.pr_why != PR_JOBCONTROL) {
-			dprintf("Psetrun: %s\n", strerror(errno));
+			Pdprintf("Psetrun: %s\n", strerror(errno));
 			return (-1);
 		}
 		/* Otherwise pretend that the job-stopped process is running */
@@ -2128,18 +2241,18 @@ Psetrun(struct ps_prochandle *P,
 
 ssize_t
 Pread(struct ps_prochandle *P,
-	void *buf,		/* caller's buffer */
-	size_t nbyte,		/* number of bytes to read */
-	uintptr_t address)	/* address in process */
+    void *buf,		/* caller's buffer */
+    size_t nbyte,	/* number of bytes to read */
+    uintptr_t address)	/* address in process */
 {
 	return (P->ops.pop_pread(P, buf, nbyte, address, P->data));
 }
 
 ssize_t
 Pread_string(struct ps_prochandle *P,
-	char *buf,		/* caller's buffer */
-	size_t size,		/* upper limit on bytes to read */
-	uintptr_t addr)		/* address in process */
+    char *buf,			/* caller's buffer */
+    size_t size,		/* upper limit on bytes to read */
+    uintptr_t addr)		/* address in process */
 {
 	enum { STRSZ = 40 };
 	char string[STRSZ + 1];
@@ -2175,9 +2288,9 @@ Pread_string(struct ps_prochandle *P,
 
 ssize_t
 Pwrite(struct ps_prochandle *P,
-	const void *buf,	/* caller's buffer */
-	size_t nbyte,		/* number of bytes to write */
-	uintptr_t address)	/* address in process */
+    const void *buf,	/* caller's buffer */
+    size_t nbyte,	/* number of bytes to write */
+    uintptr_t address)	/* address in process */
 {
 	return (P->ops.pop_pwrite(P, buf, nbyte, address, P->data));
 }
@@ -2921,10 +3034,10 @@ Plwp_iter(struct ps_prochandle *P, proc_lwp_f *func, void *cd)
 	 */
 	if (P->state == PS_DEAD) {
 		core_info_t *core = P->data;
-		lwp_info_t *lwp = list_prev(&core->core_lwp_head);
-		uint_t i;
+		lwp_info_t *lwp;
 
-		for (i = 0; i < core->core_nlwp; i++, lwp = list_prev(lwp)) {
+		for (lwp = list_tail(&core->core_lwp_head); lwp != NULL;
+		    lwp = list_prev(&core->core_lwp_head, lwp)) {
 			if (lwp->lwp_psinfo.pr_sname != 'Z' &&
 			    (rv = func(cd, &lwp->lwp_status)) != 0)
 				break;
@@ -2993,10 +3106,10 @@ retry:
 	 */
 	if (P->state == PS_DEAD) {
 		core_info_t *core = P->data;
-		lwp_info_t *lwp = list_prev(&core->core_lwp_head);
-		uint_t i;
+		lwp_info_t *lwp;
 
-		for (i = 0; i < core->core_nlwp; i++, lwp = list_prev(lwp)) {
+		for (lwp = list_tail(&core->core_lwp_head); lwp != NULL;
+		    lwp = list_prev(&core->core_lwp_head, lwp)) {
 			sp = (lwp->lwp_psinfo.pr_sname == 'Z')? NULL :
 			    &lwp->lwp_status;
 			if ((rv = func(cd, sp, &lwp->lwp_psinfo)) != 0)
@@ -3099,7 +3212,7 @@ Pcontent(struct ps_prochandle *P)
  * or it will point to an empty slot for a new struct ps_lwphandle.
  */
 static struct ps_lwphandle **
-Lfind(struct ps_prochandle *P, lwpid_t lwpid)
+Lfind_slot(struct ps_prochandle *P, lwpid_t lwpid)
 {
 	struct ps_lwphandle **Lp;
 	struct ps_lwphandle *L;
@@ -3109,6 +3222,20 @@ Lfind(struct ps_prochandle *P, lwpid_t lwpid)
 		if (L->lwp_id == lwpid)
 			break;
 	return (Lp);
+}
+
+/*
+ * A wrapper around Lfind_slot() that is suitable for the rest of the internal
+ * consumers who don't care about a slot, merely existence.
+ */
+struct ps_lwphandle *
+Lfind(struct ps_prochandle *P, lwpid_t lwpid)
+{
+	if (P->hashtab == NULL) {
+		return (NULL);
+	}
+
+	return (*Lfind_slot(P, lwpid));
 }
 
 /*
@@ -3134,7 +3261,7 @@ Lgrab(struct ps_prochandle *P, lwpid_t lwpid, int *perr)
 	    (P->hashtab = calloc(HASHSIZE, sizeof (struct ps_lwphandle *)))
 	    == NULL)
 		rc = G_STRANGE;
-	else if (*(Lp = Lfind(P, lwpid)) != NULL)
+	else if (*(Lp = Lfind_slot(P, lwpid)) != NULL)
 		rc = G_BUSY;
 	else if ((L = malloc(sizeof (struct ps_lwphandle))) == NULL)
 		rc = G_STRANGE;
@@ -3178,7 +3305,7 @@ Lgrab(struct ps_prochandle *P, lwpid_t lwpid, int *perr)
 			rc = G_NOPROC;
 			break;
 		default:
-			dprintf("Lgrab: failed to open %s: %s\n",
+			Pdprintf("Lgrab: failed to open %s: %s\n",
 			    procname, strerror(errno));
 			rc = G_STRANGE;
 			break;
@@ -3193,7 +3320,7 @@ Lgrab(struct ps_prochandle *P, lwpid_t lwpid, int *perr)
 			rc = G_NOPROC;
 			break;
 		default:
-			dprintf("Lgrab: failed to read %s: %s\n",
+			Pdprintf("Lgrab: failed to read %s: %s\n",
 			    procname, strerror(errno));
 			rc = G_STRANGE;
 			break;
@@ -3209,7 +3336,7 @@ Lgrab(struct ps_prochandle *P, lwpid_t lwpid, int *perr)
 			rc = G_NOPROC;
 			break;
 		default:
-			dprintf("Lgrab: failed to open %s: %s\n",
+			Pdprintf("Lgrab: failed to open %s: %s\n",
 			    procname, strerror(errno));
 			rc = G_STRANGE;
 			break;
@@ -3276,7 +3403,7 @@ Lfree(struct ps_lwphandle *L)
 static void
 Lfree_internal(struct ps_prochandle *P, struct ps_lwphandle *L)
 {
-	*Lfind(P, L->lwp_id) = L->lwp_hash;	/* delete from hash table */
+	*Lfind_slot(P, L->lwp_id) = L->lwp_hash; /* delete from hash table */
 	if (L->lwp_ctlfd >= 0)
 		(void) close(L->lwp_ctlfd);
 	if (L->lwp_statfd >= 0)
@@ -3382,10 +3509,10 @@ Lsync(struct ps_lwphandle *L)
  * Or, just get the current status (PCNULL).
  * Or, direct it to stop and get the current status (PCDSTOP).
  */
-static int
+int
 Lstopstatus(struct ps_lwphandle *L,
-	long request,		/* PCNULL, PCDSTOP, PCSTOP, PCWSTOP */
-	uint_t msec)		/* if non-zero, timeout in milliseconds */
+    long request,		/* PCNULL, PCDSTOP, PCSTOP, PCWSTOP */
+    uint_t msec)		/* if non-zero, timeout in milliseconds */
 {
 	int ctlfd = L->lwp_ctlfd;
 	long ctl[3];
@@ -3413,7 +3540,7 @@ Lstopstatus(struct ps_lwphandle *L,
 		}
 		break;
 	default:	/* corrupted state */
-		dprintf("Lstopstatus: corrupted state: %d\n", L->lwp_state);
+		Pdprintf("Lstopstatus: corrupted state: %d\n", L->lwp_state);
 		errno = EINVAL;
 		return (-1);
 	}
@@ -3451,10 +3578,10 @@ Lstopstatus(struct ps_lwphandle *L,
 		switch (err) {
 		case EINTR:		/* user typed ctl-C */
 		case ERESTART:
-			dprintf("Lstopstatus: EINTR\n");
+			Pdprintf("Lstopstatus: EINTR\n");
 			break;
 		case EAGAIN:		/* we lost control of the the process */
-			dprintf("Lstopstatus: EAGAIN\n");
+			Pdprintf("Lstopstatus: EAGAIN\n");
 			L->lwp_state = PS_LOST;
 			errno = err;
 			return (-1);
@@ -3474,7 +3601,7 @@ Lstopstatus(struct ps_lwphandle *L,
 				default:
 					errstr = "Lstopstatus PC???"; break;
 				}
-				dprintf("%s: %s\n", errstr, strerror(err));
+				Pdprintf("%s: %s\n", errstr, strerror(err));
 			}
 			L->lwp_state = PS_UNDEAD;
 			errno = err;
@@ -3487,7 +3614,7 @@ Lstopstatus(struct ps_lwphandle *L,
 		L->lwp_state = PS_RUN;
 		if (request == PCNULL || request == PCDSTOP || msec != 0)
 			return (0);
-		dprintf("Lstopstatus: LWP is not stopped\n");
+		Pdprintf("Lstopstatus: LWP is not stopped\n");
 		errno = EPROTO;
 		return (-1);
 	}
@@ -3584,8 +3711,8 @@ Lputareg(struct ps_lwphandle *L, int regno, prgreg_t reg)
 
 int
 Lsetrun(struct ps_lwphandle *L,
-	int sig,	/* signal to pass to LWP */
-	int flags)	/* PRSTEP|PRSABORT|PRSTOP|PRCSIG|PRCFAULT */
+    int sig,	/* signal to pass to LWP */
+    int flags)	/* PRSTEP|PRSABORT|PRSTOP|PRCSIG|PRCFAULT */
 {
 	int ctlfd = L->lwp_ctlfd;
 	int sbits = (PR_DSTOP | PR_ISTOP | PR_ASLEEP);
@@ -3906,6 +4033,7 @@ Pgrab_ops(pid_t pid, void *data, const ps_ops_t *ops, int flags)
 	P->agentctlfd = -1;
 	P->agentstatfd = -1;
 	Pinitsym(P);
+	Pinitfd(P);
 	P->data = data;
 	Pread_status(P);
 

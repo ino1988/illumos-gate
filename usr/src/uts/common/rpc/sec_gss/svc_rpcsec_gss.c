@@ -18,9 +18,13 @@
  *
  * CDDL HEADER END
  */
+
 /*
+ * Copyright 2021 Tintri by DDN, Inc. All rights reserved.
  * Copyright (c) 1996, 2010, Oracle and/or its affiliates. All rights reserved.
  * Copyright 2012 Milan Jurik. All rights reserved.
+ * Copyright 2012 Marcel Telka <marcel@telka.sk>
+ * Copyright 2018 OmniOS Community Edition (OmniOSce) Association.
  */
 
 /*
@@ -45,6 +49,7 @@
 #include <rpc/rpcsec_defs.h>
 #include <sys/sunddi.h>
 #include <sys/atomic.h>
+#include <sys/disp.h>
 
 extern bool_t __rpc_gss_make_principal(rpc_gss_principal_t *, gss_buffer_t);
 
@@ -234,7 +239,6 @@ typedef struct svcrpcsec_gss_taskq_arg {
 
 /* gssd is single threaded, so 1 thread for the taskq is probably good/ok */
 int rpcsec_gss_init_taskq_nthreads = 1;
-static ddi_taskq_t *svcrpcsec_gss_init_taskq = NULL;
 
 extern struct rpc_msg *rpc_msg_dup(struct rpc_msg *);
 extern void rpc_msg_free(struct rpc_msg **, int);
@@ -248,6 +252,110 @@ struct udp_data {
 	mblk_t	*ud_resp;			/* buffer for response */
 	mblk_t	*ud_inmp;			/* mblk chain of request */
 };
+
+static zone_key_t svc_gss_zone_key;
+static uint_t svc_gss_tsd_key;
+
+typedef struct svc_gss_zsd {
+	zoneid_t sgz_zoneid;
+	kmutex_t sgz_lock;
+	taskq_t *sgz_init_taskq;
+} svc_gss_zsd_t;
+
+static taskq_t *
+svc_gss_create_taskq(zone_t *zone)
+{
+	taskq_t *tq;
+
+	if (zone == NULL) {
+		cmn_err(CE_NOTE, "%s: couldn't find zone", __func__);
+		return (NULL);
+	}
+
+	/* Like ddi_taskq_create(), but for zones, just for now */
+	tq = taskq_create_proc("rpcsec_gss_init_taskq",
+	    rpcsec_gss_init_taskq_nthreads, minclsyspri,
+	    rpcsec_gss_init_taskq_nthreads, INT_MAX, zone->zone_zsched,
+	    TASKQ_PREPOPULATE);
+
+	if (tq == NULL)
+		cmn_err(CE_NOTE, "%s: taskq_create_proc failed", __func__);
+
+	return (tq);
+}
+
+static void *
+svc_gss_zone_init(zoneid_t zoneid)
+{
+	svc_gss_zsd_t *zsd;
+	zone_t *zone = curzone;
+
+	zsd = kmem_alloc(sizeof (*zsd), KM_SLEEP);
+	mutex_init(&zsd->sgz_lock, NULL, MUTEX_DEFAULT, NULL);
+	zsd->sgz_zoneid = zoneid;
+
+	if (zone->zone_id != zoneid)
+		zone = zone_find_by_id_nolock(zoneid);
+
+	zsd->sgz_init_taskq = svc_gss_create_taskq(zone);
+	return (zsd);
+}
+
+/*
+ * taskq_destroy() wakes all taskq threads and tells them to exit.
+ * It then cv_wait()'s for all of them to finish exiting.
+ * cv_wait() calls resume(), which accesses the target's process.
+ * That may be one of our taskq threads, which are attached to zone_zsched.
+ *
+ * If we do taskq_destroy() in the zsd_destroy callback, then zone_zsched
+ * will have exited and been destroyed before it runs, and we can panic
+ * in resume(). Our taskq threads are not accounted for in either
+ * zone_ntasks or zone_kthreads, which means zsched does not wait for
+ * taskq threads attached to it to complete before exiting.
+ *
+ * We therefore need to do this at shutdown time. At the point where
+ * the zsd_shutdown callback is invoked, all other zone tasks (processes)
+ * have exited, but zone_kthreads and other taskqs hanging off zsched have not.
+ *
+ * We need to be careful not to allow RPC services to be ran from
+ * zsched-attached taskqs or zone_kthreads.
+ */
+static void
+svc_gss_zone_shutdown(zoneid_t zoneid, void *arg)
+{
+	svc_gss_zsd_t *zsd = arg;
+
+	/* All non-zsched-hung threads should be finished. */
+	mutex_enter(&zsd->sgz_lock);
+	if (zsd->sgz_init_taskq != NULL) {
+		taskq_destroy(zsd->sgz_init_taskq);
+		zsd->sgz_init_taskq = NULL;
+	}
+	mutex_exit(&zsd->sgz_lock);
+}
+
+static void
+svc_gss_zone_fini(zoneid_t zoneid, void *arg)
+{
+	svc_gss_zsd_t *zsd = arg;
+
+	mutex_destroy(&zsd->sgz_lock);
+	kmem_free(zsd, sizeof (*zsd));
+}
+
+static svc_gss_zsd_t *
+svc_gss_get_zsd(void)
+{
+	svc_gss_zsd_t *zsd;
+
+	zsd = tsd_get(svc_gss_tsd_key);
+	if (zsd == NULL) {
+		zsd = zone_getspecific(svc_gss_zone_key, curzone);
+		(void) tsd_set(svc_gss_tsd_key, zsd);
+	}
+
+	return (zsd);
+}
 
 /*ARGSUSED*/
 static int
@@ -301,14 +409,9 @@ svc_gss_init()
 	    svc_gss_data_reclaim,
 	    NULL, NULL, 0);
 
-	if (svcrpcsec_gss_init_taskq == NULL) {
-		svcrpcsec_gss_init_taskq = ddi_taskq_create(NULL,
-		    "rpcsec_gss_init_taskq", rpcsec_gss_init_taskq_nthreads,
-		    TASKQ_DEFAULTPRI, 0);
-		if (svcrpcsec_gss_init_taskq == NULL)
-			cmn_err(CE_NOTE,
-			    "svc_gss_init: ddi_taskq_create failed");
-	}
+	tsd_create(&svc_gss_tsd_key, NULL);
+	zone_key_create(&svc_gss_zone_key, svc_gss_zone_init,
+	    svc_gss_zone_shutdown, svc_gss_zone_fini);
 }
 
 /*
@@ -318,6 +421,9 @@ svc_gss_init()
 void
 svc_gss_fini()
 {
+	if (zone_key_delete(svc_gss_zone_key) != 0)
+		cmn_err(CE_WARN, "%s: failed to delete zone key", __func__);
+	tsd_destroy(&svc_gss_tsd_key);
 	mutex_destroy(&cb_mutex);
 	mutex_destroy(&ctx_mutex);
 	rw_destroy(&cred_lock);
@@ -372,10 +478,7 @@ rpc_gss_cleanup(SVCXPRT *clone_xprt)
  * Shift the array arr of length arrlen right by nbits bits.
  */
 static void
-shift_bits(arr, arrlen, nbits)
-	uint_t	*arr;
-	int	arrlen;
-	int	nbits;
+shift_bits(uint_t *arr, int arrlen, int nbits)
 {
 	int	i, j;
 	uint_t	lo, hi;
@@ -405,10 +508,7 @@ shift_bits(arr, arrlen, nbits)
  * Check that the received sequence number seq_num is valid.
  */
 static bool_t
-check_seq(cl, seq_num, kill_context)
-	svc_rpc_gss_data	*cl;
-	uint_t			seq_num;
-	bool_t			*kill_context;
+check_seq(svc_rpc_gss_data *cl, uint_t seq_num, bool_t *kill_context)
 {
 	int			i, j;
 	uint_t			bit;
@@ -429,7 +529,7 @@ check_seq(cl, seq_num, kill_context)
 	 */
 	if (seq_num > cl->seq_num) {
 		(void) shift_bits(cl->seq_bits, SEQ_ARR_SIZE,
-				(int)(seq_num - cl->seq_num));
+		    (int)(seq_num - cl->seq_num));
 		cl->seq_bits[0] |= SEQ_HI_BIT;
 		cl->seq_num = seq_num;
 		return (TRUE);
@@ -463,8 +563,7 @@ check_seq(cl, seq_num, kill_context)
  * Set server callback.
  */
 bool_t
-rpc_gss_set_callback(cb)
-	rpc_gss_callback_t	*cb;
+rpc_gss_set_callback(rpc_gss_callback_t *cb)
 {
 	rpc_gss_cblist_t		*cbl, *tmp;
 
@@ -506,9 +605,7 @@ rpc_gss_set_callback(cb)
  * the incoming context.
  */
 static bool_t
-do_callback(req, client_data)
-	struct svc_req		*req;
-	svc_rpc_gss_data	*client_data;
+do_callback(struct svc_req *req, svc_rpc_gss_data *client_data)
 {
 	rpc_gss_cblist_t		*cbl;
 	bool_t			ret = TRUE, found = FALSE;
@@ -517,13 +614,13 @@ do_callback(req, client_data)
 	mutex_enter(&cb_mutex);
 	for (cbl = rpc_gss_cblist; cbl != NULL; cbl = cbl->next) {
 		if (req->rq_prog != cbl->cb.program ||
-					req->rq_vers != cbl->cb.version)
+		    req->rq_vers != cbl->cb.version)
 			continue;
 		found = TRUE;
 		lock.locked = FALSE;
 		lock.raw_cred = &client_data->raw_cred;
 		ret = (*cbl->cb.callback)(req, client_data->deleg,
-			client_data->context, &lock, &client_data->cookie);
+		    client_data->context, &lock, &client_data->cookie);
 		req->rq_xprt->xp_cookie = client_data->cookie;
 
 		if (ret) {
@@ -535,7 +632,7 @@ do_callback(req, client_data)
 	if (!found) {
 		if (client_data->deleg != GSS_C_NO_CREDENTIAL) {
 			(void) kgss_release_cred(&minor, &client_data->deleg,
-					crgetuid(CRED()));
+			    crgetuid(CRED()));
 			client_data->deleg = GSS_C_NO_CREDENTIAL;
 		}
 	}
@@ -547,11 +644,8 @@ do_callback(req, client_data)
  * Get caller credentials.
  */
 bool_t
-rpc_gss_getcred(req, rcred, ucred, cookie)
-	struct svc_req		*req;
-	rpc_gss_rawcred_t	**rcred;
-	rpc_gss_ucred_t		**ucred;
-	void			**cookie;
+rpc_gss_getcred(struct svc_req *req, rpc_gss_rawcred_t **rcred,
+    rpc_gss_ucred_t **ucred, void **cookie)
 {
 	SVCAUTH			*svcauth;
 	svc_rpc_gss_data	*client_data;
@@ -571,38 +665,45 @@ rpc_gss_getcred(req, rcred, ucred, cookie)
 
 		if (client_data->u_cred_set == 0 ||
 		    client_data->u_cred_set < gethrestime_sec()) {
-		    if (client_data->u_cred_set == 0) {
-			if ((gssstat = kgsscred_expname_to_unix_cred(
-			    &client_data->client_name,
-			    &client_data->u_cred.uid,
-			    &client_data->u_cred.gid,
-			    &client_data->u_cred.gidlist,
-			    &gidlen, crgetuid(CRED()))) != GSS_S_COMPLETE) {
-				RPCGSS_LOG(1, "rpc_gss_getcred: "
-				    "kgsscred_expname_to_unix_cred failed %x\n",
-				    gssstat);
-				*ucred = NULL;
-			} else {
-				client_data->u_cred.gidlen = (short)gidlen;
-				client_data->u_cred_set =
-				    gethrestime_sec() + svc_rpcgss_gid_timeout;
+			if (client_data->u_cred_set == 0) {
+				if ((gssstat = kgsscred_expname_to_unix_cred(
+				    &client_data->client_name,
+				    &client_data->u_cred.uid,
+				    &client_data->u_cred.gid,
+				    &client_data->u_cred.gidlist,
+				    &gidlen, crgetuid(CRED())))
+				    != GSS_S_COMPLETE) {
+					RPCGSS_LOG(1, "rpc_gss_getcred: "
+					    "kgsscred_expname_to_unix_cred "
+					    "failed %x\n", gssstat);
+					*ucred = NULL;
+				} else {
+					client_data->u_cred.gidlen =
+					    (short)gidlen;
+					client_data->u_cred_set =
+					    gethrestime_sec() +
+					    svc_rpcgss_gid_timeout;
+				}
+			} else if (client_data->u_cred_set
+			    < gethrestime_sec()) {
+				if ((gssstat = kgss_get_group_info(
+				    client_data->u_cred.uid,
+				    &client_data->u_cred.gid,
+				    &client_data->u_cred.gidlist,
+				    &gidlen, crgetuid(CRED())))
+				    != GSS_S_COMPLETE) {
+					RPCGSS_LOG(1, "rpc_gss_getcred: "
+					    "kgss_get_group_info failed %x\n",
+					    gssstat);
+					*ucred = NULL;
+				} else {
+					client_data->u_cred.gidlen =
+					    (short)gidlen;
+					client_data->u_cred_set =
+					    gethrestime_sec() +
+					    svc_rpcgss_gid_timeout;
+				}
 			}
-		    } else if (client_data->u_cred_set < gethrestime_sec()) {
-			if ((gssstat = kgss_get_group_info(
-			    client_data->u_cred.uid,
-			    &client_data->u_cred.gid,
-			    &client_data->u_cred.gidlist,
-			    &gidlen, crgetuid(CRED()))) != GSS_S_COMPLETE) {
-				RPCGSS_LOG(1, "rpc_gss_getcred: "
-				    "kgss_get_group_info failed %x\n",
-				    gssstat);
-				*ucred = NULL;
-			} else {
-				client_data->u_cred.gidlen = (short)gidlen;
-				client_data->u_cred_set =
-				    gethrestime_sec() + svc_rpcgss_gid_timeout;
-			}
-		    }
 		}
 	}
 
@@ -692,7 +793,7 @@ do_gss_accept(
 	gss_buffer_desc		output_token;
 	OM_uint32		gssstat, minor, minor_stat, time_rec;
 	int			ret_flags, ret;
-	gss_OID 		mech_type = GSS_C_NULL_OID;
+	gss_OID			mech_type = GSS_C_NULL_OID;
 	int			free_mech_type = 1;
 	struct svc_req		r, *rqst;
 
@@ -907,6 +1008,7 @@ svcrpcsec_gss_taskq_func(void *svcrpcsecgss_taskq_arg)
 		    retval);
 	}
 	rpc_msg_free(&arg->msg, MAX_AUTH_BYTES);
+	SVC_RELE(arg->rq_xprt, NULL, FALSE);
 	svc_clone_unlink(arg->rq_xprt);
 	svc_clone_free(arg->rq_xprt);
 	xdr_free(__xdr_rpc_gss_init_arg, (caddr_t)arg->rpc_call_arg);
@@ -926,6 +1028,20 @@ rpcsec_gss_init(
 	svc_rpc_gss_data	*client_data;
 	int ret;
 	svcrpcsec_gss_taskq_arg_t *arg;
+	svc_gss_zsd_t *zsd = svc_gss_get_zsd();
+	taskq_t *tq = zsd->sgz_init_taskq;
+
+	if (tq == NULL) {
+		mutex_enter(&zsd->sgz_lock);
+		if (zsd->sgz_init_taskq == NULL)
+			zsd->sgz_init_taskq = svc_gss_create_taskq(curzone);
+		tq = zsd->sgz_init_taskq;
+		mutex_exit(&zsd->sgz_lock);
+		if (tq == NULL) {
+			cmn_err(CE_NOTE, "%s: no taskq available", __func__);
+			return (RPCSEC_GSS_FAILED);
+		}
+	}
 
 	if (creds.ctx_handle.length != 0) {
 		RPCGSS_LOG0(1, "_svcrpcsec_gss: ctx_handle not null\n");
@@ -949,7 +1065,7 @@ rpcsec_gss_init(
 	}
 
 	/*
-	 * kgss_accept_sec_context()/gssd(1M) can be overly time
+	 * kgss_accept_sec_context()/gssd(8) can be overly time
 	 * consuming so let's queue it and return asap.
 	 *
 	 * taskq func must free arg.
@@ -957,10 +1073,9 @@ rpcsec_gss_init(
 	arg = kmem_alloc(sizeof (*arg), KM_SLEEP);
 
 	/* taskq func must free rpc_call_arg & deserialized arguments */
-	arg->rpc_call_arg = kmem_alloc(sizeof (*arg->rpc_call_arg), KM_SLEEP);
+	arg->rpc_call_arg = kmem_zalloc(sizeof (*arg->rpc_call_arg), KM_SLEEP);
 
 	/* deserialize arguments */
-	bzero(arg->rpc_call_arg, sizeof (*arg->rpc_call_arg));
 	if (!SVC_GETARGS(rqst->rq_xprt, __xdr_rpc_gss_init_arg,
 	    (caddr_t)arg->rpc_call_arg)) {
 		ret = RPCSEC_GSS_FAILED;
@@ -973,6 +1088,11 @@ rpcsec_gss_init(
 	svc_clone_link(rqst->rq_xprt->xp_master, arg->rq_xprt, rqst->rq_xprt);
 	arg->rq_xprt->xp_xid = rqst->rq_xprt->xp_xid;
 
+	/*
+	 * Increment the reference count on the rpcmod slot so that is not
+	 * freed before the task has finished.
+	 */
+	SVC_HOLD(arg->rq_xprt);
 
 	/* set the appropriate wrap/unwrap routine for RPCSEC_GSS */
 	arg->rq_xprt->xp_auth.svc_ah_ops = svc_rpc_gss_ops;
@@ -985,16 +1105,13 @@ rpcsec_gss_init(
 	arg->cr_version = creds.version;
 	arg->cr_service = creds.service;
 
-	/* We no longer need the xp_xdrin, destroy it all here. */
-	XDR_DESTROY(&(rqst->rq_xprt->xp_xdrin));
-
 	/* should be ok to hold clm lock as taskq will have new thread(s) */
-	ret = ddi_taskq_dispatch(svcrpcsec_gss_init_taskq,
-	    svcrpcsec_gss_taskq_func, arg, DDI_SLEEP);
-	if (ret == DDI_FAILURE) {
-		cmn_err(CE_NOTE, "rpcsec_gss_init: taskq dispatch fail");
+	if (taskq_dispatch(tq, svcrpcsec_gss_taskq_func, arg, TQ_SLEEP)
+	    == DDI_FAILURE) {
+		cmn_err(CE_NOTE, "%s: taskq dispatch fail", __func__);
 		ret = RPCSEC_GSS_FAILED;
 		rpc_msg_free(&arg->msg, MAX_AUTH_BYTES);
+		SVC_RELE(arg->rq_xprt, NULL, FALSE);
 		svc_clone_unlink(arg->rq_xprt);
 		svc_clone_free(arg->rq_xprt);
 		kmem_free(arg, sizeof (*arg));
@@ -1475,11 +1592,8 @@ check_verf(struct rpc_msg *msg, gss_ctx_id_t context, int *qop_state, uid_t uid)
  * (e.g. sequence number or sequence window)
  */
 static bool_t
-set_response_verf(rqst, msg, cl, num)
-	struct svc_req		*rqst;
-	struct rpc_msg		*msg;
-	svc_rpc_gss_data	*cl;
-	uint_t			num;
+set_response_verf(struct svc_req *rqst, struct rpc_msg *msg,
+    svc_rpc_gss_data *cl, uint_t num)
 {
 	OM_uint32		minor;
 	gss_buffer_desc		in_buf, out_buf;
@@ -1490,8 +1604,8 @@ set_response_verf(rqst, msg, cl, num)
 	in_buf.value = (char *)&num_net;
 /* XXX uid ? */
 
-	if ((kgss_sign(&minor, cl->context, cl->qop, &in_buf,
-				&out_buf)) != GSS_S_COMPLETE)
+	if ((kgss_sign(&minor, cl->context, cl->qop, &in_buf, &out_buf))
+	    != GSS_S_COMPLETE)
 		return (FALSE);
 
 	rqst->rq_xprt->xp_verf.oa_flavor = RPCSEC_GSS;
@@ -1566,8 +1680,7 @@ create_client()
  * Insert client context into hash list and LRU list.
  */
 static void
-insert_client(client_data)
-	svc_rpc_gss_data	*client_data;
+insert_client(svc_rpc_gss_data *client_data)
 {
 	svc_rpc_gss_data	*cl;
 	int			index = HASH(client_data->key);
@@ -1595,8 +1708,7 @@ insert_client(client_data)
  * top of the LRU list since this is the most recently used context.
  */
 static svc_rpc_gss_data *
-get_client(ctx_handle)
-	gss_buffer_t		ctx_handle;
+get_client(gss_buffer_t ctx_handle)
 {
 	uint_t			key = *(uint_t *)ctx_handle->value;
 	svc_rpc_gss_data	*cl;
@@ -1638,8 +1750,7 @@ get_client(ctx_handle)
  * Don't change its LRU state since it may not be used.
  */
 static svc_rpc_gss_data *
-find_client(key)
-	uint_t			key;
+find_client(uint_t key)
 {
 	int			index = HASH(key);
 	svc_rpc_gss_data	*cl = NULL;
@@ -1657,8 +1768,7 @@ find_client(key)
  * Destroy a client context.
  */
 static void
-destroy_client(client_data)
-	svc_rpc_gss_data	*client_data;
+destroy_client(svc_rpc_gss_data *client_data)
 {
 	OM_uint32		minor;
 	int			index = HASH(client_data->key);
@@ -1692,20 +1802,20 @@ destroy_client(client_data)
 	 */
 	if (client_data->context != GSS_C_NO_CONTEXT) {
 		(void) kgss_delete_sec_context(&minor, &client_data->context,
-					NULL);
+		    NULL);
 
 		common_client_data_free(client_data);
 
 		if (client_data->deleg != GSS_C_NO_CREDENTIAL) {
-		    (void) kgss_release_cred(&minor, &client_data->deleg,
-				crgetuid(CRED()));
+			(void) kgss_release_cred(&minor, &client_data->deleg,
+			    crgetuid(CRED()));
 		}
 	}
 
 	if (client_data->u_cred.gidlist != NULL) {
-	    kmem_free((char *)client_data->u_cred.gidlist,
-			client_data->u_cred.gidlen * sizeof (gid_t));
-	    client_data->u_cred.gidlist = NULL;
+		kmem_free((char *)client_data->u_cred.gidlist,
+		    client_data->u_cred.gidlen * sizeof (gid_t));
+		client_data->u_cred.gidlist = NULL;
 	}
 	if (client_data->retrans_data != NULL)
 		retrans_del(client_data);
@@ -1775,11 +1885,8 @@ sweep_clients(bool_t from_reclaim)
  * and write the result to xdrs.
  */
 static bool_t
-svc_rpc_gss_wrap(auth, out_xdrs, xdr_func, xdr_ptr)
-	SVCAUTH			*auth;
-	XDR			*out_xdrs;
-	bool_t			(*xdr_func)();
-	caddr_t			xdr_ptr;
+svc_rpc_gss_wrap(SVCAUTH *auth, XDR *out_xdrs, bool_t (*xdr_func)(),
+    caddr_t xdr_ptr)
 {
 	svc_rpc_gss_parms_t	*gss_parms = SVCAUTH_GSSPARMS(auth);
 	bool_t ret;
@@ -1789,15 +1896,14 @@ svc_rpc_gss_wrap(auth, out_xdrs, xdr_func, xdr_ptr)
 	 * privacy service is used, don't wrap - just XDR encode.
 	 * Otherwise, wrap data using service and QOP parameters.
 	 */
-	if (!gss_parms->established ||
-				gss_parms->service == rpc_gss_svc_none)
+	if (!gss_parms->established || gss_parms->service == rpc_gss_svc_none)
 		return ((*xdr_func)(out_xdrs, xdr_ptr));
 
 	ret = __rpc_gss_wrap_data(gss_parms->service,
-				(OM_uint32)gss_parms->qop_rcvd,
-				(gss_ctx_id_t)gss_parms->context,
-				gss_parms->seq_num,
-				out_xdrs, xdr_func, xdr_ptr);
+	    (OM_uint32)gss_parms->qop_rcvd,
+	    (gss_ctx_id_t)gss_parms->context,
+	    gss_parms->seq_num,
+	    out_xdrs, xdr_func, xdr_ptr);
 	return (ret);
 }
 
@@ -1805,11 +1911,8 @@ svc_rpc_gss_wrap(auth, out_xdrs, xdr_func, xdr_ptr)
  * Decrypt the serialized arguments and XDR decode them.
  */
 static bool_t
-svc_rpc_gss_unwrap(auth, in_xdrs, xdr_func, xdr_ptr)
-	SVCAUTH			*auth;
-	XDR			*in_xdrs;
-	bool_t			(*xdr_func)();
-	caddr_t			xdr_ptr;
+svc_rpc_gss_unwrap(SVCAUTH *auth, XDR *in_xdrs, bool_t (*xdr_func)(),
+    caddr_t xdr_ptr)
 {
 	svc_rpc_gss_parms_t	*gss_parms = SVCAUTH_GSSPARMS(auth);
 
@@ -1818,15 +1921,14 @@ svc_rpc_gss_unwrap(auth, in_xdrs, xdr_func, xdr_ptr)
 	 * privacy service is used, don't unwrap - just XDR decode.
 	 * Otherwise, unwrap data.
 	 */
-	if (!gss_parms->established ||
-				gss_parms->service == rpc_gss_svc_none)
+	if (!gss_parms->established || gss_parms->service == rpc_gss_svc_none)
 		return ((*xdr_func)(in_xdrs, xdr_ptr));
 
 	return (__rpc_gss_unwrap_data(gss_parms->service,
-				(gss_ctx_id_t)gss_parms->context,
-				gss_parms->seq_num,
-				gss_parms->qop_rcvd,
-				in_xdrs, xdr_func, xdr_ptr));
+	    (gss_ctx_id_t)gss_parms->context,
+	    gss_parms->seq_num,
+	    gss_parms->qop_rcvd,
+	    in_xdrs, xdr_func, xdr_ptr));
 }
 
 

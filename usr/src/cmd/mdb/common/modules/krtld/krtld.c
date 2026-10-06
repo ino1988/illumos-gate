@@ -24,15 +24,28 @@
  * Use is subject to license terms.
  */
 
-#pragma ident	"%Z%%M%	%I%	%E% SMI"
+/*
+ * Copyright 2025 Oxide Computer Company
+ */
 
 #include <sys/machelf.h>
 #include <sys/modctl.h>
 #include <sys/kobj.h>
 
 #include <mdb/mdb_modapi.h>
+#include <mdb/mdb_ctf.h>
 
 static uintptr_t module_head; /* Head of kernel modctl list */
+
+struct krtld_ctf_module {
+	Ehdr hdr;
+	char *shdrs;
+	size_t text_size;
+	size_t data_size;
+	char *text;
+	char *ctfdata;
+	size_t ctfsize;
+};
 
 struct modctl_walk_data {
 	uintptr_t mwd_head;
@@ -45,9 +58,9 @@ modctl_walk_init(mdb_walk_state_t *wsp)
 	struct modctl_walk_data *mwd = mdb_alloc(
 	    sizeof (struct modctl_walk_data), UM_SLEEP);
 
-	mwd->mwd_head = (wsp->walk_addr == NULL ? module_head : wsp->walk_addr);
+	mwd->mwd_head = (wsp->walk_addr == 0 ? module_head : wsp->walk_addr);
 	wsp->walk_data = mwd;
-	wsp->walk_addr = NULL;
+	wsp->walk_addr = 0;
 
 	return (WALK_NEXT);
 }
@@ -61,7 +74,7 @@ modctl_walk_step(mdb_walk_state_t *wsp)
 	if (wsp->walk_addr == mwd->mwd_head)
 		return (WALK_DONE);
 
-	if (wsp->walk_addr == NULL)
+	if (wsp->walk_addr == 0)
 		wsp->walk_addr = mwd->mwd_head;
 
 	if (mdb_vread(&mwd->mwd_modctl, sizeof (struct modctl),
@@ -227,7 +240,7 @@ static int
 modhdrs(uintptr_t addr, uint_t flags, int argc, const mdb_arg_t *argv)
 {
 	struct modctl ctl;
-	struct module mod;
+	struct krtld_ctf_module mod;
 	Shdr *shdrs;
 
 	size_t nbytes;
@@ -241,13 +254,22 @@ modhdrs(uintptr_t addr, uint_t flags, int argc, const mdb_arg_t *argv)
 	if (argc != 0)
 		return (DCMD_USAGE);
 
-	mdb_vread(&ctl, sizeof (struct modctl), addr);
-	mdb_vread(&mod, sizeof (struct module), (uintptr_t)ctl.mod_mp);
+	if (mdb_vread(&ctl, sizeof (struct modctl), addr) == -1) {
+		mdb_warn("failed to read modctl at %p\n", addr);
+		return (DCMD_ERR);
+	}
+	if (mdb_ctf_vread(&mod, "struct module", "struct krtld_ctf_module",
+	    (uintptr_t)ctl.mod_mp, 0) == -1) {
+		mdb_warn("failed to read module at %p for modctl %p\n",
+		    ctl.mod_mp, addr);
+		return (DCMD_ERR);
+	}
+
 	dump_ehdr(&mod.hdr);
 
 	nbytes = sizeof (Shdr) * mod.hdr.e_shnum;
 	shdrs = mdb_alloc(nbytes, UM_SLEEP | UM_GC);
-	mdb_vread(shdrs, nbytes, (uintptr_t)mod.shdrs);
+	mdb_vread(shdrs, nbytes, (uintptr_t)(void *)mod.shdrs);
 
 	for (i = 0; i < mod.hdr.e_shnum; i++)
 		dump_shdr(&shdrs[i], i);
@@ -263,7 +285,7 @@ modinfo_format(uintptr_t addr, const void *data, void *private)
 
 	struct modlinkage linkage;
 	struct modlmisc lmisc;
-	struct module mod;
+	struct krtld_ctf_module mod;
 
 	char info[MODMAXLINKINFOLEN];
 	char name[MODMAXNAMELEN];
@@ -276,8 +298,15 @@ modinfo_format(uintptr_t addr, const void *data, void *private)
 
 	info[0] = '\0';
 
-	if (mcp->mod_mp != NULL)
-		(void) mdb_vread(&mod, sizeof (mod), (uintptr_t)mcp->mod_mp);
+	if (mcp->mod_mp != NULL) {
+		if (mdb_ctf_vread(&mod,
+		    "struct module", "struct krtld_ctf_module",
+		    (uintptr_t)mcp->mod_mp, 0) == -1) {
+			mdb_warn("failed to read module at %p\n",
+			    mcp->mod_mp);
+			return (WALK_NEXT);
+		}
+	}
 
 	if (mcp->mod_linkage != NULL) {
 		(void) mdb_vread(&linkage, sizeof (linkage),
@@ -331,12 +360,13 @@ static int
 ctfinfo_format(uintptr_t addr, const struct modctl *mcp, void *private)
 {
 	char name[MODMAXNAMELEN];
-	struct module mod;
+	struct krtld_ctf_module mod;
 
 	if (mcp->mod_mp == NULL)
 		return (WALK_NEXT); /* module is not loaded */
 
-	if (mdb_vread(&mod, sizeof (mod), (uintptr_t)mcp->mod_mp) == -1) {
+	if (mdb_ctf_vread(&mod, "struct module", "struct krtld_ctf_module",
+	    (uintptr_t)mcp->mod_mp, 0) == -1) {
 		mdb_warn("failed to read module at %p for modctl %p\n",
 		    mcp->mod_mp, addr);
 		return (WALK_NEXT);

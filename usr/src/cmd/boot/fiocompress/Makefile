@@ -22,8 +22,7 @@
 # Copyright 2007 Sun Microsystems, Inc.  All rights reserved.
 # Use is subject to license terms.
 #
-# ident	"%Z%%M%	%I%	%E% SMI"
-# 
+# Copyright (c) 2018, Joyent, Inc.
 
 PROG= fiocompress
 
@@ -37,14 +36,11 @@ include ../Makefile.com
 .KEEP_STATE:
 
 LDLIBS +=	-lz
+NATIVE_LIBS +=	libz.so
 
 CFLAGS +=	-I../../../uts/common
-LINTFLAGS +=	-I../../../uts/common
 
-# definitions for lint
-# until libz is compiled against ON header files (uid/gid)
-LINTFLAGS += -erroff=E_INCONS_ARG_DECL2
-LINTFLAGS += -erroff=E_INCONS_VAL_TYPE_DECL2
+SMOFF +=	leaks
 
 all: $(PROG)
 
@@ -58,7 +54,5 @@ clean:
 	-$(RM) $(OBJS)
 
 _msg:
-
-lint:	lint_SRCS
 
 include ../Makefile.targ

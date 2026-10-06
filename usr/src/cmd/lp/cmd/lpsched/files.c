@@ -27,8 +27,6 @@
 /*	Copyright (c) 1984, 1986, 1987, 1988, 1989 AT&T	*/
 /*	  All Rights Reserved  	*/
 
-#pragma ident	"%Z%%M%	%I%	%E% SMI"
-
 #include "lpsched.h"
 #include <syslog.h>
 #include <strings.h>
@@ -47,7 +45,7 @@ off_t chfiles ( char * * list, uid_t uid, gid_t gid )	/* funcdef */
     size_t	total;
     struct stat	stbuf;
     char	*file;
-    
+
     total = 0;
 
     while(file = *list++)
@@ -73,7 +71,7 @@ off_t chfiles ( char * * list, uid_t uid, gid_t gid )	/* funcdef */
 		Free(file);
 		list[-1] = file = newfile;
 	    }
-	    
+
 	    (void) chownmod(file, uid, gid, 0600);
 	}
 
@@ -172,7 +170,7 @@ void rmfiles ( RSTATUS * rp, int log_it )	/* funcdef */
 
 	    p = strdup(rp->req_file);		/* remove host/id file */
 	    if (q = strrchr(p, '-')) {
-		    *q = NULL;
+		    *q = '\0';
 		    path = makepath(Lp_Tmp, p, NULL);
 		    (void) Unlink(path);
 		    Free(path);
@@ -309,12 +307,12 @@ _alloc_req_id ( void )
 	}
 
 	wrap = curr;
-	do {	
+	do {
 		ret = curr;
 		if ((curr += incr) > end)
 	    	curr = start;
 
-	} while ( wrap != curr && ((RSTATUS *)request_by_id_num(ret)) ) ; 
+	} while ( wrap != curr && ((RSTATUS *)request_by_id_num(ret)) ) ;
 
 	/* write the new id file */
 	lseek(fd, 0, SEEK_SET);
@@ -375,7 +373,7 @@ _alloc_files (
 	}
 
 	file = makepath(Lp_Temp, base, (char *)0);
-        
+
 	cp = strrchr(file, '-') + 1;
 	while (num--) {
 		sprintf (cp, "%d", num + plus);

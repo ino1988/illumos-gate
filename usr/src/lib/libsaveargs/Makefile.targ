@@ -21,6 +21,7 @@
 #
 # Copyright 2007 Sun Microsystems, Inc.  All rights reserved.
 # Use is subject to license terms.
+# Copyright (c) 2016, Chris Fraire <cfraire@me.com>.
 #
 
 #
@@ -35,21 +36,16 @@ install: $(TYPES:%=install.%)
 all: $(TYPES:%=all.%)
 
 $(TYPES:%=all.%):
-	@CURTYPE=$(@:all.%=%) $(MAKE) $@.targ
+	@$(MAKE) $@.targ CURTYPE=$(@:all.%=%)
 
 $(TYPES:%=install.%):
-	@CURTYPE=$(@:install.%=%) $(MAKE) $@.targ
+	@$(MAKE) $@.targ CURTYPE=$(@:install.%=%)
 
 install.library.targ: all.library $(INSTALL_DEPS_library)
 install.standalone.targ: all.standalone $(INSTALL_DEPS_standalone)
 
 all.library.targ: $(LIBS)
 all.standalone.targ: $(STANDLIBRARY)
-
-lint: $(TYPES:%=lint.%)
-
-$(TYPES:%=lint.%):
-	@CURTYPE=$(@:lint.%=%) $(MAKE) lintcheck
 
 $(STANDLIBRARY): $(OBJS) $(LINKTEST_OBJ)
 	$(LD) $(BREDUCE) $(ZDEFS) $(LDFLAGS) -o $@.linktest $(OBJS) $(LINKTEST_OBJ)
@@ -59,7 +55,7 @@ $(STANDLIBRARY): $(OBJS) $(LINKTEST_OBJ)
 clobber: $(TYPES:%=clobber.%)
 
 $(TYPES:%=clobber.%):
-	@CURTYPE=$(@:clobber.%=%) $(MAKE) clobber.targ
+	@$(MAKE) clobber.targ CURTYPE=$(@:clobber.%=%)
 
 clobber.targ: clean
 	-$(RM) $(CLOBBERTARGFILES)
@@ -73,8 +69,3 @@ $(OBJS): objs
 objs/%.o pics/%.o: $(COMDIR)/%.c
 	$(COMPILE.c) -o $@ $<
 	$(POST_PROCESS_O)
-
-# install rule for lint library target
-$(ROOTLINTDIR)/%: $(COMDIR)/%
-	$(INS.file)
-

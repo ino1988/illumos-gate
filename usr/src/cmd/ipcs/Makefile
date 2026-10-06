@@ -20,22 +20,24 @@
 # CDDL HEADER END
 #
 #
-#ident	"%Z%%M%	%I%	%E% SMI"
-#
 # Copyright 2004 Sun Microsystems, Inc.  All rights reserved.
 # Use is subject to license terms.
 #
-# cmd/ipcs/Makefile
-#
+# Copyright (c) 2019, Joyent, Inc.
+# Copyright 2024 Oxide Computer Company
 
 PROG=		ipcs
 XPG4PROG=	$(PROG)
+OBJS=		ipcs.o $(HEXDUMP_OBJS)
 
 include ../Makefile.cmd
+include $(SRC)/common/hexdump/Makefile.com
 
-LINTFLAGS +=	-erroff=E_NAME_USED_NOT_DEF2
 CFLAGS +=	$(CCVERBOSE)
 LDLIBS +=	-lproject
+
+# main() too hairy
+SMATCH =	off
 
 .KEEP_STATE:
 
@@ -43,12 +45,18 @@ all: $(PROG)
 
 install: all $(ROOTXPG4PROG)
 
+clean:
+	$(RM) $(OBJS)
+
+$(PROG): $(OBJS)
+	$(LINK.c) -o $@ $(OBJS) $(LDLIBS)
+	$(POST_PROCESS)
+
 $(ROOTXPG4PROG):	$(ROOTPROG)
 	-$(RM) $(ROOTXPG4PROG)
 	-$(LN) -s ../../bin/$(PROG) $(ROOTXPG4PROG)
 
 clean:
 
-lint:	lint_PROG
-
+include $(SRC)/common/hexdump/Makefile.targ
 include ../Makefile.targ

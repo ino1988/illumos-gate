@@ -1,18 +1,20 @@
 /*
  * Copyright 2009 Sun Microsystems, Inc.  All rights reserved.
  * Use is subject to license terms.
+ *
+ * Copyright 2025 RackTop Systems, Inc.
  */
 
 /*
  * Copyright (C) 1998 by the FundsXpress, INC.
- * 
+ *
  * All rights reserved.
- * 
+ *
  * Export of this software from the United States of America may require
  * a specific license from the United States Government.  It is the
  * responsibility of any person or organization contemplating export to
  * obtain such a license before exporting.
- * 
+ *
  * WITHIN THAT CONSTRAINT, permission to use, copy, modify, and
  * distribute this software and its documentation for any purpose and
  * without fee is hereby granted, provided that the above copyright
@@ -23,7 +25,7 @@
  * permission.  FundsXpress makes no representations about the suitability of
  * this software for any purpose.  It is provided "as is" without express
  * or implied warranty.
- * 
+ *
  * THIS SOFTWARE IS PROVIDED ``AS IS'' AND WITHOUT ANY EXPRESS OR
  * IMPLIED WARRANTIES, INCLUDING, WITHOUT LIMITATION, THE IMPLIED
  * WARRANTIES OF MERCHANTIBILITY AND FITNESS FOR A PARTICULAR PURPOSE.
@@ -64,8 +66,10 @@ krb5_c_make_checksum(krb5_context context, krb5_cksumtype cksumtype,
 #endif
     cksum->length = cksumlen;
 
-    if ((cksum->contents = (krb5_octet *) MALLOC(cksum->length)) == NULL)
+    if ((cksum->contents = (krb5_octet *) MALLOC(cksum->length)) == NULL) {
+	cksum->length = 0;
 	return(ENOMEM);
+    }
 
     data.length = cksum->length;
     data.data = (char *) cksum->contents;
@@ -74,12 +78,12 @@ krb5_c_make_checksum(krb5_context context, krb5_cksumtype cksumtype,
 	/* check if key is compatible */
 
 	if (krb5_cksumtypes_list[i].keyed_etype) {
-	    for (e1=0; e1<krb5_enctypes_length; e1++) 
+	    for (e1=0; e1<krb5_enctypes_length; e1++)
 		if (krb5_enctypes_list[e1].etype ==
 		    krb5_cksumtypes_list[i].keyed_etype)
 		    break;
 
-	    for (e2=0; e2<krb5_enctypes_length; e2++) 
+	    for (e2=0; e2<krb5_enctypes_length; e2++)
 		if (krb5_enctypes_list[e2].etype == key->enctype)
 		    break;
 
@@ -102,7 +106,7 @@ krb5_c_make_checksum(krb5_context context, krb5_cksumtype cksumtype,
 	}
 #else
 	if ((ret = init_key_uef(krb_ctx_hSession(context), (krb5_keyblock *)key)))
-		return (ret);
+		goto cleanup;
 #endif /* _KERNEL */
 
 	ret = (*(krb5_cksumtypes_list[i].keyhash->hash))(context, key,
@@ -117,13 +121,13 @@ krb5_c_make_checksum(krb5_context context, krb5_cksumtype cksumtype,
 	 * If the hash_mt is invalid, try using the cksum_mt
 	 * because "hash" and "checksum" are overloaded terms
 	 * in some places.
-	 */ 
+	 */
 	if (context->kef_hash_mt == CRYPTO_MECH_INVALID)
 		context->kef_hash_mt = context->kef_cksum_mt;
 #else
 	ret = init_key_uef(krb_ctx_hSession(context), (krb5_keyblock *)key);
 	if (ret)
-		return (ret);
+		goto cleanup;
 #endif /* _KERNEL */
 	ret = krb5_dk_make_checksum(context,
 				krb5_cksumtypes_list[i].hash,

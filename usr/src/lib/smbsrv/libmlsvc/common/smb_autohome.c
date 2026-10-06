@@ -20,6 +20,7 @@
  */
 /*
  * Copyright (c) 2007, 2010, Oracle and/or its affiliates. All rights reserved.
+ * Copyright 2013 Nexenta Systems, Inc.  All rights reserved.
  */
 
 #include <sys/param.h>
@@ -63,7 +64,7 @@ static void smb_autohome_parse_options(smb_share_t *);
 static int smb_autohome_add_private(const char *, uid_t, gid_t);
 
 /*
- * Add an autohome share.  See smb_autohome(4) for details.
+ * Add an autohome share.  See smbautohome(5) for details.
  *
  * If share directory contains backslash path separators, they will
  * be converted to forward slash to support NT/DOS path style for
@@ -82,6 +83,9 @@ smb_autohome_add(const smb_token_t *token)
 	uid_t		uid;
 	gid_t		gid;
 
+	if (token->tkn_flags & SMB_ATF_ANON)
+		return;
+
 	uid = token->tkn_user.i_id;
 	gid = token->tkn_primary_grp.i_id;
 
@@ -90,7 +94,7 @@ smb_autohome_add(const smb_token_t *token)
 		assert(username);
 	} else {
 		if (getpwuid_r(uid, &pw, buf, sizeof (buf)) == NULL) {
-			syslog(LOG_ERR, "unable to determine name for " \
+			syslog(LOG_DEBUG, "unable to determine name for " \
 			    "UID: %u\n", uid);
 			return;
 		}
@@ -137,7 +141,7 @@ smb_autohome_add_private(const char *username, uid_t uid, gid_t gid)
 	static mutex_t	autohome_mutex;
 	smb_share_t	si;
 	smb_autohome_t	*ai;
-	char 		shr_name[MAXNAMELEN];
+	char		shr_name[MAXNAMELEN];
 
 	(void) strlcpy(shr_name, username, sizeof (shr_name));
 

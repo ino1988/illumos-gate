@@ -334,7 +334,6 @@ hxge_add_mcast_addr(p_hxge_t hxgep, struct ether_addr *addrp)
 	uint16_t	hash_bit;
 	boolean_t	rx_init = B_FALSE;
 	uint_t		j;
-	hxge_status_t	status = HXGE_OK;
 
 	HXGE_DEBUG_MSG((hxgep, PFC_CTL, "==> hxge_add_mcast_addr"));
 
@@ -374,12 +373,6 @@ hxge_add_mcast_addr(p_hxge_t hxgep, struct ether_addr *addrp)
 	HXGE_DEBUG_MSG((hxgep, PFC_CTL, "<== hxge_add_mcast_addr"));
 
 	return (HXGE_OK);
-fail:
-	RW_EXIT(&hxgep->filter_lock);
-	HXGE_ERROR_MSG((hxgep, HXGE_ERR_CTL, "hxge_add_mcast_addr: "
-	    "Unable to add multicast address"));
-
-	return (status);
 }
 
 /*
@@ -393,7 +386,6 @@ hxge_del_mcast_addr(p_hxge_t hxgep, struct ether_addr *addrp)
 	uint16_t	hash_bit;
 	boolean_t	rx_init = B_FALSE;
 	uint_t		j;
-	hxge_status_t	status = HXGE_OK;
 
 	HXGE_DEBUG_MSG((hxgep, PFC_CTL, "==> hxge_del_mcast_addr"));
 	RW_ENTER_WRITER(&hxgep->filter_lock);
@@ -437,12 +429,6 @@ hxge_del_mcast_addr(p_hxge_t hxgep, struct ether_addr *addrp)
 	HXGE_DEBUG_MSG((hxgep, PFC_CTL, "<== hxge_del_mcast_addr"));
 
 	return (HXGE_OK);
-fail:
-	RW_EXIT(&hxgep->filter_lock);
-	HXGE_ERROR_MSG((hxgep, HXGE_ERR_CTL, "hxge_del_mcast_addr: "
-	    "Unable to remove multicast address"));
-
-	return (status);
 }
 
 hxge_status_t
@@ -511,7 +497,7 @@ hxge_pfc_set_hash(p_hxge_t hxgep, uint32_t seed)
 {
 	hpi_status_t		rs = HPI_SUCCESS;
 	hpi_handle_t		handle;
-	p_hxge_class_pt_cfg_t 	p_class_cfgp;
+	p_hxge_class_pt_cfg_t	p_class_cfgp;
 
 	HXGE_DEBUG_MSG((hxgep, PFC_CTL, " ==> hxge_pfc_set_hash"));
 
@@ -777,7 +763,7 @@ hxge_status_t
 hxge_pfc_ip_class_config(p_hxge_t hxgep, tcam_class_t class, uint32_t config)
 {
 	uint32_t		class_config;
-	p_hxge_class_pt_cfg_t 	p_class_cfgp;
+	p_hxge_class_pt_cfg_t	p_class_cfgp;
 	tcam_key_cfg_t		cfg;
 	hpi_handle_t		handle;
 	hpi_status_t		rs = HPI_SUCCESS;
@@ -866,7 +852,7 @@ hxge_pfc_update_hw(p_hxge_t hxgep)
 	int		max_vlan_groups;
 	int		vlan_group_step;
 
-	p_hxge_class_pt_cfg_t 	p_class_cfgp;
+	p_hxge_class_pt_cfg_t	p_class_cfgp;
 
 	HXGE_DEBUG_MSG((hxgep, PFC_CTL, "==> hxge_pfc_update_hw"));
 	p_class_cfgp = (p_hxge_class_pt_cfg_t)&hxgep->class_config;
@@ -1017,7 +1003,7 @@ hxge_classify_init_sw(p_hxge_t hxgep)
 	classify_ptr->tcam_size = TCAM_HXGE_TCAM_MAX_ENTRY;
 
 	alloc_size = sizeof (tcam_flow_spec_t) * classify_ptr->tcam_size;
-	classify_ptr->tcam_entries = KMEM_ZALLOC(alloc_size, NULL);
+	classify_ptr->tcam_entries = KMEM_ZALLOC(alloc_size, KM_SLEEP);
 	bzero(classify_ptr->class_usage, sizeof (classify_ptr->class_usage));
 
 	/* Start from the beginning of TCAM */
@@ -1044,7 +1030,7 @@ hxge_classify_exit_sw(p_hxge_t hxgep)
 		alloc_size = fsize * classify_ptr->tcam_size;
 		KMEM_FREE((void *) classify_ptr->tcam_entries, alloc_size);
 	}
-	hxgep->classifier.state = NULL;
+	hxgep->classifier.state = 0;
 
 	HXGE_DEBUG_MSG((hxgep, PFC_CTL, "<== hxge_classify_exit_sw"));
 

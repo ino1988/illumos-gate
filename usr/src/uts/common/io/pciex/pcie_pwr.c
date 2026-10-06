@@ -21,6 +21,7 @@
 /*
  * Copyright 2009 Sun Microsystems, Inc.  All rights reserved.
  * Use is subject to license terms.
+ * Copyright 2019 Joyent, Inc.
  */
 
 #include <sys/types.h>
@@ -111,10 +112,10 @@ pcie_power(dev_info_t *dip, int component, int level)
 	int pmcaps = pwr_p->pwr_pmcaps;
 	int ret = DDI_FAILURE;
 
-#if defined(__i386) || defined(__amd64)
+#if defined(__x86)
 	if (dip)
 		return (DDI_SUCCESS);
-#endif /* defined(__i386) || defined(__amd64) */
+#endif /* defined(__x86) */
 
 	ASSERT(level != PM_LEVEL_UNKNOWN);
 	/* PM should not asking for a level, which is unsupported */
@@ -276,10 +277,10 @@ pcie_bus_power(dev_info_t *dip, void *impl_arg, pm_bus_power_op_t op,
 	int rv = DDI_SUCCESS;
 	int level_allowed, comp;
 
-#if defined(__i386) || defined(__amd64)
+#if defined(__x86)
 	if (dip)
 		return (DDI_SUCCESS);
-#endif /* defined(__i386) || defined(__amd64) */
+#endif /* defined(__x86) */
 
 	switch (op) {
 	case BUS_POWER_PRE_NOTIFICATION:
@@ -752,7 +753,7 @@ pcie_pm_subrelease(dev_info_t *dip, pcie_pwr_t *pwr_p)
  * Called when the child makes the first power management call.
  * sets up the counters. All the components of the child device are
  * assumed to be at unknown level. It also releases the power hold
- * 	pwr_p - parent's pwr_t
+ *	pwr_p - parent's pwr_t
  *	cdip   - child's dip
  */
 int
@@ -852,10 +853,10 @@ pcie_pwr_resume(dev_info_t *dip)
 	dev_info_t *cdip;
 	pcie_pwr_t *pwr_p = NULL;
 
-#if defined(__i386) || defined(__amd64)
+#if defined(__x86)
 	if (dip)
 		return (DDI_SUCCESS);
-#endif /* defined(__i386) || defined(__amd64) */
+#endif /* defined(__x86) */
 
 	if (PCIE_PMINFO(dip))
 		pwr_p = PCIE_NEXUS_PMINFO(dip);
@@ -908,7 +909,8 @@ pcie_pwr_resume(dev_info_t *dip)
 		pcie_clear_errors(cdip);
 
 		/* PCIe workaround: disable errors during 4K config resore */
-		if (is_pcie = pcie_is_pcie(cdip))
+		is_pcie = pcie_is_pcie(cdip);
+		if (is_pcie)
 			pcie_disable_errors(cdip);
 		(void) pci_restore_config_regs(cdip);
 		if (is_pcie) {
@@ -938,10 +940,10 @@ pcie_pwr_suspend(dev_info_t *dip)
 	int *child_counters = NULL; /* per child dip counters */
 	pcie_pwr_t *pwr_p = NULL;
 
-#if defined(__i386) || defined(__amd64)
+#if defined(__x86)
 	if (dip)
 		return (DDI_SUCCESS);
-#endif /* defined(__i386) || defined(__amd64) */
+#endif /* defined(__x86) */
 
 	if (PCIE_PMINFO(dip))
 		pwr_p = PCIE_NEXUS_PMINFO(dip);
@@ -1041,7 +1043,8 @@ pcie_pwr_suspend(dev_info_t *dip)
 		    ddi_driver_name(cdip), ddi_get_instance(cdip));
 
 		/* PCIe workaround: disable errors during 4K config save */
-		if (is_pcie = pcie_is_pcie(cdip))
+		is_pcie = pcie_is_pcie(cdip);
+		if (is_pcie)
 			pcie_disable_errors(cdip);
 		(void) pci_save_config_regs(cdip);
 		if (is_pcie) {

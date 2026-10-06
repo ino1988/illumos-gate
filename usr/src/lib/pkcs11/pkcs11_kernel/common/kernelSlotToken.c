@@ -22,9 +22,9 @@
 /*
  * Copyright 2005 Sun Microsystems, Inc.  All rights reserved.
  * Use is subject to license terms.
+ *
+ * Copyright 2023 RackTop Systems, Inc.
  */
-
-#pragma ident	"%Z%%M%	%I%	%E% SMI"
 
 #include <stdlib.h>
 #include <strings.h>
@@ -317,6 +317,7 @@ C_GetMechanismList(CK_SLOT_ID slotID, CK_MECHANISM_TYPE_PTR pMechanismList,
 		/*
 		 * Atomic flags are not part of PKCS#11 so we filter
 		 * them out here.
+		 * Neither is CRYPTO_FG_MAC.
 		 */
 		flags &= ~(CRYPTO_FG_DIGEST_ATOMIC | CRYPTO_FG_ENCRYPT_ATOMIC |
 		    CRYPTO_FG_DECRYPT_ATOMIC | CRYPTO_FG_MAC_ATOMIC |
@@ -324,7 +325,8 @@ C_GetMechanismList(CK_SLOT_ID slotID, CK_MECHANISM_TYPE_PTR pMechanismList,
 		    CRYPTO_FG_SIGN_RECOVER_ATOMIC |
 		    CRYPTO_FG_VERIFY_RECOVER_ATOMIC |
 		    CRYPTO_FG_ENCRYPT_MAC_ATOMIC |
-		    CRYPTO_FG_MAC_DECRYPT_ATOMIC);
+		    CRYPTO_FG_MAC_DECRYPT_ATOMIC |
+		    CRYPTO_FG_MAC);
 
 		/* mechanism has no PKCS#11 flags, so don't report it */
 		if (flags == 0)

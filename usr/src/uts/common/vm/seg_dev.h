@@ -21,10 +21,11 @@
 /*
  * Copyright 2009 Sun Microsystems, Inc.  All rights reserved.
  * Use is subject to license terms.
+ * Copyright 2018 Joyent, Inc.
  */
 
 /*	Copyright (c) 1984, 1986, 1987, 1988, 1989 AT&T	*/
-/*	  All Rights Reserved  	*/
+/*	  All Rights Reserved	*/
 
 /*
  * University Copyright- Copyright (c) 1982, 1986, 1988
@@ -122,7 +123,7 @@ struct devmap_pmem_cookie {
 
 extern void segdev_init(void);
 
-extern int segdev_create(struct seg *, void *);
+extern int segdev_create(struct seg **, void *);
 
 extern int segdev_copyto(struct seg *, caddr_t, const void *, void *, size_t);
 extern int segdev_copyfrom(struct seg *, caddr_t, const void *, void *, size_t);

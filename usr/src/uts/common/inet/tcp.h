@@ -22,6 +22,9 @@
  * Copyright (c) 1991, 2010, Oracle and/or its affiliates. All rights reserved.
  * Copyright (c) 2011, Joyent, Inc. All rights reserved.
  * Copyright (c) 2011 Nexenta Systems, Inc. All rights reserved.
+ * Copyright (c) 2014, 2017 by Delphix. All rights reserved.
+ * Copyright 2020 OmniOS Community Edition (OmniOSce) Association.
+ * Copyright 2024 Oxide Computer Company
  */
 /* Copyright (c) 1990 Mentat Inc. */
 
@@ -45,6 +48,7 @@ extern "C" {
 #include <inet/mib2.h>
 #include <inet/tcp_stack.h>
 #include <inet/tcp_sack.h>
+#include <inet/cc.h>
 
 /* TCP states */
 #define	TCPS_CLOSED		-6
@@ -151,6 +155,9 @@ typedef struct tcp_s {
 	struct conn_s	*tcp_connp;	/* back pointer to conn_t */
 	tcp_stack_t	*tcp_tcps;	/* back pointer to tcp_stack_t */
 
+	struct cc_algo	*tcp_cc_algo;	/* congestion control algorithm */
+	struct cc_var	tcp_ccv;	/* congestion control specific vars */
+
 	int32_t	tcp_state;
 	int32_t	tcp_rcv_ws;		/* My window scale power */
 	int32_t	tcp_snd_ws;		/* Sender's window scale power */
@@ -176,25 +183,17 @@ typedef struct tcp_s {
 	mblk_t	*tcp_xmit_tail;		/* Last data sent */
 	uint32_t tcp_unsent;		/* # of bytes in hand that are unsent */
 	uint32_t tcp_xmit_tail_unsent;	/* # of unsent bytes in xmit_tail */
-
 	uint32_t tcp_suna;		/* Sender unacknowledged */
 	uint32_t tcp_rexmit_nxt;	/* Next rexmit seq num */
 	uint32_t tcp_rexmit_max;	/* Max retran seq num */
-	int32_t	tcp_snd_burst;		/* Send burst factor */
 	uint32_t tcp_cwnd;		/* Congestion window */
 	int32_t tcp_cwnd_cnt;		/* cwnd cnt in congestion avoidance */
-
-	uint32_t tcp_ibsegs;		/* Inbound segments on this stream */
-	uint32_t tcp_obsegs;		/* Outbound segments on this stream */
-
 	uint32_t tcp_naglim;		/* Tunable nagle limit */
 	uint32_t	tcp_valid_bits;
 #define	TCP_ISS_VALID	0x1	/* Is the tcp_iss seq num active? */
 #define	TCP_FSS_VALID	0x2	/* Is the tcp_fss seq num active? */
 #define	TCP_URG_VALID	0x4	/* Is the tcp_urg seq num active? */
 #define	TCP_OFO_FIN_VALID 0x8	/* Has TCP received an out of order FIN? */
-
-
 
 	timeout_id_t	tcp_timer_tid;	/* Control block for timer service */
 	uchar_t	tcp_timer_backoff;	/* Backoff shift count. */
@@ -248,12 +247,14 @@ typedef struct tcp_s {
 		tcp_accept_error : 1,	/* Error during TLI accept */
 		tcp_send_discon_ind : 1, /* TLI accept err, send discon ind */
 		tcp_cork : 1,		/* tcp_cork option */
+		tcp_quickack : 1,	/* Send acks immediately */
 		tcp_tconnind_started : 1, /* conn_ind message is being sent */
 
 		tcp_lso :1,		/* Lower layer is capable of LSO */
 		tcp_is_wnd_shrnk : 1,	/* Window has shrunk */
+		tcp_md5sig : 1,		/* Add MD5 signature option */
 
-		tcp_pad_to_bit_31 : 18;
+		tcp_pad_to_bit_31 : 16;
 
 	uint32_t	tcp_initial_pmtu; /* Initial outgoing Path MTU. */
 
@@ -282,9 +283,11 @@ typedef struct tcp_s {
 	uint32_t tcp_cwnd_max;
 	uint32_t tcp_csuna;		/* Clear (no rexmits in window) suna */
 
-	clock_t	tcp_rtt_sa;		/* Round trip smoothed average */
-	clock_t	tcp_rtt_sd;		/* Round trip smoothed deviation */
-	clock_t	tcp_rtt_update;		/* Round trip update(s) */
+	hrtime_t tcp_rtt_sum;		/* Round trip sum */
+	uint32_t tcp_rtt_cnt;		/* Round trip count (non_dup ACKs) */
+	hrtime_t tcp_rtt_sa;		/* Round trip smoothed average */
+	hrtime_t tcp_rtt_sd;		/* Round trip smoothed deviation */
+	uint32_t tcp_rtt_update;	/* Round trip update(s) */
 	clock_t tcp_ms_we_have_waited;	/* Total retrans time */
 
 	uint32_t tcp_swl1;		/* These help us avoid using stale */
@@ -377,6 +380,7 @@ typedef struct tcp_s {
 
 	int		tcp_ipsec_overhead;
 
+	uint_t		tcp_recvtos;	/* Last received IP_RECVTOS */
 	uint_t		tcp_recvifindex; /* Last received IPV6_RCVPKTINFO */
 	uint_t		tcp_recvhops;	/* Last received IPV6_RECVHOPLIMIT */
 	uint_t		tcp_recvtclass;	/* Last received IPV6_RECVTCLASS */
@@ -493,6 +497,15 @@ typedef struct tcp_s {
 	/* FIN-WAIT-2 flush timeout */
 	uint32_t		tcp_fin_wait_2_flush_interval;
 
+	tcp_conn_stats_t	tcp_cs;
+
+	/*
+	 * The cached inbound and outbound security associations (SAs) for the
+	 * TCP signature (TCP_MD5SIG).
+	 */
+	void		*tcp_sig_sa_in;
+	void		*tcp_sig_sa_out;
+
 #ifdef DEBUG
 	pc_t			tcmp_stk[15];
 #endif
@@ -506,10 +519,10 @@ typedef struct tcp_s {
 #endif
 
 extern void	tcp_conn_reclaim(void *);
-extern void 	tcp_free(tcp_t *tcp);
+extern void	tcp_free(tcp_t *tcp);
 extern void	tcp_ddi_g_init(void);
 extern void	tcp_ddi_g_destroy(void);
-extern void 	*tcp_get_conn(void *arg, tcp_stack_t *);
+extern conn_t	*tcp_get_conn(void *arg, tcp_stack_t *);
 extern mblk_t	*tcp_snmp_get(queue_t *, mblk_t *, boolean_t);
 extern int	tcp_snmp_set(queue_t *, int, int, uchar_t *, int len);
 

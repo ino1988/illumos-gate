@@ -22,35 +22,36 @@
 #
 # Copyright (c) 1989 by Sun Microsystems, Inc.
 #
+# Copyright (c) 2018, Joyent, Inc.
 
 CFLAGS += v
 
 PROG= ctags
 XPG4PROG= ctags
-OTHERPROGS= fold cxref
-SRCS= $(PROG).c fold.c mkstr.c xstr.c
-TXTS= READ_ME del.h.cb mkstr.c xstr.c
+SRCS= $(PROG).c
+TXTS= READ_ME
 #
 # For message catalogue file
 #
 POFILES= $(SRCS:%.c=%.po)
 
 include ../../Makefile.cmd
-$(XPG4) := CFLAGS += -DXPG4 
+$(XPG4) := CFLAGS += -DXPG4
 
 CERRWARN += -_gcc=-Wno-char-subscripts
 CERRWARN += -_gcc=-Wno-parentheses
-CERRWARN += -_gcc=-Wno-uninitialized
+CERRWARN += $(CNOWARN_UNINIT)
 CERRWARN += -_gcc=-Wno-implicit-function-declaration
 CERRWARN += -_gcc=-Wno-unused-variable
 
-POFILE= misc.po
+# way too old
+SMATCH=off
 
-CLOBBERFILES += $(OTHERPROGS)
+POFILE= misc.po
 
 .KEEP_STATE:
 
-all: $(PROG) $(XPG4) $(OTHERPROGS)
+all: $(PROG) $(XPG4)
 
 catalog: $(POFILE)
 
@@ -58,11 +59,11 @@ $(POFILE): $(POFILES)
 	$(RM) $@
 	cat $(POFILES) > $(POFILE)
 
+$(ROOTPROG):
+	$(RM) $@; $(SYMLINK) ../has/bin/ctags $@
 
-install: all $(ROOTPROG) $(ROOTXPG4PROG)
+install: all $(ROOTPROG) $(ROOTHASBINPROG) $(ROOTXPG4PROG)
 
 clean:
-
-lint:	lint_SRCS
 
 include ../../Makefile.targ

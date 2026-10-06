@@ -25,7 +25,7 @@
  */
 
 /*
- * Copyright (c) 2011, Joyent, Inc. All rights reserved.
+ * Copyright 2017 Joyent, Inc.
  * Copyright (c) 2012 by Delphix. All rights reserved.
  */
 
@@ -43,7 +43,7 @@ extern "C" {
  * Solaris system and DTrace subsystem and are subject to change at any time
  * without notice.  Applications and drivers using these interfaces will fail
  * to run on future releases.  These interfaces should not be used for any
- * purpose except those expressly outlined in dtrace(7D) and libdtrace(3LIB).
+ * purpose except those expressly outlined in dtrace(4D) and libdtrace(3LIB).
  * Please refer to the "Solaris Dynamic Tracing Guide" for more information.
  */
 
@@ -922,6 +922,7 @@ typedef struct dtrace_mstate {
 	int dtms_ipl;				/* cached interrupt pri lev */
 	int dtms_fltoffs;			/* faulting DIFO offset */
 	uintptr_t dtms_strtok;			/* saved strtok() pointer */
+	uintptr_t dtms_strtok_limit;		/* upper bound of strtok ptr */
 	uint32_t dtms_access;			/* memory access rights */
 	dtrace_difo_t *dtms_difo;		/* current dif object */
 	file_t *dtms_getf;			/* cached rval of getf() */
@@ -1200,7 +1201,7 @@ typedef struct dtrace_enabling {
  * properties in the dtrace.conf file.  If there is an anonymous enabling, a
  * DTrace consumer state and enabling are created on attach.  The state may be
  * subsequently grabbed by the first consumer specifying the "grabanon"
- * option.  As long as an anonymous DTrace enabling exists, dtrace(7D) will
+ * option.  As long as an anonymous DTrace enabling exists, dtrace(4D) will
  * refuse to unload.
  */
 typedef struct dtrace_anon {
@@ -1261,6 +1262,7 @@ extern void dtrace_copyoutstr(uintptr_t, uintptr_t, size_t,
     volatile uint16_t *);
 extern void dtrace_getpcstack(pc_t *, int, int, uint32_t *);
 extern ulong_t dtrace_getreg(struct regs *, uint_t);
+extern void dtrace_setreg(struct regs *, uint_t, ulong_t);
 extern uint64_t dtrace_getvmreg(uint_t, volatile uint16_t *);
 extern int dtrace_getstackdepth(int);
 extern void dtrace_getupcstack(uint64_t *, int);
@@ -1290,16 +1292,19 @@ extern void dtrace_copystr(uintptr_t, uintptr_t, size_t, volatile uint16_t *);
 /*
  * DTrace Assertions
  *
- * DTrace calls ASSERT from probe context.  To assure that a failed ASSERT
- * does not induce a markedly more catastrophic failure (e.g., one from which
- * a dump cannot be gleaned), DTrace must define its own ASSERT to be one that
- * may safely be called from probe context.  This header file must thus be
- * included by any DTrace component that calls ASSERT from probe context, and
- * _only_ by those components.  (The only exception to this is kernel
- * debugging infrastructure at user-level that doesn't depend on calling
- * ASSERT.)
+ * DTrace calls ASSERT and VERIFY from probe context.  To assure that a failed
+ * ASSERT or VERIFY does not induce a markedly more catastrophic failure (e.g.,
+ * one from which a dump cannot be gleaned), DTrace must define its own ASSERT
+ * and VERIFY macros to be ones that may safely be called from probe context.
+ * This header file must thus be included by any DTrace component that calls
+ * ASSERT and/or VERIFY from probe context, and _only_ by those components.
+ * (The only exception to this is kernel debugging infrastructure at user-level
+ * that doesn't depend on calling ASSERT.)
  */
 #undef ASSERT
+#undef VERIFY
+#define	VERIFY(EX)	((void)((EX) || \
+			dtrace_assfail(#EX, __FILE__, __LINE__)))
 #ifdef DEBUG
 #define	ASSERT(EX)	((void)((EX) || \
 			dtrace_assfail(#EX, __FILE__, __LINE__)))

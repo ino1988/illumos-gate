@@ -24,8 +24,6 @@
  * All rights reserved.
  */
 
-#pragma ident	"%Z%%M%	%I%	%E% SMI"
-
 /*
  * Copyright 1993 OpenVision Technologies, Inc., All Rights Reserved.
  *
@@ -34,6 +32,7 @@
  * 1.10 1994/10/27 12:39:23 jik Exp $
  */
 
+#include <stdio.h>
 #include <stdlib.h>
 #include <gssapi/gssapi.h>
 #include <rpc/rpc.h>

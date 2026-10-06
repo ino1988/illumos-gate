@@ -1,5 +1,6 @@
 #
 # Copyright (c) 2007, 2010, Oracle and/or its affiliates. All rights reserved.
+# Copyright (c) 2018, Joyent, Inc.
 #
 
 #
@@ -51,10 +52,13 @@ CPPFLAGS += $(LFLAGS64)
 CPPFLAGS += -D_FILE_OFFSET_BITS=64 -DDEBUG
 CPPFLAGS += -I. -Iinclude
 
-C99MODE = $(C99_ENABLE)
+# not linted
+SMATCH=off
+
+CSTD = $(CSTD_GNU99)
 
 # lint does not like unused _umem_*_init
-LINTFLAGS += -xerroff=E_NAME_DEF_NOT_USED2 
+LINTFLAGS += -xerroff=E_NAME_DEF_NOT_USED2
 
 # function argument declared inconsistently
 LINTFLAGS += -xerroff=E_INCONS_ARG_DECL2
@@ -63,11 +67,11 @@ LINTFLAGS += -xerroff=E_INCONS_VAL_TYPE_USED2
 # value type declared inconsistently
 LINTFLAGS += -xerroff=E_INCONS_VAL_TYPE_DECL2
 # argument used inconsistently
-LINTFLAGS += -xerroff=E_INCONS_ARG_USED2 
+LINTFLAGS += -xerroff=E_INCONS_ARG_USED2
 
 CERRWARN += -_gcc=-Wno-unused-variable
 CERRWARN += -_gcc=-Wno-switch
-CERRWARN += -_gcc=-Wno-uninitialized
+CERRWARN += $(CNOWARN_UNINIT)
 CERRWARN += -_gcc=-Wno-address
 
 LDLIBS   += -lsocket -lnsl -lzfs -lsec -lndmp -lmd5 -lnvpair -lumem -lbsm -lgen -lcmdutils -linetutil
@@ -136,7 +140,7 @@ $(ROOTNDMPDDIR)/%: %
 
 all: $(PROG)
 
-install: all $(ROOTNDMPDDIR)  $(ROOTNDMPDFILE) $(ROOTSVCMETHOD) $(ROOTMANIFEST) 
+install: all $(ROOTNDMPDDIR)  $(ROOTNDMPDFILE) $(ROOTSVCMETHOD) $(ROOTMANIFEST)
 
 check:	$(CHKMANIFEST)
 

@@ -21,10 +21,14 @@
 
 #
 # Copyright (c) 2010, Oracle and/or its affiliates. All rights reserved.
+# Copyright 2015, OmniTI Computer Consulting, Inc. All rights reserved.
+# Copyright 2015 Igor Kozhukhov <ikozhukhov@gmail.com>
+# Copyright 2016 RackTop Systems.
+# Copyright 2021 OmniOS Community Edition (OmniOSce) Association.
+# Copyright 2020 Peter Tribble
 #
 
 include $(SRC)/Makefile.master
-include $(SRC)/Makefile.buildnum
 
 #
 # Make sure we're getting a consistent execution environment for the
@@ -135,7 +139,7 @@ PKGPUBLISHER= $(PKGPUBLISHER_REDIST)
 #
 PKGVERS_COMPONENT= 0.$(RELEASE)
 PKGVERS_BUILTON= $(RELEASE)
-PKGVERS_BRANCH= 0.$(ONNV_BUILDNUM)
+PKGVERS_BRANCH= 999999.1
 PKGVERS= $(PKGVERS_COMPONENT),$(PKGVERS_BUILTON)-$(PKGVERS_BRANCH)
 
 #
@@ -148,9 +152,7 @@ PKGVERS= $(PKGVERS_COMPONENT),$(PKGVERS_BUILTON)-$(PKGVERS_BRANCH)
 # packaging, we need both values.
 #
 i386_ARCH32= i86
-sparc_ARCH32= sparcv7
 i386_ARCH64= amd64
-sparc_ARCH64= sparcv9
 
 #
 # macros and transforms needed by pkgmogrify
@@ -163,11 +165,16 @@ sparc_ARCH64= sparcv9
 #
 PM_TRANSFORMS= common_actions publish restart_fmri facets defaults \
 	extract_metadata
+PM_FINAL_TRANSFORMS= strip_dependinfo
 PM_INC= transforms manifests
+
+JAVA_8_ONLY=
+JAVA_11_ONLY=
+$(BLD_JAVA_11)JAVA_8_ONLY=$(POUND_SIGN)
+$(JAVA_8_ONLY)JAVA_11_ONLY=$(POUND_SIGN)
 
 PKGMOG_DEFINES= \
 	i386_ONLY=$(POUND_SIGN) \
-	sparc_ONLY=$(POUND_SIGN) \
 	$(PKGMACH)_ONLY= \
 	ARCH=$(PKGMACH) \
 	ARCH32=$($(PKGMACH)_ARCH32) \
@@ -176,8 +183,19 @@ PKGMOG_DEFINES= \
 	PKGVERS_BUILTON=$(PKGVERS_BUILTON) \
 	PKGVERS_BRANCH=$(PKGVERS_BRANCH) \
 	PKGVERS=$(PKGVERS) \
+	PERL_ARCH=$(PERL_ARCH) \
+	PERL_ARCH64=$(PERL_ARCH64) \
 	PERL_VERSION=$(PERL_VERSION) \
-	PERL_PKGVERS=$(PERL_PKGVERS)
+	PERL_PKGVERS=$(PERL_PKGVERS) \
+	BUILDPERL32=$(BUILDPERL32) \
+	BUILDPERL64=$(BUILDPERL64) \
+	PYTHON3_VERSION=$(PYTHON3_VERSION) \
+	PYTHON3b_VERSION=$(PYTHON3b_VERSION) \
+	PYTHON3_PKGVERS=$(PYTHON3_PKGVERS) \
+	PYTHON3b_PKGVERS=$(PYTHON3b_PKGVERS) \
+	python3b_ONLY=$(BUILDPY3b) \
+	JAVA_11_ONLY=$(JAVA_11_ONLY) \
+	JAVA_8_ONLY=$(JAVA_8_ONLY)
 
 PKGDEP_TOKENS_i386= \
 	'PLATFORM=i86hvm' \
@@ -185,11 +203,6 @@ PKGDEP_TOKENS_i386= \
 	'PLATFORM=i86xpv' \
 	'ISALIST=amd64' \
 	'ISALIST=i386'
-PKGDEP_TOKENS_sparc= \
-	'PLATFORM=sun4u' \
-	'PLATFORM=sun4v' \
-	'ISALIST=sparcv9' \
-	'ISALIST=sparc'
 PKGDEP_TOKENS= $(PKGDEP_TOKENS_$(PKGMACH))
 
 #
@@ -216,10 +229,30 @@ CLOBBERFILES= $(PDIR) proto_list_$(PKGMACH) install-$(PKGMACH).out \
 # build environment and then reference (implicitly or explicitly) the all
 # or install targets.
 #
-MANIFESTS :sh= (cd manifests; print *.mf)
-PKGS= $(MANIFESTS:%.mf=%)
+# We want some manifests to optionally build based on environment options, so
+# those are excluded when generating the list of manifests and added back in if
+# necessary. We also want a relatively easy way to add files to the list of
+# manifests given special treatment. Add any other special ones to the
+# SPECIAL_MANIFESTS variable. It can contain wildcards in regexp form, i.e.
+# SUNW.* as one useful example.
+#
+SPECIAL_MANIFESTS = system-library-python-libbe-3b\.p5m \
+    system-library-python-solaris-3b\.p5m \
+    system-library-python-zfs-3b\.p5m
+LIST_MANIFESTS_CMD = (cd manifests ; /usr/bin/ls -1 *.p5m |\
+	$(SED) $(SPECIAL_MANIFESTS:%=-e '/^%$$/d') )
+MANIFESTS = $(LIST_MANIFESTS_CMD:sh)
+
+# Conditionally add back the py3b manifests if requested
+$(BUILDPY3b)MANIFESTS += \
+	system-library-python-libbe-3b.p5m \
+	system-library-python-solaris-3b.p5m \
+	system-library-python-zfs-3b.p5m
+
+PKGS= $(MANIFESTS:%.p5m=%)
 DEP_PKGS= $(PKGS:%=$(PDIR)/%.dep)
 PROC_PKGS= $(PKGS:%=$(PDIR)/%.mog)
+FIN_PKGS= $(PKGS:%=$(PDIR)/%.fin)
 
 #
 # Track the synthetic manifests separately so we can properly express
@@ -255,9 +288,9 @@ PUB_PKGS= $(SYNTH_PKGS:%=$(PDIR)/%.pub) $(PKGS:%=$(PDIR)/%.pub)
 #
 # The meanings of each package status are as follows:
 #
-# 	PKGSTAT		meaning
-# 	----------	----------------------------------------------------
-# 	noincorp	Do not include in incorporation or group package
+#	PKGSTAT		meaning
+#	----------	----------------------------------------------------
+#	noincorp	Do not include in incorporation or group package
 #	obsolete	Include in incorporation, but not group package
 #	renamed		Include in incorporation, but not group package
 #	current		Include in incorporation and group package
@@ -274,12 +307,12 @@ PKGLISTS= \
 .KEEP_STATE:
 
 .PARALLEL: $(PKGS) $(PROC_PKGS) $(DEP_PKGS) \
-	$(PROC_SYNTH_PKGS) $(DEP_SYNTH_PKGS) $(PUB_PKGS)
+	$(PROC_SYNTH_PKGS) $(DEP_SYNTH_PKGS) $(FIN_PKGS) $(PUB_PKGS)
 
 #
 # For a single manifest, the dependency chain looks like this:
 #
-#	raw manifest (mypkg.mf)
+#	raw manifest (mypkg.p5m)
 #		|
 #		| use pkgmogrify to process raw manifest
 #		|
@@ -293,10 +326,14 @@ PKGLISTS= \
 #		|
 #	manifest with dependencies resolved (mypkg.res)
 #		|
+#		| use pkgmogrify to apply final cleanups
+#		|
+#	cleaned up manifest (mypkg.fin)
+#		|
 #		| use pkgsend to publish the package
 #		|
 #	placeholder to indicate successful publication (mypkg.pub)
-#	
+#
 # * This may be suppressed via SUPPRESSPKGDEP.  The resulting
 #   packages will install correctly, but care must be taken to
 #   install all dependencies, because pkg will not have the input
@@ -336,16 +373,19 @@ PKGLISTS= \
 #		 |		|
 #		 |		| pkgsend publish
 #		 |		|
-#	  repositories 	    resolved dependencies
+#	  repositories	    final manifests
 #		 |			|
-# pkgsend	 |			| pkgdepend resolve
-# create-repository	 	 	|
-#		 |		generated dependencies
+# pkgsend	 |			| pkgmogrify final
+# create-repository			|
+#		 |		resolved dependencies
 #	 repo directories		|
+#					| pkgdepend resolve
+#					|
+#				    generated dependencies
+#					|
 #					| pkgdepend
 #					|
-#				processed manifests
-# 
+#                                    processed manifests
 
 ALL_TARGETS= $(PROC_SYNTH_PKGS) proto_list_$(PKGMACH)
 
@@ -362,12 +402,8 @@ $(PDIR):
 #
 # This rule resolves dependencies across all published manifests.
 #
-# We shouldn't have to ignore the error from pkgdepend, but until
-# 16012 and its dependencies are resolved, pkgdepend will always exit
-# with an error.
-#
 $(PDIR)/gendeps: $(DEP_SYNTH_PKGS) $(DEP_PKGS)
-	-$(PKGDEBUG)if [ "$(SUPPRESSPKGDEP)" = "true" ]; then \
+	$(PKGDEBUG)if [ "$(SUPPRESSPKGDEP)" = "true" ]; then \
 		print "Suppressing dependency resolution"; \
 		for p in $(DEP_PKGS:%.dep=%); do \
 			$(CP) $$p.dep $$p.res; \
@@ -482,11 +518,11 @@ $(REPOS:%=$(PKGDEST)/repo.%):
 #   pkgmogrify encounters an abort in the publish transforms.
 #
 
-.SUFFIXES: .mf .mog .dep .res .pub
+.SUFFIXES: .p5m .mog .dep .res .fin .pub
 
-$(PDIR)/%.mog: manifests/%.mf
+$(PDIR)/%.mog: manifests/%.p5m
 	@print "Processing manifest $(<F)"
-	@env PKGFMT_OUTPUT=v1 pkgfmt -c $<
+	@pkgfmt -fv2 -c $<
 	$(PKGDEBUG)$(RM) $(@) $(@:%.mog=%) $(@:%.mog=%.nodepend) \
 		$(@:%.mog=%.lics) $(PDIR)/$(@F:%.mog=%).metadata.* $(@).vars
 	$(PKGDEBUG)$(PKGMOGRIFY) $(PKGMOG_VERBOSE) $(PM_INC:%= -I %) \
@@ -526,7 +562,17 @@ $(PDIR)/%.dep: $(PDIR)/%.mog
 # on a per-manifest basis.  Instead, see the gendeps rule above.
 #
 
-$(PDIR)/%.pub: $(PDIR)/%.res
+$(PDIR)/%.fin: $(PDIR)/%.res
+	$(PKGDEBUG)$(RM) $(@)
+	$(PKGDEBUG)if [ -s $(<) ]; then \
+		print "Running final transforms for $(<F)"; \
+		$(PKGMOGRIFY) $(PKGMOG_VERBOSE) $(PM_INC:%= -I %) -O $(@) \
+		    $(<) $(PM_FINAL_TRANSFORMS); \
+	else \
+		$(TOUCH) $(@); \
+	fi
+
+$(PDIR)/%.pub: $(PDIR)/%.fin
 	$(PKGDEBUG)m=$$(basename $(@:%.pub=%).metadata.*); \
 	r=$${m#$(@F:%.pub=%.metadata.)+(?).}; \
 	if [ -s $(<) ]; then \
@@ -551,12 +597,12 @@ $(PDIR)/%.pub: $(PDIR)/%.res
 # The implementation notes from the previous rule are applicable
 # here, too.
 #
-$(PROC_SYNTH_PKGS): $(PKGLISTS) $$(@F:%.mog=%.mf)
-	@print "Processing synthetic manifest $(@F:%.mog=%.mf)"
+$(PROC_SYNTH_PKGS): $(PKGLISTS) $$(@F:%.mog=%.p5m)
+	@print "Processing synthetic manifest $(@F:%.mog=%.p5m)"
 	$(PKGDEBUG)$(RM) $(@) $(PDIR)/$(@F:%.mog=%).metadata.* $(@).vars
 	$(PKGDEBUG)$(PKGMOGRIFY) $(PKGMOG_VERBOSE) -I transforms -I $(PDIR) \
 		$(PKGMOG_DEFINES:%=-D %) -D PKGDEP_TYPE=$(PKGDEP_TYPE) \
-		-P $(@).vars -O $(@) $(@F:%.mog=%.mf) \
+		-P $(@).vars -O $(@) $(@F:%.mog=%.p5m) \
 		$(PM_TRANSFORMS) synthetic
 	$(PKGDEBUG)eval REPO=redist PKGSTAT=current `$(CAT) -s $(@).vars`; \
 	if [ -f $(@) ]; then \
@@ -581,16 +627,6 @@ clobber: clean
 # point to valid manifests, and will fail the make run if one
 # does not contain an fmri.
 #
-# We do this in the BEGIN action instead of using pattern matching
-# because we expect the fmri to be at or near the first line of each input
-# file, and this way lets us avoid reading the rest of the file after we
-# find what we need.
-#
-# We keep track of a failure to locate an fmri, so we can fail the
-# make run, but we still attempt to process each package in the
-# repo/pkgstat-specific subdir, in hopes of maybe giving some
-# additional useful info.
-#
 # The protolist is used for bfu archive creation, which may be invoked
 # interactively by the user.  Both protolist and PKGLISTS targets
 # depend on $(PROC_PKGS), but protolist builds them recursively.
@@ -601,33 +637,14 @@ clobber: clean
 # contents of the processed manifests, which can vary depending on build
 # environment.
 #
-$(PKGLISTS): $(PROC_PKGS)
+$(PKGLISTS): scripts/pkglist.awk $(PROC_PKGS)
 	$(PKGDEBUG)sdotr=$(@F:packages.%=%); \
 	r=$${sdotr%.+(?)}; s=$${sdotr#+(?).}; \
 	print "Generating $$r $$s package list"; \
 	$(RM) $(@); $(TOUCH) $(@); \
-	$(NAWK) 'BEGIN { \
-		if (ARGC < 2) { \
-			exit; \
-		} \
-		retcode = 0; \
-		for (i = 1; i < ARGC; i++) { \
-			do { \
-				e = getline f < ARGV[i]; \
-			} while ((e == 1) && (f !~ /name=pkg.fmri/)); \
-			close(ARGV[i]); \
-			if (e == 1) { \
-				l = split(f, a, "="); \
-				print "depend fmri=" a[l], \
-					"type=$$(PKGDEP_TYPE)"; \
-			} else { \
-				print "no fmri in " ARGV[i] >> "/dev/stderr"; \
-				retcode = 2; \
-			} \
-		} \
-		exit retcode; \
-	}' `find $(PDIR) -type l -a \( $(PKGS:%=-name %.metadata.$$s.$$r -o) \
-		-name NOSUCHFILE \)` >> $(@)
+	$(AWK) -f scripts/pkglist.awk \
+	    `find $(PDIR) -type l -a \( $(PKGS:%=-name %.metadata.$$s.$$r -o) \
+	    -name NOSUCHFILE \)` >> $(@)
 
 #
 # rules to validate proto area against manifests, check for safe
@@ -659,7 +676,7 @@ license-list: makesilent
 stage-licenses: license-list FRC
 	$(PKGDEBUG)$(MAKE) -e -f Makefile.lic \
 		PKGDEBUG=$(PKGDEBUG) LICROOT=$(PKGROOT)/licenses \
-		`$(NAWK) '{ \
+		`$(AWK) '{ \
 			print "$(PKGROOT)/licenses/" $$0; \
 			print "$(PKGROOT)/licenses/" $$0 ".descrip"; \
 		}' license-list` > /dev/null;
@@ -671,9 +688,30 @@ protocmp: makesilent
 
 pmodes: makesilent
 	@validate_pkg -a $(PKGMACH) -M -m $(PDIR) \
-		-e $(CODEMGR_WS)/exception_lists/pmodes 
+		-e $(CODEMGR_WS)/exception_lists/pmodes
 
-check: protocmp pmodes
+pkglint: makesilent
+	$(PKGDEBUG)$(CP) etc/pkglintrc $(PDIR)/pkglintrc
+	$(PKGDEBUG)$(GREP) pkg:/ $(CODEMGR_WS)/exception_lists/packaging.deps \
+	    | sed 's/.*/    & \\/' >> $(PDIR)/pkglintrc
+	$(PKGDEBUG)echo "    pkg:/runtime/python$(PYTHON3_PKGVERS) \\" \
+	     >> $(PDIR)/pkglintrc
+	$(PKGDEBUG)$(BUILDPY3b) \
+	    echo "    pkg:/runtime/python$(PYTHON3b_PKGVERS) \\" \
+	     >> $(PDIR)/pkglintrc
+	$(PKGDEBUG) echo "    pkg:/runtime/perl$(PERL_PKGVERS) \\" \
+	     >> $(PDIR)/pkglintrc
+	$(PKGDEBUG)echo >> $(PDIR)/pkglintrc
+	$(PKGDEBUG)$(RM) -rf $(PKGDEST)/lint.image
+	$(PKGDEBUG)for r in $(REPOS); do \
+		pkglint \
+		    -f $(PDIR)/pkglintrc \
+		    -c $(PKGDEST)/lint.image \
+		    -r $(PKGDEST)/repo.$$r \
+		    `$(FIND) $(PDIR) -name \*.fin \! -size 0c -print`; \
+	done
+
+check: protocmp pmodes pkglint
 
 protolist: proto_list_$(PKGMACH)
 
@@ -713,9 +751,9 @@ gendeps: $(PDIR)/gendeps
 # Since the most common use case for this is "install," the architecture
 # specific install targets have been further abbreviated to elide "/install."
 #
-i386/% sparc/%:
+i386/%:
 	$(MAKE) -e $(@F) PKGMACH=$(@D) SUPPRESSPKGDEP=$(SUPPRESSPKGDEP)
 
-i386 sparc: $$(@)/install
+i386: $$(@)/install
 
 FRC:

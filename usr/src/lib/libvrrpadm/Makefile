@@ -25,7 +25,7 @@
 
 include $(SRC)/lib/Makefile.lib
 
-HDRS =		netinet/vrrp.h libvrrpadm.h
+HDRS =		libvrrpadm.h
 HDRDIR =	common
 
 SUBDIRS =	$(MACH)
@@ -40,11 +40,10 @@ all :=		TARGET = all
 clean :=	TARGET = clean
 clobber :=	TARGET = clobber
 install :=	TARGET = install
-lint :=		TARGET = lint
 
 .KEEP_STATE:
 
-all clean clobber install lint: $(SUBDIRS)
+all clean clobber install: $(SUBDIRS)
 
 install_h:	$(ROOTHDRS)
 

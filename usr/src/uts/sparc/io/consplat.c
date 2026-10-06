@@ -24,7 +24,9 @@
  * Use is subject to license terms.
  */
 
-#pragma ident	"%Z%%M%	%I%	%E% SMI"
+/*
+ * Copyright 2019 Peter Tribble.
+ */
 
 /*
  * isa-specific console configuration routines
@@ -112,10 +114,10 @@ plat_fbpath(void)
 char *
 plat_mousepath(void)
 {
-	static char 	*mousepath = NULL;
-	static char 	buf[MAXPATHLEN];
-	char 		*path, *p, *q;
-	major_t		zs_major, kb_major;
+	static char *mousepath = NULL;
+	static char buf[MAXPATHLEN];
+	char *path, *p, *q;
+	major_t zs_major, kb_major;
 
 	if (mousepath != NULL)
 		return (mousepath);
@@ -196,6 +198,15 @@ plat_stdoutpath(void)
 	return (outpath);
 }
 
+/*
+ * stub definition for consconfig_dacf
+ */
+char *
+plat_diagpath(void)
+{
+	return (NULL);
+}
+
 int
 plat_stdin_is_keyboard(void)
 {
@@ -206,12 +217,6 @@ int
 plat_stdout_is_framebuffer(void)
 {
 	return (prom_stdout_is_framebuffer());
-}
-
-void
-kadb_uses_kernel()
-{
-	/* only used on intel */
 }
 
 void

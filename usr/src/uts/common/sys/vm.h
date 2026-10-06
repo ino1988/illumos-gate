@@ -23,7 +23,7 @@
  */
 
 /*	Copyright (c) 1983, 1984, 1985, 1986, 1987, 1988, 1989 AT&T	*/
-/*	  All Rights Reserved  	*/
+/*	  All Rights Reserved	*/
 
 /*
  * University Copyright- Copyright (c) 1982, 1986, 1988
@@ -49,13 +49,19 @@ extern "C" {
 #if defined(_KERNEL)
 #include <sys/vnode.h>
 
-void	setupclock(int);
+void	setupclock(void);
 void	pageout(void);
 void	cv_signal_pageout(void);
 int	queue_io_request(struct vnode *, u_offset_t);
 
 extern	kmutex_t	memavail_lock;
 extern	kcondvar_t	memavail_cv;
+
+#define	WAKE_PAGEOUT_SCANNER(tag)			\
+	do {						\
+		DTRACE_PROBE(schedpage__wake__ ## tag);	\
+		cv_broadcast(&proc_pageout->p_cv);	\
+	} while (0)
 
 #endif	/* defined(_KERNEL) */
 

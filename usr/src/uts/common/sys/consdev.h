@@ -22,6 +22,8 @@
 /*
  * Copyright 2009 Sun Microsystems, Inc.  All rights reserved.
  * Use is subject to license terms.
+ *
+ * Copyright 2026 Oxide Computer Company
  */
 
 #ifndef	_SYS_CONSDEV_H
@@ -68,6 +70,7 @@ extern dev_t	stdindev;	/* default standard input device */
 extern dev_t	fbdev;		/* default framebuffer device */
 extern struct vnode *fbvp;	/* pointer to vnode for that device */
 extern dev_info_t *fbdip;	/* pointer to dev_info for fbdev (optional) */
+extern dev_t	diagdev;	/* default diag device (optional) */
 
 extern int	consmode;	/* CONS_FW or CONS_KFB */
 extern int	cons_tem_disable;
@@ -135,7 +138,7 @@ extern struct vnode *rwsconsvp;	/* vnode for underlying workstation console */
  * Set the type simulated by hardwares
  * ioctl(fd, CONSSETKBDTYPE, kbdtype)
  * kbdtype:
- * 	KB_PC or KB_USB
+ *	KB_PC or KB_USB
  */
 #define	CONSSETKBDTYPE		(_CONSIOC|4)
 
@@ -214,6 +217,9 @@ typedef struct cons_polledio {
 } cons_polledio_t;
 
 extern cons_polledio_t *cons_polledio;
+
+extern void console_polled_enter(void);
+extern void console_polled_exit(void);
 
 /*
  * Workstation Console

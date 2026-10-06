@@ -20,6 +20,9 @@
  */
 /*
  * Copyright (c) 1990, 2010, Oracle and/or its affiliates. All rights reserved.
+ * Copyright 2019 Joyent, Inc.
+ * Copyright 2023 RackTop Systems, Inc.
+ * Copyright 2026 Oxide Computer Company
  */
 
 /*
@@ -34,6 +37,7 @@
 #include <mdb/mdb_target.h>
 #include <mdb/mdb_param.h>
 #include <mdb/mdb_modapi.h>
+#include <mdb/mdb_ctf.h>
 #include <mdb/mdb_ks.h>
 
 #include <sys/types.h>
@@ -83,7 +87,6 @@ unsigned long _mdb_ks_mmu_pagemask;
 uintptr_t _mdb_ks_kernelbase;
 uintptr_t _mdb_ks_userlimit;
 uintptr_t _mdb_ks_userlimit32;
-uintptr_t _mdb_ks_argsbase;
 unsigned long _mdb_ks_msg_bsize;
 unsigned long _mdb_ks_defaultstksz;
 int _mdb_ks_ncpu;
@@ -507,7 +510,7 @@ mdb_vnode2path(uintptr_t addr, char *buf, size_t buflen)
 
 	bzero(&path, sizeof (mdb_path_t));
 again:
-	if ((addr == NULL) && (path.mdp_nelem == 0)) {
+	if ((addr == 0) && (path.mdp_nelem == 0)) {
 		/*
 		 * 0 elems && complete tells sprintpath to just print "/"
 		 */
@@ -557,30 +560,30 @@ mdb_pid2proc(pid_t pid, proc_t *proc)
 	struct pid pidp;
 
 	if (mdb_readvar(&pidhash, "pidhash") == -1)
-		return (NULL);
+		return (0);
 
 	if (mdb_readvar(&pid_hashsz, "pid_hashsz") == -1)
-		return (NULL);
+		return (0);
 
 	if (mdb_readvar(&procdir, "procdir") == -1)
-		return (NULL);
+		return (0);
 
 	hash = pid & (pid_hashsz - 1);
 
 	if (mdb_vread(&paddr, sizeof (paddr),
 	    pidhash + (hash * sizeof (paddr))) == -1)
-		return (NULL);
+		return (0);
 
 	while (paddr != 0) {
 		if (mdb_vread(&pidp, sizeof (pidp), paddr) == -1)
-			return (NULL);
+			return (0);
 
 		if (pidp.pid_id == pid) {
 			uintptr_t procp;
 
 			if (mdb_vread(&procp, sizeof (procp), procdir +
 			    (pidp.pid_prslot * sizeof (procp))) == -1)
-				return (NULL);
+				return (0);
 
 			if (proc != NULL)
 				(void) mdb_vread(proc, sizeof (proc_t), procp);
@@ -589,7 +592,7 @@ mdb_pid2proc(pid_t pid, proc_t *proc)
 		}
 		paddr = (uintptr_t)pidp.pid_link;
 	}
-	return (NULL);
+	return (0);
 }
 
 int
@@ -601,6 +604,21 @@ mdb_cpu2cpuid(uintptr_t cpup)
 		return (-1);
 
 	return (cpu.cpu_id);
+}
+
+/*
+ * Return the value read from the target's '_ncpu' when the target was
+ * activated. This lets dmods size target-derived allocations from the
+ * target rather than from mdb's own build-time NCPU which may differ.
+ */
+int
+mdb_ncpu(void)
+{
+	if (_mdb_ks_ncpu <= 0) {
+		mdb_warn("target '_ncpu' is unavailable or invalid\n");
+		return (-1);
+	}
+	return (_mdb_ks_ncpu);
 }
 
 int
@@ -665,7 +683,7 @@ mdb_page_lookup(uintptr_t vp, u_offset_t offset)
 	uintptr_t page_hash_entry, pp;
 
 	if (!page_hash_loaded && !page_hash_load()) {
-		return (NULL);
+		return (0);
 	}
 
 	ndx = PAGE_HASH_FUNC(vp, offset);
@@ -674,16 +692,16 @@ mdb_page_lookup(uintptr_t vp, u_offset_t offset)
 	if (mdb_vread(&pp, sizeof (pp), page_hash_entry) < 0) {
 		mdb_warn("unable to read page_hash[%ld] (%p)", ndx,
 		    page_hash_entry);
-		return (NULL);
+		return (0);
 	}
 
-	while (pp != NULL) {
+	while (pp != 0) {
 		page_t page;
 		long nndx;
 
 		if (mdb_vread(&page, sizeof (page), pp) < 0) {
 			mdb_warn("unable to read page_t at %p", pp);
-			return (NULL);
+			return (0);
 		}
 
 		if ((uintptr_t)page.p_vnode == vp &&
@@ -703,13 +721,13 @@ mdb_page_lookup(uintptr_t vp, u_offset_t offset)
 			mdb_warn("mdb_page_lookup: mdb_ks PAGE_HASH_FUNC() "
 			    "mismatch: in bucket %ld, but page %p hashes to "
 			    "bucket %ld\n", ndx, pp, nndx);
-			return (NULL);
+			return (0);
 		}
 
 		pp = (uintptr_t)page.p_hash;
 	}
 
-	return (NULL);
+	return (0);
 }
 
 char
@@ -802,15 +820,23 @@ mdb_page2pfn(uintptr_t addr)
 	return (page.p_pagenum);
 }
 
+struct a2m_ctf_module {
+	char *text;
+	char *data;
+	size_t text_size;
+	size_t data_size;
+};
+
 static int
 a2m_walk_modctl(uintptr_t addr, const struct modctl *m, a2m_query_t *a2m)
 {
-	struct module mod;
+	struct a2m_ctf_module mod;
 
 	if (m->mod_mp == NULL)
 		return (0);
 
-	if (mdb_vread(&mod, sizeof (mod), (uintptr_t)m->mod_mp) == -1) {
+	if (mdb_ctf_vread(&mod, "struct module", "struct a2m_ctf_module",
+	    (uintptr_t)m->mod_mp, 0) == -1) {
 		mdb_warn("couldn't read modctl %p's module", addr);
 		return (0);
 	}
@@ -836,7 +862,7 @@ mdb_addr2modctl(uintptr_t addr)
 	a2m_query_t a2m;
 
 	a2m.a2m_addr = addr;
-	a2m.a2m_where = NULL;
+	a2m.a2m_where = 0;
 
 	(void) mdb_walk("modctl", (mdb_walk_cb_t)a2m_walk_modctl, &a2m);
 	return (a2m.a2m_where);
@@ -937,7 +963,7 @@ mdb_qrnext(const queue_t *q)
 	if (qip != NULL)
 		return (qip->qi_ops->q_rnext(q));
 
-	return (NULL);
+	return (0);
 }
 
 uintptr_t
@@ -948,7 +974,7 @@ mdb_qwnext(const queue_t *q)
 	if (qip != NULL)
 		return (qip->qi_ops->q_wnext(q));
 
-	return (NULL);
+	return (0);
 }
 
 uintptr_t
@@ -991,13 +1017,13 @@ find_mbind(const char *name, uintptr_t *hashtab)
 	while (mb) {
 		if (mdb_vread(&mb_local, sizeof (mb_local), mb) == -1) {
 			mdb_warn("failed to read struct bind at %p", mb);
-			return (NULL);
+			return (0);
 		}
 		if (mdb_readstr(node_name, sizeof (node_name),
 		    (uintptr_t)mb_local.b_name) == -1) {
 			mdb_warn("failed to read node name string at %p",
 			    mb_local.b_name);
-			return (NULL);
+			return (0);
 		}
 
 		if (strcmp(name, node_name) == 0)
@@ -1011,9 +1037,9 @@ find_mbind(const char *name, uintptr_t *hashtab)
 int
 mdb_name_to_major(const char *name, major_t *major)
 {
-	uintptr_t	mbind;
-	uintptr_t	mb_hashtab[MOD_BIND_HASHSIZE];
-	struct bind 	mbind_local;
+	uintptr_t mbind;
+	uintptr_t mb_hashtab[MOD_BIND_HASHSIZE];
+	struct bind mbind_local;
 
 
 	if (mdb_readsym(mb_hashtab, sizeof (mb_hashtab), "mb_hashtab") == -1) {
@@ -1021,7 +1047,7 @@ mdb_name_to_major(const char *name, major_t *major)
 		return (-1);
 	}
 
-	if ((mbind = find_mbind(name, mb_hashtab)) != NULL) {
+	if ((mbind = find_mbind(name, mb_hashtab)) != 0) {
 		if (mdb_vread(&mbind_local, sizeof (mbind_local), mbind) ==
 		    -1) {
 			mdb_warn("failed to read mbind struct at %p", mbind);
@@ -1037,7 +1063,7 @@ mdb_name_to_major(const char *name, major_t *major)
 const char *
 mdb_major_to_name(major_t major)
 {
-	static char name[MODMAXNAMELEN + 1];
+	static char name[MODMAXNAMELEN];
 
 	uintptr_t devnamesp;
 	struct devnames dn;
@@ -1051,7 +1077,7 @@ mdb_major_to_name(major_t major)
 	    major * sizeof (struct devnames)) != sizeof (struct devnames))
 		return (NULL);
 
-	if (mdb_readstr(name, MODMAXNAMELEN + 1, (uintptr_t)dn.dn_name) == -1)
+	if (mdb_readstr(name, sizeof (name), (uintptr_t)dn.dn_name) == -1)
 		return (NULL);
 
 	return ((const char *)name);
@@ -1186,8 +1212,64 @@ mdb_get_soft_state_byname(char *softstatep_name, uint_t instance,
 	    state_buf_p, sizeof_state));
 }
 
+static void
+tdelta_help(void)
+{
+	mdb_printf(
+"Prints the difference between two nanosecond (hrtime_t) timestamps.\n\n"
+"The time used for comparison depends on the context in which mdb is invoked:\n"
+"	Live system	The current time (gethrtime()).\n"
+"	Crash dump	The time the dump started writing to the dump device.\n"
+"	KMDB		The most recent time the system entered KMDB.\n"
+"\n"
+"Note that with crash dumps, the dump time is often a few milliseconds\n"
+"after the time of the panic (panic_hrtime).\n"
+"\n"
+"The following options are supported:\n"
+"	-h	Print the delta in human readable form.\n"
+"	-t %<u>ts%</u>	Use %<u>ts%</u> as the comparison timestamp.\n");
+}
+
+static int
+tdelta(uintptr_t addr, uint_t flags, int argc, const mdb_arg_t *argv)
+{
+	int64_t	val = 0;
+	int64_t	delta = 0;
+	int	do_nice = FALSE;
+
+	if (!(flags & DCMD_ADDRSPEC)) {
+		mdb_warn("dcmd requires an input hrtime_t");
+		return (DCMD_ERR);
+	}
+
+	val = (int64_t)mdb_gethrtime();
+
+	if (mdb_getopts(argc, argv,
+	    'h', MDB_OPT_SETBITS, TRUE, &do_nice,
+	    't', MDB_OPT_UINT64, &val,
+	    NULL) != argc) {
+		return (DCMD_USAGE);
+	}
+
+	delta = (int64_t)addr - val;
+
+	if (do_nice) {
+		char buf[32] = { 0 };
+
+		mdb_nicetime(delta, buf, sizeof (buf));
+		mdb_printf("%s\n", buf);
+	} else {
+		mdb_printf("%ll#R\n", delta);
+	}
+
+	return (DCMD_OK);
+}
+
 static const mdb_dcmd_t dcmds[] = {
 	{ "dnlc", NULL, "print DNLC contents", dnlcdump },
+	{
+	    "tdelta", "?[-h][-t ts]", "compute ns time delta", tdelta,
+	    tdelta_help },
 	{ NULL }
 };
 
@@ -1216,7 +1298,6 @@ update_vars(void *arg)
 
 	(void) mdb_readvar(&_mdb_ks_userlimit, "_userlimit");
 	(void) mdb_readvar(&_mdb_ks_userlimit32, "_userlimit32");
-	(void) mdb_readvar(&_mdb_ks_argsbase, "_argsbase");
 	(void) mdb_readvar(&_mdb_ks_msg_bsize, "_msg_bsize");
 	(void) mdb_readvar(&_mdb_ks_defaultstksz, "_defaultstksz");
 	(void) mdb_readvar(&_mdb_ks_ncpu, "_ncpu");
@@ -1275,7 +1356,7 @@ mdb_kproc_as(uintptr_t proc_addr)
 	if (mdb_vread(&p, sizeof (p), proc_addr) == sizeof (p))
 		return ((uintptr_t)p.p_as);
 
-	return (NULL);
+	return (0);
 }
 
 /*
@@ -1430,11 +1511,11 @@ mdb_dump_print_content(dumphdr_t *dh, pid_t content)
 	if (!(expcont & DF_CURPROC))
 		return;
 
-	if (mdb_readvar(&pt, "panic_thread") != sizeof (pt) || pt == NULL)
+	if (mdb_readvar(&pt, "panic_thread") != sizeof (pt) || pt == 0)
 		goto kthreadpanic_err;
 
 	if (mdb_vread(&procp, sizeof (procp), pt + OFFSETOF(kthread_t,
-	    t_procp)) == -1 || procp == NULL)
+	    t_procp)) == -1 || procp == 0)
 		goto kthreadpanic_err;
 
 	if (mdb_lookup_by_name("p0", &sym) != 0)
@@ -1489,7 +1570,7 @@ mdb_ddi_root_node(void)
 	/* return (top_devinfo);   */
 	if (mdb_readvar(&top_devinfo_addr, "top_devinfo") == -1) {
 		mdb_warn("failed to read top_devinfo");
-		return (NULL);
+		return (0);
 	}
 	return (top_devinfo_addr);
 }
@@ -1544,7 +1625,7 @@ mdb_ddi_deviname(uintptr_t dip_addr, char *name, size_t name_size)
 	local_name_size -= length;
 	addrname = (uintptr_t)local_dip.devi_addr;
 
-	if (addrname != NULL) {
+	if (addrname != 0) {
 
 		if (local_name_size < 2) {
 			mdb_warn("not enough room for node address string");
@@ -1808,4 +1889,20 @@ mdb_get_lbolt(void)
 	}
 
 	return ((ts/nsec) - lbi.lbi_debug_time);
+}
+
+void
+mdb_print_buildversion(void)
+{
+	GElf_Sym sym;
+
+	if (mdb_lookup_by_name("buildversion", &sym) != 0)
+		return;
+
+	char *str = mdb_zalloc(4096, UM_SLEEP | UM_GC);
+
+	if (mdb_readstr(str, 4096, sym.st_value) < 1)
+		return;
+
+	mdb_printf("build version: %s\n", str);
 }

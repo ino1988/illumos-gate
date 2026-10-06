@@ -21,6 +21,9 @@
 /*
  * Copyright 2009 Sun Microsystems, Inc.  All rights reserved.
  * Use is subject to license terms.
+ *
+ * Copyright 2020 Joyent, Inc.
+ * Copyright 2026 Bill Sommerfeld <sommerfeld@hamachi.org>
  */
 
 #ifndef	_HPET_H
@@ -69,7 +72,11 @@ typedef struct hpet {
  */
 extern hpet_t hpet;
 
-int hpet_acpi_init(int *hpet_vect, iflag_t *hpet_flags);
+int hpet_early_init(void);
+boolean_t hpet_timer_is_readable(void);
+uint32_t hpet_read_timer_32(void);
+int hpet_acpi_init(int *hpet_vect, iflag_t *hpet_flags, hrtime_t (*)(void),
+    void (*)(hrtime_t));
 void hpet_acpi_fini(void);
 uint32_t hpet_proxy_ipl(void);
 

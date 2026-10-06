@@ -19,7 +19,7 @@
  * CDDL HEADER END
  */
 /*	Copyright (c) 1984, 1986, 1987, 1988, 1989 AT&T	*/
-/*	  All Rights Reserved  	*/
+/*	  All Rights Reserved	*/
 
 
 /*
@@ -29,7 +29,8 @@
  * Use is subject to license terms.
  */
 /*
- * Copyright (c) 2012, Joyent, Inc.  All rights reserved.
+ * Copyright (c) 2018, Joyent, Inc.
+ * Copyright 2022 Oxide Computer Company
  */
 
 #ifndef	_SYS_AUXV_H
@@ -141,6 +142,7 @@ typedef struct {
  */
 #define	AT_SUN_HWCAP	2009
 #define	AT_SUN_HWCAP2	2023
+#define	AT_SUN_HWCAP3	2029
 
 #if defined(_KERNEL)
 /*
@@ -149,9 +151,11 @@ typedef struct {
  */
 extern uint_t auxv_hwcap;
 extern uint_t auxv_hwcap_2;
+extern uint_t auxv_hwcap_3;
 #if defined(_SYSCALL32)
 extern uint_t auxv_hwcap32;
 extern uint_t auxv_hwcap32_2;
+extern uint_t auxv_hwcap32_3;
 #endif /* _SYSCALL32 */
 #else
 extern uint_t getisax(uint32_t *, uint_t);
@@ -188,8 +192,16 @@ extern uint_t getisax(uint32_t *, uint_t);
 #define	AT_SUN_BRAND_AUX3	2022
 
 /*
- * Note that 2023 is reserved for the AT_SUN_HWCAP2 word defined above.
+ * Aux vector for comm page
  */
+#define	AT_SUN_COMMPAGE		2026
+
+/*
+ * These two AUX vectors are generally used to define information about the FPU.
+ * These values are currently only used on the x86 platform.
+ */
+#define	AT_SUN_FPTYPE		2027
+#define	AT_SUN_FPSIZE		2028
 
 /*
  * The kernel is in a better position to determine whether a process needs to

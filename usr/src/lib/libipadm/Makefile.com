@@ -20,7 +20,9 @@
 #
 #
 # Copyright (c) 2010, Oracle and/or its affiliates. All rights reserved.
-#
+# Copyright (c) 2016, Chris Fraire <cfraire@me.com>.
+# Copyright (c) 2018, Joyent, Inc.
+# Copyright 2021 Tintri by DDN, Inc. All rights reserved.
 #
 
 LIBRARY = libipadm.a
@@ -33,22 +35,23 @@ include ../../Makefile.lib
 # install this library in the root filesystem
 include ../../Makefile.rootfs
 
-LIBS =		$(DYNLIB) $(LINTLIB)
-LDLIBS +=	-lc -lnsl -linetutil -lsocket -ldlpi -lnvpair -ldhcpagent \
-	        -ldladm -lsecdb
+LIBS =		$(DYNLIB)
+LDLIBS +=	-lc -linetutil -lsocket -ldlpi -lnvpair -ldhcpagent \
+		-ldladm -lsecdb -ldhcputil -lipmp -lcmdutils
 
 SRCDIR =	../common
-$(LINTLIB) :=	SRCS = $(SRCDIR)/$(LINTSRC)
 
 CFLAGS +=	$(CCVERBOSE)
 CERRWARN +=	-_gcc=-Wno-switch
-CERRWARN +=	-_gcc=-Wno-uninitialized
+CERRWARN +=	$(CNOWARN_UNINIT)
 CPPFLAGS +=	-I$(SRCDIR) -D_REENTRANT
+
+# not linted
+SMATCH=off
 
 .KEEP_STATE:
 
 all:		$(LIBS)
 
-lint:		lintcheck
 
 include $(SRC)/lib/Makefile.targ

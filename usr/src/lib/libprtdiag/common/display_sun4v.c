@@ -20,6 +20,7 @@
  */
 /*
  * Copyright (c) 2005, 2010, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2020 Peter Tribble.
  */
 
 #include <stdio.h>
@@ -115,11 +116,10 @@ static void sun4v_print_openprom_rev();
 
 int
 sun4v_display(Sys_tree *tree, Prom_node *root, int log,
-	picl_nodehdl_t plafh)
+    picl_nodehdl_t plafh)
 {
 	void *value;		/* used for opaque PROM data */
 	struct mem_total memory_total;	/* Total memory in system */
-	struct grp_info grps;	/* Info on all groups in system */
 	char machine[MAXSTRLEN];
 	int	exit_code = 0;
 
@@ -155,7 +155,7 @@ sun4v_display(Sys_tree *tree, Prom_node *root, int log,
 		}
 
 		/* Display the Memory Size */
-		display_memorysize(tree, NULL, &grps, &memory_total);
+		display_memorysize(tree, NULL, &memory_total);
 
 		/* Display the CPU devices */
 		sun4v_display_cpu_devices(plafh);
@@ -1792,7 +1792,7 @@ sun4v_print_fru_status_callback(picl_nodehdl_t nodeh, void *args)
 	}
 
 	if (is_fru_absent(nodeh))
-		strcpy(status, "Not present");
+		(void) strcpy(status, "Not present");
 
 	err = picl_get_propval_by_name(nodeh, PICL_PROP_PARENT, &parenth,
 	    sizeof (parenth));

@@ -26,7 +26,8 @@
  */
 
 /*
- * Copyright (c) 2012 by Delphix. All rights reserved.
+ * Copyright (c) 2012, 2017 by Delphix. All rights reserved.
+ * Copyright 2013 Saso Kiselkov. All rights reserved.
  */
 
 /*	Copyright (c) 1984, 1986, 1987, 1988, 1989 AT&T	*/
@@ -35,7 +36,9 @@
 #ifndef _SYS_DEBUG_H
 #define	_SYS_DEBUG_H
 
+#if !defined(_STANDALONE)
 #include <sys/isa_defs.h>
+#endif
 #include <sys/types.h>
 #include <sys/note.h>
 
@@ -50,10 +53,10 @@ extern "C" {
  * ASSERT and is evaluated on both debug and non-debug kernels.
  */
 
-extern int assfail(const char *, const char *, int);
-#define	VERIFY(EX) ((void)((EX) || assfail(#EX, __FILE__, __LINE__)))
+extern void assfail(const char *, const char *, int);
+#define	VERIFY(EX) ((void)((EX) || (assfail(#EX, __FILE__, __LINE__), 0)))
 #if DEBUG
-#define	ASSERT(EX) ((void)((EX) || assfail(#EX, __FILE__, __LINE__)))
+#define	ASSERT(EX) ((void)((EX) || (assfail(#EX, __FILE__, __LINE__), 0)))
 #else
 #define	ASSERT(x)  ((void)0)
 #endif
@@ -79,10 +82,11 @@ extern int assfail(const char *, const char *, int);
 #if DEBUG
 #define	IMPLY(A, B) \
 	((void)(((!(A)) || (B)) || \
-	    assfail("(" #A ") implies (" #B ")", __FILE__, __LINE__)))
+	    (assfail("(" #A ") implies (" #B ")", __FILE__, __LINE__), 0)))
 #define	EQUIV(A, B) \
 	((void)((!!(A) == !!(B)) || \
-	    assfail("(" #A ") is equivalent to (" #B ")", __FILE__, __LINE__)))
+	    (assfail("(" #A ") is equivalent to (" #B ")", \
+		__FILE__, __LINE__), 0)))
 #else
 #define	IMPLY(A, B) ((void)0)
 #define	EQUIV(A, B) ((void)0)
@@ -107,29 +111,37 @@ extern void assfail3(const char *, uintmax_t, const char *, uintmax_t,
 			__FILE__, __LINE__); \
 _NOTE(CONSTCOND) } while (0)
 
+#define	VERIFY3B(x, y, z)	VERIFY3_IMPL(x, y, z, boolean_t)
 #define	VERIFY3S(x, y, z)	VERIFY3_IMPL(x, y, z, int64_t)
 #define	VERIFY3U(x, y, z)	VERIFY3_IMPL(x, y, z, uint64_t)
 #define	VERIFY3P(x, y, z)	VERIFY3_IMPL(x, y, z, uintptr_t)
 #define	VERIFY0(x)		VERIFY3_IMPL(x, ==, 0, uintmax_t)
 
 #if DEBUG
+#define	ASSERT3B(x, y, z)	VERIFY3_IMPL(x, y, z, boolean_t)
 #define	ASSERT3S(x, y, z)	VERIFY3_IMPL(x, y, z, int64_t)
 #define	ASSERT3U(x, y, z)	VERIFY3_IMPL(x, y, z, uint64_t)
 #define	ASSERT3P(x, y, z)	VERIFY3_IMPL(x, y, z, uintptr_t)
 #define	ASSERT0(x)		VERIFY3_IMPL(x, ==, 0, uintmax_t)
 #else
+#define	ASSERT3B(x, y, z)	((void)0)
 #define	ASSERT3S(x, y, z)	((void)0)
 #define	ASSERT3U(x, y, z)	((void)0)
 #define	ASSERT3P(x, y, z)	((void)0)
 #define	ASSERT0(x)		((void)0)
 #endif
 
-#ifdef	_KERNEL
+/*
+ * Compile-time assertion. The condition 'x' must be constant.
+ */
+#define	CTASSERT(x)	_Static_assert(x, "compile-time assertion failed")
+
+#if defined(_KERNEL) || defined(_FAKE_KERNEL)
 
 extern void abort_sequence_enter(char *);
 extern void debug_enter(char *);
 
-#endif	/* _KERNEL */
+#endif	/* _KERNEL || _FAKE_KERNEL */
 
 #if defined(DEBUG) && !defined(__sun)
 /* CSTYLED */

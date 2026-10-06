@@ -12,10 +12,33 @@
 #
 # Copyright (c) 2012 by Delphix. All rights reserved.
 # Copyright 2014 Garrett D'Amore <garrett@damore.org>
+# Copyright 2019 Joyent, Inc.
+# Copyright 2021 Tintri by DDN, Inc. All rights reserved.
+# Copyright 2025 Oxide Computer Company
 #
 
 .PARALLEL: $(SUBDIRS)
 
-SUBDIRS = libc-tests os-tests test-runner util-tests zfs-tests
+SUBDIRS = \
+	bhyve-tests \
+	crypto-tests \
+	elf-tests \
+	header-tests \
+	i2c-tests \
+	libc-tests \
+	libmlrpc-tests \
+	libproc-tests \
+	libsec-tests \
+	net-tests \
+	nvme-tests \
+	os-tests \
+	smbclient-tests \
+	smbsrv-tests \
+	test-runner \
+	tz-tests \
+	util-tests \
+	zfs-tests
+
+CHKSUBDIRS = $(SUBDIRS)
 
 include Makefile.com

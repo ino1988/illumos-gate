@@ -22,15 +22,16 @@
 #
 # Copyright (c) 2010, Oracle and/or its affiliates. All rights reserved.
 #
-# Copyright 2011 Nexenta Systems, Inc. All rights reserved.
 # Copyright 2012 OmniTI Computer Consulting, Inc.  All rights reserved.
+# Copyright 2015 Nexenta Systems, Inc. All rights reserved.
+# Copyright 2016 Toomas Soome <tsoome@me.com>
 #
 
 
-LIBRARY= 	libbe.a
-VERS= 		.1
+LIBRARY=	libbe.a
+VERS=		.1
 
-OBJECTS= 	\
+OBJECTS=	\
 		be_activate.o \
 		be_create.o \
 		be_list.o \
@@ -42,28 +43,23 @@ OBJECTS= 	\
 
 include ../../Makefile.lib
 
-LIBS=		$(DYNLIB) $(LINTLIB)
+LIBS=		$(DYNLIB)
 
-SRCDIR= 	../common
+SRCDIR=		../common
 
-INCS += -I$(SRCDIR)
+INCS += -I$(SRCDIR) -I$(SRC)/cmd/boot/common -I$(SRC)/common/ficl
 
-C99MODE= 	$(C99_ENABLE)
+CSTD=	$(CSTD_GNU99)
 
-LDLIBS +=	-lzfs -linstzones -luuid -lnvpair -lc -lgen -ldevinfo
+LDLIBS +=	-lficl-sys -lzfs -linstzones -luuid -lnvpair -lc -lgen
+LDLIBS +=	-ldevinfo -lefi -lzfsbootenv
 CPPFLAGS +=	$(INCS)
-CERRWARN +=	-_gcc=-Wno-unused-label
-CERRWARN +=	-_gcc=-Wno-uninitialized
-CERRWARN +=	-_gcc=-Wno-address
 
 CLOBBERFILES += $(LIBRARY)
-
-$(LINTLIB) := SRCS=	$(SRCDIR)/$(LINTSRC)
 
 .KEEP_STATE:
 
 all: $(LIBS) $(LIBRARY)
 
-lint: lintcheck
 
 include ../../Makefile.targ

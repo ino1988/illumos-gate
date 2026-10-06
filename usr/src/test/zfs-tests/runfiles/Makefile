@@ -10,30 +10,17 @@
 #
 
 #
-# Copyright (c) 2012 by Delphix. All rights reserved.
+# Copyright (c) 2012, 2016 by Delphix. All rights reserved.
 # Copyright 2014, OmniTI Computer Consulting, Inc. All rights reserved.
 #
 
 include $(SRC)/Makefile.master
 
-SRCS = delphix.run openindiana.run omnios.run
+OPTPKG = opt/zfs-tests
+ROOTOPTPKG = $(ROOT)/$(OPTPKG)
+TARGETDIR = $(ROOTOPTPKG)/runfiles
 
-ROOTOPTPKG = $(ROOT)/opt/zfs-tests
-RUNFILES = $(ROOTOPTPKG)/runfiles
+include $(SRC)/test/zfs-tests/Makefile.com
 
-CMDS = $(SRCS:%=$(RUNFILES)/%)
-$(CMDS) := FILEMODE = 0444
-
-all: $(SRCS)
-
-install: $(CMDS)
-
-clean lint clobber:
-
-$(CMDS): $(RUNFILES) $(SRCS)
-
-$(RUNFILES):
-	$(INS.dir)
-
-$(RUNFILES)/%: %
-	$(INS.file)
+check:
+	$(CHECK_TEST_RUNFILES) -T $(OPTPKG) $(FILES)

@@ -25,6 +25,7 @@
 #
 # eft.so (the eversholt DE)
 #
+# Copyright (c) 2018, Joyent, Inc.
 
 .KEEP_STATE:
 
@@ -34,7 +35,7 @@ MODULE = eft
 CLASS = common
 DMOD = $(MODULE).so
 
-YSRCS=escparse.y 
+YSRCS=escparse.y
 SRCS =	alloc.c check.c config.c eft.c eftread.c esclex.c eval.c evnv.c \
 	fme.c iexpr.c io.c ipath.c itree.c lut.c literals.c out.c platform.c \
 	ptree.c stable.c stats.c tree.c
@@ -43,11 +44,16 @@ DMOD_SRCS = eft_mdb.c
 include ../../Makefile.plugin
 
 CPPFLAGS += -DFMAPLUGIN -I$(EVERSRCDIR) -I.
-CERRWARN += -_gcc=-Wno-unused-label
-CERRWARN += -_gcc=-Wno-uninitialized
+CERRWARN += $(CNOWARN_UNINIT)
 CERRWARN += -_gcc=-Wno-switch
 CERRWARN += -_gcc=-Wno-parentheses
 CERRWARN += -_gcc=-Wno-implicit-function-declaration
+
+# because of labels from yacc
+escparse.o := CERRWARN += -_gcc=-Wno-unused-label
+
+# not linted
+SMATCH=off
 
 $(PROG) := LDFLAGS += -R/usr/lib/fm
 $(PROG) := LDLIBS += -L$(ROOTLIB)/fm -ltopo

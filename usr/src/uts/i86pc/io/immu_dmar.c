@@ -27,6 +27,10 @@
  * All rights reserved.
  */
 
+/*
+ * Copyright 2023 Oxide Computer Company
+ * Copyright 2025 RackTop Systems, Inc.
+ */
 
 #include <sys/debug.h>
 #include <sys/sysmacros.h>
@@ -60,7 +64,6 @@ static dmar_table_t *dmar_table;	/* converted form of DMAR table */
 /*
  * global variables exported outside this file
  */
-boolean_t dmar_print = B_FALSE;
 kmutex_t ioapic_drhd_lock;
 list_t ioapic_drhd_list;
 
@@ -486,13 +489,23 @@ dmar_parse(dmar_table_t **tblpp, char *raw)
 		case DMAR_RHSA:
 			unmstr = "RHSA";
 			break;
+		case DMAR_ANDD:
+			unmstr = "ANDD";
+			break;
+		case DMAR_SATC:
+			unmstr = "SATC";
+			break;
+		case DMAR_SIDP:
+			unmstr = "SIDP";
+			break;
 		default:
-			unmstr = "unknown unity type";
+			unmstr = "unknown unit type";
 			break;
 		}
 		if (unmstr) {
 			ddi_err(DER_NOTE, NULL, "DMAR ACPI table: "
-			    "skipping unsupported unit type %s", unmstr);
+			    "skipping unsupported unit type %u: %s",
+			    get_uint16(uhead), unmstr);
 		}
 		uhead += get_uint16(&uhead[2]);
 	}
@@ -613,7 +626,7 @@ dmar_table_print(dmar_table_t *tbl)
 {
 	int i;
 
-	if (dmar_print == B_FALSE) {
+	if (immu_dmar_print == B_FALSE) {
 		return;
 	}
 
@@ -722,16 +735,15 @@ static void
 drhd_devi_destroy(drhd_t *drhd)
 {
 	dev_info_t *dip;
-	int count;
 
 	dip = drhd->dr_dip;
 	ASSERT(dip);
 
-	ndi_devi_enter(root_devinfo, &count);
+	ndi_devi_enter(root_devinfo);
 	if (ndi_devi_offline(dip, NDI_DEVI_REMOVE) != DDI_SUCCESS) {
 		ddi_err(DER_WARN, dip, "Failed to destroy");
 	}
-	ndi_devi_exit(root_devinfo, count);
+	ndi_devi_exit(root_devinfo);
 	drhd->dr_dip = NULL;
 }
 
@@ -926,9 +938,9 @@ immu_dmar_blacklisted(char **strptr, uint_t nstrs)
 	for (i = 0; nstrs - i >= 4; i++) {
 		if (strcmp(*strptr++, "DMAR") == 0) {
 			if (strcmp(*strptr++, tbl->tbl_oem_id) == 0 &&
-			    ((char *)strptr == '\0' ||
+			    (*strptr[0] == '\0' ||
 			    strcmp(*strptr++, tbl->tbl_oem_tblid) == 0) &&
-			    ((char *)strptr == '\0' ||
+			    (*strptr[0] == '\0' ||
 			    strcmp(*strptr++, oem_rev) == 0)) {
 				return (B_TRUE);
 			}
@@ -942,7 +954,6 @@ void
 immu_dmar_rmrr_map(void)
 {
 	int seg;
-	int count;
 	dev_info_t *rdip;
 	scope_t *scope;
 	rmrr_t *rmrr;
@@ -985,10 +996,10 @@ immu_dmar_rmrr_map(void)
 
 				ASSERT(root_devinfo);
 				/* XXX should be optimized */
-				ndi_devi_enter(root_devinfo, &count);
+				ndi_devi_enter(root_devinfo);
 				ddi_walk_devs(ddi_get_child(root_devinfo),
 				    match_bdf, &imarg);
-				ndi_devi_exit(root_devinfo, count);
+				ndi_devi_exit(root_devinfo);
 
 				if (imarg.ima_ddip == NULL) {
 					ddi_err(DER_WARN, NULL,

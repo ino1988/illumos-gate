@@ -25,6 +25,9 @@
  *
  * Copyright (c) 1995, 2010, Oracle and/or its affiliates. All rights reserved.
  */
+/*
+ * Copyright 2022 OmniOS Community Edition (OmniOSce) Association.
+ */
 
 #include <errno.h>
 #include "alist.h"
@@ -43,8 +46,8 @@ typedef struct {
 	Seg_Table	*b_e_seg_table;
 	section_info_table *sec_table;
 	int64_t		*off_table;	/* maintains section's offset; set to */
-					/* 	retain old offset, else 0 */
-	int64_t		*nobits_table; 	/* maintains NOBITS sections */
+					/*	retain old offset, else 0 */
+	int64_t		*nobits_table;	/* maintains NOBITS sections */
 	char		*new_sec_string;
 } file_state_t;
 
@@ -83,7 +86,7 @@ each_file(char *cur_file, Cmd_Info *cmd_info)
 	int fd;
 	int oflag;
 
-	if (cmd_info->flags & MIGHT_CHG)
+	if (CHK_OPT(cmd_info, MIGHT_CHG))
 		oflag = O_RDWR;
 	else
 		oflag = O_RDONLY;
@@ -115,7 +118,7 @@ each_file(char *cur_file, Cmd_Info *cmd_info)
 			artmpfile.tmp_name = tempnam(TMPDIR, "mcs2");
 			if ((fdartmp = open(artmpfile.tmp_name,
 			    O_WRONLY | O_APPEND | O_CREAT,
-			    (mode_t)0666)) == NULL) {
+			    (mode_t)0666)) == 0) {
 				error_message(OPEN_TEMP_ERROR,
 				    SYSTEM_ERROR, strerror(errno),
 				    prog, artmpfile);
@@ -313,17 +316,17 @@ static int
 traverse_file(Elf *elf, GElf_Ehdr * ehdr, char *cur_file, Cmd_Info *cmd_info,
     file_state_t *state)
 {
-	Elf_Scn *	scn;
-	Elf_Scn *	temp_scn;
-	Elf_Data *	data;
-	GElf_Shdr *	shdr;
-	char 		*temp_name;
-	section_info_table *	sinfo;
-	GElf_Xword 	x;
-	int 		ret = 0, SYM = 0;	/* used by strip command */
-	int 		phnum = ehdr->e_phnum;
-	unsigned 	int i, scn_index;
-	size_t 		shstrndx, shnum;
+	Elf_Scn		*scn;
+	Elf_Scn		*temp_scn;
+	Elf_Data	*data;
+	GElf_Shdr	*shdr;
+	char		*temp_name;
+	section_info_table *sinfo;
+	GElf_Xword	x;
+	int		ret = 0, SYM = 0;	/* used by strip command */
+	int		phnum = ehdr->e_phnum;
+	unsigned	int i, scn_index;
+	size_t		shstrndx, shnum;
 
 	state->Sect_exists = 0;
 
@@ -358,12 +361,12 @@ traverse_file(Elf *elf, GElf_Ehdr * ehdr, char *cur_file, Cmd_Info *cmd_info,
 		sinfo->scn	= scn;
 		sinfo->secno	= scn_index;
 		sinfo->osecno	= scn_index;
-		SET_ACTION(sinfo->flags, ACT_NOP);
+		SET_ACTION(sinfo->si_flags, ACT_NOP);
 		sinfo->name	= name;
 		if (ehdr->e_phnum == 0)
-			SET_LOC(sinfo->flags, NOSEG);
+			SET_LOC(sinfo->si_flags, NOSEG);
 		else
-			SET_LOC(sinfo->flags, scn_location(scn, elf, state));
+			SET_LOC(sinfo->si_flags, scn_location(scn, elf, state));
 
 		if (shdr->sh_type == SHT_GROUP) {
 			if (aplist_append(&cmd_info->sh_groups,
@@ -411,7 +414,7 @@ traverse_file(Elf *elf, GElf_Ehdr * ehdr, char *cur_file, Cmd_Info *cmd_info,
 		 * action to be processes.
 		 */
 		if ((name != NULL) && (sectcmp(name) == 0)) {
-			SET_CANDIDATE(sinfo->flags);
+			SET_CANDIDATE(sinfo->si_flags);
 
 			/*
 			 * This flag just shows that there was a
@@ -428,7 +431,7 @@ traverse_file(Elf *elf, GElf_Ehdr * ehdr, char *cur_file, Cmd_Info *cmd_info,
 		if (CHK_OPT(cmd_info, I_AM_STRIP) &&
 		    ((shdr->sh_type == SHT_SUNW_DEBUG) ||
 		    (shdr->sh_type == SHT_SUNW_DEBUGSTR))) {
-			SET_CANDIDATE(sinfo->flags);
+			SET_CANDIDATE(sinfo->si_flags);
 			state->Sect_exists++;
 		}
 
@@ -436,12 +439,12 @@ traverse_file(Elf *elf, GElf_Ehdr * ehdr, char *cur_file, Cmd_Info *cmd_info,
 		/*
 		 * Zap this file ?
 		 */
-		if ((cmd_info->flags & zFLAG) &&
+		if (CHK_OPT(cmd_info, zFLAG) &&
 		    (shdr->sh_type == SHT_PROGBITS)) {
-			SET_CANDIDATE(sinfo->flags);
+			SET_CANDIDATE(sinfo->si_flags);
 			state->Sect_exists++;
 		}
-		x = GET_LOC(sinfo->flags);
+		x = GET_LOC(sinfo->si_flags);
 
 		/*
 		 * Remember the note section index so that we can
@@ -470,7 +473,7 @@ traverse_file(Elf *elf, GElf_Ehdr * ehdr, char *cur_file, Cmd_Info *cmd_info,
 		 * If this section satisfies the condition,
 		 * apply the actions specified.
 		 */
-		if (ISCANDIDATE(sinfo->flags)) {
+		if (ISCANDIDATE(sinfo->si_flags)) {
 			ret += apply_action(sinfo, cur_file, cmd_info);
 		}
 
@@ -481,7 +484,7 @@ traverse_file(Elf *elf, GElf_Ehdr * ehdr, char *cur_file, Cmd_Info *cmd_info,
 		    (CHK_OPT(cmd_info, xFLAG) == 0) &&
 		    (CHK_OPT(cmd_info, lFLAG) == 0)) {
 			if (shdr->sh_type == SHT_SYMTAB &&
-			    GET_LOC(sinfo->flags) == AFTER) {
+			    GET_LOC(sinfo->si_flags) == AFTER) {
 				SYM = scn_index;
 			}
 		}
@@ -508,7 +511,7 @@ traverse_file(Elf *elf, GElf_Ehdr * ehdr, char *cur_file, Cmd_Info *cmd_info,
 		++(cmd_info->no_of_nulled);
 		if (state->Sect_exists == 0)
 			++state->Sect_exists;
-		SET_ACTION(state->sec_table[SYM].flags, ACT_DELETE);
+		SET_ACTION(state->sec_table[SYM].si_flags, ACT_DELETE);
 		state->off_table[SYM] = 0;
 		/*
 		 * Can I remove section header
@@ -517,14 +520,14 @@ traverse_file(Elf *elf, GElf_Ehdr * ehdr, char *cur_file, Cmd_Info *cmd_info,
 		if ((tmp_shdr.sh_link < shnum) &&
 		    (tmp_shdr.sh_link != SHN_UNDEF) &&
 		    (tmp_shdr.sh_link != shstrndx) &&
-		    (GET_LOC(state->sec_table[tmp_shdr.sh_link].flags) ==
+		    (GET_LOC(state->sec_table[tmp_shdr.sh_link].si_flags) ==
 		    AFTER)) {
 			state->sec_table[tmp_shdr.sh_link].secno =
 			    (GElf_Word)DELETED;
 			++(cmd_info->no_of_nulled);
 			if (state->Sect_exists == 0)
 				++state->Sect_exists;
-			SET_ACTION(state->sec_table[tmp_shdr.sh_link].flags,
+			SET_ACTION(state->sec_table[tmp_shdr.sh_link].si_flags,
 			    ACT_DELETE);
 			state->off_table[tmp_shdr.sh_link] = 0;
 		}
@@ -598,14 +601,17 @@ traverse_file(Elf *elf, GElf_Ehdr * ehdr, char *cur_file, Cmd_Info *cmd_info,
 				    (GElf_Word)NULLED)) &&
 				    sinfo->rel_loc != IN) {
 					if (GET_LOC(state->
-					    sec_table[rel_idx].flags) == PRIOR)
+					    sec_table[rel_idx].si_flags) ==
+					    PRIOR) {
 						state->sec_table[rel_idx].
 						    secno = (GElf_Word)NULLED;
-					else
+					} else {
 						state->sec_table[rel_idx].
 						    secno = (GElf_Word)DELETED;
-					SET_ACTION(state->sec_table[rel_idx].
-					    flags, ACT_DELETE);
+					}
+					SET_ACTION(
+					    state->sec_table[rel_idx].si_flags,
+					    ACT_DELETE);
 				}
 
 				/*
@@ -617,15 +623,15 @@ traverse_file(Elf *elf, GElf_Ehdr * ehdr, char *cur_file, Cmd_Info *cmd_info,
 				    (GElf_Word)DELETED) ||
 				    (state->sec_table[rel_idx].secno ==
 				    (GElf_Word)NULLED)) &&
-				    (GET_LOC(sinfo->flags) != IN)) {
-					if (GET_LOC(sinfo->flags) ==
+				    (GET_LOC(sinfo->si_flags) != IN)) {
+					if (GET_LOC(sinfo->si_flags) ==
 					    PRIOR)
 						sinfo->secno =
 						    (GElf_Word)NULLED;
 					else
 						sinfo->secno =
 						    (GElf_Word)DELETED;
-					SET_ACTION(sinfo->flags, ACT_DELETE);
+					SET_ACTION(sinfo->si_flags, ACT_DELETE);
 				}
 			}
 
@@ -642,9 +648,10 @@ traverse_file(Elf *elf, GElf_Ehdr * ehdr, char *cur_file, Cmd_Info *cmd_info,
 					 * section is a member may be able
 					 * to be removed. See post_process().
 					 */
-					if (shdr->sh_flags & SHF_GROUP)
-						cmd_info->flags |=
-						    SHF_GROUP_DEL;
+					if (shdr->sh_flags & SHF_GROUP) {
+						SET_OPT(cmd_info,
+						    SHF_GROUP_DEL);
+					}
 				} else {
 					/*
 					 * The data buffer of SHT_GROUP this
@@ -653,9 +660,10 @@ traverse_file(Elf *elf, GElf_Ehdr * ehdr, char *cur_file, Cmd_Info *cmd_info,
 					 */
 					sinfo->secno -= acc;
 					if ((shdr->sh_flags & SHF_GROUP) &&
-					    (acc != 0))
-						cmd_info->flags |=
-						    SHF_GROUP_MOVE;
+					    (acc != 0)) {
+						SET_OPT(cmd_info,
+						    SHF_GROUP_MOVE);
+					}
 				}
 				sinfo++;
 			}
@@ -716,7 +724,7 @@ build_file(Elf *src_elf, GElf_Ehdr *src_ehdr, Cmd_Info *cmd_info,
 		return (FAILURE);
 	}
 
-	if (gelf_newehdr(dst_elf, gelf_getclass(src_elf)) == NULL) {
+	if (gelf_newehdr(dst_elf, gelf_getclass(src_elf)) == 0) {
 		error_message(LIBELF_ERROR, LIBelf_ERROR, elf_errmsg(-1), prog);
 		return (FAILURE);
 	}
@@ -743,7 +751,7 @@ build_file(Elf *src_elf, GElf_Ehdr *src_ehdr, Cmd_Info *cmd_info,
 	if (src_ehdr->e_phnum != 0) {
 		(void) elf_flagelf(dst_elf, ELF_C_SET, ELF_F_LAYOUT);
 
-		if (gelf_newphdr(dst_elf, src_ehdr->e_phnum) == NULL) {
+		if (gelf_newphdr(dst_elf, src_ehdr->e_phnum) == 0) {
 			error_message(LIBELF_ERROR, LIBelf_ERROR,
 			    elf_errmsg(-1), prog);
 			return (FAILURE);
@@ -934,8 +942,8 @@ build_file(Elf *src_elf, GElf_Ehdr *src_ehdr, Cmd_Info *cmd_info,
 			 * If the section is to be updated,
 			 * do so.
 			 */
-			if (ISCANDIDATE(info->flags)) {
-				if ((GET_LOC(info->flags) == PRIOR) &&
+			if (ISCANDIDATE(info->si_flags)) {
+				if ((GET_LOC(info->si_flags) == PRIOR) &&
 				    (((int)info->secno == NULLED) ||
 				    ((int)info->secno == EXPANDED) ||
 				    ((int)info->secno == SHRUNK))) {
@@ -948,7 +956,7 @@ build_file(Elf *src_elf, GElf_Ehdr *src_ehdr, Cmd_Info *cmd_info,
 					dst_shdr.sh_type = SHT_PROGBITS;
 					if ((int)info->secno != NULLED) {
 						(cmd_info->no_of_moved)++;
-						SET_MOVING(info->flags);
+						SET_MOVING(info->si_flags);
 					}
 				} else {
 					/*
@@ -1041,7 +1049,7 @@ build_file(Elf *src_elf, GElf_Ehdr *src_ehdr, Cmd_Info *cmd_info,
 		dst_shdr.sh_type = SHT_PROGBITS;
 		dst_shdr.sh_flags = 0;
 		dst_shdr.sh_addr = 0;
-		if (src_ehdr->e_phnum != NULL)
+		if (src_ehdr->e_phnum != 0)
 			dst_shdr.sh_offset = new_offset;
 		else
 			dst_shdr.sh_offset = 0;
@@ -1079,7 +1087,7 @@ build_file(Elf *src_elf, GElf_Ehdr *src_ehdr, Cmd_Info *cmd_info,
 		info = &state->sec_table[0];
 
 		for (cnt = 0; cnt < shnum; cnt++, info++) {
-			if ((GET_MOVING(info->flags)) == 0)
+			if ((GET_MOVING(info->si_flags)) == 0)
 				continue;
 
 			if ((src_scn = elf_getscn(src_elf, info->osecno)) ==
@@ -1555,14 +1563,14 @@ post_process(Cmd_Info *cmd_info, file_state_t *state)
 	/*
 	 * If no change is required, then return.
 	 */
-	if ((cmd_info->flags & (SHF_GROUP_MOVE|SHF_GROUP_DEL)) == 0)
+	if (!CHK_OPT(cmd_info, SHF_GROUP_MOVE|SHF_GROUP_DEL))
 		return;
 
 	/*
 	 * If SHF_GROUP sections were removed, we might need to
 	 * remove SHT_GROUP sections.
 	 */
-	if (cmd_info->flags & SHF_GROUP_DEL) {
+	if (CHK_OPT(cmd_info, SHF_GROUP_DEL)) {
 		Word	grpcnt;
 		int	deleted = 0;
 

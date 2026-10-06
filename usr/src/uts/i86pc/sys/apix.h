@@ -20,6 +20,7 @@
  */
 /*
  * Copyright (c) 2010, Oracle and/or its affiliates. All rights reserved.
+ * Copyright 2017 Joyent, Inc.
  */
 
 #ifndef __SYS_APIX_APIX_H
@@ -75,11 +76,11 @@ enum {
 
 /*
  * Number of interrupt vectors reserved by software on each LOCAL APIC:
- * 	1. Dtrace
+ *	1. Dtrace
  *	2. int80
  *	3. system-call
  *	4. fast-trap
- * 	5. apix-reserved
+ *	5. apix-reserved
  */
 #define	APIX_SW_RESERVED_VECTORS	5
 
@@ -245,11 +246,6 @@ extern int apic_handle_pci_pci_bridge(dev_info_t *idip, int child_devno,
 extern void apic_record_rdt_entry(apic_irq_t *irqptr, int irq);
 
 /*
- * From apic_regops.c
- */
-extern int apic_have_32bit_cr8;
-
-/*
  * apix_intr.c
  */
 extern void apix_do_interrupt(struct regs *rp, trap_trace_rec_t *ttp);
@@ -287,11 +283,12 @@ extern struct apix_rebind_info apix_rebindinfo;
 
 #define	APIX_DO_FAKE_INTR(_cpu, _vector)\
 	if (APIX_IS_FAKE_INTR(_vector)) {\
-		struct autovec *tp;\
+		struct autovec *tp = NULL;\
 		if ((_cpu) == apix_rebindinfo.i_old_cpuid)\
 			tp = apix_rebindinfo.i_old_av;\
 		else if ((_cpu) == apix_rebindinfo.i_new_cpuid)\
 			tp = apix_rebindinfo.i_new_av;\
+		ASSERT(tp != NULL);\
 		if (tp->av_vector != NULL &&\
 		    (tp->av_flags & AV_PENTRY_PEND) == 0) {\
 			tp->av_flags |= AV_PENTRY_PEND;\

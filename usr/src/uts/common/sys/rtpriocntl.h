@@ -25,13 +25,11 @@
  */
 
 /*	Copyright (c) 1984, 1986, 1987, 1988, 1989 AT&T	*/
-/*	  All Rights Reserved  	*/
+/*	  All Rights Reserved	*/
 
 
 #ifndef _SYS_RTPRIOCNTL_H
 #define	_SYS_RTPRIOCNTL_H
-
-#pragma ident	"%Z%%M%	%I%	%E% SMI"	/* SVr4.0 1.4 */
 
 #include <sys/types.h>
 #include <sys/thread.h>
@@ -69,7 +67,7 @@ typedef struct rtinfo {
 #define	RT_KY_TQSIG	4	/* real-time time quantum signal */
 
 /*
- * The following is used by the dispadmin(1M) command for
+ * The following is used by the dispadmin(8) command for
  * scheduler administration and is not for general use.
  */
 

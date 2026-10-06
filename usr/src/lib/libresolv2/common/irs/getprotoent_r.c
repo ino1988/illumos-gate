@@ -15,10 +15,6 @@
  * OF OR IN CONNECTION WITH THE USE OR PERFORMANCE OF THIS SOFTWARE.
  */
 
-#if defined(LIBC_SCCS) && !defined(lint)
-static const char rcsid[] = "$Id: getprotoent_r.c,v 1.6 2006/08/01 01:14:16 marka Exp $";
-#endif /* LIBC_SCCS and not lint */
-
 #include <port_before.h>
 #if !defined(_REENTRANT) || !defined(DO_PTHREADS)
 	static int getprotoent_r_not_required = 0;
@@ -33,7 +29,7 @@ static const char rcsid[] = "$Id: getprotoent_r.c,v 1.6 2006/08/01 01:14:16 mark
 
 #ifdef PROTO_R_RETURN
 
-static PROTO_R_RETURN 
+static PROTO_R_RETURN
 copy_protoent(struct protoent *, struct protoent *, PROTO_R_COPY_ARGS);
 
 PROTO_R_RETURN
@@ -46,7 +42,7 @@ getprotobyname_r(const char *name, struct protoent *pptr, PROTO_R_ARGS) {
 		*answerp = NULL;
 	else
 		*answerp = pptr;
-	
+
 	return (n);
 #else
 	if (pe == NULL)
@@ -66,7 +62,7 @@ getprotobynumber_r(int proto, struct protoent *pptr, PROTO_R_ARGS) {
 		*answerp = NULL;
 	else
 		*answerp = pptr;
-	
+
 	return (n);
 #else
 	if (pe == NULL)
@@ -92,7 +88,7 @@ getprotoent_r(struct protoent *pptr, PROTO_R_ARGS) {
 		*answerp = NULL;
 	else
 		*answerp = pptr;
-	
+
 	return (n);
 #else
 	if (pe == NULL)
@@ -149,7 +145,7 @@ copy_protoent(struct protoent *pe, struct protoent *pptr, PROTO_R_COPY_ARGS) {
 	}
 	len += strlen(pe->p_name) + 1;
 	len += numptr * sizeof(char*);
-	
+
 	if (len > (int)buflen) {
 		errno = ERANGE;
 		return (PROTO_R_BAD);

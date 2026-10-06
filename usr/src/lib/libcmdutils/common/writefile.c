@@ -25,7 +25,7 @@
  */
 
 /*	Copyright (c) 1984, 1986, 1987, 1988, 1989 AT&T	*/
-/*	  All Rights Reserved  	*/
+/*	  All Rights Reserved	*/
 
 /*
  * University Copyright- Copyright (c) 1982, 1986, 1988
@@ -37,14 +37,32 @@
  * contributors.
  */
 
-#pragma ident	"%Z%%M%	%I%	%E% SMI"
+/*
+ * Copyright 2024-2025 RackTop Systems, Inc.
+ */
 
 #include "libcmdutils.h"
 
-
+/*
+ * Helper for mv/cp/ln (see $SRC/cmd/mv)
+ * Copy a file "in" to "out" where
+ *	fi is a file descriptor open for read on "in"
+ *	fo is a file descriptor open for write on "out"
+ *	infile is a name used for error messages re. "in"
+ *	outfile is a name used for error messages re. "out"
+ *	asfile is an attr. name on "in" if copying an attr, else NULL
+ *	atfile is an attr. name on "out" if copying an attr, else NULL
+ *	s1p points to stat info for "in"
+ *	s2p points to stat info for "out"
+ *
+ * Returns 0 on success.  Returns 1 on failure AND closes fi, fo!
+ *
+ * Closing fi, fo on error may be surprising as an interface design
+ * but callers expect this behavior.
+ */
 int
-writefile(int fi, int fo, char *infile, char *outfile, char *asfile,
-    char *atfile, struct stat *s1p, struct stat *s2p)
+writefile(int fi, int fo, const char *infile, const char *outfile,
+    const char *asfile, const char *atfile, struct stat *s1p, struct stat *s2p)
 {
 	int mapsize, munmapsize;
 	caddr_t cp;
@@ -68,7 +86,9 @@ writefile(int fi, int fo, char *infile, char *outfile, char *asfile,
 	if (srcbuf == NULL) {
 		(void) fprintf(stderr,
 		    dgettext(TEXT_DOMAIN, "could not allocate memory"
-		    " for path buffer: "));
+		    " for path buffer\n"));
+		(void) close(fi);
+		(void) close(fo);
 		return (1);
 	}
 	if (asfile != NULL) {
@@ -88,7 +108,10 @@ writefile(int fi, int fo, char *infile, char *outfile, char *asfile,
 	if (targbuf == NULL) {
 		(void) fprintf(stderr,
 		    dgettext(TEXT_DOMAIN, "could not allocate memory"
-		    " for path buffer: "));
+		    " for path buffer\n"));
+		free(srcbuf);
+		(void) close(fi);
+		(void) close(fo);
 		return (1);
 	}
 	if (atfile != NULL) {
@@ -98,7 +121,7 @@ writefile(int fi, int fo, char *infile, char *outfile, char *asfile,
 		(void) snprintf(targbuf, targ_size, "%s", outfile);
 	}
 
-	if (ISREG(*s1p) && s1p->st_size > SMALLFILESIZE) {
+	if (S_ISREG(s1p->st_mode) && s1p->st_size > SMALLFILESIZE) {
 		/*
 		 * Determine size of initial mapping.  This will determine the
 		 * size of the address space chunk we work with.  This initial
@@ -140,8 +163,10 @@ writefile(int fi, int fo, char *infile, char *outfile, char *asfile,
 						(void) close(fi);
 						(void) close(fo);
 						(void) munmap(cp, munmapsize);
-						if (ISREG(*s2p))
+						if (S_ISREG(s2p->st_mode))
 							(void) unlink(targbuf);
+						free(srcbuf);
+						free(targbuf);
 						return (1);
 					}
 					remains -= nbytes;
@@ -164,12 +189,10 @@ writefile(int fi, int fo, char *infile, char *outfile, char *asfile,
 				(void) close(fi);
 				(void) close(fo);
 				(void) munmap(cp, munmapsize);
-				if (ISREG(*s2p))
+				if (S_ISREG(s2p->st_mode))
 					(void) unlink(targbuf);
-				if (srcbuf != NULL)
-					free(srcbuf);
-				if (targbuf != NULL)
-					free(targbuf);
+				free(srcbuf);
+				free(targbuf);
 				return (1);
 			}
 			filesize -= nbytes;
@@ -184,12 +207,10 @@ writefile(int fi, int fo, char *infile, char *outfile, char *asfile,
 				(void) close(fi);
 				(void) close(fo);
 				(void) munmap(cp, munmapsize);
-				if (ISREG(*s2p))
+				if (S_ISREG(s2p->st_mode))
 					(void) unlink(targbuf);
-				if (srcbuf != NULL)
-					free(srcbuf);
-				if (targbuf != NULL)
-					free(targbuf);
+				free(srcbuf);
+				free(targbuf);
 				return (1);
 			}
 		}
@@ -199,33 +220,29 @@ writefile(int fi, int fo, char *infile, char *outfile, char *asfile,
 		for (;;) {
 			n = read(fi, buf, sizeof (buf));
 			if (n == 0) {
+				free(srcbuf);
+				free(targbuf);
 				return (0);
 			} else if (n < 0) {
 				(void) close(fi);
 				(void) close(fo);
-				if (ISREG(*s2p))
+				if (S_ISREG(s2p->st_mode))
 					(void) unlink(targbuf);
-				if (srcbuf != NULL)
-					free(srcbuf);
-				if (targbuf != NULL)
-					free(targbuf);
+				free(srcbuf);
+				free(targbuf);
 				return (1);
 			} else if (write(fo, buf, n) != n) {
 				(void) close(fi);
 				(void) close(fo);
-				if (ISREG(*s2p))
+				if (S_ISREG(s2p->st_mode))
 					(void) unlink(targbuf);
-				if (srcbuf != NULL)
-					free(srcbuf);
-				if (targbuf != NULL)
-					free(targbuf);
+				free(srcbuf);
+				free(targbuf);
 				return (1);
 			}
 		}
 	}
-	if (srcbuf != NULL)
-		free(srcbuf);
-	if (targbuf != NULL)
-		free(targbuf);
+	free(srcbuf);
+	free(targbuf);
 	return (0);
 }

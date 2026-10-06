@@ -23,9 +23,13 @@
 # Copyright 2005 Sun Microsystems, Inc.  All rights reserved.
 # Use is subject to license terms.
 #
-# ident	"%Z%%M%	%I%	%E% SMI"
-#
+# Copyright 2024 Oxide Computer Company
 
 include ../Makefile.com
 
-install: all $(ROOTLIBS) $(ROOTLINKS) $(ROOTLINT)
+pics/zfs_fletcher_avx512.o := CTFCVTFLAGS += -m
+pics/zfs_fletcher_intel.o := CTFCVTFLAGS += -m
+pics/zfs_fletcher_sse.o := CTFCVTFLAGS += -m
+CTFMRGFLAGS += -m
+
+install: all $(ROOTLIBS) $(ROOTLINKS)

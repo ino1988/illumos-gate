@@ -23,6 +23,7 @@
  * Use is subject to license terms.
  *
  * Copyright (c) 2012, Joyent, Inc. All rights reserved.
+ * Copyright 2022 Oxide Computer Company
  */
 
 #include <stdio.h>
@@ -186,7 +187,7 @@ obio_print(uintptr_t data, int ilev)
 
 	dp = (struct ddi_parent_private_data *)data;
 #ifdef DEBUG
-	dprintf("obio parent private data: nreg = 0x%x offset = 0x%x"
+	dbgprintf("obio parent private data: nreg = 0x%x offset = 0x%x"
 	    " nintr = 0x%x offset = 0x%x nrng = 0x%x offset = %x\n",
 	    dp->par_nreg, *((di_off_t *)(&dp->par_reg)),
 	    dp->par_nintr, *((di_off_t *)(&dp->par_intr)),
@@ -252,7 +253,7 @@ pcmcia_print(uintptr_t data, int ilev)
 
 	dp = (struct pcmcia_parent_private *)data;
 #ifdef DEBUG
-	dprintf("pcmcia parent private data: nreg = 0x%x offset = 0x%x"
+	dbgprintf("pcmcia parent private data: nreg = 0x%x offset = 0x%x"
 	    " intr = 0x%x offset = %x\n",
 	    dp->ppd_nreg, *(di_off_t *)(&dp->ppd_reg),
 	    dp->ppd_intr, *(di_off_t *)(&dp->ppd_intrspec));
@@ -295,7 +296,7 @@ sbus_print(uintptr_t data, int ilev)
 
 	dp = (struct ddi_parent_private_data *)data;
 #ifdef DEBUG
-	dprintf("sbus parent private data: nreg = 0x%x offset = 0x%x"
+	dbgprintf("sbus parent private data: nreg = 0x%x offset = 0x%x"
 	    " nintr = 0x%x offset = 0x%x nrng = 0x%x offset = %x\n",
 	    dp->par_nreg, *((di_off_t *)(&dp->par_reg)),
 	    dp->par_nintr, *((di_off_t *)(&dp->par_intr)),
@@ -371,7 +372,7 @@ match_priv_data(di_node_t node)
 		while (tmp && (*tmp != '\0')) {
 			if (strncmp(tmp, drv_name, len) == 0) {
 #ifdef	DEBUG
-				dprintf("matched parent private data"
+				dbgprintf("matched parent private data"
 				    " at Node <%s> parent driver <%s>\n",
 				    di_node_name(node), drv_name);
 #endif	/* DEBUG */
@@ -380,7 +381,7 @@ match_priv_data(di_node_t node)
 			/*
 			 * skip a white space
 			 */
-			if (tmp = strchr(tmp, ' '))
+			if ((tmp = strchr(tmp, ' ')) != NULL)
 				tmp++;
 		}
 	}
@@ -394,12 +395,12 @@ dump_priv_data(int ilev, di_node_t node)
 	uintptr_t priv;
 	struct priv_data *pdp;
 
-	if ((priv = (uintptr_t)di_parent_private_data(node)) == NULL)
+	if ((priv = (uintptr_t)di_parent_private_data(node)) == (uintptr_t)NULL)
 		return;
 
 	if ((pdp = match_priv_data(node)) == NULL) {
 #ifdef DEBUG
-		dprintf("Error: parent private data format unknown\n");
+		dbgprintf("Error: parent private data format unknown\n");
 #endif /* DEBUG */
 		return;
 	}
@@ -409,59 +410,33 @@ dump_priv_data(int ilev, di_node_t node)
 	/* ignore driver private data for now */
 }
 
-#define	LOOKUP_PROP(proptype, ph, nodetype, dev, node, name, data)	\
-	((nodetype == DI_PROM_NODEID) ?					\
-	di_prom_prop_lookup_##proptype(ph, node, name, data) :		\
-	di_prop_lookup_##proptype(dev, node, name, data))
-#define	ISPCI(s)						\
-	(((s) != NULL) && ((strcmp((s), "pci") == 0) ||		\
-	(strcmp((s), "pciex") == 0)))
 /*
  * Print vendor ID and device ID for PCI devices
  */
-int
-print_pciid(di_node_t node, di_prom_handle_t ph, pcidb_hdl_t *pci)
+void
+print_pciid(const char *type, uint16_t vid, uint16_t did, pcidb_hdl_t *pci)
 {
-	pcidb_vendor_t *vend;
-	pcidb_device_t *dev;
-	di_node_t pnode = di_parent_node(node);
-	char *s = NULL;
-	int *i, type = di_nodeid(node);
+	const char *vstr, *dstr;
 
-	if (LOOKUP_PROP(strings, ph, type, DDI_DEV_T_ANY, pnode,
-	    "device_type", &s) <= 0)
-		return (0);
+	(void) printf(" (%s%x,%x)", type, vid, did);
 
-	if (!ISPCI(s))
-		return (0);	/* not a pci device */
+	vstr = "unknown vendor";
+	dstr = "unknown device";
+	if (pci != NULL) {
+		pcidb_vendor_t *vend = NULL;
+		pcidb_device_t *dev = NULL;
 
-	(void) printf(" (%s", s);
-	if (LOOKUP_PROP(ints, ph, type, DDI_DEV_T_ANY, node,
-	    "vendor-id", &i) > 0)
-		(void) printf("%x", i[0]);
+		vend = pcidb_lookup_vendor(pci, vid);
 
-	if (pci != NULL)
-		vend = pcidb_lookup_vendor(pci, i[0]);
+		if (vend != NULL) {
+			vstr = pcidb_vendor_name(vend);
+			dev = pcidb_lookup_device_by_vendor(vend, did);
+		}
 
-	if (LOOKUP_PROP(ints, ph, type, DDI_DEV_T_ANY, node,
-	    "device-id", &i) > 0)
-		(void) printf(",%x", i[0]);
+		if (dev != NULL) {
+			dstr = pcidb_device_name(dev);
+		}
+	}
 
-	if (pci != NULL)
-		dev = pcidb_lookup_device_by_vendor(vend, i[0]);
-
-	(void) printf(") [");
-
-	if (vend != NULL)
-		(void) printf("%s ", pcidb_vendor_name(vend));
-	else
-		(void) printf("unknown vendor, ");
-
-	if (dev != NULL)
-		(void) printf("%s", pcidb_device_name(dev));
-	else
-		(void) printf("unknown device");
-
-	(void) printf("]");
-	return (1);
+	(void) printf(" [%s %s]", vstr, dstr);
 }

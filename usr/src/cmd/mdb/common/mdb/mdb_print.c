@@ -25,8 +25,9 @@
 
 /*
  * Copyright (c) 2012, 2014 by Delphix. All rights reserved.
- * Copyright (c) 2012 Joyent, Inc. All rights reserved.
+ * Copyright 2020 Joyent, Inc.
  * Copyright (c) 2014 Nexenta Systems, Inc. All rights reserved.
+ * Copyright 2025 Oxide Computer Company
  */
 
 #include <mdb/mdb_modapi.h>
@@ -533,7 +534,7 @@ cmd_enum(uintptr_t addr, uint_t flags, int argc, const mdb_arg_t *argv)
 	mdb_ctf_id_t idr;
 
 	int i;
-	intmax_t search;
+	intmax_t search = 0;
 	uint_t isp2;
 
 	info.e_flags = (flags & DCMD_PIPE_OUT)? 0 : E_PRETTY;
@@ -728,19 +729,20 @@ cmd_list(uintptr_t addr, uint_t flags, int argc, const mdb_arg_t *argv)
 		char buf[MDB_SYM_NAMLEN];
 		int ret;
 
-		/*
-		 * Check that we were provided 2 arguments: a type name
-		 * and a member of that type.
-		 */
-		if (argc != 2)
-			return (DCMD_USAGE);
-
 		ret = args_to_typename(&argc, &argv, buf, sizeof (buf));
 		if (ret != 0)
 			return (ret);
 
 		argv++;
 		argc--;
+
+		/*
+		 * If we make it here, we were provided a type name. We should
+		 * only continue if we still have arguments left (e.g. member
+		 * name and potentially a variable name).
+		 */
+		if (argc == 0)
+			return (DCMD_USAGE);
 
 		member = argv->a_un.a_str;
 		offset = mdb_ctf_offsetof_by_name(buf, member);
@@ -782,7 +784,7 @@ cmd_list(uintptr_t addr, uint_t flags, int argc, const mdb_arg_t *argv)
 		}
 
 		a = tmp;
-	} while (a != addr && a != NULL);
+	} while (a != addr && a != 0);
 
 	return (DCMD_OK);
 }
@@ -816,16 +818,18 @@ cmd_array(uintptr_t addr, uint_t flags, int argc, const mdb_arg_t *argv)
 			return (DCMD_ABORT);
 		}
 
-		if (argv[1].a_type == MDB_TYPE_IMMEDIATE)
-			nelem = argv[1].a_un.a_val;
-		else
-			nelem = mdb_strtoull(argv[1].a_un.a_str);
+		nelem = (int)mdb_argtoull(&argv[1]);
 
 		elemsize = mdb_ctf_type_size(id);
 	} else if (addr_to_sym(t, addr, tn, sizeof (tn), &sym, &s_info)
-	    != NULL && mdb_ctf_lookup_by_symbol(&sym, &s_info, &id)
-	    == 0 && mdb_ctf_type_kind(id) == CTF_K_ARRAY &&
+	    != NULL &&
+	    mdb_ctf_lookup_by_symbol(&sym, &s_info, &id) == 0 &&
+	    mdb_ctf_type_kind(id) == CTF_K_ARRAY &&
 	    mdb_ctf_array_info(id, &ar) != -1) {
+		if (ar.mta_nelems == 0) {
+			mdb_warn("array has 0 elements\n");
+			return (DCMD_ERR);
+		}
 		elemsize = mdb_ctf_type_size(id) / ar.mta_nelems;
 		nelem = ar.mta_nelems;
 	} else {
@@ -853,6 +857,28 @@ cmd_array(uintptr_t addr, uint_t flags, int argc, const mdb_arg_t *argv)
 }
 
 /*
+ * This is a shared implementation to determine if we should treat a type as a
+ * bitfield. The parameters are the CTF encoding and the bit offset of the
+ * integer. This also exists in mdb_print.c. We consider something a bitfield
+ * if:
+ *
+ *  o The type is more than 8 bytes. This is a bit of a historical choice from
+ *    mdb and is a stranger one. The normal integer handling code generally
+ *    doesn't handle integers more than 64-bits in size. Of course neither does
+ *    the bitfield code...
+ *  o The bit count is not a multiple of 8.
+ *  o The size in bytes is not a power of 2.
+ *  o The offset is not a multiple of 8.
+ */
+boolean_t
+is_bitfield(const ctf_encoding_t *ep, ulong_t off)
+{
+	size_t bsize = ep->cte_bits / NBBY;
+	return (bsize > 8 || (ep->cte_bits % NBBY) != 0 ||
+	    (bsize & (bsize - 1)) != 0 || (off % NBBY) != 0);
+}
+
+/*
  * Print an integer bitfield in hexadecimal by reading the enclosing byte(s)
  * and then shifting and masking the data in the lower bits of a uint64_t.
  */
@@ -860,19 +886,31 @@ static int
 print_bitfield(ulong_t off, printarg_t *pap, ctf_encoding_t *ep)
 {
 	mdb_tgt_addr_t addr = pap->pa_addr + off / NBBY;
-	size_t size = (ep->cte_bits + (NBBY - 1)) / NBBY;
 	uint64_t mask = (1ULL << ep->cte_bits) - 1;
 	uint64_t value = 0;
 	uint8_t *buf = (uint8_t *)&value;
 	uint8_t shift;
-
 	const char *format;
+
+	/*
+	 * Our bitfield may straddle a byte boundary. We explicitly take the
+	 * offset of the bitfield within its byte into account when determining
+	 * the overall amount of data to copy and mask off from the underlying
+	 * data.
+	 */
+	uint_t nbits = ep->cte_bits + (off % NBBY);
+	size_t size = P2ROUNDUP(nbits, NBBY) / NBBY;
 
 	if (!(pap->pa_flags & PA_SHOWVAL))
 		return (0);
 
 	if (ep->cte_bits > sizeof (value) * NBBY - 1) {
 		mdb_printf("??? (invalid bitfield size %u)", ep->cte_bits);
+		return (0);
+	}
+
+	if (size > sizeof (value)) {
+		mdb_printf("??? (total bitfield too large after alignment");
 		return (0);
 	}
 
@@ -885,6 +923,7 @@ print_bitfield(ulong_t off, printarg_t *pap, ctf_encoding_t *ep)
 	buf += sizeof (value) - size;
 	off += ep->cte_bits;
 #endif
+
 	if (mdb_tgt_aread(pap->pa_tgt, pap->pa_as, buf, size, addr) != size) {
 		mdb_warn("failed to read %lu bytes at %llx",
 		    (ulong_t)size, addr);
@@ -930,6 +969,30 @@ print_bitfield(ulong_t off, printarg_t *pap, ctf_encoding_t *ep)
 }
 
 /*
+ * We want to print an escaped char as e.g. '\0'. We don't use mdb_fmt_print()
+ * as it won't get auto-wrap right here (although even now, we don't include any
+ * trailing comma).
+ */
+static int
+print_char_val(mdb_tgt_addr_t addr, printarg_t *pap)
+{
+	char cval;
+	char *s;
+
+	if (mdb_tgt_aread(pap->pa_tgt, pap->pa_as, &cval, 1, addr) != 1)
+		return (1);
+
+	if (mdb.m_flags & MDB_FL_ADB)
+		s = strchr2adb(&cval, 1);
+	else
+		s = strchr2esc(&cval, 1);
+
+	mdb_printf("'%s'", s);
+	strfree(s);
+	return (0);
+}
+
+/*
  * Print out a character or integer value.  We use some simple heuristics,
  * described below, to determine the appropriate radix to use for output.
  */
@@ -962,22 +1025,13 @@ print_int_val(const char *type, ctf_encoding_t *ep, ulong_t off,
 		return (0);
 	}
 
-	/*
-	 * If the size is not a power-of-two number of bytes in the range 1-8
-	 * then we assume it is a bitfield and print it as such.
-	 */
 	size = ep->cte_bits / NBBY;
-	if (size > 8 || (ep->cte_bits % NBBY) != 0 || (size & (size - 1)) != 0)
+	if (is_bitfield(ep, off)) {
 		return (print_bitfield(off, pap, ep));
-
-	if (IS_CHAR(*ep)) {
-		mdb_printf("'");
-		if (mdb_fmt_print(pap->pa_tgt, pap->pa_as,
-		    addr, 1, 'C') == addr)
-			return (1);
-		mdb_printf("'");
-		return (0);
 	}
+
+	if (IS_CHAR(*ep))
+		return (print_char_val(addr, pap));
 
 	if (mdb_tgt_aread(pap->pa_tgt, pap->pa_as, &u.i8, size, addr) != size) {
 		mdb_warn("failed to read %lu bytes at %llx",
@@ -1142,7 +1196,7 @@ print_ptr(const char *type, const char *name, mdb_ctf_id_t id,
 
 	mdb_printf("%a", value);
 
-	if (value == NULL || strcmp(type, "caddr_t") == 0)
+	if (value == 0 || strcmp(type, "caddr_t") == 0)
 		return (0);
 
 	if (mdb_ctf_type_kind(base) == CTF_K_POINTER &&
@@ -1433,7 +1487,7 @@ print_hole(printarg_t *pap, int depth, ulong_t off, ulong_t endoff)
 	ASSERT(off < endoff);
 
 	if (bits > NBBY * sizeof (uint64_t)) {
-		ulong_t end;
+		ulong_t end = 0;
 
 		/*
 		 * The hole is larger than the largest integer type.  To
@@ -1679,6 +1733,16 @@ elt_print(const char *name, mdb_ctf_id_t id, mdb_ctf_id_t base,
 		if (pap->pa_prefix != NULL && depth <= 1)
 			mdb_printf("%s%s", pap->pa_prefix,
 			    (depth == 0) ? "" : pap->pa_suffix);
+
+		/*
+		 * Figure out if we're printing an anonymous struct or union. If
+		 * so, indicate that this is anonymous.
+		 */
+		if (depth != 0 && *name == '\0' && (kind == CTF_K_STRUCT ||
+		    kind == CTF_K_UNION)) {
+			name = "<anon>";
+		}
+
 		mdb_printf("%s", name);
 	}
 
@@ -1727,7 +1791,7 @@ static int
 pipe_print(mdb_ctf_id_t id, ulong_t off, void *data)
 {
 	printarg_t *pap = data;
-	ssize_t size;
+	size_t size;
 	static const char *const fsp[] = { "%#r", "%#r", "%#r", "%#llr" };
 	uintptr_t value;
 	uintptr_t addr = pap->pa_addr + off / NBBY;
@@ -1756,7 +1820,6 @@ pipe_print(mdb_ctf_id_t id, ulong_t off, void *data)
 		return (0);
 	}
 
-again:
 	switch (mdb_ctf_type_kind(base)) {
 	case CTF_K_POINTER:
 		if (mdb_tgt_aread(pap->pa_tgt, pap->pa_as,
@@ -1786,13 +1849,12 @@ again:
 		 * For immediate values, we just print out the value.
 		 */
 		size = e.cte_bits / NBBY;
-		if (size > 8 || (e.cte_bits % NBBY) != 0 ||
-		    (size & (size - 1)) != 0) {
+		if (is_bitfield(&e, off)) {
 			return (print_bitfield(off, pap, &e));
 		}
 
 		if (mdb_tgt_aread(pap->pa_tgt, pap->pa_as, &u.i8, size,
-		    addr) != size) {
+		    addr) != (size_t)size) {
 			mdb_warn("failed to read %lu bytes at %p",
 			    (ulong_t)size, pap->pa_addr);
 			return (-1);
@@ -2364,7 +2426,7 @@ cmd_print(uintptr_t addr, uint_t flags, int argc, const mdb_arg_t *argv)
 	if ((flags & DCMD_ADDRSPEC) && !opt_i)
 		pa.pa_addr = opt_p ? mdb_get_dot() : addr;
 	else
-		pa.pa_addr = NULL;
+		pa.pa_addr = 0;
 
 	if (opt_i) {
 		const char *vargv[2];
@@ -2541,7 +2603,7 @@ static int
 printf_signed(mdb_ctf_id_t id, uintptr_t addr, ulong_t off, char *fmt,
     boolean_t sign)
 {
-	ssize_t size;
+	size_t size;
 	mdb_ctf_id_t base;
 	ctf_encoding_t e;
 
@@ -2590,20 +2652,40 @@ printf_signed(mdb_ctf_id_t id, uintptr_t addr, ulong_t off, char *fmt,
 	 * particular, see the comments there for an explanation of the
 	 * endianness differences in this code.)
 	 */
-	if (size > 8 || (e.cte_bits % NBBY) != 0 ||
-	    (size & (size - 1)) != 0) {
+	if (is_bitfield(&e, off)) {
 		uint64_t mask = (1ULL << e.cte_bits) - 1;
 		uint64_t value = 0;
 		uint8_t *buf = (uint8_t *)&value;
 		uint8_t shift;
+		uint_t nbits;
 
 		/*
-		 * Round our size up one byte.
+		 * Our bitfield may straddle a byte boundary. We explicitly take
+		 * the offset of the bitfield within its byte into account when
+		 * determining the overall amount of data to copy and mask off
+		 * from the underlying data.
 		 */
-		size = (e.cte_bits + (NBBY - 1)) / NBBY;
+		nbits = e.cte_bits + (off % NBBY);
+		size = P2ROUNDUP(nbits, NBBY) / NBBY;
 
 		if (e.cte_bits > sizeof (value) * NBBY - 1) {
 			mdb_printf("invalid bitfield size %u", e.cte_bits);
+			return (DCMD_ABORT);
+		}
+
+		/*
+		 * Our bitfield may straddle a byte boundary, if so, the
+		 * calculation of size may not correctly capture that. However,
+		 * off is relative to the entire bitfield, so we first have to
+		 * make that relative to the byte.
+		 */
+		if ((off % NBBY) + e.cte_bits > NBBY * size) {
+			size++;
+		}
+
+		if (size > sizeof (value)) {
+			mdb_warn("??? (total bitfield too large after "
+			    "alignment\n");
 			return (DCMD_ABORT);
 		}
 
@@ -2645,13 +2727,13 @@ printf_signed(mdb_ctf_id_t id, uintptr_t addr, ulong_t off, char *fmt,
 
 	switch (size) {
 	case sizeof (uint8_t):
-		mdb_printf(fmt, (uint64_t)(sign ? u.i1 : u.ui1));
+		mdb_printf(fmt, (uint64_t)(sign ? (uint64_t)u.i1 : u.ui1));
 		break;
 	case sizeof (uint16_t):
-		mdb_printf(fmt, (uint64_t)(sign ? u.i2 : u.ui2));
+		mdb_printf(fmt, (uint64_t)(sign ? (uint64_t)u.i2 : u.ui2));
 		break;
 	case sizeof (uint32_t):
-		mdb_printf(fmt, (uint64_t)(sign ? u.i4 : u.ui4));
+		mdb_printf(fmt, (uint64_t)(sign ? (uint64_t)u.i4 : u.ui4));
 		break;
 	case sizeof (uint64_t):
 		mdb_printf(fmt, (uint64_t)(sign ? u.i8 : u.ui8));
@@ -2800,9 +2882,21 @@ printf_string(mdb_ctf_id_t id, uintptr_t addr, ulong_t off, char *fmt)
 
 	bzero(buf, sizeof (buf));
 
-	if (mdb_vread(buf, MIN(r.mta_nelems, sizeof (buf) - 1), addr) == -1) {
-		mdb_warn("failed to read array at %p", addr);
-		return (DCMD_ERR);
+	if (r.mta_nelems != 0) {
+		const size_t read_sz = MIN(r.mta_nelems, sizeof (buf) - 1);
+		if (mdb_vread(buf, read_sz, addr) == -1) {
+			mdb_warn("failed to read array at %p", addr);
+			return (DCMD_ERR);
+		}
+	} else {
+		/*
+		 * If the element count is zero, assume that the input is a
+		 * flexible length array which is NUL terminated.
+		 */
+		if (mdb_readstr(buf, sizeof (buf), addr) < 0) {
+			mdb_warn("failed to read string at %llx", addr);
+			return (DCMD_ERR);
+		}
 	}
 
 	mdb_printf(fmt, buf);
@@ -3109,6 +3203,7 @@ cmd_printf(uintptr_t addr, uint_t flags, int argc, const mdb_arg_t *argv)
 	}
 
 	mdb_printf("%s", last);
+	mdb_set_dot(addr + mdb_ctf_type_size(id));
 
 	return (DCMD_OK);
 }

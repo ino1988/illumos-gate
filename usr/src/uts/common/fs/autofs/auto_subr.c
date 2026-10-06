@@ -162,11 +162,13 @@ auto_lookup_aux(fnnode_t *fnp, char *name, cred_t *cred)
 	bzero(&link, sizeof (link));
 	error = auto_lookup_request(fnip, name, &link, TRUE, &mountreq, cred);
 	if (!error) {
-		if (link.link != NULL || link.link != '\0') {
+		if (link.link != NULL) {
+			error = ENOENT;
 			/*
 			 * This node should be a symlink
 			 */
-			error = auto_perform_link(fnp, &link, cred);
+			if (*link.link != '\0')
+				error = auto_perform_link(fnp, &link, cred);
 		} else if (mountreq) {
 			/*
 			 * The automount daemon is requesting a mount,
@@ -715,7 +717,7 @@ auto_lookup_request(
 			break;
 		}
 	}
-done:
+
 	xdr_free(xdr_autofs_lookupres, (char *)resp);
 	kmem_free(resp, sizeof (*resp));
 	AUTOFS_DPRINT((5, "auto_lookup_request: path=%s name=%s error=%d\n",
@@ -1340,7 +1342,6 @@ mount:
 
 	crfree(zcred);
 
-done:
 	/*
 	 * Return failure if daemon didn't mount anything, and all
 	 * kernel mounts attempted failed.

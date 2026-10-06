@@ -19,7 +19,7 @@
  * CDDL HEADER END
  */
 /*	Copyright (c) 1984, 1986, 1987, 1988, 1989 AT&T	*/
-/*	  All Rights Reserved  	*/
+/*	  All Rights Reserved	*/
 
 
 /*
@@ -33,6 +33,9 @@
  * Use is subject to license terms.
  */
 
+/*
+ * Copyright (c) 2018, Joyent, Inc.
+ */
 /*
  * Sun Microsystems version of fmthard:
  *
@@ -118,7 +121,7 @@ static diskaddr_t	lastlba = 0;	/* last LBA on 64-bit VTOC */
 static char	*uboot = "boot";
 
 #elif defined(i386)
-/* use installgrub(1M) to install boot blocks */
+/* use installboot(8) to install boot blocks */
 static char *uboot = "";
 #else
 #error No platform defined.
@@ -165,7 +168,7 @@ main(int argc, char **argv)
 		case 'b':
 			(void) fprintf(stderr,
 			    "fmthard: -p and -b no longer supported."
-			    " Use installgrub(1M) to install boot blocks\n");
+			    " Use installboot(8) to install boot blocks\n");
 			break;
 #endif	/* defined(i386) */
 
@@ -740,7 +743,7 @@ full size of disk.  The full disk capacity is %llu sectors.\n", i, fullsz);
 		    (vtoc->v_part[i].p_size % nblks)) {
 			(void) fprintf(stderr, "\
 fmthard: Partition %d not aligned on cylinder boundary \n", i);
-				exit(1);
+			exit(1);
 		}
 		if (vtoc->v_part[i].p_start > fullsz ||
 		    vtoc->v_part[i].p_start +

@@ -38,10 +38,6 @@ CPPFLAGS += -I$(SRC)/uts/common/sys/fibre-channel
 CPPFLAGS += -I$(SRC)/uts/common/sys/fibre-channel/fca/qlc
 CPPFLAGS += -I$(SRC)/uts/common/sys/fibre-channel/impl
 
-LINTFLAGS64 +=  -erroff=E_STATIC_UNUSED -erroff=E_FUNC_SET_NOT_USED
-LINTFLAGS64 +=  -erroff=E_STATIC_UNUSED -erroff=E_FUNC_ARG_UNUSED
-
-C99MODE=	-xc99=%all
-C99LMODE=	-Xc99=%all
+CSTD=	$(CSTD_GNU99)
 
 CERRWARN +=	-_gcc=-Wno-address

@@ -25,6 +25,10 @@
 # Use is subject to license terms.
 #
 
+#
+# Copyright (c) 2016 by Delphix. All rights reserved.
+#
+
 . $STF_SUITE/include/libtest.shlib
 . $STF_SUITE/tests/functional/cli_root/zfs_copies/zfs_copies.kshlib
 
@@ -35,7 +39,7 @@
 # STRATEGY:
 #	1. Create filesystems with copies set as 2,3 respectively;
 #	2. Copy specified size data into each filesystem;
-#	3. Verify that the space is charged as expected with zfs list, ls -s, df(1m),
+#	3. Verify that the space is charged as expected with zfs list, ls -s, df(8),
 #	   du(1) commands;
 #
 
@@ -47,7 +51,7 @@ function cleanup
 
 	for val in 1 2 3; do
 		if datasetexists $TESTPOOL/fs_$val; then
-			log_must $ZFS destroy $TESTPOOL/fs_$val
+			log_must zfs destroy $TESTPOOL/fs_$val
 		fi
 	done
 }
@@ -56,21 +60,21 @@ log_assert "Verify that the space used by multiple copies is charged correctly."
 log_onexit cleanup
 
 for val in 1 2 3; do
-	log_must $ZFS create -o copies=$val $TESTPOOL/fs_$val
+	log_must zfs create -o copies=$val $TESTPOOL/fs_$val
 
-	log_must $MKFILE $FILESIZE /$TESTPOOL/fs_$val/$FILE
+	log_must mkfile $FILESIZE /$TESTPOOL/fs_$val/$FILE
 done
 
 #
 # Sync up the filesystem
 #
-$SYNC
+sync_all_pools
 
 #
 # Verify 'zfs list' can correctly list the space charged
 #
 log_note "Verify 'zfs list' can correctly list the space charged."
-fsize=${FILESIZE%[m|M]}
+fsize=${FILESIZE%[m\|M]}
 for val in 1 2 3; do
 	used=$(get_used_prop $TESTPOOL/fs_$val)
 	check_used $used $val
@@ -78,21 +82,23 @@ done
 
 log_note "Verify 'ls -s' can correctly list the space charged."
 for val in 1 2 3; do
-	blks=`$LS -ls /$TESTPOOL/fs_$val/$FILE | $AWK '{print $1}'`
-	(( used = blks * 512 / (1024 * 1024) ))
+	blks=`ls -ls /$TESTPOOL/fs_$val/$FILE | awk '{print $1}'`
+	(( used = blks * 512 ))
 	check_used $used $val
 done
 
-log_note "Verify df(1M) can corectly display the space charged."
+log_note "Verify df(8) can corectly display the space charged."
 for val in 1 2 3; do
-	used=`$DF -F zfs -h /$TESTPOOL/fs_$val/$FILE | $GREP $TESTPOOL/fs_$val \
-		| $AWK '{print $3}'`
+	used=`df -F zfs -k /$TESTPOOL/fs_$val/$FILE | grep $TESTPOOL/fs_$val \
+		| awk '{print $3}'`
+	(( used = used * 1024 )) # kb -> bytes
 	check_used $used $val
 done
 
 log_note "Verify du(1) can correctly display the space charged."
 for val in 1 2 3; do
-	used=`$DU -h /$TESTPOOL/fs_$val/$FILE | $AWK '{print $1}'`
+	used=`du -k /$TESTPOOL/fs_$val/$FILE | awk '{print $1}'`
+	(( used = used * 1024 )) # kb -> bytes
 	check_used $used $val
 done
 

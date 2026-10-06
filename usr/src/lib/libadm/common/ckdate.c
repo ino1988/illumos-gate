@@ -19,7 +19,7 @@
  * CDDL HEADER END
  */
 /*	Copyright (c) 1984, 1986, 1987, 1988, 1989 AT&T	*/
-/*	  All Rights Reserved  	*/
+/*	  All Rights Reserved	*/
 
 
 /*
@@ -115,22 +115,19 @@ static char *
 p_eday(char *string, int llim, int ulim)
 {
 	char *ptr, *copy;
-	char daynum[3];
 	int begin = -1;
 	int iday = 0;
 	int idaymax = 2;
 
-	daynum[0] = '\0';
 	if (*string == BLANK) {
 		string++;
 		idaymax--;
 	}
 	copy = string;
 	while (isdigit((unsigned char)*copy) && (iday < idaymax)) {
-		daynum[iday] = *copy++;
+		copy++;
 		iday++;
 	}
-	daynum[iday] = '\0';
 	if (iday == 1) {
 		llim = 1;
 		ulim = 9;
@@ -302,7 +299,7 @@ int
 ckdate_val(char *fmt, char *input)
 {
 	char ltrl, dfl;
-	int valid = 1; 	/* time of day string is valid for format */
+	int valid = 1;	/* time of day string is valid for format */
 
 	if ((fmt != NULL) && (fmtcheck(fmt) == 1))
 		return (4);
@@ -395,9 +392,8 @@ ckdate_val(char *fmt, char *input)
 		fmt++;
 	}	 /* end of while fmt and valid */
 
-	if ((*fmt == NULL) && ((input != NULL) && *input != 0)) {
-		if (*input != NULL)
-			valid = 0;
+	if ((*fmt == '\0') && ((input != NULL) && *input != '\0')) {
+		valid = 0;
 	}
 	return ((valid == 0));
 }

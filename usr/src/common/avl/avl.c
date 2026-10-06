@@ -24,7 +24,8 @@
  */
 
 /*
- * Copyright (c) 2014 by Delphix. All rights reserved.
+ * Copyright 2015 Nexenta Systems, Inc.  All rights reserved.
+ * Copyright (c) 2015 by Delphix. All rights reserved.
  */
 
 /*
@@ -102,21 +103,6 @@
 #include <sys/debug.h>
 #include <sys/avl.h>
 #include <sys/cmn_err.h>
-
-/*
- * Small arrays to translate between balance (or diff) values and child indices.
- *
- * Code that deals with binary tree data structures will randomly use
- * left and right children when examining a tree.  C "if()" statements
- * which evaluate randomly suffer from very poor hardware branch prediction.
- * In this code we avoid some of the branch mispredictions by using the
- * following translation arrays. They replace random branches with an
- * additional memory reference. Since the translation arrays are both very
- * small the data should remain efficiently in cache.
- */
-static const int  avl_child2balance[2]	= {-1, 1};
-static const int  avl_balance2child[]	= {0, 0, 1};
-
 
 /*
  * Walk from one node to the previous valued node (ie. an infix walk
@@ -273,8 +259,7 @@ avl_find(avl_tree_t *tree, const void *value, avl_index_t *where)
 #endif
 			return (AVL_NODE2DATA(node, off));
 		}
-		child = avl_balance2child[1 + diff];
-
+		child = (diff > 0);
 	}
 
 	if (where != NULL)
@@ -527,7 +512,7 @@ avl_insert(avl_tree_t *tree, void *new_data, avl_index_t where)
 		 * Compute the new balance
 		 */
 		old_balance = AVL_XBALANCE(node);
-		new_balance = old_balance + avl_child2balance[which_child];
+		new_balance = old_balance + (which_child ? 1 : -1);
 
 		/*
 		 * If we introduced equal balance, then we are done immediately
@@ -635,14 +620,17 @@ avl_add(avl_tree_t *tree, void *new_node)
 	/*
 	 * This is unfortunate.  We want to call panic() here, even for
 	 * non-DEBUG kernels.  In userland, however, we can't depend on anything
-	 * in libc or else the rtld build process gets confused.  So, all we can
-	 * do in userland is resort to a normal ASSERT().
+	 * in libc or else the rtld build process gets confused.
+	 * Thankfully, rtld provides us with its own assfail() so we can use
+	 * that here.  We use assfail() directly to get a nice error message
+	 * in the core - much like what panic() does for crashdumps.
 	 */
 	if (avl_find(tree, new_node, &where) != NULL)
 #ifdef _KERNEL
 		panic("avl_find() succeeded inside avl_add()");
 #else
-		ASSERT(0);
+		(void) assfail("avl_find() succeeded inside avl_add()",
+		    __FILE__, __LINE__);
 #endif
 	avl_insert(tree, new_node, where);
 }
@@ -704,7 +692,7 @@ avl_remove(avl_tree_t *tree, void *data)
 		 * choose node to swap from whichever side is taller
 		 */
 		old_balance = AVL_XBALANCE(delete);
-		left = avl_balance2child[old_balance + 1];
+		left = (old_balance > 0);
 		right = 1 - left;
 
 		/*
@@ -788,7 +776,7 @@ avl_remove(avl_tree_t *tree, void *data)
 		 */
 		node = parent;
 		old_balance = AVL_XBALANCE(node);
-		new_balance = old_balance - avl_child2balance[which_child];
+		new_balance = old_balance - (which_child ? 1 : -1);
 		parent = AVL_XPARENT(node);
 		which_child = AVL_XCHILD(node);
 
@@ -948,8 +936,8 @@ avl_is_empty(avl_tree_t *tree)
 
 /*
  * Post-order tree walk used to visit all tree nodes and destroy the tree
- * in post order. This is used for destroying a tree without paying any cost
- * for rebalancing it.
+ * in post order. This is used for removing all the nodes from a tree without
+ * paying any cost for rebalancing it.
  *
  * example:
  *

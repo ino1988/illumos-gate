@@ -20,6 +20,10 @@
  */
 
 /*
+ * Copyright (c) 2017 Peter Tribble.
+ */
+
+/*
  * Copyright (c) 1989, 2010, Oracle and/or its affiliates. All rights reserved.
  */
 
@@ -51,7 +55,6 @@
 #include <assert.h>
 #include <instzones_api.h>
 #include <pkglib.h>
-#include <pkgweb.h>
 #include <install.h>
 #include <libinst.h>
 #include <libadm.h>
@@ -94,7 +97,8 @@ static int	merg_respfile(void);
 static int	mv_pkgdirs(void);
 static int	rdonly(char *p);
 static void	ck_w_dryrun(int (*func)(), int type);
-static void	copyright(void), usage(void);
+static void	copyright(void);
+static void	usage(void) __NORETURN;
 static void	do_pkgask(boolean_t a_run_request_as_root);
 static void	rm_icas(char *casdir);
 static void	set_dryrun_dir_loc(void);
@@ -682,7 +686,7 @@ main(int argc, char *argv[])
 
 		/*
 		 * Same as pkgadd: Identify a file or directory which
-		 * contains output from a previous pkgask(1M)
+		 * contains output from a previous pkgask(8)
 		 * session. This file supplies the interaction responses
 		 * that would be requested by the package in interactive
 		 * mode. response must be a full pathname.

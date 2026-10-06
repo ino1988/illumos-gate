@@ -20,6 +20,7 @@
  * CDDL HEADER END
  */
 /*
+ * Copyright (c) 2018 Peter Tribble.
  * Copyright (c) 2014 Gary Mills
  * Copyright 2005 Sun Microsystems, Inc.  All rights reserved.
  * Use is subject to license terms.
@@ -51,6 +52,11 @@ static struct table t[] = {
 	{ "networks",	dogetnet },
 	{ "netmasks",	dogetnetmask },
 	{ "project",	dogetproject },
+	{ "auth_attr",	dogetauthattr },
+	{ "exec_attr",	dogetexecattr },
+	{ "prof_attr",	dogetprofattr },
+	{ "user_attr",	dogetuserattr },
+	{ "netgroup",	dogetnetgr },
 	{ NULL,		NULL }
 };
 
@@ -83,6 +89,10 @@ main(int argc, const char **argv)
 			case EXC_SYNTAX:
 				(void) fprintf(stderr,
 				    gettext("Syntax error\n"));
+				break;
+			case EXC_ERROR:
+				(void) fprintf(stderr,
+				    gettext("Internal error\n"));
 				break;
 			case EXC_ENUM_NOT_SUPPORTED:
 				(void) fprintf(stderr,

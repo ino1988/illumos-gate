@@ -21,6 +21,7 @@
 
 /*
  * Copyright (c) 2004, 2010, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2016 by Delphix. All rights reserved.
  */
 
 #ifndef	_REPCACHE_PROTOCOL_H
@@ -33,7 +34,7 @@
  * 1. Introduction
  * ---------------
  * This header file defines the private protocols between libscf(3lib) and
- * svc.configd(1m).  There are two separate protocols:
+ * svc.configd(8).  There are two separate protocols:
  *
  * 1.	The 'global' protocol, accessible via an fattach(3C)ed door located
  *	at REPOSITORY_DOOR_NAME.
@@ -49,7 +50,7 @@
  * 1.	If libscf(3lib) recieves an EINTR from door_call(), it doesn't know
  *      whether or not the server recieved (and is processing) its request.
  *
- * 2.	When svc.configd(1M) calls door_return(), the client may have already
+ * 2.	When svc.configd(8) calls door_return(), the client may have already
  *	received an EINTR, aborting its door_call().  In this case, the
  *	returned values are dropped on the floor.
  *
@@ -113,8 +114,8 @@
  *
  * An idiom the protocol uses to lower the number of round trips is
  * client-controlled identifiers.  The basic idea is this:  whenever a
- * client wants to set up and use a piece of server state, he picks an
- * integer *which he knows is not in use* to identify it.  The server then
+ * client wants to set up and use a piece of server state, it picks an
+ * integer *which it knows is not in use* to identify it.  The server then
  * maintains per-client, per-resource id->resource maps.  This has a number
  * of advantages:
  *

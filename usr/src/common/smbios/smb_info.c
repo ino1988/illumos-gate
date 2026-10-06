@@ -20,6 +20,9 @@
  */
 
 /*
+ * Copyright 2015 OmniTI Computer Consulting, Inc.  All rights reserved.
+ * Copyright 2019 Joyent, Inc.
+ * Copyright 2026 Oxide Computer Company
  * Copyright 2010 Sun Microsystems, Inc.  All rights reserved.
  * Use is subject to license terms.
  */
@@ -44,9 +47,28 @@
  * also to automatically handle the case of a structure that has been extended.
  * When necessary, this code can use smb_gteq() to determine whether the SMBIOS
  * data is of a particular revision that is supposed to contain a new field.
+ *
+ * Note, when trying to bzero the caller's struct you have to be careful about
+ * versions. One can only bzero the initial version that existed in illumos. In
+ * other words, if someone passes an older library handle that doesn't support a
+ * version you cannot assume that their structures have those additional members
+ * in them. Instead, a 'base' version is introduced for such types that have
+ * differences and instead we only bzero out the base version and then handle
+ * the additional members. In general, because all additional members will be
+ * assigned, there's no reason to zero them out unless they are arrays that
+ * won't be entirely filled in.
+ *
+ * Due to history, anything added after the update from version 2.4, in other
+ * words additions from or after '5094 Update libsmbios with recent items'
+ * (4e901881) is currently being used for this. While we don't allow software
+ * compiling against this to get an older form, this was the first major update
+ * and a good starting point for us to enforce this behavior which is useful for
+ * moving forward to making this more public.
  */
 
 #include <sys/smbios_impl.h>
+#include <sys/byteorder.h>
+#include <sys/debug.h>
 
 #ifdef _KERNEL
 #include <sys/sunddi.h>
@@ -55,6 +77,8 @@
 #include <unistd.h>
 #include <string.h>
 #endif
+
+#define	SMB_CONT_WORD	2		/* contained elements are word size */
 
 /*
  * A large number of SMBIOS structures contain a set of common strings used to
@@ -108,9 +132,9 @@ static const struct smb_infospec {
 		offsetof(smb_chassis_t, smbch_asset),
 		0,
 		0,
-		offsetof(smb_chassis_t, smbch_cn),
-		SMB_CONT_BYTE,
-		offsetof(smb_chassis_t, smbch_cv) },
+		0,
+		0,
+		0 },
 	{ SMB_TYPE_PROCESSOR,
 		offsetof(smb_processor_t, smbpr_manufacturer),
 		0,
@@ -177,6 +201,35 @@ static const struct smb_infospec {
 		0,
 		0,
 		0 },
+	{ SMB_TYPE_BATTERY,
+		offsetof(smb_battery_t, smbbat_manufacturer),
+		offsetof(smb_battery_t, smbbat_devname),
+		0,
+		/*
+		 * While the serial number is a part of the device, because of
+		 * the fact that the battery has two different serial numbers,
+		 * we don't include it here.
+		 */
+		0,
+		0,
+		offsetof(smb_battery_t, smbbat_loc),
+		0,
+		0,
+		0,
+		0
+	},
+	{ SMB_TYPE_FWINFO,
+		offsetof(smb_fwinfo_t, smbfwii_mfg),
+		0,
+		offsetof(smb_fwinfo_t, smbfwii_vers),
+		0,
+		0,
+		0,
+		0,
+		0,
+		0,
+		0
+	},
 	{ SMB_TYPE_EOT }
 };
 
@@ -194,19 +247,38 @@ smb_info_strptr(const smb_struct_t *stp, uint8_t off, int *n)
 }
 
 static void
-smb_info_bcopy(const smb_header_t *hp, void *dst, size_t dstlen)
+smb_info_bcopy_offset(const smb_header_t *hp, void *dst, size_t dstlen,
+    size_t offset)
 {
-	if (dstlen > hp->smbh_len) {
-		bcopy(hp, dst, hp->smbh_len);
-		bzero((char *)dst + hp->smbh_len, dstlen - hp->smbh_len);
-	} else
-		bcopy(hp, dst, dstlen);
+	if (offset >= hp->smbh_len) {
+		bzero(dst, dstlen);
+	} else if (offset + dstlen > hp->smbh_len) {
+		size_t nvalid = MIN(hp->smbh_len - offset, dstlen);
+		bcopy((char *)hp + offset, dst, nvalid);
+		bzero((char *)dst + nvalid, dstlen - nvalid);
+	} else {
+		bcopy((char *)hp + offset, dst, dstlen);
+	}
 }
 
-void
+static void
+smb_info_bcopy(const smb_header_t *hp, void *dst, size_t dstlen)
+{
+	return (smb_info_bcopy_offset(hp, dst, dstlen, 0));
+}
+
+smbios_entry_point_t
 smbios_info_smbios(smbios_hdl_t *shp, smbios_entry_t *ep)
 {
 	bcopy(&shp->sh_ent, ep, sizeof (smbios_entry_t));
+	return (shp->sh_ent_type);
+}
+
+void
+smbios_info_smbios_version(smbios_hdl_t *shp, smbios_version_t *v)
+{
+	v->smbv_major = SMB_MAJOR(shp->sh_smbvers);
+	v->smbv_minor = SMB_MINOR(shp->sh_smbvers);
 }
 
 #ifndef _KERNEL
@@ -282,7 +354,7 @@ smbios_info_contains(smbios_hdl_t *shp, id_t id, uint_t idc, id_t *idv)
 {
 	const smb_struct_t *stp = smb_lookup_id(shp, id);
 	const struct smb_infospec *isp;
-	id_t *cp;
+	const void *cp;
 	uint_t size;
 	uint8_t cnt;
 	int i, n;
@@ -298,18 +370,27 @@ smbios_info_contains(smbios_hdl_t *shp, id_t id, uint_t idc, id_t *idv)
 	if (isp->is_type == SMB_TYPE_EOT)
 		return (smb_set_errno(shp, ESMB_TYPE));
 
+	/*
+	 * Not every info type has contained objects. Use the size field as a
+	 * proxy for this being actually present.
+	 */
 	size = isp->is_contsz;
-	cnt = *((uint8_t *)(uintptr_t)stp->smbst_hdr + isp->is_contc);
-	cp = (id_t *)((uintptr_t)stp->smbst_hdr + isp->is_contv);
+	if (size != SMB_CONT_WORD)
+		return (smb_set_errno(shp, ESMB_INVAL));
+
+	if (stp->smbst_hdr->smbh_len <= isp->is_contc)
+		return (smb_set_errno(shp, ESMB_SHORT));
+
+	cnt = *(uint8_t *)((uintptr_t)stp->smbst_hdr + isp->is_contc);
+
+	if (stp->smbst_hdr->smbh_len < isp->is_contv + size * cnt)
+		return (smb_set_errno(shp, ESMB_SHORT));
+
+	cp = (const void *)((uintptr_t)stp->smbst_hdr + isp->is_contv);
 
 	n = MIN(cnt, idc);
 	for (i = 0; i < n; i++) {
-		if (size == SMB_CONT_WORD)
-			idv[i] = *((uint8_t *)(uintptr_t)cp + (i * 2));
-		else if (size == SMB_CONT_BYTE)
-			idv[i] = *((uint8_t *)(uintptr_t)cp + (i * 3));
-		else
-			return (smb_set_errno(shp, ESMB_INVAL));
+		idv[i] = *((const uint16_t *)cp + i);
 	}
 
 	return (cnt);
@@ -328,7 +409,10 @@ smbios_info_bios(smbios_hdl_t *shp, smbios_bios_t *bp)
 		return (smb_set_errno(shp, ESMB_CORRUPT));
 
 	bip = (smb_bios_t *)(uintptr_t)stp->smbst_hdr;
-	bzero(bp, sizeof (smbios_bios_t));
+	bzero(bp, sizeof (smb_base_bios_t));
+	if (smb_libgteq(shp, SMB_VERSION_31)) {
+		bp->smbb_extromsize = 0;
+	}
 
 	bp->smbb_vendor = smb_strptr(stp, bip->smbbi_vendor);
 	bp->smbb_version = smb_strptr(stp, bip->smbbi_version);
@@ -358,6 +442,50 @@ smbios_info_bios(smbios_hdl_t *shp, smbios_bios_t *bp)
 			bp->smbb_ecfwv.smbv_minor =
 			    bip->smbbi_xcflags[SMB_BIOSXB_ECFW_MIN];
 		}
+
+		if (bp->smbb_nxcflags > SMB_BIOSXB_EXTROM + 1 &&
+		    smb_gteq(shp, SMB_VERSION_31)) {
+			uint16_t val;
+			uint64_t rs;
+
+			/*
+			 * Because of the fact that the extended size is a
+			 * uint16_t and we'd need to define an explicit
+			 * endian-aware way to access it, we don't include it in
+			 * the number of extended flags below and thus subtract
+			 * its size.
+			 */
+			bp->smbb_nxcflags -= sizeof (uint16_t);
+			bcopy(&bip->smbbi_xcflags[SMB_BIOSXB_EXTROM], &val,
+			    sizeof (val));
+			val = LE_16(val);
+
+			/*
+			 * The upper two bits of the extended rom size are used
+			 * to indicate whether the other 14 bits are in MB or
+			 * GB.
+			 */
+			rs = SMB_BIOS_EXTROM_VALUE_MASK(val);
+			switch (SMB_BIOS_EXTROM_SHIFT_MASK(val)) {
+			case 0:
+				rs *= 1024ULL * 1024ULL;
+				break;
+			case 1:
+				rs *= 1024ULL * 1024ULL * 1024ULL;
+				break;
+			default:
+				rs = 0;
+				break;
+			}
+
+			if (smb_libgteq(shp, SMB_VERSION_31)) {
+				bp->smbb_extromsize = rs;
+			}
+		}
+	}
+
+	if (smb_libgteq(shp, SMB_VERSION_31) && bp->smbb_extromsize == 0) {
+		bp->smbb_extromsize = bp->smbb_romsize;
 	}
 
 	return (stp->smbst_hdr->smbh_hdl);
@@ -375,8 +503,24 @@ smbios_info_system(smbios_hdl_t *shp, smbios_system_t *sip)
 	smb_info_bcopy(stp->smbst_hdr, &si, sizeof (si));
 	bzero(sip, sizeof (smbios_system_t));
 
-	sip->smbs_uuid = ((smb_system_t *)stp->smbst_hdr)->smbsi_uuid;
-	sip->smbs_uuidlen = sizeof (si.smbsi_uuid);
+	/*
+	 * The UUID field was introduced in SMBIOS 2.1, it wasn't present in
+	 * SMBIOS 2.0. This library was first written against SMBIOS 2.4, which
+	 * required that and the family string. We only set the UUID field if we
+	 * have enough bytes for it.
+	 *
+	 * We really should check for the full spec's minimum lengths; however,
+	 * since this has never enforced this and the system relies on the
+	 * system information a fair bit, we basically instead only include the
+	 * UUID if we have enough bytes to cover it in its entirety.
+	 */
+	if (stp->smbst_hdr->smbh_len >= offsetof(smb_system_t, smbsi_wakeup)) {
+		sip->smbs_uuid = ((smb_system_t *)stp->smbst_hdr)->smbsi_uuid;
+		sip->smbs_uuidlen = sizeof (si.smbsi_uuid);
+	} else {
+		sip->smbs_uuid = NULL;
+		sip->smbs_uuidlen = 0;
+	}
 	sip->smbs_wakeup = si.smbsi_wakeup;
 	sip->smbs_sku = smb_strptr(stp, si.smbsi_sku);
 	sip->smbs_family = smb_strptr(stp, si.smbsi_family);
@@ -396,6 +540,13 @@ smbios_info_bboard(smbios_hdl_t *shp, id_t id, smbios_bboard_t *bbp)
 	if (stp->smbst_hdr->smbh_type != SMB_TYPE_BASEBOARD)
 		return (smb_set_errno(shp, ESMB_TYPE));
 
+	/*
+	 * Minimum baseboard size is 0x8, e.g. one has everything ahead of the
+	 * asset tag.
+	 */
+	if (stp->smbst_hdr->smbh_len < offsetof(smb_bboard_t, smbbb_asset))
+		return (smb_set_errno(shp, ESMB_SHORT));
+
 	smb_info_bcopy(stp->smbst_hdr, &bb, sizeof (bb));
 	bzero(bbp, sizeof (smbios_bboard_t));
 
@@ -411,17 +562,50 @@ int
 smbios_info_chassis(smbios_hdl_t *shp, id_t id, smbios_chassis_t *chp)
 {
 	const smb_struct_t *stp = smb_lookup_id(shp, id);
+	off_t skuoff;
 	smb_chassis_t ch;
+	smb_chassis_bonus_t b;
 
-	if (stp == NULL)
+	if (stp == NULL) {
 		return (-1); /* errno is set for us */
+	}
 
-	if (stp->smbst_hdr->smbh_type != SMB_TYPE_CHASSIS)
+	if (stp->smbst_hdr->smbh_type != SMB_TYPE_CHASSIS) {
 		return (smb_set_errno(shp, ESMB_TYPE));
+	}
+
+	/*
+	 * The minimum table length for the chassis is 0xd, which is the
+	 * starting point of the OEM data. This was set in SMBIOS 2.1. We don't
+	 * consider SMBIOS 2.0 tables right now.
+	 */
+	if (stp->smbst_hdr->smbh_len < offsetof(smb_chassis_t, smbch_oemdata)) {
+		return (smb_set_errno(shp, ESMB_SHORT));
+	}
 
 	smb_info_bcopy(stp->smbst_hdr, &ch, sizeof (ch));
-	bzero(chp, sizeof (smbios_chassis_t));
+	bzero(chp, sizeof (smb_base_chassis_t));
 
+	/*
+	 * See the comments for the smb_chassis_pre35_t in <sys/smbios_impl.h>
+	 * for an explanation as to why this is here. The use of smb_strptr with
+	 * index 0 below ensures that we initialize this to an empty string.
+	 */
+	if (smb_libgteq(shp, SMB_VERSION_35)) {
+		chp->smbc_sku = smb_strptr(stp, 0);
+	} else if (smb_libgteq(shp, SMB_VERSION_27)) {
+		smb_chassis_pre35_t *p35 = (smb_chassis_pre35_t *)chp;
+		bzero(p35->smbc_sku, sizeof (p35->smbc_sku));
+	}
+
+	/*
+	 * SMBIOS 3.9 added the rack type and height. Make sure to initialize
+	 * this if the library is new enough.
+	 */
+	if (smb_libgteq(shp, SMB_VERSION_39)) {
+		chp->smbc_rtype = 0;
+		chp->smbc_rheight = 0;
+	}
 	chp->smbc_oemdata = ch.smbch_oemdata;
 	chp->smbc_lock = (ch.smbch_type & SMB_CHT_LOCK) != 0;
 	chp->smbc_type = ch.smbch_type & ~SMB_CHT_LOCK;
@@ -434,7 +618,124 @@ smbios_info_chassis(smbios_hdl_t *shp, id_t id, smbios_chassis_t *chp)
 	chp->smbc_elems = ch.smbch_cn;
 	chp->smbc_elemlen = ch.smbch_cm;
 
+	/*
+	 * If the table is older than version 2.7 which added support for the
+	 * chassis SKU, there's no reason to proceed. A 2.7 table is not
+	 * required to have support for a chassis SKU so we don't proceed either
+	 * if there isn't space for the SKU byte. This is very common of
+	 * hypervisors.
+	 */
+	if (!smb_gteq(shp, SMB_VERSION_27)) {
+		return (0);
+	}
+
+	skuoff = sizeof (ch) + ch.smbch_cn * ch.smbch_cm;
+	smb_info_bcopy_offset(stp->smbst_hdr, &b, sizeof (b), skuoff);
+
+	/*
+	 * In the library versions between 2.7 and 3.4, we opted to embed the
+	 * SKU in the chassis structure itself, rather than include a pointer.
+	 * See the comments around the smb_chassis_pre35_t in
+	 * <sys/smbios_impl.h>.
+	 */
+	if (smb_libgteq(shp, SMB_VERSION_27) &&
+	    !smb_libgteq(shp, SMB_VERSION_34)) {
+		smb_chassis_pre35_t *p35 = (smb_chassis_pre35_t *)chp;
+		const char *str;
+
+		str = smb_strptr(stp, b.smbcb_sku);
+		(void) strlcpy(p35->smbc_sku, str, sizeof (p35->smbc_sku));
+	}
+
+	if (smb_libgteq(shp, SMB_VERSION_35)) {
+		chp->smbc_sku = smb_strptr(stp, b.smbcb_sku);
+	}
+
+	if (smb_libgteq(shp, SMB_VERSION_39)) {
+		chp->smbc_rtype = b.smbcb_rtype;
+		chp->smbc_rheight = b.smbcb_rheight;
+	}
+
 	return (0);
+}
+
+int
+smbios_info_chassis_elts(smbios_hdl_t *shp, id_t id, uint_t *nentsp,
+    smbios_chassis_entry_t **entsp)
+{
+	const smb_struct_t *stp = smb_lookup_id(shp, id);
+	smbios_chassis_entry_t *entry;
+	smb_chassis_t ch;
+	size_t entlen;
+	uint_t i;
+
+	if (stp == NULL) {
+		return (-1); /* errno is set for us */
+	}
+
+	if (stp->smbst_hdr->smbh_type != SMB_TYPE_CHASSIS) {
+		return (smb_set_errno(shp, ESMB_TYPE));
+	}
+
+	/*
+	 * We don't explicitly check the length of the table as it is legal for
+	 * the chassis table to be shorter than something that contains the
+	 * number of elements.
+	 */
+	smb_info_bcopy(stp->smbst_hdr, &ch, sizeof (ch));
+	if (ch.smbch_cn == 0) {
+		*nentsp = 0;
+		*entsp = NULL;
+		return (0);
+	}
+
+	if (ch.smbch_cm != sizeof (smb_chassis_entry_t)) {
+		return (smb_set_errno(shp, ESMB_CORRUPT));
+	}
+
+	entlen = ch.smbch_cm * ch.smbch_cn;
+	if (stp->smbst_hdr->smbh_len < sizeof (ch) + entlen) {
+		return (smb_set_errno(shp, ESMB_SHORT));
+	}
+
+	if ((entry = smb_alloc(entlen)) == NULL) {
+		return (smb_set_errno(shp, ESMB_NOMEM));
+	}
+
+	for (i = 0; i < ch.smbch_cn; i++) {
+		smb_chassis_entry_t e;
+		size_t off = sizeof (ch) + i * sizeof (e);
+
+		smb_info_bcopy_offset(stp->smbst_hdr, &e, sizeof (e), off);
+		/*
+		 * The top bit is used to indicate what type of record this is,
+		 * while the lower 7-bits indicate the actual type.
+		 */
+		entry[i].smbce_type = e.smbce_type & 0x80 ?
+		    SMB_CELT_SMBIOS : SMB_CELT_BBOARD;
+		entry[i].smbce_elt = e.smbce_type & 0x7f;
+		entry[i].smbce_min = e.smbce_min;
+		entry[i].smbce_max = e.smbce_max;
+	}
+
+	*entsp = entry;
+	*nentsp = ch.smbch_cn;
+
+	return (0);
+}
+
+void
+smbios_info_chassis_elts_free(smbios_hdl_t *shp, uint_t nents,
+    smbios_chassis_entry_t *ent)
+{
+	size_t sz = nents * sizeof (smbios_chassis_entry_t);
+
+	if (nents == 0) {
+		ASSERT3P(ent, ==, NULL);
+		return;
+	}
+
+	smb_free(ent, sz);
 }
 
 int
@@ -450,12 +751,13 @@ smbios_info_processor(smbios_hdl_t *shp, id_t id, smbios_processor_t *pp)
 		return (smb_set_errno(shp, ESMB_TYPE));
 
 	smb_info_bcopy(stp->smbst_hdr, &p, sizeof (p));
-	bzero(pp, sizeof (smbios_processor_t));
+	bzero(pp, sizeof (smb_base_processor_t));
 
 	pp->smbp_cpuid = p.smbpr_cpuid;
 	pp->smbp_type = p.smbpr_type;
 	pp->smbp_family = p.smbpr_family;
 	pp->smbp_voltage = p.smbpr_voltage;
+	pp->smbp_clkspeed = p.smbpr_clkspeed;
 	pp->smbp_maxspeed = p.smbpr_maxspeed;
 	pp->smbp_curspeed = p.smbpr_curspeed;
 	pp->smbp_status = p.smbpr_status;
@@ -463,6 +765,45 @@ smbios_info_processor(smbios_hdl_t *shp, id_t id, smbios_processor_t *pp)
 	pp->smbp_l1cache = p.smbpr_l1cache;
 	pp->smbp_l2cache = p.smbpr_l2cache;
 	pp->smbp_l3cache = p.smbpr_l3cache;
+
+	if (smb_libgteq(shp, SMB_VERSION_25)) {
+		pp->smbp_corecount = p.smbpr_corecount;
+		pp->smbp_coresenabled = p.smbpr_coresenabled;
+		pp->smbp_threadcount = p.smbpr_threadcount;
+		pp->smbp_cflags = p.smbpr_cflags;
+	}
+
+	if (smb_libgteq(shp, SMB_VERSION_26)) {
+		if (pp->smbp_family == 0xfe) {
+			pp->smbp_family = p.smbpr_family2;
+		}
+	}
+
+	if (smb_libgteq(shp, SMB_VERSION_30)) {
+		if (pp->smbp_corecount == 0xff) {
+			pp->smbp_corecount = p.smbpr_corecount2;
+		}
+		if (pp->smbp_coresenabled == 0xff) {
+			pp->smbp_coresenabled = p.smbpr_coresenabled2;
+		}
+		if (pp->smbp_threadcount == 0xff) {
+			pp->smbp_threadcount = p.smbpr_threadcount2;
+		}
+	}
+
+	if (smb_libgteq(shp, SMB_VERSION_36)) {
+		pp->smbp_threadsenabled = p.smbpr_threaden;
+	}
+
+	/*
+	 * SMBIOS 3.8 added a socket string which is only required if the
+	 * processor upgrade constant is not present. We don't try to munge
+	 * these two together here and leave it to clients to figure out
+	 * (especially as what'll happen in practice is unknown).
+	 */
+	if (smb_libgteq(shp, SMB_VERSION_38)) {
+		pp->smbp_socktype = smb_strptr(stp, p.smbpr_socktype);
+	}
 
 	return (0);
 }
@@ -480,7 +821,7 @@ smbios_info_cache(smbios_hdl_t *shp, id_t id, smbios_cache_t *cap)
 		return (smb_set_errno(shp, ESMB_TYPE));
 
 	smb_info_bcopy(stp->smbst_hdr, &c, sizeof (c));
-	bzero(cap, sizeof (smbios_cache_t));
+	bzero(cap, sizeof (smb_base_cache_t));
 
 	cap->smba_maxsize = SMB_CACHE_SIZE(c.smbca_maxsize);
 	cap->smba_size = SMB_CACHE_SIZE(c.smbca_size);
@@ -499,6 +840,19 @@ smbios_info_cache(smbios_hdl_t *shp, id_t id, smbios_cache_t *cap)
 
 	if (SMB_CACHE_CFG_SOCKETED(c.smbca_config))
 		cap->smba_flags |= SMB_CAF_SOCKETED;
+
+	if (smb_libgteq(shp, SMB_VERSION_31)) {
+		cap->smba_maxsize2 = SMB_CACHE_EXT_SIZE(c.smbca_maxsize2);
+		cap->smba_size2 = SMB_CACHE_EXT_SIZE(c.smbca_size2);
+
+		if (cap->smba_maxsize2 == 0) {
+			cap->smba_maxsize2 = cap->smba_maxsize;
+		}
+
+		if (cap->smba_size2 == 0) {
+			cap->smba_size2 = cap->smba_size;
+		}
+	}
 
 	return (0);
 }
@@ -533,6 +887,8 @@ smbios_info_slot(smbios_hdl_t *shp, id_t id, smbios_slot_t *sp)
 {
 	const smb_struct_t *stp = smb_lookup_id(shp, id);
 	smb_slot_t s;
+	smb_slot_cont_t cont;
+	size_t off;
 
 	if (stp == NULL)
 		return (-1); /* errno is set for us */
@@ -541,7 +897,7 @@ smbios_info_slot(smbios_hdl_t *shp, id_t id, smbios_slot_t *sp)
 		return (smb_set_errno(shp, ESMB_TYPE));
 
 	smb_info_bcopy(stp->smbst_hdr, &s, sizeof (s));
-	bzero(sp, sizeof (smbios_slot_t));
+	bzero(sp, sizeof (smb_base_slot_t));
 
 	sp->smbl_name = smb_strptr(stp, s.smbsl_name);
 	sp->smbl_type = s.smbsl_type;
@@ -554,6 +910,101 @@ smbios_info_slot(smbios_hdl_t *shp, id_t id, smbios_slot_t *sp)
 	sp->smbl_sg = s.smbsl_sg;
 	sp->smbl_bus = s.smbsl_bus;
 	sp->smbl_df = s.smbsl_df;
+
+	if (smb_libgteq(shp, SMB_VERSION_32)) {
+		sp->smbl_dbw = s.smbsl_dbw;
+		sp->smbl_npeers = s.smbsl_npeers;
+	}
+
+	if (!smb_libgteq(shp, SMB_VERSION_34)) {
+		return (0);
+	}
+
+	/*
+	 * In SMBIOS 3.4, several members were added to follow the variable
+	 * number of peers. These are defined to start at byte 0x14 + 5 *
+	 * npeers. If the table is from before 3.4, we simple zero things out.
+	 * Otherwise we check if the length covers the peers and this addendum
+	 * to include it as the table length is allowed to be less than this and
+	 * not include it.
+	 */
+	off = SMB_SLOT_CONT_START + 5 * s.smbsl_npeers;
+	smb_info_bcopy_offset(stp->smbst_hdr, &cont, sizeof (cont), off);
+	sp->smbl_info = cont.smbsl_info;
+	sp->smbl_pwidth = cont.smbsl_pwidth;
+	sp->smbl_pitch = cont.smbsl_pitch;
+
+	if (smb_libgteq(shp, SMB_VERSION_35)) {
+		sp->smbl_height = cont.smbsl_height;
+	}
+
+	return (0);
+}
+
+void
+smbios_info_slot_peers_free(smbios_hdl_t *shp, uint_t npeers,
+    smbios_slot_peer_t *peer)
+{
+	size_t sz = npeers * sizeof (smbios_slot_peer_t);
+
+	if (npeers == 0) {
+		ASSERT3P(peer, ==, NULL);
+		return;
+	}
+
+	smb_free(peer, sz);
+}
+
+int
+smbios_info_slot_peers(smbios_hdl_t *shp, id_t id, uint_t *npeers,
+    smbios_slot_peer_t **peerp)
+{
+	const smb_struct_t *stp = smb_lookup_id(shp, id);
+	const smb_slot_t *slotp;
+	smbios_slot_peer_t *peer;
+	size_t minlen;
+	uint_t i;
+
+	if (stp == NULL)
+		return (-1); /* errno is set for us */
+
+	slotp = (const smb_slot_t *)stp->smbst_hdr;
+
+	if (stp->smbst_hdr->smbh_type != SMB_TYPE_SLOT)
+		return (smb_set_errno(shp, ESMB_TYPE));
+
+	if (stp->smbst_hdr->smbh_len <= offsetof(smb_slot_t, smbsl_npeers) ||
+	    slotp->smbsl_npeers == 0) {
+		*npeers = 0;
+		*peerp = NULL;
+		return (0);
+	}
+
+	/*
+	 * Make sure that the size of the structure makes sense for the number
+	 * of peers reported.
+	 */
+	minlen = slotp->smbsl_npeers * sizeof (smb_slot_peer_t) +
+	    offsetof(smb_slot_t, smbsl_npeers);
+	if (stp->smbst_hdr->smbh_len < minlen) {
+		return (smb_set_errno(shp, ESMB_SHORT));
+	}
+
+	if ((peer = smb_alloc(slotp->smbsl_npeers *
+	    sizeof (smbios_slot_peer_t))) == NULL) {
+		return (smb_set_errno(shp, ESMB_NOMEM));
+	}
+
+	for (i = 0; i < slotp->smbsl_npeers; i++) {
+		peer[i].smblp_group = slotp->smbsl_peers[i].smbspb_group_no;
+		peer[i].smblp_bus = slotp->smbsl_peers[i].smbspb_bus;
+		peer[i].smblp_device = slotp->smbsl_peers[i].smbspb_df >> 3;
+		peer[i].smblp_function = slotp->smbsl_peers[i].smbspb_df & 0x7;
+		peer[i].smblp_data_width = slotp->smbsl_peers[i].smbspb_width;
+	}
+
+	*npeers = slotp->smbsl_npeers;
+	*peerp = peer;
 
 	return (0);
 }
@@ -718,6 +1169,8 @@ smbios_info_memarray(smbios_hdl_t *shp, id_t id, smbios_memarray_t *map)
 
 	if (m.smbmarr_cap != 0x80000000)
 		map->smbma_size = (uint64_t)m.smbmarr_cap * 1024;
+	else if (m.smbmarr_extcap != 0)
+		map->smbma_size = m.smbmarr_extcap;
 	else
 		map->smbma_size = 0; /* unknown */
 
@@ -741,9 +1194,15 @@ smbios_info_memarrmap(smbios_hdl_t *shp, id_t id, smbios_memarrmap_t *map)
 
 	map->smbmam_array = m.smbamap_array;
 	map->smbmam_width = m.smbamap_width;
-	map->smbmam_addr = (uint64_t)m.smbamap_start * 1024;
-	map->smbmam_size = (uint64_t)
-	    (m.smbamap_end - m.smbamap_start + 1) * 1024;
+
+	if (m.smbamap_start != 0xFFFFFFFF && m.smbamap_end != 0xFFFFFFFF) {
+		map->smbmam_addr = (uint64_t)m.smbamap_start * 1024;
+		map->smbmam_size = (uint64_t)
+		    (m.smbamap_end - m.smbamap_start + 1) * 1024;
+	} else if (m.smbamap_extstart != 0 && m.smbamap_extend != 0) {
+		map->smbmam_addr = m.smbamap_extstart;
+		map->smbmam_size = m.smbamap_extend - m.smbamap_extstart + 1;
+	}
 
 	return (0);
 }
@@ -761,14 +1220,17 @@ smbios_info_memdevice(smbios_hdl_t *shp, id_t id, smbios_memdevice_t *mdp)
 		return (smb_set_errno(shp, ESMB_TYPE));
 
 	smb_info_bcopy(stp->smbst_hdr, &m, sizeof (m));
-	bzero(mdp, sizeof (smbios_memdevice_t));
+	bzero(mdp, sizeof (smb_base_memdevice_t));
 
 	mdp->smbmd_array = m.smbmdev_array;
 	mdp->smbmd_error = m.smbmdev_error;
 	mdp->smbmd_twidth = m.smbmdev_twidth == 0xFFFF ? -1U : m.smbmdev_twidth;
 	mdp->smbmd_dwidth = m.smbmdev_dwidth == 0xFFFF ? -1U : m.smbmdev_dwidth;
 
-	if (mdp->smbmd_size != 0xFFFF) {
+	if (m.smbmdev_size == 0x7FFF) {
+		mdp->smbmd_size = (uint64_t)m.smbmdev_extsize;
+		mdp->smbmd_size *= 1024 * 1024; /* convert MB to bytes */
+	} else if (m.smbmdev_size != 0xFFFF) {
 		mdp->smbmd_size = (uint64_t)(m.smbmdev_size & ~SMB_MDS_KBYTES);
 		if (m.smbmdev_size & SMB_MDS_KBYTES)
 			mdp->smbmd_size *= 1024;
@@ -780,12 +1242,74 @@ smbios_info_memdevice(smbios_hdl_t *shp, id_t id, smbios_memdevice_t *mdp)
 	mdp->smbmd_form = m.smbmdev_form;
 	mdp->smbmd_set = m.smbmdev_set;
 	mdp->smbmd_type = m.smbmdev_type;
+	mdp->smbmd_speed = m.smbmdev_speed;
 	mdp->smbmd_flags = m.smbmdev_flags;
 	mdp->smbmd_dloc = smb_strptr(stp, m.smbmdev_dloc);
 	mdp->smbmd_bloc = smb_strptr(stp, m.smbmdev_bloc);
 
-	if (m.smbmdev_speed != 0)
-		mdp->smbmd_speed = 1000 / m.smbmdev_speed; /* MHz -> nsec */
+	if (smb_libgteq(shp, SMB_VERSION_26)) {
+		mdp->smbmd_rank = m.smbmdev_attrs & 0x0F;
+	}
+
+	if (smb_libgteq(shp, SMB_VERSION_27)) {
+		mdp->smbmd_clkspeed = m.smbmdev_clkspeed;
+	}
+
+	if (smb_libgteq(shp, SMB_VERSION_28)) {
+		mdp->smbmd_minvolt = m.smbmdev_minvolt;
+		mdp->smbmd_maxvolt = m.smbmdev_maxvolt;
+		mdp->smbmd_confvolt = m.smbmdev_confvolt;
+	}
+
+	if (smb_libgteq(shp, SMB_VERSION_32)) {
+		mdp->smbmd_memtech = m.smbmdev_memtech;
+		mdp->smbmd_opcap_flags = m.smbmdev_opmode;
+		mdp->smbmd_firmware_rev = smb_strptr(stp,
+		    m.smbmdev_fwver);
+		mdp->smbmd_modmfg_id = m.smbmdev_modulemfgid;
+		mdp->smbmd_modprod_id = m.smbmdev_moduleprodid;
+		mdp->smbmd_cntrlmfg_id = m.smbmdev_memsysmfgid;
+		mdp->smbmd_cntrlprod_id = m.smbmdev_memsysprodid;
+		mdp->smbmd_nvsize = m.smbmdev_nvsize;
+		mdp->smbmd_volatile_size = m.smbmdev_volsize;
+		mdp->smbmd_cache_size = m.smbmdev_cachesize;
+		mdp->smbmd_logical_size = m.smbmdev_logicalsize;
+	}
+
+	if (smb_libgteq(shp, SMB_VERSION_33)) {
+		if (m.smbmdev_speed == 0xffff) {
+			mdp->smbmd_extspeed = m.smbmdev_extspeed;
+		} else {
+			mdp->smbmd_extspeed = m.smbmdev_speed;
+		}
+
+		if (m.smbmdev_clkspeed == 0xffff) {
+			mdp->smbmd_extclkspeed = m.smbmdev_extclkspeed;
+		} else {
+			mdp->smbmd_extclkspeed = m.smbmdev_clkspeed;
+		}
+	}
+
+	/*
+	 * The unknown key for missing revision information for the RCD and
+	 * PMIC0 is not all zeros. As such, we need to look if the device SMBIOS
+	 * table is not 3.7 then we need to fix up the bits that we copied.
+	 * After that we need to go back and check the consumer's version to
+	 * actually place this data there.
+	 */
+	if (!smb_gteq(shp, SMB_VERSION_37)) {
+		m.smbmdev_pmic0mfgid = SMB_MD_MFG_UNKNOWN;
+		m.smbmdev_pmic0rev = SMB_MD_REV_UNKNOWN;
+		m.smbmdev_rcdmfgid = SMB_MD_MFG_UNKNOWN;
+		m.smbmdev_rcdrev = SMB_MD_REV_UNKNOWN;
+	}
+
+	if (smb_libgteq(shp, SMB_VERSION_37)) {
+		mdp->smbmd_pmic0_mfgid = m.smbmdev_pmic0mfgid;
+		mdp->smbmd_pmic0_rev = m.smbmdev_pmic0rev;
+		mdp->smbmd_rcd_mfgid = m.smbmdev_rcdmfgid;
+		mdp->smbmd_rcd_rev = m.smbmdev_rcdrev;
+	}
 
 	return (0);
 }
@@ -807,12 +1331,18 @@ smbios_info_memdevmap(smbios_hdl_t *shp, id_t id, smbios_memdevmap_t *mdp)
 
 	mdp->smbmdm_device = m.smbdmap_device;
 	mdp->smbmdm_arrmap = m.smbdmap_array;
-	mdp->smbmdm_addr = (uint64_t)m.smbdmap_start * 1024;
-	mdp->smbmdm_size = (uint64_t)
-	    (m.smbdmap_end - m.smbdmap_start + 1) * 1024;
 	mdp->smbmdm_rpos = m.smbdmap_rpos;
 	mdp->smbmdm_ipos = m.smbdmap_ipos;
 	mdp->smbmdm_idepth = m.smbdmap_idepth;
+
+	if (m.smbdmap_start != 0xFFFFFFFF && m.smbdmap_end != 0xFFFFFFFF) {
+		mdp->smbmdm_addr = (uint64_t)m.smbdmap_start * 1024;
+		mdp->smbmdm_size = (uint64_t)
+		    (m.smbdmap_end - m.smbdmap_start + 1) * 1024;
+	} else if (m.smbdmap_extstart != 0 && m.smbdmap_extend != 0) {
+		mdp->smbmdm_addr = m.smbdmap_extstart;
+		mdp->smbmdm_size = m.smbdmap_extend - m.smbdmap_extstart + 1;
+	}
 
 	return (0);
 }
@@ -841,12 +1371,17 @@ id_t
 smbios_info_boot(smbios_hdl_t *shp, smbios_boot_t *bp)
 {
 	const smb_struct_t *stp = smb_lookup_type(shp, SMB_TYPE_BOOT);
-	const smb_boot_t *b = (smb_boot_t *)(uintptr_t)stp->smbst_hdr;
+	const smb_boot_t *b;
 
 	if (stp == NULL)
 		return (-1); /* errno is set for us */
 
+	if (stp->smbst_hdr->smbh_len < sizeof (smb_boot_t))
+		return (smb_set_errno(shp, ESMB_SHORT));
+
 	bzero(bp, sizeof (smbios_boot_t));
+
+	b = (smb_boot_t *)(uintptr_t)stp->smbst_hdr;
 
 	bp->smbt_status = b->smbbo_status[0];
 	bp->smbt_size = stp->smbst_hdr->smbh_len - sizeof (smb_boot_t);
@@ -1021,13 +1556,24 @@ smbios_info_extprocessor(smbios_hdl_t *shp, id_t id,
 	if (stp->smbst_hdr->smbh_type != SUN_OEM_EXT_PROCESSOR)
 		return (smb_set_errno(shp, ESMB_TYPE));
 
+	if (stp->smbst_hdr->smbh_len < sizeof (smb_processor_ext_t))
+		return (smb_set_errno(shp, ESMB_SHORT));
+
 	exp = (smb_processor_ext_t *)(uintptr_t)stp->smbst_hdr;
 	bzero(epp, sizeof (smbios_processor_ext_t));
 
 	epp->smbpe_processor = exp->smbpre_processor;
 	epp->smbpe_fru = exp->smbpre_fru;
 	epp->smbpe_n = exp->smbpre_n;
-	epp->smbpe_apicid = exp->smbpre_apicid;
+	if (epp->smbpe_n > 0) {
+		if (stp->smbst_hdr->smbh_len < sizeof (smb_processor_ext_t) +
+		    exp->smbpre_n * sizeof (uint16_t)) {
+			return (smb_set_errno(shp, ESMB_SHORT));
+		}
+		epp->smbpe_apicid = exp->smbpre_apicid;
+	} else {
+		epp->smbpe_apicid = NULL;
+	}
 
 	return (0);
 }
@@ -1043,6 +1589,9 @@ smbios_info_extport(smbios_hdl_t *shp, id_t id, smbios_port_ext_t *eportp)
 
 	if (stp->smbst_hdr->smbh_type != SUN_OEM_EXT_PORT)
 		return (smb_set_errno(shp, ESMB_TYPE));
+
+	if (stp->smbst_hdr->smbh_len < sizeof (smb_port_ext_t))
+		return (smb_set_errno(shp, ESMB_SHORT));
 
 	ep = (smb_port_ext_t *)(uintptr_t)stp->smbst_hdr;
 	bzero(eportp, sizeof (smbios_port_ext_t));
@@ -1118,8 +1667,776 @@ smbios_info_extmemdevice(smbios_hdl_t *shp, id_t id,
 
 	emdp->smbmdeve_md = exmd.smbmdeve_mdev;
 	emdp->smbmdeve_drch = exmd.smbmdeve_dchan;
-	emdp->smbmdeve_ncs  = exmd.smbmdeve_ncs;
-	emdp->smbmdeve_cs = exmd.smbmdeve_cs;
+	emdp->smbmdeve_ncs = exmd.smbmdeve_ncs;
+
+	return (0);
+}
+
+int
+smbios_info_extmemdevice_cs(smbios_hdl_t *shp, id_t id, uint_t *ncsp,
+    uint8_t **csp)
+{
+	const smb_struct_t *stp = smb_lookup_id(shp, id);
+	smb_memdevice_ext_t exmd;
+	size_t size;
+	void *buf;
+
+	if (stp == NULL)
+		return (-1); /* errno is set for us */
+
+	if (stp->smbst_hdr->smbh_type != SUN_OEM_EXT_MEMDEVICE)
+		return (smb_set_errno(shp, ESMB_TYPE));
+
+	smb_info_bcopy(stp->smbst_hdr, &exmd, sizeof (exmd));
+	if (exmd.smbmdeve_ncs == 0) {
+		*ncsp = 0;
+		*csp = NULL;
+		return (0);
+	}
+
+	size = exmd.smbmdeve_ncs * sizeof (*exmd.smbmdeve_cs);
+
+	if (stp->smbst_hdr->smbh_len < sizeof (exmd) + size)
+		return (smb_set_errno(shp, ESMB_SHORT));
+
+	buf = smb_alloc(size);
+	if (buf == NULL)
+		return (smb_set_errno(shp, ESMB_NOMEM));
+	smb_info_bcopy_offset(stp->smbst_hdr, buf, size, sizeof (exmd));
+
+	*ncsp = exmd.smbmdeve_ncs;
+	*csp = buf;
+	return (0);
+}
+
+void
+smbios_info_extmemdevice_cs_free(smbios_hdl_t *shp __unused, uint_t ncs,
+    uint8_t *csp)
+{
+	size_t size = ncs * sizeof (uint8_t);
+
+	if (size == 0) {
+		ASSERT3P(csp, ==, NULL);
+		return;
+	}
+	smb_free(csp, size);
+}
+
+int
+smbios_info_powersup(smbios_hdl_t *shp, id_t id, smbios_powersup_t *psup)
+{
+	const smb_struct_t *stp = smb_lookup_id(shp, id);
+	smb_powersup_t psu;
+
+	if (stp == NULL)
+		return (-1); /* errno is set for us */
+
+	if (stp->smbst_hdr->smbh_type != SMB_TYPE_POWERSUP)
+		return (smb_set_errno(shp, ESMB_TYPE));
+
+	/* The minimum length required by the spec is 0x10. */
+	if (stp->smbst_hdr->smbh_len < 0x10)
+		return (smb_set_errno(shp, ESMB_SHORT));
+
+	bzero(psup, sizeof (*psup));
+	smb_info_bcopy(stp->smbst_hdr, &psu, sizeof (psu));
+	psup->smbps_group = psu.smbpsup_group;
+	psup->smbps_maxout = psu.smbpsup_max;
+
+	if (SMB_PSU_CHARS_ISHOT(psu.smbpsup_char))
+		psup->smbps_flags |= SMB_POWERSUP_F_HOT;
+	if (SMB_PSU_CHARS_ISPRES(psu.smbpsup_char))
+		psup->smbps_flags |= SMB_POWERSUP_F_PRESENT;
+	if (SMB_PSU_CHARS_ISUNPLUG(psu.smbpsup_char))
+		psup->smbps_flags |= SMB_POWERSUP_F_UNPLUG;
+
+	psup->smbps_ivrs = SMB_PSU_CHARS_IVRS(psu.smbpsup_char);
+	psup->smbps_status = SMB_PSU_CHARS_STATUS(psu.smbpsup_char);
+	psup->smbps_pstype = SMB_PSU_CHARS_TYPE(psu.smbpsup_char);
+
+	if (stp->smbst_hdr->smbh_len >= 0x12) {
+		psup->smbps_vprobe = psu.smbpsup_vprobe;
+	} else {
+		psup->smbps_vprobe = 0xffff;
+	}
+
+	if (stp->smbst_hdr->smbh_len >= 0x14) {
+		psup->smbps_cooldev = psu.smbpsup_cooldev;
+	} else {
+		psup->smbps_cooldev = 0xffff;
+	}
+
+	if (stp->smbst_hdr->smbh_len >= 0x16) {
+		psup->smbps_iprobe = psu.smbpsup_iprobe;
+	} else {
+		psup->smbps_iprobe = 0xffff;
+	}
+
+	return (0);
+}
+
+int
+smbios_info_vprobe(smbios_hdl_t *shp, id_t id, smbios_vprobe_t *vprobe)
+{
+	const smb_struct_t *stp = smb_lookup_id(shp, id);
+	smb_vprobe_t vp;
+
+	if (stp == NULL)
+		return (-1); /* errno is set for us */
+
+	if (stp->smbst_hdr->smbh_type != SMB_TYPE_VPROBE)
+		return (smb_set_errno(shp, ESMB_TYPE));
+
+	if (stp->smbst_hdr->smbh_len < SMB_VPROBE_MINLEN)
+		return (smb_set_errno(shp, ESMB_SHORT));
+
+	bzero(vprobe, sizeof (*vprobe));
+	smb_info_bcopy(stp->smbst_hdr, &vp, sizeof (vp));
+	vprobe->smbvp_description = smb_strptr(stp, vp.smbvpr_descr);
+	vprobe->smbvp_location = SMB_VPROBE_LOCATION(vp.smbvpr_locstat);
+	vprobe->smbvp_status = SMB_VPROBE_STATUS(vp.smbvpr_locstat);
+	vprobe->smbvp_maxval = vp.smbvpr_maxval;
+	vprobe->smbvp_minval = vp.smbvpr_minval;
+	vprobe->smbvp_resolution = vp.smbvpr_resolution;
+	vprobe->smbvp_tolerance	= vp.smbvpr_tolerance;
+	vprobe->smbvp_accuracy = vp.smbvpr_accuracy;
+
+	if (stp->smbst_hdr->smbh_len >= SMB_VPROBE_NOMINAL_MINLEN) {
+		vprobe->smbvp_nominal = vp.smbvpr_nominal;
+	} else {
+		vprobe->smbvp_nominal = SMB_PROBE_UNKNOWN_VALUE;
+	}
+
+	return (0);
+}
+
+int
+smbios_info_cooldev(smbios_hdl_t *shp, id_t id, smbios_cooldev_t *cooldev)
+{
+	const smb_struct_t *stp = smb_lookup_id(shp, id);
+	smb_cooldev_t cd;
+
+	if (stp == NULL)
+		return (-1); /* errno is set for us */
+
+	if (stp->smbst_hdr->smbh_type != SMB_TYPE_COOLDEV)
+		return (smb_set_errno(shp, ESMB_TYPE));
+
+	if (stp->smbst_hdr->smbh_len < SMB_COOLDEV_MINLEN)
+		return (smb_set_errno(shp, ESMB_SHORT));
+
+	bzero(cooldev, sizeof (*cooldev));
+	smb_info_bcopy(stp->smbst_hdr, &cd, sizeof (cd));
+	cooldev->smbcd_tprobe = cd.smbcdev_tprobe;
+	cooldev->smbcd_type = SMB_COOLDEV_TYPE(cd.smbcdev_typstat);
+	cooldev->smbcd_status = SMB_COOLDEV_STATUS(cd.smbcdev_typstat);
+	cooldev->smbcd_group = cd.smbcdev_group;
+	cooldev->smbcd_oem = cd.smbcdev_oem;
+
+	if (stp->smbst_hdr->smbh_len >= SMB_COOLDEV_NOMINAL_MINLEN) {
+		cooldev->smbcd_nominal = cd.smbcdev_nominal;
+	} else {
+		cooldev->smbcd_nominal = SMB_PROBE_UNKNOWN_VALUE;
+	}
+
+	/*
+	 * The description field was added in SMBIOS version 2.7. The
+	 * SMB_TYPE_COOLDEV support was only added after all of the 2.7+ fields
+	 * were added in the spec. So while a user may request an older version,
+	 * we don't have to worry about old structures and just simply skip it
+	 * if they're not asking for it.
+	 */
+	if (smb_libgteq(shp, SMB_VERSION_27) &&
+	    smb_gteq(shp, SMB_VERSION_27) &&
+	    stp->smbst_hdr->smbh_len >= SMB_COOLDEV_DESCR_MINLEN) {
+		cooldev->smbcd_descr = smb_strptr(stp, cd.smbcdev_descr);
+	} else {
+		cooldev->smbcd_descr = NULL;
+	}
+
+	return (0);
+}
+
+int
+smbios_info_tprobe(smbios_hdl_t *shp, id_t id, smbios_tprobe_t *tprobe)
+{
+	const smb_struct_t *stp = smb_lookup_id(shp, id);
+	smb_tprobe_t tp;
+
+	if (stp == NULL)
+		return (-1); /* errno is set for us */
+
+	if (stp->smbst_hdr->smbh_type != SMB_TYPE_TPROBE)
+		return (smb_set_errno(shp, ESMB_TYPE));
+
+	if (stp->smbst_hdr->smbh_len < SMB_TPROBE_MINLEN)
+		return (smb_set_errno(shp, ESMB_SHORT));
+
+	bzero(tprobe, sizeof (*tprobe));
+	smb_info_bcopy(stp->smbst_hdr, &tp, sizeof (tp));
+	tprobe->smbtp_description = smb_strptr(stp, tp.smbtpr_descr);
+	tprobe->smbtp_location = SMB_TPROBE_LOCATION(tp.smbtpr_locstat);
+	tprobe->smbtp_status = SMB_TPROBE_STATUS(tp.smbtpr_locstat);
+	tprobe->smbtp_maxval = tp.smbtpr_maxval;
+	tprobe->smbtp_minval = tp.smbtpr_minval;
+	tprobe->smbtp_resolution = tp.smbtpr_resolution;
+	tprobe->smbtp_tolerance	= tp.smbtpr_tolerance;
+	tprobe->smbtp_accuracy = tp.smbtpr_accuracy;
+
+	if (stp->smbst_hdr->smbh_len >= SMB_TPROBE_NOMINAL_MINLEN) {
+		tprobe->smbtp_nominal = tp.smbtpr_nominal;
+	} else {
+		tprobe->smbtp_nominal = SMB_PROBE_UNKNOWN_VALUE;
+	}
+
+	return (0);
+}
+
+int
+smbios_info_iprobe(smbios_hdl_t *shp, id_t id, smbios_iprobe_t *iprobe)
+{
+	const smb_struct_t *sip = smb_lookup_id(shp, id);
+	smb_iprobe_t ip;
+
+	if (sip == NULL)
+		return (-1); /* errno is set for us */
+
+	if (sip->smbst_hdr->smbh_type != SMB_TYPE_IPROBE)
+		return (smb_set_errno(shp, ESMB_TYPE));
+
+	if (sip->smbst_hdr->smbh_len < SMB_IPROBE_MINLEN)
+		return (smb_set_errno(shp, ESMB_SHORT));
+
+	bzero(iprobe, sizeof (*iprobe));
+	smb_info_bcopy(sip->smbst_hdr, &ip, sizeof (ip));
+	iprobe->smbip_description = smb_strptr(sip, ip.smbipr_descr);
+	iprobe->smbip_location = SMB_IPROBE_LOCATION(ip.smbipr_locstat);
+	iprobe->smbip_status = SMB_IPROBE_STATUS(ip.smbipr_locstat);
+	iprobe->smbip_maxval = ip.smbipr_maxval;
+	iprobe->smbip_minval = ip.smbipr_minval;
+	iprobe->smbip_resolution = ip.smbipr_resolution;
+	iprobe->smbip_tolerance	= ip.smbipr_tolerance;
+	iprobe->smbip_accuracy = ip.smbipr_accuracy;
+
+	if (sip->smbst_hdr->smbh_len >= SMB_IPROBE_NOMINAL_MINLEN) {
+		iprobe->smbip_nominal = ip.smbipr_nominal;
+	} else {
+		iprobe->smbip_nominal = SMB_PROBE_UNKNOWN_VALUE;
+	}
+
+	return (0);
+}
+
+int
+smbios_info_processor_info(smbios_hdl_t *shp, id_t id,
+    smbios_processor_info_t *proc)
+{
+	const smb_struct_t *stp = smb_lookup_id(shp, id);
+	smb_processor_info_t pi;
+
+	if (stp == NULL)
+		return (-1); /* errno is set for us */
+
+	if (stp->smbst_hdr->smbh_type != SMB_TYPE_PROCESSOR_INFO)
+		return (smb_set_errno(shp, ESMB_TYPE));
+
+	if (stp->smbst_hdr->smbh_len < sizeof (pi))
+		return (smb_set_errno(shp, ESMB_SHORT));
+
+	bzero(proc, sizeof (*proc));
+	smb_info_bcopy(stp->smbst_hdr, &pi, sizeof (pi));
+
+	if (sizeof (pi) + pi.smbpai_len > stp->smbst_hdr->smbh_len)
+		return (smb_set_errno(shp, ESMB_CORRUPT));
+
+	proc->smbpi_processor = pi.smbpai_proc;
+	proc->smbpi_ptype = pi.smbpai_type;
+
+	return (0);
+}
+
+int
+smbios_info_processor_riscv(smbios_hdl_t *shp, id_t id,
+    smbios_processor_info_riscv_t *riscv)
+{
+	const smb_struct_t *stp = smb_lookup_id(shp, id);
+	const smb_processor_info_t *proc;
+	const smb_processor_info_riscv_t *rv;
+
+	if (stp == NULL) {
+		return (-1); /* errno is set for us */
+	}
+
+	if (stp->smbst_hdr->smbh_type != SMB_TYPE_PROCESSOR_INFO) {
+		return (smb_set_errno(shp, ESMB_TYPE));
+	}
+
+	if (stp->smbst_hdr->smbh_len < sizeof (*proc)) {
+		return (smb_set_errno(shp, ESMB_SHORT));
+	}
+
+	proc = (const smb_processor_info_t *)stp->smbst_hdr;
+	if (sizeof (*proc) + proc->smbpai_len > stp->smbst_hdr->smbh_len) {
+		return (smb_set_errno(shp, ESMB_CORRUPT));
+	}
+
+	switch (proc->smbpai_type) {
+	case SMB_PROCINFO_T_RV32:
+	case SMB_PROCINFO_T_RV64:
+	case SMB_PROCINFO_T_RV128:
+		break;
+	default:
+		return (smb_set_errno(shp, ESMB_TYPE));
+	}
+
+	if (stp->smbst_hdr->smbh_len < sizeof (*proc) + sizeof (*rv)) {
+		return (smb_set_errno(shp, ESMB_SHORT));
+	}
+	rv = (const smb_processor_info_riscv_t *)&proc->smbpai_data[0];
+	if (rv->smbpairv_len != sizeof (*rv)) {
+		return (smb_set_errno(shp, ESMB_CORRUPT));
+	}
+
+	bcopy(rv->smbpairv_hartid, riscv->smbpirv_hartid,
+	    sizeof (riscv->smbpirv_hartid));
+	bcopy(rv->smbpairv_vendid, riscv->smbpirv_vendid,
+	    sizeof (riscv->smbpirv_vendid));
+	bcopy(rv->smbpairv_archid, riscv->smbpirv_archid,
+	    sizeof (riscv->smbpirv_archid));
+	bcopy(rv->smbpairv_machid, riscv->smbpirv_machid,
+	    sizeof (riscv->smbpirv_machid));
+	bcopy(rv->smbpairv_metdi, riscv->smbpirv_metdi,
+	    sizeof (riscv->smbpirv_metdi));
+	bcopy(rv->smbpairv_mitdi, riscv->smbpirv_mitdi,
+	    sizeof (riscv->smbpirv_mitdi));
+	riscv->smbpirv_isa = rv->smbpairv_isa;
+	riscv->smbpirv_privlvl = rv->smbpairv_privlvl;
+	riscv->smbpirv_boothart = rv->smbpairv_boot;
+	riscv->smbpirv_xlen = rv->smbpairv_xlen;
+	riscv->smbpirv_mxlen = rv->smbpairv_mxlen;
+	riscv->smbpirv_sxlen = rv->smbpairv_sxlen;
+	riscv->smbpirv_uxlen = rv->smbpairv_uxlen;
+
+	return (0);
+}
+
+int
+smbios_info_pointdev(smbios_hdl_t *shp, id_t id, smbios_pointdev_t *pd)
+{
+	const smb_struct_t *stp = smb_lookup_id(shp, id);
+	smb_pointdev_t point;
+
+	if (stp == NULL) {
+		return (-1); /* errno is set for us */
+	}
+
+	if (stp->smbst_hdr->smbh_type != SMB_TYPE_POINTDEV) {
+		return (smb_set_errno(shp, ESMB_TYPE));
+	}
+
+	if (stp->smbst_hdr->smbh_len < sizeof (point)) {
+		return (smb_set_errno(shp, ESMB_SHORT));
+	}
+
+	bzero(pd, sizeof (*pd));
+	smb_info_bcopy(stp->smbst_hdr, &point, sizeof (point));
+
+	pd->smbpd_type = point.smbpdev_type;
+	pd->smbpd_iface = point.smbpdev_iface;
+	pd->smbpd_nbuttons = point.smbpdev_nbuttons;
+
+	return (0);
+}
+
+int
+smbios_info_battery(smbios_hdl_t *shp, id_t id, smbios_battery_t *bp)
+{
+	const smb_struct_t *stp = smb_lookup_id(shp, id);
+	smb_battery_t bat;
+
+	if (stp == NULL) {
+		return (-1); /* errno is set for us */
+	}
+
+	if (stp->smbst_hdr->smbh_type != SMB_TYPE_BATTERY) {
+		return (smb_set_errno(shp, ESMB_TYPE));
+	}
+
+	if (stp->smbst_hdr->smbh_len < sizeof (bat)) {
+		return (smb_set_errno(shp, ESMB_SHORT));
+	}
+
+	bzero(bp, sizeof (*bp));
+	smb_info_bcopy(stp->smbst_hdr, &bat, sizeof (bat));
+
+	/*
+	 * This may be superseded by the SBDS data.
+	 */
+	if (bat.smbbat_date != 0) {
+		bp->smbb_date = smb_strptr(stp, bat.smbbat_date);
+	} else {
+		bp->smbb_date = NULL;
+	}
+
+	/*
+	 * This may be superseded by the SBDS data.
+	 */
+	if (bat.smbbat_serial != 0) {
+		bp->smbb_serial = smb_strptr(stp, bat.smbbat_serial);
+	} else {
+		bp->smbb_serial = NULL;
+	}
+
+	bp->smbb_chem = bat.smbbat_chem;
+	bp->smbb_cap = bat.smbbat_cap;
+	if (bat.smbbat_mult > 0) {
+		bp->smbb_cap *= bat.smbbat_mult;
+	}
+	bp->smbb_volt = bat.smbbat_volt;
+	bp->smbb_version = smb_strptr(stp, bat.smbbat_version);
+	bp->smbb_err = bat.smbbat_err;
+	bp->smbb_ssn = bat.smbbat_ssn;
+	bp->smbb_syear = 1980 + (bat.smbbat_sdate >> 9);
+	bp->smbb_smonth = (bat.smbbat_sdate >> 5) & 0xf;
+	bp->smbb_sday = bat.smbbat_sdate & 0x1f;
+	bp->smbb_schem = smb_strptr(stp, bat.smbbat_schem);
+	bp->smbb_oemdata = bat.smbbat_oemdata;
+
+	return (0);
+}
+
+int
+smbios_info_strprop(smbios_hdl_t *shp, id_t id, smbios_strprop_t *str)
+{
+	const smb_struct_t *stp = smb_lookup_id(shp, id);
+	smb_strprop_t prop;
+
+	if (stp == NULL) {
+		return (-1); /* errno is set for us */
+	}
+
+	if (stp->smbst_hdr->smbh_type != SMB_TYPE_STRPROP) {
+		return (smb_set_errno(shp, ESMB_TYPE));
+	}
+
+	if (stp->smbst_hdr->smbh_len < sizeof (prop)) {
+		return (smb_set_errno(shp, ESMB_SHORT));
+	}
+
+	if (stp->smbst_hdr->smbh_len > sizeof (prop)) {
+		return (smb_set_errno(shp, ESMB_CORRUPT));
+	}
+
+	bzero(str, sizeof (*str));
+	smb_info_bcopy(stp->smbst_hdr, &prop, sizeof (prop));
+
+	str->smbsp_parent = prop.smbstrp_phdl;
+	str->smbsp_prop_id = prop.smbstrp_prop_id;
+	str->smbsp_prop_val = smb_strptr(stp, prop.smbstrp_prop_val);
+
+	return (0);
+}
+
+int
+smbios_info_fwinfo(smbios_hdl_t *shp, id_t id, smbios_fwinfo_t *fwinfo)
+{
+	const smb_struct_t *stp = smb_lookup_id(shp, id);
+	smb_fwinfo_t fw;
+
+	if (stp == NULL) {
+		return (-1); /* errno is set for us */
+	}
+
+	if (stp->smbst_hdr->smbh_type != SMB_TYPE_FWINFO) {
+		return (smb_set_errno(shp, ESMB_TYPE));
+	}
+
+	if (stp->smbst_hdr->smbh_len < sizeof (fw)) {
+		return (smb_set_errno(shp, ESMB_SHORT));
+	}
+
+	/*
+	 * The version and manufacturer are part of smbios_info_common().
+	 */
+	bzero(fwinfo, sizeof (*fwinfo));
+	smb_info_bcopy(stp->smbst_hdr, &fw, sizeof (fw));
+	fwinfo->smbfw_name = smb_strptr(stp, fw.smbfwii_name);
+	fwinfo->smbfw_id = smb_strptr(stp, fw.smbfwii_id);
+	fwinfo->smbfw_reldate = smb_strptr(stp, fw.smbfwii_reldate);
+	fwinfo->smbfw_lsv = smb_strptr(stp, fw.smbfwii_lsv);
+	fwinfo->smbfw_imgsz = fw.smbfwii_imgsz;
+	fwinfo->smbfw_chars = fw.smbfwii_chars;
+	fwinfo->smbfw_state = fw.smbfwii_state;
+	fwinfo->smbfw_ncomps = fw.smbfwii_ncomps;
+	fwinfo->smbfw_vers_fmt = fw.smbfwii_vers_fmt;
+	fwinfo->smbfw_id_fmt = fw.smbfwii_id_fmt;
+
+	return (0);
+}
+
+int
+smbios_info_fwinfo_comps(smbios_hdl_t *shp, id_t id, uint_t *ncompsp,
+    smbios_fwinfo_comp_t **compsp)
+{
+	const smb_struct_t *stp = smb_lookup_id(shp, id);
+	smbios_fwinfo_comp_t *comps;
+	smb_fwinfo_t fw;
+	size_t need;
+	uint_t i;
+
+	if (stp == NULL) {
+		return (-1); /* errno is set for us */
+	}
+
+	if (stp->smbst_hdr->smbh_type != SMB_TYPE_FWINFO) {
+		return (smb_set_errno(shp, ESMB_TYPE));
+	}
+
+	if (stp->smbst_hdr->smbh_len < sizeof (fw)) {
+		return (smb_set_errno(shp, ESMB_SHORT));
+	}
+
+	smb_info_bcopy(stp->smbst_hdr, &fw, sizeof (fw));
+	if (fw.smbfwii_ncomps == 0) {
+		*ncompsp = 0;
+		*compsp = NULL;
+		return (0);
+	}
+
+	need = fw.smbfwii_ncomps * sizeof (uint16_t) + sizeof (smb_fwinfo_t);
+	if (stp->smbst_hdr->smbh_len < need) {
+		return (smb_set_errno(shp, ESMB_SHORT));
+	}
+
+	comps = smb_alloc(fw.smbfwii_ncomps * sizeof (smbios_fwinfo_comp_t));
+	if (comps == NULL) {
+		return (smb_set_errno(shp, ESMB_NOMEM));
+	}
+
+	for (i = 0; i < fw.smbfwii_ncomps; i++) {
+		uint16_t id;
+		size_t off = sizeof (smb_fwinfo_t) + sizeof (uint16_t) * i;
+		smb_info_bcopy_offset(stp->smbst_hdr, &id, sizeof (id), off);
+		comps[i].smbfwe_id = id;
+	}
+
+	*ncompsp = fw.smbfwii_ncomps;
+	*compsp = comps;
+
+	return (0);
+}
+
+void
+smbios_info_fwinfo_comps_free(smbios_hdl_t *shp, uint_t ncomps,
+    smbios_fwinfo_comp_t *comps)
+{
+	size_t sz = ncomps * sizeof (smbios_fwinfo_comp_t);
+
+	if (ncomps == 0) {
+		ASSERT3P(comps, ==, NULL);
+		return;
+	}
+
+	smb_free(comps, sz);
+}
+
+int
+smbios_info_addinfo_nents(smbios_hdl_t *shp, id_t id, uint_t *nentsp)
+{
+	const smb_struct_t *stp = smb_lookup_id(shp, id);
+	smb_addinfo_t add;
+
+	if (stp == NULL) {
+		return (-1); /* errno is set for us */
+	}
+
+	if (stp->smbst_hdr->smbh_type != SMB_TYPE_ADDINFO) {
+		return (smb_set_errno(shp, ESMB_TYPE));
+	}
+
+	if (stp->smbst_hdr->smbh_len < sizeof (add)) {
+		return (smb_set_errno(shp, ESMB_SHORT));
+	}
+
+	smb_info_bcopy(stp->smbst_hdr, &add, sizeof (add));
+	*nentsp = add.smbai_nents;
+
+	return (0);
+}
+
+void
+smbios_info_addinfo_ent_free(smbios_hdl_t *hdl, smbios_addinfo_ent_t *ent)
+{
+	if (ent->smbai_dlen > 0) {
+		ASSERT3P(ent->smbai_data, !=, NULL);
+		smb_free(ent->smbai_data, ent->smbai_dlen);
+	}
+
+	smb_free(ent, sizeof (smbios_addinfo_ent_t));
+}
+
+int
+smbios_info_addinfo_ent(smbios_hdl_t *shp, id_t id, uint_t entno,
+    smbios_addinfo_ent_t **entp)
+{
+	const smb_struct_t *stp = smb_lookup_id(shp, id);
+	size_t off;
+	smb_addinfo_t add;
+	smb_addinfo_ent_t ent;
+	smbios_addinfo_ent_t *entry;
+	uint_t i;
+
+	if (stp == NULL) {
+		return (-1); /* errno is set for us */
+	}
+
+	if (stp->smbst_hdr->smbh_type != SMB_TYPE_ADDINFO) {
+		return (smb_set_errno(shp, ESMB_TYPE));
+	}
+
+	if (stp->smbst_hdr->smbh_len < sizeof (add)) {
+		return (smb_set_errno(shp, ESMB_SHORT));
+	}
+
+	smb_info_bcopy(stp->smbst_hdr, &add, sizeof (add));
+	if (entno >= add.smbai_nents) {
+		return (smb_set_errno(shp, ESMB_REQVAL));
+	}
+
+	off = sizeof (add);
+	for (i = 0; i <= entno; i++) {
+		if (off + sizeof (ent) > stp->smbst_hdr->smbh_len) {
+			return (smb_set_errno(shp, ESMB_SHORT));
+		}
+
+		smb_info_bcopy_offset(stp->smbst_hdr, &ent, sizeof (ent), off);
+		if (ent.smbaie_len < sizeof (ent)) {
+			return (smb_set_errno(shp, ESMB_SHORT));
+		}
+
+		if (ent.smbaie_len + off > stp->smbst_hdr->smbh_len) {
+			return (smb_set_errno(shp, ESMB_CORRUPT));
+		}
+
+		if (i != entno) {
+			off += ent.smbaie_len;
+		}
+	}
+
+	entry = smb_alloc(sizeof (smbios_addinfo_ent_t));
+	if (entry == NULL) {
+		return (smb_set_errno(shp, ESMB_NOMEM));
+	}
+
+	entry->smbai_ref = ent.smbaie_rhdl;
+	entry->smbai_ref_off = ent.smbaie_off;
+	if (ent.smbaie_str != 0) {
+		entry->smbai_str = smb_strptr(stp, ent.smbaie_str);
+	} else {
+		entry->smbai_str = NULL;
+	}
+	entry->smbai_dlen = ent.smbaie_len - sizeof (ent);
+	if (entry->smbai_dlen > 0) {
+		entry->smbai_data = smb_alloc(entry->smbai_dlen);
+		if (entry->smbai_data == NULL) {
+			smb_free(entry, sizeof (smbios_addinfo_ent_t));
+			return (smb_set_errno(shp, ESMB_NOMEM));
+		}
+		smb_info_bcopy_offset(stp->smbst_hdr, entry->smbai_data,
+		    entry->smbai_dlen, off + offsetof(smb_addinfo_ent_t,
+		    smbaie_val));
+	} else {
+		entry->smbai_data = NULL;
+	}
+
+	*entp = entry;
+	return (0);
+}
+
+int
+smbios_info_tpm(smbios_hdl_t *shp, id_t id, smbios_tpm_t *tpm)
+{
+	const smb_struct_t *stp = smb_lookup_id(shp, id);
+	smb_tpm_t t;
+
+	if (stp == NULL) {
+		return (-1); /* errno is set for us */
+	}
+
+	if (stp->smbst_hdr->smbh_type != SMB_TYPE_TPM) {
+		return (smb_set_errno(shp, ESMB_TYPE));
+	}
+
+	if (stp->smbst_hdr->smbh_len < sizeof (t)) {
+		return (smb_set_errno(shp, ESMB_SHORT));
+	}
+
+	bzero(tpm, sizeof (*tpm));
+	smb_info_bcopy(stp->smbst_hdr, &t, sizeof (t));
+	bcopy(t.smbtpm_vid, tpm->smbtpm_vid, sizeof (t.smbtpm_vid));
+	tpm->smbtpm_major = t.smbtpm_major;
+	tpm->smbtpm_minor = t.smbtpm_minor;
+	tpm->smbtpm_fwv1 = t.smbtpm_fwv1;
+	tpm->smbtpm_fwv2 = t.smbtpm_fwv2;
+	tpm->smbtpm_desc = smb_strptr(stp, t.smbtpm_desc);
+	tpm->smbtpm_chars = t.smbtpm_chars;
+	tpm->smbtpm_oem = t.smbtpm_oem;
+
+	return (0);
+}
+
+int
+smbios_info_mgmtdev(smbios_hdl_t *shp, id_t id, smbios_mgmtdev_t *mgmt)
+{
+	const smb_struct_t *stp = smb_lookup_id(shp, id);
+	smb_mgmtdev_t md;
+
+	if (stp == NULL) {
+		return (-1); /* errno is set for us */
+	}
+
+	if (stp->smbst_hdr->smbh_type != SMB_TYPE_MGMTDEV) {
+		return (smb_set_errno(shp, ESMB_TYPE));
+	}
+
+	if (stp->smbst_hdr->smbh_len < sizeof (md)) {
+		return (smb_set_errno(shp, ESMB_SHORT));
+	}
+
+	bzero(mgmt, sizeof (*mgmt));
+	smb_info_bcopy(stp->smbst_hdr, &md, sizeof (md));
+	mgmt->smbmd_desc = smb_strptr(stp, md.smbmgd_desc);
+	mgmt->smbmd_dtype = md.smbmgd_dtype;
+	mgmt->smbmd_atype = md.smbmgd_atype;
+	mgmt->smbmd_addr = md.smbmgd_addr;
+
+	return (0);
+}
+
+int
+smbios_info_mgmtcomp(smbios_hdl_t *shp, id_t id, smbios_mgmtcomp_t *mgmt)
+{
+	const smb_struct_t *stp = smb_lookup_id(shp, id);
+	smb_mgmtcomp_t mc;
+
+	if (stp == NULL) {
+		return (-1); /* errno is set for us */
+	}
+
+	if (stp->smbst_hdr->smbh_type != SMB_TYPE_MGMTDEVCP) {
+		return (smb_set_errno(shp, ESMB_TYPE));
+	}
+
+	if (stp->smbst_hdr->smbh_len < sizeof (mc)) {
+		return (smb_set_errno(shp, ESMB_SHORT));
+	}
+
+	bzero(mgmt, sizeof (*mgmt));
+	smb_info_bcopy(stp->smbst_hdr, &mc, sizeof (mc));
+	mgmt->smbmc_desc = smb_strptr(stp, mc.smbmgc_desc);
+	mgmt->smbmc_mgmtdev = mc.smbmgc_mgmtdev;
+	mgmt->smbmc_comp = mc.smbmgc_comp;
+	mgmt->smbmc_thresh = mc.smbmgc_thresh;
 
 	return (0);
 }

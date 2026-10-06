@@ -24,8 +24,6 @@
  * Use is subject to license terms.
  */
 
-#pragma ident	"%Z%%M%	%I%	%E% SMI"
-
 /*
  * This code is conformant to RFC 3542.
  */
@@ -50,13 +48,13 @@
 int
 inet6_opt_init(void *extbuf, socklen_t extlen)
 {
-	if (extbuf && ((extlen < 0) || (extlen % 8))) {
+	if (extbuf != NULL && (extlen == 0 || (extlen % 8) != 0)) {
 		return (-1);
 	}
 
-	if (extbuf) {
+	if (extbuf != NULL) {
 		*(uint8_t *)extbuf = 0;
-		*((uint8_t *)extbuf + 1) = extlen/8 - 1;
+		*((uint8_t *)extbuf + 1) = extlen / 8 - 1;
 	}
 
 	return (2);
@@ -69,7 +67,7 @@ inet6_opt_init(void *extbuf, socklen_t extlen)
  */
 int
 inet6_opt_append(void *extbuf, socklen_t extlen, int offset, uint8_t type,
-	socklen_t len, uint_t align, void **databufp)
+    socklen_t len, uint_t align, void **databufp)
 {
 	uint8_t *p;
 	socklen_t endlen;
@@ -77,7 +75,7 @@ inet6_opt_append(void *extbuf, socklen_t extlen, int offset, uint8_t type,
 
 	if (align > len ||
 	    (align != 1 && align != 2 && align != 4 && align != 8) ||
-	    len < 0 || len > 255 || type < 2) {
+	    len > 255 || type < 2) {
 		return (-1);
 	}
 
@@ -210,7 +208,7 @@ inet6_opt_set_val(void *databuf, int offset, void *val, socklen_t vallen)
  */
 int
 inet6_opt_next(void *extbuf, socklen_t extlen, int offset, uint8_t *typep,
-	socklen_t *lenp, void **databufp)
+    socklen_t *lenp, void **databufp)
 {
 	uint8_t *p;
 	uint8_t *end;
@@ -271,7 +269,7 @@ inet6_opt_next(void *extbuf, socklen_t extlen, int offset, uint8_t *typep,
  */
 int
 inet6_opt_find(void *extbuf, socklen_t extlen, int offset, uint8_t type,
-	socklen_t *lenp, void **databufp)
+    socklen_t *lenp, void **databufp)
 {
 	uint8_t newtype;
 

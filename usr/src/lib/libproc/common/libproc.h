@@ -25,23 +25,15 @@
  *
  * Portions Copyright 2007 Chad Mynhier
  * Copyright 2012 DEY Storage Systems, Inc.  All rights reserved.
- * Copyright (c) 2013, Joyent, Inc. All rights reserved.
+ * Copyright 2019 Joyent, Inc.
  * Copyright (c) 2013 by Delphix. All rights reserved.
+ * Copyright 2019, Carlos Neira <cneirabustos@gmail.com>
+ * Copyright 2020 OmniOS Community Edition (OmniOSce) Association.
+ * Copyright 2024 Oxide Computer Company
  */
 
 /*
  * Interfaces available from the process control library, libproc.
- *
- * libproc provides process control functions for the /proc tools
- * (commands in /usr/proc/bin), /usr/bin/truss, and /usr/bin/gcore.
- * libproc is a private support library for these commands only.
- * It is _not_ a public interface, although it might become one
- * in the fullness of time, when the interfaces settle down.
- *
- * In the meantime, be aware that any program linked with libproc in this
- * release of Solaris is almost guaranteed to break in the next release.
- *
- * In short, do not use this header file or libproc for any purpose.
  */
 
 #ifndef	_LIBPROC_H
@@ -66,6 +58,7 @@
 #include <sys/socket.h>
 #include <sys/utsname.h>
 #include <sys/corectl.h>
+#include <sys/secflags.h>
 #if defined(__i386) || defined(__amd64)
 #include <sys/sysi86.h>
 #endif
@@ -203,6 +196,7 @@ typedef void (*pop_read_aux_t)(struct ps_prochandle *, auxv_t **, int *,
 typedef int (*pop_cred_t)(struct ps_prochandle *, prcred_t *, int,
     void *);
 typedef int (*pop_priv_t)(struct ps_prochandle *, prpriv_t **, void *);
+typedef int (*pop_secflags_t)(struct ps_prochandle *, prsecflags_t **, void *);
 typedef const psinfo_t *(*pop_psinfo_t)(struct ps_prochandle *, psinfo_t *,
     void *);
 typedef void (*pop_status_t)(struct ps_prochandle *, pstatus_t *, void *);
@@ -213,6 +207,7 @@ typedef char *(*pop_platform_t)(struct ps_prochandle *, char *, size_t, void *);
 typedef int (*pop_uname_t)(struct ps_prochandle *, struct utsname *, void *);
 typedef char *(*pop_zonename_t)(struct ps_prochandle *, char *, size_t, void *);
 typedef char *(*pop_execname_t)(struct ps_prochandle *, char *, size_t, void *);
+typedef int (*pop_cwd_t)(struct ps_prochandle *, prcwd_t **, void *);
 #if defined(__i386) || defined(__amd64)
 typedef int (*pop_ldt_t)(struct ps_prochandle *, struct ssd *, int, void *);
 #endif
@@ -233,6 +228,8 @@ typedef struct ps_ops {
 	pop_uname_t		pop_uname;
 	pop_zonename_t		pop_zonename;
 	pop_execname_t		pop_execname;
+	pop_secflags_t		pop_secflags;
+	pop_cwd_t		pop_cwd;
 #if defined(__i386) || defined(__amd64)
 	pop_ldt_t		pop_ldt;
 #endif
@@ -274,12 +271,15 @@ extern	const pstatus_t *Pstatus(struct ps_prochandle *);
 extern	int	Pcred(struct ps_prochandle *, prcred_t *, int);
 extern	int	Psetcred(struct ps_prochandle *, const prcred_t *);
 extern	int	Ppriv(struct ps_prochandle *, prpriv_t **);
+extern	void	Ppriv_free(struct ps_prochandle *, prpriv_t *);
 extern	int	Psetpriv(struct ps_prochandle *, prpriv_t *);
 extern	void   *Pprivinfo(struct ps_prochandle *);
 extern	int	Psetzoneid(struct ps_prochandle *, zoneid_t);
 extern	int	Pgetareg(struct ps_prochandle *, int, prgreg_t *);
 extern	int	Pputareg(struct ps_prochandle *, int, prgreg_t);
 extern	int	Psetrun(struct ps_prochandle *, int, int);
+extern	int	Psecflags(struct ps_prochandle *, prsecflags_t **);
+extern	void	Psecflags_free(prsecflags_t *);
 extern	ssize_t	Pread(struct ps_prochandle *, void *, size_t, uintptr_t);
 extern	ssize_t Pread_string(struct ps_prochandle *, char *, size_t, uintptr_t);
 extern	ssize_t	Pwrite(struct ps_prochandle *, const void *, size_t, uintptr_t);
@@ -336,6 +336,13 @@ extern	int	Lstack(struct ps_lwphandle *, stack_t *);
 extern	int	Lmain_stack(struct ps_lwphandle *, stack_t *);
 extern	int	Lalt_stack(struct ps_lwphandle *, stack_t *);
 
+extern int	Lgetregs(struct ps_lwphandle *, prgregset_t *);
+extern int	Lsetregs(struct ps_lwphandle *, const prgregset_t *);
+extern int	Lgetfpregs(struct ps_lwphandle *, prfpregset_t *);
+extern int	Lsetfpregs(struct ps_lwphandle *, const prfpregset_t *);
+extern int	Lgetxregs(struct ps_lwphandle *, prxregset_t **, size_t *);
+extern int	Lsetxregs(struct ps_lwphandle *, const prxregset_t *, size_t);
+
 /*
  * Function prototypes for system calls forced on the victim process.
  */
@@ -361,7 +368,7 @@ extern	int	pr_getitimer(struct ps_prochandle *,
 extern	int	pr_setitimer(struct ps_prochandle *,
 			int, const struct itimerval *, struct itimerval *);
 extern	int	pr_ioctl(struct ps_prochandle *, int, int, void *, size_t);
-extern	int	pr_fcntl(struct ps_prochandle *, int, int, void *);
+extern	int	pr_fcntl(struct ps_prochandle *, int, int, void *, void *);
 extern	int	pr_stat(struct ps_prochandle *, const char *, struct stat *);
 extern	int	pr_lstat(struct ps_prochandle *, const char *, struct stat *);
 extern	int	pr_fstat(struct ps_prochandle *, int, struct stat *);
@@ -422,11 +429,13 @@ extern int Plwp_getfpregs(struct ps_prochandle *, lwpid_t, prfpregset_t *);
 extern int Plwp_setfpregs(struct ps_prochandle *, lwpid_t,
     const prfpregset_t *);
 
+extern int Plwp_getxregs(struct ps_prochandle *, lwpid_t, prxregset_t **,
+    size_t *);
+extern void Plwp_freexregs(struct ps_prochandle *, prxregset_t *, size_t);
+extern int Plwp_setxregs(struct ps_prochandle *, lwpid_t, const prxregset_t *,
+    size_t);
+
 #if defined(__sparc)
-
-extern int Plwp_getxregs(struct ps_prochandle *, lwpid_t, prxregset_t *);
-extern int Plwp_setxregs(struct ps_prochandle *, lwpid_t, const prxregset_t *);
-
 extern int Plwp_getgwindows(struct ps_prochandle *, lwpid_t, gwindows_t *);
 
 #if defined(__sparcv9)
@@ -441,6 +450,7 @@ extern	int	Pldt(struct ps_prochandle *, struct ssd *, int);
 extern	int	proc_get_ldt(pid_t, struct ssd *, int);
 #endif	/* __i386 || __amd64 */
 
+extern int Plwp_getname(struct ps_prochandle *, lwpid_t, char *, size_t);
 extern int Plwp_getpsinfo(struct ps_prochandle *, lwpid_t, lwpsinfo_t *);
 extern int Plwp_getspymaster(struct ps_prochandle *, lwpid_t, psinfo_t *);
 
@@ -466,8 +476,21 @@ extern int Plwp_iter_all(struct ps_prochandle *, proc_lwp_all_f *, void *);
 typedef int proc_walk_f(psinfo_t *, lwpsinfo_t *, void *);
 extern int proc_walk(proc_walk_f *, void *, int);
 
-#define	PR_WALK_PROC	0		/* walk processes only */
-#define	PR_WALK_LWP	1		/* walk all lwps */
+#define	PR_WALK_PROC		0		/* walk processes only */
+#define	PR_WALK_LWP		1		/* walk all lwps */
+#define	PR_WALK_INCLUDE_SYS	0x80000000	/* include SSYS processes */
+
+/*
+ * File descriptor iteration.
+ */
+typedef int proc_fdwalk_f(const prfdinfo_t *, void *);
+extern int proc_fdwalk(pid_t, proc_fdwalk_f *, void *);
+
+/*
+ * fdinfo iteration.
+ */
+typedef int proc_fdinfowalk_f(uint_t, const void *, size_t, void *);
+extern int proc_fdinfowalk(const prfdinfo_t *, proc_fdinfowalk_f *, void *);
 
 /*
  * Determine if an lwp is in a set as returned from proc_arg_xgrab().
@@ -703,8 +726,15 @@ extern pid_t proc_arg_xpsinfo(const char *, int, psinfo_t *, int *,
 extern int proc_get_auxv(pid_t, auxv_t *, int);
 extern int proc_get_cred(pid_t, prcred_t *, int);
 extern prpriv_t *proc_get_priv(pid_t);
+extern void proc_free_priv(prpriv_t *);
 extern int proc_get_psinfo(pid_t, psinfo_t *);
 extern int proc_get_status(pid_t, pstatus_t *);
+extern int proc_get_secflags(pid_t, prsecflags_t **);
+extern prfdinfo_t *proc_get_fdinfo(pid_t, int);
+extern const void *proc_fdinfo_misc(const prfdinfo_t *, uint_t, size_t *);
+extern void proc_fdinfo_free(prfdinfo_t *);
+extern int proc_get_lwpsinfo(pid_t, uint_t, lwpsinfo_t *);
+extern int proc_get_lwpstatus(pid_t, uint_t, lwpstatus_t *);
 
 /*
  * Utility functions for debugging tools to convert numeric fault,
@@ -712,10 +742,12 @@ extern int proc_get_status(pid_t, pstatus_t *);
  */
 #define	FLT2STR_MAX 32	/* max. string length of faults (like SIG2STR_MAX) */
 #define	SYS2STR_MAX 32	/* max. string length of syscalls (like SIG2STR_MAX) */
+#define	DMODELSTR_MAX 32 /* max. string length of data model names */
 
 extern char *proc_fltname(int, char *, size_t);
 extern char *proc_signame(int, char *, size_t);
 extern char *proc_sysname(int, char *, size_t);
+extern char *proc_dmodelname(int, char *, size_t);
 
 /*
  * Utility functions for debugging tools to convert fault, signal, and system
@@ -771,8 +803,20 @@ extern int proc_finistdio(void);
 /*
  * Iterate over all open files.
  */
-typedef int proc_fdinfo_f(void *, prfdinfo_t *);
+typedef int proc_fdinfo_f(void *, const prfdinfo_t *);
 extern int Pfdinfo_iter(struct ps_prochandle *, proc_fdinfo_f *, void *);
+
+/*
+ * NT_UPANIC information.
+ */
+extern int Pupanic(struct ps_prochandle *, prupanic_t **);
+extern void Pupanic_free(prupanic_t *);
+
+/*
+ * NT_CWD information.
+ */
+extern int Pcwd(struct ps_prochandle *, prcwd_t **);
+extern void Pcwd_free(prcwd_t *);
 
 #ifdef	__cplusplus
 }

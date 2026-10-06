@@ -22,7 +22,7 @@
  * of helper providers. The default disposition for a helper provider -- USDT
  * and ustack helpers -- is to load itself from it's containing object's .init
  * section. In cases where startup time is deemed critical, USDT authors can
- * use the -xlazyload option to dtrace(1M) to disable automatic loading (it's
+ * use the -xlazyload option to dtrace(8) to disable automatic loading (it's
  * difficult to make the case for the utility of this feature for anything
  * other than libc which, indeed, was the sole motivation). If a binary has
  * been compiled with automatic loading disabled, this audit library may be
@@ -76,7 +76,7 @@ la_objopen(Link_map *lmp, Lmid_t lmid, uintptr_t *cookie)
 	 * message, but it's possible that might fail as well.
 	 */
 	if ((node = malloc(sizeof (obj_list_t))) == NULL) {
-		dprintf(0, "libdaudit: failed to allocate");
+		dl_dprintf(0, "libdaudit: failed to allocate");
 		return (0);
 	}
 	node->ol_next = list;

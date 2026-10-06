@@ -20,6 +20,8 @@
  */
 /*
  * Copyright (c) 2010, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2016, Chris Fraire <cfraire@me.com>.
+ * Copyright 2024 Oxide Computer Company
  */
 
 /*
@@ -100,14 +102,15 @@ i_ipadm_create_ipv6addrs(ipadm_handle_t iph, ipadm_addrobj_t addr,
 		status = i_ipadm_send_ndpd_cmd(addr->ipadm_ifname, addr,
 		    IPADM_CREATE_ADDRS);
 		if (status != IPADM_SUCCESS &&
-		    status != IPADM_NDPD_NOT_RUNNING) {
+		    status != IPADM_NDPD_NOT_RUNNING &&
+		    status != IPADM_ADDRCONF_EXISTS) {
 			(void) i_ipadm_delete_addr(iph, addr);
 			return (status);
 		}
 	}
 
 	/* Persist the intfid. */
-	status = i_ipadm_addr_persist(iph, addr, B_FALSE, i_flags);
+	status = i_ipadm_addr_persist(iph, addr, B_FALSE, i_flags, NULL);
 	if (status != IPADM_SUCCESS) {
 		(void) i_ipadm_delete_addr(iph, addr);
 		(void) i_ipadm_send_ndpd_cmd(addr->ipadm_ifname, addr,
@@ -128,8 +131,12 @@ i_ipadm_delete_ipv6addrs(ipadm_handle_t iph, ipadm_addrobj_t ipaddr)
 	 */
 	status = i_ipadm_send_ndpd_cmd(ipaddr->ipadm_ifname, ipaddr,
 	    IPADM_DELETE_ADDRS);
-	if (status == IPADM_NDPD_NOT_RUNNING)
+
+	/* if the entry is not found, or ndpd is not running, just carry on */
+	if (status == IPADM_NDPD_NOT_RUNNING || status == IPADM_ENXIO ||
+	    status == IPADM_NOTFOUND)
 		status = IPADM_SUCCESS;
+
 	if (status == IPADM_SUCCESS)
 		status = i_ipadm_delete_addr(iph, ipaddr);
 
@@ -151,7 +158,7 @@ i_ipadm_create_linklocal(ipadm_handle_t iph, ipadm_addrobj_t addr)
 	 * Create a logical interface if needed.
 	 */
 retry:
-	status = i_ipadm_do_addif(iph, addr);
+	status = i_ipadm_do_addif(iph, addr, &addif);
 	if (status != IPADM_SUCCESS)
 		return (status);
 	if (!(iph->iph_flags & IPH_INIT)) {

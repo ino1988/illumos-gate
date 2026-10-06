@@ -28,6 +28,7 @@
  */
 /*
  * Copyright 2012 Garrett D'Amore <garrett@damore.org>.  All rights reserved.
+ * Copyright 2017 Joyent, Inc.
  */
 
 /*
@@ -58,7 +59,8 @@
 #define	IMMU_PCI_CLASS2SUB(c)   (((c) >> 8) & 0xff); /* classcode */
 
 #define	IMMU_CONTIG_PADDR(d, p) \
-	((d).dck_paddr && ((d).dck_paddr + IMMU_PAGESIZE) == (p))
+	((d).dck_paddr && ((d).dck_paddr + (d).dck_npages * IMMU_PAGESIZE) \
+	    == (p))
 
 typedef struct dvma_arg {
 	immu_t *dva_immu;
@@ -673,7 +675,6 @@ immu_dvma_get_immu(dev_info_t *dip, immu_flags_t immu_flags)
 			    "immu units found for device. Expected (%p), "
 			    "actual (%p)", (void *)immu,
 			    (void *)immu_devi->imd_immu);
-			mutex_exit(&(DEVI(dip)->devi_lock));
 			/*NOTREACHED*/
 		}
 	}
@@ -1012,7 +1013,7 @@ map_unity_domain(domain_t *domain)
 
 /*
  * create_xlate_arena()
- * 	Create the dvma arena for a domain with translation
+ *	Create the dvma arena for a domain with translation
  *	mapping
  */
 static void
@@ -1156,7 +1157,7 @@ set_domain(
 
 /*
  * device_domain()
- * 	Get domain for a device. The domain may be global in which case it
+ *	Get domain for a device. The domain may be global in which case it
  *	is shared between all IOMMU units. Due to potential AGAW differences
  *      between IOMMU units, such global domains *have to be* UNITY mapping
  *      domains. Alternatively, the domain may be local to a IOMMU unit.
@@ -2074,7 +2075,9 @@ PTE_set_one(immu_t *immu, hw_pdte_t *hwp, paddr_t paddr,
 
 	pte |= immu->immu_ptemask;
 
+#ifndef BUGGY_DRIVERS
 out:
+#endif
 #endif /* DEBUG */
 #ifdef BUGGY_DRIVERS
 	PDTE_SET_READ(pte);
@@ -2125,6 +2128,7 @@ PTE_set_all(immu_t *immu, domain_t *domain, xlate_t *xlate,
 		nvpages -= dcookies[j].dck_npages;
 	}
 
+	VERIFY(j >= 0);
 	nppages = nvpages;
 	paddr = dcookies[j].dck_paddr +
 	    (dcookies[j].dck_npages - nppages) * IMMU_PAGESIZE;
@@ -2218,7 +2222,9 @@ PDE_set_one(immu_t *immu, hw_pdte_t *hwp, pgtable_t *next,
 	 * by the Vt-d spec
 	 */
 
+#ifndef  BUGGY_DRIVERS
 out:
+#endif
 #ifdef  BUGGY_DRIVERS
 	PDTE_SET_READ(pde);
 	PDTE_SET_WRITE(pde);
@@ -2567,6 +2573,8 @@ immu_map_dvmaseg(dev_info_t *rdip, ddi_dma_handle_t handle,
 	immu_dcookie_t *dcookies;
 	int pde_set;
 
+	rwmask = 0;
+	page = NULL;
 	domain = IMMU_DEVI(rdip)->imd_domain;
 	immu = domain->dom_immu;
 	immu_flags = dma_to_immu_flags(dmareq);
@@ -2666,10 +2674,8 @@ immu_map_dvmaseg(dev_info_t *rdip, ddi_dma_handle_t handle,
 			vaddr += psize;
 		}
 
-		npages++;
-
 		if (ihp->ihp_npremapped > 0) {
-			*ihp->ihp_preptes[npages - 1] =
+			*ihp->ihp_preptes[npages] =
 			    PDTE_PADDR(paddr) | rwmask;
 		} else if (IMMU_CONTIG_PADDR(dcookies[dmax], paddr)) {
 			dcookies[dmax].dck_npages++;
@@ -2691,12 +2697,15 @@ immu_map_dvmaseg(dev_info_t *rdip, ddi_dma_handle_t handle,
 				dvma += (npages << IMMU_PAGESHIFT);
 				npages = 0;
 				dmax = 0;
-			} else
+			} else {
 				dmax++;
+			}
 			dcookies[dmax].dck_paddr = paddr;
 			dcookies[dmax].dck_npages = 1;
 		}
 		size -= psize;
+		if (npages != 0)
+			npages++;
 	}
 
 	/*

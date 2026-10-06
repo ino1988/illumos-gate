@@ -27,15 +27,10 @@
 #ifndef	_MENU_SCSI_H
 #define	_MENU_SCSI_H
 
-#pragma ident	"%Z%%M%	%I%	%E% SMI"
-
 #ifdef	__cplusplus
 extern "C" {
 #endif
 
-/*
- *	Prototypes for ANSI
- */
 int	c_scsi(void);
 
 #ifdef	__cplusplus

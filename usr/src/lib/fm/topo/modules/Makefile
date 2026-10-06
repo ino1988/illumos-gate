@@ -22,14 +22,9 @@
 #
 # Copyright 2007 Sun Microsystems, Inc.  All rights reserved.
 # Use is subject to license terms.
+# Copyright 2019 Peter Tribble.
+# Copyright 2022 Garrett D'Amore
 #
-# ident	"%Z%%M%	%I%	%E% SMI"
-
-sparc_SUBDIRS =	sun4u \
-		sun4v \
-		SUNW,Sun-Fire \
-		SUNW,Sun-Fire-15000 \
-		SUNW,SPARC-Enterprise
 
 i386_SUBDIRS = i86pc
 

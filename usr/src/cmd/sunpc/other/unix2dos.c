@@ -24,9 +24,6 @@
  * Use is subject to license terms.
  */
 
-#pragma ident	"%Z%%M%	%I%	%E% SMI"
-
-
 /*
  *	Converts files from one char set to another
  *
@@ -495,6 +492,8 @@ void
 usage()
 {
 	fprintf(stderr,
-	    "usage: unix2dos [ -ascii ] [ -iso ] [ -7 ] [ originalfile [ convertedfile ] ]\n");
+	    "usage: unix2dos [ -ascii ] [ -iso ] [ -7 ]\n"
+	    "\t[ -437 | -850 | -860 | -863 | -865 ] [ originalfile "
+	    "[ convertedfile ] ]\n");
 	exit(1);
 }

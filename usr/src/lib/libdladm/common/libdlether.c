@@ -21,6 +21,8 @@
 /*
  * Copyright 2010 Sun Microsystems, Inc.  All rights reserved.
  * Use is subject to license terms.
+ *
+ * Copyright 2015 Garrett D'Amore <garrett@damore.org>
  */
 
 #include <stdlib.h>
@@ -45,6 +47,15 @@ typedef struct ether_spdx_s {
 } ether_spdx_t;
 
 static ether_spdx_t cap_spdx[] = {
+	{{400000, LINK_DUPLEX_FULL}, "cap_400gfdx"},
+	{{200000, LINK_DUPLEX_FULL}, "cap_200gfdx"},
+	{{100000, LINK_DUPLEX_FULL}, "cap_100gfdx"},
+	{{50000, LINK_DUPLEX_FULL}, "cap_50gfdx"},
+	{{40000, LINK_DUPLEX_FULL}, "cap_40gfdx"},
+	{{25000, LINK_DUPLEX_FULL}, "cap_25gfdx"},
+	{{10000, LINK_DUPLEX_FULL}, "cap_10gfdx"},
+	{{5000, LINK_DUPLEX_FULL}, "cap_5000fdx"},
+	{{2500, LINK_DUPLEX_FULL}, "cap_2500fdx"},
 	{{1000, LINK_DUPLEX_FULL}, "cap_1000fdx"},
 	{{1000, LINK_DUPLEX_HALF}, "cap_1000hdx"},
 	{{100, LINK_DUPLEX_FULL}, "cap_100fdx"},
@@ -55,6 +66,15 @@ static ether_spdx_t cap_spdx[] = {
 };
 
 static ether_spdx_t adv_cap_spdx[] = {
+	{{400000, LINK_DUPLEX_FULL}, "adv_cap_400gfdx"},
+	{{200000, LINK_DUPLEX_FULL}, "adv_cap_200gfdx"},
+	{{100000, LINK_DUPLEX_FULL}, "adv_cap_100gfdx"},
+	{{50000, LINK_DUPLEX_FULL}, "adv_cap_50gfdx"},
+	{{40000, LINK_DUPLEX_FULL}, "adv_cap_40gfdx"},
+	{{25000, LINK_DUPLEX_FULL}, "adv_cap_25gfdx"},
+	{{10000, LINK_DUPLEX_FULL}, "adv_cap_10gfdx"},
+	{{5000, LINK_DUPLEX_FULL}, "adv_cap_5000fdx"},
+	{{2500, LINK_DUPLEX_FULL}, "adv_cap_2500fdx"},
 	{{1000, LINK_DUPLEX_FULL}, "adv_cap_1000fdx"},
 	{{1000, LINK_DUPLEX_HALF}, "adv_cap_1000hdx"},
 	{{100, LINK_DUPLEX_FULL}, "adv_cap_100fdx"},
@@ -65,6 +85,15 @@ static ether_spdx_t adv_cap_spdx[] = {
 };
 
 static ether_spdx_t lp_cap_spdx[] = {
+	{{400000, LINK_DUPLEX_FULL}, "lp_cap_400gfdx"},
+	{{200000, LINK_DUPLEX_FULL}, "lp_cap_200gfdx"},
+	{{100000, LINK_DUPLEX_FULL}, "lp_cap_100gfdx"},
+	{{50000, LINK_DUPLEX_FULL}, "lp_cap_50gfdx"},
+	{{40000, LINK_DUPLEX_FULL}, "lp_cap_40gfdx"},
+	{{25000, LINK_DUPLEX_FULL}, "lp_cap_25gfdx"},
+	{{10000, LINK_DUPLEX_FULL}, "lp_cap_10gfdx"},
+	{{5000, LINK_DUPLEX_FULL}, "lp_cap_5000fdx"},
+	{{2500, LINK_DUPLEX_FULL}, "lp_cap_2500fdx"},
 	{{1000, LINK_DUPLEX_FULL}, "lp_cap_1000fdx"},
 	{{1000, LINK_DUPLEX_HALF}, "lp_cap_1000hdx"},
 	{{100, LINK_DUPLEX_FULL}, "lp_cap_100fdx"},
@@ -198,7 +227,7 @@ extern char *
 dladm_ether_spdx2str(char *buf, size_t buflen, dladm_ether_info_t *eattr,
     int ptype)
 {
-	int		i, j;
+	uint_t		i, j;
 	boolean_t	is_full, is_half;
 	int		speed;
 	char		speed_unit;
@@ -223,7 +252,7 @@ dladm_ether_spdx2str(char *buf, size_t buflen, dladm_ether_info_t *eattr,
 		if (j < i)
 			continue;
 
-		if (speed >= 1000) {
+		if ((speed % 1000) == 0) {
 			speed = speed/1000;
 			speed_unit = 'G';
 		} else {
@@ -352,6 +381,8 @@ dladm_ether_info_done(dladm_ether_info_t *eattr)
 {
 	int i;
 
-	for (i = CURRENT; i <= PEERADV; i++)
+	for (i = CURRENT; i <= PEERADV; i++) {
 		free(eattr->lei_attr[i].le_spdx);
+		eattr->lei_attr[i].le_spdx = NULL;
+	}
 }

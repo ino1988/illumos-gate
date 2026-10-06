@@ -18,8 +18,13 @@
  *
  * CDDL HEADER END
  */
+
 /*
  * Copyright (c) 1997, 2010, Oracle and/or its affiliates. All rights reserved.
+ */
+
+/*
+ * Copyright 2018 Nexenta Systems, Inc.
  */
 
 #include <sys/cred.h>
@@ -42,8 +47,6 @@
 
 #define	NUM_RECORDS_TO_WRITE 256
 #define	NUM_BYTES_TO_WRITE 65536
-
-extern krwlock_t exported_lock;
 
 static int nfslog_num_records_to_write = NUM_RECORDS_TO_WRITE;
 static int nfslog_num_bytes_to_write = NUM_BYTES_TO_WRITE;
@@ -438,8 +441,9 @@ log_file_create(caddr_t origname, struct log_file **lfpp)
 	(void) sprintf(name, "%s%s", origname, LOG_INPROG_STRING);
 
 	LOGGING_DPRINT((3, "log_file_create: %s\n", name));
-	if (error = vn_open(name, UIO_SYSSPACE, FCREAT|FWRITE|FOFFMAX,
-	    LOG_MODE, &vp, CRCREAT, 0)) {
+	error = vn_open(name, UIO_SYSSPACE, FCREAT|FWRITE|FOFFMAX,
+	    LOG_MODE, &vp, CRCREAT, 0);
+	if (error != 0) {
 		nfs_cmn_err(error, CE_WARN,
 		    "log_file_create: Can not open %s - error %m", name);
 		goto out;
@@ -559,8 +563,9 @@ log_file_rele(struct log_file *lfp)
 	ASSERT(lfp->lf_flags == 0);
 	ASSERT(lfp->lf_writers == 0);
 
-	if (error = VOP_CLOSE(lfp->lf_vp, FCREAT|FWRITE|FOFFMAX, 1, (offset_t)0,
-	    CRED(), NULL)) {
+	error = VOP_CLOSE(lfp->lf_vp, FCREAT|FWRITE|FOFFMAX, 1, (offset_t)0,
+	    CRED(), NULL);
+	if (error != 0) {
 		nfs_cmn_err(error, CE_WARN,
 		    "NFS: Could not close log buffer %s - error = %m",
 		    lfp->lf_path);
@@ -595,11 +600,8 @@ log_file_rele(struct log_file *lfp)
  */
 /* ARGSUSED */
 void *
-nfslog_record_alloc(
-	struct exportinfo *exi,
-	int alloc_indx,
-	void **cookie,
-	int flags)
+nfslog_record_alloc(struct exportinfo *exi, int alloc_indx, void **cookie,
+    int flags)
 {
 	struct lr_alloc *lrp;
 
@@ -652,7 +654,7 @@ nfslog_record_alloc(
  */
 void
 nfslog_record_put(void *cookie, size_t size, bool_t sync,
-	unsigned int which_buffers)
+    unsigned int which_buffers)
 {
 	struct lr_alloc *lrp = (struct lr_alloc *)cookie;
 	struct log_buffer *lbp = lrp->lb;
@@ -768,8 +770,8 @@ nfslog_records_flush_to_disk_nolock(struct log_buffer *lbp)
  * them to the end of the log file.
  */
 static int
-nfslog_write_logrecords(struct log_file *lfp,
-	struct lr_alloc *lrp_writers, int num_recs)
+nfslog_write_logrecords(struct log_file *lfp, struct lr_alloc *lrp_writers,
+    int num_recs)
 {
 	struct uio uio;
 	struct iovec *iovp;
@@ -935,13 +937,15 @@ nfslog_logbuffer_rename(struct log_buffer *lbp)
 	/*
 	 * rename the current buffer to what the daemon expects
 	 */
-	if (error = nfslog_logfile_rename(lf->lf_path, lbp->lb_path))
+	error = nfslog_logfile_rename(lf->lf_path, lbp->lb_path);
+	if (error != 0)
 		goto out;
 
 	/*
 	 * Create a new working buffer file and have all new data sent there.
 	 */
-	if (error = log_file_create(lbp->lb_path, &logfile)) {
+	error = log_file_create(lbp->lb_path, &logfile);
+	if (error != 0) {
 		/* Attempt to rename to original */
 		(void) nfslog_logfile_rename(lbp->lb_path, lf->lf_path);
 		goto out;
@@ -991,7 +995,8 @@ nfslog_logfile_rename(char *from, char *new)
 {
 	int error;
 
-	if (error = vn_rename(from, new, UIO_SYSSPACE)) {
+	error = vn_rename(from, new, UIO_SYSSPACE);
+	if (error != 0) {
 		cmn_err(CE_WARN,
 		    "nfslog_logfile_rename: couldn't rename %s to %s\n",
 		    from, new);
@@ -1161,8 +1166,8 @@ nfsl_flush(struct nfsl_flush_args *args, model_t model)
 		/*
 		 * Do the work asynchronously
 		 */
-		(void) thread_create(NULL, 0, nfslog_do_flush,
-		    tparams, 0, &p0, TS_RUN, minclsyspri);
+		(void) zthread_create(NULL, 0, nfslog_do_flush,
+		    tparams, 0, minclsyspri);
 	}
 
 	return (error);
@@ -1240,7 +1245,6 @@ nfslog_do_flush(struct flush_thread_params *tparams)
 		kmem_free(buf_inprog, buf_inprog_len);
 	}
 
-out:
 	if ((args->directive & NFSL_SYNC) == 0) {
 		/*
 		 * Work was performed asynchronously, the caller is
@@ -1249,8 +1253,7 @@ out:
 		 */
 		kmem_free(args->buff, args->buff_len);
 		kmem_free(tparams, sizeof (*tparams));
-		thread_exit();
-		/* NOTREACHED */
+		zthread_exit();
 	}
 
 	tparams->tp_error = error;
@@ -1529,6 +1532,7 @@ static int	nfslog_dispatch_table_arglen = sizeof (nfslog_dispatch_table) /
  */
 struct exportinfo *
 nfslog_get_exi(
+	nfs_export_t *ne,
 	struct exportinfo *exi,
 	struct svc_req *req,
 	caddr_t res,
@@ -1560,7 +1564,7 @@ nfslog_get_exi(
 		return (exi);
 	}
 
-	if (exi != exi_public)
+	if (exi != ne->exi_public)
 		return (NULL);
 
 	/*
@@ -1625,8 +1629,8 @@ static long long rfslog_records_ignored = 0;
  */
 void
 nfslog_write_record(struct exportinfo *exi, struct svc_req *req,
-	caddr_t args, caddr_t res, cred_t *cr, struct netbuf *pnb,
-	unsigned int record_id, unsigned int which_buffers)
+    caddr_t args, caddr_t res, cred_t *cr, struct netbuf *pnb,
+    unsigned int record_id, unsigned int which_buffers)
 {
 	struct nfslog_prog_disp	*progtable;	/* prog struct */
 	struct nfslog_vers_disp	*verstable;	/* version struct */
@@ -1764,17 +1768,17 @@ nfslog_write_record(struct exportinfo *exi, struct svc_req *req,
 static char *
 get_publicfh_path(int *alloc_length)
 {
-	extern struct exportinfo *exi_public;
 	char *pubpath;
+	nfs_export_t *ne = nfs_get_export();
 
-	rw_enter(&exported_lock, RW_READER);
+	rw_enter(&ne->exported_lock, RW_READER);
 
-	*alloc_length = exi_public->exi_export.ex_pathlen + 1;
+	*alloc_length = ne->exi_public->exi_export.ex_pathlen + 1;
 	pubpath = kmem_alloc(*alloc_length, KM_SLEEP);
 
-	(void) strcpy(pubpath, exi_public->exi_export.ex_path);
+	(void) strcpy(pubpath, ne->exi_public->exi_export.ex_path);
 
-	rw_exit(&exported_lock);
+	rw_exit(&ne->exported_lock);
 
 	return (pubpath);
 }
@@ -1870,11 +1874,8 @@ nfslog_unshare_record(struct exportinfo *exi, cred_t *cr)
 
 
 void
-nfslog_getfh(struct exportinfo *exi,
-	fhandle *fh,
-	char *fname,
-	enum uio_seg seg,
-	cred_t *cr)
+nfslog_getfh(struct exportinfo *exi, fhandle *fh, char *fname, enum uio_seg seg,
+    cred_t *cr)
 {
 	struct svc_req	req;
 	int		res = 0;

@@ -23,6 +23,7 @@
 /*
  * Copyright 2006 Sun Microsystems, Inc.  All rights reserved.
  * Use is subject to license terms.
+ * Copyright (c) 2016 by Delphix. All rights reserved.
  */
 
 /*	Copyright (c) 1983, 1984, 1985, 1986, 1987, 1988, 1989 AT&T */
@@ -33,8 +34,6 @@
  * under license from the Regents of the University of
  * California.
  */
-
-#pragma ident	"%Z%%M%	%I%	%E% SMI"
 
 #include "mt.h"
 #include <stdlib.h>
@@ -543,7 +542,7 @@ domatch(char *domain, char *map, char *key, int  keylen,
 		retval = ypprot_err(resp.status);
 	}
 
-	/* Get some memory which the user can get rid of as he likes */
+	/* Get some memory which the user can get rid of as they likes */
 
 	if (!retval && ((*val = malloc((size_t)
 	    resp.valdat.dsize + 2)) == NULL)) {

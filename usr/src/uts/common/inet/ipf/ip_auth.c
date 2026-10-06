@@ -151,7 +151,7 @@ ipf_stack_t *ifs;
 
 	MUTEX_INIT(&ifs->ifs_ipf_authmx, "ipf auth log mutex");
 	RWLOCK_INIT(&ifs->ifs_ipf_auth, "ipf IP User-Auth rwlock");
-#if SOLARIS && defined(_KERNEL)
+#if defined(SOLARIS) && defined(_KERNEL)
 	cv_init(&ifs->ifs_ipfauthwait, "ipf auth condvar", CV_DRIVER, NULL);
 #endif
 #if defined(linux) && defined(_KERNEL)
@@ -334,7 +334,7 @@ fr_info_t *fin;
 		ip->ip_off = htons(bo);
 	}
 #endif
-#if SOLARIS && defined(_KERNEL)
+#if defined(SOLARIS) && defined(_KERNEL)
 	m->b_rptr -= qpi->qpi_off;
 	ifs->ifs_fr_authpkts[i] = *(mblk_t **)fin->fin_mp;
 	cv_signal(&ifs->ifs_ipfauthwait);
@@ -522,12 +522,12 @@ fr_authioctlloop:
 		ifs->ifs_fr_authpkts[i] = NULL;
 		RWLOCK_EXIT(&ifs->ifs_ipf_auth);
 #ifdef	_KERNEL
-		if (fra->fra_info.fin_v == 4) { 
+		if (fra->fra_info.fin_v == 4) {
 			net_data_p = ifs->ifs_ipf_ipv4;
-		} else if (fra->fra_info.fin_v == 6) { 
+		} else if (fra->fra_info.fin_v == 6) {
 			net_data_p = ifs->ifs_ipf_ipv6;
-		} else { 
-			return (-1); 
+		} else {
+			return (-1);
 		}
 
 		/*
@@ -687,7 +687,7 @@ ipf_stack_t *ifs;
 	}
 
 	if (ifs->ifs_fr_auth_init == 1) {
-# if SOLARIS && defined(_KERNEL)
+# if defined(SOLARIS) && defined(_KERNEL)
 		cv_destroy(&ifs->ifs_ipfauthwait);
 # endif
 		MUTEX_DESTROY(&ifs->ifs_ipf_authmx);
@@ -764,7 +764,7 @@ ipf_stack_t *ifs;
 
 	if ((cmd != SIOCADAFR) && (cmd != SIOCRMAFR))
 		return EIO;
-	
+
 	for (faep = &ifs->ifs_fae_list; ((fae = *faep) != NULL); ) {
 		if (&fae->fae_fr == fr)
 			break;

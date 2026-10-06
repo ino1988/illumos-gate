@@ -10,47 +10,12 @@
 #
 
 #
-# Copyright (c) 2013 by Delphix. All rights reserved.
+# Copyright (c) 2013, 2016 by Delphix. All rights reserved.
 #
 
 include $(SRC)/Makefile.master
 
 ROOTOPTPKG = $(ROOT)/opt/zfs-tests
-TESTDIR = $(ROOTOPTPKG)/tests/functional/rsend
+TARGETDIR = $(ROOTOPTPKG)/tests/functional/rsend
 
-PROGS = cleanup \
-	rsend_001_pos \
-	rsend_002_pos \
-	rsend_003_pos \
-	rsend_004_pos \
-	rsend_005_pos \
-	rsend_006_pos \
-	rsend_007_pos \
-	rsend_008_pos \
-	rsend_009_pos \
-	rsend_010_pos \
-	rsend_011_pos \
-	rsend_012_pos \
-	rsend_013_pos \
-	setup
-
-FILES = rsend.cfg \
-	rsend.kshlib
-
-CMDS = $(PROGS:%=$(TESTDIR)/%) $(FILES:%=$(TESTDIR)/%)
-$(CMDS) := FILEMODE = 0555
-
-all lint clean clobber:
-
-install: $(CMDS)
-
-$(CMDS): $(TESTDIR)
-
-$(TESTDIR):
-	$(INS.dir)
-
-$(TESTDIR)/%: %.ksh
-	$(INS.rename)
-
-$(TESTDIR)/%: %
-	$(INS.file)
+include $(SRC)/test/zfs-tests/Makefile.com

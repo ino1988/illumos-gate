@@ -20,6 +20,8 @@
  */
 /*
  * Copyright (c) 2005, 2010, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2015 by Delphix. All rights reserved.
+ * Copyright 2024 Oxide Computer Company
  */
 
 #include <sys/types.h>
@@ -150,6 +152,16 @@ tcp_fuse(tcp_t *tcp, uchar_t *iphdr, tcpha_t *tcpha)
 		CONN_DEC_REF(peer_connp);
 		return;
 	}
+
+	/*
+	 * If we need to add MD5 Signature options, don't allow fusion.
+	 */
+	if (tcp->tcp_md5sig || peer_tcp->tcp_md5sig) {
+		TCP_STAT(tcps, tcp_fusion_unqualified);
+		CONN_DEC_REF(peer_connp);
+		return;
+	}
+
 	/*
 	 * Fuse the endpoints; we perform further checks against both
 	 * tcp endpoints to ensure that a fusion is allowed to happen.
@@ -159,7 +171,7 @@ tcp_fuse(tcp_t *tcp, uchar_t *iphdr, tcpha_t *tcpha)
 
 	if (!tcp->tcp_unfusable && !peer_tcp->tcp_unfusable &&
 	    tcp->tcp_xmit_head == NULL && peer_tcp->tcp_xmit_head == NULL) {
-		mblk_t *mp;
+		mblk_t *mp = NULL;
 		queue_t *peer_rq = peer_connp->conn_rq;
 
 		ASSERT(!TCP_IS_DETACHED(peer_tcp));
@@ -465,6 +477,16 @@ tcp_fuse_output(tcp_t *tcp, mblk_t *mp, uint32_t send_size)
 	}
 
 	/*
+	 * Check enforcement of the minimum TTL policy differences in the
+	 * connection as this can change even after fusion. If we detect a
+	 * mismatch, unfuse and allow normal stack processing to handle this.
+	 */
+	if (peer_connp->conn_min_ttl != 0 && peer_connp->conn_min_ttl >
+	    connp->conn_xmit_ipp.ipp_unicast_hops) {
+		goto unfuse;
+	}
+
+	/*
 	 * Handle urgent data; we either send up SIGURG to the peer now
 	 * or do it later when we drain, in case the peer is detached
 	 * or if we're short of memory for M_PCSIG mblk.
@@ -645,14 +667,16 @@ tcp_fuse_output(tcp_t *tcp, mblk_t *mp, uint32_t send_size)
 	peer_tcp->tcp_rack = peer_tcp->tcp_rnxt;
 
 	TCPS_BUMP_MIB(tcps, tcpOutDataSegs);
+	TCPS_BUMP_MIB(tcps, tcpHCOutSegs);
 	TCPS_UPDATE_MIB(tcps, tcpOutDataBytes, send_size);
+	tcp->tcp_cs.tcp_out_data_bytes += send_size;
+	tcp->tcp_cs.tcp_out_data_segs++;
 
 	TCPS_BUMP_MIB(tcps, tcpHCInSegs);
 	TCPS_BUMP_MIB(tcps, tcpInDataInorderSegs);
 	TCPS_UPDATE_MIB(tcps, tcpInDataInorderBytes, send_size);
-
-	BUMP_LOCAL(tcp->tcp_obsegs);
-	BUMP_LOCAL(peer_tcp->tcp_ibsegs);
+	peer_tcp->tcp_cs.tcp_in_data_inorder_bytes += send_size;
+	peer_tcp->tcp_cs.tcp_in_data_inorder_segs++;
 
 	DTRACE_TCP5(send, void, NULL, ip_xmit_attr_t *, connp->conn_ixa,
 	    __dtrace_tcp_void_ip_t *, NULL, tcp_t *, tcp,

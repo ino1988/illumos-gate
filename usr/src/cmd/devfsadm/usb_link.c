@@ -21,6 +21,9 @@
  * Copyright 2009 Sun Microsystems, Inc.  All rights reserved.
  * Use is subject to license terms.
  */
+/*
+ * Copyright 2019, Joyent, Inc.
+ */
 
 #include <devfsadm.h>
 #include <stdio.h>
@@ -37,6 +40,8 @@ static int usb_process(di_minor_t minor, di_node_t node);
 
 static void ugen_create_link(char *p_path, char *node_name,
     di_node_t node, di_minor_t minor);
+static void ccid_create_link(char *p_path, char *node_name,
+    di_node_t node, di_minor_t minor);
 
 
 /* Rules for creating links */
@@ -51,15 +56,13 @@ static devfsadm_create_t usb_cbt[] = {
 						ILEVEL_0, usb_process },
 	{ "usb", NULL, "hid",		DRV_EXACT,
 						ILEVEL_0, usb_process },
-	{ "usb", NULL, "hwarc",	DRV_EXACT,
-						ILEVEL_0, usb_process },
-	{ "usb", NULL, "wusb_ca",	DRV_EXACT,
-						ILEVEL_0, usb_process },
 	{ "usb", DDI_NT_NEXUS, "hubd",	DRV_EXACT|TYPE_EXACT,
 						ILEVEL_0, usb_process },
 	{ "usb", DDI_NT_NEXUS, "ohci",	DRV_EXACT|TYPE_EXACT,
 						ILEVEL_0, usb_process },
 	{ "usb", DDI_NT_NEXUS, "ehci",	DRV_EXACT|TYPE_EXACT,
+						ILEVEL_0, usb_process },
+	{ "usb", DDI_NT_NEXUS, "xhci",	DRV_EXACT|TYPE_EXACT,
 						ILEVEL_0, usb_process },
 	{ "usb", DDI_NT_SCSI_NEXUS, "scsa2usb",	DRV_EXACT|TYPE_EXACT,
 						ILEVEL_0, usb_process },
@@ -77,7 +80,7 @@ static devfsadm_create_t usb_cbt[] = {
 						ILEVEL_0, usb_process },
 	{ "usb", DDI_NT_UGEN, "usbprn", DRV_EXACT|TYPE_EXACT,
 						ILEVEL_0, usb_process },
-	{ "usb", DDI_NT_NEXUS, "hwahc", DRV_EXACT|TYPE_EXACT,
+	{ "usb", DDI_NT_CCID_ATTACHMENT_POINT, "ccid", DRV_EXACT|TYPE_EXACT,
 						ILEVEL_0, usb_process },
 };
 
@@ -100,9 +103,7 @@ DEVFSADM_CREATE_INIT_V0(usb_cbt);
 #define	USB_LINK_RE_MASS_STORE	"^usb/mass-storage[0-9]+$"
 #define	USB_LINK_RE_UGEN	"^usb/[0-9,a-f]+\\.[0-9,a-f]+/[0-9]+/.+$"
 #define	USB_LINK_RE_USBPRN	"^usb/printer[0-9]+$"
-#define	USB_LINK_RE_WHOST	"^usb/whost[0-9]+$"
-#define	USB_LINK_RE_HWARC	"^usb/hwarc[0-9]+$"
-#define	USB_LINK_RE_WUSB_CA	"^usb/wusb_ca[0-9]+$"
+#define	USB_LINK_RE_CCID	"^ccid/ccid[0-9]+/slot[0-9]+$"
 
 /* Rules for removing links */
 static devfsadm_remove_t usb_remove_cbt[] = {
@@ -131,12 +132,8 @@ static devfsadm_remove_t usb_remove_cbt[] = {
 			devfsadm_rm_all },
 	{ "usb", USB_LINK_RE_USBPRN, RM_POST | RM_HOT | RM_ALWAYS, ILEVEL_0,
 			devfsadm_rm_link },
-	{ "usb", USB_LINK_RE_WHOST, RM_POST | RM_HOT, ILEVEL_0,
-			devfsadm_rm_all },
-	{ "usb", USB_LINK_RE_HWARC, RM_POST | RM_HOT | RM_ALWAYS, ILEVEL_0,
-			devfsadm_rm_all },
-	{ "usb", USB_LINK_RE_WUSB_CA, RM_POST | RM_HOT | RM_ALWAYS, ILEVEL_0,
-			devfsadm_rm_all }
+	{ "usb", USB_LINK_RE_CCID, RM_POST | RM_HOT | RM_ALWAYS, ILEVEL_0,
+		devfsadm_rm_all }
 };
 
 /*
@@ -165,12 +162,6 @@ static devfsadm_enumerate_t mass_storage_rules[1] =
 	{"^usb$/^mass-storage([0-9]+)$", 1, MATCH_ALL};
 static devfsadm_enumerate_t usbprn_rules[1] =
 	{"^usb$/^printer([0-9]+)$", 1, MATCH_ALL};
-static devfsadm_enumerate_t whost_rules[1] =
-	{"^usb$/^whost([0-9]+)$", 1, MATCH_ALL};
-static devfsadm_enumerate_t hwarc_rules[1] =
-	{"^usb$/^hwarc([0-9]+)$", 1, MATCH_ALL};
-static devfsadm_enumerate_t wusb_ca_rules[1] =
-	{"^usb$/^wusb_ca([0-9]+)$", 1, MATCH_ALL};
 
 DEVFSADM_REMOVE_INIT_V0(usb_remove_cbt);
 
@@ -189,28 +180,26 @@ minor_fini(void)
 }
 
 typedef enum {
-	DRIVER_HUBD	= 0,
-	DRIVER_OHCI	= 1,
-	DRIVER_EHCI	= 2,
-	DRIVER_UHCI	= 3,
-	DRIVER_USB_AC	= 4,
-	DRIVER_USB_AS	= 5,
-	DRIVER_HID	= 6,
-	DRIVER_USB_MID	= 7,
-	DRIVER_DDIVS_USBC = 8,
-	DRIVER_SCSA2USB = 9,
-	DRIVER_USBPRN	= 10,
-	DRIVER_UGEN	= 11,
-	DRIVER_VIDEO	= 12,
-	DRIVER_HWAHC	= 13,
-	DRIVER_HWARC	= 14,
-	DRIVER_WUSB_CA	= 15,
-	DRIVER_UNKNOWN	= 16
+	DRIVER_HUBD,
+	DRIVER_OHCI,
+	DRIVER_EHCI,
+	DRIVER_UHCI,
+	DRIVER_XHCI,
+	DRIVER_USB_AC,
+	DRIVER_USB_AS,
+	DRIVER_HID,
+	DRIVER_USB_MID,
+	DRIVER_DDIVS_USBC,
+	DRIVER_SCSA2USB,
+	DRIVER_USBPRN,
+	DRIVER_UGEN,
+	DRIVER_VIDEO,
+	DRIVER_UNKNOWN
 } driver_defs_t;
 
 typedef struct {
 	char	*driver_name;
-	int	index;
+	driver_defs_t	index;
 } driver_name_table_entry_t;
 
 driver_name_table_entry_t driver_name_table[] = {
@@ -218,6 +207,7 @@ driver_name_table_entry_t driver_name_table[] = {
 	{ "ohci",	DRIVER_OHCI },
 	{ "ehci",	DRIVER_EHCI },
 	{ "uhci",	DRIVER_UHCI },
+	{ "xhci",	DRIVER_XHCI },
 	{ "usb_ac",	DRIVER_USB_AC },
 	{ "usb_as",	DRIVER_USB_AS },
 	{ "hid",	DRIVER_HID },
@@ -227,9 +217,6 @@ driver_name_table_entry_t driver_name_table[] = {
 	{ "usbprn",	DRIVER_USBPRN },
 	{ "ugen",	DRIVER_UGEN },
 	{ "usbvc",	DRIVER_VIDEO },
-	{ "hwahc",	DRIVER_HWAHC },
-	{ "hwarc",	DRIVER_HWARC },
-	{ "wusb_ca",	DRIVER_WUSB_CA },
 	{ NULL,		DRIVER_UNKNOWN }
 };
 
@@ -244,7 +231,8 @@ usb_process(di_minor_t minor, di_node_t node)
 	devfsadm_enumerate_t rules[1];
 	char *l_path, *p_path, *buf, *devfspath;
 	char *minor_nm, *drvr_nm, *name = (char *)NULL;
-	int i, index;
+	int i;
+	driver_defs_t index;
 	int flags = 0;
 	int create_secondary_link = 0;
 
@@ -301,12 +289,21 @@ usb_process(di_minor_t minor, di_node_t node)
 		return (DEVFSADM_CONTINUE);
 	}
 
+	if (strcmp(di_minor_nodetype(minor), DDI_NT_CCID_ATTACHMENT_POINT) ==
+	    0) {
+		ccid_create_link(p_path, minor_nm, node, minor);
+		free(l_path);
+		free(p_path);
+		return (DEVFSADM_CONTINUE);
+	}
+
 	/* Figure out which rules to apply */
 	switch (index) {
 	case DRIVER_HUBD:
 	case DRIVER_OHCI:
 	case DRIVER_EHCI:
 	case DRIVER_UHCI:
+	case DRIVER_XHCI:
 		rules[0] = hub_rules[0];	/* For HUBs */
 		name = "hub";
 
@@ -357,27 +354,6 @@ usb_process(di_minor_t minor, di_node_t node)
 	case DRIVER_USBPRN:
 		rules[0] = usbprn_rules[0];
 		name = "printer";
-		break;
-	case DRIVER_HWAHC:
-		if (strcmp(minor_nm, "hwahc") == 0) {
-			rules[0] = whost_rules[0];
-			name = "whost";		/* For HWA HC */
-		} else if (strcmp(minor_nm, "hubd") == 0) {
-			rules[0] = hub_rules[0];
-			name = "hub";		/* For HWA HC */
-		} else {
-			free(l_path);
-			free(p_path);
-			return (DEVFSADM_CONTINUE);
-		}
-		break;
-	case DRIVER_HWARC:
-		rules[0] = hwarc_rules[0];
-		name = "hwarc";		/* For UWB HWA Radio Controllers */
-		break;
-	case DRIVER_WUSB_CA:
-		rules[0] = wusb_ca_rules[0];
-		name = "wusb_ca";	/* for wusb cable association */
 		break;
 	default:
 		devfsadm_print(debug_mid, "usb_process: unknown driver=%s\n",
@@ -486,4 +462,20 @@ ugen_create_link(char *p_path, char *node_name,
 	(void) devfsadm_mklink(l_path, node, minor, flags);
 
 	free(buf);
+}
+
+/*
+ * Create a CCID related link.
+ */
+static void
+ccid_create_link(char *p_path, char *minor_nm, di_node_t node, di_minor_t minor)
+{
+	char l_path[MAXPATHLEN];
+
+	(void) snprintf(l_path, sizeof (l_path), "ccid/ccid%d/%s",
+	    di_instance(node), minor_nm);
+
+	devfsadm_print(debug_mid, "mklink %s -> %s\n", l_path, p_path);
+
+	(void) devfsadm_mklink(l_path, node, minor, 0);
 }

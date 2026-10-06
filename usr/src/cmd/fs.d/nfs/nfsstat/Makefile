@@ -22,7 +22,8 @@
 # Copyright 2009 Sun Microsystems, Inc.  All rights reserved.
 # Use is subject to license terms.
 #
-# cmd/fs.d/nfs/nfsstat/Makefile
+# Copyright (c) 2018, Joyent, Inc.
+# Copyright 2025 Hans Rosenfeld
 
 PROG=		nfsstat
 
@@ -33,15 +34,17 @@ COMMON=	nfs_sec.o
 OBJS=	nfsstat.o $(COMMON)
 SRCS=	nfsstat.c ../lib/nfs_sec.c
 
-STATCOMMONDIR = $(SRC)/cmd/stat/common
+CLEANFILES = $(OBJS)
 
-STAT_COMMON_OBJS = timestamp.o
-STAT_COMMON_SRCS = $(STAT_COMMON_OBJS:%.o=$(STATCOMMONDIR)/%.c)
-SRCS += $(STAT_COMMON_SRCS)
-OBJS += $(STAT_COMMON_OBJS)
+include		$(SRC)/cmd/stat/Makefile.stat
 
-CPPFLAGS += -I$(STATCOMMONDIR)
+CSTD= $(CSTD_GNU99)
+
 CERRWARN += -_gcc=-Wno-parentheses
+
+# not linted
+SMATCH=off
+
 LDLIBS += -lkstat -lnsl
 
 $(PROG):	$(OBJS)
@@ -56,16 +59,11 @@ all:		$(PROG)
 
 nfs_sec.o:	../lib/nfs_sec.c
 		$(COMPILE.c) ../lib/nfs_sec.c
-
-%.o:    $(STATCOMMONDIR)/%.c
-	$(COMPILE.c) $<
+		$(POST_PROCESS_O)
 
 install:	all $(ROOTPROG)
 
-lint:
-	$(LINT.c) $(SRCS) $(LDLIBS)
-
-clean:     
-	$(RM) $(OBJS)
+clean:
+		$(RM) $(CLEANFILES)
 
 include ../../../Makefile.targ

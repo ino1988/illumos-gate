@@ -21,6 +21,7 @@
 /*
  * Copyright 2014 Garrett D'Amore <garrett@damore.org>
  * Copyright (c) 1999, 2010, Oracle and/or its affiliates. All rights reserved.
+ * Copyright 2020 OmniOS Community Edition (OmniOSce) Association.
  */
 
 #ifndef	_USER_ATTR_H
@@ -78,10 +79,6 @@ struct __FILE;		/* structure tag for type FILE defined in stdio.h */
 #define	USERATTR_ROLES_KW		"roles"
 #define	USERATTR_ROLES_NONE_KW		"none"
 #define	USERATTR_DEFAULTPROJ_KW		"project"
-#define	USERATTR_IDLETIME_KW		"idletime"
-#define	USERATTR_IDLECMD_KW		"idlecmd"
-#define	USERATTR_IDLECMD_LOCK_KW	"lock"
-#define	USERATTR_IDLECMD_LOGOUT_KW	"logout"
 #define	USERATTR_TYPE_KW		"type"
 #define	USERATTR_TYPE_NORMAL_KW		"normal"
 #define	USERATTR_TYPE_ADMIN_KW		"admin"
@@ -106,6 +103,9 @@ struct __FILE;		/* structure tag for type FILE defined in stdio.h */
 #define	USERATTR_PASSWD_MANUAL		"manual"
 #define	USERATTR_TYPE_ROLE		USERATTR_TYPE_NONADMIN_KW
 #define	USERATTR_AUDIT_FLAGS_KW		"audit_flags"
+#define	USERATTR_ROLEAUTH_KW		"roleauth"
+#define	USERATTR_ROLEAUTH_USER		"user"
+#define	USERATTR_ROLEAUTH_ROLE		"role"
 
 
 /*

@@ -23,6 +23,9 @@
 # Copyright 2006 Sun Microsystems, Inc.  All rights reserved.
 # Use is subject to license terms.
 #
+# Copyright (c) 2018, Joyent, Inc.
+# Copyright 2023 Jason King
+
 
 #
 # uts/intel/io/sata/Makefile
@@ -43,10 +46,7 @@ UTSBASE	= ../..
 #
 MODULE		= sata
 OBJECTS		= $(SATA_OBJS:%=$(OBJS_DIR)/%)
-LINTS		= $(SATA_OBJS:%.o=$(LINTS_DIR)/%.ln)
 ROOTMODULE	= $(ROOT_MISC_DIR)/$(MODULE)
-WARLOCK_OUT     = $(SATA_OBJS:%.o=%.ll)
-WARLOCK_OK      = $(MODULE).ok
 
 #
 #	Include common rules.
@@ -57,7 +57,6 @@ include $(UTSBASE)/intel/Makefile.intel
 #	Define targets
 #
 ALL_TARGET	= $(BINARY)
-LINT_TARGET	= $(MODULE).lint
 INSTALL_TARGET	= $(BINARY) $(ROOTMODULE)
 
 #
@@ -67,31 +66,11 @@ DEBUG_FLGS	=
 DEBUG_DEFS	+= $(DEBUG_FLGS)
 
 #
-# lint pass one enforcement
-#  
-CFLAGS += $(CCVERBOSE)
-
-#
 # dependency on scsi module
 #
-LDFLAGS += -dy -Nmisc/scsi
+LDFLAGS += -Nmisc/scsi
 
-#
-# For now, disable these lint checks; maintainers should endeavor
-# to investigate and remove these for maximum lint coverage.
-# Please do not carry these forward to new Makefiles.
-#
-LINTTAGS	+= -erroff=E_BAD_PTR_CAST_ALIGN
-LINTTAGS	+= -erroff=E_PTRDIFF_OVERFLOW
-LINTTAGS	+= -erroff=E_ASSIGN_NARROW_CONV
-LINTTAGS	+= -erroff=E_STATIC_UNUSED
-
-CERRWARN	+= -_gcc=-Wno-parentheses
-CERRWARN	+= -_gcc=-Wno-unused-label
-CERRWARN	+= -_gcc=-Wno-unused-function
-CERRWARN	+= -_gcc=-Wno-unused-variable
-CERRWARN	+= -_gcc=-Wno-uninitialized
-CERRWARN	+= -_gcc=-Wno-empty-body
+CFLAGS		+= $(CCVERBOSE)
 
 #
 #	Default build targets.
@@ -103,16 +82,8 @@ def:		$(DEF_DEPS)
 all:		$(ALL_DEPS)
 
 clean:		$(CLEAN_DEPS)
-		$(RM) $(WARLOCK_OUT) $(WARLOCK_OK)
 
 clobber:	$(CLOBBER_DEPS)
-		$(RM) $(WARLOCK_OUT) $(WARLOCK_OK)
-
-lint:		$(LINT_DEPS)
-
-modlintlib:	$(MODLINTLIB_DEPS)
-
-clean.lint:	$(CLEAN_LINT_DEPS)
 
 install:	$(INSTALL_DEPS)
 
@@ -120,21 +91,3 @@ install:	$(INSTALL_DEPS)
 #	Include common targets.
 #
 include $(UTSBASE)/intel/Makefile.targ
-
-#
-#       Defines for local commands.
-#
-WLCC            = wlcc
-TOUCH           = touch
-WARLOCK         = warlock
-
-#
-#       Warlock targets
-#
-warlock: $(WARLOCK_OK)
-
-$(WARLOCK_OK):   $(WARLOCK_OUT)
-	$(TOUCH) $@
-
-%.ll: $(UTSBASE)/common/io/sata/impl/%.c
-	$(WLCC) $(CPPFLAGS) -DDEBUG -o $@ $<

@@ -25,6 +25,10 @@
 /*
  * Copyright (c) 2012, Joyent, Inc. All rights reserved.
  */
+/*
+ * Copyright (c) 2019 Peter Tribble.
+ * Copyright 2022 Oxide Computer Company
+ */
 
 /*
  * For machines that support the openprom, fetch and print the list
@@ -47,7 +51,8 @@
 #include <sys/stat.h>
 #include <zone.h>
 #include <libnvpair.h>
-#include <pcidb.h>
+#include <err.h>
+#include <upanic.h>
 #include "prtconf.h"
 
 
@@ -99,7 +104,6 @@ typedef struct dumpops {
 typedef struct di_args {
 	di_prom_handle_t	prom_hdl;
 	di_devlink_handle_t	devlink_hdl;
-	pcidb_hdl_t 		*pcidb_hdl;
 } di_arg_t;
 
 static const dumpops_t sysprop_dumpops = {
@@ -140,7 +144,6 @@ static void walk_driver(di_node_t, di_arg_t *);
 static int dump_devs(di_node_t, void *);
 static int dump_prop_list(const dumpops_t *, const char *,
 				int, void *, dev_t, int *);
-static int _error(const char *, ...);
 static int is_openprom();
 static void walk(uchar_t *, uint_t, int);
 static void dump_node(nvlist_t *, int);
@@ -159,8 +162,9 @@ static int unprintable(char *, int);
 static int promopen(int);
 static void promclose();
 static di_node_t find_target_node(di_node_t);
-static void node_display_set(di_node_t);
-static int dump_pciid(char *, int, di_node_t, pcidb_hdl_t *);
+static void node_display_private_set(di_node_t);
+static int node_display_set(di_node_t, void *);
+static void dump_pciid(char *, int, di_node_t);
 
 void
 prtconf_devinfo(void)
@@ -169,12 +173,11 @@ prtconf_devinfo(void)
 	di_arg_t		di_arg;
 	di_prom_handle_t	prom_hdl = DI_PROM_HANDLE_NIL;
 	di_devlink_handle_t	devlink_hdl = NULL;
-	pcidb_hdl_t		*pcidb_hdl = NULL;
 	di_node_t		root_node;
 	uint_t			flag;
 	char			*rootpath;
 
-	dprintf("verbosemode %s\n", opts.o_verbose ? "on" : "off");
+	dbgprintf("verbosemode %s\n", opts.o_verbose ? "on" : "off");
 
 	/* determine what info we need to get from kernel */
 	flag = DINFOSUBTREE;
@@ -187,15 +190,15 @@ prtconf_devinfo(void)
 	if (opts.o_pciid) {
 		flag |= DINFOPROP;
 		if ((prom_hdl = di_prom_init()) == DI_PROM_HANDLE_NIL)
-			exit(_error("di_prom_init() failed."));
+			err(-1, "di_prom_init() failed.");
 	}
 
 	if (opts.o_forcecache) {
 		if (dbg.d_forceload) {
-			exit(_error(NULL, "option combination not supported"));
+			warnx("option combination not supported");
 		}
 		if (strcmp(rootpath, "/") != 0) {
-			exit(_error(NULL, "invalid root path for option"));
+			errx(-1, "invalid root path for option");
 		}
 		flag = DINFOCACHE;
 	} else if (opts.o_verbose) {
@@ -213,12 +216,12 @@ prtconf_devinfo(void)
 
 		/* get devlink (aka aliases) data */
 		if ((devlink_hdl = di_devlink_init(NULL, 0)) == NULL)
-			exit(_error("di_devlink_init() failed."));
+			err(-1, "di_devlink_init() failed.");
 	} else
 		root_node = di_init(rootpath, flag);
 
 	if (root_node == DI_NODE_NIL) {
-		(void) _error(NULL, "devinfo facility not available");
+		warnx("devinfo facility not available");
 		/* not an error if this isn't the global zone */
 		if (getzoneid() == GLOBAL_ZONEID)
 			exit(-1);
@@ -226,16 +229,8 @@ prtconf_devinfo(void)
 			exit(0);
 	}
 
-	if (opts.o_verbose || opts.o_pciid) {
-		pcidb_hdl = pcidb_open(PCIDB_VERSION);
-		if (pcidb_hdl == NULL)
-			(void) _error(NULL, "pcidb facility not available, "
-			    "continuing anyways");
-	}
-
 	di_arg.prom_hdl = prom_hdl;
 	di_arg.devlink_hdl = devlink_hdl;
-	di_arg.pcidb_hdl = pcidb_hdl;
 
 	/*
 	 * ...and walk all nodes to report them out...
@@ -263,7 +258,7 @@ prtconf_devinfo(void)
 		}
 
 		/* mark the target node so we display it */
-		node_display_set(target_node);
+		node_display_private_set(target_node);
 
 		if (opts.o_ancestors) {
 			/*
@@ -271,8 +266,8 @@ prtconf_devinfo(void)
 			 * them as well
 			 */
 			node = target_node;
-			while (node = di_parent_node(node))
-				node_display_set(node);
+			while ((node = di_parent_node(node)) != DI_NODE_NIL)
+				node_display_private_set(node);
 		} else {
 			/*
 			 * when we display device tree nodes the indentation
@@ -285,7 +280,7 @@ prtconf_devinfo(void)
 			 * target node starts with an indentation of zero.
 			 */
 			node = target_node;
-			while (node = di_parent_node(node))
+			while ((node = di_parent_node(node)) != DI_NODE_NIL)
 				opts.o_target++;
 		}
 
@@ -295,9 +290,7 @@ prtconf_devinfo(void)
 			 * them as well
 			 */
 			(void) di_walk_node(target_node, DI_WALK_CLDFIRST,
-			    (void *)1,
-			    (int (*)(di_node_t, void *))
-			    node_display_set);
+			    (void *)1, node_display_set);
 		}
 	}
 
@@ -308,8 +301,6 @@ prtconf_devinfo(void)
 		di_prom_fini(prom_hdl);
 	if (devlink_hdl != NULL)
 		(void) di_devlink_fini(&devlink_hdl);
-	if (pcidb_hdl != NULL)
-		pcidb_close(pcidb_hdl);
 	di_fini(root_node);
 }
 
@@ -325,7 +316,7 @@ i_find_target_node(di_node_t node, void *arg)
 		char *path;
 
 		if ((path = di_devfs_path(node)) == NULL)
-			exit(_error("failed to allocate memory"));
+			err(-1, "failed to allocate memory");
 
 		if (strcmp(opts.o_devices_path, path) == 0) {
 			di_devfs_path_free(path);
@@ -345,7 +336,8 @@ i_find_target_node(di_node_t node, void *arg)
 		}
 	} else {
 		/* we should never get here */
-		exit(_error(NULL, "internal error"));
+		const char *msg = "internal error";
+		upanic(msg, strlen(msg));
 	}
 	return (DI_WALK_CONTINUE);
 }
@@ -378,11 +370,18 @@ node_display(di_node_t node)
 }
 
 static void
-node_display_set(di_node_t node)
+node_display_private_set(di_node_t node)
 {
 	long data = (long)di_node_private_get(node);
 	data |= NODE_DISPLAY;
 	di_node_private_set(node, (void *)data);
+}
+
+static int
+node_display_set(di_node_t node, void *arg __unused)
+{
+	node_display_private_set(node);
+	return (0);
 }
 
 #define	LNODE_DISPLAYED		(1<<0)
@@ -548,7 +547,7 @@ dump_prop_list(const dumpops_t *dumpops, const char *name, int ilev,
 	di_minor_t	minor;
 	char		*p;
 	int		i, prop_type, nitems;
-	dev_t		pdev;
+	dev_t		pdev = DDI_DEV_T_NONE;
 	int		nprop = 0;
 
 	if (compat_printed)
@@ -721,6 +720,23 @@ walk_driver(di_node_t root, di_arg_t *di_arg)
 	}
 }
 
+static const char *
+devinfo_is_pci(di_node_t node)
+{
+	char *t = NULL;
+	di_node_t pnode = di_parent_node(node);
+
+	if (di_prop_lookup_strings(DDI_DEV_T_ANY, pnode,
+	    "device_type", &t) <= 0)
+		return (NULL);
+
+	if (t == NULL || (strcmp(t, "pci") != 0 &&
+	    strcmp(t, "pciex") != 0))
+		return (NULL);
+
+	return (t);
+}
+
 /*
  * print out information about this node, returns appropriate code.
  */
@@ -738,7 +754,7 @@ dump_devs(di_node_t node, void *arg)
 
 	if (dbg.d_debug) {
 		char *path = di_devfs_path(node);
-		dprintf("Dump node %s\n", path);
+		dbgprintf("Dump node %s\n", path);
 		di_devfs_path_free(path);
 	}
 
@@ -766,8 +782,19 @@ dump_devs(di_node_t node, void *arg)
 	indent_to_level(ilev);
 
 	(void) printf("%s", di_node_name(node));
-	if (opts.o_pciid)
-		(void) print_pciid(node, di_arg->prom_hdl, di_arg->pcidb_hdl);
+	if (opts.o_pciid) {
+		int *vid, *did;
+		const char *dtype = devinfo_is_pci(node);
+
+		if (dtype != NULL &&
+		    di_prop_lookup_ints(DDI_DEV_T_ANY, node, "vendor-id",
+		    &vid) > 0 && vid[0] <= UINT16_MAX &&
+		    di_prop_lookup_ints(DDI_DEV_T_ANY, node, "device-id",
+		    &did) > 0 && did[0] <= UINT16_MAX) {
+			print_pciid(dtype, (uint16_t)vid[0], (uint16_t)did[0],
+			    opts.o_pcidb);
+		}
+	}
 
 	/*
 	 * if this node does not have an instance number or is the
@@ -811,8 +838,7 @@ dump_devs(di_node_t node, void *arg)
 			    ilev + 1, node);
 
 		/* Ensure that pci id information is printed under Hardware */
-		(void) dump_pciid(printed ? NULL : "Hardware",
-		    ilev + 1, node, di_arg->pcidb_hdl);
+		dump_pciid(printed ? NULL : "Hardware", ilev + 1, node);
 
 		dump_priv_data(ilev + 1, node);
 		dump_pathing_data(ilev + 1, node);
@@ -828,40 +854,6 @@ dump_devs(di_node_t node, void *arg)
 
 	return (DI_WALK_CONTINUE);
 }
-
-/* _error([no_perror, ] fmt [, arg ...]) */
-static int
-_error(const char *opt_noperror, ...)
-{
-	int saved_errno;
-	va_list ap;
-	int no_perror = 0;
-	const char *fmt;
-
-	saved_errno = errno;
-
-	(void) fprintf(stderr, "%s: ", opts.o_progname);
-
-	va_start(ap, opt_noperror);
-	if (opt_noperror == NULL) {
-		no_perror = 1;
-		fmt = va_arg(ap, char *);
-	} else
-		fmt = opt_noperror;
-	(void) vfprintf(stderr, fmt, ap);
-	va_end(ap);
-
-	if (no_perror)
-		(void) fprintf(stderr, "\n");
-	else {
-		(void) fprintf(stderr, ": ");
-		errno = saved_errno;
-		perror("");
-	}
-
-	return (-1);
-}
-
 
 /*
  * The rest of the routines handle printing the raw prom devinfo (-p option).
@@ -881,7 +873,6 @@ typedef union {
 } Oppbuf;
 
 static int prom_fd;
-static uchar_t *prom_snapshot;
 
 static int
 is_openprom(void)
@@ -892,7 +883,7 @@ is_openprom(void)
 
 	opp->oprom_size = MAXVALSIZE;
 	if (ioctl(prom_fd, OPROMGETCONS, opp) < 0)
-		exit(_error("OPROMGETCONS"));
+		err(-1, "OPROMGETCONS");
 
 	i = (unsigned int)((unsigned char)opp->oprom_array[0]);
 	return ((i & OPROMCONS_OPENPROM) == OPROMCONS_OPENPROM);
@@ -901,10 +892,12 @@ is_openprom(void)
 int
 do_prominfo(void)
 {
-	uint_t arg = opts.o_verbose;
+	uint_t arg = 0;
+	uint_t *ptr;
+	uchar_t *prom_snapshot;
 
 	if (promopen(O_RDONLY))  {
-		exit(_error("openeepr device open failed"));
+		err(-1, "openeepr device open failed");
 	}
 
 	if (is_openprom() == 0)  {
@@ -913,27 +906,40 @@ do_prominfo(void)
 		return (1);
 	}
 
+	/*
+	 * If we're eiher in verbose mode or asked to get device information,
+	 * then we need to actually ask for verbose information from the prom by
+	 * setting a non-zero value.
+	 */
+	if (opts.o_verbose != 0 || opts.o_pciid != 0) {
+		arg = 1;
+	}
+
 	/* OPROMSNAPSHOT returns size in arg */
 	if (ioctl(prom_fd, OPROMSNAPSHOT, &arg) < 0)
-		exit(_error("OPROMSNAPSHOT"));
+		err(-1, "OPROMSNAPSHOT");
 
-	if (arg == 0)
+	/*
+	 * ioctl OPROMCOPYOUT is expecting buffer with at least
+	 * sizeof (uint_t).
+	 */
+	if (arg < sizeof (uint_t))
 		return (1);
 
-	if ((prom_snapshot = malloc(arg)) == NULL)
-		exit(_error("failed to allocate memory"));
+	if ((ptr = malloc(arg)) == NULL)
+		err(-1, "failed to allocate memory");
 
 	/* copy out the snapshot for printing */
-	/*LINTED*/
-	*(uint_t *)prom_snapshot = arg;
+	*ptr = arg;
+	prom_snapshot = (uchar_t *)ptr;
 	if (ioctl(prom_fd, OPROMCOPYOUT, prom_snapshot) < 0)
-		exit(_error("OPROMCOPYOUT"));
+		err(-1, "OPROMCOPYOUT");
 
 	promclose();
 
 	/* print out information */
 	walk(prom_snapshot, arg, 0);
-	free(prom_snapshot);
+	free(ptr);
 
 	return (0);
 }
@@ -949,7 +955,7 @@ walk(uchar_t *buf, uint_t size, int level)
 
 	/* Expand to an nvlist */
 	if (nvlist_unpack((char *)buf, size, &nvl, 0))
-		exit(_error("error processing snapshot"));
+		err(-1, "error processing snapshot");
 
 	/* print current node */
 	dump_node(nvl, level);
@@ -960,20 +966,20 @@ walk(uchar_t *buf, uint_t size, int level)
 		return;		/* no child exists */
 
 	if (error || nvlist_unpack((char *)cbuf, csize, &cnvl, 0))
-		exit(_error("error processing snapshot"));
+		err(-1, "error processing snapshot");
 
-	while (child = nvlist_next_nvpair(cnvl, child)) {
+	while ((child = nvlist_next_nvpair(cnvl, child)) != NULL) {
 		char *name = nvpair_name(child);
 		data_type_t type = nvpair_type(child);
 		uchar_t *nodebuf;
 		uint_t nodesize;
 		if (strcmp("node", name) != 0) {
-			dprintf("unexpected nvpair name %s != name\n", name);
+			dbgprintf("unexpected nvpair name %s != name\n", name);
 			continue;
 		}
 		if (type != DATA_TYPE_BYTE_ARRAY) {
-			dprintf("unexpected nvpair type %d, not byte array \n",
-			    type);
+			dbgprintf("unexpected nvpair type %d, "
+			    "not byte array \n", type);
 			continue;
 		}
 
@@ -986,35 +992,250 @@ walk(uchar_t *buf, uint_t size, int level)
 }
 
 /*
- * Print all properties and values
+ * The encoding of the name property depends on whether we got verbose prom
+ * information or not. If we didn't, it'll just be a string in the nvlist_t.
+ * However, otherwise it'll end up being byte data that the kernel guarantees
+ * for 'name' is actually a null terminated string.
+ */
+static const char *
+prom_node_name(nvlist_t *nvl)
+{
+	char *str;
+	uchar_t *bval;
+	uint_t len;
+
+	if (nvlist_lookup_string(nvl, "name", &str) == 0) {
+		return (str);
+	}
+
+	if (nvlist_lookup_byte_array(nvl, "name", &bval, &len) == 0) {
+		if (bval[len - 1] == '\0')
+			return ((char *)bval);
+	}
+
+	return ("data not available");
+}
+
+/*
+ * Given a node at a given level, try to determine if this is a PCI device. We
+ * do this through a two step process mostly due to the fact that we don't have
+ * easy linkage to the parent here and not all nodes have everything we expect.
+ * This test is more similar to the pcieadm test than what we use for the normal
+ * devinfo part.
+ *
+ * 1. Check the node name to see if it starts with pci with another character
+ *   (to avoid the synthetic pci instances).
+ * 2. Look at the compatible property for the class strings.
+ */
+static boolean_t
+prom_is_pci(nvlist_t *nvl, const char *name)
+{
+	uchar_t *value;
+	uint_t len;
+
+	if (strncmp("pci", name, 3) == 0 && name[3] != '\0') {
+		return (B_TRUE);
+	}
+
+	/*
+	 * This is a composite string. Unlike with devinfo, we just have the
+	 * array of strings here and we have to manually make sure we don't
+	 * exceed the size as we don't have the total number of entries.
+	 */
+	if (nvlist_lookup_byte_array(nvl, "compatible", &value, &len) == 0) {
+		const char *str;
+
+		/*
+		 * Adjust by one to account or the extra NUL that the driver
+		 * inserts.
+		 */
+		len--;
+		for (str = (char *)value; str < ((char *)value + len);
+		    str += strlen(str) + 1) {
+			if (strncmp("pciclass,", str,
+			    sizeof ("pciclass,") - 1) == 0 ||
+			    strncmp("pciexclass,", str,
+			    sizeof ("pciexclass,") - 1) == 0) {
+				return (B_TRUE);
+			}
+		}
+	}
+
+	return (B_FALSE);
+}
+
+static boolean_t
+prom_extract_u16(nvlist_t *nvl, const char *name, uint16_t *valp)
+{
+	uchar_t *value;
+	uint_t len;
+	uint32_t u32;
+
+	if (nvlist_lookup_byte_array(nvl, name, &value, &len) != 0) {
+		return (B_FALSE);
+	}
+
+	/*
+	 * A uint32_t will be encoded as a 4-byte value followed by a NUL
+	 * regardless.
+	 */
+	if (len != 5 || value[4] != '\0') {
+		return (B_FALSE);
+	}
+
+	/*
+	 * The current PROM code puts values in the native-endianness for x86
+	 * and SPARC as opposed to always translating into what 1275 wants of
+	 * big endian. It is unclear what'll happen for subsequent platforms.
+	 */
+#if !defined(__x86)
+#error "determine endianness of the platform's openprom interface"
+#endif
+	(void) memcpy(&u32, value, sizeof (u32));
+	if (u32 > UINT16_MAX) {
+		return (B_FALSE);
+	}
+
+	*valp = (uint16_t)u32;
+	return (B_TRUE);
+}
+
+/*
+ * Similar to the above, synthesize the device type as either pci or pciex based
+ * on the compatible array. A PCI Express device will have their first entry
+ * start with 'pciexXXXX,XXXX'. A device without that will just start with pci.
+ */
+static const char *
+prom_pci_device_type(nvlist_t *nvl)
+{
+	uchar_t *value;
+	uint_t len;
+
+	if (nvlist_lookup_byte_array(nvl, "compatible", &value, &len) != 0) {
+		return (NULL);
+	}
+
+	if (strncmp("pciex", (char *)value, 5) == 0 && value[5] != '\0') {
+		return ("pciex");
+	}
+
+	if (strncmp("pci", (char *)value, 3) == 0 && value[3] != '\0') {
+		return ("pci");
+	}
+
+	return (NULL);
+}
+
+static void
+dump_pcidb(int level, uint16_t vid, uint16_t did, boolean_t do_sub,
+    uint16_t svid, uint16_t sdid)
+{
+	const char *vstr = "unknown vendor";
+	const char *dstr = "unknown device";
+	const char *sstr = "unknown subsystem";
+	pcidb_vendor_t *pciv = NULL;
+	pcidb_device_t *pcid = NULL;
+	pcidb_subvd_t *pcis = NULL;
+
+	if (opts.o_pcidb == NULL)
+		return;
+
+	pciv = pcidb_lookup_vendor(opts.o_pcidb, vid);
+	if (pciv != NULL) {
+		vstr = pcidb_vendor_name(pciv);
+		pcid = pcidb_lookup_device_by_vendor(pciv, did);
+		if (pcid != NULL) {
+			dstr = pcidb_device_name(pcid);
+		}
+	}
+
+	indent_to_level(level);
+	(void) printf("vendor-name:  '%s'\n", vstr);
+	indent_to_level(level);
+	(void) printf("device-name:  '%s'\n", dstr);
+
+	if (!do_sub)
+		return;
+
+	if (pciv != NULL && pcid != NULL) {
+		pcis = pcidb_lookup_subvd_by_device(pcid, svid, sdid);
+		if (pcis != NULL) {
+			sstr = pcidb_subvd_name(pcis);
+		}
+	}
+
+	indent_to_level(level);
+	(void) printf("subsystem-name:  '%s'\n", sstr);
+}
+
+/*
+ * Print all properties and values. When o_verbose is specified then rather than
+ * printing the name of the node (and potentially the PCI ID and DB info), we
+ * print the node name and instead include all that information in properties.
+ * This mimics the behavior of the non-prom path.
  */
 static void
 dump_node(nvlist_t *nvl, int level)
 {
 	int id = 0;
-	char *name = NULL;
+	const char *name;
 	nvpair_t *nvp = NULL;
 
 	indent_to_level(level);
+	name = prom_node_name(nvl);
 	(void) printf("Node");
 	if (!opts.o_verbose) {
-		if (nvlist_lookup_string(nvl, "name", &name))
-			(void) printf("data not available");
-		else
-			(void) printf(" '%s'", name);
+		(void) printf(" '%s'", name);
+
+		if (opts.o_pciid && prom_is_pci(nvl, name)) {
+			const char *dtype = prom_pci_device_type(nvl);
+			uint16_t vid, did;
+
+			if (prom_extract_u16(nvl, "vendor-id", &vid) &&
+			    prom_extract_u16(nvl, "device-id", &did) &&
+			    dtype != NULL) {
+				print_pciid(dtype, vid, did, opts.o_pcidb);
+			}
+
+		}
+	} else {
+		(void) nvlist_lookup_int32(nvl, "@nodeid", &id);
+		(void) printf(" %#08x\n", id);
+	}
+
+	if (!opts.o_verbose) {
 		(void) putchar('\n');
 		return;
 	}
-	(void) nvlist_lookup_int32(nvl, "@nodeid", &id);
-	(void) printf(" %#08x\n", id);
 
-	while (nvp = nvlist_next_nvpair(nvl, nvp)) {
+	while ((nvp = nvlist_next_nvpair(nvl, nvp)) != NULL) {
 		name = nvpair_name(nvp);
 		if (name[0] == '@')
 			continue;
 
 		print_one(nvp, level + 1);
 	}
+
+	/*
+	 * Go through and create synthetic properties for PCI devices like the
+	 * normal device tree path.
+	 */
+	if (prom_is_pci(nvl, name)) {
+		uint16_t vid = UINT16_MAX, did = UINT16_MAX;
+		uint16_t svid = UINT16_MAX, sdid = UINT16_MAX;
+		boolean_t valid_sub = B_FALSE;
+
+		if (prom_extract_u16(nvl, "subsystem-vendor-id", &svid) &&
+		    prom_extract_u16(nvl, "subsystem-id", &sdid)) {
+			valid_sub = B_TRUE;
+		}
+
+		if (prom_extract_u16(nvl, "vendor-id", &vid) &&
+		    prom_extract_u16(nvl, "device-id", &did)) {
+			dump_pcidb(level + 1, vid, did, valid_sub, svid, sdid);
+		}
+	}
+
 	(void) putchar('\n');
 }
 
@@ -1030,8 +1251,10 @@ path_state_name(di_path_state_t st)
 			return ("offline");
 		case DI_PATH_STATE_FAULT:
 			return ("faulted");
+		case DI_PATH_STATE_UNKNOWN:
+		default:
+			return ("unknown");
 	}
-	return ("unknown");
 }
 
 /*
@@ -1110,7 +1333,7 @@ dump_minor_data_paths(int ilev, di_minor_t minor,
 
 	/* get the path to the device and the minor node name */
 	if ((path = di_devfs_minor_path(minor)) == NULL)
-		exit(_error("failed to allocate memory"));
+		err(-1, "failed to allocate memory");
 
 	/* display the path to this minor node */
 	indent_to_level(ilev);
@@ -1273,7 +1496,7 @@ link_lnode_disp(di_link_t link, uint_t endpoint, int ilev,
 		    (uint_t)major(devt), (uint_t)minor(devt));
 
 		/* display paths to the src devt minor node */
-		while (minor = di_minor_next(node, minor)) {
+		while ((minor = di_minor_next(node, minor)) != DI_MINOR_NIL) {
 			if (devt != di_minor_devt(minor))
 				continue;
 
@@ -1297,7 +1520,7 @@ link_lnode_disp(di_link_t link, uint_t endpoint, int ilev,
 	 */
 	node = di_lnode_devinfo(lnode);
 	if ((path = di_devfs_path(node)) == NULL)
-		exit(_error("failed to allocate memory"));
+		err(-1, "failed to allocate memory");
 
 	indent_to_level(ilev + 1);
 	(void) printf("dev_path=%s\n", path);
@@ -1312,7 +1535,8 @@ dump_minor_link_data(int ilev, di_node_t node, dev_t devt,
 	di_link_t	link;
 
 	link = DI_LINK_NIL;
-	while (link = di_link_next_by_node(node, link, DI_LINK_TGT)) {
+	while ((link = di_link_next_by_node(node, link, DI_LINK_TGT)) !=
+	    DI_LINK_NIL) {
 		di_lnode_t	tgt_lnode;
 		dev_t		tgt_devt = DDI_DEV_T_NONE;
 
@@ -1336,7 +1560,8 @@ dump_minor_link_data(int ilev, di_node_t node, dev_t devt,
 	}
 
 	link = DI_LINK_NIL;
-	while (link = di_link_next_by_node(node, link, DI_LINK_SRC)) {
+	while ((link = di_link_next_by_node(node, link, DI_LINK_SRC)) !=
+	    DI_LINK_NIL) {
 		di_lnode_t	src_lnode;
 		dev_t		src_devt = DDI_DEV_T_NONE;
 
@@ -1373,10 +1598,10 @@ dump_minor_data(int ilev, di_node_t node, di_devlink_handle_t devlink_hdl)
 	 * node as undisplayed
 	 */
 	lnode = DI_LNODE_NIL;
-	while (lnode = di_lnode_next(node, lnode))
+	while ((lnode = di_lnode_next(node, lnode)) != DI_LNODE_NIL)
 		lnode_displayed_clear(lnode);
 	minor = DI_MINOR_NIL;
-	while (minor = di_minor_next(node, minor)) {
+	while ((minor = di_minor_next(node, minor)) != DI_MINOR_NIL) {
 		minor_displayed_clear(minor);
 	}
 
@@ -1447,7 +1672,8 @@ dump_minor_data(int ilev, di_node_t node, di_devlink_handle_t devlink_hdl)
 	 * minor node does not exist for the opened devt
 	 */
 	link = DI_LINK_NIL;
-	while (link = di_link_next_by_node(node, link, DI_LINK_TGT)) {
+	while ((link = di_link_next_by_node(node, link, DI_LINK_TGT)) !=
+	    DI_LINK_NIL) {
 		dev_t		devt;
 
 		lnode = di_link_to_lnode(link, DI_LINK_TGT);
@@ -1486,7 +1712,8 @@ dump_link_data(int ilev, di_node_t node, di_devlink_handle_t devlink_hdl)
 	di_link_t	link;
 
 	link = DI_LINK_NIL;
-	while (link = di_link_next_by_node(node, link, DI_LINK_SRC)) {
+	while ((link = di_link_next_by_node(node, link, DI_LINK_SRC)) !=
+	    DI_LINK_NIL) {
 		di_lnode_t	src_lnode;
 		dev_t		src_devt = DDI_DEV_T_NONE;
 
@@ -1670,11 +1897,10 @@ promopen(int oflag)
 			if (errno == ENXIO)
 				return (-1);
 			if (getzoneid() == GLOBAL_ZONEID) {
-				_exit(_error("cannot open %s",
-				    opts.o_promdev));
+				err(-1, "cannot open %s", opts.o_promdev);
 			}
 			/* not an error if this isn't the global zone */
-			(void) _error(NULL, "openprom facility not available");
+			warnx("openprom facility not available");
 			exit(0);
 		} else
 			return (0);
@@ -1685,7 +1911,7 @@ static void
 promclose(void)
 {
 	if (close(prom_fd) < 0)
-		exit(_error("close error on %s", opts.o_promdev));
+		err(-1, "close error on %s", opts.o_promdev);
 }
 
 /*
@@ -1730,47 +1956,11 @@ do_promversion(void)
 
 	opp->oprom_size = MAXVALSIZE;
 	if (ioctl(prom_fd, OPROMGETVERSION, opp) < 0)
-		exit(_error("OPROMGETVERSION"));
+		err(-1, "OPROMGETVERSION");
 
 	(void) printf("%s\n", opp->oprom_array);
 	promclose();
 	return (0);
-}
-
-int
-do_prom_version64(void)
-{
-#ifdef	sparc
-	Oppbuf	oppbuf;
-	struct openpromio *opp = &(oppbuf.opp);
-	/*LINTED*/
-	struct openprom_opr64 *opr = (struct openprom_opr64 *)opp->oprom_array;
-
-	static const char msg[] =
-	    "NOTICE: The firmware on this system does not support the "
-	    "64-bit OS.\n"
-	    "\tPlease upgrade to at least the following version:\n"
-	    "\t\t%s\n\n";
-
-	if (promopen(O_RDONLY))  {
-		(void) fprintf(stderr, "Cannot open openprom device\n");
-		return (-1);
-	}
-
-	opp->oprom_size = MAXVALSIZE;
-	if (ioctl(prom_fd, OPROMREADY64, opp) < 0)
-		exit(_error("OPROMREADY64"));
-
-	if (opr->return_code == 0)
-		return (0);
-
-	(void) printf(msg, opr->message);
-
-	promclose();
-	return (opr->return_code);
-#else
-	return (0);
-#endif
 }
 
 int
@@ -1819,7 +2009,7 @@ do_productinfo(void)
 
 di_node_t
 find_node_by_name(di_prom_handle_t promh, di_node_t parent,
-		char *node_name)
+    char *node_name)
 {
 	di_node_t next_node;
 	uchar_t *prop_valp;
@@ -1838,7 +2028,7 @@ find_node_by_name(di_prom_handle_t promh, di_node_t parent,
 
 int
 get_propval_by_name(di_prom_handle_t promh, di_node_t node, const char *name,
-			uchar_t **valp)
+    uchar_t **valp)
 {
 	int len;
 	uchar_t *bufp;
@@ -1855,7 +2045,7 @@ get_propval_by_name(di_prom_handle_t promh, di_node_t node, const char *name,
 
 static void
 dump_prodinfo(di_prom_handle_t promh, di_node_t node, const char **propstr,
-		char *node_name, int num)
+    char *node_name, int num)
 {
 	int out, len, index1, index, endswap = 0;
 	uchar_t *prop_valp;
@@ -1946,35 +2136,29 @@ dump_compatible(char *name, int ilev, di_node_t node)
 	return (1);
 }
 
-static int
-dump_pciid(char *name, int ilev, di_node_t node, pcidb_hdl_t *pci)
+static void
+dump_pciid(char *name, int ilev, di_node_t node)
 {
-	char *t = NULL;
 	int *vid, *did, *svid, *sdid;
 	const char *vname, *dname, *sname;
 	pcidb_vendor_t *pciv;
 	pcidb_device_t *pcid;
 	pcidb_subvd_t *pcis;
-	di_node_t pnode = di_parent_node(node);
 
 	const char *unov = "unknown vendor";
 	const char *unod = "unknown device";
 	const char *unos = "unknown subsystem";
 
-	if (pci == NULL)
-		return (0);
+	if (opts.o_pcidb == NULL)
+		return;
 
 	vname = unov;
 	dname = unod;
 	sname = unos;
 
-	if (di_prop_lookup_strings(DDI_DEV_T_ANY, pnode,
-	    "device_type", &t) <= 0)
-		return (0);
-
-	if (t == NULL || (strcmp(t, "pci") != 0 &&
-	    strcmp(t, "pciex") != 0))
-		return (0);
+	if (devinfo_is_pci(node) == NULL) {
+		return;
+	}
 
 	/*
 	 * All devices should have a vendor and device id, if we fail to find
@@ -1988,10 +2172,10 @@ dump_pciid(char *name, int ilev, di_node_t node, pcidb_hdl_t *pci)
 	 * string if we find it or not.
 	 */
 	if (di_prop_lookup_ints(DDI_DEV_T_ANY, node, "vendor-id", &vid) <= 0)
-		return (0);
+		return;
 
 	if (di_prop_lookup_ints(DDI_DEV_T_ANY, node, "device-id", &did) <= 0)
-		return (0);
+		return;
 
 	if (di_prop_lookup_ints(DDI_DEV_T_ANY, node, "subsystem-vendor-id",
 	    &svid) <= 0 || di_prop_lookup_ints(DDI_DEV_T_ANY, node,
@@ -2001,7 +2185,7 @@ dump_pciid(char *name, int ilev, di_node_t node, pcidb_hdl_t *pci)
 		sname = NULL;
 	}
 
-	pciv = pcidb_lookup_vendor(pci, vid[0]);
+	pciv = pcidb_lookup_vendor(opts.o_pcidb, vid[0]);
 	if (pciv == NULL)
 		goto print;
 	vname = pcidb_vendor_name(pciv);
@@ -2043,6 +2227,4 @@ print:
 		indent_to_level(ilev);
 		(void) printf("    value='%s'\n", sname);
 	}
-
-	return (0);
 }

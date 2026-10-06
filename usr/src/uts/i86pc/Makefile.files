@@ -23,6 +23,10 @@
 # Copyright (c) 1992, 2010, Oracle and/or its affiliates. All rights reserved.
 #
 # Copyright (c) 2010, Intel Corporation.
+# Copyright 2019 OmniOS Community Edition (OmniOSce) Association.
+# Copyright 2020 Joyent, Inc.
+# Copyright 2026 Oxide Computer Company
+# Copyright 2021 Jason King
 #
 #	This Makefile defines file modules in the directory uts/i86pc
 #	and its children. These are the source files which are i86pc
@@ -40,6 +44,7 @@ CORE_OBJS +=			\
 	cmi.o			\
 	cmi_hw.o		\
 	cms.o			\
+	comm_page.o		\
 	confunix.o		\
 	cpu_idle.o		\
 	cpuid.o			\
@@ -64,6 +69,7 @@ CORE_OBJS +=			\
 	hat_kdi.o		\
 	hment.o			\
 	hold_page.o		\
+	hpet_acpi.o		\
 	hrtimers.o		\
 	htable.o		\
 	hypercall.o		\
@@ -73,7 +79,6 @@ CORE_OBJS +=			\
 	instr_size.o		\
 	intr.o			\
 	kboot_mmu.o		\
-	kdi_subr.o		\
 	kdi_idt.o		\
 	kdi_idthdl.o		\
 	kdi_asm.o		\
@@ -81,13 +86,14 @@ CORE_OBJS +=			\
 	mach_kdi.o		\
 	mach_sysconfig.o	\
 	machdep.o		\
+	md_clear.o		\
 	mem_config.o		\
 	mem_config_stubs.o	\
 	mem_config_arch.o	\
-	memlist_new.o		\
 	memnode.o		\
-	microcode.o		\
-	microfind.o		\
+	memstr.o		\
+	microcode_amd.o		\
+	microcode_intel.o	\
 	mlsetup.o		\
 	mp_call.o		\
 	mp_implfuncs.o		\
@@ -108,13 +114,22 @@ CORE_OBJS +=			\
 	pci_orion.o		\
 	pmem.o			\
 	ppage.o			\
+	prom_panic.o		\
+	prom_reboot.o		\
 	pwrnow.o		\
 	speedstep.o		\
+	ssp.o			\
 	startup.o		\
 	timestamp.o		\
 	todpc_subr.o		\
+	tscc_cpuid.o		\
+	tscc_hpet.o		\
+	tscc_pit.o		\
+	tscc_vmware.o		\
 	trap.o			\
 	turbo.o			\
+	ucode_utils_amd.o	\
+	ucode_utils_intel.o	\
 	vm_machdep.o		\
 	xpv_platform.o		\
 	x_call.o
@@ -135,7 +150,10 @@ BOOT_DRIVER_OBJS =		\
 	boot_keyboard.o		\
 	boot_keyboard_table.o	\
 	boot_vga.o		\
-	boot_mmu.o
+	boot_fb.o		\
+	boot_mmu.o		\
+	dboot_multiboot2.o	\
+	$(FONT_OBJS)
 
 CORE_OBJS += $(BOOT_DRIVER_OBJS)
 
@@ -143,19 +161,12 @@ CORE_OBJS += $(BOOT_DRIVER_OBJS)
 #	locore.o is special. It must be the first file relocated so that it
 #	it is relocated just where its name implies.
 #
-SPECIAL_OBJS_32 +=		\
+SPECIAL_OBJS +=			\
 	locore.o		\
 	fast_trap_asm.o		\
 	interrupt.o		\
-	syscall_asm.o
-
-SPECIAL_OBJS_64 +=		\
-	locore.o		\
-	fast_trap_asm.o		\
-	interrupt.o		\
-	syscall_asm_amd64.o
-
-SPECIAL_OBJS += $(SPECIAL_OBJS_$(CLASS))
+	syscall_asm_amd64.o	\
+	kpti_trampolines.o
 
 #
 # Objects that get compiled into the identity mapped PT_LOAD section of unix
@@ -182,7 +193,8 @@ DBOOT_OBJS +=			\
 #			driver and misc modules
 #
 GFX_PRIVATE_OBJS	+= gfx_private.o gfxp_pci.o gfxp_segmap.o \
-			   gfxp_devmap.o gfxp_vgatext.o gfxp_vm.o vgasubr.o
+			   gfxp_devmap.o gfxp_vgatext.o gfxp_vm.o vgasubr.o \
+			   gfxp_fb.o gfxp_bitmap.o
 FIPE_OBJS += fipe_drv.o fipe_pm.o
 IOAT_OBJS += ioat.o ioat_rs.o ioat_ioctl.o ioat_chan.o
 ISANEXUS_OBJS += isa.o dma_engine.o i8237A.o
@@ -192,10 +204,10 @@ PCI_E_NEXUS_OBJS += pci_common.o pci_kstats.o pci_tools.o
 PCINEXUS_OBJS += pci.o pci_common.o pci_kstats.o pci_tools.o
 PCPLUSMP_OBJS += apic.o apic_regops.o psm_common.o apic_introp.o	\
 			mp_platform_common.o mp_platform_misc.o		\
-			hpet_acpi.o apic_common.o apic_timer.o
+			apic_common.o apic_timer.o
 APIX_OBJS += apix.o apic_regops.o psm_common.o apix_intr.o apix_utils.o \
-		apix_irm.o mp_platform_common.o hpet_acpi.o apic_common.o \
-		apic_timer.o
+		apix_irm.o mp_platform_common.o apic_common.o \
+		apic_timer.o apix_regops.o
 
 
 ACPI_DRV_OBJS	+= acpi_drv.o acpi_video.o
@@ -216,6 +228,7 @@ ACPIDEV_OBJS += acpidev_drv.o \
 	acpidev_memory.o \
 	acpidev_pci.o \
 	acpidev_resource.o \
+	acpidev_usbport.o \
 	acpidev_util.o
 
 DRMACH_ACPI_OBJS += drmach_acpi.o dr_util.o drmach_err.o
@@ -231,6 +244,10 @@ XSVC_OBJS += xsvc.o
 AMD_IOMMU_OBJS +=	amd_iommu.o amd_iommu_impl.o amd_iommu_acpi.o \
 			amd_iommu_cmd.o amd_iommu_log.o amd_iommu_page_tables.o
 
+PCI_PRD_OBJS += pci_prd_i86pc.o
+
+I86PC_KTEST_OBJS =	i86pc_ktest.o
+
 #
 #	Build up defines and paths.
 #
@@ -241,12 +258,10 @@ INC_PATH	+= -I$(UTSBASE)/i86xpv -I$(UTSBASE)/common/xen
 #
 # Since the assym files are derived, the dependencies must be explicit for
 # all files including this file. (This is only actually required in the
-# instance when the .nse_depinfo file does not exist.) It may seem that
-# the lint targets should also have a similar dependency, but they don't
-# since only C headers are included when #defined(__lint) is true.
+# instance when the .nse_depinfo file does not exist.)
 #
 
-ASSYM_DEPS      += 		\
+ASSYM_DEPS      +=		\
 	copy.o			\
 	desctbls_asm.o		\
 	ddi_i86_asm.o		\
@@ -260,12 +275,10 @@ ASSYM_DEPS      += 		\
 	mpcore.o		\
 	sseblk.o		\
 	swtch.o			\
-	syscall_asm.o		\
 	syscall_asm_amd64.o	\
+	kpti_trampolines.o	\
 	cpr_wakecode.o
 
 CPR_IMPL_OBJS	= cpr_impl.o	cpr_wakecode.o
 
 $(KDI_ASSYM_DEPS:%=$(OBJS_DIR)/%):	$(DSF_DIR)/$(OBJS_DIR)/kdi_assym.h
-
-ASSYM_DEPS += kdi_asm.o

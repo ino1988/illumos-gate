@@ -21,9 +21,13 @@
 
 /*
  * Copyright (c) 1995, 2010, Oracle and/or its affiliates. All rights reserved.
+ * Copyright 2015, Joyent, Inc.  All rights reserved.
+ * Copyright (c) 2013, OmniTI Computer Consulting, Inc. All rights reserved.
+ * Copyright 2015 Nexenta Systems, Inc. All rights reserved.
+ * Copyright 2020 OmniOS Community Edition (OmniOSce) Association.
+ * Copyright 2022 Garrett D'Amore
+ * Copyright 2024 Oxide Computer Company
  */
-
-/* Copyright (c) 2013, OmniTI Computer Consulting, Inc. All rights reserved. */
 
 #include <sys/types.h>
 #include <sys/t_lock.h>
@@ -51,6 +55,7 @@
 #include <sys/cmn_err.h>
 #include <sys/vmsystm.h>
 #include <sys/policy.h>
+#include <sys/limits.h>
 
 #include <sys/socket.h>
 #include <sys/socketvar.h>
@@ -66,7 +71,6 @@
 #include <vm/seg_map.h>
 #include <vm/seg_kpm.h>
 
-#include <fs/sockfs/nl7c.h>
 #include <fs/sockfs/sockcommon.h>
 #include <fs/sockfs/sockfilter_impl.h>
 #include <fs/sockfs/socktpi.h>
@@ -77,16 +81,14 @@ int do_useracc = 1;		/* Controlled by setting SO_DEBUG to 4 */
 #define	do_useracc	1
 #endif /* SOCK_TEST */
 
-extern int 	xnet_truncate_print;
-
-extern void	nl7c_init(void);
-extern int	sockfs_defer_nl7c_init;
+extern int	xnet_truncate_print;
 
 /*
- * Note: DEF_IOV_MAX is defined and used as it is in "fs/vncalls.c"
- *	 as there isn't a formal definition of IOV_MAX ???
+ * This constitutes the known flags that are allowed to be passed in the upper
+ * bits of a socket type either for socket() or accept4().
  */
-#define	MSG_MAXIOVLEN	16
+#define	SOCK_KNOWN_FLAGS	(SOCK_CLOEXEC | SOCK_NDELAY | SOCK_NONBLOCK | \
+				    SOCK_CLOFORK)
 
 /*
  * Kernel component of socket creation.
@@ -110,7 +112,7 @@ so_socket(int family, int type_w_flags, int protocol, char *devpath,
 
 	type = type_w_flags & SOCK_TYPE_MASK;
 	type_w_flags &= ~SOCK_TYPE_MASK;
-	if (type_w_flags & ~(SOCK_CLOEXEC|SOCK_NDELAY|SOCK_NONBLOCK))
+	if (type_w_flags & ~SOCK_KNOWN_FLAGS)
 		return (set_errno(EINVAL));
 
 	if (devpath != NULL) {
@@ -135,7 +137,8 @@ so_socket(int family, int type_w_flags, int protocol, char *devpath,
 
 	/* Allocate a file descriptor for the socket */
 	vp = SOTOV(so);
-	if (error = falloc(vp, FWRITE|FREAD, &fp, &fd)) {
+	error = falloc(vp, FWRITE|FREAD, &fp, &fd);
+	if (error != 0) {
 		(void) socket_close(so, 0, CRED());
 		socket_destroy(so);
 		return (set_errno(error));
@@ -155,7 +158,10 @@ so_socket(int family, int type_w_flags, int protocol, char *devpath,
 	mutex_exit(&fp->f_tlock);
 	setf(fd, fp);
 	if ((type_w_flags & SOCK_CLOEXEC) != 0) {
-		f_setfd(fd, FD_CLOEXEC);
+		f_setfd_or(fd, FD_CLOEXEC);
+	}
+	if ((type_w_flags & SOCK_CLOFORK) != 0) {
+		f_setfd_or(fd, FD_CLOFORK);
 	}
 
 	return (fd);
@@ -218,7 +224,7 @@ getsonode(int sock, int *errorp, file_t **fpp)
  */
 static struct sockaddr *
 copyin_name(struct sonode *so, struct sockaddr *name, socklen_t *namelenp,
-	    int *errorp)
+    int *errorp)
 {
 	char	*faddr;
 	size_t	namelen = (size_t)*namelenp;
@@ -276,8 +282,8 @@ copyin_name(struct sonode *so, struct sockaddr *name, socklen_t *namelenp,
  * Copy from kaddr/klen to uaddr/ulen. Updates ulenp if non-NULL.
  */
 static int
-copyout_arg(void *uaddr, socklen_t ulen, void *ulenp,
-		void *kaddr, socklen_t klen)
+copyout_arg(void *uaddr, socklen_t ulen, void *ulenp, void *kaddr,
+    socklen_t klen)
 {
 	if (uaddr != NULL) {
 		if (ulen > klen)
@@ -303,8 +309,8 @@ copyout_arg(void *uaddr, socklen_t ulen, void *ulenp,
  * klen to update ulenp.
  */
 static int
-copyout_name(void *uaddr, socklen_t ulen, void *ulenp,
-		void *kaddr, socklen_t klen)
+copyout_name(void *uaddr, socklen_t ulen, void *ulenp, void *kaddr,
+    socklen_t klen)
 {
 	if (uaddr != NULL) {
 		if (ulen >= klen)
@@ -493,7 +499,8 @@ so_socketpair(int sv[2])
 		}
 
 		nvp = SOTOV(nso);
-		if (error = falloc(nvp, FWRITE|FREAD, &nfp, &nfd)) {
+		error = falloc(nvp, FWRITE|FREAD, &nfp, &nfd);
+		if (error != 0) {
 			(void) socket_close(nso, 0, CRED());
 			socket_destroy(nso);
 			eprintsoline(nso, error);
@@ -522,11 +529,11 @@ so_socketpair(int sv[2])
 		releasef(svs[1]);
 
 		/*
-		 * If FD_CLOEXEC was set on the filedescriptor we're
-		 * swapping out, we should set it on the new one too.
+		 * If FD_CLOEXEC or FD_CLOFORK was set on the file descriptor
+		 * we're swapping out, we should set it on the new one too.
 		 */
-		if (orig_flags & FD_CLOEXEC) {
-			f_setfd(nfd, FD_CLOEXEC);
+		if (orig_flags & (FD_CLOEXEC | FD_CLOFORK)) {
+			f_setfd_or(nfd, orig_flags & (FD_CLOEXEC | FD_CLOFORK));
 		}
 
 		/*
@@ -590,7 +597,7 @@ bind(int sock, struct sockaddr *name, socklen_t namelen, int version)
 		error = socket_bind(so, name, namelen, _SOBIND_SOCKBSD, CRED());
 		break;
 	}
-done:
+
 	releasef(sock);
 	if (name != NULL)
 		kmem_free(name, (size_t)namelen);
@@ -641,7 +648,7 @@ accept(int sock, struct sockaddr *name, socklen_t *namelenp, int version,
 	dprint(1, ("accept(%d, %p, %p)\n",
 	    sock, (void *)name, (void *)namelenp));
 
-	if (flags & ~(SOCK_CLOEXEC|SOCK_NONBLOCK|SOCK_NDELAY)) {
+	if (flags & ~SOCK_KNOWN_FLAGS) {
 		return (set_errno(EINVAL));
 	}
 
@@ -714,7 +721,8 @@ accept(int sock, struct sockaddr *name, socklen_t *namelenp, int version,
 		releasef(sock);
 		return (set_errno(error));
 	}
-	if (error = falloc(NULL, FWRITE|FREAD, &nfp, NULL)) {
+	error = falloc(NULL, FWRITE|FREAD, &nfp, NULL);
+	if (error != 0) {
 		setf(nfd, NULL);
 		(void) socket_close(nso, 0, CRED());
 		socket_destroy(nso);
@@ -730,10 +738,14 @@ accept(int sock, struct sockaddr *name, socklen_t *namelenp, int version,
 	setf(nfd, nfp);
 
 	/*
-	 * Act on SOCK_CLOEXEC from flags
+	 * Act on SOCK_CLOEXEC and SOCK_CLOFORK from flags
 	 */
 	if (flags & SOCK_CLOEXEC) {
-		f_setfd(nfd, FD_CLOEXEC);
+		f_setfd_or(nfd, FD_CLOEXEC);
+	}
+
+	if (flags & SOCK_CLOFORK) {
+		f_setfd_or(nfd, FD_CLOFORK);
 	}
 
 	/*
@@ -827,20 +839,15 @@ shutdown(int sock, int how, int version)
  * Common receive routine.
  */
 static ssize_t
-recvit(int sock,
-	struct nmsghdr *msg,
-	struct uio *uiop,
-	int flags,
-	socklen_t *namelenp,
-	socklen_t *controllenp,
-	int *flagsp)
+recvit(int sock, struct nmsghdr *msg, struct uio *uiop, int flags,
+    socklen_t *namelenp, socklen_t *controllenp, int *flagsp)
 {
 	struct sonode *so;
 	file_t *fp;
 	void *name;
 	socklen_t namelen;
 	void *control;
-	socklen_t controllen;
+	socklen_t controllen, free_controllen;
 	ssize_t len;
 	int error;
 
@@ -857,7 +864,7 @@ recvit(int sock,
 	controllen = msg->msg_controllen;
 
 	msg->msg_flags = flags & (MSG_OOB | MSG_PEEK | MSG_WAITALL |
-	    MSG_DONTWAIT | MSG_XPG4_2);
+	    MSG_DONTWAIT | MSG_XPG4_2 | MSG_CMSG_CLOEXEC | MSG_CMSG_CLOFORK);
 
 	error = socket_recvmsg(so, msg, uiop, CRED());
 	if (error) {
@@ -867,6 +874,8 @@ recvit(int sock,
 	lwp_stat_update(LWP_STAT_MSGRCV, 1);
 	releasef(sock);
 
+	free_controllen = msg->msg_controllen;
+
 	error = copyout_name(name, namelen, namelenp,
 	    msg->msg_name, msg->msg_namelen);
 	if (error)
@@ -874,9 +883,12 @@ recvit(int sock,
 
 	if (flagsp != NULL) {
 		/*
-		 * Clear internal flag.
+		 * Clear internal flag. We also clear the CMSG flags out of
+		 * paranoia, though they should have been cleared by our
+		 * sop_recvmsg.
 		 */
-		msg->msg_flags &= ~MSG_XPG4_2;
+		msg->msg_flags &= ~(MSG_XPG4_2 | MSG_CMSG_CLOEXEC |
+		    MSG_CMSG_CLOFORK);
 
 		/*
 		 * Determine MSG_CTRUNC. sorecvmsg sets MSG_CTRUNC only
@@ -896,11 +908,7 @@ recvit(int sock,
 			goto err;
 		}
 	}
-	/*
-	 * Note: This MUST be done last. There can be no "goto err" after this
-	 * point since it could make so_closefds run twice on some part
-	 * of the file descriptor array.
-	 */
+
 	if (controllen != 0) {
 		if (!(flags & MSG_XPG4_2)) {
 			/*
@@ -909,36 +917,65 @@ recvit(int sock,
 			 */
 			controllen &= ~((int)sizeof (uint32_t) - 1);
 		}
+
+		if (msg->msg_controllen > controllen || control == NULL) {
+			/*
+			 * If the truncated part contains file descriptors,
+			 * then they must be closed in the kernel as they
+			 * will not be included in the data returned to
+			 * user space. Close them now so that the header size
+			 * can be safely adjusted prior to copyout. In case of
+			 * an error during copyout, the remaining file
+			 * descriptors will be closed in the error handler
+			 * below.
+			 */
+			so_closefds(msg->msg_control, msg->msg_controllen,
+			    !(flags & MSG_XPG4_2),
+			    control == NULL ? 0 : controllen);
+
+			/*
+			 * In the case of a truncated control message, the last
+			 * cmsg header that fits into the available buffer
+			 * space must be adjusted to reflect the actual amount
+			 * of associated data that will be returned. This only
+			 * needs to be done for XPG4 messages as non-XPG4
+			 * messages are not structured (they are just a
+			 * buffer and a length - msg_accrights(len)).
+			 */
+			if (control != NULL && (flags & MSG_XPG4_2)) {
+				so_truncatecmsg(msg->msg_control,
+				    msg->msg_controllen, controllen);
+				msg->msg_controllen = controllen;
+			}
+		}
+
 		error = copyout_arg(control, controllen, controllenp,
 		    msg->msg_control, msg->msg_controllen);
+
 		if (error)
 			goto err;
 
-		if (msg->msg_controllen > controllen || control == NULL) {
-			if (control == NULL)
-				controllen = 0;
-			so_closefds(msg->msg_control, msg->msg_controllen,
-			    !(flags & MSG_XPG4_2), controllen);
-		}
 	}
 	if (msg->msg_namelen != 0)
 		kmem_free(msg->msg_name, (size_t)msg->msg_namelen);
-	if (msg->msg_controllen != 0)
-		kmem_free(msg->msg_control, (size_t)msg->msg_controllen);
+	if (free_controllen != 0)
+		kmem_free(msg->msg_control, (size_t)free_controllen);
 	return (len - uiop->uio_resid);
 
 err:
 	/*
 	 * If we fail and the control part contains file descriptors
-	 * we have to close the fd's.
+	 * we have to close them. For a truncated control message, the
+	 * descriptors which were cut off have already been closed and the
+	 * length adjusted so that they will not be closed again.
 	 */
 	if (msg->msg_controllen != 0)
 		so_closefds(msg->msg_control, msg->msg_controllen,
 		    !(flags & MSG_XPG4_2), 0);
 	if (msg->msg_namelen != 0)
 		kmem_free(msg->msg_name, (size_t)msg->msg_namelen);
-	if (msg->msg_controllen != 0)
-		kmem_free(msg->msg_control, (size_t)msg->msg_controllen);
+	if (free_controllen != 0)
+		kmem_free(msg->msg_control, (size_t)free_controllen);
 	return (set_errno(error));
 }
 
@@ -975,8 +1012,8 @@ recv(int sock, void *buffer, size_t len, int flags)
 }
 
 ssize_t
-recvfrom(int sock, void *buffer, size_t len, int flags,
-	struct sockaddr *name, socklen_t *namelenp)
+recvfrom(int sock, void *buffer, size_t len, int flags, struct sockaddr *name,
+    socklen_t *namelenp)
 {
 	struct nmsghdr lmsg;
 	struct uio auio;
@@ -1023,9 +1060,10 @@ recvmsg(int sock, struct nmsghdr *msg, int flags)
 	STRUCT_HANDLE(nmsghdr, umsgptr);
 	struct nmsghdr lmsg;
 	struct uio auio;
-	struct iovec aiov[MSG_MAXIOVLEN];
+	struct iovec buf[IOV_MAX_STACK], *aiov = buf;
+	ssize_t iovsize = 0;
 	int iovcnt;
-	ssize_t len;
+	ssize_t len, rval;
 	int i;
 	int *flagsp;
 	model_t	model;
@@ -1068,8 +1106,13 @@ recvmsg(int sock, struct nmsghdr *msg, int flags)
 
 	iovcnt = lmsg.msg_iovlen;
 
-	if (iovcnt <= 0 || iovcnt > MSG_MAXIOVLEN) {
+	if (iovcnt <= 0 || iovcnt > IOV_MAX) {
 		return (set_errno(EMSGSIZE));
+	}
+
+	if (iovcnt > IOV_MAX_STACK) {
+		iovsize = iovcnt * sizeof (struct iovec);
+		aiov = kmem_alloc(iovsize, KM_SLEEP);
 	}
 
 #ifdef _SYSCALL32_IMPL
@@ -1078,12 +1121,22 @@ recvmsg(int sock, struct nmsghdr *msg, int flags)
 	 * that they can't move more than 2Gbytes of data in a single call.
 	 */
 	if (model == DATAMODEL_ILP32) {
-		struct iovec32 aiov32[MSG_MAXIOVLEN];
+		struct iovec32 buf32[IOV_MAX_STACK], *aiov32 = buf32;
+		ssize_t iov32size;
 		ssize32_t count32;
 
-		if (copyin((struct iovec32 *)lmsg.msg_iov, aiov32,
-		    iovcnt * sizeof (struct iovec32)))
+		iov32size = iovcnt * sizeof (struct iovec32);
+		if (iovsize != 0)
+			aiov32 = kmem_alloc(iov32size, KM_SLEEP);
+
+		if (copyin((struct iovec32 *)lmsg.msg_iov, aiov32, iov32size)) {
+			if (iovsize != 0) {
+				kmem_free(aiov32, iov32size);
+				kmem_free(aiov, iovsize);
+			}
+
 			return (set_errno(EFAULT));
+		}
 
 		count32 = 0;
 		for (i = 0; i < iovcnt; i++) {
@@ -1091,15 +1144,28 @@ recvmsg(int sock, struct nmsghdr *msg, int flags)
 
 			iovlen32 = aiov32[i].iov_len;
 			count32 += iovlen32;
-			if (iovlen32 < 0 || count32 < 0)
+			if (iovlen32 < 0 || count32 < 0) {
+				if (iovsize != 0) {
+					kmem_free(aiov32, iov32size);
+					kmem_free(aiov, iovsize);
+				}
+
 				return (set_errno(EINVAL));
+			}
+
 			aiov[i].iov_len = iovlen32;
 			aiov[i].iov_base =
 			    (caddr_t)(uintptr_t)aiov32[i].iov_base;
 		}
+
+		if (iovsize != 0)
+			kmem_free(aiov32, iov32size);
 	} else
 #endif /* _SYSCALL32_IMPL */
 	if (copyin(lmsg.msg_iov, aiov, iovcnt * sizeof (struct iovec))) {
+		if (iovsize != 0)
+			kmem_free(aiov, iovsize);
+
 		return (set_errno(EFAULT));
 	}
 	len = 0;
@@ -1107,6 +1173,9 @@ recvmsg(int sock, struct nmsghdr *msg, int flags)
 		ssize_t iovlen = aiov[i].iov_len;
 		len += iovlen;
 		if (iovlen < 0 || len < 0) {
+			if (iovsize != 0)
+				kmem_free(aiov, iovsize);
+
 			return (set_errno(EINVAL));
 		}
 	}
@@ -1121,12 +1190,20 @@ recvmsg(int sock, struct nmsghdr *msg, int flags)
 	    (do_useracc == 0 ||
 	    useracc(lmsg.msg_control, lmsg.msg_controllen,
 	    B_WRITE) != 0)) {
+		if (iovsize != 0)
+			kmem_free(aiov, iovsize);
+
 		return (set_errno(EFAULT));
 	}
 
-	return (recvit(sock, &lmsg, &auio, flags,
+	rval = recvit(sock, &lmsg, &auio, flags,
 	    STRUCT_FADDR(umsgptr, msg_namelen),
-	    STRUCT_FADDR(umsgptr, msg_controllen), flagsp));
+	    STRUCT_FADDR(umsgptr, msg_controllen), flagsp);
+
+	if (iovsize != 0)
+		kmem_free(aiov, iovsize);
+
+	return (rval);
 }
 
 /*
@@ -1153,6 +1230,8 @@ sendit(int sock, struct nmsghdr *msg, struct uio *uiop, int flags)
 		uiop->uio_extflg = UIO_COPY_CACHED;
 	else
 		uiop->uio_extflg = UIO_COPY_DEFAULT;
+
+	len = uiop->uio_resid;
 
 	/* Allocate and copyin name and control */
 	name = msg->msg_name;
@@ -1196,7 +1275,6 @@ sendit(int sock, struct nmsghdr *msg, struct uio *uiop, int flags)
 		msg->msg_controllen = controllen = 0;
 	}
 
-	len = uiop->uio_resid;
 	msg->msg_flags = flags;
 
 	error = socket_sendmsg(so, msg, uiop, CRED());
@@ -1264,9 +1342,10 @@ sendmsg(int sock, struct nmsghdr *msg, int flags)
 	struct nmsghdr lmsg;
 	STRUCT_DECL(nmsghdr, u_lmsg);
 	struct uio auio;
-	struct iovec aiov[MSG_MAXIOVLEN];
+	struct iovec buf[IOV_MAX_STACK], *aiov = buf;
+	ssize_t iovsize = 0;
 	int iovcnt;
-	ssize_t len;
+	ssize_t len, rval;
 	int i;
 	model_t	model;
 
@@ -1309,7 +1388,7 @@ sendmsg(int sock, struct nmsghdr *msg, int flags)
 
 	iovcnt = lmsg.msg_iovlen;
 
-	if (iovcnt <= 0 || iovcnt > MSG_MAXIOVLEN) {
+	if (iovcnt <= 0 || iovcnt > IOV_MAX) {
 		/*
 		 * Unless this is XPG 4.2 we allow iovcnt == 0 to
 		 * be compatible with SunOS 4.X and 4.4BSD.
@@ -1318,19 +1397,34 @@ sendmsg(int sock, struct nmsghdr *msg, int flags)
 			return (set_errno(EMSGSIZE));
 	}
 
+	if (iovcnt > IOV_MAX_STACK) {
+		iovsize = iovcnt * sizeof (struct iovec);
+		aiov = kmem_alloc(iovsize, KM_SLEEP);
+	}
+
 #ifdef _SYSCALL32_IMPL
 	/*
 	 * 32-bit callers need to have their iovec expanded, while ensuring
 	 * that they can't move more than 2Gbytes of data in a single call.
 	 */
 	if (model == DATAMODEL_ILP32) {
-		struct iovec32 aiov32[MSG_MAXIOVLEN];
+		struct iovec32 buf32[IOV_MAX_STACK], *aiov32 = buf32;
+		ssize_t iov32size;
 		ssize32_t count32;
 
+		iov32size = iovcnt * sizeof (struct iovec32);
+		if (iovsize != 0)
+			aiov32 = kmem_alloc(iov32size, KM_SLEEP);
+
 		if (iovcnt != 0 &&
-		    copyin((struct iovec32 *)lmsg.msg_iov, aiov32,
-		    iovcnt * sizeof (struct iovec32)))
+		    copyin((struct iovec32 *)lmsg.msg_iov, aiov32, iov32size)) {
+			if (iovsize != 0) {
+				kmem_free(aiov32, iov32size);
+				kmem_free(aiov, iovsize);
+			}
+
 			return (set_errno(EFAULT));
+		}
 
 		count32 = 0;
 		for (i = 0; i < iovcnt; i++) {
@@ -1338,17 +1432,30 @@ sendmsg(int sock, struct nmsghdr *msg, int flags)
 
 			iovlen32 = aiov32[i].iov_len;
 			count32 += iovlen32;
-			if (iovlen32 < 0 || count32 < 0)
+			if (iovlen32 < 0 || count32 < 0) {
+				if (iovsize != 0) {
+					kmem_free(aiov32, iov32size);
+					kmem_free(aiov, iovsize);
+				}
+
 				return (set_errno(EINVAL));
+			}
+
 			aiov[i].iov_len = iovlen32;
 			aiov[i].iov_base =
 			    (caddr_t)(uintptr_t)aiov32[i].iov_base;
 		}
+
+		if (iovsize != 0)
+			kmem_free(aiov32, iov32size);
 	} else
 #endif /* _SYSCALL32_IMPL */
 	if (iovcnt != 0 &&
 	    copyin(lmsg.msg_iov, aiov,
 	    (unsigned)iovcnt * sizeof (struct iovec))) {
+		if (iovsize != 0)
+			kmem_free(aiov, iovsize);
+
 		return (set_errno(EFAULT));
 	}
 	len = 0;
@@ -1356,6 +1463,9 @@ sendmsg(int sock, struct nmsghdr *msg, int flags)
 		ssize_t iovlen = aiov[i].iov_len;
 		len += iovlen;
 		if (iovlen < 0 || len < 0) {
+			if (iovsize != 0)
+				kmem_free(aiov, iovsize);
+
 			return (set_errno(EINVAL));
 		}
 	}
@@ -1366,7 +1476,12 @@ sendmsg(int sock, struct nmsghdr *msg, int flags)
 	auio.uio_segflg = UIO_USERSPACE;
 	auio.uio_limit = 0;
 
-	return (sendit(sock, &lmsg, &auio, flags));
+	rval = sendit(sock, &lmsg, &auio, flags);
+
+	if (iovsize != 0)
+		kmem_free(aiov, iovsize);
+
+	return (rval);
 }
 
 ssize_t
@@ -1445,8 +1560,7 @@ bad:	return (error != 0 ? set_errno(error) : 0);
 
 /*ARGSUSED3*/
 int
-getsockname(int sock, struct sockaddr *name,
-		socklen_t *namelenp, int version)
+getsockname(int sock, struct sockaddr *name, socklen_t *namelenp, int version)
 {
 	struct sonode *so;
 	int error;
@@ -1483,12 +1597,8 @@ bad:	return (error != 0 ? set_errno(error) : 0);
 
 /*ARGSUSED5*/
 int
-getsockopt(int sock,
-	int level,
-	int option_name,
-	void *option_value,
-	socklen_t *option_lenp,
-	int version)
+getsockopt(int sock, int level, int option_name, void *option_value,
+    socklen_t *option_lenp, int version)
 {
 	struct sonode *so;
 	socklen_t optlen, optlen_res;
@@ -1535,12 +1645,8 @@ getsockopt(int sock,
 
 /*ARGSUSED5*/
 int
-setsockopt(int sock,
-	int level,
-	int option_name,
-	void *option_value,
-	socklen_t option_len,
-	int version)
+setsockopt(int sock, int level, int option_name, void *option_value,
+    socklen_t option_len, int version)
 {
 	struct sonode *so;
 	intptr_t buffer[2];
@@ -1612,37 +1718,9 @@ sockconf_add_sock(int family, int type, int protocol, char *name)
 	}
 	if (strncmp(buf, "/dev", strlen("/dev")) == 0) {
 		/* For device */
-
-		/*
-		 * Special handling for NCA:
-		 *
-		 * DEV_NCA is never opened even if an application
-		 * requests for AF_NCA. The device opened is instead a
-		 * predefined AF_INET transport (NCA_INET_DEV).
-		 *
-		 * Prior to Volo (PSARC/2007/587) NCA would determine
-		 * the device using a lookup, which worked then because
-		 * all protocols were based on TPI. Since TPI is no
-		 * longer the default, we have to explicitly state
-		 * which device to use.
-		 */
-		if (strcmp(buf, NCA_DEV) == 0) {
-			/* only support entry <28, 2, 0> */
-			if (family != AF_NCA || type != SOCK_STREAM ||
-			    protocol != 0) {
-				kmem_free(buf, MAXPATHLEN);
-				return (EINVAL);
-			}
-
-			pathlen = strlen(NCA_INET_DEV) + 1;
-			kdevpath = kmem_alloc(pathlen, KM_SLEEP);
-			bcopy(NCA_INET_DEV, kdevpath, pathlen);
-			kdevpath[pathlen - 1] = '\0';
-		} else {
-			kdevpath = kmem_alloc(pathlen, KM_SLEEP);
-			bcopy(buf, kdevpath, pathlen);
-			kdevpath[pathlen - 1] = '\0';
-		}
+		kdevpath = kmem_alloc(pathlen, KM_SLEEP);
+		bcopy(buf, kdevpath, pathlen);
+		kdevpath[pathlen - 1] = '\0';
 	} else {
 		/* For socket module */
 		kmodule = kmem_alloc(pathlen, KM_SLEEP);
@@ -1842,11 +1920,6 @@ sockconfig(int cmd, void *arg1, void *arg2, void *arg3, void *arg4)
 	if (secpolicy_net_config(CRED(), B_FALSE) != 0)
 		return (set_errno(EPERM));
 
-	if (sockfs_defer_nl7c_init) {
-		nl7c_init();
-		sockfs_defer_nl7c_init = 0;
-	}
-
 	switch (cmd) {
 	case SOCKCONFIG_ADD_SOCK:
 		error = sockconf_add_sock((int)(uintptr_t)arg1,
@@ -1861,6 +1934,9 @@ sockconfig(int cmd, void *arg1, void *arg2, void *arg3, void *arg4)
 		break;
 	case SOCKCONFIG_REMOVE_FILTER:
 		error = sockconfig_remove_filter((const char *)arg1);
+		break;
+	case SOCKCONFIG_GET_SOCKTABLE:
+		error = sockparams_copyout_socktable((int)(uintptr_t)arg1);
 		break;
 	default:
 #ifdef	DEBUG
@@ -1937,7 +2013,7 @@ sockconfig(int cmd, void *arg1, void *arg2, void *arg3, void *arg4)
  * the application as that's what would have happened if the operations
  * were done sequentially. With this in mind, following should work :
  *
- * 	- Check for errors before read or write.
+ *	- Check for errors before read or write.
  *	- If the reader encounters error, set the error in sr_read_error.
  *	  Check sr_write_error, if it is set, send cv_signal as it is
  *	  waiting for reader to complete. If it is not set, the writer
@@ -2118,7 +2194,7 @@ snf_async_read(snf_req_t *sr)
 	int extra = 0;
 	int maxblk = 0;
 	int wroff = 0;
-	struct sonode *so;
+	struct sonode *so = NULL;
 
 	fp = sr->sr_fp;
 	size = sr->sr_file_size;
@@ -2451,6 +2527,9 @@ snf_smap_desbfree(snf_smap_desbinfo *snfi)
  * At the end of the whole sendfile() operation, we wait till the data from
  * the last mblk is ack'ed by the transport before returning so that the
  * caller of sendfile() can safely modify the file content.
+ *
+ * The caller of this function should make sure that total_size does not exceed
+ * the actual file size of fvp.
  */
 int
 snf_segmap(file_t *fp, vnode_t *fvp, u_offset_t fileoff, u_offset_t total_size,
@@ -2719,7 +2798,7 @@ snf_cache(file_t *fp, vnode_t *fvp, u_offset_t fileoff, u_offset_t size,
 	struct vattr va;
 	int maxblk = 0;
 	int wroff = 0;
-	struct sonode *so;
+	struct sonode *so = NULL;
 	struct nmsghdr msg;
 
 	vp = fp->f_vnode;
@@ -2967,7 +3046,7 @@ recv32(int32_t sock, caddr32_t buffer, size32_t len, int32_t flags)
 
 ssize_t
 recvfrom32(int32_t sock, caddr32_t buffer, size32_t len, int32_t flags,
-	caddr32_t name, caddr32_t namelenp)
+    caddr32_t name, caddr32_t namelenp)
 {
 	return (recvfrom(sock, (void *)(uintptr_t)buffer, (ssize32_t)len, flags,
 	    (void *)(uintptr_t)name, (void *)(uintptr_t)namelenp));
@@ -2981,7 +3060,7 @@ send32(int32_t sock, caddr32_t buffer, size32_t len, int32_t flags)
 
 ssize_t
 sendto32(int32_t sock, caddr32_t buffer, size32_t len, int32_t flags,
-	caddr32_t name, socklen_t namelen)
+    caddr32_t name, socklen_t namelen)
 {
 	return (sendto(sock, (void *)(uintptr_t)buffer, (ssize32_t)len, flags,
 	    (void *)(uintptr_t)name, namelen));

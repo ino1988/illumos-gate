@@ -23,8 +23,10 @@
  * Copyright 2006 Sun Microsystems, Inc.  All rights reserved.
  * Use is subject to license terms.
  */
-
-#pragma ident	"%Z%%M%	%I%	%E% SMI"
+/*
+ * Copyright 2019 Joyent, Inc.
+ * Copyright 2023 Oxide computer Company
+ */
 
 #include <strings.h>
 #include <ctype.h>
@@ -55,16 +57,99 @@ topo_hdl_strfree(topo_hdl_t *thp, char *s)
 		topo_hdl_free(thp, s, strlen(s) + 1);
 }
 
+void
+topo_hdl_strfreev(topo_hdl_t *thp, char **strarr, uint_t nelem)
+{
+	for (uint_t i = 0; i < nelem; i++)
+		topo_hdl_strfree(thp, strarr[i]);
+
+	topo_hdl_free(thp, strarr, (nelem * sizeof (char *)));
+}
+
 char *
 topo_mod_strdup(topo_mod_t *mod, const char *s)
 {
 	return (topo_hdl_strdup(mod->tm_hdl, s));
 }
 
+int
+topo_hdl_vasprintf(topo_hdl_t *thp, char **str, const char *fmt, va_list ap)
+{
+	int len, ret;
+
+	*str = NULL;
+	len = vsnprintf(NULL, 0, fmt, ap);
+	if (len < 0) {
+		return (len);
+	}
+
+	if (len == INT_MAX) {
+		return (-1);
+	}
+	len++;
+
+	*str = topo_hdl_alloc(thp, len);
+	if (*str == NULL) {
+		return (-1);
+	}
+
+	/*
+	 * If an attempt to format a given string is inconsistent, then that
+	 * means something is extremely wrong and we're not going to try again
+	 * and leave that ultimately to the caller to deal with as it suggests
+	 * they were changing something about the arguments themselves. While
+	 * asprintf(3C) does loop on this, we are not as forgiving.
+	 */
+	ret = vsnprintf(*str, len, fmt, ap);
+	if (ret < 0 || ret + 1 != len) {
+		topo_hdl_free(thp, *str, len + 1);
+		*str = NULL;
+		return (-1);
+	}
+
+	return (ret);
+}
+
+int
+topo_hdl_asprintf(topo_hdl_t *thp, char **str, const char *fmt, ...)
+{
+	int ret;
+	va_list ap;
+
+	va_start(ap, fmt);
+	ret = topo_hdl_vasprintf(thp, str, fmt, ap);
+	va_end(ap);
+	return (ret);
+}
+
+int
+topo_mod_vasprintf(topo_mod_t *mod, char **str, const char *fmt, va_list ap)
+{
+	return (topo_hdl_vasprintf(mod->tm_hdl, str, fmt, ap));
+}
+
+int
+topo_mod_asprintf(topo_mod_t *mod, char **str, const char *fmt, ...)
+{
+	int ret;
+	va_list ap;
+
+	va_start(ap, fmt);
+	ret = topo_hdl_vasprintf(mod->tm_hdl, str, fmt, ap);
+	va_end(ap);
+	return (ret);
+}
+
 void
 topo_mod_strfree(topo_mod_t *mod, char *s)
 {
 	topo_hdl_strfree(mod->tm_hdl, s);
+}
+
+void
+topo_mod_strfreev(topo_mod_t *mod, char **strarr, uint_t nelem)
+{
+	topo_hdl_strfreev(mod->tm_hdl, strarr, nelem);
 }
 
 const char *

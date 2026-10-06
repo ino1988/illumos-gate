@@ -24,6 +24,10 @@
  */
 
 /*
+ * Copyright 2023 Oxide Computer Company
+ */
+
+/*
  * AUDIO CONTROL Driver:
  *
  * usb_ac is a multiplexor that sits on top of usb_as and hid and is
@@ -78,7 +82,7 @@
 
 
 /* debug support */
-uint_t	usb_ac_errlevel 	= USB_LOG_L4;
+uint_t	usb_ac_errlevel		= USB_LOG_L4;
 uint_t	usb_ac_errmask		= (uint_t)-1;
 uint_t	usb_ac_instance_debug	= (uint_t)-1;
 
@@ -1466,7 +1470,7 @@ usb_ac_setup_connections(usb_ac_state_t *uacp)
  */
 static void
 usb_ac_add_unit_descriptor(usb_ac_state_t *uacp, uchar_t *buffer,
-	size_t buflen)
+    size_t buflen)
 {
 	void	*descr;
 	int	len;
@@ -2049,10 +2053,10 @@ usb_ac_set_selector(usb_ac_state_t *uacp, uint_t id,
  */
 static uint_t
 usb_ac_set_control(usb_ac_state_t *uacp, uint_t dir, uint_t search_target,
-	uint_t channel, uint_t control, uint_t all_or_one,
-	uint_t *count, uint_t arg1,
-	int (*func)(usb_ac_state_t *uacp, uint_t unit, uint_t dir,
-		uint_t channel, uint_t control, uint_t arg1, uint_t *depth))
+    uint_t channel, uint_t control, uint_t all_or_one,
+    uint_t *count, uint_t arg1,
+    int (*func)(usb_ac_state_t *uacp, uint_t unit, uint_t dir,
+    uint_t channel, uint_t control, uint_t arg1, uint_t *depth))
 {
 	uint_t id;
 	uint_t depth = 0;
@@ -2085,10 +2089,10 @@ usb_ac_set_control(usb_ac_state_t *uacp, uint_t dir, uint_t search_target,
  */
 static uint_t
 usb_ac_traverse_all_units(usb_ac_state_t *uacp, uint_t dir,
-	uint_t search_target, uint_t channel, uint_t control,
-	uint_t all_or_one, uint_t *count, uint_t arg1, uint_t *depth,
-	int (*func)(usb_ac_state_t *uacp, uint_t unit, uint_t dir,
-		uint_t channel, uint_t control, uint_t arg1, uint_t *depth))
+    uint_t search_target, uint_t channel, uint_t control,
+    uint_t all_or_one, uint_t *count, uint_t arg1, uint_t *depth,
+    int (*func)(usb_ac_state_t *uacp, uint_t unit, uint_t dir,
+    uint_t channel, uint_t control, uint_t arg1, uint_t *depth))
 {
 	uint_t unit, start_type, id;
 
@@ -2157,10 +2161,10 @@ usb_ac_traverse_all_units(usb_ac_state_t *uacp, uint_t dir,
  */
 static uint_t
 usb_ac_set_monitor_gain_control(usb_ac_state_t *uacp, uint_t dir,
-	uint_t search_target, uint_t channel, uint_t control,
-	uint_t all_or_one, uint_t *count, uint_t arg1,
-	int (*func)(usb_ac_state_t *uacp, uint_t unit, uint_t dir,
-		uint_t channel, uint_t control, uint_t arg1, uint_t *depth))
+    uint_t search_target, uint_t channel, uint_t control,
+    uint_t all_or_one, uint_t *count, uint_t arg1,
+    int (*func)(usb_ac_state_t *uacp, uint_t unit, uint_t dir,
+    uint_t channel, uint_t control, uint_t arg1, uint_t *depth))
 {
 	uint_t unit, id;
 	uint_t depth = 0;
@@ -2267,10 +2271,10 @@ usb_ac_check_path(usb_ac_state_t *uacp, uint_t type)
  */
 static uint_t
 usb_ac_traverse_connections(usb_ac_state_t *uacp, uint_t start_unit, uint_t dir,
-	uint_t search_target, uint_t channel, uint_t control,
-	uint_t all_or_one, uint_t *count, uint_t arg1, uint_t *depth,
-	int (*func)(usb_ac_state_t *uacp, uint_t unit, uint_t dir,
-		uint_t channel, uint_t control, uint_t arg1, uint_t *depth))
+    uint_t search_target, uint_t channel, uint_t control,
+    uint_t all_or_one, uint_t *count, uint_t arg1, uint_t *depth,
+    int (*func)(usb_ac_state_t *uacp, uint_t unit, uint_t dir,
+    uint_t channel, uint_t control, uint_t arg1, uint_t *depth))
 {
 	uint_t unit, id;
 	uint_t done = (dir & USB_AUDIO_PLAY) ? USB_AUDIO_OUTPUT_TERMINAL :
@@ -4438,7 +4442,6 @@ usb_ac_online_siblings(usb_ac_state_t *uacp)
 static void
 usb_ac_hold_siblings(usb_ac_state_t *uacp)
 {
-	int		circ;
 	dev_info_t	*pdip, *child_dip;
 
 	USB_DPRINTF_L4(PRINT_MASK_ALL, uacp->usb_ac_log_handle,
@@ -4448,7 +4451,7 @@ usb_ac_hold_siblings(usb_ac_state_t *uacp)
 	pdip = ddi_get_parent(uacp->usb_ac_dip);
 
 	/* hold the children */
-	ndi_devi_enter(pdip, &circ);
+	ndi_devi_enter(pdip);
 	child_dip = ddi_get_child(pdip);
 	while (child_dip != NULL) {
 		ndi_hold_devi(child_dip);
@@ -4460,7 +4463,7 @@ usb_ac_hold_siblings(usb_ac_state_t *uacp)
 
 		child_dip = ddi_get_next_sibling(child_dip);
 	}
-	ndi_devi_exit(pdip, circ);
+	ndi_devi_exit(pdip);
 }
 
 
@@ -4470,7 +4473,6 @@ usb_ac_hold_siblings(usb_ac_state_t *uacp)
 static void
 usb_ac_rele_siblings(usb_ac_state_t *uacp)
 {
-	int		circ;
 	dev_info_t	*pdip, *child_dip;
 
 	USB_DPRINTF_L4(PRINT_MASK_ALL, uacp->usb_ac_log_handle,
@@ -4478,7 +4480,7 @@ usb_ac_rele_siblings(usb_ac_state_t *uacp)
 
 	/* release all siblings and ourselves */
 	pdip = ddi_get_parent(uacp->usb_ac_dip);
-	ndi_devi_enter(pdip, &circ);
+	ndi_devi_enter(pdip);
 	child_dip = ddi_get_child(pdip);
 	while (child_dip != NULL) {
 		ndi_rele_devi(child_dip);
@@ -4490,7 +4492,7 @@ usb_ac_rele_siblings(usb_ac_state_t *uacp)
 
 		child_dip = ddi_get_next_sibling(child_dip);
 	}
-	ndi_devi_exit(pdip, circ);
+	ndi_devi_exit(pdip);
 }
 static void
 usb_restore_engine(usb_ac_state_t *statep)
@@ -4793,7 +4795,6 @@ usb_audio_write_stero_rec(void *arg, uint64_t cval)
 {
 	usb_audio_ctrl_t *ctrlp = arg;
 	usb_ac_state_t *statep = ctrlp->statep;
-	int rv = EIO;
 	int left, right;
 	uint_t count = 0;
 
@@ -4821,11 +4822,9 @@ usb_audio_write_stero_rec(void *arg, uint64_t cval)
 	    USB_AUDIO_FEATURE_UNIT, 2,
 	    USB_AUDIO_VOLUME_CONTROL,
 	    USB_AC_FIND_ALL, &count, right, usb_ac_set_gain);
-	rv = 0;
 
-done:
 	mutex_exit(&statep->usb_ac_mutex);
-	return (rv);
+	return (0);
 }
 
 static int
@@ -4833,7 +4832,6 @@ usb_audio_write_ster_vol(void *arg, uint64_t cval)
 {
 	usb_audio_ctrl_t *ctrlp = arg;
 	usb_ac_state_t *statep = ctrlp->statep;
-	int rv = EIO;
 	int left, right;
 	uint_t count = 0;
 
@@ -4860,11 +4858,9 @@ usb_audio_write_ster_vol(void *arg, uint64_t cval)
 	    USB_AUDIO_FEATURE_UNIT, 2,
 	    USB_AUDIO_VOLUME_CONTROL,
 	    USB_AC_FIND_ALL, &count, right, usb_ac_set_gain);
-	rv = 0;
 
-OUT:
 	mutex_exit(&statep->usb_ac_mutex);
-	return (rv);
+	return (0);
 }
 
 
@@ -4876,7 +4872,6 @@ usb_audio_write_mono_vol(void *arg, uint64_t cval)
 {
 	usb_audio_ctrl_t *ctrlp = arg;
 	usb_ac_state_t *statep = ctrlp->statep;
-	int rv = EIO;
 	int gain;
 
 	uint_t count = 0;
@@ -4897,11 +4892,9 @@ usb_audio_write_mono_vol(void *arg, uint64_t cval)
 	    USB_AUDIO_VOLUME_CONTROL,
 	    USB_AC_FIND_ALL, &count, gain, usb_ac_set_gain);
 
-	rv = 0;
-OUT:
 	mutex_exit(&statep->usb_ac_mutex);
 
-	return (rv);
+	return (0);
 }
 
 
@@ -4913,7 +4906,6 @@ usb_audio_write_monitor_gain(void *arg, uint64_t cval)
 {
 	usb_audio_ctrl_t *ctrlp = arg;
 	usb_ac_state_t *statep = ctrlp->statep;
-	int rv = EIO;
 	int gain;
 	uint_t count = 0;
 
@@ -4935,10 +4927,8 @@ usb_audio_write_monitor_gain(void *arg, uint64_t cval)
 	    USB_AC_FIND_ALL, &count, gain,
 	    usb_ac_set_monitor_gain);
 
-	rv = 0;
-OUT:
 	mutex_exit(&statep->usb_ac_mutex);
-	return (rv);
+	return (0);
 }
 
 static int
@@ -4946,7 +4936,6 @@ usb_audio_write_mono_rec(void *arg, uint64_t cval)
 {
 	usb_audio_ctrl_t *ctrlp = arg;
 	usb_ac_state_t *statep = ctrlp->statep;
-	int rv = EIO;
 	int gain;
 
 	uint_t count = 0;
@@ -4968,10 +4957,8 @@ usb_audio_write_mono_rec(void *arg, uint64_t cval)
 	    USB_AUDIO_VOLUME_CONTROL,
 	    USB_AC_FIND_ALL, &count, gain, usb_ac_set_gain);
 
-	rv = 0;
-
 	mutex_exit(&statep->usb_ac_mutex);
-	return (rv);
+	return (0);
 }
 
 static int
@@ -5008,9 +4995,7 @@ usb_audio_write_rec_src(void *arg, uint64_t cval)
 		rv = EINVAL;
 	}
 	mutex_exit(&statep->usb_ac_mutex);
-	rv = 0;
 
-OUT:
 	return (rv);
 
 }
@@ -5192,9 +5177,7 @@ usb_ac_rem_controls(usb_ac_state_t *statep)
 static int
 usb_ac_add_controls(usb_ac_state_t *statep)
 {
-	int rv = USB_FAILURE;
 	usb_audio_format_t *format;
-
 
 	if (statep->engines[0].af_engp) {
 		/* Init controls for play format */
@@ -5234,17 +5217,8 @@ usb_ac_add_controls(usb_ac_state_t *statep)
 
 	}
 
-
-	rv = USB_SUCCESS;
-
-OUT:
-	if (rv != USB_SUCCESS)
-		usb_ac_rem_controls(statep);
-	return (rv);
+	return (USB_SUCCESS);
 }
-
-
-
 
 
 /*ARGSUSED*/
@@ -5283,7 +5257,8 @@ usb_audio_unregister(usb_ac_state_t *statep)
 
 
 static int
-usb_audio_register(usb_ac_state_t *statep) {
+usb_audio_register(usb_ac_state_t *statep)
+{
 	audio_dev_t *af_devp;
 	int rv = USB_FAILURE;
 	int n;
@@ -5501,14 +5476,11 @@ usb_engine_open(void *arg, int flag, unsigned *nframesp, caddr_t *bufp)
 		goto OUT;
 	}
 
-
-
 	mutex_enter(&statep->usb_ac_mutex);
 	statep->flags |= AD_SETUP;
 	mutex_exit(&statep->usb_ac_mutex);
 
 	rv = 0;
-
 
 OUT:
 	if (rv != 0)
@@ -5574,7 +5546,6 @@ usb_engine_start(void *arg)
 		    "failed to start %d engine", engp->af_eflags);
 		rv = EIO;
 	}
-
 
 	return (rv);
 }

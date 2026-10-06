@@ -22,7 +22,7 @@
 # Copyright 2009 Sun Microsystems, Inc.  All rights reserved.
 # Use is subject to license terms.
 #
-#
+# Copyright (c) 2018, Joyent, Inc.
 
 LIBRARY =		libipp-listener.a
 VERS =			.0
@@ -36,15 +36,11 @@ OBJECTS = \
 	set-printer-attributes.o validate-job.o
 
 include ../../../Makefile.lib
-include ../../../Makefile.rootfs
 
 SRCDIR =	../common
 
-ROOTLIBDIR=	$(ROOT)/usr/lib
-
 LIBS =			$(DYNLIB)
 
-$(LINTLIB):=	SRCS = $(SRCDIR)/$(LINTSRC)
 
 CFLAGS +=	$(CCVERBOSE)
 CPPFLAGS +=	-DSOLARIS_PRIVATE_POST_0_9
@@ -53,7 +49,10 @@ CPPFLAGS +=	-I../../libpapi-common/common
 CPPFLAGS +=	-I../../libipp-core/common
 
 CERRWARN +=	-_gcc=-Wno-unused-variable
-CERRWARN +=	-_gcc=-Wno-uninitialized
+CERRWARN +=	$(CNOWARN_UNINIT)
+
+# not linted
+SMATCH=off
 
 MAPFILES =	$(SRCDIR)/mapfile
 
@@ -63,6 +62,5 @@ LDLIBS +=	-lipp-core -lpapi -lc -lsocket -lnsl
 
 all:	$(LIBS)
 
-lint:	lintcheck
 
 include ../../../Makefile.targ

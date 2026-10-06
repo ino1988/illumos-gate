@@ -87,7 +87,7 @@ static char *fma_classes[] = {
 const char *
 get_fma_tag(uint32_t index)
 {
-	if (index > (sizeof (fma_tags) / sizeof (struct fma_tags)))
+	if (index >= (sizeof (fma_tags) / sizeof (struct fma_tags)))
 		return (NULL);
 
 	return (fma_tags[index].t);
@@ -101,7 +101,7 @@ get_fma_tag(uint32_t index)
 const char *
 get_fma_class(uint32_t index)
 {
-	if (index > (sizeof (fma_tags) / sizeof (struct fma_tags)))
+	if (index >= (sizeof (fma_tags) / sizeof (struct fma_tags)))
 		return (NULL);
 
 	return (fma_tags[index].s);
@@ -253,13 +253,15 @@ params_type_print(nvlist_t *p, const char *name, const char *fmri)
 		if (nvpair_value_nvlist(tnvp, &nvl) != 0)
 			uu_die("nvpair_value_nvlist");
 
-		if (!has_output)
-			if (fmri == NULL)
+		if (!has_output) {
+			if (fmri == NULL) {
 				safe_printf(gettext("    Event: %s\n"), name);
-			else
+			} else {
 				safe_printf(gettext(
 				    "    Event: %s (source: %s)\n"),
 				    name, fmri);
+			}
+		}
 
 		has_output = 1;
 

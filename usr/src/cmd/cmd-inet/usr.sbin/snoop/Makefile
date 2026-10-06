@@ -22,6 +22,8 @@
 #
 # Copyright 2009 Sun Microsystems, Inc.  All rights reserved.
 # Use is subject to license terms.
+# Copyright (c) 2018, Joyent, Inc.
+# Copyright 2024 Bill Sommerfeld <sommerfeld@hamachi.org>
 #
 
 PROG=	snoop
@@ -39,7 +41,8 @@ OBJS=	nfs4_xdr.o snoop.o snoop_aarp.o snoop_adsp.o snoop_aecho.o \
 	snoop_pppoe.o snoop_rip.o snoop_rip6.o snoop_rpc.o snoop_rpcprint.o \
 	snoop_rpcsec.o snoop_rport.o snoop_rquota.o snoop_rstat.o snoop_rtmp.o \
 	snoop_sctp.o snoop_slp.o snoop_smb.o snoop_socks.o snoop_solarnet.o \
-	snoop_tcp.o snoop_tftp.o snoop_trill.o snoop_udp.o snoop_zip.o
+	snoop_tcp.o snoop_tftp.o snoop_trill.o snoop_udp.o snoop_vxlan.o \
+	snoop_zip.o
 
 SRCS=	$(OBJS:.o=.c)
 HDRS=	snoop.h snoop_mip.h at.h snoop_ospf.h snoop_ospf6.h
@@ -48,17 +51,19 @@ include	../../../Makefile.cmd
 
 CPPFLAGS += -I. -I$(SRC)/common/net/dhcp \
 	-D_LARGEFILE_SOURCE -D_FILE_OFFSET_BITS=64
-LDLIBS += -ldhcputil -ldlpi -lsocket -lnsl -ltsol
-LDFLAGS += $(MAPFILE.NGB:%=-M%)
+LDLIBS += -ldhcputil -ldlpi -lresolv -lsocket -lnsl -ltsol
+LDFLAGS += $(MAPFILE.NGB:%=-Wl,-M%)
 CERRWARN += -_gcc=-Wno-switch
 CERRWARN += -_gcc=-Wno-implicit-function-declaration
-CERRWARN += -_gcc=-Wno-uninitialized
+CERRWARN += $(CNOWARN_UNINIT)
 CERRWARN += -_gcc=-Wno-clobbered
 CERRWARN += -_gcc=-Wno-unused-value
 CERRWARN += -_gcc=-Wno-parentheses
 CERRWARN += -_gcc=-Wno-unused-variable
-CERRWARN += -_gcc=-Wno-unused-label
 CERRWARN += -_gcc=-Wno-unused-function
+
+# we really should have smatch running on this code but...
+SMATCH=off
 
 .KEEP_STATE:
 
@@ -74,7 +79,5 @@ install:	all $(ROOTUSRSBINPROG)
 
 clean:
 	$(RM) $(OBJS)
-
-lint:	lint_SRCS
 
 include	../../../Makefile.targ

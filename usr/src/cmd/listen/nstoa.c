@@ -28,9 +28,6 @@
 /*	Copyright (c) 1984, 1986, 1987, 1988, 1989 AT&T	*/
 /*	  All Rights Reserved  	*/
 
-
-#pragma ident	"%Z%%M%	%I%	%E% SMI"
-
 /*
 	stoa - convert string to address
 
@@ -65,7 +62,7 @@
 #define	todigit(c)	((int)((c) - '0'))	/* char to digit */
 #define	toxdigit(c)	((isdigit(c))?todigit(c):(toupper(c)-(int)'A'+10))
 #define	isodigit(c)	(isdigit(c) && ((c) != '9') && ((c) != '8'))
-#define	itoac(i)	(((i) > 9) ? ((char)((i)-10) + 'A'):((char)(i) + '0'))	
+#define	itoac(i)	(((i) > 9) ? ((char)((i)-10) + 'A'):((char)(i) + '0'))
 #define	MASK(n)		((1 << (n)) - 1)
 
 #define	MAXRLEVEL	10	/* maximum recursion level */
@@ -213,12 +210,13 @@ int	quote;
 
 			case 'v':	/* vert. tab */
 				buf[len++] = '\v'; s++;
+				/* FALLTHROUGH */
 
 			case '0':
 			case '1':
 			case '2':
 			case '3':
-				for(oc=ch=0; (*s >= '0' && *s <= '7') && oc++ < 3; ++s) 
+				for(oc=ch=0; (*s >= '0' && *s <= '7') && oc++ < 3; ++s)
 					ch = (ch << 3) | (*s - '0');
 				buf[len++] = ch;
 				break;
@@ -338,7 +336,7 @@ int	type;
 	switch (type) {
 
 	case OCT:
-		/* first add \o */	
+		/* first add \o */
 		sbuf[0] = '\\';
 		sbuf[1] = 'o';
 
@@ -346,7 +344,7 @@ int	type;
 			mystr ? SBUFSIZE : 0);
 
 	case HEX:
-		/* first add \x */	
+		/* first add \x */
 		sbuf[0] = '\\';
 		sbuf[1] = 'x';
 
@@ -357,7 +355,7 @@ int	type;
 		base = xfer(str, addr->buf,
 			 addr->len + 1, mystr ? SBUFSIZE : 0);
 		if (base)
-			base[addr->len] = '\0';	/* terminate*/ 
+			base[addr->len] = '\0';	/* terminate*/
 		return base;
 
 	default:
@@ -368,7 +366,7 @@ int	type;
 
 /*
 	x_atos, o_atos
-	return the number of bytes occupied by string + NULL*/ 
+	return the number of bytes occupied by string + NULL*/
 
 /*
 	x_atos :	convert an address string a, length s
@@ -451,7 +449,7 @@ int	n;
 
 
 /* transfer block to a given destination or allocate one of the
-    right size 
+    right size
     if max = 0 : ignore max
 */
 

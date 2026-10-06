@@ -20,6 +20,8 @@
  */
 /*
  * Copyright (c) 1998, 2010, Oracle and/or its affiliates. All rights reserved.
+ * Copyright 2015 Nexenta Systems, Inc. All rights reserved.
+ * Copyright 2024 MNX Cloud, Inc.
  */
 
 #include <sys/stat.h>
@@ -34,10 +36,11 @@
 #include "utils.h"
 
 static const char USAGE[] = "\
-Usage: %s [-nuy] [-c kernel | curproc | all ] [-d dump-device | swap ]\n\
-	[-m min {k|m|%%} ] [-s savecore-dir] [-r root-dir] [-z on|off]\n";
+Usage: %s [-Henpuy] [-c kernel | curproc | all ]\n\
+	[-d dump-device | swap | none ] [-m min {k|m|%%} ] [-s savecore-dir]\n\
+	[-r root-dir] [-z on|off]\n";
 
-static const char OPTS[] = "inuyc:d:m:s:r:z:";
+static const char OPTS[] = "Heinpuyc:d:m:s:r:z:";
 
 static const char PATH_DEVICE[] = "/dev/dump";
 static const char PATH_CONFIG[] = "/etc/dumpadm.conf";
@@ -51,6 +54,7 @@ main(int argc, char *argv[])
 	struct stat st;
 	int c;
 	int dflag = 0;			/* for checking in use during -d ops */
+	int eflag = 0;			/* print estimated dump size */
 	int dcmode = DC_CURRENT;	/* kernel settings override unless -u */
 	int modified = 0;		/* have we modified the dump config? */
 	char *minfstr = NULL;		/* string value of -m argument */
@@ -110,6 +114,10 @@ main(int argc, char *argv[])
 	for (optind = 1; optind < argc; optind++) {
 		while ((c = getopt(argc, argv, OPTS)) != (int)EOF) {
 			switch (c) {
+			case 'H':
+				dc.dc_headers = false;
+				break;
+
 			case 'c':
 				if (dconf_str2content(&dc, optarg) == -1)
 					return (E_USAGE);
@@ -121,7 +129,9 @@ main(int argc, char *argv[])
 				dflag++;
 				modified++;
 				break;
-
+			case 'e':
+				eflag++;
+				break;
 			case 'i':
 				/* undocumented option */
 				if (chrooted) {
@@ -139,6 +149,10 @@ main(int argc, char *argv[])
 			case 'n':
 				dc.dc_enable = DC_OFF;
 				modified++;
+				break;
+
+			case 'p':
+				dc.dc_parsable = true;
 				break;
 
 			case 's':
@@ -166,6 +180,22 @@ main(int argc, char *argv[])
 				break;
 			}
 		}
+	}
+
+	if (eflag) {
+		if (modified < 2 && douuid == 0 && chrooted == 0 &&
+		    dcmode == DC_CURRENT && minfstr == NULL)
+			return (dconf_get_dumpsize(&dc) ? E_SUCCESS : E_ERROR);
+		else
+			die(gettext("-e cannot be used with other options\n"));
+	}
+
+	if (dc.dc_parsable) {
+		die(gettext("-p can only be used with -e\n"));
+	}
+
+	if (!dc.dc_headers) {
+		die(gettext("-H can only be used with -e\n"));
 	}
 
 	if (douuid)

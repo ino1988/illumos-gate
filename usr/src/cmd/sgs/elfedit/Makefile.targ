@@ -36,7 +36,7 @@
 		$(COMPILE.c) -D_ELF64 -o $@ $<
 		$(POST_PROCESS_O)
 
-%.o:		$(SGSTOOLS)/common/%.c
+%.o:		$(SGSCOMMON)/%.c
 		$(COMPILE.c) -o $@ $<
 		$(POST_PROCESS_O)
 
@@ -53,14 +53,9 @@ all:		$(PROG)
 clean:
 		$(RM) $(OBJS) $(CLEANFILES)
 
-delete:
-		$(RM) $(PROG)
-
-install \
-package:	all $(ROOTPROG)
+install:	all $(ROOTPROG)
 
 include		$(SRC)/cmd/Makefile.targ
-include		$(SRC)/cmd/sgs/Makefile.targ
 
 # Derived source and header files (messaging).
 

@@ -21,6 +21,9 @@
 
 /*
  * Copyright (c) 1988, 2010, Oracle and/or its affiliates. All rights reserved.
+ * Copyright 2018 Joyent, Inc.
+ * Copyright 2026 Oxide Computer Company
+ * Copyright 2021 OmniOS Community Edition (OmniOSce) Association.
  */
 
 /*	Copyright (c) 1984, 1986, 1987, 1988, 1989 AT&T	*/
@@ -70,8 +73,10 @@
 #include <sys/pool.h>
 #include <sys/sdt.h>
 #include <sys/corectl.h>
+#include <sys/core.h>
 #include <sys/brand.h>
 #include <sys/libc_kernel.h>
+#include <sys/spawn_impl.h>
 
 /*
  * convert code/data pair into old style wait status
@@ -154,6 +159,7 @@ restart_init(int what, int why)
 	kthread_t *t = curthread;
 	klwp_t *lwp = ttolwp(t);
 	proc_t *p = ttoproc(t);
+	proc_t *pp = p->p_zone->zone_zsched;
 	user_t *up = PTOU(p);
 
 	vnode_t *oldcd, *oldrd;
@@ -165,11 +171,11 @@ restart_init(int what, int why)
 	 * zone) know that init has failed and will be restarted.
 	 */
 	zcmn_err(p->p_zone->zone_id, CE_WARN,
-	    "init(1M) %s: restarting automatically",
+	    "init(8) %s: restarting automatically",
 	    exit_reason(reason_buf, sizeof (reason_buf), what, why));
 
 	if (!INGLOBALZONE(p)) {
-		cmn_err(CE_WARN, "init(1M) for zone %s (pid %d) %s: "
+		cmn_err(CE_WARN, "init(8) for zone %s (pid %d) %s: "
 		    "restarting automatically",
 		    p->p_zone->zone_name, p->p_pid, reason_buf);
 	}
@@ -184,7 +190,7 @@ restart_init(int what, int why)
 
 	/*
 	 * Grab p_lock and begin clearing miscellaneous global process
-	 * state that needs to be reset before we exec the new init(1M).
+	 * state that needs to be reset before we exec the new init(8).
 	 */
 
 	mutex_enter(&p->p_lock);
@@ -248,6 +254,11 @@ restart_init(int what, int why)
 		up->u_cwd = NULL;
 	}
 
+	/* Reset security flags */
+	mutex_enter(&pp->p_lock);
+	p->p_secflags = pp->p_secflags;
+	mutex_exit(&pp->p_lock);
+
 	mutex_exit(&p->p_lock);
 
 	if (oldrd != NULL)
@@ -255,12 +266,29 @@ restart_init(int what, int why)
 	if (oldcd != NULL)
 		VN_RELE(oldcd);
 
+	/*
+	 * It's possible that a zone's init will have become privilege aware
+	 * and modified privilege sets; reset them.
+	 */
+	cred_t *oldcr, *newcr;
+
+	mutex_enter(&p->p_crlock);
+	oldcr = p->p_cred;
+	mutex_enter(&pp->p_crlock);
+	crhold(newcr = p->p_cred = pp->p_cred);
+	mutex_exit(&pp->p_crlock);
+	mutex_exit(&p->p_crlock);
+	crfree(oldcr);
+	/* Additional hold for the current thread - expected by crset() */
+	crhold(newcr);
+	crset(p, newcr);
+
 	/* Free the controlling tty.  (freectty() always assumes curproc.) */
 	ASSERT(p == curproc);
 	(void) freectty(B_TRUE);
 
 	/*
-	 * Now exec() the new init(1M) on top of the current process.  If we
+	 * Now exec() the new init(8) on top of the current process.  If we
 	 * succeed, the caller will treat this like a successful system call.
 	 * If we fail, we issue messages and the caller will proceed with exit.
 	 */
@@ -270,11 +298,11 @@ restart_init(int what, int why)
 		return (0);
 
 	zcmn_err(p->p_zone->zone_id, CE_WARN,
-	    "failed to restart init(1M) (err=%d): system reboot required", err);
+	    "failed to restart init(8) (err=%d): system reboot required", err);
 
 	if (!INGLOBALZONE(p)) {
-		cmn_err(CE_WARN, "failed to restart init(1M) for zone %s "
-		    "(pid %d, err=%d): zoneadm(1M) boot required",
+		cmn_err(CE_WARN, "failed to restart init(8) for zone %s "
+		    "(pid %d, err=%d): zoneadm(8) boot required",
 		    p->p_zone->zone_name, p->p_pid, err);
 	}
 
@@ -319,6 +347,115 @@ proc_is_exiting(proc_t *p)
 }
 
 /*
+ * Return true if zone's init is restarted, false if exit processing should
+ * proceeed.
+ */
+static boolean_t
+zone_init_exit(zone_t *z, int why, int what)
+{
+	/*
+	 * Typically we don't let the zone's init exit unless zone_start_init()
+	 * failed its exec, or we are shutting down the zone or the machine,
+	 * although the various flags handled within this function will control
+	 * the behavior.
+	 *
+	 * Since we are single threaded, we don't need to lock the following
+	 * accesses to zone_proc_initpid.
+	 */
+	if (z->zone_boot_err != 0 ||
+	    zone_status_get(z) >= ZONE_IS_SHUTTING_DOWN ||
+	    zone_status_get(global_zone) >= ZONE_IS_SHUTTING_DOWN) {
+		/*
+		 * Clear the zone's init pid and proceed with exit processing.
+		 */
+		z->zone_proc_initpid = -1;
+		return (B_FALSE);
+	}
+
+	/*
+	 * There are a variety of configuration flags on the zone to control
+	 * init exit behavior.
+	 *
+	 * If the init process should be restarted, the "zone_restart_init"
+	 * member will be set.
+	 */
+	if (!z->zone_restart_init) {
+		/*
+		 * The zone has been set up to halt when init exits.
+		 */
+		(void) zone_kadmin(A_SHUTDOWN, AD_HALT, NULL, zone_kcred());
+		z->zone_proc_initpid = -1;
+		return (B_FALSE);
+	}
+
+	/*
+	 * At this point we know we're configured to restart init, but there
+	 * are various modifiers to that behavior.
+	 */
+
+	if (z->zone_reboot_on_init_exit) {
+		/*
+		 * Some init programs in branded zones do not tolerate a
+		 * restart in the traditional manner; setting
+		 * "zone_reboot_on_init_exit" will cause the entire zone to be
+		 * rebooted instead.
+		 */
+
+		if (z->zone_restart_init_0) {
+			/*
+			 * Some init programs in branded zones only want to
+			 * restart if they exit 0, otherwise the zone should
+			 * shutdown. Setting the "zone_restart_init_0" member
+			 * controls this behavior.
+			 */
+			if (why == CLD_EXITED && what == 0) {
+				/* Trigger a zone reboot */
+				(void) zone_kadmin(A_REBOOT, 0, NULL,
+				    zone_kcred());
+			} else {
+				/* Shutdown instead of reboot */
+				(void) zone_kadmin(A_SHUTDOWN, AD_HALT, NULL,
+				    zone_kcred());
+			}
+		} else {
+			/* Trigger a zone reboot */
+			(void) zone_kadmin(A_REBOOT, 0, NULL, zone_kcred());
+		}
+
+		z->zone_proc_initpid = -1;
+		return (B_FALSE);
+	}
+
+	if (z->zone_restart_init_0) {
+		/*
+		 * Some init programs in branded zones only want to restart if
+		 * they exit 0, otherwise the zone should shutdown. Setting the
+		 * "zone_restart_init_0" member controls this behavior.
+		 *
+		 * In this case we only restart init if it exited successfully.
+		 */
+		if (why == CLD_EXITED && what == 0 &&
+		    restart_init(what, why) == 0) {
+			return (B_TRUE);
+		}
+	} else {
+		/*
+		 * No restart modifiers on the zone, attempt to restart init.
+		 */
+		if (restart_init(what, why) == 0)
+			return (B_TRUE);
+	}
+
+	/*
+	 * The restart failed, or the criteria for a restart are not met;
+	 * the zone will shut down.
+	 */
+	(void) zone_kadmin(A_SHUTDOWN, AD_HALT, NULL, zone_kcred());
+	z->zone_proc_initpid = -1;
+	return (B_FALSE);
+}
+
+/*
  * Return value:
  *   1 - exitlwps() failed, call (or continue) lwp_exit()
  *   0 - restarting init.  Return through system call path
@@ -354,6 +491,16 @@ proc_exit(int why, int what)
 	if (exitlwps(0) != 0)
 		return (1);
 
+	/*
+	 * If this is a spawn(2) child that has not yet reported back to its
+	 * parent, do that now and unblock the parent. This is done as soon as
+	 * the exit is committed, past exitlwps(), so the parent's spawn(2)
+	 * returns promptly. It has no ordering requirement against the DTrace
+	 * exit probes below.
+	 */
+	if (p->p_spawn_ksp != NULL)
+		spawn_complete(p->p_spawn_ksp, 0);
+
 	mutex_enter(&p->p_lock);
 	if (p->p_ttime > 0) {
 		/*
@@ -386,18 +533,9 @@ proc_exit(int why, int what)
 	 * following accesses to zone_proc_initpid.
 	 */
 	if (p->p_pid == z->zone_proc_initpid) {
-		if (z->zone_boot_err == 0 &&
-		    zone_status_get(z) < ZONE_IS_SHUTTING_DOWN &&
-		    zone_status_get(global_zone) < ZONE_IS_SHUTTING_DOWN &&
-		    z->zone_restart_init == B_TRUE &&
-		    restart_init(what, why) == 0)
+		/* If zone's init restarts, we're done here. */
+		if (zone_init_exit(z, why, what))
 			return (0);
-		/*
-		 * Since we didn't or couldn't restart init, we clear
-		 * the zone's init state and proceed with exit
-		 * processing.
-		 */
-		z->zone_proc_initpid = -1;
 	}
 
 	lwp_pcb_exit();
@@ -408,11 +546,17 @@ proc_exit(int why, int what)
 	 * Special case:  If we will be making the process disappear
 	 * without a trace because it is either:
 	 *	* an exiting SSYS process, or
-	 *	* a posix_spawn() vfork child who requests it,
+	 *	* a vfork child exiting with _EVAPORATE (no longer used by
+	 *	  libc but retained for branded userlands), or
+	 *	* a spawn(2) child whose setup failed (CLDEVAPORATE),
 	 * we don't bother to allocate a useless sigqueue.
+	 *
+	 * p_pidflag is ordinarily protected by pidlock but CLDEVAPORATE is
+	 * only ever set by this process itself, before it exits.
 	 */
 	evaporate = (p->p_flag & SSYS) || ((p->p_flag & SVFORK) &&
-	    why == CLD_EXITED && what == _EVAPORATE);
+	    why == CLD_EXITED && what == _EVAPORATE) ||
+	    (p->p_pidflag & CLDEVAPORATE);
 	if (!evaporate)
 		sqp = kmem_zalloc(sizeof (sigqueue_t), KM_SLEEP);
 
@@ -445,7 +589,15 @@ proc_exit(int why, int what)
 	 */
 	if (p->p_dtrace_helpers != NULL) {
 		ASSERT(dtrace_helpers_cleanup != NULL);
-		(*dtrace_helpers_cleanup)();
+		(*dtrace_helpers_cleanup)(p);
+	}
+
+	/*
+	 * Clean up any signalfd state for the process.
+	 */
+	if (p->p_sigfd != NULL) {
+		VERIFY(sigfd_exit_helper != NULL);
+		(*sigfd_exit_helper)();
 	}
 
 	/* untimeout the realtime timers */
@@ -455,6 +607,14 @@ proc_exit(int why, int what)
 	if ((tmp_id = p->p_alarmid) != 0) {
 		p->p_alarmid = 0;
 		(void) untimeout(tmp_id);
+	}
+
+	/*
+	 * If we had generated any upanic(2) state, free that now.
+	 */
+	if (p->p_upanic != NULL) {
+		kmem_free(p->p_upanic, PRUPANIC_BUFLEN);
+		p->p_upanic = NULL;
 	}
 
 	/*

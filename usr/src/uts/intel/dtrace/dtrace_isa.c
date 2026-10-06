@@ -26,6 +26,7 @@
 
 /*
  * Copyright (c) 2013, 2014 by Delphix. All rights reserved.
+ * Copyright (c) 2017 Joyent, Inc.
  */
 
 #include <sys/dtrace_impl.h>
@@ -84,7 +85,7 @@ dtrace_getpcstack(pc_t *pcstack, int pcstack_limit, int aframes,
 		}
 
 		if (aframes > 0) {
-			if (--aframes == 0 && caller != NULL) {
+			if (--aframes == 0 && caller != 0) {
 				/*
 				 * We've just run out of artificial frames,
 				 * and we have a valid caller -- fill it in
@@ -92,7 +93,7 @@ dtrace_getpcstack(pc_t *pcstack, int pcstack_limit, int aframes,
 				 */
 				ASSERT(depth < pcstack_limit);
 				pcstack[depth++] = (pc_t)caller;
-				caller = NULL;
+				caller = 0;
 			}
 		} else {
 			if (depth < pcstack_limit)
@@ -101,7 +102,7 @@ dtrace_getpcstack(pc_t *pcstack, int pcstack_limit, int aframes,
 
 		if (last) {
 			while (depth < pcstack_limit)
-				pcstack[depth++] = NULL;
+				pcstack[depth++] = 0;
 			return;
 		}
 
@@ -262,7 +263,7 @@ dtrace_getupcstack(uint64_t *pcstack, int pcstack_limit)
 
 zero:
 	while (pcstack_limit-- > 0)
-		*pcstack++ = NULL;
+		*pcstack++ = 0;
 }
 
 int
@@ -406,7 +407,7 @@ dtrace_getufpstack(uint64_t *pcstack, uint64_t *fpstack, int pcstack_limit)
 
 zero:
 	while (pcstack_limit-- > 0)
-		*pcstack++ = NULL;
+		*pcstack++ = 0;
 }
 
 /*ARGSUSED*/
@@ -417,29 +418,16 @@ dtrace_getarg(int arg, int aframes)
 	struct frame *fp = (struct frame *)dtrace_getfp();
 	uintptr_t *stack;
 	int i;
-#if defined(__amd64)
 	/*
 	 * A total of 6 arguments are passed via registers; any argument with
 	 * index of 5 or lower is therefore in a register.
 	 */
 	int inreg = 5;
-#endif
 
 	for (i = 1; i <= aframes; i++) {
 		fp = (struct frame *)(fp->fr_savfp);
 
 		if (fp->fr_savpc == (pc_t)dtrace_invop_callsite) {
-#if !defined(__amd64)
-			/*
-			 * If we pass through the invalid op handler, we will
-			 * use the pointer that it passed to the stack as the
-			 * second argument to dtrace_invop() as the pointer to
-			 * the stack.  When using this stack, we must step
-			 * beyond the EIP that was pushed when the trap was
-			 * taken -- hence the "+ 1" below.
-			 */
-			stack = ((uintptr_t **)&fp[1])[1] + 1;
-#else
 			/*
 			 * In the case of amd64, we will use the pointer to the
 			 * regs structure that was pushed when we took the
@@ -462,7 +450,6 @@ dtrace_getarg(int arg, int aframes)
 				stack = (uintptr_t *)(rp->r_rsp);
 				arg -= inreg;
 			}
-#endif
 			goto load;
 		}
 
@@ -478,7 +465,6 @@ dtrace_getarg(int arg, int aframes)
 	 */
 	arg++;
 
-#if defined(__amd64)
 	if (arg <= inreg) {
 		/*
 		 * This shouldn't happen.  If the argument is passed in a
@@ -490,7 +476,6 @@ dtrace_getarg(int arg, int aframes)
 	}
 
 	arg -= (inreg + 1);
-#endif
 	stack = (uintptr_t *)&fp[1];
 
 load:
@@ -546,39 +531,39 @@ dtrace_getstackdepth(int aframes)
 	return (depth - aframes);
 }
 
+static const int dtrace_regmap[] = {
+	REG_GS,		/* GS */
+	REG_FS,		/* FS */
+	REG_ES,		/* ES */
+	REG_DS,		/* DS */
+	REG_RDI,	/* EDI */
+	REG_RSI,	/* ESI */
+	REG_RBP,	/* EBP */
+	REG_RSP,	/* ESP */
+	REG_RBX,	/* EBX */
+	REG_RDX,	/* EDX */
+	REG_RCX,	/* ECX */
+	REG_RAX,	/* EAX */
+	REG_TRAPNO,	/* TRAPNO */
+	REG_ERR,	/* ERR */
+	REG_RIP,	/* EIP */
+	REG_CS,		/* CS */
+	REG_RFL,	/* EFL */
+	REG_RSP,	/* UESP */
+	REG_SS		/* SS */
+};
+
+
 ulong_t
 dtrace_getreg(struct regs *rp, uint_t reg)
 {
-#if defined(__amd64)
-	int regmap[] = {
-		REG_GS,		/* GS */
-		REG_FS,		/* FS */
-		REG_ES,		/* ES */
-		REG_DS,		/* DS */
-		REG_RDI,	/* EDI */
-		REG_RSI,	/* ESI */
-		REG_RBP,	/* EBP */
-		REG_RSP,	/* ESP */
-		REG_RBX,	/* EBX */
-		REG_RDX,	/* EDX */
-		REG_RCX,	/* ECX */
-		REG_RAX,	/* EAX */
-		REG_TRAPNO,	/* TRAPNO */
-		REG_ERR,	/* ERR */
-		REG_RIP,	/* EIP */
-		REG_CS,		/* CS */
-		REG_RFL,	/* EFL */
-		REG_RSP,	/* UESP */
-		REG_SS		/* SS */
-	};
-
 	if (reg <= SS) {
-		if (reg >= sizeof (regmap) / sizeof (int)) {
+		if (reg >= sizeof (dtrace_regmap) / sizeof (int)) {
 			DTRACE_CPUFLAG_SET(CPU_DTRACE_ILLOP);
 			return (0);
 		}
 
-		reg = regmap[reg];
+		reg = dtrace_regmap[reg];
 	} else {
 		reg -= SS + 1;
 	}
@@ -641,14 +626,73 @@ dtrace_getreg(struct regs *rp, uint_t reg)
 		return (0);
 	}
 
-#else
-	if (reg > SS) {
-		DTRACE_CPUFLAG_SET(CPU_DTRACE_ILLOP);
-		return (0);
+}
+
+void
+dtrace_setreg(struct regs *rp, uint_t reg, ulong_t val)
+{
+	if (reg <= SS) {
+		ASSERT(reg < (sizeof (dtrace_regmap) / sizeof (int)));
+
+		reg = dtrace_regmap[reg];
+	} else {
+		reg -= SS + 1;
 	}
 
-	return ((&rp->r_gs)[reg]);
-#endif
+	switch (reg) {
+	case REG_RDI:
+		rp->r_rdi = val;
+		break;
+	case REG_RSI:
+		rp->r_rsi = val;
+		break;
+	case REG_RDX:
+		rp->r_rdx = val;
+		break;
+	case REG_RCX:
+		rp->r_rcx = val;
+		break;
+	case REG_R8:
+		rp->r_r8 = val;
+		break;
+	case REG_R9:
+		rp->r_r9 = val;
+		break;
+	case REG_RAX:
+		rp->r_rax = val;
+		break;
+	case REG_RBX:
+		rp->r_rbx = val;
+		break;
+	case REG_RBP:
+		rp->r_rbp = val;
+		break;
+	case REG_R10:
+		rp->r_r10 = val;
+		break;
+	case REG_R11:
+		rp->r_r11 = val;
+		break;
+	case REG_R12:
+		rp->r_r12 = val;
+		break;
+	case REG_R13:
+		rp->r_r13 = val;
+		break;
+	case REG_R14:
+		rp->r_r14 = val;
+		break;
+	case REG_R15:
+		rp->r_r15 = val;
+		break;
+	case REG_RSP:
+		rp->r_rsp = val;
+		break;
+	default:
+		DTRACE_CPUFLAG_SET(CPU_DTRACE_ILLOP);
+		return;
+	}
+
 }
 
 static int

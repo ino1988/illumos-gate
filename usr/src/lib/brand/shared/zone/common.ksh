@@ -367,7 +367,7 @@ get_archiver()
 
 #
 # Unpack flar into current directory (which should be zoneroot).  The flash
-# archive is standard input.  See flash_archive(4) man page.
+# archive is standard input.  See flash_archive(5) man page.
 # 
 # We can't use "flar split" since it will only unpack into a directory called
 # "archive".  We need to unpack in place in order to properly handle nested
@@ -439,7 +439,7 @@ install_flar()
 
 		#
 		# Otherwise skip past this section; read lines until detecting
-		# section_end.  According to flash_archive(4) we can have
+		# section_end.  According to flash_archive(5) we can have
 		# an arbitrary number of sections but the archive section
 		# must be last.
 		#
@@ -551,7 +551,7 @@ install_flar()
 #
 #   c) inside the zonepath root: We'll see all the top level dirs, ./etc,
 #      ./var, ./usr....  This is also the case we see when we get an archive
-#      of a physical sytem.  We must be in ZONEROOT when we unpack the archive.
+#      of a physical system.  We must be in ZONEROOT when we unpack the archive.
 #
 # Note that there can be a directory named "root" under the ZONEPATH/root
 # directory.

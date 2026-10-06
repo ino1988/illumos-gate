@@ -21,17 +21,16 @@
  */
 
 /*	Copyright (c) 1988 AT&T	*/
-/*	  All Rights Reserved  	*/
+/*	  All Rights Reserved	*/
 
 /*
+ * Copyright 2025 Hans Rosenfeld
  * Copyright 2006 Sun Microsystems, Inc.  All rights reserved.
  * Use is subject to license terms.
  */
 
 #ifndef	_PRINT_H
 #define	_PRINT_H
-
-#pragma ident	"%Z%%M%	%I%	%E% SMI"	/* SVr4.0 1.9	*/
 
 #include "file64.h"
 #include <floatingpoint.h>
@@ -44,14 +43,19 @@
 extern "C" {
 #endif
 
-extern ssize_t
-_doprnt(const char *format, va_list in_args, FILE *iop);
+#ifdef	_WIDE
+#pragma redefine_extname _ndoprnt _wndoprnt
+#pragma redefine_extname _doprnt _wdoprnt
+#define	CHAR_T	wchar_t
+#else
+#define	CHAR_T	char
+#endif
 
 extern ssize_t
-_ndoprnt(const char *format, va_list in_args, FILE *iop, int flag);
+_doprnt(const CHAR_T *format, va_list in_args, FILE *iop);
 
 extern ssize_t
-_wndoprnt(const wchar_t *format, va_list in_args, FILE *iop, int flag);
+_ndoprnt(const CHAR_T *format, va_list in_args, FILE *iop, int flag);
 
 extern void
 __aconvert(double arg, int ndigits, int *exp, int *sign, char *buf);
@@ -63,7 +67,7 @@ __qaconvert(long double *arg, int ndigits, int *exp, int *sign, char *buf);
 #define	MAXDIGS 11
 
 /* Maximum number of digits in any long long representation */
-#define	MAXLLDIGS 21
+#define	MAXLLDIGS 22
 
 /* Maximum total number of digits in E format */
 #define	MAXECVT (DECIMAL_STRING_LENGTH-1)

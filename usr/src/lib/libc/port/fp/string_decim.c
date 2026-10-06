@@ -24,19 +24,28 @@
  * Use is subject to license terms.
  */
 
-#pragma ident	"%Z%%M%	%I%	%E% SMI"
-
 #include "lint.h"
 #include <sys/types.h>
 #include <ctype.h>
 #include <stdio.h>
 #include "base_conversion.h"
+#include <xlocale.h>
 #include <locale.h>
+#include "thr_uberdata.h"
 
 void
 string_to_decimal(char **ppc, int nmax, int fortran_conventions,
     decimal_record *pd, enum decimal_string_form *pform,
     char **pechar)
+{
+	string_to_decimal_l(ppc, nmax, fortran_conventions, pd, pform, pechar,
+	    __curlocale());
+}
+
+void
+string_to_decimal_l(char **ppc, int nmax, int fortran_conventions,
+    decimal_record *pd, enum decimal_string_form *pform,
+    char **pechar, locale_t loc)
 {
 	char	*cp = *ppc;	/* last character seen */
 	char	*good = cp - 1;	/* last character accepted */

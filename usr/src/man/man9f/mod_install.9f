@@ -8,7 +8,6 @@
 mod_install, mod_remove, mod_info, mod_modname \- add, remove or query a
 loadable module
 .SH SYNOPSIS
-.LP
 .nf
 #include <sys/modctl.h>
 
@@ -34,11 +33,8 @@ loadable module
 .fi
 
 .SH INTERFACE LEVEL
-.sp
-.LP
-Solaris DDI specific (Solaris DDI).
+illumos DDI specific (illumos DDI).
 .SH PARAMETERS
-.sp
 .ne 2
 .na
 \fB\fImodlinkage\fR\fR
@@ -58,8 +54,6 @@ Pointer to the \fBmodinfo\fR structure passed to \fB_info\fR(9E).
 .RE
 
 .SH DESCRIPTION
-.sp
-.LP
 \fBmod_install()\fR must be called from a module's \fB_init\fR(9E) routine.
 .sp
 .LP
@@ -83,7 +77,7 @@ means that all \fB_init\fR(9E) initialization must occur prior to
 When \fB_fini\fR(9E) is executing, another thread may call \fBattach\fR(9E)
 prior to \fB_fini\fR(9E) calling \fBmod_remove()\fR. If this occurs, the
 \fBmod_remove()\fR fails (non-zero return). From a programming standpoint, this
-means that \fB_init\fR(9E) initilizations should only be undone after a
+means that \fB_init\fR(9E) initializations should only be undone after a
 successful return from \fBmod_remove()\fR.
 .sp
 .LP
@@ -92,8 +86,6 @@ driver, the module name is the same as the driver name. This function can be
 used to avoid compiled-in knowledge of the module name, and is of particular
 use when \fB_init\fR(9E) needs to call a function like \fBkstat_create\fR(9F).
 .SH RETURN VALUES
-.sp
-.LP
 \fBmod_install()\fR and \fBmod_remove()\fR return \fB0\fR upon success and
 non-zero on failure.
 .sp
@@ -104,14 +96,15 @@ non-zero on failure.
 \fBmod_modname()\fR returns the name of the module. The returned name remains
 valid as long as the module remains loaded.
 .SH EXAMPLES
-.sp
-.LP
 See \fB_init\fR(9E) for an example that uses these functions.
 .SH SEE ALSO
-.sp
-.LP
-\fB_fini\fR(9E), \fB_info\fR(9E), \fB_init\fR(9E), \fBkstat_create\fR(9F),
-\fBmodldrv\fR(9S), \fBmodlinkage\fR(9S), \fBmodlstrmod\fR(9S)
+.BR _fini (9E),
+.BR _info (9E),
+.BR _init (9E),
+.BR kstat_create (9F),
+.BR modldrv (9S),
+.BR modlinkage (9S),
+.BR modlstrmod (9S)
 .sp
 .LP
 \fIWriting Device Drivers\fR

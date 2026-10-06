@@ -18,9 +18,13 @@
  *
  * CDDL HEADER END
  */
+
 /*
  * Copyright (c) 2010, Oracle and/or its affiliates. All rights reserved.
  * Copyright (c) 2013 by Delphix. All rights reserved.
+ * Copyright (c) 2016-2017, Chris Fraire <cfraire@me.com>.
+ * Copyright 2021 Tintri by DDN, Inc. All rights reserved.
+ * Copyright 2023 Oxide Computer Company
  */
 
 /*
@@ -32,6 +36,7 @@
  */
 #include <sys/types.h>
 #include <sys/socket.h>
+#include <sys/param.h>
 #include <netdb.h>
 #include <inet/ip.h>
 #include <string.h>
@@ -48,6 +53,8 @@
 #include <ctype.h>
 #include <dhcpagent_util.h>
 #include <dhcpagent_ipc.h>
+#include <dhcp_inittab.h>
+#include <dhcp_symbol.h>
 #include <ipadm_ndpd.h>
 #include <libdladm.h>
 #include <libdllink.h>
@@ -64,10 +71,13 @@ static ipadm_status_t	i_ipadm_create_dhcp(ipadm_handle_t, ipadm_addrobj_t,
 			    uint32_t);
 static ipadm_status_t	i_ipadm_delete_dhcp(ipadm_handle_t, ipadm_addrobj_t,
 			    boolean_t);
+static ipadm_status_t	i_ipadm_refresh_dhcp(ipadm_addrobj_t);
 static ipadm_status_t	i_ipadm_get_db_addr(ipadm_handle_t, const char *,
 			    const char *, nvlist_t **);
 static ipadm_status_t	i_ipadm_op_dhcp(ipadm_addrobj_t, dhcp_ipc_type_t,
 			    int *);
+static ipadm_status_t	i_ipadm_dhcp_status(ipadm_addrobj_t addr,
+			    dhcp_status_t *status, int *dhcperror);
 static ipadm_status_t	i_ipadm_validate_create_addr(ipadm_handle_t,
 			    ipadm_addrobj_t, uint32_t);
 static ipadm_status_t	i_ipadm_addr_persist_nvl(ipadm_handle_t, nvlist_t *,
@@ -77,6 +87,7 @@ static ipadm_status_t	i_ipadm_get_default_prefixlen(struct sockaddr_storage *,
 static ipadm_status_t	i_ipadm_get_static_addr_db(ipadm_handle_t,
 			    ipadm_addrobj_t);
 static boolean_t	i_ipadm_is_user_aobjname_valid(const char *);
+static ipadm_prop_desc_t	*i_ipadm_get_addrprop_desc(const char *pname);
 
 /*
  * Callback functions to retrieve property values from the kernel. These
@@ -85,15 +96,20 @@ static boolean_t	i_ipadm_is_user_aobjname_valid(const char *);
  * for a given property.
  */
 static ipadm_pd_getf_t	i_ipadm_get_prefixlen, i_ipadm_get_addr_flag,
-			i_ipadm_get_zone, i_ipadm_get_broadcast;
+			i_ipadm_get_zone, i_ipadm_get_broadcast,
+			i_ipadm_get_primary, i_ipadm_get_reqhost;
 
 /*
  * Callback functions to set property values. These functions translate the
  * values to a format suitable for kernel consumption, allocate the necessary
- * ioctl buffers and then invoke ioctl().
+ * ioctl buffers and then invoke ioctl(); or in the case of reqhost, get the
+ * collaborating agent to set the value.
  */
 static ipadm_pd_setf_t	i_ipadm_set_prefixlen, i_ipadm_set_addr_flag,
-			i_ipadm_set_zone;
+			i_ipadm_set_zone, i_ipadm_set_reqhost;
+
+static ipadm_status_t	i_ipadm_set_aobj_addrprop(ipadm_handle_t iph,
+    ipadm_addrobj_t ipaddr, uint_t flags, const char *propname);
 
 /* address properties description table */
 ipadm_prop_desc_t ipadm_addrprop_table[] = {
@@ -104,12 +120,23 @@ ipadm_prop_desc_t ipadm_addrprop_table[] = {
 	    i_ipadm_set_addr_flag, i_ipadm_get_onoff,
 	    i_ipadm_get_addr_flag },
 
-	{ "prefixlen", NULL, IPADMPROP_CLASS_ADDR, MOD_PROTO_NONE, 0,
+	{ IPADM_NVP_PREFIXLEN, NULL, IPADMPROP_CLASS_ADDR, MOD_PROTO_NONE, 0,
 	    i_ipadm_set_prefixlen, i_ipadm_get_prefixlen,
 	    i_ipadm_get_prefixlen },
 
+	/*
+	 * primary is read-only because there is no operation to un-set
+	 * DHCP_IF_PRIMARY in dhcpagent except to delete-addr and then
+	 * re-create-addr.
+	 */
+	{ "primary", NULL, IPADMPROP_CLASS_ADDR, MOD_PROTO_NONE, 0,
+		NULL, NULL, i_ipadm_get_primary },
+
 	{ "private", NULL, IPADMPROP_CLASS_ADDR, MOD_PROTO_NONE, 0,
 	    i_ipadm_set_addr_flag, i_ipadm_get_onoff, i_ipadm_get_addr_flag },
+
+	{ IPADM_NVP_REQHOST, NULL, IPADMPROP_CLASS_ADDR, MOD_PROTO_NONE, 0,
+	    i_ipadm_set_reqhost, NULL, i_ipadm_get_reqhost },
 
 	{ "transmit", NULL, IPADMPROP_CLASS_ADDR, MOD_PROTO_NONE, 0,
 	    i_ipadm_set_addr_flag, i_ipadm_get_onoff, i_ipadm_get_addr_flag },
@@ -201,9 +228,23 @@ i_ipadm_get_addrobj(ipadm_handle_t iph, ipadm_addrobj_t ipaddr)
 	ipaddr->ipadm_atype = rval.ir_atype;
 	ipaddr->ipadm_af = rval.ir_family;
 	ipaddr->ipadm_flags = rval.ir_flags;
-	if (rval.ir_atype == IPADM_ADDR_IPV6_ADDRCONF) {
-		(void) memcpy(&ipaddr->ipadm_intfid, &rval.ir_ifid,
-		    sizeof (ipaddr->ipadm_intfid));
+	switch (rval.ir_atype) {
+	case IPADM_ADDR_IPV6_ADDRCONF:
+		ipaddr->ipadm_intfid = rval.ipmgmt_ir_intfid;
+		break;
+	case IPADM_ADDR_DHCP:
+		if (strlcpy(ipaddr->ipadm_reqhost, rval.ipmgmt_ir_reqhost,
+		    sizeof (ipaddr->ipadm_reqhost)) >=
+		    sizeof (ipaddr->ipadm_reqhost)) {
+			/*
+			 * shouldn't get here as the buffers are defined
+			 * with same length, MAX_NAME_LEN
+			 */
+			return (IPADM_FAILURE);
+		}
+		break;
+	default:
+		break;
 	}
 
 	return (IPADM_SUCCESS);
@@ -244,8 +285,11 @@ i_ipadm_get_static_addr_db(ipadm_handle_t iph, ipadm_addrobj_t ipaddr)
 		    nvlist_exists(anvl, IPADM_NVP_IPV6ADDR))
 			break;
 	}
+	nvlist_free(onvl);
+
 	if (nvp == NULL)
-		goto fail;
+		return (IPADM_NOTFOUND);
+
 	for (nvp = nvlist_next_nvpair(anvl, NULL);
 	    nvp != NULL; nvp = nvlist_next_nvpair(anvl, nvp)) {
 		name = nvpair_name(nvp);
@@ -258,16 +302,13 @@ i_ipadm_get_static_addr_db(ipadm_handle_t iph, ipadm_addrobj_t ipaddr)
 		}
 	}
 	assert(af != AF_UNSPEC);
+
 	if (nvpair_value_nvlist(nvp, &nvladdr) != 0 ||
 	    nvlist_lookup_string(nvladdr, IPADM_NVP_IPADDRHNAME, &sname) != 0 ||
-	    ipadm_set_addr(ipaddr, sname, af) != IPADM_SUCCESS) {
-		goto fail;
-	}
-	nvlist_free(onvl);
+	    ipadm_set_addr(ipaddr, sname, af) != IPADM_SUCCESS)
+		return (IPADM_NOTFOUND);
+
 	return (IPADM_SUCCESS);
-fail:
-	nvlist_free(onvl);
-	return (IPADM_NOTFOUND);
 }
 
 /*
@@ -345,7 +386,7 @@ ipadm_delete_aobjname(ipadm_handle_t iph, const char *ifname, sa_family_t af,
  * Gets all the addresses from active configuration and populates the
  * address information in `addrinfo'.
  */
-static ipadm_status_t
+ipadm_status_t
 i_ipadm_active_addr_info(ipadm_handle_t iph, const char *ifname,
     ipadm_addr_info_t **addrinfo, uint32_t ipadm_flags, int64_t lifc_flags)
 {
@@ -374,6 +415,9 @@ retry:
 	bzero(&lifr, sizeof (lifr));
 	for (ifap = ifa; ifap != NULL; ifap = ifap->ifa_next) {
 		struct sockaddr_storage data;
+
+		if (ifap->ifa_addr->sa_family == AF_LINK)
+			continue;
 
 		(void) strlcpy(cifname, ifap->ifa_name, sizeof (cifname));
 		lnum = 0;
@@ -1012,7 +1056,7 @@ i_ipadm_set_zone(ipadm_handle_t iph, const void *arg,
 
 	/*
 	 * To modify the zone assignment such that it persists across
-	 * reboots, zonecfg(1M) must be used.
+	 * reboots, zonecfg(8) must be used.
 	 */
 	if (flags & IPADM_OPT_PERSIST) {
 		return (IPADM_NOTSUP);
@@ -1038,6 +1082,84 @@ i_ipadm_set_zone(ipadm_handle_t iph, const void *arg,
 		return (ipadm_errno2status(errno));
 
 	return (IPADM_SUCCESS);
+}
+
+/*
+ * Callback function that sets the property `reqhost' on the address
+ * object in `arg' to the value in `pval'.
+ */
+/* ARGSUSED */
+static ipadm_status_t
+i_ipadm_set_reqhost(ipadm_handle_t iph, const void *arg,
+    ipadm_prop_desc_t *pdp, const void *pval, uint_t af, uint_t flags)
+{
+	ipadm_status_t		status;
+	ipadm_addrobj_t		ipaddr = (ipadm_addrobj_t)arg;
+
+	if (ipaddr->ipadm_atype != IPADM_ADDR_DHCP)
+		return (IPADM_NOTSUP);
+
+	/*
+	 * If requested to set reqhost just from active config but the
+	 * address is not in active config, return error.
+	 */
+	if (!(ipaddr->ipadm_flags & IPMGMT_ACTIVE) &&
+	    (flags & IPADM_OPT_ACTIVE) && !(flags & IPADM_OPT_PERSIST)) {
+		return (IPADM_NOTFOUND);
+	}
+
+	status = ipadm_set_reqhost(ipaddr, pval);
+	if (status != IPADM_SUCCESS)
+		return (status);
+
+	if (ipaddr->ipadm_flags & IPMGMT_ACTIVE) {
+		status = i_ipadm_refresh_dhcp(ipaddr);
+
+		/*
+		 * We do not report a problem for IPADM_DHCP_IPC_TIMEOUT since
+		 * it is only a soft error to indicate the caller that the
+		 * lease might be renewed after the function returns.
+		 */
+		if (status != IPADM_SUCCESS && status != IPADM_DHCP_IPC_TIMEOUT)
+			return (status);
+	}
+
+	status = i_ipadm_set_aobj_addrprop(iph, ipaddr, flags,
+	    IPADM_NVP_REQHOST);
+	return (status);
+}
+
+/*
+ * Used by address object property callback functions that need to do a
+ * two-stage update because the addrprop is cached on the address object.
+ */
+static ipadm_status_t
+i_ipadm_set_aobj_addrprop(ipadm_handle_t iph, ipadm_addrobj_t ipaddr,
+    uint_t flags, const char *propname)
+{
+	ipadm_status_t	status;
+	uint32_t	two_stage_flags;
+
+	/*
+	 * Send the updated address object information to ipmgmtd, since the
+	 * cached version of an addrprop resides on an aobjmap, but do
+	 * not change the ACTIVE/PERSIST state of the aobjmap. Instead, request
+	 * a two-stage, SET_PROPS update with ACTIVE/PERSIST as the first stage
+	 * per the existing aobjmap flags and a second stage encoded in
+	 * IPADM_OPT_PERSIST_PROPS.
+	 */
+	two_stage_flags = (flags | IPADM_OPT_SET_PROPS)
+	    & ~(IPADM_OPT_ACTIVE | IPADM_OPT_PERSIST);
+	if (ipaddr->ipadm_flags & IPMGMT_ACTIVE)
+		two_stage_flags |= IPADM_OPT_ACTIVE;
+	if (ipaddr->ipadm_flags & IPMGMT_PERSIST)
+		two_stage_flags |= IPADM_OPT_PERSIST;
+	if (flags & IPADM_OPT_PERSIST)
+		two_stage_flags |= IPADM_OPT_PERSIST_PROPS;
+
+	status = i_ipadm_addr_persist(iph, ipaddr, B_FALSE, two_stage_flags,
+	    propname);
+	return (status);
 }
 
 /*
@@ -1371,6 +1493,90 @@ i_ipadm_get_zone(ipadm_handle_t iph, const void *arg,
 	return (IPADM_SUCCESS);
 }
 
+/*
+ * Callback function that retrieves the value of the property `primary'
+ * for the address object in `arg'.
+ */
+/* ARGSUSED */
+static ipadm_status_t
+i_ipadm_get_primary(ipadm_handle_t iph, const void *arg,
+    ipadm_prop_desc_t *pdp, char *buf, uint_t *bufsize, uint_t af,
+    uint_t valtype)
+{
+	ipadm_addrobj_t	ipaddr = (ipadm_addrobj_t)arg;
+	const char		*onoff = "";
+	size_t			nbytes;
+
+	switch (valtype) {
+	case MOD_PROP_DEFAULT:
+		if (ipaddr->ipadm_atype == IPADM_ADDR_DHCP)
+			onoff = IPADM_OFFSTR;
+		break;
+	case MOD_PROP_ACTIVE:
+		if (ipaddr->ipadm_atype == IPADM_ADDR_DHCP) {
+			dhcp_status_t	dhcp_status;
+			ipadm_status_t	ipc_status;
+			int			error;
+
+			ipc_status = i_ipadm_dhcp_status(ipaddr, &dhcp_status,
+			    &error);
+			if (ipc_status != IPADM_SUCCESS &&
+			    ipc_status != IPADM_NOTFOUND)
+				return (ipc_status);
+
+			onoff = dhcp_status.if_dflags & DHCP_IF_PRIMARY ?
+			    IPADM_ONSTR : IPADM_OFFSTR;
+		}
+		break;
+	default:
+		return (IPADM_INVALID_ARG);
+	}
+
+	nbytes = strlcpy(buf, onoff, *bufsize);
+	if (nbytes >= *bufsize) {
+		/* insufficient buffer space */
+		*bufsize = nbytes + 1;
+		return (IPADM_NO_BUFS);
+	}
+
+	return (IPADM_SUCCESS);
+}
+
+/*
+ * Callback function that retrieves the value of the property `reqhost'
+ * for the address object in `arg'.
+ */
+/* ARGSUSED */
+static ipadm_status_t
+i_ipadm_get_reqhost(ipadm_handle_t iph, const void *arg,
+    ipadm_prop_desc_t *pdp, char *buf, uint_t *bufsize, uint_t af,
+    uint_t valtype)
+{
+	ipadm_addrobj_t	ipaddr = (ipadm_addrobj_t)arg;
+	const char	*reqhost = "";
+	size_t		nbytes;
+
+	switch (valtype) {
+	case MOD_PROP_DEFAULT:
+		break;
+	case MOD_PROP_ACTIVE:
+		if (ipaddr->ipadm_atype == IPADM_ADDR_DHCP)
+			reqhost = ipaddr->ipadm_reqhost;
+		break;
+	default:
+		return (IPADM_INVALID_ARG);
+	}
+
+	nbytes = strlcpy(buf, reqhost, *bufsize);
+	if (nbytes >= *bufsize) {
+		/* insufficient buffer space */
+		*bufsize = nbytes + 1;
+		return (IPADM_NO_BUFS);
+	}
+
+	return (IPADM_SUCCESS);
+}
+
 static ipadm_prop_desc_t *
 i_ipadm_get_addrprop_desc(const char *pname)
 {
@@ -1472,7 +1678,7 @@ ipadm_set_addrprop(ipadm_handle_t iph, const char *pname,
 	ipadm_prop_desc_t	*pdp = NULL;
 	char			defbuf[MAXPROPVALLEN];
 	uint_t			defbufsize = MAXPROPVALLEN;
-	boolean_t 		reset = (pflags & IPADM_OPT_DEFAULT);
+	boolean_t		reset = (pflags & IPADM_OPT_DEFAULT);
 	ipadm_status_t		status = IPADM_SUCCESS;
 
 	/* Check for solaris.network.interface.config authorization */
@@ -1513,7 +1719,6 @@ ipadm_set_addrprop(ipadm_handle_t iph, const char *pname,
 	if ((pflags & IPADM_OPT_PERSIST) &&
 	    !(ipaddr.ipadm_flags & IPMGMT_PERSIST))
 		return (IPADM_TEMPORARY_OBJ);
-
 	/*
 	 * Currently, setting an address property on an address object of type
 	 * IPADM_ADDR_IPV6_ADDRCONF is not supported. Supporting it involves
@@ -1775,6 +1980,7 @@ ipadm_get_addr(const ipadm_addrobj_t ipaddr, struct sockaddr_storage *addr)
 
 	return (IPADM_SUCCESS);
 }
+
 /*
  * Set up tunnel destination address in ipaddr by contacting DNS.
  * The function works similar to ipadm_set_addr().
@@ -1901,6 +2107,28 @@ ipadm_set_wait_time(ipadm_addrobj_t ipaddr, int32_t wait)
 }
 
 /*
+ * Sets the dhcp parameter `ipadm_reqhost' in the address object `ipaddr',
+ * but validate any non-nil value using ipadm_is_valid_hostname() and also
+ * check length.
+ */
+ipadm_status_t
+ipadm_set_reqhost(ipadm_addrobj_t ipaddr, const char *reqhost)
+{
+	const size_t HNLEN = sizeof (ipaddr->ipadm_reqhost);
+
+	if (ipaddr == NULL || ipaddr->ipadm_atype != IPADM_ADDR_DHCP)
+		return (IPADM_INVALID_ARG);
+
+	if (ipadm_is_nil_hostname(reqhost))
+		*ipaddr->ipadm_reqhost = '\0';
+	else if (!ipadm_is_valid_hostname(reqhost))
+		return (IPADM_INVALID_ARG);
+	else if (strlcpy(ipaddr->ipadm_reqhost, reqhost, HNLEN) >= HNLEN)
+		return (IPADM_INVALID_ARG);
+	return (IPADM_SUCCESS);
+}
+
+/*
  * Creates a placeholder for the `ipadm_aobjname' in the ipmgmtd `aobjmap'.
  * If the `aobjname' already exists in the daemon's `aobjmap' then
  * IPADM_ADDROBJ_EXISTS will be returned.
@@ -1927,10 +2155,19 @@ i_ipadm_lookupadd_addrobj(ipadm_handle_t iph, ipadm_addrobj_t ipaddr)
 	rvalp = &rval;
 	err = ipadm_door_call(iph, &larg, sizeof (larg), (void **)&rvalp,
 	    sizeof (rval), B_FALSE);
-	if (err == 0 && ipaddr->ipadm_aobjname[0] == '\0') {
-		/* copy the daemon generated `aobjname' into `ipadddr' */
-		(void) strlcpy(ipaddr->ipadm_aobjname, rval.ir_aobjname,
-		    sizeof (ipaddr->ipadm_aobjname));
+	if (err == 0) {
+		/*
+		 * Save daemon-generated state.  Copy the `lnum` from
+		 * the daemon if this is not a legacy case, and copy
+		 * `aobjname' if we did not give a name.
+		 */
+		if ((iph->iph_flags & IPH_LEGACY) == 0)
+			ipaddr->ipadm_lifnum = rval.ir_lnum;
+		if (ipaddr->ipadm_aobjname[0] == '\0') {
+			(void) strlcpy(ipaddr->ipadm_aobjname,
+			    rval.ir_aobjname,
+			    sizeof (ipaddr->ipadm_aobjname));
+		}
 	}
 	if (err == EEXIST)
 		return (IPADM_ADDROBJ_EXISTS);
@@ -2050,14 +2287,15 @@ i_ipadm_enable_static(ipadm_handle_t iph, const char *ifname, nvlist_t *nvl,
 ipadm_status_t
 i_ipadm_enable_dhcp(ipadm_handle_t iph, const char *ifname, nvlist_t *nvl)
 {
-	int32_t			wait;
-	boolean_t		primary;
-	nvlist_t		*nvdhcp;
+	int32_t			wait = IPADM_DHCP_WAIT_DEFAULT;
+	boolean_t		primary = B_FALSE;
+	nvlist_t		*nvdhcp = NULL;
 	nvpair_t		*nvp;
 	char			*name;
 	struct ipadm_addrobj_s	ipaddr;
-	char			*aobjname;
+	char			*aobjname = NULL, *reqhost = NULL;
 	int			err = 0;
+	ipadm_status_t		ipadm_err = IPADM_SUCCESS;
 
 	/* Extract the dhcp parameters */
 	for (nvp = nvlist_next_nvpair(nvl, NULL); nvp != NULL;
@@ -2067,6 +2305,8 @@ i_ipadm_enable_dhcp(ipadm_handle_t iph, const char *ifname, nvlist_t *nvl)
 			err = nvpair_value_nvlist(nvp, &nvdhcp);
 		else if (strcmp(name, IPADM_NVP_AOBJNAME) == 0)
 			err = nvpair_value_string(nvp, &aobjname);
+		else if (strcmp(name, IPADM_NVP_REQHOST) == 0)
+			err = nvpair_value_string(nvp, &reqhost);
 		if (err != 0)
 			return (ipadm_errno2status(err));
 	}
@@ -2088,6 +2328,9 @@ i_ipadm_enable_dhcp(ipadm_handle_t iph, const char *ifname, nvlist_t *nvl)
 		ipaddr.ipadm_wait = 0;
 	else
 		ipaddr.ipadm_wait = wait;
+	ipadm_err = ipadm_set_reqhost(&ipaddr, reqhost);
+	if (ipadm_err != IPADM_SUCCESS)
+		return (ipadm_err);
 	ipaddr.ipadm_af = AF_INET;
 	return (i_ipadm_create_dhcp(iph, &ipaddr, IPADM_OPT_ACTIVE));
 }
@@ -2162,7 +2405,7 @@ ipadm_create_addrobj(ipadm_addr_type_t type, const char *aobjname,
 	ipadm_status_t	status;
 	char		*aname, *cp;
 	char		ifname[IPADM_AOBJSIZ];
-	ifspec_t 	ifsp;
+	ifspec_t	ifsp;
 
 	if (ipaddr == NULL)
 		return (IPADM_INVALID_ARG);
@@ -2180,11 +2423,9 @@ ipadm_create_addrobj(ipadm_addr_type_t type, const char *aobjname,
 	/* Check if the interface name is valid. */
 	if (!ifparse_ifspec(ifname, &ifsp))
 		return (IPADM_INVALID_ARG);
-
 	/* Check if the given addrobj name is valid. */
 	if (aname != NULL && !i_ipadm_is_user_aobjname_valid(aname))
 		return (IPADM_INVALID_ARG);
-
 	if ((newaddr = calloc(1, sizeof (struct ipadm_addrobj_s))) == NULL)
 		return (IPADM_NO_MEMORY);
 
@@ -2325,14 +2566,13 @@ i_ipadm_addr_exists_on_if(ipadm_handle_t iph, const char *ifname,
  * control. On success, it sets the lifnum in the address object `addr'.
  */
 ipadm_status_t
-i_ipadm_do_addif(ipadm_handle_t iph, ipadm_addrobj_t addr)
+i_ipadm_do_addif(ipadm_handle_t iph, ipadm_addrobj_t addr, boolean_t *added)
 {
 	ipadm_status_t	status;
 	boolean_t	addif;
 	struct lifreq	lifr;
 	int		sock;
 
-	addr->ipadm_lifnum = 0;
 	status = i_ipadm_addr_exists_on_if(iph, addr->ipadm_ifname,
 	    addr->ipadm_af, &addif);
 	if (status != IPADM_SUCCESS)
@@ -2350,6 +2590,14 @@ i_ipadm_do_addif(ipadm_handle_t iph, ipadm_addrobj_t addr)
 		if (ioctl(sock, SIOCLIFADDIF, (caddr_t)&lifr) < 0)
 			return (ipadm_errno2status(errno));
 		addr->ipadm_lifnum = i_ipadm_get_lnum(lifr.lifr_name);
+		if (added != NULL)
+			*added = B_TRUE;
+	} else {
+		/*
+		 * The first logical interface (0) has a zero address, and is
+		 * not under DHCP control, use it.
+		 */
+		addr->ipadm_lifnum = 0;
 	}
 	return (IPADM_SUCCESS);
 }
@@ -2366,10 +2614,6 @@ i_ipadm_get_db_addr(ipadm_handle_t iph, const char *ifname,
     const char *aobjname, nvlist_t **onvl)
 {
 	ipmgmt_getaddr_arg_t	garg;
-	ipmgmt_get_rval_t	*rvalp;
-	int			err;
-	size_t			nvlsize;
-	char			*nvlbuf;
 
 	/* Populate the door_call argument structure */
 	bzero(&garg, sizeof (garg));
@@ -2380,16 +2624,7 @@ i_ipadm_get_db_addr(ipadm_handle_t iph, const char *ifname,
 	if (ifname != NULL)
 		(void) strlcpy(garg.ia_ifname, ifname, sizeof (garg.ia_ifname));
 
-	rvalp = malloc(sizeof (ipmgmt_get_rval_t));
-	err = ipadm_door_call(iph, &garg, sizeof (garg), (void **)&rvalp,
-	    sizeof (*rvalp), B_TRUE);
-	if (err == 0) {
-		nvlsize = rvalp->ir_nvlsize;
-		nvlbuf = (char *)rvalp + sizeof (ipmgmt_get_rval_t);
-		err = nvlist_unpack(nvlbuf, nvlsize, onvl, NV_ENCODE_NATIVE);
-	}
-	free(rvalp);
-	return (ipadm_errno2status(err));
+	return (i_ipadm_call_ipmgmtd(iph, (void *) &garg, sizeof (garg), onvl));
 }
 
 /*
@@ -2420,11 +2655,13 @@ ipadm_create_addr(ipadm_handle_t iph, ipadm_addrobj_t addr, uint32_t flags)
 	ipadm_addr_type_t	type;
 	char			*ifname = addr->ipadm_ifname;
 	boolean_t		legacy = (iph->iph_flags & IPH_LEGACY);
-	boolean_t		aobjfound;
+	boolean_t		aobjfound = B_FALSE;
 	boolean_t		is_6to4;
 	struct lifreq		lifr;
 	uint64_t		ifflags;
 	boolean_t		is_boot = (iph->iph_flags & IPH_IPMGMTD);
+	boolean_t		is_ipmp;
+	char			gifname[LIFGRNAMSIZ];
 
 	/* check for solaris.network.interface.config authorization */
 	if (!ipadm_check_auth())
@@ -2434,7 +2671,6 @@ ipadm_create_addr(ipadm_handle_t iph, ipadm_addrobj_t addr, uint32_t flags)
 	status = i_ipadm_validate_create_addr(iph, addr, flags);
 	if (status != IPADM_SUCCESS)
 		return (status);
-
 	/*
 	 * For Legacy case, check if an addrobj already exists for the
 	 * given logical interface name. If one does not exist,
@@ -2569,6 +2805,17 @@ ipadm_create_addr(ipadm_handle_t iph, ipadm_addrobj_t addr, uint32_t flags)
 			return (IPADM_SUCCESS);
 	}
 
+	/*
+	 * If interface is an IPMP group member, move it out of the group before
+	 * performing any operations on it.
+	 */
+	if ((is_ipmp = i_ipadm_is_under_ipmp(iph, addr->ipadm_ifname))) {
+		(void) i_ipadm_get_groupname_active(iph, addr->ipadm_ifname,
+		    gifname, sizeof (gifname));
+		(void) i_ipadm_set_groupname_active(iph, addr->ipadm_ifname,
+		    "");
+	}
+
 	/* Create the address. */
 	type = addr->ipadm_atype;
 	switch (type) {
@@ -2584,6 +2831,12 @@ ipadm_create_addr(ipadm_handle_t iph, ipadm_addrobj_t addr, uint32_t flags)
 	default:
 		status = IPADM_INVALID_ARG;
 		break;
+	}
+
+	/* Move the underlying IPMP interface back to the group */
+	if (is_ipmp) {
+		(void) i_ipadm_set_groupname_active(iph, addr->ipadm_ifname,
+		    gifname);
 	}
 
 	/*
@@ -2658,25 +2911,10 @@ i_ipadm_create_addr(ipadm_handle_t iph, ipadm_addrobj_t ipaddr, uint32_t flags)
 	 * Create a new logical interface if needed; otherwise, just
 	 * use the 0th logical interface.
 	 */
-retry:
 	if (!(iph->iph_flags & IPH_LEGACY)) {
-		status = i_ipadm_do_addif(iph, ipaddr);
+		status = i_ipadm_do_addif(iph, ipaddr, NULL);
 		if (status != IPADM_SUCCESS)
 			return (status);
-		/*
-		 * We don't have to set the lifnum for IPH_INIT case, because
-		 * there is no placeholder created for the address object in
-		 * this case. For IPH_LEGACY, we don't do this because the
-		 * lifnum is given by the caller and it will be set in the
-		 * end while we call the i_ipadm_addr_persist().
-		 */
-		if (!(iph->iph_flags & IPH_INIT)) {
-			status = i_ipadm_setlifnum_addrobj(iph, ipaddr);
-			if (status == IPADM_ADDROBJ_EXISTS)
-				goto retry;
-			if (status != IPADM_SUCCESS)
-				return (status);
-		}
 	}
 	i_ipadm_addrobj2lifname(ipaddr, lifr.lifr_name,
 	    sizeof (lifr.lifr_name));
@@ -2700,7 +2938,18 @@ retry:
 	}
 
 	if (flags & IPADM_OPT_UP) {
-		status = i_ipadm_set_flags(iph, lifr.lifr_name, af, IFF_UP, 0);
+		uint32_t	iff_flags = IFF_UP;
+
+		/*
+		 * Set the NOFAILOVER flag only on underlying IPMP interface
+		 * and not the IPMP group interface itself.
+		 */
+		if (i_ipadm_is_under_ipmp(iph, lifr.lifr_name) &&
+		    !i_ipadm_is_ipmp(iph, lifr.lifr_name))
+			iff_flags |= IFF_NOFAILOVER;
+
+		status = i_ipadm_set_flags(iph, lifr.lifr_name,
+		    af, iff_flags, 0);
 
 		/*
 		 * IPADM_DAD_FOUND is a soft-error for create-addr.
@@ -2730,11 +2979,12 @@ retry:
 			}
 		}
 		status = i_ipadm_addr_persist(iph, ipaddr, default_prefixlen,
-		    flags);
+		    flags, NULL);
 	}
 ret:
 	if (status != IPADM_SUCCESS && !legacy)
 		(void) i_ipadm_delete_addr(iph, ipaddr);
+
 	return (status);
 }
 
@@ -2761,6 +3011,8 @@ ipadm_delete_addr(ipadm_handle_t iph, const char *aobjname, uint32_t flags)
 	ipadm_status_t		status;
 	struct ipadm_addrobj_s	ipaddr;
 	boolean_t		release = ((flags & IPADM_OPT_RELEASE) != 0);
+	boolean_t		is_ipmp = B_FALSE;
+	char			gifname[LIFGRNAMSIZ];
 
 	/* check for solaris.network.interface.config authorization */
 	if (!ipadm_check_auth())
@@ -2799,6 +3051,19 @@ ipadm_delete_addr(ipadm_handle_t iph, const char *aobjname, uint32_t flags)
 	 * kernel.
 	 */
 	if (ipaddr.ipadm_flags & IPMGMT_ACTIVE) {
+
+		/*
+		 * If interface is an IPMP group member, move it out of the
+		 * group before performing any operations on it.
+		 */
+		if ((is_ipmp = i_ipadm_is_under_ipmp(iph,
+		    ipaddr.ipadm_ifname))) {
+			(void) i_ipadm_get_groupname_active(iph,
+			    ipaddr.ipadm_ifname, gifname, sizeof (gifname));
+			(void) i_ipadm_set_groupname_active(iph,
+			    ipaddr.ipadm_ifname, "");
+		}
+
 		switch (ipaddr.ipadm_atype) {
 		case IPADM_ADDR_STATIC:
 			status = i_ipadm_delete_addr(iph, &ipaddr);
@@ -2827,7 +3092,7 @@ ipadm_delete_addr(ipadm_handle_t iph, const char *aobjname, uint32_t flags)
 		if (status == IPADM_ENXIO)
 			status = IPADM_SUCCESS;
 		else if (status != IPADM_SUCCESS)
-			return (status);
+			goto out;
 	}
 
 	if (!(ipaddr.ipadm_flags & IPMGMT_PERSIST) &&
@@ -2835,9 +3100,22 @@ ipadm_delete_addr(ipadm_handle_t iph, const char *aobjname, uint32_t flags)
 		flags &= ~IPADM_OPT_PERSIST;
 	}
 	status = i_ipadm_delete_addrobj(iph, &ipaddr, flags);
-	if (status == IPADM_NOTFOUND)
-		return (status);
-	return (IPADM_SUCCESS);
+
+	if (status != IPADM_NOTFOUND)
+		status = IPADM_SUCCESS;
+
+out:
+	/*
+	 * Move the underlying IPMP interface back to the group.
+	 * This cannot be done until the persistent configuration has been
+	 * deleted as it will otherwise cause the active configuration to be
+	 * restored.
+	 */
+	if (is_ipmp) {
+		(void) i_ipadm_set_groupname_active(iph,
+		    ipaddr.ipadm_ifname, gifname);
+	}
+	return (status);
 }
 
 /*
@@ -2860,7 +3138,7 @@ i_ipadm_create_dhcp(ipadm_handle_t iph, ipadm_addrobj_t addr, uint32_t flags)
 	 * use the 0th logical interface.
 	 */
 retry:
-	status = i_ipadm_do_addif(iph, addr);
+	status = i_ipadm_do_addif(iph, addr, NULL);
 	if (status != IPADM_SUCCESS)
 		return (status);
 	/*
@@ -2887,7 +3165,7 @@ retry:
 	dh_status = status;
 
 	/* Persist the address object information in ipmgmtd. */
-	status = i_ipadm_addr_persist(iph, addr, B_FALSE, flags);
+	status = i_ipadm_addr_persist(iph, addr, B_FALSE, flags, NULL);
 	if (status != IPADM_SUCCESS)
 		goto fail;
 
@@ -2947,6 +3225,10 @@ i_ipadm_op_dhcp(ipadm_addrobj_t addr, dhcp_ipc_type_t type, int *dhcperror)
 {
 	dhcp_ipc_request_t	*request;
 	dhcp_ipc_reply_t	*reply	= NULL;
+	dhcp_symbol_t		*entry = NULL;
+	dhcp_data_type_t	dtype = DHCP_TYPE_NONE;
+	void			*d4o = NULL;
+	uint16_t		d4olen = 0;
 	char			ifname[LIFNAMSIZ];
 	int			error;
 	int			dhcp_timeout;
@@ -2956,9 +3238,36 @@ i_ipadm_op_dhcp(ipadm_addrobj_t addr, dhcp_ipc_type_t type, int *dhcperror)
 	i_ipadm_addrobj2lifname(addr, ifname, sizeof (ifname));
 	if (addr->ipadm_primary)
 		type |= DHCP_PRIMARY;
-	request = dhcp_ipc_alloc_request(type, ifname, NULL, 0, DHCP_TYPE_NONE);
-	if (request == NULL)
+
+	/* Set up a CD_HOSTNAME option, if applicable, to send through IPC */
+	switch (DHCP_IPC_CMD(type)) {
+	case DHCP_START:
+	case DHCP_EXTEND:
+		if (addr->ipadm_af == AF_INET && *addr->ipadm_reqhost != '\0') {
+			entry = inittab_getbycode(ITAB_CAT_STANDARD,
+			    ITAB_CONS_INFO, CD_HOSTNAME);
+			if (entry == NULL) {
+				return (IPADM_FAILURE);
+			} else {
+				d4o = inittab_encode(entry, addr->ipadm_reqhost,
+				    &d4olen, B_FALSE);
+				free(entry);
+				entry = NULL;
+				if (d4o == NULL)
+					return (IPADM_FAILURE);
+				dtype = DHCP_TYPE_OPTION;
+			}
+		}
+		break;
+	default:
+		break;
+	}
+
+	request = dhcp_ipc_alloc_request(type, ifname, d4o, d4olen, dtype);
+	if (request == NULL) {
+		free(d4o);
 		return (IPADM_NO_MEMORY);
+	}
 
 	if (addr->ipadm_wait == IPADM_DHCP_WAIT_FOREVER)
 		dhcp_timeout = DHCP_IPC_WAIT_FOREVER;
@@ -2969,6 +3278,7 @@ i_ipadm_op_dhcp(ipadm_addrobj_t addr, dhcp_ipc_type_t type, int *dhcperror)
 	/* Send the message to dhcpagent. */
 	error = dhcp_ipc_make_request(request, &reply, dhcp_timeout);
 	free(request);
+	free(d4o);
 	if (error == 0) {
 		error = reply->return_code;
 		free(reply);
@@ -2982,6 +3292,62 @@ i_ipadm_op_dhcp(ipadm_addrobj_t addr, dhcp_ipc_type_t type, int *dhcperror)
 			return (IPADM_DHCP_IPC_TIMEOUT);
 	}
 
+	return (IPADM_SUCCESS);
+}
+
+/*
+ * Communicates with the dhcpagent to send a dhcp message of type
+ * DHCP_STATUS, and copy on success into the `status' instance owned by the
+ * caller. It returns any dhcp error in `dhcperror' if a non-null pointer
+ * is provided.
+ */
+static ipadm_status_t
+i_ipadm_dhcp_status(ipadm_addrobj_t addr, dhcp_status_t *status,
+    int *dhcperror)
+{
+	dhcp_ipc_type_t		type = DHCP_STATUS;
+	dhcp_ipc_request_t	*request;
+	dhcp_ipc_reply_t	*reply;
+	dhcp_status_t		*private_status;
+	size_t			reply_size;
+	int			error;
+
+	if (addr->ipadm_af == AF_INET6)
+		type |= DHCP_V6;
+
+	request = dhcp_ipc_alloc_request(type, addr->ipadm_ifname, NULL, 0,
+	    DHCP_TYPE_NONE);
+	if (request == NULL)
+		return (IPADM_NO_MEMORY);
+
+	error = dhcp_ipc_make_request(request, &reply, DHCP_IPC_WAIT_DEFAULT);
+	free(request);
+	if (error != 0) {
+		if (dhcperror != NULL)
+			*dhcperror = error;
+		return (error != DHCP_IPC_E_TIMEOUT ? IPADM_DHCP_IPC_ERROR
+		    : IPADM_DHCP_IPC_TIMEOUT);
+	}
+
+	error = reply->return_code;
+	if (error == DHCP_IPC_E_UNKIF) {
+		free(reply);
+		bzero(status, sizeof (dhcp_status_t));
+		return (IPADM_NOTFOUND);
+	}
+
+	private_status = dhcp_ipc_get_data(reply, &reply_size, NULL);
+	if (reply_size < DHCP_STATUS_VER1_SIZE) {
+		free(reply);
+		return (IPADM_DHCP_IPC_ERROR);
+	}
+
+	/*
+	 * Copy the status out of the memory allocated by this function into
+	 * memory owned by the caller.
+	 */
+	*status = *private_status;
+	free(reply);
 	return (IPADM_SUCCESS);
 }
 
@@ -3026,21 +3392,19 @@ ipadm_free_addr_info(ipadm_addr_info_t *ainfo)
 
 /*
  * Makes a door call to ipmgmtd to update its `aobjmap' with the address
- * object in `ipaddr'. This door call also updates the persistent DB to
+ * object in `ipaddr'. This door call also can update the persistent DB to
  * remember address object to be recreated on next reboot or on an
  * ipadm_enable_addr()/ipadm_enable_if() call.
  */
 ipadm_status_t
 i_ipadm_addr_persist(ipadm_handle_t iph, const ipadm_addrobj_t ipaddr,
-    boolean_t default_prefixlen, uint32_t flags)
+    boolean_t default_prefixlen, uint32_t flags, const char *propname)
 {
 	char			*aname = ipaddr->ipadm_aobjname;
 	nvlist_t		*nvl;
 	int			err = 0;
 	ipadm_status_t		status;
-	char			pval[MAXPROPVALLEN];
 	uint_t			pflags = 0;
-	ipadm_prop_desc_t	*pdp = NULL;
 
 	/*
 	 * Construct the nvl to send to the door.
@@ -3060,8 +3424,6 @@ i_ipadm_addr_persist(ipadm_handle_t iph, const ipadm_addrobj_t ipaddr,
 		status = i_ipadm_add_ipaddr2nvl(nvl, ipaddr);
 		if (status != IPADM_SUCCESS)
 			goto ret;
-		(void) snprintf(pval, sizeof (pval), "%d",
-		    ipaddr->ipadm_static_prefixlen);
 		if (flags & IPADM_OPT_UP)
 			err = nvlist_add_string(nvl, "up", "yes");
 		else
@@ -3071,6 +3433,18 @@ i_ipadm_addr_persist(ipadm_handle_t iph, const ipadm_addrobj_t ipaddr,
 	case IPADM_ADDR_DHCP:
 		status = i_ipadm_add_dhcp2nvl(nvl, ipaddr->ipadm_primary,
 		    ipaddr->ipadm_wait);
+		if (status != IPADM_SUCCESS)
+			goto ret;
+
+		/*
+		 * For purposes of updating the ipmgmtd cached representation of
+		 * reqhost (ipmgmt_am_reqhost), include a value here in `nvl',
+		 * but the value is actually fully persisted as a separate
+		 * i_ipadm_persist_propval below.
+		 */
+		err = nvlist_add_string(nvl, IPADM_NVP_REQHOST,
+		    ipaddr->ipadm_reqhost);
+		status = ipadm_errno2status(err);
 		break;
 	case IPADM_ADDR_IPV6_ADDRCONF:
 		status = i_ipadm_add_intfid2nvl(nvl, ipaddr);
@@ -3094,25 +3468,64 @@ i_ipadm_addr_persist(ipadm_handle_t iph, const ipadm_addrobj_t ipaddr,
 			pflags |= IPMGMT_ACTIVE;
 		if (flags & IPADM_OPT_PERSIST)
 			pflags |= IPMGMT_PERSIST;
+		if (flags & IPADM_OPT_SET_PROPS)
+			pflags |= IPMGMT_PROPS_ONLY;
 	}
 	status = i_ipadm_addr_persist_nvl(iph, nvl, pflags);
-	/*
-	 * prefixlen is stored in a separate line in the DB and not along
-	 * with the address itself, since it is also an address property and
-	 * all address properties are stored in separate lines. We need to
-	 * persist the prefixlen by calling the function that persists
-	 * address properties.
-	 */
-	if (status == IPADM_SUCCESS && !default_prefixlen &&
-	    ipaddr->ipadm_atype == IPADM_ADDR_STATIC &&
-	    (flags & IPADM_OPT_PERSIST)) {
-		for (pdp = ipadm_addrprop_table; pdp->ipd_name != NULL; pdp++) {
-			if (strcmp("prefixlen", pdp->ipd_name) == 0)
-				break;
-		}
-		assert(pdp != NULL);
-		status = i_ipadm_persist_propval(iph, pdp, pval, ipaddr, flags);
+
+	if (flags & IPADM_OPT_SET_PROPS) {
+		/*
+		 * Set PERSIST per IPADM_OPT_PROPS_PERSIST, and then un-set the
+		 * SET_PROPS bits.
+		 */
+		flags |= IPADM_OPT_ACTIVE;
+		if (flags & IPADM_OPT_PERSIST_PROPS)
+			flags |= IPADM_OPT_PERSIST;
+		else
+			flags &= ~IPADM_OPT_PERSIST;
+		flags &= ~(IPADM_OPT_SET_PROPS | IPADM_OPT_PERSIST_PROPS);
 	}
+
+	if (status == IPADM_SUCCESS && (flags & IPADM_OPT_PERSIST)) {
+		char		pbuf[MAXPROPVALLEN], *pval = NULL;
+		ipadm_prop_desc_t	*pdp = NULL;
+
+		/*
+		 * addprop properties are stored on separate lines in the DB and
+		 * not along with the address itself. Call the function that
+		 * persists address properties.
+		 */
+
+		switch (ipaddr->ipadm_atype) {
+		case IPADM_ADDR_STATIC:
+			if (!default_prefixlen && (propname == NULL ||
+			    strcmp(propname, IPADM_NVP_PREFIXLEN) == 0)) {
+				pdp = i_ipadm_get_addrprop_desc(
+				    IPADM_NVP_PREFIXLEN);
+				(void) snprintf(pbuf, sizeof (pbuf), "%u",
+				    ipaddr->ipadm_static_prefixlen);
+				pval = pbuf;
+			}
+			break;
+		case IPADM_ADDR_DHCP:
+			if (propname == NULL ||
+			    strcmp(propname, IPADM_NVP_REQHOST) == 0) {
+				pdp = i_ipadm_get_addrprop_desc(
+				    IPADM_NVP_REQHOST);
+				pval = ipaddr->ipadm_reqhost;
+			}
+			break;
+		default:
+			break;
+		}
+
+		if (pval != NULL) {
+			assert(pdp != NULL);
+			status = i_ipadm_persist_propval(iph, pdp, pval,
+			    ipaddr, flags);
+		}
+	}
+
 ret:
 	nvlist_free(nvl);
 	return (status);
@@ -3203,15 +3616,18 @@ i_ipadm_updown_common(ipadm_handle_t iph, const char *aobjname,
 
 	if (!(ipaddr->ipadm_flags & IPMGMT_ACTIVE))
 		return (IPADM_OP_DISABLE_OBJ);
+
 	if ((ipadm_flags & IPADM_OPT_PERSIST) &&
 	    !(ipaddr->ipadm_flags & IPMGMT_PERSIST))
 		return (IPADM_TEMPORARY_OBJ);
+
 	if (ipaddr->ipadm_atype == IPADM_ADDR_IPV6_ADDRCONF ||
 	    (ipaddr->ipadm_atype == IPADM_ADDR_DHCP &&
 	    (ipadm_flags & IPADM_OPT_PERSIST)))
 		return (IPADM_NOTSUP);
 
 	i_ipadm_addrobj2lifname(ipaddr, lifname, sizeof (lifname));
+
 	return (i_ipadm_get_flags(iph, lifname, ipaddr->ipadm_af, ifflags));
 }
 
@@ -3322,7 +3738,6 @@ ipadm_refresh_addr(ipadm_handle_t iph, const char *aobjname,
 	char			lifname[LIFNAMSIZ];
 	boolean_t		inform =
 	    ((ipadm_flags & IPADM_OPT_INFORM) != 0);
-	int			dherr;
 
 	/* check for solaris.network.interface.config authorization */
 	if (!ipadm_check_auth())
@@ -3364,18 +3779,34 @@ ipadm_refresh_addr(ipadm_handle_t iph, const char *aobjname,
 			return (IPADM_SUCCESS);
 		status = i_ipadm_set_flags(iph, lifname, af, IFF_UP, 0);
 	} else if (ipaddr.ipadm_atype == IPADM_ADDR_DHCP) {
-		status = i_ipadm_op_dhcp(&ipaddr, DHCP_EXTEND, &dherr);
-		/*
-		 * Restart the dhcp address negotiation with server if no
-		 * address has been acquired yet.
-		 */
-		if (status != IPADM_SUCCESS && dherr == DHCP_IPC_E_OUTSTATE) {
-			ipaddr.ipadm_wait = IPADM_DHCP_WAIT_DEFAULT;
-			status = i_ipadm_op_dhcp(&ipaddr, DHCP_START, NULL);
-		}
+		status = i_ipadm_refresh_dhcp(&ipaddr);
 	} else {
 		status = IPADM_NOTSUP;
 	}
+	return (status);
+}
+
+/*
+ * This is called from ipadm_refresh_addr() and i_ipadm_set_reqhost() to
+ * send a DHCP_EXTEND message and possibly a DHCP_START message
+ * to the dhcpagent.
+ */
+static ipadm_status_t
+i_ipadm_refresh_dhcp(ipadm_addrobj_t ipaddr)
+{
+	ipadm_status_t		status;
+	int			dherr;
+
+	status = i_ipadm_op_dhcp(ipaddr, DHCP_EXTEND, &dherr);
+	/*
+	 * Restart the dhcp address negotiation with server if no
+	 * address has been acquired yet.
+	 */
+	if (status != IPADM_SUCCESS && dherr == DHCP_IPC_E_OUTSTATE) {
+		ipaddr->ipadm_wait = IPADM_DHCP_WAIT_DEFAULT;
+		status = i_ipadm_op_dhcp(ipaddr, DHCP_START, NULL);
+	}
+
 	return (status);
 }
 
@@ -3423,8 +3854,13 @@ i_ipadm_validate_create_addr(ipadm_handle_t iph, ipadm_addrobj_t ipaddr,
 
 	ifname = ipaddr->ipadm_ifname;
 
-	if (i_ipadm_is_ipmp(iph, ifname) || i_ipadm_is_under_ipmp(iph, ifname))
-		return (IPADM_NOTSUP);
+	/*
+	 * Do not go further when we are under ipmp.
+	 * The interface is plumbed up and we are going to add
+	 * NOFAILOVER address to make in.mpathd happy.
+	 */
+	if (i_ipadm_is_under_ipmp(iph, ifname))
+		return (IPADM_SUCCESS);
 
 	af = ipaddr->ipadm_af;
 	af_exists = ipadm_if_enabled(iph, ifname, af);
@@ -3448,16 +3884,10 @@ i_ipadm_validate_create_addr(ipadm_handle_t iph, ipadm_addrobj_t ipaddr,
 	status = i_ipadm_if_pexists(iph, ifname, af, &p_exists);
 	if (status != IPADM_SUCCESS)
 		return (status);
+
 	if (!a_exists && p_exists)
 		return (IPADM_OP_DISABLE_OBJ);
-	if ((flags & IPADM_OPT_PERSIST) && a_exists && !p_exists) {
-		/*
-		 * If address has to be created persistently,
-		 * and the interface does not exist in the persistent
-		 * store but in active config, fail.
-		 */
-		return (IPADM_TEMPORARY_OBJ);
-	}
+
 	if (af_exists) {
 		status = i_ipadm_get_flags(iph, ifname, af, &ifflags);
 		if (status != IPADM_SUCCESS)
@@ -3494,29 +3924,45 @@ i_ipadm_validate_create_addr(ipadm_handle_t iph, ipadm_addrobj_t ipaddr,
 }
 
 ipadm_status_t
-i_ipadm_merge_prefixlen_from_nvl(nvlist_t *invl, nvlist_t *onvl,
+i_ipadm_merge_addrprops_from_nvl(nvlist_t *invl, nvlist_t *onvl,
     const char *aobjname)
 {
-	nvpair_t	*nvp, *prefixnvp;
+	const char * const	ADDRPROPS[] =
+	    { IPADM_NVP_PREFIXLEN, IPADM_NVP_REQHOST };
+	const size_t		ADDRPROPSLEN =
+	    sizeof (ADDRPROPS) / sizeof (*ADDRPROPS);
+	nvpair_t	*nvp, *propnvp;
 	nvlist_t	*tnvl;
 	char		*aname;
+	const char	*propname;
+	size_t		i;
 	int		err;
 
-	for (nvp = nvlist_next_nvpair(invl, NULL); nvp != NULL;
-	    nvp = nvlist_next_nvpair(invl, nvp)) {
-		if (nvpair_value_nvlist(nvp, &tnvl) == 0 &&
-		    nvlist_exists(tnvl, IPADM_NVP_PREFIXLEN) &&
-		    nvlist_lookup_string(tnvl, IPADM_NVP_AOBJNAME,
-		    &aname) == 0 && strcmp(aname, aobjname) == 0) {
-			/* prefixlen exists for given address object */
-			(void) nvlist_lookup_nvpair(tnvl, IPADM_NVP_PREFIXLEN,
-			    &prefixnvp);
-			err = nvlist_add_nvpair(onvl, prefixnvp);
-			if (err == 0) {
-				err = nvlist_remove(invl, nvpair_name(nvp),
-				    nvpair_type(nvp));
+	for (i = 0; i < ADDRPROPSLEN; ++i) {
+		propname = ADDRPROPS[i];
+
+		for (nvp = nvlist_next_nvpair(invl, NULL); nvp != NULL;
+		    nvp = nvlist_next_nvpair(invl, nvp)) {
+			if (nvpair_value_nvlist(nvp, &tnvl) == 0 &&
+			    nvlist_exists(tnvl, propname) &&
+			    nvlist_lookup_string(tnvl, IPADM_NVP_AOBJNAME,
+			    &aname) == 0 && strcmp(aname, aobjname) == 0) {
+
+				/*
+				 * property named `propname' exists for given
+				 * aobj
+				 */
+				(void) nvlist_lookup_nvpair(tnvl, propname,
+				    &propnvp);
+				err = nvlist_add_nvpair(onvl, propnvp);
+				if (err == 0) {
+					err = nvlist_remove(invl,
+					    nvpair_name(nvp), nvpair_type(nvp));
+				}
+				if (err != 0)
+					return (ipadm_errno2status(err));
+				break;
 			}
-			return (ipadm_errno2status(err));
 		}
 	}
 	return (IPADM_SUCCESS);
@@ -3561,23 +4007,45 @@ ipadm_enable_addr(ipadm_handle_t iph, const char *aobjname, uint32_t flags)
 
 	for (nvp = nvlist_next_nvpair(addrnvl, NULL); nvp != NULL;
 	    nvp = nvlist_next_nvpair(addrnvl, nvp)) {
+		boolean_t set_init = B_FALSE;
+
 		if (nvpair_value_nvlist(nvp, &nvl) != 0)
 			continue;
 
 		if (nvlist_exists(nvl, IPADM_NVP_IPV4ADDR) ||
-		    nvlist_exists(nvl, IPADM_NVP_IPV6ADDR)) {
-			status = i_ipadm_merge_prefixlen_from_nvl(addrnvl, nvl,
+		    nvlist_exists(nvl, IPADM_NVP_IPV6ADDR) ||
+		    nvlist_exists(nvl, IPADM_NVP_DHCP)) {
+			status = i_ipadm_merge_addrprops_from_nvl(addrnvl, nvl,
 			    aobjname);
 			if (status != IPADM_SUCCESS)
 				continue;
 		}
-		iph->iph_flags |= IPH_INIT;
+
+		/*
+		 * ipadm_enable_addr() is never a persistent operation. We need
+		 * to set IPH_INIT because ipmgmtd daemon does not have to write
+		 * the address to the persistent db. The address is already
+		 * available in the persistent db and we are here to re-enable
+		 * the persistent configuration.
+		 *
+		 * But we need to make sure we're not accidentally clearing an
+		 * IPH_INIT flag that was already set when we were called.
+		 */
+		if ((iph->iph_flags & IPH_INIT) == 0) {
+			iph->iph_flags |= IPH_INIT;
+			set_init = B_TRUE;
+		}
+
 		status = i_ipadm_init_addrobj(iph, nvl);
-		iph->iph_flags &= ~IPH_INIT;
+
+		if (set_init)
+			iph->iph_flags &= ~IPH_INIT;
+
 		if (status != IPADM_SUCCESS)
 			break;
 	}
 
+	nvlist_free(addrnvl);
 	return (status);
 }
 

@@ -23,39 +23,22 @@
 # Copyright (c) 2008, 2010, Oracle and/or its affiliates. All rights reserved.
 #
 
-include $(SRC)/Makefile.master
+# Copyright 2018 OmniOS Community Edition (OmniOSce) Association.
+
 include ../Makefile.tools
 
-SUBDIRS= \
-	Checks	\
-	hgext	\
-	Scm
+SUBDIRS=Checks Scm py3
 
-PYSRCS = \
-	__init__.py
+all :=		TARGET= all
+install :=	TARGET= install
+clean :=	TARGET= clean
+clobber :=	TARGET= clobber
+lint :=		TARGET= lint
 
-PYOBJS =	$(PYSRCS:%.py=%.pyc)
-PYTOPDIR = 	$(ROOTONBLDLIB)
-PYMODDIR =	onbld
-
-all	:= TARGET = all
-install := TARGET = install
-clean	:= TARGET = clean
-clobber := TARGET = clobber
-
-include ../Makefile.python
-
-.KEEP_STATE:
-
-all: $(PYVERSOBJS) $(SUBDIRS)
-
-install: all $(ROOTPYFILES) $(SUBDIRS)
-
-clean: $(SUBDIRS)
-
-clobber: clean pyclobber $(SUBDIRS)
+all install clean clobber lint: $(SUBDIRS)
 
 $(SUBDIRS): FRC
 	@cd $@; pwd; $(MAKE) $(TARGET)
 
 FRC:
+

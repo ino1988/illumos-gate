@@ -28,8 +28,6 @@
 /*	Copyright (c) 1984, 1986, 1987, 1988, 1989 AT&T	*/
 /*	  All Rights Reserved  	*/
 
-#pragma ident	"%Z%%M%	%I%	%E% SMI"
-
 #include "awk.def"
 #include "stdio.h"
 #include "awk.h"
@@ -852,7 +850,6 @@ insert_table(ccl_chars_t *table_base, int table_size, int ns, wchar_t cs,
 			/*
 			 * Quick! insert to font of current table entries.
 			 */
-qinsert:
 			table_size++;
 			for (; i < table_size; i++, table++) {
 				tns = table->cc_ns;

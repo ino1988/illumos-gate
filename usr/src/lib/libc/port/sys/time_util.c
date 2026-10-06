@@ -22,9 +22,8 @@
 /*
  * Copyright 2004 Sun Microsystems, Inc.  All rights reserved.
  * Use is subject to license terms.
+ * Copyright 2016 Joyent, Inc.
  */
-
-#pragma ident	"%Z%%M%	%I%	%E% SMI"
 
 #include <sys/types.h>
 #include <time.h>
@@ -39,6 +38,10 @@
 void
 hrt2ts(hrtime_t hrt, timespec_t *tsp)
 {
+#if defined(__amd64)
+	tsp->tv_sec = hrt / NANOSEC;
+	tsp->tv_nsec = hrt % NANOSEC;
+#else
 	uint32_t sec, nsec, tmp;
 
 	tmp = (uint32_t)(hrt >> 30);
@@ -60,6 +63,7 @@ hrt2ts(hrtime_t hrt, timespec_t *tsp)
 	}
 	tsp->tv_sec = (time_t)sec;
 	tsp->tv_nsec = nsec;
+#endif /* defined(__amd64) */
 }
 
 /*
@@ -67,16 +71,13 @@ hrt2ts(hrtime_t hrt, timespec_t *tsp)
  * All *timedwait() system call traps expect relative time.
  */
 void
-abstime_to_reltime(clockid_t clock_id,
-	const timespec_t *abstime, timespec_t *reltime)
+abstime_to_reltime(clockid_t clock_id, const timespec_t *abstime,
+    timespec_t *reltime)
 {
 	extern int __clock_gettime(clockid_t, timespec_t *);
 	timespec_t now;
 
-	if (clock_id == CLOCK_HIGHRES)
-		hrt2ts(gethrtime(), &now);
-	else
-		(void) __clock_gettime(clock_id, &now);
+	(void) __clock_gettime(clock_id, &now);
 	if (abstime->tv_nsec >= now.tv_nsec) {
 		reltime->tv_sec = abstime->tv_sec - now.tv_sec;
 		reltime->tv_nsec = abstime->tv_nsec - now.tv_nsec;

@@ -20,6 +20,9 @@
  */
 /*
  * Copyright (c) 1999, 2010, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2016-2017, Chris Fraire <cfraire@me.com>.
+ * Copyright 2019 Joshua M. Clulow <josh@sysmgr.org>
+ * Copyright 2026 Oxide Computer Company
  *
  * This module contains core functions for managing DHCP state machine
  * instances.
@@ -31,6 +34,8 @@
 #include <string.h>
 #include <ctype.h>
 #include <sys/types.h>
+#include <sys/debug.h>
+#include <sys/avl.h>
 #include <sys/socket.h>
 #include <netinet/in.h>
 #include <netinet/arp.h>
@@ -158,6 +163,55 @@ parse_param_list(const char *param_list, uint_t *param_cnt,
 	return (params);
 }
 
+static int
+dhcp_route_compar(const void *lp, const void *rp)
+{
+	const dhcp_route_t *l = lp;
+	const dhcp_route_t *r = rp;
+
+	/*
+	 * Interface routes must appear first in the sort order.  If a
+	 * subsequent non-interface route depends on an interface route in
+	 * order to reach the (off-subnet) gateway, it will have been added
+	 * already.
+	 */
+	if (l->dhr_interface && !r->dhr_interface) {
+		return (-1);
+	} else if (!l->dhr_interface && r->dhr_interface) {
+		return (1);
+	}
+
+	/*
+	 * Sort next by prefix length.  This has the effect of placing default
+	 * route entries next in the list after interface routes.
+	 */
+	if (l->dhr_prefix < r->dhr_prefix) {
+		return (-1);
+	} else if (l->dhr_prefix > r->dhr_prefix) {
+		return (1);
+	}
+
+	/*
+	 * Sort next by the prefix address itself.
+	 */
+	if (l->dhr_network.s_addr < r->dhr_network.s_addr) {
+		return (-1);
+	} else if (l->dhr_network.s_addr > r->dhr_network.s_addr) {
+		return (1);
+	}
+
+	/*
+	 * And finally by the next hop router address.
+	 */
+	if (l->dhr_nexthop.s_addr < r->dhr_nexthop.s_addr) {
+		return (-1);
+	} else if (l->dhr_nexthop.s_addr > r->dhr_nexthop.s_addr) {
+		return (1);
+	}
+
+	return (0);
+}
+
 /*
  * insert_smach(): Create a state machine instance on a given logical
  *		   interface.  The state machine holds the caller's LIF
@@ -189,6 +243,9 @@ insert_smach(dhcp_lif_t *lif, int *error)
 	dsmp->dsm_state = INIT;
 	dsmp->dsm_dflags = DHCP_IF_REMOVED;	/* until added to list */
 	isv6 = lif->lif_pif->pif_isv6;
+
+	avl_create(&dsmp->dsm_routes, dhcp_route_compar, sizeof (dhcp_route_t),
+	    offsetof(dhcp_route_t, dhr_node));
 
 	/*
 	 * Now that we have a controlling LIF, we need to assign an IAID to
@@ -316,8 +373,16 @@ hold_smach(dhcp_smach_t *dsmp)
 static void
 free_smach(dhcp_smach_t *dsmp)
 {
+	void *c = NULL;
+	dhcp_route_t *dhr;
+
 	dhcpmsg(MSG_DEBUG, "free_smach: freeing state machine %s",
 	    dsmp->dsm_name);
+
+	while ((dhr = avl_destroy_nodes(&dsmp->dsm_routes, &c)) != NULL) {
+		free(dhr);
+	}
+	avl_destroy(&dsmp->dsm_routes);
 
 	deprecate_leases(dsmp);
 	remove_lif(dsmp->dsm_lif);
@@ -330,8 +395,9 @@ free_smach(dhcp_smach_t *dsmp)
 	free(dsmp->dsm_cid);
 	free(dsmp->dsm_prl);
 	free(dsmp->dsm_pil);
-	free(dsmp->dsm_routers);
 	free(dsmp->dsm_reqhost);
+	free(dsmp->dsm_msg_reqhost);
+	free(dsmp->dsm_dhcp_domainname);
 	free(dsmp);
 
 	/* no big deal if this fails */
@@ -1049,14 +1115,17 @@ no_specified_id:
 	 * unable to parse it.  We need to determine if a Client ID is required
 	 * and, if so, generate one.
 	 *
-	 * If it's IPv4, not in an IPMP group, and not a logical interface,
+	 * If it's IPv4, not in an IPMP group, not a logical interface,
+	 * and a DHCP default for DF_V4_DEFAULT_IAID_DUID is not affirmative,
 	 * then we need to preserve backward-compatibility by avoiding
 	 * new-fangled DUID/IAID construction.  (Note: even for IPMP test
 	 * addresses, we construct a DUID/IAID since we may renew a lease for
 	 * an IPMP test address on any functioning IP interface in the group.)
 	 */
 	if (!pif->pif_isv6 && pif->pif_grifname[0] == '\0' &&
-	    strchr(dsmp->dsm_name, ':') == NULL) {
+	    strchr(dsmp->dsm_name, ':') == NULL &&
+	    !df_get_bool(dsmp->dsm_name, pif->pif_isv6,
+	    DF_V4_DEFAULT_IAID_DUID)) {
 		if (pif->pif_hwtype == ARPHRD_IB) {
 			/*
 			 * This comes from the DHCP over IPoIB specification.
@@ -1145,23 +1214,50 @@ smach_count(void)
 }
 
 /*
- * discard_default_routes(): removes a state machine's default routes alone.
+ * discard_routes(): removes a state machine's routes alone.
  *
  *   input: dhcp_smach_t *: the state machine whose default routes need to be
  *			    discarded
+ *	    dhcp_route_source_t: remove routes that match this source exactly,
+ *				 or all routes if 0 is passed
  *  output: void
  */
 
 void
-discard_default_routes(dhcp_smach_t *dsmp)
+discard_routes(dhcp_smach_t *dsmp, dhcp_route_source_t kind)
 {
-	free(dsmp->dsm_routers);
-	dsmp->dsm_routers = NULL;
-	dsmp->dsm_nrouters = 0;
+	dhcp_route_t *dhr = avl_first(&dsmp->dsm_routes);
+
+	while (dhr != NULL) {
+		/*
+		 * Grab the next entry first so that we have the option of
+		 * freeing the current entry:
+		 */
+		dhcp_route_t *next = AVL_NEXT(&dsmp->dsm_routes, dhr);
+
+		if (kind == 0 || dhr->dhr_source == kind) {
+			/*
+			 * We have been asked to remove either every route, or
+			 * routes that only come from this source.
+			 */
+			avl_remove(&dsmp->dsm_routes, dhr);
+			free(dhr);
+		} else if (dhr->dhr_source & kind) {
+			/*
+			 * Remove this source from the route, but leave it in
+			 * the list because it was also available via another
+			 * source.
+			 */
+			dhr->dhr_source &= ~kind;
+			VERIFY(dhr->dhr_source != 0);
+		}
+
+		dhr = next;
+	}
 }
 
 /*
- * remove_default_routes(): removes a state machine's default routes from the
+ * remove_routes(): removes a state machine's configured routes from the
  *			    kernel and from the state machine.
  *
  *   input: dhcp_smach_t *: the state machine whose default routes need to be
@@ -1170,29 +1266,48 @@ discard_default_routes(dhcp_smach_t *dsmp)
  */
 
 void
-remove_default_routes(dhcp_smach_t *dsmp)
+remove_routes(dhcp_smach_t *dsmp)
 {
-	int idx;
 	uint32_t ifindex;
 
-	if (dsmp->dsm_routers != NULL) {
-		ifindex = dsmp->dsm_lif->lif_pif->pif_index;
-		for (idx = dsmp->dsm_nrouters - 1; idx >= 0; idx--) {
-			if (del_default_route(ifindex,
-			    &dsmp->dsm_routers[idx])) {
-				dhcpmsg(MSG_DEBUG, "remove_default_routes: "
-				    "removed %s from %s",
-				    inet_ntoa(dsmp->dsm_routers[idx]),
-				    dsmp->dsm_name);
-			} else {
-				dhcpmsg(MSG_INFO, "remove_default_routes: "
-				    "unable to remove %s from %s",
-				    inet_ntoa(dsmp->dsm_routers[idx]),
-				    dsmp->dsm_name);
-			}
-		}
-		discard_default_routes(dsmp);
+	if (avl_is_empty(&dsmp->dsm_routes)) {
+		return;
 	}
+
+	ifindex = dsmp->dsm_lif->lif_pif->pif_index;
+
+	/*
+	 * The router list is sorted such that interface routes, which may be
+	 * required for gateway reachability, are stored first in the list.
+	 * When removing routes, start from the end of the list and work
+	 * backwards.
+	 */
+	for (dhcp_route_t *dhr = avl_last(&dsmp->dsm_routes);
+	    dhr != NULL; dhr = AVL_PREV(&dsmp->dsm_routes, dhr)) {
+		int loglevel = MSG_DEBUG;
+		const char *fmt = "remove_routes: removed "
+		    "%s/%u -> %s from %s";
+		char rt[INET_ADDRSTRLEN];
+
+		if (!dhr->dhr_installed) {
+			continue;
+		}
+
+		(void) strncpy(rt, inet_ntoa(dhr->dhr_network),
+		    sizeof (rt));
+
+		if (!del_route(ifindex, dhr)) {
+			loglevel = MSG_INFO;
+			fmt = "remove_routes: unable to remove "
+			    "%s/%u -> %s from %s";
+		} else {
+			dhr->dhr_installed = B_FALSE;
+		}
+
+		dhcpmsg(loglevel, fmt, rt, dhr->dhr_prefix,
+		    inet_ntoa(dhr->dhr_nexthop), dsmp->dsm_name);
+	}
+	discard_routes(dsmp, 0);
 }
 
 /*
@@ -1207,7 +1322,8 @@ reset_smach(dhcp_smach_t *dsmp)
 {
 	dsmp->dsm_dflags &= ~DHCP_IF_FAILED;
 
-	remove_default_routes(dsmp);
+	remove_routes(dsmp);
+	clear_lif_mtu(dsmp->dsm_lif);
 
 	free_pkt_list(&dsmp->dsm_recv_pkt_list);
 	free_pkt_entry(dsmp->dsm_ack);
@@ -1217,6 +1333,15 @@ reset_smach(dhcp_smach_t *dsmp)
 
 	free(dsmp->dsm_reqhost);
 	dsmp->dsm_reqhost = NULL;
+
+	/*
+	 * Do not reset dsm_msg_reqhost here. Unlike dsm_reqhost coming from
+	 * /etc/host.*, dsm_msg_reqhost comes externally, and it survives until
+	 * it is reset from another external message.
+	 */
+
+	free(dsmp->dsm_dhcp_domainname);
+	dsmp->dsm_dhcp_domainname = NULL;
 
 	cancel_smach_timers(dsmp);
 
@@ -1533,7 +1658,7 @@ deprecate_leases(dhcp_smach_t *dsmp)
 	 * routes must be removed prior to canonizing or deprecating the LIF.
 	 */
 
-	remove_default_routes(dsmp);
+	remove_routes(dsmp);
 
 	while ((dlp = dsmp->dsm_leases) != NULL)
 		remove_lease(dlp);

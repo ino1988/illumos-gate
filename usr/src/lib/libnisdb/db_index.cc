@@ -26,8 +26,6 @@
  *  Use is subject to license terms.
  */
 
-#pragma ident	"%Z%%M%	%I%	%E% SMI"
-
 #include <stdio.h>
 #include <malloc.h>
 #include "db_headers.h"
@@ -189,7 +187,7 @@ db_index_entry *
 db_index::lookup(item *index_value, long *how_many_found,
 		db_table *table, bool_t checkTTL)
 {
-	register unsigned long hval;
+	unsigned long hval;
 	unsigned long bucket;
 	db_index_entry	*ret;
 
@@ -227,9 +225,9 @@ db_index::lookup(item *index_value, long *how_many_found,
 db_status
 db_index::remove(item* index_value, entryp recnum)
 {
-	register unsigned long hval;
+	unsigned long hval;
 	unsigned long bucket;
-	register db_index_entry *fst;
+	db_index_entry *fst;
 	db_status	ret;
 
 	if (index_value == NULL)
@@ -267,7 +265,7 @@ db_index::remove(item* index_value, entryp recnum)
 db_status
 db_index::add(item* index_value, entryp recnum)
 {
-	register unsigned long hval;
+	unsigned long hval;
 
 	if (index_value == NULL)
 		return (DB_NOTUNIQUE);
@@ -339,6 +337,7 @@ db_index::dump(char *file)
 	else
 		ret = status;
 	WRITEUNLOCK(this, ret, "wu db_index::dump");
+	return (ret);
 }
 
 /*

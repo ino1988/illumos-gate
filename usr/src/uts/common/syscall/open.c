@@ -24,10 +24,12 @@
  */
 
 /*	Copyright (c) 1983, 1984, 1985, 1986, 1987, 1988, 1989 AT&T	*/
-/*	  All Rights Reserved  	*/
+/*	  All Rights Reserved	*/
 
 /*
  * Copyright (c) 2013, OmniTI Computer Consulting, Inc. All rights reserved.
+ * Copyright 2021 OmniOS Community Edition (OmniOSce) Association.
+ * Copyright 2026 Oxide Computer Company
  */
 /*
  * Portions of this source code were derived from Berkeley 4.3 BSD
@@ -47,6 +49,7 @@
 #include <sys/vfs.h>
 #include <sys/file.h>
 #include <sys/mode.h>
+#include <sys/model.h>
 #include <sys/uio.h>
 #include <sys/debug.h>
 #include <c2/audit.h>
@@ -57,7 +60,7 @@
  */
 
 static int
-copen(int startfd, char *fname, int filemode, int createmode)
+copen(int startfd, char *fname, int filemode, int createmode, uio_seg_t seg)
 {
 	struct pathname pn;
 	vnode_t *vp, *sdvp;
@@ -67,7 +70,6 @@ copen(int startfd, char *fname, int filemode, int createmode)
 	int fd, dupfd;
 	vnode_t *startvp;
 	proc_t *p = curproc;
-	uio_seg_t seg = UIO_USERSPACE;
 	char *open_filename = fname;
 	uint32_t auditing = AU_AUDITING();
 	char startchar;
@@ -93,7 +95,7 @@ copen(int startfd, char *fname, int filemode, int createmode)
 		/*
 		 * We're here via openat()
 		 */
-		if (copyin(fname, &startchar, sizeof (char)))
+		if (uio_copyin(fname, &startchar, sizeof (char), seg))
 			return (set_errno(EFAULT));
 
 		/*
@@ -116,11 +118,11 @@ copen(int startfd, char *fname, int filemode, int createmode)
 	if (filemode & FXATTRDIROPEN) {
 		if (auditing && startvp != NULL)
 			audit_setfsat_path(1);
-		if (error = lookupnameat(fname, seg, FOLLOW,
-		    NULLVPP, &vp, startvp))
-			return (set_errno(error));
+		error = lookupnameat(fname, seg, FOLLOW, NULLVPP, &vp, startvp);
 		if (startvp != NULL)
 			VN_RELE(startvp);
+		if (error != 0)
+			return (set_errno(error));
 
 		startvp = vp;
 	}
@@ -130,7 +132,7 @@ copen(int startfd, char *fname, int filemode, int createmode)
 	 */
 	if (filemode & FXATTR) {
 		if (startfd == AT_FDCWD) {
-			if (copyin(fname, &startchar, sizeof (char)))
+			if (uio_copyin(fname, &startchar, sizeof (char), seg))
 				return (set_errno(EFAULT));
 
 			/*
@@ -160,7 +162,7 @@ copen(int startfd, char *fname, int filemode, int createmode)
 	if (filemode & (FXATTR|FXATTRDIROPEN)) {
 		vattr_t vattr;
 
-		if (error = pn_get(fname, UIO_USERSPACE, &pn)) {
+		if (error = pn_get(fname, seg, &pn)) {
 			goto out;
 		}
 
@@ -230,7 +232,11 @@ noxattr:
 					 */
 					setf(fd, fp);
 					if ((filemode & FCLOEXEC) != 0) {
-						f_setfd(fd, FD_CLOEXEC);
+						f_setfd_or(fd, FD_CLOEXEC);
+					}
+
+					if ((filemode & FCLOFORK) != 0) {
+						f_setfd_or(fd, FD_CLOFORK);
 					}
 					return (fd);
 				} else {
@@ -259,7 +265,11 @@ noxattr:
 					mutex_exit(&fp->f_tlock);
 					setf(fd, fp);
 					if ((filemode & FCLOEXEC) != 0) {
-						f_setfd(fd, FD_CLOEXEC);
+						f_setfd_or(fd, FD_CLOEXEC);
+					}
+
+					if ((filemode & FCLOFORK) != 0) {
+						f_setfd_or(fd, FD_CLOFORK);
 					}
 					releasef(dupfd);
 				}
@@ -289,12 +299,40 @@ out:
 #endif
 
 /*
+ * Kernel-callable open of a kernel-resident path, used to apply spawn(2)
+ * file actions in a spawned child.
+ *
+ * copen() reports failure by returning the error number from set_errno(),
+ * which is indistinguishable by value from a valid file descriptor. We
+ * convert to the convention expected by an in-kernel caller - a return of
+ * -1 with the error left in lwp_errno, and the file descriptor otherwise.
+ */
+int
+kopenat(int startfd, char *path, int fmode, int cmode, model_t model)
+{
+	klwp_t *lwp = ttolwp(curthread);
+	int fd;
+
+	if (model == DATAMODEL_ILP32)
+		fmode = OPENMODE32(fmode);
+	else
+		fmode = OPENMODE64(fmode);
+
+	lwp->lwp_errno = 0;
+	fd = copen(startfd, path, fmode, cmode, UIO_SYSSPACE);
+	if (lwp->lwp_errno != 0)
+		return (-1);
+
+	return (fd);
+}
+
+/*
  * Open a file.
  */
 int
 openat(int fd, char *path, int fmode, int cmode)
 {
-	return (copen(fd, path, OPENMODE(fmode), cmode));
+	return (copen(fd, path, OPENMODE(fmode), cmode, UIO_USERSPACE));
 }
 
 int
@@ -310,7 +348,7 @@ open(char *path, int fmode, int cmode)
 int
 openat64(int fd, char *path, int fmode, int cmode)
 {
-	return (copen(fd, path, OPENMODE64(fmode), cmode));
+	return (copen(fd, path, OPENMODE64(fmode), cmode, UIO_USERSPACE));
 }
 
 int
@@ -328,7 +366,7 @@ open64(char *path, int fmode, int cmode)
 int
 openat32(int fd, char *path, int fmode, int cmode)
 {
-	return (copen(fd, path, OPENMODE32(fmode), cmode));
+	return (copen(fd, path, OPENMODE32(fmode), cmode, UIO_USERSPACE));
 }
 
 int

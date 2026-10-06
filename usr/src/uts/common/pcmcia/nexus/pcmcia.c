@@ -24,6 +24,10 @@
  */
 
 /*
+ * Copyright 2023 Oxide Computer Company
+ */
+
+/*
  * PCMCIA NEXUS
  *	The PCMCIA module is a generalized interface for
  *	implementing PCMCIA nexus drivers.  It preserves
@@ -72,7 +76,7 @@
 #ifdef sparc
 #include <sys/ddi_subrdefs.h>
 
-#elif defined(__x86) || defined(__amd64)
+#elif defined(__x86)
 #include <sys/mach_intr.h>
 #endif
 
@@ -384,7 +388,7 @@ pcmcia_attach(dev_info_t *dip, anp_t *adapter)
 	mutex_enter(&pcmcia_enum_lock);
 	mutex_enter(&pcmcia_global_lock);
 	if (pcmcia_num_adapters == 0) {
-		pcmcia_cis_parser = (f_tt *)CISParser;
+		pcmcia_cis_parser = (f_tt *)(uintptr_t)CISParser;
 		cis_parser = (void *(*)(int, ...)) CISParser;
 		pcmcia_cs_event = (f_tt *)cs_event;
 		cs_socket_services = SocketServices;
@@ -511,7 +515,7 @@ static int (*cs_error_ptr)() = card_services_error;
  */
 int
 pcmcia_ctlops(dev_info_t *dip, dev_info_t *rdip,
-	ddi_ctl_enum_t ctlop, void *arg, void *result)
+    ddi_ctl_enum_t ctlop, void *arg, void *result)
 {
 	int e;
 	char name[64];
@@ -850,7 +854,7 @@ pcmcia_prop_op(dev_t dev, dev_info_t *dip, dev_info_t *ch_dip,
 			break;
 		case PCMCIA_PROP_CARDBUS:
 			propptr = NULL;
-			if (!(ppd->ppd_flags * PPD_CARD_CARDBUS))
+			if ((ppd->ppd_flags & PPD_CARD_CARDBUS) == 0)
 				return (DDI_PROP_NOT_FOUND);
 			break;
 		}
@@ -953,7 +957,7 @@ pcmcia_find_rnum(dev_info_t *dip, struct regspec *reg)
 
 int
 pcmcia_bus_map(dev_info_t *dip, dev_info_t *rdip, ddi_map_req_t *mp,
-	off_t offset, off_t len, caddr_t *vaddrp)
+    off_t offset, off_t len, caddr_t *vaddrp)
 {
 	struct pcm_regs *regs, *mregs = NULL, tmp_reg;
 	ddi_map_req_t mr = *mp;
@@ -1078,7 +1082,7 @@ struct regspec *
 pcmcia_cons_regspec(dev_info_t *dip, int type, uchar_t *buff, ra_return_t *ret)
 {
 	int ptype = -1, len, bus;
-	char device_type[MODMAXNAMELEN + 1];
+	char device_type[MODMAXNAMELEN];
 	dev_info_t *pdip;
 	struct regspec *defreg;
 	pci_regspec_t *pcireg;
@@ -1152,7 +1156,7 @@ pcmcia_init_adapter(anp_t *adapter, dev_info_t *dip)
 	pcmcia_adapters[i]->pca_number = i;
 	(void) strcpy(pcmcia_adapters[i]->pca_name, ddi_get_name(dip));
 	pcmcia_adapters[i]->
-	    pca_name[sizeof (pcmcia_adapters[i]->pca_name) - 1] = NULL;
+	    pca_name[sizeof (pcmcia_adapters[i]->pca_name) - 1] = '\0';
 
 	if (ls_if != NULL) {
 		inquire_adapter_t conf;
@@ -1560,7 +1564,6 @@ pcm_search_devinfo(dev_info_t *self, struct pcm_device_info *info, int socket)
 	char bf[256];
 	struct pcmcia_parent_private *ppd;
 	dev_info_t *dip;
-	int circ;
 
 #if defined(PCMCIA_DEBUG)
 	if (pcmcia_debug)
@@ -1570,7 +1573,7 @@ pcm_search_devinfo(dev_info_t *self, struct pcm_device_info *info, int socket)
 		    info->pd_vers1_name, info->pd_flags);
 #endif
 
-	ndi_devi_enter(self, &circ);
+	ndi_devi_enter(self);
 	/* do searches in compatible property order */
 	for (dip = (dev_info_t *)DEVI(self)->devi_child;
 	    dip != NULL;
@@ -1639,7 +1642,7 @@ pcm_search_devinfo(dev_info_t *self, struct pcm_device_info *info, int socket)
 				break;
 		}
 	}
-	ndi_devi_exit(self, circ);
+	ndi_devi_exit(self);
 	return (dip);
 }
 
@@ -1704,7 +1707,7 @@ pcm_find_parent_dip(int socket)
  */
 int
 pcmcia_set_em_handler(int (*handler)(), caddr_t events, int elen,
-			uint32_t id, void **cs, void **ss)
+    uint32_t id, void **cs, void **ss)
 {
 	struct pcmcia_mif *mif, *tmp;
 
@@ -1744,7 +1747,7 @@ pcmcia_set_em_handler(int (*handler)(), caddr_t events, int elen,
 		if (mif == NULL)
 			return (ENOSPC);
 
-		mif->mif_function = (void (*)())handler;
+		mif->mif_function = (void (*)())(uintptr_t)handler;
 		bcopy(events, mif->mif_events, elen);
 		mif->mif_id = id;
 		mutex_enter(&pcmcia_global_lock);
@@ -1775,13 +1778,13 @@ pcm_fix_bits(socket_enum_t src, socket_enum_t dst, int num, int dir)
 
 	if (dir == 0) {
 				/* LEFT */
-		for (i = 0; i <= (sizeof (dst) * PR_WORDSIZE) - num; i++) {
+		for (i = 0; i <= PCMCIA_MAX_SOCKETS - num; i++) {
 			if (PR_GET(src, i))
 				PR_SET(dst, i + num);
 		}
 	} else {
 				/* RIGHT */
-		for (i = num; i < sizeof (dst) * PR_WORDSIZE; i++) {
+		for (i = num; i < PCMCIA_MAX_SOCKETS; i++) {
 			if (PR_GET(src, i))
 				PR_SET(dst, i - num);
 		}
@@ -2338,7 +2341,7 @@ pcmcia_fix_string(char *str)
 
 void
 pcmcia_1275_name(int socket, struct pcm_device_info *info,
-			client_handle_t handle)
+    client_handle_t handle)
 {
 	cistpl_manfid_t manfid;
 	cistpl_jedec_t jedec;
@@ -2453,7 +2456,7 @@ char *pcmcia_lan_types[] = {
 
 void
 pcmcia_generic_name(int socket, struct pcm_device_info *info,
-			client_handle_t handle)
+    client_handle_t handle)
 {
 	cistpl_funcid_t funcid;
 	cistpl_funce_t funce;
@@ -2642,7 +2645,7 @@ pcmcia_add_compatible(dev_info_t *dip, struct pcm_device_info *info)
  */
 static int
 pcmcia_get_mem_regs(struct pcm_regs *regs, struct pcm_device_info *info,
-			int type, int pctype)
+    int type, int pctype)
 {
 	int num_regs = 0;
 	tuple_t tuple;
@@ -2711,7 +2714,7 @@ pcmcia_get_mem_regs(struct pcm_regs *regs, struct pcm_device_info *info,
  */
 static int
 pcmcia_get_io_regs(struct pcm_regs *regs, struct pcm_device_info *info,
-		    int pctype)
+    int pctype)
 {
 	int num_regs = 0;
 	tuple_t tuple;
@@ -3815,7 +3818,7 @@ SSSetIRQHandler(set_irq_handler_t *handler)
 
 	retval = ddi_add_intr(dip, 0, handler->iblk_cookie,
 	    handler->idev_cookie,
-	    (uint32_t(*)(caddr_t)) handler->handler,
+	    (uint32_t(*)(caddr_t))(uintptr_t) handler->handler,
 	    handler->arg1);
 
 	if (retval == DDI_SUCCESS) {
@@ -3990,7 +3993,6 @@ pcmcia_create_device(ss_make_device_node_t *init)
 int
 pcmcia_get_minors(dev_info_t *dip, struct pcm_make_dev **minors)
 {
-	int circ;
 	int count = 0;
 	struct ddi_minor_data *dp;
 	struct pcm_make_dev *md;
@@ -4000,7 +4002,7 @@ pcmcia_get_minors(dev_info_t *dip, struct pcm_make_dev **minors)
 
 	socket = ddi_getprop(DDI_DEV_T_ANY, dip, DDI_PROP_DONTPASS,
 	    PCM_DEV_SOCKET, -1);
-	ndi_devi_enter(dip, &circ);
+	ndi_devi_enter(dip);
 	if (DEVI(dip)->devi_minor != (struct ddi_minor_data *)NULL) {
 		for (dp = DEVI(dip)->devi_minor;
 		    dp != (struct ddi_minor_data *)NULL;
@@ -4055,7 +4057,7 @@ pcmcia_get_minors(dev_info_t *dip, struct pcm_make_dev **minors)
 			count = 0;
 		}
 	}
-	ndi_devi_exit(dip, circ);
+	ndi_devi_exit(dip);
 	return (count);
 }
 
@@ -4065,7 +4067,6 @@ static char *ddmtypes[] = { "minor", "alias", "default", "internal" };
 static void
 pcmcia_dump_minors(dev_info_t *dip)
 {
-	int circ;
 	int count = 0;
 	struct ddi_minor_data *dp;
 	int unit, major;
@@ -4089,7 +4090,7 @@ pcmcia_dump_minors(dev_info_t *dip)
 			cmn_err(CE_CONT, "\tsibs: %s %s %s\n",
 			    ddi_binding_name(np), cf2, cur);
 
-			ndi_devi_enter(np, &circ);
+			ndi_devi_enter(np);
 			if (DEVI(np)->devi_minor !=
 			    (struct ddi_minor_data *)NULL) {
 				for (dp = DEVI(np)->devi_minor;
@@ -4113,7 +4114,7 @@ pcmcia_dump_minors(dev_info_t *dip)
 					    ddi_binding_name(np));
 				}
 			}
-			ndi_devi_exit(np, circ);
+			ndi_devi_exit(np);
 		}
 	}
 }
@@ -4530,18 +4531,18 @@ is_subtractv(dev_info_t *dip)
 
 /*
  * pcmcia_pci_alloc()
- * 	allocate mem or I/O resource from the ancestor of the cardbus bridge.
- * 	First start from the parent node. If the parent is a subtractive
- * 	decode bridge and it does not have the requested resource, go up the
- * 	device tree to find the resource.
+ *	allocate mem or I/O resource from the ancestor of the cardbus bridge.
+ *	First start from the parent node. If the parent is a subtractive
+ *	decode bridge and it does not have the requested resource, go up the
+ *	device tree to find the resource.
  *
- * 	dip		the parent node of the cardbus bridge
+ *	dip		the parent node of the cardbus bridge
  *
- * 	res_dip		returns a pointer to the node from which the
- * 			resource is obtained. *res_dip could point to
- * 			the parent or a higher level ancestor. *res_dip
- * 			should be saved by the caller and later passed
- * 			to pcmcia_ra_free();
+ *	res_dip		returns a pointer to the node from which the
+ *			resource is obtained. *res_dip could point to
+ *			the parent or a higher level ancestor. *res_dip
+ *			should be saved by the caller and later passed
+ *			to pcmcia_ra_free();
  */
 int
 pcmcia_pci_alloc(dev_info_t *dip, ndi_ra_request_t *req, ra_return_t *ret,
@@ -4634,9 +4635,8 @@ pcmcia_free_resources(dev_info_t *self)
 	struct regspec *assigned;
 	int len;
 	dev_info_t *dip;
-	int circ;
 
-	ndi_devi_enter(self, &circ);
+	ndi_devi_enter(self);
 	/* do searches in compatible property order */
 	for (dip = (dev_info_t *)DEVI(self)->devi_child;
 	    dip != NULL;
@@ -4655,7 +4655,7 @@ pcmcia_free_resources(dev_info_t *self)
 			kmem_free(assigned, len);
 		}
 	}
-	ndi_devi_exit(self, circ);
+	ndi_devi_exit(self);
 }
 
 /*
@@ -5028,7 +5028,7 @@ pcmcia_intr_ops(dev_info_t *dip, dev_info_t *rdip, ddi_intr_op_t intr_op,
 	return (ret);
 }
 
-#elif defined(__x86) || defined(__amd64)
+#elif defined(__x86)
 
 static struct intrspec	*pcmcia_intr_get_ispec(dev_info_t *, int,
 			    pcmcia_logical_socket_t **);
@@ -5292,7 +5292,7 @@ pcmcia_intr_enable_isr(dev_info_t *dip, dev_info_t *rdip,
 
 	handler.socket = sockp->ls_socket;
 	handler.irq = irq;
-	handler.handler = (f_tt *)hdlp->ih_cb_func;
+	handler.handler = (f_tt *)(uintptr_t)hdlp->ih_cb_func;
 	handler.arg1 = hdlp->ih_cb_arg1;
 	handler.arg2 = hdlp->ih_cb_arg2;
 	handler.handler_id = (uint32_t)(uintptr_t)rdip;
@@ -5425,13 +5425,14 @@ pcmcia_intr_disable_isr(dev_info_t *dip, dev_info_t *rdip,
 
 		/* Check if there is only one handler left */
 		if ((intr->next == intr) && (intr->prev == intr)) {
-			if (intr->handler_id != (uint32_t)(uintptr_t)rdip)
+			if (intr->handler_id != (uint32_t)(uintptr_t)rdip) {
 				/*
 				 * need to get the dip that was
 				 * used to add the handler
 				 */
 				rdip = sockp->ls_mfintr_dip;
-				ispecp = (struct intrspec *)&sockp->ls_intrspec;
+			}
+			ispecp = (struct intrspec *)&sockp->ls_intrspec;
 		} else {
 			/* Don't call cleanup if list still has members */
 			mutex_exit(&sockp->ls_ilock);

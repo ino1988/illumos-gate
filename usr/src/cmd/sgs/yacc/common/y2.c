@@ -26,8 +26,6 @@
 /* Copyright (c) 1988 AT&T */
 /* All Rights Reserved */
 
-#pragma ident	"%Z%%M%	%I%	%E% SMI"
-
 #include "dextern.h"
 #include "sgs.h"
 #include <stdio.h>
@@ -56,11 +54,11 @@
 #define	d_FLAG	0x02
 #define	DEFAULT_PREFIX	"y"
 
-char *infile;				/* input file name 		*/
-static int numbval;			/* value of an input number 	*/
+char *infile;				/* input file name		*/
+static int numbval;			/* value of an input number	*/
 static int toksize = NAMESIZE;
 static wchar_t *tokname;	/* input token name		*/
-char *parser = PARSER;		/* location of common parser 	*/
+char *parser = PARSER;		/* location of common parser	*/
 
 static void finact(void);
 static wchar_t *cstash(wchar_t *);
@@ -167,11 +165,12 @@ int nmbchars = 0;	/* number of mb literals in mbchars */
 MBCLIT *mbchars = (MBCLIT *) 0; /* array of mb literals */
 int nmbcharsz = 0; /* allocated space for mbchars */
 
+#define	F_NAME_LENGTH	128
+
 void
-setup(argc, argv)
-int argc;
-char *argv[];
-{	int ii, i, j, lev, t, ty;
+setup(int argc, char *argv[])
+{
+	int ii, i, j, lev, t, ty;
 		/* ty is the sequencial number of token name in tokset */
 	int c;
 	int *p;
@@ -180,23 +179,22 @@ char *argv[];
 	unsigned int options = 0;
 	char *file_prefix = DEFAULT_PREFIX;
 	char *sym_prefix = "";
-#define	F_NAME_LENGTH	128
 	char	fname[F_NAME_LENGTH+1];
 
 	foutput = NULL;
 	fdefine = NULL;
 	i = 1;
 
-	tokname = (wchar_t *)malloc(sizeof (wchar_t) * toksize);
-	tokset = (TOKSYMB *)malloc(sizeof (TOKSYMB) * ntoksz);
-	toklev = (int *)malloc(sizeof (int) * ntoksz);
-	nontrst = (NTSYMB *)malloc(sizeof (NTSYMB) * nnontersz);
-	mem0 = (int *)malloc(sizeof (int) * new_memsize);
-	prdptr = (int **)malloc(sizeof (int *) * (nprodsz+2));
-	levprd = (int *)malloc(sizeof (int) * (nprodsz+2));
-	had_act = (wchar_t *)calloc((nprodsz + 2), sizeof (wchar_t));
-	lhstext = (wchar_t *)calloc(1, sizeof (wchar_t) * LHS_TEXT_LEN);
-	rhstext = (wchar_t *)calloc(1, sizeof (wchar_t) * RHS_TEXT_LEN);
+	tokname = malloc(sizeof (wchar_t) * toksize);
+	tokset = malloc(sizeof (TOKSYMB) * ntoksz);
+	toklev = malloc(sizeof (int) * ntoksz);
+	nontrst = malloc(sizeof (NTSYMB) * nnontersz);
+	mem0 = malloc(sizeof (int) * new_memsize);
+	prdptr = malloc(sizeof (int *) * (nprodsz + 2));
+	levprd = malloc(sizeof (int) * (nprodsz + 2));
+	had_act = calloc(nprodsz + 2, sizeof (wchar_t));
+	lhstext = calloc(LHS_TEXT_LEN, sizeof (wchar_t));
+	rhstext = calloc(RHS_TEXT_LEN, sizeof (wchar_t));
 	aryfil(toklev, ntoksz, 0);
 	aryfil(levprd, nprodsz, 0);
 	for (ii = 0; ii < ntoksz; ++ii)
@@ -239,7 +237,7 @@ char *argv[];
 			break;
 		case 'Y':
 			cp = (char *)malloc(strlen(optarg)+
-				sizeof ("/yaccpar") + 1);
+			    sizeof ("/yaccpar") + 1);
 			cp = strcpy(cp, optarg);
 			parser = strcat(cp, "/yaccpar");
 			break;
@@ -272,9 +270,8 @@ char *argv[];
 	 * Open y.output if -v is specified
 	 */
 	if (options & v_FLAG) {
-		(void) strncpy(fname,
-			file_prefix,
-			F_NAME_LENGTH-strlen(".output"));
+		(void) strncpy(fname, file_prefix,
+		    F_NAME_LENGTH - strlen(".output"));
 		(void) strcat(fname, ".output");
 		foutput = fopen(fname, "w");
 		if (foutput == NULL)
@@ -286,14 +283,12 @@ char *argv[];
 	 * Open y.tab.h if -d is specified
 	 */
 	if (options & d_FLAG) {
-		(void) strncpy(fname,
-			file_prefix,
-			F_NAME_LENGTH-strlen(".tab.h"));
+		(void) strncpy(fname, file_prefix,
+		    F_NAME_LENGTH - strlen(".tab.h"));
 		(void) strcat(fname, ".tab.h");
 		fdefine = fopen(fname, "w");
 		if (fdefine == NULL)
-			error(gettext(
-			"cannot open y.tab.h"));
+			error(gettext("cannot open y.tab.h"));
 	}
 
 	fdebug = fopen(DEBUGNAME, "w");
@@ -308,9 +303,8 @@ char *argv[];
 	/*
 	 * Open y.tab.c
 	 */
-	(void) strncpy(fname,
-		file_prefix,
-		F_NAME_LENGTH-strlen(".tab.c"));
+	(void) strncpy(fname, file_prefix,
+	    F_NAME_LENGTH - strlen(".tab.c"));
 	(void) strcat(fname, ".tab.c");
 	ftable = fopen(fname, "w");
 	if (ftable == NULL)
@@ -401,8 +395,8 @@ char *argv[];
  *	This message is passed to error() function.
  */
 					error(gettext(
-					"type redeclaration of token %ws"),
-					tokset[t].name);
+					    "type redeclaration of token %ws"),
+					    tokset[t].name);
 					}
 				else
 					SETTYPE(toklev[t], ty);
@@ -417,7 +411,7 @@ char *argv[];
  */
 					error(gettext(
 				"type redeclaration of nonterminal %ws"),
-						nontrst[t-NTBASE].name);
+					    nontrst[t-NTBASE].name);
 					}
 				else
 					nontrst[t-NTBASE].tvalue = ty;
@@ -493,7 +487,7 @@ char *argv[];
  */
 						error(gettext(
 				"%ws is not a token."),
-						tokname);
+						    tokname);
 					}
 					if (lev & ~04) {
 						if (ASSOC(toklev[j]) & ~04)
@@ -503,14 +497,15 @@ char *argv[];
  */
 							error(gettext(
 				"redeclaration of precedence of %ws"),
-						tokname);
+							    tokname);
 						SETASC(toklev[j], lev);
 						SETPLEV(toklev[j], i);
 					} else {
 						if (ASSOC(toklev[j]))
-						(void) warning(1, gettext(
+							(void) warning(1,
+							    gettext(
 				"redeclaration of precedence of %ws."),
-							tokname);
+							    tokname);
 						SETASC(toklev[j], lev);
 						}
 					if (ty) {
@@ -521,7 +516,7 @@ char *argv[];
  *	This message is passed to error() function.
  */
 						"redeclaration of type of %ws"),
-							tokname);
+							    tokname);
 						SETTYPE(toklev[j], ty);
 						}
 					if ((t = gettok()) == NUMBER) {
@@ -533,7 +528,7 @@ char *argv[];
  */
 							error(gettext(
 				"type number of %ws should be defined earlier"),
-							tokset[j].name);
+							    tokset[j].name);
 							}
 						if (numbval >= -YYFLAG1) {
 /*
@@ -542,7 +537,7 @@ char *argv[];
  */
 							error(gettext(
 				"token numbers must be less than %d"),
-							-YYFLAG1);
+							    -YYFLAG1);
 							}
 						t = gettok();
 						}
@@ -588,52 +583,24 @@ char *argv[];
 	end_toks();	/* all tokens dumped - get ready for reductions */
 
 	(void) fprintf(ftable, "\n#include <inttypes.h>\n");
-	(void) fprintf(ftable, "\n#ifdef __STDC__\n");
 	(void) fprintf(ftable, "#include <stdlib.h>\n");
 	(void) fprintf(ftable, "#include <string.h>\n");
-	(void) fprintf(ftable, "#define	YYCONST	const\n");
-	(void) fprintf(ftable, "#else\n");
-	(void) fprintf(ftable, "#include <malloc.h>\n");
-	(void) fprintf(ftable, "#include <memory.h>\n");
-	(void) fprintf(ftable, "#define	YYCONST\n");
-	(void) fprintf(ftable, "#endif\n");
 	(void) fprintf(ftable, "\n#include <values.h>\n");
 
 	if (sym_prefix[0] != '\0')
 		put_prefix_define(sym_prefix);
-
-	(void) fprintf(ftable,
-	"\n#if defined(__cplusplus) || defined(__STDC__)\n");
-	(void) fprintf(ftable,
-	"\n#if defined(__cplusplus) && defined(__EXTERN_C__)\n");
-	(void) fprintf(ftable, "extern \"C\" {\n");
-	(void) fprintf(ftable, "#endif\n");
-	(void) fprintf(ftable, "#ifndef yyerror\n");
-	(void) fprintf(ftable, "#if defined(__cplusplus)\n");
-	(void) fprintf(ftable, "	void yyerror(YYCONST char *);\n");
-	(void) fprintf(ftable, "#endif\n");
-	(void) fprintf(ftable, "#endif\n");
-	(void) fprintf(ftable, "#ifndef yylex\n");
-	(void) fprintf(ftable, "	int yylex(void);\n");
-	(void) fprintf(ftable, "#endif\n");
-	(void) fprintf(ftable, "	int yyparse(void);\n");
-	(void) fprintf(ftable,
-	"#if defined(__cplusplus) && defined(__EXTERN_C__)\n");
-	(void) fprintf(ftable, "}\n");
-	(void) fprintf(ftable, "#endif\n");
-	(void) fprintf(ftable, "\n#endif\n\n");
 
 	(void) fprintf(ftable, "#define yyclearin yychar = -1\n");
 	(void) fprintf(ftable, "#define yyerrok yyerrflag = 0\n");
 	(void) fprintf(ftable, "extern int yychar;\nextern int yyerrflag;\n");
 	if (!(defunion || ntypes))
 		(void) fprintf(ftable,
-			"#ifndef YYSTYPE\n#define YYSTYPE int\n#endif\n");
+		    "#ifndef YYSTYPE\n#define YYSTYPE int\n#endif\n");
 	(void) fprintf(ftable, "YYSTYPE yylval;\n");
 	(void) fprintf(ftable, "YYSTYPE yyval;\n");
 	(void) fprintf(ftable, "typedef int yytabelem;\n");
 	(void) fprintf(ftable,
-		"#ifndef YYMAXDEPTH\n#define YYMAXDEPTH 150\n#endif\n");
+	    "#ifndef YYMAXDEPTH\n#define YYMAXDEPTH 150\n#endif\n");
 	(void) fprintf(ftable, "#if YYMAXDEPTH > 0\n");
 	(void) fprintf(ftable, "int yy_yys[YYMAXDEPTH], *yys = yy_yys;\n");
 	(void) fprintf(ftable, "YYSTYPE yy_yyv[YYMAXDEPTH], *yyv = yy_yyv;\n");
@@ -715,7 +682,7 @@ char *argv[];
  *	Do not translate %%prec.
  */
 				error(gettext(
-				"illegal %%prec syntax"));
+				    "illegal %%prec syntax"));
 			j = chfind(2, tokname);
 			if (j >= NTBASE)
 /*
@@ -724,8 +691,8 @@ char *argv[];
  *	Do not translate %%prec.
  */
 				error(gettext(
-				"nonterminal %ws illegal after %%prec"),
-				nontrst[j-NTBASE].name);
+				    "nonterminal %ws illegal after %%prec"),
+				    nontrst[j-NTBASE].name);
 			levprd[nprod] = toklev[j] & ~04;
 			t = gettok();
 			}
@@ -794,9 +761,10 @@ char *argv[];
 		/* check that default action is reasonable */
 
 		if (ntypes && !(levprd[nprod] & ACTFLAG) &&
-				nontrst[*prdptr[nprod]-NTBASE].tvalue) {
+		    nontrst[*prdptr[nprod]-NTBASE].tvalue) {
 			/* no explicit action, LHS has value */
 			int tempty;
+
 			tempty = prdptr[nprod][1];
 			if (tempty < 0)
 /*
@@ -833,15 +801,15 @@ char *argv[];
 	if (t == MARK) {
 		if (gen_lines)
 			(void) fprintf(ftable, "\n# line %d \"%s\"\n",
-				lineno, infile);
+			    lineno, infile);
 		while ((c = getwc(finput)) != EOF)
 			(void) putwc(c, ftable);
-		}
+	}
 	(void) fclose(finput);
 }
 
 static void
-finact()
+finact(void)
 {
 	/* finish action routine */
 	(void) fclose(faction);
@@ -849,8 +817,7 @@ finact()
 }
 
 static wchar_t *
-cstash(s)
-register wchar_t *s;
+cstash(wchar_t *s)
 {
 	wchar_t *temp;
 	static int used = 0;
@@ -868,7 +835,7 @@ register wchar_t *s;
 		if (!used)
 			free((char *)cnames);
 		if ((cnames = (wchar_t *)
-			malloc(sizeof (wchar_t)*exp_cname)) == NULL)
+		    malloc(sizeof (wchar_t)*exp_cname)) == NULL)
 /*
  * TRANSLATION_NOTE  -- This is a message from yacc.
  *	This message is passed to error() function.
@@ -877,7 +844,7 @@ register wchar_t *s;
  *	'Could not allocate internally used memory.'
  */
 			error(gettext(
-			"cannot expand string dump"));
+			    "cannot expand string dump"));
 		cnamp = cnames;
 		used = 0;
 	}
@@ -895,7 +862,7 @@ defin(int t, wchar_t *s)
 {
 	/* define s to be a terminal if t=0 or a nonterminal if t=1 */
 
-	int val;
+	int val = 0;
 
 	if (t) {
 		if (++nnonter >= nnontersz)
@@ -1052,7 +1019,7 @@ defin(int t, wchar_t *s)
 }
 
 static void
-defout()
+defout(void)
 {
 	/* write out the defines (at the end of the declaration section) */
 
@@ -1064,7 +1031,7 @@ defout()
 		cp = tokset[i].name;
 		if (*cp == L' ')	/* literals */
 		{
-			(void) fprintf(fdebug, WSFMT("\t\"%ws\",\t%d,\n"),
+			(void) fprintf(fdebug, "\t\"%ws\",\t%d,\n",
 			    tokset[i].name + 1, tokset[i].value);
 			continue;	/* was cp++ */
 		}
@@ -1078,14 +1045,14 @@ defout()
 		}
 
 		(void) fprintf(fdebug,
-		    WSFMT("\t\"%ws\",\t%d,\n"), tokset[i].name,
+		    "\t\"%ws\",\t%d,\n", tokset[i].name,
 		    tokset[i].value);
 		(void) fprintf(ftable,
-		    WSFMT("# define %ws %d\n"), tokset[i].name,
+		    "# define %ws %d\n", tokset[i].name,
 		    tokset[i].value);
 		if (fdefine != NULL)
 			(void) fprintf(fdefine,
-			    WSFMT("# define %ws %d\n"),
+			    "# define %ws %d\n",
 			    tokset[i].name,
 			    tokset[i].value);
 
@@ -1095,7 +1062,7 @@ defout()
 }
 
 static int
-gettok()
+gettok(void)
 {
 	int i, base;
 	static int peekline; /* number of '\n' seen in lookahead */
@@ -1184,8 +1151,8 @@ begin:
 		case L'=':	return (PREC);
 		case L'{':	return (LCURLY);
 		default:	reserve = 1;
-			}
-
+		}
+		/* FALLTHROUGH */
 	default:
 
 		if (iswdigit(c)) { /* number */
@@ -1310,7 +1277,7 @@ chfind(int t, wchar_t *s)
 }
 
 static void
-cpyunion()
+cpyunion(void)
 {
 	/*
 	 * copy the union declaration to the output,
@@ -1366,7 +1333,7 @@ cpyunion()
 }
 
 static void
-cpycode()
+cpycode(void)
 {
 	/* copies code between \{ and \} */
 
@@ -1405,7 +1372,7 @@ cpycode()
 }
 
 static int
-skipcom()
+skipcom(void)
 {
 	/* skip over comments */
 	int c, i = 0;  /* i is the number of lines skipped */
@@ -1488,7 +1455,7 @@ swt:
 				if (tok < 0)
 					tok = fdtype(*prdptr[nprod]);
 				(void) fprintf(faction,
-				    WSFMT(".%ws"), typeset[tok]);
+				    ".%ws", typeset[tok]);
 			}
 			goto loop;
 		}
@@ -1553,7 +1520,7 @@ swt:
 								/* CSTYLED */
 								fdtype(prdptr[nprod][i]);
 							(void) fprintf(faction,
-							    WSFMT(".%ws"),
+							    ".%ws",
 							    typeset[tok]);
 						}
 						goto swt;
@@ -1564,7 +1531,7 @@ swt:
 			 * (Likely id with $ in.)
 			 * If non-terminal is added, remove it from the list.
 			 */
-			(void) fprintf(faction, WSFMT("$%ws"), tokname);
+			(void) fprintf(faction, "$%ws", tokname);
 /*
  * TRANSLATION_NOTE  -- This is a message from yacc.
  *	This message is passed to warning() function.
@@ -1613,7 +1580,7 @@ swt:
 				if (tok < 0)
 					tok = fdtype(prdptr[nprod][j+offset]);
 				(void) fprintf(faction,
-				    WSFMT(".%ws"), typeset[tok]);
+				    ".%ws", typeset[tok]);
 			}
 			goto swt;
 		}
@@ -1713,15 +1680,14 @@ lcopy:
 }
 
 static void
-lhsfill(s)	/* new rule, dump old (if exists), restart strings */
-wchar_t *s;
+lhsfill(wchar_t *s)	/* new rule, dump old (if exists), restart strings */
 {
 	static int lhs_len = LHS_TEXT_LEN;
 	int s_lhs = wslen(s);
 	if (s_lhs >= lhs_len) {
 		lhs_len = s_lhs + 2;
 		lhstext = (wchar_t *)
-			realloc((char *)lhstext, sizeof (wchar_t)*lhs_len);
+		    realloc((char *)lhstext, sizeof (wchar_t)*lhs_len);
 		if (lhstext == NULL)
 /*
  * TRANSLATION_NOTE  -- This is a message from yacc.
@@ -1729,15 +1695,14 @@ wchar_t *s;
  *	LHS -- Left Hand Side.
  */
 			error(gettext(
-			"couldn't expanded LHS length"));
+			    "couldn't expanded LHS length"));
 	}
 	rhsfill((wchar_t *)0);
 	(void) wscpy(lhstext, s); /* don't worry about too long of a name */
 }
 
 static void
-rhsfill(s)
-wchar_t *s;	/* either name or 0 */
+rhsfill(wchar_t *s)	/* either name or 0 */
 {
 	static wchar_t *loc;	/* next free location in rhstext */
 	static int rhs_len = RHS_TEXT_LEN;
@@ -1761,7 +1726,7 @@ wchar_t *s;	/* either name or 0 */
 		textbase = rhstext;
 		rhs_len += s_rhs + RHS_TEXT_LEN;
 		rhstext = (wchar_t *)
-			realloc((char *)rhstext, sizeof (wchar_t)*rhs_len);
+		    realloc((char *)rhstext, sizeof (wchar_t)*rhs_len);
 		if (rhstext == NULL)
 /*
  * TRANSLATION_NOTE  -- This is a message from yacc.
@@ -1769,7 +1734,7 @@ wchar_t *s;	/* either name or 0 */
  *	RHS -- Right Hand Side.
  */
 			error(gettext(
-			"couldn't expanded RHS length"));
+			    "couldn't expanded RHS length"));
 		loc = loc - textbase + rhstext;
 	}
 
@@ -1779,7 +1744,7 @@ wchar_t *s;	/* either name or 0 */
 		*loc++ = L'\'';	/* add first quote */
 		p++;
 	}
-	while (*loc = *p++)
+	while ((*loc = *p++))
 		if (loc++ > &rhstext[ RHS_TEXT_LEN ] - 3)
 			break;
 
@@ -1789,7 +1754,7 @@ wchar_t *s;	/* either name or 0 */
 }
 
 static void
-lrprnt()	/* print out the left and right hand sides */
+lrprnt(void)	/* print out the left and right hand sides */
 {
 	wchar_t *rhs;
 	wchar_t *m_rhs = NULL;
@@ -1858,14 +1823,14 @@ lrprnt()	/* print out the left and right hand sides */
 		else
 			rhs = m_rhs;
 	}
-	(void) fprintf(fdebug, WSFMT("\t\"%ws :%ws\",\n"), lhstext, rhs);
+	(void) fprintf(fdebug, "\t\"%ws :%ws\",\n", lhstext, rhs);
 	if (m_rhs)
 		free(m_rhs);
 }
 
 
 static void
-beg_debug()	/* dump initial sequence for fdebug file */
+beg_debug(void)	/* dump initial sequence for fdebug file */
 {
 	(void) fprintf(fdebug,
 	    "typedef struct\n");
@@ -1884,19 +1849,17 @@ beg_debug()	/* dump initial sequence for fdebug file */
 
 
 static void
-end_toks()	/* finish yytoks array, get ready for yyred's strings */
+end_toks(void)	/* finish yytoks array, get ready for yyred's strings */
 {
 	(void) fprintf(fdebug, "\t\"-unknown-\",\t-1\t/* ends search */\n");
 	(void) fprintf(fdebug, "};\n\n");
-	(void) fprintf(fdebug,
-	    "#ifdef __cplusplus\nconst\n#endif\n");
-	(void) fprintf(fdebug, "char * yyreds[] =\n{\n");
+	(void) fprintf(fdebug, "const char * yyreds[] =\n{\n");
 	(void) fprintf(fdebug, "\t\"-no such reduction-\",\n");
 }
 
 
 static void
-end_debug()	/* finish yyred array, close file */
+end_debug(void)	/* finish yyred array, close file */
 {
 	lrprnt();		/* dump last lhs, rhs */
 	(void) fprintf(fdebug, "};\n#endif /* YYDEBUG */\n");
@@ -1910,7 +1873,7 @@ end_debug()	/* finish yyred array, close file */
  * seen that has a longer length, expand "tokname" by NAMESIZE.
  */
 static void
-exp_tokname()
+exp_tokname(void)
 {
 	toksize += NAMESIZE;
 	tokname = (wchar_t *)
@@ -1923,7 +1886,7 @@ exp_tokname()
  *
  */
 static void
-exp_prod()
+exp_prod(void)
 {
 	int i;
 	nprodsz += NPROD;
@@ -1960,7 +1923,7 @@ exp_prod()
  *	(ntoksz + NNONTERM) >= TEMPSIZE : temp1[]
  */
 static void
-exp_ntok()
+exp_ntok(void)
 {
 	ntoksz += NTERMS;
 
@@ -1982,7 +1945,7 @@ exp_ntok()
 
 
 static void
-exp_nonterm()
+exp_nonterm(void)
 {
 	nnontersz += NNONTERM;
 
@@ -2002,8 +1965,7 @@ exp_nonterm()
 }
 
 void
-exp_mem(flag)
-int flag;
+exp_mem(int flag)
 {
 	int i;
 	static int *membase;
@@ -2011,7 +1973,7 @@ int flag;
 
 	membase = tracemem;
 	tracemem = (int *)
-		realloc((char *)tracemem, sizeof (int) * new_memsize);
+	    realloc((char *)tracemem, sizeof (int) * new_memsize);
 	if (tracemem == NULL)
 /*
  * TRANSLATION_NOTE  -- This is a message from yacc.
@@ -2021,7 +1983,7 @@ int flag;
  *	'Could not allocate internally used memory.'
  */
 		error(gettext(
-		"couldn't expand mem table"));
+		    "couldn't expand mem table"));
 	if (flag) {
 		for (i = 0; i <= nprod; ++i)
 			prdptr[i] = prdptr[i] - membase + tracemem;
@@ -2033,15 +1995,14 @@ int flag;
 	}
 }
 
-static int
-findchtok(chlit)
-int chlit;
 /*
  * findchtok(chlit) returns the token number for a character literal
  * chlit that is "bigger" than 255 -- the max char value that the
  * original yacc was build for.  This yacc treate them as though
  * an ordinary token.
  */
+static int
+findchtok(int chlit)
 {
 	int	i;
 

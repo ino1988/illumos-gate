@@ -41,7 +41,7 @@
  *	allows the LDC clients to transfer data via memory mappings.
  *
  * 3) Support exported to upper layers (filesystems, etc)
- *	The upper layers call into vdc via strategy(9E) and DKIO(7I)
+ *	The upper layers call into vdc via strategy(9E) and dkio(4I)
  *	ioctl calls. vdc will copy the data to be written to the descriptor
  *	ring or maps the buffer to store the data read by the vDisk
  *	server into the descriptor ring. It then sends a message to the
@@ -173,14 +173,14 @@ static int	vdc_process_data_msg(vdc_t *vdc, vio_msg_t *msg);
 static int	vdc_handle_ver_msg(vdc_t *vdc, vio_ver_msg_t *ver_msg);
 static int	vdc_handle_attr_msg(vdc_t *vdc, vd_attr_msg_t *attr_msg);
 static int	vdc_handle_dring_reg_msg(vdc_t *vdc, vio_dring_reg_msg_t *msg);
-static int 	vdc_send_request(vdc_t *vdcp, int operation,
+static int	vdc_send_request(vdc_t *vdcp, int operation,
 		    caddr_t addr, size_t nbytes, int slice, diskaddr_t offset,
 		    buf_t *bufp, vio_desc_direction_t dir, int flags);
 static int	vdc_map_to_shared_dring(vdc_t *vdcp, int idx);
-static int 	vdc_populate_descriptor(vdc_t *vdcp, int operation,
+static int	vdc_populate_descriptor(vdc_t *vdcp, int operation,
 		    caddr_t addr, size_t nbytes, int slice, diskaddr_t offset,
 		    buf_t *bufp, vio_desc_direction_t dir, int flags);
-static int 	vdc_do_sync_op(vdc_t *vdcp, int operation, caddr_t addr,
+static int	vdc_do_sync_op(vdc_t *vdcp, int operation, caddr_t addr,
 		    size_t nbytes, int slice, diskaddr_t offset,
 		    vio_desc_direction_t dir, boolean_t);
 static int	vdc_do_op(vdc_t *vdc, int op, caddr_t addr, size_t nbytes,
@@ -224,7 +224,7 @@ static int	vdc_get_efi_convert(vdc_t *vdc, void *from, void *to,
 static int	vdc_set_efi_convert(vdc_t *vdc, void *from, void *to,
 		    int mode, int dir);
 
-static void 	vdc_ownership_update(vdc_t *vdc, int ownership_flags);
+static void	vdc_ownership_update(vdc_t *vdc, int ownership_flags);
 static int	vdc_access_set(vdc_t *vdc, uint64_t flags);
 static vdc_io_t	*vdc_eio_queue(vdc_t *vdc, int index);
 static void	vdc_eio_unqueue(vdc_t *vdc, clock_t deadline,
@@ -284,7 +284,7 @@ static uint_t vdc_hattr_min = VDC_HATTR_MIN;
  * various operations
  */
 static int	vdc_timeout = 0; /* units: seconds */
-static int 	vdc_ldcup_timeout = 1; /* units: seconds */
+static int	vdc_ldcup_timeout = 1; /* units: seconds */
 
 static uint64_t vdc_hz_min_ldc_delay;
 static uint64_t vdc_min_timeout_ldc = 1 * MILLISEC;
@@ -724,7 +724,7 @@ vdc_do_attach(dev_info_t *dip)
 
 	(void) md_fini_handle(mdp);
 
-	/* Create the kstats for saving the I/O statistics used by iostat(1M) */
+	/* Create the kstats for saving the I/O statistics used by iostat(8) */
 	vdc_create_io_kstats(vdc);
 	vdc_create_err_kstats(vdc);
 
@@ -1074,7 +1074,7 @@ vdc_create_device_nodes_vtoc(vdc_t *vdc)
  *	refers to a whole disk. Slices start at 'a'
  *
  * Parameters:
- *	vdc 		- soft state pointer
+ *	vdc		- soft state pointer
  *
  * Return Values
  *	0		- Success
@@ -1192,7 +1192,7 @@ vdc_prop_op(dev_t dev, dev_info_t *dip, ddi_prop_op_t prop_op, int mod_flags,
  *	currently opened.
  *
  * Parameters:
- *	vdc 		- soft state pointer
+ *	vdc		- soft state pointer
  *
  * Return Values
  *	B_TRUE		- at least one slice is opened.
@@ -1342,7 +1342,7 @@ vdc_open(dev_t *dev, int flag, int otyp, cred_t *cred)
 
 		/* call vdc_validate() asynchronously to avoid blocking */
 		if (taskq_dispatch(system_taskq, vdc_validate_task,
-		    (void *)vdc, TQ_NOSLEEP) == NULL) {
+		    (void *)vdc, TQ_NOSLEEP) == TASKQID_INVALID) {
 			vdc_mark_closed(vdc, slice, flag, otyp);
 			mutex_exit(&vdc->lock);
 			return (ENXIO);
@@ -2576,7 +2576,7 @@ vdc_terminate_ldc(vdc_t *vdc, vdc_server_t *srvr)
 	if (srvr->state & VDC_LDC_INIT) {
 		DMSG(vdc, 0, "[%d] ldc_fini()\n", instance);
 		(void) ldc_fini(srvr->ldc_handle);
-		srvr->ldc_handle = NULL;
+		srvr->ldc_handle = 0;
 	}
 
 	srvr->state &= ~(VDC_LDC_INIT | VDC_LDC_CB | VDC_LDC_OPEN);
@@ -2682,7 +2682,7 @@ vdc_init_descriptor_ring(vdc_t *vdc)
 
 		status = ldc_mem_dring_create(vdc->dring_len,
 		    vdc->dring_entry_size, &vdc->dring_hdl);
-		if ((vdc->dring_hdl == NULL) || (status != 0)) {
+		if ((vdc->dring_hdl == 0) || (status != 0)) {
 			DMSG(vdc, 0, "[%d] Descriptor ring creation failed",
 			    vdc->instance);
 			return (status);
@@ -2773,7 +2773,7 @@ static void
 vdc_destroy_descriptor_ring(vdc_t *vdc)
 {
 	vdc_local_desc_t	*ldep = NULL;	/* Local Dring Entry Pointer */
-	ldc_mem_handle_t	mhdl = NULL;
+	ldc_mem_handle_t	mhdl = 0;
 	ldc_mem_info_t		minfo;
 	int			status = -1;
 	int			i;	/* loop */
@@ -2790,7 +2790,7 @@ vdc_destroy_descriptor_ring(vdc_t *vdc)
 			ldep = &vdc->local_dring[i];
 			mhdl = ldep->desc_mhdl;
 
-			if (mhdl == NULL)
+			if (mhdl == 0)
 				continue;
 
 			if ((status = ldc_mem_info(mhdl, &minfo)) != 0) {
@@ -2803,7 +2803,7 @@ vdc_destroy_descriptor_ring(vdc_t *vdc)
 				 * is not valid. Clear it out so that
 				 * no one tries to use it.
 				 */
-				ldep->desc_mhdl = NULL;
+				ldep->desc_mhdl = 0;
 				continue;
 			}
 
@@ -2813,7 +2813,7 @@ vdc_destroy_descriptor_ring(vdc_t *vdc)
 
 			(void) ldc_mem_free_handle(mhdl);
 
-			ldep->desc_mhdl = NULL;
+			ldep->desc_mhdl = 0;
 		}
 		vdc->initialized &= ~VDC_DRING_ENTRY;
 	}
@@ -2841,7 +2841,7 @@ vdc_destroy_descriptor_ring(vdc_t *vdc)
 		DMSG(vdc, 0, "[%d] Destroying DRing\n", vdc->instance);
 		status = ldc_mem_dring_destroy(vdc->dring_hdl);
 		if (status == 0) {
-			vdc->dring_hdl = NULL;
+			vdc->dring_hdl = 0;
 			bzero(&vdc->dring_mem_info, sizeof (ldc_mem_info_t));
 			vdc->initialized &= ~VDC_DRING_INIT;
 		} else {
@@ -3010,7 +3010,7 @@ done:
 	/*
 	 * If this is a block read/write we update the I/O statistics kstat
 	 * to indicate that this request has been placed on the queue for
-	 * processing (i.e sent to the vDisk server) - iostat(1M) will
+	 * processing (i.e sent to the vDisk server) - iostat(8) will
 	 * report the time waiting for the vDisk server under the %b column
 	 *
 	 * In the case of an error we take it off the wait queue only if
@@ -3197,7 +3197,7 @@ loop:
  *	vdc_do_op
  *
  * Description:
- * 	Wrapper around vdc_submit_request(). Each request is associated with a
+ *	Wrapper around vdc_submit_request(). Each request is associated with a
  *	buf structure. If a buf structure is provided (bufp != NULL) then the
  *	request will be submitted with that buf, and the caller can wait for
  *	completion of the request with biowait(). If a buf structure is not
@@ -3321,7 +3321,7 @@ done:
  *	vdc_do_sync_op
  *
  * Description:
- * 	Wrapper around vdc_do_op that serializes requests.
+ *	Wrapper around vdc_do_op that serializes requests.
  *
  * Arguments:
  *	vdcp	  - the soft state pointer
@@ -3411,9 +3411,9 @@ vdc_do_sync_op(vdc_t *vdcp, int operation, caddr_t addr, size_t nbytes,
  *	vdc_drain_response()
  *
  * Description:
- * 	When a guest is panicking, the completion of requests needs to be
- * 	handled differently because interrupts are disabled and vdc
- * 	will not get messages. We have to poll for the messages instead.
+ *	When a guest is panicking, the completion of requests needs to be
+ *	handled differently because interrupts are disabled and vdc
+ *	will not get messages. We have to poll for the messages instead.
  *
  *	Note: since we are panicking we don't implement	the io:::done
  *	DTrace probe or update the I/O statistics kstats.
@@ -3431,9 +3431,9 @@ vdc_do_sync_op(vdc_t *vdcp, int operation, caddr_t addr, size_t nbytes,
 static int
 vdc_drain_response(vdc_t *vdc, struct buf *buf)
 {
-	int 			rv, idx, retries;
+	int			rv, idx, retries;
 	size_t			msglen;
-	vdc_local_desc_t 	*ldep = NULL;	/* Local Dring Entry Pointer */
+	vdc_local_desc_t	*ldep = NULL;	/* Local Dring Entry Pointer */
 	vio_dring_msg_t		dmsg;
 	struct buf		*mbuf;
 	boolean_t		ack;
@@ -3926,7 +3926,7 @@ vdc_wait_for_response(vdc_t *vdcp, vio_msg_t *msgp)
  *
  * Description:
  *	Resubmit each descriptor in the backed up dring to
- * 	vDisk server. The Dring was backed up during connection
+ *	vDisk server. The Dring was backed up during connection
  *	reset.
  *
  * Arguments:
@@ -4030,7 +4030,7 @@ void
 vdc_cancel_backup_dring(vdc_t *vdcp)
 {
 	vdc_local_desc_t *ldep;
-	struct buf 	*bufp;
+	struct buf	*bufp;
 	int		count;
 	int		b_idx;
 	int		dring_size;
@@ -4118,7 +4118,7 @@ vdc_cancel_backup_dring(vdc_t *vdcp)
 void
 vdc_connection_timeout(void *arg)
 {
-	vdc_t 		*vdcp = (vdc_t *)arg;
+	vdc_t		*vdcp = (vdc_t *)arg;
 
 	mutex_enter(&vdcp->lock);
 
@@ -4213,7 +4213,7 @@ static void
 vdc_switch_server(vdc_t *vdcp)
 {
 	int		rv;
-	vdc_server_t 	*curr_server, *new_server;
+	vdc_server_t	*curr_server, *new_server;
 
 	ASSERT(MUTEX_HELD(&vdcp->lock));
 
@@ -4410,9 +4410,9 @@ vdc_handshake_retry(vdc_t *vdcp, int hshake_cnt, int hattr_cnt)
  * Description:
  *
  *	Main VDC message processing thread. Each vDisk instance
- * 	consists of a copy of this thread. This thread triggers
- * 	all the handshakes and data exchange with the server. It
- * 	also handles all channel resets
+ *	consists of a copy of this thread. This thread triggers
+ *	all the handshakes and data exchange with the server. It
+ *	also handles all channel resets
  *
  * Arguments:
  *      vdc     - soft state pointer for this instance of the device driver.
@@ -5504,7 +5504,7 @@ vdc_is_supported_version(vio_ver_msg_t *ver_msg)
 /* -------------------------------------------------------------------------- */
 
 /*
- * DKIO(7) support
+ * dkio(4I) support
  */
 
 typedef struct vdc_dk_arg {
@@ -5516,7 +5516,7 @@ typedef struct vdc_dk_arg {
 
 /*
  * Function:
- * 	vdc_dkio_flush_cb()
+ *	vdc_dkio_flush_cb()
  *
  * Description:
  *	This routine is a callback for DKIOCFLUSHWRITECACHE which can be called
@@ -5572,7 +5572,7 @@ vdc_dkio_flush_cb(void *arg)
 
 /*
  * Function:
- * 	vdc_dkio_gapart()
+ *	vdc_dkio_gapart()
  *
  * Description:
  *	This function implements the DKIOCGAPART ioctl.
@@ -5638,7 +5638,7 @@ vdc_dkio_gapart(vdc_t *vdc, caddr_t arg, int flag)
 
 /*
  * Function:
- * 	vdc_dkio_partition()
+ *	vdc_dkio_partition()
  *
  * Description:
  *	This function implements the DKIOCPARTITION ioctl.
@@ -5691,7 +5691,7 @@ vdc_dkio_partition(vdc_t *vdc, caddr_t arg, int flag)
 
 /*
  * Function:
- * 	vdc_dioctl_rwcmd()
+ *	vdc_dioctl_rwcmd()
  *
  * Description:
  *	This function implements the DIOCTL_RWCMD ioctl. This ioctl is used
@@ -5926,7 +5926,7 @@ vdc_scsi_status(vdc_t *vdc, vd_scsi_t *vd_scsi, boolean_t log_error)
 }
 
 /*
- * Implemented the USCSICMD uscsi(7I) ioctl. This ioctl is converted to
+ * Implemented the USCSICMD uscsi(4I) ioctl. This ioctl is converted to
  * a VD_OP_SCSICMD operation which is sent to the vdisk server. If a SCSI
  * reset is requested (i.e. a flag USCSI_RESET* is set) then the ioctl is
  * converted to a VD_OP_RESET operation.
@@ -5934,15 +5934,15 @@ vdc_scsi_status(vdc_t *vdc, vd_scsi_t *vd_scsi, boolean_t log_error)
 static int
 vdc_uscsi_cmd(vdc_t *vdc, caddr_t arg, int mode)
 {
-	struct uscsi_cmd 	uscsi;
+	struct uscsi_cmd	uscsi;
 	struct uscsi_cmd32	uscsi32;
-	vd_scsi_t 		*vd_scsi;
-	int 			vd_scsi_len;
+	vd_scsi_t		*vd_scsi;
+	int			vd_scsi_len;
 	union scsi_cdb		*cdb;
 	struct scsi_extended_sense *sense;
-	char 			*datain, *dataout;
+	char			*datain, *dataout;
 	size_t			cdb_len, datain_len, dataout_len, sense_len;
-	int 			rv;
+	int			rv;
 
 	if (ddi_model_convert_from(mode & FMODELS) == DDI_MODEL_ILP32) {
 		if (ddi_copyin(arg, &uscsi32, sizeof (struct uscsi_cmd32),
@@ -6180,7 +6180,7 @@ vdc_scsi_alloc_persistent_out(uchar_t cmd, int len, int *vd_scsi_len)
 }
 
 /*
- * Implement the MHIOCGRP_INKEYS mhd(7i) ioctl. The ioctl is converted
+ * Implement the MHIOCGRP_INKEYS mhd(4I) ioctl. The ioctl is converted
  * to a SCSI PERSISTENT IN READ KEYS command which is sent to the vdisk
  * server with a VD_OP_SCSICMD operation.
  */
@@ -6292,7 +6292,7 @@ done:
 }
 
 /*
- * Implement the MHIOCGRP_INRESV mhd(7i) ioctl. The ioctl is converted
+ * Implement the MHIOCGRP_INRESV mhd(4I) ioctl. The ioctl is converted
  * to a SCSI PERSISTENT IN READ RESERVATION command which is sent to
  * the vdisk server with a VD_OP_SCSICMD operation.
  */
@@ -6420,7 +6420,7 @@ done:
 }
 
 /*
- * Implement the MHIOCGRP_REGISTER mhd(7i) ioctl. The ioctl is converted
+ * Implement the MHIOCGRP_REGISTER mhd(4I) ioctl. The ioctl is converted
  * to a SCSI PERSISTENT OUT REGISTER command which is sent to the vdisk
  * server with a VD_OP_SCSICMD operation.
  */
@@ -6459,7 +6459,7 @@ vdc_mhd_register(vdc_t *vdc, caddr_t arg, int mode)
 }
 
 /*
- * Implement the MHIOCGRP_RESERVE mhd(7i) ioctl. The ioctl is converted
+ * Implement the MHIOCGRP_RESERVE mhd(4I) ioctl. The ioctl is converted
  * to a SCSI PERSISTENT OUT RESERVE command which is sent to the vdisk
  * server with a VD_OP_SCSICMD operation.
  */
@@ -6500,7 +6500,7 @@ vdc_mhd_reserve(vdc_t *vdc, caddr_t arg, int mode)
 }
 
 /*
- * Implement the MHIOCGRP_PREEMPTANDABORT mhd(7i) ioctl. The ioctl is
+ * Implement the MHIOCGRP_PREEMPTANDABORT mhd(4I) ioctl. The ioctl is
  * converted to a SCSI PERSISTENT OUT PREEMPT AND ABORT command which
  * is sent to the vdisk server with a VD_OP_SCSICMD operation.
  */
@@ -6545,7 +6545,7 @@ vdc_mhd_preemptabort(vdc_t *vdc, caddr_t arg, int mode)
 }
 
 /*
- * Implement the MHIOCGRP_REGISTERANDIGNOREKEY mhd(7i) ioctl. The ioctl
+ * Implement the MHIOCGRP_REGISTERANDIGNOREKEY mhd(4I) ioctl. The ioctl
  * is converted to a SCSI PERSISTENT OUT REGISTER AND IGNORE EXISTING KEY
  * command which is sent to the vdisk server with a VD_OP_SCSICMD operation.
  */
@@ -6934,7 +6934,7 @@ vdc_eio_thread(void *arg)
 }
 
 /*
- * Implement the MHIOCENFAILFAST mhd(7i) ioctl.
+ * Implement the MHIOCENFAILFAST mhd(4I) ioctl.
  */
 static int
 vdc_failfast(vdc_t *vdc, caddr_t arg, int mode)
@@ -6959,7 +6959,7 @@ vdc_failfast(vdc_t *vdc, caddr_t arg, int mode)
 }
 
 /*
- * Implement the MHIOCTKOWN and MHIOCRELEASE mhd(7i) ioctls. These ioctls are
+ * Implement the MHIOCTKOWN and MHIOCRELEASE mhd(4I) ioctls. These ioctls are
  * converted to VD_OP_SET_ACCESS operations.
  */
 static int
@@ -6975,7 +6975,7 @@ vdc_access_set(vdc_t *vdc, uint64_t flags)
 }
 
 /*
- * Implement the MHIOCSTATUS mhd(7i) ioctl. This ioctl is converted to a
+ * Implement the MHIOCSTATUS mhd(4I) ioctl. This ioctl is converted to a
  * VD_OP_GET_ACCESS operation.
  */
 static int
@@ -7166,7 +7166,7 @@ vdc_check_capacity(vdc_t *vdc)
 }
 
 /*
- * This structure is used in the DKIO(7I) array below.
+ * This structure is used in the dkio(4I) array below.
  */
 typedef struct vdc_dk_ioctl {
 	uint8_t		op;		/* VD_OP_XXX value */
@@ -7179,7 +7179,7 @@ typedef struct vdc_dk_ioctl {
 } vdc_dk_ioctl_t;
 
 /*
- * Subset of DKIO(7I) operations currently supported
+ * Subset of dkio(4I) operations currently supported
  */
 static vdc_dk_ioctl_t	dk_ioctl[] = {
 	{VD_OP_FLUSH,		DKIOCFLUSHWRITECACHE,	0,
@@ -7200,7 +7200,7 @@ static vdc_dk_ioctl_t	dk_ioctl[] = {
 		vdc_get_geom_convert},
 	{VD_OP_GET_DISKGEOM,	DKIOCG_PHYGEOM,		sizeof (vd_geom_t),
 		vdc_get_geom_convert},
-	{VD_OP_GET_DISKGEOM, 	DKIOCG_VIRTGEOM,	sizeof (vd_geom_t),
+	{VD_OP_GET_DISKGEOM,	DKIOCG_VIRTGEOM,	sizeof (vd_geom_t),
 		vdc_get_geom_convert},
 	{VD_OP_SET_DISKGEOM,	DKIOCSGEOM,		sizeof (vd_geom_t),
 		vdc_set_geom_convert},
@@ -7212,21 +7212,21 @@ static vdc_dk_ioctl_t	dk_ioctl[] = {
 	/* DIOCTL_RWCMD is converted to a read or a write */
 	{0, DIOCTL_RWCMD,  sizeof (struct dadkio_rwcmd), NULL},
 
-	/* mhd(7I) non-shared multihost disks ioctls */
+	/* mhd(4I) non-shared multihost disks ioctls */
 	{0, MHIOCTKOWN,				0, vdc_null_copy_func},
 	{0, MHIOCRELEASE,			0, vdc_null_copy_func},
 	{0, MHIOCSTATUS,			0, vdc_null_copy_func},
 	{0, MHIOCQRESERVE,			0, vdc_null_copy_func},
 
-	/* mhd(7I) shared multihost disks ioctls */
+	/* mhd(4I) shared multihost disks ioctls */
 	{0, MHIOCGRP_INKEYS,			0, vdc_null_copy_func},
 	{0, MHIOCGRP_INRESV,			0, vdc_null_copy_func},
 	{0, MHIOCGRP_REGISTER,			0, vdc_null_copy_func},
-	{0, MHIOCGRP_RESERVE, 			0, vdc_null_copy_func},
+	{0, MHIOCGRP_RESERVE,			0, vdc_null_copy_func},
 	{0, MHIOCGRP_PREEMPTANDABORT,		0, vdc_null_copy_func},
 	{0, MHIOCGRP_REGISTERANDIGNOREKEY,	0, vdc_null_copy_func},
 
-	/* mhd(7I) failfast ioctl */
+	/* mhd(4I) failfast ioctl */
 	{0, MHIOCENFAILFAST,			0, vdc_null_copy_func},
 
 	/*
@@ -7268,7 +7268,7 @@ vd_process_efi_ioctl(void *vdisk, int cmd, uintptr_t arg)
  *
  * Arguments:
  *	dev	- the device number
- *	cmd	- the operation [dkio(7I)] to be processed
+ *	cmd	- the operation [dkio(4I)] to be processed
  *	arg	- pointer to user provided structure
  *		  (contains data to be set or reference parameter for get)
  *	mode	- bit flag, indicating open settings, 32/64 bit type, etc
@@ -7572,15 +7572,16 @@ vd_process_ioctl(dev_t dev, int cmd, caddr_t arg, int mode, int *rvalp)
 			/* put the request on a task queue */
 			rv = taskq_dispatch(system_taskq, vdc_dkio_flush_cb,
 			    (void *)dkarg, DDI_SLEEP);
-			if (rv == NULL) {
+			if (rv == TASKQID_INVALID) {
 				/* clean up if dispatch fails */
 				mutex_enter(&vdc->lock);
 				vdc->dkio_flush_pending--;
 				mutex_exit(&vdc->lock);
 				kmem_free(dkarg, sizeof (vdc_dk_arg_t));
+				return (ENOMEM);
 			}
 
-			return (rv == NULL ? ENOMEM : 0);
+			return (0);
 		}
 	}
 
@@ -8094,7 +8095,7 @@ vdc_set_efi_convert(vdc_t *vdc, void *from, void *to, int mode, int dir)
  *
  * Description:
  *	This routine fakes up the disk info needed for some DKIO ioctls such
- *	as DKIOCINFO and DKIOCGMEDIAINFO [just like lofi(7D) and ramdisk(7D) do]
+ *	as DKIOCINFO and DKIOCGMEDIAINFO [just like lofi(4D) and ramdisk(4D) do]
  *
  *	Note: This function must not be called until the vDisk attributes have
  *	been exchanged as part of the handshake with the vDisk server.

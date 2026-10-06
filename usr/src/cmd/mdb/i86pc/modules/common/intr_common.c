@@ -20,15 +20,17 @@
  */
 /*
  * Copyright (c) 2006, 2010, Oracle and/or its affiliates. All rights reserved.
+ * Copyright 2018 Joyent, Inc.
+ * Copyright 2026 Oxide Computer Company
  */
 
 #include "intr_common.h"
-#include <sys/multidata.h>
 #include <sys/gld.h>
 #include <sys/gldpriv.h>
 
 int		option_flags;
 uintptr_t	gld_intr_addr;
+int		apic_pir_vect;
 static struct av_head softvec_tbl[LOCK_LEVEL + 1];
 
 static char *businfo_array[] = {
@@ -73,21 +75,12 @@ soft_interrupt_help(void)
 	    "  -d   instead of ISR, print <driver_name><instance#>\n");
 }
 
-/*
- * This is copied from avintr.c
- * NOTE: Ensure that this definition stays in sync
- */
-typedef struct av_softinfo {
-	cpuset_t	av_pending;	/* pending bitmasks */
-} av_softinfo_t;
-
 /* ARGSUSED */
 int
 soft_interrupt_dump(uintptr_t addr, uint_t flags, int argc,
     const mdb_arg_t *argv)
 {
 	int			i;
-	av_softinfo_t		avsoftinfo;
 	struct autovec		avhp;
 	ddi_softint_hdl_impl_t	hdlp;
 
@@ -115,15 +108,12 @@ soft_interrupt_dump(uintptr_t addr, uint_t flags, int argc,
 		do {
 			if (!avhp.av_vector ||
 			    (mdb_vread(&hdlp, sizeof (ddi_softint_hdl_impl_t),
-			    (uintptr_t)avhp.av_intr_id) == -1) ||
-			    (mdb_vread(&avsoftinfo, sizeof (av_softinfo_t),
-			    (uintptr_t)hdlp.ih_pending) == -1))
+			    (uintptr_t)avhp.av_intr_id) == -1))
 				continue;
 
-			/* Print each soft interrupt entry */
 			mdb_printf("%-16p %-2d   %-2d  %-16p %-16p",
 			    avhp.av_intr_id, mdb_cpuset_find(
-			    (uintptr_t)&avsoftinfo.av_pending) != -1 ? 1 : 0,
+			    (uintptr_t)hdlp.ih_pending) != -1 ? 1 : 0,
 			    avhp.av_prilevel, avhp.av_intarg1, avhp.av_intarg2);
 			interrupt_print_isr((uintptr_t)avhp.av_vector,
 			    (uintptr_t)avhp.av_intarg1, (uintptr_t)hdlp.ih_dip);
@@ -145,7 +135,7 @@ interrupt_print_isr(uintptr_t vector, uintptr_t arg1, uintptr_t dip)
 	 * figure out the real ISR function name from gld_intr()
 	 */
 	if (isr_addr == gld_intr_addr) {
-		gld_mac_info_t 	macinfo;
+		gld_mac_info_t macinfo;
 
 		if (mdb_vread(&macinfo, sizeof (gld_mac_info_t), arg1) != -1) {
 			/* verify gld data structure and get the real ISR */
@@ -155,7 +145,7 @@ interrupt_print_isr(uintptr_t vector, uintptr_t arg1, uintptr_t dip)
 	}
 
 	if ((option_flags & INTR_DISPLAY_DRVR_INST) && dip) {
-		char drvr_name[MODMAXNAMELEN + 1];
+		char drvr_name[MODMAXNAMELEN];
 
 		if (dip && mdb_devinfo2driver(dip, drvr_name,
 		    sizeof (drvr_name)) == 0) {
@@ -302,11 +292,16 @@ apic_interrupt_dump(apic_irq_t *irqp, struct av_head *avp,
 
 	} else {
 		if (irqp->airq_mps_intr_index == RESERVE_INDEX &&
-		    !irqp->airq_share)
-			mdb_printf("poke_cpu");
-		else if (mdb_vread(&avhp, sizeof (struct autovec),
-		    (uintptr_t)avp->avh_link) != -1)
+		    !irqp->airq_share) {
+			if (irqp->airq_vector == apic_pir_vect) {
+				mdb_printf("pir_ipi");
+			} else {
+				mdb_printf("poke_cpu");
+			}
+		} else if (mdb_vread(&avhp, sizeof (struct autovec),
+		    (uintptr_t)avp->avh_link) != -1) {
 			mdb_printf("%a", avhp.av_vector);
+		}
 	}
 	mdb_printf("\n");
 }
@@ -446,10 +441,15 @@ apix_interrupt_ipi_dump(apix_vector_t *vectp, struct autovec *avp,
 		mdb_printf("%-9s %-3s %s%-3s %-6s %-3s %-6s %-3d   %-9s ",
 		    cpu_vector, "-  ", evtchn, ipl, "-   ", "Edg",
 		    intr_type, vectp->v_share, ioapic_iline);
-	if (!vectp->v_share)
-		mdb_printf("poke_cpu");
-	else
+	if (!vectp->v_share) {
+		if (vectp->v_vector == apic_pir_vect) {
+			mdb_printf("pir_ipi");
+		} else {
+			mdb_printf("poke_cpu");
+		}
+	} else {
 		mdb_printf("%a", avp->av_vector);
+	}
 
 	mdb_printf("\n");
 }

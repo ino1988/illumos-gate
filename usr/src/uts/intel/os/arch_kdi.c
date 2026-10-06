@@ -21,6 +21,8 @@
 /*
  * Copyright 2009 Sun Microsystems, Inc.  All rights reserved.
  * Use is subject to license terms.
+ *
+ * Copyright 2018 Joyent, Inc.
  */
 
 /*
@@ -76,13 +78,11 @@ kdi_gdt2cpu(uintptr_t gdtbase)
 	return (NULL);
 }
 
-#if defined(__amd64)
 uintptr_t
 kdi_gdt2gsbase(uintptr_t gdtbase)
 {
 	return ((uintptr_t)kdi_gdt2cpu(gdtbase));
 }
-#endif
 
 static uintptr_t
 kdi_get_userlimit(void)
@@ -154,7 +154,6 @@ mach_kdi_init(kdi_t *kdi)
 	kdi->mkdi_deactivate = kdi_deactivate;
 	kdi->mkdi_idt_switch = kdi_idt_switch;
 	kdi->mkdi_update_drreg = kdi_update_drreg;
-	kdi->mkdi_set_debug_msrs = kdi_set_debug_msrs;
 	kdi->mkdi_get_userlimit = kdi_get_userlimit;
 	kdi->mkdi_get_cpuinfo = kdi_get_cpuinfo;
 	kdi->mkdi_stop_slaves = kdi_stop_slaves;

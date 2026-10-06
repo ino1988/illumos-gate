@@ -2,10 +2,11 @@
 # Copyright 2008 Sun Microsystems, Inc.  All rights reserved.
 # Use is subject to license terms.
 #
+# Copyright (c) 2018, Joyent, Inc.
 
 PROG= kadmin kadmin.local
 SHFILES= k5srvutil
-CLOBBERFILES= $(SHFILES) 
+CLOBBERFILES= $(SHFILES)
 
 KRB5SBINSHFILES= $(SHFILES:%=$(KRB5SBIN)/%)
 
@@ -13,7 +14,6 @@ COMMON_OBJS   = kadmin.o kadmin_ct.o ss_wrapper.o getdate.o keytab.o
 RMT_OBJS= $(COMMON_OBJS) kadmin_rmt.o
 LOC_OBJS= $(COMMON_OBJS) kadmin_loc.o
 OBJS	= $(COMMON_OBJS) $(RMT_OBJS) $(LOC_OBJS)
-SRCS	= $(OBJS:.o=.c)
 
 include ../../../Makefile.cmd
 include $(SRC)/lib/gss_mechs/mech_krb5/Makefile.mech_krb5
@@ -32,12 +32,14 @@ CPPFLAGS += -I$(SRC)/uts/common/gssapi/include/ \
 		-I$(SRC)/lib/gss_mechs/mech_krb5/include $(DEFS)
 
 CERRWARN += -_gcc=-Wno-implicit-function-declaration
-CERRWARN += -_gcc=-Wno-unused-label
 CERRWARN += -_gcc=-Wno-unused-function
 CERRWARN += -_gcc=-Wno-parentheses
 CERRWARN += -_gcc=-Wno-unused-variable
 
-COPTFLAG += $(XESS) #-I$(KINCDIR) 
+# because of labels from yacc
+getdate.o := CERRWARN += -_gcc=-Wno-unused-label
+
+SMATCH=off
 
 SHAREDLIBS = -lmech_krb5 -lss
 
@@ -69,8 +71,6 @@ install: $(KRB5SBINPROG) $(KRB5SBINSHFILES)
 
 clean:
 	$(RM) $(OBJS)
-
-lint: lint_SRCS
 
 include ../../../Makefile.targ
 

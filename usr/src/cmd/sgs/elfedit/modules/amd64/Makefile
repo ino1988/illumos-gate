@@ -23,7 +23,7 @@
 # Copyright 2007 Sun Microsystems, Inc.  All rights reserved.
 # Use is subject to license terms.
 #
-# ident	"%Z%%M%	%I%	%E% SMI"
+# Copyright 2019 OmniOS Community Edition (OmniOSce) Association.
 #
 
 include		../Makefile.com
@@ -33,24 +33,17 @@ CONVLIBDIR =	$(CONVLIBDIR64)
 ELFLIBDIR =	$(ELFLIBDIR64)
 MTARG =		amd64/
 
-lint :=		CONV_LIB =	$(CONV_LIB64)
-lint :=		LDDBG_LIB =	$(LDDBG_LIB64)
-
 CFLAGS64 +=	$(C_PICFLAGS64)
 
 LLDFLAGS =	$(LLDFLAGS64)
-
-LINTFLAGS64 +=	$(VAR_LINTFLAGS64)
-
 
 .KEEP_STATE:
 
 all:		$(PICDIR) .WAIT $(ELFEDITLIBS)
 
-install \
-package:	all .WAIT $(ROOTELFEDITDIR64) .WAIT $(ROOTELFEDITLIBS)
+install:	all .WAIT $(ROOTELFEDITDIR64) .WAIT $(ROOTELFEDITLIBS)
 
 
 include		../Makefile.targ
-include		../../../Makefile.sub.64
+include		$(SRC)/Makefile.master.64
 

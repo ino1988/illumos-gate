@@ -24,7 +24,9 @@
  * Use is subject to license terms.
  */
 /*
- * Copyright (c) 2012, Joyent, Inc.  All rights reserved.
+ * Copyright 2019 Doma Gergő Mihály <doma.gergo.mihaly@gmail.com>
+ * Copyright 2018 Joyent, Inc.
+ * Copyright 2023 Oxide Computer Company
  */
 
 /*
@@ -37,13 +39,19 @@
 #include <mdb/mdb_proc.h>
 #include <mdb/mdb_kreg.h>
 #include <mdb/mdb_err.h>
+#include <mdb/mdb_isautil.h>
 #include <mdb/mdb_ia32util.h>
+#include <mdb/proc_x86util.h>
 #include <mdb/mdb.h>
 
+#include <sys/ucontext.h>
 #include <sys/frame.h>
 #include <libproc.h>
 #include <sys/fp.h>
 #include <ieeefp.h>
+#include <sys/sysmacros.h>
+
+#include <stddef.h>
 
 const mdb_tgt_regdesc_t pt_regdesc[] = {
 	{ "gs", GS, MDB_TGT_R_EXPORT },
@@ -95,7 +103,8 @@ pt_read_instr(mdb_tgt_t *t)
 	const lwpstatus_t *psp = &Pstatus(t->t_pshandle)->pr_lwp;
 	uint8_t ret = 0;
 
-	(void) mdb_tgt_vread(t, &ret, sizeof (ret), psp->pr_reg[EIP]);
+	(void) mdb_tgt_aread(t, MDB_TGT_AS_VIRT_I, &ret, sizeof (ret),
+	    psp->pr_reg[EIP]);
 
 	return (ret);
 }
@@ -108,9 +117,37 @@ pt_regs(uintptr_t addr, uint_t flags, int argc, const mdb_arg_t *argv)
 	mdb_tgt_tid_t tid;
 	prgregset_t grs;
 	prgreg_t eflags;
+	boolean_t from_ucontext = B_FALSE;
 
-	if (argc != 0)
+	if (mdb_getopts(argc, argv,
+	    'u', MDB_OPT_SETBITS, B_TRUE, &from_ucontext, NULL) != argc) {
 		return (DCMD_USAGE);
+	}
+
+	if (from_ucontext) {
+		int off;
+		int o0, o1;
+
+		if (!(flags & DCMD_ADDRSPEC)) {
+			mdb_warn("-u requires a ucontext_t address\n");
+			return (DCMD_ERR);
+		}
+
+		o0 = mdb_ctf_offsetof_by_name("ucontext_t", "uc_mcontext");
+		o1 = mdb_ctf_offsetof_by_name("mcontext_t", "gregs");
+		if (o0 == -1 || o1 == -1) {
+			off = offsetof(ucontext_t, uc_mcontext) +
+			    offsetof(mcontext_t, gregs);
+		} else {
+			off = o0 + o1;
+		}
+
+		if (mdb_vread(&grs, sizeof (grs), addr + off) != sizeof (grs)) {
+			mdb_warn("failed to read from ucontext_t %p", addr);
+			return (DCMD_ERR);
+		}
+		goto print_regs;
+	}
 
 	if (t->t_pshandle == NULL || Pstate(t->t_pshandle) == PS_UNDEAD) {
 		mdb_warn("no process active\n");
@@ -132,6 +169,7 @@ pt_regs(uintptr_t addr, uint_t flags, int argc, const mdb_arg_t *argv)
 		return (DCMD_ERR);
 	}
 
+print_regs:
 	eflags = grs[EFL];
 
 	mdb_printf("%%cs = 0x%04x\t\t%%eax = 0x%0?p %A\n",
@@ -185,184 +223,15 @@ pt_regs(uintptr_t addr, uint_t flags, int argc, const mdb_arg_t *argv)
 	return (DCMD_OK);
 }
 
-static const char *
-fpcw2str(uint32_t cw, char *buf, size_t nbytes)
-{
-	char *end = buf + nbytes;
-	char *p = buf;
-
-	buf[0] = '\0';
-
-	/*
-	 * Decode all masks in the 80387 control word.
-	 */
-	if (cw & FPIM)
-		p += mdb_snprintf(p, (size_t)(end - p), "|IM");
-	if (cw & FPDM)
-		p += mdb_snprintf(p, (size_t)(end - p), "|DM");
-	if (cw & FPZM)
-		p += mdb_snprintf(p, (size_t)(end - p), "|ZM");
-	if (cw & FPOM)
-		p += mdb_snprintf(p, (size_t)(end - p), "|OM");
-	if (cw & FPUM)
-		p += mdb_snprintf(p, (size_t)(end - p), "|UM");
-	if (cw & FPPM)
-		p += mdb_snprintf(p, (size_t)(end - p), "|PM");
-	if (cw & FPPC)
-		p += mdb_snprintf(p, (size_t)(end - p), "|PC");
-	if (cw & FPRC)
-		p += mdb_snprintf(p, (size_t)(end - p), "|RC");
-	if (cw & FPIC)
-		p += mdb_snprintf(p, (size_t)(end - p), "|IC");
-
-	/*
-	 * Decode precision, rounding, and infinity options in control word.
-	 */
-	if (cw & FPSIG24)
-		p += mdb_snprintf(p, (size_t)(end - p), "|SIG24");
-	if (cw & FPSIG53)
-		p += mdb_snprintf(p, (size_t)(end - p), "|SIG53");
-	if (cw & FPSIG64)
-		p += mdb_snprintf(p, (size_t)(end - p), "|SIG64");
-
-	if ((cw & FPRC) == (FPRD|FPRU))
-		p += mdb_snprintf(p, (size_t)(end - p), "|RTZ");
-	else if (cw & FPRD)
-		p += mdb_snprintf(p, (size_t)(end - p), "|RD");
-	else if (cw & FPRU)
-		p += mdb_snprintf(p, (size_t)(end - p), "|RU");
-	else
-		p += mdb_snprintf(p, (size_t)(end - p), "|RTN");
-
-	if (cw & FPA)
-		p += mdb_snprintf(p, (size_t)(end - p), "|A");
-	else
-		p += mdb_snprintf(p, (size_t)(end - p), "|P");
-	if (cw & WFPB17)
-		p += mdb_snprintf(p, (size_t)(end - p), "|WFPB17");
-	if (cw & WFPB24)
-		p += mdb_snprintf(p, (size_t)(end - p), "|WFPB24");
-
-	if (buf[0] == '|')
-		return (buf + 1);
-
-	return ("0");
-}
-
-static const char *
-fpsw2str(uint32_t cw, char *buf, size_t nbytes)
-{
-	char *end = buf + nbytes;
-	char *p = buf;
-
-	buf[0] = '\0';
-
-	/*
-	 * Decode all masks in the 80387 status word.
-	 */
-	if (cw & FPS_IE)
-		p += mdb_snprintf(p, (size_t)(end - p), "|IE");
-	if (cw & FPS_DE)
-		p += mdb_snprintf(p, (size_t)(end - p), "|DE");
-	if (cw & FPS_ZE)
-		p += mdb_snprintf(p, (size_t)(end - p), "|ZE");
-	if (cw & FPS_OE)
-		p += mdb_snprintf(p, (size_t)(end - p), "|OE");
-	if (cw & FPS_UE)
-		p += mdb_snprintf(p, (size_t)(end - p), "|UE");
-	if (cw & FPS_PE)
-		p += mdb_snprintf(p, (size_t)(end - p), "|PE");
-	if (cw & FPS_SF)
-		p += mdb_snprintf(p, (size_t)(end - p), "|SF");
-	if (cw & FPS_ES)
-		p += mdb_snprintf(p, (size_t)(end - p), "|ES");
-	if (cw & FPS_C0)
-		p += mdb_snprintf(p, (size_t)(end - p), "|C0");
-	if (cw & FPS_C1)
-		p += mdb_snprintf(p, (size_t)(end - p), "|C1");
-	if (cw & FPS_C2)
-		p += mdb_snprintf(p, (size_t)(end - p), "|C2");
-	if (cw & FPS_C3)
-		p += mdb_snprintf(p, (size_t)(end - p), "|C3");
-	if (cw & FPS_B)
-		p += mdb_snprintf(p, (size_t)(end - p), "|B");
-
-	if (buf[0] == '|')
-		return (buf + 1);
-
-	return ("0");
-}
-
-static const char *
-fpmxcsr2str(uint32_t mxcsr, char *buf, size_t nbytes)
-{
-	char *end = buf + nbytes;
-	char *p = buf;
-
-	buf[0] = '\0';
-
-	/*
-	 * Decode the MXCSR word
-	 */
-	if (mxcsr & SSE_IE)
-		p += mdb_snprintf(p, (size_t)(end - p), "|IE");
-	if (mxcsr & SSE_DE)
-		p += mdb_snprintf(p, (size_t)(end - p), "|DE");
-	if (mxcsr & SSE_ZE)
-		p += mdb_snprintf(p, (size_t)(end - p), "|ZE");
-	if (mxcsr & SSE_OE)
-		p += mdb_snprintf(p, (size_t)(end - p), "|OE");
-	if (mxcsr & SSE_UE)
-		p += mdb_snprintf(p, (size_t)(end - p), "|UE");
-	if (mxcsr & SSE_PE)
-		p += mdb_snprintf(p, (size_t)(end - p), "|PE");
-
-	if (mxcsr & SSE_DAZ)
-		p += mdb_snprintf(p, (size_t)(end - p), "|DAZ");
-
-	if (mxcsr & SSE_IM)
-		p += mdb_snprintf(p, (size_t)(end - p), "|IM");
-	if (mxcsr & SSE_DM)
-		p += mdb_snprintf(p, (size_t)(end - p), "|DM");
-	if (mxcsr & SSE_ZM)
-		p += mdb_snprintf(p, (size_t)(end - p), "|ZM");
-	if (mxcsr & SSE_OM)
-		p += mdb_snprintf(p, (size_t)(end - p), "|OM");
-	if (mxcsr & SSE_UM)
-		p += mdb_snprintf(p, (size_t)(end - p), "|UM");
-	if (mxcsr & SSE_PM)
-		p += mdb_snprintf(p, (size_t)(end - p), "|PM");
-
-	if ((mxcsr & SSE_RC) == (SSE_RD|SSE_RU))
-		p += mdb_snprintf(p, (size_t)(end - p), "|RTZ");
-	else if (mxcsr & SSE_RD)
-		p += mdb_snprintf(p, (size_t)(end - p), "|RD");
-	else if (mxcsr & SSE_RU)
-		p += mdb_snprintf(p, (size_t)(end - p), "|RU");
-	else
-		p += mdb_snprintf(p, (size_t)(end - p), "|RTN");
-
-	if (mxcsr & SSE_FZ)
-		p += mdb_snprintf(p, (size_t)(end - p), "|FZ");
-
-	if (buf[0] == '|')
-		return (buf + 1);
-	return ("0");
-}
-
-/*ARGSUSED*/
 int
 pt_fpregs(uintptr_t addr, uint_t flags, int argc, const mdb_arg_t *argv)
 {
-	mdb_tgt_t *t = mdb.m_target;
-	mdb_tgt_tid_t tid;
-	uint32_t hw = FP_NO;
-	uint_t sse = 0;
+	int ret;
 	prfpregset_t fprs;
 	struct _fpstate fps;
 	char buf[256];
 	uint_t top;
-	int i;
+	size_t i;
 
 	/*
 	 * Union for overlaying _fpreg structure on to quad-precision
@@ -374,72 +243,16 @@ pt_fpregs(uintptr_t addr, uint_t flags, int argc, const mdb_arg_t *argv)
 	} fpru;
 
 	/*
-	 * Array of strings corresponding to FPU tag word values (see
-	 * section 7.3.6 of the Intel Programmer's Reference Manual).
+	 * We use common code between 32-bit and 64-bit x86 to capture and print
+	 * the extended vector state. The remaining classic 387 state is
+	 * finicky and different enough that it is left to be dealt with on its
+	 * own.
 	 */
-	const char *tag_strings[] = { "valid", "zero", "special", "empty" };
-
-	if (argc != 0)
-		return (DCMD_USAGE);
-
-	if (t->t_pshandle == NULL || Pstate(t->t_pshandle) == PS_UNDEAD) {
-		mdb_warn("no process active\n");
-		return (DCMD_ERR);
-	}
-
-	if (Pstate(t->t_pshandle) == PS_LOST) {
-		mdb_warn("debugger has lost control of process\n");
-		return (DCMD_ERR);
-	}
-
-	if (flags & DCMD_ADDRSPEC)
-		tid = (mdb_tgt_tid_t)addr;
-	else
-		tid = PTL_TID(t);
-
-	if (mdb_tgt_readsym(t, MDB_TGT_AS_VIRT, &hw,
-	    sizeof (hw), "libc.so", "_fp_hw") < 0 &&
-	    mdb_tgt_readsym(t, MDB_TGT_AS_VIRT, &hw,
-	    sizeof (hw), MDB_TGT_OBJ_EXEC, "_fp_hw") < 0)
-		mdb_warn("failed to read _fp_hw value");
-
-	if (mdb_tgt_readsym(t, MDB_TGT_AS_VIRT, &sse,
-	    sizeof (sse), "libc.so", "_sse_hw") < 0 &&
-	    mdb_tgt_readsym(t, MDB_TGT_AS_VIRT, &sse,
-	    sizeof (sse), MDB_TGT_OBJ_EXEC, "_sse_hw") < 0)
-		mdb_warn("failed to read _sse_hw value");
-
-	mdb_printf("_fp_hw 0x%02x (", hw);
-	switch (hw) {
-	case FP_SW:
-		mdb_printf("80387 software emulator");
-		break;
-	case FP_287:
-		mdb_printf("80287 chip");
-		break;
-	case FP_387:
-		mdb_printf("80387 chip");
-		break;
-	case FP_486:
-		mdb_printf("80486 chip");
-		break;
-	default:
-		mdb_printf("no floating point support");
-		break;
-	}
-	if (sse)
-		mdb_printf(" with SSE");
-	mdb_printf(")\n");
-
-	if (!(hw & FP_HW))
-		return (DCMD_OK); /* just abort if no hardware present */
-
-	if (PTL_GETFPREGS(t, tid, &fprs) != 0) {
-		mdb_warn("failed to get floating point registers");
-		return (DCMD_ERR);
-	}
+	if ((ret = x86_pt_fpregs_common(addr, flags, argc, &fprs)) != DCMD_OK)
+		return (ret);
 
 	bcopy(&fprs.fp_reg_set.fpchip_state, &fps, sizeof (fps));
+	mdb_printf("387 and FP Control State\n");
 
 	fps.cw &= 0xffff;	/* control word is really 16 bits */
 	fps.sw &= 0xffff;	/* status word is really 16 bits */
@@ -462,7 +275,7 @@ pt_fpregs(uintptr_t addr, uint_t flags, int argc, const mdb_arg_t *argv)
 	mdb_printf("dtoff  %a\n", fps.dataoff);
 	mdb_printf("dtsel  0x%x\n\n", fps.datasel);
 
-	for (i = 0; i < 8; i++) {
+	for (i = 0; i < ARRAY_SIZE(fps._st); i++) {
 		/*
 		 * Recall that we need to use the current TOP-of-stack value to
 		 * associate the _st[] index back to a physical register number,
@@ -478,21 +291,10 @@ pt_fpregs(uintptr_t addr, uint_t flags, int argc, const mdb_arg_t *argv)
 		    i, fpru.reg.exponent,
 		    fpru.reg.significand[3], fpru.reg.significand[2],
 		    fpru.reg.significand[1], fpru.reg.significand[0],
-		    fpru.ld, tag_strings[tag_value]);
+		    fpru.ld, fptag2str(tag_value));
 	}
 
-	if (!sse)
-		return (DCMD_OK);
-
-	mdb_printf("\nmxcsr  0x%04x (%s)\n", fps.mxcsr,
-	    fpmxcsr2str(fps.mxcsr, buf, sizeof (buf)));
-	mdb_printf("xcp    0x%04x (%s)\n\n", fps.xstatus,
-	    fpmxcsr2str(fps.xstatus, buf, sizeof (buf)));
-
-	for (i = 0; i < 8; i++)
-		mdb_printf("%%xmm%d  0x%08x%08x%08x%08x\n", i,
-		    fps.xmm[i][3], fps.xmm[i][2],
-		    fps.xmm[i][1], fps.xmm[i][0]);
+	x86_pt_fpregs_sse_ctl(fps.mxcsr, fps.xstatus, buf, sizeof (buf));
 
 	return (DCMD_OK);
 }

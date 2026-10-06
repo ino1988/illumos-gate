@@ -204,7 +204,7 @@ char *__nis_server;   /* if set, use only this server for binding */
 
 #define	OPT_INT 1
 #define	OPT_STRING 2
-#ifdef DEBUG
+#ifdef NSS_DEBUG_INSECURE
 #define	OPT_FILE 3
 #endif
 
@@ -215,7 +215,7 @@ struct option {
 };
 
 static struct option nss_options[] = {
-#ifdef DEBUG
+#ifdef NSS_DEBUG_INSECURE
 	/* allowing __nss_debug_file to be set could be a security hole. */
 	{ "debug_file", OPT_FILE, &__nss_debug_file },
 #endif
@@ -224,7 +224,7 @@ static struct option nss_options[] = {
 };
 
 static struct option nis_options[] = {
-#ifdef DEBUG
+#ifdef NSS_DEBUG_INSECURE
 	/* allowing __nis_debug_file to be set could be a security hole. */
 	{ "debug_file", OPT_FILE, &__nis_debug_file },
 #endif
@@ -249,14 +249,14 @@ static struct option nis_options[] = {
  */
 
 typedef struct nss_cfgparam {
-	char 		*name;
+	char		*name;
 	mutex_t		*lock;
 	void		*buffer;
 	size_t		length;
 } nss_cfgparam_t;
 
 typedef struct nss_cfglist {
-	char 		*name;
+	char		*name;
 	nss_cfgparam_t	*list;
 	int		count;
 	int		max;
@@ -562,7 +562,7 @@ nss_status_t
 nss_config(nss_config_t **plist, int cnt)
 {
 	nss_config_t	*next;
-	int 	i;
+	int	i;
 
 	/* interface is only available to nscd */
 	if (_nsc_proc_is_cache() <= 0) {
@@ -642,7 +642,7 @@ set_option(struct option *opt, char *name, char *val)
 {
 	int n;
 	char *p;
-#ifdef DEBUG
+#ifdef NSS_DEBUG_INSECURE
 	FILE *fp;
 #endif
 
@@ -661,7 +661,7 @@ set_option(struct option *opt, char *name, char *val)
 					n = atoi(val);
 				*((int *)opt->address) = n;
 				break;
-#ifdef DEBUG
+#ifdef NSS_DEBUG_INSECURE
 			case OPT_FILE:
 				fp = fopen(val, "wF");
 				*((FILE **)opt->address) = fp;
@@ -973,7 +973,6 @@ _nss_src_state_destr(struct nss_src_state *src, int max_dormant)
 void
 _nss_db_state_destr(struct nss_db_state *s)
 {
-
 	if (s == NULL)
 		return;
 
@@ -1020,24 +1019,20 @@ _nss_status_vec(void)
 }
 
 static void
-output_loop_diag_a(
-	int n,
-	char *dbase,
-	struct __nsw_lookup_v1 *lkp)
-
+output_loop_diag_a(int n,
+    char *dbase,
+    struct __nsw_lookup_v1 *lkp)
 {
 	(void) fprintf(__nss_debug_file,
-		"NSS_retry(%d): '%s': trying '%s' ... ",
-		n, dbase, lkp->service_name);
+	    "NSS_retry(%d): '%s': trying '%s' ... ",
+	    n, dbase, lkp->service_name);
 	(void) fflush(__nss_debug_file);
 
 }
 
 static void
-output_loop_diag_b(
-	nss_status_t res,
-	struct __nsw_lookup_v1 *lkp)
-
+output_loop_diag_b(nss_status_t res,
+    struct __nsw_lookup_v1 *lkp)
 {
 	(void) fprintf(__nss_debug_file, "result=");
 	switch (res) {
@@ -1072,7 +1067,7 @@ output_loop_diag_b(
 		break;
 	case __NSW_TRYAGAIN_NTIMES:
 		(void) fprintf(__nss_debug_file, "TRYAGAIN_NTIMES (N=%d)",
-			lkp->max_retries);
+		    lkp->max_retries);
 		break;
 	case __NSW_TRYAGAIN_PAUSED:
 		(void) fprintf(__nss_debug_file, "TRYAGAIN_PAUSED");
@@ -1150,7 +1145,7 @@ nss_delete(nss_db_root_t *rootp)
 
 nss_status_t
 nss_search(nss_db_root_t *rootp, nss_db_initf_t initf, int search_fnum,
-	void *search_args)
+    void *search_args)
 {
 	nss_status_t		res = NSS_UNAVAIL;
 	struct nss_db_state	*s;
@@ -1286,16 +1281,10 @@ struct nss_getent_context {
 	nss_db_params_t		param;
 };
 
-static void		nss_setent_u(nss_db_root_t *,
-				    nss_db_initf_t,
-				    nss_getent_t *);
-static nss_status_t	nss_getent_u(nss_db_root_t *,
-				    nss_db_initf_t,
-				    nss_getent_t *,
-				    void *);
-static void		nss_endent_u(nss_db_root_t *,
-				    nss_db_initf_t,
-				    nss_getent_t *);
+static void nss_setent_u(nss_db_root_t *, nss_db_initf_t, nss_getent_t *);
+static nss_status_t nss_getent_u(nss_db_root_t *, nss_db_initf_t,
+    nss_getent_t *, void *);
+static void nss_endent_u(nss_db_root_t *, nss_db_initf_t, nss_getent_t *);
 
 void
 nss_setent(nss_db_root_t *rootp, nss_db_initf_t initf, nss_getent_t *contextpp)
@@ -1310,7 +1299,7 @@ nss_setent(nss_db_root_t *rootp, nss_db_initf_t initf, nss_getent_t *contextpp)
 
 nss_status_t
 nss_getent(nss_db_root_t *rootp, nss_db_initf_t initf, nss_getent_t *contextpp,
-	void *args)
+    void *args)
 {
 	nss_status_t		status;
 
@@ -1364,7 +1353,7 @@ end_iter_u(nss_db_root_t *rootp, struct nss_getent_context *contextp)
 
 static void
 nss_setent_u(nss_db_root_t *rootp, nss_db_initf_t initf,
-	nss_getent_t *contextpp)
+    nss_getent_t *contextpp)
 {
 	nss_status_t		status;
 	struct nss_db_state	*s;
@@ -1449,7 +1438,7 @@ nss_setent_u(nss_db_root_t *rootp, nss_db_initf_t initf,
 
 static nss_status_t
 nss_getent_u(nss_db_root_t *rootp, nss_db_initf_t initf,
-	nss_getent_t *contextpp, void *args)
+    nss_getent_t *contextpp, void *args)
 {
 	nss_status_t		status;
 	struct nss_db_state	*s;
@@ -1533,7 +1522,7 @@ nss_getent_u(nss_db_root_t *rootp, nss_db_initf_t initf,
 /*ARGSUSED*/
 static void
 nss_endent_u(nss_db_root_t *rootp, nss_db_initf_t initf,
-	nss_getent_t *contextpp)
+    nss_getent_t *contextpp)
 {
 	nss_status_t		status;
 	struct nss_getent_context *contextp;
@@ -1651,10 +1640,9 @@ nss_pack_dbd(void *buffer, size_t bufsize, nss_db_params_t *p, size_t *poff)
  * Return: NSS_SUCCESS (OK to proceed), NSS_ERROR, NSS_NOTFOUND
  */
 
-/*ARGSUSED*/
 nss_status_t
-nss_pack(void *buffer, size_t bufsize, nss_db_root_t *rootp,
-	    nss_db_initf_t initf, int search_fnum, void *search_args)
+nss_pack(void *buffer, size_t bufsize, nss_db_root_t *rootp __unused,
+    nss_db_initf_t initf, int search_fnum, void *search_args)
 {
 	nss_pheader_t		*pbuf = (nss_pheader_t *)buffer;
 	nss_XbyY_args_t		*in = (nss_XbyY_args_t *)search_args;
@@ -1759,10 +1747,9 @@ nss_pack(void *buffer, size_t bufsize, nss_db_root_t *rootp,
  * Return: NSS_SUCCESS (OK to proceed), NSS_ERROR, NSS_NOTFOUND
  */
 
-/*ARGSUSED*/
 nss_status_t
-nss_pack_ent(void *buffer, size_t bufsize, nss_db_root_t *rootp,
-	    nss_db_initf_t initf, nss_getent_t *contextpp)
+nss_pack_ent(void *buffer, size_t bufsize, nss_db_root_t *rootp __unused,
+    nss_db_initf_t initf, nss_getent_t *contextpp)
 {
 	nss_pheader_t		*pbuf = (nss_pheader_t *)buffer;
 	struct nss_getent_context *contextp = contextpp->ctx;
@@ -1833,10 +1820,9 @@ nss_pack_ent(void *buffer, size_t bufsize, nss_db_root_t *rootp,
  * quantities.  Store in an int array... Assume gid's are <= 32 bits...
  */
 
-/*ARGSUSED*/
 nss_status_t
-nss_unpack(void *buffer, size_t bufsize, nss_db_root_t *rootp,
-	    nss_db_initf_t initf, int search_fnum, void *search_args)
+nss_unpack(void *buffer, size_t bufsize __unused, nss_db_root_t *rootp __unused,
+    nss_db_initf_t initf __unused, int search_fnum, void *search_args)
 {
 	nss_pheader_t		*pbuf = (nss_pheader_t *)buffer;
 	nss_XbyY_args_t		*in = (nss_XbyY_args_t *)search_args;
@@ -1934,10 +1920,10 @@ nss_unpack(void *buffer, size_t bufsize, nss_db_root_t *rootp,
  * Return: status, errnos, cookie info and results from requested operation.
  */
 
-/*ARGSUSED*/
 nss_status_t
-nss_unpack_ent(void *buffer, size_t bufsize, nss_db_root_t *rootp,
-	    nss_db_initf_t initf, nss_getent_t *contextpp, void *args)
+nss_unpack_ent(void *buffer, size_t bufsize __unused,
+    nss_db_root_t *rootp __unused, nss_db_initf_t initf __unused,
+    nss_getent_t *contextpp, void *args)
 {
 	nss_pheader_t		*pbuf = (nss_pheader_t *)buffer;
 	nss_XbyY_args_t		*in = (nss_XbyY_args_t *)args;
@@ -2009,7 +1995,7 @@ nss_unpack_ent(void *buffer, size_t bufsize, nss_db_root_t *rootp,
 
 nss_status_t
 _nsc_search(nss_db_root_t *rootp, nss_db_initf_t initf, int search_fnum,
-	void *search_args)
+    void *search_args)
 {
 	nss_pheader_t		*pbuf;
 	void			*doorptr = NULL;
@@ -2084,7 +2070,7 @@ _nsc_search(nss_db_root_t *rootp, nss_db_initf_t initf, int search_fnum,
  */
 nss_status_t
 _nsc_setent_u(nss_db_root_t *rootp, nss_db_initf_t initf,
-	nss_getent_t *contextpp)
+    nss_getent_t *contextpp)
 {
 	nss_status_t		status = NSS_TRYLOCAL;
 	struct nss_getent_context *contextp = contextpp->ctx;
@@ -2161,7 +2147,7 @@ _nsc_setent_u(nss_db_root_t *rootp, nss_db_initf_t initf,
 
 nss_status_t
 _nsc_getent_u(nss_db_root_t *rootp, nss_db_initf_t initf,
-	nss_getent_t *contextpp, void *args)
+    nss_getent_t *contextpp, void *args)
 {
 	nss_status_t		status = NSS_TRYLOCAL;
 	struct nss_getent_context *contextp = contextpp->ctx;
@@ -2228,7 +2214,7 @@ _nsc_getent_u(nss_db_root_t *rootp, nss_db_initf_t initf,
 
 nss_status_t
 _nsc_endent_u(nss_db_root_t *rootp, nss_db_initf_t initf,
-	nss_getent_t *contextpp)
+    nss_getent_t *contextpp)
 {
 	nss_status_t		status = NSS_TRYLOCAL;
 	struct nss_getent_context *contextp = contextpp->ctx;
@@ -2297,4 +2283,12 @@ _nss_get_bufsizes(int arg)
 		return (__nss_buflen_group);
 	}
 	return (__nss_buflen_default);
+}
+
+void *
+_nss_XbyY_fini(nss_XbyY_args_t *args)
+{
+	if ((args->returnval == NULL) && (args->erange != 0))
+		errno = ERANGE;
+	return (args->returnval);
 }

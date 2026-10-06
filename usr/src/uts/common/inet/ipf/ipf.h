@@ -157,8 +157,9 @@ typedef	struct	{
 
 
 #if defined(__NetBSD__) || defined(__OpenBSD__) || \
-        (_BSDI_VERSION >= 199701) || (__FreeBSD_version >= 300000) || \
-	SOLARIS || defined(__sgi) || defined(__osf__) || defined(linux)
+	(_BSDI_VERSION >= 199701) || (__FreeBSD_version >= 300000) || \
+	defined(SOLARIS) || defined(__sgi) || defined(__osf__) || \
+	defined(linux)
 # include <stdarg.h>
 typedef	int	(* ioctlfunc_t) __P((int, ioctlcmd_t, ...));
 #else
@@ -213,10 +214,9 @@ extern u_32_t getoptbyname __P((char *));
 extern u_32_t getoptbyvalue __P((int));
 extern u_32_t getv6optbyname __P((char *));
 extern u_32_t getv6optbyvalue __P((int));
-extern void hexdump __P((FILE *, void *, int, int));
 extern int icmpcode __P((char *));
 extern void initparse __P((void));
-extern void ipf_dotuning __P((int, char *, ioctlfunc_t)); 
+extern void ipf_dotuning __P((int, char *, ioctlfunc_t));
 extern void ipf_addrule __P((int, ioctlfunc_t, void *));
 extern int ipf_parsefile __P((int, addfunc_t, ioctlfunc_t *, char *));
 extern int ipf_parsesome __P((int, addfunc_t, ioctlfunc_t *, FILE *));
@@ -305,7 +305,7 @@ extern void set_variable __P((char *, char *));
 extern char *get_variable __P((char *, char **, int));
 extern void resetlexer __P((void));
 
-#if SOLARIS
+#ifdef SOLARIS
 extern int gethostname __P((char *, int ));
 extern void sync __P((void));
 #endif

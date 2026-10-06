@@ -21,6 +21,7 @@
 /*
  * Copyright 2009 Sun Microsystems, Inc.  All rights reserved.
  * Use is subject to license terms.
+ * Copyright 2019 Joyent, Inc.
  */
 
 /*
@@ -90,6 +91,7 @@
 #include <sys/pg.h>
 #include <sys/promif.h>
 #include <sys/sdt.h>
+#include <sys/smt.h>
 
 lgrp_gen_t	lgrp_gen = 0;		/* generation of lgroup hierarchy */
 lgrp_t *lgrp_table[NLGRPS_MAX]; /* table of all initialized lgrp_t structs */
@@ -520,6 +522,8 @@ lgrp_main_mp_init(void)
 {
 	klgrpset_t changed;
 
+	smt_init();
+
 	/*
 	 * Update lgroup topology (if necessary)
 	 */
@@ -844,6 +848,7 @@ lgrp_create(void)
 	int		i;
 
 	ASSERT(!lgrp_initialized || MUTEX_HELD(&cpu_lock));
+	lgrpid = 0;
 
 	/*
 	 * Find an open slot in the lgroup table and recycle unused lgroup
@@ -1342,6 +1347,10 @@ lgrp_mem_init(int mnode, lgrp_handle_t hand, boolean_t is_copy_rename)
 			klgrpset_add(changed, lgrp->lgrp_id);
 			count++;
 		}
+	} else {
+		if (drop_lock)
+			mutex_exit(&cpu_lock);
+		return;
 	}
 
 	/*
@@ -1440,8 +1449,8 @@ lgrp_mem_fini(int mnode, lgrp_handle_t hand, boolean_t is_copy_rename)
 		 * Remove memory node from lgroup.
 		 */
 		lgrp->lgrp_mnodes &= ~mnodes_mask;
+		ASSERT(lgrp->lgrp_nmnodes > 0);
 		lgrp->lgrp_nmnodes--;
-		ASSERT(lgrp->lgrp_nmnodes >= 0);
 	}
 	ASSERT(lgrp_root->lgrp_nmnodes > 0);
 
@@ -2151,8 +2160,8 @@ lpl_topo_verify(cpupart_t *cpupart)
 
 		/* do the parent lgroups exist and do they match? */
 		if (lgrp->lgrp_parent) {
-			ASSERT(lpl->lpl_parent);
-			ASSERT(lgrp->lgrp_parent->lgrp_id ==
+			ASSERT(lpl->lpl_parent != NULL &&
+			    lgrp->lgrp_parent->lgrp_id ==
 			    lpl->lpl_parent->lpl_lgrpid);
 
 			if (!lpl->lpl_parent) {
@@ -3566,6 +3575,8 @@ lgrp_shm_policy_get(struct anon_map *amp, ulong_t anon_index, vnode_t *vp,
 	avl_tree_t		*tree;
 	avl_index_t		where;
 
+	shm_locality = NULL;
+	tree = NULL;
 	/*
 	 * Get policy segment tree from anon_map or vnode and use specified
 	 * anon index or vnode offset as offset
@@ -3731,7 +3742,7 @@ lgrp_mem_choose(struct seg *seg, caddr_t vaddr, size_t pgsz)
 				    LGRP_NUM_DEFAULT, 1);
 			break;
 		}
-		/* LINTED fallthrough on case statement */
+		/* FALLTHROUGH */
 	case LGRP_MEM_POLICY_RANDOM:
 
 		/*
@@ -3784,7 +3795,7 @@ lgrp_mem_choose(struct seg *seg, caddr_t vaddr, size_t pgsz)
 		klgrpset_copy(lgrpset, curproc->p_lgrpset);
 		stat = LGRP_NUM_RANDOM_PROC;
 
-		/* LINTED fallthrough on case statement */
+		/* FALLTHROUGH */
 	case LGRP_MEM_POLICY_RANDOM_PSET:
 
 		if (!stat)
@@ -4089,12 +4100,13 @@ lgrp_shm_policy_split(avl_tree_t *tree, lgrp_shm_policy_seg_t *seg,
 	lgrp_shm_policy_seg_t	*newseg;
 	avl_index_t		where;
 
-	ASSERT(seg != NULL);
-	ASSERT(off >= seg->shm_off && off <= seg->shm_off + seg->shm_size);
+	ASSERT(seg != NULL && (off >= seg->shm_off &&
+	    off <= seg->shm_off + seg->shm_size));
 
-	if (!seg || off < seg->shm_off || off > seg->shm_off +
-	    seg->shm_size)
+	if (!seg || off < seg->shm_off ||
+	    off > seg->shm_off + seg->shm_size) {
 		return (NULL);
+	}
 
 	if (off == seg->shm_off || off == seg->shm_off + seg->shm_size)
 		return (seg);

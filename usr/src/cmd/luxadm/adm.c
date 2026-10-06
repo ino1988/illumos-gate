@@ -23,12 +23,6 @@
  * Use is subject to license terms.
  */
 
-
-
-
-/*LINTLIBRARY*/
-
-
 /*
  * Administration program for SENA
  * subsystems and individual FC_AL devices.
@@ -405,15 +399,15 @@ static	const	int EOK	= 0;	/* errno.h type success return code */
 static int
 getaction(char *cmd, struct keyword *matches, int  *retval)
 {
-int actlen;
+	int actlen;
 
 	/* Idiot checking of pointers */
 	if (! cmd || ! matches || ! retval ||
 	    ! (actlen = strlen(cmd)))	/* Is there an cmd ? */
 	    return (EFAULT);
 
-	    /* Keep looping until NULL match string (end of list) */
-	    while (matches->match) {
+	/* Keep looping until NULL match string (end of list) */
+	while (matches->match) {
 		/*
 		 * Precedence: Make sure target is no longer than
 		 * current match string
@@ -432,7 +426,7 @@ int actlen;
 		} else {
 		    matches++;		/* Next match string/struct */
 		}
-	    }	/* End of matches loop */
+	}	/* End of matches loop */
 	return (EINVAL);
 
 }	/* End of getaction() */
@@ -441,7 +435,7 @@ int actlen;
 int
 main(int argc, char **argv)
 {
-register int 	c;
+register int	c;
 /* getopt varbs */
 extern char *optarg;
 char		*optstring = NULL;
@@ -450,7 +444,7 @@ int		cmd = 0;		/* Cmd verb from cmd line */
 int		exit_code = 0;		/* exit code for program */
 int		temp_fd;		/* For -f option */
 char		*file_name = NULL;
-int		option_t_input;
+int		option_t_input = 0;
 char		*path_phys = NULL;
 int		USE_FCHBA = 0;
 

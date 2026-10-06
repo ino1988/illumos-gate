@@ -21,6 +21,8 @@
 /*
  * Copyright 2010 Sun Microsystems, Inc.  All rights reserved.
  * Use is subject to license terms.
+ * Copyright (c) 2016 by Delphix. All rights reserved.
+ * Copyright 2018 Joyent, Inc.
  */
 
 /*
@@ -601,7 +603,7 @@ page_clear_transient_ue(page_t *pp)
 	uint64_t	pa;
 	uint32_t	pa_hi, pa_lo;
 	on_trap_data_t	otd;
-	int		errors = 0;
+	int		errors;
 	int		i;
 
 	ASSERT(PAGE_EXCL(pp));
@@ -645,6 +647,7 @@ page_clear_transient_ue(page_t *pp)
 		PR_MESSAGE(CE_WARN, 1, MSG_UE, pa);
 		errors = 1;
 	} else {
+		errors = 0;
 		for (wb = 0xff; wb > 0; wb--) {
 			for (i = 0; i < PAGESIZE; i++) {
 				kaddr[i] = wb;
@@ -690,7 +693,7 @@ page_retire_transient_ue(page_t *pp)
 	ASSERT(!hat_page_is_mapped(pp));
 
 	/*
-	 * If this page is a repeat offender, retire him under the
+	 * If this page is a repeat offender, retire it under the
 	 * "two strikes and you're out" rule. The caller is responsible
 	 * for scrubbing the page to try to clear the error.
 	 */
@@ -850,9 +853,8 @@ page_retire_incr_pend_count(void *datap)
 {
 	PR_INCR_KSTAT(pr_pending);
 
-	if ((datap == &kvp) || (datap == &zvp)) {
+	if (datap == &kvp || datap == &kvps[KV_ZVP] || datap == &kvps[KV_VVP])
 		PR_INCR_KSTAT(pr_pending_kas);
-	}
 }
 
 void
@@ -860,9 +862,8 @@ page_retire_decr_pend_count(void *datap)
 {
 	PR_DECR_KSTAT(pr_pending);
 
-	if ((datap == &kvp) || (datap == &zvp)) {
+	if (datap == &kvp || datap == &kvps[KV_ZVP] || datap == &kvps[KV_VVP])
 		PR_DECR_KSTAT(pr_pending_kas);
-	}
 }
 
 /*
@@ -1210,7 +1211,7 @@ page_retire_check_pp(page_t *pp, uint64_t *errors)
 	}
 
 	/*
-	 * We have magically arranged the bit values returned to fmd(1M)
+	 * We have magically arranged the bit values returned to fmd(8)
 	 * to line up with the FMA, MCE, and UE bits of the page_t.
 	 */
 	if (errors) {

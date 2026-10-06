@@ -22,6 +22,9 @@
  * Copyright 2009 Sun Microsystems, Inc.  All rights reserved.
  * Use is subject to license terms.
  */
+/*
+ * Copyright (c) 2016 by Delphix. All rights reserved.
+ */
 
 #include <string.h>
 #include <unistd.h>
@@ -266,7 +269,7 @@ dhcp_ipc_recv_reply(int fd, dhcp_ipc_reply_t **reply, int32_t timeout)
 {
 	/*
 	 * If the caller doesn't want to wait forever, and the amount of time
-	 * he wants to wait is expressible as an integer number of milliseconds
+	 * it wants to wait is expressible as an integer number of milliseconds
 	 * (as needed by the msg function), then we wait that amount of time
 	 * plus an extra two seconds for the daemon to do its work.  The extra
 	 * two seconds is arbitrary; it should allow plenty of time for the
@@ -435,7 +438,7 @@ dhcp_ipc_init(int *listen_fd)
 	/*
 	 * we use SO_REUSEADDR here since in the case where there
 	 * really is another daemon running that is using the agent's
-	 * port, bind(3N) will fail.  so we can't lose.
+	 * port, bind(3SOCKET) will fail.  so we can't lose.
 	 */
 
 	(void) setsockopt(*listen_fd, SOL_SOCKET, SO_REUSEADDR, &on,
@@ -474,7 +477,7 @@ dhcp_ipc_accept(int listen_fd, int *fd, int *is_priv)
 	/*
 	 * if we were extremely concerned with portability, we would
 	 * set the socket into nonblocking mode before doing the
-	 * accept(3N), since on BSD-based networking stacks, there is
+	 * accept(3SOCKET), since on BSD-based networking stacks, there is
 	 * a potential race that can occur if the socket which
 	 * connected to us performs a TCP RST before we accept, since
 	 * BSD handles this case entirely in the kernel and as a

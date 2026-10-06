@@ -24,25 +24,26 @@
  * Use is subject to license terms.
  */
 
-#pragma ident	"%Z%%M%	%I%	%E% SMI"
-
 #include "lint.h"
+#include "thr_uberdata.h"
 #include <sys/types.h>
 #include <ctype.h>
 #include <stdio.h>
 #include "base_conversion.h"
+#include <xlocale.h>
 #include <locale.h>
 
 void
 func_to_decimal(char **ppc, int nmax, int fortran_conventions,
-		decimal_record *pd, enum decimal_string_form *pform,
-		char **pechar, int (*pget)(void), int *pnread,
-		int (*punget)(int))
+    decimal_record *pd, enum decimal_string_form *pform,
+    char **pechar, int (*pget)(void), int *pnread,
+    int (*punget)(int))
 {
 	char	*cp = *ppc - 1;	/* last character seen */
 	char	*good = cp;	/* last character accepted */
 	int	current;	/* *cp or EOF */
 	int	nread = 0;	/* number of characters read so far */
+	locale_t loc = __curlocale();
 
 #define	NEXT \
 	if (nread < nmax) { \

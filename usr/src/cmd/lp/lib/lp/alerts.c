@@ -22,13 +22,12 @@
 /*
  * Copyright 1997 Sun Microsystems, Inc.  All rights reserved.
  * Use is subject to license terms.
+ * Copyright (c) 2016 by Delphix. All rights reserved.
  */
 
 /*	Copyright (c) 1984, 1986, 1987, 1988, 1989 AT&T	*/
 /*	  All Rights Reserved  	*/
 
-
-#pragma ident	"%Z%%M%	%I%	%E% SMI"	/* SVr4.0 1.17	*/
 /* EMACS_MODES: !fill, lnumb, !overwrite, !nodelete, !picture */
 
 #include "stdio.h"
@@ -73,7 +72,7 @@ static struct {
 /*
  * These are used to bracket the administrator's command, so that
  * we can find it easily. We're out of luck if the administrator
- * includes an identical phrase in his or her command.
+ * includes an identical phrase in their command.
  */
 #define ALRT_CMDSTART "## YOUR COMMAND STARTS HERE -- DON'T TOUCH ABOVE!!"
 #define ALRT_CMDEND   "## YOUR COMMAND ENDS HERE -- DON'T TOUCH BELOW!!"

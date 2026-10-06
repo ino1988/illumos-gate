@@ -22,6 +22,7 @@
 #
 # Copyright (c) 2010, Oracle and/or its affiliates. All rights reserved.
 #
+# Copyright (c) 2018, Joyent, Inc.
 
 LIBRARY = libsmp.a
 VERS = .1
@@ -36,31 +37,30 @@ include ../../../Makefile.lib
 include ../../Makefile.defs
 
 SRCS = $(OBJECTS:%.o=../common/%.c)
-C99MODE = $(C99_ENABLE)
+CSTD = $(CSTD_GNU99)
 CPPFLAGS += -I../common -I. -D_REENTRANT
 $(NOT_RELEASE_BUILD)CPPFLAGS += -DDEBUG
 CFLAGS += $(CCVERBOSE)
 
 CERRWARN += -_gcc=-Wno-type-limits
-CERRWARN += -_gcc=-Wno-uninitialized
+CERRWARN += $(CNOWARN_UNINIT)
+
+SMOFF += all_func_returns
 
 LDLIBS += \
 	-lumem \
 	-lc
-LIBS =		$(DYNLIB) $(LINTLIB)
+LIBS =		$(DYNLIB)
 ROOTLIBDIR =	$(ROOTSCSILIBDIR)
 ROOTLIBDIR64 =	$(ROOTSCSILIBDIR)/$(MACH64)
 
 CLEANFILES += \
 	../common/smp_errno.c
 
-$(LINTLIB) :=	SRCS = $(SRCDIR)/$(LINTSRC)
 
 .KEEP_STATE:
 
 all : $(LIBS)
-
-lint : lintcheck
 
 ../common/smp_errno.c: ../common/mkerrno.sh ../common/libsmp.h
 	sh ../common/mkerrno.sh < ../common/libsmp.h > $@

@@ -22,6 +22,7 @@
 #
 # Copyright (c) 1989 by Sun Microsystems, Inc.
 #
+# Copyright (c) 2018, Joyent, Inc.
 
 FSTYPE=		nfs
 TYPEPROG=	rquotad
@@ -38,11 +39,12 @@ CERRWARN += -_gcc=-Wno-implicit-function-declaration
 CERRWARN += -_gcc=-Wno-unused-variable
 LDLIBS += -lnsl
 
+# unknown type for func
+SMATCH=off
+
 $(TYPEPROG):	$(OBJS)
 		$(LINK.c) -o $@ $(LDLIBS) $(OBJS)
 		$(POST_PROCESS)
-
-lint:		lint_SRCS
 
 clean:
 		$(RM) $(OBJS) rquota_xdr.c

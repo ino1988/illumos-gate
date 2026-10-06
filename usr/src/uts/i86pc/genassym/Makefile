@@ -22,6 +22,7 @@
 # Copyright 2007 Sun Microsystems, Inc.  All rights reserved.
 # Use is subject to license terms.
 #
+# Copyright 2019 OmniOS Community Edition (OmniOSce) Association.
 #
 #	This makefile drives the production of assym.h through
 #	compile time intialized data.
@@ -73,8 +74,6 @@ clean:		$(CLEAN_DEPS)
 
 clobber:	$(CLOBBER_DEPS)
 
-clean.lint:
-
 install:	def
 
 CPPFLAGS += -I../../i86pc/io/ppm
@@ -83,8 +82,8 @@ CPPFLAGS += -I../../i86pc/io/ppm
 # Create assym.h
 #
 $(GENASSYM): $(GENASSYM_SRC)
-	$(NATIVECC) $(ALWAYS_DEFS) $(GENASSYM_DEFS) $(NATIVE_INC_PATH) \
-	   -o $@ $(GENASSYM_SRC)
+	$(NATIVECC) $(NATIVE_CFLAGS) $(ALWAYS_DEFS) $(GENASSYM_DEFS) \
+	   $(NATIVE_INC_PATH) -o $@ $(GENASSYM_SRC)
 
 $(ASSYM_H): $(OFFSETS_SRC) $(PLATFORM_OFFSETS_SRC) $(GENASSYM)
 	$(OFFSETS_CREATE) <$(OFFSETS_SRC) >$@

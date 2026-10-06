@@ -19,7 +19,7 @@
  * CDDL HEADER END
  */
 /*
- * Copyright 2014 Nexenta Systems, Inc.  All rights reserved.
+ * Copyright 2015 Nexenta Systems, Inc.  All rights reserved.
  *
  * Copyright (c) 2011 Gary Mills
  *
@@ -62,9 +62,26 @@ extern	long	strtol();
 
 extern	int	errno;
 
-#ifdef __STDC__
+char	*file_name;
+char	*option_d;
+char	*option_f;
+char	*option_l;
+char	*option_p;
+char	option_s;
+char	*option_t;
+char	*option_x;
+char	diag_msg;
+char	option_msg;
+int	need_newline;
+int	dev_expert;
+int	expert_mode;
+uint_t	cur_blksz;
+struct ctlr_info	*ctlr_list;
+struct disk_info	*disk_list;
+struct mctlr_list	*controlp;
+char	x86_devname[MAXNAMELEN];
+FILE	*data_file;
 
-/* Function prototypes for ANSI C Compilers */
 static void	usage(void);
 static int	sup_prxfile(void);
 static void	sup_setpath(void);
@@ -89,34 +106,6 @@ static void	sort_disk_list(void);
 static int	disk_name_compare(const void *, const void *);
 static void	make_controller_list(void);
 static void	check_for_duplicate_disknames(char *arglist[]);
-
-#else	/* __STDC__ */
-
-/* Function prototypes for non-ANSI C Compilers */
-static void	usage();
-static int	sup_prxfile();
-static void	sup_setpath();
-static void	sup_setdtype();
-static int	sup_change_spec();
-static void	sup_setpart();
-static void	search_for_logical_dev();
-static void	add_device_to_disklist();
-static int	disk_is_known();
-static void	datafile_error();
-static void	search_duplicate_dtypes();
-static void	search_duplicate_pinfo();
-static void	check_dtypes_for_inconsistency();
-static void	check_pinfo_for_inconsistency();
-static uint_t	str2blks();
-static int	str2cyls();
-static struct	chg_list *new_chg_list();
-static char	*get_physical_name();
-static void	sort_disk_list();
-static int	disk_name_compare();
-static void	make_controller_list();
-static void	check_for_duplicate_disknames();
-
-#endif	/* __STDC__ */
 
 #if defined(sparc)
 static char *other_ctlrs[] = {
@@ -150,7 +139,7 @@ static char	**search_path = NULL;
 
 static int name_represents_wholedisk(char *name);
 
-static void get_disk_name(int fd, char *disk_name);
+static void get_disk_name(int fd, char *disk_name, struct disk_info *disk_info);
 
 /*
  * This routine digests the options on the command line.  It returns
@@ -267,7 +256,7 @@ badopt:
 
 
 static void
-usage()
+usage(void)
 {
 	err_print("Usage:  format [-s][-d disk_name]");
 	err_print("[-t disk_type][-p partition_name]\n");
@@ -291,7 +280,7 @@ usage()
  * the problem is occurring.
  */
 void
-sup_init()
+sup_init(void)
 {
 	int		nopened_files = 0;
 	char		fname[MAXPATHLEN];
@@ -391,7 +380,7 @@ sup_init()
  * for the descriptor.  Return true if able to open the file.
  */
 static int
-sup_prxfile()
+sup_prxfile(void)
 {
 	int	status;
 	TOKEN	token;
@@ -466,7 +455,7 @@ sup_prxfile()
  * enable supporting multiple search path definitions.
  */
 static void
-sup_setpath()
+sup_setpath(void)
 {
 	TOKEN		token;
 	TOKEN		cleaned;
@@ -530,13 +519,13 @@ sup_setpath()
  * controller type.
  */
 static void
-sup_setdtype()
+sup_setdtype(void)
 {
 	TOKEN	token, cleaned, ident;
 	int	val, status, i;
 	ulong_t	flags = 0;
 	struct	disk_type *dtype, *type;
-	struct	ctlr_type *ctype;
+	struct	ctlr_type *ctype = NULL;
 	char	*dtype_name, *ptr;
 	struct	mctlr_list	*mlp;
 
@@ -758,6 +747,7 @@ sup_setdtype()
 			datafile_error("Unknown keyword '%s'", ident);
 		}
 	}
+
 	/*
 	 * Check to be sure all the necessary attributes have been defined.
 	 * If any are missing, it's an error.  Also, log options for later
@@ -932,7 +922,7 @@ sup_change_spec(struct disk_type *disk, char *id)
  * controller type.
  */
 static void
-sup_setpart()
+sup_setpart(void)
 {
 	TOKEN	token, cleaned, disk, ctlr, ident;
 	struct	disk_type *dtype = NULL;
@@ -1546,9 +1536,21 @@ search_for_logical_dev(char *devname)
  * Get the disk name from the inquiry data
  */
 static void
-get_disk_name(int fd, char *disk_name)
+get_disk_name(int fd, char *disk_name, struct disk_info *disk_info)
 {
 	struct scsi_inquiry	inquiry;
+	char			*vid, *pid, *rid;
+
+	if (get_disk_inquiry_prop(disk_info->devfs_name, &vid, &pid, &rid)
+	    == 0) {
+		(void) snprintf(disk_name, MAXNAMELEN - 1, "%s-%s-%s",
+		    vid, pid, rid);
+		free(vid);
+		free(pid);
+		free(rid);
+
+		return;
+	}
 
 	if (uscsi_inquiry(fd, (char *)&inquiry, sizeof (inquiry))) {
 		if (option_msg)
@@ -1880,7 +1882,7 @@ add_device_to_disklist(char *devname, char *devpath)
 	if (search_disk->label_type == L_TYPE_SOLARIS) {
 		status = read_label(search_file, &search_label);
 	} else {
-		status = read_efi_label(search_file, &efi_info);
+		status = read_efi_label(search_file, &efi_info, search_disk);
 	}
 	/*
 	 * If reading the label failed, and this is a SCSI
@@ -1888,7 +1890,9 @@ add_device_to_disklist(char *devname, char *devpath)
 	 * Configuration.
 	 */
 	ctlr = search_ctlr->ctlr_ctype;
-	if ((status == -1) && (ctlr->ctype_ctype == DKC_SCSI_CCS)) {
+	if ((status == -1) &&
+	    (ctlr->ctype_ctype == DKC_SCSI_CCS ||
+	    ctlr->ctype_ctype == DKC_BLKDEV)) {
 		if (option_msg && diag_msg) {
 			err_print("%s: attempting auto configuration\n",
 			    search_disk->disk_name);
@@ -1905,8 +1909,10 @@ add_device_to_disklist(char *devname, char *devpath)
 				status = 0;
 				search_disk->disk_flags |=
 				    (DSK_LABEL_DIRTY | DSK_AUTO_CONFIG);
+				break;
 			}
-			break;
+			/* With SOLARIS label type failed, try EFI. */
+			/* FALLTHROUGH */
 		case (L_TYPE_EFI):
 			efi_disk = auto_efi_sense(search_file, &efi_info);
 			if (efi_disk != NULL) {
@@ -1914,6 +1920,7 @@ add_device_to_disklist(char *devname, char *devpath)
 				 * Auto config worked, so we now have
 				 * a valid label for the disk.
 				 */
+				search_disk->label_type = L_TYPE_EFI;
 				status = 0;
 				search_disk->disk_flags |=
 				    (DSK_LABEL_DIRTY | DSK_AUTO_CONFIG);
@@ -1964,9 +1971,20 @@ add_device_to_disklist(char *devname, char *devpath)
 		}
 		search_dtype->dtype_next = NULL;
 
-		(void) strlcpy(search_dtype->vendor, efi_info.vendor, 9);
-		(void) strlcpy(search_dtype->product, efi_info.product, 17);
-		(void) strlcpy(search_dtype->revision, efi_info.revision, 5);
+		search_dtype->vendor = strdup(efi_info.vendor);
+		search_dtype->product = strdup(efi_info.product);
+		search_dtype->revision = strdup(efi_info.revision);
+
+		if (search_dtype->vendor == NULL ||
+		    search_dtype->product == NULL ||
+		    search_dtype->revision == NULL) {
+			free(search_dtype->vendor);
+			free(search_dtype->product);
+			free(search_dtype->revision);
+			free(search_dtype);
+			goto out;
+		}
+
 		search_dtype->capacity = efi_info.capacity;
 		search_disk->disk_type = search_dtype;
 
@@ -1985,18 +2003,17 @@ add_device_to_disklist(char *devname, char *devpath)
 		for (i = 0; i < search_parts->etoc->efi_nparts; i++) {
 			if (search_parts->etoc->efi_parts[i].p_tag ==
 			    V_RESERVED) {
-				if (search_parts->etoc->efi_parts[i].p_name) {
-					bcopy(search_parts->etoc->efi_parts[i]
-					    .p_name, search_disk->v_volume,
-					    LEN_DKL_VVOL);
-				} else {
-					bzero(search_disk->v_volume,
-					    LEN_DKL_VVOL);
-				}
+				bcopy(search_parts->etoc->efi_parts[i].p_name,
+				    search_disk->v_volume, LEN_DKL_VVOL);
 				break;
 			}
 		}
+	out:
 		(void) close(search_file);
+
+		free(efi_info.vendor);
+		free(efi_info.product);
+		free(efi_info.revision);
 		return;
 	}
 
@@ -2035,7 +2052,8 @@ add_device_to_disklist(char *devname, char *devpath)
 		search_dtype->dtype_next = NULL;
 		if (strncmp(search_label.dkl_asciilabel, "DEFAULT",
 		    strlen("DEFAULT")) == 0) {
-			(void) get_disk_name(search_file, disk_name);
+			(void) get_disk_name(search_file, disk_name,
+			    search_disk);
 			search_dtype->dtype_asciilabel = (char *)
 			    zalloc(strlen(disk_name) + 1);
 			(void) strcpy(search_dtype->dtype_asciilabel,
@@ -2189,13 +2207,11 @@ disk_is_known(struct dk_cinfo *dkinfo)
  * in the disk label.
  */
 int
-dtype_match(label, dtype)
-	register struct dk_label *label;
-	register struct disk_type *dtype;
+dtype_match(struct dk_label *label, struct disk_type *dtype)
 {
 
 	if (dtype->dtype_asciilabel == NULL) {
-	    return (0);
+		return (0);
 	}
 
 	/*
@@ -2220,9 +2236,7 @@ dtype_match(label, dtype)
  * in the disk label.
  */
 int
-parts_match(label, pinfo)
-	register struct dk_label *label;
-	register struct partition_info *pinfo;
+parts_match(struct dk_label *label, struct partition_info *pinfo)
 {
 	int i;
 
@@ -2257,10 +2271,10 @@ parts_match(label, pinfo)
 		return (0);
 	for (i = 0; i < NDKMAP; i++) {
 		if (label->dkl_vtoc.v_part[i].p_tag !=
-				pinfo->vtoc.v_part[i].p_tag)
+		    pinfo->vtoc.v_part[i].p_tag)
 			return (0);
 		if (label->dkl_vtoc.v_part[i].p_flag !=
-				pinfo->vtoc.v_part[i].p_flag)
+		    pinfo->vtoc.v_part[i].p_flag)
 			return (0);
 	}
 	/*
@@ -2361,7 +2375,7 @@ datafile_error(char *errmsg, char *token)
  * That may or may not be a problem...
  */
 static void
-search_duplicate_dtypes()
+search_duplicate_dtypes(void)
 {
 	struct disk_type	*dp1;
 	struct disk_type	*dp2;
@@ -2379,7 +2393,7 @@ search_duplicate_dtypes()
 			}
 			dp1 = dp1->dtype_next;
 		}
-	mlp = mlp->next;
+		mlp = mlp->next;
 	}
 }
 
@@ -2394,7 +2408,7 @@ search_duplicate_dtypes()
  * That may or may not be a problem...
  */
 static void
-search_duplicate_pinfo()
+search_duplicate_pinfo(void)
 {
 	struct disk_type	*dp;
 	struct partition_info	*pp1;
@@ -2417,7 +2431,7 @@ search_duplicate_pinfo()
 			}
 			dp = dp->dtype_next;
 		}
-	mlp = mlp->next;
+		mlp = mlp->next;
 	}
 }
 
@@ -2428,9 +2442,7 @@ search_duplicate_pinfo()
  * If so, print an error message and abort.
  */
 static void
-check_dtypes_for_inconsistency(dp1, dp2)
-	struct disk_type	*dp1;
-	struct disk_type	*dp2;
+check_dtypes_for_inconsistency(struct disk_type	*dp1, struct disk_type *dp2)
 {
 	int		i;
 	int		result;
@@ -2491,13 +2503,13 @@ check_dtypes_for_inconsistency(dp1, dp2)
 
 	if (result) {
 		err_print("Inconsistent definitions for disk type '%s'\n",
-			dp1->dtype_asciilabel);
+		    dp1->dtype_asciilabel);
 		if (dp1->dtype_filename != NULL &&
-					dp2->dtype_filename != NULL) {
+		    dp2->dtype_filename != NULL) {
 			err_print("%s (%d) - %s (%d)\n",
-				dp1->dtype_filename, dp1->dtype_lineno,
-				dp2->dtype_filename, dp2->dtype_lineno);
-			}
+			    dp1->dtype_filename, dp1->dtype_lineno,
+			    dp2->dtype_filename, dp2->dtype_lineno);
+		}
 		fullabort();
 	}
 }
@@ -2509,9 +2521,8 @@ check_dtypes_for_inconsistency(dp1, dp2)
  * If so, print an error message and abort.
  */
 static void
-check_pinfo_for_inconsistency(pp1, pp2)
-	struct partition_info	*pp1;
-	struct partition_info	*pp2;
+check_pinfo_for_inconsistency(struct partition_info *pp1,
+    struct partition_info *pp2)
 {
 	int		i;
 	int		result;
@@ -2559,13 +2570,13 @@ check_pinfo_for_inconsistency(pp1, pp2)
 
 	if (result) {
 		err_print("Inconsistent definitions for partition type '%s'\n",
-			pp1->pinfo_name);
+		    pp1->pinfo_name);
 		if (pp1->pinfo_filename != NULL &&
-					pp2->pinfo_filename != NULL) {
+		    pp2->pinfo_filename != NULL) {
 			err_print("%s (%d) - %s (%d)\n",
-				pp1->pinfo_filename, pp1->pinfo_lineno,
-				pp2->pinfo_filename, pp2->pinfo_lineno);
-			}
+			    pp1->pinfo_filename, pp1->pinfo_lineno,
+			    pp2->pinfo_filename, pp2->pinfo_lineno);
+		}
 		fullabort();
 	}
 }
@@ -2811,7 +2822,7 @@ exit:
 
 
 static void
-sort_disk_list()
+sort_disk_list(void)
 {
 	int			n;
 	struct disk_info	**disks;
@@ -2906,7 +2917,7 @@ disk_name_compare(
 }
 
 static void
-make_controller_list()
+make_controller_list(void)
 {
 	int	x;
 	struct	mctlr_list	*ctlrp;
@@ -2923,8 +2934,7 @@ make_controller_list()
 }
 
 static void
-check_for_duplicate_disknames(arglist)
-char *arglist[];
+check_for_duplicate_disknames(char *arglist[])
 {
 	char			*directory = "/dev/rdsk/";
 	char			**disklist;
@@ -2945,9 +2955,9 @@ char *arglist[];
 			 *  disk list.
 			 */
 			for (i = 0; i < diskno; i++) {
-			    canonicalize_name(t, arglist[i]);
-			    if (strncmp(s, t, strlen(t)) == 0)
-				break;
+				canonicalize_name(t, arglist[i]);
+				if (strncmp(s, t, strlen(t)) == 0)
+					break;
 			}
 			if (i != diskno)
 				continue;
@@ -2989,6 +2999,7 @@ name_represents_wholedisk(char	*name)
 			else
 				return (1);
 		}
+
 		(void) strcpy(localname, symname);
 	}
 	return (0);

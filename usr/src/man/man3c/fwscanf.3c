@@ -1,19 +1,53 @@
-'\" te
+.\"
+.\" Sun Microsystems, Inc. gratefully acknowledges The Open Group for
+.\" permission to reproduce portions of its copyrighted documentation.
+.\" Original documentation from The Open Group can be obtained online at
+.\" http://www.opengroup.org/bookstore/.
+.\"
+.\" The Institute of Electrical and Electronics Engineers and The Open
+.\" Group, have given us permission to reprint portions of their
+.\" documentation.
+.\"
+.\" In the following statement, the phrase ``this text'' refers to portions
+.\" of the system documentation.
+.\"
+.\" Portions of this text are reprinted and reproduced in electronic form
+.\" in the SunOS Reference Manual, from IEEE Std 1003.1, 2004 Edition,
+.\" Standard for Information Technology -- Portable Operating System
+.\" Interface (POSIX), The Open Group Base Specifications Issue 6,
+.\" Copyright (C) 2001-2004 by the Institute of Electrical and Electronics
+.\" Engineers, Inc and The Open Group.  In the event of any discrepancy
+.\" between these versions and the original IEEE and The Open Group
+.\" Standard, the original IEEE and The Open Group Standard is the referee
+.\" document.  The original Standard can be obtained online at
+.\" http://www.opengroup.org/unix/online.html.
+.\"
+.\" This notice shall appear on any product containing this material.
+.\"
+.\" The contents of this file are subject to the terms of the
+.\" Common Development and Distribution License (the "License").
+.\" You may not use this file except in compliance with the License.
+.\"
+.\" You can obtain a copy of the license at usr/src/OPENSOLARIS.LICENSE
+.\" or http://www.opensolaris.org/os/licensing.
+.\" See the License for the specific language governing permissions
+.\" and limitations under the License.
+.\"
+.\" When distributing Covered Code, include this CDDL HEADER in each
+.\" file and include the License file at usr/src/OPENSOLARIS.LICENSE.
+.\" If applicable, add the following below this CDDL HEADER, with the
+.\" fields enclosed by brackets "[]" replaced with your own identifying
+.\" information: Portions Copyright [yyyy] [name of copyright owner]
+.\"
+.\"
 .\" Copyright (c) 1992, X/Open Company Limited. All Rights Reserved.
 .\" Portions Copyright (c) 2008, Sun Microsystems, Inc.  All Rights Reserved.
-.\" Sun Microsystems, Inc. gratefully acknowledges The Open Group for permission to reproduce portions of its copyrighted documentation. Original documentation from The Open Group can be obtained online at
-.\" http://www.opengroup.org/bookstore/.
-.\" The Institute of Electrical and Electronics Engineers and The Open Group, have given us permission to reprint portions of their documentation. In the following statement, the phrase "this text" refers to portions of the system documentation. Portions of this text are reprinted and reproduced in electronic form in the Sun OS Reference Manual, from IEEE Std 1003.1, 2004 Edition, Standard for Information Technology -- Portable Operating System Interface (POSIX), The Open Group Base Specifications Issue 6, Copyright (C) 2001-2004 by the Institute of Electrical and Electronics Engineers, Inc and The Open Group. In the event of any discrepancy between these versions and the original IEEE and The Open Group Standard, the original IEEE and The Open Group Standard is the referee document. The original Standard can be obtained online at http://www.opengroup.org/unix/online.html.
-.\"  This notice shall appear on any product containing this material.
-.\" The contents of this file are subject to the terms of the Common Development and Distribution License (the "License").  You may not use this file except in compliance with the License.
-.\" You can obtain a copy of the license at usr/src/OPENSOLARIS.LICENSE or http://www.opensolaris.org/os/licensing.  See the License for the specific language governing permissions and limitations under the License.
-.\" When distributing Covered Code, include this CDDL HEADER in each file and include the License file at usr/src/OPENSOLARIS.LICENSE.  If applicable, add the following below this CDDL HEADER, with the fields enclosed by brackets "[]" replaced with your own identifying information: Portions Copyright [yyyy] [name of copyright owner]
-.TH FWSCANF 3C "Jul 10, 2008"
+.\"
+.TH FWSCANF 3C "Feb 17, 2023"
 .SH NAME
 fwscanf, wscanf, swscanf, vfwscanf, vwscanf, vswscanf \- convert formatted
 wide-character input
 .SH SYNOPSIS
-.LP
 .nf
 #include <stdio.h>
 #include <wchar.h>
@@ -54,8 +88,6 @@ wide-character input
 .fi
 
 .SH DESCRIPTION
-.sp
-.LP
 The \fBfwscanf()\fR function reads from the named input \fIstream\fR.
 .sp
 .LP
@@ -69,7 +101,7 @@ The \fBvfwscanf()\fR, \fBvswscanf()\fR, and \fBvwscanf()\fR functions are
 equivalent to the \fBfwscanf()\fR, \fBswscanf()\fR, and \fBwscanf()\fR
 functions, respectively, except that instead of being called with a variable
 number of arguments, they are called with an argument list as defined by the
-<\fBstdarg.h\fR> header . These functions do not invoke the \fBva_end()\fR
+<\fBstdarg.h\fR> header. These functions do not invoke the \fBva_end()\fR
 macro. Applications using these functions should call \fBva_end\fR(\fIap\fR)
 afterwards to clean up.
 .sp
@@ -377,7 +409,7 @@ Matches an optionally signed floating-point number, whose format is the same as
 expected for the subject sequence of \fBwcstod\fR(3C). In the absence of a size
 modifier, the corresponding argument must be a pointer to \fBfloat\fR. The
 \fBe\fR, \fBf\fR, and \fBg\fR specifiers match hexadecimal floating point
-values only in C99/SUSv3 (see \fBstandards\fR(5)) mode, but the \fBa\fR
+values only in C99/SUSv3 (see \fBstandards\fR(7)) mode, but the \fBa\fR
 specifier always matches hexadecimal floating point values.
 .sp
 These conversion specifiers match any subject sequence accepted by
@@ -557,8 +589,6 @@ field will be marked for update by the first successful execution of
 \fIstream\fR that returns data not supplied by a prior call to
 \fBungetc\fR(3C).
 .SH RETURN VALUES
-.sp
-.LP
 Upon successful completion, these functions return the number of successfully
 matched and assigned input items; this number can be 0 in the event of an early
 matching failure.  If the input ends before the first matching failure or
@@ -566,8 +596,6 @@ conversion, \fBEOF\fR is returned.  If a read error occurs the error indicator
 for the stream is set, \fBEOF\fR is returned, and \fBerrno\fR is set to
 indicate the error.
 .SH ERRORS
-.sp
-.LP
 For the conditions under which the \fBfwscanf()\fR functions will fail and may
 fail, refer to \fBfgetwc\fR(3C).
 .sp
@@ -592,12 +620,9 @@ There are insufficient arguments.
 .RE
 
 .SH USAGE
-.sp
-.LP
 In format strings containing the \fB%\fR form of conversion specifications,
 each argument in the argument list is used exactly once.
 .SH EXAMPLES
-.LP
 \fBExample 1 \fR\fBwscanf()\fR example
 .sp
 .LP
@@ -657,9 +682,7 @@ will assign 56 to \fIi\fR, 789.0 to \fIx\fR, skip 0123, and place the string
 character \fBa\fR.
 
 .SH ATTRIBUTES
-.sp
-.LP
-See \fBattributes\fR(5) for descriptions of the following attributes:
+See \fBattributes\fR(7) for descriptions of the following attributes:
 .sp
 
 .sp
@@ -673,20 +696,31 @@ Interface Stability	Committed
 _
 MT-Level	MT-Safe
 _
-Standard	See \fBstandards\fR(5).
+Standard	See \fBstandards\fR(7).
 .TE
 
 .SH SEE ALSO
-.sp
-.LP
-\fBfgetc\fR(3C), \fBfgets\fR(3C), \fBfgetwc\fR(3C), \fBfgetws\fR(3C),
-\fBfread\fR(3C), \fBfscanf\fR(3C), \fBfwprintf\fR(3C), \fBgetc\fR(3C),
-\fBgetchar\fR(3C), \fBgets\fR(3C), \fBgetwc\fR(3C), \fBgetwchar\fR(3C),
-\fBsetlocale\fR(3C), \fBstrtod\fR(3C), \fBwcrtomb\fR(3C), \fBwcstod\fR(3C),
-\fBwcstol\fR(3C), \fBwcstoul\fR(3C), \fBattributes\fR(5), \fBstandards\fR(5)
+.BR fgetc (3C),
+.BR fgets (3C),
+.BR fgetwc (3C),
+.BR fgetws (3C),
+.BR fread (3C),
+.BR fscanf (3C),
+.BR fwprintf (3C),
+.BR getc (3C),
+.BR getchar (3C),
+.BR gets (3C),
+.BR getwc (3C),
+.BR getwchar (3C),
+.BR setlocale (3C),
+.BR strtod (3C),
+.BR wcrtomb (3C),
+.BR wcstod (3C),
+.BR wcstol (3C),
+.BR wcstoul (3C),
+.BR attributes (7),
+.BR standards (7)
 .SH NOTES
-.sp
-.LP
 The behavior of the conversion specifier "%%" has changed for all of the
 functions described on this manual page. Previously the "%%" specifier accepted
 a "%" character from input only if there were no preceding whitespace

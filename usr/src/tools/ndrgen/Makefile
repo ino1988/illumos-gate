@@ -25,31 +25,30 @@
 
 PROG=	ndrgen ndrgen1
 
-MAN1FILES=	ndrgen.1
+MAN1ONBLDFILES=	ndrgen.1onbld
 
 OBJS=	ndr_main.o ndr_lex.o ndr_anal.o \
 	ndr_gen.o ndr_parse.o ndr_print.o
-SRCS=	$(OBJS:%.o=%.c)
 
 include ../Makefile.tools
 
 CFLAGS += $(CCVERBOSE)
-CERRWARN += -_gcc=-Wno-uninitialized
-CERRWARN += -_gcc=-Wno-unused
+CERRWARN += $(CNOWARN_UNINIT)
+
+# because of labels from yacc
+ndr_parse.o := CERRWARN += -_gcc=-Wno-unused-label
 
 CLEANFILES += $(OBJS) y.tab.c y.tab.h
 
-$(ROOTONBLDMAN1FILES) := FILEMODE=      644
+$(ROOTONBLDMAN1ONBLDFILES) := FILEMODE=      644
 
 .KEEP_STATE:
 
 .PARALLEL: $(OBJS)
 
-all:	$(PROG) $(MAN1FILES)
+all:	$(PROG) $(MAN1ONBLDFILES)
 
-install: all .WAIT $(ROOTONBLDMACHPROG) $(ROOTONBLDMAN1FILES)
-
-lint:	lint_SRCS
+install: all .WAIT $(ROOTONBLDMACHPROG) $(ROOTONBLDMAN1ONBLDFILES)
 
 clean:
 	$(RM) $(CLEANFILES)

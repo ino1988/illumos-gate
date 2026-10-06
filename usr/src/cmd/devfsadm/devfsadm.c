@@ -20,7 +20,11 @@
  */
 
 /*
+ * Copyright 2016 Toomas Soome <tsoome@me.com>
+ * Copyright 2016 Nexenta Systems, Inc.  All rights reserved.
  * Copyright (c) 1998, 2010, Oracle and/or its affiliates. All rights reserved.
+ * Copyright 2019, Joyent, Inc.
+ * Copyright 2026 Oxide Computer Company
  */
 
 /*
@@ -375,7 +379,7 @@ main(int argc, char *argv[])
 			detachfromtty();
 			(void) cond_init(&cv, USYNC_THREAD, 0);
 			(void) mutex_init(&count_lock, USYNC_THREAD, 0);
-			if (thr_create(NULL, NULL,
+			if (thr_create(NULL, 0,
 			    (void *(*)(void *))instance_flush_thread,
 			    NULL, THR_DETACHED, NULL) != 0) {
 				err_print(CANT_CREATE_THREAD, "daemon",
@@ -387,8 +391,7 @@ main(int argc, char *argv[])
 			/* start the minor_fini_thread */
 			(void) mutex_init(&minor_fini_mutex, USYNC_THREAD, 0);
 			(void) cond_init(&minor_fini_cv, USYNC_THREAD, 0);
-			if (thr_create(NULL, NULL,
-			    (void *(*)(void *))minor_fini_thread,
+			if (thr_create(NULL, 0, minor_fini_thread,
 			    NULL, THR_DETACHED, NULL)) {
 				err_print(CANT_CREATE_THREAD, "minor_fini",
 				    strerror(errno));
@@ -503,7 +506,7 @@ set_lock_root(void)
 static void
 parse_args(int argc, char *argv[])
 {
-	char opt;
+	int opt;
 	char get_linkcompat_opts = FALSE;
 	char *compat_class;
 	int num_aliases = 0;
@@ -597,7 +600,7 @@ parse_args(int argc, char *argv[])
 		    getopt(argc, argv, "a:bc:dfi:m:np:R:r:suvV:x")) != EOF) {
 			switch (opt) {
 			case 'a':
-				ap = calloc(sizeof (struct aliases), 1);
+				ap = calloc(1, sizeof (struct aliases));
 				ap->a_name = dequote(optarg);
 				len = strlen(ap->a_name) + 1;
 				if (len > MAXMODCONFNAME) {
@@ -654,16 +657,16 @@ parse_args(int argc, char *argv[])
 				 */
 				root_dir = s_strdup(optarg);
 				if (zone_pathcheck(root_dir) !=
-				    DEVFSADM_SUCCESS)
-				devfsadm_exit(devfsadm_copy());
-				/*NOTREACHED*/
+				    DEVFSADM_SUCCESS) {
+					devfsadm_exit(devfsadm_copy());
+				}
 				break;
 			case 'r':
 				devices_dir = s_strdup(optarg);
 				if (zone_pathcheck(devices_dir) !=
-				    DEVFSADM_SUCCESS)
+				    DEVFSADM_SUCCESS) {
 					devfsadm_exit(1);
-					/*NOTREACHED*/
+				}
 				break;
 			case 's':
 				/*
@@ -675,7 +678,7 @@ parse_args(int argc, char *argv[])
 				break;
 			case 'u':
 				/*
-				 * Invoked via update_drv(1m) to update
+				 * Invoked via update_drv(8) to update
 				 * the kernel's driver/alias binding
 				 * when removing one or more aliases.
 				 */
@@ -702,7 +705,7 @@ parse_args(int argc, char *argv[])
 		}
 
 		if (bind == TRUE) {
-			if ((mc.major == -1) || (mc.drvname[0] == NULL)) {
+			if ((mc.major == -1) || (mc.drvname[0] == '\0')) {
 				err_print(MAJOR_AND_B_FLAG);
 				devfsadm_exit(1);
 				/*NOTREACHED*/
@@ -2071,6 +2074,16 @@ class_ok(char *class)
 		return (DEVFSADM_SUCCESS);
 	}
 
+	/*
+	 * Some create tabs operate on multiple classes of devices because the
+	 * kernel doesn't have a good way for a driver to indicate that a
+	 * particular minor's class is different from that of the dev_info_t
+	 * it belongs to. As such, we'll always fail to match those here.
+	 */
+	if (class == NULL) {
+		return (DEVFSADM_FAILURE);
+	}
+
 	for (i = 0; i < num_classes; i++) {
 		if (strcmp(class, classes[i]) == 0) {
 			return (DEVFSADM_SUCCESS);
@@ -2396,9 +2409,8 @@ load_module(char *mname, char *cdir)
  * within 'timeout' secs the minor_fini_thread needs to do a SYNC_STATE
  * so that we still call the minor_fini routines.
  */
-/*ARGSUSED*/
-static void
-minor_fini_thread(void *arg)
+static void *
+minor_fini_thread(void *arg __unused)
 {
 	timestruc_t	abstime;
 
@@ -2431,6 +2443,7 @@ minor_fini_thread(void *arg)
 
 		(void) mutex_lock(&minor_fini_mutex);
 	}
+	return (NULL);
 }
 
 
@@ -2798,6 +2811,7 @@ create_link_common(char *devlink, char *contents, int *exists)
 				case EINVAL:
 					/* not a symlink, remove and create */
 					s_unlink(devlink);
+					/* FALLTHROUGH */
 				default:
 					/* maybe it didn't exist at all */
 					try = CREATE_LINK;
@@ -3289,7 +3303,7 @@ rm_parent_dir_if_empty(char *pathname)
  */
 void
 devfsadm_rm_stale_links(char *dir_re, char *valid_link, di_node_t node,
-			di_minor_t minor)
+    di_minor_t minor)
 {
 	link_t *link;
 	linkhead_t *head;
@@ -3714,10 +3728,10 @@ do_inst_sync(char *filename, char *instfilename)
  * safely, the database is flushed to a temporary file, then moved into place.
  *
  * The following files are used during this process:
- * 	/etc/path_to_inst:	The path_to_inst file
- * 	/etc/path_to_inst.<pid>: Contains data flushed from the kernel
- * 	/etc/path_to_inst.old:  The backup file
- * 	/etc/path_to_inst.old.<pid>: Temp file for creating backup
+ *	/etc/path_to_inst:	The path_to_inst file
+ *	/etc/path_to_inst.<pid>: Contains data flushed from the kernel
+ *	/etc/path_to_inst.old:  The backup file
+ *	/etc/path_to_inst.old.<pid>: Temp file for creating backup
  *
  */
 static void
@@ -4305,11 +4319,11 @@ hot_cleanup(char *node_path, char *minor_name, char *ev_subclass,
 				(void) snprintf(rmlink, sizeof (rmlink),
 				    "%s", link->devlink);
 				if (rm->remove->flags & RM_NOINTERPOSE) {
-					((void (*)(char *))
-					    (rm->remove->callback_fcn))(rmlink);
+					(void)
+					    (rm->remove->callback_fcn)(rmlink);
 				} else {
-					ret = ((int (*)(char *))
-					    (rm->remove->callback_fcn))(rmlink);
+					ret =
+					    (rm->remove->callback_fcn)(rmlink);
 					if (ret == DEVFSADM_TERMINATE)
 						nfphash_insert(rmlink);
 				}
@@ -4449,11 +4463,11 @@ matching_dev(char *devpath, void *data)
 
 		vprint(RECURSEDEV_MID, "%scalling callback %s\n", fcn, devpath);
 		if (cleanup_data->rm->remove->flags & RM_NOINTERPOSE)
-			((void (*)(char *))
-			    (cleanup_data->rm->remove->callback_fcn))(devpath);
+			(void)
+			    (cleanup_data->rm->remove->callback_fcn)(devpath);
 		else {
-			ret = ((int (*)(char *))
-			    (cleanup_data->rm->remove->callback_fcn))(devpath);
+			ret =
+			    (cleanup_data->rm->remove->callback_fcn)(devpath);
 			if (ret == DEVFSADM_TERMINATE) {
 				/*
 				 * We want no further remove processing for
@@ -4813,7 +4827,7 @@ get_component(char *str, const char *comp_str)
  * rules[] is an array of  devfsadm_enumerate_t structures which defines
  * the enumeration rules to be used for a specified set of links in /dev.
  * The set of links is specified through regular expressions (of the flavor
- * described in regex(5)). These regular expressions are used to determine
+ * described in regex(7)). These regular expressions are used to determine
  * the set of links in /dev to examine. The last path component in these
  * regular expressions MUST contain a parenthesized subexpression surrounding
  * the RE which is to be considered the enumerating component. The subexp
@@ -4837,18 +4851,19 @@ get_component(char *str, const char *comp_str)
  */
 int
 devfsadm_enumerate_int(char *devfs_path, int index, char **buf,
-			devfsadm_enumerate_t rules[], int nrules)
+    devfsadm_enumerate_t rules[], int nrules)
 {
 	return (find_enum_id(rules, nrules,
 	    devfs_path, index, "0", INTEGER, buf, 0));
 }
 
 int
-disk_enumerate_int(char *devfs_path, int index, char **buf,
-    devfsadm_enumerate_t rules[], int nrules)
+ctrl_enumerate_int(char *devfs_path, int index, char **buf,
+    devfsadm_enumerate_t rules[], int nrules, int multiple,
+    boolean_t scsi_vhci)
 {
 	return (find_enum_id(rules, nrules,
-	    devfs_path, index, "0", INTEGER, buf, 1));
+	    devfs_path, index, scsi_vhci ? "0" : "1", INTEGER, buf, multiple));
 }
 
 /*
@@ -4857,7 +4872,7 @@ disk_enumerate_int(char *devfs_path, int index, char **buf,
  */
 static int
 devfsadm_enumerate_int_start(char *devfs_path, int index, char **buf,
-		devfsadm_enumerate_t rules[], int nrules, char *start)
+    devfsadm_enumerate_t rules[], int nrules, char *start)
 {
 	return (find_enum_id(rules, nrules,
 	    devfs_path, index, start, INTEGER, buf, 0));
@@ -4869,7 +4884,7 @@ devfsadm_enumerate_int_start(char *devfs_path, int index, char **buf,
  */
 int
 devfsadm_enumerate_char(char *devfs_path, int index, char **buf,
-			devfsadm_enumerate_t rules[], int nrules)
+    devfsadm_enumerate_t rules[], int nrules)
 {
 	return (find_enum_id(rules, nrules,
 	    devfs_path, index, "a", LETTER, buf, 0));
@@ -4881,7 +4896,7 @@ devfsadm_enumerate_char(char *devfs_path, int index, char **buf,
  */
 int
 devfsadm_enumerate_char_start(char *devfs_path, int index, char **buf,
-	devfsadm_enumerate_t rules[], int nrules, char *start)
+    devfsadm_enumerate_t rules[], int nrules, char *start)
 {
 	return (find_enum_id(rules, nrules,
 	    devfs_path, index, start, LETTER, buf, 0));
@@ -4898,8 +4913,8 @@ devfsadm_enumerate_char_start(char *devfs_path, int index, char **buf,
  */
 static int
 find_enum_id(devfsadm_enumerate_t rules[], int nrules,
-	char *devfs_path, int index, char *min, int type, char **buf,
-	int multiple)
+    char *devfs_path, int index, char *min, int type, char **buf,
+    int multiple)
 {
 	numeral_t *matchnp;
 	numeral_t *numeral;
@@ -4999,7 +5014,7 @@ find_enum_id(devfsadm_enumerate_t rules[], int nrules,
  */
 static int
 lookup_enum_cache(numeral_set_t *set, char *cmp_str,
-	devfsadm_enumerate_t rules[], int index, numeral_t **matchnpp)
+    devfsadm_enumerate_t rules[], int index, numeral_t **matchnpp)
 {
 	int matchcount = 0, rv = -1;
 	int uncached;
@@ -5190,7 +5205,6 @@ get_enum_cache(devfsadm_enumerate_t rules[], int nrules)
 			vprint(RSRV_MID, "parsing rule RE: %s\n", path_left);
 			ret = enumerate_parse(entry->er_file, path_left,
 			    setp, rules, i);
-			free(path_left);
 			if (ret == 1) {
 				/*
 				 * We found the reserved ID for this entry.
@@ -5199,8 +5213,10 @@ get_enum_cache(devfsadm_enumerate_t rules[], int nrules)
 				 */
 				vprint(RSRV_MID, "found rsv ID: rstring: %s "
 				    "rule RE: %s\n", entry->er_file, path_left);
+				free(path_left);
 				break;
 			}
+			free(path_left);
 		}
 	}
 
@@ -5302,7 +5318,8 @@ new_id(numeral_t *numeral, int type, char *min)
 
 	if (type == LETTER) {
 
-		char letter[26], i;
+		char letter[26];
+		int i;
 
 		if (numeral == NULL) {
 			return (s_strdup(min));
@@ -5390,7 +5407,7 @@ new_id(numeral_t *numeral, int type, char *min)
 
 static int
 enumerate_parse(char *rsvstr, char *path_left, numeral_set_t *setp,
-	    devfsadm_enumerate_t rules[], int index)
+    devfsadm_enumerate_t rules[], int index)
 {
 	char	*slash1 = NULL;
 	char	*slash2 = NULL;
@@ -5427,10 +5444,10 @@ enumerate_parse(char *rsvstr, char *path_left, numeral_set_t *setp,
 			path_left++;
 		}
 
-		if (slash1 = strchr(path_left, '/')) {
+		if ((slash1 = strchr(path_left, '/')) != NULL) {
 			*slash1 = '\0';
 		}
-		if (slash2 = strchr(rsvstr, '/')) {
+		if ((slash2 = strchr(rsvstr, '/')) != NULL) {
 			*slash2 = '\0';
 		}
 
@@ -5506,7 +5523,7 @@ out:
  */
 static void
 enumerate_recurse(char *current_dir, char *path_left, numeral_set_t *setp,
-	    devfsadm_enumerate_t rules[], int index)
+    devfsadm_enumerate_t rules[], int index)
 {
 	char *slash;
 	char *new_path;
@@ -5523,7 +5540,7 @@ enumerate_recurse(char *current_dir, char *path_left, numeral_set_t *setp,
 		path_left++;
 	}
 
-	if (slash = strchr(path_left, '/')) {
+	if ((slash = strchr(path_left, '/')) != NULL) {
 		*slash = '\0';
 	}
 
@@ -5661,7 +5678,7 @@ create_reserved_numeral(numeral_set_t *setp, char *numeral_id)
  */
 static void
 create_cached_numeral(char *path, numeral_set_t *setp, char *numeral_id,
-	devfsadm_enumerate_t rules[], int index)
+    devfsadm_enumerate_t rules[], int index)
 {
 	char linkbuf[PATH_MAX + 1];
 	char lpath[PATH_MAX + 1];
@@ -5838,7 +5855,7 @@ devfsadm_copy(void)
 /*ARGSUSED*/
 static int
 devfsadm_copy_file(const char *file, const struct stat *stat,
-		    int flags, struct FTW *ftw)
+    int flags, struct FTW *ftw)
 {
 	struct stat sp;
 	dev_t newdev;
@@ -6203,9 +6220,9 @@ read_devlinktab_file(void)
 		i = strlen(line);
 		if (line[i-1] == NEWLINE) {
 			line[i-1] = '\0';
-		} else if (i == sizeof (line-1)) {
+		} else if (i == sizeof (line) - 1) {
 			err_print(LINE_TOO_LONG, devlinktab_line,
-			    devlinktab_file, sizeof (line)-1);
+			    devlinktab_file, sizeof (line) - 1);
 			while (((i = getc(fp)) != '\n') && (i != EOF))
 				;
 			continue;
@@ -6290,7 +6307,7 @@ read_devlinktab_file(void)
  */
 static int
 split_devlinktab_entry(char *entry, char **selector, char **p_link,
-			char **s_link)
+    char **s_link)
 {
 	char *tab;
 
@@ -6304,7 +6321,7 @@ split_devlinktab_entry(char *entry, char **selector, char **p_link,
 		return (DEVFSADM_FAILURE);
 	}
 
-	if (*p_link == '\0') {
+	if (**p_link == '\0') {
 		err_print(MISSING_DEVNAME, devlinktab_line, devlinktab_file);
 		return (DEVFSADM_FAILURE);
 	}
@@ -6339,7 +6356,7 @@ create_selector_list(char *selector)
 	selector_list_t *selector_list;
 
 	/* parse_devfs_spec splits the next field into keyword & value */
-	while ((*selector != NULL) && (error == FALSE)) {
+	while ((*selector != '\0') && (error == FALSE)) {
 		if (parse_selector(&selector, &key, &val) == DEVFSADM_FAILURE) {
 			error = TRUE;
 			break;
@@ -6487,6 +6504,7 @@ create_link_list(char *link)
 					error_str =
 					    "multiple counters not permitted";
 					free(link_list);
+					link_list = NULL;
 				} else {
 					counter_found = TRUE;
 					link_list->type = COUNTER;
@@ -6498,6 +6516,7 @@ create_link_list(char *link)
 			default:
 				error = TRUE;
 				free(link_list);
+				link_list = NULL;
 				error_str = "unrecognized escape sequence";
 				break;
 			}
@@ -6507,6 +6526,7 @@ create_link_list(char *link)
 					    "followed by a digit\n";
 					error = TRUE;
 					free(link_list);
+					link_list = NULL;
 				} else {
 					link_list->arg =
 					    (int)strtoul(link, &link, 10);
@@ -6726,7 +6746,7 @@ get_anchored_re(char *link, char *anchored_re, char *pattern)
 
 static int
 construct_devlink(char *link, link_list_t *link_build, char *contents,
-			di_minor_t minor, di_node_t node, char *pattern)
+    di_minor_t minor, di_node_t node, char *pattern)
 {
 	int counter_offset = -1;
 	devfsadm_enumerate_t rules[1] = {NULL};
@@ -7027,7 +7047,7 @@ devfsadm_free_dev_names(char **dev_names, int len)
  * devfsadm_free_dev_names() is used to free the returned array.
  * NULL is returned on failure or when there are no matching devlinks.
  *
- * re is an extended regular expression in regex(5) format used to further
+ * re is an extended regular expression in regex(7) format used to further
  * match devlinks pointing to phys_path; it may be NULL to match all
  */
 char **
@@ -7133,7 +7153,7 @@ dequote(char *src)
  */
 static void
 getattr(char *phy_path, char *aminor, int spectype, dev_t dev, mode_t *mode,
-	uid_t *uid, gid_t *gid)
+    uid_t *uid, gid_t *gid)
 {
 	char devname[PATH_MAX + 1];
 	char *node_name;
@@ -7367,7 +7387,7 @@ read_logindevperm_file(void)
 	static int cached = FALSE;
 	static struct stat cached_sb;
 	struct stat current_sb;
-	struct login_dev *ldev;
+	struct login_dev *ldev = NULL;
 	FILE *fp;
 	char line[MAX_LDEV_LINE];
 	int ln, perm, rv;
@@ -7400,6 +7420,7 @@ read_logindevperm_file(void)
 				list = next;
 			}
 			free(ldev);
+			ldev = NULL;
 		}
 	} else {
 		cached = TRUE;
@@ -7480,12 +7501,12 @@ read_logindevperm_file(void)
 		}
 
 		drv = strtok_r(NULL, LDEV_DRVLIST_DELIMS, &lasts);
-		if (drv) {
+		if (drv != NULL && ldev != NULL) {
 			if (strcmp(drv, LDEV_DRVLIST_NAME) == 0) {
 
 				drv = strtok_r(NULL, LDEV_DRV_DELIMS, &lasts);
 
-				while (drv) {
+				while (drv != NULL) {
 					vprint(FILES_MID,
 					    "logindevperm driver=%s\n", drv);
 
@@ -7542,7 +7563,7 @@ getnexttoken(char *next, char **nextp, char **tokenpp, char *tchar)
 			;
 		if (*cp1 == '=' || *cp1 == ':' || *cp1 == '&' || *cp1 == '|' ||
 		    *cp1 == ';' || *cp1 == '\n' || *cp1 == '\0') {
-			*cp = NULL;	/* terminate token */
+			*cp = '\0';	/* terminate token */
 			cp = cp1;
 		}
 	}
@@ -7569,7 +7590,7 @@ read_driver_aliases_file(void)
 {
 
 	driver_alias_t *save;
-	driver_alias_t *lst_tail;
+	driver_alias_t *lst_tail = NULL;
 	driver_alias_t *ap;
 	static int cached = FALSE;
 	FILE *afd;
@@ -7799,7 +7820,7 @@ add_verbose_id(char *mid)
  * returns DEVFSADM_TRUE if contents is a minor node in /devices.
  * If mn_root is not NULL, mn_root is set to:
  *	if contents is a /dev node, mn_root = contents
- * 			OR
+ *			OR
  *	if contents is a /devices node, mn_root set to the '/'
  *	following /devices.
  */
@@ -8219,6 +8240,26 @@ build_event_attributes(char *class, char *subclass, char *node_path,
 		goto out;
 
 	if (strcmp(subclass, ESC_DISK) == 0) {
+		/*
+		 * While we're removing labeled lofi device, we will receive
+		 * event for every registered minor device and lastly,
+		 * an event with minor set to NULL, as in following example:
+		 * class: EC_dev_remove subclass: disk
+		 * node_path: /pseudo/lofi@1 driver: lofi minor: u,raw
+		 * class: EC_dev_remove subclass: disk
+		 * node_path: /pseudo/lofi@1 driver: lofi minor: NULL
+		 *
+		 * When we receive this last event with minor set to NULL,
+		 * all lofi minor devices are already removed and the call to
+		 * lookup_disk_dev_name() would result in error.
+		 * To prevent name lookup error messages for this case, we
+		 * need to filter out that last event.
+		 */
+		if (strcmp(class, EC_DEV_REMOVE) == 0 &&
+		    strcmp(driver_name, "lofi") ==  0 && minor == NULL) {
+			nvlist_free(nvl);
+			return (NULL);
+		}
 		if ((dev_name = lookup_disk_dev_name(node_path)) == NULL) {
 			dev_name_lookup_err = 1;
 			goto out;
@@ -8239,11 +8280,26 @@ build_event_attributes(char *class, char *subclass, char *node_path,
 		 * The raw minor node is created or removed after the block
 		 * node.  Lofi devfs events are dependent on this behavior.
 		 * Generate the sysevent only for the raw minor node.
+		 *
+		 * If the lofi mapping is created, we will receive the following
+		 * event: class: EC_dev_add subclass: lofi minor: NULL
+		 *
+		 * As in case of EC_dev_add, the minor is NULL pointer,
+		 * to get device links created, we will need to provide the
+		 * type of minor node for lookup_lofi_dev_name()
+		 *
+		 * If the lofi device is unmapped, we will receive following
+		 * events:
+		 * class: EC_dev_remove subclass: lofi minor: disk
+		 * class: EC_dev_remove subclass: lofi minor: disk,raw
+		 * class: EC_dev_remove subclass: lofi minor: NULL
 		 */
-		if (strstr(minor, "raw") == NULL) {
-			if (nvl) {
-				nvlist_free(nvl);
-			}
+
+		if (strcmp(class, EC_DEV_ADD) == 0 && minor == NULL)
+			minor = "disk,raw";
+
+		if (minor == NULL || strstr(minor, "raw") == NULL) {
+			nvlist_free(nvl);
 			return (NULL);
 		}
 		if ((dev_name = lookup_lofi_dev_name(node_path, minor)) ==
@@ -8290,8 +8346,7 @@ build_event_attributes(char *class, char *subclass, char *node_path,
 	return (nvl);
 
 out:
-	if (nvl)
-		nvlist_free(nvl);
+	nvlist_free(nvl);
 
 	if (dev_name)
 		free(dev_name);
@@ -8364,8 +8419,7 @@ process_syseventq()
 			free(tmp->class);
 		if (tmp->subclass != NULL)
 			free(tmp->subclass);
-		if (tmp->nvl != NULL)
-			nvlist_free(tmp->nvl);
+		nvlist_free(tmp->nvl);
 		syseventq_back = syseventq_back->next;
 		if (syseventq_back == NULL)
 			syseventq_front = NULL;
@@ -8376,7 +8430,7 @@ process_syseventq()
 
 static void
 build_and_enq_event(char *class, char *subclass, char *node_path,
-	di_node_t node, char *minor)
+    di_node_t node, char *minor)
 {
 	nvlist_t *nvl;
 
@@ -8476,8 +8530,7 @@ nfphash_destroy(void)
 	item_t	*ip;
 
 	for (i = 0; i < NFP_HASH_SZ; i++) {
-		/*LINTED*/
-		while (ip = nfp_hash[i]) {
+		while ((ip = nfp_hash[i]) != NULL) {
 			nfp_hash[i] = ip->i_next;
 			free(ip->i_key);
 			free(ip);

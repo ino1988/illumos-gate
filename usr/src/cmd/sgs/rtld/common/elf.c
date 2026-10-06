@@ -27,6 +27,7 @@
  */
 /*
  * Copyright (c) 2012, Joyent, Inc.  All rights reserved.
+ * Copyright 2022 Oxide Computer Company
  */
 
 /*
@@ -126,40 +127,13 @@ elf_get_sec_dirs()
 }
 
 /*
- * Redefine NEEDED name if necessary.
+ * For ELF objects we only need perform path expansion.  Latent support for
+ * other objects may require further work
  */
 static int
 elf_fix_name(const char *name, Rt_map *clmp, Alist **alpp, Aliste alni,
     uint_t orig)
 {
-	/*
-	 * For ABI compliance, if we are asked for ld.so.1, then really give
-	 * them libsys.so.1 (the SONAME of libsys.so.1 is ld.so.1).
-	 */
-	if (((*name == '/') &&
-	/* BEGIN CSTYLED */
-#if	defined(_ELF64)
-	    (strcmp(name, MSG_ORIG(MSG_PTH_RTLD_64)) == 0)) ||
-#else
-	    (strcmp(name, MSG_ORIG(MSG_PTH_RTLD)) == 0)) ||
-#endif
-	    (strcmp(name, MSG_ORIG(MSG_FIL_RTLD)) == 0)) {
-		/* END CSTYLED */
-		Pdesc	*pdp;
-
-		DBG_CALL(Dbg_file_fixname(LIST(clmp), name,
-		    MSG_ORIG(MSG_PTH_LIBSYS)));
-		if ((pdp = alist_append(alpp, NULL, sizeof (Pdesc),
-		    alni)) == NULL)
-			return (0);
-
-		pdp->pd_pname = (char *)MSG_ORIG(MSG_PTH_LIBSYS);
-		pdp->pd_plen = MSG_PTH_LIBSYS_SIZE;
-		pdp->pd_flags = PD_FLG_PNSLASH;
-
-		return (1);
-	}
-
 	return (expand_paths(clmp, name, alpp, alni, orig, 0));
 }
 
@@ -238,7 +212,7 @@ elf_verify(caddr_t addr, size_t size, Fdesc *fdp, const char *name,
 	/*
 	 * Determine if we're an elf file.  If not simply return, we don't set
 	 * any rejection information as this test allows use to scroll through
-	 * the objects we support (ELF, AOUT).
+	 * the objects we support (ELF).
 	 */
 	if (size < sizeof (Ehdr) ||
 	    caddr[EI_MAG0] != ELFMAG0 ||
@@ -315,12 +289,12 @@ elf_verify(caddr_t addr, size_t size, Fdesc *fdp, const char *name,
  *
  *  -	elf_needed() is called to establish any ld.so.1 dependencies.  These
  *	dependencies should all be lazy loaded, so this routine is typically a
- * 	no-op.  However, we call elf_needed() for completeness, in case any
+ *	no-op.  However, we call elf_needed() for completeness, in case any
  *	NEEDED initialization is required.
  *
  *  -	For intel, ld.so.1's JMPSLOT relocations need relative updates. These
  *	are by default skipped thus delaying all relative relocation processing
- * 	on every invocation of ld.so.1.
+ *	on every invocation of ld.so.1.
  */
 int
 elf_rtld_load()
@@ -344,7 +318,7 @@ elf_rtld_load()
 	 *
 	 *  -	ld.so.1 does not exercise *any* PLT's before it has made a call
 	 *	to elf_lazy_load().  This is because all dynamic dependencies
-	 * 	are recorded as lazy dependencies.
+	 *	are recorded as lazy dependencies.
 	 */
 	(void) elf_reloc_relative_count((ulong_t)JMPREL(lmp),
 	    (ulong_t)(PLTRELSZ(lmp) / RELENT(lmp)), (ulong_t)RELENT(lmp),
@@ -422,7 +396,7 @@ elf_lazy_load(Rt_map *clmp, Slookup *slp, uint_t ndx, const char *sym,
 	/*
 	 * Establish a link-map control list for this request.
 	 */
-	if ((lmco = create_cntl(lml, 0)) == NULL) {
+	if ((lmco = create_cntl(lml, 0)) == 0) {
 		remove_alist(&palp, 1);
 		return (NULL);
 	}
@@ -838,7 +812,7 @@ _elf_lookup_filtee(Slookup *slp, Sresult *srp, uint_t *binfo, uint_t ndx,
 		    (LML_FLG_TRC_UNREF | LML_FLG_TRC_UNUSED));
 
 		if (tracing || DBG_ENABLED) {
-			Bnd_desc 	*bdp;
+			Bnd_desc	*bdp;
 			Aliste		idx;
 
 			FLAGS1(ilmp) |= FL1_RT_USED;
@@ -924,8 +898,8 @@ _elf_lookup_filtee(Slookup *slp, Sresult *srp, uint_t *binfo, uint_t ndx,
 			/*
 			 * Establish a link-map control list for this request.
 			 */
-			if ((lmco = create_cntl(lml, 0)) == NULL)
-				return (NULL);
+			if ((lmco = create_cntl(lml, 0)) == 0)
+				return (0);
 
 			/*
 			 * Determine the capability filtees.  If none can be
@@ -1016,7 +990,7 @@ _elf_lookup_filtee(Slookup *slp, Sresult *srp, uint_t *binfo, uint_t ndx,
 				 *  -	ld.so.1 is available to relocate
 				 *	against.
 				 *  -	There's no need to add an dependencies
-				 * 	to this handle.
+				 *	to this handle.
 				 */
 				rdflags = (GPD_DLSYM | GPD_RELOC);
 
@@ -1070,8 +1044,8 @@ _elf_lookup_filtee(Slookup *slp, Sresult *srp, uint_t *binfo, uint_t ndx,
 				 * Establish a link-map control list for this
 				 * request.
 				 */
-				if ((lmco = create_cntl(lml, 0)) == NULL)
-					return (NULL);
+				if ((lmco = create_cntl(lml, 0)) == 0)
+					return (0);
 
 				/*
 				 * Locate and load the filtee.
@@ -1720,7 +1694,7 @@ elf_new_lmp(Lm_list *lml, Aliste lmco, Fdesc *fdp, Addr addr, size_t msize,
 	rtsz = S_DROUND(sizeof (Rt_map));
 	epsz = S_DROUND(sizeof (Rt_elfp));
 	lmsz = rtsz + epsz + dynsz;
-	if ((lmp = calloc(lmsz, 1)) == NULL)
+	if ((lmp = calloc(1, lmsz)) == NULL)
 		return (NULL);
 	ELFPRV(lmp) = (void *)((uintptr_t)lmp + rtsz);
 	DYNINFO(lmp) = (Dyninfo *)((uintptr_t)lmp + rtsz + epsz);
@@ -1874,13 +1848,13 @@ elf_new_lmp(Lm_list *lml, Aliste lmco, Fdesc *fdp, Addr addr, size_t msize,
 				JMPREL(lmp) = (void *)(dyn->d_un.d_ptr + base);
 				break;
 			case DT_INIT:
-				if (dyn->d_un.d_ptr != NULL)
+				if (dyn->d_un.d_ptr != 0)
 					INIT(lmp) =
 					    (void (*)())(dyn->d_un.d_ptr +
 					    base);
 				break;
 			case DT_FINI:
-				if (dyn->d_un.d_ptr != NULL)
+				if (dyn->d_un.d_ptr != 0)
 					FINI(lmp) =
 					    (void (*)())(dyn->d_un.d_ptr +
 					    base);
@@ -2316,8 +2290,8 @@ elf_new_lmp(Lm_list *lml, Aliste lmco, Fdesc *fdp, Addr addr, size_t msize,
 
 	} else if ((cap = CAP(lmp)) != NULL) {
 		/*
-		 * Processing of the a.out and ld.so.1 does not involve a file
-		 * descriptor as exec() did all the work, so capture the
+		 * Processing of the executable and ld.so.1 does not involve a
+		 * file descriptor as exec() did all the work, so capture the
 		 * capabilities for these cases.
 		 */
 		while (cap->c_tag != CA_SUNW_NULL) {
@@ -2339,6 +2313,9 @@ elf_new_lmp(Lm_list *lml, Aliste lmco, Fdesc *fdp, Addr addr, size_t msize,
 				CAPSET(lmp).sc_mach = STRTAB(lmp) +
 				    cap->c_un.c_ptr;
 				break;
+			case CA_SUNW_HW_3:
+				CAPSET(lmp).sc_hw_3 = cap->c_un.c_val;
+				break;
 			}
 			cap++;
 		}
@@ -2355,7 +2332,7 @@ elf_new_lmp(Lm_list *lml, Aliste lmco, Fdesc *fdp, Addr addr, size_t msize,
 	if (CAPCHAIN(lmp)) {
 		Capchain	*capchain;
 
-		if ((capchain = calloc(CAPCHAINSZ(lmp), 1)) == NULL)
+		if ((capchain = calloc(1, CAPCHAINSZ(lmp))) == NULL)
 			return (NULL);
 		(void) memcpy(capchain, CAPCHAIN(lmp), CAPCHAINSZ(lmp));
 		CAPCHAIN(lmp) = capchain;
@@ -2510,7 +2487,7 @@ elf_dladdr(ulong_t addr, Rt_map *lmp, Dl_info *dlip, void **info, int flags)
 	 * symbol lookup hash table.
 	 */
 	str = STRTAB(lmp);
-	if (SUNWSYMSZ(lmp) == NULL) {
+	if (SUNWSYMSZ(lmp) == 0) {
 		sym = SYMTAB(lmp);
 		/*
 		 * If we don't have a .hash table there are no symbols
@@ -2720,7 +2697,7 @@ elf_lazy_find_sym(Slookup *slp, Sresult *srp, uint_t *binfo, int *in_nfavl)
 	 * as each object supplies its own lazy dependencies.
 	 */
 	if (aplist_append(&alist, lmp, AL_CNT_LAZYFIND) == NULL)
-		return (NULL);
+		return (0);
 
 	for (APLIST_TRAVERSE(alist, idx1, lmp1)) {
 		uint_t	dynndx;
@@ -2777,8 +2754,8 @@ elf_lazy_find_sym(Slookup *slp, Sresult *srp, uint_t *binfo, int *in_nfavl)
 			 * A successful lazy load can mean one of two things:
 			 *
 			 *  -	new objects have been loaded, in which case the
-			 * 	objects will have been analyzed, relocated, and
-			 * 	finally moved to the callers control list.
+			 *	objects will have been analyzed, relocated, and
+			 *	finally moved to the callers control list.
 			 *  -	the objects are already loaded, and this lazy
 			 *	load has simply associated the referenced object
 			 *	with it's lazy dependencies.
@@ -2860,7 +2837,7 @@ elf_lazy_find_sym(Slookup *slp, Sresult *srp, uint_t *binfo, int *in_nfavl)
 			if (slp->sl_flags & LKUP_NODESCENT)
 				continue;
 
-			if (aplist_test(&alist, nlmp, AL_CNT_LAZYFIND) == NULL)
+			if (aplist_test(&alist, nlmp, AL_CNT_LAZYFIND) == 0)
 				return (0);
 		}
 	}

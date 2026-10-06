@@ -21,6 +21,8 @@
 /*
  * Copyright 2010 Sun Microsystems, Inc.  All rights reserved.
  * Use is subject to license terms.
+ * Copyright 2018 Joyent, Inc.
+ * Copyright 2026 Oxide Computer Company
  */
 
 #include <sys/types.h>
@@ -63,30 +65,6 @@
  * hanging off the mac_impl_t. The broadcast group id's are
  * unique globally (tracked by mac_bcast_id).
  */
-
-/*
- * The same MAC client may be added for different <addr,vid> tuple,
- * we maintain a ref count for the number of times it has been added
- * to account for deleting the MAC client from the group.
- */
-typedef struct mac_bcast_grp_mcip_s {
-	mac_client_impl_t	*mgb_client;
-	int			mgb_client_ref;
-} mac_bcast_grp_mcip_t;
-
-typedef struct mac_bcast_grp_s {			/* Protected by */
-	struct mac_bcast_grp_s	*mbg_next;		/* SL */
-	void			*mbg_addr;		/* SL */
-	uint16_t		mbg_vid;		/* SL */
-	mac_impl_t		*mbg_mac_impl;		/* WO */
-	mac_addrtype_t		mbg_addrtype;		/* WO */
-	flow_entry_t		*mbg_flow_ent;		/* WO */
-	mac_bcast_grp_mcip_t	*mbg_clients;		/* mi_rw_lock */
-	uint_t			mbg_nclients;		/* mi_rw_lock */
-	uint_t			mbg_nclients_alloc;	/* SL */
-	uint64_t		mbg_clients_gen;	/* mi_rw_lock */
-	uint32_t		mbg_id;			/* atomic */
-} mac_bcast_grp_t;
 
 static kmem_cache_t *mac_bcast_grp_cache;
 static uint32_t mac_bcast_id = 0;
@@ -146,7 +124,7 @@ mac_bcast_send(void *arg1, void *arg2, mblk_t *mp_chain, boolean_t is_loopback)
 	uint64_t gen;
 	uint_t i;
 	mblk_t *mp_chain1;
-	flow_entry_t	*flent;
+	flow_entry_t *flent;
 	int err;
 
 	rw_enter(&mip->mi_rw_lock, RW_READER);
@@ -180,14 +158,7 @@ mac_bcast_send(void *arg1, void *arg2, mblk_t *mp_chain, boolean_t is_loopback)
 		 * It is important to hold a reference on the
 		 * flow_ent here.
 		 */
-		if ((mp_chain1 = mac_copymsgchain_cksum(mp_chain)) == NULL)
-			break;
-		/*
-		 * Fix the checksum for packets originating
-		 * from the local machine.
-		 */
-		if ((src_mcip != NULL) &&
-		    (mp_chain1 = mac_fix_cksum(mp_chain1)) == NULL)
+		if ((mp_chain1 = copymsgchain(mp_chain)) == NULL)
 			break;
 
 		FLOW_TRY_REFHOLD(flent, err);
@@ -246,7 +217,8 @@ mac_bcast_send(void *arg1, void *arg2, mblk_t *mp_chain, boolean_t is_loopback)
 		MCIP_STAT_UPDATE(src_mcip, brdcstxmt, 1);
 		MCIP_STAT_UPDATE(src_mcip, brdcstxmtbytes, msgdsize(mp_chain));
 
-		MAC_TX(mip, mip->mi_default_tx_ring, mp_chain, src_mcip);
+		mp_chain = mac_provider_tx(mip, mip->mi_default_tx_ring,
+		    mp_chain, src_mcip);
 		if (mp_chain != NULL)
 			freemsgchain(mp_chain);
 	} else {
@@ -263,7 +235,7 @@ int
 mac_bcast_add(mac_client_impl_t *mcip, const uint8_t *addr, uint16_t vid,
     mac_addrtype_t addrtype)
 {
-	mac_impl_t 		*mip = mcip->mci_mip;
+	mac_impl_t		*mip = mcip->mci_mip;
 	mac_bcast_grp_t		*grp = NULL, **last_grp;
 	size_t			addr_len = mip->mi_type->mt_addr_length;
 	int			rc = 0;

@@ -1,0 +1,236 @@
+.\" The contents of this file are subject to the terms of the Common
+.\" Development and Distribution License (the "License").  You may not use
+.\" this file except in compliance with the License. You can obtain a copy
+.\" of the license at usr/src/OPENSOLARIS.LICENSE or
+.\" http://www.opensolaris.org/os/licensing.
+.\"
+.\"  See the License for the specific language governing permissions and
+.\" limitations under the License. When distributing Covered Code, include
+.\" this CDDL HEADER in each file and include the License file at
+.\" usr/src/OPENSOLARIS.LICENSE.  If applicable, add the following below
+.\" this CDDL HEADER, with
+.\"
+.\" the fields enclosed by brackets "[]" replaced with your own identifying
+.\" information: Portions Copyright [yyyy] [name of copyright owner]
+.\"
+.\" Copyright (c) 2004, Sun Microsystems, Inc.  All Rights Reserved
+.\" Copyright 2026 Oxide Computer Company
+.\"
+.Dd June 29, 2026
+.Dt MPSTAT 8
+.Os
+.Sh NAME
+.Nm mpstat
+.Nd report per-processor or per-processor-set statistics
+.Sh SYNOPSIS
+.Nm
+.Op Fl aq
+.Op Fl p | P Ar set
+.Op Fl T Cm u | d
+.Op Ar interval Oo Ar count Oc
+.Sh DESCRIPTION
+The
+.Nm
+command reports processor statistics in tabular form.
+Each row of the table represents the activity of one processor.
+The first table summarizes all activity since boot.
+Each subsequent table summarizes activity for the preceding interval.
+All values are rates listed as events per second unless otherwise noted.
+.Pp
+During execution of the kernel status command, the state of the kernel can
+change.
+If relevant, a state change message is included in the
+.Nm
+output, in one of the following forms:
+.Bd -literal -offset indent
+<<processor 3 moved from pset: -1 to: 1>>
+<<pset destroyed: 1>>
+<<pset created: 1>>
+<<processors added: 1, 3>>
+<<processors removed: 1, 3>>
+.Ed
+.Pp
+The
+.Nm
+command reports the following information:
+.Bl -tag -width Ds
+.It Sy CPU No or Sy SET
+Without the
+.Fl a
+option,
+.Nm
+reports
+.Sy CPU
+statistics for a processor ID.
+With the
+.Fl a
+option,
+.Nm
+reports
+.Sy SET
+statistics for a processor set ID.
+.It Sy minf
+minor faults
+.It Sy mjf
+major faults
+.It Sy xcal
+inter-processor cross-calls
+.It Sy intr
+interrupts
+.It Sy ithr
+interrupts as threads
+.Pq not counting clock interrupt
+.It Sy csw
+context switches
+.It Sy icsw
+involuntary context switches
+.It Sy migr
+thread migrations
+.Pq to another processor
+.It Sy smtx
+spins on mutexes
+.Pq lock not acquired on first try
+.It Sy srw
+spins on readers/writer locks
+.Pq lock not acquired on first try
+.It Sy syscl
+system calls
+.It Sy usr
+percent user time
+.It Sy sys
+percent system time
+.It Sy wt
+the I/O wait time is no longer calculated as a percentage of CPU
+time, and this statistic will always return zero.
+.It Sy idl
+percent idle time
+.It Sy sze
+number of processors in the requested processor set
+.It Sy set
+processor set membership of each CPU
+.El
+.Sh OPTIONS
+The following options are supported:
+.Bl -tag -width Ds
+.It Fl a
+Aggregate output by processor set.
+Sort the output by set.
+The default output is sorted by CPU number.
+.It Fl p
+Report processor set membership of each CPU.
+Sort the output by set.
+The default output is sorted by CPU number.
+.It Fl P Ar set
+Display only those processors in the specified
+.Ar set .
+.It Fl q
+Suppress messages related to state changes.
+.It Fl T Cm u | d
+Specify
+.Cm u
+for a printed representation of the internal representation of time.
+See
+.Xr time 2 .
+Specify
+.Cm d
+for standard date format.
+See
+.Xr date 1 .
+.It Ar interval
+Report once each
+.Ar interval
+seconds.
+.It Ar count
+Only print
+.Ar count
+reports.
+.El
+.Sh EXAMPLES
+.Sy Example 1
+Using
+.Nm
+to Generate User and System Operation Statistics
+.Pp
+The following command generates processor statistics over a five-second
+interval in two reports.
+The command shows the processor set membership of each CPU.
+The default output is sorted by CPU number, aggregated by
+.Em processor set ,
+for user
+.Pq Sy usr
+and system
+.Pq Sy sys
+operations.
+.Bd -literal
+example% mpstat -ap 5 2
+
+SET minf mjf xcal intr ithr csw icsw migr smtx srw syscl usr sys wt idl sze
+  0    6   0  355  291  190  22    0    0    0   0    43   0   2  0  43   1
+  1   24  17  534  207  200  70    1    0    2   0   600   4   1  0  84   2
+  2   19   7  353  325  318  44    0    0    5   0   345   1   1  0  94   3
+  3   36   2  149  237  236  14    0    0    4   0    97   0   0  0  98   2
+SET minf mjf xcal intr ithr csw icsw migr smtx srw syscl usr sys wt idl sze
+  0    1   0  720  405  304  55    0    0   18   0    12   0  15  0  81   1
+  1    0  69 1955  230  200 313   33    4   41   9  7086  34  10  0  19   2
+  2    0  46  685  314  300 203   11    0   54   1  5287  36   6  0  28   3
+  3    0   0   14  386  384   0    0    0    0   0     0   0   0  0 100   2
+.Ed
+.Sh INTERFACE STABILITY
+The command line interface of
+.Nm
+is
+.Sy Evolving .
+The output of
+.Nm
+is
+.Sy Not-An-Interface
+and may change at any time.
+.Sh SEE ALSO
+.Xr date 1 ,
+.Xr sar 1 ,
+.Xr time 2 ,
+.Xr attributes 7 ,
+.Xr iostat 8 ,
+.Xr sar 8 ,
+.Xr vmstat 8
+.Sh NOTES
+The sum of CPU utilization might vary slightly from 100 due to rounding errors
+in the production of a percentage figure.
+.Pp
+The total time used for CPU
+processing is the sum of
+.Sy usr
+and
+.Sy sys
+output values, reported for user and system operations.
+The
+.Sy idl
+value reports the time that the CPU
+is idle for any reason other than pending disk I/O operations.
+.Pp
+Run the
+.Xr iostat 8
+command with the
+.Fl x
+option to report I/O service times in
+.Sy svc_t
+output.
+The
+.Xr iostat 8
+utility also reports the same
+.Sy wt ,
+user
+.Pq Sy us ,
+and system
+.Pq Sy sy
+statistics.
+See
+.Xr iostat 8
+for more information.
+.Pp
+When executing in a zone
+and if the pools facility is active,
+.Nm
+will only provide information for those processors which are a member of the
+processor set of the pool to which the zone
+is bound.

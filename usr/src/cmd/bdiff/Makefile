@@ -23,19 +23,23 @@
 # Copyright (c) 1989, 1996 by Sun Microsystems, Inc.
 # All rights reserved.
 #
+# Copyright (c) 2018, Joyent, Inc.
 
-PROG= bdiff 
+PROG= bdiff
 
 include ../Makefile.cmd
 
 FILEMODE=	755
 
 CPPFLAGS += -D_FILE_OFFSET_BITS=64
-CERRWARN += -_gcc=-Wno-uninitialized
+CERRWARN += $(CNOWARN_UNINIT)
+
+# not linted
+SMATCH=off
 
 .KEEP_STATE:
 
-all: $(PROG) 
+all: $(PROG)
 
 install: all $(ROOTPROG)
 

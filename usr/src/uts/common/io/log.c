@@ -25,7 +25,7 @@
 
 
 /*
- * Streams log driver.  See log(7D).
+ * Streams log driver.  See log(4D).
  */
 
 #include <sys/types.h>
@@ -73,9 +73,9 @@ static int
 log_attach(dev_info_t *devi, ddi_attach_cmd_t cmd)
 {
 	if (ddi_create_minor_node(devi, "conslog", S_IFCHR,
-	    LOG_CONSMIN, DDI_PSEUDO, NULL) == DDI_FAILURE ||
+	    LOG_CONSMIN, DDI_PSEUDO, 0) == DDI_FAILURE ||
 	    ddi_create_minor_node(devi, "log", S_IFCHR,
-	    LOG_LOGMIN, DDI_PSEUDO, NULL) == DDI_FAILURE) {
+	    LOG_LOGMIN, DDI_PSEUDO, 0) == DDI_FAILURE) {
 		ddi_remove_minor_node(devi, NULL);
 		return (DDI_FAILURE);
 	}
@@ -271,23 +271,14 @@ log_rsrv(queue_t *q)
 	size_t idlen;
 
 	while (canputnext(q) && (mp = getq(q)) != NULL) {
-		if (log_msgid == 0) {
-			/*
-			 * Strip out the message ID.  If it's a kernel
-			 * SL_CONSOLE message, replace msgid with "unix: ".
-			 */
-			msg = (char *)mp->b_cont->b_rptr;
-			if ((msgid_start = strstr(msg, "[ID ")) != NULL &&
-			    (msgid_end = strstr(msgid_start, "] ")) != NULL) {
-				log_ctl_t *lc = (log_ctl_t *)mp->b_rptr;
-				if ((lc->flags & SL_CONSOLE) &&
-				    (lc->pri & LOG_FACMASK) == LOG_KERN)
-					msgid_start = msg + snprintf(msg,
-					    7, "unix: ");
-				idlen = msgid_end + 2 - msgid_start;
-				ovbcopy(msg, msg + idlen, msgid_start - msg);
-				mp->b_cont->b_rptr += idlen;
-			}
+		msg = (char *)mp->b_cont->b_rptr;
+		if (log_msgid == 0 &&
+		    (msgid_start = strstr(msg, "[ID ")) != NULL &&
+		    (msgid_end = strstr(msgid_start, "] ")) != NULL) {
+			/* Strip out the message ID */
+			idlen = msgid_end + 2 - msgid_start;
+			ovbcopy(msg, msg + idlen, msgid_start - msg);
+			mp->b_cont->b_rptr += idlen;
 		}
 		mp->b_band = 0;
 		putnext(q, mp);
@@ -307,8 +298,8 @@ static struct qinit logwinit =
 static struct streamtab loginfo = { &logrinit, &logwinit, NULL, NULL };
 
 DDI_DEFINE_STREAM_OPS(log_ops, nulldev, nulldev, log_attach, nodev,
-	nodev, log_info, D_NEW | D_MP | D_MTPERMOD, &loginfo,
-	ddi_quiesce_not_needed);
+    nodev, log_info, D_NEW | D_MP | D_MTPERMOD, &loginfo,
+    ddi_quiesce_not_needed);
 
 static struct modldrv modldrv =
 	{ &mod_driverops, "streams log driver", &log_ops };

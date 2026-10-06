@@ -26,7 +26,7 @@
 
 /*
  * Copyright (c) 2012 by Delphix. All rights reserved.
- * Copyright (c) 2012 Joyent, Inc. All rights reserved.
+ * Copyright 2017 Joyent, Inc.
  */
 
 /*
@@ -45,7 +45,7 @@
  * response to editing commands.
  *
  * The terminal backend is also responsible for maintaining and manipulating
- * the settings (see stty(1) and termio(7I)) associated with the terminal.
+ * the settings (see stty(1) and termio(4I)) associated with the terminal.
  * The debugger makes use of four distinct sets of terminal attributes:
  *
  * (1) the settings used by the debugger's parent process (tio_ptios),
@@ -93,8 +93,23 @@
 #define	KEY_ESC	(0x01b)			/* Escape key code */
 #define	KEY_DEL (0x07f)			/* ASCII DEL key code */
 
-#define	META(c)	((c) | 0x080)		/* Convert 'x' to 'M-x' */
-#define	KPAD(c) ((c) | 0x100)		/* Convert 'x' to 'ESC-[-x' */
+/*
+ * These macros support the use of various ranges within the "tio_keymap"
+ * member of "termio_data_t" objects.  This array maps from an input byte, or
+ * special control code, to the appropriate terminal handling callback.  The
+ * array has KEY_MAX (0x1ff) entries, partitioned as follows:
+ *
+ *     0 -  7f		7-bit ASCII byte
+ *    80 -  ff	META()	ASCII byte with Meta key modifier
+ *   100 - 119	KPAD()	Alphabetic character received as part of a single-byte
+ *			cursor control sequence, e.g. ESC [ A
+ *   11a - 123	FKEY()	Numeric character received as part of a function key
+ *			control sequence, e.g. ESC [ 4 ~
+ *   124 - 1ff		Unused
+ */
+#define	META(c)		(((c) & 0x7f) | 0x80)
+#define	KPAD(c)		(((c) < 'A' || (c) > 'Z') ? 0 : ((c) - 'A' + 0x100))
+#define	FKEY(c)		(((c) < '0' || (c) > '9') ? 0 : ((c) - '0' + 0x11a))
 
 /*
  * These macros allow for composition of control sequences for xterm and other
@@ -127,7 +142,7 @@ typedef struct termio_info {
 	termio_attr_val_t ti_am;	/* Automatic right margin? */
 	termio_attr_val_t ti_bw;	/* Backward motion at left edge? */
 	termio_attr_val_t ti_npc;	/* No padding character? */
-	termio_attr_val_t ti_xenl;	/* Newline ignored after 80 cols? */
+	termio_attr_val_t ti_xenl;	/* Newline ignored at autowrap? */
 	termio_attr_val_t ti_xon;	/* Use xon/xoff handshaking? */
 	termio_attr_val_t ti_cols;	/* # of columns */
 	termio_attr_val_t ti_lines;	/* # of rows */
@@ -153,6 +168,7 @@ typedef struct termio_info {
 	termio_attr_val_t ti_cnorm;	/* Make cursor appear normal */
 	termio_attr_val_t ti_nel;	/* Newline */
 	termio_attr_val_t ti_cr;	/* Carriage return */
+	termio_attr_val_t ti_smam;	/* Turn on automatic margins */
 } termio_info_t;
 
 typedef enum {
@@ -181,6 +197,7 @@ typedef void (*putp_t)(struct termio_data *, const char *, uint_t);
 #define	TIO_CAPWARN	0x40		/* Warnings about terminfo issued */
 #define	TIO_XTERM	0x80		/* Terminal is xterm compatible */
 #define	TIO_TAB		0x100		/* Tab completion mode */
+#define	TIO_LAZYWRAP	0x200		/* Lazy cursor on autowrap */
 
 static const mdb_bitmask_t tio_flag_masks[] = {
 	{ "FINDHIST", TIO_FINDHIST, TIO_FINDHIST },
@@ -191,7 +208,8 @@ static const mdb_bitmask_t tio_flag_masks[] = {
 	{ "TTYWARN", TIO_TTYWARN, TIO_TTYWARN },
 	{ "CAPWARN", TIO_CAPWARN, TIO_CAPWARN },
 	{ "XTERM", TIO_XTERM, TIO_XTERM },
-	{ "TAB", TIO_TAB, TIO_TAB},
+	{ "TAB", TIO_TAB, TIO_TAB },
+	{ "LAZYWRAP", TIO_LAZYWRAP, TIO_LAZYWRAP },
 	{ NULL, 0, 0 }
 };
 
@@ -202,7 +220,7 @@ typedef struct termio_data {
 	mdb_iob_t *tio_out;		/* I/o buffer for terminal output */
 	mdb_iob_t *tio_in;		/* I/o buffer for terminal input */
 	mdb_iob_t *tio_link;		/* I/o buffer to resize on WINCH */
-	keycb_t tio_keymap[KEY_MAX];	/* Keymap (callback functions) */
+	keycb_t tio_keymap[KEY_MAX];	/* Keymap (see comments atop file) */
 	mdb_cmdbuf_t tio_cmdbuf;	/* Editable command-line buffer */
 	struct termios tio_ptios;	/* Parent terminal settings */
 	struct termios tio_ctios;	/* Child terminal settings */
@@ -299,17 +317,17 @@ extern int tigetflag(const char *);
 extern int tigetnum(const char *);
 
 static const mdb_io_ops_t termio_ops = {
-	termio_read,
-	termio_write,
-	termio_seek,
-	termio_ctl,
-	termio_close,
-	termio_name,
-	termio_link,
-	termio_unlink,
-	termio_setattr,
-	termio_suspend,
-	termio_resume
+	.io_read = termio_read,
+	.io_write = termio_write,
+	.io_seek = termio_seek,
+	.io_ctl = termio_ctl,
+	.io_close = termio_close,
+	.io_name = termio_name,
+	.io_link = termio_link,
+	.io_unlink = termio_unlink,
+	.io_setattr = termio_setattr,
+	.io_suspend = termio_suspend,
+	.io_resume = termio_resume,
 };
 
 static termio_info_t termio_info;
@@ -350,7 +368,8 @@ static const termio_attr_t termio_attrs[] = {
 	{ "cnorm", TIO_ATTR_STR, &termio_info.ti_cnorm },
 	{ "nel", TIO_ATTR_STR, &termio_info.ti_nel },
 	{ "cr", TIO_ATTR_STR, &termio_info.ti_cr },
-	{ NULL, NULL, NULL }
+	{ "smam", TIO_ATTR_STR, &termio_info.ti_smam },
+	{ NULL, 0, NULL }
 };
 
 /*
@@ -385,7 +404,7 @@ termio_read(mdb_io_t *io, void *buf, size_t nbytes)
 
 	mdb_bool_t esc = FALSE, pad = FALSE;
 	ssize_t rlen = 0;
-	int c;
+	int c, fkey = 0;
 
 	const char *s;
 	size_t len;
@@ -471,8 +490,42 @@ char_loop:
 		}
 
 		if (pad) {
-			c = KPAD(CTRL(c));
 			pad = FALSE;
+
+			if ((fkey = FKEY(c)) != 0) {
+				/*
+				 * Some terminals send a multibyte control
+				 * sequence for particular function keys.
+				 * These sequences are of the form:
+				 *
+				 *	ESC [ n ~
+				 *
+				 * where "n" is a numeric character from
+				 * '0' to '9'.
+				 */
+				goto char_loop;
+			}
+
+			if ((c = KPAD(c)) == 0) {
+				/*
+				 * This was not a valid keypad control
+				 * sequence.
+				 */
+				goto char_loop;
+			}
+		}
+
+		if (fkey != 0) {
+			if (c == '~') {
+				/*
+				 * This is a valid special function key
+				 * sequence.  Use the value we stashed
+				 * earlier.
+				 */
+				c = fkey;
+			}
+
+			fkey = 0;
 		}
 
 		len = td->tio_cmdbuf.cmd_buflen + td->tio_promptlen;
@@ -538,8 +591,8 @@ termio_close(mdb_io_t *io)
 {
 	termio_data_t *td = io->io_data;
 
-	(void) mdb_signal_sethandler(SIGWINCH, SIG_DFL, NULL);
-	(void) mdb_signal_sethandler(SIGTSTP, SIG_DFL, NULL);
+	(void) mdb_signal_sethandler(SIGWINCH, MDB_SIG_DFL, NULL);
+	(void) mdb_signal_sethandler(SIGTSTP, MDB_SIG_DFL, NULL);
 
 	termio_suspend_tty(td, &td->tio_ptios);
 
@@ -672,9 +725,9 @@ termio_suspend_tty(termio_data_t *td, struct termios *iosp)
 
 	if (td->tio_opgid > 0 && td->tio_opgid != mdb.m_pgid) {
 		mdb_dprintf(MDB_DBG_CMDBUF, "fg pgid=%d\n", (int)td->tio_opgid);
-		(void) mdb_signal_sethandler(SIGTTOU, SIG_IGN, NULL);
+		(void) mdb_signal_sethandler(SIGTTOU, MDB_SIG_IGN, NULL);
 		(void) termio_ctl(td->tio_io, TIOCSPGRP, &td->tio_opgid);
-		(void) mdb_signal_sethandler(SIGTTOU, SIG_DFL, NULL);
+		(void) mdb_signal_sethandler(SIGTTOU, MDB_SIG_DFL, NULL);
 	}
 }
 
@@ -700,7 +753,9 @@ termio_resume_tty(termio_data_t *td, struct termios *iosp)
 	static const uint_t baud[] = {
 		0, 50, 75, 110, 134, 150, 200, 300, 600, 1200,
 		1800, 2400, 4800, 9600, 19200, 38400, 57600,
-		76800, 115200, 153600, 230400, 307200, 460800, 921600
+		76800, 115200, 153600, 230400, 307200, 460800, 921600,
+		1000000, 1152000, 1500000, 2000000, 2500000, 3000000,
+		3500000, 4000000
 	};
 
 	struct termios *ntios;
@@ -722,9 +777,9 @@ termio_resume_tty(termio_data_t *td, struct termios *iosp)
 	 * We temporarily ignore TTOU because TIOCSPGRP could trigger it.
 	 */
 	if (td->tio_opgid != mdb.m_pgid) {
-		(void) mdb_signal_sethandler(SIGTTOU, SIG_IGN, NULL);
+		(void) mdb_signal_sethandler(SIGTTOU, MDB_SIG_IGN, NULL);
 		(void) termio_ctl(td->tio_io, TIOCSPGRP, &mdb.m_pgid);
-		(void) mdb_signal_sethandler(SIGTTOU, SIG_DFL, NULL);
+		(void) mdb_signal_sethandler(SIGTTOU, MDB_SIG_DFL, NULL);
 		mdb_dprintf(MDB_DBG_CMDBUF, "fg pgid=%d\n", (int)mdb.m_pgid);
 	}
 
@@ -779,7 +834,7 @@ termio_resume_tty(termio_data_t *td, struct termios *iosp)
 		warn("failed to reset terminal attributes");
 
 	/*
-	 * Compute the terminal speed as described in termio(7I), and then
+	 * Compute the terminal speed as described in termio(4I), and then
 	 * look up the corresponding microseconds-per-char in our table.
 	 */
 	if (ntios->c_cflag & CBAUDEXT)
@@ -824,6 +879,18 @@ termio_resume_tty(termio_data_t *td, struct termios *iosp)
 	termio_tput(td, td->tio_info.ti_cnorm.at_str, 1); /* cursor visible */
 	termio_tput(td, td->tio_info.ti_enacs.at_str, 1); /* alt char set */
 
+	/*
+	 * If the terminal is automargin-capable and we have an initialization
+	 * sequence to enable automargins, we must send it now.  Note that
+	 * we don't have a way of querying this mode and restoring it; if
+	 * we are fighting with (say) a target that is depending on automargin
+	 * being turned off, it will lose.
+	 */
+	if ((td->tio_flags & TIO_AUTOWRAP) &&
+	    td->tio_info.ti_smam.at_str != NULL) {
+		termio_tput(td, td->tio_info.ti_smam.at_str, 1);
+	}
+
 	mdb_iob_flush(td->tio_out);
 }
 
@@ -859,7 +926,7 @@ termio_delay(termio_data_t *td, uint_t usec)
 }
 
 /*
- * Parse the terminfo(4) padding sequence "$<...>" and delay for the specified
+ * Parse the terminfo(5) padding sequence "$<...>" and delay for the specified
  * amount of time by sending pad characters to the terminal.
  */
 static const char *
@@ -953,7 +1020,7 @@ termio_puts(termio_data_t *td, const char *s, uint_t lines)
 /*
  * Print a padded escape sequence string to the terminal.  The caller specifies
  * the string 's' and a count of the affected lines.  If the string contains an
- * embedded delay sequence delimited by "$<>" (see terminfo(4)), appropriate
+ * embedded delay sequence delimited by "$<>" (see terminfo(5)), appropriate
  * padding will be included in the output.  We determine whether or not padding
  * is required during initialization, and set tio_putp to the proper subroutine.
  */
@@ -1072,6 +1139,24 @@ static void
 termio_bspch(termio_data_t *td)
 {
 	if (td->tio_x == 0) {
+		/*
+		 * If TIO_LAZYWRAP is set, we are regrettably in one of two
+		 * states that we cannot differentiate between:  the cursor is
+		 * either on the right margin of the previous line (having not
+		 * advanced due to the lazy wrap) _or_ the cursor is on the
+		 * left margin of the current line because a wrap has already
+		 * been induced due to prior activity.  Because these cases are
+		 * impossible to differentiate, we force the latter case by
+		 * emitting a space and then moving the cursor back.  If the
+		 * wrap had not been induced, emitting this space will induce
+		 * it -- and will assure that our termio_backleft() is the
+		 * correct behavior with respect to the cursor.
+		 */
+		if (td->tio_flags & TIO_LAZYWRAP) {
+			mdb_iob_putc(td->tio_out, ' ');
+			termio_tput(td, td->tio_info.ti_cub1.at_str, 1);
+		}
+
 		termio_backleft(td);
 		td->tio_x = td->tio_cols - 1;
 		td->tio_y--;
@@ -1088,10 +1173,21 @@ termio_delch(termio_data_t *td)
 {
 	mdb_iob_putc(td->tio_out, ' ');
 
-	if (td->tio_x == td->tio_cols - 1 && (td->tio_flags & TIO_AUTOWRAP))
-		termio_backleft(td);
-	else
+	if (td->tio_x == td->tio_cols - 1 && (td->tio_flags & TIO_AUTOWRAP)) {
+		/*
+		 * We just overwrote a space in the final column, so we know
+		 * that we have autowrapped and we therefore definitely don't
+		 * want to issue the ti_cub1.  If we have TIO_LAZYWRAP, we know
+		 * that the cursor remains on the final column, and we want to
+		 * do nothing -- but if TIO_LAZYWRAP isn't set, we have wrapped
+		 * and we need to move the cursor back up and all the way to
+		 * the right via termio_backleft().
+		 */
+		if (!(td->tio_flags & TIO_LAZYWRAP))
+			termio_backleft(td);
+	} else {
 		termio_tput(td, td->tio_info.ti_cub1.at_str, 1);
+	}
 
 	mdb_iob_flush(td->tio_out);
 }
@@ -1348,8 +1444,52 @@ termio_setup_attrs(termio_data_t *td, const char *name)
 
 	td->tio_flags = 0;
 
-	if (td->tio_info.ti_am.at_val && !td->tio_info.ti_xenl.at_val)
+	/*
+	 * We turn on TIO_AUTOWRAP if "am" (automargin) is set on the terminal.
+	 * Previously, this check was too smart for its own good, turning
+	 * TIO_AUTOWRAP on only when both "am" was set _and_ "xenl" was unset.
+	 * "xenl" is one of the (infamous?) so-called "Xanthippe glitches",
+	 * this one pertaining to the Concept 100's feature of not autowrapping
+	 * if the autowrap-inducing character is a newline.  (That is, the
+	 * newline was "eaten" in this case -- and "xenl" accordingly stands
+	 * for "Xanthippe eat newline", which itself sounds like a command from
+	 * an Infocom game about line discipline set in ancient Greece.) This
+	 * (now removed) condition misunderstood the semantics of "xenl",
+	 * apparently inferring that its presence denoted that the terminal
+	 * could not autowrap at all.  In fact, "xenl" is commonly set, and
+	 * denotes that the terminal will not autowrap on a newline -- a
+	 * feature (nee glitch) that is not particularly relevant with respect
+	 * to our input processing.  (Ironically, disabling TIO_AUTOWRAP in
+	 * this case only results in correct-seeming output because of the
+	 * presence of the feature, as the inserted newline to force the wrap
+	 * isn't actually displayed; were it displayed, the input buffer would
+	 * appear double-spaced.)  So with respect to "xenl" and autowrapping,
+	 * the correct behavior is to ignore it entirely, and adopt the
+	 * (simpler and less arcane) logic of setting TIO_AUTOWRAP if (and only
+	 * if) "am" is set on the terminal.  This does not, however, mean that
+	 * "xenl" is meaningless; see below...
+	 */
+	if (td->tio_info.ti_am.at_val)
 		td->tio_flags |= TIO_AUTOWRAP;
+
+	/*
+	 * While "xenl" doesn't dictate our TIO_AUTOWRAP setting, it does have
+	 * a subtle impact on the way we process input:  in addition to its
+	 * eponymous behavior of eating newlines, "xenl" denotes a second,
+	 * entirely orthogonal idiosyncracy.  As terminfo(5) tells it: "Those
+	 * terminals whose cursor remains on the right-most column until
+	 * another character has been received, rather than wrapping
+	 * immediately upon receiving the right- most character, such as the
+	 * VT100, should also indicate xenl."  So yes, "xenl" in fact has two
+	 * entirely different meanings -- it is a glitch-within-a-glitch, in
+	 * what one assumes (hopes?) to be an accident of history rather than a
+	 * deliberate act of sabotage.  This second behavior is relevant to us
+	 * because it affects the way we redraw the screen after a backspace in
+	 * the left-most column.  We call this second behavior "lazy wrapping",
+	 * and we set it if (and only if) "xenl" is set on the terminal.
+	 */
+	if (td->tio_info.ti_xenl.at_val)
+		td->tio_flags |= TIO_LAZYWRAP;
 
 	if (td->tio_info.ti_bw.at_val)
 		td->tio_flags |= TIO_BACKLEFT;
@@ -1486,10 +1626,20 @@ mdb_termio_create(const char *name, mdb_io_t *rio, mdb_io_t *wio)
 	td->tio_keymap[CTRL('d')] = termio_delchar;
 	td->tio_keymap[CTRL('?')] = termio_widescreen;
 
-	td->tio_keymap[KPAD(CTRL('A'))] = termio_prevhist;
-	td->tio_keymap[KPAD(CTRL('B'))] = termio_nexthist;
-	td->tio_keymap[KPAD(CTRL('C'))] = termio_fwdchar;
-	td->tio_keymap[KPAD(CTRL('D'))] = termio_backchar;
+	td->tio_keymap[KPAD('A')] = termio_prevhist;
+	td->tio_keymap[KPAD('B')] = termio_nexthist;
+	td->tio_keymap[KPAD('C')] = termio_fwdchar;
+	td->tio_keymap[KPAD('D')] = termio_backchar;
+
+	/*
+	 * Many modern terminal emulators treat the "Home" and "End" keys on a
+	 * PC keyboard as cursor keys.  Some others use a multibyte function
+	 * key control sequence.  We handle both styles here:
+	 */
+	td->tio_keymap[KPAD('H')] = termio_home;
+	td->tio_keymap[FKEY('1')] = termio_home;
+	td->tio_keymap[KPAD('F')] = termio_end;
+	td->tio_keymap[FKEY('4')] = termio_end;
 
 	/*
 	 * We default both ASCII BS and DEL to termio_backspace for safety.  We
@@ -1906,13 +2056,13 @@ termio_quit(termio_data_t *td, int c)
 static const char *
 termio_susp(termio_data_t *td, int c)
 {
-	(void) mdb_signal_sethandler(SIGWINCH, SIG_IGN, NULL);
-	(void) mdb_signal_sethandler(SIGTSTP, SIG_IGN, NULL);
+	(void) mdb_signal_sethandler(SIGWINCH, MDB_SIG_IGN, NULL);
+	(void) mdb_signal_sethandler(SIGTSTP, MDB_SIG_IGN, NULL);
 
 	termio_suspend_tty(td, &td->tio_ptios);
 	mdb_iob_nl(td->tio_out);
 
-	(void) mdb_signal_sethandler(SIGTSTP, SIG_DFL, NULL);
+	(void) mdb_signal_sethandler(SIGTSTP, MDB_SIG_DFL, NULL);
 	(void) mdb_signal_pgrp(SIGTSTP);
 
 	/*
@@ -1920,7 +2070,7 @@ termio_susp(termio_data_t *td, int c)
 	 * debugger process group to be stopped by the kernel.  Once we return
 	 * from that call, we assume we are resuming from a subsequent SIGCONT.
 	 */
-	(void) mdb_signal_sethandler(SIGTSTP, SIG_IGN, NULL);
+	(void) mdb_signal_sethandler(SIGTSTP, MDB_SIG_IGN, NULL);
 	termio_resume_tty(td, &td->tio_ptios);
 
 	(void) mdb_signal_sethandler(SIGWINCH, termio_winch, td);

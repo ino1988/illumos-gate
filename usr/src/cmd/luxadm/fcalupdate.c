@@ -66,7 +66,7 @@
 #include	<l_common.h>
 #include	"luxadm.h"
 
-/*	Defines 	*/
+/*	Defines		*/
 #define	FEPROM_SIZE		256*1024
 #define	FEPROM_MAX_PROGRAM	25
 #define	FEPROM_MAX_ERASE	1000
@@ -298,7 +298,7 @@ static int
 findversion(int index, uchar_t *version)
 /*ARGSUSED*/
 {
-int fd, ntries;
+int fd = 0, ntries;
 struct socal_fm_version	*buffer;
 char	socal[MAXNAMELEN];
 char	fp[MAXNAMELEN];
@@ -595,7 +595,7 @@ getbootdev(unsigned int verbose)
 {
 	char *df = "df /";
 	FILE *ptr;
-	char *p, *p1;
+	char *p = NULL, *p1;
 	char bootdev[PATH_MAX];
 	char buf[BUFSIZ];
 	int foundroot = 0;
@@ -632,7 +632,7 @@ getbootdev(unsigned int verbose)
 			char *slot = ",0:slot";
 
 			ls = (char *)malloc(PATH_MAX);
-			(void) memset((char *)ls, NULL, PATH_MAX);
+			(void) memset((char *)ls, 0, PATH_MAX);
 			(void) strcpy(ls, "ls -l ");
 			(void) strcat(ls, bootdev);
 			if ((ptr = popen(ls, "r")) != NULL) {
@@ -827,9 +827,9 @@ loop1:
 
 /*
  * getsocpath():
- * 	Searches the /devices directory recursively returning all soc_name
+ *	Searches the /devices directory recursively returning all soc_name
  *	entries in sbussoc_list (global). This excludes port entries and
- * 	onboard socal (which leaves only directory entries with
+ *	onboard socal (which leaves only directory entries with
  *	soc_name included). devcnt is updated to reflect number of soc_name
  *	devices found.
  */
@@ -917,7 +917,7 @@ loadsocpath(const char *pathname, int *devcnt)
 	int ret = 0;
 	int len;
 	int len_tmp;
-	char *sp;
+	char *sp = NULL;
 	char *sp_tmp;
 	char buffer[PATH_MAX];
 

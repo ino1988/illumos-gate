@@ -21,6 +21,8 @@
 /*
  * Copyright 2009 Sun Microsystems, Inc.  All rights reserved.
  * Use is subject to license terms.
+ * Copyright (c) 2016-2017, Chris Fraire <cfraire@me.com>.
+ * Copyright 2019 Joshua M. Clulow <josh@sysmgr.org>
  */
 
 #ifndef	STATES_H
@@ -101,8 +103,7 @@ struct dhcp_smach_s {
 	uint16_t	*dsm_pil;	/* if non-NULL, param ignore list */
 	uint_t		dsm_pillen;	/* param ignore list len */
 
-	uint_t		dsm_nrouters;	/* the number of default routers */
-	struct in_addr	*dsm_routers;	/* an array of default routers */
+	avl_tree_t	dsm_routes;	/* list of routes */
 
 	in6_addr_t	dsm_server;	/* our DHCP server */
 	uchar_t		*dsm_serverid;	/* server DUID for v6 */
@@ -199,6 +200,19 @@ struct dhcp_smach_s {
 	 * here between the DISCOVER and the REQUEST.  (v4 only)
 	 */
 	char		*dsm_reqhost;
+
+	/*
+	 * The host name we've been asked by IPC message (e.g.,
+	 * `ipadm -T dhcp -h ...') to request is remembered here until it is
+	 * reset by another external message.
+	 */
+	char		*dsm_msg_reqhost;
+
+	/*
+	 * The domain name returned for v4 DNSdmain is decoded here for use
+	 * (if configured and needed) to determine an FQDN.
+	 */
+	char		*dsm_dhcp_domainname;
 
 	/*
 	 * V4 and V6 use slightly different timers.  For v4, we must count
@@ -309,8 +323,8 @@ boolean_t	schedule_smach_timer(dhcp_smach_t *, int, uint32_t,
 		    iu_tq_callback_t *);
 void		cancel_offer_timer(dhcp_smach_t *);
 void		cancel_smach_timers(dhcp_smach_t *);
-void		discard_default_routes(dhcp_smach_t *);
-void		remove_default_routes(dhcp_smach_t *);
+void		discard_routes(dhcp_smach_t *, dhcp_route_source_t);
+void		remove_routes(dhcp_smach_t *);
 boolean_t	is_bound_state(DHCPSTATE);
 
 /* Lease-related support functions in states.c */

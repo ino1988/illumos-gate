@@ -25,7 +25,8 @@
 
 #
 # Copyright (c) 2012 by Delphix. All rights reserved.
-# Copyright (c) 2012 Joyent, Inc. All rights reserved.
+# Copyright 2021 Joyent, Inc.
+# Copyright 2025 Oxide Computer Company
 #
 
 KMDBSRCS += \
@@ -37,7 +38,6 @@ KMDBSRCS += \
 	mdb_callb.c \
 	mdb_cmdbuf.c \
 	mdb_cmds.c \
-	kvm_cpu.c \
 	kmdb_conf.c \
 	kmdb_context.c \
 	kmdb_create.c \
@@ -61,6 +61,7 @@ KMDBSRCS += \
 	kmdb_kdi.c \
 	kmdb_kvm.c \
 	mdb_logio.c \
+	mdb_linkerset.c \
 	mdb_list.c \
 	mdb_macalias.c \
 	kmdb_main.c \
@@ -77,6 +78,7 @@ KMDBSRCS += \
 	mdb_set.c \
 	kmdb_shell.c \
 	mdb_signal.c \
+	mdb_stack.c \
 	mdb_string.c \
 	mdb_strio.c \
 	kmdb_stubs.c \
@@ -89,15 +91,16 @@ KMDBSRCS += \
 	kmdb_umemglue.c \
 	mdb_value.c \
 	mdb_vcb.c \
+	mdb_walkers.c \
 	mdb_wcb.c \
 	mdb_whatis.c \
 	kmdb_wr.c
 
 KMDBML +=
 
-KMDBOBJS = $(KMDBSRCS:%.c=%.o) $(KMDBML:%.s=%.o)
+KMDBOBJS = $(KMDBSRCS:%.c=%.o) $(KMDBML:%.S=%.o)
 
-PROMSRCS += 
+PROMSRCS +=
 
 PROMOBJS = $(PROMSRCS:%.c=%.o)
 
@@ -110,16 +113,15 @@ KCTLSRCS += \
 	kctl_string.c \
 	kctl_wr.c
 
-KCTLML += 
+KCTLML +=
 
-KCTLOBJS = $(KCTLSRCS:%.c=%.o) $(KCTLML:%.s=%.o)
+KCTLOBJS = $(KCTLSRCS:%.c=%.o) $(KCTLML:%.S=%.o)
 
 SRCS += $(KMDBSRCS) $(PROMSRCS)
 MLSRCS += $(KMDBML)
-OBJS = $(SRCS:%.c=%.o) $(KMDBML:%.s=%.o)
+OBJS = $(SRCS:%.c=%.o) $(KMDBML:%.S=%.o)
 
 ALLOBJS = $(OBJS) $(KCTLOBJS)
-ALLLINTFILES = $(ALLOBJS:%.o=%.ln)
 
 # files that need KMDB_VERSION defined
 VERSFILES = \

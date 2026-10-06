@@ -21,38 +21,40 @@
 #
 
 #
-# Copyright (c) 2012 by Delphix. All rights reserved.
+# Copyright (c) 2012, 2016 by Delphix. All rights reserved.
 #
 
 . $STF_SUITE/include/libtest.shlib
 
 ################################################################################
 #
-#  Specifying invalid features/states should cause the create to fail.
+#  Specifying invalid feature names/states should cause the create to fail.
 #
-#  1. Try to create the pool with a variety of invalid feature flags options.
+#  1. Try to create the pool with a variety of invalid feature names/states.
 #  2. Verify no pool was created.
 #
 ################################################################################
 
 verify_runnable "global"
 
-properties="feature@async_destroy=disabled " \
-    "feature@async_destroy=active " \
-    "feature@xxx_fake_xxx=enabled " \
-    "unsupported@some_feature=inactive " \
-    "unsupported@some_feature=readonly "
+properties="\
+feature@async_destroy=disable \
+feature@async_destroy=active \
+feature@xxx_fake_xxx=enabled \
+unsupported@some_feature=inactive \
+unsupported@some_feature=readonly \
+"
 
 function cleanup
 {
-	datasetexists $TESTPOOL && log_must $ZPOOL destroy $TESTPOOL
+	datasetexists $TESTPOOL && log_must zpool destroy $TESTPOOL
 }
 
-log_assert "'zpool create with invalid features fails"
+log_assert "'zpool create' with invalid feature names/states fails"
 log_onexit cleanup
 
 for prop in $properties; do
-	log_mustnot $ZPOOL create -f -o "$prop" $TESTPOOL $DISKS
+	log_mustnot zpool create -f -o "$prop" $TESTPOOL $DISKS
 	log_mustnot datasetexists $TESTPOOL
 done
 

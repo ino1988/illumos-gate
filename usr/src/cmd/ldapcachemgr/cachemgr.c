@@ -21,6 +21,7 @@
 /*
  * Copyright 2009 Sun Microsystems, Inc.  All rights reserved.
  * Use is subject to license terms.
+ * Copyright 2019 Nexenta Systems, Inc.
  */
 
 /*
@@ -225,13 +226,13 @@ static thread_key_t	server_key;
 static void *
 server_tsd_bind(void *arg)
 {
-	static void	*value = 0;
+	static void *value = "NON-NULL TSD";
 
 	/*
 	 * disable cancellation to prevent hangs when server
 	 * threads disappear
 	 */
-
+	(void) pthread_setcancelstate(PTHREAD_CANCEL_DISABLE, NULL);
 	(void) thr_setspecific(server_key, value);
 	(void) door_return(NULL, 0, NULL, 0);
 
@@ -268,6 +269,7 @@ server_destroy(void *arg)
 	(void) mutex_lock(&create_lock);
 	num_servers--;
 	(void) mutex_unlock(&create_lock);
+	(void) thr_setspecific(server_key, NULL);
 }
 
 static void		client_killserver();
@@ -448,9 +450,7 @@ main(int argc, char ** argv)
 			 * no specified log file
 			 */
 			(void) strcpy(current_admin.logfile, LOGFILE);
-		else
-			(void) cachemgr_set_lf(&current_admin,
-			    current_admin.logfile);
+		(void) cachemgr_set_lf(&current_admin, current_admin.logfile);
 		/*
 		 * validate the range of debug level number
 		 * and set the number to current_admin.debug_level
@@ -470,8 +470,7 @@ main(int argc, char ** argv)
 	} else {
 		if (strlen(current_admin.logfile) == 0)
 			(void) strcpy(current_admin.logfile, "/dev/null");
-			(void) cachemgr_set_lf(&current_admin,
-			    current_admin.logfile);
+		(void) cachemgr_set_lf(&current_admin, current_admin.logfile);
 	}
 
 	if (dofg == 0)
@@ -1201,7 +1200,7 @@ client_showstats(admin_t *ptr)
 static void
 detachfromtty(char *pgm)
 {
-	int 	status;
+	int	status;
 	pid_t	pid, wret;
 
 	(void) close(0);
@@ -1405,12 +1404,11 @@ is_root(int free_uc, char *dc_str, ucred_t **ucp)
 
 int
 is_called_from_nscd(pid_t pid)
-
 {
 	static mutex_t	_door_lock = DEFAULTMUTEX;
 	static	int	doorfd = -1;
 	int		match;
-	door_info_t 	my_door;
+	door_info_t	my_door;
 
 	/*
 	 * the first time in we try and open and validate the door.

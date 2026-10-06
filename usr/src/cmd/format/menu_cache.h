@@ -27,15 +27,10 @@
 #ifndef	_MENU_CACHE_H
 #define	_MENU_CACHE_H
 
-#pragma ident	"%Z%%M%	%I%	%E% SMI"
-
 #ifdef	__cplusplus
 extern "C" {
 #endif
 
-/*
- *	Prototypes for ANSI
- */
 int	c_cache(void);
 int	ca_write_cache(void);
 int	ca_read_cache(void);

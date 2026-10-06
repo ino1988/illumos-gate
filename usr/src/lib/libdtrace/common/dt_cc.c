@@ -21,8 +21,9 @@
 
 /*
  * Copyright (c) 2003, 2010, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2011, 2016 by Delphix. All rights reserved.
  * Copyright (c) 2013, Joyent Inc. All rights reserved.
- * Copyright (c) 2012 by Delphix. All rights reserved.
+ * Copyright 2015 Gary Mills
  */
 
 /*
@@ -117,7 +118,6 @@ static const dtrace_diftype_t dt_int_rtype = {
 
 static void *dt_compile(dtrace_hdl_t *, int, dtrace_probespec_t, void *,
     uint_t, int, char *const[], FILE *, const char *);
-
 
 /*ARGSUSED*/
 static int
@@ -502,21 +502,23 @@ dt_action_printa(dtrace_hdl_t *dtp, dt_node_t *dnp, dtrace_stmtdesc_t *sdp)
 	for (anp = dnp->dn_args; anp != NULL; anp = anp->dn_list)
 		argc++; /* count up arguments for error messages below */
 
-	switch (dnp->dn_args->dn_kind) {
-	case DT_NODE_STRING:
-		format = dnp->dn_args->dn_string;
-		anp = dnp->dn_args->dn_list;
-		argr = 2;
-		break;
-	case DT_NODE_AGG:
-		format = NULL;
-		anp = dnp->dn_args;
-		argr = 1;
-		break;
-	default:
-		format = NULL;
-		anp = dnp->dn_args;
-		argr = 1;
+	if (dnp->dn_args != NULL) {
+		switch (dnp->dn_args->dn_kind) {
+		case DT_NODE_STRING:
+			format = dnp->dn_args->dn_string;
+			anp = dnp->dn_args->dn_list;
+			argr = 2;
+			break;
+		case DT_NODE_AGG:
+			format = NULL;
+			anp = dnp->dn_args;
+			argr = 1;
+			break;
+		default:
+			format = NULL;
+			anp = dnp->dn_args;
+			argr = 1;
+		}
 	}
 
 	if (argc < argr) {
@@ -2335,7 +2337,7 @@ dt_compile(dtrace_hdl_t *dtp, int context, dtrace_probespec_t pspec, void *arg,
 	dt_node_t *dnp;
 	dt_decl_t *ddp;
 	dt_pcb_t pcb;
-	void *rv;
+	void *volatile rv;
 	int err;
 
 	if ((fp == NULL && s == NULL) || (cflags & ~DTRACE_C_MASK) != 0) {
@@ -2418,6 +2420,28 @@ dt_compile(dtrace_hdl_t *dtp, int context, dtrace_probespec_t pspec, void *arg,
 	}
 
 	/*
+	 * Perform sugar transformations (for "if" / "else") and replace the
+	 * existing clause chain with the new one.
+	 */
+	if (context == DT_CTX_DPROG) {
+		dt_node_t *dnp, *next_dnp;
+		dt_node_t *new_list = NULL;
+
+		for (dnp = yypcb->pcb_root->dn_list;
+		    dnp != NULL; dnp = next_dnp) {
+			/* remove this node from the list */
+			next_dnp = dnp->dn_list;
+			dnp->dn_list = NULL;
+
+			if (dnp->dn_kind == DT_NODE_CLAUSE)
+				dnp = dt_compile_sugar(dtp, dnp);
+			/* append node to the new list */
+			new_list = dt_node_link(new_list, dnp);
+		}
+		yypcb->pcb_root->dn_list = new_list;
+	}
+
+	/*
 	 * If we have successfully created a parse tree for a D program, loop
 	 * over the clauses and actions and instantiate the corresponding
 	 * libdtrace program.  If we are parsing a D expression, then we
@@ -2437,6 +2461,8 @@ dt_compile(dtrace_hdl_t *dtp, int context, dtrace_probespec_t pspec, void *arg,
 		for (; dnp != NULL; dnp = dnp->dn_list) {
 			switch (dnp->dn_kind) {
 			case DT_NODE_CLAUSE:
+				if (DT_TREEDUMP_PASS(dtp, 4))
+					dt_printd(dnp, stderr, 0);
 				dt_compile_clause(dtp, dnp);
 				break;
 			case DT_NODE_XLATOR:

@@ -21,6 +21,12 @@
 /*
  * Copyright 2010 Sun Microsystems, Inc.  All rights reserved.
  * Use is subject to license terms.
+ *
+ * Copyright 2016 Joyent, Inc.
+ * Copyright (c) 2016 by Delphix. All rights reserved.
+ * Copyright 2019 Joshua M. Clulow <josh@sysmgr.org>
+ * Copyright 2022 Tintri by DDN, Inc. All rights reserved.
+ * Copyright 2023 Oxide Computer Company
  */
 
 
@@ -74,7 +80,7 @@ static int	scsa2usb_info(dev_info_t *, ddi_info_cmd_t, void *,
 						void **);
 static int	scsa2usb_detach(dev_info_t *, ddi_detach_cmd_t);
 static int	scsa2usb_cleanup(dev_info_t *, scsa2usb_state_t *);
-static void	scsa2usb_validate_attrs(scsa2usb_state_t *);
+static void	scsa2usb_detect_quirks(scsa2usb_state_t *);
 static void	scsa2usb_create_luns(scsa2usb_state_t *);
 static int	scsa2usb_is_usb(dev_info_t *);
 static void	scsa2usb_fake_inquiry(scsa2usb_state_t *,
@@ -88,7 +94,6 @@ static void	scsa2usb_override(scsa2usb_state_t *);
 static int	scsa2usb_parse_input_str(char *, scsa2usb_ov_t *,
 		    scsa2usb_state_t *);
 static void	scsa2usb_override_error(char *, scsa2usb_state_t *);
-static char	*scsa2usb_strtok_r(char *, char *, char **);
 
 
 /* PANIC callback handling */
@@ -120,9 +125,9 @@ static int	scsa2usb_scsi_bus_unconfig(dev_info_t *, uint_t,
 /* functions for command and transport support */
 static void	scsa2usb_prepare_pkt(scsa2usb_state_t *, struct scsi_pkt *);
 static int	scsa2usb_cmd_transport(scsa2usb_state_t *, scsa2usb_cmd_t *);
-static int	scsa2usb_check_bulkonly_blacklist_attrs(scsa2usb_state_t *,
-		    scsa2usb_cmd_t *, uchar_t);
-static int	scsa2usb_check_ufi_blacklist_attrs(scsa2usb_state_t *, uchar_t,
+static int	scsa2usb_check_bulkonly_quirks(scsa2usb_state_t *,
+		    scsa2usb_cmd_t *);
+static int	scsa2usb_check_ufi_quirks(scsa2usb_state_t *,
 		    scsa2usb_cmd_t *);
 static int	scsa2usb_handle_scsi_cmd_sub_class(scsa2usb_state_t *,
 		    scsa2usb_cmd_t *, struct scsi_pkt *);
@@ -147,9 +152,11 @@ static int	scsa2usb_open_usb_pipes(scsa2usb_state_t *);
 void		scsa2usb_close_usb_pipes(scsa2usb_state_t *);
 
 static void	scsa2usb_fill_up_cdb_len(scsa2usb_cmd_t *, int);
-static void	scsa2usb_fill_up_cdb_lba(scsa2usb_cmd_t *, int);
+static void	scsa2usb_fill_up_cdb_lba(scsa2usb_cmd_t *, uint64_t);
+static void	scsa2usb_fill_up_g4_cdb_lba(scsa2usb_cmd_t *, uint64_t);
 static void	scsa2usb_fill_up_ReadCD_cdb_len(scsa2usb_cmd_t *, int, int);
 static void	scsa2usb_fill_up_12byte_cdb_len(scsa2usb_cmd_t *, int, int);
+static void	scsa2usb_fill_up_16byte_cdb_len(scsa2usb_cmd_t *, int, int);
 static int	scsa2usb_read_cd_blk_size(uchar_t);
 int		scsa2usb_rw_transport(scsa2usb_state_t *, struct scsi_pkt *);
 void		scsa2usb_setup_next_xfer(scsa2usb_state_t *, scsa2usb_cmd_t *);
@@ -239,6 +246,8 @@ static char *scsa2usb_cmds[] = {
 	"\135sendcuesheet",
 	"\136prin",
 	"\137prout",
+	"\210read16",
+	"\212write16",
 	"\241blankcd",
 	"\245playaudio12",
 	"\250read12",
@@ -254,71 +263,75 @@ static char *scsa2usb_cmds[] = {
 
 
 /*
- * Mass-Storage devices masquerade as "sd" disks.
+ * Mass-Storage devices masquerade as "sd" disks.  These devices may not
+ * support all SCSI CDBs in their entirety due to implementation
+ * limitations.
  *
- * These devices may not support all SCSI CDBs in their
- * entirety due to their hardware implementation limitations.
- *
- * As such, following is a list of some of the black-listed
- * devices w/ the attributes that they do not support.
- * (See scsa2usb.h for description on each attribute)
+ * The following table contains a list of quirks for devices that are known to
+ * misbehave.  See the comments in scsa2usb.h for a description of each
+ * quirk attribute.
  */
-#define	X	((uint16_t)(-1))
 
-static struct blacklist {
-	uint16_t	idVendor;	/* vendor ID			*/
-	uint16_t	idProduct;	/* product ID			*/
-	uint16_t	bcdDevice;	/* device release number in bcd */
-	uint16_t	attributes;	/* attributes to blacklist	*/
-} scsa2usb_blacklist[] = {
+/*
+ * Either the product ID (q_pid) or the revision number (q_rev) can be a
+ * wildcard match using this constant:
+ */
+#define	X	UINT16_MAX
+
+static struct quirk {
+	uint16_t	q_vid;	/* Vendor ID */
+	uint16_t	q_pid;	/* Product ID */
+	uint16_t	q_rev;	/* Device revision number in BCD */
+	uint16_t	q_attr;	/* Quirk attributes for this device */
+} scsa2usb_quirks[] = {
 	/* Iomega Zip100 drive (prototype) with flaky bridge */
-	{MS_IOMEGA_VID, MS_IOMEGA_PID1_ZIP100, 0,
+	{MS_IOMEGA_VID, MS_IOMEGA_PID1_ZIP100, X,
 	    SCSA2USB_ATTRS_GET_LUN | SCSA2USB_ATTRS_PM},
 
 	/* Iomega Zip100 drive (newer model) with flaky bridge */
-	{MS_IOMEGA_VID, MS_IOMEGA_PID2_ZIP100, 0,
+	{MS_IOMEGA_VID, MS_IOMEGA_PID2_ZIP100, X,
 	    SCSA2USB_ATTRS_GET_LUN | SCSA2USB_ATTRS_PM},
 
 	/* Iomega Zip100 drive (newer model) with flaky bridge */
-	{MS_IOMEGA_VID, MS_IOMEGA_PID3_ZIP100, 0,
+	{MS_IOMEGA_VID, MS_IOMEGA_PID3_ZIP100, X,
 	    SCSA2USB_ATTRS_GET_LUN | SCSA2USB_ATTRS_PM},
 
 	/* Iomega Zip250 drive */
-	{MS_IOMEGA_VID, MS_IOMEGA_PID_ZIP250, 0, SCSA2USB_ATTRS_GET_LUN},
+	{MS_IOMEGA_VID, MS_IOMEGA_PID_ZIP250, X, SCSA2USB_ATTRS_GET_LUN},
 
 	/* Iomega Clik! drive */
-	{MS_IOMEGA_VID, MS_IOMEGA_PID_CLIK, 0,
+	{MS_IOMEGA_VID, MS_IOMEGA_PID_CLIK, X,
 	    SCSA2USB_ATTRS_GET_LUN | SCSA2USB_ATTRS_START_STOP},
 
 	/* Kingston DataTraveler Stick / PNY Attache Stick */
-	{MS_TOSHIBA_VID, MS_TOSHIBA_PID0, 0,
+	{MS_TOSHIBA_VID, MS_TOSHIBA_PID0, X,
 	    SCSA2USB_ATTRS_GET_LUN},
 
 	/* PNY Floppy drive */
-	{MS_PNY_VID, MS_PNY_PID0, 0,
+	{MS_PNY_VID, MS_PNY_PID0, X,
 	    SCSA2USB_ATTRS_GET_LUN},
 
 	/* SMSC floppy Device - and its clones */
-	{MS_SMSC_VID, X, 0, SCSA2USB_ATTRS_START_STOP},
+	{MS_SMSC_VID, X, X, SCSA2USB_ATTRS_START_STOP},
 
 	/* Hagiwara SmartMedia Device */
-	{MS_HAGIWARA_SYS_COM_VID, MS_HAGIWARA_SYSCOM_PID1, 0,
+	{MS_HAGIWARA_SYS_COM_VID, MS_HAGIWARA_SYSCOM_PID1, X,
 	    SCSA2USB_ATTRS_GET_LUN | SCSA2USB_ATTRS_START_STOP},
 
 	/* Hagiwara CompactFlash Device */
-	{MS_HAGIWARA_SYS_COM_VID, MS_HAGIWARA_SYSCOM_PID2, 0,
+	{MS_HAGIWARA_SYS_COM_VID, MS_HAGIWARA_SYSCOM_PID2, X,
 	    SCSA2USB_ATTRS_GET_LUN | SCSA2USB_ATTRS_START_STOP},
 
 	/* Hagiwara SmartMedia/CompactFlash Combo Device */
-	{MS_HAGIWARA_SYS_COM_VID, MS_HAGIWARA_SYSCOM_PID3, 0,
+	{MS_HAGIWARA_SYS_COM_VID, MS_HAGIWARA_SYSCOM_PID3, X,
 	    SCSA2USB_ATTRS_START_STOP},
 
 	/* Hagiwara new SM Device */
-	{MS_HAGIWARA_SYS_COM_VID, MS_HAGIWARA_SYSCOM_PID4, 0,
+	{MS_HAGIWARA_SYS_COM_VID, MS_HAGIWARA_SYSCOM_PID4, X,
 	    SCSA2USB_ATTRS_GET_LUN | SCSA2USB_ATTRS_START_STOP},
 
 	/* Hagiwara new CF Device */
-	{MS_HAGIWARA_SYS_COM_VID, MS_HAGIWARA_SYSCOM_PID5, 0,
+	{MS_HAGIWARA_SYS_COM_VID, MS_HAGIWARA_SYSCOM_PID5, X,
 	    SCSA2USB_ATTRS_GET_LUN | SCSA2USB_ATTRS_START_STOP},
 
 	/* Mitsumi CD-RW Device(s) */
@@ -326,62 +339,63 @@ static struct blacklist {
 	    SCSA2USB_ATTRS_GET_CONF | SCSA2USB_ATTRS_GET_PERF},
 
 	/* Neodio Technologies Corporation SM/CF/MS/SD Combo Device */
-	{MS_NEODIO_VID, MS_NEODIO_DEVICE_3050, 0,
+	{MS_NEODIO_VID, MS_NEODIO_DEVICE_3050, X,
 	    SCSA2USB_ATTRS_MODE_SENSE },
 
 	/* dumb flash devices */
-	{MS_SONY_FLASH_VID, MS_SONY_FLASH_PID, 0,
+	{MS_SONY_FLASH_VID, MS_SONY_FLASH_PID, X,
 	    SCSA2USB_ATTRS_REDUCED_CMD},
 
-	{MS_TREK_FLASH_VID, MS_TREK_FLASH_PID, 0,
+	{MS_TREK_FLASH_VID, MS_TREK_FLASH_PID, X,
 	    SCSA2USB_ATTRS_REDUCED_CMD},
 
-	{MS_PENN_FLASH_VID, MS_PENN_FLASH_PID, 0,
+	{MS_PENN_FLASH_VID, MS_PENN_FLASH_PID, X,
 	    SCSA2USB_ATTRS_REDUCED_CMD},
 
 	/* SimpleTech UCF-100 CF Device */
-	{MS_SIMPLETECH_VID, MS_SIMPLETECH_PID1, 0,
+	{MS_SIMPLETECH_VID, MS_SIMPLETECH_PID1, X,
 	    SCSA2USB_ATTRS_REDUCED_CMD},
 
 	{MS_ADDONICS_CARD_READER_VID, MS_ADDONICS_CARD_READER_PID,
-	    0, SCSA2USB_ATTRS_REDUCED_CMD},
+	    X, SCSA2USB_ATTRS_REDUCED_CMD},
 
 	/* Acomdata 80GB USB/1394 Hard Disk */
-	{MS_ACOMDATA_VID, MS_ACOMDATA_PID1, 0,
+	{MS_ACOMDATA_VID, MS_ACOMDATA_PID1, X,
 	    SCSA2USB_ATTRS_USE_CSW_RESIDUE},
 
 	/* OTi6828 Flash Disk */
-	{MS_OTI_VID, MS_OTI_DEVICE_6828, 0,
+	{MS_OTI_VID, MS_OTI_DEVICE_6828, X,
 	    SCSA2USB_ATTRS_USE_CSW_RESIDUE},
 
 	/* AMI Virtual Floppy */
-	{MS_AMI_VID, MS_AMI_VIRTUAL_FLOPPY, 0,
+	{MS_AMI_VID, MS_AMI_VIRTUAL_FLOPPY, X,
 	    SCSA2USB_ATTRS_NO_MEDIA_CHECK},
 
 	/* ScanLogic USB Storage Device */
-	{MS_SCANLOGIC_VID, MS_SCANLOGIC_PID1, 0,
+	{MS_SCANLOGIC_VID, MS_SCANLOGIC_PID1, X,
 	    SCSA2USB_ATTRS_NO_CAP_ADJUST},
 
 	/* Super Top USB 2.0 IDE Device */
-	{MS_SUPERTOP_VID, MS_SUPERTOP_DEVICE_6600, 0,
+	{MS_SUPERTOP_VID, MS_SUPERTOP_DEVICE_6600, X,
 	    SCSA2USB_ATTRS_USE_CSW_RESIDUE},
 
 	/* Aigo Miniking Device NEHFSP14 */
-	{MS_AIGO_VID, MS_AIGO_DEVICE_6981, 0,
+	{MS_AIGO_VID, MS_AIGO_DEVICE_6981, X,
 	    SCSA2USB_ATTRS_USE_CSW_RESIDUE},
 
 	/* Alcor Micro Corp 6387 flash disk */
-	{MS_ALCOR_VID, MS_ALCOR_PID0, 0,
+	{MS_ALCOR_VID, MS_ALCOR_PID0, X,
 	    SCSA2USB_ATTRS_GET_LUN | SCSA2USB_ATTRS_USE_CSW_RESIDUE},
 
 	/* Western Digital External HDD */
-	{MS_WD_VID, MS_WD_PID, 0,
-	    SCSA2USB_ATTRS_INQUIRY_EVPD}
+	{MS_WD_VID, MS_WD_PID, X,
+	    SCSA2USB_ATTRS_INQUIRY_EVPD},
+
+	/* Insyde Virtual CD-ROM */
+	{MS_INSYDE_VID, MS_INSYDE_PID_CDROM, X,
+	    SCSA2USB_ATTRS_MODE_SENSE},
 };
 
-
-#define	N_SCSA2USB_BLACKLIST (sizeof (scsa2usb_blacklist))/ \
-				sizeof (struct blacklist)
 
 /*
  * Attribute values can be overridden by values
@@ -474,7 +488,7 @@ static struct cb_ops scsa2usb_cbops = {
 	ddi_prop_op,		/* prop_op */
 	NULL,			/* stream */
 	D_MP,			/* cb_flag */
-	CB_REV, 		/* rev */
+	CB_REV,			/* rev */
 	nodev,			/* int (*cb_aread)() */
 	nodev			/* int (*cb_awrite)() */
 };
@@ -624,7 +638,7 @@ scsa2usb_attach(dev_info_t *dip, ddi_attach_cmd_t cmd)
 	usb_ep_data_t		*ep_data;
 	usb_client_dev_data_t	*dev_data;
 	usb_alt_if_data_t	*altif_data;
-	usb_ugen_info_t 	usb_ugen_info;
+	usb_ugen_info_t		usb_ugen_info;
 
 	USB_DPRINTF_L4(DPRINT_MASK_SCSA, NULL,
 	    "scsa2usb_attach: dip = 0x%p", (void *)dip);
@@ -660,7 +674,7 @@ scsa2usb_attach(dev_info_t *dip, ddi_attach_cmd_t cmd)
 		return (DDI_FAILURE);
 	}
 
-	scsa2usbp->scsa2usb_dip 	= dip;
+	scsa2usbp->scsa2usb_dip		= dip;
 	scsa2usbp->scsa2usb_instance	= instance;
 
 	/* allocate a log handle for debug/error messages */
@@ -695,11 +709,15 @@ scsa2usb_attach(dev_info_t *dip, ddi_attach_cmd_t cmd)
 		    dev_data->dev_iblock_cookie);
 	}
 	mutex_enter(&scsa2usbp->scsa2usb_mutex);
-	scsa2usbp->scsa2usb_dip 	= dip;
+	scsa2usbp->scsa2usb_dip		= dip;
 	scsa2usbp->scsa2usb_instance	= instance;
+	/*
+	 * Devices begin with all attributes enabled.  Attributes may be
+	 * disabled later through detected quirks or through the configuration
+	 * file.
+	 */
 	scsa2usbp->scsa2usb_attrs	= SCSA2USB_ALL_ATTRS;
 	scsa2usbp->scsa2usb_dev_data	= dev_data;
-
 
 	/* save the default pipe handle */
 	scsa2usbp->scsa2usb_default_pipe = dev_data->dev_default_ph;
@@ -738,15 +756,36 @@ scsa2usb_attach(dev_info_t *dip, ddi_attach_cmd_t cmd)
 	/* figure out the endpoints and copy the descr */
 	if ((ep_data = usb_lookup_ep_data(dip, dev_data, interface, 0, 0,
 	    USB_EP_ATTR_BULK, USB_EP_DIR_OUT)) != NULL) {
-		scsa2usbp->scsa2usb_bulkout_ept = ep_data->ep_descr;
+		if (usb_ep_xdescr_fill(USB_EP_XDESCR_CURRENT_VERSION,
+		    dip, ep_data, &scsa2usbp->scsa2usb_bulkout_xept) !=
+		    USB_SUCCESS) {
+
+			mutex_exit(&scsa2usbp->scsa2usb_mutex);
+
+			goto fail;
+		}
 	}
 	if ((ep_data = usb_lookup_ep_data(dip, dev_data, interface, 0, 0,
 	    USB_EP_ATTR_BULK, USB_EP_DIR_IN)) != NULL) {
-		scsa2usbp->scsa2usb_bulkin_ept = ep_data->ep_descr;
+		if (usb_ep_xdescr_fill(USB_EP_XDESCR_CURRENT_VERSION,
+		    dip, ep_data, &scsa2usbp->scsa2usb_bulkin_xept) !=
+		    USB_SUCCESS) {
+
+			mutex_exit(&scsa2usbp->scsa2usb_mutex);
+
+			goto fail;
+		}
 	}
 	if ((ep_data = usb_lookup_ep_data(dip, dev_data, interface, 0, 0,
 	    USB_EP_ATTR_INTR, USB_EP_DIR_IN)) != NULL) {
-		scsa2usbp->scsa2usb_intr_ept = ep_data->ep_descr;
+		if (usb_ep_xdescr_fill(USB_EP_XDESCR_CURRENT_VERSION,
+		    dip, ep_data, &scsa2usbp->scsa2usb_intr_xept) !=
+		    USB_SUCCESS) {
+
+			mutex_exit(&scsa2usbp->scsa2usb_mutex);
+
+			goto fail;
+		}
 	}
 
 	/*
@@ -845,10 +884,7 @@ scsa2usb_attach(dev_info_t *dip, ddi_attach_cmd_t cmd)
 		goto fail;
 	}
 
-	/*
-	 * Validate the black-listed attributes
-	 */
-	scsa2usb_validate_attrs(scsa2usbp);
+	scsa2usb_detect_quirks(scsa2usbp);
 
 	/* Print the serial number from the registration data */
 	if (scsa2usbp->scsa2usb_dev_data->dev_serial) {
@@ -1541,11 +1577,11 @@ scsa2usb_parse_input_str(char *str, scsa2usb_ov_t *ovp,
 	u_longlong_t	value;
 
 	/* parse all the input pairs in the string */
-	for (input_field = scsa2usb_strtok_r(str, "=", &lasts);
+	for (input_field = strtok_r(str, "=", &lasts);
 	    input_field != NULL;
-	    input_field = scsa2usb_strtok_r(lasts, "=", &lasts)) {
+	    input_field = strtok_r(lasts, "=", &lasts)) {
 
-		if ((input_value = scsa2usb_strtok_r(lasts, " ", &lasts)) ==
+		if ((input_value = strtok_r(lasts, " ", &lasts)) ==
 		    NULL) {
 			scsa2usb_override_error("format", scsa2usbp);
 
@@ -1667,67 +1703,36 @@ scsa2usb_override_error(char *input_field, scsa2usb_state_t *scsa2usbp)
 	    "invalid %s in scsa2usb.conf file entry", input_field);
 }
 
-/*
- * scsa2usb_strtok_r:
- *	parse a list of tokens
- */
-static char *
-scsa2usb_strtok_r(char *p, char *sep, char **lasts)
-{
-	char	*e;
-	char	*tok = NULL;
-
-	if (p == 0 || *p == 0) {
-
-		return (NULL);
-	}
-
-	e = p+strlen(p);
-
-	do {
-		if (strchr(sep, *p) != NULL) {
-			if (tok != NULL) {
-				*p = 0;
-				*lasts = p+1;
-
-				return (tok);
-			}
-		} else if (tok == NULL) {
-			tok = p;
-		}
-	} while (++p < e);
-
-	*lasts = NULL;
-
-	return (tok);
-}
-
 
 /*
- * scsa2usb_validate_attrs:
- *	many devices have BO/CB/CBI protocol support issues.
- *	use vendor/product info to reset the
- *	individual erroneous attributes
- *
- * NOTE: we look at only device at a time (at attach time)
+ * Some devices are not complete or compatible implementations of the USB mass
+ * storage protocols, and need special handling.  This routine checks various
+ * aspects of the device against internal lists of quirky hardware.
  */
 static void
-scsa2usb_validate_attrs(scsa2usb_state_t *scsa2usbp)
+scsa2usb_detect_quirks(scsa2usb_state_t *scsa2usbp)
 {
-	int i, mask;
+	int mask;
 	usb_dev_descr_t *desc = scsa2usbp->scsa2usb_dev_data->dev_descr;
 
 	if (!SCSA2USB_IS_BULK_ONLY(scsa2usbp)) {
 		scsa2usbp->scsa2usb_attrs &= ~SCSA2USB_ATTRS_GET_LUN;
 	}
 
-	/* determine if this device is on the blacklist */
-	for (i = 0; i < N_SCSA2USB_BLACKLIST; i++) {
-		if ((scsa2usb_blacklist[i].idVendor == desc->idVendor) &&
-		    ((scsa2usb_blacklist[i].idProduct == desc->idProduct) ||
-		    (scsa2usb_blacklist[i].idProduct == X))) {
-			scsa2usbp->scsa2usb_attrs &=
-			    ~(scsa2usb_blacklist[i].attributes);
+	/*
+	 * Determine if this device is on the quirks list:
+	 */
+	for (uint_t i = 0; i < ARRAY_SIZE(scsa2usb_quirks); i++) {
+		struct quirk *q = &scsa2usb_quirks[i];
+
+		if (q->q_vid == desc->idVendor &&
+		    (q->q_pid == desc->idProduct || q->q_pid == X) &&
+		    (q->q_rev == desc->bcdDevice || q->q_rev == X)) {
+			/*
+			 * Remove any attribute bits specified in the quirks
+			 * table:
+			 */
+			scsa2usbp->scsa2usb_attrs &= ~(q->q_attr);
 			break;
 		}
 	}
@@ -2351,7 +2356,7 @@ scsa2usb_scsi_tgt_init(dev_info_t *dip, dev_info_t *cdip,
 /* ARGSUSED */
 static void
 scsa2usb_scsi_tgt_free(dev_info_t *hba_dip, dev_info_t *cdip,
-	scsi_hba_tran_t *tran, struct scsi_device *sd)
+    scsi_hba_tran_t *tran, struct scsi_device *sd)
 {
 	scsa2usb_state_t *scsa2usbp = (scsa2usb_state_t *)
 	    tran->tran_hba_private;
@@ -2391,7 +2396,6 @@ static int
 scsa2usb_scsi_bus_config(dev_info_t *dip, uint_t flag, ddi_bus_config_op_t op,
     void *arg, dev_info_t **child)
 {
-	int	circ;
 	int	rval;
 
 	scsa2usb_state_t *scsa2usbp =
@@ -2406,7 +2410,7 @@ scsa2usb_scsi_bus_config(dev_info_t *dip, uint_t flag, ddi_bus_config_op_t op,
 		flag |= NDI_DEVI_DEBUG;
 	}
 
-	ndi_devi_enter(dip, &circ);
+	ndi_devi_enter(dip);
 	/* create children if necessary */
 	if (DEVI(dip)->devi_child == NULL) {
 		scsa2usb_create_luns(scsa2usbp);
@@ -2414,7 +2418,7 @@ scsa2usb_scsi_bus_config(dev_info_t *dip, uint_t flag, ddi_bus_config_op_t op,
 
 	rval = ndi_busop_bus_config(dip, flag, op, arg, child, 0);
 
-	ndi_devi_exit(dip, circ);
+	ndi_devi_exit(dip);
 
 	return (rval);
 }
@@ -2427,7 +2431,6 @@ scsa2usb_scsi_bus_unconfig(dev_info_t *dip, uint_t flag, ddi_bus_config_op_t op,
 	scsa2usb_state_t *scsa2usbp =
 	    ddi_get_soft_state(scsa2usb_statep, ddi_get_instance(dip));
 
-	int		circular_count;
 	int		rval = NDI_SUCCESS;
 	uint_t		save_flag = flag;
 
@@ -2448,7 +2451,7 @@ scsa2usb_scsi_bus_unconfig(dev_info_t *dip, uint_t flag, ddi_bus_config_op_t op,
 		flag &= ~(NDI_DEVI_REMOVE | NDI_UNCONFIG);
 	}
 
-	ndi_devi_enter(dip, &circular_count);
+	ndi_devi_enter(dip);
 	rval = ndi_busop_bus_unconfig(dip, flag, op, arg);
 
 	/*
@@ -2460,7 +2463,7 @@ scsa2usb_scsi_bus_unconfig(dev_info_t *dip, uint_t flag, ddi_bus_config_op_t op,
 		flag |= NDI_DEVI_REMOVE;
 		rval = ndi_busop_bus_unconfig(dip, flag, op, arg);
 	}
-	ndi_devi_exit(dip, circular_count);
+	ndi_devi_exit(dip);
 
 	if ((rval != NDI_SUCCESS) && (op == BUS_UNCONFIG_ALL) &&
 	    (save_flag & NDI_DEVI_REMOVE)) {
@@ -3018,9 +3021,6 @@ scsa2usb_force_invalid_request(scsa2usb_state_t *scsa2usbp,
 }
 
 
-/*
- * scsa2usb_cmd_transport:
- */
 static int
 scsa2usb_cmd_transport(scsa2usb_state_t *scsa2usbp, scsa2usb_cmd_t *cmd)
 {
@@ -3036,13 +3036,15 @@ scsa2usb_cmd_transport(scsa2usb_state_t *scsa2usbp, scsa2usb_cmd_t *cmd)
 
 	pkt = scsa2usbp->scsa2usb_cur_pkt = cmd->cmd_pkt;
 
-	/* check black-listed attrs first */
+	/*
+	 * Check per-device quirks first:
+	 */
 	if (SCSA2USB_IS_BULK_ONLY(scsa2usbp)) {
-		transport = scsa2usb_check_bulkonly_blacklist_attrs(scsa2usbp,
-		    cmd, pkt->pkt_cdbp[0]);
+		transport = scsa2usb_check_bulkonly_quirks(scsa2usbp, cmd);
 	} else if (SCSA2USB_IS_CB(scsa2usbp) || SCSA2USB_IS_CBI(scsa2usbp)) {
-		transport =  scsa2usb_check_ufi_blacklist_attrs(scsa2usbp,
-		    pkt->pkt_cdbp[0], cmd);
+		transport = scsa2usb_check_ufi_quirks(scsa2usbp, cmd);
+	} else {
+		return (TRAN_FATAL_ERROR);
 	}
 
 	/* just accept the command or return error */
@@ -3090,22 +3092,14 @@ scsa2usb_cmd_transport(scsa2usb_state_t *scsa2usbp, scsa2usb_cmd_t *cmd)
 
 
 /*
- * scsa2usb_check_bulkonly_blacklist_attrs:
- *	validate "scsa2usb_blacklist_attrs" (see scsa2usb.h)
- *	if blacklisted attrs match accept the request
- *	attributes checked are:-
- *		SCSA2USB_ATTRS_START_STOP
+ * Check this Bulk Only command against the quirks for this particular device.
+ * Returns a transport disposition.
  */
 int
-scsa2usb_check_bulkonly_blacklist_attrs(scsa2usb_state_t *scsa2usbp,
-    scsa2usb_cmd_t *cmd, uchar_t opcode)
+scsa2usb_check_bulkonly_quirks(scsa2usb_state_t *scsa2usbp, scsa2usb_cmd_t *cmd)
 {
 	struct scsi_inquiry *inq =
 	    &scsa2usbp->scsa2usb_lun_inquiry[cmd->cmd_pkt->pkt_address.a_lun];
-
-	USB_DPRINTF_L4(DPRINT_MASK_SCSA, scsa2usbp->scsa2usb_log_handle,
-	    "scsa2usb_check_bulkonly_blacklist_attrs: opcode = %s",
-	    scsi_cname(opcode, scsa2usb_cmds));
 
 	ASSERT(mutex_owned(&scsa2usbp->scsa2usb_mutex));
 
@@ -3113,7 +3107,7 @@ scsa2usb_check_bulkonly_blacklist_attrs(scsa2usb_state_t *scsa2usbp,
 	 * decode and convert the packet
 	 * for most cmds, we can bcopy the cdb
 	 */
-	switch (opcode) {
+	switch (cmd->cmd_pkt->pkt_cdbp[0]) {
 	case SCMD_DOORLOCK:
 		if (!(scsa2usbp->scsa2usb_attrs & SCSA2USB_ATTRS_DOORLOCK)) {
 
@@ -3351,6 +3345,8 @@ scsa2usb_handle_scsi_cmd_sub_class(scsa2usb_state_t *scsa2usbp,
 	case SCMD_WRITE:
 	case SCMD_READ_G1:
 	case SCMD_WRITE_G1:
+	case SCMD_READ_G4:
+	case SCMD_WRITE_G4:
 	case SCMD_READ_G5:
 	case SCMD_WRITE_G5:
 	case SCMD_READ_LONG:
@@ -3543,23 +3539,17 @@ scsa2usb_do_tur(scsa2usb_state_t *scsa2usbp, struct scsi_address *ap)
 
 
 /*
- * scsa2usb_check_ufi_blacklist_attrs:
- *	validate "scsa2usb_blacklist_attrs" (see scsa2usb.h)
- *	if blacklisted attrs match accept the request
- *	attributes checked are:-
- *		SCSA2USB_ATTRS_GET_CONF
- *		SCSA2USB_ATTRS_GET_PERF
- *		SCSA2USB_ATTRS_GET_START_STOP
+ * Check this UFI command against the quirks for this particular device.
+ * Returns a transport disposition.
  */
 static int
-scsa2usb_check_ufi_blacklist_attrs(scsa2usb_state_t *scsa2usbp, uchar_t opcode,
-    scsa2usb_cmd_t *cmd)
+scsa2usb_check_ufi_quirks(scsa2usb_state_t *scsa2usbp, scsa2usb_cmd_t *cmd)
 {
-	int	rval = SCSA2USB_TRANSPORT;
+	int rval = SCSA2USB_TRANSPORT;
 
 	ASSERT(mutex_owned(&scsa2usbp->scsa2usb_mutex));
 
-	switch (opcode) {
+	switch (cmd->cmd_pkt->pkt_cdbp[0]) {
 	case SCMD_PRIN:
 	case SCMD_PROUT:
 		rval = SCSA2USB_JUST_ACCEPT;
@@ -3636,7 +3626,7 @@ int
 scsa2usb_handle_ufi_subclass_cmd(scsa2usb_state_t *scsa2usbp,
     scsa2usb_cmd_t *cmd, struct scsi_pkt *pkt)
 {
-	uchar_t opcode =  pkt->pkt_cdbp[0];
+	uchar_t opcode = pkt->pkt_cdbp[0];
 
 	USB_DPRINTF_L4(DPRINT_MASK_SCSA, scsa2usbp->scsa2usb_log_handle,
 	    "scsa2usb_handle_ufi_subclass_cmd: cmd = 0x%p pkt = 0x%p",
@@ -3695,12 +3685,13 @@ scsa2usb_handle_ufi_subclass_cmd(scsa2usb_state_t *scsa2usbp,
 	case SCMD_WRITE:
 	case SCMD_READ_G1:
 	case SCMD_WRITE_G1:
+	case SCMD_READ_G4:
+	case SCMD_WRITE_G4:
 	case SCMD_READ_G5:
 	case SCMD_WRITE_G5:
 	case SCMD_READ_LONG:
 	case SCMD_WRITE_LONG:
 	case SCMD_READ_CD:
-
 		return (scsa2usb_rw_transport(scsa2usbp, pkt));
 
 	case SCMD_TEST_UNIT_READY:
@@ -3787,7 +3778,8 @@ int
 scsa2usb_rw_transport(scsa2usb_state_t *scsa2usbp, struct scsi_pkt *pkt)
 {
 	scsa2usb_cmd_t *cmd = PKT2CMD(pkt);
-	int lba, dir, opcode;
+	int dir, opcode;
+	uint64_t lba;
 	struct buf *bp = cmd->cmd_bp;
 	size_t len, xfer_count;
 	size_t blk_size;	/* calculate the block size to be used */
@@ -3799,7 +3791,7 @@ scsa2usb_rw_transport(scsa2usb_state_t *scsa2usbp, struct scsi_pkt *pkt)
 	ASSERT(mutex_owned(&scsa2usbp->scsa2usb_mutex));
 
 	opcode = pkt->pkt_cdbp[0];
-	blk_size  = scsa2usbp->scsa2usb_lbasize[pkt->pkt_address.a_lun];
+	blk_size = scsa2usbp->scsa2usb_lbasize[pkt->pkt_address.a_lun];
 						/* set to default */
 
 	switch (opcode) {
@@ -3830,8 +3822,9 @@ scsa2usb_rw_transport(scsa2usb_state_t *scsa2usbp, struct scsi_pkt *pkt)
 		lba = SCSA2USB_LBA_10BYTE(pkt);
 		len = SCSA2USB_LEN_10BYTE(pkt);
 		dir = USB_EP_DIR_OUT;
-		if (len) {
-			sz = SCSA2USB_CDRW_BLKSZ(bp ? bp->b_bcount : 0, len);
+		if (len > 0) {
+			sz = SCSA2USB_CDRW_BLKSZ(bp != NULL ?
+			    bp->b_bcount : 0, len);
 			if (SCSA2USB_VALID_CDRW_BLKSZ(sz)) {
 				blk_size = sz;	/* change it accordingly */
 			}
@@ -3844,6 +3837,16 @@ scsa2usb_rw_transport(scsa2usb_state_t *scsa2usbp, struct scsi_pkt *pkt)
 
 		/* Figure out the block size */
 		blk_size = scsa2usb_read_cd_blk_size(pkt->pkt_cdbp[1] >> 2);
+		break;
+	case SCMD_READ_G4:
+		lba = SCSA2USB_LBA_16BYTE(pkt);
+		len = SCSA2USB_LEN_16BYTE(pkt);
+		dir = USB_EP_DIR_IN;
+		break;
+	case SCMD_WRITE_G4:
+		lba = SCSA2USB_LBA_16BYTE(pkt);
+		len = SCSA2USB_LEN_16BYTE(pkt);
+		dir = USB_EP_DIR_OUT;
 		break;
 	case SCMD_READ_G5:
 		lba = SCSA2USB_LBA_12BYTE(pkt);
@@ -3860,8 +3863,8 @@ scsa2usb_rw_transport(scsa2usb_state_t *scsa2usbp, struct scsi_pkt *pkt)
 	cmd->cmd_total_xfercount = xfer_count = len * blk_size;
 
 	/* reduce xfer count if necessary */
-	if (blk_size &&
-	    (xfer_count > scsa2usbp->scsa2usb_max_bulk_xfer_size)) {
+	if (blk_size != 0 &&
+	    xfer_count > scsa2usbp->scsa2usb_max_bulk_xfer_size) {
 		/*
 		 * For CD-RW devices reduce the xfer count based
 		 * on the block size used by these devices. The
@@ -3874,13 +3877,13 @@ scsa2usb_rw_transport(scsa2usb_state_t *scsa2usbp, struct scsi_pkt *pkt)
 		 * The len part of the cdb changes as a result of that.
 		 */
 		if (SCSA2USB_VALID_CDRW_BLKSZ(blk_size)) {
-			xfer_count = ((scsa2usbp->scsa2usb_max_bulk_xfer_size/
-			    blk_size) * blk_size);
-			len = xfer_count/blk_size;
+			xfer_count = (scsa2usbp->scsa2usb_max_bulk_xfer_size /
+			    blk_size) * blk_size;
+			len = xfer_count / blk_size;
 			xfer_count = blk_size * len;
 		} else {
 			xfer_count = scsa2usbp->scsa2usb_max_bulk_xfer_size;
-			len = xfer_count/blk_size;
+			len = xfer_count / blk_size;
 		}
 	}
 
@@ -3889,7 +3892,7 @@ scsa2usb_rw_transport(scsa2usb_state_t *scsa2usbp, struct scsi_pkt *pkt)
 	cmd->cmd_blksize = (int)blk_size;
 
 	/*
-	 * Having figure out the 'partial' xfer len based on he
+	 * Having figured out the 'partial' xfer len based on the
 	 * block size; fill it in to the cmd->cmd_cdb
 	 */
 	cmd->cmd_cdb[SCSA2USB_OPCODE] = (uchar_t)opcode;
@@ -3897,18 +3900,24 @@ scsa2usb_rw_transport(scsa2usb_state_t *scsa2usbp, struct scsi_pkt *pkt)
 	case SCMD_READ_CD:
 		bcopy(pkt->pkt_cdbp, &cmd->cmd_cdb, cmd->cmd_cdblen);
 		scsa2usb_fill_up_ReadCD_cdb_len(cmd, len, CDB_GROUP5);
+		scsa2usb_fill_up_cdb_lba(cmd, lba);
+		break;
+	case SCMD_WRITE_G4:
+	case SCMD_READ_G4:
+		scsa2usb_fill_up_16byte_cdb_len(cmd, len, CDB_GROUP4);
+		scsa2usb_fill_up_g4_cdb_lba(cmd, lba);
 		break;
 	case SCMD_WRITE_G5:
 	case SCMD_READ_G5:
 		scsa2usb_fill_up_12byte_cdb_len(cmd, len, CDB_GROUP5);
+		scsa2usb_fill_up_cdb_lba(cmd, lba);
 		break;
 	default:
 		scsa2usb_fill_up_cdb_len(cmd, len);
 		cmd->cmd_actual_len = CDB_GROUP1;
+		scsa2usb_fill_up_cdb_lba(cmd, lba);
 		break;
 	}
-
-	scsa2usb_fill_up_cdb_lba(cmd, lba);
 
 	USB_DPRINTF_L3(DPRINT_MASK_SCSA, scsa2usbp->scsa2usb_log_handle,
 	    "bcount=0x%lx lba=0x%x len=0x%lx xfercount=0x%lx total=0x%lx",
@@ -3987,10 +3996,23 @@ scsa2usb_setup_next_xfer(scsa2usb_state_t *scsa2usbp, scsa2usb_cmd_t *cmd)
 		/* calculate lba = current_lba + len_of_prev_cmd */
 		cmd->cmd_lba += (cmd->cmd_cdb[6] << 16) +
 		    (cmd->cmd_cdb[7] << 8) + cmd->cmd_cdb[8];
-		cdb_len = xfer_len/cmd->cmd_blksize;
+		cdb_len = xfer_len / cmd->cmd_blksize;
 		cmd->cmd_cdb[SCSA2USB_READ_CD_LEN_2] = (uchar_t)cdb_len;
 		/* re-adjust xfer count */
 		cmd->cmd_xfercount = cdb_len * cmd->cmd_blksize;
+		scsa2usb_fill_up_cdb_lba(cmd, cmd->cmd_lba);
+		break;
+	case SCMD_WRITE_G4:
+	case SCMD_READ_G4:
+		/* calculate lba = current_lba + len_of_prev_cmd */
+		cmd->cmd_lba += (cmd->cmd_cdb[10] << 24) +
+		    (cmd->cmd_cdb[11] << 16) + (cmd->cmd_cdb[12] << 8) +
+		    cmd->cmd_cdb[13];
+		if (blk_size != 0) {
+			xfer_len /= blk_size;
+		}
+		scsa2usb_fill_up_16byte_cdb_len(cmd, xfer_len, CDB_GROUP5);
+		scsa2usb_fill_up_g4_cdb_lba(cmd, cmd->cmd_lba);
 		break;
 	case SCMD_WRITE_G5:
 	case SCMD_READ_G5:
@@ -3998,10 +4020,11 @@ scsa2usb_setup_next_xfer(scsa2usb_state_t *scsa2usbp, scsa2usb_cmd_t *cmd)
 		cmd->cmd_lba += (cmd->cmd_cdb[6] << 24) +
 		    (cmd->cmd_cdb[7] << 16) + (cmd->cmd_cdb[8] << 8) +
 		    cmd->cmd_cdb[9];
-		if (blk_size) {
+		if (blk_size != 0) {
 			xfer_len /= blk_size;
 		}
 		scsa2usb_fill_up_12byte_cdb_len(cmd, xfer_len, CDB_GROUP5);
+		scsa2usb_fill_up_cdb_lba(cmd, cmd->cmd_lba);
 		break;
 	case SCMD_WRITE_G1:
 	case SCMD_WRITE_LONG:
@@ -4010,21 +4033,22 @@ scsa2usb_setup_next_xfer(scsa2usb_state_t *scsa2usbp, scsa2usb_cmd_t *cmd)
 		if (SCSA2USB_VALID_CDRW_BLKSZ(cmd->cmd_blksize)) {
 			blk_size = cmd->cmd_blksize;
 		}
-		cdb_len = xfer_len/blk_size;
+		cdb_len = xfer_len / blk_size;
 		scsa2usb_fill_up_cdb_len(cmd, cdb_len);
 		/* re-adjust xfer count */
 		cmd->cmd_xfercount = cdb_len * blk_size;
+		scsa2usb_fill_up_cdb_lba(cmd, cmd->cmd_lba);
 		break;
 	default:
-		if (blk_size) {
+		if (blk_size != 0) {
 			xfer_len /= blk_size;
 		}
 		scsa2usb_fill_up_cdb_len(cmd, xfer_len);
-		cmd->cmd_lba += scsa2usbp->scsa2usb_max_bulk_xfer_size/blk_size;
+		cmd->cmd_lba += scsa2usbp->scsa2usb_max_bulk_xfer_size /
+		    blk_size;
+		scsa2usb_fill_up_cdb_lba(cmd, cmd->cmd_lba);
+		break;
 	}
-
-	/* fill in the lba */
-	scsa2usb_fill_up_cdb_lba(cmd, cmd->cmd_lba);
 
 	USB_DPRINTF_L4(DPRINT_MASK_SCSA, scsa2usbp->scsa2usb_log_handle,
 	    "scsa2usb_setup_next_xfer:\n\tlba = 0x%x xfer_len = 0x%x "
@@ -4519,8 +4543,8 @@ scsa2usb_open_usb_pipes(scsa2usb_state_t *scsa2usbp)
 		mutex_exit(&scsa2usbp->scsa2usb_mutex);
 
 		/* Open the USB bulk-in pipe */
-		if ((rval = usb_pipe_open(scsa2usbp->scsa2usb_dip,
-		    &scsa2usbp->scsa2usb_bulkin_ept, &policy, USB_FLAGS_SLEEP,
+		if ((rval = usb_pipe_xopen(scsa2usbp->scsa2usb_dip,
+		    &scsa2usbp->scsa2usb_bulkin_xept, &policy, USB_FLAGS_SLEEP,
 		    &scsa2usbp->scsa2usb_bulkin_pipe)) != USB_SUCCESS) {
 			mutex_enter(&scsa2usbp->scsa2usb_mutex);
 			USB_DPRINTF_L2(DPRINT_MASK_SCSA,
@@ -4532,8 +4556,8 @@ scsa2usb_open_usb_pipes(scsa2usb_state_t *scsa2usbp)
 		}
 
 		/* Open the bulk-out pipe  using the same policy */
-		if ((rval = usb_pipe_open(scsa2usbp->scsa2usb_dip,
-		    &scsa2usbp->scsa2usb_bulkout_ept, &policy, USB_FLAGS_SLEEP,
+		if ((rval = usb_pipe_xopen(scsa2usbp->scsa2usb_dip,
+		    &scsa2usbp->scsa2usb_bulkout_xept, &policy, USB_FLAGS_SLEEP,
 		    &scsa2usbp->scsa2usb_bulkout_pipe)) != USB_SUCCESS) {
 			usb_pipe_close(scsa2usbp->scsa2usb_dip,
 			    scsa2usbp->scsa2usb_bulkin_pipe,
@@ -4556,8 +4580,8 @@ scsa2usb_open_usb_pipes(scsa2usb_state_t *scsa2usbp)
 		if (SCSA2USB_IS_CBI(scsa2usbp)) {
 			mutex_exit(&scsa2usbp->scsa2usb_mutex);
 
-			if ((rval = usb_pipe_open(scsa2usbp->scsa2usb_dip,
-			    &scsa2usbp->scsa2usb_intr_ept, &policy,
+			if ((rval = usb_pipe_xopen(scsa2usbp->scsa2usb_dip,
+			    &scsa2usbp->scsa2usb_intr_xept, &policy,
 			    USB_FLAGS_SLEEP, &scsa2usbp->scsa2usb_intr_pipe)) !=
 			    USB_SUCCESS) {
 				usb_pipe_close(scsa2usbp->scsa2usb_dip,
@@ -4670,7 +4694,7 @@ scsa2usb_close_usb_pipes(scsa2usb_state_t *scsa2usbp)
  *	fill up command CDBs' LBA part
  */
 static void
-scsa2usb_fill_up_cdb_lba(scsa2usb_cmd_t *cmd, int lba)
+scsa2usb_fill_up_cdb_lba(scsa2usb_cmd_t *cmd, uint64_t lba)
 {
 	/* zero cdb1, lba bits so they won't get copied in the new cdb */
 	cmd->cmd_cdb[SCSA2USB_LUN] &= 0xE0;
@@ -4678,6 +4702,27 @@ scsa2usb_fill_up_cdb_lba(scsa2usb_cmd_t *cmd, int lba)
 	cmd->cmd_cdb[SCSA2USB_LBA_1] = lba >> 16;
 	cmd->cmd_cdb[SCSA2USB_LBA_2] = lba >> 8;
 	cmd->cmd_cdb[SCSA2USB_LBA_3] = (uchar_t)lba;
+	cmd->cmd_lba = lba;
+}
+
+
+/*
+ * scsa2usb_fill_up_g4_cdb_lba:
+ *	fill in the CDB for a Group 4 command (16-byte CDB)
+ */
+static void
+scsa2usb_fill_up_g4_cdb_lba(scsa2usb_cmd_t *cmd, uint64_t lba)
+{
+	/* zero cdb1, lba bits so they won't get copied in the new cdb */
+	cmd->cmd_cdb[SCSA2USB_LUN] &= 0xE0;
+	cmd->cmd_cdb[2] = lba >> 56;
+	cmd->cmd_cdb[3] = lba >> 48;
+	cmd->cmd_cdb[4] = lba >> 40;
+	cmd->cmd_cdb[5] = lba >> 32;
+	cmd->cmd_cdb[6] = lba >> 24;
+	cmd->cmd_cdb[7] = lba >> 16;
+	cmd->cmd_cdb[8] = lba >> 8;
+	cmd->cmd_cdb[9] = lba;
 	cmd->cmd_lba = lba;
 }
 
@@ -4693,6 +4738,21 @@ scsa2usb_fill_up_ReadCD_cdb_len(scsa2usb_cmd_t *cmd, int len, int actual_len)
 	cmd->cmd_cdb[SCSA2USB_READ_CD_LEN_1] = len >> 8;
 	cmd->cmd_cdb[SCSA2USB_READ_CD_LEN_2] = (uchar_t)len;
 	cmd->cmd_actual_len = (uchar_t)actual_len;
+}
+
+
+/*
+ * scsa2usb_fill_up_16byte_cdb_len:
+ *	populate CDB length field for SCMD_WRITE_G4 and SCMD_READ_G4
+ */
+static void
+scsa2usb_fill_up_16byte_cdb_len(scsa2usb_cmd_t *cmd, int len, int actual_len)
+{
+	cmd->cmd_cdb[10] = len >> 24;
+	cmd->cmd_cdb[11] = len >> 16;
+	cmd->cmd_cdb[12] = len >> 8;
+	cmd->cmd_cdb[13] = len;
+	cmd->cmd_actual_len = actual_len;
 }
 
 
@@ -5359,7 +5419,6 @@ scsa2usb_reconnect_event_cb(dev_info_t *dip)
 	scsa2usb_state_t *scsa2usbp =
 	    ddi_get_soft_state(scsa2usb_statep, ddi_get_instance(dip));
 	dev_info_t	*cdip;
-	int		circ;
 	int		rval = USB_SUCCESS;
 
 	ASSERT(scsa2usbp != NULL);
@@ -5372,7 +5431,7 @@ scsa2usb_reconnect_event_cb(dev_info_t *dip)
 	USB_DPRINTF_L0(DPRINT_MASK_SCSA, scsa2usbp->scsa2usb_log_handle,
 	    "Reinserted device is accessible again.");
 
-	ndi_devi_enter(dip, &circ);
+	ndi_devi_enter(dip);
 	for (cdip = ddi_get_child(dip); cdip; ) {
 		dev_info_t *next = ddi_get_next_sibling(cdip);
 
@@ -5382,7 +5441,7 @@ scsa2usb_reconnect_event_cb(dev_info_t *dip)
 
 		cdip = next;
 	}
-	ndi_devi_exit(dip, circ);
+	ndi_devi_exit(dip);
 
 	/* stop suppressing warnings */
 	mutex_enter(&scsa2usbp->scsa2usb_mutex);
@@ -5429,7 +5488,7 @@ scsa2usb_disconnect_event_cb(dev_info_t *dip)
 	scsa2usb_state_t *scsa2usbp =
 	    ddi_get_soft_state(scsa2usb_statep, ddi_get_instance(dip));
 	dev_info_t	*cdip;
-	int		circ, i;
+	int		i;
 	int		rval = USB_SUCCESS;
 
 	ASSERT(scsa2usbp != NULL);
@@ -5458,7 +5517,7 @@ scsa2usb_disconnect_event_cb(dev_info_t *dip)
 	}
 	mutex_exit(&scsa2usbp->scsa2usb_mutex);
 
-	ndi_devi_enter(dip, &circ);
+	ndi_devi_enter(dip);
 	for (cdip = ddi_get_child(dip); cdip; ) {
 		dev_info_t *next = ddi_get_next_sibling(cdip);
 
@@ -5468,7 +5527,7 @@ scsa2usb_disconnect_event_cb(dev_info_t *dip)
 
 		cdip = next;
 	}
-	ndi_devi_exit(dip, circ);
+	ndi_devi_exit(dip);
 
 	if (scsa2usbp->scsa2usb_ugen_hdl) {
 		rval = usb_ugen_disconnect_ev_cb(
@@ -5499,13 +5558,11 @@ scsa2usb_create_pm_components(dev_info_t *dip, scsa2usb_state_t *scsa2usbp)
 	    (void *)dip, (void *)scsa2usbp);
 
 	/*
-	 * determine if this device is on the blacklist
-	 * or if a conf file entry has disabled PM
+	 * Check if power management is disabled by a per-device quirk:
 	 */
 	if ((scsa2usbp->scsa2usb_attrs & SCSA2USB_ATTRS_PM) == 0) {
 		USB_DPRINTF_L2(DPRINT_MASK_PM, scsa2usbp->scsa2usb_log_handle,
 		    "device cannot be power managed");
-
 		return;
 	}
 

@@ -3,11 +3,10 @@
 .\" The contents of this file are subject to the terms of the Common Development and Distribution License (the "License").  You may not use this file except in compliance with the License.
 .\" You can obtain a copy of the license at usr/src/OPENSOLARIS.LICENSE or http://www.opensolaris.org/os/licensing.  See the License for the specific language governing permissions and limitations under the License.
 .\" When distributing Covered Code, include this CDDL HEADER in each file and include the License file at usr/src/OPENSOLARIS.LICENSE.  If applicable, add the following below this CDDL HEADER, with the fields enclosed by brackets "[]" replaced with your own identifying information: Portions Copyright [yyyy] [name of copyright owner]
-.TH PROC_SERVICE 3PROC "Oct 12, 2007"
+.TH PROC_SERVICE 3PROC "Jan 23, 2023"
 .SH NAME
 proc_service \- process service interfaces
 .SH SYNOPSIS
-.LP
 .nf
 #include <proc_service.h>
 
@@ -131,7 +130,6 @@ proc_service \- process service interfaces
 \fBvoid\fR \fBps_plog\fR(\fBconst char *\fR\fIfmt\fR);
 .fi
 
-.SS "SPARC"
 .LP
 .nf
 \fBps_err_e\fR \fBps_lgetxregsize\fR(\fBstruct ps_prochandle *\fR\fIph\fR,
@@ -151,15 +149,12 @@ proc_service \- process service interfaces
 .fi
 
 .SS "x86"
-.LP
 .nf
 \fBps_err_e\fR \fBps_lgetLDT\fR(\fBstruct ps_prochandle *\fR\fIph\fR, \fBlwpid_t\fR \fIlwpid\fR,
      \fBstruct ssd *\fR\fIldt\fR);
 .fi
 
 .SH DESCRIPTION
-.sp
-.LP
 Every program that links \fBlibthread_db\fR or \fBlibrtld_db\fR must provide a
 set of process control primitives that allow \fBlibthread_db\fR and
 \fBlibrtld_db\fR to access memory and registers in the target process, to start
@@ -173,7 +168,6 @@ a functional specification that clients of \fBlibthread_db\fR and
 \fBlibrtld_db\fR can use to implement this required interface. The
 <\fBproc_service.h\fR> header lists the C declarations of these routines.
 .SH FUNCTIONS
-.sp
 .ne 2
 .na
 \fB\fBps_pdmodel()\fR\fR
@@ -334,7 +328,8 @@ Sets the \fBLWP`s\fR floating point register set.
 \fB\fBps_pauxv()\fR\fR
 .ad
 .RS 23n
-Returns a pointer to a read-only copy of the target process's auxiliary vector.
+Returns a pointer to a read-only copy of the auxiliary vector of the target
+process.
 .RE
 
 .sp
@@ -364,8 +359,6 @@ Rolls the \fBLWP\fR out of a critical section when the process is stopped.
 Logs a message.
 .RE
 
-.SS "SPARC"
-.sp
 .ne 2
 .na
 \fB\fBps_lgetxregsize()\fR\fR
@@ -393,7 +386,6 @@ Sets the extra state registers of the \fBLWP\fR.
 .RE
 
 .SS "x86"
-.sp
 .ne 2
 .na
 \fB\fBps_lgetLDT()\fR\fR
@@ -403,9 +395,7 @@ Reads the local descriptor table of the \fBLWP\fR.
 .RE
 
 .SH ATTRIBUTES
-.sp
-.LP
-See \fBattributes\fR(5) for description of the following attributes:
+See \fBattributes\fR(7) for description of the following attributes:
 .sp
 
 .sp
@@ -419,10 +409,11 @@ MT Level	Safe
 .TE
 
 .SH SEE ALSO
-.sp
-.LP
-\fBlibc_db\fR(3LIB), \fBlibrtld_db\fR(3LIB), \fBps_pread\fR(3PROC),
-\fBrtld_db\fR(3EXT), \fBattributes\fR(5)
+.BR rtld_db (3EXT),
+.BR libc_db (3LIB),
+.BR librtld_db (3LIB),
+.BR ps_pread (3PROC),
+.BR attributes (7)
 .sp
 .LP
 \fILinker and Libraries Guide\fR

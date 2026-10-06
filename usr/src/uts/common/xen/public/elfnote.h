@@ -67,7 +67,7 @@
 
 /*
  * The offset of the ELF paddr field from the acutal required
- * psuedo-physical address (numeric).
+ * pseudo-physical address (numeric).
  *
  * This is used to maintain backwards compatibility with older kernels
  * which wrote __PAGE_OFFSET into that field. This field defaults to 0
@@ -180,7 +180,7 @@
 /*
  * System information exported through crash notes.
  *
- * The kexec / kdump code will create one XEN_ELFNOTE_CRASH_INFO 
+ * The kexec / kdump code will create one XEN_ELFNOTE_CRASH_INFO
  * note in case of a system crash. This note will contain various
  * information about the system, see xen/include/xen/elfcore.h.
  */
@@ -189,7 +189,7 @@
 /*
  * System registers exported through crash notes.
  *
- * The kexec / kdump code will create one XEN_ELFNOTE_CRASH_REGS 
+ * The kexec / kdump code will create one XEN_ELFNOTE_CRASH_REGS
  * note per cpu in case of a system crash. This note is architecture
  * specific and will contain registers not saved in the "CORE" note.
  * See xen/include/xen/elfcore.h for more information.

@@ -20,10 +20,13 @@
  */
 /*
  * Copyright (c) 1989, 2010, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2017 by Delphix. All rights reserved.
+ * Copyright 2020 OmniOS Community Edition (OmniOSce) Association.
+ * Copyright 2024 Oxide Computer Company
  */
 
 /*	Copyright (c) 1984, 1986, 1987, 1988, 1989 AT&T	*/
-/*	  All Rights Reserved  	*/
+/*	  All Rights Reserved	*/
 
 
 /*
@@ -178,6 +181,31 @@ namefind(vnode_t *vp, vnode_t *mnt)
 		    (mnt == NULL || np->nm_mountpt == mnt))
 			break;
 	return (np);
+}
+
+/*
+ * For each namenode that has nm_filevp == vp, call the provided function
+ * with the namenode as an argument. This finds all of the namefs entries
+ * which are mounted on vp; note that there can be more than one.
+ */
+int
+nm_walk_mounts(const vnode_t *vp, nm_walk_mounts_f *func, cred_t *cr, void *arg)
+{
+	struct namenode *np;
+	int ret = 0;
+
+	mutex_enter(&ntable_lock);
+
+	for (np = *NM_FILEVP_HASH(vp); np != NULL; np = np->nm_nextp) {
+		if (np->nm_filevp == vp) {
+			if ((ret = func(np, cr, arg)) != 0)
+				break;
+		}
+	}
+
+	mutex_exit(&ntable_lock);
+
+	return (ret);
 }
 
 /*
@@ -479,6 +507,7 @@ nm_mount(vfs_t *vfsp, vnode_t *mvp, struct mounta *uap, cred_t *crp)
 	newvp->v_rdev = filevp->v_rdev;
 	newvp->v_data = (caddr_t)nodep;
 	VFS_HOLD(vfsp);
+	vn_copypath(mvp, newvp);
 	vn_exists(newvp);
 
 	/*
@@ -581,7 +610,8 @@ nm_unmount(vfs_t *vfsp, int flag, cred_t *crp)
 	nameremove(nodep);
 	thisvp = NMTOV(nodep);
 	mutex_enter(&thisvp->v_lock);
-	if (thisvp->v_count-- == 1) {
+	VN_RELE_LOCKED(thisvp);
+	if (thisvp->v_count == 0) {
 		fp = nodep->nm_filep;
 		mutex_exit(&thisvp->v_lock);
 		vn_invalid(thisvp);
@@ -658,6 +688,19 @@ nm_sync(vfs_t *vfsp, short flag, cred_t *crp)
 	return (VOP_FSYNC(nodep->nm_filevp, FSYNC, crp, NULL));
 }
 
+static int
+nm_syncfs(vfs_t *vfsp, uint64_t flags, cred_t *crp)
+{
+	struct namenode *nodep;
+
+	if (flags != 0) {
+		return (ENOTSUP);
+	}
+
+	nodep = (struct namenode *)vfsp->vfs_data;
+	return (VOP_FSYNC(nodep->nm_filevp, FSYNC, crp, NULL));
+}
+
 /*
  * File system initialization routine. Save the file system type,
  * establish a file system device number and initialize nm_filevp_hash[].
@@ -671,6 +714,7 @@ nameinit(int fstype, char *name)
 		VFSNAME_ROOT,		{ .vfs_root = nm_root },
 		VFSNAME_STATVFS,	{ .vfs_statvfs = nm_statvfs },
 		VFSNAME_SYNC,		{ .vfs_sync = nm_sync },
+		VFSNAME_SYNCFS,		{ .vfs_syncfs = nm_syncfs },
 		NULL,			NULL
 	};
 	static const fs_operation_def_t nm_dummy_vfsops_template[] = {
@@ -722,8 +766,8 @@ nameinit(int fstype, char *name)
 }
 
 static mntopts_t nm_mntopts = {
-	NULL,
-	0
+	.mo_count = 0,
+	.mo_list = NULL
 };
 
 static vfsdef_t vfw = {

@@ -24,8 +24,9 @@
  */
 
 /*
- * Copyright 2014 Joyent, Inc.  All rights reserved.
+ * Copyright (c) 2017 Joyent, Inc.
  * Copyright (c) 2014, Tegile Systems Inc. All rights reserved.
+ * Copyright 2023 Racktop Systems, Inc.
  */
 
 #include <limits.h>
@@ -34,20 +35,20 @@
 #include <sys/sunmdi.h>
 #include <sys/list.h>
 #include <sys/scsi/scsi.h>
+#include <sys/refhash.h>
 
 #pragma pack(1)
-#include <sys/scsi/adapters/mpt_sas/mpi/mpi2_type.h>
-#include <sys/scsi/adapters/mpt_sas/mpi/mpi2.h>
-#include <sys/scsi/adapters/mpt_sas/mpi/mpi2_cnfg.h>
-#include <sys/scsi/adapters/mpt_sas/mpi/mpi2_init.h>
-#include <sys/scsi/adapters/mpt_sas/mpi/mpi2_ioc.h>
-#include <sys/scsi/adapters/mpt_sas/mpi/mpi2_sas.h>
-#include <sys/scsi/adapters/mpt_sas/mpi/mpi2_raid.h>
-#include <sys/scsi/adapters/mpt_sas/mpi/mpi2_tool.h>
+#include <sys/scsi/adapters/mpi/mpi2_type.h>
+#include <sys/scsi/adapters/mpi/mpi2.h>
+#include <sys/scsi/adapters/mpi/mpi2_cnfg.h>
+#include <sys/scsi/adapters/mpi/mpi2_init.h>
+#include <sys/scsi/adapters/mpi/mpi2_ioc.h>
+#include <sys/scsi/adapters/mpi/mpi2_sas.h>
+#include <sys/scsi/adapters/mpi/mpi2_raid.h>
+#include <sys/scsi/adapters/mpi/mpi2_tool.h>
 #pragma pack()
 
 #include <sys/scsi/adapters/mpt_sas/mptsas_var.h>
-#include <sys/scsi/adapters/mpt_sas/mptsas_hash.h>
 
 struct {
 	int	value;
@@ -119,7 +120,7 @@ mdi_info_cb(uintptr_t addr, const void *data, void *cbdata)
 		return (-1);
 	}
 
-	*dev_path = NULL;
+	*dev_path = '\0';
 	if (construct_path((uintptr_t)c.ct_dip, dev_path) != DCMD_OK)
 		strcpy(dev_path, "unknown");
 
@@ -227,7 +228,7 @@ klist_head(list_t *lp, uintptr_t klp)
 {
 	if ((uintptr_t)lp->list_head.list_next ==
 	    klp + offsetof(struct list, list_head))
-		return (NULL);
+		return (0);
 
 	return ((uintptr_t)(((char *)lp->list_head.list_next) -
 	    lp->list_offset));
@@ -241,7 +242,7 @@ klist_next(list_t *lp, uintptr_t klp, void *op)
 	    lp->list_offset);
 
 	if ((uintptr_t)np->list_next == klp + offsetof(struct list, list_head))
-		return (NULL);
+		return (0);
 
 	return (((uintptr_t)(np->list_next)) - lp->list_offset);
 }
@@ -284,7 +285,7 @@ krefhash_next(uintptr_t khp, void *op, uintptr_t *addr)
 	lp = (refhash_link_t *)(((char *)(op)) + mh.rh_link_off);
 	ml = *lp;
 	while ((klp = klist_next(&mh.rh_objs,
-	    khp + offsetof(refhash_t, rh_objs), &ml)) != NULL) {
+	    khp + offsetof(refhash_t, rh_objs), &ml)) != 0) {
 		mdb_vread(&ml, sizeof (ml), klp);
 		if (!(ml.rhl_flags & RHL_F_DEAD))
 			break;
@@ -474,7 +475,7 @@ display_slotinfo(struct mptsas *mp, struct mptsas_slots *s)
 		return (DCMD_ERR);
 	}
 
-	if (state != MDB_STATE_STOPPED && panicstr == NULL) {
+	if (state != MDB_STATE_STOPPED && panicstr == 0) {
 		mdb_warn("mptsas: slot info not available for live dump\n");
 		return (DCMD_ERR);
 	}
@@ -715,6 +716,46 @@ display_deviceinfo(struct mptsas *mp)
 		case MPI25_MFGPAGE_DEVID_SAS3108_5:
 		case MPI25_MFGPAGE_DEVID_SAS3108_6:
 			mdb_printf("(SAS3108) ");
+			break;
+		case MPI26_MFGPAGE_DEVID_SAS3216:
+		case MPI26_MFGPAGE_DEVID_SAS3316_1:
+		case MPI26_MFGPAGE_DEVID_SAS3316_2:
+		case MPI26_MFGPAGE_DEVID_SAS3316_3:
+		case MPI26_MFGPAGE_DEVID_SAS3316_4:
+			mdb_printf("(SAS3216) ");
+			break;
+		case MPI26_MFGPAGE_DEVID_SAS3224:
+		case MPI26_MFGPAGE_DEVID_SAS3324_1:
+		case MPI26_MFGPAGE_DEVID_SAS3324_2:
+		case MPI26_MFGPAGE_DEVID_SAS3324_3:
+		case MPI26_MFGPAGE_DEVID_SAS3324_4:
+			mdb_printf("(SAS3224) ");
+			break;
+		case MPI26_MFGPAGE_DEVID_SAS3408:
+			mdb_printf("(SAS3408) ");
+			break;
+		case MPI26_MFGPAGE_DEVID_SAS3416:
+			mdb_printf("(SAS3416) ");
+			break;
+		case MPI26_MFGPAGE_DEVID_SAS3508:
+		case MPI26_MFGPAGE_DEVID_SAS3508_1:
+			mdb_printf("(SAS3508) ");
+			break;
+		case MPI26_MFGPAGE_DEVID_SAS3516:
+		case MPI26_MFGPAGE_DEVID_SAS3516_1:
+			mdb_printf("(SAS3516) ");
+			break;
+		case MPI26_MFGPAGE_DEVID_SAS3616:
+			mdb_printf("(SAS3616) ");
+			break;
+		case MPI26_MFGPAGE_DEVID_SAS3708:
+			mdb_printf("(SAS3708) ");
+			break;
+		case MPI26_MFGPAGE_DEVID_SAS3716:
+			mdb_printf("(SAS3716) ");
+			break;
+		case MPI26_MFGPAGE_DEVID_SAS4008:
+			mdb_printf("(SAS4008) ");
 			break;
 		default:
 			mdb_printf("(SAS????) ");

@@ -1,0 +1,71 @@
+#!/usr/bin/ksh
+
+#
+# This file and its contents are supplied under the terms of the
+# Common Development and Distribution License ("CDDL"), version 1.0.
+# You may only use this file in accordance with the terms of version
+# 1.0 of the CDDL.
+#
+# A full copy of the text of the CDDL should have accompanied this
+# source.  A copy of the CDDL is also available via the Internet at
+# http://www.illumos.org/license/CDDL.
+#
+
+#
+# Copyright (c) 2012 by Delphix. All rights reserved.
+# Copyright 2014, OmniTI Computer Consulting, Inc. All rights reserved.
+# Copyright 2016, Joyent, Inc.
+#
+
+case $0 in
+/opt/header-tests/bin/headertest)
+	root=""
+	;;
+/*/opt/header-tests/bin/headertest)
+	root="${0%/opt/header-tests/bin/headertest}"
+	;;
+*/opt/header-tests/bin/headertest)
+	root="$PWD/${0%/opt/header-tests/bin/headertest}"
+	;;
+esac
+
+# See ../tests/common/symbol_test.py
+[[ -n "$root" ]] && export HEADER_TEST_ROOT="$root"
+
+export MY_TESTS="$root/opt/header-tests"
+runner="$root/opt/test-runner/bin/run"
+outdir="$root/var/tmp/test_results"
+
+function fail
+{
+	echo $1
+	exit ${2:-1}
+}
+
+function find_runfile
+{
+	typeset distro=
+	if [[ -f "$MY_TESTS/runfiles/default.run" ]]; then
+		distro=default
+	fi
+
+	[[ -n "$distro" ]] && echo "$MY_TESTS/runfiles/$distro.run"
+}
+
+while getopts c:T: c; do
+	case $c in
+	'c')
+		runfile="$OPTARG"
+		[[ -f $runfile ]] || fail "Cannot read file: $runfile"
+		;;
+	'T')
+		xargs+=( -T "$OPTARG" )
+		;;
+	esac
+done
+shift $((OPTIND - 1))
+
+[[ -z "$runfile" ]] && runfile=$(find_runfile)
+[[ -z "$runfile" ]] && fail "Couldn't determine distro"
+
+"$runner" -c "$runfile" -i "$MY_TESTS" -o "$outdir" "${xargs[@]}"

@@ -216,7 +216,7 @@ class SLPHeaderV1 extends SrvLocHeader implements Cloneable {
 				ServiceLocationException.PARSE_ERROR,
 				"function_code_error",
 				new Object[] {
-		    new Integer(functionCode)});
+		    Integer.valueOf(functionCode)});
 
 	}
 
@@ -228,7 +228,7 @@ class SLPHeaderV1 extends SrvLocHeader implements Cloneable {
 				ServiceLocationException.PARSE_ERROR,
 				"length_overflow",
 				new Object[] {
-		    new Integer(nbytes), new Integer(length)});
+		    Integer.valueOf(nbytes), Integer.valueOf(length)});
 
 	}
 
@@ -758,7 +758,7 @@ class SLPHeaderV1 extends SrvLocHeader implements Cloneable {
 
 	return attrForms;
     }
-	
+
     // Parse out a V1 attribute vector.
 
     void

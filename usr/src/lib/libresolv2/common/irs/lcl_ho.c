@@ -1,7 +1,7 @@
 /*
  * Copyright (c) 1985, 1988, 1993
  *    The Regents of the University of California.  All rights reserved.
- * 
+ *
  * Redistribution and use in source and binary forms, with or without
  * modification, are permitted provided that the following conditions
  * are met:
@@ -17,7 +17,7 @@
  * 4. Neither the name of the University nor the names of its contributors
  *    may be used to endorse or promote products derived from this software
  *    without specific prior written permission.
- * 
+ *
  * THIS SOFTWARE IS PROVIDED BY THE REGENTS AND CONTRIBUTORS ``AS IS'' AND
  * ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
  * IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE
@@ -50,10 +50,6 @@
 
 /* from gethostnamadr.c	8.1 (Berkeley) 6/4/93 */
 /* BIND Id: gethnamaddr.c,v 8.15 1996/05/22 04:56:30 vixie Exp $ */
-
-#if defined(LIBC_SCCS) && !defined(lint)
-static const char rcsid[] = "$Id: lcl_ho.c,v 1.5 2006/03/09 23:57:56 marka Exp $";
-#endif /* LIBC_SCCS and not lint */
 
 /* Imports. */
 
@@ -220,7 +216,7 @@ ho_byname2(struct irs_ho *this, const char *name, int af) {
 	struct hostent *hp;
 	char **hap;
 	size_t n;
-	
+
 	if (init(this) == -1)
 		return (NULL);
 
@@ -255,7 +251,7 @@ ho_byaddr(struct irs_ho *this, const void *addr, int len, int af) {
 	const u_char *uaddr = addr;
 	struct hostent *hp;
 	int size;
-	
+
 	if (init(this) == -1)
 		return (NULL);
 
@@ -451,7 +447,7 @@ ho_minimize(struct irs_ho *this) {
 	}
 	if (pvt->res)
 		res_nclose(pvt->res);
-} 
+}
 
 static struct __res_state *
 ho_res_get(struct irs_ho *this) {
@@ -566,7 +562,7 @@ ns_namelen(const char *s) {
 static int
 init(struct irs_ho *this) {
 	struct pvt *pvt = (struct pvt *)this->private;
-	
+
 	if (!pvt->res && !ho_res_get(this))
 		return (-1);
 	if (((pvt->res->options & RES_INIT) == 0U) &&

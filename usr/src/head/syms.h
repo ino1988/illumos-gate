@@ -20,13 +20,11 @@
  * CDDL HEADER END
  */
 /*	Copyright (c) 1988 AT&T	*/
-/*	  All Rights Reserved  	*/
+/*	  All Rights Reserved	*/
 
 
 #ifndef	_SYMS_H
 #define	_SYMS_H
-
-#pragma ident	"%Z%%M%	%I%	%E% SMI"	/* SVr4.0 2.8	*/
 
 /*		Storage Classes are defined in storclass.h  */
 #include <storclass.h>
@@ -183,18 +181,18 @@ union auxent
 				long	x_lnnoptr;	/* ptr to fcn line # */
 				long	x_endndx;	/* entry ndx past */
 							/* block end */
-			} 	x_fcn;
+			}	x_fcn;
 			struct			/* if ISARY, up to 4 dimen. */
 			{
 				unsigned short	x_dimen[DIMNUM];
-			} 	x_ary;
+			}	x_ary;
 		}		x_fcnary;
 		unsigned short  x_tvndx;		/* tv index */
-	} 	x_sym;
+	}	x_sym;
 	struct
 	{
 		char	x_fname[FILNMLEN];
-	} 	x_file;
+	}	x_file;
 	struct
 	{
 		long		x_scnlen;	/* section length */

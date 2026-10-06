@@ -21,6 +21,9 @@
 
 /*
  * Copyright (c) 2010, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2014, 2017 by Delphix. All rights reserved.
+ * Copyright 2020 Joyent, Inc.
+ * Copyright 2024 Oxide Computer Company
  */
 
 /* This file contains all TCP output processing functions. */
@@ -50,6 +53,7 @@
 #include <inet/proto_set.h>
 #include <inet/ipsec_impl.h>
 #include <inet/ip_ndp.h>
+#include <inet/tcp_sig.h>
 
 static mblk_t	*tcp_get_seg_mp(tcp_t *, uint32_t, int32_t *);
 static void	tcp_wput_cmdblk(queue_t *, mblk_t *);
@@ -57,12 +61,12 @@ static void	tcp_wput_flush(tcp_t *, mblk_t *);
 static void	tcp_wput_iocdata(tcp_t *tcp, mblk_t *mp);
 static int	tcp_xmit_end(tcp_t *);
 static int	tcp_send(tcp_t *, const int, const int, const int,
-		    const int, int *, uint_t *, int *, mblk_t **, mblk_t *);
+		    const int, int *, uint32_t *, int *, mblk_t **, mblk_t *);
 static void	tcp_xmit_early_reset(char *, mblk_t *, uint32_t, uint32_t,
 		    int, ip_recv_attr_t *, ip_stack_t *, conn_t *);
 static boolean_t	tcp_send_rst_chk(tcp_stack_t *);
 static void	tcp_process_shrunk_swnd(tcp_t *, uint32_t);
-static void	tcp_fill_header(tcp_t *, uchar_t *, clock_t, int);
+static void	tcp_fill_header(tcp_t *, uchar_t *, int);
 
 /*
  * Functions called directly via squeue having a prototype of edesc_t.
@@ -79,7 +83,19 @@ static void	tcp_wput_proto(void *, mblk_t *, void *, ip_recv_attr_t *);
  */
 static int tcp_tx_pull_len = 16;
 
-void
+static void
+cc_after_idle(tcp_t *tcp)
+{
+	uint32_t old_cwnd = tcp->tcp_cwnd;
+
+	if (CC_ALGO(tcp)->after_idle != NULL)
+		CC_ALGO(tcp)->after_idle(&tcp->tcp_ccv);
+
+	DTRACE_PROBE3(cwnd__cc__after__idle, tcp_t *, tcp, uint32_t, old_cwnd,
+	    uint32_t, tcp->tcp_cwnd);
+}
+
+int
 tcp_wput(queue_t *q, mblk_t *mp)
 {
 	conn_t	*connp = Q_TO_CONN(q);
@@ -109,11 +125,11 @@ tcp_wput(queue_t *q, mblk_t *mp)
 		CONN_INC_REF(connp);
 		SQUEUE_ENTER_ONE(connp->conn_sqp, mp, tcp_output, connp,
 		    NULL, tcp_squeue_flag, SQTAG_TCP_OUTPUT);
-		return;
+		return (0);
 
 	case M_CMD:
 		tcp_wput_cmdblk(q, mp);
-		return;
+		return (0);
 
 	case M_PROTO:
 	case M_PCPROTO:
@@ -131,7 +147,7 @@ tcp_wput(queue_t *q, mblk_t *mp)
 				    "tcp_wput_proto, dropping one...");
 			}
 			freemsg(mp);
-			return;
+			return (0);
 		}
 		if (type == T_SVR4_OPTMGMT_REQ) {
 			/*
@@ -146,14 +162,14 @@ tcp_wput(queue_t *q, mblk_t *mp)
 			ASSERT(cr != NULL);
 			if (cr == NULL) {
 				tcp_err_ack(tcp, mp, TSYSERR, EINVAL);
-				return;
+				return (0);
 			}
 			if (snmpcom_req(q, mp, tcp_snmp_set, ip_snmp_get,
 			    cr)) {
 				/*
 				 * This was a SNMP request
 				 */
-				return;
+				return (0);
 			} else {
 				output_proc = tcp_wput_proto;
 			}
@@ -174,12 +190,12 @@ tcp_wput(queue_t *q, mblk_t *mp)
 		switch (iocp->ioc_cmd) {
 		case TCP_IOC_ABORT_CONN:
 			tcp_ioctl_abort_conn(q, mp);
-			return;
+			return (0);
 		case TI_GETPEERNAME:
 		case TI_GETMYNAME:
 			mi_copyin(q, mp, NULL,
 			    SIZEOF_STRUCT(strbuf, iocp->ioc_flag));
-			return;
+			return (0);
 
 		default:
 			output_proc = tcp_wput_ioctl;
@@ -194,6 +210,7 @@ tcp_wput(queue_t *q, mblk_t *mp)
 	CONN_INC_REF(connp);
 	SQUEUE_ENTER_ONE(connp->conn_sqp, mp, output_proc, connp,
 	    NULL, tcp_squeue_flag, SQTAG_TCP_WPUT_OTHER);
+	return (0);
 }
 
 /*
@@ -216,7 +233,6 @@ tcp_wput_data(tcp_t *tcp, mblk_t *mp, boolean_t urgent)
 	int32_t		total_hdr_len;
 	int32_t		tcp_hdr_len;
 	int		rc;
-	tcp_stack_t	*tcps = tcp->tcp_tcps;
 	conn_t		*connp = tcp->tcp_connp;
 	clock_t		now = LBOLT_FASTPATH;
 
@@ -371,7 +387,7 @@ data_null:
 
 	if ((tcp->tcp_suna == snxt) && !tcp->tcp_localnet &&
 	    (TICK_TO_MSEC(now - tcp->tcp_last_recv_time) >= tcp->tcp_rto)) {
-		TCP_SET_INIT_CWND(tcp, mss, tcps->tcps_slow_start_after_idle);
+		cc_after_idle(tcp);
 	}
 	if (tcpstate == TCPS_SYN_RCVD) {
 		/*
@@ -452,7 +468,7 @@ data_null:
 		}
 	}
 
-	local_time = (mblk_t *)now;
+	local_time = (mblk_t *)(intptr_t)gethrtime();
 
 	/*
 	 * "Our" Nagle Algorithm.  This is not the same as in the old
@@ -571,7 +587,7 @@ done:;
  * All further messages will also be handled by tcp_wput() because we cannot
  * be sure that the above short cut is safe later.
  */
-void
+int
 tcp_wput_sock(queue_t *wq, mblk_t *mp)
 {
 	conn_t			*connp = Q_TO_CONN(wq);
@@ -588,20 +604,22 @@ tcp_wput_sock(queue_t *wq, mblk_t *mp)
 	    MBLKL(mp) == sizeof (struct T_capability_req) &&
 	    car->PRIM_type == T_CAPABILITY_REQ) {
 		tcp_capability_req(tcp, mp);
-		return;
+		return (0);
 	}
 
 	tcp_wput(wq, mp);
+	return (0);
 }
 
 /* ARGSUSED */
-void
+int
 tcp_wput_fallback(queue_t *wq, mblk_t *mp)
 {
 #ifdef DEBUG
 	cmn_err(CE_CONT, "tcp_wput_fallback: Message during fallback \n");
 #endif
 	freemsg(mp);
+	return (0);
 }
 
 /*
@@ -717,7 +735,7 @@ tcp_wput_iocdata(tcp_t *tcp, mblk_t *mp)
 	STRUCT_HANDLE(strbuf, sb);
 	uint_t		addrlen;
 	conn_t		*connp = tcp->tcp_connp;
-	queue_t 	*q = connp->conn_wq;
+	queue_t		*q = connp->conn_wq;
 
 	/* Make sure it is one of ours. */
 	switch (iocp->ioc_cmd) {
@@ -818,7 +836,7 @@ tcp_wput_iocdata(tcp_t *tcp, mblk_t *mp)
 static void
 tcp_wput_ioctl(void *arg, mblk_t *mp, void *arg2, ip_recv_attr_t *dummy)
 {
-	conn_t 		*connp = (conn_t *)arg;
+	conn_t		*connp = (conn_t *)arg;
 	tcp_t		*tcp = connp->conn_tcp;
 	queue_t		*q = connp->conn_wq;
 	struct iocblk	*iocp;
@@ -1142,14 +1160,16 @@ tcp_output(void *arg, mblk_t *mp, void *arg2, ip_recv_attr_t *dummy)
 	 *   4. data in mblk
 	 *   5. len <= mss
 	 *   6. no tcp_valid bits
+	 *   7. no MD5 signature option
 	 */
-	if ((tcp->tcp_unsent != 0) ||
-	    (tcp->tcp_cork) ||
-	    (mp->b_cont != NULL) ||
-	    (tcp->tcp_state != TCPS_ESTABLISHED) ||
-	    (len == 0) ||
-	    (len > mss) ||
-	    (tcp->tcp_valid_bits != 0)) {
+	if (tcp->tcp_unsent != 0 ||
+	    tcp->tcp_cork ||
+	    tcp->tcp_md5sig ||
+	    mp->b_cont != NULL ||
+	    tcp->tcp_state != TCPS_ESTABLISHED ||
+	    len == 0 ||
+	    len > mss ||
+	    tcp->tcp_valid_bits != 0) {
 		tcp_wput_data(tcp, mp, B_FALSE);
 		return;
 	}
@@ -1179,17 +1199,18 @@ tcp_output(void *arg, mblk_t *mp, void *arg2, ip_recv_attr_t *dummy)
 	snxt = tcp->tcp_snxt;
 
 	/*
-	 * Check to see if this connection has been idled for some
-	 * time and no ACK is expected.  If it is, we need to slow
-	 * start again to get back the connection's "self-clock" as
-	 * described in VJ's paper.
+	 * Check to see if this connection has been idle for some time and no
+	 * ACK is expected. If so, then the congestion window size is no longer
+	 * meaningfully tied to current network conditions.
 	 *
-	 * Reinitialize tcp_cwnd after idle.
+	 * We reinitialize tcp_cwnd, and slow start again to get back the
+	 * connection's "self-clock" as described in Van Jacobson's 1988 paper
+	 * "Congestion avoidance and control".
 	 */
 	now = LBOLT_FASTPATH;
 	if ((tcp->tcp_suna == snxt) && !tcp->tcp_localnet &&
 	    (TICK_TO_MSEC(now - tcp->tcp_last_recv_time) >= tcp->tcp_rto)) {
-		TCP_SET_INIT_CWND(tcp, mss, tcps->tcps_slow_start_after_idle);
+		cc_after_idle(tcp);
 	}
 
 	usable = tcp->tcp_swnd;		/* tcp window size */
@@ -1252,7 +1273,7 @@ tcp_output(void *arg, mblk_t *mp, void *arg2, ip_recv_attr_t *dummy)
 
 	if ((mp1 = dupb(mp)) == 0)
 		goto no_memory;
-	mp->b_prev = (mblk_t *)(uintptr_t)now;
+	mp->b_prev = (mblk_t *)(intptr_t)gethrtime();
 	mp->b_next = (mblk_t *)(uintptr_t)snxt;
 
 	/* adjust tcp header information */
@@ -1267,7 +1288,9 @@ tcp_output(void *arg, mblk_t *mp, void *arg2, ip_recv_attr_t *dummy)
 
 	TCPS_BUMP_MIB(tcps, tcpOutDataSegs);
 	TCPS_UPDATE_MIB(tcps, tcpOutDataBytes, len);
-	BUMP_LOCAL(tcp->tcp_obsegs);
+	TCPS_BUMP_MIB(tcps, tcpHCOutSegs);
+	tcp->tcp_cs.tcp_out_data_segs++;
+	tcp->tcp_cs.tcp_out_data_bytes += len;
 
 	/* Update the latest receive window size in TCP header. */
 	tcpha->tha_win = htons(tcp->tcp_rwnd >> tcp->tcp_rcv_ws);
@@ -1307,12 +1330,10 @@ tcp_output(void *arg, mblk_t *mp, void *arg2, ip_recv_attr_t *dummy)
 
 	/* Fill in the timestamp option. */
 	if (tcp->tcp_snd_ts_ok) {
-		uint32_t llbolt = (uint32_t)LBOLT_FASTPATH;
-
-		U32_TO_BE32(llbolt,
-		    (char *)tcpha + TCP_MIN_HEADER_LENGTH+4);
+		U32_TO_BE32(now,
+		    (char *)tcpha + TCP_MIN_HEADER_LENGTH + 4);
 		U32_TO_BE32(tcp->tcp_ts_recent,
-		    (char *)tcpha + TCP_MIN_HEADER_LENGTH+8);
+		    (char *)tcpha + TCP_MIN_HEADER_LENGTH + 8);
 	} else {
 		ASSERT(connp->conn_ht_ulp_len == TCP_MIN_HEADER_LENGTH);
 	}
@@ -1420,7 +1441,7 @@ tcp_output_urgent(void *arg, mblk_t *mp, void *arg2, ip_recv_attr_t *dummy)
 }
 
 /*
- * Called by streams close routine via squeues when our client blows off her
+ * Called by streams close routine via squeues when our client blows off its
  * descriptor, we take this to mean: "close the stream state NOW, close the tcp
  * connection politely" When SO_LINGER is set (with a non-zero linger time and
  * it is not a nonblocking socket) then this routine sleeps until the FIN is
@@ -1660,11 +1681,23 @@ finish:
 
 		/* non-STREAM socket, release the upper handle */
 		if (IPCL_IS_NONSTR(connp)) {
-			ASSERT(connp->conn_upper_handle != NULL);
-			(*connp->conn_upcalls->su_closed)
-			    (connp->conn_upper_handle);
+			sock_upcalls_t *upcalls = connp->conn_upcalls;
+			sock_upper_handle_t handle = connp->conn_upper_handle;
+
+			ASSERT(upcalls != NULL);
+			ASSERT(upcalls->su_closed != NULL);
+			ASSERT(handle != NULL);
+			/*
+			 * Set these to NULL first because closed() will free
+			 * upper structures.  Acquire conn_lock because an
+			 * external caller like conn_get_socket_info() will
+			 * upcall if these are non-NULL.
+			 */
+			mutex_enter(&connp->conn_lock);
 			connp->conn_upper_handle = NULL;
 			connp->conn_upcalls = NULL;
+			mutex_exit(&connp->conn_lock);
+			upcalls->su_closed(handle);
 		}
 	}
 
@@ -1679,7 +1712,7 @@ finish:
 void
 tcp_shutdown_output(void *arg, mblk_t *mp, void *arg2, ip_recv_attr_t *dummy)
 {
-	conn_t 	*connp = (conn_t *)arg;
+	conn_t	*connp = (conn_t *)arg;
 	tcp_t	*tcp = connp->conn_tcp;
 
 	freemsg(mp);
@@ -1700,8 +1733,6 @@ tcp_shutdown_output(void *arg, mblk_t *mp, void *arg2, ip_recv_attr_t *dummy)
 		}
 	}
 }
-
-#pragma inline(tcp_send_data)
 
 void
 tcp_send_data(tcp_t *tcp, mblk_t *mp)
@@ -1761,17 +1792,16 @@ tcp_send_synack(void *arg, mblk_t *mp, void *arg2, ip_recv_attr_t *dummy)
  * tcp_send() is called by tcp_wput_data() and returns one of the following:
  *
  * -1 = failed allocation.
- *  0 = success; burst count reached, or usable send window is too small,
- *      and that we'd rather wait until later before sending again.
+ *  0 = We've either successfully sent data, or our usable send window is too
+ *      small and we'd rather wait until later before sending again.
  */
 static int
 tcp_send(tcp_t *tcp, const int mss, const int total_hdr_len,
     const int tcp_hdr_len, const int num_sack_blk, int *usable,
-    uint_t *snxt, int *tail_unsent, mblk_t **xmit_tail, mblk_t *local_time)
+    uint32_t *snxt, int *tail_unsent, mblk_t **xmit_tail, mblk_t *local_time)
 {
-	int		num_burst_seg = tcp->tcp_snd_burst;
 	int		num_lso_seg = 1;
-	uint_t		lso_usable;
+	uint_t		lso_usable = 0;
 	boolean_t	do_lso_send = B_FALSE;
 	tcp_stack_t	*tcps = tcp->tcp_tcps;
 	conn_t		*connp = tcp->tcp_connp;
@@ -1795,25 +1825,16 @@ tcp_send(tcp_t *tcp, const int mss, const int total_hdr_len,
 		int		len;
 
 		/*
-		 * Burst count reached, return successfully.
-		 */
-		if (num_burst_seg == 0)
-			break;
-
-		/*
 		 * Calculate the maximum payload length we can send at one
 		 * time.
 		 */
 		if (do_lso_send) {
 			/*
-			 * Check whether be able to to do LSO for the current
-			 * available data.
+			 * Determine whether or not it's possible to do LSO,
+			 * and if so, how much data we can send.
 			 */
-			if (num_burst_seg >= 2 && (*usable - 1) / mss >= 1) {
+			if ((*usable - 1) / mss >= 1) {
 				lso_usable = MIN(tcp->tcp_lso_max, *usable);
-				lso_usable = MIN(lso_usable,
-				    num_burst_seg * mss);
-
 				num_lso_seg = lso_usable / mss;
 				if (lso_usable % mss) {
 					num_lso_seg++;
@@ -1830,14 +1851,6 @@ tcp_send(tcp_t *tcp, const int mss, const int total_hdr_len,
 		}
 
 		ASSERT(num_lso_seg <= IP_MAXPACKET / mss + 1);
-#ifdef DEBUG
-		DTRACE_PROBE2(tcp_send_lso, int, num_lso_seg, boolean_t,
-		    do_lso_send);
-#endif
-		/*
-		 * Adjust num_burst_seg here.
-		 */
-		num_burst_seg -= num_lso_seg;
 
 		len = mss;
 		if (len > *usable) {
@@ -1917,16 +1930,17 @@ tcp_send(tcp_t *tcp, const int mss, const int total_hdr_len,
 
 		/*
 		 * Branch off to tcp_xmit_mp() if any of the VALID bits is
-		 * set.  For the case when TCP_FSS_VALID is the only valid
-		 * bit (normal active close), branch off only when we think
-		 * that the FIN flag needs to be set.  Note for this case,
-		 * that (snxt + len) may not reflect the actual seg_len,
-		 * as len may be further reduced in tcp_xmit_mp().  If len
-		 * gets modified, we will end up here again.
+		 * set or if we have to add an MD5 signature option.  For the
+		 * case when TCP_FSS_VALID is the only valid bit (normal active
+		 * close), branch off only when we think that the FIN flag
+		 * needs to be set.  Note for this case, that (snxt + len) may
+		 * not reflect the actual seg_len, as len may be further
+		 * reduced in tcp_xmit_mp().  If len gets modified, we will end
+		 * up here again.
 		 */
-		if (tcp->tcp_valid_bits != 0 &&
+		if (tcp->tcp_md5sig || (tcp->tcp_valid_bits != 0 &&
 		    (tcp->tcp_valid_bits != TCP_FSS_VALID ||
-		    ((*snxt + len) == tcp->tcp_fss))) {
+		    *snxt + len == tcp->tcp_fss))) {
 			uchar_t		*prev_rptr;
 			uint32_t	prev_snxt = tcp->tcp_snxt;
 
@@ -1974,16 +1988,21 @@ tcp_send(tcp_t *tcp, const int mss, const int total_hdr_len,
 			}
 			*snxt += len;
 			*tail_unsent = (*xmit_tail)->b_wptr - mp1->b_wptr;
-			BUMP_LOCAL(tcp->tcp_obsegs);
+			TCPS_BUMP_MIB(tcps, tcpHCOutSegs);
 			TCPS_BUMP_MIB(tcps, tcpOutDataSegs);
 			TCPS_UPDATE_MIB(tcps, tcpOutDataBytes, len);
+			tcp->tcp_cs.tcp_out_data_segs++;
+			tcp->tcp_cs.tcp_out_data_bytes += len;
 			tcp_send_data(tcp, mp);
 			continue;
 		}
 
 		*snxt += len;	/* Adjust later if we don't send all of len */
+		TCPS_BUMP_MIB(tcps, tcpHCOutSegs);
 		TCPS_BUMP_MIB(tcps, tcpOutDataSegs);
 		TCPS_UPDATE_MIB(tcps, tcpOutDataBytes, len);
+		tcp->tcp_cs.tcp_out_data_segs++;
+		tcp->tcp_cs.tcp_out_data_bytes += len;
 
 		if (*tail_unsent) {
 			/* Are the bytes above us in flight? */
@@ -2080,7 +2099,7 @@ tcp_send(tcp_t *tcp, const int mss, const int total_hdr_len,
 		 * Fill in the header using the template header, and add
 		 * options such as time-stamp, ECN and/or SACK, as needed.
 		 */
-		tcp_fill_header(tcp, rptr, (clock_t)local_time, num_sack_blk);
+		tcp_fill_header(tcp, rptr, num_sack_blk);
 
 		mp->b_rptr = rptr;
 
@@ -2159,6 +2178,7 @@ tcp_send(tcp_t *tcp, const int mss, const int total_hdr_len,
 				*snxt += spill;
 				tcp->tcp_last_sent_len += spill;
 				TCPS_UPDATE_MIB(tcps, tcpOutDataBytes, spill);
+				tcp->tcp_cs.tcp_out_data_bytes += spill;
 				/*
 				 * Adjust the checksum
 				 */
@@ -2207,7 +2227,7 @@ tcp_send(tcp_t *tcp, const int mss, const int total_hdr_len,
 			 */
 			ixa->ixa_fragsize = ixa->ixa_pmtu;
 			ixa->ixa_extra_ident = 0;
-			tcp->tcp_obsegs += num_lso_seg;
+			TCPS_BUMP_MIB(tcps, tcpHCOutSegs);
 			TCP_STAT(tcps, tcp_lso_times);
 			TCP_STAT_UPDATE(tcps, tcp_lso_pkt_out, num_lso_seg);
 		} else {
@@ -2218,7 +2238,7 @@ tcp_send(tcp_t *tcp, const int mss, const int total_hdr_len,
 			 */
 			lso_info_cleanup(mp);
 			tcp_send_data(tcp, mp);
-			BUMP_LOCAL(tcp->tcp_obsegs);
+			TCPS_BUMP_MIB(tcps, tcpHCOutSegs);
 		}
 	}
 
@@ -2298,8 +2318,8 @@ tcp_xmit_end(tcp_t *tcp)
 	 * So don't do any update.
 	 */
 	bzero(&uinfo, sizeof (uinfo));
-	uinfo.iulp_rtt = tcp->tcp_rtt_sa;
-	uinfo.iulp_rtt_sd = tcp->tcp_rtt_sd;
+	uinfo.iulp_rtt = NSEC2MSEC(tcp->tcp_rtt_sa);
+	uinfo.iulp_rtt_sd = NSEC2MSEC(tcp->tcp_rtt_sd);
 
 	/*
 	 * Note that uinfo is kept for conn_faddr in the DCE. Could update even
@@ -2434,9 +2454,43 @@ tcp_xmit_ctl(char *str, tcp_t *tcp, uint32_t seq, uint32_t ack, int ctl)
 		tcp->tcp_rack_cnt = 0;
 		TCPS_BUMP_MIB(tcps, tcpOutAck);
 	}
-	BUMP_LOCAL(tcp->tcp_obsegs);
+
 	tcpha->tha_seq = htonl(seq);
 	tcpha->tha_ack = htonl(ack);
+
+	if (tcp->tcp_md5sig) {
+		uint8_t digest[MD5_DIGEST_LENGTH];
+		int tcplen = (int)(mp->b_wptr - rptr) +
+		    TCPOPT_REAL_MD5_LEN - ip_hdr_len;
+
+		if (tcpsig_signature(mp->b_cont, tcp, tcpha, tcplen, digest,
+		    false)) {
+			uint8_t *wptr = mp->b_wptr;
+
+			wptr[0] = TCPOPT_NOP;
+			wptr[1] = TCPOPT_NOP;
+			wptr[2] = TCPOPT_MD5;
+			wptr[3] = TCPOPT_MD5_LEN;
+			bcopy(digest, &wptr[4], sizeof (digest));
+
+			tcpha->tha_offset_and_reserved += (5 << 4);
+			mp->b_wptr += TCPOPT_REAL_MD5_LEN;
+			ixa->ixa_pktlen += TCPOPT_REAL_MD5_LEN;
+			if (ixa->ixa_flags & IXAF_IS_IPV4) {
+				ipha->ipha_length = htons(ntohs(
+				    ipha->ipha_length) + TCPOPT_REAL_MD5_LEN);
+			} else {
+				ip6h->ip6_plen = htons(ntohs(ip6h->ip6_plen) +
+				    TCPOPT_REAL_MD5_LEN);
+			}
+		} else {
+			/* Silently drop the packet */
+			freemsg(mp);
+			return;
+		}
+	}
+
+	TCPS_BUMP_MIB(tcps, tcpHCOutSegs);
 	/*
 	 * Include the adjustment for a source route if any.
 	 */
@@ -2703,8 +2757,8 @@ tcp_xmit_listeners_reset(mblk_t *mp, ip_recv_attr_t *ira, ip_stack_t *ipst,
 	uint32_t	seg_seq;
 	uint32_t	seg_ack;
 	uint_t		flags;
-	ipha_t 		*ipha;
-	ip6_t 		*ip6h;
+	ipha_t		*ipha;
+	ip6_t		*ip6h;
 	boolean_t	policy_present;
 	netstack_t	*ns = ipst->ips_netstack;
 	tcp_stack_t	*tcps = ns->netstack_tcp;
@@ -3044,7 +3098,7 @@ tcp_xmit_mp(tcp_t *tcp, mblk_t *mp, int32_t max_to_send, int32_t *offset,
 	uchar_t	*rptr;
 	tcpha_t	*tcpha;
 	int32_t	num_sack_blk = 0;
-	int32_t	sack_opt_len = 0;
+	int32_t	sack_opt_len = 0, opt_len = 0;
 	tcp_stack_t	*tcps = tcp->tcp_tcps;
 	conn_t		*connp = tcp->tcp_connp;
 	ip_xmit_attr_t	*ixa = connp->conn_ixa;
@@ -3059,7 +3113,7 @@ tcp_xmit_mp(tcp_t *tcp, mblk_t *mp, int32_t max_to_send, int32_t *offset,
 	/*
 	 * Note that tcp_mss has been adjusted to take into account the
 	 * timestamp option if applicable.  Because SACK options do not
-	 * appear in every TCP segments and they are of variable lengths,
+	 * appear in every TCP segment and they are of variable lengths,
 	 * they cannot be included in tcp_mss.  Thus we need to calculate
 	 * the actual segment length when we need to send a segment which
 	 * includes SACK options.
@@ -3069,9 +3123,13 @@ tcp_xmit_mp(tcp_t *tcp, mblk_t *mp, int32_t max_to_send, int32_t *offset,
 		    tcp->tcp_num_sack_blk);
 		sack_opt_len = num_sack_blk * sizeof (sack_blk_t) +
 		    TCPOPT_NOP_LEN * 2 + TCPOPT_HEADER_LEN;
-		if (max_to_send + sack_opt_len > tcp->tcp_mss)
-			max_to_send -= sack_opt_len;
+		opt_len += sack_opt_len;
 	}
+	if (tcp->tcp_md5sig)
+		opt_len += TCPOPT_REAL_MD5_LEN;
+
+	if (max_to_send + opt_len > tcp->tcp_mss)
+		max_to_send -= opt_len;
 
 	if (offset != NULL) {
 		off = *offset;
@@ -3199,9 +3257,9 @@ tcp_xmit_mp(tcp_t *tcp, mblk_t *mp, int32_t max_to_send, int32_t *offset,
 			uint32_t llbolt = (uint32_t)LBOLT_FASTPATH;
 
 			U32_TO_BE32(llbolt,
-			    (char *)tcpha + TCP_MIN_HEADER_LENGTH+4);
+			    (char *)tcpha + TCP_MIN_HEADER_LENGTH + 4);
 			U32_TO_BE32(tcp->tcp_ts_recent,
-			    (char *)tcpha + TCP_MIN_HEADER_LENGTH+8);
+			    (char *)tcpha + TCP_MIN_HEADER_LENGTH + 8);
 		}
 	}
 
@@ -3227,6 +3285,32 @@ tcp_xmit_mp(tcp_t *tcp, mblk_t *mp, int32_t max_to_send, int32_t *offset,
 		}
 		tcpha->tha_offset_and_reserved += ((num_sack_blk * 2 + 1) << 4);
 	}
+
+	/* Fill in the MD5 signature option */
+	if (tcp->tcp_md5sig) {
+		uint8_t digest[MD5_DIGEST_LENGTH];
+		int tcplen = data_length + (int)(mp1->b_wptr - rptr) +
+		    TCPOPT_REAL_MD5_LEN - ixa->ixa_ip_hdr_length;
+
+		if (tcpsig_signature(mp1->b_cont, tcp, tcpha, tcplen, digest,
+		    false)) {
+			uint8_t	*wptr = mp1->b_wptr;
+
+			wptr[0] = TCPOPT_NOP;
+			wptr[1] = TCPOPT_NOP;
+			wptr[2] = TCPOPT_MD5;
+			wptr[3] = TCPOPT_MD5_LEN;
+			bcopy(digest, &wptr[4], sizeof (digest));
+
+			tcpha->tha_offset_and_reserved += (5 << 4);
+			mp1->b_wptr += TCPOPT_REAL_MD5_LEN;
+		} else {
+			/* Silently drop the packet */
+			freemsg(mp1);
+			return (NULL);
+		}
+	}
+
 	ASSERT((uintptr_t)(mp1->b_wptr - rptr) <= (uintptr_t)INT_MAX);
 	data_length += (int)(mp1->b_wptr - rptr);
 
@@ -3369,7 +3453,8 @@ tcp_sack_rexmit(tcp_t *tcp, uint_t *flags)
 			} else {
 				usable_swnd = usable_swnd / mss;
 				tcp->tcp_cwnd = tcp->tcp_snxt - tcp->tcp_suna +
-				    MAX(usable_swnd * mss, mss);
+				    MAX((uint32_t)usable_swnd * (uint32_t)mss,
+				    (uint32_t)mss);
 				*flags |= TH_XMIT_NEEDED;
 				return;
 			}
@@ -3403,11 +3488,13 @@ tcp_sack_rexmit(tcp_t *tcp, uint_t *flags)
 		/*
 		 * Update the send timestamp to avoid false retransmission.
 		 */
-		snxt_mp->b_prev = (mblk_t *)ddi_get_lbolt();
+		snxt_mp->b_prev = (mblk_t *)(intptr_t)gethrtime();
 
 		TCPS_BUMP_MIB(tcps, tcpRetransSegs);
 		TCPS_UPDATE_MIB(tcps, tcpRetransBytes, seg_len);
 		TCPS_BUMP_MIB(tcps, tcpOutSackRetransSegs);
+		tcp->tcp_cs.tcp_out_retrans_segs++;
+		tcp->tcp_cs.tcp_out_retrans_bytes += seg_len;
 		/*
 		 * Update tcp_rexmit_max to extend this SACK recovery phase.
 		 * This happens when new data sent during fast recovery is
@@ -3424,9 +3511,6 @@ tcp_sack_rexmit(tcp_t *tcp, uint_t *flags)
 /*
  * tcp_ss_rexmit() is called to do slow start retransmission after a timeout
  * or ICMP errors.
- *
- * To limit the number of duplicate segments, we limit the number of segment
- * to be sent in one time to tcp_snd_burst, the burst variable.
  */
 void
 tcp_ss_rexmit(tcp_t *tcp)
@@ -3436,7 +3520,6 @@ tcp_ss_rexmit(tcp_t *tcp)
 	int32_t		win;
 	int32_t		mss;
 	int32_t		off;
-	int32_t		burst = tcp->tcp_snd_burst;
 	mblk_t		*snxt_mp;
 	tcp_stack_t	*tcps = tcp->tcp_tcps;
 
@@ -3455,8 +3538,7 @@ tcp_ss_rexmit(tcp_t *tcp)
 		mss = tcp->tcp_mss;
 		snxt_mp = tcp_get_seg_mp(tcp, snxt, &off);
 
-		while (SEQ_LT(snxt, smax) && (win > 0) &&
-		    (burst > 0) && (snxt_mp != NULL)) {
+		while (SEQ_LT(snxt, smax) && (win > 0) && (snxt_mp != NULL)) {
 			mblk_t	*xmit_mp;
 			mblk_t	*old_snxt_mp = snxt_mp;
 			uint32_t cnt = mss;
@@ -3480,12 +3562,13 @@ tcp_ss_rexmit(tcp_t *tcp)
 			 * Update the send timestamp to avoid false
 			 * retransmission.
 			 */
-			old_snxt_mp->b_prev = (mblk_t *)ddi_get_lbolt();
+			old_snxt_mp->b_prev = (mblk_t *)(intptr_t)gethrtime();
 			TCPS_BUMP_MIB(tcps, tcpRetransSegs);
 			TCPS_UPDATE_MIB(tcps, tcpRetransBytes, cnt);
+			tcp->tcp_cs.tcp_out_retrans_segs++;
+			tcp->tcp_cs.tcp_out_retrans_bytes += cnt;
 
 			tcp->tcp_rexmit_nxt = snxt;
-			burst--;
 		}
 		/*
 		 * If we have transmitted all we have at the time
@@ -3526,7 +3609,6 @@ tcp_rexmit_after_error(tcp_t *tcp)
 	tcp->tcp_rexmit_nxt = tcp->tcp_suna;
 	tcp->tcp_rexmit = B_TRUE;
 	tcp->tcp_dupack_cnt = 0;
-	tcp->tcp_snd_burst = TCP_CWND_SS;
 	tcp_ss_rexmit(tcp);
 }
 
@@ -3642,7 +3724,7 @@ tcp_process_shrunk_swnd(tcp_t *tcp, uint32_t shrunk_count)
  * ECN and/or SACK.
  */
 static void
-tcp_fill_header(tcp_t *tcp, uchar_t *rptr, clock_t now, int num_sack_blk)
+tcp_fill_header(tcp_t *tcp, uchar_t *rptr, int num_sack_blk)
 {
 	tcpha_t *tcp_tmpl, *tcpha;
 	uint32_t *dst, *src;
@@ -3664,7 +3746,7 @@ tcp_fill_header(tcp_t *tcp, uchar_t *rptr, clock_t now, int num_sack_blk)
 
 	/* Fill time-stamp option if needed */
 	if (tcp->tcp_snd_ts_ok) {
-		U32_TO_BE32((uint32_t)now,
+		U32_TO_BE32(LBOLT_FASTPATH,
 		    (char *)tcp_tmpl + TCP_MIN_HEADER_LENGTH + 4);
 		U32_TO_BE32(tcp->tcp_ts_recent,
 		    (char *)tcp_tmpl + TCP_MIN_HEADER_LENGTH + 8);

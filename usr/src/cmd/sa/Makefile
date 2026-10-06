@@ -23,8 +23,7 @@
 # Use is subject to license terms.
 # Copyright (c) 2013 Andrew Stormont.  All rights reserved.
 #
-# cmd/sa/Makefile
-#
+# Copyright (c) 2018, Joyent, Inc.
 
 MANIFEST =	sar.xml
 SVCMETHOD =	svc-sar
@@ -34,13 +33,12 @@ include ../Makefile.cmd
 ROOTMANIFESTDIR = $(ROOTSVCSYSTEM)
 
 CERRWARN +=	-_gcc=-Wno-parentheses
-CERRWARN +=	-_gcc=-Wno-uninitialized
+CERRWARN +=	$(CNOWARN_UNINIT)
 
-GREP=		grep
+SMOFF += all_func_returns
 
-SADC= 		sadc
-SADP= 		sadp
-SAR= 		sar
+SADC=		sadc
+SAR=		sar
 TIMEX=		timex
 SA1=		sa1
 SA2=		sa2
@@ -56,7 +54,7 @@ INITSHELL=	$(PERF)
 
 PROGS=		$(BINPROG) $(SBINPROG) $(LIBPROG)
 SHELLS=		$(LIBSHELL)
-TXTS= 		$(SADP).c README
+TXTS=		README
 ALL=		$(PROGS) $(SHELLS)
 
 # Source files
@@ -87,11 +85,11 @@ ENTRY3=		'$(POUND_SIGN) 5 18 * * 1-5 /usr/lib/sa/sa2 -s 8:00 -e 18:01 -i 1200 -A
 CLOBBERFILES=	$(PROGS) $(SHELLS)
 
 # Conditionals
-$(LIBSAD)/$(SADC) 	:= FILEMODE = 0555
+$(LIBSAD)/$(SADC)	:= FILEMODE = 0555
 
 .KEEP_STATE:
 
-all: 		$(ALL) $(TXTS)
+all:		$(ALL) $(TXTS)
 
 $(SADC):	$(SADC_OBJECTS)
 	$(LINK.c) -o $@ $(SADC_OBJECTS) $(LDLIBS)
@@ -129,7 +127,7 @@ $(ETCINITD)/%: %
 check:	$(CHKMANIFEST)
 
 clean:
-	$(RM) $(SADC_OBJECTS) $(PROGS) $(SHELLS) $(SADP)
+	$(RM) $(SADC_OBJECTS) $(PROGS) $(SHELLS)
 
 lint:	lint_SRCS
 

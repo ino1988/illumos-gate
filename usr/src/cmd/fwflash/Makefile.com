@@ -21,16 +21,15 @@
 # Copyright 2009 Sun Microsystems, Inc.  All rights reserved.
 # Use is subject to license terms.
 #
-# cmd/fwflash/Makefile.com
-#
+# Copyright (c) 2018, Joyent, Inc.
 #
 # common rules for $SRC/cmd/fwflash
 
-CLOSED=			$(SRC)/../closed
-
 CERRWARN +=		-_gcc=-Wno-parentheses
-CERRWARN +=		-_gcc=-Wno-uninitialized
 CERRWARN +=		-_gcc=-Wno-address
+
+# not linted
+SMATCH=off
 
 ROOTUSR=                $(ROOT)/usr
 ROOTUSRINCLD=		$(ROOTUSR)/include
@@ -80,11 +79,6 @@ $(ROOTUSRSBIN):		$(ROOTUSR)
 $(ROOTUSRSBIN)/%:	%
 	$(INS.file)
 
-
-
-%.ln: $(SRCDIR)/%.c
-	$(LINT.c) $(LINTFLAGS) -c $<
-
 %.po: $(SRCDIR)/%.c
 	$(RM) messages.po
 	$(XGETTEXT) $(XGETFLAGS) \
@@ -94,7 +88,4 @@ $(ROOTUSRSBIN)/%:	%
 
 $(POFILE): $(POFILES)
 	$(RM) $@
-	cat $(POFILES) >$@		
-
-LINTFLAGS += -D_POSIX_PTHREAD_SEMANTICS -erroff=E_CONSTANT_CONDITION \
-	-erroff=E_SUPPRESSION_DIRECTIVE_UNUSED
+	cat $(POFILES) >$@

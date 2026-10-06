@@ -261,7 +261,7 @@ retry:
 				 * mac_ctx_tmpl, once it picks a MAC provider.
 				 */
 				KCF_WRAP_MAC_OPS_PARAMS(&(next_req->kr_params),
-				    KCF_OP_ATOMIC, NULL, mac_mech, mac_key,
+				    KCF_OP_ATOMIC, 0, mac_mech, mac_key,
 				    (crypto_data_t *)ct, mac, mac_tmpl);
 			}
 
@@ -1055,7 +1055,7 @@ int crypto_encrypt_mac_final(crypto_context_t context, crypto_dual_data_t *ct,
 		    ctx->cc_session, NULL, NULL, NULL, ct, mac, NULL, NULL);
 		error = kcf_submit_request(pd, ctx, cr, &params, B_FALSE);
 	}
-out:
+
 	/* Release the hold done in kcf_new_ctx() during init step. */
 	KCF_CONTEXT_COND_RELEASE(error, kcf_ctx);
 	return (error);
@@ -1213,7 +1213,7 @@ retry:
 				}
 				KCF_WRAP_DECRYPT_OPS_PARAMS(
 				    &(next_req->kr_params), KCF_OP_ATOMIC,
-				    NULL, decr_mech, decr_key,
+				    0, decr_mech, decr_key,
 				    (crypto_data_t *)ct, pt, spi_decr_tmpl);
 			}
 

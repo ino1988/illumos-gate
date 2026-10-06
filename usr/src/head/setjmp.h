@@ -20,7 +20,7 @@
  * CDDL HEADER END
  */
 /*	Copyright (c) 1988 AT&T	*/
-/*	  All Rights Reserved  	*/
+/*	  All Rights Reserved	*/
 
 /*
  * Copyright 2014 Garrett D'Amore <garrett@damore.org>
@@ -51,14 +51,13 @@ extern "C" {
 	defined(__EXTENSIONS__)
 /* non-ANSI standard compilation */
 
-#if defined(_LP64) || defined(_I32LPx)
+#if defined(_LP64)
 typedef long sigjmp_buf[_SIGJBLEN];
 #else
 typedef int sigjmp_buf[_SIGJBLEN];
 #endif
 
 extern int sigsetjmp(sigjmp_buf, int) __RETURNS_TWICE;
-#pragma unknown_control_flow(sigsetjmp)
 extern void siglongjmp(sigjmp_buf, int) __NORETURN;
 #endif
 

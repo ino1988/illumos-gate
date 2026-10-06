@@ -21,6 +21,7 @@
 
 /*
  * Copyright (c) 1982, 2010, Oracle and/or its affiliates. All rights reserved.
+ * Copyright 2015, Joyent, Inc. All rights reserved.
  */
 
 /*
@@ -53,6 +54,7 @@
 #include <sys/vnode.h>
 #include <sys/uio.h>
 #include <sys/stat.h>
+#include <sys/limits.h>
 
 #include <sys/console.h>
 #include <sys/consdev.h>
@@ -92,7 +94,7 @@ static struct cb_ops cn_cb_ops = {
 	cnioctl,		/* ioctl */
 	nodev,			/* devmap */
 	nodev,			/* mmap */
-	nodev, 			/* segmap */
+	nodev,			/* segmap */
 	cnpoll,			/* poll */
 	ddi_prop_op,		/* cb_prop_op */
 	0,			/* streamtab  */
@@ -207,16 +209,16 @@ cn_attach(dev_info_t *devi, ddi_attach_cmd_t cmd)
 		return (DDI_FAILURE);
 
 	if (ddi_create_minor_node(devi, "syscon", S_IFCHR,
-	    0, DDI_PSEUDO, NULL) == DDI_FAILURE) {
+	    0, DDI_PSEUDO, 0) == DDI_FAILURE) {
 		return (DDI_FAILURE);
 	}
 	if (ddi_create_minor_node(devi, "systty", S_IFCHR,
-	    0, DDI_PSEUDO, NULL) == DDI_FAILURE) {
+	    0, DDI_PSEUDO, 0) == DDI_FAILURE) {
 		ddi_remove_minor_node(devi, NULL);
 		return (DDI_FAILURE);
 	}
 	if (ddi_create_minor_node(devi, "console", S_IFCHR,
-	    0, DDI_PSEUDO, NULL) == DDI_FAILURE) {
+	    0, DDI_PSEUDO, 0) == DDI_FAILURE) {
 		ddi_remove_minor_node(devi, NULL);
 		return (DDI_FAILURE);
 	}
@@ -235,9 +237,9 @@ cn_detach(dev_info_t *devi, ddi_detach_cmd_t cmd)
 	return (DDI_SUCCESS);
 }
 
-/* ARGSUSED */
 static int
-cn_info(dev_info_t *dip, ddi_info_cmd_t infocmd, void *arg, void **result)
+cn_info(dev_info_t *dip __unused, ddi_info_cmd_t infocmd, void *arg,
+    void **result)
 {
 	int error = DDI_FAILURE;
 
@@ -344,9 +346,8 @@ cnopen(dev_t *dev, int flag, int state, struct cred *cred)
 	return (0);
 }
 
-/* ARGSUSED */
 static int
-cnclose(dev_t dev, int flag, int state, struct cred *cred)
+cnclose(dev_t dev __unused, int flag, int state, struct cred *cred)
 {
 	int	err = 0;
 	vnode_t	*vp;
@@ -372,9 +373,8 @@ cnclose(dev_t dev, int flag, int state, struct cred *cred)
 	return (err);
 }
 
-/* ARGSUSED */
 static int
-cnread(dev_t dev, struct uio *uio, struct cred *cred)
+cnread(dev_t dev __unused, struct uio *uio, struct cred *cred)
 {
 	kcondvar_t	sleep_forever;
 	kmutex_t	sleep_forever_mutex;
@@ -400,9 +400,8 @@ cnread(dev_t dev, struct uio *uio, struct cred *cred)
 		return (cdev_read(rconsdev, uio, cred));
 }
 
-/* ARGSUSED */
 static int
-cnwrite(dev_t dev, struct uio *uio, struct cred *cred)
+cnwrite(dev_t dev __unused, struct uio *uio, struct cred *cred)
 {
 	if (rconsvp == NULL) {
 		uio->uio_resid = 0;
@@ -414,14 +413,24 @@ cnwrite(dev_t dev, struct uio *uio, struct cred *cred)
 	 */
 	if (vsconsvp != NULL && vsconsvp->v_stream != NULL) {
 		struiod_t uiod;
+		struct iovec buf[IOV_MAX_STACK];
+		int iovlen = 0;
+
+		if (uio->uio_iovcnt > IOV_MAX_STACK) {
+			iovlen = uio->uio_iovcnt * sizeof (iovec_t);
+			uiod.d_iov = kmem_alloc(iovlen, KM_SLEEP);
+		} else {
+			uiod.d_iov = buf;
+		}
 
 		/*
 		 * strwrite modifies uio so need to make copy.
 		 */
-		(void) uiodup(uio, &uiod.d_uio, uiod.d_iov,
-		    sizeof (uiod.d_iov) / sizeof (*uiod.d_iov));
+		(void) uiodup(uio, &uiod.d_uio, uiod.d_iov, uio->uio_iovcnt);
 
 		(void) strwrite(vsconsvp, &uiod.d_uio, cred);
+		if (iovlen != 0)
+			kmem_free(uiod.d_iov, iovlen);
 	}
 
 	if (rconsvp->v_stream != NULL)
@@ -430,13 +439,40 @@ cnwrite(dev_t dev, struct uio *uio, struct cred *cred)
 		return (cdev_write(rconsdev, uio, cred));
 }
 
-/* ARGSUSED */
 static int
-cnprivateioc(dev_t dev, int cmd, intptr_t arg, int flag, struct cred *cred,
-	int *rvalp)
+cnprivateioc(dev_t dev __unused, int cmd, intptr_t arg, int flag,
+    struct cred *cred, int *rvalp)
 {
+	if (cmd == CONS_GETDEV) {
+		/*
+		 * The user has requested the device number of the redirection
+		 * client.
+		 */
+		STRUCT_DECL(cons_getdev, cnd);
+		STRUCT_INIT(cnd, flag);
 
-	/* currently we only support one ioctl */
+		bzero(STRUCT_BUF(cnd), STRUCT_SIZE(cnd));
+
+		if ((flag & DATAMODEL_MASK) == DATAMODEL_ILP32) {
+			dev32_t rconsdev32;
+
+			if (cmpldev(&rconsdev32, rconsdev) != 1) {
+				return (EOVERFLOW);
+			}
+
+			STRUCT_FSET(cnd, cnd_rconsdev, rconsdev32);
+		} else {
+			STRUCT_FSET(cnd, cnd_rconsdev, rconsdev);
+		}
+
+		if (ddi_copyout(STRUCT_BUF(cnd), (void *)arg,
+		    STRUCT_SIZE(cnd), flag) != 0) {
+			return (EFAULT);
+		}
+
+		return (0);
+	}
+
 	if (cmd != CONS_GETTERM)
 		return (EINVAL);
 
@@ -458,7 +494,7 @@ cnprivateioc(dev_t dev, int cmd, intptr_t arg, int flag, struct cred *cred,
 /* ARGSUSED */
 static int
 cnioctl(dev_t dev, int cmd, intptr_t arg, int flag, struct cred *cred,
-	int *rvalp)
+    int *rvalp)
 {
 	if (rconsvp == NULL)
 		return (0);
@@ -486,7 +522,7 @@ cnioctl(dev_t dev, int cmd, intptr_t arg, int flag, struct cred *cred,
 /* ARGSUSED */
 static int
 cnpoll(dev_t dev, short events, int anyyet, short *reventsp,
-	struct pollhead **phpp)
+    struct pollhead **phpp)
 {
 	if (rconsvp == NULL)
 		return (nochpoll(dev, events, anyyet, reventsp, phpp));

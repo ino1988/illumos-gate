@@ -22,7 +22,9 @@
 /*
  * Copyright (c) 2003, 2010, Oracle and/or its affiliates. All rights reserved.
  * Copyright (c) 2013 by Delphix. All rights reserved.
- * Copyright (c) 2012, Joyent, Inc. All rights reserved.
+ * Copyright 2019 Joyent, Inc.
+ * Copyright 2022 Racktop Systems, Inc.
+ * Copyright 2025 Oxide Computer Company
  */
 
 /*
@@ -34,6 +36,7 @@
 
 #include <mdb/mdb_param.h>
 #include <mdb/mdb_modapi.h>
+#include <mdb/mdb_ctf.h>
 #include <mdb/mdb_ks.h>
 #include <sys/dtrace_impl.h>
 #include <sys/vmem_impl.h>
@@ -52,7 +55,7 @@
 int
 id2probe(uintptr_t addr, uint_t flags, int argc, const mdb_arg_t *argv)
 {
-	uintptr_t probe = NULL;
+	uintptr_t probe = 0;
 	uintptr_t probes;
 
 	if (!(flags & DCMD_ADDRSPEC))
@@ -84,7 +87,7 @@ dtrace_help(void)
 
 	mdb_printf("Given a dtrace_state_t structure that represents a "
 	    "DTrace consumer, prints\n"
-	    "dtrace(1M)-like output for in-kernel DTrace data.  (The "
+	    "dtrace(8)-like output for in-kernel DTrace data.  (The "
 	    "dtrace_state_t\n"
 	    "structures for all DTrace consumers may be obtained by running "
 	    "the \n"
@@ -114,7 +117,7 @@ dtracemdb_eprobe(dtrace_state_t *state, dtrace_eprobedesc_t *epd)
 		return (-1);
 	}
 
-	if (addr == NULL) {
+	if (addr == 0) {
 		mdb_warn("epid %d doesn't match an ecb\n", epid);
 		return (-1);
 	}
@@ -135,7 +138,7 @@ dtracemdb_eprobe(dtrace_state_t *state, dtrace_eprobedesc_t *epd)
 	 * This is a little painful:  in order to find the number of actions,
 	 * we need to first walk through them.
 	 */
-	for (ap = (uintptr_t)ecb.dte_action, nactions = 0; ap != NULL; ) {
+	for (ap = (uintptr_t)ecb.dte_action, nactions = 0; ap != 0; ) {
 		if (mdb_vread(&act, sizeof (act), ap) == -1) {
 			mdb_warn("failed to read action %p on ecb %p",
 			    ap, addr);
@@ -154,7 +157,7 @@ dtracemdb_eprobe(dtrace_state_t *state, dtrace_eprobedesc_t *epd)
 	epd->dtepd_uarg = ecb.dte_uarg;
 	epd->dtepd_size = ecb.dte_size;
 
-	for (ap = (uintptr_t)ecb.dte_action, nactions = 0; ap != NULL; ) {
+	for (ap = (uintptr_t)ecb.dte_action, nactions = 0; ap != 0; ) {
 		if (mdb_vread(&act, sizeof (act), ap) == -1) {
 			mdb_warn("failed to read action %p on ecb %p",
 			    ap, addr);
@@ -204,11 +207,11 @@ dtracemdb_probe(dtrace_state_t *state, dtrace_probedesc_t *pd)
 			return (-1);
 		}
 
-		if (paddr != NULL)
+		if (paddr != 0)
 			break;
 	}
 
-	if (paddr == NULL) {
+	if (paddr == 0) {
 		errno = ESRCH;
 		return (-1);
 	}
@@ -274,7 +277,7 @@ dtracemdb_aggdesc(dtrace_state_t *state, dtrace_aggdesc_t *agd)
 		return (-1);
 	}
 
-	if (addr == NULL) {
+	if (addr == 0) {
 		mdb_warn("aggid %d doesn't match an aggregation\n", aggid);
 		return (-1);
 	}
@@ -354,6 +357,8 @@ dtracemdb_aggdesc(dtrace_state_t *state, dtrace_aggdesc_t *agd)
 static int
 dtracemdb_bufsnap(dtrace_buffer_t *which, dtrace_bufdesc_t *desc)
 {
+	static hrtime_t hr_offset = 0;
+	static boolean_t offset_set = B_FALSE;
 	uintptr_t addr;
 	size_t bufsize;
 	dtrace_buffer_t buf;
@@ -430,9 +435,52 @@ dtracemdb_bufsnap(dtrace_buffer_t *which, dtrace_bufdesc_t *desc)
 		desc->dtbd_oldest = 0;
 	}
 
+	/*
+	 * On a live system, dtbd_timestamp is set to gethrtime() when the
+	 * DTRACEIOC_BUFSNAP ioctl is called. The effect of this is that the
+	 * timestamps of all the enabled probe records in the buf will always
+	 * be less than dtbd_timestamp. dtrace_consume() relies on this
+	 * invariant to determine when it needs to retrieve more dtrace bufs
+	 * from the kernel.
+	 *
+	 * However when mdb is reading a crash dump, the value of
+	 * gethrtime() on the system running mdb may smaller than the
+	 * enabled probe records in the crash dump, violating the invariant
+	 * dtrace_consume() is relying on. This can cause dtrace_consume()
+	 * to prematurely stop processing records.
+	 *
+	 * To preserve the invariant dtrace_consume() requires, we simply
+	 * add the value of panic_hrtime to gethrtime() when setting
+	 * dtdb_timestamp. On a live system, panic_hrtime will be 0, and
+	 * the invariant will be preserved by virtue of being running on
+	 * a live system. On a crash dump, no valid probe record can have a
+	 * timestamp greater than panic_hrtime, so adding this to the value
+	 * of gethrtime() will guarantee the invariant expected by
+	 * dtrace_consume() is preserved.
+	 */
+	if (!offset_set) {
+		hrtime_t panic_hrtime;
+
+		/*
+		 * We could be slightly more clever and only set hr_offset
+		 * if gethrtime() in mdb is < panic_hrtime, but it doesn't
+		 * seem necessary. If for some reason, we cannot read
+		 * panic_hrtime, we'll try to continue -- ::dtrace may
+		 * still succeed, so we just warn and continue.
+		 */
+		if (mdb_readvar(&panic_hrtime, "panic_hrtime") == -1) {
+			mdb_warn("failed to read 'panic_hrtime' -- "
+			    "some dtrace data may not be displayed");
+		} else {
+			hr_offset = panic_hrtime;
+		}
+		offset_set = B_TRUE;
+	}
+
 	desc->dtbd_size = bufsize;
 	desc->dtbd_drops = buf.dtb_drops;
 	desc->dtbd_errors = buf.dtb_errors;
+	desc->dtbd_timestamp = gethrtime() + hr_offset;
 
 	return (0);
 }
@@ -719,15 +767,21 @@ dtracemdb_ioctl(void *varg, int cmd, void *arg)
 	}
 }
 
+struct dtrace_ctf_module {
+	char *text;
+	size_t text_size;
+};
+
 static int
 dtracemdb_modctl(uintptr_t addr, const struct modctl *m, dtracemdb_data_t *data)
 {
-	struct module mod;
+	struct dtrace_ctf_module mod;
 
 	if (m->mod_mp == NULL)
 		return (WALK_NEXT);
 
-	if (mdb_vread(&mod, sizeof (mod), (uintptr_t)m->mod_mp) == -1) {
+	if (mdb_ctf_vread(&mod, "struct module", "struct dtrace_ctf_module",
+	    (uintptr_t)m->mod_mp, 0) == -1) {
 		mdb_warn("couldn't read modctl %p's module", addr);
 		return (WALK_NEXT);
 	}
@@ -809,7 +863,7 @@ dtracemdb_stat(void *varg, processorid_t cpu)
 		return (-1);
 	}
 
-	if (caddr == NULL)
+	if (caddr == 0)
 		return (-1);
 
 	if (mdb_vread(&c, sizeof (c), caddr) == -1) {
@@ -823,6 +877,8 @@ dtracemdb_stat(void *varg, processorid_t cpu)
 		return (P_SPARE);
 	} else if (c.cpu_flags & CPU_FAULTED) {
 		return (P_FAULTED);
+	} else if (c.cpu_flags & CPU_DISABLED) {
+		return (P_DISABLED);
 	} else if ((c.cpu_flags & (CPU_READY | CPU_OFFLINE)) != CPU_READY) {
 		return (P_OFFLINE);
 	} else if (c.cpu_flags & CPU_ENABLE) {
@@ -1176,7 +1232,7 @@ dtrace_errhash_init(mdb_walk_state_t *wsp)
 	uintptr_t *hash, addr;
 	int i;
 
-	if (wsp->walk_addr != NULL) {
+	if (wsp->walk_addr != 0) {
 		mdb_warn("dtrace_errhash walk only supports global walks\n");
 		return (WALK_ERR);
 	}
@@ -1276,7 +1332,7 @@ dtrace_helptrace_init(mdb_walk_state_t *wsp)
 	uint32_t next;
 	uintptr_t buffer;
 
-	if (wsp->walk_addr != NULL) {
+	if (wsp->walk_addr != 0) {
 		mdb_warn("dtrace_helptrace only supports global walks\n");
 		return (WALK_ERR);
 	}
@@ -1286,7 +1342,7 @@ dtrace_helptrace_init(mdb_walk_state_t *wsp)
 		return (WALK_ERR);
 	}
 
-	if (buffer == NULL) {
+	if (buffer == 0) {
 		mdb_warn("helper tracing is not enabled\n");
 		return (WALK_ERR);
 	}
@@ -1520,7 +1576,7 @@ dtrace_state_init(mdb_walk_state_t *wsp)
 	minor_t max = 0;
 	dtrace_state_walk_t *dw;
 
-	if (wsp->walk_addr != NULL) {
+	if (wsp->walk_addr != 0) {
 		mdb_warn("dtrace_state only supports global walks\n");
 		return (WALK_ERR);
 	}
@@ -1650,7 +1706,7 @@ dtrace_state_help(void)
 	    "no state structure is provided, iterates\nover all state "
 	    "structures.\n\n"
 	    "Addresses in ADDR column may be provided to ::dtrace to obtain\n"
-	    "dtrace(1M)-like output for in-kernel DTrace data.\n");
+	    "dtrace(8)-like output for in-kernel DTrace data.\n");
 }
 
 int
@@ -1744,7 +1800,7 @@ dtrace_aggkey_init(mdb_walk_state_t *wsp)
 	dtrace_aggkey_data_t *data;
 	size_t hsize;
 
-	if ((addr = wsp->walk_addr) == NULL) {
+	if ((addr = wsp->walk_addr) == 0) {
 		mdb_warn("dtrace_aggkey walk needs aggregation buffer\n");
 		return (WALK_ERR);
 	}
@@ -1788,7 +1844,7 @@ dtrace_aggkey_step(mdb_walk_state_t *wsp)
 	dtrace_aggkey_t key;
 	uintptr_t addr;
 
-	while ((addr = data->dtakd_next) == NULL) {
+	while ((addr = data->dtakd_next) == 0) {
 		if (data->dtakd_ndx == data->dtakd_hashsize)
 			return (WALK_DONE);
 
@@ -1833,7 +1889,7 @@ dtrace_dynvar_init(mdb_walk_state_t *wsp)
 	size_t hsize;
 	GElf_Sym sym;
 
-	if ((addr = wsp->walk_addr) == NULL) {
+	if ((addr = wsp->walk_addr) == 0) {
 		mdb_warn("dtrace_dynvar walk needs dtrace_dstate_t\n");
 		return (WALK_ERR);
 	}
@@ -2376,7 +2432,7 @@ dtrace_ecb_init(mdb_walk_state_t *wsp)
 	dtrace_state_t state;
 	dtrace_ecb_walk_t *ecbwp;
 
-	if ((addr = wsp->walk_addr) == NULL) {
+	if ((addr = wsp->walk_addr) == 0) {
 		mdb_warn("dtrace_ecb walk needs dtrace_state_t\n");
 		return (WALK_ERR);
 	}
@@ -2415,7 +2471,7 @@ dtrace_ecb_step(mdb_walk_state_t *wsp)
 		return (WALK_ERR);
 	}
 
-	if (ecbp == NULL)
+	if (ecbp == 0)
 		return (WALK_NEXT);
 
 	return (wsp->walk_callback(ecbp, NULL, wsp->walk_cbdata));
@@ -2517,8 +2573,15 @@ static struct dtrace_options {
 	{ "aggsortkey", dtrace_options_numtostr },
 	{ "aggsortrev", dtrace_options_numtostr },
 	{ "aggsortpos", dtrace_options_numtostr },
-	{ "aggsortkeypos", dtrace_options_numtostr }
+	{ "aggsortkeypos", dtrace_options_numtostr },
+	{ "temporal", dtrace_options_numtostr },
+	{ "agghist", dtrace_options_numtostr },
+	{ "aggpack", dtrace_options_numtostr },
+	{ "aggzoom", dtrace_options_numtostr },
+	{ "zone", dtrace_options_numtostr }
 };
+
+CTASSERT(ARRAY_SIZE(_dtrace_options) == DTRACEOPT_MAX);
 
 static void
 dtrace_options_help(void)
@@ -2571,7 +2634,7 @@ pid2state_init(mdb_walk_state_t *wsp)
 	struct dev_info info;
 	pid_t pid = (pid_t)wsp->walk_addr;
 
-	if (wsp->walk_addr == NULL) {
+	if (wsp->walk_addr == 0) {
 		mdb_warn("pid2state walk requires PID\n");
 		return (WALK_ERR);
 	}
@@ -2583,7 +2646,7 @@ pid2state_init(mdb_walk_state_t *wsp)
 		return (DCMD_ERR);
 	}
 
-	if ((proc = mdb_pid2proc(pid, NULL)) == NULL) {
+	if ((proc = mdb_pid2proc(pid, NULL)) == 0) {
 		mdb_warn("PID 0t%d not found\n", pid);
 		return (DCMD_ERR);
 	}
@@ -2661,7 +2724,7 @@ dtrace_probes_walk(uintptr_t addr, void *ignored, uintptr_t *target)
 	dtrace_probe_t probe;
 	dtrace_probedesc_t pd;
 
-	if (addr == NULL)
+	if (addr == 0)
 		return (WALK_ERR);
 
 	if (mdb_vread(&ecb, sizeof (dtrace_ecb_t), addr) == -1) {
@@ -2730,7 +2793,7 @@ dtrace_probes(uintptr_t addr, uint_t flags, int argc, const mdb_arg_t *argv)
 				continue;
 			}
 
-			if (paddr == NULL)
+			if (paddr == 0)
 				continue;
 
 			pd.dtpd_id = i + 1;
@@ -2754,7 +2817,7 @@ dtrace_probes(uintptr_t addr, uint_t flags, int argc, const mdb_arg_t *argv)
 const mdb_dcmd_t kernel_dcmds[] = {
 	{ "id2probe", ":", "translate a dtrace_id_t to a dtrace_probe_t",
 	    id2probe },
-	{ "dtrace", ":[-c cpu]", "print dtrace(1M)-like output",
+	{ "dtrace", ":[-c cpu]", "print dtrace(8)-like output",
 	    dtrace, dtrace_help },
 	{ "dtrace_errhash", ":", "print DTrace error hash", dtrace_errhash },
 	{ "dtrace_helptrace", ":", "print DTrace helper trace",

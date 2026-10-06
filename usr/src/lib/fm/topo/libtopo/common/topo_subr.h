@@ -21,6 +21,8 @@
 
 /*
  * Copyright (c) 2006, 2010, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2018, Joyent, Inc.
+ * Copyright 2023 Oxide Computer Company
  */
 
 #ifndef _TOPO_SUBR_H
@@ -124,13 +126,13 @@ extern int topo_version_str2num(const char *, topo_version_t);
 extern int topo_version_defined(topo_version_t);
 
 extern void topo_dprintf(topo_hdl_t *, int, const char *, ...);
-extern void topo_vdprintf(topo_hdl_t *, int, const char *, const char *,
+extern void topo_vdprintf(topo_hdl_t *, const char *, const char *,
     va_list);
 
 extern tnode_t *topo_hdl_root(topo_hdl_t *, const char *);
 extern char *topo_search_path(topo_mod_t *, const char *, const char *);
 
-extern void topo_fmristr_build(ssize_t *, char *, size_t, char *, char *,
+extern boolean_t topo_fmristr_build(size_t *, char *, size_t, char *, char *,
     char *);
 
 extern int topo_walk_byid(topo_walk_t *wp, const char *name, topo_instance_t);
@@ -138,6 +140,7 @@ extern int topo_walk_bysibling(topo_walk_t *wp, const char *name,
     topo_instance_t);
 
 extern char *topo_cleanup_auth_str(topo_hdl_t *, const char *);
+extern char *topo_cleanup_strn(topo_hdl_t *, const char *, size_t);
 
 #ifdef __cplusplus
 }

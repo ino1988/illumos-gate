@@ -120,7 +120,7 @@ class SLPHeaderV2 extends SrvLocHeader implements Cloneable {
 
     static void registerOptionClass(int id, Class optClass) {
 
-	Integer key = new Integer(id);
+	Integer key = Integer.valueOf(id);
 
 	// We should probably check if it implements SLPOption.OptionParser,
 	//  but...
@@ -185,7 +185,7 @@ class SLPHeaderV2 extends SrvLocHeader implements Cloneable {
 				ServiceLocationException.PARSE_ERROR,
 				"option_error",
 				new Object[] {
-		    new Integer(optOff), new Integer(length)});
+		    Integer.valueOf(optOff), Integer.valueOf(length)});
 
 	}
 
@@ -243,7 +243,7 @@ class SLPHeaderV2 extends SrvLocHeader implements Cloneable {
 	case SrvLocHeader.DAAdvert:
 	    rply = new CDAAdvert(this, dis);
 	    break;
-	
+
 	case SrvLocHeader.SrvAck:
 
 	    // We act as a SrvAck.
@@ -262,7 +262,7 @@ class SLPHeaderV2 extends SrvLocHeader implements Cloneable {
 				ServiceLocationException.PARSE_ERROR,
 				"function_code_error",
 				new Object[] {
-		    new Integer(functionCode)});
+		    Integer.valueOf(functionCode)});
 
 	}
 
@@ -274,7 +274,7 @@ class SLPHeaderV2 extends SrvLocHeader implements Cloneable {
 				ServiceLocationException.PARSE_ERROR,
 				"length_overflow",
 				new Object[] {
-		    new Integer(nbytes), new Integer(length)});
+		    Integer.valueOf(nbytes), Integer.valueOf(length)});
 
 	}
 
@@ -293,7 +293,7 @@ class SLPHeaderV2 extends SrvLocHeader implements Cloneable {
 	Assert.slpassert(((functionCode <= SAAdvert) &&
 	    (functionCode >= SrvReq)),
 		      "function_code_error",
-		      new Object[] {new Integer(functionCode)});
+		      new Object[] {Integer.valueOf(functionCode)});
 
 	Assert.slpassert((locale != null),
 		      "null_locale_error",
@@ -320,8 +320,8 @@ class SLPHeaderV2 extends SrvLocHeader implements Cloneable {
 				ServiceLocationException.BUFFER_OVERFLOW,
 				"buffer_overflow",
 				new Object[] {
-		    new Integer(headerLen + SHORT_SIZE),
-			new Integer(packetLength)});
+		    Integer.valueOf(headerLen + SHORT_SIZE),
+			Integer.valueOf(packetLength)});
 	}
     }
 
@@ -514,7 +514,7 @@ class SLPHeaderV2 extends SrvLocHeader implements Cloneable {
 
 	    // Lookup an option parser.
 
-	    Integer key = new Integer(optId);
+	    Integer key = Integer.valueOf(optId);
 
 	    Class optClass = (Class)optClasses.get(key);
 
@@ -547,20 +547,20 @@ class SLPHeaderV2 extends SrvLocHeader implements Cloneable {
 
 
 	    } else {
-	
+
 		try {
 
 		    // Parse the option.
 
 		    OptionParser optParser =
 			(OptionParser)optClass.newInstance();
-	
+
 		    SLPOption opt = optParser.parse(this, dsr);
 
 		    // Insert option into option table.
 
 		    optTable.put(key, opt);
-	
+
 		} catch (InstantiationException ex) {
 
 		    throw
@@ -630,7 +630,7 @@ class SLPHeaderV2 extends SrvLocHeader implements Cloneable {
 		putInt(0, baos);
 
 	    }
-	
+
 	    byte[] bytes = obaos.toByteArray();
 
 	    baos.write(bytes, 0, bytes.length);
@@ -675,7 +675,7 @@ class SLPHeaderV2 extends SrvLocHeader implements Cloneable {
 		available = available - bytes.length;
 
 	    } else {
-	
+
 		// Throw exception, upper layers need to break off multicast.
 		//  This exception should *never* be surfaced.
 
@@ -773,7 +773,7 @@ class SLPHeaderV2 extends SrvLocHeader implements Cloneable {
 	if (auth != null) {
 
 	    // Put it in the auth block for this URL.
-	
+
 	    authTable.put(url, auth);
 
 	}
@@ -954,7 +954,7 @@ class SLPHeaderV2 extends SrvLocHeader implements Cloneable {
 	    while (en.hasMoreElements()) {
 		ServiceLocationAttribute attr =
 		    (ServiceLocationAttribute)en.nextElement();
-	
+
 		strings.addElement(attr.externalize());
 
 	    }

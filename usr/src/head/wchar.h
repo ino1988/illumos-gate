@@ -188,7 +188,16 @@ extern int wcsncasecmp_l(const wchar_t *, const wchar_t *, size_t, locale_t);
 extern size_t mbsnrtowcs(wchar_t *_RESTRICT_KYWD, const char **_RESTRICT_KYWD,
     size_t, size_t, mbstate_t *_RESTRICT_KYWD);
 
+extern FILE	*open_wmemstream(wchar_t **, size_t *);
+
 #endif	/* defined(_XPG7) || !defined(_STRICT_SYMBOLS) */
+
+#if defined(_XPG8) || !defined(_STRICT_SYMBOLS)
+extern size_t wcslcat(wchar_t *_RESTRICT_KYWD, const wchar_t *_RESTRICT_KYWD,
+    size_t);
+extern size_t wcslcpy(wchar_t *_RESTRICT_KYWD, const wchar_t *_RESTRICT_KYWD,
+    size_t);
+#endif	/* defined(_XPG8) || !defined(_STRICT_SYMBOLS) */
 
 #ifdef	__cplusplus
 }

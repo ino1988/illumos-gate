@@ -47,12 +47,6 @@ CONF=		fcal_leds.conf
 ROOTCONF=	$(CONF:%=$(ROOTLIBDIR)/%)
 $(ROOTCONF)	:= FILEMODE = 0644
 
-LINTSRC =	$(LINTLIB:%.ln=%)
-ROOTLINTDIR =	$(ROOTLIBDIR)
-ROOTLINT =	$(LINTSRC:%=$(ROOTLINTDIR)/%)
-
-CLEANFILES=	$(LINTOUT) $(LINTLIB)
-
 CPPFLAGS +=	-I$(SRC)/uts/sun4u/ -I$(SRC)/uts/common/
 CPPFLAGS +=	-D_POSIX_PTHREAD_SEMANTICS
 CPPFLAGS +=	-D_REENTRANT
@@ -71,8 +65,7 @@ LDLIBS +=	-L$(SRC)/cmd/picl/plugins/common/devtree
 LDLIBS +=	-L$(SRC)/cmd/picl/plugins/common/piclevent
 LDLIBS +=	-L$(SRC)/cmd/picl/plugins/common/frutree
 LDLIBS +=	-L$(SRC)/cmd/picl/plugins/common/memcfg
-LDLIBS +=	-lpicltree -lpicldevtree -lpiclfrutree -lnvpair
-LDLIBS +=	-ldevinfo -lc
+LDLIBS +=	-lpicltree -ldevinfo -lc
 
 .KEEP_STATE:
 
@@ -82,7 +75,6 @@ all :=		TARGET= all
 install :=	TARGET= install
 clean :=	TARGET= clean
 clobber :=	TARGET= clobber
-lint :=		TARGET= lint
 _msg :=		TARGET= _msg
 
 POFILE =	piclfcal_leds_lw2plus.po
@@ -110,11 +102,7 @@ $(LIBLINKS):	FRC
 include $(SRC)/lib/Makefile.targ
 include	$(SRC)/cmd/picl/plugins/Makefile.targ
 
-$(ROOTLINTDIR)/%: ../%
-	$(INS.file)
-
 lint:
-	$(LINT.c) $(SRCS)
 
 $(SUBDIRS): FRC
 	@cd $@; pwd; $(MAKE) $(TARGET)

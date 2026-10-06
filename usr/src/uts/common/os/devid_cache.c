@@ -20,6 +20,8 @@
  */
 /*
  * Copyright (c) 2006, 2010, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2018 by Delphix. All rights reserved.
+ * Copyright 2023 Oxide Computer Company
  */
 
 #include <sys/note.h>
@@ -46,7 +48,7 @@
  * involves walking the entire device tree attaching all possible disk
  * instances, to search for the device referenced by a devid.  Obviously,
  * full device discovery is something to be avoided where possible.
- * Note that simply invoking devfsadm(1M) is equivalent to running full
+ * Note that simply invoking devfsadm(8) is equivalent to running full
  * discovery at the devid cache level.
  *
  * Reasons why a disk may not be accessible:
@@ -60,7 +62,7 @@
  * When discovery may succeed:
  *	Discovery will result in success when a device has been moved
  *	to a different address.  Note that it's recommended that
- *	devfsadm(1M) be invoked (no arguments required) whenever a system's
+ *	devfsadm(8) be invoked (no arguments required) whenever a system's
  *	h/w configuration has been updated.  Alternatively, a
  *	reconfiguration boot can be used to accomplish the same result.
  *
@@ -68,7 +70,7 @@
  * failure for a device which was powered off.  Assuming the cache has an
  * entry for such a device, simply powering it on should permit the system
  * to access it.  If problems persist after powering it on, invoke
- * devfsadm(1M).
+ * devfsadm(8).
  *
  * Discovery prior to mounting root is only of interest when booting
  * from a filesystem which accesses devices by device id, which of
@@ -343,8 +345,7 @@ devid_cache_pack_list(nvf_handle_t fd, nvlist_t **ret_nvl)
 	return (DDI_SUCCESS);
 
 err:
-	if (sub_nvl)
-		nvlist_free(sub_nvl);
+	nvlist_free(sub_nvl);
 	nvlist_free(nvl);
 	*ret_nvl = NULL;
 	return (DDI_FAILURE);
@@ -584,6 +585,21 @@ replace:			np->nvp_devid = new_devid;
 				DEVID_DEBUG((CE_CONT, "devid register: "
 				    "devid %s does not match\n", path));
 				/*
+				 * We do not expect devids to change, log it.
+				 */
+				char *devid_stored =
+				    ddi_devid_str_encode(np->nvp_devid, NULL);
+				char *devid_new =
+				    ddi_devid_str_encode(devid, NULL);
+
+				cmn_err(CE_CONT, "devid register: devid for "
+				    "%s does not match. stored: %s, new: %s.",
+				    path, devid_stored, devid_new);
+
+				ddi_devid_str_free(devid_stored);
+				ddi_devid_str_free(devid_new);
+
+				/*
 				 * Replace cached devid for this path
 				 * with newly registered devid.  A devid
 				 * may map to multiple paths but one path
@@ -726,12 +742,11 @@ devid_cache_cleanup(void)
 static void
 e_devid_minor_to_devlist(
 	dev_info_t	*dip,
-	char		*minor_name,
+	const char	*minor_name,
 	int		ndevts_alloced,
 	int		*devtcntp,
 	dev_t		*devtsp)
 {
-	int			circ;
 	struct ddi_minor_data	*dmdp;
 	int			minor_all = 0;
 	int			ndevts = *devtcntp;
@@ -745,7 +760,7 @@ e_devid_minor_to_devlist(
 		minor_all = 1;
 
 	/* Find matching minor names */
-	ndi_devi_enter(dip, &circ);
+	ndi_devi_enter(dip);
 	for (dmdp = DEVI(dip)->devi_minor; dmdp; dmdp = dmdp->next) {
 
 		/* Skip non-minors, and non matching minor names */
@@ -765,7 +780,7 @@ e_devid_minor_to_devlist(
 			devtsp[ndevts] = dmdp->ddm_dev;
 		ndevts++;
 	}
-	ndi_devi_exit(dip, circ);
+	ndi_devi_exit(dip);
 
 	*devtcntp = ndevts;
 }
@@ -781,12 +796,11 @@ e_devid_minor_to_devlist(
  */
 static int
 e_devid_cache_devi_path_lists(ddi_devid_t devid, int retmax,
-	int *retndevis, dev_info_t **retdevis, int *retnpaths, char **retpaths)
+    int *retndevis, dev_info_t **retdevis, int *retnpaths, char **retpaths)
 {
 	nvp_devid_t *np;
 	int ndevis, npaths;
 	dev_info_t *dip, *pdip;
-	int circ;
 	int maxdevis = 0;
 	int maxpaths = 0;
 	list_t *listp;
@@ -820,10 +834,10 @@ e_devid_cache_devi_path_lists(ddi_devid_t devid, int retmax,
 			dip = NULL;
 			if (np->nvp_flags & NVP_DEVID_DIP) {
 				pdip = ddi_get_parent(np->nvp_dip);
-				if (ndi_devi_tryenter(pdip, &circ)) {
+				if (ndi_devi_tryenter(pdip)) {
 					dip = np->nvp_dip;
 					ndi_hold_devi(dip);
-					ndi_devi_exit(pdip, circ);
+					ndi_devi_exit(pdip);
 					ASSERT(!DEVI_IS_ATTACHING(dip));
 					ASSERT(!DEVI_IS_DETACHING(dip));
 				} else {
@@ -862,8 +876,8 @@ e_devid_cache_devi_path_lists(ddi_devid_t devid, int retmax,
  * Primary interface used by ddi_lyr_devid_to_devlist()
  */
 int
-e_devid_cache_to_devt_list(ddi_devid_t devid, char *minor_name,
-	int *retndevts, dev_t **retdevts)
+e_devid_cache_to_devt_list(ddi_devid_t devid, const char *minor_name,
+    int *retndevts, dev_t **retdevts)
 {
 	char		*path, **paths;
 	int		i, j, n;
@@ -1064,6 +1078,8 @@ e_devid_cache_path_to_devid(char *path, char *ua,
 
 	*devidp = NULL;
 
+	pathlen = 0;
+	ualen = 0;
 	if (ua) {
 		pathlen = strlen(path);
 		ualen = strlen(ua);

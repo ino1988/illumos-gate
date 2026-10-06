@@ -20,7 +20,8 @@
  */
 /*
  * Copyright (c) 2010, Oracle and/or its affiliates. All rights reserved.
- * Copyright (c) 2012, 2014 by Delphix. All rights reserved.
+ * Copyright (c) 2012, 2015 by Delphix. All rights reserved.
+ * Copyright (c) 2019, loli10K <ezomori.nozomu@gmail.com>. All rights reserved.
  */
 
 #include <sys/dmu.h>
@@ -115,7 +116,7 @@ diff_cb(spa_t *spa, zilog_t *zilog, const blkptr_t *bp,
 	if (issig(JUSTLOOKING) && issig(FORREAL))
 		return (SET_ERROR(EINTR));
 
-	if (zb->zb_object != DMU_META_DNODE_OBJECT)
+	if (bp == NULL || zb->zb_object != DMU_META_DNODE_OBJECT)
 		return (0);
 
 	if (BP_IS_HOLE(bp)) {
@@ -129,24 +130,27 @@ diff_cb(spa_t *spa, zilog_t *zilog, const blkptr_t *bp,
 	} else if (zb->zb_level == 0) {
 		dnode_phys_t *blk;
 		arc_buf_t *abuf;
-		uint32_t aflags = ARC_WAIT;
-		int blksz = BP_GET_LSIZE(bp);
+		arc_flags_t aflags = ARC_FLAG_WAIT;
+		int epb = BP_GET_LSIZE(bp) >> DNODE_SHIFT;
+		int zio_flags = ZIO_FLAG_CANFAIL;
 		int i;
 
+		if (BP_IS_PROTECTED(bp))
+			zio_flags |= ZIO_FLAG_RAW;
+
 		if (arc_read(NULL, spa, bp, arc_getbuf_func, &abuf,
-		    ZIO_PRIORITY_ASYNC_READ, ZIO_FLAG_CANFAIL,
-		    &aflags, zb) != 0)
+		    ZIO_PRIORITY_ASYNC_READ, zio_flags, &aflags, zb) != 0)
 			return (SET_ERROR(EIO));
 
 		blk = abuf->b_data;
-		for (i = 0; i < blksz >> DNODE_SHIFT; i++) {
+		for (i = 0; i < epb; i += blk[i].dn_extra_slots + 1) {
 			uint64_t dnobj = (zb->zb_blkid <<
 			    (DNODE_BLOCK_SHIFT - DNODE_SHIFT)) + i;
 			err = report_dnode(da, dnobj, blk+i);
 			if (err)
 				break;
 		}
-		(void) arc_buf_remove_ref(abuf, &abuf);
+		arc_buf_destroy(abuf, &abuf);
 		if (err)
 			return (err);
 		/* Don't care about the data blocks */
@@ -194,7 +198,7 @@ dmu_diff(const char *tosnap_name, const char *fromsnap_name,
 		return (SET_ERROR(EXDEV));
 	}
 
-	fromtxg = fromsnap->ds_phys->ds_creation_txg;
+	fromtxg = dsl_dataset_phys(fromsnap)->ds_creation_txg;
 	dsl_dataset_rele(fromsnap, FTAG);
 
 	dsl_dataset_long_hold(tosnap, FTAG);
@@ -206,8 +210,17 @@ dmu_diff(const char *tosnap_name, const char *fromsnap_name,
 	da.da_ddr.ddr_first = da.da_ddr.ddr_last = 0;
 	da.da_err = 0;
 
+	/*
+	 * Since zfs diff only looks at dnodes which are stored in plaintext
+	 * (other than bonus buffers), we don't technically need to decrypt
+	 * the dataset to perform this operation. However, the command line
+	 * utility will still fail if the keys are not loaded because the
+	 * dataset isn't mounted and because it will fail when it attempts to
+	 * call the ZFS_IOC_OBJ_TO_STATS ioctl.
+	 */
 	error = traverse_dataset(tosnap, fromtxg,
-	    TRAVERSE_PRE | TRAVERSE_PREFETCH_METADATA, diff_cb, &da);
+	    TRAVERSE_PRE | TRAVERSE_PREFETCH_METADATA | TRAVERSE_NO_DECRYPT,
+	    diff_cb, &da);
 
 	if (error != 0) {
 		da.da_err = error;

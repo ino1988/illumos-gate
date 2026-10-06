@@ -21,6 +21,8 @@
 /*
  * Copyright 2010 Sun Microsystems, Inc.  All rights reserved.
  * Use is subject to license terms.
+ * Copyright 2018 Joyent, Inc.
+ * Copyright 2026 Oxide Computer Company
  */
 
 /*
@@ -261,7 +263,7 @@ static stat_info_t rx_srs_stats_list[] = {
 	{RX_SRS_STAT_OFF(mrs_chaincntover50)},
 	{RX_SRS_STAT_OFF(mrs_ierrors)}
 };
-#define	RX_SRS_STAT_SIZE 		\
+#define	RX_SRS_STAT_SIZE		\
 	(sizeof (rx_srs_stats_list) / sizeof (stat_info_t))
 
 #define	TX_SOFTRING_STAT_OFF(f)	(offsetof(mac_tx_stats_t, f))
@@ -273,14 +275,14 @@ static stat_info_t tx_softring_stats_list[] = {
 	{TX_SOFTRING_STAT_OFF(mts_unblockcnt)},
 	{TX_SOFTRING_STAT_OFF(mts_sdrops)},
 };
-#define	TX_SOFTRING_STAT_SIZE 		\
+#define	TX_SOFTRING_STAT_SIZE		\
 	(sizeof (tx_softring_stats_list) / sizeof (stat_info_t))
 
 static void
 i_mac_add_stats(void *sum, void *op1, void *op2,
     stat_info_t stats_list[], uint_t size)
 {
-	int 	i;
+	int	i;
 
 	for (i = 0; i < size; i++) {
 		uint64_t *op1_val = (uint64_t *)
@@ -678,8 +680,8 @@ i_mac_rx_hwlane_stat_create(mac_soft_ring_set_t *mac_srs, const char *modname,
 static uint64_t
 i_mac_misc_stat_get(void *handle, uint_t stat)
 {
-	flow_entry_t 		*flent = handle;
-	mac_client_impl_t 	*mcip = flent->fe_mcip;
+	flow_entry_t		*flent = handle;
+	mac_client_impl_t	*mcip = flent->fe_mcip;
 	mac_misc_stats_t	*mac_misc_stat = &mcip->mci_misc_stat;
 	mac_rx_stats_t		*mac_rx_stat;
 	mac_tx_stats_t		*mac_tx_stat;
@@ -870,9 +872,10 @@ i_mac_tx_hwlane_stat_create(mac_soft_ring_t *ringp, const char *modname,
 static uint64_t
 i_mac_rx_fanout_stat_get(void *handle, uint_t stat)
 {
-	mac_soft_ring_t 	*tcp_ringp = (mac_soft_ring_t *)handle;
-	mac_soft_ring_t		*udp_ringp = NULL, *oth_ringp = NULL;
-	mac_soft_ring_set_t 	*mac_srs = tcp_ringp->s_ring_set;
+	mac_soft_ring_t		*tcp_ringp = (mac_soft_ring_t *)handle;
+	mac_soft_ring_t		*tcp6_ringp = NULL, *udp_ringp = NULL;
+	mac_soft_ring_t		*udp6_ringp = NULL, *oth_ringp = NULL;
+	mac_soft_ring_set_t	*mac_srs = tcp_ringp->s_ring_set;
 	int			index;
 	uint64_t		val;
 
@@ -880,24 +883,31 @@ i_mac_rx_fanout_stat_get(void *handle, uint_t stat)
 	/* Extract corresponding udp and oth ring pointers */
 	for (index = 0; mac_srs->srs_tcp_soft_rings[index] != NULL; index++) {
 		if (mac_srs->srs_tcp_soft_rings[index] == tcp_ringp) {
+			tcp6_ringp = mac_srs->srs_tcp6_soft_rings[index];
 			udp_ringp = mac_srs->srs_udp_soft_rings[index];
+			udp6_ringp = mac_srs->srs_udp6_soft_rings[index];
 			oth_ringp = mac_srs->srs_oth_soft_rings[index];
 			break;
 		}
 	}
 
-	ASSERT((udp_ringp != NULL) && (oth_ringp != NULL));
+	ASSERT((tcp6_ringp != NULL) && (udp_ringp != NULL) &&
+	    (udp6_ringp != NULL) && (oth_ringp != NULL));
 
 	switch (stat) {
 	case MAC_STAT_RBYTES:
 		val = (tcp_ringp->s_ring_total_rbytes) +
+		    (tcp6_ringp->s_ring_total_rbytes) +
 		    (udp_ringp->s_ring_total_rbytes) +
+		    (udp6_ringp->s_ring_total_rbytes) +
 		    (oth_ringp->s_ring_total_rbytes);
 		break;
 
 	case MAC_STAT_IPACKETS:
 		val = (tcp_ringp->s_ring_total_inpkt) +
+		    (tcp6_ringp->s_ring_total_inpkt) +
 		    (udp_ringp->s_ring_total_inpkt) +
+		    (udp6_ringp->s_ring_total_inpkt) +
 		    (oth_ringp->s_ring_total_inpkt);
 		break;
 
@@ -1003,6 +1013,7 @@ void
 mac_ring_stat_create(mac_ring_t *ring)
 {
 	mac_impl_t	*mip = ring->mr_mip;
+	mac_group_t	*grp = (mac_group_t *)ring->mr_gh;
 	char		statname[MAXNAMELEN];
 	char		modname[MAXNAMELEN];
 
@@ -1014,8 +1025,8 @@ mac_ring_stat_create(mac_ring_t *ring)
 
 	switch (ring->mr_type) {
 	case MAC_RING_TYPE_RX:
-		(void) snprintf(statname, sizeof (statname), "mac_rx_ring%d",
-		    ring->mr_index);
+		(void) snprintf(statname, sizeof (statname),
+		    "mac_rx_ring_%d_%d", grp->mrg_index, ring->mr_index);
 		i_mac_rx_ring_stat_create(ring, modname, statname);
 		break;
 
@@ -1035,7 +1046,7 @@ void
 mac_srs_stat_create(mac_soft_ring_set_t *mac_srs)
 {
 	flow_entry_t	*flent = mac_srs->srs_flent;
-	char 		statname[MAXNAMELEN];
+	char		statname[MAXNAMELEN];
 	boolean_t	is_tx_srs;
 
 	/* No hardware/software lanes for user defined flows */
@@ -1093,7 +1104,7 @@ mac_soft_ring_stat_create(mac_soft_ring_t *ringp)
 {
 	mac_soft_ring_set_t	*mac_srs = ringp->s_ring_set;
 	flow_entry_t		*flent = ringp->s_ring_mcip->mci_flent;
-	mac_ring_t		*ring = (mac_ring_t *)ringp->s_ring_tx_arg2;
+	mac_ring_t		*ring = ringp->s_ring_tx_arg2;
 	boolean_t		is_tx_srs;
 	char			statname[MAXNAMELEN];
 
@@ -1102,16 +1113,21 @@ mac_soft_ring_stat_create(mac_soft_ring_t *ringp)
 		return;
 
 	is_tx_srs = ((mac_srs->srs_type & SRST_TX) != 0);
-	if (is_tx_srs) {	/* tx side hardware lane */
+	if (is_tx_srs) {
 		ASSERT(ring != NULL);
 		(void) snprintf(statname, sizeof (statname), "mac_tx_hwlane%d",
 		    ring->mr_index);
 		i_mac_tx_hwlane_stat_create(ringp, flent->fe_flow_name,
 		    statname);
-	} else {		/* rx side fanout */
-				/* Maintain single stat for (tcp, udp, oth) */
-		if (ringp->s_ring_type & ST_RING_TCP) {
+	} else {
+		/*
+		 * We maintain a single "fanout lane" stat per set of rx
+		 * protocol softrings. That is, each set of (TCP/TCP6, UDP/UDP6,
+		 * OTH) softrings counts as a single lane.
+		 */
+		if (ringp->s_ring_state & ST_RING_TCP) {
 			int			index;
+			int			fanout_lane;
 			mac_soft_ring_t		*softring;
 
 			for (index = 0, softring = mac_srs->srs_soft_ring_head;
@@ -1121,13 +1137,15 @@ mac_soft_ring_stat_create(mac_soft_ring_t *ringp)
 					break;
 			}
 
+			fanout_lane = index / ST_RING_NUM_PROTO;
+
 			if (mac_srs->srs_ring == NULL) {
 				(void) snprintf(statname, sizeof (statname),
-				    "mac_rx_swlane0_fanout%d", index/3);
+				    "mac_rx_swlane0_fanout%d", fanout_lane);
 			} else {
 				(void) snprintf(statname, sizeof (statname),
 				    "mac_rx_hwlane%d_fanout%d",
-				    mac_srs->srs_ring->mr_index, index/3);
+				    mac_srs->srs_ring->mr_index, fanout_lane);
 			}
 			i_mac_rx_fanout_stat_create(ringp, flent->fe_flow_name,
 			    statname);

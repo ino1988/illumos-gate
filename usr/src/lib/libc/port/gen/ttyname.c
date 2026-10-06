@@ -25,7 +25,7 @@
  */
 
 /*	Copyright (c) 1988 AT&T	*/
-/*	  All Rights Reserved  	*/
+/*	  All Rights Reserved	*/
 
 /*
  * ttyname(f): return "/dev/X" (where X is a relative pathname
@@ -155,7 +155,7 @@ static	dev_t	ptsldev = NODEV;
 char *
 _ttyname_dev(dev_t rdev, char *buffer, size_t buflen)
 {
-	struct stat64 fsb;
+	struct stat64 fsb = { 0 };
 
 	fsb.st_rdev = rdev;
 
@@ -285,7 +285,7 @@ _ttyname_common(struct stat64 *fsp, char *buffer, uint_t match_mask)
 		 * Is /dev/pts then just do a quick check. We don't have
 		 * to stat the entire /dev/pts dir.
 		 */
-		if (strcmp(PTS, srch_dirs[dirno].name) == NULL) {
+		if (strcmp(PTS, srch_dirs[dirno].name) == 0) {
 			if ((pt = ispts(fsp, match_mask)) != NULL) {
 				is_pts = 1;
 				found = 1;
@@ -475,10 +475,10 @@ itoa(int i, char *ptr)
 
 static int
 srch_dir(const entry_t path,	/* current path */
-	int match_mask,		/* flags mask */
-	int depth,		/* current depth (/dev = 0) */
-	const entry_t skip_dirs[], /* directories not needing searching */
-	struct stat64 *fsb)	/* the file being searched for */
+    int match_mask,		/* flags mask */
+    int depth,			/* current depth (/dev = 0) */
+    const entry_t skip_dirs[],	/* directories not needing searching */
+    struct stat64 *fsb)		/* the file being searched for */
 {
 	DIR *dirp;
 	struct dirent64 *direntp;
@@ -510,8 +510,15 @@ srch_dir(const entry_t path,	/* current path */
 		return (0);
 	}
 
-	path_len = strlen(path.name);
-	(void) strcpy(file_name, path.name);
+	/*
+	 * Note, we only make sure we can fit path.name + '/' into
+	 * file_name here.
+	 */
+	path_len = strlcpy(file_name, path.name, sizeof (file_name));
+	if (path_len + 1 >= sizeof (file_name)) {
+		(void) closedir(dirp);
+		return (0);
+	}
 	last_comp = file_name + path_len;
 	*last_comp++ = '/';
 
@@ -564,11 +571,14 @@ srch_dir(const entry_t path,	/* current path */
 		 */
 		else if ((tsb.st_mode & S_IFMT) == S_IFCHR) {
 			int flag = 0;
-			if (tsb.st_dev == fsb->st_dev)
+			if (match_mask & MATCH_FS &&
+			    tsb.st_dev == fsb->st_dev)
 				flag |= MATCH_FS;
-			if (tsb.st_rdev == fsb->st_rdev)
+			if (match_mask & MATCH_MM &&
+			    tsb.st_rdev == fsb->st_rdev)
 				flag |= MATCH_MM;
-			if (tsb.st_ino == fsb->st_ino)
+			if (match_mask & MATCH_INO &&
+			    tsb.st_ino == fsb->st_ino)
 				flag |= MATCH_INO;
 
 			if ((flag & file.flags) == file.flags) {
@@ -692,10 +702,11 @@ get_pri_dirs(void)
 				state = COMMENT_STATE;
 				break;
 			}
-			if (!isspace(*buf))	/* skip leading white space */
+			if (!isspace(*buf)) {	/* skip leading white space */
 				state = DIRNAME_STATE;
 				vec->name = buf;
 				vec->flags = 0;
+			}
 			break;
 
 		case COMMENT_STATE:

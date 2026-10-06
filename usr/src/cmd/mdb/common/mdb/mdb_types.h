@@ -27,8 +27,6 @@
 #ifndef	_MDB_TYPES_H
 #define	_MDB_TYPES_H
 
-#pragma ident	"%Z%%M%	%I%	%E% SMI"
-
 #include <sys/types.h>
 
 #ifdef	__cplusplus
@@ -40,7 +38,7 @@ extern "C" {
  * make sure we have uintptr_t appropriately defined.
  */
 #ifndef _SYS_INT_TYPES_H
-#if defined(_LP64) || defined(_I32LPx)
+#if defined(_LP64)
 typedef unsigned long uintptr_t;
 #else
 typedef unsigned int uintptr_t;

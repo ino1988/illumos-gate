@@ -23,9 +23,8 @@
 # Copyright 2004 Sun Microsystems, Inc.  All rights reserved.
 # Use is subject to license terms.
 #
-#ident	"%Z%%M%	%I%	%E% SMI"
 
-CRTSRCS=        $(SRC)/lib/common/sparcv9
+CRTSRCS=        $(SRC)/lib/crt/sparc
 include		$(SRC)/cmd/sgs/0@0/Makefile.com
 
 .KEEP_STATE:
@@ -33,5 +32,5 @@ include		$(SRC)/cmd/sgs/0@0/Makefile.com
 install:	all $(ROOTLIBDIR64)/$(DYNLIB)
 
 include		$(SRC)/cmd/sgs/0@0/Makefile.targ
-include		../../Makefile.sub.64
+include		$(SRC)/Makefile.master.64
 

@@ -94,23 +94,12 @@ static unsigned int purge_patterns[] = {	/* patterns to be written */
 
 static unsigned int alpha_pattern =  0x40404040;   /* 10000000...  == @@@@... */
 
-/* Function prototypes */
-#ifdef	__STDC__
-
 static int	scan_repair(diskaddr_t bn, int mode);
 static int	analyze_blocks(int flags, diskaddr_t blkno, uint_t blkcnt,
 		unsigned data, int init, int driver_flags, int *xfercntp);
 static int	handle_error_conditions(void);
 static int	verify_blocks(int flags, diskaddr_t blkno, uint_t blkcnt,
 		unsigned data, int driver_flags, int *xfercntp);
-#else	/* __STDC__ */
-
-static int	scan_repair();
-static int	analyze_blocks();
-static int	handle_error_conditions();
-static int	verify_blocks();
-
-#endif	/* __STDC__ */
 
 /*
  * This routine performs a surface analysis based upon the global
@@ -119,11 +108,10 @@ static int	verify_blocks();
  * analysis is enable).
  */
 int
-do_scan(flags, mode)
-	int	flags, mode;
+do_scan(int flags, int mode)
 {
 	diskaddr_t	start, end, curnt;
-	int	pass, needinit, data;
+	int	pass, needinit, data = alpha_pattern;
 	uint_t	size;
 	int	status, founderr, i, j;
 	int	error = 0;
@@ -135,7 +123,7 @@ do_scan(flags, mode)
 	 * if the controller can correct the defect.
 	 */
 	if (scan_correct && !EMBEDDED_SCSI && (cur_ops->op_repair != NULL) &&
-			(cur_list.list == NULL)) {
+	    (cur_list.list == NULL)) {
 		err_print("Current Defect List must be initialized ");
 		err_print("to do automatic repair.\n");
 		return (-1);
@@ -145,14 +133,15 @@ do_scan(flags, mode)
 	 */
 	if (scan_entire) {
 		start = 0;
-	    if (cur_label == L_TYPE_SOLARIS) {
-		if (cur_ctype->ctype_flags & CF_SCSI)
-			end = datasects() - 1;
-		else
-			end = physsects() - 1;
-	    } else if (cur_label == L_TYPE_EFI) {
-		end = cur_parts->etoc->efi_last_lba;
-	    }
+		end = 0;
+		if (cur_label == L_TYPE_SOLARIS) {
+			if (cur_ctype->ctype_flags & CF_SCSI)
+				end = datasects() - 1;
+			else
+				end = physsects() - 1;
+		} else if (cur_label == L_TYPE_EFI) {
+			end = cur_parts->etoc->efi_last_lba;
+		}
 	} else {
 		start = scan_lower;
 		end = scan_upper;
@@ -195,20 +184,20 @@ do_scan(flags, mode)
 	 * we mark the defect list and/or label dirty so it will get rewritten.
 	 */
 	if (flags & (SCAN_PATTERN | SCAN_WRITE)) {
-	    if (cur_label == L_TYPE_SOLARIS) {
-		if (start < (diskaddr_t)totalsects() &&
-				end >= (diskaddr_t)datasects()) {
-			if (!EMBEDDED_SCSI) {
-				cur_list.flags |= LIST_DIRTY;
+		if (cur_label == L_TYPE_SOLARIS) {
+			if (start < (diskaddr_t)totalsects() &&
+			    end >= (diskaddr_t)datasects()) {
+				if (!EMBEDDED_SCSI) {
+					cur_list.flags |= LIST_DIRTY;
+				}
+				if (cur_disk->disk_flags & DSK_LABEL)
+					cur_flags |= LABEL_DIRTY;
 			}
+		}
+		if (start == 0) {
 			if (cur_disk->disk_flags & DSK_LABEL)
 				cur_flags |= LABEL_DIRTY;
 		}
-	    }
-	    if (start == 0) {
-		if (cur_disk->disk_flags & DSK_LABEL)
-			cur_flags |= LABEL_DIRTY;
-	    }
 	}
 	/*
 	 * Initialize the summary info on sectors repaired.
@@ -230,22 +219,23 @@ do_scan(flags, mode)
 
 			if (flags & SCAN_PURGE) {
 				flags &= ~(SCAN_PURGE_READ_PASS
-						| SCAN_PURGE_ALPHA_PASS);
+				    | SCAN_PURGE_ALPHA_PASS);
 				switch (pattern % (NPPATTERNS + 1)) {
 				case NPPATTERNS:
 					pattern = 0;
 					if (!error) {
-					    fmt_print(
+						fmt_print(
 "\nThe last %d passes were successful, running alpha pattern pass", NPPATTERNS);
-					    flags |= SCAN_PURGE_ALPHA_PASS;
-					    data = alpha_pattern;
+						flags |= SCAN_PURGE_ALPHA_PASS;
+						data = alpha_pattern;
 					} else {
-					    data = purge_patterns[pattern];
-					    pattern++;
+						data = purge_patterns[pattern];
+						pattern++;
 					};
 					break;
 				case READPATTERN:
 					flags |=  SCAN_PURGE_READ_PASS;
+					/* FALLTHROUGH */
 				default:
 					data = purge_patterns[pattern];
 					pattern++;
@@ -417,7 +407,7 @@ out:
 	 * if scan_restore_defects (the default) is true.
 	 */
 	if (!EMBEDDED_SCSI && (cur_list.flags & LIST_DIRTY) &&
-				(scan_restore_defects)) {
+	    (scan_restore_defects)) {
 		cur_list.flags = 0;
 		write_deflist(&cur_list);
 		}
@@ -438,7 +428,7 @@ out:
 		log_print("\n");
 	}
 	fmt_print("Total of %lld defective blocks repaired.\n",
-		scan_blocks_fixed);
+	    scan_blocks_fixed);
 	/*
 	 * Reinitialize the logging variables so they don't get used
 	 * when they are not really valid.
@@ -455,9 +445,7 @@ out:
  * (This has been extracted out of do_scan(), to simplify it.)
  */
 static int
-scan_repair(bn, mode)
-	diskaddr_t	bn;
-	int	mode;
+scan_repair(diskaddr_t bn, int mode)
 {
 	int	status;
 	int	result = 1;
@@ -487,7 +475,7 @@ scan_repair(bn, mode)
 	buf_is_good = 0;
 	for (i = 0; i < 5; i++) {
 		status = (*cur_ops->op_rdwr)(DIR_READ, cur_file, bn, 1,
-				buf, F_SILENT, NULL);
+		    buf, F_SILENT, NULL);
 		if (status == 0) {
 			buf_is_good = 1;
 			break;
@@ -495,7 +483,7 @@ scan_repair(bn, mode)
 	}
 
 	fmt_print("Repairing %s error on %llu (",
-				buf_is_good ? "soft" : "hard", bn);
+	    buf_is_good ? "soft" : "hard", bn);
 	pr_dblock(fmt_print, bn);
 	fmt_print(")...");
 
@@ -520,10 +508,10 @@ scan_repair(bn, mode)
 			fmt_print("ok.\n");
 		}
 		status = (*cur_ops->op_rdwr)(DIR_WRITE, cur_file, bn,
-					1, buf, (F_SILENT | F_ALLERRS), NULL);
+		    1, buf, (F_SILENT | F_ALLERRS), NULL);
 		if (status == 0) {
 			status = (*cur_ops->op_rdwr)(DIR_READ, cur_file, bn,
-					1, buf, (F_SILENT | F_ALLERRS), NULL);
+			    1, buf, (F_SILENT | F_ALLERRS), NULL);
 		}
 		if (status) {
 			fmt_print("The new block also appears defective.\n");
@@ -554,8 +542,10 @@ scan_repair(bn, mode)
 		 */
 		} else if (cur_ctype->ctype_flags & CF_WLIST) {
 			kill_deflist(&cur_list);
-			(*cur_ops->op_ex_cur)(&cur_list);
-			fmt_print("Current list updated\n");
+			if (*cur_ops->op_ex_cur != NULL) {
+				(void) (*cur_ops->op_ex_cur)(&cur_list);
+				fmt_print("Current list updated\n");
+			}
 		} else {
 			add_ldef(bn, &cur_list);
 			write_deflist(&cur_list);
@@ -580,17 +570,13 @@ scan_repair(bn, mode)
  * an error if a defect is found.  It is called by do_scan().
  */
 static int
-analyze_blocks(flags, blkno, blkcnt, data, init, driver_flags, xfercntp)
-	int	flags, driver_flags, init;
-	uint_t	blkcnt;
-	register unsigned data;
-	diskaddr_t	blkno;
-	int	*xfercntp;
+analyze_blocks(int flags, diskaddr_t blkno, uint_t blkcnt, unsigned data,
+    int init, int driver_flags, int *xfercntp)
 {
 	int		corrupt = 0;
 	int		status;
-	register diskaddr_t	i, nints;
-	register unsigned *ptr = (uint_t *)pattern_buf;
+	diskaddr_t	i, nints;
+	unsigned *ptr = (uint_t *)pattern_buf;
 
 	media_error = 0;
 	if (flags & SCAN_VERIFY) {
@@ -641,7 +627,7 @@ analyze_blocks(flags, blkno, blkcnt, data, init, driver_flags, xfercntp)
 			    blkcnt, (caddr_t)pattern_buf, driver_flags,
 			    xfercntp);
 			if (status)
-			    goto bad;
+				goto bad;
 		}
 		/*
 		 * Only read if we are on the read pass of SCAN_PURGE, if we
@@ -652,7 +638,7 @@ analyze_blocks(flags, blkno, blkcnt, data, init, driver_flags, xfercntp)
 			    blkcnt, (caddr_t)pattern_buf, driver_flags,
 			    xfercntp);
 			if (status)
-			    goto bad;
+				goto bad;
 		}
 	}
 	/*
@@ -666,11 +652,11 @@ analyze_blocks(flags, blkno, blkcnt, data, init, driver_flags, xfercntp)
 			if (*ptr++ != data) {
 				err_print("Data miscompare error (expecting ");
 				err_print("0x%x, got 0x%x) at ", data,
-					*((int *)((int *)pattern_buf +
-					(nints - i))));
+				    *((int *)((int *)pattern_buf +
+				    (nints - i))));
 				pr_dblock(err_print, blkno);
 				err_print(", offset = 0x%llx.\n",
-					(nints - i) * sizeof (int));
+				    (nints - i) * sizeof (int));
 				goto bad;
 			}
 	}
@@ -695,8 +681,9 @@ bad:
 	 */
 	if (corrupt) {
 		if ((*cur_ops->op_rdwr)(DIR_WRITE, cur_file, blkno,
-				blkcnt, (caddr_t)cur_buf, F_NORMAL, xfercntp))
-		err_print("Warning: unable to restore original data.\n");
+		    blkcnt, (caddr_t)cur_buf, F_NORMAL, xfercntp))
+			err_print(
+			    "Warning: unable to restore original data.\n");
 	}
 	exit_critical();
 	/*
@@ -719,12 +706,8 @@ bad:
  * This should eliminate any caching effect on the drives.
  */
 static int
-verify_blocks(int flags,
-		diskaddr_t blkno,
-		uint_t blkcnt,
-		unsigned data,
-		int driver_flags,
-		int *xfercntp)
+verify_blocks(int flags, diskaddr_t blkno, uint_t blkcnt, unsigned data,
+    int driver_flags, int *xfercntp)
 {
 	int		status, i, nints;
 	unsigned	*ptr = (uint_t *)pattern_buf;
@@ -790,7 +773,7 @@ bad:
 
 
 static int
-handle_error_conditions()
+handle_error_conditions(void)
 {
 
 	/*

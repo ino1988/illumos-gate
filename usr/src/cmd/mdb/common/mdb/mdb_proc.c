@@ -24,7 +24,9 @@
  * Use is subject to license terms.
  */
 /*
- * Copyright (c) 2013, Joyent, Inc.  All rights reserved.
+ * Copyright 2018 Joyent, Inc.
+ * Copyright (c) 2014 by Delphix. All rights reserved.
+ * Copyright 2026 Oxide Computer Company
  */
 
 /*
@@ -86,12 +88,15 @@
 #include <mdb/mdb_proc.h>
 #include <mdb/mdb_disasm.h>
 #include <mdb/mdb_signal.h>
+#include <mdb/mdb_stack.h>
 #include <mdb/mdb_string.h>
 #include <mdb/mdb_module.h>
 #include <mdb/mdb_debug.h>
 #include <mdb/mdb_conf.h>
 #include <mdb/mdb_err.h>
 #include <mdb/mdb_types.h>
+#include <mdb/mdb_isautil.h>
+
 #include <mdb/mdb.h>
 
 #include <sys/utsname.h>
@@ -102,8 +107,10 @@
 #include <stdio_ext.h>
 #include <stdlib.h>
 #include <string.h>
+#include <ctype.h>
 
 #define	PC_FAKE		-1UL			/* illegal pc value unequal 0 */
+#define	PANIC_BUFSIZE	1024
 
 static const char PT_EXEC_PATH[] = "a.out";	/* Default executable */
 static const char PT_CORE_PATH[] = "core";	/* Default core file */
@@ -112,6 +119,7 @@ static const pt_ptl_ops_t proc_lwp_ops;
 static const pt_ptl_ops_t proc_tdb_ops;
 static const mdb_se_ops_t proc_brkpt_ops;
 static const mdb_se_ops_t proc_wapt_ops;
+static const mdb_se_ops_t proc_sysexit_ops;
 
 static int pt_setrun(mdb_tgt_t *, mdb_tgt_status_t *, int);
 static void pt_activate_common(mdb_tgt_t *);
@@ -451,10 +459,11 @@ pt_post_attach(mdb_tgt_t *t)
 	(void) Psetflags(P, PR_FORK);		/* inherit tracing on fork */
 
 	/*
-	 * Install event specifiers to track fork and exec activities:
+	 * Install event specifiers to track fork, exec and spawn activities:
 	 */
 	(void) mdb_tgt_add_sysexit(t, SYS_vfork, hflag, pt_fork, NULL);
 	(void) mdb_tgt_add_sysexit(t, SYS_forksys, hflag, pt_fork, NULL);
+	(void) mdb_tgt_add_sysexit(t, SYS_spawn, hflag, pt_fork, NULL);
 	(void) mdb_tgt_add_sysexit(t, SYS_execve, hflag, pt_exec, NULL);
 
 	/*
@@ -616,6 +625,7 @@ pt_fork(mdb_tgt_t *t, int vid, void *private)
 	int follow_parent = mdb.m_forkmode != MDB_FM_CHILD;
 	int is_vfork = (psp->pr_what == SYS_vfork ||
 	    (psp->pr_what == SYS_forksys && psp->pr_sysarg[0] == 2));
+	int is_spawn = (psp->pr_what == SYS_spawn);
 
 	struct ps_prochandle *C;
 	const lwpstatus_t *csp;
@@ -673,14 +683,21 @@ pt_fork(mdb_tgt_t *t, int vid, void *private)
 
 	csp = &Pstatus(C)->pr_lwp;
 
+	/*
+	 * A spawned child never returns from a fork; its first observable
+	 * stop is on exit from the exec of its new program.
+	 */
 	if (csp->pr_why != PR_SYSEXIT ||
-	    (csp->pr_what != SYS_vfork && csp->pr_what != SYS_forksys)) {
-		warn("forked child process %ld did not stop on exit from "
-		    "fork as expected\n", psp->pr_rval1);
+	    (is_spawn ? csp->pr_what != SYS_execve :
+	    (csp->pr_what != SYS_vfork && csp->pr_what != SYS_forksys))) {
+		warn("%s child process %ld did not stop on exit from "
+		    "%s as expected\n", is_spawn ? "spawned" : "forked",
+		    psp->pr_rval1, is_spawn ? "exec" : "fork");
 	}
 
-	warn("target forked child process %ld (debugger following %s)\n",
-	    psp->pr_rval1, follow_parent ? "parent" : "child");
+	warn("target %s child process %ld (debugger following %s)\n",
+	    is_spawn ? "spawned" : "forked", psp->pr_rval1,
+	    follow_parent ? "parent" : "child");
 
 	(void) Punsetflags(C, PR_ASYNC);	/* require synchronous mode */
 	(void) Psetflags(C, PR_BPTADJ);		/* always adjust eip on x86 */
@@ -695,8 +712,10 @@ pt_fork(mdb_tgt_t *t, int vid, void *private)
 	 * the process at the time of fork when events were armed.  We must
 	 * therefore handle this as a special case and re-invoke the disarm
 	 * callback of each active specifier to clean out the child process.
+	 * A spawned child has a brand new address space in which our events
+	 * were never armed, so there is nothing to clean out there.
 	 */
-	if (!is_vfork) {
+	if (!is_vfork && !is_spawn) {
 		for (t->t_pshandle = C, sep = mdb_list_next(&t->t_active);
 		    sep != NULL; sep = mdb_list_next(sep)) {
 			if (sep->se_state == MDB_TGT_SPEC_ACTIVE)
@@ -737,8 +756,9 @@ pt_fork(mdb_tgt_t *t, int vid, void *private)
 
 			} while (csp->pr_why != PR_SYSEXIT ||
 			    csp->pr_errno != 0 || csp->pr_what != SYS_execve);
-		} else
+		} else if (!is_spawn) {
 			t->t_pshandle = C;
+		}
 	}
 
 	/*
@@ -766,6 +786,9 @@ pt_fork(mdb_tgt_t *t, int vid, void *private)
 		mdb_list_append(&pt->p_vforkp, vfp);
 		mdb_tgt_sespec_idle_all(t, EBUSY, FALSE);
 
+	} else if (is_spawn && follow_parent) {
+		mdb_tgt_sespec_idle_all(t, EBUSY, FALSE);
+		Prelease(C, PRELEASE_CLEAR);
 	} else {
 		mdb_tgt_sespec_idle_all(t, EBUSY, FALSE);
 		Prelease(t->t_pshandle, PRELEASE_CLEAR);
@@ -779,15 +802,32 @@ pt_fork(mdb_tgt_t *t, int vid, void *private)
 	 * If we are following the child, reset the libthread_db handle as well
 	 * as the rtld agent.
 	 */
-	if (follow_parent)
+	if (follow_parent) {
 		t->t_pshandle = P;
-	else {
+	} else {
 		t->t_pshandle = C;
-		pt->p_rtld = Prd_agent(C);
-		(void) Pobject_iter(t->t_pshandle, (proc_map_f *)thr_check, t);
+		if (!is_spawn) {
+			pt->p_rtld = Prd_agent(C);
+			(void) Pobject_iter(t->t_pshandle,
+			    (proc_map_f *)thr_check, t);
+		}
 	}
 
-	(void) mdb_tgt_sespec_activate_all(t);
+	if (is_spawn && !follow_parent) {
+		/*
+		 * The child of a spawn is running a different program to the
+		 * parent and is stopped on exit from the exec of it. The
+		 * pending stop will be matched by the execve specifier and
+		 * delivered to pt_exec(), which discards the parent's symbol
+		 * state, loads that of the new program and re-initialises
+		 * our events as if the debuggee itself had exec'd.
+		 * We still need to activate the system call specifiers, whose
+		 * arming does not touch the child's memory.
+		 */
+		(void) mdb_tgt_sespec_activate_matching(t, &proc_sysexit_ops);
+	} else {
+		(void) mdb_tgt_sespec_activate_all(t);
+	}
 	(void) mdb_tgt_continue(t, NULL);
 }
 
@@ -993,79 +1033,79 @@ pt_setflags(mdb_tgt_t *t, int flags)
 	return (0);
 }
 
-/*ARGSUSED*/
 static int
-pt_frame(void *arglim, uintptr_t pc, uint_t argc, const long *argv,
+pt_frame(void *argp, uintptr_t pc, uint_t argc, const long *argv,
     const mdb_tgt_gregset_t *gregs)
 {
-	argc = MIN(argc, (uint_t)(uintptr_t)arglim);
-	mdb_printf("%a(", pc);
+	mdb_stack_frame_hdl_t *hdl = argp;
+	uint64_t bp;
 
-	if (argc != 0) {
-		mdb_printf("%lr", *argv++);
-		for (argc--; argc != 0; argc--)
-			mdb_printf(", %lr", *argv++);
-	}
-
-	mdb_printf(")\n");
-	return (0);
-}
-
-static int
-pt_framev(void *arglim, uintptr_t pc, uint_t argc, const long *argv,
-    const mdb_tgt_gregset_t *gregs)
-{
-	argc = MIN(argc, (uint_t)(uintptr_t)arglim);
 #if defined(__i386) || defined(__amd64)
-	mdb_printf("%0?lr %a(", gregs->gregs[R_FP], pc);
+	bp = gregs->gregs[R_FP];
 #else
-	mdb_printf("%0?lr %a(", gregs->gregs[R_SP], pc);
+	bp = gregs->gregs[R_SP];
 #endif
-	if (argc != 0) {
-		mdb_printf("%lr", *argv++);
-		for (argc--; argc != 0; argc--)
-			mdb_printf(", %lr", *argv++);
-	}
 
-	mdb_printf(")\n");
+	mdb_stack_frame(hdl, pc, bp, argc, argv);
+
 	return (0);
 }
 
 static int
-pt_framer(void *arglim, uintptr_t pc, uint_t argc, const long *argv,
+pt_framer(void *argp, uintptr_t pc, uint_t argc, const long *argv,
     const mdb_tgt_gregset_t *gregs)
 {
-	if (pt_frameregs(arglim, pc, argc, argv, gregs, pc == PC_FAKE) == -1) {
+	mdb_stack_frame_hdl_t *hdl = argp;
+
+	uint_t arglim = mdb_stack_frame_arglim(hdl);
+
+	if (pt_frameregs((void *)(uintptr_t)arglim, pc,
+	    argc, argv, gregs, pc == PC_FAKE) == -1) {
 		/*
 		 * Use verbose format if register format is not supported.
 		 */
-		return (pt_framev(arglim, pc, argc, argv, gregs));
+		mdb_stack_frame_flags_set(hdl, MSF_VERBOSE);
+		return (pt_frame((void *)hdl, pc, argc, argv, gregs));
 	}
 
 	return (0);
 }
 
-/*ARGSUSED*/
 static int
 pt_stack_common(uintptr_t addr, uint_t flags, int argc,
-    const mdb_arg_t *argv, mdb_tgt_stack_f *func, prgreg_t saved_pc)
+    const mdb_arg_t *argv, mdb_stack_frame_flags_t sflags,
+    mdb_tgt_stack_f *func, prgreg_t saved_pc)
 {
-	void *arg = (void *)(uintptr_t)mdb.m_nargs;
 	mdb_tgt_t *t = mdb.m_target;
 	mdb_tgt_gregset_t gregs;
+	mdb_stack_frame_hdl_t *hdl;
+	uint_t arglim = mdb.m_nargs;
+	int i;
+
+	i = mdb_getopts(argc, argv,
+	    'n', MDB_OPT_SETBITS, MSF_ADDR, &sflags,
+	    's', MDB_OPT_SETBITS, MSF_SIZES, &sflags,
+	    't', MDB_OPT_SETBITS, MSF_TYPES, &sflags,
+	    'v', MDB_OPT_SETBITS, MSF_VERBOSE, &sflags,
+	    NULL);
+
+	argc -= i;
+	argv += i;
 
 	if (argc != 0) {
 		if (argv->a_type == MDB_TYPE_CHAR || argc > 1)
 			return (DCMD_USAGE);
 
-		if (argv->a_type == MDB_TYPE_STRING)
-			arg = (void *)(uintptr_t)mdb_strtoull(argv->a_un.a_str);
-		else
-			arg = (void *)(uintptr_t)argv->a_un.a_val;
+		arglim = mdb_argtoull(argv);
 	}
 
 	if (t->t_pshandle == NULL || Pstate(t->t_pshandle) == PS_IDLE) {
 		mdb_warn("no process active\n");
+		return (DCMD_ERR);
+	}
+
+	if ((hdl = mdb_stack_frame_init(t, arglim, sflags)) == NULL) {
+		mdb_warn("failed to init stack frame\n");
 		return (DCMD_ERR);
 	}
 
@@ -1086,20 +1126,21 @@ pt_stack_common(uintptr_t addr, uint_t flags, int argc,
 		return (DCMD_ERR);
 	}
 
-	(void) mdb_tgt_stack_iter(t, &gregs, func, arg);
+	(void) mdb_tgt_stack_iter(t, &gregs, func, (void *)hdl);
 	return (DCMD_OK);
 }
 
 static int
 pt_stack(uintptr_t addr, uint_t flags, int argc, const mdb_arg_t *argv)
 {
-	return (pt_stack_common(addr, flags, argc, argv, pt_frame, 0));
+	return (pt_stack_common(addr, flags, argc, argv, 0, pt_frame, 0));
 }
 
 static int
 pt_stackv(uintptr_t addr, uint_t flags, int argc, const mdb_arg_t *argv)
 {
-	return (pt_stack_common(addr, flags, argc, argv, pt_framev, 0));
+	return (pt_stack_common(addr, flags, argc, argv, MSF_VERBOSE,
+	    pt_frame, 0));
 }
 
 static int
@@ -1109,7 +1150,8 @@ pt_stackr(uintptr_t addr, uint_t flags, int argc, const mdb_arg_t *argv)
 	 * Force printing of first register window, by setting  the
 	 * saved pc (%i7) to PC_FAKE.
 	 */
-	return (pt_stack_common(addr, flags, argc, argv, pt_framer, PC_FAKE));
+	return (pt_stack_common(addr, flags, argc, argv, 0,
+	    pt_framer, PC_FAKE));
 }
 
 /*ARGSUSED*/
@@ -1302,18 +1344,50 @@ pt_regstatus(uintptr_t addr, uint_t flags, int argc, const mdb_arg_t *argv)
 }
 
 static int
+pt_thread_name(mdb_tgt_t *t, mdb_tgt_tid_t tid, char *buf, size_t bufsize)
+{
+	char name[THREAD_NAME_MAX];
+
+	buf[0] = '\0';
+
+	if (t->t_pshandle == NULL ||
+	    Plwp_getname(t->t_pshandle, tid, name, sizeof (name)) != 0 ||
+	    name[0] == '\0') {
+		if (mdb_snprintf(buf, bufsize, "%lu", tid) > bufsize) {
+			return (set_errno(EMDB_NAME2BIG));
+		}
+
+		return (0);
+	}
+
+	if (mdb_snprintf(buf, bufsize, "%lu [%s]", tid, name) > bufsize) {
+		return (set_errno(EMDB_NAME2BIG));
+	}
+
+	return (0);
+}
+
+static int
 pt_findstack(uintptr_t tid, uint_t flags, int argc, const mdb_arg_t *argv)
 {
 	mdb_tgt_t *t = mdb.m_target;
 	mdb_tgt_gregset_t gregs;
-	int showargs = 0;
+	boolean_t showargs = B_FALSE;
+	boolean_t types = B_FALSE;
+	boolean_t sizes = B_FALSE;
+	boolean_t addrs = B_FALSE;
 	int count;
 	uintptr_t pc, sp;
+	char buf[128];
 
 	if (!(flags & DCMD_ADDRSPEC))
 		return (DCMD_USAGE);
 
-	count = mdb_getopts(argc, argv, 'v', MDB_OPT_SETBITS, TRUE, &showargs,
+	count = mdb_getopts(argc, argv,
+	    'n', MDB_OPT_SETBITS, TRUE, &addrs,
+	    's', MDB_OPT_SETBITS, TRUE, &sizes,
+	    't', MDB_OPT_SETBITS, TRUE, &types,
+	    'v', MDB_OPT_SETBITS, TRUE, &showargs,
 	    NULL);
 	argc -= count;
 	argv += count;
@@ -1332,19 +1406,27 @@ pt_findstack(uintptr_t tid, uint_t flags, int argc, const mdb_arg_t *argv)
 #else
 	sp = gregs.gregs[R_SP];
 #endif
-	mdb_printf("stack pointer for thread %p: %p\n", tid, sp);
+
+	(void) pt_thread_name(t, tid, buf, sizeof (buf));
+
+	mdb_printf("stack pointer for thread %s: %p\n", buf, sp);
 	if (pc != 0)
 		mdb_printf("[ %0?lr %a() ]\n", sp, pc);
 
 	(void) mdb_inc_indent(2);
 	mdb_set_dot(sp);
 
-	if (argc == 1)
+	if (argc == 1) {
 		(void) mdb_eval(argv->a_un.a_str);
-	else if (showargs)
-		(void) mdb_eval("<.$C");
-	else
-		(void) mdb_eval("<.$C0");
+	} else {
+		(void) mdb_snprintf(buf, sizeof (buf),
+		    "<.$C%s%s%s%s",
+		    addrs ? " -n" : "",
+		    sizes ? " -s" : "",
+		    types ? " -t" : "",
+		    showargs ? "" : " 0");
+		(void) mdb_eval(buf);
+	}
 
 	(void) mdb_dec_indent(2);
 	return (DCMD_OK);
@@ -1388,6 +1470,13 @@ pt_gcore(uintptr_t addr, uint_t flags, int argc, const mdb_arg_t *argv)
 	(void) mdb_snprintf(fname, size, "%s.%d", prefix, (int)pid);
 
 	if (Pgcore(t->t_pshandle, fname, content) != 0) {
+		/*
+		 * Short writes during dumping are specifically described by
+		 * EBADE, just as ZFS uses this otherwise-unused code for
+		 * checksum errors.  Translate to and mdb errno.
+		 */
+		if (errno == EBADE)
+			(void) set_errno(EMDB_SHORTWRITE);
 		mdb_warn("couldn't dump core");
 		return (DCMD_ERR);
 	}
@@ -1544,6 +1633,38 @@ pt_print_reason(const lwpstatus_t *psp)
 	}
 }
 
+static void
+pt_status_dcmd_upanic(prupanic_t *pru)
+{
+	size_t i;
+
+	mdb_printf("process panicked\n");
+	if ((pru->pru_flags & PRUPANIC_FLAG_MSG_ERROR) != 0) {
+		mdb_printf("warning: process upanic message was bad\n");
+		return;
+	}
+
+	if ((pru->pru_flags & PRUPANIC_FLAG_MSG_VALID) == 0)
+		return;
+
+	if ((pru->pru_flags & PRUPANIC_FLAG_MSG_TRUNC) != 0) {
+		mdb_printf("warning: process upanic message truncated\n");
+	}
+
+	mdb_printf("upanic message: ");
+
+	for (i = 0; i < PRUPANIC_BUFLEN; i++) {
+		if (pru->pru_data[i] == '\0')
+			break;
+		if (isascii(pru->pru_data[i]) && isprint(pru->pru_data[i])) {
+			mdb_printf("%c", pru->pru_data[i]);
+		} else {
+			mdb_printf("\\x%02x", pru->pru_data[i]);
+		}
+	}
+	mdb_printf("\n");
+}
+
 /*ARGSUSED*/
 static int
 pt_status_dcmd(uintptr_t addr, uint_t flags, int argc, const mdb_arg_t *argv)
@@ -1559,8 +1680,9 @@ pt_status_dcmd(uintptr_t addr, uint_t flags, int argc, const mdb_arg_t *argv)
 		int state;
 		GElf_Sym sym;
 		uintptr_t panicstr;
-		char panicbuf[128];
+		char *panicbuf = mdb_alloc(PANIC_BUFSIZE, UM_SLEEP);
 		const siginfo_t *sip = &(psp->pr_lwp.pr_info);
+		prupanic_t *pru = NULL;
 
 		char execname[MAXPATHLEN], buf[BUFSIZ];
 		char signame[SIG2STR_MAX + 4]; /* enough for SIG+name+\0 */
@@ -1666,12 +1788,19 @@ pt_status_dcmd(uintptr_t addr, uint_t flags, int argc, const mdb_arg_t *argv)
 		case PS_DEAD:
 			if (cursig == 0 && WIFSIGNALED(pi.pr_wstat))
 				cursig = WTERMSIG(pi.pr_wstat);
+
+			(void) Pupanic(P, &pru);
+
 			/*
-			 * We can only use pr_wstat == 0 as a test for gcore if
-			 * an NT_PRCRED note is present; these features were
-			 * added at the same time in Solaris 8.
+			 * Test for upanic first. We can only use pr_wstat == 0
+			 * as a test for gcore if an NT_PRCRED note is present;
+			 * these features were added at the same time in Solaris
+			 * 8.
 			 */
-			if (pi.pr_wstat == 0 && Pstate(P) == PS_DEAD &&
+			if (pru != NULL) {
+				pt_status_dcmd_upanic(pru);
+				Pupanic_free(pru);
+			} else if (pi.pr_wstat == 0 && Pstate(P) == PS_DEAD &&
 			    Pcred(P, &cred, 1) == 0) {
 				mdb_printf("process core file generated "
 				    "with gcore(1)\n");
@@ -1716,11 +1845,10 @@ pt_status_dcmd(uintptr_t addr, uint_t flags, int argc, const mdb_arg_t *argv)
 			    Pread(t->t_pshandle, &panicstr, sizeof (panicstr),
 			    sym.st_value) == sizeof (panicstr) &&
 			    Pread_string(t->t_pshandle, panicbuf,
-			    sizeof (panicbuf), panicstr) > 0) {
-				mdb_printf("panic message: %s",
+			    PANIC_BUFSIZE, panicstr) > 0) {
+				mdb_printf("libc panic message: %s",
 				    panicbuf);
 			}
-
 
 			break;
 
@@ -1731,6 +1859,7 @@ pt_status_dcmd(uintptr_t addr, uint_t flags, int argc, const mdb_arg_t *argv)
 		default:
 			mdb_printf("unknown libproc Pstate: %d\n", Pstate(P));
 		}
+		mdb_free(panicbuf, PANIC_BUFSIZE);
 
 	} else if (pt->p_file != NULL) {
 		const GElf_Ehdr *ehp = &pt->p_file->gf_ehdr;
@@ -1959,8 +2088,7 @@ pt_env_set(pt_data_t *pt, const char *nameval)
 	(void) mdb_nv_insert(&pt->p_env, name, NULL, (uintptr_t)val,
 	    MDB_NV_EXTNAME);
 
-	if (equals)
-		*equals = '=';
+	*equals = '=';
 }
 
 /*
@@ -2096,13 +2224,45 @@ getenv_help(void)
 	    " instead of initial environment.\n");
 }
 
+static void
+pt_stack_help(void)
+{
+	mdb_printf(
+	    "Options:\n"
+	    "  -s   show the size of each stack frame to the left\n"
+	    "  -t   where CTF is present, show types for functions and "
+	    "arguments\n"
+	    "  -v   include frame pointer information (this is the default "
+	    "for %<b>$C%</b>)\n"
+	    "\n"
+	    "If the optional %<u>cnt%</u> is given, no more than %<u>cnt%</u> "
+	    "arguments are shown\nfor each stack frame.\n");
+}
+
+static void
+pt_findstack_help(void)
+{
+	mdb_printf(
+	    "Options:\n"
+	    "  -n   do not resolve addresses to names\n"
+	    "  -s   show the size of each stack frame to the left\n"
+	    "  -t   where CTF is present, show types for functions and "
+	    "arguments\n"
+	    "  -v   show function arguments\n"
+	    "\n"
+	    "If the optional %<u>cnt%</u> is given, no more than %<u>cnt%</u> "
+	    "arguments are shown\nfor each stack frame.\n");
+}
+
 static const mdb_dcmd_t pt_dcmds[] = {
-	{ "$c", "?[cnt]", "print stack backtrace", pt_stack },
-	{ "$C", "?[cnt]", "print stack backtrace", pt_stackv },
+	{ "$c", "?[-nstv] [cnt]", "print stack backtrace", pt_stack,
+	    pt_stack_help },
+	{ "$C", "?[-nstv] [cnt]", "print stack backtrace", pt_stackv,
+	    pt_stack_help },
 	{ "$i", NULL, "print signals that are ignored", pt_ignored },
 	{ "$l", NULL, "print the representative thread's lwp id", pt_lwpid },
 	{ "$L", NULL, "print list of the active lwp ids", pt_lwpids },
-	{ "$r", "?", "print general-purpose registers", pt_regs },
+	{ "$r", "?[-u]", "print general-purpose registers", pt_regs },
 	{ "$x", "?", "print floating point registers", pt_fpregs },
 	{ "$X", "?", "print floating point registers", pt_fpregs },
 	{ "$y", "?", "print floating point registers", pt_fpregs },
@@ -2114,7 +2274,8 @@ static const mdb_dcmd_t pt_dcmds[] = {
 	{ ":R", "[-a]", "release the previously attached process", pt_detach },
 	{ "attach", "?[core|pid]",
 	    "attach to process or core file", pt_attach },
-	{ "findstack", ":[-v]", "find user thread stack", pt_findstack },
+	{ "findstack", ":[-nstv]", "find user thread stack", pt_findstack,
+	    pt_findstack_help },
 	{ "gcore", "[-o prefix] [-c content]",
 	    "produce a core file for the attached process", pt_gcore },
 	{ "getenv", "[-t] [name]", "display an environment variable",
@@ -2122,11 +2283,13 @@ static const mdb_dcmd_t pt_dcmds[] = {
 	{ "kill", NULL, "forcibly kill and release target", pt_kill },
 	{ "release", "[-a]",
 	    "release the previously attached process", pt_detach },
-	{ "regs", "?", "print general-purpose registers", pt_regs },
+	{ "regs", "?[-u]", "print general-purpose registers", pt_regs },
 	{ "fpregs", "?[-dqs]", "print floating point registers", pt_fpregs },
 	{ "setenv", "name=value", "set an environment variable", pt_setenv },
-	{ "stack", "?[cnt]", "print stack backtrace", pt_stack },
-	{ "stackregs", "?", "print stack backtrace and registers", pt_stackr },
+	{ "stack", "?[-nstv] [cnt]", "print stack backtrace", pt_stack,
+	    pt_stack_help },
+	{ "stackregs", "?[-nstv]", "print stack backtrace and registers",
+	    pt_stackr, pt_stack_help },
 	{ "status", NULL, "print summary of current target", pt_status_dcmd },
 	{ "tls", ":symbol",
 	    "lookup TLS data in the context of a given thread", pt_tls },
@@ -2234,7 +2397,10 @@ pt_activate_common(mdb_tgt_t *t)
 static void
 pt_activate(mdb_tgt_t *t)
 {
-	static const mdb_nv_disc_t reg_disc = { reg_disc_set, reg_disc_get };
+	static const mdb_nv_disc_t reg_disc = {
+		.disc_set = reg_disc_set,
+		.disc_get = reg_disc_get
+	};
 
 	pt_data_t *pt = t->t_data;
 	struct utsname u1, u2;
@@ -3140,7 +3306,7 @@ pt_object_iter(mdb_tgt_t *t, mdb_tgt_map_f *func, void *private)
 		(void) strncpy(mp->map_name, s, MDB_TGT_MAPSZ);
 		mp->map_name[MDB_TGT_MAPSZ - 1] = '\0';
 		mp->map_flags = MDB_TGT_MAP_R | MDB_TGT_MAP_X;
-		mp->map_base = NULL;
+		mp->map_base = 0;
 		mp->map_size = 0;
 
 		if (func(private, mp, s) != 0)
@@ -3325,8 +3491,8 @@ Pcreate_callback(struct ps_prochandle *P)
 	if (pt->p_stdout != NULL)
 		pt_dupfd(pt->p_stdout, O_CREAT | O_WRONLY, 0666, STDOUT_FILENO);
 
-	(void) mdb_signal_sethandler(SIGPIPE, SIG_DFL, NULL);
-	(void) mdb_signal_sethandler(SIGQUIT, SIG_DFL, NULL);
+	(void) mdb_signal_sethandler(SIGPIPE, MDB_SIG_DFL, NULL);
+	(void) mdb_signal_sethandler(SIGQUIT, MDB_SIG_DFL, NULL);
 }
 
 static int
@@ -3547,11 +3713,11 @@ pt_setrun(mdb_tgt_t *t, mdb_tgt_status_t *tsp, int flags)
 	 * it.  Ignore SIGTTOU while doing this to avoid being suspended.
 	 */
 	if (mdb.m_flags & MDB_FL_JOBCTL) {
-		(void) mdb_signal_sethandler(SIGTTOU, SIG_IGN, NULL);
+		(void) mdb_signal_sethandler(SIGTTOU, MDB_SIG_IGN, NULL);
 		(void) IOP_CTL(mdb.m_term, TIOCGPGRP, &old_pgid);
 		(void) IOP_CTL(mdb.m_term, TIOCSPGRP,
 		    (void *)&Pstatus(P)->pr_pgid);
-		(void) mdb_signal_sethandler(SIGTTOU, SIG_DFL, NULL);
+		(void) mdb_signal_sethandler(SIGTTOU, MDB_SIG_DFL, NULL);
 	}
 
 	if (Pstate(P) != PS_RUN && Psetrun(P, sig, flags) == -1) {
@@ -3595,9 +3761,9 @@ pt_setrun(mdb_tgt_t *t, mdb_tgt_status_t *tsp, int flags)
 	 * while ignoring SIGTTOU so we are not accidentally suspended.
 	 */
 	if (old_pgid != -1) {
-		(void) mdb_signal_sethandler(SIGTTOU, SIG_IGN, NULL);
+		(void) mdb_signal_sethandler(SIGTTOU, MDB_SIG_IGN, NULL);
 		(void) IOP_CTL(mdb.m_term, TIOCSPGRP, &pgid);
-		(void) mdb_signal_sethandler(SIGTTOU, SIG_DFL, NULL);
+		(void) mdb_signal_sethandler(SIGTTOU, MDB_SIG_DFL, NULL);
 	}
 
 	/*
@@ -3704,15 +3870,15 @@ pt_sysenter_match(mdb_tgt_t *t, mdb_sespec_t *sep, mdb_tgt_status_t *tsp)
 }
 
 static const mdb_se_ops_t proc_sysenter_ops = {
-	pt_sysenter_ctor,	/* se_ctor */
-	pt_sysenter_dtor,	/* se_dtor */
-	pt_sysenter_info,	/* se_info */
-	no_se_secmp,		/* se_secmp */
-	no_se_vecmp,		/* se_vecmp */
-	no_se_arm,		/* se_arm */
-	no_se_disarm,		/* se_disarm */
-	no_se_cont,		/* se_cont */
-	pt_sysenter_match	/* se_match */
+	.se_ctor = pt_sysenter_ctor,
+	.se_dtor = pt_sysenter_dtor,
+	.se_info = pt_sysenter_info,
+	.se_secmp = no_se_secmp,
+	.se_vecmp = no_se_vecmp,
+	.se_arm = no_se_arm,
+	.se_disarm = no_se_disarm,
+	.se_cont = no_se_cont,
+	.se_match = pt_sysenter_match,
 };
 
 static int
@@ -3764,15 +3930,15 @@ pt_sysexit_match(mdb_tgt_t *t, mdb_sespec_t *sep, mdb_tgt_status_t *tsp)
 }
 
 static const mdb_se_ops_t proc_sysexit_ops = {
-	pt_sysexit_ctor,	/* se_ctor */
-	pt_sysexit_dtor,	/* se_dtor */
-	pt_sysexit_info,	/* se_info */
-	no_se_secmp,		/* se_secmp */
-	no_se_vecmp,		/* se_vecmp */
-	no_se_arm,		/* se_arm */
-	no_se_disarm,		/* se_disarm */
-	no_se_cont,		/* se_cont */
-	pt_sysexit_match	/* se_match */
+	.se_ctor = pt_sysexit_ctor,
+	.se_dtor = pt_sysexit_dtor,
+	.se_info = pt_sysexit_info,
+	.se_secmp = no_se_secmp,
+	.se_vecmp = no_se_vecmp,
+	.se_arm = no_se_arm,
+	.se_disarm = no_se_disarm,
+	.se_cont = no_se_cont,
+	.se_match = pt_sysexit_match,
 };
 
 static int
@@ -3824,15 +3990,15 @@ pt_signal_match(mdb_tgt_t *t, mdb_sespec_t *sep, mdb_tgt_status_t *tsp)
 }
 
 static const mdb_se_ops_t proc_signal_ops = {
-	pt_signal_ctor,		/* se_ctor */
-	pt_signal_dtor,		/* se_dtor */
-	pt_signal_info,		/* se_info */
-	no_se_secmp,		/* se_secmp */
-	no_se_vecmp,		/* se_vecmp */
-	no_se_arm,		/* se_arm */
-	no_se_disarm,		/* se_disarm */
-	no_se_cont,		/* se_cont */
-	pt_signal_match		/* se_match */
+	.se_ctor = pt_signal_ctor,
+	.se_dtor = pt_signal_dtor,
+	.se_info = pt_signal_info,
+	.se_secmp = no_se_secmp,
+	.se_vecmp = no_se_vecmp,
+	.se_arm = no_se_arm,
+	.se_disarm = no_se_disarm,
+	.se_cont = no_se_cont,
+	.se_match = pt_signal_match,
 };
 
 static int
@@ -3887,15 +4053,15 @@ pt_fault_match(mdb_tgt_t *t, mdb_sespec_t *sep, mdb_tgt_status_t *tsp)
 }
 
 static const mdb_se_ops_t proc_fault_ops = {
-	pt_fault_ctor,		/* se_ctor */
-	pt_fault_dtor,		/* se_dtor */
-	pt_fault_info,		/* se_info */
-	no_se_secmp,		/* se_secmp */
-	no_se_vecmp,		/* se_vecmp */
-	no_se_arm,		/* se_arm */
-	no_se_disarm,		/* se_disarm */
-	no_se_cont,		/* se_cont */
-	pt_fault_match		/* se_match */
+	.se_ctor = pt_fault_ctor,
+	.se_dtor = pt_fault_dtor,
+	.se_info = pt_fault_info,
+	.se_secmp = no_se_secmp,
+	.se_vecmp = no_se_vecmp,
+	.se_arm = no_se_arm,
+	.se_disarm = no_se_disarm,
+	.se_cont = no_se_cont,
+	.se_match = pt_fault_match,
 };
 
 /*
@@ -3953,7 +4119,7 @@ pt_brkpt_ctor(mdb_tgt_t *t, mdb_sespec_t *sep, void *args)
 
 	ptb = mdb_alloc(sizeof (pt_brkpt_t), UM_SLEEP);
 	ptb->ptb_addr = pta->pta_addr;
-	ptb->ptb_instr = NULL;
+	ptb->ptb_instr = 0;
 	sep->se_data = ptb;
 
 	return (0);
@@ -3971,7 +4137,7 @@ static char *
 pt_brkpt_info(mdb_tgt_t *t, mdb_sespec_t *sep, mdb_vespec_t *vep,
     mdb_tgt_spec_desc_t *sp, char *buf, size_t nbytes)
 {
-	uintptr_t addr = NULL;
+	uintptr_t addr = 0;
 
 	if (vep != NULL) {
 		pt_bparg_t *pta = vep->ve_args;
@@ -4129,15 +4295,15 @@ pt_brkpt_match(mdb_tgt_t *t, mdb_sespec_t *sep, mdb_tgt_status_t *tsp)
 }
 
 static const mdb_se_ops_t proc_brkpt_ops = {
-	pt_brkpt_ctor,		/* se_ctor */
-	pt_brkpt_dtor,		/* se_dtor */
-	pt_brkpt_info,		/* se_info */
-	pt_brkpt_secmp,		/* se_secmp */
-	pt_brkpt_vecmp,		/* se_vecmp */
-	pt_brkpt_arm,		/* se_arm */
-	pt_brkpt_disarm,	/* se_disarm */
-	pt_brkpt_cont,		/* se_cont */
-	pt_brkpt_match		/* se_match */
+	.se_ctor = pt_brkpt_ctor,
+	.se_dtor = pt_brkpt_dtor,
+	.se_info = pt_brkpt_info,
+	.se_secmp = pt_brkpt_secmp,
+	.se_vecmp = pt_brkpt_vecmp,
+	.se_arm = pt_brkpt_arm,
+	.se_disarm = pt_brkpt_disarm,
+	.se_cont = pt_brkpt_cont,
+	.se_match = pt_brkpt_match,
 };
 
 static int
@@ -4302,15 +4468,15 @@ pt_wapt_match(mdb_tgt_t *t, mdb_sespec_t *sep, mdb_tgt_status_t *tsp)
 }
 
 static const mdb_se_ops_t proc_wapt_ops = {
-	pt_wapt_ctor,		/* se_ctor */
-	pt_wapt_dtor,		/* se_dtor */
-	pt_wapt_info,		/* se_info */
-	pt_wapt_secmp,		/* se_secmp */
-	pt_wapt_vecmp,		/* se_vecmp */
-	pt_wapt_arm,		/* se_arm */
-	pt_wapt_disarm,		/* se_disarm */
-	pt_wapt_cont,		/* se_cont */
-	pt_wapt_match		/* se_match */
+	.se_ctor = pt_wapt_ctor,
+	.se_dtor = pt_wapt_dtor,
+	.se_info = pt_wapt_info,
+	.se_secmp = pt_wapt_secmp,
+	.se_vecmp = pt_wapt_vecmp,
+	.se_arm = pt_wapt_arm,
+	.se_disarm = pt_wapt_disarm,
+	.se_cont = pt_wapt_cont,
+	.se_match = pt_wapt_match,
 };
 
 static void
@@ -4355,7 +4521,7 @@ pt_add_sbrkpt(mdb_tgt_t *t, const char *sym,
 
 	pta = mdb_alloc(sizeof (pt_bparg_t), UM_SLEEP);
 	pta->pta_symbol = strdup(sym);
-	pta->pta_addr = NULL;
+	pta->pta_addr = 0;
 
 	return (mdb_tgt_vespec_insert(t, &proc_brkpt_ops, spec_flags,
 	    func, data, pta, pt_bparg_dtor));
@@ -4568,31 +4734,6 @@ pt_putareg(mdb_tgt_t *t, mdb_tgt_tid_t tid, const char *rname, mdb_tgt_reg_t r)
 			else if (rd_flags & MDB_TGT_R_8L)
 				r &= 0xffULL;
 
-#if defined(__sparc) && defined(_ILP32)
-			/*
-			 * If we are debugging on 32-bit SPARC, the globals and
-			 * outs can have 32 upper bits stored in the xregs.
-			 */
-			int is_g = (rd_num == R_G0 ||
-			    rd_num >= R_G1 && rd_num <= R_G7);
-			int is_o = (rd_num >= R_O0 && rd_num <= R_O7);
-			prxregset_t xrs;
-
-			if ((is_g || is_o) && PTL_GETXREGS(t, tid, &xrs) == 0 &&
-			    xrs.pr_type == XR_TYPE_V8P) {
-				if (is_g) {
-					xrs.pr_un.pr_v8p.pr_xg[rd_num -
-					    R_G0 + XR_G0] = (uint32_t)(r >> 32);
-				} else if (is_o) {
-					xrs.pr_un.pr_v8p.pr_xo[rd_num -
-					    R_O0 + XR_O0] = (uint32_t)(r >> 32);
-				}
-
-				if (PTL_SETXREGS(t, tid, &xrs) == -1)
-					return (-1);
-			}
-#endif	/* __sparc && _ILP32 */
-
 			if (PTL_GETREGS(t, tid, grs) == 0) {
 				grs[rd_num] = (prgreg_t)r;
 				return (PTL_SETREGS(t, tid, grs));
@@ -4650,58 +4791,58 @@ pt_auxv(mdb_tgt_t *t, const auxv_t **auxvp)
 
 
 static const mdb_tgt_ops_t proc_ops = {
-	pt_setflags,				/* t_setflags */
-	(int (*)()) mdb_tgt_notsup,		/* t_setcontext */
-	pt_activate,				/* t_activate */
-	pt_deactivate,				/* t_deactivate */
-	pt_periodic,				/* t_periodic */
-	pt_destroy,				/* t_destroy */
-	pt_name,				/* t_name */
-	(const char *(*)()) mdb_conf_isa,	/* t_isa */
-	pt_platform,				/* t_platform */
-	pt_uname,				/* t_uname */
-	pt_dmodel,				/* t_dmodel */
-	(ssize_t (*)()) mdb_tgt_notsup,		/* t_aread */
-	(ssize_t (*)()) mdb_tgt_notsup,		/* t_awrite */
-	pt_vread,				/* t_vread */
-	pt_vwrite,				/* t_vwrite */
-	(ssize_t (*)()) mdb_tgt_notsup,		/* t_pread */
-	(ssize_t (*)()) mdb_tgt_notsup,		/* t_pwrite */
-	pt_fread,				/* t_fread */
-	pt_fwrite,				/* t_fwrite */
-	(ssize_t (*)()) mdb_tgt_notsup,		/* t_ioread */
-	(ssize_t (*)()) mdb_tgt_notsup,		/* t_iowrite */
-	(int (*)()) mdb_tgt_notsup,		/* t_vtop */
-	pt_lookup_by_name,			/* t_lookup_by_name */
-	pt_lookup_by_addr,			/* t_lookup_by_addr */
-	pt_symbol_iter,				/* t_symbol_iter */
-	pt_mapping_iter,			/* t_mapping_iter */
-	pt_object_iter,				/* t_object_iter */
-	pt_addr_to_map,				/* t_addr_to_map */
-	pt_name_to_map,				/* t_name_to_map */
-	pt_addr_to_ctf,				/* t_addr_to_ctf */
-	pt_name_to_ctf,				/* t_name_to_ctf */
-	pt_status,				/* t_status */
-	pt_run,					/* t_run */
-	pt_step,				/* t_step */
-	pt_step_out,				/* t_step_out */
-	(int (*)()) mdb_tgt_notsup,		/* t_step_branch */
-	pt_next,				/* t_next */
-	pt_continue,				/* t_cont */
-	pt_signal,				/* t_signal */
-	pt_add_vbrkpt,				/* t_add_vbrkpt */
-	pt_add_sbrkpt,				/* t_add_sbrkpt */
-	(int (*)()) mdb_tgt_null,		/* t_add_pwapt */
-	pt_add_vwapt,				/* t_add_vwapt */
-	(int (*)()) mdb_tgt_null,		/* t_add_iowapt */
-	pt_add_sysenter,			/* t_add_sysenter */
-	pt_add_sysexit,				/* t_add_sysexit */
-	pt_add_signal,				/* t_add_signal */
-	pt_add_fault,				/* t_add_fault */
-	pt_getareg,				/* t_getareg */
-	pt_putareg,				/* t_putareg */
-	pt_stack_iter,				/* t_stack_iter */
-	pt_auxv					/* t_auxv */
+	.t_setflags = pt_setflags,
+	.t_setcontext = (int (*)())(uintptr_t)mdb_tgt_notsup,
+	.t_activate = pt_activate,
+	.t_deactivate = pt_deactivate,
+	.t_periodic = pt_periodic,
+	.t_destroy = pt_destroy,
+	.t_name = pt_name,
+	.t_isa = (const char *(*)())mdb_conf_isa,
+	.t_platform = pt_platform,
+	.t_uname = pt_uname,
+	.t_dmodel = pt_dmodel,
+	.t_aread = (ssize_t (*)())mdb_tgt_notsup,
+	.t_awrite = (ssize_t (*)())mdb_tgt_notsup,
+	.t_vread = pt_vread,
+	.t_vwrite = pt_vwrite,
+	.t_pread = (ssize_t (*)())mdb_tgt_notsup,
+	.t_pwrite = (ssize_t (*)())mdb_tgt_notsup,
+	.t_fread = pt_fread,
+	.t_fwrite = pt_fwrite,
+	.t_ioread = (ssize_t (*)())mdb_tgt_notsup,
+	.t_iowrite = (ssize_t (*)())mdb_tgt_notsup,
+	.t_vtop = (int (*)())(uintptr_t)mdb_tgt_notsup,
+	.t_lookup_by_name = pt_lookup_by_name,
+	.t_lookup_by_addr = pt_lookup_by_addr,
+	.t_symbol_iter = pt_symbol_iter,
+	.t_mapping_iter = pt_mapping_iter,
+	.t_object_iter = pt_object_iter,
+	.t_addr_to_map = pt_addr_to_map,
+	.t_name_to_map = pt_name_to_map,
+	.t_addr_to_ctf = pt_addr_to_ctf,
+	.t_name_to_ctf = pt_name_to_ctf,
+	.t_status = pt_status,
+	.t_run = pt_run,
+	.t_step = pt_step,
+	.t_step_out = pt_step_out,
+	.t_next = pt_next,
+	.t_cont = pt_continue,
+	.t_signal = pt_signal,
+	.t_add_vbrkpt = pt_add_vbrkpt,
+	.t_add_sbrkpt = pt_add_sbrkpt,
+	.t_add_pwapt = (int (*)())(uintptr_t)mdb_tgt_null,
+	.t_add_vwapt = pt_add_vwapt,
+	.t_add_iowapt = (int (*)())(uintptr_t)mdb_tgt_null,
+	.t_add_sysenter = pt_add_sysenter,
+	.t_add_sysexit = pt_add_sysexit,
+	.t_add_signal = pt_add_signal,
+	.t_add_fault = pt_add_fault,
+	.t_getareg = pt_getareg,
+	.t_putareg = pt_putareg,
+	.t_stack_iter = pt_stack_iter,
+	.t_auxv = pt_auxv,
+	.t_thread_name = pt_thread_name,
 };
 
 /*
@@ -4767,32 +4908,37 @@ pt_lwp_setregs(mdb_tgt_t *t, void *tap, mdb_tgt_tid_t tid, prgregset_t gregs)
 	return (set_errno(EMDB_NOPROC));
 }
 
-#ifdef	__sparc
 
 /*ARGSUSED*/
 static int
-pt_lwp_getxregs(mdb_tgt_t *t, void *tap, mdb_tgt_tid_t tid, prxregset_t *xregs)
+pt_lwp_getxregs(mdb_tgt_t *t, void *tap, mdb_tgt_tid_t tid, prxregset_t **xregs,
+    size_t *sizep)
 {
 	if (t->t_pshandle != NULL) {
 		return (ptl_err(Plwp_getxregs(t->t_pshandle,
-		    (lwpid_t)tid, xregs)));
+		    (lwpid_t)tid, xregs, sizep)));
 	}
 	return (set_errno(EMDB_NOPROC));
 }
 
-/*ARGSUSED*/
+static void
+pt_lwp_freexregs(mdb_tgt_t *t, void *tap, prxregset_t *xregs, size_t size)
+{
+	if (t->t_pshandle != NULL) {
+		Plwp_freexregs(t->t_pshandle, xregs, size);
+	}
+}
+
 static int
 pt_lwp_setxregs(mdb_tgt_t *t, void *tap, mdb_tgt_tid_t tid,
-    const prxregset_t *xregs)
+    const prxregset_t *xregs, size_t len)
 {
 	if (t->t_pshandle != NULL) {
 		return (ptl_err(Plwp_setxregs(t->t_pshandle,
-		    (lwpid_t)tid, xregs)));
+		    (lwpid_t)tid, xregs, len)));
 	}
 	return (set_errno(EMDB_NOPROC));
 }
-
-#endif	/* __sparc */
 
 /*ARGSUSED*/
 static int
@@ -4819,18 +4965,17 @@ pt_lwp_setfpregs(mdb_tgt_t *t, void *tap, mdb_tgt_tid_t tid,
 }
 
 static const pt_ptl_ops_t proc_lwp_ops = {
-	(int (*)()) mdb_tgt_nop,
-	(void (*)()) mdb_tgt_nop,
-	pt_lwp_tid,
-	pt_lwp_iter,
-	pt_lwp_getregs,
-	pt_lwp_setregs,
-#ifdef __sparc
-	pt_lwp_getxregs,
-	pt_lwp_setxregs,
-#endif
-	pt_lwp_getfpregs,
-	pt_lwp_setfpregs
+	.ptl_ctor = (int (*)())(uintptr_t)mdb_tgt_nop,
+	.ptl_dtor = (void (*)())(uintptr_t)mdb_tgt_nop,
+	.ptl_tid = pt_lwp_tid,
+	.ptl_iter = pt_lwp_iter,
+	.ptl_getregs = pt_lwp_getregs,
+	.ptl_setregs = pt_lwp_setregs,
+	.ptl_getxregs = pt_lwp_getxregs,
+	.ptl_freexregs = pt_lwp_freexregs,
+	.ptl_setxregs = pt_lwp_setxregs,
+	.ptl_getfpregs = pt_lwp_getfpregs,
+	.ptl_setfpregs = pt_lwp_setfpregs
 };
 
 static int
@@ -4954,15 +5099,16 @@ pt_tdb_setregs(mdb_tgt_t *t, void *tap, mdb_tgt_tid_t tid, prgregset_t gregs)
 	return (0);
 }
 
-#ifdef __sparc
-
 static int
-pt_tdb_getxregs(mdb_tgt_t *t, void *tap, mdb_tgt_tid_t tid, prxregset_t *xregs)
+pt_tdb_getxregs(mdb_tgt_t *t, void *tap, mdb_tgt_tid_t tid, prxregset_t **xregs,
+    size_t *sizep)
 {
 	pt_data_t *pt = t->t_data;
 
 	td_thrhandle_t th;
 	td_err_e err;
+	int xregsize;
+	prxregset_t *pxr;
 
 	if (t->t_pshandle == NULL)
 		return (set_errno(EMDB_NOPROC));
@@ -4970,16 +5116,36 @@ pt_tdb_getxregs(mdb_tgt_t *t, void *tap, mdb_tgt_tid_t tid, prxregset_t *xregs)
 	if ((err = pt->p_tdb_ops->td_ta_map_id2thr(tap, tid, &th)) != TD_OK)
 		return (set_errno(tdb_to_errno(err)));
 
-	err = pt->p_tdb_ops->td_thr_getxregs(&th, xregs);
-	if (err != TD_OK && err != TD_PARTIALREG)
+	if ((err = pt->p_tdb_ops->td_thr_getxregsize(&th, &xregsize)) != TD_OK)
 		return (set_errno(tdb_to_errno(err)));
 
+	if (xregsize == 0) {
+		return (set_errno(ENODATA));
+	}
+
+	pxr = mdb_alloc(xregsize, UM_SLEEP);
+
+	err = pt->p_tdb_ops->td_thr_getxregs(&th, pxr);
+	if (err != TD_OK && err != TD_PARTIALREG) {
+		mdb_free(pxr, xregsize);
+		return (set_errno(tdb_to_errno(err)));
+	}
+
+	*xregs = pxr;
+	*sizep = xregsize;
 	return (0);
+}
+
+static void
+pt_tdb_freexregs(mdb_tgt_t *t __unused, void *tap __unused, prxregset_t *pxr,
+    size_t size)
+{
+	mdb_free(pxr, size);
 }
 
 static int
 pt_tdb_setxregs(mdb_tgt_t *t, void *tap, mdb_tgt_tid_t tid,
-    const prxregset_t *xregs)
+    const prxregset_t *xregs, size_t len __unused)
 {
 	pt_data_t *pt = t->t_data;
 
@@ -4998,8 +5164,6 @@ pt_tdb_setxregs(mdb_tgt_t *t, void *tap, mdb_tgt_tid_t tid,
 
 	return (0);
 }
-
-#endif	/* __sparc */
 
 static int
 pt_tdb_getfpregs(mdb_tgt_t *t, void *tap, mdb_tgt_tid_t tid,
@@ -5046,18 +5210,17 @@ pt_tdb_setfpregs(mdb_tgt_t *t, void *tap, mdb_tgt_tid_t tid,
 }
 
 static const pt_ptl_ops_t proc_tdb_ops = {
-	pt_tdb_ctor,
-	pt_tdb_dtor,
-	pt_tdb_tid,
-	pt_tdb_iter,
-	pt_tdb_getregs,
-	pt_tdb_setregs,
-#ifdef __sparc
-	pt_tdb_getxregs,
-	pt_tdb_setxregs,
-#endif
-	pt_tdb_getfpregs,
-	pt_tdb_setfpregs
+	.ptl_ctor = pt_tdb_ctor,
+	.ptl_dtor = pt_tdb_dtor,
+	.ptl_tid = pt_tdb_tid,
+	.ptl_iter = pt_tdb_iter,
+	.ptl_getregs = pt_tdb_getregs,
+	.ptl_setregs = pt_tdb_setregs,
+	.ptl_getxregs = pt_tdb_getxregs,
+	.ptl_freexregs = pt_tdb_freexregs,
+	.ptl_setxregs = pt_tdb_setxregs,
+	.ptl_getfpregs = pt_tdb_getfpregs,
+	.ptl_setfpregs = pt_tdb_setfpregs
 };
 
 static ssize_t
@@ -5069,7 +5232,7 @@ pt_xd_auxv(mdb_tgt_t *t, void *buf, size_t nbytes)
 
 	if (P != NULL && (auxv = Pgetauxvec(P)) != NULL &&
 	    auxv->a_type != AT_NULL) {
-		for (auxp = auxv, auxn = 1; auxp->a_type != NULL; auxp++)
+		for (auxp = auxv, auxn = 1; auxp->a_type != 0; auxp++)
 			auxn++;
 	}
 
@@ -5235,7 +5398,7 @@ mdb_proc_tgt_create(mdb_tgt_t *t, int argc, const char *argv[])
 	char execname[MAXPATHLEN];
 	struct stat64 st;
 	int perr;
-	int state;
+	int state = 0;
 	struct rlimit rlim;
 	int i;
 
@@ -5312,14 +5475,16 @@ mdb_proc_tgt_create(mdb_tgt_t *t, int argc, const char *argv[])
 
 	/*
 	 * If we don't have an executable path or the executable path is the
-	 * /proc/<pid>/object/a.out path, but we now have a libproc handle,
-	 * attempt to derive the executable path using Pexecname().  We need
-	 * to do this in the /proc case in order to open the executable for
-	 * writing because /proc/object/<file> permission are masked with 0555.
-	 * If Pexecname() fails us, fall back to /proc/<pid>/object/a.out.
+	 * /proc/<pid>/object/a.out path, but we now have a libproc handle (and
+	 * it didn't come from a core file), attempt to derive the executable
+	 * path using Pexecname().  We need to do this in the /proc case in
+	 * order to open the executable for writing because /proc/object/<file>
+	 * permission are masked with 0555.  If Pexecname() fails us, fall back
+	 * to /proc/<pid>/object/a.out.
 	 */
-	if (t->t_pshandle != NULL && (aout_path == NULL || (stat64(aout_path,
-	    &st) == 0 && strcmp(st.st_fstype, "proc") == 0))) {
+	if (t->t_pshandle != NULL && core_path == NULL &&
+	    (aout_path == NULL || (stat64(aout_path, &st) == 0 &&
+	    strcmp(st.st_fstype, "proc") == 0))) {
 		GElf_Sym s;
 		aout_path = Pexecname(t->t_pshandle, execname, MAXPATHLEN);
 		if (aout_path == NULL && state != PS_DEAD && state != PS_IDLE) {

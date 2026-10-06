@@ -24,8 +24,6 @@
  * Use is subject to license terms.
  */
 
-#pragma ident	"%Z%%M%	%I%	%E% SMI"
-
 /*
  * Pstack.c
  *
@@ -176,7 +174,7 @@ load_uclist(uclist_t *ucl, const lwpstatus_t *psp)
 	uint_t new_size, i;
 	ucontext_t uc;
 
-	if (addr == NULL)
+	if (addr == (uintptr_t)NULL)
 		return (0);
 
 	for (;;) {
@@ -203,7 +201,7 @@ load_uclist(uclist_t *ucl, const lwpstatus_t *psp)
 		if (Pread(P, &uc, sizeof (uc), addr) != sizeof (uc))
 			break; /* abort if we fail to read ucontext */
 
-		dprintf("detected lwp %d signal context at %p\n",
+		Pdprintf("detected lwp %d signal context at %p\n",
 		    (int)psp->pr_lwpid, (void *)addr);
 		ucl->uc_addrs[ucl->uc_nelems++] = addr;
 
@@ -214,7 +212,7 @@ load_uclist(uclist_t *ucl, const lwpstatus_t *psp)
 		 * entry which could indicate a cycle or a very peculiar
 		 * interference pattern between threads.
 		 */
-		if (addr == NULL)
+		if (addr == (uintptr_t)NULL)
 			break;
 
 		for (i = 0; i < ucl->uc_nelems - 1; i++) {

@@ -21,18 +21,17 @@
 # Copyright 2009 Sun Microsystems, Inc.  All rights reserved.
 # Use is subject to license terms.
 #
+# Copyright (c) 2018, Joyent, Inc.
 
 MANIFEST = ssh.xml
 SVCMETHOD = sshd
 
 include ../../Makefile.cmd
-include ../Makefile.ssh-common
 
-SSHASKPASS=	$(ROOTLIBSSH)/ssh-askpass
 ETCSSHDIR=	$(ROOTETC)/ssh
-DIRS=		$(ETCSSHDIR) $(ROOTLIBSSH)
+DIRS=		$(ETCSSHDIR)
 
-FILES= sshd_config ssh_config moduli
+FILES= sshd_config ssh_config
 
 ETCSSHFILES=	$(FILES:%=$(ETCSSHDIR)/%)
 
@@ -46,15 +45,13 @@ $(ETCSSHDIR)/% : %
 $(DIRS):
 	$(INS.dir)
 
-$(ROOTLIBSSH)/%: %
-	$(INS.file)
-
 $(POFILE):
+
+SMOFF += signed
 
 all lint clean clobber _msg:
 
-install: all $(DIRS) $(ETCSSHFILES) $(ROOTMANIFEST) $(ROOTSVCMETHOD) \
-	$(SSHASKPASS)
+install: all $(DIRS) $(ETCSSHFILES) $(ROOTMANIFEST) $(ROOTSVCMETHOD)
 
 check: $(CHKMANIFEST)
 

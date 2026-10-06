@@ -23,6 +23,8 @@
 # Copyright 2005 Sun Microsystems, Inc.  All rights reserved.
 # Use is subject to license terms.
 #
+# Copyright 2017 RackTop Systems.
+#
 
 MODULE = libzpool.so
 MDBTGT = proc
@@ -37,17 +39,15 @@ include ../../../Makefile.module
 MODSRCS_DIR = ../../../common/modules/zfs
 GENUNIX_DIR = ../../../common/modules/genunix
 
+CPPFLAGS.first = -I$(SRC)/lib/libfakekernel/common -D_FAKE_KERNEL
 CPPFLAGS += -I../../../../../lib/libzpool/common \
-	-I../../../../../uts/common/fs/zfs
+	-I../../../../../uts/common/fs/zfs \
+	-I../../../../../common/zfs
 
-C99MODE=	-xc99=%all
-C99LMODE=	-Xc99=%all
+CSTD=	$(CSTD_GNU99)
 
-CERRWARN 	+= -_gcc=-Wno-type-limits
+CERRWARN	+= -_gcc=-Wno-type-limits
 
 dmod/%.o: $(GENUNIX_DIR)/%.c
 	$(COMPILE.c) -o $@ $<
 	$(CTFCONVERT_O)
-
-dmod/%.ln: $(GENUNIX_DIR)/%.c
-	$(LINT.c) -c $<

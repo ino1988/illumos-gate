@@ -34,13 +34,13 @@ OBJS =  cryptoadm.o \
 
 SRCS = $(OBJS:.o=.c)
 
-include ../../Makefile.cmd 
+include ../../Makefile.cmd
 
 POFILES = $(OBJS:%.o=%.po)
 POFILE = $(PROG)_all.po
 
 CFLAGS += $(CCVERBOSE)
-CERRWARN += -_gcc=-Wno-uninitialized
+CERRWARN += $(CNOWARN_UNINIT)
 CERRWARN += -_gcc=-Wno-parentheses
 
 LDLIBS += -lcryptoutil

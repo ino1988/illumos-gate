@@ -27,13 +27,7 @@
  * Use is subject to license terms.
  */
 
-#if defined(ELFOBJ)
-#pragma weak aintf = __aintf
-#pragma weak anintf = __anintf
-#pragma weak irintf = __irintf
-#pragma weak nintf = __nintf
-#pragma weak rintf = __rintf
-#endif
+#pragma weak __rintf = rintf
 
 /* INDENT OFF */
 /*
@@ -91,7 +85,7 @@ aintf(float x) {
 
 float
 anintf(float x) {
-	volatile float dummy;
+	volatile float dummy __unused;
 	int hx, k, j, ix;
 
 	hx = *(int *) &x;
@@ -128,7 +122,7 @@ irintf(float x) {
 int
 nintf(float x) {
 	int hx, ix, k, j, m;
-	volatile float dummy;
+	volatile float dummy __unused;
 
 	hx = *(int *) &x;
 	k = (hx & ~0x80000000) >> 23;

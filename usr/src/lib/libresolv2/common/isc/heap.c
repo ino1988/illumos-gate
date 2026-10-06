@@ -25,10 +25,6 @@
  *	ISBN 0-201-06673-4, chapter 11.
  */
 
-#if !defined(LINT) && !defined(CODECENTER)
-static const char rcsid[] = "$Id: heap.c,v 1.4 2006/03/09 23:57:56 marka Exp $";
-#endif /* not lint */
-
 #include "port_before.h"
 
 #include <stddef.h>
@@ -106,7 +102,7 @@ static void
 float_up(heap_context ctx, int i, void *elt) {
 	int p;
 
-	for ( p = heap_parent(i); 
+	for ( p = heap_parent(i);
 	      i > 1 && ctx->higher_priority(elt, ctx->heap[p]);
 	      i = p, p = heap_parent(i) ) {
 		ctx->heap[i] = ctx->heap[p];
@@ -154,7 +150,7 @@ heap_insert(heap_context ctx, void *elt) {
 	i = ++ctx->heap_size;
 	if (ctx->heap_size >= ctx->array_size && heap_resize(ctx) < 0)
 		return (-1);
-	
+
 	float_up(ctx, i, elt);
 
 	return (0);
@@ -191,7 +187,7 @@ heap_increased(heap_context ctx, int i) {
 		errno = EINVAL;
 		return (-1);
 	}
-	
+
 	float_up(ctx, i, ctx->heap[i]);
 
 	return (0);
@@ -203,7 +199,7 @@ heap_decreased(heap_context ctx, int i) {
 		errno = EINVAL;
 		return (-1);
 	}
-	
+
 	sink_down(ctx, i, ctx->heap[i]);
 
 	return (0);

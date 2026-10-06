@@ -31,6 +31,7 @@
  *    modifying and posting shared receive queues.
  */
 
+#include <sys/sysmacros.h>
 #include <sys/types.h>
 #include <sys/conf.h>
 #include <sys/ddi.h>
@@ -174,7 +175,7 @@ hermon_srq_alloc(hermon_state_t *state, hermon_srq_info_t *srqinfo,
 	 */
 	srq_wr_sz = max(sizes->srq_wr_sz + 1, HERMON_SRQ_MIN_SIZE);
 	log_srq_size = highbit(srq_wr_sz);
-	if ((srq_wr_sz & (srq_wr_sz - 1)) == 0) {
+	if (ISP2(srq_wr_sz)) {
 		log_srq_size = log_srq_size - 1;
 	}
 
@@ -412,7 +413,6 @@ hermon_srq_alloc(hermon_state_t *state, hermon_srq_info_t *srqinfo,
  */
 srqalloc_fail8:
 	hermon_wrid_wqhdr_destroy(srq->srq_wq_wqhdr);
-srqalloc_fail7:
 	if (hermon_mr_deregister(state, &mr, HERMON_MR_DEREG_ALL,
 	    HERMON_SLEEPFLAG_FOR_CONTEXT()) != DDI_SUCCESS) {
 		HERMON_WARNING(state, "failed to deregister SRQ memory");
@@ -431,7 +431,6 @@ srqalloc_fail2:
 	hermon_rsrc_free(state, &srqc);
 srqalloc_fail1:
 	hermon_pd_refcnt_dec(pd);
-srqalloc_fail:
 	return (status);
 }
 
@@ -623,7 +622,7 @@ hermon_srq_modify(hermon_state_t *state, hermon_srqhdl_t srq, uint_t size,
 	 */
 	size = max(size, HERMON_SRQ_MIN_SIZE);
 	log_srq_size = highbit(size);
-	if ((size & (size - 1)) == 0) {
+	if (ISP2(size)) {
 		log_srq_size = log_srq_size - 1;
 	}
 
@@ -974,7 +973,7 @@ hermon_srq_sgl_to_logwqesz(hermon_state_t *state, uint_t num_sgl,
 		 */
 		max_size = (HERMON_QP_WQE_MLX_SRQ_HDRS + (num_sgl << 4));
 		log2 = highbit(max_size);
-		if ((max_size & (max_size - 1)) == 0) {
+		if (ISP2(max_size)) {
 			log2 = log2 - 1;
 		}
 

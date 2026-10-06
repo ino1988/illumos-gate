@@ -14,6 +14,8 @@
  */
 /*
  * Copyright (c) 2013 Joyent, Inc.  All Rights reserved.
+ * Copyright 2020 OmniOS Community Edition (OmniOSce) Association.
+ * Copyright 2021 Oxide Computer Company
  */
 
 #include <limits.h>
@@ -23,14 +25,23 @@
 #include <dirent.h>
 #include <ctype.h>
 #include <string.h>
+#include <stddef.h>
 #include <sys/mkdev.h>
 
 #include "libproc.h"
 #include "Pcontrol.h"
+#include "proc_fd.h"
 
 /*
  * Pfdinfo.c - obtain open file information.
  */
+
+void
+Pinitfd(struct ps_prochandle *P)
+{
+	list_create(&P->fd_head, sizeof (fd_info_t),
+	    offsetof(fd_info_t, fd_list));
+}
 
 /*
  * Allocate an fd_info structure and stick it on the list.
@@ -41,20 +52,17 @@
 fd_info_t *
 Pfd2info(struct ps_prochandle *P, int fd)
 {
-	fd_info_t	*fip = list_next(&P->fd_head);
-	fd_info_t	*next;
-	int i;
+	fd_info_t	*fip, *next = NULL;
 
-	if (fip == NULL) {
-		list_link(&P->fd_head, NULL);
-		fip = list_next(&P->fd_head);
-	}
+	for (fip = list_head(&P->fd_head); fip != NULL;
+	    fip = list_next(&P->fd_head, fip)) {
+		if (fip->fd_info == NULL)
+			continue;
 
-	for (i = 0; i < P->num_fd; i++, fip = list_next(fip)) {
-		if (fip->fd_info.pr_fd == fd) {
+		if (fip->fd_info->pr_fd == fd) {
 			return (fip);
 		}
-		if (fip->fd_info.pr_fd < fd) {
+		if (fip->fd_info->pr_fd < fd) {
 			break;
 		}
 	}
@@ -63,10 +71,31 @@ Pfd2info(struct ps_prochandle *P, int fd)
 	if ((fip = calloc(1, sizeof (*fip))) == NULL)
 		return (NULL);
 
-	fip->fd_info.pr_fd = fd;
-	list_link(fip, next ? next : (void *)&(P->fd_head));
-	P->num_fd++;
+	list_insert_before(&P->fd_head, next, fip);
 	return (fip);
+}
+
+static int
+fdwalk_cb(const prfdinfo_t *info, void *arg)
+{
+	struct ps_prochandle *P = arg;
+	fd_info_t *fip;
+
+	fip = Pfd2info(P, info->pr_fd);
+	if (fip == NULL) {
+		errno = ENOMEM;
+		return (-1);
+	}
+
+	if (fip->fd_info == NULL)
+		fip->fd_info = proc_fdinfo_dup(info);
+
+	if (fip->fd_info == NULL) {
+		errno = ENOMEM;
+		return (-1);
+	}
+
+	return (0);
 }
 
 /*
@@ -81,73 +110,13 @@ load_fdinfo(struct ps_prochandle *P)
 	 * This is an edge case it isn't worth adding additional state to
 	 * to eliminate.
 	 */
-	if (P->num_fd > 0) {
+	if (!list_is_empty(&P->fd_head))
 		return;
-	}
 
-	if (P->state != PS_DEAD && P->state != PS_IDLE) {
-		char dir_name[PATH_MAX];
-		char path[PATH_MAX];
-		struct dirent *ent;
-		DIR	*dirp;
-		int	fd;
+	if (P->state == PS_DEAD || P->state == PS_IDLE)
+		return;
 
-		/*
-		 * Try to get the path information first.
-		 */
-		(void) snprintf(dir_name, sizeof (dir_name),
-		    "%s/%d/path", procfs_path, (int)P->pid);
-		dirp = opendir(dir_name);
-		if (dirp == NULL) {
-			return;
-		}
-		ent = NULL;
-		while ((ent = readdir(dirp)) != NULL) {
-			fd_info_t	*fip;
-			prfdinfo_t	*info;
-			int		len;
-			struct stat64	stat;
-
-			if (!isdigit(ent->d_name[0]))
-				continue;
-
-			fd = atoi(ent->d_name);
-
-			fip = Pfd2info(P, fd);
-			info = &fip->fd_info;
-			info->pr_fd = fd;
-
-			if (pr_fstat64(P, fd, &stat) == 0) {
-				info->pr_mode = stat.st_mode;
-				info->pr_uid = stat.st_uid;
-				info->pr_gid = stat.st_gid;
-				info->pr_major = major(stat.st_dev);
-				info->pr_minor = minor(stat.st_dev);
-				info->pr_rmajor = major(stat.st_rdev);
-				info->pr_rminor = minor(stat.st_rdev);
-				info->pr_size = stat.st_size;
-				info->pr_ino = stat.st_ino;
-			}
-
-			info->pr_fileflags = pr_fcntl(P, fd, F_GETXFL, 0);
-			info->pr_fdflags = pr_fcntl(P, fd, F_GETFD, 0);
-			info->pr_offset = pr_llseek(P, fd, 0, SEEK_CUR);
-
-			/* attempt to determine the path to it */
-			(void) snprintf(path, sizeof (path),
-			    "%s/%d/path/%d", procfs_path, (int)P->pid, fd);
-			len = readlink(path, info->pr_path,
-			    sizeof (info->pr_path) - 1);
-
-			if (len < 0) {
-				info->pr_path[0] = 0;
-			} else {
-				info->pr_path[len] = 0;
-			}
-		}
-		(void) closedir(dirp);
-
-	}
+	proc_fdwalk(P->pid, fdwalk_cb, P);
 }
 
 int
@@ -161,10 +130,9 @@ Pfdinfo_iter(struct ps_prochandle *P, proc_fdinfo_f *func, void *cd)
 
 	/* NB: We walk the list backwards. */
 
-	for (fip = list_prev(&P->fd_head);
-	    fip != (void *)&P->fd_head && fip != NULL;
-	    fip = list_prev(fip)) {
-		if ((rv = func(cd, &fip->fd_info)) != 0)
+	for (fip = list_tail(&P->fd_head); fip != NULL;
+	    fip = list_prev(&P->fd_head, fip)) {
+		if ((rv = func(cd, fip->fd_info)) != 0)
 			return (rv);
 	}
 	return (0);

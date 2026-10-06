@@ -23,6 +23,7 @@
 # Copyright 2007 Sun Microsystems, Inc.  All rights reserved.
 # Use is subject to license terms.
 #
+# Copyright (c) 2018, Joyent, Inc.
 
 PROG= captoinfo
 
@@ -31,14 +32,17 @@ SRCS= $(OBJS:%.o=%.c)
 
 include ../Makefile.cmd
 
-LDFLAGS +=	$(MAPFILE.INT:%=-M%)
+LDFLAGS +=	$(MAPFILE.INT:%=-Wl,-M%)
 LDLIBS +=	-lcurses
 CPPFLAGS +=	-I../../lib/libcurses/screen
 CERRWARN +=	-_gcc=-Wno-parentheses
 
+# code is a mess right now
+SMATCH=off
+
 .KEEP_STATE:
 
-all: $(PROG) 
+all: $(PROG)
 
 $(PROG): $(OBJS) $(MAPFILE.INT)
 	$(LINK.c) $(OBJS) -o $@ $(LDLIBS)
@@ -48,7 +52,5 @@ install: all $(ROOTPROG)
 
 clean:
 	$(RM) $(OBJS)
-
-lint: lint_SRCS
 
 include ../Makefile.targ

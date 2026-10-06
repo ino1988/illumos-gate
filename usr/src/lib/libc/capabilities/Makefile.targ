@@ -22,26 +22,27 @@
 #
 # Copyright (c) 2010, Oracle and/or its affiliates. All rights reserved.
 #
+# Copyright (c) 2019, Joyent, Inc.
+#
 
 $(SYMCAP):	$(OBJCAP)
 $(OBJCAP):	$(PICS)
 $(PICS):	pics
 
 # Assemble the original source file.
-
-pics/%.o:	../../$(TRG_PLATFORM)/common/%.s
+pics/%.o:	../../$(TRG_PLATFORM)/common/%.S
 		$(COMPILE.s) $< -o $@
-		$(POST_PROCESS_O)
+		$(POST_PROCESS_S_O)
 
-pics/%.o:	../../$(ALT_PLATFORM)/common/%.s
+pics/%.o:	../../$(ALT_PLATFORM)/common/%.S
 		$(COMPILE.s) $< -o $@
-		$(POST_PROCESS_O)
+		$(POST_PROCESS_S_O)
 
 # Combine all pic objects into one relocatable object.  Assign any capabilities
 # to this object, and define the interface.
 
 pics/objcap.o:	$(PICS) $(MAPFILE-CAP)
-		$(LD) -r -o $@ $(MAPOPT-CAP) -Breduce $(PICS)
+		$(LD) -r -o $@ $(MAPOPT-CAP) $(BREDUCE) $(PICS)
 		$(POST_PROCESS_OBJCAP_O)
 
 # Convert the combined object capabilities object into a symbol capabilities

@@ -21,6 +21,9 @@
 /*
  * Copyright 2009 Sun Microsystems, Inc.  All rights reserved.
  * Use is subject to license terms.
+ *
+ * Copyright 2022 Garrett D'Amore
+ * Copyright 2025 Oxide Computer Company
  */
 
 #ifndef	_SYS_SOFTMAC_IMPL_H
@@ -90,6 +93,7 @@ typedef struct softmac_dev_s {
 #define	SOFTMAC_NOSUPP		0x02
 #define	SOFTMAC_NEED_RECREATE	0x04
 #define	SOFTMAC_NOTIFY_QUIT	0x08
+#define	SOFTMAC_NOTIFY_DONE	0x10
 
 #define	SMAC_NONZERO_NODECNT(softmac)		\
 	((softmac->smac_softmac[0] != NULL) +	\
@@ -183,8 +187,6 @@ typedef struct softmac {
 	uint32_t	smac_capab_flags;
 	uint32_t	smac_hcksum_txflags;
 	boolean_t	smac_no_capability_req;
-	dl_capab_mdt_t	smac_mdt_capab;
-	boolean_t	smac_mdt;
 
 	/*
 	 * Lower stream structure, accessed by the MAC provider API. The GLDv3

@@ -21,9 +21,9 @@
 /*
  * Copyright 2007 Sun Microsystems, Inc.  All rights reserved.
  * Use is subject to license terms.
+ * Copyright (c) 2017 by Delphix. All rights reserved.
+ * Copyright 2024 MNX Cloud, Inc.
  */
-
-#pragma ident	"%Z%%M%	%I%	%E% SMI"
 
 #include <sys/param.h>
 #include <sys/t_lock.h>
@@ -94,7 +94,7 @@ pc_getnode(
 	pc_cluster32_t scluster;
 
 	ASSERT(fsp->pcfs_flags & PCFS_LOCKED);
-	if (ep == (struct pcdir *)0) {
+	if (ep == NULL) {
 		ep = &pcfs_rootdirentry;
 		scluster = 0;
 	} else {
@@ -140,8 +140,7 @@ pc_getnode(
 	 * Cannot find node in active list. Allocate memory for a new node
 	 * initialize it, and put it on the active list.
 	 */
-	pcp = kmem_alloc(sizeof (struct pcnode), KM_SLEEP);
-	bzero(pcp, sizeof (struct pcnode));
+	pcp = kmem_zalloc(sizeof (struct pcnode), KM_SLEEP);
 	vp = vn_alloc(KM_SLEEP);
 	pcp->pc_vn = vp;
 	pcp->pc_entry = *ep;
@@ -262,7 +261,7 @@ retry:
 	}
 	ASSERT(!vn_has_cached_data(vp));
 
-	vp->v_count--;  /* release our hold from vn_rele */
+	VN_RELE_LOCKED(vp);
 	if (vp->v_count > 0) { /* Is this check still needed? */
 		PC_DPRINTF1(3, "pc_rele: pcp=0x%p HELD AGAIN!\n", (void *)pcp);
 		mutex_exit(&vp->v_lock);
@@ -667,7 +666,7 @@ pc_mark_irrecov(struct pcfs *fsp)
 		    "an irrecoverable error was encountered.\n"
 		    "File damage is possible.  To prevent further\n"
 		    "damage, this pcfs instance will now be frozen.\n"
-		    "Use umount(1M) to release the instance.\n");
+		    "Use umount(8) to release the instance.\n");
 		(void) pc_unlockfs(fsp);
 	}
 }
@@ -771,7 +770,7 @@ pc_diskchanged(struct pcfs *fsp)
 	}
 #endif
 	if (!(vfsp->vfs_flag & VFS_UNMOUNTED) &&
-	    fsp->pcfs_fatp != (uchar_t *)0) {
+	    fsp->pcfs_fatp != NULL) {
 		pc_invalfat(fsp);
 	} else {
 		binval(fsp->pcfs_xdev);

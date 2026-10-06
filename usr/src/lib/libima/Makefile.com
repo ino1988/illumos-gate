@@ -22,7 +22,7 @@
 # Copyright 2009 Sun Microsystems, Inc.  All rights reserved.
 # Use is subject to license terms.
 #
-#
+# Copyright (c) 2018, Joyent, Inc.
 
 LIBRARY=	libima.a
 VERS=		.1
@@ -35,28 +35,23 @@ include ../../Makefile.lib
 IETCFILES=	$(CONFIGFILE:%=$(ROOTETC)/%)
 IETCFILES:=	FILEMODE= 644
 
-LIBS =		$(DYNLIB) $(LINTLIB)
+LIBS =		$(DYNLIB)
 LDLIBS +=	-lc
 
 CFLAGS +=	-mt
 CFLAGS +=	$(CCVERBOSE)
-CFLAGS +=	-xCC
-CFLAGS +=	-erroff=E_IMPLICIT_DECL_FUNC_RETURN_INT
 CFLAGS +=	-DSOLARIS
 
 CFLAGS64 +=       -mt
 CFLAGS64 +=       $(CCVERBOSE)
-CFLAGS64 +=       -xCC
-CFLAGS64 +=       -erroff=E_IMPLICIT_DECL_FUNC_RETURN_INT
 CFLAGS64 +=       -DSOLARIS
 
 CERRWARN +=	-_gcc=-Wno-unused-variable
 
-LINTFLAGS += -DSOLARIS
-LINTFLAGS64 += -DSOLARIS
+# not linted
+SMATCH=off
 
 SRCDIR =	../common
-$(LINTLIB) := SRCS=	$(SRCDIR)/$(LINTSRC)
 
 $(ROOTETC)/%:	../common/%
 	$(INS.file)
@@ -64,8 +59,5 @@ $(ROOTETC)/%:	../common/%
 .KEEP_STATE:
 
 all:	$(LIBS) $(IETCFILES)
-
-lint:
-	@echo "This section is not required to be lint clean"
 
 include ../../Makefile.targ

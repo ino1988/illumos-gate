@@ -3,8 +3,6 @@
  * Use is subject to license terms.
  */
 
-#pragma ident	"%Z%%M%	%I%	%E% SMI"
-
 /*
  * usr/src/cmd/cmd-inet/usr.bin/telnet/enc_des.c
  */
@@ -69,6 +67,9 @@
  */
 
 /* based on @(#)enc_des.c	8.1 (Berkeley) 6/4/93 */
+/*
+ * Copyright (c) 2016 by Delphix. All rights reserved.
+ */
 
 #include <krb5.h>
 #include <stdio.h>
@@ -123,7 +124,7 @@ ecb_encrypt(struct stinfo *stp, Block in, Block out)
 	/* this is a kerberos enctype, not a telopt enctype */
 	dout.enctype = ENCTYPE_UNKNOWN;
 
-	code = krb5_c_encrypt(telnet_context, &stp->str_key, NULL, NULL,
+	code = krb5_c_encrypt(telnet_context, &stp->str_key, 0, NULL,
 		&din, &dout);
 	if (code)
 		(void) fprintf(stderr, gettext(
@@ -170,7 +171,7 @@ cfb64_start(int dir)
 	case TELNET_DIR_DECRYPT:
 		/*
 		 * This is simply a request to have the other side
-		 * start output (our input).  He will negotiate an
+		 * start output (our input).  The other side will negotiate an
 		 * IV so we need not look for it.
 		 */
 		state = fbp->state[dir];

@@ -39,7 +39,7 @@ PROGS= $(PROG) $(RT) $(TS) $(IA) $(FSS) $(FX) $(SDC)
 include ../Makefile.cmd
 
 CFLAGS +=	$(CCVERBOSE)
-CERRWARN +=	-_gcc=-Wno-uninitialized
+CERRWARN +=	$(CNOWARN_UNINIT)
 
 ROOTDIR=	$(ROOT)/usr/lib/class
 ROOTDIRS=	$(ROOTDIR)	\
@@ -83,8 +83,8 @@ $(ROOTDIR)/TS/% : %
 	$(INS.file)
 
 .KEEP_STATE:
- 
-all: $(PROGS) 
+
+all: $(PROGS)
 
 $(PROGS): $$(OBJ) subr.o
 	$(LINK.c) -o $@ $(OBJ) subr.o $(LDLIBS)
@@ -106,7 +106,7 @@ check: $(CHKMANIFEST)
 
 clean:
 	$(RM) $(OBJECTS) $(PROGS) llib-lsubr.ln
- 
+
 lint:	llib-lsubr.ln
 	$(LINT.c) dispadmin.c $(LDLIBS)
 	$(LINT.c) fssdispadmin.c $(LDLIBS)
@@ -115,5 +115,5 @@ lint:	llib-lsubr.ln
 	$(LINT.c) rtdispadmin.c $(LDLIBS)
 	$(LINT.c) sdcdispadmin.c $(LDLIBS)
 	$(LINT.c) tsdispadmin.c $(LDLIBS)
- 
+
 include ../Makefile.targ

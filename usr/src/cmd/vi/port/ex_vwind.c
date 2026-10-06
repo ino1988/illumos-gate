@@ -206,7 +206,7 @@ vcontext(line *addr, unsigned char where)
 	case '^':
 		addr = vback(addr, basWLINES - vdepth());
 		getaline(*addr);
-		/* fall into ... */
+		/* FALLTHROUGH */
 
 	case '-':
 		top = vback(addr, basWLINES - vdepth());
@@ -494,7 +494,7 @@ vnline(unsigned char *curs)
 			if(wcursor - linebuf > j)
 				wcursor = owcursor;
 		}
-			
+
 	} else if (vmoving)
 		wcursor = vfindcol(vmovcol);
 	else

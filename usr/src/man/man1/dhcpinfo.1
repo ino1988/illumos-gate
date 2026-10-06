@@ -1,14 +1,14 @@
 '\" te
 .\"  Copyright (c) 1992-1996 Competitive Automation, Inc.
 .\" Copyright (c) 2009, Sun Microsystems, Inc. All Rights Reserved.
+.\" Copyright (c) 2020 Peter Tribble
 .\" The contents of this file are subject to the terms of the Common Development and Distribution License (the "License"). You may not use this file except in compliance with the License. You can obtain a copy of the license at usr/src/OPENSOLARIS.LICENSE or http://www.opensolaris.org/os/licensing.
 .\"  See the License for the specific language governing permissions and limitations under the License. When distributing Covered Code, include this CDDL HEADER in each file and include the License file at usr/src/OPENSOLARIS.LICENSE. If applicable, add the following below this CDDL HEADER, with the
 .\" fields enclosed by brackets "[]" replaced with your own identifying information: Portions Copyright [yyyy] [name of copyright owner]
-.TH DHCPINFO 1 "May 15, 2009"
+.TH DHCPINFO 1 "Feb 13, 2020"
 .SH NAME
 dhcpinfo \- display values of parameters received through DHCP
 .SH SYNOPSIS
-.LP
 .nf
 \fBdhcpinfo\fR [\fB-c\fR] [\fB-i\fR \fIinterface\fR] [\fB-n\fR \fIlimit\fR] [\fB-v 4|6\fR] \fIcode\fR
 .fi
@@ -19,39 +19,34 @@ dhcpinfo \- display values of parameters received through DHCP
 .fi
 
 .SH DESCRIPTION
-.sp
-.LP
 The \fBdhcpinfo\fR utility prints the \fBDHCP\fR-supplied value(s) of the
 parameter requested on the command line. The parameter can be identified either
 by its numeric code in the \fBDHCP\fR specification, or by its mnemonic
-identifier, as listed in \fBdhcp_inittab\fR(4). This command is intended to be
-used in command substitutions in the shell scripts invoked by \fBinit\fR(1M) at
-system boot. It first contacts the \fBDHCP\fR client daemon at system boot or
-in event scripts as described in \fBdhcpagent\fR(1M). It first contacts the
-DHCP client daemon \fBdhcpagent\fR(1M) to verify that \fBDHCP\fR has
+identifier, as listed in \fBdhcp_inittab\fR(5). This command is intended to be
+used in command substitutions in the shell scripts invoked at system boot or
+in event scripts as described in \fBdhcpagent\fR(8). It first contacts the
+DHCP client daemon \fBdhcpagent\fR(8) to verify that \fBDHCP\fR has
 successfully completed on the requested interface. If \fBDHCP\fR has
 successfully completed on the requested interface, \fBdhcpinfo\fR retrieves the
 values for the requested parameter. Parameter values echoed by \fBdhcpinfo\fR
 should not be used without checking its exit status. See \fBexit\fR(1).
 .sp
 .LP
-See \fBdhcp_inittab\fR(4) for the list of mnemonic identifier codes for all
+See \fBdhcp_inittab\fR(5) for the list of mnemonic identifier codes for all
 \fBDHCP\fR parameters. See \fIRFC 2132, DHCP Options and BOOTP Vendor
 Extensions\fR for more details on DHCPv4 parameters, and RFC 3315, Dynamic Host
 Configuration Protocol for IPv6 (DHCPv6), for more details on DHCPv6
 parameters.
 .SS "Output Format"
-.sp
-.LP
 The output from \fBdhcpinfo\fR consists of one or more lines of \fBASCII\fR
 text; the format of the output depends upon the requested parameter. The number
 of values returned per line and the total number of lines output for a given
 parameter are determined by the parameter's \fBgranularity\fR and \fBmaximum\fR
-values, respectively, as defined by \fBdhcp_inittab\fR(4).
+values, respectively, as defined by \fBdhcp_inittab\fR(5).
 .sp
 .LP
 The format of each individual value is determined by the data type of the
-option, as determined by \fBdhcp_inittab\fR(4). The possible data types and
+option, as determined by \fBdhcp_inittab\fR(5). The possible data types and
 their formats are listed below:
 .sp
 
@@ -59,7 +54,7 @@ their formats are listed below:
 .TS
 c c c
 l l l .
-Data Type	Format	\fBdhcp_inittab\fR(4) type
+Data Type	Format	\fBdhcp_inittab\fR(5) type
 Unsigned Number	One or more decimal digits	T{
 \fBUNUMBER8\fR, \fBUNUMBER16\fR, \fBUNUMBER32\fR, \fBUNUMBER64\fR
 T}
@@ -81,8 +76,6 @@ T}	\fBDOMAIN\fR
 .TE
 
 .SH OPTIONS
-.sp
-.LP
 The following options are supported:
 .sp
 .ne 2
@@ -104,13 +97,13 @@ Specifies the interface to retrieve values for \fBDHCP\fR parameters from. If
 this option is not specified, the primary interface is used.
 .sp
 If a primary interface has not been selected for the system by
-\fBifconfig\fR(1M) or for this command by \fB-i\fR, the system automatically
+\fBifconfig\fR(8) or for this command by \fB-i\fR, the system automatically
 selects an interface to consider as primary for the current command invocation.
 The selection chooses the interface whose name sorts lexically first, and that
 has DHCP parameters attached.  This selection does not affect system state. Use
-\fBifconfig\fR(1M) to set a primary interface.
+\fBifconfig\fR(8) to set a primary interface.
 .sp
-The recommended practice in the \fBdhcpagent\fR(1M) \fBeventhook\fR scripts is
+The recommended practice in the \fBdhcpagent\fR(8) \fBeventhook\fR scripts is
 to specify the desired interface with \fB-i\fR, rather than relying on primary
 selection.
 .sp
@@ -130,16 +123,14 @@ Limits the list of values displayed to \fIlimit\fR lines.
 .sp
 .ne 2
 .na
-\fB\fB-v\fR\fB4 | 6\fR\fR
+\fB\fB-v 4|6\fR\fR
 .ad
 .RS 16n
-Specifies the DHCP version to query. Use \fB-v4\fRfor DHCPv4 and \fB-v6\fR for
-DHCPv6.
+Specifies the DHCP version to query. Use \fB-v 4\fR for DHCPv4 and \fB-v 6\fR
+for DHCPv6.
 .RE
 
 .SH OPERANDS
-.sp
-.LP
 The following operands are supported:
 .sp
 .ne 2
@@ -159,12 +150,10 @@ the actual vendor code for DHCPv4, and \fB65536\fR for DHCPv6.
 .ad
 .RS 14n
 Mnemonic symbol for the requested \fBDHCP\fR parameter, as listed in
-\fBdhcp_inittab\fR(4).
+\fBdhcp_inittab\fR(5).
 .RE
 
 .SH EXIT STATUS
-.sp
-.LP
 The following exit values are returned:
 .sp
 .ne 2
@@ -214,9 +203,7 @@ System error (should never occur).
 .RE
 
 .SH ATTRIBUTES
-.sp
-.LP
-See \fBattributes\fR(5) for descriptions of the following attributes:
+See \fBattributes\fR(7) for descriptions of the following attributes:
 .sp
 
 .sp
@@ -230,10 +217,10 @@ Interface Stability	Committed
 .TE
 
 .SH SEE ALSO
-.sp
-.LP
-\fBdhcpagent\fR(1M), \fBifconfig\fR(1M), \fBinit\fR(1M), \fBdhcp_inittab\fR(4),
-\fBattributes\fR(5)
+.BR dhcp_inittab (5),
+.BR attributes (7),
+.BR dhcpagent (8),
+.BR ifconfig (8)
 .sp
 .LP
 Alexander, S., and R. Droms, \fIRFC 2132, DHCP Options and BOOTP Vendor

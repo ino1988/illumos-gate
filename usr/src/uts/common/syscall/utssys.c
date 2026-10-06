@@ -29,8 +29,6 @@
 /*	  All Rights Reserved	*/
 
 
-#pragma ident	"%Z%%M%	%I%	%E% SMI"
-
 #include <sys/param.h>
 #include <sys/inttypes.h>
 #include <sys/types.h>
@@ -370,7 +368,7 @@ dofusers(vnode_t *fvp, int flags)
 
 		/*
 		 * it's safe to drop p_lock here because we
-		 * called sprlock() before and it set the SPRLOCK
+		 * called sprlock() before and it set the P_PR_LOCK
 		 * flag for the process so it won't go away.
 		 */
 		mutex_exit(&prp->p_lock);
@@ -468,7 +466,7 @@ dofusers(vnode_t *fvp, int flags)
 		 */
 		if (nbmandonly && (!(use_flag & F_NBM))) {
 			/*
-			 * grab the process lock again, clear the SPRLOCK
+			 * grab the process lock again, clear the P_PR_LOCK
 			 * flag, release the process, and continue.
 			 */
 			mutex_enter(&prp->p_lock);
@@ -534,7 +532,7 @@ dofusers(vnode_t *fvp, int flags)
 			struct seg	*seg;
 			struct as	*as = prp->p_as;
 
-			AS_LOCK_ENTER(as, &as->a_lock, RW_READER);
+			AS_LOCK_ENTER(as, RW_READER);
 			for (seg = AS_SEGFIRST(as); seg;
 			    seg = AS_SEGNEXT(as, seg)) {
 				/*
@@ -598,7 +596,7 @@ dofusers(vnode_t *fvp, int flags)
 					break;
 				}
 			}
-			AS_LOCK_EXIT(as, &as->a_lock);
+			AS_LOCK_EXIT(as);
 		}
 
 		if (use_flag) {
@@ -610,7 +608,7 @@ dofusers(vnode_t *fvp, int flags)
 		}
 
 		/*
-		 * grab the process lock again, clear the SPRLOCK
+		 * grab the process lock again, clear the P_PR_LOCK
 		 * flag, release the process, and continue.
 		 */
 		mutex_enter(&prp->p_lock);

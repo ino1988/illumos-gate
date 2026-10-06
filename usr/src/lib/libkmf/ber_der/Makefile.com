@@ -21,6 +21,7 @@
 # Copyright 2008 Sun Microsystems, Inc.  All rights reserved.
 # Use is subject to license terms.
 #
+# Copyright (c) 2018, Joyent, Inc.
 
 LIBRARY= libkmfberder.a
 VERS= .1
@@ -37,24 +38,21 @@ include $(SRC)/lib/Makefile.rootfs
 SRCDIR=	../common
 INCDIR=	../inc
 
-LIBS=	$(DYNLIB) $(LINTLIB)
+LIBS=	$(DYNLIB)
 
-$(LINTLIB) := SRCS = $(SRCDIR)/$(LINTSRC)
 
-CFLAGS		+=	$(CCVERBOSE) -xCC
-CFLAGS64	+=	$(CCVERBOSE) -xCC
 CPPFLAGS	+=	-I$(ADJUNCT_PROTO)/usr/include/libxml2 \
 			-I$(INCDIR) -I../../include
 CPPFLAGS64	+=	-I$(ADJUNCT_PROTO)/usr/include/libxml2 \
 			-I$(INCDIR) -I../../include
 LDLIBS		+=	-lc
 
-CERRWARN	+=	-_gcc=-Wno-unused-label
+# not linted
+SMATCH=off
 
 .KEEP_STATE:
 
 all:    $(LIBS)
 
-lint:	lintcheck
 
 include $(SRC)/lib/Makefile.targ

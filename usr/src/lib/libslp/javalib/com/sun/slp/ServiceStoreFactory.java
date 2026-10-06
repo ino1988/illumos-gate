@@ -277,7 +277,7 @@ class ServiceStoreFactory extends Object {
 		url = new ServiceURL(surl, lifetime);
 
 		if (sType != null) {
-	
+
 		    // Check if it's OK for this service URL.
 
 		    ServiceType utype = url.getServiceType();
@@ -306,15 +306,15 @@ class ServiceStoreFactory extends Object {
 				ServiceLocationException.PARSE_ERROR,
 				"ssf_not_valid_lifetime",
 				new Object[] {
-			slifetime, new Integer(linecount)});
-	
+			slifetime, Integer.valueOf(linecount)});
+
 	    } catch (IllegalArgumentException ex) {
 		throw
 		    new ServiceLocationException(
 				ServiceLocationException.PARSE_ERROR,
 				"ssf_syntax_err",
 				new Object[] {
-			ex.getMessage(), new Integer(linecount)});
+			ex.getMessage(), Integer.valueOf(linecount)});
 
 	    }
 
@@ -398,14 +398,14 @@ class ServiceStoreFactory extends Object {
 		    // Validate, lower case scope names.
 
 		    DATable.validateScopes(scopes, locale);
-	
+
 		} catch (ServiceLocationException e) {
 		    e.makeAddendum(" (line " + scopeLinenum + ")");
 		    throw e;
 		}
 
 	    }
-	
+
 	    // We've got the attributes, the service URL, scope, and
 	    //  locale, so add a record. Note that any crypto is
 	    //  added when the registration is actually done.
@@ -439,7 +439,7 @@ class ServiceStoreFactory extends Object {
 	    Locale locale = rec.getLocale();
 	    Vector scopes = rec.getScopes();
 	    StringBuffer line = new StringBuffer();
-	
+
 	    // Compose the registration line.
 
 	    line.append(surl);

@@ -560,9 +560,10 @@ cu_cpc_init(cpu_t *cp, kcpc_request_list_t *reqs, int nreqs)
 		 * Nothing to measure for this hardware sharing relationship
 		 */
 		if (nevents - nevents_save == 0) {
-			if (cntr_info != NULL)
+			if (cntr_info != NULL) {
 				kmem_free(cntr_info, sizeof (cu_cntr_info_t));
 				cntr_info_array[pg_hw_type] = NULL;
+			}
 			continue;
 		}
 
@@ -692,7 +693,7 @@ cu_cpc_program(cpu_t *cp, int *err)
 	 *
 	 * Context is marked with KCPC_CTX_INVALID_STOPPED when context is
 	 * unprogrammed and may be marked with KCPC_CTX_INVALID when
-	 * kcpc_invalidate_all() is called by cpustat(1M) and dtrace CPC to
+	 * kcpc_invalidate_all() is called by cpustat(8) and dtrace CPC to
 	 * invalidate all CPC contexts before they take over all the counters.
 	 *
 	 * This isn't necessary since these flags are only used for thread bound
@@ -1257,7 +1258,7 @@ cu_cpu_fini(cpu_t *cp)
 			ctx = cpu_ctx->ctx_ptr_array[i];
 			if (ctx == NULL)
 				continue;
-			kcpc_free(ctx, 0);
+			kcpc_free_cpu(ctx);
 		}
 
 		/*
@@ -1297,7 +1298,7 @@ static void
 cu_cpu_kstat_create(pghw_t *pg, cu_cntr_info_t *cntr_info)
 {
 	kstat_t		*ks;
-	char 		*sharing = pghw_type_string(pg->pghw_hw);
+	char		*sharing = pghw_type_string(pg->pghw_hw);
 	char		name[KSTAT_STRLEN + 1];
 
 	/*
@@ -1416,7 +1417,7 @@ cu_cpu_run(cpu_t *cp, cu_cpu_func_t func, uintptr_t arg)
 	 * cpu_call() will call func on the CPU specified with given argument
 	 * and return func's return value in last argument
 	 */
-	cpu_call(cp, (cpu_call_func_t)func, arg, (uintptr_t)&error);
+	cpu_call(cp, (cpu_call_func_t)(uintptr_t)func, arg, (uintptr_t)&error);
 	return (error);
 }
 
@@ -1470,7 +1471,7 @@ cu_cpu_update(struct cpu *cp, boolean_t move_to)
 	 */
 	retval = 0;
 	if (move_to)
-		(void) cu_cpu_run(cp, (cu_cpu_func_t)kcpc_read,
+		(void) cu_cpu_run(cp, (cu_cpu_func_t)(uintptr_t)kcpc_read,
 		    (uintptr_t)cu_cpu_update_stats);
 	else {
 		retval = kcpc_read((kcpc_update_func_t)cu_cpu_update_stats);

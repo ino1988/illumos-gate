@@ -28,16 +28,10 @@
 #ifndef	_MODIFY_PARTITION_H
 #define	_MODIFY_PARTITION_H
 
-#pragma ident	"%Z%%M%	%I%	%E% SMI"
-
 #ifdef	__cplusplus
 extern "C" {
 #endif
 
-
-/*
- *	Prototypes for ANSI C compilers
- */
 int	p_modify(void);
 
 void	new_partitiontable(struct disk_type *tptr, struct  disk_type *oldtype);

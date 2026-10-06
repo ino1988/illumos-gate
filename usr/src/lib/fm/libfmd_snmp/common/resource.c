@@ -202,7 +202,7 @@ rsrcinfo_update_one(const fmd_adm_rsrcinfo_t *rsrcinfo, void *arg)
 
 	data->d_valid = valid_stamp;
 
-	DEBUGMSGTL((MODNAME_STR, "timestamp updated for %lu/%s@%p: %lu\n",
+	DEBUGMSGTL((MODNAME_STR, "timestamp updated for %lu/%s@%p: %d\n",
 	    data->d_index, data->d_ari_fmri, data, data->d_valid));
 
 	if ((update_ctx->uc_type & UCT_ALL) ||
@@ -265,9 +265,8 @@ rsrcinfo_update(sunFmResource_update_ctx_t *update_ctx)
 	return (SNMP_ERR_NOERROR);
 }
 
-/*ARGSUSED*/
-static void
-update_thread(void *arg)
+__NORETURN static void *
+update_thread(void *arg __unused)
 {
 	/*
 	 * The current rsrcinfo_update implementation offers minimal savings
@@ -354,8 +353,7 @@ sunFmResourceTable_init(void)
 		return (MIB_REGISTRATION_FAILED);
 	}
 
-	if ((err = pthread_create(NULL, NULL, (void *(*)(void *))update_thread,
-	    NULL)) != 0) {
+	if ((err = pthread_create(NULL, NULL, update_thread, NULL)) != 0) {
 		(void) snmp_log(LOG_ERR, MODNAME_STR ": error creating update "
 		    "thread: %s\n", strerror(err));
 		return (MIB_REGISTRATION_FAILED);
@@ -394,6 +392,7 @@ sunFmResourceTable_init(void)
 		snmp_free_varbind(table_info->indexes);
 		SNMP_FREE(table_info);
 		SNMP_FREE(handler);
+		return (MIB_REGISTRATION_FAILED);
 	}
 
 	if ((rsrc_fmri_avl = uu_avl_create(rsrc_fmri_avl_pool, NULL,
@@ -418,6 +417,7 @@ sunFmResourceTable_init(void)
 		SNMP_FREE(handler);
 		uu_avl_destroy(rsrc_fmri_avl);
 		uu_avl_pool_destroy(rsrc_fmri_avl_pool);
+		return (MIB_REGISTRATION_FAILED);
 	}
 
 	if ((rsrc_index_avl = uu_avl_create(rsrc_index_avl_pool, NULL,

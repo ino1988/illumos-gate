@@ -20,8 +20,8 @@
 #
 
 #
-# Copyright 2011 Nexenta Systems, Inc.  All rights reserved.
 # Copyright (c) 2008, 2010, Oracle and/or its affiliates. All rights reserved.
+# Copyright 2017 Nexenta Systems, Inc.  All rights reserved.
 #
 
 #
@@ -33,7 +33,7 @@ include $(SRC)/Makefile.master
 
 SUBDIRS_CATALOG=	smbutil mount umount share
 SUBDIRS=		$(SUBDIRS_CATALOG) chacl lsacl \
-			smbiod smbiod-svc svc test
+			smbiod smbiod-svc svc fksmbcl
 
 # for messaging catalog files
 #
@@ -45,14 +45,13 @@ all:=		TARGET= all
 install:=	TARGET= install
 clean:=		TARGET= clean
 clobber:=	TARGET= clobber
-lint:=		TARGET= lint
 catalog:=       TARGET= catalog
 
 .KEEP_STATE:
 
 .PARALLEL:	$(SUBDIRS)
 
-all install clean clobber lint: $(SUBDIRS)
+all install clean clobber: $(SUBDIRS)
 
 catalog: $(SUBDIRS_CATALOG)
 	$(RM) $(POFILE)

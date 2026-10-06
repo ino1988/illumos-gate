@@ -22,6 +22,7 @@
 # Copyright 2006 Sun Microsystems, Inc.  All rights reserved.
 # Use is subject to license terms.
 #
+# Copyright (c) 2018, Joyent, Inc.
 
 LIBRARY =	libslp.a
 VERS =		.1
@@ -35,9 +36,8 @@ OBJECTS =	SLPFindAttrs.o SLPFindSrvTypes.o SLPFindSrvs.o SLPOpen.o \
 
 include ../../Makefile.lib
 
-LIBS =		$(DYNLIB) $(LINTLIB)
+LIBS =		$(DYNLIB)
 LDLIBS +=	-lc -lnsl -lsocket
-$(LINTLIB):=	SRCS = $(SRCDIR)/$(LINTSRC)
 
 SRCDIR =	../clib
 
@@ -45,13 +45,15 @@ CFLAGS +=	$(CCVERBOSE)
 CPPFLAGS +=	-D_REENTRANT -I../clib -I$(JAVA_ROOT)/include \
 		-I$(JAVA_ROOT)/include/solaris
 
-CERRWARN +=	-_gcc=-Wno-uninitialized
+CERRWARN +=	$(CNOWARN_UNINIT)
 CERRWARN +=	-_gcc=-Wno-parentheses
+
+# not linted
+SMATCH=off
 
 .KEEP_STATE:
 
 all:
 
-lint: lintcheck
 
 include ../../Makefile.targ

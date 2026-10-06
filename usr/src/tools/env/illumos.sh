@@ -19,48 +19,149 @@
 # CDDL HEADER END
 #
 # Copyright (c) 2005, 2010, Oracle and/or its affiliates. All rights reserved.
-# Copyright 2010, 2011 Nexenta Systems, Inc.  All rights reserved.
 # Copyright 2012 Joshua M. Clulow <josh@sysmgr.org>
+# Copyright 2015 Nexenta Systems, Inc.  All rights reserved.
+# Copyright 2015, OmniTI Computer Consulting, Inc. All rights reserved.
+# Copyright 2016 RackTop Systems.
+# Copyright 2019 OmniOS Community Edition (OmniOSce) Association.
+# Copyright 2020 Joyent, Inc.
+# Copyright 2024 Bill Sommerfeld <sommerfeld@hamachi.org>
 #
+# - This file is sourced by "bldenv" and "nightly" and should not
+#   be executed directly.
+# - This script is only interpreted by ksh93 and explicitly allows the
+#   use of ksh93 language extensions.
 
-# Configuration variables for the runtime environment of the nightly
-# build script and other tools for construction and packaging of
-# releases.
-# This example is suitable for building an illumos workspace, which
-# will contain the resulting archives. It is based off the onnv
-# release. It sets NIGHTLY_OPTIONS to make nightly do:
+
+# -----------------------------------------------------------------------------
+# Parameters you are likely to want to change
+# -----------------------------------------------------------------------------
+
 #       DEBUG build only (-D, -F)
 #       do not bringover from the parent (-n)
 #       runs 'make check' (-C)
 #       checks for new interfaces in libraries (-A)
-#       runs lint in usr/src (-l plus the LINTDIRS variable)
 #       sends mail on completion (-m and the MAILTO variable)
 #       creates packages for PIT/RE (-p)
 #       checks for changes in ELF runpaths (-r)
 #       build and use this workspace's tools in $SRC/tools (-t)
-#
-# - This file is sourced by "bldenv.sh" and "nightly.sh" and should not 
-#   be executed directly.
-# - This script is only interpreted by ksh93 and explicitly allows the
-#   use of ksh93 language extensions.
-#
-export NIGHTLY_OPTIONS='-FnCDAlmprt'
+export NIGHTLY_OPTIONS='-FnCDAmprt'
 
-#
-# -- PLEASE READ THIS --
-#
-# The variables  GATE and CODEMGR_WS must always be customised to
-# match your workspace/gate location!!
-#
-# -- PLEASE READ THIS --
-#
+# Some scripts optionally send mail messages to MAILTO.
+#export MAILTO=
 
-# This is a variable for the rest of the script - GATE doesn't matter to
-# nightly itself
-export GATE='testws'
+# CODEMGR_WS - where is your workspace at
+export CODEMGR_WS="${CODEMGR_WS:-`git rev-parse --show-toplevel`}"
 
-# CODEMGR_WS - where is your workspace at (or what should nightly name it)
-export CODEMGR_WS="$HOME/ws/$GATE"
+# Compilers may be specified using the following variables:
+# PRIMARY_CC	- primary C compiler
+# PRIMARY_CCC	- primary C++ compiler
+#
+# SHADOW_CCS    - list of shadow C compilers
+# SHADOW_CCCS	- list of shadow C++ compilers
+#
+# Each entry has the form <name>,<path to binary>,<style> where name is a
+# free-form name (possibly used in the makefiles to guard options), path is
+# the path to the executable.  style is the 'style' of command line taken by
+# the compiler, currently either gnu (or gcc) or sun (or cc), which is also
+# used by Makefiles to guard options.
+#
+# for example:
+# export PRIMARY_CC=gcc10,/opt/gcc-10/bin/gcc,gnu
+# export PRIMARY_CCC=gcc10,/opt/gcc-10/bin/g++,gnu
+# export SHADOW_CCS=studio12,/opt/SUNWspro/bin/cc,sun
+# export SHADOW_CCCS=studio12,/opt/SUNWspro/bin/CC,sun
+#
+# There can be several space-separated entries in SHADOW_* to run multiple
+# shadow compilers.
+#
+# To disable shadow compilation, unset SHADOW_* or set them to the empty string.
+#
+export GNUC_ROOT=/usr/gcc/10
+export PRIMARY_CC=gcc10,$GNUC_ROOT/bin/gcc,gnu
+export PRIMARY_CCC=gcc10,$GNUC_ROOT/bin/g++,gnu
+export SHADOW_CCS=gcc14,/usr/gcc/14/bin/gcc,gnu
+export SHADOW_CCCS=gcc14,/usr/gcc/14/bin/g++,gnu
+
+# comment to disable smatch
+export ENABLE_SMATCH=1
+
+# Comment this out to disable support for SMB printing, i.e. if you
+# don't want to bother providing the CUPS headers this needs.
+export ENABLE_SMB_PRINTING=
+
+# If your distro uses certain versions of Perl, make sure either Makefile.master
+# contains your new defaults OR your .env file sets them.
+# These are how you would override for building on OmniOS r151028, for example.
+#export PERL_VERSION=5.28
+#export PERL_VARIANT=-thread-multi
+#export PERL_PKGVERS=
+
+# To disable building of the 32-bit or 64-bit perl modules (or both),
+# uncomment these lines:
+#export BUILDPERL32='#'
+#export BUILDPERL64='#'
+
+# If your distro uses certain versions of Python, make sure either
+# Makefile.master contains your new defaults OR your .env file sets them.
+#export PYTHON3_VERSION=3.9
+#export PYTHON3_PKGVERS=-39
+#export PYTHON3_SUFFIX=
+
+# Set console color scheme either by build type:
+#
+#export RELEASE_CONSOLE_COLOR="-DDEFAULT_ANSI_FOREGROUND=ANSI_COLOR_BLACK \
+#	-DDEFAULT_ANSI_BACKGROUND=ANSI_COLOR_WHITE"
+#
+#export DEBUG_CONSOLE_COLOR="-DDEFAULT_ANSI_FOREGROUND=ANSI_COLOR_RED \
+#	-DDEFAULT_ANSI_BACKGROUND=ANSI_COLOR_WHITE"
+#
+# or just one for any build type:
+#
+#export DEFAULT_CONSOLE_COLOR="-DDEFAULT_ANSI_FOREGROUND=ANSI_COLOR_BLACK \
+#	-DDEFAULT_ANSI_BACKGROUND=ANSI_COLOR_WHITE"
+
+# Set if your distribution has different package versioning
+#export PKGVERS_BRANCH=2018.0.0.17900
+
+# Skip Java 11 builds on distributions that don't support it
+#export BLD_JAVA_11=
+
+# POST_NIGHTLY can be any command to be run at the end of nightly.  See
+# nightly(1) for interactions between environment variables and this command.
+#POST_NIGHTLY=
+
+# Populates /etc/versions/build on each nightly run
+export BUILDVERSION_EXEC="git describe --all --long --dirty"
+
+# -----------------------------------------------------------------------------
+# When the 'n' option is not present in NIGHTLY_OPTIONS, nightly updates
+# the build workspace from the sources identified by the following
+# variables.  Defaults are set in nightly if the environment file
+# leaves them unset.
+# -----------------------------------------------------------------------------
+
+# SCM in use.  Defaults to "git"; others are undertested.
+#export BRINGOVER_SCM="git"
+
+# URL or pathname to source workspace.
+#export BRINGOVER_WS="${CLONE_WS}"
+
+# Branch within BRINGOVER_WS; must be specified if BRINGOVER_WS is a URL
+#export BRINGOVER_BRANCH=""
+
+# Short name to use within CODEMGR_WS for BRINGOVER_WS.
+# This is git-specific.
+#export BRINGOVER_REMOTE=nightly_bringover_ws
+
+# Command-line options to add to the clone operation that creates a new
+# workspace.   If git is in use, adding "--reference /path/to/local/illumos-gate"
+# can speed up clones and make them use less disk space.
+#export CLONE_OPTIONS=""
+
+# -----------------------------------------------------------------------------
+# You are less likely to need to modify parameters below.
+# -----------------------------------------------------------------------------
 
 # Maximum number of dmake jobs.  The recommended number is 2 + NCPUS,
 # where NCPUS is the number of logical CPUs on your build system.
@@ -72,7 +173,7 @@ function maxjobs
 
 	ncpu=$(builtin getconf ; getconf 'NPROCESSORS_ONLN')
 	(( maxjobs=ncpu + 2 ))
-	
+
 	# Throttle number of parallel jobs launched by dmake to a value which
 	# gurantees that all jobs have enough memory. This was added to avoid
 	# excessive paging/swapping in cases of virtual machine installations
@@ -87,7 +188,7 @@ function maxjobs
 		# the value matched by ([[:digit:]]+), i.e. the amount of
 		# memory installed
 		physical_memory="10#${.sh.match[1]}"
-		
+
 		((
 			max_jobs_per_memory=round(physical_memory/min_mem_per_job) ,
 			maxjobs=fmax(2, fmin(maxjobs, max_jobs_per_memory))
@@ -106,25 +207,23 @@ ONBLD_BIN='/opt/onbld/bin'
 # PARENT_WS is used to determine the parent of this workspace. This is
 # for the options that deal with the parent workspace (such as where the
 # proto area will go).
-export PARENT_WS=''
+export PARENT_WS="${PARENT_WS:-}"
 
 # CLONE_WS is the workspace nightly should do a bringover from.
-export CLONE_WS='ssh://anonhg@hg.illumos.org/illumos-gate'
-
 # The bringover, if any, is done as STAFFER.
+export CLONE_WS="${CLONE_WS:-}"
+
 # Set STAFFER to your own login as gatekeeper or developer
 # The point is to use group "staff" and avoid referencing the parent
 # workspace as root.
-# Some scripts optionally send mail messages to MAILTO.
-#
 export STAFFER="$LOGNAME"
-export MAILTO="$STAFFER"
+export MAILTO="${MAILTO:-$STAFFER}"
 
 # If you wish the mail messages to be From: an arbitrary address, export
 # MAILFROM.
 #export MAILFROM="user@example.com"
 
-# The project (see project(4)) under which to run this build.  If not
+# The project (see project(5)) under which to run this build.  If not
 # specified, the build is simply run in a new task in the current project.
 export BUILD_PROJECT=''
 
@@ -134,13 +233,11 @@ export LOGFILE="$ATLOG/nightly.log"
 export MACH="$(uname -p)"
 
 #
-#  The following two macros are the closed/crypto binaries.  Once
-#  Illumos has totally freed itself, we can remove these references.
+#  The following macro points to the closed binaries.  Once illumos has
+#  totally freed itself, we can remove this reference.
 #
 # Location of encumbered binaries.
-export ON_CLOSED_BINS="$CODEMGR_WS/closed"
-# Location of signed cryptographic binaries.
-export ON_CRYPTO_BINS="$CODEMGR_WS/on-crypto.$MACH.tar.bz2"
+export ON_CLOSED_BINS="/opt/onbld/closed"
 
 # REF_PROTO_LIST - for comparing the list of stuff in your proto area
 # with. Generally this should be left alone, since you want to see differences
@@ -159,7 +256,7 @@ export MULTI_PROTO="no"
 # when the release slips (nah) or you move an environment file to a new
 # release
 #
-export VERSION="$GATE"
+#export VERSION="${VERSION:-`git describe --long --all HEAD | cut -d/ -f2-`}"
 
 #
 # the RELEASE and RELEASE_DATE variables are set in Makefile.master;
@@ -187,45 +284,27 @@ export PKGARCHIVE="${CODEMGR_WS}/packages/${MACH}/nightly"
 # export PKGPUBLISHER_REDIST='on-redist'
 
 # Package manifest format version.
-export PKGFMT_OUTPUT='v1'
+export PKGFMT_OUTPUT='v2'
 
-# we want make to do as much as it can, just in case there's more than
+# We want make to do as much as it can, just in case there's more than
 # one problem.
-export MAKEFLAGS='k'
-
-# Magic variable to prevent the devpro compilers/teamware from sending
-# mail back to devpro on every use.
-export UT_NO_USAGE_TRACKING='1'
+# We also must set e in MAKEFLAGS as the makefiles depend on importing
+# the environment variables set here.
+export MAKEFLAGS='ke'
 
 # Build tools - don't change these unless you know what you're doing.  These
-# variables allows you to get the compilers and onbld files locally or
-# through cachefs.  Set BUILD_TOOLS to pull everything from one location.
+# variables allows you to get the compilers and onbld files locally.
+# Set BUILD_TOOLS to pull everything from one location.
 # Alternately, you can set ONBLD_TOOLS to where you keep the contents of
-# SUNWonbld and SPRO_ROOT to where you keep the compilers.  SPRO_VROOT
-# exists to make it easier to test new versions of the compiler.
+# SUNWonbld.
 export BUILD_TOOLS='/opt'
 #export ONBLD_TOOLS='/opt/onbld'
-export SPRO_ROOT='/opt/SUNWspro'
-export SPRO_VROOT="$SPRO_ROOT"
-
-# This goes along with lint - it is a series of the form "A [y|n]" which
-# means "go to directory A and run 'make lint'" Then mail me (y) the
-# difference in the lint output. 'y' should only be used if the area you're
-# linting is actually lint clean or you'll get lots of mail.
-# You shouldn't need to change this though.
-#export LINTDIRS="$SRC y"
-
-# Set this flag to 'n' to disable the automatic validation of the dmake
-# version in use.  The default is to check it.
-#CHECK_DMAKE='y'
 
 # Set this flag to 'n' to disable the use of 'checkpaths'.  The default,
 # if the 'N' option is not specified, is to run this test.
 #CHECK_PATHS='y'
 
-# POST_NIGHTLY can be any command to be run at the end of nightly.  See
-# nightly(1) for interactions between environment variables and this command.
-#POST_NIGHTLY=
-
-# Uncomment this to disable support for SMB printing.
-# export ENABLE_SMB_PRINTING='#'
+if [[ "$ENABLE_SMATCH" == "1" ]]; then
+	SMATCHBIN=$CODEMGR_WS/usr/src/tools/proto/root_$MACH-nd/opt/onbld/bin/$MACH/smatch
+	export SHADOW_CCS="$SHADOW_CCS smatch,$SMATCHBIN,smatch"
+fi

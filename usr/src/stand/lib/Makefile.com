@@ -31,11 +31,10 @@ include $(SRC)/lib/Makefile.lib
 include $(SRC)/stand/lib/Makefile.$(MACH)
 
 SRCDIR =	.
-LIBS +=		$(LIBRARY) $(LINTLIB)
+LIBS +=		$(LIBRARY)
 CFLAGS +=	$(CCVERBOSE)
 LDFLAGS =	-r
-LDLIBS +=	-lsa -lfakeboot
-$(LINTLIB) :=	SRCS = $(SRCDIR)/$(LINTSRC)
+LDLIBS +=	-lsa
 
 #
 # Reset ROOTLIBDIR to an alternate directory so that we don't clash with
@@ -72,30 +71,15 @@ CMNDIR =	.
 # the proto area since those headers match libc's implementation, and
 # libc is of course not available to standalone binaries.
 #
-CPPDEFS	= 	-D$(KARCH) -D_BOOT -D_KERNEL -D_MACHDEP
-CPPINCS	= 	-YI,$(STANDDIR)/lib/sa -I$(STANDDIR)/lib/sa \
+CPPDEFS	=	-D$(KARCH) -D_BOOT -D_KERNEL -D_MACHDEP
+CPPINCS	=	-YI,$(STANDDIR)/lib/sa -I$(STANDDIR)/lib/sa \
 		-I$(STANDDIR) -I$(SRCDIR) -I$(CMNDIR) \
 		-I$(STANDDIR)/$(MACH) -I$(SYSDIR)/common $(ARCHDIRS) \
 		-I$(SYSDIR)/sun4 -I$(SYSDIR)/$(KARCH)
 
 CPPFLAGS =	$(CPPDEFS) $(CPPINCS)
 AS_CPPFLAGS =	$(CPPDEFS) $(CPPINCS:-YI,%=-I%)
-ASFLAGS =	-P -D__STDC__ -D_ASM
-
-#
-# While things are pretty much 32-bit lint-clean, there are a ton of
-# suspect pointer casts.  Since these may be serious problems (especially
-# on SPARC), this really needs to be investigated thoroughly one day.
-# However, we shouldn't feel too bad: the whole kernel is linted with this
-# turned off as well (along with a dozen other disabled warnings).
-#
-# The other two -erroff's are needed only because lint's -u flag is lame
-# and also turns off "name used but not defined" checks (so we instead
-# just enumerate the errors that -u turns off that we want turned off).
-#
-LINTFLAGS = -nmsF -erroff=E_BAD_PTR_CAST_ALIGN \
-	    -erroff=E_NAME_DECL_NOT_USED_DEF2 -erroff=E_NAME_DEF_NOT_USED2 \
-	    -erroff=E_STATIC_UNUSED
+ASFLAGS =	-D__STDC__ -D_ASM
 
 #
 # CPPFLAGS values that *must* be included whenever linking with or
@@ -137,5 +121,11 @@ DHCPCPPFLAGS = -I$(CMNNETDIR)/dhcp
 # is shameful.
 #
 SOCKCPPFLAGS = -I$(STANDDIR)/lib/sock -D_SYS_STREAM_H
+
+#
+# Using Makefile.lib pulls in the stack protector. Explicitly disable it
+# as it is not initialized or supported in this environment currently.
+#
+STACKPROTECT = none
 
 .KEEP_STATE:

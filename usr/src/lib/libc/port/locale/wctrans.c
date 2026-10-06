@@ -27,7 +27,7 @@
  */
 
 #include "lint.h"
-#include <note.h>
+#include "thr_uberdata.h"
 #include <errno.h>
 #include <string.h>
 #include <wctype.h>
@@ -61,7 +61,7 @@ towctrans_l(wint_t wc, wctrans_t desc, locale_t loc)
 wint_t
 towctrans(wint_t wc, wctrans_t desc)
 {
-	return (towctrans_l(wc, desc, uselocale(NULL)));
+	return (towctrans_l(wc, desc, __curlocale()));
 }
 
 /*
@@ -69,7 +69,7 @@ towctrans(wint_t wc, wctrans_t desc)
  * and tolower.
  */
 wctrans_t
-wctrans_l(const char *charclass, locale_t loc)
+wctrans_l(const char *charclass, locale_t loc __unused)
 {
 	struct {
 		const char	*name;
@@ -80,7 +80,6 @@ wctrans_l(const char *charclass, locale_t loc)
 		{ NULL,		_WCT_ERROR },		/* Default */
 	};
 	int i;
-	_NOTE(ARGUNUSED(loc));
 
 	i = 0;
 	while (ccls[i].name != NULL && strcmp(ccls[i].name, charclass) != 0)
@@ -94,5 +93,5 @@ wctrans_l(const char *charclass, locale_t loc)
 wctrans_t
 wctrans(const char *charclass)
 {
-	return (wctrans_l(charclass, uselocale(NULL)));
+	return (wctrans_l(charclass, __curlocale()));
 }

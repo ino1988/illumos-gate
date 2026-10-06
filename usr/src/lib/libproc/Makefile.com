@@ -23,11 +23,15 @@
 # Copyright 2012 DEY Storage Systems, Inc.  All rights reserved.
 # Copyright (c) 2013 by Delphix. All rights reserved.
 #
+# Copyright (c) 2018, Joyent, Inc.
+# Copyright 2020 OmniOS Community Edition (OmniOSce) Association.
 
 LIBRARY = libproc.a
 VERS = .1
 
 CMNOBJS =	\
+	core_shstrtab.o	\
+	list.o		\
 	P32ton.o	\
 	Pcontrol.o	\
 	Pcore.o		\
@@ -69,6 +73,7 @@ CMNOBJS =	\
 	proc_get_info.o	\
 	proc_names.o	\
 	proc_arg.o	\
+	proc_fd.o	\
 	proc_set.o	\
 	proc_stdio.o
 
@@ -83,21 +88,22 @@ include ../../Makefile.rootfs
 
 SRCS =		$(CMNOBJS:%.o=../common/%.c) $(ISAOBJS:%.o=%.c)
 
-LIBS =		$(DYNLIB) $(LINTLIB)
+LIBS =		$(DYNLIB)
 LDLIBS +=	-lrtld_db -lelf -lctf -lc
-C99MODE =	$(C99_ENABLE)
-CPPFLAGS +=	$($(MACH64)_CPPFLAGS)
+CSTD =	$(CSTD_GNU99)
+CPPFLAGS +=	$($(MACH64)_CPPFLAGS) -I$(SRC)/common/core
 
 SRCDIR =	../common
-$(LINTLIB) :=	SRCS = $(SRCDIR)/$(LINTSRC)
 
 CFLAGS +=	$(CCVERBOSE)
 CPPFLAGS +=	-I$(SRCDIR)
 
-CERRWARN +=	-_gcc=-Wno-uninitialized
+CERRWARN +=	$(CNOWARN_UNINIT)
 CERRWARN +=	-_gcc=-Wno-parentheses
 CERRWARN +=	-_gcc=-Wno-type-limits
-CERRWARN +=	-_gcc=-Wno-unused-label
+
+# not linted
+SMATCH=off
 
 # All interfaces are interposable, therefore don't allow direct binding to
 # libproc.  Disable libproc from directly binding to itself, but allow libperl
@@ -110,8 +116,6 @@ DYNFLAGS +=	$(BNODIRECT) $(ZDIRECT) $(ZLAZYLOAD)
 
 all: $(LIBS)
 
-lint: lintcheck
-
 # include library targets
 include ../../Makefile.targ
 
@@ -119,6 +123,10 @@ objs/%.o pics/%.o: %.c
 	$(COMPILE.c) -o $@ $<
 	$(POST_PROCESS_O)
 
-objs/%.o pics/%.o: $(SRC)/common/saveargs/%.c
+objs/%.o pics/%.o: $(SRC)/common/list/%.c
+	$(COMPILE.c) -o $@ $<
+	$(POST_PROCESS_O)
+
+objs/%.o pics/%.o: $(SRC)/common/core/%.c
 	$(COMPILE.c) -o $@ $<
 	$(POST_PROCESS_O)

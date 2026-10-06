@@ -1,3 +1,4 @@
+// Copyright 2012 Nexenta Systems, Inc.  All rights reserved.
 // Copyright (C) 2002 Microsoft Corporation
 // All rights reserved.
 //
@@ -34,11 +35,10 @@
 // the array below, that a mechanism can be found.
 //
 
-#pragma error_messages (off,E_INITIALIZATION_TYPE_MISMATCH)
 MECH_OID g_stcMechOIDList [] =
 {
         {(unsigned char *)"\x06\x09\x2a\x86\x48\x82\xf7\x12\x01\x02\x02",
-         11,  9, spnego_mech_oid_Kerberos_V5_Legacy},	// 1.2.840.48018.1.2.2 
+         11,  9, spnego_mech_oid_Kerberos_V5_Legacy},	// 1.2.840.48018.1.2.2
 	{(unsigned char *)"\x06\x09\x2a\x86\x48\x86\xf7\x12\x01\x02\x02",
          11,  9, spnego_mech_oid_Kerberos_V5}, // 1.2.840.113554.1.2.2
 	{(unsigned char *)"\x06\x06\x2b\x06\x01\x05\x05\x02",
@@ -48,7 +48,6 @@ MECH_OID g_stcMechOIDList [] =
 	{(unsigned char *)"", 0,  0, spnego_mech_oid_NotUsed  // Placeholder
         }
 };
-#pragma error_messages (default,E_INITIALIZATION_TYPE_MISMATCH)
 
 /////////////////////////////////////////////////////////////////////////////
 //
@@ -184,7 +183,7 @@ int ASNDerGetLength( unsigned char* pbLengthData, long nBoundaryLength, long* pn
 //    [in]  nLengthWithToken  -  Expected token length (with data)
 //    [in]  nBoundaryLength   -  Length that value must not exceed.
 //    [out] pnLength          -  Filled out with data length
-//    [out] pnTokenLength     -  Filled out with number of bytes 
+//    [out] pnTokenLength     -  Filled out with number of bytes
 //                               consumed by token identifier and length.
 //
 // Returns:
@@ -257,7 +256,7 @@ int ASNDerCheckToken( unsigned char* pbTokenData, unsigned char nToken,
          nReturn = SPNEGO_E_TOKEN_NOT_FOUND;
       }
 
-   }  // IF Boundary Length is at least 2 bytes 
+   }  // IF Boundary Length is at least 2 bytes
 
    return nReturn;
 }
@@ -290,7 +289,7 @@ int ASNDerCheckOID( unsigned char* pbTokenData, SPNEGO_MECH_OID nMechOID, long n
    long  nLength = 0L;
 
    // Verify that we have an OID token
-   if ( ( nReturn = ASNDerCheckToken( pbTokenData, OID, 0L, nBoundaryLength, 
+   if ( ( nReturn = ASNDerCheckToken( pbTokenData, OID, 0L, nBoundaryLength,
                                        &nLength, pnTokenLength ) ) == SPNEGO_E_SUCCESS )
    {
       // Add the data length to the Token Length
@@ -451,29 +450,37 @@ long ASNDerCalcElementLength( long nDataLength, long* pnInternalLength )
 // Comments :
 //    Helper function to calculate a MechList length.  A mechlist consists
 //    of a NegTokenInit sequence token, a sequence token for the MechList
-//    and finally a list of OIDs.  In our case, we only really have one
-//    OID.
+//    and finally a list of OIDs.
 //
 ////////////////////////////////////////////////////////////////////////////
 
-long ASNDerCalcMechListLength( SPNEGO_MECH_OID mechoid, long* pnInternalLength )
+long ASNDerCalcMechListLength( SPNEGO_MECH_OID *mechOidLst, int mechOidCnt,
+   long* pnInternalLength )
 {
-   // First the OID
-   long  nTotalLength = g_stcMechOIDList[mechoid].iLen;
+	// First the OID
+	SPNEGO_MECH_OID oid_idx;
+	long  nTotalLength;
+	int i;
 
-   // Next add in a sequence token
-   nTotalLength += ASNDerCalcTokenLength( nTotalLength, 0L );
+	nTotalLength = 0;
+	for (i = 0; i < mechOidCnt; i++) {
+		oid_idx = mechOidLst[i];
+		nTotalLength += g_stcMechOIDList[oid_idx].iLen;
+	}
 
-   // Internal length is the length without the element sequence token
-   if ( NULL != pnInternalLength )
-   {
-      *pnInternalLength = nTotalLength;
-   }
+	// Next add in a sequence token
+	nTotalLength += ASNDerCalcTokenLength( nTotalLength, 0L );
 
-   // Finally add in the element's sequence token
-   nTotalLength += ASNDerCalcTokenLength( nTotalLength, 0L );
+	// Internal length is the length without the element sequence token
+	if ( NULL != pnInternalLength )
+	{
+		*pnInternalLength = nTotalLength;
+	}
 
-   return nTotalLength;
+	// Finally add in the element's sequence token
+	nTotalLength += ASNDerCalcTokenLength( nTotalLength, 0L );
+
+	return nTotalLength;
 }
 
 
@@ -519,7 +526,7 @@ int ASNDerWriteLength( unsigned char* pbData, long nLength )
          {
             // Cast the length to a single byte, since we know that it
             // is 0x7F or less (or we wouldn't only need a single byte).
-      
+
             *pbData = (unsigned char) nLength;
             break;
          }
@@ -564,7 +571,7 @@ int ASNDerWriteLength( unsigned char* pbData, long nLength )
    {
       // Cast the length to a single byte, since we know that it
       // is 0x7F or less (or we wouldn't only need a single byte).
-      
+
       *pbData = (unsigned char) nLength;
    }
 
@@ -646,9 +653,12 @@ int ASNDerWriteToken( unsigned char* pbData, unsigned char ucType,
 int ASNDerWriteOID( unsigned char* pbData, SPNEGO_MECH_OID eMechOID )
 {
 
-   memcpy( pbData, g_stcMechOIDList[eMechOID].ucOid, g_stcMechOIDList[eMechOID].iLen );
+	if (pbData != NULL) {
+		memcpy( pbData, g_stcMechOIDList[eMechOID].ucOid,
+		    g_stcMechOIDList[eMechOID].iLen );
+	}
 
-   return g_stcMechOIDList[eMechOID].iLen;
+	return g_stcMechOIDList[eMechOID].iLen;
 }
 
 
@@ -671,27 +681,35 @@ int ASNDerWriteOID( unsigned char* pbData, SPNEGO_MECH_OID eMechOID )
 //
 ////////////////////////////////////////////////////////////////////////////
 
-long ASNDerWriteMechList( unsigned char* pbData, SPNEGO_MECH_OID mechoid )
+long ASNDerWriteMechList( unsigned char* pbData, SPNEGO_MECH_OID *mechOidLst, int mechOidCnt )
 {
-   // First get the length
-   long  nInternalLength = 0L;
-   long  nMechListLength = ASNDerCalcMechListLength( mechoid, &nInternalLength );
-   long  nTempLength = 0L;
+	// First get the length
+	long  nInternalLength = 0L;
+	long  nMechListLength;
+	long  nTempLength = 0L;
+	int   i;
 
-   nTempLength = ASNDerWriteToken( pbData, SPNEGO_NEGINIT_ELEMENT_MECHTYPES,
+	nMechListLength = ASNDerCalcMechListLength(mechOidLst, mechOidCnt, &nInternalLength);
+	nTempLength = ASNDerWriteToken( pbData, SPNEGO_NEGINIT_ELEMENT_MECHTYPES,
                                     NULL, nInternalLength );
 
-   // Adjust the data pointer
-   pbData += nTempLength;
+	// Adjust the data pointer
+	pbData += nTempLength;
+	nInternalLength	-= nTempLength;
 
-   // Now write the Sequence token and the OID (the OID is a BLOB in the global
-   // structure.
+	// Now write the Sequence token and the OID (the OID is a BLOB in the global
+	// structure.
 
-   nTempLength = ASNDerWriteToken( pbData, SPNEGO_CONSTRUCTED_SEQUENCE,
-                                    g_stcMechOIDList[mechoid].ucOid,
-                                    g_stcMechOIDList[mechoid].iLen );
+	nTempLength = ASNDerWriteToken( pbData, SPNEGO_CONSTRUCTED_SEQUENCE,
+					NULL, nInternalLength);
+	pbData += nTempLength;
 
-   return nMechListLength;
+	for (i = 0; i < mechOidCnt; i++) {
+		nTempLength = ASNDerWriteOID( pbData, mechOidLst[i] );
+		pbData += nTempLength;
+	}
+
+	return nMechListLength;
 }
 
 

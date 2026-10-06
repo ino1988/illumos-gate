@@ -20,6 +20,8 @@
 #
 #
 # Copyright (c) 1998, 2010, Oracle and/or its affiliates. All rights reserved.
+# Copyright 2020 Joyent, Inc.
+# Copyright 2024 MNX Cloud, Inc.
 #
 
 PROG = dumpadm
@@ -27,20 +29,19 @@ MANIFEST = dumpadm.xml
 SVCMETHOD= svc-dumpadm
 
 OBJS = main.o dconf.o minfree.o utils.o swap.o
-SRCS = $(OBJS:.o=.c)
-
-
-lint := LINTFLAGS = -mx
 
 include ../Makefile.cmd
 
 CFLAGS += $(CCVERBOSE)
+CFLAGS += -I../../lib/libzutil/common
+
+CSTD = $(CSTD_GNU99)
 
 FILEMODE = 0555
 
 ROOTMANIFESTDIR = $(ROOTSVCSYSTEM)
 
-LDLIBS +=	-ldiskmgt -lzfs -luuid
+LDLIBS +=	-ldiskmgt -lzfs -luuid -lzutil
 
 .KEEP_STATE:
 
@@ -56,7 +57,5 @@ check: $(CHKMANIFEST)
 
 clean:
 	$(RM) $(OBJS)
-
-lint: lint_SRCS
 
 include ../Makefile.targ

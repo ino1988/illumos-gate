@@ -929,7 +929,7 @@ again:
 
 				goto end;
 			}
-			/* else FALL THROUGH TO */
+			/* FALLTHROUGH */
 
 		default:
 			__tli_sys_strerror(errorstr, sizeof (errorstr),
@@ -1731,13 +1731,9 @@ svc_vc_reply(SVCXPRT *xprt, struct rpc_msg *msg)
 	caddr_t xdr_location;
 	bool_t has_args;
 
-#ifdef __lock_lint
-	(void) mutex_lock(&svc_send_mutex(SVCEXT(xprt)->parent));
-#else
 	if (svc_mt_mode != RPC_SVC_MT_NONE)
 /* LINTED pointer alignment */
 		(void) mutex_lock(&svc_send_mutex(SVCEXT(xprt)->parent));
-#endif
 
 	if (msg->rm_reply.rp_stat == MSG_ACCEPTED &&
 	    msg->rm_reply.rp_acpt.ar_stat == SUCCESS) {
@@ -1758,13 +1754,9 @@ svc_vc_reply(SVCXPRT *xprt, struct rpc_msg *msg)
 	}
 	(void) xdrrec_endofrecord(xdrs, TRUE);
 
-#ifdef __lock_lint
-	(void) mutex_unlock(&svc_send_mutex(SVCEXT(xprt)->parent));
-#else
 	if (svc_mt_mode != RPC_SVC_MT_NONE)
 /* LINTED pointer alignment */
 		(void) mutex_unlock(&svc_send_mutex(SVCEXT(xprt)->parent));
-#endif
 
 	return (stat);
 }
@@ -1836,7 +1828,7 @@ __svc_vc_dup(struct svc_req *req, caddr_t *resp_buf, uint_t *resp_bufsz)
 
 int
 __svc_vc_dupdone(struct svc_req *req, caddr_t resp_buf, uint_t resp_bufsz,
-				int status)
+    int status)
 {
 	return (__svc_dupdone(req, resp_buf, resp_bufsz, status,
 	    /* LINTED pointer alignment */

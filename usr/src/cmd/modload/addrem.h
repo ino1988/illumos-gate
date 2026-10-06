@@ -20,6 +20,7 @@
  */
 /*
  * Copyright (c) 1993, 2010, Oracle and/or its affiliates. All rights reserved.
+ * Copyright 2020 OmniOS Community Edition (OmniOSce) Association.
  */
 
 #ifndef _CMD_MODLOAD_ADDREM_H
@@ -44,7 +45,7 @@ extern "C" {
 
 #define	MAX_CMD_LINE	256
 #define	MAX_N2M_ALIAS_LINE	FILENAME_MAX + FILENAME_MAX + 1
-#define	MAXLEN_NAM_TO_MAJ_ENT 	FILENAME_MAX + MAX_STR_MAJOR + 1
+#define	MAXLEN_NAM_TO_MAJ_ENT	FILENAME_MAX + MAX_STR_MAJOR + 1
 #define	OPT_LEN		128
 #define	CADDR_HEX_STR	16
 #define	UINT_STR	10
@@ -81,16 +82,16 @@ extern "C" {
 #endif
 
 /* pointers to add_drv/rem_drv database files */
-char *driver_aliases;
-char *driver_classes;
-char *minor_perm;
-char *name_to_major;
-char *rem_name_to_major;
-char *device_policy;
-char *extra_privs;
+extern char *driver_aliases;
+extern char *driver_classes;
+extern char *minor_perm;
+extern char *name_to_major;
+extern char *rem_name_to_major;
+extern char *device_policy;
+extern char *extra_privs;
 
 /* devfs root string */
-char *devfs_root;
+extern char *devfs_root;
 
 /* module path searching structure */
 struct drvmod_dir {
@@ -98,7 +99,7 @@ struct drvmod_dir {
 	struct drvmod_dir *next;
 };
 
-struct drvmod_dir *moddir;
+extern struct drvmod_dir *moddir;
 
 /* names of things: directories, commands, files */
 #define	KERNEL_DRV	"/kernel/drv"
@@ -118,7 +119,7 @@ extern char *get_perm_entry(char *, char *);
 extern int check_perms_aliases(int, int);
 extern int check_name_to_major(int);
 extern void enter_lock(void);
-extern void err_exit(void);
+extern void err_exit(void) __NORETURN;
 extern void exit_unlock(void);
 extern char *get_entry(char *, char *, char, int);
 extern int build_filenames(char *);

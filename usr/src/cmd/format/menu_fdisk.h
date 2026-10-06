@@ -28,19 +28,13 @@
 #ifndef	_MENU_FDISK_H
 #define	_MENU_FDISK_H
 
-#pragma ident	"%Z%%M%	%I%	%E% SMI"
-
 #ifdef	__cplusplus
 extern "C" {
 #endif
 
-/*
- *	Prototypes for ANSI
- */
 int	copy_solaris_part(struct ipart *ipart);
 void	open_cur_file(int);
 int	auto_solaris_part(struct dk_label *);
-
 
 /*
  * These flags are used to open file descriptor for current

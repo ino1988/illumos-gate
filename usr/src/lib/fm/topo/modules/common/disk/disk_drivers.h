@@ -9,7 +9,7 @@
  * http://www.illumos.org/license/CDDL.
  */
 /*
- * Copyright (c) 2013, Joyent, Inc. All rights reserved.
+ * Copyright 2020 Joyent, Inc.
  */
 
 #ifndef _DISK_DRIVERS_H
@@ -17,12 +17,25 @@
 
 #include <fm/topo_mod.h>
 #include <libdevinfo.h>
+#include <libnvme.h>
 
 #ifdef __cplusplus
 extern "C" {
 #endif
 
+/*
+ * This is the disk module-specific data.
+ */
+typedef struct {
+	topo_list_t td_dlist;
+	nvme_t *td_nvme;
+} topo_disk_t;
+
+#define	MPTSAS_DRV	"mpt_sas"
+#define	NVME_DRV	"nvme"
+
 int disk_mptsas_find_disk(topo_mod_t *, tnode_t *, char **);
+int disk_nvme_enum_disk(topo_mod_t *, tnode_t *);
 
 #ifdef __cplusplus
 }

@@ -59,7 +59,7 @@ Service manifests for the iSNS Server
 		name='start'
 		exec='/usr/sbin/isns'
 		timeout_seconds='60'>
-		<method_context>
+		<method_context working_directory='/'>
 			<method_credential
 			user='root'
 			group='root'
@@ -67,13 +67,13 @@ Service manifests for the iSNS Server
 			/>
 		</method_context>
 	</exec_method>
-        
+
 	<exec_method
 		type='method'
 		name='stop'
 		exec=':kill'
 		timeout_seconds='60'>
-		<method_context>
+		<method_context working_directory='/'>
 			<method_credential
 			user='root'
 			group='root'
@@ -81,13 +81,13 @@ Service manifests for the iSNS Server
 			/>
 		</method_context>
 	</exec_method>
-        
+
 	<exec_method
 		type='method'
 		name='refresh'
 		exec=':kill -HUP'
 		timeout_seconds='60'>
-		<method_context>
+		<method_context working_directory='/'>
 			<method_credential
 			user='root'
 			group='root'
@@ -97,7 +97,7 @@ Service manifests for the iSNS Server
 	</exec_method>
 
         <property_group name='general' type='framework'>
-		<!-- to start stop isns -->		
+		<!-- to start stop isns -->
 		<propval name='action_authorization' type='astring'
 			value='solaris.smf.manage.isns' />
 		<!-- to manage prop values -->
@@ -128,9 +128,9 @@ Service manifests for the iSNS Server
 			</loctext>
 		</common_name>
 		<documentation>
-			<manpage title='isns' section='1M'
+			<manpage title='isns' section='8'
 				manpath='/usr/share/man' />
-			<manpage title='isnsadm' section='1M'
+			<manpage title='isnsadm' section='8'
 				manpath='/usr/share /man' />
 		</documentation>
 	</template>

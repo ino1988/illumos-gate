@@ -21,15 +21,17 @@
 #
 # Copyright (c) 1990, 2010, Oracle and/or its affiliates. All rights reserved.
 #
+# Copyright (c) 2018, Joyent, Inc.
+# Copyright 2020 OmniOS Community Edition (OmniOSce) Association.
 
 
-PROG= 		passmgmt
-FILE= 		datemsk
-TXTS= 		$(FILE)
+PROG=		passmgmt
+FILE=		datemsk
+TXTS=		$(FILE)
 
 include ../Makefile.cmd
 
-FILEMODE= 	0555
+FILEMODE=	0555
 ROOTFILE=	$(ROOTETC)/$(FILE)
 
 # conditional assignment
@@ -40,11 +42,14 @@ $(ROOTFILE):=	FILEMODE= $(LIBFILEMODE)
 LDLIBS +=	-lsecdb -lnsl
 CERRWARN +=	-_gcc=-Wno-type-limits
 CERRWARN +=	-_gcc=-Wno-implicit-function-declaration
-CERRWARN +=	-_gcc=-Wno-uninitialized
+CERRWARN +=	$(CNOWARN_UNINIT)
+
+# not linted
+SMATCH=off
 
 all: $(PROG) $(TXTS)
 
-XGETFLAGS= -a -x $(PROG).xcl 
+XGETFLAGS= -a -x $(PROG).xcl
 
 install: all $(ROOTLIBPROG) $(ROOTFILE)
 
@@ -59,7 +64,5 @@ datemsk: datemsk.template
 
 clean:
 	$(RM) datemsk
-
-lint:	lint_PROG
 
 include ../Makefile.targ

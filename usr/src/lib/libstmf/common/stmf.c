@@ -343,7 +343,6 @@ groupIoctl(int fd, int cmd, stmfGroupName *groupName)
 				break;
 		}
 	}
-done:
 	return (ret);
 }
 
@@ -424,7 +423,6 @@ groupMemberIoctl(int fd, int cmd, stmfGroupName *groupName, stmfDevid *devid)
 				break;
 		}
 	}
-done:
 	return (ret);
 }
 
@@ -3445,7 +3443,7 @@ stmfDevidFromIscsiName(char *iscsiName, stmfDevid *devid)
  * devid - on success, contains the converted wwn
  */
 int
-stmfDevidFromWwn(uchar_t *wwn, stmfDevid *devid)
+stmfDevidFromWwn(uchar_t wwn[8], stmfDevid *devid)
 {
 	if (wwn == NULL || devid == NULL)
 		return (STMF_ERROR_INVALID_ARG);

@@ -79,6 +79,9 @@ CPL_MATCH_FN(no_match)
 	return (0);
 }
 
+static void command_complete(int s) __NORETURN;
+static void usage(void) __NORETURN;
+
 static void
 command_complete(int s)
 {
@@ -90,7 +93,7 @@ command_complete(int s)
 }
 
 static void
-usage()
+usage(void)
 {
 	if (!interactive) {
 		(void) fprintf(stderr, gettext("Usage:\t"
@@ -732,7 +735,7 @@ static keywdtab_t	idtypes[] = {
 	{SADB_X_IDENTTYPE_ADDR_RANGE,	"rangev4"},
 	{SADB_X_IDENTTYPE_ADDR_RANGE,	"rangev6"},
 	{SADB_X_IDENTTYPE_KEY_ID,	"keyid"},
-	{NULL,	0}
+	{0,				NULL}
 };
 
 static int
@@ -810,7 +813,7 @@ parse_cky(int argc, char **argv, uint64_t *ckyp)
 
 static int
 parse_addr_pr(int argc, char **argv, struct hostent **h1pp,
-	struct hostent **h2pp)
+    struct hostent **h2pp)
 {
 	int	rtn, consumed = 0;
 
@@ -900,7 +903,7 @@ static keywdtab_t	psfldtypes[] = {
 	{PSFLD_REMIDTYPE,	"remoteidtype"},
 	{PSFLD_MODE,		"ike_mode"},
 	{PSFLD_KEY,		"key"},
-	{NULL,	0}
+	{0,			NULL}
 };
 
 static int
@@ -926,7 +929,7 @@ static keywdtab_t	ikemodes[] = {
 	{IKE_XCHG_IDENTITY_PROTECT,	"main"},
 	{IKE_XCHG_AGGRESSIVE,		"aggressive"},
 	{IKE_XCHG_IP_AND_AGGR,		"both"},
-	{NULL,	0}
+	{0,				NULL}
 };
 
 static int
@@ -2032,9 +2035,9 @@ print_certcache(ike_certcache_t *c)
 
 	(void) printf(gettext("CERTIFICATE CACHE ID: %d\n"), c->cache_id);
 	(void) printf(gettext("\tSubject Name: <%s>\n"),
-	    (c->subject != NULL) ? c->subject : gettext("Name unavailable"));
+	    (*c->subject != '\0') ? c->subject : gettext("Name unavailable"));
 	(void) printf(gettext("\t Issuer Name: <%s>\n"),
-	    (c->issuer != NULL) ? c->issuer : gettext("Name unavailable"));
+	    (*c->issuer != '\0') ? c->issuer : gettext("Name unavailable"));
 	if ((int)c->certclass == -1)
 		(void) printf(gettext("\t\t[trusted certificate]\n"));
 	switch (c->linkage) {
@@ -2250,7 +2253,7 @@ print_defaults(char *label, char *description, char *unit,
  * two ike_defaults_t's, the first contains the hard coded defaults, the second
  * contains the actual values used. If these differ, then the defaults have been
  * changed via a config file entry. Note that "-" indicates this default
- * is not tunable via ike.config(4) or is system wide tunable.
+ * is not tunable via ike.config(5) or is system wide tunable.
  */
 static void
 do_print_defaults(ike_defaults_t *dp)
@@ -3345,7 +3348,7 @@ parseit(int argc, char **argv, char *notused, boolean_t notused_either)
 	case IKE_SVC_DUMP_AUTHALGS:
 	case IKE_SVC_DUMP_PS:
 	case IKE_SVC_DUMP_CERTCACHE:
-		if (argc != NULL) {
+		if (argc != 0) {
 			print_dump_help();
 			break;
 		}
@@ -3427,7 +3430,7 @@ parseit(int argc, char **argv, char *notused, boolean_t notused_either)
 int
 main(int argc, char **argv)
 {
-	char	ch;
+	int	ch;
 
 	(void) setlocale(LC_ALL, "");
 #if !defined(TEXT_DOMAIN)

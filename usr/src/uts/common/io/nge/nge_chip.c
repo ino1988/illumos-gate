@@ -24,6 +24,10 @@
  * Use is subject to license terms.
  */
 
+/*
+ * Copyright (c) 2018, Joyent, Inc.
+ */
+
 #include "nge.h"
 static uint32_t	nge_watchdog_count	= 1 << 5;
 static uint32_t	nge_watchdog_check	= 1 << 3;
@@ -37,7 +41,6 @@ static void nge_sync_mac_modes(nge_t *);
  * Operating register get/set access routines
  */
 uint8_t nge_reg_get8(nge_t *ngep, nge_regno_t regno);
-#pragma	inline(nge_reg_get8)
 
 uint8_t
 nge_reg_get8(nge_t *ngep, nge_regno_t regno)
@@ -48,7 +51,6 @@ nge_reg_get8(nge_t *ngep, nge_regno_t regno)
 }
 
 void nge_reg_put8(nge_t *ngep, nge_regno_t regno, uint8_t data);
-#pragma	inline(nge_reg_put8)
 
 void
 nge_reg_put8(nge_t *ngep, nge_regno_t regno, uint8_t data)
@@ -60,7 +62,6 @@ nge_reg_put8(nge_t *ngep, nge_regno_t regno, uint8_t data)
 }
 
 uint16_t nge_reg_get16(nge_t *ngep, nge_regno_t regno);
-#pragma	inline(nge_reg_get16)
 
 uint16_t
 nge_reg_get16(nge_t *ngep, nge_regno_t regno)
@@ -70,7 +71,6 @@ nge_reg_get16(nge_t *ngep, nge_regno_t regno)
 }
 
 void nge_reg_put16(nge_t *ngep, nge_regno_t regno, uint16_t data);
-#pragma	inline(nge_reg_put16)
 
 void
 nge_reg_put16(nge_t *ngep, nge_regno_t regno, uint16_t data)
@@ -82,7 +82,6 @@ nge_reg_put16(nge_t *ngep, nge_regno_t regno, uint16_t data)
 }
 
 uint32_t nge_reg_get32(nge_t *ngep, nge_regno_t regno);
-#pragma	inline(nge_reg_get32)
 
 uint32_t
 nge_reg_get32(nge_t *ngep, nge_regno_t regno)
@@ -92,7 +91,6 @@ nge_reg_get32(nge_t *ngep, nge_regno_t regno)
 }
 
 void nge_reg_put32(nge_t *ngep, nge_regno_t regno, uint32_t data);
-#pragma	inline(nge_reg_put32)
 
 void
 nge_reg_put32(nge_t *ngep, nge_regno_t regno, uint32_t data)
@@ -103,9 +101,8 @@ nge_reg_put32(nge_t *ngep, nge_regno_t regno, uint32_t data)
 
 }
 
-
+#if	NGE_DEBUGGING
 static int nge_chip_peek_cfg(nge_t *ngep, nge_peekpoke_t *ppd);
-#pragma	no_inline(nge_chip_peek_cfg)
 
 static int
 nge_chip_peek_cfg(nge_t *ngep, nge_peekpoke_t *ppd)
@@ -256,7 +253,6 @@ nge_chip_poke_reg(nge_t *ngep, nge_peekpoke_t *ppd)
 }
 
 static int nge_chip_peek_mii(nge_t *ngep, nge_peekpoke_t *ppd);
-#pragma	no_inline(nge_chip_peek_mii)
 
 static int
 nge_chip_peek_mii(nge_t *ngep, nge_peekpoke_t *ppd)
@@ -269,7 +265,6 @@ nge_chip_peek_mii(nge_t *ngep, nge_peekpoke_t *ppd)
 }
 
 static int nge_chip_poke_mii(nge_t *ngep, nge_peekpoke_t *ppd);
-#pragma	no_inline(nge_chip_poke_mii)
 
 static int
 nge_chip_poke_mii(nge_t *ngep, nge_peekpoke_t *ppd)
@@ -422,6 +417,7 @@ nge_chip_poke_seeprom(nge_t *ngep, nge_peekpoke_t *ppd)
 	    ppd->pp_acc_offset, &data);
 	return (err);
 }
+#endif /* NGE_DEBUGGING */
 
 void
 nge_init_dev_spec_param(nge_t *ngep)
@@ -576,7 +572,6 @@ nge_init_dev_spec_param(nge_t *ngep)
  *   returning the data in the structure pointed to by <infop>.
  */
 void nge_chip_cfg_init(nge_t *ngep, chip_info_t *infop, boolean_t reset);
-#pragma	no_inline(nge_chip_cfg_init)
 
 void
 nge_chip_cfg_init(nge_t *ngep, chip_info_t *infop, boolean_t reset)
@@ -1010,25 +1005,25 @@ nge_chip_reset(nge_t *ngep)
 		mac = uaddr1.addr_bits.addr;
 		mac <<= 32;
 		mac |= nge_reg_get32(ngep, NGE_UNI_ADDR0);
-			ngep->chipinfo.hw_mac_addr = mac;
-			if (ngep->dev_spec_param.mac_addr_order) {
-				for (i = 0; i < ETHERADDRL; i++) {
-					ngep->chipinfo.vendor_addr.addr[i] =
-					    (uchar_t)mac;
-					ngep->cur_uni_addr.addr[i] =
-					    (uchar_t)mac;
-					mac >>= 8;
-				}
-			} else {
-				for (i = ETHERADDRL; i-- != 0; ) {
-					ngep->chipinfo.vendor_addr.addr[i] =
-					    (uchar_t)mac;
-					ngep->cur_uni_addr.addr[i] =
-					    (uchar_t)mac;
-					mac >>= 8;
-				}
+		ngep->chipinfo.hw_mac_addr = mac;
+		if (ngep->dev_spec_param.mac_addr_order) {
+			for (i = 0; i < ETHERADDRL; i++) {
+				ngep->chipinfo.vendor_addr.addr[i] =
+				    (uchar_t)mac;
+				ngep->cur_uni_addr.addr[i] =
+				    (uchar_t)mac;
+				mac >>= 8;
 			}
-			ngep->chipinfo.vendor_addr.set = 1;
+		} else {
+			for (i = ETHERADDRL; i-- != 0; ) {
+				ngep->chipinfo.vendor_addr.addr[i] =
+				    (uchar_t)mac;
+				ngep->cur_uni_addr.addr[i] =
+				    (uchar_t)mac;
+				mac >>= 8;
+			}
+		}
+		ngep->chipinfo.vendor_addr.set = 1;
 	}
 	pci_config_put8(ngep->cfg_handle, PCI_CONF_CACHE_LINESZ,
 	    ngep->chipinfo.clsize);
@@ -1842,6 +1837,7 @@ nge_chip_intr(caddr_t arg1, caddr_t arg2)
 	return (DDI_INTR_CLAIMED);
 }
 
+#if	NGE_DEBUGGING
 static enum ioc_reply
 nge_pp_ioctl(nge_t *ngep, int cmd, mblk_t *mp, struct iocblk *iocp)
 {
@@ -1952,7 +1948,6 @@ nge_pp_ioctl(nge_t *ngep, int cmd, mblk_t *mp, struct iocblk *iocp)
 
 static enum ioc_reply nge_diag_ioctl(nge_t *ngep, int cmd, mblk_t *mp,
 					struct iocblk *iocp);
-#pragma	no_inline(nge_diag_ioctl)
 
 static enum ioc_reply
 nge_diag_ioctl(nge_t *ngep, int cmd, mblk_t *mp, struct iocblk *iocp)
@@ -1981,6 +1976,7 @@ nge_diag_ioctl(nge_t *ngep, int cmd, mblk_t *mp, struct iocblk *iocp)
 
 	/* NOTREACHED */
 }
+#endif /* NGE_DEBUGGING */
 
 enum ioc_reply
 nge_chip_ioctl(nge_t *ngep, mblk_t *mp, struct iocblk *iocp)

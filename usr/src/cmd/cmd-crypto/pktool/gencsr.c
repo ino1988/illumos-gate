@@ -56,7 +56,7 @@ gencsr_pkcs11(KMF_HANDLE_T kmfhandle,
 	KMF_KEY_HANDLE pubk, prik;
 	KMF_X509_NAME	csrSubject;
 	KMF_CSR_DATA	csr;
-	KMF_DATA signedCsr = {NULL, 0};
+	KMF_DATA signedCsr = { 0, NULL };
 
 	KMF_KEYSTORE_TYPE kstype = KMF_KEYSTORE_PK11TOKEN;
 	int numattr = 0;
@@ -177,7 +177,7 @@ gencsr_file(KMF_HANDLE_T kmfhandle,
 	KMF_KEY_HANDLE pubk, prik;
 	KMF_X509_NAME	csrSubject;
 	KMF_CSR_DATA	csr;
-	KMF_DATA signedCsr = {NULL, 0};
+	KMF_DATA signedCsr = { 0, NULL };
 	char *fullcsrpath = NULL;
 	char *fullkeypath = NULL;
 
@@ -226,7 +226,7 @@ gencsr_file(KMF_HANDLE_T kmfhandle,
 		SET_VALUE(kmf_set_csr_subject_altname(&csr, altname, altcrit,
 		    alttype), "kmf_set_csr_subject_altname");
 	}
-	if (kubits != NULL) {
+	if (kubits != 0) {
 		SET_VALUE(kmf_set_csr_ku(&csr, kucrit, kubits),
 		    "kmf_set_csr_ku");
 	}
@@ -272,7 +272,7 @@ gencsr_nss(KMF_HANDLE_T kmfhandle,
 	KMF_KEY_HANDLE pubk, prik;
 	KMF_X509_NAME	csrSubject;
 	KMF_CSR_DATA	csr;
-	KMF_DATA signedCsr = {NULL, 0};
+	KMF_DATA signedCsr = { 0, NULL };
 
 	KMF_KEYSTORE_TYPE kstype = KMF_KEYSTORE_NSS;
 	int numattr = 0;
@@ -312,7 +312,7 @@ gencsr_nss(KMF_HANDLE_T kmfhandle,
 		SET_VALUE(kmf_set_csr_subject_altname(&csr, altname, altcrit,
 		    alttype), "kmf_set_csr_subject_altname");
 	}
-	if (kubits != NULL) {
+	if (kubits != 0) {
 		SET_VALUE(kmf_set_csr_ku(&csr, kucrit, kubits),
 		    "kmf_set_csr_ku");
 	}
@@ -392,7 +392,7 @@ pk_gencsr(int argc, char *argv[])
 	KMF_ALGORITHM_INDEX sigAlg = KMF_ALGID_SHA1WithRSA;
 	boolean_t interactive = B_FALSE;
 	char *subname = NULL;
-	KMF_CREDENTIAL tokencred = {NULL, 0};
+	KMF_CREDENTIAL tokencred = { NULL, 0 };
 	KMF_GENERALNAMECHOICES alttype = 0;
 	int altcrit = 0, kucrit = 0;
 	EKU_LIST *ekulist = NULL;

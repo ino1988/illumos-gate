@@ -23,24 +23,18 @@
 # Copyright 2008 Sun Microsystems, Inc.  All rights reserved.
 # Use is subject to license terms.
 #
-# ident	"%Z%%M%	%I%	%E% SMI"
+# Copyright 2019 OmniOS Community Edition (OmniOSce) Association.
 #
 
 include		../Makefile.com
 
 .KEEP_STATE:
 
-LLDFLAGS =	$(LLDFLAGS64)
-ELFLIBDIR =	$(ELFLIBDIR64)
-CONVLIBDIR =	$(CONVLIBDIR64)
-
-VAR_SGSBINPROG=	$(VAR_SGSBINPROG64)
-VAR_SGSCCSLINK=	$(VAR_SGSCCSLINK64)
-
 include		../Makefile.targ
-include		../../Makefile.sub.64
+include		$(SRC)/Makefile.master.64
 
-lint:		$(LINTOUT64) $(SGSLINTOUT)
+install:	$(ROOTPROG) $(ROOTPROG64) \
+	$(ROOTCCSBINLINK) $(ROOTCCSBINLINK64)
 
-install \
-package:	$(VAR_SGSBINPROG64)
+$(ROOTBIN64)/dump:
+	$(RM) $@; $(SYMLINK) ../../bin/dump $@

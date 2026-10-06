@@ -23,6 +23,9 @@
  * Copyright (c) 1992, 2010, Oracle and/or its affiliates. All rights reserved.
  * Copyright 2012 Garrett D'Amore <garrett@damore.org>
  * Copyright 2014 Pluribus Networks, Inc.
+ * Copyright 2016 Nexenta Systems, Inc.
+ * Copyright 2018 Joyent, Inc.
+ * Copyright 2026 Oxide Computer Company
  */
 
 /*
@@ -67,6 +70,7 @@
 #include <vm/hat_i86.h>
 #include <sys/x86_archext.h>
 #include <sys/avl.h>
+#include <sys/font.h>
 
 /*
  * DDI Boot Configuration
@@ -103,7 +107,7 @@ static int peek_mem(peekpoke_ctlops_t *in_args);
 
 static int kmem_override_cache_attrs(caddr_t, size_t, uint_t);
 
-#if defined(__amd64) && !defined(__xpv)
+#if !defined(__xpv)
 extern void immu_init(void);
 #endif
 
@@ -175,9 +179,6 @@ configure(void)
 {
 	extern void i_ddi_init_root();
 
-#if defined(__i386)
-	extern int fpu_pentium_fdivbug;
-#endif	/* __i386 */
 	extern int fpu_ignored;
 
 	/*
@@ -186,12 +187,6 @@ configure(void)
 
 	fpu_probe();
 
-#if defined(__i386)
-	if (fpu_pentium_fdivbug) {
-		printf("\
-FP hardware exhibits Pentium floating point divide problem\n");
-	}
-#endif	/* __i386 */
 
 	if (fpu_ignored) {
 		printf("FP hardware will not be used\n");
@@ -214,7 +209,7 @@ FP hardware exhibits Pentium floating point divide problem\n");
 	/* reprogram devices not set up by firmware (BIOS) */
 	impl_bus_reprobe();
 
-#if defined(__amd64) && !defined(__xpv)
+#if !defined(__xpv)
 	/*
 	 * Setup but don't startup the IOMMU
 	 * Startup happens later via a direct call
@@ -838,12 +833,6 @@ impl_ddi_sunbus_removechild(dev_info_t *dip)
 int ignore_hardware_nodes = 0;
 
 /*
- * Local data
- */
-static struct impl_bus_promops *impl_busp;
-
-
-/*
  * New DDI interrupt framework
  */
 
@@ -1008,10 +997,10 @@ page_create_io_wrapper(void *addr, size_t len, int vmflag, void *arg)
 
 #ifdef __xpv
 static void
-segkmem_free_io(vmem_t *vmp, void * ptr, size_t size)
+segkmem_free_io(vmem_t *vmp, void *ptr, size_t size)
 {
 	extern void page_destroy_io(page_t *);
-	segkmem_xfree(vmp, ptr, size, page_destroy_io);
+	segkmem_xfree(vmp, ptr, size, &kvp, page_destroy_io);
 }
 #endif
 
@@ -1407,12 +1396,12 @@ contig_free(void *addr, size_t size)
  */
 static void *
 kalloca(size_t size, size_t align, int cansleep, int physcontig,
-	ddi_dma_attr_t *attr)
+    ddi_dma_attr_t *attr)
 {
 	size_t *addr, *raddr, rsize;
 	size_t hdrsize = 4 * sizeof (size_t);	/* must be power of 2 */
 	int a, i, c;
-	vmem_t *vmp;
+	vmem_t *vmp = NULL;
 	kmem_cache_t *cp = NULL;
 
 	if (attr->dma_attr_addr_lo > mmu_ptob((uint64_t)ddiphysmin))
@@ -1430,7 +1419,8 @@ kalloca(size_t size, size_t align, int cansleep, int physcontig,
 	rsize = P2ROUNDUP_TYPED(size + align, KA_ALIGN, size_t);
 
 	if (physcontig && rsize > PAGESIZE) {
-		if (addr = contig_alloc(size, attr, align, cansleep)) {
+		if ((addr = contig_alloc(size, attr, align, cansleep)) !=
+		    NULL) {
 			if (!putctgas(addr, size))
 				contig_free(addr, size);
 			else
@@ -1520,7 +1510,7 @@ kfreea(void *addr)
 
 /*ARGSUSED*/
 void
-i_ddi_devacc_to_hatacc(ddi_device_acc_attr_t *devaccp, uint_t *hataccp)
+i_ddi_devacc_to_hatacc(const ddi_device_acc_attr_t *devaccp, uint_t *hataccp)
 {
 }
 
@@ -1536,7 +1526,7 @@ i_ddi_check_cache_attr(uint_t flags)
 	 * the attributes leads to a failure.
 	 */
 	uint_t cache_attr = IOMEM_CACHE_ATTR(flags);
-	if ((cache_attr != 0) && ((cache_attr & (cache_attr - 1)) != 0))
+	if ((cache_attr != 0) && !ISP2(cache_attr))
 		return (B_FALSE);
 
 	/* All cache attributes are supported on X86/X64 */
@@ -1606,9 +1596,9 @@ i_ddi_cacheattr_to_hatacc(uint_t flags, uint_t *hataccp)
 /*ARGSUSED*/
 int
 i_ddi_mem_alloc(dev_info_t *dip, ddi_dma_attr_t *attr,
-	size_t length, int cansleep, int flags,
-	ddi_device_acc_attr_t *accattrp, caddr_t *kaddrp,
-	size_t *real_length, ddi_acc_hdl_t *ap)
+    size_t length, int cansleep, int flags,
+    const ddi_device_acc_attr_t *accattrp, caddr_t *kaddrp,
+    size_t *real_length, ddi_acc_hdl_t *ap)
 {
 	caddr_t a;
 	int iomin;
@@ -1627,9 +1617,8 @@ i_ddi_mem_alloc(dev_info_t *dip, ddi_dma_attr_t *attr,
 	}
 
 	if (attr->dma_attr_minxfer == 0 || attr->dma_attr_align == 0 ||
-	    (attr->dma_attr_align & (attr->dma_attr_align - 1)) ||
-	    (attr->dma_attr_minxfer & (attr->dma_attr_minxfer - 1))) {
-			return (DDI_FAILURE);
+	    !ISP2(attr->dma_attr_align) || !ISP2(attr->dma_attr_minxfer)) {
+		return (DDI_FAILURE);
 	}
 
 	/*
@@ -1841,7 +1830,7 @@ get_boot_properties(void)
 	extern char hw_provider[];
 	dev_info_t *devi;
 	char *name;
-	int length;
+	int length, flags;
 	char property_name[50], property_val[50];
 	void *bop_staging_area;
 
@@ -1872,7 +1861,7 @@ get_boot_properties(void)
 		}
 
 		length = BOP_GETPROPLEN(bootops, property_name);
-		if (length == 0)
+		if (length < 0)
 			continue;
 		if (length > MMU_PAGESIZE) {
 			cmn_err(CE_NOTE,
@@ -1881,6 +1870,7 @@ get_boot_properties(void)
 			continue;
 		}
 		BOP_GETPROP(bootops, property_name, bop_staging_area);
+		flags = do_bsys_getproptype(bootops, property_name);
 
 		/*
 		 * special properties:
@@ -1895,18 +1885,67 @@ get_boot_properties(void)
 		if (strcmp(name, "si-machine") == 0) {
 			(void) strncpy(utsname.machine, bop_staging_area,
 			    SYS_NMLN);
-			utsname.machine[SYS_NMLN - 1] = (char)NULL;
-		} else if (strcmp(name, "si-hw-provider") == 0) {
+			utsname.machine[SYS_NMLN - 1] = '\0';
+			continue;
+		}
+		if (strcmp(name, "si-hw-provider") == 0) {
 			(void) strncpy(hw_provider, bop_staging_area, SYS_NMLN);
-			hw_provider[SYS_NMLN - 1] = (char)NULL;
-		} else if (strcmp(name, "bios-boot-device") == 0) {
+			hw_provider[SYS_NMLN - 1] = '\0';
+			continue;
+		}
+		if (strcmp(name, "bios-boot-device") == 0) {
 			copy_boot_str(bop_staging_area, property_val, 50);
 			(void) ndi_prop_update_string(DDI_DEV_T_NONE, devi,
 			    property_name, property_val);
-		} else if (strcmp(name, "stdout") == 0) {
+			continue;
+		}
+		if (strcmp(name, "stdout") == 0) {
 			(void) ndi_prop_update_int(DDI_DEV_T_NONE, devi,
 			    property_name, *((int *)bop_staging_area));
-		} else {
+			continue;
+		}
+
+		/* Boolean property */
+		if (length == 0) {
+			(void) e_ddi_prop_create(DDI_DEV_T_NONE, devi,
+			    DDI_PROP_CANSLEEP, property_name, NULL, 0);
+			continue;
+		}
+
+		/* Now anything else based on type. */
+		switch (flags) {
+		case DDI_PROP_TYPE_INT:
+			if (length == sizeof (int)) {
+				(void) e_ddi_prop_update_int(DDI_DEV_T_NONE,
+				    devi, property_name,
+				    *((int *)bop_staging_area));
+			} else {
+				(void) e_ddi_prop_update_int_array(
+				    DDI_DEV_T_NONE, devi, property_name,
+				    bop_staging_area, length / sizeof (int));
+			}
+			break;
+		case DDI_PROP_TYPE_STRING:
+			(void) e_ddi_prop_update_string(DDI_DEV_T_NONE, devi,
+			    property_name, bop_staging_area);
+			break;
+		case DDI_PROP_TYPE_BYTE:
+			(void) e_ddi_prop_update_byte_array(DDI_DEV_T_NONE,
+			    devi, property_name, bop_staging_area, length);
+			break;
+		case DDI_PROP_TYPE_INT64:
+			if (length == sizeof (int64_t)) {
+				(void) e_ddi_prop_update_int64(DDI_DEV_T_NONE,
+				    devi, property_name,
+				    *((int64_t *)bop_staging_area));
+			} else {
+				(void) e_ddi_prop_update_int64_array(
+				    DDI_DEV_T_NONE, devi, property_name,
+				    bop_staging_area,
+				    length / sizeof (int64_t));
+			}
+			break;
+		default:
 			/* Property type unknown, use old prop interface */
 			(void) e_ddi_prop_create(DDI_DEV_T_NONE, devi,
 			    DDI_PROP_CANSLEEP, property_name, bop_staging_area,
@@ -1982,6 +2021,55 @@ get_vga_properties(void)
 	kmem_free(bop_staging_area, MMU_PAGESIZE);
 }
 
+/*
+ * Copy console font to kernel memory. The temporary font setup
+ * to use font module was done in early console setup, using low
+ * memory and data from font module. Now we need to allocate
+ * kernel memory and copy data over, so the low memory can be freed.
+ * We can have at most one entry in font list from early boot.
+ */
+static void
+get_console_font(void)
+{
+	struct fontlist *fp, *fl;
+	bitmap_data_t *bd;
+	struct font *fd, *tmp;
+	int i;
+
+	if (STAILQ_EMPTY(&fonts))
+		return;
+
+	fl = STAILQ_FIRST(&fonts);
+	STAILQ_REMOVE_HEAD(&fonts, font_next);
+	fp = kmem_zalloc(sizeof (*fp), KM_SLEEP);
+	bd = kmem_zalloc(sizeof (*bd), KM_SLEEP);
+	fd = kmem_zalloc(sizeof (*fd), KM_SLEEP);
+
+	fp->font_name = NULL;
+	fp->font_flags = FONT_BOOT;
+	fp->font_data = bd;
+
+	bd->width = fl->font_data->width;
+	bd->height = fl->font_data->height;
+	bd->uncompressed_size = fl->font_data->uncompressed_size;
+	bd->font = fd;
+
+	tmp = fl->font_data->font;
+	fd->vf_width = tmp->vf_width;
+	fd->vf_height = tmp->vf_height;
+	for (i = 0; i < VFNT_MAPS; i++) {
+		if (tmp->vf_map_count[i] == 0)
+			continue;
+		fd->vf_map_count[i] = tmp->vf_map_count[i];
+		fd->vf_map[i] = kmem_alloc(fd->vf_map_count[i] *
+		    sizeof (*fd->vf_map[i]), KM_SLEEP);
+		bcopy(tmp->vf_map[i], fd->vf_map[i], fd->vf_map_count[i] *
+		    sizeof (*fd->vf_map[i]));
+	}
+	fd->vf_bytes = kmem_alloc(bd->uncompressed_size, KM_SLEEP);
+	bcopy(tmp->vf_bytes, fd->vf_bytes, bd->uncompressed_size);
+	STAILQ_INSERT_HEAD(&fonts, fp, font_next);
+}
 
 /*
  * This is temporary, but absolutely necessary.  If we are being
@@ -1996,7 +2084,7 @@ get_vga_properties(void)
  *
  * Trying to assemble root file system drivers as we are booting from
  * devconf will fail if the kernel driver is basing its name_addr's on the
- * psuedo-node device info while the bootpath passed up from bootconf is using
+ * pseudo-node device info while the bootpath passed up from bootconf is using
  * reality-based name_addrs.  We help the boot along in this case by
  * looking at the pre-bootconf bootpath and determining if we would have
  * successfully matched if that had been the bootpath we had chosen.
@@ -2095,12 +2183,13 @@ x86_old_bootpath_name_addr_match(dev_info_t *cdip, char *caddr, char *naddr)
 		 *
 		 *  bootpath assumed to be of the form /bus/module@name_addr
 		 */
-		if (busp = strchr(bp1275, '/')) {
-			if (modp = strchr(busp + 1, '/')) {
-				if (atp = strchr(modp + 1, '@')) {
+		if ((busp = strchr(bp1275, '/')) != NULL) {
+			if ((modp = strchr(busp + 1, '/')) != NULL) {
+				if ((atp = strchr(modp + 1, '@')) != NULL) {
 					*atp = '\0';
 					addrp = atp + 1;
-					if (eoaddrp = strchr(addrp, '/'))
+					if ((eoaddrp = strchr(addrp, '/')) !=
+					    NULL)
 						*eoaddrp = '\0';
 				}
 			}
@@ -2130,12 +2219,13 @@ x86_old_bootpath_name_addr_match(dev_info_t *cdip, char *caddr, char *naddr)
 		 *  bootpath assumed to be of the form /bus/module@name_addr
 		 */
 		addrp = NULL;
-		if (busp = strchr(bp, '/')) {
-			if (modp = strchr(busp + 1, '/')) {
-				if (atp = strchr(modp + 1, '@')) {
+		if ((busp = strchr(bp, '/')) != NULL) {
+			if ((modp = strchr(busp + 1, '/')) != NULL) {
+				if ((atp = strchr(modp + 1, '@')) != NULL) {
 					*atp = '\0';
 					addrp = atp + 1;
-					if (eoaddrp = strchr(addrp, '/'))
+					if ((eoaddrp = strchr(addrp, '/')) !=
+					    NULL)
 						*eoaddrp = '\0';
 				}
 			}
@@ -2204,11 +2294,12 @@ e_ddi_copytodev(dev_info_t *devi,
 static int
 poke_mem(peekpoke_ctlops_t *in_args)
 {
-	int err = DDI_SUCCESS;
+	int err;
 	on_trap_data_t otd;
 
 	/* Set up protected environment. */
 	if (!on_trap(&otd, OT_DATA_ACCESS)) {
+		err = DDI_SUCCESS;
 		switch (in_args->size) {
 		case sizeof (uint8_t):
 			*(uint8_t *)(in_args->dev_addr) =
@@ -2234,8 +2325,9 @@ poke_mem(peekpoke_ctlops_t *in_args)
 			err = DDI_FAILURE;
 			break;
 		}
-	} else
+	} else {
 		err = DDI_FAILURE;
+	}
 
 	/* Take down protected environment. */
 	no_trap();
@@ -2247,10 +2339,11 @@ poke_mem(peekpoke_ctlops_t *in_args)
 static int
 peek_mem(peekpoke_ctlops_t *in_args)
 {
-	int err = DDI_SUCCESS;
+	int err;
 	on_trap_data_t otd;
 
 	if (!on_trap(&otd, OT_DATA_ACCESS)) {
+		err = DDI_SUCCESS;
 		switch (in_args->size) {
 		case sizeof (uint8_t):
 			*(uint8_t *)in_args->host_addr =
@@ -2276,8 +2369,9 @@ peek_mem(peekpoke_ctlops_t *in_args)
 			err = DDI_FAILURE;
 			break;
 		}
-	} else
+	} else {
 		err = DDI_FAILURE;
+	}
 
 	no_trap();
 	return (err);
@@ -2432,10 +2526,10 @@ pci_peekpoke_check_nofma(void *arg, ddi_ctl_enum_t ctlop)
 
 int
 pci_peekpoke_check(dev_info_t *dip, dev_info_t *rdip,
-	ddi_ctl_enum_t ctlop, void *arg, void *result,
-	int (*handler)(dev_info_t *, dev_info_t *, ddi_ctl_enum_t, void *,
-	void *), kmutex_t *err_mutexp, kmutex_t *peek_poke_mutexp,
-	void (*scan)(dev_info_t *, ddi_fm_error_t *))
+    ddi_ctl_enum_t ctlop, void *arg, void *result,
+    int (*handler)(dev_info_t *, dev_info_t *, ddi_ctl_enum_t, void *,
+    void *), kmutex_t *err_mutexp, kmutex_t *peek_poke_mutexp,
+    void (*scan)(dev_info_t *, ddi_fm_error_t *))
 {
 	int rval;
 	peekpoke_ctlops_t *in_args = (peekpoke_ctlops_t *)arg;
@@ -2507,7 +2601,7 @@ impl_setup_ddi(void)
 	ramdisk_end -= ONE_GIG;
 #endif
 	rd_mem_prop.phys = ramdisk_start;
-	rd_mem_prop.size = ramdisk_end - ramdisk_start + 1;
+	rd_mem_prop.size = ramdisk_end - ramdisk_start;
 
 	(void) ndi_prop_update_byte_array(DDI_DEV_T_NONE, xdip,
 	    RD_EXISTING_PROP_NAME, (uchar_t *)&rd_mem_prop,
@@ -2534,13 +2628,16 @@ impl_setup_ddi(void)
 	/* not framebuffer should be enumerated, if present */
 	get_vga_properties();
 
+	/* Copy console font if provided by boot. */
+	get_console_font();
+
 	/*
 	 * Check for administratively disabled drivers.
 	 */
 	check_driver_disable();
 
 #if !defined(__xpv)
-	if (!post_fastreboot)
+	if (!post_fastreboot && BOP_GETPROPLEN(bootops, "efi-systab") < 0)
 		startup_bios_disk();
 #endif
 	/* do bus dependent probes. */
@@ -2550,13 +2647,6 @@ impl_setup_ddi(void)
 dev_t
 getrootdev(void)
 {
-	/*
-	 * Precedence given to rootdev if set in /etc/system
-	 */
-	if (root_is_svm == B_TRUE) {
-		return (ddi_pathname_to_dev_t(svm_bootpath));
-	}
-
 	/*
 	 * Usually rootfs.bo_name is initialized by the
 	 * the bootpath property from bootenv.rc, but
@@ -2770,7 +2860,7 @@ i_ddi_caut_put64(ddi_acc_impl_t *hp, uint64_t *addr, uint64_t value)
 
 void
 i_ddi_caut_rep_get8(ddi_acc_impl_t *hp, uint8_t *host_addr, uint8_t *dev_addr,
-	size_t repcount, uint_t flags)
+    size_t repcount, uint_t flags)
 {
 	i_ddi_caut_getput_ctlops(hp, (uintptr_t)host_addr, (uintptr_t)dev_addr,
 	    sizeof (uint8_t), repcount, flags, DDI_CTLOPS_PEEK);
@@ -2802,7 +2892,7 @@ i_ddi_caut_rep_get64(ddi_acc_impl_t *hp, uint64_t *host_addr,
 
 void
 i_ddi_caut_rep_put8(ddi_acc_impl_t *hp, uint8_t *host_addr, uint8_t *dev_addr,
-	size_t repcount, uint_t flags)
+    size_t repcount, uint_t flags)
 {
 	i_ddi_caut_getput_ctlops(hp, (uintptr_t)host_addr, (uintptr_t)dev_addr,
 	    sizeof (uint8_t), repcount, flags, DDI_CTLOPS_POKE);
@@ -2897,12 +2987,6 @@ i_ddi_dma_max(dev_info_t *dip, ddi_dma_attr_t *attrp)
 	}
 
 	return ((uint32_t)maxxfer);
-}
-
-/*ARGSUSED*/
-void
-translate_devid(dev_info_t *dip)
-{
 }
 
 pfn_t

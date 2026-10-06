@@ -21,6 +21,8 @@
 /*
  * Copyright 2009 Sun Microsystems, Inc.  All rights reserved.
  * Use is subject to license terms.
+ *
+ * Copyright 2018, Joyent, Inc.
  */
 
 #ifndef	_AES_IMPL_H
@@ -90,7 +92,8 @@ extern "C" {
 #define	AES_MIN_KEY_BYTES	((AES_MINBITS) >> 3)
 #define	AES_MAX_KEY_BYTES	((AES_MAXBITS) >> 3)
 #define	AES_192_KEY_BYTES	24
-#define	AES_IV_LEN		16
+#define	AES_IV_LEN		16	/* CBC, ECB */
+#define	AES_GMAC_IV_LEN		12
 
 /* AES key schedule may be implemented with 32- or 64-bit elements: */
 #define	AES_32BIT_KS		32
@@ -135,9 +138,10 @@ extern int aes_decrypt_block(const void *ks, const uint8_t *ct, uint8_t *pt);
 
 /*
  * AES mode functions.
- * The first 2 functions operate on 16-byte AES blocks.
+ * The first 3 functions operate on 16-byte AES blocks.
  */
 extern void aes_copy_block(uint8_t *in, uint8_t *out);
+extern void aes_copy_block64(uint8_t *in, uint64_t *out);
 extern void aes_xor_block(uint8_t *data, uint8_t *dst);
 
 /* Note: ctx is a pointer to aes_ctx_t defined in modes.h */
@@ -159,7 +163,8 @@ typedef enum aes_mech_type {
 	AES_CTR_MECH_INFO_TYPE,		/* SUN_CKM_AES_CTR */
 	AES_CCM_MECH_INFO_TYPE,		/* SUN_CKM_AES_CCM */
 	AES_GCM_MECH_INFO_TYPE,		/* SUN_CKM_AES_GCM */
-	AES_GMAC_MECH_INFO_TYPE		/* SUN_CKM_AES_GMAC */
+	AES_GMAC_MECH_INFO_TYPE,	/* SUN_CKM_AES_GMAC */
+	AES_CMAC_MECH_INFO_TYPE		/* SUN_CKM_AES_CMAC */
 } aes_mech_type_t;
 
 #endif	/* _KERNEL */

@@ -1,10 +1,12 @@
 /*
  * Copyright 2009 Sun Microsystems, Inc.  All rights reserved.
  * Use is subject to license terms.
+ * Copyright (c) 2016 by Delphix. All rights reserved.
+ * Copyright 2021 Joyent, Inc.
  */
 
 /*	Copyright (c) 1984, 1986, 1987, 1988, 1989 AT&T	*/
-/*	  All Rights Reserved  	*/
+/*	  All Rights Reserved  */
 
 
 /*
@@ -91,13 +93,13 @@ main(int argc, char **argv)
 
 	(void) setlocale(LC_ALL, "");
 	pp = getpwuid(getuid());
-	pr.pw_uid = pp->pw_uid;
-	pr.pw_name = pp->pw_name;
-
 	if (pp == NULL)
 		atabort(INVALIDUSER);
 	if (!allowed(pp->pw_name, ATALLOW, ATDENY))
 		atabort(NOTALLOWED);
+
+	pr.pw_uid = pp->pw_uid;
+	pr.pw_name = pp->pw_name;
 
 	/*
 	 * Interpret command line flags if they exist.
@@ -229,7 +231,7 @@ countfiles(uid_t *uidlist, int nuids)
 	 * For each file in the queue, see if the user(s) own the file. We
 	 * have to use "entryfound" (rather than simply incrementing "numfiles")
 	 * so that if a person's name appears twice on the command line we
-	 * don't double the number of files owned by him/her.
+	 * don't double the number of files owned by that user.
 	 */
 	for (i = 0; i < numentries; i++) {
 		if ((stat(queue[i]->d_name, &stbuf)) < 0) {
@@ -276,7 +278,7 @@ printqueue(uid_t *uidlist, int nuids)
 	 * belonging to that person(s), otherwise print the entire queue.
 	 * Once again, we have to use "entryfound" (rather than simply
 	 * comparing each command line argument) so that if a person's name
-	 * appears twice we don't print each file owned by him/her twice.
+	 * appears twice we don't print each of their files twice.
 	 *
 	 *
 	 * "printrank", "printdate", and "printjobname" all take existing
@@ -316,7 +318,7 @@ printqueue(uid_t *uidlist, int nuids)
 }
 
 /*
- * Get the uid of a person using his/her login name. Return -1 if no
+ * Get the uid of a person using their login name. Return -1 if no
  * such account name exists.
  */
 uid_t
@@ -333,7 +335,7 @@ getid(char *name)
 }
 
 /*
- * Get the full login name of a person using his/her user id.
+ * Get the full login name of a person using their user id.
  */
 char *
 getname(uid_t uid)
@@ -371,7 +373,7 @@ printdate(char *filename)
 {
 	time_t	jobdate;
 	struct tm *unpackeddate;
-	char date[18];				/* reformatted execution date */
+	char date[19];				/* reformatted execution date */
 
 	/*
 	 * Convert the file name to a date.
@@ -384,7 +386,8 @@ printdate(char *filename)
 	/*
 	 * Format the execution date of a job.
 	 */
-	sprintf(date, "%3s %2d, %4d %02d:%02d", mthnames[unpackeddate->tm_mon],
+	snprintf(date, sizeof (date), "%3s %2d, %4d %02d:%02d",
+	    mthnames[unpackeddate->tm_mon],
 	    unpackeddate->tm_mday, unpackeddate->tm_year,
 	    unpackeddate->tm_hour, unpackeddate->tm_min);
 

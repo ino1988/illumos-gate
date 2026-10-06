@@ -20,6 +20,7 @@
  */
 /*
  * Copyright (c) 2005, 2010, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2016, Joyent, Inc. All rights reserved.
  */
 
 /*
@@ -398,7 +399,7 @@ iptun_m_getprop(void *barg, const char *pr_name, mac_prop_id_t pr_num,
 	default:
 		err = ENOTSUP;
 	}
-done:
+
 	iptun_exit(iptun);
 	return (err);
 }
@@ -1114,12 +1115,12 @@ iptun_setparams(iptun_t *iptun, const iptun_kparams_t *ik)
 
 	if (ik->iptun_kparam_flags & IPTUN_KPARAM_SECINFO) {
 		/*
-		 * Set IPsec policy originating from the ifconfig(1M) command
+		 * Set IPsec policy originating from the ifconfig(8) command
 		 * line.  This is traditionally called "simple" policy because
 		 * the ipsec_req_t (iptun_kparam_secinfo) can only describe a
 		 * simple policy of "do ESP on everything" and/or "do AH on
 		 * everything" (as opposed to the rich policy that can be
-		 * defined with ipsecconf(1M)).
+		 * defined with ipsecconf(8)).
 		 */
 		if (iptun->iptun_typeinfo->iti_type == IPTUN_TYPE_6TO4) {
 			/*
@@ -1355,6 +1356,7 @@ iptun_free(iptun_t *iptun)
 		iptun->iptun_connp = NULL;
 	}
 
+	netstack_rele(iptun->iptun_ns);
 	kmem_cache_free(iptun_cache, iptun);
 	atomic_dec_32(&iptun_tunnelcount);
 }
@@ -1682,7 +1684,6 @@ iptun_info(iptun_kparams_t *ik, cred_t *credp)
 		mutex_exit(&iptun->iptun_itp->itp_lock);
 	}
 
-done:
 	iptun_exit(iptun);
 	return (err);
 }
@@ -2627,8 +2628,8 @@ iptun_input_icmp_v6(iptun_t *iptun, mblk_t *data_mp, icmp6_t *icmp6h,
 			iptun_drop_pkt(data_mp, &iptun->iptun_oerrors);
 			return;
 		}
-		/* FALLTHRU */
 	}
+	/* FALLTHROUGH */
 	case ICMP6_TIME_EXCEEDED:
 	case ICMP6_DST_UNREACH:
 		type = (inner4 != NULL ? ICMP_DEST_UNREACHABLE :

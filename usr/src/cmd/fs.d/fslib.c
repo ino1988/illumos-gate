@@ -23,8 +23,6 @@
  * Use is subject to license terms.
  */
 
-#pragma ident	"%Z%%M%	%I%	%E% SMI"
-
 #include	<stdio.h>
 #include	<stdarg.h>
 #include	<stdlib.h>
@@ -165,9 +163,9 @@ fsfreemntlist(mntlist_t *mntl)
 mntlist_t *
 fsmkmntlist(FILE *mfp)
 {
-	struct extmnttab 	mnt;
-	mntlist_t 	*mhead, *mtail;
-	int 		ret;
+	struct extmnttab	mnt;
+	mntlist_t	*mhead, *mtail;
+	int		ret;
 
 	mhead = mtail = NULL;
 
@@ -207,7 +205,7 @@ alloc_failed:
 mntlist_t *
 fsgetmlast(mntlist_t *ml, struct mnttab *mntin)
 {
-	mntlist_t 	*delete = NULL;
+	mntlist_t	*delete = NULL;
 
 	for (; ml; ml = ml->mntl_next) {
 		if (mntin->mnt_mountp && mntin->mnt_special) {
@@ -243,7 +241,7 @@ fsgetmlevel(char *cp)
 	int	mlevel;
 	char	*cp1;
 
-	if (cp == NULL || *cp == NULL || *cp != '/')
+	if (cp == NULL || *cp == '\0' || *cp != '/')
 		return (0);	/* this should never happen */
 
 	mlevel = 1;			/* root (/) is the minimal case */
@@ -295,7 +293,7 @@ static char *empty_opt_vector[] = {
  */
 void
 cmp_requested_to_actual_options(char *requested_opts, char *actual_opts,
-	char *special, char *mountp)
+    char *special, char *mountp)
 {
 	char	*option_ptr, *actopt, *equalptr;
 	int	found;
@@ -304,7 +302,10 @@ cmp_requested_to_actual_options(char *requested_opts, char *actual_opts,
 	if (requested_opts == NULL)
 		return;
 
-	bufp = alloca(strlen(actual_opts) + 1);
+	if (actual_opts == NULL)
+		bufp = alloca(1);
+	else
+		bufp = alloca(strlen(actual_opts) + 1);
 
 	while (*requested_opts != '\0') {
 		(void) getsubopt(&requested_opts, empty_opt_vector,
@@ -387,7 +388,8 @@ cmp_requested_to_actual_options(char *requested_opts, char *actual_opts,
  *			- 1 if maxphys is found
  */
 int
-fsgetmaxphys(int *maxphys, int *error) {
+fsgetmaxphys(int *maxphys, int *error)
+{
 
 	int	gotit = 0;
 	int	fp = open("/", O_RDONLY);

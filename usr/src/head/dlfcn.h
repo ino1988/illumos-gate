@@ -107,7 +107,7 @@ typedef ulong_t		Lmid_t;
  * Declarations used for dynamic linking support routines.
  */
 extern void	*dlopen(const char *, int);
-extern void   	*dlsym(void *_RESTRICT_KYWD, const char *_RESTRICT_KYWD);
+extern void	*dlsym(void *_RESTRICT_KYWD, const char *_RESTRICT_KYWD);
 extern int	dlclose(void *);
 extern char	*dlerror(void);
 #if !defined(_XOPEN_SOURCE) || defined(__EXTENSIONS__)
@@ -119,13 +119,8 @@ extern int	dlinfo(void *, int, void *);
 extern Dl_amd64_unwindinfo  *dlamd64getunwind(void *, Dl_amd64_unwindinfo *);
 #endif /* !defined(_XOPEN_SOURCE) || defined(__EXTENSIONS__) */
 
-#pragma unknown_control_flow(dlopen, dlsym, dlclose, dlerror)
-#if !defined(_XOPEN_SOURCE) || defined(__EXTENSIONS__)
-#pragma unknown_control_flow(dlmopen, dladdr, dladdr1, dldump, dlinfo)
-#endif /* !defined(_XOPEN_SOURCE) || defined(__EXTENSIONS__) */
-
 /*
- * Valid values for handle argument to dlsym(3x).
+ * Valid values for handle argument to dlsym(3C).
  */
 #define	RTLD_NEXT		(void *)-1	/* look in `next' dependency */
 #define	RTLD_DEFAULT		(void *)-2	/* look up symbol from scope */
@@ -171,7 +166,7 @@ extern Dl_amd64_unwindinfo  *dlamd64getunwind(void *, Dl_amd64_unwindinfo *);
 						/*	bind to ourself */
 #define	RTLD_REL_WEAK		0x00020		/* apply symbolic weak relocs */
 						/*	even if unresolved */
-#define	RTLD_REL_ALL		0x00fff 	/* apply all relocs */
+#define	RTLD_REL_ALL		0x00fff		/* apply all relocs */
 
 #define	RTLD_MEMORY		0x01000		/* use memory sections */
 #define	RTLD_STRIP		0x02000		/* retain allocable sections */

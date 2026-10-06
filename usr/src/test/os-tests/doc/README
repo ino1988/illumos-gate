@@ -36,7 +36,7 @@ and the testrunner without running a full nightly:
 Then set the publisher on the test machine to point to your repository and
 install the OS Unit Test Suite.
 
-	test_machine# pkg install pkg:/system/test/zfstest
+	test_machine# pkg install pkg:/system/test/ostest
 
 Note, the framework will be installed automatically, as the OS Unit Test Suite
 depends on it.
@@ -44,7 +44,7 @@ depends on it.
 2. Running the OS Unit Test Suite
 
 The pre-requisites for running the OS Unit Test Suite are:
-	- A non-root user with the ability to sudo(1M) to root without a
+	- A non-root user with the ability to sudo(8) to root without a
 	  password or the root user must run the test.
 
 Once the pre-requisites are satisfied, simply run the ostest script:

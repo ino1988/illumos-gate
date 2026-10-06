@@ -53,6 +53,9 @@ my $appDebug = 0; # used after return from "new auditxml";
 
 # Process command-line options
 our ($opt_d, $opt_e, $opt_i, $opt_o);
+$opt_e = "";
+$opt_i = "";
+$opt_o = "";
 if (!getopts('de:i:o:') || $#ARGV != 0) {
     die $usage;
 }
@@ -610,6 +613,7 @@ sub generateTableC {
 		  'priv_limit'		=> 'ADT_AUT_PRIV_L', 	# dummy token id
 		  'priv_inherit'	=> 'ADT_AUT_PRIV_I',	# dummy token id
 		  'return'      	=> 'AUT_RETURN',
+		  'secflags'		=> 'AUT_SECFLAGS',
 	#	  'seq'         	=> 'AUT_SEQ',		# not defined
 	#	  'socket'      	=> 'AUT_SOCKET',	# not defined
 	#	  'socket-inet' 	=> 'AUT_SOCKET_INET',
@@ -707,7 +711,7 @@ sub generateTableC {
 	}
 	my ($xlate, $jni) =
 	  formatTableEntry ('', $tokenId, $eventId, '', 0, 0,
-			    $tokenOrder[$sequence], 'NULL', $omit);
+			    $tokenOrder[$sequence], 'NULL', '', $omit);
 	push (@xlateEntryList, $xlate);
       }
       else {

@@ -21,7 +21,7 @@
 
 /*
  * Copyright (c) 2004, 2010, Oracle and/or its affiliates. All rights reserved.
- * Copyright (c) 2012, Joyent, Inc.  All rights reserverd.
+ * Copyright 2019 Joyent, Inc.
  */
 
 /*
@@ -466,11 +466,23 @@
 #include <sys/ontrap.h>
 #include <sys/x86_archext.h>
 #include <sys/promif.h>
+#include <sys/smt.h>
 #include <vm/hat_i86.h>
 #if defined(__xpv)
 #include <sys/hypervisor.h>
 #endif
 
+/* If these fail, then the padding numbers in machcpuvar.h are wrong. */
+#if !defined(__xpv)
+#define	MCOFF(member)	\
+	(offsetof(cpu_t, cpu_m) + offsetof(struct machcpu, member))
+CTASSERT(MCOFF(mcpu_pad) == MACHCPU_SIZE);
+CTASSERT(MCOFF(mcpu_pad2) == MMU_PAGESIZE);
+CTASSERT((MCOFF(mcpu_kpti) & 0xF) == 0);
+CTASSERT(((sizeof (struct kpti_frame)) & 0xF) == 0);
+CTASSERT((offsetof(struct kpti_frame, kf_tr_rsp) & 0xF) == 0);
+CTASSERT(MCOFF(mcpu_pad3) < 2 * MMU_PAGESIZE);
+#endif
 
 #if defined(__xpv) && defined(DEBUG)
 
@@ -585,6 +597,8 @@ hilevel_intr_prolog(struct cpu *cpu, uint_t pil, uint_t oldpil, struct regs *rp)
 		}
 	}
 
+	smt_begin_intr(pil);
+
 	/*
 	 * Store starting timestamp in CPU structure for this PIL.
 	 */
@@ -689,6 +703,8 @@ hilevel_intr_epilog(struct cpu *cpu, uint_t pil, uint_t oldpil, uint_t vecnum)
 			t->t_intr_start = now;
 	}
 
+	smt_end_intr();
+
 	mcpu->mcpu_pri = oldpil;
 	(void) (*setlvlx)(oldpil, vecnum);
 
@@ -751,6 +767,8 @@ intr_thread_prolog(struct cpu *cpu, caddr_t stackptr, uint_t pil)
 	it->t_state = TS_ONPROC;
 
 	cpu->cpu_thread = it;		/* new curthread on this cpu */
+	smt_begin_intr(pil);
+
 	it->t_pil = (uchar_t)pil;
 	it->t_pri = intr_pri + (pri_t)pil;
 	it->t_intr_start = now;
@@ -841,6 +859,7 @@ intr_thread_epilog(struct cpu *cpu, uint_t vec, uint_t oldpil)
 	mcpu->mcpu_pri = pil;
 	(*setlvlx)(pil, vec);
 	t->t_intr_start = now;
+	smt_end_intr();
 	cpu->cpu_thread = t;
 }
 
@@ -1028,6 +1047,7 @@ top:
 
 	it->t_intr = t;
 	cpu->cpu_thread = it;
+	smt_begin_intr(pil);
 
 	/*
 	 * Set bit for this pil in CPU's interrupt active bitmask.
@@ -1088,7 +1108,9 @@ dosoftint_epilog(struct cpu *cpu, uint_t oldpil)
 	it->t_link = cpu->cpu_intr_thread;
 	cpu->cpu_intr_thread = it;
 	it->t_state = TS_FREE;
+	smt_end_intr();
 	cpu->cpu_thread = t;
+
 	if (t->t_flag & T_INTR_THREAD)
 		t->t_intr_start = now;
 	basespl = cpu->cpu_base_spl;
@@ -1140,7 +1162,7 @@ cpu_create_intrstat(cpu_t *cp)
 		zoneid = ALL_ZONES;
 
 	intr_ksp = kstat_create_zone("cpu", cp->cpu_id, "intrstat", "misc",
-	    KSTAT_TYPE_NAMED, PIL_MAX * 2, NULL, zoneid);
+	    KSTAT_TYPE_NAMED, PIL_MAX * 2, 0, zoneid);
 
 	/*
 	 * Initialize each PIL's named kstat
@@ -1431,6 +1453,8 @@ loop:
 	 */
 	tp = CPU->cpu_thread;
 	if (USERMODE(rp->r_cs)) {
+		pcb_t *pcb;
+
 		/*
 		 * Check if AST pending.
 		 */
@@ -1445,14 +1469,29 @@ loop:
 			goto loop;
 		}
 
-#if defined(__amd64)
+		pcb = &tp->t_lwp->lwp_pcb;
+
+		/*
+		 * Check to see if we need to initialize the FPU for this
+		 * thread. This should be an uncommon occurrence, but may happen
+		 * in the case where the system creates an lwp through an
+		 * abnormal path such as the agent lwp. Make sure that we still
+		 * happen to have the FPU in a good state.
+		 */
+		if ((pcb->pcb_fpu.fpu_flags & FPU_EN) == 0) {
+			kpreempt_disable();
+			fp_seed();
+			kpreempt_enable();
+			PCB_SET_UPDATE_FPU(pcb);
+		}
+
 		/*
 		 * We are done if segment registers do not need updating.
 		 */
-		if (tp->t_lwp->lwp_pcb.pcb_rupdate == 0)
+		if (!PCB_NEED_UPDATE(pcb))
 			return (1);
 
-		if (update_sregs(rp, tp->t_lwp)) {
+		if (PCB_NEED_UPDATE_SEGS(pcb) && update_sregs(rp, tp->t_lwp)) {
 			/*
 			 * 1 or more of the selectors is bad.
 			 * Deliver a SIGSEGV.
@@ -1467,11 +1506,32 @@ loop:
 			tp->t_sig_check = 1;
 			cli();
 		}
-		tp->t_lwp->lwp_pcb.pcb_rupdate = 0;
+		PCB_CLEAR_UPDATE_SEGS(pcb);
 
-#endif	/* __amd64 */
+		if (PCB_NEED_UPDATE_FPU(pcb)) {
+			fprestore_ctxt(&pcb->pcb_fpu);
+		}
+		PCB_CLEAR_UPDATE_FPU(pcb);
+
+		ASSERT0(PCB_NEED_UPDATE(pcb));
+
 		return (1);
 	}
+
+#if !defined(__xpv)
+	/*
+	 * Assert that we're not trying to return into the syscall return
+	 * trampolines. Things will go baaaaad if we try to do that.
+	 *
+	 * Note that none of these run with interrupts on, so this should
+	 * never happen (even in the sysexit case the STI doesn't take effect
+	 * until after sysexit finishes).
+	 */
+	extern void tr_sysc_ret_start();
+	extern void tr_sysc_ret_end();
+	ASSERT(!(rp->r_pc >= (uintptr_t)tr_sysc_ret_start &&
+	    rp->r_pc <= (uintptr_t)tr_sysc_ret_end));
+#endif
 
 	/*
 	 * Here if we are returning to supervisor mode.

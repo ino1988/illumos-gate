@@ -20,6 +20,7 @@
  * CDDL HEADER END
  */
 /*
+ * Copyright 2017 Gary Mills
  * Copyright 2005 Sun Microsystems, Inc.  All rights reserved.
  * Use is subject to license terms.
  */
@@ -27,8 +28,6 @@
 /*	Copyright (c) 1984, 1986, 1987, 1988, 1989 AT&T	*/
 /*	  All Rights Reserved  	*/
 
-
-#pragma ident	"%Z%%M%	%I%	%E% SMI"
 
 #include	"uucp.h"
 
@@ -129,13 +128,12 @@ rproc()
 	FILE *cfd;
 	char line[BUFSIZ];
 	char *carray[C_MAX];
-	int na;
 
 	cfd = fopen(GRADES, "r");
 
 	while (rdfulline(cfd, line, BUFSIZ) != 0) {
 
-		na = getargs(line, carray, C_MAX);
+		(void) getargs(line, carray, C_MAX);
 		insert(carray[0]);
 	}
 
@@ -156,7 +154,7 @@ uproc()
 	while (rdfulline(cfd, line, BUFSIZ) != 0) {
 
 		na = getargs(line, carray, C_MAX);
-		
+
 		if (upermit(carray, na) != FAIL)
 			insert(carray[0]);
 	}
@@ -183,6 +181,6 @@ int i1, i2;
 /*VARARGS*/
 /*ARGSUSED*/
 void
-errent(s1, s2, i1, file, line)
-char *s1, *s2, *file;
-{ }
+errent(char *s1, char *s2, int i1, char *file, int line)
+{
+}

@@ -11,25 +11,19 @@
 
 #
 # Copyright 2011, Richard Lowe
-# Copyright 2013 Nexenta Systems, Inc.  All rights reserved.
+# Copyright 2014 Nexenta Systems, Inc.  All rights reserved.
 #
 
 include		$(SRC)/Makefile.master
 
-MANSECT= 	3
+MANSECT=	3
 
-MANFILES= 	Intro.3		\
+MANFILES=	Intro.3		\
 		hosts_access.3
-
-MANLINKS=	intro.3		\
-		libwrap.3
-
-intro.3		:= LINKSRC = Intro.3
-
-libwrap.3	:= LINKSRC = hosts_access.3
 
 .KEEP_STATE:
 
 include		$(SRC)/man/Makefile.man
 
-install:	$(ROOTMANFILES) $(ROOTMANLINKS)
+install:	$(ROOTMANFILES) $(MANLINK_SRCS)
+	$(MANLINK_INSTALL)

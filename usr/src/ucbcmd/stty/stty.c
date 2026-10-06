@@ -28,6 +28,7 @@
 /*	  All Rights Reserved  	*/
 
 #include <stdio.h>
+#include <stdlib.h>
 #include <ctype.h>
 #include <sys/types.h>
 #include <termio.h>
@@ -754,10 +755,12 @@ delay(int m, char *s)
 		(void) fprintf(output, "%s%d ", s, m);
 }
 
-long	speed[] = {
+long speed[] = {
 	0, 50, 75, 110, 134, 150, 200, 300,
 	600, 1200, 1800, 2400, 4800, 9600, 19200, 38400,
-	57600, 76800, 115200, 153600, 230400, 307200, 460800, 921600
+	57600, 76800, 115200, 153600, 230400, 307200, 460800, 921600,
+	1000000, 1152000, 1500000, 2000000, 2500000, 3000000, 3500000,
+	4000000
 };
 
 void

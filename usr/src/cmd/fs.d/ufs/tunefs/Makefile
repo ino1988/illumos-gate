@@ -23,6 +23,7 @@
 # Copyright (c) 1989,1996, by Sun Microsystems, Inc.
 # All rights reserved.
 #
+# Copyright (c) 2018, Joyent, Inc.
 
 FSTYPE=		ufs
 LIBPROG=	tunefs
@@ -37,9 +38,10 @@ LDLIBS	+=	-ladm
 CPPFLAGS +=	-D_LARGEFILE64_SOURCE
 
 CERRWARN +=	-_gcc=-Wno-parentheses
-CERRWARN +=	-_gcc=-Wno-uninitialized
+CERRWARN +=	$(CNOWARN_UNINIT)
 
-lint:		lint_PROG
+# not linted
+SMATCH=off
 
 $(ROOTUSRSBIN)/$(LIBPROG):	FRC
 		-$(RM) $@; $(SYMLINK) $(LINKVALUE) $@

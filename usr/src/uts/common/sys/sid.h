@@ -22,6 +22,8 @@
 /*
  * Copyright 2010 Sun Microsystems, Inc.  All rights reserved.
  * Use is subject to license terms.
+ *
+ * Copyright 2020 Tintri by DDN, Inc. All rights reserved.
  */
 
 #ifndef _SYS_SID_H
@@ -29,7 +31,7 @@
 
 #include <sys/types.h>
 #include <sys/avl.h>
-#ifdef _KERNEL
+#if defined(_KERNEL) || defined(_FAKE_KERNEL)
 #include <sys/zone.h>
 #endif
 
@@ -53,7 +55,7 @@ extern "C" {
 #define	SIDSYS_SID2ID	0
 #define	SIDSYS_ID2SID	1
 
-#ifdef _KERNEL
+#if defined(_KERNEL) || defined(_FAKE_KERNEL)
 #define	KSIDLIST_MEM(n)	(sizeof (ksidlist_t) + ((n) - 1) * sizeof (ksid_t))
 
 /* Domains are stored in AVL trees so we can share them among SIDs */
@@ -87,6 +89,7 @@ typedef struct ksidlist {
 	uint_t		ksl_ref;
 	uint_t		ksl_nsid;
 	uint_t		ksl_neid;	/* Number of ids which are ephemeral */
+	ksid_t		**ksl_sorted;	/* ksl_sids sorted by ID */
 	ksid_t		ksl_sids[1];	/* Allocate ksl_nsid times */
 } ksidlist_t;
 
@@ -117,12 +120,14 @@ void ksiddomain_rele(ksiddomain_t *);
 void ksiddomain_hold(ksiddomain_t *);
 void ksidlist_rele(ksidlist_t *);
 void ksidlist_hold(ksidlist_t *);
+boolean_t ksidlist_has_sid(ksidlist_t *, const char *, uint32_t);
+boolean_t ksidlist_has_pid(ksidlist_t *, uint32_t);
 
 ksiddomain_t *ksid_lookupdomain(const char *);
 
 ksidlist_t *kcrsid_gidstosids(zone_t *, int, gid_t *);
 
-#else
+#else /* _KERNEL */
 
 int allocids(int, int, uid_t *, int, gid_t *);
 int __idmap_reg(int);

@@ -27,15 +27,10 @@
 #ifndef	_ADD_DEFINITION_H
 #define	_ADD_DEFINITION_H
 
-#pragma ident	"%Z%%M%	%I%	%E% SMI"
-
 #ifdef	__cplusplus
 extern "C" {
 #endif
 
-/*
- *	Prototypes for ANSI C compilers
- */
 int	add_definition(void);
 
 #ifdef	__cplusplus

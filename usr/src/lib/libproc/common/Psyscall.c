@@ -25,6 +25,7 @@
 
 /*
  * Copyright (c) 2013, Joyent, Inc. All rights reserved.
+ * Copyright 2026 Oxide Computer Company
  */
 
 #include <stdio.h>
@@ -55,6 +56,7 @@
 #include "Pisadep.h"
 
 extern sigset_t blockable_sigs;
+extern int _libproc_test_fail_copyinargs;
 
 static void
 Pabort_agent(struct ps_prochandle *P)
@@ -62,7 +64,7 @@ Pabort_agent(struct ps_prochandle *P)
 	int sysnum = P->status.pr_lwp.pr_syscall;
 	int stop;
 
-	dprintf("agent LWP is stopped or asleep in syscall %d\n", sysnum);
+	Pdprintf("agent LWP is stopped or asleep in syscall %d\n", sysnum);
 	(void) Pstop(P, 0);
 	stop = Psysexit(P, sysnum, TRUE);
 
@@ -70,7 +72,7 @@ Pabort_agent(struct ps_prochandle *P)
 		while (Pwait(P, 0) == -1 && errno == EINTR)
 			continue;
 		(void) Psysexit(P, sysnum, stop);
-		dprintf("agent LWP system call aborted\n");
+		Pdprintf("agent LWP system call aborted\n");
 	}
 }
 
@@ -155,7 +157,7 @@ Pcreate_agent(struct ps_prochandle *P)
 	if ((P->status.pr_lwp.pr_flags & PR_ASLEEP) ||
 	    ((P->status.pr_lwp.pr_flags & PR_STOPPED) &&
 	    P->status.pr_lwp.pr_why == PR_SYSENTRY)) {
-		dprintf("Pcreate_agent: aborting agent syscall; lwp is %s\n",
+		Pdprintf("Pcreate_agent: aborting agent syscall; lwp is %s\n",
 		    (P->status.pr_lwp.pr_flags & PR_ASLEEP) ?
 		    "asleep" : "stopped");
 		Pabort_agent(P);
@@ -200,11 +202,14 @@ Pdestroy_agent(struct ps_prochandle *P)
 		flags = P->status.pr_lwp.pr_flags;
 
 		/*
-		 * If the agent is currently asleep in a system call, attempt
-		 * to abort the system call so we can terminate the agent.
+		 * If the agent is currently asleep in a system call or stopped
+		 * on system call entry, attempt to abort the system call so we
+		 * can terminate the agent.
 		 */
-		if ((flags & (PR_AGENT|PR_ASLEEP)) == (PR_AGENT|PR_ASLEEP)) {
-			dprintf("Pdestroy_agent: aborting agent syscall\n");
+		if ((flags & PR_AGENT) && ((flags & PR_ASLEEP) ||
+		    ((flags & PR_STOPPED) &&
+		    P->status.pr_lwp.pr_why == PR_SYSENTRY))) {
+			Pdprintf("Pdestroy_agent: aborting agent syscall\n");
 			Pabort_agent(P);
 		}
 
@@ -213,7 +218,10 @@ Pdestroy_agent(struct ps_prochandle *P)
 		 * the _lwp_exit(2) system call.  Close our agent descriptors
 		 * regardless of whether this is successful.
 		 */
-		(void) pr_lwp_exit(P);
+		if (pr_lwp_exit(P) != 0) {
+			Pdprintf("Pdestroy_agent: failed to terminate "
+			    "agent LWP: %s\n", strerror(errno));
+		}
 		(void) close(P->agentctlfd);
 		(void) close(P->agentstatfd);
 		P->agentctlfd = -1;
@@ -296,10 +304,10 @@ bad:
  */
 int
 Psyscall(struct ps_prochandle *P,
-	sysret_t *rval,		/* syscall return values */
-	int sysindex,		/* system call index */
-	uint_t nargs,		/* number of arguments to system call */
-	argdes_t *argp)		/* argument descriptor array */
+    sysret_t *rval,		/* syscall return values */
+    int sysindex,		/* system call index */
+    uint_t nargs,		/* number of arguments to system call */
+    argdes_t *argp)		/* argument descriptor array */
 {
 	int agent_created = FALSE;
 	pstatus_t save_pstatus;
@@ -422,7 +430,7 @@ Psyscall(struct ps_prochandle *P,
 	 */
 	ap = Psyscall_setup(P, nargs, sysindex, sp);
 	P->flags |= SETREGS;	/* set registers before continuing */
-	dprintf("Psyscall(): execute(sysindex = %d)\n", sysindex);
+	Pdprintf("Psyscall(): execute(sysindex = %d)\n", sysindex);
 
 	/*
 	 * Execute the syscall instruction and stop on syscall entry.
@@ -432,7 +440,7 @@ Psyscall(struct ps_prochandle *P,
 	    !Pissyscall_prev(P, P->status.pr_lwp.pr_reg[R_PC], NULL)))
 		goto bad10;
 
-	dprintf("Psyscall(): copying arguments\n");
+	Pdprintf("Psyscall(): copying arguments\n");
 
 	/*
 	 * The LWP is stopped at syscall entry.
@@ -449,14 +457,42 @@ Psyscall(struct ps_prochandle *P,
 		}
 	}
 	rval->sys_rval1 = 0;			/* in case of error */
-	if (Psyscall_copyinargs(P, nargs, argp, ap) != 0)
-		goto bad18;
+
+	/*
+	 * The private _libproc_test_fail_copyinargs flag makes the following
+	 * write to the agent's stack behave as though it had failed. It
+	 * exists so that the test suite can exercise the failure handling
+	 * below, including during agent destruction, without requiring a
+	 * target process whose stack is genuinely unwritable.
+	 */
+	if (_libproc_test_fail_copyinargs ||
+	    Psyscall_copyinargs(P, nargs, argp, ap) != 0) {
+		/*
+		 * Constructing the fabricated stack frame failed. That is
+		 * fatal for a normal system call, but not for _lwp_exit().
+		 * The frame is only consumed on return to userland, and
+		 * _lwp_exit() does not return, so the call can safely
+		 * proceed without it. This matters when destroying an agent
+		 * whose stack cannot be written at all. The agent inherits
+		 * its stack from the representative lwp, and if that lwp was
+		 * caught early in process startup then the area below the
+		 * stack pointer may be unmapped. A write there through /proc
+		 * fails, since such writes do not grow the stack. Bailing
+		 * out here would orphan the agent, and the process could
+		 * then never be set running again because run-on-last-close
+		 * is skipped for a process which still has an agent lwp.
+		 */
+		if (sysindex != SYS_lwp_exit)
+			goto bad18;
+		Pdprintf("Psyscall(): ignoring copyinargs failure for "
+		    "_lwp_exit()\n");
+	}
 
 	/*
 	 * Complete the system call.
 	 * This moves the LWP to the stopped-on-syscall-exit state.
 	 */
-	dprintf("Psyscall(): set running at sysentry\n");
+	Pdprintf("Psyscall(): set running at sysentry\n");
 
 	sexit = Psysexit(P, sysindex, TRUE);	/* catch this syscall exit */
 	do {
@@ -472,7 +508,7 @@ Psyscall(struct ps_prochandle *P,
 	 * to Pwait() will yield ENOENT because the LWP no longer exists.
 	 */
 	if (sysindex == SYS_lwp_exit && errno == ENOENT) {
-		dprintf("Psyscall(): _lwp_exit successful\n");
+		Pdprintf("Psyscall(): _lwp_exit successful\n");
 		rval->sys_rval1 = rval->sys_rval2 = 0;
 		goto out;
 	}
@@ -484,11 +520,11 @@ Psyscall(struct ps_prochandle *P,
 		goto bad23;
 
 	if (!Pissyscall_prev(P, P->status.pr_lwp.pr_reg[R_PC], NULL)) {
-		dprintf("Pissyscall_prev() failed\n");
+		Pdprintf("Pissyscall_prev() failed\n");
 		goto bad24;
 	}
 
-	dprintf("Psyscall(): caught at sysexit\n");
+	Pdprintf("Psyscall(): caught at sysexit\n");
 
 	/*
 	 * For each argument.
@@ -514,12 +550,12 @@ Psyscall(struct ps_prochandle *P,
 		error = P->status.pr_lwp.pr_errno;
 		rval->sys_rval1 = -1L;
 		rval->sys_rval2 = -1L;
-		dprintf("Psyscall(%d) fails with errno %d\n",
+		Pdprintf("Psyscall(%d) fails with errno %d\n",
 		    sysindex, error);
 	} else {				/* normal return */
 		rval->sys_rval1 = P->status.pr_lwp.pr_rval1;
 		rval->sys_rval2 = P->status.pr_lwp.pr_rval2;
-		dprintf("Psyscall(%d) returns 0x%lx 0x%lx\n", sysindex,
+		Pdprintf("Psyscall(%d) returns 0x%lx 0x%lx\n", sysindex,
 		    P->status.pr_lwp.pr_rval1, P->status.pr_lwp.pr_rval2);
 	}
 
@@ -542,7 +578,10 @@ bad17:	Perr++;
 	Perr++;
 	Perr++;
 bad10:	Perr++;
-bad9:	Perr++;
+#ifndef _LP64
+bad9:
+#endif
+	Perr++;
 bad8:	Perr++;
 bad7:	Perr++;
 bad6:	Perr++;
@@ -552,7 +591,7 @@ bad3:	Perr++;
 bad2:	Perr++;
 bad1:	Perr++;
 	error = -1;
-	dprintf("Psyscall(%d) fails with local error %d\n", sysindex, Perr);
+	Pdprintf("Psyscall(%d) fails with local error %d\n", sysindex, Perr);
 
 out:
 	/*

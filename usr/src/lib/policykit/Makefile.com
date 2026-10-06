@@ -23,32 +23,21 @@
 # Use is subject to license terms.
 #
 
+VERSPKG = $(POLICYKIT_VERSION)
+PCFILE = polkit.pc
+
 include $(SRC)/lib/Makefile.lib
 include $(SRC)/lib/policykit/Makefile.policykit
 
 CPPFLAGS =	$(POLICYKIT_DBUS_CPPFLAGS) $(POLICYKIT_GLIB_CPPFLAGS) $(CPPFLAGS.master)
 
 CERRWARN +=	-_gcc=-Wno-unused-variable
+CERRWARN +=	-_gcc=-Wno-unused-function
 
-C99MODE =	$(C99_ENABLE)
-
-ROOTLIBPCDIR =	$(ROOT)/usr/lib/pkgconfig
-ROOTLIBPC =	$(LIBPCSRC:%=$(ROOTLIBPCDIR)/%)
-
-CLOBBERFILES +=	$(LIBPCSRC)
+CSTD =	$(CSTD_GNU99)
 
 #
 # Ensure `all' is the default target.
 #
 all:
-
-$(ROOTLIBPCDIR):
-	$(INS.dir)
-
-$(ROOTLIBPC): $(ROOTLIBPCDIR) $(LIBPCSRC)
-	$(INS.file) $(LIBPCSRC)
-
-$(LIBPCSRC): ../common/$(LIBPCSRC).in
-	$(SED)	-e "s@__VERSION__@$(POLICYKIT_VERSION)@" \
-		 < ../common/$(LIBPCSRC).in > $(LIBPCSRC)
 

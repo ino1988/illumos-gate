@@ -22,17 +22,21 @@
 /*
  * Copyright 2009 Sun Microsystems, Inc.  All rights reserved.
  * Use is subject to license terms.
+ *
+ * Copyright 2021 Joyent, Inc.
+ * Copyright 2023 RackTop Systems, Inc.
+ * Copyright 2026 Oxide Computer Company
  */
 
 #include <stdio.h>
 #include <unistd.h>
 #include <stropts.h>
 #include <string.h>
+#include <strings.h>
 #include <stdlib.h>
 #include <fcntl.h>
 #include <stdarg.h>
 #include <setjmp.h>
-#include <string.h>
 #include <errno.h>
 #include <sys/types.h>
 #include <sys/time.h>
@@ -73,12 +77,14 @@ static char *encap;
 static int audio;
 int maxcount;	/* maximum no of packets to capture */
 int count;	/* count of packets captured */
+uint_t total_drops; /* number of packets dropped */
 static int sumcount;
 int x_offset = -1;
 int x_length = 0x7fffffff;
 FILE *namefile;
 boolean_t Pflg;
 boolean_t Iflg;
+boolean_t fflg;
 boolean_t qflg;
 boolean_t rflg;
 #ifdef	DEBUG
@@ -93,6 +99,54 @@ static void snoop_sigrecover(int sig, siginfo_t *info, void *p);
 static char *protmalloc(size_t);
 static void resetperm(void);
 
+static char *
+process_ocapfile(const char *arg, size_t *nfiles, off_t *limit)
+{
+	char *ptr = strdup(arg);
+	char *name, *data;
+	const char *errstr;
+	long long n, m;
+	int i;
+
+	name = strsep(&ptr, ":");
+	data = strsep(&ptr, ":");
+	if (data == NULL || ptr == NULL)
+		usage();
+
+	n = strtonum(data, 1, 100, &errstr);
+	if (errstr != NULL) {
+		printf("%s: value %s: %s\n", __func__, data, errstr);
+		usage();
+	}
+	*nfiles = n;
+	m = 1;
+	i = strlen(ptr);
+	if (i > 0)
+		i--;
+
+	switch (ptr[i]) {
+	case 'k':
+		m = 1024;
+		ptr[i] = '\0';
+		break;
+	case 'm':
+		m = 1024 * 1024;
+		ptr[i] = '\0';
+		break;
+	case 'g':
+		m = 1024 * 1024 * 1024;
+		ptr[i] = '\0';
+		break;
+	}
+	n = strtonum(ptr, 1, MAXOFF_T, &errstr);
+	if (errstr != NULL) {
+		printf("%s: value %s: %s\n", __func__, ptr, errstr);
+		usage();
+	}
+	*limit = n * m;
+	return (name);
+}
+
 int
 main(int argc, char **argv)
 {
@@ -105,6 +159,7 @@ main(int argc, char **argv)
 	boolean_t nflg = B_FALSE;
 	boolean_t Nflg = B_FALSE;
 	int Cflg = 0;
+	boolean_t Qflg = B_FALSE;
 	boolean_t Uflg = B_FALSE;
 	int first = 1;
 	int last  = 0x7fffffff;
@@ -122,6 +177,9 @@ main(int argc, char **argv)
 	int nbytes;
 	char *datalink = NULL;
 	dlpi_handle_t dh;
+	size_t nfiles = 0;
+	off_t limit = 0;
+	int direction = DIR_INOUT;
 
 	names[0] = '\0';
 	/*
@@ -227,8 +285,8 @@ main(int argc, char **argv)
 	}
 	(void) setvbuf(stdout, NULL, _IOLBF, BUFSIZ);
 
-	while ((c = getopt(argc, argv, "at:CPDSi:o:Nn:s:d:I:vVp:f:c:x:U?rqz"))
-	    != EOF) {
+	while ((c = getopt(argc, argv,
+	    "at:CPDSi:O:o:Nn:s:d:I:vVp:fc:x:U?rqQ:z")) != EOF) {
 		switch (c) {
 		case 'a':
 			audiodev = getenv("AUDIODEV");
@@ -268,7 +326,14 @@ main(int argc, char **argv)
 		case 'i':
 			icapfile = optarg;
 			break;
+		case 'O':
+			if (ocapfile != NULL)
+				usage();
+			ocapfile = process_ocapfile(optarg, &nfiles, &limit);
+			break;
 		case 'o':
+			if (ocapfile != NULL)
+				usage();
 			ocapfile = optarg;
 			break;
 		case 'N':
@@ -305,21 +370,7 @@ main(int argc, char **argv)
 			}
 			break;
 		case 'f':
-			(void) gethostname(self, MAXHOSTNAMELEN);
-			p = strchr(optarg, ':');
-			if (p) {
-				*p = '\0';
-				if (strcmp(optarg, self) == 0 ||
-				    strcmp(p+1, self) == 0)
-				(void) fprintf(stderr,
-				"Warning: cannot capture packets from %s\n",
-				    self);
-				*p = ' ';
-			} else if (strcmp(optarg, self) == 0)
-				(void) fprintf(stderr,
-				"Warning: cannot capture packets from %s\n",
-				    self);
-			argstr = optarg;
+			fflg = B_TRUE;
 			break;
 		case 'x':
 			p = optarg;
@@ -341,6 +392,17 @@ main(int argc, char **argv)
 			break;
 		case 'q':
 			qflg = B_TRUE;
+			break;
+		case 'Q':
+			Qflg = B_TRUE;
+			if (strcasecmp("inout", optarg) == 0)
+				direction = DIR_INOUT;
+			else if (strcasecmp("in", optarg) == 0)
+				direction = DIR_IN;
+			else if (strcasecmp("out", optarg) == 0)
+				direction = DIR_OUT;
+			else
+				usage();
 			break;
 		case 'r':
 			rflg = B_TRUE;
@@ -373,6 +435,11 @@ main(int argc, char **argv)
 	if (!icapfile) {
 		use_kern_pf = open_datalink(&dh, datalink);
 	} else {
+		if (Qflg) {
+			pr_err("cannot specify direction (-Q) when "
+			    "reading from a capture file (-i)");
+		}
+
 		use_kern_pf = B_FALSE;
 		cap_open_read(icapfile);
 
@@ -435,7 +502,10 @@ main(int argc, char **argv)
 	 * mappings through the name service.
 	 */
 	if (ocapfile) {
-		cap_open_write(ocapfile);
+		if (nfiles > 1)
+			cap_open_wr_multi(ocapfile, nfiles, limit);
+		else
+			cap_open_write(ocapfile);
 		proc = cap_write;
 	} else {
 		flags |= F_NOW;
@@ -493,7 +563,7 @@ main(int argc, char **argv)
 			timeout.tv_usec = 0;
 		}
 
-		init_datalink(dh, snaplen, chunksize, &timeout, fp);
+		init_datalink(dh, snaplen, chunksize, &timeout, fp, direction);
 		if (! qflg && ocapfile)
 			show_count();
 		resetperm();
@@ -527,8 +597,7 @@ static int tone[] = {
  * an 8k read sounds like a "WHAAAARP".
  */
 void
-click(len)
-	int len;
+click(int len)
 {
 	len /= 8;
 	len = len ? len : 4;
@@ -548,7 +617,7 @@ show_count()
 		return;
 
 	prev = count;
-	(void) fprintf(stderr, "\r%d ", count);
+	(void) fprintf(stderr, "\rPackets: %d Drops: %u", count, total_drops);
 }
 
 #define	ENCAP_LEN	16	/* Hold "(NN encap)" */
@@ -559,10 +628,8 @@ show_count()
  * line display.
  */
 void
-show_pktinfo(flags, num, src, dst, ptvp, tvp, drops, len)
-	int flags, num, drops, len;
-	char *src, *dst;
-	struct timeval *ptvp, *tvp;
+show_pktinfo(int flags, int num, char *src, char *dst, struct timeval *ptvp,
+    struct timeval *tvp, int drops, int len)
 {
 	struct tm *tm;
 	static struct timeval tvp0;
@@ -578,9 +645,9 @@ show_pktinfo(flags, num, src, dst, ptvp, tvp, drops, len)
 
 	if (flags & F_TIME) {
 		if (flags & F_ATIME) {
-			(void) sprintf(lp, "%d:%02d:%d.%05d ",
-				tm->tm_hour, tm->tm_min, tm->tm_sec,
-				(int)tvp->tv_usec / 10);
+			(void) sprintf(lp, "%02d:%02d:%02d.%05d ",
+			    tm->tm_hour, tm->tm_min, tm->tm_sec,
+			    (int)tvp->tv_usec / 10);
 			lp += strlen(lp);
 		} else {
 			if (flags & F_RTIME) {
@@ -629,7 +696,7 @@ show_pktinfo(flags, num, src, dst, ptvp, tvp, drops, len)
 		(void) sprintf(encap, "  (%d encap)", total_encap_levels - 1);
 		(void) printf("%s%s%s\n", line, sumline[start],
 		    ((flags & F_ALLSUM) || (total_encap_levels == 1)) ? "" :
-			encap);
+		    encap);
 
 		for (i = start + 1; i < sumcount; i++)
 			(void) printf("%s%s\n", line, sumline[i]);
@@ -669,8 +736,7 @@ get_sum_line()
 
 /*ARGSUSED*/
 char *
-get_detail_line(off, len)
-	int off, len;
+get_detail_line(int off, int len)
 {
 	if (detail_line[0]) {
 		(void) printf("%s\n", detail_line);
@@ -776,45 +842,49 @@ usage(void)
 {
 	(void) fprintf(stderr, "\nUsage:  snoop\n");
 	(void) fprintf(stderr,
-	"\t[ -a ]			# Listen to packets on audio\n");
+	"\t[ -a ]                       # Listen to packets on audio\n");
 	(void) fprintf(stderr,
-	"\t[ -d link ]		# Listen on named link\n");
+	"\t[ -d link ]                  # Listen on named link\n");
 	(void) fprintf(stderr,
-	"\t[ -s snaplen ]		# Truncate packets\n");
+	"\t[ -s snaplen ]               # Truncate packets\n");
 	(void) fprintf(stderr,
-	"\t[ -I IP interface ]		# Listen on named IP interface\n");
+	"\t[ -I IP interface ]          # Listen on named IP interface\n");
 	(void) fprintf(stderr,
-	"\t[ -c count ]		# Quit after count packets\n");
+	"\t[ -c count ]                 # Quit after count packets\n");
 	(void) fprintf(stderr,
-	"\t[ -P ]			# Turn OFF promiscuous mode\n");
+	"\t[ -P ]                       # Turn OFF promiscuous mode\n");
 	(void) fprintf(stderr,
-	"\t[ -D ]			# Report dropped packets\n");
+	"\t[ -D ]                       # Report dropped packets\n");
 	(void) fprintf(stderr,
-	"\t[ -S ]			# Report packet size\n");
+	"\t[ -S ]                       # Report packet size\n");
 	(void) fprintf(stderr,
-	"\t[ -i file ]		# Read previously captured packets\n");
+	"\t[ -i file ]                  # Read previously captured packets\n");
 	(void) fprintf(stderr,
-	"\t[ -o file ]		# Capture packets in file\n");
+	"\t[ -O prefix:count:size ]     # Capture packets in files\n");
 	(void) fprintf(stderr,
-	"\t[ -n file ]		# Load addr-to-name table from file\n");
+	"\t[ -o file ]                  # Capture packets in file\n");
 	(void) fprintf(stderr,
-	"\t[ -N ]			# Create addr-to-name table\n");
+	"\t[ -n file ]                  # Load addr-to-name table from file\n");
 	(void) fprintf(stderr,
-	"\t[ -t  r|a|d ]		# Time: Relative, Absolute or Delta\n");
+	"\t[ -N ]                       # Create addr-to-name table\n");
 	(void) fprintf(stderr,
-	"\t[ -v ]			# Verbose packet display\n");
+	"\t[ -t  r|a|d ]                # Time: Relative, Absolute or Delta\n");
 	(void) fprintf(stderr,
-	"\t[ -V ]			# Show all summary lines\n");
+	"\t[ -v ]                       # Verbose packet display\n");
 	(void) fprintf(stderr,
-	"\t[ -p first[,last] ]	# Select packet(s) to display\n");
+	"\t[ -V ]                       # Show all summary lines\n");
 	(void) fprintf(stderr,
-	"\t[ -x offset[,length] ]	# Hex dump from offset for length\n");
+	"\t[ -p first[,last] ]          # Select packet(s) to display\n");
 	(void) fprintf(stderr,
-	"\t[ -C ]			# Print packet filter code\n");
+	"\t[ -x offset[,length] ]       # Hex dump from offset for length\n");
 	(void) fprintf(stderr,
-	"\t[ -q ]			# Suppress printing packet count\n");
+	"\t[ -C ]                       # Print packet filter code\n");
 	(void) fprintf(stderr,
-	"\t[ -r ]			# Do not resolve address to name\n");
+	"\t[ -q ]                       # Suppress printing packet count\n");
+	(void) fprintf(stderr,
+	"\t[ -Q inout|in|out ]          # Set packet capture direction\n");
+	(void) fprintf(stderr,
+	"\t[ -r ]                       # Do not resolve address to name\n");
 	(void) fprintf(stderr,
 	"\n\t[ filter expression ]\n");
 	(void) fprintf(stderr, "\nExample:\n");

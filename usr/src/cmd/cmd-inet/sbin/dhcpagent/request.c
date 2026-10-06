@@ -21,6 +21,7 @@
 /*
  * Copyright 2009 Sun Microsystems, Inc.  All rights reserved.
  * Use is subject to license terms.
+ * Copyright (c) 2016-2017, Chris Fraire <cfraire@me.com>.
  *
  * REQUESTING state of the client state machine.
  */
@@ -245,6 +246,8 @@ dhcp_requesting(iu_tq_t *tqp, void *arg)
 		return;
 	}
 
+	save_domainname(dsmp, offer);
+
 	if (isv6) {
 		const char *estr, *msg;
 		const dhcpv6_option_t *d6o;
@@ -295,7 +298,8 @@ dhcp_requesting(iu_tq_t *tqp, void *arg)
 
 		(void) add_pkt_opt32(dpkt, CD_LEASE_TIME, lease);
 		(void) add_pkt_opt16(dpkt, CD_MAX_DHCP_SIZE,
-		    htons(dsmp->dsm_lif->lif_max - sizeof (struct udpiphdr)));
+		    htons(dsmp->dsm_lif->lif_pif->pif_mtu -
+		    sizeof (struct udpiphdr)));
 		(void) add_pkt_opt32(dpkt, CD_REQUESTED_IP_ADDR,
 		    offer->pkt->yiaddr.s_addr);
 		(void) add_pkt_opt(dpkt, CD_SERVER_ID,
@@ -313,7 +317,8 @@ dhcp_requesting(iu_tq_t *tqp, void *arg)
 		 * dhcp_selecting() if the DF_REQUEST_HOSTNAME option set and a
 		 * host name was found
 		 */
-		if (dsmp->dsm_reqhost != NULL) {
+		if (!dhcp_add_fqdn_opt(dpkt, dsmp) &&
+		    dsmp->dsm_reqhost != NULL) {
 			(void) add_pkt_opt(dpkt, CD_HOSTNAME, dsmp->dsm_reqhost,
 			    strlen(dsmp->dsm_reqhost));
 		}
@@ -1103,7 +1108,7 @@ dhcp_packet_lif(iu_eh_t *ehp, int fd, short events, iu_event_id_t id,
 	uint_t		xid;
 	dhcp_smach_t	*dsmp;
 
-	if ((plp = recv_pkt(fd, lif->lif_max, B_FALSE)) == NULL)
+	if ((plp = recv_pkt(fd, lif->lif_pif->pif_mtu, B_FALSE)) == NULL)
 		return;
 
 	recv_type = pkt_recv_type(plp);

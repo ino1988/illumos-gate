@@ -20,6 +20,9 @@
  */
 /*
  * Copyright (c) 1989, 2010, Oracle and/or its affiliates. All rights reserved.
+ * Copyright 2012 Marcel Telka <marcel@telka.sk>
+ * Copyright 2013 Nexenta Systems, Inc.  All rights reserved.
+ * Copyright 2018 OmniOS Community Edition (OmniOSce) Association.
  */
 /* Copyright (c) 1983, 1984, 1985, 1986, 1987, 1988, 1989 AT&T */
 /* All Rights Reserved */
@@ -44,6 +47,7 @@
 
 #ifdef	_KERNEL
 #include <rpc/svc_auth.h>
+#include <rpc/rpc_tags.h>
 #include <sys/callb.h>
 #endif	/* _KERNEL */
 
@@ -188,8 +192,24 @@ struct svc_ops {
 		/* `ready-to-receive' */
 	void	(*xp_clone_xprt)(SVCXPRT *, SVCXPRT *);
 		/* transport specific clone function */
-	void	(*xp_tattrs) (SVCXPRT *, int, void **);
+	void	(*xp_tattrs)(SVCXPRT *, int, void **);
+		/* kernel level control */
+	int	(*xp_ctl)(SVCXPRT *, int, void *);
+		/* transport specific hold function */
+	void	(*xp_hold)(queue_t *);
+		/* transport specific release function */
+	void	(*xp_release)(queue_t *, mblk_t *, bool_t);
 };
+
+/*
+ * Kernel SVC Control Requests.
+ */
+#define	SVCCTL_SET_ASD		1
+#define	SVCCTL_GET_ASD		2
+#define	SVCCTL_SET_CBCONN	3
+#define	SVCCTL_SET_TAG		4
+#define	SVCCTL_SET_TAG_CLEAR	5
+#define	SVCCTL_CMP_TAG		6
 
 #define	SVC_TATTR_ADDRMASK	1
 
@@ -213,7 +233,6 @@ enum xprt_stat {
 };
 
 struct xp_ops {
-#ifdef	__STDC__
 	bool_t	(*xp_recv)(SVCXPRT *, struct rpc_msg *);
 		/* receive incoming requests */
 	enum xprt_stat (*xp_stat)(SVCXPRT *);
@@ -228,15 +247,6 @@ struct xp_ops {
 		/* destroy this struct */
 	bool_t	(*xp_control)(SVCXPRT *, const uint_t,	void *);
 		/* catch-all control function */
-#else	/* __STDC__ */
-	bool_t	(*xp_recv)(); /* receive incoming requests */
-	enum xprt_stat (*xp_stat)(); /* get transport status */
-	bool_t	(*xp_getargs)(); /* get arguments */
-	bool_t	(*xp_reply)(); /* send reply */
-	bool_t	(*xp_freeargs)(); /* free mem allocated for args */
-	void	(*xp_destroy)(); /* destroy this struct */
-	bool_t	(*xp_control)(); /* catch-all control function */
-#endif	/* __STDC__ */
 };
 #endif	/* _KERNEL */
 
@@ -254,7 +264,7 @@ struct __svcpool {
 	 * The pool's thread lock p_thread_lock protects:
 	 * - p_threads, p_detached_threads, p_reserved_threads and p_closing
 	 * The pool's request lock protects:
-	 * - p_asleep, p_drowsy, p_reqs, p_walkers, p_req_cv.
+	 * - p_asleep, p_drowsy, p_reqs, p_size, p_walkers, p_req_cv.
 	 * The following fields are `initialized constants':
 	 * - p_id, p_stksize, p_timeout.
 	 * Access to p_next and p_prev is protected by the pool
@@ -271,7 +281,7 @@ struct __svcpool {
 	kmutex_t	p_thread_lock;		/* Thread lock		  */
 	int		p_asleep;		/* Asleep threads	  */
 	int		p_drowsy;		/* Drowsy flag		  */
-	kcondvar_t 	p_req_cv;		/* svc_poll() sleep var.  */
+	kcondvar_t	p_req_cv;		/* svc_poll() sleep var.  */
 	clock_t		p_timeout;		/* svc_poll() timeout	  */
 	kmutex_t	p_req_lock;		/* Request lock		  */
 	int		p_reqs;			/* Pending requests	  */
@@ -359,6 +369,8 @@ struct __svcpool {
 	kmutex_t	p_user_lock;		/* Creator lock		  */
 	void		(*p_offline)();		/* callout for unregister */
 	void		(*p_shutdown)();	/* callout for shutdown */
+
+	size_t		p_size;			/* Total size of queued msgs */
 };
 
 /*
@@ -396,6 +408,7 @@ typedef struct __svcxprt_common {
 	struct netbuf	xpc_rtaddr;	/* remote transport address	*/
 	struct netbuf	xpc_lcladdr;	/* local transport address	*/
 	char		*xpc_netid;	/* network token		*/
+	void		*xpc_tags;	/* network token		*/
 	SVC_CALLOUT_TABLE *xpc_sct;
 } __SVCXPRT_COMMON;
 
@@ -409,10 +422,11 @@ typedef struct __svcxprt_common {
 #define	xp_lcladdr	xp_xpc.xpc_lcladdr
 #define	xp_sct		xp_xpc.xpc_sct
 #define	xp_netid	xp_xpc.xpc_netid
+#define	xp_tags		xp_xpc.xpc_tags
 
 struct __svcmasterxprt {
-	SVCMASTERXPRT 	*xp_next;	/* Next transport in the list	*/
-	SVCMASTERXPRT 	*xp_prev;	/* Prev transport in the list	*/
+	SVCMASTERXPRT	*xp_next;	/* Next transport in the list	*/
+	SVCMASTERXPRT	*xp_prev;	/* Prev transport in the list	*/
 	__SVCXPRT_COMMON xp_xpc;	/* Fields common with the clone	*/
 	SVCPOOL		*xp_pool;	/* Pointer to the pool		*/
 	mblk_t		*xp_req_head;	/* Request queue head		*/
@@ -426,7 +440,20 @@ struct __svcmasterxprt {
 	struct netbuf	xp_addrmask;	/* address mask			*/
 
 	caddr_t		xp_p2;		/* private: for use by svc ops  */
+
+	int		xp_full : 1;	/* xprt is full			*/
+	int		xp_enable : 1;	/* xprt needs to be enabled	*/
+	int		xp_reqs;	/* number of requests queued	*/
+	size_t		xp_size;	/* total size of queued msgs	*/
 };
+
+typedef struct __svccb_args {
+	SVCMASTERXPRT *xprt;
+	rpcprog_t prog;
+	rpcvers_t vers;
+	int family;
+	void *tag;
+} SVCCB_ARGS;
 
 /*
  * Service thread `clone' transport handle (SVCXPRT)
@@ -464,6 +491,7 @@ struct __svcxprt {
 	/* Private for svc ops */
 	char		xp_p2buf[SVC_P2LEN]; /* udp_data or cots_data_t */
 						/* or clone_rdma_data_t */
+	void		*xp_asd;
 };
 #else	/* _KERNEL */
 struct __svcxprt {
@@ -504,6 +532,7 @@ struct __svcxprt {
  *  address mask, and netid of transport.
  */
 #define	svc_getrpccaller(x) (&(x)->xp_rtaddr)
+#define	svc_getrpchost(x) (&(x)->xp_lcladdr)
 #ifdef _KERNEL
 #define	svc_getcaller(x) (&(x)->xp_rtaddr.buf)
 #define	svc_getaddrmask(x) (&(x)->xp_master->xp_addrmask)
@@ -523,6 +552,14 @@ struct __svcxprt {
 	if ((src_xprt)->xp_ops->xp_clone_xprt) \
 		(*(src_xprt)->xp_ops->xp_clone_xprt) \
 		    (src_xprt, dst_xprt)
+
+#define	SVC_HOLD(xprt) \
+	if ((xprt)->xp_ops->xp_hold) \
+		(*(xprt)->xp_ops->xp_hold)((xprt)->xp_wq)
+
+#define	SVC_RELE(xprt, mp, enable) \
+	if ((xprt)->xp_ops->xp_release) \
+		(*(xprt)->xp_ops->xp_release)((xprt)->xp_wq, (mp), (enable))
 
 #define	SVC_RECV(clone_xprt, mp, msg) \
 	(*(clone_xprt)->xp_ops->xp_recv)((clone_xprt), (mp), (msg))
@@ -577,6 +614,9 @@ struct __svcxprt {
 
 #define	SVC_START(xprt) \
 	(*(xprt)->xp_ops->xp_start)(xprt)
+
+#define	SVC_CTL(clone_xprt, rq, arg) \
+	(*(clone_xprt)->xp_ops->xp_ctl)((clone_xprt), (rq), (arg))
 
 #else	/* _KERNEL */
 
@@ -662,7 +702,6 @@ extern int	svc_do_run(int);
 #define	SVCPSET_UNREGISTER_PROC	2
 extern int	svc_pool_control(int, int, void *);
 #else	/* _KERNEL */
-#ifdef	__STDC__
 extern bool_t	rpc_reg(const rpcprog_t, const rpcvers_t, const rpcproc_t,
 			char *(*)(char *), const xdrproc_t, const xdrproc_t,
 			const char *);
@@ -710,16 +749,17 @@ extern void	svc_unreg(const rpcprog_t, const rpcvers_t);
  */
 extern void	xprt_register(const SVCXPRT *);
 extern void	xprt_unregister(const SVCXPRT *);
-#else	/* __STDC__ */
-extern bool_t	rpc_reg();
-extern bool_t	svc_reg();
-extern bool_t	svc_auth_reg();
-extern void	svc_unreg();
-extern void	xprt_register();
-extern void	xprt_unregister();
-#endif /* __STDC__ */
 #endif	/* _KERNEL */
 
+#ifdef _KERNEL
+/*
+ * Transport hold and release.
+ */
+extern void rpcmod_hold(queue_t *);
+extern void rpcmod_release(queue_t *, mblk_t *, bool_t);
+extern void mir_svc_hold(queue_t *);
+extern void mir_svc_release(queue_t *, mblk_t *, bool_t);
+#endif /* _KERNEL */
 
 /*
  * When the service routine is called, it must first check to see if it
@@ -746,7 +786,6 @@ extern void	xprt_unregister();
  * batched and which are not.  Warning: responding to batch calls may
  * deadlock the caller and server processes!
  */
-#ifdef	__STDC__
 extern bool_t	svc_sendreply(const SVCXPRT *, const xdrproc_t,	const caddr_t);
 extern void	svcerr_decode(const SVCXPRT *);
 extern void	svcerr_weakauth(const SVCXPRT *);
@@ -757,17 +796,6 @@ extern void	svcerr_auth(const SVCXPRT *, const enum auth_stat);
 extern void	svcerr_noprog(const SVCXPRT *);
 extern void	svcerr_systemerr(const SVCXPRT *);
 extern void	svcerr_badcred(const SVCXPRT *);
-#else	/* __STDC__ */
-extern bool_t	svc_sendreply();
-extern void	svcerr_decode();
-extern void	svcerr_weakauth();
-extern void	svcerr_noproc();
-extern void	svcerr_progvers();
-extern void	svcerr_auth();
-extern void	svcerr_noprog();
-extern void	svcerr_systemerr();
-extern void	svcerr_badcred();
-#endif	/* __STDC__ */
 
 #ifdef	_KERNEL
 /*
@@ -787,7 +815,7 @@ extern int	svc_clts_kcreate(struct file *, uint_t, struct T_info_ack *,
 				SVCMASTERXPRT **);
 extern int	svc_cots_kcreate(struct file *, uint_t, struct T_info_ack *,
 				SVCMASTERXPRT **);
-extern void	svc_queuereq(queue_t *, mblk_t *);
+extern bool_t	svc_queuereq(queue_t *, mblk_t *, bool_t);
 extern void	svc_queueclean(queue_t *);
 extern void	svc_queueclose(queue_t *);
 extern int	svc_reserve_thread(SVCXPRT *);
@@ -844,37 +872,18 @@ extern void	rpc_gss_cleanup(SVCXPRT *);
 extern pollfd_t	*svc_pollfd;
 extern int	svc_max_pollfd;
 extern fd_set	svc_fdset;
-#if !defined(_LP64) && FD_SETSIZE > 1024
-extern fd_set	_new_svc_fdset;
-#ifdef __PRAGMA_REDEFINE_EXTNAME
-#pragma redefine_extname	svc_fdset	_new_svc_fdset
-#else   /* __PRAGMA_REDEFINE_EXTNAME */
-#define	svc_fdset	_new_svc_fdset
-#endif  /* __PRAGMA_REDEFINE_EXTNAME */
-#endif	/* LP64 && FD_SETSIZE > 1024 */
 #define	svc_fds svc_fdset.fds_bits[0]	/* compatibility */
 
 /*
  * A small program implemented by the svc_rpc implementation itself.
  * Also see clnt.h for protocol numbers.
  */
-#ifdef __STDC__
 extern void	svc_getreq(int);
 extern void	svc_getreq_common(const int);
 extern void	svc_getreqset(fd_set *); /* takes fdset instead of int */
 extern void	svc_getreq_poll(struct pollfd *, const int);
 extern void	svc_run(void);
 extern void	svc_exit(void);
-#else	/* __STDC__ */
-extern void	rpctest_service();
-extern void	svc_getreqset();
-extern void	svc_getreq();
-extern void	svc_getreq_common();
-extern void	svc_getreqset();	 /* takes fdset instead of int */
-extern void	svc_getreq_poll();
-extern void	svc_run();
-extern void	svc_exit();
-#endif	/* __STDC__ */
 
 /*
  *  Functions used to manage user file descriptors
@@ -883,27 +892,21 @@ typedef int svc_input_id_t;
 typedef void (*svc_callback_t)(svc_input_id_t id, int fd,
 				unsigned int events, void* cookie);
 
-#ifdef __STDC__
 extern svc_input_id_t svc_add_input(int fd, unsigned int events,
 				svc_callback_t user_callback,
 				void* cookie);
 extern int svc_remove_input(svc_input_id_t id);
-#else	/* __STDC__ */
-extern svc_input_id_t svc_add_input();
-extern int	svc_remove_input();
-#endif
 
 /*
  * These are the existing service side transport implementations.
  *
  * Transport independent svc_create routine.
  */
-#ifdef __STDC__
 extern int	svc_create(void (*)(struct svc_req *, SVCXPRT *),
 				const rpcprog_t, const rpcvers_t,
 				const char *);
 	/*
-	 * 	void (*dispatch)();		-- dispatch routine
+	 *	void (*dispatch)();		-- dispatch routine
 	 *	const rpcprog_t prognum;	-- program number
 	 *	const rpcvers_t versnum;	-- version number
 	 *	const char *nettype;		-- network type
@@ -921,6 +924,22 @@ extern SVCXPRT	*svc_tp_create(void (*)(struct svc_req *, SVCXPRT *),
 	 * const rpcprog_t prognum;		-- program number
 	 * const rpcvers_t versnum;		-- version number
 	 * const struct netconfig *nconf;	-- netconfig structure
+	 */
+
+/*
+ * Variant of svc_tp_create that accepts a binding address.
+ * If addr == NULL, this is the same as svc_tp_create().
+ */
+extern SVCXPRT	*svc_tp_create_addr(void (*)(struct svc_req *, SVCXPRT *),
+				const rpcprog_t, const rpcvers_t,
+				const struct netconfig *,
+				const struct netbuf *);
+	/*
+	 * void (*dispatch)();			-- dispatch routine
+	 * const rpcprog_t prognum;		-- program number
+	 * const rpcvers_t versnum;		-- version number
+	 * const struct netconfig *nconf;	-- netconfig structure
+	 * const struct netbuf *addr;		-- address to bind
 	 */
 
 /*
@@ -960,9 +979,9 @@ extern SVCXPRT	*svc_dg_create(const int, const uint_t, const uint_t);
  */
 extern  SVCXPRT	*svc_fd_create(const int, const uint_t, const uint_t);
 	/*
-	 * 	const int fd;			-- open connection end point
-	 * 	const uint_t sendsize;		-- max send size
-	 * 	const uint_t recvsize;		-- max recv size
+	 *	const int fd;			-- open connection end point
+	 *	const uint_t sendsize;		-- max send size
+	 *	const uint_t recvsize;		-- max recv size
 	 */
 
 /*
@@ -977,7 +996,7 @@ extern SVCXPRT	*svc_door_create(void (*)(struct svc_req *, SVCXPRT *),
 				const rpcprog_t, const rpcvers_t,
 				const uint_t);
 	/*
-	 * 	void (*dispatch)();		-- dispatch routine
+	 *	void (*dispatch)();		-- dispatch routine
 	 *	const rpcprog_t prognum;	-- program number
 	 *	const rpcvers_t versnum;	-- version number
 	 *	const uint_t sendsize;		-- send buffer size
@@ -997,17 +1016,6 @@ extern	bool_t	svc_control(SVCXPRT *, const uint_t, void *);
  * svc_dg_enable_cache() enables the cache on dg transports.
  */
 extern int svc_dg_enablecache(SVCXPRT *, const uint_t);
-#else	/* __STDC__ */
-extern int	svc_create();
-extern SVCXPRT	*svc_tp_create();
-extern SVCXPRT	*svc_tli_create();
-extern SVCXPRT	*svc_vc_create();
-extern SVCXPRT	*svc_dg_create();
-extern SVCXPRT	*svc_fd_create();
-extern SVCXPRT	*svc_raw_create();
-extern SVCXPRT	*svc_door_create();
-extern int svc_dg_enablecache();
-#endif	/* __STDC__ */
 
 extern boolean_t is_multilevel(rpcprog_t);
 
@@ -1027,11 +1035,7 @@ extern boolean_t is_multilevel(rpcprog_t);
 #define	RPC_SVC_MT_AUTO		1	/* automatic MT mode */
 #define	RPC_SVC_MT_USER		2	/* user MT mode */
 
-#ifdef	__STDC__
 extern void	svc_done(SVCXPRT *);
-#else
-extern void	svc_done();
-#endif	/* __STDC__ */
 
 /*
  * Obtaining local credentials.
@@ -1044,16 +1048,10 @@ typedef struct __svc_local_cred_t {
 	pid_t	pid;	/* caller's pid, or -1 if not available */
 } svc_local_cred_t;
 
-#ifdef __STDC__
 struct ucred_s;
 extern void	svc_fd_negotiate_ucred(int);
 extern int	svc_getcallerucred(const SVCXPRT *, struct ucred_s **);
 extern bool_t	svc_get_local_cred(SVCXPRT *, svc_local_cred_t *);
-#else
-extern void	svc_fd_negotiate_ucred();
-extern int	svc_getcallerucred();
-extern bool_t	svc_get_local_cred();
-#endif	/* __STDC__ */
 
 /*
  * Private interfaces and structures for user level duplicate request caching.
@@ -1092,21 +1090,12 @@ struct dupreq {
 #define	DUP_DROP		0x03	/* request dropped */
 #define	DUP_ERROR		0x04	/* error in dup req cache */
 
-#ifdef __STDC__
 extern bool_t	__svc_dupcache_init(void *, int, char **);
 extern int	__svc_dup(struct svc_req *, caddr_t *, uint_t *, char *);
 extern int	__svc_dupdone(struct svc_req *, caddr_t, uint_t, int, char *);
 extern bool_t	__svc_vc_dupcache_init(SVCXPRT *, void *, int);
 extern int	__svc_vc_dup(struct svc_req *, caddr_t *, uint_t *);
 extern int	__svc_vc_dupdone(struct svc_req *, caddr_t, uint_t, int);
-#else
-extern bool_t	__svc_dupcache_init();
-extern int	__svc_dup();
-extern int	__svc_dupdone();
-extern bool_t	__svc_vc_dupcache_init();
-extern int	__svc_vc_dup();
-extern int	__svc_vc_dupdone();
-#endif	/* __STDC__ */
 #endif	/* _KERNEL */
 
 #ifdef	_KERNEL
@@ -1116,9 +1105,13 @@ extern int	__svc_vc_dupdone();
  * change in future releases.
  */
 extern SVCXPRT *svc_clone_init(void);
+extern void svc_init_clone_xprt(SVCXPRT *, queue_t *);
 extern void svc_clone_free(SVCXPRT *);
 extern void svc_clone_link(SVCMASTERXPRT *, SVCXPRT *, SVCXPRT *);
 extern void svc_clone_unlink(SVCXPRT *);
+
+/* Get cached preallocated cred */
+extern cred_t *svc_xprt_cred(SVCXPRT *);
 #endif	/* _KERNEL */
 
 #ifdef	__cplusplus

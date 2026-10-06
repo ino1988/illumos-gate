@@ -21,6 +21,7 @@
 #
 # Copyright 2009 Sun Microsystems, Inc.  All rights reserved.
 # Use is subject to license terms.
+# Copyright 2015 Toomas Soome <tsoome@me.com>
 #
 #
 
@@ -32,17 +33,16 @@ OBJECTS +=	libgrub_menu.o libgrub_bargs.o libgrub_errno.o
 include ../../Makefile.lib
 include ../../Makefile.rootfs
 
-LIBS =		$(DYNLIB) $(LINTLIB)
+LIBS =		$(DYNLIB)
 
 SRCDIR = ../common
 
 INCS += -I$(SRCDIR)
 
-$(LINTLIB) :=	SRCS =	$(SRCDIR)/$(LINTSRC)
 #
 # Libraries added to the next line must be present in miniroot
 #
-LDLIBS +=	-lc -lzfs -ldevinfo -lfstyp
+LDLIBS +=	-lc -lzfs -ldevinfo -lfstyp -lefi
 
 CFLAGS +=	$(CCVERBOSE)
 
@@ -50,6 +50,5 @@ CFLAGS +=	$(CCVERBOSE)
 
 all: $(LIBS)
 
-lint: lintcheck
 
 include ../../Makefile.targ

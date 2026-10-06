@@ -21,10 +21,16 @@
 
 /*
  * Copyright (c) 1989, 2010, Oracle and/or its affiliates. All rights reserved.
+ * Copyright 2022 Garrett D'Amore <garrett@damore.org>
  */
 
 /*	Copyright (c) 1984, 1986, 1987, 1988, 1989 AT&T	*/
-/*	  All Rights Reserved  	*/
+/*	  All Rights Reserved	*/
+
+/*
+ * Copyright 2019 Joyent, Inc.
+ * Copyright 2026 Oxide Computer Company
+ */
 
 #ifndef _SYS_EXEC_H
 #define	_SYS_EXEC_H
@@ -79,7 +85,7 @@ typedef struct uarg {
 	ssize_t arglen;
 	char	*fname;
 	char	*pathname;
-	ssize_t	auxsize;
+	size_t	auxsize;
 	caddr_t	stackend;
 	size_t	stk_align;
 	size_t	stk_size;
@@ -95,6 +101,7 @@ typedef struct uarg {
 	model_t	from_model;
 	size_t	to_ptrsize;
 	size_t	from_ptrsize;
+	uio_seg_t argseg;
 	size_t	ncargs;
 	struct execsw *execswp;
 	uintptr_t entry;
@@ -106,6 +113,7 @@ typedef struct uarg {
 	char	*auxp_brand; /* address of first brand auxv on user stack */
 	cred_t	*pfcred;
 	boolean_t scrubenv;
+	uintptr_t commpage;
 } uarg_t;
 
 /*
@@ -157,10 +165,11 @@ typedef struct uarg {
 #endif
 
 #define	INTPSZ	MAXPATHLEN
+#define	INTP_MAXDEPTH	5	/* Nested interpreter depth matches Linux */
 typedef struct intpdata {
 	char	*intp;
-	char	*intp_name;
-	char	*intp_arg;
+	char	*intp_name[INTP_MAXDEPTH];
+	char	*intp_arg[INTP_MAXDEPTH];
 } intpdata_t;
 
 #define	EXECSETID_SETID		0x1 /* setid exec */
@@ -173,7 +182,7 @@ struct execsw {
 	int	exec_maglen;
 	int	(*exec_func)(struct vnode *vp, struct execa *uap,
 		    struct uarg *args, struct intpdata *idata, int level,
-		    long *execsz, int setid, caddr_t exec_file,
+		    size_t *execsz, int setid, caddr_t exec_file,
 		    struct cred *cred, int brand_action);
 	int	(*exec_core)(struct vnode *vp, struct proc *p,
 		    struct cred *cred, rlim64_t rlimit, int sig,
@@ -188,30 +197,20 @@ extern kmutex_t execsw_lock;
 extern short elfmagic;
 extern short intpmagic;
 extern short javamagic;
-#if defined(__sparc)
-extern short aout_zmagic;
-extern short aout_nmagic;
-extern short aout_omagic;
-#endif
 extern short nomagic;
 
 extern char elf32magicstr[];
 extern char elf64magicstr[];
 extern char intpmagicstr[];
 extern char javamagicstr[];
-#if defined(__sparc)
-extern char aout_nmagicstr[];
-extern char aout_zmagicstr[];
-extern char aout_omagicstr[];
-#endif
 extern char nomagicstr[];
 
 extern int exec_args(execa_t *, uarg_t *, intpdata_t *, void **);
-extern int exece(const char *fname, const char **argp, const char **envp);
-extern int exec_common(const char *fname, const char **argp,
-    const char **envp, int brand_action);
+extern int exece(uintptr_t, const char **, const char **, int);
+extern int exec_common(const char *, const char **, const char **, vnode_t *,
+    int, uio_seg_t);
 extern int gexec(vnode_t **vp, struct execa *uap, struct uarg *args,
-    struct intpdata *idata, int level, long *execsz, caddr_t exec_file,
+    struct intpdata *idata, int level, size_t *execsz, caddr_t exec_file,
     struct cred *cred, int brand_action);
 extern struct execsw *allocate_execsw(char *name, char *magic,
     size_t magic_size);
@@ -237,38 +236,30 @@ extern void exec_set_sp(size_t);
  * when compiling the 32-bit compatability elf code in the elfexec module.
  */
 extern int elfexec(vnode_t *, execa_t *, uarg_t *, intpdata_t *, int,
-    long *, int, caddr_t, cred_t *, int);
+    size_t *, int, caddr_t, cred_t *, int);
 extern int mapexec_brand(vnode_t *, uarg_t *, Ehdr *, Addr *,
     intptr_t *, caddr_t, int *, caddr_t *, caddr_t *, size_t *, uintptr_t *);
+extern int elfreadhdr(vnode_t *, cred_t *, Ehdr *, uint_t *, caddr_t *,
+    size_t *);
 #endif /* !_ELF32_COMPAT */
 
 #if defined(_LP64)
 extern int elf32exec(vnode_t *, execa_t *, uarg_t *, intpdata_t *, int,
-    long *, int, caddr_t, cred_t *, int);
+    size_t *, int, caddr_t, cred_t *, int);
 extern int mapexec32_brand(vnode_t *, uarg_t *, Elf32_Ehdr *, Elf32_Addr *,
     intptr_t *, caddr_t, int *, caddr_t *, caddr_t *, size_t *, uintptr_t *);
+extern int elf32readhdr(vnode_t *, cred_t *, Elf32_Ehdr *, uint_t *, caddr_t *,
+    size_t *);
 #endif  /* _LP64 */
 
 /*
  * Utility functions for exec module core routines:
  */
-extern int core_seg(proc_t *, vnode_t *, offset_t, caddr_t,
+extern int core_seg(proc_t *, vnode_t *, u_offset_t, caddr_t, size_t,
+    rlim64_t, cred_t *);
+
+extern int core_write(vnode_t *, enum uio_seg, u_offset_t, const void *,
     size_t, rlim64_t, cred_t *);
-
-extern int core_write(vnode_t *, enum uio_seg, offset_t,
-    const void *, size_t, rlim64_t, cred_t *);
-
-/* a.out stuff */
-
-struct exec;
-
-extern caddr_t gettmem(struct exec *exp);
-extern caddr_t getdmem(struct exec *exp);
-extern ulong_t getdfile(struct exec *exp);
-extern uint_t gettfile(struct exec *exp);
-extern int chkaout(struct exdata *exp);
-extern void getexinfo(struct exdata *edp_in, struct exdata *edp_out,
-    int *pagetext, int *pagedata);
 
 #endif	/* _KERNEL */
 

@@ -24,8 +24,6 @@
  * All rights reserved.
  */
 
-#pragma ident	"%Z%%M%	%I%	%E% SMI"
-
 #include <stdio.h>
 #include <string.h>
 #include <stdlib.h>
@@ -380,7 +378,6 @@ arch_match(FILE *fp, int arch)
 		buf2 = NULL;
 	}
 
-end:
 	free(buf2);
 	free(p);
 

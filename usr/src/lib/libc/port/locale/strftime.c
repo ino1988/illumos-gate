@@ -2,6 +2,7 @@
  * Copyright 2013 Garrett D'Amore <garrett@damore.org>
  * Copyright 2010 Nexenta Systems, Inc.  All rights reserved.
  * Copyright (c) 1989 The Regents of the University of California.
+ * Copyright 2026 Oxide Computer Company
  * All rights reserved.
  *
  * Redistribution and use in source and binary forms are permitted
@@ -20,10 +21,12 @@
 #include "lint.h"
 #include "tzfile.h"
 #include <fcntl.h>
+#include <stdint.h>
 #include <sys/stat.h>
 #include <string.h>
 #include <stdio.h>
 #include <locale.h>
+#include <tzint.h>
 #include "timelocal.h"
 #include "localeimpl.h"
 
@@ -64,6 +67,26 @@ static const char *fmt_padding[][4] = {
 	{ "%04d",	"%d",	"%4d",	"%04d" }
 };
 
+/*
+ * If a caller (such as ascftime) passes in a very large maximum size,
+ * the pointer addition here may overflow, wrap around the end of
+ * memory, and, if used as-is, would cause subsequent range checks to fail
+ * spuriously, resulting in corrupted output even if there is sufficent
+ * room in the buffer for the requested format.
+ *
+ * To prevent this, we replace an overflowed result with the largest
+ * possible pointer value.
+ */
+static char *
+_ptlim(char *s, size_t maxsize)
+{
+	char *e = s + maxsize;
+
+	if (e < s)
+		e = (char *)(-sizeof (*e));
+
+	return (e);
+}
 
 size_t
 strftime_l(char *_RESTRICT_KYWD s, size_t maxsize,
@@ -71,10 +94,11 @@ strftime_l(char *_RESTRICT_KYWD s, size_t maxsize,
     locale_t loc)
 {
 	char *p;
+	char *e = _ptlim(s, maxsize);
 
 	tzset();
-	p = _fmt(loc, ((format == NULL) ? "%c" : format), t, s, s + maxsize);
-	if (p == s + maxsize)
+	p = _fmt(loc, ((format == NULL) ? "%c" : format), t, s, e);
+	if (p == e)
 		return (0);
 	*p = '\0';
 	return (p - s);
@@ -84,7 +108,7 @@ size_t
 strftime(char *_RESTRICT_KYWD s, size_t maxsize,
     const char *_RESTRICT_KYWD format, const struct tm *_RESTRICT_KYWD t)
 {
-	return (strftime_l(s, maxsize, format, t, uselocale(NULL)));
+	return (strftime_l(s, maxsize, format, t, __curlocale()));
 }
 
 static char *
@@ -93,6 +117,9 @@ _fmt(locale_t loc, const char *format, const struct tm *t, char *pt,
 {
 	int Ealternative, Oalternative, PadIndex;
 	const struct lc_time *tptr = loc->time;
+	tzinfo_ctx_t ctx;
+
+	tzinfo_tm_to_ctx(t, &ctx);
 
 #define	PADDING(x)	fmt_padding[x][PadIndex]
 
@@ -398,9 +425,10 @@ label:
 				    pt, ptlim);
 				continue;
 			case 'Z':
-				if (t->tm_isdst >= 0)
-					pt = _add(tzname[t->tm_isdst != 0],
-					    pt, ptlim);
+				if (t->tm_isdst >= 0) {
+					pt = _add(ctx.tzc_tzname[t->tm_isdst !=
+					    0], pt, ptlim);
+				}
 				/*
 				 * C99 says that %Z must be replaced by the
 				 * empty string if the time zone is not
@@ -434,9 +462,9 @@ label:
 				 * appropriate variables are not available.
 				 */
 				if (t->tm_isdst == 0)
-					diff = -timezone;
+					diff = -ctx.tzc_timezone;
 				else
-					diff = -altzone;
+					diff = -ctx.tzc_altzone;
 				if (diff < 0) {
 					sign = "-";
 					diff = -diff;

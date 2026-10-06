@@ -46,16 +46,13 @@ LDLIBS		+= -ldevinfo
 # used for creating message catalogue files
 #
 TEXT_DOMAIN=	SUNW_OST_OSLIB
-SED=		sed
-GREP=		grep
 
 .KEEP_STATE:
 
 all:		$(LIBS)
 
-install:	all $(USR_PSM_LIBS) $(USR_PSMLINT)
+install:	all $(USR_PSM_LIBS)
 
-lint:		lintcheck
 
 include		$(SRC)/lib/Makefile.targ
 

@@ -38,8 +38,8 @@
  *    documentation and/or other materials provided with the distribution.
  * 3. All advertising materials mentioning features or use of this software
  *    must display the following acknowledgement:
- * 	This product includes software developed by the University of
- * 	California, Berkeley and its contributors.
+ *	This product includes software developed by the University of
+ *	California, Berkeley and its contributors.
  * 4. Neither the name of the University nor the names of its contributors
  *    may be used to endorse or promote products derived from this software
  *    without specific prior written permission.
@@ -64,8 +64,6 @@
 
 #ifndef _ARPA_NAMESER_COMPAT_H
 #define	_ARPA_NAMESER_COMPAT_H
-
-#pragma ident	"%Z%%M%	%I%	%E% SMI"
 
 #ifdef	__cplusplus
 extern "C" {
@@ -110,15 +108,15 @@ extern "C" {
 #endif /* BYTE_ORDER */
 
 #if !defined(BYTE_ORDER) || \
-	(BYTE_ORDER != BIG_ENDIAN && BYTE_ORDER != LITTLE_ENDIAN && \
-    BYTE_ORDER != PDP_ENDIAN)
-	/*
-	 * you must determine what the correct bit order is for
-	 * your compiler - the next line is an intentional error
-	 * which will force your compiles to bomb until you fix
-	 * the above macros.
-	 */
-	error "Undefined or invalid BYTE_ORDER";
+	((BYTE_ORDER != BIG_ENDIAN) && (BYTE_ORDER != LITTLE_ENDIAN) && \
+	(BYTE_ORDER != PDP_ENDIAN))
+/*
+ * you must determine what the correct bit order is for
+ * your compiler - the next line is an intentional error
+ * which will force your compiles to bomb until you fix
+ * the above macros.
+ */
+#error "Undefined or invalid BYTE_ORDER";
 #endif
 
 /*

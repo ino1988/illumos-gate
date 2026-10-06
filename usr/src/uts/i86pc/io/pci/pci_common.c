@@ -21,10 +21,11 @@
 
 /*
  * Copyright (c) 2005, 2010, Oracle and/or its affiliates. All rights reserved.
+ * Copyright 2022 Oxide Computer Company
  */
 
 /*
- *	File that has code which is common between pci(7d) and npe(7d)
+ *	File that has code which is common between pci(4D) and npe(4D)
  *	It shares the following:
  *	- interrupt code
  *	- pci_tools ioctl code
@@ -533,6 +534,7 @@ SUPPORTED_TYPES_OUT:
 		 * First check the config space and/or
 		 * MSI capability register(s)
 		 */
+		pci_rval = DDI_FAILURE;
 		if (DDI_INTR_IS_MSI_OR_MSIX(hdlp->ih_type))
 			pci_rval = pci_msi_get_cap(rdip, hdlp->ih_type,
 			    &pci_status);
@@ -699,6 +701,7 @@ SUPPORTED_TYPES_OUT:
 		 * First check the config space and/or
 		 * MSI capability register(s)
 		 */
+		pci_rval = DDI_FAILURE;
 		if (DDI_INTR_IS_MSI_OR_MSIX(hdlp->ih_type))
 			pci_rval = pci_msi_get_pending(rdip, hdlp->ih_type,
 			    hdlp->ih_inum, &pci_status);
@@ -824,7 +827,7 @@ pci_alloc_intr_fixed(dev_info_t *pdip, dev_info_t *rdip,
 	} else {
 		/*
 		 * No APIX module; fall back to the old scheme where the
-		 * interrupt vector is allocated during ddi_enable_intr() call.
+		 * interrupt vector is allocated during ddi_intr_enable() call.
 		 */
 		*(int *)result = 1;
 		ret = DDI_SUCCESS;
@@ -867,7 +870,7 @@ pci_free_intr_fixed(dev_info_t *pdip, dev_info_t *rdip,
 		/*
 		 * No APIX module; fall back to the old scheme where
 		 * the interrupt vector was already freed during
-		 * ddi_disable_intr() call.
+		 * ddi_intr_disable() call.
 		 */
 		ret = DDI_SUCCESS;
 	}
@@ -989,7 +992,7 @@ int
 pci_common_get_reg_prop(dev_info_t *dip, pci_regspec_t *pci_rp)
 {
 	int		i;
-	int 		number;
+	int		number;
 	int		assigned_addr_len;
 	uint_t		phys_hi = pci_rp->pci_phys_hi;
 	pci_regspec_t	*assigned_addr;
@@ -1016,6 +1019,31 @@ pci_common_get_reg_prop(dev_info_t *dip, pci_regspec_t *pci_rp)
 	for (i = 0; i < number; i++) {
 		if ((assigned_addr[i].pci_phys_hi & PCI_CONF_ADDR_MASK) ==
 		    phys_hi) {
+			/*
+			 * When the system does not manage to allocate PCI
+			 * resources for a device, then the value that is stored
+			 * in assigned addresses ends up being the hardware
+			 * default reset value of '0'. On currently supported
+			 * platforms, physical address zero is associated with
+			 * memory; however, on other platforms this may be the
+			 * exception vector table (ARM), etc. and so we opt to
+			 * generally keep the idea in PCI that the reset value
+			 * will not be used for actual MMIO allocations. If such
+			 * a platform comes around where it is worth using that
+			 * bit of MMIO for PCI then we should make this check
+			 * platform-specific.
+			 *
+			 * Note, the +1 in the print statement is because a
+			 * given regs[0] describes B/D/F information for the
+			 * device.
+			 */
+			if (assigned_addr[i].pci_phys_mid == 0 &&
+			    assigned_addr[i].pci_phys_low == 0) {
+				dev_err(dip, CE_WARN, "regs[%u] does not have "
+				    "a valid MMIO address", i + 1);
+				goto err;
+			}
+
 			pci_rp->pci_phys_mid = assigned_addr[i].pci_phys_mid;
 			pci_rp->pci_phys_low = assigned_addr[i].pci_phys_low;
 			ddi_prop_free(assigned_addr);
@@ -1023,6 +1051,7 @@ pci_common_get_reg_prop(dev_info_t *dip, pci_regspec_t *pci_rp)
 		}
 	}
 
+err:
 	ddi_prop_free(assigned_addr);
 	return (DDI_FAILURE);
 }
@@ -1473,7 +1502,7 @@ pci_common_ctlops_peek(peekpoke_ctlops_t *in_args)
 /*ARGSUSED*/
 int
 pci_common_peekpoke(dev_info_t *dip, dev_info_t *rdip,
-	ddi_ctl_enum_t ctlop, void *arg, void *result)
+    ddi_ctl_enum_t ctlop, void *arg, void *result)
 {
 	if (ctlop == DDI_CTLOPS_PEEK)
 		return (pci_common_ctlops_peek((peekpoke_ctlops_t *)arg));
@@ -1516,7 +1545,7 @@ pci_config_rd8(ddi_acc_impl_t *hdlp, uint8_t *addr)
 
 void
 pci_config_rep_rd8(ddi_acc_impl_t *hdlp, uint8_t *host_addr,
-	uint8_t *dev_addr, size_t repcount, uint_t flags)
+    uint8_t *dev_addr, size_t repcount, uint_t flags)
 {
 	uint8_t *h, *d;
 
@@ -1552,7 +1581,7 @@ pci_config_rd16(ddi_acc_impl_t *hdlp, uint16_t *addr)
 
 void
 pci_config_rep_rd16(ddi_acc_impl_t *hdlp, uint16_t *host_addr,
-	uint16_t *dev_addr, size_t repcount, uint_t flags)
+    uint16_t *dev_addr, size_t repcount, uint_t flags)
 {
 	uint16_t *h, *d;
 
@@ -1588,7 +1617,7 @@ pci_config_rd32(ddi_acc_impl_t *hdlp, uint32_t *addr)
 
 void
 pci_config_rep_rd32(ddi_acc_impl_t *hdlp, uint32_t *host_addr,
-	uint32_t *dev_addr, size_t repcount, uint_t flags)
+    uint32_t *dev_addr, size_t repcount, uint_t flags)
 {
 	uint32_t *h, *d;
 
@@ -1622,7 +1651,7 @@ pci_config_wr8(ddi_acc_impl_t *hdlp, uint8_t *addr, uint8_t value)
 
 void
 pci_config_rep_wr8(ddi_acc_impl_t *hdlp, uint8_t *host_addr,
-	uint8_t *dev_addr, size_t repcount, uint_t flags)
+    uint8_t *dev_addr, size_t repcount, uint_t flags)
 {
 	uint8_t *h, *d;
 
@@ -1655,7 +1684,7 @@ pci_config_wr16(ddi_acc_impl_t *hdlp, uint16_t *addr, uint16_t value)
 
 void
 pci_config_rep_wr16(ddi_acc_impl_t *hdlp, uint16_t *host_addr,
-	uint16_t *dev_addr, size_t repcount, uint_t flags)
+    uint16_t *dev_addr, size_t repcount, uint_t flags)
 {
 	uint16_t *h, *d;
 
@@ -1688,7 +1717,7 @@ pci_config_wr32(ddi_acc_impl_t *hdlp, uint32_t *addr, uint32_t value)
 
 void
 pci_config_rep_wr32(ddi_acc_impl_t *hdlp, uint32_t *host_addr,
-	uint32_t *dev_addr, size_t repcount, uint_t flags)
+    uint32_t *dev_addr, size_t repcount, uint_t flags)
 {
 	uint32_t *h, *d;
 
@@ -1736,7 +1765,7 @@ pci_config_wr64(ddi_acc_impl_t *hdlp, uint64_t *addr, uint64_t value)
 
 void
 pci_config_rep_rd64(ddi_acc_impl_t *hdlp, uint64_t *host_addr,
-	uint64_t *dev_addr, size_t repcount, uint_t flags)
+    uint64_t *dev_addr, size_t repcount, uint_t flags)
 {
 	if (flags == DDI_DEV_AUTOINCR) {
 		for (; repcount; repcount--)
@@ -1749,7 +1778,7 @@ pci_config_rep_rd64(ddi_acc_impl_t *hdlp, uint64_t *host_addr,
 
 void
 pci_config_rep_wr64(ddi_acc_impl_t *hdlp, uint64_t *host_addr,
-	uint64_t *dev_addr, size_t repcount, uint_t flags)
+    uint64_t *dev_addr, size_t repcount, uint_t flags)
 {
 	if (flags == DDI_DEV_AUTOINCR) {
 		for (; repcount; repcount--)

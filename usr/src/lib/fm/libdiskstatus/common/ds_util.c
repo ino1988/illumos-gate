@@ -23,8 +23,6 @@
  * Use is subject to license terms.
  */
 
-#pragma ident	"%Z%%M%	%I%	%E% SMI"
-
 #include <ctype.h>
 #include <libdiskstatus.h>
 #include <stdarg.h>
@@ -37,7 +35,7 @@ boolean_t ds_debug;
 
 /*PRINTFLIKE1*/
 void
-dprintf(const char *fmt, ...)
+ds_dprintf(const char *fmt, ...)
 {
 	va_list ap;
 
@@ -64,7 +62,7 @@ ddump(const char *label, const void *data, size_t length)
 		return;
 
 	if (label != NULL)
-		dprintf("%s\n", label);
+		ds_dprintf("%s\n", label);
 
 	linep = linebuf;
 	bufleft = LINEBUFLEN;
@@ -135,7 +133,7 @@ ddump(const char *label, const void *data, size_t length)
 
 		linebuf[LINEBUFLEN - bufleft] = 0;
 
-		dprintf("%s\n", linebuf);
+		ds_dprintf("%s\n", linebuf);
 
 		linep = linebuf;
 		bufleft = LINEBUFLEN;

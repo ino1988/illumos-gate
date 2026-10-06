@@ -1204,7 +1204,7 @@ print_mapping(print_handle_t *pnm, name_mapping_t *nm)
 			free(winname);
 			return (-1);
 		}
-	/* LINTED E_CASE_FALLTHRU */
+		/* FALLTHROUGH */
 	case MAPPING_ID:
 		if (pnm->format == MAPPING_ID) {
 			if (nm->sidprefix == NULL) {
@@ -2303,7 +2303,6 @@ do_export(flag_t *f, int argc, char **argv, cmd_pos_t *pos)
 	/* List the requested types: */
 	rc = list_name_mappings(format, fi);
 
-cleanup:
 	if (fi != NULL && fi != stdout)
 		(void) fclose(fi);
 	return (rc);
@@ -2339,7 +2338,8 @@ print_flags(flag_t *f)
 /* Convert string like sid or winname to the identity type code */
 
 static int
-string2type(char *str, cmd_pos_t *pos) {
+string2type(char *str, cmd_pos_t *pos)
+{
 	int i;
 	int code = TYPE_INVALID;
 
@@ -2741,7 +2741,6 @@ do_remove_name_mapping(flag_t *f, int argc, char **argv, cmd_pos_t *pos)
 	if (rc == 0)
 		rc = positions_add(pos);
 
-cleanup:
 	name_mapping_fini(nm);
 	if (fini_udt_command(1, pos))
 		rc = -1;
@@ -2982,7 +2981,7 @@ do_show_mapping(flag_t *f, int argc, char **argv, cmd_pos_t *pos)
 		if (stat != IDMAP_SUCCESS) {
 			print_error(pos,
 			    gettext("Unable to create handle for communicating"
-			    " with idmapd(1M) (%s)\n"),
+			    " with idmapd(8) (%s)\n"),
 			    idmap_stat2string(stat));
 			idmap_get_destroy(ghandle);
 			goto cleanup;
@@ -3077,7 +3076,7 @@ do_show_mapping(flag_t *f, int argc, char **argv, cmd_pos_t *pos)
 	 * idmapd returns fallback uid/gid in case of errors. However
 	 * it uses special sentinel value i.e 4294967295 (or -1) to
 	 * indicate that falbback pid is not available either. In such
-	 * case idmap(1M) should not display the mapping because there
+	 * case idmap(8) should not display the mapping because there
 	 * is no fallback mapping.
 	 */
 

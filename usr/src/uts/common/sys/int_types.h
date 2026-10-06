@@ -116,7 +116,7 @@ typedef uint32_t		uintmax_t;
  * to hold any data pointer; that is, data pointers can be assigned into or
  * from these integer types without losing precision.
  */
-#if defined(_LP64) || defined(_I32LPx)
+#if defined(_LP64)
 typedef long			intptr_t;
 typedef unsigned long		uintptr_t;
 #else
@@ -173,6 +173,9 @@ typedef long long		int_least64_t;
 #endif
 #endif
 
+/*
+ * If these are changed, please update char16_t and char32_t in head/uchar.h.
+ */
 typedef unsigned char		uint_least8_t;
 typedef unsigned short		uint_least16_t;
 typedef unsigned int		uint_least32_t;

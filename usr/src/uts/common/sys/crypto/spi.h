@@ -588,6 +588,8 @@ typedef union crypto_provider_dev {
 	dev_info_t		*pd_hw; /* for CRYPTO_HW_PROVIDER */
 } crypto_provider_dev_t;
 
+#endif /* _KERNEL */
+
 /*
  * The mechanism info structure crypto_mech_info_t contains a function group
  * bit mask cm_func_group_mask. This field, of type crypto_func_group_t,
@@ -596,8 +598,6 @@ typedef union crypto_provider_dev {
  */
 
 typedef uint32_t crypto_func_group_t;
-
-#endif /* _KERNEL */
 
 #define	CRYPTO_FG_ENCRYPT		0x00000001 /* encrypt_init() */
 #define	CRYPTO_FG_DECRYPT		0x00000002 /* decrypt_init() */
@@ -643,7 +643,7 @@ typedef uint32_t crypto_func_group_t;
 
 /* Bit mask for all the dual operations */
 #define	CRYPTO_FG_MAC_CIPHER_MASK	(CRYPTO_FG_ENCRYPT_MAC |	\
-    CRYPTO_FG_MAC_DECRYPT | CRYPTO_FG_ENCRYPT_MAC_ATOMIC | 		\
+    CRYPTO_FG_MAC_DECRYPT | CRYPTO_FG_ENCRYPT_MAC_ATOMIC |		\
     CRYPTO_FG_MAC_DECRYPT_ATOMIC)
 
 /* Add other combos to CRYPTO_FG_DUAL_MASK */
@@ -744,7 +744,7 @@ typedef struct crypto_provider_info {
 
 /*
  * Provider status passed by a provider to crypto_provider_notification(9F)
- * and returned by the provider_stauts(9E) entry point.
+ * and returned by the provider_status(9E) entry point.
  */
 #define	CRYPTO_PROVIDER_READY		0
 #define	CRYPTO_PROVIDER_BUSY		1

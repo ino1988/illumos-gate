@@ -23,11 +23,9 @@
  * Use is subject to license terms.
  */
 
-#pragma ident	"%Z%%M%	%I%	%E% SMI"
-
 #include "misc.h"
 
-#define	UMEM_OBJNAME "libumem.so"
+#define	UMEM_OBJNAME "libumem.so.1"
 
 int umem_debug_level = 0;
 int umem_is_standalone = 0;
@@ -46,7 +44,7 @@ umem_debug(uintptr_t addr, uint_t flags, int argc, const mdb_arg_t *argv)
 
 /*
  * To further confuse the issue, this dmod can run against either
- * libumem.so.1 *or* the libstandumem.so linked into kmdb(1M).  To figure
+ * libumem.so.1 *or* the libstandumem.so linked into kmdb(1).  To figure
  * out which one we are working against, we look up "umem_alloc" in both
  * libumem.so and the executable.
  *

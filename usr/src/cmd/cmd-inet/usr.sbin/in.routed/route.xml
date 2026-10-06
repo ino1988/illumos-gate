@@ -4,6 +4,8 @@
  Copyright 2009 Sun Microsystems, Inc.  All rights reserved.
  Use is subject to license terms.
 
+ Copyright 2016 Hans Rosenfeld <rosenfeld@grumpf.hope-2000.org>
+
  CDDL HEADER START
 
  The contents of this file are subject to the terms of the
@@ -54,7 +56,7 @@
 		name='start'
 		exec='/lib/svc/method/svc-route'
 		timeout_seconds='60'>
-		<method_context>
+		<method_context working_directory='/'>
 			<method_credential user='root' group='root'
 privileges='basic,proc_owner,proc_fork,proc_exec,proc_info,proc_session,file_chown,sys_ip_config,net_privaddr,net_icmpaccess,net_rawaccess'/>
 		</method_context>
@@ -65,7 +67,7 @@ privileges='basic,proc_owner,proc_fork,proc_exec,proc_info,proc_session,file_cho
 		name='stop'
 		exec=':kill'
 		timeout_seconds='60'>
-		<method_context>
+		<method_context working_directory='/'>
 			<method_credential user='root' group='root'/>
 		</method_context>
 	</exec_method>
@@ -78,7 +80,7 @@ privileges='basic,proc_owner,proc_fork,proc_exec,proc_info,proc_session,file_cho
 			value='solaris.smf.manage.routing' />
 	</property_group>
 
-	<!-- Properties in this group are used by routeadm (1M) -->
+	<!-- Properties in this group are used by routeadm(8) -->
 	<property_group name='routeadm' type='application'>
 		<stability value='Unstable' />
 		<propval name='protocol' type='astring' value='ipv4' />
@@ -88,7 +90,7 @@ privileges='basic,proc_owner,proc_fork,proc_exec,proc_info,proc_session,file_cho
 			value='solaris.smf.value.routing' />
 	</property_group>
 
-	<!-- Properties in this group are modifiable via routeadm (1M) -->
+	<!-- Properties in this group are modifiable via routeadm(8) -->
 	<property_group name='routing' type='application'>
 		<stability value='Evolving' />
 
@@ -120,7 +122,7 @@ privileges='basic,proc_owner,proc_fork,proc_exec,proc_info,proc_session,file_cho
 		<propval name='quiet_mode' type='boolean' value='false' />
 
 		<!-- Equivalent to -s option if true -->
-		<propval name='supply_routes' type='boolean' value='false' />	
+		<propval name='supply_routes' type='boolean' value='false' />
 
 		<!-- Equivalent to -S option if true -->
 		<propval name='default_routes_only' type='boolean'
@@ -144,8 +146,11 @@ privileges='basic,proc_owner,proc_fork,proc_exec,proc_info,proc_session,file_cho
 
 	<property_group name='firewall_config' type='com.sun,fw_configuration'>
 		<propval name='policy' type='astring' value='use_global' />
+		<propval name='block_policy' type='astring'
+			value='use_global' />
 		<propval name='apply_to' type='astring' value='' />
 		<propval name='exceptions' type='astring' value='' />
+		<propval name='target' type='astring' value='' />
 		<propval name='value_authorization' type='astring'
 			value='solaris.smf.value.firewall.config' />
 	</property_group>
@@ -157,7 +162,7 @@ privileges='basic,proc_owner,proc_fork,proc_exec,proc_info,proc_session,file_cho
 			</loctext>
 		</common_name>
 		<documentation>
-			<manpage title='in.routed' section='1M'
+			<manpage title='in.routed' section='8'
 				manpath='/usr/share/man' />
 		</documentation>
 	</template>

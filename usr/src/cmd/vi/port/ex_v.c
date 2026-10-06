@@ -30,8 +30,6 @@
 
 /* Copyright (c) 1981 Regents of the University of California */
 
-#pragma ident	"%Z%%M%	%I%	%E% SMI"
-
 #include "ex.h"
 #include "ex_re.h"
 #include "ex_tty.h"
@@ -67,7 +65,7 @@
  *		insert mode, read input line processing at lowest level.
  *
  * ex_vops3.c	structured motion definitions of ( ) { } and [ ] operators,
- *		indent for lisp routines, () and {} balancing. 
+ *		indent for lisp routines, () and {} balancing.
  *
  * ex_vput.c	output routines, clearing, physical mapping of logical cursor
  *		positioning, cursor motions, handling of insert character
@@ -122,7 +120,7 @@ void redraw()
 }
 
 /*ARGSUSED*/
-void 
+void
 #ifdef __STDC__
 winch(int sig)
 #else
@@ -142,13 +140,13 @@ int sig;
 			if (columns != jwin.ws_col || lines != jwin.ws_row)
 			    redraw();
 		}
-	} 
+	}
 	else
 		windowchg++;
 	(void)signal(SIGWINCH, winch);
 }
 
-void 
+void
 setsize()
 {
 	struct winsize jwin;
@@ -440,7 +438,7 @@ setwind(void)
 	case ONEOPEN:
 		if (auto_right_margin)
 			WCOLS--;
-		/* fall into ... */
+		/* FALLTHROUGH */
 
 	case HARDOPEN:
 		basWTOP = WTOP = WBOT = WECHO = 0;
@@ -450,7 +448,7 @@ setwind(void)
 
 	case CRTOPEN:
 		basWTOP = lines - 2;
-		/* fall into */
+		/* FALLTHROUGH */
 
 	case VISUAL:
 		ZERO = lines - TUBESIZE / WCOLS;
@@ -488,7 +486,7 @@ vok(wchar_t *atube, int undo)
 		error(gettext("Screen too large"));
 
 	vtube0 = atube;
-	if(beenhere) 
+	if(beenhere)
 		vclrbyte(atube, WCOLS * (WECHO - ZERO + 1));
 	for (i = 0; i < ZERO; i++)
 		vtube[i] = (wchar_t *) 0;
@@ -521,7 +519,7 @@ vok(wchar_t *atube, int undo)
 
 #ifdef CBREAK
 /*ARGSUSED*/
-void 
+void
 #ifdef __STDC__
 vintr(int sig)
 #else

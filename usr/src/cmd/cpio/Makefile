@@ -21,6 +21,8 @@
 # Copyright 2009 Sun Microsystems, Inc.  All rights reserved.
 # Use is subject to license terms.
 #
+# Copyright (c) 2018, Joyent, Inc.
+# Copyright 2023 OmniOS Community Edition (OmniOSce) Association.
 
 PROG= cpio
 
@@ -28,16 +30,18 @@ OBJS= cpio.o cpiostat.o utils.o
 SRCS= $(OBJS:%.o=%.c)
 
 include ../Makefile.cmd
-CPPFLAGS += -D_FILE_OFFSET_BITS=64 -DSOLARIS_PRIVS
-CERRWARN += -_gcc=-Wno-parentheses
-CERRWARN += -_gcc=-Wno-uninitialized
+include ../Makefile.cmd.64
+include ../Makefile.ctf
+
+CSTD = $(CSTD_GNU17)
+CPPFLAGS += -DSOLARIS_PRIVS
 
 LDLIBS += -lsec -lcmdutils -lnvpair
 XGETFLAGS += -a -x cpio.xcl
 
 .KEEP_STATE:
 
-all: $(PROG) 
+all: $(PROG)
 
 $(PROG): $(OBJS)
 	$(LINK.c) $(OBJS) -o $@ $(LDLIBS)
@@ -47,7 +51,5 @@ install: all $(ROOTPROG)
 
 clean:
 	$(RM) $(OBJS)
-
-lint: lint_SRCS
 
 include ../Makefile.targ

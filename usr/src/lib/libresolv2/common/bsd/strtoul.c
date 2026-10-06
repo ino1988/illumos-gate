@@ -1,12 +1,7 @@
-#if defined(LIBC_SCCS) && !defined(lint)
-static const char sccsid[] = "@(#)strtoul.c	8.1 (Berkeley) 6/4/93";
-static const char rcsid[] = "$Id: strtoul.c,v 1.4 2008/02/18 03:49:08 marka Exp $";
-#endif /* LIBC_SCCS and not lint */
-
 /*
  * Copyright (c) 1990, 1993
  *    The Regents of the University of California.  All rights reserved.
- * 
+ *
  * Redistribution and use in source and binary forms, with or without
  * modification, are permitted provided that the following conditions
  * are met:
@@ -22,7 +17,7 @@ static const char rcsid[] = "$Id: strtoul.c,v 1.4 2008/02/18 03:49:08 marka Exp 
  * 4. Neither the name of the University nor the names of its contributors
  *    may be used to endorse or promote products derived from this software
  *    without specific prior written permission.
- * 
+ *
  * THIS SOFTWARE IS PROVIDED BY THE REGENTS AND CONTRIBUTORS ``AS IS'' AND
  * ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
  * IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE

@@ -1,0 +1,2422 @@
+/*
+ * This file and its contents are supplied under the terms of the
+ * Common Development and Distribution License ("CDDL"), version 1.0.
+ * You may only use this file in accordance with the terms of version
+ * 1.0 of the CDDL.
+ *
+ * A full copy of the text of the CDDL should have accompanied this
+ * source.  A copy of the CDDL is also available via the Internet at
+ * http://www.illumos.org/license/CDDL.
+ */
+
+/*
+ * Copyright 2019 Joyent, Inc.
+ * Copyright 2022 OmniOS Community Edition (OmniOSce) Association.
+ * Copyright 2026 Oxide Computer Company
+ * Copyright 2026 Hans Rosenfeld
+ */
+
+/*
+ * VIRTIO FRAMEWORK
+ *
+ * For design and usage documentation, see the comments in "virtio.h".
+ */
+
+#include <sys/conf.h>
+#include <sys/kmem.h>
+#include <sys/debug.h>
+#include <sys/modctl.h>
+#include <sys/autoconf.h>
+#include <sys/ddi_impldefs.h>
+#include <sys/ddi.h>
+#include <sys/inttypes.h>
+#include <sys/sunddi.h>
+#include <sys/sunndi.h>
+#include <sys/avintr.h>
+#include <sys/spl.h>
+#include <sys/promif.h>
+#include <sys/list.h>
+#include <sys/bootconf.h>
+#include <sys/bootsvcs.h>
+#include <sys/sysmacros.h>
+#include <sys/pci.h>
+#include <sys/pci_cap.h>
+#include <sys/stdbit.h>
+
+#include "virtio.h"
+#include "virtio_impl.h"
+#include "virtio_endian.h"
+
+
+/*
+ * Linkage structures
+ */
+static struct modlmisc virtio_modlmisc = {
+	.misc_modops =			&mod_miscops,
+	.misc_linkinfo =		"VIRTIO common routines",
+};
+
+static struct modlinkage virtio_modlinkage = {
+	.ml_rev =			MODREV_1,
+	.ml_linkage =			{ &virtio_modlmisc, NULL }
+};
+
+int
+_init(void)
+{
+	return (mod_install(&virtio_modlinkage));
+}
+
+int
+_fini(void)
+{
+	return (mod_remove(&virtio_modlinkage));
+}
+
+int
+_info(struct modinfo *modinfop)
+{
+	return (mod_info(&virtio_modlinkage, modinfop));
+}
+
+static void virtio_unmap_cap(virtio_t *, virtio_pci_cap_t *);
+static boolean_t virtio_map_cap(virtio_t *, virtio_pci_cap_t *);
+static void virtio_discover_pci_caps(virtio_t *, ddi_acc_handle_t);
+static void virtio_set_status(virtio_t *, uint8_t);
+static int virtio_chain_append_impl(virtio_chain_t *, uint64_t, size_t,
+    uint16_t);
+static int virtio_interrupts_setup(virtio_t *, int);
+static void virtio_interrupts_teardown(virtio_t *);
+static void virtio_interrupts_disable_locked(virtio_t *);
+static void virtio_queue_free(virtio_queue_t *);
+static virtio_queue_t *virtio_queue_intr_owner(virtio_queue_t *);
+static int virtio_bar_to_rnumber(virtio_t *, uint8_t);
+
+/*
+ * Tuneable that forces use of the legacy interface even if the hypervisor
+ * presents transitional devices. It has no effect if only a modern device is
+ * presented.
+ */
+int virtio_force_legacy = 0;
+
+/*
+ * We use the same device access attributes for BAR mapping and access to the
+ * virtqueue memory.
+ */
+ddi_device_acc_attr_t virtio_acc_attr = {
+	.devacc_attr_version =		DDI_DEVICE_ATTR_V1,
+	.devacc_attr_endian_flags =	DDI_NEVERSWAP_ACC,
+	.devacc_attr_dataorder =	DDI_STORECACHING_OK_ACC,
+	.devacc_attr_access =		DDI_DEFAULT_ACC
+};
+
+
+/*
+ * DMA attributes for the memory given to the device for queue management.
+ */
+ddi_dma_attr_t virtio_dma_attr_queue = {
+	.dma_attr_version =		DMA_ATTR_V0,
+	.dma_attr_addr_lo =		0x0000000000000000,
+	/*
+	 * Queue memory is aligned on VIRTIO_PAGE_SIZE with the address shifted
+	 * down by VIRTIO_PAGE_SHIFT before being passed to the device in a
+	 * 32-bit register.
+	 */
+	.dma_attr_addr_hi =		0x00000FFFFFFFF000,
+	.dma_attr_count_max =		0x00000000FFFFFFFF,
+	.dma_attr_align =		VIRTIO_PAGE_SIZE,
+	.dma_attr_burstsizes =		1,
+	.dma_attr_minxfer =		1,
+	.dma_attr_maxxfer =		0x00000000FFFFFFFF,
+	.dma_attr_seg =			0x00000000FFFFFFFF,
+	.dma_attr_sgllen =		1,
+	.dma_attr_granular =		1,
+	.dma_attr_flags =		0
+};
+
+/*
+ * DMA attributes for the the allocation of indirect descriptor lists.  The
+ * indirect list is referenced by a regular descriptor entry: the physical
+ * address field is 64 bits wide, but the length field is only 32 bits.  Each
+ * descriptor is 16 bytes long.
+ */
+ddi_dma_attr_t virtio_dma_attr_indirect = {
+	.dma_attr_version =		DMA_ATTR_V0,
+	.dma_attr_addr_lo =		0x0000000000000000,
+	.dma_attr_addr_hi =		0xFFFFFFFFFFFFFFFF,
+	.dma_attr_count_max =		0x00000000FFFFFFFF,
+	.dma_attr_align =		sizeof (struct virtio_vq_desc),
+	.dma_attr_burstsizes =		1,
+	.dma_attr_minxfer =		1,
+	.dma_attr_maxxfer =		0x00000000FFFFFFFF,
+	.dma_attr_seg =			0x00000000FFFFFFFF,
+	.dma_attr_sgllen =		1,
+	.dma_attr_granular =		1,
+	.dma_attr_flags =		0
+};
+
+
+void
+virtio_fini(virtio_t *vio, boolean_t failed)
+{
+	mutex_enter(&vio->vio_mutex);
+
+	virtio_interrupts_teardown(vio);
+
+	virtio_queue_t *viq;
+	while ((viq = list_remove_head(&vio->vio_queues)) != NULL) {
+		virtio_queue_free(viq);
+	}
+	list_destroy(&vio->vio_queues);
+	mutex_destroy(&vio->vio_qlock);
+
+	if (failed) {
+		/*
+		 * Signal to the host that device setup failed.
+		 */
+		vio->vio_ops->vop_set_status_locked(vio, VIRTIO_STATUS_FAILED);
+	} else {
+		vio->vio_ops->vop_device_reset_locked(vio);
+	}
+
+	/*
+	 * We don't need to do anything for the provider initlevel, as it
+	 * merely records the fact that virtio_init_complete() was called.
+	 */
+	vio->vio_initlevel &= ~VIRTIO_INITLEVEL_PROVIDER;
+
+	if (vio->vio_initlevel & VIRTIO_INITLEVEL_REGS) {
+		/*
+		 * Unmap PCI BARs
+		 */
+		if (vio->vio_bar != NULL)
+			ddi_regs_map_free(&vio->vio_barh);
+
+		virtio_unmap_cap(vio, &vio->vio_cap_common);
+		virtio_unmap_cap(vio, &vio->vio_cap_notify);
+		virtio_unmap_cap(vio, &vio->vio_cap_isr);
+		virtio_unmap_cap(vio, &vio->vio_cap_device);
+
+		vio->vio_initlevel &= ~VIRTIO_INITLEVEL_REGS;
+	}
+
+	/*
+	 * Ensure we have torn down everything we set up.
+	 */
+	vio->vio_initlevel &= ~VIRTIO_INITLEVEL_SHUTDOWN;
+	VERIFY0(vio->vio_initlevel);
+
+	mutex_exit(&vio->vio_mutex);
+	mutex_destroy(&vio->vio_mutex);
+
+	kmem_free(vio, sizeof (*vio));
+}
+
+/*
+ * Early device initialisation for virtio devices.
+ */
+virtio_t *
+virtio_init(dev_info_t *dip)
+{
+	/*
+	 * First, let's see what kind of device this is.
+	 */
+	ddi_acc_handle_t pci;
+	if (pci_config_setup(dip, &pci) != DDI_SUCCESS) {
+		dev_err(dip, CE_WARN, "pci_config_setup failed");
+		return (NULL);
+	}
+
+	uint16_t devid;
+	if ((devid = pci_config_get16(pci, PCI_CONF_DEVID)) == PCI_EINVAL16) {
+		dev_err(dip, CE_WARN, "could not read config space devid");
+		pci_config_teardown(&pci);
+		return (NULL);
+	}
+
+	uint8_t revid;
+	if ((revid = pci_config_get8(pci, PCI_CONF_REVID)) == PCI_EINVAL8) {
+		dev_err(dip, CE_WARN, "could not read config space revid");
+		pci_config_teardown(&pci);
+		return (NULL);
+	}
+
+	virtio_t *vio = kmem_zalloc(sizeof (*vio), KM_SLEEP);
+	vio->vio_dip = dip;
+
+	virtio_discover_pci_caps(vio, pci);
+	pci_config_teardown(&pci);
+
+	/*
+	 * In order to operate over the modern interface we must have found a
+	 * minimum set of capabiities.
+	 */
+	boolean_t found_modern_caps =
+	    (vio->vio_cap_common.vpc_type != 0 &&
+	    vio->vio_cap_notify.vpc_type != 0 &&
+	    vio->vio_cap_isr.vpc_type != 0 &&
+	    vio->vio_cap_device.vpc_type != 0);
+
+	if (devid >= VIRTIO_MIN_MODERN_DEVID) {
+		/*
+		 * This is a purely "modern" device. If we haven't found the
+		 * required PCI capabilities then we can't proceed.
+		 */
+		if (!found_modern_caps) {
+			dev_err(dip, CE_WARN,
+			    "Did not find required PCI capabilities for a "
+			    " modern VirtIO device");
+			kmem_free(vio, sizeof (*vio));
+			return (NULL);
+		}
+
+		/*
+		 * There is nothing else that is mandatory for a modern device
+		 * that we can check.
+		 */
+		vio->vio_mode = VIRTIO_MODE_MODERN;
+		vio->vio_ops = &virtio_modern_ops;
+	} else {
+		/*
+		 * This could be a pure "legacy" or a "transitional" device.
+		 * In either case the specification requires that the device
+		 * advertise as PCI Revision 0.
+		 */
+		if (revid != 0) {
+			dev_err(dip, CE_WARN, "PCI Revision %u incorrect for "
+			    "transitional or legacy virtio device",
+			    (uint_t)revid);
+			kmem_free(vio, sizeof (*vio));
+			return (NULL);
+		}
+
+		/*
+		 * If we found the modern PCI capabilities then we're
+		 * transitional, otherwise we're legacy. We will always
+		 * choose to use the modern interfaces on a transitional
+		 * device. Ostensibly the VIRTIO_F_VERSION_1 flag is intended
+		 * to help with this decision, but it is only visible through
+		 * the modern interface!
+		 */
+		if (found_modern_caps && virtio_force_legacy == 0) {
+			vio->vio_mode = VIRTIO_MODE_TRANSITIONAL;
+			vio->vio_ops = &virtio_modern_ops;
+		} else {
+			vio->vio_mode = VIRTIO_MODE_LEGACY;
+			vio->vio_ops = &virtio_legacy_ops;
+		}
+	}
+
+	if (vio->vio_mode == VIRTIO_MODE_LEGACY) {
+		int rnumber = virtio_bar_to_rnumber(vio, VIRTIO_LEGACY_BAR);
+
+		/*
+		 * Map PCI BAR0 for legacy device access.
+		 */
+		if (rnumber == -1 || ddi_regs_map_setup(dip, rnumber,
+		    (caddr_t *)&vio->vio_bar, 0, 0, &virtio_acc_attr,
+		    &vio->vio_barh) != DDI_SUCCESS) {
+			dev_err(dip, CE_WARN, "Failed to map BAR0");
+			kmem_free(vio, sizeof (*vio));
+			return (NULL);
+		}
+	} else {
+		/*
+		 * Map the BAR regions required for the modern interface.
+		 */
+		if (!virtio_map_cap(vio, &vio->vio_cap_common) ||
+		    !virtio_map_cap(vio, &vio->vio_cap_notify) ||
+		    !virtio_map_cap(vio, &vio->vio_cap_isr) ||
+		    !virtio_map_cap(vio, &vio->vio_cap_device)) {
+			kmem_free(vio, sizeof (*vio));
+			return (NULL);
+		}
+	}
+	vio->vio_initlevel |= VIRTIO_INITLEVEL_REGS;
+
+	/*
+	 * We initialise the mutex without an interrupt priority to ease the
+	 * implementation of some of the configuration space access routines.
+	 * Drivers using the virtio framework MUST make a call to
+	 * "virtio_init_complete()" prior to spawning other threads or enabling
+	 * interrupt handlers, at which time we will destroy and reinitialise
+	 * the mutex for use in our interrupt handlers.
+	 */
+	mutex_init(&vio->vio_mutex, NULL, MUTEX_DRIVER, NULL);
+
+	list_create(&vio->vio_queues, sizeof (virtio_queue_t),
+	    offsetof(virtio_queue_t, viq_link));
+	mutex_init(&vio->vio_qlock, NULL, MUTEX_DRIVER, NULL);
+	vio->vio_qcur = UINT16_MAX;
+
+	/*
+	 * Virtio devices require a few common steps before we can negotiate
+	 * device features.
+	 */
+	virtio_device_reset(vio);
+	virtio_set_status(vio, VIRTIO_STATUS_ACKNOWLEDGE);
+	virtio_set_status(vio, VIRTIO_STATUS_DRIVER);
+
+	vio->vio_features_device = vio->vio_ops->vop_device_get_features(vio);
+	vio->vio_features = vio->vio_features_device;
+
+	return (vio);
+}
+
+boolean_t
+virtio_init_features(virtio_t *vio, uint64_t driver_features,
+    boolean_t allow_indirect)
+{
+	if (!virtio_modern(vio) && driver_features >> 32 != 0) {
+		dev_err(vio->vio_dip, CE_WARN,
+		    "driver programming error; high bits set in features");
+		return (B_FALSE);
+	}
+
+	if (allow_indirect)
+		driver_features |= VIRTIO_F_RING_INDIRECT_DESC;
+	if (virtio_modern(vio))
+		driver_features |= VIRTIO_F_VERSION_1;
+
+	/*
+	 * The ring event index mechanism is implemented entirely within the
+	 * framework so negotiate it on behalf of every client driver whenever
+	 * the device offers it.
+	 */
+	driver_features |= VIRTIO_F_RING_EVENT_IDX;
+
+	vio->vio_features &= driver_features;
+
+	if (!vio->vio_ops->vop_device_set_features(vio, vio->vio_features)) {
+		dev_err(vio->vio_dip, CE_WARN, "feature negotiation failed");
+		return (B_FALSE);
+	}
+
+	/*
+	 * With the legacy interface the device-specific configuration begins
+	 * at an offset into the BAR that depends on whether we have enabled
+	 * MSI-X interrupts or not. Start out with the offset for pre-MSI-X
+	 * operation so that we can read device configuration space prior to
+	 * configuring interrupts.
+	 */
+	if (!virtio_modern(vio))
+		vio->vio_legacy_cfg_offset = VIRTIO_LEGACY_CFG_OFFSET;
+
+	return (B_TRUE);
+}
+
+/*
+ * Some virtio devices can change their device configuration state at any
+ * time. This function may be called by the driver during the initialisation
+ * phase - before calling virtio_init_complete() - in order to register a
+ * handler function which will be called when the device configuration space
+ * is updated.
+ */
+void
+virtio_register_cfgchange_handler(virtio_t *vio, ddi_intr_handler_t *func,
+    void *funcarg)
+{
+	VERIFY(!(vio->vio_initlevel & VIRTIO_INITLEVEL_INT_ADDED));
+	VERIFY(!vio->vio_cfgchange_handler_added);
+
+	mutex_enter(&vio->vio_mutex);
+	vio->vio_cfgchange_handler = func;
+	vio->vio_cfgchange_handlerarg = funcarg;
+	mutex_exit(&vio->vio_mutex);
+}
+
+/*
+ * This function must be called by the driver once it has completed early setup
+ * calls.  The value of "allowed_interrupt_types" is a mask of interrupt types
+ * (DDI_INTR_TYPE_MSIX, etc) that we'll try to use when installing handlers, or
+ * the special value 0 to allow the system to use any available type.
+ */
+int
+virtio_init_complete(virtio_t *vio, int allowed_interrupt_types)
+{
+	VERIFY(!(vio->vio_initlevel & VIRTIO_INITLEVEL_PROVIDER));
+	vio->vio_initlevel |= VIRTIO_INITLEVEL_PROVIDER;
+
+	if (!list_is_empty(&vio->vio_queues) ||
+	    vio->vio_cfgchange_handler != NULL) {
+		/*
+		 * Set up interrupts for the queues that have been registered.
+		 */
+		if (virtio_interrupts_setup(vio, allowed_interrupt_types) !=
+		    DDI_SUCCESS) {
+			return (DDI_FAILURE);
+		}
+	}
+
+	/*
+	 * We can allocate the mutex once we know the priority.
+	 */
+	mutex_destroy(&vio->vio_mutex);
+	mutex_init(&vio->vio_mutex, NULL, MUTEX_DRIVER, virtio_intr_pri(vio));
+	for (virtio_queue_t *viq = list_head(&vio->vio_queues); viq != NULL;
+	    viq = list_next(&vio->vio_queues, viq)) {
+		mutex_destroy(&viq->viq_mutex);
+		mutex_init(&viq->viq_mutex, NULL, MUTEX_DRIVER,
+		    virtio_intr_pri(vio));
+	}
+
+	/*
+	 * Enable the queues.
+	 */
+	for (virtio_queue_t *viq = list_head(&vio->vio_queues); viq != NULL;
+	    viq = list_next(&vio->vio_queues, viq)) {
+		vio->vio_ops->vop_queue_enable_set(vio, viq->viq_index, true);
+	}
+
+	virtio_set_status(vio, VIRTIO_STATUS_DRIVER_OK);
+
+	return (DDI_SUCCESS);
+}
+
+boolean_t
+virtio_features_present(virtio_t *vio, uint64_t feature_mask)
+{
+	return ((vio->vio_features & feature_mask) == feature_mask);
+}
+
+uint32_t
+virtio_features(virtio_t *vio)
+{
+	return (vio->vio_features);
+}
+
+boolean_t
+virtio_modern(virtio_t *vio)
+{
+	return (vio->vio_mode != VIRTIO_MODE_LEGACY);
+}
+
+void
+virtio_acquireq(virtio_t *vio, uint16_t qidx)
+{
+	mutex_enter(&vio->vio_qlock);
+	if (vio->vio_qcur != qidx) {
+		vio->vio_ops->vop_queue_select(vio, qidx);
+		vio->vio_qcur = qidx;
+	}
+}
+
+void
+virtio_releaseq(virtio_t *vio)
+{
+	mutex_exit(&vio->vio_qlock);
+}
+
+void *
+virtio_intr_pri(virtio_t *vio)
+{
+	VERIFY(vio->vio_initlevel & VIRTIO_INITLEVEL_INT_ADDED);
+
+	return (DDI_INTR_PRI(vio->vio_interrupt_priority));
+}
+
+static void
+virtio_unmap_cap(virtio_t *vio, virtio_pci_cap_t *cap)
+{
+	if (cap->vpc_type != 0 && cap->vpc_bar != NULL)
+		ddi_regs_map_free(&cap->vpc_barh);
+}
+
+static boolean_t
+virtio_map_cap(virtio_t *vio, virtio_pci_cap_t *cap)
+{
+	int rnumber;
+
+	VERIFY(cap->vpc_type);
+
+	rnumber = virtio_bar_to_rnumber(vio, cap->vpc_baridx);
+
+	if (rnumber == -1 || ddi_regs_map_setup(vio->vio_dip, rnumber,
+	    (caddr_t *)&cap->vpc_bar, cap->vpc_offset, cap->vpc_size,
+	    &virtio_acc_attr, &cap->vpc_barh) != DDI_SUCCESS) {
+		dev_err(vio->vio_dip, CE_WARN,
+		    "Failed to map CAP %u @ "
+		    "BAR%u 0x%" PRIx64 "+%" PRIx64,
+		    cap->vpc_type, cap->vpc_baridx,
+		    cap->vpc_offset, cap->vpc_size);
+		return (B_FALSE);
+	}
+
+	return (B_TRUE);
+}
+
+/*
+ * Devices which are capable of operating via the "modern" VirtIO interface,
+ * which includes "transitional" devices, present a number of PCI capabilities
+ * of the vendor-specific type.
+ */
+static void
+virtio_discover_pci_caps(virtio_t *vio, ddi_acc_handle_t pci)
+{
+	uint16_t idx;
+
+	for (idx = 0; ; idx++) {
+		virtio_pci_cap_t *cap;
+		uint16_t base;
+		uint32_t id;
+
+		if (pci_cap_probe(pci, idx, &id, &base) != DDI_SUCCESS)
+			break;
+
+		/* The VirtIO caps are all of the "vendor-specific" type */
+		if (id != PCI_CAP_ID_VS)
+			continue;
+
+		uint8_t type = pci_cap_get(pci, PCI_CAP_CFGSZ_8, idx, base,
+		    VIRTIO_PCI_CAP_TYPE);
+
+		uint8_t min_len = VIRTIO_PCI_CAP_BARLEN + sizeof (uint32_t);
+
+		/* We are currently only interested in the following types */
+		switch (type) {
+		case VPC_COMMON_CFG:
+			cap = &vio->vio_cap_common;
+			break;
+		case VPC_NOTIFY_CFG:
+			cap = &vio->vio_cap_notify;
+			/* The notify capability has an extra field */
+			min_len += sizeof (uint32_t);
+			break;
+		case VPC_ISR_CFG:
+			cap = &vio->vio_cap_isr;
+			break;
+		case VPC_DEVICE_CFG:
+			cap = &vio->vio_cap_device;
+			break;
+		default:
+			/* Not interested in this cap */
+			continue;
+		}
+
+		uint8_t caplen = pci_cap_get(pci, PCI_CAP_CFGSZ_8, idx, base,
+		    VIRTIO_PCI_CAP_LEN);
+
+		/* Skip short capabilities */
+		if (caplen == PCI_EINVAL8 || caplen < min_len)
+			continue;
+
+		/*
+		 * Devices can provide multiple versions of the same capability
+		 * type which should be in order of preference. We skip
+		 * duplicates and use the first instance of each type we find.
+		 */
+		if (cap->vpc_type != 0)
+			continue;
+
+		cap->vpc_baridx = pci_cap_get(pci, PCI_CAP_CFGSZ_8, idx, base,
+		    VIRTIO_PCI_CAP_BAR);
+		if (cap->vpc_type == PCI_EINVAL8)
+			continue;
+		cap->vpc_offset = pci_cap_get(pci, PCI_CAP_CFGSZ_32, idx, base,
+		    VIRTIO_PCI_CAP_BAROFF);
+		if (cap->vpc_offset == PCI_EINVAL32)
+			continue;
+		cap->vpc_size = pci_cap_get(pci, PCI_CAP_CFGSZ_32, idx, base,
+		    VIRTIO_PCI_CAP_BARLEN);
+		if (cap->vpc_size == PCI_EINVAL32)
+			continue;
+
+		/*
+		 * The NOTIFY_CFG capability has an additional field which is
+		 * the multiplier to use to find the correct offset in the BAR
+		 * for each queue. It is permissable for this to be 0, in which
+		 * case notifications for all queues are written to the start
+		 * of the region.
+		 */
+		if (type == VPC_NOTIFY_CFG) {
+			vio->vio_multiplier = pci_cap_get(pci, PCI_CAP_CFGSZ_32,
+			    idx, base, VIRTIO_PCI_CAP_MULTIPLIER);
+			if (vio->vio_multiplier == PCI_EINVAL32)
+				continue;
+		}
+
+		/* Assigning the type marks this entry as valid */
+		cap->vpc_type = type;
+	}
+}
+
+/*
+ * Enable a bit in the device status register.  Each bit signals a level of
+ * guest readiness to the host.  Use the VIRTIO_CONFIG_DEVICE_STATUS_*
+ * constants for "status".  To zero the status field use virtio_device_reset().
+ */
+static void
+virtio_set_status(virtio_t *vio, uint8_t status)
+{
+	mutex_enter(&vio->vio_mutex);
+	vio->vio_ops->vop_set_status_locked(vio, status);
+	mutex_exit(&vio->vio_mutex);
+}
+
+void
+virtio_device_reset(virtio_t *vio)
+{
+	mutex_enter(&vio->vio_mutex);
+	vio->vio_ops->vop_device_reset_locked(vio);
+	mutex_exit(&vio->vio_mutex);
+}
+
+/*
+ * Some queues are effectively long-polled; the driver submits a series of
+ * buffers and the device only returns them when there is data available.
+ * During detach, we need to coordinate the return of these buffers.  Calling
+ * "virtio_shutdown()" will reset the device, then allow the removal of all
+ * buffers that were in flight at the time of shutdown via
+ * "virtio_queue_evacuate()".
+ */
+void
+virtio_shutdown(virtio_t *vio)
+{
+	mutex_enter(&vio->vio_mutex);
+	if (vio->vio_initlevel & VIRTIO_INITLEVEL_SHUTDOWN) {
+		/*
+		 * Shutdown has been performed already.
+		 */
+		mutex_exit(&vio->vio_mutex);
+		return;
+	}
+
+	/*
+	 * First, mark all of the queues as shutdown.  This will prevent any
+	 * further activity.
+	 */
+	for (virtio_queue_t *viq = list_head(&vio->vio_queues); viq != NULL;
+	    viq = list_next(&vio->vio_queues, viq)) {
+		mutex_enter(&viq->viq_mutex);
+		viq->viq_shutdown = B_TRUE;
+		mutex_exit(&viq->viq_mutex);
+	}
+
+	/*
+	 * Now, reset the device.  This removes any queue configuration on the
+	 * device side.
+	 */
+	vio->vio_ops->vop_device_reset_locked(vio);
+	vio->vio_initlevel |= VIRTIO_INITLEVEL_SHUTDOWN;
+	mutex_exit(&vio->vio_mutex);
+}
+
+/*
+ * Common implementation of quiesce(9E) for simple Virtio-based devices.
+ */
+int
+virtio_quiesce(virtio_t *vio)
+{
+	if (vio->vio_initlevel & VIRTIO_INITLEVEL_SHUTDOWN) {
+		/*
+		 * Device has already been reset.
+		 */
+		return (DDI_SUCCESS);
+	}
+
+	/*
+	 * When we reset the device, it should immediately stop using any DMA
+	 * memory we've previously passed to it.  All queue configuration is
+	 * discarded.  This is good enough for quiesce(9E).
+	 */
+	vio->vio_ops->vop_device_reset_locked(vio);
+
+	return (DDI_SUCCESS);
+}
+
+/*
+ * DEVICE-SPECIFIC REGISTER ACCESS
+ *
+ * Note that these functions take the mutex to avoid racing with interrupt
+ * enable/disable, when the device-specific offset can potentially change.
+ */
+
+uint8_t
+virtio_dev_getgen(virtio_t *vio)
+{
+	return (vio->vio_ops->vop_device_cfg_gen(vio));
+}
+
+uint8_t
+virtio_dev_get8(virtio_t *vio, uintptr_t offset)
+{
+	return (vio->vio_ops->vop_device_cfg_get8(vio, offset));
+}
+
+uint16_t
+virtio_dev_get16(virtio_t *vio, uintptr_t offset)
+{
+	return (vio->vio_ops->vop_device_cfg_get16(vio, offset));
+}
+
+uint32_t
+virtio_dev_get32(virtio_t *vio, uintptr_t offset)
+{
+	return (vio->vio_ops->vop_device_cfg_get32(vio, offset));
+}
+
+uint64_t
+virtio_dev_get64(virtio_t *vio, uintptr_t offset)
+{
+	return (vio->vio_ops->vop_device_cfg_get64(vio, offset));
+}
+
+void
+virtio_dev_put8(virtio_t *vio, uintptr_t offset, uint8_t value)
+{
+	vio->vio_ops->vop_device_cfg_put8(vio, offset, value);
+}
+
+void
+virtio_dev_put16(virtio_t *vio, uintptr_t offset, uint16_t value)
+{
+	vio->vio_ops->vop_device_cfg_put16(vio, offset, value);
+}
+
+void
+virtio_dev_put32(virtio_t *vio, uintptr_t offset, uint32_t value)
+{
+	vio->vio_ops->vop_device_cfg_put32(vio, offset, value);
+}
+
+/*
+ * VIRTQUEUE MANAGEMENT
+ */
+
+static int
+virtio_inflight_compar(const void *lp, const void *rp)
+{
+	const virtio_chain_t *l = lp;
+	const virtio_chain_t *r = rp;
+
+	if (l->vic_head < r->vic_head) {
+		return (-1);
+	} else if (l->vic_head > r->vic_head) {
+		return (1);
+	} else {
+		return (0);
+	}
+}
+
+virtio_queue_t *
+virtio_queue_alloc(virtio_t *vio, uint16_t qidx, const char *name,
+    ddi_intr_handler_t *func, void *funcarg, boolean_t force_direct,
+    uint_t max_segs)
+{
+	char space_name[256];
+	uint64_t noff = 0;
+	uint16_t qsz;
+
+	if (max_segs < 1) {
+		/*
+		 * Every descriptor, direct or indirect, needs to refer to at
+		 * least one buffer.
+		 */
+		dev_err(vio->vio_dip, CE_WARN, "queue \"%s\" (%u) "
+		    "segment count must be at least 1", name, (uint_t)qidx);
+		return (NULL);
+	}
+
+	mutex_enter(&vio->vio_mutex);
+
+	if (vio->vio_initlevel & VIRTIO_INITLEVEL_PROVIDER) {
+		/*
+		 * Cannot configure any more queues once initial setup is
+		 * complete and interrupts have been allocated.
+		 */
+		dev_err(vio->vio_dip, CE_WARN, "queue \"%s\" (%u) "
+		    "alloc after init complete", name, (uint_t)qidx);
+		mutex_exit(&vio->vio_mutex);
+		return (NULL);
+	}
+
+	qsz = vio->vio_ops->vop_queue_size_get(vio, qidx);
+	if (qsz == 0) {
+		/*
+		 * A size of zero means the device does not have a queue with
+		 * this index.
+		 */
+		dev_err(vio->vio_dip, CE_WARN, "queue \"%s\" (%u) "
+		    "does not exist on device", name, (uint_t)qidx);
+		mutex_exit(&vio->vio_mutex);
+		return (NULL);
+	}
+	/*
+	 * There is no way to negotiate a different queue size for legacy
+	 * devices.  We must read and use the native queue size of the device.
+	 * For devices using the modern interface we could choose to reduce
+	 * the queue size; for now we write back the value advertised by the
+	 * device unchanged.
+	 */
+	if (vio->vio_ops->vop_queue_size_set != NULL)
+		vio->vio_ops->vop_queue_size_set(vio, qidx, qsz);
+
+	if (virtio_modern(vio)) {
+		noff = vio->vio_ops->vop_queue_noff_get(vio, qidx);
+		if (noff > vio->vio_cap_notify.vpc_size - sizeof (uint32_t)) {
+			dev_err(vio->vio_dip, CE_WARN, "queue \"%s\" (%u) "
+			    "invalid notification offset 0x%" PRIx64 " "
+			    "for notify region of size 0x%" PRIx64,
+			    name, (uint_t)qidx,
+			    noff, vio->vio_cap_notify.vpc_size);
+			mutex_exit(&vio->vio_mutex);
+			return (NULL);
+		}
+	}
+
+	mutex_exit(&vio->vio_mutex);
+
+	virtio_queue_t *viq = kmem_zalloc(sizeof (*viq), KM_SLEEP);
+	viq->viq_virtio = vio;
+	viq->viq_name = name;
+	viq->viq_index = qidx;
+	viq->viq_size = qsz;
+	viq->viq_noff = noff;
+	viq->viq_func = func;
+	viq->viq_funcarg = funcarg;
+	viq->viq_max_segs = max_segs;
+	avl_create(&viq->viq_inflight, virtio_inflight_compar,
+	    sizeof (virtio_chain_t), offsetof(virtio_chain_t, vic_node));
+	list_create(&viq->viq_intr_sharers, sizeof (virtio_queue_t),
+	    offsetof(virtio_queue_t, viq_intr_sharers_link));
+
+	/*
+	 * Allocate the mutex without an interrupt priority for now, as we do
+	 * with "vio_mutex".  We'll reinitialise it in
+	 * "virtio_init_complete()".
+	 */
+	mutex_init(&viq->viq_mutex, NULL, MUTEX_DRIVER, NULL);
+
+	if (virtio_features_present(vio, VIRTIO_F_RING_INDIRECT_DESC) &&
+	    !force_direct) {
+		/*
+		 * If we were able to negotiate the indirect descriptor
+		 * feature, and the caller has not explicitly forced the use of
+		 * direct descriptors, we'll allocate indirect descriptor lists
+		 * for each chain.
+		 */
+		viq->viq_indirect = B_TRUE;
+	}
+
+	if (virtio_features_present(vio, VIRTIO_F_RING_EVENT_IDX))
+		viq->viq_event_idx = B_TRUE;
+
+	/*
+	 * Track descriptor usage in an identifier space.
+	 */
+	(void) snprintf(space_name, sizeof (space_name), "%s%d_vq_%s",
+	    ddi_get_name(vio->vio_dip), ddi_get_instance(vio->vio_dip), name);
+	if ((viq->viq_descmap = id_space_create(space_name, 0, qsz)) == NULL) {
+		dev_err(vio->vio_dip, CE_WARN, "could not allocate descriptor "
+		    "ID space");
+		virtio_queue_free(viq);
+		return (NULL);
+	}
+
+	/*
+	 * For legacy devices, memory for the queue has a strict layout
+	 * determined by the queue size, and with the device region
+	 * starting on a fresh page. Modern and transitional devices have less
+	 * stringent alignment requirements and virtqueues are more compact as
+	 * a result.
+	 */
+	const uint_t align = virtio_modern(vio) ? MODERN_VQ_ALIGN :
+	    VIRTIO_PAGE_SIZE;
+
+	/*
+	 * The driver and device areas are each followed by a single 16-bit
+	 * value holding, respectively, the "used_event" and "avail_event"
+	 * values for the ring event index mechanism. The layout includes them
+	 * whether or not the feature was negotiated. They are only written or
+	 * read when it was.
+	 */
+	const size_t sz_descs = sizeof (virtio_vq_desc_t) * qsz;
+	const size_t sz_driver = P2ROUNDUP_TYPED(sz_descs +
+	    sizeof (virtio_vq_driver_t) +
+	    sizeof (uint16_t) * (qsz + 1u),
+	    align, size_t);
+	const size_t sz_device = P2ROUNDUP_TYPED(sizeof (virtio_vq_device_t) +
+	    sizeof (virtio_vq_elem_t) * qsz +
+	    sizeof (uint16_t),
+	    align, size_t);
+
+	if (virtio_dma_init(vio, &viq->viq_dma, sz_driver + sz_device,
+	    &virtio_dma_attr_queue, DDI_DMA_RDWR | DDI_DMA_CONSISTENT,
+	    KM_SLEEP) != DDI_SUCCESS) {
+		dev_err(vio->vio_dip, CE_WARN, "could not allocate queue "
+		    "DMA memory");
+		virtio_queue_free(viq);
+		return (NULL);
+	}
+
+	/*
+	 * NOTE: The viq_dma_* members below are used by
+	 * VIRTQ_DMA_SYNC_FORDEV() and VIRTQ_DMA_SYNC_FORKERNEL() to calculate
+	 * offsets into the DMA allocation for partial synchronisation.  If the
+	 * ordering of, or relationship between, these pointers changes, the
+	 * macros must be kept in sync.
+	 */
+	viq->viq_dma_descs = virtio_dma_va(&viq->viq_dma, 0);
+	viq->viq_dma_driver = virtio_dma_va(&viq->viq_dma, sz_descs);
+	viq->viq_dma_device = virtio_dma_va(&viq->viq_dma, sz_driver);
+
+	/*
+	 * Install in the per-device list of queues.
+	 */
+	mutex_enter(&vio->vio_mutex);
+	for (virtio_queue_t *chkvq = list_head(&vio->vio_queues); chkvq != NULL;
+	    chkvq = list_next(&vio->vio_queues, chkvq)) {
+		if (chkvq->viq_index == qidx) {
+			dev_err(vio->vio_dip, CE_WARN, "attempt to register "
+			    "queue \"%s\" with same index (%d) as queue \"%s\"",
+			    name, qidx, chkvq->viq_name);
+			mutex_exit(&vio->vio_mutex);
+			virtio_queue_free(viq);
+			return (NULL);
+		}
+	}
+	list_insert_tail(&vio->vio_queues, viq);
+
+	/*
+	 * Ensure the zeroing of the queue memory is visible to the host before
+	 * we inform the device of the queue address.
+	 */
+	membar_producer();
+	VIRTQ_DMA_SYNC_FORDEV(viq);
+
+	const uint64_t pa = virtio_dma_cookie_pa(&viq->viq_dma, 0);
+	vio->vio_ops->vop_queue_addr_set(vio, qidx,
+	    pa, pa + sz_descs, pa + sz_driver);
+
+	mutex_exit(&vio->vio_mutex);
+	return (viq);
+}
+
+static void
+virtio_queue_free(virtio_queue_t *viq)
+{
+	virtio_t *vio = viq->viq_virtio;
+	virtio_queue_t *sharer;
+
+	/*
+	 * We are going to destroy the queue mutex.  Make sure we've already
+	 * removed the interrupt handlers.
+	 */
+	VERIFY(!(vio->vio_initlevel & VIRTIO_INITLEVEL_INT_ADDED));
+
+	/*
+	 * Remove any vector sharing relationships in both directions. Queues
+	 * are freed one at a time and in no particular order, so whichever
+	 * end of a relationship is freed first detaches the other.
+	 */
+	if (viq->viq_intr_owner != NULL) {
+		list_remove(&viq->viq_intr_owner->viq_intr_sharers, viq);
+		viq->viq_intr_owner = NULL;
+	}
+	while ((sharer = list_remove_head(&viq->viq_intr_sharers)) != NULL)
+		sharer->viq_intr_owner = NULL;
+	list_destroy(&viq->viq_intr_sharers);
+
+	mutex_enter(&viq->viq_mutex);
+
+	/*
+	 * If the device has not already been reset as part of a shutdown,
+	 * detach the queue from the device now.
+	 */
+	if (!viq->viq_shutdown) {
+		vio->vio_ops->vop_queue_enable_set(vio, viq->viq_index, false);
+		vio->vio_ops->vop_queue_addr_set(vio, viq->viq_index, 0, 0, 0);
+	}
+
+	virtio_dma_fini(&viq->viq_dma);
+
+	VERIFY(avl_is_empty(&viq->viq_inflight));
+	avl_destroy(&viq->viq_inflight);
+	if (viq->viq_descmap != NULL) {
+		id_space_destroy(viq->viq_descmap);
+	}
+
+	mutex_exit(&viq->viq_mutex);
+	mutex_destroy(&viq->viq_mutex);
+
+	kmem_free(viq, sizeof (*viq));
+}
+
+/*
+ * Direct the queue "viq" to share the interrupt vector that will be assigned
+ * to the queue "owner", rather than receiving a vector of its own. When an
+ * interrupt arrives on the shared vector, the handlers of both queues are
+ * called and so a queue handler must tolerate being called when its own
+ * queue has no work. This should already be the case since the same thing
+ * happens with the shared fixed interrupt fallback. Any number of queues may
+ * share the vector of one owning queue, but sharing relationships must not be
+ * chained. This function may only be called during the initialisation phase,
+ * and both queues must have been configured with handler functions.
+ */
+void
+virtio_queue_share_interrupt(virtio_queue_t *viq, virtio_queue_t *owner)
+{
+	virtio_t *vio = viq->viq_virtio;
+
+	VERIFY3P(vio, ==, owner->viq_virtio);
+	VERIFY3P(viq, !=, owner);
+	VERIFY3P(viq->viq_func, !=, NULL);
+	VERIFY3P(owner->viq_func, !=, NULL);
+
+	mutex_enter(&vio->vio_mutex);
+	VERIFY(!(vio->vio_initlevel & VIRTIO_INITLEVEL_PROVIDER));
+
+	/*
+	 * Sharing relationships cannot be chained. The owning queue must
+	 * hold its own vector, and a queue that itself has sharers cannot
+	 * also share the vector of another queue.
+	 */
+	VERIFY3P(owner->viq_intr_owner, ==, NULL);
+	VERIFY3P(viq->viq_intr_owner, ==, NULL);
+	VERIFY(list_is_empty(&viq->viq_intr_sharers));
+
+	viq->viq_intr_owner = owner;
+	list_insert_tail(&owner->viq_intr_sharers, viq);
+	mutex_exit(&vio->vio_mutex);
+}
+
+static inline uint16_t *
+virtio_queue_used_event(virtio_queue_t *viq)
+{
+	const uintptr_t used_event =
+	    (uintptr_t)&viq->viq_dma_driver->vqdr_ring[viq->viq_size];
+
+	return ((uint16_t *)used_event);
+}
+
+static inline const uint16_t *
+virtio_queue_avail_event(const virtio_queue_t *viq)
+{
+	const uintptr_t avail_event =
+	    (uintptr_t)&viq->viq_dma_device->vqde_ring[viq->viq_size];
+
+	return ((const uint16_t *)avail_event);
+}
+
+/*
+ * Decide whether an update that advances the published ring index from
+ * "old_idx" to "new_idx" must generate an event, given that an event was
+ * requested for the entry with index "event_idx". This is the code form
+ * given in the specification (version 1.3, section 2.7.11, "Helpers for
+ * Operating Virtqueues"). It is true when event_idx lies within the
+ * half-open window [old_idx, new_idx) in 16-bit modular arithmetic. That
+ * is, when this update publishes the entry for which the event was
+ * requested. It is equivalent to the perhaps more intuitive
+ *
+ *	(uint16_t)(event_idx - old_idx) < (uint16_t)(new_idx - old_idx)
+ *
+ * which asks whether the distance forward from old_idx to event_idx is
+ * smaller than the distance forward to new_idx. Comparing distances rather
+ * than the indices themselves is what makes wrapping safe - a window that
+ * straddles the 16-bit wrap remains contiguous because both distances wrap
+ * by the same amount.
+ */
+static inline boolean_t
+virtio_need_event(uint16_t event_idx, uint16_t new_idx, uint16_t old_idx)
+{
+	return ((uint16_t)(new_idx - event_idx - 1) <
+	    (uint16_t)(new_idx - old_idx));
+}
+
+void
+virtio_queue_no_interrupt(virtio_queue_t *viq, boolean_t stop_interrupts)
+{
+	mutex_enter(&viq->viq_mutex);
+
+	viq->viq_no_interrupt = stop_interrupts;
+
+	if (viq->viq_event_idx) {
+		uint16_t *used_event = virtio_queue_used_event(viq);
+
+		/*
+		 * Base the value on the index the device has most recently
+		 * published, which may be ahead of the index we have
+		 * collected up to.
+		 */
+		VIRTQ_DMA_SYNC_FORKERNEL(viq);
+		const uint16_t dindex = viq_htog16(viq,
+		    viq->viq_dma_device->vqde_index);
+
+		if (stop_interrupts) {
+			/*
+			 * The event index mechanism has no way to directly
+			 * suppress interrupts. Request an event for the index
+			 * the device has just moved past, which the
+			 * free-running index cannot reach again until it has
+			 * completed a full lap. The value is refreshed
+			 * whenever virtio_queue_poll() observes the queue
+			 * empty, so a lap, and the one spurious interrupt it
+			 * costs, requires a full ring's worth of chains to be
+			 * returned without the queue ever appearing empty.
+			 */
+			*used_event = viq_gtoh16(viq, dindex - 1);
+		} else {
+			/*
+			 * Request an event for the next chain the device
+			 * returns. This store races the device - a chain may
+			 * be returned, and the index moved past the value
+			 * written here, while this runs. Chains that have
+			 * already been returned raise no interrupt either
+			 * way, so enabling interrupts guarantees nothing
+			 * about chains returned up to and around this point,
+			 * and the caller must poll for and collect them
+			 * itself regardless.
+			 */
+			*used_event = viq_gtoh16(viq, dindex);
+		}
+	} else if (stop_interrupts) {
+		viq->viq_dma_driver->vqdr_flags |=
+		    viq_gtoh16(viq, VIRTQ_AVAIL_F_NO_INTERRUPT);
+	} else {
+		viq->viq_dma_driver->vqdr_flags &=
+		    viq_gtoh16(viq, ~VIRTQ_AVAIL_F_NO_INTERRUPT);
+	}
+	VIRTQ_DMA_SYNC_FORDEV(viq);
+
+	mutex_exit(&viq->viq_mutex);
+}
+
+static virtio_chain_t *
+virtio_queue_complete(virtio_queue_t *viq, uint_t index)
+{
+	VERIFY(MUTEX_HELD(&viq->viq_mutex));
+
+	virtio_chain_t *vic;
+
+	virtio_chain_t search;
+	bzero(&search, sizeof (search));
+	search.vic_head = index;
+
+	if ((vic = avl_find(&viq->viq_inflight, &search, NULL)) == NULL) {
+		return (NULL);
+	}
+	avl_remove(&viq->viq_inflight, vic);
+
+	return (vic);
+}
+
+uint_t
+virtio_queue_size(virtio_queue_t *viq)
+{
+	return (viq->viq_size);
+}
+
+uint_t
+virtio_queue_nactive(virtio_queue_t *viq)
+{
+	mutex_enter(&viq->viq_mutex);
+	uint_t r = avl_numnodes(&viq->viq_inflight);
+	mutex_exit(&viq->viq_mutex);
+
+	return (r);
+}
+
+/*
+ * Check whether the device has returned descriptor chains that have not yet
+ * been collected with virtio_queue_poll(). The device decides whether to send
+ * an interrupt only at the moment it returns a chain, so no interrupt is
+ * generated for chains returned while interrupts were suppressed and
+ * re-enabling them is not retroactive. A driver that re-enables interrupts
+ * should use this to discover outstanding work and process the queue itself.
+ */
+boolean_t
+virtio_queue_pending(virtio_queue_t *viq)
+{
+	boolean_t pending = B_FALSE;
+
+	mutex_enter(&viq->viq_mutex);
+	if (!viq->viq_shutdown) {
+		/*
+		 * Taking the queue mutex provides the store-load barrier
+		 * needed when the caller has just re-enabled interrupts.
+		 * That update is globally visible before we read the device
+		 * index, so a chain that the check misses was returned after
+		 * interrupts were re-enabled and will have raised one.
+		 */
+		VIRTQ_DMA_SYNC_FORKERNEL(viq);
+		pending = (viq_htog16(viq, viq->viq_dma_device->vqde_index) !=
+		    viq->viq_device_index);
+	}
+	mutex_exit(&viq->viq_mutex);
+
+	return (pending);
+}
+
+/*
+ * Return the interrupt handle for the MSI-X vector assigned to a queue, or
+ * NULL if the queue has no vector. This is the case when the framework fell
+ * back to a shared fixed interrupt, or when the queue was configured without
+ * a handler. Queues that share a vector return the same handle.
+ */
+ddi_intr_handle_t
+virtio_queue_intr_handle(virtio_queue_t *viq)
+{
+	virtio_t *vio = viq->viq_virtio;
+	virtio_queue_t *owner = virtio_queue_intr_owner(viq);
+
+	VERIFY(vio->vio_initlevel & VIRTIO_INITLEVEL_INT_ADDED);
+
+	if (vio->vio_interrupt_type != DDI_INTR_TYPE_MSIX ||
+	    !owner->viq_handler_added) {
+		return (NULL);
+	}
+
+	return (vio->vio_interrupts[owner->viq_handler_index]);
+}
+
+virtio_chain_t *
+virtio_queue_poll(virtio_queue_t *viq)
+{
+	mutex_enter(&viq->viq_mutex);
+	if (viq->viq_shutdown) {
+		/*
+		 * The device has been reset by virtio_shutdown(), and queue
+		 * processing has been halted.  Any previously submitted chains
+		 * will be evacuated using virtio_queue_evacuate().
+		 */
+		mutex_exit(&viq->viq_mutex);
+		return (NULL);
+	}
+
+	VIRTQ_DMA_SYNC_FORKERNEL(viq);
+	uint16_t dindex = viq_htog16(viq, viq->viq_dma_device->vqde_index);
+
+	if (viq->viq_event_idx && viq->viq_device_index == dindex) {
+		/*
+		 * The queue appears to be empty. Update the used event entry:
+		 * while interrupts are enabled, request an event for the next
+		 * chain the device returns beyond those already collected;
+		 * while they are suppressed, park the value one behind the
+		 * device index. A queue that is polled without ever appearing
+		 * empty can see the free-running index lap the parked value,
+		 * at a cost of one spurious interrupt per lap.
+		 */
+		*virtio_queue_used_event(viq) = viq_gtoh16(viq,
+		    viq->viq_no_interrupt ?
+		    (uint16_t)(dindex - 1) : dindex);
+		VIRTQ_DMA_SYNC_FORDEV(viq);
+
+		/*
+		 * When interrupts are enabled, the store above must be
+		 * globally visible before the device index is loaded again.
+		 * Without the barrier, that store and the device's next index
+		 * update could each miss the other, and the chain the device
+		 * returned would neither raise an interrupt nor be visible to
+		 * the re-read below.
+		 */
+		if (!viq->viq_no_interrupt)
+			membar_enter();
+
+		/*
+		 * Re-read the device index. A chain that the device returned
+		 * before it could observe the updated event entry raises no
+		 * interrupt, and must be collected now rather than left for
+		 * an interrupt that will never arrive.
+		 */
+		VIRTQ_DMA_SYNC_FORKERNEL(viq);
+		dindex = viq_htog16(viq, viq->viq_dma_device->vqde_index);
+	}
+
+	if (viq->viq_device_index == dindex) {
+		/*
+		 * If the device index has not changed since the last poll,
+		 * there are no new chains to process.
+		 */
+		mutex_exit(&viq->viq_mutex);
+		return (NULL);
+	}
+
+	/*
+	 * We need to ensure that all reads from the descriptor (vqde_ring[])
+	 * and any referenced memory by the descriptor occur after we have read
+	 * the descriptor index value above (vqde_index).
+	 */
+	membar_consumer();
+
+	uint16_t index = (viq->viq_device_index++) % viq->viq_size;
+	uint16_t start = viq_htog16(viq,
+	    viq->viq_dma_device->vqde_ring[index].vqe_start);
+	uint32_t len = viq_htog32(viq,
+	    viq->viq_dma_device->vqde_ring[index].vqe_len);
+
+	virtio_chain_t *vic;
+	if ((vic = virtio_queue_complete(viq, start)) == NULL) {
+		/*
+		 * We could not locate a chain for this descriptor index, which
+		 * suggests that something has gone horribly wrong.
+		 */
+		dev_err(viq->viq_virtio->vio_dip, CE_PANIC,
+		    "queue \"%s\" ring entry %u (descriptor %u) has no chain",
+		    viq->viq_name, (uint16_t)index, (uint16_t)start);
+	}
+
+	vic->vic_received_length = len;
+
+	mutex_exit(&viq->viq_mutex);
+
+	return (vic);
+}
+
+/*
+ * After a call to "virtio_shutdown()", the driver must retrieve any previously
+ * submitted chains and free any associated resources.
+ */
+virtio_chain_t *
+virtio_queue_evacuate(virtio_queue_t *viq)
+{
+	virtio_t *vio = viq->viq_virtio;
+
+	mutex_enter(&vio->vio_mutex);
+	if (!(vio->vio_initlevel & VIRTIO_INITLEVEL_SHUTDOWN)) {
+		dev_err(vio->vio_dip, CE_PANIC,
+		    "virtio_queue_evacuate() without virtio_shutdown()");
+	}
+	mutex_exit(&vio->vio_mutex);
+
+	mutex_enter(&viq->viq_mutex);
+	VERIFY(viq->viq_shutdown);
+
+	virtio_chain_t *vic = avl_first(&viq->viq_inflight);
+	if (vic != NULL) {
+		avl_remove(&viq->viq_inflight, vic);
+	}
+
+	mutex_exit(&viq->viq_mutex);
+
+	return (vic);
+}
+
+/*
+ * VIRTQUEUE DESCRIPTOR CHAIN MANAGEMENT
+ */
+
+/*
+ * When the device returns a descriptor chain to the driver, it may provide the
+ * length in bytes of data written into the chain.  Client drivers should use
+ * this value with care; the specification suggests some device implementations
+ * have not always provided a useful or correct value.
+ */
+size_t
+virtio_chain_received_length(virtio_chain_t *vic)
+{
+	return (vic->vic_received_length);
+}
+
+/*
+ * Allocate a descriptor chain for use with this queue.  The "kmflags" value
+ * may be KM_SLEEP or KM_NOSLEEP as per kmem_alloc(9F).
+ */
+virtio_chain_t *
+virtio_chain_alloc(virtio_queue_t *viq, int kmflags)
+{
+	virtio_t *vio = viq->viq_virtio;
+	virtio_chain_t *vic;
+	uint_t cap;
+
+	/*
+	 * Direct descriptors are known by their index in the descriptor table
+	 * for the queue.  We use the variable-length array member at the end
+	 * of the chain tracking object to hold the list of direct descriptors
+	 * assigned to this chain.
+	 */
+	if (viq->viq_indirect) {
+		/*
+		 * When using indirect descriptors we still need one direct
+		 * descriptor entry to hold the physical address and length of
+		 * the indirect descriptor table.
+		 */
+		cap = 1;
+	} else {
+		/*
+		 * For direct descriptors we need to be able to track a
+		 * descriptor for each possible segment in a single chain.
+		 */
+		cap = viq->viq_max_segs;
+	}
+
+	size_t vicsz = sizeof (*vic) + sizeof (uint16_t) * cap;
+	if ((vic = kmem_zalloc(vicsz, kmflags)) == NULL) {
+		return (NULL);
+	}
+	vic->vic_vq = viq;
+	vic->vic_direct_capacity = cap;
+
+	if (viq->viq_indirect) {
+		/*
+		 * Allocate an indirect descriptor list with the appropriate
+		 * number of entries.
+		 */
+		if (virtio_dma_init(vio, &vic->vic_indirect_dma,
+		    sizeof (virtio_vq_desc_t) * viq->viq_max_segs,
+		    &virtio_dma_attr_indirect,
+		    DDI_DMA_CONSISTENT | DDI_DMA_WRITE,
+		    kmflags) != DDI_SUCCESS) {
+			goto fail;
+		}
+
+		/*
+		 * Allocate a single descriptor to hold the indirect list.
+		 * Leave the length as zero for now; it will be set to include
+		 * any occupied entries at push time.
+		 */
+		mutex_enter(&viq->viq_mutex);
+		if (virtio_chain_append_impl(vic,
+		    virtio_dma_cookie_pa(&vic->vic_indirect_dma, 0), 0,
+		    VIRTQ_DESC_F_INDIRECT) != DDI_SUCCESS) {
+			mutex_exit(&viq->viq_mutex);
+			goto fail;
+		}
+		mutex_exit(&viq->viq_mutex);
+		VERIFY3U(vic->vic_direct_used, ==, 1);
+
+		/*
+		 * Don't set the indirect capacity until after we've installed
+		 * the direct descriptor which points at the indirect list, or
+		 * virtio_chain_append_impl() will be confused.
+		 */
+		vic->vic_indirect_capacity = viq->viq_max_segs;
+	}
+
+	return (vic);
+
+fail:
+	virtio_dma_fini(&vic->vic_indirect_dma);
+	kmem_free(vic, vicsz);
+	return (NULL);
+}
+
+void *
+virtio_chain_data(virtio_chain_t *vic)
+{
+	return (vic->vic_data);
+}
+
+void
+virtio_chain_data_set(virtio_chain_t *vic, void *data)
+{
+	vic->vic_data = data;
+}
+
+void
+virtio_chain_clear(virtio_chain_t *vic)
+{
+	if (vic->vic_indirect_capacity != 0) {
+		/*
+		 * There should only be one direct descriptor, which points at
+		 * our indirect descriptor list.  We don't want to clear it
+		 * here.
+		 */
+		VERIFY3U(vic->vic_direct_capacity, ==, 1);
+
+		if (vic->vic_indirect_used > 0) {
+			/*
+			 * Clear out the indirect descriptor table.
+			 */
+			vic->vic_indirect_used = 0;
+			bzero(virtio_dma_va(&vic->vic_indirect_dma, 0),
+			    virtio_dma_size(&vic->vic_indirect_dma));
+		}
+
+	} else if (vic->vic_direct_capacity > 0) {
+		/*
+		 * Release any descriptors that were assigned to us previously.
+		 */
+		for (uint_t i = 0; i < vic->vic_direct_used; i++) {
+			id_free(vic->vic_vq->viq_descmap, vic->vic_direct[i]);
+			vic->vic_direct[i] = 0;
+		}
+		vic->vic_direct_used = 0;
+	}
+}
+
+void
+virtio_chain_free(virtio_chain_t *vic)
+{
+	/*
+	 * First ensure that we have released any descriptors used by this
+	 * chain.
+	 */
+	virtio_chain_clear(vic);
+
+	if (vic->vic_indirect_capacity > 0) {
+		/*
+		 * Release the direct descriptor that points to our indirect
+		 * descriptor list.
+		 */
+		VERIFY3U(vic->vic_direct_capacity, ==, 1);
+		id_free(vic->vic_vq->viq_descmap, vic->vic_direct[0]);
+
+		virtio_dma_fini(&vic->vic_indirect_dma);
+	}
+
+	size_t vicsz = sizeof (*vic) +
+	    vic->vic_direct_capacity * sizeof (uint16_t);
+
+	kmem_free(vic, vicsz);
+}
+
+static inline int
+virtio_queue_descmap_alloc(virtio_queue_t *viq, uint_t *indexp)
+{
+	id_t index;
+
+	if ((index = id_alloc_nosleep(viq->viq_descmap)) == -1) {
+		return (ENOMEM);
+	}
+
+	VERIFY3S(index, >=, 0);
+	VERIFY3S(index, <=, viq->viq_size);
+
+	*indexp = (uint_t)index;
+	return (0);
+}
+
+static int
+virtio_chain_append_impl(virtio_chain_t *vic, uint64_t pa, size_t len,
+    uint16_t flags)
+{
+	virtio_queue_t *viq = vic->vic_vq;
+	virtio_vq_desc_t *vqd;
+	uint_t index;
+
+	/*
+	 * We're modifying the queue-wide descriptor list so make sure we have
+	 * the appropriate lock.
+	 */
+	VERIFY(MUTEX_HELD(&viq->viq_mutex));
+
+	if (vic->vic_indirect_capacity != 0) {
+		/*
+		 * Use indirect descriptors.
+		 */
+		if (vic->vic_indirect_used >= vic->vic_indirect_capacity) {
+			return (DDI_FAILURE);
+		}
+
+		vqd = virtio_dma_va(&vic->vic_indirect_dma, 0);
+
+		if ((index = vic->vic_indirect_used++) > 0) {
+			/*
+			 * Chain the current last indirect descriptor to the
+			 * new one.
+			 */
+			vqd[index - 1].vqd_flags |=
+			    viq_gtoh16(viq, VIRTQ_DESC_F_NEXT);
+			vqd[index - 1].vqd_next = viq_gtoh16(viq, index);
+		}
+
+	} else {
+		/*
+		 * Use direct descriptors.
+		 */
+		if (vic->vic_direct_used >= vic->vic_direct_capacity) {
+			return (DDI_FAILURE);
+		}
+
+		if (virtio_queue_descmap_alloc(viq, &index) != 0) {
+			return (DDI_FAILURE);
+		}
+
+		vqd = virtio_dma_va(&viq->viq_dma, 0);
+
+		if (vic->vic_direct_used > 0) {
+			/*
+			 * This is not the first entry.  Chain the current
+			 * descriptor to the next one.
+			 */
+			uint16_t p = vic->vic_direct[vic->vic_direct_used - 1];
+
+			vqd[p].vqd_flags |=
+			    viq_gtoh16(viq, VIRTQ_DESC_F_NEXT);
+			vqd[p].vqd_next = viq_gtoh16(viq, index);
+		}
+		vic->vic_direct[vic->vic_direct_used++] = index;
+	}
+
+	vqd[index].vqd_addr = viq_gtoh64(viq, pa);
+	vqd[index].vqd_len = viq_gtoh32(viq, len);
+	vqd[index].vqd_flags = viq_gtoh16(viq, flags);
+	vqd[index].vqd_next = 0;
+
+	return (DDI_SUCCESS);
+}
+
+int
+virtio_chain_append(virtio_chain_t *vic, uint64_t pa, size_t len,
+    virtio_direction_t dir)
+{
+	virtio_queue_t *viq = vic->vic_vq;
+	uint16_t flags = 0;
+
+	switch (dir) {
+	case VIRTIO_DIR_DEVICE_WRITES:
+		flags |= VIRTQ_DESC_F_WRITE;
+		break;
+
+	case VIRTIO_DIR_DEVICE_READS:
+		break;
+
+	default:
+		panic("unknown direction value %u", dir);
+	}
+
+	mutex_enter(&viq->viq_mutex);
+	int r = virtio_chain_append_impl(vic, pa, len, flags);
+	mutex_exit(&viq->viq_mutex);
+
+	return (r);
+}
+
+static void
+virtio_queue_flush_locked(virtio_queue_t *viq)
+{
+	virtio_t *vio = viq->viq_virtio;
+	boolean_t notify;
+
+	VERIFY(MUTEX_HELD(&viq->viq_mutex));
+
+	/*
+	 * The ring index value most recently made visible to the device,
+	 * needed below for the event index comparison.
+	 */
+	const uint16_t old_index = viq_htog16(viq,
+	    viq->viq_dma_driver->vqdr_index);
+
+	/*
+	 * Make sure any writes we have just made to the descriptors
+	 * (vqdr_ring[]) are visible to the device before we update the ring
+	 * pointer (vqdr_index).
+	 */
+	membar_producer();
+	viq->viq_dma_driver->vqdr_index =
+	    viq_gtoh16(viq, viq->viq_driver_index);
+	VIRTQ_DMA_SYNC_FORDEV(viq);
+
+	/*
+	 * Determine whether the device expects us to notify it of new
+	 * descriptors. For either mechanism this requires store-load
+	 * ordering. The store publishing the new ring index above must be
+	 * globally visible before the load of the suppression state that the
+	 * device maintains, or each side could see a stale view of the other
+	 * and a notification the device is relying on would never be sent.
+	 */
+	membar_enter();
+	VIRTQ_DMA_SYNC_FORKERNEL(viq);
+	if (viq->viq_event_idx) {
+		const uint16_t avail_event = viq_htog16(viq,
+		    *virtio_queue_avail_event(viq));
+
+		notify = virtio_need_event(avail_event,
+		    viq->viq_driver_index, old_index);
+	} else {
+		notify = (viq->viq_dma_device->vqde_flags &
+		    viq_gtoh16(viq, VIRTQ_USED_F_NO_NOTIFY)) == 0;
+	}
+
+	if (notify)
+		vio->vio_ops->vop_queue_notify(viq);
+}
+
+void
+virtio_queue_flush(virtio_queue_t *viq)
+{
+	mutex_enter(&viq->viq_mutex);
+	virtio_queue_flush_locked(viq);
+	mutex_exit(&viq->viq_mutex);
+}
+
+void
+virtio_chain_submit(virtio_chain_t *vic, boolean_t flush)
+{
+	virtio_queue_t *viq = vic->vic_vq;
+
+	mutex_enter(&viq->viq_mutex);
+
+	if (vic->vic_indirect_capacity != 0) {
+		virtio_vq_desc_t *vqd = virtio_dma_va(&viq->viq_dma, 0);
+
+		VERIFY3U(vic->vic_direct_used, ==, 1);
+
+		/*
+		 * This is an indirect descriptor queue.  The length in bytes
+		 * of the descriptor must extend to cover the populated
+		 * indirect descriptor entries.
+		 */
+		vqd[vic->vic_direct[0]].vqd_len = viq_gtoh32(viq,
+		    sizeof (virtio_vq_desc_t) * vic->vic_indirect_used);
+
+		virtio_dma_sync(&vic->vic_indirect_dma, DDI_DMA_SYNC_FORDEV);
+	}
+
+	/*
+	 * Populate the next available slot in the driver-owned ring for this
+	 * chain.  The updated value of viq_driver_index is not yet visible to
+	 * the device until a subsequent queue flush.
+	 */
+	uint16_t index = (viq->viq_driver_index++) % viq->viq_size;
+	viq->viq_dma_driver->vqdr_ring[index] =
+	    viq_gtoh16(viq, vic->vic_direct[0]);
+
+	vic->vic_head = vic->vic_direct[0];
+	avl_add(&viq->viq_inflight, vic);
+
+	if (flush) {
+		virtio_queue_flush_locked(vic->vic_vq);
+	}
+
+	mutex_exit(&viq->viq_mutex);
+}
+
+/*
+ * INTERRUPTS MANAGEMENT
+ */
+
+static const char *
+virtio_interrupt_type_name(int type)
+{
+	switch (type) {
+	case DDI_INTR_TYPE_MSIX:
+		return ("MSI-X");
+	case DDI_INTR_TYPE_MSI:
+		return ("MSI");
+	case DDI_INTR_TYPE_FIXED:
+		return ("fixed");
+	default:
+		return ("?");
+	}
+}
+
+static int
+virtio_interrupts_alloc(virtio_t *vio, int type, int nrequired)
+{
+	dev_info_t *dip = vio->vio_dip;
+	int nintrs = 0;
+	int navail = 0;
+
+	VERIFY(MUTEX_HELD(&vio->vio_mutex));
+	VERIFY(!(vio->vio_initlevel & VIRTIO_INITLEVEL_INT_ALLOC));
+
+	if (ddi_intr_get_nintrs(dip, type, &nintrs) != DDI_SUCCESS) {
+		dev_err(dip, CE_WARN, "could not count %s interrupts",
+		    virtio_interrupt_type_name(type));
+		return (DDI_FAILURE);
+	}
+	if (nintrs < 1) {
+		dev_err(dip, CE_WARN, "no %s interrupts supported",
+		    virtio_interrupt_type_name(type));
+		return (DDI_FAILURE);
+	}
+
+	if (ddi_intr_get_navail(dip, type, &navail) != DDI_SUCCESS) {
+		dev_err(dip, CE_WARN, "could not count available %s interrupts",
+		    virtio_interrupt_type_name(type));
+		return (DDI_FAILURE);
+	}
+	if (navail < nrequired) {
+		dev_err(dip, CE_WARN, "need %d %s interrupts, but only %d "
+		    "available", nrequired, virtio_interrupt_type_name(type),
+		    navail);
+		return (DDI_FAILURE);
+	}
+
+	VERIFY3P(vio->vio_interrupts, ==, NULL);
+	vio->vio_interrupts = kmem_zalloc(
+	    sizeof (ddi_intr_handle_t) * nrequired, KM_SLEEP);
+
+	int r;
+	if ((r = ddi_intr_alloc(dip, vio->vio_interrupts, type, 0, nrequired,
+	    &vio->vio_ninterrupts, DDI_INTR_ALLOC_STRICT)) != DDI_SUCCESS) {
+		dev_err(dip, CE_WARN, "%s interrupt allocation failure (%d)",
+		    virtio_interrupt_type_name(type), r);
+		kmem_free(vio->vio_interrupts,
+		    sizeof (ddi_intr_handle_t) * nrequired);
+		vio->vio_interrupts = NULL;
+		return (DDI_FAILURE);
+	}
+
+	vio->vio_initlevel |= VIRTIO_INITLEVEL_INT_ALLOC;
+	vio->vio_interrupt_type = type;
+	return (DDI_SUCCESS);
+}
+
+/*
+ * The queue whose vector this queue's interrupts arrive on.
+ */
+static virtio_queue_t *
+virtio_queue_intr_owner(virtio_queue_t *viq)
+{
+	return (viq->viq_intr_owner != NULL ? viq->viq_intr_owner : viq);
+}
+
+/*
+ * The interrupt handler installed for an MSI-X vector that is shared between
+ * queues. The device gives no indication of which queue an interrupt was for,
+ * so the handler of every queue on the vector is called.
+ */
+static uint_t
+virtio_shared_vector_isr(caddr_t arg0, caddr_t arg1)
+{
+	virtio_queue_t *viq = (virtio_queue_t *)arg0;
+
+	(void) viq->viq_func(viq->viq_funcarg, arg1);
+	for (virtio_queue_t *sharer = list_head(&viq->viq_intr_sharers);
+	    sharer != NULL;
+	    sharer = list_next(&viq->viq_intr_sharers, sharer)) {
+		(void) sharer->viq_func(sharer->viq_funcarg, arg1);
+	}
+
+	return (DDI_INTR_CLAIMED);
+}
+
+static uint_t
+virtio_shared_isr(caddr_t arg0, caddr_t arg1)
+{
+	virtio_t *vio = (virtio_t *)arg0;
+	uint_t r = DDI_INTR_UNCLAIMED;
+	uint8_t isr;
+
+	mutex_enter(&vio->vio_mutex);
+
+	/*
+	 * Check the ISR status to see if the interrupt applies to us.  Reading
+	 * this field resets it to zero.
+	 */
+	isr = vio->vio_ops->vop_isr_status(vio);
+
+	if ((isr & VIRTIO_ISR_CHECK_QUEUES) != 0) {
+		r = DDI_INTR_CLAIMED;
+
+		for (virtio_queue_t *viq = list_head(&vio->vio_queues);
+		    viq != NULL; viq = list_next(&vio->vio_queues, viq)) {
+			if (viq->viq_func != NULL) {
+				mutex_exit(&vio->vio_mutex);
+				(void) viq->viq_func(viq->viq_funcarg, arg0);
+				mutex_enter(&vio->vio_mutex);
+
+				if (vio->vio_initlevel &
+				    VIRTIO_INITLEVEL_SHUTDOWN) {
+					/*
+					 * The device was shut down while in a
+					 * queue handler routine.
+					 */
+					break;
+				}
+			}
+		}
+	}
+
+	mutex_exit(&vio->vio_mutex);
+
+	/*
+	 * vio_cfgchange_{handler,handlerarg} cannot change while interrupts
+	 * are configured so it is safe to access them outside of the lock.
+	 */
+
+	if ((isr & VIRTIO_ISR_CHECK_CONFIG) != 0) {
+		r = DDI_INTR_CLAIMED;
+		if (vio->vio_cfgchange_handler != NULL) {
+			(void) vio->vio_cfgchange_handler(
+			    (caddr_t)vio->vio_cfgchange_handlerarg,
+			    (caddr_t)vio);
+		}
+	}
+
+	return (r);
+}
+
+static int
+virtio_interrupts_setup(virtio_t *vio, int allow_types)
+{
+	dev_info_t *dip = vio->vio_dip;
+	int types;
+	int count = 0;
+
+	mutex_enter(&vio->vio_mutex);
+
+	/*
+	 * Determine the number of interrupts we'd like based on the number of
+	 * virtqueues, not counting queues that will share the vector assigned
+	 * to another queue.
+	 */
+	for (virtio_queue_t *viq = list_head(&vio->vio_queues); viq != NULL;
+	    viq = list_next(&vio->vio_queues, viq)) {
+		if (viq->viq_func != NULL && viq->viq_intr_owner == NULL) {
+			count++;
+		}
+	}
+
+	/*
+	 * If there is a configuration change handler, one extra interrupt
+	 * is needed for that.
+	 */
+	if (vio->vio_cfgchange_handler != NULL)
+		count++;
+
+	if (ddi_intr_get_supported_types(dip, &types) != DDI_SUCCESS) {
+		dev_err(dip, CE_WARN, "could not get supported interrupts");
+		mutex_exit(&vio->vio_mutex);
+		return (DDI_FAILURE);
+	}
+
+	if (allow_types != VIRTIO_ANY_INTR_TYPE) {
+		/*
+		 * Restrict the possible interrupt types at the request of the
+		 * driver.
+		 */
+		types &= allow_types;
+	}
+
+	/*
+	 * Try each potential interrupt type in descending order of preference.
+	 * Note that the specification does not appear to allow for the use of
+	 * classical MSI, so we are limited to either MSI-X or fixed
+	 * interrupts.
+	 */
+	if (types & DDI_INTR_TYPE_MSIX) {
+		if (virtio_interrupts_alloc(vio, DDI_INTR_TYPE_MSIX,
+		    count) == DDI_SUCCESS) {
+			goto add_handlers;
+		}
+	}
+	if (types & DDI_INTR_TYPE_FIXED) {
+		/*
+		 * If fixed interrupts are all that are available, we'll just
+		 * ask for one.
+		 */
+		if (virtio_interrupts_alloc(vio, DDI_INTR_TYPE_FIXED, 1) ==
+		    DDI_SUCCESS) {
+			goto add_handlers;
+		}
+	}
+
+	dev_err(dip, CE_WARN, "interrupt allocation failed");
+	mutex_exit(&vio->vio_mutex);
+	return (DDI_FAILURE);
+
+add_handlers:
+	/*
+	 * Ensure that we have not been given any high-level interrupts as our
+	 * interrupt handlers do not support them.
+	 */
+	for (int i = 0; i < vio->vio_ninterrupts; i++) {
+		uint_t ipri;
+
+		if (ddi_intr_get_pri(vio->vio_interrupts[i], &ipri) !=
+		    DDI_SUCCESS) {
+			dev_err(dip, CE_WARN, "could not determine interrupt "
+			    "priority");
+			goto fail;
+		}
+
+		if (ipri >= ddi_intr_get_hilevel_pri()) {
+			dev_err(dip, CE_WARN, "high level interrupts not "
+			    "supported");
+			goto fail;
+		}
+
+		/*
+		 * Record the highest priority we've been allocated to use for
+		 * mutex initialisation.
+		 */
+		if (i == 0 || ipri > vio->vio_interrupt_priority) {
+			vio->vio_interrupt_priority = ipri;
+		}
+	}
+
+	/*
+	 * Get the interrupt capabilities from the first handle to determine
+	 * whether we need to use ddi_intr_block_enable(9F).
+	 */
+	if (ddi_intr_get_cap(vio->vio_interrupts[0],
+	    &vio->vio_interrupt_cap) != DDI_SUCCESS) {
+		dev_err(dip, CE_WARN, "failed to get interrupt capabilities");
+		goto fail;
+	}
+
+	if (vio->vio_interrupt_type == DDI_INTR_TYPE_FIXED) {
+		VERIFY3S(vio->vio_ninterrupts, ==, 1);
+		/*
+		 * For fixed interrupts, we need to use our shared handler to
+		 * multiplex the per-queue handlers provided by the driver.
+		 */
+		if (ddi_intr_add_handler(vio->vio_interrupts[0],
+		    virtio_shared_isr, (caddr_t)vio, NULL) != DDI_SUCCESS) {
+			dev_err(dip, CE_WARN, "adding shared %s interrupt "
+			    "handler failed", virtio_interrupt_type_name(
+			    vio->vio_interrupt_type));
+			goto fail;
+		}
+
+		goto done;
+	}
+
+	VERIFY3S(vio->vio_ninterrupts, ==, count);
+
+	uint_t n = 0;
+
+	/* Bind the configuration vector interrupt */
+	if (vio->vio_cfgchange_handler != NULL) {
+		if (ddi_intr_add_handler(vio->vio_interrupts[n],
+		    vio->vio_cfgchange_handler,
+		    (caddr_t)vio->vio_cfgchange_handlerarg,
+		    (caddr_t)vio) != DDI_SUCCESS) {
+			dev_err(dip, CE_WARN,
+			    "adding configuration change interrupt failed");
+			goto fail;
+		}
+		vio->vio_cfgchange_handler_added = B_TRUE;
+		vio->vio_cfgchange_handler_index = n;
+		n++;
+	}
+
+	for (virtio_queue_t *viq = list_head(&vio->vio_queues); viq != NULL;
+	    viq = list_next(&vio->vio_queues, viq)) {
+		if (viq->viq_func == NULL || viq->viq_intr_owner != NULL) {
+			continue;
+		}
+
+		/*
+		 * A queue whose vector is shared with other queues needs a
+		 * handler that multiplexes across all of them. Otherwise the
+		 * queue's own handler is installed directly.
+		 */
+		ddi_intr_handler_t *func;
+		caddr_t funcarg;
+
+		if (list_is_empty(&viq->viq_intr_sharers)) {
+			func = viq->viq_func;
+			funcarg = (caddr_t)viq->viq_funcarg;
+		} else {
+			func = virtio_shared_vector_isr;
+			funcarg = (caddr_t)viq;
+		}
+
+		if (ddi_intr_add_handler(vio->vio_interrupts[n],
+		    func, funcarg, (caddr_t)vio) != DDI_SUCCESS) {
+			dev_err(dip, CE_WARN, "adding interrupt %u (%s) failed",
+			    n, viq->viq_name);
+			goto fail;
+		}
+
+		viq->viq_handler_index = n;
+		viq->viq_handler_added = B_TRUE;
+		n++;
+	}
+
+done:
+	vio->vio_initlevel |= VIRTIO_INITLEVEL_INT_ADDED;
+	mutex_exit(&vio->vio_mutex);
+	return (DDI_SUCCESS);
+
+fail:
+	virtio_interrupts_teardown(vio);
+	mutex_exit(&vio->vio_mutex);
+	return (DDI_FAILURE);
+}
+
+static void
+virtio_interrupts_teardown(virtio_t *vio)
+{
+	VERIFY(MUTEX_HELD(&vio->vio_mutex));
+
+	virtio_interrupts_disable_locked(vio);
+
+	if (vio->vio_interrupt_type == DDI_INTR_TYPE_FIXED) {
+		/*
+		 * Remove the multiplexing interrupt handler.
+		 */
+		if (vio->vio_initlevel & VIRTIO_INITLEVEL_INT_ADDED) {
+			int r;
+
+			VERIFY3S(vio->vio_ninterrupts, ==, 1);
+
+			if ((r = ddi_intr_remove_handler(
+			    vio->vio_interrupts[0])) != DDI_SUCCESS) {
+				dev_err(vio->vio_dip, CE_WARN, "removing "
+				    "shared interrupt handler failed (%d)", r);
+			}
+		}
+	} else {
+		/*
+		 * Remove the configuration vector interrupt handler.
+		 */
+		if (vio->vio_cfgchange_handler_added) {
+			int r;
+
+			if ((r = ddi_intr_remove_handler(
+			    vio->vio_interrupts[0])) != DDI_SUCCESS) {
+				dev_err(vio->vio_dip, CE_WARN,
+				    "removing configuration change interrupt "
+				    "handler failed (%d)", r);
+			}
+			vio->vio_cfgchange_handler_added = B_FALSE;
+		}
+
+		for (virtio_queue_t *viq = list_head(&vio->vio_queues);
+		    viq != NULL; viq = list_next(&vio->vio_queues, viq)) {
+			int r;
+
+			if (!viq->viq_handler_added) {
+				continue;
+			}
+
+			if ((r = ddi_intr_remove_handler(
+			    vio->vio_interrupts[viq->viq_handler_index])) !=
+			    DDI_SUCCESS) {
+				dev_err(vio->vio_dip, CE_WARN, "removing "
+				    "interrupt handler (%s) failed (%d)",
+				    viq->viq_name, r);
+			}
+
+			viq->viq_handler_added = B_FALSE;
+		}
+	}
+	vio->vio_initlevel &= ~VIRTIO_INITLEVEL_INT_ADDED;
+
+	if (vio->vio_initlevel & VIRTIO_INITLEVEL_INT_ALLOC) {
+		for (int i = 0; i < vio->vio_ninterrupts; i++) {
+			int r;
+
+			if ((r = ddi_intr_free(vio->vio_interrupts[i])) !=
+			    DDI_SUCCESS) {
+				dev_err(vio->vio_dip, CE_WARN, "freeing "
+				    "interrupt %u failed (%d)", i, r);
+			}
+		}
+		kmem_free(vio->vio_interrupts,
+		    sizeof (ddi_intr_handle_t) * vio->vio_ninterrupts);
+		vio->vio_interrupts = NULL;
+		vio->vio_ninterrupts = 0;
+		vio->vio_interrupt_type = 0;
+		vio->vio_interrupt_cap = 0;
+		vio->vio_interrupt_priority = 0;
+
+		vio->vio_initlevel &= ~VIRTIO_INITLEVEL_INT_ALLOC;
+	}
+}
+
+static void
+virtio_interrupts_unwind(virtio_t *vio)
+{
+	VERIFY(MUTEX_HELD(&vio->vio_mutex));
+
+	if (vio->vio_interrupt_type == DDI_INTR_TYPE_MSIX) {
+		for (virtio_queue_t *viq = list_head(&vio->vio_queues);
+		    viq != NULL; viq = list_next(&vio->vio_queues, viq)) {
+			if (!virtio_queue_intr_owner(viq)->viq_handler_added) {
+				continue;
+			}
+
+			vio->vio_ops->vop_msix_queue_set(vio, viq->viq_index,
+			    VIRTIO_LEGACY_MSI_NO_VECTOR);
+		}
+
+		if (vio->vio_cfgchange_handler_added) {
+			vio->vio_ops->vop_msix_config_set(vio,
+			    VIRTIO_LEGACY_MSI_NO_VECTOR);
+		}
+	}
+
+	if (vio->vio_interrupt_cap & DDI_INTR_FLAG_BLOCK) {
+		(void) ddi_intr_block_disable(vio->vio_interrupts,
+		    vio->vio_ninterrupts);
+	} else {
+		for (int i = 0; i < vio->vio_ninterrupts; i++) {
+			(void) ddi_intr_disable(vio->vio_interrupts[i]);
+		}
+	}
+
+	/*
+	 * Disabling the interrupts makes the MSI-X fields disappear from the
+	 * BAR once more in the legacy interface.
+	 */
+	if (!virtio_modern(vio))
+		vio->vio_legacy_cfg_offset = VIRTIO_LEGACY_CFG_OFFSET;
+}
+
+/*
+ * Return the interrupt type that was allocated for this device, as one of the
+ * DDI_INTR_TYPE_* constants. A driver that sized its queue configuration
+ * around per-queue MSI-X vectors can use this to discover whether the
+ * framework instead had to fall back to a single shared fixed interrupt.
+ */
+int
+virtio_interrupts_type(virtio_t *vio)
+{
+	VERIFY(vio->vio_initlevel & VIRTIO_INITLEVEL_INT_ADDED);
+
+	return (vio->vio_interrupt_type);
+}
+
+int
+virtio_interrupts_enable(virtio_t *vio)
+{
+	mutex_enter(&vio->vio_mutex);
+	if (vio->vio_initlevel & VIRTIO_INITLEVEL_INT_ENABLED) {
+		mutex_exit(&vio->vio_mutex);
+		return (DDI_SUCCESS);
+	}
+
+	int r = DDI_SUCCESS;
+	if (vio->vio_interrupt_cap & DDI_INTR_FLAG_BLOCK) {
+		r = ddi_intr_block_enable(vio->vio_interrupts,
+		    vio->vio_ninterrupts);
+	} else {
+		for (int i = 0; i < vio->vio_ninterrupts; i++) {
+			if ((r = ddi_intr_enable(vio->vio_interrupts[i])) !=
+			    DDI_SUCCESS) {
+				/*
+				 * Disable the interrupts we have enabled so
+				 * far.
+				 */
+				for (i--; i >= 0; i--) {
+					(void) ddi_intr_disable(
+					    vio->vio_interrupts[i]);
+				}
+				break;
+			}
+		}
+	}
+
+	if (r != DDI_SUCCESS) {
+		mutex_exit(&vio->vio_mutex);
+		return (r);
+	}
+
+	if (vio->vio_interrupt_type == DDI_INTR_TYPE_MSIX) {
+		/*
+		 * When asked to enable the interrupts, the system enables
+		 * MSI-X in the PCI configuration for the device.  While
+		 * enabled, the extra MSI-X configuration table fields appear
+		 * between the general and the device-specific regions of the
+		 * BAR in the legacy interface.
+		 */
+		if (!virtio_modern(vio)) {
+			vio->vio_legacy_cfg_offset =
+			    VIRTIO_LEGACY_CFG_OFFSET_MSIX;
+		}
+
+		for (virtio_queue_t *viq = list_head(&vio->vio_queues);
+		    viq != NULL; viq = list_next(&vio->vio_queues, viq)) {
+			virtio_queue_t *owner = virtio_queue_intr_owner(viq);
+
+			if (!owner->viq_handler_added) {
+				continue;
+			}
+
+			uint16_t qi = viq->viq_index;
+			uint16_t msi = owner->viq_handler_index;
+
+			/*
+			 * Route interrupts for this queue to the assigned
+			 * MSI-X vector number, which is that of the owning
+			 * queue when the vector is shared.
+			 */
+			vio->vio_ops->vop_msix_queue_set(vio, qi, msi);
+
+			/*
+			 * The device may not actually accept the vector number
+			 * we're attempting to program.  We need to confirm
+			 * that configuration was successful by re-reading the
+			 * configuration we just wrote.
+			 */
+			if (vio->vio_ops->vop_msix_queue_get(vio, qi) != msi) {
+				dev_err(vio->vio_dip, CE_WARN,
+				    "failed to configure MSI-X vector %u for "
+				    "queue \"%s\" (#%u)", (uint_t)msi,
+				    viq->viq_name, (uint_t)qi);
+
+				virtio_interrupts_unwind(vio);
+				mutex_exit(&vio->vio_mutex);
+				return (DDI_FAILURE);
+			}
+		}
+
+		if (vio->vio_cfgchange_handler_added) {
+			vio->vio_ops->vop_msix_config_set(vio,
+			    vio->vio_cfgchange_handler_index);
+
+			/* Verify the value was accepted. */
+			if (vio->vio_ops->vop_msix_config_get(vio) !=
+			    vio->vio_cfgchange_handler_index) {
+				dev_err(vio->vio_dip, CE_WARN,
+				    "failed to configure MSI-X vector for "
+				    "configuration");
+
+				virtio_interrupts_unwind(vio);
+				mutex_exit(&vio->vio_mutex);
+				return (DDI_FAILURE);
+			}
+		}
+	}
+
+	vio->vio_initlevel |= VIRTIO_INITLEVEL_INT_ENABLED;
+
+	mutex_exit(&vio->vio_mutex);
+	return (DDI_SUCCESS);
+}
+
+static void
+virtio_interrupts_disable_locked(virtio_t *vio)
+{
+	VERIFY(MUTEX_HELD(&vio->vio_mutex));
+
+	if (!(vio->vio_initlevel & VIRTIO_INITLEVEL_INT_ENABLED)) {
+		return;
+	}
+
+	virtio_interrupts_unwind(vio);
+
+	vio->vio_initlevel &= ~VIRTIO_INITLEVEL_INT_ENABLED;
+}
+
+void
+virtio_interrupts_disable(virtio_t *vio)
+{
+	mutex_enter(&vio->vio_mutex);
+	virtio_interrupts_disable_locked(vio);
+	mutex_exit(&vio->vio_mutex);
+}
+
+/*
+ * Map a PCI BAR (0-5) to a regset number.
+ */
+static int
+virtio_bar_to_rnumber(virtio_t *vio, uint8_t bar)
+{
+	pci_regspec_t *regs;
+	uint_t bar_offset, regs_length, rcount;
+	int rnumber = -1;
+
+	if (bar > 5)
+		return (-1);
+
+	/*
+	 * PCI_CONF_BASE0 is 0x10; each BAR is 4 bytes apart.
+	 */
+	bar_offset = PCI_CONF_BASE0 + sizeof (uint32_t) * bar;
+
+	if (ddi_prop_lookup_int_array(DDI_DEV_T_ANY, vio->vio_dip,
+	    DDI_PROP_DONTPASS, "reg", (int **)&regs, &regs_length) !=
+	    DDI_PROP_SUCCESS) {
+		return (-1);
+	}
+
+	rcount = regs_length * sizeof (int) / sizeof (pci_regspec_t);
+
+	for (int i = 0; i < rcount; i++) {
+		if (PCI_REG_REG_G(regs[i].pci_phys_hi) == bar_offset) {
+			rnumber = i;
+			break;
+		}
+	}
+
+	ddi_prop_free(regs);
+
+	return ((rnumber < rcount) ? rnumber : -1);
+}

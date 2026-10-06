@@ -25,6 +25,11 @@
  */
 
 /*
+ * Copyright (c) 2015, Joyent, Inc. All rights reserved.
+ * Copyright 2025 Oxide Computer Company
+ */
+
+/*
  * pmadvise
  *
  * ptool wrapper for madvise(3C) to apply memory advice to running processes
@@ -136,6 +141,8 @@
  */
 #define	ROUNDUP_KB(x)	(((x) + (KILOBYTE - 1)) / KILOBYTE)
 
+#define	INVALID_ADDRESS		(uintptr_t)(-1)
+
 #define	NO_ADVICE		0
 
 /*
@@ -153,7 +160,7 @@
  * Advice that can be passed to madvise fit into three groups that each
  * contain 3 mutually exclusive options.  These groups are defined below:
  *   Group 1: normal, random, sequential
- *   Group 2: willneed, dontneed, free
+ *   Group 2: willneed, dontneed, free, purge
  *   Group 3: default, accesslwp, accessmany
  * Thus, advice that includes (at most) one from each group is valid.
  *
@@ -164,7 +171,7 @@
 #define	GRP1_ADV	(1 << MADV_NORMAL | 1 << MADV_RANDOM | \
 			1 << MADV_SEQUENTIAL)
 #define	GRP2_ADV	(1 << MADV_WILLNEED | 1 << MADV_DONTNEED | \
-			1 << MADV_FREE)
+			1 << MADV_FREE | 1 << MADV_PURGE)
 #define	GRP3_ADV	(1 << MADV_ACCESS_DEFAULT | 1 << MADV_ACCESS_LWP | \
 			1 << MADV_ACCESS_MANY)
 
@@ -182,6 +189,8 @@ static	struct ps_prochandle *Pr;
 
 static	lwpstack_t *stacks;
 static	uint_t	nstacks;
+
+static uintptr_t comm_page = INVALID_ADDRESS;
 
 static char	*suboptstr[] = {
 	"private",
@@ -346,6 +355,8 @@ get_advice(char *optarg)
 		return (1 << MADV_NORMAL);
 	else if (strcmp(optarg, "free") == 0)
 		return (1 << MADV_FREE);
+	else if (strcmp(optarg, "purge") == 0)
+		return (1 << MADV_PURGE);
 	else {
 		(void) fprintf(stderr, gettext("%s: invalid advice: %s\n"),
 		    progname, optarg);
@@ -552,7 +563,7 @@ parse_suboptions(char *value)
 static int
 create_maplist(void *arg, const prmap_t *pmp, const char *object_name)
 {
-	const 		pstatus_t *Psp = Pstatus(Pr);
+	const pstatus_t *Psp = Pstatus(Pr);
 	mapnode_t *newmap = malloc(sizeof (mapnode_t));
 	saddr_t	*newaddr;
 	saddr_t	*psaddr;
@@ -587,6 +598,13 @@ create_maplist(void *arg, const prmap_t *pmp, const char *object_name)
 		lname = anon_name(newmap->label, Psp, stacks, nstacks,
 		    pmp->pr_vaddr, pmp->pr_size, pmp->pr_mflags, pmp->pr_shmid,
 		    &newmap->mtypes);
+	}
+
+	if (lname == NULL && comm_page != INVALID_ADDRESS &&
+	    pmp->pr_vaddr == comm_page) {
+		(void) strlcpy(newmap->label, "  [ comm ]",
+		    sizeof (newmap->label));
+		lname = newmap->label;
 	}
 
 	/*
@@ -676,7 +694,7 @@ apply_advice(saddr_t **advicelist)
 		 * with the for loop.
 		 */
 		if (psaddr->adv != NO_ADVICE) {
-			for (i = MADV_NORMAL; i <= MADV_ACCESS_MANY; i++) {
+			for (i = MADV_NORMAL; i <= MADV_PURGE; i++) {
 				if ((psaddr->adv & (1 << i)) &&
 				    (pr_madvise(Pr, (caddr_t)psaddr->addr,
 				    psaddr->length, i) < 0)) {
@@ -716,7 +734,8 @@ apply_advice(saddr_t **advicelist)
  * Set advice but keep mutual exclusive property of advice groupings
  */
 static void
-set_advice(int *combined_adv, int new_adv) {
+set_advice(int *combined_adv, int new_adv)
+{
 	/*
 	 * Since advice falls in 3 groups of mutually exclusive options,
 	 * clear previous value if new advice overwrites that group.
@@ -898,17 +917,19 @@ advtostr(int adv)
 	*buf = '\0';
 
 	if (adv != NO_ADVICE) {
-		for (i = MADV_NORMAL; i <= MADV_ACCESS_MANY; i++) {
+		for (i = MADV_NORMAL; i <= MADV_PURGE; i++) {
 			if (adv & (1 << i)) {
 				/*
 				 * check if it's the first advice entry
 				 */
-				if (*buf == '\0')
+				if (*buf == '\0') {
 					(void) snprintf(buf, sizeof (buf) - 1,
 					    "<= %s", advicestr[i]);
-				else
-					(void) snprintf(buf, sizeof (buf) - 1,
-					    "%s,%s", buf, advicestr[i]);
+				} else {
+					(void) strlcat(buf, ",", sizeof (buf));
+					(void) strlcat(buf, advicestr[i],
+					    sizeof (buf));
+				}
 			}
 		}
 	}
@@ -1080,6 +1101,8 @@ main(int argc, char **argv)
 				    "be available\n"),
 				    progname);
 			}
+
+			comm_page = Pgetauxval(Pr, AT_SUN_COMMPAGE);
 
 			/*
 			 * Create linked list of mappings for current process

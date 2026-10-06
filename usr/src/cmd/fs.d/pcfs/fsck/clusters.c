@@ -22,14 +22,15 @@
 /*
  * Copyright (c) 1999,2000 by Sun Microsystems, Inc.
  * All rights reserved.
+ * Copyright (c) 2016 by Delphix. All rights reserved.
+ * Copyright 2024 MNX Cloud, Inc.
  */
-
-#pragma ident	"%Z%%M%	%I%	%E% SMI"
 
 /*
  * fsck_pcfs -- routines for manipulating clusters.
  */
 #include <stdio.h>
+#include <stdbool.h>
 #include <string.h>
 #include <unistd.h>
 #include <stdlib.h>
@@ -39,6 +40,7 @@
 #include <sys/fs/pc_fs.h>
 #include <sys/fs/pc_dir.h>
 #include <sys/fs/pc_label.h>
+#include "getresponse.h"
 #include "pcfs_common.h"
 #include "fsck_pcfs.h"
 
@@ -139,7 +141,7 @@ printOrphanInfo(int32_t clusterNum)
 	printOrphanSize(clusterNum);
 }
 
-static int
+static bool
 askAboutFreeing(int32_t clusterNum)
 {
 	/*
@@ -156,10 +158,14 @@ askAboutFreeing(int32_t clusterNum)
 	(void) printf(
 	    gettext("Free the allocation units in the orphaned chain ? "
 	    "(y/n) "));
+	if (AlwaysYes)
+		return (true);
+	if (AlwaysNo)
+		return (false);
 	return (yes());
 }
 
-static int
+static bool
 askAboutRelink(int32_t clusterNum)
 {
 	/*
@@ -174,6 +180,10 @@ askAboutRelink(int32_t clusterNum)
 	(void) printf(gettext("Re-link orphaned chain into file system ? "
 	    "(y/n) "));
 
+	if (AlwaysYes)
+		return (true);
+	if (AlwaysNo)
+		return (false);
 	return (yes());
 }
 
@@ -198,7 +208,7 @@ isInUse(int32_t clusterNum)
 		return (0);
 
 	return ((InUse[clusterNum - FIRST_CLUSTER] != NULL) &&
-		(InUse[clusterNum - FIRST_CLUSTER]->dirent != NULL));
+	    (InUse[clusterNum - FIRST_CLUSTER]->dirent != NULL));
 }
 
 /*
@@ -307,8 +317,8 @@ seekCluster(int fd, int32_t clusterNum)
 /*
  *  getcluster
  *	Get cluster bytes off the disk.  We always read those bytes into
- *	the same static buffer.  If the caller wants his own copy of the
- *	data he'll have to make his own copy.  We'll return all the data
+ *	the same static buffer.  If the caller wants its own copy of the
+ *	data it'll have to make its own copy.  We'll return all the data
  *	read, even if it's short of a full cluster.  This is for future use
  *	when we might want to relocate any salvagable data from bad clusters.
  */
@@ -366,7 +376,7 @@ writeCachedCluster(int fd, CachedCluster *clustInfo)
 		    gettext("Allocation unit %d modified.\n"),
 		    clustInfo->clusterNum);
 
-	if (seekCluster(fd, clustInfo->clusterNum) == NULL)
+	if (seekCluster(fd, clustInfo->clusterNum) == 0)
 		return;
 
 	if ((bytesWritten = write(fd, clustInfo->clusterData.bytes,
@@ -655,7 +665,7 @@ summarizeFAT(int fd)
 		if (!freeInFAT(c) && !badInFAT(c) && !reservedInFAT(c) &&
 		    !isInUse(c)) {
 			(void) markInUse(fd, c, &BlankPCDIR, NULL, 0, VISIBLE,
-				&tmpl);
+			    &tmpl);
 		}
 	}
 }
@@ -1517,9 +1527,10 @@ findBadClusters(int fd)
 		if (readCluster(fd, clusterCount,
 		    &data, &datasize, RDCLUST_DONT_CACHE) < 0) {
 			if (Verbose)
-			    (void) fprintf(stderr,
-				gettext("\nUnreadable allocation unit %d.\n"),
-				clusterCount);
+				(void) fprintf(stderr,
+				    gettext(
+				    "\nUnreadable allocation unit %d.\n"),
+				    clusterCount);
 			markBad(clusterCount, data, datasize);
 		}
 		/*
@@ -1612,8 +1623,9 @@ printSummary(FILE *outDest)
 	(void) fprintf(outDest,
 	    gettext("%d total allocation units.\n"), TotalClusters);
 	if (ReservedClusterCount)
-	    (void) fprintf(outDest, gettext("%d reserved allocation units.\n"),
-		ReservedClusterCount);
+		(void) fprintf(outDest,
+		    gettext("%d reserved allocation units.\n"),
+		    ReservedClusterCount);
 	(void) fprintf(outDest,
 	    gettext("%d available allocation units.\n"), FreeClusterCount);
 }

@@ -26,11 +26,10 @@
  *	All Rights Reserved.
  */
 
-#pragma ident	"%Z%%M%	%I%	%E% SMI"
-
 #include "db_headers.h"
 #include "db_query.h"
 #include "nisdb_mt.h"
+#include <stdio.h>
 #include <string.h>
 
 /* Returns db_query containing the index values as obtained from 'attrlist.' */

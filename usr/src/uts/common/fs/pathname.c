@@ -24,7 +24,7 @@
  */
 
 /*	Copyright (c) 1983, 1984, 1985, 1986, 1987, 1988, 1989 AT&T	*/
-/*	  All Rights Reserved  	*/
+/*	  All Rights Reserved   */
 
 /*
  * University Copyright- Copyright (c) 1982, 1986, 1988
@@ -36,8 +36,6 @@
  * contributors.
  */
 
-
-#pragma ident	"%Z%%M%	%I%	%E% SMI"
 
 #include <sys/types.h>
 #include <sys/param.h>
@@ -74,9 +72,14 @@
 void
 pn_alloc(struct pathname *pnp)
 {
-	pnp->pn_path = pnp->pn_buf = kmem_alloc(MAXPATHLEN, KM_SLEEP);
+	pn_alloc_sz(pnp, MAXPATHLEN);
+}
+void
+pn_alloc_sz(struct pathname *pnp, size_t sz)
+{
+	pnp->pn_path = pnp->pn_buf = kmem_alloc(sz, KM_SLEEP);
 	pnp->pn_pathlen = 0;
-	pnp->pn_bufsize = MAXPATHLEN;
+	pnp->pn_bufsize = sz;
 }
 
 /*
@@ -98,8 +101,8 @@ pn_free(struct pathname *pnp)
  * on the stack as a local optimization.
  */
 int
-pn_get_buf(char *str, enum uio_seg seg, struct pathname *pnp,
-	void *buf, size_t bufsize)
+pn_get_buf(const char *str, enum uio_seg seg, struct pathname *pnp,
+    void *buf, size_t bufsize)
 {
 	int error;
 
@@ -119,7 +122,7 @@ pn_get_buf(char *str, enum uio_seg seg, struct pathname *pnp,
  * Pull a path name from user or kernel space.
  */
 int
-pn_get(char *str, enum uio_seg seg, struct pathname *pnp)
+pn_get(const char *str, enum uio_seg seg, struct pathname *pnp)
 {
 	int error;
 	void *buf;
@@ -137,7 +140,7 @@ pn_get(char *str, enum uio_seg seg, struct pathname *pnp)
  * On error, all fields except pn_buf will be undefined.
  */
 int
-pn_set(struct pathname *pnp, char *path)
+pn_set(struct pathname *pnp, const char *path)
 {
 	int error;
 

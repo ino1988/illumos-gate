@@ -20,6 +20,7 @@
  */
 /*
  * Copyright (c) 2006, 2010, Oracle and/or its affiliates. All rights reserved.
+ * Copyright 2021 Racktop Systems, Inc.
  */
 
 /*
@@ -76,7 +77,7 @@
 	(((ire)->ire_type & IRE_DEFAULT) || \
 	    (((ire)->ire_type & IRE_INTERFACE) && ((ire)->ire_addr == 0)))
 
-#define	IP_SRC_MULTIHOMING(isv6, ipst) 			\
+#define	IP_SRC_MULTIHOMING(isv6, ipst)			\
 	(isv6 ? ipst->ips_ipv6_strict_src_multihoming :	\
 	ipst->ips_ip_strict_src_multihoming)
 
@@ -470,7 +471,7 @@ ire_get_bucket(ire_t *ire)
  * routes to this destination, this routine will utilise the
  * first route it finds to IP address
  * Return values:
- * 	0	- FAILURE
+ *	0	- FAILURE
  *	nonzero	- ifindex
  */
 uint_t
@@ -807,7 +808,7 @@ ire_round_robin(irb_t *irb_ptr, ire_ftable_args_t *margs, uint_t hash,
     ire_t *orig_ire, ip_stack_t *ipst)
 {
 	ire_t		*ire, *maybe_ire = NULL;
-	uint_t		maybe_badcnt;
+	uint_t		maybe_badcnt = 0;
 	uint_t		maxwalk;
 
 	/* Fold in more bits from the hint/hash */
@@ -1185,7 +1186,7 @@ ip_select_route(const in6_addr_t *v6dst, const in6_addr_t v6src,
 		return (ire);
 	}
 
-	/* Now for unicast */
+	/* Now for unicast and broadcast */
 	if (ixa->ixa_ifindex != 0 || (ixaflags & IXAF_SCOPEID_SET)) {
 		if (ixaflags & IXAF_SCOPEID_SET) {
 			/* sin6_scope_id takes precedence over ixa_ifindex */
@@ -1224,7 +1225,7 @@ ip_select_route(const in6_addr_t *v6dst, const in6_addr_t v6src,
 		 * we check that IP_BOUND_IF, IP_PKTINFO, etc specify
 		 * an interface that is consistent with the source address.
 		 */
-		if (src_multihoming == 2 &&
+		if (verify_src && src_multihoming == 2 &&
 		    !ip_verify_src_on_ill(v6src, ill, ixa->ixa_zoneid)) {
 			if (errorp != NULL)
 				*errorp = EADDRNOTAVAIL;

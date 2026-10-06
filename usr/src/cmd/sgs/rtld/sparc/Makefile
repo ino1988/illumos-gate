@@ -21,10 +21,11 @@
 
 #
 # Copyright (c) 1990, 2010, Oracle and/or its affiliates. All rights reserved.
+# Copyright 2019 OmniOS Community Edition (OmniOSce) Association.
 #
 
 # Object lists are organized into primary (most frequently used code) and
-# secondary lists (less frequently used code, ie. a.out support).
+# secondary lists (less frequently used code)
 
 P_COMOBJS=	debugdata.o \
 		analyze.o	elf.o		external.o	globals.o \
@@ -32,8 +33,7 @@ P_COMOBJS=	debugdata.o \
 		dlfcns.o	config_elf.o	locale.o	tsort.o \
 		remove.o	move.o		tls.o		cap.o
 
-S_COMOBJS=	debug.o		audit.o		object.o	cache_a.out.o \
-		a.out.o
+S_COMOBJS=	debug.o		audit.o		object.o
 
 G_MACHOBJS=	doreloc.o
 
@@ -41,36 +41,28 @@ P_MACHOBJS=	sparc_elf.o	_setup.o
 
 CP_MACHOBJS=	common_sparc.o
 
-S_MACHOBJS=	sparc_a.out.o
-
 P_ASOBJS=	boot.o		boot_elf.o	caller.o
 
-S_ASOBJS=	boot_a.out.o
-
-CRTSRCS=	../../../../lib/common/sparc
+CRTSRCS=	../../../../lib/crt/sparc
 CRTI=		pics/crti.o
 CRTN=		pics/crtn.o
 CRTS=		$(CRTI)		$(CRTN)
 
-CHKSRCS=	$(SRCBASE)/uts/common/krtld/reloc.h
+CHKSRCS=	$(SRC)/uts/common/krtld/reloc.h
 
 BASEPLAT =	sparc
 
 include		$(SRC)/Makefile.master
 
 # This is safe because linking is done only with the primary compiler.
-MAPFILE-ORDER =		../common/mapfile-order-devpro
-$(__GNUC)MAPFILE-ORDER =	../common/mapfile-order-gcc
+MAPFILE-ORDER =	../common/mapfile-order-gcc
 
 include		$(SRC)/cmd/sgs/rtld/Makefile.com
 
-# Add any a.out and machine specific flags.
+# Add any machine specific flags.
 
-CPPFLAGS +=	-I../../../../uts/sparc/krtld -DA_OUT
-CFLAGS +=	-xregs=no%appl
-ASFLAGS +=	-K pic
-LINTFLAGS +=	-DA_OUT
-ADBGENCFLAGS +=	-erroff=%all
+CPPFLAGS +=	-I../../../../uts/sparc/krtld
+ASFLAGS +=	$(AS_PICFLAGS)
 ADBGENFLAGS +=	-milp32
 ADBSUB=		$(ADBSUB32)
 SONAME=		/lib/ld.so.1
@@ -81,9 +73,7 @@ SGSMSGTARG +=	$(SGSMSGSPARC) $(SGSMSGSPARC32) $(SGSMSG32)
 
 all:		$(RTLD)
 
-install:	all $(ROOTDYNLIB)
-
-lint:		$(LINTOUT32)
+install:	all $(ROOTDYNLIB) $(ROOTCOMPATLINKS)
 
 adbmacros:	adb .WAIT $(ADBSCRIPTS)
 

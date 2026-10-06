@@ -25,7 +25,10 @@
  */
 
 /*
- * Copyright (c) 2012, Joyent, Inc. All rights reserved.
+ * Copyright (c) 2015, Joyent, Inc. All rights reserved.
+ * Copyright 2015 Nexenta Systems, Inc.  All rights reserved.
+ * Copyright 2016 RackTop Systems.
+ * Copyright (c) 2017 by Delphix. All rights reserved.
  */
 
 #include <sys/types.h>
@@ -1101,9 +1104,8 @@ tmp_remove(
 	rw_enter(&parent->tn_rwlock, RW_WRITER);
 	rw_enter(&tp->tn_rwlock, RW_WRITER);
 
-	if (tp->tn_type != VDIR ||
-	    (error = secpolicy_fs_linkdir(cred, dvp->v_vfsp)) == 0)
-		error = tdirdelete(parent, tp, nm, DR_REMOVE, cred);
+	error = (tp->tn_type == VDIR) ? EPERM :
+	    tdirdelete(parent, tp, nm, DR_REMOVE, cred);
 
 	rw_exit(&tp->tn_rwlock);
 	rw_exit(&parent->tn_rwlock);
@@ -1138,8 +1140,7 @@ tmp_link(
 	parent = (struct tmpnode *)VTOTN(dvp);
 	from = (struct tmpnode *)VTOTN(srcvp);
 
-	if ((srcvp->v_type == VDIR &&
-	    secpolicy_fs_linkdir(cred, dvp->v_vfsp)) ||
+	if (srcvp->v_type == VDIR ||
 	    (from->tn_uid != crgetuid(cred) && secpolicy_basic_link(cred)))
 		return (EPERM);
 
@@ -1184,6 +1185,7 @@ tmp_rename(
 	struct tmpnode *fromparent;
 	struct tmpnode *toparent;
 	struct tmpnode *fromtp = NULL;	/* source tmpnode */
+	struct tmpnode *totp;		/* target tmpnode */
 	struct tmount *tm = (struct tmount *)VTOTM(odvp);
 	int error;
 	int samedir = 0;	/* set if odvp == ndvp */
@@ -1242,6 +1244,18 @@ tmp_rename(
 			goto done;
 	}
 
+	if (tdirlookup(toparent, nnm, &totp, cred) == 0) {
+		vnevent_pre_rename_dest(TNTOV(totp), ndvp, nnm, ct);
+		tmpnode_rele(totp);
+	}
+
+	/* Notify the target dir. if not the same as the source dir. */
+	if (ndvp != odvp) {
+		vnevent_pre_rename_dest_dir(ndvp, TNTOV(fromtp), nnm, ct);
+	}
+
+	vnevent_pre_rename_src(TNTOV(fromtp), odvp, onm, ct);
+
 	/*
 	 * Link source to new target
 	 */
@@ -1260,15 +1274,6 @@ tmp_rename(
 		if (error == ESAME)
 			error = 0;
 		goto done;
-	}
-	vnevent_rename_src(TNTOV(fromtp), odvp, onm, ct);
-
-	/*
-	 * Notify the target directory if not same as
-	 * source directory.
-	 */
-	if (ndvp != odvp) {
-		vnevent_rename_dest_dir(ndvp, ct);
 	}
 
 	/*
@@ -1292,6 +1297,17 @@ tmp_rename(
 
 	rw_exit(&fromtp->tn_rwlock);
 	rw_exit(&fromparent->tn_rwlock);
+
+	if (error == 0) {
+		vnevent_rename_src(TNTOV(fromtp), odvp, onm, ct);
+		/*
+		 * vnevent_rename_dest is called in tdirenter().
+		 * Notify the target dir if not same as source dir.
+		 */
+		if (ndvp != odvp)
+			vnevent_rename_dest_dir(ndvp, ct);
+	}
+
 done:
 	tmpnode_rele(fromtp);
 	mutex_exit(&tm->tm_renamelck);
@@ -1661,7 +1677,7 @@ top:
 	 * there's little to do -- just drop our hold.
 	 */
 	if (vp->v_count > 1 || tp->tn_nlink != 0) {
-		vp->v_count--;
+		VN_RELE_LOCKED(vp);
 		mutex_exit(&vp->v_lock);
 		mutex_exit(&tp->tn_tlock);
 		rw_exit(&tp->tn_rwlock);
@@ -1809,12 +1825,8 @@ tmp_getpage(
 	}
 
 
-	if (len <= PAGESIZE)
-		err = tmp_getapage(vp, (u_offset_t)off, len, protp, pl, plsz,
-		    seg, addr, rw, cr);
-	else
-		err = pvn_getpages(tmp_getapage, vp, (u_offset_t)off, len,
-		    protp, pl, plsz, seg, addr, rw, cr);
+	err = pvn_getpages(tmp_getapage, vp, (u_offset_t)off, len, protp,
+	    pl, plsz, seg, addr, rw, cr);
 
 	gethrestime(&now);
 	tp->tn_atime = now;
@@ -1827,7 +1839,7 @@ out:
 }
 
 /*
- * Called from pvn_getpages or swap_getpage to get a particular page.
+ * Called from pvn_getpages to get a particular page.
  */
 /*ARGSUSED*/
 static int

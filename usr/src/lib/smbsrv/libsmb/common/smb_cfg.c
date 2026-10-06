@@ -20,11 +20,19 @@
  */
 /*
  * Copyright (c) 2007, 2010, Oracle and/or its affiliates. All rights reserved.
- * Copyright 2011 Nexenta Systems, Inc.  All rights reserved.
+ * Copyright 2022 Tintri by DDN, Inc. All rights reserved.
+ * Copyright 2020-2023 RackTop Systems, Inc.
  */
 
 /*
  * CIFS configuration management library
+ */
+
+/*
+ * Checking for things like unsupportable parameter combinations are
+ * the responsibility of callers of these functions.  Example include:
+ * trying to set min_protocol above max_protocol, or requiring encryption
+ * with an allowed protocol range that can't support it.
  */
 
 #include <stdio.h>
@@ -49,6 +57,11 @@ typedef struct smb_cfg_param {
 	uint32_t sc_flags;
 } smb_cfg_param_t;
 
+struct str_val {
+	char *str;
+	uint32_t val;
+};
+
 /*
  * config parameter flags
  */
@@ -58,11 +71,14 @@ typedef struct smb_cfg_param {
 /* idmap SMF fmri and Property Group */
 #define	IDMAP_FMRI_PREFIX		"system/idmap"
 #define	MACHINE_SID			"machine_sid"
+#define	MACHINE_UUID			"machine_uuid"
 #define	IDMAP_DOMAIN			"domain_name"
+#define	IDMAP_PREF_DC			"preferred_dc"
+#define	IDMAP_SITE_NAME			"site_name"
 #define	IDMAP_PG_NAME			"config"
 
-#define	SMB_SECMODE_WORKGRP_STR 	"workgroup"
-#define	SMB_SECMODE_DOMAIN_STR  	"domain"
+#define	SMB_SECMODE_WORKGRP_STR		"workgroup"
+#define	SMB_SECMODE_DOMAIN_STR		"domain"
 
 #define	SMB_ENC_LEN	1024
 #define	SMB_DEC_LEN	256
@@ -108,6 +124,7 @@ static smb_cfg_param_t smb_cfg_table[] =
 
 	/* SMBd configuration */
 	{SMB_CI_SECURITY, "security", SCF_TYPE_ASTRING, 0},
+	{SMB_CI_NETBIOS_ENABLE, "netbios_enable", SCF_TYPE_BOOLEAN, 0},
 	{SMB_CI_NBSCOPE, "netbios_scope", SCF_TYPE_ASTRING, 0},
 	{SMB_CI_SYS_CMNT, "system_comment", SCF_TYPE_ASTRING, 0},
 	{SMB_CI_LM_LEVEL, "lmauth_level", SCF_TYPE_INTEGER, 0},
@@ -120,22 +137,79 @@ static smb_cfg_param_t smb_cfg_table[] =
 
 	{SMB_CI_MACHINE_PASSWD, "machine_passwd", SCF_TYPE_ASTRING,
 	    SMB_CF_PROTECTED},
-	{SMB_CI_KPASSWD_SRV, "kpasswd_server", SCF_TYPE_ASTRING,
-	    0},
-	{SMB_CI_KPASSWD_DOMAIN, "kpasswd_domain", SCF_TYPE_ASTRING,
-	    0},
-	{SMB_CI_KPASSWD_SEQNUM, "kpasswd_seqnum", SCF_TYPE_INTEGER,
-	    0},
-	{SMB_CI_NETLOGON_SEQNUM, "netlogon_seqnum", SCF_TYPE_INTEGER,
-	    0},
+
+	{SMB_CI_MACHINE_UUID, "machine_uuid", SCF_TYPE_ASTRING, 0},
+	{SMB_CI_KPASSWD_SRV, "kpasswd_server", SCF_TYPE_ASTRING, 0},
+	{SMB_CI_KPASSWD_DOMAIN, "kpasswd_domain", SCF_TYPE_ASTRING, 0},
+	{SMB_CI_KPASSWD_SEQNUM, "kpasswd_seqnum", SCF_TYPE_INTEGER, 0},
+	{SMB_CI_NETLOGON_SEQNUM, "netlogon_seqnum", SCF_TYPE_INTEGER, 0},
 	{SMB_CI_IPV6_ENABLE, "ipv6_enable", SCF_TYPE_BOOLEAN, 0},
 	{SMB_CI_PRINT_ENABLE, "print_enable", SCF_TYPE_BOOLEAN, 0},
 	{SMB_CI_MAP, "map", SCF_TYPE_ASTRING, SMB_CF_EXEC},
 	{SMB_CI_UNMAP, "unmap", SCF_TYPE_ASTRING, SMB_CF_EXEC},
 	{SMB_CI_DISPOSITION, "disposition", SCF_TYPE_ASTRING, SMB_CF_EXEC},
 	{SMB_CI_DFS_STDROOT_NUM, "dfs_stdroot_num", SCF_TYPE_INTEGER, 0},
-	{SMB_CI_TRAVERSE_MOUNTS, "traverse_mounts", SCF_TYPE_BOOLEAN, 0}
+	{SMB_CI_TRAVERSE_MOUNTS, "traverse_mounts", SCF_TYPE_BOOLEAN, 0},
+	{SMB_CI_SMB2_ENABLE_OLD, "smb2_enable", SCF_TYPE_BOOLEAN, 0},
+	{SMB_CI_INITIAL_CREDITS, "initial_credits", SCF_TYPE_INTEGER, 0},
+	{SMB_CI_MAXIMUM_CREDITS, "maximum_credits", SCF_TYPE_INTEGER, 0},
+	{SMB_CI_MAX_PROTOCOL, "max_protocol", SCF_TYPE_ASTRING, 0},
+	{SMB_CI_ENCRYPT, "encrypt", SCF_TYPE_ASTRING, 0},
+	{SMB_CI_MIN_PROTOCOL, "min_protocol", SCF_TYPE_ASTRING, 0},
+	{SMB_CI_BYPASS_TRAVERSE_CHECKING,
+	    "bypass_traverse_checking", SCF_TYPE_BOOLEAN, 0},
+	{SMB_CI_ENCRYPT_CIPHERS, "encrypt_ciphers", SCF_TYPE_ASTRING, 0},
+	{SMB_CI_NETLOGON_FLAGS, "netlogon_flags", SCF_TYPE_INTEGER, 0},
+	{SMB_CI_SHORT_NAMES, "short_names", SCF_TYPE_BOOLEAN, 0},
+	{SMB_CI_MAX_OPENS, "max_opens", SCF_TYPE_INTEGER, 0},
+	{SMB_CI_SIGN_ALGS, "sign_algs", SCF_TYPE_ASTRING, 0},
+
 	/* SMB_CI_MAX */
+};
+
+/*
+ * We store the max SMB protocol version in SMF as a string,
+ * (for convenience of svccfg etc) but the programmatic get/set
+ * interfaces use the numeric form.
+ *
+ * The numeric values are as defined in the [MS-SMB2] spec.
+ * except for how we represent "1" (for SMB1) which is an
+ * arbitrary value below SMB2_VERS_BASE.
+ */
+static struct str_val
+smb_versions[] = {
+	{ "3.11",	SMB_VERS_3_11 },
+	{ "3.02",	SMB_VERS_3_02 },
+	{ "3.0",	SMB_VERS_3_0 },
+	{ "2.1",	SMB_VERS_2_1 },
+	{ "2.002",	SMB_VERS_2_002 },
+	{ "1",		SMB_VERS_1 },
+	{ NULL,		0 }
+};
+
+/*
+ * Supported encryption ciphers.
+ */
+static struct str_val
+smb31_encrypt_ciphers[] = {
+	{ "aes128-ccm",	SMB3_CIPHER_FLAG_AES128_CCM },	/* SMB 3.x */
+	{ "aes128-gcm",	SMB3_CIPHER_FLAG_AES128_GCM },	/* SMB 3.1.1 */
+	{ "aes256-ccm",	SMB3_CIPHER_FLAG_AES256_CCM },	/* SMB 3.1.1 */
+	{ "aes256-gcm",	SMB3_CIPHER_FLAG_AES256_GCM },	/* SMB 3.1.1 */
+	{ "all",	SMB3_CIPHER_FLAGS_ALL },
+	{ NULL,		0 }
+};
+
+/*
+ * Supported signing algorithms.
+ */
+static struct str_val
+smb31_sign_algs[] = {
+	{ "aes128-cmac",	SMB3_SIGN_FLAG_AES128_CMAC },	/* SMB 3.x */
+	{ "aes128-gmac",	SMB3_SIGN_FLAG_AES128_GMAC },	/* SMB 3.1.1 */
+	{ "sha256-hmac",	SMB3_SIGN_FLAG_SHA256_HMAC },	/* SMB 2.x */
+	{ "all",		SMB3_SIGN_FLAGS_ALL },
+	{ NULL,		0 }
 };
 
 static smb_cfg_param_t *smb_config_getent(smb_cfg_id_t);
@@ -143,6 +217,24 @@ static smb_cfg_param_t *smb_config_getent(smb_cfg_id_t);
 static boolean_t smb_is_base64(unsigned char c);
 static char *smb_base64_encode(char *str_to_encode);
 static char *smb_base64_decode(char *encoded_str);
+static int smb_config_get_idmap_preferred_dc(char *, int);
+static int smb_config_set_idmap_preferred_dc(char *);
+static int smb_config_get_idmap_site_name(char *, int);
+static int smb_config_set_idmap_site_name(char *);
+
+uint32_t
+smb_convert_version_str(const char *version)
+{
+	uint32_t dialect = 0;
+	int i;
+
+	for (i = 0; smb_versions[i].str != NULL; i++) {
+		if (strcmp(version, smb_versions[i].str) == 0)
+			dialect = smb_versions[i].val;
+	}
+
+	return (dialect);
+}
 
 char *
 smb_config_getname(smb_cfg_id_t id)
@@ -188,7 +280,7 @@ smb_base64_encode(char *str_to_encode)
 			arr_4[3] = arr_3[2] & 0x3f;
 
 			for (i = 0; i < 4; i++)
-				ret[ret_cnt++] = b64_data[arr_4[i]];
+				ret[ret_cnt++] = b64_data[(int)arr_4[i]];
 			i = 0;
 		}
 	}
@@ -205,7 +297,7 @@ smb_base64_encode(char *str_to_encode)
 		arr_4[3] = arr_3[2] & 0x3f;
 
 		for (j = 0; j < (i + 1); j++)
-			ret[ret_cnt++] = b64_data[arr_4[j]];
+			ret[ret_cnt++] = b64_data[(int)arr_4[j]];
 
 		while (i++ < 3)
 			ret[ret_cnt++] = '=';
@@ -242,8 +334,10 @@ smb_base64_decode(char *encoded_str)
 		en_ind++;
 		if (i == 4) {
 			for (i = 0; i < 4; i++) {
-				if ((p = strchr(b64_data, arr_4[i])) == NULL)
+				if ((p = strchr(b64_data, arr_4[i])) == NULL) {
+					free(ret);
 					return (NULL);
+				}
 
 				arr_4[i] = (int)(p - b64_data);
 			}
@@ -267,8 +361,10 @@ smb_base64_decode(char *encoded_str)
 			arr_4[j] = 0;
 
 		for (j = 0; j < 4; j++) {
-			if ((p = strchr(b64_data, arr_4[j])) == NULL)
+			if ((p = strchr(b64_data, arr_4[j])) == NULL) {
+				free(ret);
 				return (NULL);
+			}
 
 			arr_4[j] = (int)(p - b64_data);
 		}
@@ -363,6 +459,11 @@ smb_config_getstr(smb_cfg_id_t id, char *cbuf, int bufsz)
 	*cbuf = '\0';
 	cfg = smb_config_getent(id);
 	assert(cfg->sc_type == SCF_TYPE_ASTRING);
+
+	if (id == SMB_CI_ADS_SITE)
+		return (smb_config_get_idmap_site_name(cbuf, bufsz));
+	if (id == SMB_CI_DOMAIN_SRV)
+		return (smb_config_get_idmap_preferred_dc(cbuf, bufsz));
 
 	handle = smb_smf_scf_init(SMBD_FMRI_PREFIX);
 	if (handle == NULL)
@@ -567,6 +668,11 @@ smb_config_setstr(smb_cfg_id_t id, char *value)
 	cfg = smb_config_getent(id);
 	assert(cfg->sc_type == SCF_TYPE_ASTRING);
 
+	if (id == SMB_CI_ADS_SITE)
+		return (smb_config_set_idmap_site_name(value));
+	if (id == SMB_CI_DOMAIN_SRV)
+		return (smb_config_set_idmap_preferred_dc(value));
+
 	protected = B_FALSE;
 
 	switch (cfg->sc_flags) {
@@ -711,6 +817,36 @@ smb_config_set(smb_cfg_id_t id, char *value)
 
 	return (SMBD_SMF_INVALID_ARG);
 }
+
+int
+smb_config_get_debug()
+{
+	int64_t val64;
+	int val = 0;	/* default */
+	smb_scfhandle_t *handle = NULL;
+
+	handle = smb_smf_scf_init(SMBD_FMRI_PREFIX);
+	if (handle == NULL) {
+		return (val);
+	}
+
+	if (smb_smf_create_service_pgroup(handle,
+	    SMBD_PG_NAME) != SMBD_SMF_OK) {
+		smb_smf_scf_fini(handle);
+		return (val);
+	}
+
+	if (smb_smf_get_integer_property(handle, "debug", &val64) != 0) {
+		smb_smf_scf_fini(handle);
+		return (val);
+	}
+	val = (int)val64;
+
+	smb_smf_scf_fini(handle);
+
+	return (val);
+}
+
 uint8_t
 smb_config_get_fg_flag()
 {
@@ -739,17 +875,117 @@ smb_config_get_fg_flag()
 }
 
 /*
+ * smb_config_get_ads_enable
+ *
+ * Returns value of the "config/use_ads" parameter
+ * from the IDMAP SMF configuration repository.
+ *
+ */
+boolean_t
+smb_config_get_ads_enable(void)
+{
+	smb_scfhandle_t *handle = NULL;
+	uint8_t vbool;
+	int rc = 0;
+
+	handle = smb_smf_scf_init(IDMAP_FMRI_PREFIX);
+	if (handle == NULL)
+		return (B_FALSE);
+
+	rc = smb_smf_create_service_pgroup(handle, IDMAP_PG_NAME);
+	if (rc == SMBD_SMF_OK)
+		rc = smb_smf_get_boolean_property(handle, "use_ads", &vbool);
+	smb_smf_scf_fini(handle);
+
+	return ((rc == SMBD_SMF_OK) ? (vbool == 1) : B_TRUE);
+}
+
+/*
  * smb_config_get_localsid
  *
  * Returns value of the "config/machine_sid" parameter
  * from the IDMAP SMF configuration repository.
- *
+ * Result is allocated; caller should free.
  */
 char *
 smb_config_get_localsid(void)
 {
 	return (smb_config_getenv_generic(MACHINE_SID, IDMAP_FMRI_PREFIX,
 	    IDMAP_PG_NAME));
+}
+
+/*
+ * smb_config_get_localuuid
+ *
+ * Returns value of the "config/machine_uuid" parameter
+ * from the IDMAP SMF configuration repository.
+ *
+ */
+int
+smb_config_get_localuuid(uuid_t uu)
+{
+	char *s;
+	int rc = 0;
+
+	uuid_clear(uu);
+	s = smb_config_getenv_generic(MACHINE_UUID, IDMAP_FMRI_PREFIX,
+	    IDMAP_PG_NAME);
+	if (s == NULL)
+		return (-1);
+
+	if (uuid_parse(s, uu) < 0)
+		rc = -1;
+
+	free(s);
+	return (rc);
+}
+
+static int
+smb_config_get_idmap_preferred_dc(char *cbuf, int bufsz)
+{
+	char *s;
+	int len, rc = -1;
+
+	s = smb_config_getenv_generic(IDMAP_PREF_DC,
+	    IDMAP_FMRI_PREFIX, IDMAP_PG_NAME);
+	if (s != NULL) {
+		len = strlcpy(cbuf, s, bufsz);
+		if (len < bufsz)
+			rc = 0;
+		free(s);
+	}
+	return (rc);
+}
+
+static int
+smb_config_set_idmap_preferred_dc(char *value)
+{
+	return (smb_config_setenv_generic(IDMAP_FMRI_PREFIX, IDMAP_PG_NAME,
+	    IDMAP_PREF_DC, value));
+}
+
+static int
+smb_config_get_idmap_site_name(char *cbuf, int bufsz)
+{
+	char *s;
+	int len, rc = -1;
+
+	s = smb_config_getenv_generic(IDMAP_SITE_NAME,
+	    IDMAP_FMRI_PREFIX, IDMAP_PG_NAME);
+	if (s != NULL) {
+		len = strlcpy(cbuf, s, bufsz);
+		if (len < bufsz)
+			rc = 0;
+		free(s);
+	}
+	return (rc);
+}
+
+static int
+smb_config_set_idmap_site_name(char *value)
+{
+	return (smb_config_setenv_generic(IDMAP_FMRI_PREFIX, IDMAP_PG_NAME,
+	    IDMAP_SITE_NAME, value));
 }
 
 /*
@@ -960,4 +1196,196 @@ smb_config_getent(smb_cfg_id_t id)
 
 	assert(0);
 	return (NULL);
+}
+
+static uint32_t
+smb_config_get_protocol(smb_cfg_id_t id, char *name, uint32_t default_val)
+{
+	char str[SMB_VERSTR_LEN];
+	int rc;
+	uint32_t val;
+
+	rc = smb_config_getstr(id, str, sizeof (str));
+	if (rc == SMBD_SMF_OK) {
+		val = smb_convert_version_str(str);
+		if (val != 0)
+			return (val);
+		if (str[0] != '\0') {
+			syslog(LOG_ERR, "smbd/%s value invalid: %s", name, str);
+		}
+	}
+
+	return (default_val);
+}
+
+/*
+ * If the service properties min_protocol and max_protocol are empty values,
+ * the built-in defaults allow clients to use any supported protocol version.
+ * Policy choices (such as "let's disable SMB1") should be implemented by
+ * setting values in the SMB service, either via the service manifest (if a
+ * distribution policy) or via svccfg/svcprop (if a local policy).
+ *
+ * max_protocol_default should be the highest implemented protocol version.
+ * See also $UTS/common/fs/smbsrv/smb2_negotiate.c
+ */
+uint32_t max_protocol_default = SMB_VERS_3_11;
+
+uint32_t
+smb_config_get_max_protocol(void)
+{
+	uint32_t max;
+
+	max = smb_config_get_protocol(SMB_CI_MAX_PROTOCOL, "max_protocol",
+	    max_protocol_default);
+
+	return (max);
+}
+
+/*
+ * See comment above max_protocol_default
+ */
+uint32_t min_protocol_default = SMB_VERS_1;
+
+uint32_t
+smb_config_get_min_protocol(void)
+{
+	uint32_t min;
+
+	min = smb_config_get_protocol(SMB_CI_MIN_PROTOCOL, "min_protocol",
+	    min_protocol_default);
+
+	return (min);
+}
+
+/*
+ * Convert a delineated list of strings to a bitmask.
+ * Returns mask or -1 for errors.
+ *
+ * Note this is used both below and in libshare_smb
+ * for validation of new setting.
+ */
+
+/* Buffer large enough to hold all current flag strings. */
+#define	SMB_STRFLAGS_MAXLEN	64
+
+static int
+smb_convert_str2flags(const char *value, const struct str_val *table)
+{
+	const char *sep = ",:";
+	char buf[SMB_STRFLAGS_MAXLEN];
+	char *last;
+	char *cn;
+	const struct str_val *sv;
+	int flags = 0;
+
+	if (value == NULL)
+		return (-1);
+
+	if (strlen(value) >= SMB_STRFLAGS_MAXLEN)
+		return (-1);
+
+	(void) strlcpy(buf, value, sizeof (buf));
+
+	cn = strtok_r(buf, sep, &last);
+	while (cn != NULL) {
+		boolean_t valid = B_FALSE;
+		/* # of entries is small - don't care about O(n2) */
+		for (sv = table; sv->str != NULL; sv++) {
+			if (strcmp(cn, sv->str) == 0) {
+				flags |= sv->val;
+				valid = B_TRUE;
+			}
+		}
+		if (!valid)
+			return (-1);
+		cn = strtok_r(NULL, sep, &last);
+	}
+	return (flags);
+}
+
+int
+smb_convert_encrypt_ciphers(const char *value)
+{
+	return (smb_convert_str2flags(value, smb31_encrypt_ciphers));
+}
+
+int
+smb_convert_signing_algs(const char *value)
+{
+	return (smb_convert_str2flags(value, smb31_sign_algs));
+}
+
+/*
+ * Return a bitmask indicating enabled cipher algorithms.
+ * If the config does not have at least one known cipher,
+ * that's a configuration error, so just enable all.
+ */
+uint32_t
+smb_config_get_encrypt_ciphers(void)
+{
+	char buf[SMB_STRFLAGS_MAXLEN];
+	int ciphers = 0;
+
+	if (smb_config_getstr(SMB_CI_ENCRYPT_CIPHERS, buf, sizeof (buf))
+	    != SMBD_SMF_OK)
+		buf[0] = '\0';
+
+	ciphers = smb_convert_encrypt_ciphers(buf);
+
+	if (ciphers <= 0)
+		ciphers = SMB3_CIPHER_FLAGS_ALL;
+
+	return ((uint32_t)ciphers);
+}
+
+/*
+ * Note: SMB3_SIGN_FLAG_SHA256_HMAC is always available,
+ * because SMB 2 does not negotiate signing algorithms.
+ */
+const int smb_default_signing_algs =
+    SMB3_SIGN_FLAG_AES128_CMAC |
+    SMB3_SIGN_FLAG_AES128_GMAC;
+
+uint32_t
+smb_config_get_signing_algs(void)
+{
+	char buf[SMB_STRFLAGS_MAXLEN];
+	int algs = 0;
+
+	if (smb_config_getstr(SMB_CI_SIGN_ALGS, buf, sizeof (buf))
+	    != SMBD_SMF_OK)
+		buf[0] = '\0';
+
+	algs = smb_convert_signing_algs(buf);
+
+	if (algs <= 0)
+		algs = smb_default_signing_algs;
+
+	return ((uint32_t)algs);
+}
+
+/*
+ * Run once at startup convert old SMF settings to current.
+ */
+void
+smb_config_upgrade(void)
+{
+}
+
+smb_cfg_val_t
+smb_config_get_require(smb_cfg_id_t id)
+{
+	int rc;
+	char str[sizeof ("required")];
+
+	rc = smb_config_getstr(id, str, sizeof (str));
+	if (rc != SMBD_SMF_OK)
+		return (SMB_CONFIG_DISABLED);
+
+	if (strncmp(str, "required", sizeof (str)) == 0)
+		return (SMB_CONFIG_REQUIRED);
+	if (strncmp(str, "enabled", sizeof (str)) == 0)
+		return (SMB_CONFIG_ENABLED);
+
+	return (SMB_CONFIG_DISABLED);
 }

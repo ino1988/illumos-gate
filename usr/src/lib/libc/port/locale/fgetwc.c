@@ -59,14 +59,15 @@ _fgetwc_unlocked_l(FILE *fp, locale_t loc)
 		/* Fast path for single-byte encodings. */
 		return ((wint_t)c);
 	}
-	if ((statep = _getmbstate(fp)) == NULL) {
+	statep = _getmbstate(fp);
+	if (statep == NULL) {
 		fp->_flag = _IOERR;
 		errno = EBADF;
 		return (WEOF);
 	}
 	do {
 		char	x = (char)c;
-		nconv = lct->lc_mbrtowc(&wc, &x, 1, statep);
+		nconv = lct->lc_mbrtowc(&wc, &x, 1, statep, B_FALSE);
 		if (nconv == (size_t)-1) {
 			break;
 		} else if (nconv == (size_t)-2) {
@@ -97,7 +98,7 @@ _fgetwc_unlocked_l(FILE *fp, locale_t loc)
 wint_t
 _fgetwc_unlocked(FILE *fp)
 {
-	return (_fgetwc_unlocked_l(fp, uselocale(NULL)));
+	return (_fgetwc_unlocked_l(fp, __curlocale()));
 }
 
 
@@ -111,7 +112,7 @@ fgetwc(FILE *fp)
 {
 	wint_t		r;
 	rmutex_t	*l;
-	locale_t	loc = uselocale(NULL);
+	locale_t	loc = __curlocale();
 
 	FLOCKFILE(l, fp);
 	r = _fgetwc_unlocked_l(fp, loc);
@@ -130,7 +131,7 @@ __fgetwc_xpg5(FILE *fp)
 {
 	wint_t		r;
 	rmutex_t	*l;
-	locale_t	loc = uselocale(NULL);
+	locale_t	loc = __curlocale();
 
 	FLOCKFILE(l, fp);
 	if (GET_NO_MODE(fp))

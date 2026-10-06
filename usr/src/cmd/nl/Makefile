@@ -22,6 +22,8 @@
 # Copyright 2007 Sun Microsystems, Inc.  All rights reserved.
 # Use is subject to license terms.
 #
+# Copyright (c) 2018, Joyent, Inc.
+#
 # Message catalog requires no special processing because messages
 # only occur in ./nl.c, not in ../expr/compile.c.
 
@@ -38,12 +40,16 @@ include ../Makefile.cmd
 
 LDLIBS += -lgen
 CFLAGS += $(CCVERBOSE)
-CERRWARN += -_gcc=-Wno-uninitialized
+CERRWARN += $(CNOWARN_UNINIT)
 CERRWARN += -_gcc=-Wno-unused-variable
+
+# not linted
+SMATCH=off
+
 $(XPG4):= CPPFLAGS += -DXPG4
 
 MAPFILE.INT =	../expr/mapfile-intf
-LDFLAGS +=	$(MAPFILE.INT:%=-M%)
+LDFLAGS +=	$(MAPFILE.INT:%=-Wl,-M%)
 
 .KEEP_STATE:
 
@@ -79,8 +85,6 @@ nlobjs.xpg4:
 
 clean:
 	$(RM) $(OBJS)
-
-lint:	lint_PROG
 
 include ../Makefile.targ
 

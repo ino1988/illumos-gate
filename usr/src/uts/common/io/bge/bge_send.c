@@ -20,7 +20,13 @@
  */
 
 /*
- * Copyright (c) 2002, 2010, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2010-2013, by Broadcom, Inc.
+ * All Rights Reserved.
+ */
+
+/*
+ * Copyright (c) 2002, 2010, Oracle and/or its affiliates.
+ * All rights reserved.
  */
 
 #include "bge_impl.h"
@@ -83,9 +89,6 @@
  * copying) and that method doesn't need any special per-buffer action
  * for recycling.
  */
-static boolean_t bge_recycle_ring(bge_t *bgep, send_ring_t *srp);
-#pragma	inline(bge_recycle_ring)
-
 static boolean_t
 bge_recycle_ring(bge_t *bgep, send_ring_t *srp)
 {
@@ -199,7 +202,6 @@ bge_recycle_ring(bge_t *bgep, send_ring_t *srp)
  * if only one send ring is being used.
  */
 boolean_t bge_recycle(bge_t *bgep, bge_status_t *bsp);
-#pragma	no_inline(bge_recycle)
 
 boolean_t
 bge_recycle(bge_t *bgep, bge_status_t *bsp)
@@ -329,7 +331,6 @@ bge_get_txbuf(bge_t *bgep, send_ring_t *srp)
  * Send a message by copying it into a preallocated (and premapped) buffer
  */
 static void bge_send_copy(bge_t *bgep, sw_txbuf_t *txbuf, mblk_t *mp);
-#pragma	inline(bge_send_copy)
 
 static void
 bge_send_copy(bge_t *bgep, sw_txbuf_t *txbuf, mblk_t *mp)
@@ -443,6 +444,12 @@ start_tx:
 			hw_sbd_p->flags |= SBD_FLAG_IP_CKSUM;
 		if (pktp->pflags & HCK_FULLCKSUM)
 			hw_sbd_p->flags |= SBD_FLAG_TCP_UDP_CKSUM;
+		if (!(bgep->chipid.flags & CHIP_FLAG_NO_JUMBO) &&
+		    (DEVICE_5717_SERIES_CHIPSETS(bgep) ||
+		     DEVICE_5725_SERIES_CHIPSETS(bgep) ||
+		     DEVICE_57765_SERIES_CHIPSETS(bgep)) &&
+		    (txbuf->copy_len > ETHERMAX))
+			hw_sbd_p->flags |= SBD_FLAG_JMB_PKT;
 		hw_sbd_p->flags |= SBD_FLAG_PACKET_END;
 
 		txfill_next = NEXT(txfill_next, BGE_SEND_BUF_MAX);

@@ -1,4 +1,4 @@
-/* 
+/*
  * ***** BEGIN LICENSE BLOCK *****
  * Version: MPL 1.1/GPL 2.0/LGPL 2.1
  *
@@ -42,8 +42,6 @@
  * Sun elects to use this software under the MPL license.
  */
 
-#pragma ident	"%Z%%M%	%I%	%E% SMI"
-
 #include "ecp.h"
 #include "ecl-priv.h"
 #include "mplogic.h"
@@ -53,10 +51,10 @@
 
 #define MAX_SCRATCH 6
 
-/* Computes R = 2P.  Elliptic curve points P and R can be identical.  Uses 
+/* Computes R = 2P.  Elliptic curve points P and R can be identical.  Uses
  * Modified Jacobian coordinates.
  *
- * Assumes input is already field-encoded using field_enc, and returns 
+ * Assumes input is already field-encoded using field_enc, and returns
  * output that is still field-encoded.
  *
  */
@@ -174,6 +172,17 @@ ec_GFp_pt_add_jm_aff(const mp_int *px, const mp_int *py, const mp_int *pz,
 	MP_CHECKOK(group->meth->field_mul(A, qx, A, group->meth));
 	MP_CHECKOK(group->meth->field_mul(B, qy, B, group->meth));
 
+	/* Check P == Q */
+	if (mp_cmp(A, px) == 0) {
+		if (mp_cmp(B, py) == 0) {
+			/* If Px == Qx && Py == Qy, double P. */
+			return (ec_GFp_pt_dbl_jm(px, py, pz, paz4, rx, ry, rz,
+			    raz4, scratch, group));
+		}
+		/* If Px == Qx && Py != Qy, return point at infinity. */
+		return (ec_GFp_pt_set_inf_jac(rx, ry, rz));
+	}
+
 	/* C = A - px, D = B - py */
 	MP_CHECKOK(group->meth->field_sub(A, px, C, group->meth));
 	MP_CHECKOK(group->meth->field_sub(B, py, D, group->meth));
@@ -218,7 +227,7 @@ CLEANUP:
  * additions. Assumes input is already field-encoded using field_enc, and
  * returns output that is still field-encoded. Uses 5-bit window NAF
  * method (algorithm 11) for scalar-point multiplication from Brown,
- * Hankerson, Lopez, Menezes. Software Implementation of the NIST Elliptic 
+ * Hankerson, Lopez, Menezes. Software Implementation of the NIST Elliptic
  * Curves Over Prime Fields. */
 mp_err
 ec_GFp_pt_mul_jm_wNAF(const mp_int *n, const mp_int *px, const mp_int *py,
@@ -307,7 +316,7 @@ ec_GFp_pt_mul_jm_wNAF(const mp_int *n, const mp_int *px, const mp_int *py,
 	/* wNAF method */
 	for (i = orderBitSize; i >= 0; i--) {
 		/* R = 2R */
-		ec_GFp_pt_dbl_jm(rx, ry, &rz, &raz4, rx, ry, &rz, 
+		ec_GFp_pt_dbl_jm(rx, ry, &rz, &raz4, rx, ry, &rz,
 					     &raz4, scratch, group);
 		if (naf[i] != 0) {
 			ec_GFp_pt_add_jm_aff(rx, ry, &rz, &raz4,

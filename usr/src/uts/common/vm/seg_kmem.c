@@ -20,6 +20,7 @@
  */
 /*
  * Copyright (c) 1998, 2010, Oracle and/or its affiliates. All rights reserved.
+ * Copyright 2019 Joyent, Inc.
  */
 
 #include <sys/types.h>
@@ -121,6 +122,11 @@ vmem_t *static_alloc_arena;	/* arena for allocating static memory */
 vmem_t *zio_arena = NULL;	/* arena for allocating zio memory */
 vmem_t *zio_alloc_arena = NULL;	/* arena for allocating zio memory */
 
+#if defined(__amd64)
+vmem_t *kvmm_arena;		/* arena for vmm VA */
+struct seg kvmmseg;		/* Segment for vmm memory */
+#endif
+
 /*
  * seg_kmem driver can map part of the kernel heap with large pages.
  * Currently this functionality is implemented for sparc platforms only.
@@ -139,15 +145,18 @@ vmem_t *zio_alloc_arena = NULL;	/* arena for allocating zio memory */
  */
 
 size_t	segkmem_lpsize;
-static  uint_t	segkmem_lpshift = PAGESHIFT;
 int	segkmem_lpszc = 0;
 
 size_t  segkmem_kmemlp_quantum = 0x400000;	/* 4MB */
 size_t  segkmem_heaplp_quantum;
 vmem_t *heap_lp_arena;
 static  vmem_t *kmem_lp_arena;
-static  vmem_t *segkmem_ppa_arena;
 static	segkmem_lpcb_t segkmem_lpcb;
+
+#ifdef __sparc
+static  uint_t	segkmem_lpshift = PAGESHIFT;
+static  vmem_t *segkmem_ppa_arena;
+#endif
 
 /*
  * We use "segkmem_kmemlp_max" to limit the total amount of physical memory
@@ -157,14 +166,14 @@ static	segkmem_lpcb_t segkmem_lpcb;
  * we allow for large page heap.
  */
 size_t  segkmem_kmemlp_max;
-static  uint_t  segkmem_kmemlp_pcnt;
+uint_t  segkmem_kmemlp_pcnt;
 
 /*
  * Getting large pages for kernel heap could be problematic due to
  * physical memory fragmentation. That's why we allow to preallocate
  * "segkmem_kmemlp_min" bytes at boot time.
  */
-static  size_t	segkmem_kmemlp_min;
+size_t	segkmem_kmemlp_min;
 
 /*
  * Throttling is used to avoid expensive tries to allocate large pages
@@ -434,12 +443,12 @@ segkmem_badop()
 	panic("segkmem_badop");
 }
 
-#define	SEGKMEM_BADOP(t)	(t(*)())segkmem_badop
+#define	SEGKMEM_BADOP(t)	(t(*)())(uintptr_t)segkmem_badop
 
 /*ARGSUSED*/
 static faultcode_t
 segkmem_fault(struct hat *hat, struct seg *seg, caddr_t addr, size_t size,
-	enum fault_type type, enum seg_rw rw)
+    enum fault_type type, enum seg_rw rw)
 {
 	pgcnt_t npages;
 	spgcnt_t pg;
@@ -654,13 +663,19 @@ segkmem_dump(struct seg *seg)
 		    segkmem_dump_range, seg->s_as);
 		vmem_walk(heaptext_arena, VMEM_ALLOC | VMEM_REENTRANT,
 		    segkmem_dump_range, seg->s_as);
+	/*
+	 * We don't want to dump pages attached to kzioseg since they
+	 * contain file data from ZFS.  If this page's segment is
+	 * kzioseg return instead of writing it to the dump device.
+	 *
+	 * Same applies to VM memory allocations.
+	 */
 	} else if (seg == &kzioseg) {
-		/*
-		 * We don't want to dump pages attached to kzioseg since they
-		 * contain file data from ZFS.  If this page's segment is
-		 * kzioseg return instead of writing it to the dump device.
-		 */
 		return;
+#if defined(__amd64)
+	} else if (seg == &kvmmseg) {
+		return;
+#endif
 	} else {
 		segkmem_dump_range(seg->s_as, seg->s_base, seg->s_size);
 	}
@@ -676,7 +691,7 @@ segkmem_dump(struct seg *seg)
 /*ARGSUSED*/
 static int
 segkmem_pagelock(struct seg *seg, caddr_t addr, size_t len,
-	page_t ***ppp, enum lock_type type, enum seg_rw rw)
+    page_t ***ppp, enum lock_type type, enum seg_rw rw)
 {
 	page_t **pplist, *pp;
 	pgcnt_t npages;
@@ -773,7 +788,7 @@ segkmem_capable(struct seg *seg, segcapability_t capability)
 	return (0);
 }
 
-static struct seg_ops segkmem_ops = {
+struct seg_ops segkmem_ops = {
 	SEGKMEM_BADOP(int),		/* dup */
 	SEGKMEM_BADOP(int),		/* unmap */
 	SEGKMEM_BADOP(void),		/* free */
@@ -797,24 +812,22 @@ static struct seg_ops segkmem_ops = {
 	segkmem_getmemid,
 	segkmem_getpolicy,		/* getpolicy */
 	segkmem_capable,		/* capable */
+	seg_inherit_notsup		/* inherit */
 };
-
-int
-segkmem_zio_create(struct seg *seg)
-{
-	ASSERT(seg->s_as == &kas && RW_WRITE_HELD(&kas.a_lock));
-	seg->s_ops = &segkmem_ops;
-	seg->s_data = &zvp;
-	kas.a_size += seg->s_size;
-	return (0);
-}
 
 int
 segkmem_create(struct seg *seg)
 {
 	ASSERT(seg->s_as == &kas && RW_WRITE_HELD(&kas.a_lock));
 	seg->s_ops = &segkmem_ops;
-	seg->s_data = &kvp;
+	if (seg == &kzioseg)
+		seg->s_data = &kvps[KV_ZVP];
+#if defined(__amd64)
+	else if (seg == &kvmmseg)
+		seg->s_data = &kvps[KV_VVP];
+#endif
+	else
+		seg->s_data = &kvps[KV_KVP];
 	kas.a_size += seg->s_size;
 	return (0);
 }
@@ -823,15 +836,14 @@ segkmem_create(struct seg *seg)
 page_t *
 segkmem_page_create(void *addr, size_t size, int vmflag, void *arg)
 {
-	struct seg kseg;
-	int pgflags;
+	struct seg kseg = { 0 };
+	int pgflags = PG_EXCL;
 	struct vnode *vp = arg;
 
 	if (vp == NULL)
 		vp = &kvp;
 
 	kseg.s_as = &kas;
-	pgflags = PG_EXCL;
 
 	if (segkmem_reloc == 0 || (vmflag & VM_NORELOC))
 		pgflags |= PG_NORELOC;
@@ -856,7 +868,7 @@ segkmem_page_create(void *addr, size_t size, int vmflag, void *arg)
  */
 void *
 segkmem_xalloc(vmem_t *vmp, void *inaddr, size_t size, int vmflag, uint_t attr,
-	page_t *(*page_create_func)(void *, size_t, int, void *), void *pcarg)
+    page_t *(*page_create_func)(void *, size_t, int, void *), void *pcarg)
 {
 	page_t *ppl;
 	caddr_t addr = inaddr;
@@ -966,10 +978,10 @@ segkmem_alloc(vmem_t *vmp, size_t size, int vmflag)
 	return (segkmem_alloc_vn(vmp, size, vmflag, &kvp));
 }
 
-void *
+static void *
 segkmem_zio_alloc(vmem_t *vmp, size_t size, int vmflag)
 {
-	return (segkmem_alloc_vn(vmp, size, vmflag, &zvp));
+	return (segkmem_alloc_vn(vmp, size, vmflag, &kvps[KV_ZVP]));
 }
 
 /*
@@ -978,8 +990,8 @@ segkmem_zio_alloc(vmem_t *vmp, size_t size, int vmflag)
  * we currently don't have a special kernel segment for non-paged
  * kernel memory that is exported by drivers to user space.
  */
-static void
-segkmem_free_vn(vmem_t *vmp, void *inaddr, size_t size, struct vnode *vp,
+void
+segkmem_xfree(vmem_t *vmp, void *inaddr, size_t size, struct vnode *vp,
     void (*func)(page_t *))
 {
 	page_t *pp;
@@ -1036,21 +1048,15 @@ segkmem_free_vn(vmem_t *vmp, void *inaddr, size_t size, struct vnode *vp,
 }
 
 void
-segkmem_xfree(vmem_t *vmp, void *inaddr, size_t size, void (*func)(page_t *))
-{
-	segkmem_free_vn(vmp, inaddr, size, &kvp, func);
-}
-
-void
 segkmem_free(vmem_t *vmp, void *inaddr, size_t size)
 {
-	segkmem_free_vn(vmp, inaddr, size, &kvp, NULL);
+	segkmem_xfree(vmp, inaddr, size, &kvp, NULL);
 }
 
-void
+static void
 segkmem_zio_free(vmem_t *vmp, void *inaddr, size_t size)
 {
-	segkmem_free_vn(vmp, inaddr, size, &zvp, NULL);
+	segkmem_xfree(vmp, inaddr, size, &kvps[KV_ZVP], NULL);
 }
 
 void
@@ -1094,6 +1100,7 @@ kmem_freepages(void *addr, pgcnt_t npages)
 	kmem_free(addr, ptob(npages));
 }
 
+#ifdef __sparc
 /*
  * segkmem_page_create_large() allocates a large page to be used for the kmem
  * caches. If kpr is enabled we ask for a relocatable page unless requested
@@ -1220,7 +1227,7 @@ static void
 segkmem_free_one_lp(caddr_t addr, size_t size)
 {
 	page_t		*pp, *rootpp = NULL;
-	pgcnt_t 	pgs_left = btopr(size);
+	pgcnt_t		pgs_left = btopr(size);
 
 	ASSERT(size == segkmem_lpsize);
 
@@ -1240,6 +1247,7 @@ segkmem_free_one_lp(caddr_t addr, size_t size)
 
 	/* page_unresv() is done by the caller */
 }
+#endif /* __sparc */
 
 /*
  * This function is called to import new spans into the vmem arenas like
@@ -1288,10 +1296,10 @@ segkmem_alloc_lp(vmem_t *vmp, size_t *sizep, size_t align, int vmflag)
 			 * backoff at trying large pages and reaping
 			 */
 			if (lpthrt > segkmem_lpthrottle_start &&
-			    (lpthrt & (lpthrt - 1))) {
+			    !ISP2(lpthrt)) {
 				lpcb->allocs_throttled++;
 				lpthrt--;
-				if ((lpthrt & (lpthrt - 1)) == 0)
+				if (ISP2(lpthrt))
 					kmem_reap();
 				return (segkmem_alloc(vmp, size, vmflag));
 			}
@@ -1384,6 +1392,7 @@ segkmem_free_lp(vmem_t *vmp, void *inaddr, size_t size)
 	}
 }
 
+#ifdef __sparc
 /*
  * segkmem_alloc_lpi() imports virtual memory from large page heap arena
  * into kmem_lp arena. In the process it maps the imported segment with
@@ -1420,7 +1429,7 @@ segkmem_free_lpi(vmem_t *vmp, void *inaddr, size_t size)
 	pgcnt_t		nlpages = size >> segkmem_lpshift;
 	size_t		lpsize = segkmem_lpsize;
 	caddr_t		addr = inaddr;
-	pgcnt_t 	npages = btopr(size);
+	pgcnt_t		npages = btopr(size);
 	int		i;
 
 	ASSERT(vmp == heap_lp_arena);
@@ -1436,6 +1445,7 @@ segkmem_free_lpi(vmem_t *vmp, void *inaddr, size_t size)
 
 	vmem_free(vmp, inaddr, size);
 }
+#endif /* __sparc */
 
 /*
  * This function is called at system boot time by kmem_init right after
@@ -1475,15 +1485,13 @@ segkmem_lpsetup()
 	}
 
 	/* set heap_lp quantum if necessary */
-	if (segkmem_heaplp_quantum == 0 ||
-	    (segkmem_heaplp_quantum & (segkmem_heaplp_quantum - 1)) ||
+	if (segkmem_heaplp_quantum == 0 || !ISP2(segkmem_heaplp_quantum) ||
 	    P2PHASE(segkmem_heaplp_quantum, segkmem_lpsize)) {
 		segkmem_heaplp_quantum = segkmem_lpsize;
 	}
 
 	/* set kmem_lp quantum if necessary */
-	if (segkmem_kmemlp_quantum == 0 ||
-	    (segkmem_kmemlp_quantum & (segkmem_kmemlp_quantum - 1)) ||
+	if (segkmem_kmemlp_quantum == 0 || !ISP2(segkmem_kmemlp_quantum) ||
 	    segkmem_kmemlp_quantum > segkmem_heaplp_quantum) {
 		segkmem_kmemlp_quantum = segkmem_heaplp_quantum;
 	}
@@ -1534,8 +1542,21 @@ segkmem_zio_init(void *zio_mem_base, size_t zio_mem_size)
 	ASSERT(zio_alloc_arena != NULL);
 }
 
-#ifdef __sparc
+#if defined(__amd64)
 
+void
+segkmem_kvmm_init(void *base, size_t size)
+{
+	ASSERT(base != NULL);
+	ASSERT(size != 0);
+
+	kvmm_arena = vmem_create("kvmm_arena", base, size, 1024 * 1024,
+	    NULL, NULL, NULL, 0, VM_SLEEP);
+
+	ASSERT(kvmm_arena != NULL);
+}
+
+#elif defined(__sparc)
 
 static void *
 segkmem_alloc_ppa(vmem_t *vmp, size_t size, int vmflag)

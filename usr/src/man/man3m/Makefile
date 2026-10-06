@@ -10,12 +10,13 @@
 #
 
 # Copyright (c) 2012, Igor Kozhukhov <ikozhukhov@gmail.com>
+# Copyright (c) 2017, Chris Fraire <cfraire@me.com>.
 
 include ../../Makefile.master
 
-MANSECT = 	3m
+MANSECT=	3m
 
-MANFILES =	acos.3m \
+MANFILES=	acos.3m \
 		acosh.3m \
 		asin.3m \
 		asinh.3m \
@@ -127,4 +128,5 @@ MANFILES =	acos.3m \
 
 include ../Makefile.man
 
-install: $(ROOTMANFILES)
+install:	$(ROOTMANFILES) $(MANLINK_SRCS)
+	$(MANLINK_INSTALL)

@@ -35,22 +35,20 @@ ROOTLINKS= $(ROOTBIN)/$(CPFILE) $(ROOTBIN)/$(LNFILE)
 ROOTXPG4LINKS= $(ROOTXPG4BIN)/$(CPFILE) $(ROOTXPG4BIN)/$(LNFILE)
 
 include ../Makefile.cmd
+include ../Makefile.ctf
 
 clean $(XPG4)	:= OBJS += values-xpg4.o
 
 CLOBBERFILES += $(CPFILE) $(LNFILE)
 CFLAGS	+=	$(CCVERBOSE)
-CERRWARN +=	-_gcc=-Wno-parentheses
-CERRWARN +=	-_gcc=-Wno-unused-variable
-CERRWARN +=	-_gcc=-Wno-uninitialized
 $(XPG4) := CFLAGS += -DXPG4
-LINTFLAGS += -DXPG4 -u
 XGETFLAGS += -a -x mv.xcl
 CPPFLAGS += -D_FILE_OFFSET_BITS=64 -I $(SRC)/common/util
 
-lint :=	LDLIBS += -lcmdutils -lavl -lsec -lnvpair
 $(PROG) := LDLIBS += -lcmdutils -lavl -lsec -lnvpair
 $(XPG4) := LDLIBS += -lcmdutils -lavl -lsec -lnvpair
+
+CTF_MODE = link
 
 .KEEP_STATE:
 
@@ -76,8 +74,8 @@ xpg4_%.o:    $(SRC)/common/util/%.c
 	$(COMPILE.c) -o $@ $<
 	$(POST_PROCESS_O)
 
-%values-xpg4.o:		../../lib/common/common/values-xpg4.c
-	$(COMPILE.c) -o $@ ../../lib/common/common/values-xpg4.c
+%values-xpg4.o:		../../lib/crt/common/values-xpg4.c
+	$(COMPILE.c) -o $@ ../../lib/crt/common/values-xpg4.c
 
 $(CPFILE):	$(PROG)
 	@$(RM) $(CPFILE); $(LN) $(PROG) $(CPFILE)
@@ -97,7 +95,5 @@ $(ROOTXPG4LINKS):	$(ROOTXPG4PROG)
 
 clean:
 	$(RM) $(OBJS) $(XPG4OBJS)
-
-lint:	lint_SRCS
 
 include ../Makefile.targ

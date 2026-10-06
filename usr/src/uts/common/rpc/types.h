@@ -35,12 +35,11 @@
 #ifndef _RPC_TYPES_H
 #define	_RPC_TYPES_H
 
-#pragma ident	"%Z%%M%	%I%	%E% SMI"
-
 /*
  * Rpc additions to <sys/types.h>
  */
 #include <sys/types.h>
+#include <sys/null.h>
 
 #ifdef __cplusplus
 extern "C" {
@@ -56,7 +55,7 @@ typedef int enum_t;
  */
 typedef u_longlong_t ulonglong_t;
 
-#if defined(_LP64) || defined(_I32LPx)
+#if defined(_LP64)
 typedef	uint32_t rpcprog_t;
 typedef	uint32_t rpcvers_t;
 typedef	uint32_t rpcproc_t;
@@ -81,10 +80,6 @@ typedef long rpc_inline_t;
 
 #ifndef	TRUE
 #define	TRUE	(1)
-#endif
-
-#ifndef	NULL
-#define	NULL	0
 #endif
 
 #ifndef	_KERNEL
@@ -119,11 +114,7 @@ extern uint_t	rpclog;
 
 /* messaging stuff. */
 #ifndef _KERNEL
-#ifdef __STDC__
 extern const char __nsl_dom[];
-#else
-extern char __nsl_dom[];
-#endif
 #endif
 
 #ifdef __cplusplus

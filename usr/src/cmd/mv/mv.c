@@ -29,7 +29,12 @@
  */
 
 /*	Copyright (c) 1984, 1986, 1987, 1988, 1989 AT&T	*/
-/*	  All Rights Reserved  	*/
+/*	  All Rights Reserved	*/
+
+/*
+ * Copyright (c) 2018, Joyent, Inc.
+ * Copyright 2026 Oxide Computer Company
+ */
 
 /*
  * University Copyright- Copyright (c) 1982, 1986, 1988
@@ -42,11 +47,108 @@
  */
 
 /*
- * Combined mv/cp/ln command:
- *	mv file1 file2
- *	mv dir1 dir2
- *	mv file1 ... filen dir1
+ * This command implements all three of mv(1), cp(1), and ln(1) which all have
+ * similar operating modes. In particular, some invocations of mv must fall back
+ * to acting like cp when crossing file systems for example.
+ *
+ * These commands have the following high level synopsis:
+ *
+ * <command> [options] source target
+ * <command> [options] source source... directory
+ * <command> [options] source [target]
+ *
+ * By default, whenever one has a target that is a directory, these commands
+ * will place the resulting object inside of directory. So say you had a file
+ * 'a' and a directory 'b' and ran 'mv a b' that would result in moving 'a' to
+ * 'b/a', that is putting it inside b. The same would happen if there were
+ * multiple files.
+ *
+ * To avoid this behavior the -T flag exists which causes the various commands
+ * to not check whether or not the target is a directory for the effect of
+ * trying to see if it should move something inside.
+ *
+ * The final form of an optional target is present only for ln.
+ *
+ * Overwriting Behavior
+ * --------------------
+ *
+ * These commands have different defaults that control what happens when they
+ * encounter things that already exist. See the discussion on the definition of
+ * the target_action_t enum and the logic in chkfiles() for an overview.
+ *
+ * Symlink Behavior
+ * ----------------
+ *
+ * These three tools all have to deal with what happens when you encounter a
+ * symbolic link. Let's take each of these in turn:
+ *
+ * mv does not do anything special when it encounters a symbolic link. It never
+ * follows links and there is no option to control this behavior. This is the
+ * simplest case and means that when we are looking at files we always use
+ * lstat(2).
+ *
+ * ln's behavior varies on whether or not one is creating a symlink with the -s
+ * option. If -s is specified, then symlinks are not followed. There are two
+ * options which control the behavior when creating hardlinks: -L and -P. These
+ * control what the hardlink is created to.
+ *
+ * Consider the case where we have a directory with a file a and a symlink b.
+ * When one runs ln b c what is supposed to happen?
+ *
+ * When -L is specified, c is going to be a symlink and b/c are hardlinks to one
+ * another and share the same inode. Meaning the directory now contains two
+ * symlinks and the single file a. When -P is specified, b is followed and a/c
+ * are hardlinks to one another. This implies that the directory now contains
+ * two files and the single symlink b. The default behavior of ln is to act like
+ * -P is specified. To summarize the default behavior and -P is to use lstat(2)
+ * when looking for information. When using -L we need to use stat and
+ * AT_SYMLINK_FOLLOW.
+ *
+ * There is one wrinkle, because nothing can ever be quite so simple. The
+ * behavior of link(2) changed with the SVR4 merge, but was left specific to an
+ * xpg4 environment. See the implementation of link(2) in libc for more
+ * information. This means the default for normal ln and xpg4 ln are different
+ * and xpg4 ln acts like -L is the default actually. This is addressed by
+ * pre-seeding the options when performing xpg4 ln.
+ *
+ * Finally we have cp. cp is the most complicated of these. There are two
+ * different general modes for cp:
+ *
+ *  1. cp is copying non-recursively. Symlinks are always followed in this case.
+ *  2. cp is copying recursively. Symlink behavior is controlled by three
+ *     options: -L, -P, and a new option -H.
+ *
+ * cp -L does not preserve symbolic links. It uses stat(2) and copies the
+ * resulting file into place. cp -P preserves symbolic links. It uses lstat(2)
+ * and will result in a new symbolic link, pointing to the same original target,
+ * being created. Finally, -H is the compromise position. It asks is this a
+ * symbolic link that was encountered on the command line directly as an
+ * operand. If so, it will be copied like -L is specified. Otherwise this
+ * implies it is a symlink encountered recursively and the equivalent of -P
+ * should be used.
+ *
+ * When cp is used recursively the default behavior is -L.
+ *
+ * The following table attempts to summarize the options available across all
+ * the different commands:
+ *
+ * COMMAND		DEFAULT		-L	-P	-H	FLAG
+ * mv			lstat (-P)	-	-	-	-
+ * ln			lstat (-P)	stat	lstat	-	Lflg
+ * xpg4 ln		stat (-L)	stat	lstat	-	Lflg
+ * ln -s		lstat (-P)	ign	ign	-	-
+ * cp			stat (-L)	-	-	-	-
+ * cp -r | -R		stat (-L)	stat	lstat	both	Pflg
+ *
+ * The default column indicates what the action the command takes and what the
+ * equivalent stat command and flag is. The option columns indicate the behavior
+ * and a '-' indicates that the flag is unsupported while 'ign' indicates that
+ * the flag is ignored. POSIX indicates ln -s ignores -L/-P. The FLAG column
+ * indicates which of the variables the program uses to drive behavior after
+ * option processing. In all cases it is legal for these options to occur
+ * multiple times.
  */
+
 #include <sys/time.h>
 #include <signal.h>
 #include <locale.h>
@@ -54,6 +156,7 @@
 #include <sys/acl.h>
 #include <libcmdutils.h>
 #include <aclutils.h>
+#include <assert.h>
 #include "getresponse.h"
 
 #define	FTYPE(A)	(A.st_mode)
@@ -76,33 +179,49 @@
 #define	MODEBITS (S_ISUID|S_ISGID|S_ISVTX|S_IRWXU|S_IRWXG|S_IRWXO)
 #define	TRUE 1
 
-static char		*dname(char *);
-static int		lnkfil(char *, char *);
-static int		cpymve(char *, char *);
-static int		chkfiles(char *, char **);
-static int		rcopy(char *, char *);
-static int		chk_different(char *, char *);
-static int		chg_time(char *, struct stat);
-static int		chg_mode(char *, uid_t, gid_t, mode_t);
-static int		copydir(char *, char *);
-static int		copyspecial(char *);
-static int		getrealpath(char *, char *);
+typedef enum {
+	/*
+	 * Indicates that after checking the file we should proceed with the
+	 * action.
+	 */
+	CHK_CONT,
+	/*
+	 * Indicates that after checking the file we encountered an error that
+	 * should be percolated up.
+	 */
+	CHK_ERROR,
+	/*
+	 * Indicate that the user opted to skip this file. No action should be
+	 * taken and this should be treated as successful.
+	 */
+	CHK_SKIP
+} chkfiles_t;
+
+static chkfiles_t	chkfiles(const char *, char **);
+static const char	*dname(const char *);
+static int		lnkfil(const char *, char *);
+static int		cpymve(const char *, char *);
+static int		rcopy(const char *, char *);
+static int		chk_different(const char *, const char *);
+static int		chg_time(const char *, struct stat);
+static int		chg_mode(const char *, uid_t, gid_t, mode_t);
+static int		copydir(const char *, char *);
+static int		copyspecial(const char *);
+static int		getrealpath(const char *, char *);
 static void		usage(void);
-static void		Perror(char *);
-static void		Perror2(char *, char *);
+static void		Perror(const char *);
+static void		Perror2(const char *, const char *);
 static int		use_stdin(void);
-static int		copyattributes(char *, char *);
-static int		copy_sysattr(char *, char *);
+static int		copyattributes(const char *, const char *);
+static int		copy_sysattr(const char *, const char *);
 static tree_node_t	*create_tnode(dev_t, ino_t);
 
-static struct stat 	s1, s2, s3, s4;
-static int 		cpy = FALSE;
-static int 		mve = FALSE;
-static int 		lnk = FALSE;
+static struct stat	s1, s2, s3, s4;
+static int		cpy = FALSE;
+static int		mve = FALSE;
+static int		lnk = FALSE;
 static char		*cmd;
-static int		silent = 0;
 static int		fflg = 0;
-static int		iflg = 0;
 static int		pflg = 0;
 static int		Rflg = 0;	/* recursive copy */
 static int		rflg = 0;	/* recursive copy */
@@ -111,6 +230,7 @@ static int		Hflg = 0;	/* follow cmd line arg symlink to dir */
 static int		Lflg = 0;	/* follow symlinks */
 static int		Pflg = 0;	/* do not follow symlinks */
 static int		atflg = 0;
+static int		Tflg = 0;	/* Treat target as a normal file */
 static int		attrsilent = 0;
 static int		targetexists = 0;
 static int		cmdarg;		/* command line argument */
@@ -121,19 +241,80 @@ static int		srcfd = -1;
 static int		targfd = -1;
 static int		sourcedirfd = -1;
 static int		targetdirfd = -1;
-static DIR 		*srcdirp = NULL;
+static DIR		*srcdirp = NULL;
 static int		srcattrfd = -1;
 static int		targattrfd = -1;
-static struct stat 	attrdir;
+static struct stat	attrdir;
+
+/*
+ * cp, mv, and ln all have behaviors around what happens when a file already
+ * exists at the target. These behaviors depend on a combination of the program,
+ * the options specified, and the permissions of the target file.
+ *
+ * 1) Explicitly remove any target file
+ * 2) Always ask the user
+ * 3) Take no action and treat as successful
+ * 4) Take no action and treat as a failure
+ * 5) Replace the target file if permissions align, otherwise fail
+ * 6) Replace the target file if permissions align, otherwise prompt if stdin
+ *    is a tty
+ *
+ * The default action varies based on the program. cp defaults to (5), mv to
+ * (6), and ln to (4). There are three flags that depending on the program
+ * will change the behavior that is taken: -f, -i, and -n. Of these only -i has
+ * the same meaning across all three programs. In this context, we treat these
+ * flags as:
+ *
+ * -f: take action (1)
+ * -i: take action (2)
+ * -n: take action (3)
+ *
+ * The following table shows which programs honor which of these flags:
+ *
+ *	CP	LN	MV
+ * -f	N	Y	Y
+ * -i	Y	Y	Y
+ * -n	Y	Y	N
+ *
+ * Any case where you see a 'N' above means the program has a different meaning
+ * for the flag. These four actions are summarized in the following enumeration.
+ *
+ * The last wrinkle with these is how they are processed on the command line. In
+ * general, we treat these as the last one wins. That is, if you specified -i -n
+ * then we would use the -n behavior. The only wrinkle for this is with mv. The
+ * non-POSIX form of mv any -f trump all -i options, but the xpg4 behavior was
+ * the last one wins. In this case -n takes the last one wins behavior with mv
+ * to try to make it as similar to everything else as we can.
+ */
+typedef enum {
+	/*
+	 * Take the program's default behavior.
+	 */
+	TA_DEFAULT,
+	/*
+	 * The user has explicitly said we should remove the file.
+	 */
+	TA_OVERWRITE,
+	/*
+	 * The user has said we should always prompt about the file.
+	 */
+	TA_PROMPT,
+	/*
+	 * The user has said we should always leave it be.
+	 */
+	TA_SKIP
+} target_action_t;
+
+target_action_t		targact = TA_DEFAULT;
 
 /* Extended system attributes support */
 
-static int open_source(char  *);
-static int open_target_srctarg_attrdirs(char  *, char *);
-static int open_attrdirp(char *);
-static int traverse_attrfile(struct dirent *, char *, char *, int);
+static int open_source(const char *);
+static int open_target_srctarg_attrdirs(const char *, const char *);
+static int open_attrdirp(const char *);
+static int traverse_attrfile(struct dirent *, const char *, const char *, int);
 static void rewind_attrdir(DIR *);
-static void close_all();
+static void close_all(void);
 
 
 int
@@ -141,13 +322,13 @@ main(int argc, char *argv[])
 {
 	int c, i, r, errflg = 0;
 	char target[PATH_MAX];
-	int (*move)(char *, char *);
+	int (*move)(const char *, char *);
 
 	/*
 	 * Determine command invoked (mv, cp, or ln)
 	 */
 
-	if (cmd = strrchr(argv[0], '/'))
+	if ((cmd = strrchr(argv[0], '/')) != NULL)
 		++cmd;
 	else
 		cmd = argv[0];
@@ -182,22 +363,29 @@ main(int argc, char *argv[])
 
 	/*
 	 * Check for options:
-	 * 	cp [ -r|-R [-H|-L|-P]] [-afip@/] file1 [file2 ...] target
-	 * 	cp [-afiprR@/] file1 [file2 ...] target
-	 *	ln [-f] [-n] [-s] file1 [file2 ...] target
-	 *	ln [-f] [-n] [-s] file1 [file2 ...]
-	 *	mv [-f|i] file1 [file2 ...] target
-	 *	mv [-f|i] dir1 target
+	 *	cp [-afinpT@/] source_file target_file
+	 *	cp [-afinp@/] source_file... target
+	 *	cp [-afinp@/] -T source_file target
+	 *	cp [-r|-R [-H|-L|-P]] [-afinp@/] source_dir... target
+	 *	ln [-fins] [-L|-P] source_file [target]
+	 *	ln [-fins] [-L|-P] source_file... target
+	 *	ln [-fins] [-L|-P] -T source_file target
+	 *	mv [-fin] source target_file
+	 *	mv [-fin] source... target_dir
+	 *	mv [-fin] -T source target
 	 */
 
 	if (cpy) {
-		while ((c = getopt(argc, argv, "afHiLpPrR@/")) != EOF)
+		while ((c = getopt(argc, argv, "afHinLpPrRT@/")) != EOF)
 			switch (c) {
 			case 'f':
 				fflg++;
 				break;
 			case 'i':
-				iflg++;
+				targact = TA_PROMPT;
+				break;
+			case 'n':
+				targact = TA_SKIP;
 				break;
 			case 'p':
 				pflg++;
@@ -245,6 +433,9 @@ main(int argc, char *argv[])
 				Rflg++;
 				rflg++;
 				break;
+			case 'T':
+				Tflg = 1;
+				break;
 			case '@':
 				atflg++;
 				attrsilent = 0;
@@ -269,34 +460,64 @@ main(int argc, char *argv[])
 		}
 
 	} else if (mve) {
-		while ((c = getopt(argc, argv, "fis")) != EOF)
+		while ((c = getopt(argc, argv, "finsT")) != EOF)
 			switch (c) {
 			case 'f':
-				silent++;
-#ifdef XPG4
-				iflg = 0;
-#endif
+				targact = TA_OVERWRITE;
 				break;
 			case 'i':
-				iflg++;
 #ifdef XPG4
-				silent = 0;
+				targact = TA_PROMPT;
+#else
+				if (targact != TA_OVERWRITE) {
+					targact = TA_PROMPT;
+				}
 #endif
+				break;
+			case 'n':
+				targact = TA_SKIP;
+				break;
+			case 'T':
+				Tflg = 1;
 				break;
 			default:
 				errflg++;
 			}
 	} else { /* ln */
-		while ((c = getopt(argc, argv, "fns")) != EOF)
+		/*
+		 * The XPG4 merge caused the default behavior of link(2) to
+		 * change unfortunately. See the comment in libc for more
+		 * information. This means that xpg4 ln and normal ln have
+		 * different default behaviors. If we're in xpg4 mode, pre-set
+		 * some options that may be overriden.
+		 */
+#ifdef	XPG4
+		Lflg = 1;
+#endif
+		while ((c = getopt(argc, argv, "fiLnPsT")) != EOF)
 			switch (c) {
 			case 'f':
-				silent++;
+				targact = TA_OVERWRITE;
+				break;
+			case 'i':
+				targact = TA_PROMPT;
+				break;
+			case 'L':
+				Lflg = 1;
+				Pflg = 0;
 				break;
 			case 'n':
 				/* silently ignored; this is the default */
 				break;
+			case 'P':
+				Pflg = 1;
+				Lflg = 0;
+				break;
 			case 's':
 				sflg++;
+				break;
+			case 'T':
+				Tflg = 1;
 				break;
 			default:
 				errflg++;
@@ -335,6 +556,12 @@ main(int argc, char *argv[])
 	 */
 
 	if (argc > 2) {
+		if (Tflg) {
+			(void) fprintf(stderr, gettext("%s: only a single "
+			    "source and target can be used with -T\n"), cmd);
+			exit(2);
+		}
+
 		if (stat(argv[argc-1], &s2) < 0) {
 			(void) fprintf(stderr,
 			    gettext("%s: %s not found\n"),
@@ -360,6 +587,11 @@ main(int argc, char *argv[])
 	if (argc == 1) {
 		if (!lnk)
 			usage();
+		if (Tflg) {
+			(void) fprintf(stderr, gettext("%s: -T requires "
+			    "specifying a target argument\n"), cmd);
+			exit(2);
+		}
 		(void) strcpy(target, ".");
 	} else {
 		(void) strcpy(target, argv[--argc]);
@@ -384,24 +616,22 @@ main(int argc, char *argv[])
 	/*
 	 * Show errors by nonzero exit code.
 	 */
-
-	return (r?2:0);
+	return (r ? 2 : 0);
 }
 
 static int
-lnkfil(char *source, char *target)
+lnkfil(const char *source, char *target)
 {
 	char	*buf = NULL;
+	int	flags;
 
 	if (sflg) {
-
 		/*
 		 * If target is a directory make complete
 		 * name of the new symbolic link within that
 		 * directory.
 		 */
-
-		if ((stat(target, &s2) >= 0) && ISDIR(s2)) {
+		if ((stat(target, &s2) >= 0) && ISDIR(s2) && !Tflg) {
 			size_t len;
 
 			len = strlen(target) + strlen(dname(source)) + 4;
@@ -422,20 +652,18 @@ lnkfil(char *source, char *target)
 		 * unlink(2) and symlink(2) will operate on the file
 		 * itself, not its reference, if the file is a symlink.
 		 */
-
 		if ((lstat(target, &s2) == 0)) {
 			/*
-			 * Check if the silent flag is set ie. the -f option
-			 * is used.  If so, use unlink to remove the current
-			 * target to replace with the new target, specified
-			 * on the command line.  Proceed with symlink.
+			 * Check what our current overwrite behavior is i.e. the
+			 * -f or -n options. If prompting is set (-i), ask the
+			 * user. If overwrite is set (-n) then we attempt to
+			 * remove it. In both cases if the target is a directory
+			 * then we refuse to remove this. Once this is done, the
+			 * program will proceed with creating the symlink.
 			 */
-			if (silent) {
-			/*
-			 * Don't allow silent (-f) removal of an existing
-			 * directory; could leave unreferenced directory
-			 * entries.
-			 */
+			switch (targact) {
+			case TA_OVERWRITE:
+			case TA_PROMPT:
 				if (ISDIR(s2)) {
 					(void) fprintf(stderr,
 					    gettext("%s: cannot create link "
@@ -443,6 +671,21 @@ lnkfil(char *source, char *target)
 					    target);
 					return (1);
 				}
+
+				/*
+				 * See the longer discussion in chkfiles about
+				 * the use of use_stdin() while prompting.
+				 */
+				if (targact == TA_PROMPT && use_stdin()) {
+					(void) fprintf(stderr,
+					    gettext("%s: overwrite %s "
+					    "(%s/%s)? "), cmd, target, yesstr,
+					    nostr);
+					if (yes() == 0) {
+						return (0);
+					}
+				}
+
 				if (unlink(target) < 0) {
 					(void) fprintf(stderr,
 					    gettext("%s: cannot unlink %s: "),
@@ -450,14 +693,19 @@ lnkfil(char *source, char *target)
 					perror("");
 					return (1);
 				}
+			case TA_DEFAULT:
+				break;
+			case TA_SKIP:
+				/*
+				 * This shouldn't be selectable.
+				 */
+				abort();
 			}
 		}
-
 
 		/*
 		 * Create a symbolic link to the source.
 		 */
-
 		if (symlink(source, target) < 0) {
 			(void) fprintf(stderr,
 			    gettext("%s: cannot create %s: "),
@@ -473,16 +721,18 @@ lnkfil(char *source, char *target)
 	}
 
 	switch (chkfiles(source, &target)) {
-		case 1: return (1);
-		case 2: return (0);
-			/* default - fall through */
+	case CHK_ERROR:
+		return (1);
+	case CHK_SKIP:
+		return (0);
+	case CHK_CONT:
+		break;
 	}
 
 	/*
 	 * Make sure source file is not a directory,
 	 * we cannot link directories...
 	 */
-
 	if (ISDIR(s1)) {
 		(void) fprintf(stderr,
 		    gettext("%s: %s is a directory\n"), cmd, source);
@@ -490,10 +740,13 @@ lnkfil(char *source, char *target)
 	}
 
 	/*
-	 * hard link, call link() and return.
+	 * Create a hard link with the appropriate flags in question. POSIX
+	 * calls out the explicit use of linkat() and the flags to use. The
+	 * defaults are up to us. See the 'Symlink Behavior' section of the
+	 * theory statement for more information.
 	 */
-
-	if (link(source, target) < 0) {
+	flags = Lflg ? AT_SYMLINK_FOLLOW : 0;
+	if (linkat(AT_FDCWD, source, AT_FDCWD, target, flags) < 0) {
 		if (errno == EXDEV)
 			(void) fprintf(stderr,
 			    gettext("%s: %s is on a different file system\n"),
@@ -515,20 +768,22 @@ lnkfil(char *source, char *target)
 }
 
 static int
-cpymve(char *source, char *target)
+cpymve(const char *source, char *target)
 {
 	int	n;
 	int fi, fo;
 	int ret = 0;
 	int attret = 0;
 	int sattret = 0;
-	int errno_save;
 	int error = 0;
 
 	switch (chkfiles(source, &target)) {
-		case 1: return (1);
-		case 2: return (0);
-			/* default - fall through */
+	case CHK_ERROR:
+		return (1);
+	case CHK_SKIP:
+		return (0);
+	case CHK_CONT:
+		break;
 	}
 
 	/*
@@ -631,7 +886,7 @@ cpymve(char *source, char *target)
 			if (targetexists && ISDIR(s2)) {
 				/* existing target dir must be empty */
 				if (rmdir(target) < 0) {
-					errno_save = errno;
+					int errno_save = errno;
 					(void) fprintf(stderr,
 					    gettext("%s: cannot rmdir %s: "),
 					    cmd, target);
@@ -988,14 +1243,23 @@ create_tnode(dev_t dev, ino_t ino)
 	return (tnode);
 }
 
-static int
-chkfiles(char *source, char **to)
+static chkfiles_t
+chkfiles(const char *source, char **to)
 {
 	char	*buf = (char *)NULL;
-	int	(*statf)() = (cpy &&
-	    !(Pflg || (Hflg && !cmdarg))) ? stat : lstat;
+	int	(*statf)(const char *, struct stat *) = lstat;
 	char    *target = *to;
 	int	error;
+
+	/*
+	 * See the Symlink Behavior section of the theory statement for more
+	 * information.
+	 */
+	if (cpy && !(Pflg || (Hflg && !cmdarg))) {
+		statf = stat;
+	} else if (lnk && !sflg && Lflg) {
+		statf = stat;
+	}
 
 	/*
 	 * Make sure source file exists.
@@ -1012,7 +1276,7 @@ chkfiles(char *source, char **to)
 		else
 			(void) fprintf(stderr,
 			    gettext("%s: cannot access %s\n"), cmd, source);
-		return (1);
+		return (CHK_ERROR);
 	}
 
 	/*
@@ -1027,7 +1291,7 @@ chkfiles(char *source, char **to)
 			(void) fprintf(stderr,
 			    "%s: failed to get acl entries: %s\n", source,
 			    acl_strerror(error));
-			return (1);
+			return (CHK_ERROR);
 		}
 		/* else: just permission bits */
 	}
@@ -1042,12 +1306,12 @@ chkfiles(char *source, char **to)
 	if ((*statf)(target, &s2) >= 0) {
 		if (ISLNK(s2))
 			(void) stat(target, &s2);
+
 		/*
-		 * If target is a directory,
-		 * make complete name of new file
-		 * within that directory.
+		 * If target is a directory, make complete name of new file
+		 * within that directory unless -T is set.
 		 */
-		if (ISDIR(s2)) {
+		if (ISDIR(s2) && !Tflg) {
 			size_t len;
 
 			len = strlen(target) + strlen(dname(source)) + 4;
@@ -1063,8 +1327,9 @@ chkfiles(char *source, char **to)
 		}
 
 		if ((*statf)(target, &s2) >= 0) {
-			int overwrite	= FALSE;
-			int override	= FALSE;
+			boolean_t prompt = B_FALSE;
+			boolean_t overwrite = B_FALSE;
+			boolean_t override = B_FALSE;
 
 			targetexists++;
 			if (cpy || mve) {
@@ -1084,7 +1349,7 @@ chkfiles(char *source, char **to)
 					    cmd, source, target);
 					if (buf != NULL)
 						free(buf);
-					return (1);
+					return (CHK_ERROR);
 				}
 			}
 			if (lnk) {
@@ -1097,79 +1362,131 @@ chkfiles(char *source, char **to)
 				if (!chk_different(source, target)) {
 					if (buf != NULL)
 						free(buf);
-					return (1);
+					return (CHK_ERROR);
 				}
-			}
-			if (lnk && !silent) {
-				(void) fprintf(stderr,
-				    gettext("%s: %s: File exists\n"),
-				    cmd, target);
-				if (buf != NULL)
-					free(buf);
-				return (1);
 			}
 
 			/*
-			 * overwrite:
-			 * If the user does not have access to
-			 * the target, ask ----if it is not
-			 * silent and user invoked command
-			 * interactively.
+			 * Determine if we need to prompt for overwriting the
+			 * file or for overriding its permissions. There is a
+			 * lot of thorny history here.
 			 *
-			 * override:
-			 * If not silent, and stdin is a terminal, and
-			 * there's no write access, and the file isn't a
-			 * symbolic link, ask for permission.
+			 * The action we take depends on targact, which is the
+			 * user's selection or the command's default behavior.
+			 * If the user has explicitly opted into prompting,
+			 * explicitly asked invoked a force option, or said to
+			 * ignore things when there is a file here, then our
+			 * options are straightforward. When we're with the
+			 * program defaults, things get a bit more nuanced and
+			 * vary by program:
 			 *
-			 * XPG4: both overwrite and override:
-			 * ask only one question.
+			 * ln: by default always fail with an error if target
+			 * exists, regardless of what kind of entity it is.
 			 *
-			 * TRANSLATION_NOTE - The following messages will
-			 * contain the first character of the strings for
-			 * "yes" and "no" defined in the file
-			 * "nl_langinfo.po".  After substitution, the
-			 * message will appear as follows:
-			 *	<cmd>: overwrite <filename> (y/n)?
-			 * where <cmd> is the name of the command
-			 * (cp, mv) and <filename> is the destination file
+			 * cp: overwriting is allowed by default, overriding is
+			 * not. To override the -f flag will be specified which
+			 * will force removal.
+			 *
+			 * mv: overwriting is allowed by default, overriding
+			 * requires prompting if on stdin, otherwise it
+			 * proceeds. Note, "on stdin" varies based on XPG4 or
+			 * not.
+			 *
+			 * The history here is messy. Logically speaking the way
+			 * that overwriting and overriding was checked in the
+			 * past was the following rough logic:
+			 *
+			 * 1) Overwriting is considered if -i is set, -f (mv
+			 * only) wasn't set, and use_stdin() was true (always
+			 * true for XPG4, otherwise only if it was a tty).
+			 *
+			 * 2) Overriding is considered if it was mv, the file
+			 * was not write accessible, -f wasn't specified and the
+			 * target wasn't a symbolic link.
+			 *
+			 * 3) If both overwrite and override were set, it would
+			 * always prompt. If just override was set, it would
+			 * always prompt. However, if only overwrite was set, it
+			 * would only prompt if the target was a regular file!
+			 *
+			 * Based on this, you can see that cp/mv -i didn't
+			 * actually prompt for any number of cases as it didn't
+			 * consider if -i had been specified, which is
+			 * definitely against the spirit of -i (and POSIX). If
+			 * -i is specified we will **always** consider the
+			 * prompt based on use_stdin() because of history. If we
+			 * are looking at defaults, then we will honor the
+			 * historical conditions that were used to check for
+			 * overwriting and overriding.
 			 */
-
-
-			overwrite = iflg && !silent && use_stdin();
-			override = !cpy && (access(target, 2) < 0) &&
-			    !silent && use_stdin() && !ISLNK(s2);
-
-			if (overwrite && override) {
-				(void) fprintf(stderr,
-				    gettext("%s: overwrite %s and override "
-				    "protection %o (%s/%s)? "), cmd, target,
-				    FMODE(s2) & MODEBITS, yesstr, nostr);
-				if (yes() == 0) {
-					if (buf != NULL)
-						free(buf);
-					return (2);
+			switch (targact) {
+			case TA_SKIP:
+				if (buf != NULL)
+					free(buf);
+				return (CHK_SKIP);
+			case TA_OVERWRITE:
+				break;
+			case TA_PROMPT:
+				if (use_stdin()) {
+					prompt = B_TRUE;
+					overwrite = B_TRUE;
+					if (mve && access(target, W_OK) < 0 &&
+					    !ISLNK(s2)) {
+						override = B_TRUE;
+					}
 				}
-			} else if (overwrite && ISREG(s2)) {
-				(void) fprintf(stderr,
-				    gettext("%s: overwrite %s (%s/%s)? "),
-				    cmd, target, yesstr, nostr);
-				if (yes() == 0) {
+				break;
+			case TA_DEFAULT:
+				if (lnk) {
+					(void) fprintf(stderr,
+					    gettext("%s: %s: File exists\n"),
+					    cmd, target);
 					if (buf != NULL)
 						free(buf);
-					return (2);
+					return (CHK_ERROR);
 				}
-			} else if (override) {
-				(void) fprintf(stderr,
-				    gettext("%s: %s: override protection "
-				    /*CSTYLED*/
-				    "%o (%s/%s)? "),
-				    /*CSTYLED*/
-				    cmd, target, FMODE(s2) & MODEBITS,
-				    yesstr, nostr);
+
+				/*
+				 * Now we have to figure out what we're going to
+				 * do here. Determine if this meets the
+				 * traditional prompting guidelines.
+				 */
+				if (mve && access(target, W_OK) < 0 &&
+				    use_stdin() && !ISLNK(s2)) {
+					prompt = B_TRUE;
+					override = B_TRUE;
+				}
+				break;
+			}
+
+			/*
+			 * We've been asked to prompt. Determine the appropriate
+			 * message for the command and the type of action that
+			 * is going on.
+			 */
+			if (prompt) {
+				assert(overwrite || override);
+				if (overwrite && override) {
+					(void) fprintf(stderr, gettext("%s: "
+					    "overwrite %s and override "
+					    "protection %o (%s/%s)? "), cmd,
+					    target, FMODE(s2) & MODEBITS,
+					    yesstr, nostr);
+				} else if (overwrite) {
+					(void) fprintf(stderr, gettext("%s: "
+					    "overwrite %s (%s/%s)? "), cmd,
+					    target, yesstr, nostr);
+				} else if (override) {
+					(void) fprintf(stderr, gettext("%s: "
+					    "%s: override protection %o "
+					    "(%s/%s)? "), cmd, target,
+					    FMODE(s2) & MODEBITS, yesstr,
+					    nostr);
+				}
 				if (yes() == 0) {
 					if (buf != NULL)
 						free(buf);
-					return (2);
+					return (CHK_SKIP);
 				}
 			}
 
@@ -1178,11 +1495,11 @@ chkfiles(char *source, char **to)
 				    gettext("%s: cannot unlink %s: "),
 				    cmd, target);
 				perror("");
-				return (1);
+				return (CHK_ERROR);
 			}
 		}
 	}
-	return (0);
+	return (CHK_CONT);
 }
 
 /*
@@ -1191,7 +1508,7 @@ chkfiles(char *source, char **to)
  * return 0 when they are identical, or when unable to resolve a pathname
  */
 static int
-chk_different(char *source, char *target)
+chk_different(const char *source, const char *target)
 {
 	char	rtarget[PATH_MAX], rsource[PATH_MAX];
 
@@ -1219,7 +1536,7 @@ chk_different(char *source, char *target)
  * return 1 on success, 0 on failure
  */
 static int
-getrealpath(char *path, char *rpath)
+getrealpath(const char *path, char *rpath)
 {
 	if (realpath(path, rpath) == NULL) {
 		int	errno_save = errno;
@@ -1233,7 +1550,7 @@ getrealpath(char *path, char *rpath)
 }
 
 static int
-rcopy(char *from, char *to)
+rcopy(const char *from, char *to)
 {
 	DIR *fold = opendir(from);
 	struct dirent *dp;
@@ -1280,10 +1597,10 @@ rcopy(char *from, char *to)
 	}
 }
 
-static char *
-dname(char *name)
+static const char *
+dname(const char *name)
 {
-	register char *p;
+	const char *p;
 
 	/*
 	 * Return just the file name given the complete path.
@@ -1313,27 +1630,28 @@ usage(void)
 
 	if (mve) {
 		(void) fprintf(stderr, gettext(
-		    "Usage: mv [-f] [-i] f1 f2\n"
-		    "       mv [-f] [-i] f1 ... fn d1\n"
-		    "       mv [-f] [-i] d1 d2\n"));
+		    "Usage: mv [-fin] source target_file\n"
+		    "       mv [-fin] source... target_dir\n"
+		    "       mv [-fin] -T source target\n"));
 	} else if (lnk) {
 #ifdef XPG4
 		(void) fprintf(stderr, gettext(
-		    "Usage: ln [-f] [-s] f1 [f2]\n"
-		    "       ln [-f] [-s] f1 ... fn d1\n"
-		    "       ln [-f] -s d1 d2\n"));
+		    "Usage: ln [-fis] [-L|-P] source_file [target]\n"
+		    "       ln [-fis] [-L|-P] source_file... target\n"
+		    "       ln [-fis] [-L|-P] -T source_file target\n"));
 #else
 		(void) fprintf(stderr, gettext(
-		    "Usage: ln [-f] [-n] [-s] f1 [f2]\n"
-		    "       ln [-f] [-n] [-s] f1 ... fn d1\n"
-		    "       ln [-f] [-n] -s d1 d2\n"));
+		    "Usage: ln [-fins] [-L|-P] source_file [target]\n"
+		    "       ln [-fins] [-L|-P] source_file... target\n"
+		    "       ln [-fins] [-L|-P] -T source_file target\n"));
 #endif
 	} else if (cpy) {
 		(void) fprintf(stderr, gettext(
-		    "Usage: cp [-a] [-f] [-i] [-p] [-@] [-/] f1 f2\n"
-		    "       cp [-a] [-f] [-i] [-p] [-@] [-/] f1 ... fn d1\n"
-		    "       cp [-r|-R [-H|-L|-P]] [-a] [-f] [-i] [-p] [-@] "
-		    "[-/] d1 ... dn-1 dn\n"));
+		    "Usage: cp [-afinpT@/] source_file target_file\n"
+		    "       cp [-afinp@/] source_file... target\n"
+		    "       cp [-afinp@/] -T source_file target\n"
+		    "       cp [-r|-R [-H|-L|-P]] [-afinp@/] "
+		    "source_dir... target\n"));
 	}
 	exit(2);
 }
@@ -1351,17 +1669,19 @@ usage(void)
  * (if supported by the underlying file system) while setting file times.
  */
 static int
-chg_time(char *to, struct stat ss)
+chg_time(const char *to, struct stat ss)
 {
 	struct timespec times[2];
+#ifdef XPG4
 	int rc;
+#endif
 
 	times[0] = ss.st_atim;
 	times[1] = ss.st_mtim;
 
+#ifdef XPG4
 	rc = utimensat(AT_FDCWD, to, times,
 	    ISLNK(s1) ? AT_SYMLINK_NOFOLLOW : 0);
-#ifdef XPG4
 	if ((pflg || mve) && rc != 0) {
 		(void) fprintf(stderr,
 		    gettext("%s: cannot set times for %s: "), cmd, to);
@@ -1369,6 +1689,9 @@ chg_time(char *to, struct stat ss)
 		if (pflg)
 			return (1);
 	}
+#else
+	(void) utimensat(AT_FDCWD, to, times,
+	    ISLNK(s1) ? AT_SYMLINK_NOFOLLOW : 0);
 #endif
 
 	return (0);
@@ -1392,7 +1715,7 @@ chg_time(char *to, struct stat ss)
  * diagnostic message or exit with a non-zero value.
  */
 static int
-chg_mode(char *target, uid_t uid, gid_t gid, mode_t mode)
+chg_mode(const char *target, uid_t uid, gid_t gid, mode_t mode)
 {
 	int clearflg = 0; /* controls message printed upon chown() error */
 	struct stat st;
@@ -1441,7 +1764,7 @@ chg_mode(char *target, uid_t uid, gid_t gid, mode_t mode)
 }
 
 static void
-Perror(char *s)
+Perror(const char *s)
 {
 	char buf[PATH_MAX + 10];
 
@@ -1450,7 +1773,7 @@ Perror(char *s)
 }
 
 static void
-Perror2(char *s1, char *s2)
+Perror2(const char *s1, const char *s2)
 {
 	char buf[PATH_MAX + 20];
 
@@ -1463,7 +1786,7 @@ Perror2(char *s1, char *s2)
  * used for cp -R and for mv across file systems
  */
 static int
-copydir(char *source, char *target)
+copydir(const char *source, char *target)
 {
 	int ret, attret = 0;
 	int sattret = 0;
@@ -1597,7 +1920,7 @@ copydir(char *source, char *target)
 }
 
 static int
-copyspecial(char *target)
+copyspecial(const char *target)
 {
 	int ret = 0;
 
@@ -1629,7 +1952,7 @@ use_stdin(void)
 /* Copy non-system extended attributes */
 
 static int
-copyattributes(char *source, char *target)
+copyattributes(const char *source, const char *target)
 {
 	struct dirent *dp;
 	int error = 0;
@@ -1868,7 +2191,7 @@ out:
 /* Copy extended system attributes from source to target */
 
 static int
-copy_sysattr(char *source, char *target)
+copy_sysattr(const char *source, const char *target)
 {
 	struct dirent	*dp;
 	nvlist_t	*response;
@@ -1934,33 +2257,31 @@ copy_sysattr(char *source, char *target)
 			 * the defaults set when its created and thus  no need
 			 * to copy the defaults.
 			 */
-			if (dp->d_name != NULL) {
-				res = sysattr_list(cmd, srcattrfd, dp->d_name);
-				if (res == NULL)
-					goto next;
+			res = sysattr_list(cmd, srcattrfd, dp->d_name);
+			if (res == NULL)
+				goto next;
 
 			/*
 			 * Copy non default extended system attributes of named
 			 * attribute file.
 			 */
-				if (fsetattr(targattrfd,
-				    XATTR_VIEW_READWRITE, res) != 0) {
-					++error;
-					(void) fprintf(stderr, gettext("%s: "
-					    "Failed to copy extended system "
-					    "attributes from attribute file "
-					    "%s of %s to %s\n"), cmd,
-					    dp->d_name, source, target);
-				}
+			if (fsetattr(targattrfd,
+			    XATTR_VIEW_READWRITE, res) != 0) {
+				++error;
+				(void) fprintf(stderr, gettext("%s: "
+				    "Failed to copy extended system "
+				    "attributes from attribute file "
+				    "%s of %s to %s\n"), cmd,
+				    dp->d_name, source, target);
 			}
+
 next:
 			if (srcattrfd != -1)
 				(void) close(srcattrfd);
 			if (targattrfd != -1)
 				(void) close(targattrfd);
 			srcattrfd = targattrfd = -1;
-			if (res != NULL)
-				nvlist_free(res);
+			nvlist_free(res);
 		}
 	}
 	/* Copy source file non default extended system attributes to target */
@@ -1972,16 +2293,15 @@ next:
 		    "%s to %s\n"), cmd, source, target);
 	}
 out:
-	if (response != NULL)
-		nvlist_free(response);
+	nvlist_free(response);
 	close_all();
 	return (error == 0 ? 0 : 1);
 }
 
 /* Open the source file */
 
-int
-open_source(char  *src)
+static int
+open_source(const char *src)
 {
 	int	error = 0;
 
@@ -2007,8 +2327,8 @@ out:
 
 /* Open source attribute dir, target and target attribute dir. */
 
-int
-open_target_srctarg_attrdirs(char  *src, char *targ)
+static int
+open_target_srctarg_attrdirs(const char *src, const char *targ)
 {
 	int		error = 0;
 
@@ -2079,8 +2399,8 @@ out:
 	return (error == 0 ? 0 : 1);
 }
 
-int
-open_attrdirp(char *source)
+static int
+open_attrdirp(const char *source)
 {
 	int tmpfd = -1;
 	int error = 0;
@@ -2126,8 +2446,9 @@ out:
 }
 
 /* Skips through ., .., and system attribute 'view' files */
-int
-traverse_attrfile(struct dirent *dp, char *source, char *target, int  first)
+static int
+traverse_attrfile(struct dirent *dp, const char *source, const char *target,
+    int first)
 {
 	int		error = 0;
 
@@ -2216,7 +2537,7 @@ out:
 	return (error == 0 ? 0 :1);
 }
 
-void
+static void
 rewind_attrdir(DIR * sdp)
 {
 	int pwdfd;
@@ -2235,8 +2556,8 @@ rewind_attrdir(DIR * sdp)
 	}
 }
 
-void
-close_all()
+static void
+close_all(void)
 {
 	if (srcattrfd != -1)
 		(void) close(srcattrfd);

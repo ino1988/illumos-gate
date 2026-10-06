@@ -39,9 +39,6 @@
  */
 
 
-
-#pragma ident	"%Z%%M%	%I%	%E% SMI"
-
 /*
  * arp - display, set, and delete arp table entries
  */
@@ -81,9 +78,10 @@ main(int argc, char *argv[])
 			if (nflags > 0) {	\
 				usage();	\
 				exit(1);	\
-			} else			\
+			} else {		\
 				y##_flag = 1;	\
-				nflags++;	\
+			}			\
+			nflags++;		\
 			break
 
 	while ((c = getopt(argc, argv, "nadfs")) != EOF) {
@@ -124,6 +122,8 @@ main(int argc, char *argv[])
 		(void) execl("/usr/bin/netstat", "netstat",
 		    (n_flag ? "-np" : "-p"),
 		    "-f", "inet", (char *)0);
+		(void) fprintf(stderr, "failed to exec netstat: %s\n",
+		    strerror(errno));
 		exit(1);
 
 	} else if (s_flag && (argsleft >= 2)) {

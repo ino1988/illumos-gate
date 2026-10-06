@@ -27,8 +27,6 @@
 #ifndef _SYS_PROCFS_ISA_H
 #define	_SYS_PROCFS_ISA_H
 
-#pragma ident	"%Z%%M%	%I%	%E% SMI"
-
 /*
  * Instruction Set Architecture specific component of <sys/procfs.h>
  * sparc v8/v9 version
@@ -70,7 +68,7 @@ typedef	uint32_t	instr_t;
  * Registers are 32 bits for ILP32, 64 bits for LP64.
  */
 #define	NPRGREG	38
-#if defined(_LP64) || defined(_I32LPx)
+#if defined(_LP64)
 typedef	long		prgreg_t;
 #else
 typedef	int		prgreg_t;
@@ -169,7 +167,7 @@ typedef struct prfpregset {
 	uint8_t	pr_q_entrysize;		/* # of bytes per FQ entry */
 	uint8_t	pr_en;			/* flag signifying fpu in use */
 	char	pr_pad[13];		/* ensure sizeof(prfpregset)%16 == 0 */
-	struct fq pr_q[16];		/* contains the FQ array */
+	struct _fq pr_q[16];		/* contains the FQ array */
 } prfpregset_t;
 #else
 typedef struct prfpregset {
@@ -182,7 +180,7 @@ typedef struct prfpregset {
 	uint8_t	pr_qcnt;		/* # of entries in saved FQ */
 	uint8_t	pr_q_entrysize;		/* # of bytes per FQ entry */
 	uint8_t	pr_en;			/* flag signifying fpu in use */
-	struct fq pr_q[32];		/* contains the FQ array */
+	struct _fq pr_q[32];		/* contains the FQ array */
 } prfpregset_t;
 #endif	/* __sparcv9 */
 

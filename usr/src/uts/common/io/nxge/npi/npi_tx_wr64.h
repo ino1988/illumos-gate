@@ -26,8 +26,6 @@
 #ifndef _NPI_TX_WR64_H
 #define	_NPI_TX_WR64_H
 
-#pragma ident	"%Z%%M%	%I%	%E% SMI"
-
 #ifdef	__cplusplus
 extern "C" {
 #endif
@@ -35,7 +33,6 @@ extern "C" {
 #include <npi.h>
 
 static void TXDMA_REG_WRITE64(npi_handle_t, uint64_t, int, uint64_t);
-#pragma inline(TXDMA_REG_WRITE64)
 
 /*
  * TXDMA_REG_WRITE64
@@ -43,10 +40,10 @@ static void TXDMA_REG_WRITE64(npi_handle_t, uint64_t, int, uint64_t);
  *	Write a 64-bit value to a DMC register.
  *
  * Arguments:
- * 	handle	The NPI handle to use.
- * 	offset	The offset into the DMA CSR (the register).
- * 	channel	The channel, which is used as a multiplicand.
- * 	value	The 64-bit value to write.
+ *	handle	The NPI handle to use.
+ *	offset	The offset into the DMA CSR (the register).
+ *	channel	The channel, which is used as a multiplicand.
+ *	value	The 64-bit value to write.
  *
  * Notes:
  *	For reference, here is the old macro:

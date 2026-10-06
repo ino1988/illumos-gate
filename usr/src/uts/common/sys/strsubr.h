@@ -19,12 +19,18 @@
  * CDDL HEADER END
  */
 /*	Copyright (c) 1984, 1986, 1987, 1988, 1989 AT&T	*/
-/*	  All Rights Reserved  	*/
+/*	  All Rights Reserved	*/
 
 
 /*
  * Copyright 2010 Sun Microsystems, Inc.  All rights reserved.
  * Use is subject to license terms.
+ * Copyright 2018 Joyent, Inc.
+ */
+
+/*
+ * Copyright 2020 OmniOS Community Edition (OmniOSce) Association.
+ * Copyright 2022 Garrett D'Amore
  */
 
 #ifndef _SYS_STRSUBR_H
@@ -39,6 +45,7 @@
  */
 #include <sys/stream.h>
 #include <sys/stropts.h>
+#include <sys/vnode.h>
 #include <sys/kstat.h>
 #include <sys/uio.h>
 #include <sys/proc.h>
@@ -114,7 +121,7 @@ extern "C" {
 /*
  * Function types for the parameterized stream head.
  * The msgfunc_t takes the parameters:
- * 	msgfunc(vnode_t *vp, mblk_t *mp, strwakeup_t *wakeups,
+ *	msgfunc(vnode_t *vp, mblk_t *mp, strwakeup_t *wakeups,
  *		strsigset_t *firstmsgsigs, strsigset_t *allmsgsigs,
  *		strpollset_t *pollwakeups);
  * It returns an optional message to be processed by the stream head.
@@ -129,7 +136,7 @@ typedef short	strpollset_t;
 typedef uintptr_t callbparams_id_t;
 typedef	mblk_t	*(*msgfunc_t)(vnode_t *, mblk_t *, strwakeup_t *,
 			strsigset_t *, strsigset_t *, strpollset_t *);
-typedef int 	(*errfunc_t)(vnode_t *, int, int *);
+typedef int	(*errfunc_t)(vnode_t *, int, int *);
 
 /*
  * Per stream sd_lock in putnext may be replaced by per cpu stream_putlocks
@@ -241,6 +248,17 @@ typedef struct stdata {
 	uint_t		sd_copyflag;	/* copy-related flags */
 	zoneid_t	sd_anchorzone;	/* Allow removal from same zone only */
 	struct msgb	*sd_cmdblk;	/* reply from _I_CMD */
+
+	/*
+	 * When a STREAMS device is cloned, the sd_vnode element of this
+	 * structure is replaced by a pointer to a common vnode shared across
+	 * all streams that are using the device. In this case, it is no longer
+	 * possible to get from the stream head back to the original vnode via
+	 * sd_vnode. Therefore, when such a device is cloned, the parent vnode -
+	 * i.e. that which was created during the device clone in spec_clone()
+	 * - is kept in sd_pvnode.
+	 */
+	struct vnode	*sd_pvnode;
 } stdata_t;
 
 /*
@@ -272,10 +290,10 @@ typedef struct stdata {
 #define	SNDMREAD	0x00008000	/* used for read notification */
 #define	OLDNDELAY	0x00010000	/* use old TTY semantics for */
 					/* NDELAY reads and writes */
-	/*		0x00020000	   unused */
+#define	STRXPG4TTY	0x00020000	/* Use XPG4 TTY semantics */
 	/*		0x00040000	   unused */
 #define	STRTOSTOP	0x00080000	/* block background writes */
-#define	STRCMDWAIT	0x00100000 	/* someone is doing an _I_CMD */
+#define	STRCMDWAIT	0x00100000	/* someone is doing an _I_CMD */
 	/*		0x00200000	   unused */
 #define	STRMOUNT	0x00400000	/* stream is mounted */
 #define	STRNOTATMARK	0x00800000	/* Not at mark (when empty read q) */
@@ -409,7 +427,7 @@ typedef struct stdata {
  *
  * The new way is:
  *
- * 	mutex_enter(SQLOCK(sq));
+ *	mutex_enter(SQLOCK(sq));
  *	count = sq->sq_count;
  *	SQ_PUTLOCKS_ENTER(sq);
  *	SUM_SQ_PUTCOUNTS(sq, count);
@@ -458,8 +476,8 @@ struct syncq {
 	 */
 	uint16_t	sq_type;	/* type (concurrency) of syncq */
 	uint16_t	sq_rmqcount;	/* # threads inside removeq() */
-	kcondvar_t 	sq_wait;	/* block on this sync queue */
-	kcondvar_t 	sq_exitwait;	/* waiting for thread to leave the */
+	kcondvar_t	sq_wait;	/* block on this sync queue */
+	kcondvar_t	sq_exitwait;	/* waiting for thread to leave the */
 					/* inner perimeter */
 	/*
 	 * Handling synchronous callbacks such as qtimeout and qbufcall
@@ -1023,7 +1041,7 @@ typedef struct str_stack str_stack_t;
 /*
  * Copy modes for tty and I_STR ioctls
  */
-#define	U_TO_K 	01			/* User to Kernel */
+#define	U_TO_K	01			/* User to Kernel */
 #define	K_TO_K  02			/* Kernel to Kernel */
 
 /*
@@ -1076,7 +1094,7 @@ typedef struct str_stack str_stack_t;
 #define	STRUNLOCKMATES(X)	mutex_exit(&((X)->sd_lock)); \
 			mutex_exit(&(((X)->sd_mate)->sd_lock))
 
-#ifdef _KERNEL
+#if defined(_KERNEL) || defined(_FAKE_KERNEL)
 
 extern void strinit(void);
 extern int strdoioctl(struct stdata *, struct strioctl *, int, int,
@@ -1196,6 +1214,7 @@ extern void qcallbwrapper(void *);
 
 extern mblk_t *esballoc_wait(unsigned char *, size_t, uint_t, frtn_t *);
 extern mblk_t *esballoca(unsigned char *, size_t, uint_t, frtn_t *);
+extern mblk_t *esballoca_wait(unsigned char *, size_t, uint_t, frtn_t *);
 extern mblk_t *desballoca(unsigned char *, size_t, uint_t, frtn_t *);
 extern int do_sendfp(struct stdata *, struct file *, struct cred *);
 extern int frozenstr(queue_t *);
@@ -1236,17 +1255,11 @@ extern void strsetrwputdatahooks(vnode_t *, msgfunc_t, msgfunc_t);
 extern int strwaitmark(vnode_t *);
 extern void strsignal_nolock(stdata_t *, int, uchar_t);
 
-struct multidata_s;
 struct pdesc_s;
-extern int hcksum_assoc(mblk_t *, struct multidata_s *, struct pdesc_s  *,
-    uint32_t, uint32_t, uint32_t, uint32_t, uint32_t, int);
-extern void hcksum_retrieve(mblk_t *, struct multidata_s *, struct pdesc_s *,
-    uint32_t *, uint32_t *, uint32_t *, uint32_t *, uint32_t *);
+
 extern void lso_info_set(mblk_t *, uint32_t, uint32_t);
 extern void lso_info_cleanup(mblk_t *);
 extern unsigned int bcksum(uchar_t *, int, unsigned int);
-extern boolean_t is_vmloaned_mblk(mblk_t *, struct multidata_s *,
-    struct pdesc_s *);
 
 extern int fmodsw_register(const char *, struct streamtab *, int);
 extern int fmodsw_unregister(const char *);

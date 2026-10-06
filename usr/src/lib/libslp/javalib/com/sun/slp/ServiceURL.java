@@ -287,7 +287,7 @@ public class ServiceURL extends Object implements Serializable   {
 		new IllegalArgumentException(
 				conf.formatMessage("url_char_error",
 						   new Object[] {
-				    new Character(c)}));
+				    Character.valueOf(c)}));
 	}
     }
 
@@ -385,7 +385,7 @@ public class ServiceURL extends Object implements Serializable   {
 
 			    if (!st.nextToken().equals("/")) {
 				break; // error!
-	
+
 			    }
 
 			    sAddr = st.nextToken();
@@ -458,7 +458,7 @@ public class ServiceURL extends Object implements Serializable   {
 		    break; // error!
 
 		}
-	
+
 		// there is a URL path
 		// URLPath is all remaining tokens
 		URLPath = sSep;

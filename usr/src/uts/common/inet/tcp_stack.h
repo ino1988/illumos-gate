@@ -21,6 +21,7 @@
 
 /*
  * Copyright (c) 2007, 2010, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2017 by Delphix. All rights reserved.
  */
 
 #ifndef	_INET_TCP_STACK_H
@@ -113,6 +114,12 @@ struct tcp_stack {
 	/* Listener connection limit configuration. */
 	kmutex_t	tcps_listener_conf_lock;
 	list_t		tcps_listener_conf;
+
+	struct cc_algo	*tcps_default_cc_algo;
+
+	/* TCP signature database and lock. */
+	kmutex_t	tcps_sigdb_lock;
+	void		*tcps_sigdb;
 
 	/*
 	 * Per CPU stats

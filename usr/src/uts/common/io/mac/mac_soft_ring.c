@@ -21,6 +21,8 @@
 /*
  * Copyright 2010 Sun Microsystems, Inc.  All rights reserved.
  * Use is subject to license terms.
+ * Copyright 2018 Joyent, Inc.
+ * Copyright 2026 Oxide Computer Company
  */
 
 /*
@@ -140,19 +142,18 @@ mac_soft_ring_worker_wakeup(mac_soft_ring_t *ringp)
 }
 
 /*
- * mac_soft_ring_create
- *
  * Create a soft ring, do the necessary setup and bind the worker
  * thread to the assigned CPU.
  */
-mac_soft_ring_t *
-mac_soft_ring_create(int id, clock_t wait, uint16_t type,
+static mac_soft_ring_t *
+mac_soft_ring_create_i(int id, clock_t wait, const mac_soft_ring_state_t type,
     pri_t pri, mac_client_impl_t *mcip, mac_soft_ring_set_t *mac_srs,
-    processorid_t cpuid, mac_direct_rx_t rx_func, void *x_arg1,
-    mac_resource_handle_t x_arg2)
+    processorid_t cpuid)
 {
-	mac_soft_ring_t 	*ringp;
-	char 			name[S_RING_NAMELEN];
+	mac_soft_ring_t		*ringp;
+	char			name[S_RING_NAMELEN];
+
+	VERIFY3U(type & SR_STATE, ==, 0);
 
 	bzero(name, 64);
 	ringp = kmem_cache_alloc(mac_soft_ring_cache, KM_SLEEP);
@@ -160,9 +161,15 @@ mac_soft_ring_create(int id, clock_t wait, uint16_t type,
 	if (type & ST_RING_TCP) {
 		(void) snprintf(name, sizeof (name),
 		    "mac_tcp_soft_ring_%d_%p", id, (void *)mac_srs);
+	} else if (type & ST_RING_TCP6) {
+		(void) snprintf(name, sizeof (name),
+		    "mac_tcp6_soft_ring_%d_%p", id, (void *)mac_srs);
 	} else if (type & ST_RING_UDP) {
 		(void) snprintf(name, sizeof (name),
 		    "mac_udp_soft_ring_%d_%p", id, (void *)mac_srs);
+	} else if (type & ST_RING_UDP6) {
+		(void) snprintf(name, sizeof (name),
+		    "mac_udp6_soft_ring_%d_%p", id, (void *)mac_srs);
 	} else if (type & ST_RING_OTH) {
 		(void) snprintf(name, sizeof (name),
 		    "mac_oth_soft_ring_%d_%p", id, (void *)mac_srs);
@@ -178,7 +185,7 @@ mac_soft_ring_create(int id, clock_t wait, uint16_t type,
 	mutex_init(&ringp->s_ring_lock, NULL, MUTEX_DEFAULT, NULL);
 	ringp->s_ring_notify_cb_info.mcbi_lockp = &ringp->s_ring_lock;
 
-	ringp->s_ring_type = type;
+	ringp->s_ring_state = type;
 	ringp->s_ring_wait = MSEC_TO_TICK(wait);
 	ringp->s_ring_mcip = mcip;
 	ringp->s_ring_set = mac_srs;
@@ -198,32 +205,58 @@ mac_soft_ring_create(int id, clock_t wait, uint16_t type,
 	ringp->s_ring_cpuid = ringp->s_ring_cpuid_save = -1;
 	ringp->s_ring_worker = thread_create(NULL, 0,
 	    mac_soft_ring_worker, ringp, 0, &p0, TS_RUN, pri);
-	if (type & ST_RING_TX) {
-		ringp->s_ring_drain_func = mac_tx_soft_ring_drain;
-		ringp->s_ring_tx_arg1 = x_arg1;
-		ringp->s_ring_tx_arg2 = x_arg2;
-		ringp->s_ring_tx_max_q_cnt = mac_tx_soft_ring_max_q_cnt;
-		ringp->s_ring_tx_hiwat =
-		    (mac_tx_soft_ring_hiwat > mac_tx_soft_ring_max_q_cnt) ?
-		    mac_tx_soft_ring_max_q_cnt : mac_tx_soft_ring_hiwat;
-		if (mcip->mci_state_flags & MCIS_IS_AGGR) {
-			mac_srs_tx_t *tx = &mac_srs->srs_tx;
-
-			ASSERT(tx->st_soft_rings[
-			    ((mac_ring_t *)x_arg2)->mr_index] == NULL);
-			tx->st_soft_rings[((mac_ring_t *)x_arg2)->mr_index] =
-			    ringp;
-		}
-	} else {
-		ringp->s_ring_drain_func = mac_rx_soft_ring_drain;
-		ringp->s_ring_rx_func = rx_func;
-		ringp->s_ring_rx_arg1 = x_arg1;
-		ringp->s_ring_rx_arg2 = x_arg2;
-		if (mac_srs->srs_state & SRS_SOFTRING_QUEUE)
-			ringp->s_ring_type |= ST_RING_WORKER_ONLY;
-	}
 	if (cpuid != -1)
 		(void) mac_soft_ring_bind(ringp, cpuid);
+
+	return (ringp);
+}
+
+mac_soft_ring_t *
+mac_soft_ring_create_rx(int id, clock_t wait, const mac_soft_ring_state_t type,
+    pri_t pri, mac_client_impl_t *mcip, mac_soft_ring_set_t *mac_srs,
+    processorid_t cpuid, mac_direct_rx_t rx_func, void *x_arg1)
+{
+	VERIFY3U((type & ST_RING_TX), ==, 0);
+
+	mac_soft_ring_t *ringp = mac_soft_ring_create_i(id, wait, type, pri,
+	    mcip, mac_srs, cpuid);
+
+	ringp->s_ring_drain_func = mac_rx_soft_ring_drain;
+	ringp->s_ring_rx_func = rx_func;
+	ringp->s_ring_rx_arg1 = x_arg1;
+	ringp->s_ring_rx_arg2 = NULL;
+	if (mac_srs->srs_type & SRST_ENQUEUE) {
+		ringp->s_ring_state |= ST_RING_WORKER_ONLY;
+	}
+
+	mac_soft_ring_stat_create(ringp);
+
+	return (ringp);
+}
+
+mac_soft_ring_t *
+mac_soft_ring_create_tx(int id, clock_t wait, const mac_soft_ring_state_t type,
+    pri_t pri, mac_client_impl_t *mcip, mac_soft_ring_set_t *mac_srs,
+    processorid_t cpuid, mac_ring_t *ring)
+{
+	VERIFY3U((type & ST_RING_TX), ==, 0);
+	VERIFY(ring != NULL);
+
+	mac_soft_ring_t *ringp = mac_soft_ring_create_i(id, wait,
+	    type | ST_RING_TX, pri, mcip, mac_srs, cpuid);
+
+	ringp->s_ring_drain_func = mac_tx_soft_ring_drain;
+	ringp->s_ring_tx_arg1 = mcip;
+	ringp->s_ring_tx_arg2 = ring;
+	ringp->s_ring_tx_max_q_cnt = mac_tx_soft_ring_max_q_cnt;
+	ringp->s_ring_tx_hiwat =
+	    (mac_tx_soft_ring_hiwat > mac_tx_soft_ring_max_q_cnt) ?
+	    mac_tx_soft_ring_max_q_cnt : mac_tx_soft_ring_hiwat;
+	if (mcip->mci_state_flags & MCIS_IS_AGGR_CLIENT) {
+		mac_srs_tx_t *tx = &mac_srs->srs_tx;
+		VERIFY3P(tx->st_soft_rings[ring->mr_index], ==, NULL);
+		tx->st_soft_rings[ring->mr_index] = ringp;
+	}
 
 	mac_soft_ring_stat_create(ringp);
 
@@ -241,7 +274,7 @@ mac_soft_ring_free(mac_soft_ring_t *softring)
 	ASSERT((softring->s_ring_state &
 	    (S_RING_CONDEMNED | S_RING_CONDEMNED_DONE | S_RING_PROC)) ==
 	    (S_RING_CONDEMNED | S_RING_CONDEMNED_DONE));
-	mac_pkt_drop(NULL, NULL, softring->s_ring_first, B_FALSE);
+	mac_drop_chain(softring->s_ring_first, "softring free");
 	softring->s_ring_tx_arg2 = NULL;
 	mac_soft_ring_stat_delete(softring);
 	mac_callback_free(softring->s_ring_notify_cb_list);
@@ -324,12 +357,12 @@ mac_soft_ring_fire(void *arg)
 	mac_soft_ring_t	*ringp = arg;
 
 	mutex_enter(&ringp->s_ring_lock);
-	if (ringp->s_ring_tid == 0) {
+	if (ringp->s_ring_tid == NULL) {
 		mutex_exit(&ringp->s_ring_lock);
 		return;
 	}
 
-	ringp->s_ring_tid = 0;
+	ringp->s_ring_tid = NULL;
 
 	if (!(ringp->s_ring_state & S_RING_PROC)) {
 		cv_signal(&ringp->s_ring_async);
@@ -338,24 +371,22 @@ mac_soft_ring_fire(void *arg)
 }
 
 /*
- * mac_rx_soft_ring_drain
+ * Drain the soft ring pointed to by ringp.
  *
- * Called when worker thread model (ST_RING_WORKER_ONLY) of processing
- * incoming packets is used. s_ring_first contain the queued packets.
- * s_ring_rx_func contains the upper level (client) routine where the
- * packets are destined and s_ring_rx_arg1/s_ring_rx_arg2 are the
- * cookie meant for the client.
+ *    o s_ring_first: pointer to the queued packet chain.
+ *
+ *    o s_ring_rx_func: pointer to to the client's Rx routine.
+ *
+ *    o s_ring_rx_{arg1,arg2}: opaque values specific to the client.
  */
-/* ARGSUSED */
 static void
 mac_rx_soft_ring_drain(mac_soft_ring_t *ringp)
 {
 	mblk_t		*mp;
 	void		*arg1;
 	mac_resource_handle_t arg2;
-	timeout_id_t 	tid;
+	timeout_id_t	tid;
 	mac_direct_rx_t	proc;
-	size_t		sz;
 	int		cnt;
 	mac_soft_ring_set_t	*mac_srs = ringp->s_ring_set;
 
@@ -363,8 +394,8 @@ mac_rx_soft_ring_drain(mac_soft_ring_t *ringp)
 	ASSERT(mutex_owned(&ringp->s_ring_lock));
 	ASSERT(!(ringp->s_ring_state & S_RING_PROC));
 
-	if ((tid = ringp->s_ring_tid) != 0)
-		ringp->s_ring_tid = 0;
+	if ((tid = ringp->s_ring_tid) != NULL)
+		ringp->s_ring_tid = NULL;
 
 	ringp->s_ring_state |= S_RING_PROC;
 
@@ -379,29 +410,26 @@ mac_rx_soft_ring_drain(mac_soft_ring_t *ringp)
 		ringp->s_ring_last = NULL;
 		cnt = ringp->s_ring_count;
 		ringp->s_ring_count = 0;
-		sz = ringp->s_ring_size;
 		ringp->s_ring_size = 0;
 		mutex_exit(&ringp->s_ring_lock);
 
-		if (tid != 0) {
+		if (tid != NULL) {
 			(void) untimeout(tid);
-			tid = 0;
+			tid = NULL;
 		}
 
 		(*proc)(arg1, arg2, mp, NULL);
 
 		/*
-		 * If we have a soft ring set which is doing
-		 * bandwidth control, we need to decrement its
-		 * srs_size so it can have a accurate idea of
-		 * what is the real data queued between SRS and
-		 * its soft rings. We decrement the size for a
-		 * packet only when it gets processed by both
-		 * SRS and the soft ring.
+		 * If we have an SRS performing bandwidth control, then
+		 * we need to decrement the size and count so the SRS
+		 * has an accurate measure of the data queued between
+		 * the SRS and its soft rings. We decrement the
+		 * counters only when the packet is processed by both
+		 * the SRS and the soft ring.
 		 */
 		mutex_enter(&mac_srs->srs_lock);
 		MAC_UPDATE_SRS_COUNT_LOCKED(mac_srs, cnt);
-		MAC_UPDATE_SRS_SIZE_LOCKED(mac_srs, sz);
 		mutex_exit(&mac_srs->srs_lock);
 
 		mutex_enter(&ringp->s_ring_lock);
@@ -413,12 +441,10 @@ mac_rx_soft_ring_drain(mac_soft_ring_t *ringp)
 }
 
 /*
- * mac_soft_ring_worker
- *
  * The soft ring worker routine to process any queued packets. In
- * normal case, the worker thread is bound to a CPU. It the soft
- * ring is dealing with TCP packets, then the worker thread will
- * be bound to the same CPU as the TCP squeue.
+ * normal case, the worker thread is bound to a CPU. If the soft ring
+ * handles TCP packets then the worker thread is bound to the same CPU
+ * as the TCP squeue.
  */
 static void
 mac_soft_ring_worker(mac_soft_ring_t *ringp)
@@ -497,7 +523,7 @@ done:
  * Enabling is allow the processing thread to send packets to the
  * client while disabling does the opposite.
  */
-void
+int
 mac_soft_ring_intr_enable(void *arg)
 {
 	mac_soft_ring_t *ringp = (mac_soft_ring_t *)arg;
@@ -506,6 +532,7 @@ mac_soft_ring_intr_enable(void *arg)
 	if (ringp->s_ring_first != NULL)
 		mac_soft_ring_worker_wakeup(ringp);
 	mutex_exit(&ringp->s_ring_lock);
+	return (0);
 }
 
 boolean_t
@@ -535,7 +562,7 @@ mac_soft_ring_intr_disable(void *arg)
  * setup.
  */
 mblk_t *
-mac_soft_ring_poll(mac_soft_ring_t *ringp, int bytes_to_pickup)
+mac_soft_ring_poll(mac_soft_ring_t *ringp, size_t bytes_to_pickup)
 {
 	mblk_t	*head, *tail;
 	mblk_t	*mp;
@@ -586,34 +613,104 @@ mac_soft_ring_poll(mac_soft_ring_t *ringp, int bytes_to_pickup)
 	 */
 	mutex_enter(&mac_srs->srs_lock);
 	MAC_UPDATE_SRS_COUNT_LOCKED(mac_srs, cnt);
-	MAC_UPDATE_SRS_SIZE_LOCKED(mac_srs, sz);
 	mutex_exit(&mac_srs->srs_lock);
 	return (head);
 }
 
 /*
- * mac_soft_ring_dls_bypass
- *
  * Enable direct client (IP) callback function from the softrings.
  * Callers need to make sure they don't need any DLS layer processing
  */
 void
-mac_soft_ring_dls_bypass(void *arg, mac_direct_rx_t rx_func, void *rx_arg1)
+mac_soft_ring_dls_bypass_enable(mac_soft_ring_t *softring,
+    mac_direct_rx_t rx_func, void *rx_arg1)
 {
-	mac_soft_ring_t		*softring = arg;
-	mac_soft_ring_set_t	*srs;
-
-	ASSERT(rx_func != NULL);
-
+	VERIFY3P(rx_func, !=, NULL);
 	mutex_enter(&softring->s_ring_lock);
 	softring->s_ring_rx_func = rx_func;
 	softring->s_ring_rx_arg1 = rx_arg1;
 	mutex_exit(&softring->s_ring_lock);
+}
 
-	srs = softring->s_ring_set;
-	mutex_enter(&srs->srs_lock);
-	srs->srs_type |= SRST_DLS_BYPASS;
-	mutex_exit(&srs->srs_lock);
+/* Disable DLS bypass. */
+void
+mac_soft_ring_dls_bypass_disable(mac_soft_ring_t *softring,
+    mac_client_impl_t *mcip)
+{
+	mutex_enter(&softring->s_ring_lock);
+	/*
+	 * Before modifying the ring state we first wait for any in-progress
+	 * processing to stop.
+	 */
+	while (softring->s_ring_state & S_RING_PROC) {
+		softring->s_ring_state |= S_RING_CLIENT_WAIT;
+		cv_wait(&softring->s_ring_client_cv,
+		    &softring->s_ring_lock);
+	}
+
+	softring->s_ring_state &= ~S_RING_CLIENT_WAIT;
+	softring->s_ring_rx_func = mac_rx_deliver;
+	softring->s_ring_rx_arg1 = mcip;
+	mutex_exit(&softring->s_ring_lock);
+}
+
+void
+mac_soft_ring_poll_enable(mac_soft_ring_t *sr, mac_direct_rx_t drx,
+    void *drx_arg, mac_resource_cb_t *rcb, uint32_t pri)
+{
+	mac_rx_fifo_t mrf;
+
+	/* Only TCP/IP clients are poll capable at the moment. */
+	VERIFY((sr->s_ring_state & (ST_RING_TCP | ST_RING_TCP6)) != 0);
+	/* The client resourse callback structure better be set. */
+	VERIFY3P(rcb->mrc_arg, !=, NULL);
+	/* Polling should be configured only once on a given softring. */
+	VERIFY3P(sr->s_ring_rx_arg2, ==, NULL);
+
+	/*
+	 * As polling elides DLS processing we must make sure that
+	 * softring processing (i.e. non-polling) also bypasses DLS
+	 * processing.
+	 */
+	mac_soft_ring_dls_bypass_enable(sr, drx, drx_arg);
+
+	bzero(&mrf, sizeof (mrf));
+	mrf.mrf_type = MAC_RX_FIFO;
+	mrf.mrf_receive = (mac_receive_t)mac_soft_ring_poll;
+	mrf.mrf_intr_enable =
+	    (mac_intr_enable_t)mac_soft_ring_intr_enable;
+	mrf.mrf_intr_disable =
+	    (mac_intr_disable_t)mac_soft_ring_intr_disable;
+	mrf.mrf_rx_arg = sr;
+	mrf.mrf_intr_handle = (mac_intr_handle_t)sr;
+	mrf.mrf_cpu_id = sr->s_ring_cpuid;
+	mrf.mrf_flow_priority = pri;
+
+	sr->s_ring_rx_arg2 = rcb->mrc_add(rcb->mrc_arg,
+	    (mac_resource_t *)&mrf);
+}
+
+void
+mac_soft_ring_poll_disable(mac_soft_ring_t *sr, mac_resource_cb_t *rcb,
+    mac_client_impl_t *mcip)
+{
+	/* Only TCP/IP clients are poll capable at the moment. */
+	VERIFY((sr->s_ring_state & (ST_RING_TCP | ST_RING_TCP6)) != 0);
+
+	/*
+	 * Remove the IP ring if there is one associated with this
+	 * softring. Note that IP rings are a limited resource; and
+	 * SRST_CLIENT_POLL_V4/V6 being set on the SRS is no guarantee
+	 * that all TCP softrings have an associated IP ring. This is by
+	 * design. See ip_squeue_add_ring().
+	 */
+	if (sr->s_ring_rx_arg2 != NULL) {
+		VERIFY3P(rcb->mrc_arg, !=, NULL);
+		rcb->mrc_remove(rcb->mrc_arg, sr->s_ring_rx_arg2);
+		sr->s_ring_rx_arg2 = NULL;
+	}
+
+	mac_soft_ring_dls_bypass_disable(sr, mcip);
 }
 
 /*
@@ -630,7 +727,8 @@ mac_soft_ring_dls_bypass(void *arg, mac_direct_rx_t rx_func, void *rx_arg1)
  * Tx soft rings.
  */
 void
-mac_soft_ring_signal(mac_soft_ring_t *softring, uint_t sr_flag)
+mac_soft_ring_signal(mac_soft_ring_t *softring,
+    const mac_soft_ring_state_t sr_flag)
 {
 	mutex_enter(&softring->s_ring_lock);
 	softring->s_ring_state |= sr_flag;
@@ -647,10 +745,10 @@ mac_soft_ring_signal(mac_soft_ring_t *softring, uint_t sr_flag)
 static void
 mac_tx_soft_ring_drain(mac_soft_ring_t *ringp)
 {
-	mblk_t 			*mp;
-	void 			*arg1;
-	void 			*arg2;
-	mblk_t 			*tail;
+	mblk_t			*mp;
+	void			*arg1;
+	void			*arg2;
+	mblk_t			*tail;
 	uint_t			saved_pkt_count, saved_size;
 	mac_tx_stats_t		stats;
 	mac_soft_ring_set_t	*mac_srs = ringp->s_ring_set;

@@ -33,7 +33,7 @@ include ../../../Makefile.lib
 include ../../Makefile.lib
 
 SRCS = ../common/fmd_agent.c ../$(MACH)/fmd_agent_$(MACH).c
-LIBS = $(DYNLIB) $(LINTLIB)
+LIBS = $(DYNLIB)
 
 SRCDIR =	../common
 
@@ -41,13 +41,8 @@ CPPFLAGS += -I../common -I.
 CFLAGS += $(CCVERBOSE) $(C_BIGPICFLAGS)
 CFLAGS64 += $(CCVERBOSE) $(C_BIGPICFLAGS)
 LDLIBS += -lnvpair -lumem -lc
+CSTD =		$(CSTD_GNU99)
 
-LINTFLAGS = -msux
-LINTFLAGS64 = -msux -m64
-
-$(LINTLIB) := SRCS = $(SRCDIR)/$(LINTSRC)
-$(LINTLIB) := LINTFLAGS = -nsvx
-$(LINTLIB) := LINTFLAGS64 = -nsvx -m64
 
 .KEEP_STATE:
 
@@ -55,12 +50,7 @@ pics/%.o: ../$(MACH)/%.c
 	$(COMPILE.c) -o $@ $<
 	$(POST_PROCESS_O)
 
-%.ln: ../$(MACH)/%.c
-	$(LINT.c) -o $@ $<
-
 all: $(LIBS)
-
-lint: $(LINTLIB) lintcheck
 
 include ../../../Makefile.targ
 include ../../Makefile.targ

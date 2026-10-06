@@ -1,5 +1,7 @@
 #
 # Copyright (c) 2006, 2010, Oracle and/or its affiliates. All rights reserved.
+# Copyright 2020 Joyent, Inc.
+# Copyright 2023 Oxide Computer Company
 #
 # CDDL HEADER START
 #
@@ -24,6 +26,11 @@
 $mapfile_version 2
 
 SYMBOL_SCOPE {
+	topo_create_props		{ TYPE = FUNCTION; FLAGS = extern };
+
+	topo_digraph_destroy		{ TYPE = FUNCTION; FLAGS = extern };
+	topo_digraph_new		{ TYPE = FUNCTION; FLAGS = extern };
+	topo_edge_new			{ TYPE = FUNCTION; FLAGS = extern };
 	topo_node_range_create		{ TYPE = FUNCTION; FLAGS = extern };
 	topo_node_range_destroy		{ TYPE = FUNCTION; FLAGS = extern };
 	topo_node_bind			{ TYPE = FUNCTION; FLAGS = extern };
@@ -38,7 +45,10 @@ SYMBOL_SCOPE {
 	topo_mod_free			{ TYPE = FUNCTION; FLAGS = extern };
 	topo_mod_nvalloc		{ TYPE = FUNCTION; FLAGS = extern };
 	topo_mod_nvdup			{ TYPE = FUNCTION; FLAGS = extern };
+	topo_mod_asprintf		{ TYPE = FUNCTION; FLAGS = extern };
+	topo_mod_vasprintf		{ TYPE = FUNCTION; FLAGS = extern };
 	topo_mod_strfree		{ TYPE = FUNCTION; FLAGS = extern };
+	topo_mod_strfreev		{ TYPE = FUNCTION; FLAGS = extern };
 	topo_mod_strdup			{ TYPE = FUNCTION; FLAGS = extern };
 
 	topo_mod_clrdebug		{ TYPE = FUNCTION; FLAGS = extern };
@@ -57,6 +67,7 @@ SYMBOL_SCOPE {
 	topo_mod_getspecific		{ TYPE = FUNCTION; FLAGS = extern };
 	topo_mod_setspecific		{ TYPE = FUNCTION; FLAGS = extern };
 	topo_mod_hcfmri			{ TYPE = FUNCTION; FLAGS = extern };
+	topo_mod_hcfmri_extend		{ TYPE = FUNCTION; FLAGS = extern };
 	topo_mod_devfmri		{ TYPE = FUNCTION; FLAGS = extern };
 	topo_mod_cpufmri		{ TYPE = FUNCTION; FLAGS = extern };
 	topo_mod_pkgfmri		{ TYPE = FUNCTION; FLAGS = extern };
@@ -64,10 +75,18 @@ SYMBOL_SCOPE {
 	topo_mod_nvl2str		{ TYPE = FUNCTION; FLAGS = extern };
 	topo_mod_str2nvl		{ TYPE = FUNCTION; FLAGS = extern };
 	topo_mod_auth			{ TYPE = FUNCTION; FLAGS = extern };
+	topo_mod_clean_str		{ TYPE = FUNCTION; FLAGS = extern };
+	topo_mod_clean_strn		{ TYPE = FUNCTION; FLAGS = extern };
+	topo_mod_hc_occupied		{ TYPE = FUNCTION; FLAGS = extern };
+	topo_mod_product		{ TYPE = FUNCTION; FLAGS = extern };
 
 	topo_mod_walk_init		{ TYPE = FUNCTION; FLAGS = extern };
 
 	topo_mod_smbios			{ TYPE = FUNCTION; FLAGS = extern };
+	topo_mod_pcidb			{ TYPE = FUNCTION; FLAGS = extern };
+
+	topo_mod_create_ufm		{ TYPE = FUNCTION; FLAGS = extern };
+	topo_mod_create_ufm_slot	{ TYPE = FUNCTION; FLAGS = extern };
 
 	topo_method_register		{ TYPE = FUNCTION; FLAGS = extern };
 	topo_method_unregister		{ TYPE = FUNCTION; FLAGS = extern };
@@ -91,4 +110,8 @@ SYMBOL_SCOPE {
 	topo_prop_set_fmri_array	{ TYPE = FUNCTION; FLAGS = extern };
 	topo_prop_inherit		{ TYPE = FUNCTION; FLAGS = extern };
 	topo_pgroup_create		{ TYPE = FUNCTION; FLAGS = extern };
+	topo_pgroup_hcset		{ TYPE = FUNCTION; FLAGS = extern };
+
+	topo_vertex_destroy		{ TYPE = FUNCTION; FLAGS = extern };
+	topo_vertex_new			{ TYPE = FUNCTION; FLAGS = extern };
 };

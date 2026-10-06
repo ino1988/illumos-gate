@@ -15,10 +15,6 @@
  * OF OR IN CONNECTION WITH THE USE OR PERFORMANCE OF THIS SOFTWARE.
  */
 
-#if !defined(LINT) && !defined(CODECENTER)
-static const char rcsid[] = "$Id: lcl_ng.c,v 1.3 2005/04/27 04:56:31 sra Exp $";
-#endif
-
 /* Imports */
 
 #include "port_before.h"
@@ -108,7 +104,7 @@ irs_lcl_ng(struct irs_acc *this) {
 	struct pvt *pvt;
 
 	UNUSED(this);
-	
+
 	if (!(ng = memget(sizeof *ng))) {
 		errno = ENOMEM;
 		return (NULL);
@@ -134,14 +130,14 @@ irs_lcl_ng(struct irs_acc *this) {
 static void
 ng_close(struct irs_ng *this) {
 	struct pvt *pvt = (struct pvt *)this->private;
-	
+
 	if (pvt->fp != NULL)
 		fclose(pvt->fp);
 	freelists(this);
 	memput(pvt, sizeof *pvt);
 	memput(this, sizeof *this);
 }
-	
+
 /*%
  * Parse the netgroup file looking for the netgroup and build the list
  * of netgrp structures. Let parse_netgrp() and read_for_group() do
@@ -150,13 +146,13 @@ ng_close(struct irs_ng *this) {
 static void
 ng_rewind(struct irs_ng *this, const char *group) {
 	struct pvt *pvt = (struct pvt *)this->private;
-	
+
 	if (pvt->fp != NULL && fseek(pvt->fp, SEEK_CUR, 0L) == -1) {
 		fclose(pvt->fp);
 		pvt->fp = NULL;
 	}
 
-	if (pvt->fp == NULL || pvt->grouphead.gr == NULL || 
+	if (pvt->fp == NULL || pvt->grouphead.gr == NULL ||
 	    strcmp(group, pvt->grouphead.grname)) {
 		freelists(this);
 		if (pvt->fp != NULL)
@@ -182,7 +178,7 @@ ng_next(struct irs_ng *this, const char **host, const char **user,
 	const char **domain)
 {
 	struct pvt *pvt = (struct pvt *)this->private;
-	
+
 	if (pvt->nextgrp) {
 		*host = pvt->nextgrp->ng_str[NG_HOST];
 		*user = pvt->nextgrp->ng_str[NG_USER];
@@ -204,9 +200,9 @@ ng_test(struct irs_ng *this, const char *name,
 
 	ng_rewind(this, name);
 	while (ng_next(this, &ng_host, &ng_user, &ng_domain))
-		if ((host == NULL || ng_host == NULL || 
+		if ((host == NULL || ng_host == NULL ||
 		     !strcmp(host, ng_host)) &&
-		    (user ==  NULL || ng_user == NULL || 
+		    (user ==  NULL || ng_user == NULL ||
 		     !strcmp(user, ng_user)) &&
 		    (domain == NULL || ng_domain == NULL ||
 		     !strcmp(domain, ng_domain))) {
@@ -317,7 +313,7 @@ parse_netgrp(struct irs_ng *this, const char *group) {
 					} else
 						len = strlen(spos);
 					if (len > 0) {
-						if(!(grp->ng_str[strpos] 
+						if(!(grp->ng_str[strpos]
 						   =  (char *)
 						   malloc(len + 1))) {
 							freelists(this);
@@ -360,7 +356,7 @@ read_for_group(struct irs_ng *this, const char *group) {
 	int len, olen, cont;
 	struct linelist *lp;
 	char line[LINSIZ + 1];
-	
+
 	while (fgets(line, LINSIZ, pvt->fp) != NULL) {
 		pos = line;
 		if (*pos == '#')
@@ -432,7 +428,7 @@ read_for_group(struct irs_ng *this, const char *group) {
 			lp->l_line = linep;
 			lp->l_next = pvt->linehead;
 			pvt->linehead = lp;
-			
+
 			/*
 			 * If this is the one we wanted, we are done.
 			 */

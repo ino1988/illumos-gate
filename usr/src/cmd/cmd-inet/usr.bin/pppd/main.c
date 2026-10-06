@@ -30,8 +30,9 @@
  * IMPLIED WARRANTIES, INCLUDING, WITHOUT LIMITATION, THE IMPLIED
  * WARRANTIES OF MERCHANTIBILITY AND FITNESS FOR A PARTICULAR PURPOSE.
  */
-
-#define RCSID	"$Id: main.c,v 1.97 2000/04/24 02:54:16 masputra Exp $"
+/*
+ * Copyright (c) 2016 by Delphix. All rights reserved.
+ */
 
 #include <stdio.h>
 #include <stdlib.h>
@@ -81,10 +82,6 @@
 #endif /* IPX_CHANGE */
 #ifdef AT_CHANGE
 #include "atcp.h"
-#endif
-
-#if !defined(lint) && !defined(_lint)
-static const char rcsid[] = RCSID;
 #endif
 
 /* interface vars */
@@ -870,7 +867,7 @@ main(argc, argv)
 	/*
 	 * If we are initiating this connection, wait for a short
 	 * time for something from the peer.  This can avoid bouncing
-	 * our packets off his tty before he has it set up.
+	 * our packets off its tty before it has set up the tty.
 	 */
 	add_fd(fd_ppp);
 	if (connect_delay != 0 && (connector != NULL || ptycommand != NULL)) {
@@ -2092,7 +2089,7 @@ run_program(prog, args, must_exist, done, arg)
 #ifdef BSD
 	/* Force the priority back to zero if pppd is running higher. */
 	if (setpriority (PRIO_PROCESS, 0, 0) < 0)
-	    warn("can't reset priority to 0: %m"); 
+	    warn("can't reset priority to 0: %m");
 #endif
 
 	/* SysV recommends a second fork at this point. */

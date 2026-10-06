@@ -22,7 +22,7 @@
 # Copyright 2009 Sun Microsystems, Inc.  All rights reserved.
 # Use is subject to license terms.
 #
-#
+# Copyright (c) 2018, Joyent, Inc.
 
 COMMONBASE = ../../common
 
@@ -37,10 +37,7 @@ $(ROOT_PROG_LINK) := FILEMODE = 0555
 
 LOCAL_OBJS = fcinfo.o fcinfo-list.o fcadm-list.o printAttrs.o fcoeadm.o
 COMMON_OBJS = cmdparse.o
-LOCAL_SRCS = $(LOCAL_OBJS:%.o=%.c)
-COMMON_SRCS = $(COMMON_OBJS:%.o=$(COMMONBASE)/cmdparse/%.c)
 OBJS = $(LOCAL_OBJS) $(COMMON_OBJS)
-SRCS =  $(LOCAL_SRCS) $(COMMON_SRCS)
 
 include ../Makefile.cmd
 
@@ -48,6 +45,9 @@ POFILE = fcinfo_cmd.po
 POFILES = fcinfo.po fcinfo-list.po fcadm-list.po printAttrs.po fcoeadm.po
 
 CERRWARN += -_gcc=-Wno-unused-variable
+
+# not linted
+SMATCH=off
 
 ROOTMANIFESTDIR=	$(ROOTSVCNETWORK)
 
@@ -62,14 +62,6 @@ INCS += -I$(SRC)/lib/libfcoe/common
 
 CPPFLAGS += -D_LARGEFILE64_SOURCE=1 -D_REENTRANT $(INCS)
 $(NOT_RELEASE_BUILD)CPPFLAGS += -DDEBUG
-
-LINTFLAGS	+= -erroff=E_SUSPICIOUS_COMPARISON
-LINTFLAGS	+= -erroff=E_SEC_SPRINTF_UNBOUNDED_COPY
-LINTFLAGS	+= -erroff=E_FUNC_RET_ALWAYS_IGNOR2
-LINTFLAGS	+= -erroff=E_BAD_PTR_CAST_ALIGN
-LINTFLAGS	+= -erroff=E_NAME_USED_NOT_DEF2
-LINTFLAGS	+= -erroff=E_FUNC_RET_MAYBE_IGNORED2
-LINTFLAGS	+= -erroff=E_STATIC_UNUSED
 
 .KEEP_STATE:
 
@@ -93,8 +85,6 @@ $(POFILE): $(POFILES)
 	$(CAT) $(POFILES) > $@
 clean:
 	$(RM) $(OBJS)
-
-lint:	lint_SRCS
 
 check:	$(CHKMANIFEST)
 

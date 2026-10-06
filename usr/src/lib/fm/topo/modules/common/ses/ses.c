@@ -22,6 +22,8 @@
 /*
  * Copyright (c) 2008, 2010, Oracle and/or its affiliates. All rights reserved.
  * Copyright 2012 Milan Jurik. All rights reserved.
+ * Copyright 2015 Nexenta Systems, Inc.  All rights reserved.
+ * Copyright 2020 Joyent, Inc.
  */
 
 #include <alloca.h>
@@ -63,6 +65,8 @@ static int ses_snap_freq = 250;		/* in milliseconds */
 	((s) == SES_ESC_UNSUPPORTED || (s) >= SES_ESC_NOT_INSTALLED)
 
 #define	HR_SECOND   1000000000
+
+#define	SES_INST_NOTSET		UINT64_MAX
 
 /*
  * Because multiple SES targets can be part of a single chassis, we construct
@@ -126,14 +130,31 @@ static const sas_connector_type_t sas_connector_type_list[] = {
 	{   0x0, "Information unknown"  },
 	{   0x1, "External SAS 4x receptacle (see SAS-2 and SFF-8470)"	},
 	{   0x2, "Exteranl Mini SAS 4x receptacle (see SAS-2 and SFF-8088)" },
+	{   0x3, "QSFP+ receptacle (see SAS-2.1 and SFF-8436)" },
+	{   0x4, "Mini SAS 4x active receptacle (see SAS-2.1 and SFF-8088)" },
+	{   0x5, "Mini SAS HD 4x receptacle (see SAS-2.1 and SFF-8644)" },
+	{   0x6, "Mini SAS HD 8x receptacle (see SAS-2.1 and SFF-8644)" },
+	{   0x7, "Mini SAS HD 16x receptacle (see SAS-2.1 and SFF-8644)" },
 	{   0xF, "Vendor-specific external connector"	},
 	{   0x10, "Internal wide SAS 4i plug (see SAS-2 and SFF-8484)"	},
 	{   0x11,
 	"Internal wide Mini SAS 4i receptacle (see SAS-2 and SFF-8087)"	},
-	{   0x20, "Internal SAS Drive receptacle (see SAS-2 and SFF-8482)"  },
-	{   0x21, "Internal SATA host plug (see SAS-2 and SATA-2)"  },
+	{   0x12, "Mini SAS HD 4i receptacle (see SAS-2.1 and SFF-8643)" },
+	{   0x20, "Internal SAS Drive receptacle (see SAS-2 and SFF-8482)" },
+	{   0x21, "Internal SATA host plug (see SAS-2 and SATA-2)"	},
 	{   0x22, "Internal SAS Drive plug (see SAS-2 and SFF-8482)"	},
 	{   0x23, "Internal SATA device plug (see SAS-2 and SATA-2)"	},
+	{   0x24, "Micro SAS receptacle (see SAS-2.14)"	},
+	{   0x25, "Micro SATA device plug (see SAS-2.1 and SATA)"	},
+	{   0x26, "Micro SAS plug (see SAS-2.1 and SFF-8486)"	},
+	{   0x27, "Micro SAS/SATA plug (see SAS-2.1 and SFF-8486)"	},
+	{   0x28,
+	"12 Gb/s SAS Drive backplane receptacle (see SAS-34 and SFF-8680)" },
+	{   0x29, "12Gb/s SAS Drive Plug (see SAS-3 and SFF-8680)"	},
+	{   0x2A, "Multifunction 12 Gb/s 6x Unshielded receptacle connector "
+		"receptacle (see SAS-3 and SFF-8639)"	},
+	{   0x2B, "Multifunction 12 Gb/s 6x Unshielded receptable connector "
+		"plug (see SAS-3 and SFF-8639)"	},
 	{   0x2F, "Internal SAS virtual connector"  },
 	{   0x3F, "Vendor-specific internal connector"	},
 	{   0x70, "Other Vendor-specific connector"	},
@@ -157,7 +178,7 @@ static const sas_connector_type_t sas_connector_type_list[] = {
 
 #define	SAS_CONNECTOR_TYPE_CODE_NOT_DEFINED  0x80
 #define	SAS_CONNECTOR_TYPE_NOT_DEFINED \
-	"Connector type not definedi by SES-2 standard"
+	"Connector type not defined by SES-2 standard"
 #define	SAS_CONNECTOR_TYPE_RESERVED \
 	"Connector type reserved by SES-2 standard"
 
@@ -207,14 +228,6 @@ typedef enum {
 	SES_DUP_SUBCHASSIS	= 0x8
 } ses_chassis_type_e;
 
-
-static const topo_pgroup_info_t storage_pgroup = {
-	TOPO_PGROUP_STORAGE,
-	TOPO_STABILITY_PRIVATE,
-	TOPO_STABILITY_PRIVATE,
-	1
-};
-
 static const topo_pgroup_info_t smp_pgroup = {
 	TOPO_PGROUP_SMP,
 	TOPO_STABILITY_PRIVATE,
@@ -245,9 +258,29 @@ static const topo_method_t ses_component_methods[] = {
 	{ NULL }
 };
 
+#define	TOPO_METH_SMCI_4U36_LABEL		"smci_4u36_bay_label"
+#define	TOPO_METH_SMCI_4U36_LABEL_DESC	\
+	"compute bay labels on SMCI 4U36 storage platform variants"
+#define	TOPO_METH_SMCI_4U36_LABEL_VERSION	0
+static int smci_4u36_bay_label(topo_mod_t *, tnode_t *, topo_version_t,
+    nvlist_t *, nvlist_t **);
+
 static const topo_method_t ses_bay_methods[] = {
 	{ TOPO_METH_FAC_ENUM, TOPO_METH_FAC_ENUM_DESC, 0,
 	    TOPO_STABILITY_INTERNAL, ses_node_enum_facility },
+	{ TOPO_METH_OCCUPIED, TOPO_METH_OCCUPIED_DESC,
+	    TOPO_METH_OCCUPIED_VERSION, TOPO_STABILITY_INTERNAL,
+	    topo_mod_hc_occupied },
+	{ TOPO_METH_SMCI_4U36_LABEL, TOPO_METH_SMCI_4U36_LABEL_DESC,
+	    TOPO_METH_SMCI_4U36_LABEL_VERSION, TOPO_STABILITY_INTERNAL,
+	    smci_4u36_bay_label },
+	{ NULL }
+};
+
+static const topo_method_t ses_recep_methods[] = {
+	{ TOPO_METH_OCCUPIED, TOPO_METH_OCCUPIED_DESC,
+	    TOPO_METH_OCCUPIED_VERSION, TOPO_STABILITY_INTERNAL,
+	    topo_mod_hc_occupied },
 	{ NULL }
 };
 
@@ -258,6 +291,39 @@ static const topo_method_t ses_enclosure_methods[] = {
 	    TOPO_STABILITY_INTERNAL, ses_enc_enum_facility },
 	{ NULL }
 };
+
+/*
+ * The bay_label_overrides table can be used to map a server product ID to a
+ * topo method that will be invoked to override the value of the label property
+ * for all bay nodes.  By default the property value is static, derived from
+ * the corresponding SES array device element's descriptor string.
+ */
+typedef struct ses_label_overrides {
+	const char *slbl_product;
+	const char *slbl_mname;
+} ses_label_overrides_t;
+
+/*
+ * This table covers three generations of SMCI's 4U 36-bay storage server
+ * (and the Joyent-branded versions).  There was also an Ivy Bridge variant
+ * which has been omitted due to an inability to find one to test on.
+ */
+static const ses_label_overrides_t bay_label_overrides[] = {
+	/* Sandy Bridge variant */
+	{ "SSG-6047R-E1R36L", TOPO_METH_SMCI_4U36_LABEL },
+	{ "Joyent-Storage-Platform-5001", TOPO_METH_SMCI_4U36_LABEL },
+
+	/* Broadwell variant */
+	{ "SSG-6048R-E1CR36L", TOPO_METH_SMCI_4U36_LABEL },
+	{ "Joyent-Storage-Platform-7001", TOPO_METH_SMCI_4U36_LABEL },
+
+	/* Skylake variant */
+	{ "SSG-6049P-E1CR36L", TOPO_METH_SMCI_4U36_LABEL },
+	{ "Joyent-S10G5", TOPO_METH_SMCI_4U36_LABEL }
+};
+
+#define	N_BAY_LBL_OVERRIDES (sizeof (bay_label_overrides) / \
+	sizeof (bay_label_overrides[0]))
 
 /*
  * Functions for tracking ses devices which we were unable to open. We retry
@@ -452,12 +518,15 @@ ses_contract_thread(void *arg)
 	ctid_t ctid;
 	struct pollfd fds;
 	int pollret;
+	sigset_t sigset;
 
 	ses_ct_print("start contract event thread");
 	efd = open64(CTFS_ROOT "/device/pbundle", O_RDONLY);
 	fds.fd = efd;
 	fds.events = POLLIN;
 	fds.revents = 0;
+	(void) sigaddset(&sigset, sesthread.thr_sig);
+	(void) pthread_sigmask(SIG_UNBLOCK, &sigset, NULL);
 	for (;;) {
 		/* check if we've been asked to exit */
 		(void) pthread_mutex_lock(&sesthread.mt);
@@ -485,7 +554,7 @@ ses_contract_thread(void *arg)
 		/* see if it is an event we are expecting */
 		ctid = ct_event_get_ctid(ev);
 		(void) snprintf(buf, sizeof (buf),
-		    "got contract event ctid=%d", ctid);
+		    "got contract event ctid=%" _PRIdID, ctid);
 		ses_ct_print(buf);
 		event = ct_event_get_type(ev);
 		if (event != CT_DEV_EV_OFFLINE && event != CT_EV_NEGEND) {
@@ -499,8 +568,8 @@ ses_contract_thread(void *arg)
 
 		/* find target pointer saved in cookie */
 		evid = ct_event_get_evid(ev);
-		(void) snprintf(path, PATH_MAX, CTFS_ROOT "/device/%ld/status",
-		    ctid);
+		(void) snprintf(path, PATH_MAX, CTFS_ROOT "/device/%" _PRIdID
+		    "/status", ctid);
 		statfd = open64(path, O_RDONLY);
 		(void) ct_status_read(statfd, CTD_COMMON, &stathdl);
 		stp = (ses_enum_target_t *)(uintptr_t)
@@ -514,7 +583,7 @@ ses_contract_thread(void *arg)
 			    "contract already abandoned %x", event);
 			ses_ct_print(buf);
 			(void) snprintf(path, PATH_MAX,
-			    CTFS_ROOT "/device/%ld/ctl", ctid);
+			    CTFS_ROOT "/device/%" _PRIdID "/ctl", ctid);
 			ctlfd = open64(path, O_WRONLY);
 			if (event != CT_EV_NEGEND)
 				(void) ct_ctl_ack(ctlfd, evid);
@@ -528,8 +597,8 @@ ses_contract_thread(void *arg)
 
 		/* find control device for ack/abandon */
 		(void) pthread_mutex_lock(&stp->set_lock);
-		(void) snprintf(path, PATH_MAX, CTFS_ROOT "/device/%ld/ctl",
-		    ctid);
+		(void) snprintf(path, PATH_MAX, CTFS_ROOT "/device/%" _PRIdID
+		    "/ctl", ctid);
 		ctlfd = open64(path, O_WRONLY);
 		if (event != CT_EV_NEGEND) {
 			/* if this is an offline event, do the offline */
@@ -546,9 +615,10 @@ ses_contract_thread(void *arg)
 			ses_ct_print("got contract negend");
 			if (stp->set_ctid) {
 				(void) snprintf(buf, sizeof (buf),
-				    "abandon old contract %d", stp->set_ctid);
+				    "abandon old contract %" _PRIdID,
+				    stp->set_ctid);
 				ses_ct_print(buf);
-				stp->set_ctid = NULL;
+				stp->set_ctid = 0;
 			}
 			(void) ct_ctl_abandon(ctlfd);
 		}
@@ -670,7 +740,7 @@ ses_create_contract(topo_mod_t *mod, ses_enum_target_t *stp)
 	int tfd, len, rval;
 	char link_path[PATH_MAX];
 
-	stp->set_ctid = NULL;
+	stp->set_ctid = 0;
 
 	/* convert "/dev" path into "/devices" path */
 	if ((len = readlink(stp->set_devpath, link_path, PATH_MAX)) < 0) {
@@ -691,7 +761,7 @@ ses_create_contract(topo_mod_t *mod, ses_enum_target_t *stp)
 	else if ((rval = ct_tmpl_create(tfd, &stp->set_ctid)) != 0)
 		topo_mod_dprintf(mod, "failed to create ctid rval = %d", rval);
 	else
-		topo_mod_dprintf(mod, "created ctid=%d", stp->set_ctid);
+		topo_mod_dprintf(mod, "created ctid=%" _PRIdID, stp->set_ctid);
 	(void) close(tfd);
 }
 
@@ -710,14 +780,15 @@ ses_target_free(topo_mod_t *mod, ses_enum_target_t *stp)
 			int ctlfd;
 			char path[PATH_MAX];
 
-			topo_mod_dprintf(mod, "abandon old contract %d",
+			topo_mod_dprintf(mod, "abandon old contract %" _PRIdID,
 			    stp->set_ctid);
 			(void) snprintf(path, PATH_MAX,
-			    CTFS_ROOT "/device/%ld/ctl", stp->set_ctid);
+			    CTFS_ROOT "/device/%" _PRIdID "/ctl",
+			    stp->set_ctid);
 			ctlfd = open64(path, O_WRONLY);
 			(void) ct_ctl_abandon(ctlfd);
 			(void) close(ctlfd);
-			stp->set_ctid = NULL;
+			stp->set_ctid = 0;
 		}
 		(void) pthread_mutex_unlock(&stp->set_lock);
 		ses_ssl_free(mod, stp);
@@ -907,7 +978,7 @@ ses_node_lock(topo_mod_t *mod, tnode_t *tn)
 		 * contract (ie we've had the offline event but not yet the
 		 * negend). If so, just return failure.
 		 */
-		if (tp->set_ctid != NULL) {
+		if (tp->set_ctid != 0) {
 			(void) topo_mod_seterrno(mod, EMOD_METHOD_NOTSUP);
 			(void) pthread_mutex_unlock(&tp->set_lock);
 			return (NULL);
@@ -1116,6 +1187,55 @@ ses_set_standard_props(topo_mod_t *mod, tnode_t *frutn, tnode_t *tn,
 }
 
 /*
+ * Iterate over the SES phy information. If any of the ports indicates that it's
+ * a SATA device and we haven't matched any disk devices yet, that means
+ * that the HBA was able to create a WWN for the SATA device based on its GUID,
+ * which is good. However, SES includes the WWN for the device's STP bridge. In
+ * theory, if the driver includes the WWN based on the SATA guid then it should
+ * also set the bridge-port property indicating the WWN that should match the
+ * SATA device.
+ */
+static int
+ses_create_disk_bridge(ses_enum_data_t *sdp, tnode_t *pnode, nvlist_t *props,
+    tnode_t **child)
+{
+	nvlist_t **phys;
+	uint_t i, n_phys;
+	topo_mod_t *mod = sdp->sed_mod;
+
+	if (nvlist_lookup_nvlist_array(props, SES_SAS_PROP_PHYS, &phys,
+	    &n_phys) != 0)
+		return (1);
+
+	for (i = 0; i < n_phys; i++) {
+		uint64_t wwn;
+		boolean_t sata;
+		char wwnstr[64];
+
+		if (nvlist_lookup_uint64(phys[i], SES_SAS_PROP_ADDR,
+		    &wwn) != 0 || wwn == 0) {
+			continue;
+		}
+
+		if (nvlist_lookup_boolean_value(phys[i],
+		    SES_SAS_PROP_SATA_DEVICE, &sata) != 0 || !sata) {
+			continue;
+		}
+
+		if (scsi_wwn_to_wwnstr(wwn, 0, wwnstr) == NULL)
+			continue;
+
+		if (disk_declare_bridge(mod, pnode, &sdp->sed_devs,
+		    wwnstr, child) == 0) {
+			return (0);
+		}
+
+	}
+
+	return (1);
+}
+
+/*
  * Callback to add a disk to a given bay.  We first check the status-code to
  * determine if a disk is present, ignoring those that aren't in an appropriate
  * state.  We then scan the parent bay node's SAS address array to determine
@@ -1136,6 +1256,9 @@ ses_create_disk(ses_enum_data_t *sdp, tnode_t *pnode, nvlist_t *props)
 
 	/*
 	 * Skip devices that are not in a present (and possibly damaged) state.
+	 * Also, skip devices that this expander is either not fully wired to,
+	 * or are hidden due to SAS zoning, as indicated by the
+	 * SES_ESC_NO_ACCESS state.
 	 */
 	if (nvlist_lookup_uint64(props, SES_PROP_STATUS_CODE, &status) != 0)
 		return (0);
@@ -1145,7 +1268,7 @@ ses_create_disk(ses_enum_data_t *sdp, tnode_t *pnode, nvlist_t *props)
 	    status != SES_ESC_CRITICAL &&
 	    status != SES_ESC_NONCRITICAL &&
 	    status != SES_ESC_UNRECOVERABLE &&
-	    status != SES_ESC_NO_ACCESS)
+	    status != SES_ESC_UNKNOWN)
 		return (0);
 
 	topo_mod_dprintf(mod, "found attached disk");
@@ -1184,8 +1307,17 @@ ses_create_disk(ses_enum_data_t *sdp, tnode_t *pnode, nvlist_t *props)
 		}
 	}
 
-	if (s == nsas)
-		(void) disk_declare_non_enumerated(mod, pnode, &child);
+	/*
+	 * We need to take another pass through the properties for this bay by
+	 * iterating over the phys and noting if any of these are SATA. Note,
+	 * this information isn't commonly part of the topo tree at this time,
+	 * hence why we end up going back and iterating over the properties
+	 * ourselves.
+	 */
+	if (s == nsas) {
+		if (ses_create_disk_bridge(sdp, pnode, props, &child) != 0)
+			(void) disk_declare_non_enumerated(mod, pnode, &child);
+	}
 
 	/* copy sas_addresses (target-ports) from parent (with 'w'added) */
 	if (child != NULL) {
@@ -1271,11 +1403,11 @@ ses_add_bay_props(topo_mod_t *mod, tnode_t *tn, ses_enum_node_t *snp)
 			    &addr) != 0)
 				continue;
 
-			len = snprintf(NULL, 0, "%016llx", addr) + 1;
+			len = snprintf(NULL, 0, "%016" PRIx64, addr) + 1;
 			if ((paths[i] = topo_mod_alloc(mod, len)) == NULL)
 				goto error;
 
-			(void) snprintf(paths[i], len, "%016llx", addr);
+			(void) snprintf(paths[i], len, "%016" PRIx64, addr);
 
 			++i;
 		}
@@ -1295,6 +1427,18 @@ error:
 	return (err);
 }
 
+static const char *
+lookup_bay_override(const char *product_id)
+{
+	for (uint_t i = 0; i < N_BAY_LBL_OVERRIDES; i++) {
+		if (strcmp(product_id,
+		    bay_label_overrides[i].slbl_product) == 0) {
+			return (bay_label_overrides[i].slbl_mname);
+		}
+	}
+	return (NULL);
+}
+
 /*
  * Callback to create a basic node (bay, psu, fan, or controller and expander).
  */
@@ -1310,7 +1454,7 @@ ses_create_generic(ses_enum_data_t *sdp, ses_enum_node_t *snp, tnode_t *pnode,
 	nvlist_t *props, *aprops;
 	nvlist_t *auth = NULL, *fmri = NULL;
 	tnode_t *tn = NULL;
-	char label[128];
+	char *clean_label = NULL, label[128];
 	int err;
 	char *part = NULL, *serial = NULL, *revision = NULL;
 	char *desc;
@@ -1321,7 +1465,7 @@ ses_create_generic(ses_enum_data_t *sdp, ses_enum_node_t *snp, tnode_t *pnode,
 	(void) nvlist_lookup_string(props, LIBSES_PROP_PART, &part);
 	(void) nvlist_lookup_string(props, LIBSES_PROP_SERIAL, &serial);
 
-	topo_mod_dprintf(mod, "adding %s %llu", nodename, instance);
+	topo_mod_dprintf(mod, "adding %s %" PRIu64, nodename, instance);
 
 	/*
 	 * Create the node.  The interesting information is all copied from the
@@ -1371,9 +1515,9 @@ ses_create_generic(ses_enum_data_t *sdp, ses_enum_node_t *snp, tnode_t *pnode,
 	/*
 	 * For the node label, we look for the following in order:
 	 *
-	 * 	<ses-description>
-	 * 	<ses-class-description> <instance>
-	 * 	<default-type-label> <instance>
+	 * <ses-description>
+	 * <ses-class-description> <instance>
+	 * <default-type-label> <instance>
 	 */
 	if (nvlist_lookup_string(props, SES_PROP_DESCRIPTION, &desc) != 0 ||
 	    desc[0] == '\0') {
@@ -1382,12 +1526,16 @@ ses_create_generic(ses_enum_data_t *sdp, ses_enum_node_t *snp, tnode_t *pnode,
 		if (nvlist_lookup_string(aprops, SES_PROP_CLASS_DESCRIPTION,
 		    &desc) != 0 || desc[0] == '\0')
 			desc = (char *)labelname;
-		(void) snprintf(label, sizeof (label), "%s %llu", desc,
+		(void) snprintf(label, sizeof (label), "%s %" PRIu64, desc,
 		    instance);
 		desc = label;
 	}
 
-	if (topo_node_label_set(tn, desc, &err) != 0)
+	if ((clean_label = topo_mod_clean_str(mod, desc)) == NULL)
+		goto error;
+
+	if (topo_prop_set_string(tn, TOPO_PGROUP_PROTOCOL, TOPO_PROP_LABEL,
+	    TOPO_PROP_MUTABLE, clean_label, &err) < 0)
 		goto error;
 
 	if (ses_set_standard_props(mod, frutn, tn, NULL, ses_node_id(np),
@@ -1395,10 +1543,11 @@ ses_create_generic(ses_enum_data_t *sdp, ses_enum_node_t *snp, tnode_t *pnode,
 		goto error;
 
 	if (strcmp(nodename, BAY) == 0) {
-		if (ses_add_bay_props(mod, tn, snp) != 0)
-			goto error;
+		const char *label_method;
+		char *product;
+		nvlist_t *args = NULL;
 
-		if (ses_create_disk(sdp, tn, props) != 0)
+		if (ses_add_bay_props(mod, tn, snp) != 0)
 			goto error;
 
 		if (topo_method_register(mod, tn, ses_bay_methods) != 0) {
@@ -1407,6 +1556,39 @@ ses_create_generic(ses_enum_data_t *sdp, ses_enum_node_t *snp, tnode_t *pnode,
 			    topo_mod_errmsg(mod));
 			goto error;
 		}
+
+		/*
+		 * Ideally we'd perform this sort of override with a platform
+		 * specific XML map file, and that would work here if we only
+		 * wanted to override the bay node label.  However, we'd also
+		 * like the disk node label (if the bay is occupied) to inherit
+		 * the overriden bay label.  So we need to ensure the
+		 * propmethod is registered before we create the child disk
+		 * node.
+		 */
+		if ((product = topo_mod_product(mod)) == NULL) {
+			(void) topo_mod_seterrno(mod, EMOD_NOMEM);
+			goto error;
+		}
+		if ((label_method = lookup_bay_override(product)) != NULL) {
+			if (topo_mod_nvalloc(mod, &args, NV_UNIQUE_NAME) != 0 ||
+			    topo_prop_method_register(tn, TOPO_PGROUP_PROTOCOL,
+			    TOPO_PROP_LABEL, TOPO_TYPE_STRING, label_method,
+			    args, &err)) {
+				topo_mod_dprintf(mod,
+				    "Failed to register method: %s on %s=%"
+				    PRIu64, label_method, BAY,
+				    topo_node_instance(tn));
+				topo_mod_strfree(mod, product);
+				nvlist_free(args);
+				goto error;
+			}
+			nvlist_free(args);
+		}
+		topo_mod_strfree(mod, product);
+
+		if (ses_create_disk(sdp, tn, props) != 0)
+			goto error;
 	} else if ((strcmp(nodename, FAN) == 0) ||
 	    (strcmp(nodename, PSU) == 0) ||
 	    (strcmp(nodename, CONTROLLER) == 0)) {
@@ -1431,12 +1613,14 @@ ses_create_generic(ses_enum_data_t *sdp, ses_enum_node_t *snp, tnode_t *pnode,
 
 	nvlist_free(auth);
 	nvlist_free(fmri);
+	topo_mod_strfree(mod, clean_label);
 	if (node != NULL) *node = tn;
 	return (0);
 
 error:
 	nvlist_free(auth);
 	nvlist_free(fmri);
+	topo_mod_strfree(mod, clean_label);
 	return (-1);
 }
 
@@ -1475,7 +1659,7 @@ ses_set_expander_props(ses_enum_data_t *sdp, ses_enum_node_t *snp,
 		goto error;
 	}
 
-	(void) sprintf(sasaddr_str, "%llx", sasaddr);
+	(void) sprintf(sasaddr_str, "%" PRIx64, sasaddr);
 
 	/* search matching dev_di_node. */
 	for (dnode = topo_list_next(&sdp->sed_devs); dnode != NULL;
@@ -1510,7 +1694,7 @@ ses_set_expander_props(ses_enum_data_t *sdp, ses_enum_node_t *snp,
 			    TOPO_PROP_SMP_TARGET_PORT, TOPO_PROP_IMMUTABLE,
 			    dnode->ddn_target_port[i], &err) != 0) {
 				topo_mod_dprintf(mod, "ses_set_expander_props: "
-				    "set %S error %s\n", TOPO_PROP_SAS_ADDR,
+				    "set %s error %s\n", TOPO_PROP_SAS_ADDR,
 				    topo_strerror(err));
 			}
 			if (topo_prop_set_string(tnode, TOPO_PGROUP_SMP,
@@ -1574,7 +1758,7 @@ ses_set_expander_props(ses_enum_data_t *sdp, ses_enum_node_t *snp,
 			    TOPO_PROP_SES_TARGET_PORT, TOPO_PROP_IMMUTABLE,
 			    sesdnode->ddn_target_port[i], &err) != 0) {
 				topo_mod_dprintf(mod, "ses_set_expander_props: "
-				    "set ses %S error %s\n", TOPO_PROP_SAS_ADDR,
+				    "set ses %s error %s\n", TOPO_PROP_SAS_ADDR,
 				    topo_strerror(err));
 			}
 			if (topo_prop_set_string(tnode, TOPO_PGROUP_SES,
@@ -1615,7 +1799,7 @@ ses_set_expander_props(ses_enum_data_t *sdp, ses_enum_node_t *snp,
 		    TOPO_PROP_SAS_ADDR, TOPO_PROP_IMMUTABLE, sasaddr_str,
 		    &err) != 0) {
 			topo_mod_dprintf(mod, "ses_set_expander_props: "
-			    "set %S error %s\n", TOPO_PROP_SAS_ADDR,
+			    "set %s error %s\n", TOPO_PROP_SAS_ADDR,
 			    topo_strerror(err));
 		}
 
@@ -1649,7 +1833,7 @@ ses_set_expander_props(ses_enum_data_t *sdp, ses_enum_node_t *snp,
 			    TOPO_PROP_PHY_COUNT, TOPO_PROP_IMMUTABLE, pcount,
 			    &err) != 0) {
 				topo_mod_dprintf(mod, "ses_set_expander_props: "
-				    "set %S error %s\n", TOPO_PROP_PHY_COUNT,
+				    "set %s error %s\n", TOPO_PROP_PHY_COUNT,
 				    topo_strerror(err));
 			}
 
@@ -1724,7 +1908,7 @@ ses_set_connector_props(ses_enum_data_t *sdp, ses_enum_node_t *snp,
 	/*
 	 * convert phy mask to string.
 	 */
-	(void) snprintf(phymask_str, 17, "%llx", phy_mask);
+	(void) snprintf(phymask_str, 17, "%" PRIx64, phy_mask);
 
 	/* create the storage group */
 	if (topo_pgroup_create(tnode, &storage_pgroup, &err) != 0) {
@@ -1737,7 +1921,7 @@ ses_set_connector_props(ses_enum_data_t *sdp, ses_enum_node_t *snp,
 		    TOPO_STORAGE_SAS_PHY_MASK, TOPO_PROP_IMMUTABLE,
 		    phymask_str, &err) != 0) {
 			topo_mod_dprintf(mod, "ses_set_expander_props: "
-			    "set %S error %s\n", TOPO_STORAGE_SAS_PHY_MASK,
+			    "set %s error %s\n", TOPO_STORAGE_SAS_PHY_MASK,
 			    topo_strerror(err));
 		}
 
@@ -1778,7 +1962,7 @@ ses_set_connector_props(ses_enum_data_t *sdp, ses_enum_node_t *snp,
 			    TOPO_STORAGE_SAS_CONNECTOR_TYPE,
 			    TOPO_PROP_IMMUTABLE, conntype_str, &err) != 0) {
 				topo_mod_dprintf(mod, "ses_set_expander_props: "
-				    "set %S error %s\n", TOPO_PROP_PHY_COUNT,
+				    "set %s error %s\n", TOPO_PROP_PHY_COUNT,
 				    topo_strerror(err));
 			}
 		}
@@ -1800,13 +1984,13 @@ ses_create_esc_sasspecific(ses_enum_data_t *sdp, ses_enum_node_t *snp,
 	topo_mod_t *mod = sdp->sed_mod;
 	tnode_t	*exptn, *contn;
 	boolean_t found;
-	sas_connector_phy_data_t connectors[64] = {NULL};
+	sas_connector_phy_data_t connectors[64] = {0};
 	uint64_t max;
 	ses_enum_node_t *ctlsnp, *xsnp, *consnp;
 	ses_node_t *np = snp->sen_node;
 	nvlist_t *props, *psprops;
 	uint64_t index, psindex, conindex, psstatus, i, j, count;
-	int64_t cidxlist[256] = {NULL};
+	int64_t cidxlist[256] = {0};
 	int phycount;
 
 	props = ses_node_props(np);
@@ -1836,8 +2020,8 @@ ses_create_esc_sasspecific(ses_enum_data_t *sdp, ses_enum_node_t *snp,
 	if (!found)
 		return (0);
 
-	topo_mod_dprintf(mod, "%s Controller %d: creating "
-	    "%llu %s nodes", cp->sec_csn, index, max + 1, SASEXPANDER);
+	topo_mod_dprintf(mod, "%s Controller %" PRIu64 ": creating "
+	    "%" PRIu64 " %s nodes", cp->sec_csn, index, max + 1, SASEXPANDER);
 
 	/*
 	 * The max number represent the number of elements
@@ -2044,6 +2228,15 @@ ses_create_esc_sasspecific(ses_enum_data_t *sdp, ses_enum_node_t *snp,
 				    contn, connectors[i].scpd_pm) != 0) {
 					continue;
 				}
+				if (topo_method_register(mod, contn,
+				    ses_recep_methods) != 0) {
+					topo_mod_dprintf(mod,
+					    "topo_method_register() failed: "
+					    "%s",
+					    topo_mod_errmsg(mod));
+					continue;
+				}
+
 			}
 		}
 		/* end indentation change */
@@ -2111,7 +2304,7 @@ ses_create_children(ses_enum_data_t *sdp, tnode_t *pnode, uint64_t type,
 	    (type == SES_ET_ARRAY_DEVICE && cp->sec_hasdev))
 		return (0);
 
-	topo_mod_dprintf(mod, "%s: creating %llu %s nodes",
+	topo_mod_dprintf(mod, "%s: creating %" PRIu64 " %s nodes",
 	    cp->sec_csn, max + 1, nodename);
 
 	if (dorange && topo_node_range_create(mod, pnode,
@@ -2168,7 +2361,7 @@ ses_create_subchassis(ses_enum_data_t *sdp, tnode_t *pnode,
 	nvlist_t *auth = NULL, *fmri = NULL;
 	uint64_t instance = scp->sec_instance;
 	char *desc;
-	char label[128];
+	char *clean_label = NULL, label[128];
 	char **paths;
 	int i, err;
 	ses_enum_target_t *stp;
@@ -2215,15 +2408,19 @@ ses_create_subchassis(ses_enum_data_t *sdp, tnode_t *pnode,
 	    desc[0] == '\0') {
 		if (nvlist_lookup_string(props, SES_PROP_CLASS_DESCRIPTION,
 		    &desc) == 0 && desc[0] != '\0')
-			(void) snprintf(label, sizeof (label), "%s %llu", desc,
-			    instance);
+			(void) snprintf(label, sizeof (label), "%s %" PRIu64,
+			    desc, instance);
 		else
 			(void) snprintf(label, sizeof (label),
-			    "SUBCHASSIS %llu", instance);
+			    "SUBCHASSIS %" PRIu64, instance);
 		desc = label;
 	}
 
-	if (topo_node_label_set(tn, desc, &err) != 0)
+	if ((clean_label = topo_mod_clean_str(mod, desc)) == NULL)
+		goto error;
+
+	if (topo_prop_set_string(tn, TOPO_PGROUP_PROTOCOL, TOPO_PROP_LABEL,
+	    TOPO_PROP_MUTABLE, clean_label, &err) < 0)
 		goto error;
 
 	if (ses_set_standard_props(mod, NULL, tn, NULL,
@@ -2289,6 +2486,7 @@ ses_create_subchassis(ses_enum_data_t *sdp, tnode_t *pnode,
 error:
 	nvlist_free(auth);
 	nvlist_free(fmri);
+	topo_mod_strfree(mod, clean_label);
 	return (ret);
 }
 
@@ -2413,8 +2611,8 @@ ses_construct_phys_tree(ses_enum_data_t *sdp, ses_enum_chassis_t *cp,
 			 */
 			topo_mod_dprintf(mod,
 			    "ses_construct_phys_tree(): Failed to find prop %s "
-			    "on ses element type %d and instance %d "
-			    "(CSN %s).", LIBSES_PROP_PHYS_PARENT,
+			    "on ses element type %" PRIu64 " and instance %"
+			    PRIu64 " (CSN %s).", LIBSES_PROP_PHYS_PARENT,
 			    snp->sen_type, snp->sen_instance, cp->sec_csn);
 			topo_mod_free(mod, child, sizeof (ses_phys_tree_t));
 			continue;
@@ -2423,8 +2621,8 @@ ses_construct_phys_tree(ses_enum_data_t *sdp, ses_enum_chassis_t *cp,
 			    LIBSES_PROP_FRU, &child->spt_isfru) != 0) {
 				topo_mod_dprintf(mod,
 				    "ses_construct_phys_tree(): Failed to "
-				    "find prop %s on ses element type %d "
-				    "and instance %d (CSN %s).",
+				    "find prop %s on ses element type %" PRIu64
+				    " and instance %" PRIu64 " (CSN %s).",
 				    LIBSES_PROP_FRU,
 				    snp->sen_type, snp->sen_instance,
 				    cp->sec_csn);
@@ -2521,8 +2719,8 @@ ses_construct_phys_tree(ses_enum_data_t *sdp, ses_enum_chassis_t *cp,
 		while (u_head) {
 			u_tail = u_head->spt_sibling;
 			topo_mod_dprintf(mod,
-			    "\telement type (%d) and instance (%d)",
-			    u_head->spt_senumnode->sen_type,
+			    "\telement type (%" PRIu64 ") and instance (%"
+			    PRIu64 ")", u_head->spt_senumnode->sen_type,
 			    u_head->spt_senumnode->sen_instance);
 			topo_mod_free(mod, u_head, sizeof (ses_phys_tree_t));
 			u_head = u_tail;
@@ -2756,9 +2954,9 @@ ses_create_chassis(ses_enum_data_t *sdp, tnode_t *pnode, ses_enum_chassis_t *cp)
 	/*
 	 * We use the following property mappings:
 	 *
-	 * 	manufacturer		vendor-id
-	 * 	model			product-id
-	 * 	serial-number		libses-chassis-serial
+	 * manufacturer		vendor-id
+	 * model		product-id
+	 * serial-number	libses-chassis-serial
 	 */
 	verify(nvlist_lookup_string(props, SES_EN_PROP_VID,
 	    &raw_manufacturer) == 0);
@@ -2773,9 +2971,9 @@ ses_create_chassis(ses_enum_data_t *sdp, tnode_t *pnode, ses_enum_chassis_t *cp)
 	 * 'product-id', we use a concatenation of 'manufacturer-model'.  We
 	 * also take the numerical serial number and convert it to a string.
 	 */
-	if ((manufacturer = disk_auth_clean(mod, raw_manufacturer)) == NULL ||
-	    (model = disk_auth_clean(mod, raw_model)) == NULL ||
-	    (revision = disk_auth_clean(mod, raw_revision)) == NULL) {
+	if ((manufacturer = topo_mod_clean_str(mod, raw_manufacturer)) ==
+	    NULL || (model = topo_mod_clean_str(mod, raw_model)) == NULL ||
+	    (revision = topo_mod_clean_str(mod, raw_revision)) == NULL) {
 		goto error;
 	}
 
@@ -2944,7 +3142,7 @@ ses_create_chassis(ses_enum_data_t *sdp, tnode_t *pnode, ses_enum_chassis_t *cp)
 			goto error;
 	}
 
-	if (cp->sec_maxinstance >= 0 &&
+	if (cp->sec_maxinstance != SES_INST_NOTSET &&
 	    (topo_node_range_create(mod, tn, SUBCHASSIS, 0,
 	    cp->sec_maxinstance) != 0)) {
 		topo_mod_dprintf(mod, "topo_node_create_range() failed: %s",
@@ -2959,14 +3157,14 @@ ses_create_chassis(ses_enum_data_t *sdp, tnode_t *pnode, ses_enum_chassis_t *cp)
 			goto error;
 
 		topo_mod_dprintf(mod, "created Subchassis node with "
-		    "instance %u\nand target (%s) under Chassis with CSN %s",
-		    scp->sec_instance, scp->sec_target->set_devpath,
-		    cp->sec_csn);
+		    "instance %" PRIu64 "\nand target (%s) under Chassis "
+		    "with CSN %s", scp->sec_instance,
+		    scp->sec_target->set_devpath, cp->sec_csn);
 
 		sc_count++;
 	}
 
-	topo_mod_dprintf(mod, "%s: created %llu %s nodes",
+	topo_mod_dprintf(mod, "%s: created %" PRIu64 " %s nodes",
 	    cp->sec_csn, sc_count, SUBCHASSIS);
 
 	cp->sec_target->set_refcount++;
@@ -3038,8 +3236,8 @@ ses_init_chassis(topo_mod_t *mod, ses_enum_data_t *sdp, ses_enum_chassis_t *pcp,
 	if (flags & (SES_NEW_SUBCHASSIS | SES_DUP_SUBCHASSIS))
 		assert(pcp != NULL);
 
-	topo_mod_dprintf(mod, "ses_init_chassis: %s: index %llu, flags (%d)",
-	    sdp->sed_name, subchassis, flags);
+	topo_mod_dprintf(mod, "ses_init_chassis: %s: index %" PRIu64
+	    ", flags (%d)", sdp->sed_name, subchassis, flags);
 
 	if (flags & (SES_NEW_CHASSIS | SES_NEW_SUBCHASSIS)) {
 
@@ -3125,7 +3323,7 @@ ses_enum_gather(ses_node_t *np, void *data)
 		    &subchassis);
 
 		topo_mod_dprintf(mod, "ses_enum_gather: Enclosure Node (%s) "
-		    "CSN (%s), subchassis (%llu)", sdp->sed_name, csn,
+		    "CSN (%s), subchassis (%" PRIu64 ")", sdp->sed_name, csn,
 		    subchassis);
 
 		/*
@@ -3168,7 +3366,7 @@ ses_enum_gather(ses_node_t *np, void *data)
 				goto error;
 
 			cp->sec_scinstance = SES_STARTING_SUBCHASSIS;
-			cp->sec_maxinstance = -1;
+			cp->sec_maxinstance = SES_INST_NOTSET;
 			cp->sec_csn = csn;
 
 			if (subchassis == NO_SUBCHASSIS) {
@@ -3185,7 +3383,7 @@ ses_enum_gather(ses_node_t *np, void *data)
 				/* 1.2 This is a new subchassis */
 
 				topo_mod_dprintf(mod, "%s: Initialize new "
-				    "subchassis with CSN %s and index %llu",
+				    "subchassis with CSN %s and index %" PRIu64,
 				    sdp->sed_name, csn, subchassis);
 
 				if ((scp = topo_mod_zalloc(mod,
@@ -3245,8 +3443,7 @@ ses_enum_gather(ses_node_t *np, void *data)
 					/* 2.3 This is a new subchassis */
 
 					topo_mod_dprintf(mod, "%s: Initialize "
-					    "new subchassis with CSN (%s) "
-					    "and LID (%s)",
+					    "new subchassis with CSN (%s)",
 					    sdp->sed_name, csn);
 
 					if ((scp = topo_mod_zalloc(mod,
@@ -3373,8 +3570,8 @@ ses_enum_gather(ses_node_t *np, void *data)
 			goto error;
 		}
 
-		topo_mod_dprintf(mod, "%s: adding node (%llu, %llu)",
-		    sdp->sed_name, type, instance);
+		topo_mod_dprintf(mod, "%s: adding node (%" PRIu64
+		    ", %" PRIu64 ")", sdp->sed_name, type, instance);
 		snp->sen_node = np;
 		snp->sen_type = type;
 		snp->sen_instance = instance;
@@ -3481,6 +3678,92 @@ error:
 	return (err);
 }
 
+/*
+ * Different generations of SMCI's 4U36 storage servers used different models
+ * of front and rear SAS expanders.
+ */
+#define	SMCI4U36_FRONT_EXPANDER_PID1	"LSI-SAS2X36"
+#define	SMCI4U36_FRONT_EXPANDER_PID2	"LSI-SAS3x40"
+#define	SMCI4U36_FRONT_EXPANDER_PID3	"SMC-SC846P"
+
+#define	SMCI4U36_REAR_EXPANDER_PID1	"LSI-CORP-SAS2X28"
+#define	SMCI4U36_REAR_EXPANDER_PID2	"LSI-SAS3x28"
+
+static int
+smci_4u36_bay_label(topo_mod_t *mod, tnode_t *node, topo_version_t version,
+    nvlist_t *in, nvlist_t **out)
+{
+	int err, ret = -1;
+	nvlist_t *pargs, *auth, *nvl = NULL, *fmri;
+	char *label = NULL, *product_id;
+
+	/*
+	 * Now look for a private argument list to determine if the invoker is
+	 * trying to do a set operation and if so, return an error as this
+	 * method only supports get operations.
+	 */
+	if ((nvlist_lookup_nvlist(in, TOPO_PROP_PARGS, &pargs) == 0) &&
+	    nvlist_exists(pargs, TOPO_PROP_VAL_VAL)) {
+		topo_mod_dprintf(mod, "%s: set operation not suppported",
+		    __func__);
+		return (topo_mod_seterrno(mod, EMOD_NVL_INVAL));
+	}
+
+	if (topo_node_resource(node, &fmri, &err) != 0) {
+		(void) topo_mod_seterrno(mod, err);
+		goto err;
+	}
+
+	if (nvlist_lookup_nvlist(fmri, FM_FMRI_AUTHORITY, &auth) != 0 ||
+	    nvlist_lookup_string(auth, FM_FMRI_AUTH_PRODUCT, &product_id) !=
+	    0) {
+		topo_mod_dprintf(mod, "%s: malformed FMRI", __func__);
+		(void) topo_mod_seterrno(mod, EMOD_UNKNOWN);
+		nvlist_free(fmri);
+		goto err;
+	}
+	nvlist_free(fmri);
+
+	if (strcmp(product_id, SMCI4U36_FRONT_EXPANDER_PID1) == 0 ||
+	    strcmp(product_id, SMCI4U36_FRONT_EXPANDER_PID2) == 0 ||
+	    strcmp(product_id, SMCI4U36_FRONT_EXPANDER_PID3) == 0) {
+		err = asprintf(&label, "Front Slot %" PRIu64,
+		    topo_node_instance(node));
+	} else if (strcmp(product_id, SMCI4U36_REAR_EXPANDER_PID1) == 0 ||
+	    strcmp(product_id, SMCI4U36_REAR_EXPANDER_PID2) == 0) {
+		err = asprintf(&label, "Rear Slot %" PRIu64,
+		    topo_node_instance(node));
+	} else {
+		topo_mod_dprintf(mod, "%s: unexpected expander product id: %s",
+		    __func__, product_id);
+		(void) topo_mod_seterrno(mod, EMOD_UNKNOWN);
+		goto err;
+	}
+
+	if (err < 0) {
+		(void) topo_mod_seterrno(mod, EMOD_NOMEM);
+		goto err;
+	}
+
+	if (topo_mod_nvalloc(mod, &nvl, NV_UNIQUE_NAME) != 0 ||
+	    nvlist_add_string(nvl, TOPO_PROP_VAL_NAME, TOPO_PROP_LABEL) != 0 ||
+	    nvlist_add_uint32(nvl, TOPO_PROP_VAL_TYPE, TOPO_TYPE_STRING)
+	    != 0 ||
+	    nvlist_add_string(nvl, TOPO_PROP_VAL_VAL, label)
+	    != 0) {
+		topo_mod_dprintf(mod, "Failed to allocate 'out' nvlist");
+		nvlist_free(nvl);
+		(void) topo_mod_seterrno(mod, EMOD_NOMEM);
+		goto err;
+	}
+	*out = nvl;
+	ret = 0;
+err:
+	free(label);
+	return (ret);
+
+}
+
 static void
 ses_release(topo_mod_t *mod, tnode_t *tn)
 {
@@ -3524,7 +3807,7 @@ ses_enum(topo_mod_t *mod, tnode_t *rnode, const char *name,
 			goto error;
 
 		/*
-		 * We search both the ses(7D) and sgen(7D) locations, so we are
+		 * We search both the ses(4D) and sgen(4D) locations, so we are
 		 * independent of any particular driver class bindings.
 		 */
 		if (ses_process_dir("/dev/es", data) != 0 ||

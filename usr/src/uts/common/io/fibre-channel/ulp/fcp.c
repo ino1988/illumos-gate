@@ -24,6 +24,10 @@
  * Fibre Channel SCSI ULP Mapping driver
  */
 
+/*
+ * Copyright 2023 Oxide Computer Company
+ */
+
 #include <sys/scsi/scsi.h>
 #include <sys/types.h>
 #include <sys/varargs.h>
@@ -531,9 +535,9 @@ static dev_info_t *fcp_create_dip(struct fcp_lun *plun, int link_cnt,
 static dev_info_t *fcp_find_existing_dip(struct fcp_lun *plun,
     dev_info_t *pdip, caddr_t name);
 static int fcp_online_child(struct fcp_lun *plun, child_info_t *cip,
-    int lcount, int tcount, int flags, int *circ);
+    int lcount, int tcount, int flags);
 static int fcp_offline_child(struct fcp_lun *plun, child_info_t *cip,
-    int lcount, int tcount, int flags, int *circ);
+    int lcount, int tcount, int flags);
 static void fcp_remove_child(struct fcp_lun *plun);
 static void fcp_watch(void *arg);
 static void fcp_check_reset_delay(struct fcp_port *pptr);
@@ -3718,7 +3722,8 @@ fcp_port_ioctl(opaque_t ulph, opaque_t port_handle, dev_t dev, int cmd,
 	mdi_pathinfo_t		*pip = NULL;
 	char			*ndi_nm;		/* NDI name */
 	char			*ndi_addr;		/* NDI addr */
-	int			is_mpxio, circ;
+	int			is_mpxio;
+	boolean_t		enteredv;
 	int			devi_entered = 0;
 	clock_t			end_time;
 
@@ -3786,9 +3791,9 @@ fcp_port_ioctl(opaque_t ulph, opaque_t port_handle, dev_t dev, int cmd,
 		/* get our child's DIP */
 		ASSERT(pptr != NULL);
 		if (is_mpxio) {
-			mdi_devi_enter(pptr->port_dip, &circ);
+			mdi_devi_enter(pptr->port_dip, &enteredv);
 		} else {
-			ndi_devi_enter(pptr->port_dip, &circ);
+			ndi_devi_enter(pptr->port_dip);
 		}
 		devi_entered = 1;
 
@@ -3869,9 +3874,9 @@ fcp_port_ioctl(opaque_t ulph, opaque_t port_handle, dev_t dev, int cmd,
 		}
 
 		if (is_mpxio) {
-			mdi_devi_exit(pptr->port_dip, circ);
+			mdi_devi_exit(pptr->port_dip, enteredv);
 		} else {
-			ndi_devi_exit(pptr->port_dip, circ);
+			ndi_devi_exit(pptr->port_dip);
 		}
 		devi_entered = 0;
 
@@ -3946,9 +3951,9 @@ fcp_port_ioctl(opaque_t ulph, opaque_t port_handle, dev_t dev, int cmd,
 		mutex_exit(&LUN_TGT->tgt_mutex);
 
 		if (is_mpxio) {
-			mdi_devi_exit(pptr->port_dip, circ);
+			mdi_devi_exit(pptr->port_dip, enteredv);
 		} else {
-			ndi_devi_exit(pptr->port_dip, circ);
+			ndi_devi_exit(pptr->port_dip);
 		}
 		devi_entered = 0;
 
@@ -4194,9 +4199,9 @@ fcp_port_ioctl(opaque_t ulph, opaque_t port_handle, dev_t dev, int cmd,
 	/* all done -- clean up and return */
 out:	if (devi_entered) {
 		if (is_mpxio) {
-			mdi_devi_exit(pptr->port_dip, circ);
+			mdi_devi_exit(pptr->port_dip, enteredv);
 		} else {
-			ndi_devi_exit(pptr->port_dip, circ);
+			ndi_devi_exit(pptr->port_dip);
 		}
 	}
 
@@ -8147,7 +8152,7 @@ fcp_trigger_lun(struct fcp_lun *plun, child_info_t *cip, int old_mpxio,
     int online, int lcount, int tcount, int flags)
 {
 	int			rval = NDI_FAILURE;
-	int			circ;
+	boolean_t		enteredv;
 	child_info_t		*ccip;
 	struct fcp_port		*pptr = plun->lun_tgt->tgt_port;
 	int			is_mpxio = pptr->port_mpxio;
@@ -8217,30 +8222,16 @@ fcp_trigger_lun(struct fcp_lun *plun, child_info_t *cip, int old_mpxio,
 			if (i_ddi_devi_attached(cdip)) {
 				pdip = ddi_get_parent(cdip);
 				devname = kmem_alloc(MAXNAMELEN + 1, KM_SLEEP);
-				ndi_devi_enter(pdip, &circ);
+				ndi_devi_enter(pdip);
 				(void) ddi_deviname(cdip, devname);
-				ndi_devi_exit(pdip, circ);
 				/*
 				 * Release parent lock before calling
 				 * devfs_clean().
 				 */
-				rval = devfs_clean(pdip, devname + 1,
+				ndi_devi_exit(pdip);
+				(void) devfs_clean(pdip, devname + 1,
 				    DV_CLEAN_FORCE);
 				kmem_free(devname, MAXNAMELEN + 1);
-				/*
-				 * Return if devfs_clean() fails for
-				 * non-MPXIO case.
-				 * For MPXIO case, another path could be
-				 * offlined.
-				 */
-				if (rval && plun->lun_mpxio == 0) {
-					FCP_TRACE(fcp_logq, pptr->port_instbuf,
-					    fcp_trace, FCP_BUF_LEVEL_3, 0,
-					    "fcp_trigger_lun: devfs_clean "
-					    "failed rval=%x  dip=%p",
-					    rval, pdip);
-					return (NDI_FAILURE);
-				}
 			}
 		}
 	}
@@ -8250,9 +8241,9 @@ fcp_trigger_lun(struct fcp_lun *plun, child_info_t *cip, int old_mpxio,
 	}
 
 	if (is_mpxio) {
-		mdi_devi_enter(pptr->port_dip, &circ);
+		mdi_devi_enter(pptr->port_dip, &enteredv);
 	} else {
-		ndi_devi_enter(pptr->port_dip, &circ);
+		ndi_devi_enter(pptr->port_dip);
 	}
 
 	mutex_enter(&pptr->port_mutex);
@@ -8271,13 +8262,11 @@ fcp_trigger_lun(struct fcp_lun *plun, child_info_t *cip, int old_mpxio,
 	}
 
 	if (online == FCP_ONLINE) {
-		rval = fcp_online_child(plun, ccip, lcount, tcount, flags,
-		    &circ);
+		rval = fcp_online_child(plun, ccip, lcount, tcount, flags);
 		fc_ulp_log_device_event(pptr->port_fp_handle,
 		    FC_ULP_DEVICE_ONLINE);
 	} else {
-		rval = fcp_offline_child(plun, ccip, lcount, tcount, flags,
-		    &circ);
+		rval = fcp_offline_child(plun, ccip, lcount, tcount, flags);
 		fc_ulp_log_device_event(pptr->port_fp_handle,
 		    FC_ULP_DEVICE_OFFLINE);
 	}
@@ -8286,9 +8275,9 @@ fail:	mutex_exit(&plun->lun_mutex);
 	mutex_exit(&pptr->port_mutex);
 
 	if (is_mpxio) {
-		mdi_devi_exit(pptr->port_dip, circ);
+		mdi_devi_exit(pptr->port_dip, enteredv);
 	} else {
-		ndi_devi_exit(pptr->port_dip, circ);
+		ndi_devi_exit(pptr->port_dip);
 	}
 
 	fc_ulp_idle_port(pptr->port_fp_handle);
@@ -12450,7 +12439,6 @@ fcp_is_dip_present(struct fcp_lun *plun, dev_info_t *cdip)
 	int		rval = FC_FAILURE;
 	dev_info_t	*pdip;
 	struct dev_info	*dip;
-	int		circular;
 
 	ASSERT(MUTEX_HELD(&plun->lun_mutex));
 
@@ -12465,7 +12453,7 @@ fcp_is_dip_present(struct fcp_lun *plun, dev_info_t *cdip)
 		    plun->lun_tgt->tgt_port->port_state);
 		return (rval);
 	}
-	ndi_devi_enter(pdip, &circular);
+	ndi_devi_enter(pdip);
 	dip = DEVI(pdip)->devi_child;
 	while (dip) {
 		if (dip == DEVI(cdip)) {
@@ -12474,7 +12462,7 @@ fcp_is_dip_present(struct fcp_lun *plun, dev_info_t *cdip)
 		}
 		dip = dip->devi_sibling;
 	}
-	ndi_devi_exit(pdip, circular);
+	ndi_devi_exit(pdip);
 	return (rval);
 }
 
@@ -12927,9 +12915,8 @@ fcp_find_existing_dip(struct fcp_lun *plun, dev_info_t *pdip, caddr_t name)
 	dev_info_t		*ndip;
 	struct fcp_tgt	*ptgt = plun->lun_tgt;
 	struct fcp_port	*pptr = ptgt->tgt_port;
-	int			circular;
 
-	ndi_devi_enter(pdip, &circular);
+	ndi_devi_enter(pdip);
 
 	ndip = (dev_info_t *)DEVI(pdip)->devi_child;
 	while ((cdip = ndip) != NULL) {
@@ -13035,7 +13022,7 @@ fcp_find_existing_dip(struct fcp_lun *plun, dev_info_t *pdip, caddr_t name)
 		}
 		ddi_prop_free(words);
 	}
-	ndi_devi_exit(pdip, circular);
+	ndi_devi_exit(pdip);
 
 	return (cdip);
 }
@@ -13118,7 +13105,7 @@ fcp_find_existing_pip(struct fcp_lun *plun, dev_info_t *pdip)
 
 static int
 fcp_online_child(struct fcp_lun *plun, child_info_t *cip, int lcount,
-    int tcount, int flags, int *circ)
+    int tcount, int flags)
 {
 	int			rval;
 	struct fcp_port		*pptr = plun->lun_tgt->tgt_port;
@@ -13203,11 +13190,11 @@ again:
 		 * management code during mdi_pi_online.
 		 */
 		mdi_hold_path(PIP(cip));
-		mdi_devi_exit_phci(pptr->port_dip, *circ);
+		mdi_devi_exit_phci(pptr->port_dip);
 
 		rval = mdi_pi_online(PIP(cip), flags);
 
-		mdi_devi_enter_phci(pptr->port_dip, circ);
+		mdi_devi_enter_phci(pptr->port_dip);
 		mdi_rele_path(PIP(cip));
 
 		if (rval == MDI_SUCCESS) {
@@ -13295,7 +13282,7 @@ again:
 /* ARGSUSED */
 static int
 fcp_offline_child(struct fcp_lun *plun, child_info_t *cip, int lcount,
-    int tcount, int flags, int *circ)
+    int tcount, int flags)
 {
 	int		rval;
 	int		lun_mpxio;
@@ -13343,11 +13330,11 @@ fcp_offline_child(struct fcp_lun *plun, child_info_t *cip, int lcount,
 		 * during mdi_pi_offline
 		 */
 		mdi_hold_path(PIP(cip));
-		mdi_devi_exit_phci(pptr->port_dip, *circ);
+		mdi_devi_exit_phci(pptr->port_dip);
 
 		rval = mdi_pi_offline(PIP(cip), flags);
 
-		mdi_devi_enter_phci(pptr->port_dip, circ);
+		mdi_devi_enter_phci(pptr->port_dip);
 		mdi_rele_path(PIP(cip));
 
 		rval = (rval == MDI_SUCCESS) ? NDI_SUCCESS : NDI_FAILURE;
@@ -13421,7 +13408,7 @@ static void
 fcp_remove_child(struct fcp_lun *plun)
 {
 	child_info_t *cip;
-	int circ;
+	boolean_t enteredv;
 
 	ASSERT(MUTEX_HELD(&plun->lun_mutex));
 
@@ -13446,7 +13433,7 @@ fcp_remove_child(struct fcp_lun *plun)
 			mutex_exit(&plun->lun_tgt->tgt_port->port_mutex);
 
 			mdi_devi_enter(
-			    plun->lun_tgt->tgt_port->port_dip, &circ);
+			    plun->lun_tgt->tgt_port->port_dip, &enteredv);
 
 			/*
 			 * Exit phci to avoid deadlock with power management
@@ -13454,15 +13441,15 @@ fcp_remove_child(struct fcp_lun *plun)
 			 */
 			mdi_hold_path(PIP(cip));
 			mdi_devi_exit_phci(
-			    plun->lun_tgt->tgt_port->port_dip, circ);
+			    plun->lun_tgt->tgt_port->port_dip);
 			(void) mdi_pi_offline(PIP(cip),
 			    NDI_DEVI_REMOVE);
 			mdi_devi_enter_phci(
-			    plun->lun_tgt->tgt_port->port_dip, &circ);
+			    plun->lun_tgt->tgt_port->port_dip);
 			mdi_rele_path(PIP(cip));
 
 			mdi_devi_exit(
-			    plun->lun_tgt->tgt_port->port_dip, circ);
+			    plun->lun_tgt->tgt_port->port_dip, enteredv);
 
 			FCP_TRACE(fcp_logq,
 			    plun->lun_tgt->tgt_port->port_instbuf,
@@ -14472,7 +14459,7 @@ fcp_pass_to_hp(struct fcp_port *pptr, struct fcp_lun *plun,
 	}
 	mutex_exit(&plun->lun_mutex);
 	if (taskq_dispatch(DEVI(pdip)->devi_taskq, fcp_hp_task,
-	    (void *)elem, KM_NOSLEEP) == NULL) {
+	    (void *)elem, KM_NOSLEEP) == TASKQID_INVALID) {
 		mutex_enter(&plun->lun_mutex);
 		if (elem->what == FCP_ONLINE || elem->what == FCP_OFFLINE) {
 			plun->lun_event_count--;
@@ -14595,7 +14582,7 @@ fcp_fail_cmd(struct fcp_pkt *cmd, uchar_t reason, uint_t statistics)
 static void
 fcp_queue_pkt(struct fcp_port *pptr, struct fcp_pkt *cmd)
 {
-	ASSERT((cmd->cmd_pkt->pkt_flags & FLAG_NOQUEUE) == NULL);
+	ASSERT((cmd->cmd_pkt->pkt_flags & FLAG_NOQUEUE) == 0);
 
 	mutex_enter(&pptr->port_pkt_mutex);
 	cmd->cmd_flags |= CFLAG_IN_QUEUE;
@@ -15653,7 +15640,8 @@ fcp_update_mpxio_path(struct fcp_lun *plun, child_info_t *cip, int what)
  * will be returned.
  */
 static char *
-fcp_get_lun_path(struct fcp_lun *plun) {
+fcp_get_lun_path(struct fcp_lun *plun)
+{
 	dev_info_t	*dip = NULL;
 	char		*path = NULL;
 	mdi_pathinfo_t	*pip = NULL;
@@ -15928,7 +15916,8 @@ fcp_reconfig_wait(struct fcp_port *pptr)
  */
 static void
 fcp_read_blacklist(dev_info_t *dip,
-    struct fcp_black_list_entry **pplun_blacklist) {
+    struct fcp_black_list_entry **pplun_blacklist)
+{
 	char **prop_array	= NULL;
 	char *curr_pwwn		= NULL;
 	char *curr_lun		= NULL;
@@ -15985,7 +15974,8 @@ fcp_read_blacklist(dev_info_t *dip,
  */
 static void
 fcp_mask_pwwn_lun(char *curr_pwwn, char *curr_lun,
-    struct fcp_black_list_entry **pplun_blacklist) {
+    struct fcp_black_list_entry **pplun_blacklist)
+{
 	int		idx			= 0;
 	uint32_t	offset			= 0;
 	unsigned long	lun_id			= 0;
@@ -16018,8 +16008,8 @@ fcp_mask_pwwn_lun(char *curr_pwwn, char *curr_lun,
 			break;
 		}
 		if (idx == 0) {	/* ignore ' ' or ',' or '\0' */
-		    offset++;
-		    continue;
+			offset++;
+			continue;
 		}
 
 		bcopy(curr_lun + offset, lunid_buf, idx);
@@ -16041,7 +16031,8 @@ fcp_mask_pwwn_lun(char *curr_pwwn, char *curr_lun,
  */
 static void
 fcp_add_one_mask(char *curr_pwwn, uint32_t lun_id,
-    struct fcp_black_list_entry **pplun_blacklist) {
+    struct fcp_black_list_entry **pplun_blacklist)
+{
 	struct fcp_black_list_entry	*tmp_entry	= *pplun_blacklist;
 	struct fcp_black_list_entry	*new_entry	= NULL;
 	la_wwn_t			wwn;
@@ -16070,7 +16061,8 @@ fcp_add_one_mask(char *curr_pwwn, uint32_t lun_id,
  * Check if we should mask the specified lun of this fcp_tgt
  */
 static int
-fcp_should_mask(la_wwn_t *wwn, uint32_t lun_id) {
+fcp_should_mask(la_wwn_t *wwn, uint32_t lun_id)
+{
 	struct fcp_black_list_entry *remote_port;
 
 	remote_port = fcp_lun_blacklist;
@@ -16100,7 +16092,8 @@ fcp_should_mask(la_wwn_t *wwn, uint32_t lun_id) {
  * Release all allocated resources
  */
 static void
-fcp_cleanup_blacklist(struct fcp_black_list_entry **pplun_blacklist) {
+fcp_cleanup_blacklist(struct fcp_black_list_entry **pplun_blacklist)
+{
 	struct fcp_black_list_entry	*tmp_entry	= *pplun_blacklist;
 	struct fcp_black_list_entry	*current_entry	= NULL;
 

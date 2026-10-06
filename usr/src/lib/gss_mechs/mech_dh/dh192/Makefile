@@ -31,15 +31,11 @@ SUBDIRS = $(MACH) $(BUILD64) $(MACH64)
 # include library definitions
 include ../../../Makefile.lib
 
-SED=    sed
-GREP=   grep
-
 all :=          TARGET= all
 clean :=        TARGET= clean
 clobber :=      TARGET= clobber
 delete :=       TARGET= delete
 install :=      TARGET= install
-lint :=         TARGET= lint
 catalog :=      TARGET= catalog
 package :=      TARGET= package
 
@@ -48,7 +44,7 @@ all:            $(SUBDIRS)
 
 install:        $(SUBDIRS)
 
-clean clobber delete lint catalog package:      $(SUBDIRS)
+clean clobber delete catalog package:      $(SUBDIRS)
 
 # include library targets
 include ../../../Makefile.targ

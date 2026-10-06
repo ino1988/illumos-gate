@@ -21,17 +21,18 @@
 #
 # Copyright (c) 2010, Oracle and/or its affiliates. All rights reserved.
 #
+# Copyright (c) 2018, Joyent, Inc.
 
 
 LIBRARY=	libseslog.a
 VERS=		.1
 
-OBJECTS=	libseslog.o 
+OBJECTS=	libseslog.o
 
 include ../../../Makefile.lib
 include ../../Makefile.lib
 
-LIBS=		$(DYNLIB) $(LINTLIB)
+LIBS=		$(DYNLIB)
 
 SRCDIR=		../common
 
@@ -39,13 +40,12 @@ INCS +=		-I$(SRCDIR)
 LDLIBS +=	-lc -lnvpair
 CPPFLAGS +=	$(INCS)
 
-$(LINTLIB) := SRCS=	$(SRCDIR)/$(LINTSRC)
+# not linted
+SMATCH=off
 
 .KEEP_STATE:
 
 all: $(LIBS)
-
-lint: lintcheck
 
 include ../../../Makefile.targ
 include ../../Makefile.targ

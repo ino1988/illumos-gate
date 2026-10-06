@@ -21,6 +21,8 @@
 /*
  * Copyright 2009 Sun Microsystems, Inc.  All rights reserved.
  * Use is subject to license terms.
+ * Copyright (c) 2016 by Delphix. All rights reserved.
+ * Copyright 2023 OmniOS Community Edition (OmniOSce) Association.
  */
 
 
@@ -198,7 +200,7 @@ perform_passwd_aging_check(
 
 	/*
 	 * if (sp_lstchg == 0), the administrator has forced the
-	 * user to change his/her passwd
+	 * user to change their passwd
 	 */
 	if (shpwd->sp_lstchg == 0)
 		return (PAM_NEW_AUTHTOK_REQD);
@@ -281,21 +283,20 @@ warn_user_passwd_will_expire(
 int
 pam_sm_acct_mgmt(pam_handle_t *pamh, int flags, int argc, const char **argv)
 {
-	uid_t			pw_uid;
-	char			*repository_name = NULL;
-	char    		*user;
-	attrlist		attr_pw[3];
-	attrlist		attr_spw[7];
-	pwu_repository_t	*pwu_rep = PWU_DEFAULT_REP;
-	pwu_repository_t	*auth_rep = NULL;
-	int 			error = PAM_ACCT_EXPIRED;
-	int			result;
-	int			i;
-	int			debug = 0;
-	int			server_policy = 0;
-	unix_authtok_data	*status;
-	struct 	spwd		shpwd = {NULL, NULL,
-					-1, -1, -1, -1, -1, -1, 0};
+	uid_t pw_uid;
+	char *repository_name = NULL;
+	char *user;
+	attrlist attr_pw[3];
+	attrlist attr_spw[7];
+	pwu_repository_t *pwu_rep = PWU_DEFAULT_REP;
+	const pwu_repository_t *auth_rep = NULL;
+	int error = PAM_ACCT_EXPIRED;
+	int result;
+	int i;
+	int debug = 0;
+	int server_policy = 0;
+	unix_authtok_data *status;
+	struct spwd shpwd = {NULL, NULL, -1, -1, -1, -1, -1, -1, 0};
 
 	for (i = 0; i < argc; i++) {
 		if (strcasecmp(argv[i], "debug") == 0)
@@ -315,7 +316,7 @@ pam_sm_acct_mgmt(pam_handle_t *pamh, int flags, int argc, const char **argv)
 		__pam_log(LOG_AUTH | LOG_DEBUG,
 		    "pam_unix_account: entering pam_sm_acct_mgmt()");
 
-	if ((error = pam_get_item(pamh, PAM_USER, (void **)&user))
+	if ((error = pam_get_item(pamh, PAM_USER, (const void **)&user))
 	    != PAM_SUCCESS)
 		goto out;
 
@@ -325,9 +326,10 @@ pam_sm_acct_mgmt(pam_handle_t *pamh, int flags, int argc, const char **argv)
 	} else
 		shpwd.sp_namp = user;
 
-	if ((error = pam_get_item(pamh, PAM_REPOSITORY, (void **)&auth_rep))
-	    != PAM_SUCCESS)
+	if ((error = pam_get_item(pamh, PAM_REPOSITORY,
+	    (const void **)&auth_rep)) != PAM_SUCCESS) {
 		goto out;
+	}
 
 	if (auth_rep == NULL) {
 		pwu_rep = PWU_DEFAULT_REP;
@@ -446,11 +448,11 @@ pam_sm_acct_mgmt(pam_handle_t *pamh, int flags, int argc, const char **argv)
 	 */
 	if (shpwd.sp_pwdp != NULL &&
 	    strncmp(shpwd.sp_pwdp, LOCKSTRING, sizeof (LOCKSTRING) - 1) == 0) {
-		char *service;
-		char *rhost = NULL;
+		const char *service;
+		const char *rhost = NULL;
 
-		(void) pam_get_item(pamh, PAM_SERVICE, (void **)&service);
-		(void) pam_get_item(pamh, PAM_RHOST, (void **)&rhost);
+		(void) pam_get_item(pamh, PAM_SERVICE, (const void **)&service);
+		(void) pam_get_item(pamh, PAM_RHOST, (const void **)&rhost);
 		__pam_log(LOG_AUTH | LOG_NOTICE,
 		    "pam_unix_account: %s attempting to validate locked "
 		    "account %s from %s",
@@ -465,11 +467,11 @@ pam_sm_acct_mgmt(pam_handle_t *pamh, int flags, int argc, const char **argv)
 	 */
 	if (shpwd.sp_pwdp[0] == '\0' &&
 	    (flags & PAM_DISALLOW_NULL_AUTHTOK) != 0) {
-		char *service;
-		char *rhost = NULL;
+		const char *service;
+		const char *rhost = NULL;
 
-		(void) pam_get_item(pamh, PAM_SERVICE, (void **)&service);
-		(void) pam_get_item(pamh, PAM_RHOST, (void **)&rhost);
+		(void) pam_get_item(pamh, PAM_SERVICE, (const void **)&service);
+		(void) pam_get_item(pamh, PAM_RHOST, (const void **)&rhost);
 
 		__pam_log(LOG_AUTH | LOG_NOTICE,
 		    "pam_unix_account: %s: empty password not allowed for "

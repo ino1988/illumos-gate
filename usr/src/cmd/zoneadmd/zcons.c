@@ -23,13 +23,14 @@
  * Copyright 2009 Sun Microsystems, Inc.  All rights reserved.
  * Use is subject to license terms.
  * Copyright 2012 Joyent, Inc.  All rights reserved.
+ * Copyright 2015 Nexenta Systems, Inc. All rights reserved.
  */
 
 /*
  * Console support for zones requires a significant infrastructure.  The
  * core pieces are contained in this file, but other portions of note
- * are in the zlogin(1M) command, the zcons(7D) driver, and in the
- * devfsadm(1M) misc_link generator.
+ * are in the zlogin(1) command, the zcons(4D) driver, and in the
+ * devfsadm(8) misc_link generator.
  *
  * Care is taken to make the console behave in an "intuitive" fashion for
  * administrators.  Essentially, we try as much as possible to mimic the
@@ -56,7 +57,7 @@
  *                                  |     +-[Anchor]--+
  *                                  |     |   ptem    |
  *                                  V     +-----------+
- *                           +---master---+---slave---+
+ *                           +---manager--+-subsidiary+
  *                           |                        |
  *                           |      zcons driver      |
  *                           |    zonename="myzone"   |
@@ -70,7 +71,7 @@
  *   to online new instances of zcons as needed.  Care is taken to
  *   prune and manage these appropriately; see init_console_dev() and
  *   destroy_console_dev().  The end result is the creation of the
- *   zcons(7D) instance and an open file descriptor to the master side.
+ *   zcons(4D) instance and an open file descriptor to the manager side.
  *   zcons instances are associated with zones via their zonename device
  *   property.  This the console instance to persist across reboots,
  *   and while the zone is halted.
@@ -78,7 +79,7 @@
  * - Acting as a server for 'zlogin -C' instances.  When zlogin -C is
  *   run, zlogin connects to zoneadmd via unix domain socket.  zoneadmd
  *   functions as a two-way proxy for console I/O, relaying user input
- *   to the master side of the console, and relaying output from the
+ *   to the manager side of the console, and relaying output from the
  *   zone to the user.
  */
 
@@ -264,34 +265,35 @@ destroy_console_devs(zlog_t *zlogp)
 	char conspath[MAXPATHLEN];
 	di_node_t root;
 	struct cb_data cb;
-	int masterfd;
-	int slavefd;
+	int managerfd;
+	int subfd;
 
 	/*
-	 * Signal the master side to release its handle on the slave side by
-	 * issuing a ZC_RELEASESLAVE ioctl.
+	 * Signal the manager side to release its handle on the subsidiary side
+	 * by issuing a ZC_RELEASESUBSID ioctl.
 	 */
 	(void) snprintf(conspath, sizeof (conspath), "/dev/zcons/%s/%s",
-	    zone_name, ZCONS_MASTER_NAME);
-	if ((masterfd = open(conspath, O_RDWR | O_NOCTTY)) != -1) {
+	    zone_name, ZCONS_MANAGER_NAME);
+	if ((managerfd = open(conspath, O_RDWR | O_NOCTTY)) != -1) {
 		(void) snprintf(conspath, sizeof (conspath), "/dev/zcons/%s/%s",
-		    zone_name, ZCONS_SLAVE_NAME);
-		if ((slavefd = open(conspath, O_RDWR | O_NOCTTY)) != -1) {
-			if (ioctl(masterfd, ZC_RELEASESLAVE,
-			    (caddr_t)(intptr_t)slavefd) != 0)
+		    zone_name, ZCONS_SUBSIDIARY_NAME);
+		if ((subfd = open(conspath, O_RDWR | O_NOCTTY)) != -1) {
+			if (ioctl(managerfd, ZC_RELEASESUBSID,
+			    (caddr_t)(intptr_t)subfd) != 0)
 				zerror(zlogp, B_TRUE, "WARNING: error while "
-				    "releasing slave handle of zone console for"
-				    " %s", zone_name);
-			(void) close(slavefd);
+				    "releasing subsidiary handle of zone "
+				    "console for %s", zone_name);
+			(void) close(subfd);
 		} else {
-			zerror(zlogp, B_TRUE, "WARNING: could not open slave "
-			    "side of zone console for %s to release slave "
-			    "handle", zone_name);
+			zerror(zlogp, B_TRUE, "WARNING: could not open "
+			    "subsidiary side of zone console for %s to "
+			    "release subsidiary handle", zone_name);
 		}
-		(void) close(masterfd);
+		(void) close(managerfd);
 	} else {
-		zerror(zlogp, B_TRUE, "WARNING: could not open master side of "
-		    "zone console for %s to release slave handle", zone_name);
+		zerror(zlogp, B_TRUE, "WARNING: could not open manager side of "
+		    "zone console for %s to release subsidiary handle",
+		    zone_name);
 	}
 
 	bzero(&cb, sizeof (cb));
@@ -322,8 +324,8 @@ destroy_console_devs(zlog_t *zlogp)
  * sanity checking, and are careful to reuse a console if one exists.
  *
  * Once the device is in the device tree, we kick devfsadm via di_init_devs()
- * to ensure that the appropriate symlinks (to the master and slave console
- * devices) are placed in /dev in the global zone.
+ * to ensure that the appropriate symlinks (to the manager and subsidiary
+ * console devices) are placed in /dev in the global zone.
  */
 static int
 init_console_dev(zlog_t *zlogp)
@@ -335,8 +337,8 @@ init_console_dev(zlog_t *zlogp)
 	di_devlink_handle_t dl = NULL;
 	int rv = -1;
 	int ndevs;
-	int masterfd;
-	int slavefd;
+	int managerfd;
+	int subfd;
 	int i;
 
 	/*
@@ -404,23 +406,26 @@ devlinks:
 	}
 
 	/*
-	 * Open the master side of the console and issue the ZC_HOLDSLAVE ioctl,
-	 * which will cause the master to retain a reference to the slave.
-	 * This prevents ttymon from blowing through the slave's STREAMS anchor.
+	 * Open the manager side of the console and issue the ZC_HOLDSUBSID
+	 * ioctl, which will cause the manager to retain a reference to the
+	 * subsidiary.  This prevents ttymon from blowing through the
+	 * subsidiary's STREAMS anchor.
 	 */
 	(void) snprintf(conspath, sizeof (conspath), "/dev/zcons/%s/%s",
-	    zone_name, ZCONS_MASTER_NAME);
-	if ((masterfd = open(conspath, O_RDWR | O_NOCTTY)) == -1) {
-		zerror(zlogp, B_TRUE, "ERROR: could not open master side of "
-		    "zone console for %s to acquire slave handle", zone_name);
+	    zone_name, ZCONS_MANAGER_NAME);
+	if ((managerfd = open(conspath, O_RDWR | O_NOCTTY)) == -1) {
+		zerror(zlogp, B_TRUE, "ERROR: could not open manager side of "
+		    "zone console for %s to acquire subsidiary handle",
+		    zone_name);
 		goto error;
 	}
 	(void) snprintf(conspath, sizeof (conspath), "/dev/zcons/%s/%s",
-	    zone_name, ZCONS_SLAVE_NAME);
-	if ((slavefd = open(conspath, O_RDWR | O_NOCTTY)) == -1) {
-		zerror(zlogp, B_TRUE, "ERROR: could not open slave side of zone"
-		    " console for %s to acquire slave handle", zone_name);
-		(void) close(masterfd);
+	    zone_name, ZCONS_SUBSIDIARY_NAME);
+	if ((subfd = open(conspath, O_RDWR | O_NOCTTY)) == -1) {
+		zerror(zlogp, B_TRUE, "ERROR: could not open subsidiary side "
+		    "of zone console for %s to acquire subsidiary handle",
+		    zone_name);
+		(void) close(managerfd);
 		goto error;
 	}
 	/*
@@ -429,7 +434,7 @@ devlinks:
 	 * 1 sec. and retry a few times before we fail to boot the zone.
 	 */
 	for (i = 0; i < 5; i++) {
-		if (ioctl(masterfd, ZC_HOLDSLAVE, (caddr_t)(intptr_t)slavefd)
+		if (ioctl(managerfd, ZC_HOLDSUBSID, (caddr_t)(intptr_t)subfd)
 		    == 0) {
 			rv = 0;
 			break;
@@ -439,11 +444,11 @@ devlinks:
 		(void) sleep(1);
 	}
 	if (rv != 0)
-		zerror(zlogp, B_TRUE, "ERROR: error while acquiring slave "
-		    "handle of zone console for %s", zone_name);
+		zerror(zlogp, B_TRUE, "ERROR: error while acquiring "
+		    "subsidiary handle of zone console for %s", zone_name);
 
-	(void) close(slavefd);
-	(void) close(masterfd);
+	(void) close(subfd);
+	(void) close(managerfd);
 
 error:
 	if (ddef_hdl)
@@ -509,7 +514,8 @@ destroy_console_sock(int servfd)
  * the ident string from a client without saving it.
  */
 static int
-get_client_ident(int clifd, pid_t *pid, char *locale, size_t locale_len)
+get_client_ident(int clifd, pid_t *pid, char *locale, size_t locale_len,
+    int *disconnect)
 {
 	char buf[BUFSIZ], *bufp;
 	size_t buflen = sizeof (buf);
@@ -549,7 +555,8 @@ get_client_ident(int clifd, pid_t *pid, char *locale, size_t locale_len)
 	}
 
 	/*
-	 * Parse buffer for message of the form: IDENT <pid> <locale>
+	 * Parse buffer for message of the form:
+	 * IDENT <pid> <locale> <disconnect flag>
 	 */
 	bufp = buf;
 	if (strncmp(bufp, "IDENT ", 6) != 0)
@@ -562,13 +569,17 @@ get_client_ident(int clifd, pid_t *pid, char *locale, size_t locale_len)
 
 	while (*bufp != '\0' && isspace(*bufp))
 		bufp++;
+	buflen = strlen(bufp) - 1;
+	*disconnect = atoi(&bufp[buflen]);
+	bufp[buflen - 1] = '\0';
 	(void) strlcpy(locale, bufp, locale_len);
 
 	return (0);
 }
 
 static int
-accept_client(int servfd, pid_t *pid, char *locale, size_t locale_len)
+accept_client(int servfd, pid_t *pid, char *locale, size_t locale_len,
+    int *disconnect)
 {
 	int connfd;
 	struct sockaddr_un cliaddr;
@@ -578,7 +589,8 @@ accept_client(int servfd, pid_t *pid, char *locale, size_t locale_len)
 	connfd = accept(servfd, (struct sockaddr *)&cliaddr, &clilen);
 	if (connfd == -1)
 		return (-1);
-	if (get_client_ident(connfd, pid, locale, locale_len) == -1) {
+	if (get_client_ident(connfd, pid, locale, locale_len,
+	    disconnect) == -1) {
 		(void) shutdown(connfd, SHUT_RDWR);
 		(void) close(connfd);
 		return (-1);
@@ -601,7 +613,7 @@ reject_client(int servfd, pid_t clientpid)
 	/*
 	 * After hear its ident string, tell client to get lost.
 	 */
-	if (get_client_ident(connfd, NULL, NULL, 0) == 0) {
+	if (get_client_ident(connfd, NULL, NULL, 0, NULL) == 0) {
 		(void) snprintf(nak, sizeof (nak), "%lu\n",
 		    clientpid);
 		(void) write(connfd, nak, strlen(nak));
@@ -611,7 +623,7 @@ reject_client(int servfd, pid_t clientpid)
 }
 
 static void
-event_message(int clifd, char *clilocale, zone_evt_t evt)
+event_message(int clifd, char *clilocale, zone_evt_t evt, int dflag)
 {
 	char *str, *lstr = NULL;
 	char lmsg[BUFSIZ];
@@ -635,7 +647,10 @@ event_message(int clifd, char *clilocale, zone_evt_t evt)
 		str = "NOTICE: Zone readied";
 		break;
 	case Z_EVT_ZONE_HALTED:
-		str = "NOTICE: Zone halted";
+		if (dflag)
+			str = "NOTICE: Zone halted.  Disconnecting...";
+		else
+			str = "NOTICE: Zone halted";
 		break;
 	case Z_EVT_ZONE_REBOOTING:
 		if (*boot_args == '\0') {
@@ -651,7 +666,10 @@ event_message(int clifd, char *clilocale, zone_evt_t evt)
 		str = "NOTICE: Zone is being uninstalled.  Disconnecting...";
 		break;
 	case Z_EVT_ZONE_BOOTFAILED:
-		str = "NOTICE: Zone boot failed";
+		if (dflag)
+			str = "NOTICE: Zone boot failed.  Disconnecting...";
+		else
+			str = "NOTICE: Zone boot failed";
 		break;
 	case Z_EVT_ZONE_BADARGS:
 		/*LINTED*/
@@ -686,7 +704,7 @@ test_client(int clifd)
 
 /*
  * This routine drives the console I/O loop.  It polls for input from the
- * master side of the console (output to the console), and from the client
+ * manager side of the console (output to the console), and from the client
  * (input from the console user).  Additionally, it polls on the server fd,
  * and disconnects any clients that might try to hook up with the zone while
  * the console is in use.
@@ -708,6 +726,7 @@ do_console_io(zlog_t *zlogp, int consfd, int servfd)
 	int pollerr = 0;
 	char clilocale[MAXPATHLEN];
 	pid_t clipid = 0;
+	int disconnect = 0;
 
 	/* console side, watch for read events */
 	pollfds[0].fd = consfd;
@@ -801,7 +820,8 @@ do_console_io(zlog_t *zlogp, int consfd, int servfd)
 
 
 			} else if ((clifd = accept_client(servfd, &clipid,
-			    clilocale, sizeof (clilocale))) != -1) {
+			    clilocale, sizeof (clilocale),
+			    &disconnect)) != -1) {
 				pollfds[1].fd = clifd;
 
 			} else {
@@ -827,7 +847,7 @@ do_console_io(zlog_t *zlogp, int consfd, int servfd)
 			if (clifd == -1) {
 				break;
 			}
-			event_message(clifd, clilocale, evt);
+			event_message(clifd, clilocale, evt, disconnect);
 			/*
 			 * Special handling for the message that the zone is
 			 * uninstalling; we boot the client, then break out
@@ -836,6 +856,14 @@ do_console_io(zlog_t *zlogp, int consfd, int servfd)
 			 * in a state < READY, and so zoneadmd will shutdown.
 			 */
 			if (evt == Z_EVT_ZONE_UNINSTALLING) {
+				break;
+			}
+			/*
+			 * Diconnect if -C and -d options were specified and
+			 * zone was halted or failed to boot.
+			 */
+			if ((evt == Z_EVT_ZONE_HALTED ||
+			    evt == Z_EVT_ZONE_BOOTFAILED) && disconnect) {
 				break;
 			}
 		}
@@ -880,17 +908,17 @@ init_console(zlog_t *zlogp)
 void
 serve_console(zlog_t *zlogp)
 {
-	int masterfd;
+	int managerfd;
 	zone_state_t zstate;
 	char conspath[MAXPATHLEN];
 
 	(void) snprintf(conspath, sizeof (conspath),
-	    "/dev/zcons/%s/%s", zone_name, ZCONS_MASTER_NAME);
+	    "/dev/zcons/%s/%s", zone_name, ZCONS_MANAGER_NAME);
 
 	for (;;) {
-		masterfd = open(conspath, O_RDWR|O_NONBLOCK|O_NOCTTY);
-		if (masterfd == -1) {
-			zerror(zlogp, B_TRUE, "failed to open console master");
+		managerfd = open(conspath, O_RDWR|O_NONBLOCK|O_NOCTTY);
+		if (managerfd == -1) {
+			zerror(zlogp, B_TRUE, "failed to open console manager");
 			(void) mutex_lock(&lock);
 			goto death;
 		}
@@ -902,14 +930,14 @@ serve_console(zlog_t *zlogp)
 		 * messages, we wouldn't be able to use read(2), as it fails
 		 * (EBADMSG) when a message with a control element is received.
 		 */
-		if (ioctl(masterfd, I_SRDOPT, RNORM|RPROTDIS) == -1) {
+		if (ioctl(managerfd, I_SRDOPT, RNORM|RPROTDIS) == -1) {
 			zerror(zlogp, B_TRUE, "failed to set options on "
-			    "console master");
+			    "console manager");
 			(void) mutex_lock(&lock);
 			goto death;
 		}
 
-		do_console_io(zlogp, masterfd, serverfd);
+		do_console_io(zlogp, managerfd, serverfd);
 
 		/*
 		 * We would prefer not to do this, but hostile zone processes
@@ -918,7 +946,7 @@ serve_console(zlog_t *zlogp)
 		 * we dismantle the stream and reopen the console when we
 		 * take another lap.
 		 */
-		(void) close(masterfd);
+		(void) close(managerfd);
 
 		(void) mutex_lock(&lock);
 		/*

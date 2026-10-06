@@ -25,6 +25,11 @@
  */
 
 /*
+ * Copyright 2019 Joyent, Inc.
+ * Copyright 2023 Racktop Systems, Inc.
+ */
+
+/*
  * These functions are used to encode SCSI INQUIRY data into
  * Solaris devid / guid values.
  */
@@ -58,7 +63,7 @@
 #define	SCSI_INQUIRY_PID_EMC_SYMMETRIX		"SYMMETRIX       "
 #define	SCSI_INQUIRY_PID_EMC_SYMMETRIX_LEN	16
 
-#define	MSG_NOT_STANDARDS_COMPLIANT "!Page83 data not standards compliant "
+#define	MSG_NOT_STANDARDS_COMPLIANT "Page83 data not standards compliant "
 #define	MSG_NOT_STANDARDS_COMPLIANT_SIZE	( \
 	sizeof (MSG_NOT_STANDARDS_COMPLIANT) + \
 	sizeof (((struct scsi_inquiry *)NULL)->inq_vid) + \
@@ -117,6 +122,12 @@ static int devid_scsi_init(char *driver_name,
 
 static char ctoi(char c);
 
+#ifdef	_KERNEL
+#define	devid_scsi_encode	ddi_devid_scsi_encode
+#define	devid_to_guid		ddi_devid_to_guid
+#define	devid_free_guid		ddi_devid_free_guid
+#endif	/* _KERNEL */
+
 /*
  *    Function: ddi_/devid_scsi_encode
  *
@@ -139,11 +150,7 @@ static char ctoi(char c);
  *		this function should be called again.
  */
 int
-#ifdef _KERNEL
-ddi_devid_scsi_encode(
-#else /* ! _KERNEL */
 devid_scsi_encode(
-#endif /* _KERNEL */
     int version,	/* IN */
     char *driver_name,	/* IN */
     uchar_t *inq,	/* IN */
@@ -232,7 +239,7 @@ devid_scsi_encode(
 				(void) strncat(msg, inq_std->inq_revision,
 				    sizeof (inq_std->inq_revision));
 				(void) strcat(msg, "\n");
-				cmn_err(CE_WARN, msg);
+				cmn_err(CE_WARN, "!%s", msg);
 				kmem_free(msg,
 				    MSG_NOT_STANDARDS_COMPLIANT_SIZE);
 			}
@@ -301,7 +308,7 @@ static int
 is_page83_data_valid(uchar_t *inq83, size_t inq83_len)
 {
 
-	int 	covered_desc_len	= 0;
+	int	covered_desc_len	= 0;
 	int	dlen			= 0;
 	uchar_t	*dblk			= NULL;
 
@@ -1148,11 +1155,7 @@ devid_scsi_init(
  *		NULL - failure
  */
 char *
-#ifdef  _KERNEL
-ddi_devid_to_guid(ddi_devid_t devid)
-#else   /* !_KERNEL */
 devid_to_guid(ddi_devid_t devid)
-#endif  /* _KERNEL */
 {
 	impl_devid_t	*id	= (impl_devid_t *)devid;
 	int		len	= 0;
@@ -1200,11 +1203,7 @@ devid_to_guid(ddi_devid_t devid)
  *   Arguments: guid - guid to free
  */
 void
-#ifdef  _KERNEL
-ddi_devid_free_guid(char *guid)
-#else   /* !_KERNEL */
 devid_free_guid(char *guid)
-#endif  /* _KERNEL */
 {
 	if (guid != NULL) {
 		DEVID_FREE(guid, strlen(guid) + 1);
@@ -1336,7 +1335,7 @@ scsi_wwnstr_hexcase(char *wwnstr, int upper_case_hex)
  * Function: scsi_wwnstr_skip_ua_prefix
  *
  * Description: This routine removes the leading 'w' in wwnstr,
- * 		if its in unit-address form.
+ *		if its in unit-address form.
  *
  * Arguments: wwnstr - the string wwn to be transformed
  *

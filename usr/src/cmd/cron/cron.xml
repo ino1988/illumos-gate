@@ -66,7 +66,7 @@
 		name='start'
 		exec='/lib/svc/method/svc-cron'
 		timeout_seconds='60'>
-		<method_context>
+		<method_context working_directory='/'>
 			<method_credential user='root' group='root' />
 		</method_context>
 	</exec_method>
@@ -108,7 +108,7 @@
 			</loctext>
 		</common_name>
 		<documentation>
-			<manpage title='cron' section='1M' manpath='/usr/share/man' />
+			<manpage title='cron' section='8' manpath='/usr/share/man' />
 			<manpage title='crontab' section='1' manpath='/usr/share/man' />
 		</documentation>
 	</template>

@@ -20,20 +20,21 @@
  * CDDL HEADER END
  */
 /*	Copyright (c) 1984, 1986, 1987, 1988, 1989 AT&T	*/
-/*	  All Rights Reserved  	*/
+/*	  All Rights Reserved	*/
 
 
 /*
  * Copyright 2004 Sun Microsystems, Inc.  All rights reserved.
  * Use is subject to license terms.
  *
- * Copyright 2012 Nexenta Systems, Inc.  All rights reserved.
+ * Copyright 2013 Nexenta Systems, Inc.  All rights reserved.
+ * Copyright 2016 Joyent, Inc.
  */
 
 #ifndef _SYS_CMN_ERR_H
 #define	_SYS_CMN_ERR_H
 
-#if defined(_KERNEL) && !defined(_ASM)
+#if !defined(_ASM) && (defined(_KERNEL) || defined(_FAKE_KERNEL))
 #include <sys/va_list.h>
 #endif
 
@@ -51,9 +52,7 @@ extern "C" {
 #define	CE_PANIC	3	/* panic		*/
 #define	CE_IGNORE	4	/* print nothing	*/
 
-#ifndef _ASM
-
-#ifdef _KERNEL
+#if !defined(_ASM) && (defined(_KERNEL) || defined(_FAKE_KERNEL))
 
 /*PRINTFLIKE2*/
 extern void cmn_err(int, const char *, ...)
@@ -64,6 +63,9 @@ extern void vzcmn_err(zoneid_t, int, const char *, __va_list)
 
 extern void dev_err(dev_info_t *, int, char *, ...)
     __KPRINTFLIKE(3);
+
+extern void vdev_err(dev_info_t *, int, const char *, __va_list)
+    __KVPRINTFLIKE(3);
 
 extern void vcmn_err(int, const char *, __va_list)
     __KVPRINTFLIKE(2);
@@ -111,8 +113,7 @@ extern void panic(const char *, ...)
 extern void vpanic(const char *, __va_list)
     __KVPRINTFLIKE(1) __NORETURN;
 
-#endif /* _KERNEL */
-#endif /* !_ASM */
+#endif /* !_ASM && _KERNEL ... */
 
 #ifdef	__cplusplus
 }

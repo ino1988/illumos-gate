@@ -24,8 +24,8 @@
  */
 
 /*
- * Copyright (c) 2012 by Delphix. All rights reserved.
- * Copyright (c) 2012, Joyent, Inc. All rights reserved.
+ * Copyright (c) 2012, 2015 by Delphix. All rights reserved.
+ * Copyright (c) 2018, Joyent, Inc.
  */
 
 /*
@@ -41,6 +41,9 @@
  *	Proceedings of the 2001 Usenix Conference.
  *	Available as http://www.usenix.org/event/usenix01/bonwick.html
  *
+ * Section 1, below, is also the primary contents of vmem(9).  If for some
+ * reason you are updating this comment, you will also wish to update the
+ * manual.
  *
  * 1. General Concepts
  * -------------------
@@ -920,7 +923,7 @@ vmem_canalloc(vmem_t *vmp, size_t size)
 	int flist = 0;
 	ASSERT(MUTEX_HELD(&vmp->vm_lock));
 
-	if ((size & (size - 1)) == 0)
+	if (ISP2(size))
 		flist = lowbit(P2ALIGN(vmp->vm_freemap, size));
 	else if ((hb = highbit(size)) < VMEM_FREELISTS)
 		flist = lowbit(P2ALIGN(vmp->vm_freemap, 1UL << hb));
@@ -935,7 +938,7 @@ vmem_canalloc(vmem_t *vmp, size_t size)
  */
 void *
 vmem_xalloc(vmem_t *vmp, size_t size, size_t align_arg, size_t phase,
-	size_t nocross, void *minaddr, void *maxaddr, int vmflag)
+    size_t nocross, void *minaddr, void *maxaddr, int vmflag)
 {
 	vmem_seg_t *vsp;
 	vmem_seg_t *vbest = NULL;
@@ -959,8 +962,7 @@ vmem_xalloc(vmem_t *vmp, size_t size, size_t align_arg, size_t phase,
 		    (void *)vmp, size, align_arg, phase, nocross,
 		    minaddr, maxaddr, vmflag);
 
-	if (phase >= align || (align & (align - 1)) != 0 ||
-	    (nocross & (nocross - 1)) != 0)
+	if (phase >= align || !ISP2(align) || !ISP2(nocross))
 		panic("vmem_xalloc(%p, %lu, %lu, %lu, %lu, %p, %p, %x): "
 		    "parameters inconsistent or invalid",
 		    (void *)vmp, size, align_arg, phase, nocross,
@@ -970,6 +972,8 @@ vmem_xalloc(vmem_t *vmp, size_t size, size_t align_arg, size_t phase,
 	    (vmflag & (VM_NOSLEEP | VM_PANIC)) == VM_NOSLEEP)
 		return (NULL);
 
+	addr = 0;
+	xsize = 0;
 	mutex_enter(&vmp->vm_lock);
 	for (;;) {
 		if (vmp->vm_nsegfree < VMEM_MINFREE &&
@@ -994,7 +998,7 @@ do_alloc:
 		 *
 		 * (4)	We're doing a best-fit or first-fit allocation.
 		 */
-		if ((size & (size - 1)) == 0) {
+		if (ISP2(size)) {
 			flist = lowbit(P2ALIGN(vmp->vm_freemap, size));
 		} else {
 			hb = highbit(size);
@@ -1102,8 +1106,12 @@ do_alloc:
 			mutex_exit(&vmp->vm_lock);
 			if (vmp->vm_cflags & VMC_XALLOC) {
 				size_t oasize = asize;
-				vaddr = ((vmem_ximport_t *)
-				    vmp->vm_source_alloc)(vmp->vm_source,
+				vmem_ximport_t *vmem_ximport;
+
+				vmem_ximport = (vmem_ximport_t *)
+				    (uintptr_t)vmp->vm_source_alloc;
+
+				vaddr = vmem_ximport(vmp->vm_source,
 				    &asize, align, vmflag & VM_KMFLAGS);
 				ASSERT(asize >= oasize);
 				ASSERT(P2PHASE(asize,
@@ -1290,7 +1298,7 @@ vmem_alloc(vmem_t *vmp, size_t size, int vmflag)
 	mutex_enter(&vmp->vm_lock);
 
 	if (vmp->vm_nsegfree >= VMEM_MINFREE || vmem_populate(vmp, vmflag)) {
-		if ((size & (size - 1)) == 0)
+		if (ISP2(size))
 			flist = lowbit(P2ALIGN(vmp->vm_freemap, size));
 		else if ((hb = highbit(size)) < VMEM_FREELISTS)
 			flist = lowbit(P2ALIGN(vmp->vm_freemap, 1UL << hb));
@@ -1380,7 +1388,7 @@ vmem_add(vmem_t *vmp, void *vaddr, size_t size, int vmflag)
  */
 void
 vmem_walk(vmem_t *vmp, int typemask,
-	void (*func)(void *, void *, size_t), void *arg)
+    void (*func)(void *, void *, size_t), void *arg)
 {
 	vmem_seg_t *vsp;
 	vmem_seg_t *seg0 = &vmp->vm_seg0;
@@ -1444,9 +1452,9 @@ vmem_size(vmem_t *vmp, int typemask)
  */
 static vmem_t *
 vmem_create_common(const char *name, void *base, size_t size, size_t quantum,
-	void *(*afunc)(vmem_t *, size_t, int),
-	void (*ffunc)(vmem_t *, void *, size_t),
-	vmem_t *source, size_t qcache_max, int vmflag)
+    void *(*afunc)(vmem_t *, size_t, int),
+    void (*ffunc)(vmem_t *, void *, size_t),
+    vmem_t *source, size_t qcache_max, int vmflag)
 {
 	int i;
 	size_t nqcache;
@@ -1574,12 +1582,14 @@ vmem_xcreate(const char *name, void *base, size_t size, size_t quantum,
     vmem_ximport_t *afunc, vmem_free_t *ffunc, vmem_t *source,
     size_t qcache_max, int vmflag)
 {
+	vmem_alloc_t *af;
+
+	af = (vmem_alloc_t *)(uintptr_t)afunc;
 	ASSERT(!(vmflag & (VMC_POPULATOR | VMC_XALLOC)));
 	vmflag &= ~(VMC_POPULATOR | VMC_XALLOC);
 
 	return (vmem_create_common(name, base, size, quantum,
-	    (vmem_alloc_t *)afunc, ffunc, source, qcache_max,
-	    vmflag | VMC_XALLOC));
+	    af, ffunc, source, qcache_max, vmflag | VMC_XALLOC));
 }
 
 vmem_t *
@@ -1648,6 +1658,12 @@ vmem_destroy(vmem_t *vmp)
 }
 
 /*
+ * Only shrink vmem hashtable if it is 1<<vmem_rescale_minshift times (8x)
+ * larger than necessary.
+ */
+int vmem_rescale_minshift = 3;
+
+/*
  * Resize vmp's hash table to keep the average lookup depth near 1.0.
  */
 static void
@@ -1662,7 +1678,8 @@ vmem_hash_rescale(vmem_t *vmp)
 	new_size = MAX(VMEM_HASH_INITIAL, 1 << (highbit(3 * nseg + 4) - 2));
 	old_size = vmp->vm_hash_mask + 1;
 
-	if ((old_size >> 1) <= new_size && new_size <= (old_size << 1))
+	if ((old_size >> vmem_rescale_minshift) <= new_size &&
+	    new_size <= (old_size << 1))
 		return;
 
 	new_table = vmem_alloc(vmem_hash_arena, new_size * sizeof (void *),
@@ -1736,7 +1753,7 @@ vmem_qcache_reap(vmem_t *vmp)
 	 */
 	for (i = 0; i < VMEM_NQCACHE_MAX; i++)
 		if (vmp->vm_qcache[i])
-			kmem_cache_reap_now(vmp->vm_qcache[i]);
+			kmem_cache_reap_soon(vmp->vm_qcache[i]);
 }
 
 /*
@@ -1744,9 +1761,9 @@ vmem_qcache_reap(vmem_t *vmp)
  */
 vmem_t *
 vmem_init(const char *heap_name,
-	void *heap_start, size_t heap_size, size_t heap_quantum,
-	void *(*heap_alloc)(vmem_t *, size_t, int),
-	void (*heap_free)(vmem_t *, void *, size_t))
+    void *heap_start, size_t heap_size, size_t heap_quantum,
+    void *(*heap_alloc)(vmem_t *, size_t, int),
+    void (*heap_free)(vmem_t *, void *, size_t))
 {
 	uint32_t id;
 	int nseg = VMEM_SEG_INITIAL;

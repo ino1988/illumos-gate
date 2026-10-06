@@ -18,6 +18,11 @@
  *
  * CDDL HEADER END
  */
+
+/*
+ * Copyright 2015 Nexenta Systems, Inc.  All rights reserved.
+ */
+
 /*
  * Copyright 2009 Sun Microsystems, Inc.  All rights reserved.
  * Use is subject to license terms.
@@ -109,6 +114,7 @@ typedef struct endpnt_type {
 	zoneid_t	e_zoneid;	/* zoneid of endpoint type */
 	kcondvar_t	e_async_cv;	/* cv for asynchronous reap threads */
 	uint_t		e_async_count;	/* count of asynchronous reap threads */
+	struct netbuf	e_laddr;	/* endpnt local address */
 } endpnt_type_t;
 
 typedef struct endpnt {
@@ -160,7 +166,8 @@ static call_table_t *clts_call_ht;
 static struct endpnt_type *endpnt_type_create(struct knetconfig *);
 static void endpnt_type_free(struct endpnt_type *);
 static int check_endpnt(struct endpnt *, struct endpnt **);
-static struct endpnt *endpnt_get(struct knetconfig *, int);
+static struct endpnt *endpnt_get(struct knetconfig *, int, int,
+				struct netbuf *);
 static void endpnt_rele(struct endpnt *);
 static void endpnt_reap_settimer(endpnt_type_t *);
 static void endpnt_reap(endpnt_type_t *);
@@ -199,6 +206,7 @@ struct cku_private {
 	struct endpnt		*cku_endpnt;	/* open end point */
 	struct knetconfig	 cku_config;
 	struct netbuf		 cku_addr;	/* remote address */
+	struct netbuf		 cku_lcladdr;	/* local address */
 	struct rpc_err		 cku_err;	/* error status */
 	XDR			 cku_outxdr;	/* xdr stream for output */
 	XDR			 cku_inxdr;	/* xdr stream for input */
@@ -212,6 +220,7 @@ struct cku_private {
 	uint32_t		 cku_xid;	/* current XID */
 	bool_t			 cku_bcast;	/* RPC broadcast hint */
 	int			cku_useresvport; /* Use reserved port */
+	int			cku_bindsrc;	/* Use source address */
 	struct rpc_clts_client	*cku_stats;	/* counters for the zone */
 };
 
@@ -304,8 +313,8 @@ clnt_clts_stats_fini(zoneid_t zoneid, struct rpc_clts_client **statsp)
 /* ARGSUSED */
 int
 clnt_clts_kcreate(struct knetconfig *config, struct netbuf *addr,
-	rpcprog_t pgm, rpcvers_t vers, int retrys, struct cred *cred,
-	CLIENT **cl)
+    rpcprog_t pgm, rpcvers_t vers, int retrys, struct cred *cred,
+    CLIENT **cl)
 {
 	CLIENT *h;
 	struct cku_private *p;
@@ -342,16 +351,19 @@ clnt_clts_kcreate(struct knetconfig *config, struct netbuf *addr,
 
 	/* pre-serialize call message header */
 	if (!xdr_callhdr(&p->cku_outxdr, &call_msg)) {
+		XDR_DESTROY(&p->cku_outxdr);
 		error = EINVAL;		/* XXX */
 		goto bad;
 	}
+	XDR_DESTROY(&p->cku_outxdr);
 
 	p->cku_config.knc_rdev = config->knc_rdev;
 	p->cku_config.knc_semantics = config->knc_semantics;
 	plen = strlen(config->knc_protofmly) + 1;
 	p->cku_config.knc_protofmly = kmem_alloc(plen, KM_SLEEP);
 	bcopy(config->knc_protofmly, p->cku_config.knc_protofmly, plen);
-	p->cku_useresvport = -1; /* value is has not been set */
+	p->cku_useresvport = -1; /* value has not been set */
+	p->cku_bindsrc = 0; /* value has not been set */
 
 	cv_init(&p->cku_call.call_cv, NULL, CV_DEFAULT, NULL);
 	mutex_init(&p->cku_call.call_lock, NULL, MUTEX_DEFAULT, NULL);
@@ -379,7 +391,7 @@ clnt_clts_kinit(CLIENT *h, struct netbuf *addr, int retrys, cred_t *cred)
 
 	p->cku_retrys = retrys;
 
-	if (p->cku_addr.maxlen < addr->len) {
+	if (p->cku_addr.maxlen < addr->maxlen) {
 		if (p->cku_addr.maxlen != 0 && p->cku_addr.buf != NULL)
 			kmem_free(p->cku_addr.buf, p->cku_addr.maxlen);
 
@@ -411,8 +423,8 @@ clnt_clts_kinit(CLIENT *h, struct netbuf *addr, int retrys, cred_t *cred)
  */
 static int
 clnt_clts_ksettimers(CLIENT *h, struct rpc_timers *t, struct rpc_timers *all,
-	int minimum, void (*feedback)(int, int, caddr_t), caddr_t arg,
-	uint32_t xid)
+    int minimum, void (*feedback)(int, int, caddr_t), caddr_t arg,
+    uint32_t xid)
 {
 	/* LINTED pointer alignment */
 	struct cku_private *p = htop(h);
@@ -453,8 +465,8 @@ clnt_clts_ksettimers(CLIENT *h, struct rpc_timers *t, struct rpc_timers *all,
  */
 enum clnt_stat
 clnt_clts_kcallit_addr(CLIENT *h, rpcproc_t procnum, xdrproc_t xdr_args,
-	caddr_t argsp, xdrproc_t xdr_results, caddr_t resultsp,
-	struct timeval wait, struct netbuf *sin)
+    caddr_t argsp, xdrproc_t xdr_results, caddr_t resultsp,
+    struct timeval wait, struct netbuf *sin)
 {
 	/* LINTED pointer alignment */
 	struct cku_private *p = htop(h);
@@ -528,6 +540,7 @@ call_again:
 			if ((!XDR_PUTINT32(xdrs, (int32_t *)&procnum)) ||
 			    (!AUTH_MARSHALL(h->cl_auth, xdrs, p->cku_cred)) ||
 			    (!(*xdr_args)(xdrs, argsp))) {
+				XDR_DESTROY(xdrs);
 				freemsg(mp);
 				p->cku_err.re_status = RPC_CANTENCODEARGS;
 				p->cku_err.re_errno = EIO;
@@ -544,12 +557,15 @@ call_again:
 			/* Serialize the procedure number and the arguments. */
 			if (!AUTH_WRAP(h->cl_auth, (caddr_t)p->cku_rpchdr,
 			    CKU_HDRSIZE+4, xdrs, xdr_args, argsp)) {
+				XDR_DESTROY(xdrs);
 				freemsg(mp);
 				p->cku_err.re_status = RPC_CANTENCODEARGS;
 				p->cku_err.re_errno = EIO;
 				goto done;
 			}
 		}
+
+		XDR_DESTROY(xdrs);
 	} else
 		mp = mpdup;
 
@@ -569,7 +585,8 @@ call_again:
 	 */
 
 	if (p->cku_endpnt == NULL)
-		p->cku_endpnt = endpnt_get(&p->cku_config, p->cku_useresvport);
+		p->cku_endpnt = endpnt_get(&p->cku_config, p->cku_useresvport,
+		    p->cku_bindsrc, &p->cku_lcladdr);
 
 	if (p->cku_endpnt == NULL) {
 		freemsg(mp);
@@ -780,6 +797,7 @@ tryread:
 		p->cku_err.re_status = RPC_CANTDECODERES;
 		p->cku_err.re_errno = EIO;
 		(void) xdr_rpc_free_verifier(xdrs, &reply_msg);
+		XDR_DESTROY(xdrs);
 		goto done1;
 	}
 
@@ -796,6 +814,7 @@ tryread:
 			p->cku_err.re_why = AUTH_INVALIDRESP;
 			RCSTAT_INCR(p->cku_stats, rcbadverfs);
 			(void) xdr_rpc_free_verifier(xdrs, &reply_msg);
+			XDR_DESTROY(xdrs);
 			goto tryread;
 		}
 		if (!AUTH_UNWRAP(h->cl_auth, xdrs, xdr_results, resultsp)) {
@@ -803,6 +822,7 @@ tryread:
 			p->cku_err.re_errno = EIO;
 		}
 		(void) xdr_rpc_free_verifier(xdrs, &reply_msg);
+		XDR_DESTROY(xdrs);
 		goto done1;
 	}
 	/* set errno in case we can't recover */
@@ -820,11 +840,13 @@ tryread:
 	 */
 	if (re_status == RPC_PROCUNAVAIL && p->cku_bcast) {
 		(void) xdr_rpc_free_verifier(xdrs, &reply_msg);
+		XDR_DESTROY(xdrs);
 		goto tryread;
 	}
 	if (re_status == RPC_AUTHERROR) {
 
 		(void) xdr_rpc_free_verifier(xdrs, &reply_msg);
+		XDR_DESTROY(xdrs);
 		call_table_remove(call);
 		if (call->call_reply != NULL) {
 			freemsg(call->call_reply);
@@ -914,6 +936,7 @@ tryread:
 	}
 
 	(void) xdr_rpc_free_verifier(xdrs, &reply_msg);
+	XDR_DESTROY(xdrs);
 
 done1:
 	call_table_remove(call);
@@ -987,8 +1010,8 @@ done:
 
 static enum clnt_stat
 clnt_clts_kcallit(CLIENT *h, rpcproc_t procnum, xdrproc_t xdr_args,
-	caddr_t argsp, xdrproc_t xdr_results, caddr_t resultsp,
-	struct timeval wait)
+    caddr_t argsp, xdrproc_t xdr_results, caddr_t resultsp,
+    struct timeval wait)
 {
 	return (clnt_clts_kcallit_addr(h, procnum, xdr_args, argsp,
 	    xdr_results, resultsp, wait, NULL));
@@ -1006,16 +1029,13 @@ clnt_clts_kerror(CLIENT *h, struct rpc_err *err)
 	*err = p->cku_err;
 }
 
+/*ARGSUSED*/
 static bool_t
 clnt_clts_kfreeres(CLIENT *h, xdrproc_t xdr_res, caddr_t res_ptr)
 {
-	/* LINTED pointer alignment */
-	struct cku_private *p = htop(h);
-	XDR *xdrs;
+	xdr_free(xdr_res, res_ptr);
 
-	xdrs = &(p->cku_outxdr);
-	xdrs->x_op = XDR_FREE;
-	return ((*xdr_res)(xdrs, res_ptr));
+	return (TRUE);
 }
 
 /*ARGSUSED*/
@@ -1038,6 +1058,17 @@ clnt_clts_kcontrol(CLIENT *h, int cmd, char *arg)
 	case CLGET_XID:
 		*((uint32_t *)arg) = p->cku_xid;
 		return (TRUE);
+
+	case CLSET_NODELAYONERR:
+		/*
+		 * CLTS does not have this functionality, but
+		 * we return TRUE here to avoid error messages.
+		 */
+		return (TRUE);
+
+	case CLGET_NODELAYONERR:
+		/* CLTS does not support this functionality. */
+		return (FALSE);
 
 	case CLSET_BCAST:
 		p->cku_bcast = *((uint32_t *)arg);
@@ -1062,6 +1093,16 @@ clnt_clts_kcontrol(CLIENT *h, int cmd, char *arg)
 			return (FALSE);
 
 		*(int *)arg = p->cku_useresvport;
+
+		return (TRUE);
+
+	case CLSET_BINDSRCADDR:
+		if (arg == NULL)
+			return (FALSE);
+
+		struct netbuf *addr = (struct netbuf *)arg;
+		clnt_dup_netbuf(addr, &p->cku_lcladdr);
+		p->cku_bindsrc = 1;
 
 		return (TRUE);
 
@@ -1096,6 +1137,7 @@ clnt_clts_kdestroy(CLIENT *h)
 	plen = strlen(p->cku_config.knc_protofmly) + 1;
 	kmem_free(p->cku_config.knc_protofmly, plen);
 	kmem_free(p->cku_addr.buf, p->cku_addr.maxlen);
+	kmem_free(p->cku_lcladdr.buf, p->cku_lcladdr.maxlen);
 	kmem_free(p, sizeof (*p));
 }
 
@@ -1242,6 +1284,9 @@ endpnt_type_create(struct knetconfig *config)
 	etype = kmem_alloc(sizeof (struct endpnt_type), KM_SLEEP);
 	etype->e_next = NULL;
 	etype->e_pcurr = NULL;
+	etype->e_laddr.buf = NULL;
+	etype->e_laddr.maxlen = 0;
+	etype->e_laddr.len = 0;
 	etype->e_itimer = 0;
 	etype->e_cnt = 0;
 
@@ -1285,6 +1330,8 @@ endpnt_type_free(struct endpnt_type *etype)
 	mutex_destroy(&etype->e_ilock);
 	list_destroy(&etype->e_pool);
 	list_destroy(&etype->e_ilist);
+	if (etype->e_laddr.buf != NULL)
+		clnt_free_netbuf(&etype->e_laddr);
 	kmem_free(etype, sizeof (endpnt_type_t));
 }
 
@@ -1368,7 +1415,8 @@ static int endpnt_get_return_null = 0;
  * can be obtained.
  */
 static struct endpnt *
-endpnt_get(struct knetconfig *config, int useresvport)
+endpnt_get(struct knetconfig *config, int useresvport,
+    int useintf, struct netbuf *laddr)
 {
 	struct endpnt_type	*n_etype = NULL;
 	struct endpnt_type	*np = NULL;
@@ -1399,12 +1447,21 @@ endpnt_get(struct knetconfig *config, int useresvport)
 	rw_enter(&endpnt_type_lock, RW_READER);
 
 top:
-	for (np = endpnt_type_list; np != NULL; np = np->e_next)
+	for (np = endpnt_type_list; np != NULL; np = np->e_next) {
 		if ((np->e_zoneid == zoneid) &&
 		    (np->e_rdev == config->knc_rdev) &&
 		    (strcmp(np->e_protofmly,
-		    config->knc_protofmly) == 0))
+		    config->knc_protofmly) == 0)) {
+			if (useintf == 1 && laddr != NULL &&
+			    laddr->buf != NULL && np->e_laddr.buf != NULL) {
+				retval = clnt_cmp_netaddr(laddr, &np->e_laddr);
+				if (retval != 0) {
+					continue;
+				}
+			}
 			break;
+		}
+	}
 
 	if (np == NULL && n_etype != NULL) {
 		ASSERT(rw_write_held(&endpnt_type_lock));
@@ -1435,6 +1492,9 @@ top:
 		 */
 		rw_exit(&endpnt_type_lock);
 		n_etype = endpnt_type_create(config);
+		if (useintf == 1 && laddr != NULL) {
+			clnt_dup_netbuf(laddr, &n_etype->e_laddr);
+		}
 
 		/*
 		 * We need to reaquire the lock with RW_WRITER here so that
@@ -1637,12 +1697,12 @@ top:
 	if (useresvport == -1)
 		useresvport = clnt_clts_do_bindresvport;
 
-	if (useresvport &&
+	if ((useresvport || useintf) &&
 	    (strcmp(config->knc_protofmly, NC_INET) == 0 ||
 	    strcmp(config->knc_protofmly, NC_INET6) == 0)) {
 
 		while ((error =
-		    bindresvport(new->e_tiptr, NULL, NULL, FALSE)) != 0) {
+		    bindresvport(new->e_tiptr, laddr, NULL, FALSE)) != 0) {
 			RPCLOG(1,
 			    "endpnt_get: bindresvport error %d\n", error);
 			if (error != EPROTO) {
@@ -1770,7 +1830,7 @@ endpnt_reap_dispatch(void *a)
 	 * endpoint.
 	 */
 	if (taskq_dispatch(endpnt_taskq, (task_func_t *)endpnt_reap, etp,
-	    TQ_NOSLEEP) == NULL)
+	    TQ_NOSLEEP) == TASKQID_INVALID)
 		return;
 	mutex_enter(&etp->e_ilock);
 	etp->e_async_count++;
@@ -1991,7 +2051,7 @@ endpnt_repossess(void *a)
 	 */
 	if (endpnt_taskq != NULL)
 		(void) taskq_dispatch(endpnt_taskq,
-		    (task_func_t *)endpnt_reclaim, (void *)ALL_ZONES,
+		    (task_func_t *)(uintptr_t)endpnt_reclaim, (void *)ALL_ZONES,
 		    TQ_NOSLEEP);
 }
 

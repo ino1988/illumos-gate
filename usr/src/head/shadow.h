@@ -26,7 +26,7 @@
  */
 
 /*	Copyright (c) 1988 AT&T	*/
-/*	  All Rights Reserved  	*/
+/*	  All Rights Reserved	*/
 
 
 #ifndef	_SHADOW_H
@@ -37,10 +37,10 @@
 extern "C" {
 #endif
 
-#define	PASSWD 		"/etc/passwd"
+#define	PASSWD		"/etc/passwd"
 #define	SHADOW		"/etc/shadow"
 #define	OPASSWD		"/etc/opasswd"
-#define	OSHADOW 	"/etc/oshadow"
+#define	OSHADOW		"/etc/oshadow"
 #define	PASSTEMP	"/etc/ptmp"
 #define	SHADTEMP	"/etc/stmp"
 

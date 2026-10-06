@@ -54,7 +54,7 @@
 		name='start'
 		exec='/lib/svc/method/vtdaemon'
 		timeout_seconds='0'>
-                <method_context>
+                <method_context working_directory='/'>
                         <method_credential user='root' group='root' />
                 </method_context>
         </exec_method>
@@ -64,7 +64,7 @@
 		name='stop'
 		exec=':kill -9'
 		timeout_seconds='3'>
-                <method_context>
+                <method_context working_directory='/'>
                         <method_credential user='root' group='root' />
                 </method_context>
         </exec_method>
@@ -101,7 +101,7 @@ vtdaemon for virtual console secure switch
 			</loctext>
 		</common_name>
 		<documentation>
-			<manpage title='vtdaemon' section='1M'
+			<manpage title='vtdaemon' section='8'
 				manpath='/usr/share/man' />
 		</documentation>
 	</template>

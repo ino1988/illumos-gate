@@ -31,14 +31,14 @@ LIBBSM = $(SRC)/lib/libbsm/common
 
 LDLIBS += -lnsl -lbsm -lsecdb
 
-OBJS = auditconfig.o 
+OBJS = auditconfig.o
 SRCS = $(OBJS:%.o=%.c)
 
 POFILE = $(PROG).po
 MSGFILES = $(SRCS)
 
 CPPFLAGS += -I$(LIBBSM)
-CERRWARN += -_gcc=-Wno-uninitialized
+CERRWARN += $(CNOWARN_UNINIT)
 CERRWARN += -_gcc=-Wno-parentheses
 
 .KEEP_STATE:

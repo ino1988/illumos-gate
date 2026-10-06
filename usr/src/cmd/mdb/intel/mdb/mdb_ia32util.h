@@ -22,11 +22,13 @@
  * Copyright 2007 Sun Microsystems, Inc.  All rights reserved.
  * Use is subject to license terms.
  */
+/*
+ * Copyright (c) 2018, Joyent, Inc.  All rights reserved.
+ * Copyright 2025 Oxide Computer Company
+ */
 
 #ifndef _MDB_IA32UTIL_H
 #define	_MDB_IA32UTIL_H
-
-#pragma ident	"%Z%%M%	%I%	%E% SMI"
 
 #include <mdb/mdb_kreg.h>
 #include <mdb/mdb_target_impl.h>
@@ -34,8 +36,6 @@
 #ifdef __cplusplus
 extern "C" {
 #endif
-
-typedef uchar_t mdb_instr_t;
 
 extern const mdb_tgt_regdesc_t mdb_ia32_kregs[];
 
@@ -49,8 +49,7 @@ extern int mdb_ia32_kvm_stack_iter(mdb_tgt_t *, const mdb_tgt_gregset_t *,
 
 extern int mdb_ia32_kvm_frame(void *, uintptr_t, uint_t, const long *,
     const mdb_tgt_gregset_t *);
-extern int mdb_ia32_kvm_framev(void *, uintptr_t, uint_t, const long *,
-    const mdb_tgt_gregset_t *);
+extern boolean_t mdb_ia32_prev_callcheck(uintptr_t);
 
 #ifdef __cplusplus
 }

@@ -22,15 +22,13 @@
 # Copyright 2006 Sun Microsystems, Inc.  All rights reserved.
 # Use is subject to license terms.
 #
-# ident	"%Z%%M%	%I%	%E% SMI"
-#
+# Copyright (c) 2018, Joyent, Inc.
 
 LIBS =		$(DYNLIB)
 
 CPPFLAGS +=	-I../inc -I$(SRC)/cmd/smserverd/
 LDLIBS +=	-lc $(PLUGIN_SPECIFIC_LIB)
 
-LINTPLUGIN  = llib-$(LIBNAME).ln
 PLUGINDIR = $(ROOTLIBDIR)/smedia
 PLUGINDIR64 = $(ROOTLIBDIR)/smedia/$(MACH64)
 FILEMODE = 555
@@ -39,23 +37,13 @@ SOFILES	= $(LIBRARY:%.a=%.so)
 PLUGINS  = $(LIBS:%=$(PLUGINDIR)/%)
 PLUGINS64  = $(LIBS:%=$(PLUGINDIR64)/%)
 
-CLEANFILES=	$(LINTOUT) $(LINTPLUGIN)
-
 SRCDIR =	../common
 
-LINTFLAGS += -xu
-LINTFLAGS64 += -xu
-$(LINTPLUGIN) :=	SRCS=$(OBJECTS:%.o=../common/%.c)
-$(LINTPLUGIN) :=	LINTFLAGS=-nvx
-$(LINTPLUGIN) :=	TARGET_ARCH=
-
-LINTSRC=	$(LINTPLUGIN:%.ln=%)
-ROOTLINTDIR=	$(ROOTLIBDIR)
-ROOTLINT=	$(LINTSRC:%=$(ROOTLINTDIR)/%)
+# not linted
+SMATCH=off
 
 .KEEP_STATE:
 
-lint:	lintcheck
 
 objs/%.o pics/%.o: ../common/%.c
 	$(COMPILE.c) -o $@ $<

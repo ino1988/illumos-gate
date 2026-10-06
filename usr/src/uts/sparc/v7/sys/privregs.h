@@ -27,8 +27,6 @@
 #ifndef _SYS_PRIVREGS_H
 #define	_SYS_PRIVREGS_H
 
-#pragma ident	"%Z%%M%	%I%	%E% SMI" /* from SunOS psl.h 1.2 */
-
 #ifdef	__cplusplus
 extern "C" {
 #endif
@@ -50,7 +48,7 @@ extern "C" {
 /*
  * This structure is only here for compatibility.  It is not used by the kernel
  * and may be removed in a future release.  A better way to access this data
- * is to use gregset_t; see proc(4) and ucontext(3HEAD).
+ * is to use gregset_t; see proc(5) and ucontext(3HEAD).
  */
 struct regs {
 	long	r_psr;		/* processor status register */

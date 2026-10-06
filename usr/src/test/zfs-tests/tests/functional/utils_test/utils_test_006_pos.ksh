@@ -26,7 +26,7 @@
 #
 
 #
-# Copyright (c) 2013 by Delphix. All rights reserved.
+# Copyright (c) 2013, 2016 by Delphix. All rights reserved.
 #
 
 . $STF_SUITE/include/libtest.shlib
@@ -34,11 +34,11 @@
 
 #
 # DESCRIPTION:
-# Ensure that the fsirand(1M) utility fails on a ZFS file system.
+# Ensure that the fsirand(8) utility fails on a ZFS file system.
 #
 # STRATEGY:
 # 1. Populate a ZFS file system with some files.
-# 2. Run fsirand(1M) against the device.
+# 2. Run fsirand(8) against the device.
 # 3. Ensure it fails.
 #
 
@@ -48,19 +48,19 @@ function cleanup
 {
 	ismounted $TESTPOOL/$TESTFS
 	(( $? != 0 )) && \
-		log_must $ZFS mount $TESTPOOL/$TESTFS
+		log_must zfs mount $TESTPOOL/$TESTFS
 
-	$RM -rf $TESTDIR/*
+	rm -rf $TESTDIR/*
 }
 
 log_onexit cleanup
 
-log_assert "Ensure that the fsirand(1M) utility fails on a ZFS file system."
+log_assert "Ensure that the fsirand(8) utility fails on a ZFS file system."
 
 populate_dir $NUM_FILES
 
-log_must $ZFS unmount $TESTDIR
+log_must zfs unmount $TESTDIR
 
-log_mustnot $FSIRAND /dev/rdsk/${DISK}s0
+log_mustnot fsirand /dev/rdsk/${DISK}s0
 
-log_pass "fsirand(1M) returned an error as expected."
+log_pass "fsirand(8) returned an error as expected."

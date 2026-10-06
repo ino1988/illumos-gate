@@ -21,6 +21,7 @@
 #
 # Copyright 2010 Sun Microsystems, Inc.  All rights reserved.
 # Use is subject to license terms.
+# Copyright 2019 Peter Tribble.
 #
 # psm/stand/boot/sparcv9/ieee1275/sun4u/Makefile
 #
@@ -32,7 +33,7 @@ include $(TOPDIR)/lib/Makefile.lib
 include $(TOPDIR)/psm/stand/lib/Makefile.lib
 include $(TOPDIR)/psm/Makefile.psm.64
 
-CFLAGS64	+= -xchip=ultra $(CCABS32)
+CFLAGS64	+= -xchip=ultra
 
 PLATSUN4DIR =	$(TOPDIR)/psm/promif/ieee1275/sun4
 SYSDIR =	$(TOPDIR)/uts
@@ -56,7 +57,6 @@ PLAT_PSUN4FILES =		\
 	prom_mmu.c		\
 	prom_retain.c		\
 	prom_sparc.c		\
-	prom_vercheck.c		\
 	prom_vername.c
 
 KARCH =		sun4u
@@ -68,11 +68,11 @@ PLAT_POBJ =	$(PLAT_PFILES:%.c=$(OBJSDIR)/%.o)
 PLAT_PSUN4OBJ =	$(PLAT_PSUN4FILES:%.c=$(OBJSDIR)/%.o)
 OBJS =		$(PLAT_POBJ) $(PLAT_PSUN4OBJ)
 L_OBJS =	$(OBJS:%.o=%.ln)
-L_SRCS = 	$(PLAT_PFILES:%=$(PLATDIR)/%)
-L_SRCS += 	$(PLAT_PSUN4FILES:%=$(PLATSUN4DIR)/%)
+L_SRCS =	$(PLAT_PFILES:%=$(PLATDIR)/%)
+L_SRCS +=	$(PLAT_PSUN4FILES:%=$(PLATSUN4DIR)/%)
 
 ARCHOPTS=	-Dsun4u
-ASFLAGS =	-P -D__STDC__ -D_BOOT -D_ASM
+ASFLAGS =	-D__STDC__ -D_BOOT -D_ASM
 CPPDEFS	=	$(ARCHOPTS) -D$(KARCH) -D_BOOT -D_KERNEL -D_MACHDEP
 CPPINCS =	-I. -I$(SYSDIR)/sun4 -I$(SYSDIR)/$(KARCH) -I$(SYSDIR)/$(MMU) \
 		-I$(SYSDIR)/sparc/v9 -I$(SYSDIR)/sparc \

@@ -2,6 +2,7 @@
 # Copyright 2004 Sun Microsystems, Inc.  All rights reserved.
 # Use is subject to license terms.
 #
+# Copyright (c) 2018, Joyent, Inc.
 
 PROG		=	kproplog
 
@@ -37,6 +38,9 @@ CERRWARN	+=	-_gcc=-Wno-unused-variable
 CERRWARN	+=	-_gcc=-Wno-unused-function
 CERRWARN	+=	-_gcc=-Wno-implicit-function-declaration
 
+# not linted
+SMATCH=off
+
 all:		$(PROG)
 
 $(PROG):	$(OBJS) $(DERIVED_OBJS)
@@ -56,8 +60,6 @@ iprop_xdr.c:	iprop.h $(KRB5IPROPDIR)/iprop.x
 $(OBJS): iprop.h
 
 install:	$(KRB5SBINPROG)
-
-lint:	$(ISRC) .WAIT lint_SRCS
 
 clean:
 	$(RM) $(OBJS) $(DERIVED_OBJS) $(ISRC)

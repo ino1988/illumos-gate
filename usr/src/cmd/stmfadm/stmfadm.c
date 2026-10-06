@@ -243,7 +243,7 @@ subCommandProps_t subcommands[] = {
 		OPERAND_MANDATORY_MULTIPLE, OPERANDSTRING_GROUP_MEMBER, NULL},
 	{"remove-view", removeViewFunc, "la", "l", NULL,
 		OPERAND_OPTIONAL_MULTIPLE, OPERANDSTRING_VIEW_ENTRY, NULL},
-	{NULL, 0, NULL, NULL, 0, NULL, 0, NULL, NULL}
+	{NULL, 0, NULL, NULL, 0, 0, 0, NULL, 0}
 };
 
 /* globals */
@@ -2249,7 +2249,6 @@ printExtLuProps(stmfGuid *guid)
 		ret++;
 	}
 
-done:
 	(void) stmfFreeLuResource(hdl);
 	return (ret);
 

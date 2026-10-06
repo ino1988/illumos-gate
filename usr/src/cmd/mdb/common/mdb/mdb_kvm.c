@@ -23,7 +23,8 @@
  */
 
 /*
- * Copyright (c) 2013, Joyent, Inc.  All rights reserved.
+ * Copyright 2019 Joyent, Inc.
+ * Copyright 2025 Oxide Computer Company
  */
 
 /*
@@ -51,12 +52,15 @@
 #include <sys/panic.h>
 #include <sys/dumphdr.h>
 #include <sys/dumpadm.h>
+#include <sys/uuid.h>
+#include <sys/stdbool.h>
 
 #include <dlfcn.h>
 #include <libctf.h>
 #include <string.h>
 #include <fcntl.h>
 #include <errno.h>
+#include <stddef.h>
 
 #include <mdb/mdb_target_impl.h>
 #include <mdb/mdb_err.h>
@@ -68,6 +72,7 @@
 #include <mdb/mdb_kvm.h>
 #include <mdb/mdb_module.h>
 #include <mdb/mdb_kb.h>
+#include <mdb/mdb_ks.h>
 #include <mdb/mdb.h>
 
 #define	KT_RELOC_BUF(buf, obase, nbase) \
@@ -94,6 +99,8 @@ typedef struct kt_maparg {
 static const char KT_MODULE[] = "mdb_ks";
 static const char KT_CTFPARENT[] = "genunix";
 
+static void (*print_buildversion)(void);
+
 static void
 kt_load_module(kt_data_t *kt, mdb_tgt_t *t, kt_module_t *km)
 {
@@ -110,6 +117,43 @@ kt_load_module(kt_data_t *kt, mdb_tgt_t *t, kt_module_t *km)
 	km->km_symtab = mdb_gelf_symtab_create_raw(&kt->k_file->gf_ehdr,
 	    &km->km_symtab_hdr, km->km_symbuf,
 	    &km->km_strtab_hdr, km->km_strtab, MDB_TGT_SYMTAB);
+}
+
+static bool
+kt_adjust_module(const struct modctl *ctl, struct module *kmod)
+{
+	/*
+	 * "struct module" was changed in illumos 17467 to accommodate
+	 * data from an extended ELF header. Unfortunately the new
+	 * fields were inserted into the middle of the structure
+	 * instead of the end where things would have been much easier
+	 * for us. In case we are loading a crash dump from an older
+	 * kernel everything will be misaligned from where we expect it
+	 * to be. Attempt to detect such cases and fix things up so we
+	 * can still load the module. Using CTF is not an option at
+	 * this point as we need to parse the module in order to find
+	 * its CTF data.
+	 */
+	if (kmod->text == ctl->mod_text &&
+	    kmod->text_size == ctl->mod_text_size) {
+		return (true);
+	}
+
+	bcopy(&kmod->shnum, &kmod->shdrs,
+	    sizeof (struct module) - offsetof(struct module, shdrs));
+
+	if (kmod->text != ctl->mod_text ||
+	    kmod->text_size != ctl->mod_text_size) {
+		mdb_printf("couldn't adjust old modctl %p's module",
+		    (void *)ctl->mod_mp);
+		return (false);
+	}
+
+	kmod->shnum = kmod->hdr.e_shnum;
+	kmod->phnum = kmod->hdr.e_phnum;
+	kmod->shstrndx = kmod->hdr.e_shstrndx;
+
+	return (true);
 }
 
 static void
@@ -140,7 +184,7 @@ kt_load_modules(kt_data_t *kt, mdb_tgt_t *t)
 	addr = head = (uintptr_t)sym.st_value;
 
 	do {
-		if (addr == NULL)
+		if (addr == 0)
 			break; /* Avoid spurious NULL pointers in list */
 
 		if (mdb_tgt_vread(t, &ctl, sizeof (ctl), addr) == -1) {
@@ -173,6 +217,9 @@ kt_load_modules(kt_data_t *kt, mdb_tgt_t *t)
 			    (void *)ctl.mod_mp);
 			continue;
 		}
+
+		if (!kt_adjust_module(&ctl, &kmod))
+			continue;
 
 		if (kmod.symspace == NULL || kmod.symhdr == NULL ||
 		    kmod.strhdr == NULL) {
@@ -485,6 +532,9 @@ kt_status_dcmd(uintptr_t addr, uint_t flags, int argc, const mdb_arg_t *argv)
 	mdb_printf("operating system: %s %s (%s)\n",
 	    uts.release, uts.version, uts.machine);
 
+	if (print_buildversion != NULL)
+		print_buildversion();
+
 	if (kt->k_dumphdr) {
 		dumphdr_t *dh = kt->k_dumphdr;
 
@@ -494,25 +544,47 @@ kt_status_dcmd(uintptr_t addr, uint_t flags, int argc, const mdb_arg_t *argv)
 
 		kt->k_dump_print_content(dh, kt->k_dumpcontent);
 	} else {
-		char uuid[37];
+		char uuid[UUID_PRINTABLE_STRING_LENGTH];
 
-		if (mdb_readsym(uuid, 37, "dump_osimage_uuid") == 37 &&
-		    uuid[36] == '\0') {
-			mdb_printf("image uuid: %s\n", uuid);
+		if (mdb_readsym(uuid, sizeof (uuid),
+		    "dump_osimage_uuid") == sizeof (uuid) &&
+		    uuid[sizeof (uuid) - 1] == '\0') {
+			mdb_printf("image uuid: %s\n", uuid[0] != '\0' ?
+			    uuid : "(not set)");
 		}
 	}
 
 	return (DCMD_OK);
 }
 
+static void
+kt_stack_help(void)
+{
+	mdb_printf(
+	    "Options:\n"
+	    "  -n   do not resolve addresses to names\n"
+	    "  -s   show the size of each stack frame to the left\n"
+	    "  -t   where CTF is present, show types for functions and "
+	    "arguments\n"
+	    "  -v   include frame pointer information (this is the default "
+	    "with %<b>$C%</b>)\n"
+	    "\n"
+	    "If the optional %<u>cnt%</u> is given, no more than %<u>cnt%</u> "
+	    "arguments are shown\nfor each stack frame.\n");
+}
+
 static const mdb_dcmd_t kt_dcmds[] = {
-	{ "$c", "?[cnt]", "print stack backtrace", kt_stack },
-	{ "$C", "?[cnt]", "print stack backtrace", kt_stackv },
+	{ "$c", "?[-nstv] [cnt]", "print stack backtrace", kt_stack,
+	    kt_stack_help },
+	{ "$C", "?[-nstv] [cnt]", "print stack backtrace", kt_stackv,
+	    kt_stack_help },
 	{ "$r", NULL, "print general-purpose registers", kt_regs },
 	{ "$?", NULL, "print status and registers", kt_regs },
 	{ "regs", NULL, "print general-purpose registers", kt_regs },
-	{ "stack", "?[cnt]", "print stack backtrace", kt_stack },
-	{ "stackregs", "?", "print stack backtrace and registers", kt_stackr },
+	{ "stack", "?[-nstv] [cnt]", "print stack backtrace", kt_stack,
+	    kt_stack_help },
+	{ "stackregs", "?[-nstv] [cnt]", "print stack backtrace and registers",
+	    kt_stackr, kt_stack_help },
 #ifdef __x86
 	{ "cpustack", "?[-v] [-c cpuid] [cnt]", "print stack backtrace for a "
 	    "specific CPU", kt_cpustack },
@@ -550,11 +622,11 @@ kt_module_by_name(kt_data_t *kt, const char *name)
 void
 kt_activate(mdb_tgt_t *t)
 {
-	static const mdb_nv_disc_t reg_disc = { NULL, reg_disc_get };
+	static const mdb_nv_disc_t reg_disc = { .disc_get = reg_disc_get };
 	kt_data_t *kt = t->t_data;
 	void *sym;
 
-	int oflag;
+	int oflag = 0;
 
 	mdb_prop_postmortem = kt->k_xpv_domu || (kt->k_dumphdr != NULL);
 	mdb_prop_kernel = TRUE;
@@ -581,6 +653,9 @@ kt_activate(mdb_tgt_t *t)
 			warn("failed to load kernel support module -- "
 			    "some modules may not load\n");
 		}
+
+		print_buildversion = (void (*)(void))dlsym(RTLD_NEXT,
+		    "mdb_print_buildversion");
 
 		if (mdb_prop_postmortem && kt->k_dumphdr != NULL) {
 			sym = dlsym(RTLD_NEXT, "mdb_dump_print_content");
@@ -802,6 +877,8 @@ kt_vtop(mdb_tgt_t *t, mdb_tgt_as_t as, uintptr_t va, physaddr_t *pap)
 	case (uintptr_t)MDB_TGT_AS_IO:
 		return (set_errno(EINVAL));
 	case (uintptr_t)MDB_TGT_AS_VIRT:
+	case (uintptr_t)MDB_TGT_AS_VIRT_I:
+	case (uintptr_t)MDB_TGT_AS_VIRT_S:
 		asp = kt->k_as;
 		break;
 	default:
@@ -1190,7 +1267,7 @@ kt_load_ctfdata(mdb_tgt_t *t, kt_module_t *km)
 	if (km->km_ctfp != NULL)
 		return (km->km_ctfp);
 
-	if (km->km_ctf_va == NULL) {
+	if (km->km_ctf_va == 0) {
 		(void) set_errno(EMDB_NOCTF);
 		return (NULL);
 	}
@@ -1482,7 +1559,7 @@ mdb_kvm_tgt_create(mdb_tgt_t *t, int argc, const char *argv[])
 		goto err;
 	}
 
-	kt->k_dump_print_content = (void (*)())kt_data_stub;
+	kt->k_dump_print_content = (void (*)())(uintptr_t)kt_data_stub;
 	kt->k_dump_find_curproc = kt_data_stub;
 
 	/*

@@ -20,6 +20,8 @@
  */
 /*
  * Copyright (c) 2010, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2016, Chris Fraire <cfraire@me.com>.
+ * Copyright 2021 Tintri by DDN, Inc. All rights reserved.
  */
 #ifndef _LIBIPADM_H
 #define	_LIBIPADM_H
@@ -29,6 +31,7 @@ extern "C" {
 #endif
 
 #include <sys/types.h>
+#include <sys/param.h>
 #include <sys/socket.h>
 #include <net/if.h>
 #include <netdb.h>
@@ -36,6 +39,8 @@ extern "C" {
 #include <libnvpair.h>
 #include <netinet/tcp.h>
 #include <sys/stropts.h>
+#include <sys/list.h>
+#include <stddef.h>
 
 #define	IPADM_AOBJ_USTRSIZ	32
 #define	IPADM_AOBJSIZ		(LIFNAMSIZ + IPADM_AOBJ_USTRSIZ)
@@ -100,8 +105,8 @@ typedef enum {
  *
  *  - IPADM_OPT_PERSIST:
  *	For all the create/delete/up/down/set/get functions,
- * 	requests to persist the configuration so that it can be
- *	re-enabled or reapplied on boot.
+ *	requests to persist the configuration so that it can be
+ *	re-enabled or re-applied on boot.
  *
  *  - IPADM_OPT_ACTIVE:
  *	Requests to apply configuration without persisting it and
@@ -141,7 +146,17 @@ typedef enum {
  *	Used to bring up a static address on creation
  *
  *  - IPADM_OPT_V46
- *      Used to plumb both IPv4 and IPv6 interfaces by ipadm_create_addr()
+ *	Used to plumb both IPv4 and IPv6 interfaces by ipadm_create_addr()
+ *
+ *  - IPADM_OPT_SET_PROPS
+ *	Used to indicate the update changes the running configuration of
+ *	"props" data on the object. The props are cached there on the parent,
+ *	but the PROPS_ONLY change does not affect the ACTIVE/PERSIST state of
+ *	the parent.
+ *
+ *  - IPADM_OPT_PERSIST_PROPS
+ *	Used when IPADM_OPT_SET_PROPS is active to indicate the update changes
+ *  the persistent configuration of the "props" data on the object.
  */
 #define	IPADM_OPT_PERSIST	0x00000001
 #define	IPADM_OPT_ACTIVE	0x00000002
@@ -157,6 +172,8 @@ typedef enum {
 #define	IPADM_OPT_INFORM	0x00000800
 #define	IPADM_OPT_UP		0x00001000
 #define	IPADM_OPT_V46		0x00002000
+#define	IPADM_OPT_SET_PROPS	0x00004000
+#define	IPADM_OPT_PERSIST_PROPS		0x00008000
 
 /* IPADM property class */
 #define	IPADMPROP_CLASS_MODULE	0x00000001	/* on 'protocol' only */
@@ -191,12 +208,29 @@ typedef enum {
 	IFIS_DISABLED		/* Interface has been disabled. */
 } ipadm_if_state_t;
 
+typedef list_t ipadm_ipmp_members_t;
+
+typedef struct {
+    list_node_t node;
+    char if_name[LIFNAMSIZ];
+} ipadm_ipmp_member_t;
+
+typedef enum {
+    IPADM_IF_CLASS_REGULAR,
+    IPADM_IF_CLASS_IPMP,
+    IPADM_IF_CLASS_VIRTUAL,
+    IPADM_IF_CLASS_UNKNOWN
+} ipadm_if_class_t;
+
 typedef struct ipadm_if_info_s {
 	struct ipadm_if_info_s	*ifi_next;
 	char			ifi_name[LIFNAMSIZ];	/* interface name */
+	ipadm_if_class_t	ifi_class;		/* interface class */
 	ipadm_if_state_t	ifi_state;		/* see above */
 	uint_t			ifi_cflags;		/* current flags */
 	uint_t			ifi_pflags;		/* persistent flags */
+	ipadm_ipmp_members_t    ifi_ipmp_cmembers; /* current IPMP members */
+	ipadm_ipmp_members_t    ifi_ipmp_pmembers; /* persistent IPMP members */
 } ipadm_if_info_t;
 
 /* ipadm_if_info_t flags */
@@ -257,7 +291,7 @@ extern void		ipadm_close(ipadm_handle_t);
 /* Check authorization for network configuration */
 extern boolean_t	ipadm_check_auth(void);
 /*
- * Interface mangement functions
+ * Interface management functions
  */
 extern ipadm_status_t	ipadm_create_if(ipadm_handle_t, char *, sa_family_t,
 			    uint32_t);
@@ -270,6 +304,10 @@ extern void		ipadm_free_if_info(ipadm_if_info_t *);
 extern ipadm_status_t	ipadm_delete_if(ipadm_handle_t, const char *,
 			    sa_family_t, uint32_t);
 extern void		ipadm_if_move(ipadm_handle_t, const char *);
+extern ipadm_status_t ipadm_add_ipmp_member(ipadm_handle_t, const char *,
+	    const char *, uint32_t);
+extern ipadm_status_t ipadm_remove_ipmp_member(ipadm_handle_t, const char *,
+	    const char *, uint32_t);
 
 /*
  * Address management functions
@@ -315,6 +353,7 @@ extern ipadm_status_t	ipadm_set_stateful(ipadm_addrobj_t, boolean_t);
 /* Functions to set fields in addrobj for DHCP */
 extern ipadm_status_t	ipadm_set_primary(ipadm_addrobj_t, boolean_t);
 extern ipadm_status_t	ipadm_set_wait_time(ipadm_addrobj_t, int32_t);
+extern ipadm_status_t	ipadm_set_reqhost(ipadm_addrobj_t, const char *);
 
 /*
  * Property management functions
@@ -347,8 +386,8 @@ extern ipadm_status_t	ipadm_get_prop(ipadm_handle_t, const char *, char *,
 /*
  * miscellaneous helper functions.
  */
-extern const char 	*ipadm_status2str(ipadm_status_t);
-extern int		ipadm_str2nvlist(const char *, nvlist_t **, uint_t);
+extern const char	*ipadm_status2str(ipadm_status_t);
+extern ipadm_status_t	ipadm_str2nvlist(const char *, nvlist_t **, uint_t);
 extern size_t		ipadm_nvlist2str(nvlist_t *, char *, size_t);
 extern char		*ipadm_proto2str(uint_t);
 extern uint_t		ipadm_str2proto(const char *);
@@ -357,6 +396,8 @@ extern int		ipadm_legacy2new_propname(const char *, char *,
 			    uint_t, uint_t *);
 extern int		ipadm_new2legacy_propname(const char *, char *,
 			    uint_t, uint_t);
+extern boolean_t	ipadm_is_valid_hostname(const char *hostname);
+extern boolean_t	ipadm_is_nil_hostname(const char *hostname);
 
 #ifdef	__cplusplus
 }

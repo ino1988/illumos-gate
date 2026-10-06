@@ -72,7 +72,7 @@
 		name='start'
 		exec='/usr/lib/vscan/vscand'
 		timeout_seconds='60' >
-		<method_context>
+		<method_context working_directory='/'>
 			<method_credential
 				user='root'
 				group='sys'
@@ -116,7 +116,7 @@
 			<loctext xml:lang='C'> VSCAN Service daemon</loctext>
 		</common_name>
 		<documentation>
-			<manpage title='vscand' section='1M'
+			<manpage title='vscand' section='8'
 				manpath='/usr/share/man' />
 		</documentation>
 	</template>

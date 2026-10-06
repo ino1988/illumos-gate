@@ -24,7 +24,8 @@
  * Use is subject to license terms.
  */
 /*
- * Copyright (c) 2012, Joyent, Inc.  All rights reserved.
+ * Copyright (c) 2018, Joyent, Inc.
+ * Copyright 2022 Oxide Computer Company
  */
 
 /*
@@ -49,6 +50,68 @@
 #include	"_audit.h"
 #include	"msg.h"
 
+/*
+ * Number of bytes to save for register usage.
+ */
+uint_t _plt_save_size;
+void (*_plt_fp_save)(void *);
+void (*_plt_fp_restore)(void *);
+
+extern void _elf_rtbndr_fp_save_orig(void *);
+extern void _elf_rtbndr_fp_restore_orig(void *);
+extern void _elf_rtbndr_fp_fxsave(void *);
+extern void _elf_rtbndr_fp_fxrestore(void *);
+extern void _elf_rtbndr_fp_xsave(void *);
+extern void _elf_rtbndr_fp_xrestore(void *);
+
+/*
+ * Based on what the kernel has told us, go through and set up the various
+ * pointers that we'll need for elf_rtbndr for the FPU.
+ */
+static void
+_setup_plt_fpu(int kind, size_t len)
+{
+	/*
+	 * If we didn't get a length for some reason, fall back to the old
+	 * implementation.
+	 */
+	if (len == 0)
+		kind = -1;
+
+	switch (kind) {
+	case AT_386_FPINFO_FXSAVE:
+		_plt_fp_save = _elf_rtbndr_fp_fxsave;
+		_plt_fp_restore = _elf_rtbndr_fp_fxrestore;
+		_plt_save_size = len;
+		break;
+	/*
+	 * We can treat processors that don't correctly handle the exception
+	 * information in xsave the same way we do others. The information
+	 * that may or may not be properly saved and restored should not be
+	 * relevant to us because of the ABI.
+	 */
+	case AT_386_FPINFO_XSAVE:
+	case AT_386_FPINFO_XSAVE_AMD:
+		_plt_fp_save = _elf_rtbndr_fp_xsave;
+		_plt_fp_restore = _elf_rtbndr_fp_xrestore;
+		_plt_save_size = len;
+		break;
+	default:
+		_plt_fp_save = _elf_rtbndr_fp_save_orig;
+		_plt_fp_restore = _elf_rtbndr_fp_restore_orig;
+		/*
+		 * The ABI says that 8 floating point registers are used for
+		 * passing arguments (%xmm0 through %xmm7). Because these
+		 * registers on some platforms may shadow the %ymm and %zmm
+		 * registers, we end up needing to size this for the maximally
+		 * sized register we care about, a 512-bit (64-byte) zmm
+		 * register.
+		 */
+		_plt_save_size = 64 * 8;
+		break;
+	}
+}
+
 /* VARARGS */
 unsigned long
 _setup(Boot *ebp, Dyn *ld_dyn)
@@ -59,7 +122,7 @@ _setup(Boot *ebp, Dyn *ld_dyn)
 	char		*_rt_name, **_envp, **_argv;
 	int		_syspagsz = 0, fd = -1;
 	uint_t		_flags = 0;
-	uint_t		hwcap[2] = { 0, 0 };
+	uint_t		hwcap[3] = { 0, 0, 0 };
 	Dyn		*dyn_ptr;
 	Phdr		*phdr = NULL;
 	Rt_map		*lmp;
@@ -67,7 +130,8 @@ _setup(Boot *ebp, Dyn *ld_dyn)
 	uid_t		uid = (uid_t)-1, euid = (uid_t)-1;
 	gid_t		gid = (gid_t)-1, egid = (gid_t)-1;
 	char		*_platform = NULL, *_execname = NULL, *_emulator = NULL;
-	int		auxflags = -1;
+	int		auxflags = -1, fpkind = -1;
+	size_t		fpsize = 0;
 
 	/*
 	 * Scan the bootstrap structure to pick up the basics.
@@ -154,9 +218,19 @@ _setup(Boot *ebp, Dyn *ld_dyn)
 			/* hardware capabilities */
 			hwcap[1] = (uint_t)auxv->a_un.a_val;
 			break;
+		case AT_SUN_HWCAP3:
+			/* hardware capabilities */
+			hwcap[2] = (uint_t)auxv->a_un.a_val;
+			break;
 		case AT_SUN_EMULATOR:
 			/* name of emulation library, if any */
 			_emulator = auxv->a_un.a_ptr;
+			break;
+		case AT_SUN_FPTYPE:
+			fpkind = (int)auxv->a_un.a_val;
+			break;
+		case AT_SUN_FPSIZE:
+			fpsize = (size_t)auxv->a_un.a_val;
 			break;
 		}
 	}
@@ -231,11 +305,17 @@ _setup(Boot *ebp, Dyn *ld_dyn)
 	    sizeof (ulong_t) + sizeof (Sym);
 
 	/*
+	 * Initialize the amd64 specific PLT relocation constants based on the
+	 * FP information that we have.
+	 */
+	_setup_plt_fpu(fpkind, fpsize);
+
+	/*
 	 * Continue with generic startup processing.
 	 */
 	if ((lmp = setup((char **)_envp, (auxv_t *)_auxv, _flags, _platform,
 	    _syspagsz, _rt_name, ld_base, interp_base, fd, phdr,
-	    _execname, _argv, uid, euid, gid, egid, NULL, auxflags,
+	    _execname, _argv, uid, euid, gid, egid, auxflags,
 	    hwcap)) == NULL) {
 		rtldexit(&lml_main, 1);
 	}

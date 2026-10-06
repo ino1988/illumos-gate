@@ -71,7 +71,7 @@ audio_attach(dev_info_t *dip, ddi_attach_cmd_t cmd)
 
 	/* look up our properties! */
 
-	if (audio_dev_register(adev) != NULL) {
+	if (audio_dev_register(adev) != DDI_SUCCESS) {
 		audio_dev_free(adev);
 		return (DDI_FAILURE);
 	}
@@ -495,7 +495,7 @@ struct audio_ops_helper {
 	struct qinit		rqinit;
 	struct qinit		wqinit;
 	struct module_info	minfo;
-	char			name[MODMAXNAMELEN+1];
+	char			name[MODMAXNAMELEN];
 };
 
 void
@@ -507,7 +507,7 @@ audio_init_ops(struct dev_ops *devops, const char *name)
 
 	(void) strlcpy(helper->name, name, sizeof (helper->name));
 
-	helper->minfo.mi_idnum = 0;	/* only for strlog(1M) */
+	helper->minfo.mi_idnum = 0;	/* only for strlog(8) */
 	helper->minfo.mi_idname = helper->name;
 	helper->minfo.mi_minpsz = 0;
 	helper->minfo.mi_maxpsz = 8192;

@@ -30,14 +30,11 @@ ROOTFS_PROG=	$(LIBPROG)
 include		../../Makefile.fstype
 
 OBJS=	$(LIBPROG).o
-SRCS=	$(LIBPROG).c $(FSLIBSRC)
 
 LDLIBS += -lsmbfs -lsec
 
 CFLAGS += $(CCVERBOSE)
 CERRWARN += -_gcc=-Wno-unused-variable
-CERRWARN += -_gcc=-Wno-unused-label
-C99MODE= $(C99_ENABLE)
 
 CLOBBERFILES	+= $(LIBPROG)
 
@@ -45,9 +42,7 @@ all:	$(ROOTFS_PROG)
 
 install:	$(ROOTLIBFSTYPEPROG)
 
-lint:	lint_SRCS
-
-clean:     
+clean:
 	$(RM) $(OBJS)
 
 .KEEP_STATE:

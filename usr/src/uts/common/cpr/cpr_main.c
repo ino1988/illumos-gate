@@ -24,6 +24,10 @@
  */
 
 /*
+ * Copyright 2019 Joyent, Inc.
+ */
+
+/*
  * This module contains the guts of checkpoint-resume mechanism.
  * All code in this module is platform independent.
  */
@@ -942,7 +946,7 @@ cpr_resume(int sleeptype)
 		goto rb_others;
 	}
 
-rb_all:
+#if defined(__sparc)
 	/*
 	 * perform platform-dependent initialization
 	 */
@@ -953,6 +957,7 @@ rb_all:
 	 * system did not really go down if we jump here
 	 */
 rb_dump:
+#endif
 	/*
 	 * IMPORTANT:  SENSITIVE RESUME SEQUENCE
 	 *
@@ -1324,7 +1329,7 @@ cpr_all_online(void)
 	do {
 		cp->cpu_cpr_flags &= ~CPU_CPR_ONLINE;
 		if (!CPU_ACTIVE(cp)) {
-			if ((rc = cpu_online(cp)) != 0)
+			if ((rc = cpu_online(cp, 0)) != 0)
 				break;
 			CPU_SET_CPR_FLAGS(cp, CPU_CPR_ONLINE);
 		}

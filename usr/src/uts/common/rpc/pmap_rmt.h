@@ -34,8 +34,6 @@
 #ifndef _RPC_PMAP_RMT_H
 #define	_RPC_PMAP_RMT_H
 
-#pragma ident	"%Z%%M%	%I%	%E% SMI"
-
 #ifndef _KERNEL
 
 #include <rpc/pmap_prot.h>
@@ -60,11 +58,7 @@ struct rmtcallargs {
 	xdrproc_t xdr_args;
 };
 
-#ifdef __STDC__
 bool_t xdr_rmtcall_args(XDR *, struct rmtcallargs *);
-#else
-bool_t xdr_rmtcall_args();
-#endif
 
 struct rmtcallres {
 	rpcport_t *port_ptr;
@@ -73,11 +67,7 @@ struct rmtcallres {
 	xdrproc_t xdr_results;
 };
 typedef struct rmtcallres rmtcallres;
-#ifdef __STDC__
 bool_t xdr_rmtcall_args(XDR *, struct rmtcallargs *);
-#else
-bool_t xdr_rmtcall_args();
-#endif
 
 #ifdef __cplusplus
 }

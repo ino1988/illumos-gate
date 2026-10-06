@@ -39,15 +39,11 @@ TEXT_DOMAIN =	SUNW_OST_NETRPC
 POFILES =	generic.po
 POFILE = mech_dh.po
 
-SED=    sed
-GREP=   grep
-
 all :=          TARGET= all
 clean :=        TARGET= clean
 clobber :=      TARGET= clobber
 delete :=       TARGET= delete
 install :=      TARGET= install
-lint :=         TARGET= lint
 catalog :=      TARGET= catalog
 package :=      TARGET= package
 _msg :=		TARGET= _msg
@@ -57,7 +53,7 @@ all:            $(DERIVED_FILES) .WAIT $(SUBDIRS)
 
 install:        $(DERIVED_FILES) .WAIT $(SUBDIRS)
 
-clean clobber delete lint catalog package:      $(SUBDIRS)
+clean clobber delete catalog package:      $(SUBDIRS)
 
 #
 # Rules for building the derived files

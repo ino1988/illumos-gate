@@ -23,17 +23,15 @@
 # Copyright 2004 Sun Microsystems, Inc.  All rights reserved.
 # Use is subject to license terms.
 #
-# ident	"%Z%%M%	%I%	%E% SMI"
+# Copyright 2019 OmniOS Community Edition (OmniOSce) Association.
 #
 
 include ../Makefile.com
 
 .KEEP_STATE:
 
-LINTFLAGS64 +=	$(VAR_LINTFLAGS64)
-
 all:		$(DYNLIB)
 install:	all $(ROOTDYNLIB64)
 
 include ../Makefile.targ
-include ../../Makefile.sub.64
+include		$(SRC)/Makefile.master.64

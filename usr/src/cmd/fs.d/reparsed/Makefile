@@ -38,7 +38,6 @@ CLOBBERFILES += $(TYPEPROG)
 
 CFLAGS +=	$(CCVERBOSE)
 CERRWARN +=	-_gcc=-Wno-unused-variable
-C99MODE=	$(C99_ENABLE)
 
 LDLIBS +=	-lreparse -lnsl
 
@@ -47,8 +46,6 @@ CPPFLAGS +=	-I$(SRC)/uts/common
 all:		$(TYPEPROG)
 
 catalog:	$(POFILE)
-
-lint:		lint_SRCS
 
 clean:
 		$(RM) $(OBJS) $(POFILE)

@@ -1,4 +1,4 @@
-/* 
+/*
  * ***** BEGIN LICENSE BLOCK *****
  * Version: MPL 1.1/GPL 2.0/LGPL 2.1
  *
@@ -41,8 +41,6 @@
  *
  * Sun elects to use this software under the MPL license.
  */
-
-#pragma ident	"%Z%%M%	%I%	%E% SMI"
 
 #include "ecl.h"
 #include "ecl-curve.h"
@@ -126,7 +124,9 @@ ECCurveParams_dup(const ECCurveParams * params, int kmflag)
 	}
 	ret->cofactor = params->cofactor;
 
+#ifndef _KERNEL
   CLEANUP:
+#endif
 	if (res != 1) {
 		EC_FreeCurveParams(ret);
 		return NULL;

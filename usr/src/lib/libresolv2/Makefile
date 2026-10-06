@@ -47,21 +47,17 @@ all :=		TARGET= all
 clean :=	TARGET= clean
 clobber :=	TARGET= clobber
 install :=	TARGET= install
-lint :=		TARGET= lint
 _msg :=		TARGET= _msg
 
-LIBRARY= 	libresolv.a
+LIBRARY=	libresolv.a
 TEXT_DOMAIN=	SUNW_OST_OSLIB
 XGETFLAGS=	-a
 POFILE=		$(LIBRARY:.a=.po)
 POFILES=	generic.po
 
-SED=	sed
-GREP=	grep
-
 .KEEP_STATE:
 
-all clean clobber lint: $(SUBDIRS)
+all clean clobber: $(SUBDIRS)
 
 install: $(SUBDIRS) $(ROOTMANIFEST) $(ROOTSVCMETHOD)
 
@@ -71,11 +67,11 @@ $(MANIFESTDIR):
 	$(INS.dir)
 
 $(MANIFESTDIR)/%: %
-	$(INS.file)                                                             
+	$(INS.file)
 $(ROOTSVCMETHOD): $(SVCMETHODDIR)
 
 $(SVCMETHODDIR):
-	$(INS.dir) 
+	$(INS.dir)
 
 $(SVCMETHODDIR)/%: %
 	$(INS.file)

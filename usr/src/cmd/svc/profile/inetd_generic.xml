@@ -32,7 +32,7 @@
 -->
 <service_bundle type='profile' name='default'>
 	<!--
-		inetd(1M) services
+		inetd(8) services
 	-->
 	<service name='network/finger' version='1' type='service'>
 		<instance name='default' enabled='true'/>
@@ -48,24 +48,12 @@
 	</service>
 
 	<!--
-		inetd(1M) RPC services
+		inetd(8) RPC services
 	-->
 	<service name='network/nfs/rquota' version='1' type='service'>
 		<instance name='default' enabled='true'/>
 	</service>
 	<service name='network/rpc/gss' version='1' type='service'>
-		<instance name='default' enabled='true'/>
-	</service>
-	<service name='network/rpc/mdcomm' version='1' type='service'>
-		<instance name='default' enabled='true'/>
-	</service>
-	<service name='network/rpc/meta' version='1' type='service'>
-		<instance name='default' enabled='true'/>
-	</service>
-	<service name='network/rpc/metamed' version='1' type='service'>
-		<instance name='default' enabled='true'/>
-	</service>
-	<service name='network/rpc/metamh' version='1' type='service'>
 		<instance name='default' enabled='true'/>
 	</service>
 	<service name='network/rpc/rstat' version='1' type='service'>

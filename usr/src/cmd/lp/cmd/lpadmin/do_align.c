@@ -25,9 +25,8 @@
 /*
  * Copyright 2007 Sun Microsystems, Inc.  All rights reserved.
  * Use is subject to license terms.
+ * Copyright (c) 2016 by Delphix. All rights reserved.
  */
-
-#pragma ident	"%Z%%M%	%I%	%E% SMI"
 
 #include <stdio.h>
 #include <errno.h>
@@ -183,7 +182,7 @@ int			do_align (printer, form, pwheel)
 	 * feature is likely to be used much, so why hassle the
 	 * administrator?
 #if	defined(WARN_OF_TOO_MANY_LINES)
-	 * However, do warn him or her.
+	 * However, do warn them.
 #endif
 	 */
 

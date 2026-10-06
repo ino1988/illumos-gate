@@ -24,15 +24,17 @@
  */
 
 /*	Copyright (c) 1984, 1986, 1987, 1988, 1989 AT&T	*/
-/*	  All Rights Reserved  	*/
+/*	  All Rights Reserved	*/
 
 /* Copyright (c) 2013, OmniTI Computer Consulting, Inc. All rights reserved. */
+/* Copyright 2020 Joyent, Inc. */
+/* Copyright 2026 Oxide Computer Company */
 
 #ifndef _SYS_FILE_H
 #define	_SYS_FILE_H
 
 #include <sys/t_lock.h>
-#ifdef _KERNEL
+#if defined(_KERNEL) || defined(_FAKE_KERNEL)
 #include <sys/model.h>
 #include <sys/user.h>
 #endif
@@ -54,7 +56,7 @@ extern "C" {
  */
 /*
  * One file structure is allocated for each open/creat/pipe call.
- * Main use is to hold the read/write pointer associated with
+ * Main use is to hold the read/write pointer (and OFD locks) associated with
  * each open file.
  */
 typedef struct file {
@@ -66,6 +68,7 @@ typedef struct file {
 	struct cred	*f_cred;	/* credentials of user who opened it */
 	struct f_audit_data	*f_audit_data;	/* file audit data */
 	int		f_count;	/* reference count */
+	struct filock *f_filock;	/* ptr to single lock_descriptor_t */
 } file_t;
 
 /*
@@ -116,8 +119,11 @@ typedef struct fpollinfo {
 #define	FEXEC		0x400000	/* O_EXEC = 0x400000 */
 
 #define	FCLOEXEC	0x800000	/* O_CLOEXEC = 0x800000 */
+#define	FDIRECTORY	0x1000000	/* O_DIRECTORY = 0x1000000 */
+#define	FDIRECT		0x2000000	/* O_DIRECT = 0x2000000 */
+#define	FCLOFORK	0x4000000	/* O_CLOFORK = 0x4000000 */
 
-#ifdef _KERNEL
+#if defined(_KERNEL) || defined(_FAKE_KERNEL)
 
 /*
  * Fake flags for driver ioctl calls to inform them of the originating
@@ -168,7 +174,20 @@ typedef struct fpollinfo {
 #define	L_SET	0	/* for lseek */
 #endif /* L_SET */
 
-#if defined(_KERNEL)
+/*
+ * For flock(3C).  These really don't belong here but for historical reasons
+ * the interface defines them to be here.
+ */
+#define	LOCK_SH	1
+#define	LOCK_EX	2
+#define	LOCK_NB	4
+#define	LOCK_UN	8
+
+#if !defined(_STRICT_SYMBOLS)
+extern int flock(int, int);
+#endif
+
+#if defined(_KERNEL) || defined(_FAKE_KERNEL)
 
 /*
  * Routines dealing with user per-open file flags and
@@ -177,19 +196,25 @@ typedef struct fpollinfo {
 struct proc;	/* forward reference for function prototype */
 struct vnodeops;
 struct vattr;
+struct uf_info;
+struct kspawn_param;
 
 extern file_t *getf(int);
+extern file_t *getf_gen(int, uf_entry_gen_t *);
 extern void releasef(int);
-extern void areleasef(int, uf_info_t *);
+extern void areleasef(int, struct uf_info *);
 #ifndef	_BOOT
-extern void closeall(uf_info_t *);
+extern void closeall(struct uf_info *);
 #endif
-extern void flist_fork(uf_info_t *, uf_info_t *);
+extern void flist_fork(struct uf_info *, struct uf_info *);
+extern void flist_spawn(struct uf_info *, struct uf_info *,
+    const struct kspawn_param *);
 extern int closef(file_t *);
 extern int closeandsetf(int, file_t *);
 extern int ufalloc_file(int, file_t *);
 extern int ufalloc(int);
 extern int ufcanalloc(struct proc *, uint_t);
+extern int kopenat(int, char *, int, int, model_t);
 extern int falloc(struct vnode *, int, file_t **, int *);
 extern void finit(void);
 extern void unfalloc(file_t *);
@@ -197,12 +222,15 @@ extern void setf(int, file_t *);
 extern int f_getfd_error(int, int *);
 extern char f_getfd(int);
 extern int f_setfd_error(int, int);
-extern void f_setfd(int, char);
+extern void f_setfd_or(int, short);
 extern int f_getfl(int, int *);
 extern int f_badfd(int, int *, int);
 extern int fassign(struct vnode **, int, int *);
-extern void fcnt_add(uf_info_t *, int);
-extern void close_exec(uf_info_t *);
+extern void fcnt_add(struct uf_info *, int);
+extern int fdup2(int, int);
+extern void fd_too_big(struct proc *);
+extern void closefrom_all(int);
+extern void close_exec(struct uf_info *);
 extern void clear_stale_fd(void);
 extern void clear_active_fd(int);
 extern void free_afd(afd_t *afd);
@@ -215,7 +243,7 @@ extern int sock_getfasync(struct vnode *);
 extern int files_can_change_zones(void);
 #ifdef DEBUG
 /* The following functions are only used in ASSERT()s */
-extern void checkwfdlist(struct vnode *, fpollinfo_t *);
+extern void checkwfdlist(struct vnode *, fpollinfo_t *, int);
 extern void checkfpollinfo(void);
 extern int infpollinfo(int);
 #endif	/* DEBUG */

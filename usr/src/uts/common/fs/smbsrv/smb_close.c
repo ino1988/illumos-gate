@@ -21,6 +21,8 @@
 /*
  * Copyright 2009 Sun Microsystems, Inc.  All rights reserved.
  * Use is subject to license terms.
+ *
+ * Copyright 2017 Nexenta Systems, Inc.  All rights reserved.
  */
 
 #include <smbsrv/smb_kproto.h>
@@ -43,26 +45,29 @@ smb_pre_close(smb_request_t *sr)
 
 	rc = smbsr_decode_vwv(sr, "wl", &sr->smb_fid, &sr->arg.timestamp);
 
-	DTRACE_SMB_1(op__Close__start, smb_request_t *, sr);
+	DTRACE_SMB_START(op__Close, smb_request_t *, sr);
 	return ((rc == 0) ? SDRC_SUCCESS : SDRC_ERROR);
 }
 
 void
 smb_post_close(smb_request_t *sr)
 {
-	DTRACE_SMB_1(op__Close__done, smb_request_t *, sr);
+	DTRACE_SMB_DONE(op__Close, smb_request_t *, sr);
 }
 
 smb_sdrc_t
 smb_com_close(smb_request_t *sr)
 {
+	int32_t mtime;
+
 	smbsr_lookup_file(sr);
 	if (sr->fid_ofile == NULL) {
 		smbsr_error(sr, NT_STATUS_INVALID_HANDLE, ERRDOS, ERRbadfid);
 		return (SDRC_ERROR);
 	}
 
-	smb_ofile_close(sr->fid_ofile, sr->arg.timestamp);
+	mtime = smb_time_local_to_gmt(sr, sr->arg.timestamp);
+	smb_ofile_close(sr->fid_ofile, mtime);
 
 	if (smbsr_encode_empty_result(sr) != 0)
 		return (SDRC_ERROR);
@@ -81,28 +86,32 @@ smb_pre_close_and_tree_disconnect(smb_request_t *sr)
 
 	rc = smbsr_decode_vwv(sr, "wl", &sr->smb_fid, &sr->arg.timestamp);
 
-	DTRACE_SMB_1(op__CloseAndTreeDisconnect__start, smb_request_t *, sr);
+	DTRACE_SMB_START(op__CloseAndTreeDisconnect, smb_request_t *, sr);
 	return ((rc == 0) ? SDRC_SUCCESS : SDRC_ERROR);
 }
 
 void
 smb_post_close_and_tree_disconnect(smb_request_t *sr)
 {
-	DTRACE_SMB_1(op__CloseAndTreeDisconnect__done, smb_request_t *, sr);
+	DTRACE_SMB_DONE(op__CloseAndTreeDisconnect, smb_request_t *, sr);
 }
 
 smb_sdrc_t
 smb_com_close_and_tree_disconnect(smb_request_t *sr)
 {
+	int32_t mtime;
+
 	smbsr_lookup_file(sr);
 	if (sr->fid_ofile == NULL) {
 		smbsr_error(sr, NT_STATUS_INVALID_HANDLE, ERRDOS, ERRbadfid);
 		return (SDRC_ERROR);
 	}
 
-	smb_ofile_close(sr->fid_ofile, sr->arg.timestamp);
-	smb_session_cancel_requests(sr->session, sr->tid_tree, sr);
+	mtime = smb_time_local_to_gmt(sr, sr->arg.timestamp);
+	smb_ofile_close(sr->fid_ofile, mtime);
+
 	smb_tree_disconnect(sr->tid_tree, B_TRUE);
+	smb_session_cancel_requests(sr->session, sr->tid_tree, sr);
 
 	if (smbsr_encode_empty_result(sr) != 0)
 		return (SDRC_ERROR);

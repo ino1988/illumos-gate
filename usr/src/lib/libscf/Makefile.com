@@ -21,64 +21,25 @@
 #
 # Copyright (c) 2004, 2010, Oracle and/or its affiliates. All rights reserved.
 #
+# Copyright (c) 2018, Joyent, Inc.
 
-LIBRARY =	libscf.a
-VERS =		.1
-
-OBJECTS = \
-	error.o			\
-	lowlevel.o		\
-	midlevel.o		\
-	notify_params.o		\
-	highlevel.o		\
-	scf_tmpl.o		\
-	scf_type.o
-
-include ../../Makefile.lib
-include ../../Makefile.rootfs
-
-LIBS =		$(DYNLIB) $(LINTLIB)
-
-$(NOT_NATIVE)NATIVE_BUILD = $(POUND_SIGN)
-$(NATIVE_BUILD)VERS =
-$(NATIVE_BUILD)LIBS = $(DYNLIB)
+include $(SRC)/lib/Makefile.lib
+include ../Makefile.shared.com
+include $(SRC)/lib/Makefile.rootfs
 
 LDLIBS_i386 += -lsmbios
-LDLIBS +=	-luutil -lc -lgen -lnsl -lnvpair
+LDLIBS +=	-luutil -lc -lgen -lnvpair
 LDLIBS +=	$(LDLIBS_$(MACH))
 
 SRCDIR =	../common
-$(LINTLIB) :=	SRCS = $(SRCDIR)/$(LINTSRC)
-
 COMDIR =	../../../common/svc
 
-CFLAGS +=	$(CCVERBOSE) -Wp,-xc99=%all
-CPPFLAGS +=	-I../inc -I../../common/inc -I$(COMDIR) -I$(ROOTHDRDIR)
-$(NOT_RELEASE_BUILD) CPPFLAGS += -DFASTREBOOT_DEBUG
-
-CERRWARN +=	-_gcc=-Wno-switch
-CERRWARN +=	-_gcc=-Wno-char-subscripts
-CERRWARN +=	-_gcc=-Wno-unused-label
-CERRWARN +=	-_gcc=-Wno-parentheses
-CERRWARN +=	-_gcc=-Wno-uninitialized
-
-#
-# For native builds, we compile and link against the native version
-# of libuutil.
-#
-LIBUUTIL =	$(SRC)/lib/libuutil
-MY_NATIVE_CPPFLAGS =\
-		-DNATIVE_BUILD $(DTEXTDOM) \
-		-I../inc -I$(COMDIR) -I$(LIBUUTIL)/common -I$(ROOTHDRDIR)
-MY_NATIVE_LDLIBS = -L$(LIBUUTIL)/native -R$(LIBUUTIL)/native -luutil -lc -lgen \
-		   -lnsl -lnvpair
-MY_NATIVE_LDLIBS_i386 = -lsmbios
-MY_NATIVE_LDLIBS += $(MY_NATIVE_LDLIBS_$(MACH))
+CPPFLAGS +=	-I$(SRC)/lib/libscf/inc -I$(SRC)/lib/libscf/common/inc \
+	-I$(COMDIR) -I$(ROOTHDRDIR)
+$(NOT_RELEASE_BUILD)CPPFLAGS += -DFASTREBOOT_DEBUG
 
 .KEEP_STATE:
 
 all:
 
-lint: lintcheck
-
-include ../../Makefile.targ
+include $(SRC)/lib/Makefile.targ

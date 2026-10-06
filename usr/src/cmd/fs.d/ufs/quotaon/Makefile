@@ -20,27 +20,18 @@
 #
 # Copyright 2009 Sun Microsystems, Inc.  All rights reserved.
 # Use is subject to license terms.
+# Copyright 2015 Nexenta Systems, Inc. All rights reserved.
 #
-# cmd/fs.d/ufs/quotaon/Makefile
+# Copyright (c) 2018, Joyent, Inc.
 
 FSTYPE=		ufs
 LIBPROG=	quotaon
 QUOTAOFF=	quotaoff
 ATTMK=		$(LIBPROG)
 
-#
-# Note that no links are made from the rc[S0-3].d directories for this rc
-# script.  The normal way to ship this is completely disabled.  The process
-# for enabling this script is described in the "Routine System Administration
-# Guide" (as of this time).
-#
-INIT_SCRIPT=	ufs_quota
-ROOTINIT_D=	$(ROOTETC)/init.d
-ROOTINIT_SCRIPT=$(ROOTINIT_D)/$(INIT_SCRIPT)
-
 OTHERINSTALL=	$(ROOTLIBFSTYPE)/$(QUOTAOFF) \
-		$(ROOTUSRSBIN)/$(LIBPROG) $(ROOTUSRSBIN)/$(QUOTAOFF) \
-		$(ROOTINIT_SCRIPT)
+		$(ROOTUSRSBIN)/$(LIBPROG) $(ROOTUSRSBIN)/$(QUOTAOFF)
+
 LINKVALUEON=	../lib/fs/$(FSTYPE)/$(LIBPROG)
 LINKVALUEOFF=	../lib/fs/$(FSTYPE)/$(QUOTAOFF)
 
@@ -52,9 +43,10 @@ CPPFLAGS +=	-D_LARGEFILE64_SOURCE
 CERRWARN +=	-_gcc=-Wno-unused-variable
 CERRWARN +=	-_gcc=-Wno-unused-function
 
-lint:		lint_PROG
+# not linted
+SMATCH=off
 
-$(ROOTLIBFSTYPE)/$(QUOTAOFF):	$(ROOTLIBFSTYPE)/$(LIBPROG) 
+$(ROOTLIBFSTYPE)/$(QUOTAOFF):	$(ROOTLIBFSTYPE)/$(LIBPROG)
 		-$(RM) $@; $(LN) $(ROOTLIBFSTYPE)/$(LIBPROG) $@
 
 $(ROOTUSRSBIN)/$(LIBPROG):
@@ -62,6 +54,3 @@ $(ROOTUSRSBIN)/$(LIBPROG):
 
 $(ROOTUSRSBIN)/$(QUOTAOFF):
 		-$(RM) $@; $(SYMLINK) $(LINKVALUEOFF) $@
-
-$(ROOTINIT_D)/% :	%
-		$(INS.file)

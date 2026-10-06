@@ -24,6 +24,11 @@
  */
 
 /*
+ * Copyright 2019 Joyent, Inc.
+ * Copyright 2026 Oxide Computer Company
+ */
+
+/*
  * Reparsed daemon
  */
 
@@ -43,6 +48,7 @@
 #include <string.h>
 #include <strings.h>
 #include <door.h>
+#include <ucred.h>
 #include <wait.h>
 #include <libintl.h>
 #include <locale.h>
@@ -183,7 +189,7 @@ main(int argc, char *argv[])
 	return (start_reparsed_svcs());
 }
 
-static void
+__NORETURN static void
 reparsed_door_call_error(int error, int buflen)
 {
 	reparsed_door_res_t rpd_res;
@@ -191,10 +197,11 @@ reparsed_door_call_error(int error, int buflen)
 	memset(&rpd_res, 0, sizeof (reparsed_door_res_t));
 	rpd_res.res_status = error;
 	rpd_res.res_len = buflen;
-	door_return((char *)&rpd_res, sizeof (reparsed_door_res_t), NULL, 0);
+	(void) door_return((char *)&rpd_res,
+	    sizeof (reparsed_door_res_t), NULL, 0);
 
 	(void) door_return(NULL, 0, NULL, 0);
-	/* NOTREACHED */
+	abort();
 }
 
 /*
@@ -212,16 +219,36 @@ reparsed_doorfunc(void *cookie, char *argp, size_t arg_size,
 	char *svc_type, *svc_data;
 	char *cp, *buf, *sbuf, res_buf[DOOR_RESULT_BUFSZ];
 	reparsed_door_res_t *resp;
+	ucred_t *uc = NULL;
+	pid_t pid;
+
+	/*
+	 * The only legitimate caller is the kernel, via reparse_kderef().
+	 * Kernel upcalls are reported with a pid of 0, which no user process
+	 * can have.
+	 */
+	if (door_ucred(&uc) != 0) {
+		reparsed_door_call_error(EPERM, 0);
+		/* NOTREACHED */
+	}
+	pid = ucred_getpid(uc);
+	ucred_free(uc);
+	if (pid != 0) {
+		reparsed_door_call_error(EPERM, 0);
+		/* NOTREACHED */
+	}
 
 	if ((argp == NULL) || (arg_size == 0)) {
 		reparsed_door_call_error(EINVAL, 0);
 		/* NOTREACHED */
 	}
 
-	if (verbose)
-		syslog(LOG_NOTICE, "reparsed_door: [%s, %d]", argp, arg_size);
+	if (verbose) {
+		syslog(LOG_NOTICE, "reparsed_door: [%.*s, %zu]",
+		    (int)arg_size, argp, arg_size);
+	}
 
-	if ((svc_type = strdup(argp)) == NULL) {
+	if ((svc_type = strndup(argp, arg_size)) == NULL) {
 		reparsed_door_call_error(ENOMEM, 0);
 		/* NOTREACHED */
 	}
@@ -324,7 +351,7 @@ start_reparsed_svcs()
 	 * Create a file system path for the door
 	 */
 	if ((dfd = open(REPARSED_DOOR, O_RDWR|O_CREAT|O_TRUNC,
-	    S_IRUSR|S_IWUSR|S_IRGRP|S_IROTH)) == -1) {
+	    S_IRUSR|S_IWUSR)) == -1) {
 		syslog(LOG_ERR, "unable to open %s", REPARSED_DOOR);
 		(void) close(doorfd);
 		return (1);
@@ -349,10 +376,6 @@ start_reparsed_svcs()
 	/*
 	 * Wait for incoming calls
 	 */
-	/*CONSTCOND*/
 	while (1)
 		(void) pause();
-
-	syslog(LOG_ERR, "Door server exited");
-	return (10);
 }

@@ -22,10 +22,12 @@
 /*
  * Copyright (c) 1994, 2010, Oracle and/or its affiliates. All rights reserved.
  * Copyright (c) 2013, OmniTI Computer Consulting, Inc. All rights reserved.
+ * Copyright 2018, Joyent, Inc.
+ * Copyright 2026 Oxide Computer Company
  */
 
 /*	Copyright (c) 1983, 1984, 1985, 1986, 1987, 1988, 1989 AT&T	*/
-/*	  All Rights Reserved  	*/
+/*	  All Rights Reserved	*/
 
 /*
  * Portions of this source code were derived from Berkeley 4.3 BSD
@@ -55,13 +57,12 @@
 
 static int flock_check(vnode_t *, flock64_t *, offset_t, offset_t);
 static int flock_get_start(vnode_t *, flock64_t *, offset_t, u_offset_t *);
-static void fd_too_big(proc_t *);
 
 /*
  * File control.
  */
 int
-fcntl(int fdes, int cmd, intptr_t arg)
+fcntl(int fdes, int cmd, intptr_t arg, intptr_t arg1)
 {
 	int iarg;
 	int error = 0;
@@ -93,6 +94,27 @@ fcntl(int fdes, int cmd, intptr_t arg)
 	ASSERT(sizeof (struct flock) == sizeof (struct flock64_64));
 	ASSERT(sizeof (struct flock64) == sizeof (struct flock64_64));
 #endif
+
+	/*
+	 * Most fcntl() calls take either 2 or 3 arguments. The introduction of
+	 * F_DUP3FD added a version that takes a 4th argument (referred to as
+	 * arg1). While fcntl() traditionally has had loose validation, we
+	 * strictly validate this new arg.
+	 */
+	switch (cmd) {
+	case F_DUP3FD:
+		if ((arg1 & ~(FD_CLOEXEC | FD_CLOFORK)) != 0) {
+			error = EINVAL;
+			goto out;
+		}
+		break;
+	default:
+		if (arg1 != 0) {
+			error = EINVAL;
+			goto out;
+		}
+		break;
+	}
 
 	/*
 	 * First, for speed, deal with the subset of cases
@@ -146,6 +168,7 @@ fcntl(int fdes, int cmd, intptr_t arg)
 	switch (cmd) {
 	case F_DUPFD:
 	case F_DUPFD_CLOEXEC:
+	case F_DUPFD_CLOFORK:
 		p = curproc;
 		if ((uint_t)iarg >= p->p_fno_ctl) {
 			if (iarg >= 0)
@@ -175,12 +198,17 @@ fcntl(int fdes, int cmd, intptr_t arg)
 			error = EMFILE;
 		} else {
 			if (cmd == F_DUPFD_CLOEXEC) {
-				f_setfd(retval, FD_CLOEXEC);
+				f_setfd_or(retval, FD_CLOEXEC);
+			}
+
+			if (cmd == F_DUPFD_CLOFORK) {
+				f_setfd_or(retval, FD_CLOFORK);
 			}
 		}
 		goto done;
 
 	case F_DUP2FD_CLOEXEC:
+	case F_DUP2FD_CLOFORK:
 		if (fdes == iarg) {
 			error = EINVAL;
 			goto done;
@@ -189,49 +217,35 @@ fcntl(int fdes, int cmd, intptr_t arg)
 		/*FALLTHROUGH*/
 
 	case F_DUP2FD:
-		p = curproc;
+	case F_DUP3FD:
+		/*
+		 * For equal descriptors dup2() and dup3() are a no-op and
+		 * must leave FD_CLOEXEC and FD_CLOFORK unchanged. Return here
+		 * rather than calling fdup2() which would clear those flags.
+		 */
 		if (fdes == iarg) {
 			retval = iarg;
-		} else if ((uint_t)iarg >= p->p_fno_ctl) {
-			if (iarg >= 0)
-				fd_too_big(p);
-			error = EBADF;
-		} else {
-			/*
-			 * We can't hold our getf(fdes) across the call to
-			 * closeandsetf() because it creates a window for
-			 * deadlock: if one thread is doing dup2(a, b) while
-			 * another is doing dup2(b, a), each one will block
-			 * waiting for the other to call releasef().  The
-			 * solution is to increment the file reference count
-			 * (which we have to do anyway), then releasef(fdes),
-			 * then closeandsetf().  Incrementing f_count ensures
-			 * that fp won't disappear after we call releasef().
-			 * When closeandsetf() fails, we try avoid calling
-			 * closef() because of all the side effects.
-			 */
-			mutex_enter(&fp->f_tlock);
-			fp->f_count++;
-			mutex_exit(&fp->f_tlock);
-			releasef(fdes);
-			if ((error = closeandsetf(iarg, fp)) == 0) {
-				if (cmd == F_DUP2FD_CLOEXEC) {
-					f_setfd(iarg, FD_CLOEXEC);
-				}
-				retval = iarg;
-			} else {
-				mutex_enter(&fp->f_tlock);
-				if (fp->f_count > 1) {
-					fp->f_count--;
-					mutex_exit(&fp->f_tlock);
-				} else {
-					mutex_exit(&fp->f_tlock);
-					(void) closef(fp);
-				}
-			}
-			goto out;
+			goto done;
 		}
-		goto done;
+
+		/*
+		 * fdup2() takes its own hold on fdes so release ours first
+		 * (it cannot be held across the closeandsetf() in there
+		 * without creating a window for deadlock against a
+		 * concurrent dup2() in the opposite direction).
+		 */
+		releasef(fdes);
+		if ((error = fdup2(fdes, iarg)) == 0) {
+			if (cmd == F_DUP2FD_CLOEXEC) {
+				f_setfd_or(iarg, FD_CLOEXEC);
+			} else if (cmd == F_DUP2FD_CLOFORK) {
+				f_setfd_or(iarg, FD_CLOFORK);
+			} else if (cmd == F_DUP3FD) {
+				f_setfd_or(iarg, (int)arg1);
+			}
+			retval = iarg;
+		}
+		goto out;
 
 	case F_SETFL:
 		vp = fp->f_vnode;
@@ -271,11 +285,12 @@ fcntl(int fdes, int cmd, intptr_t arg)
 	 * The file system and vnode layers understand and implement
 	 * locking with flock64 structures. So here once we pass through
 	 * the test for compatibility as defined by LFS API, (for F_SETLK,
-	 * F_SETLKW, F_GETLK, F_GETLKW, F_FREESP) we transform
-	 * the flock structure to a flock64 structure and send it to the
-	 * lower layers. Similarly in case of GETLK the returned flock64
-	 * structure is transformed to a flock structure if everything fits
-	 * in nicely, otherwise we return EOVERFLOW.
+	 * F_SETLKW, F_GETLK, F_GETLKW, F_OFD_GETLK, F_OFD_SETLK, F_OFD_SETLKW,
+	 * F_FREESP) we transform the flock structure to a flock64 structure
+	 * and send it to the lower layers. Similarly in case of GETLK and
+	 * OFD_GETLK the returned flock64 structure is transformed to a flock
+	 * structure if everything fits in nicely, otherwise we return
+	 * EOVERFLOW.
 	 */
 
 	case F_GETLK:
@@ -283,6 +298,11 @@ fcntl(int fdes, int cmd, intptr_t arg)
 	case F_SETLK:
 	case F_SETLKW:
 	case F_SETLK_NBMAND:
+	case F_OFD_GETLK:
+	case F_OFD_SETLK:
+	case F_OFD_SETLKW:
+	case F_FLOCK:
+	case F_FLOCKW:
 
 		/*
 		 * Copy in input fields only.
@@ -345,20 +365,66 @@ fcntl(int fdes, int cmd, intptr_t arg)
 		if ((error = flock_check(vp, &bf, offset, maxoffset)) != 0)
 			break;
 
+		if (cmd == F_FLOCK || cmd == F_FLOCKW) {
+			/* FLOCK* locking is always over the entire file. */
+			if (bf.l_whence != 0 || bf.l_start != 0 ||
+			    bf.l_len != 0) {
+				error = EINVAL;
+				break;
+			}
+			if (bf.l_type < F_RDLCK || bf.l_type > F_UNLCK) {
+				error = EINVAL;
+				break;
+			}
+		}
+
+		if (cmd == F_OFD_GETLK || cmd == F_OFD_SETLK ||
+		    cmd == F_OFD_SETLKW) {
+			/*
+			 * TBD OFD-style locking is currently limited to
+			 * covering the entire file.
+			 */
+			if (bf.l_whence != 0 || bf.l_start != 0 ||
+			    bf.l_len != 0) {
+				error = EINVAL;
+				break;
+			}
+		}
+
 		/*
 		 * Not all of the filesystems understand F_O_GETLK, and
 		 * there's no need for them to know.  Map it to F_GETLK.
+		 *
+		 * The *_frlock functions in the various file systems basically
+		 * do some validation and then funnel everything through the
+		 * fs_frlock function. For OFD-style locks fs_frlock will do
+		 * nothing so that once control returns here we can call the
+		 * ofdlock function with the correct fp. For OFD-style locks
+		 * the unsupported remote file systems, such as NFS, detect and
+		 * reject the OFD-style cmd argument.
 		 */
 		if ((error = VOP_FRLOCK(vp, (cmd == F_O_GETLK) ? F_GETLK : cmd,
 		    &bf, flag, offset, NULL, fp->f_cred, NULL)) != 0)
 			break;
 
+		if (cmd == F_FLOCK || cmd == F_FLOCKW || cmd == F_OFD_GETLK ||
+		    cmd == F_OFD_SETLK || cmd == F_OFD_SETLKW) {
+			/*
+			 * This is an OFD-style lock so we need to handle it
+			 * here. Because OFD-style locks are associated with
+			 * the file_t we didn't have enough info down the
+			 * VOP_FRLOCK path immediately above.
+			 */
+			if ((error = ofdlock(fp, cmd, &bf, flag, offset)) != 0)
+				break;
+		}
+
 		/*
 		 * If command is GETLK and no lock is found, only
 		 * the type field is changed.
 		 */
-		if ((cmd == F_O_GETLK || cmd == F_GETLK) &&
-		    bf.l_type == F_UNLCK) {
+		if ((cmd == F_O_GETLK || cmd == F_GETLK ||
+		    cmd == F_OFD_GETLK) && bf.l_type == F_UNLCK) {
 			/* l_type always first entry, always a short */
 			if (copyout(&bf.l_type, &((struct flock *)arg)->l_type,
 			    sizeof (bf.l_type)))
@@ -387,7 +453,7 @@ fcntl(int fdes, int cmd, intptr_t arg)
 			obf.l_pid = (int16_t)bf.l_pid;
 			if (copyout(&obf, (void *)arg, sizeof (obf)))
 				error = EFAULT;
-		} else if (cmd == F_GETLK) {
+		} else if (cmd == F_GETLK || cmd == F_OFD_GETLK) {
 			/*
 			 * Copy out SVR4 flock.
 			 */
@@ -591,6 +657,11 @@ fcntl(int fdes, int cmd, intptr_t arg)
 	case F_SETLK64:
 	case F_SETLKW64:
 	case F_SETLK64_NBMAND:
+	case F_OFD_GETLK64:
+	case F_OFD_SETLK64:
+	case F_OFD_SETLKW64:
+	case F_FLOCK64:
+	case F_FLOCKW64:
 		/*
 		 * Large Files: Here we set cmd as *LK and send it to
 		 * lower layers. *LK64 is only for the user land.
@@ -611,6 +682,16 @@ fcntl(int fdes, int cmd, intptr_t arg)
 			cmd = F_SETLKW;
 		else if (cmd == F_SETLK64_NBMAND)
 			cmd = F_SETLK_NBMAND;
+		else if (cmd == F_OFD_GETLK64)
+			cmd = F_OFD_GETLK;
+		else if (cmd == F_OFD_SETLK64)
+			cmd = F_OFD_SETLK;
+		else if (cmd == F_OFD_SETLKW64)
+			cmd = F_OFD_SETLKW;
+		else if (cmd == F_FLOCK64)
+			cmd = F_FLOCK;
+		else if (cmd == F_FLOCKW64)
+			cmd = F_FLOCKW;
 
 		/*
 		 * Note that the size of flock64 is different in the ILP32
@@ -636,18 +717,66 @@ fcntl(int fdes, int cmd, intptr_t arg)
 		if ((error = flock_check(vp, &bf, offset, MAXOFFSET_T)) != 0)
 			break;
 
+		if (cmd == F_FLOCK || cmd == F_FLOCKW) {
+			/* FLOCK* locking is always over the entire file. */
+			if (bf.l_whence != 0 || bf.l_start != 0 ||
+			    bf.l_len != 0) {
+				error = EINVAL;
+				break;
+			}
+			if (bf.l_type < F_RDLCK || bf.l_type > F_UNLCK) {
+				error = EINVAL;
+				break;
+			}
+		}
+
+		if (cmd == F_OFD_GETLK || cmd == F_OFD_SETLK ||
+		    cmd == F_OFD_SETLKW) {
+			/*
+			 * TBD OFD-style locking is currently limited to
+			 * covering the entire file.
+			 */
+			if (bf.l_whence != 0 || bf.l_start != 0 ||
+			    bf.l_len != 0) {
+				error = EINVAL;
+				break;
+			}
+		}
+
+		/*
+		 * The *_frlock functions in the various file systems basically
+		 * do some validation and then funnel everything through the
+		 * fs_frlock function. For OFD-style locks fs_frlock will do
+		 * nothing so that once control returns here we can call the
+		 * ofdlock function with the correct fp. For OFD-style locks
+		 * the unsupported remote file systems, such as NFS, detect and
+		 * reject the OFD-style cmd argument.
+		 */
 		if ((error = VOP_FRLOCK(vp, cmd, &bf, flag, offset,
 		    NULL, fp->f_cred, NULL)) != 0)
 			break;
 
-		if ((cmd == F_GETLK) && bf.l_type == F_UNLCK) {
+		if (cmd == F_FLOCK || cmd == F_FLOCKW || cmd == F_OFD_GETLK ||
+		    cmd == F_OFD_SETLK || cmd == F_OFD_SETLKW) {
+			/*
+			 * This is an OFD-style lock so we need to handle it
+			 * here. Because OFD-style locks are associated with
+			 * the file_t we didn't have enough info down the
+			 * VOP_FRLOCK path immediately above.
+			 */
+			if ((error = ofdlock(fp, cmd, &bf, flag, offset)) != 0)
+				break;
+		}
+
+		if ((cmd == F_GETLK || cmd == F_OFD_GETLK) &&
+		    bf.l_type == F_UNLCK) {
 			if (copyout(&bf.l_type, &((struct flock *)arg)->l_type,
 			    sizeof (bf.l_type)))
 				error = EFAULT;
 			break;
 		}
 
-		if (cmd == F_GETLK) {
+		if (cmd == F_GETLK || cmd == F_OFD_GETLK) {
 			int i;
 
 			/*
@@ -811,16 +940,4 @@ flock_get_start(vnode_t *vp, flock64_t *flp, offset_t offset, u_offset_t *start)
 	}
 
 	return (0);
-}
-
-/*
- * Take rctl action when the requested file descriptor is too big.
- */
-static void
-fd_too_big(proc_t *p)
-{
-	mutex_enter(&p->p_lock);
-	(void) rctl_action(rctlproc_legacy[RLIMIT_NOFILE],
-	    p->p_rctls, p, RCA_SAFE);
-	mutex_exit(&p->p_lock);
 }

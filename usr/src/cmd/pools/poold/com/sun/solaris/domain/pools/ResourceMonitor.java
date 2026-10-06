@@ -80,7 +80,7 @@ class ResourceMonitor extends HashMap
 		this.target = target;
 		this.maxSize = maxSize;
 		compList = new LinkedList();
-		
+
 	}
 
 	/**
@@ -114,7 +114,7 @@ class ResourceMonitor extends HashMap
 	{
 		return ((List) compList.clone());
 	}
-	
+
 	/**
 	 * Return the maximum number of samples this monitor will
 	 * hold.
@@ -123,7 +123,7 @@ class ResourceMonitor extends HashMap
 	{
 		return (maxSize);
 	}
-	
+
 	/**
 	 * Return the object which is being monitored.
 	 */
@@ -211,9 +211,9 @@ class ResourceMonitor extends HashMap
 		 * thus only be derived as an observation of the
 		 * change in value over time of these values.
 		 */
-		
+
 		StatisticList first = (StatisticList) get("idle");
-		
+
 		switch (first.size()) {
 		case 0:
 		case 1:
@@ -240,7 +240,7 @@ class ResourceMonitor extends HashMap
 			}
 			utilV = 100 * ((total.doubleValue() - idleV) /
 			    total.doubleValue());
-			return (new DoubleStatistic(new Double(utilV),
+			return (new DoubleStatistic(Double.valueOf(utilV),
 				((AggregateStatistic)first.get(first.size() -
 				2)).getStart(), ((AggregateStatistic)first.
 				getLast()).getEnd()));

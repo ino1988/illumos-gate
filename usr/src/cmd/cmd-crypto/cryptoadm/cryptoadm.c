@@ -22,6 +22,9 @@
  * Copyright (c) 2003, 2010, Oracle and/or its affiliates. All rights reserved.
  */
 
+/*
+ * Copyright (c) 2018, Joyent, Inc.
+ */
 
 #include <fcntl.h>
 #include <stdio.h>
@@ -537,7 +540,7 @@ do_list(int argc, char **argv)
 	boolean_t		mflag = B_FALSE;
 	boolean_t		pflag = B_FALSE;
 	boolean_t		vflag = B_FALSE;
-	char			ch;
+	int			ch;
 	cryptoadm_provider_t	*prov = NULL;
 	int			rc = SUCCESS;
 
@@ -1302,7 +1305,6 @@ list_simple_for_all(boolean_t verbose)
 				    "failed to retrieve the providers' "
 				    "information from file kcf.conf - %s.",
 				    _PATH_KCF_CONF);
-				free(psoftlist_kernel);
 				rc = FAILURE;
 			} else {
 

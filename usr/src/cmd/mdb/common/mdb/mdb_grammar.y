@@ -25,7 +25,10 @@
  * Use is subject to license terms.
  */
 
-#pragma ident	"%Z%%M%	%I%	%E% SMI"
+/*
+ * Copyright (c) 2019, Joyent, Inc.  All rights reserved.
+ * Copyright 2026 Oxide Computer Company
+ */
 
 #include <mdb/mdb_types.h>
 #include <mdb/mdb_debug.h>
@@ -42,6 +45,8 @@
  * and object file, respectively.  These are called from the handlers for
  * the * /.../ and % /.../ code below.
  */
+
+extern int yylex(void);
 
 static void
 vfetch(void *buf, size_t nbytes, uintptr_t addr)
@@ -88,6 +93,7 @@ yyexpand(int val)
 
 %token	<l_string>	MDB_TOK_SYMBOL
 %token	<l_string>	MDB_TOK_STRING
+%token			MDB_TOK_SHELLSRC
 %token	<l_char>	MDB_TOK_CHAR
 %token	<l_immediate>	MDB_TOK_IMMEDIATE
 %token	<l_dcmd>	MDB_TOK_DCMD
@@ -110,6 +116,7 @@ yyexpand(int val)
 %left	MDB_TOK_LSHIFT MDB_TOK_RSHIFT
 %left	'-' '+'
 %left	'*' '%' '#'
+%left	MDB_TOK_MODULUS
 
 %right	MDB_COR_VALUE
 %right	MDB_OBJ_VALUE
@@ -192,9 +199,19 @@ statement:	pipeline shell_pipe terminator {
 		}
 
 	|	'!' MDB_TOK_STRING terminator {
-			if (mdb_iob_isapipe(mdb.m_in))
+			if (mdb_iob_isapipe(mdb.m_in)) {
+				strfree($2);
 				yyerror("syntax error");
+			}
 			mdb_shell_exec($2);
+		}
+
+	|	MDB_TOK_SHELLSRC MDB_TOK_STRING terminator {
+			if (mdb_iob_isapipe(mdb.m_in)) {
+				strfree($2);
+				yyerror("syntax error");
+			}
+			mdb_shell_source($2);
 		}
 
 	|	terminator {
@@ -215,6 +232,26 @@ statement:	pipeline shell_pipe terminator {
 	;
 
 pipeline:	pipeline '|' command { mdb_cmd_create($3, &mdb.m_frame->f_argvec); }
+	|	pipeline '!' MDB_TOK_STRING '|' command {
+			/*
+			 * A quote-delimited shell command may itself form a
+			 * stage of a dcmd pipeline.
+			 */
+			mdb_cmd_t *cp;
+
+			cp = mdb_cmd_create($5, &mdb.m_frame->f_argvec);
+			cp->c_shcmd = $3;
+		}
+	|	'!' MDB_TOK_STRING '|' command {
+			/*
+			 * A quote-delimited shell command may also stand at the
+			 * head of a pipeline, with no producing dcmd.
+			 */
+			mdb_cmd_t *cp;
+
+			cp = mdb_cmd_create($4, &mdb.m_frame->f_argvec);
+			cp->c_shcmd = $2;
+		}
 	|	command { mdb_cmd_create($1, &mdb.m_frame->f_argvec); }
 	;
 
@@ -229,6 +266,7 @@ command:	'?' format_list { $$ = mdb_dcmd_lookup("?"); }
 
 shell_pipe:	/* Empty */
 	|	'!' MDB_TOK_STRING { mdb_shell_pipe($2); }
+	|	MDB_TOK_SHELLSRC MDB_TOK_STRING { mdb_shell_pipe_source($2); }
 	;
 
 format_list:	/* Empty */
@@ -297,8 +335,25 @@ expression:	expression '+' expression { $$ = $1 + $3; }
 			if ($3 == 0UL)
 				yyerror("attempted to divide by zero");
 
+			/*
+			 * Annoyingly, x86 generates a #DE when dividing
+			 * LONG_MIN by -1; check for this case explicitly.
+			 */
+			if ($1 == LONG_MIN && $3 == -1L)
+				yyerror("divide overflow");
+
 			$$ = (intmax_t)$1 / (intmax_t)$3;
 		}
+
+	|	expression MDB_TOK_MODULUS expression {
+
+			if ($3 == 0UL)
+				yyerror("attempted to divide by zero");
+
+			$$ = $1 % $3;
+		}
+
+
 
 	|	expression '&' expression { $$ = $1 & $3; }
 	|	expression '|' expression { $$ = $1 | $3; }
@@ -399,7 +454,7 @@ expression:	expression '+' expression { $$ = $1 + $3; }
 	|	MDB_TOK_SYMBOL {
 			if (strcmp($1, ".") == 0) {
 				$$ = mdb_nv_get_value(mdb.m_dot);
-				strfree($1);	
+				strfree($1);
 
 			} else {
 				const char *obj = MDB_TGT_OBJ_EVERY, *name = $1;
@@ -417,8 +472,8 @@ expression:	expression '+' expression { $$ = $1 + $3; }
 					yyperror("failed to dereference "
 					    "symbol");
 				}
-		
-				strfree($1);	
+
+				strfree($1);
 				$$ = (uintmax_t)sym.st_value;
 			}
 		}

@@ -65,19 +65,18 @@ GLOBAL=		../../../head
 CPPFLAGS=	-I$(GENERAL) -I$(GLOBAL) $(CPPFLAGS.master)
 CERRWARN +=	-_gcc=-Wno-implicit-function-declaration
 CERRWARN +=	-_gcc=-Wno-parentheses
-CERRWARN +=	-_gcc=-Wno-unused-label
 CERRWARN +=	-_gcc=-Wno-unused-variable
-LINTOUT=	lint.out
-CLEANFILES=	$(OBJECTS) $(LINTOUT) $(LINTLIB) $(DEBUGS) *.ln \
-		$(YSRC) $(LIBRARY)
-LINTFLAGS +=	-y
+CLEANFILES=	$(OBJECTS) $(DEBUGS) $(YSRC) $(LIBRARY)
+
+# because of labels from yacc
+objs/getdate.o := CERRWARN +=	-_gcc=-Wno-unused-label
 
 # support for -g library
 GLIB=		libdump_g.a
 DEBUGS=		$(OBJECTS:%=.debug/%)
 $(GLIB):=	AROBJS = $(DEBUGS)
 $(GLIB):=	DIR = .debug
-$(GLIB):=	CFLAGS= -g $(XESS) -DDEBUG -DYYDEBUG ${SBFLAGS}
+$(GLIB):=	CFLAGS= $(CCGDEBUG) -DDEBUG -DYYDEBUG $(SBFLAGS)
 
 .KEEP_STATE:
 
@@ -103,16 +102,6 @@ install:	all
 $(POFILE):	$(POFILES)
 	$(RM) $@; cat $(POFILES) > $@
 
-# rpcgen produces unused local variables that we can't easily suppress.
-# It is also stupid about 32/64 bit integers.  Since we don't support
-# the RPC subsystem any more, just ignore complaints about it all.
-# We have no control over yaccpar, and it has lots of 32/64 complaints.
-# Assumes lint run with -s argument
-lint:		lint.out
-	sed -f lint.sed lint.out
-
-lint.out:	$(LINTLIB)
-
 check:	$(HDRS)
 	$(CSTYLE) $(CSTYLEFLAGS) `echo $(SRCS) | sed -e s/getdate.c//` $(HDRS)
 	$(HDRCHK) $(HDRCHKFLAGS) $(HDRS)
@@ -120,4 +109,4 @@ check:	$(HDRS)
 # include library targets
 include ../../../lib/Makefile.targ
 
-_msg: 		$(POFILE)
+_msg:		$(POFILE)

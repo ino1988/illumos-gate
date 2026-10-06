@@ -21,6 +21,8 @@
 /*
  * Copyright 2009 Sun Microsystems, Inc.  All rights reserved.
  * Use is subject to license terms.
+ * Copyright 2014 Joyent, Inc.  All rights reserved.
+ * Copyright 2022 Garrett D'Amore <garrett@damore.org>
  */
 
 #include <sys/types.h>
@@ -67,8 +69,9 @@
  *
  * Having mmapobj interpret and map objects will allow the kernel to make the
  * best decision for where to place the mappings for said objects.  Thus, we
- * can make optimizations inside of the kernel for specific platforms or
- * cache mapping information to make mapping objects faster.
+ * can make optimizations inside of the kernel for specific platforms or cache
+ * mapping information to make mapping objects faster.  The cache is ignored
+ * if ASLR is enabled.
  *
  * The lib_va_hash will be one such optimization.  For each ELF object that
  * mmapobj is asked to interpret, we will attempt to cache the information
@@ -177,19 +180,6 @@ struct mobj_stats {
 	uint_t	mobjs_lib_va_add_delete;
 	uint_t	mobjs_lib_va_create_failure;
 	uint_t	mobjs_min_align;
-#if defined(__sparc)
-	uint_t	mobjs_aout_uzero_fault;
-	uint_t	mobjs_aout_64bit_try;
-	uint_t	mobjs_aout_noexec;
-	uint_t	mobjs_aout_e2big;
-	uint_t	mobjs_aout_lib;
-	uint_t	mobjs_aout_fixed;
-	uint_t	mobjs_aout_zfoddiff;
-	uint_t	mobjs_aout_map_bss;
-	uint_t	mobjs_aout_bss_fail;
-	uint_t	mobjs_aout_nlist;
-	uint_t	mobjs_aout_addr_in_use;
-#endif
 } mobj_stats;
 
 #define	MOBJ_STAT_ADD(stat)		((mobj_stats.mobjs_##stat)++)
@@ -211,8 +201,6 @@ struct mobj_stats {
 #define	OVERLAPS_STACK(addr, p)						\
 	((p->p_model == DATAMODEL_LP64) &&				\
 	(addr >= (p->p_usrstack - ((p->p_stk_ctl + PAGEOFFSET) & PAGEMASK))))
-#elif defined(__i386)
-#define	OVERLAPS_STACK(addr, p)	0
 #endif
 
 /* lv_flags values - bitmap */
@@ -717,7 +705,7 @@ mmapobj_lookup_start_addr(struct lib_va *lvp)
  */
 static caddr_t
 mmapobj_alloc_start_addr(struct lib_va **lvpp, size_t len, int use_lib_va,
-    size_t align, vattr_t *vap)
+    int randomize, size_t align, vattr_t *vap)
 {
 	proc_t *p = curproc;
 	struct as *as = p->p_as;
@@ -732,6 +720,7 @@ mmapobj_alloc_start_addr(struct lib_va **lvpp, size_t len, int use_lib_va,
 	size_t lib_va_len;
 
 	ASSERT(lvpp != NULL);
+	ASSERT((randomize & use_lib_va) != 1);
 
 	MOBJ_STAT_ADD(alloc_start);
 	model = get_udatamodel();
@@ -747,6 +736,10 @@ mmapobj_alloc_start_addr(struct lib_va **lvpp, size_t len, int use_lib_va,
 	if (align > 1) {
 		ma_flags |= MAP_ALIGN;
 	}
+
+	if (randomize != 0)
+		ma_flags |= _MAP_RANDOMIZE;
+
 	if (use_lib_va) {
 		/*
 		 * The first time through, we need to setup the lib_va arenas.
@@ -860,7 +853,14 @@ nolibva:
 	 * If we don't have an expected base address, or the one that we want
 	 * to use is not available or acceptable, go get an acceptable
 	 * address range.
+	 *
+	 * If ASLR is enabled, we should never have used the cache, and should
+	 * also start our real work here, in the consequent of the next
+	 * condition.
 	 */
+	if (randomize != 0)
+		ASSERT(base == NULL);
+
 	if (base == NULL || as_gap(as, len, &base, &len, 0, NULL) ||
 	    valid_usr_range(base, len, PROT_ALL, as, as->a_userlimit) !=
 	    RANGE_OKAY || OVERLAPS_STACK(base + len, p)) {
@@ -996,8 +996,8 @@ mmapobj_map_flat(vnode_t *vp, mmapobj_result_t *mrp, size_t padding,
  * fcred - credentials for the file associated with vp at open time.
  */
 static int
-mmapobj_map_ptload(struct vnode *vp, caddr_t addr, size_t len, size_t zfodlen,
-    off_t offset, int prot, cred_t *fcred)
+mmapobj_map_ptload(struct vnode *vp, caddr_t addr, size_t len,
+    volatile size_t zfodlen, off_t offset, int prot, cred_t *fcred)
 {
 	int error = 0;
 	caddr_t zfodbase, oldaddr;
@@ -1046,8 +1046,8 @@ mmapobj_map_ptload(struct vnode *vp, caddr_t addr, size_t len, size_t zfodlen,
 			 * maxprot is passed as PROT_ALL so that mdb can
 			 * write to this segment.
 			 */
-			if (error = VOP_MAP(vp, (offset_t)offset, as, &addr,
-			    len, prot, PROT_ALL, mflag, fcred, NULL)) {
+			if ((error = VOP_MAP(vp, (offset_t)offset, as, &addr,
+			    len, prot, PROT_ALL, mflag, fcred, NULL)) != 0) {
 				return (error);
 			}
 
@@ -1126,10 +1126,23 @@ mmapobj_map_ptload(struct vnode *vp, caddr_t addr, size_t len, size_t zfodlen,
 		zfodbase = (caddr_t)P2ROUNDUP(end, PAGESIZE);
 		zfoddiff = (uintptr_t)zfodbase - end;
 		if (zfoddiff) {
+			/*
+			 * Before we go to zero the remaining space on the last
+			 * page, make sure we have write permission.
+			 *
+			 * We need to be careful how we zero-fill the last page
+			 * if the protection does not include PROT_WRITE. Using
+			 * as_setprot() can cause the VM segment code to call
+			 * segvn_vpage(), which must allocate a page struct for
+			 * each page in the segment. If we have a very large
+			 * segment, this may fail, so we check for that, even
+			 * though we ignore other return values from as_setprot.
+			 */
 			MOBJ_STAT_ADD(zfoddiff);
 			if ((prot & PROT_WRITE) == 0) {
-				(void) as_setprot(as, (caddr_t)end,
-				    zfoddiff, prot | PROT_WRITE);
+				if (as_setprot(as, (caddr_t)end, zfoddiff,
+				    prot | PROT_WRITE) == ENOMEM)
+					return (ENOMEM);
 				MOBJ_STAT_ADD(zfoddiff_nowrite);
 			}
 			if (on_fault(&ljb)) {
@@ -1208,6 +1221,14 @@ mmapobj_map_elf(struct vnode *vp, caddr_t start_addr, mmapobj_result_t *mrp,
 		if (MR_GET_TYPE(mrp[i].mr_flags) == MR_PADDING) {
 			continue;
 		}
+
+		/* Can't execute code from "noexec" mounted filesystem. */
+		if (((vp->v_vfsp->vfs_flag & VFS_NOEXEC) != 0) &&
+		    ((mrp[i].mr_prot & PROT_EXEC) != 0)) {
+			MOBJ_STAT_ADD(noexec_fs);
+			return (EACCES);
+		}
+
 		p_memsz = mrp[i].mr_msize;
 		p_filesz = mrp[i].mr_fsize;
 		zfodlen = p_memsz - p_filesz;
@@ -1470,7 +1491,7 @@ check_exec_addrs(int loadable, mmapobj_result_t *mrp, caddr_t start_addr)
 			 * segdev and the type is neither MAP_SHARED
 			 * nor MAP_PRIVATE.
 			 */
-			AS_LOCK_ENTER(as, &as->a_lock, RW_READER);
+			AS_LOCK_ENTER(as, RW_READER);
 			seg = as_findseg(as, myaddr, 0);
 			MOBJ_STAT_ADD(exec_addr_mapped);
 			if (seg && seg->s_ops == &segdev_ops &&
@@ -1480,7 +1501,7 @@ check_exec_addrs(int loadable, mmapobj_result_t *mrp, caddr_t start_addr)
 			    myaddr + mylen <=
 			    seg->s_base + seg->s_size) {
 				MOBJ_STAT_ADD(exec_addr_devnull);
-				AS_LOCK_EXIT(as, &as->a_lock);
+				AS_LOCK_EXIT(as);
 				(void) as_unmap(as, myaddr, mylen);
 				ret = as_map(as, myaddr, mylen, segvn_create,
 				    &crargs);
@@ -1493,7 +1514,7 @@ check_exec_addrs(int loadable, mmapobj_result_t *mrp, caddr_t start_addr)
 					return (ret);
 				}
 			} else {
-				AS_LOCK_EXIT(as, &as->a_lock);
+				AS_LOCK_EXIT(as);
 				as_rangeunlock(as);
 				mmapobj_unmap_exec(mrp, i, start_addr);
 				MOBJ_STAT_ADD(exec_addr_in_use);
@@ -1511,7 +1532,7 @@ check_exec_addrs(int loadable, mmapobj_result_t *mrp, caddr_t start_addr)
  * Return 0 on success or error on failure.
  */
 static int
-process_phdr(Ehdr *ehdrp, caddr_t phdrbase, int nphdrs, mmapobj_result_t *mrp,
+process_phdrs(Ehdr *ehdrp, caddr_t phdrbase, int nphdrs, mmapobj_result_t *mrp,
     vnode_t *vp, uint_t *num_mapped, size_t padding, cred_t *fcred)
 {
 	int i;
@@ -1567,7 +1588,7 @@ process_phdr(Ehdr *ehdrp, caddr_t phdrbase, int nphdrs, mmapobj_result_t *mrp,
 		}
 	}
 
-	if (padding != 0) {
+	if ((padding != 0) || secflag_enabled(curproc, PROC_SEC_ASLR)) {
 		use_lib_va = 0;
 	}
 	if (e_type == ET_DYN) {
@@ -1577,7 +1598,8 @@ process_phdr(Ehdr *ehdrp, caddr_t phdrbase, int nphdrs, mmapobj_result_t *mrp,
 			return (error);
 		}
 		/* Check to see if we already have a description for this lib */
-		lvp = lib_va_find(&vattr);
+		if (!secflag_enabled(curproc, PROC_SEC_ASLR))
+			lvp = lib_va_find(&vattr);
 
 		if (lvp != NULL) {
 			MOBJ_STAT_ADD(lvp_found);
@@ -1687,7 +1709,9 @@ process_phdr(Ehdr *ehdrp, caddr_t phdrbase, int nphdrs, mmapobj_result_t *mrp,
 		 */
 		ASSERT(lvp ? use_lib_va == 0 : 1);
 		start_addr = mmapobj_alloc_start_addr(&lvp, len,
-		    use_lib_va, align, &vattr);
+		    use_lib_va,
+		    secflag_enabled(curproc, PROC_SEC_ASLR),
+		    align, &vattr);
 		if (start_addr == NULL) {
 			if (lvp) {
 				lib_va_release(lvp);
@@ -2012,245 +2036,11 @@ doelfwork(Ehdr *ehdrp, vnode_t *vp, mmapobj_result_t *mrp,
 	}
 
 	/* Now process the phdr's */
-	error = process_phdr(ehdrp, phbasep, nphdrs, mrp, vp, num_mapped,
+	error = process_phdrs(ehdrp, phbasep, nphdrs, mrp, vp, num_mapped,
 	    padding, fcred);
 	kmem_free(phbasep, phsizep);
 	return (error);
 }
-
-#if defined(__sparc)
-/*
- * Hack to support 64 bit kernels running AOUT 4.x programs.
- * This is the sizeof (struct nlist) for a 32 bit kernel.
- * Since AOUT programs are 32 bit only, they will never use the 64 bit
- * sizeof (struct nlist) and thus creating a #define is the simplest
- * way around this since this is a format which is not being updated.
- * This will be used in the place of sizeof (struct nlist) below.
- */
-#define	NLIST_SIZE	(0xC)
-
-static int
-doaoutwork(vnode_t *vp, mmapobj_result_t *mrp,
-    uint_t *num_mapped, struct exec *hdr, cred_t *fcred)
-{
-	int error;
-	size_t size;
-	size_t osize;
-	size_t nsize;	/* nlist size */
-	size_t msize;
-	size_t zfoddiff;
-	caddr_t addr;
-	caddr_t start_addr;
-	struct as *as = curproc->p_as;
-	int prot = PROT_USER | PROT_READ | PROT_EXEC;
-	uint_t mflag = MAP_PRIVATE | _MAP_LOW32;
-	offset_t off = 0;
-	int segnum = 0;
-	uint_t to_map;
-	int is_library = 0;
-	struct segvn_crargs crargs = SEGVN_ZFOD_ARGS(PROT_ZFOD, PROT_ALL);
-
-	/* Only 32bit apps supported by this file format */
-	if (get_udatamodel() != DATAMODEL_ILP32) {
-		MOBJ_STAT_ADD(aout_64bit_try);
-		return (ENOTSUP);
-	}
-
-	/* Check to see if this is a library */
-	if (hdr->a_magic == ZMAGIC && hdr->a_entry < PAGESIZE) {
-		is_library = 1;
-	}
-
-	/* Can't execute code from "noexec" mounted filesystem. */
-	if (((vp->v_vfsp->vfs_flag & VFS_NOEXEC) != 0) && (is_library == 0)) {
-		MOBJ_STAT_ADD(aout_noexec);
-		return (EACCES);
-	}
-
-	/*
-	 * There are 2 ways to calculate the mapped size of executable:
-	 * 1) rounded text size + data size + bss size.
-	 * 2) starting offset for text + text size + data size + text relocation
-	 *    size + data relocation size + room for nlist data structure.
-	 *
-	 * The larger of the two sizes will be used to map this binary.
-	 */
-	osize = P2ROUNDUP(hdr->a_text, PAGESIZE) + hdr->a_data + hdr->a_bss;
-
-	off = hdr->a_magic == ZMAGIC ? 0 : sizeof (struct exec);
-
-	nsize = off + hdr->a_text + hdr->a_data + hdr->a_trsize +
-	    hdr->a_drsize + NLIST_SIZE;
-
-	size = MAX(osize, nsize);
-	if (size != nsize) {
-		nsize = 0;
-	}
-
-	/*
-	 * 1 seg for text and 1 seg for initialized data.
-	 * 1 seg for bss (if can't fit in leftover space of init data)
-	 * 1 seg for nlist if needed.
-	 */
-	to_map = 2 + (nsize ? 1 : 0) +
-	    (hdr->a_bss > PAGESIZE - P2PHASE(hdr->a_data, PAGESIZE) ? 1 : 0);
-	if (*num_mapped < to_map) {
-		*num_mapped = to_map;
-		MOBJ_STAT_ADD(aout_e2big);
-		return (E2BIG);
-	}
-
-	/* Reserve address space for the whole mapping */
-	if (is_library) {
-		/* We'll let VOP_MAP below pick our address for us */
-		addr = NULL;
-		MOBJ_STAT_ADD(aout_lib);
-	} else {
-		/*
-		 * default start address for fixed binaries from AOUT 4.x
-		 * standard.
-		 */
-		MOBJ_STAT_ADD(aout_fixed);
-		mflag |= MAP_FIXED;
-		addr = (caddr_t)0x2000;
-		as_rangelock(as);
-		if (as_gap(as, size, &addr, &size, 0, NULL) != 0) {
-			as_rangeunlock(as);
-			MOBJ_STAT_ADD(aout_addr_in_use);
-			return (EADDRINUSE);
-		}
-		crargs.flags |= MAP_NORESERVE;
-		error = as_map(as, addr, size, segvn_create, &crargs);
-		ASSERT(addr == (caddr_t)0x2000);
-		as_rangeunlock(as);
-	}
-
-	start_addr = addr;
-	osize = size;
-
-	/*
-	 * Map as large as we need, backed by file, this will be text, and
-	 * possibly the nlist segment.  We map over this mapping for bss and
-	 * initialized data segments.
-	 */
-	error = VOP_MAP(vp, off, as, &addr, size, prot, PROT_ALL,
-	    mflag, fcred, NULL);
-	if (error) {
-		if (!is_library) {
-			(void) as_unmap(as, start_addr, osize);
-		}
-		return (error);
-	}
-
-	/* pickup the value of start_addr and osize for libraries */
-	start_addr = addr;
-	osize = size;
-
-	/*
-	 * We have our initial reservation/allocation so we need to use fixed
-	 * addresses from now on.
-	 */
-	mflag |= MAP_FIXED;
-
-	mrp[0].mr_addr = addr;
-	mrp[0].mr_msize = hdr->a_text;
-	mrp[0].mr_fsize = hdr->a_text;
-	mrp[0].mr_offset = 0;
-	mrp[0].mr_prot = PROT_READ | PROT_EXEC;
-	mrp[0].mr_flags = MR_HDR_AOUT;
-
-
-	/*
-	 * Map initialized data. We are mapping over a portion of the
-	 * previous mapping which will be unmapped in VOP_MAP below.
-	 */
-	off = P2ROUNDUP((offset_t)(hdr->a_text), PAGESIZE);
-	msize = off;
-	addr += off;
-	size = hdr->a_data;
-	error = VOP_MAP(vp, off, as, &addr, size, PROT_ALL, PROT_ALL,
-	    mflag, fcred, NULL);
-	if (error) {
-		(void) as_unmap(as, start_addr, osize);
-		return (error);
-	}
-	msize += size;
-	mrp[1].mr_addr = addr;
-	mrp[1].mr_msize = size;
-	mrp[1].mr_fsize = size;
-	mrp[1].mr_offset = 0;
-	mrp[1].mr_prot = PROT_READ | PROT_WRITE | PROT_EXEC;
-	mrp[1].mr_flags = 0;
-
-	/* Need to zero out remainder of page */
-	addr += hdr->a_data;
-	zfoddiff = P2PHASE((size_t)addr, PAGESIZE);
-	if (zfoddiff) {
-		label_t ljb;
-
-		MOBJ_STAT_ADD(aout_zfoddiff);
-		zfoddiff = PAGESIZE - zfoddiff;
-		if (on_fault(&ljb)) {
-			no_fault();
-			MOBJ_STAT_ADD(aout_uzero_fault);
-			(void) as_unmap(as, start_addr, osize);
-			return (EFAULT);
-		}
-		uzero(addr, zfoddiff);
-		no_fault();
-	}
-	msize += zfoddiff;
-	segnum = 2;
-
-	/* Map bss */
-	if (hdr->a_bss > zfoddiff) {
-		struct segvn_crargs crargs =
-		    SEGVN_ZFOD_ARGS(PROT_ZFOD, PROT_ALL);
-		MOBJ_STAT_ADD(aout_map_bss);
-		addr += zfoddiff;
-		size = hdr->a_bss - zfoddiff;
-		as_rangelock(as);
-		(void) as_unmap(as, addr, size);
-		error = as_map(as, addr, size, segvn_create, &crargs);
-		as_rangeunlock(as);
-		msize += size;
-
-		if (error) {
-			MOBJ_STAT_ADD(aout_bss_fail);
-			(void) as_unmap(as, start_addr, osize);
-			return (error);
-		}
-		mrp[2].mr_addr = addr;
-		mrp[2].mr_msize = size;
-		mrp[2].mr_fsize = 0;
-		mrp[2].mr_offset = 0;
-		mrp[2].mr_prot = PROT_READ | PROT_WRITE | PROT_EXEC;
-		mrp[2].mr_flags = 0;
-
-		addr += size;
-		segnum = 3;
-	}
-
-	/*
-	 * If we have extra bits left over, we need to include that in how
-	 * much we mapped to make sure the nlist logic is correct
-	 */
-	msize = P2ROUNDUP(msize, PAGESIZE);
-
-	if (nsize && msize < nsize) {
-		MOBJ_STAT_ADD(aout_nlist);
-		mrp[segnum].mr_addr = addr;
-		mrp[segnum].mr_msize = nsize - msize;
-		mrp[segnum].mr_fsize = 0;
-		mrp[segnum].mr_offset = 0;
-		mrp[segnum].mr_prot = PROT_READ | PROT_EXEC;
-		mrp[segnum].mr_flags = 0;
-	}
-
-	*num_mapped = to_map;
-	return (0);
-}
-#endif
 
 /*
  * These are the two types of files that we can interpret and we want to read
@@ -2298,7 +2088,8 @@ mmapobj_map_interpret(vnode_t *vp, mmapobj_result_t *mrp,
 	 * for this library.  This is the fast path and only used for
 	 * ET_DYN ELF files (dynamic libraries).
 	 */
-	if (padding == 0 && (lvp = lib_va_find(&vattr)) != NULL) {
+	if (padding == 0 && !secflag_enabled(curproc, PROC_SEC_ASLR) &&
+	    ((lvp = lib_va_find(&vattr)) != NULL)) {
 		int num_segs;
 
 		model = get_udatamodel();
@@ -2370,17 +2161,6 @@ mmapobj_map_interpret(vnode_t *vp, mmapobj_result_t *mrp,
 		return (doelfwork((Ehdr *)lheader, vp, mrp, num_mapped,
 		    padding, fcred));
 	}
-
-#if defined(__sparc)
-	/* On sparc, check for 4.X AOUT format */
-	switch (((struct exec *)header)->a_magic) {
-	case OMAGIC:
-	case ZMAGIC:
-	case NMAGIC:
-		return (doaoutwork(vp, mrp, num_mapped,
-		    (struct exec *)lheader, fcred));
-	}
-#endif
 
 	/* Unsupported type */
 	MOBJ_STAT_ADD(unsupported);

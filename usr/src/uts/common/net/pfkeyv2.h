@@ -22,6 +22,10 @@
  * Copyright 2009 Sun Microsystems, Inc.  All rights reserved.
  * Use is subject to license terms.
  */
+/*
+ * Copyright (c) 2018, Joyent, Inc.
+ * Copyright 2024 Oxide Computer Company
+ */
 
 #ifndef	_NET_PFKEYV2_H
 #define	_NET_PFKEYV2_H
@@ -30,6 +34,9 @@
  * Definitions and structures for PF_KEY version 2.  See RFC 2367 for
  * more details.  SA == Security Association, which is what PF_KEY provides
  * an API for managing.
+ *
+ * Definitions of the form SADB_X_* are local extensions that are not present
+ * in the IPsec DOI.
  */
 
 #ifdef	__cplusplus
@@ -287,7 +294,9 @@ typedef struct sadb_comb {
 	uint16_t sadb_comb_auth_maxbits;
 	uint16_t sadb_comb_encrypt_minbits;	/* Bit strengths for encrypt */
 	uint16_t sadb_comb_encrypt_maxbits;
-	uint32_t sadb_comb_reserved;
+	uint8_t sadb_x_comb_encrypt_saltbits;
+	uint8_t sadb_x_comb_reserved;
+	uint16_t sadb_comb_reserved;
 	uint32_t sadb_comb_soft_allocations;	/* Lifetime proposals for */
 	uint32_t sadb_comb_hard_allocations;	/* this combination. */
 	uint64_t sadb_comb_soft_bytes;
@@ -337,7 +346,7 @@ typedef struct sadb_x_algdesc {
 			uint8_t sadb_x_algdesc_usatype;	/* ESP, AH, etc. */
 			uint8_t sadb_x_algdesc_ualgtype; /* AUTH, CRYPT, COMP */
 			uint8_t sadb_x_algdesc_ualg;	/* 3DES, MD5, etc. */
-			uint8_t sadb_x_algdesc_ureserved;
+			uint8_t sadb_x_algdesc_usaltbits;
 			uint16_t sadb_x_algdesc_uminbits; /* Bit strengths. */
 			uint16_t sadb_x_algdesc_umaxbits;
 		} sadb_x_algdesc_actual;
@@ -349,8 +358,8 @@ typedef struct sadb_x_algdesc {
 	sadb_x_algdesc_u.sadb_x_algdesc_actual.sadb_x_algdesc_ualgtype
 #define	sadb_x_algdesc_alg \
 	sadb_x_algdesc_u.sadb_x_algdesc_actual.sadb_x_algdesc_ualg
-#define	sadb_x_algdesc_reserved \
-	sadb_x_algdesc_u.sadb_x_algdesc_actual.sadb_x_algdesc_ureserved
+#define	sadb_x_algdesc_saltbits \
+	sadb_x_algdesc_u.sadb_x_algdesc_actual.sadb_x_algdesc_usaltbits
 #define	sadb_x_algdesc_minbits \
 	sadb_x_algdesc_u.sadb_x_algdesc_actual.sadb_x_algdesc_uminbits
 #define	sadb_x_algdesc_maxbits \
@@ -477,10 +486,11 @@ typedef struct sadb_x_kmc {
 			uint32_t sadb_x_kmc_ucookie;	/* KMP-specific */
 			uint32_t sadb_x_kmc_ureserved;	/* Must be zero */
 		} sadb_x_kmc_actual;
-		uint64_t sadb_x_kmc_alignment;
+		uint64_t sadb_x_kmc_ucookie64;
 	} sadb_x_kmc_u;
 #define	sadb_x_kmc_cookie sadb_x_kmc_u.sadb_x_kmc_actual.sadb_x_kmc_ucookie
 #define	sadb_x_kmc_reserved sadb_x_kmc_u.sadb_x_kmc_actual.sadb_x_kmc_ureserved
+#define	sadb_x_kmc_cookie64 sadb_x_kmc_u.sadb_x_kmc_ucookie64
 } sadb_x_kmc_t;
 
 typedef struct sadb_x_pair {
@@ -570,6 +580,7 @@ typedef struct sadb_x_edump {
 #define	SADB_X_SAFLAGS_PAIRED	   0x10000	/* inbound/outbound pair */
 #define	SADB_X_SAFLAGS_OUTBOUND	    0x8000	/* SA direction bit */
 #define	SADB_X_SAFLAGS_INBOUND	    0x4000	/* SA direction bit */
+#define	SADB_X_SAFLAGS_TCPSIG	    0x2000	/* SA is for a TCP signature */
 #define	SADB_X_SAFLAGS_NATTED	    0x1000	/* Local node is behind a NAT */
 
 #define	SADB_X_SAFLAGS_KRES	\
@@ -597,12 +608,15 @@ typedef struct sadb_x_edump {
 #define	SADB_SATYPE_UNSPEC	0
 #define	SADB_SATYPE_AH		2  /* RFC-1826 */
 #define	SADB_SATYPE_ESP		3  /* RFC-1827 */
+#define	SADB_X_SATYPE_TCPSIG	4  /* RFC-2385 */
 #define	SADB_SATYPE_RSVP	5  /* RSVP Authentication */
 #define	SADB_SATYPE_OSPFV2	6  /* OSPFv2 Authentication */
 #define	SADB_SATYPE_RIPV2	7  /* RIPv2 Authentication */
 #define	SADB_SATYPE_MIP		8  /* Mobile IPv4 Authentication */
 
 #define	SADB_SATYPE_MAX		8
+
+#define	TCPSIG_MD5_KEY_LEN	80
 
 /*
  * Algorithm types.  Gaps are present because (for the time being) these types
@@ -614,6 +628,7 @@ typedef struct sadb_x_edump {
 
 /* Authentication algorithms */
 #define	SADB_AALG_NONE		0
+#define	SADB_AALG_MD5		1
 #define	SADB_AALG_MD5HMAC	2
 #define	SADB_AALG_SHA1HMAC	3
 #define	SADB_AALG_SHA256HMAC	5
@@ -672,8 +687,9 @@ typedef struct sadb_x_edump {
 #define	SADB_X_EXT_EDUMP		25
 #define	SADB_X_EXT_LIFETIME_IDLE	26
 #define	SADB_X_EXT_OUTER_SENS		27
+#define	SADB_X_EXT_STR_AUTH		28
 
-#define	SADB_EXT_MAX			27
+#define	SADB_EXT_MAX			28
 
 /*
  * Identity types.
@@ -693,7 +709,7 @@ typedef struct sadb_x_edump {
 #define	SADB_X_IDENTTYPE_KEY_ID		6  /* Generic KEY ID. */
 #define	SADB_X_IDENTTYPE_ADDR_RANGE	7
 
-#define	SADB_IDENTTYPE_MAX 	7
+#define	SADB_IDENTTYPE_MAX		7
 
 /*
  * Protection DOI values for the SENSITIVITY extension.  There are no values
@@ -821,7 +837,12 @@ typedef struct sadb_x_edump {
 #define	SADB_X_DIAGNOSTIC_MISSING_LIFETIME	82
 
 #define	SADB_X_DIAGNOSTIC_BAD_LABEL		83
-#define	SADB_X_DIAGNOSTIC_MAX			83
+
+#define	SADB_X_DIAGNOSTIC_MISSING_ASTR		84
+#define	SADB_X_DIAGNOSTIC_DUPLICATE_ASTR	85
+#define	SADB_X_DIAGNOSTIC_MALFORMED_ASTR	86
+
+#define	SADB_X_DIAGNOSTIC_MAX			86
 
 /* Algorithm type for sadb_x_algdesc above... */
 
@@ -834,11 +855,12 @@ typedef struct sadb_x_edump {
 
 /* Key management protocol for sadb_x_kmc above... */
 
-#define	SADB_X_KMP_MANUAL	0
+#define	SADB_X_KMP_MANUAL	0	/* Cookie is ignored. */
 #define	SADB_X_KMP_IKE		1
 #define	SADB_X_KMP_KINK		2
+#define	SADB_X_KMP_IKEV2	3
 
-#define	SADB_X_KMP_MAX		2
+#define	SADB_X_KMP_MAX		SADB_X_KMP_IKEV2
 
 /*
  * Handy conversion macros.  Not part of the PF_KEY spec...

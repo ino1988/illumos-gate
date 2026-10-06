@@ -21,14 +21,15 @@
 
 /*
  * Copyright (c) 2007, 2010, Oracle and/or its affiliates. All rights reserved.
- * Copyright 2012 Nexenta Systems, Inc. All rights reserved.
+ * Copyright 2014 Nexenta Systems, Inc. All rights reserved.
  */
 
-#ifndef _KERNEL
+#if !defined(_KERNEL) && !defined(_FAKE_KERNEL)
 #include <stdlib.h>
 #include <string.h>
 #else
 #include <sys/types.h>
+#include <sys/systm.h>
 #include <sys/sunddi.h>
 #endif
 #include <smbsrv/string.h>
@@ -141,7 +142,7 @@ smb_match_private(const char *pat, const char *str, struct match_priv *priv)
 	const char	*limit;
 	char		pc;		/* current pattern char */
 	int		rc;
-	smb_wchar_t	wcpat, wcstr;	/* current wchar in pat, str */
+	uint32_t	wcpat, wcstr;	/* current wchar in pat, str */
 	int		nbpat, nbstr;	/* multi-byte length of it */
 
 	if (priv->depth >= SMB_MATCH_DEPTH_MAX)

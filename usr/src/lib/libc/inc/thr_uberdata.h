@@ -22,8 +22,11 @@
 /*
  * Copyright (c) 1999, 2010, Oracle and/or its affiliates. All rights reserved.
  */
+
 /*
- * Copyright (c) 2014, Joyent, Inc. All rights reserved.
+ * Copyright 2016 Joyent, Inc.
+ * Copyright 2018 Nexenta Systems, Inc.
+ * Copyright 2026 Oxide Computer Company
  */
 
 #ifndef _THR_UBERDATA_H
@@ -55,9 +58,10 @@
 #include <sys/priocntl.h>
 #include <thread_db.h>
 #include <setjmp.h>
+#include <sys/thread.h>
+#include <sys/debug.h>
 #include "libc_int.h"
 #include "tdb_agent.h"
-#include "thr_debug.h"
 
 /*
  * This is an implementation-specific include file for threading support.
@@ -416,7 +420,7 @@ typedef union {
 #define	qh_lock		qh_qh.q_lock
 #define	qh_qcnt		qh_qh.q_qcnt
 #define	qh_type		qh_qh.q_type
-#if defined(THREAD_DEBUG)
+#if defined(DEBUG)
 #define	qh_lockcount	qh_qh.q_lockcount
 #define	qh_qlen		qh_qh.q_qlen
 #define	qh_qmax		qh_qh.q_qmax
@@ -531,6 +535,9 @@ typedef void (*tmem_func_t)(void *, int);
 /*
  * NOTE:  Whatever changes are made to ulwp_t must be
  * reflected in $SRC/cmd/mdb/common/modules/libc/libc.c
+ *
+ * NOTE: ulwp32_t (defined later in this file) should be kept in sync
+ * with ulwp_t
  *
  * NOTE: ul_self *must* be the first member of ulwp_t on x86
  * Low-level x86 code relies on this.
@@ -680,6 +687,8 @@ typedef struct ulwp {
 	void		*ul_unwind_ret;	/* used only by _ex_clnup_handler() */
 #endif
 	tumem_t		ul_tmem;	/* used only by umem */
+	uint_t		ul_ptinherit;	/* pthreads sched inherit value */
+	char		ul_ntoabuf[18];	/* thread-specific inet_ntoa buffer */
 } ulwp_t;
 
 #define	ul_cursig	ul_cp.s.cursig		/* deferred signal number */
@@ -862,7 +871,7 @@ typedef struct {
 typedef void (*_exithdlr_func_t) (void*);
 
 typedef struct _exthdlr {
-	struct _exthdlr 	*next;	/* next in handler list */
+	struct _exthdlr		*next;	/* next in handler list */
 	_exithdlr_func_t	hdlr;	/* handler itself */
 	void			*arg;	/* argument to handler */
 	void			*dso;	/* DSO associated with handler */
@@ -893,6 +902,37 @@ typedef struct {
 } atexit_root32_t;
 #endif	/* _SYSCALL32 */
 
+/*
+ * at_quick_exit() and quick_exit() data structures. The ISO/IEC C11 odd
+ * siblings of atexit()
+ */
+typedef void (*_quick_exithdlr_func_t)(void);
+
+typedef struct _qexthdlr {
+	struct _qexthdlr	*next;	/* next in handler list */
+	_quick_exithdlr_func_t	hdlr;	/* handler itself */
+} _qexthdlr_t;
+
+/*
+ * We add a pad on 32-bit systems to allow us to always have the structure size
+ * be 32-bytes which helps us deal with the compiler's alignment when building
+ * in ILP32 / LP64 systems.
+ */
+typedef struct {
+	mutex_t		exitfns_lock;
+	_qexthdlr_t	*head;
+#if !defined(_LP64)
+	uint32_t	pad;
+#endif
+} quickexit_root_t;
+
+#ifdef _SYSCALL32
+typedef struct {
+	mutex_t		exitfns_lock;
+	caddr32_t	head;
+	uint32_t	pad;
+} quickexit_root32_t;
+#endif /* _SYSCALL32 */
 
 /*
  * This is data that is global to all link maps (uberdata, aka super-global).
@@ -910,6 +950,7 @@ typedef struct uberdata {
 	siguaction_t	siguaction[NSIG];
 	bucket_t	bucket[NBUCKETS];
 	atexit_root_t	atexit_root;
+	quickexit_root_t quickexit_root;
 	tsd_metadata_t	tsd_metadata;
 	tls_metadata_t	tls_metadata;
 	/*
@@ -944,6 +985,7 @@ typedef struct uberdata {
 	robust_t	**robustlocks;	/* table of registered robust locks */
 	robust_t	*robustlist;	/* list of registered robust locks */
 	char	*progname;	/* the basename of the program, from argv[0] */
+	void	*ub_comm_page;	/* arch-specific comm page of kernel data */
 	struct uberdata **tdb_bootstrap;
 	tdb_t	tdb;		/* thread debug interfaces (for libc_db) */
 } uberdata_t;
@@ -1111,6 +1153,8 @@ typedef struct ulwp32 {
 	caddr32_t	ul_unwind_ret;	/* used only by _ex_clnup_handler() */
 #endif
 	tumem32_t	ul_tmem;	/* used only by umem */
+	uint_t		ul_ptinherit;	/* pthreads sched inherit value */
+	char		ul_ntoabuf[18];	/* thread-specific inet_ntoa buffer */
 } ulwp32_t;
 
 #define	REPLACEMENT_SIZE32	((size_t)&((ulwp32_t *)NULL)->ul_sigmask)
@@ -1126,6 +1170,7 @@ typedef struct uberdata32 {
 	siguaction32_t	siguaction[NSIG];
 	bucket32_t	bucket[NBUCKETS];
 	atexit_root32_t	atexit_root;
+	quickexit_root32_t quickexit_root;
 	tsd_metadata32_t tsd_metadata;
 	tls_metadata32_t tls_metadata;
 	char		primary_map;
@@ -1156,6 +1201,7 @@ typedef struct uberdata32 {
 	caddr32_t	robustlocks;
 	caddr32_t	robustlist;
 	caddr32_t	progname;
+	caddr32_t	ub_comm_page;
 	caddr32_t	tdb_bootstrap;
 	tdb32_t		tdb;
 } uberdata32_t;
@@ -1194,6 +1240,7 @@ typedef	struct	_thrattr {
 	int	policy;
 	int	inherit;
 	size_t	guardsize;
+	char	name[THREAD_NAME_MAX];
 } thrattr_t;
 
 typedef	struct	_rwlattr {
@@ -1227,8 +1274,8 @@ extern	greg_t		stkptr(void);
 extern	int	__nanosleep(const timespec_t *, timespec_t *);
 extern	void	getgregs(ulwp_t *, gregset_t);
 extern	void	setgregs(ulwp_t *, gregset_t);
-extern	void	thr_panic(const char *);
-#pragma rarely_called(thr_panic)
+extern	void	thr_panic(const char *) __NORETURN;
+extern	void	mutex_panic(mutex_t *, const char *) __NORETURN;
 extern	ulwp_t	*find_lwp(thread_t);
 extern	void	finish_init(void);
 extern	void	update_sched(ulwp_t *);
@@ -1275,6 +1322,12 @@ extern	void	_flush_windows(void);
 #define	_flush_windows()
 #endif
 extern	void	set_curthread(void *);
+extern	void	ssp_init(void);
+extern	locale_t __curlocale(void);
+
+extern	int	sema_relclockwait(sema_t *, clockid_t, const timespec_t *);
+extern	int	sema_clockwait(sema_t *, clockid_t, const timespec_t *);
+
 
 /*
  * Utility function used when waking up many threads (more than MAXLWPS)
@@ -1430,7 +1483,6 @@ extern	int	__sigprocmask(int, const sigset_t *, sigset_t *);
 extern	int	__lwp_sigmask(int, const sigset_t *);
 extern	void	__sighndlr(int, siginfo_t *, ucontext_t *, void (*)());
 extern	caddr_t	__sighndlrend;
-#pragma unknown_control_flow(__sighndlr)
 
 /* belongs in <pthread.h> */
 #define	PTHREAD_CREATE_DAEMON_NP	0x100	/* = THR_DAEMON */
@@ -1444,14 +1496,15 @@ extern	int	mutex_unlock_internal(mutex_t *, int);
 
 /* not cancellation points: */
 extern	int	__cond_wait(cond_t *, mutex_t *);
-extern	int	__cond_timedwait(cond_t *, mutex_t *, const timespec_t *);
+extern	int	__cond_timedwait(cond_t *, mutex_t *, clockid_t,
+		    const timespec_t *);
 extern	int	__cond_reltimedwait(cond_t *, mutex_t *, const timespec_t *);
 
 extern	int	rw_read_held(rwlock_t *);
 extern	int	rw_write_held(rwlock_t *);
 
 extern	int	_thrp_create(void *, size_t, void *(*)(void *), void *, long,
-			thread_t *, size_t);
+			thread_t *, size_t, const char *);
 extern	int	_thrp_suspend(thread_t, uchar_t);
 extern	int	_thrp_continue(thread_t, uchar_t);
 
@@ -1464,6 +1517,8 @@ extern	const thrattr_t *def_thrattr(void);
 extern	id_t	setparam(idtype_t, id_t, int, int);
 extern	id_t	setprio(idtype_t, id_t, int, int *);
 extern	id_t	getparam(idtype_t, id_t, int *, struct sched_param *);
+struct kspawn_sched;
+extern	int	spawn_sched_resolve(int, int, int, struct kspawn_sched *);
 
 /*
  * System call wrappers (direct interfaces to the kernel)

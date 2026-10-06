@@ -15,10 +15,6 @@
  * OF OR IN CONNECTION WITH THE USE OR PERFORMANCE OF THIS SOFTWARE.
  */
 
-#if !defined(LINT) && !defined(CODECENTER)
-static const char rcsid[] = "$Id: gen_sv.c,v 1.3 2005/04/27 04:56:24 sra Exp $";
-#endif
-
 /* Imports */
 
 #include "port_before.h"
@@ -101,7 +97,7 @@ irs_gen_sv(struct irs_acc *this) {
 static void
 sv_close(struct irs_sv *this) {
 	struct pvt *pvt = (struct pvt *)this->private;
-	
+
 	memput(pvt, sizeof *pvt);
 	memput(this, sizeof *this);
 }
@@ -111,7 +107,7 @@ sv_next(struct irs_sv *this) {
 	struct pvt *pvt = (struct pvt *)this->private;
 	struct servent *rval;
 	struct irs_sv *sv;
-	
+
 	while (pvt->rule) {
 		sv = pvt->rule->inst->sv;
 		rval = (*sv->next)(sv);
@@ -134,7 +130,7 @@ sv_byname(struct irs_sv *this, const char *name, const char *proto) {
 	struct irs_rule *rule;
 	struct servent *rval;
 	struct irs_sv *sv;
-	
+
 	rval = NULL;
 	for (rule = pvt->rules; rule; rule = rule->next) {
 		sv = rule->inst->sv;
@@ -151,7 +147,7 @@ sv_byport(struct irs_sv *this, int port, const char *proto) {
 	struct irs_rule *rule;
 	struct servent *rval;
 	struct irs_sv *sv;
-	
+
 	rval = NULL;
 	for (rule = pvt->rules; rule; rule = rule->next) {
 		sv = rule->inst->sv;

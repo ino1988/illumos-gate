@@ -25,6 +25,8 @@
 
 #
 # Copyright (c) 2012 by Delphix. All rights reserved.
+# Copyright (c) 2018, Joyent, Inc.
+# Copyright 2025 OmniOS Community Edition (OmniOSce) Association.
 #
 
 PROG = isns
@@ -36,11 +38,13 @@ COBJS	= main.o qry.o admintf.o dsapi.o log.o sched.o dseng.o scn.o cache.o
 COBJS	+= dump.o msgq.o server.o config.o esi.o obj.o utils.o dd.o func.o
 COBJS	+= pdu.o door.o htable.o
 OBJS	= $(COBJS) $(DSRC:%.d=%.o)
-SRCS	= $(COBJS:%.o=%.c)
 POFILE= isns.po
 POFILES	= $(COBJS:%.o=%.po)
 
 include ../../Makefile.cmd
+include ../../Makefile.ctf
+
+CTF_MODE = link
 
 DATA_STORE	= xml
 XML_DIR		= xml_def
@@ -50,25 +54,23 @@ MANIFEST	= isns_server.xml
 ROOTMANIFESTDIR	= $(ROOTSVCNETWORK)
 $(ROOTSVCNETWORK)/isns_server.xml	:= FILEMODE = 0444
 
-CFLAGS 		+=	$(CCVERBOSE)
-CPPFLAGS 	+= -I./ -I$(ADJUNCT_PROTO)/usr/include/libxml2
+CFLAGS		+=	$(CCVERBOSE)
+CPPFLAGS	+= -I./ -I$(ADJUNCT_PROTO)/usr/include/libxml2
 CPPFLAGS	+= -DTARGET_DATA_STORE=$(DATA_STORE)
 CPPFLAGS	+= -D_POSIX_PTHREAD_SEMANTICS
-LINTFLAGS += -xerroff=E_BAD_PTR_CAST_ALIGN
-LINTFLAGS += -xerroff=E_NAME_USED_NOT_DEF2
-LINTFLAGS += -xerroff=E_CASE_FALLTHRU
 
 CERRWARN += -_gcc=-Wno-char-subscripts
 CERRWARN += -_gcc=-Wno-ignored-qualifiers
-CERRWARN += -_gcc=-Wno-uninitialized
+CERRWARN += $(CNOWARN_UNINIT)
 CERRWARN += -_gcc=-Wno-implicit-function-declaration
+
+# not linted
+SMATCH=off
 
 CLOBBERFILES += $(DTRACE_HEADER)
 
-obj.o := CERRWARN += -erroff=E_CONST_OBJ_SHOULD_HAVE_INITIZR
-obj.o := CERRWARN += -erroff=E_IMPLICIT_DECL_FUNC_RETURN_INT
-
 LDLIBS		+= -lsecdb -lsocket -lnsl -lscf -lxml2
+NATIVE_LIBS	+= libxml2.so
 
 .KEEP_STATE:
 
@@ -92,7 +94,7 @@ $(PROG): $(OBJS)
 clean:
 	$(RM) $(OBJS)
 
-lint:	lint_SRCS
+$(POFILES): $(DTRACE_HEADER)
 
 $(POFILE): $(POFILES)
 	$(RM) $@

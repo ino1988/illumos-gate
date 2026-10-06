@@ -21,7 +21,9 @@
 /*
  * Copyright (c) 1998, 2010, Oracle and/or its affiliates. All rights reserved.
  * Copyright 2011 Nexenta Systems, Inc.  All rights reserved.
- * Copyright (c) 2012, Joyent, Inc. All rights reserved.
+ * Copyright (c) 2015, Joyent, Inc. All rights reserved.
+ * Copyright 2022 Garrett D'Amore <garrett@damore.org>
+ * Copyright 2023 Oxide Computer Company
  */
 
 #include <regex.h>
@@ -57,6 +59,8 @@ static int cpuid(di_minor_t minor, di_node_t node);
 static int glvc(di_minor_t minor, di_node_t node);
 static int ses_callback(di_minor_t minor, di_node_t node);
 static int kmdrv_create(di_minor_t minor, di_node_t node);
+static int vio9p_create(di_minor_t minor, di_node_t node);
+static int eeprom_create(di_minor_t minor, di_node_t node);
 
 static devfsadm_create_t misc_cbt[] = {
 	{ "pseudo", "ddi_pseudo", "(^sad$)",
@@ -80,7 +84,7 @@ static devfsadm_create_t misc_cbt[] = {
 	{ "enclosure", DDI_NT_SCSI_ENCLOSURE, NULL,
 	    TYPE_EXACT, ILEVEL_0, ses_callback
 	},
-	{ "pseudo", "ddi_pseudo", "(^winlock$)|(^pm$)",
+	{ "pseudo", "ddi_pseudo", "(^pm$)",
 	    TYPE_EXACT | DRV_RE, ILEVEL_0, node_name
 	},
 	{ "pseudo", "ddi_pseudo", "conskbd",
@@ -89,23 +93,29 @@ static devfsadm_create_t misc_cbt[] = {
 	{ "pseudo", "ddi_pseudo", "consms",
 	    TYPE_EXACT | DRV_EXACT, ILEVEL_0, consms
 	},
+	{ "pseudo", "ddi_pseudo", "eventfd",
+	    TYPE_EXACT | DRV_EXACT, ILEVEL_0, minor_name
+	},
+	{ "pseudo", "ddi_pseudo", "signalfd",
+	    TYPE_EXACT | DRV_EXACT, ILEVEL_0, minor_name
+	},
 	{ "pseudo", "ddi_pseudo", "rsm",
 	    TYPE_EXACT | DRV_EXACT, ILEVEL_0, minor_name
 	},
 	{ "pseudo", "ddi_pseudo",
 	    "(^lockstat$)|(^SUNW,rtvc$)|(^vol$)|(^log$)|(^sy$)|"
-	    "(^ksyms$)|(^clone$)|(^tl$)|(^tnf$)|(^kstat$)|(^mdesc$)|(^eeprom$)|"
+	    "(^ksyms$)|(^clone$)|(^tl$)|(^kstat$)|(^mdesc$)|(^eeprom$)|"
 	    "(^ptsl$)|(^mm$)|(^wc$)|(^dump$)|(^cn$)|(^svvslo$)|(^ptm$)|"
 	    "(^ptc$)|(^openeepr$)|(^poll$)|(^sysmsg$)|(^random$)|(^trapstat$)|"
 	    "(^cryptoadm$)|(^crypto$)|(^pool$)|(^poolctl$)|(^bl$)|(^kmdb$)|"
-	    "(^sysevent$)|(^kssl$)|(^physmem$)",
+	    "(^sysevent$)|(^physmem$)",
 	    TYPE_EXACT | DRV_RE, ILEVEL_1, minor_name
 	},
 	{ "pseudo", "ddi_pseudo",
 	    "(^ip$)|(^tcp$)|(^udp$)|(^icmp$)|"
 	    "(^ip6$)|(^tcp6$)|(^udp6$)|(^icmp6$)|"
 	    "(^rts$)|(^arp$)|(^ipsecah$)|(^ipsecesp$)|(^keysock$)|(^spdsock$)|"
-	    "(^nca$)|(^rds$)|(^sdp$)|(^ipnet$)|(^dlpistub$)|(^bpf$)",
+	    "(^rds$)|(^sdp$)|(^ipnet$)|(^dlpistub$)|(^bpf$)",
 	    TYPE_EXACT | DRV_RE, ILEVEL_1, minor_name
 	},
 	{ "pseudo", "ddi_pseudo", "ipd",
@@ -122,6 +132,9 @@ static devfsadm_create_t misc_cbt[] = {
 	{ "pseudo", "ddi_pseudo",
 	    "(^kdmouse$)|(^rootprop$)",
 	    TYPE_EXACT | DRV_RE, ILEVEL_0, node_name
+	},
+	{ "pseudo", "ddi_pseudo", "timerfd",
+	    TYPE_EXACT | DRV_EXACT, ILEVEL_0, minor_name
 	},
 	{ "pseudo", "ddi_pseudo", "tod",
 	    TYPE_EXACT | DRV_EXACT, ILEVEL_0, node_name
@@ -189,12 +202,24 @@ static devfsadm_create_t misc_cbt[] = {
 	{ "pseudo", "ddi_pseudo", "fm",
 	    TYPE_EXACT | DRV_RE, ILEVEL_1, minor_name,
 	},
-	{ "pseudo", "ddi_pseudo", "smbsrv",
-	    TYPE_EXACT | DRV_EXACT, ILEVEL_1, minor_name,
+	{ "pseudo", "ddi_pseudo", "smbsrv1?",
+	    TYPE_EXACT | DRV_RE, ILEVEL_1, minor_name,
 	},
 	{ "pseudo", "ddi_pseudo", "tpm",
 	    TYPE_EXACT | DRV_EXACT, ILEVEL_0, minor_name
 	},
+	{ "pseudo", "ddi_pseudo", "overlay",
+	    TYPE_EXACT | DRV_EXACT, ILEVEL_0, minor_name
+	},
+	{ "9p", "ddi_pseudo", "vio9p",
+	    TYPE_EXACT | DRV_EXACT, ILEVEL_0, vio9p_create,
+	},
+	{ "pseudo", "ddi_pseudo", "ktest",
+	    TYPE_EXACT | DRV_EXACT, ILEVEL_0, minor_name
+	},
+	{ "pseudo", DDI_NT_EEPROM, "eedev",
+	    TYPE_EXACT | DRV_EXACT, ILEVEL_0, eeprom_create
+	}
 };
 
 DEVFSADM_CREATE_INIT_V0(misc_cbt);
@@ -215,8 +240,8 @@ static devfsadm_remove_t misc_remove_cbt[] = {
 	{ "pseudo", "^daplt$",
 	    RM_PRE | RM_ALWAYS, ILEVEL_0, devfsadm_rm_all
 	},
-	{ "pseudo", "^zcons/" ZONENAME_REGEXP "/(" ZCONS_MASTER_NAME "|"
-		ZCONS_SLAVE_NAME ")$",
+	{ "pseudo", "^zcons/" ZONENAME_REGEXP "/(" ZCONS_MANAGER_NAME "|"
+		ZCONS_SUBSIDIARY_NAME ")$",
 	    RM_PRE | RM_HOT | RM_ALWAYS, ILEVEL_0, devfsadm_rm_all
 	},
 	{ "pseudo", "^" CPUID_SELF_NAME "$", RM_ALWAYS | RM_PRE | RM_HOT,
@@ -233,7 +258,13 @@ static devfsadm_remove_t misc_remove_cbt[] = {
 	},
 	{ "pseudo", "^sctp|sctp6$",
 	    RM_PRE | RM_ALWAYS, ILEVEL_0, devfsadm_rm_link
-	}
+	},
+	{ "9p", "^9p/[0-9]+$",
+	    RM_PRE | RM_HOT | RM_ALWAYS, ILEVEL_0, devfsadm_rm_all
+	},
+	{ "pseudo", "^eeprom/.*$",
+	    RM_PRE | RM_HOT | RM_ALWAYS, ILEVEL_0, devfsadm_rm_all
+	},
 };
 
 /* Rules for gpio devices */
@@ -465,7 +496,7 @@ fc_port(di_minor_t minor, di_node_t node)
 /*
  * Handles:
  *	minor node type "ddi_printer".
- * 	rules of the form: type=ddi_printer;name=bpp  \M0
+ *	rules of the form: type=ddi_printer;name=bpp  \M0
  */
 static int
 printer_create(di_minor_t minor, di_node_t node)
@@ -619,6 +650,26 @@ av_create(di_minor_t minor, di_node_t node)
 }
 
 /*
+ * Create device nodes for Virtio 9P channels:
+ *	/dev/9p/[0-9]+
+ */
+static int
+vio9p_create(di_minor_t minor, di_node_t node)
+{
+	char *minor_name = di_minor_name(minor);
+	char path[PATH_MAX + 1];
+
+	if (minor_name == NULL || strcmp(minor_name, "9p") != 0) {
+		return (DEVFSADM_CONTINUE);
+	}
+
+	(void) snprintf(path, sizeof (path), "9p/%d", di_instance(node));
+	(void) devfsadm_mklink(path, node, minor, 0);
+
+	return (DEVFSADM_CONTINUE);
+}
+
+/*
  * Creates /dev/lom and /dev/tsalarm:ctl for tsalarm node
  */
 static int
@@ -667,7 +718,7 @@ zcons_create(di_minor_t minor, di_node_t node)
 }
 
 /*
- *	/dev/cpu/self/cpuid 	->	/devices/pseudo/cpuid@0:self
+ *	/dev/cpu/self/cpuid	->	/devices/pseudo/cpuid@0:self
  */
 static int
 cpuid(di_minor_t minor, di_node_t node)
@@ -704,5 +755,39 @@ kmdrv_create(di_minor_t minor, di_node_t node)
 {
 
 	(void) devfsadm_mklink("kmdrv", node, minor, 0);
+	return (DEVFSADM_CONTINUE);
+}
+
+/*
+ * EEPROMs
+ *
+ * Minor nodes are named by the eedev driver as <driver>:<instance>:<name>. Our
+ * goal is to turn this into /dev/eeprom/driver/instance/name -> /devices/...
+ */
+static int
+eeprom_create(di_minor_t minor, di_node_t node)
+{
+	const char *n;
+	char *dup, *c;
+	char buf[PATH_MAX];
+
+	if ((n = di_minor_name(minor)) == NULL) {
+		return (DEVFSADM_CONTINUE);
+	}
+
+	if ((dup = strdup(n)) == NULL) {
+		return (DEVFSADM_TERMINATE);
+	}
+
+	c = dup;
+	while ((c = strchr(c, ':')) != NULL) {
+		*c = '/';
+	}
+
+	if (snprintf(buf, sizeof (buf), "eeprom/%s", dup) < sizeof (buf)) {
+		(void) devfsadm_mklink(buf, node, minor, 0);
+	}
+
+	free(dup);
 	return (DEVFSADM_CONTINUE);
 }

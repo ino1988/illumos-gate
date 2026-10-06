@@ -24,6 +24,10 @@
  * Use is subject to license terms.
  *
  * Copyright 2011 Jason King.  All rights reserved.
+ * Copyright 2012 Joshua M. Clulow <josh@sysmgr.org>
+ * Copyright 2015 Josef 'Jeff' Sipek <jeffpc@josefsipek.net>
+ * Copyright 2018, Joyent, Inc.
+ * Copyright 2024 Oxide Computer Company
  */
 
 #include <ctype.h>
@@ -31,6 +35,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <sys/hexdump.h>
 #include <sys/sysmacros.h>
 #include <sys/elf_SPARC.h>
 
@@ -97,6 +102,22 @@ getsymname(uint64_t addr, const char *symbol, off_t offset, char *buf,
 }
 
 /*
+ * Determine if we are on an architecture with fixed-size instructions,
+ * and if so, what size they are.
+ */
+static int
+insn_size(dis_handle_t *dhp)
+{
+	int min = dis_min_instrlen(dhp);
+	int max = dis_max_instrlen(dhp);
+
+	if (min == max)
+		return (min);
+
+	return (0);
+}
+
+/*
  * The main disassembly routine.  Given a fixed-sized buffer and starting
  * address, disassemble the data using the supplied target and libdisasm handle.
  */
@@ -115,6 +136,8 @@ dis_data(dis_tgt_t *tgt, dis_handle_t *dhp, uint64_t addr, void *data,
 	size_t symsize;
 	int isfunc;
 	size_t symwidth = 0;
+	int ret;
+	int insz = insn_size(dhp);
 
 	db.db_tgt = tgt;
 	db.db_data = data;
@@ -130,17 +153,17 @@ dis_data(dis_tgt_t *tgt, dis_handle_t *dhp, uint64_t addr, void *data,
 
 	while (addr < db.db_addr + db.db_size) {
 
-		if (dis_disassemble(dhp, addr, buf, BUFSIZE) != 0) {
-#if defined(__sparc)
+		ret = dis_disassemble(dhp, addr, buf, BUFSIZE);
+		if (ret != 0 && insz > 0) {
 			/*
-			 * Since sparc instructions are fixed size, we
+			 * Since we know instructions are fixed size, we
 			 * always know the address of the next instruction
 			 */
 			(void) snprintf(buf, sizeof (buf),
 			    "*** invalid opcode ***");
-			db.db_nextaddr = addr + 4;
+			db.db_nextaddr = addr + insz;
 
-#else
+		} else if (ret != 0) {
 			off_t next;
 
 			(void) snprintf(buf, sizeof (buf),
@@ -163,13 +186,12 @@ dis_data(dis_tgt_t *tgt, dis_handle_t *dhp, uint64_t addr, void *data,
 				else
 					db.db_nextaddr = addr + next;
 			}
-#endif
 		}
 
 		/*
 		 * Print out the line as:
 		 *
-		 * 	address:	bytes	text
+		 *	address:	bytes	text
 		 *
 		 * If there are more than 6 bytes in any given instruction,
 		 * spread the bytes across two lines.  We try to get symbolic
@@ -305,70 +327,32 @@ do_read(void *data, uint64_t addr, void *buf, size_t len)
 
 /*
  * Routine to dump raw data in a human-readable format.  Used by the -d and -D
- * options.  We model our output after the xxd(1) program, which gives nicely
- * formatted output, along with an ASCII translation of the result.
+ * options.
  */
 void
 dump_data(uint64_t addr, void *data, size_t datalen)
 {
-	uintptr_t curaddr = addr & (~0xf);
-	uint8_t *bytes = data;
-	int i;
-	int width;
+	hexdump_t h;
+
+	hexdump_init(&h);
+	/* Print out data in two-byte chunks. */
+	hexdump_set_grouping(&h, 2);
+	hexdump_set_addr(&h, addr);
 
 	/*
 	 * Determine if the address given to us fits in 32-bit range, in which
 	 * case use a 4-byte width.
 	 */
 	if (((addr + datalen) & 0xffffffff00000000ULL) == 0ULL)
-		width = 8;
+		hexdump_set_addrwidth(&h, 8);
 	else
-		width = 16;
+		hexdump_set_addrwidth(&h, 16);
 
-	while (curaddr < addr + datalen) {
-		/*
-		 * Display leading address
-		 */
-		(void) printf("%0*x: ", width, curaddr);
 
-		/*
-		 * Print out data in two-byte chunks.  If the current address
-		 * is before the starting address or after the end of the
-		 * section, print spaces.
-		 */
-		for (i = 0; i < 16; i++) {
-			if (curaddr + i < addr ||curaddr + i >= addr + datalen)
-				(void) printf("  ");
-			else
-				(void) printf("%02x",
-				    bytes[curaddr + i - addr]);
+	(void) hexdump_fileh(&h, data, datalen, HDF_DEFAULT | HDF_ALIGN,
+	    stdout);
 
-			if (i & 1)
-				(void) printf(" ");
-		}
-
-		(void) printf(" ");
-
-		/*
-		 * Print out the ASCII representation
-		 */
-		for (i = 0; i < 16; i++) {
-			if (curaddr + i < addr ||
-			    curaddr + i >= addr + datalen) {
-				(void) printf(" ");
-			} else {
-				uint8_t byte = bytes[curaddr + i - addr];
-				if (isprint(byte))
-					(void) printf("%c", byte);
-				else
-					(void) printf(".");
-			}
-		}
-
-		(void) printf("\n");
-
-		curaddr += 16;
-	}
+	hexdump_fini(&h);
 }
 
 /*
@@ -482,7 +466,6 @@ dis_file(const char *filename)
 		 * native machine type.
 		 */
 		switch (ehdr.e_machine) {
-#ifdef __sparc
 		case EM_SPARC:
 			if (ehdr.e_ident[EI_CLASS] != ELFCLASS32 ||
 			    ehdr.e_ident[EI_DATA] != ELFDATA2MSB) {
@@ -520,9 +503,7 @@ dis_file(const char *filename)
 
 			g_flags |= DIS_SPARC_V9 | DIS_SPARC_V9_SGI;
 			break;
-#endif /* __sparc */
 
-#if defined(__i386) || defined(__amd64)
 		case EM_386:
 			g_flags |= DIS_X86_SIZE32;
 			break;
@@ -530,7 +511,61 @@ dis_file(const char *filename)
 		case EM_AMD64:
 			g_flags |= DIS_X86_SIZE64;
 			break;
-#endif /* __i386 || __amd64 */
+
+		case EM_S370:
+			g_flags |= DIS_S370;
+
+			if (ehdr.e_ident[EI_CLASS] != ELFCLASS32 ||
+			    ehdr.e_ident[EI_DATA] != ELFDATA2MSB) {
+				warn("invalid E_IDENT field for S370 object");
+				return;
+			}
+			break;
+
+		case EM_S390:
+			/*
+			 * Both 390 and z/Architecture use EM_S390, the only
+			 * differences is the class: ELFCLASS32 for plain
+			 * old s390 and ELFCLASS64 for z/Architecture (aka.
+			 * s390x).
+			 */
+			if (ehdr.e_ident[EI_CLASS] == ELFCLASS32) {
+				g_flags |= DIS_S390_31;
+			} else if (ehdr.e_ident[EI_CLASS] == ELFCLASS64) {
+				g_flags |= DIS_S390_64;
+			} else {
+				warn("invalid E_IDENT field for S390 object");
+				return;
+			}
+
+			if (ehdr.e_ident[EI_DATA] != ELFDATA2MSB) {
+				warn("invalid E_IDENT field for S390 object");
+				return;
+			}
+			break;
+
+		case EM_RISCV:
+			/*
+			 * RISC-V is defined to be litle endian. The current ISA
+			 * makes it clear that the 64-bit instructions can
+			 * co-exist with the 32-bit ones and therefore we don't
+			 * need a separate elf class at this time.
+			 */
+			if (ehdr.e_ident[EI_DATA] != ELFDATA2LSB) {
+				warn("invalid EI_DATA field for RISC-V object");
+				return;
+			}
+
+			if (ehdr.e_ident[EI_CLASS] == ELFCLASS32) {
+				g_flags |= DIS_RISCV_32;
+			} else if (ehdr.e_ident[EI_CLASS] == ELFCLASS64) {
+				g_flags |= DIS_RISCV_64;
+			} else {
+				warn("invalid EI_CLASS field for RISC-V "
+				    "object");
+				return;
+			}
+			break;
 
 		default:
 			die("%s: unsupported ELF machine 0x%x", filename,

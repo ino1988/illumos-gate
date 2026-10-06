@@ -21,6 +21,7 @@
 /*
  * Copyright 2009 Sun Microsystems, Inc.  All rights reserved.
  * Use is subject to license terms.
+ * Copyright 2025 Oxide Computer Company
  */
 
 #ifndef	_SYS_DLS_H
@@ -45,7 +46,7 @@ extern "C" {
 #define	DLS_MODULE_NAME	"dls"
 
 /*
- * Data-Link Services Information (text emitted by modinfo(1m))
+ * Data-Link Services Information (text emitted by modinfo(8))
  */
 #define	DLS_INFO	"Data-Link Services"
 
@@ -85,6 +86,9 @@ typedef struct dls_link_s	dls_link_t;
 #define	DLS_PROMISC_SAP		0x00000001
 #define	DLS_PROMISC_MULTI	0x00000002
 #define	DLS_PROMISC_PHYS	0x00000004
+#define	DLS_PROMISC_RX_ONLY	0x00000008
+#define	DLS_PROMISC_INCOMING	0x00000010
+#define	DLS_PROMISC_OUTGOING	0x00000020
 
 extern int	dls_open(dls_link_t *, dls_dl_handle_t, dld_str_t *);
 extern void	dls_close(dld_str_t *);
@@ -122,6 +126,7 @@ extern int		dls_devnet_hold_by_dev(dev_t, dls_dl_handle_t *);
 extern void		dls_devnet_rele(dls_dl_handle_t);
 extern void		dls_devnet_prop_task_wait(dls_dl_handle_t);
 
+extern const char	*dls_devnet_link(dls_dl_handle_t);
 extern const char	*dls_devnet_mac(dls_dl_handle_t);
 extern uint16_t		dls_devnet_vid(dls_dl_handle_t);
 extern datalink_id_t	dls_devnet_linkid(dls_dl_handle_t);

@@ -23,6 +23,7 @@
  * Copyright 2009 Sun Microsystems, Inc.  All rights reserved.
  * Use is subject to license terms.
  * Copyright 2013 Joyent, Inc.  All rights reserved.
+ * Copyright 2024 Oxide Computer Company
  */
 
 #include <sys/param.h>
@@ -124,6 +125,34 @@ killall(zoneid_t zoneid)
 	}
 	mutex_exit(&pidlock);
 }
+
+/*
+ * Emits an SDT probe (sdt:::test) with 7 arguments.  This is used to test
+ * arguments are passed properly, whether via registers or on the stack.
+ */
+static void
+sdt_test_args(void)
+{
+	DTRACE_PROBE7(test, int, 1, int, 2, int, 3, int, 4, int, 5,
+	    int, 6, int, 7);
+}
+
+/*
+ * Same as above, but with the probe called as a tail call.
+ * Unfortunately, gcc doesn't yet have a [[musttail]] attribute that would
+ * either generate a tail call or error at compile time if it can't.  Instead
+ * we use a separate function along with a optimize pragma.  On x86, this does
+ * indeed generate a tail call as written.
+ */
+#pragma GCC push_options
+#pragma GCC optimize("optimize-sibling-calls")
+static void
+sdt_test_args_tail_call(int a, int b, int c, int d, int e, int f, int g)
+{
+	DTRACE_PROBE7(test, int, a, int, b, int, c, int, d,
+	    int, e, int, f, int, g);
+}
+#pragma GCC pop_options
 
 int
 kadmin(int cmd, int fcn, void *mdep, cred_t *credp)
@@ -280,7 +309,7 @@ kadmin(int cmd, int fcn, void *mdep, cred_t *credp)
 		 * vfs_syncall() can acquire the vfs locks they need.
 		 */
 		sema_p(&fsflush_sema);
-		(void) callb_execute_class(CB_CL_UADMIN_PRE_VFS, NULL);
+		(void) callb_execute_class(CB_CL_UADMIN_PRE_VFS, 0);
 
 		vfs_unmountall();
 		(void) VFS_MOUNTROOT(rootvfs, ROOT_UNMOUNT);
@@ -296,9 +325,8 @@ kadmin(int cmd, int fcn, void *mdep, cred_t *credp)
 		dump_messages();
 
 		invoke_cb = B_TRUE;
-
-		/* FALLTHROUGH */
 	}
+	/* FALLTHROUGH */
 
 	case A_REBOOT:
 		if ((mdep != NULL) && (*(char *)mdep == '/')) {
@@ -395,8 +423,8 @@ kadmin(int cmd, int fcn, void *mdep, cred_t *credp)
 
 	case A_SDTTEST:
 	{
-		DTRACE_PROBE7(test, int, 1, int, 2, int, 3, int, 4, int, 5,
-		    int, 6, int, 7);
+		sdt_test_args();
+		sdt_test_args_tail_call(1, 2, 3, 4, 5, 6, 7);
 		break;
 	}
 
@@ -443,7 +471,7 @@ uadmin(int cmd, int fcn, uintptr_t mdep)
 	 * Certain subcommands intepret a non-NULL mdep value as a pointer to
 	 * a boot string.  We pull that in as bootargs, if applicable.
 	 */
-	if (mdep != NULL &&
+	if (mdep != (uintptr_t)NULL &&
 	    (cmd == A_SHUTDOWN || cmd == A_REBOOT || cmd == A_DUMP ||
 	    cmd == A_FREEZE || cmd == A_CONFIG)) {
 		bootargs = kmem_zalloc(BOOTARGS_MAX, KM_SLEEP);

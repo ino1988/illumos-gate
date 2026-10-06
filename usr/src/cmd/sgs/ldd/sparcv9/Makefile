@@ -18,24 +18,20 @@
 #
 # CDDL HEADER END
 #
-#
-#ident	"%Z%%M%	%I%	%E% SMI"
-#
 # Copyright 2008 Sun Microsystems, Inc.  All rights reserved.
 # Use is subject to license terms.
+#
+# Copyright 2019 OmniOS Community Edition (OmniOSce) Association.
 #
 
 include		../Makefile.com
 
 .KEEP_STATE:
 
-CONVLIBDIR =	$(CONVLIBDIR64)
-LLDFLAGS =	$(LLDFLAGS64)
-LINTFLAGS64 +=	$(VAR_LINTFLAGS64)
-
-ROOTPROG =	$(ROOTPROG64)
-
-lint:		$(LINTOUT64) $(SGSLINTOUT)
-
 include		../Makefile.targ
-include		../../Makefile.sub.64
+include		$(SRC)/Makefile.master.64
+
+install:	$(ROOTPROG) $(ROOTPROG64)
+
+$(ROOTBIN64)/ldd:
+	$(RM) $@; $(SYMLINK) ../../bin/ldd $@

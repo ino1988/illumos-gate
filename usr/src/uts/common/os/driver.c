@@ -22,6 +22,9 @@
  * Copyright 2009 Sun Microsystems, Inc.  All rights reserved.
  * Use is subject to license terms.
  */
+/*
+ * Copyright (c) 2017 by Delphix. All rights reserved.
+ */
 
 #include <sys/types.h>
 #include <sys/t_lock.h>
@@ -40,7 +43,6 @@
 #include <sys/kmem.h>
 #include <sys/file.h>
 #include <sys/debug.h>
-#include <sys/tnf_probe.h>
 
 /* Don't #include <sys/ddi.h> - it #undef's getmajor() */
 
@@ -363,7 +365,7 @@ dev_lclose(dev_t dev, int flag, int otype, struct cred *cred)
 	mutex_enter(&cvp->v_lock);
 	switch (cvp->v_count) {
 	default:
-		cvp->v_count--;
+		VN_RELE_LOCKED(cvp);
 		break;
 
 	case 0:
@@ -432,18 +434,6 @@ dev_to_instance(dev_t dev)
 	return ((int)(uintptr_t)vinstance);
 }
 
-static void
-bdev_strategy_tnf_probe(struct buf *bp)
-{
-	/* Kernel probe */
-	TNF_PROBE_5(strategy, "io blockio", /* CSTYLED */,
-	    tnf_device, device, bp->b_edev,
-	    tnf_diskaddr, block, bp->b_lblkno,
-	    tnf_size, size, bp->b_bcount,
-	    tnf_opaque, buf, bp,
-	    tnf_bioflags, flags, bp->b_flags);
-}
-
 int
 bdev_strategy(struct buf *bp)
 {
@@ -462,12 +452,6 @@ bdev_strategy(struct buf *bp)
 
 	DTRACE_IO1(start, struct buf *, bp);
 	bp->b_flags |= B_STARTED;
-
-	/*
-	 * Call the TNF probe here instead of the inline code
-	 * to force our compiler to use the tail call optimization.
-	 */
-	bdev_strategy_tnf_probe(bp);
 
 	return (ops->devo_cb_ops->cb_strategy(bp));
 }
@@ -570,7 +554,7 @@ cdev_ioctl(dev_t dev, int cmd, intptr_t arg, int mode, struct cred *cred,
 
 int
 cdev_devmap(dev_t dev, devmap_cookie_t dhp, offset_t off, size_t len,
-	size_t *maplen, uint_t mode)
+    size_t *maplen, uint_t mode)
 {
 	struct cb_ops	*cb;
 
@@ -586,7 +570,7 @@ cdev_mmap(int (*mapfunc)(dev_t, off_t, int), dev_t dev, off_t off, int prot)
 
 int
 cdev_segmap(dev_t dev, off_t off, struct as *as, caddr_t *addrp, off_t len,
-	    uint_t prot, uint_t maxprot, uint_t flags, cred_t *credp)
+    uint_t prot, uint_t maxprot, uint_t flags, cred_t *credp)
 {
 	struct cb_ops	*cb;
 
@@ -597,7 +581,7 @@ cdev_segmap(dev_t dev, off_t off, struct as *as, caddr_t *addrp, off_t len,
 
 int
 cdev_poll(dev_t dev, short events, int anyyet, short *reventsp,
-	struct pollhead **pollhdrp)
+    struct pollhead **pollhdrp)
 {
 	struct cb_ops	*cb;
 

@@ -20,6 +20,8 @@
  */
 /*
  * Copyright (c) 2002, 2010, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2017 by Delphix. All rights reserved.
+ * Copyright 2023 Oxide Computer Company
  */
 
 /*
@@ -105,7 +107,7 @@ devfs_close(struct vnode *vp, int flag, int count,
 /*ARGSUSED*/
 static int
 devfs_read(struct vnode *vp, struct uio *uiop, int ioflag, struct cred *cred,
-	struct caller_context *ct)
+    struct caller_context *ct)
 {
 	dcmn_err2(("devfs_read %s\n", VTODV(vp)->dv_name));
 	ASSERT(vp->v_type == VDIR);
@@ -120,7 +122,7 @@ devfs_read(struct vnode *vp, struct uio *uiop, int ioflag, struct cred *cred,
 /*ARGSUSED*/
 static int
 devfs_write(struct vnode *vp, struct uio *uiop, int ioflag, struct cred *cred,
-	struct caller_context *ct)
+    struct caller_context *ct)
 {
 	dcmn_err2(("devfs_write %s\n", VTODV(vp)->dv_name));
 	ASSERT(vp->v_type == VDIR);
@@ -903,6 +905,14 @@ devfs_readdir(struct vnode *dvp, struct uio *uiop, struct cred *cred, int *eofp,
 		rw_downgrade(&ddv->dv_contents);
 	}
 
+	/*
+	 * Even if the dv node was not stale at entry to this function, it may
+	 * be stale now if another process got in between the rw_exit/rw_enter
+	 * calls above and unlinked it.
+	 */
+	if (DV_STALE(ddv))
+		return (ESTALE);
+
 	soff = uiop->uio_loffset;
 	bufsz = uiop->uio_iov->iov_len;
 	de = bufp = kmem_alloc(bufsz, KM_SLEEP);
@@ -1053,7 +1063,7 @@ devfs_inactive(struct vnode *vp, struct cred *cred, caller_context_t *ct)
 	dcmn_err2(("devfs_inactive: %s\n", dv->dv_name));
 	mutex_enter(&vp->v_lock);
 	ASSERT(vp->v_count >= 1);
-	--vp->v_count;
+	VN_RELE_LOCKED(vp);
 	destroy = (DV_STALE(dv) && vp->v_count == 0);
 	mutex_exit(&vp->v_lock);
 
@@ -1122,7 +1132,7 @@ devfs_seek(struct vnode *vp, offset_t ooff, offset_t *noffp,
 {
 	ASSERT(vp->v_type == VDIR);
 	dcmn_err2(("devfs_seek %s\n", VTODV(vp)->dv_name));
-	return ((*noffp < 0 || *noffp > MAXOFFSET_T) ? EINVAL : 0);
+	return (*noffp < 0 ? EINVAL : 0);
 }
 
 vnodeops_t *dv_vnodeops;

@@ -21,6 +21,7 @@
 /*
  * Copyright (c) 2009, 2010, Oracle and/or its affiliates. All rights reserved.
  * Copyright 2012 Milan Jurik. All rights reserved.
+ * Copyright 2019 Joyent, Inc.
  */
 
 #include <limits.h>
@@ -228,7 +229,7 @@ display_iport_damap(dev_info_t *pdip)
 	mdb_vread(&dam1, sizeof (dam1),
 	    (uintptr_t)(sizeof (dam0) + tmd_offset + (char *)sht.tran_tgtmap));
 
-	if (dam0 != NULL) {
+	if (dam0 != 0) {
 		rval = mdb_call_dcmd("damap", dam0, DCMD_ADDRSPEC, 0, NULL);
 		mdb_printf("\n");
 		if (rval != DCMD_OK) {
@@ -236,7 +237,7 @@ display_iport_damap(dev_info_t *pdip)
 		}
 	}
 
-	if (dam1 != NULL) {
+	if (dam1 != 0) {
 		rval = mdb_call_dcmd("damap", dam1, DCMD_ADDRSPEC, 0, NULL);
 		mdb_printf("\n");
 	}
@@ -769,6 +770,9 @@ display_targets(struct pmcs_hw m, int verbose, int totals_only)
 		case EXPANDER:
 			dtype = "SMP";
 			smp_targets++;
+			break;
+		default:
+			dtype = "Unknown";
 			break;
 		}
 
@@ -1545,7 +1549,7 @@ get_devid_from_ob_iomb(struct pmcs_hw ss, uint32_t *qentryp, uint16_t opcode)
 		/*
 		 * If we have a PHY, read it in and get it's handle
 		 */
-		if (_phy != NULL) {
+		if (_phy != 0) {
 			if (MDB_RD(phy, sizeof (*phy), _phy) == -1) {
 				NOREAD(pmcs_phy_t, phy);
 			} else {
@@ -1741,7 +1745,7 @@ display_outbound_queues(struct pmcs_hw ss, uint64_t devid_filter,
 	for (qidx = 0; qidx < PMCS_NOQ; qidx++) {
 		obqp = (uintptr_t)ss.oqp[qidx];
 
-		if (obqp == NULL) {
+		if (obqp == 0) {
 			mdb_printf("No outbound queue ptr for queue #%d\n",
 			    qidx);
 			continue;
@@ -1873,7 +1877,7 @@ display_inbound_queues(struct pmcs_hw ss, uint64_t devid_filter, uint_t verbose)
 	for (qidx = 0; qidx < PMCS_NIQ; qidx++) {
 		ibqp = (uintptr_t)ss.iqp[qidx];
 
-		if (ibqp == NULL) {
+		if (ibqp == 0) {
 			mdb_printf("No inbound queue ptr for queue #%d\n",
 			    qidx);
 			continue;
@@ -1950,7 +1954,7 @@ display_phy(struct pmcs_phy phy, struct pmcs_phy *phyp, int verbose,
 	char		*asent = no;
 	char		*dead = no;
 	char		*changed = no;
-	char		route_attr, route_method;
+	char		route_attr, route_method = '\0';
 
 	switch (phy.dtype) {
 	case NOTHING:
@@ -1973,6 +1977,9 @@ display_phy(struct pmcs_phy phy, struct pmcs_phy *phyp, int verbose,
 		if (phy.configured) {
 			++exp_phys;
 		}
+		break;
+	default:
+		dtype = "Unknown";
 		break;
 	}
 
@@ -2367,7 +2374,7 @@ pmcs_dump_tracelog(boolean_t filter, int instance, uint64_t tail_lines,
 static int
 targets_walk_i(mdb_walk_state_t *wsp)
 {
-	if (wsp->walk_addr == NULL) {
+	if (wsp->walk_addr == 0) {
 		mdb_warn("Can not perform global walk\n");
 		return (WALK_ERR);
 	}
@@ -2418,7 +2425,7 @@ targets_walk_s(mdb_walk_state_t *wsp)
 
 	do {
 		wsp->walk_addr = (uintptr_t)(targets[++target_idx]);
-	} while ((wsp->walk_addr == NULL) && (target_idx < ss.max_dev));
+	} while ((wsp->walk_addr == 0) && (target_idx < ss.max_dev));
 
 	if (target_idx == ss.max_dev) {
 		return (WALK_DONE);
@@ -2478,7 +2485,7 @@ pmcs_next_sibling(pmcs_phy_t *phyp)
 static int
 phy_walk_i(mdb_walk_state_t *wsp)
 {
-	if (wsp->walk_addr == NULL) {
+	if (wsp->walk_addr == 0) {
 		mdb_warn("Can not perform global walk\n");
 		return (WALK_ERR);
 	}
@@ -2522,7 +2529,7 @@ phy_walk_s(mdb_walk_state_t *wsp)
 		wsp->walk_addr = (uintptr_t)(phyp->sibling);
 	}
 
-	if (wsp->walk_addr == NULL) {
+	if (wsp->walk_addr == 0) {
 		/*
 		 * We reached the end of this sibling list.  Trudge back up
 		 * to the parent and find the next sibling after the expander
@@ -2555,7 +2562,7 @@ display_matching_work(struct pmcs_hw ss, uintmax_t index, uintmax_t snum,
 	uintptr_t	_wp;
 	boolean_t	printed_header = B_FALSE;
 	uint32_t	mask, mask_val, match_val;
-	char		*match_type;
+	char		*match_type = NULL;
 
 	if (index != UINT_MAX) {
 		match_type = "index";
@@ -2626,7 +2633,7 @@ pmcs_tag(uintptr_t addr, uint_t flags, int argc, const mdb_arg_t *argv)
 	uintmax_t		index = UINT_MAX;
 	int			args = 0;
 	void			*pmcs_state;
-	char			*state_str;
+	char			*state_str = NULL;
 	struct dev_info		dip;
 
 	if (!(flags & DCMD_ADDRSPEC)) {
@@ -2646,7 +2653,8 @@ pmcs_tag(uintptr_t addr, uint_t flags, int argc, const mdb_arg_t *argv)
 	if (mdb_getopts(argc, argv,
 	    'i', MDB_OPT_UINT64, &index,
 	    's', MDB_OPT_UINT64, &snum,
-	    't', MDB_OPT_UINT64, &tag_type) != argc)
+	    't', MDB_OPT_UINT64, &tag_type,
+	    NULL) != argc)
 		return (DCMD_USAGE);
 
 	/*
@@ -2856,7 +2864,7 @@ pmcs_log(uintptr_t addr, uint_t flags, int argc, const mdb_arg_t *argv)
 	struct pmcs_hw	ss;
 	struct dev_info	dip;
 	const char	*match_phy_path = NULL;
-	uint64_t 	match_sas_address = 0, tail_lines = 0;
+	uint64_t	match_sas_address = 0, tail_lines = 0;
 	uint_t		verbose = 0;
 
 	if (!(flags & DCMD_ADDRSPEC)) {
@@ -2926,10 +2934,10 @@ pmcs_dcmd(uintptr_t addr, uint_t flags, int argc, const mdb_arg_t *argv)
 	uint_t			fwlog = FALSE;
 	boolean_t		devid_filter = FALSE;
 	uintptr_t		pdevid;
-	uint32_t		devid;
+	uint32_t		devid = 0;
 	int			rv = DCMD_OK;
 	void			*pmcs_state;
-	char			*state_str;
+	char			*state_str = NULL;
 	struct dev_info		dip;
 	per_iport_setting_t	pis;
 

@@ -28,8 +28,6 @@
 #ifndef _PCI_STRINGS_H
 #define	_PCI_STRINGS_H
 
-#pragma ident	"%Z%%M%	%I%	%E% SMI"
-
 #ifdef __cplusplus
 extern "C" {
 #endif
@@ -44,6 +42,9 @@ typedef struct pci_class_strings_s {
 	char	*actual_desc;	/* PCI/PCI-X/PCIe function's description */
 	char	*short_desc;	/* Cfgadm based original short description */
 } pci_class_strings_t;
+
+extern const pci_class_strings_t class_pci[];
+extern size_t class_pci_items;
 
 #ifdef __cplusplus
 }

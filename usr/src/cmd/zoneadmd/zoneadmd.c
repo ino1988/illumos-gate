@@ -22,6 +22,7 @@
 /*
  * Copyright (c) 2003, 2010, Oracle and/or its affiliates. All rights reserved.
  * Copyright 2014 Nexenta Systems, Inc. All rights reserved.
+ * Copyright (c) 2016 by Delphix. All rights reserved.
  */
 
 /*
@@ -34,7 +35,7 @@
  *   console device; configure process runtime attributes such as resource
  *   controls, pool bindings, fine-grained privileges.
  *
- * - Launch the zone's init(1M) process.
+ * - Launch the zone's init(8) process.
  *
  * - Implement a door server; clients (like zoneadm) connect to the door
  *   server and request zone state changes.  The kernel is also a client of
@@ -258,7 +259,7 @@ zerror(zlog_t *zlogp, boolean_t use_strerror, const char *fmt, ...)
 
 /*
  * Emit a warning for any boot arguments which are unrecognized.  Since
- * Solaris boot arguments are getopt(3c) compatible (see kernel(1m)), we
+ * Solaris boot arguments are getopt(3c) compatible (see kernel(8)), we
  * put the arguments into an argv style array, use getopt to process them,
  * and put the resultant argument string back into outargs.
  *
@@ -276,12 +277,12 @@ filter_bootargs(zlog_t *zlogp, const char *inargs, char *outargs,
     char *init_file, char *badarg)
 {
 	int argc = 0, argc_save;
-	int i;
+	int i, c;
 	int err;
 	char *arg, *lasts, **argv = NULL, **argv_save;
 	char zonecfg_args[BOOTARGS_MAX];
 	char scratchargs[BOOTARGS_MAX], *sargs;
-	char c;
+	char argsw[5];
 
 	bzero(outargs, BOOTARGS_MAX);
 	bzero(badarg, BOOTARGS_MAX);
@@ -350,7 +351,7 @@ filter_bootargs(zlog_t *zlogp, const char *inargs, char *outargs,
 	 * We preserve compatibility with the Solaris system boot behavior,
 	 * which allows:
 	 *
-	 * 	# reboot kernel/unix -s -m verbose
+	 *	# reboot kernel/unix -s -m verbose
 	 *
 	 * In this example, kernel/unix tells the booter what file to
 	 * boot.  We don't want reboot in a zone to be gratuitously different,
@@ -385,8 +386,10 @@ filter_bootargs(zlog_t *zlogp, const char *inargs, char *outargs,
 		case 'm':
 		case 's':
 			/* These pass through unmolested */
-			(void) snprintf(outargs, BOOTARGS_MAX,
-			    "%s -%c %s ", outargs, c, optarg ? optarg : "");
+			(void) snprintf(argsw, sizeof (argsw), " -%c ", c);
+			(void) strlcat(outargs, argsw, BOOTARGS_MAX);
+			if (optarg)
+				(void) strlcat(outargs, optarg, BOOTARGS_MAX);
 			break;
 		case '?':
 			/*
@@ -396,10 +399,9 @@ filter_bootargs(zlog_t *zlogp, const char *inargs, char *outargs,
 			 * args they want.
 			 */
 			err = Z_INVAL;
-			(void) snprintf(outargs, BOOTARGS_MAX,
-			    "%s -%c", outargs, optopt);
-			(void) snprintf(badarg, BOOTARGS_MAX,
-			    "%s -%c", badarg, optopt);
+			(void) snprintf(argsw, sizeof (argsw), " -%c", optopt);
+			(void) strlcat(outargs, argsw, BOOTARGS_MAX);
+			(void) strlcat(badarg, argsw, BOOTARGS_MAX);
 			break;
 		}
 	}
@@ -411,13 +413,14 @@ filter_bootargs(zlog_t *zlogp, const char *inargs, char *outargs,
 	 * and warn on them as a group.
 	 */
 	if (optind < argc) {
+		const char *prefix = "";
+
 		err = Z_INVAL;
-		while (optind < argc) {
-			(void) snprintf(badarg, BOOTARGS_MAX, "%s%s%s",
-			    badarg, strlen(badarg) > 0 ? " " : "",
-			    argv[optind]);
-			optind++;
-		}
+		do {
+			(void) strlcat(badarg, prefix, BOOTARGS_MAX);
+			(void) strlcat(badarg, argv[optind], BOOTARGS_MAX);
+			prefix = " ";
+		} while (++optind < argc);
 		zerror(zlogp, B_FALSE, "WARNING: Unused or invalid boot "
 		    "arguments `%s'.", badarg);
 	}
@@ -522,7 +525,7 @@ notify_zonestatd(zoneid_t zoneid)
 	params.desc_ptr = NULL;
 	params.desc_num = 0;
 	params.rbuf = NULL;
-	params.rsize = NULL;
+	params.rsize = 0;
 	(void) door_call(fd, &params);
 	(void) close(fd);
 }
@@ -771,8 +774,13 @@ do_subproc(zlog_t *zlogp, char *cmdbuf, char **retstr)
 
 	while (fgets(inbuf, 1024, file) != NULL) {
 		if (retstr == NULL) {
-			if (zlogp != &logsys)
+			if (zlogp != &logsys) {
+				int last = strlen(inbuf) - 1;
+
+				if (inbuf[last] == '\n')
+					inbuf[last] = '\0';
 				zerror(zlogp, B_FALSE, "%s", inbuf);
+			}
 		} else {
 			char *p;
 
@@ -817,6 +825,7 @@ zone_bootup(zlog_t *zlogp, const char *bootargs, int zstate)
 	dladm_status_t status;
 	char errmsg[DLADM_STRSIZE];
 	int err;
+	boolean_t restart_init, restart_init0, restart_initreboot;
 
 	if (brand_prestatechg(zlogp, zstate, Z_BOOT) != 0)
 		return (-1);
@@ -865,13 +874,18 @@ zone_bootup(zlog_t *zlogp, const char *bootargs, int zstate)
 		goto bad;
 	}
 
-	/* Get the path for this zone's init(1M) (or equivalent) process.  */
+	/* Get the path for this zone's init(8) (or equivalent) process.  */
 	if (brand_get_initname(bh, init_file, MAXPATHLEN) != 0) {
 		zerror(zlogp, B_FALSE,
-		    "unable to determine zone's init(1M) location");
+		    "unable to determine zone's init(8) location");
 		brand_close(bh);
 		goto bad;
 	}
+
+	/* See if this zone's brand should restart init if it dies. */
+	restart_init = brand_restartinit(bh);
+	restart_init0 = brand_restartinit0(bh);
+	restart_initreboot = brand_restartinitreboot(bh);
 
 	brand_close(bh);
 
@@ -936,6 +950,23 @@ zone_bootup(zlog_t *zlogp, const char *bootargs, int zstate)
 
 	if (zone_setattr(zoneid, ZONE_ATTR_BOOTARGS, nbootargs, 0) == -1) {
 		zerror(zlogp, B_TRUE, "could not set zone boot arguments");
+		goto bad;
+	}
+
+	if (!restart_init && zone_setattr(zoneid, ZONE_ATTR_INITNORESTART,
+	    NULL, 0) == -1) {
+		zerror(zlogp, B_TRUE, "could not set zone init-no-restart");
+		goto bad;
+	}
+	if (restart_init0 && zone_setattr(zoneid, ZONE_ATTR_INITRESTART0,
+	    NULL, 0) == -1) {
+		zerror(zlogp, B_TRUE,
+		    "could not set zone init-restart-on-exit-0");
+		goto bad;
+	}
+	if (restart_initreboot && zone_setattr(zoneid, ZONE_ATTR_INITREBOOT,
+	    NULL, 0) == -1) {
+		zerror(zlogp, B_TRUE, "could not set zone reboot-on-init-exit");
 		goto bad;
 	}
 
@@ -1181,7 +1212,7 @@ server(void *cookie, char *args, size_t alen, door_desc_t *dp,
 	zone_cmd_t cmd;
 	zone_cmd_arg_t *zargp;
 
-	boolean_t kernelcall;
+	boolean_t kernelcall = B_FALSE;
 
 	int rval = -1;
 	uint64_t uniqid;
@@ -1363,7 +1394,7 @@ server(void *cookie, char *args, size_t alen, door_desc_t *dp,
 				abort();
 			/*
 			 * We could have two clients racing to halt this
-			 * zone; the second client loses, but his request
+			 * zone; the second client loses, but its request
 			 * doesn't fail, since the zone is now in the desired
 			 * state.
 			 */
@@ -1459,13 +1490,14 @@ server(void *cookie, char *args, size_t alen, door_desc_t *dp,
 		case Z_READY:
 			/*
 			 * We could have two clients racing to ready this
-			 * zone; the second client loses, but his request
+			 * zone; the second client loses, but its request
 			 * doesn't fail, since the zone is now in the desired
 			 * state.
 			 */
 			zerror(zlogp, B_FALSE, "zone is already ready");
 			rval = 0;
 			break;
+		case Z_FORCEBOOT:
 		case Z_BOOT:
 			(void) strlcpy(boot_args, zargp->bootbuf,
 			    sizeof (boot_args));
@@ -1491,6 +1523,7 @@ server(void *cookie, char *args, size_t alen, door_desc_t *dp,
 		case Z_SHUTDOWN:
 		case Z_REBOOT:
 		case Z_NOTE_UNINSTALLING:
+		case Z_FORCEMOUNT:
 		case Z_MOUNT:
 		case Z_UNMOUNT:
 			if (kernelcall)	/* Invalid; can't happen */
@@ -1538,10 +1571,11 @@ server(void *cookie, char *args, size_t alen, door_desc_t *dp,
 			else
 				eventstream_write(Z_EVT_ZONE_HALTED);
 			break;
+		case Z_FORCEBOOT:
 		case Z_BOOT:
 			/*
 			 * We could have two clients racing to boot this
-			 * zone; the second client loses, but his request
+			 * zone; the second client loses, but its request
 			 * doesn't fail, since the zone is now in the desired
 			 * state.
 			 */
@@ -1585,6 +1619,7 @@ server(void *cookie, char *args, size_t alen, door_desc_t *dp,
 			}
 			break;
 		case Z_NOTE_UNINSTALLING:
+		case Z_FORCEMOUNT:
 		case Z_MOUNT:
 		case Z_UNMOUNT:
 			zerror(zlogp, B_FALSE, "%s operation is invalid "
@@ -1645,7 +1680,7 @@ setup_door(zlog_t *zlogp)
 }
 
 /*
- * zoneadm(1m) will start zoneadmd if it thinks it isn't running; this
+ * zoneadm(8) will start zoneadmd if it thinks it isn't running; this
  * is where zoneadmd itself will check to see that another instance of
  * zoneadmd isn't already controlling this zone.
  *
@@ -1657,20 +1692,20 @@ setup_door(zlog_t *zlogp)
  * vnodes we could be dealing with.  Our strategy is as follows:
  *
  * - If the file we opened is a regular file (common case):
- * 	There is no fattach(3c)ed door, so we have a chance of becoming
- * 	the managing zoneadmd. We attempt to lock the file: if it is
- * 	already locked, that means someone else raced us here, so we
- * 	lose and give up.  zoneadm(1m) will try to contact the zoneadmd
- * 	that beat us to it.
+ *	There is no fattach(3c)ed door, so we have a chance of becoming
+ *	the managing zoneadmd. We attempt to lock the file: if it is
+ *	already locked, that means someone else raced us here, so we
+ *	lose and give up.  zoneadm(8) will try to contact the zoneadmd
+ *	that beat us to it.
  *
  * - If the file we opened is a namefs file:
- * 	This means there is already an established door fattach(3c)'ed
- * 	to the rendezvous path.  We've lost the race, so we give up.
- * 	Note that in this case we also try to grab the file lock, and
- * 	will succeed in acquiring it since the vnode locked by the
- * 	"winning" zoneadmd was a regular one, and the one we locked was
- * 	the fattach(3c)'ed door node.  At any rate, no harm is done, and
- * 	we just return to zoneadm(1m) which knows to retry.
+ *	This means there is already an established door fattach(3c)'ed
+ *	to the rendezvous path.  We've lost the race, so we give up.
+ *	Note that in this case we also try to grab the file lock, and
+ *	will succeed in acquiring it since the vnode locked by the
+ *	"winning" zoneadmd was a regular one, and the one we locked was
+ *	the fattach(3c)'ed door node.  At any rate, no harm is done, and
+ *	we just return to zoneadm(8) which knows to retry.
  */
 static int
 make_daemon_exclusive(zlog_t *zlogp)
@@ -1728,7 +1763,7 @@ top:
 			 *
 			 * If the door has been revoked, the zoneadmd
 			 * process currently managing the zone is going
-			 * away.  We'll return control to zoneadm(1m)
+			 * away.  We'll return control to zoneadm(8)
 			 * which will try again (by which time zoneadmd
 			 * will hopefully have exited).
 			 */
@@ -2042,6 +2077,13 @@ main(int argc, char *argv[])
 	(void) sigaddset(&block_cld, SIGCHLD);
 	(void) sigprocmask(SIG_BLOCK, &block_cld, NULL);
 
+	/*
+	 * The parent only needs stderr after the fork, so close other fd's
+	 * that we inherited from zoneadm so that the parent doesn't have those
+	 * open while waiting. The child will close the rest after the fork.
+	 */
+	closefrom(3);
+
 	if ((ctfd = init_template()) == -1) {
 		zerror(zlogp, B_TRUE, "failed to create contract");
 		return (1);
@@ -2256,11 +2298,10 @@ main(int argc, char *argv[])
 
 child_out:
 	assert(pid == 0);
-	if (shstate != NULL) {
-		shstate->status = -1;
-		(void) sema_post(&shstate->sem);
-		(void) munmap((char *)shstate, shstatelen);
-	}
+
+	shstate->status = -1;
+	(void) sema_post(&shstate->sem);
+	(void) munmap((char *)shstate, shstatelen);
 
 	/*
 	 * This might trigger an unref notification, but if so,

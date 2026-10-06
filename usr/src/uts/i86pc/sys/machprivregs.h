@@ -22,12 +22,12 @@
 /*
  * Copyright 2007 Sun Microsystems, Inc.  All rights reserved.
  * Use is subject to license terms.
+ *
+ * Copyright 2019 Joyent, Inc.
  */
 
 #ifndef	_SYS_MACHPRIVREGS_H
 #define	_SYS_MACHPRIVREGS_H
-
-#pragma ident	"%Z%%M%	%I%	%E% SMI"
 
 /*
  * Platform dependent instruction sequences for manipulating
@@ -77,8 +77,18 @@ extern "C" {
 #define	SYSRETQ	sysretq
 #define	SYSRETL	sysretl
 #define	SWAPGS	swapgs
-#define	XPV_TRAP_POP	/* empty */
-#define	XPV_TRAP_PUSH	/* empty */
+
+/*
+ * As of GNU binutils 2.37, the assembler has split the 'sysexit' instruction
+ * into 'sysexitl' and 'sysexitq'. Using a plain 'sysexit' is interpreted as
+ * 'sysexitl' but comes with a warning about the assumption being made. Since
+ * all warnings are treated as errors in the kernel build, this results in a
+ * build failure. Unfortunately the desired 'sysexitl' cannot be used since
+ * older versions of the GNU assembler do not understand it.
+ * The following macro emits the correct byte sequence for 'sysexitl' on this
+ * platform.
+ */
+#define	SYSEXITL .byte 0x0f, 0x35
 
 #elif defined(__i386)
 
@@ -86,6 +96,8 @@ extern "C" {
 
 #endif	/* __i386 */
 
+#define	XPV_TRAP_POP	/* empty */
+#define	XPV_TRAP_PUSH	/* empty */
 #define	CLEAN_CS	/* empty */
 
 
@@ -129,7 +141,7 @@ extern "C" {
 	movq	REGOFF_RDI(%rsp), %rdi;	\
 	addq	$REGOFF_RIP, %rsp
 
-#define	FAST_INTR_RETURN	iretq
+#define	FAST_INTR_RETURN	call x86_md_clear; jmp tr_iret_user
 
 #elif defined(__i386)
 

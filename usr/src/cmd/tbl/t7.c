@@ -2,7 +2,7 @@
  * Copyright 1998 Sun Microsystems, Inc.  All rights reserved.
  * Use is subject to license terms.
  */
-  
+
 /*	Copyright (c) 1984, 1986, 1987, 1988, 1989 AT&T	*/
 /*	  All Rights Reserved  	*/
 
@@ -11,8 +11,6 @@
  * All rights reserved. The Berkeley software License Agreement
  * specifies the terms and conditions for redistribution.
  */
-
-#pragma ident	"%Z%%M%	%I%	%E% SMI"     
 
 /* t7.c: control to write table entries */
 # include "t..c"
@@ -64,11 +62,12 @@ for(c=0; c<ncol; c++)
 			if (table[ldata][c].rcol)
 			  if (lused[c]) /*Zero field width*/
 				fprintf(tabout, "\\n(%du ",c+CMID);
+			/* FALLTHROUGH */
 		case 'c':
 		case 'l':
 		case 'r':
-		    if (realsplit? rused[c]: (used[c]+lused[c]))
-			fprintf(tabout, "\\n(%du ",c+CRIGHT);
+			if (realsplit? rused[c]: (used[c]+lused[c]))
+				fprintf(tabout, "\\n(%du ",c+CRIGHT);
 			continue;
 		case 's':
 			if (lspan(lform, c))
@@ -136,7 +135,7 @@ if (boxflg || allflg || dboxflg) { /* bottom of table line */
 	fprintf(tabout, ".if \\n(T. ");
 	drawline(nlin,0,ncol, dboxflg ? '=' : '-',1,0);
 	fprintf(tabout, "\n.if \\n(T. .vs\n");
-	/* T. is really an argument to a macro but because of 
+	/* T. is really an argument to a macro but because of
 		   eqn we don't dare pass it as an argument and reference by $1 */
 }
 	for(c=0; c<ncol; c++)

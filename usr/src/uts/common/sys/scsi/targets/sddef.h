@@ -23,7 +23,10 @@
  */
 /*
  * Copyright 2011 cyril.galibern@opensvc.com
- * Copyright 2014 Nexenta Systems, Inc.  All rights reserved.
+ * Copyright 2017 Nexenta Systems, Inc.  All rights reserved.
+ * Copyright 2019 Joyent, Inc.
+ * Copyright 2022 RackTop Systems, Inc.
+ * Copyright 2022 Garrett D'Amore
  */
 
 #ifndef	_SYS_SCSI_TARGETS_SDDEF_H
@@ -215,6 +218,35 @@ struct sd_mapblocksize_info {
 _NOTE(SCHEME_PROTECTS_DATA("unshared data", sd_mapblocksize_info))
 
 
+/* Thin-provisioning (UNMAP) flags for un_thin_flags. */
+enum {
+	SD_THIN_PROV_ENABLED =		1 << 0,	/* UNMAP available */
+	SD_THIN_PROV_READ_ZEROS =	1 << 1	/* unmapped blk = zeros */
+};
+
+/*
+ * Device limits as read from the Block Limits VPD page (0xB0). If the page
+ * is unavailable, will be filled with some defaults.
+ */
+typedef struct sd_blk_limits_s {
+	uint16_t	lim_opt_xfer_len_gran;
+	uint32_t	lim_max_xfer_len;
+	uint32_t	lim_opt_xfer_len;
+	uint32_t	lim_max_pfetch_len;
+	uint32_t	lim_max_unmap_lba_cnt;
+	uint32_t	lim_max_unmap_descr_cnt;
+	uint32_t	lim_opt_unmap_gran;
+	uint32_t	lim_unmap_gran_align;
+	uint64_t	lim_max_write_same_len;
+} sd_blk_limits_t;
+
+typedef struct sd_unmapstats {
+	kstat_named_t	us_cmds;
+	kstat_named_t	us_errs;
+	kstat_named_t	us_extents;
+	kstat_named_t	us_bytes;
+} sd_unmapstats_t;
+
 /*
  * sd_lun: The main data structure for a scsi logical unit.
  * Stored as the softstate structure for each device.
@@ -316,11 +348,6 @@ struct sd_lun {
 	uchar_t	un_last_pkt_reason;	/* used to suppress multiple msgs */
 	int	un_tagflags;		/* Pkt Flags for Tagged Queueing  */
 	short	un_resvd_status;	/* Reservation Status */
-	ulong_t	un_detach_count;	/* !0 if executing detach routine */
-	ulong_t	un_layer_count;		/* Current total # of layered opens */
-	ulong_t un_opens_in_progress;	/* Current # of threads in sdopen */
-
-	ksema_t	un_semoclose;		/* serialize opens/closes */
 
 	/*
 	 * Control & status info for command throttling
@@ -356,6 +383,8 @@ struct sd_lun {
 	union	ocmap	un_ocmap;		/* open partition map */
 	struct	kstat	*un_pstats[NSDMAP];	/* partition statistics */
 	struct	kstat	*un_stats;		/* disk statistics */
+	sd_unmapstats_t	*un_unmapstats;		/* UNMAP stats structure */
+	struct	kstat	*un_unmapstats_ks;	/* UNMAP kstat */
 	kstat_t		*un_errstats;		/* for error statistics */
 	uint64_t	un_exclopen;		/* exclusive open bitmask */
 	ddi_devid_t	un_devid;		/* device id */
@@ -439,8 +468,6 @@ struct sd_lun {
 						/* device is attached */
 	    un_f_log_sense_supported	:1,	/* support log sense */
 	    un_f_pm_supported		:1, 	/* support power-management */
-	    un_f_cfg_is_lsi		:1,	/* Is LSI device, */
-						/* default to NO */
 	    un_f_wcc_inprog		:1,	/* write cache change in */
 						/* progress */
 	    un_f_ejecting		:1,	/* media is ejecting */
@@ -460,11 +487,13 @@ struct sd_lun {
 	    un_f_pm_log_sense_smart	:1,	/* log sense support SMART */
 						/* feature attribute */
 	    un_f_is_solid_state		:1,	/* has solid state media */
+	    un_f_is_rotational		:1,	/* spinning rust */
 	    un_f_mmc_gesn_polling	:1,	/* use GET EVENT STATUS */
 						/* NOTIFICATION for polling */
 	    un_f_enable_rmw		:1,	/* Force RMW in sd driver */
 	    un_f_expnevent		:1,
-	    un_f_reserved		:3;
+	    un_f_cache_mode_changeable	:1,	/* can change cache mode */
+	    un_f_reserved		:2;
 
 	/* Ptr to table of strings for ASC/ASCQ error message printing */
 	struct scsi_asq_key_strings	*un_additional_codes;
@@ -506,6 +535,12 @@ struct sd_lun {
 	uint64_t	un_rmw_incre_count;	/* count I/O */
 	timeout_id_t	un_rmw_msg_timeid;	/* for RMW message control */
 
+	/* Thin provisioning support (see SD_THIN_PROV_*) */
+	uint64_t	un_thin_flags;
+
+	/* Block limits (0xB0 VPD page) */
+	sd_blk_limits_t	un_blk_lim;
+
 	/* For timeout callback to issue a START STOP UNIT command */
 	timeout_id_t	un_startstop_timeid;
 
@@ -519,13 +554,6 @@ struct sd_lun {
 
 	hrtime_t	un_pm_idle_time;
 	timeout_id_t	un_pm_idle_timeid;
-
-	/*
-	 * Count to determine if a Sonoma controller is in the process of
-	 * failing over, and how many I/O's are failed with the 05/94/01
-	 * sense code.
-	 */
-	uint_t		un_sonoma_failure_count;
 
 	/*
 	 * Support for failfast operation.
@@ -748,26 +776,6 @@ _NOTE(MUTEX_PROTECTS_DATA(sd_lun::un_fi_mutex,
 #define	ISCD(un)		((un)->un_ctype == CTYPE_CDROM)
 #define	ISROD(un)		((un)->un_ctype == CTYPE_ROD)
 #define	ISPXRE(un)		((un)->un_ctype == CTYPE_PXRE)
-
-/*
- * This macro checks the vendor of the device to see if it is LSI. Because
- * LSI has some devices out there that return 'Symbios' or 'SYMBIOS', we
- * need to check for those also.
- *
- * This is used in some vendor specific checks.
- */
-#define	SD_IS_LSI(un)	((un)->un_f_cfg_is_lsi == TRUE)
-
-/*
- * Macros to check if the lun is a Sun T3 or a T4
- */
-#define	SD_IS_T3(un) \
-	((bcmp(SD_INQUIRY(un)->inq_vid, "SUN", 3) == 0) && \
-	(bcmp(SD_INQUIRY(un)->inq_pid, "T3", 2) == 0))
-
-#define	SD_IS_T4(un) \
-	((bcmp(SD_INQUIRY(un)->inq_vid, "SUN", 3) == 0) && \
-	(bcmp(SD_INQUIRY(un)->inq_pid, "T4", 2) == 0))
 
 /*
  * Macros for non-512 byte writes to removable devices.
@@ -1125,10 +1133,10 @@ struct sd_fi_arq {
 #else
 
 #undef	SDDEBUG
-#define	SD_ERROR	{ if (0) sd_log_err; }
-#define	SD_TRACE	{ if (0) sd_log_trace; }
-#define	SD_INFO		{ if (0) sd_log_info; }
-#define	SD_DUMP_MEMORY	{ if (0) sd_dump_memory; }
+#define	SD_ERROR(...)		(void)(0)
+#define	SD_TRACE(...)		(void)(0)
+#define	SD_INFO(...)		(void)(0)
+#define	SD_DUMP_MEMORY(...)	(void)(0)
 #endif
 
 
@@ -1734,20 +1742,9 @@ struct sd_fm_internal {
 #define	SD_RMW_MSG_PRINT_TIMEOUT	(drv_usectohz((clock_t)10000000))
 
 /*
- * 100 msec. is what we'll wait for certain retries for fibre channel
- * targets, 0 msec for parallel SCSI.
+ * 0 msec. is what we'll wait for certain retries.
  */
-#if defined(__fibre)
-#define	SD_RETRY_DELAY			(drv_usectohz(100000))
-#else
 #define	SD_RETRY_DELAY			((clock_t)0)
-#endif
-
-/*
- * 60 seconds is what we will wait for to reset the
- * throttle back to it SD_MAX_THROTTLE.
- */
-#define	SD_RESET_THROTTLE_TIMEOUT	60
 
 /*
  * Number of times we'll retry a normal operation.
@@ -1756,11 +1753,7 @@ struct sd_fm_internal {
  * (need to distinguish between Target and Transport failure)
  *
  */
-#if defined(__fibre)
-#define	SD_RETRY_COUNT			3
-#else
 #define	SD_RETRY_COUNT			5
-#endif
 
 /*
  * Number of times we will retry for unit attention.
@@ -1894,126 +1887,76 @@ struct sd_fm_internal {
  * Bit flag telling driver to set the controller type from sd.conf
  * sd-config-list and driver table.
  */
-#if defined(__i386) || defined(__amd64)
 #define	SD_CONF_SET_CTYPE		1
-#elif defined(__fibre)
-#define	SD_CONF_SET_CTYPE		5
-#else
-#define	SD_CONF_SET_CTYPE		1
-#endif
 #define	SD_CONF_BSET_CTYPE		(1 << SD_CONF_SET_CTYPE)
 
 /*
  * Bit flag telling driver to set the not ready retry count for a device from
  * sd.conf sd-config-list and driver table.
  */
-#if defined(__i386) || defined(__amd64)
 #define	SD_CONF_SET_NOTREADY_RETRIES	10
-#elif defined(__fibre)
-#define	SD_CONF_SET_NOTREADY_RETRIES	1
-#else
-#define	SD_CONF_SET_NOTREADY_RETRIES	2
-#endif
 #define	SD_CONF_BSET_NRR_COUNT		(1 << SD_CONF_SET_NOTREADY_RETRIES)
 
 /*
  * Bit flag telling driver to set SCSI status BUSY Retries from sd.conf
  * sd-config-list and driver table.
  */
-#if defined(__i386) || defined(__amd64)
 #define	SD_CONF_SET_BUSY_RETRIES 	11
-#elif defined(__fibre)
-#define	SD_CONF_SET_BUSY_RETRIES 	2
-#else
-#define	SD_CONF_SET_BUSY_RETRIES 	5
-#endif
 #define	SD_CONF_BSET_BSY_RETRY_COUNT	(1 << SD_CONF_SET_BUSY_RETRIES)
 
 /*
  * Bit flag telling driver that device does not have a valid/unique serial
  * number.
  */
-#if defined(__i386) || defined(__amd64)
 #define	SD_CONF_SET_FAB_DEVID		2
-#else
-#define	SD_CONF_SET_FAB_DEVID		3
-#endif
 #define	SD_CONF_BSET_FAB_DEVID   	(1 << SD_CONF_SET_FAB_DEVID)
 
 /*
  * Bit flag telling driver to disable all caching for disk device.
  */
-#if defined(__i386) || defined(__amd64)
 #define	SD_CONF_SET_NOCACHE		3
-#else
-#define	SD_CONF_SET_NOCACHE		4
-#endif
 #define	SD_CONF_BSET_NOCACHE		(1 << SD_CONF_SET_NOCACHE)
 
 /*
  * Bit flag telling driver that the PLAY AUDIO command requires parms in BCD
  * format rather than binary.
  */
-#if defined(__i386) || defined(__amd64)
 #define	SD_CONF_SET_PLAYMSF_BCD		4
-#else
-#define	SD_CONF_SET_PLAYMSF_BCD		6
-#endif
 #define	SD_CONF_BSET_PLAYMSF_BCD    	(1 << SD_CONF_SET_PLAYMSF_BCD)
 
 /*
  * Bit flag telling driver that the response from the READ SUBCHANNEL command
  * has BCD fields rather than binary.
  */
-#if defined(__i386) || defined(__amd64)
 #define	SD_CONF_SET_READSUB_BCD		5
-#else
-#define	SD_CONF_SET_READSUB_BCD		7
-#endif
 #define	SD_CONF_BSET_READSUB_BCD	(1 << SD_CONF_SET_READSUB_BCD)
 
 /*
  * Bit in flags telling driver that the track number fields in the READ TOC
  * request and respone are in BCD rather than binary.
  */
-#if defined(__i386) || defined(__amd64)
 #define	SD_CONF_SET_READ_TOC_TRK_BCD	6
-#else
-#define	SD_CONF_SET_READ_TOC_TRK_BCD	8
-#endif
 #define	SD_CONF_BSET_READ_TOC_TRK_BCD	(1 << SD_CONF_SET_READ_TOC_TRK_BCD)
 
 /*
  * Bit flag telling driver that the address fields in the READ TOC request and
  * respone are in BCD rather than binary.
  */
-#if defined(__i386) || defined(__amd64)
 #define	SD_CONF_SET_READ_TOC_ADDR_BCD	7
-#else
-#define	SD_CONF_SET_READ_TOC_ADDR_BCD	9
-#endif
 #define	SD_CONF_BSET_READ_TOC_ADDR_BCD	(1 << SD_CONF_SET_READ_TOC_ADDR_BCD)
 
 /*
  * Bit flag telling the driver that the device doesn't support the READ HEADER
  * command.
  */
-#if defined(__i386) || defined(__amd64)
 #define	SD_CONF_SET_NO_READ_HEADER	8
-#else
-#define	SD_CONF_SET_NO_READ_HEADER	10
-#endif
 #define	SD_CONF_BSET_NO_READ_HEADER 	(1 << SD_CONF_SET_NO_READ_HEADER)
 
 /*
  * Bit flag telling the driver that for the READ CD command the device uses
  * opcode 0xd4 rather than 0xbe.
  */
-#if defined(__i386) || defined(__amd64)
 #define	SD_CONF_SET_READ_CD_XD4		9
-#else
-#define	SD_CONF_SET_READ_CD_XD4 	11
-#endif
 #define	SD_CONF_BSET_READ_CD_XD4	(1 << SD_CONF_SET_READ_CD_XD4)
 
 /*
@@ -2379,7 +2322,8 @@ typedef struct disk_power_attr_pc {
 #define	SD_VPD_ASCII_OP_PG	0x08	/* 0x82 - ASCII Op Defs */
 #define	SD_VPD_DEVID_WWN_PG	0x10	/* 0x83 - Device Identification */
 #define	SD_VPD_EXTENDED_DATA_PG	0x80	/* 0x86 - Extended data about the lun */
-#define	SD_VPD_DEV_CHARACTER_PG	0x400	/* 0xB1 - Device Characteristics */
+#define	SD_VPD_BLK_LIMITS_PG	0x400	/* 0xB0 - Block Limits */
+#define	SD_VPD_DEV_CHARACTER_PG	0x800	/* 0xB1 - Device Characteristics */
 
 /*
  * Non-volatile cache support

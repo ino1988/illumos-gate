@@ -23,6 +23,12 @@
  */
 
 /*
+ * Copyright (c) 2018, Joyent, Inc.
+ * Copyright 2023 Oxide Computer Company
+ * Copyright 2024 MNX Cloud, Inc.
+ */
+
+/*
  * The InfiniBand  Nexus driver (IB nexus) is a bus nexus driver for IB bus.
  * It supports  Port nodes, Virtual Physical Point of Attachment nodes (VPPA)
  * for  HCAs registered with IBTL and IOC nodes for all the IOCs present in
@@ -74,7 +80,7 @@ dev_info_t		*ibnex_commsvc_initnode(dev_info_t *,
 static void		ibnex_delete_port_node_data(ibnex_node_data_t *);
 int			ibnex_get_dip_from_guid(ib_guid_t, int,
 			    ib_pkey_t, dev_info_t **);
-int 			ibnex_get_node_and_dip_from_guid(ib_guid_t, int,
+int			ibnex_get_node_and_dip_from_guid(ib_guid_t, int,
 			    ib_pkey_t, ibnex_node_data_t **, dev_info_t **);
 static ibnex_node_data_t *ibnex_is_node_data_present(ibnex_node_type_t,
 			    void *, int, ib_pkey_t);
@@ -253,7 +259,7 @@ static struct cb_ops ibnex_cbops = {
 	ddi_prop_op,		/* prop_op */
 	NULL,			/* stream */
 	D_MP,			/* cb_flag */
-	CB_REV, 		/* rev */
+	CB_REV,			/* rev */
 	nodev,			/* int (*cb_aread)() */
 	nodev			/* int (*cb_awrite)() */
 };
@@ -522,7 +528,7 @@ ibnex_attach(dev_info_t *dip, ddi_attach_cmd_t cmd)
 	 * power management of the phci and client
 	 */
 	if (ddi_prop_create(DDI_DEV_T_NONE, dip, DDI_PROP_CANSLEEP,
-	    "pm-want-child-notification?", NULL, NULL) != DDI_PROP_SUCCESS) {
+	    "pm-want-child-notification?", NULL, 0) != DDI_PROP_SUCCESS) {
 		IBTF_DPRINTF_L2("ibnex",
 		    "_attach: create pm-want-child-notification failed");
 		(void) ddi_remove_minor_node(dip, NULL);
@@ -823,7 +829,7 @@ ibt_status_t
 ibnex_ibtl_callback(ibtl_ibnex_cb_args_t *cb_args)
 {
 	int			retval = IBT_SUCCESS;
-	struct dev_ops 		*hca_dev_ops;
+	struct dev_ops		*hca_dev_ops;
 	dev_info_t		*clnt_dip;
 	ibnex_node_data_t	*node_data;
 
@@ -863,7 +869,7 @@ ibnex_ibtl_callback(ibtl_ibnex_cb_args_t *cb_args)
 		 * from interrupt context.
 		 */
 		if (taskq_dispatch(system_taskq, ibnex_handle_reprobe_dev,
-		    clnt_dip, TQ_SLEEP) == 0) {
+		    clnt_dip, TQ_SLEEP) == TASKQID_INVALID) {
 			IBTF_DPRINTF_L2("ibnex",
 			    "ibnex_ibtl_callback: taskq_dispatch failed");
 			mutex_enter(&ibnex.ibnex_mutex);
@@ -884,7 +890,7 @@ ibnex_ibtl_callback(ibtl_ibnex_cb_args_t *cb_args)
 
 /*
  * ibnex_map_fault
- * 	IOC drivers need not map memory. Return failure to fail any
+ *	IOC drivers need not map memory. Return failure to fail any
  *	such calls.
  */
 /*ARGSUSED*/
@@ -899,7 +905,7 @@ ibnex_map_fault(dev_info_t *dip, dev_info_t *rdip, struct hat *hat,
 
 /*
  * ibnex_busctl
- * 	bus_ctl bus_ops entry point
+ *	bus_ctl bus_ops entry point
  */
 /*ARGSUSED*/
 int
@@ -1129,8 +1135,8 @@ static int
 ibnex_bus_config(dev_info_t *parent, uint_t flag,
     ddi_bus_config_op_t op, void *devname, dev_info_t **child)
 {
-	int			ret = IBNEX_SUCCESS, len, circ, need_bus_config;
-	char 			*device_name, *cname = NULL, *caddr = NULL;
+	int			ret = IBNEX_SUCCESS, len, need_bus_config;
+	char			*device_name, *cname = NULL, *caddr = NULL;
 	dev_info_t		*cdip;
 	ibnex_node_data_t	*node_data;
 
@@ -1139,7 +1145,7 @@ ibnex_bus_config(dev_info_t *parent, uint_t flag,
 		IBTF_DPRINTF_L4("ibnex", "\tbus_config: CONFIG_ONE, "
 		    "parent %p", parent);
 
-		ndi_devi_enter(parent, &circ);
+		ndi_devi_enter(parent);
 
 		len = strlen((char *)devname) + 1;
 		device_name = i_ddi_strdup(devname, KM_SLEEP);
@@ -1147,7 +1153,7 @@ ibnex_bus_config(dev_info_t *parent, uint_t flag,
 
 		if (caddr == NULL || (strlen(caddr) == 0)) {
 			kmem_free(device_name, len);
-			ndi_devi_exit(parent, circ);
+			ndi_devi_exit(parent);
 			return (NDI_FAILURE);
 		}
 
@@ -1155,7 +1161,7 @@ ibnex_bus_config(dev_info_t *parent, uint_t flag,
 		if (cdip)
 			node_data = ddi_get_parent_data(cdip);
 
-		ndi_devi_exit(parent, circ);
+		ndi_devi_exit(parent);
 
 		if (cdip == NULL || (node_data != NULL &&
 		    node_data->node_dip == NULL)) {
@@ -1379,7 +1385,7 @@ ibnex_config_all_children(dev_info_t *parent)
 	ibdm_ioc_info_t		*ioc_list;
 	ibdm_hca_list_t		*hca_list;
 	ib_guid_t		hca_guid;
-	int			circ;
+	boolean_t		enteredv;
 
 	IBTF_DPRINTF_L4("ibnex", "\tconfig_all_children: Begin");
 
@@ -1390,12 +1396,12 @@ ibnex_config_all_children(dev_info_t *parent)
 	 * locking. IB Nexus is enumerating the children
 	 * of HCA, not MPXIO clients.
 	 */
-	ndi_devi_enter(parent, &circ);
+	ndi_devi_enter(parent);
 	hca_guid = ibtl_ibnex_hcadip2guid(parent);
 	ibdm_ibnex_port_settle_wait(hca_guid, ibnex_port_settling_time);
 	hca_list = ibdm_ibnex_get_hca_info_by_guid(hca_guid);
 	if (hca_list == NULL) {
-		ndi_devi_exit(parent, circ);
+		ndi_devi_exit(parent);
 		return;
 	}
 	ibnex_create_hcasvc_nodes(parent, hca_list->hl_hca_port_attr);
@@ -1405,13 +1411,13 @@ ibnex_config_all_children(dev_info_t *parent)
 		ibnex_create_vppa_nodes(parent, &hca_list->hl_port_attr[ii]);
 	}
 	ibdm_ibnex_free_hca_list(hca_list);
-	ndi_devi_exit(parent, circ);
+	ndi_devi_exit(parent);
 
 	/*
 	 * Use mdi_devi_enter() for locking. IB Nexus is
 	 * enumerating MPxIO clients.
 	 */
-	mdi_devi_enter(parent, &circ);
+	mdi_devi_enter(parent, &enteredv);
 
 	ibnex_pseudo_initnodes();
 
@@ -1432,7 +1438,7 @@ ibnex_config_all_children(dev_info_t *parent)
 	ibnex_config_pseudo_all(parent);
 
 	mutex_exit(&ibnex.ibnex_mutex);
-	mdi_devi_exit(parent, circ);
+	mdi_devi_exit(parent, enteredv);
 
 	IBTF_DPRINTF_L4("ibnex", "\tconfig_all_children: End");
 }
@@ -1474,9 +1480,9 @@ void
 ibnex_create_vppa_nodes(
     dev_info_t *parent, ibdm_port_attr_t *port_attr)
 {
-	int 		idx, ii;
+	int		idx, ii;
 	int		rval;
-	ib_pkey_t 	pkey;
+	ib_pkey_t	pkey;
 	dev_info_t	*dip;
 
 	IBTF_DPRINTF_L4("ibnex", "\tcreate_vppa_nodes: Begin");
@@ -1711,8 +1717,8 @@ int
 ibnex_get_pkey_commsvc_index_portnum(char *device_name, int *index,
     ib_pkey_t *pkey, uint8_t *port_num)
 {
-	char 	*srv, **service_name, *temp;
-	int  	ii, ncommsvcs, ret;
+	char	*srv, **service_name, *temp;
+	int	ii, ncommsvcs, ret;
 
 	if (ibnex_devname_to_portnum(device_name, port_num) !=
 	    IBNEX_SUCCESS) {
@@ -1942,7 +1948,7 @@ ibnex_pseudo_config_one(ibnex_node_data_t *node_data, char *caddr,
 		/*
 		 * This function is now called with PHCI / HCA driver
 		 * as parent. The format of devicename is :
-		 * 	<driver_name>@<driver_name>,<unit_address>
+		 *	<driver_name>@<driver_name>,<unit_address>
 		 * The "caddr" part of the devicename matches the
 		 * format of pseudo_node_addr.
 		 *
@@ -2863,7 +2869,7 @@ ibnex_comm_svc_init(char *property, ibnex_node_type_t type)
 				IBTF_DPRINTF_L2("ibnex", "\tcomm_svc_init : "
 				    "Service name %s invalid : Not unique",
 				    servicep[count]);
-					continue;
+				continue;
 			}
 
 		valid[count] = 1;
@@ -2879,16 +2885,30 @@ ibnex_comm_svc_init(char *property, ibnex_node_type_t type)
 		return (IBNEX_SUCCESS);
 	}
 
-	comm_svcp = kmem_zalloc((ncomm_svcs * sizeof (char *)), KM_SLEEP);
-	if (type == IBNEX_PORT_COMMSVC_NODE) {
+	switch (type) {
+	case IBNEX_PORT_COMMSVC_NODE:
+		comm_svcp =
+		    kmem_zalloc((ncomm_svcs * sizeof (char *)), KM_SLEEP);
 		ibnex.ibnex_comm_svc_names = comm_svcp;
 		ibnex.ibnex_num_comm_svcs = ncomm_svcs;
-	} else if (type == IBNEX_VPPA_COMMSVC_NODE) {
+		break;
+
+	case IBNEX_VPPA_COMMSVC_NODE:
+		comm_svcp =
+		    kmem_zalloc((ncomm_svcs * sizeof (char *)), KM_SLEEP);
 		ibnex.ibnex_vppa_comm_svc_names = comm_svcp;
 		ibnex.ibnex_nvppa_comm_svcs = ncomm_svcs;
-	} else if (type == IBNEX_HCASVC_COMMSVC_NODE) {
+		break;
+
+	case IBNEX_HCASVC_COMMSVC_NODE:
+		comm_svcp =
+		    kmem_zalloc((ncomm_svcs * sizeof (char *)), KM_SLEEP);
 		ibnex.ibnex_hcasvc_comm_svc_names = comm_svcp;
 		ibnex.ibnex_nhcasvc_comm_svcs = ncomm_svcs;
+		break;
+
+	default:
+		goto done;
 	}
 
 	/* copy the services into an array of strings */
@@ -2901,6 +2921,7 @@ ibnex_comm_svc_init(char *property, ibnex_node_type_t type)
 		    "\t\tService [%d]: %s", i, comm_svcp[i]);
 		++i;
 	}
+done:
 	ddi_prop_free(servicep);
 	kmem_free(valid, nservices * sizeof (int));
 	return (IBNEX_SUCCESS);
@@ -2971,7 +2992,7 @@ ibnex_commsvc_initnode(dev_info_t *parent, ibdm_port_attr_t *port_attr,
 	ibnex_node_data_t	*node_data;
 	ibnex_port_node_t	*port_node;
 	char devname[MAXNAMELEN];
-	int 			cdip_allocated = 0;
+	int			cdip_allocated = 0;
 
 	ASSERT(MUTEX_HELD(&ibnex.ibnex_mutex));
 
@@ -3299,7 +3320,7 @@ static int
 ibnex_create_port_compatible_prop(dev_info_t *child_dip,
     char *comm_svcp, ibdm_port_attr_t *port_attr)
 {
-	int 	rval, i;
+	int	rval, i;
 	char	*temp;
 	char	*compatible[IBNEX_MAX_IBPORT_COMPAT_NAMES];
 
@@ -3970,7 +3991,7 @@ ib_vhci_pi_uninit(dev_info_t *vdip, mdi_pathinfo_t *pip, int flag)
 /*ARGSUSED*/
 static int
 ib_vhci_pi_state_change(dev_info_t *vdip, mdi_pathinfo_t *pip,
-		mdi_pathinfo_state_t state, uint32_t arg1, int arg2)
+    mdi_pathinfo_state_t state, uint32_t arg1, int arg2)
 {
 	IBTF_DPRINTF_L4("ibnex",
 	    "\tpi_state_change: dip %p pip %p state %x", vdip, pip, state);
@@ -4038,9 +4059,10 @@ ibnex_ioc_bus_config_one(dev_info_t **pdipp, uint_t flag,
     ddi_bus_config_op_t op, void *devname, dev_info_t **child,
     int *need_bus_config)
 {
-	int ret = DDI_FAILURE, circ;
+	int ret = DDI_FAILURE;
+	boolean_t enteredv;
 	dev_info_t *pdip = *pdipp;
-	ib_guid_t	iou_guid, ioc_guid;
+	ib_guid_t iou_guid, ioc_guid;
 	char *ioc_guid_str;
 
 
@@ -4058,7 +4080,7 @@ ibnex_ioc_bus_config_one(dev_info_t **pdipp, uint_t flag,
 		if (ret == MDI_SUCCESS)
 			*need_bus_config = 0;
 	} else {
-		mdi_devi_enter(pdip, &circ);
+		mdi_devi_enter(pdip, &enteredv);
 		if (strstr((char *)devname, ":port=") != NULL) {
 			ret = ibnex_config_root_iocnode(pdip, devname);
 			ASSERT(ibnex.ibnex_dip == NULL);
@@ -4066,7 +4088,7 @@ ibnex_ioc_bus_config_one(dev_info_t **pdipp, uint_t flag,
 		} else {
 			ret = ibnex_config_ioc_node(devname, pdip);
 		}
-		mdi_devi_exit(pdip, circ);
+		mdi_devi_exit(pdip, enteredv);
 	}
 	return (ret);
 }

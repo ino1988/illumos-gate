@@ -29,6 +29,9 @@
 
 #include <libscf.h>
 #include <unistd.h>
+#if !defined(NATIVE_BUILD)
+#include <sys/secflags.h>
+#endif
 
 #ifdef	__cplusplus
 extern "C" {
@@ -233,11 +236,11 @@ int scf_set_count_property(scf_transaction_t *, char *, uint64_t, boolean_t);
  * Walks all the instances matching a given fmri list.  Each fmri in the array
  * can be one of the following:
  *
- * 	- Full instance name
- * 	- Full service name
- * 	- Full property group or property name
- * 	- Partial service or instance name
- * 	- A globbed pattern
+ *	- Full instance name
+ *	- Full service name
+ *	- Full property group or property name
+ *	- Partial service or instance name
+ *	- A globbed pattern
  *
  * The matching rules for partial fmris are a slightly more complex.  We allow
  * for any substring anchored at the end of the instance or service name,
@@ -247,29 +250,29 @@ int scf_set_count_property(scf_transaction_t *, char *, uint64_t, boolean_t);
  * 'filesystem/local'.  The following would not be acceptable:
  * 'system/filesystem', 'filesystem/loc', 'system/local'.  Possible flag values:
  *
- * 	SCF_WALK_MULTIPLE	Allow individual arguments to correspond to
- * 				multiple instances.
+ *	SCF_WALK_MULTIPLE	Allow individual arguments to correspond to
+ *				multiple instances.
  *
- * 	SCF_WALK_LEGACY		Walk legacy services (indicated by a non-NULL
- * 				propery group).
+ *	SCF_WALK_LEGACY		Walk legacy services (indicated by a non-NULL
+ *				propery group).
  *
- * 	SCF_WALK_SERVICE	If the user specifies a service, pass the
- * 				service to the callback without iterating over
- * 				its instances.
+ *	SCF_WALK_SERVICE	If the user specifies a service, pass the
+ *				service to the callback without iterating over
+ *				its instances.
  *
- * 	SCF_WALK_PROPERTY	Allow FMRIs which match property groups or
- * 				individual properties.  Incompatible with
- * 				SCF_WALK_LEGACY.
+ *	SCF_WALK_PROPERTY	Allow FMRIs which match property groups or
+ *				individual properties.  Incompatible with
+ *				SCF_WALK_LEGACY.
  *
- * 	SCF_WALK_NOINSTANCE	Walk only services.  Must be used in
- * 				conjunction with SCF_WALK_SERVICE.
+ *	SCF_WALK_NOINSTANCE	Walk only services.  Must be used in
+ *				conjunction with SCF_WALK_SERVICE.
  *
- * 	SCF_WALK_EXPLICIT	Walk only services if the match is exact
+ *	SCF_WALK_EXPLICIT	Walk only services if the match is exact
  *				else return instances. Must be used in
  *				conjunction with SCF_WALK_SERVICE.
  *
- * 	SCF_WALK_UNIPARTIAL	Can be combined with SCF_WALK_MULTIPLE
- * 				so that an error is returned if a partial
+ *	SCF_WALK_UNIPARTIAL	Can be combined with SCF_WALK_MULTIPLE
+ *				so that an error is returned if a partial
  *				fmri matches multiple instances, unless
  *				a wildcard match is also used.
  *
@@ -566,14 +569,6 @@ void _check_services(char **);
 scf_handle_t *_scf_handle_create_and_bind(scf_version_t);
 
 /*
- * _smf_refresh_all_instances()
- * refresh all intances of a service
- * return SCF_SUCCESS or SCF_FAILED on _PERMISSION_DENIED, _BACKEND_ACCESS
- * or _BACKEND_READONLY.
- */
-int _smf_refresh_all_instances(scf_service_t *);
-
-/*
  * _scf_get_fma_notify_params()
  * Specialized fuction to get fma notifitation parameters
  */
@@ -591,6 +586,10 @@ int _scf_get_svc_notify_params(const char *, nvlist_t *, int32_t, int, int);
  * nvlist_t
  */
 int _scf_notify_get_params(scf_propertygroup_t *, nvlist_t *);
+
+#if !defined(NATIVE_BUILD)
+int scf_default_secflags(scf_handle_t *, scf_secflags_t *);
+#endif
 
 #define	SCF_NOTIFY_PARAMS_SOURCE_NAME	((const char *)"preference_source")
 

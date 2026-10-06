@@ -22,11 +22,12 @@
 # Copyright 2008 Sun Microsystems, Inc.  All rights reserved.
 # Use is subject to license terms.
 #
+# Copyright (c) 2018, Joyent, Inc.
 
 PROG = luxadm
 
 COBJS = adm.o fchba.o lux_util.o fabric_conf.o
-OBJS_sparc= g_adm.o diag.o fcalupdate.o hotplug.o qlgcupdate.o setboot.o 
+OBJS_sparc= g_adm.o diag.o fcalupdate.o hotplug.o qlgcupdate.o setboot.o
 OBJS_i386 = x86_adm.o errormsgs.o
 OBJS = $(OBJS_$(MACH)) $(COBJS)
 
@@ -38,9 +39,10 @@ POFILE = luxadm.po
 include ../Makefile.cmd
 
 CERRWARN +=	-_gcc=-Wno-parentheses
-CERRWARN +=	-_gcc=-Wno-uninitialized
-CERRWARN +=	-_gcc=-Wno-unused-label
 CERRWARN +=	-_gcc=-Wno-address
+
+# not linted
+SMATCH=off
 
 sparc_LDLIBS = -la5k -lg_fc -ldevid -lkstat -ldevinfo
 i386_LDLIBS =
@@ -52,14 +54,6 @@ LDLIBS += -lHBAAPI
 INCS += -I$(SRC)/lib/sun_fc/common
 
 CPPFLAGS += -D_LARGEFILE64_SOURCE=1 -D_REENTRANT $(INCS)
-
-LINTFLAGS += -erroff=E_FUNC_RET_MAYBE_IGNORED2
-LINTFLAGS += -erroff=E_SEC_PRINTF_VAR_FMT
-LINTFLAGS += -erroff=E_SEC_SPRINTF_UNBOUNDED_COPY
-LINTFLAGS += -erroff=E_NAME_USED_NOT_DEF2  
-LINTFLAGS += -erroff=E_BAD_FORMAT_ARG_TYPE2
-LINTFLAGS += -erroff=E_SEC_FORBIDDEN_WARN_GETS
-LINTFLAGS += -erroff=E_SEC_SCANF_UNBOUNDED_COPY
 
 ROOTUSRSBINLINKS = $(PROG:%=$(ROOTUSRSBIN)/%)
 
@@ -104,7 +98,5 @@ $(POFILE): $(POFILES)
 
 clean:
 	$(RM) $(OBJS) $(PROG) $(GENCAT_PROG) $(GENMSG_LUX)
-
-lint:	lint_SRCS
 
 include ../Makefile.targ

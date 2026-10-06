@@ -21,6 +21,8 @@
 
 /*
  * Copyright (c) 1990, 2010, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2017 Joyent, Inc.
+ * Copyright 2025 Oxide Computer Company
  */
 
 /*
@@ -93,6 +95,7 @@ static struct modctl	*mod_hold_by_name_common(struct modctl *, const char *);
 static struct modctl	*mod_hold_next_by_id(modid_t);
 static struct modctl	*mod_hold_loaded_mod(struct modctl *, char *, int *);
 static struct modctl	*mod_hold_installed_mod(char *, int, int, int *);
+static struct modctl	*mod_find_by_name(const char *);
 
 static void		mod_release(struct modctl *);
 static void		mod_make_requisite(struct modctl *, struct modctl *);
@@ -415,6 +418,7 @@ modctl_modinfo(modid_t id, struct modinfo *umodi)
 	struct modinfo32 modi32;
 #endif
 
+	nobase = 0;
 	if (get_udatamodel() == DATAMODEL_NATIVE) {
 		if (copyin(umodi, &modi, sizeof (struct modinfo)) != 0)
 			return (EFAULT);
@@ -427,6 +431,12 @@ modctl_modinfo(modid_t id, struct modinfo *umodi)
 		modi.mi_info = modi32.mi_info;
 		modi.mi_id = modi32.mi_id;
 		modi.mi_nextid = modi32.mi_nextid;
+		if (modi.mi_info & MI_INFO_BY_NAME) {
+			bcopy(modi32.mi_name, modi.mi_name,
+			    sizeof (modi.mi_name));
+			CTASSERT(sizeof (modi.mi_name) ==
+			    sizeof (modi32.mi_name));
+		}
 		nobase = modi.mi_info & MI_INFO_NOBASE;
 	}
 #endif
@@ -434,6 +444,14 @@ modctl_modinfo(modid_t id, struct modinfo *umodi)
 	 * This flag is -only- for the kernels use.
 	 */
 	modi.mi_info &= ~MI_INFO_LINKAGE;
+
+	if (modi.mi_info & MI_INFO_BY_NAME) {
+		/* By-name search string must be NUL-terminated */
+		if (strnlen(modi.mi_name, sizeof (modi.mi_name)) ==
+		    sizeof (modi.mi_name)) {
+			return (EINVAL);
+		}
+	}
 
 	retval = modinfo(id, &modi);
 	if (retval)
@@ -501,6 +519,7 @@ modctl_update_driver_aliases(int add, int *data)
 		int	alias_resid;
 	} *aliases, *aip;
 
+	aliases = NULL;
 	bzero(&mc, sizeof (struct modconfig));
 	if (get_udatamodel() == DATAMODEL_NATIVE) {
 		if (copyin(data, &mc, sizeof (struct modconfig)) != 0)
@@ -1234,13 +1253,12 @@ modctl_get_devid(dev_t dev, uint_t len, ddi_devid_t udevid)
 /*ARGSUSED*/
 static int
 modctl_devid2paths(ddi_devid_t udevid, char *uminor_name, uint_t flag,
-	size_t *ulensp, char *upaths)
+    size_t *ulensp, char *upaths)
 {
 	ddi_devid_t	devid = NULL;
 	int		devid_len;
 	char		*minor_name = NULL;
 	dev_info_t	*dip = NULL;
-	int		circ;
 	struct ddi_minor_data	*dmdp;
 	char		*path = NULL;
 	int		ulens;
@@ -1327,7 +1345,7 @@ modctl_devid2paths(ddi_devid_t udevid, char *uminor_name, uint_t flag,
 			continue;
 
 		/* loop over all the minor nodes, skipping ones we don't want */
-		ndi_devi_enter(dip, &circ);
+		ndi_devi_enter(dip);
 		for (dmdp = DEVI(dip)->devi_minor; dmdp; dmdp = dmdp->next) {
 			if ((dmdp->ddm_dev != devlist[i]) ||
 			    (dmdp->type != DDM_MINOR))
@@ -1365,7 +1383,7 @@ modctl_devid2paths(ddi_devid_t udevid, char *uminor_name, uint_t flag,
 				upaths += len;
 			}
 		}
-		ndi_devi_exit(dip, circ);
+		ndi_devi_exit(dip);
 		ddi_release_devi(dip);
 		dip = NULL;
 	}
@@ -1379,7 +1397,7 @@ modctl_devid2paths(ddi_devid_t udevid, char *uminor_name, uint_t flag,
 	ret = 0;
 
 out:	if (dip) {
-		ndi_devi_exit(dip, circ);
+		ndi_devi_exit(dip);
 		ddi_release_devi(dip);
 	}
 	if (path)
@@ -2300,17 +2318,17 @@ modctl_hp(int subcmd, const char *path, char *cn_name, uintptr_t arg,
 	switch (subcmd) {
 	case MODHPOPS_CHANGE_STATE:
 		error = ddihp_modctl(DDI_HPOP_CN_CHANGE_STATE, devpath,
-		    cn_name_str, arg, NULL);
+		    cn_name_str, arg, 0);
 		break;
 	case MODHPOPS_CREATE_PORT:
 		/* Create an empty PORT */
 		error = ddihp_modctl(DDI_HPOP_CN_CREATE_PORT, devpath,
-		    cn_name_str, NULL, NULL);
+		    cn_name_str, 0, 0);
 		break;
 	case MODHPOPS_REMOVE_PORT:
 		/* Remove an empty PORT */
 		error = ddihp_modctl(DDI_HPOP_CN_REMOVE_PORT, devpath,
-		    cn_name_str, NULL, NULL);
+		    cn_name_str, 0, 0);
 		break;
 	case MODHPOPS_BUS_GET:
 		error = ddihp_modctl(DDI_HPOP_CN_GET_PROPERTY, devpath,
@@ -2691,7 +2709,7 @@ modrload(const char *subdir, const char *filename, struct modctl **rmodp)
 		CPU_STATS_ADDQ(CPU, sys, modload, 1);
 	}
 
-done:	if (subdir != NULL)
+	if (subdir != NULL)
 		kmem_free(fullname, size);
 	return (rmodp ? retval : id);
 }
@@ -2800,6 +2818,7 @@ modloadonly(const char *subdir, const char *filename)
 		fullname = (char *)filename;
 	}
 
+	id = -1;
 	modp = mod_hold_loaded_mod(NULL, fullname, &retval);
 	if (modp) {
 		id = modp->mod_id;
@@ -2877,25 +2896,33 @@ static int
 modinfo(modid_t id, struct modinfo *modinfop)
 {
 	struct modctl	*modp;
-	modid_t		mid;
-	int		i;
 
-	mid = modinfop->mi_id;
 	if (modinfop->mi_info & MI_INFO_ALL) {
+		modid_t mid = modinfop->mi_id;
 		while ((modp = mod_hold_next_by_id(mid++)) != NULL) {
 			if ((modinfop->mi_info & MI_INFO_CNT) ||
 			    modp->mod_installed)
 				break;
 			mod_release_mod(modp);
 		}
-		if (modp == NULL)
-			return (EINVAL);
+	} else if (modinfop->mi_info & MI_INFO_BY_NAME) {
+		mutex_enter(&mod_lock);
+		modp = mod_find_by_name(modinfop->mi_name);
+		if (modp != NULL) {
+			(void) mod_hold_by_modctl(modp,
+			    MOD_LOCK_HELD | MOD_WAIT_FOREVER);
+		}
+		mutex_exit(&mod_lock);
 	} else {
 		modp = mod_hold_by_id(id);
-		if (modp == NULL)
-			return (EINVAL);
+	}
+
+	if (modp == NULL) {
+		return (EINVAL);
+	}
+	if (!(modinfop->mi_info & MI_INFO_ALL)) {
 		if (!(modinfop->mi_info & MI_INFO_CNT) &&
-		    (modp->mod_installed == 0)) {
+		    modp->mod_installed == 0) {
 			mod_release_mod(modp);
 			return (EINVAL);
 		}
@@ -2903,7 +2930,7 @@ modinfo(modid_t id, struct modinfo *modinfop)
 
 	modinfop->mi_rev = 0;
 	modinfop->mi_state = 0;
-	for (i = 0; i < MODMAXLINK; i++) {
+	for (uint_t i = 0; i < MODMAXLINK; i++) {
 		modinfop->mi_msinfo[i].msi_p0 = -1;
 		modinfop->mi_msinfo[i].msi_linkinfo[0] = 0;
 	}
@@ -2919,7 +2946,8 @@ modinfo(modid_t id, struct modinfo *modinfop)
 
 	modinfop->mi_id = modp->mod_id;
 	modinfop->mi_loadcnt = modp->mod_loadcnt;
-	(void) strcpy(modinfop->mi_name, modp->mod_modname);
+	(void) strlcpy(modinfop->mi_name, modp->mod_modname,
+	    sizeof (modinfop->mi_name));
 
 	mod_release_mod(modp);
 	return (0);
@@ -3202,6 +3230,24 @@ mod_find_by_filename(char *subdir, char *filename)
 }
 
 /*
+ * Find a loaded module by name.
+ * Must be called with `mod_lock` held.
+ */
+static struct modctl *
+mod_find_by_name(const char *modname)
+{
+	ASSERT(MUTEX_HELD(&mod_lock));
+
+	struct modctl *mp = &modules;
+	do {
+		if (strcmp(modname, mp->mod_modname) == 0) {
+			return (mp);
+		}
+	} while ((mp = mp->mod_next) != &modules);
+	return (NULL);
+}
+
+/*
  * Check for circular dependencies.  This is called from do_dependents()
  * in kobj.c.  If we are the thread already loading this module, then
  * we're trying to load a dependent that we're already loading which
@@ -3351,7 +3397,7 @@ mod_askparams()
 	if ((fd = kobj_open(systemfile)) != -1L)
 		kobj_close(fd);
 	else
-		systemfile = NULL;
+		systemfile = self_assembly = NULL;
 
 	/*CONSTANTCONDITION*/
 	while (1) {
@@ -3363,12 +3409,13 @@ mod_askparams()
 		if (s0[0] == '\0')
 			break;
 		else if (strcmp(s0, "/dev/null") == 0) {
-			systemfile = NULL;
+			systemfile = self_assembly = NULL;
 			break;
 		} else {
 			if ((fd = kobj_open(s0)) != -1L) {
 				kobj_close(fd);
 				systemfile = s0;
+				self_assembly = NULL;
 				break;
 			}
 		}
@@ -3467,6 +3514,11 @@ mod_load(struct modctl *mp, int usepath)
 		kmem_free(modinfop, sizeof (struct modinfo));
 		(void) mod_sysctl(SYS_SET_MVAR, (void *)mp);
 		retval = install_stubs_by_name(mp, mp->mod_modname);
+
+		/*
+		 * Perform hotinlines before module is started.
+		 */
+		do_hotinlines(mp->mod_mp);
 
 		/*
 		 * Now that the module is loaded, we need to give DTrace
@@ -4180,9 +4232,9 @@ mod_release_mod(struct modctl *mp)
 }
 
 modid_t
-mod_name_to_modid(char *filename)
+mod_name_to_modid(const char *filename)
 {
-	char		*modname;
+	const char	*modname;
 	struct modctl	*mp;
 
 	mutex_enter(&mod_lock);
@@ -4560,7 +4612,6 @@ dev_alias_minorperm(dev_info_t *dip, char *minor_name, mperm_t *rmp)
 	mperm_t			*mp;
 	char			*alias = NULL;
 	dev_info_t		*cdevi;
-	int			circ;
 	struct ddi_minor_data	*dmd;
 
 	major = ddi_name_to_major(minor_name);
@@ -4580,14 +4631,14 @@ dev_alias_minorperm(dev_info_t *dip, char *minor_name, mperm_t *rmp)
 	LOCK_DEV_OPS(&dnp->dn_lock);
 
 	if ((cdevi = dnp->dn_head) != NULL) {
-		ndi_devi_enter(cdevi, &circ);
+		ndi_devi_enter(cdevi);
 		for (dmd = DEVI(cdevi)->devi_minor; dmd; dmd = dmd->next) {
 			if (dmd->type == DDM_ALIAS) {
 				alias = i_ddi_strdup(dmd->ddm_name, KM_SLEEP);
 				break;
 			}
 		}
-		ndi_devi_exit(cdevi, circ);
+		ndi_devi_exit(cdevi);
 	}
 
 	UNLOCK_DEV_OPS(&dnp->dn_lock);

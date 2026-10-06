@@ -20,6 +20,8 @@
  */
 /*
  * Copyright (c) 1997, 2010, Oracle and/or its affiliates. All rights reserved.
+ * Copyright 2024 MNX Cloud, Inc.
+ * Copyright 2026 Oxide Computer Company
  */
 
 /*
@@ -147,7 +149,7 @@ di_init_driver(const char *drv_name, uint_t flag)
 
 di_node_t
 di_init_impl(const char *phys_path, uint_t flag,
-	struct di_priv_data *priv)
+    struct di_priv_data *priv)
 {
 	caddr_t pa;
 	int fd, map_size;
@@ -161,11 +163,13 @@ di_init_impl(const char *phys_path, uint_t flag,
 
 	/*
 	 * Make sure there is no minor name in the path
-	 * and the path do not start with /devices....
+	 * and the path does not start with /devices.
+	 * The length check accounts for a '/' prefix and NUL terminator.
 	 */
-	if (strchr(phys_path, ':') ||
+	if (phys_path == NULL ||
+	    strchr(phys_path, ':') ||
 	    (strncmp(phys_path, "/devices", 8) == 0) ||
-	    (strlen(phys_path) > MAXPATHLEN)) {
+	    (strlen(phys_path) > sizeof (dinfo_io.root_path) - 2)) {
 		errno = EINVAL;
 		return (DI_NODE_NIL);
 	}
@@ -467,7 +471,7 @@ di_drv_next_node(di_node_t node)
 
 	pa = (caddr_t)node - DI_NODE(node)->self;
 
-	if (DI_NODE(node)->next == NULL) {
+	if (DI_NODE(node)->next == 0) {
 		errno = ENXIO;
 		return (DI_NODE_NIL);
 	}
@@ -672,10 +676,10 @@ prune_sib(struct node_list **headp)
 	prev = *headp;
 	curr = prev->next;
 	while (curr) {
-		if (((curr_par = di_parent_node(curr->node)) != DI_NODE_NIL) &&
-		    ((curr_par == parent) || ((curr_gpar =
-		    di_parent_node(curr_par)) != DI_NODE_NIL) &&
-		    (curr_gpar == parent))) {
+		if ((curr_par = di_parent_node(curr->node)) != DI_NODE_NIL &&
+		    (curr_par == parent ||
+		    ((curr_gpar = di_parent_node(curr_par)) != DI_NODE_NIL &&
+		    curr_gpar == parent))) {
 			/*
 			 * match parent/grandparent: delete curr
 			 */
@@ -770,7 +774,7 @@ update_node_list(int action, uint_t flag, struct node_list **headp)
  */
 static void
 walk_one_node(struct node_list **headp, uint_t flag, void *arg,
-	int (*callback)(di_node_t, void *))
+    int (*callback)(di_node_t, void *))
 {
 	DPRINTF((DI_TRACE, "Walking node %s\n", di_node_name((*headp)->node)));
 
@@ -780,7 +784,7 @@ walk_one_node(struct node_list **headp, uint_t flag, void *arg,
 
 int
 di_walk_node(di_node_t root, uint_t flag, void *arg,
-	int (*node_callback)(di_node_t, void *))
+    int (*node_callback)(di_node_t, void *))
 {
 	struct node_list  *head;	/* node_list for tree walk */
 
@@ -816,7 +820,7 @@ di_walk_node(di_node_t root, uint_t flag, void *arg,
  */
 static void
 walk_one_minor_list(struct node_list **headp, const char *desired_type,
-	uint_t flag, void *arg, int (*callback)(di_node_t, di_minor_t, void *))
+    uint_t flag, void *arg, int (*callback)(di_node_t, di_minor_t, void *))
 {
 	int ddm_type;
 	int action = DI_WALK_CONTINUE;
@@ -851,7 +855,7 @@ walk_one_minor_list(struct node_list **headp, const char *desired_type,
 
 int
 di_walk_minor(di_node_t root, const char *minor_type, uint_t flag, void *arg,
-	int (*minor_callback)(di_node_t, di_minor_t, void *))
+    int (*minor_callback)(di_node_t, di_minor_t, void *))
 {
 	struct node_list	*head;	/* node_list for tree walk */
 
@@ -1065,7 +1069,7 @@ di_driver_ops(di_node_t node)
 }
 
 /*
- * returns the length of the path, caller must free memory
+ * Returns pointer to the allocated string, which must be freed by the caller.
  */
 char *
 di_devfs_path(di_node_t node)
@@ -1709,7 +1713,7 @@ di_prop_find(dev_t match_dev, di_node_t node, const char *name)
 
 int
 di_prop_lookup_ints(dev_t dev, di_node_t node, const char *prop_name,
-	int **prop_data)
+    int **prop_data)
 {
 	di_prop_t prop;
 
@@ -1722,7 +1726,7 @@ di_prop_lookup_ints(dev_t dev, di_node_t node, const char *prop_name,
 
 int
 di_prop_lookup_int64(dev_t dev, di_node_t node, const char *prop_name,
-	int64_t **prop_data)
+    int64_t **prop_data)
 {
 	di_prop_t prop;
 
@@ -1748,7 +1752,7 @@ di_prop_lookup_strings(dev_t dev, di_node_t node, const char *prop_name,
 
 int
 di_prop_lookup_bytes(dev_t dev, di_node_t node, const char *prop_name,
-	uchar_t **prop_data)
+    uchar_t **prop_data)
 {
 	di_prop_t prop;
 
@@ -2376,7 +2380,7 @@ di_vhci_first_node(di_node_t root)
 	pa = (caddr_t)root - DI_NODE(root)->self;
 	dap = DI_ALL(pa);
 
-	if (dap->top_vhci_devinfo == NULL) {
+	if (dap->top_vhci_devinfo == 0) {
 		errno = ENXIO;
 		return (DI_NODE_NIL);
 	}
@@ -2397,7 +2401,7 @@ di_vhci_next_node(di_node_t node)
 	DPRINTF((DI_TRACE, "next vhci node on the snap shot:"
 	    " current=%s\n", di_node_name(node)));
 
-	if (DI_NODE(node)->next_vhci == NULL) {
+	if (DI_NODE(node)->next_vhci == 0) {
 		errno = ENXIO;
 		return (DI_NODE_NIL);
 	}
@@ -2425,7 +2429,7 @@ di_phci_first_node(di_node_t vhci_node)
 
 	pa = (caddr_t)vhci_node - DI_NODE(vhci_node)->self;
 
-	if (DI_NODE(vhci_node)->top_phci == NULL) {
+	if (DI_NODE(vhci_node)->top_phci == 0) {
 		errno = ENXIO;
 		return (DI_NODE_NIL);
 	}
@@ -2446,7 +2450,7 @@ di_phci_next_node(di_node_t node)
 	DPRINTF((DI_TRACE, "next phci node on the snap shot:"
 	    " current=%s\n", di_node_name(node)));
 
-	if (DI_NODE(node)->next_phci == NULL) {
+	if (DI_NODE(node)->next_phci == 0) {
 		errno = ENXIO;
 		return (DI_NODE_NIL);
 	}
@@ -2535,7 +2539,7 @@ typedef struct {
 static int
 di_walk_hp_callback(di_node_t node, void *argp)
 {
-	di_walk_hp_arg_t 	*arg = (di_walk_hp_arg_t *)argp;
+	di_walk_hp_arg_t	*arg = (di_walk_hp_arg_t *)argp;
 	di_hp_t			hp;
 	char			*type_str;
 
@@ -2890,7 +2894,7 @@ di_prom_fini(di_prom_handle_t ph)
  */
 static di_prom_prop_t
 di_prom_prop_found(di_prom_handle_t ph, int nodeid,
-	di_prom_prop_t prom_prop)
+    di_prom_prop_t prom_prop)
 {
 	struct di_prom_handle *p = (struct di_prom_handle *)ph;
 	struct openpromio *opp = &p->oppbuf.opp;
@@ -3028,7 +3032,7 @@ di_prom_prop_data(di_prom_prop_t prom_prop, uchar_t **prom_prop_data)
 	 */
 	if (prom_prop == DI_PROM_PROP_NIL) {
 		errno = EINVAL;
-		return (NULL);
+		return (0);
 	}
 
 	*prom_prop_data = ((struct di_prom_prop *)prom_prop)->data;
@@ -3042,7 +3046,7 @@ di_prom_prop_data(di_prom_prop_t prom_prop, uchar_t **prom_prop_data)
  */
 static struct di_prom_prop *
 di_prom_prop_lookup_common(di_prom_handle_t ph, di_node_t node,
-	const char *prom_prop_name)
+    const char *prom_prop_name)
 {
 	struct openpromio *opp;
 	struct di_prom_prop *prop;
@@ -3142,7 +3146,7 @@ di_prom_prop_lookup_common(di_prom_handle_t ph, di_node_t node,
 
 int
 di_prom_prop_lookup_ints(di_prom_handle_t ph, di_node_t node,
-	const char *prom_prop_name, int **prom_prop_data)
+    const char *prom_prop_name, int **prom_prop_data)
 {
 	int len;
 	struct di_prom_prop *prop;
@@ -3168,7 +3172,7 @@ di_prom_prop_lookup_ints(di_prom_handle_t ph, di_node_t node,
 
 int
 di_prom_prop_lookup_strings(di_prom_handle_t ph, di_node_t node,
-	const char *prom_prop_name, char **prom_prop_data)
+    const char *prom_prop_name, char **prom_prop_data)
 {
 	int len;
 	struct di_prom_prop *prop;
@@ -3211,7 +3215,7 @@ di_prom_prop_lookup_strings(di_prom_handle_t ph, di_node_t node,
 
 int
 di_prom_prop_lookup_bytes(di_prom_handle_t ph, di_node_t node,
-	const char *prom_prop_name, uchar_t **prom_prop_data)
+    const char *prom_prop_name, uchar_t **prom_prop_data)
 {
 	int len;
 	struct di_prom_prop *prop;
@@ -3460,11 +3464,11 @@ di_lnode_next(di_node_t node, di_lnode_t lnode)
 	di_all = DI_ALL((caddr_t)node - DI_NODE(node)->self);
 
 	if (lnode == DI_NODE_NIL) {
-		if (DI_NODE(node)->lnodes != NULL)
+		if (DI_NODE(node)->lnodes != 0)
 			return (DI_LNODE((caddr_t)di_all +
 			    DI_NODE(node)->lnodes));
 	} else {
-		if (DI_LNODE(lnode)->node_next != NULL)
+		if (DI_LNODE(lnode)->node_next != 0)
 			return (DI_LNODE((caddr_t)di_all +
 			    DI_LNODE(lnode)->node_next));
 	}
@@ -3495,21 +3499,21 @@ di_link_next_by_node(di_node_t node, di_link_t link, uint_t endpoint)
 
 	if (endpoint == DI_LINK_SRC) {
 		if (link == DI_LINK_NIL) {
-			if (DI_NODE(node)->src_links != NULL)
+			if (DI_NODE(node)->src_links != 0)
 				return (DI_LINK((caddr_t)di_all +
 				    DI_NODE(node)->src_links));
 		} else {
-			if (DI_LINK(link)->src_node_next != NULL)
+			if (DI_LINK(link)->src_node_next != 0)
 				return (DI_LINK((caddr_t)di_all +
 				    DI_LINK(link)->src_node_next));
 		}
 	} else {
 		if (link == DI_LINK_NIL) {
-			if (DI_NODE(node)->tgt_links != NULL)
+			if (DI_NODE(node)->tgt_links != 0)
 				return (DI_LINK((caddr_t)di_all +
 				    DI_NODE(node)->tgt_links));
 		} else {
-			if (DI_LINK(link)->tgt_node_next != NULL)
+			if (DI_LINK(link)->tgt_node_next != 0)
 				return (DI_LINK((caddr_t)di_all +
 				    DI_LINK(link)->tgt_node_next));
 		}
@@ -3541,24 +3545,24 @@ di_link_next_by_lnode(di_lnode_t lnode, di_link_t link, uint_t endpoint)
 
 	if (endpoint == DI_LINK_SRC) {
 		if (link == DI_LINK_NIL) {
-			if (DI_LNODE(lnode)->link_out == NULL)
+			if (DI_LNODE(lnode)->link_out == 0)
 				return (DI_LINK_NIL);
 			return (DI_LINK((caddr_t)di_all +
 			    DI_LNODE(lnode)->link_out));
 		} else {
-			if (DI_LINK(link)->src_link_next == NULL)
+			if (DI_LINK(link)->src_link_next == 0)
 				return (DI_LINK_NIL);
 			return (DI_LINK((caddr_t)di_all +
 			    DI_LINK(link)->src_link_next));
 		}
 	} else {
 		if (link == DI_LINK_NIL) {
-			if (DI_LNODE(lnode)->link_in == NULL)
+			if (DI_LNODE(lnode)->link_in == 0)
 				return (DI_LINK_NIL);
 			return (DI_LINK((caddr_t)di_all +
 			    DI_LNODE(lnode)->link_in));
 		} else {
-			if (DI_LINK(link)->tgt_link_next == NULL)
+			if (DI_LINK(link)->tgt_link_next == 0)
 				return (DI_LINK_NIL);
 			return (DI_LINK((caddr_t)di_all +
 			    DI_LINK(link)->tgt_link_next));
@@ -3786,9 +3790,9 @@ di_lookup_node_impl(di_node_t root, char *devfspath)
 		pname = slash + 1;
 		node = di_child_node(node);
 
-		if (slash = strchr(pname, '/'))
+		if ((slash = strchr(pname, '/')) != NULL)
 			*slash = '\0';
-		if (paddr = strchr(pname, '@'))
+		if ((paddr = strchr(pname, '@')) != NULL)
 			*paddr++ = '\0';
 
 		for (; node != DI_NODE_NIL; node = di_sibling_node(node)) {

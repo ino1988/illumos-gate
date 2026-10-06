@@ -23,6 +23,11 @@
  * Copyright (c) 2008, 2010, Oracle and/or its affiliates. All rights reserved.
  */
 
+/*
+ * Copyright 2019 Joyent, Inc.
+ * Copyright 2025 Hans Rosenfeld
+ */
+
 #include <sys/types.h>
 #include <sys/scsi/generic/commands.h>
 #include <sys/scsi/impl/spc3_types.h>
@@ -56,10 +61,7 @@ libscsi_assert(const char *expr, const char *file, int line)
 	(void) write(STDERR_FILENO, msg, strlen(msg));
 
 	abort();
-	_exit(1);
-
 	/*NOTREACHED*/
-	return (0);
 }
 
 int
@@ -192,6 +194,12 @@ libscsi_hdl_t *
 libscsi_init(uint_t version, libscsi_errno_t *errp)
 {
 	libscsi_hdl_t *hp;
+
+	if (version != LIBSCSI_VERSION) {
+		if (errp != NULL)
+			*errp = ESCSI_VERSION;
+		return (NULL);
+	}
 
 	if ((hp = malloc(sizeof (libscsi_hdl_t))) == NULL) {
 		if (errp != NULL)

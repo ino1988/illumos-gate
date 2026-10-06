@@ -26,16 +26,10 @@
 #ifndef	_MENU_PARTITION_H
 #define	_MENU_PARTITION_H
 
-#pragma ident	"%Z%%M%	%I%	%E% SMI"
-
 #ifdef	__cplusplus
 extern "C" {
 #endif
 
-
-/*
- *	Prototypes for ANSI C compilers
- */
 int	p_apart(void);
 int	p_bpart(void);
 int	p_cpart(void);

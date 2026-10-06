@@ -43,7 +43,7 @@
  * Prompt for max number of LBA
  */
 uint64_t
-get_mlba()
+get_mlba(void)
 {
 	u_ioparam_t	ioparam;
 
@@ -51,35 +51,38 @@ get_mlba()
 	ioparam.io_bounds.upper = UINT_MAX64;
 
 	return (input(FIO_INT64, "Enter maximum number of LBAs",
-	    ':', &ioparam, (int *)NULL, DATA_INPUT));
+	    ':', &ioparam, NULL, DATA_INPUT));
 }
 
 /*
  * Prompt for number of cylinders
  */
 int
-get_ncyl()
+get_ncyl(void)
 {
 	u_ioparam_t	ioparam;
 
 	ioparam.io_bounds.lower = 1;
-	ioparam.io_bounds.upper = MAX_CYLS;
+	ioparam.io_bounds.upper = MAX_CYLS - 2;
 	return (input(FIO_INT, "Enter number of data cylinders",
-	    ':', &ioparam, (int *)NULL, DATA_INPUT));
+	    ':', &ioparam, NULL, DATA_INPUT));
 }
 
 /*
  * Prompt for number of alternate cylinders
  */
 int
-get_acyl(n_cyls)
-	int		n_cyls;
+get_acyl(int n_cyls)
 {
 	u_ioparam_t	ioparam;
 	int		deflt;
 
 	ioparam.io_bounds.lower = 2;
-	ioparam.io_bounds.upper = MAX_CYLS - n_cyls;
+	/* n_cyls is at least 1, see get_ncyl() above. */
+	if (n_cyls >= 1 && MAX_CYLS - n_cyls >= 2)
+		ioparam.io_bounds.upper = MAX_CYLS - n_cyls;
+	else
+		ioparam.io_bounds.upper = 2;
 	deflt = 2;
 	return (input(FIO_INT, "Enter number of alternate cylinders", ':',
 	    &ioparam, &deflt, DATA_INPUT));
@@ -89,9 +92,7 @@ get_acyl(n_cyls)
  * Prompt for number of physical cylinders
  */
 int
-get_pcyl(n_cyls, a_cyls)
-	int		n_cyls;
-	int		a_cyls;
+get_pcyl(int n_cyls, int a_cyls)
 {
 	u_ioparam_t	ioparam;
 	int		deflt;
@@ -107,23 +108,21 @@ get_pcyl(n_cyls, a_cyls)
  * Prompt for number of heads
  */
 int
-get_nhead()
+get_nhead(void)
 {
 	u_ioparam_t	ioparam;
 
 	ioparam.io_bounds.lower = 1;
 	ioparam.io_bounds.upper = MAX_HEADS;
 	return (input(FIO_INT, "Enter number of heads", ':',
-	    &ioparam, (int *)NULL, DATA_INPUT));
+	    &ioparam, NULL, DATA_INPUT));
 }
 
 /*
  * Prompt for number of physical heads
  */
 int
-get_phead(n_heads, options)
-	int		n_heads;
-	ulong_t		*options;
+get_phead(int n_heads, ulong_t *options)
 {
 	u_ioparam_t	ioparam;
 	int		deflt;
@@ -132,7 +131,7 @@ get_phead(n_heads, options)
 		ioparam.io_bounds.lower = n_heads;
 		ioparam.io_bounds.upper = INFINITY;
 		if (input(FIO_OPINT, "Enter physical number of heads",
-				':', &ioparam, &deflt, DATA_INPUT)) {
+		    ':', &ioparam, &deflt, DATA_INPUT)) {
 			*options |= SUP_PHEAD;
 			return (deflt);
 		}
@@ -145,7 +144,7 @@ get_phead(n_heads, options)
  * Prompt for number of sectors per track
  */
 int
-get_nsect()
+get_nsect(void)
 {
 	u_ioparam_t	ioparam;
 
@@ -153,15 +152,14 @@ get_nsect()
 	ioparam.io_bounds.upper = MAX_SECTS;
 	return (input(FIO_INT,
 	    "Enter number of data sectors/track", ':',
-	    &ioparam, (int *)NULL, DATA_INPUT));
+	    &ioparam, NULL, DATA_INPUT));
 }
 
 /*
  * Prompt for number of physical sectors per track
  */
 int
-get_psect(options)
-	ulong_t		*options;
+get_psect(ulong_t *options)
 {
 	u_ioparam_t	ioparam;
 	int		deflt;
@@ -170,7 +168,7 @@ get_psect(options)
 		ioparam.io_bounds.lower = 0;
 		ioparam.io_bounds.upper = INFINITY;
 		if (input(FIO_OPINT, "Enter number of physical sectors/track",
-				':', &ioparam, &deflt, DATA_INPUT)) {
+		    ':', &ioparam, &deflt, DATA_INPUT)) {
 			*options |= SUP_PSECT;
 			return (deflt);
 		}
@@ -182,9 +180,7 @@ get_psect(options)
  * Prompt for bytes per track
  */
 int
-get_bpt(n_sects, options)
-	int		n_sects;
-	ulong_t		*options;
+get_bpt(int n_sects, ulong_t *options)
 {
 	u_ioparam_t	ioparam;
 	int		deflt;
@@ -195,7 +191,7 @@ get_bpt(n_sects, options)
 		ioparam.io_bounds.upper = INFINITY;
 		deflt = n_sects * cur_blksz;
 		return (input(FIO_INT, "Enter number of bytes/track",
-				':', &ioparam, &deflt, DATA_INPUT));
+		    ':', &ioparam, &deflt, DATA_INPUT));
 	}
 
 	return (0);
@@ -205,7 +201,7 @@ get_bpt(n_sects, options)
  * Prompt for rpm
  */
 int
-get_rpm()
+get_rpm(void)
 {
 	u_ioparam_t	ioparam;
 	int		deflt;
@@ -221,8 +217,7 @@ get_rpm()
  * Prompt for formatting time
  */
 int
-get_fmt_time(options)
-	ulong_t		*options;
+get_fmt_time(ulong_t *options)
 {
 	u_ioparam_t	ioparam;
 	int		deflt;
@@ -230,7 +225,7 @@ get_fmt_time(options)
 	ioparam.io_bounds.lower = 0;
 	ioparam.io_bounds.upper = INFINITY;
 	if (input(FIO_OPINT, "Enter format time", ':',
-			&ioparam, &deflt, DATA_INPUT)) {
+	    &ioparam, &deflt, DATA_INPUT)) {
 		*options |= SUP_FMTTIME;
 		return (deflt);
 	}
@@ -241,8 +236,7 @@ get_fmt_time(options)
  * Prompt for cylinder skew
  */
 int
-get_cyl_skew(options)
-	ulong_t		*options;
+get_cyl_skew(ulong_t *options)
 {
 	u_ioparam_t	ioparam;
 	int		deflt;
@@ -250,7 +244,7 @@ get_cyl_skew(options)
 	ioparam.io_bounds.lower = 0;
 	ioparam.io_bounds.upper = INFINITY;
 	if (input(FIO_OPINT, "Enter cylinder skew", ':',
-			&ioparam, &deflt, DATA_INPUT)) {
+	    &ioparam, &deflt, DATA_INPUT)) {
 		*options |= SUP_CYLSKEW;
 		return (deflt);
 	}
@@ -261,8 +255,7 @@ get_cyl_skew(options)
  * Prompt for track skew
  */
 int
-get_trk_skew(options)
-	ulong_t		*options;
+get_trk_skew(ulong_t *options)
 {
 	u_ioparam_t	ioparam;
 	int		deflt;
@@ -270,7 +263,7 @@ get_trk_skew(options)
 	ioparam.io_bounds.lower = 0;
 	ioparam.io_bounds.upper = INFINITY;
 	if (input(FIO_OPINT, "Enter track skew", ':',
-			&ioparam, &deflt, DATA_INPUT)) {
+	    &ioparam, &deflt, DATA_INPUT)) {
 		*options |= SUP_TRKSKEW;
 		return (deflt);
 	}
@@ -281,8 +274,7 @@ get_trk_skew(options)
  * Prompt for tracks per zone
  */
 int
-get_trks_zone(options)
-	ulong_t		*options;
+get_trks_zone(ulong_t *options)
 {
 	u_ioparam_t	ioparam;
 	int		deflt;
@@ -290,7 +282,7 @@ get_trks_zone(options)
 	ioparam.io_bounds.lower = 0;
 	ioparam.io_bounds.upper = INFINITY;
 	if (input(FIO_OPINT, "Enter tracks per zone", ':',
-			&ioparam, &deflt, DATA_INPUT)) {
+	    &ioparam, &deflt, DATA_INPUT)) {
 		*options |= SUP_TRKS_ZONE;
 		return (deflt);
 	}
@@ -301,8 +293,7 @@ get_trks_zone(options)
  * Prompt for alternate tracks
  */
 int
-get_atrks(options)
-	ulong_t		*options;
+get_atrks(ulong_t *options)
 {
 	u_ioparam_t	ioparam;
 	int		deflt;
@@ -310,7 +301,7 @@ get_atrks(options)
 	ioparam.io_bounds.lower = 0;
 	ioparam.io_bounds.upper = INFINITY;
 	if (input(FIO_OPINT, "Enter alternate tracks", ':',
-			&ioparam, &deflt, DATA_INPUT)) {
+	    &ioparam, &deflt, DATA_INPUT)) {
 		*options |= SUP_ATRKS;
 		return (deflt);
 	}
@@ -321,8 +312,7 @@ get_atrks(options)
  * Prompt for alternate sectors
  */
 int
-get_asect(options)
-	ulong_t		*options;
+get_asect(ulong_t *options)
 {
 	u_ioparam_t	ioparam;
 	int		deflt;
@@ -330,7 +320,7 @@ get_asect(options)
 	ioparam.io_bounds.lower = 0;
 	ioparam.io_bounds.upper = INFINITY;
 	if (input(FIO_OPINT, "Enter alternate sectors", ':',
-			&ioparam, &deflt, DATA_INPUT)) {
+	    &ioparam, &deflt, DATA_INPUT)) {
 		*options |= SUP_ASECT;
 		return (deflt);
 	}
@@ -341,8 +331,7 @@ get_asect(options)
  * Prompt for cache setting
  */
 int
-get_cache(options)
-	ulong_t		*options;
+get_cache(ulong_t *options)
 {
 	u_ioparam_t	ioparam;
 	int		deflt;
@@ -350,7 +339,7 @@ get_cache(options)
 	ioparam.io_bounds.lower = 0;
 	ioparam.io_bounds.upper = 0xff;
 	if (input(FIO_OPINT, "Enter cache control", ':',
-			&ioparam, &deflt, DATA_INPUT)) {
+	    &ioparam, &deflt, DATA_INPUT)) {
 		*options |= SUP_CACHE;
 		return (deflt);
 	}
@@ -361,8 +350,7 @@ get_cache(options)
  * Prompt for prefetch threshold
  */
 int
-get_threshold(options)
-	ulong_t		*options;
+get_threshold(ulong_t *options)
 {
 	u_ioparam_t	ioparam;
 	int		deflt;
@@ -370,7 +358,7 @@ get_threshold(options)
 	ioparam.io_bounds.lower = 0;
 	ioparam.io_bounds.upper = INFINITY;
 	if (input(FIO_OPINT, "Enter prefetch threshold",
-			':', &ioparam, &deflt, DATA_INPUT)) {
+	    ':', &ioparam, &deflt, DATA_INPUT)) {
 		*options |= SUP_PREFETCH;
 		return (deflt);
 	}
@@ -381,8 +369,7 @@ get_threshold(options)
  * Prompt for minimum prefetch
  */
 int
-get_min_prefetch(options)
-	ulong_t		*options;
+get_min_prefetch(ulong_t *options)
 {
 	u_ioparam_t	ioparam;
 	int		deflt;
@@ -390,7 +377,7 @@ get_min_prefetch(options)
 	ioparam.io_bounds.lower = 0;
 	ioparam.io_bounds.upper = INFINITY;
 	if (input(FIO_OPINT, "Enter minimum prefetch",
-			':', &ioparam, &deflt, DATA_INPUT)) {
+	    ':', &ioparam, &deflt, DATA_INPUT)) {
 		*options |= SUP_CACHE_MIN;
 		return (deflt);
 	}
@@ -401,9 +388,7 @@ get_min_prefetch(options)
  * Prompt for maximum prefetch
  */
 int
-get_max_prefetch(min_prefetch, options)
-	int		min_prefetch;
-	ulong_t		*options;
+get_max_prefetch(int min_prefetch, ulong_t *options)
 {
 	u_ioparam_t	ioparam;
 	int		deflt;
@@ -411,7 +396,7 @@ get_max_prefetch(min_prefetch, options)
 	ioparam.io_bounds.lower = min_prefetch;
 	ioparam.io_bounds.upper = INFINITY;
 	if (input(FIO_OPINT, "Enter maximum prefetch",
-			':', &ioparam, &deflt, DATA_INPUT)) {
+	    ':', &ioparam, &deflt, DATA_INPUT)) {
 		*options |= SUP_CACHE_MAX;
 		return (deflt);
 	}
@@ -422,7 +407,7 @@ get_max_prefetch(min_prefetch, options)
  * Prompt for bytes per sector
  */
 int
-get_bps()
+get_bps(void)
 {
 	u_ioparam_t	ioparam;
 	int		deflt;
@@ -442,9 +427,9 @@ get_bps()
  * Prompt for ascii label
  */
 char *
-get_asciilabel()
+get_asciilabel(void)
 {
 	return ((char *)(uintptr_t)input(FIO_OSTR,
 	    "Enter disk type name (remember quotes)", ':',
-	    (u_ioparam_t *)NULL, (int *)NULL, DATA_INPUT));
+	    NULL, NULL, DATA_INPUT));
 }

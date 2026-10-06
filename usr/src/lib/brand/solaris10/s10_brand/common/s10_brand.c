@@ -20,8 +20,10 @@
  */
 
 /*
+ * Copyright 2016 Toomas Soome <tsoome@me.com>
  * Copyright (c) 2013, OmniTI Computer Consulting, Inc. All rights reserved.
  * Copyright (c) 2009, 2010, Oracle and/or its affiliates. All rights reserved.
+ * Copyright 2024 Oxide Computer Company
  */
 
 #include <errno.h>
@@ -61,6 +63,7 @@
 #include <atomic.h>
 #include <sys/acl.h>
 #include <sys/socket.h>
+#include <sys/fdsync.h>
 
 #include <s10_brand.h>
 #include <brand_misc.h>
@@ -560,7 +563,7 @@ typedef struct s10_ct_param {
 } s10_ct_param_t;
 
 /*
- * We have to emulate process contract ioctls for init(1M) because the
+ * We have to emulate process contract ioctls for init(8) because the
  * ioctl parameter structure changed between S10 and Nevada.  This is
  * a relatively simple process of filling Nevada structure fields,
  * shuffling values, and initiating a native system call.
@@ -622,7 +625,7 @@ zfs_ioctl(sysret_t *rval, int fdes, int cmd, intptr_t arg)
 }
 
 struct s10_lofi_ioctl {
-	uint32_t li_minor;
+	uint32_t li_id;
 	boolean_t li_force;
 	char li_filename[MAXPATHLEN + 1];
 };
@@ -652,7 +655,7 @@ lofi_ioctl(sysret_t *rval, int fdes, int cmd, intptr_t arg)
 
 	bzero(&native_param, sizeof (native_param));
 
-	struct_assign(native_param, s10_param, li_minor);
+	struct_assign(native_param, s10_param, li_id);
 	struct_assign(native_param, s10_param, li_force);
 
 	/*
@@ -665,7 +668,7 @@ lofi_ioctl(sysret_t *rval, int fdes, int cmd, intptr_t arg)
 
 	err = __systemcall(rval, SYS_ioctl + 1024, fdes, cmd, &native_param);
 
-	struct_assign(s10_param, native_param, li_minor);
+	struct_assign(s10_param, native_param, li_id);
 	/* li_force is input-only */
 
 	bcopy(native_param.li_filename, s10_param.li_filename,
@@ -725,8 +728,10 @@ s10_pwrite(sysret_t *rval, int fd, const void *bufferp, size_t num_bytes,
 {
 	int err;
 
-	if ((err = __systemcall(rval, SYS_fcntl + 1024, fd, F_GETFL)) != 0)
+	if ((err = __systemcall(rval, SYS_fcntl + 1024, fd, F_GETFL, 0, 0)) !=
+	    0) {
 		return (err);
+	}
 	if (rval->sys_rval1 & O_APPEND)
 		return (__systemcall(rval, SYS_write + 1024, fd, bufferp,
 		    num_bytes));
@@ -746,8 +751,10 @@ s10_pwrite64(sysret_t *rval, int fd, const void *bufferp, size32_t num_bytes,
 {
 	int err;
 
-	if ((err = __systemcall(rval, SYS_fcntl + 1024, fd, F_GETFL)) != 0)
+	if ((err = __systemcall(rval, SYS_fcntl + 1024, fd, F_GETFL, 0, 0)) !=
+	    0) {
 		return (err);
+	}
 	if (rval->sys_rval1 & O_APPEND)
 		return (__systemcall(rval, SYS_write + 1024, fd, bufferp,
 		    num_bytes));
@@ -1355,7 +1362,7 @@ s10_exec(sysret_t *rval, const char *fname, const char **argp)
 		return (err);
 
 	/* If an exec call succeeds, it never returns */
-	err = __systemcall(rval, SYS_execve + 1024, fname, argp, NULL);
+	err = __systemcall(rval, SYS_execve + 1024, fname, argp, NULL, 0);
 	brand_assert(err != 0);
 	return (err);
 }
@@ -1373,9 +1380,44 @@ s10_execve(sysret_t *rval, const char *fname, const char **argp,
 		return (err);
 
 	/* If an exec call succeeds, it never returns */
-	err = __systemcall(rval, SYS_execve + 1024, fname, argp, envp);
+	err = __systemcall(rval, SYS_execve + 1024, fname, argp, envp, 0);
 	brand_assert(err != 0);
 	return (err);
+}
+
+/*
+ * fcntl(2) added an additional argument which we need to pass as zero.
+ */
+int
+s10_fcntl(sysret_t *rval, int fd, int cmd, intptr_t arg)
+{
+	return (__systemcall(rval, SYS_fcntl + 1024, fd, cmd, arg, 0));
+}
+
+/*
+ * Interpose on the SYS_fdsync system call. The structure was chagned to use a
+ * distinct enum rather than passing a combination of the <sys/file.h> flags
+ * FSYNC and FDSYNC. The prior system call implementation only passed those two
+ * flags on to the VFS operation. The system call did not check if the 'flag'
+ * argument was zero or not; however, we know that in illumos it was always
+ * called with either FSYNC or FDSYNC explicitly. To try and fail open in a
+ * sense, we translate any call with no explicit level to a normal fsync(3C)
+ * style operation.
+ */
+static int
+s10_fdsync(sysret_t *rval, int fd, int flag)
+{
+	uint32_t level;
+
+	if ((flag & FSYNC) != 0) {
+		level = FDSYNC_FILE;
+	} else if ((flag & FDSYNC) != 0) {
+		level = FDSYNC_DATA;
+	} else {
+		level = FDSYNC_FILE;
+	}
+
+	return (__systemcall(rval, SYS_fdsync + 1024, fd, level));
 }
 
 /*
@@ -1694,7 +1736,7 @@ s10_lwp_private(sysret_t *rval, int cmd, int which, uintptr_t base)
 		 * Manual," Volume 3A for more details.
 		 */
 		brand_sysent_table[SYS_lwp_create].st_callc =
-		    (sysent_cb_t)s10_lwp_create_correct_fs;
+		    (sysent_cb_t)(uintptr_t)s10_lwp_create_correct_fs;
 		return (__systemcall(rval, SYS_brand + 1024,
 		    B_S10_FSREGCORRECTION));
 	}
@@ -1837,7 +1879,7 @@ brand_init(int argc, char *argv[], char *envp[])
 
 	/*
 	 * Cache the pid of the zone's init process and determine if
-	 * we're init(1m) for the zone.  Remember: we might be init
+	 * we're init(8) for the zone.  Remember: we might be init
 	 * now, but as soon as we fork(2) we won't be.
 	 */
 	(void) get_initpid_info();
@@ -1959,11 +2001,11 @@ brand_sysent_table_t brand_sysent_table[] = {
 	NOSYS,					/*  55 */
 	NOSYS,					/*  56 */
 	NOSYS,					/*  57 */
-	NOSYS,					/*  58 */
+	EMULATE(s10_fdsync, 2 | RV_DEFAULT),	/*  58 */
 	EMULATE(s10_execve, 3 | RV_DEFAULT),	/*  59 */
 	NOSYS,					/*  60 */
 	NOSYS,					/*  61 */
-	NOSYS,					/*  62 */
+	EMULATE(s10_fcntl, 3 | RV_DEFAULT),	/*  62 */
 	NOSYS,					/*  63 */
 	NOSYS,					/*  64 */
 	NOSYS,					/*  65 */

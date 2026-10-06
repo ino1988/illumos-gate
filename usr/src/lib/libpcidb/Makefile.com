@@ -24,22 +24,25 @@
 
 LIBRARY = libpcidb.a
 VERS = .1
-OBJECTS = pcidb.o
+OBJECTS = pcidb.o list.o
 
 include ../../Makefile.lib
 
-LIBS = $(DYNLIB) $(LINTLIB)
+LIBS = $(DYNLIB)
 
 SRCDIR = ../common
 
 LDLIBS += -lc
+CSTD = $(CSTD_GNU99)
 
-$(LINTLIB) := SRCS = $(SRCDIR)/$(LINTSRC)
 
 .KEEP_STATE:
 
 all: $(LIBS)
 
-lint: lintcheck
+pics/%.o: $(SRC)/common/list/%.c
+	$(COMPILE.c) -o $@ $<
+	$(POST_PROCESS_O)
+
 
 include ../../Makefile.targ

@@ -22,6 +22,7 @@
 /*
  * Copyright 2008 Sun Microsystems, Inc.  All rights reserved.
  * Use is subject to license terms.
+ * Copyright 2018 Joyent, Inc.
  */
 
 /*
@@ -115,8 +116,9 @@ segmf_data_zalloc(struct seg *seg)
 }
 
 int
-segmf_create(struct seg *seg, void *args)
+segmf_create(struct seg **segpp, void *args)
 {
+	struct seg *seg = *segpp;
 	struct segmf_crargs *a = args;
 	struct segmf_data *data;
 	struct as *as = seg->s_as;
@@ -780,5 +782,6 @@ static struct seg_ops segmf_ops = {
 	segmf_setpagesize,
 	segmf_getmemid,
 	segmf_getpolicy,
-	segmf_capable
+	segmf_capable,
+	seg_inherit_notsup
 };

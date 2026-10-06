@@ -23,14 +23,12 @@
 
  CDDL HEADER END
 
-	ident	"%Z%%M%	%I%	%E% SMI"
-
 	NOTE:  This service manifest is not editable; its contents will
 	be overwritten by package or patch operations, including
 	operating system upgrade.  Make customizations in a different
 	file.
 
-	Service manifest for mpxio upgrade, enabled by stmsboot(1M).
+	Service manifest for mpxio upgrade, enabled by stmsboot(8).
 -->
 
 <service_bundle type='manifest' name='SUNWcsr:mpxio-upgrade'>
@@ -43,14 +41,6 @@
 	<create_default_instance enabled='false' />
 
 	<single_instance />
-
-	<dependency
-	    name='metainit'
-	    type='service'
-	    grouping='optional_all'
-	    restart_on='none'>
-		<service_fmri value='svc:/system/metainit' />
-	</dependency>
 
 	<dependency
 	    name='vxvm-sysboot'
@@ -96,7 +86,7 @@
 		<documentation>
 			<manpage
 				title='stmsboot'
-				section='1M'
+				section='8'
 				manpath='/usr/share/man' />
 		</documentation>
 	</template>

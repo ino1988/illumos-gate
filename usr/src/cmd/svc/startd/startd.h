@@ -21,7 +21,8 @@
 
 /*
  * Copyright (c) 2004, 2010, Oracle and/or its affiliates. All rights reserved.
- * Copyright (c) 2013, Joyent, Inc. All rights reserved.
+ * Copyright (c) 2015, Joyent, Inc. All rights reserved.
+ * Copyright 2017 RackTop Systems.
  */
 
 #ifndef	_STARTD_H
@@ -82,16 +83,9 @@ extern "C" {
 
 #endif
 
-#ifndef NDEBUG
-#define	bad_error(func, err)	{					\
-	(void) fprintf(stderr, "%s:%d: %s() failed with unexpected "	\
-	    "error %d.  Aborting.\n", __FILE__, __LINE__, (func), (err)); \
-	abort();							\
-}
-#else
-#define	bad_error(func, err)	abort()
-#endif
-
+#define	bad_error(func, err)					\
+	uu_panic("%s:%d: %s() failed with unexpected "		\
+	    "error %d.  Aborting.\n", __FILE__, __LINE__, (func), (err));
 
 #define	min(a, b)	(((a) < (b)) ? (a) : (b))
 
@@ -171,10 +165,12 @@ extern pthread_mutexattr_t mutex_attrs;
  *   Note that the ordering in admin_action_t, admin_actions, and admin_events
  *   must match.  admin_actions and admin_events are defined in startd.c.
  */
-#define	NACTIONS			6
+#define	NACTIONS			8
 
 typedef enum {
-	ADMIN_EVENT_DEGRADED = 0x0,
+	ADMIN_EVENT_RESTORE = 0,
+	ADMIN_EVENT_DEGRADED,
+	ADMIN_EVENT_DEGRADE_IMMEDIATE,
 	ADMIN_EVENT_MAINT_OFF,
 	ADMIN_EVENT_MAINT_ON,
 	ADMIN_EVENT_MAINT_ON_IMMEDIATE,
@@ -332,7 +328,7 @@ typedef struct graph_vertex {
 	 *
 	 * Currently, only relevant for GVT_SVC and GVT_INST type vertices.
 	 */
-	int 				gv_refs;
+	int				gv_refs;
 
 	int32_t				gv_stn_tset;
 	int32_t				gv_reason;
@@ -351,12 +347,14 @@ int32_t libscf_get_stn_tset(scf_instance_t *);
  * Restarter transition outcomes
  */
 typedef enum {
+	DEGRADE_REQUESTED,
 	MAINT_REQUESTED,
 	START_REQUESTED,
 	START_FAILED_REPEATEDLY,
 	START_FAILED_CONFIGURATION,
 	START_FAILED_FATAL,
 	START_FAILED_TIMEOUT_FATAL,
+	START_FAILED_DEGRADED,
 	START_FAILED_OTHER
 } start_outcome_t;
 
@@ -571,7 +569,7 @@ typedef struct contract_entry {
 
 extern volatile uint16_t	storing_contract;
 
-uu_list_pool_t *contract_list_pool;
+extern uu_list_pool_t *contract_list_pool;
 
 /* contract.c */
 ctid_t contract_init(void);

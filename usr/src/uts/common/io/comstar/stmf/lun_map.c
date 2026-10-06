@@ -47,8 +47,9 @@ void stmf_update_sessions_per_ve(stmf_view_entry_t *ve,
 void stmf_add_lus_to_session_per_vemap(stmf_i_local_port_t *ilport,
 		stmf_i_scsi_session_t *iss, stmf_lun_map_t *vemap);
 stmf_id_data_t *stmf_lookup_group_for_host(uint8_t *ident, uint16_t ident_size);
-stmf_status_t stmf_add_ent_to_map(stmf_lun_map_t *sm, void *ent, uint8_t *lun);
-stmf_status_t stmf_remove_ent_from_map(stmf_lun_map_t *sm, uint8_t *lun);
+static stmf_status_t stmf_add_ent_to_map(stmf_lun_map_t *sm, void *ent,
+    uint8_t *lun);
+static stmf_status_t stmf_remove_ent_from_map(stmf_lun_map_t *sm, uint8_t *lun);
 uint16_t stmf_get_next_free_lun(stmf_lun_map_t *sm, uint8_t *lun);
 stmf_status_t stmf_add_tg(uint8_t *tg_name, uint16_t tg_name_size,
 		int allow_special, uint32_t *err_detail);
@@ -179,10 +180,11 @@ stmf_view_clear_config()
 
 /*
  * Create luns map for session based on the view
+ * iss_lockp is held
  */
 stmf_status_t
 stmf_session_create_lun_map(stmf_i_local_port_t *ilport,
-		stmf_i_scsi_session_t *iss)
+    stmf_i_scsi_session_t *iss)
 {
 	stmf_id_data_t *tg;
 	stmf_id_data_t *hg;
@@ -236,52 +238,8 @@ stmf_session_create_lun_map(stmf_i_local_port_t *ilport,
 }
 
 /*
- * destroy lun map for session
- */
-/* ARGSUSED */
-stmf_status_t
-stmf_session_destroy_lun_map(stmf_i_local_port_t *ilport,
-		stmf_i_scsi_session_t *iss)
-{
-	stmf_lun_map_t *sm;
-	stmf_i_lu_t *ilu;
-	uint16_t n;
-	stmf_lun_map_ent_t *ent;
-
-	ASSERT(mutex_owned(&stmf_state.stmf_lock));
-	/*
-	 * to avoid conflict with updating session's map,
-	 * which only grab stmf_lock
-	 */
-	sm = iss->iss_sm;
-	iss->iss_sm = NULL;
-	iss->iss_hg = NULL;
-	if (sm->lm_nentries) {
-		for (n = 0; n < sm->lm_nentries; n++) {
-			if ((ent = (stmf_lun_map_ent_t *)sm->lm_plus[n])
-			    != NULL) {
-				if (ent->ent_itl_datap) {
-					stmf_do_itl_dereg(ent->ent_lu,
-					    ent->ent_itl_datap,
-					    STMF_ITL_REASON_IT_NEXUS_LOSS);
-				}
-				ilu = (stmf_i_lu_t *)
-				    ent->ent_lu->lu_stmf_private;
-				atomic_dec_32(&ilu->ilu_ref_cnt);
-				kmem_free(sm->lm_plus[n],
-				    sizeof (stmf_lun_map_ent_t));
-			}
-		}
-		kmem_free(sm->lm_plus,
-		    sizeof (stmf_lun_map_ent_t *) * sm->lm_nentries);
-	}
-
-	kmem_free(sm, sizeof (*sm));
-	return (STMF_SUCCESS);
-}
-
-/*
  * Expects the session lock to be held.
+ * iss_lockp is held
  */
 stmf_xfer_data_t *
 stmf_session_prepare_report_lun_data(stmf_lun_map_t *sm)
@@ -289,6 +247,7 @@ stmf_session_prepare_report_lun_data(stmf_lun_map_t *sm)
 	stmf_xfer_data_t *xd;
 	uint16_t nluns, ent;
 	uint32_t alloc_size, data_size;
+	uchar_t *buf;
 	int i;
 
 	nluns = sm->lm_nluns;
@@ -314,12 +273,13 @@ stmf_session_prepare_report_lun_data(stmf_lun_map_t *sm)
 
 	ent = 0;
 
+	buf = (uchar_t *)xd + offsetof(stmf_xfer_data_t, buf);
 	for (i = 0; ((i < sm->lm_nentries) && (ent < nluns)); i++) {
 		if (sm->lm_plus[i] == NULL)
 			continue;
 		/* Fill in the entry */
-		xd->buf[8 + (ent << 3) + 1] = (uchar_t)i;
-		xd->buf[8 + (ent << 3) + 0] = ((uchar_t)(i >> 8));
+		buf[8 + (ent << 3) + 1] = (uchar_t)i;
+		buf[8 + (ent << 3) + 0] = ((uchar_t)(i >> 8));
 		ent++;
 	}
 
@@ -390,12 +350,13 @@ stmf_session_lu_unmapall(stmf_lu_t *lu)
 }
 /*
  * add lu to a session, stmf_lock is already held
+ * iss_lockp/ilport_lock already held
  */
-stmf_status_t
+static stmf_status_t
 stmf_add_lu_to_session(stmf_i_local_port_t *ilport,
-		stmf_i_scsi_session_t	*iss,
-		stmf_lu_t *lu,
-		uint8_t *lu_nbr)
+    stmf_i_scsi_session_t *iss,
+    stmf_lu_t *lu,
+    uint8_t *lu_nbr)
 {
 	stmf_lun_map_t *sm = iss->iss_sm;
 	stmf_status_t ret;
@@ -434,13 +395,11 @@ stmf_add_lu_to_session(stmf_i_local_port_t *ilport,
 
 /*
  * remvoe lu from a session, stmf_lock is already held
+ * iss_lockp held
  */
-/* ARGSUSED */
-stmf_status_t
-stmf_remove_lu_from_session(stmf_i_local_port_t *ilport,
-		stmf_i_scsi_session_t *iss,
-		stmf_lu_t *lu,
-		uint8_t *lu_nbr)
+static void
+stmf_remove_lu_from_session(stmf_i_scsi_session_t *iss,
+    stmf_lu_t *lu, uint8_t *lu_nbr)
 {
 	stmf_status_t ret;
 	stmf_i_lu_t *ilu;
@@ -451,7 +410,10 @@ stmf_remove_lu_from_session(stmf_i_local_port_t *ilport,
 
 	ASSERT(mutex_owned(&stmf_state.stmf_lock));
 	lun_map_ent = stmf_get_ent_from_map(sm, luNbr);
-	ASSERT(lun_map_ent && lun_map_ent->ent_lu == lu);
+	ASSERT(lun_map_ent->ent_lu == lu);
+	if (lun_map_ent == NULL) {
+		return;
+	}
 
 	ilu = (stmf_i_lu_t *)lu->lu_stmf_private;
 
@@ -464,7 +426,6 @@ stmf_remove_lu_from_session(stmf_i_local_port_t *ilport,
 		    STMF_ITL_REASON_USER_REQUEST);
 	}
 	kmem_free((void *)lun_map_ent, sizeof (stmf_lun_map_ent_t));
-	return (STMF_SUCCESS);
 }
 
 /*
@@ -473,7 +434,7 @@ stmf_remove_lu_from_session(stmf_i_local_port_t *ilport,
  */
 void
 stmf_update_sessions_per_ve(stmf_view_entry_t *ve,
-		stmf_lu_t *lu, int action)
+    stmf_lu_t *lu, int action)
 {
 	stmf_i_lu_t *ilu_tmp;
 	stmf_lu_t *lu_to_add;
@@ -519,8 +480,8 @@ stmf_update_sessions_per_ve(stmf_view_entry_t *ve,
 				continue;
 			/* This host belongs to the host group */
 			if (action == 0) { /* to remove */
-				(void) stmf_remove_lu_from_session(ilport, iss,
-				    lu_to_add, ve->ve_lun);
+				stmf_remove_lu_from_session(iss, lu_to_add,
+				    ve->ve_lun);
 				if (ilu_tmp->ilu_ref_cnt == 0) {
 					rw_exit(&ilport->ilport_lock);
 					return;
@@ -540,8 +501,8 @@ stmf_update_sessions_per_ve(stmf_view_entry_t *ve,
  */
 void
 stmf_add_lus_to_session_per_vemap(stmf_i_local_port_t *ilport,
-		stmf_i_scsi_session_t *iss,
-		stmf_lun_map_t *vemap)
+    stmf_i_scsi_session_t *iss,
+    stmf_lun_map_t *vemap)
 {
 	stmf_lu_t *lu;
 	stmf_i_lu_t *ilu;
@@ -549,7 +510,6 @@ stmf_add_lus_to_session_per_vemap(stmf_i_local_port_t *ilport,
 	uint32_t	i;
 
 	ASSERT(mutex_owned(&stmf_state.stmf_lock));
-
 	for (i = 0; i < vemap->lm_nentries; i++) {
 		ve = (stmf_view_entry_t *)vemap->lm_plus[i];
 		if (!ve)
@@ -562,11 +522,13 @@ stmf_add_lus_to_session_per_vemap(stmf_i_local_port_t *ilport,
 		}
 	}
 }
-/* remove luns in view entry map from a session */
+/*
+ * remove luns in view entry map from a session
+ * iss_lockp held
+ */
 void
-stmf_remove_lus_from_session_per_vemap(stmf_i_local_port_t *ilport,
-		stmf_i_scsi_session_t *iss,
-		stmf_lun_map_t *vemap)
+stmf_remove_lus_from_session_per_vemap(stmf_i_scsi_session_t *iss,
+    stmf_lun_map_t *vemap)
 {
 	stmf_lu_t *lu;
 	stmf_i_lu_t *ilu;
@@ -582,15 +544,14 @@ stmf_remove_lus_from_session_per_vemap(stmf_i_local_port_t *ilport,
 		ilu = (stmf_i_lu_t *)ve->ve_luid->id_pt_to_object;
 		if (ilu && ilu->ilu_state == STMF_STATE_ONLINE) {
 			lu = ilu->ilu_lu;
-			(void) stmf_remove_lu_from_session(ilport, iss, lu,
-			    ve->ve_lun);
+			stmf_remove_lu_from_session(iss, lu, ve->ve_lun);
 		}
 	}
 }
 
 stmf_id_data_t *
 stmf_alloc_id(uint16_t id_size, uint16_t type, uint8_t *id_data,
-			uint32_t additional_size)
+    uint32_t additional_size)
 {
 	stmf_id_data_t *id;
 	int struct_size, total_size, real_id_size;
@@ -710,6 +671,7 @@ stmf_remove_id(stmf_id_list_t *idlist, stmf_id_data_t *id)
  * is successfully added. ve_map is just another representation of the
  * view enrtries in a LU. Duplicating or merging a ve map does not
  * affect any refcnts.
+ * stmf_state.stmf_lock held
  */
 stmf_lun_map_t *
 stmf_duplicate_ve_map(stmf_lun_map_t *src)
@@ -742,9 +704,13 @@ stmf_destroy_ve_map(stmf_lun_map_t *dst)
 	kmem_free(dst, sizeof (*dst));
 }
 
+/*
+ * stmf_state.stmf_lock held. Operations are stmf global in nature and
+ * not session level.
+ */
 int
 stmf_merge_ve_map(stmf_lun_map_t *src, stmf_lun_map_t *dst,
-		stmf_lun_map_t **pp_ret_map, stmf_merge_flags_t mf)
+    stmf_lun_map_t **pp_ret_map, stmf_merge_flags_t mf)
 {
 	int i;
 	int nentries;
@@ -816,7 +782,7 @@ stmf_merge_ve_map(stmf_lun_map_t *src, stmf_lun_map_t *dst,
  */
 stmf_status_t
 stmf_add_hg(uint8_t *hg_name, uint16_t hg_name_size,
-		int allow_special, uint32_t *err_detail)
+    int allow_special, uint32_t *err_detail)
 {
 	stmf_id_data_t *id;
 
@@ -841,7 +807,7 @@ stmf_add_hg(uint8_t *hg_name, uint16_t hg_name_size,
 /* add target group */
 stmf_status_t
 stmf_add_tg(uint8_t *tg_name, uint16_t tg_name_size,
-		int allow_special, uint32_t *err_detail)
+    int allow_special, uint32_t *err_detail)
 {
 	stmf_id_data_t *id;
 
@@ -920,8 +886,8 @@ stmf_add_ve_to_luid(stmf_id_data_t *luid, stmf_view_entry_t *ve)
 /* stmf_lock is already held, err_detail may be assigned if error happens */
 stmf_status_t
 stmf_add_view_entry(stmf_id_data_t *hg, stmf_id_data_t *tg,
-		uint8_t *lu_guid, uint32_t *ve_id, uint8_t *lun,
-		stmf_view_entry_t **conflicting, uint32_t *err_detail)
+    uint8_t *lu_guid, uint32_t *ve_id, uint8_t *lun,
+    stmf_view_entry_t **conflicting, uint32_t *err_detail)
 {
 	stmf_id_data_t *luid;
 	stmf_view_entry_t *ve;
@@ -1066,7 +1032,11 @@ add_ve_err_ret:
 	return (ret);
 }
 
-stmf_status_t
+/*
+ * protected by stmf_state.stmf_lock when working on global lun map.
+ * iss_lockp when working at the session level.
+ */
+static stmf_status_t
 stmf_add_ent_to_map(stmf_lun_map_t *lm, void *ent, uint8_t *lun)
 {
 	uint16_t n;
@@ -1098,7 +1068,11 @@ try_again_to_add:
 }
 
 
-stmf_status_t
+/*
+ * iss_lockp held when working on a session.
+ * stmf_state.stmf_lock is held when working on the global views.
+ */
+static stmf_status_t
 stmf_remove_ent_from_map(stmf_lun_map_t *lm, uint8_t *lun)
 {
 	uint16_t n, i;
@@ -1135,6 +1109,9 @@ stmf_remove_ent_from_map(stmf_lun_map_t *lm, uint8_t *lun)
 	return (STMF_SUCCESS);
 }
 
+/*
+ * stmf_state.stmf_lock held
+ */
 uint16_t
 stmf_get_next_free_lun(stmf_lun_map_t *sm, uint8_t *lun)
 {
@@ -1158,6 +1135,10 @@ stmf_get_next_free_lun(stmf_lun_map_t *sm, uint8_t *lun)
 	return (luNbr);
 }
 
+/*
+ * stmf_state.stmf_lock is held when working on global view map
+ * iss_lockp (RW_WRITER) is held when working on session map.
+ */
 void *
 stmf_get_ent_from_map(stmf_lun_map_t *sm, uint16_t lun_num)
 {
@@ -1173,9 +1154,9 @@ stmf_get_ent_from_map(stmf_lun_map_t *sm, uint16_t lun_num)
 
 int
 stmf_add_ve(uint8_t *hgname, uint16_t hgname_size,
-		uint8_t *tgname, uint16_t tgname_size,
-		uint8_t *lu_guid, uint32_t *ve_id,
-		uint8_t *luNbr, uint32_t *err_detail)
+    uint8_t *tgname, uint16_t tgname_size,
+    uint8_t *lu_guid, uint32_t *ve_id,
+    uint8_t *luNbr, uint32_t *err_detail)
 {
 	stmf_id_data_t *hg;
 	stmf_id_data_t *tg;
@@ -1317,7 +1298,7 @@ stmf_remove_ve_by_id(uint8_t *guid, uint32_t veid, uint32_t *err_detail)
 
 int
 stmf_add_group(uint8_t *grpname, uint16_t grpname_size,
-		stmf_id_type_t group_type, uint32_t *err_detail)
+    stmf_id_type_t group_type, uint32_t *err_detail)
 {
 	stmf_status_t status;
 
@@ -1348,7 +1329,7 @@ stmf_add_group(uint8_t *grpname, uint16_t grpname_size,
  */
 int
 stmf_remove_group(uint8_t *grpname, uint16_t grpname_size,
-		stmf_id_type_t group_type, uint32_t *err_detail)
+    stmf_id_type_t group_type, uint32_t *err_detail)
 {
 	stmf_id_data_t *id;
 	stmf_id_data_t *idmemb;
@@ -1411,8 +1392,8 @@ stmf_remove_group(uint8_t *grpname, uint16_t grpname_size,
 
 int
 stmf_add_group_member(uint8_t *grpname, uint16_t grpname_size,
-		uint8_t	*entry_ident, uint16_t entry_size,
-		stmf_id_type_t entry_type, uint32_t *err_detail)
+    uint8_t *entry_ident, uint16_t entry_size,
+    stmf_id_type_t entry_type, uint32_t *err_detail)
 {
 	stmf_id_data_t	*id_grp, *id_alltgt;
 	stmf_id_data_t	*id_member;
@@ -1492,6 +1473,7 @@ stmf_add_group_member(uint8_t *grpname, uint16_t grpname_size,
 			stmf_id_data_t *tgid;
 			iss->iss_hg = (void *)id_grp;
 			tgid = ilport->ilport_tg;
+			rw_enter(iss->iss_lockp, RW_WRITER);
 			if (tgid) {
 				vemap = stmf_get_ve_map_per_ids(tgid, id_grp);
 				if (vemap)
@@ -1501,6 +1483,7 @@ stmf_add_group_member(uint8_t *grpname, uint16_t grpname_size,
 			if (vemap_alltgt)
 				stmf_add_lus_to_session_per_vemap(ilport,
 				    iss, vemap_alltgt);
+			rw_exit(iss->iss_lockp);
 		}
 	}
 
@@ -1509,8 +1492,8 @@ stmf_add_group_member(uint8_t *grpname, uint16_t grpname_size,
 
 int
 stmf_remove_group_member(uint8_t *grpname, uint16_t grpname_size,
-		uint8_t *entry_ident, uint16_t entry_size,
-		stmf_id_type_t entry_type, uint32_t *err_detail)
+    uint8_t *entry_ident, uint16_t entry_size,
+    stmf_id_type_t entry_type, uint32_t *err_detail)
 {
 	stmf_id_data_t	*id_grp, *id_alltgt;
 	stmf_id_data_t	*id_member;
@@ -1577,17 +1560,19 @@ stmf_remove_group_member(uint8_t *grpname, uint16_t grpname_size,
 		    entry_ident, entry_size);
 		if (iss) {
 			stmf_id_data_t *tgid;
+			rw_enter(iss->iss_lockp, RW_WRITER);
 			iss->iss_hg = NULL;
 			tgid = ilport->ilport_tg;
 			if (tgid) {
 				vemap = stmf_get_ve_map_per_ids(tgid, id_grp);
 				if (vemap)
 					stmf_remove_lus_from_session_per_vemap(
-					    ilport, iss, vemap);
+					    iss, vemap);
 			}
 			if (vemap_alltgt)
-				stmf_remove_lus_from_session_per_vemap(ilport,
-				    iss, vemap_alltgt);
+				stmf_remove_lus_from_session_per_vemap(iss,
+				    vemap_alltgt);
+			rw_exit(iss->iss_lockp);
 		}
 	}
 
@@ -1616,7 +1601,7 @@ stmf_targetident_to_ilport(uint8_t *target_ident, uint16_t ident_size)
 
 stmf_i_scsi_session_t *
 stmf_lookup_session_for_hostident(stmf_i_local_port_t *ilport,
-		uint8_t *host_ident, uint16_t ident_size)
+    uint8_t *host_ident, uint16_t ident_size)
 {
 	stmf_i_scsi_session_t *iss;
 	uint8_t *id;
@@ -1734,8 +1719,8 @@ stmf_validate_lun_view_entry(stmf_id_data_t *hg, stmf_id_data_t *tg,
 
 int
 stmf_validate_lun_ve(uint8_t *hgname, uint16_t hgname_size,
-		uint8_t *tgname, uint16_t tgname_size,
-		uint8_t *luNbr, uint32_t *err_detail)
+    uint8_t *tgname, uint16_t tgname_size,
+    uint8_t *luNbr, uint32_t *err_detail)
 {
 	stmf_id_data_t		*hg;
 	stmf_id_data_t		*tg;

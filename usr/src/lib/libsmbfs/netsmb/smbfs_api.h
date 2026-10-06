@@ -20,9 +20,10 @@
  */
 
 /*
- * Copyright 2011 Nexenta Systems, Inc.  All rights reserved.
  * Copyright 2009 Sun Microsystems, Inc.  All rights reserved.
  * Use is subject to license terms.
+ *
+ * Copyright 2018 Nexenta Systems, Inc.  All rights reserved.
  */
 
 #ifndef _NETSMB_SMBFS_API_H
@@ -48,7 +49,7 @@ extern "C" {
  * EAUTH is used for CIFS authentication errors.
  */
 #ifndef EBADRPC
-#define	EBADRPC 	113
+#define	EBADRPC		113
 #endif
 #ifndef EAUTH
 #define	EAUTH		114
@@ -90,7 +91,6 @@ typedef enum {
 #define	SMB_AT_NTLM1	4	/* NTLM (v1) */
 #define	SMB_AT_NTLM2	8	/* NTLMv2 */
 #define	SMB_AT_KRB5	0x10	/* Kerberos5 (AD) */
-#define	SMB_AT_DEFAULT	(SMB_AT_KRB5 | SMB_AT_NTLM2)
 
 struct smb_ctx;	/* anonymous here; real one in smb_lib.h */
 typedef struct smb_ctx smb_ctx_t;
@@ -123,6 +123,8 @@ int  smb_ctx_setauthflags(struct smb_ctx *, int);
 int  smb_ctx_setcharset(struct smb_ctx *, const char *);
 int  smb_ctx_setfullserver(struct smb_ctx *, const char *);
 int  smb_ctx_setsigning(struct smb_ctx *, int ena, int req);
+int  smb_ctx_setminver(struct smb_ctx *, int ver);
+int  smb_ctx_setmaxver(struct smb_ctx *, int ver);
 
 int  smb_ctx_setnbflags(struct smb_ctx *, int ena, int bcast);
 int  smb_ctx_setscope(struct smb_ctx *, const char *);
@@ -141,8 +143,8 @@ typedef void (*smb_ctx_close_hook_t)(struct smb_ctx *);
 void smb_ctx_set_close_hook(smb_ctx_close_hook_t);
 int  smb_fh_close(int);
 int  smb_fh_open(struct smb_ctx *ctx, const char *, int);
-int  smb_fh_read(int, off_t, size_t, char *);
-int  smb_fh_write(int, off_t, size_t, const char *);
+int  smb_fh_read(int, off64_t, size_t, char *);
+int  smb_fh_write(int, off64_t, size_t, const char *);
 int  smb_fh_xactnp(int, int, const char *,
 	int *, char *, int *);
 int  smb_fh_getssnkey(int, uchar_t *, size_t);

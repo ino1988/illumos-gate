@@ -24,7 +24,7 @@
  */
 
 /*	Copyright (c) 1983, 1984, 1985, 1986, 1987, 1988, 1989 AT&T	*/
-/*	  All Rights Reserved  	*/
+/*	  All Rights Reserved	*/
 
 /*
  * University Copyright- Copyright (c) 1982, 1986, 1988
@@ -58,6 +58,8 @@ extern pgcnt_t	desscan;	/* desired pages scanned per second */
 extern pgcnt_t	slowscan;
 extern pgcnt_t	fastscan;
 extern pgcnt_t	pushes;		/* number of pages pushed to swap device */
+extern uint64_t	low_mem_scan;	/* num times page scan due to low memory */
+extern volatile uint64_t n_throttle; /* num times page create throttled */
 
 /* writable copies of tunables */
 extern pgcnt_t	maxpgio;	/* max paging i/o per sec before start swaps */
@@ -70,13 +72,14 @@ extern pgcnt_t	pageout_reserve; /* point at which we deny non-PG_WAIT calls */
 extern pgcnt_t	pages_before_pager; /* XXX */
 
 /*
- * TRUE if the pageout daemon, fsflush daemon or the scheduler.  These
- * processes can't sleep while trying to free up memory since a deadlock
- * will occur if they do sleep.
+ * TRUE if the pageout daemon, fsflush daemon, or the scheduler.  These threads
+ * can't sleep while trying to free up memory since a deadlock will occur if
+ * they do sleep.
  */
 #define	NOMEMWAIT() (ttoproc(curthread) == proc_pageout || \
 			ttoproc(curthread) == proc_fsflush || \
-			ttoproc(curthread) == proc_sched)
+			ttoproc(curthread) == proc_sched || \
+			(curthread->t_flag & T_PUSHPAGE) != 0)
 
 /* insure non-zero */
 #define	nz(x)	((x) != 0 ? (x) : 1)

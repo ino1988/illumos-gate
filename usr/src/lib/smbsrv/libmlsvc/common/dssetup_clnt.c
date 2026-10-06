@@ -19,8 +19,9 @@
  * CDDL HEADER END
  */
 /*
- * Copyright 2011 Nexenta Systems, Inc.  All rights reserved.
  * Copyright (c) 2008, 2010, Oracle and/or its affiliates. All rights reserved.
+ * Copyright 2014 Nexenta Systems, Inc.  All rights reserved.
+ * Copyright 2023 RackTop Systems, Inc.
  */
 
 /*
@@ -29,7 +30,7 @@
 
 #include <string.h>
 #include <strings.h>
-#include <smbsrv/wintypes.h>
+#include <smb/wintypes.h>
 #include <smbsrv/libsmb.h>
 #include <smbsrv/ndl/dssetup.ndl>
 #include <smbsrv/libmlsvc.h>
@@ -38,6 +39,7 @@ int
 dssetup_get_domain_info(ds_primary_domain_info_t *ds_info)
 {
 	dssetup_DsRoleGetPrimaryDomainInfo_t arg;
+	char user[SMB_USERNAME_MAXLEN];
 	struct dssetup_DsRolePrimaryDomInfo1 *info;
 	smb_domainex_t di;
 	mlsvc_handle_t handle;
@@ -47,8 +49,9 @@ dssetup_get_domain_info(ds_primary_domain_info_t *ds_info)
 	if (!smb_domain_getinfo(&di))
 		return (-1);
 
-	if (ndr_rpc_bind(&handle, di.d_dc, di.d_primary.di_nbname,
-	    MLSVC_ANON_USER, "DSSETUP") != 0)
+	smb_ipc_get_user(user, sizeof (user));
+	if (ndr_rpc_bind(&handle, di.d_dci.dc_name, di.d_primary.di_nbname,
+	    user, "DSSETUP") != 0)
 		return (-1);
 
 	opnum = DSSETUP_OPNUM_DsRoleGetPrimaryDomainInfo;

@@ -20,6 +20,12 @@
  */
 /*
  * Copyright (c) 2005, 2010, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2011, Joyent, Inc. All rights reserved.
+ */
+
+/*
+ * Copyright 2015, Joyent, Inc.
+ * Copyright 2022 OmniOS Community Edition (OmniOSce) Association
  */
 
 #ifndef _LIBDLADM_H
@@ -29,6 +35,7 @@
 #include <sys/dld.h>
 #include <sys/dlpi.h>
 #include <libnvpair.h>
+#include <kstat.h>
 
 /*
  * This file includes structures, macros and common routines shared by all
@@ -71,6 +78,10 @@ extern "C" {
  *  - DLADM_OPT_BOOT:
  *    Bypass check functions during boot (used by pool property since pools
  *    can come up after link properties are set)
+ *
+ *  - DLADM_OPT_TRANSIENT:
+ *    Indicates that the link assigned to a zone is transient and will be
+ *    removed when the zone shuts down.
  */
 #define	DLADM_OPT_ACTIVE	0x00000001
 #define	DLADM_OPT_PERSIST	0x00000002
@@ -81,6 +92,7 @@ extern "C" {
 #define	DLADM_OPT_VLAN		0x00000040
 #define	DLADM_OPT_NOREFRESH	0x00000080
 #define	DLADM_OPT_BOOT		0x00000100
+#define	DLADM_OPT_TRANSIENT	0x00000200
 
 #define	DLADM_WALK_TERMINATE	0
 #define	DLADM_WALK_CONTINUE	-1
@@ -173,7 +185,10 @@ typedef enum {
 	DLADM_STATUS_NO_IB_HW_RESOURCE,
 	DLADM_STATUS_INVALID_PKEY_TBL_SIZE,
 	DLADM_STATUS_PORT_NOPROTO,
-	DLADM_STATUS_INVALID_MTU
+	DLADM_STATUS_INVALID_MTU,
+	DLADM_STATUS_PERSIST_ON_TEMP,
+	DLADM_STATUS_BAD_ENCAP,
+	DLADM_STATUS_ADDRNOTAVAIL
 } dladm_status_t;
 
 typedef enum {
@@ -208,6 +223,12 @@ extern void		dladm_close(dladm_handle_t);
  * dlmgmtd are given access to the door file descriptor.
  */
 extern int	dladm_dld_fd(dladm_handle_t);
+/*
+ * Retrieve kstat_ctl_t* from handle.The libkstat handle is opened
+ * when the first caller needs it.This allows the library to share
+ * the kstat handle.
+ */
+extern kstat_ctl_t	*dladm_dld_kcp(dladm_handle_t);
 
 typedef struct dladm_arg_info {
 	const char	*ai_name;
@@ -220,6 +241,12 @@ typedef struct dladm_arg_list {
 	uint_t			al_count;
 	char			*al_buf;
 } dladm_arg_list_t;
+
+typedef struct dladm_errlist {
+	uint_t		el_count;
+	uint_t		el_alloc;
+	char		**el_errs;
+} dladm_errlist_t;
 
 typedef enum {
 	DLADM_LOGTYPE_LINK = 1,
@@ -282,11 +309,15 @@ extern dladm_status_t	dladm_zone_halt(dladm_handle_t, zoneid_t);
 
 extern dladm_status_t	dladm_strs2range(char **, uint_t, mac_propval_type_t,
 			    mac_propval_range_t **);
-extern dladm_status_t	dladm_range2list(mac_propval_range_t *, void*,
+extern dladm_status_t	dladm_range2list(const mac_propval_range_t *, void *,
 			    uint_t *);
-extern int		dladm_range2strs(mac_propval_range_t *, char **);
+extern int		dladm_range2strs(const mac_propval_range_t *, char **);
 extern dladm_status_t	dladm_list2range(void *, uint_t, mac_propval_type_t,
 			    mac_propval_range_t **);
+
+extern uint_t		dladm_errlist_count(dladm_errlist_t *);
+extern void		dladm_errlist_init(dladm_errlist_t *);
+extern void		dladm_errlist_reset(dladm_errlist_t *);
 
 #ifdef	__cplusplus
 }

@@ -21,6 +21,7 @@
 #
 # uts/intel/config/Makefile
 # Copyright 2010 Nexenta Systems, Inc.  All rights reserved.
+# Copyright 2015 Igor Kozhukhov <ikozhukhov@gmail.com>
 # Copyright 2009 Sun Microsystems, Inc.  All rights reserved.
 # Use is subject to license terms.
 #
@@ -50,13 +51,11 @@ SECCONFIG	= device_policy priv_names
 BOOTIMAGE	= splashimage.xpm
 ALTBOOTIMAGE	= solaris.xpm	# Temporary, for compatibility
 BOOTENVRC	= bootenv.rc
-DEVMASTER	= master
 FILEMODE	= 644
 ROOTETC		= $(ROOT)/etc
 ROOTETCSEC	= $(ROOTETC)/security
 ROOTBOOT	= $(ROOT)/boot
 BOOTSOLARIS	= $(ROOTBOOT)/solaris
-BOOTDEVICEDB	= $(BOOTSOLARIS)/devicedb
 
 SRCFILES	= $(CONFIGFILES:%=$(SRCDIR)/%) $(SECCONFIG:%=$(SRCDIR)/%)
 SRCFILES	+= $(BOOTIMAGE:%=$(SRCDIR)/%)
@@ -65,7 +64,6 @@ SRCFILES	+= $(DEVMASTER:%=$(SRCDIR)/%)
 ROOTCONFIGFILES	= $(CONFIGFILES:%=$(ROOTETC)/%) $(SECCONFIG:%=$(ROOTETCSEC)/%)
 ROOTCONFIGFILES	+= $(BOOTIMAGE:%=$(ROOTBOOT)/%)
 ROOTCONFIGFILES	+= $(BOOTENVRC:%=$(BOOTSOLARIS)/%)
-ROOTCONFIGFILES	+= $(DEVMASTER:%=$(BOOTDEVICEDB)/%)
 ROOTALTBOOTIMAGE = $(ALTBOOTIMAGE:%=$(ROOTBOOT)/%)
 
 #
@@ -100,29 +98,21 @@ $(ROOTBOOT)/%: $(ROOTBOOT) $(SRCDIR)/%
 $(ROOTBOOT)/solaris.xpm: $(ROOTBOOT)/splashimage.xpm
 	$(RM) $@; $(LN) $(ROOTBOOT)/splashimage.xpm $@
 
-
 $(BOOTSOLARIS):
 	$(INS) -s -d -m $(DIRMODE) $@
 
 $(BOOTSOLARIS)/%: $(BOOTSOLARIS) $(SRCDIR)/%
 	$(INS.file)
 
-$(BOOTDEVICEDB):
-	$(INS) -s -d -m $(DIRMODE) $@
-
-$(BOOTDEVICEDB)/%: $(BOOTDEVICEDB) $(SRCDIR)/%
-	$(INS.file)
-
 $(SRCDIR)/priv_names: $(PRIVS_DEF) $(PRIVS_AWK)
-	$(NAWK) -f $(PRIVS_AWK) < $(PRIVS_DEF) -v pnamesfile=$@
+	$(AWK) -f $(PRIVS_AWK) < $(PRIVS_DEF) -v pnamesfile=$@
 
-clean lint:
+clean:
 clobber: clobber.targ
 
-# 
-#	No lints, so keep the clobber and clean targets reasonable. 
-# 
-CLEANLINTFILES	= Nothing_to_remove
+#
+#	Keep the clobber and clean targets reasonable.
+#
 CLEANFILES	= Nothing_to_remove
 CLOBBERFILES	= $(SRCDIR)/priv_names
 

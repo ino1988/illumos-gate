@@ -20,11 +20,12 @@
  */
 
 /*	Copyright (c) 1984, 1986, 1987, 1988, 1989 AT&T	*/
-/*	  All Rights Reserved  	*/
+/*	  All Rights Reserved	*/
 
 /*
  * Copyright 2010 Sun Microsystems, Inc.  All rights reserved.
  * Use is subject to license terms.
+ * Copyright (c) 2016 by Delphix. All rights reserved.
  */
 
 #include <sys/param.h>
@@ -73,7 +74,7 @@ static uint_t mkpsr(uint64_t tstate, uint32_t fprs);
 
 #ifdef _SYSCALL32_IMPL
 static void fpuregset_32ton(const fpregset32_t *src, fpregset_t *dest,
-    const struct fq32 *sfq, struct fq *dfq);
+    const struct fq32 *sfq, struct _fq *dfq);
 #endif /* _SYSCALL32_IMPL */
 
 /*
@@ -104,7 +105,7 @@ setfpregs(klwp_t *lwp, fpregset_t *fp)
 		if (!(pfp->fpu_en) && (!(pfp->fpu_fprs & FPRS_FEF)) &&
 		    fpu_exists) {
 			/*
-			 * He's not currently using the FPU but wants to in his
+			 * It's not currently using the FPU but wants to in its
 			 * new context - arrange for this on return to userland.
 			 */
 			pfp->fpu_fprs = (uint32_t)fprs;
@@ -120,9 +121,9 @@ setfpregs(klwp_t *lwp, fpregset_t *fp)
 		/*
 		 * Load up a user's floating point context.
 		 */
-		if (fp->fpu_qcnt > MAXFPQ) 	/* plug security holes */
+		if (fp->fpu_qcnt > MAXFPQ)	/* plug security holes */
 			fp->fpu_qcnt = MAXFPQ;
-		fp->fpu_q_entrysize = sizeof (struct fq);
+		fp->fpu_q_entrysize = sizeof (struct _fq);
 
 		/*
 		 * For v9 kernel, copy all of the fp regs.
@@ -818,7 +819,7 @@ setregs(uarg_t *args)
 	rp->r_y = 0;
 	curthread->t_post_sys = 1;
 	lwp->lwp_eosys = JUSTRETURN;
-	lwp->lwp_pcb.pcb_trap0addr = NULL;	/* no trap 0 handler */
+	lwp->lwp_pcb.pcb_trap0addr = 0;	/* no trap 0 handler */
 	/*
 	 * Clear the fixalignment flag
 	 */
@@ -1098,7 +1099,7 @@ sendsig(int sig, k_siginfo_t *sip, void (*hdlr)())
 		sulword_noerr(&fp->uc.uc_mcontext.gwins, (ulong_t)NULL);
 
 	if (fpq_size != 0) {
-		struct fq *fqp = (struct fq *)sp;
+		struct _fq *fqp = (struct _fq *)sp;
 		sulword_noerr(&fp->uc.uc_mcontext.fpregs.fpu_q, (ulong_t)fqp);
 		copyout_noerr(mpcb->mpcb_fpu_q, fqp, fpq_size);
 
@@ -1124,7 +1125,7 @@ sendsig(int sig, k_siginfo_t *sip, void (*hdlr)())
 
 
 	/*
-	 * Since we flushed the user's windows and we are changing his
+	 * Since we flushed the user's windows and we are changing their
 	 * stack pointer, the window that the user will return to will
 	 * be restored from the save area in the frame we are setting up.
 	 * We copy in save area for old stack pointer so that debuggers
@@ -1424,7 +1425,7 @@ sendsig32(int sig, k_siginfo_t *sip, void (*hdlr)())
 		gwp = NULL;
 		sp += gwin_size;
 	} else {
-		suword32_noerr(&fp->uc.uc_mcontext.gwins, (uint32_t)NULL);
+		suword32_noerr(&fp->uc.uc_mcontext.gwins, 0);
 	}
 
 	if (fpq_size != 0) {
@@ -1454,14 +1455,13 @@ sendsig32(int sig, k_siginfo_t *sip, void (*hdlr)())
 		mpcb->mpcb_flags |= FP_TRAPPED;
 
 	} else {
-		suword32_noerr(&fp->uc.uc_mcontext.fpregs.fpu_q,
-		    (uint32_t)NULL);
+		suword32_noerr(&fp->uc.uc_mcontext.fpregs.fpu_q, 0);
 		suword8_noerr(&fp->uc.uc_mcontext.fpregs.fpu_qcnt, 0);
 	}
 
 
 	/*
-	 * Since we flushed the user's windows and we are changing his
+	 * Since we flushed the user's windows and we are changing their
 	 * stack pointer, the window that the user will return to will
 	 * be restored from the save area in the frame we are setting up.
 	 * We copy in save area for old stack pointer so that debuggers
@@ -1723,14 +1723,14 @@ fpuregset_nto32(const fpregset_t *src, fpregset32_t *dest, struct fq32 *dfq)
 	bzero(dest, sizeof (*dest));
 	for (i = 0; i < 32; i++)
 		dest->fpu_fr.fpu_regs[i] = src->fpu_fr.fpu_regs[i];
-	dest->fpu_q = NULL;
+	dest->fpu_q = 0;
 	dest->fpu_fsr = (uint32_t)src->fpu_fsr;
 	dest->fpu_qcnt = src->fpu_qcnt;
 	dest->fpu_q_entrysize = sizeof (struct fpq32);
 	dest->fpu_en = src->fpu_en;
 
 	if ((src->fpu_qcnt) && (dfq != NULL)) {
-		struct fq *sfq = src->fpu_q;
+		struct _fq *sfq = src->fpu_q;
 		for (i = 0; i < src->fpu_qcnt; i++, dfq++, sfq++) {
 			dfq->FQu.fpq.fpq_addr =
 			    (caddr32_t)(uintptr_t)sfq->FQu.fpq.fpq_addr;
@@ -1748,7 +1748,7 @@ fpuregset_nto32(const fpregset_t *src, fpregset32_t *dest, struct fq32 *dfq)
  */
 static void
 fpuregset_32ton(const fpregset32_t *src, fpregset_t *dest,
-    const struct fq32 *sfq, struct fq *dfq)
+    const struct fq32 *sfq, struct _fq *dfq)
 {
 	int i;
 
@@ -1758,7 +1758,7 @@ fpuregset_32ton(const fpregset32_t *src, fpregset_t *dest,
 	dest->fpu_q = dfq;
 	dest->fpu_fsr = (uint64_t)src->fpu_fsr;
 	if ((dest->fpu_qcnt = src->fpu_qcnt) > 0)
-		dest->fpu_q_entrysize = sizeof (struct fpq);
+		dest->fpu_q_entrysize = sizeof (struct _fpq);
 	else
 		dest->fpu_q_entrysize = 0;
 	dest->fpu_en = src->fpu_en;
@@ -1774,7 +1774,7 @@ fpuregset_32ton(const fpregset32_t *src, fpregset_t *dest,
 
 void
 ucontext_32ton(const ucontext32_t *src, ucontext_t *dest,
-    const struct fq32 *sfq, struct fq *dfq)
+    const struct fq32 *sfq, struct _fq *dfq)
 {
 	int i;
 

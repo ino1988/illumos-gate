@@ -1,6 +1,7 @@
 /*
  * Copyright (c) 2008, 2010, Oracle and/or its affiliates. All rights reserved.
- * Copyright 2014 Nexenta Systems, Inc.  All rights reserved.
+ * Copyright 2015 Nexenta Systems, Inc.  All rights reserved.
+ * Copyright (c) 2018, Joyent, Inc.
  */
 
 /*
@@ -333,7 +334,7 @@ ndmp_set_config_process(char *propname)
 	if ((propvalue = strchr(propname, '=')) == NULL) {
 		(void) fprintf(stderr, gettext("Missing value in "
 		    "property=value argument for %s\n"), propname);
-			return;
+		return;
 	}
 	*propvalue = '\0';
 	propvalue++;
@@ -341,7 +342,7 @@ ndmp_set_config_process(char *propname)
 	if (*propname == '\0') {
 		(void) fprintf(stderr, gettext("Missing property in "
 		    "property=value argument for %s\n"), propname);
-			return;
+		return;
 	}
 	for (j = 0; j < NDMPADM_NPROP; j++) {
 		if (strcmp(propname, prop_table[j]) == 0)
@@ -355,7 +356,7 @@ ndmp_set_config_process(char *propname)
 	ret = ndmp_set_prop(propname, propvalue);
 	if (ret != -1) {
 		if (!ndmp_door_status()) {
-			if (ndmp_service_refresh() == -1)
+			if (ndmp_service_refresh() != 0)
 				(void) fprintf(stdout, gettext("Could not "
 				    "refesh property of service ndmpd\n"));
 		}
@@ -513,7 +514,7 @@ ndmp_kill_sessions(int argc, char **argv, ndmp_command_t *cur_cmd)
 		} else {
 			(void) fprintf(stderr,
 			    gettext("Invalid argument %s\n"), argv[i]);
-				continue;
+			continue;
 		}
 		if (ret == -1)
 			(void) fprintf(stdout,
@@ -616,14 +617,14 @@ ndmp_enable_auth(int argc, char **argv, ndmp_command_t *cur_cmd)
 		if (strncmp(auth_type, ndmp_auth_table[i].auth_type,
 		    strlen(ndmp_auth_table[i].auth_type)) == 0) {
 			auth_type_flag = 1;
-			if ((ndmp_set_prop((char *)ndmp_auth_table[i].username,
+			if ((ndmp_set_prop(ndmp_auth_table[i].username,
 			    username)) == -1) {
 				(void) fprintf(stdout,
 				    gettext("Could not set username - %s\n"),
 				    ndmp_strerror(ndmp_errno));
 				continue;
 			}
-			if ((ndmp_set_prop((char *)ndmp_auth_table[i].password,
+			if ((ndmp_set_prop(ndmp_auth_table[i].password,
 			    enc_password)) == -1) {
 				(void) fprintf(stdout,
 				    gettext("Could not set password - %s\n"),
@@ -631,7 +632,7 @@ ndmp_enable_auth(int argc, char **argv, ndmp_command_t *cur_cmd)
 				continue;
 			}
 			if (!ndmp_door_status() &&
-			    (ndmp_service_refresh()) == -1) {
+			    (ndmp_service_refresh()) != 0) {
 				(void) fprintf(stdout,
 				    gettext("Could not refesh ndmpd service "
 				    "properties\n"));
@@ -677,14 +678,14 @@ ndmp_disable_auth(int argc, char **argv, ndmp_command_t *cur_cmd)
 		if (strncmp(auth_type, ndmp_auth_table[i].auth_type,
 		    strlen(ndmp_auth_table[i].auth_type)) == 0) {
 			auth_type_flag = 1;
-			if ((ndmp_set_prop((char *)ndmp_auth_table[i].username,
+			if ((ndmp_set_prop(ndmp_auth_table[i].username,
 			    "")) == -1) {
 				(void) fprintf(stdout,
 				    gettext("Could not clear username - %s\n"),
 				    ndmp_strerror(ndmp_errno));
 				continue;
 			}
-			if ((ndmp_set_prop((char *)ndmp_auth_table[i].password,
+			if ((ndmp_set_prop(ndmp_auth_table[i].password,
 			    "")) == -1) {
 				(void) fprintf(stdout,
 				    gettext("Could not clear password - %s\n"),
@@ -692,7 +693,7 @@ ndmp_disable_auth(int argc, char **argv, ndmp_command_t *cur_cmd)
 				continue;
 			}
 			if (!ndmp_door_status() &&
-			    (ndmp_service_refresh()) == -1) {
+			    (ndmp_service_refresh()) != 0) {
 				(void) fprintf(stdout, gettext("Could not "
 				    "refesh ndmpd service properties\n"));
 			}

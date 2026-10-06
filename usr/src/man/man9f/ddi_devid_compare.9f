@@ -3,14 +3,13 @@
 .\" The contents of this file are subject to the terms of the Common Development and Distribution License (the "License").  You may not use this file except in compliance with the License. You can obtain a copy of the license at usr/src/OPENSOLARIS.LICENSE or http://www.opensolaris.org/os/licensing.
 .\"  See the License for the specific language governing permissions and limitations under the License. When distributing Covered Code, include this CDDL HEADER in each file and include the License file at usr/src/OPENSOLARIS.LICENSE.  If applicable, add the following below this CDDL HEADER, with
 .\" the fields enclosed by brackets "[]" replaced with your own identifying information: Portions Copyright [yyyy] [name of copyright owner]
-.TH DDI_DEVID_COMPARE 9F "May 21, 2009"
+.TH DDI_DEVID_COMPARE 9F "August 22, 2023"
 .SH NAME
 ddi_devid_compare, ddi_devid_free, ddi_devid_init, ddi_devid_register,
 ddi_devid_sizeof, ddi_devid_str_decode, ddi_devid_str_encode,
 ddi_devid_str_free, ddi_devid_get, ddi_devid_unregister, ddi_devid_valid \-
 kernel interfaces for device ids
 .SH SYNOPSIS
-.LP
 .nf
 \fBint\fR \fBddi_devid_compare\fR(\fBddi_devid_t\fR \fIdevid1\fR, \fBddi_devid_t\fR \fIdevid2\fR);
 .fi
@@ -68,7 +67,6 @@ kernel interfaces for device ids
 .fi
 
 .SH PARAMETERS
-.sp
 .ne 2
 .na
 \fB\fIdevid\fR\fR
@@ -138,7 +136,7 @@ World Wide Name associated with SCSI-3 devices.
 \fB\fBDEVID_SCSI_SERIAL\fR\fR
 .ad
 .RS 21n
-Vendor \fBID\fRand serial number associated with a SCSI device. Note: This may
+Vendor \fBID\fR and serial number associated with a SCSI device. Note: This may
 only be used if known to be unique; otherwise a fabricated device id must be
 used.
 .RE
@@ -201,12 +199,8 @@ The return address of a minor name. Free string with
 .RE
 
 .SH INTERFACE LEVEL
-.sp
-.LP
-Solaris DDI specific (Solaris DDI).
+illumos DDI specific (illumos DDI).
 .SH DESCRIPTION
-.sp
-.LP
 The following routines are used to provide unique identifiers, device
 \fBID\fRs, for devices. Specifically, kernel modules use these interfaces to
 identify and locate devices, independent of the device's physical connection or
@@ -275,7 +269,7 @@ pointer to it. The driver must free the memory allocated by this function using
 the \fBddi_devid_free()\fR function.
 .sp
 .LP
-The \fBddi_devid_str_encode()\fR function encodes a \fIdevid\fR and minor_name
+The \fBddi_devid_str_encode()\fR function encodes a \fIdevid\fR and \fIminor_name\fR
 into a null-terminated ASCII string, returning a pointer to that string. If
 both a \fIdevid\fR and a \fIminor_name\fR are non-null, then a slash (\fB/\fR)
 is used to separate the \fIdevid\fR from the \fIminor_name\fR in the encoded
@@ -288,7 +282,7 @@ freed by calling \fBdevid_str_free()\fR.
 .LP
 The \fBddi_devid_str_decode()\fR function takes a string previously produced by
 the \fBdevid_str_encode\fR(3DEVID) or \fBddi_devid_str_encode()\fR function and
-decodes the contained device ID and minor_name, allocating and returning
+decodes the contained device ID and minor name, allocating and returning
 pointers to the extracted parts through the \fIretdevid\fR and
 \fIretminor_name\fR arguments. If the special \fIdevidstr\fR \fBid0\fR was
 specified then the returned device ID and minor name will both be null. A
@@ -301,8 +295,6 @@ The \fBddi_devid_str_free()\fR function is used to free all strings returned by
 the \fBddi_devid\fR functions (the \fBddi_devid_str_encode()\fR function return
 value and the returned \fIretminor_name\fR argument).
 .SH RETURN VALUES
-.sp
-.LP
 \fBddi_devid_init()\fR returns the following values:
 .sp
 .ne 2
@@ -526,14 +518,14 @@ Failure; the \fIdevidstr\fR string was not valid.
 .RE
 
 .SH CONTEXT
-.sp
-.LP
 These functions can be called from a user or kernel context.
 .SH SEE ALSO
-.sp
-.LP
-\fBdevid_get\fR(3DEVID), , \fBlibdevid\fR(3LIB), \fBattributes\fR(5),
-\fBattach\fR(9E), \fBdetach\fR(9E), \fBkmem_free\fR(9F)
+.BR devid_get (3DEVID),
+.BR libdevid (3LIB),
+.BR attributes (7),
+.BR attach (9E),
+.BR detach (9E),
+.BR kmem_free (9F)
 .sp
 .LP
 \fIWriting Device Drivers\fR

@@ -24,8 +24,14 @@
 # Copyright 2007 Sun Microsystems, Inc.  All rights reserved.
 # Use is subject to license terms.
 #
+
+#
+# Copyright (c) 2016 by Delphix. All rights reserved.
+#
+
 . $STF_SUITE/include/libtest.shlib
 . $STF_SUITE/tests/functional/cli_root/zfs_create/zfs_create.cfg
+. $STF_SUITE/tests/functional/cli_root/zfs_create/zfs_create_common.kshlib
 
 #
 # DESCRIPTION:
@@ -34,6 +40,8 @@
 # STRATEGY:
 # 1. Create a volume in the storage pool.
 # 2. Verify the volume is created correctly.
+# 3. Verify that the volume created has its volsize rounded to the nearest
+#    multiple of the blocksize (in this case, the default blocksize)
 #
 
 verify_runnable "global"
@@ -41,9 +49,9 @@ verify_runnable "global"
 function cleanup
 {
 	typeset -i j=0
-	while [[ $j -lt ${#size[*]} ]]; do
+	while (( j < ${#size[*]} )); do
 		if datasetexists $TESTPOOL/${TESTVOL}${size[j]}; then
-			log_must $ZFS destroy $TESTPOOL/${TESTVOL}${size[j]}
+			log_must zfs destroy $TESTPOOL/${TESTVOL}${size[j]}
 		fi
 		((j = j + 1))
 	done
@@ -55,8 +63,8 @@ log_onexit cleanup
 log_assert "'zfs create -s -V <size> <volume>' succeeds"
 
 typeset -i j=0
-while (( $j < ${#size[*]} )); do
-	typeset cmdline="$ZFS create -s -V ${size[j]}  \
+while (( j < ${#size[*]} )); do
+	typeset cmdline="zfs create -s -V ${size[j]}  \
 			 $TESTPOOL/${TESTVOL}${size[j]}"
 
 	str=$(eval $cmdline 2>&1)
@@ -73,6 +81,15 @@ while (( $j < ${#size[*]} )); do
 	fi
 
 	((j = j + 1))
-
 done
+
+typeset -i j=0
+while (( j < ${#explicit_size_check[*]} )); do
+  propertycheck ${TESTPOOL}/${TESTVOL}${explicit_size_check[j]} \
+    volsize=${expected_rounded_size[j]} || \
+    log_fail "volsize ${size[j]} was not rounded up"
+
+	((j = j + 1))
+done
+
 log_pass "'zfs create -s -V <size> <volume>' works as expected."

@@ -26,6 +26,7 @@
 
 /*
  * Copyright (c) 2013, Joyent, Inc. All rights reserved.
+ * Copyright 2025 Oxide Computer Company
  */
 
 #include <sys/param.h>
@@ -48,7 +49,6 @@
 #include <sys/door.h>
 #include <vm/seg_kp.h>
 #include <sys/debug.h>
-#include <sys/tnf.h>
 #include <sys/schedctl.h>
 #include <sys/poll.h>
 #include <sys/copyops.h>
@@ -146,6 +146,7 @@ lwp_create(void (*proc)(), caddr_t arg, size_t len, proc_t *p,
 	if (rctlfail) {
 		mutex_exit(&p->p_zone->zone_nlwps_lock);
 		mutex_exit(&p->p_lock);
+		atomic_inc_32(&p->p_zone->zone_ffcap);
 		return (NULL);
 	}
 	p->p_task->tk_nlwps++;
@@ -204,6 +205,7 @@ lwp_create(void (*proc)(), caddr_t arg, size_t len, proc_t *p,
 			p->p_zone->zone_nlwps--;
 			mutex_exit(&p->p_zone->zone_nlwps_lock);
 			mutex_exit(&p->p_lock);
+			atomic_inc_32(&p->p_zone->zone_ffnomem);
 			return (NULL);
 		}
 	} else {
@@ -217,6 +219,7 @@ lwp_create(void (*proc)(), caddr_t arg, size_t len, proc_t *p,
 			p->p_zone->zone_nlwps--;
 			mutex_exit(&p->p_zone->zone_nlwps_lock);
 			mutex_exit(&p->p_lock);
+			atomic_inc_32(&p->p_zone->zone_ffnomem);
 			return (NULL);
 		}
 	}
@@ -582,10 +585,12 @@ grow:
 			err = CL_FORK(curthread, t, bufp);
 			t->t_cid = cid;
 		}
-		if (err)
+		if (err) {
+			atomic_inc_32(&p->p_zone->zone_ffmisc);
 			goto error;
-		else
+		} else {
 			bufp = NULL;
+		}
 	}
 
 	/*
@@ -612,6 +617,7 @@ grow:
 				 * All lwpids are allocated; fail the request.
 				 */
 				err = 1;
+				atomic_inc_32(&p->p_zone->zone_ffnoproc);
 				goto error;
 			}
 			/*
@@ -631,6 +637,7 @@ grow:
 	if (PROC_IS_BRANDED(p)) {
 		if (BROP(p)->b_initlwp(lwp)) {
 			err = 1;
+			atomic_inc_32(&p->p_zone->zone_ffmisc);
 			goto error;
 		}
 		branded = 1;
@@ -710,6 +717,8 @@ grow:
 	lep->le_lwpid = t->t_tid;
 	lep->le_start = t->t_start;
 	lwp_hash_in(p, lep, p->p_tidhash, p->p_tidhash_sz, 1);
+
+	lwp_fp_init(lwp);
 
 	if (state == TS_RUN) {
 		/*
@@ -977,12 +986,6 @@ lwp_exit(void)
 
 	t->t_proc_flag |= TP_LWPEXIT;
 	term_mstate(t);
-
-#ifndef NPROBE
-	/* Kernel probe */
-	if (t->t_tnf_tpdp)
-		tnf_thread_exit();
-#endif /* NPROBE */
 
 	t->t_forw->t_back = t->t_back;
 	t->t_back->t_forw = t->t_forw;
@@ -1391,7 +1394,7 @@ holdcheck(int clearflags)
  * from the user's address space.  A double barrier is used to prevent an
  * infinite loop.
  *
- * 	o The first thread into holdwatch() is the 'master' thread and does
+ *	o The first thread into holdwatch() is the 'master' thread and does
  *        the following:
  *
  *              - Sets SHOLDWATCH on the current process
@@ -1403,7 +1406,7 @@ holdcheck(int clearflags)
  *              - Waits for the other threads to completely stop
  *              - Unsets SWATCHOK
  *
- * 	o If SHOLDWATCH is already set when we enter this function, then another
+ *	o If SHOLDWATCH is already set when we enter this function, then another
  *        thread is already trying to stop this thread.  This 'slave' thread
  *        does the following:
  *
@@ -1411,19 +1414,19 @@ holdcheck(int clearflags)
  *              - Waits for SWATCHOK flag to be set
  *              - Calls stop()
  *
- * 	o If SWATCHOK is set on the process, then this function immediately
+ *	o If SWATCHOK is set on the process, then this function immediately
  *        returns, as we must have been called via stop().
  *
  * In addition, there are other flags that take precedence over SHOLDWATCH:
  *
- * 	o If SEXITLWPS is set, exit immediately.
+ *	o If SEXITLWPS is set, exit immediately.
  *
- * 	o If SHOLDFORK1 is set, wait for fork1() to complete.
+ *	o If SHOLDFORK1 is set, wait for fork1() to complete.
  *
- * 	o If SHOLDFORK is set, then watchpoint activity takes precedence In this
+ *	o If SHOLDFORK is set, then watchpoint activity takes precedence In this
  *        case, set SHOLDWATCH, signalling the forking thread to stop first.
  *
- * 	o If the process is being stopped via /proc (TP_PRSTOP is set), then we
+ *	o If the process is being stopped via /proc (TP_PRSTOP is set), then we
  *        stop the current thread.
  *
  * Returns 0 if all threads have been quiesced.  Returns non-zero if not all
@@ -1598,6 +1601,35 @@ pokelwps(proc_t *p)
 		} else if (t->t_state == TS_ONPROC) {
 			if (t->t_cpu != CPU)
 				poke_cpu(t->t_cpu->cpu_id);
+		}
+		thread_unlock(t);
+	} while ((t = t->t_forw) != p->p_tlist);
+}
+
+/*
+ * Set the schedbits on the process' stopped threads and try running them.
+ *
+ * runlwps() is mainly useful to get a stopped process running in order to
+ * witness an event such as SIGKILL. It operates on stopped threads without
+ * regard to t_whystop or p_flag; callers must ensure that this is acceptable in
+ * combination with the schedbits to be set on those threads.
+ */
+void
+runlwps(proc_t *p, ushort_t schedbits)
+{
+	kthread_t *t;
+
+	ASSERT(MUTEX_HELD(&p->p_lock));
+
+	p->p_stopsig = 0;
+	t = p->p_tlist;
+
+	do {
+		thread_lock(t);
+		if (t->t_state == TS_STOPPED) {
+			t->t_dtrace_stop = 0;
+			t->t_schedflag |= schedbits;
+			setrun_locked(t);
 		}
 		thread_unlock(t);
 	} while ((t = t->t_forw) != p->p_tlist);

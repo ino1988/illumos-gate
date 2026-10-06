@@ -23,10 +23,7 @@
 # Copyright 2007 Sun Microsystems, Inc.  All rights reserved.
 # Use is subject to license terms.
 #
-# ident	"%Z%%M%	%I%	%E% SMI"
-#
-# cmd/picl/plugins/sun4v/pri/Makefile
-#
+
 LIBRARY=	libpriplugin.a
 VERS=		.1
 
@@ -48,19 +45,6 @@ include $(SRC)/cmd/picl/plugins/Makefile.com
 
 SRCS=		$(OBJECTS:%.o=%.c)
 
-LINT_SRC=	./priplugin.c ./init.c \
-		./mem_prop_update.c io_dev_label.c \
-		$(SRC)/common/mdesc/mdesc_findname.c \
-		$(SRC)/common/mdesc/mdesc_findnodeprop.c \
-		$(SRC)/common/mdesc/mdesc_fini.c \
-		$(SRC)/common/mdesc/mdesc_getpropdata.c \
-		$(SRC)/common/mdesc/mdesc_getpropstr.c \
-		$(SRC)/common/mdesc/mdesc_getpropval.c \
-		$(SRC)/common/mdesc/mdesc_init_intern.c \
-		$(SRC)/common/mdesc/mdesc_nodecount.c \
-		$(SRC)/common/mdesc/mdesc_rootnode.c \
-		$(SRC)/common/mdesc/mdesc_scandag.c
-
 $(OBJS_DIR)/%.o:		$(SRC)/common/mdesc/%.c
 	$(COMPILE.c) -o $@ $<
 	$(CTFCONVERT_O)
@@ -74,8 +58,6 @@ DYNFLAGS_COM =		/usr/lib/picl/plugins
 
 ROOTLIBDIR =	$(ROOT_PLAT_PLUGINDIR)
 
-CLEANFILES =	$(LINTOUT) $(LINTLIB)
-
 CPPFLAGS +=	-I$(SRC)/common/mdesc
 CPPFLAGS +=	-I$(SRC)/uts/common/sys
 CPPFLAGS +=	-I$(SRC)/lib/libpri/common
@@ -87,19 +69,12 @@ LDLIBS +=	-L$(ROOT)/usr/lib/picl/plugins -L$(ROOT)/usr/lib/sparcv9
 LDLIBS +=	-L$(ROOT)/usr/lib/libpri
 LDLIBS +=	-L$(ROOT_PLATFORM)/lib -L$(ROOT_PLATFORM)/lib/picl/plugins
 
-LDLIBS +=	-lc -lpicl -lpicltree -lpicldevtree -lpri
-
-# No interfaces from libsnmpplugin.so directly used here, but we need the
-# snmp plugin to load and init before libpriplugin.so.
-#
-LDLIBS +=	-lsnmpplugin
+LDLIBS +=	-lc -lpicl -lpicltree -lpri
 
 #DYNFLAGS +=	-R$(DYNFLAGS_COM)
 $(SPARC_BLD)LDLIBS +=	-R$(DYNFLAGS_PLAT) \
 			-R$(DYNFLAGS_SUN4V)
 LDLIBS +=	-R$(DYNFLAGS_COM)
-
-LINTFLAGS +=	-erroff=E_BAD_PTR_CAST_ALIGN -v
 
 .KEEP_STATE:
 
@@ -115,6 +90,5 @@ include $(SRC)/cmd/picl/plugins/Makefile.targ
 include $(SRC)/lib/Makefile.targ
 
 lint :
-	$(LINT.c) $(LINT_SRC)
 
 FRC:

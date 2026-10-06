@@ -22,8 +22,9 @@
 #
 # Copyright 2010 Sun Microsystems, Inc.  All rights reserved.
 # Use is subject to license terms.
+# Copyright (c) 2016, Chris Fraire <cfraire@me.com>.
 #
-# cmd/cmd-inet/usr.sbin/nwamcfg/Makefile
+# Copyright (c) 2018, Joyent, Inc.
 
 PROG=	nwamcfg
 OBJS=	nwamcfg.o nwamcfg_lex.o nwamcfg_grammar.tab.o
@@ -35,17 +36,20 @@ LFLAGS =	-t
 LDLIBS +=	-ll -ltecla -lnwam -lumem
 YFLAGS +=	-d -b nwamcfg_grammar
 CLEANFILES +=	nwamcfg_lex.c nwamcfg_grammar.tab.c nwamcfg_grammar.tab.h
-CLEANFILES +=	$(PROG).ln
 
 CERRWARN +=	-_gcc=-Wno-switch
-CERRWARN +=	-_gcc=-Wno-uninitialized
 CERRWARN +=	-_gcc=-Wno-unused-variable
-CERRWARN +=	-_gcc=-Wno-unused-label
 CERRWARN +=	-_gcc=-Wno-implicit-function-declaration
+
+# because of labels from yacc
+nwamcfg_lex.o := CERRWARN += -_gcc=-Wno-unused-label
+nwamcfg_grammar.tab.o := CERRWARN += -_gcc=-Wno-unused-label
+
+SMOFF += all_func_returns
 
 .KEEP_STATE:
 
-all: $(PROG) 
+all: $(PROG)
 
 $(PROG): $(OBJS)
 	$(LINK.c) $(OBJS) -o $@ $(LDLIBS)
@@ -56,7 +60,7 @@ install: all $(ROOTUSRSBINPROG)
 nwamcfg_lex.c:	nwamcfg_lex.l nwamcfg_grammar.tab.h nwamcfg.h
 	$(LEX) $(LFLAGS) nwamcfg_lex.l > $@
 
-nwamcfg_grammar.tab.h nwamcfg_grammar.tab.c:	nwamcfg_grammar.y nwamcfg.h
+nwamcfg_grammar.tab.h + nwamcfg_grammar.tab.c:	nwamcfg_grammar.y nwamcfg.h
 	$(YACC) $(YFLAGS) nwamcfg_grammar.y
 
 nwamcfg_lex.o nwamcfg_grammar.tab.o := CCVERBOSE =
@@ -67,11 +71,5 @@ check:  $(PROG).c $(PROG).h
 
 clean:
 	$(RM) $(OBJS) $(CLEANFILES)
-
-#
-# We don't do lint of lex- and yacc- generated source files
-#
-lint:
-	$(LINT.c) -c $(PROG).c $(LDLIBS)
 
 include ../../../Makefile.targ

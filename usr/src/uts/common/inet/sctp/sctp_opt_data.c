@@ -23,6 +23,12 @@
  * Copyright (c) 2004, 2010, Oracle and/or its affiliates. All rights reserved.
  */
 
+/*
+ * Copyright (c) 2018, Joyent, Inc.
+ * Copyright 2024 Oxide Computer Company
+ * Copyright 2026 Edgecast Cloud LLC.
+ */
+
 #include <sys/types.h>
 #include <sys/stream.h>
 #define	_SUN_TPI_VERSION 2
@@ -717,6 +723,8 @@ opdes_t	sctp_opt_arr[] = {
 { IP_NEXTHOP, IPPROTO_IP, OA_R, OA_RW, OP_CONFIG, 0,
 	sizeof (in_addr_t),	-1 /* not initialized  */ },
 
+{ IP_MINTTL, IPPROTO_IP, OA_RW, OA_RW, OP_NP, 0, sizeof (int), 0 },
+
 { IPV6_UNSPEC_SRC, IPPROTO_IPV6, OA_R, OA_RW, OP_RAW, 0,
 	sizeof (int), 0 },
 
@@ -775,6 +783,9 @@ opdes_t	sctp_opt_arr[] = {
 	sizeof (ipsec_req_t), -1 /* not initialized */ },
 { IPV6_SRC_PREFERENCES, IPPROTO_IPV6, OA_RW, OA_RW, OP_NP, 0,
 	sizeof (uint32_t), IPV6_PREFER_SRC_DEFAULT },
+
+{ IPV6_MINHOPCOUNT, IPPROTO_IPV6, OA_RW, OA_RW, OP_NP, 0,
+	sizeof (int), 0 },
 };
 
 uint_t sctp_opt_arr_size = A_CNT(sctp_opt_arr);
@@ -1037,6 +1048,13 @@ int
 sctp_set_opt(sctp_t *sctp, int level, int name, const void *invalp,
     socklen_t inlen)
 {
+	return (sctp_set_opt_common(sctp, level, name, invalp, inlen, B_FALSE));
+}
+
+int
+sctp_set_opt_common(sctp_t *sctp, int level, int name, const void *invalp,
+    socklen_t inlen, boolean_t kernel_special)
+{
 	int		*i1 = (int *)invalp;
 	boolean_t	onoff;
 	int		retval = 0, addrcnt;
@@ -1053,7 +1071,10 @@ sctp_set_opt(sctp_t *sctp, int level, int name, const void *invalp,
 	/* In all cases, the size of the option must be bigger than int */
 	if (inlen >= sizeof (int32_t)) {
 		onoff = ONOFF(*i1);
+	} else {
+		return (EINVAL);
 	}
+
 	retval = 0;
 
 	RUN_SCTP(sctp);
@@ -1236,17 +1257,25 @@ sctp_set_opt(sctp_t *sctp, int level, int name, const void *invalp,
 				    B_TRUE);
 			}
 			break;
-		case SCTP_UC_SWAP: {
-			struct sctp_uc_swap *us;
+		case SCTP_UC_SWAP:
+			if (kernel_special) {
+				struct sctp_uc_swap *us;
 
-			/*
-			 * Change handle & upcalls.
-			 */
-			us = (struct sctp_uc_swap *)invalp;
-			sctp->sctp_ulpd = us->sus_handle;
-			sctp->sctp_upcalls = us->sus_upcalls;
+				/*
+				 * Change handle & upcalls.
+				 */
+				us = (struct sctp_uc_swap *)invalp;
+				sctp->sctp_ulpd = us->sus_handle;
+				sctp->sctp_upcalls = us->sus_upcalls;
+			} else {
+				/*
+				 * We don't want ANYONE other than
+				 * our own kernel-ness mucking with this
+				 * socket option. Everyone else gets an error.
+				 */
+				retval = ENOPROTOOPT;
+			}
 			break;
-		}
 		case SCTP_PRSCTP:
 			sctp->sctp_prsctp_aware = onoff;
 			break;
@@ -1261,7 +1290,7 @@ sctp_set_opt(sctp_t *sctp, int level, int name, const void *invalp,
 
 	case IPPROTO_IP:
 		if (connp->conn_family != AF_INET) {
-			retval = ENOPROTOOPT;
+			retval = EINVAL;
 			goto done;
 		}
 		switch (name) {
@@ -1493,7 +1522,6 @@ sctp_getpeeraddrs(sctp_t *sctp, void *paddrs, int *addrcnt)
 			sin6->sin6_family = AF_INET6;
 			sin6->sin6_flowinfo = connp->conn_flowinfo;
 			if (IN6_IS_ADDR_LINKSCOPE(&addr) &&
-			    sctp->sctp_primary != NULL &&
 			    (sctp->sctp_primary->sf_ixa->ixa_flags &
 			    IXAF_SCOPEID_SET)) {
 				sin6->sin6_scope_id =

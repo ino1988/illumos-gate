@@ -22,6 +22,7 @@
 # Copyright 2008 Sun Microsystems, Inc.  All rights reserved.
 # Use is subject to license terms.
 #
+# Copyright 2020 OmniOS Community Edition (OmniOSce) Association.
 #
 
 include ../Makefile.lib
@@ -34,18 +35,14 @@ clean :=	TARGET= clean
 clobber :=	TARGET= clobber
 delete :=	TARGET= delete
 install :=	TARGET= install
-lint :=		TARGET= lint
 _msg :=		TARGET= _msg
 package :=	TARGET= package
 
-LIBRARY= 	libproc.a
+LIBRARY=	libproc.a
 TEXT_DOMAIN=	SUNW_OST_OSLIB
 XGETFLAGS=	-a
 POFILE=		$(LIBRARY:.a=.po)
 POFILES=	generic.po
-
-SED=	sed
-GREP=	grep
 
 # definitions for install_h target
 HDRS=		libproc.h
@@ -61,7 +58,7 @@ $(ROOTHDRDIR)/%: common/%
 
 .KEEP_STATE:
 
-all clean clobber delete install lint package: $(SUBDIRS)
+all clean clobber delete install package: $(SUBDIRS)
 
 install_h: $(ROOTHDRS)
 

@@ -25,7 +25,7 @@
  */
 
 /*
- * This file provides the code that allows svccfg(1M) to validate a
+ * This file provides the code that allows svccfg(8) to validate a
  * manifest against the template specifications.  svccfg uses the
  * validation facilities for the import and validate subcommands.
  *
@@ -3643,7 +3643,6 @@ tmpl_validate_values(pgroup_t *prop_pattern, property_t *prop, pgroup_t *pg,
 		}
 	}
 
-out:
 	av_destroy(legal);
 	return (rc);
 }

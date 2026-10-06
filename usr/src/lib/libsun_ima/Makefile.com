@@ -22,7 +22,7 @@
 # Copyright 2008 Sun Microsystems, Inc.  All rights reserved.
 # Use is subject to license terms.
 #
-#
+# Copyright (c) 2018, Joyent, Inc.
 
 LIBRARY =	libsun_ima.a
 VERS =		.1
@@ -34,11 +34,10 @@ OBJECTS =	$(LOCOBJS) $(COMOBJS)
 include ../../Makefile.lib
 
 SRCS =          ../common/ima.c $(SRC)/common/iscsi/utils.c
-$(LINTLIB) := SRCS=	$(SRCDIR)/$(LINTSRC)
 
 SRCDIR =	../common
 
-LIBS =		$(DYNLIB) $(LINTLIB)
+LIBS =		$(DYNLIB)
 LDLIBS +=	-lc
 LDLIBS +=	-lnsl
 LDLIBS +=	-ldevinfo
@@ -51,13 +50,15 @@ CFLAGS64 +=	$(CCVERBOSE)
 
 CERRWARN +=	-_gcc=-Wno-parentheses
 
+# not linted
+SMATCH=off
+
 CPPFLAGS +=	-DSOLARIS
 
 .KEEP_STATE:
 
 all:	$(LIBS)
 
-lint:	lintcheck
 
 include ../../Makefile.targ
 

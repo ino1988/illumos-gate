@@ -20,7 +20,10 @@
  */
 /*
  * Copyright (c) 2010, Oracle and/or its affiliates. All rights reserved.
- * Copyright (c) 2014, Joyent, Inc.  All rights reserved.
+ * Copyright 2018 Joyent, Inc.
+ * Copyright 2016 OmniTI Computer Consulting, Inc. All rights reserved.
+ * Copyright 2020 OmniOS Community Edition (OmniOSce) Association.
+ * Copyright 2022 RackTop Systems, Inc.
  */
 
 #include <sys/types.h>
@@ -52,6 +55,7 @@
 #include <sys/vlan.h>
 #include <sys/vnic.h>
 #include <sys/vnic_impl.h>
+#include <sys/mac_impl.h>
 #include <sys/mac_flow_impl.h>
 #include <inet/ip_impl.h>
 
@@ -196,13 +200,10 @@ vnic_unicast_add(vnic_t *vnic, vnic_mac_addr_type_t vnic_addr_type,
     uint8_t *mac_addr_arg, uint16_t flags, vnic_ioc_diag_t *diag,
     uint16_t vid, boolean_t req_hwgrp_flag)
 {
-	mac_diag_t mac_diag;
+	mac_diag_t mac_diag = MAC_DIAG_NONE;
 	uint16_t mac_flags = 0;
 	int err;
 	uint_t addr_len;
-
-	if (flags & VNIC_IOC_CREATE_NODUPCHECK)
-		mac_flags |= MAC_UNICAST_NODUPCHECK;
 
 	switch (vnic_addr_type) {
 	case VNIC_MAC_ADDR_TYPE_FIXED:
@@ -352,7 +353,7 @@ vnic_dev_create(datalink_id_t vnic_id, datalink_id_t linkid,
 
 	rw_enter(&vnic_lock, RW_WRITER);
 
-	/* does a VNIC with the same id already exist? */
+	/* Does a VNIC with the same id already exist? */
 	err = mod_hash_find(vnic_hash, VNIC_HASH_KEY(vnic_id),
 	    (mod_hash_val_t *)&vnic);
 	if (err == 0) {
@@ -368,6 +369,7 @@ vnic_dev_create(datalink_id_t vnic_id, datalink_id_t linkid,
 
 	bzero(vnic, sizeof (*vnic));
 
+	vnic->vn_ls = LINK_STATE_UNKNOWN;
 	vnic->vn_id = vnic_id;
 	vnic->vn_link_id = linkid;
 	vnic->vn_vrid = vrid;
@@ -452,6 +454,20 @@ vnic_dev_create(datalink_id_t vnic_id, datalink_id_t linkid,
 				vnic->vn_hcksum_txflags = 0;
 		} else {
 			vnic->vn_hcksum_txflags = 0;
+		}
+
+		/*
+		 * Check for LSO capabilities. LSO implementations
+		 * depend on hardware checksumming, so the same
+		 * requirement is enforced here.
+		 */
+		if (vnic->vn_hcksum_txflags != 0) {
+			if (!mac_capab_get(vnic->vn_lower_mh, MAC_CAPAB_LSO,
+			    &vnic->vn_cap_lso)) {
+				vnic->vn_cap_lso.lso_flags = 0;
+			}
+		} else {
+			vnic->vn_cap_lso.lso_flags = 0;
 		}
 	}
 
@@ -553,8 +569,6 @@ vnic_dev_create(datalink_id_t vnic_id, datalink_id_t linkid,
 
 	err = dls_devnet_create(vnic->vn_mh, vnic->vn_id, crgetzoneid(credp));
 	if (err != 0) {
-		VERIFY(is_anchor || mac_margin_remove(vnic->vn_lower_mh,
-		    vnic->vn_margin) == 0);
 		if (!is_anchor) {
 			VERIFY(mac_mtu_remove(vnic->vn_lower_mh,
 			    vnic->vn_mtu) == 0);
@@ -571,7 +585,20 @@ vnic_dev_create(datalink_id_t vnic_id, datalink_id_t linkid,
 	ASSERT(err == 0);
 	vnic_count++;
 
+	/*
+	 * Now that we've enabled this VNIC, we should go through and update the
+	 * link state by setting it to our parents.
+	 */
 	vnic->vn_enabled = B_TRUE;
+
+	if (is_anchor) {
+		vnic->vn_ls = LINK_STATE_UP;
+	} else {
+		vnic->vn_ls = mac_client_stat_get(vnic->vn_mch,
+		    MAC_STAT_LINK_STATE);
+	}
+	mac_link_update(vnic->vn_mh, vnic->vn_ls);
+
 	rw_exit(&vnic_lock);
 
 	return (0);
@@ -806,8 +833,17 @@ vnic_m_capab_get(void *arg, mac_capab_t cap, void *cap_data)
 		uint32_t *hcksum_txflags = cap_data;
 
 		*hcksum_txflags = vnic->vn_hcksum_txflags &
-		    (HCKSUM_INET_FULL_V4 | HCKSUM_IPHDRCKSUM |
-		    HCKSUM_INET_PARTIAL);
+		    (HCKSUM_INET_FULL_V4 | HCKSUM_INET_FULL_V6 |
+		    HCKSUM_IPHDRCKSUM | HCKSUM_INET_PARTIAL);
+		break;
+	}
+	case MAC_CAPAB_LSO: {
+		mac_capab_lso_t *cap_lso = cap_data;
+
+		if (vnic->vn_cap_lso.lso_flags == 0) {
+			return (B_FALSE);
+		}
+		*cap_lso = vnic->vn_cap_lso;
 		break;
 	}
 	case MAC_CAPAB_VNIC: {
@@ -1021,7 +1057,7 @@ static int
 vnic_m_setprop(void *m_driver, const char *pr_name, mac_prop_id_t pr_num,
     uint_t pr_valsize, const void *pr_val)
 {
-	int 		err = 0;
+	int		err = 0;
 	vnic_t		*vn = m_driver;
 
 	switch (pr_num) {
@@ -1059,11 +1095,42 @@ vnic_m_setprop(void *m_driver, const char *pr_name, mac_prop_id_t pr_num,
 		err = mac_maxsdu_update(vn->vn_mh, mtu);
 		break;
 	}
+	case MAC_PROP_VN_PROMISC_FILTERED: {
+		boolean_t filtered;
+
+		if (pr_valsize < sizeof (filtered)) {
+			err = EINVAL;
+			break;
+		}
+
+		bcopy(pr_val, &filtered, sizeof (filtered));
+		mac_set_promisc_filtered(vn->vn_mch, filtered);
+		break;
+	}
 	case MAC_PROP_SECONDARY_ADDRS: {
 		mac_secondary_addr_t msa;
 
 		bcopy(pr_val, &msa, sizeof (msa));
 		err = vnic_set_secondary_macs(vn, &msa);
+		break;
+	}
+	case MAC_PROP_PRIVATE: {
+		if (vn->vn_link_id != DATALINK_INVALID_LINKID ||
+		    strcmp(pr_name, "_linkstate") != 0) {
+			err = ENOTSUP;
+			break;
+		}
+
+		if (strcmp(pr_val, "up") == 0) {
+			vn->vn_ls = LINK_STATE_UP;
+		} else if (strcmp(pr_val, "down") == 0) {
+			vn->vn_ls = LINK_STATE_DOWN;
+		} else if (strcmp(pr_val, "unknown") == 0) {
+			vn->vn_ls = LINK_STATE_UNKNOWN;
+		} else {
+			return (EINVAL);
+		}
+		mac_link_update(vn->vn_mh, vn->vn_ls);
 		break;
 	}
 	default:
@@ -1079,14 +1146,38 @@ vnic_m_getprop(void *arg, const char *pr_name, mac_prop_id_t pr_num,
     uint_t pr_valsize, void *pr_val)
 {
 	vnic_t		*vn = arg;
-	int 		ret = 0;
+	int		ret = 0;
+	boolean_t	out;
 
 	switch (pr_num) {
+	case MAC_PROP_VN_PROMISC_FILTERED:
+		out = mac_get_promisc_filtered(vn->vn_mch);
+		ASSERT(pr_valsize >= sizeof (boolean_t));
+		bcopy(&out, pr_val, sizeof (boolean_t));
+		break;
 	case MAC_PROP_SECONDARY_ADDRS:
 		ret = vnic_get_secondary_macs(vn, pr_valsize, pr_val);
 		break;
+	case MAC_PROP_PRIVATE:
+		if (vn->vn_link_id != DATALINK_INVALID_LINKID) {
+			ret = EINVAL;
+			break;
+		}
+
+		if (strcmp(pr_name, "_linkstate") != 0) {
+			ret = EINVAL;
+			break;
+		}
+		if (vn->vn_ls == LINK_STATE_UP) {
+			(void) sprintf(pr_val, "up");
+		} else if (vn->vn_ls == LINK_STATE_DOWN) {
+			(void) sprintf(pr_val, "down");
+		} else {
+			(void) sprintf(pr_val, "unknown");
+		}
+		break;
 	default:
-		ret = EINVAL;
+		ret = ENOTSUP;
 		break;
 	}
 
@@ -1094,7 +1185,8 @@ vnic_m_getprop(void *arg, const char *pr_name, mac_prop_id_t pr_num,
 }
 
 /* ARGSUSED */
-static void vnic_m_propinfo(void *m_driver, const char *pr_name,
+static void
+vnic_m_propinfo(void *m_driver, const char *pr_name,
     mac_prop_id_t pr_num, mac_prop_info_handle_t prh)
 {
 	vnic_t		*vn = m_driver;
@@ -1135,6 +1227,18 @@ static void vnic_m_propinfo(void *m_driver, const char *pr_name,
 			mac_prop_info_set_range_uint32(prh,
 			    range.mpr_range_uint32[0].mpur_min, max);
 			mac_perim_exit(mph);
+		}
+		break;
+	case MAC_PROP_PRIVATE:
+		if (vn->vn_link_id != DATALINK_INVALID_LINKID)
+			break;
+
+		if (strcmp(pr_name, "_linkstate") == 0) {
+			char buf[16];
+
+			mac_prop_info_set_perm(prh, MAC_PROP_PERM_RW);
+			(void) sprintf(buf, "unknown");
+			mac_prop_info_set_default_str(prh, buf);
 		}
 		break;
 	}
@@ -1209,8 +1313,9 @@ vnic_notify_cb(void *arg, mac_notify_type_t type)
 		break;
 
 	case MAC_NOTE_LINK:
-		mac_link_update(vnic->vn_mh,
-		    mac_client_stat_get(vnic->vn_mch, MAC_STAT_LINK_STATE));
+		vnic->vn_ls = mac_client_stat_get(vnic->vn_mch,
+		    MAC_STAT_LINK_STATE);
+		mac_link_update(vnic->vn_mh, vnic->vn_ls);
 		break;
 
 	default:

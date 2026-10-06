@@ -40,14 +40,13 @@ CFLAGS64 += $(CCVERBOSE)
 CPPFLAGS += -I../common -I../../common/inc -D_REENTRANT
 DYNFLAGS += $(ZINTERPOSE)
 
-CERRWARN += -_gcc=-Wno-unused-label
+# not linted
+SMATCH=off
 
 .KEEP_STATE:
 
 all: $(LIBS)
 
-lint:
-	$(LINT.c) $(SRCS) $(LDLIBS)
 
 # include library targets
 include ../../Makefile.targ

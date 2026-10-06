@@ -22,6 +22,7 @@
 /*
  * Copyright 2009 Sun Microsystems, Inc.  All rights reserved.
  * Use is subject to license terms.
+ * Copyright (c) 2016 by Delphix. All rights reserved.
  */
 
 /*	Copyright (c) 1984, 1986, 1987, 1988, 1989 AT&T	*/
@@ -190,6 +191,7 @@ lwp_wait(id_t lwpid, id_t *departed)
 	curthread->t_waitfor = lwpid;
 	p->p_lwpwait++;
 	p->p_lwpdwait += daemon;
+	target_lep = NULL;
 
 	if (lwpid != 0) {
 		if ((ldp = lwp_hash_lookup(p, lwpid)) == NULL)
@@ -300,7 +302,7 @@ lwp_wait(id_t lwpid, id_t *departed)
 					error = EDEADLK;
 					break;
 				}
-				/* who is he waiting for? */
+				/* who are they waiting for? */
 				if ((tid = t->t_waitfor) == -1)
 					break;
 				if (tid == 0) {

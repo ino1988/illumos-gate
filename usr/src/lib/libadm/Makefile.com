@@ -21,6 +21,7 @@
 #
 # Copyright (c) 1997, 2010, Oracle and/or its affiliates. All rights reserved.
 #
+# Copyright (c) 2018, Joyent, Inc.
 
 LIBRARY=	libadm.a
 VERS=		.1
@@ -38,22 +39,23 @@ include	../../Makefile.lib
 # install this library in the root filesystem
 include ../../Makefile.rootfs
 
-LIBS=		$(DYNLIB) $(LINTLIB)
+LIBS=		$(DYNLIB)
 SRCDIR=		../common
 
 CPPFLAGS +=	-I ../inc
 
 CERRWARN +=	-_gcc=-Wno-parentheses
-CERRWARN +=	-_gcc=-Wno-uninitialized
+CERRWARN +=	$(CNOWARN_UNINIT)
 CERRWARN +=	-_gcc=-Wno-char-subscripts
 
-$(LINTLIB) :=	SRCS=$(SRCDIR)/$(LINTSRC)
+# not linted
+SMATCH=off
+
 LDLIBS +=	-lc
 
 .KEEP_STATE:
 
 all: $(LIBS)
 
-lint:	lintcheck
 
 include		../../Makefile.targ

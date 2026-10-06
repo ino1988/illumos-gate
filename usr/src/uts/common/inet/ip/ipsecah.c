@@ -21,6 +21,8 @@
 /*
  * Copyright 2010 Sun Microsystems, Inc.  All rights reserved.
  * Use is subject to license terms.
+ * Copyright (c) 2012 Nexenta Systems, Inc. All rights reserved.
+ * Copyright 2017 Joyent, Inc.
  */
 
 #include <sys/types.h>
@@ -95,20 +97,6 @@ static	ipsecahparam_t	lcl_param_arr[] = {
 	{ 0,	0xffffffffU,		0,	"ipsecah_default_hard_usetime"},
 	{ 0,	1,			0,	"ipsecah_log_unknown_spi"},
 };
-#define	ipsecah_debug			ipsecah_params[0].ipsecah_param_value
-#define	ipsecah_age_interval		ipsecah_params[1].ipsecah_param_value
-#define	ipsecah_age_int_max		ipsecah_params[1].ipsecah_param_max
-#define	ipsecah_reap_delay		ipsecah_params[2].ipsecah_param_value
-#define	ipsecah_replay_size		ipsecah_params[3].ipsecah_param_value
-#define	ipsecah_acquire_timeout		ipsecah_params[4].ipsecah_param_value
-#define	ipsecah_larval_timeout		ipsecah_params[5].ipsecah_param_value
-#define	ipsecah_default_soft_bytes	ipsecah_params[6].ipsecah_param_value
-#define	ipsecah_default_hard_bytes	ipsecah_params[7].ipsecah_param_value
-#define	ipsecah_default_soft_addtime	ipsecah_params[8].ipsecah_param_value
-#define	ipsecah_default_hard_addtime	ipsecah_params[9].ipsecah_param_value
-#define	ipsecah_default_soft_usetime	ipsecah_params[10].ipsecah_param_value
-#define	ipsecah_default_hard_usetime	ipsecah_params[11].ipsecah_param_value
-#define	ipsecah_log_unknown_spi		ipsecah_params[12].ipsecah_param_value
 
 #define	ah0dbg(a)	printf a
 /* NOTE:  != 0 instead of > 0 so lint doesn't complain. */
@@ -146,9 +134,9 @@ static mblk_t *ah_outbound(mblk_t *, ip_xmit_attr_t *);
 static void ah_outbound_finish(mblk_t *, ip_xmit_attr_t *);
 
 static int ipsecah_open(queue_t *, dev_t *, int, int, cred_t *);
-static int ipsecah_close(queue_t *);
-static void ipsecah_wput(queue_t *, mblk_t *);
-static void ah_send_acquire(ipsacq_t *, mblk_t *, netstack_t *);
+static int ipsecah_close(queue_t *, int, cred_t *);
+static int ipsecah_rput(queue_t *, mblk_t *);
+static int ipsecah_wput(queue_t *, mblk_t *);
 static boolean_t ah_register_out(uint32_t, uint32_t, uint_t, ipsecah_stack_t *,
     cred_t *);
 static void	*ipsecah_stack_init(netstackid_t stackid, netstack_t *ns);
@@ -164,12 +152,12 @@ static struct module_info info = {
 };
 
 static struct qinit rinit = {
-	(pfi_t)putnext, NULL, ipsecah_open, ipsecah_close, NULL, &info,
+	ipsecah_rput, NULL, ipsecah_open, ipsecah_close, NULL, &info,
 	NULL
 };
 
 static struct qinit winit = {
-	(pfi_t)ipsecah_wput, NULL, ipsecah_open, ipsecah_close, NULL, &info,
+	ipsecah_wput, NULL, ipsecah_open, ipsecah_close, NULL, &info,
 	NULL
 };
 
@@ -187,8 +175,8 @@ ah_kstat_init(ipsecah_stack_t *ahstack, netstackid_t stackid)
 	ipsec_stack_t	*ipss = ahstack->ipsecah_netstack->netstack_ipsec;
 
 	ahstack->ah_ksp = kstat_create_netstack("ipsecah", 0, "ah_stat", "net",
-	    KSTAT_TYPE_NAMED, sizeof (ah_kstats_t) / sizeof (kstat_named_t),
-	    KSTAT_FLAG_PERSISTENT, stackid);
+	    KSTAT_TYPE_NAMED, sizeof (ah_kstats_t) / sizeof (kstat_named_t), 0,
+	    stackid);
 
 	if (ahstack->ah_ksp == NULL || ahstack->ah_ksp->ks_data == NULL)
 		return (B_FALSE);
@@ -227,7 +215,7 @@ static int
 ah_kstat_update(kstat_t *kp, int rw)
 {
 	ah_kstats_t	*ekp;
-	netstackid_t	stackid = (netstackid_t)(uintptr_t)kp->ks_private;
+	netstackid_t	stackid;
 	netstack_t	*ns;
 	ipsec_stack_t	*ipss;
 
@@ -237,6 +225,7 @@ ah_kstat_update(kstat_t *kp, int rw)
 	if (rw == KSTAT_WRITE)
 		return (EACCES);
 
+	stackid = (netstackid_t)(uintptr_t)kp->ks_private;
 	ns = netstack_find_by_stackid(stackid);
 	if (ns == NULL)
 		return (-1);
@@ -247,9 +236,9 @@ ah_kstat_update(kstat_t *kp, int rw)
 	}
 	ekp = (ah_kstats_t *)kp->ks_data;
 
-	mutex_enter(&ipss->ipsec_alg_lock);
+	rw_enter(&ipss->ipsec_alg_lock, RW_READER);
 	ekp->ah_stat_num_aalgs.value.ui64 = ipss->ipsec_nalgs[IPSEC_ALG_AUTH];
-	mutex_exit(&ipss->ipsec_alg_lock);
+	rw_exit(&ipss->ipsec_alg_lock);
 
 	netstack_rele(ns);
 	return (0);
@@ -283,11 +272,11 @@ ah_ager(void *arg)
  */
 /* ARGSUSED */
 static int
-ipsecah_param_get(q, mp, cp, cr)
-	queue_t	*q;
-	mblk_t	*mp;
-	caddr_t	cp;
-	cred_t *cr;
+ipsecah_param_get(
+    queue_t	*q,
+    mblk_t	*mp,
+    caddr_t	cp,
+    cred_t *cr)
 {
 	ipsecahparam_t	*ipsecahpa = (ipsecahparam_t *)cp;
 	uint_t value;
@@ -306,12 +295,12 @@ ipsecah_param_get(q, mp, cp, cr)
  */
 /* ARGSUSED */
 static int
-ipsecah_param_set(q, mp, value, cp, cr)
-	queue_t	*q;
-	mblk_t	*mp;
-	char	*value;
-	caddr_t	cp;
-	cred_t *cr;
+ipsecah_param_set(
+    queue_t	*q,
+    mblk_t	*mp,
+    char	*value,
+    caddr_t	cp,
+    cred_t *cr)
 {
 	ulong_t	new_value;
 	ipsecahparam_t	*ipsecahpa = (ipsecahparam_t *)cp;
@@ -324,7 +313,7 @@ ipsecah_param_set(q, mp, value, cp, cr)
 	if (ddi_strtoul(value, NULL, 10, &new_value) != 0 ||
 	    new_value < ipsecahpa->ipsecah_param_min ||
 	    new_value > ipsecahpa->ipsecah_param_max) {
-		    return (EINVAL);
+		return (EINVAL);
 	}
 
 	/* Set the new value */
@@ -419,7 +408,6 @@ ipsecah_stack_init(netstackid_t stackid, netstack_t *ns)
 	(void) ah_kstat_init(ahstack, stackid);
 
 	ahstack->ah_sadb.s_acquire_timeout = &ahstack->ipsecah_acquire_timeout;
-	ahstack->ah_sadb.s_acqfn = ah_send_acquire;
 	sadbp_init("AH", &ahstack->ah_sadb, SADB_SATYPE_AH, ah_hash_size,
 	    ahstack->ipsecah_netstack);
 
@@ -450,7 +438,6 @@ ipsecah_stack_fini(netstackid_t stackid, void *arg)
 	if (ahstack->ah_pfkey_q != NULL) {
 		(void) quntimeout(ahstack->ah_pfkey_q, ahstack->ah_event);
 	}
-	ahstack->ah_sadb.s_acqfn = NULL;
 	ahstack->ah_sadb.s_acquire_timeout = NULL;
 	sadbp_destroy(&ahstack->ah_sadb, ahstack->ipsecah_netstack);
 	ip_drop_unregister(&ahstack->ah_dropper);
@@ -506,8 +493,9 @@ ipsecah_open(queue_t *q, dev_t *devp, int flag, int sflag, cred_t *credp)
 /*
  * AH module close routine.
  */
+/* ARGSUSED */
 static int
-ipsecah_close(queue_t *q)
+ipsecah_close(queue_t *q, int flags __unused, cred_t *credp __unused)
 {
 	ipsecah_stack_t	*ahstack = (ipsecah_stack_t *)q->q_ptr;
 
@@ -573,7 +561,7 @@ ah_register_out(uint32_t sequence, uint32_t pid, uint_t serial,
 	 * the variable part (i.e. the algorithms) of the message.
 	 */
 
-	mutex_enter(&ipss->ipsec_alg_lock);
+	rw_enter(&ipss->ipsec_alg_lock, RW_READER);
 
 	/*
 	 * Return only valid algorithms, so the number of algorithms
@@ -595,7 +583,7 @@ ah_register_out(uint32_t sequence, uint32_t pid, uint_t serial,
 	}
 	mp->b_cont = allocb(allocsize, BPRI_HI);
 	if (mp->b_cont == NULL) {
-		mutex_exit(&ipss->ipsec_alg_lock);
+		rw_exit(&ipss->ipsec_alg_lock);
 		freemsg(mp);
 		return (B_FALSE);
 	}
@@ -642,7 +630,7 @@ ah_register_out(uint32_t sequence, uint32_t pid, uint_t serial,
 		nextext = (sadb_ext_t *)saalg;
 	}
 
-	mutex_exit(&ipss->ipsec_alg_lock);
+	rw_exit(&ipss->ipsec_alg_lock);
 
 	if (sens_tsl != NULL) {
 		sens = (sadb_sens_t *)nextext;
@@ -942,8 +930,8 @@ ah_add_sa_finish(mblk_t *mp, sadb_msg_t *samsg, keysock_in_t *ksi,
 		if (rc == 0) {
 			lpkt = sadb_clear_lpkt(larval);
 			if (lpkt != NULL) {
-				rc = !taskq_dispatch(ah_taskq, inbound_task,
-				    lpkt, TQ_NOSLEEP);
+				rc = taskq_dispatch(ah_taskq, inbound_task,
+				    lpkt, TQ_NOSLEEP) == TASKQID_INVALID;
 			}
 		}
 		IPSA_REFRELE(larval);
@@ -1123,10 +1111,10 @@ ah_add_sa(mblk_t *mp, keysock_in_t *ksi, int *diagnostic, netstack_t *ns)
 	 */
 
 	/* verify that there is a mapping for the specified algorithm */
-	mutex_enter(&ipss->ipsec_alg_lock);
+	rw_enter(&ipss->ipsec_alg_lock, RW_READER);
 	aalg = ipss->ipsec_alglists[IPSEC_ALG_AUTH][assoc->sadb_sa_auth];
 	if (aalg == NULL || !ALG_VALID(aalg)) {
-		mutex_exit(&ipss->ipsec_alg_lock);
+		rw_exit(&ipss->ipsec_alg_lock);
 		ah1dbg(ahstack, ("Couldn't find auth alg #%d.\n",
 		    assoc->sadb_sa_auth));
 		*diagnostic = SADB_X_DIAGNOSTIC_BAD_AALG;
@@ -1136,7 +1124,7 @@ ah_add_sa(mblk_t *mp, keysock_in_t *ksi, int *diagnostic, netstack_t *ns)
 
 	/* sanity check key sizes */
 	if (!ipsec_valid_key_size(key->sadb_key_bits, aalg)) {
-		mutex_exit(&ipss->ipsec_alg_lock);
+		rw_exit(&ipss->ipsec_alg_lock);
 		*diagnostic = SADB_X_DIAGNOSTIC_BAD_AKEYBITS;
 		return (EINVAL);
 	}
@@ -1144,11 +1132,11 @@ ah_add_sa(mblk_t *mp, keysock_in_t *ksi, int *diagnostic, netstack_t *ns)
 	/* check key and fix parity if needed */
 	if (ipsec_check_key(aalg->alg_mech_type, key, B_TRUE,
 	    diagnostic) != 0) {
-		mutex_exit(&ipss->ipsec_alg_lock);
+		rw_exit(&ipss->ipsec_alg_lock);
 		return (EINVAL);
 	}
 
-	mutex_exit(&ipss->ipsec_alg_lock);
+	rw_exit(&ipss->ipsec_alg_lock);
 
 	return (ah_add_sa_finish(mp, (sadb_msg_t *)mp->b_cont->b_rptr, ksi,
 	    diagnostic, ahstack));
@@ -1460,9 +1448,19 @@ ah_keysock_no_socket(mblk_t *mp, ipsecah_stack_t *ahstack)
 }
 
 /*
+ * AH module read put routine.
+ */
+static int
+ipsecah_rput(queue_t *q, mblk_t *mp)
+{
+	putnext(q, mp);
+	return (0);
+}
+
+/*
  * AH module write put routine.
  */
-static void
+static int
 ipsecah_wput(queue_t *q, mblk_t *mp)
 {
 	ipsec_info_t *ii;
@@ -1512,7 +1510,7 @@ ipsecah_wput(queue_t *q, mblk_t *mp)
 		case ND_GET:
 			if (nd_getset(q, ahstack->ipsecah_g_nd, mp)) {
 				qreply(q, mp);
-				return;
+				return (0);
 			} else {
 				iocp->ioc_error = ENOENT;
 			}
@@ -1526,7 +1524,7 @@ ipsecah_wput(queue_t *q, mblk_t *mp)
 			iocp->ioc_count = 0;
 			mp->b_datap->db_type = M_IOCACK;
 			qreply(q, mp);
-			return;
+			return (0);
 		}
 	default:
 		ah3dbg(ahstack,
@@ -1534,6 +1532,7 @@ ipsecah_wput(queue_t *q, mblk_t *mp)
 		    mp->b_datap->db_type));
 		putnext(q, mp);
 	}
+	return (0);
 }
 
 /* Refactor me */
@@ -1733,160 +1732,6 @@ ah_age_bytes(ipsa_t *assoc, uint64_t bytes, boolean_t inbound)
 	}
 
 	return (inrc && outrc);
-}
-
-/*
- * Perform the really difficult work of inserting the proposed situation.
- * Called while holding the algorithm lock.
- */
-static void
-ah_insert_prop(sadb_prop_t *prop, ipsacq_t *acqrec, uint_t combs,
-    netstack_t *ns)
-{
-	sadb_comb_t *comb = (sadb_comb_t *)(prop + 1);
-	ipsec_action_t *ap;
-	ipsec_prot_t *prot;
-	ipsecah_stack_t	*ahstack = ns->netstack_ipsecah;
-	ipsec_stack_t	*ipss = ns->netstack_ipsec;
-
-	ASSERT(MUTEX_HELD(&ipss->ipsec_alg_lock));
-
-	prop->sadb_prop_exttype = SADB_EXT_PROPOSAL;
-	prop->sadb_prop_len = SADB_8TO64(sizeof (sadb_prop_t));
-	*(uint32_t *)(&prop->sadb_prop_replay) = 0;	/* Quick zero-out! */
-
-	prop->sadb_prop_replay = ahstack->ipsecah_replay_size;
-
-	/*
-	 * Based upon algorithm properties, and what-not, prioritize a
-	 * proposal, based on the ordering of the AH algorithms in the
-	 * alternatives in the policy rule or socket that was placed
-	 * in the acquire record.
-	 */
-
-	for (ap = acqrec->ipsacq_act; ap != NULL;
-	    ap = ap->ipa_next) {
-		ipsec_alginfo_t *aalg;
-
-		if ((ap->ipa_act.ipa_type != IPSEC_POLICY_APPLY) ||
-		    (!ap->ipa_act.ipa_apply.ipp_use_ah))
-			continue;
-
-		prot = &ap->ipa_act.ipa_apply;
-
-		ASSERT(prot->ipp_auth_alg > 0);
-
-		aalg = ipss->ipsec_alglists[IPSEC_ALG_AUTH]
-		    [prot->ipp_auth_alg];
-		if (aalg == NULL || !ALG_VALID(aalg))
-			continue;
-
-		/* XXX check aalg for duplicates??.. */
-
-		comb->sadb_comb_flags = 0;
-		comb->sadb_comb_reserved = 0;
-		comb->sadb_comb_encrypt = 0;
-		comb->sadb_comb_encrypt_minbits = 0;
-		comb->sadb_comb_encrypt_maxbits = 0;
-
-		comb->sadb_comb_auth = aalg->alg_id;
-		comb->sadb_comb_auth_minbits =
-		    MAX(prot->ipp_ah_minbits, aalg->alg_ef_minbits);
-		comb->sadb_comb_auth_maxbits =
-		    MIN(prot->ipp_ah_maxbits, aalg->alg_ef_maxbits);
-
-		/*
-		 * The following may be based on algorithm
-		 * properties, but in the meantime, we just pick
-		 * some good, sensible numbers.  Key mgmt. can
-		 * (and perhaps should) be the place to finalize
-		 * such decisions.
-		 */
-
-		/*
-		 * No limits on allocations, since we really don't
-		 * support that concept currently.
-		 */
-		comb->sadb_comb_soft_allocations = 0;
-		comb->sadb_comb_hard_allocations = 0;
-
-		/*
-		 * These may want to come from policy rule..
-		 */
-		comb->sadb_comb_soft_bytes =
-		    ahstack->ipsecah_default_soft_bytes;
-		comb->sadb_comb_hard_bytes =
-		    ahstack->ipsecah_default_hard_bytes;
-		comb->sadb_comb_soft_addtime =
-		    ahstack->ipsecah_default_soft_addtime;
-		comb->sadb_comb_hard_addtime =
-		    ahstack->ipsecah_default_hard_addtime;
-		comb->sadb_comb_soft_usetime =
-		    ahstack->ipsecah_default_soft_usetime;
-		comb->sadb_comb_hard_usetime =
-		    ahstack->ipsecah_default_hard_usetime;
-
-		prop->sadb_prop_len += SADB_8TO64(sizeof (*comb));
-		if (--combs == 0)
-			return;	/* out of space.. */
-		comb++;
-	}
-}
-
-/*
- * Prepare and actually send the SADB_ACQUIRE message to PF_KEY.
- */
-static void
-ah_send_acquire(ipsacq_t *acqrec, mblk_t *extended, netstack_t *ns)
-{
-	uint_t combs;
-	sadb_msg_t *samsg;
-	sadb_prop_t *prop;
-	mblk_t *pfkeymp, *msgmp;
-	ipsecah_stack_t	*ahstack = ns->netstack_ipsecah;
-	ipsec_stack_t	*ipss = ns->netstack_ipsec;
-
-	AH_BUMP_STAT(ahstack, acquire_requests);
-
-	if (ahstack->ah_pfkey_q == NULL) {
-		mutex_exit(&acqrec->ipsacq_lock);
-		return;
-	}
-
-	/* Set up ACQUIRE. */
-	pfkeymp = sadb_setup_acquire(acqrec, SADB_SATYPE_AH,
-	    ns->netstack_ipsec);
-	if (pfkeymp == NULL) {
-		ah0dbg(("sadb_setup_acquire failed.\n"));
-		mutex_exit(&acqrec->ipsacq_lock);
-		return;
-	}
-	ASSERT(MUTEX_HELD(&ipss->ipsec_alg_lock));
-	combs = ipss->ipsec_nalgs[IPSEC_ALG_AUTH];
-	msgmp = pfkeymp->b_cont;
-	samsg = (sadb_msg_t *)(msgmp->b_rptr);
-
-	/* Insert proposal here. */
-
-	prop = (sadb_prop_t *)(((uint64_t *)samsg) + samsg->sadb_msg_len);
-	ah_insert_prop(prop, acqrec, combs, ns);
-	samsg->sadb_msg_len += prop->sadb_prop_len;
-	msgmp->b_wptr += SADB_64TO8(samsg->sadb_msg_len);
-
-	mutex_exit(&ipss->ipsec_alg_lock);
-
-	/*
-	 * Must mutex_exit() before sending PF_KEY message up, in
-	 * order to avoid recursive mutex_enter() if there are no registered
-	 * listeners.
-	 *
-	 * Once I've sent the message, I'm cool anyway.
-	 */
-	mutex_exit(&acqrec->ipsacq_lock);
-	if (extended != NULL) {
-		putnext(ahstack->ah_pfkey_q, extended);
-	}
-	putnext(ahstack->ah_pfkey_q, pfkeymp);
 }
 
 /* Refactor me */
@@ -3053,7 +2898,7 @@ ah_process_ip_options_v6(mblk_t *mp, ipsa_t *assoc, int *length_to_skip,
 {
 	ip6_t	*ip6h;
 	ip6_t	*oip6h;
-	mblk_t 	*phdr_mp;
+	mblk_t	*phdr_mp;
 	int option_length;
 	uint_t	ah_align_sz;
 	uint_t ah_offset;
@@ -3171,7 +3016,7 @@ ah_process_ip_options_v4(mblk_t *mp, ipsa_t *assoc, int *length_to_skip,
 	uint32_t option_length;
 	ipha_t	*ipha;
 	ipha_t	*oipha;
-	mblk_t 	*phdr_mp;
+	mblk_t	*phdr_mp;
 	int	 size;
 	uchar_t	*optptr;
 	uint8_t optval;

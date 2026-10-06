@@ -15,12 +15,6 @@
  * OF OR IN CONNECTION WITH THE USE OR PERFORMANCE OF THIS SOFTWARE.
  */
 
-#ifndef lint
-static const char rcsid[] = "$Id: ns_verify.c,v 1.5 2006/03/09 23:57:56 marka Exp $";
-#endif
-
-/* Import. */
-
 #include "port_before.h"
 #include "fd_setsize.h"
 
@@ -244,7 +238,7 @@ ns_verify(u_char *msg, int *msglen, void *k,
 			dst_verify_data(SIG_MODE_UPDATE, key, &ctx,
 					querysig, querysiglen, NULL, 0);
 		}
-		
+
  		/* Digest the message. */
 		dst_verify_data(SIG_MODE_UPDATE, key, &ctx, msg, recstart - msg,
 				NULL, 0);
@@ -386,7 +380,7 @@ ns_verify_tcp(u_char *msg, int *msglen, ns_tcp_tsig_state *state,
 	hp->arcount = htons(ntohs(hp->arcount) - 1);
 	dst_verify_data(SIG_MODE_UPDATE, state->key, &state->ctx,
 			msg, recstart - msg, NULL, 0);
-	
+
 	/* Read the key name. */
 	n = dn_expand(msg, eom, cp, name, MAXDNAME);
 	if (n < 0)

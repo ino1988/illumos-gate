@@ -2,6 +2,7 @@
 # Copyright 2008 Sun Microsystems, Inc.  All rights reserved.
 # Use is subject to license terms.
 #
+# Copyright (c) 2018, Joyent, Inc.
 
 PROG= kdb5_util
 
@@ -33,12 +34,14 @@ CPPFLAGS += -I. -I$(SRC)/lib/gss_mechs/mech_krb5/include/kerberosIV \
 	-DHAVE_STRSTR=1 -DHAVE_COMPILE=1 -DHAVE_STEP=1 \
 	-DHAVE_KRB_DB_H=1 -DHAVE_KDC_H=1 -DKDB4_DISABLE \
 	-DUSE_KADM5_API_VERSION=2
-COPTFLAG += $(XESS) #-I$(KINCDIR) 
 
 CERRWARN += -_gcc=-Wno-parentheses
 CERRWARN += -_gcc=-Wno-unused-variable
 CERRWARN += -_gcc=-Wno-unused-function
 CERRWARN += -_gcc=-Wno-implicit-function-declaration
+
+# not linted
+SMATCH=off
 
 LDFLAGS += $(KRUNPATH) $(KERBRUNPATH)
 LDLIBS += -L $(ROOT_KLIBDIR) -L $(KRB5LIB) -lkadm5srv -lkdb \
@@ -56,7 +59,7 @@ $(ISRCHDR):	$(KRB5IPROPDIR)/iprop.x
 # Explicitly state the dependency on iprop.h
 $(OBJS):	$(ISRCHDR)
 
-$(PROG):	$(OBJS) 
+$(PROG):	$(OBJS)
 	$(LINK.c) $(OBJS) -o $@ $(LDLIBS)
 	$(POST_PROCESS)
 
@@ -64,8 +67,6 @@ install: $(KRB5SBINPROG)
 
 clean:
 	$(RM) $(OBJS) $(ISRCHDR)
-
-lint: lint_SRCS
 
 include ../../../Makefile.targ
 

@@ -23,6 +23,11 @@
  * Use is subject to license terms.
  */
 
+/*
+ * Copyright (c) 2018, Joyent, Inc.
+ * Copyright 2021 Oxide Computer Company
+ */
+
 #include <sys/types.h>
 #include <sys/systm.h>
 #include <sys/param.h>
@@ -69,7 +74,7 @@ extern struct modctl *mod_getctl(struct modlinkage *);
 extern int errsys(), nodev(), nulldev();
 
 extern int findmodbyname(char *);
-extern int mod_getsysnum(char *);
+extern int mod_getsysnum(const char *);
 
 extern struct execsw execsw[];
 
@@ -561,10 +566,8 @@ mod_installdrv(struct modldrv *modl, struct modlinkage *modlp)
 
 	/* Sanity check modname */
 	if ((major = ddi_name_to_major(modname)) == DDI_MAJOR_T_NONE) {
-#ifdef DEBUG
 		cmn_err(CE_WARN,
 		    "mod_installdrv: no major number for %s", modname);
-#endif
 		err = ENXIO;
 		goto done;
 	}
@@ -789,7 +792,7 @@ mod_installsys_sysent(
 	 */
 	if (mp->sy_flags & SE_NOUNLOAD) {
 		if (mp->sy_flags & SE_ARGC) {
-			sysp->sy_callc = (int64_t (*)())mp->sy_call;
+			sysp->sy_callc = (int64_t (*)())(uintptr_t)mp->sy_call;
 		} else {
 			sysp->sy_callc = syscall_ap;
 		}
@@ -834,7 +837,7 @@ mod_removesys_sysent(
 		    (SE_LOADED | SE_LOADABLE)) {
 			sysp->sy_flags &= ~SE_LOADED;
 			sysp->sy_callc = loadable_syscall;
-			sysp->sy_call = (int (*)())nosys;
+			sysp->sy_call = nosys32;
 			rw_exit(sysp->sy_lock);
 			return (0);
 		}
@@ -1336,7 +1339,7 @@ mod_installexec(struct modlexec *modl, struct modlinkage *modlp)
 	if (eswp->exec_func != NULL) {
 		printf("exec type %x is already installed\n",
 		    *eswp->exec_magic);
-			return (EBUSY);		 /* it's already there! */
+		return (EBUSY);		 /* it's already there! */
 	}
 
 	rw_enter(eswp->exec_lock, RW_WRITER);

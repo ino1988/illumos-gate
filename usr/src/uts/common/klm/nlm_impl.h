@@ -28,7 +28,7 @@
  */
 
 /*
- * Copyright 2012 Nexenta Systems, Inc.  All rights reserved.
+ * Copyright 2019 Nexenta by DDN, Inc. All rights reserved.
  * Copyright (c) 2012 by Delphix. All rights reserved.
  */
 
@@ -111,7 +111,7 @@ struct _kthread;
  * We pass three callback functions to nlm_do_lock:
  *    nlm_reply_cb: send a normal RPC reply
  *      nlm_res_cb: do a _res (message style) RPC (call)
- * nlm_testargs_cb: do a "granted" RPC call (after blocking)
+ * nlm_granted_cb: do a "granted" RPC call (after blocking)
  * Only one of the 1st or 2nd is used.
  * The 3rd is used only for blocking
  *
@@ -122,7 +122,7 @@ struct _kthread;
  */
 typedef bool_t (*nlm_reply_cb)(SVCXPRT *, nlm4_res *);
 typedef enum clnt_stat (*nlm_res_cb)(nlm4_res *, void *, CLIENT *);
-typedef enum clnt_stat (*nlm_testargs_cb)(nlm4_testargs *, void *, CLIENT *);
+typedef enum clnt_stat (*nlm_granted_cb)(nlm4_testargs *, nlm4_res *, CLIENT *);
 typedef enum clnt_stat (*nlm_testres_cb)(nlm4_testres *, void *, CLIENT *);
 
 /*
@@ -346,6 +346,7 @@ enum nlm_rpcb_state {
  *   nh_shrlist: a list of all active share resevations on the client side.
  *   nh_reclaimer: a pointer to reclamation thread (kthread_t)
  *                 NULL if reclamation thread doesn't exist
+ *   nh_laddr: the server address through which the request came from.
  */
 struct nlm_host {
 	kmutex_t		nh_lock;		/* (c) */
@@ -369,6 +370,7 @@ struct nlm_host {
 	struct nlm_vhold_list	nh_vholds_list;		/* (l) */
 	struct nlm_shres	*nh_shrlist;		/* (l) */
 	kthread_t		*nh_reclaimer;		/* (l) */
+	struct netbuf		nh_laddr;
 };
 TAILQ_HEAD(nlm_host_list, nlm_host);
 
@@ -459,6 +461,7 @@ struct nlm_globals {
 	int				cn_idle_tmo;		/* (z) */
 	int				grace_period;		/* (z) */
 	int				retrans_tmo;		/* (z) */
+	zoneid_t			nlm_zoneid;		/* (c) */
 	kmutex_t			clean_lock;		/* (c) */
 	TAILQ_ENTRY(nlm_globals)	nlm_link;		/* (g) */
 };
@@ -569,7 +572,7 @@ int nlm_knc_from_netid(const char *, struct knetconfig *);
  * NLM host functions (nlm_impl.c)
  */
 struct nlm_host *nlm_host_findcreate(struct nlm_globals *, char *,
-    const char *, struct netbuf *);
+    const char *, struct netbuf *, struct netbuf *);
 struct nlm_host *nlm_host_find(struct nlm_globals *,
     const char *, struct netbuf *);
 struct nlm_host *nlm_host_find_by_sysid(struct nlm_globals *, sysid_t);
@@ -621,7 +624,7 @@ void nlm_do_notify2(nlm_sm_status *, void *, struct svc_req *);
 void nlm_do_test(nlm4_testargs *, nlm4_testres *,
     struct svc_req *, nlm_testres_cb);
 void nlm_do_lock(nlm4_lockargs *, nlm4_res *, struct svc_req *,
-    nlm_reply_cb, nlm_res_cb, nlm_testargs_cb);
+    nlm_reply_cb, nlm_res_cb, nlm_granted_cb);
 void nlm_do_cancel(nlm4_cancargs *, nlm4_res *,
     struct svc_req *, nlm_res_cb);
 void nlm_do_unlock(nlm4_unlockargs *, nlm4_res *,

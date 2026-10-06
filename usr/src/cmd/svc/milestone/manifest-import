@@ -20,6 +20,7 @@
 # CDDL HEADER END
 #
 # Copyright (c) 2004, 2010, Oracle and/or its affiliates. All rights reserved.
+# Copyright 2017 RackTop Systems.
 #
 
 # 0a  Initialization.
@@ -73,17 +74,13 @@ function svccfg_apply {
 }
 
 #
-# If the smf/manifest table has file entries that are missing
+# If the smf repository has file entries that are missing
 # then there is work to be done by the cleanup process.
 #
 function cleanup_needwork {
-	if [ "$early" == true ]; then
-		smfmfiles=`/usr/bin/svcprop smf/manifest | \
-		    awk '(/^lib_/ && /\/manifestfile /) {print $3}'`
-	else
-		smfmfiles=`/usr/bin/svcprop smf/manifest | \
-		    awk '/\/manifestfile / {print $3}'`
-	fi
+	smfmfiles=`svcprop -p manifestfiles '*' 2>/dev/null |
+	    nawk -v early="$early" '$2 == "astring" &&
+	    (early != "true" || $3 ~ "^/lib/") { print $3 }'`
 
 	nw=`/lib/svc/bin/mfstscan $smfmfiles 2>&1 1>/dev/null`
 	[ "$nw" ] && return 1
@@ -237,13 +234,13 @@ function import_manifests {
 		$X /usr/sbin/svccfg import $dirs > $logf 2>&1
 	fi
 
-	grep "Loaded .*. smf(5) service descriptions" $logf > /dev/null 2>&1
+	grep "Loaded .*. smf(7) service descriptions" $logf > /dev/null 2>&1
 	if [ $? -eq 0 ]; then
 		activity=true
 	fi
 
 	if [ -s $logf ]; then
-		grep "smf(5) service descriptions failed to load" $logf > /dev/null 2>&1
+		grep "smf(7) service descriptions failed to load" $logf > /dev/null 2>&1
 		failures=$?
 		if [ $failures -eq 0 ]; then
 			echo "svccfg warnings:"
@@ -316,7 +313,7 @@ function apply_profile {
 
 #
 # 4.  Upgrade handling.  The upgrade file generally consists of a series
-# of svcadm(1M) and svccfg(1M) commands.
+# of svcadm(8) and svccfg(8) commands.
 #
 function handle_upgrade {
 

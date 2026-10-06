@@ -9,7 +9,7 @@
  *   -z Show compression statistics instead of default display
  *
  * History:
- *      perkins@cps.msu.edu: Added compression statistics and alternate 
+ *      perkins@cps.msu.edu: Added compression statistics and alternate
  *                display. 11/94
  *	Brad Parker (brad@cayman.com) 6/92
  *
@@ -36,12 +36,6 @@
 
 #ifndef __STDC__
 #define const
-#endif
-
-#pragma ident	"%Z%%M%	%I%	%E% SMI"
-
-#ifndef lint
-static const char rcsid[] = "$Id: pppstats.c,v 1.27 1999/08/13 06:46:23 paulus Exp $";
 #endif
 
 #include <stdio.h>
@@ -399,7 +393,7 @@ intpr()
 		       W(c.inc_packets),
 		       ccs.c.ratio / 256.0);
 	    }
-	
+
 	} else {
 	    if (ratef)
 		(void) printf("%8.3f", KBPS(V(p.ppp_ibytes)));

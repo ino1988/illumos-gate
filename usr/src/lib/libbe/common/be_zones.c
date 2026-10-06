@@ -25,6 +25,7 @@
 
 /*
  * Copyright 2013 Nexenta Systems, Inc. All rights reserved.
+ * Copyright 2022 OmniOS Community Edition (OmniOSce) Association.
  */
 
 /*
@@ -111,7 +112,7 @@ int
 be_find_active_zone_root(zfs_handle_t *be_zhp, char *zonepath_ds,
     char *zoneroot_ds, int zoneroot_ds_size)
 {
-	active_zone_root_data_t		azr_data = { 0 };
+	active_zone_root_data_t		azr_data = { { 0 }, NULL };
 	zfs_handle_t			*zhp;
 	char				zone_container_ds[MAXPATHLEN];
 	int				ret = BE_SUCCESS;
@@ -135,9 +136,13 @@ be_find_active_zone_root(zfs_handle_t *be_zhp, char *zonepath_ds,
 		}
 	}
 
-	/* Generate string for the root container dataset  for this zone. */
-	be_make_container_ds(zonepath_ds, zone_container_ds,
-	    sizeof (zone_container_ds));
+	/* Generate string for the root container dataset for this zone. */
+	if ((ret = be_make_container_ds(zonepath_ds, zone_container_ds,
+	    sizeof (zone_container_ds))) != BE_SUCCESS) {
+		be_print_err(gettext("%s: failed to get BE container dataset "
+		    "for %s\n"), __func__, zonepath_ds);
+		return (ret);
+	}
 
 	/* Get handle to this zone's root container dataset */
 	if ((zhp = zfs_open(g_zfs, zone_container_ds, ZFS_TYPE_FILESYSTEM))
@@ -205,8 +210,12 @@ be_find_mounted_zone_root(char *zone_altroot, char *zonepath_ds,
 	int		zret = 0;
 
 	/* Generate string for the root container dataset for this zone. */
-	be_make_container_ds(zonepath_ds, zone_container_ds,
-	    sizeof (zone_container_ds));
+	if ((ret = be_make_container_ds(zonepath_ds, zone_container_ds,
+	    sizeof (zone_container_ds))) != BE_SUCCESS) {
+		be_print_err(gettext("%s: failed to get BE container dataset "
+		    "for %s\n"), __func__, zonepath_ds);
+		return (ret);
+	}
 
 	/* Get handle to this zone's root container dataset. */
 	if ((zhp = zfs_open(g_zfs, zone_container_ds, ZFS_TYPE_FILESYSTEM))
@@ -293,8 +302,12 @@ be_zone_supported(char *zonepath_ds)
 	 * Make sure the zonepath has a zone root container dataset
 	 * underneath it.
 	 */
-	be_make_container_ds(zonepath_ds, zone_container_ds,
-	    sizeof (zone_container_ds));
+	if ((ret = be_make_container_ds(zonepath_ds, zone_container_ds,
+	    sizeof (zone_container_ds))) != BE_SUCCESS) {
+		be_print_err(gettext("%s: failed to get BE container dataset "
+		    "for %s\n"), __func__, zonepath_ds);
+		return (B_FALSE);
+	}
 
 	if (!zfs_dataset_exists(g_zfs, zone_container_ds,
 	    ZFS_TYPE_FILESYSTEM)) {

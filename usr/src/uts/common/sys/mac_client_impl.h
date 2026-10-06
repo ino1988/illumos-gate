@@ -21,6 +21,11 @@
 /*
  * Copyright 2010 Sun Microsystems, Inc.  All rights reserved.
  * Use is subject to license terms.
+ * Copyright (c) 2012, Joyent, Inc.  All rights reserved.
+ * Copyright 2026 Oxide Computer Company
+ */
+/*
+ * Copyright 2018 Joyent, Inc.
  */
 
 #ifndef	_SYS_MAC_CLIENT_IMPL_H
@@ -53,11 +58,6 @@ typedef struct mac_unicast_impl_s {			/* Protected by */
 	uint16_t			mui_vid;	/* SL */
 } mac_unicast_impl_t;
 
-#define	MAC_CLIENT_FLAGS_PRIMARY		0X0001
-#define	MAC_CLIENT_FLAGS_VNIC_PRIMARY		0x0002
-#define	MAC_CLIENT_FLAGS_MULTI_PRIMARY		0x0004
-#define	MAC_CLIENT_FLAGS_PASSIVE_PRIMARY	0x0008
-
 /*
  * One of these is instantiated per MAC client promiscuous callback.
  *
@@ -79,6 +79,8 @@ typedef struct mac_promisc_impl_s {			/* Protected by */
 	boolean_t			mpi_no_phys;	/* WO */
 	boolean_t			mpi_strip_vlan_tag;	/* WO */
 	boolean_t			mpi_no_copy;	/* WO */
+	boolean_t			mpi_rx_only;	/* WO */
+	boolean_t			mpi_tx_only;	/* WO */
 } mac_promisc_impl_t;
 
 typedef union mac_tx_percpu_s {
@@ -93,7 +95,87 @@ typedef union mac_tx_percpu_s {
 #define	pcpu_tx_refcnt	pcpu_lr._pcpu_tx_refcnt
 
 /*
- * One of these is instanciated for each MAC client.
+ * MAC Client type
+ */
+typedef enum {
+	MAC_CLIENT_FLAGS_PRIMARY		= 1 << 0,
+	MAC_CLIENT_FLAGS_VNIC_PRIMARY		= 1 << 1,
+	MAC_CLIENT_FLAGS_MULTI_PRIMARY		= 1 << 2,
+	MAC_CLIENT_FLAGS_PASSIVE_PRIMARY	= 1 << 3,
+} mac_client_flags_t;
+
+/*
+ * MAC Client Implementation State
+ */
+typedef enum {
+	/*
+	 * The client is a VNIC.
+	 */
+	MCIS_IS_VNIC			= 1 << 0,
+	/*
+	 * The client has exclusive control over the MAC, such that it is
+	 * the sole client of the MAC.
+	 */
+	MCIS_EXCLUSIVE			= 1 << 1,
+	/*
+	 * MAC will not add VLAN tags to outgoing traffic. If this flag
+	 * is set it is up to the client to add the correct VLAN tag.
+	 */
+	MCIS_TAG_DISABLE		= 1 << 2,
+	/*
+	 * MAC will not strip the VLAN tags on incoming traffic before
+	 * passing it to mci_rx_fn. This only applies to non-bypass
+	 * traffic.
+	 */
+	MCIS_STRIP_DISABLE		= 1 << 3,
+	/*
+	 * The client represents a port on an aggr.
+	 */
+	MCIS_IS_AGGR_PORT		= 1 << 4,
+	/*
+	 * The client is capable of polling the Rx TCP softrings.
+	 */
+	MCIS_CLIENT_POLL_CAPABLE	= 1 << 5,
+	/*
+	 * This flag is set when the client's link info has been logged
+	 * by the mac_log_linkinfo() timer. This ensures that the
+	 * client's link info is only logged once.
+	 */
+	MCIS_DESC_LOGGED		= 1 << 6,
+	/*
+	 * This client has an HIO share bound to it.
+	 */
+	MCIS_SHARE_BOUND		= 1 << 7,
+	/*
+	 * MAC will not check the VID of the client's Tx traffic.
+	 */
+	MCIS_DISABLE_TX_VID_CHECK	= 1 << 8,
+	/*
+	 * The client is using the same name as its underlying MAC. This
+	 * happens when dlmgmtd is unreachable during client creation.
+	 */
+	MCIS_USE_DATALINK_NAME		= 1 << 9,
+	/*
+	 * The client requires MAC address hardware classification. This
+	 * is only used by sun4v vsw.
+	 */
+	MCIS_UNICAST_HW			= 1 << 10,
+	/*
+	 * The client sits atop an aggr.
+	 */
+	MCIS_IS_AGGR_CLIENT		= 1 << 11,
+	/*
+	 * Do not allow the client to enable DLS bypass.
+	 */
+	MCIS_RX_BYPASS_DISABLE		= 1 << 12,
+	/*
+	 * This client has no MAC unicast addresss associated with it.
+	 */
+	MCIS_NO_UNICAST_ADDR		= 1 << 13,
+} mac_client_state_t;
+
+/*
+ * One of these is instantiated for each MAC client.
  */
 struct mac_client_impl_s {			/* Protected by */
 	struct mac_client_impl_s *mci_client_next;	/* mi_rw_lock */
@@ -112,11 +194,10 @@ struct mac_client_impl_s {			/* Protected by */
 	 */
 	struct mac_impl_s	*mci_upper_mip;		/* WO */
 
-	uint32_t		mci_state_flags;	/* WO */
+	mac_client_state_t	mci_state_flags;	/* WO */
 	mac_rx_t		mci_rx_fn;		/* Rx Quiescence */
 	void			*mci_rx_arg;		/* Rx Quiescence */
-	mac_direct_rx_t		mci_direct_rx_fn;	/* SL */
-	void			*mci_direct_rx_arg;	/* SL */
+	mac_direct_rxs_t	mci_direct_rx;		/* SL */
 	mac_rx_t		mci_rx_p_fn;		/* Rx Quiescence */
 	void			*mci_rx_p_arg;		/* Rx Quiescence */
 	void			*mci_p_unicast_list;
@@ -124,28 +205,38 @@ struct mac_client_impl_s {			/* Protected by */
 	mac_cb_t		*mci_promisc_list;	/* mi_promisc_lock */
 
 	mac_address_t		*mci_unicast;
-	uint32_t		mci_flags;		/* SL */
+	mac_client_flags_t	mci_flags;		/* SL */
 	krwlock_t		mci_rw_lock;
 	mac_unicast_impl_t	*mci_unicast_list;	/* mci_rw_lock */
+
 	/*
 	 * The mac_client_impl_t may be shared by multiple clients, i.e
 	 * multiple VLANs sharing the same MAC client. In this case the
-	 * address/vid tubles differ and are each associated with their
+	 * address/vid tuples differ and are each associated with their
 	 * own flow entry, but the rest underlying components SRS, etc,
 	 * are common.
+	 *
+	 * This is only needed to support sun4v vsw. There are several
+	 * places in MAC we could simplify the code if we removed
+	 * sun4v support.
 	 */
 	flow_entry_t		*mci_flent_list;	/* mci_rw_lock */
 	uint_t			mci_nflents;		/* mci_rw_lock */
 	uint_t			mci_nvids;		/* mci_rw_lock */
+	volatile uint32_t	mci_vidcache;		/* VID cache */
 
-	/* Resource Management Functions */
-	mac_resource_add_t	mci_resource_add;	/* SL */
-	mac_resource_remove_t	mci_resource_remove;	/* SL */
-	mac_resource_quiesce_t	mci_resource_quiesce;	/* SL */
-	mac_resource_restart_t	mci_resource_restart;	/* SL */
-	mac_resource_bind_t	mci_resource_bind;	/* SL */
-	void			*mci_resource_arg;	/* SL */
-
+	/*
+	 * Resource Management Callback Functions
+	 *
+	 * A mac client may have both an IPv4 and IPv6 ill_t active on it. In
+	 * order to avoid stomping on each other we give each their own resource
+	 * callbacks. At this time resources are used solely by TCP softrings
+	 * for the purpose of IP ring/squeue creation and polling. Currently the
+	 * callbacks are identical across protocol types, save the mrc_arg,
+	 * which is used to pass the ill_t up to IP.
+	 */
+	mac_resource_cb_t	mci_rcb4;	/* SL */
+	mac_resource_cb_t	mci_rcb6;	/* SL */
 
 	/* Tx notify callback */
 	kmutex_t		mci_tx_cb_lock;
@@ -178,6 +269,7 @@ struct mac_client_impl_s {			/* Protected by */
 	 */
 	kmutex_t		mci_protect_lock;
 	uint32_t		mci_protect_flags;	/* SL */
+	in6_addr_t		mci_v6_mac_token;	/* SL */
 	in6_addr_t		mci_v6_local_addr;	/* SL */
 	avl_tree_t		mci_v4_pending_txn;	/* mci_protect_lock */
 	avl_tree_t		mci_v4_completed_txn;	/* mci_protect_lock */
@@ -185,6 +277,7 @@ struct mac_client_impl_s {			/* Protected by */
 	avl_tree_t		mci_v6_pending_txn;	/* mci_protect_lock */
 	avl_tree_t		mci_v6_cid;		/* mci_protect_lock */
 	avl_tree_t		mci_v6_dyn_ip;		/* mci_protect_lock */
+	avl_tree_t		mci_v6_slaac_ip;	/* mci_protect_lock */
 	timeout_id_t		mci_txn_cleanup_tid;	/* mci_protect_lock */
 
 	/*
@@ -217,7 +310,7 @@ extern	int	mac_tx_percpu_cnt;
 	&(mcip)->mci_flent->fe_resource_props)
 
 #define	MCIP_EFFECTIVE_PROPS(mcip)		\
-	(mcip->mci_flent == NULL ? NULL : 	\
+	(mcip->mci_flent == NULL ? NULL :	\
 	&(mcip)->mci_flent->fe_effective_props)
 
 #define	MCIP_RESOURCE_PROPS_MASK(mcip)		\
@@ -280,35 +373,42 @@ extern	int	mac_tx_percpu_cnt;
 	}								\
 }
 
+/*
+ * To allow the hot path to not grab any additional locks, we keep a single
+ * entry VLAN ID cache that caches whether or not a given VID belongs to a
+ * MAC client.
+ */
+#define	MCIP_VIDCACHE_VALIDSHIFT	31
+#define	MCIP_VIDCACHE_VIDSHIFT		1
+#define	MCIP_VIDCACHE_VIDMASK		(UINT16_MAX << MCIP_VIDCACHE_VIDSHIFT)
+#define	MCIP_VIDCACHE_BOOLSHIFT		0
+
+#define	MCIP_VIDCACHE_INVALID		0
+
+#define	MCIP_VIDCACHE_CACHE(vid, bool)	\
+	((1U << MCIP_VIDCACHE_VALIDSHIFT) | \
+	((vid) << MCIP_VIDCACHE_VIDSHIFT) | \
+	((bool) ? (1U << MCIP_VIDCACHE_BOOLSHIFT) : 0))
+
+#define	MCIP_VIDCACHE_ISVALID(v)	((v) & (1U << MCIP_VIDCACHE_VALIDSHIFT))
+#define	MCIP_VIDCACHE_VID(v)		\
+	(((v) & MCIP_VIDCACHE_VIDMASK) >> MCIP_VIDCACHE_VIDSHIFT)
+#define	MCIP_VIDCACHE_BOOL(v)		((v) & (1U << MCIP_VIDCACHE_BOOLSHIFT))
+
 #define	MAC_TAG_NEEDED(mcip)						\
 	(((mcip)->mci_state_flags & MCIS_TAG_DISABLE) == 0 &&		\
 	(mcip)->mci_nvids == 1)						\
 
-/* MCI state flags */
-#define	MCIS_IS_VNIC			0x0001
-#define	MCIS_EXCLUSIVE			0x0002
-#define	MCIS_TAG_DISABLE		0x0004
-#define	MCIS_STRIP_DISABLE		0x0008
-#define	MCIS_IS_AGGR_PORT		0x0010
-#define	MCIS_CLIENT_POLL_CAPABLE	0x0020
-#define	MCIS_DESC_LOGGED		0x0040
-#define	MCIS_SHARE_BOUND		0x0080
-#define	MCIS_DISABLE_TX_VID_CHECK	0x0100
-#define	MCIS_USE_DATALINK_NAME		0x0200
-#define	MCIS_UNICAST_HW			0x0400
-#define	MCIS_IS_AGGR			0x0800
-#define	MCIS_RX_BYPASS_DISABLE		0x1000
-#define	MCIS_NO_UNICAST_ADDR		0x2000
-
 /* Mac protection flags */
 #define	MPT_FLAG_V6_LOCAL_ADDR_SET	0x0001
+#define	MPT_FLAG_PROMISC_FILTERED	0x0002
 
 /* in mac_client.c */
 extern void mac_promisc_client_dispatch(mac_client_impl_t *, mblk_t *);
 extern void mac_client_init(void);
 extern void mac_client_fini(void);
-extern void mac_promisc_dispatch(mac_impl_t *, mblk_t *,
-    mac_client_impl_t *);
+extern void mac_promisc_dispatch(mac_impl_t *, mblk_t *, mac_client_impl_t *,
+    boolean_t);
 
 extern int mac_validate_props(mac_impl_t *, mac_resource_props_t *);
 

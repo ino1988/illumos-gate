@@ -22,6 +22,7 @@
 /*
  * Copyright 2008 Sun Microsystems, Inc.  All rights reserved.
  * Use is subject to license terms.
+ * Copyright (c) 2016 by Delphix. All rights reserved.
  */
 
 /*
@@ -62,7 +63,6 @@
 #include <sys/callb.h>
 #include <sys/open.h>
 #include <sys/ddidmareq.h>
-#include <sys/dma_engine.h>
 #include <sys/kstat.h>
 #include <sys/kmem.h>
 #include <sys/modctl.h>
@@ -78,7 +78,7 @@
 #include <sys/pcic_reg.h>
 #include <sys/pcic_var.h>
 
-#if defined(__i386) || defined(__amd64)
+#if defined(__x86)
 #include <sys/pci_cfgspace.h>
 #endif
 
@@ -111,7 +111,7 @@ static int pcic_apply_avail_ranges(dev_info_t *, pcm_regs_t *,
 int pci_resource_setup_avail(dev_info_t *, pci_regspec_t *, int);
 
 /*
- * On x86 platforms the ddi_iobp_alloc(9F) and ddi_mem_alloc(9F) calls
+ * On x86 platforms the ddi_iobp_alloc(9F) and ddi_umem_alloc(9F) calls
  * are xlated into DMA ctlops. To make this nexus work on x86, we
  * need to have the default ddi_dma_mctl ctlops in the bus_ops
  * structure, just to pass the request to the parent. The correct
@@ -140,14 +140,14 @@ struct bus_ops pcmciabus_ops = {
 	NULL,				/* (*bus_remove_eventcall)();	*/
 	NULL,				/* (*bus_post_event)();		*/
 	NULL,				/* (*bus_intr_ctl)();		*/
-	NULL,				/* (*bus_config)(); 		*/
-	NULL,				/* (*bus_unconfig)(); 		*/
-	NULL,				/* (*bus_fm_init)(); 		*/
-	NULL,				/* (*bus_fm_fini)(); 		*/
+	NULL,				/* (*bus_config)();		*/
+	NULL,				/* (*bus_unconfig)();		*/
+	NULL,				/* (*bus_fm_init)();		*/
+	NULL,				/* (*bus_fm_fini)();		*/
 	NULL,				/* (*bus_enter)()		*/
 	NULL,				/* (*bus_exit)()		*/
 	NULL,				/* (*bus_power)()		*/
-	pcmcia_intr_ops			/* (*bus_intr_op)(); 		*/
+	pcmcia_intr_ops			/* (*bus_intr_op)();		*/
 };
 
 static struct cb_ops pcic_cbops = {
@@ -828,7 +828,7 @@ pcic_attach(dev_info_t *dip, ddi_attach_cmd_t cmd)
 	 */
 	if (pcic->pc_flags & PCF_PCIBUS) {
 		int class_code;
-#if defined(__i386) || defined(__amd64)
+#if defined(__x86)
 		pcic->pc_base = 0x1000000;
 		pcic->pc_bound = (uint32_t)~0;
 		pcic->pc_iobase = 0x1000;
@@ -1766,7 +1766,7 @@ pcic_setup_adapter(pcicdev_t *pcic)
 	int i;
 	int value, flags;
 
-#if defined(__i386) || defined(__amd64)
+#if defined(__x86)
 	pci_regspec_t *reg;
 	uchar_t bus, dev, func;
 	uint_t classcode;
@@ -1972,7 +1972,7 @@ pcic_setup_adapter(pcicdev_t *pcic)
 			ddi_put8(pcic->cfg_handle,
 			    pcic->cfgaddr + PCIC_DIAG_REG, cfg);
 
-#if defined(__i386) || defined(__amd64)
+#if defined(__x86)
 			/*
 			 * Some TI chips have 2 cardbus slots(function0 and
 			 * function1), and others may have just 1 cardbus slot.
@@ -2646,7 +2646,7 @@ pcic_calc_speed(pcicdev_t *pcic, uint32_t speed)
  * Generally the larger value is taken if 2 are possible.
  */
 static struct pcic_card_times {
-	uint16_t cycle;	/* Speed as found in the atribute space of he card. */
+	uint16_t cycle;	/* Speed as found in the atribute space of the card. */
 	uint16_t setup;	/* Corresponding address setup time. */
 	uint16_t width;	/* Corresponding width, OE or WE. */
 	uint16_t hold;	/* Corresponding data or address hold time. */
@@ -2826,7 +2826,7 @@ pcic_set_window(dev_info_t *dip, set_window_t *window)
 				(void) pcmcia_free_mem(memp->res_dip, &res);
 				memp->pcw_status &= ~(PCW_MAPPED|PCW_ENABLED);
 				memp->pcw_hostmem = NULL;
-				memp->pcw_base = NULL;
+				memp->pcw_base = 0;
 				memp->pcw_len = 0;
 			}
 
@@ -2885,7 +2885,7 @@ pcic_set_window(dev_info_t *dip, set_window_t *window)
 				    (window->socket << 16),
 				    (caddr_t *)&memp->pcw_hostmem,
 				    &memp->pcw_handle,
-				    &window->attr, NULL);
+				    &window->attr, 0);
 
 				if (which != DDI_SUCCESS) {
 
@@ -4743,7 +4743,7 @@ pcic_set_interrupt(dev_info_t *dip, set_irq_handler_t *handler)
 		}
 
 		pcic->irq_current->intr =
-		    (ddi_intr_handler_t *)handler->handler;
+		    (ddi_intr_handler_t *)(uintptr_t)handler->handler;
 		pcic->irq_current->handler_id = handler->handler_id;
 		pcic->irq_current->arg1 = handler->arg1;
 		pcic->irq_current->arg2 = handler->arg2;
@@ -4756,7 +4756,7 @@ pcic_set_interrupt(dev_info_t *dip, set_irq_handler_t *handler)
 		break;
 
 	default:
-		intr->intr = (ddi_intr_handler_t *)handler->handler;
+		intr->intr = (ddi_intr_handler_t *)(uintptr_t)handler->handler;
 		intr->handler_id = handler->handler_id;
 		intr->arg1 = handler->arg1;
 		intr->arg2 = handler->arg2;
@@ -6081,7 +6081,7 @@ pcic_close(dev_t dev, int flag, int otyp, cred_t *cred)
 
 static int
 pcic_ioctl(dev_t dev, int cmd, intptr_t arg, int mode, cred_t *cred,
-	int *rval)
+    int *rval)
 {
 #ifdef CARDBUS
 	if (cardbus_is_cb_minor(dev))
@@ -6332,6 +6332,7 @@ pcic_cb_disable_intr(dev_info_t *dip)
 	mutex_exit(&pcic->pc_lock);
 }
 
+#if defined(__sparc)
 static int
 log_pci_cfg_err(ushort_t e, int bridge_secondary)
 {
@@ -6362,7 +6363,6 @@ log_pci_cfg_err(ushort_t e, int bridge_secondary)
 	return (nerr);
 }
 
-#if defined(__sparc)
 static int
 pcic_fault(enum pci_fault_ops op, void *arg)
 {
@@ -6785,6 +6785,7 @@ pcic_cbus_powerctl(pcicdev_t *pcic, int socket)
 
 static int	pcic_do_pprintf = 0;
 
+#ifdef PCIC_DEBUG
 static void
 pcic_dump_debqueue(char *msg)
 {
@@ -6801,6 +6802,7 @@ pcic_dump_debqueue(char *msg)
 		debp = debp->next;
 	}
 }
+#endif /* PCIC_DEBUG */
 
 
 /* PRINTFLIKE3 */

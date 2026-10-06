@@ -18,23 +18,25 @@
 #
 # CDDL HEADER END
 #
-#
+# Copyright 2014 Shruti V Sampat <shrutisampat@gmail.com>
 # Copyright 2009 Sun Microsystems, Inc.  All rights reserved.
 # Use is subject to license terms.
 #
+# Copyright (c) 2018, Joyent, Inc.
 
 PROG= utmpd
+OBJS= $(PROG).o
 DEFAULTFILES= utmpd.dfl
 MANIFEST= utmp.xml
 SVCMETHOD= svc-utmpd
 
 include ../Makefile.cmd
+include ../Makefile.cmd.64
+include ../Makefile.ctf
 
 ROOTMANIFESTDIR = $(ROOTSVCSYSTEM)
 
 FILEMODE = 555
-
-CERRWARN += -_gcc=-Wno-extra
 
 .KEEP_STATE:
 
@@ -43,10 +45,13 @@ all: $(PROG)
 install: all $(DIRS) $(ROOTLIBPROG) $(ROOTETCDEFAULTFILES) $(ROOTMANIFEST) \
 	$(ROOTSVCMETHOD)
 
+$(PROG): $(OBJS)
+	$(LINK.c) -o $(PROG) $(OBJS) $(LDLIBS)
+	$(POST_PROCESS)
+
 check:	$(CHKMANIFEST)
 
 clean:
-
-lint:	lint_PROG
+	$(RM) $(OBJS)
 
 include ../Makefile.targ

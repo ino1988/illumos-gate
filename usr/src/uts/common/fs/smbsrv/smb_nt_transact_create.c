@@ -20,6 +20,7 @@
  */
 /*
  * Copyright (c) 2007, 2010, Oracle and/or its affiliates. All rights reserved.
+ * Copyright 2017 Nexenta Systems, Inc.  All rights reserved.
  */
 
 /*
@@ -34,6 +35,8 @@
 
 #include <smbsrv/smb_kproto.h>
 #include <smbsrv/smb_fsops.h>
+
+extern int smb_nt_create_enable_extended_response;
 
 /*
  * smb_nt_transact_create
@@ -82,9 +85,9 @@ smb_pre_nt_transact_create(smb_request_t *sr, smb_xa_t *xa)
 	if (rc == 0) {
 		if (NameLength == 0) {
 			op->fqi.fq_path.pn_path = "\\";
-		} else if (NameLength >= MAXPATHLEN) {
-			smbsr_error(sr, NT_STATUS_OBJECT_PATH_NOT_FOUND,
-			    ERRDOS, ERROR_PATH_NOT_FOUND);
+		} else if (NameLength >= SMB_MAXPATHLEN) {
+			smbsr_error(sr, NT_STATUS_OBJECT_NAME_INVALID,
+			    ERRDOS, ERROR_INVALID_NAME);
 			rc = -1;
 		} else {
 			rc = smb_mbc_decodef(&xa->req_param_mb, "%#u",
@@ -101,7 +104,7 @@ smb_pre_nt_transact_create(smb_request_t *sr, smb_xa_t *xa)
 	}
 
 	if (sd_len) {
-		status = smb_decode_sd(xa, &sd);
+		status = smb_decode_sd(&xa->req_data_mb, &sd);
 		if (status != NT_STATUS_SUCCESS) {
 			smbsr_error(sr, status, 0, 0);
 			return (SDRC_ERROR);
@@ -112,8 +115,7 @@ smb_pre_nt_transact_create(smb_request_t *sr, smb_xa_t *xa)
 		op->sd = NULL;
 	}
 
-	DTRACE_SMB_2(op__NtTransactCreate__start, smb_request_t *, sr,
-	    struct open_param *, op);
+	DTRACE_SMB_START(op__NtTransactCreate, smb_request_t *, sr);
 
 	return ((rc == 0) ? SDRC_SUCCESS : SDRC_ERROR);
 }
@@ -122,27 +124,45 @@ void
 smb_post_nt_transact_create(smb_request_t *sr, smb_xa_t *xa)
 {
 	smb_sd_t *sd = sr->arg.open.sd;
+	_NOTE(ARGUNUSED(xa))
 
-	DTRACE_SMB_2(op__NtTransactCreate__done, smb_request_t *, sr,
-	    smb_xa_t *, xa);
+	DTRACE_SMB_DONE(op__NtTransactCreate, smb_request_t *, sr);
 
 	if (sd) {
 		smb_sd_term(sd);
 		kmem_free(sd, sizeof (smb_sd_t));
 	}
 
-	if (sr->arg.open.dir != NULL)
+	if (sr->arg.open.dir != NULL) {
 		smb_ofile_release(sr->arg.open.dir);
+		sr->arg.open.dir = NULL;
+	}
 }
 
+/*
+ * A lot like smb_com_nt_create_andx
+ */
 smb_sdrc_t
 smb_nt_transact_create(smb_request_t *sr, smb_xa_t *xa)
 {
-	struct open_param *op = &sr->arg.open;
+	struct open_param	*op = &sr->arg.open;
+	smb_attr_t		*ap = &op->fqi.fq_fattr;
+	smb_ofile_t		*of;
+	int			rc;
 	uint8_t			DirFlag;
-	smb_attr_t		attr;
-	smb_node_t		*node;
-	uint32_t status;
+	uint32_t		status;
+
+	if (op->create_options & ~SMB_NTCREATE_VALID_OPTIONS) {
+		smbsr_error(sr, NT_STATUS_INVALID_PARAMETER,
+		    ERRDOS, ERROR_INVALID_PARAMETER);
+		return (SDRC_ERROR);
+	}
+
+	if (op->create_options & FILE_OPEN_BY_FILE_ID) {
+		smbsr_error(sr, NT_STATUS_NOT_SUPPORTED,
+		    ERRDOS, ERROR_NOT_SUPPORTED);
+		return (SDRC_ERROR);
+	}
 
 	if ((op->create_options & FILE_DELETE_ON_CLOSE) &&
 	    !(op->desired_access & DELETE)) {
@@ -172,8 +192,7 @@ smb_nt_transact_create(smb_request_t *sr, smb_xa_t *xa)
 	if (op->rootdirfid == 0) {
 		op->fqi.fq_dnode = sr->tid_tree->t_snode;
 	} else {
-		op->dir = smb_ofile_lookup_by_fid(sr->tid_tree,
-		    (uint16_t)op->rootdirfid);
+		op->dir = smb_ofile_lookup_by_fid(sr, (uint16_t)op->rootdirfid);
 		if (op->dir == NULL) {
 			smbsr_error(sr, NT_STATUS_INVALID_HANDLE,
 			    ERRDOS, ERRbadfid);
@@ -182,68 +201,94 @@ smb_nt_transact_create(smb_request_t *sr, smb_xa_t *xa)
 		op->fqi.fq_dnode = op->dir->f_node;
 	}
 
-	op->op_oplock_levelII = B_TRUE;
-
 	status = smb_common_open(sr);
-
-	if (status != NT_STATUS_SUCCESS)
+	if (status != NT_STATUS_SUCCESS) {
+		smbsr_status(sr, status, 0, 0);
 		return (SDRC_ERROR);
+	}
+	if (op->op_oplock_level != SMB_OPLOCK_NONE) {
+		/* Oplock req. in op->op_oplock_level etc. */
+		smb1_oplock_acquire(sr, B_TRUE);
+	}
+
+	/*
+	 * NB: after the above smb_common_open() success,
+	 * we have a handle allocated (sr->fid_ofile).
+	 * If we don't return success, we must close it.
+	 */
+	of = sr->fid_ofile;
 
 	switch (sr->tid_tree->t_res_type & STYPE_MASK) {
 	case STYPE_DISKTREE:
 	case STYPE_PRINTQ:
 		if (op->create_options & FILE_DELETE_ON_CLOSE)
-			smb_ofile_set_delete_on_close(sr->fid_ofile);
-
-		node = sr->fid_ofile->f_node;
-		DirFlag = smb_node_is_dir(node) ? 1 : 0;
-		if (smb_node_getattr(sr, node, &attr) != 0) {
-			smbsr_error(sr, NT_STATUS_INTERNAL_ERROR,
-			    ERRDOS, ERROR_INTERNAL_ERROR);
-			return (SDRC_ERROR);
-		}
-
-		(void) smb_mbc_encodef(&xa->rep_param_mb, "b.wllTTTTlqqwwb",
-		    op->op_oplock_level,
-		    sr->smb_fid,
-		    op->action_taken,
-		    0,	/* EaErrorOffset */
-		    &attr.sa_crtime,
-		    &attr.sa_vattr.va_atime,
-		    &attr.sa_vattr.va_mtime,
-		    &attr.sa_vattr.va_ctime,
-		    op->dattr & FILE_ATTRIBUTE_MASK,
-		    attr.sa_allocsz,
-		    attr.sa_vattr.va_size,
-		    op->ftype,
-		    op->devstate,
-		    DirFlag);
+			smb_ofile_set_delete_on_close(sr, of);
+		DirFlag = smb_node_is_dir(of->f_node) ? 1 : 0;
 		break;
 
 	case STYPE_IPC:
-		bzero(&attr, sizeof (smb_attr_t));
-		(void) smb_mbc_encodef(&xa->rep_param_mb, "b.wllTTTTlqqwwb",
-		    0,
-		    sr->smb_fid,
-		    op->action_taken,
-		    0,	/* EaErrorOffset */
-		    &attr.sa_crtime,
-		    &attr.sa_vattr.va_atime,
-		    &attr.sa_vattr.va_mtime,
-		    &attr.sa_vattr.va_ctime,
-		    op->dattr,
-		    0x1000LL,
-		    0LL,
-		    op->ftype,
-		    op->devstate,
-		    0);
+		DirFlag = 0;
 		break;
 
 	default:
 		smbsr_error(sr, NT_STATUS_INVALID_DEVICE_REQUEST,
 		    ERRDOS, ERROR_INVALID_FUNCTION);
-		return (SDRC_ERROR);
+		goto errout;
 	}
 
-	return (SDRC_SUCCESS);
+	if ((op->nt_flags & NT_CREATE_FLAG_EXTENDED_RESPONSE) != 0 &&
+	    smb_nt_create_enable_extended_response != 0) {
+		uint32_t MaxAccess = 0;
+		if (of->f_node != NULL) {
+			smb_fsop_eaccess(sr, of->f_cr, of->f_node, &MaxAccess);
+		}
+		MaxAccess |= of->f_granted_access;
+
+		rc = smb_mbc_encodef(
+		    &xa->rep_param_mb, "bbwllTTTTlqqwwb16.qll",
+		    op->op_oplock_level,	/* (b) */
+		    1,		/* ResponseType	   (b) */
+		    sr->smb_fid,		/* (w) */
+		    op->action_taken,		/* (l) */
+		    0,		/* EaErrorOffset   (l) */
+		    &ap->sa_crtime,		/* (T) */
+		    &ap->sa_vattr.va_atime,	/* (T) */
+		    &ap->sa_vattr.va_mtime,	/* (T) */
+		    &ap->sa_vattr.va_ctime,	/* (T) */
+		    op->dattr & FILE_ATTRIBUTE_MASK, /* (l) */
+		    ap->sa_allocsz,		/* (q) */
+		    ap->sa_vattr.va_size,	/* (q) */
+		    op->ftype,			/* (w) */
+		    op->devstate,		/* (w) */
+		    DirFlag,			/* (b) */
+		    /* volume guid		  (16.) */
+		    op->fileid,			/* (q) */
+		    MaxAccess,			/* (l) */
+		    0);		/* guest access	   (l) */
+	} else {
+		rc = smb_mbc_encodef(
+		    &xa->rep_param_mb, "bbwllTTTTlqqwwb",
+		    op->op_oplock_level,	/* (b) */
+		    0,		/* ResponseType	   (b) */
+		    sr->smb_fid,		/* (w) */
+		    op->action_taken,		/* (l) */
+		    0,		/* EaErrorOffset   (l) */
+		    &ap->sa_crtime,		/* (T) */
+		    &ap->sa_vattr.va_atime,	/* (T) */
+		    &ap->sa_vattr.va_mtime,	/* (T) */
+		    &ap->sa_vattr.va_ctime,	/* (T) */
+		    op->dattr & FILE_ATTRIBUTE_MASK, /* (l) */
+		    ap->sa_allocsz,		/* (q) */
+		    ap->sa_vattr.va_size,	/* (q) */
+		    op->ftype,			/* (w) */
+		    op->devstate,		/* (w) */
+		    DirFlag);			/* (b) */
+	}
+
+	if (rc == 0)
+		return (SDRC_SUCCESS);
+
+errout:
+	smb_ofile_close(of, 0);
+	return (SDRC_ERROR);
 }

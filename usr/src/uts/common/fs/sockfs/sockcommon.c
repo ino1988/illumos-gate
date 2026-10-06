@@ -21,6 +21,9 @@
 
 /*
  * Copyright (c) 2008, 2010, Oracle and/or its affiliates. All rights reserved.
+ * Copyright 2015, Joyent, Inc.
+ * Copyright 2017 Sebastian Wiedenroth
+ * Copyright 2022 Garrett D'Amore
  */
 
 #include <sys/types.h>
@@ -45,7 +48,6 @@
 #include <inet/ipclassifier.h>
 #include <fs/sockfs/sockcommon.h>
 #include <fs/sockfs/sockfilter_impl.h>
-#include <fs/sockfs/nl7c.h>
 #include <fs/sockfs/socktpi.h>
 #include <fs/sockfs/sodirect.h>
 #include <inet/ip.h>
@@ -339,8 +341,10 @@ socket_sendmsg(struct sonode *so, struct nmsghdr *msg, struct uio *uiop,
 			error = 0;
 		break;
 	case EPIPE:
-		if ((so->so_mode & SM_KERNEL) == 0)
+		if (((so->so_mode & SM_KERNEL) == 0) &&
+		    ((msg->msg_flags & MSG_NOSIGNAL) == 0)) {
 			tsignal(curthread, SIGPIPE);
+		}
 		break;
 	}
 
@@ -454,16 +458,16 @@ sonode_constructor(void *buf, void *cdrarg, int kmflags)
 	vp->v_data = so;
 	vn_setops(vp, socket_vnodeops);
 
-	so->so_priv 		= NULL;
+	so->so_priv		= NULL;
 	so->so_oobmsg		= NULL;
 
 	so->so_proto_handle	= NULL;
 
-	so->so_peercred 	= NULL;
+	so->so_peercred		= NULL;
 
 	so->so_rcv_queued	= 0;
-	so->so_rcv_q_head 	= NULL;
-	so->so_rcv_q_last_head 	= NULL;
+	so->so_rcv_q_head	= NULL;
+	so->so_rcv_q_last_head	= NULL;
 	so->so_rcv_head		= NULL;
 	so->so_rcv_last_head	= NULL;
 	so->so_rcv_wanted	= 0;
@@ -500,6 +504,9 @@ sonode_constructor(void *buf, void *cdrarg, int kmflags)
 	cv_init(&so->so_rcv_cv, NULL, CV_DEFAULT, NULL);
 	cv_init(&so->so_copy_cv, NULL, CV_DEFAULT, NULL);
 	cv_init(&so->so_closing_cv, NULL, CV_DEFAULT, NULL);
+
+	so->so_krecv_cb = NULL;
+	so->so_krecv_arg = NULL;
 
 	return (0);
 }
@@ -597,7 +604,7 @@ sonode_init(struct sonode *so, struct sockparams *sp, int family,
 	so->so_copyflag = 0;
 
 	vn_reinit(vp);
-	vp->v_vfsp	= rootvfs;
+	vp->v_vfsp	= sock_vfsp;
 	vp->v_type	= VSOCK;
 	vp->v_rdev	= sockdev;
 
@@ -653,6 +660,10 @@ sonode_fini(struct sonode *so)
 	/* Detach and destroy filters */
 	if (so->so_filter_top != NULL)
 		sof_sonode_cleanup(so);
+
+	/* Clean up any remnants of krecv callbacks */
+	so->so_krecv_cb = NULL;
+	so->so_krecv_arg = NULL;
 
 	ASSERT(list_is_empty(&so->so_acceptq_list));
 	ASSERT(list_is_empty(&so->so_acceptq_defer));

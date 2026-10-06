@@ -20,10 +20,12 @@
  */
 /*	Copyright (c) 1990, 1991 UNIX System Laboratories, Inc.	*/
 /*	Copyright (c) 1984, 1986, 1987, 1988, 1989, 1990 AT&T	*/
-/*	  All Rights Reserved 	*/
+/*	  All Rights Reserved	*/
 
 /*
  * Copyright (c) 1992, 2010, Oracle and/or its affiliates. All rights reserved.
+ * Copyright 2026 Oxide Computer Company
+ * Copyright 2024 Hans Rosenfeld
  */
 
 #ifndef	_SYS_ASY_H
@@ -52,105 +54,246 @@ extern "C" {
 #define	COM4_IOADDR	0x2e8
 
 /*
+ * asy_hwtype definitions
+ *
+ * W.r.t the supported device registers, the 16650 actually a superset of the
+ * 16750, hence the ordering.
+ */
+#define	ASY_8250A	0x00008250	/* 8250A or 16450 */
+#define	ASY_16550	0x10016550	/* broken FIFO which must not be used */
+#define	ASY_16550A	0x20016551	/* usable FIFO */
+#define	ASY_16750	0x30016750	/* 64 byte FIFO, auto flow control */
+#define	ASY_16650	0x40016650	/* 32 byte FIFO, auto flow control */
+#define	ASY_16950	0x50016950	/* 128 byte FIFO, auto flow control */
+#define	ASY_MAXCHIP	ASY_16950
+
+/*
  * Definitions for INS8250 / 16550  chips
  */
+typedef enum {
+	ASY_ILLEGAL = 0,
+	/* 8250 / 16450 / 16550 registers */
+	ASY_THR,		/* Transmitter Holding Register	(W) */
+	ASY_RHR,		/* Receiver Holding Register	(R) */
+	ASY_IER,		/* Interrupt Enable Register	(R/W) */
+	ASY_FCR,		/* FIFO Control Register	(W) */
+	ASY_ISR,		/* Interrupt Status Register	(R) */
+	ASY_LCR,		/* Line Control Register	(R/W) */
+	ASY_MCR,		/* Modem Control Register	(R/W) */
+	ASY_LSR,		/* Line Status Register		(R) */
+	ASY_MSR,		/* Modem Status Register	(R) */
+	ASY_SPR,		/* Scratch Pad Register		(R/W) */
+	ASY_DLL,		/* Divisor Latch Low		(R/W) */
+	ASY_DLH,		/* Divisor Latch High		(R/W) */
 
-/* defined as offsets from the data register */
-#define	DAT		0 	/* receive/transmit data */
-#define	ICR		1  	/* interrupt control register */
-#define	ISR		2   	/* interrupt status register */
-#define	LCR		3   	/* line control register */
-#define	MCR		4   	/* modem control register */
-#define	LSR		5   	/* line status register */
-#define	MSR		6   	/* modem status register */
-#define	SCR		7   	/* scratch register */
-#define	DLL		0   	/* divisor latch (lsb) */
-#define	DLH		1   	/* divisor latch (msb) */
-#define	FIFOR		ISR	/* FIFO register for 16550 */
-#define	EFR		ISR	/* Enhanced feature register for 16650 */
+	/* 16750 extended register */
+	ASY_EFR,		/* Extended Feature Register	(R/W) */
+
+	/* 16650 extended registers */
+	ASY_XON1,		/* XON Character 1		(R/W) */
+	ASY_XON2,		/* XON Character 2		(R/W) */
+	ASY_XOFF1,		/* XOFF Character 1		(R/W) */
+	ASY_XOFF2,		/* XOFF Character 2		(R/W) */
+
+	/* 16950 additional registers */
+	ASY_ASR,		/* Additional Status Register	(R/W) */
+	ASY_RFL,		/* Receiver FIFO Length		(R/W) */
+	ASY_TFL,		/* Transmitter FIFO Length	(R/W) */
+	ASY_ICR,		/* Indexed Control Register	(R/W) */
+
+	/* 16950 indexed registers */
+	ASY_ACR,		/* Additional Control Register  (R/W) */
+	ASY_CPR,		/* Clock Prescaler Register	(R/W) */
+	ASY_TCR,		/* Times Clock Register		(R/W) */
+	ASY_CKS,		/* Clock Select Register	(R/W) */
+	ASY_TTL,		/* Transmitter Trigger Level	(R/W) */
+	ASY_RTL,		/* Receiver Trigger Level	(R/W) */
+	ASY_FCL,		/* Flow Control Low-Level	(R/W) */
+	ASY_FCH,		/* Flow Control High-Level	(R/W) */
+	ASY_ID1,		/* Device Identification 1	(R) */
+	ASY_ID2,		/* Device Identification 2	(R) */
+	ASY_ID3,		/* Device Identification 3	(R) */
+	ASY_REV,		/* Device Revision		(R) */
+	ASY_CSR,		/* Channel Software Reset	(W) */
+	ASY_NMR,		/* Nine-Bit Mode Register	(R/W) */
+
+	ASY_NREG,
+} asy_reg_t;
 
 /*
  * INTEL 8210-A/B & 16450/16550 Registers Structure.
  */
 
-/* Line Control Register */
-#define	WLS0		0x01	/* word length select bit 0 */
-#define	WLS1		0x02	/* word length select bit 2 */
-#define	STB		0x04	/* number of stop bits */
-#define	PEN		0x08	/* parity enable */
-#define	EPS		0x10	/* even parity select */
-#define	SETBREAK 	0x40	/* break key */
-#define	DLAB		0x80	/* divisor latch access bit */
-#define	RXLEN   	0x03   	/* # of data bits per received/xmitted char */
-#define	STOP1   	0x00
-#define	STOP2   	0x04
-#define	PAREN   	0x08
-#define	PAREVN  	0x10
-#define	PARMARK 	0x20
-#define	SNDBRK  	0x40
-#define	EFRACCESS	0xBF	/* magic value for 16650 EFR access */
-
-#define	BITS5		0x00	/* 5 bits per char */
-#define	BITS6		0x01	/* 6 bits per char */
-#define	BITS7		0x02	/* 7 bits per char */
-#define	BITS8		0x03	/* 8 bits per char */
-
-/* Line Status Register */
-#define	RCA		0x01	/* data ready */
-#define	OVRRUN		0x02	/* overrun error */
-#define	PARERR		0x04	/* parity error */
-#define	FRMERR		0x08	/* framing error */
-#define	BRKDET  	0x10	/* a break has arrived */
-#define	XHRE		0x20	/* tx hold reg is now empty */
-#define	XSRE		0x40	/* tx shift reg is now empty */
-#define	RFBE		0x80	/* rx FIFO Buffer error */
-
-/* Interrupt Id Regisger */
-#define	MSTATUS		0x00	/* modem status changed */
-#define	NOINTERRUPT	0x01	/* no interrupt pending */
-#define	TxRDY		0x02	/* Transmitter Holding Register Empty */
-#define	RxRDY		0x04	/* Receiver Data Available */
-#define	FFTMOUT 	0x0c	/* FIFO timeout - 16550AF */
-#define	RSTATUS 	0x06	/* Receiver Line Status */
-
 /* Interrupt Enable Register */
-#define	RIEN		0x01	/* Received Data Ready */
-#define	TIEN		0x02	/* Tx Hold Register Empty */
-#define	SIEN		0x04	/* Receiver Line Status */
-#define	MIEN		0x08	/* Modem Status */
+typedef enum {
+	ASY_IER_RIEN = 1 << 0,	/* Received Data Ready */
+	ASY_IER_TIEN = 1 << 1,	/* Tx Hold Register Empty */
+	ASY_IER_SIEN = 1 << 2,	/* Receiver Line Status */
+	ASY_IER_MIEN = 1 << 3	/* Modem Status */
+} asy_ier_t;
+
+#define	ASY_IER_ALL	\
+	(ASY_IER_RIEN | ASY_IER_TIEN | ASY_IER_SIEN | ASY_IER_MIEN)
+
+/* FIFO Control register */
+typedef enum {
+	ASY_FCR_FIFO_EN =	1 << 0,	/* FIFOs enabled */
+	ASY_FCR_RHR_FL =	1 << 1,	/* flush receiver FIFO */
+	ASY_FCR_THR_FL =	1 << 2,	/* flush transmitter FIFO */
+	ASY_FCR_DMA =		1 << 3,	/* DMA mode 1 */
+	ASY_FCR_THR_TR0 =	1 << 4,	/* xmit trigger level bit 0 (16650) */
+	ASY_FCR_THR_TR1 =	1 << 5,	/* xmit trigger level bit 1 (16650) */
+	ASY_FCR_RHR_TR0 =	1 << 6,	/* receiver trigger level bit 0 */
+	ASY_FCR_RHR_TR1 =	1 << 7,	/* receiver trigger level bit 1 */
+} asy_fcr_t;
+
+#define	ASY_FCR_FIFO64		ASY_FCR_THR_TR1	/* 64 byte FIFO en (16750) */
+
+/* 16550 receiver trigger levels */
+#define	ASY_FCR_RHR_TRIG_1	0		/*  1 byte RX trigger level */
+#define	ASY_FCR_RHR_TRIG_4	ASY_FCR_RHR_TR0	/*  4 byte RX trigger level */
+#define	ASY_FCR_RHR_TRIG_8	ASY_FCR_RHR_TR1	/*  8 byte RX trigger level */
+#define	ASY_FCR_RHR_TRIG_14	\
+	(ASY_FCR_THR_TR0 | ASY_FCR_THR_TR1)	/* 14 byte RX trigger level */
+
+/* 16650 transmitter trigger levels */
+#define	ASY_FCR_THR_TRIG_16	0		/* 16 byte TX trigger level */
+#define	ASY_FCR_THR_TRIG_8	ASY_FCR_THR_TR0	/*  8 byte TX trigger level */
+#define	ASY_FCR_THR_TRIG_24	ASY_FCR_THR_TR1	/* 24 byte TX trigger level */
+#define	ASY_FCR_THR_TRIG_30	\
+	(ASY_FCR_THR_TR0 | ASY_FCR_THR_TR1)	/* 30 byte TX trigger level */
+
+#define	ASY_FCR_FIFO_OFF 0	/* FIFOs disabled */
+
+/* Interrupt Status Register */
+#define	ASY_ISR_NOINTR	0x01	/* no interrupt pending */
+#define	ASY_ISR_MASK	0x0e	/* interrupt identification mask */
+#define	ASY_ISR_EMASK	0x3e	/* interrupt id mask when EFR[4] = 1 (16650) */
+
+#define	ASY_ISR_FIFO64	0x20	/* 64 byte FIFOs enabled (16750) */
+#define	ASY_ISR_FIFOEN	0xc0	/* FIFOs enabled (16550A and up) */
+
+#define	ASY_ISR_ID_RLST	0x06	/* Receiver Line Status */
+#define	ASY_ISR_ID_RDA	0x04	/* Receiver Data Available */
+#define	ASY_ISR_ID_TMO	0x0c	/* Character timeout (16550A and up) */
+#define	ASY_ISR_ID_THRE	0x02	/* Transmitter Holding Register Empty */
+#define	ASY_ISR_ID_MST	0x00	/* Modem Status changed */
+#define	ASY_ISR_ID_XOFF	0x10	/* Received XOFF / special character (16650) */
+#define	ASY_ISR_ID_RCTS	0x20	/* RTS/CTS changed (16650) */
+
+/* Line Control Register */
+typedef enum {
+	ASY_LCR_WLS0 =	1 << 0,	/* word length select bit 0 */
+	ASY_LCR_WLS1 =	1 << 1,	/* word length select bit 2 */
+	ASY_LCR_STB =	1 << 2,	/* number of stop bits */
+	ASY_LCR_PEN =	1 << 3,	/* parity enable */
+	ASY_LCR_EPS =	1 << 4,	/* even parity select */
+	ASY_LCR_SPS =	1 << 5,	/* stick parity select */
+	ASY_LCR_SETBRK = 1 << 6, /* break key */
+	ASY_LCR_DLAB =	1 << 7	/* divisor latch access bit */
+} asy_lcr_t;
+
+#define	ASY_LCR_STOP1	0x00
+#define	ASY_LCR_STOP2	ASY_LCR_STB
+
+#define	ASY_LCR_EFRACCESS	0xBF	/* magic value for 16650 EFR access */
+
+#define	ASY_LCR_BITS5	0x00				/* 5 bits per char */
+#define	ASY_LCR_BITS6	ASY_LCR_WLS0			/* 6 bits per char */
+#define	ASY_LCR_BITS7	ASY_LCR_WLS1			/* 7 bits per char */
+#define	ASY_LCR_BITS8	(ASY_LCR_WLS0 | ASY_LCR_WLS1)	/* 8 bits per char */
 
 /* Modem Control Register */
-#define	DTR		0x01	/* Data Terminal Ready */
-#define	RTS		0x02	/* Request To Send */
-#define	OUT1		0x04	/* Aux output - not used */
-#define	OUT2		0x08	/* turns intr to 386 on/off */
-#define	ASY_LOOP	0x10	/* loopback for diagnostics */
+typedef enum {
+	ASY_MCR_DTR =	1 << 0,	/* Data Terminal Ready */
+	ASY_MCR_RTS =	1 << 1,	/* Request To Send */
+	ASY_MCR_OUT1 =	1 << 2,	/* Aux output - not used */
+	ASY_MCR_OUT2 =	1 << 3,	/* turns intr to 386 on/off */
+	ASY_MCR_LOOP =	1 << 4	/* loopback for diagnostics */
+} asy_mcr_t;
+
+#define	ASY_MCR_LOOPBACK	\
+	(ASY_MCR_DTR | ASY_MCR_RTS | ASY_MCR_OUT1 | ASY_MCR_OUT2 | ASY_MCR_LOOP)
+
+/* Line Status Register */
+typedef enum {
+	ASY_LSR_DR =	1 << 0,	/* data ready */
+	ASY_LSR_OE =	1 << 1,	/* overrun error */
+	ASY_LSR_PE =	1 << 2,	/* parity error */
+	ASY_LSR_FE =	1 << 3,	/* framing error */
+	ASY_LSR_BI =	1 << 4,	/* break interrupt */
+	ASY_LSR_THRE =	1 << 5,	/* transmitter holding register empty */
+	ASY_LSR_TEMT =	1 << 6,	/* transmitter empty (THR + TSR empty) */
+	ASY_LSR_DE =	1 << 7	/* Receiver FIFO data error */
+} asy_lsr_t;
+
+#define	ASY_LSR_ERRORS	\
+	(ASY_LSR_OE | ASY_LSR_PE | ASY_LSR_FE | ASY_LSR_BI)
 
 /* Modem Status Register */
-#define	DCTS		0x01	/* Delta Clear To Send */
-#define	DDSR		0x02	/* Delta Data Set Ready */
-#define	DRI		0x04	/* Trail Edge Ring Indicator */
-#define	DDCD		0x08	/* Delta Data Carrier Detect */
-#define	CTS		0x10	/* Clear To Send */
-#define	DSR		0x20	/* Data Set Ready */
-#define	RI		0x40	/* Ring Indicator */
-#define	DCD		0x80	/* Data Carrier Detect */
+typedef enum {
+	ASY_MSR_DCTS =	1 << 0,	/* Delta Clear To Send */
+	ASY_MSR_DDSR =	1 << 1,	/* Delta Data Set Ready */
+	ASY_MSR_TERI =	1 << 2,	/* Trailing Edge Ring Indicator */
+	ASY_MSR_DDCD =	1 << 3,	/* Delta Data Carrier Detect */
+	ASY_MSR_CTS =	1 << 4,	/* Clear To Send */
+	ASY_MSR_DSR =	1 << 5,	/* Data Set Ready */
+	ASY_MSR_RI =	1 << 6,	/* Ring Indicator */
+	ASY_MSR_DCD =	1 << 7	/* Data Carrier Detect */
+} asy_msr_t;
 
-#define	DELTAS(x)	((x)&(DCTS|DDSR|DRI|DDCD))
-#define	STATES(x)	((x)&(CTS|DSR|RI|DCD))
+#define	ASY_MSR_DELTAS(x)	\
+	((x) & (ASY_MSR_DCTS | ASY_MSR_DDSR | ASY_MSR_TERI | ASY_MSR_DDCD))
+#define	ASY_MSR_STATES(x)	\
+	((x) & (ASY_MSR_CTS | ASY_MSR_DSR | ASY_MSR_RI | ASY_MSR_DCD))
 
-/* flags for FCR (FIFO Control register) */
-#define	FIFO_OFF	0x00	/* fifo disabled */
-#define	FIFO_ON		0x01	/* fifo enabled */
-#define	FIFORXFLSH	0x02	/* flush receiver FIFO */
-#define	FIFOTXFLSH	0x04	/* flush transmitter FIFO */
-#define	FIFODMA		0x08	/* DMA mode 1 */
-#define	FIFOEXTRA1	0x10	/* Longer fifos on some 16650's */
-#define	FIFOEXTRA2	0x20	/* Longer fifos on some 16650's and 16750 */
-#define	FIFO_TRIG_1	0x00	/* 1 byte trigger level */
-#define	FIFO_TRIG_4	0x40	/* 4 byte trigger level */
-#define	FIFO_TRIG_8	0x80	/* 8 byte trigger level */
-#define	FIFO_TRIG_14	0xC0	/* 14 byte trigger level */
+/* Scratch Pad Register */
+#define	ASY_SPR_TEST	0x5a	/* arbritrary value for testing SPR */
+
+/* Extended Feature Register (16650) */
+#define	ASY_EFR_ENH_EN	0x10	/* IER[4:7], ISR[4,5], FCR[4,5], MCR[5:7] */
+
+/* Additional Status Register (16950) */
+typedef enum {
+	ASY_ASR_TD =	1 << 0,	/* Transmitter Disabled */
+	ASY_ASR_RTD =	1 << 1,	/* Remote Transmitter Disabled */
+	ASY_ASR_RTS =	1 << 2,	/* RTS status */
+	ASY_ASR_DTR =	1 << 3,	/* DTR status */
+	ASY_ASR_SCD =	1 << 4,	/* Special Character detected */
+	ASY_ASR_FIFOSEL = 1 << 5, /* FIFOSEL pin status */
+	ASY_ASR_FIFOSZ = 1 << 6, /* FIFO size */
+	ASY_ASR_TI =	1 << 7	/* Transmitter Idle */
+} asy_16950_asr_t;
+
+/* Additional Control Register (16950) */
+#define	ASY_ACR_RD	0x01	/* Receiver Disable */
+#define	ASY_ACR_TD	0x02	/* Transmitter Disable */
+#define	ASY_ACR_DSR	0x04	/* Automatic DSR flow control */
+#define	ASY_ACR_DTR	0x18	/* DTR line configuration */
+#define	ASY_ACR_TRIG	0x20	/* 950 mode trigger levels enable */
+#define	ASY_ACR_ICR	0x40	/* ICR read enable */
+#define	ASY_ACR_ASR	0x80	/* Additional Status Enable */
+
+#define	ASY_ACR_DTR_NORM	0x00	/* DTR normal (compatible) */
+#define	ASY_ACR_DTR_FLOW	0x08	/* DTR used for flow-control */
+#define	ASY_ACR_DTR_RS485_LOW	0x10	/* DTR drives ext. RS485 buffer low */
+#define	ASY_ACR_DTR_RS485_HIGH	0x18	/* DTR drives ext. RS485 buffer high */
+
+/* Clock Select Register (16950) */
+#define	ASY_CKS_RCLK	0x00	/* RCLK pin drives receiver clock */
+#define	ASY_CKS_RDSR	0x01	/* DSR pin drives receiver clock */
+#define	ASY_CKS_RBDOUT	0x02	/* BDOUT pint drives receiver clock */
+#define	ASY_CKS_RTCLK	0x03	/* transmitter clock drives receiver clock */
+
+#define	ASY_CKS_BDO_DIS	0x04	/* Disable BDOUT pin */
+#define	ASY_CKS_RCLK_1X	0x08	/* Receiver clock in isochronous 1x mode */
+
+#define	ASY_CKS_DTR_NO	0x00	/* DTR pin defined by ACR[ASY_ACR_DTR] */
+#define	ASY_CKS_DTR_T1X	0x10	/* Transmitter 1x clock on DTR pin */
+#define	ASY_CKS_DTR_BDO	0x20	/* Baud rate generator output on DTR pin */
+
+#define	ASY_CKS_TCLK_RI	0x40	/* External transmitter clock on RI pin */
+#define	ASY_CKS_TCLK_1X	0x80	/* Transmitter clock in isochronous 1x mode */
 
 /* Serial in/out requests */
 
@@ -158,12 +301,6 @@ extern "C" {
 #define	FRERROR		020000
 #define	PERROR		010000
 #define	S_ERRORS	(PERROR|OVERRUN|FRERROR)
-
-/* EFR - Enhanced feature register for 16650 */
-#define	ENHENABLE	0x10
-
-/* SCR - scratch register */
-#define	SCRTEST		0x5a	/* arbritrary value for testing SCR register */
 
 /*
  * Ring buffer and async line management definitions.
@@ -192,61 +329,34 @@ extern "C" {
 #define	RING_ERR(ap, c) \
 	((ap)->async_ring[((ap)->async_rget) & RINGMASK] & (c))
 
-/*
- * Asy tracing macros.  These are a bit similar to some macros in sys/vtrace.h .
- *
- * XXX - Needs review:  would it be better to use the macros in sys/vtrace.h ?
- */
-#ifdef DEBUG
-#define	DEBUGWARN0(fac, format) \
-	if (debug & (fac)) \
-		cmn_err(CE_WARN, format)
-#define	DEBUGNOTE0(fac, format) \
-	if (debug & (fac)) \
-		cmn_err(CE_NOTE, format)
-#define	DEBUGNOTE1(fac, format, arg1) \
-	if (debug & (fac)) \
-		cmn_err(CE_NOTE, format, arg1)
-#define	DEBUGNOTE2(fac, format, arg1, arg2) \
-	if (debug & (fac)) \
-		cmn_err(CE_NOTE, format, arg1, arg2)
-#define	DEBUGNOTE3(fac, format, arg1, arg2, arg3) \
-	if (debug & (fac)) \
-		cmn_err(CE_NOTE, format, arg1, arg2, arg3)
-#define	DEBUGCONT0(fac, format) \
-	if (debug & (fac)) \
-		cmn_err(CE_CONT, format)
-#define	DEBUGCONT1(fac, format, arg1) \
-	if (debug & (fac)) \
-		cmn_err(CE_CONT, format, arg1)
-#define	DEBUGCONT2(fac, format, arg1, arg2) \
-	if (debug & (fac)) \
-		cmn_err(CE_CONT, format, arg1, arg2)
-#define	DEBUGCONT3(fac, format, arg1, arg2, arg3) \
-	if (debug & (fac)) \
-		cmn_err(CE_CONT, format, arg1, arg2, arg3)
-#define	DEBUGCONT4(fac, format, arg1, arg2, arg3, arg4) \
-	if (debug & (fac)) \
-		cmn_err(CE_CONT, format, arg1, arg2, arg3, arg4)
-#define	DEBUGCONT10(fac, format, \
-	arg1, arg2, arg3, arg4, arg5, arg6, arg7, arg8, arg9, arg10) \
-	if (debug & (fac)) \
-		cmn_err(CE_CONT, format, \
-		arg1, arg2, arg3, arg4, arg5, arg6, arg7, arg8, arg9, arg10)
-#else
-#define	DEBUGWARN0(fac, format)
-#define	DEBUGNOTE0(fac, format)
-#define	DEBUGNOTE1(fac, format, arg1)
-#define	DEBUGNOTE2(fac, format, arg1, arg2)
-#define	DEBUGNOTE3(fac, format, arg1, arg2, arg3)
-#define	DEBUGCONT0(fac, format)
-#define	DEBUGCONT1(fac, format, arg1)
-#define	DEBUGCONT2(fac, format, arg1, arg2)
-#define	DEBUGCONT3(fac, format, arg1, arg2, arg3)
-#define	DEBUGCONT4(fac, format, arg1, arg2, arg3, arg4)
-#define	DEBUGCONT10(fac, format, \
-	arg1, arg2, arg3, arg4, arg5, arg6, arg7, arg8, arg9, arg10)
-#endif
+/* definitions for asy_progress */
+typedef enum {
+	ASY_PROGRESS_REGS =	1 << 0,
+	ASY_PROGRESS_SOFTINT =	1 << 1,
+	ASY_PROGRESS_INT =	1 << 2,
+	ASY_PROGRESS_MUTEX =	1 << 3,
+	ASY_PROGRESS_ASYNC =	1 << 4,
+	ASY_PROGRESS_MINOR =	1 << 5
+} asy_progress_t;
+
+
+/* definitions for asy_flags field */
+typedef enum {
+	ASY_NEEDSOFT =		1 << 0,
+	ASY_DOINGSOFT =		1 << 1,
+	ASY_PPS =		1 << 2,
+	ASY_PPS_EDGE =		1 << 3,
+	ASY_DOINGSOFT_RETRY =	1 << 4,
+	ASY_RTS_DTR_OFF =	1 << 5,
+	ASY_IGNORE_CD =		1 << 6,
+	ASY_CONSOLE =		1 << 7,
+	ASY_DDI_SUSPENDED =	1 << 8, /* suspended by DDI */
+} asy_flags_t;
+
+/* definitions for asy_flags2 field */
+typedef enum {
+	ASY2_NO_LOOPBACK = 1 << 0	/* Device doesn't support loopback */
+} asy_flags2_t;
 
 /*
  * Hardware channel common data. One structure per port.
@@ -259,23 +369,35 @@ extern "C" {
  */
 
 struct asycom {
-	int		asy_flags;	/* random flags  */
+#ifdef DEBUG
+	int		asy_debug;	/* per-instance debug flags */
+#endif
+	asy_progress_t	asy_progress;	/* attach progress */
+	asy_flags_t	asy_flags;	/* random flags  */
 					/* protected by asy_excl_hi lock */
 	uint_t		asy_hwtype;	/* HW type: ASY16550A, etc. */
 	uint_t		asy_use_fifo;	/* HW FIFO use it or not ?? */
 	uint_t		asy_fifo_buf;	/* With FIFO = 16, otherwise = 1 */
-	uint_t		asy_flags2;	/* flags which don't change, no lock */
+	asy_flags2_t	asy_flags2;	/* flags which don't change, no lock */
 	uint8_t		*asy_ioaddr;	/* i/o address of ASY port */
 	struct asyncline *asy_priv;	/* protocol private data -- asyncline */
 	dev_info_t	*asy_dip;	/* dev_info */
 	int		asy_unit;	/* which port */
-	ddi_iblock_cookie_t asy_iblock;
 	kmutex_t	asy_excl;	/* asy adaptive mutex */
 	kmutex_t	asy_excl_hi;	/* asy spinlock mutex */
 	kmutex_t	asy_soft_lock;	/* soft lock for guarding softpend. */
 	int		asysoftpend;	/* Flag indicating soft int pending. */
-	ddi_softintr_t	asy_softintr_id;
-	ddi_iblock_cookie_t asy_soft_iblock;
+
+	ddi_softint_handle_t asy_soft_inth;
+	uint_t		asy_soft_intr_pri;
+
+	ddi_intr_handle_t *asy_inth;
+	size_t		asy_inth_sz;
+	uint_t		asy_intr_pri;
+	int		asy_intr_cnt;
+	int		asy_intr_cap;
+	int		asy_intr_type;
+	int		asy_intr_types;
 
 	/*
 	 * The asy_soft_sr mutex should only be taken by the soft interrupt
@@ -291,14 +413,59 @@ struct asycom {
 	uchar_t		asy_bidx;	/* console baud rate index */
 	tcflag_t	asy_cflag;	/* console mode bits */
 	struct cons_polledio	polledio;	/* polled I/O functions */
+	uint8_t		asy_polled_ier;		/* saved IER, polled mode */
+	uint8_t		asy_polled_lcr;		/* saved LCR, polled mode */
+	uint8_t		asy_polled_mcr;		/* saved MCR, polled mode */
+	uint_t		asy_polled_depth;	/* nested polled-mode entries */
 	ddi_acc_handle_t	asy_iohandle;	/* Data access handle */
 	tcflag_t	asy_ocflag;	/* old console mode bits */
 	uchar_t		asy_com_port;	/* COM port number, or zero */
 	uchar_t		asy_fifor;	/* FIFOR register setting */
+	uint8_t		asy_acr;	/* 16950 additional control register */
 #ifdef DEBUG
 	int		asy_msint_cnt;	/* number of times in async_msint */
 #endif
 };
+
+/* definitions for async_flags field */
+typedef enum {
+	ASYNC_EXCL_OPEN =	1 << 28, /* exclusive open */
+	ASYNC_WOPEN =		1 << 0,  /* waiting for open to complete */
+	ASYNC_ISOPEN =		1 << 1,  /* open is complete */
+	ASYNC_OUT =		1 << 2,  /* line being used for dialout */
+	ASYNC_CARR_ON =		1 << 3,  /* carrier on last time we looked */
+	ASYNC_STOPPED =		1 << 4,  /* output is stopped */
+	ASYNC_DELAY =		1 << 5,  /* waiting for delay to finish */
+	ASYNC_BREAK =		1 << 6,  /* waiting for break to finish */
+	ASYNC_BUSY =		1 << 7,  /* waiting for transmission finish */
+	ASYNC_DRAINING =	1 << 8,  /* waiting for output to drain */
+	ASYNC_SERVICEIMM =	1 << 9,  /* queue soft interrupt as soon as */
+	ASYNC_HW_IN_FLOW =	1 << 10, /* input flow control in effect */
+	ASYNC_HW_OUT_FLW =	1 << 11, /* output flow control in effect */
+	ASYNC_PROGRESS =	1 << 12, /* made progress on output effort */
+	ASYNC_CLOSING =		1 << 13, /* processing close on stream */
+	ASYNC_OUT_SUSPEND =	1 << 14, /* waiting for TIOCSBRK to finish */
+	ASYNC_HOLD_UTBRK =	1 << 15, /* waiting for untimed break hold */
+					/* the minimum time */
+	ASYNC_DTR_DELAY =	1 << 16, /* delaying DTR turn on */
+	ASYNC_SW_IN_FLOW =	1 << 17, /* sw input flow control in effect */
+	ASYNC_SW_OUT_FLW =	1 << 18, /* sw output flow control in effect */
+	ASYNC_SW_IN_NEEDED =	1 << 19, /* sw input flow control char is */
+					/* needed to be sent */
+	ASYNC_OUT_FLW_RESUME =	1 << 20, /* output need to be resumed */
+					/* because of transition of flow */
+					/* control from stop to start */
+	ASYNC_DDI_SUSPENDED =	1 << 21, /* suspended by DDI */
+	ASYNC_RESUME_BUFCALL =	1 << 22  /* call bufcall when resumed by DDI */
+} async_flags_t;
+
+/* definitions for async_inflow_source field in struct asyncline */
+typedef enum {
+	IN_FLOW_NULL =		0 << 0,
+	IN_FLOW_RINGBUFF =	1 << 0,
+	IN_FLOW_STREAMS =	1 << 1,
+	IN_FLOW_USER =		1 << 2
+} async_inflow_t;
 
 /*
  * Asychronous protocol private data structure for ASY.
@@ -308,13 +475,13 @@ struct asycom {
  */
 
 struct asyncline {
-	int		async_flags;	/* random flags */
+	async_flags_t	async_flags;	/* random flags */
 	kcondvar_t	async_flags_cv; /* condition variable for flags */
 	kcondvar_t	async_ops_cv;	/* condition variable for async_ops */
 	dev_t		async_dev;	/* device major/minor numbers */
 	mblk_t		*async_xmitblk;	/* transmit: active msg block */
 	struct asycom	*async_common;	/* device common data */
-	tty_common_t 	async_ttycommon; /* tty driver common data */
+	tty_common_t	async_ttycommon; /* tty driver common data */
 	bufcall_id_t	async_wbufcid;	/* id for pending write-side bufcall */
 	size_t		async_wbufcds;	/* Buffer size requested in bufcall */
 	timeout_id_t	async_polltid;	/* softint poll timeout id */
@@ -340,14 +507,33 @@ struct asyncline {
 	ushort_t	async_ring[RINGSIZE];
 
 	short		async_break;	/* break count */
-	int		async_inflow_source; /* input flow control type */
+	async_inflow_t	async_inflow_source; /* input flow control type */
 
+	/*
+	 * This union presumably exists to support a change that happened some
+	 * time in the distant past.  The two overrun fields are used as
+	 * booleans; one imagines that the split between hardware and software
+	 * overruns was made some time after the driver was initially written
+	 * and that the earliest versions just had the single `async_overrun`
+	 * field.
+	 *
+	 * By using the union, out-of-tree consumers could presumably still
+	 * detect any type of overrun via testing the `async_overrun` field,
+	 * which would _de facto_ combine the two, while the driver keeps
+	 * finer-grained track of the specific kind of overrun.  Of course,
+	 * this only works if consuming code treats any non-zero value as true,
+	 * and does not compare against 1 specifically.
+	 *
+	 * It is unclear if this is still necessary.  One hopes that any such
+	 * consumers, if they exist, neither assign through `async_overrun` nor
+	 * look specifically for the value one to mean true.
+	 */
 	union {
 		struct {
-			uchar_t _hw;	/* overrun (hw) */
-			uchar_t _sw;	/* overrun (sw) */
+			uint8_t _hw;	/* overrun (hw) */
+			uint8_t _sw;	/* overrun (sw) */
 		} _a;
-		ushort_t uover_overrun;
+		uint16_t uover_overrun;
 	} async_uover;
 #define	async_overrun		async_uover._a.uover_overrun
 #define	async_hw_overrun	async_uover._a._hw
@@ -361,63 +547,6 @@ struct asyncline {
 	int		async_ops;	/* active operations counter */
 };
 
-/* definitions for async_flags field */
-#define	ASYNC_EXCL_OPEN	 0x10000000	/* exclusive open */
-#define	ASYNC_WOPEN	 0x00000001	/* waiting for open to complete */
-#define	ASYNC_ISOPEN	 0x00000002	/* open is complete */
-#define	ASYNC_OUT	 0x00000004	/* line being used for dialout */
-#define	ASYNC_CARR_ON	 0x00000008	/* carrier on last time we looked */
-#define	ASYNC_STOPPED	 0x00000010	/* output is stopped */
-#define	ASYNC_DELAY	 0x00000020	/* waiting for delay to finish */
-#define	ASYNC_BREAK	 0x00000040	/* waiting for break to finish */
-#define	ASYNC_BUSY	 0x00000080	/* waiting for transmission to finish */
-#define	ASYNC_DRAINING	 0x00000100	/* waiting for output to drain */
-#define	ASYNC_SERVICEIMM 0x00000200	/* queue soft interrupt as soon as */
-#define	ASYNC_HW_IN_FLOW 0x00000400	/* input flow control in effect */
-#define	ASYNC_HW_OUT_FLW 0x00000800	/* output flow control in effect */
-#define	ASYNC_PROGRESS	 0x00001000	/* made progress on output effort */
-#define	ASYNC_CLOSING	 0x00002000	/* processing close on stream */
-#define	ASYNC_OUT_SUSPEND 0x00004000    /* waiting for TIOCSBRK to finish */
-#define	ASYNC_HOLD_UTBRK 0x00008000	/* waiting for untimed break hold */
-					/* the minimum time */
-#define	ASYNC_DTR_DELAY  0x00010000	/* delaying DTR turn on */
-#define	ASYNC_SW_IN_FLOW 0x00020000	/* sw input flow control in effect */
-#define	ASYNC_SW_OUT_FLW 0x00040000	/* sw output flow control in effect */
-#define	ASYNC_SW_IN_NEEDED 0x00080000	/* sw input flow control char is */
-					/* needed to be sent */
-#define	ASYNC_OUT_FLW_RESUME 0x00100000 /* output need to be resumed */
-					/* because of transition of flow */
-					/* control from stop to start */
-#define	ASYNC_DDI_SUSPENDED  0x00200000	/* suspended by DDI */
-#define	ASYNC_RESUME_BUFCALL 0x00400000	/* call bufcall when resumed by DDI */
-
-/* asy_hwtype definitions */
-#define	ASY8250A	0x2		/* 8250A or 16450 */
-#define	ASY16550	0x3		/* broken FIFO which must not be used */
-#define	ASY16550A	0x4		/* usable FIFO */
-#define	ASY16650	0x5
-#define	ASY16750	0x6
-
-/* definitions for asy_flags field */
-#define	ASY_NEEDSOFT	0x00000001
-#define	ASY_DOINGSOFT	0x00000002
-#define	ASY_PPS		0x00000004
-#define	ASY_PPS_EDGE	0x00000008
-#define	ASY_DOINGSOFT_RETRY	0x00000010
-#define	ASY_RTS_DTR_OFF	0x00000020
-#define	ASY_IGNORE_CD	0x00000040
-#define	ASY_CONSOLE	0x00000080
-#define	ASY_DDI_SUSPENDED	0x00000100 /* suspended by DDI */
-
-/* definitions for asy_flags2 field */
-#define	ASY2_NO_LOOPBACK 0x00000001	/* Device doesn't support loopback */
-
-/* definitions for async_inflow_source field in struct asyncline */
-#define	IN_FLOW_NULL	0x00000000
-#define	IN_FLOW_RINGBUFF	0x00000001
-#define	IN_FLOW_STREAMS	0x00000002
-#define	IN_FLOW_USER	0x00000004
-
 /*
  * OUTLINE defines the high-order flag bit in the minor device number that
  * controls use of a tty line for dialin and dialout simultaneously.
@@ -429,22 +558,8 @@ struct asyncline {
 #endif
 #define	UNIT(x)		(getminor(x) & ~OUTLINE)
 
-/*
- * ASYSETSOFT macro to pend a soft interrupt if one isn't already pending.
- */
-
-#define	ASYSETSOFT(asy)	{			\
-	if (mutex_tryenter(&asy->asy_soft_lock)) {	\
-		asy->asy_flags |= ASY_NEEDSOFT;		\
-		if (!asy->asysoftpend) {		\
-			asy->asysoftpend = 1;		\
-			mutex_exit(&asy->asy_soft_lock);	\
-			ddi_trigger_softintr(asy->asy_softintr_id);	\
-		}					\
-		else					\
-			mutex_exit(&asy->asy_soft_lock);	\
-	}							\
-}
+/* This corresponds to DDI_SOFTINT_MED used by the old softint routines. */
+#define	ASY_SOFT_INT_PRI	6
 
 #ifdef __cplusplus
 }

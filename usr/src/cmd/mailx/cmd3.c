@@ -38,8 +38,6 @@
  * contributors.
  */
 
-#pragma ident	"%Z%%M%	%I%	%E% SMI"
-
 #include "rcv.h"
 #include <locale.h>
 
@@ -70,7 +68,7 @@ static char	lastbang[BUFSIZ];
  * and forking a sh -c
  */
 
-int 
+int
 shell(char *str)
 {
 	shell1(str);
@@ -78,15 +76,15 @@ shell(char *str)
 	return(0);
 }
 
-static int 
+static int
 shell1(char *str)
 {
 	void (*sig[2])(int);
-	register int t;
-	register pid_t p;
+	int t;
+	pid_t p;
 	char *Shell;
 	char cmd[BUFSIZ];
-	
+
 	nstrcpy(cmd, sizeof (cmd), str);
 	if (bangexp(cmd) < 0)
 		return(-1);
@@ -118,7 +116,7 @@ shell1(char *str)
  * Fork an interactive shell.
  */
 
-int 
+int
 #ifdef	__cplusplus
 dosh(char *)
 #else
@@ -127,8 +125,8 @@ dosh(char *s)
 #endif
 {
 	void (*sig[2])(int);
-	register int t;
-	register pid_t p;
+	int t;
+	pid_t p;
 	char *Shell;
 
 	if ((Shell = value("SHELL")) == NOSTR || *Shell=='\0')
@@ -160,12 +158,12 @@ dosh(char *s)
  * Expand the shell escape by expanding unescaped !'s into the
  * last issued command where possible.
  */
-static int 
+static int
 bangexp(char *str)
 {
 	char bangbuf[BUFSIZ];
-	register char *cp, *cp2;
-	register int n;
+	char *cp, *cp2;
+	int n;
 	int changed = 0;
 	int bangit = (value("bang")!=NOSTR);
 
@@ -211,11 +209,11 @@ overf:
  * Print out a nice help message from some file or another.
  */
 
-int 
+int
 help(void)
 {
 	int c;
-	register FILE *f;
+	FILE *f;
 
 	if ((f = fopen(HELPFILE, "r")) == NULL) {
 		printf(gettext("No help just now.\n"));
@@ -231,10 +229,10 @@ help(void)
  * Change user's working directory.
  */
 
-int 
+int
 schdir(char *str)
 {
-	register char *cp;
+	char *cp;
 	char cwd[PATHSIZE], file[PATHSIZE];
 	static char efile[PATHSIZE];
 
@@ -276,7 +274,7 @@ schdir(char *str)
  * to only sender of message, depending on setting of "replyall".
  */
 
-int 
+int
 respond(int *msgvec)
 {
 	if (reply2sender())
@@ -285,7 +283,7 @@ respond(int *msgvec)
 		return(Resp1(msgvec, 0));
 }
 
-int 
+int
 followup(int *msgvec)
 {
 	if (reply2sender())
@@ -294,13 +292,13 @@ followup(int *msgvec)
 		return(Resp1(msgvec, 1));
 }
 
-int 
+int
 replyall(int *msgvec)
 {
 	return(resp1(msgvec, 0));
 }
 
-static int 
+static int
 resp1(int *msgvec, int useauthor)
 {
 	struct message *mp;
@@ -317,7 +315,7 @@ resp1(int *msgvec, int useauthor)
 	snprintf(mydomname, sizeof (mydomname), "%s@%s", myname, domain);
 	snprintf(mylocalname, sizeof (mylocalname), "%s@%s", myname, host);
 	returnaddr = value("returnaddr");
-	
+
 	mp = &message[msgvec[0] - 1];
 	dot = mp;
 	reply2 = replyto(mp, &rcv);
@@ -383,12 +381,12 @@ resp1(int *msgvec, int useauthor)
 	return(0);
 }
 
-void 
+void
 getrecf(char *buf, char *recfile, int useauthor, int sz_recfile)
 {
-	register char *bp, *cp;
-	register char *recf = recfile;
-	register int folderize;
+	char *bp, *cp;
+	char *recf = recfile;
+	int folderize;
 	char fldr[BUFSIZ];
 
 	folderize = (value("outfolder")!=NOSTR && getfold(fldr) == 0);
@@ -440,7 +438,7 @@ static char *
 reedit(char *subj)
 {
 	char sbuf[10];
-	register char *newsubj;
+	char *newsubj;
 
 	if (subj == NOSTR)
 		return(NOSTR);
@@ -458,17 +456,17 @@ reedit(char *subj)
  * back to the system mailbox.
  */
 
-int 
+int
 preserve(int *msgvec)
 {
-	register struct message *mp;
-	register int *ip, mesg;
+	struct message *mp;
+	int *ip, mesg;
 
 	if (edit) {
 		printf(gettext("Cannot \"preserve\" in edit mode\n"));
 		return(1);
 	}
-	for (ip = msgvec; *ip != NULL; ip++) {
+	for (ip = msgvec; *ip != 0; ip++) {
 		mesg = *ip;
 		mp = &message[mesg-1];
 		mp->m_flag |= MPRESERVE;
@@ -481,12 +479,12 @@ preserve(int *msgvec)
 /*
  * Mark all given messages as unread.
  */
-int 
+int
 unread(int msgvec[])
 {
-	register int *ip;
+	int *ip;
 
-	for (ip = msgvec; *ip != NULL; ip++) {
+	for (ip = msgvec; *ip != 0; ip++) {
 		dot = &message[*ip-1];
 		dot->m_flag &= ~(MREAD|MTOUCH);
 		dot->m_flag |= MSTATUS;
@@ -498,13 +496,13 @@ unread(int msgvec[])
  * Print the size of each message.
  */
 
-int 
+int
 messize(int *msgvec)
 {
-	register struct message *mp;
-	register int *ip, mesg;
+	struct message *mp;
+	int *ip, mesg;
 
-	for (ip = msgvec; *ip != NULL; ip++) {
+	for (ip = msgvec; *ip != 0; ip++) {
 		mesg = *ip;
 		mp = &message[mesg-1];
 		dot = mp;
@@ -518,7 +516,7 @@ messize(int *msgvec)
  * by returning an error.
  */
 
-int 
+int
 rexit(int e)
 {
 	if (sourcing)
@@ -537,11 +535,11 @@ rexit(int e)
  * of csh.
  */
 
-int 
+int
 set(char **arglist)
 {
-	register struct var *vp;
-	register char *cp, *cp2;
+	struct var *vp;
+	char *cp, *cp2;
 	char varbuf[BUFSIZ], **ap, **p;
 	int errs, h, s;
 
@@ -587,11 +585,11 @@ set(char **arglist)
  * Unset a bunch of variable values.
  */
 
-int 
+int
 unset(char **arglist)
 {
-	register int errs;
-	register char **ap;
+	int errs;
+	char **ap;
 
 	errs = 0;
 	for (ap = arglist; *ap != NOSTR; ap++)
@@ -603,12 +601,12 @@ unset(char **arglist)
  * Add users to a group.
  */
 
-int 
+int
 group(char **argv)
 {
-	register struct grouphead *gh;
-	register struct mgroup *gp;
-	register int h;
+	struct grouphead *gh;
+	struct mgroup *gp;
+	int h;
 	int s;
 	char **ap, *gname, **p;
 
@@ -665,12 +663,12 @@ group(char **argv)
  * Remove users from a group.
  */
 
-int 
+int
 ungroup(char **argv)
 {
-	register struct grouphead *gh, **ghp;
-	register struct mgroup *gp, *gpnext;
-	register int h;
+	struct grouphead *gh, **ghp;
+	struct mgroup *gp, *gpnext;
+	int h;
 	char **ap, *gname;
 
 	if (argcount(argv) == 0) {
@@ -710,10 +708,10 @@ ungroup(char **argv)
  * order.
  */
 
-static void 
+static void
 sort(char **list)
 {
-	register char **ap;
+	char **ap;
 
 	for (ap = list; *ap != NOSTR; ap++)
 		;
@@ -726,7 +724,7 @@ sort(char **list)
  * Do a dictionary order comparison of the arguments from
  * qsort.
  */
-static int 
+static int
 diction(const void *a, const void *b)
 {
 	return(strcmp(*(char **)a, *(char **)b));
@@ -736,7 +734,7 @@ diction(const void *a, const void *b)
  * The do nothing command for comments.
  */
 
-int 
+int
 #ifdef	__cplusplus
 null(char *)
 #else
@@ -752,10 +750,10 @@ null(char *s)
  * Otherwise, print the name of the person who's mail
  * we are reading.
  */
-int 
+int
 file(char **argv)
 {
-	register char *cp;
+	char *cp;
 	int editing, mdot;
 
 	if (argv[0] == NOSTR) {
@@ -800,7 +798,7 @@ file(char **argv)
 static char *
 getfilename(char *name, int *aedit)
 {
-	register char *cp;
+	char *cp;
 	char savename[BUFSIZ];
 	char oldmailname[BUFSIZ];
 	char tmp[BUFSIZ];
@@ -852,7 +850,7 @@ getfilename(char *name, int *aedit)
 			nstrcpy(origname, PATHSIZE, cp);
 			return(cp);
 		}
-		/* Fall into . . . */
+		/* FALLTHROUGH */
 
 	default:
 regular:
@@ -874,10 +872,10 @@ regular:
  * Expand file names like echo
  */
 
-int 
-echo(register char **argv)
+int
+echo(char **argv)
 {
-	register char *cp;
+	char *cp;
 	int neednl = 0;
 
 	while (*argv != NOSTR) {
@@ -900,7 +898,7 @@ echo(register char **argv)
  * reply.
  */
 
-int 
+int
 Respond(int *msgvec)
 {
 	if (reply2sender())
@@ -909,7 +907,7 @@ Respond(int *msgvec)
 		return(resp1(msgvec, 0));
 }
 
-int 
+int
 Followup(int *msgvec)
 {
 	if (reply2sender())
@@ -918,19 +916,19 @@ Followup(int *msgvec)
 		return(resp1(msgvec, 1));
 }
 
-int 
+int
 replysender(int *msgvec)
 {
 	return(Resp1(msgvec, 0));
 }
 
-static int 
+static int
 Resp1(int *msgvec, int useauthor)
 {
 	struct header head;
 	struct message *mp;
-	register int s, *ap;
-	register char *cp, *cp2, *subject;
+	int s, *ap;
+	char *cp, *cp2, *subject;
 
 	for (s = 0, ap = msgvec; *ap != 0; ap++) {
 		mp = &message[*ap - 1];
@@ -970,10 +968,10 @@ Resp1(int *msgvec, int useauthor)
  * .mailrc and do some things if sending, others if receiving.
  */
 
-int 
+int
 ifcmd(char **argv)
 {
-	register char *cp;
+	char *cp;
 
 	if (cond != CANY) {
 		printf(gettext("Illegal nested \"if\"\n"));
@@ -1006,7 +1004,7 @@ ifcmd(char **argv)
  * flip over the conditional flag.
  */
 
-int 
+int
 elsecmd(void)
 {
 
@@ -1043,7 +1041,7 @@ elsecmd(void)
  * End of if statement.  Just set cond back to anything.
  */
 
-int 
+int
 endifcmd(void)
 {
 
@@ -1058,11 +1056,11 @@ endifcmd(void)
 /*
  * Set the list of alternate names.
  */
-int 
+int
 alternates(char **namelist)
 {
-	register int c;
-	register char **ap, **ap2, *cp;
+	int c;
+	char **ap, **ap2, *cp;
 
 	c = argcount(namelist) + 1;
 	if (c == 1) {
@@ -1107,10 +1105,10 @@ replyto(struct message *mp, char **f)
 	return (r);
 }
 
-/* 
+/*
  * reply2sender - determine whether a "reply" command should reply to the
  *                sender of the messages, or to all the recipients of the
- *                message.                
+ *                message.
  *
  *                With the advent of POSIX.2 compliance, this has become
  *                a bit more complicated, and so should be done in one
@@ -1120,8 +1118,8 @@ replyto(struct message *mp, char **f)
 static int
 reply2sender (void)
 {
-	register int rep = (value("replyall") != NOSTR);
-	register int flp = (value("flipr") != NOSTR);
+	int rep = (value("replyall") != NOSTR);
+	int flp = (value("flipr") != NOSTR);
 
 	return((rep && !flp)|| (!rep && flp));
 }

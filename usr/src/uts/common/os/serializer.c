@@ -24,8 +24,6 @@
  * Use is subject to license terms.
  */
 
-#pragma ident	"%Z%%M%	%I%	%E% SMI"
-
 /*
  * Kernel protection serializers: general purpose synchronization mechanism.
  *
@@ -267,7 +265,7 @@ serializer_enter(serializer_t *s, srproc_t proc, mblk_t *mp, void *arg)
 		 */
 		serializer_enqueue(s, proc, mp, arg);
 	} else {
-		taskqid_t tid = 0;
+		taskqid_t tid = TASKQID_INVALID;
 
 		/*
 		 * If the request list is empty, can process right away,
@@ -314,7 +312,7 @@ serializer_enter(serializer_t *s, srproc_t proc, mblk_t *mp, void *arg)
 					    (task_func_t *)
 					    serializer_drain_completely,
 					    s, TQ_NOSLEEP | TQ_NOQUEUE);
-					if (tid != 0)
+					if (tid != TASKQID_INVALID)
 						s->ser_taskq = B_TRUE;
 				}
 			}

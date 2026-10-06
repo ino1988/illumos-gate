@@ -21,6 +21,7 @@
  *
  * Copyright 2005 Sun Microsystems, Inc.  All rights reserved.
  * Use is subject to license terms.
+ * Copyright (c) 2016 by Delphix. All rights reserved.
  */
 
 /*	Copyright (c) 1983, 1984, 1985, 1986, 1987, 1988, 1989 AT&T */
@@ -32,14 +33,12 @@
  * California.
  */
 
-#pragma ident	"%Z%%M%	%I%	%E% SMI"
-
 /*
  * This is a user command which gets a NIS data base from some running
  * server, and gets it to the local site by using the normal NIS client
  * enumeration functions.  The map is copied to a temp name, then the real
  * map is removed and the temp map is moved to the real name.  ypxfr then
- * sends a "YPPROC_CLEAR" message to the local server to insure that he will
+ * sends a "YPPROC_CLEAR" message to the local server to insure that it will
  * not hold a removed map open, so serving an obsolete version.
  *
  * ypxfr [ -h <host> ] [ -d <domainname> ]
@@ -72,10 +71,10 @@
  */
 
 #include <ndbm.h>
-#undef NULL
 #define	DATUM
 
 #include <stdio.h>
+#include <stdarg.h>
 #include <errno.h>
 #include <time.h>
 #include <ctype.h>
@@ -160,7 +159,7 @@ int interdomain_sz = 0;		/* Size of the interdomain value */
 struct timeval udp_timeout = { UDPTIMEOUT, 0};
 struct timeval tcp_timeout = { 180, 0}; /* Timeout for map enumeration */
 
-char *interdomain_value; 	/* place to store the interdomain value */
+char *interdomain_value;	/* place to store the interdomain value */
 char *tid;
 char *proto;
 int entry_count;		/* counts entries in the map */
@@ -211,7 +210,7 @@ bool add_private_entries();
 bool new_mapfiles();
 void del_mapfiles();
 void set_output();
-void logprintf();
+void logprintf(char *, ...);
 bool send_ypclear();
 void xfr_exit();
 void send_callback();
@@ -349,18 +348,19 @@ set_output()
  * This constructs a logging record.
  */
 void
-logprintf(arg1, arg2, arg3, arg4, arg5, arg6, arg7)
-/*VARARGS*/
+logprintf(char *fmt, ...)
 {
 	struct timeval t;
+	va_list ap;
 
+	va_start(ap, fmt);
 	fseek(stderr, 0, 2);
 	if (logging) {
 		(void) gettimeofday(&t, NULL);
 		(void) fprintf(stderr, "%19.19s: ", ctime(&t.tv_sec));
 	}
-	(void) fprintf(stderr, (char *)arg1, arg2, arg3, arg4, arg5,
-				arg6, arg7);
+	(void) vfprintf(stderr, fmt, ap);
+	va_end(ap);
 	fflush(stderr);
 }
 
@@ -1579,7 +1579,7 @@ get_map(pname, pushstat)
 
 	} else
 		retval = FALSE; /* barf again at YPOLDVERS */
-cleanup:
+
 	clnt_destroy(domb.dom_client);
 	return (retval);
 }
@@ -1831,7 +1831,7 @@ xfr_exit(status)
 
 /*
  * This sets up a UDP connection to the yppush process which contacted our
- * parent ypserv, and sends him a status on the requested transfer.
+ * parent ypserv, and sends it a status on the requested transfer.
  */
 void
 send_callback(status)

@@ -21,11 +21,15 @@
 
 /*
  * Copyright (c) 1989, 2010, Oracle and/or its affiliates. All rights reserved.
- * Copyright (c) 2013, Joyent, Inc. All rights reserved.
+ * Copyright (c) 2018, Joyent, Inc.
+ * Copyright (c) 2017 by Delphix. All rights reserved.
+ * Copyright 2020 OmniOS Community Edition (OmniOSce) Association.
+ * Copyright 2022 MNX Cloud, Inc.
+ * Copyright 2023 Oxide Computer Company
  */
 
 /*	Copyright (c) 1984,	 1986, 1987, 1988, 1989 AT&T	*/
-/*	  All Rights Reserved  	*/
+/*	  All Rights Reserved	*/
 
 #include <sys/types.h>
 #include <sys/param.h>
@@ -63,6 +67,7 @@
 #include <sys/contract_impl.h>
 #include <sys/ctfs.h>
 #include <sys/avl.h>
+#include <sys/ctype.h>
 #include <fs/fs_subr.h>
 #include <vm/rm.h>
 #include <vm/as.h>
@@ -152,18 +157,22 @@ static prdirent_t piddir[] = {
 		"root" },
 	{ PR_FDDIR,	21 * sizeof (prdirent_t), sizeof (prdirent_t),
 		"fd" },
-	{ PR_OBJECTDIR,	22 * sizeof (prdirent_t), sizeof (prdirent_t),
+	{ PR_FDINFODIR,	22 * sizeof (prdirent_t), sizeof (prdirent_t),
+		"fdinfo" },
+	{ PR_OBJECTDIR,	23 * sizeof (prdirent_t), sizeof (prdirent_t),
 		"object" },
-	{ PR_LWPDIR,	23 * sizeof (prdirent_t), sizeof (prdirent_t),
+	{ PR_LWPDIR,	24 * sizeof (prdirent_t), sizeof (prdirent_t),
 		"lwp" },
-	{ PR_PRIV,	24 * sizeof (prdirent_t), sizeof (prdirent_t),
+	{ PR_PRIV,	25 * sizeof (prdirent_t), sizeof (prdirent_t),
 		"priv" },
-	{ PR_PATHDIR,	25 * sizeof (prdirent_t), sizeof (prdirent_t),
+	{ PR_PATHDIR,	26 * sizeof (prdirent_t), sizeof (prdirent_t),
 		"path" },
-	{ PR_CTDIR,	26 * sizeof (prdirent_t), sizeof (prdirent_t),
+	{ PR_CTDIR,	27 * sizeof (prdirent_t), sizeof (prdirent_t),
 		"contracts" },
+	{ PR_SECFLAGS,	28 * sizeof (prdirent_t), sizeof (prdirent_t),
+		"secflags" },
 #if defined(__x86)
-	{ PR_LDT,	27 * sizeof (prdirent_t), sizeof (prdirent_t),
+	{ PR_LDT,	29 * sizeof (prdirent_t), sizeof (prdirent_t),
 		"ldt" },
 #endif
 };
@@ -180,22 +189,24 @@ static prdirent_t lwpiddir[] = {
 		".." },
 	{ PR_LWPCTL,	 3 * sizeof (prdirent_t), sizeof (prdirent_t),
 		"lwpctl" },
-	{ PR_LWPSTATUS,	 4 * sizeof (prdirent_t), sizeof (prdirent_t),
+	{ PR_LWPNAME,	 4 * sizeof (prdirent_t), sizeof (prdirent_t),
+		"lwpname" },
+	{ PR_LWPSTATUS,	 5 * sizeof (prdirent_t), sizeof (prdirent_t),
 		"lwpstatus" },
-	{ PR_LWPSINFO,	 5 * sizeof (prdirent_t), sizeof (prdirent_t),
+	{ PR_LWPSINFO,	 6 * sizeof (prdirent_t), sizeof (prdirent_t),
 		"lwpsinfo" },
-	{ PR_LWPUSAGE,	 6 * sizeof (prdirent_t), sizeof (prdirent_t),
+	{ PR_LWPUSAGE,	 7 * sizeof (prdirent_t), sizeof (prdirent_t),
 		"lwpusage" },
-	{ PR_XREGS,	 7 * sizeof (prdirent_t), sizeof (prdirent_t),
+	{ PR_XREGS,	 8 * sizeof (prdirent_t), sizeof (prdirent_t),
 		"xregs" },
-	{ PR_TMPLDIR,	 8 * sizeof (prdirent_t), sizeof (prdirent_t),
+	{ PR_TMPLDIR,	 9 * sizeof (prdirent_t), sizeof (prdirent_t),
 		"templates" },
-	{ PR_SPYMASTER,	 9 * sizeof (prdirent_t), sizeof (prdirent_t),
+	{ PR_SPYMASTER,	 10 * sizeof (prdirent_t), sizeof (prdirent_t),
 		"spymaster" },
 #if defined(__sparc)
-	{ PR_GWINDOWS,	10 * sizeof (prdirent_t), sizeof (prdirent_t),
+	{ PR_GWINDOWS,	11 * sizeof (prdirent_t), sizeof (prdirent_t),
 		"gwindows" },
-	{ PR_ASRS,	11 * sizeof (prdirent_t), sizeof (prdirent_t),
+	{ PR_ASRS,	12 * sizeof (prdirent_t), sizeof (prdirent_t),
 		"asrs" },
 #endif
 };
@@ -414,7 +425,7 @@ out:
 /* ARGSUSED */
 static int
 prclose(vnode_t *vp, int flag, int count, offset_t offset, cred_t *cr,
-	caller_context_t *ct)
+    caller_context_t *ct)
 {
 	prnode_t *pnp = VTOP(vp);
 	prcommon_t *pcp = pnp->pr_pcommon;
@@ -584,12 +595,14 @@ static int pr_read_inval(), pr_read_as(), pr_read_status(),
 #endif
 	pr_read_usage(), pr_read_lusage(), pr_read_pagedata(),
 	pr_read_watch(), pr_read_lwpstatus(), pr_read_lwpsinfo(),
-	pr_read_lwpusage(), pr_read_xregs(), pr_read_priv(),
-	pr_read_spymaster(),
+	pr_read_lwpusage(), pr_read_lwpname(),
+	pr_read_xregs(), pr_read_priv(),
+	pr_read_spymaster(), pr_read_secflags(),
 #if defined(__sparc)
 	pr_read_gwindows(), pr_read_asrs(),
 #endif
-	pr_read_piddir(), pr_read_pidfile(), pr_read_opagedata();
+	pr_read_piddir(), pr_read_pidfile(), pr_read_opagedata(),
+	pr_read_fdinfo();
 
 static int (*pr_read_function[PR_NFILES])() = {
 	pr_read_inval,		/* /proc				*/
@@ -618,11 +631,14 @@ static int (*pr_read_function[PR_NFILES])() = {
 	pr_read_inval,		/* /proc/<pid>/root			*/
 	pr_read_inval,		/* /proc/<pid>/fd			*/
 	pr_read_inval,		/* /proc/<pid>/fd/nn			*/
+	pr_read_inval,		/* /proc/<pid>/fdinfo			*/
+	pr_read_fdinfo,		/* /proc/<pid>/fdinfo/nn		*/
 	pr_read_inval,		/* /proc/<pid>/object			*/
 	pr_read_inval,		/* /proc/<pid>/object/xxx		*/
 	pr_read_inval,		/* /proc/<pid>/lwp			*/
 	pr_read_inval,		/* /proc/<pid>/lwp/<lwpid>		*/
 	pr_read_inval,		/* /proc/<pid>/lwp/<lwpid>/lwpctl	*/
+	pr_read_lwpname,	/* /proc/<pid>/lwp/<lwpid>/lwpname	*/
 	pr_read_lwpstatus,	/* /proc/<pid>/lwp/<lwpid>/lwpstatus	*/
 	pr_read_lwpsinfo,	/* /proc/<pid>/lwp/<lwpid>/lwpsinfo	*/
 	pr_read_lwpusage,	/* /proc/<pid>/lwp/<lwpid>/lwpusage	*/
@@ -639,6 +655,7 @@ static int (*pr_read_function[PR_NFILES])() = {
 	pr_read_inval,		/* /proc/<pid>/path/xxx			*/
 	pr_read_inval,		/* /proc/<pid>/contracts		*/
 	pr_read_inval,		/* /proc/<pid>/contracts/<ctid>		*/
+	pr_read_secflags,	/* /proc/<pid>/secflags			*/
 	pr_read_pidfile,	/* old process file			*/
 	pr_read_pidfile,	/* old lwp file				*/
 	pr_read_opagedata,	/* old pagedata file			*/
@@ -646,7 +663,7 @@ static int (*pr_read_function[PR_NFILES])() = {
 
 /* ARGSUSED */
 static int
-pr_read_inval(prnode_t *pnp, uio_t *uiop)
+pr_read_inval(prnode_t *pnp, uio_t *uiop, cred_t *cr)
 {
 	/*
 	 * No read() on any /proc directory, use getdents(2) instead.
@@ -709,7 +726,7 @@ pr_read_as(prnode_t *pnp, uio_t *uiop)
 }
 
 static int
-pr_read_status(prnode_t *pnp, uio_t *uiop)
+pr_read_status(prnode_t *pnp, uio_t *uiop, cred_t *cr)
 {
 	pstatus_t *sp;
 	int error;
@@ -731,7 +748,7 @@ pr_read_status(prnode_t *pnp, uio_t *uiop)
 }
 
 static int
-pr_read_lstatus(prnode_t *pnp, uio_t *uiop)
+pr_read_lstatus(prnode_t *pnp, uio_t *uiop, cred_t *cr)
 {
 	proc_t *p;
 	kthread_t *t;
@@ -777,7 +794,7 @@ pr_read_lstatus(prnode_t *pnp, uio_t *uiop)
 }
 
 static int
-pr_read_psinfo(prnode_t *pnp, uio_t *uiop)
+pr_read_psinfo(prnode_t *pnp, uio_t *uiop, cred_t *cr)
 {
 	psinfo_t psinfo;
 	proc_t *p;
@@ -804,7 +821,85 @@ pr_read_psinfo(prnode_t *pnp, uio_t *uiop)
 }
 
 static int
-pr_read_lpsinfo(prnode_t *pnp, uio_t *uiop)
+pr_read_fdinfo(prnode_t *pnp, uio_t *uiop, cred_t *cr)
+{
+	prfdinfo_t *fdinfo;
+	list_t data;
+	proc_t *p;
+	uint_t fd;
+	file_t *fp;
+	short ufp_flag;
+	int error = 0;
+
+	ASSERT(pnp->pr_type == PR_FDINFO);
+
+	/*
+	 * This is a guess at the size of the structure that needs to
+	 * be returned. It's a balance between not allocating too much more
+	 * space than is required and not requiring too many subsequent
+	 * reallocations. Allocate it before acquiring the process lock.
+	 */
+	pr_iol_initlist(&data, sizeof (prfdinfo_t) + MAXPATHLEN + 2, 1);
+
+	if ((error = prlock(pnp, ZNO)) != 0) {
+		pr_iol_freelist(&data);
+		return (error);
+	}
+
+	p = pnp->pr_common->prc_proc;
+
+	if ((p->p_flag & SSYS) || p->p_as == &kas) {
+		prunlock(pnp);
+		pr_iol_freelist(&data);
+		return (0);
+	}
+
+	fd = pnp->pr_index;
+
+	/* Fetch and lock the file_t for this descriptor */
+	fp = pr_getf(p, fd, &ufp_flag);
+
+	if (fp == NULL) {
+		error = ENOENT;
+		prunlock(pnp);
+		goto out;
+	}
+
+	/*
+	 * For fdinfo, we don't want to include the placeholder pr_misc at the
+	 * end of the struct. We'll terminate the data with an empty pr_misc
+	 * header before returning.
+	 */
+
+	fdinfo = pr_iol_newbuf(&data, offsetof(prfdinfo_t, pr_misc));
+	fdinfo->pr_fd = fd;
+	fdinfo->pr_fdflags = ufp_flag;
+	fdinfo->pr_fileflags = fp->f_flag2 << 16 | fp->f_flag;
+	if ((fdinfo->pr_fileflags & (FSEARCH | FEXEC)) == 0)
+		fdinfo->pr_fileflags += FOPEN;
+	fdinfo->pr_offset = fp->f_offset;
+	/*
+	 * Information from the vnode (rather than the file_t) is retrieved
+	 * later, in prgetfdinfo() - for example sock_getfasync()
+	 */
+
+	prunlock(pnp);
+
+	error = prgetfdinfo(p, fp->f_vnode, fdinfo, cr, fp->f_cred, &data);
+
+	pr_releasef(fp);
+
+out:
+	if (error == 0)
+		error = pr_iol_uiomove_and_free(&data, uiop, error);
+	else
+		pr_iol_freelist(&data);
+
+	return (error);
+}
+
+static int
+pr_read_lpsinfo(prnode_t *pnp, uio_t *uiop, cred_t *cr)
 {
 	proc_t *p;
 	kthread_t *t;
@@ -889,7 +984,7 @@ readmap_common:
 		return (0);
 	}
 
-	if (!AS_LOCK_TRYENTER(as, &as->a_lock, RW_WRITER)) {
+	if (!AS_LOCK_TRYENTER(as, RW_WRITER)) {
 		prunlock(pnp);
 		delay(1);
 		goto readmap_common;
@@ -908,7 +1003,7 @@ readmap_common:
 		break;
 	}
 
-	AS_LOCK_EXIT(as, &as->a_lock);
+	AS_LOCK_EXIT(as);
 	mutex_enter(&p->p_lock);
 	prunlock(pnp);
 
@@ -918,28 +1013,28 @@ readmap_common:
 }
 
 static int
-pr_read_map(prnode_t *pnp, uio_t *uiop)
+pr_read_map(prnode_t *pnp, uio_t *uiop, cred_t *cr)
 {
 	ASSERT(pnp->pr_type == PR_MAP);
 	return (pr_read_map_common(pnp, uiop, pnp->pr_type));
 }
 
 static int
-pr_read_rmap(prnode_t *pnp, uio_t *uiop)
+pr_read_rmap(prnode_t *pnp, uio_t *uiop, cred_t *cr)
 {
 	ASSERT(pnp->pr_type == PR_RMAP);
 	return (pr_read_map_common(pnp, uiop, pnp->pr_type));
 }
 
 static int
-pr_read_xmap(prnode_t *pnp, uio_t *uiop)
+pr_read_xmap(prnode_t *pnp, uio_t *uiop, cred_t *cr)
 {
 	ASSERT(pnp->pr_type == PR_XMAP);
 	return (pr_read_map_common(pnp, uiop, pnp->pr_type));
 }
 
 static int
-pr_read_cred(prnode_t *pnp, uio_t *uiop)
+pr_read_cred(prnode_t *pnp, uio_t *uiop, cred_t *cr)
 {
 	proc_t *p;
 	prcred_t *pcrp;
@@ -953,7 +1048,7 @@ pr_read_cred(prnode_t *pnp, uio_t *uiop)
 	 * the number of supplementary groups is variable.
 	 */
 	pcrp =
-	    kmem_alloc(sizeof (prcred_t) + sizeof (gid_t) * (ngroups_max - 1),
+	    kmem_zalloc(sizeof (prcred_t) + sizeof (gid_t) * (ngroups_max - 1),
 	    KM_SLEEP);
 
 	if ((error = prlock(pnp, ZNO)) != 0)
@@ -974,11 +1069,11 @@ out:
 }
 
 static int
-pr_read_priv(prnode_t *pnp, uio_t *uiop)
+pr_read_priv(prnode_t *pnp, uio_t *uiop, cred_t *cr)
 {
 	proc_t *p;
 	size_t psize = prgetprivsize();
-	prpriv_t *ppriv = kmem_alloc(psize, KM_SLEEP);
+	prpriv_t *ppriv = kmem_zalloc(psize, KM_SLEEP);
 	int error;
 
 	ASSERT(pnp->pr_type == PR_PRIV);
@@ -998,7 +1093,7 @@ out:
 }
 
 static int
-pr_read_sigact(prnode_t *pnp, uio_t *uiop)
+pr_read_sigact(prnode_t *pnp, uio_t *uiop, cred_t *cr)
 {
 	int nsig = PROC_IS_BRANDED(curproc)? BROP(curproc)->b_nsig : NSIG;
 	proc_t *p;
@@ -1037,7 +1132,7 @@ out:
 }
 
 static int
-pr_read_auxv(prnode_t *pnp, uio_t *uiop)
+pr_read_auxv(prnode_t *pnp, uio_t *uiop, cred_t *cr)
 {
 	auxv_t auxv[__KERN_NAUXV_IMPL];
 	proc_t *p;
@@ -1069,10 +1164,10 @@ pr_read_auxv(prnode_t *pnp, uio_t *uiop)
  *	we have two kinds of LDT structures to export -- one for compatibility
  *	mode, and one for long mode, sigh.
  *
- * 	For now lets just have a ldt of size 0 for 64-bit processes.
+ *	For now let's just have a ldt of size 0 for 64-bit processes.
  */
 static int
-pr_read_ldt(prnode_t *pnp, uio_t *uiop)
+pr_read_ldt(prnode_t *pnp, uio_t *uiop, cred_t *cr)
 {
 	proc_t *p;
 	struct ssd *ssd;
@@ -1108,7 +1203,7 @@ pr_read_ldt(prnode_t *pnp, uio_t *uiop)
 #endif	/* __x86 */
 
 static int
-pr_read_usage(prnode_t *pnp, uio_t *uiop)
+pr_read_usage(prnode_t *pnp, uio_t *uiop, cred_t *cr)
 {
 	prhusage_t *pup;
 	prusage_t *upup;
@@ -1197,7 +1292,7 @@ out:
 }
 
 static int
-pr_read_lusage(prnode_t *pnp, uio_t *uiop)
+pr_read_lusage(prnode_t *pnp, uio_t *uiop, cred_t *cr)
 {
 	int nlwp;
 	prhusage_t *pup;
@@ -1308,7 +1403,7 @@ pr_read_lusage(prnode_t *pnp, uio_t *uiop)
 }
 
 static int
-pr_read_pagedata(prnode_t *pnp, uio_t *uiop)
+pr_read_pagedata(prnode_t *pnp, uio_t *uiop, cred_t *cr)
 {
 	proc_t *p;
 	int error;
@@ -1333,7 +1428,7 @@ pr_read_pagedata(prnode_t *pnp, uio_t *uiop)
 }
 
 static int
-pr_read_opagedata(prnode_t *pnp, uio_t *uiop)
+pr_read_opagedata(prnode_t *pnp, uio_t *uiop, cred_t *cr)
 {
 	proc_t *p;
 	struct as *as;
@@ -1360,7 +1455,7 @@ pr_read_opagedata(prnode_t *pnp, uio_t *uiop)
 }
 
 static int
-pr_read_watch(prnode_t *pnp, uio_t *uiop)
+pr_read_watch(prnode_t *pnp, uio_t *uiop, cred_t *cr)
 {
 	proc_t *p;
 	int error;
@@ -1406,7 +1501,7 @@ pr_read_watch(prnode_t *pnp, uio_t *uiop)
 }
 
 static int
-pr_read_lwpstatus(prnode_t *pnp, uio_t *uiop)
+pr_read_lwpstatus(prnode_t *pnp, uio_t *uiop, cred_t *cr)
 {
 	lwpstatus_t *sp;
 	int error;
@@ -1437,7 +1532,7 @@ out:
 }
 
 static int
-pr_read_lwpsinfo(prnode_t *pnp, uio_t *uiop)
+pr_read_lwpsinfo(prnode_t *pnp, uio_t *uiop, cred_t *cr)
 {
 	lwpsinfo_t lwpsinfo;
 	proc_t *p;
@@ -1484,7 +1579,7 @@ pr_read_lwpsinfo(prnode_t *pnp, uio_t *uiop)
 }
 
 static int
-pr_read_lwpusage(prnode_t *pnp, uio_t *uiop)
+pr_read_lwpusage(prnode_t *pnp, uio_t *uiop, cred_t *cr)
 {
 	prhusage_t *pup;
 	prusage_t *upup;
@@ -1534,28 +1629,90 @@ out:
 	return (error);
 }
 
+static int
+pr_read_lwpname(prnode_t *pnp, uio_t *uiop, cred_t *cr)
+{
+	char lwpname[THREAD_NAME_MAX];
+	kthread_t *t;
+	int error;
+
+	ASSERT(pnp->pr_type == PR_LWPNAME);
+
+	if (uiop->uio_offset >= THREAD_NAME_MAX)
+		return (0);
+
+	if ((error = prlock(pnp, ZNO)) != 0)
+		return (error);
+
+	bzero(lwpname, sizeof (lwpname));
+
+	t = pnp->pr_common->prc_thread;
+
+	if (t->t_name != NULL)
+		(void) strlcpy(lwpname, t->t_name, sizeof (lwpname));
+
+	prunlock(pnp);
+
+	return (pr_uioread(lwpname, sizeof (lwpname), uiop));
+}
+
 /* ARGSUSED */
 static int
-pr_read_xregs(prnode_t *pnp, uio_t *uiop)
+pr_read_xregs(prnode_t *pnp, uio_t *uiop, cred_t *cr)
 {
-#if defined(__sparc)
 	proc_t *p;
 	kthread_t *t;
 	int error;
-	char *xreg;
+	void *xreg;
 	size_t size;
 
 	ASSERT(pnp->pr_type == PR_XREGS);
 
-	xreg = kmem_zalloc(sizeof (prxregset_t), KM_SLEEP);
-
 	if ((error = prlock(pnp, ZNO)) != 0)
-		goto out;
+		return (error);
 
 	p = pnp->pr_common->prc_proc;
 	t = pnp->pr_common->prc_thread;
 
-	size = prhasx(p)? prgetprxregsize(p) : 0;
+	/*
+	 * While we would prefer to do the allocation without holding the
+	 * process under a prlock(), we can only determine this size while
+	 * holding the process as the hold guarantees us:
+	 *
+	 *  o That the process in question actualy exists.
+	 *  o That the process in question cannot change the set of FPU features
+	 *    it has enabled.
+	 *
+	 * We will drop p_lock across the allocation call itself. This should be
+	 * safe as the enabled feature set should not change while the process
+	 * is locked (e.g. enabling extending FPU state like AMX on x86 should
+	 * require the process to be locked).
+	 */
+	size = prhasx(p) ? prgetprxregsize(p) : 0;
+	if (size == 0) {
+		prunlock(pnp);
+		return (0);
+	}
+
+	/*
+	 * To read the extended register set we require that the thread be
+	 * stopped as this state is only valid in the kernel when it is. An
+	 * exception made if the target thread and the current thread are one
+	 * and the same. We won't stop you from doing something... weird.
+	 */
+	thread_lock(t);
+	if (t != curthread && !ISTOPPED(t) && !VSTOPPED(t) && !DSTOPPED(t)) {
+		thread_unlock(t);
+		prunlock(pnp);
+		return (EBUSY);
+	}
+	thread_unlock(t);
+
+	mutex_exit(&p->p_lock);
+	xreg = kmem_zalloc(size, KM_SLEEP);
+	mutex_enter(&p->p_lock);
+	ASSERT3U(size, ==, prgetprxregsize(p));
+
 	if (uiop->uio_offset >= size) {
 		prunlock(pnp);
 		goto out;
@@ -1569,15 +1726,12 @@ pr_read_xregs(prnode_t *pnp, uio_t *uiop)
 
 	error = pr_uioread(xreg, size, uiop);
 out:
-	kmem_free(xreg, sizeof (prxregset_t));
+	kmem_free(xreg, size);
 	return (error);
-#else
-	return (0);
-#endif
 }
 
 static int
-pr_read_spymaster(prnode_t *pnp, uio_t *uiop)
+pr_read_spymaster(prnode_t *pnp, uio_t *uiop, cred_t *cr)
 {
 	psinfo_t psinfo;
 	int error;
@@ -1587,6 +1741,11 @@ pr_read_spymaster(prnode_t *pnp, uio_t *uiop)
 
 	if ((error = prlock(pnp, ZNO)) != 0)
 		return (error);
+
+	if (pnp->pr_common->prc_thread == NULL) {
+		prunlock(pnp);
+		return (0);
+	}
 
 	lwp = pnp->pr_common->prc_thread->t_lwp;
 
@@ -1601,10 +1760,29 @@ pr_read_spymaster(prnode_t *pnp, uio_t *uiop)
 	return (pr_uioread(&psinfo, sizeof (psinfo), uiop));
 }
 
+static int
+pr_read_secflags(prnode_t *pnp, uio_t *uiop, cred_t *cr)
+{
+	prsecflags_t ret;
+	int error;
+	proc_t *p;
+
+	ASSERT(pnp->pr_type == PR_SECFLAGS);
+
+	if ((error = prlock(pnp, ZNO)) != 0)
+		return (error);
+
+	p = pnp->pr_common->prc_proc;
+	prgetsecflags(p, &ret);
+	prunlock(pnp);
+
+	return (pr_uioread(&ret, sizeof (ret), uiop));
+}
+
 #if defined(__sparc)
 
 static int
-pr_read_gwindows(prnode_t *pnp, uio_t *uiop)
+pr_read_gwindows(prnode_t *pnp, uio_t *uiop, cred_t *cr)
 {
 	proc_t *p;
 	kthread_t *t;
@@ -1648,7 +1826,7 @@ out:
 
 /* ARGSUSED */
 static int
-pr_read_asrs(prnode_t *pnp, uio_t *uiop)
+pr_read_asrs(prnode_t *pnp, uio_t *uiop, cred_t *cr)
 {
 	int error;
 
@@ -1685,7 +1863,7 @@ pr_read_asrs(prnode_t *pnp, uio_t *uiop)
 #endif	/* __sparc */
 
 static int
-pr_read_piddir(prnode_t *pnp, uio_t *uiop)
+pr_read_piddir(prnode_t *pnp, uio_t *uiop, cred_t *cr)
 {
 	ASSERT(pnp->pr_type == PR_PIDDIR);
 	ASSERT(pnp->pr_pidfile != NULL);
@@ -1698,7 +1876,7 @@ pr_read_piddir(prnode_t *pnp, uio_t *uiop)
 }
 
 static int
-pr_read_pidfile(prnode_t *pnp, uio_t *uiop)
+pr_read_pidfile(prnode_t *pnp, uio_t *uiop, cred_t *cr)
 {
 	int error;
 
@@ -1775,11 +1953,14 @@ static int (*pr_read_function_32[PR_NFILES])() = {
 	pr_read_inval,		/* /proc/<pid>/root			*/
 	pr_read_inval,		/* /proc/<pid>/fd			*/
 	pr_read_inval,		/* /proc/<pid>/fd/nn			*/
+	pr_read_inval,		/* /proc/<pid>/fdinfo			*/
+	pr_read_fdinfo,		/* /proc/<pid>/fdinfo/nn		*/
 	pr_read_inval,		/* /proc/<pid>/object			*/
 	pr_read_inval,		/* /proc/<pid>/object/xxx		*/
 	pr_read_inval,		/* /proc/<pid>/lwp			*/
 	pr_read_inval,		/* /proc/<pid>/lwp/<lwpid>		*/
 	pr_read_inval,		/* /proc/<pid>/lwp/<lwpid>/lwpctl	*/
+	pr_read_lwpname,	/* /proc/<pid>/lwp/<lwpid>/lwpname	*/
 	pr_read_lwpstatus_32,	/* /proc/<pid>/lwp/<lwpid>/lwpstatus	*/
 	pr_read_lwpsinfo_32,	/* /proc/<pid>/lwp/<lwpid>/lwpsinfo	*/
 	pr_read_lwpusage_32,	/* /proc/<pid>/lwp/<lwpid>/lwpusage	*/
@@ -1796,13 +1977,14 @@ static int (*pr_read_function_32[PR_NFILES])() = {
 	pr_read_inval,		/* /proc/<pid>/path/xxx			*/
 	pr_read_inval,		/* /proc/<pid>/contracts		*/
 	pr_read_inval,		/* /proc/<pid>/contracts/<ctid>		*/
+	pr_read_secflags,	/* /proc/<pid>/secflags			*/
 	pr_read_pidfile,	/* old process file			*/
 	pr_read_pidfile,	/* old lwp file				*/
 	pr_read_opagedata_32,	/* old pagedata file			*/
 };
 
 static int
-pr_read_status_32(prnode_t *pnp, uio_t *uiop)
+pr_read_status_32(prnode_t *pnp, uio_t *uiop, cred_t *cr)
 {
 	pstatus32_t *sp;
 	proc_t *p;
@@ -1836,7 +2018,7 @@ pr_read_status_32(prnode_t *pnp, uio_t *uiop)
 }
 
 static int
-pr_read_lstatus_32(prnode_t *pnp, uio_t *uiop)
+pr_read_lstatus_32(prnode_t *pnp, uio_t *uiop, cred_t *cr)
 {
 	proc_t *p;
 	kthread_t *t;
@@ -1890,7 +2072,7 @@ pr_read_lstatus_32(prnode_t *pnp, uio_t *uiop)
 }
 
 static int
-pr_read_psinfo_32(prnode_t *pnp, uio_t *uiop)
+pr_read_psinfo_32(prnode_t *pnp, uio_t *uiop, cred_t *cr)
 {
 	psinfo32_t psinfo;
 	proc_t *p;
@@ -1917,7 +2099,7 @@ pr_read_psinfo_32(prnode_t *pnp, uio_t *uiop)
 }
 
 static int
-pr_read_lpsinfo_32(prnode_t *pnp, uio_t *uiop)
+pr_read_lpsinfo_32(prnode_t *pnp, uio_t *uiop, cred_t *cr)
 {
 	proc_t *p;
 	kthread_t *t;
@@ -2005,7 +2187,7 @@ readmap32_common:
 		return (EOVERFLOW);
 	}
 
-	if (!AS_LOCK_TRYENTER(as, &as->a_lock, RW_WRITER)) {
+	if (!AS_LOCK_TRYENTER(as, RW_WRITER)) {
 		prunlock(pnp);
 		delay(1);
 		goto readmap32_common;
@@ -2023,7 +2205,7 @@ readmap32_common:
 		error = prgetmap32(p, 0, &iolhead);
 		break;
 	}
-	AS_LOCK_EXIT(as, &as->a_lock);
+	AS_LOCK_EXIT(as);
 	mutex_enter(&p->p_lock);
 	prunlock(pnp);
 
@@ -2033,28 +2215,28 @@ readmap32_common:
 }
 
 static int
-pr_read_map_32(prnode_t *pnp, uio_t *uiop)
+pr_read_map_32(prnode_t *pnp, uio_t *uiop, cred_t *cr)
 {
 	ASSERT(pnp->pr_type == PR_MAP);
 	return (pr_read_map_common_32(pnp, uiop, pnp->pr_type));
 }
 
 static int
-pr_read_rmap_32(prnode_t *pnp, uio_t *uiop)
+pr_read_rmap_32(prnode_t *pnp, uio_t *uiop, cred_t *cr)
 {
 	ASSERT(pnp->pr_type == PR_RMAP);
 	return (pr_read_map_common_32(pnp, uiop, pnp->pr_type));
 }
 
 static int
-pr_read_xmap_32(prnode_t *pnp, uio_t *uiop)
+pr_read_xmap_32(prnode_t *pnp, uio_t *uiop, cred_t *cr)
 {
 	ASSERT(pnp->pr_type == PR_XMAP);
 	return (pr_read_map_common_32(pnp, uiop, pnp->pr_type));
 }
 
 static int
-pr_read_sigact_32(prnode_t *pnp, uio_t *uiop)
+pr_read_sigact_32(prnode_t *pnp, uio_t *uiop, cred_t *cr)
 {
 	int nsig = PROC_IS_BRANDED(curproc)? BROP(curproc)->b_nsig : NSIG;
 	proc_t *p;
@@ -2098,7 +2280,7 @@ out:
 }
 
 static int
-pr_read_auxv_32(prnode_t *pnp, uio_t *uiop)
+pr_read_auxv_32(prnode_t *pnp, uio_t *uiop, cred_t *cr)
 {
 	auxv32_t auxv[__KERN_NAUXV_IMPL];
 	proc_t *p;
@@ -2133,7 +2315,7 @@ pr_read_auxv_32(prnode_t *pnp, uio_t *uiop)
 }
 
 static int
-pr_read_usage_32(prnode_t *pnp, uio_t *uiop)
+pr_read_usage_32(prnode_t *pnp, uio_t *uiop, cred_t *cr)
 {
 	prhusage_t *pup;
 	prusage32_t *upup;
@@ -2222,7 +2404,7 @@ out:
 }
 
 static int
-pr_read_lusage_32(prnode_t *pnp, uio_t *uiop)
+pr_read_lusage_32(prnode_t *pnp, uio_t *uiop, cred_t *cr)
 {
 	int nlwp;
 	prhusage_t *pup;
@@ -2334,7 +2516,7 @@ pr_read_lusage_32(prnode_t *pnp, uio_t *uiop)
 }
 
 static int
-pr_read_pagedata_32(prnode_t *pnp, uio_t *uiop)
+pr_read_pagedata_32(prnode_t *pnp, uio_t *uiop, cred_t *cr)
 {
 	proc_t *p;
 	int error;
@@ -2364,7 +2546,7 @@ pr_read_pagedata_32(prnode_t *pnp, uio_t *uiop)
 }
 
 static int
-pr_read_opagedata_32(prnode_t *pnp, uio_t *uiop)
+pr_read_opagedata_32(prnode_t *pnp, uio_t *uiop, cred_t *cr)
 {
 	proc_t *p;
 	struct as *as;
@@ -2397,7 +2579,7 @@ pr_read_opagedata_32(prnode_t *pnp, uio_t *uiop)
 }
 
 static int
-pr_read_watch_32(prnode_t *pnp, uio_t *uiop)
+pr_read_watch_32(prnode_t *pnp, uio_t *uiop, cred_t *cr)
 {
 	proc_t *p;
 	int error;
@@ -2447,7 +2629,7 @@ pr_read_watch_32(prnode_t *pnp, uio_t *uiop)
 }
 
 static int
-pr_read_lwpstatus_32(prnode_t *pnp, uio_t *uiop)
+pr_read_lwpstatus_32(prnode_t *pnp, uio_t *uiop, cred_t *cr)
 {
 	lwpstatus32_t *sp;
 	proc_t *p;
@@ -2490,7 +2672,7 @@ out:
 }
 
 static int
-pr_read_lwpsinfo_32(prnode_t *pnp, uio_t *uiop)
+pr_read_lwpsinfo_32(prnode_t *pnp, uio_t *uiop, cred_t *cr)
 {
 	lwpsinfo32_t lwpsinfo;
 	proc_t *p;
@@ -2535,7 +2717,7 @@ pr_read_lwpsinfo_32(prnode_t *pnp, uio_t *uiop)
 }
 
 static int
-pr_read_lwpusage_32(prnode_t *pnp, uio_t *uiop)
+pr_read_lwpusage_32(prnode_t *pnp, uio_t *uiop, cred_t *cr)
 {
 	prhusage_t *pup;
 	prusage32_t *upup;
@@ -2586,7 +2768,7 @@ out:
 }
 
 static int
-pr_read_spymaster_32(prnode_t *pnp, uio_t *uiop)
+pr_read_spymaster_32(prnode_t *pnp, uio_t *uiop, cred_t *cr)
 {
 	psinfo32_t psinfo;
 	int error;
@@ -2596,6 +2778,11 @@ pr_read_spymaster_32(prnode_t *pnp, uio_t *uiop)
 
 	if ((error = prlock(pnp, ZNO)) != 0)
 		return (error);
+
+	if (pnp->pr_common->prc_thread == NULL) {
+		prunlock(pnp);
+		return (0);
+	}
 
 	lwp = pnp->pr_common->prc_thread->t_lwp;
 
@@ -2612,7 +2799,7 @@ pr_read_spymaster_32(prnode_t *pnp, uio_t *uiop)
 
 #if defined(__sparc)
 static int
-pr_read_gwindows_32(prnode_t *pnp, uio_t *uiop)
+pr_read_gwindows_32(prnode_t *pnp, uio_t *uiop, cred_t *cr)
 {
 	proc_t *p;
 	kthread_t *t;
@@ -2678,12 +2865,60 @@ prread(vnode_t *vp, uio_t *uiop, int ioflag, cred_t *cr, caller_context_t *ct)
 	 * data.  An ILP32 process will see ILP32 data.
 	 */
 	if (curproc->p_model == DATAMODEL_LP64)
-		return (pr_read_function[pnp->pr_type](pnp, uiop));
+		return (pr_read_function[pnp->pr_type](pnp, uiop, cr));
 	else
-		return (pr_read_function_32[pnp->pr_type](pnp, uiop));
+		return (pr_read_function_32[pnp->pr_type](pnp, uiop, cr));
 #else
-	return (pr_read_function[pnp->pr_type](pnp, uiop));
+	return (pr_read_function[pnp->pr_type](pnp, uiop, cr));
 #endif
+}
+
+/* Note we intentionally don't handle partial writes/updates. */
+static int
+pr_write_lwpname(prnode_t *pnp, uio_t *uiop)
+{
+	kthread_t *t = NULL;
+	char *lwpname;
+	int error;
+
+	lwpname = kmem_zalloc(THREAD_NAME_MAX, KM_SLEEP);
+
+	if ((error = uiomove(lwpname, THREAD_NAME_MAX, UIO_WRITE, uiop)) != 0) {
+		kmem_free(lwpname, THREAD_NAME_MAX);
+		return (error);
+	}
+
+	/* Somebody tried to write too long a thread name... */
+	if (lwpname[THREAD_NAME_MAX - 1] != '\0' || uiop->uio_resid > 0) {
+		kmem_free(lwpname, THREAD_NAME_MAX);
+		return (EIO);
+	}
+
+	VERIFY3U(lwpname[THREAD_NAME_MAX - 1], ==, '\0');
+
+	for (size_t i = 0; lwpname[i] != '\0'; i++) {
+		if (!ISPRINT(lwpname[i])) {
+			kmem_free(lwpname, THREAD_NAME_MAX);
+			return (EINVAL);
+		}
+	}
+
+	/* Equivalent of thread_setname(), but with the ZNO magic. */
+	if ((error = prlock(pnp, ZNO)) != 0) {
+		kmem_free(lwpname, THREAD_NAME_MAX);
+		return (error);
+	}
+
+	t = pnp->pr_common->prc_thread;
+	if (t->t_name == NULL) {
+		t->t_name = lwpname;
+	} else {
+		(void) strlcpy(t->t_name, lwpname, THREAD_NAME_MAX);
+		kmem_free(lwpname, THREAD_NAME_MAX);
+	}
+
+	prunlock(pnp);
+	return (0);
 }
 
 /* ARGSUSED */
@@ -2764,6 +2999,9 @@ prwrite(vnode_t *vp, uio_t *uiop, int ioflag, cred_t *cr, caller_context_t *ct)
 			uiop->uio_resid = resid;
 		return (error);
 
+	case PR_LWPNAME:
+		return (pr_write_lwpname(pnp, uiop));
+
 	default:
 		return ((vp->v_type == VDIR)? EISDIR : EBADF);
 	}
@@ -2772,7 +3010,7 @@ prwrite(vnode_t *vp, uio_t *uiop, int ioflag, cred_t *cr, caller_context_t *ct)
 
 static int
 prgetattr(vnode_t *vp, vattr_t *vap, int flags, cred_t *cr,
-	caller_context_t *ct)
+    caller_context_t *ct)
 {
 	prnode_t *pnp = VTOP(vp);
 	prnodetype_t type = pnp->pr_type;
@@ -2891,11 +3129,35 @@ prgetattr(vnode_t *vp, vattr_t *vap, int flags, cred_t *cr,
 		return (0);
 	}
 
+	/* A subset of prlock(pnp...) */
 	p = pr_p_lock(pnp);
 	mutex_exit(&pr_pidlock);
 	if (p == NULL)
 		return (ENOENT);
 	pcp = pnp->pr_common;
+
+	/*
+	 * Because we're performing a subset of prlock() inline here, we must
+	 * follow prlock's semantics when encountering a zombie process
+	 * (PRC_DESTROY flag is set) or an exiting process (SEXITING flag is
+	 * set). Those semantics indicate acting as if the process is no
+	 * longer there (return ENOENT).
+	 *
+	 * If we chose to proceed here regardless, we may encounter issues
+	 * when we drop the p_lock (see PR_OBJECTDIR, PR_PATHDIR, PR_*MAP,
+	 * PR_LDT, and PR_*PAGEDATA below). A process-cleanup which was
+	 * blocked on p_lock may ignore the P_PR_LOCK flag we set above, since
+	 * it set one of PRC_DESTROY or SEXITING. If the process then gets
+	 * destroyed our "p" will be useless, as will its p_lock.
+	 *
+	 * It may be desirable to move this check to only places further down
+	 * prior to actual droppages of p->p_lock, but for now, we're playing
+	 * it safe and checking here immediately, like prlock() does..
+	 */
+	if (((pcp->prc_flags & PRC_DESTROY) || (p->p_flag & SEXITING))) {
+		prunlock(pnp);
+		return (ENOENT);
+	}
 
 	mutex_enter(&p->p_crlock);
 	vap->va_uid = crgetruid(p->p_cred);
@@ -2930,11 +3192,11 @@ prgetattr(vnode_t *vp, vattr_t *vap, int flags, cred_t *cr,
 			vap->va_size = 2 * PRSDSIZE;
 		else {
 			mutex_exit(&p->p_lock);
-			AS_LOCK_ENTER(as, &as->a_lock, RW_WRITER);
+			AS_LOCK_ENTER(as, RW_WRITER);
 			if (as->a_updatedir)
 				rebuild_objdir(as);
 			vap->va_size = (as->a_sizedir + 2) * PRSDSIZE;
-			AS_LOCK_EXIT(as, &as->a_lock);
+			AS_LOCK_EXIT(as);
 			mutex_enter(&p->p_lock);
 		}
 		vap->va_nlink = 2;
@@ -2944,12 +3206,12 @@ prgetattr(vnode_t *vp, vattr_t *vap, int flags, cred_t *cr,
 			vap->va_size = (P_FINFO(p)->fi_nfiles + 4) * PRSDSIZE;
 		else {
 			mutex_exit(&p->p_lock);
-			AS_LOCK_ENTER(as, &as->a_lock, RW_WRITER);
+			AS_LOCK_ENTER(as, RW_WRITER);
 			if (as->a_updatedir)
 				rebuild_objdir(as);
 			vap->va_size = (as->a_sizedir + 4 +
 			    P_FINFO(p)->fi_nfiles) * PRSDSIZE;
-			AS_LOCK_EXIT(as, &as->a_lock);
+			AS_LOCK_EXIT(as);
 			mutex_enter(&p->p_lock);
 		}
 		vap->va_nlink = 2;
@@ -2962,9 +3224,25 @@ prgetattr(vnode_t *vp, vattr_t *vap, int flags, cred_t *cr,
 		vap->va_size = 0;
 		break;
 	case PR_FDDIR:
+	case PR_FDINFODIR:
 		vap->va_nlink = 2;
 		vap->va_size = (P_FINFO(p)->fi_nfiles + 2) * PRSDSIZE;
 		break;
+	case PR_FDINFO: {
+		file_t *fp;
+		int fd = pnp->pr_index;
+
+		fp = pr_getf(p, fd, NULL);
+		if (fp == NULL) {
+			prunlock(pnp);
+			return (ENOENT);
+		}
+		prunlock(pnp);
+		vap->va_size = prgetfdinfosize(p, fp->f_vnode, cr);
+		vap->va_nblocks = (fsblkcnt64_t)btod(vap->va_size);
+		pr_releasef(fp);
+		return (0);
+	}
 	case PR_LWPDIR:
 		/*
 		 * va_nlink: count each lwp as a directory link.
@@ -3015,7 +3293,7 @@ prgetattr(vnode_t *vp, vattr_t *vap, int flags, cred_t *cr,
 			vap->va_size = 0;
 		else {
 			mutex_exit(&p->p_lock);
-			AS_LOCK_ENTER(as, &as->a_lock, RW_WRITER);
+			AS_LOCK_ENTER(as, RW_WRITER);
 			if (type == PR_MAP)
 				vap->va_mtime = as->a_updatetime;
 			if (type == PR_XMAP)
@@ -3024,7 +3302,7 @@ prgetattr(vnode_t *vp, vattr_t *vap, int flags, cred_t *cr,
 			else
 				vap->va_size = prnsegs(as, type == PR_RMAP) *
 				    PR_OBJSIZE(prmap32_t, prmap_t);
-			AS_LOCK_EXIT(as, &as->a_lock);
+			AS_LOCK_EXIT(as);
 			mutex_enter(&p->p_lock);
 		}
 		break;
@@ -3038,6 +3316,9 @@ prgetattr(vnode_t *vp, vattr_t *vap, int flags, cred_t *cr,
 		break;
 	case PR_PRIV:
 		vap->va_size = prgetprivsize();
+		break;
+	case PR_SECFLAGS:
+		vap->va_size = sizeof (prsecflags_t);
 		break;
 	case PR_SIGACT:
 		nsig = PROC_IS_BRANDED(curproc)? BROP(curproc)->b_nsig : NSIG;
@@ -3073,14 +3354,14 @@ prgetattr(vnode_t *vp, vattr_t *vap, int flags, cred_t *cr,
 			 * change while the process is marked P_PR_LOCK.
 			 */
 			mutex_exit(&p->p_lock);
-			AS_LOCK_ENTER(as, &as->a_lock, RW_WRITER);
+			AS_LOCK_ENTER(as, RW_WRITER);
 #ifdef _LP64
 			vap->va_size = iam32bit?
 			    prpdsize32(as) : prpdsize(as);
 #else
 			vap->va_size = prpdsize(as);
 #endif
-			AS_LOCK_EXIT(as, &as->a_lock);
+			AS_LOCK_EXIT(as);
 			mutex_enter(&p->p_lock);
 		}
 		break;
@@ -3089,14 +3370,14 @@ prgetattr(vnode_t *vp, vattr_t *vap, int flags, cred_t *cr,
 			vap->va_size = 0;
 		else {
 			mutex_exit(&p->p_lock);
-			AS_LOCK_ENTER(as, &as->a_lock, RW_WRITER);
+			AS_LOCK_ENTER(as, RW_WRITER);
 #ifdef _LP64
 			vap->va_size = iam32bit?
 			    oprpdsize32(as) : oprpdsize(as);
 #else
 			vap->va_size = oprpdsize(as);
 #endif
-			AS_LOCK_EXIT(as, &as->a_lock);
+			AS_LOCK_EXIT(as);
 			mutex_enter(&p->p_lock);
 		}
 		break;
@@ -3120,7 +3401,8 @@ prgetattr(vnode_t *vp, vattr_t *vap, int flags, cred_t *cr,
 			vap->va_size = 0;
 		break;
 	case PR_SPYMASTER:
-		if (pnp->pr_common->prc_thread->t_lwp->lwp_spymaster != NULL) {
+		if (pnp->pr_common->prc_thread != NULL &&
+		    pnp->pr_common->prc_thread->t_lwp->lwp_spymaster != NULL) {
 			vap->va_size = PR_OBJSIZE(psinfo32_t, psinfo_t);
 		} else {
 			vap->va_size = 0;
@@ -3285,8 +3567,8 @@ praccess(vnode_t *vp, int mode, int flags, cred_t *cr, caller_context_t *ct)
  */
 static vnode_t *pr_lookup_notdir(), *pr_lookup_procdir(), *pr_lookup_piddir(),
 	*pr_lookup_objectdir(), *pr_lookup_lwpdir(), *pr_lookup_lwpiddir(),
-	*pr_lookup_fddir(), *pr_lookup_pathdir(), *pr_lookup_tmpldir(),
-	*pr_lookup_ctdir();
+	*pr_lookup_fddir(), *pr_lookup_fdinfodir(), *pr_lookup_pathdir(),
+	*pr_lookup_tmpldir(), *pr_lookup_ctdir();
 
 static vnode_t *(*pr_lookup_function[PR_NFILES])() = {
 	pr_lookup_procdir,	/* /proc				*/
@@ -3315,11 +3597,14 @@ static vnode_t *(*pr_lookup_function[PR_NFILES])() = {
 	pr_lookup_notdir,	/* /proc/<pid>/root			*/
 	pr_lookup_fddir,	/* /proc/<pid>/fd			*/
 	pr_lookup_notdir,	/* /proc/<pid>/fd/nn			*/
+	pr_lookup_fdinfodir,	/* /proc/<pid>/fdinfo			*/
+	pr_lookup_notdir,	/* /proc/<pid>/fdinfo/nn		*/
 	pr_lookup_objectdir,	/* /proc/<pid>/object			*/
 	pr_lookup_notdir,	/* /proc/<pid>/object/xxx		*/
 	pr_lookup_lwpdir,	/* /proc/<pid>/lwp			*/
 	pr_lookup_lwpiddir,	/* /proc/<pid>/lwp/<lwpid>		*/
 	pr_lookup_notdir,	/* /proc/<pid>/lwp/<lwpid>/lwpctl	*/
+	pr_lookup_notdir,	/* /proc/<pid>/lwp/<lwpid>/lwpname	*/
 	pr_lookup_notdir,	/* /proc/<pid>/lwp/<lwpid>/lwpstatus	*/
 	pr_lookup_notdir,	/* /proc/<pid>/lwp/<lwpid>/lwpsinfo	*/
 	pr_lookup_notdir,	/* /proc/<pid>/lwp/<lwpid>/lwpusage	*/
@@ -3336,6 +3621,7 @@ static vnode_t *(*pr_lookup_function[PR_NFILES])() = {
 	pr_lookup_notdir,	/* /proc/<pid>/path/xxx			*/
 	pr_lookup_ctdir,	/* /proc/<pid>/contracts		*/
 	pr_lookup_notdir,	/* /proc/<pid>/contracts/<ctid>		*/
+	pr_lookup_notdir,	/* /proc/<pid>/secflags			*/
 	pr_lookup_notdir,	/* old process file			*/
 	pr_lookup_notdir,	/* old lwp file				*/
 	pr_lookup_notdir,	/* old pagedata file			*/
@@ -3343,8 +3629,8 @@ static vnode_t *(*pr_lookup_function[PR_NFILES])() = {
 
 static int
 prlookup(vnode_t *dp, char *comp, vnode_t **vpp, pathname_t *pathp,
-	int flags, vnode_t *rdir, cred_t *cr, caller_context_t *ct,
-	int *direntflags, pathname_t *realpnp)
+    int flags, vnode_t *rdir, cred_t *cr, caller_context_t *ct,
+    int *direntflags, pathname_t *realpnp)
 {
 	prnode_t *pnp = VTOP(dp);
 	prnodetype_t type = pnp->pr_type;
@@ -3374,6 +3660,25 @@ prlookup(vnode_t *dp, char *comp, vnode_t **vpp, pathname_t *pathp,
 			return (error);
 		/* FALLTHROUGH */
 	case PR_FD:
+		/*
+		 * Performing a VOP_LOOKUP on the underlying vnode and emitting
+		 * the resulting vnode, without encapsulation, as our own is a
+		 * very special case when it comes to the assumptions built
+		 * into VFS.
+		 *
+		 * Since the resulting vnode is highly likely to be at some
+		 * abitrary position in another filesystem, we insist that the
+		 * VTRAVERSE flag is set on the parent.  This prevents things
+		 * such as the v_path freshness logic from mistaking the
+		 * resulting vnode as a "real" child of the parent, rather than
+		 * a consequence of this "procfs wormhole".
+		 *
+		 * Failure to establish such protections can lead to
+		 * incorrectly calculated v_paths being set on nodes reached
+		 * through these lookups.
+		 */
+		ASSERT((dp->v_flag & VTRAVERSE) != 0);
+
 		dp = pnp->pr_realvp;
 		return (VOP_LOOKUP(dp, comp, vpp, pathp, flags, rdir, cr, ct,
 		    direntflags, realpnp));
@@ -3381,7 +3686,8 @@ prlookup(vnode_t *dp, char *comp, vnode_t **vpp, pathname_t *pathp,
 		break;
 	}
 
-	if ((type == PR_OBJECTDIR || type == PR_FDDIR || type == PR_PATHDIR) &&
+	if ((type == PR_OBJECTDIR || type == PR_FDDIR ||
+	    type == PR_FDINFODIR || type == PR_PATHDIR) &&
 	    (error = praccess(dp, VEXEC, 0, cr, ct)) != 0)
 		return (error);
 
@@ -3394,28 +3700,41 @@ prlookup(vnode_t *dp, char *comp, vnode_t **vpp, pathname_t *pathp,
 /* ARGSUSED */
 static int
 prcreate(vnode_t *dp, char *comp, vattr_t *vap, vcexcl_t excl,
-	int mode, vnode_t **vpp, cred_t *cr, int flag, caller_context_t *ct,
-	vsecattr_t *vsecp)
+    int mode, vnode_t **vpp, cred_t *cr, int flag, caller_context_t *ct,
+    vsecattr_t *vsecp)
 {
 	int error;
 
 	if ((error = prlookup(dp, comp, vpp, NULL, 0, NULL, cr,
 	    ct, NULL, NULL)) != 0) {
-		if (error == ENOENT)	/* can't O_CREAT nonexistent files */
-			error = EACCES;		/* unwriteable directories */
-	} else {
-		if (excl == EXCL)			/* O_EXCL */
-			error = EEXIST;
-		else if (vap->va_mask & AT_SIZE) {	/* O_TRUNC */
-			vnode_t *vp = *vpp;
-			uint_t mask;
+		if (error == ENOENT) {
+			/* One can't O_CREAT nonexistent files in /proc. */
+			error = EACCES;
+		}
+		return (error);
+	}
 
-			if (vp->v_type == VDIR)
+	if (excl == EXCL) {
+		/* Disallow the O_EXCL case */
+		error = EEXIST;
+	} else if ((error = praccess(*vpp, mode, 0, cr, ct)) == 0) {
+		/* Before proceeding, handle O_TRUNC if necessary. */
+		if (vap->va_mask & AT_SIZE) {
+			vnode_t *vp = *vpp;
+
+			if (vp->v_type == VDIR) {
+				/* Only allow O_TRUNC on files */
 				error = EISDIR;
-			else if (vp->v_type != VPROC ||
-			    VTOP(vp)->pr_type != PR_FD)
+			} else if (vp->v_type != VPROC ||
+			    VTOP(vp)->pr_type != PR_FD) {
+				/*
+				 * Disallow for files outside of the
+				 * /proc/<pid>/fd/<n> entries
+				 */
 				error = EACCES;
-			else {		/* /proc/<pid>/fd/<n> */
+			} else {
+				uint_t mask;
+
 				vp = VTOP(vp)->pr_realvp;
 				mask = vap->va_mask;
 				vap->va_mask = AT_SIZE;
@@ -3423,10 +3742,11 @@ prcreate(vnode_t *dp, char *comp, vattr_t *vap, vcexcl_t excl,
 				vap->va_mask = mask;
 			}
 		}
-		if (error) {
-			VN_RELE(*vpp);
-			*vpp = NULL;
-		}
+	}
+
+	if (error) {
+		VN_RELE(*vpp);
+		*vpp = NULL;
 	}
 	return (error);
 }
@@ -3524,7 +3844,7 @@ pr_lookup_procdir(vnode_t *dp, char *comp)
 		/* initialize the new prcommon struct */
 		if ((p->p_flag & SSYS) || p->p_as == &kas)
 			pcp->prc_flags |= PRC_SYS;
-		if (p->p_stat == SZOMB)
+		if (p->p_stat == SZOMB || (p->p_flag & SEXITING) != 0)
 			pcp->prc_flags |= PRC_DESTROY;
 		pcp->prc_proc = p;
 		pcp->prc_datamodel = p->p_model;
@@ -3609,7 +3929,8 @@ pr_lookup_piddir(vnode_t *dp, char *comp)
 		vp = (type == PR_CURDIR)? up->u_cdir :
 		    (up->u_rdir? up->u_rdir : rootdir);
 
-		if (vp == NULL) {	/* can't happen? */
+		if (vp == NULL) {
+			/* can't happen(?) */
 			prunlock(dpnp);
 			prfreenode(pnp);
 			return (NULL);
@@ -3620,6 +3941,7 @@ pr_lookup_piddir(vnode_t *dp, char *comp)
 		 */
 		VN_HOLD(vp);
 		pnp->pr_realvp = vp;
+		PTOV(pnp)->v_flag |= VTRAVERSE;
 		break;
 	default:
 		break;
@@ -3693,7 +4015,7 @@ pr_lookup_objectdir(vnode_t *dp, char *comp)
 	 * will not change because it is marked P_PR_LOCK.
 	 */
 	mutex_exit(&p->p_lock);
-	AS_LOCK_ENTER(as, &as->a_lock, RW_READER);
+	AS_LOCK_ENTER(as, RW_READER);
 	if ((seg = AS_SEGFIRST(as)) == NULL) {
 		vp = NULL;
 		goto out;
@@ -3726,7 +4048,7 @@ out:
 	if (vp != NULL) {
 		VN_HOLD(vp);
 	}
-	AS_LOCK_EXIT(as, &as->a_lock);
+	AS_LOCK_EXIT(as);
 	mutex_enter(&p->p_lock);
 	prunlock(dpnp);
 
@@ -3967,7 +4289,7 @@ pr_lookup_lwpiddir(vnode_t *dp, char *comp)
 }
 
 /*
- * Lookup one of the process's open files.
+ * Lookup one of the process's file vnodes.
  */
 static vnode_t *
 pr_lookup_fddir(vnode_t *dp, char *comp)
@@ -3979,8 +4301,6 @@ pr_lookup_fddir(vnode_t *dp, char *comp)
 	file_t *fp;
 	uint_t fd;
 	int c;
-	uf_entry_t *ufp;
-	uf_info_t *fip;
 
 	ASSERT(dpnp->pr_type == PR_FDDIR);
 
@@ -3990,8 +4310,8 @@ pr_lookup_fddir(vnode_t *dp, char *comp)
 		if (c < '0' || c > '9')
 			return (NULL);
 		ofd = fd;
-		fd = 10*fd + c - '0';
-		if (fd/10 != ofd)	/* integer overflow */
+		fd = 10 * fd + c - '0';
+		if (fd / 10 != ofd)	/* integer overflow */
 			return (NULL);
 	}
 
@@ -4008,42 +4328,95 @@ pr_lookup_fddir(vnode_t *dp, char *comp)
 		return (NULL);
 	}
 
-	fip = P_FINFO(p);
-	mutex_exit(&p->p_lock);
-	mutex_enter(&fip->fi_lock);
-	if (fd < fip->fi_nfiles) {
-		UF_ENTER(ufp, fip, fd);
-		if ((fp = ufp->uf_file) != NULL) {
-			pnp->pr_mode = 07111;
-			if (fp->f_flag & FREAD)
-				pnp->pr_mode |= 0444;
-			if (fp->f_flag & FWRITE)
-				pnp->pr_mode |= 0222;
-			vp = fp->f_vnode;
-			VN_HOLD(vp);
-		}
-		UF_EXIT(ufp);
+	if ((fp = pr_getf(p, fd, NULL)) != NULL) {
+		pnp->pr_mode = 07111;
+		if (fp->f_flag & FREAD)
+			pnp->pr_mode |= 0444;
+		if (fp->f_flag & FWRITE)
+			pnp->pr_mode |= 0222;
+		vp = fp->f_vnode;
+		VN_HOLD(vp);
 	}
-	mutex_exit(&fip->fi_lock);
-	mutex_enter(&p->p_lock);
-	prunlock(dpnp);
 
-	if (vp == NULL)
-		prfreenode(pnp);
-	else {
-		/*
-		 * Fill in the prnode so future references will
-		 * be able to find the underlying object's vnode.
-		 * Don't link this prnode into the list of all
-		 * prnodes for the process; this is a one-use node.
-		 */
-		pnp->pr_realvp = vp;
-		pnp->pr_parent = dp;		/* needed for prlookup */
-		VN_HOLD(dp);
-		vp = PTOV(pnp);
-		if (pnp->pr_realvp->v_type == VDIR)
-			vp->v_type = VDIR;
+	prunlock(dpnp);
+	if (fp != NULL) {
+		pr_releasef(fp);
 	}
+
+	if (vp == NULL) {
+		prfreenode(pnp);
+		return (NULL);
+	}
+
+	/*
+	 * Fill in the prnode so future references will
+	 * be able to find the underlying object's vnode.
+	 * Don't link this prnode into the list of all
+	 * prnodes for the process; this is a one-use node.
+	 */
+	pnp->pr_realvp = vp;
+	pnp->pr_parent = dp;		/* needed for prlookup */
+	VN_HOLD(dp);
+	vp = PTOV(pnp);
+	if (pnp->pr_realvp->v_type == VDIR) {
+		vp->v_type = VDIR;
+		vp->v_flag |= VTRAVERSE;
+	}
+
+	return (vp);
+}
+
+static vnode_t *
+pr_lookup_fdinfodir(vnode_t *dp, char *comp)
+{
+	prnode_t *dpnp = VTOP(dp);
+	prnode_t *pnp;
+	vnode_t *vp = NULL;
+	proc_t *p;
+	uint_t fd;
+	int c;
+
+	ASSERT(dpnp->pr_type == PR_FDINFODIR);
+
+	fd = 0;
+	while ((c = *comp++) != '\0') {
+		int ofd;
+		if (c < '0' || c > '9')
+			return (NULL);
+		ofd = fd;
+		fd = 10 * fd + c - '0';
+		if (fd / 10 != ofd)	/* integer overflow */
+			return (NULL);
+	}
+
+	pnp = prgetnode(dp, PR_FDINFO);
+
+	if (prlock(dpnp, ZNO) != 0) {
+		prfreenode(pnp);
+		return (NULL);
+	}
+	p = dpnp->pr_common->prc_proc;
+	if ((p->p_flag & SSYS) || p->p_as == &kas) {
+		prunlock(dpnp);
+		prfreenode(pnp);
+		return (NULL);
+	}
+
+	/*
+	 * Don't link this prnode into the list of all
+	 * prnodes for the process; this is a one-use node.
+	 * Unlike the FDDIR case, the underlying vnode is not stored in
+	 * pnp->pr_realvp. Instead, the fd number is stored in pnp->pr_index
+	 * and used by pr_read_fdinfo() to return information for the right
+	 * file descriptor.
+	 */
+	pnp->pr_common = dpnp->pr_common;
+	pnp->pr_pcommon = dpnp->pr_pcommon;
+	pnp->pr_parent = dp;
+	pnp->pr_index = fd;
+	VN_HOLD(dp);
+	prunlock(dpnp);
+	vp = PTOV(pnp);
 
 	return (vp);
 }
@@ -4150,7 +4523,7 @@ pr_lookup_pathdir(vnode_t *dp, char *comp)
 				type = NAME_OBJECT;
 			}
 		} else {
-			AS_LOCK_ENTER(as, &as->a_lock, RW_READER);
+			AS_LOCK_ENTER(as, RW_READER);
 			if ((seg = AS_SEGFIRST(as)) != NULL) {
 				do {
 					/*
@@ -4184,7 +4557,7 @@ pr_lookup_pathdir(vnode_t *dp, char *comp)
 				type = NAME_OBJECT;
 			}
 
-			AS_LOCK_EXIT(as, &as->a_lock);
+			AS_LOCK_EXIT(as);
 		}
 	}
 
@@ -4506,6 +4879,7 @@ prgetnode(vnode_t *dp, prnodetype_t type)
 	case PR_CURDIR:
 	case PR_ROOTDIR:
 	case PR_FDDIR:
+	case PR_FDINFODIR:
 	case PR_OBJECTDIR:
 	case PR_PATHDIR:
 	case PR_CTDIR:
@@ -4543,6 +4917,10 @@ prgetnode(vnode_t *dp, prnodetype_t type)
 	case PR_PIDFILE:
 	case PR_LWPIDFILE:
 		pnp->pr_mode = 0600;	/* read-write by owner only */
+		break;
+
+	case PR_LWPNAME:
+		pnp->pr_mode = 0644;	/* readable by all + owner can write */
 		break;
 
 	case PR_PSINFO:
@@ -4619,9 +4997,11 @@ prfreecommon(prcommon_t *pcp)
 		mutex_exit(&pcp->prc_mutex);
 	else {
 		mutex_exit(&pcp->prc_mutex);
-		ASSERT(pcp->prc_pollhead.ph_list == NULL);
+
 		ASSERT(pcp->prc_refcnt == 0);
 		ASSERT(pcp->prc_selfopens == 0 && pcp->prc_writers == 0);
+
+		pollhead_clean(&pcp->prc_pollhead);
 		mutex_destroy(&pcp->prc_mutex);
 		cv_destroy(&pcp->prc_wait);
 		kmem_free(pcp, sizeof (prcommon_t));
@@ -4634,8 +5014,8 @@ prfreecommon(prcommon_t *pcp)
  */
 static int pr_readdir_notdir(), pr_readdir_procdir(), pr_readdir_piddir(),
 	pr_readdir_objectdir(), pr_readdir_lwpdir(), pr_readdir_lwpiddir(),
-	pr_readdir_fddir(), pr_readdir_pathdir(), pr_readdir_tmpldir(),
-	pr_readdir_ctdir();
+	pr_readdir_fddir(), pr_readdir_fdinfodir(), pr_readdir_pathdir(),
+	pr_readdir_tmpldir(), pr_readdir_ctdir();
 
 static int (*pr_readdir_function[PR_NFILES])() = {
 	pr_readdir_procdir,	/* /proc				*/
@@ -4664,11 +5044,14 @@ static int (*pr_readdir_function[PR_NFILES])() = {
 	pr_readdir_notdir,	/* /proc/<pid>/root			*/
 	pr_readdir_fddir,	/* /proc/<pid>/fd			*/
 	pr_readdir_notdir,	/* /proc/<pid>/fd/nn			*/
+	pr_readdir_fdinfodir,	/* /proc/<pid>/fdinfo			*/
+	pr_readdir_notdir,	/* /proc/<pid>/fdinfo/nn		*/
 	pr_readdir_objectdir,	/* /proc/<pid>/object			*/
 	pr_readdir_notdir,	/* /proc/<pid>/object/xxx		*/
 	pr_readdir_lwpdir,	/* /proc/<pid>/lwp			*/
 	pr_readdir_lwpiddir,	/* /proc/<pid>/lwp/<lwpid>		*/
 	pr_readdir_notdir,	/* /proc/<pid>/lwp/<lwpid>/lwpctl	*/
+	pr_readdir_notdir,	/* /proc/<pid>/lwp/<lwpid>/lwpname	*/
 	pr_readdir_notdir,	/* /proc/<pid>/lwp/<lwpid>/lwpstatus	*/
 	pr_readdir_notdir,	/* /proc/<pid>/lwp/<lwpid>/lwpsinfo	*/
 	pr_readdir_notdir,	/* /proc/<pid>/lwp/<lwpid>/lwpusage	*/
@@ -4685,6 +5068,7 @@ static int (*pr_readdir_function[PR_NFILES])() = {
 	pr_readdir_notdir,	/* /proc/<pid>/path/xxx			*/
 	pr_readdir_ctdir,	/* /proc/<pid>/contracts		*/
 	pr_readdir_notdir,	/* /proc/<pid>/contracts/<ctid>		*/
+	pr_readdir_notdir,	/* /proc/<pid>/secflags			*/
 	pr_readdir_notdir,	/* old process file			*/
 	pr_readdir_notdir,	/* old lwp file				*/
 	pr_readdir_notdir,	/* old pagedata file			*/
@@ -4693,7 +5077,7 @@ static int (*pr_readdir_function[PR_NFILES])() = {
 /* ARGSUSED */
 static int
 prreaddir(vnode_t *vp, uio_t *uiop, cred_t *cr, int *eofp,
-	caller_context_t *ct, int flags)
+    caller_context_t *ct, int flags)
 {
 	prnode_t *pnp = VTOP(vp);
 
@@ -4838,7 +5222,7 @@ rebuild_objdir(struct as *as)
 	int i, j;
 	ulong_t nold, nnew;
 
-	ASSERT(AS_WRITE_HELD(as, &as->a_lock));
+	ASSERT(AS_WRITE_HELD(as));
 
 	if (as->a_updatedir == 0 && as->a_objectdir != NULL)
 		return;
@@ -4943,7 +5327,7 @@ rebuild_objdir(struct as *as)
 static vnode_t *
 obj_entry(struct as *as, int slot)
 {
-	ASSERT(AS_LOCK_HELD(as, &as->a_lock));
+	ASSERT(AS_LOCK_HELD(as));
 	if (as->a_objectdir == NULL)
 		return (NULL);
 	ASSERT(slot < as->a_sizedir);
@@ -5007,7 +5391,7 @@ pr_readdir_objectdir(prnode_t *pnp, uio_t *uiop, int *eofp)
 		 * space via mmap/munmap calls.
 		 */
 		if (as != NULL) {
-			AS_LOCK_ENTER(as, &as->a_lock, RW_WRITER);
+			AS_LOCK_ENTER(as, RW_WRITER);
 			if (as->a_updatedir)
 				rebuild_objdir(as);
 			objdirsize = as->a_sizedir;
@@ -5025,7 +5409,7 @@ pr_readdir_objectdir(prnode_t *pnp, uio_t *uiop, int *eofp)
 		}
 
 		if (as != NULL)
-			AS_LOCK_EXIT(as, &as->a_lock);
+			AS_LOCK_EXIT(as);
 
 		/*
 		 * Stop when all objects have been reported.
@@ -5194,9 +5578,12 @@ out:
 	return (0);
 }
 
-/* ARGSUSED */
+/*
+ * Helper function for reading a directory which lists open file desciptors
+ */
 static int
-pr_readdir_fddir(prnode_t *pnp, uio_t *uiop, int *eofp)
+pr_readdir_fdlist(prnode_t *pnp, uio_t *uiop, int *eofp,
+    prnodetype_t dirtype, prnodetype_t entrytype)
 {
 	gfs_readdir_state_t gstate;
 	int error, eof = 0;
@@ -5206,8 +5593,6 @@ pr_readdir_fddir(prnode_t *pnp, uio_t *uiop, int *eofp)
 	int fddirsize;
 	uf_info_t *fip;
 
-	ASSERT(pnp->pr_type == PR_FDDIR);
-
 	if ((error = prlock(pnp, ZNO)) != 0)
 		return (error);
 	p = pnp->pr_common->prc_proc;
@@ -5216,7 +5601,7 @@ pr_readdir_fddir(prnode_t *pnp, uio_t *uiop, int *eofp)
 	mutex_exit(&p->p_lock);
 
 	if ((error = gfs_readdir_init(&gstate, PLNSIZ, PRSDSIZE, uiop,
-	    pmkino(0, pslot, PR_PIDDIR), pmkino(0, pslot, PR_FDDIR), 0)) != 0) {
+	    pmkino(0, pslot, PR_PIDDIR), pmkino(0, pslot, dirtype), 0)) != 0) {
 		mutex_enter(&p->p_lock);
 		prunlock(pnp);
 		return (error);
@@ -5247,7 +5632,7 @@ pr_readdir_fddir(prnode_t *pnp, uio_t *uiop, int *eofp)
 		}
 
 		error = gfs_readdir_emitn(&gstate, uiop, n,
-		    pmkino(n, pslot, PR_FD), n);
+		    pmkino(n, pslot, entrytype), n);
 		if (error)
 			break;
 	}
@@ -5257,6 +5642,24 @@ pr_readdir_fddir(prnode_t *pnp, uio_t *uiop, int *eofp)
 	prunlock(pnp);
 
 	return (gfs_readdir_fini(&gstate, error, eofp, eof));
+}
+
+static int
+pr_readdir_fddir(prnode_t *pnp, uio_t *uiop, int *eofp)
+{
+
+	ASSERT(pnp->pr_type == PR_FDDIR);
+
+	return (pr_readdir_fdlist(pnp, uiop, eofp, pnp->pr_type, PR_FD));
+}
+
+static int
+pr_readdir_fdinfodir(prnode_t *pnp, uio_t *uiop, int *eofp)
+{
+
+	ASSERT(pnp->pr_type == PR_FDINFODIR);
+
+	return (pr_readdir_fdlist(pnp, uiop, eofp, pnp->pr_type, PR_FDINFO));
 }
 
 /* ARGSUSED */
@@ -5299,11 +5702,11 @@ pr_readdir_pathdir(prnode_t *pnp, uio_t *uiop, int *eofp)
 		as = NULL;
 		objdirsize = 0;
 	} else {
-		AS_LOCK_ENTER(as, &as->a_lock, RW_WRITER);
+		AS_LOCK_ENTER(as, RW_WRITER);
 		if (as->a_updatedir)
 			rebuild_objdir(as);
 		objdirsize = as->a_sizedir;
-		AS_LOCK_EXIT(as, &as->a_lock);
+		AS_LOCK_EXIT(as);
 		as = NULL;
 	}
 
@@ -5363,7 +5766,7 @@ pr_readdir_pathdir(prnode_t *pnp, uio_t *uiop, int *eofp)
 			 */
 			if (as == NULL) {
 				as = p->p_as;
-				AS_LOCK_ENTER(as, &as->a_lock, RW_WRITER);
+				AS_LOCK_ENTER(as, RW_WRITER);
 			}
 
 			if (as->a_updatedir) {
@@ -5401,11 +5804,11 @@ pr_readdir_pathdir(prnode_t *pnp, uio_t *uiop, int *eofp)
 		 * Drop the address space lock to do the uiomove().
 		 */
 		if (as != NULL)
-			AS_LOCK_EXIT(as, &as->a_lock);
+			AS_LOCK_EXIT(as);
 
 		error = uiomove((caddr_t)dirent, reclen, UIO_READ, uiop);
 		if (as != NULL)
-			AS_LOCK_ENTER(as, &as->a_lock, RW_WRITER);
+			AS_LOCK_ENTER(as, RW_WRITER);
 
 		if (error)
 			break;
@@ -5417,7 +5820,7 @@ pr_readdir_pathdir(prnode_t *pnp, uio_t *uiop, int *eofp)
 	if (fip != NULL)
 		mutex_exit(&fip->fi_lock);
 	if (as != NULL)
-		AS_LOCK_EXIT(as, &as->a_lock);
+		AS_LOCK_EXIT(as);
 	mutex_enter(&p->p_lock);
 	prunlock(pnp);
 	return (error);
@@ -5568,6 +5971,7 @@ prinactive(vnode_t *vp, cred_t *cr, caller_context_t *ct)
 	switch (type) {
 	case PR_OBJECT:
 	case PR_FD:
+	case PR_FDINFO:
 	case PR_SELF:
 	case PR_PATH:
 		/* These are not linked into the usual lists */
@@ -5588,7 +5992,7 @@ prinactive(vnode_t *vp, cred_t *cr, caller_context_t *ct)
 	mutex_enter(&vp->v_lock);
 
 	if (type == PR_PROCDIR || vp->v_count > 1) {
-		vp->v_count--;
+		VN_RELE_LOCKED(vp);
 		mutex_exit(&vp->v_lock);
 		if (p != NULL)
 			mutex_exit(&p->p_lock);
@@ -5682,7 +6086,7 @@ prseek(vnode_t *vp, offset_t ooff, offset_t *noffp, caller_context_t *ct)
 /*
  * We use the p_execdir member of proc_t to expand the %d token in core file
  * paths (the directory path for the executable that dumped core; see
- * coreadm(1M) for details). We'd like gcore(1) to be able to expand %d in
+ * coreadm(8) for details). We'd like gcore(1) to be able to expand %d in
  * the same way as core dumping from the kernel, but there's no convenient
  * and comprehensible way to export the path name for p_execdir. To solve
  * this, we try to find the actual path to the executable that was used. In
@@ -5909,7 +6313,7 @@ prrealvp(vnode_t *vp, vnode_t **vpp, caller_context_t *ct)
 /*ARGSUSED5*/
 static int
 prpoll(vnode_t *vp, short events, int anyyet, short *reventsp,
-	pollhead_t **phpp, caller_context_t *ct)
+    pollhead_t **phpp, caller_context_t *ct)
 {
 	prnode_t *pnp = VTOP(vp);
 	prcommon_t *pcp = pnp->pr_common;
@@ -5939,7 +6343,11 @@ prpoll(vnode_t *vp, short events, int anyyet, short *reventsp,
 		return (0);
 	}
 
-	lockstate = pollunlock();	/* avoid deadlock with prnotify() */
+	/* avoid deadlock with prnotify() */
+	if (pollunlock(&lockstate) != 0) {
+		*reventsp = POLLNVAL;
+		return (0);
+	}
 
 	if ((error = prlock(pnp, ZNO)) != 0) {
 		pollrelock(lockstate);
@@ -6010,7 +6418,7 @@ prpoll(vnode_t *vp, short events, int anyyet, short *reventsp,
 	}
 
 	*reventsp = revents;
-	if (!anyyet && revents == 0) {
+	if ((!anyyet && revents == 0) || (events & POLLET)) {
 		/*
 		 * Arrange to wake up the polling lwp when
 		 * the target process/lwp stops or terminates

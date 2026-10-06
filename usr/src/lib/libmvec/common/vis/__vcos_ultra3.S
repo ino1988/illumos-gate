@@ -29,11 +29,9 @@
 	.file	"__vcos_ultra3.S"
 
 #include "libm.h"
-#if defined(LIBMVEC_SO_BUILD)
 	.weak	__vcos
 	.type	__vcos,#function
 	__vcos = __vcos_ultra3
-#endif
 
 	RO_DATA
 	.align	64
@@ -99,23 +97,23 @@ constants:
 ! o7  scratch
 
 ! f0  hx0
-! f2  
-! f4  
-! f6  
+! f2
+! f4
+! f6
 ! f8  hx1
-! f10 
-! f12 
-! f14 
+! f10
+! f12
+! f14
 ! f16 hx2
-! f18 
-! f20 
-! f22 
+! f18
+! f20
+! f22
 ! f24 hx3
-! f26 
-! f28 
-! f30 
-! f32 
-! f34 
+! f26
+! f28
+! f30
+! f32
+! f34
 ! f36
 ! f38
 

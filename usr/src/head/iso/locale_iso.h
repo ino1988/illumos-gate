@@ -21,13 +21,14 @@
  */
 /*
  * Copyright 2014 Garrett D'Amore <garrett@damore.org>
+ * Copyright 2014 PALO, Richard.
  *
  * Copyright 2005 Sun Microsystems, Inc.  All rights reserved.
  * Use is subject to license terms.
  */
 
 /*	Copyright (c) 1988 AT&T	*/
-/*	  All Rights Reserved  	*/
+/*	  All Rights Reserved	*/
 
 
 /*
@@ -46,6 +47,7 @@
 #define	_ISO_LOCALE_ISO_H
 
 #include <sys/feature_tests.h>
+#include <sys/null.h>
 
 #ifdef __cplusplus
 extern "C" {
@@ -78,10 +80,11 @@ struct lconv {
 /*
  * New in IEEE Std 1003.1-2001 for alignment with the ISO/IEC 9899:1999
  * standard.  Namespace and binary compatibility dictate that visibility
- * of these new members be limited.  Visibility is limited to a strictly
- * conforming ANSI C environment (-Xc) or if _LCONV_C99 is defined.
+ * of these new members be limited, but all instances of this structure created
+ * by libc include space for the new fields.   The new fields are excluded in a
+ * strictly-conforming pre-C99 environment if _LCONV_C99 is not also defined.
  */
-#if (defined(_STRICT_STDC) && defined(_STDC_C99)) || defined(_LCONV_C99)
+#if !defined(_STRICT_SYMBOLS) || defined(_STDC_C99) || defined(_LCONV_C99)
 	char int_p_cs_precedes;
 	char int_p_sep_by_space;
 	char int_n_cs_precedes;
@@ -98,14 +101,6 @@ struct lconv {
 #define	LC_MONETARY	4
 #define	LC_MESSAGES	5
 #define	LC_ALL		6
-
-#ifndef	NULL
-#if defined(_LP64)
-#define	NULL    0L
-#else
-#define	NULL    0
-#endif
-#endif
 
 extern char	*setlocale(int, const char *);
 extern struct lconv *localeconv(void);

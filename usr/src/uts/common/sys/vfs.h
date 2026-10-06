@@ -18,12 +18,16 @@
  *
  * CDDL HEADER END
  */
+
 /*
  * Copyright (c) 1988, 2010, Oracle and/or its affiliates. All rights reserved.
+ * Copyright 2016 Toomas Soome <tsoome@me.com>
+ * Copyright (c) 2016, 2017 by Delphix. All rights reserved.
+ * Copyright 2016 Nexenta Systems, Inc.
  */
 
 /*	Copyright (c) 1983, 1984, 1985, 1986, 1987, 1988, 1989 AT&T	*/
-/*	  All Rights Reserved  	*/
+/*	  All Rights Reserved	*/
 
 /*
  * Portions of this source code were derived from Berkeley 4.3 BSD
@@ -69,14 +73,6 @@ typedef struct {
  * File identifier.  Should be unique per filesystem on a single
  * machine.  This is typically called by a stateless file server
  * in order to generate "file handles".
- *
- * Do not change the definition of struct fid ... fid_t without
- * letting the CacheFS group know about it!  They will have to do at
- * least two things, in the same change that changes this structure:
- *   1. change CFSVERSION in usr/src/uts/common/sys/fs/cachefs_fs.h
- *   2. put the old version # in the canupgrade array
- *	in cachfs_upgrade() in usr/src/cmd/fs.d/cachefs/fsck/fsck.c
- * This is necessary because CacheFS stores FIDs on disk.
  *
  * Many underlying file systems cast a struct fid into other
  * file system dependent structures which may require 4 byte alignment.
@@ -234,7 +230,7 @@ typedef struct vfs {
 	struct vfs	*vfs_zone_prev;		/* prev VFS visible in zone */
 
 	struct fem_head	*vfs_femhead;		/* fs monitoring */
-	minor_t		vfs_lofi_minor;		/* minor if lofi mount */
+	uint32_t	vfs_lofi_id;		/* ID if lofi mount */
 } vfs_t;
 
 #define	vfs_featureset	vfs_implp->vi_featureset
@@ -334,7 +330,8 @@ typedef enum vntrans vntrans_t;
 	int	(*vfs_vget)(vfs_t *, vnode_t **, fid_t *);		\
 	int	(*vfs_mountroot)(vfs_t *, enum whymountroot);		\
 	void	(*vfs_freevfs)(vfs_t *);				\
-	int	(*vfs_vnstate)(vfs_t *, vnode_t *, vntrans_t)	/* NB: No ";" */
+	int	(*vfs_vnstate)(vfs_t *, vnode_t *, vntrans_t);		\
+	int	(*vfs_syncfs)(vfs_t *, uint64_t, cred_t *)	/* NB: No ";" */
 
 /*
  * Operations supported on virtual file system.
@@ -353,6 +350,7 @@ extern int	fsop_mountroot(vfs_t *, enum whymountroot);
 extern void	fsop_freefs(vfs_t *);
 extern int	fsop_sync_by_kind(int, short, cred_t *);
 extern int	fsop_vnstate(vfs_t *, vnode_t *, vntrans_t);
+extern int	fsop_syncfs(vfs_t *, uint64_t, cred_t *);
 
 #define	VFS_MOUNT(vfsp, mvp, uap, cr) fsop_mount(vfsp, mvp, uap, cr)
 #define	VFS_UNMOUNT(vfsp, flag, cr) fsop_unmount(vfsp, flag, cr)
@@ -363,6 +361,7 @@ extern int	fsop_vnstate(vfs_t *, vnode_t *, vntrans_t);
 #define	VFS_MOUNTROOT(vfsp, init) fsop_mountroot(vfsp, init)
 #define	VFS_FREEVFS(vfsp) fsop_freefs(vfsp)
 #define	VFS_VNSTATE(vfsp, vn, ns)	fsop_vnstate(vfsp, vn, ns)
+#define	VFS_SYNCFS(vfsp, flag, cr) fsop_syncfs(vfsp, flag, cr)
 
 #define	VFSNAME_MOUNT		"mount"
 #define	VFSNAME_UNMOUNT		"unmount"
@@ -373,6 +372,8 @@ extern int	fsop_vnstate(vfs_t *, vnode_t *, vntrans_t);
 #define	VFSNAME_MOUNTROOT	"mountroot"
 #define	VFSNAME_FREEVFS		"freevfs"
 #define	VFSNAME_VNSTATE		"vnstate"
+#define	VFSNAME_SYNCFS		"syncfs"
+
 /*
  * Filesystem type switch table.
  */
@@ -420,6 +421,7 @@ enum {
 #define	VSW_XID		0x40	/* file system supports extended ids */
 #define	VSW_CANLOFI	0x80	/* file system supports lofi mounts */
 #define	VSW_ZMOUNT	0x100	/* file system always allowed in a zone */
+#define	VSW_MOUNTDEV	0x200	/* file system is mounted via device path */
 
 #define	VSW_INSTALLED	0x8000	/* this vsw is associated with a file system */
 
@@ -428,7 +430,7 @@ enum {
  */
 #define	VFSSP_VERBATIM	0x1	/* do not prefix the supplied path */
 
-#if defined(_KERNEL)
+#if defined(_KERNEL) || defined(_FAKE_KERNEL)
 
 /*
  * Private vfs data, NOT to be used by a file system implementation.
@@ -446,7 +448,7 @@ typedef struct vfs_impl {
 	vopstats_t	*vi_fstypevsp;		/* ptr to per-fstype vopstats */
 	vopstats_t	vi_vopstats;		/* per-mount vnode op stats */
 
-	timespec_t	vi_hrctime; 		/* High-res creation time */
+	timespec_t	vi_hrctime;		/* High-res creation time */
 
 	zone_ref_t	vi_zone_ref;		/* reference to zone */
 } vfs_impl_t;
@@ -475,7 +477,6 @@ void	vn_reclaim(vnode_t *);
 void	vn_invalid(vnode_t *);
 
 int	rootconf(void);
-int	svm_rootconf(void);
 int	domount(char *, struct mounta *, vnode_t *, struct cred *,
 	    struct vfs **);
 int	dounmount(struct vfs *, int, cred_t *);
@@ -519,7 +520,6 @@ int	vfs_optionisset(const struct vfs *, const char *, char **);
 int	vfs_settag(uint_t, uint_t, const char *, const char *, cred_t *);
 int	vfs_clrtag(uint_t, uint_t, const char *, const char *, cred_t *);
 void	vfs_syncall(void);
-void	vfs_syncprogress(void);
 void	vfsinit(void);
 void	vfs_unmountall(void);
 void	vfs_make_fsid(fsid_t *, dev_t, int);

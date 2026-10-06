@@ -41,13 +41,13 @@ OBJS += $(CMNOBJS)
 include ../Makefile.com
 include ../../Makefile.lib.64
 
-C99MODE =	$(C99_ENABLE)
+CSTD =	$(CSTD_GNU99)
 
 LDLIBS += -luuid -lc
 
 CPPFLAGS += -I. -I$(SRC)/lib/libds/common -I$(SRC)/cmd/ldmad
 
-install: all $(ROOTLIBS64) $(ROOTLINKS64) $(ROOTLINT64)
+install: all $(ROOTLIBS64) $(ROOTLINKS64)
 
 pics/%.o: $(SRC)/common/mdesc/%.c
 	$(COMPILE.c) -o $@ $<

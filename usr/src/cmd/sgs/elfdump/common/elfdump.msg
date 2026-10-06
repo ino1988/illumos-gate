@@ -22,6 +22,9 @@
 #
 # Copyright (c) 1997, 2010, Oracle and/or its affiliates. All rights reserved.
 # Copyright 2012 DEY Storage Systems, Inc.  All rights reserved.
+# Copyright 2018 Joyent, Inc.
+# Copyright 2020 OmniOS Community Edition (OmniOSce) Association.
+# Copyright 2024 Oxide Computer Company
 #
 
 @ _START_
@@ -36,7 +39,7 @@
 			 [-N name] [-O osabi] [-T type] [-p | -w outfile] \
 			 file...\n"
 @ MSG_USAGE_DETAIL1	"\t[-c]\t\tdump section header information\n"
-@ MSG_USAGE_DETAIL2	"\t[-C]\t\tdemangle C++ symbol names\n"
+@ MSG_USAGE_DETAIL2	"\t[-C]\t\tdemangle symbol names\n"
 @ MSG_USAGE_DETAIL3	"\t[-d]\t\tdump the contents of the .dynamic section\n"
 @ MSG_USAGE_DETAIL4	"\t[-e]\t\tdump the elf header\n"
 @ MSG_USAGE_DETAIL5	"\t[-g]\t\tdump the contents of the .group sections\n"
@@ -132,6 +135,7 @@
 			 version definitions available: 0-%d\n"
 @ MSG_ERR_NOTSTRTAB	"%s: section[%d] is not a string table as expected \
 			 by section[%d]\n";
+@ MSG_ERR_BADCHAINIDX	"%s: %s: invalid chain index %d for bucket %d (max %d)\n"
 
 @ MSG_ERR_LDYNNOTADJ	"%s: bad dynamic symbol table layout: %s and %s \
 			 sections are not adjacent\n"
@@ -161,17 +165,14 @@
 			 range (0 - %d): %d\n";
 @ MSG_ERR_BADSIDYNTAG	"%s: [%d: %s][%d]: dynamic element \
 			 [%d: %s][%d] should have type %s: %s\n";
+@ MSG_ERR_BADCIEFDELEN	"%s: %s: invalid CIE/FDE length: %#llx at %#llx\n"
 
 
 @ MSG_WARN_INVINTERP1	"%s: PT_INTERP header has no associated section\n"
-@ MSG_WARN_INVINTERP2	"%s: interp section: %s: and PT_INTERP program \
-			 header have conflicting size or offsets\n"
 @ MSG_WARN_INVCAP1	"%s: PT_SUNWCAP header has no associated section\n"
 @ MSG_WARN_INVCAP2	"%s: capabilities section[%d]: %s: requires PT_CAP \
 			 program header\n"
-@ MSG_WARN_INVCAP3	"%s: capabilities section[%d]: %s: and PT_CAP program \
-			 header have conflicting size or offsets\n"
-@ MSG_WARN_INVCAP4	"%s: capabilities section[%d]: %s: requires string \
+@ MSG_WARN_INVCAP3	"%s: capabilities section[%d]: %s: requires string \
 			 table: invalid sh_info: %d\n";
 @ MSG_WARN_INADDR32SF1	"%s: capabilities section %s: software capability \
 			 ADDR32: is ineffective within a 32-bit object\n"
@@ -180,6 +181,10 @@
 
 @ MSG_INFO_LINUXOSABI	"%s: %s object has Linux .note.ABI-tag section. \
 			Assuming %s\n"
+
+@ MSG_ERR_DWOVRFLW	"%s: %s: encoded DWARF data exceeds section size\n"
+@ MSG_ERR_DWBADENC	"%s: %s: bad DWARF encoding: %#x\n"
+@ MSG_ERR_DWNOCIE	"%s: %s: no CIE prior to FDE\n"
 
 # exception_range_entry table entries.
 # TRANSLATION_NOTE - the following entries provide for a series of one or more
@@ -261,6 +266,11 @@
 @ MSG_STR_UNKNOWN	"<unknown>"
 @ MSG_STR_SECTION	"%s (section)"
 @ MSG_STR_CHECKSUM	"elf checksum: 0x%lx"
+@ MSG_STR_VADDR		"virtual address"
+@ MSG_STR_OFFSET	"offset"
+@ MSG_STR_FILESIZE	"file size"
+@ MSG_STR_MEMSIZE	"memory size"
+@ MSG_STR_ALIGNMENT	"alignment"
 
 @ MSG_FMT_SCNNDX	"section[%d]"
 @ MSG_FMT_NOTEENTNDX	"  entry [%d]";
@@ -275,6 +285,13 @@
 @ MSG_ERR_BAD_T_OSABI	"%s: unrecognized operating system ABI: %s\n"
 @ MSG_ERR_AMBIG_MATCH	"%s: ambiguous use of -I, -N, or -T. Remove \
 			 -p option or section selection option(s)\n"
+
+# Program/section correspondence messages
+@ MSG_SHDR_PHDR_MISMATCH	"%s: Section[%d: %s]: %s does not \
+				 match %s segment: %s=%x: Program \
+				 Header[%d].%s=%x\n"
+@ MSG_SHDR_NO_PHDR		"%s: Section[%d: %s]: has no matching \
+				 %s segment\n"
 
 #
 # SHT_MOVE messages
@@ -303,6 +320,10 @@
 			 architecture: %s\n"
 @ MSG_NOTE_BADCOREDATA	"%s: elfdump core file note data truncated or \
 			 otherwise malformed\n"
+@ MSG_NOTE_BADCORETYPE	"%s: unknown note type %#x\n"
+
+@ MSG_NOTE_BAD_SECFLAGS_VER	"unknown prsecflags_t version: "
+@ MSG_NOTE_BAD_UPANIC_VER	"unknown prupanic_t version: "
 
 @ _END_
 
@@ -369,7 +390,6 @@
 @ MSG_FMT_SECSYM	"%.*s%s"
 
 @ MSG_HEXDUMP_ROW	"%*s%-*s%s"
-@ MSG_HEXDUMP_TOK	"%2.2x"
 
 @ MSG_SUNW_OST_SGS	"SUNW_OST_SGS"
 
@@ -396,7 +416,7 @@
 @ MSG_UNW_CIECALGN	" codealign: %#llx  dataalign: %lld  \
 			  retaddr: %d"
 @ MSG_UNW_CIEAXVAL	" Augmentation Data:"
-@ MSG_UNW_CIEAXSIZ	"   size: %d"
+@ MSG_UNW_CIEAXSIZ	"   size: %lld"
 @ MSG_UNW_CIEAXPERS	"   personality:"
 @ MSG_UNW_CIEAXPERSENC	"       encoding: 0x%02x %s"
 @ MSG_UNW_CIEAXPERSRTN	"       routine:  %#08llx"
@@ -458,8 +478,11 @@
 @ MSG_CNOTE_DESC_PSINFO_T		"desc: (psinfo_t)"
 @ MSG_CNOTE_DESC_PSTATUS_T		"desc: (pstatus_t)"
 @ MSG_CNOTE_DESC_STRUCT_UTSNAME		"desc: (struct utsname)"
-@ MSG_CNOTE_DESC_PRFDINFO_T		"desc: (prfdinfo_t)"
-
+@ MSG_CNOTE_DESC_PRFDINFO_T		"desc: (prfdinfo_core_t)"
+@ MSG_CNOTE_DESC_PRSECFLAGS_T		"desc: (prsecflags_t)"
+@ MSG_CNOTE_DESC_PRLWPNAME_T		"desc: (prlwpname_t)"
+@ MSG_CNOTE_DESC_PRUPANIC_T		"desc: (prupanic_t)"
+@ MSG_CNOTE_DESC_PRCWD_T		"desc: (prcwd_t)"
 
 @ MSG_CNOTE_FMT_LINE		"%*s%-*s%s"
 @ MSG_CNOTE_FMT_LINE_2UP	"%*s%-*s%-*s%-*s%s"
@@ -526,6 +549,7 @@
 @ MSG_CNOTE_T_PR_LWP			"pr_lwp:"
 @ MSG_CNOTE_T_PR_LWPHOLD		"pr_lwphold:"
 @ MSG_CNOTE_T_PR_LWPID			"pr_lwpid:"
+@ MSG_CNOTE_T_PR_LWPNAME		"pr_lwpname:"
 @ MSG_CNOTE_T_PR_LWPPEND		"pr_lwppend:"
 @ MSG_CNOTE_T_PR_NAME			"pr_name:"
 @ MSG_CNOTE_T_PR_NGROUPS		"pr_ngroups:"
@@ -589,6 +613,11 @@
 @ MSG_CNOTE_T_PR_WSTAT			"pr_wstat:"
 @ MSG_CNOTE_T_PR_ZOMB			"pr_zomb:"
 @ MSG_CNOTE_T_PR_ZONEID			"pr_zoneid:"
+@ MSG_CNOTE_T_PR_EFFECTIVE		"pr_effective:"
+@ MSG_CNOTE_T_PR_INHERIT		"pr_inherit:"
+@ MSG_CNOTE_T_PR_LOWER			"pr_lower:"
+@ MSG_CNOTE_T_PR_UPPER			"pr_upper:"
+@ MSG_CNOTE_T_PR_VERSION		"pr_version:"
 @ MSG_CNOTE_T_SA_FLAGS			"sa_flags:"
 @ MSG_CNOTE_T_SA_HANDLER		"sa_handler:"
 @ MSG_CNOTE_T_SA_MASK			"sa_mask:"
@@ -628,6 +657,14 @@
 @ MSG_CNOTE_T_PR_INO			"pr_ino:"
 @ MSG_CNOTE_T_PR_FILEFLAGS		"pr_fileflags:"
 @ MSG_CNOTE_T_PR_FDFLAGS		"pr_fdflags:"
+@ MSG_CNOTE_T_PRU_VERSION		"pru_version:"
+@ MSG_CNOTE_T_PRU_FLAGS			"pru_flags:"
+@ MSG_CNOTE_T_PRU_DATA			"pru_data:"
+@ MSG_CNOTE_T_CWD_FSID			"prcwd_fsid:"
+@ MSG_CNOTE_T_CWD_FSNAME		"prcwd_fsname:"
+@ MSG_CNOTE_T_CWD_MNTPT			"prcwd_mntpt:"
+@ MSG_CNOTE_T_CWD_MNTSPEC		"prcwd_mntspec:"
+@ MSG_CNOTE_T_CWD_CWD			"prcwd_cwd:"
 
 
 # Names of fake sections generated from program header data

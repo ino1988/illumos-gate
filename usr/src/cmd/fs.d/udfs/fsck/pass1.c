@@ -4,7 +4,7 @@
  */
 
 /*	Copyright (c) 1983, 1984, 1985, 1986, 1987, 1988, 1989 AT&T	*/
-/*	  All Rights Reserved  	*/
+/*	  All Rights Reserved	*/
 
 /*
  * Copyright (c) 1980, 1986, 1990 The Regents of the University of California.
@@ -25,8 +25,6 @@
  * WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE.
  */
 
-#pragma ident	"%Z%%M%	%I%	%E% SMI"
-
 #include <stdio.h>
 #include <strings.h>
 #include <malloc.h>
@@ -41,6 +39,8 @@
 #include "fsck.h"
 #include "udfs.h"
 #include <locale.h>
+
+uint64_t maxuniqid;	/* maximum unique id on medium */
 
 /*
  * for each large file ( size > MAXOFF_T) this global counter
@@ -92,11 +92,11 @@ static uint32_t baseblock;
 static uint8_t fidbuf[MAXFIDSIZE];
 
 void
-pass1()
+pass1(void)
 {
-	register struct file_entry *fp;
-	register struct fileinfo *fip;
-	register struct bufarea *bp;
+	struct file_entry *fp;
+	struct fileinfo *fip;
+	struct bufarea *bp;
 	struct file_id *fidp;
 	struct bufarea *fbp;
 	int err;
@@ -115,7 +115,6 @@ pass1()
 				fip->fe_block);
 			goto next;
 		}
-		/* LINTED */
 		fp = (struct file_entry *)bp->b_un.b_buf;
 		fip->fe_lcount = fp->fe_lcount;
 		fip->fe_type = fp->fe_icb_tag.itag_ftype;
@@ -168,6 +167,7 @@ pass1()
 		case FTYPE_FILE:
 		case FTYPE_SYMLINK:
 			ckinode(fp);
+			/* FALLTHROUGH */
 		default:
 			n_files++;
 			break;
@@ -257,7 +257,6 @@ getallocext(struct file_entry *fp, uint32_t loc, uint32_t len)
 			gettext("Can't read allocation extent\n"));
 		return (1);
 	}
-	/* LINTED */
 	aep = (struct alloc_ext_desc *)extbuf;
 	err = verifytag(&aep->aed_tag, loc, &aep->aed_tag, UD_ALLOC_EXT_DESC);
 	if (err) {
@@ -273,10 +272,8 @@ getallocext(struct file_entry *fp, uint32_t loc, uint32_t len)
 	/* Swap the descriptors */
 	for (i = 0, ap = dir_adrlist; i < dir_naddrs; i++, ap += dir_adrsize) {
 		if (dir_adrsize == sizeof (short_ad_t)) {
-			/* LINTED */
 			ud_swap_short_ad((short_ad_t *)ap);
 		} else if (dir_adrsize == sizeof (long_ad_t)) {
-			/* LINTED */
 			ud_swap_long_ad((long_ad_t *)ap);
 		}
 	}
@@ -301,14 +298,13 @@ static int32_t
 getdir(struct file_entry *fp, struct bufarea **fbp,
 	u_offset_t *poffset, struct file_id **fidpp)
 {
-	/* LINTED */
-	register struct file_id *fidp = (struct file_id *)fidbuf;
-	register struct short_ad *sap;
-	register struct long_ad *lap;
-	register int i, newoff, xoff = 0;
-	uint32_t block = 0, nb, len, left;
+	struct file_id *fidp = (struct file_id *)fidbuf;
+	struct short_ad *sap;
+	struct long_ad *lap;
+	int i, newoff, xoff = 0;
+	uint32_t block = 0, nb, len = 0, left;
 	u_offset_t offset;
-	int err, type;
+	int err, type = 0;
 
 
 again:
@@ -331,7 +327,6 @@ again2:
 again3:
 	switch (fp->fe_icb_tag.itag_flags & 0x3) {
 	case ICB_FLAG_SHORT_AD:
-		/* LINTED */
 		sap = &((short_ad_t *)dir_adrlist)[dir_adrindx];
 		for (i = dir_adrindx; i < dir_naddrs; i++, sap++) {
 			len = EXTLEN(sap->sad_ext_len);
@@ -380,7 +375,6 @@ again3:
 		dir_fidp = dirbuf;
 		break;
 	case ICB_FLAG_LONG_AD:
-		/* LINTED */
 		lap = &((long_ad_t *)dir_adrlist)[dir_adrindx];
 		for (i = dir_adrindx; i < dir_naddrs; i++, lap++) {
 			len = EXTLEN(lap->lad_ext_len);
@@ -471,15 +465,14 @@ nextone:
 static void
 ckinode(struct file_entry *fp)
 {
-	register struct short_ad *sap;
-	register struct long_ad *lap;
-	register int i, type, len;
+	struct short_ad *sap = NULL;
+	struct long_ad *lap;
+	int i, type, len;
 
 	switch (fp->fe_icb_tag.itag_flags & 0x3) {
 	case ICB_FLAG_SHORT_AD:
 		dir_adrsize = sizeof (short_ad_t);
 		dir_naddrs = fp->fe_len_adesc / sizeof (short_ad_t);
-		/* LINTED */
 		sap = (short_ad_t *)(fp->fe_spec + fp->fe_len_ear);
 again1:
 		for (i = 0; i < dir_naddrs; i++, sap++) {
@@ -496,7 +489,6 @@ again1:
 				/* This changes dir_naddrs and dir_adrlist */
 				if (getallocext(fp, sap->sad_ext_loc, len))
 					break;
-				/* LINTED */
 				sap = (short_ad_t *)dir_adrlist;
 				goto again1;
 			}
@@ -505,7 +497,6 @@ again1:
 	case ICB_FLAG_LONG_AD:
 		dir_adrsize = sizeof (long_ad_t);
 		dir_naddrs = fp->fe_len_adesc / sizeof (long_ad_t);
-		/* LINTED */
 		lap = (long_ad_t *)(fp->fe_spec + fp->fe_len_ear);
 again2:
 		for (i = 0; i < dir_naddrs; i++, lap++) {
@@ -522,7 +513,6 @@ again2:
 				/* This changes dir_naddrs and dir_adrlist */
 				if (getallocext(fp, lap->lad_ext_loc, len))
 					break;
-				/* LINTED */
 				lap = (long_ad_t *)dir_adrlist;
 				goto again2;
 			}
@@ -538,14 +528,13 @@ again2:
 static void
 adjust(struct fileinfo *fip)
 {
-	register struct file_entry *fp;
-	register struct bufarea *bp;
+	struct file_entry *fp;
+	struct bufarea *bp;
 
 	bp = getfilentry(fip->fe_block, fip->fe_len);
 	if (bp == NULL)
 		errexit(gettext("Unable to read file entry at %x\n"),
 			fip->fe_block);
-	/* LINTED */
 	fp = (struct file_entry *)bp->b_un.b_buf;
 	pwarn(gettext("LINK COUNT %s I=%x"),
 		fip->fe_type == FTYPE_DIRECTORY ? "DIR" :
@@ -570,10 +559,10 @@ adjust(struct fileinfo *fip)
 }
 
 void
-dofreemap()
+dofreemap(void)
 {
-	register int i;
-	register char *bp, *fp;
+	int i;
+	char *bp, *fp;
 	struct inodesc idesc;
 
 	if (freemap == NULL)
@@ -601,7 +590,7 @@ dofreemap()
 }
 
 void
-dolvint()
+dolvint(void)
 {
 	struct lvid_iu *lviup;
 	struct inodesc idesc;

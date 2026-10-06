@@ -2,6 +2,7 @@
 # Copyright 2008 Sun Microsystems, Inc.  All rights reserved.
 # Use is subject to license terms.
 #
+# Copyright (c) 2018, Joyent, Inc.
 
 PROG= ktutil
 
@@ -23,10 +24,12 @@ CPPFLAGS += -I$(SRC)/uts/common/gssapi/include \
 	-DHAVE_LIBSOCKET=1 -DHAVE_LIBNSL=1 -DHAVE_UNISTD_H=1 \
 	-DHAVE_SYS_TIMEB_H=1 -DHAVE_ALLOCA_H=1 -DHAVE_FTIME=1 \
 	 -DHAVE_TIMEZONE
-COPTFLAG += $(XESS) #-I$(KINCDIR) 
 
 CERRWARN += -_gcc=-Wno-implicit-function-declaration
 CERRWARN += -_gcc=-Wno-unused-function
+
+# not linted
+SMATCH=off
 
 LDFLAGS += $(KRUNPATH) $(KERBRUNPATH)
 LDLIBS += $(KMECHLIB) $(ROOT)$(KERBLIBDIR)/libss.so
@@ -35,7 +38,7 @@ LDLIBS += $(KMECHLIB) $(ROOT)$(KERBLIBDIR)/libss.so
 
 all: $(PROG)
 
-ktutil:	$(OBJS) 
+ktutil:	$(OBJS)
 	$(LINK.c) $(OBJS) -o $@ $(LDLIBS)
 	$(POST_PROCESS)
 
@@ -43,8 +46,6 @@ install: $(KRB5PROG)
 
 clean:
 	$(RM) $(OBJS)
-
-lint: lint_SRCS
 
 include ../../../Makefile.targ
 

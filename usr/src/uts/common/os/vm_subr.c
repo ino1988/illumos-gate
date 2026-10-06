@@ -59,7 +59,6 @@
 
 #include <sys/swap.h>
 #include <sys/vtrace.h>
-#include <sys/tnf_probe.h>
 #include <sys/fs/snode.h>
 #include <sys/copyops.h>
 #include <sys/conf.h>
@@ -141,13 +140,6 @@ default_physio(int (*strat)(struct buf *), struct buf *bp, dev_t dev,
 	int allocbuf = 0;
 
 	TRACE_1(TR_FAC_PHYSIO, TR_PHYSIO_START, "physio_start: bp %p", bp);
-
-	/* Kernel probe */
-	TNF_PROBE_4(physio_start, "io rawio", /* CSTYLED */,
-	    tnf_device,		device,		dev,
-	    tnf_offset,		offset,		uio->uio_loffset,
-	    tnf_size,		size,		uio->uio_resid,
-	    tnf_bioflags,	rw,		rw);
 
 	if (rw == B_READ) {
 		CPU_STATS_ADD_K(sys, phread, 1);
@@ -290,10 +282,6 @@ default_physio(int (*strat)(struct buf *), struct buf *bp, dev_t dev,
 		kmem_cache_free(physio_buf_cache, bp);
 	}
 
-	/* Kernel probe */
-	TNF_PROBE_1(physio_end, "io rawio", /* CSTYLED */,
-		tnf_device,	device,		dev);
-
 	TRACE_1(TR_FAC_PHYSIO, TR_PHYSIO_END, "physio_end: bp %p", bp);
 
 	return (error);
@@ -364,11 +352,11 @@ cow_mapin(struct as *as, caddr_t uaddr, caddr_t kaddr, struct page **cached_ppp,
 
 	*lenp = 0;
 	if (cow) {
-		AS_LOCK_ENTER(as, &as->a_lock, RW_WRITER);
+		AS_LOCK_ENTER(as, RW_WRITER);
 		seg = as_findseg(as, uaddr, 0);
 		if ((seg == NULL) || ((base = seg->s_base) > uaddr) ||
 		    (uaddr + total) > base + seg->s_size) {
-			AS_LOCK_EXIT(as, &as->a_lock);
+			AS_LOCK_EXIT(as);
 			return (EINVAL);
 		}
 		/*
@@ -376,10 +364,10 @@ cow_mapin(struct as *as, caddr_t uaddr, caddr_t kaddr, struct page **cached_ppp,
 		 * But to be safe, we check against segvn.
 		 */
 		if (seg->s_ops != &segvn_ops) {
-			AS_LOCK_EXIT(as, &as->a_lock);
+			AS_LOCK_EXIT(as);
 			return (ENOTSUP);
 		} else if ((SEGOP_GETTYPE(seg, uaddr) & MAP_PRIVATE) == 0) {
-			AS_LOCK_EXIT(as, &as->a_lock);
+			AS_LOCK_EXIT(as);
 			return (ENOTSUP);
 		}
 	}
@@ -484,7 +472,7 @@ tryagain:
 		++i;
 	}
 	if (cow) {
-		AS_LOCK_EXIT(as, &as->a_lock);
+		AS_LOCK_EXIT(as);
 	}
 	if (first && res == FC_NOMAP) {
 		/*
@@ -502,7 +490,7 @@ tryagain:
 		size = total;
 		res = as_fault(as->a_hat, as, uaddr, size, F_INVAL, S_READ);
 		if (cow)
-			AS_LOCK_ENTER(as, &as->a_lock, RW_WRITER);
+			AS_LOCK_ENTER(as, RW_WRITER);
 		goto tryagain;
 	}
 	switch (res) {

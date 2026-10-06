@@ -12,15 +12,15 @@
 #
 # Copyright (c) 2012 by Delphix. All rights reserved.
 # Copyright 2014, OmniTI Computer Consulting, Inc. All rights reserved.
+# Copyright 2016, Joyent, Inc.
 #
 
 include $(SRC)/Makefile.master
 
-SRCS = delphix.run \
-	omnios.run \
-	openindiana.run
+SRCS = default.run
 
-ROOTOPTPKG = $(ROOT)/opt/os-tests
+OPTPKG = opt/os-tests
+ROOTOPTPKG = $(ROOT)/$(OPTPKG)
 RUNFILES = $(ROOTOPTPKG)/runfiles
 
 CMDS = $(SRCS:%=$(RUNFILES)/%)
@@ -31,6 +31,9 @@ all: $(SRCS)
 install: $(CMDS)
 
 clean lint clobber:
+
+check:
+	$(CHECK_TEST_RUNFILES) -T $(OPTPKG) $(SRCS)
 
 $(CMDS): $(RUNFILES) $(SRCS)
 

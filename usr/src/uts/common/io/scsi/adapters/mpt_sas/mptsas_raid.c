@@ -22,6 +22,9 @@
 /*
  * Copyright 2010 Sun Microsystems, Inc.  All rights reserved.
  * Use is subject to license terms.
+ * Copyright (c) 2014, Tegile Systems Inc. All rights reserved.
+ * Copyright 2015 Nexenta Systems, Inc. All rights reserved.
+ * Copyright 2023 Racktop Systems, Inc.
  */
 
 /*
@@ -72,13 +75,13 @@
 
 #pragma pack(1)
 
-#include <sys/scsi/adapters/mpt_sas/mpi/mpi2_type.h>
-#include <sys/scsi/adapters/mpt_sas/mpi/mpi2.h>
-#include <sys/scsi/adapters/mpt_sas/mpi/mpi2_cnfg.h>
-#include <sys/scsi/adapters/mpt_sas/mpi/mpi2_init.h>
-#include <sys/scsi/adapters/mpt_sas/mpi/mpi2_ioc.h>
-#include <sys/scsi/adapters/mpt_sas/mpi/mpi2_raid.h>
-#include <sys/scsi/adapters/mpt_sas/mpi/mpi2_tool.h>
+#include <sys/scsi/adapters/mpi/mpi2_type.h>
+#include <sys/scsi/adapters/mpi/mpi2.h>
+#include <sys/scsi/adapters/mpi/mpi2_cnfg.h>
+#include <sys/scsi/adapters/mpi/mpi2_init.h>
+#include <sys/scsi/adapters/mpi/mpi2_ioc.h>
+#include <sys/scsi/adapters/mpi/mpi2_raid.h>
+#include <sys/scsi/adapters/mpi/mpi2_tool.h>
 
 #pragma pack()
 
@@ -91,7 +94,7 @@ static int mptsas_get_raid_wwid(mptsas_t *mpt, mptsas_raidvol_t *raidvol);
 
 extern int mptsas_check_dma_handle(ddi_dma_handle_t handle);
 extern int mptsas_check_acc_handle(ddi_acc_handle_t handle);
-extern mptsas_target_t *mptsas_tgt_alloc(mptsas_t *, uint16_t,
+extern mptsas_target_t *mptsas_tgt_alloc(refhash_t *, uint16_t,
     uint64_t, uint32_t, mptsas_phymask_t, uint8_t);
 
 static int
@@ -215,7 +218,7 @@ mptsas_raidconf_page_0_cb(mptsas_t *mpt, caddr_t page_memp,
 			/*
 			 * RAID uses phymask of 0.
 			 */
-			ptgt = mptsas_tgt_alloc(mpt,
+			ptgt = mptsas_tgt_alloc(mpt->m_targets,
 			    voldevhandle, raidwwn, 0, 0, 0);
 
 			raidconfig->m_raidvol[vol].m_raidtgt =
@@ -572,7 +575,8 @@ mptsas_raid_action_system_shutdown(mptsas_t *mpt)
 	mptsas_slots_t			*slots = mpt->m_active;
 	int				config, vol;
 	mptsas_cmd_t			*cmd;
-	uint32_t			request_desc_low, reply_addr;
+	uint32_t			reply_addr;
+	uint64_t			request_desc;
 	int				cnt;
 	pMpi2ReplyDescriptorsUnion_t	reply_desc_union;
 	pMPI2DefaultReply_t		reply;
@@ -631,9 +635,9 @@ mptsas_raid_action_system_shutdown(mptsas_t *mpt)
 	 */
 	(void) ddi_dma_sync(mpt->m_dma_req_frame_hdl, 0, 0,
 	    DDI_DMA_SYNC_FORDEV);
-	request_desc_low = (cmd->cmd_slot << 16) +
+	request_desc = (cmd->cmd_slot << 16) +
 	    MPI2_REQ_DESCRIPT_FLAGS_DEFAULT_TYPE;
-	MPTSAS_START_CMD(mpt, request_desc_low, 0);
+	MPTSAS_START_CMD(mpt, request_desc);
 
 	/*
 	 * Even though reply does not matter because the system is shutting

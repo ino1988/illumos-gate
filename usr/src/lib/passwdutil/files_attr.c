@@ -21,6 +21,8 @@
 /*
  * Copyright 2009 Sun Microsystems, Inc.  All rights reserved.
  * Use is subject to license terms.
+ * Copyright (c) 2016 by Delphix. All rights reserved.
+ * Copyright 2024 OmniOS Community Edition (OmniOSce) Association.
  */
 
 #include <sys/types.h>
@@ -44,16 +46,18 @@
 
 int files_lock(void);
 int files_unlock(void);
-int files_checkhistory(char *user, char *passwd, pwu_repository_t *rep);
-int files_getattr(char *name, attrlist *item, pwu_repository_t *rep);
-int files_getpwnam(char *name, attrlist *items, pwu_repository_t *rep,
+int files_checkhistory(const char *user, const char *passwd,
+    pwu_repository_t *rep);
+int files_getattr(const char *name, attrlist *item, pwu_repository_t *rep);
+int files_getpwnam(const char *name, attrlist *items, pwu_repository_t *rep,
     void **buf);
 int files_update(attrlist *items, pwu_repository_t *rep, void *buf);
-int files_putpwnam(char *name, char *oldpw, pwu_repository_t *rep, void *buf);
-int files_user_to_authenticate(char *name, pwu_repository_t *rep,
+int files_putpwnam(const char *name, const char *oldpw, pwu_repository_t *rep,
+    void *buf);
+int files_user_to_authenticate(const char *name, pwu_repository_t *rep,
 	char **auth_user, int *privileged);
 
-static int files_update_history(char *name, struct spwd *spwd);
+static int files_update_history(const char *name, struct spwd *spwd);
 
 /*
  * files function pointer table, used by passwdutil_init to initialize
@@ -215,7 +219,8 @@ private_getspnam_r(const char *name, struct spwd *result, char *buffer,
  */
 /*ARGSUSED*/
 int
-files_getpwnam(char *name, attrlist *items, pwu_repository_t *rep, void **buf)
+files_getpwnam(const char *name, attrlist *items, pwu_repository_t *rep,
+    void **buf)
 {
 	attrlist *p;
 	struct pwbuf *pwbuf;
@@ -328,7 +333,7 @@ error:
  */
 /*ARGSUSED*/
 int
-files_user_to_authenticate(char *user, pwu_repository_t *rep,
+files_user_to_authenticate(const char *user, pwu_repository_t *rep,
 	char **auth_user, int *privileged)
 {
 	struct pwbuf *pwbuf;
@@ -402,7 +407,7 @@ files_user_to_authenticate(char *user, pwu_repository_t *rep,
  *
  */
 int
-files_checkhistory(char *user, char *passwd, pwu_repository_t *rep)
+files_checkhistory(const char *user, const char *passwd, pwu_repository_t *rep)
 {
 	attrlist attr;
 	int res;
@@ -469,7 +474,7 @@ out:
  * Get attributes specified in list 'items'
  */
 int
-files_getattr(char *name, attrlist *items, pwu_repository_t *rep)
+files_getattr(const char *name, attrlist *items, pwu_repository_t *rep)
 {
 	struct pwbuf *pwbuf;
 	struct passwd *pw;
@@ -810,7 +815,7 @@ files_update(attrlist *items, pwu_repository_t *rep, void *buf)
 				 * We take care not to update lstchg if the
 				 * user has no password, otherwise the user
 				 * might not be required to provide a password
-				 * the next time [s]he logs-in.
+				 * the next time they log-in.
 				 *
 				 * Also, if lstchg != -1 (i.e., not set in
 				 * /etc/shadow), we keep the old value.
@@ -897,7 +902,7 @@ files_update(attrlist *items, pwu_repository_t *rep, void *buf)
  * "spwd" for user "name"
  */
 int
-files_update_shadow(char *name, struct spwd *spwd)
+files_update_shadow(const char *name, struct spwd *spwd)
 {
 	struct stat64 stbuf;
 	FILE *dst;
@@ -1003,7 +1008,7 @@ shadow_exit:
 }
 
 int
-files_update_passwd(char *name, struct passwd *pwd)
+files_update_passwd(const char *name, struct passwd *pwd)
 {
 	struct stat64 stbuf;
 	FILE *src, *dst;
@@ -1092,7 +1097,8 @@ passwd_exit:
  */
 /*ARGSUSED*/
 int
-files_putpwnam(char *name, char *oldpw, pwu_repository_t *rep, void *buf)
+files_putpwnam(const char *name, const char *oldpw, pwu_repository_t *rep,
+    void *buf)
 {
 	struct pwbuf *pwbuf = (struct pwbuf *)buf;
 	int result = PWU_SUCCESS;
@@ -1134,10 +1140,10 @@ files_putpwnam(char *name, char *oldpw, pwu_repository_t *rep, void *buf)
 
 /*
  *	NOTE:  This is all covered under the repository lock held for updating
- *	passwd(4) and shadow(4).
+ *	passwd(5) and shadow(5).
  */
 int
-files_update_history(char *name, struct spwd *spwd)
+files_update_history(const char *name, struct spwd *spwd)
 {
 	int	histsize;
 	int	tmpfd;

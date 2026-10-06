@@ -23,16 +23,15 @@
 # Copyright 2004 Sun Microsystems, Inc.  All rights reserved.
 # Use is subject to license terms.
 #
-# ident	"%Z%%M%	%I%	%E% SMI"
-#
 
-CRTSRCS= ../../common/amd64
+CRTSRCS= ../../crt/amd64
 
 include ../Makefile.com
 include ../../Makefile.lib.64
 
 CPPFLAGS += -D_SYSCALL32
 
-BUILD.SO= $(LD) -o $@ -G $(DYNFLAGS) $(PICS) $(LDLIBS)
+BUILD.SO= $(LD) -o $@ $(GSHARED) $(DYNFLAGS) $(PICS) $(LDLIBS)
 
-install: all $(ROOTLIBDIR64) .WAIT $(ROOTLIBS64) $(ROOTLINKS64)
+install: all $(ROOTLIBDIR64) .WAIT $(ROOTLIBS64) $(ROOTLINKS64) \
+	$(ROOTCOMPATLINKS64)

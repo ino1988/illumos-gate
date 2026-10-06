@@ -22,6 +22,8 @@
 /*
  * Copyright 2011 Nexenta Systems, Inc.  All rights reserved.
  * Copyright (c) 2008, 2010, Oracle and/or its affiliates. All rights reserved.
+ * Copyright 2015, Joyent, Inc.
+ * Copyright 2022 Garrett D'Amore
  */
 
 #include <sys/file.h>
@@ -56,9 +58,6 @@ ksocket_socket(ksocket_t *ksp, int domain, int type, int protocol, int flags,
 	/* All Solaris components should pass a cred for this operation. */
 	ASSERT(cr != NULL);
 
-	if (domain == AF_NCA)
-		return (EAFNOSUPPORT);
-
 	ASSERT(flags == KSOCKET_SLEEP || flags == KSOCKET_NOSLEEP);
 	so = socket_create(domain, type, protocol, NULL, NULL, version, flags,
 	    cr, &error);
@@ -67,7 +66,7 @@ ksocket_socket(ksocket_t *ksp, int domain, int type, int protocol, int flags,
 			char *mod = NULL;
 
 			/*
-			 * Could be that root file sytem is not loaded or
+			 * Could be that root file system is not loaded or
 			 * soconfig has not run yet.
 			 */
 			if (type == SOCK_STREAM && (domain == AF_INET ||
@@ -803,8 +802,7 @@ ksocket_spoll(ksocket_t ks, int timo, short events, short *revents,
 	pdp->pd_events = events;
 	pdp->pd_pcache = pcp;
 	pcache_insert_fd(pcp, pdp, 1);
-	pollhead_insert(php, pdp);
-	pdp->pd_php = php;
+	polldat_associate(pdp, php);
 
 	mutex_enter(&pcp->pc_lock);
 	while (!(so->so_state & SS_CLOSING)) {
@@ -820,7 +818,7 @@ ksocket_spoll(ksocket_t ks, int timo, short events, short *revents,
 		if (error != 0 || *revents != 0)
 			break;
 
-		if (pcp->pc_flag & T_POLLWAKE)
+		if (pcp->pc_flag & PC_POLLWAKE)
 			continue;
 
 		if (timo == -1) {
@@ -837,11 +835,8 @@ ksocket_spoll(ksocket_t ks, int timo, short events, short *revents,
 	}
 	mutex_exit(&pcp->pc_lock);
 
-	if (pdp->pd_php != NULL) {
-		pollhead_delete(pdp->pd_php, pdp);
-		pdp->pd_php = NULL;
-		pdp->pd_fd = NULL;
-	}
+	polldat_disassociate(pdp);
+	pdp->pd_fd = 0;
 
 	/*
 	 * pollwakeup() may still interact with this pollcache. Wait until
@@ -930,4 +925,16 @@ ksocket_rele(ksocket_t ks)
 		if (--so->so_count == 1)
 			cv_signal(&so->so_closing_cv);
 	}
+}
+
+int
+ksocket_krecv_set(ksocket_t ks, ksocket_krecv_f cb, void *arg)
+{
+	return (so_krecv_set(KSTOSO(ks), (so_krecv_f)cb, arg));
+}
+
+void
+ksocket_krecv_unblock(ksocket_t ks)
+{
+	return (so_krecv_unblock(KSTOSO(ks)));
 }

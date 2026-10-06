@@ -10,22 +10,22 @@
 #
 
 #
-# Copyright 2011, Richard Lowe
+# Copyright 2023 Oxide Computer Company
+# Copyright 2017, Richard Lowe
 # Copyright 2013 Nexenta Systems, Inc.  All rights reserved.
 #
 
 include		$(SRC)/Makefile.master
 
-MANSECT= 	9
-
-MANLINKS=	Intro.9		\
-		intro.9
-
-Intro.9		:= LINKSRC = ../man9e/Intro.9e
-intro.9		:= LINKSRC = ../man9e/Intro.9e
+MANSECT=	9
+MANFILES=	Intro.9	\
+		iport.9 \
+		ktest.9 \
+		vmem.9
 
 .KEEP_STATE:
 
 include		$(SRC)/man/Makefile.man
 
-install: 	$(ROOTMANLINKS)
+install:	$(ROOTMANFILES) $(MANLINK_SRCS)
+	$(MANLINK_INSTALL)

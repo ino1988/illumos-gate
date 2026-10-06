@@ -22,8 +22,7 @@
 # Copyright 2008 Sun Microsystems, Inc.  All rights reserved.
 # Use is subject to license terms.
 #
-# ident	"%Z%%M%	%I%	%E% SMI"
-#
+# Copyright (c) 2018, Joyent, Inc.
 
 LIBRARY =		libprint.a
 VERS =			.2
@@ -32,19 +31,18 @@ OBJECTS = \
 	ns_cmn_printer.o nss_convert.o nss_ldap.o nss_printer.o nss_write.o
 
 include ../../../Makefile.lib
-include ../../../Makefile.rootfs
 
 SRCDIR =	../common
 
-ROOTLIBDIR=	$(ROOT)/usr/lib
-
 LIBS =			$(DYNLIB)
 
-$(LINTLIB):=	SRCS = $(SRCDIR)/$(LINTSRC)
 
 CFLAGS +=	$(CCVERBOSE)
 CPPFLAGS +=	-I$(SRCDIR)
 CPPFLAGS +=	-I../../head -D_REENTRANT
+
+# not linted
+SMATCH=off
 
 LDLIBS +=	-lnsl -lsocket -lc -lldap
 
@@ -53,6 +51,5 @@ LDLIBS +=	-lnsl -lsocket -lc -lldap
 
 all:	$(LIBS)
 
-lint:	lintcheck
 
 include ../../../Makefile.targ

@@ -27,8 +27,6 @@
 #ifndef _SYS_WATCHPOINT_H
 #define	_SYS_WATCHPOINT_H
 
-#pragma ident	"%Z%%M%	%I%	%E% SMI"
-
 #include <sys/types.h>
 #include <vm/seg_enum.h>
 #include <sys/copyops.h>
@@ -40,7 +38,7 @@ extern "C" {
 
 /*
  * Definitions for the VM implementation of watchpoints.
- * See proc(4) and <sys/procfs.h> for definitions of the user interface.
+ * See proc(5) and <sys/procfs.h> for definitions of the user interface.
  */
 
 /*

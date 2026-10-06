@@ -24,6 +24,9 @@
  * Use is subject to license terms.
  */
 
+/*
+ * Copyright 2020 Joyent, Inc.
+ */
 
 #include <sys/types.h>
 #include <sys/inttypes.h>
@@ -74,12 +77,10 @@ dboot_elfload64(uintptr_t file_image)
 {
 	Elf64_Ehdr *eh;
 	Elf64_Phdr *phdr;
-	Elf64_Shdr *shdr;
-	caddr_t allphdrs, sechdrs;
+	caddr_t allphdrs;
 	int i;
 	paddr_t src;
 	paddr_t dst;
-	paddr_t next_addr;
 
 	elf_file = (caddr_t)file_image;
 
@@ -102,14 +103,6 @@ dboot_elfload64(uintptr_t file_image)
 	if (allphdrs == NULL)
 		dboot_panic("Failed to get program headers e_phnum = %d",
 		    eh->e_phnum);
-
-	/*
-	 * Get the section headers.
-	 */
-	sechdrs = PGETBYTES(eh->e_shoff);
-	if (sechdrs == NULL)
-		dboot_panic("Failed to get section headers e_shnum = %d",
-		    eh->e_shnum);
 
 	/*
 	 * Next look for interesting program headers.
@@ -169,21 +162,24 @@ dboot_elfload64(uintptr_t file_image)
 		(void) memcpy((void *)(uintptr_t)dst,
 		    (void *)(uintptr_t)src, (size_t)phdr->p_filesz);
 
-		next_addr = dst + phdr->p_filesz;
-	}
-
-
-	/*
-	 * Next look for bss
-	 */
-	for (i = 0; i < eh->e_shnum; i++) {
-		shdr = (Elf64_Shdr *)(sechdrs + eh->e_shentsize * i);
-
-		/* zero out bss */
-		if (shdr->sh_type == SHT_NOBITS) {
-			(void) memset((void *)(uintptr_t)next_addr, 0,
-			    shdr->sh_size);
-			break;
+		/*
+		 * Clear space from oversized segments, bss.
+		 * Note, the bss actual start is
+		 * P2ROUNDUP(dst + phdr->p_filesz, shdr->sh_addralign),
+		 * but we can wipe everything from phdr->p_filesz to
+		 * phdr->p_memsz.
+		 */
+		if (phdr->p_filesz < phdr->p_memsz) {
+			if (prom_debug) {
+				dboot_printf("zeroing BSS %zu bytes from "
+				    "physaddr 0x%" PRIx64
+				    " (end=0x%" PRIx64 ")\n",
+				    (size_t)(phdr->p_memsz - phdr->p_filesz),
+				    dst + phdr->p_filesz,
+				    dst + phdr->p_memsz - 1);
+			}
+			(void) memset((void *)(uintptr_t)(dst + phdr->p_filesz),
+			    0, phdr->p_memsz - phdr->p_filesz);
 		}
 	}
 

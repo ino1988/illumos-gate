@@ -22,6 +22,7 @@
 #
 # Copyright (c) 1989 by Sun Microsystems, Inc.
 #
+# Copyright (c) 2018, Joyent, Inc.
 
 FSTYPE=		hsfs
 LIBPROG=	labelit
@@ -33,6 +34,5 @@ CERRWARN += -_gcc=-Wno-switch
 CERRWARN += -_gcc=-Wno-implicit-function-declaration
 CERRWARN += -_gcc=-Wno-unused-variable
 
-lint := PROG = $(LIBPROG)
-
-lint:	lint_PROG
+# not linted
+SMATCH=off

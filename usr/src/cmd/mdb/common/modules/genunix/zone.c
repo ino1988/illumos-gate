@@ -20,6 +20,8 @@
  */
 /*
  * Copyright (c) 2004, 2010, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2012, Joyent, Inc.  All rights reserved.
+ * Copyright 2025 Oxide Computer Company
  */
 
 #include <mdb/mdb_param.h>
@@ -53,6 +55,31 @@ char *zone_status_names[] = {
 	"dying",		/* ZONE_IS_DYING */
 	"dead"			/* ZONE_IS_DEAD */
 };
+
+static int
+zid_lookup_cb(uintptr_t addr, const zone_t *zone, void *arg)
+{
+	zoneid_t zid = *(uintptr_t *)arg;
+	if (zone->zone_id == zid)
+		mdb_printf("%p\n", addr);
+
+	return (WALK_NEXT);
+}
+
+/*ARGSUSED*/
+int
+zid2zone(uintptr_t addr, uint_t flags, int argc, const mdb_arg_t *argv)
+{
+	if (!(flags & DCMD_ADDRSPEC) || argc != 0)
+		return (DCMD_USAGE);
+
+	if (mdb_walk("zone", (mdb_walk_cb_t)zid_lookup_cb, &addr) == -1) {
+		mdb_warn("failed to walk zone");
+		return (DCMD_ERR);
+	}
+
+	return (DCMD_OK);
+}
 
 int
 zoneprt(uintptr_t addr, uint_t flags, int argc, const mdb_arg_t *argv)
@@ -229,7 +256,7 @@ zone_walk_init(mdb_walk_state_t *wsp)
 {
 	GElf_Sym sym;
 
-	if (wsp->walk_addr == NULL) {
+	if (wsp->walk_addr == 0) {
 		if (mdb_lookup_by_name("zone_active", &sym) == -1) {
 			mdb_warn("failed to find 'zone_active'");
 			return (WALK_ERR);
@@ -253,7 +280,7 @@ zone_walk_step(mdb_walk_state_t *wsp)
 int
 zsd_walk_init(mdb_walk_state_t *wsp)
 {
-	if (wsp->walk_addr == NULL) {
+	if (wsp->walk_addr == 0) {
 		mdb_warn("global walk not supported\n");
 		return (WALK_ERR);
 	}
@@ -372,10 +399,7 @@ zsd(uintptr_t addr, uint_t flags, int argc, const mdb_arg_t *argv)
 		 * The missed argument should be a key.
 		 */
 		argp = &argv[argcindex];
-		if (argp->a_type == MDB_TYPE_IMMEDIATE)
-			cbd.key = argp->a_un.a_val;
-		else
-			cbd.key = mdb_strtoull(argp->a_un.a_str);
+		cbd.key = (zone_key_t)mdb_argtoull(argp);
 		cbd.keygiven = TRUE;
 		cbd.found = FALSE;
 	}

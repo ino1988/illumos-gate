@@ -94,9 +94,8 @@ extern void *HYPERVISOR_console_page;
 
 /* -- move these definitions elsewhere -- */
 
-extern int xen_debug_handler(void *);
+extern uint_t xen_debug_handler(caddr_t, caddr_t);
 extern void xen_printf(const char *, ...) __KPRINTFLIKE(1);
-#pragma rarely_called(xen_printf)
 
 extern void xen_callback(void);
 extern void xen_failsafe_callback(void);
@@ -154,8 +153,8 @@ extern void xen_set_segment_base(int, ulong_t);
 #endif	/* __amd64 */
 extern long xen_vcpu_up(processorid_t);
 extern long xen_vcpu_down(processorid_t);
-extern void xen_enable_user_iopl(void);
-extern void xen_disable_user_iopl(void);
+extern void xen_enable_user_iopl(void *);
+extern void xen_disable_user_iopl(void *);
 
 extern int xen_get_mc_physcpuinfo(xen_mc_logical_cpu_t *, uint_t *);
 extern uint_t xen_phys_ncpus;

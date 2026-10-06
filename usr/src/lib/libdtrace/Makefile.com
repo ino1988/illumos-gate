@@ -20,8 +20,9 @@
 #
 #
 # Copyright (c) 2003, 2010, Oracle and/or its affiliates. All rights reserved.
-# Copyright (c) 2012 by Delphix. All rights reserved.
+# Copyright (c) 2011, 2016 by Delphix. All rights reserved.
 #
+# Copyright (c) 2018, Joyent, Inc.
 
 LIBRARY = libdtrace.a
 VERS = .1
@@ -38,6 +39,7 @@ LIBSRCS = \
 	dt_dof.c \
 	dt_error.c \
 	dt_errtags.c \
+	dt_sugar.c \
 	dt_handle.c \
 	dt_ident.c \
 	dt_inttab.c \
@@ -94,6 +96,7 @@ DLIBSRCS += \
 	sched.d \
 	signal.d \
 	scsi.d \
+	smb.d \
 	srp.d \
 	sysevent.d \
 	tcp.d \
@@ -102,8 +105,8 @@ DLIBSRCS += \
 
 include ../../Makefile.lib
 
-SRCS = $(LIBSRCS:%.c=../common/%.c) $(LIBISASRCS:%.c=../$(MACH)/%.c) 
-LIBS = $(DYNLIB) $(LINTLIB)
+SRCS = $(LIBSRCS:%.c=../common/%.c) $(LIBISASRCS:%.c=../$(MACH)/%.c)
+LIBS = $(DYNLIB)
 
 SRCDIR = ../common
 
@@ -125,19 +128,24 @@ CPPFLAGS += -I../common -I.
 CFLAGS += $(CCVERBOSE) $(C_BIGPICFLAGS)
 CFLAGS64 += $(CCVERBOSE) $(C_BIGPICFLAGS)
 
-CERRWARN += -_gcc=-Wno-unused-label
 CERRWARN += -_gcc=-Wno-unused-variable
 CERRWARN += -_gcc=-Wno-parentheses
-CERRWARN += -_gcc=-Wno-uninitialized
+CERRWARN += $(CNOWARN_UNINIT)
 CERRWARN += -_gcc=-Wno-switch
+
+# because of labels from yacc
+pics/dt_grammar.o := CERRWARN += -_gcc=-Wno-unused-label
+pics/dt_lex.o := CERRWARN += -_gcc=-Wno-unused-label
+
+# not linted
+SMATCH=off
 
 YYCFLAGS =
 LDLIBS += -lgen -lproc -lrtld_db -lnsl -lsocket -lctf -lelf -lc
 DRTILDLIBS = $(LDLIBS.lib) -lc
+LIBDAUDITLIBS = $(LDLIBS.lib) -lmapmalloc -lc -lproc $(LDSTACKPROTECT)
 
 yydebug := YYCFLAGS += -DYYDEBUG
-
-$(LINTLIB) := SRCS = $(SRCDIR)/$(LINTSRC)
 
 LFLAGS = -t -v
 YFLAGS = -d -v
@@ -149,6 +157,14 @@ ROOTDLIBS = $(DLIBSRCS:%=$(ROOTDLIBDIR)/%)
 ROOTDOBJS = $(ROOTDLIBDIR)/$(DRTIOBJ) $(ROOTDLIBDIR)/$(LIBDAUDIT)
 ROOTDOBJS64 = $(ROOTDLIBDIR64)/$(DRTIOBJ) $(ROOTDLIBDIR64)/$(LIBDAUDIT)
 
+#
+# We do not build drti.o with the stack protector as otherwise
+# everything that uses dtrace -G may have a surprise stack protector
+# requirement right now. While in theory this could be handled by libc,
+# this will make the overall default transition smoother.
+#
+$(DRTIOBJ) := STACKPROTECT = none
+
 $(ROOTDLIBDIR)/%.d := FILEMODE=444
 $(ROOTDLIBDIR)/%.o := FILEMODE=444
 $(ROOTDLIBDIR64)/%.o :=	FILEMODE=444
@@ -159,10 +175,6 @@ $(ROOTDLIBDIR64)/%.so := FILEMODE=555
 
 all: $(LIBS) $(DRTIOBJ) $(LIBDAUDIT)
 
-lint: lintdlink lintcheck
-
-lintdlink: $(DLINKSRCS:%.c=../common/%.c)
-	$(LINT.c) $(DLINKSRCS:%.c=../common/%.c) $(DRTILDLIBS)
 
 dt_lex.c: $(SRCDIR)/dt_lex.l dt_grammar.h
 	$(LEX) $(LFLAGS) $(SRCDIR)/dt_lex.l > $@
@@ -174,9 +186,6 @@ dt_grammar.c dt_grammar.h: $(SRCDIR)/dt_grammar.y
 
 pics/dt_lex.o pics/dt_grammar.o := CFLAGS += $(YYCFLAGS)
 pics/dt_lex.o pics/dt_grammar.o := CFLAGS64 += $(YYCFLAGS)
-
-pics/dt_lex.o pics/dt_grammar.o := CERRWARN += -erroff=E_STATEMENT_NOT_REACHED
-pics/dt_lex.o pics/dt_grammar.o := CCVERBOSE =
 
 ../common/dt_errtags.c: ../common/mkerrtags.sh ../common/dt_errtags.h
 	sh ../common/mkerrtags.sh < ../common/dt_errtags.h > $@
@@ -224,13 +233,13 @@ pics/%.o: ../$(MACH)/%.s
 	$(POST_PROCESS_O)
 
 $(DRTIOBJ): $(DRTIOBJS)
-	$(LD) -o $@ -r -Blocal -Breduce $(DRTIOBJS)
+	$(LD) -o $@ -r $(BLOCAL) $(BREDUCE) $(DRTIOBJS)
 	$(POST_PROCESS_O)
 
 $(LIBDAUDIT): $(LIBDAUDITOBJS)
-	$(LINK.c) -o $@ $(GSHARED) -h$(LIBDAUDIT) $(ZTEXT) $(ZDEFS) $(BDIRECT) \
-	    $(MAPFILE.PGA:%=-M%) $(MAPFILE.NED:%=-M%) $(LIBDAUDITOBJS) \
-	    -lmapmalloc -lc -lproc
+	$(LINK.c) -o $@ $(GSHARED) -Wl,-h$(LIBDAUDIT) $(ZTEXT) $(ZDEFS) \
+	    $(BDIRECT) $(MAPFILE.PGA:%=-Wl,-M%) $(MAPFILE.NED:%=-Wl,-M%) \
+	    $(LIBDAUDITOBJS) $(LIBDAUDITLIBS)
 	$(POST_PROCESS_SO)
 
 $(ROOTDLIBDIR):

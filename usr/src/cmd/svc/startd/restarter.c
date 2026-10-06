@@ -21,7 +21,8 @@
 
 /*
  * Copyright (c) 2004, 2010, Oracle and/or its affiliates. All rights reserved.
- * Copyright (c) 2013, Joyent, Inc. All rights reserved.
+ * Copyright 2017 RackTop Systems.
+ * Copyright 2019 Joyent, Inc.
  */
 
 /*
@@ -135,6 +136,7 @@
 #include "startd.h"
 #include "protocol.h"
 
+uu_list_pool_t *contract_list_pool;
 static uu_list_pool_t *restarter_instance_pool;
 static restarter_instance_list_t instance_list;
 
@@ -817,10 +819,11 @@ instance_started(restarter_inst_t *inst)
 	assert(MUTEX_HELD(&inst->ri_lock));
 
 	if (inst->ri_i.i_state == RESTARTER_STATE_ONLINE ||
-	    inst->ri_i.i_state == RESTARTER_STATE_DEGRADED)
+	    inst->ri_i.i_state == RESTARTER_STATE_DEGRADED) {
 		ret = 1;
-	else
+	} else {
 		ret = 0;
+	}
 
 	return (ret);
 }
@@ -993,6 +996,8 @@ restarter_post_fsminimal_thread(void *unused)
 {
 	scf_handle_t *h;
 	int r;
+
+	(void) pthread_setname_np(pthread_self(), "restarter_post_fsmin");
 
 	h = libscf_handle_create_bound_loop();
 
@@ -1736,7 +1741,7 @@ rep_retry:
 		info->sf_id = rip->ri_id;
 		info->sf_method_type = METHOD_REFRESH;
 		info->sf_event_type = RERR_REFRESH;
-		info->sf_reason = NULL;
+		info->sf_reason = 0;
 
 		assert(rip->ri_method_thread == 0);
 		rip->ri_method_thread =
@@ -1747,11 +1752,69 @@ rep_retry:
 	scf_instance_destroy(inst);
 }
 
+static void
+degrade_instance(scf_handle_t *h, restarter_inst_t *rip, restarter_str_t reason)
+{
+	scf_instance_t *scf_inst = NULL;
+
+	assert(MUTEX_HELD(&rip->ri_lock));
+
+	log_instance(rip, B_TRUE, "Marking degraded due to %s.",
+	    restarter_get_str_short(reason));
+	log_framework(LOG_DEBUG, "%s: marking degraded due to %s.\n",
+	    rip->ri_i.i_fmri, restarter_get_str_short(reason));
+
+	/* Services that aren't online are ignored */
+	if (rip->ri_i.i_state != RESTARTER_STATE_ONLINE) {
+		log_framework(LOG_DEBUG,
+		    "%s: degrade_instance -> is not online\n",
+		    rip->ri_i.i_fmri);
+		return;
+	}
+
+	/*
+	 * If reason state is restarter_str_service_request and
+	 * restarter_actions/auxiliary_fmri property is set with a valid fmri,
+	 * copy the fmri to restarter/auxiliary_fmri so svcs -x can use.
+	 */
+	if (reason == restarter_str_service_request &&
+	    libscf_fmri_get_instance(h, rip->ri_i.i_fmri, &scf_inst) == 0) {
+		if (restarter_inst_validate_ractions_aux_fmri(scf_inst) == 0) {
+			if (restarter_inst_set_aux_fmri(scf_inst)) {
+				log_framework(LOG_DEBUG, "%s: "
+				    "restarter_inst_set_aux_fmri failed: ",
+				    rip->ri_i.i_fmri);
+			}
+		} else {
+			log_framework(LOG_DEBUG, "%s: "
+			    "restarter_inst_validate_ractions_aux_fmri "
+			    "failed: ", rip->ri_i.i_fmri);
+
+			if (restarter_inst_reset_aux_fmri(scf_inst)) {
+				log_framework(LOG_DEBUG, "%s: "
+				    "restarter_inst_reset_aux_fmri failed: ",
+				    rip->ri_i.i_fmri);
+			}
+		}
+		scf_instance_destroy(scf_inst);
+	}
+
+	(void) restarter_instance_update_states(h, rip,
+	    RESTARTER_STATE_DEGRADED, RESTARTER_STATE_NONE, RERR_NONE, reason);
+
+	log_transition(rip, DEGRADE_REQUESTED);
+}
+
+/*
+ * Note that the ordering of these must match the restarter event types defined
+ * in librestart.h
+ */
 const char *event_names[] = { "INVALID", "ADD_INSTANCE", "REMOVE_INSTANCE",
 	"ENABLE", "DISABLE", "ADMIN_DEGRADED", "ADMIN_REFRESH",
 	"ADMIN_RESTART", "ADMIN_MAINT_OFF", "ADMIN_MAINT_ON",
 	"ADMIN_MAINT_ON_IMMEDIATE", "STOP", "START", "DEPENDENCY_CYCLE",
-	"INVALID_DEPENDENCY", "ADMIN_DISABLE", "STOP_RESET"
+	"INVALID_DEPENDENCY", "ADMIN_DISABLE", "STOP_RESET",
+	"ADMIN_DEGRADE_IMMEDIATE", "ADMIN_RESTORE"
 };
 
 /*
@@ -1770,6 +1833,8 @@ restarter_process_events(void *arg)
 	restarter_inst_t *rip;
 	char *fmri = (char *)arg;
 	struct timespec to;
+
+	(void) pthread_setname_np(pthread_self(), "restarter_process_events");
 
 	assert(fmri != NULL);
 
@@ -1866,11 +1931,17 @@ again:
 			break;
 
 		case RESTARTER_EVENT_TYPE_ADMIN_DEGRADED:
-			log_framework(LOG_WARNING, "Restarter: "
-			    "%s command (for %s) unimplemented.\n",
-			    event_names[event->riq_type], inst->ri_i.i_fmri);
+		case RESTARTER_EVENT_TYPE_ADMIN_DEGRADE_IMMEDIATE:
+			if (event_from_tty(h, inst) == 0) {
+				degrade_instance(h, inst,
+				    restarter_str_service_request);
+			} else {
+				degrade_instance(h, inst,
+				    restarter_str_administrative_request);
+			}
 			break;
 
+		case RESTARTER_EVENT_TYPE_ADMIN_RESTORE:
 		case RESTARTER_EVENT_TYPE_ADMIN_RESTART:
 			if (!instance_started(inst)) {
 				log_framework(LOG_DEBUG, "Restarter: "
@@ -1939,14 +2010,16 @@ out:
 }
 
 static int
-is_admin_event(restarter_event_type_t t) {
-
+is_admin_event(restarter_event_type_t t)
+{
 	switch (t) {
 	case RESTARTER_EVENT_TYPE_ADMIN_MAINT_ON:
 	case RESTARTER_EVENT_TYPE_ADMIN_MAINT_ON_IMMEDIATE:
 	case RESTARTER_EVENT_TYPE_ADMIN_MAINT_OFF:
 	case RESTARTER_EVENT_TYPE_ADMIN_REFRESH:
+	case RESTARTER_EVENT_TYPE_ADMIN_RESTORE:
 	case RESTARTER_EVENT_TYPE_ADMIN_DEGRADED:
+	case RESTARTER_EVENT_TYPE_ADMIN_DEGRADE_IMMEDIATE:
 	case RESTARTER_EVENT_TYPE_ADMIN_RESTART:
 		return (1);
 	default:
@@ -1984,6 +2057,8 @@ static void *
 restarter_event_thread(void *unused)
 {
 	scf_handle_t *h;
+
+	(void) pthread_setname_np(pthread_self(), "restarter_event");
 
 	/*
 	 * This is a new thread, and thus, gets its own handle
@@ -2084,14 +2159,6 @@ nolookup:
 			MUTEX_LOCK(&ru->restarter_update_lock);
 		}
 	}
-
-	/*
-	 * Unreachable for now -- there's currently no graceful cleanup
-	 * called on exit().
-	 */
-	(void) scf_handle_unbind(h);
-	scf_handle_destroy(h);
-	return (NULL);
 }
 
 static restarter_inst_t *
@@ -2196,6 +2263,8 @@ restarter_contracts_event_thread(void *unused)
 	int fd, err;
 	scf_handle_t *local_handle;
 
+	(void) pthread_setname_np(pthread_self(), "restarter_contracts_event");
+
 	/*
 	 * Await graph load completion.  That is, stop here, until we've scanned
 	 * the repository for contract - instance associations.
@@ -2271,7 +2340,7 @@ restarter_contracts_event_thread(void *unused)
 		startd_close(sfd);
 
 		/*
-		 * svc.configd(1M) restart handling performed by the
+		 * svc.configd(8) restart handling performed by the
 		 * fork_configd_thread.  We don't acknowledge, as that thread
 		 * will do so.
 		 */
@@ -2367,7 +2436,6 @@ static const char *timeout_ovr_svcs[] = {
 	"svc:/network/loopback:default",
 	"svc:/network/physical:default",
 	"svc:/system/device/local:default",
-	"svc:/system/metainit:default",
 	"svc:/system/filesystem/usr:default",
 	"svc:/system/filesystem/minimal:default",
 	"svc:/system/filesystem/local:default",
@@ -2545,6 +2613,8 @@ restarter_timeouts_event_thread(void *unused)
 	 * the necessary processing every second, as long as the queue
 	 * is not empty.
 	 */
+
+	(void) pthread_setname_np(pthread_self(), "restarter_timeouts_event");
 
 	/*CONSTCOND*/
 	while (1) {

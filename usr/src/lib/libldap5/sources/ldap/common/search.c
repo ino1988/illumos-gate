@@ -1,9 +1,9 @@
 /*
  * Copyright 2001-2002 Sun Microsystems, Inc.  All rights reserved.
  * Use is subject to license terms.
+ *
+ * Copyright 2017 Nexenta Systems, Inc.  All rights reserved.
  */
-
-#pragma ident	"%Z%%M%	%I%	%E% SMI"
 
 
 /*
@@ -36,7 +36,7 @@
  */
 
 #if 0
-#ifndef lint 
+#ifndef lint
 static char copyright[] = "@(#) Copyright (c) 1990 Regents of the University of Michigan.\nAll rights reserved.\n";
 #endif
 #endif
@@ -59,7 +59,7 @@ static int put_simple_filter( BerElement *ber, char *str );
 static int put_substring_filter( BerElement *ber, char *type,
 	char *str );
 static int put_filter_list( BerElement *ber, char *str );
-static int nsldapi_search_s( LDAP *ld, const char *base, int scope, 
+static int nsldapi_search_s( LDAP *ld, const char *base, int scope,
 	const char *filter, char **attrs, int attrsonly,
 	LDAPControl **serverctrls, LDAPControl **clientctrls,
 	struct timeval *localtimeoutp, int timelimit, int sizelimit,
@@ -267,11 +267,11 @@ nsldapi_timeval2ldaplimit( struct timeval *timeoutp, int defaultvalue )
 /* returns an LDAP error code and also sets it in ld */
 int
 nsldapi_build_search_req(
-    LDAP		*ld, 
-    const char		*base, 
-    int			scope, 
+    LDAP		*ld,
+    const char		*base,
+    int			scope,
     const char		*filter,
-    char		**attrs, 
+    char		**attrs,
     int			attrsonly,
     LDAPControl		**serverctrls,
     LDAPControl		**clientctrls,	/* not used for anything yet */
@@ -405,10 +405,10 @@ find_right_paren( char *s )
 
 static char *
 put_complex_filter(
-    BerElement		*ber, 
-    char		*str, 
-    ber_tag_t		tag, 
-    int			not 
+    BerElement		*ber,
+    char		*str,
+    ber_tag_t		tag,
+    int			not
 )
 {
 	char	*next;
@@ -798,12 +798,22 @@ free_and_return:
 static int
 unescape_filterval( char *val )
 {
-	int	escape, firstdigit, ival; 
+	int	escape, firstdigit, ival;
 	char	*s, *d;
 
 	escape = 0;
 	for ( s = d = val; *s; s++ ) {
 		if ( escape ) {
+			/*
+			 * need to leave escaped comma as-is, i.e.
+			 * val="CN=Last\, First,OU=..."
+			 */
+			if (*s == ',') {
+				*d++ = '\\';
+				*d++ = *s;
+				escape = 0;
+				continue;
+			}
 			/*
 			 * first try LDAPv3 escape (hexadecimal) sequence
 			 */
@@ -906,13 +916,13 @@ put_substring_filter( BerElement *ber, char *type, char *val )
 int
 LDAP_CALL
 ldap_search_st(
-    LDAP		*ld, 
-    const char 		*base, 
-    int 		scope, 
-    const char 		*filter, 
+    LDAP		*ld,
+    const char 		*base,
+    int 		scope,
+    const char 		*filter,
     char 		**attrs,
-    int 		attrsonly, 
-    struct timeval	*timeout, 
+    int 		attrsonly,
+    struct timeval	*timeout,
     LDAPMessage 	**res
 )
 {
@@ -923,12 +933,12 @@ ldap_search_st(
 int
 LDAP_CALL
 ldap_search_s(
-    LDAP	*ld, 
-    const char 	*base, 
-    int 	scope, 
-    const char 	*filter, 
+    LDAP	*ld,
+    const char 	*base,
+    int 	scope,
+    const char 	*filter,
     char 	**attrs,
-    int		attrsonly, 
+    int		attrsonly,
     LDAPMessage	**res
 )
 {
@@ -938,12 +948,12 @@ ldap_search_s(
 
 int LDAP_CALL
 ldap_search_ext_s(
-    LDAP		*ld, 
-    const char 		*base, 
-    int 		scope, 
-    const char 		*filter, 
+    LDAP		*ld,
+    const char 		*base,
+    int 		scope,
+    const char 		*filter,
     char 		**attrs,
-    int			attrsonly, 
+    int			attrsonly,
     LDAPControl		**serverctrls,
     LDAPControl		**clientctrls,
     struct timeval	*timeoutp,
@@ -957,14 +967,14 @@ ldap_search_ext_s(
 }
 
 
-static int 
+static int
 nsldapi_search_s(
-    LDAP		*ld, 
-    const char 		*base, 
-    int 		scope, 
-    const char 		*filter, 
+    LDAP		*ld,
+    const char 		*base,
+    int 		scope,
+    const char 		*filter,
     char 		**attrs,
-    int			attrsonly, 
+    int			attrsonly,
     LDAPControl		**serverctrls,
     LDAPControl		**clientctrls,
     struct timeval	*localtimeoutp,

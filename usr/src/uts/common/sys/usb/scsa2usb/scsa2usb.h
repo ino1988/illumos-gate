@@ -20,6 +20,9 @@
  *
  * Copyright 2010 Sun Microsystems, Inc.  All rights reserved.
  * Use is subject to license terms.
+ *
+ * Copyright 2019, Joyent, Inc.
+ * Copyright 2019 Joshua M. Clulow <josh@sysmgr.org>
  */
 
 #ifndef _SYS_USB_SCSA2USB_H
@@ -53,7 +56,9 @@ extern "C" {
  */
 #define	SCSA2USB_MAX_BULK_XFER_SIZE	(64 * 1024)
 
-/* Blacklist some vendors whose devices could cause problems */
+/*
+ * Identify devices with quirks of implementation that we need to work around:
+ */
 #define	MS_HAGIWARA_SYS_COM_VID	0x693	/* VendorId of Hagiwara Sys-Com */
 #define	MS_HAGIWARA_SYSCOM_PID1	0x1	/* PID for SmartMedia(SM) device */
 #define	MS_HAGIWARA_SYSCOM_PID2	0x3	/* PID for CompactFlash(CF) device */
@@ -122,6 +127,13 @@ extern "C" {
 #define	MS_WD_PID   0x1001  /* PID for Western Digital USB External HDD */
 
 /*
+ * The virtual CD-ROM device emulated by at least some Insyde BMCs is not
+ * completely implemented.  It hangs when a MODE SENSE command is sent.
+ */
+#define	MS_INSYDE_VID		0xb1f	/* Vendor: Insyde Software Corp */
+#define	MS_INSYDE_PID_CDROM	0x03ea	/* Product: BMC Virtual CD-ROM */
+
+/*
  * The AMI virtual floppy device is not a real USB storage device, but
  * emulated by the SP firmware shipped together with important Sun x86
  * products such as Galaxy and Thumper platforms. The device causes
@@ -140,7 +152,7 @@ extern "C" {
  * Reducing timeout value to 1 second can help a little bit, but the delay
  * is still noticeable, because the target driver would make many retries
  * for this command. It is not desirable to mess with the target driver
- * for a broken USB device. So adding the device to the scsa2usb blacklist
+ * for a broken USB device. So adding the device to the scsa2usb quirks list
  * is the best choice we have.
  *
  * It is found that the READ CAPACITY failure only happens when there is
@@ -181,10 +193,10 @@ extern "C" {
  * SCSA2USB_ATTRS_NO_MEDIA_CHECK: AMI Virtual Floppy devices need to
  *		check if media is ready before issuing READ CAPACITY.
  * SCSA2USB_ATTRS_NO_CAP_ADJUST: Some devices return total logical block number
- * 		instead of highest logical block address on READ_CAPACITY cmd.
+ *		instead of highest logical block address on READ_CAPACITY cmd.
  *
  * NOTE: If a device simply STALLs the GET_MAX_LUN BO class-specific command
- * and recovers then it will not be added to the scsa2usb_blacklist[] table
+ * and recovers then it will not be added to the scsa2usb_quirks[] table
  * in scsa2usb.c. The other attributes will not be taken of the table unless
  * their inclusion causes a recovery and retries (thus seriously affecting
  * the driver performance).
@@ -278,7 +290,7 @@ typedef struct scsa2usb_ov {
 typedef struct scsa2usb_state {
 	int			scsa2usb_instance;	/* Instance number    */
 	int			scsa2usb_dev_state;	/* USB device state   */
-	int			scsa2usb_flags; 	/* Per instance flags */
+	int			scsa2usb_flags;		/* Per instance flags */
 	int			scsa2usb_intfc_num;	/* Interface number   */
 	dev_info_t		*scsa2usb_dip;		/* Per device. info   */
 	scsa2usb_power_t	*scsa2usb_pm;		/* PM state info */
@@ -303,9 +315,9 @@ typedef struct scsa2usb_state {
 	struct scsi_inquiry	scsa2usb_lun_inquiry[SCSA2USB_MAX_LUNS];
 						/* store inquiry per LUN  */
 	usb_if_descr_t		scsa2usb_intfc_descr;	/* Interface descr    */
-	usb_ep_descr_t		scsa2usb_bulkin_ept;	/* Bulk In descriptor */
-	usb_ep_descr_t		scsa2usb_bulkout_ept;	/* Bulkout descriptor */
-	usb_ep_descr_t		scsa2usb_intr_ept;	/* Intr ept descr */
+	usb_ep_xdescr_t		scsa2usb_bulkin_xept;	/* Bulk In descriptor */
+	usb_ep_xdescr_t		scsa2usb_bulkout_xept;	/* Bulkout descriptor */
+	usb_ep_xdescr_t		scsa2usb_intr_xept;	/* Intr ept descr */
 
 	usb_pipe_handle_t	scsa2usb_default_pipe;	/* Default pipe	Hndle */
 	usb_pipe_handle_t	scsa2usb_intr_pipe;	/* Intr polling Hndle */
@@ -351,6 +363,15 @@ typedef struct scsa2usb_state {
 	uint8_t			scsa2usb_clones[SCSA2USB_MAX_CLONE];
 } scsa2usb_state_t;
 
+/*
+ * These macros were added as part of updating scsa2usb to support USB 3.0 and
+ * newer devices to minimize driver changes. There's no reason these can't be
+ * expanded by someone who wants to.
+ */
+#define	scsa2usb_bulkin_ept	scsa2usb_bulkin_xept.uex_ep
+#define	scsa2usb_bulkout_ept	scsa2usb_bulkout_xept.uex_ep
+#define	scsa2usb_intr_ept	scsa2usb_intr_xept.uex_ep
+
 
 /* for warlock */
 _NOTE(MUTEX_PROTECTS_DATA(scsa2usb_state::scsa2usb_mutex, scsa2usb_state))
@@ -358,13 +379,10 @@ _NOTE(DATA_READABLE_WITHOUT_LOCK(scsa2usb_state::scsa2usb_instance))
 _NOTE(DATA_READABLE_WITHOUT_LOCK(scsa2usb_state::scsa2usb_dip))
 _NOTE(DATA_READABLE_WITHOUT_LOCK(scsa2usb_state::scsa2usb_arq_cmd))
 _NOTE(DATA_READABLE_WITHOUT_LOCK(scsa2usb_state::scsa2usb_arq_bp))
-_NOTE(DATA_READABLE_WITHOUT_LOCK(scsa2usb_state::scsa2usb_bulkin_ept))
-_NOTE(DATA_READABLE_WITHOUT_LOCK(scsa2usb_state::scsa2usb_bulkout_ept))
 _NOTE(DATA_READABLE_WITHOUT_LOCK(scsa2usb_state::scsa2usb_intr_ept))
 _NOTE(DATA_READABLE_WITHOUT_LOCK(scsa2usb_state::scsa2usb_default_pipe))
 _NOTE(DATA_READABLE_WITHOUT_LOCK(scsa2usb_state::scsa2usb_intr_pipe))
 _NOTE(DATA_READABLE_WITHOUT_LOCK(scsa2usb_state::scsa2usb_bulkin_pipe))
-_NOTE(DATA_READABLE_WITHOUT_LOCK(scsa2usb_state::scsa2usb_bulkout_pipe))
 _NOTE(DATA_READABLE_WITHOUT_LOCK(scsa2usb_state::scsa2usb_log_handle))
 _NOTE(DATA_READABLE_WITHOUT_LOCK(scsa2usb_state::scsa2usb_intfc_num))
 _NOTE(DATA_READABLE_WITHOUT_LOCK(scsa2usb_state::scsa2usb_dev_data))
@@ -499,10 +517,12 @@ _NOTE(SCHEME_PROTECTS_DATA("unshared data", usb_bulk_req_t))
 	FORMG0COUNT(((union scsi_cdb *)(pktp)->pkt_cdbp), (cnt))
 
 
-/* transport related */
-#define	SCSA2USB_JUST_ACCEPT	0
-#define	SCSA2USB_TRANSPORT	1
-#define	SCSA2USB_REJECT		-1
+/*
+ * Transport dispositions for commands:
+ */
+#define	SCSA2USB_JUST_ACCEPT	0	/* Simulate command without device */
+#define	SCSA2USB_TRANSPORT	1	/* Send the command to the device */
+#define	SCSA2USB_REJECT		-1	/* Reject with immediate fatal error */
 
 /*
  * The scsa2usb_cpr_info data structure is used for cpr related
@@ -531,14 +551,14 @@ typedef struct scsa2usb_cmd {
 	int			cmd_timeout;		/* copy of pkt_time */
 	uchar_t			cmd_cdb[SCSI_CDB_SIZE];	/* CDB */
 	uchar_t			cmd_dir;		/* direction */
-	uchar_t			cmd_actual_len; 	/* cdb len */
+	uchar_t			cmd_actual_len;		/* cdb len */
 	uchar_t			cmd_cdblen;		/* requested  cdb len */
 	struct scsi_arq_status	cmd_scb;		/* status, w/ arq */
 
 	/* used in multiple xfers */
 	size_t			cmd_total_xfercount;	/* total xfer val */
 	size_t			cmd_offset;		/* offset into buf */
-	int			cmd_lba;		/* current xfer lba */
+	uint64_t		cmd_lba;		/* current xfer lba */
 	int			cmd_done;		/* command done? */
 	int			cmd_blksize;		/* block size */
 	usba_list_entry_t	cmd_waitQ;		/* waitQ element */
@@ -559,7 +579,9 @@ _NOTE(SCHEME_PROTECTS_DATA("stable data", scsi_device scsi_address))
 #define	SCSA2USB_LEN_0		7		/* LEN[0] field */
 #define	SCSA2USB_LEN_1		8		/* LEN[1] field */
 
-/* macros to calculate LBA for 6/10/12-byte commands */
+/*
+ * Extract LBA and length from 6, 10, 12, and 16-byte commands:
+ */
 #define	SCSA2USB_LBA_6BYTE(pkt) \
 	(((pkt)->pkt_cdbp[1] & 0x1f) << 16) + \
 	((pkt)->pkt_cdbp[2] << 8) + (pkt)->pkt_cdbp[3]
@@ -578,9 +600,22 @@ _NOTE(SCHEME_PROTECTS_DATA("stable data", scsi_device scsi_address))
 	((pkt)->pkt_cdbp[2] << 24) + ((pkt)->pkt_cdbp[3] << 16) + \
 	    ((pkt)->pkt_cdbp[4] << 8) +  (pkt)->pkt_cdbp[5]
 
+#define	SCSA2USB_LEN_16BYTE(pkt) \
+	(((pkt)->pkt_cdbp[10] << 24) + ((pkt)->pkt_cdbp[11] << 16) + \
+	    ((pkt)->pkt_cdbp[12] << 8) + (pkt)->pkt_cdbp[13])
+#define	SCSA2USB_LBA_16BYTE(pkt) ((uint64_t)( \
+	((uint64_t)(pkt)->pkt_cdbp[2] << 56) + \
+	((uint64_t)(pkt)->pkt_cdbp[3] << 48) + \
+	((uint64_t)(pkt)->pkt_cdbp[4] << 40) + \
+	((uint64_t)(pkt)->pkt_cdbp[5] << 32) + \
+	((uint64_t)(pkt)->pkt_cdbp[6] << 24) + \
+	((uint64_t)(pkt)->pkt_cdbp[7] << 16) + \
+	((uint64_t)(pkt)->pkt_cdbp[8] << 8) + \
+	((uint64_t)(pkt)->pkt_cdbp[9])))
+
 /* macros to convert a pkt to cmd and vice-versa */
 #define	PKT2CMD(pkt)		((scsa2usb_cmd_t *)(pkt)->pkt_ha_private)
-#define	CMD2PKT(sp)		((sp)->cmd_pkt
+#define	CMD2PKT(sp)		((sp)->cmd_pkt)
 
 /* bulk pipe default timeout value - how long the command to be tried? */
 #define	SCSA2USB_BULK_PIPE_TIMEOUT	(2 * USB_PIPE_TIMEOUT)
@@ -647,7 +682,7 @@ typedef struct scsa2usb_read_cap {
 #ifdef	DEBUG
 #define	SCSA2USB_PRINT_CDB	scsa2usb_print_cdb
 #else
-#define	SCSA2USB_PRINT_CDB	0 &&
+#define	SCSA2USB_PRINT_CDB(...)	(void)(0)
 #endif
 
 /* ugen support */

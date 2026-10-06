@@ -22,14 +22,15 @@
 /*
  * Copyright 2007 Sun Microsystems, Inc.  All rights reserved.
  * Use is subject to license terms.
+ *
+ * Copyright 2026 Oxide Computer Company
  */
-
-#pragma ident	"%Z%%M%	%I%	%E% SMI"
 
 #include <sys/systm.h>
 #include <sys/cmn_err.h>
 #include <sys/kobj.h>
 #include <sys/kobj_impl.h>
+#include <zlib.h>
 
 struct zchdr {
 	uint_t zch_magic;
@@ -38,12 +39,11 @@ struct zchdr {
 
 #define	ZCH_MAGIC	0x3cc13cc1
 
-/*ARGSUSED*/
-void *
-zcalloc(void *opaque, uint_t items, uint_t size)
+static void *
+zcalloc_impl(uint_t items, uint_t size, int kmflag)
 {
 	size_t nbytes = sizeof (struct zchdr) + items * size;
-	struct zchdr *z = kobj_zalloc(nbytes, KM_NOWAIT|KM_TMP);
+	struct zchdr *z = kobj_zalloc(nbytes, kmflag);
 
 	if (z == NULL)
 		return (NULL);
@@ -54,9 +54,27 @@ zcalloc(void *opaque, uint_t items, uint_t size)
 	return (z + 1);
 }
 
-/*ARGSUSED*/
+
+void *
+zcalloc(void *opaque __unused, uint_t items, uint_t size)
+{
+	return (zcalloc_impl(items, size, KM_NOWAIT|KM_TMP));
+}
+
+/*
+ * Variant of zcalloc which uses KM_SLEEP so callers will block until memory
+ * becomes available instead of failing immediately.  This is useful for
+ * decompression paths which are expected to wait for memory (e.g. during
+ * ZFS reads) rather than fail and return errors.
+ */
+void *
+zcalloc_sleep(void *opaque __unused, uint_t items, uint_t size)
+{
+	return (zcalloc_impl(items, size, KM_SLEEP));
+}
+
 void
-zcfree(void *opaque, void *ptr)
+zcfree(void *opaque __unused, void *ptr)
 {
 	struct zchdr *z = ((struct zchdr *)ptr) - 1;
 
@@ -64,22 +82,4 @@ zcfree(void *opaque, void *ptr)
 		panic("zcfree region corrupt: hdr=%p ptr=%p", (void *)z, ptr);
 
 	kobj_free(z, z->zch_size);
-}
-
-void
-zmemcpy(void *dest, const void *source, uint_t len)
-{
-	bcopy(source, dest, len);
-}
-
-int
-zmemcmp(const void *s1, const void *s2, uint_t len)
-{
-	return (bcmp(s1, s2, len));
-}
-
-void
-zmemzero(void *dest, uint_t len)
-{
-	bzero(dest, len);
 }

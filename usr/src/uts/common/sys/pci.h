@@ -21,6 +21,8 @@
 /*
  * Copyright 2009 Sun Microsystems, Inc.  All rights reserved.
  * Use is subject to license terms.
+ * Copyright 2019, Joyent, Inc.
+ * Copyright 2025 Oxide Computer Company
  */
 
 #ifndef	_SYS_PCI_H
@@ -29,6 +31,9 @@
 #ifdef	__cplusplus
 extern "C" {
 #endif
+
+#include <sys/stdint.h>
+#include <sys/types.h>
 
 /*
  * PCI Configuration Header offsets
@@ -105,7 +110,15 @@ extern "C" {
 #define	PCI_BCNF_BCNTRL_B2B_ENAB	0x0080
 
 #define	PCI_BCNF_IO_MASK	0xf0
+#define	PCI_BCNF_IO_SHIFT	8
+#define	PCI_BCNF_IO_LIMIT_BITS	0xfff
 #define	PCI_BCNF_MEM_MASK	0xfff0
+#define	PCI_BCNF_MEM_SHIFT	16
+#define	PCI_BCNF_MEM_LIMIT_BITS	0xfffff
+#define	PCI_BCNF_ADDR_MASK	0x000f
+
+#define	PCI_BCNF_IO_32BIT	0x01
+#define	PCI_BCNF_PF_MEM_64BIT	0x01
 
 /*
  * Header type 2 (Cardbus) offsets
@@ -161,6 +174,7 @@ extern "C" {
 /*
  * PCI status register bits
  */
+#define	PCI_STAT_READY		0x1	/* Immediate Readiness */
 #define	PCI_STAT_INTR		0x8	/* Interrupt state */
 #define	PCI_STAT_CAP		0x10	/* Implements Capabilities */
 #define	PCI_STAT_66MHZ		0x20	/* 66 MHz capable */
@@ -228,6 +242,7 @@ extern "C" {
 #define	PCI_MASS_ATA		0x5	/* ATA Controller */
 #define	PCI_MASS_SATA		0x6	/* Serial ATA */
 #define	PCI_MASS_SAS		0x7	/* Serial Attached SCSI (SAS) Cntrlr */
+#define	PCI_MASS_NVME		0x8	/* Non-Volatile memory controller */
 #define	PCI_MASS_OTHER		0x80	/* Other Mass Storage Controller */
 
 /*
@@ -480,23 +495,23 @@ extern "C" {
 /*
  * Programming interfaces for class 0xC / subclass 0x0 (Firewire)
  */
-#define	PCI_SERIAL_FIRE_WIRE  		0x00	/* IEEE 1394 (Firewire) */
-#define	PCI_SERIAL_FIRE_1394_HCI 	0x10	/* 1394 OpenHCI Host Cntrlr */
+#define	PCI_SERIAL_FIRE_WIRE		0x00	/* IEEE 1394 (Firewire) */
+#define	PCI_SERIAL_FIRE_1394_HCI	0x10	/* 1394 OpenHCI Host Cntrlr */
 
 /*
  * Programming interfaces for class 0xC / subclass 0x3 (USB controller)
  */
-#define	PCI_SERIAL_USB_IF_UHCI 		0x00	/* UHCI Compliant */
-#define	PCI_SERIAL_USB_IF_OHCI 		0x10	/* OHCI Compliant */
-#define	PCI_SERIAL_USB_IF_EHCI 		0x20	/* EHCI Compliant */
-#define	PCI_SERIAL_USB_IF_GENERIC 	0x80	/* no specific HCD */
-#define	PCI_SERIAL_USB_IF_DEVICE 	0xFE	/* not a HCD */
+#define	PCI_SERIAL_USB_IF_UHCI		0x00	/* UHCI Compliant */
+#define	PCI_SERIAL_USB_IF_OHCI		0x10	/* OHCI Compliant */
+#define	PCI_SERIAL_USB_IF_EHCI		0x20	/* EHCI Compliant */
+#define	PCI_SERIAL_USB_IF_GENERIC	0x80	/* no specific HCD */
+#define	PCI_SERIAL_USB_IF_DEVICE	0xFE	/* not a HCD */
 
 /*
  * Programming interfaces for class 0xC / subclass 0x7 (IPMI controller)
  */
-#define	PCI_SERIAL_IPMI_IF_SMIC 	0x0	/* SMIC Interface */
-#define	PCI_SERIAL_IPMI_IF_KBD 		0x1	/* Keyboard Ctrl Style Intfc */
+#define	PCI_SERIAL_IPMI_IF_SMIC		0x0	/* SMIC Interface */
+#define	PCI_SERIAL_IPMI_IF_KBD		0x1	/* Keyboard Ctrl Style Intfc */
 #define	PCI_SERIAL_IPMI_IF_BTI		0x2	/* Block Transfer Interface */
 
 /*
@@ -514,8 +529,8 @@ extern "C" {
 /*
  * Programming interfaces for class 0xD / subclass 0x1 (Consumer IR controller)
  */
-#define	PCI_WIRELESS_IR_CONSUMER 	0x00	/* Consumer IR Controller */
-#define	PCI_WIRELESS_IR_UWB_RC 		0x10	/* UWB Radio Controller */
+#define	PCI_WIRELESS_IR_CONSUMER	0x00	/* Consumer IR Controller */
+#define	PCI_WIRELESS_IR_UWB_RC		0x10	/* UWB Radio Controller */
 
 /*
  * PCI Sub-class codes - base class 0xE (Intelligent I/O controllers)
@@ -574,6 +589,7 @@ extern "C" {
 #define	PCI_BASE_TYPE_M		0x00000006  /* type indicator mask */
 #define	PCI_BASE_PREF_M		0x00000008  /* prefetch mask */
 #define	PCI_BASE_M_ADDR_M	0xfffffff0  /* memory address mask */
+#define	PCI_BASE_M_ADDR64_M	0xfffffffffffffff0ULL /* 64bit mem addr mask */
 #define	PCI_BASE_IO_ADDR_M	0xfffffffe  /* I/O address mask */
 
 #define	PCI_BASE_ROM_ADDR_M	0xfffff800  /* ROM address mask */
@@ -611,6 +627,8 @@ extern "C" {
 #define	PCI_CAP_ID_MSI_X	0x11	/* MSI-X supported */
 #define	PCI_CAP_ID_SATA		0x12	/* SATA Data/Index Config supported */
 #define	PCI_CAP_ID_FLR		0x13	/* Function Level Reset supported */
+#define	PCI_CAP_ID_EA		0x14	/* Enhanced Allocation */
+#define	PCI_CAP_ID_FPB		0x15	/* Flattening Portal Bridge */
 
 /*
  * Capability next entry pointer values
@@ -630,6 +648,7 @@ extern "C" {
  */
 #define	PCI_PMCAP_VER_1_0	0x1	/* PCI PM spec 1.0 */
 #define	PCI_PMCAP_VER_1_1	0x2	/* PCI PM spec 1.1 */
+#define	PCI_PMCAP_VER_1_2	0x3	/* PCI PM spec 1.2 */
 #define	PCI_PMCAP_VER_MASK	0x7	/* version mask */
 #define	PCI_PMCAP_PME_CLOCK	0x8	/* needs PCI clock for PME */
 #define	PCI_PMCAP_DSI		0x20	/* needs device specific init */
@@ -659,6 +678,7 @@ extern "C" {
 #define	PCI_PMCSR_D2			0x2	/* power state D2 */
 #define	PCI_PMCSR_D3HOT			0x3	/* power state D3hot */
 #define	PCI_PMCSR_STATE_MASK		0x3	/* power state mask */
+#define	PCI_PMCSR_NOSOFTRESET		0x8	/* No Soft Reset */
 #define	PCI_PMCSR_PME_EN		0x100	/* enable PME assertion */
 #define	PCI_PMCSR_DSEL_D0_PWR_C		0x0	/* D0 power consumed */
 #define	PCI_PMCSR_DSEL_D1_PWR_C		0x200	/* D1 power consumed */
@@ -899,13 +919,16 @@ typedef struct pcix_attr {
 #define	PCI_MSI_CTRL		0x02	/* MSI control register, 2 bytes */
 #define	PCI_MSI_ADDR_OFFSET	0x04	/* MSI 32-bit msg address, 4 bytes */
 #define	PCI_MSI_32BIT_DATA	0x08	/* MSI 32-bit msg data, 2 bytes */
+#define	PCI_MSI_32BIT_EXTDATA	0x0A	/* MSI 32-bit msg ext data, 2 bytes */
 #define	PCI_MSI_32BIT_MASK	0x0C	/* MSI 32-bit mask bits, 4 bytes */
 #define	PCI_MSI_32BIT_PENDING	0x10	/* MSI 32-bit pending bits, 4 bytes */
 
 /*
  * PCI Message Signalled Interrupts (MSI) capability entry offsets for 64-bit
  */
+#define	PCI_MSI_64BIT_ADDR	0x08	/* MSI 64-bit upper address, 4 bytes */
 #define	PCI_MSI_64BIT_DATA	0x0C	/* MSI 64-bit msg data, 2 bytes */
+#define	PCI_MSI_64BIT_EXTDATA	0x0E	/* MSI 64-bit msg ext data, 2 bytes */
 #define	PCI_MSI_64BIT_MASKBITS	0x10	/* MSI 64-bit mask bits, 4 bytes */
 #define	PCI_MSI_64BIT_PENDING	0x14	/* MSI 64-bit pending bits, 4 bytes */
 
@@ -919,6 +942,8 @@ typedef struct pcix_attr {
 #define	PCI_MSI_MME_SHIFT	0x4	/* Shift for MME bits */
 #define	PCI_MSI_64BIT_MASK	0x0080	/* 64bit support mask in MSI ctrl reg */
 #define	PCI_MSI_PVM_MASK	0x0100	/* PVM support mask in MSI ctrl reg */
+#define	PCI_MSI_EMD_MASK	0x0200	/* EMD Capable Mask */
+#define	PCI_MSI_EMD_ENABLE	0x0400	/* EMD Enable bit */
 
 /*
  * PCI Extended Message Signalled Interrupts (MSI-X) capability entry offsets
@@ -1043,6 +1068,11 @@ typedef struct pcix_attr {
 
 #define	PCI_HTCAP_FUNCEXT_LEN_MASK		0xFF
 
+/*
+ * PCI Bridge Subsystem Capability (PCI_CAP_ID_P2P_SUBSYS)
+ */
+#define	PCI_SUBSYSCAP_SUBVID	0x4
+#define	PCI_SUBSYSCAP_SUBSYS	0x6
 
 /*
  * other interesting PCI constants
@@ -1172,6 +1202,11 @@ typedef struct pci_phys_spec pci_regspec_t;
 #define	PCI_REG_ADDR_G(x)	(((x) & PCI_REG_ADDR_M) >> PCI_REG_ADDR_SHIFT)
 #define	PCI_REG_BDFR_G(x)	((x) & PCI_REG_BDFR_M)
 
+#define	PCI_REG_MAKE_BDFR(b, d, f, r)	( \
+	    (uint_t)(b) << PCI_REG_BUS_SHIFT | \
+	    (uint_t)(d) << PCI_REG_DEV_SHIFT | \
+	    (uint_t)(f) << PCI_REG_FUNC_SHIFT | (r))
+
 /*
  * PCI bit encodings of pci_phys_hi of PCI 1275 address cell.
  */
@@ -1233,6 +1268,14 @@ typedef struct pci_phys_spec pci_regspec_t;
  * the driver or the OBP.
  */
 #define	PCI_BUS_CONF_MAP_PROP	"pci-conf-indirect"
+
+/*
+ * PCI returns all 1s for an invalid read.
+ */
+#define	PCI_EINVAL8	0xff
+#define	PCI_EINVAL16	0xffff
+#define	PCI_EINVAL32	0xffffffff
+#define	PCI_EINVAL64	0xffffffffffffffffULL
 
 #ifdef	__cplusplus
 }

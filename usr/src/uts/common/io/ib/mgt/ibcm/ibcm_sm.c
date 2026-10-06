@@ -812,7 +812,7 @@ ibcm_recv_timeout_cb(void *args)
 		ibcm_recv_tasks++;
 		mutex_exit(&ibcm_recv_mutex);
 		if (taskq_dispatch(ibcm_taskq, ibcm_recv_task, tq,
-		    TQ_NOQUEUE | TQ_NOSLEEP) == 0) {
+		    TQ_NOQUEUE | TQ_NOSLEEP) == TASKQID_INVALID) {
 			mutex_enter(&ibcm_recv_mutex);
 			if (--ibcm_recv_tasks == 0) {
 				(void) timeout(ibcm_recv_timeout_cb, tq, 1);
@@ -873,7 +873,8 @@ ibcm_recv_add_one(ibmf_handle_t ibmf_handle, ibmf_msg_t *msgp, void *args)
 		tq->tq_args = args;
 		_NOTE(NOW_VISIBLE_TO_OTHER_THREADS(*tq))
 		if (taskq_dispatch(ibcm_taskq, ibcm_recv_task, tq,
-		    TQ_NOQUEUE | TQ_NOSLEEP) == 0) {	/* dispatch failed */
+		    TQ_NOQUEUE | TQ_NOSLEEP) == TASKQID_INVALID) {
+			/* dispatch failed */
 			mutex_enter(&ibcm_recv_mutex);
 			if (--ibcm_recv_tasks == 0) {
 				/* try the dispatch again, after a tick */
@@ -917,7 +918,7 @@ ibcm_recv_cb(ibmf_handle_t ibmf_handle, ibmf_msg_t *msgp, void *args)
  *	Called from ibcm_process_incoming_mad on reception of a REQ message
  *
  * Description:
- * 	If it a new REQ (not duplicate)
+ *	If it a new REQ (not duplicate)
  *		creates a new state structure in passive connection mode
  *		populate state structure fields
  *		inserts state structure in hca active and passive trees
@@ -2979,7 +2980,7 @@ ibcm_resend_mra_mad(ibcm_state_data_t *statep)
 	statep->send_mad_flags |= IBCM_MRA_POST_BUSY;
 
 	statep->mra_time = gethrtime();
-	IBCM_REF_CNT_INCR(statep); 	/* for non-blocking MRA post */
+	IBCM_REF_CNT_INCR(statep);	/* for non-blocking MRA post */
 	/* Exit the statep mutex, before sending the MAD */
 	mutex_exit(&statep->state_mutex);
 
@@ -3349,7 +3350,7 @@ ibcm_post_rtu_mad(ibcm_state_data_t *statep)
 
 /*
  * ibcm_process_abort:
- * 	Processes abort, if client requested abort connection attempt
+ *	Processes abort, if client requested abort connection attempt
  *
  * INPUTS:
  *	statep	- pointer to ibcm_state_data_t is passed
@@ -3490,7 +3491,8 @@ ibcm_timeout_cb(void *arg)
 
 			/* if possible, do not slow down calling recycle func */
 			if (taskq_dispatch(ibcm_taskq, ibcm_process_rc_recycle,
-			    recycle_arg, TQ_NOQUEUE | TQ_NOSLEEP) == 0) {
+			    recycle_arg, TQ_NOQUEUE | TQ_NOSLEEP) ==
+			    TASKQID_INVALID) {
 
 				_NOTE(NOW_INVISIBLE_TO_OTHER_THREADS(
 				    statep->recycle_arg))
@@ -4203,8 +4205,8 @@ ibcm_add_ud_tlist(ibcm_ud_state_data_t *ud_statep)
 void
 ibcm_process_tlist()
 {
-	ibcm_state_data_t 	*statep;
-	ibcm_ud_state_data_t 	*ud_statep;
+	ibcm_state_data_t	*statep;
+	ibcm_ud_state_data_t	*ud_statep;
 	callb_cpr_t		cprinfo;
 
 	IBTF_DPRINTF_L5(cmlog, "ibcm_process_tlist: thread started");
@@ -5912,17 +5914,6 @@ ibcm_verify_req_gids_and_svcid(ibcm_state_data_t *statep,
 		ibt_ari_ip_t	ari_ip;
 		boolean_t	rdma_rej_mad = B_FALSE;
 
-		if (cm_req_msgp->req_private_data == NULL) {
-			mutex_exit(&ibcm_svc_info_lock);
-
-			IBTF_DPRINTF_L2(cmlog, "ibcm_verify_req_gids_and_svcid:"
-			    " RDMA CM IP REQ Priv Data is NULL");
-
-			/* Send a REJ with CONSUMER REJ */
-			ibcm_post_rej_mad(statep, IBT_CM_CONSUMER,
-			    IBT_CM_FAILURE_REQ, NULL, 0);
-			return (IBCM_FAILURE);
-		}
 		ip_data = (ibcm_ip_pvtdata_t *)cm_req_msgp->req_private_data;
 
 		bzero(&ari_ip, sizeof (ibt_ari_ip_t));
@@ -7347,7 +7338,7 @@ static void
 ibcm_copy_addl_rej(ibcm_state_data_t *statep, ibcm_rej_msg_t *rej_msgp,
     ibt_cm_conn_failed_t *failed)
 {
-	uint16_t 	rej_reason = b2h16(rej_msgp->rej_rejection_reason);
+	uint16_t	rej_reason = b2h16(rej_msgp->rej_rejection_reason);
 	uint8_t		ari_len = rej_msgp->rej_reject_info_len_plus >> 1;
 	ibcm_classportinfo_msg_t tclp;
 	ibt_arej_info_t	*cf_addl = &failed->cf_additional;

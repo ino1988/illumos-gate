@@ -26,7 +26,7 @@
 #
 
 #
-# Copyright (c) 2013 by Delphix. All rights reserved.
+# Copyright (c) 2013, 2016 by Delphix. All rights reserved.
 #
 
 . $STF_SUITE/include/libtest.shlib
@@ -37,14 +37,5 @@ verify_runnable "global"
 if ! verify_slog_support ; then
 	log_unsupported "This system doesn't support separate intent logs"
 fi
-
-if [[ -d $VDEV ]]; then
-	log_must $RM -rf $VDIR
-fi
-if [[ -d $VDEV2 ]]; then
-	log_must $RM -rf $VDIR2
-fi
-log_must $MKDIR -p $VDIR $VDIR2
-log_must $MKFILE $SIZE $VDEV $SDEV $LDEV $VDEV2 $SDEV2 $LDEV2
 
 log_pass

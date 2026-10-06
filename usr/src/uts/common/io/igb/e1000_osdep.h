@@ -51,30 +51,27 @@ extern "C" {
 #include <sys/pci_cap.h>
 #include <sys/atomic.h>
 #include <sys/note.h>
+#include <sys/stdbool.h>
 #include "igb_debug.h"
 
 #define	usec_delay(x)		drv_usecwait(x)
+#define	usec_delay_irq		usec_delay
 #define	msec_delay(x)		drv_usecwait(x * 1000)
 #define	msec_delay_irq		msec_delay
 
-#ifdef IGB_DEBUG
 #define	DEBUGOUT(S)		IGB_DEBUGLOG_0(NULL, S)
 #define	DEBUGOUT1(S, A)		IGB_DEBUGLOG_1(NULL, S, A)
 #define	DEBUGOUT2(S, A, B)	IGB_DEBUGLOG_2(NULL, S, A, B)
 #define	DEBUGOUT3(S, A, B, C)	IGB_DEBUGLOG_3(NULL, S, A, B, C)
-#else
-#define	DEBUGOUT(S)
-#define	DEBUGOUT1(S, A)
-#define	DEBUGOUT2(S, A, B)
-#define	DEBUGOUT3(S, A, B, C)
-#endif
 
-#define	DEBUGFUNC(f)
+#ifdef IGB_DEBUG
+#define	DEBUGFUNC(F)		IGB_DEBUGFUNC(F)
+#else
+#define	DEBUGFUNC(F)
+#endif
 
 #define	OS_DEP(hw)		((struct igb_osdep *)((hw)->back))
 
-#define	false			B_FALSE
-#define	true			B_TRUE
 #define	FALSE			false
 #define	TRUE			true
 
@@ -167,10 +164,9 @@ typedef	int16_t		s16;
 typedef	int32_t		s32;
 typedef	int64_t		s64;
 typedef uint8_t		u8;
-typedef	uint16_t 	u16;
+typedef	uint16_t	u16;
 typedef	uint32_t	u32;
 typedef	uint64_t	u64;
-typedef	boolean_t	bool;
 
 /*
  * igb only uses the first two of the ddi_acc_handle_t, the latter end up coming

@@ -20,6 +20,7 @@
 #
 #
 # Copyright (c) 2010, Oracle and/or its affiliates. All rights reserved.
+# Copyright 2019 OmniOS Community Edition (OmniOSce) Association.
 #
 
 include		../Makefile.com
@@ -30,14 +31,12 @@ LLDFLAGS =	$(LLDFLAGS64)
 CONVLIBDIR =	$(CONVLIBDIR64)
 ELFLIBDIR =	$(ELFLIBDIR64)
 LDDBGLIBDIR =	$(LDDBGLIBDIR64)
-LINTFLAGS64 +=	$(VAR_LINTFLAGS64)
 
 ROOTPROG =	$(ROOTPROG64)
 
 all:		$(PROG)
 
-package \
 install:	all $(ROOTPROG64) $(ROOTCCSBINLINK64)
 
 include		../Makefile.targ
-include		../../Makefile.sub.64
+include		$(SRC)/Makefile.master.64

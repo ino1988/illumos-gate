@@ -25,6 +25,11 @@
 # Use is subject to license terms.
 #
 
+#
+# Copyright (c) 2016 by Delphix. All rights reserved.
+# Copyright 2023 RackTop Systems, Inc.
+#
+
 . $STF_SUITE/tests/functional/acl/acl_common.kshlib
 
 #
@@ -35,7 +40,7 @@
 # STRATEGY:
 #	1. Separatedly verify file and directory was assigned read_acl/write_acl
 #	   by root and non-root user.
-#	2. Verify owner always can read and write acl, even deny.
+#	2. Verify owner can read and write acl.
 #	3. Verify group access permission, when group was assigned
 #	   read_acl/write_acl.
 #	4. Verify access permission, after everyone was assigned read_acl/write.
@@ -59,7 +64,7 @@ function read_ACL #<node> <user1> <user2> ...
 
 	shift
 	for user in $@; do
-		chgusr_exec $user $LS -vd $node > /dev/null 2>&1
+		chgusr_exec $user ls -vd $node > /dev/null 2>&1
 		ret=$?
 		(( ret != 0 )) && return $ret
 
@@ -81,7 +86,7 @@ function write_ACL #<node> <user1> <user2> ...
 		ret=$?;
 		(( ret != 0 )) && return $ret
 
-		chgusr_exec $user $CHMOD A0+owner@:read_data:allow $node
+		chgusr_exec $user chmod A0+owner@:read_data:allow $node
 		ret=$?
 		(( ret != 0 )) && return $ret
 
@@ -89,7 +94,7 @@ function write_ACL #<node> <user1> <user2> ...
 		ret=$?
 		(( ret != 0 )) && return $ret
 
-		chgusr_exec $user $CHMOD A0- $node
+		chgusr_exec $user chmod A0- $node
 		ret=$?
 		(( ret != 0 )) && return $ret
 
@@ -106,13 +111,22 @@ function write_ACL #<node> <user1> <user2> ...
 function check_owner #<node>
 {
 	typeset node=$1
+	typeset log
 
 	for acc in allow deny; do
+		if [[ $aclimplicit == on ||
+		    $acc == allow || $ZFS_ACL_CUR_USER == root ]]; then
+			log=log_must
+		else
+			log=log_mustnot
+		fi
 		log_must usr_exec \
-			$CHMOD A0+owner@:read_acl/write_acl:$acc $node
+			chmod A0+owner@:read_acl/write_acl:$acc $node
+		# at this time we can always read acl
 		log_must read_ACL $node $ZFS_ACL_CUR_USER
-		log_must write_ACL $node $ZFS_ACL_CUR_USER
-		log_must usr_exec $CHMOD A0- $node
+		$log write_ACL $node $ZFS_ACL_CUR_USER
+		# only root can remove write_acl:deny
+		log_must chgusr_exec root chmod A0- $node
 	done
 }
 
@@ -127,20 +141,22 @@ function check_group #<node>
 		grp_usr=$ZFS_ACL_STAFF2
 	fi
 
-	log_must usr_exec $CHMOD A0+group@:read_acl/write_acl:allow $node
+	log_must usr_exec chmod A0+group@:read_acl/write_acl:allow $node
 	log_must read_ACL $node $grp_usr
 	log_must write_ACL $node $grp_usr
-	log_must usr_exec $CHMOD A0- $node
+	log_must usr_exec chmod A0- $node
 
-	log_must usr_exec $CHMOD A0+group@:read_acl/write_acl:deny $node
+	log_must usr_exec chmod A0+group@:read_acl/write_acl:deny $node
 	log_mustnot read_ACL $node $grp_usr
 	log_mustnot write_ACL $node $grp_usr
-	log_must usr_exec $CHMOD A0- $node
+	# only root can remove write_acl:deny
+	log_must chgusr_exec root chmod A0- $node
 }
 
 function check_everyone #<node>
 {
 	typeset node=$1
+	typeset log
 
 	typeset flag
 	for flag in allow deny; do
@@ -151,12 +167,13 @@ function check_everyone #<node>
 		fi
 
 		log_must usr_exec \
-			$CHMOD A0+everyone@:read_acl/write_acl:$flag $node
+			chmod A0+everyone@:read_acl/write_acl:$flag $node
 
 		$log read_ACL $node $ZFS_ACL_OTHER1 $ZFS_ACL_OTHER2
 		$log write_ACL $node $ZFS_ACL_OTHER1 $ZFS_ACL_OTHER2
 
-		log_must usr_exec $CHMOD A0- $node
+		# only root can remove write_acl:deny
+		log_must chgusr_exec root chmod A0- $node
 	done
 }
 
@@ -164,9 +181,9 @@ function check_spec_user #<node>
 {
 	typeset node=$1
 
-	log_must usr_exec $CHMOD A0+everyone@:read_acl/write_acl:deny $node
-	log_must usr_exec \
-		$CHMOD A0+user:$ZFS_ACL_OTHER1:read_acl/write_acl:allow $node
+	log_must usr_exec chmod A0+everyone@:read_acl/write_acl:deny $node
+	log_must chgusr_exec root \
+		chmod A0+user:$ZFS_ACL_OTHER1:read_acl/write_acl:allow $node
 
 	# The specified user can read and write acl
 	log_must read_ACL $node $ZFS_ACL_OTHER1
@@ -178,16 +195,17 @@ function check_spec_user #<node>
 	log_mustnot \
 		write_ACL $node $ZFS_ACL_ADMIN $ZFS_ACL_STAFF2 $ZFS_ACL_OTHER2
 
-	log_must usr_exec $CHMOD A0- $node
-	log_must usr_exec $CHMOD A0- $node
+	# only root can remove write_acl:deny
+	log_must chgusr_exec root chmod A0- $node
+	log_must chgusr_exec root chmod A0- $node
 }
 
 function check_spec_group #<node>
 {
 	typeset node=$1
 
-	log_must usr_exec $CHMOD A0+everyone@:read_acl/write_acl:deny $node
-	log_must usr_exec $CHMOD \
+	log_must usr_exec chmod A0+everyone@:read_acl/write_acl:deny $node
+	log_must chgusr_exec root chmod \
 		A0+group:$ZFS_ACL_OTHER_GROUP:read_acl/write_acl:allow $node
 
 	# The specified group can read and write acl
@@ -197,23 +215,27 @@ function check_spec_group #<node>
 	# All the other user can't read and write acl
 	log_mustnot read_ACL $node $ZFS_ACL_ADMIN $ZFS_ACL_STAFF2
 	log_mustnot write_ACL $node $ZFS_ACL_ADMIN $ZFS_ACL_STAFF2
+
+	# only root can remove write_acl:deny
+	log_must chgusr_exec root chmod A0- $node
+	log_must chgusr_exec root chmod A0- $node
 }
 
 function check_user_in_group #<node>
 {
 	typeset node=$1
 
-	log_must usr_exec $CHMOD \
+	log_must usr_exec chmod \
 		A0+group:$ZFS_ACL_OTHER_GROUP:read_acl/write_acl:deny $node
-	log_must usr_exec $CHMOD \
+	log_must usr_exec chmod \
 		A0+user:$ZFS_ACL_OTHER1:read_acl/write_acl:allow $node
 	log_must read_ACL $node $ZFS_ACL_OTHER1
 	log_must write_ACL $node $ZFS_ACL_OTHER1
 	log_mustnot read_ACL $node $ZFS_ACL_OTHER2
 	log_mustnot write_ACL $node $ZFS_ACL_OTHER2
 
-	log_must usr_exec $CHMOD A0- $node
-	log_must usr_exec $CHMOD A0- $node
+	log_must usr_exec chmod A0- $node
+	log_must usr_exec chmod A0- $node
 }
 
 set -A func_name check_owner \
@@ -223,20 +245,40 @@ set -A func_name check_owner \
 		check_spec_group \
 		check_user_in_group
 
-for user in root $ZFS_ACL_STAFF1; do
-	log_must set_cur_usr $user
+typeset a_prop="on off"
+typeset aclimplicit=$(zfs get -Ho value aclimplicit $TESTPOOL/$TESTFS)
+typeset val
 
-	log_must usr_exec $TOUCH $testfile
-	log_must usr_exec $MKDIR $testdir
+for val in $a_prop; do
+	log_must zfs set aclimplicit=$val $TESTPOOL/$TESTFS
+	aclimplicit=$(zfs get -Ho value aclimplicit $TESTPOOL/$TESTFS)
+	if [[ $val == off ]]; then
+		# aclimplicit=off also needs aclmode=passthrough and
+		# aclinherit=passthrough
+		log_must zfs set aclmode=passthrough $TESTPOOL/$TESTFS
+		log_must zfs set aclinherit=passthrough $TESTPOOL/$TESTFS
+	fi
 
-	typeset func node
-	for func in ${func_name[@]}; do
-		for node in $testfile $testdir; do
-			eval $func \$node
+	for user in root $ZFS_ACL_STAFF1; do
+		log_must set_cur_usr $user
+
+		log_must usr_exec touch $testfile
+		log_must usr_exec mkdir $testdir
+
+		typeset func node
+		for func in ${func_name[@]}; do
+			for node in $testfile $testdir; do
+				eval $func \$node
+			done
 		done
-	done
 
-	log_must usr_exec $RM -rf $testfile $testdir
+		log_must usr_exec rm -rf $testfile $testdir
+	done
 done
+
+# restore defaults
+log_must zfs inherit aclmode $TESTPOOL/$TESTFS
+log_must zfs inherit aclinherit $TESTPOOL/$TESTFS
+log_must zfs inherit aclimplicit $TESTPOOL/$TESTFS
 
 log_pass "Verify chmod A[number]{+|-|=} read_acl/write_acl passed."

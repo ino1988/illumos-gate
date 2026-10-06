@@ -21,19 +21,21 @@
 
 #
 # Copyright (c) 1994, 2010, Oracle and/or its affiliates. All rights reserved.
+# Copyright (c) 2018, Joyent, Inc.
+# Copyright 2019 OmniOS Community Edition (OmniOSce) Association.
 #
 
 RTLD=		ld.so.1
 
 AVLOBJ=		avl.o
 DTROBJ=		dtrace_data.o
-TOOLOBJS=	alist.o strhash.o
+SGSCOMMONOBJ=	alist.o strhash.o
 BLTOBJ=		msg.o
 ELFCAPOBJ=	elfcap.o
 OBJECTS=	$(BLTOBJ) \
 		$(AVLOBJ) \
 		$(DTROBJ) \
-		$(TOOLOBJS) \
+		$(SGSCOMMONOBJ) \
 		$(ELFCAPOBJ) \
 		$(P_ASOBJS)   $(P_COMOBJS)   $(P_MACHOBJS)   $(G_MACHOBJS)  \
 		$(S_ASOBJS)   $(S_COMOBJS)   $(S_MACHOBJS)   $(CP_MACHOBJS)
@@ -48,7 +50,11 @@ include		$(SRC)/cmd/sgs/Makefile.com
 
 SRCDIR =	../common
 ELFCAP =	$(SRC)/common/elfcap
-PLAT =		$(VAR_PLAT_$(BASEPLAT))
+
+PLAT_i386 =	intel/ia32
+PLAT_amd64 =	intel/amd64
+PLAT_sparc =	sparc
+PLAT = $(PLAT_$(BASEPLAT))
 
 # DTrace needs an executable data segment.
 MAPFILE.NED=
@@ -70,42 +76,50 @@ ETCDYNLIB=	$(RTLD:%=$(ETCLIBDIR)/%)
 ROOTDYNLIB=	$(RTLD:%=$(ROOTFS_LIBDIR)/%)
 ROOTDYNLIB64=	$(RTLD:%=$(ROOTFS_LIBDIR64)/%)
 
+COMPATLINKS=	etc/lib/ld.so.1 \
+		usr/lib/ld.so.1
+COMPATLINKS64=	usr/lib/$(MACH64)/ld.so.1
+
+$(ROOT)/etc/lib/ld.so.1 := COMPATLINKTARGET= ../../lib/ld.so.1
+$(ROOT)/usr/lib/ld.so.1 := COMPATLINKTARGET= ../../lib/ld.so.1
+$(ROOT)/usr/lib/$(MACH64)/ld.so.1 := \
+	COMPATLINKTARGET= ../../../lib/$(MACH64)/ld.so.1
 
 FILEMODE =	755
 
-CPPFLAGS +=	-I$(SRCBASE)/lib/libc/inc \
-		-I$(SRCBASE)/uts/common/krtld \
-		-I$(SRCBASE)/uts/$(PLAT) \
-		-I$(SRCBASE)/uts/$(PLAT)/krtld \
+CPPFLAGS +=	-I$(SRC)/lib/libc/inc \
+		-I$(SRC)/uts/common/krtld \
+		-I$(SRC)/uts/$(PLAT) \
+		-I$(SRC)/uts/$(PLAT)/krtld \
 		-I$(SRC)/common/sgsrtcid \
 		-I$(ELFCAP) \
 		 $(CPPFEATUREMACROS)
 
-ASFLAGS=	-P -D_ASM $(CPPFLAGS)
+ASFLAGS +=	-D_ASM $(CPPFLAGS)
+ASFLAGS64 +=	-D_ASM $(CPPFLAGS)
 LDLIB =		-L ../../libld/$(MACH)
 RTLDLIB =	-L ../../librtld/$(MACH)
 
-CERRWARN +=	-_gcc=-Wno-uninitialized
-CERRWARN +=	-_gcc=-Wno-unused-variable
-CERRWARN +=	-_gcc=-Wno-switch
+CERRWARN +=	$(CNOWARN_UNINIT)
+
+# not linted
+SMATCH=off
 
 # These definitions require that libc be built in the same workspace
 # as the run-time linker and before the run-time linker is built.
 # This is required for the system's self-consistency in any case.
-CPICLIB =	$(VAR_RTLD_CPICLIB)
-CPICLIB64 =	$(VAR_RTLD_CPICLIB64)
+CPICLIB =	-L $(SRC)/lib/libc/$(MACH)
+CPICLIB64 =	-L $(SRC)/lib/libc/$(MACH64)
 CLIB =		-lc_pic
 
-LDLIBS +=	$(CONVLIBDIR) $(CONV_LIB) \
+LDLIBS +=	$(CONVLIBDIR) -lconv \
 		$(CPICLIB) $(CLIB) \
-		$(LDDBGLIBDIR) $(LDDBG_LIB) \
+		$(LDDBGLIBDIR) -llddbg \
 		$(RTLDLIB) -lrtld \
-		$(LDLIB) $(LD_LIB) 
+		$(LDLIB) -lld
 
 DYNFLAGS +=	-i -e _rt_boot $(VERSREF) $(ZNODLOPEN) \
 		$(ZINTERPOSE) -zdtrace=dtrace_data '-R$$ORIGIN'
-
-BUILD.s=	$(AS) $(ASFLAGS) $< -o $@
 
 BLTDEFS=	msg.h
 BLTDATA=	msg.c
@@ -131,19 +145,29 @@ SGSMSGALL=	$(SGSMSGCOM) $(SGSMSG32) $(SGSMSG64) \
 SGSMSGFLAGS1=	$(SGSMSGFLAGS) -m $(BLTMESG)
 SGSMSGFLAGS2=	$(SGSMSGFLAGS) -h $(BLTDEFS) -d $(BLTDATA) -n rtld_msg
 
-SRCS=		$(AVLOBJ:%.o=$(VAR_AVLDIR)/%.c) \
-		$(DTROBJ:%.o=$(VAR_DTRDIR)/%.c) \
-		$(TOOLOBJS:%.o=$(SGSTOOLS)/common/%.c) \
+SRCS=		$(AVLOBJ:%.o=$(SRC)/common/avl/%.c) \
+		$(DTROBJ:%.o=$(SRC)/common/dtrace/%.c) \
+		$(SGSCOMMONOBJ:%.o=$(SGSCOMMON)/%.c) \
 		$(COMOBJS:%.o=../common/%.c)  $(MACHOBJS:%.o=%.c) $(BLTDATA) \
-		$(G_MACHOBJS:%.o=$(SRCBASE)/uts/$(PLAT)/krtld/%.c) \
+		$(G_MACHOBJS:%.o=$(SRC)/uts/$(PLAT)/krtld/%.c) \
 		$(CP_MACHOBJS:%.o=../$(MACH)/%.c) \
-		$(ASOBJS:%.o=%.s)
-LINTSRCS=	$(SRCS) ../common/lintsup.c
+		$(ASOBJS:%.o=%.S)
 
-LINTFLAGS +=	-u -Dsun -D_REENTRANT -erroff=E_EMPTY_TRANSLATION_UNIT \
-		-erroff=E_NAME_DECL_NOT_USED_DEF2
-LINTFLAGS64 +=	-u -D_REENTRANT -erroff=E_CAST_INT_TO_SMALL_INT \
-		-erroff=E_NAME_DECL_NOT_USED_DEF2
-
-CLEANFILES +=	$(LINTOUTS)  $(CRTS)  $(BLTFILES)
+CLEANFILES +=	$(CRTS) $(BLTFILES)
 CLOBBERFILES +=	$(RTLD)
+
+#
+# We cannot currently enable the stack protector for rtld as it runs
+# before libc initializes, which is where we always enable the stack
+# protector values. Because rtld is likely on an alternate link map and
+# links in the relevant portions of libc through libc_pic.a, there is
+# probably a path to enabling an rtld specific version of the stack
+# protector.
+#
+# As a result, this currently disables the stack protector in two
+# related targets which really could use it. These are libconv and libc.
+# Both of these end up building position-independent archive libraries
+# that are directly linked into rtld. This situation can and should be
+# improved.
+#
+STACKPROTECT = none

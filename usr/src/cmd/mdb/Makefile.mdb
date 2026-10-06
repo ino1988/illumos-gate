@@ -26,7 +26,9 @@
 #
 # Copyright 2011 Nexenta Systems, Inc.  All rights reserved.
 # Copyright (c) 2012 by Delphix. All rights reserved.
-# Copyright (c) 2012 Joyent, Inc. All rights reserved.
+# Copyright 2021 Joyent, Inc.
+# Copyright 2018 Jason King
+# Copyright 2025 Oxide Computer Company
 #
 
 .KEEP_STATE:
@@ -60,6 +62,7 @@ SRCS += \
 	mdb_kb_kvm.c \
 	mdb_kproc.c \
 	mdb_kvm.c \
+	mdb_linkerset.c \
 	mdb_logio.c \
 	mdb_list.c \
 	mdb_macalias.c \
@@ -78,6 +81,7 @@ SRCS += \
 	mdb_set.c \
 	mdb_shell.c \
 	mdb_signal.c \
+	mdb_stack.c \
 	mdb_stdlib.c \
 	mdb_string.c \
 	mdb_strio.c \
@@ -89,31 +93,22 @@ SRCS += \
 	mdb_umem.c \
 	mdb_value.c \
 	mdb_vcb.c \
+	mdb_walkers.c \
 	mdb_wcb.c \
 	mdb_whatis.c
 
 $(NOT_RELEASE_BUILD)CPPFLAGS += -DDEBUG
 CPPFLAGS += -D_MDB -I. -I../.. -I../../../common
 
-C99MODE=	-xc99=%all
-C99LMODE=	-Xc99=%all
+CSTD=	$(CSTD_GNU99)
 
 LDLIBS += -lcurses -lkvm -lproc -lrtld_db -lctf -lumem -ldisasm -lscf
+LDLIBS += -ldemangle-sys
 
-CERRWARN += -_gcc=-Wno-uninitialized
 CERRWARN += -_gcc=-Wno-char-subscripts
 CERRWARN += -_gcc=-Wno-clobbered
 CERRWARN += -_gcc=-Wno-parentheses
-CERRWARN += -_gcc=-Wno-unused-label
 CERRWARN += -_gcc=-Wno-unused-variable
-
-#
-# -erroff=E_INCONS_ARG_DECL2 works around a problem where lint gets confused
-# about how struct mdb_tgt_gregset is used in mdb_tgt_stack_f() and
-# mdb_tgt_stack_iter_f(). Will be resolved as part of fix for CR 6749868.
-#
-LINTFLAGS += -n -errtags=yes -erroff=E_INCONS_ARG_DECL2
-LINTFILES = $(SRCS:%.c=%.ln)
 
 PROG = mdb
 OBJS = $(SRCS:%.c=%.o) mdb_lex.o mdb_grammar.o
@@ -124,7 +119,7 @@ ROOTLINK32 = $(LINK:%=$(ROOTBIN32)/%)
 ROOTLINK64 = $(LINK:%=$(ROOTBIN64)/%)
 
 .NO_PARALLEL:
-.PARALLEL: $(OBJS) $(LINTFILES)
+.PARALLEL: $(OBJS)
 
 all: $(PROG)
 
@@ -150,6 +145,8 @@ mdb_grammar.h mdb_grammar.c: ../../../common/mdb/mdb_grammar.y
 	@$(MV) y.tab.c mdb_grammar.c
 
 mdb_lex.o mdb_grammar.o := CCVERBOSE =
+# because of labels from yacc
+mdb_lex.o mdb_grammar.o := CERRWARN += -_gcc=-Wno-unused-label
 
 mdb_conf.o := CPPFLAGS += -DMDB_VERSION='$(MDB_VERSION)'
 
@@ -177,32 +174,11 @@ ffs.o ffs.ln := CPPFLAGS += -Dffs=mdb_ffs
 	$(COMPILE.c) $<
 	$(CTFCONVERT_O)
 
-clean.lint:
-	$(RM) $(LINTFILES)
-
 clean:
 	$(RM) $(OBJS)
 	$(RM) mdb_lex.c mdb_grammar.c mdb_grammar.h y.tab.h y.tab.c y.output
 
-clobber: clean clean.lint
+clobber: clean
 	$(RM) $(PROG)
-
-%.ln: ../../../common/mdb/%.c
-	$(LINT.c) -c $<
-
-%.ln: ../../mdb/%.c
-	$(LINT.c) -c $<
-
-%.ln: %.c
-	$(LINT.c) -c $<
-
-%.ln: $(SRC)/common/net/util/%.c
-	$(LINT.c) -c $<
-
-%.ln: $(SRC)/common/util/%.c
-	$(LINT.c) -c $<
-
-lint: $(LINTFILES)
-	$(LINT) $(LINTFLAGS) $(LINTFILES)
 
 dmods:

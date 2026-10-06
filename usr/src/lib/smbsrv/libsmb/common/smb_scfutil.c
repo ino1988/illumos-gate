@@ -21,9 +21,10 @@
 /*
  * Copyright 2008 Sun Microsystems, Inc.  All rights reserved.
  * Use is subject to license terms.
+ *
+ * Copyright 2015 Nexenta Systems, Inc.  All rights reserved.
+ * Copyright 2023 Oxide Computer Company
  */
-
-#pragma ident	"@(#)smb_scfutil.c	1.5	08/07/30 SMI"
 
 /* helper functions for using libscf with CIFS */
 
@@ -49,12 +50,10 @@
 static void
 smb_smf_scf_log_error(char *msg)
 {
-	if (!msg) {
-		syslog(LOG_ERR, " SMBD SMF problem: %s\n",
-		    scf_strerror(scf_error()));
-	} else { /*LINTED E_SEC_PRINTF_E_VAR_FMT*/
-		syslog(LOG_ERR, msg, scf_strerror(scf_error()));
-	}
+	if (msg == NULL)
+		msg = "SMBD SMF problems";
+
+	syslog(LOG_ERR, "%s: %s", msg, scf_strerror(scf_error()));
 }
 
 /*
@@ -157,6 +156,7 @@ int
 smb_smf_end_transaction(smb_scfhandle_t *handle)
 {
 	int ret = SMBD_SMF_OK;
+	int rc;
 
 	if (handle == NULL)
 		return (SMBD_SMF_SYSTEM_ERR);
@@ -164,10 +164,17 @@ smb_smf_end_transaction(smb_scfhandle_t *handle)
 	if (handle->scf_trans == NULL) {
 		ret = SMBD_SMF_SYSTEM_ERR;
 	} else {
-		if (scf_transaction_commit(handle->scf_trans) < 0) {
+		rc = scf_transaction_commit(handle->scf_trans);
+		if (rc == 1) {
+			ret = SMBD_SMF_OK;
+		} else if (rc == 0) {
+			ret = SMBD_SMF_INVALID_ARG;
+			smb_smf_scf_log_error(
+			    "Failed to commit, old pg: transaction");
+		} else {
 			ret = SMBD_SMF_SYSTEM_ERR;
-			smb_smf_scf_log_error("Failed to commit "
-			    "transaction: %s");
+			smb_smf_scf_log_error(
+			    "Failed to commit, error: transaction");
 		}
 		scf_transaction_destroy_children(handle->scf_trans);
 		scf_transaction_destroy(handle->scf_trans);
@@ -221,10 +228,8 @@ smb_smf_set_string_property(smb_scfhandle_t *handle,
 		ret = SMBD_SMF_SYSTEM_ERR;
 	}
 	if (ret == SMBD_SMF_SYSTEM_ERR) {
-		switch (scf_error()) {
-		case SCF_ERROR_PERMISSION_DENIED:
+		if (scf_error() == SCF_ERROR_PERMISSION_DENIED) {
 			ret = SMBD_SMF_NO_PERMISSION;
-			break;
 		}
 	}
 
@@ -316,10 +321,8 @@ smb_smf_set_integer_property(smb_scfhandle_t *handle, char *propname,
 		ret = SMBD_SMF_SYSTEM_ERR;
 	}
 	if (ret == SMBD_SMF_SYSTEM_ERR) {
-		switch (scf_error()) {
-		case SCF_ERROR_PERMISSION_DENIED:
+		if (scf_error() == SCF_ERROR_PERMISSION_DENIED) {
 			ret = SMBD_SMF_NO_PERMISSION;
-			break;
 		}
 	}
 	/*
@@ -411,10 +414,8 @@ smb_smf_set_boolean_property(smb_scfhandle_t *handle, char *propname,
 		ret = SMBD_SMF_SYSTEM_ERR;
 	}
 	if (ret == SMBD_SMF_SYSTEM_ERR) {
-		switch (scf_error()) {
-		case SCF_ERROR_PERMISSION_DENIED:
+		if (scf_error() == SCF_ERROR_PERMISSION_DENIED) {
 			ret = SMBD_SMF_NO_PERMISSION;
-			break;
 		}
 	}
 	/*
@@ -510,10 +511,8 @@ smb_smf_set_opaque_property(smb_scfhandle_t *handle, char *propname,
 		ret = SMBD_SMF_SYSTEM_ERR;
 	}
 	if (ret == SMBD_SMF_SYSTEM_ERR) {
-		switch (scf_error()) {
-		case SCF_ERROR_PERMISSION_DENIED:
+		if (scf_error() == SCF_ERROR_PERMISSION_DENIED) {
 			ret = SMBD_SMF_NO_PERMISSION;
-			break;
 		}
 	}
 	/*
@@ -560,6 +559,54 @@ smb_smf_get_opaque_property(smb_scfhandle_t *handle, char *propname,
 		scf_value_destroy(value);
 	if (prop != NULL)
 		scf_property_destroy(prop);
+	return (ret);
+}
+
+/*
+ * Delete a property (for properties obsoleted during an upgrade).
+ */
+int
+smb_smf_delete_property(smb_scfhandle_t *handle, char *propname)
+{
+	scf_transaction_entry_t *entry;
+	int ret = SMBD_SMF_OK;
+
+	if (handle == NULL)
+		return (SMBD_SMF_SYSTEM_ERR);
+	if (handle->scf_trans == NULL)
+		return (SMBD_SMF_SYSTEM_ERR);
+
+	/*
+	 * properties must be set in transactions and don't take
+	 * effect until the transaction has been ended/committed.
+	 */
+	entry = scf_entry_create(handle->scf_handle);
+	if (entry == NULL) {
+		ret = SMBD_SMF_SYSTEM_ERR;
+		goto out;
+	}
+
+	if (scf_transaction_property_delete(handle->scf_trans,
+	    entry, propname) == 0) {
+		/* the entry is in the transaction */
+		entry = NULL;
+	} else {
+		switch (scf_error()) {
+		case SCF_ERROR_NOT_FOUND:
+			/* Did not exist.  We're done. */
+			ret = SMBD_SMF_OK;
+			goto out;
+		case SCF_ERROR_PERMISSION_DENIED:
+			ret = SMBD_SMF_NO_PERMISSION;
+			goto out;
+		default:
+			ret = SMBD_SMF_SYSTEM_ERR;
+			goto out;
+		}
+	}
+
+out:
+	scf_entry_destroy(entry);
 	return (ret);
 }
 
@@ -633,8 +680,8 @@ smb_smf_scf_init(char *svc_name)
 		} else {
 			free(handle);
 			handle = NULL;
-			smb_smf_scf_log_error("Could not access SMF "
-			    "repository: %s\n");
+			smb_smf_scf_log_error(
+			    "Could not access SMF repository");
 		}
 	}
 	return (handle);
@@ -642,7 +689,8 @@ smb_smf_scf_init(char *svc_name)
 	/* error handling/unwinding */
 err:
 	(void) smb_smf_scf_fini(handle);
-	(void) smb_smf_scf_log_error("SMF initialization problem: %s\n");
+	if (scf_error() != SCF_ERROR_NOT_FOUND)
+		(void) smb_smf_scf_log_error("SMF initialization problem");
 	return (NULL);
 }
 

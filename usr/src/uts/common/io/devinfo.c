@@ -24,6 +24,10 @@
  */
 
 /*
+ * Copyright 2023 Oxide Computer Company
+ */
+
+/*
  * driver for accessing kernel devinfo tree.
  */
 #include <sys/types.h>
@@ -118,7 +122,6 @@ struct di_mem {
 struct di_stack {
 	void		*offset[MAX_TREE_DEPTH];
 	struct dev_info *dip[MAX_TREE_DEPTH];
-	int		circ[MAX_TREE_DEPTH];
 	int		depth;	/* depth of current node to be copied */
 };
 
@@ -130,13 +133,12 @@ struct di_stack {
 	((di_off_t *)(stack)->offset[(stack)->depth - 2])
 #define	EMPTY_STACK(stack)	((stack)->depth == 0)
 #define	POP_STACK(stack)	{ \
-	ndi_devi_exit((dev_info_t *)TOP_NODE(stack), \
-		(stack)->circ[(stack)->depth - 1]); \
+	ndi_devi_exit((dev_info_t *)TOP_NODE(stack)); \
 	((stack)->depth--); \
 }
 #define	PUSH_STACK(stack, node, off_p)	{ \
 	ASSERT(node != NULL); \
-	ndi_devi_enter((dev_info_t *)node, &(stack)->circ[(stack)->depth]); \
+	ndi_devi_enter((dev_info_t *)node); \
 	(stack)->dip[(stack)->depth] = (node); \
 	(stack)->offset[(stack)->depth] = (void *)(off_p); \
 	((stack)->depth)++; \
@@ -461,9 +463,9 @@ di_attach(dev_info_t *dip, ddi_attach_cmd_t cmd)
 		    di_max_opens * sizeof (struct di_state *), KM_SLEEP);
 
 		if (ddi_create_minor_node(dip, "devinfo", S_IFCHR,
-		    DI_FULL_PARENT, DDI_PSEUDO, NULL) == DDI_FAILURE ||
+		    DI_FULL_PARENT, DDI_PSEUDO, 0) == DDI_FAILURE ||
 		    ddi_create_minor_node(dip, "devinfo,ro", S_IFCHR,
-		    DI_READONLY_PARENT, DDI_PSEUDO, NULL) == DDI_FAILURE) {
+		    DI_READONLY_PARENT, DDI_PSEUDO, 0) == DDI_FAILURE) {
 			kmem_free(di_states,
 			    di_max_opens * sizeof (struct di_state *));
 			ddi_remove_minor_node(dip, NULL);
@@ -1298,7 +1300,7 @@ di_key_cmp(mod_hash_key_t key1, mod_hash_key_t key2)
 static void
 di_copy_aliases(struct di_state *st, alias_pair_t *apair, di_off_t *offp)
 {
-	di_off_t 		off;
+	di_off_t		off;
 	struct di_all		*all = DI_ALL_PTR(st);
 	struct di_alias		*di_alias;
 	di_off_t		curroff;
@@ -1817,7 +1819,7 @@ di_copynode(struct dev_info *node, struct di_stack *dsp, struct di_state *st)
 	me->top_phci = 0;		/* Filled up by build_phci_list. */
 	me->next_phci = 0;		/* Filled up by build_phci_list. */
 	me->multipath_component = MULTIPATH_COMPONENT_NONE; /* set default. */
-	me->user_private_data = NULL;
+	me->user_private_data = 0;
 
 	/*
 	 * Get parent's offset in snapshot from the stack
@@ -1987,7 +1989,7 @@ property:
 		 * Make copy of global property list if this devinfo refers
 		 * global properties different from what's on the devnames
 		 * array. It can happen if there has been a forced
-		 * driver.conf update. See mod_drv(1M).
+		 * driver.conf update. See update_drv(8).
 		 */
 		ASSERT(me->drv_major != -1);
 		if (node->devi_global_prop_list !=
@@ -2026,7 +2028,6 @@ priv_data:
 
 pm_info: /* NOT implemented */
 
-subtree:
 	/* keep the stack aligned */
 	off = DI_ALIGN(off);
 
@@ -2035,7 +2036,6 @@ subtree:
 		return (off);
 	}
 
-child:
 	/*
 	 * If there is a visible child--push child onto stack.
 	 * Hold the parent (me) busy while doing so.
@@ -2051,7 +2051,6 @@ child:
 		}
 	}
 
-sibling:
 	/*
 	 * Done with any child nodes, unroll the stack till a visible
 	 * sibling of a parent node is found or root node is reached.
@@ -2517,7 +2516,7 @@ out:
  */
 static di_off_t
 di_getmdata(struct ddi_minor_data *mnode, di_off_t *off_p, di_off_t node,
-	struct di_state *st)
+    struct di_state *st)
 {
 	di_off_t	off;
 	struct di_minor	*me;
@@ -2536,7 +2535,7 @@ di_getmdata(struct ddi_minor_data *mnode, di_off_t *off_p, di_off_t node,
 		me->self = off;
 		me->type = mnode->type;
 		me->node = node;
-		me->user_private_data = NULL;
+		me->user_private_data = 0;
 
 		off += sizeof (struct di_minor);
 
@@ -3082,10 +3081,10 @@ di_getprop_add(int list, int dyn, struct di_state *st, struct dev_info *dip,
 		 * ordering.
 		 */
 		ndi_hold_devi((dev_info_t *)dip);
-		ndi_devi_exit((dev_info_t *)dip, dip->devi_circular);
+		ndi_devi_exit((dev_info_t *)dip);
 		rv = (*prop_op)(pdevt, (dev_info_t *)dip,
 		    PROP_LEN_AND_VAL_ALLOC, pflags, name, &val, &len);
-		ndi_devi_enter((dev_info_t *)dip, &dip->devi_circular);
+		ndi_devi_enter((dev_info_t *)dip);
 		ndi_rele_devi((dev_info_t *)dip);
 
 		if (rv == DDI_PROP_SUCCESS) {

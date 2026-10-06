@@ -20,6 +20,7 @@
  */
 
 /*
+ * Copyright 2014 PALO, Richard.
  * Copyright 2014 Garrett D'Amore <garrett@damore.org>
  * Copyright (c) 2013 Gary Mills
  *
@@ -27,7 +28,7 @@
  */
 
 /*	Copyright (c) 1988 AT&T	*/
-/*	  All Rights Reserved  	*/
+/*	  All Rights Reserved	*/
 
 /* Copyright (c) 2013, OmniTI Computer Consulting, Inc. All rights reserved. */
 
@@ -36,6 +37,7 @@
 
 #include <sys/feature_tests.h>
 
+#include <sys/null.h>
 #include <sys/types.h>
 #include <sys/unistd.h>
 
@@ -178,14 +180,6 @@ extern "C" {
 #define	_POSIX_VDISABLE		0
 #endif
 
-#ifndef NULL
-#if defined(_LP64)
-#define	NULL	0L
-#else
-#define	NULL	0
-#endif
-#endif
-
 #define	STDIN_FILENO	0
 #define	STDOUT_FILENO	1
 #define	STDERR_FILENO	2
@@ -290,6 +284,13 @@ extern int execlp(const char *, const char *, ...);
 extern int execv(const char *, char *const *);
 extern int execve(const char *, char *const *, char *const *);
 extern int execvp(const char *, char *const *);
+#if defined(_XPG7) || !defined(_STRICT_SYMBOLS)
+extern int fexecve(int, char *const[], char *const[]);
+#endif
+#if !defined(_STRICT_SYMBOLS)
+extern int execvpe(const char *, char *const [], char *const []);
+extern int syncfs(int);
+#endif	/* !_STRICT_SYMBOLS */
 extern void _exit(int)
 	__NORETURN;
 /*
@@ -395,13 +396,11 @@ extern uid_t getuid(void);
 #if !defined(__XOPEN_OR_POSIX) || defined(__EXTENSIONS__)
 extern char *getusershell(void);
 #endif /* !defined(__XOPEN_OR_POSIX) || defined(__EXTENSIONS__) */
-#if !defined(__XOPEN_OR_POSIX) || defined(_XPG4_2) || defined(__EXTENSIONS__)
-extern char *getwd(char *);
-#endif /* !defined(__XOPEN_OR_POSIX) || defined(_XPG4_2)... */
 /*
  * The following ioctl prototype is duplicated in <stropts.h>. The
  * duplication is necessitated by XPG4.2 which requires the prototype
- * be defined in <stropts.h>.
+ * be defined in <stropts.h>.  ioctl() is also duplicated in <sys/ioctl.h>
+ * for broader portability aid.
  */
 #if !defined(__XOPEN_OR_POSIX) || defined(__EXTENSIONS__)
 extern int ioctl(int, int, ...);
@@ -559,11 +558,10 @@ extern useconds_t ualarm(useconds_t, useconds_t);
 #endif
 extern int unlink(const char *);
 #if (defined(_XPG4_2) && !defined(_XPG7)) || !defined(_STRICT_SYMBOLS)
+extern char *getwd(char *);
 extern int usleep(useconds_t);
-#endif
-#if !defined(__XOPEN_OR_POSIX) || defined(_XPG4_2) || defined(__EXTENSIONS__)
 extern pid_t vfork(void) __RETURNS_TWICE;
-#endif /* !defined(__XOPEN_OR_POSIX) || defined(_XPG4_2)... */
+#endif
 #if !defined(__XOPEN_OR_POSIX) || defined(__EXTENSIONS__)
 extern void vhangup(void);
 #endif /* !defined(__XOPEN_OR_POSIX) || defined(__EXTENSIONS__) */
@@ -600,10 +598,6 @@ extern off64_t	tell64(int);
 extern int	truncate64(const char *, off64_t);
 extern int	lockf64(int, int, off64_t);
 #endif	/* _LARGEFILE64_SOURCE */
-
-#if !defined(__XOPEN_OR_POSIX) || defined(_XPG4_2) || defined(__EXTENSIONS__)
-#pragma unknown_control_flow(vfork)
-#endif /* !defined(__XOPEN_OR_POSIX) || defined(_XPG4_2)... */
 
 /*
  * getlogin_r() & ttyname_r() prototypes are defined here.
@@ -716,6 +710,10 @@ extern char *ttyname_r(int, char *, int);
 #endif /* (_POSIX_C_SOURCE - 0 >= 199506L) || ... */
 
 #endif /* defined(__EXTENSIONS__) || defined(_REENTRANT)... */
+
+#if !defined(_STRICT_SYMBOLS)
+extern int getentropy(void *, size_t);
+#endif	/* !_STRICT_SYMBOLS */
 
 #ifdef	__cplusplus
 }

@@ -318,16 +318,16 @@ static int mnode_maxmrange[MAX_MEM_NODES];
 #define	PAGE_COUNTERS(mnode, rg_szc, idx)			\
 	(page_counters[(rg_szc)][(mnode)].hpm_counters[(idx)])
 
-#define	PAGE_COUNTERS_COUNTERS(mnode, rg_szc) 			\
+#define	PAGE_COUNTERS_COUNTERS(mnode, rg_szc)			\
 	(page_counters[(rg_szc)][(mnode)].hpm_counters)
 
-#define	PAGE_COUNTERS_SHIFT(mnode, rg_szc) 			\
+#define	PAGE_COUNTERS_SHIFT(mnode, rg_szc)			\
 	(page_counters[(rg_szc)][(mnode)].hpm_shift)
 
-#define	PAGE_COUNTERS_ENTRIES(mnode, rg_szc) 			\
+#define	PAGE_COUNTERS_ENTRIES(mnode, rg_szc)			\
 	(page_counters[(rg_szc)][(mnode)].hpm_entries)
 
-#define	PAGE_COUNTERS_BASE(mnode, rg_szc) 			\
+#define	PAGE_COUNTERS_BASE(mnode, rg_szc)			\
 	(page_counters[(rg_szc)][(mnode)].hpm_base)
 
 #define	PAGE_COUNTERS_CURRENT_COLOR_ARRAY(mnode, rg_szc, g)		\
@@ -341,7 +341,7 @@ static int mnode_maxmrange[MAX_MEM_NODES];
 	(((pnum) - PAGE_COUNTERS_BASE((mnode), (rg_szc))) >>	\
 		PAGE_COUNTERS_SHIFT((mnode), (rg_szc)))
 
-#define	IDX_TO_PNUM(mnode, rg_szc, index) 			\
+#define	IDX_TO_PNUM(mnode, rg_szc, index)			\
 	(PAGE_COUNTERS_BASE((mnode), (rg_szc)) +		\
 		((index) << PAGE_COUNTERS_SHIFT((mnode), (rg_szc))))
 
@@ -546,7 +546,7 @@ page_ctrs_sz(void)
 	pfn_t	physbase;
 	pfn_t	physmax;
 	uint_t	ctrs_sz = 0;
-	int 	i;
+	int	i;
 	pgcnt_t colors_per_szc[MMU_PAGE_SIZES];
 
 	/*
@@ -1866,7 +1866,7 @@ mach_page_add(page_t **ppp, page_t *pp)
 void
 mach_page_sub(page_t **ppp, page_t *pp)
 {
-	ASSERT(PP_ISFREE(pp));
+	ASSERT(pp != NULL && PP_ISFREE(pp));
 
 	if (*ppp == NULL || pp == NULL)
 		panic("mach_page_sub");
@@ -1925,7 +1925,7 @@ static uint_t page_promote_noreloc_err;
  * accounting which needs to be done for a returned page.
  *
  * RFE: For performance pass in pp instead of pfnum so
- * 	we can avoid excessive calls to page_numtopp_nolock().
+ *	we can avoid excessive calls to page_numtopp_nolock().
  *	This would depend on an assumption that all contiguous
  *	pages are in the same memseg so we can just add/dec
  *	our pp.
@@ -1970,7 +1970,7 @@ page_promote(int mnode, pfn_t pfnum, uchar_t new_szc, int flags, int mtype)
 	uint_t		bin;
 	pgcnt_t		tmpnpgs, pages_left;
 	uint_t		noreloc;
-	int 		which_list;
+	int		which_list;
 	ulong_t		index;
 	kmutex_t	*phm;
 
@@ -2270,17 +2270,14 @@ page_t *
 page_freelist_coalesce(int mnode, uchar_t szc, uint_t color, uint_t ceq_mask,
     int mtype, pfn_t pfnhi)
 {
-	int 	r = szc;		/* region size */
+	int	r = szc;		/* region size */
 	int	mrange;
-	uint_t 	full, bin, color_mask, wrap = 0;
+	uint_t	full, bin, color_mask, wrap = 0;
 	pfn_t	pfnum, lo, hi;
 	size_t	len, idx, idx0;
 	pgcnt_t	cands = 0, szcpgcnt = page_get_pagecnt(szc);
 	page_t	*ret_pp;
 	MEM_NODE_ITERATOR_DECL(it);
-#if defined(__sparc)
-	pfn_t pfnum0, nlo, nhi;
-#endif
 
 	if (mpss_coalesce_disable) {
 		ASSERT(szc < MMU_PAGE_SIZES);
@@ -2380,39 +2377,7 @@ page_freelist_coalesce(int mnode, uchar_t szc, uint_t color, uint_t ceq_mask,
 	idx0 = PNUM_TO_IDX(mnode, r, pfnum);
 	ASSERT(idx0 < len);
 
-#if defined(__sparc)
-	pfnum0 = pfnum;		/* page corresponding to idx0 */
-	nhi = 0;		/* search kcage ranges */
-#endif
-
 	for (idx = idx0; wrap == 0 || (idx < idx0 && wrap < 2); ) {
-
-#if defined(__sparc)
-		/*
-		 * Find lowest intersection of kcage ranges and mnode.
-		 * MTYPE_NORELOC means look in the cage, otherwise outside.
-		 */
-		if (nhi <= pfnum) {
-			if (kcage_next_range(mtype == MTYPE_NORELOC, pfnum,
-			    (wrap == 0 ? hi : pfnum0), &nlo, &nhi))
-				goto wrapit;
-
-			/* jump to the next page in the range */
-			if (pfnum < nlo) {
-				pfnum = P2ROUNDUP(nlo, szcpgcnt);
-				MEM_NODE_ITERATOR_INIT(pfnum, mnode, szc, &it);
-				idx = PNUM_TO_IDX(mnode, r, pfnum);
-				if (idx >= len || pfnum >= hi)
-					goto wrapit;
-				if ((PFN_2_COLOR(pfnum, szc, &it) ^ color) &
-				    ceq_mask)
-					goto next;
-				if (interleaved_mnodes &&
-				    PFN_2_MEM_NODE(pfnum) != mnode)
-					goto next;
-			}
-		}
-#endif
 
 		if (PAGE_COUNTERS(mnode, r, idx) != full)
 			goto next;
@@ -2420,7 +2385,7 @@ page_freelist_coalesce(int mnode, uchar_t szc, uint_t color, uint_t ceq_mask,
 		/*
 		 * RFE: For performance maybe we can do something less
 		 *	brutal than locking the entire freelist. So far
-		 * 	this doesn't seem to be a performance problem?
+		 *	this doesn't seem to be a performance problem?
 		 */
 		page_freelist_lock(mnode);
 		if (PAGE_COUNTERS(mnode, r, idx) == full) {
@@ -2432,14 +2397,7 @@ page_freelist_coalesce(int mnode, uchar_t szc, uint_t color, uint_t ceq_mask,
 				    PFN_2_COLOR(pfnum, szc, &it), mrange) = idx;
 				page_freelist_unlock(mnode);
 				rw_exit(&page_ctrs_rwlock[mnode]);
-#if defined(__sparc)
-				if (PP_ISNORELOC(ret_pp)) {
-					pgcnt_t npgs;
 
-					npgs = page_get_pagecnt(ret_pp->p_szc);
-					kcage_freemem_sub(npgs);
-				}
-#endif
 				return (ret_pp);
 			}
 		} else {
@@ -2467,14 +2425,10 @@ next:
 		    color_mask, &it);
 		idx = PNUM_TO_IDX(mnode, r, pfnum);
 		if (idx >= len || pfnum >= hi) {
-wrapit:
 			pfnum = lo;
 			MEM_NODE_ITERATOR_INIT(pfnum, mnode, szc, &it);
 			idx = PNUM_TO_IDX(mnode, r, pfnum);
 			wrap++;
-#if defined(__sparc)
-			nhi = 0;	/* search kcage ranges */
-#endif
 		}
 	}
 
@@ -2490,8 +2444,8 @@ wrapit:
 void
 page_freelist_coalesce_all(int mnode)
 {
-	int 	r;		/* region size */
-	int 	idx, full;
+	int	r;		/* region size */
+	int	idx, full;
 	size_t	len;
 	int doall = interleaved_mnodes || mnode < 0;
 	int mlo = doall ? 0 : mnode;
@@ -2584,7 +2538,7 @@ page_freelist_split(uchar_t szc, uint_t color, int mnode, int mtype,
     pfn_t pfnlo, pfn_t pfnhi, page_list_walker_t *plw)
 {
 	uchar_t nszc = szc + 1;
-	uint_t 	bin, sbin, bin_prev;
+	uint_t	bin, sbin, bin_prev;
 	page_t	*pp, *firstpp;
 	page_t	*ret_pp = NULL;
 	uint_t  color_mask;
@@ -3427,7 +3381,7 @@ page_geti_contig_pages(int mnode, uint_t bin, uchar_t szc, int flags,
 	page_t *pp, *randpp, *endpp;
 	uint_t colors, ceq_mask;
 	/* LINTED : set but not used in function */
-	uint_t color_mask;
+	uint_t color_mask __unused;
 	pfn_t hi, lo;
 	uint_t skip;
 	MEM_NODE_ITERATOR_DECL(it);
@@ -3690,7 +3644,7 @@ page_get_contig_pages(int mnode, uint_t bin, int mtype, uchar_t szc,
 	return (NULL);
 }
 
-#if defined(__i386) || defined(__amd64)
+#if defined(__x86)
 /*
  * Determine the likelihood of finding/coalescing a szc page.
  * Return 0 if the likelihood is small otherwise return 1.
@@ -3730,7 +3684,7 @@ page_chk_freelist(uint_t szc)
 /*ARGSUSED*/
 page_t *
 page_get_freelist(struct vnode *vp, u_offset_t off, struct seg *seg,
-	caddr_t vaddr, size_t size, uint_t flags, struct lgrp *lgrp)
+    caddr_t vaddr, size_t size, uint_t flags, struct lgrp *lgrp)
 {
 	struct as	*as = seg->s_as;
 	page_t		*pp = NULL;
@@ -4147,6 +4101,8 @@ page_get_replacement_page(page_t *orig_like_pp, struct lgrp *lgrp_target,
 	lgrp_mnode_cookie_t	lgrp_cookie;
 	lgrp_t		*lgrp;
 
+	mnode = 0;
+	lgrp = NULL;
 	REPL_STAT_INCR(ngets);
 	like_pp = orig_like_pp;
 	ASSERT(PAGE_EXCL(like_pp));
@@ -4179,8 +4135,7 @@ page_get_replacement_page(page_t *orig_like_pp, struct lgrp *lgrp_target,
 	if (PP_ISKAS(like_pp))
 		pgrflags |= PGR_SAMESZC;
 
-	/* LINTED */
-	MTYPE_PGR_INIT(mtype, flags, like_pp, page_mnode, npgs);
+	MTYPE_PGR_INIT(mtype, flags, like_pp, npgs);
 
 	while (npgs) {
 		pplist = NULL;

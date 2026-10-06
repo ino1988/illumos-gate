@@ -22,15 +22,18 @@
 # Copyright 2009 Sun Microsystems, Inc.  All rights reserved.
 # Use is subject to license terms.
 #
+# Copyright 2024 Oxide Computer Company
 
 PROG = smbios
-OBJS = smbios.o
+OBJS = smbios.o bitext.o $(HEXDUMP_OBJS)
 SRCS = $(OBJS:%.o=%.c)
 
 include ../Makefile.cmd
+include ../Makefile.cmd.64
+include $(SRC)/common/hexdump/Makefile.com
 
 CFLAGS += $(CCVERBOSE)
-LDLIBS += -lsmbios
+LDLIBS += -lsmbios -ljedec
 
 FILEMODE = 0555
 STRIPFLAG =
@@ -43,11 +46,14 @@ $(PROG): $(OBJS)
 	$(LINK.c) -o $@ $(OBJS) $(LDLIBS)
 	$(POST_PROCESS)
 
+%.o: $(SRC)/common/bitext/%.c
+	$(COMPILE.c) $<
+	$(POST_PROCESS_O)
+
 clean:
 	$(RM) $(OBJS)
 
 install: $(ROOTUSRSBINPROG)
 
-lint: lint_SRCS
-
+include $(SRC)/common/hexdump/Makefile.targ
 include ../Makefile.targ

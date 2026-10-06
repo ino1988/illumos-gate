@@ -26,8 +26,6 @@
 #ifndef	_MENU_H
 #define	_MENU_H
 
-#pragma ident	"%Z%%M%	%I%	%E% SMI"
-
 #ifdef	__cplusplus
 extern "C" {
 #endif
@@ -49,11 +47,6 @@ struct menu_item {
 	int	(*menu_func)();
 	int	(*menu_state)();
 };
-
-
-/*
- *	Prototypes for ANSI C compilers
- */
 
 char	**create_menu_list(struct menu_item *menu);
 void	display_menu_list(char **list);

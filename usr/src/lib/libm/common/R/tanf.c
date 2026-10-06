@@ -26,7 +26,7 @@
  * Use is subject to license terms.
  */
 
-#pragma weak tanf = __tanf
+#pragma weak __tanf = tanf
 
 #include "libm.h"
 
@@ -76,7 +76,7 @@ tanf(float x)
 	double	y, z, w;
 	float	f;
 	int	n, ix, hx, hy;
-	volatile int i;
+	volatile int i __unused;
 
 	hx = *((int *)&x);
 	ix = hx & 0x7fffffff;

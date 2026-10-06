@@ -23,7 +23,9 @@
  * Use is subject to license terms.
  */
 
-#pragma ident	"%Z%%M%	%I%	%E% SMI"
+/*
+ * Copyright (c) 2018, Joyent, Inc.
+ */
 
 #include <stdio.h>
 #include <stdlib.h>
@@ -433,7 +435,7 @@ static gs_ops_t do_gs_func[] = {
 };
 
 #define	N_FUNC		sizeof (do_func) / sizeof (cmd_ops_t)
-#define	N_GS_FUNC 	sizeof (do_gs_func) / sizeof (gs_ops_t)
+#define	N_GS_FUNC	sizeof (do_gs_func) / sizeof (gs_ops_t)
 
 /*
  * valid rate value
@@ -2531,7 +2533,7 @@ do_deletepf(int fd, int argc, char **argv)
 				    B_FALSE);
 				free(section_id);
 				p_section = p_sectionbak;
-					continue;
+				continue;
 			}
 			p_section = p_section->section_next;
 		}
@@ -2751,8 +2753,9 @@ do_rmprefer(int fd, int argc, char **argv)
 			return (B_FALSE);
 		pae = plist->ael_head;
 		while (pae != NULL) {
+			ae_t *next = pae->ae_next;
 			free(pae);
-			pae = pae->ae_next;
+			pae = next;
 		}
 		plist->ael_head = plist->ael_tail = NULL;
 		plist->ael_argc = 0;
@@ -3145,7 +3148,7 @@ do_wlanlist(int fd, int argc, char **argv)
 
 /*
  * do_showstatus: show the basic status of the interface, including
- * linkstauts, essid, encryption and signal strength.
+ * linkstatus, essid, encryption and signal strength.
  */
 /*ARGSUSED*/
 static boolean_t
@@ -4001,7 +4004,7 @@ do_get_wlanlist(int fd)
 static boolean_t
 do_get_linkstatus(int fd)
 {
-	PRTDBG(("do_get_linkstauts(%d)\n", fd));
+	PRTDBG(("do_get_linkstatus(%d)\n", fd));
 	return (call_ioctl(fd, WLAN_GET_PARAM, WL_LINKSTATUS, 0));
 }
 

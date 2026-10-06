@@ -1,4 +1,5 @@
 /*
+ * Copyright 2017 Gary Mills
  * Copyright 2008 Sun Microsystems, Inc.  All rights reserved.
  * Use is subject to license terms.
  */
@@ -156,21 +157,19 @@ static int get_ticket_policy(rparams,i,argv,argc)
     time_t now;
     int mask = 0;
     krb5_error_code retval = 0;
-    krb5_boolean no_msg = FALSE;
 
-    krb5_boolean print_usage = FALSE;
     /* Solaris Kerberos */
     char *me = progname;
 
     time(&now);
     if (!strcmp(argv[*i], "-maxtktlife")) {
 	if (++(*i) > argc-1)
-	    goto err_usage;
+	    goto err;
 	date = get_date(argv[*i]);
 	if (date == (time_t)(-1)) {
 	    retval = EINVAL;
 	    com_err (me, retval, gettext("while providing time specification"));
-	    goto err_nomsg;
+	    goto err;
 	}
 	rparams->max_life = date-now;
 	mask |= LDAP_REALM_MAXTICKETLIFE;
@@ -179,13 +178,13 @@ static int get_ticket_policy(rparams,i,argv,argc)
 
     else if (!strcmp(argv[*i], "-maxrenewlife")) {
 	if (++(*i) > argc-1)
-	    goto err_usage;
+	    goto err;
 
 	date = get_date(argv[*i]);
 	if (date == (time_t)(-1)) {
 	    retval = EINVAL;
 	    com_err (me, retval, gettext("while providing time specification"));
-	    goto err_nomsg;
+	    goto err;
 	}
 	rparams->max_renewable_life = date-now;
 	mask |= LDAP_REALM_MAXRENEWLIFE;
@@ -195,7 +194,7 @@ static int get_ticket_policy(rparams,i,argv,argc)
 	else if (*(argv[*i]) == '-')
 	    rparams->tktflags |= KRB5_KDB_DISALLOW_POSTDATED;
 	else
-	    goto err_usage;
+	    goto err;
 
 	mask |= LDAP_REALM_KRBTICKETFLAGS;
     } else if (!strcmp((argv[*i] + 1), "allow_forwardable")) {
@@ -205,7 +204,7 @@ static int get_ticket_policy(rparams,i,argv,argc)
 	else if (*(argv[*i]) == '-')
 	    rparams->tktflags |= KRB5_KDB_DISALLOW_FORWARDABLE;
 	else
-	    goto err_usage;
+	    goto err;
 
 	mask |= LDAP_REALM_KRBTICKETFLAGS;
     } else if (!strcmp((argv[*i] + 1), "allow_renewable")) {
@@ -214,7 +213,7 @@ static int get_ticket_policy(rparams,i,argv,argc)
 	else if (*(argv[*i]) == '-')
 	    rparams->tktflags |= KRB5_KDB_DISALLOW_RENEWABLE;
 	else
-	    goto err_usage;
+	    goto err;
 
 	mask |= LDAP_REALM_KRBTICKETFLAGS;
     } else if (!strcmp((argv[*i] + 1), "allow_proxiable")) {
@@ -223,7 +222,7 @@ static int get_ticket_policy(rparams,i,argv,argc)
 	else if (*(argv[*i]) == '-')
 	    rparams->tktflags |= KRB5_KDB_DISALLOW_PROXIABLE;
 	else
-	    goto err_usage;
+	    goto err;
 
 	mask |= LDAP_REALM_KRBTICKETFLAGS;
     } else if (!strcmp((argv[*i] + 1), "allow_dup_skey")) {
@@ -232,7 +231,7 @@ static int get_ticket_policy(rparams,i,argv,argc)
 	else if (*(argv[*i]) == '-')
 	    rparams->tktflags |= KRB5_KDB_DISALLOW_DUP_SKEY;
 	else
-	    goto err_usage;
+	    goto err;
 
 	mask |= LDAP_REALM_KRBTICKETFLAGS;
     }
@@ -243,7 +242,7 @@ static int get_ticket_policy(rparams,i,argv,argc)
 	else if (*(argv[*i]) == '-')
 	    rparams->tktflags &= (int)(~KRB5_KDB_REQUIRES_PRE_AUTH);
 	else
-	    goto err_usage;
+	    goto err;
 
 	mask |= LDAP_REALM_KRBTICKETFLAGS;
     } else if (!strcmp((argv[*i] + 1), "requires_hwauth")) {
@@ -252,7 +251,7 @@ static int get_ticket_policy(rparams,i,argv,argc)
 	else if (*(argv[*i]) == '-')
 	    rparams->tktflags &= (int)(~KRB5_KDB_REQUIRES_HW_AUTH);
 	else
-	    goto err_usage;
+	    goto err;
 
 	mask |= LDAP_REALM_KRBTICKETFLAGS;
     } else if (!strcmp((argv[*i] + 1), "allow_svr")) {
@@ -261,7 +260,7 @@ static int get_ticket_policy(rparams,i,argv,argc)
 	else if (*(argv[*i]) == '-')
 	    rparams->tktflags |= KRB5_KDB_DISALLOW_SVR;
 	else
-	    goto err_usage;
+	    goto err;
 
 	mask |= LDAP_REALM_KRBTICKETFLAGS;
     } else if (!strcmp((argv[*i] + 1), "allow_tgs_req")) {
@@ -270,7 +269,7 @@ static int get_ticket_policy(rparams,i,argv,argc)
 	else if (*(argv[*i]) == '-')
 	    rparams->tktflags |= KRB5_KDB_DISALLOW_TGT_BASED;
 	else
-	    goto err_usage;
+	    goto err;
 
 	mask |= LDAP_REALM_KRBTICKETFLAGS;
     } else if (!strcmp((argv[*i] + 1), "allow_tix")) {
@@ -279,7 +278,7 @@ static int get_ticket_policy(rparams,i,argv,argc)
 	else if (*(argv[*i]) == '-')
 	    rparams->tktflags |= KRB5_KDB_DISALLOW_ALL_TIX;
 	else
-	    goto err_usage;
+	    goto err;
 
 	mask |= LDAP_REALM_KRBTICKETFLAGS;
     } else if (!strcmp((argv[*i] + 1), "needchange")) {
@@ -288,7 +287,7 @@ static int get_ticket_policy(rparams,i,argv,argc)
 	else if (*(argv[*i]) == '-')
 	    rparams->tktflags &= (int)(~KRB5_KDB_REQUIRES_PWCHANGE);
 	else
-	    goto err_usage;
+	    goto err;
 
 	mask |= LDAP_REALM_KRBTICKETFLAGS;
     } else if (!strcmp((argv[*i] + 1), "password_changing_service")) {
@@ -297,15 +296,12 @@ static int get_ticket_policy(rparams,i,argv,argc)
 	else if (*(argv[*i]) == '-')
 	    rparams->tktflags &= (int)(~KRB5_KDB_PWCHANGE_SERVICE);
 	else
-	    goto err_usage;
+	    goto err;
 
 	mask |=LDAP_REALM_KRBTICKETFLAGS;
     }
-err_usage:
-    print_usage = TRUE;
 
-err_nomsg:
-    no_msg = TRUE;
+err:
 
     return mask;
 }
@@ -724,7 +720,7 @@ void kdb5_ldap_create(argc, argv)
 	 * Solaris Kerberos:
 	 * The kadmin/admin principal is unused on Solaris. This principal is used
 	 * in AUTH_GSSAPI but Solaris doesn't support AUTH_GSSAPI. RPCSEC_GSS can only
-	 * be used with host-based principals. 
+	 * be used with host-based principals.
 	 *
 	 */
 #if 0 /* ************ Begin IFDEF'ed OUT ***************************** */
@@ -2215,7 +2211,7 @@ krb5_dbe_update_mod_princ_data_new(context, entry, mod_date, mod_princ)
 {
     krb5_tl_data          tl_data;
 
-    krb5_error_code 	  retval = 0;
+    krb5_error_code	  retval = 0;
     krb5_octet		* nextloc = 0;
     char		* unparse_mod_princ = 0;
     unsigned int	unparse_mod_princ_size;
@@ -2499,6 +2495,7 @@ kdb5_ldap_destroy(argc, argv)
 #endif
     /* Solaris Kerberos: to remove stash file */
     char *stash_file = NULL;
+    char stashbuf[MAXPATHLEN+1];
     struct stat stb;
 
     optind = 1;
@@ -2629,10 +2626,9 @@ kdb5_ldap_destroy(argc, argv)
      * This behavior exists in the Solaris version of kdb5_util destroy.
      */
     if (global_params.stash_file == NULL) {
-	char stashbuf[MAXPATHLEN+1];
 	int realm_len = strlen(global_params.realm);
 
-	(void) strlcpy(stashbuf, DEFAULT_KEYFILE_STUB, sizeof (stashbuf)); 
+	(void) strlcpy(stashbuf, DEFAULT_KEYFILE_STUB, sizeof (stashbuf));
 
 	if (realm_len <= (MAXPATHLEN-strlen(stashbuf))) {
 	    (void) strncat(stashbuf, global_params.realm,

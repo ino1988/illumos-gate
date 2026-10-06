@@ -27,8 +27,6 @@
 #ifndef _SYS_VUID_EVENT_H
 #define	_SYS_VUID_EVENT_H
 
-#pragma ident	"%Z%%M%	%I%	%E% SMI"
-
 #include <sys/types.h>
 #include <sys/types32.h>
 
@@ -370,7 +368,7 @@ typedef struct firm_event {
 				/* offset within id's segment (minus id's */
 				/* address) */
 	int		value;	/* Event's value */
-#if defined(_LP64) || defined(_I32LPx)
+#if defined(_LP64)
 	struct timeval32 time;	/* Event's time stamp */
 #else
 	struct timeval time;

@@ -48,11 +48,11 @@
  *
  *  -c file	defines the output configuration file.
  *
- *  -f flag	flags for dldump(3dl).
+ *  -f flag	flags for dldump(3C).
  *
- *  -o dir	defines the output directory for any dldump(3dl) objects
+ *  -o dir	defines the output directory for any dldump(3C) objects
  *		that follow.  For backward compatibility (RTC_VER_ONE only
- * 		allowed one output directory) allow the first occurrence of this
+ *		allowed one output directory) allow the first occurrence of this
  *		specification to catch any previous files.  If not specified,
  *		the configuration files parent directory is used).
  *
@@ -66,11 +66,11 @@
  * string table which will be used to create the eventual configuration file.
  *
  *  -a name	add the individual name, with an alternative to the
- *		configuration cache.  No alternative is created via dldump(3dl),
+ *		configuration cache.  No alternative is created via dldump(3C),
  *		it is the users responsibility to furnish the alternative.
  *
  *  -A name	add the individual name, with an optional alternative to the
- *		configuration cache.  No alternative is created via dldump(3dl),
+ *		configuration cache.  No alternative is created via dldump(3C),
  *		it is the users responsibility to furnish the alternative.
  *
  *  -e envar	replaceable environment variable
@@ -81,26 +81,24 @@
  *		is a directory each shared object within the directory is added
  *		to the cache.
  *
- *  -I name	same as -i, but in addition any ELF objects are dldump(3dl)'ed.
+ *  -I name	same as -i, but in addition any ELF objects are dldump(3C)'ed.
  *
  *  -g name	add the group name to the configuration cache.  Each object is
- * 		expanded to determine its dependencies and these are added to
+ *		expanded to determine its dependencies and these are added to
  *		the cache.  If name is a directory each shared object within the
  *		directory and its dependencies are added to the cache.
  *
- *  -G app	same as -g, but in addition any ELF objects are dldump(3dl)'ed.
+ *  -G app	same as -g, but in addition any ELF objects are dldump(3C)'ed.
  *
  *  -l dir	library search directory
  *
  *  -s dir	trusted (secure) directory
- *
- *  -t type	search directory type (ELF or AOUT).
  */
 
 /*
  * Establish a structure for maintaining current object directory attributes.
  * We wish to validate the access of any object directory that will be written
- * to (dldump(3dl), and thus by maintaining a current object directory and its
+ * to dldump(3C), and thus by maintaining a current object directory and its
  * intended use we can perform this validation later.
  */
 typedef struct {
@@ -118,7 +116,7 @@ main(int argc, char **argv, char **envp)
 	Alist		*objdirs = NULL;
 	Objdir		*objdir, *iobjdir;
 	struct stat	ostatus, nstatus;
-	int 		c_class;
+	int		c_class;
 
 	if ((objdir = iobjdir = alist_append(&objdirs, NULL, sizeof (Objdir),
 	    AL_CNT_CRLE)) == NULL)
@@ -180,7 +178,7 @@ main(int argc, char **argv, char **envp)
 			crle.c_flags |= (CRLE_PRMENV | CRLE_CREAT);
 			break;
 
-		case 'f':			/* dldump(3dl) flags */
+		case 'f':			/* dldump(3C) flags */
 			if (crle.c_dlflags) {
 				(void) fprintf(stderr, MSG_INTL(MSG_ARG_MULT),
 				    crle.c_name, MSG_ORIG(MSG_ARG_F));
@@ -210,11 +208,7 @@ main(int argc, char **argv, char **envp)
 			break;
 
 		case 'l':			/* library search path */
-			if (crle.c_flags & CRLE_AOUT)
-				crle.c_flags |= CRLE_ADLIB;
-			else
-				crle.c_flags |= CRLE_EDLIB;
-			crle.c_flags |= CRLE_CREAT;
+			crle.c_flags |= (CRLE_EDLIB | CRLE_CREAT);
 			break;
 
 		case 'o':			/* define an object directory */
@@ -227,21 +221,17 @@ main(int argc, char **argv, char **envp)
 			break;
 
 		case 's':			/* trusted (secure) path */
-			if (crle.c_flags & CRLE_AOUT)
-				crle.c_flags |= CRLE_ASLIB;
-			else
-				crle.c_flags |= CRLE_ESLIB;
-			crle.c_flags |= CRLE_CREAT;
+			crle.c_flags |= (CRLE_ESLIB | CRLE_CREAT);
 			break;
 
-		case 't':			/* search path type */
+		/*
+		 * Search path type, undocumented but left for compatibility.
+		 * Previously used to select between AOUT and ELF, now
+		 * anything other than ELF is an error.
+		 */
+		case 't':
 			if (strcmp((const char *)optarg,
-			    MSG_ORIG(MSG_STR_ELF)) == 0)
-				crle.c_flags &= ~CRLE_AOUT;
-			else if (strcmp((const char *)optarg,
-			    MSG_ORIG(MSG_STR_AOUT)) == 0)
-				crle.c_flags |= CRLE_AOUT;
-			else {
+			    MSG_ORIG(MSG_STR_ELF)) != 0) {
 				(void) fprintf(stderr, MSG_INTL(MSG_ARG_TYPE),
 				    crle.c_name, optarg);
 				error = 1;
@@ -400,7 +390,7 @@ main(int argc, char **argv, char **envp)
 	}
 
 	/*
-	 * If an object directory is required to hold dldump(3dl) output assign
+	 * If an object directory is required to hold dldump(3C) output assign
 	 * a default if necessary and insure we're able to write there.
 	 */
 	if (crle.c_flags & CRLE_ALTER) {
@@ -431,11 +421,11 @@ main(int argc, char **argv, char **envp)
 		}
 
 		/*
-		 * If we're going to dldump(3dl) images ourself make sure we
+		 * If we're going to dldump(3C) images ourself make sure we
 		 * can access any directories.
 		 */
 		if (crle.c_flags & CRLE_DUMP) {
-			Objdir	*objdir;
+			Objdir	*objdir = NULL;
 			Aliste	idx;
 			int	err = 0;
 
@@ -559,13 +549,8 @@ main(int argc, char **argv, char **envp)
 			break;
 
 		case 'l':			/* library search path */
-			if (crle.c_flags & CRLE_AOUT) {
-				str = MSG_ORIG(MSG_STR_AOUT);
-				lib = &crle.c_adlibpath;
-			} else {
-				str = MSG_ORIG(MSG_STR_ELF);
-				lib = &crle.c_edlibpath;
-			}
+			str = MSG_ORIG(MSG_STR_ELF);
+			lib = &crle.c_edlibpath;
 			if (addlib(&crle, lib, (const char *)optarg) != 0)
 				error = 1;
 			else if (crle.c_flags & CRLE_VERBOSE)
@@ -578,13 +563,8 @@ main(int argc, char **argv, char **envp)
 			break;
 
 		case 's':			/* trusted (secure) path */
-			if (crle.c_flags & CRLE_AOUT) {
-				str = MSG_ORIG(MSG_STR_AOUT);
-				lib = &crle.c_aslibpath;
-			} else {
-				str = MSG_ORIG(MSG_STR_ELF);
-				lib = &crle.c_eslibpath;
-			}
+			str = MSG_ORIG(MSG_STR_ELF);
+			lib = &crle.c_eslibpath;
 			if (addlib(&crle, lib, (const char *)optarg) != 0)
 				error = 1;
 			else if (crle.c_flags & CRLE_VERBOSE)
@@ -592,12 +572,7 @@ main(int argc, char **argv, char **envp)
 				    str, (const char *)optarg);
 			break;
 
-		case 't':			/* search path type */
-			if (strcmp((const char *)optarg,
-			    MSG_ORIG(MSG_STR_ELF)) == 0)
-				crle.c_flags &= ~CRLE_AOUT;
-			else
-				crle.c_flags |= CRLE_AOUT;
+		case 't':
 			break;
 
 		case 'u':
@@ -630,7 +605,7 @@ main(int argc, char **argv, char **envp)
 	}
 
 	/*
-	 * If dldump(3dl) images are required spawn a process to create them.
+	 * If dldump(3C) images are required spawn a process to create them.
 	 */
 	if (crle.c_flags & CRLE_DUMP) {
 		if (dump(&crle) != 0) {

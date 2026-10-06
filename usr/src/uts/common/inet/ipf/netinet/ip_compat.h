@@ -28,14 +28,19 @@
 #if defined(_KERNEL) || defined(KERNEL) || defined(__KERNEL__)
 # undef	KERNEL
 # undef	_KERNEL
-# undef 	__KERNEL__
+# undef		__KERNEL__
 # define	KERNEL
 # define	_KERNEL
-# define 	__KERNEL__
+# define	__KERNEL__
 #endif
 
-#ifndef	SOLARIS
-#define	SOLARIS	(defined(sun) && (defined(__svr4__) || defined(__SVR4)))
+#ifdef	SOLARIS
+#undef	SOLARIS
+#endif
+#if (defined(sun) && (defined(__svr4__) || defined(__SVR4)))
+#define	SOLARIS	(1)
+#else
+#define	SOLARIS	(0)
 #endif
 #if SOLARIS2 >= 8
 # ifndef	USE_INET6
@@ -134,7 +139,7 @@ struct file;
 /* ----------------------------------------------------------------------- */
 /*                                  S O L A R I S                          */
 /* ----------------------------------------------------------------------- */
-#if SOLARIS
+#ifdef SOLARIS
 # define	MENTAT	1
 # include	<sys/cmn_err.h>
 # include	<sys/isa_defs.h>
@@ -291,6 +296,7 @@ typedef unsigned int	u_32_t;
 #  endif /* sparc */
 #  define	KMALLOC(a,b)	(a) = (b)kmem_alloc(sizeof(*(a)), KM_NOSLEEP)
 #  define	KMALLOCS(a,b,c)	(a) = (b)kmem_alloc((c), KM_NOSLEEP)
+#  define	SLEEPING_KMALLOCS(a,b,c) (a) = (b)kmem_alloc((c), KM_SLEEP)
 #  define	GET_MINOR(x)	getminor(x)
 /*extern	phy_if_t	get_unit __P((char *, int, ipf_stack_t *));*/
 #  define	GETIFP(n, v, ifs)	(void *)get_unit(n, v, ifs)
@@ -742,7 +748,7 @@ struct ip6_ext {
 	u_char	ip6e_len;
 };
 
-typedef	int		ioctlcmd_t;  
+typedef	int		ioctlcmd_t;
 /*
  * Really, any arch where sizeof(long) != sizeof(int).
  */
@@ -794,7 +800,7 @@ typedef struct mbuf mb_t;
 # endif
 
 typedef	struct uio	uio_t;
-typedef	u_long		ioctlcmd_t;  
+typedef	u_long		ioctlcmd_t;
 typedef	int		minor_t;
 typedef	u_int32_t	u_32_t;
 # define	U_32_T	1
@@ -808,10 +814,10 @@ typedef	u_int32_t	u_32_t;
 /* ----------------------------------------------------------------------- */
 #ifdef __FreeBSD__
 # if defined(_KERNEL)
-#  if (__FreeBSD_version >= 500000)                          
+#  if (__FreeBSD_version >= 500000)
 #   include "opt_bpf.h"
 #  else
-#   include "bpf.h"    
+#   include "bpf.h"
 #  endif
 #  if defined(__FreeBSD_version) && (__FreeBSD_version >= 400000)
 #   include "opt_inet6.h"
@@ -1015,7 +1021,7 @@ typedef struct mbuf mb_t;
 # endif
 
 typedef	struct uio	uio_t;
-typedef	u_long		ioctlcmd_t;  
+typedef	u_long		ioctlcmd_t;
 typedef	int		minor_t;
 typedef	u_int32_t	u_32_t;
 # define	U_32_T	1
@@ -1080,7 +1086,7 @@ typedef struct mbuf mb_t;
 # endif
 
 typedef	struct uio	uio_t;
-typedef	int		ioctlcmd_t;  
+typedef	int		ioctlcmd_t;
 typedef	int		minor_t;
 typedef	unsigned int	u_32_t;
 # define	U_32_T	1
@@ -1176,7 +1182,7 @@ extern	mb_t	*m_pullup __P((mb_t *, int));
 
 #  define	ifnet		net_device
 #  define	if_xname	name
-#  define	if_unit		ifindex 
+#  define	if_unit		ifindex
 
 #  define	KMALLOC(x,t)	(x) = (t)kmalloc(sizeof(*(x)), \
 				    in_interrupt() ? GFP_ATOMIC : GFP_KERNEL)
@@ -1342,7 +1348,7 @@ struct ip6_ext {
 	u_char	ip6e_len;
 };
 
-typedef	int		ioctlcmd_t;  
+typedef	int		ioctlcmd_t;
 typedef	int		minor_t;
 /*
  * Really, any arch where sizeof(long) != sizeof(int).
@@ -1473,6 +1479,7 @@ typedef	struct	mb_s	{
 # define	SPL_X(x)	;
 # define	KMALLOC(a,b)	(a) = (b)malloc(sizeof(*a))
 # define	KMALLOCS(a,b,c)	(a) = (b)malloc(c)
+# define	SLEEPING_KMALLOCS KMALLOCS
 # define	KFREE(x)	free(x)
 # define	KFREES(x,s)	free(x)
 # define	GETIFP(x, v, ifs)	get_unit(x,v, ifs)
@@ -1808,7 +1815,7 @@ typedef	struct	tcpiphdr	tcpiphdr_t;
 
 #if (BSD >= 199306) && !defined(m_act)
 # define	m_act	m_nextpkt
-#endif  
+#endif
 
 /*
  * Security Options for Intenet Protocol (IPSO) as defined in RFC 1108.
@@ -1845,7 +1852,7 @@ typedef	struct	tcpiphdr	tcpiphdr_t;
  * IP option #defines
  */
 #undef	IPOPT_RR
-#define	IPOPT_RR	7 
+#define	IPOPT_RR	7
 #undef	IPOPT_ZSU
 #define	IPOPT_ZSU	10	/* ZSU */
 #undef	IPOPT_MTUP

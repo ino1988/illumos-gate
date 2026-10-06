@@ -22,6 +22,7 @@
 /*
  * Copyright 2009 Sun Microsystems, Inc.  All rights reserved.
  * Use is subject to license terms.
+ * Copyright (c) 2017, Joyent, Inc.  All rights reserved.
  */
 
 #include <sys/param.h>
@@ -36,6 +37,7 @@
 #include <sys/mutex.h>
 #include <sys/bitmap.h>
 #include <sys/atomic.h>
+#include <sys/sunddi.h>
 #include <sys/kobj.h>
 #include <sys/disp.h>
 #include <vm/seg_kmem.h>
@@ -121,11 +123,23 @@ static boolean_t wait_for_zone_creator(netstack_t *, kmutex_t *);
 static boolean_t wait_for_nms_inprogress(netstack_t *, nm_state_t *,
     kmutex_t *);
 
+static void netstack_hold_locked(netstack_t *);
+
+static ksema_t netstack_reap_limiter;
+/*
+ * Hard-coded constant, but since this is not tunable in real-time, it seems
+ * making it an /etc/system tunable is better than nothing.
+ */
+uint_t netstack_outstanding_reaps = 1024;
+
 void
 netstack_init(void)
 {
 	mutex_init(&netstack_g_lock, NULL, MUTEX_DEFAULT, NULL);
 	mutex_init(&netstack_shared_lock, NULL, MUTEX_DEFAULT, NULL);
+
+	sema_init(&netstack_reap_limiter, netstack_outstanding_reaps, NULL,
+	    SEMA_DRIVER, NULL);
 
 	netstack_initialized = 1;
 
@@ -220,10 +234,37 @@ netstack_unregister(int moduleid)
 	 * instances can use this module.
 	 */
 	for (ns = netstack_head; ns != NULL; ns = ns->netstack_next) {
+		boolean_t created = B_FALSE;
 		nm_state_t *nms = &ns->netstack_m_state[moduleid];
 
 		mutex_enter(&ns->netstack_lock);
-		if (ns_reg[moduleid].nr_shutdown != NULL &&
+
+		/*
+		 * We need to be careful here. We could actually have a netstack
+		 * being created as we speak waiting for us to let go of this
+		 * lock to proceed. It may have set NSS_CREATE_NEEDED, but not
+		 * have gotten to the point of completing it yet. If
+		 * NSS_CREATE_NEEDED, we can safely just remove it here and
+		 * never create the module. However, if NSS_CREATE_INPROGRESS is
+		 * set, we need to still flag this module for shutdown and
+		 * deletion, just as though it had reached NSS_CREATE_COMPLETED.
+		 *
+		 * It is safe to do that because of two different guarantees
+		 * that exist in the system. The first is that before we do a
+		 * create, shutdown, or destroy, we ensure that nothing else is
+		 * in progress in the system for this netstack and wait for it
+		 * to complete. Secondly, because the zone is being created, we
+		 * know that the following call to apply_all_netstack will block
+		 * on the zone finishing its initialization.
+		 */
+		if (nms->nms_flags & NSS_CREATE_NEEDED)
+			nms->nms_flags &= ~NSS_CREATE_NEEDED;
+
+		if (nms->nms_flags & NSS_CREATE_INPROGRESS ||
+		    nms->nms_flags & NSS_CREATE_COMPLETED)
+			created = B_TRUE;
+
+		if (ns_reg[moduleid].nr_shutdown != NULL && created &&
 		    (nms->nms_flags & NSS_CREATE_COMPLETED) &&
 		    (nms->nms_flags & NSS_SHUTDOWN_ALL) == 0) {
 			nms->nms_flags |= NSS_SHUTDOWN_NEEDED;
@@ -231,8 +272,7 @@ netstack_unregister(int moduleid)
 			    netstack_t *, ns, int, moduleid);
 		}
 		if ((ns_reg[moduleid].nr_flags & NRF_REGISTERED) &&
-		    ns_reg[moduleid].nr_destroy != NULL &&
-		    (nms->nms_flags & NSS_CREATE_COMPLETED) &&
+		    ns_reg[moduleid].nr_destroy != NULL && created &&
 		    (nms->nms_flags & NSS_DESTROY_ALL) == 0) {
 			nms->nms_flags |= NSS_DESTROY_NEEDED;
 			DTRACE_PROBE2(netstack__destroy__needed,
@@ -313,7 +353,7 @@ netstack_zone_create(zoneid_t zoneid)
 			/*
 			 * Should never find a pre-existing exclusive stack
 			 */
-			ASSERT(stackid == GLOBAL_NETSTACKID);
+			VERIFY(stackid == GLOBAL_NETSTACKID);
 			kmem_free(ns, sizeof (netstack_t));
 			ns = *nsp;
 			mutex_enter(&ns->netstack_lock);
@@ -889,12 +929,7 @@ netstack_get_current(void)
 
 	ns = curproc->p_zone->zone_netstack;
 	ASSERT(ns != NULL);
-	if (ns->netstack_flags & (NSF_UNINIT|NSF_CLOSING))
-		return (NULL);
-
-	netstack_hold(ns);
-
-	return (ns);
+	return (netstack_hold_if_active(ns));
 }
 
 /*
@@ -926,7 +961,7 @@ netstack_find_by_cred(const cred_t *cr)
  * If there is no exact match then assume the shared stack instance
  * matches.
  *
- * Skip the unitialized ones.
+ * Skip the uninitialized and closing ones.
  */
 netstack_t *
 netstack_find_by_zoneid(zoneid_t zoneid)
@@ -939,12 +974,8 @@ netstack_find_by_zoneid(zoneid_t zoneid)
 	if (zone == NULL)
 		return (NULL);
 
-	ns = zone->zone_netstack;
-	ASSERT(ns != NULL);
-	if (ns->netstack_flags & (NSF_UNINIT|NSF_CLOSING))
-		ns = NULL;
-	else
-		netstack_hold(ns);
+	ASSERT(zone->zone_netstack != NULL);
+	ns = netstack_hold_if_active(zone->zone_netstack);
 
 	zone_rele(zone);
 	return (ns);
@@ -966,7 +997,6 @@ netstack_find_by_zoneid(zoneid_t zoneid)
 netstack_t *
 netstack_find_by_zoneid_nolock(zoneid_t zoneid)
 {
-	netstack_t *ns;
 	zone_t *zone;
 
 	zone = zone_find_by_id_nolock(zoneid);
@@ -974,16 +1004,9 @@ netstack_find_by_zoneid_nolock(zoneid_t zoneid)
 	if (zone == NULL)
 		return (NULL);
 
-	ns = zone->zone_netstack;
-	ASSERT(ns != NULL);
-
-	if (ns->netstack_flags & (NSF_UNINIT|NSF_CLOSING))
-		ns = NULL;
-	else
-		netstack_hold(ns);
-
+	ASSERT(zone->zone_netstack != NULL);
 	/* zone_find_by_id_nolock does not have a hold on the zone */
-	return (ns);
+	return (netstack_hold_if_active(zone->zone_netstack));
 }
 
 /*
@@ -1000,11 +1023,12 @@ netstack_find_by_stackid(netstackid_t stackid)
 
 	mutex_enter(&netstack_g_lock);
 	for (ns = netstack_head; ns != NULL; ns = ns->netstack_next) {
+		/* Can't use hold_if_active because of stackid check. */
 		mutex_enter(&ns->netstack_lock);
 		if (ns->netstack_stackid == stackid &&
 		    !(ns->netstack_flags & (NSF_UNINIT|NSF_CLOSING))) {
+			netstack_hold_locked(ns);
 			mutex_exit(&ns->netstack_lock);
-			netstack_hold(ns);
 			mutex_exit(&netstack_g_lock);
 			return (ns);
 		}
@@ -1014,13 +1038,81 @@ netstack_find_by_stackid(netstackid_t stackid)
 	return (NULL);
 }
 
+boolean_t
+netstack_inuse_by_stackid(netstackid_t stackid)
+{
+	netstack_t *ns;
+	boolean_t rval = B_FALSE;
+
+	mutex_enter(&netstack_g_lock);
+
+	for (ns = netstack_head; ns != NULL; ns = ns->netstack_next) {
+		if (ns->netstack_stackid == stackid) {
+			rval = B_TRUE;
+			break;
+		}
+	}
+
+	mutex_exit(&netstack_g_lock);
+
+	return (rval);
+}
+
+
+static void
+netstack_reap(void *arg)
+{
+	netstack_t **nsp, *ns = (netstack_t *)arg;
+	boolean_t found;
+	int i;
+
+	/*
+	 * Time to call the destroy functions and free up
+	 * the structure
+	 */
+	netstack_stack_inactive(ns);
+
+	/* Make sure nothing increased the references */
+	ASSERT(ns->netstack_refcnt == 0);
+	ASSERT(ns->netstack_numzones == 0);
+
+	/* Finally remove from list of netstacks */
+	mutex_enter(&netstack_g_lock);
+	found = B_FALSE;
+	for (nsp = &netstack_head; *nsp != NULL;
+	    nsp = &(*nsp)->netstack_next) {
+		if (*nsp == ns) {
+			*nsp = ns->netstack_next;
+			ns->netstack_next = NULL;
+			found = B_TRUE;
+			break;
+		}
+	}
+	ASSERT(found);
+	mutex_exit(&netstack_g_lock);
+
+	/* Make sure nothing increased the references */
+	ASSERT(ns->netstack_refcnt == 0);
+	ASSERT(ns->netstack_numzones == 0);
+
+	ASSERT(ns->netstack_flags & NSF_CLOSING);
+
+	for (i = 0; i < NS_MAX; i++) {
+		nm_state_t *nms = &ns->netstack_m_state[i];
+
+		cv_destroy(&nms->nms_cv);
+	}
+	mutex_destroy(&ns->netstack_lock);
+	cv_destroy(&ns->netstack_cv);
+	kmem_free(ns, sizeof (*ns));
+	/* Allow another reap to be scheduled. */
+	sema_v(&netstack_reap_limiter);
+}
+
 void
 netstack_rele(netstack_t *ns)
 {
-	netstack_t **nsp;
-	boolean_t found;
 	int refcnt, numzones;
-	int i;
 
 	mutex_enter(&ns->netstack_lock);
 	ASSERT(ns->netstack_refcnt > 0);
@@ -1038,55 +1130,71 @@ netstack_rele(netstack_t *ns)
 
 	if (refcnt == 0 && numzones == 0) {
 		/*
-		 * Time to call the destroy functions and free up
-		 * the structure
+		 * Because there are possibilities of re-entrancy in various
+		 * netstack structures by callers, which might cause a lock up
+		 * due to odd reference models, or other factors, we choose to
+		 * schedule the actual deletion of this netstack as a deferred
+		 * task on the system taskq.  This way, any such reference
+		 * models won't trip over themselves.
+		 *
+		 * Assume we aren't in a high-priority interrupt context, so
+		 * we can use KM_SLEEP and semaphores.
 		 */
-		netstack_stack_inactive(ns);
+		if (sema_tryp(&netstack_reap_limiter) == 0) {
+			/*
+			 * Indicate we're slamming against a limit.
+			 */
+			hrtime_t measurement = gethrtime();
 
-		/* Make sure nothing increased the references */
-		ASSERT(ns->netstack_refcnt == 0);
-		ASSERT(ns->netstack_numzones == 0);
-
-		/* Finally remove from list of netstacks */
-		mutex_enter(&netstack_g_lock);
-		found = B_FALSE;
-		for (nsp = &netstack_head; *nsp != NULL;
-		    nsp = &(*nsp)->netstack_next) {
-			if (*nsp == ns) {
-				*nsp = ns->netstack_next;
-				ns->netstack_next = NULL;
-				found = B_TRUE;
-				break;
-			}
+			sema_p(&netstack_reap_limiter);
+			/* Capture delay in ns. */
+			DTRACE_PROBE1(netstack__reap__rate__limited,
+			    hrtime_t, gethrtime() - measurement);
 		}
-		ASSERT(found);
-		mutex_exit(&netstack_g_lock);
 
-		/* Make sure nothing increased the references */
-		ASSERT(ns->netstack_refcnt == 0);
-		ASSERT(ns->netstack_numzones == 0);
-
-		ASSERT(ns->netstack_flags & NSF_CLOSING);
-
-		for (i = 0; i < NS_MAX; i++) {
-			nm_state_t *nms = &ns->netstack_m_state[i];
-
-			cv_destroy(&nms->nms_cv);
-		}
-		mutex_destroy(&ns->netstack_lock);
-		cv_destroy(&ns->netstack_cv);
-		kmem_free(ns, sizeof (*ns));
+		/* TQ_SLEEP should prevent taskq_dispatch() from failing. */
+		(void) taskq_dispatch(system_taskq, netstack_reap, ns,
+		    TQ_SLEEP);
 	}
+}
+
+static void
+netstack_hold_locked(netstack_t *ns)
+{
+	ASSERT(MUTEX_HELD(&ns->netstack_lock));
+	ns->netstack_refcnt++;
+	ASSERT(ns->netstack_refcnt > 0);
+	DTRACE_PROBE1(netstack__inc__ref, netstack_t *, ns);
+}
+
+/*
+ * If the passed-in netstack isn't active (i.e. it's uninitialized or closing),
+ * return NULL, otherwise return it with its reference held.  Common code
+ * for many netstack_find*() functions.
+ */
+netstack_t *
+netstack_hold_if_active(netstack_t *ns)
+{
+	netstack_t *retval;
+
+	mutex_enter(&ns->netstack_lock);
+	if (ns->netstack_flags & (NSF_UNINIT | NSF_CLOSING)) {
+		retval = NULL;
+	} else {
+		netstack_hold_locked(ns);
+		retval = ns;
+	}
+	mutex_exit(&ns->netstack_lock);
+
+	return (retval);
 }
 
 void
 netstack_hold(netstack_t *ns)
 {
 	mutex_enter(&ns->netstack_lock);
-	ns->netstack_refcnt++;
-	ASSERT(ns->netstack_refcnt > 0);
+	netstack_hold_locked(ns);
 	mutex_exit(&ns->netstack_lock);
-	DTRACE_PROBE1(netstack__inc__ref, netstack_t *, ns);
 }
 
 /*
@@ -1327,20 +1435,21 @@ netstack_next(netstack_handle_t *handle)
 			break;
 		ns = ns->netstack_next;
 	}
-	/* skip those with that aren't really here */
+	/*
+	 * Skip those that aren't really here (uninitialized or closing).
+	 * Can't use hold_if_active because of "end" tracking.
+	 */
 	while (ns != NULL) {
 		mutex_enter(&ns->netstack_lock);
 		if ((ns->netstack_flags & (NSF_UNINIT|NSF_CLOSING)) == 0) {
+			*handle = end + 1;
+			netstack_hold_locked(ns);
 			mutex_exit(&ns->netstack_lock);
 			break;
 		}
 		mutex_exit(&ns->netstack_lock);
 		end++;
 		ns = ns->netstack_next;
-	}
-	if (ns != NULL) {
-		*handle = end + 1;
-		netstack_hold(ns);
 	}
 	mutex_exit(&netstack_g_lock);
 	return (ns);

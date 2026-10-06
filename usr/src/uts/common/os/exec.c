@@ -24,9 +24,11 @@
  */
 
 /*	Copyright (c) 1988 AT&T	*/
-/*	  All Rights Reserved  	*/
+/*	  All Rights Reserved	*/
 /*
- * Copyright (c) 2012, Joyent, Inc.  All rights reserved.
+ * Copyright 2015 Garrett D'Amore <garrett@damore.org>
+ * Copyright 2019 Joyent, Inc.
+ * Copyright 2026 Oxide Computer Company
  */
 
 #include <sys/types.h>
@@ -52,6 +54,7 @@
 #include <sys/lgrp.h>
 #include <sys/vtrace.h>
 #include <sys/exec.h>
+#include <sys/execx.h>
 #include <sys/exechdr.h>
 #include <sys/kmem.h>
 #include <sys/prsystm.h>
@@ -69,6 +72,7 @@
 #include <sys/sdt.h>
 #include <sys/brand.h>
 #include <sys/klpd.h>
+#include <sys/random.h>
 
 #include <c2/audit.h>
 
@@ -77,6 +81,7 @@
 #include <vm/as.h>
 #include <vm/seg.h>
 #include <vm/seg_vn.h>
+#include <vm/seg_hole.h>
 
 #define	PRIV_RESET		0x01	/* needs to reset privs */
 #define	PRIV_SETID		0x02	/* needs to change uids */
@@ -91,34 +96,114 @@ static int hold_execsw(struct execsw *);
 
 uint_t auxv_hwcap = 0;	/* auxv AT_SUN_HWCAP value; determined on the fly */
 uint_t auxv_hwcap_2 = 0;	/* AT_SUN_HWCAP2 */
+uint_t auxv_hwcap_3 = 0;	/* AT_SUN_HWCAP3 */
 #if defined(_SYSCALL32_IMPL)
 uint_t auxv_hwcap32 = 0;	/* 32-bit version of auxv_hwcap */
 uint_t auxv_hwcap32_2 = 0;	/* 32-bit version of auxv_hwcap2 */
+uint_t auxv_hwcap32_3 = 0;	/* 32-bit version of auxv_hwcap3 */
 #endif
 
 #define	PSUIDFLAGS		(SNOCD|SUGID)
 
 /*
+ * These are consumed within the specific exec modules, but are defined here
+ * because
+ *
+ * 1) The exec modules are unloadable, which would make this near useless.
+ *
+ * 2) We want them to be common across all of them, should more than ELF come
+ *    to support them.
+ *
+ * All must be powers of 2.
+ */
+size_t aslr_max_brk_skew = 16 * 1024 * 1024; /* 16MB */
+#pragma weak exec_stackgap = aslr_max_stack_skew /* Old, compatible name */
+size_t aslr_max_stack_skew = 64 * 1024; /* 64KB */
+
+/*
+ * Size of guard segment for 64-bit processes and minimum size it can be shrunk
+ * to in the case of grow() operations.  These are kept as variables in case
+ * they need to be tuned in an emergency.
+ */
+size_t stack_guard_seg_sz = 256 * 1024 * 1024;
+size_t stack_guard_min_sz = 64 * 1024 * 1024;
+
+/*
  * exece() - system call wrapper around exec_common()
  */
 int
-exece(const char *fname, const char **argp, const char **envp)
+exece(uintptr_t file, const char **argp, const char **envp, int flags)
 {
 	int error;
 
-	error = exec_common(fname, argp, envp, EBA_NONE);
+	if ((flags & ~EXEC_DESCRIPTOR) != 0)
+		return (set_errno(EINVAL));
+
+	if ((flags & EXEC_DESCRIPTOR) != 0) {
+		/*
+		 * If EXEC_DESCRIPTOR is specified, then the `file`
+		 * parameter is the number of a file descriptor in the current
+		 * process.
+		 */
+		char *path = NULL;
+		size_t allocsize;
+		int fd = (int)file;
+		vnode_t *vp = NULL;
+
+		if ((error = fgetstartvp(fd, NULL, &vp)) != 0)
+			return (set_errno(error));
+
+		mutex_enter(&vp->v_lock);
+		if (vp->v_path != NULL && vp->v_path != vn_vpath_empty) {
+			allocsize = strlen(vp->v_path) + 1;
+			path = kmem_alloc(allocsize, KM_NOSLEEP);
+			if (path == NULL) {
+				mutex_exit(&vp->v_lock);
+				VN_RELE(vp);
+				return (set_errno(ENOMEM));
+			}
+			bcopy(vp->v_path, path, allocsize);
+		}
+		mutex_exit(&vp->v_lock);
+
+		/*
+		 * In the unlikely event that the descriptor's path is not
+		 * cached, we fall back to using a constructed one.
+		 */
+		if (path == NULL) {
+			/* 8 for "/dev/fd/", 10 for %d, + \0 == 19 */
+			allocsize = 20;
+			path = kmem_alloc(allocsize, KM_NOSLEEP);
+			if (path == NULL) {
+				VN_RELE(vp);
+				return (set_errno(ENOMEM));
+			}
+			(void) snprintf(path, allocsize, "/dev/fd/%d", fd);
+		}
+
+		error = exec_common(path, argp, envp, vp, EBA_NONE,
+		    UIO_USERSPACE);
+		VN_RELE(vp);
+		kmem_free(path, allocsize);
+	} else {
+		const char *fname = (const char *)file;
+
+		error = exec_common(fname, argp, envp, NULL, EBA_NONE,
+		    UIO_USERSPACE);
+	}
+
 	return (error ? (set_errno(error)) : 0);
 }
 
 int
 exec_common(const char *fname, const char **argp, const char **envp,
-    int brand_action)
+    vnode_t *vp, int brand_action, uio_seg_t seg)
 {
-	vnode_t *vp = NULL, *dir = NULL, *tmpvp = NULL;
+	vnode_t *dir = NULL, *tmpvp = NULL;
 	proc_t *p = ttoproc(curthread);
 	klwp_t *lwp = ttolwp(curthread);
 	struct user *up = PTOU(p);
-	long execsz;		/* temporary count of exec size */
+	size_t execsz;		/* temporary count of exec size */
 	int i;
 	int error;
 	char exec_file[MAXCOMLEN+1];
@@ -185,36 +270,53 @@ exec_common(const char *fname, const char **argp, const char **envp,
 	sigorset(&curthread->t_hold, &ignoredefault);
 	mutex_exit(&p->p_lock);
 
-	/*
-	 * Look up path name and remember last component for later.
-	 * To help coreadm expand its %d token, we attempt to save
-	 * the directory containing the executable in p_execdir. The
-	 * first call to lookuppn() may fail and return EINVAL because
-	 * dirvpp is non-NULL. In that case, we make a second call to
-	 * lookuppn() with dirvpp set to NULL; p_execdir will be NULL,
-	 * but coreadm is allowed to expand %d to the empty string and
-	 * there are other cases in which that failure may occur.
-	 */
-	if ((error = pn_get((char *)fname, UIO_USERSPACE, &pn)) != 0)
-		goto out;
-	pn_alloc(&resolvepn);
-	if ((error = lookuppn(&pn, &resolvepn, FOLLOW, &dir, &vp)) != 0) {
-		pn_free(&resolvepn);
-		pn_free(&pn);
-		if (error != EINVAL)
-			goto out;
-
-		dir = NULL;
-		if ((error = pn_get((char *)fname, UIO_USERSPACE, &pn)) != 0)
+	if (vp != NULL) {
+		/*
+		 * When a vnode is passed in we take an extra hold here and
+		 * release it before returning. This means that callers don't
+		 * need to account for the reference changing over the call.
+		 */
+		VN_HOLD(vp);
+		pn_alloc(&pn);
+		pn_alloc(&resolvepn);
+		VERIFY0(pn_set(&pn, fname));
+		VERIFY0(pn_set(&resolvepn, fname));
+	} else {
+		/*
+		 * Look up path name and remember last component for later.
+		 * To help coreadm expand its %d token, we attempt to save
+		 * the directory containing the executable in p_execdir. The
+		 * first call to lookuppn() may fail and return EINVAL because
+		 * dirvpp is non-NULL. In that case, we make a second call to
+		 * lookuppn() with dirvpp set to NULL; p_execdir will be NULL,
+		 * but coreadm is allowed to expand %d to the empty string and
+		 * there are other cases in which that failure may occur.
+		 */
+		if ((error = pn_get((char *)fname, seg, &pn)) != 0)
 			goto out;
 		pn_alloc(&resolvepn);
-		if ((error = lookuppn(&pn, &resolvepn, FOLLOW, NULLVPP,
-		    &vp)) != 0) {
+		error = lookuppn(&pn, &resolvepn, FOLLOW, &dir, &vp);
+		if (error != 0) {
 			pn_free(&resolvepn);
 			pn_free(&pn);
-			goto out;
+			if (error != EINVAL)
+				goto out;
+
+			dir = NULL;
+			if ((error = pn_get((char *)fname, seg,
+			    &pn)) != 0) {
+				goto out;
+			}
+			pn_alloc(&resolvepn);
+			if ((error = lookuppn(&pn, &resolvepn, FOLLOW, NULLVPP,
+			    &vp)) != 0) {
+				pn_free(&resolvepn);
+				pn_free(&pn);
+				goto out;
+			}
 		}
 	}
+
 	if (vp == NULL) {
 		if (dir != NULL)
 			VN_RELE(dir);
@@ -254,6 +356,7 @@ exec_common(const char *fname, const char **argp, const char **envp,
 	bzero(exec_file, MAXCOMLEN+1);
 	(void) strncpy(exec_file, pn.pn_path, MAXCOMLEN);
 	bzero(&args, sizeof (args));
+	args.argseg = seg;
 	args.pathname = resolvepn.pn_path;
 	/* don't free resolvepn until we are done with args */
 	pn_free(&pn);
@@ -331,7 +434,7 @@ exec_common(const char *fname, const char **argp, const char **envp,
 	 */
 	up->u_acflag &= ~AFORK;
 	bcopy(exec_file, up->u_comm, MAXCOMLEN+1);
-	curthread->t_predcache = NULL;
+	curthread->t_predcache = 0;
 
 	/*
 	 * Clear contract template state
@@ -386,7 +489,19 @@ exec_common(const char *fname, const char **argp, const char **envp,
 	 * must be reset to SIG_DFL.
 	 */
 	sigdefault(p);
-	p->p_flag &= ~(SNOWAIT|SJCTL);
+	/*
+	 * This is the point at which exec commits to the new program.
+	 * SEXECED is set here, the new address space is in place and the
+	 * uarea and signal state have just been reset; the process is about
+	 * to return to userland running its new image. SSPAWNING is the
+	 * complement of SEXECED and a child carries it only while under
+	 * construction. Therefore we clear it as SEXECED is set, under
+	 * p_lock. Clearing it earlier would expose a window in which /proc
+	 * sees a process with neither kas nor SSPAWNING that has not
+	 * finished exec. Any later would leave a fully exec'd process still
+	 * flagged as spawning.
+	 */
+	p->p_flag &= ~(SNOWAIT|SJCTL|SSPAWNING);
 	p->p_flag |= (SEXECED|SMSACCT|SMSFORK);
 	up->u_signal[SIGCLD - 1] = SIG_DFL;
 
@@ -541,7 +656,7 @@ gexec(
 	struct uarg *args,
 	struct intpdata *idatap,
 	int level,
-	long *execsz,
+	size_t *execsz,
 	caddr_t exec_file,
 	struct cred *cred,
 	int brand_action)
@@ -560,6 +675,9 @@ gexec(
 	int privflags = 0;
 	int setidfl;
 	priv_set_t fset;
+	secflagset_t old_secflags;
+
+	secflags_copy(&old_secflags, &pp->p_secflags.psf_effective);
 
 	/*
 	 * If the SNOCD or SUGID flag is set, turn it off and remember the
@@ -660,6 +778,9 @@ gexec(
 		priv_adjust_PA(cred);
 	}
 
+	/* The new image gets the inheritable secflags as its secflags */
+	secflags_promote(pp);
+
 	/* SunOS 4.x buy-back */
 	if ((vp->v_vfsp->vfs_flag & VFS_NOSETUID) &&
 	    (vattr.va_mode & (VSUID|VSGID))) {
@@ -720,7 +841,8 @@ gexec(
 	 * Use /etc/system variable to determine if the stack
 	 * should be marked as executable by default.
 	 */
-	if (noexec_user_stack)
+	if ((noexec_user_stack != 0) ||
+	    secflag_enabled(pp, PROC_SEC_NOEXECSTACK))
 		args->stk_prot &= ~PROT_EXEC;
 
 	args->execswp = eswp; /* Save execsw pointer in uarg for exec_func */
@@ -876,11 +998,17 @@ bad_noclose:
 	if (error == 0)
 		error = ENOEXEC;
 
+	mutex_enter(&pp->p_lock);
 	if (suidflags) {
-		mutex_enter(&pp->p_lock);
 		pp->p_flag |= suidflags;
-		mutex_exit(&pp->p_lock);
 	}
+	/*
+	 * Restore the effective secflags, to maintain the invariant they
+	 * never change for a given process
+	 */
+	secflags_copy(&pp->p_secflags.psf_effective, &old_secflags);
+	mutex_exit(&pp->p_lock);
+
 	return (error);
 }
 
@@ -1123,7 +1251,7 @@ execpermissions(struct vnode *vp, struct vattr *vattrp, struct uarg *args)
 	if ((p->p_plist || (p->p_proc_flag & (P_PR_PTRACE|P_PR_TRACE))) &&
 	    (error = VOP_ACCESS(vp, VREAD, 0, p->p_cred, NULL))) {
 		/*
-		 * If process is under ptrace(2) compatibility,
+		 * If process is under ptrace(3C) compatibility,
 		 * fail the exec(2).
 		 */
 		if (p->p_proc_flag & P_PR_PTRACE)
@@ -1255,18 +1383,37 @@ execmap(struct vnode *vp, caddr_t addr, size_t len, size_t zfodlen,
 			/*
 			 * Before we go to zero the remaining space on the last
 			 * page, make sure we have write permission.
+			 *
+			 * Normal illumos binaries don't even hit the case
+			 * where we have to change permission on the last page
+			 * since their protection is typically either
+			 *    PROT_USER | PROT_WRITE | PROT_READ
+			 * or
+			 *    PROT_ZFOD (same as PROT_ALL).
+			 *
+			 * We need to be careful how we zero-fill the last page
+			 * if the segment protection does not include
+			 * PROT_WRITE. Using as_setprot() can cause the VM
+			 * segment code to call segvn_vpage(), which must
+			 * allocate a page struct for each page in the segment.
+			 * If we have a very large segment, this may fail, so
+			 * we have to check for that, even though we ignore
+			 * other return values from as_setprot.
 			 */
 
-			AS_LOCK_ENTER(as, &as->a_lock, RW_READER);
+			AS_LOCK_ENTER(as, RW_READER);
 			seg = as_segat(curproc->p_as, (caddr_t)end);
 			if (seg != NULL)
 				SEGOP_GETPROT(seg, (caddr_t)end, zfoddiff - 1,
 				    &zprot);
-			AS_LOCK_EXIT(as, &as->a_lock);
+			AS_LOCK_EXIT(as);
 
 			if (seg != NULL && (zprot & PROT_WRITE) == 0) {
-				(void) as_setprot(as, (caddr_t)end,
-				    zfoddiff - 1, zprot | PROT_WRITE);
+				if (as_setprot(as, (caddr_t)end, zfoddiff - 1,
+				    zprot | PROT_WRITE) == ENOMEM) {
+					error = ENOMEM;
+					goto bad;
+				}
 			}
 
 			if (on_fault(&ljb)) {
@@ -1391,7 +1538,7 @@ noexec(
     struct uarg *args,
     struct intpdata *idatap,
     int level,
-    long *execsz,
+    size_t *execsz,
     int setid,
     caddr_t exec_file,
     struct cred *cred)
@@ -1503,6 +1650,11 @@ stk_getptr(uarg_t *args, char *src, char **dst)
 {
 	int error;
 
+	if (args->argseg == UIO_SYSSPACE) {
+		*dst = *(char **)src;
+		return (0);
+	}
+
 	if (args->from_model == DATAMODEL_NATIVE) {
 		ulong_t ptr;
 		error = fulword(src, &ptr);
@@ -1537,17 +1689,30 @@ stk_copyin(execa_t *uap, uarg_t *args, intpdata_t *intp, void **auxvpp)
 
 	/*
 	 * Copy interpreter's name and argument to argv[0] and argv[1].
+	 * In the rare case that we have nested interpreters then those names
+	 * and arguments are also copied to the subsequent slots in argv.
 	 */
-	if (intp != NULL && intp->intp_name != NULL) {
-		if ((error = stk_add(args, intp->intp_name, UIO_SYSSPACE)) != 0)
-			return (error);
-		if (intp->intp_arg != NULL &&
-		    (error = stk_add(args, intp->intp_arg, UIO_SYSSPACE)) != 0)
-			return (error);
+	if (intp != NULL && intp->intp_name[0] != NULL) {
+		int i;
+
+		for (i = 0; i < INTP_MAXDEPTH; i++) {
+			if (intp->intp_name[i] == NULL)
+				break;
+			error = stk_add(args, intp->intp_name[i], UIO_SYSSPACE);
+			if (error != 0)
+				return (error);
+			if (intp->intp_arg[i] != NULL) {
+				error = stk_add(args, intp->intp_arg[i],
+				    UIO_SYSSPACE);
+				if (error != 0)
+					return (error);
+			}
+		}
+
 		if (args->fname != NULL)
 			error = stk_add(args, args->fname, UIO_SYSSPACE);
 		else
-			error = stk_add(args, uap->fname, UIO_USERSPACE);
+			error = stk_add(args, uap->fname, args->argseg);
 		if (error)
 			return (error);
 
@@ -1571,7 +1736,7 @@ stk_copyin(execa_t *uap, uarg_t *args, intpdata_t *intp, void **auxvpp)
 				return (EFAULT);
 			if (sp == NULL)
 				break;
-			if ((error = stk_add(args, sp, UIO_USERSPACE)) != 0)
+			if ((error = stk_add(args, sp, args->argseg)) != 0)
 				return (error);
 			argv += ptrsize;
 		}
@@ -1589,12 +1754,12 @@ stk_copyin(execa_t *uap, uarg_t *args, intpdata_t *intp, void **auxvpp)
 				return (EFAULT);
 			if (sp == NULL)
 				break;
-			if ((error = stk_add(args, sp, UIO_USERSPACE)) != 0)
+			if ((error = stk_add(args, sp, args->argseg)) != 0)
 				return (error);
 			if (args->scrubenv && strncmp(tmp, "LD_", 3) == 0) {
 				/* Undo the copied string */
 				args->stk_strp = tmp;
-				*(args->stk_offp++) = NULL;
+				*(args->stk_offp++) = 0;
 			}
 			envp += ptrsize;
 		}
@@ -1755,10 +1920,57 @@ stk_copyout(uarg_t *args, char *usrstack, void **auxvpp, user_t *up)
 }
 
 /*
+ * Though the actual stack base is constant, slew the %sp by a random aligned
+ * amount in [0,aslr_max_stack_skew).  Mostly, this makes life slightly more
+ * complicated for buffer overflows hoping to overwrite the return address.
+ *
+ * On some platforms this helps avoid cache thrashing when identical processes
+ * simultaneously share caches that don't provide enough associativity
+ * (e.g. sun4v systems). In this case stack slewing makes the same hot stack
+ * variables in different processes live in different cache sets increasing
+ * effective associativity.
+ */
+size_t
+exec_get_spslew(void)
+{
+#ifdef sun4v
+	static uint_t sp_color_stride = 16;
+	static uint_t sp_color_mask = 0x1f;
+	static uint_t sp_current_color = (uint_t)-1;
+#endif
+	size_t off;
+
+	ASSERT(ISP2(aslr_max_stack_skew));
+
+	if ((aslr_max_stack_skew == 0) ||
+	    !secflag_enabled(curproc, PROC_SEC_ASLR)) {
+#ifdef sun4v
+		uint_t spcolor = atomic_inc_32_nv(&sp_current_color);
+		return ((size_t)((spcolor & sp_color_mask) *
+		    SA(sp_color_stride)));
+#else
+		return (0);
+#endif
+	}
+
+	(void) random_get_pseudo_bytes((uint8_t *)&off, sizeof (off));
+	return (SA(P2PHASE(off, aslr_max_stack_skew)));
+}
+
+/*
  * Initialize a new user stack with the specified arguments and environment.
  * The initial user stack layout is as follows:
  *
  *	User Stack
+ *	+---------------+
+ *	|		|
+ *	| stack guard	|
+ *	| (64-bit only)	|
+ *	|		|
+ *	+...............+ <--- stack limit (base - curproc->p_stk_ctl)
+ *	.		.
+ *	.		.
+ *	.		.
  *	+---------------+ <--- curproc->p_usrstack
  *	|		|
  *	| slew		|
@@ -1800,6 +2012,11 @@ stk_copyout(uarg_t *args, char *usrstack, void **auxvpp, user_t *up)
  *	+---------------+ <--- argv[]
  *	| argc		|
  *	+---------------+ <--- stack base
+ *
+ * In 64-bit processes, a stack guard segment is allocated at the address
+ * immediately below where the stack limit ends.  This protects new library
+ * mappings (such as the linker) from being placed in relatively dangerous
+ * proximity to the stack.
  */
 int
 exec_args(execa_t *uap, uarg_t *args, intpdata_t *intp, void **auxvpp)
@@ -1813,9 +2030,19 @@ exec_args(execa_t *uap, uarg_t *args, intpdata_t *intp, void **auxvpp)
 	struct as *as;
 	extern int use_stk_lpg;
 	size_t sp_slew;
+#if defined(_LP64)
+	const size_t sg_sz = (stack_guard_seg_sz & PAGEMASK);
+#endif /* defined(_LP64) */
 
 	args->from_model = p->p_model;
-	if (p->p_model == DATAMODEL_NATIVE) {
+	if (args->argseg == UIO_SYSSPACE) {
+		/*
+		 * The argument and environment vectors are in kernel memory,
+		 * so pointers within them are always native sized regardless
+		 * of the process data model.
+		 */
+		args->from_ptrsize = sizeof (char *);
+	} else if (p->p_model == DATAMODEL_NATIVE) {
 		args->from_ptrsize = sizeof (long);
 	} else {
 		args->from_ptrsize = sizeof (int32_t);
@@ -1898,7 +2125,7 @@ exec_args(execa_t *uap, uarg_t *args, intpdata_t *intp, void **auxvpp)
 	 */
 	if (p->p_dtrace_helpers != NULL) {
 		ASSERT(dtrace_helpers_cleanup != NULL);
-		(*dtrace_helpers_cleanup)();
+		(*dtrace_helpers_cleanup)(p);
 	}
 
 	mutex_enter(&p->p_lock);
@@ -1961,6 +2188,8 @@ exec_args(execa_t *uap, uarg_t *args, intpdata_t *intp, void **auxvpp)
 	p->p_brkpageszc = 0;
 	p->p_stksize = 0;
 	p->p_stkpageszc = 0;
+	p->p_stkg_start = 0;
+	p->p_stkg_end = 0;
 	p->p_model = args->to_model;
 	p->p_usrstack = usrstack;
 	p->p_stkprot = args->stk_prot;
@@ -1984,17 +2213,10 @@ exec_args(execa_t *uap, uarg_t *args, intpdata_t *intp, void **auxvpp)
 	p->p_flag |= SAUTOLPG;	/* kernel controls page sizes */
 	mutex_exit(&p->p_lock);
 
-	/*
-	 * Some platforms may choose to randomize real stack start by adding a
-	 * small slew (not more than a few hundred bytes) to the top of the
-	 * stack. This helps avoid cache thrashing when identical processes
-	 * simultaneously share caches that don't provide enough associativity
-	 * (e.g. sun4v systems). In this case stack slewing makes the same hot
-	 * stack variables in different processes to live in different cache
-	 * sets increasing effective associativity.
-	 */
 	sp_slew = exec_get_spslew();
 	ASSERT(P2PHASE(sp_slew, args->stk_align) == 0);
+	/* Be certain we don't underflow */
+	VERIFY((curproc->p_usrstack - (size + sp_slew)) < curproc->p_usrstack);
 	exec_set_sp(size + sp_slew);
 
 	as = as_alloc();
@@ -2005,10 +2227,36 @@ exec_args(execa_t *uap, uarg_t *args, intpdata_t *intp, void **auxvpp)
 	(void) hat_setup(as->a_hat, HAT_ALLOC);
 	hat_join_srd(as->a_hat, args->ex_vp);
 
-	/*
-	 * Finally, write out the contents of the new stack.
-	 */
+	/* Write out the contents of the new stack. */
 	error = stk_copyout(args, usrstack - sp_slew, auxvpp, up);
 	kmem_free(args->stk_base, args->stk_size);
+
+#if defined(_LP64)
+	/* Add stack guard segment (if needed) after successful copyout */
+	if (error == 0 && p->p_model == DATAMODEL_LP64 && sg_sz != 0) {
+		seghole_crargs_t sca;
+		caddr_t addr_end = (caddr_t)(((uintptr_t)usrstack -
+		    p->p_stk_ctl) & PAGEMASK);
+		caddr_t addr_start = addr_end - sg_sz;
+
+		DTRACE_PROBE4(stack__guard__chk, proc_t *, p,
+		    caddr_t, addr_start, caddr_t, addr_end, size_t, sg_sz);
+
+		if (addr_end >= usrstack || addr_start >= addr_end ||
+		    valid_usr_range(addr_start, sg_sz, PROT_NONE, as,
+		    as->a_userlimit) != RANGE_OKAY) {
+			return (E2BIG);
+		}
+
+		/* Create un-mappable area in AS with seg_hole */
+		sca.name = "stack_guard";
+		error = as_map(as, addr_start, sg_sz, seghole_create, &sca);
+		if (error == 0) {
+			p->p_stkg_start = (uintptr_t)addr_start;
+			p->p_stkg_end = (uintptr_t)addr_start + sg_sz;
+		}
+	}
+#endif /* defined(_LP64) */
+
 	return (error);
 }

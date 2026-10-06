@@ -37,9 +37,6 @@
  * contributors.
  */
 
-#pragma ident	"%Z%%M%	%I%	%E% SMI"
-
-char *xxxvers = "@(#)roff:n1.c	2.13";
 /*
  * n1.c
  *
@@ -107,7 +104,7 @@ main(int argc, char **argv)
 	tchar i;
 	int eileenct;		/*count to test for "Eileen's loop"*/
 	extern void catch(), kcatch();
-	char	**oargv, *getenv();
+	char	**oargv;
 
 	(void)setlocale(LC_ALL, "");
 #if !defined(TEXT_DOMAIN)
@@ -145,7 +142,7 @@ main(int argc, char **argv)
 				strcpy(fontfile, &argv[0][2]);
 			} else {
 				argv++; argc--;
-				if (argv[0] != '\0') {
+				if (argv[0] != NULL) {
 					strcpy(termtab, argv[0]);
 					strcpy(fontfile, argv[0]);
 				} else
@@ -181,11 +178,12 @@ main(int argc, char **argv)
 			ptid = 1;
 			continue;
 		case 'r':
-			if (&argv[0][2] != '\0' && strlen(&argv[0][2]) >= 2 && &argv[0][3] != '\0')
-			eibuf = roff_sprintf(ibuf+strlen(ibuf), ".nr %c %s\n",
-				argv[0][2], &argv[0][3]); 
-			else 
+			if (strlen(&argv[0][2]) >= 2) {
+				eibuf = roff_sprintf(ibuf+strlen(ibuf),
+				    ".nr %c %s\n", argv[0][2], &argv[0][3]);
+			} else {
 				errprint(gettext("wrong options"));
+			}
 			continue;
 		case 'c':
 		case 'm':
@@ -198,7 +196,8 @@ main(int argc, char **argv)
 				errprint(gettext("No library provided with -m"));
 				done(02);
 			}
-			if (getenv("TROFFMACS") != '\0') {
+			p = getenv("TROFFMACS");
+			if (p != NULL && *p != '\0') {
 			     if (tryfile(getenv("TROFFMACS"), &argv[0][2], nmfi))
 			       nmfi++;
 			} else
@@ -209,7 +208,7 @@ main(int argc, char **argv)
 				errprint(gettext("Cannot find library %s\n"),
 					argv[0]);
 				done(02);
-			  } 
+			  }
 			continue;
 		case 'o':
 			getpn(&argv[0][2]);
@@ -323,7 +322,7 @@ int idx;
 	if (access(mfiles[idx], 4) == -1)
 		return(0);
 	else return(1);
-}	
+}
 
 void catch()
 {
@@ -379,7 +378,7 @@ init2()
 	ttyod = 2;
 	if ((ttyp=ttyname(j=0)) != 0 || (ttyp=ttyname(j=1)) != 0 || (ttyp=ttyname(j=2)) != 0)
 		;
-	else 
+	else
 		ttyp = "notty";
 	iflg = j;
 	if (ascii)
@@ -782,12 +781,12 @@ g0:
 			return(k);
 		}
 		if (k == FLSS) {
-			copyf++; 
+			copyf++;
 			raw++;
 			i = getch0();
 			if (!fi)
 				flss = i;
-			copyf--; 
+			copyf--;
 			raw--;
 			goto g0;
 		}
@@ -802,8 +801,8 @@ g0:
 			}
 			if (k == fc || k == tabch || k == ldrch) {
 				if ((i = setfield(k)) == 0)
-					goto g0; 
-				else 
+					goto g0;
+				else
 					return(i);
 			}
 			if (k == '\b') {
@@ -1103,7 +1102,7 @@ g2:
 #endif	/* NROFF */
 #endif	/* EUC */
 			goto g4;
-		if (i != 0177) 
+		if (i != 0177)
 			i = ifilt[i];
 	}
 	if (cbits(i) == IMP && !raw)

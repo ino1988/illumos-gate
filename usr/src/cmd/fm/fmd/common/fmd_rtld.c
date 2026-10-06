@@ -24,8 +24,6 @@
  * Use is subject to license terms.
  */
 
-#pragma ident	"%Z%%M%	%I%	%E% SMI"
-
 #include <dlfcn.h>
 #include <link.h>
 
@@ -37,7 +35,7 @@
 #include <fmd.h>
 
 typedef struct fmd_rtld {
-	void *rtld_dlp;		/* libdl(3DL) handle for shared library */
+	void *rtld_dlp;		/* libdl handle for shared library */
 	void (*rtld_init)(fmd_hdl_t *); /* shared library's _fmd_init() */
 	void (*rtld_fini)(fmd_hdl_t *); /* shared library's _fmd_fini() */
 } fmd_rtld_t;

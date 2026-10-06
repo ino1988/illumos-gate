@@ -22,7 +22,8 @@
 /*
  * Copyright 2010 Sun Microsystems, Inc.  All rights reserved.
  * Use is subject to license terms.
- * Copyright 2013 Joyent, Inc.  All rights reserved.
+ * Copyright 2018 Joyent, Inc.
+ * Copyright 2026 Oxide Computer Company
  */
 
 /*
@@ -50,7 +51,7 @@ extern "C" {
 #endif
 
 extern boolean_t mac_rx_bypass_set(mac_client_handle_t, mac_direct_rx_t,
-    void *);
+    void *, boolean_t);
 extern void mac_rx_bypass_enable(mac_client_handle_t);
 extern void mac_rx_bypass_disable(mac_client_handle_t);
 
@@ -63,7 +64,9 @@ extern void mac_stop(mac_handle_t);
 
 extern void mac_ioctl(mac_handle_t, queue_t *, mblk_t *);
 extern link_state_t mac_link_get(mac_handle_t);
-extern void mac_resource_set(mac_client_handle_t, mac_resource_add_t, void *);
+extern void mac_resource_set(mac_client_handle_t, mac_resource_cb_t *,
+    boolean_t);
+extern void mac_resource_clear(mac_client_handle_t, boolean_t);
 extern dev_info_t *mac_devinfo_get(mac_handle_t);
 extern void *mac_driver(mac_handle_t);
 extern boolean_t mac_capab_get(mac_handle_t, mac_capab_t, void *);
@@ -75,10 +78,6 @@ extern int mac_vlan_header_info(mac_handle_t, mblk_t *, mac_header_info_t *);
 extern mblk_t *mac_header_cook(mac_handle_t, mblk_t *);
 extern mblk_t *mac_header_uncook(mac_handle_t, mblk_t *);
 
-extern void mac_resource_set_common(mac_client_handle_t,
-    mac_resource_add_t, mac_resource_remove_t, mac_resource_quiesce_t,
-    mac_resource_restart_t, mac_resource_bind_t, void *);
-
 extern	void mac_perim_enter_by_mh(mac_handle_t, mac_perim_handle_t *);
 extern	int mac_perim_enter_by_macname(const char *, mac_perim_handle_t *);
 extern	int mac_perim_enter_by_linkid(datalink_id_t, mac_perim_handle_t *);
@@ -89,8 +88,8 @@ extern	uint16_t mac_client_vid(mac_client_handle_t);
 extern int mac_vnic_unicast_set(mac_client_handle_t, const uint8_t *);
 extern boolean_t mac_client_is_vlan_vnic(mac_client_handle_t);
 
-extern void mac_client_poll_enable(mac_client_handle_t);
-extern void mac_client_poll_disable(mac_client_handle_t);
+extern void mac_client_poll_enable(mac_client_handle_t, boolean_t);
+extern void mac_client_poll_disable(mac_client_handle_t, boolean_t);
 
 /*
  * Flow-related APIs for MAC clients.
@@ -121,9 +120,17 @@ extern void mac_tx_client_quiesce(mac_client_handle_t);
 extern void mac_tx_client_condemn(mac_client_handle_t);
 extern void mac_tx_client_restart(mac_client_handle_t);
 extern void mac_srs_perm_quiesce(mac_client_handle_t, boolean_t);
+extern uint_t mac_hwrings_idx_get(mac_handle_t, uint_t, mac_group_handle_t *,
+    mac_ring_handle_t *, mac_ring_type_t);
 extern int mac_hwrings_get(mac_client_handle_t, mac_group_handle_t *,
     mac_ring_handle_t *, mac_ring_type_t);
 extern uint_t mac_hwring_getinfo(mac_ring_handle_t);
+extern void mac_hwring_set_passthru(mac_ring_handle_t, mac_rx_t, void *,
+    mac_resource_handle_t);
+extern void mac_hwring_clear_passthru(mac_ring_handle_t);
+extern void mac_client_set_flow_cb(mac_client_handle_t, mac_rx_t, void *);
+extern void mac_client_clear_flow_cb(mac_client_handle_t);
+
 extern void mac_hwring_setup(mac_ring_handle_t, mac_resource_handle_t,
     mac_ring_handle_t);
 extern void mac_hwring_teardown(mac_ring_handle_t);
@@ -131,11 +138,14 @@ extern int mac_hwring_disable_intr(mac_ring_handle_t);
 extern int mac_hwring_enable_intr(mac_ring_handle_t);
 extern int mac_hwring_start(mac_ring_handle_t);
 extern void mac_hwring_stop(mac_ring_handle_t);
+extern int mac_hwring_activate(mac_ring_handle_t);
+extern void mac_hwring_quiesce(mac_ring_handle_t);
 extern mblk_t *mac_hwring_poll(mac_ring_handle_t, int);
 extern mblk_t *mac_hwring_tx(mac_ring_handle_t, mblk_t *);
 extern int mac_hwring_getstat(mac_ring_handle_t, uint_t, uint64_t *);
 extern mblk_t *mac_hwring_send_priv(mac_client_handle_t,
     mac_ring_handle_t, mblk_t *);
+extern void mac_hwring_set_default(mac_handle_t, mac_ring_handle_t);
 
 #define	MAC_HWRING_POLL(ring, bytes)			\
 	(((ring)->mr_info.mri_poll)			\
@@ -143,6 +153,13 @@ extern mblk_t *mac_hwring_send_priv(mac_client_handle_t,
 
 extern int mac_hwgroup_addmac(mac_group_handle_t, const uint8_t *);
 extern int mac_hwgroup_remmac(mac_group_handle_t, const uint8_t *);
+extern int mac_hwgroup_addvlan(mac_group_handle_t, uint16_t);
+extern int mac_hwgroup_remvlan(mac_group_handle_t, uint16_t);
+
+extern boolean_t mac_has_hw_vlan(mac_handle_t);
+
+extern uint_t mac_get_num_rx_groups(mac_handle_t);
+extern int mac_set_promisc(mac_handle_t, boolean_t);
 
 extern void mac_set_upper_mac(mac_client_handle_t, mac_handle_t,
     mac_resource_props_t *);
@@ -170,6 +187,7 @@ extern void mac_client_set_intr_cpu(void *, mac_client_handle_t, int32_t);
 extern void *mac_get_devinfo(mac_handle_t);
 
 extern boolean_t mac_is_vnic(mac_handle_t);
+extern boolean_t mac_is_overlay(mac_handle_t);
 extern uint32_t mac_no_notification(mac_handle_t);
 
 extern int mac_set_prop(mac_handle_t, mac_prop_id_t, char *, void *, uint_t);

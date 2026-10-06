@@ -22,7 +22,7 @@
 # Copyright (c) 2009, 2010, Oracle and/or its affiliates. All rights reserved.
 #
 
-PROGS =		s10_native s10_isaexec_wrapper s10_python_wrapper \
+PROGS =		s10_native s10_isaexec_wrapper \
 		s10_net_physical
 
 include $(SRC)/cmd/Makefile.cmd
@@ -36,11 +36,9 @@ CLOBBERFILES =	$(ROOTPROGS)
 
 all: $(PROGS)
 
-lint:
-
 install: all $(ROOTPROGS)
 
 clean:
-	$(RM) $(PROGS)
+	$(RM) $(PROGS) $(CLEANFILES)
 
 include $(SRC)/cmd/Makefile.targ

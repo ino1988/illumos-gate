@@ -22,6 +22,7 @@
 # Copyright 2009 Sun Microsystems, Inc.  All rights reserved.
 # Use is subject to license terms.
 #
+# Copyright (c) 2018, Joyent, Inc.
 
 LIBRARY =	libtsol.a
 VERS =		.2
@@ -42,30 +43,25 @@ include ../../Makefile.lib
 # install this library in the root filesystem
 include ../../Makefile.rootfs
 
-LIBS =		$(DYNLIB) $(LINTLIB)
+LIBS =		$(DYNLIB)
 LDLIBS +=	-lsecdb -lc
 
 SRCDIR =	../common
-$(LINTLIB):=	SRCS = $(SRCDIR)/$(LINTSRC)
-
-lint:=		SRCS = \
-	$(NONCOMMONOBJS:%.o=$(SRCDIR)/%.c) \
-	$(COMMONOBJS:%.o=$(COMMONDIR)/%.c)
 
 COMMONDIR=	$(SRC)/common/tsol
 
 CFLAGS +=	$(CCVERBOSE)
 CPPFLAGS +=	-D_REENTRANT -I$(SRCDIR) -I$(COMMONDIR)
 
-LINTFLAGS64 +=	-m64
+CERRWARN +=	$(CNOWARN_UNINIT)
 
-CERRWARN +=	-_gcc=-Wno-uninitialized
+# not linted
+SMATCH=off
 
 .KEEP_STATE:
 
 all: $(LIBS)
 
-lint: lintcheck
 
 objs/%.o pic_profs/%.o pics/%.o:	$(COMMONDIR)/%.c
 	$(COMPILE.c) -o $@ $<

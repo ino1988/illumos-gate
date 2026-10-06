@@ -22,6 +22,8 @@
 # Copyright 2007 Sun Microsystems, Inc.  All rights reserved.
 # Use is subject to license terms.
 #
+# Copyright (c) 2018, Joyent, Inc.
+# Copyright 2025 Hans Rosenfeld
 
 #
 # Definitions for targets shared by some subdirs, which have
@@ -29,14 +31,19 @@
 # COMMON_DIR.
 #
 
-LDFLAGS +=	$(MAPFILE.NGB:%=-M%)
+include ../../Makefile.ctf
+
+LDFLAGS +=	$(MAPFILE.NGB:%=-Wl,-M%)
 
 CERRWARN += -_gcc=-Wno-unused-function
-CERRWARN += -_gcc=-Wno-uninitialized
+CERRWARN += $(CNOWARN_UNINIT)
 CERRWARN += -_gcc=-Wno-parentheses
 
-%.o: $(COMMON_DIR)/%.c
+SMOFF += strcpy_overflow
+
+%.c:	$(COMMON_DIR)/%.c
+	$(CP) $(COMMON_DIR)/$@ $@
+
+%.o:    %.c
 	$(COMPILE.c) $<
-%.po: $(COMMON_DIR)/%.c
-	$(COMPILE.cpp) $< > $<.i
-	$(BUILD.po)
+	$(POST_PROCESS_O)

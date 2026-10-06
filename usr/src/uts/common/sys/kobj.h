@@ -21,12 +21,15 @@
 /*
  * Copyright 2007 Sun Microsystems, Inc.  All rights reserved.
  * Use is subject to license terms.
+ *
+ * Copyright 2017 RackTop Systems.
+ * Copyright (c) 2017 Joyent, Inc.
+ * Copyright 2025 MNX Cloud, Inc.
+ * Copyright 2025 Oxide Computer Company
  */
 
 #ifndef _SYS_KOBJ_H
 #define	_SYS_KOBJ_H
-
-#pragma ident	"%Z%%M%	%I%	%E% SMI"
 
 #include <sys/modctl.h>
 #include <sys/elf.h>
@@ -34,6 +37,7 @@
 #include <sys/vmem.h>
 #include <sys/sdt.h>
 #include <sys/bootstat.h>
+#include <sys/types.h>
 
 #ifdef	__cplusplus
 extern "C" {
@@ -47,7 +51,13 @@ struct module_list {
 	struct module *mp;
 };
 
-typedef unsigned short	symid_t;		/* symbol table index */
+typedef struct hotinline_desc {
+	char	*hid_symname;		/* symbol name */
+	uintptr_t hid_instr_offset;	/* offset of call in text */
+	struct hotinline_desc *hid_next;	/* next hotinline */
+} hotinline_desc_t;
+
+typedef uint32_t	symid_t;		/* symbol table index */
 typedef unsigned char	*reloc_dest_t;
 
 typedef	void	module_mach;
@@ -56,6 +66,9 @@ struct module {
 	int total_allocated;
 
 	Ehdr hdr;
+	Elf64_Word shnum;
+	Elf64_Word phnum;
+	Elf64_Word shstrndx;
 	char *shdrs;
 	Shdr *symhdr, *strhdr;
 
@@ -99,6 +112,8 @@ struct module {
 	caddr_t textwin;
 	caddr_t textwin_base;
 
+	hotinline_desc_t *hi_calls;
+
 	sdt_probedesc_t *sdt_probes;
 	size_t sdt_nprobes;
 	char *sdt_tab;
@@ -121,7 +136,7 @@ struct _buf {
 	intptr_t	 _fd;
 	char		*_ptr;
 	char		*_base;
-	char 		*_name;
+	char		*_name;
 	char		*_dbuf;
 	int		 _size;
 	int		_cnt;
@@ -158,7 +173,7 @@ typedef struct {
 
 #define	F_BLKS(file, size)	((size / (file)->_bsize) * (file)->_bsize)
 
-#if defined(_KERNEL)
+#if defined(_KERNEL) || defined(_FAKE_KERNEL)
 
 extern int kobj_load_module(struct modctl *, int);
 extern void kobj_unload_module(struct modctl *);
@@ -187,6 +202,7 @@ extern int kobj_read_file(struct _buf *, char *, unsigned, unsigned);
 extern int kobj_get_filesize(struct _buf *, uint64_t *size);
 extern uintptr_t kobj_getelfsym(char *, void *, int *);
 extern void kobj_set_ctf(struct module *, caddr_t data, size_t size);
+extern void do_hotinlines(struct module *);
 
 extern int kobj_filbuf(struct _buf *);
 extern void kobj_sync(void);
@@ -201,8 +217,9 @@ extern void kobj_texthole_free(caddr_t, size_t);
 extern void kobj_stat_get(kobj_stat_t *);
 extern void kobj_textwin_alloc(struct module *);
 extern void kobj_textwin_free(struct module *);
+extern void kobj_printf(char *, ...) __KPRINTFLIKE(1);
 
-#endif	/* defined(_KERNEL) */
+#endif	/* defined(_KERNEL) || defined(_FAKE_KERNEL) */
 
 #ifdef	__cplusplus
 }

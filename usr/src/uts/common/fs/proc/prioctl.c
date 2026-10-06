@@ -22,10 +22,12 @@
 /*
  * Copyright 2010 Sun Microsystems, Inc.  All rights reserved.
  * Use is subject to license terms.
+ * Copyright 2019 Joyent, Inc.
+ * Copyright 2026 Oxide Computer Company
  */
 
 /*	Copyright (c) 1984, 1986, 1987, 1988, 1989 AT&T	*/
-/*	  All rights reserved.  	*/
+/*	  All rights reserved.	*/
 
 #include <sys/types.h>
 #include <sys/param.h>
@@ -70,7 +72,7 @@
 #include <sys/ctfs_impl.h>
 #include <sys/ctfs.h>
 
-#if defined(__i386) || defined(__i386_COMPAT)
+#if defined(__i386_COMPAT)
 #include <sys/sysi86.h>
 #endif
 
@@ -81,8 +83,8 @@ static	ulong_t	prmaprunflags(long);
 static	long	prmapsetflags(long);
 static	void	prsetrun(kthread_t *, prrun_t *);
 static	int	propenm(prnode_t *, caddr_t, caddr_t, int *, cred_t *);
-extern	void	oprgetstatus(kthread_t *, prstatus_t *, zone_t *);
-extern	void	oprgetpsinfo(proc_t *, prpsinfo_t *, kthread_t *);
+static	void	oprgetstatus(kthread_t *, prstatus_t *, zone_t *);
+static	void	oprgetpsinfo(proc_t *, prpsinfo_t *, kthread_t *);
 static	int	oprgetmap(proc_t *, list_t *);
 
 static int
@@ -132,29 +134,19 @@ prctioctl(prnode_t *pnp, int cmd, intptr_t arg, int flag, cred_t *cr)
 /*
  * Control operations (lots).
  */
+/* BEGIN CSTYLED */
 /*ARGSUSED*/
 #ifdef _SYSCALL32_IMPL
 static int
-prioctl64(
-	struct vnode *vp,
-	int cmd,
-	intptr_t arg,
-	int flag,
-	cred_t *cr,
-	int *rvalp,
-	caller_context_t *ct)
+prioctl64(struct vnode *vp, int cmd, intptr_t arg, int flag, cred_t *cr,
+    int *rvalp, caller_context_t *ct)
 #else
 int
-prioctl(
-	struct vnode *vp,
-	int cmd,
-	intptr_t arg,
-	int flag,
-	cred_t *cr,
-	int *rvalp,
-	caller_context_t *ct)
+prioctl(struct vnode *vp, int cmd, intptr_t arg, int flag, cred_t *cr,
+    int *rvalp, caller_context_t *ct)
 #endif	/* _SYSCALL32_IMPL */
 {
+/* END CSTYLED */
 	int nsig = PROC_IS_BRANDED(curproc)? BROP(curproc)->b_nsig : NSIG;
 	caddr_t cmaddr = (caddr_t)arg;
 	proc_t *p;
@@ -218,12 +210,20 @@ prioctl(
 		return (EBADF);
 
 	/*
+	 * The following command is no longer supported. It was present on SPARC
+	 * and would always error on other platforms. We now explicitly return
+	 * ENOTSUP to make this more explicit.
+	 */
+	if (cmd == PIOCSXREG)
+		return (ENOTSUP);
+
+	/*
 	 * Perform any necessary copyin() operations before
 	 * locking the process.  Helps avoid deadlocks and
 	 * improves performance.
 	 *
 	 * Also, detect invalid ioctl codes here to avoid
-	 * locking a process unnnecessarily.
+	 * locking a process unnecessarily.
 	 *
 	 * Also, prepare to allocate space that will be needed below,
 	 * case by case.
@@ -254,13 +254,8 @@ prioctl(
 	case PIOCMAXSIG:
 	case PIOCGXREGSIZE:
 		break;
-	case PIOCSXREG:		/* set extra registers */
 	case PIOCGXREG:		/* get extra registers */
-#if defined(__sparc)
-		thingsize = sizeof (prxregset_t);
-#else
-		thingsize = 0;
-#endif
+		thingsize = prgetprxregsize(p);
 		break;
 	case PIOCACTION:
 		thingsize = (nsig-1) * sizeof (struct sigaction);
@@ -286,11 +281,11 @@ prioctl(
 	case PIOCAUXV:
 		break;
 
-#if defined(__i386) || defined(__amd64)
+#if defined(__x86)
 	case PIOCNLDT:
 	case PIOCLDT:
 		break;
-#endif	/* __i386 || __amd64 */
+#endif	/* __x86 */
 
 #if defined(__sparc)
 	case PIOCGWIN:
@@ -401,17 +396,6 @@ startover:
 	case PIOCLUSAGE:
 		zdisp = ZYES;
 		break;
-	case PIOCSXREG:		/* set extra registers */
-		/*
-		 * perform copyin before grabbing the process lock
-		 */
-		if (thing) {
-			if (copyin(cmaddr, thing, thingsize)) {
-				kmem_free(thing, thingsize);
-				return (EFAULT);
-			}
-		}
-		/* fall through... */
 	default:
 		zdisp = ZNO;
 		break;
@@ -455,8 +439,6 @@ startover:
 		prunlock(pnp);
 		if (copyout(prp, cmaddr, sizeof (proc_t)))
 			error = EFAULT;
-		kmem_free(prp, sizeof (proc_t));
-		thing = NULL;
 		break;
 	}
 
@@ -469,8 +451,6 @@ startover:
 		prunlock(pnp);
 		if (copyout(userp, cmaddr, sizeof (user_t)))
 			error = EFAULT;
-		kmem_free(userp, sizeof (user_t));
-		thing = NULL;
 		break;
 	}
 
@@ -482,9 +462,10 @@ startover:
 	case PIOCSTOP:		/* stop process or lwp from running */
 	case PIOCWSTOP:		/* wait for process or lwp to stop */
 		/*
-		 * Can't apply to a system process.
+		 * Can't apply to a system process or to a spawn(2) child
+		 * that has not yet exec'd.
 		 */
-		if ((p->p_flag & SSYS) || p->p_as == &kas) {
+		if ((p->p_flag & (SSYS | SSPAWNING)) || p->p_as == &kas) {
 			prunlock(pnp);
 			error = EBUSY;
 			break;
@@ -573,7 +554,6 @@ startover:
 		}
 
 		idp = thing;
-		thing = NULL;
 		Bidp = idp;
 		if ((t = p->p_tlist) != NULL) {
 			do {
@@ -588,7 +568,6 @@ startover:
 		prunlock(pnp);
 		if (copyout(Bidp, cmaddr, (Nlwp+1) * sizeof (id_t)))
 			error = EFAULT;
-		kmem_free(Bidp, (Nlwp+1) * sizeof (id_t));
 		break;
 	}
 
@@ -798,12 +777,19 @@ startover:
 
 	case PIOCGXREGSIZE:	/* get the size of the extra registers */
 	{
-		int xregsize;
-
 		if (prhasx(p)) {
+			size_t xregsize;
+			int abisize;
+
 			xregsize = prgetprxregsize(p);
 			prunlock(pnp);
-			if (copyout(&xregsize, cmaddr, sizeof (xregsize)))
+			if (xregsize > INT_MAX) {
+				error = EOVERFLOW;
+				break;
+			}
+
+			abisize = (int)xregsize;
+			if (copyout(&abisize, cmaddr, sizeof (abisize)))
 				error = EFAULT;
 		} else {
 			prunlock(pnp);
@@ -827,28 +813,6 @@ startover:
 		} else {
 			prunlock(pnp);
 			error = EINVAL;	/* No extra register support */
-		}
-		if (thing) {
-			kmem_free(thing, thingsize);
-			thing = NULL;
-		}
-		break;
-
-	case PIOCSXREG:		/* set extra registers */
-		if (!ISTOPPED(t) && !VSTOPPED(t) && !DSTOPPED(t))
-			error = EBUSY;
-		else if (!prhasx(p))
-			error = EINVAL;	/* No extra register support */
-		else if (thing) {
-			/* drop p_lock while touching the lwp's stack */
-			mutex_exit(&p->p_lock);
-			prsetprxregs(lwp, thing);
-			mutex_enter(&p->p_lock);
-		}
-		prunlock(pnp);
-		if (thing) {
-			kmem_free(thing, thingsize);
-			thing = NULL;
 		}
 		break;
 
@@ -882,7 +846,6 @@ startover:
 		}
 
 		Bprsp = thing;
-		thing = NULL;
 		prsp = Bprsp;
 		oprgetstatus(t, prsp, VTOZONE(vp));
 		t = p->p_tlist;
@@ -897,7 +860,6 @@ startover:
 		if (copyout(Bprsp, cmaddr, (Nlwp+1) * sizeof (prstatus_t)))
 			error = EFAULT;
 
-		kmem_free(Bprsp, (Nlwp+1) * sizeof (prstatus_t));
 		break;
 	}
 
@@ -935,14 +897,11 @@ startover:
 		prunlock(pnp);
 		if (copyout(sap, cmaddr, (nsig-1) * sizeof (struct sigaction)))
 			error = EFAULT;
-		kmem_free(sap, (nsig-1) * sizeof (struct sigaction));
-		thing = NULL;
 		break;
 	}
 
 	case PIOCGHOLD:		/* get signal-hold mask */
-		schedctl_finish_sigblock(t);
-		sigktou(&t->t_hold, &un.holdmask);
+		prgethold(t, &un.holdmask);
 		prunlock(pnp);
 		if (copyout(&un.holdmask, cmaddr, sizeof (un.holdmask)))
 			error = EFAULT;
@@ -955,20 +914,20 @@ startover:
 
 	case PIOCNMAP:		/* get number of memory mappings */
 	{
-		int n;
+		uint_t n;
 		struct as *as = p->p_as;
 
 		if ((p->p_flag & SSYS) || as == &kas)
 			n = 0;
 		else {
 			mutex_exit(&p->p_lock);
-			AS_LOCK_ENTER(as, &as->a_lock, RW_WRITER);
+			AS_LOCK_ENTER(as, RW_WRITER);
 			n = prnsegs(as, 0);
-			AS_LOCK_EXIT(as, &as->a_lock);
+			AS_LOCK_EXIT(as);
 			mutex_enter(&p->p_lock);
 		}
 		prunlock(pnp);
-		if (copyout(&n, cmaddr, sizeof (int)))
+		if (copyout(&n, cmaddr, sizeof (uint_t)))
 			error = EFAULT;
 		break;
 	}
@@ -983,9 +942,9 @@ startover:
 			prunlock(pnp);
 		} else {
 			mutex_exit(&p->p_lock);
-			AS_LOCK_ENTER(as, &as->a_lock, RW_WRITER);
+			AS_LOCK_ENTER(as, RW_WRITER);
 			error = oprgetmap(p, &iolhead);
-			AS_LOCK_EXIT(as, &as->a_lock);
+			AS_LOCK_EXIT(as);
 			mutex_enter(&p->p_lock);
 			prunlock(pnp);
 
@@ -1220,8 +1179,6 @@ startover:
 		prunlock(pnp);
 		if (copyout(Bupup, cmaddr, (Nlwp+1) * sizeof (prusage_t)))
 			error = EFAULT;
-		kmem_free(thing, thingsize);
-		thing = NULL;
 		break;
 	}
 
@@ -1247,7 +1204,7 @@ startover:
 		break;
 	}
 
-#if defined(__i386) || defined(__amd64)
+#if defined(__x86)
 	case PIOCNLDT:		/* get number of LDT entries */
 	{
 		int n;
@@ -1288,7 +1245,6 @@ startover:
 		}
 
 		ssd = thing;
-		thing = NULL;
 		if (n != 0)
 			prgetldt(p, ssd);
 		mutex_exit(&p->p_ldtlock);
@@ -1299,10 +1255,9 @@ startover:
 		bzero(&ssd[n], sizeof (*ssd));
 		if (copyout(ssd, cmaddr, (n+1) * sizeof (*ssd)))
 			error = EFAULT;
-		kmem_free(ssd, (n+1) * sizeof (*ssd));
 		break;
 	}
-#endif	/* __i386 || __amd64 */
+#endif	/* __x86 */
 
 #if defined(__sparc)
 	case PIOCGWIN:		/* get gwindows_t (see sys/reg.h) */
@@ -1317,8 +1272,6 @@ startover:
 		prunlock(pnp);
 		if (copyout(gwp, cmaddr, sizeof (*gwp)))
 			error = EFAULT;
-		kmem_free(gwp, sizeof (gwindows_t));
-		thing = NULL;
 		break;
 	}
 #endif	/* __sparc */
@@ -1330,7 +1283,8 @@ startover:
 
 	}
 
-	ASSERT(thing == NULL);
+	if (thing != NULL)
+		kmem_free(thing, thingsize);
 	ASSERT(xpnp == NULL);
 	return (error);
 }
@@ -1406,8 +1360,7 @@ oprgetstatus32(kthread_t *t, prstatus32_t *sp, zone_t *zp)
 	sp->pr_cursig  = lwp->lwp_cursig;
 	prassignset(&sp->pr_sigpend, &p->p_sig);
 	prassignset(&sp->pr_lwppend, &t->t_sig);
-	schedctl_finish_sigblock(t);
-	prassignset(&sp->pr_sighold, &t->t_hold);
+	prgethold(t, &sp->pr_sighold);
 	sp->pr_altstack.ss_sp =
 	    (caddr32_t)(uintptr_t)lwp->lwp_sigaltstack.ss_sp;
 	sp->pr_altstack.ss_size = (size32_t)lwp->lwp_sigaltstack.ss_size;
@@ -1473,6 +1426,7 @@ oprgetstatus32(kthread_t *t, prstatus32_t *sp, zone_t *zp)
 			sp->pr_sysarg[0] = 0;
 			sp->pr_sysarg[1] = (caddr32_t)up->u_argv;
 			sp->pr_sysarg[2] = (caddr32_t)up->u_envp;
+			sp->pr_sysarg[3] = 0;
 			for (i = 0, auxp = up->u_auxv;
 			    i < sizeof (up->u_auxv) / sizeof (up->u_auxv[0]);
 			    i++, auxp++) {
@@ -1490,7 +1444,7 @@ oprgetstatus32(kthread_t *t, prstatus32_t *sp, zone_t *zp)
 	mutex_enter(&p->p_lock);
 }
 
-void
+static void
 oprgetpsinfo32(proc_t *p, prpsinfo32_t *psp, kthread_t *tp)
 {
 	kthread_t *t;
@@ -1657,11 +1611,11 @@ oprgetpsinfo32(proc_t *p, prpsinfo32_t *psp, kthread_t *tp)
 			psp->pr_pctmem = 0;
 		} else {
 			mutex_exit(&p->p_lock);
-			AS_LOCK_ENTER(as, &as->a_lock, RW_READER);
+			AS_LOCK_ENTER(as, RW_READER);
 			psp->pr_size = (size32_t)btopr(as->a_resvsize);
 			psp->pr_rssize = (size32_t)rm_asrss(as);
 			psp->pr_pctmem = rm_pctmemory(as);
-			AS_LOCK_EXIT(as, &as->a_lock);
+			AS_LOCK_EXIT(as);
 			mutex_enter(&p->p_lock);
 		}
 	}
@@ -1684,14 +1638,8 @@ oprgetpsinfo32(proc_t *p, prpsinfo32_t *psp, kthread_t *tp)
 
 /*ARGSUSED*/
 static int
-prioctl32(
-	struct vnode *vp,
-	int cmd,
-	intptr_t arg,
-	int flag,
-	cred_t *cr,
-	int *rvalp,
-	caller_context_t *ct)
+prioctl32(struct vnode *vp, int cmd, intptr_t arg, int flag, cred_t *cr,
+    int *rvalp, caller_context_t *ct)
 {
 	int nsig = PROC_IS_BRANDED(curproc)? BROP(curproc)->b_nsig : NSIG;
 	caddr_t cmaddr = (caddr_t)arg;
@@ -1781,12 +1729,20 @@ prioctl32(
 		return (EBADF);
 
 	/*
+	 * The following command is no longer supported. It was present on SPARC
+	 * and would always error on other platforms. We now explicitly return
+	 * ENOTSUP to make this more explicit.
+	 */
+	if (cmd == PIOCSXREG)
+		return (ENOTSUP);
+
+	/*
 	 * Perform any necessary copyin() operations before
 	 * locking the process.  Helps avoid deadlocks and
 	 * improves performance.
 	 *
 	 * Also, detect invalid ioctl codes here to avoid
-	 * locking a process unnnecessarily.
+	 * locking a process unnecessarily.
 	 *
 	 * Also, prepare to allocate space that will be needed below,
 	 * case by case.
@@ -1817,13 +1773,8 @@ prioctl32(
 	case PIOCMAXSIG:
 	case PIOCGXREGSIZE:
 		break;
-	case PIOCSXREG:		/* set extra registers */
 	case PIOCGXREG:		/* get extra registers */
-#if defined(__sparc)
-		thingsize = sizeof (prxregset_t);
-#else
-		thingsize = 0;
-#endif
+		thingsize = prgetprxregsize(p);
 		break;
 	case PIOCACTION:
 		thingsize = (nsig-1) * sizeof (struct sigaction32);
@@ -1849,11 +1800,11 @@ prioctl32(
 	case PIOCAUXV:
 		break;
 
-#if defined(__i386) || defined(__i386_COMPAT)
+#if defined(__i386_COMPAT)
 	case PIOCNLDT:
 	case PIOCLDT:
 		break;
-#endif	/* __i386 || __i386_COMPAT */
+#endif	/* __i386_COMPAT */
 
 #if defined(__sparc)
 	case PIOCGWIN:
@@ -1863,7 +1814,7 @@ prioctl32(
 
 	case PIOCOPENM:		/* open mapped object for reading */
 		if (cmaddr == NULL)
-			un32.va = NULL;
+			un32.va = (caddr32_t)(uintptr_t)NULL;
 		else if (copyin(cmaddr, &un32.va, sizeof (un32.va)))
 			error = EFAULT;
 		break;
@@ -1964,17 +1915,6 @@ startover:
 	case PIOCLUSAGE:
 		zdisp = ZYES;
 		break;
-	case PIOCSXREG:		/* set extra registers */
-		/*
-		 * perform copyin before grabbing the process lock
-		 */
-		if (thing) {
-			if (copyin(cmaddr, thing, thingsize)) {
-				kmem_free(thing, thingsize);
-				return (EFAULT);
-			}
-		}
-		/* fall through... */
 	default:
 		zdisp = ZNO;
 		break;
@@ -2018,8 +1958,6 @@ startover:
 		prunlock(pnp);
 		if (copyout(prp, cmaddr, sizeof (proc_t)))
 			error = EFAULT;
-		kmem_free(prp, sizeof (proc_t));
-		thing = NULL;
 		break;
 	}
 
@@ -2032,8 +1970,6 @@ startover:
 		prunlock(pnp);
 		if (copyout(userp, cmaddr, sizeof (user_t)))
 			error = EFAULT;
-		kmem_free(userp, sizeof (user_t));
-		thing = NULL;
 		break;
 	}
 
@@ -2051,9 +1987,10 @@ startover:
 	case PIOCSTOP:		/* stop process or lwp from running */
 	case PIOCWSTOP:		/* wait for process or lwp to stop */
 		/*
-		 * Can't apply to a system process.
+		 * Can't apply to a system process or to a spawn(2) child
+		 * that has not yet exec'd.
 		 */
-		if ((p->p_flag & SSYS) || p->p_as == &kas) {
+		if ((p->p_flag & (SSYS | SSPAWNING)) || p->p_as == &kas) {
 			prunlock(pnp);
 			error = EBUSY;
 			break;
@@ -2158,7 +2095,6 @@ startover:
 		}
 
 		idp = thing;
-		thing = NULL;
 		Bidp = idp;
 		if ((t = p->p_tlist) != NULL) {
 			do {
@@ -2173,7 +2109,6 @@ startover:
 		prunlock(pnp);
 		if (copyout(Bidp, cmaddr, (Nlwp+1) * sizeof (id_t)))
 			error = EFAULT;
-		kmem_free(Bidp, (Nlwp+1) * sizeof (id_t));
 		break;
 	}
 
@@ -2401,12 +2336,19 @@ startover:
 
 	case PIOCGXREGSIZE:	/* get the size of the extra registers */
 	{
-		int xregsize;
-
 		if (prhasx(p)) {
+			size_t xregsize;
+			int abisize;
+
 			xregsize = prgetprxregsize(p);
 			prunlock(pnp);
-			if (copyout(&xregsize, cmaddr, sizeof (xregsize)))
+			if (xregsize > INT_MAX) {
+				error = EOVERFLOW;
+				break;
+			}
+
+			abisize = (int)xregsize;
+			if (copyout(&abisize, cmaddr, sizeof (abisize)))
 				error = EFAULT;
 		} else {
 			prunlock(pnp);
@@ -2433,30 +2375,6 @@ startover:
 		if (error == 0 &&
 		    copyout(thing, cmaddr, thingsize))
 			error = EFAULT;
-		if (thing) {
-			kmem_free(thing, thingsize);
-			thing = NULL;
-		}
-		break;
-
-	case PIOCSXREG:		/* set extra registers */
-		if (PROCESS_NOT_32BIT(p))
-			error = EOVERFLOW;
-		else if (!ISTOPPED(t) && !VSTOPPED(t) && !DSTOPPED(t))
-			error = EBUSY;
-		else if (!prhasx(p))
-			error = EINVAL;	/* No extra register support */
-		else if (thing) {
-			/* drop p_lock while touching the lwp's stack */
-			mutex_exit(&p->p_lock);
-			prsetprxregs(lwp, thing);
-			mutex_enter(&p->p_lock);
-		}
-		prunlock(pnp);
-		if (thing) {
-			kmem_free(thing, thingsize);
-			thing = NULL;
-		}
 		break;
 
 	case PIOCSTATUS:	/* get process/lwp status */
@@ -2480,10 +2398,6 @@ startover:
 
 		if (PROCESS_NOT_32BIT(p)) {
 			prunlock(pnp);
-			if (thing) {
-				kmem_free(thing, thingsize);
-				thing = NULL;
-			}
 			error = EOVERFLOW;
 			break;
 		}
@@ -2504,7 +2418,6 @@ startover:
 		}
 
 		Bprsp = (prstatus32_t *)thing;
-		thing = NULL;
 		prsp = Bprsp;
 		oprgetstatus32(t, prsp, VTOZONE(vp));
 		t = p->p_tlist;
@@ -2518,8 +2431,6 @@ startover:
 		prunlock(pnp);
 		if (copyout(Bprsp, cmaddr, (Nlwp+1) * sizeof (prstatus32_t)))
 			error = EFAULT;
-
-		kmem_free(Bprsp, (Nlwp + 1) * sizeof (prstatus32_t));
 		break;
 	}
 
@@ -2562,14 +2473,11 @@ startover:
 		if (error == 0 &&
 		    copyout(sap, cmaddr, (nsig-1)*sizeof (struct sigaction32)))
 			error = EFAULT;
-		kmem_free(sap, (nsig-1)*sizeof (struct sigaction32));
-		thing = NULL;
 		break;
 	}
 
 	case PIOCGHOLD:		/* get signal-hold mask */
-		schedctl_finish_sigblock(t);
-		sigktou(&t->t_hold, &un32.holdmask);
+		prgethold(t, &un32.holdmask);
 		prunlock(pnp);
 		if (copyout(&un32.holdmask, cmaddr, sizeof (un32.holdmask)))
 			error = EFAULT;
@@ -2582,20 +2490,20 @@ startover:
 
 	case PIOCNMAP:		/* get number of memory mappings */
 	{
-		int n;
+		uint_t n;
 		struct as *as = p->p_as;
 
 		if ((p->p_flag & SSYS) || as == &kas)
 			n = 0;
 		else {
 			mutex_exit(&p->p_lock);
-			AS_LOCK_ENTER(as, &as->a_lock, RW_WRITER);
+			AS_LOCK_ENTER(as, RW_WRITER);
 			n = prnsegs(as, 0);
-			AS_LOCK_EXIT(as, &as->a_lock);
+			AS_LOCK_EXIT(as);
 			mutex_enter(&p->p_lock);
 		}
 		prunlock(pnp);
-		if (copyout(&n, cmaddr, sizeof (int)))
+		if (copyout(&n, cmaddr, sizeof (uint_t)))
 			error = EFAULT;
 		break;
 	}
@@ -2613,9 +2521,9 @@ startover:
 			prunlock(pnp);
 		} else {
 			mutex_exit(&p->p_lock);
-			AS_LOCK_ENTER(as, &as->a_lock, RW_WRITER);
+			AS_LOCK_ENTER(as, RW_WRITER);
 			error = oprgetmap32(p, &iolhead);
-			AS_LOCK_EXIT(as, &as->a_lock);
+			AS_LOCK_EXIT(as);
 			mutex_enter(&p->p_lock);
 			prunlock(pnp);
 
@@ -2850,8 +2758,6 @@ startover:
 		prunlock(pnp);
 		if (copyout(Bupup, cmaddr, (Nlwp+1) * sizeof (prusage32_t)))
 			error = EFAULT;
-		kmem_free(thing, thingsize);
-		thing = NULL;
 		break;
 	}
 
@@ -2887,7 +2793,7 @@ startover:
 		break;
 	}
 
-#if defined(__i386) || defined(__i386_COMPAT)
+#if defined(__i386_COMPAT)
 	case PIOCNLDT:		/* get number of LDT entries */
 	{
 		int n;
@@ -2928,7 +2834,6 @@ startover:
 		}
 
 		ssd = thing;
-		thing = NULL;
 		if (n != 0)
 			prgetldt(p, ssd);
 		mutex_exit(&p->p_ldtlock);
@@ -2939,10 +2844,9 @@ startover:
 		bzero(&ssd[n], sizeof (*ssd));
 		if (copyout(ssd, cmaddr, (n+1) * sizeof (*ssd)))
 			error = EFAULT;
-		kmem_free(ssd, (n+1) * sizeof (*ssd));
 		break;
 	}
-#endif	/* __i386 || __i386_COMPAT */
+#endif	/* __i386_COMPAT */
 
 #if defined(__sparc)
 	case PIOCGWIN:		/* get gwindows_t (see sys/reg.h) */
@@ -2962,8 +2866,6 @@ startover:
 			if (copyout(gwp, cmaddr, sizeof (*gwp)))
 				error = EFAULT;
 		}
-		kmem_free(gwp, sizeof (*gwp));
-		thing = NULL;
 		break;
 	}
 #endif	/* __sparc */
@@ -2975,7 +2877,8 @@ startover:
 
 	}
 
-	ASSERT(thing == NULL);
+	if (thing != NULL)
+		kmem_free(thing, thingsize);
 	ASSERT(xpnp == NULL);
 	return (error);
 }
@@ -3142,7 +3045,7 @@ propenm(prnode_t *pnp, caddr_t cmaddr, caddr_t va, int *rvalp, cred_t *cr)
 		 * change because it is marked P_PR_LOCK.
 		 */
 		mutex_exit(&p->p_lock);
-		AS_LOCK_ENTER(as, &as->a_lock, RW_READER);
+		AS_LOCK_ENTER(as, RW_READER);
 		seg = as_segat(as, va);
 		if (seg != NULL &&
 		    seg->s_ops == &segvn_ops &&
@@ -3153,7 +3056,7 @@ propenm(prnode_t *pnp, caddr_t cmaddr, caddr_t va, int *rvalp, cred_t *cr)
 		} else {
 			error = EINVAL;
 		}
-		AS_LOCK_EXIT(as, &as->a_lock);
+		AS_LOCK_EXIT(as);
 		mutex_enter(&p->p_lock);
 	} else if ((xvp = p->p_exec) == NULL) {
 		error = EINVAL;
@@ -3180,7 +3083,7 @@ propenm(prnode_t *pnp, caddr_t cmaddr, caddr_t va, int *rvalp, cred_t *cr)
  * Return old version of process/lwp status.
  * The u-block is mapped in by this routine and unmapped at the end.
  */
-void
+static void
 oprgetstatus(kthread_t *t, prstatus_t *sp, zone_t *zp)
 {
 	proc_t *p = ttoproc(t);
@@ -3246,8 +3149,7 @@ oprgetstatus(kthread_t *t, prstatus_t *sp, zone_t *zp)
 	sp->pr_cursig  = lwp->lwp_cursig;
 	prassignset(&sp->pr_sigpend, &p->p_sig);
 	prassignset(&sp->pr_lwppend, &t->t_sig);
-	schedctl_finish_sigblock(t);
-	prassignset(&sp->pr_sighold, &t->t_hold);
+	prgethold(t, &sp->pr_sighold);
 	sp->pr_altstack = lwp->lwp_sigaltstack;
 	prgetaction(p, up, lwp->lwp_cursig, &sp->pr_action);
 	sp->pr_pid   = p->p_pid;
@@ -3310,6 +3212,7 @@ oprgetstatus(kthread_t *t, prstatus_t *sp, zone_t *zp)
 			sp->pr_sysarg[0] = 0;
 			sp->pr_sysarg[1] = (uintptr_t)up->u_argv;
 			sp->pr_sysarg[2] = (uintptr_t)up->u_envp;
+			sp->pr_sysarg[3] = 0;
 			for (i = 0, auxp = up->u_auxv;
 			    i < sizeof (up->u_auxv) / sizeof (up->u_auxv[0]);
 			    i++, auxp++) {
@@ -3329,7 +3232,7 @@ oprgetstatus(kthread_t *t, prstatus_t *sp, zone_t *zp)
 /*
  * Return old version of information used by ps(1).
  */
-void
+static void
 oprgetpsinfo(proc_t *p, prpsinfo_t *psp, kthread_t *tp)
 {
 	kthread_t *t;
@@ -3496,11 +3399,11 @@ oprgetpsinfo(proc_t *p, prpsinfo_t *psp, kthread_t *tp)
 			psp->pr_pctmem = 0;
 		} else {
 			mutex_exit(&p->p_lock);
-			AS_LOCK_ENTER(as, &as->a_lock, RW_READER);
+			AS_LOCK_ENTER(as, RW_READER);
 			psp->pr_size = btopr(as->a_resvsize);
 			psp->pr_rssize = rm_asrss(as);
 			psp->pr_pctmem = rm_pctmemory(as);
-			AS_LOCK_EXIT(as, &as->a_lock);
+			AS_LOCK_EXIT(as);
 			mutex_enter(&p->p_lock);
 		}
 	}
@@ -3523,7 +3426,7 @@ oprgetmap(proc_t *p, list_t *iolhead)
 	struct seg *brkseg, *stkseg;
 	uint_t prot;
 
-	ASSERT(as != &kas && AS_WRITE_HELD(as, &as->a_lock));
+	ASSERT(as != &kas && AS_WRITE_HELD(as));
 
 	/*
 	 * Request an initial buffer size that doesn't waste memory
@@ -3541,6 +3444,10 @@ oprgetmap(proc_t *p, list_t *iolhead)
 		caddr_t eaddr = seg->s_base + pr_getsegsize(seg, 0);
 		caddr_t saddr, naddr;
 		void *tmp = NULL;
+
+		if ((seg->s_flags & S_HOLE) != 0) {
+			continue;
+		}
 
 		for (saddr = seg->s_base; saddr < eaddr; saddr = naddr) {
 			prot = pr_getprot(seg, 0, &tmp, &saddr, &naddr, eaddr);
@@ -3583,7 +3490,7 @@ oprgetmap32(proc_t *p, list_t *iolhead)
 	struct seg *brkseg, *stkseg;
 	uint_t prot;
 
-	ASSERT(as != &kas && AS_WRITE_HELD(as, &as->a_lock));
+	ASSERT(as != &kas && AS_WRITE_HELD(as));
 
 	/*
 	 * Request an initial buffer size that doesn't waste memory
@@ -3601,6 +3508,10 @@ oprgetmap32(proc_t *p, list_t *iolhead)
 		caddr_t eaddr = seg->s_base + pr_getsegsize(seg, 0);
 		caddr_t saddr, naddr;
 		void *tmp = NULL;
+
+		if ((seg->s_flags & S_HOLE) != 0) {
+			continue;
+		}
 
 		for (saddr = seg->s_base; saddr < eaddr; saddr = naddr) {
 			prot = pr_getprot(seg, 0, &tmp, &saddr, &naddr, eaddr);
@@ -3643,7 +3554,7 @@ oprpdsize(struct as *as)
 	struct seg *seg;
 	size_t size;
 
-	ASSERT(as != &kas && AS_WRITE_HELD(as, &as->a_lock));
+	ASSERT(as != &kas && AS_WRITE_HELD(as));
 
 	if ((seg = AS_SEGFIRST(as)) == NULL)
 		return (0);
@@ -3654,6 +3565,10 @@ oprpdsize(struct as *as)
 		caddr_t saddr, naddr;
 		void *tmp = NULL;
 		size_t npage;
+
+		if ((seg->s_flags & S_HOLE) != 0) {
+			continue;
+		}
 
 		for (saddr = seg->s_base; saddr < eaddr; saddr = naddr) {
 			(void) pr_getprot(seg, 0, &tmp, &saddr, &naddr, eaddr);
@@ -3673,7 +3588,7 @@ oprpdsize32(struct as *as)
 	struct seg *seg;
 	size_t size;
 
-	ASSERT(as != &kas && AS_WRITE_HELD(as, &as->a_lock));
+	ASSERT(as != &kas && AS_WRITE_HELD(as));
 
 	if ((seg = AS_SEGFIRST(as)) == NULL)
 		return (0);
@@ -3684,6 +3599,10 @@ oprpdsize32(struct as *as)
 		caddr_t saddr, naddr;
 		void *tmp = NULL;
 		size_t npage;
+
+		if ((seg->s_flags & S_HOLE) != 0) {
+			continue;
+		}
 
 		for (saddr = seg->s_base; saddr < eaddr; saddr = naddr) {
 			(void) pr_getprot(seg, 0, &tmp, &saddr, &naddr, eaddr);
@@ -3711,15 +3630,15 @@ oprpdread(struct as *as, uint_t hatid, struct uio *uiop)
 	int error;
 
 again:
-	AS_LOCK_ENTER(as, &as->a_lock, RW_WRITER);
+	AS_LOCK_ENTER(as, RW_WRITER);
 
 	if ((seg = AS_SEGFIRST(as)) == NULL) {
-		AS_LOCK_EXIT(as, &as->a_lock);
+		AS_LOCK_EXIT(as);
 		return (0);
 	}
 	size = oprpdsize(as);
 	if (uiop->uio_resid < size) {
-		AS_LOCK_EXIT(as, &as->a_lock);
+		AS_LOCK_EXIT(as);
 		return (E2BIG);
 	}
 
@@ -3734,6 +3653,10 @@ again:
 		caddr_t eaddr = seg->s_base + pr_getsegsize(seg, 0);
 		caddr_t saddr, naddr;
 		void *tmp = NULL;
+
+		if ((seg->s_flags & S_HOLE) != 0) {
+			continue;
+		}
 
 		for (saddr = seg->s_base; saddr < eaddr; saddr = naddr) {
 			size_t len;
@@ -3765,7 +3688,7 @@ again:
 			 */
 			if (next > (uintptr_t)buf + size) {
 				pr_getprot_done(&tmp);
-				AS_LOCK_EXIT(as, &as->a_lock);
+				AS_LOCK_EXIT(as);
 
 				kmem_free(buf, size);
 
@@ -3797,7 +3720,7 @@ again:
 		ASSERT(tmp == NULL);
 	} while ((seg = AS_SEGNEXT(as, seg)) != NULL);
 
-	AS_LOCK_EXIT(as, &as->a_lock);
+	AS_LOCK_EXIT(as);
 
 	ASSERT((uintptr_t)pmp <= (uintptr_t)buf + size);
 	error = uiomove(buf, (caddr_t)pmp - buf, UIO_READ, uiop);
@@ -3818,15 +3741,15 @@ oprpdread32(struct as *as, uint_t hatid, struct uio *uiop)
 	int error;
 
 again:
-	AS_LOCK_ENTER(as, &as->a_lock, RW_WRITER);
+	AS_LOCK_ENTER(as, RW_WRITER);
 
 	if ((seg = AS_SEGFIRST(as)) == NULL) {
-		AS_LOCK_EXIT(as, &as->a_lock);
+		AS_LOCK_EXIT(as);
 		return (0);
 	}
 	size = oprpdsize32(as);
 	if (uiop->uio_resid < size) {
-		AS_LOCK_EXIT(as, &as->a_lock);
+		AS_LOCK_EXIT(as);
 		return (E2BIG);
 	}
 
@@ -3841,6 +3764,10 @@ again:
 		caddr_t eaddr = seg->s_base + pr_getsegsize(seg, 0);
 		caddr_t saddr, naddr;
 		void *tmp = NULL;
+
+		if ((seg->s_flags & S_HOLE) != 0) {
+			continue;
+		}
 
 		for (saddr = seg->s_base; saddr < eaddr; saddr = naddr) {
 			size_t len;
@@ -3872,7 +3799,7 @@ again:
 			 */
 			if (next > (uintptr_t)buf + size) {
 				pr_getprot_done(&tmp);
-				AS_LOCK_EXIT(as, &as->a_lock);
+				AS_LOCK_EXIT(as);
 
 				kmem_free(buf, size);
 
@@ -3904,7 +3831,7 @@ again:
 		ASSERT(tmp == NULL);
 	} while ((seg = AS_SEGNEXT(as, seg)) != NULL);
 
-	AS_LOCK_EXIT(as, &as->a_lock);
+	AS_LOCK_EXIT(as);
 
 	ASSERT((uintptr_t)pmp == (uintptr_t)buf + size);
 	error = uiomove(buf, (caddr_t)pmp - buf, UIO_READ, uiop);

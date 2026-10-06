@@ -72,7 +72,7 @@ kmdb_prom_getchar(int wait)
 	getchar = (uintptr_t)pio->cons_polledio_getchar;
 	arg = (uintptr_t)pio->cons_polledio_argument;
 
-	if (!wait && ischar != NULL && !kmdb_dpi_call(ischar, 1, &arg))
+	if (!wait && ischar != 0 && !kmdb_dpi_call(ischar, 1, &arg))
 		return (-1);
 
 	return ((int)kmdb_dpi_call(getchar, 1, &arg));
@@ -430,7 +430,9 @@ kmdb_parse_mode(const char *mode, struct termios *tip, int in)
 	static const uint_t baudmap[] = {
 		0, 50, 75, 110, 134, 150, 200, 300, 600, 1200,
 		1800, 2400, 4800, 9600, 19200, 38400, 57600,
-		76800, 115200, 153600, 230400, 307200, 460800, 921600
+		76800, 115200, 153600, 230400, 307200, 460800, 921600,
+		1000000, 1152000, 1500000, 2000000, 2500000, 3000000,
+		3500000, 4000000
 	};
 	static const uint_t bitsmap[] = { CS6, CS6, CS7, CS8 };
 	char *m = strdup(mode);
@@ -543,8 +545,16 @@ kmdb_prom_term_init(kmdb_auxv_t *kav, kmdb_promif_t *pif)
 	    0x00, 0x11, 0x13, 0x1a, 0x19, 0x12, 0x0f, 0x17, 0x16 };
 	char *conin = NULL, *conout = NULL;
 
-	if (kmdb_prom_stdout_is_framebuffer(kav))
+	if (kmdb_prom_stdout_is_framebuffer(kav)) {
+		struct winsize *wsz = &pif->pif_wsz;
+
+		/* Set default dimensions. */
+		wsz->ws_row = KMDB_PIF_WINSIZE_ROWS;
+		wsz->ws_col = KMDB_PIF_WINSIZE_COLS;
+
+		kmdb_prom_get_tem_size(kav, &wsz->ws_row, &wsz->ws_col);
 		pif->pif_oterm = ATTACHED_TERM_TYPE;
+	}
 
 	bzero(&pif->pif_tios, sizeof (struct termios));
 
@@ -680,8 +690,9 @@ kmdb_prom_term_ctl(int req, void *arg)
 		 */
 		if (mdb.m_promif->pif_oterm != NULL) {
 			struct winsize *wsz = arg;
-			wsz->ws_row = KMDB_PIF_WINSIZE_ROWS;
-			wsz->ws_col = KMDB_PIF_WINSIZE_COLS;
+
+			wsz->ws_row = mdb.m_promif->pif_wsz.ws_row;
+			wsz->ws_col = mdb.m_promif->pif_wsz.ws_col;
 			wsz->ws_xpixel = wsz->ws_ypixel = 0;
 			return (0);
 		}
@@ -742,10 +753,10 @@ kmdb_prom_debugger_exit(void)
 	mdb.m_pio = NULL;
 }
 
-#ifdef DEBUG
 /*
- * The prom_* files use ASSERT, which is #defined as assfail().
- * We need to redirect that to our assert function.
+ * The prom_* files use ASSERT, which is #defined as assfail().  We need to
+ * redirect that to our assert function. This is also used by the various STAND
+ * libraries.
  */
 int
 kmdb_prom_assfail(const char *assertion, const char *file, int line)
@@ -754,7 +765,6 @@ kmdb_prom_assfail(const char *assertion, const char *file, int line)
 	/*NOTREACHED*/
 	return (0);
 }
-#endif
 
 /*
  * Begin the initialization of the debugger/PROM interface.  Initialization is

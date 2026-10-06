@@ -25,18 +25,16 @@
  * Copyright 2013 Joshua M. Clulow <josh@sysmgr.org>
  *
  * Copyright (c) 2014 Gary Mills
+ * Copyright (c) 2016 by Delphix. All rights reserved.
+ * Copyright 2022 Sebastian Wiedenroth
+ * Copyright 2023 OmniOS Community Edition (OmniOSce) Association.
  */
 
 /*	Copyright (c) 1984, 1986, 1987, 1988, 1989 AT&T	*/
-/*	  All Rights Reserved  	*/
+/*	  All Rights Reserved	*/
 
 /*	Copyright (c) 1987, 1988 Microsoft Corporation	*/
 /*	  All Rights Reserved	*/
-
-#ifdef lint
-/* make lint happy */
-#define	__EXTENSIONS__
-#endif
 
 #include <sys/contract/process.h>
 #include <sys/ctfs.h>
@@ -197,6 +195,7 @@ struct event {
 			struct shared *tz;	/* timezone of this event */
 			struct shared *home;	/* directory for this event */
 			struct shared *shell;	/* shell for this event */
+			uint32_t max_random_delay;	/* max. random delay */
 		} ct;
 		struct { /* for at events */
 			short exists;	/* for revising at events	*/
@@ -314,7 +313,6 @@ static struct usr *find_usr(char *);
 static int ex(struct event *e);
 static void read_dirs(int);
 static void mail(char *, char *, int);
-static char *next_field(int, int);
 static void readcron(struct usr *, time_t);
 static int next_ge(int, char *);
 static void free_if_unused(struct usr *);
@@ -354,7 +352,7 @@ static void *get_obj(struct shared *obj);
  * it's original intended use.
  */
 static time_t last_time, init_time, t_old;
-static int reset_needed; /* set to 1 when cron(1M) needs to re-initialize */
+static int reset_needed; /* set to 1 when cron(8) needs to re-initialize */
 
 static int		refresh;
 static sigset_t		defmask, sigmask;
@@ -371,8 +369,8 @@ extern int	audit_cron_delete_anc_file(char *, char *);
 extern int	audit_cron_is_anc_name(char *);
 extern int	audit_cron_mode();
 
-static int cron_conv(int, struct pam_message **,
-		struct pam_response **, void *);
+static int cron_conv(int, const struct pam_message **,
+    struct pam_response **, void *);
 
 static struct pam_conv pam_conv = {cron_conv, NULL};
 static pam_handle_t *pamh;	/* Authentication handle */
@@ -438,7 +436,7 @@ main(int argc, char *argv[])
 
 	/*
 	 * reset_needed is set to 1 whenever el_add() finds out that a cron
-	 * job is scheduled to be run before the time when cron(1M) daemon
+	 * job is scheduled to be run before the time when cron(8) daemon
 	 * initialized.
 	 * Other cases where a reset is needed is when ex() finds that the
 	 * event to be executed is being run at the wrong time, or when idle()
@@ -459,7 +457,7 @@ begin:
 	(void) setlocale(LC_ALL, "");
 	/* fork unless 'nofork' is specified */
 	if ((argc <= 1) || (strcmp(argv[1], "nofork"))) {
-		if (rfork = fork()) {
+		if ((rfork = fork()) != 0) {
 			if (rfork == (pid_t)-1) {
 				(void) sleep(30);
 				goto begin;
@@ -690,7 +688,7 @@ initialize(int firstpass)
 					    REMOVE_FIFO|CONSOLE_MSG);
 			} else {
 				if (NOFORK) {
-					/* didn't fork... init(1M) is waiting */
+					/* didn't fork... init(8) is waiting */
 					(void) sleep(60);
 				}
 				perror("FIFO");
@@ -699,7 +697,7 @@ initialize(int firstpass)
 			}
 		} else {
 			if (NOFORK) {
-				/* didn't fork... init(1M) is waiting */
+				/* didn't fork... init(8) is waiting */
 				(void) sleep(60);
 				/*
 				 * the wait is painful, but we don't want
@@ -977,7 +975,8 @@ mod_ctab(char *name, time_t reftime)
 			return;
 		}
 #ifdef DEBUG
-		(void) fprintf(stderr, "%s has revised his crontab\n", u->name);
+		(void) fprintf(stderr, "%s has revised their crontab\n",
+		    u->name);
 #endif
 		rm_ctevents(u);
 		el_remove(u->ctid, 0);
@@ -985,9 +984,8 @@ mod_ctab(char *name, time_t reftime)
 	}
 }
 
-/* ARGSUSED */
 static void
-mod_atjob(char *name, time_t reftime)
+mod_atjob(char *name, time_t reftime __unused)
 {
 	char	*ptr;
 	time_t	tim;
@@ -1134,7 +1132,9 @@ readcron(struct usr *u, time_t reftime)
 	struct shared *tz = NULL;
 	struct shared *home = NULL;
 	struct shared *shell = NULL;
+	uint32_t max_random_delay = 0;
 	int lineno = 0;
+	const char *errstr;
 
 	/* read the crontab file */
 	cte_init();		/* Init error handling */
@@ -1166,7 +1166,7 @@ readcron(struct usr *u, time_t reftime)
 		if (strncmp(&line[cursor], ENV_TZ,
 		    strlen(ENV_TZ)) == 0) {
 			if ((tmp = strchr(&line[cursor], '\n')) != NULL) {
-				*tmp = NULL;
+				*tmp = '\0';
 			}
 
 			if (!isvalid_tz(&line[cursor + strlen(ENV_TZ)], NULL,
@@ -1184,7 +1184,7 @@ readcron(struct usr *u, time_t reftime)
 		if (strncmp(&line[cursor], ENV_HOME,
 		    strlen(ENV_HOME)) == 0) {
 			if ((tmp = strchr(&line[cursor], '\n')) != NULL) {
-				*tmp = NULL;
+				*tmp = '\0';
 			}
 			if (home == NULL ||
 			    strcmp(&line[cursor], get_obj(home))) {
@@ -1198,7 +1198,7 @@ readcron(struct usr *u, time_t reftime)
 		if (strncmp(&line[cursor], ENV_SHELL,
 		    strlen(ENV_SHELL)) == 0) {
 			if ((tmp = strchr(&line[cursor], '\n')) != NULL) {
-				*tmp = NULL;
+				*tmp = '\0';
 			}
 			if (shell == NULL ||
 			    strcmp(&line[cursor], get_obj(shell))) {
@@ -1208,13 +1208,37 @@ readcron(struct usr *u, time_t reftime)
 			continue;
 		}
 
+		if (strncmp(&line[cursor], ENV_RANDOM_DELAY,
+		    strlen(ENV_RANDOM_DELAY)) == 0) {
+			if ((tmp = strchr(&line[cursor], '\n')) != NULL) {
+				*tmp = '\0';
+			}
+
+			max_random_delay = strtonum(
+			    &line[cursor + strlen(ENV_RANDOM_DELAY)], 0,
+			    UINT32_MAX / 60, &errstr);
+			if (errstr != NULL) {
+				cte_add(lineno, line);
+				break;
+			}
+
+			continue;
+		}
+
 		e = xmalloc(sizeof (struct event));
 		e->etype = CRONEVENT;
-		if (!(((e->of.ct.minute = next_field(0, 59)) != NULL) &&
-		    ((e->of.ct.hour = next_field(0, 23)) != NULL) &&
-		    ((e->of.ct.daymon = next_field(1, 31)) != NULL) &&
-		    ((e->of.ct.month = next_field(1, 12)) != NULL) &&
-		    ((e->of.ct.dayweek = next_field(0, 6)) != NULL))) {
+
+		if (next_field(0, 59, line, &cursor,
+		    &e->of.ct.minute) != CFOK ||
+		    next_field(0, 23, line, &cursor, &e->of.ct.hour) != CFOK ||
+		    next_field(1, 31, line, &cursor,
+		    &e->of.ct.daymon) != CFOK ||
+		    next_field(1, 12, line, &cursor, &e->of.ct.month) != CFOK ||
+		    next_field(0, 6, line, &cursor,
+		    &e->of.ct.dayweek) != CFOK) {
+#ifdef DEBUG
+			(void) fprintf(stderr, "Error: %d %s", lineno, line);
+#endif
 			free(e);
 			cte_add(lineno, line);
 			continue;
@@ -1255,6 +1279,8 @@ again:
 		e->of.ct.shell = dup_shared(shell);
 		/* set the home of this entry */
 		e->of.ct.home = dup_shared(home);
+		/* set the maximum random delay */
+		e->of.ct.max_random_delay = max_random_delay;
 		/* have the event point to it's owner	*/
 		e->u = u;
 		/* insert this event at the front of this user's event list */
@@ -1441,67 +1467,6 @@ mail(char *usrname, char *mesg, int format)
 	if (cron_pid == getpid()) {
 		miscpid_insert(fork_val);
 	}
-}
-
-static char *
-next_field(int lower, int upper)
-{
-	/*
-	 * next_field returns a pointer to a string which holds the next
-	 * field of a line of a crontab file.
-	 *   if (numbers in this field are out of range (lower..upper),
-	 *	or there is a syntax error) then
-	 *	NULL is returned, and a mail message is sent to the
-	 *	user telling him which line the error was in.
-	 */
-
-	char *s;
-	int num, num2, start;
-
-	while ((line[cursor] == ' ') || (line[cursor] == '\t'))
-		cursor++;
-	start = cursor;
-	if (line[cursor] == '\0') {
-		return (NULL);
-	}
-	if (line[cursor] == '*') {
-		cursor++;
-		if ((line[cursor] != ' ') && (line[cursor] != '\t'))
-			return (NULL);
-		s = xmalloc(2);
-		(void) strcpy(s, "*");
-		return (s);
-	}
-	for (;;) {
-		if (!isdigit(line[cursor]))
-			return (NULL);
-		num = 0;
-		do {
-			num = num*10 + (line[cursor]-'0');
-		} while (isdigit(line[++cursor]));
-		if ((num < lower) || (num > upper))
-			return (NULL);
-		if (line[cursor] == '-') {
-			if (!isdigit(line[++cursor]))
-				return (NULL);
-			num2 = 0;
-			do {
-				num2 = num2*10 + (line[cursor]-'0');
-			} while (isdigit(line[++cursor]));
-			if ((num2 < lower) || (num2 > upper))
-				return (NULL);
-		}
-		if ((line[cursor] == ' ') || (line[cursor] == '\t'))
-			break;
-		if (line[cursor] == '\0')
-			return (NULL);
-		if (line[cursor++] != ',')
-			return (NULL);
-	}
-	s = xmalloc(cursor-start + 1);
-	(void) strncpy(s, line + start, cursor-start);
-	s[cursor-start] = '\0';
-	return (s);
 }
 
 #define	tm_cmp(t1, t2) (\
@@ -1906,18 +1871,22 @@ recalc:
 static time_t
 next_time(struct event *e, time_t tflag)
 {
-	if (e->of.ct.tz != NULL) {
-		time_t ret;
+	time_t ret;
 
+	if (e->of.ct.tz != NULL) {
 		(void) putenv((char *)get_obj(e->of.ct.tz));
 		tzset();
 		ret = tz_next_time(e, tflag);
 		(void) putenv(tzone);
 		tzset();
-		return (ret);
 	} else {
-		return (tz_next_time(e, tflag));
+		ret = tz_next_time(e, tflag);
 	}
+
+	if (e->of.ct.max_random_delay > 0) {
+		ret += arc4random_uniform(e->of.ct.max_random_delay * 60 - 1);
+	}
+	return (ret);
 }
 
 /*
@@ -2391,7 +2360,7 @@ ex(struct event *e)
 	}
 
 	/*
-	 * set correct user identification and check his account
+	 * set correct user identification and check their account
 	 */
 	r = set_user_cred(e->u, pproj);
 	if (r == VUC_EXPIRED) {
@@ -2838,7 +2807,7 @@ msg_wait(long tim)
 static void
 process_msg(struct message *pmsg, time_t reftime)
 {
-	if (pmsg->etype == NULL)
+	if (pmsg->etype == 0)
 		return;
 
 	switch (pmsg->etype) {
@@ -2930,24 +2899,21 @@ rinfo_free(struct runinfo *entry)
 	}
 }
 
-/* ARGSUSED */
 static void
-thaw_handler(int sig)
+thaw_handler(int sig __unused)
 {
 	refresh = 1;
 }
 
 
-/* ARGSUSED */
 static void
-cronend(int sig)
+cronend(int sig __unused)
 {
 	crabort("SIGTERM", REMOVE_FIFO);
 }
 
-/*ARGSUSED*/
 static void
-child_handler(int sig)
+child_handler(int sig __unused)
 {
 	;
 }
@@ -3473,12 +3439,11 @@ process_anc_files(int del)
 	}
 }
 
-/*ARGSUSED*/
 static int
-cron_conv(int num_msg, struct pam_message **msgs,
-    struct pam_response **response, void *appdata_ptr)
+cron_conv(int num_msg, const struct pam_message **msgs,
+    struct pam_response **response __unused, void *appdata_ptr __unused)
 {
-	struct pam_message	**m = msgs;
+	const struct pam_message **m = msgs;
 	int i;
 
 	for (i = 0; i < num_msg; i++) {
@@ -3598,14 +3563,14 @@ contract_abandon_latest(pid_t pid)
 		crabort("repeated failure to abandon contracts",
 		    REMOVE_FIFO | CONSOLE_MSG);
 
-	if (r = contract_latest(&id)) {
+	if ((r = contract_latest(&id)) != 0) {
 		msg("could not obtain latest contract for "
 		    "PID %ld: %s", pid, strerror(r));
 		cts_lost++;
 		return;
 	}
 
-	if (r = contract_abandon_id(id)) {
+	if ((r = contract_abandon_id(id)) != 0) {
 		msg("could not abandon latest contract %ld: %s", id,
 		    strerror(r));
 		cts_lost++;
@@ -3615,7 +3580,7 @@ contract_abandon_latest(pid_t pid)
 
 static struct shared *
 create_shared(void *obj, void * (*obj_alloc)(void *obj),
-	void (*obj_free)(void *))
+    void (*obj_free)(void *))
 {
 	struct shared *out;
 

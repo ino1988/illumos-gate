@@ -21,6 +21,7 @@
 
 /*
  * Copyright (c) 2007, 2010, Oracle and/or its affiliates. All rights reserved.
+ * Copyright 2013 Nexenta Systems, Inc.  All rights reserved.
  */
 
 /*
@@ -77,8 +78,14 @@ smb_share_door_clnt_fini(void)
 static int
 smb_share_door_clnt_open(void)
 {
+	const char	*door_name;
+
 	if (smb_share_dfd == -1) {
-		if ((smb_share_dfd = open(SMB_SHARE_DNAME, O_RDONLY)) < 0)
+		door_name = getenv("SMB_SHARE_DNAME");
+		if (door_name == NULL)
+			door_name = SMB_SHARE_DNAME;
+
+		if ((smb_share_dfd = open(door_name, O_RDONLY)) < 0)
 			smb_share_dfd = -1;
 		else
 			smb_share_dncall = 0;
@@ -217,8 +224,9 @@ smb_share_list(int offset, smb_shrlist_t *list)
 	}
 
 	dec_ctx = smb_dr_decode_start(arg->data_ptr, arg->data_size);
-	if (smb_share_dchk(dec_ctx) != 0) {
-		(void) smb_dr_decode_finish(dec_ctx);
+	if (dec_ctx == NULL || smb_share_dchk(dec_ctx) != 0) {
+		if (dec_ctx != NULL)
+			(void) smb_dr_decode_finish(dec_ctx);
 		smb_share_door_clnt_exit(arg, B_FALSE, "decode");
 		return (NERR_InternalError);
 	}
@@ -261,8 +269,9 @@ smb_share_count(void)
 	}
 
 	dec_ctx = smb_dr_decode_start(arg->data_ptr, arg->data_size);
-	if (smb_share_dchk(dec_ctx) != 0) {
-		(void) smb_dr_decode_finish(dec_ctx);
+	if (dec_ctx == NULL || smb_share_dchk(dec_ctx) != 0) {
+		if (dec_ctx != NULL)
+			(void) smb_dr_decode_finish(dec_ctx);
 		smb_share_door_clnt_exit(arg, B_FALSE, "decode");
 		return (-1);
 	}
@@ -304,8 +313,9 @@ smb_share_delete(char *share_name)
 	}
 
 	dec_ctx = smb_dr_decode_start(arg->data_ptr, arg->data_size);
-	if (smb_share_dchk(dec_ctx) != 0) {
-		(void) smb_dr_decode_finish(dec_ctx);
+	if (dec_ctx == NULL || smb_share_dchk(dec_ctx) != 0) {
+		if (dec_ctx != NULL)
+			(void) smb_dr_decode_finish(dec_ctx);
 		smb_share_door_clnt_exit(arg, B_FALSE, "decode");
 		return (NERR_InternalError);
 	}
@@ -349,8 +359,9 @@ smb_share_rename(char *from, char *to)
 	}
 
 	dec_ctx = smb_dr_decode_start(arg->data_ptr, arg->data_size);
-	if (smb_share_dchk(dec_ctx) != 0) {
-		(void) smb_dr_decode_finish(dec_ctx);
+	if (dec_ctx == NULL || smb_share_dchk(dec_ctx) != 0) {
+		if (dec_ctx != NULL)
+			(void) smb_dr_decode_finish(dec_ctx);
 		smb_share_door_clnt_exit(arg, B_FALSE, "decode");
 		return (NERR_InternalError);
 	}
@@ -392,8 +403,9 @@ smb_share_create(smb_share_t *si)
 	}
 
 	dec_ctx = smb_dr_decode_start(arg->data_ptr, arg->data_size);
-	if (smb_share_dchk(dec_ctx) != 0) {
-		(void) smb_dr_decode_finish(dec_ctx);
+	if (dec_ctx == NULL || smb_share_dchk(dec_ctx) != 0) {
+		if (dec_ctx != NULL)
+			(void) smb_dr_decode_finish(dec_ctx);
 		smb_share_door_clnt_exit(arg, B_FALSE, "decode");
 		return (NERR_InternalError);
 	}
@@ -436,8 +448,9 @@ smb_share_modify(smb_share_t *si)
 	}
 
 	dec_ctx = smb_dr_decode_start(arg->data_ptr, arg->data_size);
-	if (smb_share_dchk(dec_ctx) != 0) {
-		(void) smb_dr_decode_finish(dec_ctx);
+	if (dec_ctx == NULL || smb_share_dchk(dec_ctx) != 0) {
+		if (dec_ctx != NULL)
+			(void) smb_dr_decode_finish(dec_ctx);
 		smb_share_door_clnt_exit(arg, B_FALSE, "decode");
 		return (NERR_InternalError);
 	}

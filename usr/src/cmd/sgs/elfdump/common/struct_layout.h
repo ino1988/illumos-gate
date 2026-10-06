@@ -26,6 +26,8 @@
 
 /*
  * Copyright 2012 DEY Storage Systems, Inc.  All rights reserved.
+ * Copyright 2018 Joyent, Inc.
+ * Copyright 2020 OmniOS Community Edition (OmniOSce) Association.
  */
 
 #ifndef	_STRUCT_LAYOUT_H
@@ -45,7 +47,7 @@ extern "C" {
 
 
 /*
- * Solaris defines system structs that elfdump needs to display
+ * illumos defines system structs that elfdump needs to display
  * data from. We have a variety of hurdles to overcome in doing this:
  *
  *	- The size of system types can differ between ELFCLASS32 and
@@ -98,7 +100,7 @@ typedef struct {
  */
 typedef union {
 	char		sld_i8;
-	uchar_t 	sld_ui8;
+	uchar_t		sld_ui8;
 	short		sld_i16;
 	ushort_t	sld_ui16;
 	int32_t		sld_i32;
@@ -506,7 +508,7 @@ typedef struct {
 } sl_utsname_layout_t;
 
 /*
- * Layout description of prdinfo_t, from <sys/procfs.h>.
+ * Layout description of prfdinfo_core_t, from <sys/procfs.h>.
  */
 typedef struct {
 	sl_field_t		sizeof_struct;
@@ -525,6 +527,37 @@ typedef struct {
 	sl_field_t		pr_fdflags;
 	sl_field_t		pr_path;
 } sl_prfdinfo_layout_t;
+
+typedef struct {
+	sl_field_t		sizeof_struct;
+	sl_field_t		pr_version;
+	sl_field_t		pr_effective;
+	sl_field_t		pr_inherit;
+	sl_field_t		pr_lower;
+	sl_field_t		pr_upper;
+} sl_prsecflags_layout_t;
+
+typedef struct {
+	sl_field_t		sizeof_struct;
+	sl_field_t		pr_lwpid;
+	sl_field_t		pr_lwpname;
+} sl_prlwpname_layout_t;
+
+typedef struct {
+	sl_field_t		sizeof_struct;
+	sl_field_t		pru_version;
+	sl_field_t		pru_flags;
+	sl_field_t		pru_data;
+} sl_prupanic_layout_t;
+
+typedef struct {
+	sl_field_t		sizeof_struct;
+	sl_field_t		prcwd_fsid;
+	sl_field_t		prcwd_fsname;
+	sl_field_t		prcwd_mntpt;
+	sl_field_t		prcwd_mntspec;
+	sl_field_t		prcwd_cwd;
+} sl_prcwd_layout_t;
 
 /*
  * This type collects all of the layout definitions for
@@ -551,6 +584,10 @@ typedef struct {
 	const sl_timestruc_layout_t	*timestruc;	/* timestruc_t */
 	const sl_utsname_layout_t	*utsname;	/* struct utsname */
 	const sl_prfdinfo_layout_t	*prfdinfo;	/* prdinfo_t */
+	const sl_prsecflags_layout_t	*prsecflags;	/* prsecflags_t */
+	const sl_prlwpname_layout_t	*prlwpname;	/* prlwpname_t */
+	const sl_prupanic_layout_t	*prupanic;	/* prupanic_t */
+	const sl_prcwd_layout_t		*prcwd;		/* prcwd_t */
 } sl_arch_layout_t;
 
 

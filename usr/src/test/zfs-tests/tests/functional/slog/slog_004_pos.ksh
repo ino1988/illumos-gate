@@ -26,7 +26,7 @@
 #
 
 #
-# Copyright (c) 2013 by Delphix. All rights reserved.
+# Copyright (c) 2013, 2016 by Delphix. All rights reserved.
 #
 
 . $STF_SUITE/tests/functional/slog/slog.kshlib
@@ -46,6 +46,7 @@ verify_runnable "global"
 
 log_assert "Attaching a log device passes."
 log_onexit cleanup
+log_must setup
 
 for type in "" "mirror" "raidz" "raidz2"
 do
@@ -53,19 +54,19 @@ do
 	do
 		for logtype in "" "mirror"
 		do
-			log_must $ZPOOL create $TESTPOOL $type $VDEV \
+			log_must zpool create $TESTPOOL $type $VDEV \
 				$spare $SDEV log $logtype $LDEV
 
 			ldev=$(random_get $LDEV)
 			typeset ldev2=$(random_get $LDEV2)
-			log_must $ZPOOL attach $TESTPOOL $ldev $ldev2
+			log_must zpool attach $TESTPOOL $ldev $ldev2
 			log_must display_status $TESTPOOL
 			log_must verify_slog_device \
 				$TESTPOOL $ldev 'ONLINE' 'mirror'
 			log_must verify_slog_device \
 				$TESTPOOL $ldev2 'ONLINE' 'mirror'
 
-			log_must $ZPOOL destroy -f $TESTPOOL
+			log_must zpool destroy -f $TESTPOOL
 		done
 	done
 done

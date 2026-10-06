@@ -22,7 +22,7 @@
 # Copyright 2009 Sun Microsystems, Inc.  All rights reserved.
 # Use is subject to license terms.
 #
-#
+# Copyright (c) 2018, Joyent, Inc.
 
 LIBRARY= pkinit.a
 VERS= .1
@@ -56,7 +56,7 @@ POFILES = generic.po
 INS.liblink=	-$(RM) $@; $(SYMLINK) $(LIBLINKS)$(VERS) $@
 
 
-CPPFLAGS += 	-I$(SRC)/lib/krb5 \
+CPPFLAGS +=	-I$(SRC)/lib/krb5 \
 		-I$(SRC)/lib/krb5/kdb \
 		-I$(SRC)/lib/gss_mechs/mech_krb5/include \
 		-I$(SRC)/lib/gss_mechs/mech_krb5/krb5/os \
@@ -65,12 +65,23 @@ CPPFLAGS += 	-I$(SRC)/lib/krb5 \
 		-I$(SRC)/uts/common/gssapi/mechs/krb5/include \
 		-I$(SRC)
 
-CERRWARN	+= -_gcc=-Wno-uninitialized
+# The pkinit_crypto_openssl.c file is not ported to the OpenSSL 3.x API yet and
+# so we need to make sure the deprecated 1.x API is fully available for it.
+# Once the pkinit_crypto_openssl.c file is adapted for OpenSSL 3.x this should
+# be updated or removed.
+# See also https://www.illumos.org/issues/16915
+CPPFLAGS +=	-DOPENSSL_API_COMPAT=10101
+
+CERRWARN	+= $(CNOWARN_UNINIT)
 CERRWARN	+= -_gcc=-Wno-unused-function
 
+# not linted
+SMATCH=off
+
 CFLAGS +=	$(CCVERBOSE) -I..
-DYNFLAGS +=	$(KRUNPATH) $(KMECHLIB) -znodelete
+DYNFLAGS +=	$(KRUNPATH) $(KMECHLIB) $(ZNODELETE)
 LDLIBS +=	-L $(ROOTLIBDIR) -lcrypto -lc
+NATIVE_LIBS +=	libcrypto.so
 
 ROOTLIBDIR= $(ROOT)/usr/lib/krb5/plugins/preauth
 
@@ -81,7 +92,6 @@ $(ROOTLIBDIR):
 
 all:	$(LIBS)
 
-lint:	lintcheck
 
 # include library targets
 include $(SRC)/lib/krb5/Makefile.targ

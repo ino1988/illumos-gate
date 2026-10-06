@@ -19,6 +19,7 @@
  * CDDL HEADER END
  */
 /*
+ * Copyright 2015 Gary Mills
  * Copyright 2009 Sun Microsystems, Inc.  All rights reserved.
  * Use is subject to license terms.
  */
@@ -45,7 +46,6 @@
 __nis_ldap_proxy_info	proxyInfo		=
 	{NULL, (auth_method_t)NO_VALUE_SET, (tls_method_t)NO_VALUE_SET, NULL,
 		NULL, NULL, NULL, NULL, (follow_referral_t)NO_VALUE_SET};
-__nis_config_t		ldapConfig;
 __nisdb_table_mapping_t ldapDBTableMapping;
 __nis_table_mapping_t	*ldapTableMapping	= NULL;
 __yp_domain_context_t	ypDomains;
@@ -53,7 +53,7 @@ __yp_domain_context_t	ypDomains;
 parse_error		p_error			= no_parse_error;
 int			cur_line_num		= 0;
 int			start_line_num		= 0;
-int			seq_num 		= 0;
+int			seq_num			= 0;
 const char		*warn_file		= NULL;
 
 char			_key_val[38];
@@ -83,6 +83,11 @@ static int parse_ldap_config_dn_attrs(__nis_ldap_proxy_info *proxy_info,
 static int yp_parse_ldap_default_conf(__nis_ldap_proxy_info *proxy_info,
 	__nis_config_t *nis_config, __nis_config_info_t *config_info,
 	__nisdb_table_mapping_t *table_info);
+
+/* Forward declarations */
+int yp_parse_ldap_config_file(const char *, __nis_ldap_proxy_info *,
+    __nis_config_t *, __nis_table_mapping_t **, __nis_config_info_t *,
+    __nisdb_table_mapping_t *, __yp_domain_context_t *);
 
 
 /* helper functions */
@@ -128,7 +133,6 @@ parse_ldap_migration(
 					(tls_method_t)NO_VALUE_SET, NULL,
 					NULL, NULL};
 	struct stat		buf;
-	int i = 0;
 
 	p_error = no_parse_error;
 
@@ -412,7 +416,7 @@ yp_parse_ldap_default_conf(
 	char		*attr_val;
 	int		defflags;
 	config_key	attrib_num;
-	int 	i, len, attr_len;
+	int		i, len;
 	void		*defp;
 
 	if ((defp = defopen_r(YP_ETCCONFFILE)) != NULL) {
@@ -501,10 +505,7 @@ yp_parse_ldap_default_conf(
  */
 
 static config_key
-get_attrib_num_cmdline(
-	const char	*s,
-	const char 	**begin_s,
-	const char 	**end_s)
+get_attrib_num_cmdline(const char *s, const char **begin_s, const char **end_s)
 {
 	const char	*s_end		= s + strlen(s);
 	const char	*equal_s;
@@ -559,13 +560,10 @@ get_attrib_num_cmdline(
  */
 
 static int
-parse_ldap_config_file(
-	const char 		*config_file,
-	__nis_ldap_proxy_info	*proxy_info,
-	__nis_config_t		*nis_config,
-	__nis_table_mapping_t	**table_mapping,
-	__nis_config_info_t	*config_info,
-	__nisdb_table_mapping_t	*table_info)
+parse_ldap_config_file(const char *config_file,
+    __nis_ldap_proxy_info *proxy_info, __nis_config_t *nis_config,
+    __nis_table_mapping_t **table_mapping, __nis_config_info_t *config_info,
+    __nisdb_table_mapping_t *table_info)
 {
 	int		rc = 0;
 	config_key	attrib_num;
@@ -646,7 +644,6 @@ yp_parse_ldap_config_file(
 	__yp_domain_context_t	*ypDomains)
 {
 	int	rc = 0;
-	int	numDomains = 0;
 	config_key	attrib_num;
 	int	fd;
 	char	*attr_val = NULL;
@@ -733,7 +730,6 @@ get_file_attr_val(int fd, char **attr_val)
 	char		*attribute_value;
 	int		ret;
 	config_key	attrib_num = no_more_keys;
-	int		found_quote = 0;
 
 	*attr_val = NULL;
 
@@ -808,7 +804,6 @@ connect_to_ldap_config_server(
 	int			server_port,
 	__nis_config_info_t	*config_info)
 {
-	int		rc		= 0;
 	LDAP		*ld		= NULL;
 	int		ldapVersion	= LDAP_VERSION3;
 	int		derefOption	= LDAP_DEREF_ALWAYS;

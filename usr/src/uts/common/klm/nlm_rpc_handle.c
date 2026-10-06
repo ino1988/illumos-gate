@@ -20,7 +20,7 @@
  */
 
 /*
- * Copyright 2011 Nexenta Systems, Inc.  All rights reserved.
+ * Copyright 2019 Nexenta by DDN, Inc. All rights reserved.
  * Copyright (c) 2012 by Delphix. All rights reserved.
  */
 
@@ -111,7 +111,38 @@ update_host_rpcbinding(struct nlm_host *hostp, int vers)
 	hostp->nh_rpcb_ustat = RPC_SUCCESS;
 	mutex_exit(&hostp->nh_lock);
 
-	stat = rpcbind_getaddr(&hostp->nh_knc, NLM_PROG, vers, &hostp->nh_addr);
+	/*
+	 * If this host has a local address saved, use it when creating
+	 * the RPC binding so that if we need to "call back" the client
+	 * (eg. for a "lock granted" call) the RPC client we use will
+	 * have the correct local IP address.  Without that, on a server
+	 * with multiple interfaces, the client may not "see" our call.
+	 * Be sure to pass port=0 in the local address.
+	 */
+	if ((&hostp->nh_laddr)->buf != NULL) {
+		struct netbuf *laddr_copy = (struct netbuf *)
+		    kmem_zalloc(sizeof (struct netbuf), KM_SLEEP);
+		clnt_dup_netbuf(&hostp->nh_laddr, laddr_copy);
+		struct sockaddr *saddr = (struct sockaddr *)
+		    laddr_copy->buf;
+		if (saddr->sa_family == AF_INET) {
+			struct sockaddr_in *in_addr;
+			in_addr = (struct sockaddr_in *)saddr;
+			in_addr->sin_port = 0;
+		} else if (saddr->sa_family == AF_INET6) {
+			struct sockaddr_in6 *in6_addr;
+			in6_addr = (struct sockaddr_in6 *)saddr;
+			in6_addr->sin6_port = 0;
+		}
+		stat = rpcbind_getaddr5(&hostp->nh_knc, NLM_PROG, vers,
+		    &hostp->nh_addr, laddr_copy);
+		clnt_free_netbuf(laddr_copy);
+		kmem_free(laddr_copy, sizeof (struct netbuf));
+	} else {
+		stat = rpcbind_getaddr5(&hostp->nh_knc, NLM_PROG,
+		    vers, &hostp->nh_addr, NULL);
+	}
+
 	mutex_enter(&hostp->nh_lock);
 
 	hostp->nh_rpcb_state = ((stat == RPC_SUCCESS) ?
@@ -119,6 +150,37 @@ update_host_rpcbinding(struct nlm_host *hostp, int vers)
 
 	hostp->nh_rpcb_ustat = stat;
 	cv_broadcast(&hostp->nh_rpcb_cv);
+}
+
+/*
+ * If we have a local (src) binding, use it.
+ * See similar in update_host_rpcbinding().
+ */
+static void
+set_bindsrcaddr(struct nlm_host *hostp, nlm_rpc_t *rpcp)
+{
+	struct netbuf *laddr_copy = (struct netbuf *)
+	    kmem_zalloc(sizeof (struct netbuf), KM_SLEEP);
+
+	clnt_dup_netbuf(&hostp->nh_laddr, laddr_copy);
+	struct sockaddr *saddr = (struct sockaddr *)
+	    laddr_copy->buf;
+	if (saddr->sa_family == AF_INET) {
+		struct sockaddr_in *in_addr;
+		in_addr = (struct sockaddr_in *)saddr;
+		in_addr->sin_port = 0;
+	} else if (saddr->sa_family == AF_INET6) {
+		struct sockaddr_in6 *in6_addr;
+		in6_addr = (struct sockaddr_in6 *)saddr;
+		in6_addr->sin6_port = 0;
+	}
+	if (!clnt_control(rpcp->nr_handle, CLSET_BINDSRCADDR,
+	    (char *)laddr_copy)) {
+		cmn_err(CE_WARN, "Unable to set "
+		    "CLSET_BINDSRCADDR\n");
+	}
+	clnt_free_netbuf(laddr_copy);
+	kmem_free(laddr_copy, sizeof (struct netbuf));
 }
 
 /*
@@ -130,6 +192,7 @@ update_host_rpcbinding(struct nlm_host *hostp, int vers)
 static int
 refresh_nlm_rpc(struct nlm_host *hostp, nlm_rpc_t *rpcp)
 {
+	uint32_t zero = 0;
 	int ret;
 
 	if (rpcp->nr_handle == NULL) {
@@ -153,11 +216,18 @@ refresh_nlm_rpc(struct nlm_host *hostp, nlm_rpc_t *rpcp)
 		    (char *)&clset) == FALSE) {
 			NLM_ERR("Unable to set CLSET_NODELAYONERR\n");
 		}
+		if (hostp->nh_laddr.buf != NULL) {
+			set_bindsrcaddr(hostp, rpcp);
+		}
 	} else {
 		ret = clnt_tli_kinit(rpcp->nr_handle, &hostp->nh_knc,
 		    &hostp->nh_addr, 0, NLM_RPC_RETRIES, CRED());
 		if (ret == 0) {
 			enum clnt_stat stat;
+
+			if (hostp->nh_laddr.buf != NULL) {
+				set_bindsrcaddr(hostp, rpcp);
+			}
 
 			/*
 			 * Check whether host's RPC binding is still
@@ -175,6 +245,12 @@ refresh_nlm_rpc(struct nlm_host *hostp, nlm_rpc_t *rpcp)
 			if (NLM_STALE_CLNT(stat)) {
 				ret = ESTALE;
 			}
+			/*
+			 * Need to reset the XID after the null call above,
+			 * otherwise we'll reuse the XID from that call.
+			 */
+			(void) CLNT_CONTROL(rpcp->nr_handle, CLSET_XID,
+			    (char *)&zero);
 		}
 	}
 
@@ -209,7 +285,15 @@ again:
 			rc = cv_wait_sig(&hostp->nh_rpcb_cv, &hostp->nh_lock);
 			if (rc == 0) {
 				mutex_exit(&hostp->nh_lock);
-				return (EINTR);
+				rc = EINTR;
+				goto errout;
+			} else if (hostp->nh_rpcb_state != NRPCB_UPDATED) {
+				/*
+				 * Current waiters don't retry
+				 */
+				mutex_exit(&hostp->nh_lock);
+				rc = ENOENT;
+				goto errout;
 			}
 		}
 
@@ -229,7 +313,8 @@ again:
 		 */
 		if (hostp->nh_rpcb_ustat != RPC_SUCCESS) {
 			mutex_exit(&hostp->nh_lock);
-			return (ENOENT);
+			rc = ENOENT;
+			goto errout;
 		}
 	}
 
@@ -263,7 +348,7 @@ again:
 		}
 
 		destroy_rpch(rpcp);
-		return (rc);
+		goto errout;
 	}
 
 	DTRACE_PROBE2(end, struct nlm_host *, hostp,
@@ -271,6 +356,10 @@ again:
 
 	*rpcpp = rpcp;
 	return (0);
+
+errout:
+	NLM_ERR("Can't get RPC client handle for: %s", hostp->nh_name);
+	return (rc);
 }
 
 void

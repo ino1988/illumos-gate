@@ -39,11 +39,9 @@ size_t
 mbstowcs_l(wchar_t *_RESTRICT_KYWD pwcs, const char *_RESTRICT_KYWD s,
     size_t n, locale_t loc)
 {
-	static const mbstate_t initial = { 0 };
-	mbstate_t mbs;
+	mbstate_t mbs = { 0 };
 	const char *sp;
 
-	mbs = initial;
 	sp = s;
 	return (loc->ctype->lc_mbsnrtowcs(pwcs, &sp, ULONG_MAX, n, &mbs));
 }
@@ -51,5 +49,5 @@ mbstowcs_l(wchar_t *_RESTRICT_KYWD pwcs, const char *_RESTRICT_KYWD s,
 size_t
 mbstowcs(wchar_t *_RESTRICT_KYWD pwcs, const char *_RESTRICT_KYWD s, size_t n)
 {
-	return (mbstowcs_l(pwcs, s, n, uselocale(NULL)));
+	return (mbstowcs_l(pwcs, s, n, __curlocale()));
 }

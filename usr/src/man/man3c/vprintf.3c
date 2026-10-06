@@ -1,26 +1,65 @@
-'\" te
-.\" Copyright (c) 2009, Sun Microsystems, Inc.  All Rights Reserved.
+.\"
+.\" Sun Microsystems, Inc. gratefully acknowledges The Open Group for
+.\" permission to reproduce portions of its copyrighted documentation.
+.\" Original documentation from The Open Group can be obtained online at
+.\" http://www.opengroup.org/bookstore/.
+.\"
+.\" The Institute of Electrical and Electronics Engineers and The Open
+.\" Group, have given us permission to reprint portions of their
+.\" documentation.
+.\"
+.\" In the following statement, the phrase ``this text'' refers to portions
+.\" of the system documentation.
+.\"
+.\" Portions of this text are reprinted and reproduced in electronic form
+.\" in the SunOS Reference Manual, from IEEE Std 1003.1, 2004 Edition,
+.\" Standard for Information Technology -- Portable Operating System
+.\" Interface (POSIX), The Open Group Base Specifications Issue 6,
+.\" Copyright (C) 2001-2004 by the Institute of Electrical and Electronics
+.\" Engineers, Inc and The Open Group.  In the event of any discrepancy
+.\" between these versions and the original IEEE and The Open Group
+.\" Standard, the original IEEE and The Open Group Standard is the referee
+.\" document.  The original Standard can be obtained online at
+.\" http://www.opengroup.org/unix/online.html.
+.\"
+.\" This notice shall appear on any product containing this material.
+.\"
+.\" The contents of this file are subject to the terms of the
+.\" Common Development and Distribution License (the "License").
+.\" You may not use this file except in compliance with the License.
+.\"
+.\" You can obtain a copy of the license at usr/src/OPENSOLARIS.LICENSE
+.\" or http://www.opensolaris.org/os/licensing.
+.\" See the License for the specific language governing permissions
+.\" and limitations under the License.
+.\"
+.\" When distributing Covered Code, include this CDDL HEADER in each
+.\" file and include the License file at usr/src/OPENSOLARIS.LICENSE.
+.\" If applicable, add the following below this CDDL HEADER, with the
+.\" fields enclosed by brackets "[]" replaced with your own identifying
+.\" information: Portions Copyright [yyyy] [name of copyright owner]
+.\"
+.\"
 .\" Copyright 1989 AT&T
-.\" Portions Copyright (c) 2001, the Institute of Electrical and Electronics Engineers, Inc. and The Open Group. All Rights Reserved.
-.\" Sun Microsystems, Inc. gratefully acknowledges The Open Group for permission to reproduce portions of its copyrighted documentation. Original documentation from The Open Group can be obtained online at  http://www.opengroup.org/bookstore/.
-.\" The Institute of Electrical and Electronics Engineers and The Open Group, have given us permission to reprint portions of their documentation. In the following statement, the phrase "this text" refers to portions of the system documentation. Portions of this text
-.\" are reprinted and reproduced in electronic form in the Sun OS Reference Manual, from IEEE Std 1003.1, 2004 Edition, Standard for Information Technology -- Portable Operating System Interface (POSIX), The Open Group Base Specifications Issue 6, Copyright (C) 2001-2004 by the Institute of Electrical
-.\" and Electronics Engineers, Inc and The Open Group. In the event of any discrepancy between these versions and the original IEEE and The Open Group Standard, the original IEEE and The Open Group Standard is the referee document. The original Standard can be obtained online at http://www.opengroup.org/unix/online.html.
-.\"  This notice shall appear on any product containing this material.
-.\" The contents of this file are subject to the terms of the Common Development and Distribution License (the "License").  You may not use this file except in compliance with the License.
-.\" You can obtain a copy of the license at usr/src/OPENSOLARIS.LICENSE or http://www.opensolaris.org/os/licensing.  See the License for the specific language governing permissions and limitations under the License.
-.\" When distributing Covered Code, include this CDDL HEADER in each file and include the License file at usr/src/OPENSOLARIS.LICENSE.  If applicable, add the following below this CDDL HEADER, with the fields enclosed by brackets "[]" replaced with your own identifying information: Portions Copyright [yyyy] [name of copyright owner]
-.TH VPRINTF 3C "Jan 7, 2009"
+.\" Copyright (c) 2001, The IEEE and The Open Group.  All Rights Reserved.
+.\" Copyright (c) 2009, Sun Microsystems, Inc.  All Rights Reserved.
+.\" Copyright 2025 Hans Rosenfeld
+.\"
+.TH VPRINTF 3C "April 25, 2024"
 .SH NAME
-vprintf, vfprintf, vsprintf, vsnprintf, vasprintf \- print formatted output of
+vprintf, vdprintf, vfprintf, vsprintf, vsnprintf, vasprintf \- print formatted output of
 a variable argument list
 .SH SYNOPSIS
-.LP
 .nf
 #include <stdio.h>
 #include <stdarg.h>
 
 \fBint\fR \fBvprintf\fR(\fBconst char *\fR\fIformat\fR, \fBva_list\fR \fIap\fR);
+.fi
+
+.LP
+.nf
+\fBint\fR \fBvdprintf\fR(\fBint\fR \fIfildes\fR, \fBconst char *\fR\fIformat\fR, \fBva_list\fR \fIap\fR);
 .fi
 
 .LP
@@ -44,14 +83,12 @@ a variable argument list
 .fi
 
 .SH DESCRIPTION
-.sp
-.LP
-The \fBvprintf()\fR, \fBvfprintf()\fR, \fBvsprintf()\fR, \fBvsnprintf()\fR, and
-\fBvasprintf()\fR functions are the same as \fBprintf()\fR, \fBfprintf()\fR,
-\fBsprintf()\fR, \fBsnprintf()\fR, and \fBasprintf()\fR, respectively, except
-that instead of being called with a variable number of arguments, they are
-called with an argument list as defined in the \fB<stdarg.h>\fR header. See
-\fBprintf\fR(3C).
+The \fBvprintf()\fR, \fBvdprintf()\fR, \fBvfprintf()\fR, \fBvsprintf()\fR,
+\fBvsnprintf()\fR, and \fBvasprintf()\fR functions are the same as
+\fBprintf()\fR, \fBdprintf()\fR, \fBfprintf()\fR, \fBsprintf()\fR,
+\fBsnprintf()\fR, and \fBasprintf()\fR, respectively, except that instead of
+being called with a variable number of arguments, they are called with an
+argument list as defined in the \fB<stdarg.h>\fR header. See \fBprintf\fR(3C).
 .sp
 .LP
 The \fB<stdarg.h>\fR header defines the type \fBva_list\fR and a set of macros
@@ -74,12 +111,8 @@ traversed again if \fBva_start()\fR is called again after \fBva_end()\fR. In
 the example below, the \fBerror()\fR arguments (\fIarg1\fR, \fIarg2\fR,
 \&.\|.\|.) are passed to \fBvfprintf()\fR in the argument \fIap\fR.
 .SH RETURN VALUES
-.sp
-.LP
 Refer to \fBprintf\fR(3C).
 .SH ERRORS
-.sp
-.LP
 The \fBvprintf()\fR and \fBvfprintf()\fR functions will fail if either the
 \fIstream\fR is unbuffered or the \fIstream\fR's buffer needed to be flushed
 and:
@@ -94,7 +127,6 @@ offset maximum.
 .RE
 
 .SH EXAMPLES
-.LP
 \fBExample 1 \fRUsing \fBvprintf()\fR to write an error routine.
 .sp
 .LP
@@ -106,7 +138,7 @@ routine:
 .nf
 #include <stdio.h>
 #include <stdarg.h>
-\&. . .
+\&.\|.\|.
 /*
  *   error should be called like
  *         error(function_name, format, arg1, \&.\|.\|.);
@@ -126,9 +158,7 @@ void error(char *function_name, char *format, \&.\|.\|.)
 .in -2
 
 .SH ATTRIBUTES
-.sp
-.LP
-See \fBattributes\fR(5) for descriptions of the following attributes:
+See \fBattributes\fR(7) for descriptions of the following attributes:
 .sp
 
 .sp
@@ -151,18 +181,16 @@ All of these functions can be used safely in multithreaded applications, as
 long as \fBsetlocale\fR(3C) is not being called to change the locale.
 .sp
 .LP
-See \fBstandards\fR(5) for the standards conformance of \fBvprintf()\fR,
+See \fBstandards\fR(7) for the standards conformance of \fBvprintf()\fR,
 \fBvfprintf()\fR, \fBvsprintf()\fR, and \fBvsnprintf()\fR. The
 \fBvasprintf()\fR function is modeled on the one that appears in the FreeBSD,
 NetBSD, and GNU C libraries.
 .SH SEE ALSO
-.sp
-.LP
-\fBprintf\fR(3C), \fBattributes\fR(5), \fBstdarg\fR(3EXT), \fBattributes\fR(5),
-\fBstandards\fR(5)
+.BR printf (3C),
+.BR stdarg (3EXT),
+.BR attributes (7),
+.BR standards (7)
 .SH NOTES
-.sp
-.LP
 The \fBvsnprintf()\fR return value when \fIn\fR = 0 was changed in the Solaris
 10 release. The change was based on the SUSv3 specification. The previous
 behavior was based on the initial SUSv2 specification, where \fBvsnprintf()\fR

@@ -26,8 +26,6 @@
  * Use is subject to license terms.
  */
 
-#pragma ident	"%Z%%M%	%I%	%E% SMI"
-
 #include "parseproto.h"
 #include <assert.h>
 
@@ -69,7 +67,7 @@ static	char		*de_const(char *);
 
 
 static	int	yylex(void);
-static	void	yyerror(const char *);
+static	int	yyerror(const char *);
 static	int	yyparse(void);
 
 #if defined(MEM_DEBUG)
@@ -773,12 +771,14 @@ restart:
 			skipcomment();
 			goto restart;
 		}
+		return (c);
 
 	case '.':
 		if (lookahead('.')) {
 			if (lookahead('.'))
 				return (ELLIPSIS);
 		}
+		return (c);
 
 	case EOF:
 	case '(':
@@ -1374,7 +1374,7 @@ type_PrintType(type_t *tp, int lvl) {
  *	   cannot be modified without changing the table included within the
  *	   function.
  *
- * 	3) The function returns NULL to indicate that the type modifier
+ *	3) The function returns NULL to indicate that the type modifier
  *	   list is valid and non-NULL to indicate an error.
  *
  *	4) A type_t of NULL is permitted to indicate an empty type_t list.
@@ -1782,7 +1782,7 @@ decl_addfun(decl_t *dp, decl_t *arglist) {
 	type_t	*tp = type_Construct();
 
 	if (sp = decl_VerifyArgs(arglist))
-		yyerror(sp);
+		(void) yyerror(sp);
 
 	type_SetFun(tp, arglist);
 	decl_AddTypeTail(dp, tp);
@@ -2005,9 +2005,11 @@ decl_Parse(char *str, decl_t **dpp) {
 	return (errstr);
 }
 
-static void
-yyerror(const char *err) {
+static int
+yyerror(const char *err)
+{
 	errstr = err;
+	return (0);
 }
 
 #if defined(DEBUG)

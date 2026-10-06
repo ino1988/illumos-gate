@@ -24,8 +24,6 @@
  * All rights reserved.
  */
 
-#pragma ident	"%Z%%M%	%I%	%E% SMI"
-
 #include <string.h>
 #include <stdlib.h>
 #include <stdio.h>
@@ -83,7 +81,7 @@ AudioError Audio::
 RaiseError(
 	AudioError	code,			// error code
 	AudioSeverity	sev,			// error severity
-	char		*msg) const		// additional message
+	const char	*msg) const		// additional message
 {
 	if (code == AUDIO_SUCCESS)
 		return (code);
@@ -339,7 +337,8 @@ AsyncCopy(
 
 	// Validate basic arguments and state
 	tohdr = to->GetHeader();
-	if (err = tohdr.Validate())
+	err = tohdr.Validate();
+	if (err != AUDIO_SUCCESS)
 		return (err);
 	if (limit < 0.)
 		return (RaiseError(AUDIO_ERR_BADARG));
@@ -414,6 +413,6 @@ AsyncCopy(
 			}
 		}
 	}
-	delete bptr;
+	delete[] bptr;
 	return (err);
 }

@@ -21,7 +21,8 @@
 
 /*
  * Copyright (c) 2006, 2010, Oracle and/or its affiliates. All rights reserved.
- * Copyright (c) 2013, Joyent, Inc. All rights reserved.
+ * Copyright 2020 Joyent, Inc.
+ * Copyright 2026 Oxide Computer Company
  */
 
 #include <libxml/parser.h>
@@ -54,16 +55,6 @@ static int fac_enum_process(topo_mod_t *, xmlNodePtr, tnode_t *);
 static int decorate_nodes(topo_mod_t *, tf_rdata_t *, xmlNodePtr, tnode_t *,
     tf_pad_t **);
 
-
-static void
-strarr_free(topo_mod_t *mod, char **arr, uint_t nelems)
-{
-	int i;
-
-	for (i = 0; i < nelems; i++)
-		topo_mod_strfree(mod, arr[i]);
-	topo_mod_free(mod, arr, (nelems * sizeof (char *)));
-}
 
 int
 xmlattr_to_stab(topo_mod_t *mp, xmlNodePtr n, const char *stabname,
@@ -114,13 +105,40 @@ xmlattr_to_int(topo_mod_t *mp,
 	xmlChar *str;
 	xmlChar *estr;
 
-	topo_dprintf(mp->tm_hdl, TOPO_DBG_XML, "xmlattr_to_int(propname=%s)\n",
-	    propname);
+	if ((str = xmlGetProp(n, (xmlChar *)propname)) == NULL) {
+		topo_dprintf(mp->tm_hdl, TOPO_DBG_XML,
+		    "%s: failed to lookup %s attribute", __func__, propname);
+		return (topo_mod_seterrno(mp, ETOPO_PRSR_NOATTR));
+	}
+	errno = 0;
+	*value = strtoull((char *)str, (char **)&estr, 0);
+	if (errno != 0 || *estr != '\0') {
+		/* no conversion was done */
+		xmlFree(str);
+		topo_dprintf(mp->tm_hdl, TOPO_DBG_XML,
+		    "%s: failed to convert %s attribute", __func__, propname);
+		return (topo_mod_seterrno(mp, ETOPO_PRSR_BADNUM));
+	}
+	xmlFree(str);
+	return (0);
+}
+
+int
+xmlattr_to_double(topo_mod_t *mp,
+    xmlNodePtr n, const char *propname, double *value)
+{
+	xmlChar *str;
+	xmlChar *estr;
+
+	topo_dprintf(mp->tm_hdl, TOPO_DBG_XML,
+	    "xmlattr_to_double(propname=%s)\n", propname);
 	if ((str = xmlGetProp(n, (xmlChar *)propname)) == NULL)
 		return (topo_mod_seterrno(mp, ETOPO_PRSR_NOATTR));
-	*value = strtoull((char *)str, (char **)&estr, 10);
-	if (estr == str) {
-		/* no conversion was done */
+
+	errno = 0;
+	*value = strtold((char *)str, (char **)&estr);
+	if (errno != 0 || *estr != '\0') {
+		/* full or partial conversion failure */
 		xmlFree(str);
 		return (topo_mod_seterrno(mp, ETOPO_PRSR_BADNUM));
 	}
@@ -169,6 +187,8 @@ xmlattr_to_type(topo_mod_t *mp, xmlNodePtr xn, xmlChar *attr)
 		rv = TOPO_TYPE_FMRI;
 	} else if (xmlStrcmp(str, (xmlChar *)String) == 0) {
 		rv = TOPO_TYPE_STRING;
+	} else if (xmlStrcmp(str, (xmlChar *)Double) == 0) {
+		rv = TOPO_TYPE_DOUBLE;
 	} else if (xmlStrcmp(str, (xmlChar *)Int32_Arr) == 0) {
 		rv = TOPO_TYPE_INT32_ARRAY;
 	} else if (xmlStrcmp(str, (xmlChar *)UInt32_Arr) == 0) {
@@ -194,10 +214,11 @@ xmlattr_to_type(topo_mod_t *mp, xmlNodePtr xn, xmlChar *attr)
 
 static int
 xlate_common(topo_mod_t *mp, xmlNodePtr xn, topo_type_t ptype, nvlist_t *nvl,
-const char *name)
+    const char *name)
 {
-	int rv;
+	int rv = 0;
 	uint64_t ui;
+	double dbl;
 	uint_t i = 0, nelems = 0;
 	nvlist_t *fmri;
 	xmlChar *str;
@@ -228,6 +249,11 @@ const char *name)
 			return (-1);
 		rv = nvlist_add_uint64(nvl, name, ui);
 		break;
+	case TOPO_TYPE_DOUBLE:
+		if (xmlattr_to_double(mp, xn, Value, &dbl) < 0)
+			return (-1);
+		rv = nvlist_add_double(nvl, name, dbl);
+		break;
 	case TOPO_TYPE_FMRI:
 		if (xmlattr_to_fmri(mp, xn, Value, &fmri) < 0)
 			return (-1);
@@ -244,35 +270,7 @@ const char *name)
 	case TOPO_TYPE_UINT32_ARRAY:
 	case TOPO_TYPE_INT64_ARRAY:
 	case TOPO_TYPE_UINT64_ARRAY:
-		for (cn = xn->xmlChildrenNode; cn != NULL; cn = cn->next)
-			if ((xmlStrcmp(cn->name, (xmlChar *)Propitem) == 0) ||
-			    (xmlStrcmp(cn->name, (xmlChar *)Argitem) == 0))
-				nelems++;
-
-		if (nelems < 1) {
-			topo_dprintf(mp->tm_hdl, TOPO_DBG_ERR, "No <propitem> "
-			    "or <argitem> elements found for array val");
-			return (-1);
-		}
-		if ((arrbuf = topo_mod_alloc(mp, (nelems * sizeof (uint64_t))))
-		    == NULL)
-			return (topo_mod_seterrno(mp, ETOPO_NOMEM));
-		break;
 	case TOPO_TYPE_STRING_ARRAY:
-		for (cn = xn->xmlChildrenNode; cn != NULL; cn = cn->next)
-			if ((xmlStrcmp(cn->name, (xmlChar *)Propitem) == 0) ||
-			    (xmlStrcmp(cn->name, (xmlChar *)Argitem) == 0))
-				nelems++;
-
-		if (nelems < 1) {
-			topo_dprintf(mp->tm_hdl, TOPO_DBG_ERR, "No <propitem> "
-			    "or <argitem> elements found for array val");
-			return (-1);
-		}
-		if ((strarrbuf = topo_mod_alloc(mp, (nelems * sizeof (char *))))
-		    == NULL)
-			return (topo_mod_seterrno(mp, ETOPO_NOMEM));
-		break;
 	case TOPO_TYPE_FMRI_ARRAY:
 		for (cn = xn->xmlChildrenNode; cn != NULL; cn = cn->next)
 			if ((xmlStrcmp(cn->name, (xmlChar *)Propitem) == 0) ||
@@ -281,12 +279,9 @@ const char *name)
 
 		if (nelems < 1) {
 			topo_dprintf(mp->tm_hdl, TOPO_DBG_ERR, "No <propitem> "
-			    "elements found for array prop");
+			    "or <argitem> elements found for array val");
 			return (-1);
 		}
-		if ((nvlarrbuf = topo_mod_alloc(mp, (nelems *
-		    sizeof (nvlist_t *)))) == NULL)
-			return (topo_mod_seterrno(mp, ETOPO_NOMEM));
 		break;
 	default:
 		topo_dprintf(mp->tm_hdl, TOPO_DBG_ERR,
@@ -296,82 +291,81 @@ const char *name)
 
 	switch (ptype) {
 	case TOPO_TYPE_INT32_ARRAY:
+		if ((arrbuf = topo_mod_alloc(mp, (nelems * sizeof (int32_t))))
+		    == NULL)
+			return (topo_mod_seterrno(mp, ETOPO_NOMEM));
 		for (cn = xn->xmlChildrenNode; cn != NULL; cn = cn->next) {
 			if ((xmlStrcmp(cn->name, (xmlChar *)Propitem) == 0) ||
 			    (xmlStrcmp(cn->name, (xmlChar *)Argitem) == 0)) {
 
-				if ((str = xmlGetProp(xn, (xmlChar *)Value))
-				    == NULL)
+				if (xmlattr_to_int(mp, cn, Value, &ui) < 0)
 					return (-1);
-
-				((int32_t *)arrbuf)[i++]
-				    = atoi((const char *)str);
-				xmlFree(str);
+				((int32_t *)arrbuf)[i++] = (int32_t)ui;
 			}
 		}
 
 		rv = nvlist_add_int32_array(nvl, name, (int32_t *)arrbuf,
 		    nelems);
-		free(arrbuf);
+		topo_mod_free(mp, arrbuf, (nelems * sizeof (int32_t)));
 		break;
 	case TOPO_TYPE_UINT32_ARRAY:
+		if ((arrbuf = topo_mod_alloc(mp, (nelems * sizeof (uint32_t))))
+		    == NULL)
+			return (topo_mod_seterrno(mp, ETOPO_NOMEM));
 		for (cn = xn->xmlChildrenNode; cn != NULL; cn = cn->next) {
 			if ((xmlStrcmp(cn->name, (xmlChar *)Propitem) == 0) ||
 			    (xmlStrcmp(cn->name, (xmlChar *)Argitem) == 0)) {
 
-				if ((str = xmlGetProp(xn, (xmlChar *)Value))
-				    == NULL)
+				if (xmlattr_to_int(mp, cn, Value, &ui) < 0)
 					return (-1);
-
-				((uint32_t *)arrbuf)[i++]
-				    = atoi((const char *)str);
-				xmlFree(str);
+				((uint32_t *)arrbuf)[i++] = (uint32_t)ui;
 			}
 		}
 
 		rv = nvlist_add_uint32_array(nvl, name, (uint32_t *)arrbuf,
 		    nelems);
-		free(arrbuf);
+		topo_mod_free(mp, arrbuf, (nelems * sizeof (uint32_t)));
 		break;
 	case TOPO_TYPE_INT64_ARRAY:
+		if ((arrbuf = topo_mod_alloc(mp, (nelems * sizeof (int64_t))))
+		    == NULL)
+			return (topo_mod_seterrno(mp, ETOPO_NOMEM));
 		for (cn = xn->xmlChildrenNode; cn != NULL; cn = cn->next) {
 			if ((xmlStrcmp(cn->name, (xmlChar *)Propitem) == 0) ||
 			    (xmlStrcmp(cn->name, (xmlChar *)Argitem) == 0)) {
 
-				if ((str = xmlGetProp(xn, (xmlChar *)Value))
-				    == NULL)
+				if (xmlattr_to_int(mp, cn, Value, &ui) < 0)
 					return (-1);
-
-				((int64_t *)arrbuf)[i++]
-				    = atol((const char *)str);
-				xmlFree(str);
+				((int64_t *)arrbuf)[i++] = (int64_t)ui;
 			}
 		}
 
 		rv = nvlist_add_int64_array(nvl, name, (int64_t *)arrbuf,
 		    nelems);
-		free(arrbuf);
+		topo_mod_free(mp, arrbuf, (nelems * sizeof (int64_t)));
 		break;
 	case TOPO_TYPE_UINT64_ARRAY:
+		if ((arrbuf = topo_mod_alloc(mp, (nelems * sizeof (uint64_t))))
+		    == NULL)
+			return (topo_mod_seterrno(mp, ETOPO_NOMEM));
 		for (cn = xn->xmlChildrenNode; cn != NULL; cn = cn->next) {
 			if ((xmlStrcmp(cn->name, (xmlChar *)Propitem) == 0) ||
 			    (xmlStrcmp(cn->name, (xmlChar *)Argitem) == 0)) {
 
-				if ((str = xmlGetProp(xn, (xmlChar *)Value))
-				    == NULL)
+				if (xmlattr_to_int(mp, cn, Value, &ui) < 0)
 					return (-1);
-
-				((uint64_t *)arrbuf)[i++]
-				    = atol((const char *)str);
-				xmlFree(str);
+				((uint64_t *)arrbuf)[i++] = ui;
 			}
 		}
 
 		rv = nvlist_add_uint64_array(nvl, name, arrbuf,
 		    nelems);
-		free(arrbuf);
+		topo_mod_free(mp, arrbuf, (nelems * sizeof (uint64_t)));
 		break;
 	case TOPO_TYPE_STRING_ARRAY:
+		if ((strarrbuf = topo_mod_alloc(mp, (nelems * sizeof (char *))))
+		    == NULL)
+			return (topo_mod_seterrno(mp, ETOPO_NOMEM));
 		for (cn = xn->xmlChildrenNode; cn != NULL; cn = cn->next) {
 			if ((xmlStrcmp(cn->name, (xmlChar *)Propitem) == 0) ||
 			    (xmlStrcmp(cn->name, (xmlChar *)Argitem) == 0)) {
@@ -387,14 +381,17 @@ const char *name)
 		}
 
 		rv = nvlist_add_string_array(nvl, name, strarrbuf, nelems);
-		strarr_free(mp, strarrbuf, nelems);
+		topo_mod_strfreev(mp, strarrbuf, nelems);
 		break;
 	case TOPO_TYPE_FMRI_ARRAY:
+		if ((nvlarrbuf = topo_mod_alloc(mp, (nelems *
+		    sizeof (nvlist_t *)))) == NULL)
+			return (topo_mod_seterrno(mp, ETOPO_NOMEM));
 		for (cn = xn->xmlChildrenNode; cn != NULL; cn = cn->next) {
 			if ((xmlStrcmp(cn->name, (xmlChar *)Propitem) == 0) ||
 			    (xmlStrcmp(cn->name, (xmlChar *)Argitem) == 0)) {
 
-				if ((str = xmlGetProp(xn, (xmlChar *)Value))
+				if ((str = xmlGetProp(cn, (xmlChar *)Value))
 				    == NULL)
 					return (-1);
 
@@ -409,7 +406,13 @@ const char *name)
 
 		rv = nvlist_add_nvlist_array(nvl, name, nvlarrbuf,
 		    nelems);
-		free(nvlarrbuf);
+		topo_mod_free(mp, nvlarrbuf, (nelems * sizeof (nvlist_t *)));
+		break;
+	default:
+		/*
+		 * Invalid types were handled in the switch statement above
+		 * this. Items in this case don't need additional processing.
+		 */
 		break;
 	}
 
@@ -524,6 +527,7 @@ prop_create(topo_mod_t *mp,
 	uint64_t ui64, *ui64arr;
 	int32_t i32, *i32arr;
 	int64_t i64, *i64arr;
+	double dbl;
 	uint_t nelem;
 	char *str, **strarr;
 	int err, e;
@@ -542,6 +546,9 @@ prop_create(topo_mod_t *mp,
 		break;
 	case TOPO_TYPE_UINT64:
 		e = nvlist_lookup_uint64(pfmri, INV_PVAL, &ui64);
+		break;
+	case TOPO_TYPE_DOUBLE:
+		e = nvlist_lookup_double(pfmri, INV_PVAL, &dbl);
 		break;
 	case TOPO_TYPE_FMRI:
 		e = nvlist_lookup_nvlist(pfmri, INV_PVAL, &fmri);
@@ -574,6 +581,7 @@ prop_create(topo_mod_t *mp,
 		break;
 	default:
 		e = ETOPO_PRSR_BADTYPE;
+		break;
 	}
 	if (e != 0) {
 		topo_dprintf(mp->tm_hdl, TOPO_DBG_ERR,
@@ -592,6 +600,9 @@ prop_create(topo_mod_t *mp,
 		break;
 	case TOPO_TYPE_UINT64:
 		e = topo_prop_set_uint64(ptn, gnm, pnm, flag, ui64, &err);
+		break;
+	case TOPO_TYPE_DOUBLE:
+		e = topo_prop_set_double(ptn, gnm, pnm, flag, dbl, &err);
 		break;
 	case TOPO_TYPE_FMRI:
 		e = topo_prop_set_fmri(ptn, gnm, pnm, flag, fmri, &err);
@@ -622,6 +633,9 @@ prop_create(topo_mod_t *mp,
 	case TOPO_TYPE_FMRI_ARRAY:
 		e = topo_prop_set_fmri_array(ptn, gnm, pnm, flag,
 		    (const nvlist_t **)fmriarr, nelem, &err);
+		break;
+	default:
+		e = ETOPO_PRSR_BADTYPE;
 		break;
 	}
 	if (e != 0 && err != ETOPO_PROP_DEFD) {
@@ -1012,8 +1026,7 @@ pmr_done:
 		xmlFree(meth_name);
 	if (prop_name)
 		xmlFree(prop_name);
-	if (arg_nvl)
-		nvlist_free(arg_nvl);
+	nvlist_free(arg_nvl);
 	return (ret);
 }
 
@@ -1102,8 +1115,7 @@ pgroup_record(topo_mod_t *mp, xmlNodePtr pxn, tnode_t *tn, const char *rname,
 		e |= nvlist_add_nvlist_array(pgnvl, INV_PGRP_ALLPROPS, apl,
 		    pcnt);
 		for (ai = 0; ai < pcnt; ai++)
-			if (apl[ai] != NULL)
-				nvlist_free(apl[ai]);
+			nvlist_free(apl[ai]);
 		topo_mod_free(mp, apl, pcnt * sizeof (nvlist_t *));
 		if (e != 0) {
 			nvlist_free(pgnvl);
@@ -1169,8 +1181,9 @@ static int
 pad_process(topo_mod_t *mp, tf_rdata_t *rd, xmlNodePtr pxn, tnode_t *ptn,
     tf_pad_t **rpad)
 {
-	xmlNodePtr cn, gcn, psn, ecn, target;
-	xmlNodePtr def_set = NULL;
+	xmlNodePtr cn, gcn, psn = NULL, target;
+	/* Explicitly initialize ecn to help -Wmaybe-unit */
+	xmlNodePtr def_set = NULL, ecn = NULL;
 	tnode_t *ct;
 	tf_pad_t *new = *rpad;
 	tf_rdata_t tmp_rd;
@@ -1210,10 +1223,7 @@ pad_process(topo_mod_t *mp, tf_rdata_t *rd, xmlNodePtr pxn, tnode_t *ptn,
 					continue;
 				set = xmlGetProp(cn, (xmlChar *)Setlist);
 
-				if (mp->tm_hdl->th_product)
-					key = mp->tm_hdl->th_product;
-				else
-					key = mp->tm_hdl->th_platform;
+				key = mp->tm_hdl->th_product;
 
 				/*
 				 * If it's the default set then we'll store
@@ -1255,29 +1265,6 @@ pad_process(topo_mod_t *mp, tf_rdata_t *rd, xmlNodePtr pxn, tnode_t *ptn,
 		topo_dprintf(mp->tm_hdl, TOPO_DBG_XML,
 		    "pad_process: dcnt=%d, pgcnt=%d, ecnt=%d, joined_set=%d\n",
 		    dcnt, pgcnt, ecnt, joined_set);
-		/*
-		 * If an enum-method element was found, AND we're a child of a
-		 * node element, then we invoke the enumerator so that it can do
-		 * post-processing of the node.
-		 */
-		if (ecnt && (strcmp((const char *)pxn->name, Node) == 0)) {
-			if ((tmp_rd.rd_einfo = enum_attributes_process(mp, ecn))
-			    == NULL)
-				return (-1);
-			tmp_rd.rd_mod = mp;
-			tmp_rd.rd_name = rd->rd_name;
-			tmp_rd.rd_min = rd->rd_min;
-			tmp_rd.rd_max = rd->rd_max;
-			tmp_rd.rd_pn = ptn;
-			if (enum_run(mp, &tmp_rd) < 0) {
-				/*
-				 * Note the failure but continue on
-				 */
-				topo_dprintf(mp->tm_hdl, TOPO_DBG_ERR,
-				    "pad_process: enumeration failed.\n");
-			}
-			tf_edata_free(mp, tmp_rd.rd_einfo);
-		}
 		/*
 		 * Here we allocate an element in an intermediate data structure
 		 * which keeps track property groups and dependents of the range
@@ -1347,12 +1334,41 @@ pad_process(topo_mod_t *mp, tf_rdata_t *rd, xmlNodePtr pxn, tnode_t *ptn,
 		*rpad = new;
 	}
 
-	if (new->tpad_dcnt > 0)
-		if (dependents_create(mp, rd->rd_finfo, new, pxn, ptn) < 0)
-			return (-1);
-
+	/*
+	 * We need to process the property groups before enumerating any
+	 * dependents as that enuemration can itself have dependencies on
+	 * properties set on the parent node.
+	 */
 	if (new->tpad_pgcnt > 0)
 		if (pgroups_create(mp, new, ptn) < 0)
+			return (-1);
+
+	/*
+	 * If an enum-method element was found, AND we're a child of a
+	 * node element, then we invoke the enumerator so that it can do
+	 * post-processing of the node.
+	 */
+	if (ecnt && (strcmp((const char *)pxn->name, Node) == 0)) {
+		if ((tmp_rd.rd_einfo = enum_attributes_process(mp, ecn))
+		    == NULL)
+			return (-1);
+		tmp_rd.rd_mod = mp;
+		tmp_rd.rd_name = rd->rd_name;
+		tmp_rd.rd_min = rd->rd_min;
+		tmp_rd.rd_max = rd->rd_max;
+		tmp_rd.rd_pn = ptn;
+		if (enum_run(mp, &tmp_rd) < 0) {
+			/*
+			 * Note the failure but continue on
+			 */
+			topo_dprintf(mp->tm_hdl, TOPO_DBG_ERR,
+			    "pad_process: enumeration failed.\n");
+		}
+		tf_edata_free(mp, tmp_rd.rd_einfo);
+	}
+
+	if (new->tpad_dcnt > 0)
+		if (dependents_create(mp, rd->rd_finfo, new, pxn, ptn) < 0)
 			return (-1);
 
 	return (0);
@@ -1641,7 +1657,7 @@ enum_run(topo_mod_t *mp, tf_rdata_t *rd)
 	if (e != 0) {
 		topo_dprintf(mp->tm_hdl, TOPO_DBG_ERR,
 		    "Enumeration failed (%s)\n",
-		    topo_strerror(topo_mod_errno(mp)));
+		    topo_strerror(topo_mod_errno(rd->rd_mod)));
 		(void) topo_hdl_seterrno(thp, EMOD_PARTIAL_ENUM);
 		return (topo_mod_seterrno(mp, EMOD_PARTIAL_ENUM));
 	}
@@ -1680,7 +1696,7 @@ fac_enum_run(topo_mod_t *mp, tnode_t *node, const char *name)
 	if (e != 0) {
 		topo_dprintf(thp, TOPO_DBG_ERR,
 		    "Facility provider enumeration failed (%s)\n",
-		    topo_strerror(topo_mod_errno(mp)));
+		    topo_strerror(topo_mod_errno(fmod)));
 		(void) topo_hdl_seterrno(thp, EMOD_PARTIAL_ENUM);
 		return (topo_mod_seterrno(mp, EMOD_PARTIAL_ENUM));
 	}
@@ -1864,10 +1880,7 @@ topo_xml_walk(topo_mod_t *mp,
 
 			set = xmlGetProp(curr, (xmlChar *)Setlist);
 
-			if (mp->tm_hdl->th_product)
-				key = mp->tm_hdl->th_product;
-			else
-				key = mp->tm_hdl->th_platform;
+			key = mp->tm_hdl->th_product;
 
 			/*
 			 * If it's the default set then we'll store
@@ -1998,8 +2011,6 @@ txml_file_parse(topo_mod_t *tmp,
 	 */
 	if (getenv("TOPOXML_VALIDATE") != NULL) {
 		dtdpath = getenv("TOPO_DTD");
-		if (dtdpath != NULL)
-			xmlLoadExtDtdDefaultValue = 0;
 		validate = 1;
 	}
 

@@ -27,8 +27,6 @@
 #ifndef	_DBOOT_XBOOT_H
 #define	_DBOOT_XBOOT_H
 
-#pragma ident	"%Z%%M%	%I%	%E% SMI"
-
 #include <sys/mach_mmu.h>
 
 #ifdef	__cplusplus
@@ -62,10 +60,10 @@ extern uint_t prom_debug;
 	_NOTE(CONSTANTCONDITION)					\
 	} } while (0)
 
-extern void dboot_halt(void);
+extern void dboot_halt(void) __NORETURN;
 extern void *mem_alloc(uint32_t size);
 
-#define	RNDUP(x, y)	((x) + ((y) - 1ul) & ~((y) - 1ul))
+#define	RNDUP(x, y)	(((x) + ((y) - 1ul)) & ~((y) - 1ul))
 
 #endif /* _ASM */
 

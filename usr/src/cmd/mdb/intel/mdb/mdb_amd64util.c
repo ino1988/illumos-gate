@@ -24,8 +24,10 @@
  * Use is subject to license terms.
  */
 /*
- * Copyright (c) 2012, Joyent, Inc.  All rights reserved.
+ * Copyright (c) 2018, Joyent, Inc.  All rights reserved.
  * Copyright 2014 Nexenta Systems, Inc.  All rights reserved.
+ * Copyright (c) 2013 by Delphix. All rights reserved.
+ * Copyright 2025 Oxide Computer Company
  */
 
 #include <sys/types.h>
@@ -38,6 +40,8 @@
 #include <mdb/mdb_kreg_impl.h>
 #include <mdb/mdb_debug.h>
 #include <mdb/mdb_modapi.h>
+#include <mdb/mdb_stack.h>
+#include <mdb/mdb_isautil.h>
 #include <mdb/mdb_amd64util.h>
 #include <mdb/mdb_ctf.h>
 #include <mdb/mdb_err.h>
@@ -132,6 +136,10 @@ const mdb_tgt_regdesc_t mdb_amd64_kregs[] = {
 	{ "sp",  KREG_RSP, MDB_TGT_R_EXPORT | MDB_TGT_R_16 },
 	{ "spl", KREG_RSP, MDB_TGT_R_EXPORT | MDB_TGT_R_8L },
 	{ "ss", KREG_SS, MDB_TGT_R_EXPORT },
+	{ "gsbase", KREG_GSBASE, MDB_TGT_R_EXPORT },
+	{ "kgsbase", KREG_KGSBASE, MDB_TGT_R_EXPORT },
+	{ "cr2", KREG_CR2, MDB_TGT_R_EXPORT },
+	{ "cr3", KREG_CR3, MDB_TGT_R_EXPORT },
 	{ NULL, 0, 0 }
 };
 
@@ -185,29 +193,14 @@ mdb_amd64_printregs(const mdb_tgt_gregset_t *gregs)
 	    (rflags & KREG_EFLAGS_PF_MASK) ? "PF" : "pf",
 	    (rflags & KREG_EFLAGS_CF_MASK) ? "CF" : "cf");
 
-	mdb_printf("%24s%%cs = 0x%04x\t%%ds = 0x%04x\t%%es = 0x%04x\n",
-	    " ", kregs[KREG_CS], kregs[KREG_DS], kregs[KREG_ES]);
-
-	mdb_printf("%%trapno = 0x%x\t\t%%fs = 0x%04x\t%%gs = 0x%04x\n",
-	    kregs[KREG_TRAPNO], (kregs[KREG_FS] & 0xffff),
-	    (kregs[KREG_GS] & 0xffff));
-	mdb_printf("   %%err = 0x%x\n", kregs[KREG_ERR]);
-}
-
-/*
- * We expect all proper Solaris core files to have STACK_ALIGN-aligned stacks.
- * Hence the name.  However, if the core file resulted from a
- * hypervisor-initiated panic, the hypervisor's frames may only be 64-bit
- * aligned instead of 128.
- */
-static int
-fp_is_aligned(uintptr_t fp, int xpv_panic)
-{
-	if (!xpv_panic && (fp & (STACK_ALIGN -1)))
-		return (0);
-	if ((fp & sizeof (uintptr_t) - 1))
-		return (0);
-	return (1);
+	mdb_printf("%%cs = 0x%04x\t%%ds = 0x%04x\t"
+	    "%%es = 0x%04x\t%%fs = 0x%04x\n", kregs[KREG_CS], kregs[KREG_DS],
+	    kregs[KREG_ES], kregs[KREG_FS] & 0xffff);
+	mdb_printf("%%gs = 0x%04x\t%%gsbase = 0x%lx\t%%kgsbase = 0x%lx\n",
+	    kregs[KREG_GS] & 0xffff, kregs[KREG_GSBASE], kregs[KREG_KGSBASE]);
+	mdb_printf("%%trapno = 0x%x\t%%err = 0x%x\t%%cr2 = 0x%lx\t"
+	    "%%cr3 = 0x%lx\n", kregs[KREG_TRAPNO], kregs[KREG_ERR],
+	    kregs[KREG_CR2], kregs[KREG_CR3]);
 }
 
 int
@@ -223,7 +216,7 @@ mdb_amd64_kvm_stack_iter(mdb_tgt_t *t, const mdb_tgt_gregset_t *gsp,
 	int err;
 	int i;
 
-	struct {
+	struct fr {
 		uintptr_t fr_savfp;
 		uintptr_t fr_savpc;
 	} fr;
@@ -240,6 +233,8 @@ mdb_amd64_kvm_stack_iter(mdb_tgt_t *t, const mdb_tgt_gregset_t *gsp,
 	mdb_syminfo_t sip;
 	mdb_ctf_funcinfo_t mfp;
 	int xpv_panic = 0;
+	int advance_tortoise = 1;
+	uintptr_t tortoise_fp = 0;
 #ifndef	_KMDB
 	int xp;
 
@@ -252,22 +247,39 @@ mdb_amd64_kvm_stack_iter(mdb_tgt_t *t, const mdb_tgt_gregset_t *gsp,
 	while (fp != 0) {
 		int args_style = 0;
 
-		/*
-		 * Ensure progress (increasing fp), and prevent
-		 * endless loop with the same FP.
-		 */
-		if (fp <= lastfp) {
-			err = EMDB_STKFRAME;
-			goto badfp;
-		}
-		if (!fp_is_aligned(fp, xpv_panic)) {
-			err = EMDB_STKALIGN;
-			goto badfp;
-		}
-		if (mdb_tgt_vread(t, &fr, sizeof (fr), fp) != sizeof (fr)) {
+		if (mdb_tgt_aread(t, MDB_TGT_AS_VIRT_S, &fr, sizeof (fr), fp) !=
+		    sizeof (fr)) {
 			err = EMDB_NOMAP;
 			goto badfp;
 		}
+
+		if (tortoise_fp == 0) {
+			tortoise_fp = fp;
+		} else {
+			/*
+			 * Advance tortoise_fp every other frame, so we detect
+			 * cycles with Floyd's tortoise/hare.
+			 */
+			if (advance_tortoise != 0) {
+				struct fr tfr;
+
+				if (mdb_tgt_aread(t, MDB_TGT_AS_VIRT_S, &tfr,
+				    sizeof (tfr), tortoise_fp) !=
+				    sizeof (tfr)) {
+					err = EMDB_NOMAP;
+					goto badfp;
+				}
+
+				tortoise_fp = tfr.fr_savfp;
+			}
+
+			if (fp == tortoise_fp) {
+				err = EMDB_STKFRAME;
+				goto badfp;
+			}
+		}
+
+		advance_tortoise = !advance_tortoise;
 
 		if ((mdb_tgt_lookup_by_addr(t, pc, MDB_TGT_SYM_FUZZY,
 		    NULL, 0, &s, &sip) == 0) &&
@@ -323,7 +335,8 @@ mdb_amd64_kvm_stack_iter(mdb_tgt_t *t, const mdb_tgt_gregset_t *gsp,
 		insnsize = MIN(MIN(s.st_size, SAVEARGS_INSN_SEQ_LEN),
 		    pc - s.st_value);
 
-		if (mdb_tgt_vread(t, ins, insnsize, s.st_value) != insnsize)
+		if (mdb_tgt_aread(t, MDB_TGT_AS_VIRT_I, ins, insnsize,
+		    s.st_value) != insnsize)
 			argc = 0;
 
 		if ((argc != 0) &&
@@ -342,8 +355,8 @@ mdb_amd64_kvm_stack_iter(mdb_tgt_t *t, const mdb_tgt_gregset_t *gsp,
 			if (args_style == SAVEARGS_STRUCT_ARGS)
 				size += sizeof (long);
 
-			if (mdb_tgt_vread(t, fr_argv, size, (fp - size))
-			    != size)
+			if (mdb_tgt_aread(t, MDB_TGT_AS_VIRT_S, fr_argv, size,
+			    (fp - size)) != size)
 				return (-1);	/* errno has been set for us */
 
 			/*
@@ -362,7 +375,8 @@ mdb_amd64_kvm_stack_iter(mdb_tgt_t *t, const mdb_tgt_gregset_t *gsp,
 				    sizeof (fr_argv) -
 				    (reg_argc * sizeof (long)));
 
-				if (mdb_tgt_vread(t, &fr_argv[reg_argc], size,
+				if (mdb_tgt_aread(t, MDB_TGT_AS_VIRT_S,
+				    &fr_argv[reg_argc], size,
 				    fp + sizeof (fr)) != size)
 					return (-1); /* errno has been set */
 			}
@@ -427,14 +441,15 @@ mdb_amd64_step_out(mdb_tgt_t *t, uintptr_t *p, kreg_t pc, kreg_t fp, kreg_t sp,
 		if (pc == s.st_value && curinstr == M_PUSHQ_RBP)
 			fp = sp - 8;
 		else if (pc == s.st_value + 1 && curinstr == M_REX_W) {
-			if (mdb_tgt_vread(t, &curinstr, sizeof (curinstr),
-			    pc + 1) == sizeof (curinstr) && curinstr ==
-			    M_MOVL_RBP)
+			if (mdb_tgt_aread(t, MDB_TGT_AS_VIRT_I, &curinstr,
+			    sizeof (curinstr), pc + 1) == sizeof (curinstr) &&
+			    curinstr == M_MOVL_RBP)
 				fp = sp;
 		}
 	}
 
-	if (mdb_tgt_vread(t, &fr, sizeof (fr), fp) == sizeof (fr)) {
+	if (mdb_tgt_aread(t, MDB_TGT_AS_VIRT_S, &fr, sizeof (fr), fp) ==
+	    sizeof (fr)) {
 		*p = fr.fr_savpc;
 		return (0);
 	}
@@ -469,8 +484,8 @@ mdb_amd64_next(mdb_tgt_t *t, uintptr_t *p, kreg_t pc, mdb_instr_t curinstr)
 	/* Skip the rex prefix, if any */
 	callpc = pc;
 	while (curinstr >= M_REX_LO && curinstr <= M_REX_HI) {
-		if (mdb_tgt_vread(t, &curinstr, sizeof (curinstr), ++callpc) !=
-		    sizeof (curinstr))
+		if (mdb_tgt_aread(t, MDB_TGT_AS_VIRT_I, &curinstr,
+		    sizeof (curinstr), ++callpc) != sizeof (curinstr))
 			return (-1); /* errno is set for us */
 	}
 
@@ -479,52 +494,97 @@ mdb_amd64_next(mdb_tgt_t *t, uintptr_t *p, kreg_t pc, mdb_instr_t curinstr)
 		return (set_errno(EAGAIN));
 	}
 
-	if ((npc = mdb_dis_nextins(mdb.m_disasm, t, MDB_TGT_AS_VIRT, pc)) == pc)
+	npc = mdb_dis_nextins(mdb.m_disasm, t, MDB_TGT_AS_VIRT_I, pc);
+	if (npc == pc)
 		return (-1); /* errno is set for us */
 
 	*p = npc;
 	return (0);
 }
 
-/*ARGSUSED*/
 int
-mdb_amd64_kvm_frame(void *arglim, uintptr_t pc, uint_t argc, const long *argv,
+mdb_amd64_kvm_frame(void *argp, uintptr_t pc, uint_t argc, const long *argv,
     const mdb_tgt_gregset_t *gregs)
 {
-	argc = MIN(argc, (uintptr_t)arglim);
-	mdb_printf("%a(", pc);
+	mdb_stack_frame_hdl_t *hdl = argp;
+	uint64_t bp;
 
-	if (argc != 0) {
-		mdb_printf("%lr", *argv++);
-		for (argc--; argc != 0; argc--)
-			mdb_printf(", %lr", *argv++);
-	}
-
-	mdb_printf(")\n");
+	bp = gregs->kregs[KREG_RBP];
+	mdb_stack_frame(hdl, pc, bp, argc, argv);
 	return (0);
 }
 
-int
-mdb_amd64_kvm_framev(void *arglim, uintptr_t pc, uint_t argc, const long *argv,
-    const mdb_tgt_gregset_t *gregs)
+/*
+ * Check if the instruction immediately before the given program counter (pcp)
+ * is a CALL instruction on AMD64. Since x86-64 instructions are
+ * variable-length, we read the 8 bytes preceding the PC and look for specific
+ * call encodings at known offsets that would align with common call
+ * instruction lengths. Although x86 instructions can be up to 15 bytes long,
+ * for a CALL to reach that length would require a long sequence of prefixes.
+ * Of those, only the address-size prefix would affect where we need to look
+ * for the instruction, and such prefixes are extremely rare in real-world
+ * code.
+ */
+boolean_t
+mdb_amd64_prev_callcheck(uintptr_t pcp)
 {
+	uint8_t buf[8];
+
 	/*
-	 * Historically adb limited stack trace argument display to a fixed-
-	 * size number of arguments since no symbolic debugging info existed.
-	 * On amd64 we can detect the true number of saved arguments so only
-	 * respect an arglim of zero; otherwise display the entire argv[].
+	 * Ensure we can read 8 bytes before the PC. This accommodates the
+	 * largest call encoding we care about (far calls).
 	 */
-	if (arglim == 0)
-		argc = 0;
+	if (pcp < 8 || mdb_vread(buf, sizeof (buf), pcp - 8) != sizeof (buf))
+		return (B_FALSE);
 
-	mdb_printf("%0?lr %a(", gregs->kregs[KREG_RBP], pc);
+	/*
+	 * Direct near call: CALL rel32
+	 * Opcode: E8, followed by 4-byte PC-relative offset.
+	 * Instruction is 5 bytes long; opcode is at buf[3].
+	 */
+	if (buf[3] == 0xe8)
+		return (B_TRUE);
 
-	if (argc != 0) {
-		mdb_printf("%lr", *argv++);
-		for (argc--; argc != 0; argc--)
-			mdb_printf(", %lr", *argv++);
-	}
+	/*
+	 * Indirect near call: CALL r/m64
+	 * Opcode: FF /2 (i.e., reg field of ModR/M is 010).
+	 *
+	 * We're expecting the instruction to be exactly 2 bytes: FF 14,
+	 * with opcode at buf[5] and ModR/M at buf[6].
+	 *
+	 * buf[6] == 0x14 means:
+	 *  - mod = 00 (no displacement)
+	 *  - reg = 010 (CALL)
+	 *  - r/m = 100 (SIB follows — typically [rsp])
+	 *
+	 * This form is common in PLT stubs like: CALL QWORD PTR [RSP]
+	 *
+	 * Other encodings of FF /2 are less plausible here:
+	 *  - mod = 01 - 8-bit displacement - unlikely for noreturn functions
+	 *  - mod = 10 - 32-bit displacement - would overlap with PC; invalid
+	 *  - mod = 00 with r/m != 100 - e.g., CALL RAX - would return to
+	 *    buf[7], not pcp
+	 */
+	if (buf[5] == 0xff && buf[6] == 0x14)
+		return (B_TRUE);
 
-	mdb_printf(")\n");
-	return (0);
+	/*
+	 * Indirect RIP-relative call: CALL QWORD PTR [RIP + disp32]
+	 * Encoding: FF 15 xx xx xx xx
+	 * Instruction is 6 bytes long; opcode at buf[2], ModR/M at buf[3].
+	 * Common in PLT thunks and PIC code.
+	 */
+	if (buf[2] == 0xff && buf[3] == 0x15)
+		return (B_TRUE);
+
+	/*
+	 * Far call (segment-based): CALL FAR ptr16:32
+	 * Opcode: 9A, followed by 6-byte far pointer.
+	 * Rare in modern 64-bit code but still valid.
+	 * Instruction is 7 bytes; opcode at buf[0].
+	 */
+	if (buf[0] == 0x9a)
+		return (B_TRUE);
+
+	return (B_FALSE);
 }

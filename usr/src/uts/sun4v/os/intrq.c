@@ -23,6 +23,7 @@
  * Use is subject to license terms.
  */
 
+#include <sys/sysmacros.h>
 #include <sys/machsystm.h>
 #include <sys/cpu.h>
 #include <sys/intreg.h>
@@ -98,7 +99,7 @@ cpu_intrq_setup(struct cpu *cpu)
 	 * contig_mem_alloc() requires size to be a power of 2.
 	 * Increase size to a power of 2 if necessary.
 	 */
-	if ((size & (size - 1)) != 0) {
+	if (!ISP2(size)) {
 		size = 1 << highbit(size);
 	}
 
@@ -194,7 +195,7 @@ cpu_intrq_cleanup(struct cpu *cpu)
 	if (mcpup->mondo_data) {
 		contig_mem_free(mcpup->mondo_data, INTR_REPORT_SIZE);
 		mcpup->mondo_data = NULL;
-		mcpup->mondo_data_ra = NULL;
+		mcpup->mondo_data_ra = 0;
 	}
 
 	/*
@@ -208,14 +209,14 @@ cpu_intrq_cleanup(struct cpu *cpu)
 	 * contig_mem_alloc() requires size to be a power of 2.
 	 * Increase size to a power of 2 if necessary.
 	 */
-	if ((cpu_list_size & (cpu_list_size - 1)) != 0) {
+	if (!ISP2(cpu_list_size)) {
 		cpu_list_size = 1 << highbit(cpu_list_size);
 	}
 
 	if (mcpup->cpu_list) {
 		contig_mem_free(mcpup->cpu_list, cpu_list_size);
 		mcpup->cpu_list = NULL;
-		mcpup->cpu_list_ra = NULL;
+		mcpup->cpu_list_ra = 0;
 	}
 
 	/*
@@ -225,7 +226,7 @@ cpu_intrq_cleanup(struct cpu *cpu)
 		cpu_q_size = cpu_q_entries * INTR_REPORT_SIZE;
 		contig_mem_free(mcpup->cpu_q_va, cpu_q_size);
 		mcpup->cpu_q_va = NULL;
-		mcpup->cpu_q_base_pa = NULL;
+		mcpup->cpu_q_base_pa = 0;
 		mcpup->cpu_q_size = 0;
 	}
 
@@ -233,7 +234,7 @@ cpu_intrq_cleanup(struct cpu *cpu)
 		dev_q_size = dev_q_entries * INTR_REPORT_SIZE;
 		contig_mem_free(mcpup->dev_q_va, dev_q_size);
 		mcpup->dev_q_va = NULL;
-		mcpup->dev_q_base_pa = NULL;
+		mcpup->dev_q_base_pa = 0;
 		mcpup->dev_q_size = 0;
 	}
 
@@ -241,7 +242,7 @@ cpu_intrq_cleanup(struct cpu *cpu)
 		cpu_rq_size = cpu_rq_entries * Q_ENTRY_SIZE;
 		contig_mem_free(mcpup->cpu_rq_va, 2 * cpu_rq_size);
 		mcpup->cpu_rq_va = NULL;
-		mcpup->cpu_rq_base_pa = NULL;
+		mcpup->cpu_rq_base_pa = 0;
 		mcpup->cpu_rq_size = 0;
 	}
 
@@ -249,7 +250,7 @@ cpu_intrq_cleanup(struct cpu *cpu)
 		cpu_nrq_size = cpu_nrq_entries * Q_ENTRY_SIZE;
 		contig_mem_free(mcpup->cpu_nrq_va, 2 * cpu_nrq_size);
 		mcpup->cpu_nrq_va = NULL;
-		mcpup->cpu_nrq_base_pa = NULL;
+		mcpup->cpu_nrq_base_pa = 0;
 		mcpup->cpu_nrq_size = 0;
 	}
 }

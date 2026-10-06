@@ -23,11 +23,13 @@
 # Copyright 2008 Sun Microsystems, Inc.  All rights reserved.
 # Use is subject to license terms.
 #
+# Copyright 2019 OmniOS Community Edition (OmniOSce) Association.
+#
 
 PROG=		size
 
-include 	$(SRC)/cmd/Makefile.cmd
-include 	$(SRC)/cmd/sgs/Makefile.com
+include		$(SRC)/cmd/Makefile.cmd
+include		$(SRC)/cmd/sgs/Makefile.com
 
 COMOBJS=	main.o process.o fcns.o
 
@@ -38,12 +40,9 @@ CERRWARN +=	-_gcc=-Wno-unused-variable
 OBJS =		$(COMOBJS)
 .PARALLEL:	$(OBJS)
 
-LLDFLAGS =	'$(LDPASS)-R$$ORIGIN/../../lib'
-LLDFLAGS64 =	'$(LDPASS)-R$$ORIGIN/../../../lib/$(MACH64)'
-LDFLAGS +=	$(LLDFLAGS)
+RPATH =	'-R$$ORIGIN/../../lib/$(MACH64)'
+LDFLAGS +=	$(RPATH)
 
-LDLIBS +=	$(CONVLIBDIR) $(CONV_LIB) $(ELFLIBDIR) -lelf
+LDLIBS +=	$(CONVLIBDIR64) -lconv $(ELFLIBDIR64) -lelf
 
-LINTSRCS =	$(SRCS)
-
-CLEANFILES +=	$(OBJS) $(LINTOUTS)
+CLEANFILES +=	$(OBJS)

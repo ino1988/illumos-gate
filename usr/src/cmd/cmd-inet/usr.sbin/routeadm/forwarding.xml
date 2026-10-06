@@ -23,8 +23,6 @@
 
  CDDL HEADER END
 
-	ident	"%Z%%M%	%I%	%E% SMI"
-
 	NOTE:  This service manifest is not editable; its contents will
 	be overwritten by package or patch operations, including
 	operating system upgrade.  Make customizations in a different
@@ -72,7 +70,7 @@
 		name='start'
 		exec='/lib/svc/method/svc-forwarding %m ipv4'
 		timeout_seconds='60' >
-		<method_context>
+		<method_context working_directory='/'>
 			<method_credential user='root' group='root' />
 		</method_context>
 	</exec_method>
@@ -82,7 +80,7 @@
 		name='stop'
 		exec='/lib/svc/method/svc-forwarding %m ipv4'
 		timeout_seconds='60' >
-		<method_context>
+		<method_context working_directory='/'>
 			<method_credential user='root' group='root' />
 		</method_context>
 	</exec_method>
@@ -92,7 +90,7 @@
 		name='refresh'
 		exec='/lib/svc/method/svc-forwarding %m ipv4'
 		timeout_seconds='60' >
-		<method_context>
+		<method_context working_directory='/'>
 			<method_credential user='root' group='root' />
 		</method_context>
 	</exec_method>
@@ -110,7 +108,7 @@
 			value='solaris.smf.manage.routing' />
 	</property_group>
 
-	<!-- Properties in this group are modifiable via routeadm (1M) -->
+	<!-- Properties in this group are modifiable via routeadm(8) -->
 	<property_group name='routeadm' type='application'>
 		<propval name='default-ipv4-forwarding' type='boolean'
 			value='false' />
@@ -132,7 +130,7 @@
 			</loctext>
 		</description>
 		<documentation>
-			<manpage title='routeadm' section='1M'
+			<manpage title='routeadm' section='8'
 				manpath='/usr/share/man' />
 		</documentation>
 	</template>
@@ -176,7 +174,7 @@
 		name='start'
 		exec='/lib/svc/method/svc-forwarding %m ipv6'
 		timeout_seconds='60' >
-		<method_context>
+		<method_context working_directory='/'>
 			<method_credential user='root' group='root' />
 		</method_context>
 	</exec_method>
@@ -186,7 +184,7 @@
 		name='stop'
 		exec='/lib/svc/method/svc-forwarding %m ipv6'
 		timeout_seconds='60' >
-		<method_context>
+		<method_context working_directory='/'>
 			<method_credential user='root' group='root' />
 		</method_context>
 	</exec_method>
@@ -196,7 +194,7 @@
 		name='refresh'
 		exec='/lib/svc/method/svc-forwarding %m ipv6'
 		timeout_seconds='60' >
-		<method_context>
+		<method_context working_directory='/'>
 			<method_credential user='root' group='root' />
 		</method_context>
 	</exec_method>
@@ -214,7 +212,7 @@
 			value='solaris.smf.manage.routing' />
 	</property_group>
 
-	<!-- Properties in this group are modifiable via routeadm (1M) -->
+	<!-- Properties in this group are modifiable via routeadm(8) -->
         <property_group name='routeadm' type='application'>
 		<propval name='default-ipv6-forwarding' type='boolean'
 			value='false' />
@@ -236,7 +234,7 @@
 			</loctext>
 		</description>
 		<documentation>
-			<manpage title='routeadm' section='1M'
+			<manpage title='routeadm' section='8'
 				manpath='/usr/share/man' />
 		</documentation>
 	</template>

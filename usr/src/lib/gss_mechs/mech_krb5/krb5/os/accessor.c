@@ -8,7 +8,7 @@
  *   require a specific license from the United States Government.
  *   It is the responsibility of any person or organization contemplating
  *   export to obtain such a license before exporting.
- * 
+ *
  * WITHIN THAT CONSTRAINT, permission to use, copy, modify, and
  * distribute this software and its documentation for any purpose and
  * without fee is hereby granted, provided that the above copyright
@@ -22,7 +22,7 @@
  * M.I.T. makes no representations about the suitability of
  * this software for any purpose.  It is provided "as is" without express
  * or implied warranty.
- * 
+ *
 */
 
 #include "k5-int.h"
@@ -30,11 +30,14 @@
 
 /* If this trick gets used elsewhere, move it to k5-platform.h.  */
 #ifndef DESIGNATED_INITIALIZERS
-#define DESIGNATED_INITIALIZERS				\
-  /* ANSI/ISO C 1999 supports this...  */		\
-  (__STDC_VERSION__ >= 199901L				\
+/* ANSI/ISO C 1999 supports this...  */
+#if __STDC_VERSION__ >= 199901L				\
    /* ...as does GCC, since version 2.something.  */	\
-   || (!defined __cplusplus && __GNUC__ >= 3))
+   || (!defined __cplusplus && __GNUC__ >= 3)
+#define DESIGNATED_INITIALIZERS	1
+#else
+#define DESIGNATED_INITIALIZERS	0
+#endif
 #endif
 
 krb5_error_code KRB5_CALLCONV

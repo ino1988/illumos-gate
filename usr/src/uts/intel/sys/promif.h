@@ -26,8 +26,6 @@
 #ifndef	_SYS_PROMIF_H
 #define	_SYS_PROMIF_H
 
-#pragma ident	"%Z%%M%	%I%	%E% SMI"
-
 #include <sys/types.h>
 #include <sys/obpdefs.h>
 
@@ -104,10 +102,10 @@ extern	int		prom_stdin_is_keyboard(void);
 extern	int		prom_stdout_is_framebuffer(void);
 extern	void		prom_framebuffer_getpos(int *row, int *col);
 extern	void		prom_framebuffer_getcolors(int *fg, int *bg);
-extern  char    	*prom_stdinpath(void);
-extern  char    	*prom_stdoutpath(void);
-extern  void    	prom_strip_options(char *from, char *to);
-extern  void    	prom_pathname(char *);
+extern	char		*prom_stdinpath(void);
+extern	char		*prom_stdoutpath(void);
+extern	void		prom_strip_options(char *from, char *to);
+extern	void		prom_pathname(char *);
 
 /*
  * Special device nodes: IEEE 1275-1994 only.
@@ -173,19 +171,15 @@ extern	int		prom_seek(int fd, unsigned long long offset);
 
 extern	void		prom_writestr(const char *buf, size_t bufsize);
 
-/*PRINTFLIKE1*/
 extern	void		prom_printf(const char *fmt, ...)
-	__PRINTFLIKE(1);
-#pragma	rarely_called(prom_printf)
+	__KPRINTFLIKE(1);
 extern	void		prom_vprintf(const char *fmt, __va_list adx)
-	__VPRINTFLIKE(1);
-#pragma	rarely_called(prom_vprintf)
+	__KVPRINTFLIKE(1);
 
-/*PRINTFLIKE2*/
 extern	char		*prom_sprintf(char *s, const char *fmt, ...)
-	__PRINTFLIKE(2);
+	__KPRINTFLIKE(2);
 extern	char		*prom_vsprintf(char *s, const char *fmt, __va_list adx)
-	__VPRINTFLIKE(2);
+	__KVPRINTFLIKE(2);
 
 /*
  * promif tree searching routines ... OBP and IEEE 1275-1994.

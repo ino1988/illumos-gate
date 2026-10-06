@@ -21,6 +21,7 @@
 
 /*
  * Copyright (c) 1991, 2010, Oracle and/or its affiliates. All rights reserved.
+ * Copyright 2019 Joyent, Inc.
  */
 
 #include <sys/param.h>
@@ -51,8 +52,6 @@
 #include <sys/modctl.h>
 #include <sys/aio_impl.h>
 #include <c2/audit.h>
-#include <sys/tnf.h>
-#include <sys/tnf_probe.h>
 #include <sys/machpcb.h>
 #include <sys/privregs.h>
 #include <sys/copyops.h>
@@ -191,7 +190,7 @@ get_syscall32_args(klwp_t *lwp, int *argp, int *nargsp)
 #endif
 
 /*
- * 	Save the system call arguments in a safe place.
+ *	Save the system call arguments in a safe place.
  *	lwp->lwp_ap normally points to the out regs in the reg structure.
  *	If the user is going to change the out registers, g1, or the stack,
  *	and might want to get the args (for /proc tracing), it must copy
@@ -333,10 +332,16 @@ reset_syscall_args(void)
  * This works for old or new calling sequence.
  */
 int64_t
-nosys()
+nosys(void)
 {
 	tsignal(curthread, SIGSYS);
 	return ((int64_t)set_errno(ENOSYS));
+}
+
+int
+nosys32(void)
+{
+	return (nosys());
 }
 
 /*
@@ -410,7 +415,7 @@ pre_syscall(int arg0)
 	}
 
 	/*
-	 * From the proc(4) manual page:
+	 * From the proc(5) manual page:
 	 * When entry to a system call is being traced, the traced process
 	 * stops after having begun the call to the system but before the
 	 * system call arguments have been fetched from the process.
@@ -466,16 +471,6 @@ pre_syscall(int arg0)
 			repost = 1;
 		}
 	}
-
-#ifndef NPROBE
-	/* Kernel probe */
-	if (tnf_tracing_active) {
-		TNF_PROBE_1(syscall_start, "syscall thread", /* CSTYLED */,
-			tnf_sysnum,	sysnum,		t->t_sysnum);
-		t->t_post_sys = 1;	/* make sure post_syscall runs */
-		repost = 1;
-	}
-#endif /* NPROBE */
 
 #ifdef SYSCALLTRACE
 	if (syscalltrace) {
@@ -646,7 +641,7 @@ post_syscall(long rval1, long rval2)
 	}
 
 	/*
-	 * From the proc(4) manual page:
+	 * From the proc(5) manual page:
 	 * When exit from a system call is being traced, the traced process
 	 * stops on completion of the system call just prior to checking for
 	 * signals and returning to user level.  At this point all return
@@ -787,17 +782,6 @@ sig_check:
 		xregrestore(lwp, 1);
 
 	lwp->lwp_errno = 0;		/* clear error for next time */
-
-#ifndef NPROBE
-	/* Kernel probe */
-	if (tnf_tracing_active) {
-		TNF_PROBE_3(syscall_end, "syscall thread", /* CSTYLED */,
-		    tnf_long,	rval1,		rval1,
-		    tnf_long,	rval2,		rval2,
-		    tnf_long,	errno,		(long)error);
-		repost = 1;
-	}
-#endif /* NPROBE */
 
 	/*
 	 * Set state to LWP_USER here so preempt won't give us a kernel
@@ -1004,7 +988,7 @@ lock_syscall(struct sysent *table, uint_t code)
 /*
  * Loadable syscall support.
  *	If needed, load the module, then reserve it by holding a read
- * 	lock for the duration of the call.
+ *	lock for the duration of the call.
  *	Later, if the syscall is not unloadable, it could patch the vector.
  */
 /*ARGSUSED*/
@@ -1026,7 +1010,6 @@ loadable_syscall(
 	 * Try to autoload the system call if necessary.
 	 */
 	module_lock = lock_syscall(se, code);
-	THREAD_KPRI_RELEASE();	/* drop priority given by rw_enter */
 
 	/*
 	 * we've locked either the loaded syscall or nosys
@@ -1040,7 +1023,6 @@ loadable_syscall(
 		rval = syscall_ap();
 	}
 
-	THREAD_KPRI_REQUEST();	/* regain priority from read lock */
 	rw_exit(module_lock);
 	return (rval);
 }
@@ -1070,7 +1052,7 @@ indir(int code, long a0, long a1, long a2, long a3, long a4)
 	 * Handle argument setup, unless already done in pre_syscall().
 	 */
 	if (callp->sy_narg > 5) {
-		if (save_syscall_args()) 	/* move args to LWP array */
+		if (save_syscall_args())	/* move args to LWP array */
 			return ((int64_t)set_errno(EFAULT));
 	} else if (!lwp->lwp_argsaved) {
 		long *ap;

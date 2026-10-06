@@ -15,10 +15,6 @@
  * OF OR IN CONNECTION WITH THE USE OR PERFORMANCE OF THIS SOFTWARE.
  */
 
-#if !defined(LINT) && !defined(CODECENTER)
-static const char rcsid[] = "$Id: getprotoent.c,v 1.4 2005/04/27 04:56:26 sra Exp $";
-#endif
-
 /* Imports */
 
 #include "port_before.h"
@@ -161,13 +157,13 @@ init() {
 		net_data->pr = (*net_data->irs->pr_map)(net_data->irs);
 
 		if (!net_data->pr || !net_data->res) {
- error:		
+ error:
 			errno = EIO;
 			return (NULL);
 		}
 		(*net_data->pr->res_set)(net_data->pr, net_data->res, NULL);
 	}
-	
+
 	return (net_data);
 }
 

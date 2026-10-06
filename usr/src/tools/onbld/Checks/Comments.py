@@ -26,16 +26,20 @@
 #
 
 # Copyright 2007, 2010 Richard Lowe
+# Copyright 2019 OmniOS Community Edition (OmniOSce) Association.
+# Copyright 2024 Bill Sommerfeld
 
 #
 # Check delta comments:
-# 	- Have the correct form.
-# 	- Have a synopsis matching that of the bug
-# 	- Appear only once.
+#	- Have the correct form.
+#	- Have a synopsis matching that of the bug
+#	- Appear only once.
+#	- Do not contain common spelling errors.
 #
 
 import re, sys
 from onbld.Checks.DbLookups import BugDB
+from onbld.Checks.SpellCheck import spellcheck_line
 
 
 bugre = re.compile(r'^(\d{2,7}) (.*)$')
@@ -44,8 +48,16 @@ bugre = re.compile(r'^(\d{2,7}) (.*)$')
 def isBug(comment):
 	return bugre.match(comment)
 
+def changeid_present(comments):
+	if len(comments) < 3:
+		return False
+	if comments[-2] != '':
+		return False
+	if re.match('^Change-Id: I[0-9a-f]+', comments[-1]):
+		return True
+	return False
 
-def comchk(comments, check_db=True, output=sys.stderr):
+def comchk(comments, check_db=True, output=sys.stderr, bugs=None):
 	'''Validate checkin comments against ON standards.
 
 	Comments must be a list of one-line comments, with no trailing
@@ -60,6 +72,7 @@ def comchk(comments, check_db=True, output=sys.stderr):
 	bugnospcre = re.compile(r'^(\d{2,7})([^ ].*)')
 	ignorere = re.compile(r'^(' +
                               r'Portions contributed by|' +
+                              r'Imported[ -]from|' +
                               r'Contributed by|' +
                               r'Reviewed[ -]by|' +
                               r'Approved[ -]by|' +
@@ -67,15 +80,26 @@ def comchk(comments, check_db=True, output=sys.stderr):
                               r'[: ]')
 
 	errors = { 'bugnospc': [],
+		   'changeid': [],
 		   'mutant': [],
 		   'dup': [],
 		   'nomatch': [],
-		   'nonexistent': [] }
-	bugs = {}
+		   'nonexistent': [],
+		   'spelling': [] }
+	if bugs is None:
+		bugs = {}
+	newbugs = set()
 	ret = 0
 	blanks = False
 
+	if changeid_present(comments):
+		comments = comments[:-2]
+		errors['changeid'].append('Change Id present')
+
+	lineno = 0
 	for com in comments:
+		lineno += 1
+
 		# Our input must be newline-free, comments are line-wise.
 		if com.find('\n') != -1:
 			raise ValueError("newline in comment '%s'" % com)
@@ -88,11 +112,15 @@ def comchk(comments, check_db=True, output=sys.stderr):
 			blanks = True
 			continue
 
+		for err in spellcheck_line(com):
+			errors['spelling'].append(
+			    'comment line {} - {}'.format(lineno, err))
+
 		match = bugre.search(com)
 		if match:
-			if match.group(1) not in bugs:
-				bugs[match.group(1)] = []
-			bugs[match.group(1)].append(match.group(2))
+			(bugid, synopsis) = match.groups()
+			bugs.setdefault(bugid, []).append(synopsis)
+			newbugs.add(bugid)
 			continue
 
 		#
@@ -102,9 +130,9 @@ def comchk(comments, check_db=True, output=sys.stderr):
 		#
 		match = bugnospcre.search(com)
 		if match:
-			if match.group(1) not in bugs:
-				bugs[match.group(1)] = []
-			bugs[match.group(1)].append(match.group(2))
+			(bugid, synopsis) = match.groups()
+			bugs.setdefault(bugid, []).append(synopsis)
+			newbugs.add(bugid)
 			errors['bugnospc'].append(com)
 			continue
 
@@ -113,9 +141,10 @@ def comchk(comments, check_db=True, output=sys.stderr):
 
 	if len(bugs) > 0 and check_db:
 		bugdb = BugDB()
-		results = bugdb.lookup(bugs.keys())
+		results = bugdb.lookup(list(bugs.keys()))
 
-	for crid, insts in bugs.iteritems():
+	for crid in sorted(newbugs):
+		insts = bugs[crid]
 		if len(insts) > 1:
 			errors['dup'].append(crid)
 
@@ -157,6 +186,10 @@ def comchk(comments, check_db=True, output=sys.stderr):
 		for com in errors['bugnospc']:
 			output.write("  %s\n" % com)
 
+	if errors['changeid']:
+		ret = 1
+		output.write("NOTE: Change-Id present in comment\n")
+
 	if errors['mutant']:
 		ret = 1
 		output.write("These comments are not valid bugs:\n")
@@ -177,5 +210,11 @@ def comchk(comments, check_db=True, output=sys.stderr):
 			output.write("Synopsis of %s is wrong:\n" % err[0])
 			output.write("  should be: '%s'\n" % err[1])
 			output.write("         is: '%s'\n" % err[2])
+
+	if errors['spelling']:
+		ret = 1
+		output.write("Spellcheck:\n")
+		for err in errors['spelling']:
+			output.write('{}\n'.format(err))
 
 	return ret

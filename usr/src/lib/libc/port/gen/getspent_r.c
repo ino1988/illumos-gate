@@ -22,9 +22,8 @@
 /*
  * Copyright 2008 Sun Microsystems, Inc.  All rights reserved.
  * Use is subject to license terms.
+ * Copyright (c) 2016 by Delphix. All rights reserved.
  */
-
-#pragma ident	"%Z%%M%	%I%	%E% SMI"
 
 #include "lint.h"
 #include <mtlib.h>
@@ -100,7 +99,7 @@ fgetspent_r(FILE *f, struct spwd *result, char *buffer, int buflen)
 	extern void	_nss_XbyY_fgets(FILE *, nss_XbyY_args_t *);
 	nss_XbyY_args_t	arg;
 
-	/* ... but in fgetXXent_r, the caller deserves any +/- entry he gets */
+	/* ... but in fgetXXent_r, the caller deserves any +/- entry it gets */
 
 	/* No key to fill in */
 	NSS_XbyY_INIT(&arg, result, buffer, buflen, str2spwd);
@@ -186,11 +185,11 @@ str2spwd(const char *instr, int lenstr, void *ent, char *buffer, int buflen)
 	size_t	lencopy;
 
 	limit = p + lenstr;
-	if ((p = memchr(instr, ':', lenstr)) == 0 ||
+	if ((p = memchr(instr, ':', lenstr)) == NULL ||
 	    ++p >= limit ||
-	    (p = memchr(p, ':', limit - p)) == 0) {
+	    (p = memchr(p, ':', limit - p)) == NULL) {
 		lencopy = (size_t)lenstr;
-		p = 0;
+		p = NULL;
 	} else {
 		lencopy = p - instr;
 		p++;
@@ -202,16 +201,16 @@ str2spwd(const char *instr, int lenstr, void *ent, char *buffer, int buflen)
 	if (instr != buffer) {
 		/* Overlapping buffer copies are OK */
 		(void) memmove(buffer, instr, lencopy);
-		buffer[lencopy] = 0;
+		buffer[lencopy] = '\0';
 	}
 
 	/* quick exit do not entry fill if not needed */
-	if (ent == (void *)NULL)
+	if (ent == NULL)
 		return (NSS_STR_PARSE_SUCCESS);
 
 	black_magic = (*instr == '+' || *instr == '-');
 	shadow->sp_namp = bufp = buffer;
-	shadow->sp_pwdp	= 0;
+	shadow->sp_pwdp	= NULL;
 	shadow->sp_lstchg = -1;
 	shadow->sp_min	= -1;
 	shadow->sp_max	= -1;
@@ -220,7 +219,7 @@ str2spwd(const char *instr, int lenstr, void *ent, char *buffer, int buflen)
 	shadow->sp_expire = -1;
 	shadow->sp_flag	= 0;
 
-	if ((bufp = strchr(bufp, ':')) == 0) {
+	if ((bufp = strchr(bufp, ':')) == NULL) {
 		if (black_magic)
 			return (NSS_STR_PARSE_SUCCESS);
 		else
@@ -229,8 +228,8 @@ str2spwd(const char *instr, int lenstr, void *ent, char *buffer, int buflen)
 	*bufp++ = '\0';
 
 	shadow->sp_pwdp = bufp;
-	if (instr == 0) {
-		if ((bufp = strchr(bufp, ':')) == 0) {
+	if (*instr == '\0') {
+		if ((bufp = strchr(bufp, ':')) == NULL) {
 			if (black_magic)
 				return (NSS_STR_PARSE_SUCCESS);
 			else

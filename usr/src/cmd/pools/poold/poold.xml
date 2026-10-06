@@ -23,8 +23,6 @@
     Copyright 2005 Sun Microsystems, Inc.  All rights reserved.
     Use is subject to license terms.
 
-    ident	"%Z%%M%	%I%	%E% SMI"
-
     NOTE:  This service manifest is not editable; its contents will
     be overwritten by package or patch operations, including
     operating system upgrade.  Make customizations in a different
@@ -66,7 +64,7 @@
 		name='start'
 		exec='/lib/svc/method/svc-poold %m'
 		timeout_seconds='60'>
-		<method_context>
+		<method_context working_directory='/'>
 			<method_credential user='root' group='root' />
 		</method_context>
 	</exec_method>
@@ -76,7 +74,7 @@
 		name='stop'
 		exec=':kill'
 		timeout_seconds='60'>
-		<method_context>
+		<method_context working_directory='/'>
 			<method_credential user='root' group='root' />
 		</method_context>
 	</exec_method>
@@ -86,7 +84,7 @@
 		name='refresh'
 		exec=':kill -HUP'
 		timeout_seconds='60'>
-		<method_context>
+		<method_context working_directory='/'>
 			<method_credential user='root' group='root' />
 		</method_context>
 	</exec_method>
@@ -100,7 +98,7 @@
 			</loctext>
 		</common_name>
 		<documentation>
-			<manpage title='poold' section='1M' manpath='/usr/share/man' />
+			<manpage title='poold' section='8' manpath='/usr/share/man' />
 		</documentation>
 	</template>
 </service>

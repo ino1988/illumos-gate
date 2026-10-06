@@ -303,7 +303,7 @@ class SunDATable extends DATable {
 	buf.append("(");
 	buf.append(VERSION_ID);
 	buf.append("=");
-	buf.append((new Integer(version)).toString());
+	buf.append((Integer.valueOf(version)).toString());
 	buf.append(")");
 
 	// Add closing paren if there were any scopes.
@@ -340,7 +340,7 @@ class SunDATable extends DATable {
 		new ServiceLocationException(errCode,
 					     "loopback_error",
 					     new Object[] {
-		    new Short(errCode)});
+		    Short.valueOf(errCode)});
 
 	}
 
@@ -364,7 +364,7 @@ class SunDATable extends DATable {
 
 	for (i = 0; i < n; i++) {
 	    ServiceURL url = (ServiceURL)serviceURLs.elementAt(i);
-	
+
 	    // If the time to live is less than the current minimum,
 	    //  save it.
 

@@ -20,7 +20,7 @@
  * CDDL HEADER END
  */
 /*	Copyright (c) 1984, 1986, 1987, 1988, 1989 AT&T	*/
-/*	  All Rights Reserved  	*/
+/*	  All Rights Reserved	*/
 
 
 /*
@@ -30,8 +30,6 @@
 
 #ifndef _SYS_STRLOG_H
 #define	_SYS_STRLOG_H
-
-#pragma ident	"%Z%%M%	%I%	%E% SMI"
 
 #include <sys/types.h>
 #include <sys/types32.h>
@@ -50,9 +48,9 @@ extern "C" {
 typedef struct log_ctl {
 	short	mid;
 	short	sid;
-	char 	level;		/* level of message for tracing */
+	char	level;		/* level of message for tracing */
 	short	flags;		/* message disposition */
-#if defined(_LP64) || defined(_I32LPx)
+#if defined(_LP64)
 	clock32_t ltime;	/* time in machine ticks since boot */
 	time32_t ttime;		/* time in seconds since 1970 */
 #else

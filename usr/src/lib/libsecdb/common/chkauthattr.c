@@ -20,6 +20,7 @@
  */
 /*
  * Copyright (c) 1999, 2010, Oracle and/or its affiliates. All rights reserved.
+ * Copyright 2026 Oxide Computer Company
  */
 
 #include <alloca.h>
@@ -99,7 +100,7 @@ _enum_common_p(const char *cprofiles,
 	if (cprofiles == NULL)
 		return (0);
 
-	if (*pcnt > 0 && strcmp(profs[*pcnt - 1], PROFILE_STOP) == NULL)
+	if (*pcnt > 0 && strcmp(profs[*pcnt - 1], PROFILE_STOP) == 0)
 		return (0);
 
 	COPYTOSTACK(profiles, cprofiles)
@@ -116,7 +117,9 @@ _enum_common_p(const char *cprofiles,
 			return (-1);
 
 		/* Add it */
-		profs[(*pcnt)++] = strdup(prof);
+		if ((profs[*pcnt] = strdup(prof)) == NULL)
+			return (-1);
+		(*pcnt)++;
 
 		if (strcmp(profs[*pcnt - 1], PROFILE_STOP) == 0)
 			break;
@@ -333,7 +336,7 @@ _auth_match_noun(const char *pattern, const char *auth,
 	if (strncmp(pattern, auth, pattern_len - 1) == 0) {
 		grant = strrchr(auth, '.');
 		if (grant != NULL) {
-			if (strncmp(grant + 1, "grant", 5) != NULL)
+			if (strncmp(grant + 1, "grant", 5) != 0)
 				return (1);
 		}
 	}

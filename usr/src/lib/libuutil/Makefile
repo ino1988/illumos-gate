@@ -23,10 +23,7 @@
 # Use is subject to license terms.
 #
 
-#
-# We build a native version of libuutil.so.1 in the "native" subdirectory.
-# Note that we don't bother to lint it.
-#
+# We build a native version of libuutil.so.1 from src/tools/svc
 
 include ../Makefile.lib
 
@@ -39,11 +36,10 @@ HDRDIR =	common
 SUBDIRS	=	$(MACH)
 $(BUILD64)SUBDIRS += $(MACH64)
 
-all := 		TARGET = all
+all :=		TARGET = all
 clean :=	TARGET = clean
 clobber :=	TARGET = clobber
 install	:=	TARGET = install
-lint :=		TARGET = lint
 
 MSGFILES = \
 	common/uu_dprintf.c \
@@ -53,7 +49,7 @@ POFILE =	libuutil.po
 
 .KEEP_STATE:
 
-all clean clobber install: native $(SUBDIRS)
+all clean clobber install: $(SUBDIRS)
 
 lint:		$(SUBDIRS)
 
@@ -65,7 +61,7 @@ check:		$(CHECKHDRS)
 
 _msg:		$(MSGDOMAINPOFILE)
 
-native $(SUBDIRS): FRC
+$(SUBDIRS): FRC
 	@cd $@; pwd; $(MAKE) $(TARGET)
 
 FRC:

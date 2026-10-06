@@ -19,12 +19,14 @@
  * CDDL HEADER END
  */
 
+/*	Copyright (c) 1988 AT&T	*/
+/*	  All Rights Reserved	*/
+
 /*
  * Copyright (c) 1989, 2010, Oracle and/or its affiliates. All rights reserved.
+ * Copyright 2025 Edgecast Cloud LLC.
+ * Copyright 2026 Oxide Computer Company
  */
-
-/*	Copyright (c) 1988 AT&T	*/
-/*	  All Rights Reserved  	*/
 
 #include "lint.h"
 #include <mtlib.h>
@@ -260,8 +262,13 @@ getmntent_common(FILE *fp, struct extmnttab *emp, int command)
 		/* EOF. */
 		return (-1);
 	default:
-		/* A non-mntfs file. */
-		if (command == MNTIOC_GETMNTENT)
+		/*
+		 * If the file is not provided by mntfs then the ioctl()
+		 * fails with ENOTTY and we fall back to parsing the file
+		 * as text. Any other error, such as a transient EFAULT,
+		 * is returned to the caller.
+		 */
+		if (command == MNTIOC_GETMNTENT && errno == ENOTTY)
 			return (getmntent_compat(fp, (struct mnttab *)emp));
 		else
 			return (ret);
@@ -274,9 +281,8 @@ getmntent(FILE *fp, struct mnttab *mp)
 	return (getmntent_common(fp, (struct extmnttab *)mp, MNTIOC_GETMNTENT));
 }
 
-/*ARGSUSED*/
 int
-getextmntent(FILE *fp, struct extmnttab *emp, size_t len)
+getextmntent(FILE *fp, struct extmnttab *emp, size_t len __unused)
 {
 	return (getmntent_common(fp, emp, MNTIOC_GETEXTMNTENT));
 }
@@ -304,7 +310,7 @@ mntopt(char **p)
 }
 
 char *
-hasmntopt(struct mnttab *mnt, char *opt)
+hasmntopt(const struct mnttab *mnt, const char *opt)
 {
 	char tmpopts[MNT_LINE_MAX];
 	char *f, *opts = tmpopts;

@@ -22,6 +22,7 @@
  * Copyright (c) 1990, 2010, Oracle and/or its affiliates. All rights reserved.
  * Copyright (c) 2011 Bayard G. Bell. All rights reserved.
  * Copyright 2013 Joyent, Inc. All rights reserved.
+ * Copyright (c) 2017 by Delphix. All rights reserved.
  */
 
 /*
@@ -150,7 +151,7 @@ static vfsdef_t vfw = {
 	"hsfs",
 	hsfsinit,
 	/* We don't suppport remounting */
-	VSW_HASPROTO|VSW_STATS|VSW_CANLOFI,
+	VSW_HASPROTO|VSW_STATS|VSW_CANLOFI|VSW_MOUNTDEV,
 	&hsfs_proto_opttbl
 };
 
@@ -1434,7 +1435,7 @@ hs_copylabel(struct hs_volume *hvp, unsigned char *label, int isjoliet)
 	}
 	/* cdrom volid is at most 32 bytes */
 	bcopy(label, hvp->vol_id, 32);
-	hvp->vol_id[31] = NULL;
+	hvp->vol_id[31] = '\0';
 }
 
 /*

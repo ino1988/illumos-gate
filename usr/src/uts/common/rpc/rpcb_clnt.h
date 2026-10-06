@@ -52,8 +52,6 @@
 #ifndef _RPC_RPCB_CLNT_H
 #define	_RPC_RPCB_CLNT_H
 
-#pragma ident	"%Z%%M%	%I%	%E% SMI"
-
 #include <rpc/types.h>
 #include <rpc/rpcb_prot.h>
 #include <sys/netconfig.h>
@@ -62,7 +60,6 @@
 extern "C" {
 #endif
 
-#ifdef __STDC__
 extern bool_t		rpcb_set(const rpcprog_t, const rpcvers_t,
 	const struct netconfig  *, const struct netbuf *);
 extern bool_t		rpcb_unset(const rpcprog_t, const rpcvers_t,
@@ -77,16 +74,6 @@ extern bool_t		rpcb_getaddr(const rpcprog_t, const rpcvers_t,
 extern bool_t		rpcb_gettime(const char *, time_t *);
 extern char		*rpcb_taddr2uaddr(struct netconfig *, struct netbuf *);
 extern struct netbuf	*rpcb_uaddr2taddr(struct netconfig *, char *);
-#else
-extern bool_t		rpcb_set();
-extern bool_t		rpcb_unset();
-extern rpcblist	*rpcb_getmaps();
-extern enum clnt_stat	rpcb_rmtcall();
-extern bool_t		rpcb_getaddr();
-extern bool_t		rpcb_gettime();
-extern char		*rpcb_taddr2uaddr();
-extern struct netbuf	*rpcb_uaddr2taddr();
-#endif
 
 #ifdef __cplusplus
 }

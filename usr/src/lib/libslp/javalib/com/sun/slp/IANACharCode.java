@@ -184,7 +184,7 @@ abstract class IANACharCode extends Object {
 
 	// Assemble the character code based on the encoding type.
 
-	if (encoding.equals(UNICODE) || 	
+	if (encoding.equals(UNICODE) ||
 	    encoding.equals(UNICODE_BIG) ||
 	    encoding.equals(UNICODE_LITTLE)) {
 
@@ -198,7 +198,7 @@ abstract class IANACharCode extends Object {
 		    new ServiceLocationException(
 				ServiceLocationException.PARSE_ERROR,
 				"v1_charcode_error",
-				new Object[] {new Character(c), encoding});
+				new Object[] {Character.valueOf(c), encoding});
 	    }
 
 	} else if (encoding.equals(ASCII) || encoding.equals(LATIN1)) {
@@ -210,7 +210,7 @@ abstract class IANACharCode extends Object {
 		    new ServiceLocationException(
 				ServiceLocationException.PARSE_ERROR,
 				"v1_charcode_error",
-				new Object[] {new Character(c), encoding});
+				new Object[] {Character.valueOf(c), encoding});
 	    }
 	} else if (encoding.equals(UTF8)) {
 
@@ -219,7 +219,7 @@ abstract class IANACharCode extends Object {
 		    new ServiceLocationException(
 				ServiceLocationException.PARSE_ERROR,
 				"v1_charcode_error",
-				new Object[] {new Character(c), encoding});
+				new Object[] {Character.valueOf(c), encoding});
 	    }
 
 
@@ -274,7 +274,7 @@ abstract class IANACharCode extends Object {
 	byte b0 = 0, b1 = 0, b2 = 0, b3 = 0;
 	byte b[] = null;
 
-	b0 = (byte) (code & 0xFF);			
+	b0 = (byte) (code & 0xFF);
 	b1 = (byte) ((code >> 8) & 0xFF);
 	b2 = (byte) ((code >> 16) & 0xFF);
 	b3 = (byte) ((code >> 24) & 0xFf);

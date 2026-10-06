@@ -23,6 +23,10 @@
  * Copyright (c) 1992, 2010, Oracle and/or its affiliates. All rights reserved.
  */
 
+/*
+ * Copyright (c) 2018, Joyent, Inc.
+ */
+
 #include <sys/scsi/scsi.h>
 #include <sys/dktp/cm.h>
 #include <sys/dktp/quetypes.h>
@@ -135,20 +139,20 @@ static int cmdkawrite(dev_t dev, struct aio_req *aio, cred_t *credp);
  */
 
 static struct cb_ops cmdk_cb_ops = {
-	cmdkopen, 		/* open */
-	cmdkclose, 		/* close */
-	cmdkstrategy, 		/* strategy */
-	nodev, 			/* print */
-	cmdkdump, 		/* dump */
-	cmdkread, 		/* read */
-	cmdkwrite, 		/* write */
-	cmdkioctl, 		/* ioctl */
-	nodev, 			/* devmap */
-	nodev, 			/* mmap */
-	nodev, 			/* segmap */
-	nochpoll, 		/* poll */
-	cmdk_prop_op, 		/* cb_prop_op */
-	0, 			/* streamtab  */
+	cmdkopen,		/* open */
+	cmdkclose,		/* close */
+	cmdkstrategy,		/* strategy */
+	nodev,			/* print */
+	cmdkdump,		/* dump */
+	cmdkread,		/* read */
+	cmdkwrite,		/* write */
+	cmdkioctl,		/* ioctl */
+	nodev,			/* devmap */
+	nodev,			/* mmap */
+	nodev,			/* segmap */
+	nochpoll,		/* poll */
+	cmdk_prop_op,		/* cb_prop_op */
+	0,			/* streamtab  */
 	D_64BIT | D_MP | D_NEW,	/* Driver comaptibility flag */
 	CB_REV,			/* cb_rev */
 	cmdkaread,		/* async read */
@@ -167,15 +171,15 @@ static int cmdksuspend(dev_info_t *dip);
 static int cmdkpower(dev_info_t *dip, int component, int level);
 
 struct dev_ops cmdk_ops = {
-	DEVO_REV, 		/* devo_rev, */
-	0, 			/* refcnt  */
+	DEVO_REV,		/* devo_rev, */
+	0,			/* refcnt  */
 	cmdkinfo,		/* info */
-	nulldev, 		/* identify */
-	cmdkprobe, 		/* probe */
-	cmdkattach, 		/* attach */
+	nulldev,		/* identify */
+	cmdkprobe,		/* probe */
+	cmdkattach,		/* attach */
 	cmdkdetach,		/* detach */
-	nodev, 			/* reset */
-	&cmdk_cb_ops, 		/* driver operations */
+	nodev,			/* reset */
+	&cmdk_cb_ops,		/* driver operations */
 	(struct bus_ops *)0,	/* bus operations */
 	cmdkpower,		/* power */
 	ddi_quiesce_not_needed,	/* quiesce */
@@ -186,29 +190,15 @@ struct dev_ops cmdk_ops = {
  */
 #include <sys/modctl.h>
 
-#ifndef XPV_HVM_DRIVER
 static struct modldrv modldrv = {
 	&mod_driverops,		/* Type of module. This one is a driver */
 	"Common Direct Access Disk",
-	&cmdk_ops,				/* driver ops 		*/
+	&cmdk_ops,				/* driver ops		*/
 };
 
 static struct modlinkage modlinkage = {
 	MODREV_1, (void *)&modldrv, NULL
 };
-
-
-#else /* XPV_HVM_DRIVER */
-static struct modlmisc modlmisc = {
-	&mod_miscops,		/* Type of module. This one is a misc */
-	"HVM Common Direct Access Disk",
-};
-
-static struct modlinkage modlinkage = {
-	MODREV_1, (void *)&modlmisc, NULL
-};
-
-#endif /* XPV_HVM_DRIVER */
 
 /* Function prototypes for cmlb callbacks */
 
@@ -253,19 +243,15 @@ cmdk_isopen(struct cmdk *dkp, dev_t dev)
 int
 _init(void)
 {
-	int 	rval;
+	int	rval;
 
-#ifndef XPV_HVM_DRIVER
 	if (rval = ddi_soft_state_init(&cmdk_state, sizeof (struct cmdk), 7))
 		return (rval);
-#endif /* !XPV_HVM_DRIVER */
 
 	mutex_init(&cmdk_attach_mutex, NULL, MUTEX_DRIVER, NULL);
 	if ((rval = mod_install(&modlinkage)) != 0) {
 		mutex_destroy(&cmdk_attach_mutex);
-#ifndef XPV_HVM_DRIVER
 		ddi_soft_state_fini(&cmdk_state);
-#endif /* !XPV_HVM_DRIVER */
 	}
 	return (rval);
 }
@@ -288,19 +274,17 @@ _info(struct modinfo *modinfop)
 static int
 cmdkprobe(dev_info_t *dip)
 {
-	int 	instance;
+	int	instance;
 	int	status;
 	struct	cmdk	*dkp;
 
 	instance = ddi_get_instance(dip);
 
-#ifndef XPV_HVM_DRIVER
 	if (ddi_get_soft_state(cmdk_state, instance))
 		return (DDI_PROBE_PARTIAL);
 
 	if (ddi_soft_state_zalloc(cmdk_state, instance) != DDI_SUCCESS)
 		return (DDI_PROBE_PARTIAL);
-#endif /* !XPV_HVM_DRIVER */
 
 	if ((dkp = ddi_get_soft_state(cmdk_state, instance)) == NULL)
 		return (DDI_PROBE_PARTIAL);
@@ -318,9 +302,7 @@ cmdkprobe(dev_info_t *dip)
 		mutex_exit(&dkp->dk_mutex);
 		mutex_destroy(&dkp->dk_mutex);
 		rw_destroy(&dkp->dk_bbh_mutex);
-#ifndef XPV_HVM_DRIVER
 		ddi_soft_state_free(cmdk_state, instance);
-#endif /* !XPV_HVM_DRIVER */
 		return (DDI_PROBE_PARTIAL);
 	}
 
@@ -330,9 +312,7 @@ cmdkprobe(dev_info_t *dip)
 		mutex_exit(&dkp->dk_mutex);
 		mutex_destroy(&dkp->dk_mutex);
 		rw_destroy(&dkp->dk_bbh_mutex);
-#ifndef XPV_HVM_DRIVER
 		ddi_soft_state_free(cmdk_state, instance);
-#endif /* !XPV_HVM_DRIVER */
 		return (status);
 	}
 
@@ -348,9 +328,9 @@ cmdkprobe(dev_info_t *dip)
 static int
 cmdkattach(dev_info_t *dip, ddi_attach_cmd_t cmd)
 {
-	int 		instance;
+	int		instance;
 	struct		cmdk *dkp;
-	char 		*node_type;
+	char		*node_type;
 
 	switch (cmd) {
 	case DDI_ATTACH:
@@ -384,18 +364,6 @@ cmdkattach(dev_info_t *dip, ddi_attach_cmd_t cmd)
 	/* open the target disk	 */
 	if (dadk_open(DKTP_DATA, 0) != DDI_SUCCESS)
 		goto fail2;
-
-#ifdef _ILP32
-	{
-		struct  tgdk_geom phyg;
-		(void) dadk_getphygeom(DKTP_DATA, &phyg);
-		if ((phyg.g_cap - 1) > DK_MAX_BLOCKS) {
-			(void) dadk_close(DKTP_DATA);
-			goto fail2;
-		}
-	}
-#endif
-
 
 	/* mark as having opened target */
 	dkp->dk_flag |= CMDK_TGDK_OPEN;
@@ -454,9 +422,7 @@ fail2:
 	rw_destroy(&dkp->dk_bbh_mutex);
 	mutex_exit(&dkp->dk_mutex);
 	mutex_destroy(&dkp->dk_mutex);
-#ifndef XPV_HVM_DRIVER
 	ddi_soft_state_free(cmdk_state, instance);
-#endif /* !XPV_HVM_DRIVER */
 	return (DDI_FAILURE);
 }
 
@@ -465,7 +431,7 @@ static int
 cmdkdetach(dev_info_t *dip, ddi_detach_cmd_t cmd)
 {
 	struct cmdk	*dkp;
-	int 		instance;
+	int		instance;
 	int		max_instance;
 
 	switch (cmd) {
@@ -531,9 +497,7 @@ cmdkdetach(dev_info_t *dip, ddi_detach_cmd_t cmd)
 	rw_destroy(&dkp->dk_bbh_mutex);
 	mutex_destroy(&dkp->dk_pm_mutex);
 	cv_destroy(&dkp->dk_suspend_cv);
-#ifndef XPV_HVM_DRIVER
 	ddi_soft_state_free(cmdk_state, instance);
-#endif /* !XPV_HVM_DRIVER */
 
 	return (DDI_SUCCESS);
 }
@@ -542,7 +506,7 @@ static int
 cmdkinfo(dev_info_t *dip, ddi_info_cmd_t infocmd, void *arg, void **result)
 {
 	dev_t		dev = (dev_t)arg;
-	int 		instance;
+	int		instance;
 	struct	cmdk	*dkp;
 
 #ifdef lint
@@ -735,7 +699,7 @@ cmdk_prop_op(dev_t dev, dev_info_t *dip, ddi_prop_op_t prop_op, int mod_flags,
 static int
 cmdkdump(dev_t dev, caddr_t addr, daddr_t blkno, int nblk)
 {
-	int 		instance;
+	int		instance;
 	struct	cmdk	*dkp;
 	diskaddr_t	p_lblksrt;
 	diskaddr_t	p_lblkcnt;
@@ -778,7 +742,7 @@ cmdkdump(dev_t dev, caddr_t addr, daddr_t blkno, int nblk)
 }
 
 /*
- * Copy in the dadkio_rwcmd according to the user's data model.  If needed,
+ * Copy in the dadkio_rwcmd according to the user's data model.	 If needed,
  * convert it for our internal use.
  */
 static int
@@ -854,7 +818,7 @@ rwcmd_copyout(struct dadkio_rwcmd *rwcmdp, caddr_t outaddr, int flag)
 		case DDI_MODEL_NONE: {
 			if (ddi_copyout(rwcmdp, outaddr,
 			    sizeof (struct dadkio_rwcmd), flag))
-			return (EFAULT);
+				return (EFAULT);
 		}
 	}
 	return (0);
@@ -866,10 +830,10 @@ rwcmd_copyout(struct dadkio_rwcmd *rwcmdp, caddr_t outaddr, int flag)
 static int
 cmdkioctl(dev_t dev, int cmd, intptr_t arg, int flag, cred_t *credp, int *rvalp)
 {
-	int 		instance;
+	int		instance;
 	struct scsi_device *devp;
 	struct cmdk	*dkp;
-	char 		data[NBPSCTR];
+	char		data[NBPSCTR];
 
 	instance = CMDKUNIT(dev);
 	if (!(dkp = ddi_get_soft_state(cmdk_state, instance)))
@@ -887,7 +851,7 @@ cmdkioctl(dev_t dev, int cmd, intptr_t arg, int flag, cred_t *credp, int *rvalp)
 
 	case DKIOCGMEDIAINFO: {
 		struct dk_minfo	media_info;
-		struct  tgdk_geom phyg;
+		struct	tgdk_geom phyg;
 
 		/* dadk_getphygeom always returns success */
 		(void) dadk_getphygeom(DKTP_DATA, &phyg);
@@ -984,7 +948,7 @@ cmdkioctl(dev_t dev, int cmd, intptr_t arg, int flag, cred_t *credp, int *rvalp)
 		 * This is not an update mechanism to add bad blocks
 		 * to the bad block structures stored on disk.
 		 *
-		 * addbadsec(1M) will update the bad block data on disk
+		 * addbadsec(8) will update the bad block data on disk
 		 * and use this ioctl to force the driver to re-initialize
 		 * the list of bad blocks in the driver.
 		 */
@@ -1063,7 +1027,7 @@ cmdkclose(dev_t dev, int flag, int otyp, cred_t *credp)
 {
 	int		part;
 	ulong_t		partbit;
-	int 		instance;
+	int		instance;
 	struct cmdk	*dkp;
 	int		lastclose = 1;
 	int		i;
@@ -1126,9 +1090,9 @@ static int
 cmdkopen(dev_t *dev_p, int flag, int otyp, cred_t *credp)
 {
 	dev_t		dev = *dev_p;
-	int 		part;
+	int		part;
 	ulong_t		partbit;
-	int 		instance;
+	int		instance;
 	struct	cmdk	*dkp;
 	diskaddr_t	p_lblksrt;
 	diskaddr_t	p_lblkcnt;
@@ -1262,7 +1226,7 @@ cmdkmin(struct buf *bp)
 static int
 cmdkrw(dev_t dev, struct uio *uio, int flag)
 {
-	int 		instance;
+	int		instance;
 	struct	cmdk	*dkp;
 
 	instance = CMDKUNIT(dev);
@@ -1281,7 +1245,7 @@ cmdkrw(dev_t dev, struct uio *uio, int flag)
 static int
 cmdkarw(dev_t dev, struct aio_req *aio, int flag)
 {
-	int 		instance;
+	int		instance;
 	struct	cmdk	*dkp;
 
 	instance = CMDKUNIT(dev);
@@ -1303,8 +1267,8 @@ cmdkarw(dev_t dev, struct aio_req *aio, int flag)
 static int
 cmdkstrategy(struct buf *bp)
 {
-	int 		instance;
-	struct	cmdk 	*dkp;
+	int		instance;
+	struct	cmdk	*dkp;
 	long		d_cnt;
 	diskaddr_t	p_lblksrt;
 	diskaddr_t	p_lblkcnt;
@@ -1541,7 +1505,7 @@ cmdk_lb_getinfo(dev_info_t *dip, int cmd, void *arg, void *tg_cookie)
 		/*
 		 * If the controller returned us something that doesn't
 		 * really fit into an Int 13/function 8 geometry
-		 * result, just fail the ioctl.  See PSARC 1998/313.
+		 * result, just fail the ioctl.	 See PSARC 1998/313.
 		 */
 		if (capacity < 0 || capacity >= 63 * 254 * 1024)
 			return (EINVAL);
@@ -1578,6 +1542,7 @@ cmdk_lb_getinfo(dev_info_t *dip, int cmd, void *arg, void *tg_cookie)
 			tgattribute->media_is_writable = FALSE;
 		else
 			tgattribute->media_is_writable = TRUE;
+		tgattribute->media_is_rotational = TRUE;
 
 		return (0);
 	}
@@ -1781,7 +1746,7 @@ err:
 static int
 cmdk_devid_fabricate(struct cmdk *dkp)
 {
-	ddi_devid_t	devid = NULL;	/* devid made by ddi_devid_init  */
+	ddi_devid_t	devid = NULL;	/* devid made by ddi_devid_init	 */
 	struct dk_devid	*dkdevidp;	/* devid struct stored on disk */
 	diskaddr_t	blk;
 	tgdk_iob_handle	handle = NULL;
@@ -1856,7 +1821,7 @@ cmdk_bbh_free_alts(struct cmdk *dkp)
 static void
 cmdk_bbh_reopen(struct cmdk *dkp)
 {
-	tgdk_iob_handle 	handle = NULL;
+	tgdk_iob_handle		handle = NULL;
 	diskaddr_t		slcb, slcn, slce;
 	struct	alts_parttbl	*ap;
 	struct	alts_ent	*enttblp;
@@ -2035,12 +2000,12 @@ cmdk_bbh_freehandle(opaque_t bbh_data, opaque_t handle)
  *	case 1:			   ddddd
  *	case 2:				   -d-----
  *	case 3:					     ddddd
- *	case 4:			         dddddddddddd
+ *	case 4:				 dddddddddddd
  *	case 5:			      ddddddd-----
- *	case 6:			           ---ddddddd
- *	case 7:			           ddddddd
+ *	case 6:				   ---ddddddd
+ *	case 7:				   ddddddd
  *
- *	where:  g = good sector,	b = bad sector
+ *	where:	g = good sector,	b = bad sector
  *		d = sector in disk section
  *		- = disk section may be extended to cover those disk area
  */

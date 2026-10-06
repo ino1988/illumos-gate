@@ -23,7 +23,7 @@
  */
 
 /*	Copyright (c) 1984, 1986, 1987, 1988, 1989 AT&T		*/
-/*	  All Rights Reserved  	*/
+/*	  All Rights Reserved	*/
 
 /*
  * University Copyright- Copyright (c) 1982, 1986, 1988
@@ -34,9 +34,6 @@
  * software developed by the University of California, Berkeley, and its
  * contributors.
  */
-
-/* LINTLIBRARY */
-/* PROTOLIB1 */
 
 /* NFS server */
 
@@ -52,6 +49,7 @@
 #include <sys/time.h>
 #include <sys/file.h>
 #include <nfs/nfs.h>
+#include <nfs/nfs4.h>
 #include <nfs/nfs_acl.h>
 #include <nfs/nfssys.h>
 #include <stdio.h>
@@ -105,7 +103,7 @@ static void quiesce(int);
 static	char	*MyName;
 static	NETSELDECL(defaultproviders)[] = { "/dev/tcp6", "/dev/tcp", "/dev/udp",
 					    "/dev/udp6", NULL };
-/* static	NETSELDECL(defaultprotos)[] =	{ NC_UDP, NC_TCP, NULL }; */
+
 /*
  * The following are all globals used by routines in nfs_tbind.c.
  */
@@ -119,11 +117,12 @@ int	max_conns_allowed = -1;	/* used by cots_listen_event() */
 
 /*
  * Keep track of min/max versions of NFS protocol to be started.
- * Start with the defaults (min == 2, max == 3).  We have the
- * capability of starting vers=4 but only if the user requests it.
+ * Start with the defaults (min == 2, max == 4).
+ * Used NFS_VERS_... and should be analyzed with NFS_PROT_VERSION
+ * macros.
  */
-int	nfs_server_vers_min = NFS_VERSMIN_DEFAULT;
-int	nfs_server_vers_max = NFS_VERSMAX_DEFAULT;
+uint32_t nfs_server_vers_min = NFS_SRV_VERS_MIN;
+uint32_t nfs_server_vers_max = NFS_SRV_VERS_MAX;
 
 /*
  * Set the default for server delegation enablement and set per
@@ -138,13 +137,13 @@ main(int ac, char *av[])
 	int allflag = 0;
 	int df_allflag = 0;
 	int opt_cnt = 0;
-	int maxservers = 1;	/* zero allows inifinte number of threads */
+	int maxservers = 1024;	/* zero allows inifinte number of threads */
 	int maxservers_set = 0;
 	int logmaxservers = 0;
 	int pid;
 	int i;
-	char *provider = (char *)NULL;
-	char *df_provider = (char *)NULL;
+	char *provider = NULL;
+	char *df_provider = NULL;
 	struct protob *protobp0, *protobp;
 	NETSELDECL(proto) = NULL;
 	NETSELDECL(df_proto) = NULL;
@@ -156,8 +155,8 @@ main(int ac, char *av[])
 	sigset_t sgset;
 	char name[PATH_MAX], value[PATH_MAX];
 	int ret, bufsz;
-
 	int pipe_fd = -1;
+	const char *errstr;
 
 	MyName = *av;
 
@@ -178,6 +177,9 @@ main(int ac, char *av[])
 
 	(void) enable_extended_FILE_stdio(-1, -1);
 
+	/* Upgrade SMF settings, if necessary. */
+	nfs_config_upgrade(NFSD);
+
 	/*
 	 * Read in the values from SMF first before we check
 	 * command line options so the options override SMF values.
@@ -186,9 +188,8 @@ main(int ac, char *av[])
 	ret = nfs_smf_get_prop("max_connections", value, DEFAULT_INSTANCE,
 	    SCF_TYPE_INTEGER, NFSD, &bufsz);
 	if (ret == SA_OK) {
-		errno = 0;
-		max_conns_allowed = strtol(value, (char **)NULL, 10);
-		if (errno != 0)
+		max_conns_allowed = strtonum(value, -1, INT32_MAX, &errstr);
+		if (errstr != NULL)
 			max_conns_allowed = -1;
 	}
 
@@ -196,9 +197,8 @@ main(int ac, char *av[])
 	ret = nfs_smf_get_prop("listen_backlog", value, DEFAULT_INSTANCE,
 	    SCF_TYPE_INTEGER, NFSD, &bufsz);
 	if (ret == SA_OK) {
-		errno = 0;
-		listen_backlog = strtol(value, (char **)NULL, 10);
-		if (errno != 0) {
+		listen_backlog = strtonum(value, 0, INT32_MAX, &errstr);
+		if (errstr != NULL) {
 			listen_backlog = 32;
 		}
 	}
@@ -228,25 +228,38 @@ main(int ac, char *av[])
 	ret = nfs_smf_get_prop("servers", value, DEFAULT_INSTANCE,
 	    SCF_TYPE_INTEGER, NFSD, &bufsz);
 	if (ret == SA_OK) {
-		errno = 0;
-		maxservers = strtol(value, (char **)NULL, 10);
-		if (errno != 0)
-			maxservers = 1;
+		maxservers = strtonum(value, 1, INT32_MAX, &errstr);
+		if (errstr != NULL)
+			maxservers = 1024;
 		else
 			maxservers_set = 1;
 	}
 
-	bufsz = 4;
+	bufsz = PATH_MAX;
 	ret = nfs_smf_get_prop("server_versmin", value, DEFAULT_INSTANCE,
-	    SCF_TYPE_INTEGER, NFSD, &bufsz);
-	if (ret == SA_OK)
-		nfs_server_vers_min = strtol(value, (char **)NULL, 10);
+	    SCF_TYPE_ASTRING, NFSD, &bufsz);
+	if (ret == SA_OK) {
+		ret = nfs_convert_version_str(value);
+		if (ret == 0) {
+			(void) fprintf(stderr, "invalid server_versmin: %s\n",
+			    value);
+		} else {
+			nfs_server_vers_min = ret;
+		}
+	}
 
-	bufsz = 4;
+	bufsz = PATH_MAX;
 	ret = nfs_smf_get_prop("server_versmax", value, DEFAULT_INSTANCE,
-	    SCF_TYPE_INTEGER, NFSD, &bufsz);
-	if (ret == SA_OK)
-		nfs_server_vers_max = strtol(value, (char **)NULL, 10);
+	    SCF_TYPE_ASTRING, NFSD, &bufsz);
+	if (ret == SA_OK) {
+		ret = nfs_convert_version_str(value);
+		if (ret == 0) {
+			(void) fprintf(stderr, "invalid server_versmax: %s\n",
+			    value);
+		} else {
+			nfs_server_vers_max = ret;
+		}
+	}
 
 	bufsz = PATH_MAX;
 	ret = nfs_smf_get_prop("server_delegation", value, DEFAULT_INSTANCE,
@@ -361,8 +374,8 @@ main(int ac, char *av[])
 
 	if (proto != NULL &&
 	    strncasecmp(proto, NC_UDP, strlen(NC_UDP)) == 0) {
-		if (nfs_server_vers_max == NFS_V4) {
-			if (nfs_server_vers_min == NFS_V4) {
+		if (NFS_PROT_VERSION(nfs_server_vers_max) == NFS_V4) {
+			if (NFS_PROT_VERSION(nfs_server_vers_min) == NFS_V4) {
 				fprintf(stderr,
 				    "NFS version 4 is not supported "
 				    "with the UDP protocol.  Exiting\n");
@@ -392,8 +405,8 @@ main(int ac, char *av[])
 	 * Check the ranges for min/max version specified
 	 */
 	else if ((nfs_server_vers_min > nfs_server_vers_max) ||
-	    (nfs_server_vers_min < NFS_VERSMIN) ||
-	    (nfs_server_vers_max > NFS_VERSMAX))
+	    (nfs_server_vers_min < NFS_SRV_VERS_MIN) ||
+	    (nfs_server_vers_max > NFS_SRV_VERS_MAX))
 		usage();
 	/*
 	 * There are no additional arguments, and we haven't set maxservers
@@ -443,7 +456,7 @@ main(int ac, char *av[])
 	case 0:
 		break;
 	case -1:
-		fprintf(stderr, "error locking for %s: %s", NFSD,
+		fprintf(stderr, "error locking for %s: %s\n", NFSD,
 		    strerror(errno));
 		exit(2);
 	default:
@@ -456,9 +469,10 @@ main(int ac, char *av[])
 	 * stable storage, and provided we're going to run a version
 	 * that supports it, setup the DSS paths.
 	 */
-	if (dss_pathnames != NULL && nfs_server_vers_max >= DSS_VERSMIN) {
+	if (dss_pathnames != NULL &&
+	    NFS_PROT_VERSION(nfs_server_vers_max) >= DSS_VERSMIN) {
 		if (dss_init(dss_npaths, dss_pathnames) != 0) {
-			fprintf(stderr, "%s", "dss_init failed. Exiting.");
+			fprintf(stderr, "%s", "dss_init failed. Exiting.\n");
 			exit(1);
 		}
 	}
@@ -472,7 +486,7 @@ main(int ac, char *av[])
 
 	if (logmaxservers) {
 		fprintf(stderr,
-		    "Number of servers not specified. Using default of %d.",
+		    "Number of servers not specified. Using default of %d.\n",
 		    maxservers);
 	}
 
@@ -490,8 +504,8 @@ main(int ac, char *av[])
 	 * Set up kernel RPC thread pool for the NFS server.
 	 */
 	if (nfssvcpool(maxservers)) {
-		fprintf(stderr, "Can't set up kernel NFS service: %s. Exiting",
-		    strerror(errno));
+		fprintf(stderr, "Can't set up kernel NFS service: %s. "
+		    "Exiting.\n", strerror(errno));
 		exit(1);
 	}
 
@@ -499,7 +513,7 @@ main(int ac, char *av[])
 	 * Set up blocked thread to do LWP creation on behalf of the kernel.
 	 */
 	if (svcwait(NFS_SVCPOOL_ID)) {
-		fprintf(stderr, "Can't set up NFS pool creator: %s. Exiting",
+		fprintf(stderr, "Can't set up NFS pool creator: %s. Exiting.\n",
 		    strerror(errno));
 		exit(1);
 	}
@@ -516,7 +530,7 @@ main(int ac, char *av[])
 		if (svcrdma(NFS_SVCPOOL_ID, nfs_server_vers_min,
 		    nfs_server_vers_max, nfs_server_delegation)) {
 			fprintf(stderr,
-			    "Can't set up RDMA creator thread : %s",
+			    "Can't set up RDMA creator thread : %s\n",
 			    strerror(errno));
 		}
 	}
@@ -531,26 +545,29 @@ main(int ac, char *av[])
 
 	/*
 	 * Build a protocol block list for registration.
+	 * In protocol list we have first block for NFS and second
+	 * block for NFS_ACL - which is needed up to v3, as support
+	 * for ACL is included in NFS protocol since v4.
 	 */
 	protobp0 = protobp = (struct protob *)malloc(sizeof (struct protob));
 	protobp->serv = "NFS";
-	protobp->versmin = nfs_server_vers_min;
-	protobp->versmax = nfs_server_vers_max;
+	protobp->versmin = NFS_PROT_VERSION(nfs_server_vers_min);
+	protobp->versmax = NFS_PROT_VERSION(nfs_server_vers_max);
 	protobp->program = NFS_PROGRAM;
 
 	protobp->next = (struct protob *)malloc(sizeof (struct protob));
 	protobp = protobp->next;
 	protobp->serv = "NFS_ACL";		/* not used */
-	protobp->versmin = nfs_server_vers_min;
+	protobp->versmin = NFS_PROT_VERSION(nfs_server_vers_min);
 	/* XXX - this needs work to get the version just right */
-	protobp->versmax = (nfs_server_vers_max > NFS_ACL_V3) ?
-	    NFS_ACL_V3 : nfs_server_vers_max;
+	protobp->versmax =
+	    MIN(NFS_PROT_VERSION(nfs_server_vers_max), NFS_ACL_V3);
 	protobp->program = NFS_ACL_PROGRAM;
-	protobp->next = (struct protob *)NULL;
+	protobp->next = NULL;
 
 	if (allflag) {
 		if (do_all(protobp0, nfssvc) == -1) {
-			fprintf(stderr, "setnetconfig failed : %s",
+			fprintf(stderr, "setnetconfig failed : %s\n",
 			    strerror(errno));
 			exit(1);
 		}
@@ -560,7 +577,7 @@ main(int ac, char *av[])
 		NCONF_HANDLE *nc;
 		bool_t	protoFound = FALSE;
 		if ((nc = setnetconfig()) == (NCONF_HANDLE *) NULL) {
-			fprintf(stderr, "setnetconfig failed : %s",
+			fprintf(stderr, "setnetconfig failed : %s\n",
 			    strerror(errno));
 			goto done;
 		}
@@ -574,7 +591,7 @@ main(int ac, char *av[])
 		(void) endnetconfig(nc);
 		if (protoFound == FALSE) {
 			fprintf(stderr,
-			    "couldn't find netconfig entry for protocol %s",
+			    "couldn't find netconfig entry for protocol %s\n",
 			    proto);
 		}
 	} else if (provider)
@@ -593,7 +610,7 @@ done:
 
 	if (num_fds == 0) {
 		fprintf(stderr, "Could not start NFS service for any protocol."
-		    " Exiting");
+		    " Exiting.\n");
 		exit(1);
 	}
 
@@ -648,18 +665,17 @@ nfssvc(int fd, struct netbuf addrmask, struct netconfig *nconf)
 	nsa.netid = nconf->nc_netid;
 	nsa.addrmask = addrmask;
 	if (strncasecmp(nconf->nc_proto, NC_UDP, strlen(NC_UDP)) == 0) {
-		nsa.versmax = (nfs_server_vers_max > NFS_V3) ?
-		    NFS_V3 : nfs_server_vers_max;
-		nsa.versmin = nfs_server_vers_min;
+		nsa.nfs_versmax = MIN(nfs_server_vers_max, NFS_VERS_3);
+		nsa.nfs_versmin = nfs_server_vers_min;
 		/*
 		 * If no version left, silently do nothing, previous
 		 * checks will have assured at least TCP is available.
 		 */
-		if (nsa.versmin > nsa.versmax)
+		if (nsa.nfs_versmin > nsa.nfs_versmax)
 			return (0);
 	} else {
-		nsa.versmax = nfs_server_vers_max;
-		nsa.versmin = nfs_server_vers_min;
+		nsa.nfs_versmax = nfs_server_vers_max;
+		nsa.nfs_versmin = nfs_server_vers_min;
 	}
 	nsa.delegation = nfs_server_delegation;
 	return (_nfssys(NFS_SVC, &nsa));
@@ -735,7 +751,7 @@ quiesce(int sig)
 	int error;
 	int id = NFS_SVCPOOL_ID;
 
-	if (nfs_server_vers_max >= QUIESCE_VERSMIN) {
+	if (NFS_PROT_VERSION(nfs_server_vers_max) >= QUIESCE_VERSMIN) {
 		/* Request server quiesce at next shutdown */
 		error = _nfssys(NFS4_SVC_REQUEST_QUIESCE, &id);
 
@@ -804,8 +820,8 @@ dss_mkleafdir(char *dir, char *leaf, char *tmppath)
 {
 	/* MAXPATHLEN includes the terminating NUL */
 	if (strlen(dir) + strlen(leaf) > MAXPATHLEN - 1) {
-		fprintf(stderr, "stable storage path too long: %s%s. Exiting",
-		    dir, leaf);
+		fprintf(stderr, "stable storage path too long: %s%s. "
+		    "Exiting.\n", dir, leaf);
 		exit(1);
 	}
 
@@ -814,7 +830,7 @@ dss_mkleafdir(char *dir, char *leaf, char *tmppath)
 	/* the directory may already exist: that's OK */
 	if (mkdir(tmppath, NFS4_DSS_DIR_MODE) == -1 && errno != EEXIST) {
 		fprintf(stderr, "error creating stable storage directory: "
-		    "%s: %s. Exiting", strerror(errno), tmppath);
+		    "%s: %s. Exiting.\n", strerror(errno), tmppath);
 		exit(1);
 	}
 }
@@ -848,7 +864,7 @@ dss_init(uint_t npaths, char **pathnames)
 		/* now NULL out any duplicates */
 		i = 0; j = 1; nskipped = 0;
 		while (j < npaths) {
-			if (strcmp(pathnames[i], pathnames[j]) == NULL) {
+			if (strcmp(pathnames[i], pathnames[j]) == 0) {
 				pathnames[j] = NULL;
 				j++;
 				nskipped++;
@@ -870,7 +886,8 @@ dss_init(uint_t npaths, char **pathnames)
 			sz = nreal * sizeof (char *);
 			tmp_pathnames = (char **)malloc(sz);
 			if (tmp_pathnames == NULL) {
-				fprintf(stderr, "tmp_pathnames malloc failed");
+				fprintf(stderr, "tmp_pathnames malloc "
+				    "failed\n");
 				exit(1);
 			}
 
@@ -890,7 +907,7 @@ dss_init(uint_t npaths, char **pathnames)
 	/* Create the name-value pair list */
 	error = nvlist_alloc(&nvl, NV_UNIQUE_NAME, 0);
 	if (error) {
-		fprintf(stderr, "nvlist_alloc failed: %s.", strerror(errno));
+		fprintf(stderr, "nvlist_alloc failed: %s\n", strerror(errno));
 		return (1);
 	}
 
@@ -898,7 +915,7 @@ dss_init(uint_t npaths, char **pathnames)
 	error = nvlist_add_string_array(nvl, NFS4_DSS_NVPAIR_NAME,
 	    pathnames, npaths);
 	if (error) {
-		fprintf(stderr, "nvlist_add_string_array failed: %s.",
+		fprintf(stderr, "nvlist_add_string_array failed: %s\n",
 		    strerror(errno));
 		nvlist_free(nvl);
 		return (1);
@@ -913,7 +930,7 @@ dss_init(uint_t npaths, char **pathnames)
 	bufp = NULL;
 	error = nvlist_pack(nvl, &bufp, &buflen, NV_ENCODE_XDR, 0);
 	if (error) {
-		fprintf(stderr, "nvlist_pack failed: %s.", strerror(errno));
+		fprintf(stderr, "nvlist_pack failed: %s\n", strerror(errno));
 		nvlist_free(nvl);
 		return (1);
 	}
@@ -933,7 +950,7 @@ dss_init(uint_t npaths, char **pathnames)
 	error = _nfssys(NFS4_DSS_SETPATHS_SIZE, &bufsize);
 	if (error) {
 		fprintf(stderr,
-		    "_nfssys(NFS4_DSS_SETPATHS_SIZE) failed: %s. ",
+		    "_nfssys(NFS4_DSS_SETPATHS_SIZE) failed: %s\n",
 		    strerror(errno));
 		free(bufp);
 		return (1);
@@ -943,7 +960,7 @@ dss_init(uint_t npaths, char **pathnames)
 	error = _nfssys(NFS4_DSS_SETPATHS, bufp);
 	if (error) {
 		fprintf(stderr,
-		    "_nfssys(NFS4_DSS_SETPATHS) failed: %s. ", strerror(errno));
+		    "_nfssys(NFS4_DSS_SETPATHS) failed: %s\n", strerror(errno));
 		free(bufp);
 		return (1);
 	}

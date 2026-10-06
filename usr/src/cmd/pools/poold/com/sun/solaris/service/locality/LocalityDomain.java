@@ -81,7 +81,7 @@ public class LocalityDomain
 	 * String representation of often used property.
 	 */
 	private final static String CPU_SYS_ID = "cpu.sys_id";
-	
+
 	/**
 	 * Constructor.
 	 *
@@ -172,7 +172,7 @@ public class LocalityDomain
 			Component comp = (Component) cpuIt.next();
 			int id = (int) comp.getLongProperty(CPU_SYS_ID);
 			LocalityGroup group = getGroup(id);
-			if (group != null && exclude.contains(group) == false) 
+			if (group != null && exclude.contains(group) == false)
 				result.add(group);
 		}
 		return (result);
@@ -201,14 +201,14 @@ public class LocalityDomain
 			Integer score = (Integer) grps.get(group);
 			if (score != null) {
 				int iscore = score.intValue() + 1;
-				grps.put(group, new Integer(iscore));
+				grps.put(group, Integer.valueOf(iscore));
 			} else {
-				grps.put(group, new Integer(1));
-			}			
+				grps.put(group, Integer.valueOf(1));
+			}
 		}
 		Iterator groupIt = grps.keySet().iterator();
 		LocalityGroup centre = null;
-		Integer highest = new Integer(0);
+		Integer highest = Integer.valueOf(0);
 		while (groupIt.hasNext()) {
 			LocalityGroup cand = (LocalityGroup) groupIt.next();
 			Integer value = (Integer) grps.get(cand);
@@ -228,7 +228,7 @@ public class LocalityDomain
 	private int calcMaxLatency()
 	{
 		int max = 0;
-		
+
 		Set groups = getGroups();
 		Iterator outer = groups.iterator();
 		while (outer.hasNext()) {
@@ -312,7 +312,7 @@ public class LocalityDomain
 		if (children.isEmpty()) {
 			int cpus[] = group.getCPUIDs();
 
-			
+
 			for (int i = 0; i < cpus.length; i++)
 				if (cpus[i] == cpuid) {
 					return (group);
@@ -347,4 +347,4 @@ public class LocalityDomain
 	 */
 	private native LocalityGroup jl_root();
 
-}	
+}

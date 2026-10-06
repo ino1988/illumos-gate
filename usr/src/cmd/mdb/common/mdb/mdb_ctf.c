@@ -23,8 +23,9 @@
  * Use is subject to license terms.
  */
 /*
- * Copyright (c) 2013 by Delphix. All rights reserved.
- * Copyright (c) 2013, Joyent, Inc.  All rights reserved.
+ * Copyright (c) 2013, 2016 by Delphix. All rights reserved.
+ * Copyright (c) 2018, Joyent, Inc.
+ * Copyright 2025 Oxide Computer Company
  */
 
 #include <mdb/mdb_ctf.h>
@@ -37,6 +38,7 @@
 
 #include <libctf.h>
 #include <string.h>
+#include <limits.h>
 
 typedef struct tnarg {
 	mdb_tgt_t *tn_tgt;		/* target to use for lookup */
@@ -55,6 +57,8 @@ typedef struct member_iter {
 	mdb_ctf_member_f *mi_cb;
 	void *mi_arg;
 	ctf_file_t *mi_fp;
+	uint32_t mi_flags;
+	ulong_t mi_off;
 } member_iter_t;
 
 typedef struct type_visit {
@@ -239,7 +243,7 @@ name_to_type(mdb_tgt_t *t, const char *cname, ctf_id_t *idp)
 {
 	const char *object = MDB_TGT_OBJ_EXEC;
 	ctf_file_t *fp = NULL;
-	ctf_id_t id;
+	ctf_id_t id = CTF_ERR;
 	tnarg_t arg;
 	char *p, *s;
 	char buf[MDB_SYM_NAMLEN];
@@ -569,6 +573,18 @@ mdb_ctf_type_name(mdb_ctf_id_t id, char *buf, size_t len)
 }
 
 ssize_t
+mdb_ctf_type_lname(mdb_ctf_id_t id, char *buf, size_t len)
+{
+	mdb_ctf_impl_t *idp = (mdb_ctf_impl_t *)&id;
+	char *ret;
+
+	if (!mdb_ctf_type_valid(id))
+		return (set_errno(EINVAL));
+
+	return (ctf_type_lname(idp->mci_fp, idp->mci_id, buf, len));
+}
+
+ssize_t
 mdb_ctf_type_size(mdb_ctf_id_t id)
 {
 	mdb_ctf_impl_t *idp = (mdb_ctf_impl_t *)&id;
@@ -734,20 +750,45 @@ mdb_ctf_enum_name(mdb_ctf_id_t id, int value)
 static int
 member_iter_cb(const char *name, ctf_id_t type, ulong_t off, void *data)
 {
+	int ret, kind;
 	member_iter_t *mip = data;
 	mdb_ctf_id_t id;
 
 	set_ctf_id(&id, mip->mi_fp, type);
 
-	return (mip->mi_cb(name, id, off, mip->mi_arg));
+	ret = mip->mi_cb(name, id, mip->mi_off + off, mip->mi_arg);
+	if (ret != 0) {
+		return (ret);
+	}
+
+	/*
+	 * If we have an anonymous struct or union and we've been asked to
+	 * process it, recurse through it. We need to modify the offset that
+	 * we're at as we progress through this so that way the caller sees this
+	 * at the correct memory location.
+	 */
+	kind = ctf_type_kind(mip->mi_fp, type);
+	if ((kind == CTF_K_STRUCT || kind == CTF_K_UNION) && *name == '\0' &&
+	    (mip->mi_flags & MDB_CTF_F_ITER_ANON) != 0) {
+		mip->mi_off += off;
+		ret = ctf_member_iter(mip->mi_fp, type, member_iter_cb, mip);
+		mip->mi_off -= off;
+	}
+
+	return (ret);
 }
 
 int
-mdb_ctf_member_iter(mdb_ctf_id_t id, mdb_ctf_member_f *cb, void *data)
+mdb_ctf_member_iter(mdb_ctf_id_t id, mdb_ctf_member_f *cb, void *data,
+    uint32_t flags)
 {
 	mdb_ctf_impl_t *idp = (mdb_ctf_impl_t *)&id;
 	member_iter_t mi;
 	int ret;
+
+	if ((flags & ~MDB_CTF_F_ITER_ANON) != 0) {
+		return (set_errno(EINVAL));
+	}
 
 	/* resolve the type in case there's a forward declaration */
 	if ((ret = mdb_ctf_type_resolve(id, &id)) != 0)
@@ -756,6 +797,8 @@ mdb_ctf_member_iter(mdb_ctf_id_t id, mdb_ctf_member_f *cb, void *data)
 	mi.mi_cb = cb;
 	mi.mi_arg = data;
 	mi.mi_fp = idp->mci_fp;
+	mi.mi_flags = flags;
+	mi.mi_off = 0;
 
 	ret = ctf_member_iter(idp->mci_fp, idp->mci_id, member_iter_cb, &mi);
 
@@ -781,8 +824,9 @@ mdb_ctf_enum_iter(mdb_ctf_id_t id, mdb_ctf_enum_f *cb, void *data)
 /*
  * callback proxy for mdb_ctf_type_iter
  */
+/* ARGSUSED */
 static int
-type_iter_cb(ctf_id_t type, void *data)
+type_iter_cb(ctf_id_t type, boolean_t root, void *data)
 {
 	type_iter_t *tip = data;
 	mdb_ctf_id_t id;
@@ -812,7 +856,7 @@ mdb_ctf_type_iter(const char *object, mdb_ctf_type_f *cb, void *data)
 	ti.ti_arg = data;
 	ti.ti_fp = fp;
 
-	if ((ret = ctf_type_iter(fp, type_iter_cb, &ti)) == CTF_ERR)
+	if ((ret = ctf_type_iter(fp, B_FALSE, type_iter_cb, &ti)) == CTF_ERR)
 		return (set_errno(ctf_to_errno(ctf_errno(fp))));
 
 	return (ret);
@@ -860,7 +904,7 @@ mdb_ctf_member_info(mdb_ctf_id_t id, const char *member, ulong_t *offp,
 	mbr.mbr_offp = offp;
 	mbr.mbr_typep = typep;
 
-	rc = mdb_ctf_member_iter(id, member_info_cb, &mbr);
+	rc = mdb_ctf_member_iter(id, member_info_cb, &mbr, MDB_CTF_F_ITER_ANON);
 
 	/* couldn't get member list */
 	if (rc == -1)
@@ -910,6 +954,24 @@ mdb_ctf_offsetof_by_name(const char *type, const char *member)
 	return (off);
 }
 
+ssize_t
+mdb_ctf_sizeof_by_name(const char *type)
+{
+	mdb_ctf_id_t id;
+	ssize_t size;
+
+	if (mdb_ctf_lookup_by_name(type, &id) == -1) {
+		mdb_warn("couldn't find type %s", type);
+		return (-1);
+	}
+
+	if ((size = mdb_ctf_type_size(id)) == -1) {
+		mdb_warn("couldn't determine type size of %s", type);
+		return (-1);
+	}
+
+	return (size);
+}
 
 /*ARGSUSED*/
 static int
@@ -925,7 +987,7 @@ mdb_ctf_num_members(mdb_ctf_id_t id)
 {
 	int count = 0;
 
-	if (mdb_ctf_member_iter(id, num_members_cb, &count) != 0)
+	if (mdb_ctf_member_iter(id, num_members_cb, &count, 0) != 0)
 		return (-1); /* errno is set for us */
 
 	return (count);
@@ -958,7 +1020,12 @@ offset_to_name_cb(const char *name, mdb_ctf_id_t id, ulong_t off, void *data)
 	if (off + size <= *mbc->mbc_offp)
 		return (0);
 
-	n = mdb_snprintf(*mbc->mbc_bufp, *mbc->mbc_lenp, "%s", name);
+	if (*name == '\0' && (mdb_ctf_type_kind(id) == CTF_K_STRUCT ||
+	    mdb_ctf_type_kind(id) == CTF_K_UNION)) {
+		n = mdb_snprintf(*mbc->mbc_bufp, *mbc->mbc_lenp, "<anon>");
+	} else {
+		n = mdb_snprintf(*mbc->mbc_bufp, *mbc->mbc_lenp, "%s", name);
+	}
 	mbc->mbc_total += n;
 	if (n > *mbc->mbc_lenp)
 		n = *mbc->mbc_lenp;
@@ -1049,7 +1116,8 @@ mdb_ctf_offset_to_name(mdb_ctf_id_t id, ulong_t off, char *buf, size_t len,
 				}
 			}
 
-			ret = mdb_ctf_member_iter(id, offset_to_name_cb, &mbc);
+			ret = mdb_ctf_member_iter(id, offset_to_name_cb, &mbc,
+			    0);
 			if (ret == -1)
 				return (-1); /* errno is set for us */
 
@@ -1177,7 +1245,7 @@ type_equals(mdb_ctf_id_t a, mdb_ctf_id_t b)
 		 * structs. However, the extra check will do no harm.
 		 */
 		return (mdb_ctf_num_members(a) == mdb_ctf_num_members(b) &&
-		    mdb_ctf_member_iter(a, type_equals_cb, &b) == 0);
+		    mdb_ctf_member_iter(a, type_equals_cb, &b, 0) == 0);
 
 	case CTF_K_ARRAY:
 		return (mdb_ctf_array_info(a, &aar) == 0 &&
@@ -1216,8 +1284,9 @@ member_cb(const char *name, mdb_ctf_id_t modmid, ulong_t modoff, void *data)
 	    "member %s of type %s", name, mp->m_tgtname);
 
 	if (mdb_ctf_member_info(mp->m_tgtid, name, &tgtoff, &tgtmid) != 0) {
-		mdb_ctf_warn(mp->m_flags,
-		    "could not find %s\n", tgtname);
+		if (mp->m_flags & MDB_CTF_VREAD_IGNORE_ABSENT)
+			return (0);
+		mdb_ctf_warn(mp->m_flags, "could not find %s\n", tgtname);
 		return (set_errno(EMDB_CTFNOMEMB));
 	}
 
@@ -1247,7 +1316,7 @@ vread_helper(mdb_ctf_id_t modid, char *modbuf,
     mdb_ctf_id_t tgtid, char *tgtbuf, const char *tgtname, uint_t flags)
 {
 	size_t modsz, tgtsz;
-	int modkind, tgtkind;
+	int modkind, tgtkind, mod_members;
 	member_t mbr;
 	enum_value_t ev;
 	int ret;
@@ -1447,31 +1516,54 @@ vread_helper(mdb_ctf_id_t modid, char *modbuf,
 		mbr.m_flags = flags;
 		mbr.m_tgtname = typename;
 
-		return (mdb_ctf_member_iter(modid, member_cb, &mbr));
+		return (mdb_ctf_member_iter(modid, member_cb, &mbr, 0));
 
 	case CTF_K_UNION:
+		mbr.m_modbuf = modbuf;
+		mbr.m_tgtbuf = tgtbuf;
+		mbr.m_tgtid = tgtid;
+		mbr.m_flags = flags;
+		mbr.m_tgtname = typename;
 
 		/*
-		 * Unions are a little tricky. The only time it's truly
-		 * safe to read in a union is if no part of the union or
-		 * any of its component types have changed.  The correct
-		 * use of this feature is to read the containing structure,
-		 * figure out which component of the union is valid, compute
-		 * the location of that in the target and then read in
-		 * that part of the structure.
+		 * Not all target union members need to be present in the
+		 * mdb type. If there is only a single union member in the
+		 * mdb type, its actual type does not need to match with
+		 * its target's type. On the other hand, if more than one
+		 * union members are specified in the mdb type, their types
+		 * must match with the types of their relevant union members
+		 * of the target union.
 		 */
+		mod_members = mdb_ctf_num_members(modid);
+		if (mod_members == 1) {
+			return (mdb_ctf_member_iter(modid, member_cb, &mbr, 0));
+		} else if (mod_members > 1) {
+			if (mdb_ctf_member_iter(modid, type_equals_cb,
+			    &tgtid, 0)) {
+				mdb_ctf_warn(flags,
+				    "inexact match for union %s (%s)\n",
+				    typename, tgtname);
+				return (set_errno(EMDB_INCOMPAT));
+			}
 
-		if (!type_equals(modid, tgtid)) {
-			mdb_ctf_warn(flags, "inexact match for union %s (%s)\n",
-			    typename, tgtname);
-			return (set_errno(EMDB_INCOMPAT));
+			/*
+			 * From the check above we know that the members
+			 * which are present in the mdb type are equal to
+			 * the types in the target. Thus, the member_cb
+			 * callback below will not move anything around and
+			 * it is equivalent to:
+			 *
+			 * bcopy(tgtbuf, modbuf, MAX(module member's sizes))
+			 */
+			return (mdb_ctf_member_iter(modid, member_cb, &mbr, 0));
+		} else {
+			/*
+			 * We either got 0 or -1. In any case that number
+			 * should be returned right away. For the error
+			 * case of -1, errno has been set for us.
+			 */
+			return (mod_members);
 		}
-
-		ASSERT(modsz == tgtsz);
-
-		bcopy(tgtbuf, modbuf, modsz);
-
-		return (0);
 
 	case CTF_K_ARRAY:
 		if (mdb_ctf_array_info(tgtid, &tar) != 0) {
@@ -1569,12 +1661,11 @@ vread_helper(mdb_ctf_id_t modid, char *modbuf,
  * Warning: it will therefore only work with enums are only used to store
  * legitimate enum values (not several values or-ed together).
  *
- * By default, if mdb_ctf_vread() can not find any members or enum values,
- * it will print a descriptive message (with mdb_warn()) and fail.
- * Passing MDB_CTF_VREAD_QUIET in 'flags' will suppress the warning message.
- * Additional flags can be used to ignore specific types of translation
- * failure, but should be used with caution, because they will silently leave
- * the caller's buffer uninitialized.
+ * Flags values:
+ *
+ * MDB_CTF_VREAD_QUIET: keep quiet about failures
+ * MDB_CTF_VREAD_IGNORE_ABSENT: ignore any member that couldn't be found in the
+ * target struct; be careful not to use an uninitialized result.
  */
 int
 mdb_ctf_vread(void *modbuf, const char *target_typename,
@@ -1587,8 +1678,14 @@ mdb_ctf_vread(void *modbuf, const char *target_typename,
 	mdb_ctf_id_t tgtid;
 	mdb_ctf_id_t modid;
 	mdb_module_t *mod;
+	int ret;
 
-	if ((mod = mdb_get_module()) == NULL || (mfp = mod->mod_ctfp) == NULL) {
+	if ((mod = mdb_get_module()) == NULL) {
+		mdb_ctf_warn(flags, "could not get MDB module");
+		return (set_errno(EMDB_NOCTF));
+	}
+
+	if ((mfp = mod->mod_ctfp) == NULL) {
 		mdb_ctf_warn(flags, "no ctf data found for mdb module %s\n",
 		    mod->mod_name);
 		return (set_errno(EMDB_NOCTF));
@@ -1619,15 +1716,20 @@ mdb_ctf_vread(void *modbuf, const char *target_typename,
 		return (-1); /* errno is set for us */
 	}
 
-	tgtbuf = mdb_alloc(size, UM_SLEEP | UM_GC);
+	tgtbuf = mdb_alloc(size, UM_SLEEP);
 
 	if (mdb_vread(tgtbuf, size, addr) < 0) {
 		mdb_ctf_warn(flags, "couldn't read %s from %p\n",
 		    target_typename, addr);
+		mdb_free(tgtbuf, size);
 		return (-1); /* errno is set for us */
 	}
 
-	return (vread_helper(modid, modbuf, tgtid, tgtbuf, NULL, flags));
+	ret = vread_helper(modid, modbuf, tgtid, tgtbuf, NULL, flags);
+
+	mdb_free(tgtbuf, size);
+
+	return (ret);
 }
 
 /*
@@ -1939,7 +2041,7 @@ mdb_ctf_add_member(const mdb_ctf_id_t *p, const char *name,
 		return (set_errno(ctf_to_errno(ctf_errno(mdb.m_synth))));
 	}
 
-	id = ctf_add_member(mdb.m_synth, mcip->mci_id, name, mtid);
+	id = ctf_add_member(mdb.m_synth, mcip->mci_id, name, mtid, ULONG_MAX);
 	if (id == CTF_ERR) {
 		mdb_dprintf(MDB_DBG_CTF, "failed to add member %s: %s\n",
 		    name, ctf_errmsg(ctf_errno(mdb.m_synth)));
@@ -2040,7 +2142,7 @@ mdb_ctf_add_pointer(const mdb_ctf_id_t *p, mdb_ctf_id_t *rid)
 	}
 
 
-	id = ctf_add_pointer(mdb.m_synth, CTF_ADD_ROOT, id);
+	id = ctf_add_pointer(mdb.m_synth, CTF_ADD_ROOT, NULL, id);
 	if (id == CTF_ERR) {
 		mdb_dprintf(MDB_DBG_CTF, "failed to add pointer: %s\n",
 		    ctf_errmsg(ctf_errno(mdb.m_synth)));
@@ -2088,6 +2190,7 @@ mdb_ctf_type_delete(const mdb_ctf_id_t *id)
 	return (0);
 }
 
+/* ARGSUSED */
 static int
 mdb_ctf_synthetics_file_cb(mdb_ctf_id_t id, void *arg)
 {
@@ -2125,7 +2228,7 @@ mdb_ctf_synthetics_from_file(const char *file)
 	ti.ti_fp = fp;
 	ti.ti_arg = syn;
 	ti.ti_cb = mdb_ctf_synthetics_file_cb;
-	if (ctf_type_iter(fp, type_iter_cb, &ti) == CTF_ERR) {
+	if (ctf_type_iter(fp, B_FALSE, type_iter_cb, &ti) == CTF_ERR) {
 		ret = set_errno(ctf_to_errno(ctf_errno(fp)));
 		mdb_warn("failed to add types");
 		goto cleanup;
@@ -2141,4 +2244,62 @@ cleanup:
 	if (ret != 0)
 		(void) ctf_discard(syn);
 	return (ret);
+}
+
+int
+mdb_ctf_synthetics_to_file(const char *file)
+{
+	int err;
+	ctf_file_t *fp = mdb.m_synth;
+
+	if (fp == NULL) {
+		mdb_warn("synthetic types are disabled, not writing "
+		    "anything\n");
+		return (DCMD_ERR);
+	}
+
+	err = mdb_ctf_write(file, fp);
+	if (err != 0) {
+		if (err == CTF_ERR)
+			(void) set_errno(ctf_to_errno(ctf_errno(fp)));
+		else
+			(void) set_errno(err);
+		err = DCMD_ERR;
+	} else {
+		err = DCMD_OK;
+	}
+
+	return (err);
+}
+
+static int
+cmd_typelist_type(mdb_ctf_id_t id, void *arg)
+{
+	char buf[1024];
+
+	if (mdb_ctf_type_name(id, buf, sizeof (buf)) != NULL) {
+		mdb_printf("%s\n", buf);
+	}
+	return (0);
+}
+
+static int
+cmd_typelist_module(void *data, const mdb_map_t *mp, const char *name)
+{
+	(void) mdb_ctf_type_iter(name, cmd_typelist_type, data);
+	return (0);
+}
+
+int
+cmd_typelist(uintptr_t addr, uint_t flags, int argc, const mdb_arg_t *argv)
+{
+	if ((flags & DCMD_ADDRSPEC) != 0) {
+		return (DCMD_USAGE);
+	}
+
+	(void) mdb_tgt_object_iter(mdb.m_target, cmd_typelist_module, NULL);
+	(void) mdb_ctf_type_iter(MDB_CTF_SYNTHETIC_ITER, cmd_typelist_type,
+	    NULL);
+
+	return (DCMD_OK);
 }

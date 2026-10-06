@@ -22,6 +22,13 @@
  * Copyright (c) 2005, 2010, Oracle and/or its affiliates. All rights reserved.
  */
 
+/*
+ * Copyright (c) 2015, Joyent, Inc.
+ * Copyright 2020 Peter Tribble.
+ * Copyright 2022 OmniOS Community Edition (OmniOSce) Association.
+ * Copyright 2023 Oxide Computer Company
+ */
+
 #include <unistd.h>
 #include <errno.h>
 #include <ctype.h>
@@ -29,6 +36,9 @@
 #include <strings.h>
 #include <dirent.h>
 #include <stdlib.h>
+#include <assert.h>
+#include <stdio.h>
+#include <stdarg.h>
 #include <netinet/in.h>
 #include <arpa/inet.h>
 #include <sys/param.h>
@@ -62,23 +72,23 @@ static media_type_t media_type_table[] =  {
 	{ DL_HDLC,	"HDLC" },
 	{ DL_CHAR,	"SyncCharacter" },
 	{ DL_CTCA,	"CTCA" },
-	{ DL_FDDI, 	"FDDI" },
-	{ DL_FC, 	"FiberChannel" },
-	{ DL_ATM, 	"ATM" },
-	{ DL_IPATM, 	"ATM(ClassicIP)" },
-	{ DL_X25, 	"X.25" },
-	{ DL_IPX25, 	"X.25(ClassicIP)" },
-	{ DL_ISDN, 	"ISDN" },
-	{ DL_HIPPI, 	"HIPPI" },
-	{ DL_100VG, 	"100BaseVGEthernet" },
-	{ DL_100VGTPR, 	"100BaseVGTokenRing" },
-	{ DL_ETH_CSMA, 	"IEEE802.3" },
-	{ DL_100BT, 	"100BaseT" },
-	{ DL_FRAME, 	"FrameRelay" },
-	{ DL_MPFRAME, 	"MPFrameRelay" },
-	{ DL_ASYNC, 	"AsyncCharacter" },
-	{ DL_IPNET, 	"IPNET" },
-	{ DL_OTHER, 	"Other" }
+	{ DL_FDDI,	"FDDI" },
+	{ DL_FC,	"FiberChannel" },
+	{ DL_ATM,	"ATM" },
+	{ DL_IPATM,	"ATM(ClassicIP)" },
+	{ DL_X25,	"X.25" },
+	{ DL_IPX25,	"X.25(ClassicIP)" },
+	{ DL_ISDN,	"ISDN" },
+	{ DL_HIPPI,	"HIPPI" },
+	{ DL_100VG,	"100BaseVGEthernet" },
+	{ DL_100VGTPR,	"100BaseVGTokenRing" },
+	{ DL_ETH_CSMA,	"IEEE802.3" },
+	{ DL_100BT,	"100BaseT" },
+	{ DL_FRAME,	"FrameRelay" },
+	{ DL_MPFRAME,	"MPFrameRelay" },
+	{ DL_ASYNC,	"AsyncCharacter" },
+	{ DL_IPNET,	"IPNET" },
+	{ DL_OTHER,	"Other" }
 };
 #define	MEDIATYPECOUNT	(sizeof (media_type_table) / sizeof (media_type_t))
 
@@ -107,7 +117,7 @@ dladm_open(dladm_handle_t *handle)
 		return (dladm_errno2status(errno));
 
 	/*
-	 * Don't open DLMGMT_DOOR now.  dlmgmtd(1M) is not able to
+	 * Don't open DLMGMT_DOOR now.  dlmgmtd(8) is not able to
 	 * open the door when the dladm handle is opened because the
 	 * door hasn't been created yet at that time.  Thus, we must
 	 * open it on-demand in dladm_door_fd().  Move the open()
@@ -121,6 +131,7 @@ dladm_open(dladm_handle_t *handle)
 
 	(*handle)->dld_fd = dld_fd;
 	(*handle)->door_fd = -1;
+	(*handle)->dld_kcp = NULL;
 
 	return (DLADM_STATUS_OK);
 }
@@ -132,6 +143,8 @@ dladm_close(dladm_handle_t handle)
 		(void) close(handle->dld_fd);
 		if (handle->door_fd != -1)
 			(void) close(handle->door_fd);
+		if (handle->dld_kcp != NULL)
+			(void) kstat_close(handle->dld_kcp);
 		free(handle);
 	}
 }
@@ -140,6 +153,14 @@ int
 dladm_dld_fd(dladm_handle_t handle)
 {
 	return (handle->dld_fd);
+}
+
+kstat_ctl_t *
+dladm_dld_kcp(dladm_handle_t handle)
+{
+	if (handle->dld_kcp == NULL)
+		handle->dld_kcp = kstat_open();
+	return (handle->dld_kcp);
 }
 
 /*
@@ -418,6 +439,15 @@ dladm_status2str(dladm_status_t status, char *buf)
 	case DLADM_STATUS_INVALID_MTU:
 		s = "MTU check failed, MTU outside of device's supported range";
 		break;
+	case DLADM_STATUS_PERSIST_ON_TEMP:
+		s = "can't create persistent object on top of temporary object";
+		break;
+	case DLADM_STATUS_BAD_ENCAP:
+		s = "invalid encapsulation protocol";
+		break;
+	case DLADM_STATUS_ADDRNOTAVAIL:
+		s = "can't assign requested address";
+		break;
 	default:
 		s = "<unknown error>";
 		break;
@@ -468,6 +498,8 @@ dladm_errno2status(int err)
 		return (DLADM_STATUS_FLOW_IDENTICAL);
 	case EADDRINUSE:
 		return (DLADM_STATUS_ADDRINUSE);
+	case EADDRNOTAVAIL:
+		return (DLADM_STATUS_ADDRNOTAVAIL);
 	default:
 		return (DLADM_STATUS_FAILED);
 	}
@@ -493,16 +525,19 @@ dladm_status_t
 dladm_str2bw(char *oarg, uint64_t *bw)
 {
 	char		*endp = NULL;
-	int64_t		n;
+	uint64_t	n;
+	int64_t		sn;
 	int		mult = 1;
 
-	n = strtoull(oarg, &endp, 10);
+	errno = 0;
+	sn = strtoull(oarg, &endp, 10);
 
 	if ((errno != 0) || (strlen(endp) > 1))
 		return (DLADM_STATUS_BADARG);
 
-	if (n < 0)
+	if (sn < 0)
 		return (DLADM_STATUS_BADVAL);
+	n = sn;
 
 	switch (*endp) {
 	case 'k':
@@ -560,11 +595,7 @@ dladm_bw2str(int64_t bw, char *buf)
 	kbps = (bw%1000000)/1000;
 	mbps = bw/1000000;
 	if (kbps != 0) {
-		if (mbps == 0)
-			(void) snprintf(buf, DLADM_STRSIZE, "0.%03u", kbps);
-		else
-			(void) snprintf(buf, DLADM_STRSIZE, "%5u.%03u", mbps,
-			    kbps);
+		(void) snprintf(buf, DLADM_STRSIZE, "%5u.%03u", mbps, kbps);
 	} else {
 		(void) snprintf(buf, DLADM_STRSIZE, "%5u", mbps);
 	}
@@ -654,6 +685,12 @@ dladm_class2str(datalink_class_t class, char *buf)
 	case DATALINK_CLASS_PART:
 		s = "part";
 		break;
+	case DATALINK_CLASS_OVERLAY:
+		s = "overlay";
+		break;
+	case DATALINK_CLASS_MISC:
+		s = "misc";
+		break;
 	default:
 		s = "unknown";
 		break;
@@ -671,7 +708,7 @@ dladm_media2str(uint32_t media, char *buf)
 {
 	const char *s = "--";
 	media_type_t *mt;
-	int idx;
+	uint_t idx;
 
 	for (idx = 0; idx < MEDIATYPECOUNT; idx++) {
 		mt = media_type_table + idx;
@@ -692,7 +729,7 @@ uint32_t
 dladm_str2media(const char *buf)
 {
 	media_type_t *mt;
-	int idx;
+	uint_t idx;
 
 	for (idx = 0; idx < MEDIATYPECOUNT; idx++) {
 		mt = media_type_table + idx;
@@ -825,14 +862,21 @@ dladm_valid_linkname(const char *link)
 {
 	size_t		len = strlen(link);
 	const char	*cp;
+	int		nd = 0;
 
 	if (len >= MAXLINKNAMELEN)
 		return (B_FALSE);
 
-	/*
-	 * The link name cannot start with a digit and must end with a digit.
-	 */
-	if ((isdigit(link[0]) != 0) || (isdigit(link[len - 1]) == 0))
+	/* Link name cannot start with a digit */
+	if (isdigit(link[0]))
+		return (B_FALSE);
+	/* Link name must end with a number without leading zeroes */
+	cp = link + len - 1;
+	while (isdigit(*cp)) {
+		cp--;
+		nd++;
+	}
+	if (nd == 0 || (nd > 1 && *(cp + 1) == '0'))
 		return (B_FALSE);
 
 	/*
@@ -901,7 +945,7 @@ dladm_status_t
 dladm_str2protect(char *token, uint32_t *ptype)
 {
 	link_protect_t	*lp;
-	int		i;
+	uint_t		i;
 
 	for (i = 0; i < LPTYPES; i++) {
 		lp = &link_protect_types[i];
@@ -921,7 +965,7 @@ dladm_protect2str(uint32_t ptype, char *buf)
 {
 	const char	*s = "--";
 	link_protect_t	*lp;
-	int		i;
+	uint_t		i;
 
 	for (i = 0; i < LPTYPES; i++) {
 		lp = &link_protect_types[i];
@@ -1075,10 +1119,10 @@ fail:
  * is allocated here but should be freed by the caller.
  */
 dladm_status_t
-dladm_strs2range(char **prop_val, uint_t val_cnt,
-	mac_propval_type_t type, mac_propval_range_t **range)
+dladm_strs2range(char **prop_val, uint_t val_cnt, mac_propval_type_t type,
+    mac_propval_range_t **range)
 {
-	int			i;
+	uint_t			i;
 	char			*endp;
 	mac_propval_range_t	*rangep;
 	dladm_status_t		status = DLADM_STATUS_OK;
@@ -1110,7 +1154,7 @@ dladm_strs2range(char **prop_val, uint_t val_cnt,
 				if (*endp++ != '-')
 					return (DLADM_STATUS_BADRANGE);
 				ur->mpur_max = strtol(endp, &endp, 10);
-				if (endp != NULL && *endp != '\0' ||
+				if ((endp != NULL && *endp != '\0') ||
 				    ur->mpur_max < ur->mpur_min)
 					return (DLADM_STATUS_BADRANGE);
 			}
@@ -1132,15 +1176,15 @@ dladm_strs2range(char **prop_val, uint_t val_cnt,
  * Convert a mac_propval_range_t structure into an array of elements.
  */
 dladm_status_t
-dladm_range2list(mac_propval_range_t *rangep, void *elem, uint_t *nelem)
+dladm_range2list(const mac_propval_range_t *rangep, void *elem, uint_t *nelem)
 {
-	int		i, j, k;
+	uint_t		i, j, k;
 	dladm_status_t	status = DLADM_STATUS_OK;
 
 	switch (rangep->mpr_type) {
 	case MAC_PROPVAL_UINT32: {
-		mac_propval_uint32_range_t	*ur;
-		uint32_t			*elem32 = elem;
+		const mac_propval_uint32_range_t	*ur;
+		uint32_t				*elem32 = elem;
 
 		k = 0;
 		ur = &rangep->mpr_range_uint32[0];
@@ -1168,13 +1212,13 @@ dladm_range2list(mac_propval_range_t *rangep, void *elem, uint_t *nelem)
  * of single elements or ranges.
  */
 int
-dladm_range2strs(mac_propval_range_t *rangep, char **prop_val)
+dladm_range2strs(const mac_propval_range_t *rangep, char **prop_val)
 {
-	int	i;
+	uint_t	i;
 
 	switch (rangep->mpr_type) {
 	case MAC_PROPVAL_UINT32: {
-		mac_propval_uint32_range_t	*ur;
+		const mac_propval_uint32_range_t	*ur;
 
 		/* Write ranges and individual elements */
 		ur = &rangep->mpr_range_uint32[0];
@@ -1188,6 +1232,20 @@ dladm_range2strs(mac_propval_range_t *rangep, char **prop_val)
 				(void) snprintf(prop_val[i], DLADM_PROP_VAL_MAX,
 				    "%u-%u", ur->mpur_min, ur->mpur_max);
 			}
+		}
+		return (0);
+	}
+	case MAC_PROPVAL_STR: {
+		const mac_propval_str_range_t	*str;
+		size_t				coff, len;
+
+		coff = 0;
+		str = &rangep->u.mpr_str;
+		for (i = 0; i < rangep->mpr_count; i++) {
+			len = strlen(&str->mpur_data[coff]);
+			(void) strlcpy(prop_val[i], &str->mpur_data[coff],
+			    DLADM_PROP_VAL_MAX);
+			coff += len + 1;
 		}
 		return (0);
 	}
@@ -1212,7 +1270,7 @@ dladm_status_t
 dladm_list2range(void *elem, uint_t nelem, mac_propval_type_t type,
     mac_propval_range_t **range)
 {
-	int			i;
+	uint_t			i;
 	uint_t			nr = 0;
 	mac_propval_range_t	*rangep;
 	dladm_status_t		status = DLADM_STATUS_OK;
@@ -1267,4 +1325,61 @@ dladm_list2range(void *elem, uint_t nelem, mac_propval_type_t type,
 	*range = rangep;
 
 	return (status);
+}
+
+void
+dladm_errlist_init(dladm_errlist_t *erl)
+{
+	bzero(erl, sizeof (dladm_errlist_t));
+}
+
+void
+dladm_errlist_reset(dladm_errlist_t *erl)
+{
+	uint_t i;
+
+	for (i = 0; i < erl->el_count; i++)
+		free(erl->el_errs[i]);
+	free(erl->el_errs);
+	dladm_errlist_init(erl);
+}
+
+uint_t
+dladm_errlist_count(dladm_errlist_t *erl)
+{
+	return (erl->el_count);
+}
+
+dladm_status_t
+dladm_errlist_append(dladm_errlist_t *erl, const char *fmt, ...)
+{
+	int ret;
+	va_list ap;
+	char *m = NULL;
+
+	if (erl->el_count == erl->el_alloc) {
+		int alloc;
+		void *addr;
+		if (erl->el_alloc == 0) {
+			assert(erl->el_errs == NULL);
+			alloc = 32;
+		} else {
+			alloc = erl->el_alloc + 32;
+		}
+		addr = realloc(erl->el_errs, sizeof (char *) * alloc);
+		if (addr == NULL)
+			return (DLADM_STATUS_NOMEM);
+
+		erl->el_errs = addr;
+		erl->el_alloc = alloc;
+	}
+
+	va_start(ap, fmt);
+	ret = vasprintf(&m, fmt, ap);
+	va_end(ap);
+	if (ret == -1)
+		return (dladm_errno2status(errno));
+	erl->el_errs[erl->el_count] = m;
+	erl->el_count++;
+	return (DLADM_STATUS_OK);
 }

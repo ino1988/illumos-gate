@@ -89,7 +89,7 @@ struct scsi_device {
 	 * The HBA driver can store a pointer to per-scsi_device(9S)
 	 * HBA private data during its tran_tgt_init(9E) implementation
 	 * by calling scsi_device_hba_private_set(9F), and free that
-	 * pointer during tran_tgt_fini(9E). At tran_send(9E) time, the
+	 * pointer during tran_tgt_free(9E). At tran_send(9E) time, the
 	 * HBA driver can use scsi_address_device(9F) to obtain a pointer
 	 * to the scsi_device(9S) structure, and then gain access to
 	 * its per-scsi_device(9S) hba private data by calling
@@ -150,7 +150,7 @@ struct scsi_device {
 	 * tran_tgt_free(9E) independent of devinfo node state, this means
 	 * that uninitchild code should not call tran_tgt_free(9E).
 	 */
-	int			sd_uninit_prevent:16,
+	unsigned		sd_uninit_prevent:16,
 				sd_tran_tgt_free_done:1,
 				sd_flags_pad:15;
 

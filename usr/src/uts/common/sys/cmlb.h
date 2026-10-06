@@ -19,6 +19,7 @@
  * CDDL HEADER END
  */
 /*
+ * Copyright 2016 Toomas Soome <tsoome@me.com>
  * Copyright 2009 Sun Microsystems, Inc.  All rights reserved.
  * Use is subject to license terms.
  */
@@ -50,6 +51,7 @@ typedef struct cmlb_geom {
 typedef struct tg_attribute {
 	int media_is_writable;
 	int media_is_solid_state;
+	int media_is_rotational;
 } tg_attribute_t;
 
 
@@ -61,6 +63,7 @@ typedef struct tg_attribute {
 #define	CMLB_OFF_BY_ONE					0x00000004
 #define	CMLB_FAKE_LABEL_ONE_PARTITION			0x00000008
 #define	CMLB_INTERNAL_MINOR_NODES			0x00000010
+#define	CMLB_CREATE_P0_MINOR_NODE			0x00000020
 
 /* bit definitions of flag passed to cmlb_validate */
 #define	CMLB_SILENT					0x00000001
@@ -80,6 +83,22 @@ typedef struct tg_attribute {
 #define	TG_GETBLOCKSIZE		4
 #define	TG_GETATTR		5
 
+#if defined(_SUNOS_VTOC_8)
+
+#define	CMLBUNIT_DFT_SHIFT	3
+/* This will support p0 node on sparc */
+#define	CMLBUNIT_FORCE_P0_SHIFT	(CMLBUNIT_DFT_SHIFT + 1)
+
+#elif defined(_SUNOS_VTOC_16)
+
+#define	CMLBUNIT_DFT_SHIFT	6
+#define	CMLBUNIT_FORCE_P0_SHIFT	(CMLBUNIT_DFT_SHIFT)
+
+#else	/* defined(_SUNOS_VTOC_16) */
+
+#error "No VTOC format defined."
+
+#endif	/* defined(_SUNOS_VTOC_8) */
 
 /*
  * Ops vector including utility functions into target driver that cmlb uses.

@@ -21,6 +21,8 @@
 /*
  * Copyright 2009 Sun Microsystems, Inc.  All rights reserved.
  * Use is subject to license terms.
+ *
+ * Copyright 2020 Joyent, Inc.
  */
 
 #include <pthread.h>
@@ -60,11 +62,10 @@ soft_pkcs12_pbe(soft_session_t *, CK_MECHANISM_PTR, soft_object_t *);
  */
 CK_RV
 soft_gen_keyobject(CK_ATTRIBUTE_PTR pTemplate,  CK_ULONG ulCount,
-    CK_ULONG *objecthandle_p, soft_session_t *sp,
+    soft_object_t **objp, soft_session_t *sp,
     CK_OBJECT_CLASS class, CK_KEY_TYPE key_type, CK_ULONG keylen, CK_ULONG mode,
     boolean_t internal)
 {
-
 	CK_RV rv;
 	soft_object_t *new_objp = NULL;
 
@@ -108,24 +109,22 @@ soft_gen_keyobject(CK_ATTRIBUTE_PTR pTemplate,  CK_ULONG ulCount,
 	/* Write the new token object to the keystore */
 	if (IS_TOKEN_OBJECT(new_objp)) {
 		new_objp->version = 1;
-		new_objp->session_handle = (CK_SESSION_HANDLE)NULL;
+		new_objp->session_handle = CK_INVALID_HANDLE;
 		soft_add_token_object_to_slot(new_objp);
-		/*
-		 * Type casting the address of an object struct to
-		 * an object handle.
-		 */
-		*objecthandle_p = (CK_ULONG)new_objp;
+
+		set_objecthandle(new_objp);
+		*objp = new_objp;
 
 		return (CKR_OK);
 	}
 
-	new_objp->session_handle = (CK_SESSION_HANDLE)sp;
+	new_objp->session_handle = sp->handle;
 
 	/* Add the new object to the session's object list. */
 	soft_add_object_to_session(new_objp, sp);
 
-	/* Type casting the address of an object struct to an object handle. */
-	*objecthandle_p =  (CK_ULONG)new_objp;
+	set_objecthandle(new_objp);
+	*objp = new_objp;
 
 	return (CKR_OK);
 
@@ -257,15 +256,12 @@ soft_genkey(soft_session_t *session_p, CK_MECHANISM_PTR pMechanism,
 	}
 
 	/* Create a new object for secret key. */
-	rv = soft_gen_keyobject(pTemplate, ulCount, phKey, session_p,
+	rv = soft_gen_keyobject(pTemplate, ulCount, &secret_key, session_p,
 	    CKO_SECRET_KEY, key_type, keylen, SOFT_GEN_KEY, B_FALSE);
 
 	if (rv != CKR_OK) {
 		return (rv);
 	}
-
-	/* Obtain the secret object pointer. */
-	secret_key = (soft_object_t *)*phKey;
 
 	switch (pMechanism->mechanism) {
 	case CKM_DES_KEY_GEN:
@@ -409,6 +405,7 @@ soft_genkey(soft_session_t *session_p, CK_MECHANISM_PTR pMechanism,
 			soft_delete_token_object(secret_key, B_FALSE, B_FALSE);
 	}
 
+	*phKey = secret_key->handle;
 	return (rv);
 }
 
@@ -447,19 +444,16 @@ soft_genkey_pair(soft_session_t *session_p, CK_MECHANISM_PTR pMechanism,
 
 	/* Create a new object for public key. */
 	rv = soft_gen_keyobject(pPublicKeyTemplate, ulPublicAttrCount,
-	    phPublicKey, session_p, CKO_PUBLIC_KEY, key_type, 0,
+	    &public_key, session_p, CKO_PUBLIC_KEY, key_type, 0,
 	    SOFT_GEN_KEY, B_FALSE);
 
 	if (rv != CKR_OK) {
 		return (rv);
 	}
 
-	/* Obtain the public object pointer. */
-	public_key = (soft_object_t *)*phPublicKey;
-
 	/* Create a new object for private key. */
 	rv = soft_gen_keyobject(pPrivateKeyTemplate, ulPrivateAttrCount,
-	    phPrivateKey, session_p, CKO_PRIVATE_KEY, key_type, 0,
+	    &private_key, session_p, CKO_PRIVATE_KEY, key_type, 0,
 	    SOFT_GEN_KEY, B_FALSE);
 
 	if (rv != CKR_OK) {
@@ -473,9 +467,6 @@ soft_genkey_pair(soft_session_t *session_p, CK_MECHANISM_PTR pMechanism,
 			    B_FALSE, B_FALSE);
 		return (rv);
 	}
-
-	/* Obtain the private object pointer. */
-	private_key = (soft_object_t *)*phPrivateKey;
 
 	/*
 	 * At this point, both public key and private key objects
@@ -540,6 +531,9 @@ soft_genkey_pair(soft_session_t *session_p, CK_MECHANISM_PTR pMechanism,
 			soft_delete_token_object(private_key, B_FALSE, B_FALSE);
 		}
 	}
+
+	*phPublicKey = public_key->handle;
+	*phPrivateKey = private_key->handle;
 
 	return (rv);
 }
@@ -609,8 +603,7 @@ soft_key_derive_check_length(soft_object_t *secret_key, CK_ULONG max_keylen)
 
 static CK_RV
 soft_pkcs12_pbe(soft_session_t *session_p,
-		CK_MECHANISM_PTR pMechanism,
-		soft_object_t *derived_key)
+    CK_MECHANISM_PTR pMechanism, soft_object_t *derived_key)
 {
 	CK_RV rv = CKR_OK;
 	CK_PBE_PARAMS *params = pMechanism->pParameter;
@@ -822,26 +815,11 @@ digest_done:
 	(void) memcpy(keybuf, A, keysize);
 
 cleanup:
-	if (A) {
-		bzero(A, Alen);
-		free(A);
-	}
-	if (Ai) {
-		bzero(Ai, AiLen);
-		free(Ai);
-	}
-	if (B) {
-		bzero(B, Blen);
-		free(B);
-	}
-	if (D) {
-		bzero(D, Dlen);
-		free(D);
-	}
-	if (I) {
-		bzero(I, Ilen);
-		free(I);
-	}
+	freezero(A, Alen);
+	freezero(Ai, AiLen);
+	freezero(B, Blen);
+	freezero(D, Dlen);
+	freezero(I, Ilen);
 	return (rv);
 }
 
@@ -861,20 +839,20 @@ soft_derivekey(soft_session_t *session_p, CK_MECHANISM_PTR pMechanism,
 
 	switch (pMechanism->mechanism) {
 	case CKM_DH_PKCS_DERIVE:
+		if (phKey == NULL_PTR)
+			return (CKR_ARGUMENTS_BAD);
+
 		/*
 		 * Create a new object for secret key. The key type should
 		 * be provided in the template.
 		 */
 		rv = soft_gen_keyobject(pTemplate, ulAttributeCount,
-		    phKey, session_p, CKO_SECRET_KEY, (CK_KEY_TYPE)~0UL, 0,
-		    SOFT_DERIVE_KEY_DH, B_FALSE);
+		    &secret_key, session_p, CKO_SECRET_KEY, (CK_KEY_TYPE)~0UL,
+		    0, SOFT_DERIVE_KEY_DH, B_FALSE);
 
 		if (rv != CKR_OK) {
 			return (rv);
 		}
-
-		/* Obtain the secret object pointer. */
-		secret_key = (soft_object_t *)*phKey;
 
 		rv = soft_dh_key_derive(basekey_p, secret_key,
 		    (CK_BYTE *)pMechanism->pParameter,
@@ -893,20 +871,20 @@ soft_derivekey(soft_session_t *session_p, CK_MECHANISM_PTR pMechanism,
 		break;
 
 	case CKM_ECDH1_DERIVE:
+		if (phKey == NULL_PTR)
+			return (CKR_ARGUMENTS_BAD);
+
 		/*
 		 * Create a new object for secret key. The key type should
 		 * be provided in the template.
 		 */
 		rv = soft_gen_keyobject(pTemplate, ulAttributeCount,
-		    phKey, session_p, CKO_SECRET_KEY, (CK_KEY_TYPE)~0UL, 0,
-		    SOFT_DERIVE_KEY_DH, B_FALSE);
+		    &secret_key, session_p, CKO_SECRET_KEY, (CK_KEY_TYPE)~0UL,
+		    0, SOFT_DERIVE_KEY_DH, B_FALSE);
 
 		if (rv != CKR_OK) {
 			return (rv);
 		}
-
-		/* Obtain the secret object pointer. */
-		secret_key = (soft_object_t *)*phKey;
 
 		rv = soft_ec_key_derive(basekey_p, secret_key,
 		    (CK_BYTE *)pMechanism->pParameter,
@@ -949,23 +927,33 @@ soft_derivekey(soft_session_t *session_p, CK_MECHANISM_PTR pMechanism,
 		digest_mech.mechanism = CKM_SHA512;
 		goto common;
 
+	case CKM_SHA512_224_KEY_DERIVATION:
+		hash_size = SHA512_224_DIGEST_LENGTH;
+		digest_mech.mechanism = CKM_SHA512_224;
+		goto common;
+
+	case CKM_SHA512_256_KEY_DERIVATION:
+		hash_size = SHA512_256_DIGEST_LENGTH;
+		digest_mech.mechanism = CKM_SHA512_256;
+		goto common;
+
 common:
+		if (phKey == NULL_PTR)
+			return (CKR_ARGUMENTS_BAD);
+
 		/*
 		 * Create a new object for secret key. The key type is optional
 		 * to be provided in the template. If it is not specified in
 		 * the template, the default is CKK_GENERIC_SECRET.
 		 */
 		rv = soft_gen_keyobject(pTemplate, ulAttributeCount,
-		    phKey, session_p, CKO_SECRET_KEY,
+		    &secret_key, session_p, CKO_SECRET_KEY,
 		    (CK_KEY_TYPE)CKK_GENERIC_SECRET, 0,
 		    SOFT_DERIVE_KEY_OTHER, B_FALSE);
 
 		if (rv != CKR_OK) {
 			return (rv);
 		}
-
-		/* Obtain the secret object pointer. */
-		secret_key = (soft_object_t *)*phKey;
 
 		/* Validate the key type and key length */
 		rv = soft_key_derive_check_length(secret_key, hash_size);
@@ -1053,10 +1041,12 @@ common:
 
 	case CKM_SSL3_KEY_AND_MAC_DERIVE:
 	case CKM_TLS_KEY_AND_MAC_DERIVE:
+		/* These mechanisms do not use phKey */
 		return (soft_ssl_key_and_mac_derive(session_p, pMechanism,
 		    basekey_p, pTemplate, ulAttributeCount));
 
 	case CKM_TLS_PRF:
+		/* This mechanism does not use phKey */
 		if (pMechanism->pParameter == NULL ||
 		    pMechanism->ulParameterLen != sizeof (CK_TLS_PRF_PARAMS) ||
 		    phKey != NULL)
@@ -1083,6 +1073,19 @@ common:
 		if (rv != CKR_OK)
 			soft_delete_token_object(secret_key, B_FALSE, B_FALSE);
 	}
+
+	/*
+	 * Some mechanisms don't use phKey either because they create
+	 * multiple key objects and instead populate a structure passed in
+	 * as a field in their pParameter parameter with the resulting key
+	 * objects (e.g. CKM_TLS_KEY_AND_MAC_DERIVE) or they instead write
+	 * their result to an output buffer passed in their pParameter
+	 * parameter (e.g. CKM_TLS_PRF). All such mechanisms return prior
+	 * to reaching here. The remaining mechanisms (which do use phKey)
+	 * should have already validated phKey is not NULL prior to doing
+	 * their key derivation.
+	 */
+	*phKey = secret_key->handle;
 
 	return (rv);
 }
@@ -1165,11 +1168,9 @@ soft_derive_enforce_flags(soft_object_t *basekey, soft_object_t *newkey)
  * Currently, PRF is always SHA_1_HMAC.
  */
 static CK_RV
-do_prf(soft_session_t *session_p,
-	CK_PKCS5_PBKD2_PARAMS_PTR params,
-	soft_object_t *hmac_key,
-	CK_BYTE *newsalt, CK_ULONG saltlen,
-	CK_BYTE *blockdata, CK_ULONG blocklen)
+do_prf(soft_session_t *session_p, CK_PKCS5_PBKD2_PARAMS_PTR params,
+    soft_object_t *hmac_key, CK_BYTE *newsalt, CK_ULONG saltlen,
+    CK_BYTE *blockdata, CK_ULONG blocklen)
 {
 	CK_RV rv = CKR_OK;
 	CK_MECHANISM digest_mech = {CKM_SHA_1_HMAC, NULL, 0};
@@ -1249,13 +1250,14 @@ cleanup:
 
 static CK_RV
 soft_create_hmac_key(soft_session_t *session_p,  CK_BYTE *passwd,
-		CK_ULONG passwd_len, CK_OBJECT_HANDLE_PTR phKey)
+    CK_ULONG passwd_len, soft_object_t **keyp)
 {
 	CK_RV rv = CKR_OK;
 	CK_OBJECT_CLASS keyclass = CKO_SECRET_KEY;
 	CK_KEY_TYPE keytype = CKK_GENERIC_SECRET;
 	CK_BBOOL True = TRUE;
 	CK_ATTRIBUTE keytemplate[4];
+
 	/*
 	 * We must initialize each template member individually
 	 * because at the time of initial coding for ON10, the
@@ -1284,7 +1286,7 @@ soft_create_hmac_key(soft_session_t *session_p,  CK_BYTE *passwd,
 	 * mechanism parameter structure.
 	 */
 	rv = soft_gen_keyobject(keytemplate,
-	    sizeof (keytemplate)/sizeof (CK_ATTRIBUTE), phKey, session_p,
+	    sizeof (keytemplate)/sizeof (CK_ATTRIBUTE), keyp, session_p,
 	    CKO_SECRET_KEY, (CK_KEY_TYPE)CKK_GENERIC_SECRET, 0,
 	    SOFT_CREATE_OBJ, B_TRUE);
 
@@ -1293,8 +1295,7 @@ soft_create_hmac_key(soft_session_t *session_p,  CK_BYTE *passwd,
 
 CK_RV
 soft_generate_pkcs5_pbkdf2_key(soft_session_t *session_p,
-		CK_MECHANISM_PTR pMechanism,
-		soft_object_t *secret_key)
+    CK_MECHANISM_PTR pMechanism, soft_object_t *secret_key)
 {
 	CK_RV rv = CKR_OK;
 	CK_PKCS5_PBKD2_PARAMS	*params =
@@ -1302,7 +1303,6 @@ soft_generate_pkcs5_pbkdf2_key(soft_session_t *session_p,
 	CK_ULONG hLen = SHA1_HASH_SIZE;
 	CK_ULONG dkLen, i;
 	CK_ULONG blocks, remainder;
-	CK_OBJECT_HANDLE phKey = 0;
 	soft_object_t *hmac_key = NULL;
 	CK_BYTE *salt = NULL;
 	CK_BYTE *keydata = NULL;
@@ -1323,12 +1323,10 @@ soft_generate_pkcs5_pbkdf2_key(soft_session_t *session_p,
 	 * Create a key object to use for HMAC operations.
 	 */
 	rv = soft_create_hmac_key(session_p, params->pPassword,
-	    *params->ulPasswordLen, &phKey);
+	    *params->ulPasswordLen, &hmac_key);
 
 	if (rv != CKR_OK)
 		return (rv);
-
-	hmac_key = (soft_object_t *)phKey;
 
 	/* Step 1. */
 	dkLen = OBJ_SEC_VALUE_LEN(secret_key);  /* length of desired key */
@@ -1400,15 +1398,15 @@ soft_generate_pkcs5_pbkdf2_key(soft_session_t *session_p,
 		keydata += hLen;
 	}
 	(void) soft_delete_object(session_p, hmac_key, B_FALSE, B_FALSE);
-	free(salt);
+	freezero(salt, params->ulSaltSourceDataLen);
 
 	return (rv);
 }
 
 CK_RV
 soft_wrapkey(soft_session_t *session_p, CK_MECHANISM_PTR pMechanism,
-		soft_object_t *wrappingKey_p, soft_object_t *hkey_p,
-		CK_BYTE_PTR pWrappedKey, CK_ULONG_PTR pulWrappedKeyLen)
+    soft_object_t *wrappingKey_p, soft_object_t *hkey_p,
+    CK_BYTE_PTR pWrappedKey, CK_ULONG_PTR pulWrappedKeyLen)
 {
 	CK_RV		rv = CKR_OK;
 	CK_ULONG	plain_len = 0;
@@ -1535,14 +1533,12 @@ soft_wrapkey(soft_session_t *session_p, CK_MECHANISM_PTR pMechanism,
 cleanup_wrap:
 	if (padded_data != NULL && padded_len != plain_len) {
 		/* Clear buffer before returning to memory pool. */
-		(void) memset(padded_data, 0x0, padded_len);
-		free(padded_data);
+		freezero(padded_data, padded_len);
 	}
 
 	if ((hkey_p->class != CKO_SECRET_KEY) && (plain_data != NULL)) {
 		/* Clear buffer before returning to memory pool. */
-		(void) memset(plain_data, 0x0, plain_len);
-		free(plain_data);
+		freezero(plain_data, plain_len);
 	}
 
 	return (rv);
@@ -1555,7 +1551,7 @@ cleanup_wrap:
  */
 static CK_RV
 soft_unwrap_secret_len_check(CK_KEY_TYPE keytype, CK_MECHANISM_TYPE mechtype,
-	CK_ATTRIBUTE_PTR pTemplate, CK_ULONG ulAttributeCount)
+    CK_ATTRIBUTE_PTR pTemplate, CK_ULONG ulAttributeCount)
 {
 	CK_ULONG	i;
 	boolean_t	isValueLen = B_FALSE;
@@ -1628,10 +1624,9 @@ soft_unwrap_secret_len_check(CK_KEY_TYPE keytype, CK_MECHANISM_TYPE mechtype,
 
 CK_RV
 soft_unwrapkey(soft_session_t *session_p, CK_MECHANISM_PTR pMechanism,
-		soft_object_t *unwrappingkey_p,
-		CK_BYTE_PTR pWrappedKey, CK_ULONG ulWrappedKeyLen,
-		CK_ATTRIBUTE_PTR pTemplate, CK_ULONG ulAttributeCount,
-		CK_OBJECT_HANDLE_PTR phKey)
+    soft_object_t *unwrappingkey_p, CK_BYTE_PTR pWrappedKey,
+    CK_ULONG ulWrappedKeyLen, CK_ATTRIBUTE_PTR pTemplate,
+    CK_ULONG ulAttributeCount, CK_OBJECT_HANDLE_PTR phKey)
 {
 	CK_RV			rv = CKR_OK;
 	CK_OBJECT_CLASS		new_obj_class = ~0UL;
@@ -1686,7 +1681,7 @@ soft_unwrapkey(soft_session_t *session_p, CK_MECHANISM_PTR pMechanism,
 
 	/* Create a new object based on the attribute template. */
 	rv = soft_gen_keyobject(pTemplate, ulAttributeCount,
-	    (CK_ULONG *)&new_objp, session_p, (CK_OBJECT_CLASS)~0UL,
+	    &new_objp, session_p, (CK_OBJECT_CLASS)~0UL,
 	    (CK_KEY_TYPE)~0UL, 0, SOFT_UNWRAP_KEY, B_FALSE);
 	if (rv != CKR_OK)
 		return (rv);
@@ -1822,8 +1817,7 @@ soft_unwrapkey(soft_session_t *session_p, CK_MECHANISM_PTR pMechanism,
 
 	if (new_objp->class != CKO_SECRET_KEY) {
 		/* Clear buffer before returning to memory pool. */
-		(void) memset(plain_data, 0x0, plain_len);
-		free(plain_data);
+		freezero(plain_data, plain_len);
 	}
 
 	*phKey = (CK_OBJECT_HANDLE)new_objp;
@@ -1834,8 +1828,7 @@ cleanup_unwrap:
 	/* The decrypted private key buffer must be freed explicitly. */
 	if ((new_objp->class != CKO_SECRET_KEY) && (plain_data != NULL)) {
 		/* Clear buffer before returning to memory pool. */
-		(void) memset(plain_data, 0x0, plain_len);
-		free(plain_data);
+		freezero(plain_data, plain_len);
 	}
 
 	/* sck and new_objp are indirectly free()d inside these functions */

@@ -22,10 +22,12 @@
 /*
  * Copyright 2008 Sun Microsystems, Inc.  All rights reserved.
  * Use is subject to license terms.
+ * Copyright (c) 2016 by Delphix. All rights reserved.
+ * Copyright 2025 MNX Cloud, Inc.
  */
 
 /*	Copyright (c) 1984, 1986, 1987, 1988, 1989 AT&T	*/
-/*	  All Rights Reserved  	*/
+/*	  All Rights Reserved	*/
 
 /*
  * University Copyright- Copyright (c) 1982, 1986, 1988
@@ -36,8 +38,6 @@
  * software developed by the University of California, Berkeley, and its
  * contributors.
  */
-
-#pragma ident	"%Z%%M%	%I%	%E% SMI"
 
 #include "lint.h"
 #include <sys/types.h>
@@ -79,6 +79,9 @@ static int setbit(DBM *);
 static int getbit(DBM *);
 static int dbm_flushdir(DBM *);
 static int dbm_flushpag(DBM *db);
+#ifdef NDBM_DEBUG
+static int chkblk(char buf[PBLKSIZ]);
+#endif
 
 /* the following three are required by mapfile-vers */
 datum dbm_do_nextkey(DBM *, datum);
@@ -511,7 +514,7 @@ dbm_slow_nextkey(DBM *db)
 			    (read(db->dbm_pagf, db->dbm_pagbuf, PBLKSIZ) !=
 			    PBLKSIZ))
 				(void) memset(db->dbm_pagbuf, 0, PBLKSIZ);
-#ifdef DEBUG
+#ifdef NDBM_DEBUG
 			else if (chkblk(db->dbm_pagbuf) < 0)
 				db->dbm_flags |= _DBM_IOERR;
 #endif
@@ -584,7 +587,7 @@ dbm_do_nextkey(DBM *db, datum inkey)
 			    (read(db->dbm_pagf, db->dbm_pagbuf, PBLKSIZ) !=
 			    PBLKSIZ))
 				(void) memset(db->dbm_pagbuf, 0, PBLKSIZ);
-#ifdef DEBUG
+#ifdef NDBM_DEBUG
 			else if (chkblk(db->dbm_pagbuf) < 0)
 			db->dbm_flags |= _DBM_IOERR;
 #endif
@@ -599,7 +602,7 @@ dbm_do_nextkey(DBM *db, datum inkey)
 		 * be an extra clever moron who depends on
 		 * these variables and their former meaning.
 		 * If we set the variables this would have got
-		 * us the key for sure! So give him the old algorithm.
+		 * us the key for sure! So give it the old algorithm.
 		 */
 		if (key.dptr == NULL)
 			return (dbm_slow_nextkey(db));
@@ -699,8 +702,8 @@ keep_going:
 	}
 
 	/* really need hash at this point */
-	/* if he gave us a key we have already calculated the hash */
-	/* if not get it */
+	/* if it gave us a key we have already calculated the hash */
+	/* if not get the hash */
 	if (inkey.dptr == NULL)
 		hash = dcalchash(key);
 	hash = dbm_hashinc(db, hash);
@@ -763,7 +766,7 @@ dbm_access(DBM *db, unsigned long hash)
 			    PBLKSIZ)) {
 				db->dbm_flags |= _DBM_IOERR;
 			}
-		dbm_clrdirty(db);
+			dbm_clrdirty(db);
 		}
 
 		db->dbm_pagbno = my_blkno;
@@ -771,7 +774,7 @@ dbm_access(DBM *db, unsigned long hash)
 		if ((lseek64(db->dbm_pagf, where, L_SET) != where) ||
 		    (read(db->dbm_pagf, db->dbm_pagbuf, PBLKSIZ) != PBLKSIZ))
 			(void) memset(db->dbm_pagbuf, 0, PBLKSIZ);
-#ifdef DEBUG
+#ifdef NDBM_DEBUG
 		else if (chkblk(db->dbm_pagbuf) < 0)
 			db->dbm_flags |= _DBM_IOERR;
 #endif
@@ -840,7 +843,7 @@ setbit(DBM *db)
 }
 
 static datum
-makdatum(char buf[PBLKSIZ], int n)
+makdatum(char *buf, int n)
 {
 	short *sp;
 	int t;
@@ -885,7 +888,7 @@ cmpdatum(datum d1, datum d2)
 }
 
 static int
-finddatum(char buf[PBLKSIZ], datum item)
+finddatum(char *buf, datum item)
 {
 	short *sp;
 	int i, n, j;
@@ -961,7 +964,7 @@ dcalchash(datum item)
  * Delete pairs of items (n & n+1).
  */
 static int
-delitem(char buf[PBLKSIZ], int n)
+delitem(char *buf, int n)
 {
 	short *sp, *sp1;
 	int i1, i2;
@@ -992,7 +995,7 @@ delitem(char buf[PBLKSIZ], int n)
  * Add pairs of items (item & item1).
  */
 static int
-additem(char buf[PBLKSIZ], datum item, datum item1)
+additem(char *buf, datum item, datum item1)
 {
 	short *sp;
 	int i1, i2;
@@ -1013,7 +1016,7 @@ additem(char buf[PBLKSIZ], datum item, datum item1)
 	return (1);
 }
 
-#ifdef DEBUG
+#ifdef NDBM_DEBUG
 static int
 chkblk(char buf[PBLKSIZ])
 {

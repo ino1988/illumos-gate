@@ -23,7 +23,7 @@
  */
 
 /*	Copyright (c) 1983, 1984, 1985, 1986, 1987, 1988, 1989 AT&T	*/
-/*	  All Rights Reserved  	*/
+/*	  All Rights Reserved	*/
 
 /*
  * University Copyright- Copyright (c) 1982, 1986, 1988
@@ -76,14 +76,19 @@ extern "C" {
  * storing full names, then we are ok. The space savings are worth it.
  */
 typedef struct ncache {
-	struct ncache *hash_next; 	/* hash chain, MUST BE FIRST */
+	struct ncache *hash_next;	/* hash chain, MUST BE FIRST */
 	struct ncache *hash_prev;
 	struct vnode *vp;		/* vnode the name refers to */
 	struct vnode *dp;		/* vnode of parent of name */
 	int hash;			/* hash signature */
 	uchar_t namlen;			/* length of name */
-	char name[1];			/* segment name - null terminated */
+	char name[];			/* segment name */
 } ncache_t;
+
+/*
+ * Produce size of struct ncache with space allocated in name string.
+ */
+#define	NCACHE_SIZE(namelen)	offsetof(ncache_t, name) + (namelen)
 
 /*
  * Hash table bucket structure of name cache entries for fast lookup.
@@ -169,7 +174,7 @@ struct nc_stats {
 		(namlen) = Xcp - (name);			\
 	}
 
-#if defined(_KERNEL)
+#if defined(_KERNEL) || defined(_FAKE_KERNEL)
 
 #include <sys/vfs.h>
 #include <sys/vnode.h>
@@ -187,7 +192,6 @@ void	dnlc_purge_vp(vnode_t *);
 int	dnlc_purge_vfsp(vfs_t *, int);
 void	dnlc_remove(vnode_t *, const char *);
 int	dnlc_fs_purge1(struct vnodeops *);
-vnode_t	*dnlc_reverse_lookup(vnode_t *, char *, size_t);
 void	dnlc_reduce_cache(void *);
 
 #endif	/* defined(_KERNEL) */
@@ -206,7 +210,7 @@ void	dnlc_reduce_cache(void *);
  */
 typedef struct dcfree {
 	uint64_t df_handle;		/* fs supplied handle */
-	struct dcfree *df_next; 	/* link to next free entry in bucket */
+	struct dcfree *df_next;		/* link to next free entry in bucket */
 	uint_t df_len;			/* length of free entry */
 } dcfree_t;
 
@@ -215,8 +219,13 @@ typedef struct dcentry {
 	struct dcentry *de_next;	/* link to next name entry in bucket */
 	int de_hash;			/* hash signature */
 	uchar_t de_namelen;		/* length of name excluding null */
-	char de_name[1];		/* null terminated name */
+	char de_name[];			/* name */
 } dcentry_t;
+
+/*
+ * Produce size of struct dcentry with space allocated in name string.
+ */
+#define	DCENTTRY_SIZE(namelen)	offsetof(dcentry_t, de_name) + (namelen)
 
 typedef struct dircache {
 	struct dircache *dc_next;	/* chain - for purge purposes */

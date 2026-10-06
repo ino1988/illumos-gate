@@ -40,12 +40,30 @@ mbrtowc_l(wchar_t *_RESTRICT_KYWD pwc, const char *_RESTRICT_KYWD s,
 
 	if (ps == NULL)
 		ps = &mbs;
-	return (loc->ctype->lc_mbrtowc(pwc, s, n, ps));
+	return (loc->ctype->lc_mbrtowc(pwc, s, n, ps, B_FALSE));
 }
 
 size_t
 mbrtowc(wchar_t *_RESTRICT_KYWD pwc, const char *_RESTRICT_KYWD s,
     size_t n, mbstate_t *_RESTRICT_KYWD ps)
 {
-	return (mbrtowc_l(pwc, s, n, ps, uselocale(NULL)));
+	return (mbrtowc_l(pwc, s, n, ps, __curlocale()));
+}
+
+size_t
+mbrtowc_nz_l(wchar_t *_RESTRICT_KYWD pwc, const char *_RESTRICT_KYWD s,
+    size_t n, mbstate_t *_RESTRICT_KYWD ps, locale_t loc)
+{
+	static mbstate_t mbs;
+
+	if (ps == NULL)
+		ps = &mbs;
+	return (loc->ctype->lc_mbrtowc(pwc, s, n, ps, B_TRUE));
+}
+
+size_t
+mbrtowc_nz(wchar_t *_RESTRICT_KYWD pwc, const char *_RESTRICT_KYWD s,
+    size_t n, mbstate_t *_RESTRICT_KYWD ps)
+{
+	return (mbrtowc_nz_l(pwc, s, n, ps, __curlocale()));
 }

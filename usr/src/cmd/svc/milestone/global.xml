@@ -2,6 +2,8 @@
 <!DOCTYPE service_bundle SYSTEM "/usr/share/lib/xml/dtd/service_bundle.dtd.1">
 <!--
  Copyright (c) 2008, 2010, Oracle and/or its affiliates. All rights reserved.
+ Copyright 2016 Hans Rosenfeld <rosenfeld@grumpf.hope-2000.org>
+ Copyright 2019 Joyent, Inc.
 
  CDDL HEADER START
 
@@ -66,9 +68,9 @@ system-wide configuration definitions
 			</loctext>
 		</common_name>
 		<documentation>
-			<manpage title='smf' section='5'
+			<manpage title='smf' section='7'
 			    manpath='/usr/share/man' />
-			<manpage title='smf_template' section='5'
+			<manpage title='smf_template' section='7'
 			    manpath='/usr/share/man' />
 		</documentation>
 
@@ -101,7 +103,7 @@ The restarter responsible for managing this service instance.  If the property i
 			    required='false'>
 				<description>
 					<loctext xml:lang='C'>
-Only one instance of this service may be run.  This property is currently unenforced, but will be at some point in the future.
+Only one instance of this service may be run.  This behavior is unimplemented, and obsolete.
 					</loctext>
 				</description>
 				<cardinality min='1' max='1'/>
@@ -538,8 +540,17 @@ The project ID in numeric or text form.  ":default" can be used as a token to in
 				<description>
 					<loctext xml:lang='C'>
 The resource pool name in which to launch the method.  ":default" can be used
-as a token to indicate the pool specified in the project(4) entry given in
+as a token to indicate the pool specified in the project(5) entry given in
 the project attribute.
+					</loctext>
+				</description>
+				<cardinality min='1' max='1'/>
+			</prop_pattern>
+			<prop_pattern name='security_flags' type='astring'
+			    required='false'>
+				<description>
+					<loctext xml:lang='C'>
+An optional string specifying the security flags as defined in security-flags(7).
 					</loctext>
 				</description>
 				<cardinality min='1' max='1'/>
@@ -578,7 +589,7 @@ in numeric or text form.
 			    required='false'>
 				<description>
 					<loctext xml:lang='C'>
-An optional string specifying the privilege set as defined in privileges(5).
+An optional string specifying the privilege set as defined in privileges(7).
 					</loctext>
 				</description>
 				<cardinality min='1' max='1'/>
@@ -588,7 +599,7 @@ An optional string specifying the privilege set as defined in privileges(5).
 				<description>
 					<loctext xml:lang='C'>
 An optional string specifying the limit privilege set as defined in
-privileges(5).
+privileges(7).
 					</loctext>
 				</description>
 				<cardinality min='1' max='1'/>
@@ -610,7 +621,7 @@ user, group, privileges, and limit_privileges properties.
 				<description>
 					<loctext xml:lang='C'>
 The name of an RBAC (role-based access control) profile which, along with the
-method executable, identifies an entry in exec_attr(4).
+method executable, identifies an entry in exec_attr(5).
 					</loctext>
 				</description>
 				<cardinality min='1' max='1'/>
@@ -638,7 +649,7 @@ Service name
 				</common_name>
 				<description>
 					<loctext xml:lang='C'>
-IANA name or RPC name for non-inetd service, equivalent to inetd/name property. For RPC services, the value of this property is not an IANA name but is either an RPC program number or name, see rpc(4).
+IANA name or RPC name for non-inetd service, equivalent to inetd/name property. For RPC services, the value of this property is not an IANA name but is either an RPC program number or name, see rpc(5).
 					</loctext>
 				</description>
 			</prop_pattern>
@@ -659,7 +670,7 @@ A boolean property where a "true" value indicates an RPC service, equivalent to 
 			    required='false'>
 				<common_name>
 					<loctext xml:lang='C'>
-Custom firewall script 
+Custom firewall script
 					</loctext>
 				</common_name>
 				<description>
@@ -730,6 +741,47 @@ Allow access to entities specified in 'apply_to' property.
 					<include_values type='values'/>
 				</choices>
 			</prop_pattern>
+			<prop_pattern name='block_policy' type='astring'
+			    required='false'>
+				<common_name>
+					<loctext xml:lang='C'>
+Firewall block policy
+					</loctext>
+				</common_name>
+				<description>
+					<loctext xml:lang='C'>
+Service firewall block policy.
+					</loctext>
+				</description>
+				<visibility value='readwrite'/>
+				<cardinality min='1' max='1'/>
+				<values>
+					<value name='use_global'>
+						<description>
+							<loctext xml:lang='C'>
+Apply Global Default block policy, specified in network/ipfilter for the service. This is the default value.
+							</loctext>
+						</description>
+					</value>
+					<value name='none'>
+						<description>
+							<loctext xml:lang='C'>
+Block by dropping packets.
+							</loctext>
+						</description>
+					</value>
+					<value name='return'>
+						<description>
+							<loctext xml:lang='C'>
+Block by returning RST or ICMP messages.
+							</loctext>
+						</description>
+					</value>
+				</values>
+				<choices>
+					<include_values type='values'/>
+				</choices>
+			</prop_pattern>
 			<prop_pattern name="apply_to" type="astring"
 			    required="false">
 				<common_name>
@@ -739,7 +791,20 @@ Apply policy to
 				</common_name>
 				<description>
 					<loctext xml:lang="C">
-The host and network IPs, network interfaces, and ippools to deny if the policy is set to deny, or accept if the policy is set to accept.
+The source host and network IPv4 addresses, incoming network interfaces, and ippools to deny if the policy is set to deny, or accept if the policy is set to accept.
+					</loctext>
+				</description>
+			</prop_pattern>
+			<prop_pattern name="apply_to_6" type="astring"
+			    required="false">
+				<common_name>
+					<loctext xml:lang='C'>
+Apply policy to
+					</loctext>
+				</common_name>
+				<description>
+					<loctext xml:lang="C">
+The source host and network IPv6 addresses, incoming network interfaces, and ippools to deny if the policy is set to deny, or accept if the policy is set to accept.
 					</loctext>
 				</description>
 			</prop_pattern>
@@ -752,7 +817,46 @@ Make exceptions to
 				</common_name>
 				<description>
 					<loctext xml:lang="C">
-The host and network IPs, network interfaces, and ippools to exempt from the set policy. That is, those to accept if the policy is set to deny, or to deny if the policy is set to accept.
+The source host and network IPv4 addresses, incoming network interfaces, and ippools to exempt from the set policy. That is, those to accept if the policy is set to deny, or to deny if the policy is set to accept.
+					</loctext>
+				</description>
+			</prop_pattern>
+			<prop_pattern name="exceptions_6" type="astring"
+			    required="false">
+				<common_name>
+					<loctext xml:lang='C'>
+Make exceptions to
+					</loctext>
+				</common_name>
+				<description>
+					<loctext xml:lang="C">
+The source host and network IPv6 addressess, incoming network interfaces, and ippools to exempt from the set policy. That is, those to accept if the policy is set to deny, or to deny if the policy is set to accept.
+					</loctext>
+				</description>
+			</prop_pattern>
+			<prop_pattern name="target" type="astring"
+			    required="false">
+				<common_name>
+					<loctext xml:lang='C'>
+Apply policy to
+					</loctext>
+				</common_name>
+				<description>
+					<loctext xml:lang="C">
+The destination host and network IPv4 addresses, and ippools to deny if the policy is set to deny, or accept if the policy is set to accept.
+					</loctext>
+				</description>
+			</prop_pattern>
+			<prop_pattern name="target6" type="astring"
+			    required="false">
+				<common_name>
+					<loctext xml:lang='C'>
+Apply policy to
+					</loctext>
+				</common_name>
+				<description>
+					<loctext xml:lang="C">
+The destination host and network IPv6 addresses, and ippools to deny if the policy is set to deny, or accept if the policy is set to accept.
 					</loctext>
 				</description>
 			</prop_pattern>

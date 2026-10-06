@@ -82,7 +82,7 @@ __vsin(int n, double * restrict x, int stridex, double * restrict y,
 	double		x0, x1, x2, *py0 = 0, *py1 = 0, *py2, *xsave, *ysave;
 	unsigned	hx0, hx1, hx2, xsb0, xsb1 = 0, xsb2;
 	int		i, biguns, nsave, sxsave, sysave;
-	volatile int	v __GNU_UNUSED;
+	volatile int	v __unused;
 	nsave = n;
 	xsave = x;
 	sxsave = stridex;
@@ -90,6 +90,7 @@ __vsin(int n, double * restrict x, int stridex, double * restrict y,
 	sysave = stridey;
 	biguns = 0;
 
+	x0 = *x;	/* error: 'x0' may be used uninitialized */
 	do
 	{
 LOOP0:
@@ -492,14 +493,14 @@ MEDIUM:
 	y1_or_zero[3] = 0.0;
 	y2_or_zero[3] = 0.0;
 
-	if (biguns == 3) 
+	if (biguns == 3)
 	{
 		biguns = 0;
 		xsb0 = xsb0 >> 31;
 		xsb1 = xsb1 >> 31;
 		goto loop2;
 	}
-	else if (biguns == 2) 
+	else if (biguns == 2)
 	{
 		xsb0 = xsb0 >> 31;
 		biguns = 0;

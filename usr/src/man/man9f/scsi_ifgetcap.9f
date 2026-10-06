@@ -4,11 +4,10 @@
 .\" The contents of this file are subject to the terms of the Common Development and Distribution License (the "License").  You may not use this file except in compliance with the License.
 .\" You can obtain a copy of the license at usr/src/OPENSOLARIS.LICENSE or http://www.opensolaris.org/os/licensing.  See the License for the specific language governing permissions and limitations under the License.
 .\" When distributing Covered Code, include this CDDL HEADER in each file and include the License file at usr/src/OPENSOLARIS.LICENSE.  If applicable, add the following below this CDDL HEADER, with the fields enclosed by brackets "[]" replaced with your own identifying information: Portions Copyright [yyyy] [name of copyright owner]
-.TH SCSI_IFGETCAP 9F "May 24, 2014"
+.TH SCSI_IFGETCAP 9F "August 22, 2023"
 .SH NAME
 scsi_ifgetcap, scsi_ifsetcap \- get/set SCSI transport capability
 .SH SYNOPSIS
-.LP
 .nf
 #include <sys/scsi/scsi.h>
 
@@ -24,11 +23,8 @@ scsi_ifgetcap, scsi_ifsetcap \- get/set SCSI transport capability
 .fi
 
 .SH INTERFACE LEVEL
-.sp
-.LP
-Solaris DDI specific (Solaris DDI).
+illumos DDI specific (illumos DDI).
 .SH PARAMETERS
-.sp
 .ne 2
 .na
 \fB\fIap\fR\fR
@@ -65,8 +61,6 @@ Determines if all targets or only the specified target is affected.
 .RE
 
 .SH DESCRIPTION
-.sp
-.LP
 The \fBscsi_ifsetcap()\fR function is used by target drivers to set the
 capabilities of the host adapter driver. The \fIcap\fR pointer is a name-value
 pair identified by a null-terminated character string and the integer value of
@@ -238,8 +232,8 @@ If geometry is not relevant or appropriate for the target disk,
 \fBscsi_ifgetcap()\fR can return \fB-1\fR to indicate that the geometry is not
 defined. For example, if the \fBHBA\fR BIOS supports Logical Block Addressing
 for the target disk, \fBscsi_ifgetcap()\fR returns \fB-1\fR. Attempts to
-retreive the "virtual geometry" from the target driver, such as the
-\fBDKIOCG_VIRTGEOM\fR ioctl, will fail. See \fBdkio\fR(7I) for more information
+retrieve the "virtual geometry" from the target driver, such as the
+\fBDKIOCG_VIRTGEOM\fR ioctl, will fail. See \fBdkio\fR(4I) for more information
 about \fBDKIOCG_VIRTGEOM\fR.
 .RE
 
@@ -312,7 +306,7 @@ the \fBtran_reset()\fR function of the \fBHBA\fR driver can be called with the
 .ad
 .RS 24n
 Capability held in the \fBtran_interconnect_type\fR element of struct
-\fBscsi_hba_tran\fR that indicates the \fBHBA\fR transport interconnect type .
+\fBscsi_hba_tran\fR that indicates the \fBHBA\fR transport interconnect type.
 The integer value of the interconnect type of the transport is defined in the
 \fBservices.h\fR header file.
 .RE
@@ -334,8 +328,6 @@ the default value of the target driver is used for the \fBCDB\fR determination.
 .RE
 
 .SH RETURN VALUES
-.sp
-.LP
 The \fBscsi_ifsetcap()\fR function returns:
 .sp
 .ne 2
@@ -379,7 +371,6 @@ If the capability was not defined.
 .RE
 
 .SH EXAMPLES
-.LP
 \fBExample 1 \fRUsing \fBscsi_ifgetcap()\fR
 .sp
 .in +2
@@ -406,13 +397,9 @@ if (scsi_ifsetcap(&devp->sd_address, "tagged-qing", 1, 1) == 1) {
 .in -2
 
 .SH CONTEXT
-.sp
-.LP
 These functions can be called from user, interrupt, or kernel context.
 .SH ATTRIBUTES
-.sp
-.LP
-See \fBattributes\fR(5) for descriptions of the following attributes:
+See \fBattributes\fR(7) for descriptions of the following attributes:
 .sp
 
 .sp
@@ -426,11 +413,13 @@ Interface Stability	Committed
 .TE
 
 .SH SEE ALSO
-.sp
-.LP
-\fBtran_reset\fR(9E), \fBscsi_hba_lookup_capstr\fR(9F), \fBscsi_reset\fR(9F),
-\fBscsi_reset_notify\fR(9F), \fBddi_dma_attr\fR(9S),
-\fBscsi_address\fR(9S), \fBscsi_arq_status\fR(9S)
+.BR tran_reset (9E),
+.BR scsi_hba_lookup_capstr (9F),
+.BR scsi_reset (9F),
+.BR scsi_reset_notify (9F),
+.BR ddi_dma_attr (9S),
+.BR scsi_address (9S),
+.BR scsi_arq_status (9S)
 .sp
 .LP
 \fIWriting Device Drivers\fR

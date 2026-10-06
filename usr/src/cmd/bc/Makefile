@@ -23,6 +23,7 @@
 # Copyright 2003 Sun Microsystems, Inc.  All rights reserved.
 # Use is subject to license terms.
 #
+# Copyright (c) 2018, Joyent, Inc.
 
 PROG= bc
 XPG6PROG= bc
@@ -37,7 +38,12 @@ include ../Makefile.cmd
 
 CERRWARN += -_gcc=-Wno-implicit-function-declaration
 CERRWARN += -_gcc=-Wno-parentheses
-CERRWARN += -_gcc=-Wno-unused-label
+
+# because of labels from yacc
+bc.o $(XD)/bc.o := CERRWARN += -_gcc=-Wno-unused-label
+
+# needs work
+SMATCH=off
 
 $(XPG6EXOBJS) := CFLAGS += -DXPG6
 ROOTLIBB= $(LIBB:%=$(ROOTLIB)/%)
@@ -45,7 +51,7 @@ $(ROOTLIBB) :=	FILEMODE =	$(LIBFILEMODE)
 
 .KEEP_STATE:
 
-all: $(PROG) $(XPG6) $(LIBB) 
+all: $(PROG) $(XPG6) $(LIBB)
 
 $(PROG): $(EXOBJS)
 	$(LINK.c) -o $@ $(EXOBJS) $(LDLIBS)
@@ -65,8 +71,6 @@ install: all $(ROOTPROG) $(ROOTXPG6PROG) $(ROOTLIBB)
 
 clean:
 	-@rm -rf $(PROG).c $(PROG).x $(EXOBJS) $(XD) $(PROG) $(XPG6)
-
-lint:
 
 $(XPG6EXOBJS): $(XD)
 

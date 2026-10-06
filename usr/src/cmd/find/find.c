@@ -22,16 +22,19 @@
  * Copyright (c) 1988, 2010, Oracle and/or its affiliates. All rights reserved.
  * Copyright 2012 Nexenta Systems, Inc. All rights reserved.
  * Copyright (c) 2013 Andrew Stormont.  All rights reserved.
+ * Copyright 2020 Joyent, Inc.
+ * Copyright 2024 Bill Sommerfeld <sommerfeld@hamachi.org>
+ * Copyright 2026 Oxide Computer Company
  */
 
 
 /*	Copyright (c) 1984, 1986, 1987, 1988, 1989 AT&T	*/
-/*	  All Rights Reserved  	*/
+/*	  All Rights Reserved	*/
 
 
 /*	Parts of this product may be derived from		*/
 /*	Mortice Kern Systems Inc. and Berkeley 4.3 BSD systems.	*/
-/*	licensed from  Mortice Kern Systems Inc. and 		*/
+/*	licensed from  Mortice Kern Systems Inc. and		*/
 /*	the University of California.				*/
 
 /*
@@ -39,6 +42,7 @@
  */
 
 #include <stdio.h>
+#include <err.h>
 #include <errno.h>
 #include <pwd.h>
 #include <grp.h>
@@ -46,7 +50,9 @@
 #include <sys/stat.h>
 #include <sys/param.h>
 #include <sys/acl.h>
+#include <aclutils.h>
 #include <limits.h>
+#include <spawn.h>
 #include <unistd.h>
 #include <stdlib.h>
 #include <locale.h>
@@ -72,7 +78,6 @@
 #define	LINEBUF_SIZE		LINE_MAX	/* input or output lines */
 #define	REMOTE_FS		"/etc/dfs/fstypes"
 #define	N_FSTYPES		20
-#define	SHELL_MAXARGS		253	/* see doexec() for description */
 
 /*
  * This is the list of operations
@@ -84,10 +89,11 @@ enum Command
 {
 	PRINT,
 	ACL, AMIN, AND, ATIME, CMIN, CPIO, CSIZE, CTIME, DEPTH, EXEC, F_GROUP,
-	F_GROUPACL, F_USER, F_USERACL, FOLLOW, FSTYPE, INAME, INUM, IPATH,
-	IREGEX,	LINKS, LOCAL, LPAREN, LS, MAXDEPTH, MINDEPTH, MMIN, MOUNT,
-	MTIME, NAME, NCPIO, NEWER, NOGRP, NOT, NOUSER, OK, OR, PATH, PERM,
-	PRINT0, PRUNE, REGEX, RPAREN, SIZE, TYPE, VARARGS, XATTR, DELETE
+	GROUPACL, GSID, GSIDACL, F_USER, USERACL, USID, USIDACL, FOLLOW,
+	FSTYPE, INAME, INUM, IPATH, IREGEX, LINKS, LOCAL, LPAREN, LS, MAXDEPTH,
+	MINDEPTH, MMIN, MOUNT, MTIME, NAME, NCPIO, NEWER, NOGRP, NOT, NOUSER,
+	OK, OR, PATH, PERM, PRINT0, PRUNE, REGEX, RPAREN, SIDACL, SIZE, TYPE,
+	VARARGS, XATTR, DELETE
 };
 
 enum Type
@@ -105,7 +111,7 @@ struct Args
 /*
  * Except for pathnames, these are the only legal arguments
  */
-static struct Args commands[] =
+static const struct Args commands[] =
 {
 	"!",		NOT,		Op,
 	"(",		LPAREN,		Unary,
@@ -124,7 +130,9 @@ static struct Args commands[] =
 	"-follow",	FOLLOW,		Unary,
 	"-fstype",	FSTYPE,		Str,
 	"-group",	F_GROUP,	Num,
-	"-groupacl",	F_GROUPACL,	Num,
+	"-groupacl",	GROUPACL,	Num,
+	"-gsid",	GSID,		Num,
+	"-gsidacl",	GSIDACL,	Num,
 	"-iname",	INAME,		Str,
 	"-inum",	INUM,		Num,
 	"-ipath",	IPATH,		Str,
@@ -152,13 +160,16 @@ static struct Args commands[] =
 	"-print0",	PRINT0,		Unary,
 	"-prune",	PRUNE,		Unary,
 	"-regex",	REGEX,		Str,
+	"-sidacl",	SIDACL,		Num,
 	"-size",	SIZE,		Num,
 	"-type",	TYPE,		Num,
 	"-user",	F_USER,		Num,
-	"-useracl",	F_USERACL,	Num,
+	"-useracl",	USERACL,	Num,
+	"-usid",	USID,		Num,
+	"-usidacl",	USIDACL,	Num,
 	"-xattr",	XATTR,		Unary,
 	"-xdev",	MOUNT,		Unary,
-	NULL,		0,		0
+	0,		0,		0
 };
 
 union Item
@@ -202,24 +213,25 @@ struct Arglist
 };
 
 
-static int		compile();
-static int		execute();
-static int		doexec(char *, char **, int *);
-static int		dodelete(char *, struct stat *, struct FTW *);
-static struct Args	*lookup();
-static int		ok();
+static int		compile(char **, struct Node *, int *);
+static int		execute(const char *, const struct stat *, int,
+    struct FTW *);
+static int		doexec(const char *, char **, int *);
+static int		dodelete(const char *, const struct stat *,
+    struct FTW *);
+static const struct Args *lookup(char *);
+static int		ok(const char *, char *[]);
 static void		usage(void)	__NORETURN;
-static struct Arglist	*varargs();
-static int		list();
-static char		*getgroup();
-static FILE		*cmdopen();
-static int		cmdclose();
-static char		*getshell();
-static void 		init_remote_fs();
-static char		*getname();
-static int		readmode();
-static mode_t		getmode();
-static char		*gettail();
+static struct Arglist	*varargs(char **);
+static int		list(const char *, const struct stat *);
+static char		*getgroup(gid_t);
+static FILE		*cmdopen(char *, char **, char *, FILE *);
+static int		cmdclose(FILE *);
+static void		init_remote_fs(void);
+static char		*getname(uid_t);
+static int		readmode(const char *);
+static mode_t		getmode(mode_t);
+static const char	*gettail(const char *);
 
 
 static int walkflags = FTW_CHDIR|FTW_PHYS|FTW_ANYERR|FTW_NOLOOP;
@@ -400,7 +412,7 @@ main(int argc, char **argv)
 	while (lastlist) {
 		if (lastlist->end != lastlist->nextstr) {
 			*lastlist->nextvar = 0;
-			(void) doexec((char *)0, lastlist->arglist,
+			(void) doexec(NULL, lastlist->arglist,
 			    &exec_exitcode);
 		}
 		lastlist = lastlist->next;
@@ -415,15 +427,12 @@ main(int argc, char **argv)
  */
 
 static int
-compile(argv, np, actionp)
-char **argv;
-struct Node *np;
-int *actionp;
+compile(char **argv, struct Node *np, int *actionp)
 {
 	char *b;
 	char **av;
 	struct Node *oldnp = topnode;
-	struct Args *argp;
+	const struct Args *argp;
 	char **com;
 	int i;
 	enum Command wasop = PRINT;
@@ -442,8 +451,8 @@ int *actionp;
 		if (argp->type == Op) {
 			if (wasop == NOT || (wasop && np->action != NOT)) {
 				(void) fprintf(stderr,
-				gettext("%s: operand follows operand\n"),
-						cmdname);
+				    gettext("%s: operand follows operand\n"),
+				    cmdname);
 				exit(1);
 			}
 			if (np->action != NOT && oldnp == 0)
@@ -453,9 +462,9 @@ int *actionp;
 			wasop = PRINT;
 			if (argp->type != Unary) {
 				if (!(b = *++av)) {
-					(void) fprintf(stderr,
-					gettext("%s: incomplete statement\n"),
-							cmdname);
+					(void) fprintf(stderr, gettext(
+					    "%s: incomplete statement\n"),
+					    cmdname);
 					exit(1);
 				}
 				if (argp->type == Num) {
@@ -463,8 +472,9 @@ int *actionp;
 					    (argp->action == MINDEPTH)) &&
 					    ((int)strtol(b, (char **)NULL,
 					    10) < 0))
-						errx(1,
-					gettext("%s: value must be positive"),
+						errx(1, gettext(
+						    "%s: value must be "
+						    "positive"),
 						    (argp->action == MAXDEPTH) ?
 						    "maxdepth" : "mindepth");
 					if ((argp->action != PERM) ||
@@ -570,8 +580,8 @@ int *actionp;
 
 		case F_USER:
 		case F_GROUP:
-		case F_USERACL:
-		case F_GROUPACL: {
+		case USERACL:
+		case GROUPACL: {
 			struct	passwd	*pw;
 			struct	group *gr;
 			long value;
@@ -579,7 +589,7 @@ int *actionp;
 
 			value = -1;
 			if (argp->action == F_USER ||
-			    argp->action == F_USERACL) {
+			    argp->action == USERACL) {
 				if ((pw = getpwnam(b)) != 0)
 					value = (long)pw->pw_uid;
 			} else {
@@ -592,11 +602,72 @@ int *actionp;
 				if (errno != 0 || q == b || *q != '\0') {
 					(void) fprintf(stderr, gettext(
 					    "%s: cannot find %s name\n"),
-						cmdname, *av);
+					    cmdname, *av);
 					exit(1);
 				}
 			}
 			np->first.l = value;
+			break;
+		}
+
+		case USID:
+		case GSID:
+		case USIDACL:
+		case GSIDACL: {
+			uid_t value;
+			boolean_t need_user = ((argp->action == USID) ||
+			    (argp->action == USIDACL));
+			value = -1;
+			if (sid_to_id(b, need_user, &value)) {
+				(void) fprintf(stderr, gettext(
+				    "%s: cannot find %s name\n"),
+				    cmdname, *av);
+				exit(1);
+			}
+			np->first.l = value;
+
+			switch (argp->action) {
+			case USID:
+				np->action = F_USER;
+				break;
+
+			case GSID:
+				np->action = F_GROUP;
+				break;
+
+			case USIDACL:
+				np->action = USERACL;
+				break;
+
+			case GSIDACL:
+				np->action = GROUPACL;
+				break;
+			}
+			break;
+		}
+
+		case SIDACL: {
+			uid_t siduid = -1;
+			uid_t sidgid = -1;
+			int nouid = sid_to_id(b, B_TRUE, &siduid);
+			int nogid = sid_to_id(b, B_FALSE, &sidgid);
+
+			if (nouid != 0 && nogid != 0) {
+				(void) fprintf(stderr, gettext(
+				    "%s: cannot find uid or gid from %s\n"),
+				    cmdname, *av);
+				exit(1);
+			}
+			if (nouid != 0) {
+				np->action = GROUPACL;
+				np->first.l = sidgid;
+			} else if (nogid != 0) {
+				np->action = USERACL;
+				np->first.l = siduid;
+			} else {
+				np->first.l = siduid;
+				np->second.l = sidgid;
+			}
 			break;
 		}
 
@@ -607,9 +678,9 @@ int *actionp;
 			(*actionp)++;
 			for (;;) {
 				if ((b = *av) == 0) {
-					(void) fprintf(stderr,
-					gettext("%s: incomplete statement\n"),
-						cmdname);
+					(void) fprintf(stderr, gettext(
+					    "%s: incomplete statement\n"),
+					    cmdname);
 					exit(1);
 				}
 				if (strcmp(b, ";") == 0) {
@@ -618,8 +689,7 @@ int *actionp;
 				} else if (strcmp(b, "{}") == 0)
 					*av = dummyarg;
 				else if (strcmp(b, "+") == 0 &&
-					av[-1] == dummyarg &&
-					np->action == EXEC) {
+				    av[-1] == dummyarg && np->action == EXEC) {
 					av[-1] = 0;
 					np->first.vp = varargs(np->first.ap);
 					np->action = VARARGS;
@@ -661,7 +731,7 @@ int *actionp;
 			if (*b == '-')
 				++b;
 
-			if (readmode(b) != NULL) {
+			if (readmode(b) != 0) {
 				(void) fprintf(stderr, gettext(
 				    "find: -perm: Bad permission string\n"));
 				usage();
@@ -708,12 +778,14 @@ int *actionp;
 			/* set up cpio */
 			if ((fd = fopen(b, "w")) == NULL) {
 				(void) fprintf(stderr,
-					gettext("%s: cannot create %s\n"),
-					cmdname, b);
+				    gettext("%s: cannot create %s\n"),
+				    cmdname, b);
 				exit(1);
 			}
 
 			np->first.l = (long)cmdopen("cpio", com, "w", fd);
+			if (np->first.l == 0)
+				err(1, gettext("cannot run cpio"));
 			(void) fclose(fd);
 			walkflags |= FTW_DEPTH;
 			np->action = CPIO;
@@ -728,8 +800,8 @@ int *actionp;
 			struct stat statb;
 			if (stat(b, &statb) < 0) {
 				(void) fprintf(stderr,
-					gettext("%s: cannot access %s\n"),
-					cmdname, b);
+				    gettext("%s: cannot access %s\n"),
+				    cmdname, b);
 				exit(1);
 			}
 			np->first.l = statb.st_mtime;
@@ -752,10 +824,10 @@ int *actionp;
 		case ACL:
 			break;
 		case MAXDEPTH:
-			maxdepth = (int)strtol(b, (char **)NULL, 10);
+			maxdepth = (int)strtol(b, NULL, 10);
 			break;
 		case MINDEPTH:
-			mindepth = (int)strtol(b, (char **)NULL, 10);
+			mindepth = (int)strtol(b, NULL, 10);
 			break;
 		}
 
@@ -767,8 +839,7 @@ int *actionp;
 		goto err;
 
 	if (paren_cnt != 0) {
-		(void) fprintf(stderr, gettext("%s: unmatched '('\n"),
-		cmdname);
+		(void) fprintf(stderr, gettext("%s: unmatched '('\n"), cmdname);
 		exit(1);
 	}
 
@@ -799,15 +870,72 @@ usage(void)
 }
 
 /*
+ * ACL matching is complex enough to warrant its own function.
+ */
+static int
+aclmatch(struct Node *np, const char *filename)
+{
+	int i, t1, t2;
+	acl_t *acl;
+	void *acl_entry;
+	aclent_t *p1;
+	ace_t *p2;
+
+	if (np->action == USERACL) {
+		t1 = USER;
+		t2 = 0;
+	} else {
+		t1 = GROUP;
+		t2 = ACE_IDENTIFIER_GROUP;
+	}
+
+	if (acl_get(filename, 0, &acl) != 0)
+		return (0);
+
+	/* Old acls can't map sids */
+	if (np->action == SIDACL && acl->acl_type == ACLENT_T)
+		return (0);
+
+	for (i = 0, acl_entry = acl->acl_aclp;
+	    i != acl->acl_cnt; i++) {
+		id_t who = np->first.l;
+
+		if (acl->acl_type == ACLENT_T) {
+			p1 = (aclent_t *)acl_entry;
+			if (np->action != SIDACL &&
+			    p1->a_id == who && p1->a_type == t1) {
+				acl_free(acl);
+				return (1);
+			}
+		} else {
+			p2 = (ace_t *)acl_entry;
+
+			if (np->action == SIDACL) {
+				if (p2->a_flags & ACE_IDENTIFIER_GROUP) {
+					who = np->second.l;
+					t2 = ACE_IDENTIFIER_GROUP;
+				} else {
+					t2 = 0;
+				}
+			}
+			if (p2->a_who == who &&
+			    ((p2->a_flags & ACE_TYPE_FLAGS) == t2)) {
+				acl_free(acl);
+				return (1);
+			}
+		}
+		acl_entry = ((char *)acl_entry + acl->acl_entry_size);
+	}
+	acl_free(acl);
+	return (0);
+}
+
+/*
  * This is the function that gets executed at each node
  */
 
 static int
-execute(name, statb, type, state)
-char *name;
-struct stat *statb;
-int type;
-struct FTW *state;
+execute(const char *name, const struct stat *statb, int type, struct FTW *state)
 {
 	struct Node *np = topnode;
 	int val;
@@ -815,26 +943,26 @@ struct FTW *state;
 	long l;
 	long long ll;
 	int not = 1;
-	char *filename;
+	const char *filename;
 	int cnpreg = 0;
 
 	if (type == FTW_NS) {
 		(void) fprintf(stderr, gettext("%s: stat() error %s: %s\n"),
-			cmdname, name, strerror(errno));
+		    cmdname, name, strerror(errno));
 		error = 1;
 		return (0);
 	} else if (type == FTW_DNR) {
 		(void) fprintf(stderr, gettext("%s: cannot read dir %s: %s\n"),
-			cmdname, name, strerror(errno));
+		    cmdname, name, strerror(errno));
 		error = 1;
 	} else if (type == FTW_SLN && lflag == 1) {
 		(void) fprintf(stderr,
-			gettext("%s: cannot follow symbolic link %s: %s\n"),
-			cmdname, name, strerror(errno));
+		    gettext("%s: cannot follow symbolic link %s: %s\n"),
+		    cmdname, name, strerror(errno));
 		error = 1;
 	} else if (type == FTW_DL) {
 		(void) fprintf(stderr, gettext("%s: cycle detected for %s\n"),
-			cmdname, name);
+		    cmdname, name);
 		error = 1;
 		return (0);
 	}
@@ -888,7 +1016,7 @@ struct FTW *state;
 			 */
 			for (nremfs = 0; nremfs < fstype_index; nremfs++) {
 				if (strcmp(remote_fstypes[nremfs],
-						statb->st_fstype) == 0) {
+				    statb->st_fstype) == 0) {
 					val = 0;
 					break;
 				}
@@ -990,10 +1118,10 @@ struct FTW *state;
 				ap->nextstr = cp;
 			} else {
 				/* no more room, exec command */
-				*ap->nextvar++ = name;
+				*ap->nextvar++ = (char *)name;
 				*ap->nextvar = 0;
 				val = 1;
-				(void) doexec((char *)0, ap->arglist,
+				(void) doexec(NULL, ap->arglist,
 				    &exec_exitcode);
 				ap->nextstr = ap->end;
 				ap->nextvar = ap->firstvar;
@@ -1033,14 +1161,17 @@ struct FTW *state;
 			 * /usr/bin/find  will not pattern match a leading
 			 * '.' in a filename, unless '.' is explicitly
 			 * specified.
+			 *
+			 * The legacy behavior makes no sense for PATH.
 			 */
 #ifndef XPG4
-			fnmflags |= FNM_PERIOD;
+			if (np->action == NAME || np->action == INAME)
+				fnmflags |= FNM_PERIOD;
 #endif
 
 			val = !fnmatch(np->first.cp,
-			    (np->action == NAME || np->action == INAME)
-				? basename(path) : path, fnmflags);
+			    (np->action == NAME || np->action == INAME) ?
+			    basename(path) : path, fnmflags);
 			free(path);
 			break;
 		}
@@ -1076,7 +1207,7 @@ struct FTW *state;
 			break;
 		case XATTR:
 			filename = (walkflags & FTW_CHDIR) ?
-				gettail(name) : name;
+			    gettail(name) : name;
 			val = (pathconf(filename, _PC_XATTR_EXISTS) == 1);
 			break;
 		case ACL:
@@ -1086,43 +1217,15 @@ struct FTW *state;
 			 * nftw()) of the file
 			 */
 			filename = (walkflags & FTW_CHDIR) ?
-				gettail(name) : name;
+			    gettail(name) : name;
 			val = acl_trivial(filename);
 			break;
-		case F_USERACL:
-		case F_GROUPACL: {
-			int i;
-			acl_t *acl;
-			void *acl_entry;
-			aclent_t *p1;
-			ace_t *p2;
-
+		case USERACL:
+		case GROUPACL:
+		case SIDACL: {
 			filename = (walkflags & FTW_CHDIR) ?
 			    gettail(name) : name;
-			val = 0;
-			if (acl_get(filename, 0, &acl) != 0)
-				break;
-			for (i = 0, acl_entry = acl->acl_aclp;
-			    i != acl->acl_cnt; i++) {
-				if (acl->acl_type == ACLENT_T) {
-					p1 = (aclent_t *)acl_entry;
-					if (p1->a_id == np->first.l) {
-						val = 1;
-						acl_free(acl);
-						break;
-					}
-				} else {
-					p2 = (ace_t *)acl_entry;
-					if (p2->a_who == np->first.l) {
-						val = 1;
-						acl_free(acl);
-						break;
-					}
-				}
-				acl_entry = ((char *)acl_entry +
-				    acl->acl_entry_size);
-			}
-			acl_free(acl);
+			val = aclmatch(np, filename);
 			break;
 		}
 		case IREGEX:
@@ -1130,7 +1233,7 @@ struct FTW *state;
 			regmatch_t pmatch;
 
 			val = 0;
-			if (regexec(&preg[cnpreg], name, 1, &pmatch, NULL) == 0)
+			if (regexec(&preg[cnpreg], name, 1, &pmatch, 0) == 0)
 				val = ((pmatch.rm_so == 0) &&
 				    (pmatch.rm_eo == strlen(name)));
 			cnpreg++;
@@ -1152,7 +1255,7 @@ struct FTW *state;
 		 * 'Lastval' saves the last result (fail or pass) when
 		 * returning back to the calling routine.
 		 */
-		if (val^not) {
+		if (val ^ not) {
 			lastval = 0;
 			return (0);
 		}
@@ -1168,15 +1271,13 @@ struct FTW *state;
  */
 
 static int
-ok(name, argv)
-char *name;
-char *argv[];
+ok(const char *name, char *argv[])
 {
 	int  c;
 	int i = 0;
 	char resp[LINE_MAX + 1];
 
-	(void) fflush(stdout); 	/* to flush possible `-print' */
+	(void) fflush(stdout);	/* to flush possible `-print' */
 
 	if ((*argv != dummyarg) && (strcmp(*argv, name)))
 		(void) fprintf(stderr, "< %s ... %s >?   ", *argv, name);
@@ -1210,22 +1311,20 @@ char *argv[];
  */
 
 static int
-doexec(char *name, char *argv[], int *exitcode)
+doexec(const char *name, char *argv[], int *exitcode)
 {
 	char *cp;
 	char **av = argv;
-	char *newargs[1 + SHELL_MAXARGS + 1];
 	int dummyseen = 0;
-	int i, j, status, rc, r = 0;
-	int exit_status = 0;
-	pid_t pid, pid1;
+	int err, rc, r = 0;
+	pid_t pid;
 
 	(void) fflush(stdout);	  /* to flush possible `-print' */
 	if (name) {
 		while (cp = *av++) {
 			if (cp == dummyarg) {
 				dummyseen = 1;
-				av[-1] = name;
+				av[-1] = (char *)name;
 			}
 
 		}
@@ -1233,14 +1332,13 @@ doexec(char *name, char *argv[], int *exitcode)
 	if (argv[0] == NULL)    /* null command line */
 		return (r);
 
-	if ((pid = fork()) == -1) {
-		/* fork failed */
-		if (exitcode != NULL)
-			*exitcode = 1;
-		return (0);
-	}
-	if (pid != 0) {
-		/* parent */
+	if ((err = posix_spawnp(&pid, argv[0], NULL, NULL, argv,
+	    environ)) != 0) {
+		/* The command could not be invoked */
+		warnc(err, gettext("cannot execute %s"), argv[0]);
+		error = 1;
+		r = 1;
+	} else {
 		do {
 			/* wait for child to exit */
 			if ((rc = wait(&r)) == -1 && errno != EINTR) {
@@ -1252,67 +1350,6 @@ doexec(char *name, char *argv[], int *exitcode)
 				return (0);
 			}
 		} while (rc != pid);
-	} else {
-		/* child */
-		(void) execvp(argv[0], argv);
-		if (errno != E2BIG)
-			exit(1);
-
-		/*
-		 * We are in a situation where argv[0] points to a
-		 * script without the interpreter line, e.g. #!/bin/sh.
-		 * execvp() will execute either /usr/bin/sh or
-		 * /usr/xpg4/bin/sh against the script, and you will be
-		 * limited to SHELL_MAXARGS arguments. If you try to
-		 * pass more than SHELL_MAXARGS arguments, execvp()
-		 * fails with E2BIG.
-		 * See usr/src/lib/libc/port/gen/execvp.c.
-		 *
-		 * In this situation, process the argument list by
-		 * packets of SHELL_MAXARGS arguments with respect of
-		 * the following rules:
-		 * 1. the invocations have to complete before find exits
-		 * 2. only one invocation can be running at a time
-		 */
-
-		i = 1;
-		newargs[0] = argv[0];
-
-		while (argv[i]) {
-			j = 1;
-			while (j <= SHELL_MAXARGS && argv[i]) {
-				newargs[j++] = argv[i++];
-			}
-			newargs[j] = NULL;
-
-			if ((pid1 = fork()) == -1) {
-				/* fork failed */
-				exit(1);
-			}
-			if (pid1 == 0) {
-				/* child */
-				(void) execvp(newargs[0], newargs);
-				exit(1);
-			}
-
-			status = 0;
-
-			do {
-				/* wait for the child to exit */
-				if ((rc = wait(&status)) == -1 &&
-				    errno != EINTR) {
-					(void) fprintf(stderr,
-					    gettext("wait failed %s"),
-					    strerror(errno));
-					exit(1);
-				}
-			} while (rc != pid1);
-
-			if (status)
-				exit_status = 1;
-		}
-		/* all the invocations have completed */
-		exit(exit_status);
 	}
 
 	if (name && dummyseen) {
@@ -1329,9 +1366,9 @@ doexec(char *name, char *argv[], int *exitcode)
 }
 
 static int
-dodelete(char *name, struct stat *statb, struct FTW *state)
+dodelete(const char *name, const struct stat *statb, struct FTW *state)
 {
-	char *fn;
+	const char *fn;
 	int rc = 0;
 
 	/* restrict symlinks */
@@ -1375,11 +1412,10 @@ dodelete(char *name, struct stat *statb, struct FTW *state)
 /*
  *  Table lookup routine
  */
-static struct Args *
-lookup(word)
-char *word;
+static const struct Args *
+lookup(char *word)
 {
-	struct Args *argp = commands;
+	const struct Args *argp = commands;
 	int second;
 	if (word == 0 || *word == 0)
 		return (0);
@@ -1398,8 +1434,7 @@ char *word;
  */
 
 static struct Arglist *
-varargs(com)
-char **com;
+varargs(char **com)
 {
 	struct Arglist *ap;
 	int n;
@@ -1414,7 +1449,8 @@ char **com;
 	ap->end = (char *)ap + varsize;
 	ap->nextstr = ap->end;
 	ap->nextvar = ap->arglist;
-	while (*ap->nextvar++ = *com++);
+	while (*ap->nextvar++ = *com++)
+		;
 	ap->nextvar--;
 	ap->firstvar = ap->nextvar;
 	ap->next = lastlist;
@@ -1424,7 +1460,7 @@ char **com;
 
 /*
  * filter command support
- * fork and exec cmd(argv) according to mode:
+ * spawn cmd(argv) according to mode:
  *
  *	"r"	with fp as stdin of cmd (default stdin), cmd stdout returned
  *	"w"	with fp as stdout of cmd (default stdout), cmd stdin returned
@@ -1440,16 +1476,14 @@ static struct			/* info for each cmdopen()		*/
 } cmdproc[MAXCMDS];
 
 static FILE *
-cmdopen(cmd, argv, mode, fp)
-char	*cmd;
-char	**argv;
-char	*mode;
-FILE	*fp;
+cmdopen(char *cmd, char **argv, char *mode, FILE *fp)
 {
+	posix_spawn_file_actions_t fact;
 	int	proc;
 	int	cmdfd;
 	int	usrfd;
-	int		pio[2];
+	int	err;
+	int	pio[2];
 
 	switch (*mode) {
 	case 'r':
@@ -1473,47 +1507,46 @@ FILE	*fp;
 	if (pipe(pio))
 		return (0);
 
-	switch (cmdproc[proc].pid = fork()) {
-	case -1:
-		return (0);
-	case 0:
-		if (fp && fileno(fp) != usrfd) {
-			(void) close(usrfd);
-			if (dup2(fileno(fp), usrfd) != usrfd)
-				_exit(CMDERR);
-			(void) close(fileno(fp));
-		}
-		(void) close(cmdfd);
-		if (dup2(pio[cmdfd], cmdfd) != cmdfd)
-			_exit(CMDERR);
-		(void) close(pio[cmdfd]);
-		(void) close(pio[usrfd]);
-		(void) execvp(cmd, argv);
-		if (errno == ENOEXEC) {
-			char	**p;
-			char		**v;
-
-			/*
-			 * assume cmd is a shell script
-			 */
-
-			p = argv;
-			while (*p++);
-			if (v = (char **)malloc((p - argv + 1) *
-					sizeof (char **))) {
-				p = v;
-				*p++ = cmd;
-				if (*argv) argv++;
-				while (*p++ = *argv++);
-				(void) execv(getshell(), v);
+	if ((err = posix_spawn_file_actions_init(&fact)) == 0) {
+		if (fp != NULL && fileno(fp) != usrfd) {
+			if ((err = posix_spawn_file_actions_adddup2(&fact,
+			    fileno(fp), usrfd)) == 0) {
+				err = posix_spawn_file_actions_addclose(
+				    &fact, fileno(fp));
 			}
 		}
-		_exit(CMDERR);
-		/*NOTREACHED*/
-	default:
-		(void) close(pio[cmdfd]);
-		return (cmdproc[proc].fp = fdopen(pio[usrfd], mode));
+		if (err == 0) {
+			err = posix_spawn_file_actions_adddup2(&fact,
+			    pio[cmdfd], cmdfd);
+		}
+		if (err == 0) {
+			err = posix_spawn_file_actions_addclose(&fact,
+			    pio[cmdfd]);
+		}
+		if (err == 0) {
+			err = posix_spawn_file_actions_addclose(&fact,
+			    pio[usrfd]);
+		}
+		if (err == 0) {
+			/*
+			 * A command which is executable but not in a
+			 * recognised format is run as a shell script.
+			 */
+			err = posix_spawnp(&cmdproc[proc].pid, cmd, &fact,
+			    NULL, argv, environ);
+		}
+		(void) posix_spawn_file_actions_destroy(&fact);
 	}
+
+	if (err != 0) {
+		(void) close(pio[0]);
+		(void) close(pio[1]);
+		errno = err;
+		return (0);
+	}
+
+	(void) close(pio[cmdfd]);
+	return (cmdproc[proc].fp = fdopen(pio[usrfd], mode));
 }
 
 /*
@@ -1523,8 +1556,7 @@ FILE	*fp;
  */
 
 static int
-cmdclose(fp)
-FILE	*fp;
+cmdclose(FILE *fp)
 {
 	int	i;
 	pid_t	p, pid;
@@ -1537,7 +1569,8 @@ FILE	*fp;
 	(void) fclose(fp);
 	cmdproc[i].fp = 0;
 	pid = cmdproc[i].pid;
-	while ((p = wait(&status)) != pid && p != (pid_t)-1);
+	while ((p = wait(&status)) != pid && p != (pid_t)-1)
+		;
 	if (p == pid) {
 		status = (status >> 8) & CMDERR;
 		if (status == CMDERR)
@@ -1546,42 +1579,6 @@ FILE	*fp;
 	else
 		status = -1;
 	return (status);
-}
-
-/*
- * return pointer to the full path name of the shell
- *
- * SHELL is read from the environment and must start with /
- *
- * if set-uid or set-gid then the executable and its containing
- * directory must not be writable by the real user
- *
- * /usr/bin/sh is returned by default
- */
-
-char *
-getshell()
-{
-	char	*s;
-	char	*sh;
-	uid_t	u;
-	int	j;
-
-	if (((sh = getenv("SHELL")) != 0) && *sh == '/') {
-		if (u = getuid()) {
-			if ((u != geteuid() || getgid() != getegid()) &&
-			    access(sh, 2) == 0)
-				goto defshell;
-			s = strrchr(sh, '/');
-			*s = 0;
-			j = access(sh, 2);
-			*s = '/';
-			if (!j) goto defshell;
-		}
-		return (sh);
-	}
-defshell:
-	return ("/usr/bin/sh");
 }
 
 /*
@@ -1658,9 +1655,7 @@ getgroup(gid_t gid)
 #define	kbytes(bytes)		(((bytes) + 1023) / 1024)
 
 static int
-list(file, stp)
-	char *file;
-	struct stat *stp;
+list(const char *file, const struct stat *stp)
 {
 	char pmode[32], uname[32], gname[32], fsize[32], ftime[32];
 	int trivial;
@@ -1681,7 +1676,7 @@ list(file, stp)
 #endif
 	int who;
 	char *cp;
-	char *tailname;
+	const char *tailname;
 	time_t now;
 	long long ksize;
 
@@ -1753,7 +1748,7 @@ list(file, stp)
 
 		if (stp->st_mode & special[who * 3])
 			pmode[permoffset(who) + 3] =
-				special[who * 3 + 1 + is_exec];
+			    special[who * 3 + 1 + is_exec];
 		else if (is_exec)
 			pmode[permoffset(who) + 3] = 'x';
 		else
@@ -1796,14 +1791,12 @@ list(file, stp)
 
 	if (pmode[0] == 'b' || pmode[0] == 'c')
 		(void) sprintf(fsize, "%3ld,%4ld",
-			major(stp->st_rdev), minor(stp->st_rdev));
+		    major(stp->st_rdev), minor(stp->st_rdev));
 	else {
 		(void) sprintf(fsize, (stp->st_size < 100000000) ?
-			"%8lld" : "%lld", stp->st_size);
+		    "%8lld" : "%lld", stp->st_size);
 #ifdef	S_IFLNK
 		if (pmode[0] == 'l') {
-
-
 			who = readlink(tailname, flink, sizeof (flink) - 1);
 
 			if (who >= 0)
@@ -1821,29 +1814,34 @@ list(file, stp)
 		(void) sprintf(ftime, "%-12.12s", cp + 4);
 
 	(void) printf((stp->st_ino < 100000) ? "%5llu " :
-		"%llu ", stp->st_ino);  /* inode #	*/
+	    "%llu ", stp->st_ino);  /* inode #	*/
 #ifdef	S_IFSOCK
 	ksize = (long long) kbytes(ldbtob(stp->st_blocks)); /* kbytes */
 #else
 	ksize = (long long) kbytes(stp->st_size); /* kbytes */
 #endif
 	(void) printf((ksize < 10000) ? "%4lld " : "%lld ", ksize);
-	(void) printf("%s %2ld %s%s%s %s %s%s%s\n",
-		pmode,					/* protection	*/
-		stp->st_nlink,				/* # of links	*/
-		uname,					/* owner	*/
-		gname,					/* group	*/
-		fsize,					/* # of bytes	*/
-		ftime,					/* modify time	*/
-		file,					/* name		*/
 #ifdef	S_IFLNK
-		(pmode[0] == 'l') ? " -> " : "",
-		(pmode[0] == 'l') ? flink  : ""		/* symlink	*/
+	(void) printf("%s %2ld %s%s%s %s %s%s%s\n",
+	    pmode,					/* protection	*/
+	    stp->st_nlink,				/* # of links	*/
+	    uname,					/* owner	*/
+	    gname,					/* group	*/
+	    fsize,					/* # of bytes	*/
+	    ftime,					/* modify time	*/
+	    file,					/* name		*/
+	    (pmode[0] == 'l') ? " -> " : "",
+	    (pmode[0] == 'l') ? flink  : "");		/* symlink	*/
 #else
-		"",
-		""
+	(void) printf("%s %2ld %s%s%s %s %s\n",
+	    pmode,					/* protection	*/
+	    stp->st_nlink,				/* # of links	*/
+	    uname,					/* owner	*/
+	    gname,					/* group	*/
+	    fsize,					/* # of bytes	*/
+	    ftime,					/* modify time	*/
+	    file);					/* name		*/
 #endif
-);
 
 	return (0);
 }
@@ -1865,7 +1863,7 @@ new_string(char *s)
  * remote_fstypes array.
  */
 static void
-init_remote_fs()
+init_remote_fs(void)
 {
 	FILE    *fp;
 	char    line_buf[LINEBUF_SIZE];
@@ -1932,8 +1930,7 @@ static	uint_t	nowho;			/* No who for this mode (DOS kludge) */
  * is NULL if everything is OK, otherwise it is -1.
  */
 static int
-readmode(ascmode)
-const char *ascmode;
+readmode(const char *ascmode)
 {
 	const char *amode = ascmode;
 	PERMST *pp;
@@ -2070,7 +2067,7 @@ const char *ascmode;
 		break;
 	}
 	endp = pp;
-	return (NULL);
+	return (0);
 }
 
 /*
@@ -2078,8 +2075,7 @@ const char *ascmode;
  * value as who (user designation) mask or 0 if this isn't valid.
  */
 static int
-iswho(c)
-int c;
+iswho(int c)
 {
 	switch (c) {
 	case 'a':
@@ -2105,8 +2101,7 @@ int c;
  * in a symbolic mode.
  */
 static int
-isop(c)
-int c;
+isop(int c)
 {
 	switch (c) {
 	case '+':
@@ -2126,9 +2121,7 @@ int c;
  * 'o' are used, and sets pp->p_special to the one used.
  */
 static int
-isperm(pp, c)
-PERMST *pp;
-int c;
+isperm(PERMST *pp, int c)
 {
 	switch (c) {
 	case 'u':
@@ -2266,10 +2259,10 @@ getmode(mode_t startmode)
  * Returns the last component of a path name, unless it is
  * an absolute path, in which case it returns the whole path
  */
-static char
-*gettail(char *fname)
+static const char *
+gettail(const char *fname)
 {
-	char	*base = fname;
+	const char *base = fname;
 
 	if (*fname != '/') {
 		if ((base = strrchr(fname, '/')) != NULL)

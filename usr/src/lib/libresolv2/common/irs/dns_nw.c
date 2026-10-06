@@ -15,10 +15,6 @@
  * OF OR IN CONNECTION WITH THE USE OR PERFORMANCE OF THIS SOFTWARE.
  */
 
-#if defined(LIBC_SCCS) && !defined(lint)
-static const char rcsid[] = "$Id: dns_nw.c,v 1.12 2005/04/27 04:56:22 sra Exp $";
-#endif /* LIBC_SCCS and not lint */
-
 /* Imports. */
 
 #include "port_before.h"
@@ -579,7 +575,7 @@ normalize_name(char *name) {
 static int
 init(struct irs_nw *this) {
 	struct pvt *pvt = (struct pvt *)this->private;
-	
+
 	if (!pvt->res && !nw_res_get(this))
 		return (-1);
 	if (((pvt->res->options & RES_INIT) == 0U) &&

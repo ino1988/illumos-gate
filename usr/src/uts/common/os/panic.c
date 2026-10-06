@@ -24,6 +24,8 @@
 
 /*
  * Copyright (c) 2011, Joyent, Inc. All rights reserved.
+ * Copyright (c) 2016 by Delphix. All rights reserved.
+ * Copyright 2026 Oxide Computer Company
  */
 
 /*
@@ -146,6 +148,8 @@
 #include <sys/panic.h>
 #include <sys/fm/util.h>
 #include <sys/clock_impl.h>
+#include <sys/consdev.h>
+#include <sys/sunddi.h>
 
 /*
  * Panic variables which are set once during the QUIESCE state by the
@@ -170,6 +174,7 @@ int panic_ipl;				/* ipl on panic_cpu at time of panic */
 ushort_t panic_schedflag;		/* t_schedflag for panic_thread */
 cpu_t *panic_bound_cpu;			/* t_bound_cpu for panic_thread */
 char panic_preempt;			/* t_preempt for panic_thread */
+dev_info_t *panic_dip;			/* from dev_err(dip, CE_PANIC, ...) */
 
 /*
  * Panic variables which can be set via /etc/system or patched while
@@ -177,7 +182,7 @@ char panic_preempt;			/* t_preempt for panic_thread */
  */
 char *panic_bootstr = NULL;		/* mdboot string to use after panic */
 int panic_bootfcn = AD_BOOT;		/* mdboot function to use after panic */
-int halt_on_panic = 0;  		/* halt after dump instead of reboot? */
+int halt_on_panic = 0;			/* halt after dump instead of reboot? */
 int nopanicdebug = 0;			/* reboot instead of call debugger? */
 int in_sync = 0;			/* skip vfs_syncall() and just dump? */
 
@@ -197,8 +202,7 @@ int panic_forced = 0;
  * Triggers for panic state transitions:
  */
 int panic_quiesce;			/* trigger for CALM    -> QUIESCE */
-int panic_sync;				/* trigger for QUIESCE -> SYNC */
-int panic_dump;				/* trigger for SYNC    -> DUMP */
+int panic_dump;				/* trigger for QUIESCE    -> DUMP */
 
 /*
  * Variable signifying quiesce(9E) is in progress.
@@ -213,7 +217,7 @@ panicsys(const char *format, va_list alist, struct regs *rp, int on_panic_stack)
 	cpu_t *cp = CPU;
 
 	caddr_t intr_stack = NULL;
-	uint_t intr_actv;
+	volatile uint_t intr_actv;
 
 	ushort_t schedflag = t->t_schedflag;
 	cpu_t *bound_cpu = t->t_bound_cpu;
@@ -304,6 +308,16 @@ panicsys(const char *format, va_list alist, struct regs *rp, int on_panic_stack)
 		}
 
 		/*
+		 * From here on, the banner, the stack trace, and the dump all
+		 * use polled console I/O, so give the console driver the
+		 * chance to make itself ready. This is done only now that the
+		 * other CPUs are stopped and panicstr is set, so the driver's
+		 * hook can neither race the driver on another CPU nor block on
+		 * a lock. There is no matching exit; we are not coming back.
+		 */
+		console_polled_enter();
+
+		/*
 		 * Lower ipl to 10 to keep clock() from running, but allow
 		 * keyboard interrupts to enter the debugger.  These callbacks
 		 * are executed with panicstr set so they can bypass locks.
@@ -311,7 +325,7 @@ panicsys(const char *format, va_list alist, struct regs *rp, int on_panic_stack)
 		splx(ipltospl(CLOCK_LEVEL));
 		panic_quiesce_hw(pdp);
 		(void) FTRACE_STOP();
-		(void) callb_execute_class(CB_CL_PANIC, NULL);
+		(void) callb_execute_class(CB_CL_PANIC, 0);
 
 		if (log_intrq != NULL)
 			log_flushq(log_intrq);
@@ -335,6 +349,10 @@ panicsys(const char *format, va_list alist, struct regs *rp, int on_panic_stack)
 #endif
 			printf("\n\rpanic[cpu%d]/thread=%p: ", cp->cpu_id,
 			    (void *)t);
+		if (panic_dip != NULL) {
+			printf("%s%d: ", ddi_driver_name(panic_dip),
+			    ddi_get_instance(panic_dip));
+		}
 		vprintf(format, alist);
 		printf("\n\n");
 
@@ -357,7 +375,7 @@ panicsys(const char *format, va_list alist, struct regs *rp, int on_panic_stack)
 			}
 		}
 
-	} else if (panic_dump != 0 || panic_sync != 0 || panicstr != NULL) {
+	} else if (panic_dump != 0 || panicstr != NULL) {
 		printf("\n\rpanic[cpu%d]/thread=%p: ", cp->cpu_id, (void *)t);
 		vprintf(format, alist);
 		printf("\n");
@@ -365,23 +383,10 @@ panicsys(const char *format, va_list alist, struct regs *rp, int on_panic_stack)
 		goto spin;
 
 	/*
-	 * Prior to performing sync or dump, we make sure that do_polled_io is
+	 * Prior to performing dump, we make sure that do_polled_io is
 	 * set, but we'll leave ipl at 10; deadman(), a CY_HIGH_LEVEL cyclic,
-	 * will re-enter panic if we are not making progress with sync or dump.
+	 * will re-enter panic if we are not making progress with dump.
 	 */
-
-	/*
-	 * Sync the filesystems.  Reset t_cred if not set because much of
-	 * the filesystem code depends on CRED() being valid.
-	 */
-	if (!in_sync && panic_trigger(&panic_sync)) {
-		if (t->t_cred == NULL)
-			t->t_cred = kcred;
-		splx(ipltospl(CLOCK_LEVEL));
-		do_polled_io = 1;
-		vfs_syncall();
-	}
-
 	/*
 	 * Take the crash dump.  If the dump trigger is already set, try to
 	 * enter the debugger again before rebooting the system.

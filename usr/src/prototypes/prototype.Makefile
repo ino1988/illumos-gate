@@ -10,6 +10,6 @@
 #
 
 #
-# Copyright 2014 <contributor>
+# Copyright 2026 <contributor>
 #
 

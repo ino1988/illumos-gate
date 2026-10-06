@@ -24,17 +24,25 @@
  * Use is subject to license terms.
  */
 /*
- * Copyright (c) 2012 by Delphix. All rights reserved.
+ * Copyright (c) 2012, 2014 by Delphix. All rights reserved.
+ * Copyright 2015 Joyent, Inc.
+ * Copyright 2020 Oxide Computer Company
  */
 
 #include "lint.h"
+#include "libc.h"
 #include "thr_uberdata.h"
+#include <upanic.h>
 
 const char *panicstr;
 ulwp_t *panic_thread;
 
 static mutex_t assert_lock = DEFAULTMUTEX;
 static ulwp_t *assert_thread = NULL;
+
+mutex_t *panic_mutex = NULL;
+
+static void Abort(const char *, size_t) __NORETURN;
 
 /*
  * Called from __assert() to set panicstr and panic_thread.
@@ -57,42 +65,24 @@ grab_assert_lock()
 }
 
 static void
-Abort(const char *msg)
+Abort(const char *msg, size_t buflen)
 {
 	ulwp_t *self;
-	struct sigaction act;
-	sigset_t sigmask;
-	lwpid_t lwpid;
 
 	/* to help with core file debugging */
 	panicstr = msg;
 	if ((self = __curthread()) != NULL) {
 		panic_thread = self;
-		lwpid = self->ul_lwpid;
-	} else {
-		lwpid = _lwp_self();
 	}
 
-	/* set SIGABRT signal handler to SIG_DFL w/o grabbing any locks */
-	(void) memset(&act, 0, sizeof (act));
-	act.sa_sigaction = SIG_DFL;
-	(void) __sigaction(SIGABRT, &act, NULL);
-
-	/* delete SIGABRT from the signal mask */
-	(void) sigemptyset(&sigmask);
-	(void) sigaddset(&sigmask, SIGABRT);
-	(void) __lwp_sigmask(SIG_UNBLOCK, &sigmask);
-
-	(void) _lwp_kill(lwpid, SIGABRT);	/* never returns */
-	(void) kill(getpid(), SIGABRT);	/* if it does, try harder */
-	_exit(127);
+	upanic(msg, buflen);
 }
 
 /*
  * Write a panic message w/o grabbing any locks other than assert_lock.
  * We have no idea what locks are held at this point.
  */
-static void
+void
 common_panic(const char *head, const char *why)
 {
 	char msg[400];	/* no panic() message in the library is this long */
@@ -114,7 +104,7 @@ common_panic(const char *head, const char *why)
 	if (msg[len1 - 1] != '\n')
 		msg[len1++] = '\n';
 	(void) __write(2, msg, len1);
-	Abort(msg);
+	Abort(msg, sizeof (msg));
 }
 
 void
@@ -127,6 +117,13 @@ void
 aio_panic(const char *why)
 {
 	common_panic("*** libc aio system failure: ", why);
+}
+
+void
+mutex_panic(mutex_t *mp, const char *why)
+{
+	panic_mutex = mp;
+	common_panic("*** libc mutex system failure: ", why);
 }
 
 /*
@@ -236,7 +233,7 @@ lock_error(const mutex_t *mp, const char *who, void *cv, const char *msg)
 	(void) strcat(buf, "\n\n");
 	(void) __write(2, buf, strlen(buf));
 	if (udp->uberflags.uf_thread_error_detection >= 2)
-		Abort(buf);
+		Abort(buf, sizeof (buf));
 	assert_thread = NULL;
 	(void) _lwp_mutex_unlock(&assert_lock);
 	if (self != NULL)
@@ -325,7 +322,7 @@ rwlock_error(const rwlock_t *rp, const char *who, const char *msg)
 	(void) strcat(buf, "\n\n");
 	(void) __write(2, buf, strlen(buf));
 	if (udp->uberflags.uf_thread_error_detection >= 2)
-		Abort(buf);
+		Abort(buf, sizeof (buf));
 	assert_thread = NULL;
 	(void) _lwp_mutex_unlock(&assert_lock);
 	if (self != NULL)
@@ -373,7 +370,7 @@ thread_error(const char *msg)
 	(void) strcat(buf, "\n\n");
 	(void) __write(2, buf, strlen(buf));
 	if (udp->uberflags.uf_thread_error_detection >= 2)
-		Abort(buf);
+		Abort(buf, sizeof (buf));
 	assert_thread = NULL;
 	(void) _lwp_mutex_unlock(&assert_lock);
 	if (self != NULL)
@@ -409,16 +406,32 @@ __assfail(const char *assertion, const char *filename, int line_num)
 		lwpid = _lwp_self();
 	}
 
-	(void) strcpy(buf, "assertion failed for thread ");
+	/*
+	 * This is a hack, but since the Abort function isn't exported
+	 * to outside consumers, libzpool's vpanic() function calls
+	 * assfail() with a filename set to NULL. In that case, it'd be
+	 * best not to print "assertion failed" since it was a panic and
+	 * not an assertion failure.
+	 */
+	if (filename == NULL) {
+		(void) strcpy(buf, "failure for thread ");
+	} else {
+		(void) strcpy(buf, "assertion failed for thread ");
+	}
+
 	ultos((uint64_t)(uintptr_t)self, 16, buf + strlen(buf));
 	(void) strcat(buf, ", thread-id ");
 	ultos((uint64_t)lwpid, 10, buf + strlen(buf));
 	(void) strcat(buf, ": ");
 	(void) strcat(buf, assertion);
-	(void) strcat(buf, ", file ");
-	(void) strcat(buf, filename);
-	(void) strcat(buf, ", line ");
-	ultos((uint64_t)line_num, 10, buf + strlen(buf));
+
+	if (filename != NULL) {
+		(void) strcat(buf, ", file ");
+		(void) strcat(buf, filename);
+		(void) strcat(buf, ", line ");
+		ultos((uint64_t)line_num, 10, buf + strlen(buf));
+	}
+
 	(void) strcat(buf, "\n");
 	(void) __write(2, buf, strlen(buf));
 	/*
@@ -429,7 +442,7 @@ __assfail(const char *assertion, const char *filename, int line_num)
 	 *	if (self != NULL)
 	 *		exit_critical(self);
 	 */
-	Abort(buf);
+	Abort(buf, sizeof (buf));
 }
 
 /*
@@ -439,11 +452,18 @@ __assfail(const char *assertion, const char *filename, int line_num)
  * We don't use "#pragma weak assfail __assfail" in order to avoid
  * warnings from the check_fnames utility at build time for libraries
  * that define their own version of assfail().
+ *
+ * Additionally, ASSERT() and VERIFY() in <sys/debug.h> can invoke assfail().
+ *
+ * We would like this to be declared _NORETURN, but some caution is in order
+ * as alternate implementations of assfail() exist -- notably the one in
+ * libfakekernel -- which can return under some circumstances.
  */
 void
 assfail(const char *assertion, const char *filename, int line_num)
 {
 	__assfail(assertion, filename, line_num);
+	/* NOTREACHED */
 }
 
 void

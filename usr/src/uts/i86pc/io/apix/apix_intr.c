@@ -21,6 +21,8 @@
 
 /*
  * Copyright (c) 2010, Oracle and/or its affiliates. All rights reserved.
+ * Copyright 2018 Western Digital Corporation.  All rights reserved.
+ * Copyright 2019 Joyent, Inc.
  */
 
 #include <sys/cpuvar.h>
@@ -67,6 +69,7 @@
 #include <vm/hat_i86.h>
 #include <sys/stack.h>
 #include <sys/apix.h>
+#include <sys/smt.h>
 
 static void apix_post_hardint(int);
 
@@ -279,6 +282,7 @@ apix_do_softint_prolog(struct cpu *cpu, uint_t pil, uint_t oldpil,
 
 	it->t_intr = t;
 	cpu->cpu_thread = it;
+	smt_begin_intr(pil);
 
 	/*
 	 * Set bit for this pil in CPU's interrupt active bitmask.
@@ -330,6 +334,13 @@ apix_do_softint_epilog(struct cpu *cpu, uint_t oldpil)
 		set_base_spl();
 		/* mcpu->mcpu_pri = cpu->cpu_base_spl; */
 
+		/*
+		 * If there are pending interrupts, send a softint to
+		 * re-enter apix_do_interrupt() and get them processed.
+		 */
+		if (apixs[cpu->cpu_id]->x_intr_pending)
+			siron();
+
 		it->t_state = TS_FREE;
 		it->t_link = cpu->cpu_intr_thread;
 		cpu->cpu_intr_thread = it;
@@ -342,7 +353,9 @@ apix_do_softint_epilog(struct cpu *cpu, uint_t oldpil)
 	it->t_link = cpu->cpu_intr_thread;
 	cpu->cpu_intr_thread = it;
 	it->t_state = TS_FREE;
+	smt_end_intr();
 	cpu->cpu_thread = t;
+
 	if (t->t_flag & T_INTR_THREAD)
 		t->t_intr_start = now;
 	basespl = cpu->cpu_base_spl;
@@ -458,6 +471,8 @@ apix_hilevel_intr_prolog(struct cpu *cpu, uint_t pil, uint_t oldpil,
 		}
 	}
 
+	smt_begin_intr(pil);
+
 	/* store starting timestamp in CPu structure for this IPL */
 	mcpu->pil_high_start[pil - (LOCK_LEVEL + 1)] = now;
 
@@ -547,6 +562,8 @@ apix_hilevel_intr_epilog(struct cpu *cpu, uint_t oldpil)
 		if (t->t_flag & T_INTR_THREAD)
 			t->t_intr_start = now;
 	}
+
+	smt_end_intr();
 
 	mcpu->mcpu_pri = oldpil;
 	if (pil < CBE_HIGH_PIL)
@@ -660,6 +677,7 @@ apix_intr_thread_prolog(struct cpu *cpu, uint_t pil, caddr_t stackptr)
 	it->t_state = TS_ONPROC;
 
 	cpu->cpu_thread = it;
+	smt_begin_intr(pil);
 
 	/*
 	 * Initialize thread priority level from intr_pri
@@ -720,6 +738,13 @@ apix_intr_thread_epilog(struct cpu *cpu, uint_t oldpil)
 		mcpu->mcpu_pri = basespl;
 		(*setlvlx)(basespl, 0);
 
+		/*
+		 * If there are pending interrupts, send a softint to
+		 * re-enter apix_do_interrupt() and get them processed.
+		 */
+		if (apixs[cpu->cpu_id]->x_intr_pending)
+			siron();
+
 		it->t_state = TS_FREE;
 		/*
 		 * Return interrupt thread to pool
@@ -741,7 +766,9 @@ apix_intr_thread_epilog(struct cpu *cpu, uint_t oldpil)
 	cpu->cpu_intr_thread = it;
 	it->t_state = TS_FREE;
 
+	smt_end_intr();
 	cpu->cpu_thread = t;
+
 	if (t->t_flag & T_INTR_THREAD)
 		t->t_intr_start = now;
 	basespl = cpu->cpu_base_spl;
@@ -901,9 +928,13 @@ apix_do_interrupt(struct regs *rp, trap_trace_rec_t *ttp)
 		(void) apix_do_softint(rp);
 		ASSERT(!interrupts_enabled());
 #ifdef TRAPTRACE
-	ttp->ttr_vector = T_SOFTINT;
+		ttp->ttr_vector = T_SOFTINT;
 #endif
-		return;
+		/*
+		 * We need to check again for pending interrupts that may have
+		 * arrived while the softint was running.
+		 */
+		goto do_pending;
 	}
 
 	/*
@@ -933,7 +964,14 @@ apix_do_interrupt(struct regs *rp, trap_trace_rec_t *ttp)
 	    newipl > MAX(oldipl, cpu->cpu_base_spl)) {
 		caddr_t newsp;
 
-		if (newipl > LOCK_LEVEL) {
+		if (INTR_PENDING(apixs[cpu->cpu_id], newipl)) {
+			/*
+			 * There are already vectors pending at newipl,
+			 * queue this one and fall through to process
+			 * all pending.
+			 */
+			apix_add_pending_hardint(vector);
+		} else if (newipl > LOCK_LEVEL) {
 			if (apix_hilevel_intr_prolog(cpu, newipl, oldipl, rp)
 			    == 0) {
 				newsp = cpu->cpu_intr_stack;
@@ -957,6 +995,7 @@ apix_do_interrupt(struct regs *rp, trap_trace_rec_t *ttp)
 			return;
 	}
 
+do_pending:
 	if (apix_do_pending_hilevel(cpu, rp) < 0)
 		return;
 

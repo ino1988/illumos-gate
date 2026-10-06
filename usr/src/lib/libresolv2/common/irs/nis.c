@@ -15,12 +15,6 @@
  * OF OR IN CONNECTION WITH THE USE OR PERFORMANCE OF THIS SOFTWARE.
  */
 
-#if defined(LIBC_SCCS) && !defined(lint)
-static const char rcsid[] = "$Id: nis.c,v 1.3 2005/04/27 04:56:32 sra Exp $";
-#endif
-
-/* Imports */
-
 #include "port_before.h"
 
 #ifdef WANT_IRS_NIS
@@ -35,7 +29,7 @@ static const char rcsid[] = "$Id: nis.c,v 1.3 2005/04/27 04:56:32 sra Exp $";
 #include <errno.h>
 
 #include <sys/types.h>
-#include <netinet/in.h> 
+#include <netinet/in.h>
 #ifdef T_NULL
 #undef T_NULL			/* Silence re-definition warning of T_NULL. */
 #endif

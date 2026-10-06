@@ -1,4 +1,4 @@
-/* 
+/*
  * ***** BEGIN LICENSE BLOCK *****
  * Version: MPL 1.1/GPL 2.0/LGPL 2.1
  *
@@ -41,8 +41,6 @@
  *
  * Sun elects to use this software under the MPL license.
  */
-
-#pragma ident	"%Z%%M%	%I%	%E% SMI"
 
 #include "ecp.h"
 #include "mpi.h"
@@ -90,16 +88,22 @@ ec_GFp_nistp224_mod(const mp_int *a, mp_int *r, const GFMethod *meth)
 		switch (a_used) {
 		case 14:
 			a6b = MP_DIGIT(a, 13);
+			/* FALLTHROUGH */
 		case 13:
 			a6a = MP_DIGIT(a, 12);
+			/* FALLTHROUGH */
 		case 12:
 			a5b = MP_DIGIT(a, 11);
+			/* FALLTHROUGH */
 		case 11:
 			a5a = MP_DIGIT(a, 10);
+			/* FALLTHROUGH */
 		case 10:
 			a4b = MP_DIGIT(a, 9);
+			/* FALLTHROUGH */
 		case 9:
 			a4a = MP_DIGIT(a, 8);
+			/* FALLTHROUGH */
 		case 8:
 			a3b = MP_DIGIT(a, 7);
 		}
@@ -212,6 +216,7 @@ ec_GFp_nistp224_mod(const mp_int *a, mp_int *r, const GFMethod *meth)
 			a6 = MP_DIGIT(a, 6);
 			a6b = a6 >> 32;
 			a6a_a5b = a6 << 32;
+			/* FALLTHROUGH */
 		case 6:
 			a5 = MP_DIGIT(a, 5);
 			a5b = a5 >> 32;
@@ -219,10 +224,12 @@ ec_GFp_nistp224_mod(const mp_int *a, mp_int *r, const GFMethod *meth)
 			a5b = a5b << 32;
 			a5a_a4b = a5 << 32;
 			a5a = a5 & 0xffffffff;
+			/* FALLTHROUGH */
 		case 5:
 			a4 = MP_DIGIT(a, 4);
 			a5a_a4b |= a4 >> 32;
 			a4a_a3b = a4 << 32;
+			/* FALLTHROUGH */
 		case 4:
 			a3b = MP_DIGIT(a, 3) >> 32;
 			a4a_a3b |= a3b;
@@ -258,7 +265,7 @@ ec_GFp_nistp224_mod(const mp_int *a, mp_int *r, const GFMethod *meth)
 		}
 
 
-		/* if the value is negative, r3 has a 2's complement 
+		/* if the value is negative, r3 has a 2's complement
 		 * high value */
 		r3b = (int)(r3 >>32);
 		while (r3b > 0) {
@@ -285,13 +292,15 @@ ec_GFp_nistp224_mod(const mp_int *a, mp_int *r, const GFMethod *meth)
 			r3b = (int)(r3 >>32);
 		}
 		/* check for final reduction */
-		/* now the only way we are over is if the top 4 words are all ones */
+		/* now the only way we are over is if the top 4 words are
+		 * all ones. Subtract the curve. (curve is 2^224 - 2^96 +1)
+		 */
 		if ((r3 == (MP_DIGIT_MAX >> 32)) && (r2 == MP_DIGIT_MAX)
 			&& ((r1 & MP_DIGIT_MAX << 32)== MP_DIGIT_MAX << 32) &&
 			 ((r1 != MP_DIGIT_MAX << 32 ) || (r0 != 0)) ) {
 			/* one last subraction */
 			MP_SUB_BORROW(r0, 1, r0, 0,     carry);
-			MP_SUB_BORROW(r1, 0, r1, carry, carry);
+			MP_SUB_BORROW(r1, MP_DIGIT_MAX << 32, r1, carry, carry);
 			r2 = r3 = 0;
 		}
 
@@ -308,13 +317,14 @@ ec_GFp_nistp224_mod(const mp_int *a, mp_int *r, const GFMethod *meth)
 		MP_DIGIT(r, 0) = r0;
 #endif
 	}
+	s_mp_clamp(r);
 
   CLEANUP:
 	return res;
 }
 
 /* Compute the square of polynomial a, reduce modulo p224. Store the
- * result in r.  r could be a.  Uses optimized modular reduction for p224. 
+ * result in r.  r could be a.  Uses optimized modular reduction for p224.
  */
 mp_err
 ec_GFp_nistp224_sqr(const mp_int *a, mp_int *r, const GFMethod *meth)
@@ -355,7 +365,7 @@ ec_GFp_nistp224_div(const mp_int *a, const mp_int *b, mp_int *r,
 	if (a == NULL) {
 		return  mp_invmod(b, &meth->irr, r);
 	} else {
-		/* MPI doesn't support divmod, so we implement it using invmod and 
+		/* MPI doesn't support divmod, so we implement it using invmod and
 		 * mulmod. */
 		MP_CHECKOK(mp_init(&t, FLAG(b)));
 		MP_CHECKOK(mp_invmod(b, &meth->irr, &t));

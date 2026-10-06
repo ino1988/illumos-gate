@@ -293,8 +293,7 @@ rctlsys_get(char *name, rctl_opaque_t *old_rblk, rctl_opaque_t *new_rblk,
 		mutex_exit(&rset->rcs_lock);
 		mutex_exit(&curproc->p_lock);
 
-		nblk = kmem_alloc(sizeof (rctl_opaque_t), KM_SLEEP);
-		bzero(nblk, sizeof (rctl_opaque_t));
+		nblk = kmem_zalloc(sizeof (rctl_opaque_t), KM_SLEEP);
 		nblk->rcq_value = usage;
 
 		ret = copyout(nblk, new_rblk, sizeof (rctl_opaque_t));
@@ -1043,7 +1042,7 @@ rctlsys(int code, char *name, void *obuf, void *nbuf, size_t obufsz, int flags)
 
 	case 3:
 		/*
-		 * Private code for rctladm(1M):  "rctlctl".
+		 * Private code for rctladm(8):  "rctlctl".
 		 */
 		return (rctlsys_ctl(name, obuf, flags));
 	case 4:

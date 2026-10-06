@@ -21,16 +21,15 @@
 
 /*
  * Copyright (c) 1989, 2010, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2016 by Delphix. All rights reserved.
+ * Copyright 2026 OmniOS Community Edition (OmniOSce) Association.
  */
 
 /*	Copyright (c) 1984, 1986, 1987, 1988, 1989 AT&T	*/
-/*	  All Rights Reserved  	*/
+/*	  All Rights Reserved	*/
 
 #include <pwd.h>
 #include <zone.h>
-#if defined PS_FAULTED
-#undef  PS_FAULTED
-#endif /* PS_FAULTED */
 #include <dial.h>
 
 #include <stdlib.h>
@@ -113,7 +112,7 @@ void clean_string(char *ptr)
 	wchar_t wc;
 	size_t len;
 
-	for (cp = ptr; *cp != NULL; ) {
+	for (cp = ptr; *cp != '\0'; ) {
 		if ((len = mbtowc(&wc, cp, MB_CUR_MAX)) == -1) {
 			cp++;
 			continue;
@@ -156,110 +155,6 @@ arg_string(enum trust type, char *fmt, ...)
 	return (strdup(buf));
 }
 
-/* stolen from libc/gen/port/gen/execvp.c */
-static const char *
-execat(const char *s1, const char *s2, char *si)
-{
-        char    *s;
-        int cnt = PATH_MAX + 1; /* number of characters in s2 */
-
-        s = si;
-        while (*s1 && *s1 != ':') {
-                if (cnt > 0) {
-                        *s++ = *s1++;
-                        cnt--;
-                } else
-                        s1++;
-        }
-        if (si != s && cnt > 0) {
-                *s++ = '/';
-                cnt--;
-        }
-        while (*s2 && cnt > 0) {
-                *s++ = *s2++;
-                cnt--;
-        }
-        *s = '\0';
-        return (*s1 ? ++s1: 0);
-}
-
-/*
- * Similiar to execvp(), execpt you can supply an environment and we always
- * use /bin/sh for shell scripts.  The PATH searched is the PATH in the
- * current environment, not the environment in the argument list.
- * This was pretty much stolen from libc/gen/port/execvp.c
- */
-static int
-execvpe(char *name, char *const argv[], char *const envp[])
-{
-	char *path;
-	char fname[PATH_MAX+2];
-	char *newargs[256];
-	int i;
-	const char *cp;
-	unsigned etxtbsy = 1;
-        int eacces = 0;
-
-	if (*name == '\0') {
-		errno = ENOENT;
-		return (-1);
-	}
-
-	if ((path = getenv("PATH")) == NULL)
-		path = "/usr/bin:/bin";
-
-        cp = strchr(name, '/')? (const char *)"": path;
-
-        do {
-                cp = execat(cp, name, fname);
-        retry:
-                /*
-                 * 4025035 and 4038378
-                 * if a filename begins with a "-" prepend "./" so that
-                 * the shell can't interpret it as an option
-                 */
-                if (*fname == '-') {
-                        size_t size = strlen(fname) + 1;
-                        if ((size + 2) > sizeof (fname)) {
-                                errno = E2BIG;
-                                return (-1);
-                        }
-                        (void) memmove(fname + 2, fname, size);
-                        fname[0] = '.';
-                        fname[1] = '/';
-                }
-                (void) execve(fname, argv, envp);
-                switch (errno) {
-                case ENOEXEC:
-                        newargs[0] = "sh";
-                        newargs[1] = fname;
-                        for (i = 1; (newargs[i + 1] = argv[i]) != NULL; ++i) {
-                                if (i >= 254) {
-                                        errno = E2BIG;
-                                        return (-1);
-                                }
-                        }
-                        (void) execve("/bin/sh", newargs, envp);
-                        return (-1);
-                case ETXTBSY:
-                        if (++etxtbsy > 5)
-                                return (-1);
-                        (void) sleep(etxtbsy);
-                        goto retry;
-                case EACCES:
-                        ++eacces;
-                        break;
-                case ENOMEM:
-                case E2BIG:
-                case EFAULT:
-                        return (-1);
-                }
-        } while (cp);
-        if (eacces)
-                errno = EACCES;
-        return (-1);
-}
-
 static char time_buf[50];
 
 /**
@@ -289,6 +184,7 @@ exec(int type, ...)
 	char			*printerName;
 	char			*printerNameToShow;
 	static char		nameBuf[100];
+	char			keyBuf[sizeof (BIGGEST_NUMBER_S)];
 	char			*clean_title;
 
 	PSTATUS			*printer;
@@ -328,7 +224,7 @@ exec(int type, ...)
 		request = printer->request;
 		ep = printer->exec;
 		break;
-		
+
 	case EX_FAULT_MESSAGE:
 		printer = va_arg(args, PSTATUS *);
 		request = va_arg(args, RSTATUS *);
@@ -336,7 +232,7 @@ exec(int type, ...)
 			return(0);
 		}
 		ep = printer->fault_exec;
-		printerName = (printer->printer && printer->printer->name 
+		printerName = (printer->printer && printer->printer->name
 				  ? printer->printer->name : "??");
 			snprintf(nameBuf, sizeof (nameBuf),
 				"%s (on %s)\n", printerName, Local_System);
@@ -462,9 +358,8 @@ exec(int type, ...)
 	addenv (&envp, "LC_MONETARY", getenv("LC_MONETARY"));
 	addenv (&envp, "LC_NUMERIC", getenv("LC_NUMERIC"));
 	addenv (&envp, "LC_TIME", getenv("LC_TIME"));
-
-	sprintf ((cp = BIGGEST_NUMBER_S), "%ld", key);
-	addenv (&envp, "SPOOLER_KEY", cp);
+	sprintf (keyBuf, "%ld", key);
+	addenv (&envp, "SPOOLER_KEY", keyBuf);
 
 #if	defined(DEBUG)
 	addenv (&envp, "LPDEBUG", (debug? "1" : "0"));
@@ -474,7 +369,7 @@ exec(int type, ...)
 	 * Open the standard input, standard output, and standard error.
 	 */
 	switch (type) {
-		
+
 	case EX_SLOWF:
 	case EX_INTERF:
 		/*
@@ -584,13 +479,13 @@ exec(int type, ...)
 					 printer->printer->device);
 		if (ret != 0)
 			Done (ret, errno);
-			
+
 		if (!(request->request->outcome & RS_FILTERED))
 			file_list = request->request->file_list;
 
 		else {
 			register int		count	= 0;
-			register char *		num	= BIGGEST_REQID_S;
+			char			num[sizeof (BIGGEST_REQID_S)];
 			register char *		prefix;
 
 			prefix = makestr(
@@ -718,7 +613,7 @@ exec(int type, ...)
 		 */
 		cp = strchr(request->secure->user, '@');
 
-		allTraysWithForm(printer, request->form); 
+		allTraysWithForm(printer, request->form);
 
 		/*
 		 * Fix for 4137389
@@ -737,7 +632,7 @@ exec(int type, ...)
 		} else if (strcmp(clean_title, "") != 0) {
 			char *ct_p;
 
-			for (ct_p = clean_title; *ct_p != NULL; ct_p++) {
+			for (ct_p = clean_title; *ct_p != '\0'; ct_p++) {
 				if (*ct_p == '"')
 					*ct_p = ' ';
 			}
@@ -881,7 +776,7 @@ exec(int type, ...)
 		 */
 
 		argbuf[0] = '\0';
-				
+
 		if (printer->printer->options) {
 			char **tmp = printer->printer->options;
 			while(*tmp != NULL) {
@@ -959,8 +854,8 @@ exec(int type, ...)
 
 		/*
 		 * Do the ``raw'' bit last, to ensure it gets
-		 * done. If the user doesn't want this, then he or
-		 * she can do the correct thing using -o stty=
+		 * done. If the user doesn't want this, then they
+		 * can do the correct thing using -o stty=
 		 * and leaving out the -r option.
 		 */
 		if (request->request->actions & ACT_RAW) {
@@ -1179,7 +1074,7 @@ exec(int type, ...)
 	} else if (initgroups(pwp->pw_name, procgid) < 0) {
 		note("initgroups() call failed %d\n", errno);
 	}
-	
+
 	setgid (procgid);
 	setuid (procuid);
 
@@ -1245,7 +1140,7 @@ Fork1(EXEC *ep)
 		close(fds[1]);
 		ep->md = 0;
 		return (-1);
-	
+
 	case 0:
 		ChildMd = mconnect(NULL, fds[1], fds[1]);
 		return (0);
@@ -1268,10 +1163,10 @@ Fork2(void)
 	case -1:
 		Done (EXEC_EXIT_NFORK, errno);
 		/*NOTREACHED*/
-					
+
 	case 0:
 		return;
-					
+
 	default:
 		/*
 		 * Delay calling "ignore_fault_signals()" as long
@@ -1319,7 +1214,7 @@ cool_heels(void)
 	WaitedChildPid = 0;
 	while ((WaitedChildPid = wait(&status)) != ChildPid)
 		;
-			
+
 	if (
 		EXITED(status) > EXEC_EXIT_USER
 	     && EXITED(status) != EXEC_EXIT_FAULT

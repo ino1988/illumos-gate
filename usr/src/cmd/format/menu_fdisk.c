@@ -20,6 +20,7 @@
  */
 /*
  * Copyright (c) 1993, 2010, Oracle and/or its affiliates. All rights reserved.
+ * Copyright 2016 Toomas Soome <tsoome@me.com>
  */
 
 /*
@@ -60,6 +61,8 @@
 #include "auto_sense.h"
 
 extern	struct menu_item menu_fdisk[];
+struct mboot boot_sec;
+uint_t	xstart;
 
 /*
  * Byte swapping macros for accessing struct ipart
@@ -83,7 +86,6 @@ extern	struct menu_item menu_fdisk[];
 
 
 /* Function prototypes */
-#ifdef	__STDC__
 
 #if	defined(sparc)
 
@@ -93,19 +95,6 @@ static int getlong(uchar_t **);
 #endif	/* defined(sparc) */
 
 static int get_solaris_part(int fd, struct ipart *ipart);
-
-#else	/* __STDC__ */
-
-#if	defined(sparc)
-
-static int getbyte();
-static int getlong();
-
-#endif	/* defined(sparc) */
-
-static int get_solaris_part();
-
-#endif	/* __STDC__ */
 
 #ifdef i386
 int extpart_init(ext_part_t **epp);
@@ -351,7 +340,7 @@ open_cur_file(int mode)
  * Use of this is restricted to interactive mode only.
  */
 int
-c_fdisk()
+c_fdisk(void)
 {
 
 	char		buf[MAXPATHLEN];
@@ -361,7 +350,7 @@ c_fdisk()
 	/*
 	 * We must be in interactive mode to use the fdisk command
 	 */
-	if (option_f != (char *)NULL || isatty(0) != 1 || isatty(1) != 1) {
+	if (option_f != NULL || isatty(0) != 1 || isatty(1) != 1) {
 		err_print("Fdisk command is for interactive use only!\n");
 		return (-1);
 	}
@@ -421,7 +410,7 @@ c_fdisk()
  */
 #ifdef DEADCODE
 static void
-update_cur_parts()
+update_cur_parts(void)
 {
 
 	int i;
@@ -709,6 +698,16 @@ copy_solaris_part(struct ipart *ipart)
 	}
 
 	if ((fd = open(buf, O_RDONLY)) < 0) {
+		/*
+		 * Labeled device support in lofi provides p0 partition on
+		 * both x86 and sparc. However, sparc does not implement fdisk
+		 * partitioning. This workaround will allow format
+		 * to ignore fdisk errors in case of lofi devices.
+		 */
+		if (strcmp(cur_disk->disk_dkinfo.dki_cname, "lofi") == 0) {
+			solaris_offset = 0;
+			return (0);
+		}
 		err_print("Error: can't open disk '%s'.\n", buf);
 		return (-1);
 	}
@@ -946,7 +945,7 @@ auto_solaris_part(struct dk_label *label)
 
 
 int
-good_fdisk()
+good_fdisk(void)
 {
 	char		buf[MAXPATHLEN];
 	struct stat	statbuf;
@@ -965,6 +964,15 @@ good_fdisk()
 	if (lel(cur_disk->fdisk_part.numsect) > 0) {
 		return (1);
 	} else {
+		/*
+		 * Labeled device support in lofi provides p0 partition on
+		 * both x86 and sparc. However, sparc does not implement fdisk
+		 * partitioning. This workaround will allow format
+		 * to ignore fdisk errors in case of lofi devices.
+		 */
+		if (strcmp(cur_disk->disk_dkinfo.dki_cname, "lofi") == 0) {
+			return (1);
+		}
 		err_print("WARNING - ");
 		err_print("This disk may be in use by an application "
 		    "that has\n\t  modified the fdisk table. Ensure "

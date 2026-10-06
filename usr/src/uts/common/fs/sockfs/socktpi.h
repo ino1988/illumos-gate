@@ -21,6 +21,7 @@
 
 /*
  * Copyright (c) 2008, 2010, Oracle and/or its affiliates. All rights reserved.
+ * Copyright 2022 Garrett D'Amore
  */
 
 #ifndef _SOCKFS_SOCKTPI_H
@@ -212,37 +213,18 @@ typedef struct sotpi_info {
 	 * transport. sti_ux_vp and v_stream->sd_vnode form the
 	 * cross-linkage between the underlying fs vnode corresponding
 	 * to the bound sockaddr_un and the socket node.
+	 *
+	 * sti_ux_taddr holds the result of translations done in
+	 * so_ux_addr_xlate(), which may or may not be the same as
+	 * sti_ux_faddr (which is our connected peer address).
 	 */
 	struct so_ux_addr sti_ux_laddr; /* laddr bound with the transport */
-	struct so_ux_addr sti_ux_faddr; /* temporary peer address */
+	struct so_ux_addr sti_ux_faddr; /* connected peer address */
+	struct so_ux_addr sti_ux_taddr; /* temporary address for sendmsg */
 	struct vnode	*sti_ux_bound_vp; /* bound AF_UNIX file system vnode */
-	struct sonode	*sti_next_so; 	/* next sonode on socklist	*/
+	struct sonode	*sti_next_so;	/* next sonode on socklist	*/
 	struct sonode	*sti_prev_so;	/* previous sonode on socklist	*/
 	mblk_t	*sti_discon_ind_mp;	/* T_DISCON_IND received from below */
-
-	/*
-	 * For NL7C sockets:
-	 *
-	 * sti_nl7c_flags	the NL7C state of URL processing.
-	 *
-	 * sti_nl7c_rcv_mp	mblk_t chain of already received data to be
-	 *			passed up to the app after NL7C gives up on
-	 *			a socket.
-	 *
-	 * sti_nl7c_rcv_rval	returned rval for last mblk_t from above.
-	 *
-	 * sti_nl7c_uri		the URI currently being processed.
-	 *
-	 * sti_nl7c_rtime	URI request gethrestime_sec().
-	 *
-	 * sti_nl7c_addr	pointer returned by nl7c_addr_lookup().
-	 */
-	uint64_t	sti_nl7c_flags;
-	mblk_t		*sti_nl7c_rcv_mp;
-	int64_t		sti_nl7c_rcv_rval;
-	void		*sti_nl7c_uri;
-	time_t		sti_nl7c_rtime;
-	void		*sti_nl7c_addr;
 } sotpi_info_t;
 
 struct T_capability_ack;
@@ -257,7 +239,7 @@ extern void	sotpi_update_state(struct sonode *, struct T_capability_ack *,
 		    struct sockaddr *, socklen_t, struct sockaddr *, socklen_t,
 		    short);
 
-extern sotpi_info_t 	*sotpi_sototpi(struct sonode *);
+extern sotpi_info_t	*sotpi_sototpi(struct sonode *);
 #ifdef DEBUG
 #define	SOTOTPI(so)	(sotpi_sototpi(so))
 #else

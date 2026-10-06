@@ -23,6 +23,7 @@
 # Copyright (c) 1999 by Sun Microsystems, Inc.
 # All rights reserved.
 #
+# Copyright (c) 2018, Joyent, Inc.
 
 FSTYPE=		udfs
 LIBPROG=	fsck
@@ -37,8 +38,10 @@ UDFSDIR=	../mkfs
 UDFSOBJS=	udfslib.o
 #UDFSSRCS=	$(UDFSOBJS:%.o=%.c)
 
-CERRWARN +=	-_gcc=-Wno-uninitialized
 CERRWARN +=	-_gcc=-Wno-parentheses
+
+# not linted
+SMATCH=off
 
 OBJS=		$(FSCKOBJS) $(UDFSOBJS)
 SRCS=		$(FSCKSRCS) $(UDFSSRCS) ../mkfs/udfslib.c
@@ -68,21 +71,5 @@ $(POFILE):      $(SRCS)
 	sed "/^domain/d" messages.po >  $@
 	$(RM) $(POFILE).i messages.po
 
-lint:
-	$(LINT.c) -mu $(SRCS)
-
-clean:     
+clean:
 	$(RM) $(FSCKOBJS) $(UDFSOBJS)
-
-putback:
-	-cstyle -p inode.c
-	-cstyle -p main.c
-	-cstyle -p pass1.c
-	-cstyle -p setup.c
-	-cstyle -p utilities.c
-	-keywords inode.c
-	-keywords main.c
-	-keywords pass1.c
-	-keywords setup.c
-	-keywords utilities.c
-	-keywords Makefile

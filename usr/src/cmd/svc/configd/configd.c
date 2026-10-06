@@ -25,6 +25,7 @@
 
 /*
  * Copyright (c) 2012, Joyent, Inc. All rights reserved.
+ * Copyright (c) 2016 by Delphix. All rights reserved.
  */
 
 #include <assert.h>
@@ -71,12 +72,12 @@
  *
  * 2. Door Thread Pool Management
  * ------------------------------
- * Whenever door_return(3door) returns from the kernel and there are no
+ * Whenever door_return(3C) returns from the kernel and there are no
  * other configd threads waiting for requests, libdoor automatically
  * invokes a function registered with door_server_create(), to request a new
  * door server thread.  The default function just creates a thread that calls
- * door_return(3door).  Unfortunately, since it can take a while for the new
- * thread to *get* to door_return(3door), a stream of requests can cause a
+ * door_return(3C).  Unfortunately, since it can take a while for the new
+ * thread to *get* to door_return(3C), a stream of requests can cause a
  * large number of threads to be created, even though they aren't all needed.
  *
  * In our callback, new_server_needed(), we limit ourself to two new threads
@@ -353,11 +354,11 @@ create_connection(ucred_t *uc, repository_door_request_t *rp,
 		    sizeof (info))
 			return (REPOSITORY_DOOR_FAIL_PERMISSION_DENIED);
 
-		privileged = 1;			/* he gets full privileges */
+		privileged = 1;			/* it gets full privileges */
 	} else if (privileged_user != 0) {
 		/*
 		 * in privileged user mode, only one particular user is
-		 * allowed to connect to us, and he can do anything.
+		 * allowed to connect to us, and they can do anything.
 		 */
 		if (ucred_geteuid(uc) != privileged_user)
 			return (REPOSITORY_DOOR_FAIL_PERMISSION_DENIED);
@@ -476,7 +477,7 @@ daemonize_start(void)
 		 */
 		struct sigaction act;
 
-		act.sa_sigaction = SIG_DFL;
+		act.sa_handler = SIG_DFL;
 		(void) sigemptyset(&act.sa_mask);
 		act.sa_flags = 0;
 
@@ -597,7 +598,7 @@ main(int argc, char *argv[])
 			 */
 			privileged_pid = getppid();
 			(void) snprintf(pidpath, sizeof (pidpath),
-			    "/proc/%d/psinfo", privileged_pid);
+			    "/proc/%" _PRIdID "/psinfo", privileged_pid);
 			if ((fd = open(pidpath, O_RDONLY)) < 0 ||
 			    getppid() != privileged_pid) {
 				(void) fprintf(stderr,
@@ -674,7 +675,7 @@ main(int argc, char *argv[])
 	(void) sigfillset(&act.sa_mask);
 
 	/* signals to ignore */
-	act.sa_sigaction = SIG_IGN;
+	act.sa_handler = SIG_IGN;
 	act.sa_flags = 0;
 	(void) sigaction(SIGPIPE, &act, NULL);
 	(void) sigaction(SIGALRM, &act, NULL);

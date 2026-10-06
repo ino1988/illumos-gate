@@ -20,8 +20,10 @@
  */
 
 /*
- *  Copyright 2009 Sun Microsystems, Inc.  All rights reserved.
- *  Use is subject to license terms.
+ * Copyright 2009 Sun Microsystems, Inc.  All rights reserved.
+ * Use is subject to license terms.
+ * Copyright (c) 2018, Joyent, Inc.
+ * Copyright 2024 Oxide Computer Co.
  */
 
 /*
@@ -44,6 +46,7 @@
 #include <sys/pci_impl.h>
 #include <sys/pcie_acpi.h>
 #include <sys/hotplug/pci/pcie_hp.h>
+#include <sys/hotplug/pci/pciehpc.h>
 #include <sys/hotplug/pci/pciehpc_acpi.h>
 
 /* local static functions */
@@ -264,6 +267,8 @@ pciehpc_acpi_slotinfo_init(pcie_hp_ctrl_t *ctrl_p)
 	ctrl_p->hc_has_emi_lock = (slot_capabilities &
 	    PCIE_SLOTCAP_EMI_LOCK_PRESENT) ? B_TRUE : B_FALSE;
 
+	pciehpc_led_init(slot_p);
+
 	/* get current slot state from the hw */
 	pciehpc_get_slot_state(slot_p);
 	if (slot_p->hs_info.cn_state >= DDI_HP_CN_STATE_ENABLED)
@@ -271,9 +276,16 @@ pciehpc_acpi_slotinfo_init(pcie_hp_ctrl_t *ctrl_p)
 
 	mutex_exit(&ctrl_p->hc_mutex);
 
-	/* setup Notify() handler for hot plug events from ACPI BIOS */
-	if (pciehpc_acpi_install_event_handler(ctrl_p) != AE_OK)
+	if (!pciehpc_slot_kstat_init(slot_p)) {
+		(void) pciehpc_acpi_slotinfo_uninit(ctrl_p);
 		return (DDI_FAILURE);
+	}
+
+	/* setup Notify() handler for hot plug events from ACPI BIOS */
+	if (pciehpc_acpi_install_event_handler(ctrl_p) != AE_OK) {
+		(void) pciehpc_acpi_slotinfo_uninit(ctrl_p);
+		return (DDI_FAILURE);
+	}
 
 	PCIE_DBG("ACPI hot plug is enabled for slot #%d\n",
 	    slot_p->hs_phy_slot_num);
@@ -295,6 +307,8 @@ pciehpc_acpi_slotinfo_uninit(pcie_hp_ctrl_t *ctrl_p)
 	if (slot_p->hs_info.cn_name)
 		kmem_free(slot_p->hs_info.cn_name,
 		    strlen(slot_p->hs_info.cn_name) + 1);
+
+	pciehpc_slot_kstat_fini(slot_p);
 
 	return (DDI_SUCCESS);
 }
@@ -394,7 +408,6 @@ pciehpc_acpi_slot_poweroff(pcie_hp_slot_t *slot_p, ddi_hp_cn_state_t *result)
 		/* slot is in the 'disconnected' state */
 		PCIE_DBG("slot %d already disconnected\n",
 		    slot_p->hs_phy_slot_num);
-		ASSERT(slot_p->hs_power_led_state == PCIE_HP_LED_OFF);
 
 		*result = slot_p->hs_info.cn_state;
 		return (DDI_SUCCESS);
@@ -649,27 +662,13 @@ pciehpc_acpi_power_off_slot(pcie_hp_ctrl_t *ctrl_p)
 static ACPI_STATUS
 pciehpc_acpi_get_dev_state(ACPI_HANDLE obj, int *statusp)
 {
-	ACPI_DEVICE_INFO *info;
-	int ret = AE_OK;
+	int status;
+	ACPI_STATUS ret;
 
-	/*
-	 * Get device info object
-	 */
-	if ((ret = AcpiGetObjectInfo(obj, &info)) != AE_OK)
-		return (ret);
-
-	if (info->Valid & ACPI_VALID_STA) {
-		*statusp = info->CurrentStatus;
-	} else {
-		/*
-		 * no _STA present; assume the device status is normal
-		 * (i.e present, enabled, shown in UI and functioning).
-		 * See section 6.3.7 of ACPI 3.0 spec.
-		 */
-		*statusp = STATUS_NORMAL;
+	ret = acpica_get_object_status(obj, &status);
+	if (ACPI_SUCCESS(ret)) {
+		*statusp = status;
 	}
-
-	AcpiOsFree(info);
 
 	return (ret);
 }

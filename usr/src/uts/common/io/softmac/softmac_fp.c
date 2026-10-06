@@ -24,6 +24,12 @@
  */
 
 /*
+ * Copyright 2019, Joyent, Inc.
+ * Copyright 2022 Garrett D'Amore
+ * Copyright 2025 Oxide Computer Company
+ */
+
+/*
  * Softmac data-path switching:
  *
  * - Fast-path model
@@ -122,6 +128,7 @@
 #include <net/if.h>
 
 static kmutex_t		softmac_taskq_lock;
+static kthread_t	*softmac_taskq_thread;
 static kcondvar_t	softmac_taskq_cv;
 static list_t		softmac_taskq_list;	/* List of softmac_upper_t */
 boolean_t		softmac_taskq_quit;
@@ -143,8 +150,8 @@ softmac_fp_init()
 	softmac_taskq_done = B_FALSE;
 	list_create(&softmac_taskq_list, sizeof (softmac_upper_t),
 	    offsetof(softmac_upper_t, su_taskq_list_node));
-	(void) thread_create(NULL, 0, softmac_taskq_dispatch, NULL, 0,
-	    &p0, TS_RUN, minclsyspri);
+	softmac_taskq_thread = thread_create(NULL, 0, softmac_taskq_dispatch,
+	    NULL, 0, &p0, TS_RUN, minclsyspri);
 }
 
 void
@@ -159,6 +166,7 @@ softmac_fp_fini()
 	while (!softmac_taskq_done)
 		cv_wait(&softmac_taskq_cv, &softmac_taskq_lock);
 	mutex_exit(&softmac_taskq_lock);
+	thread_join(softmac_taskq_thread->t_did);
 	list_destroy(&softmac_taskq_list);
 
 	mutex_destroy(&softmac_taskq_lock);
@@ -308,7 +316,6 @@ softmac_capability_advertise(softmac_upper_t *sup, mblk_t *mp)
 	boolean_t		dld_capable = B_FALSE;
 	boolean_t		hcksum_capable = B_FALSE;
 	boolean_t		zcopy_capable = B_FALSE;
-	boolean_t		mdt_capable = B_FALSE;
 
 	ASSERT(sup->su_mode == SOFTMAC_FASTPATH);
 
@@ -342,12 +349,6 @@ softmac_capability_advertise(softmac_upper_t *sup, mblk_t *mp)
 		zcopy_capable = B_TRUE;
 		subsize += sizeof (dl_capability_sub_t) +
 		    sizeof (dl_capab_zerocopy_t);
-	}
-
-	if (softmac->smac_mdt) {
-		mdt_capable = B_TRUE;
-		subsize += sizeof (dl_capability_sub_t) +
-		    sizeof (dl_capab_mdt_t);
 	}
 
 	/*
@@ -429,30 +430,6 @@ softmac_capability_advertise(softmac_upper_t *sup, mblk_t *mp)
 		dlcapabsetqid(&(zcopy.zerocopy_mid), sup->su_rq);
 		bcopy(&zcopy, ptr, sizeof (dl_capab_zerocopy_t));
 		ptr += sizeof (dl_capab_zerocopy_t);
-	}
-
-	/*
-	 * MDT
-	 */
-	if (mdt_capable) {
-		dl_capab_mdt_t mdt;
-
-		dlsp = (dl_capability_sub_t *)ptr;
-
-		dlsp->dl_cap = DL_CAPAB_MDT;
-		dlsp->dl_length = sizeof (dl_capab_mdt_t);
-		ptr += sizeof (dl_capability_sub_t);
-
-		bzero(&mdt, sizeof (dl_capab_mdt_t));
-		mdt.mdt_version = MDT_VERSION_2;
-		mdt.mdt_flags = DL_CAPAB_MDT_ENABLE;
-		mdt.mdt_hdr_head = softmac->smac_mdt_capab.mdt_hdr_head;
-		mdt.mdt_hdr_tail = softmac->smac_mdt_capab.mdt_hdr_tail;
-		mdt.mdt_max_pld = softmac->smac_mdt_capab.mdt_max_pld;
-		mdt.mdt_span_limit = softmac->smac_mdt_capab.mdt_span_limit;
-		dlcapabsetqid(&(mdt.mdt_mid), sup->su_rq);
-		bcopy(&mdt, ptr, sizeof (dl_capab_mdt_t));
-		ptr += sizeof (dl_capab_mdt_t);
 	}
 
 	ASSERT(ptr == mp->b_rptr + sizeof (dl_capability_ack_t) + subsize);
@@ -658,7 +635,6 @@ softmac_unbind_req(softmac_upper_t *sup, mblk_t *mp)
 	}
 	mutex_exit(&softmac->smac_active_mutex);
 
-done:
 	qreply(sup->su_wq, ackmp);
 }
 
@@ -764,7 +740,7 @@ softmac_wput_single_nondata(softmac_upper_t *sup, mblk_t *mp)
 	 * operation is is serialized by softmac_wput_nondata_task().
 	 */
 	if (sup->su_mode != SOFTMAC_FASTPATH) {
-		dld_wput(sup->su_wq, mp);
+		(void) dld_wput(sup->su_wq, mp);
 		return;
 	}
 
@@ -852,7 +828,8 @@ softmac_taskq_dispatch(void)
 			sup->su_taskq_scheduled = B_FALSE;
 			mutex_exit(&softmac_taskq_lock);
 			VERIFY(taskq_dispatch(system_taskq,
-			    softmac_wput_nondata_task, sup, TQ_SLEEP) != NULL);
+			    softmac_wput_nondata_task, sup, TQ_SLEEP) !=
+			    TASKQID_INVALID);
 			mutex_enter(&softmac_taskq_lock);
 			sup = list_head(&softmac_taskq_list);
 		}
@@ -893,7 +870,7 @@ softmac_wput_nondata(softmac_upper_t *sup, mblk_t *mp)
 	mutex_exit(&sup->su_disp_mutex);
 
 	if (taskq_dispatch(system_taskq, softmac_wput_nondata_task,
-	    sup, TQ_NOSLEEP) != NULL) {
+	    sup, TQ_NOSLEEP) != TASKQID_INVALID) {
 		return;
 	}
 
@@ -985,9 +962,9 @@ softmac_wput_data(softmac_upper_t *sup, mblk_t *mp)
 	 * process of switching.
 	 */
 	if (sup->su_mode != SOFTMAC_FASTPATH)
-		dld_wput(sup->su_wq, mp);
+		(void) dld_wput(sup->su_wq, mp);
 	else
-		(void) softmac_fastpath_wput_data(sup, mp, NULL, 0);
+		(void) softmac_fastpath_wput_data(sup, mp, (uintptr_t)NULL, 0);
 }
 
 /*ARGSUSED*/
@@ -1018,7 +995,7 @@ softmac_fastpath_wput_data(softmac_upper_t *sup, mblk_t *mp, uintptr_t f_hint,
 	 */
 	if (SOFTMAC_CANPUTNEXT(wq)) {
 		putnext(wq, mp);
-		return (NULL);
+		return ((mac_tx_cookie_t)NULL);
 	}
 
 	if (sup->su_tx_busy) {

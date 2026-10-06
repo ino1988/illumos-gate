@@ -311,7 +311,7 @@ amd_lookup_by_mcid(topo_mod_t *mod, topo_instance_t id)
 	char path[64];
 	int fd, err;
 
-	(void) snprintf(path, sizeof (path), "/dev/mc/mc%d", id);
+	(void) snprintf(path, sizeof (path), "/dev/mc/mc%" PRIu64, id);
 	fd = open(path, O_RDONLY);
 
 	if (fd == -1) {
@@ -321,7 +321,7 @@ amd_lookup_by_mcid(topo_mod_t *mod, topo_instance_t id)
 		 * link.  So try again via /devices.
 		 */
 		(void) snprintf(path, sizeof (path),
-		    "/devices/pci@0,0/pci1022,1102@%x,2:mc-amd",
+		    "/devices/pci@0,0/pci1022,1102@%" PRIx64 ",2:mc-amd",
 		    MC_AMD_DEV_OFFSET + id);
 		fd = open(path, O_RDONLY);
 	}
@@ -467,10 +467,10 @@ amd_dimm_create(topo_mod_t *mod, uint16_t chip_smbid, tnode_t *pnode,
 	nvlist_t *fmri, **dimmarr = NULL;
 	uint64_t num;
 	uint_t ndimm;
-	id_t smbid;
-	const char *serial;
-	const char *part;
-	const char *rev;
+	id_t smbid = -1;
+	const char *serial = NULL;
+	const char *part = NULL;
+	const char *rev = NULL;
 
 	if (nvlist_lookup_nvlist_array(mc, "dimmlist", &dimmarr, &ndimm) != 0) {
 		whinge(mod, NULL, "amd_dimm_create: dimmlist lookup failed\n");
@@ -562,10 +562,10 @@ amd_dimm_create(topo_mod_t *mod, uint16_t chip_smbid, tnode_t *pnode,
 
 		for (nvp = nvlist_next_nvpair(dimmarr[i], NULL); nvp != NULL;
 		    nvp = nvlist_next_nvpair(dimmarr[i], nvp)) {
-			if (nvpair_type(nvp) == DATA_TYPE_UINT64_ARRAY &&
-			    strcmp(nvpair_name(nvp), "csnums") == 0 ||
-			    nvpair_type(nvp) == DATA_TYPE_STRING_ARRAY &&
-			    strcmp(nvpair_name(nvp), "csnames") == 0)
+			if ((nvpair_type(nvp) == DATA_TYPE_UINT64_ARRAY &&
+			    strcmp(nvpair_name(nvp), "csnums") == 0) ||
+			    (nvpair_type(nvp) == DATA_TYPE_STRING_ARRAY &&
+			    strcmp(nvpair_name(nvp), "csnames") == 0))
 				continue;	/* used in amd_rank_create() */
 
 			nerr += nvprop_add(mod, nvp, PGNAME(DIMM), dimmnode);
@@ -688,8 +688,7 @@ amd_dramchan_create(topo_mod_t *mod, tnode_t *pnode, const char *name,
 		(void) topo_prop_set_string(chnode, PGNAME(CHAN), "channel",
 		    TOPO_PROP_IMMUTABLE, i == 0 ? "A" : "B", &err);
 	}
-	if (pfmri)
-		nvlist_free(pfmri);
+	nvlist_free(pfmri);
 
 	return (nerr == 0 ? 0 : -1);
 }

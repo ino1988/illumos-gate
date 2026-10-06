@@ -28,6 +28,8 @@
  */
 /*
  * Copyright (c) 2012 by Delphix. All rights reserved.
+ * Copyright 2015 Nexenta Systems, Inc. All rights reserved.
+ * Copyright 2016 James S. Blachly, MD. All rights reserved.
  */
 
 #include <stdio.h>
@@ -144,8 +146,8 @@ struct iodev_filter df;
 static  uint_t	suppress_state;		/* skip state change messages */
 static	uint_t	suppress_zero;		/* skip zero valued lines */
 static  uint_t	show_mountpts;		/* show mount points */
-static	int 	interval;		/* interval (seconds) to output */
-static	int 	iter;			/* iterations from command line */
+static	int	interval;		/* interval (seconds) to output */
+static	int	iter;			/* iterations from command line */
 
 #define	SMALL_SCRATCH_BUFLEN	MAXNAMELEN
 
@@ -154,8 +156,8 @@ static int	iodevs_nl;		/* name field width */
 #define	IODEVS_NL_MAX		24	/* but keep full width under 80 */
 
 static	char	disk_header[132];
-static	uint_t 	dh_len;			/* disk header length for centering */
-static  int 	lineout;		/* data waiting to be printed? */
+static	uint_t	dh_len;			/* disk header length for centering */
+static  int	lineout;		/* data waiting to be printed? */
 
 static struct snapshot *newss;
 static struct snapshot *oldss;
@@ -169,7 +171,7 @@ static format_t	*formatter_list;
 static format_t *formatter_end;
 
 static u_longlong_t	ull_delta(u_longlong_t, u_longlong_t);
-static uint_t 	u32_delta(uint_t, uint_t);
+static uint_t	u32_delta(uint_t, uint_t);
 static void setup(void (*nfunc)(void));
 static void print_tty_hdr1(void);
 static void print_tty_hdr2(void);
@@ -204,7 +206,7 @@ main(int argc, char **argv)
 	long hz;
 	int forever;
 	hrtime_t start_n;
-	hrtime_t period_n;
+	hrtime_t period_n = 0;
 
 	(void) setlocale(LC_ALL, "");
 #if !defined(TEXT_DOMAIN)		/* Should be defined by cc -D */
@@ -568,8 +570,9 @@ show_disk(void *v1, void *v2, void *data)
 	struct iodev_snapshot *old = (struct iodev_snapshot *)v1;
 	struct iodev_snapshot *new = (struct iodev_snapshot *)v2;
 	int *count = (int *)data;
-	double rps, wps, tps, mtps, krps, kwps, kps, avw, avr, w_pct, r_pct;
-	double wserv, rserv, serv;
+	double rps = 0, wps = 0, tps = 0, mtps, krps = 0, kwps = 0;
+	double kps = 0, avw = 0, avr = 0, w_pct = 0, r_pct = 0;
+	double wserv = 0, rserv = 0, serv = 0;
 	double iosize;	/* kb/sec or MB/sec */
 	double etime, hr_etime;
 	char *disk_name;
@@ -942,35 +945,35 @@ usage(void)
 	(void) fprintf(stderr,
 	    "Usage: iostat [-cCdDeEiImMnpPrstxXYz] "
 	    " [-l n] [-T d|u] [disk ...] [interval [count]]\n"
-	    "\t\t-c: 	report percentage of time system has spent\n"
+	    "\t\t-c:	report percentage of time system has spent\n"
 	    "\t\t\tin user/system/dtrace/idle mode\n"
-	    "\t\t-C: 	report disk statistics by controller\n"
-	    "\t\t-d: 	display disk Kb/sec, transfers/sec, avg. \n"
+	    "\t\t-C:	report disk statistics by controller\n"
+	    "\t\t-d:	display disk Kb/sec, transfers/sec, avg. \n"
 	    "\t\t\tservice time in milliseconds  \n"
-	    "\t\t-D: 	display disk reads/sec, writes/sec, \n"
+	    "\t\t-D:	display disk reads/sec, writes/sec, \n"
 	    "\t\t\tpercentage disk utilization \n"
-	    "\t\t-e: 	report device error summary statistics\n"
-	    "\t\t-E: 	report extended device error statistics\n"
+	    "\t\t-e:	report device error summary statistics\n"
+	    "\t\t-E:	report extended device error statistics\n"
 	    "\t\t-i:	show device IDs for -E output\n"
-	    "\t\t-I: 	report the counts in each interval,\n"
+	    "\t\t-I:	report the counts in each interval,\n"
 	    "\t\t\tinstead of rates, where applicable\n"
 	    "\t\t-l n:	Limit the number of disks to n\n"
-	    "\t\t-m: 	Display mount points (most useful with -p)\n"
-	    "\t\t-M: 	Display data throughput in MB/sec "
+	    "\t\t-m:	Display mount points (most useful with -p)\n"
+	    "\t\t-M:	Display data throughput in MB/sec "
 	    "instead of Kb/sec\n"
-	    "\t\t-n: 	convert device names to cXdYtZ format\n"
-	    "\t\t-p: 	report per-partition disk statistics\n"
-	    "\t\t-P: 	report per-partition disk statistics only,\n"
+	    "\t\t-n:	convert device names to cXdYtZ format\n"
+	    "\t\t-p:	report per-partition disk statistics\n"
+	    "\t\t-P:	report per-partition disk statistics only,\n"
 	    "\t\t\tno per-device disk statistics\n"
-	    "\t\t-r: 	Display data in comma separated format\n"
-	    "\t\t-s: 	Suppress state change messages\n"
+	    "\t\t-r:	Display data in comma separated format\n"
+	    "\t\t-s:	Suppress state change messages\n"
 	    "\t\t-T d|u	Display a timestamp in date (d) or unix "
 	    "time_t (u)\n"
-	    "\t\t-t: 	display chars read/written to terminals\n"
-	    "\t\t-x: 	display extended disk statistics\n"
-	    "\t\t-X: 	display I/O path statistics\n"
-	    "\t\t-Y: 	display I/O path (I/T/L) statistics\n"
-	    "\t\t-z: 	Suppress entries with all zero values\n");
+	    "\t\t-t:	display chars read/written to terminals\n"
+	    "\t\t-x:	display extended disk statistics\n"
+	    "\t\t-X:	display I/O path statistics\n"
+	    "\t\t-Y:	display I/O path (I/T/L) statistics\n"
+	    "\t\t-z:	Suppress entries with all zero values\n");
 	exit(1);
 }
 
@@ -1015,18 +1018,28 @@ show_disk_errors(void *v1, void *v2, void *d)
 
 		switch (knp[i].data_type) {
 			case KSTAT_DATA_CHAR:
+			case KSTAT_DATA_STRING:
 				if ((strcmp(knp[i].name, "Serial No") == 0) &&
 				    do_devid) {
 					if (disk->is_devid) {
 						push_out("Device Id: %s ",
 						    disk->is_devid);
 						col += strlen(disk->is_devid);
-					} else
+					} else {
 						push_out("Device Id: ");
-				} else {
+					}
+
+					break;
+				}
+				if (knp[i].data_type == KSTAT_DATA_CHAR) {
 					push_out("%s: %-.16s ", knp[i].name,
 					    &knp[i].value.c[0]);
-					col += strlen(&knp[i].value.c[0]);
+					col += strnlen(&knp[i].value.c[0], 16);
+				} else {
+					push_out("%s: %s ", knp[i].name,
+					    KSTAT_NAMED_STR_PTR(&knp[i]));
+					col +=
+					    KSTAT_NAMED_STR_BUFLEN(&knp[i]) - 1;
 				}
 				break;
 			case KSTAT_DATA_ULONG:
@@ -1036,11 +1049,13 @@ show_disk_errors(void *v1, void *v2, void *d)
 				break;
 			case KSTAT_DATA_ULONGLONG:
 				if (strcmp(knp[i].name, "Size") == 0) {
-					push_out("%s: %2.2fGB <%llu bytes>\n",
+					do_newline();
+					push_out("%s: %2.2fGB <%llu bytes>",
 					    knp[i].name,
 					    (float)knp[i].value.ui64 /
 					    DISK_GIGABYTE,
 					    knp[i].value.ui64);
+					do_newline();
 					col = 0;
 					break;
 				}
@@ -1063,10 +1078,10 @@ show_disk_errors(void *v1, void *v2, void *d)
 void
 do_args(int argc, char **argv)
 {
-	int 		c;
-	int 		errflg = 0;
-	extern char 	*optarg;
-	extern int 	optind;
+	int		c;
+	int		errflg = 0;
+	extern char	*optarg;
+	extern int	optind;
 
 	while ((c = getopt(argc, argv, "tdDxXYCciIpPnmMeEszrT:l:")) != EOF)
 		switch (c) {
@@ -1257,9 +1272,9 @@ do_args(int argc, char **argv)
 void
 do_format(void)
 {
-	char	header[SMALL_SCRATCH_BUFLEN];
-	char 	ch;
-	char 	iosz;
+	char	header[SMALL_SCRATCH_BUFLEN] = {0};
+	char	ch;
+	char	iosz;
 	const char    *fstr;
 
 	disk_header[0] = 0;
@@ -1270,8 +1285,7 @@ do_format(void)
 			(void) sprintf(header, "s/w h/w trn tot ");
 		} else
 			(void) sprintf(header, "s/w,h/w,trn,tot");
-	} else
-		*header = NULL;
+	}
 	switch (do_disk & DISK_IO_MASK) {
 		case DISK_OLD:
 			if (do_raw == 0)
@@ -1308,8 +1322,15 @@ do_format(void)
 					    sizeof (disk_header),
 					    "device,r/%c,w/%c,%cr/%c,%cw/%c,"
 					    "wait,actv,svc_t,%%%%w,"
-					    "%%%%b,%s",
-					    ch, ch, iosz, ch, iosz, ch, header);
+					    "%%%%b%s%s",
+					    ch, ch, iosz, ch, iosz, ch,
+					    *header == '\0' ? "" : ",",
+					    header);
+					/*
+					 * if no -e flag, header == '\0...'
+					 * Ternary operator above is to prevent
+					 * trailing comma in full disk_header
+					 */
 				}
 			} else {
 				/* with -n option */
@@ -1321,6 +1342,18 @@ do_format(void)
 					fstr = "r/%c,w/%c,%cr/%c,%cw/%c,"
 					    "wait,actv,wsvc_t,asvc_t,"
 					    "%%%%w,%%%%b,%sdevice";
+					/*
+					 * if -rnxe, "tot" (from -e) and
+					 * "device" are run together
+					 * due to lack of trailing comma
+					 * in 'header'. However, adding
+					 * trailing comma to header at
+					 * its definition leads to prob-
+					 * lems elsewhere so it's added
+					 * here in this edge case -rnxe
+					 */
+					if (*header != '\0')
+						(void) strcat(header, ",");
 				}
 				(void) snprintf(disk_header,
 				    sizeof (disk_header),

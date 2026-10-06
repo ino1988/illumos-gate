@@ -20,6 +20,7 @@
 #
 #
 # Copyright (c) 2004, 2010, Oracle and/or its affiliates. All rights reserved.
+# Copryight 2022 Garrett D'Amore
 #
 
 include ../../Makefile.cmd
@@ -38,27 +39,17 @@ common_DCNAMES = \
 	SCA1000 \
 	SENSOR \
 	STORAGE \
-	TEST
+	TEST \
+	NIC
 
 i386_DCNAMES = \
 	AMD \
 	INTEL \
 	GMCA
 
-sparc_DCNAMES = \
-	SCF \
-	SUN4 \
-	SUN4U \
-	SUN4V
-
 DCNAMES = \
 	$(common_DCNAMES) \
 	$($(MACH)_DCNAMES)
-
-ALLDCNAMES = \
-	$(common_DCNAMES) \
-	$(sparc_DCNAMES) \
-	$(i386_DCNAMES)
 
 DCFILES = $(DCNAMES:%=%.dict)
 POFILES = $(DCNAMES:%=%.po)
@@ -70,17 +61,16 @@ ROOTLCDIR = $(ROOTLIB)/locale/C/LC_MESSAGES
 ROOTDCFILES = $(DCNAMES:%=$(ROOTDCDIR)/%.dict)
 ROOTPOFILES = $(DCNAMES:%=$(ROOTLCDIR)/%.po)
 ROOTMOFILES = $(DCNAMES:%=$(ROOTLCDIR)/%.mo)
-ROOTALLPOFILES = $(ALLDCNAMES:%=$(ROOTLCDIR)/%.po)
 
 FILEMODE = 0444
-$(ROOTALLPOFILES) := FILEMODE = 0644
+$(ROOTPOFILES) := FILEMODE = 0644
 
 DICTCK = ../scripts/dictck
 DICTCKFLAGS = -b ../scripts/buildcode
 
 all: $(MOFILES)
 
-_msg: $(ROOTALLPOFILES)
+_msg: $(ROOTPOFILES)
 
 $(ROOTDCDIR):
 	$(INS.dir)
@@ -101,7 +91,7 @@ $(ROOTLCDIR)/%: %
 	$(INS.file)
 
 %.mo: %.po
-	msgfmt -s -o $@ $<
+	$(MSGFMT) -o $@ $<
 
 lint:
 	@for name in $(DCNAMES); do\
@@ -114,4 +104,4 @@ clobber:
 	$(RM) $(MOFILES)
 
 install: all $(ROOTDCDIR) $(ROOTLCDIR) \
-	$(ROOTDCFILES) $(ROOTALLPOFILES) $(ROOTMOFILES)
+	$(ROOTDCFILES) $(ROOTPOFILES) $(ROOTMOFILES)

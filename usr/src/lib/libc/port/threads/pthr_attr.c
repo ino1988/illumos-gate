@@ -24,8 +24,14 @@
  * Use is subject to license terms.
  */
 
+/*
+ * Copyright 2018, Joyent, Inc.
+ */
+
 #include "lint.h"
 #include "thr_uberdata.h"
+#include <sys/ctype.h>
+#include <strings.h>
 #include <sched.h>
 
 /*
@@ -44,7 +50,8 @@ def_thrattr(void)
 		0,				/* prio */
 		SCHED_OTHER,			/* policy */
 		PTHREAD_INHERIT_SCHED,		/* inherit */
-		0				/* guardsize */
+		0,				/* guardsize */
+		{ 0 }				/* name */
 	};
 	if (thrattr.guardsize == 0)
 		thrattr.guardsize = _sysconf(_SC_PAGESIZE);
@@ -91,7 +98,7 @@ pthread_attr_clone(pthread_attr_t *attr, const pthread_attr_t *old_attr)
 {
 	thrattr_t *ap;
 	const thrattr_t *old_ap =
-	    old_attr? old_attr->__pthread_attrp : def_thrattr();
+	    old_attr ? old_attr->__pthread_attrp : def_thrattr();
 
 	if (old_ap == NULL)
 		return (EINVAL);
@@ -110,8 +117,8 @@ pthread_attr_clone(pthread_attr_t *attr, const pthread_attr_t *old_attr)
 int
 pthread_attr_equal(const pthread_attr_t *attr1, const pthread_attr_t *attr2)
 {
-	const thrattr_t *ap1 = attr1? attr1->__pthread_attrp : def_thrattr();
-	const thrattr_t *ap2 = attr2? attr2->__pthread_attrp : def_thrattr();
+	const thrattr_t *ap1 = attr1 ? attr1->__pthread_attrp : def_thrattr();
+	const thrattr_t *ap2 = attr2 ? attr2->__pthread_attrp : def_thrattr();
 
 	if (ap1 == NULL || ap2 == NULL)
 		return (0);
@@ -242,7 +249,8 @@ pthread_attr_setdaemonstate_np(pthread_attr_t *attr, int daemonstate)
 
 /*
  * pthread_attr_getdaemonstate_np: gets the daemon state.
- * For now, this is a private interface in libc.
+ * For now, this is a private interface in libc, but it is exposed in the
+ * mapfile for the purposes of testing only.
  */
 int
 pthread_attr_getdaemonstate_np(const pthread_attr_t *attr, int *daemonstate)
@@ -366,7 +374,7 @@ pthread_attr_getschedpolicy(const pthread_attr_t *attr, int *policy)
  */
 int
 pthread_attr_setschedparam(pthread_attr_t *attr,
-	const struct sched_param *param)
+    const struct sched_param *param)
 {
 	thrattr_t *ap;
 
@@ -385,7 +393,7 @@ pthread_attr_setschedparam(pthread_attr_t *attr,
 #pragma weak _pthread_attr_getschedparam = pthread_attr_getschedparam
 int
 pthread_attr_getschedparam(const pthread_attr_t *attr,
-					struct sched_param *param)
+    struct sched_param *param)
 {
 	thrattr_t *ap;
 
@@ -437,7 +445,7 @@ pthread_attr_getguardsize(const pthread_attr_t *attr, size_t *guardsize)
  */
 int
 pthread_attr_setstack(pthread_attr_t *attr,
-	void *stackaddr, size_t stacksize)
+    void *stackaddr, size_t stacksize)
 {
 	thrattr_t *ap;
 
@@ -458,7 +466,7 @@ pthread_attr_setstack(pthread_attr_t *attr,
  */
 int
 pthread_attr_getstack(const pthread_attr_t *attr,
-	void **stackaddr, size_t *stacksize)
+    void **stackaddr, size_t *stacksize)
 {
 	thrattr_t *ap;
 
@@ -469,4 +477,134 @@ pthread_attr_getstack(const pthread_attr_t *attr,
 		return (0);
 	}
 	return (EINVAL);
+}
+
+int
+pthread_attr_setname_np(pthread_attr_t *attr, const char *name)
+{
+	thrattr_t *ap;
+
+	if (attr == NULL || (ap = attr->__pthread_attrp) == NULL)
+		return (EINVAL);
+
+	if (name == NULL) {
+		bzero(ap->name, sizeof (ap->name));
+		return (0);
+	}
+
+	if (strlen(name) >= sizeof (ap->name))
+		return (ERANGE);
+
+	/*
+	 * We really want the ASCII version of isprint() here...
+	 */
+	for (size_t i = 0; name[i] != '\0'; i++) {
+		if (!ISPRINT(name[i]))
+			return (EINVAL);
+	}
+
+	/*
+	 * not having garbage after the end of the string simplifies attr
+	 * comparison
+	 */
+	bzero(ap->name, sizeof (ap->name));
+	(void) strlcpy(ap->name, name, sizeof (ap->name));
+	return (0);
+}
+
+int
+pthread_attr_getname_np(pthread_attr_t *attr, char *buf, size_t len)
+{
+	thrattr_t *ap;
+
+	if (buf == NULL || attr == NULL ||
+	    (ap = attr->__pthread_attrp) == NULL)
+		return (EINVAL);
+
+	if (strlcpy(buf, ap->name, len) > len)
+		return (ERANGE);
+	return (0);
+}
+
+/*
+ * This function is a common BSD extension to pthread which is used to obtain
+ * the attributes of a thread that might have changed after its creation, for
+ * example, its stack address.
+ *
+ * Note, there is no setattr analogue, nor do we desire to add one at this time.
+ * Similarly there is no native threads API analogue (nor should we add one for
+ * C11).
+ *
+ * The astute reader may note that there is a GNU version of this called
+ * pthread_getattr_np(). The two functions are similar, but subtly different in
+ * a rather important way. While pthread_attr_get_np() expects to be given
+ * a pthread_attr_t that has had pthread_attr_init() called on it,
+ * pthread_getattr_np() does not. However, on GNU systems, where the function
+ * originates, the pthread_attr_t is not opaque and thus it is entirely safe to
+ * both call pthread_attr_init() and then call pthread_getattr_np() on the same
+ * attributes object. On illumos, since the pthread_attr_t is opaque, that would
+ * be a memory leak. As such, we don't provide it.
+ */
+int
+pthread_attr_get_np(pthread_t tid, pthread_attr_t *attr)
+{
+	int ret;
+	ulwp_t *self = curthread;
+	uberdata_t *udp = self->ul_uberdata;
+	ulwp_t *target = NULL;
+	thrattr_t *ap;
+
+	/*
+	 * To ensure that information about the target thread does not change or
+	 * disappear while we're trying to interrogate it, we grab the ulwp
+	 * lock.
+	 */
+	if (self->ul_lwpid == tid) {
+		ulwp_lock(self, udp);
+		target = self;
+	} else {
+		target = find_lwp(tid);
+		if (target == NULL)
+			return (ESRCH);
+	}
+
+	if (attr == NULL) {
+		ret = EINVAL;
+		goto out;
+	}
+
+	if ((ap = attr->__pthread_attrp) == NULL) {
+		ret = EINVAL;
+		goto out;
+	}
+
+	ap->stksize = target->ul_stksiz;
+	ap->stkaddr = target->ul_stk;
+	if (target->ul_usropts & THR_DETACHED) {
+		ap->detachstate = PTHREAD_CREATE_DETACHED;
+	} else {
+		ap->detachstate = PTHREAD_CREATE_JOINABLE;
+	}
+
+	if (target->ul_usropts & THR_DAEMON) {
+		ap->daemonstate = PTHREAD_CREATE_DAEMON_NP;
+	} else {
+		ap->daemonstate = PTHREAD_CREATE_NONDAEMON_NP;
+	}
+
+	if (target->ul_usropts & THR_BOUND) {
+		ap->scope = PTHREAD_SCOPE_SYSTEM;
+	} else {
+		ap->scope = PTHREAD_SCOPE_PROCESS;
+	}
+	ap->prio = target->ul_pri;
+	ap->policy = target->ul_policy;
+	ap->inherit = target->ul_ptinherit;
+	ap->guardsize = target->ul_guardsize;
+	(void) pthread_getname_np(tid, ap->name, sizeof (ap->name));
+
+	ret = 0;
+out:
+	ulwp_unlock(target, udp);
+	return (ret);
 }

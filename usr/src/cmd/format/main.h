@@ -28,15 +28,10 @@
 #ifndef	_MAIN_H
 #define	_MAIN_H
 
-#pragma ident	"%Z%%M%	%I%	%E% SMI"
-
 #ifdef	__cplusplus
 extern "C" {
 #endif
 
-/*
- *	Prototypes for ANSI C compilers
- */
 int	main(int argc, char *argv[]);
 int	notify_unix(void);
 void	init_globals(struct disk_info *disk);

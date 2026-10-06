@@ -24,8 +24,6 @@
  * Use is subject to license terms.
  */
 
-#pragma ident	"%Z%%M%	%I%	%E% SMI"
-
 #include <unistd.h>
 #include <dlfcn.h>
 #include <signal.h>
@@ -51,9 +49,9 @@
 
 static mutex_t umem_error_lock = DEFAULTMUTEX;
 
-static char umem_error_buffer[ERR_SIZE] = "";
-static uint_t umem_error_begin = 0;
-static uint_t umem_error_end = 0;
+char umem_error_buffer[ERR_SIZE] = "";
+uint_t umem_error_begin = 0;
+uint_t umem_error_end = 0;
 
 #define	WRITE_AND_INC(var, value) { \
 	umem_error_buffer[(var)++] = (value); \
@@ -61,7 +59,7 @@ static uint_t umem_error_end = 0;
 }
 
 static void
-umem_log_enter(const char *error_str)
+log_enter(const char *error_str)
 {
 	int looped;
 	char c;
@@ -99,7 +97,7 @@ umem_error_enter(const char *error_str)
 		(void) write(UMEM_ERRFD, error_str, strlen(error_str));
 #endif
 
-	umem_log_enter(error_str);
+	log_enter(error_str);
 }
 
 int
@@ -185,7 +183,7 @@ log_message(const char *format, ...)
 		(void) write(UMEM_ERRFD, buf, strlen(buf));
 #endif
 
-	umem_log_enter(buf);
+	log_enter(buf);
 }
 
 #ifndef UMEM_STANDALONE
@@ -244,7 +242,7 @@ print_sym(void *pointer)
 	int result;
 	Dl_info sym_info;
 
-	uintptr_t end = NULL;
+	uintptr_t end = (uintptr_t)NULL;
 
 	Sym *ext_info = NULL;
 

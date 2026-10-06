@@ -27,8 +27,6 @@
 #ifndef _SYS_SCSI_ADAPTERS_EMUL64CMD_H
 #define	_SYS_SCSI_ADAPTERS_EMUL64CMD_H
 
-#pragma ident	"%Z%%M%	%I%	%E% SMI"
-
 #include <sys/scsi/scsi_types.h>
 
 #ifdef	__cplusplus
@@ -41,7 +39,7 @@ extern "C" {
 /*
  * Per-command EMUL64 private data
  *
- *	- Allocated at same time as scsi_pkt by scsi_hba_pkt_alloc(9E)
+ *	- Allocated at same time as scsi_pkt by scsi_hba_pkt_alloc(9F)
  *	- Pointed to by pkt_ha_private field in scsi_pkt
  */
 struct emul64_cmd {

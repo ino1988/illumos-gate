@@ -24,6 +24,11 @@
  */
 /* Copyright (c) 1990 Mentat Inc. */
 
+/*
+ * Copyright 2019 Joyent, Inc.
+ * Copyright 2024 Oxide Computer Company
+ */
+
 #include <sys/types.h>
 #include <sys/stream.h>
 #include <sys/strsun.h>
@@ -97,6 +102,9 @@
 /*
  * Release a reference on ip_xmit_attr.
  * The reference is acquired by conn_get_ixa()
+ *
+ * This macro has a lowercase function-call version for callers outside
+ * this file.
  */
 #define	IXA_REFRELE(ixa)					\
 {								\
@@ -106,7 +114,7 @@
 
 #define	IXA_REFHOLD(ixa)					\
 {								\
-	ASSERT((ixa)->ixa_refcnt != 0);				\
+	ASSERT3U((ixa)->ixa_refcnt, !=, 0);			\
 	atomic_inc_32(&(ixa)->ixa_refcnt);			\
 }
 
@@ -151,7 +159,7 @@ typedef struct ixamblk_s {
 	ipsec_latch_t		*ixm_ipsec_latch;
 	struct ipsa_s		*ixm_ipsec_ah_sa;	/* SA for AH */
 	struct ipsa_s		*ixm_ipsec_esp_sa;	/* SA for ESP */
-	struct ipsec_policy_s 	*ixm_ipsec_policy;	/* why are we here? */
+	struct ipsec_policy_s	*ixm_ipsec_policy;	/* why are we here? */
 	struct ipsec_action_s	*ixm_ipsec_action; /* For reflected packets */
 
 	ipsa_ref_t		ixm_ipsec_ref[2]; /* Soft reference to SA */
@@ -191,6 +199,7 @@ typedef struct iramblk_s {
 	uint_t		irm_pktlen;
 	uint16_t	irm_ip_hdr_length; /* Points to ULP header */
 	uint8_t		irm_protocol;	/* Protocol number for ULP cksum */
+	uint8_t		irm_ttl;	/* IP TTL, IPv6 hop limit */
 	zoneid_t	irm_zoneid;	/* ALL_ZONES unless local delivery */
 
 	squeue_t	*irm_sqp;
@@ -529,6 +538,7 @@ ip_recv_attr_to_mblk(ip_recv_attr_t *ira)
 	irm->irm_pktlen = ira->ira_pktlen;
 	irm->irm_ip_hdr_length = ira->ira_ip_hdr_length;
 	irm->irm_protocol = ira->ira_protocol;
+	irm->irm_ttl = ira->ira_ttl;
 
 	irm->irm_sqp = ira->ira_sqp;
 	irm->irm_ring = ira->ira_ring;
@@ -640,6 +650,7 @@ ip_recv_attr_from_mblk(mblk_t *iramp, ip_recv_attr_t *ira)
 	ira->ira_pktlen = irm->irm_pktlen;
 	ira->ira_ip_hdr_length = irm->irm_ip_hdr_length;
 	ira->ira_protocol = irm->irm_protocol;
+	ira->ira_ttl = irm->irm_ttl;
 
 	ira->ira_sqp = irm->irm_sqp;
 	/* The rest of IP assumes that the rings never go away. */
@@ -746,36 +757,41 @@ ip_recv_attr_is_mblk(mblk_t *mp)
 static ip_xmit_attr_t *
 conn_get_ixa_impl(conn_t *connp, boolean_t replace, int kmflag)
 {
-	ip_xmit_attr_t	*ixa;
-	ip_xmit_attr_t	*oldixa;
+	ip_xmit_attr_t	*oldixa;	/* Already attached to conn_t */
+	ip_xmit_attr_t	*ixa;		/* New one, which we return. */
+
+	/*
+	 * NOTE: If the marked-below common case isn't, move the
+	 * kmem_alloc() up here and put a free in what was marked as the
+	 * (not really) common case instead.
+	 */
 
 	mutex_enter(&connp->conn_lock);
-	ixa = connp->conn_ixa;
+	oldixa = connp->conn_ixa;
 
-	/* At least one references for the conn_t */
-	ASSERT(ixa->ixa_refcnt >= 1);
-	if (atomic_inc_32_nv(&ixa->ixa_refcnt) == 2) {
-		/* No other thread using conn_ixa */
+	/* At least one reference for the conn_t */
+	ASSERT3U(oldixa->ixa_refcnt, >=, 1);
+	if (atomic_inc_32_nv(&oldixa->ixa_refcnt) == 2) {
+		/* No other thread using conn_ixa (common case) */
 		mutex_exit(&connp->conn_lock);
-		return (ixa);
+		return (oldixa);
 	}
+	/* Do allocation inside-the-conn_lock because it's less common. */
 	ixa = kmem_alloc(sizeof (*ixa), kmflag);
 	if (ixa == NULL) {
 		mutex_exit(&connp->conn_lock);
-		ixa_refrele(connp->conn_ixa);
+		IXA_REFRELE(oldixa);
 		return (NULL);
 	}
-	ixa_safe_copy(connp->conn_ixa, ixa);
+	ixa_safe_copy(oldixa, ixa);
 
 	/* Make sure we drop conn_lock before any refrele */
 	if (replace) {
 		ixa->ixa_refcnt++;	/* No atomic needed - not visible */
-		oldixa = connp->conn_ixa;
 		connp->conn_ixa = ixa;
 		mutex_exit(&connp->conn_lock);
 		IXA_REFRELE(oldixa);	/* Undo refcnt from conn_t */
 	} else {
-		oldixa = connp->conn_ixa;
 		mutex_exit(&connp->conn_lock);
 	}
 	IXA_REFRELE(oldixa);	/* Undo above atomic_add_32_nv */
@@ -847,26 +863,21 @@ conn_replace_ixa(conn_t *connp, ip_xmit_attr_t *ixa)
 ip_xmit_attr_t *
 conn_get_ixa_exclusive(conn_t *connp)
 {
+	ip_xmit_attr_t *oldixa;
 	ip_xmit_attr_t *ixa;
 
-	mutex_enter(&connp->conn_lock);
-	ixa = connp->conn_ixa;
-
-	/* At least one references for the conn_t */
-	ASSERT(ixa->ixa_refcnt >= 1);
-
-	/* Make sure conn_ixa doesn't disappear while we copy it */
-	atomic_inc_32(&ixa->ixa_refcnt);
-
-	ixa = kmem_alloc(sizeof (*ixa), KM_NOSLEEP);
-	if (ixa == NULL) {
-		mutex_exit(&connp->conn_lock);
-		ixa_refrele(connp->conn_ixa);
+	ixa = kmem_alloc(sizeof (*ixa), KM_NOSLEEP_LAZY);
+	if (ixa == NULL)
 		return (NULL);
-	}
-	ixa_safe_copy(connp->conn_ixa, ixa);
+
+	mutex_enter(&connp->conn_lock);
+
+	oldixa = connp->conn_ixa;
+	IXA_REFHOLD(oldixa);
+
+	ixa_safe_copy(oldixa, ixa);
 	mutex_exit(&connp->conn_lock);
-	IXA_REFRELE(connp->conn_ixa);
+	IXA_REFRELE(oldixa);
 	return (ixa);
 }
 
@@ -909,6 +920,11 @@ ixa_safe_copy(ip_xmit_attr_t *src, ip_xmit_attr_t *ixa)
 	 */
 	if (ixa->ixa_free_flags & IXA_FREE_CRED)
 		crhold(ixa->ixa_cred);
+
+	/*
+	 * There is no cleanup in progress on this new copy.
+	 */
+	ixa->ixa_tcpcleanup = IXATC_IDLE;
 }
 
 /*
@@ -1352,7 +1368,7 @@ conn_ixa_cleanup(conn_t *connp, void *arg)
 			}
 		}
 		ixa_cleanup_stale(ixa);
-		ixa_refrele(ixa);
+		IXA_REFRELE(ixa);
 	}
 }
 
@@ -1385,7 +1401,7 @@ ixa_check_drain_insert(conn_t *connp, ip_xmit_attr_t *ixa)
 
 	if (idd->idd_tx_fctl_df(idd->idd_tx_fctl_dh, cookie) == 0) {
 		DTRACE_PROBE1(ill__tx__not__blocked, uintptr_t, cookie);
-	} else if (idl_txl->txl_cookie != NULL &&
+	} else if (idl_txl->txl_cookie != (uintptr_t)NULL &&
 	    idl_txl->txl_cookie != ixa->ixa_cookie) {
 		DTRACE_PROBE2(ill__tx__cookie__collision, uintptr_t, cookie,
 		    uintptr_t, idl_txl->txl_cookie);

@@ -34,21 +34,18 @@ all :=		TARGET= all
 clean :=	TARGET= clean
 clobber :=	TARGET= clobber
 install :=	TARGET= install
-lint :=		TARGET= lint
 _msg :=		TARGET= _msg
 package :=	TARGET= package
 
-LIBRARY= 	libmail.a
+LIBRARY=	libmail.a
 TEXT_DOMAIN=	SUNW_OST_OSLIB
 XGETFLAGS=	-a
 POFILE=		$(LIBRARY:.a=.po)
 POFILES=	generic.po
 
-SED=	sed
-
 .KEEP_STATE:
 
-all clean clobber install lint package: $(SUBDIRS)
+all clean clobber install package: $(SUBDIRS)
 
 # definitions for install_h target
 HDRS=		maillock.h libmail.h s_string.h

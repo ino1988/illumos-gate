@@ -22,8 +22,10 @@
 # Copyright 2009 Sun Microsystems, Inc.  All rights reserved.
 # Use is subject to license terms.
 #
+# Copyright 2019 Peter Tribble.
+#
 
-SYSOBJS=	 	\
+SYSOBJS=		\
 	setjmp.o	\
 	signal.o
 
@@ -31,7 +33,7 @@ include ../Makefile.com
 include $(SRC)/lib/Makefile.lib.64
 
 DYNFLAGS += $(DYNFLAGS64)
-BUILD.SO= $(CC) $(CFLAGS) -o $@ -G $(DYNFLAGS) $(PICS) -L $(ROOT)/usr/lib/$(MACH64) $(LDLIBS)
+BUILD.SO= $(CC) $(CFLAGS) -o $@ $(GSHARED) $(DYNFLAGS) $(PICS) -L $(ROOT)/usr/lib/$(MACH64) $(LDLIBS)
 BUILD.s=	$(AS) $(ASFLAGS) -xarch=v9 -D__sparcv9 $< -o $@
 
 # sparcv9-specific rule
@@ -41,7 +43,7 @@ pics/%.o: ../sparc/sys/%.c
 
 pics/%.o: sys/%.s
 	$(BUILD.s)
-	$(POST_PROCESS_O)
+	$(POST_PROCESS_S_O)
 
 .KEEP_STATE:
 

@@ -22,8 +22,6 @@
 /*
  * Copyright 2008 Sun Microsystems, Inc.  All rights reserved.
  * Use is subject to license terms.
- *
- * ident	"%Z%%M%	%I%	%E% SMI"
  */
 package org.opensolaris.os.dtrace;
 
@@ -637,7 +635,7 @@ public class LocalConsumer implements Consumer {
 		// that listeners finish executing consumerStopped()
 		// before the stop() method returns.
 		synchronized (this) {
-		    if (state == State.STOPPED || state == state.CLOSED) {
+		    if (state == State.STOPPED || state == State.CLOSED) {
 			//
 			// This consumer was stopped just after calling
 			// go() but before starting (the premature return
@@ -682,7 +680,7 @@ public class LocalConsumer implements Consumer {
      *	}
      * </code></pre>
      * Or if you need to create your own thread:
-     * <pre></code>
+     * <pre><code>
      *	protected Thread
      *	createThread()
      *	{
@@ -713,7 +711,7 @@ public class LocalConsumer implements Consumer {
     }
 
     /**
-     * @inheritDoc
+     * {@inheritDoc}
      * @throws IllegalThreadStateException if a subclass calls {@link
      * Thread#start()} on the value of {@link #createThread()}
      * @see #createThread()
@@ -725,7 +723,7 @@ public class LocalConsumer implements Consumer {
     }
 
     /**
-     * @inheritDoc
+     * {@inheritDoc}
      * @throws IllegalThreadStateException if a subclass calls {@link
      * Thread#start()} on the value of {@link #createThread()}
      * @see #createThread()
@@ -767,7 +765,7 @@ public class LocalConsumer implements Consumer {
     }
 
     /**
-     * @inheritDoc
+     * {@inheritDoc}
      *
      * @throws IllegalThreadStateException if attempting to {@code
      * stop()} a running consumer while holding the lock on that
@@ -878,7 +876,7 @@ public class LocalConsumer implements Consumer {
     }
 
     /**
-     * @inheritDoc
+     * {@inheritDoc}
      *
      * @throws IllegalThreadStateException if attempting to {@code
      * close()} a running consumer while holding the lock on that
@@ -1113,7 +1111,7 @@ public class LocalConsumer implements Consumer {
     {
 	checkGoCalled();
 	synchronized (LocalConsumer.class) {
-	    return _lookupKernelFunction(new Integer(address));
+	    return _lookupKernelFunction(Integer.valueOf(address));
 	}
     }
 
@@ -1122,7 +1120,7 @@ public class LocalConsumer implements Consumer {
     {
 	checkGoCalled();
 	synchronized (LocalConsumer.class) {
-	    return _lookupKernelFunction(new Long(address));
+	    return _lookupKernelFunction(Long.valueOf(address));
 	}
     }
 
@@ -1131,7 +1129,7 @@ public class LocalConsumer implements Consumer {
     {
 	checkGoCalled();
 	synchronized (LocalConsumer.class) {
-	    return _lookupUserFunction(pid, new Integer(address));
+	    return _lookupUserFunction(pid, Integer.valueOf(address));
 	}
     }
 
@@ -1140,7 +1138,7 @@ public class LocalConsumer implements Consumer {
     {
 	checkGoCalled();
 	synchronized (LocalConsumer.class) {
-	    return _lookupUserFunction(pid, new Long(address));
+	    return _lookupUserFunction(pid, Long.valueOf(address));
 	}
     }
 

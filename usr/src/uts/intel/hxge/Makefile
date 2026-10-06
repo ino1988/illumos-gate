@@ -22,9 +22,8 @@
 #
 # Copyright (c) 2008, 2010, Oracle and/or its affiliates. All rights reserved.
 #
-#	This makefile drives the production of the Sun
-#	10G hxge Ethernet leaf driver kernel module.
-#
+# Copyright (c) 2018, Joyent, Inc.
+
 #
 #	Path to the base of the uts directory tree (usually /usr/src/uts).
 #
@@ -36,7 +35,6 @@ UTSBASE	= ../..
 MODULE		= hxge
 HXGE_OBJECTS =	$(HXGE_OBJS) $(HXGE_HPI_OBJS)
 OBJECTS		=  $(HXGE_OBJECTS:%=$(OBJS_DIR)/%)
-LINTS		= $(HXGE_OBJECTS:%.o=$(LINTS_DIR)/%.ln)
 ROOTMODULE	= $(ROOT_DRV_DIR)/$(MODULE)
 CONF_SRCDIR	= $(UTSBASE)/common/io/hxge
 
@@ -46,51 +44,38 @@ CONF_SRCDIR	= $(UTSBASE)/common/io/hxge
 include $(UTSBASE)/intel/Makefile.intel
 
 #
-#	Override defaults to build a unique, local modstubs.o.
-#
-MODSTUBS_DIR	= $(OBJS_DIR)
-
-CLEANFILES	+= $(MODSTUBS_O)
-
-#
 #	Define targets
 #
 ALL_TARGET	= $(BINARY)
-LINT_TARGET	= $(MODULE).lint
 INSTALL_TARGET	= $(BINARY) $(ROOTMODULE) $(ROOT_CONFFILE)
 
 #
 # Include hxge specific header files
 #
 INC_PATH	+= -I$(UTSBASE)/common/io/hxge
-#
-#
-# lint pass one enforcement
-#
+
 CFLAGS += -DSOLARIS
 #
 # Debug flags
 #
 # CFLAGS += -DHXGE_DEBUG -DHPI_DEBUG
 #
-LINTFLAGS += -DSOLARIS
-#
-# STREAMS, DDI API limitations and other ON header file definitions such as ethernet.h
-# force us to turn off these lint checks.
-#
-LINTTAGS	+= -erroff=E_BAD_PTR_CAST_ALIGN
-LINTTAGS	+= -erroff=E_PTRDIFF_OVERFLOW
-LINTTAGS	+= -erroff=E_FALSE_LOGICAL_EXPR
 
-CERRWARN	+= -_gcc=-Wno-unused-label
+#
+# For now, disable these warnings; maintainers should endeavor
+# to investigate and remove these for maximum coverage.
+# Please do not carry these forward to new Makefiles.
+#
 CERRWARN	+= -_gcc=-Wno-switch
-CERRWARN	+= -_gcc=-Wno-uninitialized
+CERRWARN	+= $(CNOWARN_UNINIT)
 CERRWARN	+= -_gcc=-Wno-parentheses
+
+SMOFF += deref_check,logical_instead_of_bitwise
 
 #
 #	Driver depends on mac & IP
 #
-LDFLAGS		+= -dy -N misc/mac -N drv/ip
+LDFLAGS		+= -N misc/mac -N drv/ip
 
 #
 #	Default build targets.
@@ -104,12 +89,6 @@ all:		$(ALL_DEPS)
 clean:		$(CLEAN_DEPS)
 
 clobber:	$(CLOBBER_DEPS)
-
-lint:		$(LINT_DEPS)
-
-modlintlib:	$(MODLINTLIB_DEPS)
-
-clean.lint:	$(CLEAN_LINT_DEPS)
 
 install:	$(INSTALL_DEPS)
 

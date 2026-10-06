@@ -15,12 +15,6 @@
  * OF OR IN CONNECTION WITH THE USE OR PERFORMANCE OF THIS SOFTWARE.
  */
 
-#if !defined(LINT) && !defined(CODECENTER)
-static const char rcsid[] = "$Id: lcl.c,v 1.4 2005/04/27 04:56:30 sra Exp $";
-#endif
-
-/* Imports */
-
 #include "port_before.h"
 
 #include <stdlib.h>
@@ -28,7 +22,7 @@ static const char rcsid[] = "$Id: lcl.c,v 1.4 2005/04/27 04:56:30 sra Exp $";
 #include <string.h>
 
 #include <sys/types.h>
-#include <netinet/in.h> 
+#include <netinet/in.h>
 #include <arpa/nameser.h>
 #include <resolv.h>
 

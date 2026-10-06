@@ -20,7 +20,7 @@
  * CDDL HEADER END
  */
 /*	Copyright (c) 1988 AT&T	*/
-/*	  All Rights Reserved  	*/
+/*	  All Rights Reserved	*/
 
 
 /*
@@ -28,15 +28,15 @@
  * Use is subject to license terms.
  */
 
-#pragma ident	"%Z%%M%	%I%	%E% SMI"	/* SVr4.0 1.2	*/
-
-/*LINTLIBRARY*/
+/*
+ * Copyright (c) 2018, Joyent, Inc.
+ */
 
 #include <sys/types.h>
 #include <stdlib.h>
 #include "utility.h"
 
-/* this code was taken from REGCMP(3X) */
+/* this code was taken from regcmp(3C) */
 
 #define	SSIZE	16
 #define	TGRP	48
@@ -69,7 +69,7 @@
 
 intptr_t	*__sp_;
 intptr_t	*__stmax;
-int	__i_size;
+extern int	__i_size;
 
 /*ARGSUSED2*/
 char *
@@ -114,7 +114,7 @@ libform_regcmp(char *cs1, char *cs2)
 			*ep++ = FCEOF;
 			if (--nbra > NBRA || *__sp_ != -1)
 				goto cerror;
-			__i_size = (int) (ep - sep);
+			__i_size = (int)(ep - sep);
 			return (sep);
 		}
 		if ((c != '*') && (c != '{') && (c != '+'))
@@ -153,12 +153,12 @@ libform_regcmp(char *cs1, char *cs2)
 				*eptr = GRP;
 				continue;
 			}
-			i = (int) (ep - eptr - 2);
+			i = (int)(ep - eptr - 2);
 			for (cclcnt = 0; i >= 256; cclcnt++)
 				i -= 256;
 			if (cclcnt > 3) goto cerror;
 			*eptr |= cclcnt;
-			*++eptr = (char) i;
+			*++eptr = (char)i;
 			continue;
 
 		case '\\':
@@ -180,7 +180,7 @@ libform_regcmp(char *cs1, char *cs2)
 				else goto cerror;
 			} while (((c = *sp++) != '}') && (c != ','));
 			if (i > 255) goto cerror;
-			*ep++ = (char) i;
+			*ep++ = (char)i;
 			if (c == ',') {
 				if (cflg++) goto cerror;
 				if ((c = *sp++) == '}') {
@@ -192,7 +192,7 @@ libform_regcmp(char *cs1, char *cs2)
 				}
 			}
 			if (!cflg)
-				*ep++ = (char) i;
+				*ep++ = (char)i;
 			else if ((ep[-1]&0377) < (ep[-2]&0377))
 				goto cerror;
 			continue;
@@ -209,7 +209,7 @@ libform_regcmp(char *cs1, char *cs2)
 
 		case '*':
 			if (*lastep == CBRA || *lastep == CKET)
-			goto cerror;
+				goto cerror;
 			*lastep |= STAR;
 			continue;
 
@@ -241,7 +241,7 @@ libform_regcmp(char *cs1, char *cs2)
 				*ep++ = c;
 				cclcnt++;
 			} while ((c = *sp++) != ']');
-			lastep[1] = (char) cclcnt;
+			lastep[1] = (char)cclcnt;
 			continue;
 
 		defchar:

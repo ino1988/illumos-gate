@@ -27,7 +27,7 @@
  * Copyright 2005 Sun Microsystems, Inc.  All rights reserved.
  * Use is subject to license terms.
  */
-#pragma ident	"%Z%%M%	%I%	%E% SMI"
+
 /*
  *	acctcon1 [-p] [-t] [-l file] [-o file] <wtmpx-file >ctmp-file
  *	-p	print input only, no processing
@@ -99,7 +99,7 @@ static void printlin(void);
 static void prctmp(struct ctmp *);
 
 int
-main(int argc, char **argv) 
+main(int argc, char **argv)
 {
 	char *prog = argv[0];
 
@@ -145,7 +145,7 @@ main(int argc, char **argv)
 				printf("\t%s", time_buf);
 			} else
 				fixup(stdout);
-			
+
 		}
 		exit(exitcode);
 	}
@@ -177,7 +177,7 @@ static size_t
 wread()
 {
 	return (fread(&wb, sizeof(wb), 1, stdin) == 1);
-	
+
 }
 
 /*
@@ -259,6 +259,7 @@ loop()
 		return;
 	case BOOT_TIME:
 		upall();
+		/* FALLTHROUGH */
 	case ACCOUNTING:
 	case RUN_LVL:
 		lastime = wb.ut_xtime;

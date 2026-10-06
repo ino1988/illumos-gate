@@ -23,8 +23,6 @@
  * Use is subject to license terms.
  */
 
-#pragma ident	"%Z%%M%	%I%	%E% SMI"
-
 /*
  * Miniature keyboard driver for bootstrap.  This allows keyboard
  * support to continue after we take over interrupts and disable
@@ -82,8 +80,9 @@ extern unsigned short *kb_status;
 #else /* __xpv && _BOOT */
 
 /* Device memory addresses */
-#define	kb_flag		((unsigned char *)BIOS_KB_FLAG)
-#define	kb_flag_1	((unsigned char *)BIOS_KB_FLAG_1)
+static unsigned char *kb_status = ((unsigned char *)BIOS_KB_FLAG);
+#define	kb_flag		(&kb_status[0])
+#define	kb_flag_1	(&kb_status[1])
 
 #endif /* __xpv && _BOOT */
 
@@ -144,6 +143,10 @@ static struct {
 	-1,		/* pending */
 };
 
+#define	KTAB_STRLEN 3
+static char keystringtab[KTAB_STRLEN] = {'\033', '[', ' '};
+static int keystring = -1;
+
 static int kb_translate(unsigned char code);
 static void kb_send(unsigned char cmd);
 static void kb_update_leds(void);
@@ -157,6 +160,15 @@ kb_getchar(void)
 	while (!kb_ischar())
 		/* LOOP */;
 
+	if (keystring >= 0) {
+		ret = keystringtab[keystring++];
+		if (keystring == KTAB_STRLEN) {
+			keystring = -1;
+			kb.pending = -1;
+		}
+		return (ret);
+	}
+
 	/*
 	 * kb_ischar() doesn't succeed without leaving kb.pending
 	 * set.
@@ -164,8 +176,27 @@ kb_getchar(void)
 	ASSERT(kb.pending >= 0);
 
 	if (kb.pending & 0x100) {
-		ret = 0;
 		kb.pending &= 0xff;
+		switch (kb.pending) {
+		case 'H':		/* Up */
+			keystringtab[2] = 'A';
+			keystring = 0;
+			return (kb_getchar());
+		case 'P':		/* Down */
+			keystringtab[2] = 'B';
+			keystring = 0;
+			return (kb_getchar());
+		case 'M':		/* Right */
+			keystringtab[2] = 'C';
+			keystring = 0;
+			return (kb_getchar());
+		case 'K':		/* Left */
+			keystringtab[2] = 'D';
+			keystring = 0;
+			return (kb_getchar());
+		default:
+			ret = 0;
+		}
 	} else {
 		ret = kb.pending;
 		kb.pending = -1;

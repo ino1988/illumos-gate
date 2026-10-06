@@ -22,12 +22,13 @@
 /*
  * Copyright 2010 Sun Microsystems, Inc.  All rights reserved.
  * Use is subject to license terms.
+ * Copyright 2019 Joyent, Inc.
  */
 
 /*
  * Analyze the versioning information within a file.
  *
- *   -C		demangle C++ symbol names.
+ *   -C		demangle symbol names.
  *
  *   -d		dump version definitions.
  *
@@ -91,7 +92,7 @@ typedef struct gver_desc {
 
 /* Versym related data used by gvers_syms() */
 typedef struct {
-	GElf_Versym	*vsd_vsp;   	/* ptr to versym data */
+	GElf_Versym	*vsd_vsp;	/* ptr to versym data */
 	Elf_Data	*vsd_sym_data;	/* ptr to symtab data */
 	Word		vsd_symn;	/* # of symbols in symtab */
 	const char	*vsd_strs;	/* string table data */
@@ -710,7 +711,7 @@ gvers_find(const char *name, unsigned long hash, APlist *lst)
  *
  * exit:
  *	Return the corresponding GVer_desc struct. If the
- * 	descriptor does not already exist, it is created.
+ *	descriptor does not already exist, it is created.
  *	On error, a fatal error is issued and the process exits.
  */
 static GVer_desc *
@@ -719,7 +720,7 @@ gvers_desc(const char *name, unsigned long hash, APlist **lst, const char *file)
 	GVer_desc	*vdp;
 
 	if ((vdp = gvers_find(name, hash, *lst)) == NULL) {
-		if ((vdp = calloc(sizeof (GVer_desc), 1)) == NULL) {
+		if ((vdp = calloc(1, sizeof (GVer_desc))) == NULL) {
 			int err = errno;
 			(void) fprintf(stderr, MSG_INTL(MSG_SYS_MALLOC), cname,
 			    file, strerror(err));
@@ -766,7 +767,7 @@ static void
 gvers_derefer(GVer_desc *vdp, int weak)
 {
 	Aliste		idx;
-	GVer_desc 	*_vdp;
+	GVer_desc	*_vdp;
 
 	/*
 	 * If the head of the list was a weak then we only clear out
@@ -874,7 +875,7 @@ gvers_def(Cache *cache, Cache *def, const Gver_sym_data *vsdata,
 	if (nflag) {
 		for (APLIST_TRAVERSE(verdefs, idx1, vdp)) {
 			Aliste		idx2;
-			GVer_desc 	*_vdp;
+			GVer_desc	*_vdp;
 			int		type = vdp->vd_flags & VER_FLG_WEAK;
 
 			for (APLIST_TRAVERSE(vdp->vd_deps, idx2, _vdp))
@@ -895,7 +896,7 @@ gvers_def(Cache *cache, Cache *def, const Gver_sym_data *vsdata,
 	 */
 	for (APLIST_TRAVERSE(verdefs, idx1, vdp)) {
 		Aliste		idx2;
-		GVer_desc 	*_vdp;
+		GVer_desc	*_vdp;
 		int		count;
 
 		if (!match(NULL, vdp->vd_name, vdp->vd_ndx))
@@ -1006,19 +1007,14 @@ main(int argc, char **argv, char **envp)
 	Elf		*elf;
 	Elf_Scn		*scn;
 	Elf_Data	*data;
-	GElf_Ehdr 	ehdr;
+	GElf_Ehdr	ehdr;
 	int		nfile, var;
 	char		*names;
 	Cache		*cache, *_cache;
 	Cache		*_cache_def, *_cache_need, *_cache_sym, *_cache_loc;
 	int		error = 0;
-	Gver_sym_data 	vsdata_s;
+	Gver_sym_data	vsdata_s;
 	const Gver_sym_data	*vsdata = NULL;
-
-	/*
-	 * Check for a binary that better fits this architecture.
-	 */
-	(void) conv_check_native(argv, envp);
 
 	/*
 	 * Establish locale.
@@ -1171,7 +1167,8 @@ main(int argc, char **argv, char **envp)
 		_cache_def = _cache_need = _cache_sym = _cache_loc = NULL;
 		_cache = cache;
 		_cache++;
-		for (scn = NULL; scn = elf_nextscn(elf, scn); _cache++) {
+		for (scn = NULL; (scn = elf_nextscn(elf, scn)) != NULL;
+		    _cache++) {
 			if (gelf_getshdr(scn, &shdr) == NULL) {
 				(void) fprintf(stderr,
 				    MSG_ORIG(MSG_ELF_GETSHDR), cname, file,

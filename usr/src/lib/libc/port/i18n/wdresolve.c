@@ -24,10 +24,9 @@
  * Use is subject to license terms.
  */
 
-#pragma ident	"%Z%%M%	%I%	%E% SMI"
-
 #include "lint.h"
 #include "mtlib.h"
+#include "thr_uberdata.h"
 #include <sys/types.h>
 #include <ctype.h>
 #include <string.h>
@@ -59,28 +58,26 @@ static int	initialized = 0;
 static int
 _wdinitialize(void)
 {
-#define	_DFLTLOCPATH_LEN	(sizeof (_DFLT_LOC_PATH) - 1)
-#define	_WDMODPATH_LEN		(sizeof (_WDMOD_PATH) - 1)
 	char	wdmodpath[PATH_MAX];
 	char	*loc;
-	size_t	loclen;
+	locale_t	curloc;
+	int rv;
 
 	initialized = 1;
 
 	if (modhandle)
 		(void) dlclose(modhandle);
 
-	loc = setlocale(LC_CTYPE, NULL); /* this never return NULL */
-	loclen = strlen(loc);
-	if (_DFLTLOCPATH_LEN + loclen + _WDMODPATH_LEN >= sizeof (wdmodpath)) {
+	curloc = __curlocale();
+	loc = current_locale(curloc, LC_CTYPE);
+
+	rv = snprintf(wdmodpath, sizeof (wdmodpath), "%s%s%s",
+	    _DFLT_LOC_PATH, loc, _WDMOD_PATH);
+	if (rv < 0 || rv >= sizeof (wdmodpath)) {
 		/* pathname too long */
 		modhandle = NULL;
 		goto C_fallback;
 	}
-
-	(void) strcpy(wdmodpath, _DFLT_LOC_PATH);
-	(void) strcpy(wdmodpath + _DFLTLOCPATH_LEN, loc);
-	(void) strcpy(wdmodpath + _DFLTLOCPATH_LEN + loclen, _WDMOD_PATH);
 
 	if ((modhandle = dlopen(wdmodpath, RTLD_LAZY)) != NULL) {
 		wdchknd = (int(*)(wchar_t))dlsym(modhandle, "_wdchkind_");
@@ -164,7 +161,6 @@ wdchkind_C(wchar_t wc)
  *  strength of two characters represented by the first two arguments.
  * It returns -1 when either of the two character is not printable.
  */
-/*ARGSUSED*/
 int
 wdbindf(wchar_t wc1, wchar_t wc2, int type)
 {
@@ -181,9 +177,9 @@ wdbindf(wchar_t wc1, wchar_t wc2, int type)
 	callout_lock_exit();
 	return (i);
 }
-/*ARGSUSED*/
+
 static int
-wdbindf_C(wchar_t wc1, wchar_t wc2, int type)
+wdbindf_C(wchar_t wc1, wchar_t wc2, int type __unused)
 {
 	if (csetlen(wc1) > 1 && csetlen(wc2) > 1)
 		return (4);
@@ -197,7 +193,6 @@ wdbindf_C(wchar_t wc1, wchar_t wc2, int type)
  * with the second argument, with.  When either of the two character
  * is not printable it returns a pointer to a null wide character.
  */
-/*ARGSUSED*/
 wchar_t *
 wddelim(wchar_t wc1, wchar_t wc2, int type)
 {
@@ -214,9 +209,9 @@ wddelim(wchar_t wc1, wchar_t wc2, int type)
 	callout_lock_exit();
 	return (i);
 }
-/*ARGSUSED*/
+
 static wchar_t *
-wddelim_C(wchar_t wc1, wchar_t wc2, int type)
+wddelim_C(wchar_t wc1 __unused, wchar_t wc2 __unused, int type __unused)
 {
 	return ((wchar_t *)L" ");
 }

@@ -24,6 +24,8 @@
  *
  * Copyright 2004 Sun Microsystems, Inc.  All rights reserved.
  * Use is subject to license terms.
+ *
+ * Copyright 2019 RackTop Systems.
  */
 
 #include "db_headers.h"
@@ -206,10 +208,11 @@ delete_dictionary(db_dict_desc *dict)
 	if (dict) {
 		if (dict->tables.tables_val) {
 			/* delete each bucket */
-			for (i = 0; i < dict->tables.tables_len; i++)
+			for (i = 0; i < dict->tables.tables_len; i++) {
 				bucket = dict->tables.tables_val[i];
 				if (bucket)
 					delete_bucket(bucket);
+			}
 			/* delete table */
 			delete dict->tables.tables_val;
 		}
@@ -318,19 +321,17 @@ remove_from_bucket(db_table_desc_p bucket,
 static bool_t
 add_to_bucket(db_table_desc_p bucket, db_table_desc **head, db_table_desc_p td)
 {
-	db_table_desc_p curr, prev;
-	register char *target_name;
+	db_table_desc_p curr;
+	char *target_name;
 	unsigned long target_hval;
 	target_name = td->table_name;
 	target_hval = td->hashval;
 
 	/* Search for it in the bucket */
-	for (prev = curr = bucket; curr != NULL; curr = curr->next) {
+	for (curr = bucket; curr != NULL; curr = curr->next) {
 		if (curr->hashval == target_hval &&
 		    strcmp(curr->table_name, target_name) == 0) {
 			break;
-		} else {
-			prev = curr;
 		}
 	}
 
@@ -487,7 +488,7 @@ enumerate_dictionary(db_dict_desc *dd, db_status (*func) (db_table_desc*))
 static db_table_desc *
 search_dictionary(db_dict_desc *dd, char *target)
 {
-	register unsigned long hval;
+	unsigned long hval;
 	unsigned long bucket;
 
 	if (target == NULL || dd == NULL || dd->tables.tables_len == 0)
@@ -513,9 +514,9 @@ search_dictionary(db_dict_desc *dd, char *target)
 static db_status
 remove_from_dictionary(db_dict_desc *dd, char *target, bool_t remove_storage)
 {
-	register unsigned long hval;
+	unsigned long hval;
 	unsigned long bucket;
-	register db_table_desc *fst;
+	db_table_desc *fst;
 
 	if (target == NULL)
 		return (DB_NOTUNIQUE);
@@ -543,7 +544,7 @@ remove_from_dictionary(db_dict_desc *dd, char *target, bool_t remove_storage)
  *
  * Inputs: db_dict_desc_p dd	pointer to dictionary to add to.
  *	   db_table_desc *td	pointer to table entry to be added. The
- * 				db_table_desc.next field will be altered
+ *				db_table_desc.next field will be altered
  *				without regard to it's current setting.
  *				This means that if next points to a list of
  *				table entries, they may be either linked into
@@ -552,7 +553,7 @@ remove_from_dictionary(db_dict_desc *dd, char *target, bool_t remove_storage)
 static db_status
 add_to_dictionary(db_dict_desc_p dd, db_table_desc *td)
 {
-	register unsigned long hval;
+	unsigned long hval;
 	char *target;
 
 	if (dd == NULL)
@@ -691,15 +692,15 @@ db_dictionary::db_clone_bucket(db_table_desc *bucket, db_table_desc **clone)
 int
 db_dictionary::change_table_name(db_table_desc *clone, char *tok, char *repl)
 {
-	char 	*newname;
+	char	*newname;
 	char	*loc_end, *loc_beg;
 
 	WRITELOCK(this, DB_LOCK_ERROR, "w db_dictionary::change_table_name");
 	while (clone) {
 		/*
 		 * Special case for a tok="". This is used for the
-		 * nisrestore(1M), when restoring a replica in another
-		 * domain. This routine is used to change the datafile 
+		 * nisrestore(8), when restoring a replica in another
+		 * domain. This routine is used to change the datafile
 		 * names in the data.dict (see bugid #4031273). This will not
 		 * effect massage_dict(), since it never generates an empty
 		 * string for tok.
@@ -842,7 +843,7 @@ db_dictionary::massage_dict(char *newdictname, char *tok, char *repl)
 	int		retval;
 	u_int		i, tbl_count;
 	db_status	status;
-	db_table_desc 	*bucket, *np, *clone, *next_np;
+	db_table_desc	*bucket, *np, *clone, *next_np;
 	char		tail[NIS_MAXNAMELEN];
 	db_dictionary	*tmpptr;
 
@@ -975,7 +976,7 @@ db_dictionary::merge_dict(db_dictionary& tempdict, char *tok, char *repl)
 					"wu db_dictionary::merge_dict");
 				return (DB_INTERNAL_ERROR);
 			}
-			
+
 			dbstat = add_to_dictionary(dictionary, clone);
 			if (dbstat == DB_NOTUNIQUE) {
 				/* Overide */
@@ -1293,7 +1294,7 @@ db_dictionary::dump()
 	unlink(tmpfilename);  /* get rid of partial dumps */
 	pickle_dict_desc f(tmpfilename, PICKLE_WRITE);
 
-	status = f.transfer(&dictionary); 	/* dump table descs */
+	status = f.transfer(&dictionary);	/* dump table descs */
 	if (status != 0) {
 		WARNING("db_dictionary::dump: could not write out dictionary");
 	} else if (rename(tmpfilename, filename) < 0) {
@@ -1402,7 +1403,7 @@ db_dictionary::open_log()
 		return (0);
 	}
 
-	if ((logfile->open()) == NULL) {
+	if ((logfile->open()) == FALSE) {
 		WARNING_M("db_dictionary::open_log: could not open log file: ");
 		delete logfile;
 		logfile = NULL;
@@ -1805,7 +1806,7 @@ db_dictionary::add_table_aux(char *tab, table_obj* tobj, int mode)
 
 /*
  * Add table with given name 'tab' and description 'zdesc' to dictionary.
- * Returns errror code if table already exists, or if no memory can be found
+ * Returns error code if table already exists, or if no memory can be found
  * to store the descriptor, or if dictionary has not been intialized.
  * Dictionary is updated to stable store if addition is successful.
  * Fatal error occurs if dictionary cannot be saved.
@@ -2392,7 +2393,7 @@ db_dictionary::rollback(char *table) {
 		syslog(LOG_ERR,
 	"db_dictionary::rollback: rollback error %d for \"%s\"", ret, table);
 	}
-		
+
 	WRITEUNLOCK(this, ret, "wu db_dictionary::rollback");
 	return (ret);
 }

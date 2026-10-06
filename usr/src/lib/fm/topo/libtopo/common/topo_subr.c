@@ -22,6 +22,10 @@
 /*
  * Copyright (c) 2006, 2010, Oracle and/or its affiliates. All rights reserved.
  */
+/*
+ * Copyright 2020 Joyent, Inc.
+ * Copyright 2024 Oxide Computer Company
+ */
 
 #include <alloca.h>
 #include <ctype.h>
@@ -29,8 +33,12 @@
 #include <syslog.h>
 #include <strings.h>
 #include <unistd.h>
+#include <sys/fm/protocol.h>
+#include <sys/systeminfo.h>
+#include <sys/utsname.h>
 
 #include <topo_error.h>
+#include <topo_digraph.h>
 #include <topo_subr.h>
 
 void
@@ -160,21 +168,17 @@ topo_debug_set(topo_hdl_t *thp, const char *dbmode, const char *dout)
 	for (dbp = (topo_debug_mode_t *)_topo_dbout_modes;
 	    dbp->tdm_name != NULL; ++dbp) {
 		if (strcmp(dout, dbp->tdm_name) == 0)
-		thp->th_dbout = dbp->tdm_mode;
+			thp->th_dbout = dbp->tdm_mode;
 	}
 	topo_hdl_unlock(thp);
 }
 
 void
-topo_vdprintf(topo_hdl_t *thp, int mask, const char *mod, const char *format,
-    va_list ap)
+topo_vdprintf(topo_hdl_t *thp, const char *mod, const char *format, va_list ap)
 {
 	char *msg;
 	size_t len;
 	char c;
-
-	if (!(thp->th_debug & mask))
-		return;
 
 	len = vsnprintf(&c, 1, format, ap);
 	msg = alloca(len + 2);
@@ -206,8 +210,11 @@ topo_dprintf(topo_hdl_t *thp, int mask, const char *format, ...)
 {
 	va_list ap;
 
+	if (!(thp->th_debug & mask))
+		return;
+
 	va_start(ap, format);
-	topo_vdprintf(thp, mask, NULL, format, ap);
+	topo_vdprintf(thp, NULL, format, ap);
 	va_end(ap);
 }
 
@@ -215,11 +222,17 @@ tnode_t *
 topo_hdl_root(topo_hdl_t *thp, const char *scheme)
 {
 	ttree_t *tp;
+	topo_digraph_t *tdg;
 
 	for (tp = topo_list_next(&thp->th_trees); tp != NULL;
 	    tp = topo_list_next(tp)) {
 		if (strcmp(scheme, tp->tt_scheme) == 0)
 			return (tp->tt_root);
+	}
+	for (tdg = topo_list_next(&thp->th_digraphs); tdg != NULL;
+	    tdg = topo_list_next(tdg)) {
+		if (strcmp(scheme, tdg->tdg_scheme) == 0)
+			return (tdg->tdg_rootnode);
 	}
 
 	return (NULL);
@@ -231,29 +244,38 @@ topo_hdl_root(topo_hdl_t *thp, const char *scheme)
  * Continue to update size even if we run out of space to actually
  * stuff characters in the buffer.
  */
-void
-topo_fmristr_build(ssize_t *sz, char *buf, size_t buflen, char *str,
+boolean_t
+topo_fmristr_build(size_t *sz, char *buf, size_t buflen, char *str,
     char *prepend, char *append)
 {
-	ssize_t left;
+	size_t left;
+	int n;
 
 	if (str == NULL)
-		return;
+		return (B_TRUE);
 
-	if (buflen == 0 || (left = buflen - *sz) < 0)
+	if (buflen == 0 || *sz >= buflen)
 		left = 0;
+	else
+		left = buflen - *sz;
 
 	if (buf != NULL && left != 0)
 		buf += *sz;
 
 	if (prepend == NULL && append == NULL)
-		*sz += snprintf(buf, left, "%s", str);
+		n = snprintf(buf, left, "%s", str);
 	else if (append == NULL)
-		*sz += snprintf(buf, left, "%s%s", prepend, str);
+		n = snprintf(buf, left, "%s%s", prepend, str);
 	else if (prepend == NULL)
-		*sz += snprintf(buf, left, "%s%s", str, append);
+		n = snprintf(buf, left, "%s%s", str, append);
 	else
-		*sz += snprintf(buf, left, "%s%s%s", prepend, str, append);
+		n = snprintf(buf, left, "%s%s%s", prepend, str, append);
+
+	if (n < 0)
+		return (B_FALSE);
+
+	*sz += n;
+	return (B_TRUE);
 }
 
 #define	TOPO_PLATFORM_PATH	"%s/usr/platform/%s/lib/fm/topo/%s"
@@ -289,26 +311,26 @@ topo_search_path(topo_mod_t *mod, const char *rootdir, const char *file)
 }
 
 /*
- * SMBIOS serial numbers can contain characters (particularly ':' and ' ')
- * that are invalid for the authority and can break FMRI parsing.  We translate
- * any invalid characters to a safe '-', as well as trimming any leading or
- * trailing whitespace.  Similarly, '/' can be found in some product names
- * so we translate that to '-'.
+ * SMBIOS serial numbers (and many other strings from devices) can contain
+ * characters (particularly ':' and ' ') that are invalid for the authority and
+ * can break FMRI parsing.  We translate any invalid characters to a safe '-',
+ * as well as trimming any leading or trailing whitespace.  Similarly, '/' can
+ * be found in some product names so we translate that to '-'.
  */
 char *
-topo_cleanup_auth_str(topo_hdl_t *thp, const char *begin)
+topo_cleanup_strn(topo_hdl_t *thp, const char *begin, size_t max)
 {
 	char buf[MAXNAMELEN];
 	const char *end, *cp;
 	char *pp;
 	char c;
-	int i;
+	size_t i;
 
-	end = begin + strlen(begin);
+	end = begin + max;
 
 	while (begin < end && isspace(*begin))
 		begin++;
-	while (begin < end && isspace(*(end - 1)))
+	while (begin < end && (isspace(*(end - 1)) || *(end - 1) == '\0'))
 		end--;
 
 	if (begin >= end)
@@ -332,6 +354,12 @@ topo_cleanup_auth_str(topo_hdl_t *thp, const char *begin)
 	return (pp);
 }
 
+char *
+topo_cleanup_auth_str(topo_hdl_t *thp, const char *begin)
+{
+	return (topo_cleanup_strn(thp, begin, strlen(begin)));
+}
+
 void
 topo_sensor_type_name(uint32_t type, char *buf, size_t len)
 {
@@ -348,7 +376,7 @@ topo_sensor_type_name(uint32_t type, char *buf, size_t len)
 }
 
 void
-topo_sensor_units_name(uint8_t type, char *buf, size_t len)
+topo_sensor_units_name(uint32_t type, char *buf, size_t len)
 {
 	topo_name_trans_t *ntp;
 
@@ -363,7 +391,7 @@ topo_sensor_units_name(uint8_t type, char *buf, size_t len)
 }
 
 void
-topo_led_type_name(uint8_t type, char *buf, size_t len)
+topo_led_type_name(uint32_t type, char *buf, size_t len)
 {
 	topo_name_trans_t *ntp;
 
@@ -378,7 +406,7 @@ topo_led_type_name(uint8_t type, char *buf, size_t len)
 }
 
 void
-topo_led_state_name(uint8_t type, char *buf, size_t len)
+topo_led_state_name(uint32_t type, char *buf, size_t len)
 {
 	topo_name_trans_t *ntp;
 
@@ -393,8 +421,8 @@ topo_led_state_name(uint8_t type, char *buf, size_t len)
 }
 
 void
-topo_sensor_state_name(uint32_t sensor_type, uint8_t state, char *buf,
-size_t len)
+topo_sensor_state_name(uint32_t sensor_type, uint32_t state, char *buf,
+    size_t len)
 {
 	topo_name_trans_t *ntp;
 
@@ -529,12 +557,95 @@ size_t len)
 			(void) snprintf(buf, len, "0x%02x", state);
 			return;
 	}
+	if (state == 0) {
+		(void) snprintf(buf, len, "NO_STATES_ASSERTED");
+		return;
+	}
+	buf[0] = '\0';
 	for (; ntp->int_name != NULL; ntp++) {
-		if (ntp->int_value == state) {
-			(void) strlcpy(buf, ntp->int_name, len);
-			return;
+		if (state & ntp->int_value) {
+			if (buf[0] != '\0')
+				(void) strlcat(buf, "|", len);
+			(void) strlcat(buf, ntp->int_name, len);
 		}
 	}
 
-	(void) snprintf(buf, len, "0x%02x", state);
+	if (buf[0] == '\0')
+		(void) snprintf(buf, len, "0x%02x", state);
+}
+
+static const topo_pgroup_info_t sys_pgroup = {
+	TOPO_PGROUP_SYSTEM,
+	TOPO_STABILITY_PRIVATE,
+	TOPO_STABILITY_PRIVATE,
+	1
+};
+static const topo_pgroup_info_t auth_pgroup = {
+	FM_FMRI_AUTHORITY,
+	TOPO_STABILITY_PRIVATE,
+	TOPO_STABILITY_PRIVATE,
+	1
+};
+
+void
+topo_pgroup_hcset(tnode_t *node, nvlist_t *auth)
+{
+	int err;
+	char isa[MAXNAMELEN];
+	struct utsname uts;
+	char *prod, *psn, *csn, *server;
+
+	if (auth == NULL)
+		return;
+
+	if (topo_pgroup_create(node, &auth_pgroup, &err) != 0) {
+		if (err != ETOPO_PROP_DEFD)
+			return;
+	}
+
+	/*
+	 * Inherit if we can, it saves memory
+	 */
+	if ((topo_prop_inherit(node, FM_FMRI_AUTHORITY, FM_FMRI_AUTH_PRODUCT,
+	    &err) != 0) && (err != ETOPO_PROP_DEFD)) {
+		if (nvlist_lookup_string(auth, FM_FMRI_AUTH_PRODUCT, &prod) ==
+		    0)
+			(void) topo_prop_set_string(node, FM_FMRI_AUTHORITY,
+			    FM_FMRI_AUTH_PRODUCT, TOPO_PROP_IMMUTABLE, prod,
+			    &err);
+	}
+	if ((topo_prop_inherit(node, FM_FMRI_AUTHORITY, FM_FMRI_AUTH_PRODUCT_SN,
+	    &err) != 0) && (err != ETOPO_PROP_DEFD)) {
+		if (nvlist_lookup_string(auth, FM_FMRI_AUTH_PRODUCT_SN, &psn) ==
+		    0)
+			(void) topo_prop_set_string(node, FM_FMRI_AUTHORITY,
+			    FM_FMRI_AUTH_PRODUCT_SN, TOPO_PROP_IMMUTABLE, psn,
+			    &err);
+	}
+	if ((topo_prop_inherit(node, FM_FMRI_AUTHORITY, FM_FMRI_AUTH_CHASSIS,
+	    &err) != 0) && (err != ETOPO_PROP_DEFD)) {
+		if (nvlist_lookup_string(auth, FM_FMRI_AUTH_CHASSIS, &csn) == 0)
+			(void) topo_prop_set_string(node, FM_FMRI_AUTHORITY,
+			    FM_FMRI_AUTH_CHASSIS, TOPO_PROP_IMMUTABLE, csn,
+			    &err);
+	}
+	if ((topo_prop_inherit(node, FM_FMRI_AUTHORITY, FM_FMRI_AUTH_SERVER,
+	    &err) != 0) && (err != ETOPO_PROP_DEFD)) {
+		if (nvlist_lookup_string(auth, FM_FMRI_AUTH_SERVER, &server) ==
+		    0)
+			(void) topo_prop_set_string(node, FM_FMRI_AUTHORITY,
+			    FM_FMRI_AUTH_SERVER, TOPO_PROP_IMMUTABLE, server,
+			    &err);
+	}
+
+	if (topo_pgroup_create(node, &sys_pgroup, &err) != 0)
+		return;
+
+	if (sysinfo(SI_ARCHITECTURE, isa, sizeof (isa)) != -1)
+		(void) topo_prop_set_string(node, TOPO_PGROUP_SYSTEM,
+		    TOPO_PROP_ISA, TOPO_PROP_IMMUTABLE, isa, &err);
+
+	if (uname(&uts) != -1)
+		(void) topo_prop_set_string(node, TOPO_PGROUP_SYSTEM,
+		    TOPO_PROP_MACHINE, TOPO_PROP_IMMUTABLE, uts.machine, &err);
 }

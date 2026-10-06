@@ -22,11 +22,11 @@
 /*
  * Copyright 2009 Sun Microsystems, Inc.  All rights reserved.
  * Use is subject to license terms.
+ * Copyright 2016 Joyent, Inc.
  */
 
 #include <sys/dtrace.h>
 #include <sys/cmn_err.h>
-#include <sys/tnf.h>
 #include <sys/atomic.h>
 #include <sys/prsystm.h>
 #include <sys/modctl.h>
@@ -39,7 +39,7 @@
 void (*dtrace_cpu_init)(processorid_t);
 void (*dtrace_modload)(struct modctl *);
 void (*dtrace_modunload)(struct modctl *);
-void (*dtrace_helpers_cleanup)(void);
+void (*dtrace_helpers_cleanup)(proc_t *);
 void (*dtrace_helpers_fork)(proc_t *, proc_t *);
 void (*dtrace_cpustart_init)(void);
 void (*dtrace_cpustart_fini)(void);
@@ -185,6 +185,7 @@ dtrace_vtime_enable(void)
 {
 	dtrace_vtime_state_t state, nstate;
 
+	nstate = DTRACE_VTIME_INACTIVE;
 	do {
 		state = dtrace_vtime_active;
 
@@ -193,12 +194,7 @@ dtrace_vtime_enable(void)
 			nstate = DTRACE_VTIME_ACTIVE;
 			break;
 
-		case DTRACE_VTIME_INACTIVE_TNF:
-			nstate = DTRACE_VTIME_ACTIVE_TNF;
-			break;
-
 		case DTRACE_VTIME_ACTIVE:
-		case DTRACE_VTIME_ACTIVE_TNF:
 			panic("DTrace virtual time already enabled");
 			/*NOTREACHED*/
 		}
@@ -212,6 +208,7 @@ dtrace_vtime_disable(void)
 {
 	dtrace_vtime_state_t state, nstate;
 
+	nstate = DTRACE_VTIME_INACTIVE;
 	do {
 		state = dtrace_vtime_active;
 
@@ -220,67 +217,8 @@ dtrace_vtime_disable(void)
 			nstate = DTRACE_VTIME_INACTIVE;
 			break;
 
-		case DTRACE_VTIME_ACTIVE_TNF:
-			nstate = DTRACE_VTIME_INACTIVE_TNF;
-			break;
-
 		case DTRACE_VTIME_INACTIVE:
-		case DTRACE_VTIME_INACTIVE_TNF:
 			panic("DTrace virtual time already disabled");
-			/*NOTREACHED*/
-		}
-
-	} while	(atomic_cas_32((uint32_t *)&dtrace_vtime_active,
-	    state, nstate) != state);
-}
-
-void
-dtrace_vtime_enable_tnf(void)
-{
-	dtrace_vtime_state_t state, nstate;
-
-	do {
-		state = dtrace_vtime_active;
-
-		switch (state) {
-		case DTRACE_VTIME_ACTIVE:
-			nstate = DTRACE_VTIME_ACTIVE_TNF;
-			break;
-
-		case DTRACE_VTIME_INACTIVE:
-			nstate = DTRACE_VTIME_INACTIVE_TNF;
-			break;
-
-		case DTRACE_VTIME_ACTIVE_TNF:
-		case DTRACE_VTIME_INACTIVE_TNF:
-			panic("TNF already active");
-			/*NOTREACHED*/
-		}
-
-	} while	(atomic_cas_32((uint32_t *)&dtrace_vtime_active,
-	    state, nstate) != state);
-}
-
-void
-dtrace_vtime_disable_tnf(void)
-{
-	dtrace_vtime_state_t state, nstate;
-
-	do {
-		state = dtrace_vtime_active;
-
-		switch (state) {
-		case DTRACE_VTIME_ACTIVE_TNF:
-			nstate = DTRACE_VTIME_ACTIVE;
-			break;
-
-		case DTRACE_VTIME_INACTIVE_TNF:
-			nstate = DTRACE_VTIME_INACTIVE;
-			break;
-
-		case DTRACE_VTIME_ACTIVE:
-		case DTRACE_VTIME_INACTIVE:
-			panic("TNF already inactive");
 			/*NOTREACHED*/
 		}
 
@@ -293,13 +231,6 @@ dtrace_vtime_switch(kthread_t *next)
 {
 	dtrace_icookie_t cookie;
 	hrtime_t ts;
-
-	if (tnf_tracing_active) {
-		tnf_thread_switch(next);
-
-		if (dtrace_vtime_active == DTRACE_VTIME_INACTIVE_TNF)
-			return;
-	}
 
 	cookie = dtrace_interrupt_disable();
 	ts = dtrace_gethrtime();

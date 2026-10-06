@@ -23,6 +23,7 @@
 /*
  * Copyright 2008 Sun Microsystems, Inc.  All rights reserved.
  * Use is subject to license terms.
+ * Copyright 2016 Joyent, Inc.
  */
 
 #ifndef	_SYS_ISA_DEFS_H
@@ -73,11 +74,14 @@
  * _POINTER_ALIGNMENT / _FLOAT_ALIGNMENT:
  *	The ABI defines alignment requirements of each of the primitive
  *	object types.  Some, if not all, may be hardware requirements as
- * 	well.  The values are expressed in "byte-alignment" units.
+ *	well.  The values are expressed in "byte-alignment" units.
  *
  * _MAX_ALIGNMENT:
  *	The most stringent alignment requirement as specified by the ABI.
  *	Equal to the maximum of all the above _XXX_ALIGNMENT values.
+ *
+ * _MAX_ALIGNMENT_TYPE:
+ *	The name of the C type that has the value descried in _MAX_ALIGNMENT.
  *
  * _ALIGNMENT_REQUIRED:
  *	True or false (1 or 0) whether or not the hardware requires the ABI
@@ -93,6 +97,9 @@
  *	instruction as defined by Intel.  (Intel allows other vendors
  *	to extend the instruction for their own purposes.)
  *
+ * _CACHE_LINE_SHIFT
+ * _CACHE_LINE_SIZE
+ *	Compile time maximum cache line size for an architecture.
  *
  * Implementation Choices:
  *
@@ -111,9 +118,11 @@
  *		Long/Pointer are 64 bits, Int is 32 bits.  This is the chosen
  *		implementation for 64-bit ABIs such as SPARC V9.
  *
- *	_I32LPx:
- *		A compilation environment where 'int' is 32-bit, and
- *		longs and pointers are simply the same size.
+ *	NOTE: This header used to define _I32LPx, which expressed a compilation
+ *	environment where 'int' is 32-bit, and 'long' and pointers are the same
+ *	size (although that size is not specified).  This was true for all
+ *	compilation targets, making it of little value.  Additionally, it was
+ *	erroneously interpreted as implying that long/pointer were 64-bit.
  *
  *	In all cases, Char is 8 bits and Short is 16 bits.
  *
@@ -256,6 +265,9 @@ extern "C" {
 #define	_POINTER_ALIGNMENT		8
 #define	_MAX_ALIGNMENT			16
 #define	_ALIGNMENT_REQUIRED		1
+#define	_MAX_ALIGNMENT_TYPE		long double
+#define	_CACHE_LINE_SHIFT		6
+#define	_CACHE_LINE_SIZE		(1 << _CACHE_LINE_SHIFT)
 
 /*
  * Different alignment constraints for the i386 ABI in compatibility mode
@@ -267,9 +279,6 @@ extern "C" {
  */
 #if !defined(_LP64)
 #define	_LP64
-#endif
-#if !defined(_I32LPx) && defined(_KERNEL)
-#define	_I32LPx
 #endif
 #define	_MULTI_DATAMODEL
 #define	_SUNOS_VTOC_16
@@ -321,15 +330,17 @@ extern "C" {
 #define	_POINTER_ALIGNMENT		4
 #define	_MAX_ALIGNMENT			4
 #define	_ALIGNMENT_REQUIRED		0
+#define	_MAX_ALIGNMENT_TYPE		long
+#define	_CACHE_LINE_SHIFT		6
+#define	_CACHE_LINE_SIZE		(1 << _CACHE_LINE_SHIFT)
 
 #define	_LONG_LONG_ALIGNMENT_32		_LONG_LONG_ALIGNMENT
 
 /*
  * Define the appropriate "implementation choices".
  */
+#if !defined(_ILP32)
 #define	_ILP32
-#if !defined(_I32LPx) && defined(_KERNEL)
-#define	_I32LPx
 #endif
 #define	_SUNOS_VTOC_16
 #define	_DMA_USES_PHYSADDR
@@ -426,15 +437,15 @@ extern "C" {
 #define	_LONG_DOUBLE_COMPLEX_ALIGNMENT	8
 #define	_POINTER_ALIGNMENT		4
 #define	_MAX_ALIGNMENT			8
+#define	_MAX_ALIGNMENT_TYPE		long double
 
 #define	_LONG_LONG_ALIGNMENT_32		_LONG_LONG_ALIGNMENT
 
 /*
  * Define the appropriate "implementation choices"
  */
+#if !defined(_ILP32)
 #define	_ILP32
-#if !defined(_I32LPx) && defined(_KERNEL)
-#define	_I32LPx
 #endif
 
 /*
@@ -451,6 +462,7 @@ extern "C" {
 #define	_LONG_DOUBLE_COMPLEX_ALIGNMENT	16
 #define	_POINTER_ALIGNMENT		8
 #define	_MAX_ALIGNMENT			16
+#define	_MAX_ALIGNMENT_TYPE		long double
 
 #define	_LONG_LONG_ALIGNMENT_32		_LONG_LONG_ALIGNMENT
 
@@ -459,9 +471,6 @@ extern "C" {
  */
 #if !defined(_LP64)
 #define	_LP64
-#endif
-#if !defined(_I32LPx)
-#define	_I32LPx
 #endif
 #define	_MULTI_DATAMODEL
 

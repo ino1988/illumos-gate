@@ -23,7 +23,7 @@
  * Use is subject to license terms.
  */
 /*
- * Copyright (c) 2012, Joyent, Inc.  All rights reserved.
+ * Copyright (c) 2019, Joyent, Inc.
  */
 
 #ifndef	_UMEM_BASE_H
@@ -50,7 +50,6 @@ extern int umem_ready;
 extern thread_t umem_init_thr;		/* the thread doing the init */
 
 extern int umem_init(void);		/* do umem's initialization */
-#pragma rarely_called(umem_init)
 
 extern umem_log_header_t *umem_transaction_log;
 extern umem_log_header_t *umem_content_log;
@@ -147,7 +146,7 @@ void umem_process_envvars(void);
  * umem_genasm.c: private interfaces
  */
 extern const int umem_genasm_supported;
-extern int umem_genasm(int *, umem_cache_t **, int);
+extern boolean_t umem_genasm(int *, umem_cache_t **, int);
 
 /*
  * malloc.c: traditional malloc/free interface for genasm

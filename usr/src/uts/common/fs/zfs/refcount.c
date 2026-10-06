@@ -20,7 +20,7 @@
  */
 /*
  * Copyright (c) 2005, 2010, Oracle and/or its affiliates. All rights reserved.
- * Copyright (c) 2012 by Delphix. All rights reserved.
+ * Copyright (c) 2012, 2015 by Delphix. All rights reserved.
  */
 
 #include <sys/zfs_context.h>
@@ -39,7 +39,7 @@ static kmem_cache_t *reference_cache;
 static kmem_cache_t *reference_history_cache;
 
 void
-refcount_init(void)
+zfs_refcount_init(void)
 {
 	reference_cache = kmem_cache_create("reference_cache",
 	    sizeof (reference_t), 0, NULL, NULL, NULL, NULL, NULL, 0);
@@ -49,46 +49,63 @@ refcount_init(void)
 }
 
 void
-refcount_fini(void)
+zfs_refcount_fini(void)
 {
 	kmem_cache_destroy(reference_cache);
 	kmem_cache_destroy(reference_history_cache);
 }
 
+static int
+zfs_refcount_compare(const void *x1, const void *x2)
+{
+	const reference_t *r1 = (const reference_t *)x1;
+	const reference_t *r2 = (const reference_t *)x2;
+
+	int cmp1 = TREE_CMP(r1->ref_holder, r2->ref_holder);
+	int cmp2 = TREE_CMP(r1->ref_number, r2->ref_number);
+	int cmp = cmp1 ? cmp1 : cmp2;
+	return ((cmp || r1->ref_search) ? cmp : TREE_PCMP(r1, r2));
+}
+
 void
-refcount_create(refcount_t *rc)
+zfs_refcount_create(zfs_refcount_t *rc)
 {
 	mutex_init(&rc->rc_mtx, NULL, MUTEX_DEFAULT, NULL);
-	list_create(&rc->rc_list, sizeof (reference_t),
-	    offsetof(reference_t, ref_link));
+	avl_create(&rc->rc_tree, zfs_refcount_compare, sizeof (reference_t),
+	    offsetof(reference_t, ref_link.a));
 	list_create(&rc->rc_removed, sizeof (reference_t),
-	    offsetof(reference_t, ref_link));
+	    offsetof(reference_t, ref_link.l));
 	rc->rc_count = 0;
 	rc->rc_removed_count = 0;
 	rc->rc_tracked = reference_tracking_enable;
 }
 
 void
-refcount_create_untracked(refcount_t *rc)
+zfs_refcount_create_tracked(zfs_refcount_t *rc)
 {
-	refcount_create(rc);
+	zfs_refcount_create(rc);
+	rc->rc_tracked = B_TRUE;
+}
+
+void
+zfs_refcount_create_untracked(zfs_refcount_t *rc)
+{
+	zfs_refcount_create(rc);
 	rc->rc_tracked = B_FALSE;
 }
 
 void
-refcount_destroy_many(refcount_t *rc, uint64_t number)
+zfs_refcount_destroy_many(zfs_refcount_t *rc, uint64_t number)
 {
 	reference_t *ref;
+	void *cookie = NULL;
 
-	ASSERT(rc->rc_count == number);
-	while (ref = list_head(&rc->rc_list)) {
-		list_remove(&rc->rc_list, ref);
+	ASSERT3U(rc->rc_count, ==, number);
+	while ((ref = avl_destroy_nodes(&rc->rc_tree, &cookie)) != NULL)
 		kmem_cache_free(reference_cache, ref);
-	}
-	list_destroy(&rc->rc_list);
+	avl_destroy(&rc->rc_tree);
 
-	while (ref = list_head(&rc->rc_removed)) {
-		list_remove(&rc->rc_removed, ref);
+	while ((ref = list_remove_head(&rc->rc_removed))) {
 		kmem_cache_free(reference_history_cache, ref->ref_removed);
 		kmem_cache_free(reference_cache, ref);
 	}
@@ -97,38 +114,41 @@ refcount_destroy_many(refcount_t *rc, uint64_t number)
 }
 
 void
-refcount_destroy(refcount_t *rc)
+zfs_refcount_destroy(zfs_refcount_t *rc)
 {
-	refcount_destroy_many(rc, 0);
+	zfs_refcount_destroy_many(rc, 0);
 }
 
 int
-refcount_is_zero(refcount_t *rc)
+zfs_refcount_is_zero(zfs_refcount_t *rc)
 {
-	return (rc->rc_count == 0);
+	return (zfs_refcount_count(rc) == 0);
 }
 
 int64_t
-refcount_count(refcount_t *rc)
+zfs_refcount_count(zfs_refcount_t *rc)
 {
-	return (rc->rc_count);
+	return (atomic_load_64(&rc->rc_count));
 }
 
 int64_t
-refcount_add_many(refcount_t *rc, uint64_t number, void *holder)
+zfs_refcount_add_many(zfs_refcount_t *rc, uint64_t number, const void *holder)
 {
-	reference_t *ref = NULL;
+	reference_t *ref;
 	int64_t count;
 
-	if (rc->rc_tracked) {
-		ref = kmem_cache_alloc(reference_cache, KM_SLEEP);
-		ref->ref_holder = holder;
-		ref->ref_number = number;
+	if (likely(!rc->rc_tracked)) {
+		count = atomic_add_64_nv(&(rc)->rc_count, number);
+		ASSERT3U(count, >=, number);
+		return (count);
 	}
+
+	ref = kmem_cache_alloc(reference_cache, KM_SLEEP);
+	ref->ref_holder = holder;
+	ref->ref_number = number;
+	ref->ref_search = B_FALSE;
 	mutex_enter(&rc->rc_mtx);
-	ASSERT(rc->rc_count >= 0);
-	if (rc->rc_tracked)
-		list_insert_head(&rc->rc_list, ref);
+	avl_add(&rc->rc_tree, ref);
 	rc->rc_count += number;
 	count = rc->rc_count;
 	mutex_exit(&rc->rc_mtx);
@@ -137,94 +157,201 @@ refcount_add_many(refcount_t *rc, uint64_t number, void *holder)
 }
 
 int64_t
-refcount_add(refcount_t *rc, void *holder)
+zfs_refcount_add(zfs_refcount_t *rc, const void *holder)
 {
-	return (refcount_add_many(rc, 1, holder));
-}
-
-int64_t
-refcount_remove_many(refcount_t *rc, uint64_t number, void *holder)
-{
-	reference_t *ref;
-	int64_t count;
-
-	mutex_enter(&rc->rc_mtx);
-	ASSERT(rc->rc_count >= number);
-
-	if (!rc->rc_tracked) {
-		rc->rc_count -= number;
-		count = rc->rc_count;
-		mutex_exit(&rc->rc_mtx);
-		return (count);
-	}
-
-	for (ref = list_head(&rc->rc_list); ref;
-	    ref = list_next(&rc->rc_list, ref)) {
-		if (ref->ref_holder == holder && ref->ref_number == number) {
-			list_remove(&rc->rc_list, ref);
-			if (reference_history > 0) {
-				ref->ref_removed =
-				    kmem_cache_alloc(reference_history_cache,
-				    KM_SLEEP);
-				list_insert_head(&rc->rc_removed, ref);
-				rc->rc_removed_count++;
-				if (rc->rc_removed_count > reference_history) {
-					ref = list_tail(&rc->rc_removed);
-					list_remove(&rc->rc_removed, ref);
-					kmem_cache_free(reference_history_cache,
-					    ref->ref_removed);
-					kmem_cache_free(reference_cache, ref);
-					rc->rc_removed_count--;
-				}
-			} else {
-				kmem_cache_free(reference_cache, ref);
-			}
-			rc->rc_count -= number;
-			count = rc->rc_count;
-			mutex_exit(&rc->rc_mtx);
-			return (count);
-		}
-	}
-	panic("No such hold %p on refcount %llx", holder,
-	    (u_longlong_t)(uintptr_t)rc);
-	return (-1);
-}
-
-int64_t
-refcount_remove(refcount_t *rc, void *holder)
-{
-	return (refcount_remove_many(rc, 1, holder));
+	return (zfs_refcount_add_many(rc, 1, holder));
 }
 
 void
-refcount_transfer(refcount_t *dst, refcount_t *src)
+zfs_refcount_add_few(zfs_refcount_t *rc, uint64_t number, const void *holder)
 {
-	int64_t count, removed_count;
-	list_t list, removed;
+	if (likely(!rc->rc_tracked)) {
+		(void) zfs_refcount_add_many(rc, number, holder);
+	} else {
+		for (; number > 0; number--)
+			(void) zfs_refcount_add(rc, holder);
+	}
+}
 
-	list_create(&list, sizeof (reference_t),
-	    offsetof(reference_t, ref_link));
+int64_t
+zfs_refcount_remove_many(zfs_refcount_t *rc, uint64_t number,
+    const void *holder)
+{
+	reference_t *ref, s;
+	int64_t count;
+
+	if (likely(!rc->rc_tracked)) {
+		count = atomic_add_64_nv(&(rc)->rc_count, -number);
+		ASSERT3S(count, >=, 0);
+		return (count);
+	}
+
+	s.ref_holder = holder;
+	s.ref_number = number;
+	s.ref_search = B_TRUE;
+	mutex_enter(&rc->rc_mtx);
+	ASSERT3U(rc->rc_count, >=, number);
+	ref = avl_find(&rc->rc_tree, &s, NULL);
+	if (unlikely(ref == NULL)) {
+		panic("No such hold %p with count %" PRIu64 " on refcount %llx",
+		    holder, number, (u_longlong_t)(uintptr_t)rc);
+	}
+	avl_remove(&rc->rc_tree, ref);
+	if (reference_history > 0) {
+		ref->ref_removed = kmem_cache_alloc(reference_history_cache,
+		    KM_SLEEP);
+		list_insert_head(&rc->rc_removed, ref);
+		if (rc->rc_removed_count >= reference_history) {
+			ref = list_remove_tail(&rc->rc_removed);
+			kmem_cache_free(reference_history_cache,
+			    ref->ref_removed);
+			kmem_cache_free(reference_cache, ref);
+		} else {
+			rc->rc_removed_count++;
+		}
+	} else {
+		kmem_cache_free(reference_cache, ref);
+	}
+	rc->rc_count -= number;
+	count = rc->rc_count;
+	mutex_exit(&rc->rc_mtx);
+	return (count);
+}
+
+int64_t
+zfs_refcount_remove(zfs_refcount_t *rc, const void *holder)
+{
+	return (zfs_refcount_remove_many(rc, 1, holder));
+}
+
+void
+zfs_refcount_remove_few(zfs_refcount_t *rc, uint64_t number, const void *holder)
+{
+	if (likely(!rc->rc_tracked)) {
+		(void) zfs_refcount_remove_many(rc, number, holder);
+	} else {
+		for (; number > 0; number--)
+			(void) zfs_refcount_remove(rc, holder);
+	}
+}
+
+void
+zfs_refcount_transfer(zfs_refcount_t *dst, zfs_refcount_t *src)
+{
+	avl_tree_t tree;
+	list_t removed;
+	reference_t *ref;
+	void *cookie = NULL;
+	uint64_t count;
+	uint_t removed_count;
+
+	avl_create(&tree, zfs_refcount_compare, sizeof (reference_t),
+	    offsetof(reference_t, ref_link.a));
 	list_create(&removed, sizeof (reference_t),
-	    offsetof(reference_t, ref_link));
+	    offsetof(reference_t, ref_link.l));
 
 	mutex_enter(&src->rc_mtx);
 	count = src->rc_count;
 	removed_count = src->rc_removed_count;
 	src->rc_count = 0;
 	src->rc_removed_count = 0;
-	list_move_tail(&list, &src->rc_list);
+	avl_swap(&tree, &src->rc_tree);
 	list_move_tail(&removed, &src->rc_removed);
 	mutex_exit(&src->rc_mtx);
 
 	mutex_enter(&dst->rc_mtx);
 	dst->rc_count += count;
 	dst->rc_removed_count += removed_count;
-	list_move_tail(&dst->rc_list, &list);
+	if (avl_is_empty(&dst->rc_tree))
+		avl_swap(&dst->rc_tree, &tree);
+	else while ((ref = avl_destroy_nodes(&tree, &cookie)) != NULL)
+		avl_add(&dst->rc_tree, ref);
 	list_move_tail(&dst->rc_removed, &removed);
 	mutex_exit(&dst->rc_mtx);
 
-	list_destroy(&list);
+	avl_destroy(&tree);
 	list_destroy(&removed);
 }
 
+void
+zfs_refcount_transfer_ownership_many(zfs_refcount_t *rc, uint64_t number,
+    const void *current_holder, const void *new_holder)
+{
+	reference_t *ref, s;
+
+	if (likely(!rc->rc_tracked))
+		return;
+
+	s.ref_holder = current_holder;
+	s.ref_number = number;
+	s.ref_search = B_TRUE;
+	mutex_enter(&rc->rc_mtx);
+	ref = avl_find(&rc->rc_tree, &s, NULL);
+	ASSERT3P(ref, !=, NULL);
+	ref->ref_holder = new_holder;
+	avl_update(&rc->rc_tree, ref);
+	mutex_exit(&rc->rc_mtx);
+}
+
+void
+zfs_refcount_transfer_ownership(zfs_refcount_t *rc, const void *current_holder,
+    const void *new_holder)
+{
+	zfs_refcount_transfer_ownership_many(rc, 1, current_holder,
+	    new_holder);
+}
+
+/*
+ * If tracking is enabled, return true if a reference exists that matches
+ * the "holder" tag. If tracking is disabled, then return true if a reference
+ * might be held.
+ */
+boolean_t
+zfs_refcount_held(zfs_refcount_t *rc, const void *holder)
+{
+	reference_t *ref, s;
+	avl_index_t idx;
+	boolean_t res;
+
+	if (likely(!rc->rc_tracked))
+		return (zfs_refcount_count(rc) > 0);
+
+	s.ref_holder = holder;
+	s.ref_number = 0;
+	s.ref_search = B_TRUE;
+	mutex_enter(&rc->rc_mtx);
+	ref = avl_find(&rc->rc_tree, &s, &idx);
+	if (likely(ref == NULL))
+		ref = avl_nearest(&rc->rc_tree, idx, AVL_AFTER);
+	res = ref && ref->ref_holder == holder;
+	mutex_exit(&rc->rc_mtx);
+	return (res);
+}
+
+/*
+ * If tracking is enabled, return true if a reference does not exist that
+ * matches the "holder" tag. If tracking is disabled, always return true
+ * since the reference might not be held.
+ */
+boolean_t
+zfs_refcount_not_held(zfs_refcount_t *rc, const void *holder)
+{
+	reference_t *ref, s;
+	avl_index_t idx;
+	boolean_t res;
+
+	if (likely(!rc->rc_tracked))
+		return (B_TRUE);
+
+	mutex_enter(&rc->rc_mtx);
+	s.ref_holder = holder;
+	s.ref_number = 0;
+	s.ref_search = B_TRUE;
+	ref = avl_find(&rc->rc_tree, &s, &idx);
+	if (likely(ref == NULL))
+		ref = avl_nearest(&rc->rc_tree, idx, AVL_AFTER);
+	res = ref == NULL || ref->ref_holder != holder;
+	mutex_exit(&rc->rc_mtx);
+	return (res);
+}
 #endif	/* ZFS_DEBUG */

@@ -24,6 +24,10 @@
  * Use is subject to license terms.
  */
 
+/*
+ * Copyright 2025 OmniOS Community Edition (OmniOSce) Association.
+ */
+
 #include <stdio.h>
 #include <stdlib.h>
 #include <unistd.h>
@@ -42,6 +46,12 @@
 #include "isns_server.h"
 #include "isns_obj.h"
 #include "isns_log.h"
+
+#if LIBXML_VERSION >= 20904
+#define	XMLSTRING_CAST (const char *)
+#else
+#define	XMLSTRING_CAST (const xmlChar *)
+#endif
 
 /*
  * external variables
@@ -230,7 +240,7 @@ get_xml_doc(
 		/* validate the xml file */
 
 		/* open the xml file */
-		xml_doc = xmlParseFile(xml_file);
+		xml_doc = xmlReadFile(xml_file, NULL, XML_PARSE_NOBLANKS);
 	}
 
 	*docp = xml_doc;
@@ -362,7 +372,7 @@ convert_attr2xml(
 		case 'u':
 			/* 4-bytes non-negative integer */
 			if (xmlStrPrintf(buff, sizeof (buff),
-			    (const unsigned char *)"%u",
+			    XMLSTRING_CAST "%u",
 			    attr->value.ui) > 0) {
 				value = (xmlChar *)&buff;
 			}
@@ -404,7 +414,7 @@ convert_attr2xml(
 			} else {
 				node = child;
 			}
-			/* LINTED E_CASE_FALLTHRU */
+			/* FALLTHROUGH */
 		case 3: /* set content */
 			if (node) {
 				xmlNodeSetContent(node, value);
@@ -645,7 +655,7 @@ locate_xml_node(
 	*context = xmlXPathNewContext(doc);
 
 	if (*context &&
-	    xmlStrPrintf(&expr[2], 30, (const unsigned char *)"%s",
+	    xmlStrPrintf(&expr[2], 30, XMLSTRING_CAST "%s",
 	    xmlTag[i]) != -1) {
 		*result = xmlXPathEvalExpression(expr, *context);
 		if (*result) {
@@ -836,9 +846,6 @@ xml_init_data(
 	(void) chdir(cwd);
 	free(cwd);
 	free(p);
-
-	/* do not keep blank spaces */
-	(void) xmlKeepBlanksDefault(0);
 
 	/* remove the tmp file if it exists */
 	if (access(xml_tmp_file, F_OK) == 0) {

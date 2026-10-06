@@ -20,25 +20,37 @@
 #
 #
 # Copyright (c) 2005, 2010, Oracle and/or its affiliates. All rights reserved.
-# Copyright (c) 2012 by Delphix. All rights reserved.
+# Copyright 2016 Igor Kozhukhov <ikozhukhov@gmail.com>
+# Copyright (c) 2011, 2017 by Delphix. All rights reserved.
+# Copyright 2020 Joyent, Inc.
+# Copyright 2024 Oxide Computer Company
 #
 
 LIBRARY= libzfs.a
 VERS= .1
 
-OBJS_SHARED=			\
-	zfeature_common.o	\
-	zfs_comutil.o		\
-	zfs_deleg.o		\
-	zfs_fletcher.o		\
-	zfs_namecheck.o		\
-	zfs_prop.o		\
-	zpool_prop.o		\
+amd64_OBJS_SHARED=		\
+	zfs_fletcher_avx512.o	\
+	zfs_fletcher_intel.o	\
+	zfs_fletcher_sse.o
+
+OBJS_SHARED=				\
+	$($(MACH64)_OBJS_SHARED)	\
+	zfeature_common.o		\
+	zfs_comutil.o			\
+	zfs_deleg.o			\
+	zfs_fletcher.o			\
+	zfs_fletcher_superscalar.o	\
+	zfs_fletcher_superscalar4.o	\
+	zfs_namecheck.o			\
+	zfs_prop.o			\
+	zpool_prop.o			\
 	zprop_common.o
 
 OBJS_COMMON=			\
 	libzfs_changelist.o	\
 	libzfs_config.o		\
+	libzfs_crypto.o		\
 	libzfs_dataset.o	\
 	libzfs_diff.o		\
 	libzfs_fru.o		\
@@ -48,16 +60,17 @@ OBJS_COMMON=			\
 	libzfs_pool.o		\
 	libzfs_sendrecv.o	\
 	libzfs_status.o		\
-	libzfs_util.o
+	libzfs_util.o		\
+	libzfs_taskq.o
 
 OBJECTS= $(OBJS_COMMON) $(OBJS_SHARED)
 
 include ../../Makefile.lib
 
-# libzfs must be installed in the root filesystem for mount(1M)
+# libzfs must be installed in the root filesystem for mount(8)
 include ../../Makefile.rootfs
 
-LIBS=	$(DYNLIB) $(LINTLIB)
+LIBS=	$(DYNLIB)
 
 SRCDIR =	../common
 
@@ -65,27 +78,27 @@ INCS += -I$(SRCDIR)
 INCS += -I../../../uts/common/fs/zfs
 INCS += -I../../../common/zfs
 INCS += -I../../libc/inc
+INCS += -I../../libzutil/common
 
-C99MODE=	-xc99=%all
-C99LMODE=	-Xc99=%all
+CSTD=	$(CSTD_GNU99)
 LDLIBS +=	-lc -lm -ldevid -lgen -lnvpair -luutil -lavl -lefi \
-	-ladm -lidmap -ltsol -lmd -lumem -lzfs_core
+	-lidmap -ltsol -lcryptoutil -lpkcs11 -lmd -lumem -lzfs_core \
+	-ldevinfo -lzutil
 CPPFLAGS +=	$(INCS) -D_LARGEFILE64_SOURCE=1 -D_REENTRANT
+$(NOT_RELEASE_BUILD)CPPFLAGS += -DDEBUG
 
-CERRWARN +=	-_gcc=-Wno-switch
-CERRWARN +=	-_gcc=-Wno-parentheses
-CERRWARN +=	-_gcc=-Wno-uninitialized
-CERRWARN +=	-_gcc=-Wno-unused-function
+# not linted
+SMATCH=off
+
+LDLIBS +=	-lz
+NATIVE_LIBS += libz.so
 
 SRCS=	$(OBJS_COMMON:%.o=$(SRCDIR)/%.c)	\
 	$(OBJS_SHARED:%.o=$(SRC)/common/zfs/%.c)
-$(LINTLIB) := SRCS=	$(SRCDIR)/$(LINTSRC)
 
 .KEEP_STATE:
 
 all: $(LIBS)
-
-lint: lintcheck
 
 pics/%.o: ../../../common/zfs/%.c
 	$(COMPILE.c) -o $@ $<

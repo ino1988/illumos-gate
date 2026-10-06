@@ -2,6 +2,7 @@
 # Copyright 2008 Sun Microsystems, Inc.  All rights reserved.
 # Use is subject to license terms.
 #
+# Copyright (c) 2018, Joyent, Inc.
 
 PROG1=kprop
 PROG2=kpropd
@@ -46,7 +47,7 @@ TEXT_DOMAIN = SUNW_OST_OSCMD
 POFILE = kprop.po
 POFILES = generic.po
 
-CFLAGS += $(XESS) $(CCOPTS) $(DEFS) $(LOCALINCLUDE)
+CFLAGS += $(CCOPTS) $(DEFS) $(LOCALINCLUDE)
 CPPFLAGS +=	-I. \
 		-I$(KRB5IPROPDIR) \
 		-I$(SRC)/lib/gss_mechs/mech_krb5/include \
@@ -59,9 +60,11 @@ CERRWARN +=	-_gcc=-Wno-unused-variable
 CERRWARN +=	-_gcc=-Wno-unused-function
 CERRWARN +=	-_gcc=-Wno-implicit-function-declaration
 CERRWARN +=	-_gcc=-Wno-parentheses
-CERRWARN +=	-_gcc=-Wno-uninitialized
 CERRWARN +=	-_gcc=-Wno-unused-value
 CERRWARN +=	-_gcc=-Wno-address
+
+# not linted
+SMATCH=off
 
 LDFLAGS +=	$(KRUNPATH) $(KERBRUNPATH)
 LDLIBS +=	-lmech_krb5 -lsocket
@@ -100,10 +103,6 @@ check:	$(CHKMANIFEST)
 install_h:
 clean:
 	$(RM) $(CLIENTOBJS) $(SERVEROBJS) $(DERIVED_OBJS) $(COMMONOBJS) $(PROG) $(ISRC)
-
-lint:
-	$(LINT.c) $(CLIENTSRCS) $(COMMONSRCS) $(LDLIBS)
-	$(LINT.c) $(SERVERSRCS) $(DERIVED_SRCS) $(COMMONSRCS) $(LDLIBS)
 
 include ../../Makefile.targ
 

@@ -20,6 +20,10 @@
 #
 #
 # Copyright (c) 2005, 2010, Oracle and/or its affiliates. All rights reserved.
+# Copyright 2016 Igor Kozhukhov <ikozhukhov@gmail.com>.
+# Copyright (c) 2015 by Delphix. All rights reserved.
+# Copyright 2020 Joyent, Inc.
+# Copyright 2025 Hans Rosenfeld
 #
 
 PROG= zpool
@@ -27,30 +31,23 @@ OBJS= zpool_main.o zpool_vdev.o zpool_iter.o zpool_util.o
 SRCS= $(OBJS:%.o=%.c)
 POFILES=$(OBJS:%.o=%.po)
 POFILE= zpool.po
+CLEANFILES = $(OBJS)
 
 include ../Makefile.cmd
+include ../Makefile.cmd.64
 include ../Makefile.ctf
+include ../stat/Makefile.stat
 
-STATCOMMONDIR = $(SRC)/cmd/stat/common
+LDLIBS += -lzfs -lnvpair -ldevid -lefi -ldiskmgt -luutil -lumem -lzutil \
+	-lm -lzpool
 
-STAT_COMMON_OBJS = timestamp.o
-STAT_COMMON_SRCS = $(STAT_COMMON_OBJS:%.o=$(STATCOMMONDIR)/%.c)
-SRCS += $(STAT_COMMON_SRCS)
+INCS += -I../../common/zfs -I../../uts/common/fs/zfs
+INCS += -I../../lib/libzutil/common
 
-LDLIBS += -lzfs -lnvpair -ldevid -lefi -ldiskmgt -luutil -lumem
+CSTD=	$(CSTD_GNU99)
 
-INCS += -I../../common/zfs -I$(STATCOMMONDIR)
-
-CPPFLAGS += -D_LARGEFILE64_SOURCE=1 -D_REENTRANT $(INCS)
+CPPFLAGS += $(INCS)
 $(NOT_RELEASE_BUILD)CPPFLAGS += -DDEBUG
-
-# lint complains about unused _umem_* functions
-LINTFLAGS += -xerroff=E_NAME_DEF_NOT_USED2 
-LINTFLAGS64 += -xerroff=E_NAME_DEF_NOT_USED2  
-
-CERRWARN += -_gcc=-Wno-unused-function
-CERRWARN += -_gcc=-Wno-uninitialized
-CERRWARN += -_gcc=-Wno-parentheses
 
 ROOTUSRSBINLINKS = $(PROG:%=$(ROOTUSRSBIN)/%)
 
@@ -58,13 +55,9 @@ ROOTUSRSBINLINKS = $(PROG:%=$(ROOTUSRSBIN)/%)
 
 all: $(PROG)
 
-$(PROG): $(OBJS) $(STAT_COMMON_OBJS)
-	$(LINK.c) -o $@ $(OBJS) $(STAT_COMMON_OBJS) $(LDLIBS)
+$(PROG): $(OBJS)
+	$(LINK.c) -o $@ $(OBJS) $(LDLIBS)
 	$(POST_PROCESS)
-
-%.o:    $(STATCOMMONDIR)/%.c
-	$(COMPILE.c) $<
-	$(POST_PROCESS_O)
 
 install: all $(ROOTSBINPROG) $(ROOTUSRSBINLINKS)
 
@@ -73,9 +66,7 @@ $(POFILE): $(POFILES)
 	$(CAT) $(POFILES) > $@
 
 clean:
-	$(RM) $(OBJS) $(STAT_COMMON_OBJS)
-
-lint:	lint_SRCS
+	$(RM) $(CLEANFILES)
 
 # Links from /usr/sbin to /sbin
 $(ROOTUSRSBINLINKS):

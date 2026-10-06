@@ -19,12 +19,10 @@
 .Nd duplicate wide-character string
 .Sh SYNOPSIS
 .In wchar.h
-.
-.Ft wchar_t
+.Ft "wchar_t *"
 .Fo wcsdup
 .Fa "const wchar_t *string"
 .Fc
-.
 .Sh DESCRIPTION
 The
 .Fn wcsdup
@@ -33,9 +31,11 @@ function duplicates a wide-character
 allocating sufficient memory to store the copy, and then
 copying from
 .Fa string .
-The resulting copy is returned.  It may be deallocated with
+The resulting copy is returned.
+It may be deallocated with
 .Xr free 3C
-when it is no longer needed.  The
+when it is no longer needed.
+The
 .Fn wcsdup
 function is the wide-character equivalent of
 .Xr strdup 3C .
@@ -64,8 +64,8 @@ Insufficient memory was available to create the copy.
 .Xr strdup 3C ,
 .Xr wcslen 3C ,
 .Xr wchar.h 3HEAD ,
-.Xr locale 5 ,
-.Xr standards 5
+.Xr locale 7 ,
+.Xr standards 7
 .Sh STANDARDS
 The
 .Fn wcsdup

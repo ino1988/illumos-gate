@@ -10,6 +10,7 @@
  */
 /*
  * Copyright (c) 2014, Joyent, Inc.
+ * Copyright (c) 2017 by Delphix. All rights reserved.
  */
 
 #include <stdio.h>
@@ -164,7 +165,7 @@ nvlist_print_json(FILE *fp, nvlist_t *nvl)
 		}
 
 		case DATA_TYPE_UINT8: {
-			FPRINTF(fp, "%hhu", fnvpair_value_uint8_t(curr));
+			FPRINTF(fp, "%hhu", fnvpair_value_uint8(curr));
 			break;
 		}
 
@@ -394,8 +395,10 @@ nvlist_print_json(FILE *fp, nvlist_t *nvl)
 		}
 
 		case DATA_TYPE_UNKNOWN:
+		case DATA_TYPE_DONTCARE:
 			return (-1);
 		}
+
 	}
 
 	FPRINTF(fp, "}");

@@ -23,8 +23,9 @@
  * Use is subject to license terms.
  */
 /*
- * Copyright (c) 2013 by Delphix. All rights reserved.
+ * Copyright (c) 2013, 2016 by Delphix. All rights reserved.
  * Copyright (c) 2013 Joyent, Inc. All rights reserved.
+ * Copyright 2022 Oxide Computer Company
  */
 
 #ifndef	_DT_PARSER_H
@@ -50,6 +51,7 @@ extern "C" {
 typedef struct dt_node {
 	ctf_file_t *dn_ctfp;	/* CTF type container for node's type */
 	ctf_id_t dn_type;	/* CTF type reference for node's type */
+	ulong_t dn_bitoff;	/* Offset to the start of the CTF type */
 	uchar_t dn_kind;	/* node kind (DT_NODE_*, defined below) */
 	uchar_t dn_flags;	/* node flags (DT_NF_*, defined below) */
 	ushort_t dn_op;		/* operator (DT_TOK_*, defined by lex) */
@@ -105,6 +107,12 @@ typedef struct dt_node {
 			struct dt_node *_probes;  /* list of probe nodes */
 			int _redecl;		/* provider redeclared */
 		} _provider;
+
+		struct {
+			struct dt_node *_conditional;
+			struct dt_node *_body;
+			struct dt_node *_alternate_body;
+		} _conditional;
 	} dn_u;
 
 	struct dt_node *dn_list; /* parse tree list link */
@@ -140,6 +148,11 @@ typedef struct dt_node {
 #define	dn_provred	dn_u._provider._redecl	/* DT_NODE_PROVIDER */
 #define	dn_probes	dn_u._provider._probes	/* DT_NODE_PROVIDER */
 
+/* DT_NODE_IF: */
+#define	dn_conditional		dn_u._conditional._conditional
+#define	dn_body			dn_u._conditional._body
+#define	dn_alternate_body	dn_u._conditional._alternate_body
+
 #define	DT_NODE_FREE	0	/* unused node (waiting to be freed) */
 #define	DT_NODE_INT	1	/* integer value */
 #define	DT_NODE_STRING	2	/* string value */
@@ -162,6 +175,7 @@ typedef struct dt_node {
 #define	DT_NODE_PROBE	19	/* probe definition */
 #define	DT_NODE_PROVIDER 20	/* provider definition */
 #define	DT_NODE_PROG	21	/* program translation unit */
+#define	DT_NODE_IF	22	/* if statement */
 
 #define	DT_NF_SIGNED	0x01	/* data is a signed quantity (else unsigned) */
 #define	DT_NF_COOKED	0x02	/* data is a known type (else still cooking) */
@@ -213,6 +227,7 @@ extern dt_node_t *dt_node_xlator(dt_decl_t *, dt_decl_t *, char *, dt_node_t *);
 extern dt_node_t *dt_node_probe(char *, int, dt_node_t *, dt_node_t *);
 extern dt_node_t *dt_node_provider(char *, dt_node_t *);
 extern dt_node_t *dt_node_program(dt_node_t *);
+extern dt_node_t *dt_node_if(dt_node_t *, dt_node_t *, dt_node_t *);
 
 extern dt_node_t *dt_node_link(dt_node_t *, dt_node_t *);
 extern dt_node_t *dt_node_cook(dt_node_t *, uint_t);
@@ -226,6 +241,8 @@ extern void dt_node_link_free(dt_node_t **);
 
 extern void dt_node_attr_assign(dt_node_t *, dtrace_attribute_t);
 extern void dt_node_type_assign(dt_node_t *, ctf_file_t *, ctf_id_t, boolean_t);
+extern void dt_node_type_assign_bitfield(dt_node_t *, ctf_file_t *, ctf_id_t,
+    boolean_t, ulong_t);
 extern void dt_node_type_propagate(const dt_node_t *, dt_node_t *);
 extern const char *dt_node_type_name(const dt_node_t *, char *, size_t);
 extern size_t dt_node_type_size(const dt_node_t *);
@@ -237,6 +254,7 @@ extern void dt_node_promote(dt_node_t *, dt_node_t *, dt_node_t *);
 extern void dt_node_diftype(dtrace_hdl_t *,
     const dt_node_t *, dtrace_diftype_t *);
 extern void dt_node_printr(dt_node_t *, FILE *, int);
+extern void dt_printd(dt_node_t *, FILE *, int);
 extern const char *dt_node_name(const dt_node_t *, char *, size_t);
 extern int dt_node_root(dt_node_t *);
 
@@ -265,7 +283,7 @@ typedef enum {
 extern void dnerror(const dt_node_t *, dt_errtag_t, const char *, ...);
 extern void dnwarn(const dt_node_t *, dt_errtag_t, const char *, ...);
 
-extern void xyerror(dt_errtag_t, const char *, ...);
+extern void xyerror(dt_errtag_t, const char *, ...) __NORETURN;
 extern void xywarn(dt_errtag_t, const char *, ...);
 extern void xyvwarn(dt_errtag_t, const char *, va_list);
 

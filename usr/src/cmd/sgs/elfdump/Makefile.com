@@ -21,45 +21,47 @@
 
 #
 # Copyright (c) 1997, 2010, Oracle and/or its affiliates. All rights reserved.
+# Copyright (c) 2018, Joyent, Inc.
+# Copyright 2019 OmniOS Community Edition (OmniOSce) Association.
+# Copyright 2024 Oxide Computer Company
 #
 
 PROG=		elfdump
 
 include		$(SRC)/cmd/Makefile.cmd
 include		$(SRC)/cmd/sgs/Makefile.com
+include		$(SRC)/common/hexdump/Makefile.com
 
 COMOBJ =	main.o			corenote.o \
 		dwarf.o			struct_layout.o \
-		struct_layout_i386.o 	struct_layout_amd64.o \
- 		struct_layout_sparc.o 	struct_layout_sparcv9.o
+		struct_layout_i386.o	struct_layout_amd64.o \
+		struct_layout_sparc.o	struct_layout_sparcv9.o
 
 COMOBJ32 =	elfdump32.o fake_shdr32.o
 
 COMOBJ64 =	elfdump64.o fake_shdr64.o
 
-TOOLOBJ =	leb128.o
+SGSCOMMONOBJ =	leb128.o
 
 BLTOBJ =	msg.o
 
-OBJS=		$(BLTOBJ) $(COMOBJ) $(COMOBJ32) $(COMOBJ64) $(TOOLOBJ)
+EXTOBJ =	$(HEXDUMP_OBJS)
+
+OBJS=		$(BLTOBJ) $(COMOBJ) $(COMOBJ32) $(COMOBJ64) $(SGSCOMMONOBJ) \
+		$(EXTOBJ)
 
 MAPFILE=	$(MAPFILE.NGB)
-MAPOPT=		$(MAPFILE:%=-M%)
+MAPOPT=		$(MAPFILE:%=-Wl,-M%)
 
 CPPFLAGS=	-I. -I../common -I../../include -I../../include/$(MACH) \
-		-I$(SRCBASE)/lib/libc/inc -I$(SRCBASE)/uts/$(ARCH)/sys \
+		-I$(SRC)/lib/libc/inc -I$(SRC)/uts/$(ARCH)/sys \
 		$(CPPFLAGS.master) -I$(ELFCAP)
-LLDFLAGS =	$(VAR_ELFDUMP_LLDFLAGS)
-LLDFLAGS64 =	$(VAR_ELFDUMP_LLDFLAGS64)
-LDFLAGS +=	$(VERSREF) $(CC_USE_PROTO) $(MAPOPT) $(LLDFLAGS)
-LDLIBS +=	$(ELFLIBDIR) -lelf $(LDDBGLIBDIR) $(LDDBG_LIB) \
-		    $(CONVLIBDIR) $(CONV_LIB)
 
-LINTFLAGS +=	-x
-LINTFLAGS64 +=	-x
+LDFLAGS +=	$(VERSREF) $(MAPOPT) '-R$$ORIGIN/../../lib/$(MACH64)'
+LDLIBS +=	$(ELFLIBDIR64) -lelf $(LDDBGLIBDIR64) -llddbg \
+		    $(CONVLIBDIR64) -lconv
 
-CERRWARN +=	-_gcc=-Wno-uninitialized
-CERRWARN +=	-_gcc=-Wno-switch
+NATIVE_LDFLAGS = $(LDASSERTS) $(BDIRECT)
 
 BLTDEFS =	msg.h
 BLTDATA =	msg.c
@@ -74,7 +76,6 @@ SGSMSGFLAGS +=	-h $(BLTDEFS) -d $(BLTDATA) -m $(BLTMESG) -n elfdump_msg
 
 SRCS =		$(COMOBJ:%.o=../common/%.c) \
 		$(COMOBJ32:%32.o=../common/%.c) \
-		$(TOOLOBJ:%.o=../../tools/common/%.c) $(BLTDATA)
-LINTSRCS =	$(SRCS) ../common/lintsup.c
+		$(SGSCOMMONOBJ:%.o=$(SGSCOMMON)/%.c) $(BLTDATA)
 
-CLEANFILES +=	$(LINTOUTS) $(BLTFILES) gen_struct_layout
+CLEANFILES +=	$(BLTFILES) gen_struct_layout

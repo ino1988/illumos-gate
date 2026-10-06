@@ -15,8 +15,6 @@
 #ifndef _RESTORE_H
 #define	_RESTORE_H
 
-#pragma ident	"%Z%%M%	%I%	%E% SMI"
-
 #include <stdio.h>
 #include <string.h>
 #include <malloc.h>
@@ -65,8 +63,8 @@ extern int	autoload_tries;	/* number of times to check on autoload */
 extern int	autoload_period; /* seconds, tries*period = total wait time */
 extern struct byteorder_ctx *byteorder;
 extern char	*progname;	/* our name */
-extern char	*dumpmap; 	/* map of inodes on this dump tape */
-extern char	*clrimap; 	/* map of inodes to be deleted */
+extern char	*dumpmap;	/* map of inodes on this dump tape */
+extern char	*clrimap;	/* map of inodes to be deleted */
 extern char	*c_label;	/* label we expect to see on the tape */
 extern ino_t	maxino;		/* highest numbered inode in this file system */
 extern long	dumpnum;	/* location of the dump on this tape */
@@ -122,7 +120,6 @@ struct entry {
 /*
  * functions defined on entry structs
  */
-#ifdef __STDC__
 extern struct entry *lookupino(ino_t);
 extern struct entry *lookupname(char *);
 extern struct entry *addentry(char *, ino_t, int);
@@ -144,29 +141,6 @@ extern ino_t upperbnd(ino_t);
 extern void badentry(struct entry *, char *);
 extern char *flagvalues(struct entry *);
 extern ino_t dirlookup(char *);
-#else
-extern struct entry *lookupino();
-extern struct entry *lookupname();
-extern struct entry *addentry();
-extern void deleteino();
-extern char *myname();
-extern void freeentry();
-extern void moveentry();
-extern char *savename();
-extern void freename();
-extern void dumpsymtable();
-extern void initsymtable();
-extern void mktempname();
-extern char *gentempname();
-extern void newnode();
-extern void removenode();
-extern void removeleaf();
-extern ino_t lowerbnd();
-extern ino_t upperbnd();
-extern void badentry();
-extern char *flagvalues();
-extern ino_t dirlookup();
-#endif
 #define	NIL ((struct entry *)(0))
 
 /*
@@ -197,7 +171,7 @@ typedef struct _rstdirdesc {
 /*
  * The entry describes the next file available on the tape
  */
-struct context {
+extern struct context {
 	char	*name;		/* name of file */
 	ino_t	ino;		/* inumber of file */
 	struct	dinode *dip;	/* pointer to inode */
@@ -250,7 +224,7 @@ extern struct direct *rst_readdir(RST_DIR *);
 extern void setdirmodes(void);
 extern int genliteraldir(char *, ino_t);
 extern int inodetype(ino_t);
-extern void done(int);
+extern void done(int) __NORETURN;
 extern void runcmdshell(void);
 extern void canon(char *, char *, size_t);
 extern void onintr(int);

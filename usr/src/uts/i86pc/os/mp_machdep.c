@@ -25,6 +25,8 @@
 /*
  * Copyright (c) 2009-2010, Intel Corporation.
  * All rights reserved.
+ * Copyright 2020 Joyent, Inc.
+ * Copyright 2023 Oxide Computer Company
  */
 
 #define	PSMI_1_7
@@ -62,6 +64,9 @@
 #include <sys/sunddi.h>
 #include <sys/sunndi.h>
 #include <sys/cpc_pcbe.h>
+#include <sys/prom_debug.h>
+#include <sys/tsc.h>
+
 
 #define	OFFSETOF(s, m)		(size_t)(&(((s *)0)->m))
 
@@ -99,10 +104,6 @@ static int mach_cpu_create_devinfo(cpu_t *cp, dev_info_t **dipp);
  *	External reference functions
  */
 extern void return_instr();
-extern uint64_t freq_tsc(uint32_t *);
-#if defined(__i386)
-extern uint64_t freq_notsc(uint32_t *);
-#endif
 extern void pc_gethrestime(timestruc_t *);
 extern int cpuid_get_coreid(cpu_t *);
 extern int cpuid_get_chipid(cpu_t *);
@@ -116,10 +117,10 @@ void (*psm_notifyf)(int)	= (void (*)(int))return_instr;
 void (*psm_set_idle_cpuf)(int)	= (void (*)(int))return_instr;
 void (*psm_unset_idle_cpuf)(int) = (void (*)(int))return_instr;
 void (*psminitf)()		= mach_init;
-void (*picinitf)() 		= return_instr;
-int (*clkinitf)(int, int *) 	= (int (*)(int, int *))return_instr;
-int (*ap_mlsetup)() 		= (int (*)(void))return_instr;
-void (*send_dirintf)() 		= return_instr;
+void (*picinitf)()		= return_instr;
+int (*clkinitf)(int, int *)	= (int (*)(int, int *))return_instr;
+int (*ap_mlsetup)()		= (int (*)(void))return_instr;
+void (*send_dirintf)()		= return_instr;
 void (*setspl)(int)		= (void (*)(int))return_instr;
 int (*addspl)(int, int, int, int) = (int (*)(int, int, int, int))return_instr;
 int (*delspl)(int, int, int, int) = (int (*)(int, int, int, int))return_instr;
@@ -148,6 +149,9 @@ int (*psm_get_ipivect)(int, int) = NULL;
 uchar_t (*psm_get_ioapicid)(uchar_t) = NULL;
 uint32_t (*psm_get_localapicid)(uint32_t) = NULL;
 uchar_t (*psm_xlate_vector_by_irq)(uchar_t) = NULL;
+int (*psm_get_pir_ipivect)(void) = NULL;
+void (*psm_send_pir_ipi)(processorid_t) = NULL;
+void (*psm_cmci_setup)(processorid_t, boolean_t) = NULL;
 
 int (*psm_clkinit)(int) = NULL;
 void (*psm_timer_reprogram)(hrtime_t) = NULL;
@@ -345,6 +349,9 @@ pg_plat_hw_rank(pghw_type_t hw1, pghw_type_t hw2)
 		PGHW_POW_ACTIVE,
 		PGHW_NUM_COMPONENTS
 	};
+
+	rank1 = 0;
+	rank2 = 0;
 
 	for (i = 0; hw_hier[i] != PGHW_NUM_COMPONENTS; i++) {
 		if (hw_hier[i] == hw1)
@@ -971,6 +978,7 @@ mach_init()
 {
 	struct psm_ops  *pops;
 
+	PRM_POINT("mach_construct_info()");
 	mach_construct_info();
 
 	pops = mach_set[0];
@@ -1010,6 +1018,7 @@ mach_init()
 		notify_error = pops->psm_notify_error;
 	}
 
+	PRM_POINT("psm_softinit()");
 	(*pops->psm_softinit)();
 
 	/*
@@ -1027,6 +1036,7 @@ mach_init()
 #ifndef __xpv
 	non_deep_idle_disp_enq_thread = disp_enq_thread;
 #endif
+	PRM_DEBUG(idle_cpu_use_hlt);
 	if (idle_cpu_use_hlt) {
 		idle_cpu = cpu_idle_adaptive;
 		CPU->cpu_m.mcpu_idle_cpu = cpu_idle;
@@ -1061,6 +1071,7 @@ mach_init()
 #endif
 	}
 
+	PRM_POINT("mach_smpinit()");
 	mach_smpinit();
 }
 
@@ -1130,6 +1141,14 @@ mach_smpinit(void)
 	if (pops->psm_enable_intr)
 		psm_enable_intr  = pops->psm_enable_intr;
 
+	/*
+	 * Set this vector so it can be used by vmbus (for Hyper-V)
+	 * Need this even for single-CPU systems.  This works for
+	 * "pcplusmp" and "apix" platforms, but not "uppc" (because
+	 * "Uni-processor PC" does not provide a _get_ipivect).
+	 */
+	psm_get_ipivect = pops->psm_get_ipivect;
+
 	/* check for multiple CPUs */
 	if (cnt < 2 && plat_dr_support_cpu() == B_FALSE)
 		return;
@@ -1152,7 +1171,10 @@ mach_smpinit(void)
 #endif
 	}
 
-	psm_get_ipivect = pops->psm_get_ipivect;
+	psm_get_pir_ipivect = pops->psm_get_pir_ipivect;
+	psm_send_pir_ipi = pops->psm_send_pir_ipi;
+	psm_cmci_setup = pops->psm_cmci_setup;
+
 
 	(void) add_avintr((void *)NULL, XC_HI_PIL, xc_serv, "xc_intr",
 	    (*pops->psm_get_ipivect)(XC_HI_PIL, PSM_INTR_IPI_HI),
@@ -1191,28 +1213,14 @@ uint64_t cpu_freq_hz;	/* measured (in hertz) */
 int xpv_cpufreq_workaround = 1;
 int xpv_cpufreq_verbose = 0;
 
-#else	/* __xpv */
-
-static uint64_t
-mach_calchz(uint32_t pit_counter, uint64_t *processor_clks)
-{
-	uint64_t cpu_hz;
-
-	if ((pit_counter == 0) || (*processor_clks == 0) ||
-	    (*processor_clks > (((uint64_t)-1) / PIT_HZ)))
-		return (0);
-
-	cpu_hz = ((uint64_t)PIT_HZ * *processor_clks) / pit_counter;
-
-	return (cpu_hz);
-}
-
 #endif	/* __xpv */
 
 static uint64_t
 mach_getcpufreq(void)
 {
-#if defined(__xpv)
+#ifndef __xpv
+	return (tsc_get_freq());
+#else
 	vcpu_time_info_t *vti = &CPU->cpu_m.mcpu_vcpu_info->time;
 	uint64_t cpu_hz;
 
@@ -1251,37 +1259,6 @@ mach_getcpufreq(void)
 		    vti->tsc_to_system_mul, vti->tsc_shift, cpu_hz);
 
 	return (cpu_hz);
-#else	/* __xpv */
-	uint32_t pit_counter;
-	uint64_t processor_clks;
-
-	if (is_x86_feature(x86_featureset, X86FSET_TSC)) {
-		/*
-		 * We have a TSC. freq_tsc() knows how to measure the number
-		 * of clock cycles sampled against the PIT.
-		 */
-		ulong_t flags = clear_int_flag();
-		processor_clks = freq_tsc(&pit_counter);
-		restore_int_flag(flags);
-		return (mach_calchz(pit_counter, &processor_clks));
-	} else if (x86_vendor == X86_VENDOR_Cyrix || x86_type == X86_TYPE_P5) {
-#if defined(__amd64)
-		panic("mach_getcpufreq: no TSC!");
-#elif defined(__i386)
-		/*
-		 * We are a Cyrix based on a 6x86 core or an Intel Pentium
-		 * for which freq_notsc() knows how to measure the number of
-		 * elapsed clock cycles sampled against the PIT
-		 */
-		ulong_t flags = clear_int_flag();
-		processor_clks = freq_notsc(&pit_counter);
-		restore_int_flag(flags);
-		return (mach_calchz(pit_counter, &processor_clks));
-#endif	/* __i386 */
-	}
-
-	/* We do not know how to calculate cpu frequency for this cpu. */
-	return (0);
 #endif	/* __xpv */
 }
 
@@ -1305,9 +1282,9 @@ static int x86_cpu_freq[] = { 60, 75, 80, 90, 120, 160, 166, 175, 180, 233 };
  * is most likely printed on the part.
  *
  * Some examples:
- * 	AMD Athlon 1000 mhz measured as 998 mhz
- * 	Intel Pentium III Xeon 733 mhz measured as 731 mhz
- * 	Intel Pentium IV 1500 mhz measured as 1495mhz
+ *	AMD Athlon 1000 mhz measured as 998 mhz
+ *	Intel Pentium III Xeon 733 mhz measured as 731 mhz
+ *	Intel Pentium IV 1500 mhz measured as 1495mhz
  *
  * If in the future this function is no longer sufficient to correct
  * for the error in the measurement, then the algorithm used to perform
@@ -1427,21 +1404,18 @@ mach_clkinit(int preferred_mode, int *set_mode)
 
 	cpu_freq = machhztomhz(cpu_freq_hz);
 
-	if (!is_x86_feature(x86_featureset, X86FSET_TSC) || (cpu_freq == 0))
-		tsc_gethrtime_enable = 0;
+	/*
+	 * For most systems, we retain the default TSC-based gethrtime()
+	 * implementation that was initialized early in the boot process.
+	 */
+#ifdef __xpv
+	if (pops->psm_hrtimeinit)
+		(*pops->psm_hrtimeinit)();
+	gethrtimef = pops->psm_gethrtime;
+	gethrtimeunscaledf = gethrtimef;
+	/* scalehrtimef will remain dummy */
 
-#ifndef __xpv
-	if (tsc_gethrtime_enable) {
-		tsc_hrtimeinit(cpu_freq_hz);
-	} else
-#endif
-	{
-		if (pops->psm_hrtimeinit)
-			(*pops->psm_hrtimeinit)();
-		gethrtimef = pops->psm_gethrtime;
-		gethrtimeunscaledf = gethrtimef;
-		/* scalehrtimef will remain dummy */
-	}
+#endif /* __xpv */
 
 	mach_fixcpufreq();
 
@@ -1584,7 +1558,7 @@ mach_cpu_remove(processorid_t cpuid)
 static int
 mach_cpu_create_devinfo(cpu_t *cp, dev_info_t **dipp)
 {
-	int rv, circ;
+	int rv;
 	dev_info_t *dip;
 	static kmutex_t cpu_node_lock;
 	static dev_info_t *cpu_nex_devi = NULL;
@@ -1599,7 +1573,7 @@ mach_cpu_create_devinfo(cpu_t *cp, dev_info_t **dipp)
 		cpu_nex_devi = ddi_find_devinfo("cpus", -1, 0);
 		/* Create cpus if it doesn't exist. */
 		if (cpu_nex_devi == NULL) {
-			ndi_devi_enter(ddi_root_node(), &circ);
+			ndi_devi_enter(ddi_root_node());
 			rv = ndi_devi_alloc(ddi_root_node(), "cpus",
 			    (pnode_t)DEVI_SID_NODEID, &dip);
 			if (rv != NDI_SUCCESS) {
@@ -1610,7 +1584,7 @@ mach_cpu_create_devinfo(cpu_t *cp, dev_info_t **dipp)
 			}
 			ASSERT(dip != NULL);
 			(void) ndi_devi_online(dip, 0);
-			ndi_devi_exit(ddi_root_node(), circ);
+			ndi_devi_exit(ddi_root_node());
 			cpu_nex_devi = dip;
 		}
 		mutex_exit(&cpu_node_lock);
@@ -1619,7 +1593,7 @@ mach_cpu_create_devinfo(cpu_t *cp, dev_info_t **dipp)
 	/*
 	 * create a child node for cpu identified as 'cpu_id'
 	 */
-	ndi_devi_enter(cpu_nex_devi, &circ);
+	ndi_devi_enter(cpu_nex_devi);
 	dip = ddi_add_child(cpu_nex_devi, "cpu", DEVI_SID_NODEID, -1);
 	if (dip == NULL) {
 		cmn_err(CE_CONT,
@@ -1630,7 +1604,7 @@ mach_cpu_create_devinfo(cpu_t *cp, dev_info_t **dipp)
 		(void) ndi_hold_devi(dip);
 		rv = PSM_SUCCESS;
 	}
-	ndi_devi_exit(cpu_nex_devi, circ);
+	ndi_devi_exit(cpu_nex_devi);
 
 	return (rv);
 }

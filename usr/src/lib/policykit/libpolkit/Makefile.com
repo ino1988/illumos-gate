@@ -22,23 +22,20 @@
 # Copyright 2006 Sun Microsystems, Inc.  All rights reserved.
 # Use is subject to license terms.
 #
-# ident	"%Z%%M%	%I%	%E% SMI"
-#
-# usr/src/lib/policykit/libpolkit/Makefile.com
-#
+# Copyright 2019 OmniOS Community Edition (OmniOSce) Association.
 
 LIBRARY =	libpolkit.a
 VERS =		.0.0.0
 VERS_MAJ =	.0
+VERSPKG =	$(POLICYKIT_VERSION)
 OBJECTS =	libpolkit-rbac.o
-LIBPCSRC =	polkit.pc
+PCFILE =	polkit.pc
 
 include ../../Makefile.com
 
-LIBS =		$(DYNLIB) $(LINTLIB)
+LIBS =		$(DYNLIB)
 LDLIBS +=	$(POLICYKIT_GLIB_LDLIBS)
 LDLIBS +=	-lc -lsecdb
-$(LINTLIB) := 	SRCS = $(SRCDIR)/$(LINTSRC)
 
 SRCDIR =	../common
 
@@ -47,11 +44,12 @@ CPPFLAGS +=	-DPACKAGE_LOCALE_DIR=\"/usr/lib/locale\"
 
 ROOTMAJLINK =	$(ROOTLIBDIR)/$(LIBRARY:.a=.so)$(VERS_MAJ)
 
+# smatch has problems parsing the glib header files
+SMATCH=off
+
 .KEEP_STATE:
 
 all:		$(LIBS)
-
-lint:
 
 $(ROOTMAJLINK):
 	-$(RM) $@; $(SYMLINK) $(DYNLIB) $@

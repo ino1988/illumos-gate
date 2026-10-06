@@ -27,14 +27,11 @@
 /*	Copyright (c) 1984, 1986, 1987, 1988, 1989 AT&T	*/
 /*	  All Rights Reserved  	*/
 
-
-#pragma ident	"%Z%%M%	%I%	%E% SMI"
-
 /*
  * nlsadmin.c -- control program for the network listener service
  *
  * This program replaces a previous version of nlsadmin.
- * 
+ *
  * This version of nlsadmin works with the service access facility to
  * control the network listener.  The functionality of the SVR3.2 nlsadmin
  * command is supported through calls to the more general sacadm and pmadm
@@ -46,7 +43,7 @@
  * The -t option associates an address with service code 1 (same as in SVR3.2).
  * The -l option associates an address with service code 0.
  *
- * nlsadmin also contains new functionality -- the ability to format a 
+ * nlsadmin also contains new functionality -- the ability to format a
  * "listener-specific" string to put in the _pmtab database.  This
  * functionality is required by SAF.
  */
@@ -208,7 +205,7 @@ main(int argc, char **argv)
 			moduleptr = optarg;
 			break;
 		case 'q':
-			if ( (flag && (flag != ZZZFLAG)) || Quietflag || comptr 
+			if ( (flag && (flag != ZZZFLAG)) || Quietflag || comptr
 			     || rpcptr || lflags || idptr )
 				usage(INCONSISTENT);
 			Quietflag = TRUE;
@@ -318,7 +315,7 @@ main(int argc, char **argv)
 		case '?':
 			usage(USAGE);
 		}
-		/* NOTREACHED */	
+		/* NOTREACHED */
 	}
 
 	if ((optind < argc) && ! netspec)
@@ -330,7 +327,7 @@ main(int argc, char **argv)
 	/* determine if this command requires a netspec */
 	if (flag != CMDFLAG) {
 		/* if flag is CMDFLAG, more complicated checking of netspec
-		 * is done below in switch 
+		 * is done below in switch
 		 */
 		if ((flag == PIPFLAG || flag == VERFLAG || flag == NETFLAG)) {
 			if (netspec)
@@ -356,7 +353,7 @@ main(int argc, char **argv)
 			ptr = strchr(buf, ':');
 			ptr++;
 			ptr2 = strchr(ptr, ':');
-			*ptr2 = NULL;
+			*ptr2 = '\0';
 			if (strcmp(ptr, LISTENTYPE) != 0) {
 				sprintf(mesg, "Network specification \"%s\" is not of type %s", netspec, LISTENTYPE);
 				nlsmesg(MM_ERROR, mesg);
@@ -390,7 +387,7 @@ main(int argc, char **argv)
 		exitcode = prt_nets(netspec);
 		break;
 	case INIFLAG:
-		if (geteuid() != ROOT) 
+		if (geteuid() != ROOT)
 			no_permission();
 		exitcode = add_pm(netspec);
 		break;
@@ -554,8 +551,8 @@ prt_cmd(char *path, long flags, char *modules, char *addr, char *rpcp)
 		return(NLS_CMD);
 	}
 
-	if ((tmp = strchr(path, ' ')) != NULL) 
-		*tmp = NULL;
+	if ((tmp = strchr(path, ' ')) != NULL)
+		*tmp = '\0';
 
 	if (stat(path, &sbuf) < 0) {
 		if (errno != EFAULT) {
@@ -599,8 +596,8 @@ old_addsvc(char *svc, char *addr, char *cmd, char *com, char *module,
 		return(NLS_CMD);
 	}
 
-	if ((tmp = strchr(cmd, ' ')) != NULL) 
-		*tmp = NULL;
+	if ((tmp = strchr(cmd, ' ')) != NULL)
+		*tmp = '\0';
 
 	if (stat(cmd, &sbuf) < 0) {
 		if (errno != EFAULT) {
@@ -655,7 +652,7 @@ old_addsvc(char *svc, char *addr, char *cmd, char *com, char *module,
 }
 
 /*
- * prt_nets:  print the status of one network, or all nets if netspec 
+ * prt_nets:  print the status of one network, or all nets if netspec
  *            is NULL
  */
 int
@@ -669,12 +666,12 @@ prt_nets(char *netspec)
 	int	found = FALSE;
 	int	rtn = NLS_OK;
 
-	if (netspec == NULL) 
+	if (netspec == NULL)
 		sprintf(buf, SAC_LSTY, LISTENTYPE);
-	else 
+	else
 		sprintf(buf, SAC_LSPM, netspec);
 
-	if ((fp = popen(buf, "r")) == NULL) 
+	if ((fp = popen(buf, "r")) == NULL)
 		return(NLS_SYSERR);
 
 	while (fgets(buf, BUFSIZ, fp) != NULL) {
@@ -693,8 +690,8 @@ prt_nets(char *netspec)
 			return(NLS_SYSERR);
 		if ((state = nexttok(NULL, ":")) == NULL)
 			return(NLS_SYSERR);
-		if (strcmp(state, "ENABLED") == NULL ||
-		    strcmp(state, "STARTING") == NULL) {
+		if (strcmp(state, "ENABLED") == 0 ||
+		    strcmp(state, "STARTING") == 0) {
 			rtn = QZERO;
 			if (!Quietflag)
 				printf("%s\t%s\n", name, "ACTIVE");
@@ -721,7 +718,7 @@ prt_nets(char *netspec)
 
 
 /*
- * print info about service on netspec, or all services on netspec 
+ * print info about service on netspec, or all services on netspec
  * if svc is NULL
  */
 
@@ -736,12 +733,12 @@ prt_svcs(char *svc, char *netspec)
 	int	found = FALSE;
 	char	*p;
 
-	if (svc == NULL) 
+	if (svc == NULL)
 		sprintf(buf, PM_LSALL, netspec);
-	else 
+	else
 		sprintf(buf, PM_LSONE, netspec, svc);
 
-	if ((fp = popen(buf, "r")) == NULL) 
+	if ((fp = popen(buf, "r")) == NULL)
 		return(NLS_SYSERR);
 
 	while (fgets(buf, BUFSIZ, fp) != NULL) {
@@ -809,7 +806,7 @@ prt_svcs(char *svc, char *netspec)
 }
 
 /*
- * disable_svc:  use pmadm to disable a service 
+ * disable_svc:  use pmadm to disable a service
  */
 
 int
@@ -1055,9 +1052,9 @@ start_listener(char *netspec)
 
 	sprintf(buf, SAC_STARTPM, netspec);
 
-	if ((rtn = system(buf)) < 0) 
+	if ((rtn = system(buf)) < 0)
 		return(NLS_SYSERR);
-	rtn = (rtn>>8) & 0xff;	
+	rtn = (rtn>>8) & 0xff;
 	switch (rtn) {
 	case 0:
 		break;
@@ -1088,7 +1085,7 @@ start_listener(char *netspec)
 	if ((rtn = system(buf)) < 0) {
 		return(NLS_SYSERR);
 	}
-	rtn = (rtn>>8) & 0xff;	
+	rtn = (rtn>>8) & 0xff;
 	switch (rtn) {
 	case 0:
 		return(NLS_OK);
@@ -1136,7 +1133,7 @@ setup_addr(char *laddr, char *taddr, char *netspec)
 	FILE	*fp;
 	struct	svcfields entry;
 
-	if (laddr && *laddr == '-') 
+	if (laddr && *laddr == '-')
 		qlisten = TRUE;
 
 	if (taddr && *taddr == '-')
@@ -1152,7 +1149,7 @@ setup_addr(char *laddr, char *taddr, char *netspec)
 		if (fgets(buf, BUFSIZ, fp) != NULL) {
 			if ((rtn = svc_format(buf, &entry)) != 0) {
 				switch (rtn) {
-				case NOTLISTEN:	
+				case NOTLISTEN:
 					nlsmesg(MM_ERROR, "Incorrect port monitor type.  Must be of type listen");
 					return(NLS_FAILED);
 					break;
@@ -1194,7 +1191,7 @@ setup_addr(char *laddr, char *taddr, char *netspec)
 		if (fgets(buf, BUFSIZ, fp) != NULL) {
 			if ((rtn = svc_format(buf, &entry)) != 0) {
 				switch (rtn) {
-				case NOTLISTEN:	
+				case NOTLISTEN:
 					nlsmesg(MM_ERROR, "Incorrect port monitor type.  Must be of type listen");
 					return(NLS_FAILED);
 					break;
@@ -1248,11 +1245,11 @@ svc_format(char *buf, struct svcfields *entry)
 	entry->pmtag = buf;
 	if ((ptr = strchr(buf, ':')) == NULL)
 		return(BADPMFMT);
-	*ptr++ = NULL;
+	*ptr++ = '\0';
 	entry->pmtype = ptr;
 	if ((ptr = strchr(entry->pmtype, ':')) == NULL)
 		return(BADPMFMT);
-	*ptr++ = NULL;
+	*ptr++ = '\0';
 	entry->svc_code = ptr;
 
 	if (strcmp(entry->pmtype, LISTENTYPE) != 0)
@@ -1260,35 +1257,35 @@ svc_format(char *buf, struct svcfields *entry)
 
 	if ((ptr = strchr(entry->svc_code, ':')) == NULL)
 		return(BADPMFMT);
-	*ptr++ = NULL;
+	*ptr++ = '\0';
 	entry->flags = ptr;
 	if ((ptr = strchr(entry->flags, ':')) == NULL)
 		return(BADPMFMT);
-	*ptr++ = NULL;
+	*ptr++ = '\0';
 	entry->id = ptr;
 	if ((ptr = strchr(entry->id, ':')) == NULL)
 		return(BADPMFMT);
-	*ptr++ = NULL;
+	*ptr++ = '\0';
 	entry->res1 = ptr;
 	if ((ptr = strchr(entry->res1, ':')) == NULL)
 		return(BADPMFMT);
-	*ptr++ = NULL;
+	*ptr++ = '\0';
 	entry->res2 = ptr;
 	if ((ptr = strchr(entry->res2, ':')) == NULL)
 		return(BADPMFMT);
-	*ptr++ = NULL;
+	*ptr++ = '\0';
 	entry->res3 = ptr;
 	if ((ptr = strchr(entry->res3, ':')) == NULL)
 		return(BADPMFMT);
-	*ptr++ = NULL;
+	*ptr++ = '\0';
 	entry->addr = ptr;
 	if ((ptr = strchr(entry->addr, ':')) == NULL)
 		return(BADLISFMT);
-	*ptr++ = NULL;
+	*ptr++ = '\0';
 	entry->rpc = ptr;
 	if ((ptr = strchr(entry->rpc, ':')) == NULL)
 		return(BADLISFMT);
-	*ptr++ = NULL;
+	*ptr++ = '\0';
 	if (*entry->rpc) {
 		if ((tmp = strchr(entry->rpc, ',')) == NULL)
 			return(BADLISFMT);
@@ -1297,15 +1294,15 @@ svc_format(char *buf, struct svcfields *entry)
 	entry->lflags = ptr;
 	if ((ptr = strchr(entry->lflags, ':')) == NULL)
 		return(BADLISFMT);
-	*ptr++ = NULL;
+	*ptr++ = '\0';
 	entry->modules = ptr;
 	if ((ptr = strchr(entry->modules, ':')) == NULL)
 		return(BADLISFMT);
-	*ptr++ = NULL;
+	*ptr++ = '\0';
 	entry->command = ptr;
 	if ((ptr = strchr(entry->command, '#')) == NULL)
 		return(BADLISFMT);
-	*ptr++ = NULL;
+	*ptr++ = '\0';
 	entry->comment = ptr;
 	return(NLS_OK);
 }

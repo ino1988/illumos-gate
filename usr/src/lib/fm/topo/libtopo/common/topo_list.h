@@ -22,11 +22,13 @@
  * Copyright 2008 Sun Microsystems, Inc.  All rights reserved.
  * Use is subject to license terms.
  */
+/*
+ * Copyright 2019 Joyent, Inc.
+ * Copyright 2023 Oxide Computer Company
+ */
 
 #ifndef	_TOPO_LIST_H
 #define	_TOPO_LIST_H
-
-#pragma ident	"%Z%%M%	%I%	%E% SMI"
 
 #include <fm/libtopo.h>
 
@@ -37,11 +39,14 @@ extern "C" {
 #define	topo_list_prev(elem)	((void *)(((topo_list_t *)(elem))->l_prev))
 #define	topo_list_next(elem)	((void *)(((topo_list_t *)(elem))->l_next))
 
+extern size_t topo_list_size(topo_list_t *);
 extern void topo_list_append(topo_list_t *, void *);
 extern void topo_list_prepend(topo_list_t *, void *);
 extern void topo_list_insert_before(topo_list_t *, void *, void *);
 extern void topo_list_insert_after(topo_list_t *, void *, void *);
 extern void topo_list_delete(topo_list_t *, void *);
+extern int topo_list_deepcopy(topo_hdl_t *, topo_list_t *, topo_list_t *,
+    size_t);
 
 /* Helpers for child/sibling lists */
 extern tnode_t *topo_child_first(tnode_t *);

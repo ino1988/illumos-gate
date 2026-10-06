@@ -22,93 +22,117 @@
 #
 # Copyright (c) 1999, 2010, Oracle and/or its affiliates. All rights reserved.
 # Copyright 2014 Garrett D'Amore <garrett@damore.org>
+# Copyright 2016 Toomas Soome <tsoome@me.com>
+# Copyright (c) 2016, Chris Fraire <cfraire@me.com>.
+# Copyright 2019 Joyent, Inc.
+# Copyright 2019 OmniOS Community Edition (OmniOSce) Association.
+# Copyright 2021 Jason King
 #
 
 include ../Makefile.master
 
-# Bootstrap problem --
-# 'cw' must be built before anything else can be built.
+# Bootstrap problem: some utilities are pre-requisites for building everything
+# else:
+#    - smatch - as it is a shadow compiler
+#    - cw - as it is used to drive builds
+#    - install.bin - being the 'install' target dependency
+#    - ctf - being used to generate CTF data
+#
+# Anything built before 'install.bin' is present must override binary
+# installation rules in their makefiles. This includes the Makefile for
+# 'install.bin' itself.
+BOOT_SUBDIRS=		\
+	smatch		\
+	.WAIT		\
+	cw		\
+	.WAIT		\
+	install.bin	\
+	.WAIT		\
+	ctf		\
+	yacc		\
+	lex
 
-BOOT_SUBDIRS= \
-	cw
-
-COMMON_SUBDIRS= \
-	codereview \
-	codesign \
-	cscope-fast \
-	ctf \
-	depcheck \
-	env \
-	findunref \
-	ndrgen \
-	onbld \
-	pmodes \
-	gk \
-	install.bin \
-	lintdump \
-	protocmp \
-	protolist \
-	scripts
+COMMON_SUBDIRS=		\
+	codesign	\
+	cscope-fast	\
+	env		\
+	find_elf	\
+	findunref	\
+	lintdump	\
+	make		\
+	makesoftcore	\
+	manlink		\
+	ndrgen		\
+	onbld		\
+	protocmp	\
+	protolist	\
+	scripts		\
+	sgs		\
+	svc
 
 #
 #  special versions of commands for use only in build
 #
-UNSHIPPED_SUBDIRS = \
-	elfsign \
-	mandoc
+UNSHIPPED_SUBDIRS =		\
+	$(SGSMSG)		\
+	$(SGSLIBCONV)		\
+	$(SGSLIBELF)		\
+	$(SGSLIBLDDBG)		\
+	$(SGSLIBLD)		\
+	$(SGSLD)		\
+	geniconvtbl		\
+	localedef		\
+	mandoc			\
+	rpcgen			\
+	tic			\
+	vtfontcvt		\
+	zic
 
-sparc_SUBDIRS= \
-	chk4ubin \
-	stabs \
-	tokenize
+i386_SUBDIRS=			\
+	cpcgen			\
+	elfextract		\
+	mbh_patch		\
+	btxld
 
-i386_SUBDIRS=		\
-	aw		\
-	elfextract	\
-	mbh_patch
-
-LINTSUBDIRS= \
-	codereview \
-	ctf \
-	cw \
-	findunref \
-	lintdump \
-	ndrgen \
-	protocmp \
-	protolist
-
-SUBDIRS= \
-	$($(MACH)_SUBDIRS) \
-	$(COMMON_SUBDIRS) \
+SUBDIRS=			\
+	$($(MACH)_SUBDIRS)	\
+	$(COMMON_SUBDIRS)	\
 	$(UNSHIPPED_SUBDIRS)
 
 include Makefile.tools
 
-ROOTDIRS= \
-	$(ROOTOPT) \
-	$(ROOTONBLD) \
-	$(ROOTONBLD)/bin \
-	$(ROOTONBLD)/bin/$(MACH) \
-	$(ROOTONBLD)/lib \
-	$(ROOTONBLD)/lib/$(MACH) \
-	$(ROOTONBLD)/lib/perl \
-	$(ROOTONBLD)/lib/python2.6 \
-	$(ROOTONBLD)/lib/python2.6/onbld \
-	$(ROOTONBLD)/lib/python2.6/onbld/Checks \
-	$(ROOTONBLD)/lib/python2.6/onbld/hgext \
-	$(ROOTONBLD)/lib/python2.6/onbld/Scm \
-	$(ROOTONBLD)/env \
-	$(ROOTONBLD)/etc \
-	$(ROOTONBLD)/etc/exception_lists \
-	$(ROOTONBLD)/gk \
-	$(ROOTONBLD)/man \
-	$(ROOTONBLD)/man/man1
+ROOTDIRS=					\
+	$(ROOTOPT)				\
+	$(ROOTONBLD)				\
+	$(ROOTONBLD)/bin			\
+	$(ROOTONBLD)/bin/$(MACH)		\
+	$(ROOTONBLD)/bin/$(MACH64)		\
+	$(ROOTONBLD)/lib			\
+	$(ROOTONBLD)/lib/$(MACH)		\
+	$(ROOTONBLD)/lib/$(MACH)/64		\
+	$(ROOTONBLD)/lib/perl			\
+	$(ROOTONBLD)/env			\
+	$(ROOTONBLD)/etc			\
+	$(ROOTONBLD)/etc/exception_lists	\
+	$(ROOTONBLD)/share			\
+	$(ROOTONBLD)/share/lib			\
+	$(ROOTONBLD)/share/lib/ccs		\
+	$(ROOTONBLD)/man			\
+	$(ROOTONBLD)/man/man1onbld
+
+ROOTDIRS +=							\
+	$(ROOTONBLD)/lib/python$(PYTHON3_VERSION)				\
+	$(ROOTONBLD)/lib/python$(PYTHON3_VERSION)/onbld				\
+	$(ROOTONBLD)/lib/python$(PYTHON3_VERSION)/onbld/__pycache__		\
+	$(ROOTONBLD)/lib/python$(PYTHON3_VERSION)/onbld/Checks			\
+	$(ROOTONBLD)/lib/python$(PYTHON3_VERSION)/onbld/Checks/__pycache__	\
+	$(ROOTONBLD)/lib/python$(PYTHON3_VERSION)/onbld/Scm			\
+	$(ROOTONBLD)/lib/python$(PYTHON3_VERSION)/onbld/Scm/__pycache__
 
 all :=		TARGET= install
 install :=	TARGET= install
 clean :=	TARGET= clean
 clobber :=	TARGET= clobber
-lint :=		TARGET= lint
 _msg :=		TARGET= _msg
 
 .KEEP_STATE:
@@ -121,6 +145,9 @@ DOROOTDIRS= $(ROOTDIRS)
 clobber:= DOROOTDIRS=
 clean:= DOROOTDIRS=
 
+clobber:= DOROOTONBLDLIBPY=
+clean:= DOROOTONBLDLIBPY=
+
 all install: $(SUBDIRS)
 
 clean: $(SUBDIRS)
@@ -128,21 +155,22 @@ clean: $(SUBDIRS)
 clobber: $(SUBDIRS)
 	$(RM) -rf $(TOOLS_PROTO)
 
-lint: $(LINTSUBDIRS)
+bootstrap: $(BOOT_SUBDIRS)
 
 _msg: $(MSGSUBDIRS)
 
-.PARALLEL: $(SUBDIRS) $(CLOSED_SUBDIRS)
+.PARALLEL: $(SUBDIRS)
 
-$(SUBDIRS) $(CLOSED_SUBDIRS): $(BOOT_SUBDIRS)
+$(SUBDIRS): $(BOOT_SUBDIRS)
 
-$(BOOT_SUBDIRS) $(SUBDIRS): $$(DOROOTDIRS) $(ROOTONBLDLIBPY) FRC
+$(BOOT_SUBDIRS) $(SUBDIRS): $$(DOROOTDIRS) $$(DOROOTONBLDLIBPY) FRC
 	@cd $@; pwd; $(MAKE) $(TARGET)
 
+# Assume we don't have the install.bin available yet
 $(ROOTDIRS):
-	$(INS.dir)
+	$(MKDIR) -p -m $(DIRMODE) $@
 
 $(ROOTONBLDLIBPY): $(ROOTDIRS)
-	$(RM) -r $@; $(SYMLINK) python2.6 $@
+	$(RM) -r $@; $(SYMLINK) python$(PYTHON3_VERSION) $@
 
 FRC:

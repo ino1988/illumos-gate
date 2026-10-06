@@ -22,6 +22,7 @@
  * Copyright 2009 Sun Microsystems, Inc.  All rights reserved.
  * Use is subject to license terms.
  * Copyright 2012 Milan Jurik. All rights reserved.
+ * Copyright 2023 OmniOS Community Edition (OmniOSce) Association.
  */
 
 /*
@@ -64,7 +65,7 @@
 #include <sys/cpr.h>
 
 /* STATICUSED */
-struct utmpx 	utmp;
+struct utmpx	utmp;
 #define	NMAX		(sizeof (utmp.ut_name))
 
 /*
@@ -119,7 +120,7 @@ static	void	pm_do_auth(adt_session_data_t *);
 /*
  *  External Declarations.
  */
-extern	int	pam_tty_conv(int, struct pam_message **,
+extern	int	pam_tty_conv(int, const struct pam_message **,
     struct pam_response **, void *);
 extern	char	*optarg;
 
@@ -173,7 +174,7 @@ change_audit_file(void)
 		int	retries = RETRY_COUNT;
 
 		/*
-		 * Wait for audit(1M) -n process to complete
+		 * Wait for audit(8) -n process to complete
 		 *
 		 */
 		do {
@@ -197,7 +198,7 @@ wait_for_auqueue()
 	au_stat_t	au_stat;
 	int		retries = 10;
 
-	while (retries-- && auditon(A_GETSTAT, (caddr_t)&au_stat, NULL) == 0) {
+	while (retries-- && auditon(A_GETSTAT, (caddr_t)&au_stat, 0) == 0) {
 		if (au_stat.as_enqueue == au_stat.as_written) {
 			break;
 		}
@@ -219,9 +220,9 @@ alarm_handler(int sig)
  */
 
 /*
- * pm_poweroff - similar to poweroff(1M)
- * This should do the same auditing as poweroff(1m) would do when it
- * becomes a libpower function.  Till then we use poweroff(1m).
+ * pm_poweroff - similar to poweroff(8)
+ * This should do the same auditing as poweroff(8) would do when it
+ * becomes a libpower function.  Till then we use poweroff(8).
  */
 static void
 pm_poweroff(void)
@@ -236,7 +237,7 @@ pm_poweroff(void)
 	closelog();
 
 	/*
-	 * Call poweroff(1m) to shut down the system.
+	 * Call poweroff(8) to shut down the system.
 	 */
 	(void) execl("/usr/sbin/poweroff", "poweroff", NULL);
 
@@ -251,7 +252,8 @@ pm_poweroff(void)
  * make this function quite easy, though.
  */
 static int
-pm_check_suspend(void) {
+pm_check_suspend(void)
+{
 	/*
 	 * Use the uadmin(2) "CHECK" command to see if suspend is supported
 	 */
@@ -407,8 +409,8 @@ pm_suspend(void)
  */
 
 static void
-suspend_error(int error) {
-
+suspend_error(int error)
+{
 	switch (error) {
 	case EBUSY:
 		(void) printf(gettext("suspend: "
@@ -481,7 +483,7 @@ refresh_dt()
  * otherwise, return "xauthority" as it is.
  */
 static char *
-get_xauthority(char *xauthority)
+get_xauthority(char *xauthority, size_t buflen)
 {
 	pid_t uid;
 	char *home_dir;
@@ -515,10 +517,12 @@ get_xauthority(char *xauthority)
 	/*
 	 * If there is a .Xauthority file in home directory, reference it.
 	 */
-	/*LINTED*/
-	(void) sprintf(filepath, "%s/.Xauthority", home_dir);
-	if (stat(filepath, &stat_buf) == 0)
-		return (strcat(xauthority, filepath));
+	(void) snprintf(filepath, sizeof (filepath),
+	    "%s/.Xauthority", home_dir);
+	if (stat(filepath, &stat_buf) == 0) {
+		(void) strlcpy(xauthority, filepath, buflen);
+		return (xauthority);
+	}
 
 	/*
 	 * If Xsession can not access user's home directory, it creates the
@@ -533,21 +537,23 @@ get_xauthority(char *xauthority)
 
 	while ((dp = readdir(dirp)) != NULL) {
 		if (strstr(dp->d_name, ".Xauth") != NULL) {
-			/*LINTED*/
-			(void) sprintf(filepath, "%s/%s", DT_TMP, dp->d_name);
+			(void) snprintf(filepath, sizeof (filepath),
+			    "%s/%s", DT_TMP, dp->d_name);
 			if (stat(filepath, &stat_buf) == -1)
 				continue;
 			if (stat_buf.st_uid != uid)
 				continue;
 			if (stat_buf.st_ctime > latest) {
-				(void) strcpy(xauth, filepath);
+				(void) strlcpy(xauth, filepath,
+				    sizeof (xauth));
 				latest = stat_buf.st_ctime;
 			}
 		}
 	}
 	(void) closedir(dirp);
 
-	return (strcat(xauthority, xauth));
+	(void) strlcpy(xauthority, xauth, buflen);
+	return (xauthority);
 }
 
 /*
@@ -572,16 +578,15 @@ int
 main(int argc, char **argv)
 {
 	int		c;
-	char		display_name[MAXNAMELEN + 9] = "DISPLAY=";
-	char		xauthority[MAXPATHLEN + 12] = "XAUTHORITY=";
-	struct passwd 	*pw;
+	char		xauthority[MAXPATHLEN];
+	struct passwd	*pw;
 
-	(void *) signal(SIGHUP, SIG_IGN);
-	(void *) signal(SIGINT, SIG_IGN);
-	(void *) signal(SIGQUIT, SIG_IGN);
-	(void *) signal(SIGTSTP, SIG_IGN);
-	(void *) signal(SIGTTIN, SIG_IGN);
-	(void *) signal(SIGTTOU, SIG_IGN);
+	(void) signal(SIGHUP, SIG_IGN);
+	(void) signal(SIGINT, SIG_IGN);
+	(void) signal(SIGQUIT, SIG_IGN);
+	(void) signal(SIGTSTP, SIG_IGN);
+	(void) signal(SIGTTIN, SIG_IGN);
+	(void) signal(SIGTTOU, SIG_IGN);
 
 	/*
 	 * If suspend is invoked from a daemon (case 1 above), it
@@ -619,15 +624,8 @@ main(int argc, char **argv)
 				flags |= SHUTDOWN;
 				break;
 			case 'd':
-				/* Needswork */
 				/* Set the DISPLAY value in the environment */
-				if (strlen(optarg) >= MAXNAMELEN) {
-					(void) printf(gettext("Error: "
-					    "display name is too long.\n"));
-					return (1);
-				}
-				(void) strcat(display_name, optarg);
-				if (putenv(display_name) != 0) {
+				if (setenv("DISPLAY", optarg, 1) != 0) {
 					(void) printf(gettext("Error: "
 					    "unable to set DISPLAY "
 					    "environment variable.\n"));
@@ -715,13 +713,14 @@ main(int argc, char **argv)
 	 * one up.
 	 */
 	if (getenv("XAUTHORITY") == NULL)
-		(void) putenv(get_xauthority(xauthority));
+		(void) setenv("XAUTHORITY",
+		    get_xauthority(xauthority, MAXPATHLEN), 1);
 
 	/*
 	 * In case of "suspend" being called from daemon "powerd",
 	 * signal SIGALRM is blocked so use "sigset()" instead of "signal()".
 	 */
-	(void *) sigset(SIGALRM, alarm_handler);
+	(void) sigset(SIGALRM, alarm_handler);
 
 	/* Call the "suspend" function to do the last of the work */
 	pm_suspend();

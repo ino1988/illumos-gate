@@ -21,6 +21,7 @@
 # Copyright 2009 Sun Microsystems, Inc.  All rights reserved.
 # Use is subject to license terms.
 #
+# Copyright (c) 2018, Joyent, Inc.
 
 PROG= filesync
 
@@ -33,7 +34,10 @@ include ../Makefile.cmd
 LDLIBS += -lgen
 
 CERRWARN += -_gcc=-Wno-parentheses
-CERRWARN += -_gcc=-Wno-uninitialized
+CERRWARN += $(CNOWARN_UNINIT)
+
+# not linted
+SMATCH=off
 
 FILEMODE= 0555
 
@@ -57,7 +61,7 @@ clean:
 lint:	lint_SRCS
 
 #
-# we need our own rule for building a message catalog because our strings 
+# we need our own rule for building a message catalog because our strings
 # are already extracted, and xgettext expects to find them in situ.
 #
 #	The sed command turns each string define in messages.h into

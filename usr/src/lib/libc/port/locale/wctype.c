@@ -27,10 +27,10 @@
  */
 
 #include "lint.h"
+#include "thr_uberdata.h"
 #include <ctype.h>
 #include <string.h>
 #include <wctype.h>
-#include <note.h>
 #include <locale.h>
 #include "_ctype.h"
 
@@ -40,7 +40,7 @@
  * their own character classes.)
  */
 wctype_t
-wctype_l(const char *property, locale_t loc)
+wctype_l(const char *property, locale_t loc __unused)
 {
 	static const struct {
 		const char	*name;
@@ -65,7 +65,6 @@ wctype_l(const char *property, locale_t loc)
 		{ NULL,		0 },		/* Default */
 	};
 	int i;
-	_NOTE(ARGUNUSED(loc));
 
 	i = 0;
 	while (props[i].name != NULL && strcmp(props[i].name, property) != 0)
@@ -77,5 +76,5 @@ wctype_l(const char *property, locale_t loc)
 wctype_t
 wctype(const char *property)
 {
-	return (wctype_l(property, uselocale(NULL)));
+	return (wctype_l(property, __curlocale()));
 }

@@ -22,8 +22,6 @@
 # Copyright (c) 1995-1998 by Sun Microsystems, Inc.
 # All rights reserved.
 #
-# ident	"%Z%%M%	%I%	%E% SMI"
-#
 # mkkey.awk
 #
 # XCurses Library
@@ -34,16 +32,14 @@
 # 	awk -f mkkey.awk caps >keyindex.c
 #
 #  rcsid = $Header: /rd/src/libc/xcurses/rcs/mkkey.awk 1.1 1995/05/11 14:39:17 ant Exp $
-#	
+#
 
 BEGIN {
 print "/*"
 print " * Copyright (c) 1998 by Sun Microsystems, Inc."
 print " * All rights reserved."
 print " */"
-print
-print "#pragma ident	\"@(#)keyindex.c\t%I%\t%E% SMI\""
-print
+print ""
 print "/*"
 print " * keyindex.c"
 print " *"
@@ -55,9 +51,9 @@ print " *"
 print " * Copyright 1990, 1995 by Mortice Kern Systems Inc.  All rights reserved."
 print " *"
 print " */"
-print
+print ""
 print "#include <private.h>"
-print
+print ""
 print "/*"
 print " * This table is used to map a KEY_ constant to an"
 print " * index for cur_term->_str[] for use by keyname()."

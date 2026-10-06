@@ -22,23 +22,24 @@
 #
 # Copyright (c) 1989 by Sun Microsystems, Inc.
 #
+# Copyright (c) 2019, Joyent, Inc.
 
 PROG= deroff
 
 include ../Makefile.cmd
 
 CERRWARN += -_gcc=-Wno-char-subscripts
-CERRWARN += -_gcc=-Wno-unused-label
 CERRWARN += -_gcc=-Wno-parentheses
+
+# too hairy for smatch
+SMATCH=off
 
 .KEEP_STATE:
 
-all: $(PROG) 
+all: $(PROG)
 
 install: all $(ROOTPROG)
 
 clean:
-
-lint:	lint_PROG
 
 include ../Makefile.targ

@@ -23,8 +23,12 @@
  * Use is subject to license terms.
  */
 /*	Copyright (c) 1984, 1986, 1987, 1988, 1989 AT&T	*/
-/*	  All Rights Reserved  	*/
+/*	  All Rights Reserved	*/
 
+/*
+ * Copyright 2020 OmniOS Community Edition (OmniOSce) Association.
+ * Copyright 2022 Sebastian Wiedenroth
+ */
 
 #include <sys/types.h>
 #include <sys/stat.h>
@@ -69,10 +73,9 @@
 #define	WARNSHELL	"warning: commands will be executed using /usr/bin/sh\n"
 #define	BADUSAGE	\
 	"usage:\n"			\
-	"\tcrontab [file]\n"		\
-	"\tcrontab -e [username]\n"	\
-	"\tcrontab -l [username]\n"	\
-	"\tcrontab -r [username]"
+	"\tcrontab [-u username] [file]\n"		\
+	"\tcrontab [-u username] { -e | -l | -r }\n"	\
+	"\tcrontab { -e | -l | -r } [username]"
 #define	INVALIDUSER	"you are not a valid user (no entry in /etc/passwd)."
 #define	NOTALLOWED	"you are not authorized to use cron.  Sorry."
 #define	NOTROOT		\
@@ -81,6 +84,7 @@
 #define	EOLN		"unexpected end of line."
 #define	UNEXPECT	"unexpected character found in line."
 #define	OUTOFBOUND	"number out of bounds."
+#define	OVERFLOW	"too many elements."
 #define	ERRSFND		"errors detected in input, no crontab file generated."
 #define	ED_ERROR	\
 	"     The editor indicates that an error occurred while you were\n"\
@@ -93,6 +97,7 @@
 #define	BAD_TZ	"Timezone unrecognized in: %s"
 #define	BAD_SHELL	"Invalid shell specified: %s"
 #define	BAD_HOME	"Unable to access directory: %s\t%s\n"
+#define	BAD_RAND_DELAY	"Invalid delay: %s"
 
 extern int	per_errno;
 
@@ -100,7 +105,7 @@ extern int	audit_crontab_modify(char *, char *, int);
 extern int	audit_crontab_delete(char *, int);
 extern int	audit_crontab_not_allowed(uid_t, char *);
 
-int		err;
+static int	err;
 int		cursor;
 char		*cf;
 char		*tnam;
@@ -108,7 +113,6 @@ char		edtemp[5+13+1];
 char		line[CTLINESIZE];
 static		char	login[UNAMESIZE];
 
-static int	next_field(int, int);
 static void	catch(int);
 static void	crabort(char *);
 static void	cerror(char *);
@@ -133,6 +137,7 @@ main(int argc, char **argv)
 	int stat_loc;
 	int ret;
 	char real_login[UNAMESIZE];
+	char *user = NULL;
 	int tmpfd = -1;
 	pam_handle_t *pamh;
 	int pam_error;
@@ -141,7 +146,7 @@ main(int argc, char **argv)
 
 	(void) setlocale(LC_ALL, "");
 #if !defined(TEXT_DOMAIN)	/* Should be defined by cc -D */
-#define	TEXT_DOMAIN "SYS_TEST"	/* Use this only if it weren't */
+#define	TEXT_DOMAIN "SYS_TEST"	/* Use this only if it wasn't */
 #endif
 	(void) textdomain(TEXT_DOMAIN);
 
@@ -151,7 +156,7 @@ main(int argc, char **argv)
 		exit(1);
 	}
 
-	while ((c = getopt(argc, argv, "elr")) != EOF)
+	while ((c = getopt(argc, argv, "elru:")) != EOF) {
 		switch (c) {
 			case 'e':
 				eflag++;
@@ -162,16 +167,28 @@ main(int argc, char **argv)
 			case 'r':
 				rflag++;
 				break;
+			case 'u':
+				user = optarg;
+				break;
 			case '?':
 				errflg++;
 				break;
 		}
+	}
+
+	argc -= optind;
+	argv += optind;
 
 	if (eflag + lflag + rflag > 1)
 		errflg++;
 
-	argc -= optind;
-	argv += optind;
+	if ((eflag || lflag || rflag) && argc > 0) {
+		if (user != NULL)
+			errflg++;
+		else
+			user = *argv;
+	}
+
 	if (errflg || argc > 1)
 		crabort(BADUSAGE);
 
@@ -180,11 +197,12 @@ main(int argc, char **argv)
 		crabort(INVALIDUSER);
 
 	if (strlcpy(real_login, pwp->pw_name, sizeof (real_login))
-	    >= sizeof (real_login))
+	    >= sizeof (real_login)) {
 		crabort(NAMETOOLONG);
+	}
 
-	if ((eflag || lflag || rflag) && argc == 1) {
-		if ((pwp = getpwnam(*argv)) == NULL)
+	if (user != NULL) {
+		if ((pwp = getpwnam(user)) == NULL)
 			crabort(INVALIDUSER);
 
 		if (!cron_admin(real_login)) {
@@ -192,8 +210,9 @@ main(int argc, char **argv)
 				crabort(NOTROOT);
 			else
 				pp = getuser(ruid);
-		} else
-			pp = *argv++;
+		} else {
+			pp = user;
+		}
 	} else {
 		pp = getuser(ruid);
 	}
@@ -405,13 +424,14 @@ main(int argc, char **argv)
 }
 
 static void
-copycron(fp)
-FILE *fp;
+copycron(FILE *fp)
 {
 	FILE *tfp;
 	char pid[6], *tnam_end;
 	int t;
 	char buf[LINE_MAX];
+	const char *errstr;
+	cferror_t cferr;
 
 	sprintf(pid, "%-5d", getpid());
 	tnam = xmalloc(strlen(CRONDIR)+strlen(TMPFILE)+7);
@@ -443,10 +463,10 @@ FILE *fp;
 		if (strncmp(&line[cursor], ENV_TZ, strlen(ENV_TZ)) == 0) {
 			char *x;
 
-			strncpy(buf, &line[cursor + strlen(ENV_TZ)],
+			(void) strncpy(buf, &line[cursor + strlen(ENV_TZ)],
 			    sizeof (buf));
 			if ((x = strchr(buf, '\n')) != NULL)
-				*x = NULL;
+				*x = '\0';
 
 			if (isvalid_tz(buf, NULL, _VTZ_ALL)) {
 				goto cont;
@@ -459,10 +479,10 @@ FILE *fp;
 		    strlen(ENV_SHELL)) == 0) {
 			char *x;
 
-			strncpy(buf, &line[cursor + strlen(ENV_SHELL)],
+			(void) strncpy(buf, &line[cursor + strlen(ENV_SHELL)],
 			    sizeof (buf));
 			if ((x = strchr(buf, '\n')) != NULL)
-				*x = NULL;
+				*x = '\0';
 
 			if (isvalid_shell(buf)) {
 				goto cont;
@@ -475,10 +495,10 @@ FILE *fp;
 		    strlen(ENV_HOME)) == 0) {
 			char *x;
 
-			strncpy(buf, &line[cursor + strlen(ENV_HOME)],
+			(void) strncpy(buf, &line[cursor + strlen(ENV_HOME)],
 			    sizeof (buf));
 			if ((x = strchr(buf, '\n')) != NULL)
-				*x = NULL;
+				*x = '\0';
 			if (chdir(buf) == 0) {
 				goto cont;
 			} else {
@@ -487,13 +507,55 @@ FILE *fp;
 				    strerror(errno));
 				continue;
 			}
+		} else if (strncmp(&line[cursor], ENV_RANDOM_DELAY,
+		    strlen(ENV_RANDOM_DELAY)) == 0) {
+			char *x;
+
+			(void) strncpy(buf,
+			    &line[cursor + strlen(ENV_RANDOM_DELAY)],
+			    sizeof (buf));
+			if ((x = strchr(buf, '\n')) != NULL)
+				*x = '\0';
+
+			(void) strtonum(buf, 0, UINT32_MAX / 60, &errstr);
+			if (errstr == NULL) {
+				goto cont;
+			} else {
+				err = 1;
+				fprintf(stderr, BAD_RAND_DELAY,
+				    &line[cursor], strerror(errno));
+				continue;
+			}
 		}
 
-		if (next_field(0, 59)) continue;
-		if (next_field(0, 23)) continue;
-		if (next_field(1, 31)) continue;
-		if (next_field(1, 12)) continue;
-		if (next_field(0, 06)) continue;
+		if ((cferr = next_field(0, 59, line, &cursor, NULL)) != CFOK ||
+		    (cferr = next_field(0, 23, line, &cursor, NULL)) != CFOK ||
+		    (cferr = next_field(1, 31, line, &cursor, NULL)) != CFOK ||
+		    (cferr = next_field(1, 12, line, &cursor, NULL)) != CFOK ||
+		    (cferr = next_field(0, 6, line, &cursor, NULL)) != CFOK) {
+			switch (cferr) {
+			case CFEOLN:
+				cerror(EOLN);
+				break;
+			case CFUNEXPECT:
+				cerror(UNEXPECT);
+				break;
+			case CFOUTOFBOUND:
+				cerror(OUTOFBOUND);
+				break;
+			case CFEOVERFLOW:
+				cerror(OVERFLOW);
+				break;
+			case CFENOMEM:
+				(void) fprintf(stderr, "Out of memory\n");
+				exit(55);
+				break;
+			default:
+				break;
+			}
+			continue;
+		}
+
 		if (line[++cursor] == '\0') {
 			cerror(EOLN);
 			continue;
@@ -523,68 +585,8 @@ cont:
 	unlink(tnam);
 }
 
-static int
-next_field(lower, upper)
-int lower, upper;
-{
-	int num, num2;
-
-	while ((line[cursor] == ' ') || (line[cursor] == '\t')) cursor++;
-	if (line[cursor] == '\0') {
-		cerror(EOLN);
-		return (1);
-	}
-	if (line[cursor] == '*') {
-		cursor++;
-		if ((line[cursor] != ' ') && (line[cursor] != '\t')) {
-			cerror(UNEXPECT);
-			return (1);
-		}
-		return (0);
-	}
-	while (TRUE) {
-		if (!isdigit(line[cursor])) {
-			cerror(UNEXPECT);
-			return (1);
-		}
-		num = 0;
-		do {
-			num = num*10 + (line[cursor]-'0');
-		} while (isdigit(line[++cursor]));
-		if ((num < lower) || (num > upper)) {
-			cerror(OUTOFBOUND);
-			return (1);
-		}
-		if (line[cursor] == '-') {
-			if (!isdigit(line[++cursor])) {
-				cerror(UNEXPECT);
-				return (1);
-			}
-			num2 = 0;
-			do {
-				num2 = num2*10 + (line[cursor]-'0');
-			} while (isdigit(line[++cursor]));
-			if ((num2 < lower) || (num2 > upper)) {
-				cerror(OUTOFBOUND);
-				return (1);
-			}
-		}
-		if ((line[cursor] == ' ') || (line[cursor] == '\t')) break;
-		if (line[cursor] == '\0') {
-			cerror(EOLN);
-			return (1);
-		}
-		if (line[cursor++] != ',') {
-			cerror(UNEXPECT);
-			return (1);
-		}
-	}
-	return (0);
-}
-
 static void
-cerror(msg)
-char *msg;
+cerror(char *msg)
 {
 	fprintf(stderr, gettext("%scrontab: error on previous line; %s\n"),
 	    line, msg);
@@ -600,8 +602,7 @@ catch(int x)
 }
 
 static void
-crabort(msg)
-char *msg;
+crabort(char *msg)
 {
 	int sverrno;
 

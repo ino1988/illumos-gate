@@ -23,6 +23,9 @@
 # Copyright 2010 Sun Microsystems, Inc.  All rights reserved.
 # Use is subject to license terms.
 #
+# Copyright (c) 2018, Joyent, Inc.
+# Copyright 2019 OmniOS Community Edition (OmniOSce) Association.
+#
 
 PROG=		pvs
 
@@ -32,21 +35,17 @@ include		$(SRC)/cmd/sgs/Makefile.com
 COMOBJ=		pvs.o
 BLTOBJ=		msg.o
 
-TOOLOBJS =	alist.o
+SGSCOMMONOBJ =	alist.o
 
-OBJS=		$(BLTOBJ) $(COMOBJ) $(TOOLOBJS)
+OBJS=		$(BLTOBJ) $(COMOBJ) $(SGSCOMMONOBJ)
 
 MAPFILE=	$(MAPFILE.NGB)
-MAPOPTS=	$(MAPFILE:%=-M%)
+MAPOPTS=	$(MAPFILE:%=-Wl,-M%)
 
-CPPFLAGS +=	-I$(SRCBASE)/lib/libc/inc
-LLDFLAGS =	'-R$$ORIGIN/../lib'
-LLDFLAGS64 =	'-R$$ORIGIN/../../lib/$(MACH64)'
-LDFLAGS +=	$(VERSREF) $(CC_USE_PROTO) $(MAPOPTS) $(LLDFLAGS)
-LDLIBS +=	$(LDDBGLIBDIR) $(LDDBG_LIB) $(ELFLIBDIR) -lelf \
-		    $(CONVLIBDIR) $(CONV_LIB)
-LINTFLAGS +=	-x
-LINTFLAGS64 +=	-x
+CPPFLAGS +=	-I$(SRC)/lib/libc/inc
+LDFLAGS +=	$(VERSREF) $(MAPOPTS) '-R$$ORIGIN/../../lib/$(MACH64)'
+LDLIBS +=	$(LDDBGLIBDIR64) -llddbg $(ELFLIBDIR64) -lelf \
+		    $(CONVLIBDIR64) -lconv
 
 BLTDEFS=	msg.h
 BLTDATA=	msg.c
@@ -61,7 +60,6 @@ SGSMSGALL=	$(SGSMSGCOM)
 SGSMSGFLAGS +=	-h $(BLTDEFS) -d $(BLTDATA) -m $(BLTMESG) -n pvs_msg
 
 SRCS=		$(COMOBJ:%.o=../common/%.c) $(BLTDATA) \
-		$(TOOLOBJS:%.o=$(SGSTOOLS)/common/%.c)
-LINTSRCS=	$(SRCS) ../common/lintsup.c
+		$(SGSCOMMONOBJ:%.o=$(SGSCOMMON)/%.c)
 
-CLEANFILES +=	$(LINTOUTS) $(BLTFILES)
+CLEANFILES +=	$(BLTFILES)

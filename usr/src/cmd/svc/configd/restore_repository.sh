@@ -87,7 +87,7 @@ fi
 
 echo >&2 "
 See http://illumos.org/msg/SMF-8000-MY for more information on the use of
-this script to restore backup copies of the smf(5) repository.
+this script to restore backup copies of the smf(7) repository.
 
 If there are any problems which need human intervention, this script will
 give instructions and then exit back to your shell."
@@ -97,7 +97,7 @@ if [ "$myroot" = "/" ]; then
 	[ "`/sbin/zonename`" != global ] && system="zone"
 	echo >&2 "
 Note that upon full completion of this script, the $system will be rebooted
-using reboot(1M), which will interrupt any active services.
+using reboot(8), which will interrupt any active services.
 "
 fi
 
@@ -129,9 +129,6 @@ if [ "$nouser" = true -o "$rootro" = true ]; then
 
 	echo >&2 "
 This must be rectified before $0 can continue.
-
-If / or /usr are on SVM (md(7d)) partitions, first run
-    /lib/svc/method/svc-metainit
 
 To properly mount / and /usr, run:
     /lib/svc/method/fs-root
@@ -245,7 +242,7 @@ new="$repo"_old_"`date +%Y''%m''%d'_'%H''%M''%S`"
 steps=
 if [ "$myroot" = / ]; then
 	steps="$steps
-svc.startd(1M) and svc.configd(1M) will be quiesced, if running."
+svc.startd(8) and svc.configd(8) will be quiesced, if running."
 fi
 
 if [ -r $repo ]; then
@@ -268,7 +265,7 @@ $file
 EOF
 
 if [ "$myroot" = / ]; then
-	echo "and the system will be rebooted with reboot(1M)."
+	echo "and the system will be rebooted with reboot(8)."
 fi
 
 echo
@@ -294,11 +291,11 @@ if [ "$myroot" = / ]; then
 	startd="`pgrep -z "$zone" -f svc.startd`"
 
 	echo
-	echo "Quiescing svc.startd(1M) and svc.configd(1M): \c"
+	echo "Quiescing svc.startd(8) and svc.configd(8): \c"
 	if [ -n "$startd" ]; then
 		pstop $startd
 		startd_msg=\
-"To start svc.start(1M) running, do: /usr/bin/prun $startd"
+"To start svc.start(8) running, do: /usr/bin/prun $startd"
 	fi
 	pkill -z "$zone" -f svc.configd
 

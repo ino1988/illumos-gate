@@ -24,7 +24,8 @@
  */
 /*
  * Copyright (c) 2012 by Delphix. All rights reserved.
- * Copyright (c) 2012 Joyent, Inc. All rights reserved.
+ * Copyright 2021 Joyent, Inc.
+ * Copyright 2026 Oxide Computer Company
  */
 
 /*
@@ -52,6 +53,7 @@
  */
 
 #include <sys/param.h>
+#include <sys/stdbool.h>
 #include <stropts.h>
 
 #define	_MDB_PRIVATE
@@ -71,6 +73,7 @@
 #include <mdb/mdb_err.h>
 #include <mdb/mdb_lex.h>
 #include <mdb/mdb_io.h>
+#include <mdb/mdb_shell.h>
 #include <mdb/mdb_ctf.h>
 #ifdef _KMDB
 #include <kmdb/kmdb_module.h>
@@ -83,6 +86,7 @@
 #define	DCMD_ABORTED(x)	((x) == DCMD_USAGE || (x) == DCMD_ABORT)
 
 extern const mdb_dcmd_t mdb_dcmd_builtins[];
+extern const mdb_walker_t mdb_walker_builtins[];
 extern mdb_dis_ctor_f *const mdb_dis_builtins[];
 
 /*
@@ -454,13 +458,20 @@ static mdb_frame_t frame0;
 void
 mdb_create(const char *execname, const char *arg0)
 {
-	static const mdb_nv_disc_t psym_disc = { psym_disc_set, psym_disc_get };
-	static const mdb_nv_disc_t roff_disc = { roff_disc_set, roff_disc_get };
-	static const mdb_nv_disc_t thr_disc = { NULL, thr_disc_get };
+	static const mdb_nv_disc_t psym_disc = {
+		.disc_set = psym_disc_set,
+		.disc_get = psym_disc_get
+	};
+	static const mdb_nv_disc_t roff_disc = {
+		.disc_set = roff_disc_set,
+		.disc_get = roff_disc_get
+	};
+	static const mdb_nv_disc_t thr_disc = { .disc_get = thr_disc_get };
 
 	static char rootdir[MAXPATHLEN];
 
 	const mdb_dcmd_t *dcp;
+	const mdb_walker_t *wcp;
 	int i;
 
 	bzero(&mdb, sizeof (mdb_t));
@@ -503,7 +514,7 @@ mdb_create(const char *execname, const char *arg0)
 
 	mdb.m_rminfo.mi_dvers = MDB_API_VERSION;
 	mdb.m_rminfo.mi_dcmds = mdb_dcmd_builtins;
-	mdb.m_rminfo.mi_walkers = NULL;
+	mdb.m_rminfo.mi_walkers = mdb_walker_builtins;
 
 	(void) mdb_nv_create(&mdb.m_rmod.mod_walkers, UM_SLEEP);
 	(void) mdb_nv_create(&mdb.m_rmod.mod_dcmds, UM_SLEEP);
@@ -545,6 +556,9 @@ mdb_create(const char *execname, const char *arg0)
 	for (dcp = &mdb_dcmd_builtins[0]; dcp->dc_name != NULL; dcp++)
 		(void) mdb_module_add_dcmd(&mdb.m_rmod, dcp, 0);
 
+	for (wcp = &mdb_walker_builtins[0]; wcp->walk_name != NULL; wcp++)
+		(void) mdb_module_add_walker(&mdb.m_rmod, wcp, 0);
+
 	for (i = 0; mdb_dis_builtins[i] != NULL; i++)
 		(void) mdb_dis_create(mdb_dis_builtins[i]);
 
@@ -569,6 +583,7 @@ mdb_create(const char *execname, const char *arg0)
 
 	mdb_list_append(&mdb.m_flist, &frame0);
 	mdb.m_frame = &frame0;
+	frame0.f_shellsrc = -1;
 }
 
 void
@@ -691,6 +706,7 @@ mdb_run(void)
 		mdb_iob_clrflags(mdb.m_out, MDB_IOB_INDENT);
 		mdb_iob_discard(mdb.m_out);
 		mdb_frame_reset(&f);
+		mdb_shell_source_discard();
 
 		/*
 		 * If there was an error writing to output, display a warning
@@ -885,16 +901,39 @@ mdb_call(uintmax_t addr, uintmax_t count, uint_t flags)
 		flags |= DCMD_LOOPFIRST; /* set LOOPFIRST if this is a loop */
 
 	for (cp = mdb_list_next(&fp->f_cmds); cp; cp = mdb_list_next(cp)) {
+		/* A shell command at the head of the pipeline */
+		if (cp == mdb_list_next(&fp->f_cmds) && cp->c_shcmd != NULL) {
+			mdb_intr_enable();
+			mdb_shell_producer(cp);
+			mdb_intr_disable();
+			if (mdb_addrvec_length(&cp->c_addrv) == 0)
+				break;
+		}
+
 		if (mdb_list_next(cp) != NULL) {
+			bool filter;
+			volatile bool fclosed = false;
+			int sfd = -1;
+
+			ncp = mdb_list_next(cp);
+			filter = (ncp->c_shcmd != NULL);
+
+			if (filter) {
+				mdb_intr_enable();
+				sfd = mdb_shell_filter(ncp->c_shcmd);
+				mdb_intr_disable();
+			}
+
 			mdb_iob_pipe(iobs, rdsvc, wrsvc);
 
 			mdb_iob_stack_push(&fp->f_istk, mdb.m_in, yylineno);
 			mdb.m_in = iobs[MDB_IOB_RDIOB];
 
-			mdb_iob_stack_push(&fp->f_ostk, mdb.m_out, 0);
-			mdb.m_out = iobs[MDB_IOB_WRIOB];
+			if (!filter) {
+				mdb_iob_stack_push(&fp->f_ostk, mdb.m_out, 0);
+				mdb.m_out = iobs[MDB_IOB_WRIOB];
+			}
 
-			ncp = mdb_list_next(cp);
 			mdb_vcb_inherit(cp, ncp);
 
 			bcopy(fp->f_pcb, pcb, sizeof (jmp_buf));
@@ -904,14 +943,31 @@ mdb_call(uintmax_t addr, uintmax_t count, uint_t flags)
 			mdb_frame_set_pipe(fp);
 
 			if ((err = setjmp(fp->f_pcb)) == 0) {
+				/*
+				 * A dcmd feeding a shell stage produces its
+				 * normal human-readable output so
+				 * DCMD_PIPE_OUT is not set in that case.
+				 */
 				status = mdb_call_idcmd(cp->c_dcmd, addr, count,
-				    flags | DCMD_PIPE_OUT, &cp->c_argv,
-				    &cp->c_addrv, cp->c_vcbs);
+				    flags | (filter ? 0 : DCMD_PIPE_OUT),
+				    &cp->c_argv, &cp->c_addrv, cp->c_vcbs);
 
 				mdb.m_lastret = status;
 
 				ASSERT(mdb.m_in == iobs[MDB_IOB_RDIOB]);
-				ASSERT(mdb.m_out == iobs[MDB_IOB_WRIOB]);
+				ASSERT(filter ||
+				    mdb.m_out == iobs[MDB_IOB_WRIOB]);
+
+				if (filter && !DCMD_ABORTED(status)) {
+					mdb_iob_flush(mdb.m_out);
+					mdb_iob_destroy(mdb.m_out);
+					mdb.m_out =
+					    mdb_iob_stack_pop(&fp->f_ostk);
+					fclosed = true;
+
+					mdb_shell_filter_pump(sfd,
+					    iobs[MDB_IOB_WRIOB]);
+				}
 			} else {
 				mdb_dprintf(MDB_DBG_DSTK, "frame <%u> caught "
 				    "error %s from pipeline\n", fp->f_id,
@@ -920,17 +976,26 @@ mdb_call(uintmax_t addr, uintmax_t count, uint_t flags)
 
 			if (err != 0 || DCMD_ABORTED(status)) {
 				mdb_iob_setflags(mdb.m_in, MDB_IOB_ERR);
-				mdb_iob_setflags(mdb.m_out, MDB_IOB_ERR);
+				mdb_iob_setflags(iobs[MDB_IOB_WRIOB],
+				    MDB_IOB_ERR);
 			} else {
-				mdb_iob_flush(mdb.m_out);
-				(void) mdb_iob_ctl(mdb.m_out, I_FLUSH,
-				    (void *)FLUSHW);
+				mdb_iob_flush(iobs[MDB_IOB_WRIOB]);
+				(void) mdb_iob_ctl(iobs[MDB_IOB_WRIOB],
+				    I_FLUSH, (void *)FLUSHW);
 			}
 
 			mdb_frame_clear_pipe(fp);
 
-			mdb_iob_destroy(mdb.m_out);
-			mdb.m_out = mdb_iob_stack_pop(&fp->f_ostk);
+			if (filter && !fclosed) {
+				mdb_iob_setflags(mdb.m_out, MDB_IOB_ERR);
+				mdb_iob_destroy(mdb.m_out);
+				mdb.m_out = mdb_iob_stack_pop(&fp->f_ostk);
+			}
+			mdb_shell_filter_close(sfd);
+
+			mdb_iob_destroy(iobs[MDB_IOB_WRIOB]);
+			if (!filter)
+				mdb.m_out = mdb_iob_stack_pop(&fp->f_ostk);
 
 			if (mdb.m_in != NULL)
 				mdb_iob_destroy(mdb.m_in);
@@ -975,6 +1040,12 @@ mdb_call(uintmax_t addr, uintmax_t count, uint_t flags)
 	mdb_list_move(&fp->f_cmds, &mdb.m_lastc);
 	mdb_frame_reset(fp);
 	mdb_intr_enable();
+
+	if (err == 0)
+		mdb_shell_source_run();
+	else
+		mdb_shell_source_discard();
+
 	return (err == 0);
 }
 
@@ -1155,7 +1226,7 @@ mdb_call_tab(mdb_idcmd_t *idcp, mdb_tab_cookie_t *mcp, uint_t flags,
 	if (idcp->idc_tabp == NULL)
 		return;
 
-	idcp->idc_tabp(mcp, flags, argc, argv);
+	(void) idcp->idc_tabp(mcp, flags, argc, argv);
 }
 
 /*

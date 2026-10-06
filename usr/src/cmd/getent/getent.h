@@ -20,6 +20,7 @@
  * CDDL HEADER END
  */
 /*
+ * Copyright (c) 2018 Peter Tribble.
  * Copyright (c) 2014 Gary Mills
  * Copyright 2004 Sun Microsystems, Inc.  All rights reserved.
  * Use is subject to license terms.
@@ -39,6 +40,7 @@ extern "C" {
 #define	EXC_SYNTAX		1
 #define	EXC_NAME_NOT_FOUND	2
 #define	EXC_ENUM_NOT_SUPPORTED	3
+#define	EXC_ERROR		4
 
 extern int dogetpw(const char **);
 extern int dogetsp(const char **);
@@ -51,6 +53,11 @@ extern int dogetproto(const char **);
 extern int dogetethers(const char **);
 extern int dogetnetmask(const char **);
 extern int dogetproject(const char **);
+extern int dogetauthattr(const char **);
+extern int dogetexecattr(const char **);
+extern int dogetprofattr(const char **);
+extern int dogetuserattr(const char **);
+extern int dogetnetgr(const char **);
 
 #ifdef	__cplusplus
 }

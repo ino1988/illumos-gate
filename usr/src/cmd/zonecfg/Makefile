@@ -22,6 +22,8 @@
 # Copyright 2008 Sun Microsystems, Inc.  All rights reserved.
 # Use is subject to license terms.
 #
+# Copyright 2019 Joyent, Inc.
+#
 
 PROG=	zonecfg
 OBJS=	zonecfg.o zonecfg_lex.o zonecfg_grammar.tab.o
@@ -32,7 +34,7 @@ include ../Makefile.cmd
 # still export a number of "yy*" (libl) interfaces.  Reduce all other symbols
 # to local scope.
 MAPFILES +=	$(MAPFILE.LEX) $(MAPFILE.NGB)
-MAPOPTS =	$(MAPFILES:%=-M%)
+MAPOPTS =	$(MAPFILES:%=-Wl,-M%)
 
 LFLAGS =	-t
 YFLAGS =	-d -b zonecfg_grammar
@@ -41,12 +43,14 @@ CPPFLAGS +=	-I.
 LDFLAGS +=	$(MAPOPTS)
 CLEANFILES +=	zonecfg_lex.c zonecfg_grammar.tab.c zonecfg_grammar.tab.h
 
-CERRWARN +=	-_gcc=-Wno-uninitialized
-CERRWARN +=	-_gcc=-Wno-unused-label
+CERRWARN +=	$(CNOWARN_UNINIT)
 CERRWARN +=	-_gcc=-Wno-unused-variable
 CERRWARN +=	-_gcc=-Wno-implicit-function-declaration
 
-CLOBBERFILES += $(PROG).ln
+SMOFF += all_func_returns
+
+# false positive
+zonecfg_lex.o := SMOFF += free
 
 .KEEP_STATE:
 
@@ -64,7 +68,9 @@ zonecfg_lex.c:	zonecfg_lex.l zonecfg_grammar.tab.h zonecfg.h
 zonecfg_grammar.tab.h zonecfg_grammar.tab.c:	zonecfg_grammar.y zonecfg.h
 	$(YACC) $(YFLAGS) zonecfg_grammar.y
 
+# because of labels from yacc
 zonecfg_lex.o zonecfg_grammar.tab.o := CCVERBOSE =
+zonecfg_lex.o zonecfg_grammar.tab.o := CERRWARN += -_gcc=-Wno-unused-label
 
 check:	$(PROG).c $(PROG).h
 	$(CSTYLE) -pP $(PROG).c $(PROG).h
@@ -72,11 +78,5 @@ check:	$(PROG).c $(PROG).h
 
 clean:
 	$(RM) $(OBJS) $(CLEANFILES)
-
-#
-# We don't do lint of lex- and yacc- generated source files
-#
-lint:
-	$(LINT.c) -c $(PROG).c $(LDLIBS)
 
 include ../Makefile.targ

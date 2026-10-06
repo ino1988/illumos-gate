@@ -22,6 +22,9 @@
  * Copyright 2009 Sun Microsystems, Inc.  All rights reserved.
  * Use is subject to license terms.
  * Copyright 2012 Milan Jurik. All rights reserved.
+ * Copyright 2018 Joyent, Inc.
+ * Copyright 2019 Nexenta Systems, Inc.
+ * Copyright 2026 Oxide Computer Company
  */
 
 #include <stdlib.h>
@@ -78,6 +81,18 @@ static mutex_t		create_lock = DEFAULTMUTEX;
 static int		num_servers = 0;
 static thread_key_t	server_key;
 
+static void
+nscd_close_dp(door_desc_t *dp)
+{
+	if (dp != NULL && (dp->d_attributes & DOOR_DESCRIPTOR) != 0) {
+		/*
+		 * Just in case, clear DOOR_DESCRIPTOR so we can be idempotent.
+		 */
+		dp->d_attributes &= ~DOOR_DESCRIPTOR;
+		(void) close(dp->d_data.d_desc.d_descriptor);
+	}
+}
+
 /*
  * Bind a TSD value to a server thread. This enables the destructor to
  * be called if/when this thread exits.  This would be a programming
@@ -87,7 +102,9 @@ static thread_key_t	server_key;
 static void *
 server_tsd_bind(void *arg)
 {
-	static void *value = 0;
+	static void *value = "NON-NULL TSD";
+
+	(void) thr_setname(thr_self(), "server_tsd_bind");
 
 	/* disable cancellation to avoid hangs if server threads disappear */
 	(void) pthread_setcancelstate(PTHREAD_CANCEL_DISABLE, NULL);
@@ -126,13 +143,15 @@ server_destroy(void *arg)
 	(void) mutex_lock(&create_lock);
 	num_servers--;
 	(void) mutex_unlock(&create_lock);
+	(void) thr_setspecific(server_key, NULL);
 }
 
 /*
  * get clearance
  */
 int
-_nscd_get_clearance(sema_t *sema) {
+_nscd_get_clearance(sema_t *sema)
+{
 	if (sema_trywait(&common_sema) == 0) {
 		(void) thr_setspecific(lookup_state_key, NULL);
 		return (0);
@@ -151,7 +170,8 @@ _nscd_get_clearance(sema_t *sema) {
  * release clearance
  */
 int
-_nscd_release_clearance(sema_t *sema) {
+_nscd_release_clearance(sema_t *sema)
+{
 	int	which;
 
 	(void) thr_getspecific(lookup_state_key, (void**)&which);
@@ -165,7 +185,7 @@ _nscd_release_clearance(sema_t *sema) {
 }
 
 static void
-dozip(void)
+dozip(int signal __unused)
 {
 	/* not much here */
 }
@@ -197,7 +217,7 @@ _nscd_restart_if_cfgfile_changed()
 	static timestruc_t	last_nsswitch_modified = { 0 };
 	static timestruc_t	last_resolv_modified = { -1, 0 };
 	static mutex_t		restarting_lock = DEFAULTMUTEX;
-	static int 		restarting = 0;
+	static int		restarting = 0;
 	int			restart = 0;
 	time_t			now = time(NULL);
 	char			*me = "_nscd_restart_if_cfgfile_changed";
@@ -852,9 +872,15 @@ need_per_user_door(void *buf, int whoami, uid_t uid, char **dblist)
 	return (1);
 }
 
+/*
+ * NOTE: dp is passed in case we need to free sneaked-in FDs.
+ * Most of the time this call invokes door_return() and we will free
+ * the sneaked-in FD. The one case we merely return, the caller must be
+ * responsible for dp/FD checking.
+ */
 static void
 if_selfcred_return_per_user_door(char *argp, size_t arg_size,
-	door_desc_t *dp, int whoami)
+    door_desc_t *dp, int whoami)
 {
 	nss_pheader_t	*phdr = (nss_pheader_t *)((void *)argp);
 	char		*dblist;
@@ -878,16 +904,26 @@ if_selfcred_return_per_user_door(char *argp, size_t arg_size,
 		/*
 		 * self-cred not configured, and no error detected,
 		 * return to continue the door call processing
+		 * NOTE: "dp" is still active to the caller will need to
+		 * address file-descriptor usage if it's non-NULL.
 		 */
 		if (NSCD_STATUS_IS_OK(phdr))
 			return;
-		else
+		else {
 			/*
 			 * configured but error detected,
 			 * stop the door call processing
 			 */
+			nscd_close_dp(dp);
 			(void) door_return(argp, phdr->data_off, NULL, 0);
+		}
 	}
+
+	/*
+	 * We can safely close dp if it exists, at this point, because
+	 * the only return that isn't a door_return has passed us by.
+	 */
+	nscd_close_dp(dp);
 
 	/* get the alternate PUN door */
 	_nscd_proc_alt_get(argp, &door);
@@ -921,17 +957,20 @@ switcher(void *cookie, char *argp, size_t arg_size,
 	size_t			buflen;
 	int			callnum;
 	char			*me = "switcher";
+	boolean_t		free_dp = B_TRUE;
 
 	_NSCD_LOG(NSCD_LOG_FRONT_END, NSCD_LOG_LEVEL_DEBUG)
 	(me, "switcher ...\n");
 
 	if (argp == DOOR_UNREF_DATA) {
+		/* door_create(3C) says everything else is empty! */
 		(void) printf("Door Slam... exiting\n");
 		exit(0);
 	}
 
 	if (argp == NULL) { /* empty door call */
-		(void) door_return(NULL, 0, 0, 0); /* return the favor */
+		arg_size = 0; /* Just to be sure! */
+		goto bail; /* return the favor */
 	}
 
 	/*
@@ -943,9 +982,10 @@ switcher(void *cookie, char *argp, size_t arg_size,
 	if ((phdr->nsc_callnumber & NSCDV2CATMASK) == NSCD_CALLCAT_APP) {
 
 		/* make sure the packed buffer header is good */
-		if (validate_pheader(argp, arg_size,
-		    phdr->nsc_callnumber) == -1)
-			(void) door_return(argp, arg_size, NULL, 0);
+		if (validate_pheader(argp, arg_size, phdr->nsc_callnumber) ==
+		    -1) {
+			goto bail;
+		}
 
 		switch (phdr->nsc_callnumber) {
 
@@ -955,7 +995,8 @@ switcher(void *cookie, char *argp, size_t arg_size,
 		if (phdr->p_status != NSS_ALTRETRY)
 			if_selfcred_return_per_user_door(argp, arg_size,
 			    dp, _whoami);
-		lookup(argp, arg_size);
+		nscd_close_dp(dp);
+		lookup(argp, arg_size); /* Always door_return()s. */
 
 		break;
 
@@ -972,7 +1013,8 @@ switcher(void *cookie, char *argp, size_t arg_size,
 
 		case NSCD_GETENT:
 
-		getent(argp, arg_size);
+		nscd_close_dp(dp);
+		getent(argp, arg_size); /* Always door_return()s. */
 		break;
 
 		case NSCD_ENDENT:
@@ -1006,7 +1048,7 @@ switcher(void *cookie, char *argp, size_t arg_size,
 		break;
 		}
 
-		(void) door_return(argp, arg_size, NULL, 0);
+		goto bail;
 	}
 
 	iam = NSCD_MAIN;
@@ -1021,7 +1063,7 @@ switcher(void *cookie, char *argp, size_t arg_size,
 
 	/* make sure the buffer is good */
 	if (validate_N2Nbuf(argp, arg_size, callnum) == -1)
-		(void) door_return(argp, arg_size, NULL, 0);
+		goto bail;
 
 	switch (callnum) {
 
@@ -1030,7 +1072,12 @@ switcher(void *cookie, char *argp, size_t arg_size,
 		break;
 
 	case NSCD_IMHERE:
-		_nscd_proc_iamhere(argp, dp, n_desc, iam);
+		/*
+		 * Only case where we actually USE dp's file descriptor
+		 * will return B_TRUE, rest are B_FALSE. Choose to free or
+		 * not-free accordingly.
+		 */
+		free_dp = !_nscd_proc_iamhere(argp, dp, n_desc, iam);
 		break;
 
 	case NSCD_PULSE:
@@ -1087,6 +1134,7 @@ switcher(void *cookie, char *argp, size_t arg_size,
 
 		/* try one more time */
 		(void) _nscd_door_getadmin((void *)uptr);
+		nscd_close_dp(dp);
 		(void) door_return(uptr, buflen, NULL, 0);
 		break;
 
@@ -1111,11 +1159,14 @@ switcher(void *cookie, char *argp, size_t arg_size,
 		    phdr->nsc_callnumber);
 
 		NSCD_SET_STATUS(phdr, NSS_ERROR, EINVAL);
-
-		(void) door_return(argp, arg_size, NULL, 0);
+		/* Essentially fall through to the door_return below. */
 		break;
 
 	}
+
+bail:
+	if (free_dp)
+		nscd_close_dp(dp);
 	(void) door_return(argp, arg_size, NULL, 0);
 }
 
@@ -1171,6 +1222,15 @@ _nscd_setup_server(char *execname, char **argv)
 		errnum = errno;
 		_NSCD_LOG(NSCD_LOG_FRONT_END, NSCD_LOG_LEVEL_ERROR)
 		(me, "door_create: %s\n", strerror(errnum));
+		return (-1);
+	}
+
+	/* Make sure we only accept ONE descriptor at a time. */
+	if (door_setparam(fd, DOOR_PARAM_DESC_MAX, 1) == -1) {
+		errnum = errno;
+		_NSCD_LOG(NSCD_LOG_FRONT_END, NSCD_LOG_LEVEL_ERROR)
+		    (me, "door_setparam(DESC_MAX, 1): %s\n", strerror(errnum));
+		(void) door_revoke(fd);
 		return (-1);
 	}
 
@@ -1245,7 +1305,7 @@ _nscd_setup_server(char *execname, char **argv)
 	/*
 	 * kick off routing socket monitor thread
 	 */
-	if (thr_create(NULL, NULL,
+	if (thr_create(NULL, 0,
 	    (void *(*)(void *))rts_mon, 0, 0, NULL) != 0) {
 		errnum = errno;
 		_NSCD_LOG(NSCD_LOG_FRONT_END, NSCD_LOG_LEVEL_ERROR)
@@ -1311,7 +1371,7 @@ _nscd_setup_child_server(int did)
 	/*
 	 * kick off routing socket monitor thread
 	 */
-	if (thr_create(NULL, NULL,
+	if (thr_create(NULL, 0,
 	    (void *(*)(void *))rts_mon, 0, 0, NULL) != 0) {
 		errnum = errno;
 		_NSCD_LOG(NSCD_LOG_FRONT_END, NSCD_LOG_LEVEL_ERROR)
@@ -1476,6 +1536,8 @@ rts_mon(void)
 	} mbuf;
 	struct ifa_msghdr *ifam = &mbuf.ifam;
 	char	*me = "rts_mon";
+
+	(void) thr_setname(thr_self(), me);
 
 	rt_sock = socket(PF_ROUTE, SOCK_RAW, 0);
 	if (rt_sock < 0) {

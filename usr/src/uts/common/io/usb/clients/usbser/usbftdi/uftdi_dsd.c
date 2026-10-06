@@ -245,6 +245,8 @@ uftdi_attach(ds_attach_info_t *aip)
 		case USB_PRODUCT_FTDI_EMCU2D:
 		case USB_PRODUCT_FTDI_PCMSFU:
 		case USB_PRODUCT_FTDI_EMCU2H:
+		case USB_PRODUCT_FTDI_232EX:
+		case USB_PRODUCT_FTDI_232H:
 			break;
 		default:
 			recognized = B_FALSE;
@@ -290,7 +292,7 @@ uftdi_attach(ds_attach_info_t *aip)
 		break;
 	case USB_VENDOR_MARVELL:
 		switch (dd->idProduct) {
-		case USB_PRODUCT_MARVELL_SHEEVAPLUG_JTAG:
+		case USB_PRODUCT_MARVELL_SHEEVAPLUG:
 			break;
 		default:
 			recognized = B_FALSE;
@@ -677,6 +679,12 @@ uftdi_param2regs(uftdi_state_t *uf, ds_port_params_t *tp, uftdi_regs_t *ur)
 				break;
 			case B921600:
 				ur->ur_baud = ftdi_8u232am_b921600;
+				break;
+			case B2000000:
+				ur->ur_baud = ftdi_8u232am_b2000000;
+				break;
+			case B3000000:
+				ur->ur_baud = ftdi_8u232am_b3000000;
 				break;
 			default:
 				USB_DPRINTF_L3(DPRINT_CTLOP, uf->uf_lh,

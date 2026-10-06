@@ -24,23 +24,22 @@
  * Use is subject to license terms.
  */
 
-/*	Copyright (c) 1988 AT&T	*/
-/*	  All Rights Reserved  	*/
+/*
+ * Copyright 2025 Oxide Computer Company
+ */
 
-#pragma ident	"%Z%%M%	%I%	%E% SMI"
+/*	Copyright (c) 1988 AT&T	*/
+/*	  All Rights Reserved	*/
 
 #include "lint.h"
 #include "_libc_gettext.h"
+#include "syserr.h"
 
 #include <sys/types.h>
 #include <errno.h>
 #include <stdio.h>
 #include <string.h>
 #include <unistd.h>
-
-extern int _sys_num_err;
-extern const char _sys_errs[];
-extern const int _sys_index[];
 
 /*
  * Print the error indicated
@@ -52,8 +51,8 @@ perror(const char *s)
 	const char *c;
 	int err = errno;
 
-	if (err < _sys_num_err && err >= 0)
-		c = _libc_gettext(&_sys_errs[_sys_index[err]]);
+	if (err < _sys_num_nerr && err >= 0)
+		c = _libc_gettext(&_sys_nerrs[_sys_nindex[err]]);
 	else
 		c = _libc_gettext("Unknown error");
 

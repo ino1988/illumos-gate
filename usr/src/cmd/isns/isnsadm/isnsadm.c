@@ -21,6 +21,7 @@
 /*
  * Copyright 2008 Sun Microsystems, Inc.  All rights reserved.
  * Use is subject to license terms.
+ * Copyright 2025 OmniOS Community Edition (OmniOSce) Association.
  */
 
 /*
@@ -104,6 +105,12 @@ static int build_enumerate_xml_doc(object_type, xmlChar **);
 #define	VERBOSE		0x00000001
 #define	INITIATOR_ONLY	0x00000010
 #define	TARGET_ONLY	0x00000100
+
+#if LIBXML_VERSION >= 20904
+#define	XMLSTRING_CAST (const char *)
+#else
+#define	XMLSTRING_CAST (const xmlChar *)
+#endif
 
 /* object table based on definitions in isns_mgmt.h. */
 static obj_table_entry_t obj_table[] = {
@@ -306,7 +313,7 @@ handle_association_info(xmlChar *name, association_t assoc)
 	(void) bzero(&darg, sizeof (darg));
 	bzero(&darg, sizeof (darg));
 	darg.data_ptr = (char *)doc;
-	darg.data_size = xmlStrlen(doc) + 1;
+	darg.data_size = xmlStrlen(doc);
 	darg.rbuf = NULL;
 	darg.rsize = 0;
 	if ((door_call(fd, &darg)) == -1) {
@@ -455,7 +462,7 @@ print_partial_failure_info(xmlChar *doc)
 
 	for (i = 0; obj_table[i].obj_str != NULL; i++) {
 	    (void) xmlStrPrintf(expr, ISNS_MAX_LABEL_LEN + 13,
-		(const unsigned char *)"%s\"%s\"]", "//*[name()=",
+		XMLSTRING_CAST "%s\"%s\"]", "//*[name()=",
 		obj_table[i].obj_str);
 	    xpath_obj = xmlXPathEvalExpression(expr, ctext);
 	    if ((xpath_obj) && (xpath_obj->nodesetval) &&
@@ -1414,6 +1421,7 @@ build_delete_xml_doc(int operandLen, char **operand, object_type obj,
 {
 	xmlTextWriterPtr writer;
 	xmlBufferPtr xbuf;
+	const xmlChar *content;
 	int i, len;
 
 	if ((xbuf = xmlBufferCreate()) == NULL) {
@@ -1559,9 +1567,9 @@ build_delete_xml_doc(int operandLen, char **operand, object_type obj,
 
 	xmlFreeTextWriter(writer);
 
-	len = xmlStrlen(xbuf->content) + 1;
-	/* XXX - copy NULL at the end by having one more extra byte */
-	if ((*doc = xmlStrndup(xbuf->content, len)) == NULL) {
+	len = xmlBufferLength(xbuf);
+	content = xmlBufferContent(xbuf);
+	if ((*doc = xmlStrndup(content, len)) == NULL) {
 	    return (ERROR_XML_STRDUP_FAILED);
 	}
 
@@ -1590,6 +1598,7 @@ build_modify_xml_doc(int operandLen, char **operand, object_type obj,
 {
 	xmlTextWriterPtr writer;
 	xmlBufferPtr xbuf;
+	const xmlChar *content;
 	int i, len;
 
 	if ((xbuf = xmlBufferCreate()) == NULL) {
@@ -1697,9 +1706,9 @@ build_modify_xml_doc(int operandLen, char **operand, object_type obj,
 
 	xmlFreeTextWriter(writer);
 
-	len = xmlStrlen(xbuf->content) + 1;
-	/* XXX - copy NULL at the end by having one more extra byte */
-	if ((*doc = xmlStrndup(xbuf->content, len)) == NULL) {
+	len = xmlBufferLength(xbuf);
+	content = xmlBufferContent(xbuf);
+	if ((*doc = xmlStrndup(content, len)) == NULL) {
 	    return (ERROR_XML_STRDUP_FAILED);
 	}
 
@@ -1726,6 +1735,7 @@ build_rename_xml_doc(char *name, object_type obj, uint32_t id, xmlChar **doc)
 {
 	xmlTextWriterPtr writer;
 	xmlBufferPtr xbuf;
+	const xmlChar *content;
 	int len;
 	char namebuf[32];
 
@@ -1830,9 +1840,9 @@ build_rename_xml_doc(char *name, object_type obj, uint32_t id, xmlChar **doc)
 
 	xmlFreeTextWriter(writer);
 
-	len = xmlStrlen(xbuf->content) + 1;
-	/* XXX - copy NULL at the end by having one more extra byte */
-	if ((*doc = xmlStrndup(xbuf->content, len)) == NULL) {
+	len = xmlBufferLength(xbuf);
+	content = xmlBufferContent(xbuf);
+	if ((*doc = xmlStrndup(content, len)) == NULL) {
 	    return (ERROR_XML_STRDUP_FAILED);
 	}
 
@@ -1860,6 +1870,7 @@ build_create_xml_doc(int operandLen, char **operand, object_type obj,
 {
 	xmlTextWriterPtr writer;
 	xmlBufferPtr xbuf;
+	const xmlChar *content;
 	int i, len;
 
 	if ((xbuf = xmlBufferCreate()) == NULL) {
@@ -2000,9 +2011,9 @@ build_create_xml_doc(int operandLen, char **operand, object_type obj,
 
 	xmlFreeTextWriter(writer);
 
-	len = xmlStrlen(xbuf->content) + 1;
-	/* XXX - copy NULL at the end by having one more extra byte */
-	if ((*doc = xmlStrndup(xbuf->content, len)) == NULL) {
+	len = xmlBufferLength(xbuf);
+	content = xmlBufferContent(xbuf);
+	if ((*doc = xmlStrndup(content, len)) == NULL) {
 	    return (ERROR_XML_STRDUP_FAILED);
 	}
 
@@ -2029,6 +2040,7 @@ build_assoc_xml_doc(xmlChar *name, association_t assoc, xmlChar **doc)
 {
 	xmlTextWriterPtr writer;
 	xmlBufferPtr xbuf;
+	const xmlChar *content;
 	int len;
 
 	if ((xbuf = xmlBufferCreate()) == NULL) {
@@ -2223,9 +2235,9 @@ build_assoc_xml_doc(xmlChar *name, association_t assoc, xmlChar **doc)
 
 	xmlFreeTextWriter(writer);
 
-	len = xmlStrlen(xbuf->content) + 1;
-	/* XXX - copy NULL at the end by having one more extra byte */
-	if ((*doc = xmlStrndup(xbuf->content, len)) == NULL) {
+	len = xmlBufferLength(xbuf);
+	content = xmlBufferContent(xbuf);
+	if ((*doc = xmlStrndup(content, len)) == NULL) {
 	    return (ERROR_XML_STRDUP_FAILED);
 	}
 
@@ -2250,6 +2262,7 @@ build_enumerate_xml_doc(object_type obj, xmlChar **doc)
 {
 	xmlTextWriterPtr writer;
 	xmlBufferPtr xbuf;
+	const xmlChar *content;
 	int len;
 
 	if ((xbuf = xmlBufferCreate()) == NULL) {
@@ -2321,9 +2334,9 @@ build_enumerate_xml_doc(object_type obj, xmlChar **doc)
 
 	xmlFreeTextWriter(writer);
 
-	len = xmlStrlen(xbuf->content) + 1;
-	/* XXX - copy NULL at the end by having one more extra byte */
-	if ((*doc = xmlStrndup(xbuf->content, len)) == NULL) {
+	len = xmlBufferLength(xbuf);
+	content = xmlBufferContent(xbuf);
+	if ((*doc = xmlStrndup(content, len)) == NULL) {
 	    return (ERROR_XML_STRDUP_FAILED);
 	}
 
@@ -2350,6 +2363,7 @@ build_get_xml_doc(int operandLen, char **operand, object_type obj,
 {
 	xmlTextWriterPtr writer;
 	xmlBufferPtr xbuf;
+	const xmlChar *content;
 	int i, len;
 
 	if ((xbuf = xmlBufferCreate()) == NULL) {
@@ -2508,9 +2522,9 @@ build_get_xml_doc(int operandLen, char **operand, object_type obj,
 
 	xmlFreeTextWriter(writer);
 
-	len = xmlStrlen(xbuf->content) + 1;
-	/* XXX - copy NULL at the end by having one more extra byte */
-	if ((*doc = xmlStrndup(xbuf->content, len)) == NULL) {
+	len = xmlBufferLength(xbuf);
+	content = xmlBufferContent(xbuf);
+	if ((*doc = xmlStrndup(content, len)) == NULL) {
 	    return (ERROR_XML_STRDUP_FAILED);
 	}
 
@@ -2573,7 +2587,7 @@ list_node_func(int operandLen, char *operand[], cmdOptions_t *options,
 	    }
 	    bzero(&darg, sizeof (darg));
 	    darg.data_ptr = (char *)doc;
-	    darg.data_size = xmlStrlen(doc) + 1;
+	    darg.data_size = xmlStrlen(doc);
 	    darg.rbuf = NULL;
 	    darg.rsize = 0;
 
@@ -2602,7 +2616,7 @@ list_node_func(int operandLen, char *operand[], cmdOptions_t *options,
 		    doc = e_doc;
 		    bzero(&darg, sizeof (door_arg_t));
 		    darg.data_ptr = (char *)doc;
-		    darg.data_size = xmlStrlen(doc) + 1;
+		    darg.data_size = xmlStrlen(doc);
 		    darg.rbuf = NULL;
 		    darg.rsize = 0;
 		}
@@ -2612,7 +2626,7 @@ list_node_func(int operandLen, char *operand[], cmdOptions_t *options,
 		0) {
 		bzero(&darg, sizeof (darg));
 		darg.data_ptr = (char *)doc;
-		darg.data_size = xmlStrlen(doc) + 1;
+		darg.data_size = xmlStrlen(doc);
 		darg.rbuf = NULL;
 		darg.rsize = 0;
 	    } else {
@@ -2696,7 +2710,7 @@ list_dd_func(int operandLen, char *operand[], cmdOptions_t *options,
 	    /* get the enumerate resposne first. */
 	    bzero(&darg, sizeof (darg));
 	    darg.data_ptr = (char *)doc;
-	    darg.data_size = xmlStrlen(doc) + 1;
+	    darg.data_size = xmlStrlen(doc);
 	    darg.rbuf = NULL;
 	    darg.rsize = 0;
 	    if ((door_call(fd, &darg)) == -1) {
@@ -2733,7 +2747,7 @@ list_dd_func(int operandLen, char *operand[], cmdOptions_t *options,
 
 	bzero(&darg, sizeof (darg));
 	darg.data_ptr = (char *)doc;
-	darg.data_size = xmlStrlen(doc) + 1;
+	darg.data_size = xmlStrlen(doc);
 	darg.rbuf = NULL;
 	darg.rsize = 0;
 
@@ -2807,7 +2821,7 @@ list_ddset_func(int operandLen, char *operand[], cmdOptions_t *options,
 	    /* get the enumerate resposne. */
 	    bzero(&darg, sizeof (darg));
 	    darg.data_ptr = (char *)doc;
-	    darg.data_size = xmlStrlen(doc) + 1;
+	    darg.data_size = xmlStrlen(doc);
 	    darg.rbuf = NULL;
 	    darg.rsize = 0;
 	    if ((door_call(fd, &darg)) == -1) {
@@ -2834,7 +2848,7 @@ list_ddset_func(int operandLen, char *operand[], cmdOptions_t *options,
 		doc = e_doc;
 		bzero(&darg, sizeof (darg));
 		darg.data_ptr = (char *)doc;
-		darg.data_size = xmlStrlen(doc) + 1;
+		darg.data_size = xmlStrlen(doc);
 		darg.rbuf = NULL;
 		darg.rsize = 0;
 	    }
@@ -2843,7 +2857,7 @@ list_ddset_func(int operandLen, char *operand[], cmdOptions_t *options,
 		DiscoveryDomainSet, &doc)) == 0) {
 		bzero(&darg, sizeof (darg));
 		darg.data_ptr = (char *)doc;
-		darg.data_size = xmlStrlen(doc) + 1;
+		darg.data_size = xmlStrlen(doc);
 		darg.rbuf = NULL;
 		darg.rsize = 0;
 	    } else {
@@ -2908,7 +2922,7 @@ create_dd_func(int operandLen, char *operand[], cmdOptions_t *options,
 		DiscoveryDomain, NULL, &doc)) == 0) {
 		bzero(&darg, sizeof (darg));
 		darg.data_ptr = (char *)doc;
-		darg.data_size = xmlStrlen(doc) + 1;
+		darg.data_size = xmlStrlen(doc);
 		darg.rbuf = NULL;
 		darg.rsize = 0;
 	} else {
@@ -2974,7 +2988,7 @@ create_ddset_func(int operandLen, char *operand[], cmdOptions_t *options,
 		DiscoveryDomainSet, NULL, &doc)) == 0) {
 		bzero(&darg, sizeof (darg));
 		darg.data_ptr = (char *)doc;
-		darg.data_size = xmlStrlen(doc) + 1;
+		darg.data_size = xmlStrlen(doc);
 		darg.rbuf = NULL;
 		darg.rsize = 0;
 	} else {
@@ -3044,7 +3058,7 @@ modify_dd_func(int operandLen, char *operand[], cmdOptions_t *options,
 		DiscoveryDomain, &doc)) == 0) {
 		bzero(&darg, sizeof (darg));
 		darg.data_ptr = (char *)doc;
-		darg.data_size = xmlStrlen(doc) + 1;
+		darg.data_size = xmlStrlen(doc);
 		darg.rbuf = NULL;
 		darg.rsize = 0;
 	} else {
@@ -3112,7 +3126,7 @@ modify_dd_func(int operandLen, char *operand[], cmdOptions_t *options,
 		id, &doc)) == 0) {
 		bzero(&darg, sizeof (darg));
 		darg.data_ptr = (char *)doc;
-		darg.data_size = xmlStrlen(doc) + 1;
+		darg.data_size = xmlStrlen(doc);
 		darg.rbuf = NULL;
 		darg.rsize = 0;
 	} else {
@@ -3181,7 +3195,7 @@ modify_ddset_func(int operandLen, char *operand[], cmdOptions_t *options,
 		DiscoveryDomainSet, &doc)) == 0) {
 		bzero(&darg, sizeof (darg));
 		darg.data_ptr = (char *)doc;
-		darg.data_size = xmlStrlen(doc) + 1;
+		darg.data_size = xmlStrlen(doc);
 		darg.rbuf = NULL;
 		darg.rsize = 0;
 	} else {
@@ -3247,7 +3261,7 @@ modify_ddset_func(int operandLen, char *operand[], cmdOptions_t *options,
 		id, &doc)) == 0) {
 		bzero(&darg, sizeof (darg));
 		darg.data_ptr = (char *)doc;
-		darg.data_size = xmlStrlen(doc) + 1;
+		darg.data_size = xmlStrlen(doc);
 		darg.rbuf = NULL;
 		darg.rsize = 0;
 	} else {
@@ -3313,7 +3327,7 @@ add_node_func(int operandLen, char *operand[], cmdOptions_t *options,
 		DiscoveryDomainMember, options->optarg, &doc)) == 0) {
 		bzero(&darg, sizeof (darg));
 		darg.data_ptr = (char *)doc;
-		darg.data_size = xmlStrlen(doc) + 1;
+		darg.data_size = xmlStrlen(doc);
 		darg.rbuf = NULL;
 		darg.rsize = 0;
 	} else {
@@ -3379,7 +3393,7 @@ add_dd_func(int operandLen, char *operand[], cmdOptions_t *options,
 		DiscoveryDomainSetMember, options->optarg, &doc)) == 0) {
 		bzero(&darg, sizeof (darg));
 		darg.data_ptr = (char *)doc;
-		darg.data_size = xmlStrlen(doc) + 1;
+		darg.data_size = xmlStrlen(doc);
 		darg.rbuf = NULL;
 		darg.rsize = 0;
 	} else {
@@ -3446,7 +3460,7 @@ remove_node_func(int operandLen, char *operand[], cmdOptions_t *options,
 		DiscoveryDomainMember, options->optarg, &doc)) == 0) {
 		bzero(&darg, sizeof (darg));
 		darg.data_ptr = (char *)doc;
-		darg.data_size = xmlStrlen(doc) + 1;
+		darg.data_size = xmlStrlen(doc);
 		darg.rbuf = NULL;
 		darg.rsize = 0;
 	} else {
@@ -3513,7 +3527,7 @@ remove_dd_func(int operandLen, char *operand[], cmdOptions_t *options,
 		DiscoveryDomainSetMember, options->optarg, &doc)) == 0) {
 		bzero(&darg, sizeof (darg));
 		darg.data_ptr = (char *)doc;
-		darg.data_size = xmlStrlen(doc) + 1;
+		darg.data_size = xmlStrlen(doc);
 		darg.rbuf = NULL;
 		darg.rsize = 0;
 	} else {
@@ -3579,7 +3593,7 @@ delete_dd_func(int operandLen, char *operand[], cmdOptions_t *options,
 		DiscoveryDomain, NULL, &doc)) == 0) {
 		bzero(&darg, sizeof (darg));
 		darg.data_ptr = (char *)doc;
-		darg.data_size = xmlStrlen(doc) + 1;
+		darg.data_size = xmlStrlen(doc);
 		darg.rbuf = NULL;
 		darg.rsize = 0;
 	} else {
@@ -3646,7 +3660,7 @@ delete_ddset_func(int operandLen, char *operand[], cmdOptions_t *options,
 		DiscoveryDomainSet, NULL, &doc)) == 0) {
 		bzero(&darg, sizeof (darg));
 		darg.data_ptr = (char *)doc;
-		darg.data_size = xmlStrlen(doc) + 1;
+		darg.data_size = xmlStrlen(doc);
 		darg.rbuf = NULL;
 		darg.rsize = 0;
 	} else {
@@ -3709,7 +3723,7 @@ i_enableddset(int operandLen, char *operand[], boolean_t enable)
 		DiscoveryDomainSet, enable, &doc)) == 0) {
 		bzero(&darg, sizeof (darg));
 		darg.data_ptr = (char *)doc;
-		darg.data_size = xmlStrlen(doc) + 1;
+		darg.data_size = xmlStrlen(doc);
 		darg.rbuf = NULL;
 		darg.rsize = 0;
 	} else {
@@ -3810,7 +3824,7 @@ show_config_func(int operandLen, char *operand[], cmdOptions_t *options,
 		ServerConfig, &doc)) == 0) {
 		bzero(&darg, sizeof (darg));
 		darg.data_ptr = (char *)doc;
-		darg.data_size = xmlStrlen(doc) + 1;
+		darg.data_size = xmlStrlen(doc);
 		darg.rbuf = NULL;
 		darg.rsize = 0;
 	} else {

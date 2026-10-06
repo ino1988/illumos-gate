@@ -21,27 +21,28 @@
 #
 # Copyright (c) 2007, 2010, Oracle and/or its affiliates. All rights reserved.
 #
+# Copyright (c) 2018, Joyent, Inc.
 
 PROG =		idmap
 CLIENTOBJS =	idmap.o idmap_engine.o namemaps.o
 # idmap_clnt.o
-CLIENTSRCS =	$(CLIENTOBJS:%.o=%.c)
-POFILES = 	$(CLIENTOBJS:.o=.po)
+POFILES =	$(CLIENTOBJS:.o=.po)
 OBJS =		$(CLIENTOBJS)
-SRCS =		$(CLIENTSRCS)
 IDMAP_PROT_DIR =        $(SRC)/head/rpcsvc
 
 include ../../Makefile.cmd
 
 CERRWARN +=	-_gcc=-Wno-parentheses
 CERRWARN +=	-_gcc=-Wno-switch
-CERRWARN +=	-_gcc=-Wno-unused-label
 CERRWARN +=	-_gcc=-Wno-char-subscripts
 CERRWARN +=	-_gcc=-Wno-unused-function
-CERRWARN +=	-_gcc=-Wno-uninitialized
+CERRWARN +=	$(CNOWARN_UNINIT)
 CERRWARN +=	-_gcc=-Wno-address
 
-POFILE = 	$(PROG)_all.po
+# not linted
+SMATCH=off
+
+POFILE =	$(PROG)_all.po
 LDLIBS +=	-lidmap -ladutils -lsldap -lldap
 FILEMODE =	0555
 
@@ -55,14 +56,12 @@ CFLAGS += $(CCVERBOSE)
 $(OBJS) :=	CPPFLAGS += $(INCS) -D_REENTRANT
 $(POFILE) :=	CPPFLAGS += $(INCS)
 
-lint_SRCS :=	CPPFLAGS += $(INCS)
-
 .KEEP_STATE:
 
 all: $(PROG)
 
 $(PROG): $(OBJS)
-	$(LINK.c) -g -o $@ $(OBJS) $(LDLIBS)
+	$(LINK.c) $(CCGDEBUG) -o $@ $(OBJS) $(LDLIBS)
 	$(POST_PROCESS)
 
 $(POFILE): $(POFILES)
@@ -74,10 +73,4 @@ install: all $(ROOTUSRSBINPROG)
 clean:
 	$(RM) $(OBJS)
 
-lint: lint_SRCS
-
-LINTFLAGS += -erroff=E_NAME_DEF_NOT_USED2
-
 include ../../Makefile.targ
-
-

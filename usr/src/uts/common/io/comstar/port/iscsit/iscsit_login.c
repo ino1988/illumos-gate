@@ -21,7 +21,7 @@
 
 /*
  * Copyright (c) 2008, 2010, Oracle and/or its affiliates. All rights reserved.
- * Copyright 2014 Nexenta Systems, Inc.  All rights reserved.
+ * Copyright 2016 Nexenta Systems, Inc.
  */
 
 #include <sys/cpuvar.h>
@@ -32,18 +32,21 @@
 #include <sys/sunddi.h>
 #include <sys/modctl.h>
 #include <sys/scsi/generic/persist.h>
+#include <sys/scsi/scsi_names.h>
 
 #include <sys/socket.h>
 #include <sys/strsubr.h>
 #include <sys/sysmacros.h>
 #include <sys/note.h>
 #include <sys/sdt.h>
+#include <sys/errno.h>
 
 #include <sys/stmf.h>
 #include <sys/stmf_ioctl.h>
 #include <sys/portif.h>
 #include <sys/idm/idm.h>
 #include <sys/idm/idm_text.h>
+#include <sys/idm/idm_so.h>
 
 #define	ISCSIT_LOGIN_SM_STRINGS
 #include "iscsit.h"
@@ -193,6 +196,9 @@ login_resp_complete_cb(idm_pdu_t *pdu, idm_status_t status);
 
 static idm_status_t
 iscsit_add_declarative_keys(iscsit_conn_t *ict);
+
+static char *
+iscsit_fold_name(char *name, size_t *buflen);
 
 uint64_t max_dataseglen_target = ISCSIT_MAX_RECV_DATA_SEGMENT_LENGTH;
 
@@ -377,7 +383,8 @@ iscsit_login_sm_event_locked(iscsit_conn_t *ict, iscsit_login_event_t event,
 		if (lsm->icl_login_complete) {
 			lsm->icl_busy = B_TRUE;
 			if (taskq_dispatch(iscsit_global.global_dispatch_taskq,
-			    login_sm_complete, ict, DDI_SLEEP) == NULL) {
+			    login_sm_complete, ict, DDI_SLEEP) ==
+			    TASKQID_INVALID) {
 				cmn_err(CE_WARN, "iscsit_login_sm_event_locked:"
 				    " Failed to dispatch task");
 			}
@@ -727,7 +734,37 @@ login_sm_new_state(iscsit_conn_t *ict, login_event_ctx_t *ctx,
 	lsm->icl_login_state = new_state;
 	mutex_exit(&lsm->icl_mutex);
 
-	switch (lsm->icl_login_state) {
+	/*
+	 * Tale of caution here. The use of new_state instead of using
+	 * lsm->icl_login_state is deliberate (which had been used originally).
+	 * Since the icl_mutex is dropped under the right circumstances
+	 * the login state changes between setting the state and examining
+	 * the state to proceed. No big surprise since the lock was being
+	 * used in the first place to prevent just that type of change.
+	 *
+	 * There has been a case where network errors occurred while a client
+	 * was attempting to reinstate the connection causing multiple
+	 * login packets to arrive into the state machine. Those multiple
+	 * packets which were processed incorrectly caused the reference
+	 * count on the connection to be one higher than it should be and
+	 * from then on the connection can't close correctly causing a hang.
+	 *
+	 * Upon examination of the core it was found that the connection
+	 * audit data had calls looking like:
+	 *    login_sm_event_dispatch
+	 *    login_sm_processing
+	 *    login_sm_new_state
+	 * That call sequence means the new state was/is ILS_LOGIN_ERROR
+	 * yet the audit trail continues with a call to
+	 *    login_sm_send_next_response
+	 * which could only occur if icl_login_state had changed. Had the
+	 * design of COMSTAR taken this into account the code would
+	 * originally have held the icl_mutex across the processing of the
+	 * state processing. Lock order and calls which sleep prevent that
+	 * from being possible. The next best solution is to use the local
+	 * variable which holds the state.
+	 */
+	switch (new_state) {
 	case ILS_LOGIN_WAITING:
 		/* Do nothing, waiting for more login PDU's */
 		break;
@@ -1086,6 +1123,8 @@ login_sm_validate_initial_parameters(iscsit_conn_t *ict)
 {
 	int		nvrc;
 	char		*string_val;
+	char		*u8_iscsi_name;
+	size_t		u8_iscsi_name_len;
 	uint8_t		error_class = ISCSI_STATUS_CLASS_INITIATOR_ERR;
 	uint8_t		error_detail = ISCSI_LOGIN_STATUS_MISSING_FIELDS;
 	idm_status_t	status = IDM_STATUS_FAIL;
@@ -1105,10 +1144,16 @@ login_sm_validate_initial_parameters(iscsit_conn_t *ict)
 	    "InitiatorName", &string_val)) != 0) {
 		goto initial_params_done;
 	}
-	if ((nvrc = nvlist_add_string(lsm->icl_negotiated_values,
-	    "InitiatorName", string_val)) != 0) {
+
+	u8_iscsi_name = iscsit_fold_name(string_val, &u8_iscsi_name_len);
+	if (u8_iscsi_name == NULL)
 		goto initial_params_done;
-	}
+	nvrc = nvlist_add_string(lsm->icl_negotiated_values, "InitiatorName",
+	    u8_iscsi_name);
+	kmem_free(u8_iscsi_name, u8_iscsi_name_len);
+	if (nvrc != 0)
+		goto initial_params_done;
+
 	if ((nvrc = nvlist_lookup_string(lsm->icl_negotiated_values,
 	    "InitiatorName", &string_val)) != 0) {
 		goto initial_params_done;
@@ -1155,10 +1200,15 @@ login_sm_validate_initial_parameters(iscsit_conn_t *ict)
 		goto initial_params_done;
 	}
 	if (nvrc == 0) {
-		if ((nvrc = nvlist_add_string(lsm->icl_negotiated_values,
-		    "TargetName", string_val)) != 0) {
+		u8_iscsi_name = iscsit_fold_name(string_val,
+		    &u8_iscsi_name_len);
+		if (u8_iscsi_name == NULL)
 			goto initial_params_done;
-		}
+		nvrc = nvlist_add_string(lsm->icl_negotiated_values,
+		    "TargetName", u8_iscsi_name);
+		kmem_free(u8_iscsi_name, u8_iscsi_name_len);
+		if (nvrc != 0)
+			goto initial_params_done;
 		if ((nvrc = nvlist_lookup_string(lsm->icl_negotiated_values,
 		    "TargetName", &string_val)) != 0) {
 			goto initial_params_done;
@@ -1730,6 +1780,8 @@ login_sm_session_register(iscsit_conn_t *ict)
 	stmf_scsi_session_t	*ss;
 	iscsi_transport_id_t	*iscsi_tptid;
 	uint16_t		ident_len, adn_len, tptid_sz;
+	char			prop_buf[KSTAT_STRLEN + 1];
+	char			peer_buf[IDM_SA_NTOP_BUFSIZ];
 
 	/*
 	 * Hold target mutex until we have finished registering with STMF
@@ -1790,6 +1842,11 @@ login_sm_session_register(iscsit_conn_t *ict)
 	ss->ss_port_private = ict->ict_sess;
 	ict->ict_sess->ist_stmf_sess = ss;
 	mutex_exit(&ist->ist_tgt->target_mutex);
+	(void) snprintf(prop_buf, sizeof (prop_buf), "peername_%"PRIxPTR"",
+	    (uintptr_t)ict->ict_sess);
+	(void) idm_sa_ntop(&ict->ict_ic->ic_raddr, peer_buf,
+	    sizeof (peer_buf));
+	(void) stmf_add_rport_info(ss, prop_buf, peer_buf);
 
 	return (IDM_STATUS_SUCCESS);
 }
@@ -2691,4 +2748,51 @@ alloc_fail:
 		idm_status = IDM_STATUS_FAIL;
 	}
 	return (idm_status);
+}
+
+static char *
+iscsit_fold_name(char *name, size_t *buflen)
+{
+	char		*ret;
+	const char	*sns;
+	int		errnum;
+	int		flag = U8_TEXTPREP_NFKC;
+	size_t		inlen, outlen, coff;
+
+	if (name == NULL)
+		return (NULL);
+
+	/* Check for one of the supported name types */
+	if (strncasecmp(name, SNS_EUI ".", strlen(SNS_EUI) + 1) == 0) {
+		sns = SNS_EUI;
+		*buflen = SNS_EUI_LEN_MAX + 1;
+		flag |= U8_TEXTPREP_TOUPPER;
+	} else if (strncasecmp(name, SNS_IQN ".", strlen(SNS_IQN) + 1) == 0) {
+		sns = SNS_IQN;
+		*buflen = SNS_IQN_LEN_MAX + 1;
+		flag |= U8_TEXTPREP_TOLOWER;
+	} else if (strncasecmp(name, SNS_NAA ".", strlen(SNS_NAA) + 1) == 0) {
+		sns = SNS_NAA;
+		*buflen = SNS_NAA_LEN_MAX + 1;
+		flag |= U8_TEXTPREP_TOUPPER;
+	} else {
+		return (NULL);
+	}
+
+	ret = kmem_zalloc(*buflen, KM_SLEEP);
+	coff = strlen(sns);
+	inlen = strlen(name) - coff;
+	outlen = *buflen - coff - 1;
+
+	/* Fold the case and normalize string */
+	if (u8_textprep_str(name + coff, &inlen, ret + coff, &outlen, flag,
+	    U8_UNICODE_320, &errnum) == (size_t)-1) {
+		kmem_free(ret, *buflen);
+		return (NULL);
+	}
+
+	/* Copy the name type prefix */
+	bcopy(sns, ret, coff);
+
+	return (ret);
 }

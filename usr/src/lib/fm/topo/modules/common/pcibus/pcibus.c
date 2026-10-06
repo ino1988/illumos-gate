@@ -21,6 +21,7 @@
 
 /*
  * Copyright (c) 2006, 2010, Oracle and/or its affiliates. All rights reserved.
+ * Copyright 2020 Joyent, Inc.
  */
 
 #include <sys/fm/protocol.h>
@@ -30,6 +31,8 @@
 #include <string.h>
 #include <strings.h>
 #include <alloca.h>
+#include <fcntl.h>
+#include <unistd.h>
 #include <sys/param.h>
 #include <sys/pci.h>
 #include <sys/pcie.h>
@@ -37,12 +40,17 @@
 #include <libnvpair.h>
 #include <fm/topo_mod.h>
 #include <fm/topo_hc.h>
+#include <sys/stat.h>
+#include <sys/types.h>
 
 #include <hostbridge.h>
 #include <pcibus.h>
 #include <did.h>
 #include <did_props.h>
 #include <util.h>
+#include <topo_nic.h>
+#include <topo_usb.h>
+#include <topo_ufm.h>
 
 extern txprop_t Bus_common_props[];
 extern txprop_t Dev_common_props[];
@@ -156,6 +164,49 @@ hostbridge_asdevice(topo_mod_t *mod, tnode_t *bus)
 	return (0);
 }
 
+static int
+pciexfn_add_ufm(topo_mod_t *mod, tnode_t *parent, tnode_t *node)
+{
+	int err;
+	char *devpath = NULL;
+	tnode_t *create;
+	topo_ufm_devinfo_t tud;
+
+	if (topo_prop_get_string(node, TOPO_PGROUP_IO, TOPO_IO_DEV, &devpath,
+	    &err) != 0) {
+		return (topo_mod_seterrno(mod, EMOD_UNKNOWN));
+	}
+
+	/*
+	 * In general, almost all UFMs are device-wide. That is, in a
+	 * multi-function device, there is still a single global firmware image.
+	 * At this time, we default to putting the UFM data always on the device
+	 * node. However, if someone creates a UFM on something that's not the
+	 * first function, we'll create a UFM under that function for now. If we
+	 * add support for hardware that has per-function UFMs, then we should
+	 * update the UFM API to convey that scope.
+	 */
+	if (topo_node_instance(node) != 0) {
+		create = node;
+	} else {
+		create = parent;
+	}
+
+	if (topo_mod_load(mod, TOPO_MOD_UFM, TOPO_VERSION) == NULL) {
+		topo_mod_dprintf(mod, "pcibus enum could not load ufm module");
+		topo_mod_strfree(mod, devpath);
+		return (topo_mod_seterrno(mod, EMOD_PARTIAL_ENUM));
+	}
+
+	tud.tud_method = TOPO_UFM_M_DEVINFO;
+	tud.tud_path = devpath;
+	err = topo_mod_enumerate(mod, create, TOPO_MOD_UFM, UFM, 0, UINT32_MAX,
+	    &tud);
+	topo_mod_strfree(mod, devpath);
+
+	return (err);
+}
+
 tnode_t *
 pciexfn_declare(topo_mod_t *mod, tnode_t *parent, di_node_t dn,
     topo_instance_t i)
@@ -232,6 +283,17 @@ pciexfn_declare(topo_mod_t *mod, tnode_t *parent, di_node_t dn,
 		topo_node_unbind(ntn);
 		return (NULL);
 	}
+
+	/*
+	 * Check if the driver associated with this function exports firmware
+	 * information via the DDI UFM subsystem and, if so, create the
+	 * corresponding ufm topo nodes.
+	 */
+	if (pciexfn_add_ufm(mod, parent, ntn) != 0) {
+		topo_node_unbind(ntn);
+		return (NULL);
+	}
+
 	/*
 	 * We may find pci-express buses or plain-pci buses beneath a function
 	 */
@@ -261,6 +323,11 @@ pciexdev_declare(topo_mod_t *mod, tnode_t *parent, di_node_t dn,
 	if ((ntn = pci_tnode_create(mod, parent, PCIEX_DEVICE, i, dn)) == NULL)
 		return (NULL);
 	if (did_props_set(ntn, pd, Dev_common_props, Dev_propcnt) < 0) {
+		topo_node_unbind(ntn);
+		return (NULL);
+	}
+
+	if (pci_create_dev_sensors(mod, ntn) < 0) {
 		topo_node_unbind(ntn);
 		return (NULL);
 	}
@@ -349,6 +416,11 @@ pcidev_declare(topo_mod_t *mod, tnode_t *parent, di_node_t dn,
 		return (NULL);
 	}
 
+	if (pci_create_dev_sensors(mod, ntn) < 0) {
+		topo_node_unbind(ntn);
+		return (NULL);
+	}
+
 	/*
 	 * We can expect to find pci functions beneath the device
 	 */
@@ -428,11 +500,12 @@ static void
 declare_dev_and_fn(topo_mod_t *mod, tnode_t *bus, tnode_t **dev, di_node_t din,
     int board, int bridge, int rc, int devno, int fnno, int depth)
 {
-	int dcnt = 0, rcnt;
-	char *propstr;
+	int dcnt = 0, rcnt, err;
+	char *propstr, *label = NULL, *pdev = NULL;
 	tnode_t *fn;
 	uint_t class, subclass;
 	uint_t vid, did;
+	uint_t pdev_sz = 0;
 	did_t *dp = NULL;
 
 	if (*dev == NULL) {
@@ -489,40 +562,65 @@ declare_dev_and_fn(topo_mod_t *mod, tnode_t *bus, tnode_t **dev, di_node_t din,
 	 */
 	else if (class == PCI_CLASS_NET &&
 	    di_uintprop_get(mod, din, DI_VENDIDPROP, &vid) >= 0 &&
-	    di_uintprop_get(mod, din, DI_DEVIDPROP, &did) >= 0) {
-		if (vid == SUN_VENDOR_ID && did == NEPTUNE_DEVICE_ID) {
-			/*
-			 * Is this an adapter card? Check the bus's physlot
-			 */
-			dp = did_find(mod, topo_node_getspecific(bus));
-			if (did_physlot(dp) >= 0) {
-				topo_mod_dprintf(mod, "Found Neptune slot\n");
-				(void) topo_mod_enummap(mod, fn,
-				    "xfp", FM_FMRI_SCHEME_HC);
+	    di_uintprop_get(mod, din, DI_DEVIDPROP, &did) >= 0 &&
+	    vid == SUN_VENDOR_ID && did == NEPTUNE_DEVICE_ID) {
+		/*
+		 * Is this an adapter card? Check the bus's physlot
+		 */
+		dp = did_find(mod, topo_node_getspecific(bus));
+		if (did_physlot(dp) >= 0) {
+			topo_mod_dprintf(mod, "Found Neptune slot\n");
+			(void) topo_mod_enummap(mod, fn,
+			    "xfp", FM_FMRI_SCHEME_HC);
+		} else {
+			topo_mod_dprintf(mod, "Found Neptune ASIC\n");
+			if (topo_mod_load(mod, XAUI, TOPO_VERSION) == NULL) {
+				topo_mod_dprintf(mod, "pcibus enum "
+				    "could not load xaui enum\n");
+				(void) topo_mod_seterrno(mod,
+				    EMOD_PARTIAL_ENUM);
+				return;
 			} else {
-				topo_mod_dprintf(mod, "Found Neptune ASIC\n");
-				if (topo_mod_load(mod, XAUI, TOPO_VERSION) ==
-				    NULL) {
-					topo_mod_dprintf(mod, "pcibus enum "
-					    "could not load xaui enum\n");
-					(void) topo_mod_seterrno(mod,
-					    EMOD_PARTIAL_ENUM);
+				if (topo_node_range_create(mod, fn,
+				    XAUI, 0, 1) < 0) {
+					topo_mod_dprintf(mod,
+					    "child_range_add for "
+					    "XAUI failed: %s\n",
+					    topo_strerror(
+					    topo_mod_errno(mod)));
 					return;
-				} else {
-					if (topo_node_range_create(mod, fn,
-					    XAUI, 0, 1) < 0) {
-						topo_mod_dprintf(mod,
-						    "child_range_add for "
-						    "XAUI failed: %s\n",
-						    topo_strerror(
-						    topo_mod_errno(mod)));
-						return;
-					}
-					(void) topo_mod_enumerate(mod, fn,
-					    XAUI, XAUI, fnno, fnno, fn);
 				}
+				(void) topo_mod_enumerate(mod, fn,
+				    XAUI, XAUI, fnno, fnno, fn);
 			}
 		}
+	} else if (class == PCI_CLASS_NET) {
+		/*
+		 * Ask the nic module if there are any nodes that need to be
+		 * enumerated under this device. This might include things like
+		 * transceivers or some day, LEDs.
+		 */
+		if (topo_mod_load(mod, NIC, NIC_VERSION) == NULL) {
+			topo_mod_dprintf(mod, "pcibus enum could not load "
+			    "nic enum\n");
+			(void) topo_mod_seterrno(mod, EMOD_PARTIAL_ENUM);
+			return;
+		}
+
+		(void) topo_mod_enumerate(mod, fn, NIC, NIC, 0, 0, din);
+	} else if (class == PCI_CLASS_SERIALBUS && subclass == PCI_SERIAL_USB) {
+		/*
+		 * If we encounter a USB controller, make sure to enumerate all
+		 * of its USB ports.
+		 */
+		if (topo_mod_load(mod, USB, USB_VERSION) == NULL) {
+			topo_mod_dprintf(mod, "pcibus enum could not load "
+			    "usb enum\n");
+			(void) topo_mod_seterrno(mod, EMOD_PARTIAL_ENUM);
+			return;
+		}
+
+		(void) topo_mod_enumerate(mod, fn, USB, USB_PCI, 0, 0, din);
 	} else if (class == PCI_CLASS_MASS) {
 		di_node_t cn;
 		int niports = 0;
@@ -546,6 +644,85 @@ declare_dev_and_fn(topo_mod_t *mod, tnode_t *bus, tnode_t **dev, di_node_t din,
 				pci_receptacle_instantiate(mod, fn, din);
 		}
 	}
+
+	/*
+	 * If this is an NVMe device and if the FRU label indicates it's not an
+	 * onboard device then invoke the disk enumerator to enumerate the NVMe
+	 * controller and associated namespaces.
+	 *
+	 * We skip NVMe devices that appear to be onboard as those are likely
+	 * M.2 or U.2 devices and so should be enumerated via a
+	 * platform-specific XML map so that they can be associated with the
+	 * correct physical bay/slot.  This code is intended to pick up NVMe
+	 * devices that are part of PCIe add-in cards.
+	 */
+	if (topo_node_label(fn, &label, &err) != 0) {
+		topo_mod_dprintf(mod, "%s: failed to lookup FRU label on "
+		    "%s=%" PRIu64, __func__, topo_node_name(fn),
+		    topo_node_instance(fn));
+		goto out;
+	}
+
+	if (class == PCI_CLASS_MASS && subclass == PCI_MASS_NVME &&
+	    strcmp(label, "MB") != 0) {
+		char *driver = di_driver_name(din);
+		char *slash;
+		topo_pgroup_info_t pgi;
+
+		if (topo_prop_get_string(fn, TOPO_PGROUP_IO, TOPO_IO_DEV,
+		    &pdev, &err) != 0) {
+			topo_mod_dprintf(mod, "%s: failed to lookup %s on "
+			    "%s=%" PRIu64, __func__, TOPO_IO_DEV,
+			    topo_node_name(fn), topo_node_instance(fn));
+			goto out;
+		}
+
+		/*
+		 * Add the binding properties that are required by the disk
+		 * enumerator to discover the accociated NVMe controller.
+		 */
+		pdev_sz = strlen(pdev) + 1;
+		if ((slash = strrchr(pdev, '/')) == NULL) {
+			topo_mod_dprintf(mod, "%s: malformed dev path\n",
+			    __func__);
+			(void) topo_mod_seterrno(mod, EMOD_PARTIAL_ENUM);
+			goto out;
+		}
+		*slash = '\0';
+
+		pgi.tpi_name = TOPO_PGROUP_BINDING;
+		pgi.tpi_namestab = TOPO_STABILITY_PRIVATE;
+		pgi.tpi_datastab = TOPO_STABILITY_PRIVATE;
+		pgi.tpi_version = TOPO_VERSION;
+		if (topo_pgroup_create(fn, &pgi, &err) != 0 ||
+		    topo_prop_set_string(fn, TOPO_PGROUP_BINDING,
+		    TOPO_BINDING_DRIVER, TOPO_PROP_IMMUTABLE, driver,
+		    &err) != 0 ||
+		    topo_prop_set_string(fn, TOPO_PGROUP_BINDING,
+		    TOPO_BINDING_PARENT_DEV, TOPO_PROP_IMMUTABLE, pdev,
+		    &err) != 0) {
+			topo_mod_dprintf(mod, "%s: failed to set binding "
+			    "props", __func__);
+			(void) topo_mod_seterrno(mod, EMOD_PARTIAL_ENUM);
+			goto out;
+		}
+
+		/*
+		 * Load and invoke the disk enumerator module.
+		 */
+		if (topo_mod_load(mod, DISK, TOPO_VERSION) == NULL) {
+			topo_mod_dprintf(mod, "pcibus enum could not load "
+			    "disk enum\n");
+			(void) topo_mod_seterrno(mod, EMOD_PARTIAL_ENUM);
+			goto out;
+		}
+		(void) topo_mod_enumerate(mod, fn, DISK, NVME, 0, 0, NULL);
+	}
+out:
+	if (pdev != NULL) {
+		topo_mod_free(mod, pdev, pdev_sz);
+	}
+	topo_mod_strfree(mod, label);
 }
 
 int
@@ -681,7 +858,7 @@ pcibus_enum(topo_mod_t *mp, tnode_t *ptn, char *pnm, topo_instance_t min,
 		if (didp == NULL) {
 			topo_mod_dprintf(mp,
 			    "Parent %s node missing private data related\n"
-			    "to %s instance %d.\n", pnm, PCI_BUS, min);
+			    "to %s instance %" PRIu64 ".\n", pnm, PCI_BUS, min);
 			topo_mod_setspecific(mp, NULL);
 			return (0);
 		}

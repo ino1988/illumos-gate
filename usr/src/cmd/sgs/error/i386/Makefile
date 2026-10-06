@@ -24,10 +24,13 @@
 # Copyright 2008 Sun Microsystems, Inc.  All rights reserved.
 # Use is subject to license terms.
 #
+# Copyright (c) 2018, Joyent, Inc.
+# Copyright 2019 OmniOS Community Edition (OmniOSce) Association.
+#
 
 PROG=		error
 
-include 	../../../Makefile.cmd
+include		../../../Makefile.cmd
 
 OBJS=		errormain.o errorinput.o errorpi.o errorsubr.o \
 		errorfilter.o errortouch.o
@@ -38,12 +41,12 @@ INCLIST=	-I../common
 DEFLIST=	-DELF
 CPPFLAGS=	$(INCLIST) $(DEFLIST) $(CPPFLAGS.master)
 CFLAGS +=	$(CCVERBOSE)
-C99MODE=	$(C99_ENABLE)
+CSTD=	$(CSTD_GNU99)
 
-CERRWARN +=	-_gcc=-Wno-uninitialized
+CERRWARN +=	$(CNOWARN_UNINIT)
 CERRWARN +=	-_gcc=-Wno-parentheses
 
-CLEANFILES +=	$(LINTOUT)
+SMOFF += no_if_block,indenting
 
 %.o:		../common/%.c
 		$(COMPILE.c) $<
@@ -60,11 +63,5 @@ install:	all $(ROOTPROG) $(ROOTCCSBINLINK)
 
 clean:
 		$(RM) $(OBJS) $(CLEANFILES)
-
-lint:		$(LINTOUT)
-
-$(LINTOUT):	$(SRCS)
-		perl ../../tools/lint_hdr.pl $(PROG)	> $(LINTOUT)
-		$(LINT.c) $(SRCS) $(LDLIBS)		2>&1 | tee -a $(LINTOUT)
 
 include		../../../Makefile.targ

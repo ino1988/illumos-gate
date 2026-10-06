@@ -21,6 +21,7 @@
 #
 # Copyright 2009 Sun Microsystems, Inc.  All rights reserved.
 # Use is subject to license terms.
+# Copyright 2019 Joyent, Inc.
 #
 # uts/i86pc/sys/Makefile
 #
@@ -30,6 +31,7 @@ UTSBASE = ../..
 # include global definitions
 #
 include ../Makefile.i86pc
+include $(UTSBASE)/intel/sys/Makefile.psm
 
 #
 # Override defaults.
@@ -43,7 +45,7 @@ HDRS=  \
 	clock.h		\
 	cram.h		\
 	ddi_subrdefs.h	\
-	debug_info.h 	\
+	debug_info.h	\
 	fastboot.h	\
 	mach_mmu.h	\
 	machclock.h	\
@@ -59,14 +61,16 @@ HDRS=  \
 	psm_modctl.h	\
 	psm_types.h	\
 	rm_platter.h	\
-	smp_impldefs.h	\
 	sbd_ioctl.h	\
+	smp_impldefs.h	\
 	vm_machparam.h	\
 	x_call.h	\
 	xc_levels.h	\
 	xsvc.h
 
-ROOTHDRS=	$(HDRS:%=$(USR_PSM_ISYS_DIR)/%)
+ROOTHDRS = \
+	$(HDRS:%=$(USR_PSM_ISYS_DIR)/%)	\
+	$(PSM_SHARED_HDRS:%=$(USR_PSM_ISYS_DIR)/%)
 
 ROOTDIR=	$(ROOT)/usr/share/src
 ROOTDIRS=	$(ROOTDIR)/uts $(ROOTDIR)/uts/$(PLATFORM)

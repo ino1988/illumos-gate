@@ -34,6 +34,7 @@
 
 /*
  * Copyright (c) 2008, 2010, Oracle and/or its affiliates. All rights reserved.
+ * Copyright 2018 Nexenta Systems, Inc.  All rights reserved.
  */
 
 #include <sys/types.h>
@@ -48,12 +49,7 @@
 
 #include <netsmb/smb.h>
 #include <netsmb/smb_lib.h>
-#include <netsmb/smb_netshareenum.h>
-
 #include "common.h"
-
-int enum_shares(smb_ctx_t *);
-void print_shares(int, int, struct share_info *);
 
 void
 view_usage(void)
@@ -79,18 +75,18 @@ cmd_view(int argc, char *argv[])
 	error = smb_ctx_scan_argv(ctx, argc, argv,
 	    SMBL_SERVER, SMBL_SERVER, USE_WILDCARD);
 	if (error)
-		return (error);
+		goto out;
 
 	error = smb_ctx_readrc(ctx);
 	if (error)
-		return (error);
+		goto out;
 
 	while ((opt = getopt(argc, argv, STDPARAM_OPT)) != EOF) {
 		if (opt == '?')
 			view_usage();
 		error = smb_ctx_opt(ctx, opt, optarg);
 		if (error)
-			return (error);
+			goto out;
 	}
 
 	smb_ctx_setshare(ctx, "IPC$", USE_IPC);
@@ -101,7 +97,7 @@ cmd_view(int argc, char *argv[])
 	 */
 	error = smb_ctx_resolve(ctx);
 	if (error)
-		return (error);
+		goto out;
 
 	/*
 	 * Have server, share, etc. from above:
@@ -118,26 +114,24 @@ again:
 	if (error) {
 		smb_error(gettext("//%s: login failed"),
 		    error, ctx->ct_fullserver);
-		return (error);
+		goto out;
 	}
 
 	error = smb_ctx_get_tree(ctx);
 	if (error) {
 		smb_error(gettext("//%s/%s: tree connect failed"),
 		    error, ctx->ct_fullserver, ctx->ct_origshare);
-		return (error);
+		goto out;
 	}
 
 	/*
 	 * Have IPC$ tcon, now list shares.
-	 * This prints its own errors.
 	 */
-	error = enum_shares(ctx);
-	if (error)
-		return (error);
+	error = share_enum_rpc(ctx, ctx->ct_fullserver);
 
+out:
 	smb_ctx_free(ctx);
-	return (0);
+	return (error);
 }
 
 #ifdef I18N	/* not defined, put here so xgettext(1) can find strings */
@@ -145,7 +139,7 @@ static char *shtype[] = {
 	gettext("disk"),
 	gettext("printer"),
 	gettext("device"),	/* Communications device */
-	gettext("IPC"), 	/* Inter process communication */
+	gettext("IPC"),		/* Inter process communication */
 	gettext("unknown")
 };
 #else
@@ -153,53 +147,34 @@ static char *shtype[] = {
 	"disk",
 	"printer",
 	"device",		/* Communications device */
-	"IPC",  		/* IPC Inter process communication */
+	"IPC",			/* IPC Inter process communication */
 	"unknown"
 };
 #endif
 
-int
-enum_shares(smb_ctx_t *ctx)
-{
-	struct share_info *share_info;
-	int error, entries, total;
-
-	/*
-	 * XXX: Later, try RPC first,
-	 * then fall back to RAP...
-	 */
-	error = smb_netshareenum(ctx, &entries, &total, &share_info);
-	if (error) {
-		smb_error(gettext("//%s failed to list shares"),
-		    error, ctx->ct_fullserver);
-		return (error);
-	}
-	print_shares(entries, total, share_info);
-	return (0);
-}
-
+/*
+ * Print one line of the share list, or
+ * if SHARE is null, print the header line.
+ */
 void
-print_shares(int entries, int total,
-	struct share_info *share_info)
+view_print_share(char *share, int type, char *comment)
 {
-	struct share_info *ep;
-	int i;
+	char *stname;
+	int stindex;
 
-	printf(gettext("Share        Type       Comment\n"));
-	printf("-------------------------------\n");
-
-	for (ep = share_info, i = 0; i < entries; i++, ep++) {
-		int sti = ep->type & STYPE_MASK;
-		if (sti > STYPE_UNKNOWN)
-			sti = STYPE_UNKNOWN;
-		printf("%-12s %-10s %s\n", ep->netname,
-		    gettext(shtype[sti]),
-		    ep->remark ? ep->remark : "");
-		free(ep->netname);
-		free(ep->remark);
+	if (share == NULL) {
+		printf(gettext("Share        Type       Comment\n"));
+		printf("-------------------------------\n");
+		return;
 	}
-	printf(gettext("\n%d shares listed from %d available\n"),
-	    entries, total);
 
-	free(share_info);
+	stindex = type & STYPE_MASK;
+	if (stindex > STYPE_UNKNOWN)
+		stindex = STYPE_UNKNOWN;
+	stname = gettext(shtype[stindex]);
+
+	if (comment == NULL)
+		comment = "";
+
+	printf("%-12s %-10s %s\n", share, stname, comment);
 }

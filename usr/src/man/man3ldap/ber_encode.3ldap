@@ -103,7 +103,7 @@ The  \fBber_alloc()\fR function is used to allocate a new BER element.
 .sp
 .LP
 The  \fBber_printf()\fR function is used to encode a BER element in much the
-same way that  \fBsprintf(3S)\fR works.  One important difference, though, is
+same way that \fBsprintf(3C)\fR works.  One important difference, though, is
 that some state information is kept with the \fIber\fR parameter so that
 multiple calls can be made to  \fBber_printf()\fR to append things to the end
 of the BER element.   \fBBer_printf()\fR writes to \fIber\fR, a pointer to a
@@ -332,7 +332,7 @@ functions generally return \fB\(mi1\fR\&.
 .SH ATTRIBUTES
 .sp
 .LP
-See \fBattributes\fR(5) for a description of the following attributes:
+See \fBattributes\fR(7) for a description of the following attributes:
 .sp
 
 .sp
@@ -348,7 +348,8 @@ Interface Stability	Committed
 .SH SEE ALSO
 .sp
 .LP
-\fBber_decode\fR(3LDAP), \fBattributes\fR(5)
+.BR ber_decode (3LDAP),
+.BR attributes (7)
 .sp
 .LP
 Yeong, W., Howes, T., and Hardcastle-Kille, S., "Lightweight Directory Access

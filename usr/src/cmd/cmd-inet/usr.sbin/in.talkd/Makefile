@@ -35,14 +35,14 @@ $(ROOTMANIFEST)		:= FILEMODE= 444
 
 CFLAGS +=	$(CCVERBOSE)
 CERRWARN +=	-_gcc=-Wno-parentheses
-CERRWARN +=	-_gcc=-Wno-uninitialized
+CERRWARN +=	$(CNOWARN_UNINIT)
 LDLIBS +=	-lsocket -lnsl
 
 .KEEP_STATE:
 
 .PARALLEL: $(OBJS)
 
-all: $(PROG) 
+all: $(PROG)
 
 $(PROG): $(OBJS)
 	$(LINK.c) $(OBJS) -o $@ $(LDLIBS)

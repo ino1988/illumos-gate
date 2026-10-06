@@ -23,8 +23,6 @@
  * Use is subject to license terms.
  */
 
-#pragma ident	"%Z%%M%	%I%	%E% SMI"
-
 /*
  * The KDI is used to allow the kernel debugger to directly invoke various
  * kernel functions.  In some cases, such as with kdi_mod_iter(), the
@@ -138,7 +136,6 @@ kobj_kdi_mods_changed(void)
 	return (state != KOBJ_KDI_MOD_IDLE);
 }
 
-/*ARGSUSED1*/
 void
 kobj_kdi_mod_notify(uint_t why, struct modctl *what)
 {

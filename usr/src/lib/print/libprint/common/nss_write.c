@@ -64,7 +64,7 @@ freadline(FILE *fp, char *buf, int buflen)
 			continue;
 		} else {
 			if ((*s == '#') || (*s == '\n')) {
-				*s = NULL;
+				*s = '\0';
 				break;
 			}
 
@@ -108,7 +108,7 @@ _file_put_printer(const char *file, const ns_printer_t *printer)
 
 	/* LINTED */
 	while (1) {	/* syncronize writes */
-		fd = open(file, O_RDWR|O_CREAT|O_EXCL, 0644);
+		fd = open(file, O_RDWR | O_CREAT | O_EXCL, 0644);
 		if ((fd < 0) && (errno == EEXIST))
 			fd = open(file, O_RDWR);
 		if (fd < 0) {
@@ -141,7 +141,7 @@ _file_put_printer(const char *file, const ns_printer_t *printer)
 		(void) fprintf(ofp,
 	"#\n#\tIf you hand edit this file, comments and structure may change.\n"
 	"#\tThe preferred method of modifying this file is through the use of\n"
-	"#\tlpset(1M)\n#\n");
+	"#\tlpset(8)\n#\n");
 
 	/*
 	 * Handle the special case of lpset -x all
@@ -165,8 +165,9 @@ _file_put_printer(const char *file, const ns_printer_t *printer)
 				    == 0) {
 					entry = pentry;
 					pentry = NULL;
-				} else
+				} else {
 					entry = buf;
+				}
 
 				(void) fprintf(ofp, "%s\n", entry);
 			}
@@ -228,8 +229,9 @@ remote_command(char *command, char *host)
 			return (-1);
 		(void) close(fd);
 		return (0);
-	} else
+	} else {
 		return (-1);
+	}
 }
 
 
@@ -273,7 +275,7 @@ nis_put_printer(const ns_printer_t *printer)
 
 	if (((tmp = strrchr(rfile, '.')) != NULL) &&
 	    (strcmp(tmp, ".byname") == 0))
-		*tmp = NULL;	/* strip the .byname */
+		*tmp = '\0';	/* strip the .byname */
 
 	/* copy it local */
 	if (snprintf(cmd, sizeof (cmd), "rcp %s %s >/dev/null 2>&1",

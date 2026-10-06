@@ -22,6 +22,8 @@
  * Copyright 2009 Sun Microsystems, Inc.  All rights reserved.
  * Use is subject to license terms.
  * Copyright 2012 Milan Jurik. All rights reserved.
+ * Copyright (c) 2016 by Delphix. All rights reserved.
+ * Copyright 2023 Oxide Computer Company
  */
 
 #if defined(DEBUG)
@@ -76,7 +78,7 @@ kmutex_t ra_lock;
 struct ra_resource {
 	struct ra_resource *ra_next;
 	uint64_t	ra_base;
-	uint64_t 	ra_len;
+	uint64_t	ra_len;
 };
 
 /*
@@ -192,7 +194,6 @@ _fini()
 
 int
 _info(struct modinfo *modinfop)
-
 {
 	return (mod_info(&modlinkage, modinfop));
 }
@@ -245,7 +246,7 @@ ndi_ra_map_destroy(dev_info_t *dip, char *type)
 {
 	struct ra_dip_type	*dipmap;
 	struct ra_dip_type	**backdip;
-	struct ra_type_map  	**backtype, *typemap;
+	struct ra_type_map	**backtype, *typemap;
 	struct ra_resource	*range;
 
 	mutex_enter(&ra_lock);
@@ -446,7 +447,6 @@ ndi_ra_free(dev_info_t *dip, uint64_t base, uint64_t len, char *type,
 	 * resource to the pool.
 	 */
 	(void) pci_put_available_prop(dipmap->ra_dip, base, len, type);
-done:
 	return (NDI_SUCCESS);
 
 overlap:
@@ -488,7 +488,7 @@ isnot_pow2(uint64_t value)
 
 static  void
 adjust_link(struct ra_resource **backp, struct ra_resource *mapp,
-	    uint64_t base, uint64_t len)
+    uint64_t base, uint64_t len)
 {
 	struct ra_resource *newmap;
 	uint64_t newlen;
@@ -675,7 +675,7 @@ ndi_ra_alloc(dev_info_t *dip, ndi_ra_request_t *req, uint64_t *retbasep,
 			if (base >= mapp->ra_base &&
 			    ((base - mapp->ra_base) < mapp->ra_len)) {
 				/*
-				 * This is the node with he requested base in
+				 * This is the node with the requested base in
 				 * its range
 				 */
 				if ((len > mapp->ra_len) ||
@@ -842,9 +842,17 @@ isa_resource_setup()
 	/* initialize the interrupt space */
 	(void) ndi_ra_free(usedpdip, 0, 16, NDI_RA_TYPE_INTR, 0);
 
-#if defined(__i386) || defined(__amd64)
+	/*
+	 * The PC/AT had two PICs cascaded together through IRQ 2 on the
+	 * primary with firmware providing compatibility.  Effectively IRQ 2
+	 * and 9 are the same.  Intel platforms have retained compatibility
+	 * for that since.
+	 *
+	 * Mark IRQ 2 as consumed, so it can never be allocated.
+	 */
+#if defined(__x86)
 	bzero(&req, sizeof (req));
-	req.ra_addr = 2;	/* 2 == 9 so never allow */
+	req.ra_addr = 2;
 	req.ra_len = 1;
 	req.ra_flags = NDI_RA_ALLOC_SPECIFIED;
 	(void) ndi_ra_alloc(usedpdip, &req, &retbase, &retlen,
@@ -939,7 +947,6 @@ pci_resource_setup(dev_info_t *dip)
 	char bus_type[16] = "(unknown)";
 	int len;
 	struct busnum_ctrl ctrl;
-	int circular_count;
 	int rval = NDI_SUCCESS;
 
 	/*
@@ -1117,10 +1124,10 @@ pci_resource_setup(dev_info_t *dip)
 				ctrl.rv = DDI_SUCCESS;
 				ctrl.dip = dip;
 				ctrl.range = &pci_bus_range;
-				ndi_devi_enter(dip, &circular_count);
+				ndi_devi_enter(dip);
 				ddi_walk_devs(ddi_get_child(dip),
 				    claim_pci_busnum, (void *)&ctrl);
-				ndi_devi_exit(dip, circular_count);
+				ndi_devi_exit(dip);
 				if (ctrl.rv != DDI_SUCCESS) {
 					/* failed to create the map */
 					(void) ndi_ra_map_destroy(dip,

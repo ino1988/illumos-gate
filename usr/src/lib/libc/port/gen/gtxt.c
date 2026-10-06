@@ -24,10 +24,8 @@
  * Use is subject to license terms.
  */
 
-/*	Copyright (c) 1988 AT&T	*/
-/*	  All Rights Reserved  	*/
-
-#pragma ident	"%Z%%M%	%I%	%E% SMI"
+/*	Copyright (c) 1988 AT&T */
+/*	  All Rights Reserved   */
 
 /* __gtxt(): Common part to gettxt() and pfmt()	*/
 
@@ -35,6 +33,7 @@
 
 #include "lint.h"
 #include "libc.h"
+#include "thr_uberdata.h"
 #include <mtlib.h>
 #include <sys/types.h>
 #include <string.h>
@@ -260,6 +259,7 @@ __gtxt(const char *catname, int id, const char *dflt)
 	char	*curloc;
 	struct db_info *db;
 	int	err;
+	locale_t loc;
 
 	/* Check for invalid message id */
 	if (id < 0)
@@ -281,7 +281,8 @@ __gtxt(const char *catname, int id, const char *dflt)
 		lrw_unlock(&_rw_cur_cat);
 	}
 
-	curloc = setlocale(LC_MESSAGES, NULL);
+	loc = __curlocale();
+	curloc = current_locale(loc, LC_MESSAGES);
 
 	/* First look up the cache */
 	db = lookup_cache(NULL, curloc, catname);

@@ -22,6 +22,9 @@
 /*
  * Copyright 2008 Sun Microsystems, Inc.  All rights reserved.
  * Use is subject to license terms.
+ *
+ * Copyright 2019, Joyent, Inc.
+ * Copyright 2023 Oxide Computer Company
  */
 
 #include <stdio.h>
@@ -538,40 +541,19 @@ static int
 get_num_chips(topo_mod_t *mod)
 {
 	fmd_agent_hdl_t *hdl;
-	nvlist_t **cpus;
-	uint_t ncpu;
-	int i, nchip = 0;
-	int32_t chipid;
-	uint64_t bitmap = 0;
+	uint8_t nchip;
 
 	if ((hdl = fmd_agent_open(FMD_AGENT_VERSION)) == NULL)
 		return (-1);
-	if (fmd_agent_physcpu_info(hdl, &cpus, &ncpu) == -1) {
-		topo_mod_dprintf(mod, "get physcpu info failed:%s\n",
+	if (fmd_agent_chip_count(hdl, &nchip) == -1) {
+		topo_mod_dprintf(mod, "get physcpu count failed: %s\n",
 		    fmd_agent_errmsg(hdl));
 		fmd_agent_close(hdl);
 		return (-1);
 	}
 	fmd_agent_close(hdl);
 
-	for (i = 0; i < ncpu; i++) {
-		if (nvlist_lookup_int32(cpus[i], FM_PHYSCPU_INFO_CHIP_ID,
-		    &chipid) != 0 || chipid >= 64) {
-			topo_mod_dprintf(mod, "lookup chipid failed\n");
-			nchip = -1;
-			break;
-		}
-		if ((bitmap & (1 << chipid)) != 0) {
-			bitmap |= (1 << chipid);
-			nchip++;
-		}
-	}
-
-	for (i = 0; i < ncpu; i++)
-		nvlist_free(cpus[i]);
-	umem_free(cpus, sizeof (nvlist_t *) * ncpu);
-
-	return (nchip);
+	return ((int)nchip);
 }
 
 /*
@@ -660,7 +642,7 @@ a4fplus_chip_label(topo_mod_t *mod, tnode_t *node, topo_version_t vers,
  *
  * This function computes the DIMM slot number using the following formula:
  *
- * 	slot = cs - (cs % 2) + channel + offset
+ *	slot = cs - (cs % 2) + channel + offset
  */
 /* ARGSUSED */
 int
@@ -746,9 +728,9 @@ g4_dimm_label(topo_mod_t *mod, tnode_t *node, topo_version_t vers,
 	chip = topo_node_parent(topo_node_parent(node));
 	if (topo_prop_get_string(chip, TOPO_PGROUP_PROTOCOL, "label", &chip_lbl,
 	    &err) != 0) {
-		topo_mod_dprintf(mod, "Failed to lookup label prop on %s=%d\n",
-		    topo_node_name(chip), topo_node_instance(chip),
-		    topo_strerror(err));
+		topo_mod_dprintf(mod, "Failed to lookup label prop on %s=%"
+		    PRIu64 ": %s\n", topo_node_name(chip),
+		    topo_node_instance(chip), topo_strerror(err));
 		return (topo_mod_seterrno(mod, EMOD_NVL_INVAL));
 	}
 

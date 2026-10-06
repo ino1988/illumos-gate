@@ -21,10 +21,11 @@
 /*
  * Copyright 2009 Sun Microsystems, Inc.  All rights reserved.
  * Use is subject to license terms.
+ * Copyright 2018 Joyent, Inc.
  */
 
 /*	Copyright (c) 1984, 1986, 1987, 1988, 1989 AT&T	*/
-/*	  All Rights Reserved  	*/
+/*	  All Rights Reserved	*/
 
 /*
  * University Copyright- Copyright (c) 1982, 1986, 1988
@@ -98,6 +99,7 @@ typedef struct	segvn_data {
 	size_t	swresv;		/* swap space reserved for this segment */
 	uchar_t	advice;		/* madvise flags for segment */
 	uchar_t	pageadvice;	/* true if per page advice set */
+	uchar_t svn_inz;	/* true if pages marked as inherit zero */
 	ushort_t flags;		/* flags - from sys/mman.h */
 	spgcnt_t softlockcnt;	/* # of pages SOFTLOCKED in seg */
 	lgrp_mem_policy_info_t policy_info; /* memory allocation policy */
@@ -120,6 +122,13 @@ typedef struct	segvn_data {
 #define	SEGVN_TR_INIT	(0)	/* Check if text replication can be enabled */
 #define	SEGVN_TR_ON	(1)	/* Text replication is enabled */
 #define	SEGVN_TR_OFF	(2)	/* Text replication is disabled */
+
+/*
+ * Inherit zero states
+ */
+#define	SEGVN_INZ_NONE	(0)	/* Nothing in the segment is inherit zero */
+#define	SEGVN_INZ_ALL	(1)	/* Everything in the segment is inherit zero */
+#define	SEGVN_INZ_VPP	(2)	/* Check struct vpages for inherit zero */
 
 /*
  * Macros for segvn segment driver locking.
@@ -153,14 +162,14 @@ typedef struct	segvn_data {
 	{ NULL, NULL, 0, MAP_PRIVATE, prot, max, 0, NULL, 0, 0 }
 
 #define	AS_MAP_CHECK_VNODE_LPOOB(crfp, argsp)				\
-	((crfp) == (int (*)())segvn_create &&				\
+	((crfp) == (segcreate_func_t)segvn_create &&			\
 	(((struct segvn_crargs *)(argsp))->flags &			\
 	    (MAP_TEXT | MAP_INITDATA)) &&				\
 	((struct segvn_crargs *)(argsp))->szc == 0 &&			\
 	((struct segvn_crargs *)(argsp))->vp != NULL)
 
 #define	AS_MAP_CHECK_ANON_LPOOB(crfp, argsp)				\
-	((crfp) == (int (*)())segvn_create &&				\
+	((crfp) == (segcreate_func_t)segvn_create &&			\
 	(((struct segvn_crargs *)(argsp))->szc == 0 ||			\
 	((struct segvn_crargs *)(argsp))->szc == AS_MAP_HEAP ||		\
 	((struct segvn_crargs *)(argsp))->szc == AS_MAP_STACK) &&	\
@@ -219,7 +228,7 @@ typedef struct svntr_stats {
 } svntr_stats_t;
 
 extern void	segvn_init(void);
-extern int	segvn_create(struct seg *, void *);
+extern int	segvn_create(struct seg **, void *);
 
 extern	struct seg_ops segvn_ops;
 

@@ -19,7 +19,7 @@
  * CDDL HEADER END
  */
 /*	Copyright (c) 1989 AT&T	*/
-/*	  All Rights Reserved  	*/
+/*	  All Rights Reserved	*/
 
 
 /*
@@ -27,22 +27,19 @@
  * Use is subject to license terms.
  */
 
-#pragma ident	"%Z%%M%	%I%	%E% SMI"
+/*
+ * Copyright (c) 2018, Joyent, Inc.
+ */
 
-#include "stdio.h"
-
-extern void exit();
+#include <stdio.h>
+#include <stdlib.h>
 
 #pragma weak yylex
-extern int  yylex();
+extern int  yylex(void);
 
-/* ARGSUSED */
 int
-main(int argc, char **argv)
+main(int argc __unused, char **argv __unused)
 {
-	yylex();
+	(void) yylex();
 	exit(0);
-
-	/*NOTREACHED*/
-	return (0);
 }

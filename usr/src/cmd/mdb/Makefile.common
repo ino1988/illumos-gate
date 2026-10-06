@@ -18,27 +18,44 @@
 #
 # CDDL HEADER END
 #
+
+#
 # Copyright (c) 1999, 2010, Oracle and/or its affiliates. All rights reserved.
+# Copyright 2016 Joyent, Inc.
+# Copyright 2018 Nexenta Systems, Inc.
+# Copyright 2021 Tintri by DDN, Inc. All rights reserved.
+# Copyright 2022 Garrett D'Amore
+#
+
 #
 # MDB modules used for debugging user processes that every ISA's build
 # subdirectory will need to build.
 #
- 
+
 COMMON_MODULES_PROC = \
 	dof \
 	libavl \
 	libc \
-	libcmdutils \
+	libfknsmb \
+	libfksmbfs \
+	libfksmbsrv \
+	libmlsvc \
 	libnvpair \
 	libproc \
-	libpython2.6 \
 	libsysevent \
 	libtopo \
 	libumem \
 	libuutil \
 	libzpool \
+	list \
 	mdb_ds \
 	mdb_test
+
+#
+# MDB modules used for debugging user processes which are only 64-bit
+#
+COMMON_MODULES_PROC_64BIT = \
+	libpython
 
 #
 # MDB modules used for debugging user processes which are only 32-bit
@@ -63,30 +80,28 @@ COMMON_MODULES_KVM = \
 	hook \
 	neti \
 	idm \
-	ii \
 	ip \
 	ipc \
 	ipp \
+	klmmod \
 	krtld \
 	lofs \
 	logindmux \
 	mac \
-	md \
+	mm \
 	mpt_sas \
 	mr_sas \
-	nca \
-	nsctl \
+	nfs \
 	nsmb \
 	pmcs \
 	ptm \
 	qlc \
 	random \
-	rdc \
 	s1394 \
 	scsi_vhci \
 	sctp \
 	sd \
-	sdbc \
+	smartpqi \
 	smbfs \
 	smbsrv \
 	sockfs \
@@ -95,13 +110,8 @@ COMMON_MODULES_KVM = \
 	srpt \
 	stmf \
 	stmf_sbd \
-	sv \
 	ufs \
 	usba \
 	zfs
-
-CLOSED_COMMON_MODULES_KVM = \
-	mpt \
-	nfs
 
 include $(SRC)/Makefile.master

@@ -2,26 +2,28 @@
 <!DOCTYPE service_bundle SYSTEM "/usr/share/lib/xml/dtd/service_bundle.dtd.1">
 <!--
     CDDL HEADER START
-   
+
     The contents of this file are subject to the terms of the
     Common Development and Distribution License (the "License").
     You may not use this file except in compliance with the License.
-   
+
     You can obtain a copy of the license at usr/src/OPENSOLARIS.LICENSE
     or http://www.opensolaris.org/os/licensing.
     See the License for the specific language governing permissions
     and limitations under the License.
-   
+
     When distributing Covered Code, include this CDDL HEADER in each
     file and include the License file at usr/src/OPENSOLARIS.LICENSE.
     If applicable, add the following below this CDDL HEADER, with the
     fields enclosed by brackets "[]" replaced with your own identifying
     information: Portions Copyright [yyyy] [name of copyright owner]
-   
+
     CDDL HEADER END
-   
+
     Copyright 2009 Sun Microsystems, Inc.  All rights reserved.
     Use is subject to license terms.
+
+    Copyright 2016 Hans Rosenfeld <rosenfeld@grumpf.hope-2000.org>
 
     NOTE:  This service manifest is not editable; its contents will
     be overwritten by package or patch operations, including
@@ -49,7 +51,7 @@
 	</dependency>
 
 	<!--
-	  syslogd(1M) can log to non-root local directories.
+	  syslogd(8) can log to non-root local directories.
 	-->
 	<dependency
 		name='filesystem'
@@ -60,7 +62,7 @@
 	</dependency>
 
 	<!--
-	  syslogd(1M) can log to automounted files.
+	  syslogd(8) can log to automounted files.
 	-->
 	<dependency
 		name='autofs'
@@ -71,7 +73,7 @@
 	</dependency>
 
 	<!--
-	  syslogd(1M) needs nameservice resolution to log to remote hosts.
+	  syslogd(8) needs nameservice resolution to log to remote hosts.
 	-->
 	<dependency
 		name='name-services'
@@ -117,7 +119,7 @@
 	</property_group>
 
 	<property_group name='config' type='application'>
-		<!-- default property settings for syslogd(1m) -->
+		<!-- default property settings for syslogd(8) -->
 
 		<!-- Specifies whether remote messages are logged.
 		     log_from_remote=false is equivalent to the -t
@@ -140,8 +142,14 @@
 
 	<property_group name='firewall_config' type='com.sun,fw_configuration'>
 		<propval name='policy' type='astring' value='use_global' />
+		<propval name='block_policy' type='astring'
+			value='use_global' />
 		<propval name='apply_to' type='astring' value='' />
+		<propval name='apply_to_6' type='astring' value='' />
 		<propval name='exceptions' type='astring' value='' />
+		<propval name='exceptions_6' type='astring' value='' />
+		<propval name='target' type='astring' value='' />
+		<propval name='target_6' type='astring' value='' />
 		<propval name='value_authorization' type='astring'
 			value='solaris.smf.value.firewall.config' />
 	</property_group>
@@ -154,7 +162,7 @@
 			</loctext>
 		</common_name>
 		<documentation>
-			<manpage title='syslogd' section='1M'
+			<manpage title='syslogd' section='8'
 				manpath='/usr/share/man' />
 		</documentation>
 	</template>

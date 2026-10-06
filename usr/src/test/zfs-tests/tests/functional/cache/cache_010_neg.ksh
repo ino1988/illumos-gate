@@ -26,7 +26,8 @@
 #
 
 #
-# Copyright (c) 2013 by Delphix. All rights reserved.
+# Copyright (c) 2013, 2016 by Delphix. All rights reserved.
+# Copyright 2019 Joyent, Inc.
 #
 
 . $STF_SUITE/tests/functional/cache/cache.cfg
@@ -34,12 +35,12 @@
 
 #
 # DESCRIPTION:
-#	Verify cache device must be a block device.
+#	Verify cache device must be a block device or plain file.
 #
 # STRATEGY:
 #	1. Create a pool
-#	2. Add different object as cache
-#	3. Verify character devices and files fail
+#	2. Verify that raw disks, loopback files, and zvols can't be used to
+#	    back cache vdevs
 #
 
 verify_runnable "global"
@@ -48,37 +49,38 @@ function cleanup_testenv
 {
 	cleanup
 	if [[ -n $lofidev ]]; then
-		log_must $LOFIADM -d $lofidev
+		log_must lofiadm -d $lofidev
 	fi
 }
 
-log_assert "Cache device can only be block devices."
+log_assert "Cache device can only be block devices or plain files."
 log_onexit cleanup_testenv
 
 TESTVOL=testvol1$$
 dsk1=${DISKS%% *}
-log_must $ZPOOL create $TESTPOOL ${DISKS#$dsk1}
 
-# Add nomal /dev/rdsk device
-log_mustnot $ZPOOL add $TESTPOOL cache /dev/rdsk/${dsk1}s0
+log_must zpool create $TESTPOOL ${DISKS#$dsk1}
+
+# Add normal /dev/rdsk device
+log_mustnot zpool add $TESTPOOL cache /dev/rdsk/${dsk1}s0
 #log_must verify_cache_device $TESTPOOL $dsk1 'ONLINE'
-
-# Add nomal file
-log_mustnot $ZPOOL add $TESTPOOL cache $VDEV2
 
 # Add /dev/rlofi device
 lofidev=${VDEV2%% *}
-log_must $LOFIADM -a $lofidev
-lofidev=$($LOFIADM $lofidev)
-log_mustnot $ZPOOL add $TESTPOOL cache "/dev/rlofi/${lofidev#/dev/lofi/}"
+log_must lofiadm -a $lofidev
+lofidev=$(lofiadm $lofidev)
+log_mustnot zpool add $TESTPOOL cache "/dev/rlofi/${lofidev#/dev/lofi/}"
 if [[ -n $lofidev ]]; then
-	log_must $LOFIADM -d $lofidev
+	log_must lofiadm -d $lofidev
 	lofidev=""
 fi
 
-# Add /dev/zvol/rdsk device
-log_must $ZPOOL create $TESTPOOL2 $VDEV2
-log_must $ZFS create -V $SIZE $TESTPOOL2/$TESTVOL
-log_mustnot $ZPOOL add $TESTPOOL cache /dev/zvol/rdsk/$TESTPOOL2/$TESTVOL
+# Add normal files
+log_must zpool add $TESTPOOL cache $FILEDEV
 
-log_pass "Cache device can only be block devices."
+# Add /dev/zvol/rdsk device
+log_must zpool create $TESTPOOL2 $VDEV2
+log_must zfs create -V $SIZE $TESTPOOL2/$TESTVOL
+log_mustnot zpool add $TESTPOOL cache /dev/zvol/rdsk/$TESTPOOL2/$TESTVOL
+
+log_pass "Cache device can only be block devices or plain files."

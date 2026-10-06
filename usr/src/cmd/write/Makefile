@@ -21,13 +21,12 @@
 # Copyright 2009 Sun Microsystems, Inc.  All rights reserved.
 # Use is subject to license terms.
 #
-# cmd/write/Makefile
+# Copyright (c) 2018, Joyent, Inc.
 
 PROG= write
 
 include ../Makefile.cmd
 
-SED= sed
 DCFILE= $(PROG).dc
 
 FILEMODE = 02555
@@ -37,6 +36,8 @@ XGETFLAGS += -a -x write.xcl
 
 CFLAGS += $(CCVERBOSE)
 CERRWARN += -_gcc=-Wno-unused-variable
+
+SMOFF += all_func_returns
 
 all: $(PROG)
 

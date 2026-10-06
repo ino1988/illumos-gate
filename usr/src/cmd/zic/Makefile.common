@@ -1,0 +1,16 @@
+#
+# Copyright 2009 Sun Microsystems, Inc.  All rights reserved.
+# Use is subject to license terms.
+#
+# Copyright (c) 2018, Joyent, Inc.
+
+PROG=		zic
+
+OBJS=		zic.o
+SRCS=		$(OBJS:%.o=%.c)
+
+CSTD =		$(CSTD_GNU17)
+CERRWARN +=	-_gcc=-Wno-unused-variable
+CERRWARN +=	$(CNOWARN_UNINIT)
+
+SMATCH =	off

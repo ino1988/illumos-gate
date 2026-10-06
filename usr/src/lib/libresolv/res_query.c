@@ -20,12 +20,13 @@
  */
 
 /*
+ * Copyright 2015 Gary Mills
  * Copyright 2008 Sun Microsystems, Inc.  All rights reserved.
  * Use is subject to license terms.
  */
 
 /*	Copyright (c) 1984, 1986, 1987, 1988, 1989 AT&T	*/
-/*	  All Rights Reserved  	*/
+/*	  All Rights Reserved	*/
 
 /*
  * University Copyright- Copyright (c) 1982, 1986, 1988
@@ -37,8 +38,6 @@
  * contributors.
  */
 
-#pragma ident	"%Z%%M%	%I%	%E% SMI"
-
 #include <sys/param.h>
 #include <sys/socket.h>
 #include <netinet/in.h>
@@ -47,17 +46,17 @@
 #include <stdio.h>
 #include <errno.h>
 #include <string.h>
+#include <stdlib.h>
 #include <arpa/inet.h>
 #include <arpa/nameser.h>
 #include <resolv.h>
+#include "crossl.h"
 
 #if PACKETSZ > 1024
 #define	MAXPACKET	PACKETSZ
 #else
 #define	MAXPACKET	1024
 #endif
-
-int h_errno;
 
 /*
  * Formulate a normal query, send, and await answer.
@@ -96,7 +95,7 @@ res_query(name, class, type, answer, anslen)
 		h_errno = NO_RECOVERY;
 		return (n);
 	}
-	n = res_send(buf, n, answer, anslen);
+	n = res_send(buf, n, (char *)answer, anslen);
 	if (n < 0) {
 #ifdef DEBUG
 		if (_res.options & RES_DEBUG)
@@ -271,7 +270,7 @@ hostalias(name)
 {
 	register char *C1, *C2;
 	FILE *fp;
-	char *file, *getenv(), *strcpy(), *strncpy();
+	char *file;
 	char buf[BUFSIZ];
 	static char abuf[MAXDNAME];
 

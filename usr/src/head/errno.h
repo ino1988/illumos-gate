@@ -20,7 +20,7 @@
  * CDDL HEADER END
  */
 /*	Copyright (c) 1988 AT&T	*/
-/*	  All Rights Reserved  	*/
+/*	  All Rights Reserved	*/
 
 
 /*
@@ -31,8 +31,6 @@
 
 #ifndef _ERRNO_H
 #define	_ERRNO_H
-
-#pragma ident	"%Z%%M%	%I%	%E% SMI"	/* SVr4.0 1.4.1.5 */
 
 /*
  * Error codes
@@ -61,6 +59,14 @@ extern int errno;
 #define	errno errno
 #endif
 #endif	/* defined(_REENTRANT) || defined(_TS_ERRNO) */
+
+#if __EXT1_VISIBLE
+/* ISO/IEC 9899:2011 K.3.2.2 */
+#ifndef	_ERRNO_T_DEFINED
+#define	_ERRNO_T_DEFINED
+typedef int errno_t;
+#endif
+#endif	/* __EXT1_VISIBLE */
 
 #ifdef	__cplusplus
 }

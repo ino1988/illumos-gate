@@ -2,13 +2,13 @@
 # Copyright 2008 Sun Microsystems, Inc.  All rights reserved.
 # Use is subject to license terms.
 #
-#
+# Copyright (c) 2018, Joyent, Inc.
 
 PROG= klist
 
-OUTPUT_OPTION = -I. 
+OUTPUT_OPTION = -I.
 
-OBJS	= klist.o                       
+OBJS	= klist.o
 SRCS	= $(OBJS:.o=.c)
 
 include ../../Makefile.cmd
@@ -28,13 +28,16 @@ LDFLAGS += $(KRUNPATH)
 LDLIBS += $(KMECHLIB)
 CERRWARN += -_gcc=-Wno-unused-function
 
-$(GPROGS) := CPPFLAGS += -DSYSV -DSunOS=50 
+# not linted
+SMATCH=off
+
+$(GPROGS) := CPPFLAGS += -DSYSV -DSunOS=50
 
 .KEEP_STATE:
 
 all: $(PROG)
 
-$(PROG):       $(OBJS)  
+$(PROG):       $(OBJS)
 	$(LINK.c) $(OBJS) -o $@ $(LDLIBS)
 	$(POST_PROCESS)
 
@@ -45,13 +48,11 @@ install_h:
 clean:
 	$(RM) $(OBJS)
 
-lint: lint_SRCS
-
 include ../../Makefile.targ
 
-$(POFILE): $(DERIVED_FILES) .WAIT $(POFILES) 
-	$(RM) $@ 
-	$(CAT) $(POFILES) > $@ 
+$(POFILE): $(DERIVED_FILES) .WAIT $(POFILES)
+	$(RM) $@
+	$(CAT) $(POFILES) > $@
 
 generic.po:
 	$(RM) messages.po

@@ -23,6 +23,9 @@
  * Copyright 2010 Sun Microsystems, Inc.  All rights reserved.
  * Use is subject to license terms.
  */
+/*
+ * Copyright 2019 Joyent, Inc.
+ */
 
 /*
  * USB Serial CDC ACM driver
@@ -218,6 +221,7 @@
 #define	USBDRV_MAJOR_VER	2
 #define	USBDRV_MINOR_VER	0
 #include <sys/usb/usba.h>
+#include <sys/usb/usbdevs.h>
 #include <sys/usb/usba/usba_types.h>
 #include <sys/usb/clients/usbser/usbser.h>
 #include <sys/usb/clients/usbser/usbser_dsdi.h>
@@ -444,30 +448,38 @@ static ds_ops_t usbsacm_ds_ops = {
  * baud code -> baud rate (0 means unsupported rate)
  */
 static int usbsacm_speedtab[] = {
-	0,	/* B0 */
-	50,	/* B50 */
-	75,	/* B75 */
-	110,	/* B110 */
-	134,	/* B134 */
-	150,	/* B150 */
-	200,	/* B200 */
-	300,	/* B300 */
-	600,	/* B600 */
-	1200,	/* B1200 */
-	1800,	/* B1800 */
-	2400,	/* B2400 */
-	4800,	/* B4800 */
-	9600,	/* B9600 */
-	19200,	/* B19200 */
-	38400,	/* B38400 */
-	57600,	/* B57600 */
-	76800,	/* B76800 */
-	115200,	/* B115200 */
-	153600,	/* B153600 */
-	230400,	/* B230400 */
-	307200,	/* B307200 */
-	460800,	/* B460800 */
-	921600	/* B921600 */
+	0,		/* B0 */
+	50,		/* B50 */
+	75,		/* B75 */
+	110,		/* B110 */
+	134,		/* B134 */
+	150,		/* B150 */
+	200,		/* B200 */
+	300,		/* B300 */
+	600,		/* B600 */
+	1200,		/* B1200 */
+	1800,		/* B1800 */
+	2400,		/* B2400 */
+	4800,		/* B4800 */
+	9600,		/* B9600 */
+	19200,		/* B19200 */
+	38400,		/* B38400 */
+	57600,		/* B57600 */
+	76800,		/* B76800 */
+	115200,		/* B115200 */
+	153600,		/* B153600 */
+	230400,		/* B230400 */
+	307200,		/* B307200 */
+	460800,		/* B460800 */
+	921600,		/* B921600 */
+	1000000,	/* B1000000 */
+	1152000,	/* B1152000 */
+	1500000,	/* B1500000 */
+	2000000,	/* B2000000 */
+	2500000,	/* B2500000 */
+	3000000,	/* B3000000 */
+	3500000,	/* B3500000 */
+	4000000,	/* B4000000 */
 };
 
 
@@ -540,7 +552,7 @@ usbsacm_detach(dev_info_t *dip, ddi_detach_cmd_t cmd)
 
 int
 usbsacm_getinfo(dev_info_t *dip, ddi_info_cmd_t infocmd, void *arg,
-		void **result)
+    void **result)
 {
 	return (usbser_getinfo(dip, infocmd, arg, result, usbsacm_statep));
 }
@@ -1675,10 +1687,12 @@ usbsacm_get_descriptors(usbsacm_state_t *acmp)
 	int			mgmt_cap = 0;
 	int			master_if = -1, slave_if = -1;
 	usbsacm_port_t		*acm_port = acmp->acm_ports;
+	usb_dev_descr_t		*dd;
 
 	USB_DPRINTF_L4(PRINT_MASK_ATTA, acmp->acm_lh,
 	    "usbsacm_get_descriptors: ");
 
+	dd = acmp->acm_dev_data->dev_descr;
 	cfg = acmp->acm_dev_data->dev_curr_cfg;
 	/* set default control and data interface */
 	acm_port->acm_ctrl_if_no = acm_port->acm_data_if_no = 0;
@@ -1722,6 +1736,20 @@ usbsacm_get_descriptors(usbsacm_state_t *acmp)
 			/* parse ACM functional descriptor. */
 			if (cvs->cvs_buf_len >= 4) {
 				acm_port->acm_cap = cvs->cvs_buf[3];
+			}
+
+			/*
+			 * The Sigma Designs, Inc. USB device does not report
+			 * itself as implementing the full ACM spec. However,
+			 * it does function as a usb serial modem, so we opt to
+			 * scribble in the reported functionality if we
+			 * determine the USB device matches this vendor
+			 * and product ID.
+			 */
+			if (dd->idVendor == USB_VENDOR_SIGMADESIGNS &&
+			    dd->idProduct == USB_PRODUCT_SIGMADESIGNS_ZW090) {
+				acm_port->acm_cap |=
+				    USB_CDC_ACM_CAP_SERIAL_LINE;
 			}
 			break;
 		case USB_CDC_DESCR_TYPE_UNION:

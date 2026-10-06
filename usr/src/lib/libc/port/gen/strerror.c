@@ -23,30 +23,63 @@
  * Copyright 2008 Sun Microsystems, Inc.  All rights reserved.
  * Use is subject to license terms.
  */
+/*
+ * Copyright 2015 Joyent, Inc.
+ * Copyright 2025 Oxide Computer Company
+ */
 
 /*	Copyright (c) 1988 AT&T	*/
-/*	  All Rights Reserved  	*/
-
-#pragma ident	"%Z%%M%	%I%	%E% SMI"
+/*	  All Rights Reserved	*/
 
 #include "lint.h"
 #include "_libc_gettext.h"
+#include "syserr.h"
+#include "thr_uberdata.h"
 #include <string.h>
 #include <sys/types.h>
 #include <errno.h>
 
-extern const char _sys_errs[];
-extern const int _sys_index[];
-extern int _sys_num_err;
+char *
+strerror_l(int errnum, locale_t loc)
+{
+	if (errnum < _sys_num_nerr && errnum >= 0)
+		return (_libc_gettext_l(&_sys_nerrs[_sys_nindex[errnum]],
+		    loc));
+
+	errno = EINVAL;
+	return (_libc_gettext_l("Unknown error", loc));
+}
 
 char *
 strerror(int errnum)
 {
-	if (errnum < _sys_num_err && errnum >= 0)
-		return (_libc_gettext((char *)&_sys_errs[_sys_index[errnum]]));
+	return (strerror_l(errnum, __curlocale()));
+}
+
+/*
+ * A version of sterror() that always operates in the C locale. It returns NULL
+ * rather than the "Unknown error" string.
+ */
+const char *
+strerrordesc_np(int errnum)
+{
+	if (errnum < _sys_num_nerr && errnum >= 0)
+		return (&_sys_nerrs[_sys_nindex[errnum]]);
 
 	errno = EINVAL;
-	return (_libc_gettext("Unknown error"));
+	return (NULL);
+}
+
+const char *
+strerrorname_np(int errnum)
+{
+	if (errnum >= 0 && errnum < _sys_num_nerr &&
+	    _sys_err_names[errnum] != NULL) {
+		return (_sys_err_names[errnum]);
+	}
+
+	errno = EINVAL;
+	return (NULL);
 }
 
 /*
@@ -58,8 +91,8 @@ strerror_r(int errnum, char *strerrbuf, size_t buflen)
 	char *buf;
 	int ret = 0;
 
-	if (errnum < _sys_num_err && errnum >= 0) {
-		buf = _libc_gettext((char *)&_sys_errs[_sys_index[errnum]]);
+	if (errnum < _sys_num_nerr && errnum >= 0) {
+		buf = _libc_gettext((char *)&_sys_nerrs[_sys_nindex[errnum]]);
 	} else {
 		buf = _libc_gettext("Unknown error");
 		ret = errno = EINVAL;

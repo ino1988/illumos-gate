@@ -20,30 +20,34 @@
 #
 #
 # Copyright (c) 2010, Oracle and/or its affiliates. All rights reserved.
+# Copyright 2021 OmniOS Community Edition (OmniOSce) Association.
 #
 
 LIBRARY=	libzonecfg.a
 VERS=		.1
-OBJECTS=	libzonecfg.o getzoneent.o scratchops.o
+OBJECTS=	libzonecfg.o getzoneent.o scratchops.o definit.o
 
 include ../../Makefile.lib
 
-LIBS =		$(DYNLIB) $(LINTLIB)
-LDLIBS +=	-lc -lsocket -lnsl -luuid -lnvpair -lsysevent -lsec -lbrand \
+LIBS =		$(DYNLIB)
+LDLIBS +=	-lc -lsocket -luuid -lnvpair -lsysevent -lsec -lbrand \
 		-lpool -lscf -lproc -luutil -lbsm -lsecdb
 # DYNLIB libraries do not have lint libs and are not linted
 $(DYNLIB) :=	LDLIBS += -lxml2
+NATIVE_LIBS +=	libxml2.so
 
 SRCDIR =	../common
 CPPFLAGS +=	-I$(ADJUNCT_PROTO)/usr/include/libxml2 -I$(SRCDIR) -D_REENTRANT
-CERRWARN +=	-_gcc=-Wno-uninitialized
+CPPFLAGS +=	-I$(SRC)/common/definit
+CERRWARN +=	$(CNOWARN_UNINIT)
 CERRWARN +=	-_gcc=-Wno-parentheses
-$(LINTLIB) := SRCS=	$(SRCDIR)/$(LINTSRC)
 
 .KEEP_STATE:
 
 all:	$(LIBS)
 
-lint:	lintcheck
+pics/%.o:	$(SRC)/common/definit/%.c
+		$(COMPILE.c) -o $@ $<
+		$(POST_PROCESS_O)
 
 include ../../Makefile.targ

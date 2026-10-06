@@ -32,6 +32,7 @@
  *    down the list of Tavor configuration information.
  */
 
+#include <sys/sysmacros.h>
 #include <sys/types.h>
 #include <sys/conf.h>
 #include <sys/ddi.h>
@@ -267,8 +268,6 @@ tavor_cfg_profile_init_phase1(tavor_state_t *state)
 {
 	tavor_cfg_profile_t	*cp;
 
-	TAVOR_TNF_ENTER(tavor_cfg_profile_init_phase1);
-
 	/*
 	 * Allocate space for the configuration profile structure
 	 */
@@ -349,8 +348,6 @@ tavor_cfg_profile_init_phase1(tavor_state_t *state)
 		cp->cp_log_max_srq_sz		= TAVOR_SRQ_SZ_SHIFT_MIN;
 
 	} else {
-		TNF_PROBE_0(tavor_cfg_profile_invalid_dimmsz_fail,
-		    TAVOR_TNF_ERROR, "");
 		return (DDI_FAILURE);
 	}
 
@@ -364,8 +361,6 @@ tavor_cfg_profile_init_phase1(tavor_state_t *state)
 
 		/* Can't do both "streaming" and IOMMU bypass */
 		if (tavor_iommu_bypass != 0) {
-			TNF_PROBE_0(tavor_cfg_profile_streamingbypass_fail,
-			    TAVOR_TNF_ERROR, "");
 			kmem_free(cp, sizeof (tavor_cfg_profile_t));
 			return (DDI_FAILURE);
 		}
@@ -382,7 +377,6 @@ tavor_cfg_profile_init_phase1(tavor_state_t *state)
 	/* Attach the configuration profile to Tavor softstate */
 	state->ts_cfg_profile = cp;
 
-	TAVOR_TNF_EXIT(tavor_cfg_profile_init_phase1);
 	return (DDI_SUCCESS);
 }
 
@@ -394,8 +388,6 @@ int
 tavor_cfg_profile_init_phase2(tavor_state_t *state)
 {
 	tavor_cfg_profile_t	*cp;
-
-	TAVOR_TNF_ENTER(tavor_cfg_profile_init_phase2);
 
 	/* Read the configuration profile from Tavor softstate */
 	cp = state->ts_cfg_profile;
@@ -575,8 +567,6 @@ tavor_cfg_profile_init_phase2(tavor_state_t *state)
 		cp->cp_max_mem_rd_byte_cnt	= tavor_max_mem_rd_byte_cnt;
 
 	} else {
-		TNF_PROBE_0(tavor_cfg_profile_invalid_dimmsz_fail,
-		    TAVOR_TNF_ERROR, "");
 		return (DDI_FAILURE);
 	}
 
@@ -608,7 +598,6 @@ tavor_cfg_profile_init_phase2(tavor_state_t *state)
 	/* Determine additional configuration from optional properties */
 	tavor_cfg_prop_lookup(state, cp);
 
-	TAVOR_TNF_EXIT(tavor_cfg_profile_init_phase2);
 	return (DDI_SUCCESS);
 }
 
@@ -620,14 +609,10 @@ tavor_cfg_profile_init_phase2(tavor_state_t *state)
 void
 tavor_cfg_profile_fini(tavor_state_t *state)
 {
-	TAVOR_TNF_ENTER(tavor_cfg_profile_fini);
-
 	/*
 	 * Free up the space for configuration profile
 	 */
 	kmem_free(state->ts_cfg_profile, sizeof (tavor_cfg_profile_t));
-
-	TAVOR_TNF_EXIT(tavor_cfg_profile_fini);
 }
 
 
@@ -657,7 +642,7 @@ tavor_cfg_wqe_sizes(tavor_cfg_profile_t *cp)
 	 */
 	max_size = (TAVOR_QP_WQE_MLX_QP1_HDRS + (max_sgl << 4));
 	log2 = highbit(max_size);
-	if ((max_size & (max_size - 1)) == 0) {
+	if (ISP2(max_size)) {
 		log2 = log2 - 1;
 	}
 	max_size = (1 << log2);

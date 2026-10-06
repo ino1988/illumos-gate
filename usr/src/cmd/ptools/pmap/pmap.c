@@ -24,9 +24,14 @@
  * Use is subject to license terms.
  */
 
+/*
+ * Copyright 2025 Oxide Computer Company
+ */
+
 #include <stdio.h>
 #include <stdio_ext.h>
 #include <stdlib.h>
+#include <stddef.h>
 #include <unistd.h>
 #include <ctype.h>
 #include <fcntl.h>
@@ -41,6 +46,7 @@
 #include <sys/mkdev.h>
 #include <sys/mman.h>
 #include <sys/lgrp_user.h>
+#include <sys/debug.h>
 #include <libproc.h>
 
 #include "pmap_common.h"
@@ -143,6 +149,7 @@ static	int	aflag = 0;
  */
 static  uintptr_t start_addr = INVALID_ADDRESS;
 static	uintptr_t end_addr = INVALID_ADDRESS;
+static	uintptr_t comm_page = INVALID_ADDRESS;
 
 static	int	addr_width, size_width;
 static	char	*command;
@@ -168,10 +175,38 @@ static	uint_t	nstacks = 0;
 
 #define	MAX_TRIES	5
 
+static boolean_t
+reallocstacks(uint_t newcount)
+{
+	lwpstack_t *newstacks;
+
+	newstacks = recallocarray(stacks, nstacks, newcount,
+	    sizeof (lwpstack_t));
+	if (newstacks != NULL) {
+		stacks = newstacks;
+		nstacks = newcount;
+		return (B_TRUE);
+	}
+	return (B_FALSE);
+}
+
 static int
 getstack(void *data, const lwpstatus_t *lsp)
 {
-	int *np = (int *)data;
+	uint_t *np = (uint_t *)data;
+
+	/*
+	 * In the unlikely event that the number of LWPs has increased since we
+	 * allocated the stacks array to hold them, expand the space for these
+	 * next two entries.
+	 */
+	if (*np + 2 > nstacks && !reallocstacks(nstacks + 2)) {
+		(void) fprintf(stderr, "%s: warning: "
+		    "number of LWPs changed during execution, some details "
+		    "have been omitted.\n", command);
+		/* Terminate the walk */
+		return (1);
+	}
 
 	if (Plwp_alt_stack(Pr, lsp->pr_lwpid, &stacks[*np].lwps_stack) == 0) {
 		stacks[*np].lwps_stack.ss_flags |= SS_ONSTACK;
@@ -183,6 +218,8 @@ getstack(void *data, const lwpstatus_t *lsp)
 		stacks[*np].lwps_lwpid = lsp->pr_lwpid;
 		(*np)++;
 	}
+
+	VERIFY3U(*np, <=, nstacks);
 
 	return (0);
 }
@@ -422,10 +459,12 @@ again:
 				}
 			}
 
-			nstacks = psinfo.pr_nlwp * 2;
-			stacks = calloc(nstacks, sizeof (stacks[0]));
-			if (stacks != NULL) {
-				int n = 0;
+			/*
+			 * Multiplied by 2 to accomodate the main and alt
+			 * stack for each LWP.
+			 */
+			if (reallocstacks(psinfo.pr_nlwp * 2)) {
+				uint_t n = 0;
 				(void) Plwp_iter(Pr, getstack, &n);
 				qsort(stacks, nstacks, sizeof (stacks[0]),
 				    cmpstacks);
@@ -444,6 +483,7 @@ again:
 			/*
 			 * Gather data
 			 */
+			comm_page = Pgetauxval(Pr, AT_SUN_COMMPAGE);
 			if (xflag)
 				rc += xmapping_iter(Pr, gather_xmap, NULL, 0);
 			else if (Sflag)
@@ -475,6 +515,7 @@ again:
 					if (stacks != NULL) {
 						free(stacks);
 						stacks = NULL;
+						nstacks = 0;
 					}
 					goto again;
 				}
@@ -566,6 +607,7 @@ again:
 			if (stacks != NULL) {
 				free(stacks);
 				stacks = NULL;
+				nstacks = 0;
 			}
 
 		}
@@ -677,37 +719,80 @@ again:
 	return (0);
 }
 
-/*ARGSUSED*/
+static const char *
+mapping_name(const prmap_t *pmp, boolean_t brief, char *buf, size_t bufsz)
+{
+	const pstatus_t *Psp = Pstatus(Pr);
+	uintptr_t vaddr = pmp->pr_vaddr;
+	size_t size = pmp->pr_size;
+	uintptr_t segment_end = vaddr + size;
+	const char *lname = NULL;
+
+	/*
+	 * If the mapping is not anon or not part of the heap, make a name
+	 * for it.  We don't want to report the heap as a.out's data.
+	 */
+	if (!(pmp->pr_mflags & MA_ANON) || segment_end <= Psp->pr_brkbase ||
+	    vaddr >= Psp->pr_brkbase + Psp->pr_brksize) {
+		lname = make_name(Pr, lflag, vaddr, pmp->pr_mapname,
+		    buf, bufsz);
+		if (lname != NULL) {
+			if (brief) {
+				char *ln;
+
+				if ((ln = strrchr(lname, '/')) != NULL)
+					lname = ln + 1;
+			}
+			return (lname);
+		}
+	}
+
+	if ((pmp->pr_mflags & MA_ANON) || Pstate(Pr) == PS_DEAD) {
+		lname = anon_name(buf, Psp, stacks, nstacks, vaddr, size,
+		    pmp->pr_mflags, pmp->pr_shmid, NULL);
+		if (lname != NULL)
+			return (lname);
+	}
+
+	if (comm_page != INVALID_ADDRESS && vaddr == comm_page) {
+		(void) strlcpy(buf, "  [ comm ]", bufsz);
+		return (buf);
+	}
+
+	return (NULL);
+}
+
+/*
+ * We simplify things by casting prxmap_t into prmap_t and re-using
+ * mapping_name(). Ensure that that the fields we need remain in the same place
+ * in both.
+ */
+CTASSERT(offsetof(prmap_t, pr_vaddr) == offsetof(prxmap_t, pr_vaddr));
+CTASSERT(offsetof(prmap_t, pr_size) == offsetof(prxmap_t, pr_size));
+CTASSERT(offsetof(prmap_t, pr_mapname) == offsetof(prxmap_t, pr_mapname));
+CTASSERT(offsetof(prmap_t, pr_mflags) == offsetof(prxmap_t, pr_mflags));
+CTASSERT(offsetof(prmap_t, pr_shmid) == offsetof(prxmap_t, pr_shmid));
+
+static const char *
+mapping_xname(const prxmap_t *pmp, boolean_t brief, char *buf, size_t bufsz)
+{
+	return (mapping_name((const prmap_t *)pmp, brief, buf, bufsz));
+}
+
 static int
 look_map(void *data, const prmap_t *pmp, const char *object_name)
 {
 	struct totals *t = data;
-	const pstatus_t *Psp = Pstatus(Pr);
 	size_t size;
 	char mname[PATH_MAX];
-	char *lname = NULL;
+	const char *lname;
 	size_t	psz = pmp->pr_pagesize;
 	uintptr_t vaddr = pmp->pr_vaddr;
 	uintptr_t segment_end = vaddr + pmp->pr_size;
 	lgrp_id_t lgrp;
 	memory_chunk_t mchunk;
 
-	/*
-	 * If the mapping is not anon or not part of the heap, make a name
-	 * for it.  We don't want to report the heap as a.out's data.
-	 */
-	if (!(pmp->pr_mflags & MA_ANON) ||
-	    segment_end <= Psp->pr_brkbase ||
-	    pmp->pr_vaddr >= Psp->pr_brkbase + Psp->pr_brksize) {
-		lname = make_name(Pr, lflag, pmp->pr_vaddr, pmp->pr_mapname,
-		    mname, sizeof (mname));
-	}
-
-	if (lname == NULL &&
-	    ((pmp->pr_mflags & MA_ANON) || Pstate(Pr) == PS_DEAD)) {
-		lname = anon_name(mname, Psp, stacks, nstacks, pmp->pr_vaddr,
-		    pmp->pr_size, pmp->pr_mflags, pmp->pr_shmid, NULL);
-	}
+	lname = mapping_name(pmp, B_FALSE, mname, sizeof (mname));
 
 	/*
 	 * Adjust the address range if -A is specified.
@@ -761,7 +846,7 @@ look_map(void *data, const prmap_t *pmp, const char *object_name)
 		    segment_end, pmp->pr_pagesize, &lgrp);
 
 		(void) printf(lname ? "%.*lX %*luK %-6s%s %s\n" :
-		    "%.*lX %*luK %s %s\n",
+		    "%.*lX %*luK %-6s%s\n",
 		    addr_width, vaddr,
 		    size_width - 1, size_contig / KILOBYTE,
 		    mflags(pmp->pr_mflags),
@@ -811,18 +896,14 @@ pagesize(const prxmap_t *pmp)
 	return (buf);
 }
 
-/*ARGSUSED*/
 static int
-look_smap(void *data,
-	const prxmap_t *pmp,
-	const char *object_name,
-	int last, int doswap)
+look_smap(void *data, const prxmap_t *pmp, const char *object_name, int last,
+    int doswap)
 {
 	struct totals *t = data;
-	const pstatus_t *Psp = Pstatus(Pr);
 	size_t size;
 	char mname[PATH_MAX];
-	char *lname = NULL;
+	const char *lname;
 	const char *format;
 	size_t	psz = pmp->pr_pagesize;
 	uintptr_t vaddr = pmp->pr_vaddr;
@@ -830,22 +911,7 @@ look_smap(void *data,
 	lgrp_id_t lgrp;
 	memory_chunk_t mchunk;
 
-	/*
-	 * If the mapping is not anon or not part of the heap, make a name
-	 * for it.  We don't want to report the heap as a.out's data.
-	 */
-	if (!(pmp->pr_mflags & MA_ANON) ||
-	    pmp->pr_vaddr + pmp->pr_size <= Psp->pr_brkbase ||
-	    pmp->pr_vaddr >= Psp->pr_brkbase + Psp->pr_brksize) {
-		lname = make_name(Pr, lflag, pmp->pr_vaddr, pmp->pr_mapname,
-		    mname, sizeof (mname));
-	}
-
-	if (lname == NULL &&
-	    ((pmp->pr_mflags & MA_ANON) || Pstate(Pr) == PS_DEAD)) {
-		lname = anon_name(mname, Psp, stacks, nstacks, pmp->pr_vaddr,
-		    pmp->pr_size, pmp->pr_mflags, pmp->pr_shmid, NULL);
-	}
+	lname = mapping_xname(pmp, B_FALSE, mname, sizeof (mname));
 
 	/*
 	 * Adjust the address range if -A is specified.
@@ -921,37 +987,15 @@ look_smap(void *data,
 #define	ANON(x)	((aflag || (((x)->pr_mflags & MA_SHARED) == 0)) ? \
 	    ((x)->pr_anon) : 0)
 
-/*ARGSUSED*/
 static int
-look_xmap(void *data,
-	const prxmap_t *pmp,
-	const char *object_name,
-	int last, int doswap)
+look_xmap(void *data, const prxmap_t *pmp, const char *object_name, int last,
+    int doswap)
 {
 	struct totals *t = data;
-	const pstatus_t *Psp = Pstatus(Pr);
 	char mname[PATH_MAX];
-	char *lname = NULL;
-	char *ln;
+	const char *lname;
 
-	/*
-	 * If the mapping is not anon or not part of the heap, make a name
-	 * for it.  We don't want to report the heap as a.out's data.
-	 */
-	if (!(pmp->pr_mflags & MA_ANON) ||
-	    pmp->pr_vaddr + pmp->pr_size <= Psp->pr_brkbase ||
-	    pmp->pr_vaddr >= Psp->pr_brkbase + Psp->pr_brksize) {
-		lname = make_name(Pr, lflag, pmp->pr_vaddr, pmp->pr_mapname,
-		    mname, sizeof (mname));
-	}
-
-	if (lname != NULL) {
-		if ((ln = strrchr(lname, '/')) != NULL)
-			lname = ln + 1;
-	} else if ((pmp->pr_mflags & MA_ANON) || Pstate(Pr) == PS_DEAD) {
-		lname = anon_name(mname, Psp, stacks, nstacks, pmp->pr_vaddr,
-		    pmp->pr_size, pmp->pr_mflags, pmp->pr_shmid, NULL);
-	}
+	lname = mapping_xname(pmp, B_TRUE, mname, sizeof (mname));
 
 	(void) printf("%.*lX", addr_width, (ulong_t)pmp->pr_vaddr);
 
@@ -970,18 +1014,13 @@ look_xmap(void *data,
 	return (0);
 }
 
-/*ARGSUSED*/
 static int
-look_xmap_nopgsz(void *data,
-	const prxmap_t *pmp,
-	const char *object_name,
-	int last, int doswap)
+look_xmap_nopgsz(void *data, const prxmap_t *pmp, const char *object_name,
+    int last, int doswap)
 {
 	struct totals *t = data;
-	const pstatus_t *Psp = Pstatus(Pr);
 	char mname[PATH_MAX];
-	char *lname = NULL;
-	char *ln;
+	const char *lname;
 	static uintptr_t prev_vaddr;
 	static size_t prev_size;
 	static offset_t prev_offset;
@@ -1013,24 +1052,7 @@ look_xmap_nopgsz(void *data,
 		swap = pmp->pr_size / pmp->pr_pagesize;
 	}
 
-	/*
-	 * If the mapping is not anon or not part of the heap, make a name
-	 * for it.  We don't want to report the heap as a.out's data.
-	 */
-	if (!(pmp->pr_mflags & MA_ANON) ||
-	    pmp->pr_vaddr + pmp->pr_size <= Psp->pr_brkbase ||
-	    pmp->pr_vaddr >= Psp->pr_brkbase + Psp->pr_brksize) {
-		lname = make_name(Pr, lflag, pmp->pr_vaddr, pmp->pr_mapname,
-		    mname, sizeof (mname));
-	}
-
-	if (lname != NULL) {
-		if ((ln = strrchr(lname, '/')) != NULL)
-			lname = ln + 1;
-	} else if ((pmp->pr_mflags & MA_ANON) || Pstate(Pr) == PS_DEAD) {
-		lname = anon_name(mname, Psp, stacks, nstacks, pmp->pr_vaddr,
-		    pmp->pr_size, pmp->pr_mflags, pmp->pr_shmid, NULL);
-	}
+	lname = mapping_xname(pmp, B_TRUE, mname, sizeof (mname));
 
 	kperpage = pmp->pr_pagesize / KILOBYTE;
 
@@ -1088,7 +1110,7 @@ look_xmap_nopgsz(void *data,
 		printK(prev_anon, size_width);
 		printK(prev_locked, size_width);
 	}
-	(void) printf(prev_lname ? " %-6s %s\n" : "%s\n",
+	(void) printf(prev_lname ? " %-6s %s\n" : " %s\n",
 	    mflags(prev_mflags), prev_lname);
 
 	if (last == 0) {
@@ -1191,7 +1213,6 @@ nextmap(void)
 	return (&maps[map_count++]);
 }
 
-/*ARGSUSED*/
 static int
 gather_map(void *ignored, const prmap_t *map, const char *objname)
 {
@@ -1211,7 +1232,6 @@ gather_map(void *ignored, const prmap_t *map, const char *objname)
 	return (0);
 }
 
-/*ARGSUSED*/
 static int
 gather_xmap(void *ignored, const prxmap_t *xmap, const char *objname,
     int last, int doswap)
@@ -1491,7 +1511,7 @@ mem_chunk_get(memory_chunk_t *chunk, uintptr_t vaddr)
 	uint64_t	*dataptr = inaddr;
 	uint64_t	*outptr = outdata;
 	uint_t		*valptr = validity;
-	int 		i, j, rc;
+	int		i, j, rc;
 
 	chunk->chunk_start = vaddr;
 	chunk->page_index = 0;	/* reset index for the new chunk */
@@ -1659,7 +1679,6 @@ addr_to_lgrp(memory_chunk_t *chunk, uintptr_t vaddr, size_t *psz)
 	return (lgrp);
 }
 
-/* ARGSUSED */
 static void
 intr(int sig)
 {

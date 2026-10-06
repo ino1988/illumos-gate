@@ -153,10 +153,10 @@ scsi_pkt2bp(struct scsi_pkt *pkt)
 
 int
 scsi_dma_buf_bind_attr(struct scsi_pkt_cache_wrapper *pktw,
-			struct buf	*bp,
-			int		 dma_flags,
-			int		(*callback)(),
-			caddr_t		 arg)
+    struct buf	*bp,
+    int		 dma_flags,
+    int		(*callback)(),
+    caddr_t		 arg)
 {
 	struct scsi_pkt *pktp = &(pktw->pcw_pkt);
 	int	 status;
@@ -258,6 +258,7 @@ scsi_dmaget_attr(struct scsi_pkt_cache_wrapper *pktw)
 	pktw->pcw_total_xfer += pktp->pkt_dma_len;
 	pktp->pkt_cookies = hp->dmai_cookie - 1;
 	hp->dmai_cookie = cp;
+	hp->dmai_curcookie = num_segs;
 
 	return (1);
 }
@@ -572,7 +573,7 @@ scsi_init_pkt(struct scsi_address *ap, struct scsi_pkt *in_pktp,
 "scsi_init_pkt_start: addr %p in_pktp %p cmdlen %d statuslen %d pplen %d",
 	    ap, in_pktp, cmdlen, statuslen, pplen);
 
-#if defined(__i386) || defined(__amd64)
+#if defined(__x86)
 	if (flags & PKT_CONSISTENT_OLD) {
 		flags &= ~PKT_CONSISTENT_OLD;
 		flags |= PKT_CONSISTENT;

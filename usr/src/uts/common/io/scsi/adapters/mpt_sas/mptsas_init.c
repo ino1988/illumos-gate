@@ -23,6 +23,8 @@
  * Copyright 2009 Sun Microsystems, Inc.  All rights reserved.
  * Use is subject to license terms.
  * Copyright (c) 2014, Tegile Systems Inc. All rights reserved.
+ * Copyright (c) 2017, Joyent, Inc.
+ * Copyright 2023 Racktop Systems, Inc.
  */
 
 /*
@@ -68,12 +70,12 @@
 #include <sys/scsi/scsi.h>
 
 #pragma pack(1)
-#include <sys/scsi/adapters/mpt_sas/mpi/mpi2_type.h>
-#include <sys/scsi/adapters/mpt_sas/mpi/mpi2.h>
-#include <sys/scsi/adapters/mpt_sas/mpi/mpi2_cnfg.h>
-#include <sys/scsi/adapters/mpt_sas/mpi/mpi2_init.h>
-#include <sys/scsi/adapters/mpt_sas/mpi/mpi2_ioc.h>
-#include <sys/scsi/adapters/mpt_sas/mpi/mpi2_tool.h>
+#include <sys/scsi/adapters/mpi/mpi2_type.h>
+#include <sys/scsi/adapters/mpi/mpi2.h>
+#include <sys/scsi/adapters/mpi/mpi2_cnfg.h>
+#include <sys/scsi/adapters/mpi/mpi2_init.h>
+#include <sys/scsi/adapters/mpi/mpi2_ioc.h>
+#include <sys/scsi/adapters/mpi/mpi2_tool.h>
 #pragma pack()
 /*
  * private header files.
@@ -136,6 +138,39 @@ mptsas_devid_type_string(mptsas_t *mpt)
 	case MPI25_MFGPAGE_DEVID_SAS3108_5:
 	case MPI25_MFGPAGE_DEVID_SAS3108_6:
 		return ("SAS3108");
+	case MPI26_MFGPAGE_DEVID_SAS3216:
+	case MPI26_MFGPAGE_DEVID_SAS3316_1:
+	case MPI26_MFGPAGE_DEVID_SAS3316_2:
+	case MPI26_MFGPAGE_DEVID_SAS3316_3:
+	case MPI26_MFGPAGE_DEVID_SAS3316_4:
+		return ("SAS3216");
+	case MPI26_MFGPAGE_DEVID_SAS3224:
+	case MPI26_MFGPAGE_DEVID_SAS3324_1:
+	case MPI26_MFGPAGE_DEVID_SAS3324_2:
+	case MPI26_MFGPAGE_DEVID_SAS3324_3:
+	case MPI26_MFGPAGE_DEVID_SAS3324_4:
+		return ("SAS3224");
+	case MPI26_MFGPAGE_DEVID_SAS3408:
+		return ("SAS3408");
+	case MPI26_MFGPAGE_DEVID_SAS3416:
+		return ("SAS3416");
+	case MPI26_MFGPAGE_DEVID_SAS3508:
+	case MPI26_MFGPAGE_DEVID_SAS3508_1:
+		return ("SAS3508");
+	case MPI26_MFGPAGE_DEVID_SAS3516:
+	case MPI26_MFGPAGE_DEVID_SAS3516_1:
+		return ("SAS3516");
+	case MPI26_MFGPAGE_DEVID_SAS3616:
+		return ("SAS3616");
+	case MPI26_MFGPAGE_DEVID_SAS3708:
+		return ("SAS3708");
+	case MPI26_MFGPAGE_DEVID_SAS3716:
+		return ("SAS3716");
+	case MPI26_MFGPAGE_DEVID_SAS3816:
+	case MPI26_MFGPAGE_DEVID_SAS3816_1:
+		return ("SAS3816");
+	case MPI26_MFGPAGE_DEVID_SAS4008:
+		return ("SAS4008");
 	default:
 		return ("?");
 	}
@@ -147,7 +182,7 @@ mptsas_ioc_get_facts(mptsas_t *mpt)
 	/*
 	 * Send get facts messages
 	 */
-	if (mptsas_do_dma(mpt, sizeof (MPI2_IOC_FACTS_REQUEST), NULL,
+	if (mptsas_do_dma(mpt, sizeof (MPI2_IOC_FACTS_REQUEST), 0,
 	    mptsas_ioc_do_get_facts)) {
 		return (DDI_FAILURE);
 	}
@@ -155,7 +190,7 @@ mptsas_ioc_get_facts(mptsas_t *mpt)
 	/*
 	 * Get facts reply messages
 	 */
-	if (mptsas_do_dma(mpt, sizeof (MPI2_IOC_FACTS_REPLY), NULL,
+	if (mptsas_do_dma(mpt, sizeof (MPI2_IOC_FACTS_REPLY), 0,
 	    mptsas_ioc_do_get_facts_reply)) {
 		return (DDI_FAILURE);
 	}
@@ -165,7 +200,7 @@ mptsas_ioc_get_facts(mptsas_t *mpt)
 
 static int
 mptsas_ioc_do_get_facts(mptsas_t *mpt, caddr_t memp, int var,
-		ddi_acc_handle_t accessp)
+    ddi_acc_handle_t accessp)
 {
 #ifndef __lock_lint
 	_NOTE(ARGUNUSED(var))
@@ -190,7 +225,7 @@ mptsas_ioc_do_get_facts(mptsas_t *mpt, caddr_t memp, int var,
 
 static int
 mptsas_ioc_do_get_facts_reply(mptsas_t *mpt, caddr_t memp, int var,
-		ddi_acc_handle_t accessp)
+    ddi_acc_handle_t accessp)
 {
 #ifndef __lock_lint
 	_NOTE(ARGUNUSED(var))
@@ -218,7 +253,7 @@ mptsas_ioc_do_get_facts_reply(mptsas_t *mpt, caddr_t memp, int var,
 		return (DDI_FAILURE);
 	}
 
-	if (iocstatus = ddi_get16(accessp, &factsreply->IOCStatus)) {
+	if ((iocstatus = ddi_get16(accessp, &factsreply->IOCStatus)) != 0) {
 		mptsas_log(mpt, CE_WARN, "mptsas_ioc_do_get_facts_reply: "
 		    "IOCStatus=0x%x, IOCLogInfo=0x%x", iocstatus,
 		    ddi_get32(accessp, &factsreply->IOCLogInfo));
@@ -306,7 +341,7 @@ mptsas_ioc_do_get_facts_reply(mptsas_t *mpt, caddr_t memp, int var,
 	 * Set flag to check for SAS3 support.
 	 */
 	msgversion = ddi_get16(accessp, &factsreply->MsgVersion);
-	if (msgversion == MPI2_VERSION_02_05) {
+	if (msgversion >= MPI2_VERSION_02_05) {
 		mptsas_log(mpt, CE_NOTE, "?mpt_sas%d SAS 3 Supported\n",
 		    mpt->m_instance);
 		mpt->m_MPI25 = TRUE;
@@ -388,7 +423,7 @@ mptsas_ioc_get_port_facts(mptsas_t *mpt, int port)
 
 static int
 mptsas_ioc_do_get_port_facts(mptsas_t *mpt, caddr_t memp, int var,
-			ddi_acc_handle_t accessp)
+    ddi_acc_handle_t accessp)
 {
 	pMpi2PortFactsRequest_t	facts;
 	int			numbytes;
@@ -411,7 +446,7 @@ mptsas_ioc_do_get_port_facts(mptsas_t *mpt, caddr_t memp, int var,
 
 static int
 mptsas_ioc_do_get_port_facts_reply(mptsas_t *mpt, caddr_t memp, int var,
-				ddi_acc_handle_t accessp)
+    ddi_acc_handle_t accessp)
 {
 #ifndef __lock_lint
 	_NOTE(ARGUNUSED(var))
@@ -431,7 +466,7 @@ mptsas_ioc_do_get_port_facts_reply(mptsas_t *mpt, caddr_t memp, int var,
 		return (DDI_FAILURE);
 	}
 
-	if (iocstatus = ddi_get16(accessp, &factsreply->IOCStatus)) {
+	if ((iocstatus = ddi_get16(accessp, &factsreply->IOCStatus)) != 0) {
 		mptsas_log(mpt, CE_WARN, "mptsas_ioc_do_get_port_facts_reply: "
 		    "IOCStatus=0x%x, IOCLogInfo=0x%x", iocstatus,
 		    ddi_get32(accessp, &factsreply->IOCLogInfo));
@@ -465,7 +500,7 @@ mptsas_ioc_enable_port(mptsas_t *mpt)
 
 static int
 mptsas_ioc_do_enable_port(mptsas_t *mpt, caddr_t memp, int var,
-	ddi_acc_handle_t accessp)
+    ddi_acc_handle_t accessp)
 {
 #ifndef __lock_lint
 	_NOTE(ARGUNUSED(var))
@@ -490,7 +525,7 @@ mptsas_ioc_do_enable_port(mptsas_t *mpt, caddr_t memp, int var,
 
 static int
 mptsas_ioc_do_enable_port_reply(mptsas_t *mpt, caddr_t memp, int var,
-	ddi_acc_handle_t accessp)
+    ddi_acc_handle_t accessp)
 {
 #ifndef __lock_lint
 	_NOTE(ARGUNUSED(var))
@@ -511,7 +546,7 @@ mptsas_ioc_do_enable_port_reply(mptsas_t *mpt, caddr_t memp, int var,
 		return (DDI_FAILURE);
 	}
 
-	if (iocstatus = ddi_get16(accessp, &portreply->IOCStatus)) {
+	if ((iocstatus = ddi_get16(accessp, &portreply->IOCStatus)) != 0) {
 		mptsas_log(mpt, CE_WARN, "mptsas_ioc_do_enable_port_reply: "
 		    "IOCStatus=0x%x, IOCLogInfo=0x%x", iocstatus,
 		    ddi_get32(accessp, &portreply->IOCLogInfo));
@@ -529,7 +564,7 @@ mptsas_ioc_enable_event_notification(mptsas_t *mpt)
 	/*
 	 * Send enable event notification message
 	 */
-	if (mptsas_do_dma(mpt, sizeof (MPI2_EVENT_NOTIFICATION_REQUEST), NULL,
+	if (mptsas_do_dma(mpt, sizeof (MPI2_EVENT_NOTIFICATION_REQUEST), 0,
 	    mptsas_ioc_do_enable_event_notification)) {
 		return (DDI_FAILURE);
 	}
@@ -537,7 +572,7 @@ mptsas_ioc_enable_event_notification(mptsas_t *mpt)
 	/*
 	 * Get enable event reply message
 	 */
-	if (mptsas_do_dma(mpt, sizeof (MPI2_EVENT_NOTIFICATION_REPLY), NULL,
+	if (mptsas_do_dma(mpt, sizeof (MPI2_EVENT_NOTIFICATION_REPLY), 0,
 	    mptsas_ioc_do_enable_event_notification_reply)) {
 		return (DDI_FAILURE);
 	}
@@ -547,7 +582,7 @@ mptsas_ioc_enable_event_notification(mptsas_t *mpt)
 
 static int
 mptsas_ioc_do_enable_event_notification(mptsas_t *mpt, caddr_t memp, int var,
-	ddi_acc_handle_t accessp)
+    ddi_acc_handle_t accessp)
 {
 #ifndef __lock_lint
 	_NOTE(ARGUNUSED(var))
@@ -593,7 +628,7 @@ mptsas_ioc_do_enable_event_notification_reply(mptsas_t *mpt, caddr_t memp,
 		return (DDI_FAILURE);
 	}
 
-	if (iocstatus = ddi_get16(accessp, &eventsreply->IOCStatus)) {
+	if ((iocstatus = ddi_get16(accessp, &eventsreply->IOCStatus)) != 0) {
 		mptsas_log(mpt, CE_WARN,
 		    "mptsas_ioc_do_enable_event_notification_reply: "
 		    "IOCStatus=0x%x, IOCLogInfo=0x%x", iocstatus,
@@ -610,7 +645,7 @@ mptsas_ioc_init(mptsas_t *mpt)
 	/*
 	 * Send ioc init message
 	 */
-	if (mptsas_do_dma(mpt, sizeof (MPI2_IOC_INIT_REQUEST), NULL,
+	if (mptsas_do_dma(mpt, sizeof (MPI2_IOC_INIT_REQUEST), 0,
 	    mptsas_do_ioc_init)) {
 		return (DDI_FAILURE);
 	}
@@ -618,7 +653,7 @@ mptsas_ioc_init(mptsas_t *mpt)
 	/*
 	 * Get ioc init reply message
 	 */
-	if (mptsas_do_dma(mpt, sizeof (MPI2_IOC_INIT_REPLY), NULL,
+	if (mptsas_do_dma(mpt, sizeof (MPI2_IOC_INIT_REPLY), 0,
 	    mptsas_do_ioc_init_reply)) {
 		return (DDI_FAILURE);
 	}
@@ -656,7 +691,8 @@ mptsas_do_ioc_init(mptsas_t *mpt, caddr_t memp, int var,
 	 * These addresses are set using the DMA cookie addresses from when the
 	 * memory was allocated.  Sense buffer hi address should be 0.
 	 */
-	ddi_put32(accessp, &init->SenseBufferAddressHigh, 0);
+	ddi_put32(accessp, &init->SenseBufferAddressHigh,
+	    (uint32_t)(mpt->m_req_sense_dma_addr >> 32));
 	ddi_put32(accessp, &init->SystemReplyAddressHigh,
 	    (uint32_t)(mpt->m_reply_frame_dma_addr >> 32));
 	ddi_put32(accessp, &init->SystemRequestFrameBaseAddress.High,
@@ -698,7 +734,7 @@ mptsas_do_ioc_init(mptsas_t *mpt, caddr_t memp, int var,
 
 static int
 mptsas_do_ioc_init_reply(mptsas_t *mpt, caddr_t memp, int var,
-		ddi_acc_handle_t accessp)
+    ddi_acc_handle_t accessp)
 {
 #ifndef __lock_lint
 	_NOTE(ARGUNUSED(var))
@@ -719,14 +755,14 @@ mptsas_do_ioc_init_reply(mptsas_t *mpt, caddr_t memp, int var,
 		return (DDI_FAILURE);
 	}
 
-	if (iocstatus = ddi_get16(accessp, &initreply->IOCStatus)) {
+	if ((iocstatus = ddi_get16(accessp, &initreply->IOCStatus)) != 0) {
 		mptsas_log(mpt, CE_WARN, "mptsas_do_ioc_init_reply: "
 		    "IOCStatus=0x%x, IOCLogInfo=0x%x", iocstatus,
 		    ddi_get32(accessp, &initreply->IOCLogInfo));
 		return (DDI_FAILURE);
 	}
 
-	if ((ddi_get32(mpt->m_datap, &mpt->m_reg->Doorbell)) &
+	if ((mptsas_hirrd(mpt, &mpt->m_reg->Doorbell)) &
 	    MPI2_IOC_STATE_OPERATIONAL) {
 		mptsas_log(mpt, CE_NOTE,
 		    "?mpt%d: IOC Operational.\n", mpt->m_instance);

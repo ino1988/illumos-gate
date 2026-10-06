@@ -27,8 +27,6 @@
 #ifndef	_SYS_BUFMOD_H
 #define	_SYS_BUFMOD_H
 
-#pragma ident	"%Z%%M%	%I%	%E% SMI"
-
 #include <sys/types.h>
 #include <sys/types32.h>
 
@@ -123,7 +121,7 @@ struct sb_hdr {
 	uint_t	sbh_msglen;
 	uint_t	sbh_totlen;
 	uint_t	sbh_drops;
-#if defined(_LP64) || defined(_I32LPx)
+#if defined(_LP64)
 	struct	timeval32 sbh_timestamp;
 #else
 	struct	timeval sbh_timestamp;

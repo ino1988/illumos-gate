@@ -21,14 +21,16 @@
 
 /*
  * Copyright (c) 2004, 2010, Oracle and/or its affiliates. All rights reserved.
- * Copyright 2011 Joyent Inc.
+ * Copyright 2018 Joyent, Inc.
+ * Copyright 2025 OmniOS Community Edition (OmniOSce) Association.
+ * Copyright 2026 Oxide Computer Company
  */
 
 /*
  * method.c - method execution functions
  *
  * This file contains the routines needed to run a method:  a fork(2)-exec(2)
- * invocation monitored using either the contract filesystem or waitpid(2).
+ * invocation monitored using either the contract filesystem or waitpid(3C).
  * (Plain fork1(2) support is provided in fork.c.)
  *
  * Contract Transfer
@@ -452,7 +454,7 @@ exec_method(const restarter_inst_t *inst, int type, const char *method,
 
 	cmd = uu_msprintf("exec %s", method);
 
-	if (inst->ri_utmpx_prefix[0] != '\0' && inst->ri_utmpx_prefix != NULL)
+	if (inst->ri_utmpx_prefix != NULL && inst->ri_utmpx_prefix[0] != '\0')
 		(void) utmpx_mark_init(getpid(), inst->ri_utmpx_prefix);
 
 	setlog(inst->ri_logstem);
@@ -596,6 +598,9 @@ exec_method(const restarter_inst_t *inst, int type, const char *method,
 
 	(void) execle(SBIN_SH, SBIN_SH, "-c", cmd, NULL, nenv);
 
+	(void) fprintf(stderr, "Failed to exec %s -c '%s': %s\n",
+	    SBIN_SH, cmd, strerror(errno));
+
 	exit(10);
 }
 
@@ -683,7 +688,7 @@ method_run(restarter_inst_t **instp, int type, int *exit_code)
 	if (inst->ri_mi_deleted)
 		return (ECANCELED);
 
-	*exit_code = 0;
+	*exit_code = SMF_EXIT_OK;
 
 	assert(0 <= type && type <= 2);
 	mname = method_names[type];
@@ -948,7 +953,7 @@ method_run(restarter_inst_t **instp, int type, int *exit_code)
 		MUTEX_UNLOCK(&inst->ri_lock);
 
 		do {
-			r = waitpid(pid, &ret_status, NULL);
+			r = waitpid(pid, &ret_status, 0);
 		} while (r == -1 && errno == EINTR);
 		if (r == -1)
 			err = errno;
@@ -1018,7 +1023,10 @@ method_run(restarter_inst_t **instp, int type, int *exit_code)
 		}
 
 		*exit_code = WEXITSTATUS(ret_status);
-		if (*exit_code != 0) {
+		if (*exit_code != SMF_EXIT_OK &&
+		    *exit_code != SMF_EXIT_NODAEMON &&
+		    *exit_code != SMF_EXIT_MON_DEGRADE &&
+		    *exit_code != SMF_EXIT_TEMP_DISABLE) {
 			log_error(LOG_WARNING,
 			    "%s: Method \"%s\" failed with exit status %d.\n",
 			    inst->ri_i.i_fmri, method, WEXITSTATUS(ret_status));
@@ -1027,8 +1035,14 @@ method_run(restarter_inst_t **instp, int type, int *exit_code)
 		log_instance(inst, B_TRUE, "Method \"%s\" exited with status "
 		    "%d.", mname, *exit_code);
 
-		if (*exit_code != 0)
+		/*
+		 * Note: we will take this path for SMF_EXIT_NODAEMON and
+		 * SMF_EXIT_TEMP_DISABLE.
+		 */
+		if (*exit_code != SMF_EXIT_OK &&
+		    *exit_code != SMF_EXIT_MON_DEGRADE) {
 			goto contract_out;
+		}
 
 		end_time = time(NULL);
 
@@ -1073,11 +1087,20 @@ assured_kill:
 	}
 
 contract_out:
-	/* Abandon contracts for transient methods & methods that fail. */
+	/*
+	 * Abandon contracts for transient methods, methods that exit with
+	 * SMF_EXIT_NODAEMON/SMF_EXIT_TEMP_DISABLE and methods that fail.
+	 * Non-transient degraded services are left alone here. If their
+	 * contract is or later becomes empty, then that will be handled in the
+	 * same way as for any other non-transient service.
+	 */
 	transient = method_is_transient(inst, type);
-	if ((transient || *exit_code != 0 || result != 0) &&
-	    (restarter_is_kill_method(method) < 0))
+	if ((transient ||
+	    (*exit_code != SMF_EXIT_OK && *exit_code != SMF_EXIT_MON_DEGRADE) ||
+	    result != 0) &&
+	    restarter_is_kill_method(method) < 0) {
 		method_remove_contract(inst, !transient, B_TRUE);
+	}
 
 out:
 	if (ctfd >= 0)
@@ -1085,6 +1108,47 @@ out:
 	scf_snapshot_destroy(snap);
 	free(method);
 	return (result);
+}
+
+/*
+ * A start method has exited with SMF_EXIT_TEMP_DISABLE, requesting that the
+ * service be temporarily disabled. We do this in the same way as
+ * 'svcadm disable -t', by setting the enabled override in the non-persistent
+ * general_ovr property group. The graph engine notices this change and drives
+ * the instance to the disabled state through the normal disable path, so we do
+ * not change the instance state ourselves here. Because the override is
+ * non-persistent, it does not survive a reboot, and the method will run again
+ * on next boot in case the condition that prompted the service to disable
+ * itself has since cleared.
+ */
+static void
+method_temp_disable(restarter_inst_t *inst)
+{
+	int r;
+
+	assert(MUTEX_HELD(&inst->ri_lock));
+
+	for (;;) {
+		switch (r = libscf_set_enable_ovr(inst->ri_m_inst, 0)) {
+		case 0:
+		case ECANCELED:		/* the instance has been deleted */
+			return;
+
+		case ECONNABORTED:
+			libscf_reget_instance(inst);
+			continue;
+
+		case EPERM:
+		case EROFS:
+			log_error(LOG_WARNING, "%s: could not set the enabled "
+			    "override to temporarily disable the service: "
+			    "%s.\n", inst->ri_i.i_fmri, strerror(r));
+			return;
+
+		default:
+			bad_error("libscf_set_enable_ovr", r);
+		}
+	}
 }
 
 /*
@@ -1114,6 +1178,8 @@ method_thread(void *arg)
 	int r, exit_code;
 	boolean_t retryable;
 	restarter_str_t reason;
+
+	(void) pthread_setname_np(pthread_self(), "method");
 
 	assert(0 <= info->sf_method_type && info->sf_method_type <= 2);
 
@@ -1169,7 +1235,10 @@ retry:
 
 	r = method_run(&inst, info->sf_method_type, &exit_code);
 
-	if (r == 0 && exit_code == 0) {
+	if (r == 0 &&
+	    (exit_code == SMF_EXIT_OK || exit_code == SMF_EXIT_NODAEMON ||
+	    exit_code == SMF_EXIT_MON_DEGRADE ||
+	    exit_code == SMF_EXIT_TEMP_DISABLE)) {
 		/* Success! */
 		assert(inst->ri_i.i_next_state != RESTARTER_STATE_NONE);
 
@@ -1187,6 +1256,44 @@ retry:
 			else
 				method_remove_contract(inst, B_TRUE, B_TRUE);
 		}
+
+		/*
+		 * For methods that exit with SMF_EXIT_NODAEMON, we already
+		 * called method_remove_contract in method_run.
+		 */
+
+		/*
+		 * When a start method returns with SMF_EXIT_MON_DEGRADE we
+		 * transition the service into degraded.
+		 */
+		if (info->sf_method_type == METHOD_START &&
+		    exit_code == SMF_EXIT_MON_DEGRADE) {
+			inst->ri_i.i_next_state = RESTARTER_STATE_DEGRADED;
+			info->sf_reason = restarter_str_method_failed;
+			log_transition(inst, START_FAILED_DEGRADED);
+		}
+
+		/*
+		 * When a start method exits with SMF_EXIT_TEMP_DISABLE the
+		 * service has asked to be temporarily disabled. Request the
+		 * disable here; the instance is left to transition normally.
+		 * See the comment above method_temp_disable() for details.
+		 * The status is honoured only for start methods, so log a
+		 * warning for any other method type to give the service
+		 * author a chance to notice the error.
+		 */
+		if (exit_code == SMF_EXIT_TEMP_DISABLE) {
+			if (info->sf_method_type == METHOD_START) {
+				method_temp_disable(inst);
+			} else {
+				log_instance(inst, B_TRUE, "Method \"%s\" "
+				    "exited with SMF_EXIT_TEMP_DISABLE, "
+				    "which is only supported for start "
+				    "methods; ignoring.",
+				    method_names[info->sf_method_type]);
+			}
+		}
+
 		/*
 		 * We don't care whether the handle was rebound because this is
 		 * the last thing we do with it.

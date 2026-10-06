@@ -61,7 +61,7 @@ try_exec(struct ps_prochandle *P, const char *cwd, const char *path, char *buf,
 	else
 		(void) strcpy(buf, path);
 
-	dprintf("try_exec \"%s\"\n", buf);
+	Pdprintf("try_exec \"%s\"\n", buf);
 
 	(void) Pfindobj(P, buf, buf, PATH_MAX);
 	if ((i = resolvepath(buf, buf, PATH_MAX)) > 0) {
@@ -90,7 +90,7 @@ Pfindexec(struct ps_prochandle *P, const char *aout,
 	uintptr_t addr;
 	char *p = path, *q;
 
-	dprintf("Pfindexec '%s'\n", aout);
+	Pdprintf("Pfindexec '%s'\n", aout);
 
 	if (P->execname)
 		return (P->execname); /* Already found */
@@ -180,7 +180,7 @@ Pfindexec(struct ps_prochandle *P, const char *aout,
 	 * Fourth try: read the string pointed to by argv[0] out of the
 	 * stack in the process's address space.
 	 */
-	if (P->psinfo.pr_argv != NULL &&
+	if (P->psinfo.pr_argv != (uintptr_t)NULL &&
 	    Pread(P, &addr, sizeof (addr), P->psinfo.pr_argv) != -1 &&
 	    Pread_string(P, path, sizeof (path), (off_t)addr) > 0) {
 
@@ -233,7 +233,7 @@ Pfindexec(struct ps_prochandle *P, const char *aout,
 
 found:
 	if ((P->execname = strdup(buf)) == NULL)
-		dprintf("failed to malloc; executable name is \"%s\"", buf);
+		Pdprintf("failed to malloc; executable name is \"%s\"", buf);
 
 	return (P->execname);
 }

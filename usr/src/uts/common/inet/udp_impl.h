@@ -20,6 +20,7 @@
  */
 /*
  * Copyright (c) 2000, 2010, Oracle and/or its affiliates. All rights reserved.
+ * Copyright 2015, Joyent, Inc.
  */
 
 #ifndef	_UDP_IMPL_H
@@ -63,7 +64,7 @@ extern "C" {
 typedef struct udp_fanout_s {
 	struct udp_s *uf_udp;
 	kmutex_t uf_lock;
-#if defined(_LP64) || defined(_I32LPx)
+#if defined(_LP64)
 	char	uf_pad[48];
 #else
 	char	uf_pad[56];
@@ -179,7 +180,11 @@ typedef	struct udp_s {
 		udp_nat_t_endpoint : 1,	/* UDP_NAT_T_ENDPOINT option */
 		udp_rcvhdr : 1,		/* UDP_RCVHDR option */
 
-		udp_pad_to_bit_31 : 29;
+		udp_vxlanhash: 1,	/* UDP_SRCPORT_HASH option */
+					/* Because there's only VXLAN, cheat */
+					/* and only use a single bit */
+
+		udp_pad_to_bit_31 : 28;
 
 	/* Following 2 fields protected by the uf_lock */
 	struct udp_s	*udp_bind_hash; /* Bind hash chain */
@@ -242,7 +247,7 @@ extern void	udp_ddi_g_init(void);
 extern void	udp_ddi_g_destroy(void);
 extern void	udp_output(conn_t *connp, mblk_t *mp, struct sockaddr *addr,
 		    socklen_t addrlen);
-extern void	udp_wput(queue_t *, mblk_t *);
+extern int	udp_wput(queue_t *, mblk_t *);
 
 extern void	*udp_kstat_init(netstackid_t stackid);
 extern void	udp_kstat_fini(netstackid_t stackid, kstat_t *ksp);

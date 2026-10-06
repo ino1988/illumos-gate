@@ -22,12 +22,11 @@
 /*
  * Copyright 2003 Sun Microsystems, Inc.  All rights reserved.
  * Use is subject to license terms.
+ * Copyright 2025 MNX Cloud, Inc.
  */
 
 #ifndef	_POS4OBJ_H
 #define	_POS4OBJ_H
-
-#pragma ident	"%Z%%M%	%I%	%E% SMI"
 
 /*
  * pos4obj.h - Header file for POSIX.4 related object names
@@ -40,7 +39,7 @@ extern "C" {
 /* flags used to indicate current state of open */
 #define	DFILE_CREATE	0x01
 #define	DFILE_OPEN	0x02
-#define	ALLOC_MEM	0x04
+/* ALLOC_MEM 0x4 is deprecated, reuse this first */
 #define	DFILE_MMAP	0x08
 #define	PFILE_CREATE	0x10
 #define	NFILE_CREATE	0x20

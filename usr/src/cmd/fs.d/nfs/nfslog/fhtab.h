@@ -26,8 +26,6 @@
 #ifndef _FHTAB_H
 #define	_FHTAB_H
 
-#pragma ident	"%Z%%M%	%I%	%E% SMI"
-
 /*
  * Support for the fh mapping file for nfslog.
  */
@@ -35,6 +33,8 @@
 #ifdef __cplusplus
 extern "C" {
 #endif
+
+#include <stdio_tag.h>
 
 /*
  * RPC dispatch table for file handles
@@ -137,7 +137,7 @@ typedef union {
 	linkinfo_ent	link_rec;
 } db_record;
 
-void debug_opaque_print(FILE *, void *buf, int size);
+void debug_opaque_print(__FILE *, void *buf, int size);
 int db_add(char *fhpath, fhandle_t *dfh, char *name, fhandle_t *fh,
 	uint_t flags);
 fhlist_ent *db_lookup(char *fhpath, fhandle_t *fh, fhlist_ent *fhrecp,
@@ -148,7 +148,7 @@ int db_delete(char *fhpath, fhandle_t *fh);
 int db_delete_link(char *fhpath, fhandle_t *dfh, char *name);
 int db_rename_link(char *fhpath, fhandle_t *from_dfh, char *from_name,
 	fhandle_t *to_dfh, char *to_name);
-void db_print_all_keys(char *fhpath, fsid_t *fsidp, FILE *fp);
+void db_print_all_keys(char *fhpath, fsid_t *fsidp, __FILE *fp);
 
 char *nfslog_get_path(fhandle_t *fh, char *name, char *fhpath, char *prtstr);
 

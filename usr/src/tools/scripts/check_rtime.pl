@@ -22,15 +22,16 @@
 
 #
 # Copyright (c) 1999, 2010, Oracle and/or its affiliates. All rights reserved.
+# Copyright 2026 Oxide Computer Company
 #
 
 #
 # Check ELF information.
 #
-# This script descends a directory hierarchy inspecting ELF dynamic executables
-# and shared objects.  The general theme is to verify that common Makefile rules
-# have been used to build these objects.  Typical failures occur when Makefile
-# rules are re-invented rather than being inherited from "cmd/lib" Makefiles.
+# This script descends a directory hierarchy inspecting ELF objects.  The
+# general theme is to verify that common Makefile rules have been used to
+# build these objects.  Typical failures occur when Makefile rules are
+# re-invented rather than being inherited from "cmd/lib" Makefiles.
 #
 # As always, a number of components don't follow the rules, and these are
 # excluded to reduce this scripts output.
@@ -58,6 +59,7 @@ use vars  qw($Prog $Env $Ena64 $Tmpdir);
 use vars  qw($LddNoU $Conf32 $Conf64);
 use vars  qw(%opt);
 use vars  qw($ErrFH $ErrTtl $InfoFH $InfoTtl $OutCnt1 $OutCnt2);
+use vars  qw($Jobs $SameOut $ParentPid);
 
 # An exception file is used to specify regular expressions to match
 # objects. These directives specify special attributes of the object.
@@ -95,6 +97,16 @@ use vars  qw($ErrFH $ErrTtl $InfoFH $InfoTtl $OutCnt1 $OutCnt2);
 #
 #   EXEC_STACK
 #	Objects that are not required to have a non-executable stack
+#
+#   FORBIDDEN_DEP
+#	Objects allowed to link to 'forbidden' objects
+#
+#   FORBIDDEN
+#	Objects to which nobody not excepted with FORBIDDEN_DEP may link
+#
+#   NOT_KMOD
+#	Objects that we think should be linked with -ztype=kmod but are
+#	allowed to not be.
 #
 #   NOCRLEALT
 #	Objects that should be skipped by AltObjectConfig() when building
@@ -138,14 +150,15 @@ use vars  qw($ErrFH $ErrTtl $InfoFH $InfoTtl $OutCnt1 $OutCnt2);
 #
 
 use vars  qw($EXRE_exec_data $EXRE_exec_stack $EXRE_nocrlealt);
-use vars  qw($EXRE_nodirect $EXRE_nosymsort);
+use vars  qw($EXRE_nodirect $EXRE_nosymsort $EXRE_forbidden_dep $EXRE_forbidden);
 use vars  qw($EXRE_olddep $EXRE_skip $EXRE_stab $EXRE_textrel $EXRE_undef_ref);
 use vars  qw($EXRE_unref_obj $EXRE_unused_deps $EXRE_unused_obj);
-use vars  qw($EXRE_unused_rpath);
+use vars  qw($EXRE_unused_rpath $EXRE_no_comment $EXRE_not_kmod);
 
 use strict;
 use Getopt::Std;
 use File::Basename;
+use IO::Handle;
 
 
 # Reliably compare two OS revisions.  Arguments are <ver1> <op> <ver2>.
@@ -177,10 +190,7 @@ sub ProcFile {
 	my(@Elf, @Ldd, $Dyn, $Sym, $Stack);
 	my($Sun, $Relsz, $Pltsz, $Tex, $Stab, $Strip, $Lddopt, $SymSort);
 	my($Val, $Header, $IsX86, $RWX, $UnDep);
-	my($HasDirectBinding);
-
-	# Only look at executables and sharable objects
-	return if ($Type ne 'EXEC') && ($Type ne 'DYN');
+	my($HasDirectBinding, $HasKMOD);
 
 	# Ignore symbolic links
 	return if -l $FullPath;
@@ -208,7 +218,8 @@ sub ProcFile {
 	# shared object.
 	@Elf = split(/\n/, `elfdump -epdcy $FullPath 2>&1`);
 
-	$Dyn = $Stack = $IsX86 = $RWX = 0;
+	$Dyn = $Stack = $IsX86 = $RWX = $HasKMOD = 0;
+
 	$Header = 'None';
 	foreach my $Line (@Elf) {
 		# If we have an invalid file type (which we can tell from the
@@ -233,7 +244,7 @@ sub ProcFile {
 
 		if ($Line =~ /^Dynamic Section/) {
 			# A dynamic section indicates we're a dynamic object
-			# (this makes sure we don't check static executables).
+			$Header = 'Dyn';
 			$Dyn = 1;
 			next;
 		}
@@ -268,16 +279,22 @@ sub ProcFile {
 			$Stack = 1;
 			next;
 		}
+
+		if (($Header eq 'Dyn') && ($Line =~ /SUNW_KMOD/)) {
+			$HasKMOD = 1;
+			next;
+		}
 	}
 
-	# Determine whether this ELF executable or shared object has a
-	# conforming mcs(1) comment section.  If the correct $(POST_PROCESS)
-	# macros are used, only a 3 or 4 line .comment section should exist
-	# containing one or two "@(#)SunOS" identifying comments (one comment
-	# for a non-debug build, and two for a debug build). The results of
-	# the following split should be three or four lines, the last empty
-	# line being discarded by the split.
-	if ($opt{m}) {
+	# Determine whether this ELF object has a conforming mcs(1) comment
+	# section.  If the correct $(POST_PROCESS) macros are used, only a 3
+	# or 4 line .comment section should exist containing one or two
+	# "@(#)illumos" identifying comments (one comment for a non-debug
+	# build, and two for a debug build). The results of the following
+	# split should be three or four lines, the last empty line being
+	# discarded by the split.
+	if ($opt{m} &&
+	    (!defined($EXRE_no_comment) || ($RelPath !~ $EXRE_no_comment))) {
 		my(@Mcs, $Con, $Dev);
 
 		@Mcs = split(/\n/, `mcs -p $FullPath 2>&1`);
@@ -286,11 +303,11 @@ sub ProcFile {
 		foreach my $Line (@Mcs) {
 			$Val++;
 
-			if (($Val == 3) && ($Line !~ /^@\(#\)SunOS/)) {
+			if (($Val == 3) && ($Line !~ /^@\(#\)illumos/)) {
 				$Con = 1;
 				last;
 			}
-			if (($Val == 4) && ($Line =~ /^@\(#\)SunOS/)) {
+			if (($Val == 4) && ($Line =~ /^@\(#\)illumos/)) {
 				$Dev = 1;
 				next;
 			}
@@ -316,15 +333,9 @@ sub ProcFile {
 		    "non-executable stack required\t<no -Mmapfile_noexstk?>");
 	}
 
-	# Having caught any static executables in the mcs(1) check and non-
-	# executable stack definition check, continue with dynamic objects
-	# from now on.
-	if ($Dyn eq 0) {
-		return;
-	}
-
-	# Use ldd unless its a 64-bit object and we lack the hardware.
-	if (($Class == 32) || $Ena64) {
+	# Use ldd on dynamic objects unless it's a 64-bit object and we lack
+	# the hardware.
+	if (($Type ne 'REL') && (($Class == 32) || $Ena64)) {
 		my $LDDFullPath = $FullPath;
 
 		if ($Secure) {
@@ -335,7 +346,7 @@ sub ProcFile {
 			# being investigated to a safe place first.  In addition
 			# remove its secure permission so that it can be
 			# influenced by any alternative dependency mappings.
-	
+
 			my $File = $RelPath;
 			$File =~ s!^.*/!!;      # basename
 
@@ -393,7 +404,8 @@ sub ProcFile {
 
 			# Historically, ldd(1) likes executable objects to have
 			# their execute bit set.
-			if ($Line =~ /not executable/) {
+			if (($Type eq 'EXEC' || $Type eq 'DYN' ||
+			     $HasKMOD == 1) && (!(-x $FullPath))) {
 				onbld_elfmod::OutMsg($ErrFH, $ErrTtl, $RelPath,
 				    "is not executable");
 				next;
@@ -403,7 +415,7 @@ sub ProcFile {
 		# Look for "file" or "versions" that aren't found.  Note that
 		# these lines will occur before we find any symbol referencing
 		# errors.
-		if (($Sym == 5) && ($Line =~ /not found\)/)) {
+		if (($Type ne 'REL') && ($Sym == 5) && ($Line =~ /not found\)/)) {
 			if ($Line =~ /file not found\)/) {
 				$Line =~ s/$/\t<no -zdefs?>/;
 			}
@@ -413,7 +425,7 @@ sub ProcFile {
 		# Look for relocations whose symbols can't be found.  Note, we
 		# only print out the first 5 relocations for any file as this
 		# output can be excessive.
-		if ($Sym && ($Line =~ /symbol not found/)) {
+		if (($Type ne 'REL') && $Sym && ($Line =~ /symbol not found/)) {
 			# Determine if this file is allowed undefined
 			# references.
 			if (($Sym == 5) && defined($EXRE_undef_ref) &&
@@ -443,6 +455,7 @@ sub ProcFile {
 			onbld_elfmod::OutMsg($ErrFH, $ErrTtl, $RelPath, $Line);
 			next;
 		}
+
 		# Look for unreferenced dependencies.  Note, if any unreferenced
 		# objects are ignored, then set $UnDep so as to suppress any
 		# associated unused-object messages.
@@ -460,7 +473,7 @@ sub ProcFile {
 			next;
 		}
 		# Look for any unused dependencies.
-		if ($UnDep && ($Line =~ /unused/)) {
+		if ($UnDep && ($Line =~ /unused .+=/)) {
 			# Skip if object is allowed to have unused dependencies
 			next if defined($EXRE_unused_deps) &&
 			    ($RelPath =~ $EXRE_unused_deps);
@@ -482,6 +495,7 @@ sub ProcFile {
 	$Sun = $Relsz = $Pltsz = $Dyn = $Stab = $SymSort = 0;
 	$Tex = $Strip = 1;
 	$HasDirectBinding = 0;
+	$HasKMOD = 0;
 
 	$Header = 'None';
 ELF:	foreach my $Line (@Elf) {
@@ -540,7 +554,7 @@ ELF:	foreach my $Line (@Elf) {
 		}
 
 		# Does this object contain text relocations.
-		if ($Tex && ($Line =~ /TEXTREL/)) {
+		if ($Tex && ($Type ne 'REL') && ($Line =~ /TEXTREL/)) {
 			# Determine if this file is allowed text relocations.
 			if (defined($EXRE_textrel) &&
 			    ($RelPath =~ $EXRE_textrel)) {
@@ -548,7 +562,7 @@ ELF:	foreach my $Line (@Elf) {
 				next ELF;
 			}
 			onbld_elfmod::OutMsg($ErrFH, $ErrTtl, $RelPath,
-			    "TEXTREL .dynamic tag\t\t\t<no -Kpic?>");
+			    "TEXTREL .dynamic tag\t\t\t<no -fpic?>");
 			$Tex = 0;
 			next;
 		}
@@ -577,7 +591,15 @@ ELF:	foreach my $Line (@Elf) {
 			if (defined($EXRE_olddep) && ($Need =~ $EXRE_olddep)) {
 				# Catch any old (unnecessary) dependencies.
 				onbld_elfmod::OutMsg($ErrFH, $ErrTtl, $RelPath,
-			"NEEDED=$Need\t<dependency no longer necessary>");
+				    "NEEDED=$Need\t<dependency no " .
+				    "longer necessary>");
+			} elsif ((defined($EXRE_forbidden) &&
+                                  ($Need =~ $EXRE_forbidden)) &&
+                                 (!defined($EXRE_forbidden_dep) ||
+                                  ($FullPath !~ $EXRE_forbidden_dep))) {
+				onbld_elfmod::OutMsg($ErrFH, $ErrTtl, $RelPath,
+				    "NEEDED=$Need\t<forbidden dependency, " .
+				    "missing -nodefaultlibs?>");
 			} elsif ($opt{i}) {
 				# Under the -i (information) option print out
 				# any useful dynamic entries.
@@ -590,6 +612,10 @@ ELF:	foreach my $Line (@Elf) {
 		# Is this object built with -B direct flag on?
 		if ($Line =~ / DIRECT /) {
 			$HasDirectBinding = 1;
+		}
+
+		if (($Header eq 'Dyn') && ($Line =~ /SUNW_KMOD/)) {
+			$HasKMOD = 1;
 		}
 
 		# Does this object specify a runpath.
@@ -606,6 +632,15 @@ ELF:	foreach my $Line (@Elf) {
 	if (($Type eq 'DYN') && $Relsz && ($Relsz != $Pltsz) && ($Sun == 0)) {
 		onbld_elfmod::OutMsg($ErrFH, $ErrTtl, $RelPath,
 		    ".SUNW_reloc section missing\t\t<no -zcombreloc?>");
+	}
+
+	# A probable kernel module should be tagged
+	if (($Type eq 'REL') && ($RelPath =~ qr{(^|/)kernel/}) &&
+	    ($HasKMOD == 0)) {
+		if (!defined($EXRE_not_kmod) || ($RelPath !~ $EXRE_not_kmod)) {
+			onbld_elfmod::OutMsg($ErrFH, $ErrTtl, $RelPath,
+			    "kernel object should be linked -ztype=kmod");
+		}
 	}
 
 	# No objects released to a customer should have any .stabs sections
@@ -686,7 +721,7 @@ sub ProcSymSort {
 	my $secname;
 	while ($line = <SORT>) {
 		chomp $line;
-		
+
 		next if ($line eq '');
 
 		# If this is a header line, pick up the section name
@@ -709,9 +744,9 @@ sub ProcSymSort {
 
 		# Process symbol line
 		my @fields = split /\s+/, $line;
-		my $new_addr = $fields[2]; 
+		my $new_addr = $fields[2];
 		my $new_type = $fields[8];
-		my $new_name = $fields[9]; 
+		my $new_name = $fields[9];
 
 		if ($new_type eq 'UNDEF') {
 			onbld_elfmod::OutMsg($ErrFH, $ErrTtl, $RelPath,
@@ -726,13 +761,13 @@ sub ProcSymSort {
 			ProcSymSortOutMsg($RelPath, $secname,
 			    $last_addr, @dups) if (scalar(@dups) > 1);
 			@dups = ( $new_name );
-			$last_addr = $new_addr; 
+			$last_addr = $new_addr;
 		}
 	}
 
 	ProcSymSortOutMsg($RelPath, $secname, $last_addr, @dups)
 		if (scalar(@dups) > 1);
-	
+
 	close SORT;
 }
 
@@ -797,13 +832,13 @@ sub ProcVerdef {
 			    onbld_elfmod::OutMsg($InfoFH, $InfoTtl,
 			        $RelPath, "VERSION=$ver");
 			    $cur_ver = $ver;
-			}			    
+			}
 			onbld_elfmod::OutMsg($InfoFH, $InfoTtl,
 			    $RelPath, "SYMBOL=$sym");
 		    }
 		}
 	}
-	
+
 	close PVS;
 }
 
@@ -855,19 +890,133 @@ sub ProcFindElf {
 	my $file = $_[0];
 	my $line;
 	my $LineNum;
+	my @Objects = ();
 
 	my $prefix = OpenFindElf($file, \*FIND_ELF, \$LineNum);
 
 	while ($line = onbld_elfmod::GetLine(\*FIND_ELF, \$LineNum)) {
 		next if !($line =~ /^OBJECT\s/i);
 
-		my ($item, $class, $type, $verdef, $obj) =
-		    split(/\s+/, $line, 5);
-
-		ProcFile("$prefix/$obj", $obj, $class, $type, $verdef);
+		push @Objects, $line;
 	}
 
 	close FIND_ELF;
+
+	if ($Jobs > 1) {
+		ProcObjectsParallel($prefix, \@Objects);
+	} else {
+		ProcObjects($prefix, \@Objects, 0, scalar(@Objects));
+	}
+}
+
+sub ProcObjects {
+	my ($prefix, $objs, $lo, $hi) = @_;
+
+	for (my $i = $lo; $i < $hi; $i++) {
+		my ($item, $class, $type, $verdef, $obj) =
+		    split(/\s+/, $objs->[$i], 5);
+
+		ProcFile("$prefix/$obj", $obj, $class, $type, $verdef);
+	}
+}
+
+sub AppendFile {
+	my ($file, $fh) = @_;
+	my $line;
+
+	open(APPEND, $file) || return;
+	print $fh $line while ($line = <APPEND>);
+	close APPEND;
+}
+
+sub ProcObjectsParallel {
+	my ($prefix, $objs) = @_;
+	my $cnt = scalar(@$objs);
+	my $jobs = ($Jobs > $cnt) ? $cnt : $Jobs;
+	my (@Pids, @Errs, @Infos);
+	my $failed = 0;
+
+	my $workdir = "$Tmpdir/$Prog.$$";
+	mkdir($workdir, 0700) || die "$Prog: mkdir failed: $workdir: $!";
+
+	$ErrFH->flush();
+	$InfoFH->flush();
+	(\*STDOUT)->flush();
+
+	# The child reaping below relies on the default disposition of
+	# SIGCHLD.
+	local $SIG{CHLD} = 'DEFAULT';
+
+	# Each child is given a contiguous slice of the object list. A slice
+	# starts where the previous one ended, and since $jobs has been
+	# clamped to the number of objects no slice is empty.
+	my ($lo, $hi) = (0, 0);
+	for (my $i = 0; $i < $jobs; $lo = $hi, $i++) {
+		$hi = int(($cnt * ($i + 1)) / $jobs);
+
+		my $efile = "$workdir/err.$i";
+		my $ifile = $SameOut ? $efile : "$workdir/info.$i";
+		my $pid = fork();
+
+		if (!defined($pid)) {
+			warn "$Prog: fork failed: $!\n";
+			$failed = 1;
+			last;
+		}
+
+		if ($pid == 0) {
+			open(CHLDERR, ">$efile") ||
+			    die "$Prog: open failed: $efile: $!";
+			$ErrFH = \*CHLDERR;
+			if ($SameOut) {
+				$InfoFH = $ErrFH;
+			} else {
+				open(CHLDINFO, ">$ifile") ||
+				    die "$Prog: open failed: $ifile: $!";
+				$InfoFH = \*CHLDINFO;
+			}
+
+			$Tmpdir = "$workdir/obj.$i";
+			mkdir($Tmpdir, 0700) ||
+			    die "$Prog: mkdir failed: $Tmpdir: $!";
+
+			ProcObjects($prefix, $objs, $lo, $hi);
+
+			rmdir $Tmpdir;
+
+			close(CHLDERR) ||
+			    die "$Prog: close failed: $efile: $!";
+			if (!$SameOut) {
+				close(CHLDINFO) ||
+				    die "$Prog: close failed: $ifile: $!";
+			}
+			exit 0;
+		}
+
+		push @Pids, $pid;
+		push @Errs, $efile;
+		push @Infos, $ifile;
+	}
+
+	for (my $i = 0; $i <= $#Pids; $i++) {
+		next if waitpid($Pids[$i], 0) != -1 && $? == 0;
+
+		warn "$Prog: child " . ($i + 1) . "/" . scalar(@Pids) .
+		    " failed: status $?\n";
+		$failed = 1;
+	}
+
+	for (my $i = 0; $i <= $#Errs; $i++) {
+		AppendFile($Errs[$i], $ErrFH);
+		AppendFile($Infos[$i], $InfoFH) if !$SameOut;
+		unlink $Errs[$i];
+		unlink $Infos[$i] if !$SameOut;
+	}
+
+	rmdir $workdir;
+
+	die "$Prog: parallel object processing failed\n" if $failed;
+	die "$Prog: only $hi of $cnt objects were processed\n" if $hi != $cnt;
 }
 
 
@@ -901,7 +1050,7 @@ sub AltObjectConfig {
 	my $obj_active = 0;
 	my $obj_class;
 
-	my $prefix = OpenFindElf($file, \*FIND_ELF);
+	my $prefix = OpenFindElf($file, \*FIND_ELF, \$LineNum);
 
 LINE:
 	while ($line = onbld_elfmod::GetLine(\*FIND_ELF, \$LineNum)) {
@@ -1014,7 +1163,7 @@ LINE:
 
 # -----------------------------------------------------------------------------
 
-# This script relies on ldd returning output reflecting only the binary 
+# This script relies on ldd returning output reflecting only the binary
 # contents.  But if LD_PRELOAD* environment variables are present, libraries
 # named by them will also appear in the output, disrupting our analysis.
 # So, before we get too far, scrub the environment.
@@ -1025,6 +1174,9 @@ delete($ENV{LD_PRELOAD_64});
 
 # Establish a program name for any error diagnostics.
 chomp($Prog = `basename $0`);
+
+# Remember which process is the parent, for use in the END block below.
+$ParentPid = $$;
 
 # The onbld_elfmod package is maintained in the same directory as this
 # script, and is installed in ../lib/perl. Use the local one if present,
@@ -1051,11 +1203,11 @@ if ($Mach =~ /sparc/) {
 $Env = '';
 
 # Check that we have arguments.
-if ((getopts('D:d:E:e:f:I:imosvw:', \%opt) == 0) ||
+if ((getopts('D:d:E:e:f:I:ij:mosvw:', \%opt) == 0) ||
     (!$opt{f} && ($#ARGV == -1))) {
 	print "usage: $Prog [-imosv] [-D depfile | -d depdir] [-E errfile]\n";
-	print "\t\t[-e exfile] [-f listfile] [-I infofile] [-w outdir]\n";
-	print "\t\t[file | dir]...\n";
+	print "\t\t[-e exfile] [-f listfile] [-I infofile] [-j jobs]\n";
+	print "\t\t[-w outdir] [file | dir]...\n";
 	print "\n";
 	print "\t[-D depfile]\testablish dependencies from 'find_elf -r' file list\n";
 	print "\t[-d depdir]\testablish dependencies from under directory\n";
@@ -1064,6 +1216,7 @@ if ((getopts('D:d:E:e:f:I:imosvw:', \%opt) == 0) ||
 	print "\t[-f listfile]\tuse file list produced by find_elf -r\n";
 	print "\t[-I infofile]\tdirect informational output (-i, -v) to file\n";
 	print "\t[-i]\t\tproduce dynamic table entry information\n";
+	print "\t[-j jobs]\tprocess objects in parallel with this many jobs\n";
 	print "\t[-m]\t\tprocess mcs(1) comments\n";
 	print "\t[-o]\t\tproduce one-liner output (prefixed with pathname)\n";
 	print "\t[-s]\t\tprocess .stab and .symtab entries\n";
@@ -1073,6 +1226,13 @@ if ((getopts('D:d:E:e:f:I:imosvw:', \%opt) == 0) ||
 }
 
 die "$Prog: -D and -d options are mutually exclusive\n" if ($opt{D} && $opt{d});
+
+$Jobs = 1;
+if (defined($opt{j})) {
+	die "$Prog: -j requires a positive integer\n"
+	    if $opt{j} !~ /^\d+$/ || $opt{j} == 0;
+	$Jobs = $opt{j};
+}
 
 $Tmpdir = "/tmp" if (!($Tmpdir = $ENV{TMPDIR}) || (! -d $Tmpdir));
 
@@ -1107,7 +1267,7 @@ if ($opt{d}) {
 if ($opt{D} || $Proto) {
 	if (system('ldd -e /usr/lib/lddstub 2> /dev/null')) {
 		print "ldd: does not support -e, unable to ";
-		print "create alternative dependency mappingings.\n";
+		print "create alternative dependency mappings.\n";
 		print "ldd: option added under 4390308 (s81_30).\n\n";
 	} else {
 		# If -D was specified, it supplies a list of files in
@@ -1165,9 +1325,9 @@ if ($opt{I}) {
 }
 my ($err_dev, $err_ino) = stat($ErrFH);
 my ($info_dev, $info_ino) = stat($InfoFH);
+$SameOut = (($err_dev == $info_dev) && ($err_ino == $info_ino)) ? 1 : 0;
 $ErrTtl = \$OutCnt1;
-$InfoTtl = (($err_dev == $info_dev) && ($err_ino == $info_ino)) ?
-    \$OutCnt1 : \$OutCnt2;
+$InfoTtl = $SameOut ? \$OutCnt1 : \$OutCnt2;
 
 
 # If we were given a list of objects in 'find_elf -r' format, then
@@ -1181,9 +1341,17 @@ foreach my $Arg (@ARGV) {
 }
 
 # Cleanup output files
-unlink $Conf64 if $Conf64;
-unlink $Conf32 if $Conf32;
 close ERROR if $opt{E};
 close INFO if $opt{I};
+
+# Remove the crle(1) configuration files on any exit path, including
+# die(). Only the parent may do this - the children inherit this block,
+# and the configuration files are shared.
+END {
+	if (defined($ParentPid) && $$ == $ParentPid) {
+		unlink $Conf64 if $Conf64;
+		unlink $Conf32 if $Conf32;
+	}
+}
 
 exit 0;

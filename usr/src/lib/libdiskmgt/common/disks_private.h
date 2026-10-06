@@ -18,9 +18,15 @@
  *
  * CDDL HEADER END
  */
+
 /*
  * Copyright 2006 Sun Microsystems, Inc.  All rights reserved.
  * Use is subject to license terms.
+ */
+
+/*
+ * Copyright 2017 Nexenta Systems, Inc.
+ * Copyright 2024 Sebastian Wiedenroth
  */
 
 #ifndef _DISKS_PRIVATE_H
@@ -52,7 +58,6 @@ typedef struct alias_info {
 	slice_t		*devpaths;
 	slice_t		*orig_paths;
 	char		*wwn;
-	int		cluster;
 	int		lun;
 	int		target;
 	struct alias_info *next;
@@ -108,6 +113,7 @@ typedef struct disk {
 	int		wide;
 	int		cd_rom;
 	int		solid_state;
+	char		*serial;
 } disk_t;
 
 typedef struct descriptor {
@@ -255,7 +261,6 @@ int		libdiskmgt_str_eq(char *nm1, char *nm2);
 
 /* in-use detectors */
 int		inuse_mnt(char *slice, nvlist_t *attrs, int *errp);
-int		inuse_svm(char *slice, nvlist_t *attrs, int *errp);
 int		inuse_lu(char *slice, nvlist_t *attrs, int *errp);
 int		inuse_active_zpool(char *slice, nvlist_t *attrs, int *errp);
 int		inuse_exported_zpool(char *slice, nvlist_t *attrs, int *errp);

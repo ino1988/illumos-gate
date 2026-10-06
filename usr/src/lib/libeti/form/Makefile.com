@@ -65,25 +65,29 @@ OBJECTS=  \
 # include library definitions
 include ../../../Makefile.lib
 
-LIBS =          $(DYNLIB) $(LINTLIB)
+LIBS =          $(DYNLIB)
 
 SRCDIR=		../common
-
-$(LINTLIB) :=	SRCS=$(SRCDIR)/$(LINTSRC)
 
 CPPFLAGS +=	-I../inc
 CFLAGS +=       $(CCVERBOSE)
 LDLIBS +=       -lcurses -lc
 
 CERRWARN +=	-_gcc=-Wno-parentheses
-CERRWARN +=	-_gcc=-Wno-uninitialized
+CERRWARN +=	$(CNOWARN_UNINIT)
 CERRWARN +=	-_gcc=-Wno-char-subscripts
+
+COMPATLINKS=	usr/ccs/lib/libform.so
+COMPATLINKS64=	usr/ccs/lib/$(MACH64)/libform.so
+
+$(ROOT)/usr/ccs/lib/libform.so := COMPATLINKTARGET= ../../lib/libform.so.1
+$(ROOT)/usr/ccs/lib/$(MACH64)/libform.so := \
+	COMPATLINKTARGET= ../../../lib/$(MACH64)/libform.so.1
 
 .KEEP_STATE:
 
 all: $(LIBS)
 
-lint: lintcheck
 
 # include library targets
 include ../../../Makefile.targ

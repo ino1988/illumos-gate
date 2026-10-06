@@ -26,7 +26,8 @@
 #
 
 #
-# Copyright (c) 2012 by Delphix. All rights reserved.
+# Copyright (c) 2012, 2016 by Delphix. All rights reserved.
+# Copyright 2023 RackTop Systems, Inc.
 #
 
 . $STF_SUITE/tests/functional/acl/acl_common.kshlib
@@ -43,7 +44,7 @@
 # 4. Verify that the owner/group are correct. Follow these rules:
 #	(1) If uid is granted the write_owner permission, then it can only do
 #	    chown to its own uid, or a group that they are a member of.
-#	(2) Owner will ignore permission of (1) even write_owner not granted.
+#	(2) chown/chgrp will fail when write_owner not granted.
 #	(3) Superuser will always permit whatever they do.
 #
 
@@ -51,8 +52,8 @@ verify_runnable "both"
 
 function cleanup
 {
-	[[ -d $basedir ]] && $RM -rf $basedir
-	[[ -f $TESTDIR/$ARCHIVEFILE ]] && log_must $RM -f $TESTDIR/$ARCHIVEFILE
+	[[ -d $basedir ]] && rm -rf $basedir
+	[[ -f $TESTDIR/$ARCHIVEFILE ]] && log_must rm -f $TESTDIR/$ARCHIVEFILE
 	return 0
 }
 
@@ -71,7 +72,7 @@ function get_owner
 		log_fail "node are not defined."
 	fi
 
-	$ECHO $($LS -dl $node | $AWK '{print $3}')
+	echo $(ls -dl $node | awk '{print $3}')
 }
 
 #
@@ -85,7 +86,7 @@ function get_group
 		log_fail "node are not defined."
 	fi
 
-	$ECHO $($LS -dl $node | $AWK '{print $4}')
+	echo $(ls -dl $node | awk '{print $4}')
 }
 
 
@@ -106,7 +107,7 @@ function get_user_group
 	if [[ $? -eq 0 ]]; then
 		value=${value##*\(}
 		value=${value%%\)*}
-		$ECHO $value
+		echo $value
 	else
 		log_fail "Invalid UID (uid)."
 	fi
@@ -124,12 +125,12 @@ function operate_node_owner
 		log_fail "user, node are not defined."
 	fi
 
-	$SU $user -c "$CHOWN $expect_owner $node"
+	su $user -c "chown $expect_owner $node"
 	ret=$?
 	new_owner=$(get_owner $node)
 
 	if [[ $new_owner != $old_owner ]]; then
-		$TAR xpf $TESTDIR/$ARCHIVEFILE
+		tar xpf $TESTDIR/$ARCHIVEFILE
 	fi
 
 	if [[ $ret -eq 0 ]]; then
@@ -160,12 +161,12 @@ function operate_node_group
 		log_fail "user, node are not defined."
 	fi
 
-	$SU $user -c "$CHGRP $expect_group $node"
+	su $user -c "chgrp $expect_group $node"
 	ret=$?
 	new_group=$(get_group $node)
 
 	if [[ $new_group != $old_group ]]; then
-		$TAR xpf $TESTDIR/$ARCHIVEFILE
+		tar xpf $TESTDIR/$ARCHIVEFILE
 	fi
 
 	if [[ $ret -eq 0 ]]; then
@@ -197,7 +198,13 @@ function logname
 		ret="log_must"
 	elif [[ $user == $new ]] ; then
 		if [[ $user == $old || $acl_target == *:allow ]]; then
-			ret="log_must"
+			# with aclimplicit=on, the write_owner:deny
+			# will have no effect and chown/chgrp commands
+			# needs to succeed.
+			if [[ $aclimplicit == on ||
+			    $acl_target != *@:write_owner:deny ]]; then
+				ret="log_must"
+			fi
 		fi
 	fi
 
@@ -271,14 +278,14 @@ function test_chmod_basic_access
 
 	for flag in $a_flag; do
 		for acl_t in $a_access; do
-			log_must $SU $user -c "$CHMOD A+$flag:$acl_t $node"
+			log_must su $user -c "chmod A+$flag:$acl_t $node"
 
-			$TAR cpf $TESTDIR/$ARCHIVEFILE basedir
+			tar cpf $TESTDIR/$ARCHIVEFILE basedir
 
 			check_chmod_results $user $node $flag $acl_t $g_usr \
 			    $o_usr
 
-			log_must $SU $user -c "$CHMOD A0- $node"
+			log_must su $user -c "chmod A0- $node"
 		done
 	done
 }
@@ -289,36 +296,58 @@ function setup_test_files
 	typeset user=$2
 	typeset group=$3
 
-	$RM -rf $base_node
+	rm -rf $base_node
 
-	log_must $MKDIR -p $base_node
-	log_must $CHOWN $user:$group $base_node
+	log_must mkdir -p $base_node
+	log_must chown $user:$group $base_node
 
 	# Prepare all files/sub-dirs for testing.
-	log_must $SU $user -c "$TOUCH $file"
-	log_must $SU $user -c "$CHMOD 444 $file"
-	log_must $SU $user -c "$MKDIR -p $dir"
-	log_must $SU $user -c "$CHMOD 444 $dir"
-	log_must $SU $user -c "$CHMOD 555 $base_node"
+	log_must su $user -c "touch $file"
+	log_must su $user -c "chmod 444 $file"
+	log_must su $user -c "mkdir -p $dir"
+	log_must su $user -c "chmod 444 $dir"
+	log_must su $user -c "chmod 555 $base_node"
 }
 
 typeset ARCHIVEFILE=archive.tar
+typeset a_prop="on off"
 typeset a_access="write_owner:allow write_owner:deny"
 typeset a_flag="owner@ group@ everyone@"
 typeset basedir="$TESTDIR/basedir"
 typeset file="$basedir/file"
 typeset dir="$basedir/dir"
+typeset aclimplicit=$(zfs get -Ho value aclimplicit $TESTPOOL/$TESTFS)
+typeset val
 
 cd $TESTDIR
-setup_test_files $basedir 'root' 'root'
-test_chmod_basic_access 'root' $file $ZFS_ACL_ADMIN  $ZFS_ACL_OTHER1
-test_chmod_basic_access 'root' $dir $ZFS_ACL_ADMIN  $ZFS_ACL_OTHER1
-$RM -rf $basedir
 
-setup_test_files $basedir $ZFS_ACL_STAFF1 $ZFS_ACL_STAFF_GROUP
-test_chmod_basic_access $ZFS_ACL_STAFF1 $file $ZFS_ACL_STAFF2 $ZFS_ACL_OTHER1
-test_chmod_basic_access $ZFS_ACL_STAFF1 $dir $ZFS_ACL_STAFF2 $ZFS_ACL_OTHER1
-$RM -rf $basedir
+for val in $a_prop; do
+	log_must zfs set aclimplicit=$val $TESTPOOL/$TESTFS
+	aclimplicit=$(zfs get -Ho value aclimplicit $TESTPOOL/$TESTFS)
+	if [[ $val == off ]]; then
+		# aclimplicit=off also needs aclmode=passthrough and
+		# aclinherit=passthrough
+		log_must zfs set aclmode=passthrough $TESTPOOL/$TESTFS
+		log_must zfs set aclinherit=passthrough $TESTPOOL/$TESTFS
+	fi
+
+	setup_test_files $basedir 'root' 'root'
+	test_chmod_basic_access 'root' $file $ZFS_ACL_ADMIN  $ZFS_ACL_OTHER1
+	test_chmod_basic_access 'root' $dir $ZFS_ACL_ADMIN  $ZFS_ACL_OTHER1
+	rm -rf $basedir
+
+	setup_test_files $basedir $ZFS_ACL_STAFF1 $ZFS_ACL_STAFF_GROUP
+	test_chmod_basic_access $ZFS_ACL_STAFF1 $file $ZFS_ACL_STAFF2 \
+		$ZFS_ACL_OTHER1
+	test_chmod_basic_access $ZFS_ACL_STAFF1 $dir $ZFS_ACL_STAFF2 \
+		$ZFS_ACL_OTHER1
+	rm -rf $basedir
+done
+
+# restore defaults, so next test is not affected.
+log_must zfs inherit aclmode $TESTPOOL/$TESTFS
+log_must zfs inherit aclinherit $TESTPOOL/$TESTFS
+log_must zfs inherit aclimplicit $TESTPOOL/$TESTFS
 
 log_pass "Verify that the chown/chgrp could take owner/group " \
     "while permission is granted."

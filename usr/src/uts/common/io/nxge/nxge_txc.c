@@ -23,8 +23,6 @@
  * Use is subject to license terms.
  */
 
-#pragma ident	"%Z%%M%	%I%	%E% SMI"
-
 #include <sys/nxge/nxge_impl.h>
 #include <sys/nxge/nxge_txc.h>
 
@@ -32,7 +30,7 @@ static nxge_status_t
 nxge_txc_handle_port_errors(p_nxge_t, uint32_t);
 static void
 nxge_txc_inject_port_err(uint8_t, txc_int_stat_dbg_t *,
-			uint8_t istats);
+    uint8_t istats);
 extern nxge_status_t nxge_tx_port_fatal_err_recover(p_nxge_t);
 
 nxge_status_t
@@ -125,8 +123,8 @@ fail:
  *	Bind a TDC to a port.
  *
  * Arguments:
- * 	nxgep
- * 	channel		The channel to bind.
+ *	nxgep
+ *	channel		The channel to bind.
  *
  * Notes:
  *
@@ -227,8 +225,8 @@ fail:
  *	Unbind a TDC from a port.
  *
  * Arguments:
- * 	nxgep
- * 	channel		The channel to unbind.
+ *	nxgep
+ *	channel		The channel to unbind.
  *
  * Notes:
  *
@@ -287,11 +285,6 @@ nxge_txc_tdc_unbind(
 	    "<== nxge_txc_tdc_unbind(port %d, channel %d)", port, channel));
 
 	return (NXGE_OK);
-fail:
-	NXGE_ERROR_MSG((nxgep, NXGE_ERR_CTL,
-	    "nxge_txc_tdc_unbind(port %d, channel %d) failed", port, channel));
-
-	return (NXGE_ERROR | rs);
 }
 
 void
@@ -375,10 +368,10 @@ nxge_txc_handle_sys_errors(p_nxge_t nxgep)
 	default:
 		return (NXGE_ERROR);
 	}
-	NXGE_ERROR_MSG((nxgep, NXGE_ERR_CTL,
-	    " nxge_txc_handle_sys_errors: errored port %d",
-	    err_portn));
 	if (my_err) {
+		NXGE_ERROR_MSG((nxgep, NXGE_ERR_CTL,
+		    " nxge_txc_handle_sys_errors: errored port %d",
+		    err_portn));
 		status = nxge_txc_handle_port_errors(nxgep, err_status);
 	}
 
@@ -412,7 +405,7 @@ nxge_txc_handle_port_errors(p_nxge_t nxgep, uint32_t err_status)
 
 		if (err_status & TXC_INT_STAT_RO_CORR_ERR) {
 			statsp->ro_correct_err++;
-			NXGE_FM_REPORT_ERROR(nxgep, portn, NULL,
+			NXGE_FM_REPORT_ERROR(nxgep, portn, 0,
 			    NXGE_FM_EREPORT_TXC_RO_CORRECT_ERR);
 			NXGE_ERROR_MSG((nxgep, NXGE_ERR_CTL,
 			    "nxge_txc_err_evnts: "
@@ -420,7 +413,7 @@ nxge_txc_handle_port_errors(p_nxge_t nxgep, uint32_t err_status)
 		}
 		if (err_status & TXC_INT_STAT_RO_UNCORR_ERR) {
 			statsp->ro_uncorrect_err++;
-			NXGE_FM_REPORT_ERROR(nxgep, portn, NULL,
+			NXGE_FM_REPORT_ERROR(nxgep, portn, 0,
 			    NXGE_FM_EREPORT_TXC_RO_UNCORRECT_ERR);
 			NXGE_ERROR_MSG((nxgep, NXGE_ERR_CTL,
 			    "nxge_txc_err_evnts: "
@@ -428,7 +421,7 @@ nxge_txc_handle_port_errors(p_nxge_t nxgep, uint32_t err_status)
 		}
 		if (err_status & TXC_INT_STAT_REORDER_ERR) {
 			statsp->reorder_err++;
-			NXGE_FM_REPORT_ERROR(nxgep, portn, NULL,
+			NXGE_FM_REPORT_ERROR(nxgep, portn, 0,
 			    NXGE_FM_EREPORT_TXC_REORDER_ERR);
 			NXGE_ERROR_MSG((nxgep, NXGE_ERR_CTL,
 			    "nxge_txc_err_evnts: "
@@ -460,7 +453,7 @@ nxge_txc_handle_port_errors(p_nxge_t nxgep, uint32_t err_status)
 		}
 		if (err_status & TXC_INT_STAT_SF_CORR_ERR) {
 			statsp->sf_correct_err++;
-			NXGE_FM_REPORT_ERROR(nxgep, portn, NULL,
+			NXGE_FM_REPORT_ERROR(nxgep, portn, 0,
 			    NXGE_FM_EREPORT_TXC_SF_CORRECT_ERR);
 			NXGE_ERROR_MSG((nxgep, NXGE_ERR_CTL,
 			    "nxge_txc_err_evnts: "
@@ -468,7 +461,7 @@ nxge_txc_handle_port_errors(p_nxge_t nxgep, uint32_t err_status)
 		}
 		if (err_status & TXC_INT_STAT_SF_UNCORR_ERR) {
 			statsp->sf_uncorrect_err++;
-			NXGE_FM_REPORT_ERROR(nxgep, portn, NULL,
+			NXGE_FM_REPORT_ERROR(nxgep, portn, 0,
 			    NXGE_FM_EREPORT_TXC_SF_UNCORRECT_ERR);
 			NXGE_ERROR_MSG((nxgep, NXGE_ERR_CTL,
 			    "nxge_txc_err_evnts: "
@@ -537,13 +530,8 @@ nxge_txc_inject_err(p_nxge_t nxgep, uint32_t err_id)
 			ro_ecc_ctl.bits.ldw.single_bit_err = 1;
 		else
 			ro_ecc_ctl.bits.ldw.double_bit_err = 1;
-#if defined(__i386)
-		cmn_err(CE_NOTE, "!Write 0x%llx to TXC_ROECC_CTL_REG\n",
-		    ro_ecc_ctl.value);
-#else
 		cmn_err(CE_NOTE, "!Write 0x%lx to TXC_ROECC_CTL_REG\n",
 		    ro_ecc_ctl.value);
-#endif
 		TXC_FZC_CNTL_REG_WRITE64(nxgep->npi_handle, TXC_ROECC_CTL_REG,
 		    portn, ro_ecc_ctl.value);
 		break;
@@ -556,13 +544,8 @@ nxge_txc_inject_err(p_nxge_t nxgep, uint32_t err_id)
 			sf_ecc_ctl.bits.ldw.single_bit_err = 1;
 		else
 			sf_ecc_ctl.bits.ldw.double_bit_err = 1;
-#if defined(__i386)
-		cmn_err(CE_NOTE, "!Write 0x%llx to TXC_SFECC_CTL_REG\n",
-		    sf_ecc_ctl.value);
-#else
 		cmn_err(CE_NOTE, "!Write 0x%lx to TXC_SFECC_CTL_REG\n",
 		    sf_ecc_ctl.value);
-#endif
 		TXC_FZC_CNTL_REG_WRITE64(nxgep->npi_handle, TXC_SFECC_CTL_REG,
 		    portn, sf_ecc_ctl.value);
 		break;
@@ -571,13 +554,8 @@ nxge_txc_inject_err(p_nxge_t nxgep, uint32_t err_id)
 		    &txcs.value);
 		nxge_txc_inject_port_err(portn, &txcs,
 		    TXC_INT_STAT_REORDER_ERR);
-#if defined(__i386)
-		cmn_err(CE_NOTE, "!Write 0x%llx to TXC_INT_STAT_DBG_REG\n",
-		    txcs.value);
-#else
 		cmn_err(CE_NOTE, "!Write 0x%lx to TXC_INT_STAT_DBG_REG\n",
 		    txcs.value);
-#endif
 		NXGE_REG_WR64(nxgep->npi_handle, TXC_INT_STAT_DBG_REG,
 		    txcs.value);
 		break;
@@ -589,7 +567,7 @@ nxge_txc_inject_err(p_nxge_t nxgep, uint32_t err_id)
 
 static void
 nxge_txc_inject_port_err(uint8_t portn, txc_int_stat_dbg_t *txcs,
-				uint8_t istats)
+    uint8_t istats)
 {
 	switch (portn) {
 	case 0:

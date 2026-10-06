@@ -21,9 +21,8 @@
 /*
  * Copyright 2008 Sun Microsystems, Inc.  All rights reserved.
  * Use is subject to license terms.
+ * Copyright (c) 2016 by Delphix. All rights reserved.
  */
-
-#pragma ident	"%Z%%M%	%I%	%E% SMI"
 
 /*
  * vs_eng.c manages the vs_engines array of scan engine.
@@ -70,7 +69,7 @@
  * seconds will be closed by the housekeeper thread.
  *
  * When a scan engine is reconfigured to have less connections
- * (or is disabled) any of he superflous connections which are in
+ * (or is disabled) any of the superflous connections which are in
  * AVAILABLE state are closed (DISCONNECTED). Others are set to
  * CLOSE_PENDING to be closed (DISCONNECTED) when the engine is
  * released (when the current request completes).
@@ -623,7 +622,7 @@ vs_eng_release(const vs_eng_ctx_t *eng_ctx)
 			(void) gettimeofday(&cxn->vsc_avail_time, NULL);
 			break;
 		}
-		/* LINTED E_CASE_FALL_THROUGH - close connection */
+		/* FALLTHROUGH */
 	case VS_ENG_CLOSE_PENDING:
 		(void) close(cxn->vsc_sockfd);
 		cxn->vsc_sockfd = -1;

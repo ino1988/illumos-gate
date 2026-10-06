@@ -61,7 +61,6 @@ void (*lm_set_nlm_status)(int nlm_id, flk_nlm_status_t) = NULL;
  */
 void (*lm_remove_file_locks)(int) = NULL;
 
-krwlock_t		lm_lck;
 zone_key_t		nlm_zone_key;
 
 /*
@@ -92,6 +91,7 @@ lm_zone_init(zoneid_t zoneid)
 
 	g->lockd_pid = 0;
 	g->run_status = NLM_ST_DOWN;
+	g->nlm_zoneid = zoneid;
 
 	nlm_globals_register(g);
 	return (g);
@@ -103,6 +103,8 @@ lm_zone_fini(zoneid_t zoneid, void *data)
 {
 	struct nlm_globals *g = data;
 
+	nlm_globals_unregister(g);
+
 	ASSERT(avl_is_empty(&g->nlm_hosts_tree));
 	avl_destroy(&g->nlm_hosts_tree);
 	mod_hash_destroy_idhash(g->nlm_hosts_hash);
@@ -113,7 +115,6 @@ lm_zone_fini(zoneid_t zoneid, void *data)
 	cv_destroy(&g->nlm_gc_finish_cv);
 	mutex_destroy(&g->clean_lock);
 
-	nlm_globals_unregister(g);
 	kmem_free(g, sizeof (*g));
 }
 
@@ -168,7 +169,7 @@ _info(struct modinfo *modinfop)
 
 /*
  * ****************************************************************
- * Stubs listed in modstubs.s
+ * Stubs listed in modstubs.S
  */
 
 /*
@@ -437,7 +438,7 @@ lm_get_sysid(struct knetconfig *knc, struct netbuf *addr,
 
 	g = zone_getspecific(nlm_zone_key, curzone);
 
-	hostp = nlm_host_findcreate(g, name, netid, addr);
+	hostp = nlm_host_findcreate(g, name, netid, addr, NULL);
 	if (hostp == NULL)
 		return (NULL);
 

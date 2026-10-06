@@ -215,7 +215,7 @@ modinfo_update_one(const fmd_adm_modinfo_t *modinfo, void *arg)
 
 	data->d_valid = valid_stamp;
 
-	DEBUGMSGTL((MODNAME_STR, "timestamp updated for %lu/%s@%p: %lu\n",
+	DEBUGMSGTL((MODNAME_STR, "timestamp updated for %lu/%s@%p: %d\n",
 	    data->d_index, data->d_ami_name, data, data->d_valid));
 
 	if ((update_ctx->uc_type & UCT_ALL) ||
@@ -270,9 +270,8 @@ modinfo_update(sunFmModule_update_ctx_t *update_ctx)
 	return (SNMP_ERR_NOERROR);
 }
 
-/*ARGSUSED*/
-static void
-update_thread(void *arg)
+__NORETURN static void *
+update_thread(void *arg __unused)
 {
 	/*
 	 * The current modinfo_update implementation offers minimal savings
@@ -357,8 +356,7 @@ sunFmModuleTable_init(void)
 		return (MIB_REGISTRATION_FAILED);
 	}
 
-	if ((err = pthread_create(NULL, NULL, (void *(*)(void *))update_thread,
-	    NULL)) != 0) {
+	if ((err = pthread_create(NULL, NULL, update_thread, NULL)) != 0) {
 		(void) snmp_log(LOG_ERR, MODNAME_STR ": error creating update "
 		    "thread: %s\n", strerror(err));
 		return (MIB_REGISTRATION_FAILED);
@@ -395,6 +393,7 @@ sunFmModuleTable_init(void)
 		snmp_free_varbind(table_info->indexes);
 		SNMP_FREE(table_info);
 		SNMP_FREE(handler);
+		return (MIB_REGISTRATION_FAILED);
 	}
 
 	if ((mod_name_avl = uu_avl_create(mod_name_avl_pool, NULL,
@@ -417,6 +416,7 @@ sunFmModuleTable_init(void)
 		SNMP_FREE(handler);
 		uu_avl_destroy(mod_name_avl);
 		uu_avl_pool_destroy(mod_name_avl_pool);
+		return (MIB_REGISTRATION_FAILED);
 	}
 
 	if ((mod_index_avl = uu_avl_create(mod_index_avl_pool, NULL,

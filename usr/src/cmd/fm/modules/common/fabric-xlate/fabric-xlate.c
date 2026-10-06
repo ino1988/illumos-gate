@@ -31,6 +31,8 @@
 #include <unistd.h>
 #include <pthread.h>
 
+#include <libxml/tree.h>
+#include <libxml/parser.h>
 #include <libxml/xpathInternals.h>
 
 #include "fabric-xlate.h"
@@ -85,6 +87,7 @@ fab_update_topo(fmd_hdl_t *hdl)
 		fmd_hdl_topo_rele(hdl, thp);
 		goto cleanup;
 	}
+	fflush(fp);
 
 	/* Release topology */
 	fmd_hdl_topo_rele(hdl, thp);

@@ -24,12 +24,23 @@
  * Use is subject to license terms.
  */
 
+/*
+ * Copyright 2020 Joyent, Inc.
+ */
+
 #ifndef	_SYS_BOOTINFO_H
 #define	_SYS_BOOTINFO_H
 
 #ifdef	__cplusplus
 extern "C" {
 #endif
+
+/*
+ * This is used by bootfs and dboot.  It should be at least as large as the
+ * number of modules that bootloaders (e.g., grub) can support.  This figure
+ * has been chosen to match grub's value exactly.
+ */
+#define	MAX_BOOT_MODULES	99
 
 /*
  * The 32-bit kernel loader code needs to build several structures that the
@@ -51,6 +62,14 @@ typedef void *native_ptr_t;
 
 #endif
 
+typedef enum boot_module_type {
+	BMT_ROOTFS,
+	BMT_FILE,
+	BMT_HASH,
+	BMT_ENV,
+	BMT_FONT
+} boot_module_type_t;
+
 struct boot_memlist {
 	uint64_t	addr;
 	uint64_t	size;
@@ -62,11 +81,19 @@ struct boot_memlist {
  * The kernel needs to know how to find its modules.
  */
 struct boot_modules {
-	native_ptr_t	bm_addr;
-	uint32_t	bm_size;
-	uint32_t	bm_padding;
+	native_ptr_t		bm_addr;
+	native_ptr_t		bm_name;
+	native_ptr_t		bm_hash;
+	uint32_t		bm_size;
+	boot_module_type_t	bm_type;
 };
 
+/* To help to identify UEFI system. */
+typedef enum uefi_arch_type {
+	XBI_UEFI_ARCH_NONE,
+	XBI_UEFI_ARCH_32,
+	XBI_UEFI_ARCH_64
+} uefi_arch_type_t;
 /*
  *
  */
@@ -92,8 +119,15 @@ struct xboot_info {
 	native_ptr_t	bi_xen_start_info;
 	native_ptr_t	bi_shared_info;		/* VA for shared_info */
 #else
-	native_ptr_t	bi_mb_info;
+	native_ptr_t	bi_mb_info;		/* multiboot 1 or 2 info */
+	int		bi_mb_version;		/* multiboot version */
+	native_ptr_t	bi_acpi_rsdp;
+	native_ptr_t	bi_acpi_rsdp_copy;
+	native_ptr_t	bi_smbios;
+	native_ptr_t	bi_uefi_systab;
+	uefi_arch_type_t bi_uefi_arch;
 #endif
+	native_ptr_t	bi_framebuffer;
 };
 #pragma pack()
 

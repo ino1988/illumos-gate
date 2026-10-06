@@ -21,21 +21,25 @@
 /*
  * Copyright 2007 Sun Microsystems, Inc.  All rights reserved.
  * Use is subject to license terms.
+ * Copyright 2017 OmniTI Computer Consulting, Inc.  All rights reserved.
+ * Copyright 2017 Jason King
+ * Copyright 2025 Edgecast Cloud LLC
+ * Copyright 2026 Oxide Computer Company
  */
 
 /*	Copyright (c) 1984, 1986, 1987, 1988, 1989 AT&T	*/
-/*	  All Rights Reserved  	*/
-
-#pragma ident	"%Z%%M%	%I%	%E% SMI"
+/*	  All Rights Reserved	*/
 
 /*
  * du -- summarize disk usage
- *	du [-dorx] [-a|-s] [-h|-k|-m] [-H|-L] [file...]
  */
 
 #include <sys/types.h>
+#include <sys/wait.h>
 #include <sys/stat.h>
 #include <sys/avl.h>
+#include <sys/sysmacros.h>
+#include <assert.h>
 #include <fcntl.h>
 #include <dirent.h>
 #include <limits.h>
@@ -48,6 +52,7 @@
 
 
 static int		aflg = 0;
+static int		bflg = 0;
 static int		rflg = 0;
 static int		sflg = 0;
 static int		kflg = 0;
@@ -55,6 +60,7 @@ static int		mflg = 0;
 static int		oflg = 0;
 static int		dflg = 0;
 static int		hflg = 0;
+static int		Aflg = 0;
 static int		Hflg = 0;
 static int		Lflg = 0;
 static int		cmdarg = 0;	/* Command line argument */
@@ -66,31 +72,25 @@ static char		*name;
 static size_t		base_len = PATH_MAX + 1;    /* # of chars for base */
 static size_t		name_len = PATH_MAX + 1;    /* # of chars for name */
 
-#define	NUMBER_WIDTH	64
-typedef char		numbuf_t[NUMBER_WIDTH];
-
 /*
- * Output formats.  Solaris uses a tab as separator, XPG4 a space.
+ * Output formats. illumos uses a tab as separator, XPG4 a space.
  */
 #ifdef XPG4
 #define	FORMAT1	"%s %s\n"
-#define	FORMAT2	"%lld %s\n"
+#define	FORMAT2	"%llu %s\n"
 #else
 #define	FORMAT1	"%s\t%s\n"
-#define	FORMAT2	"%lld\t%s\n"
+#define	FORMAT2	"%llu\t%s\n"
 #endif
 
 /*
- * convert DEV_BSIZE blocks to K blocks
+ * convert bytes to blocks
  */
-#define	DEV_BSIZE	512
-#define	DEV_KSHIFT	1
-#define	DEV_MSHIFT	11
-#define	kb(n)		(((u_longlong_t)(n)) >> DEV_KSHIFT)
-#define	mb(n)		(((u_longlong_t)(n)) >> DEV_MSHIFT)
+#define	DEV_BSHIFT	9
+#define	DEV_KSHIFT	10
+#define	DEV_MSHIFT	20
 
-long	wait();
-static u_longlong_t 	descend(char *curname, int curfd, int *retcode,
+static u_longlong_t	descend(char *curname, int curfd, int *retcode,
 			    dev_t device);
 static void		printsize(blkcnt_t blocks, char *path);
 static void		exitdu(int exitcode);
@@ -117,11 +117,21 @@ main(int argc, char **argv)
 	rflg++;		/* "-r" is not an option but ON always */
 #endif
 
-	while ((c = getopt(argc, argv, "adhHkLmorsx")) != EOF)
+	while ((c = getopt(argc, argv, "aAbdhHkLmorsx")) != EOF)
 		switch (c) {
 
 		case 'a':
 			aflg++;
+			continue;
+
+		case 'b':
+			bflg++;
+			/*
+			 * -b implies -A since reporting in bytes
+			 * requires the apparent file size rather than
+			 * the allocated block count.
+			 */
+			Aflg++;
 			continue;
 
 		case 'h':
@@ -162,6 +172,10 @@ main(int argc, char **argv)
 			dflg++;
 			continue;
 
+		case 'A':
+			Aflg++;
+			continue;
+
 		case 'H':
 			Hflg++;
 			/* -H and -L are mutually exclusive */
@@ -177,7 +191,7 @@ main(int argc, char **argv)
 			continue;
 		case '?':
 			(void) fprintf(stderr, gettext(
-			    "usage: du [-dorx] [-a|-s] [-h|-k|-m] [-H|-L] "
+			    "usage: du [-Adorx] [-a|-s] [-b|-h|-k|-m] [-H|-L] "
 			    "[file...]\n"));
 			exit(2);
 		}
@@ -191,6 +205,12 @@ main(int argc, char **argv)
 	if (oflg && sflg)
 		oflg = 0;
 
+	if (bflg && (hflg || kflg || mflg)) {
+		(void) fprintf(stderr, gettext("usage: -b cannot be used in "
+		    "conjunction with -h, -k or -m\n"));
+		exit(2);
+	}
+
 	if ((base = (char *)calloc(base_len, sizeof (char))) == NULL) {
 		perror("du");
 		exit(1);
@@ -201,6 +221,7 @@ main(int argc, char **argv)
 		exit(1);
 	}
 	do {
+		pid = (pid_t)-1;
 		if (optind < argc - 1) {
 			pid = fork();
 			if (pid == (pid_t)-1) {
@@ -244,7 +265,8 @@ main(int argc, char **argv)
 			}
 			(void) strcpy(base, argv[optind]);
 			(void) strcpy(name, argv[optind]);
-			if (np = strrchr(name, '/')) {
+			np = strrchr(name, '/');
+			if (np != NULL) {
 				*np++ = '\0';
 				if (chdir(*name ? name : "/") < 0) {
 					if (rflg) {
@@ -379,7 +401,8 @@ descend(char *curname, int curfd, int *retcode, dev_t device)
 			}
 		}
 	}
-	blocks = stb.st_blocks;
+	blocks = Aflg ? stb.st_size : stb.st_blocks;
+
 	/*
 	 * If there are extended attributes on the current file, add their
 	 * block usage onto the block count.  Note: Since pathconf() always
@@ -454,7 +477,7 @@ descend(char *curname, int curfd, int *retcode, dev_t device)
 		level--;
 		return (0);
 	}
-	while (dp = readdir(dirp)) {
+	while ((dp = readdir(dirp)) != NULL) {
 		if ((strcmp(dp->d_name, ".") == 0) ||
 		    (strcmp(dp->d_name, "..") == 0))
 			continue;
@@ -523,90 +546,45 @@ descend(char *curname, int curfd, int *retcode, dev_t device)
 		return (blocks);
 }
 
-/*
- * Convert an unsigned long long to a string representation and place the
- * result in the caller-supplied buffer.
- * The given number is in units of "unit_from" size,
- * this will first be converted to a number in 1024 or 1000 byte size,
- * depending on the scaling factor.
- * Then the number is scaled down until it is small enough to be in a good
- * human readable format i.e. in the range 0 thru scale-1.
- * If it's smaller than 10 there's room enough to provide one decimal place.
- * The value "(unsigned long long)-1" is a special case and is always
- * converted to "-1".
- * Returns a pointer to the caller-supplied buffer.
- */
-static char *
-number_to_scaled_string(
-	numbuf_t buf,			/* put the result here */
-	unsigned long long number,	/* convert this number */
-	unsigned long long unit_from,	/* number of bytes per input unit */
-	unsigned long long scale)	/* 1024 (-h)  or 1000 (-H) */
+static u_longlong_t
+mkb(blkcnt_t n, size_t shift)
 {
-	unsigned long long save = 0;
-	char *M = "KMGTPE"; /* Measurement: kilo, mega, giga, tera, peta, exa */
-	char *uom = M;    /* unit of measurement, initially 'K' (=M[0]) */
-
-	if ((long long)number == (long long)-1) {
-		(void) strcpy(buf, "-1");
-		return (buf);
-	}
+	u_longlong_t v = (u_longlong_t)n;
 
 	/*
-	 * Convert number from unit_from to given scale (1024 or 1000)
-	 * This means multiply number with unit_from and divide by scale.
-	 * if number is large enough, we first divide and then multiply
-	 * 	to avoid an overflow
-	 * 	(large enough here means 100 (rather arbitrary value)
-	 *	times scale in order to reduce rounding errors)
-	 * otherwise, we first multiply and then divide
-	 * 	to avoid an underflow
+	 * If hflg was not used, we need to output number of blocks
+	 * rounded up. Block sizes can be 1M, 1K or 512 bytes.
+	 * First, convert blocks to 1 byte units and then round up.
+	 * If Aflg was used, the value is already in bytes.
 	 */
-	if (number >= 100L * scale) {
-		number = number / scale;
-		number = number * unit_from;
-	} else {
-		number = number * unit_from;
-		number = number / scale;
-	}
+	if (!Aflg)
+		v <<= DEV_BSHIFT;
 
-	/*
-	 * Now we have number as a count of scale units.
-	 * Stop scaling when we reached exa bytes, then something is
-	 * probably wrong with our number.
-	 */
-	while ((number >= scale) && (*uom != 'E')) {
-		uom++; /* next unit of measurement */
-		save = number;
-		number = (number + (scale / 2)) / scale;
-	}
-
-	/* check if we should output a decimal place after the point */
-	if (save && ((save / scale) < 10)) {
-		/* sprintf() will round for us */
-		float fnum = (float)save / scale;
-		(void) sprintf(buf, "%4.1f%c", fnum, *uom);
-	} else {
-		(void) sprintf(buf, "%4llu%c", number, *uom);
-	}
-	return (buf);
+	return (P2ROUNDUP(v, 1 << shift) >> shift);
 }
 
 static void
 printsize(blkcnt_t blocks, char *path)
 {
 	if (hflg) {
-		numbuf_t numbuf;
-		unsigned long long scale = 1024L;
-		(void) printf(FORMAT1,
-		    number_to_scaled_string(numbuf, blocks, DEV_BSIZE, scale),
-		    path);
+		u_longlong_t bsize = Aflg ? 1 : (1 << DEV_BSHIFT);
+
+		char buf[NN_NUMBUF_SZ] = { 0 };
+
+		nicenum_scale(blocks, bsize, buf, sizeof (buf), 0);
+		(void) printf(FORMAT1, buf, path);
+		return;
+	}
+
+	if (bflg) {
+		assert(Aflg);
+		(void) printf(FORMAT2, (u_longlong_t)blocks, path);
 	} else if (kflg) {
-		(void) printf(FORMAT2, (long long)kb(blocks), path);
+		(void) printf(FORMAT2, mkb(blocks, DEV_KSHIFT), path);
 	} else if (mflg) {
-		(void) printf(FORMAT2, (long long)mb(blocks), path);
+		(void) printf(FORMAT2, mkb(blocks, DEV_MSHIFT), path);
 	} else {
-		(void) printf(FORMAT2, (long long)blocks, path);
+		(void) printf(FORMAT2, mkb(blocks, DEV_BSHIFT), path);
 	}
 }
 

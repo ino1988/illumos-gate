@@ -18,12 +18,16 @@
  *
  * CDDL HEADER END
  */
+
 /*
  * Copyright 2010 Sun Microsystems, Inc.  All rights reserved.
  * Use is subject to license terms.
  */
+
 /*
- * Copyright 2013 Nexenta Systems, Inc. All rights reserved.
+ * Copyright 2018 Nexenta Systems, Inc.
+ * Copyright 2019 Nexenta by DDN, Inc.
+ * Copyright 2025 RackTop Systems, Inc.
  */
 
 #ifndef _NFS4_H
@@ -44,14 +48,25 @@
 #include <nfs/nfs4_attr.h>
 #include <sys/acl.h>
 #include <sys/list.h>
+#include <nfs/nfs4x.h>
 
 #ifdef	__cplusplus
 extern "C" {
 #endif
 
-#define	NFS4_MAX_UTF8STRING	65536
-#define	NFS4_MAX_PATHNAME4	65536
 #define	NFS4_MAX_SECOID4	65536
+#define	NFS4_MAX_UTF8STRING	65536
+#define	NFS4_MAX_LINKTEXT4	65536
+#define	NFS4_MAX_PATHNAME4	65536
+
+struct nfs_fsl_info {
+	uint_t netbuf_len;
+	uint_t netnm_len;
+	uint_t knconf_len;
+	char *netname;
+	struct netbuf *addr;
+	struct knetconfig *knconf;
+};
 
 #ifdef _KERNEL
 
@@ -60,8 +75,17 @@ typedef struct nfs4_fhandle {
 	char fh_buf[NFS4_FHSIZE];
 } nfs4_fhandle_t;
 
-#define	NFS4_MINORVERSION 0
-#define	CB4_MINORVERSION 0
+typedef uint8_t nfs4_minor_t;
+
+#define	NFS4_MINORVERSION	0
+#define	CB4_MINORVERSION_v0	0
+#define	CB4_MINORVERSION_v1	1
+
+#define	FIRST_NFS4_OP   OP_ACCESS
+#define	LAST_NFS40_OP   OP_RELEASE_LOCKOWNER
+#define	LAST_NFS41_OP   OP_RECLAIM_COMPLETE
+#define	LAST_NFS42_OP   OP_CLONE
+#define	LAST_NFS4_OP    LAST_NFS42_OP
 
 /*
  * Set the fattr4_change variable using a time struct. Note that change
@@ -107,7 +131,22 @@ typedef struct {		/* opaque entry type for later use */
 	rfs4_dbe_t *dbe;
 } *rfs4_entry_t;
 
-extern rfs4_table_t *rfs4_client_tab;
+/*
+ * NFSv4 server state databases
+ *
+ * Initialized when the module is loaded and used by NFSv4 state tables.
+ * These kmem_cache free pools are used globally, the NFSv4 state tables
+ * which make use of these kmem_cache free pools are per zone.
+ */
+extern kmem_cache_t *rfs4_client_mem_cache;
+extern kmem_cache_t *rfs4_clntIP_mem_cache;
+extern kmem_cache_t *rfs4_openown_mem_cache;
+extern kmem_cache_t *rfs4_openstID_mem_cache;
+extern kmem_cache_t *rfs4_lockstID_mem_cache;
+extern kmem_cache_t *rfs4_lockown_mem_cache;
+extern kmem_cache_t *rfs4_file_mem_cache;
+extern kmem_cache_t *rfs4_delegstID_mem_cache;
+extern kmem_cache_t *rfs4_session_mem_cache;
 
 /* database, table, index creation entry points */
 extern rfs4_database_t *rfs4_database_create(uint32_t);
@@ -116,6 +155,8 @@ extern void		rfs4_database_destroy(rfs4_database_t *);
 
 extern void		rfs4_database_destroy(rfs4_database_t *);
 
+extern kmem_cache_t	*nfs4_init_mem_cache(char *, uint32_t, uint32_t,
+				uint32_t);
 extern rfs4_table_t	*rfs4_table_create(rfs4_database_t *, char *,
 				time_t, uint32_t,
 				bool_t (*create)(rfs4_entry_t, void *),
@@ -154,6 +195,8 @@ extern bool_t		rfs4_dbe_islocked(rfs4_dbe_t *);
 #endif
 extern void		rfs4_dbe_walk(rfs4_table_t *,
 			void (*callout)(rfs4_entry_t, void *), void *);
+extern void		rfs4_dbsearch_cb(rfs4_index_t *idx, void *key,
+    int maxcount, void (*callout)(rfs4_entry_t));
 
 /*
  * Minimal server stable storage.
@@ -179,8 +222,8 @@ typedef struct ss_pn {
  *
  */
 typedef struct rfs4_oldstate {
-	struct rfs4_oldstate 	*next;
-	struct rfs4_oldstate 	*prev;
+	struct rfs4_oldstate	*next;
+	struct rfs4_oldstate	*prev;
 	rfs4_ss_pn_t		*ss_pn;
 	nfs_client_id4		cl_id4;
 } rfs4_oldstate_t;
@@ -208,14 +251,6 @@ typedef union {
  * not have more than 4 members.
  */
 typedef enum {OPENID, LOCKID, DELEGID} stateid_type_t;
-
-
-/*
- * Set of RPC credentials used for a particular operation.
- * Used for operations like SETCLIENTID_CONFIRM where the
- * credentials needs to match those used at SETCLIENTID.
- */
-typedef void *cred_set_t;		/* For now XXX */
 
 /*
  * "wait" struct for use in the open open and lock owner state
@@ -335,6 +370,7 @@ typedef struct rfs4_servinst {
 	krwlock_t		oldstate_lock;
 	time_t			start_time;
 	time_t			grace_period;
+	uint_t			nreclaim;	/* number reclaim clients  */
 	rfs4_oldstate_t		*oldstate;
 	struct rfs4_dss_path	**dss_paths;
 	struct rfs4_servinst	*next;
@@ -354,17 +390,11 @@ typedef struct rfs4_dss_path {
 } rfs4_dss_path_t;
 
 /* array of paths passed-in from nfsd command-line; stored in nvlist */
-char		**rfs4_dss_newpaths;
-uint_t		rfs4_dss_numnewpaths;
-
-/*
- * Circular doubly-linked list of paths for currently-served RGs.
- * No locking required: only changed on warmstart. Managed with insque/remque.
- */
-rfs4_dss_path_t	*rfs4_dss_pathlist;
+extern char		**rfs4_dss_newpaths;
+extern uint_t		rfs4_dss_numnewpaths;
 
 /* nvlists of all DSS paths: current, and before last warmstart */
-nvlist_t *rfs4_dss_paths, *rfs4_dss_oldpaths;
+extern nvlist_t *rfs4_dss_paths, *rfs4_dss_oldpaths;
 
 /*
  * The server maintains a set of state on a per client basis that
@@ -459,9 +489,9 @@ nvlist_t *rfs4_dss_paths, *rfs4_dss_oldpaths;
  *		says that the use of cleanlocks() on individual files
  *		is not required?
  * can_reclaim - indicates if client is allowed to reclaim after server
- * 		start-up (client had previous state at server)
+ *		start-up (client had previous state at server)
  * ss_remove - indicates that the rfs4_client_destroy function should
- * 		clean up stable storage file.
+ *		clean up stable storage file.
  * forced_expire - set if the sysadmin has used clear_locks for this client.
  * no_referrals - set if the client is Solaris and pre-dates referrals
  * deleg_revoked - how many delegations have been revoked for this client?
@@ -485,11 +515,13 @@ typedef struct rfs4_client {
 	clientid4		rc_clientid;
 	nfs_client_id4		rc_nfs_client;
 	verifier4		rc_confirm_verf;
+	uint8_t			rc_minorversion;
 	unsigned		rc_need_confirm:1;
 	unsigned		rc_unlksys_completed:1;
 	unsigned		rc_can_reclaim:1;
-	unsigned 		rc_ss_remove:1;
+	unsigned		rc_ss_remove:1;
 	unsigned		rc_forced_expire:1;
+	unsigned		rc_reclaim_completed:1;
 	uint_t			rc_deleg_revoked;
 	struct rfs4_client	*rc_cp_confirmed;
 	time_t			rc_last_access;
@@ -500,6 +532,12 @@ typedef struct rfs4_client {
 	rfs4_ss_pn_t		*rc_ss_pn;
 	struct sockaddr_storage rc_addr;
 	rfs4_servinst_t		*rc_server_instance;
+
+	/* nfsv4.1 */
+	rfs41_csr_t		rc_contrived;
+	rfs41_sprot_t		rc_state_prot;
+	list_t			rc_sessions;
+	unsigned		rc_destroying:1;    /* flag: going to destroy */
 } rfs4_client_t;
 
 /*
@@ -527,7 +565,6 @@ typedef struct rfs4_clntip {
  * state2confirm - what stateid4 should be used on the OPEN_CONFIRM
  * open_seqid - what is the next open_seqid expected for this openowner
  * oo_sw - used to serialize access to the open seqid/reply handling
- * cr_set - credential used for the OPEN
  * statelist - root of state struct list associated with this openowner
  * node - node for client struct list of openowners
  * reply_fh - open replay processing needs the filehandle so that it is
@@ -543,7 +580,6 @@ typedef struct rfs4_openowner {
 	unsigned		ro_postpone_confirm:1;
 	seqid4			ro_open_seqid;
 	rfs4_state_wait_t	ro_sw;
-	cred_set_t		ro_cr_set;
 	list_t			ro_statelist;
 	list_node_t		ro_node;
 	nfs_fh4			ro_reply_fh;
@@ -633,6 +669,8 @@ typedef struct rfs4_lo_state {
  * time_granted - time this delegation was assigned to client
  * time_recalled - time when the server started recall process
  * time_revoked - if revoked, time that the revoke occurred
+ * revoked - v4.1 delegation returned, awaiting FREE_STATEID
+ * closed  - v4.0 delegation returned, reaper will destroy
  * finfo - reference to the file associated with this delegation
  * client - reference to client for which this delegation is associated
  * node - list of delegations for the file (WRITE == 1, READ == )
@@ -644,9 +682,13 @@ typedef struct rfs4_deleg_state {
 	time_t			rds_time_granted;
 	time_t			rds_time_recalled;
 	time_t			rds_time_revoked;
+	bool_t			rds_revoked;
+	bool_t			rds_closed;
 	struct rfs4_file	*rds_finfo;
 	rfs4_client_t		*rds_client;
 	list_node_t		rds_node;
+	sessionid4		rds_cbsessid;	/* 4.1 callback session */
+	rfs41_drs_info_t	rds_rs;		/* 4.1 only */
 } rfs4_deleg_state_t;
 
 /*
@@ -706,12 +748,12 @@ typedef struct rfs4_dinfo {
  * file_rwlock - lock for serializing the removal of a file while
  *	the state structures are active within the server
  *
- * 	The only requirement for locking file_rwlock is that the
- * 	caller have a reference to the containing rfs4_file.  The dbe
- * 	lock may or may not be held for lock/unlock of file_rwlock.
- * 	As mentioned above, the file_rwlock is used for serialization
- * 	of file removal and more specifically reference to the held
- * 	vnode (e.g. vp).
+ *	The only requirement for locking file_rwlock is that the
+ *	caller have a reference to the containing rfs4_file.  The dbe
+ *	lock may or may not be held for lock/unlock of file_rwlock.
+ *	As mentioned above, the file_rwlock is used for serialization
+ *	of file removal and more specifically reference to the held
+ *	vnode (e.g. vp).
  */
 typedef struct rfs4_file {
 	rfs4_dbe_t	*rf_dbe;
@@ -728,26 +770,8 @@ typedef struct rfs4_file {
 	krwlock_t	rf_file_rwlock;
 } rfs4_file_t;
 
-extern int	rfs4_seen_first_compound;	/* set first time we see one */
-
-extern rfs4_servinst_t	*rfs4_cur_servinst;	/* current server instance */
-extern kmutex_t		rfs4_servinst_lock;	/* protects linked list */
-extern void		rfs4_servinst_create(int, int, char **);
-extern void		rfs4_servinst_destroy_all(void);
-extern void		rfs4_servinst_assign(rfs4_client_t *,
-			    rfs4_servinst_t *);
-extern rfs4_servinst_t	*rfs4_servinst(rfs4_client_t *);
-extern int		rfs4_clnt_in_grace(rfs4_client_t *);
-extern int		rfs4_servinst_in_grace(rfs4_servinst_t *);
-extern int		rfs4_servinst_grace_new(rfs4_servinst_t *);
-extern void		rfs4_grace_start(rfs4_servinst_t *);
-extern void		rfs4_grace_start_new(void);
-extern void		rfs4_grace_reset_all(void);
-extern void		rfs4_ss_oldstate(rfs4_oldstate_t *, char *, char *);
-extern void		rfs4_dss_readstate(int, char **);
-
 /*
- * rfs4_deleg_policy is used to signify the server's global delegation
+ * nfs4_deleg_policy is used to signify the server's global delegation
  * policy.  The default is to NEVER delegate files and the
  * administrator must configure the server to enable delegations.
  *
@@ -759,30 +783,150 @@ typedef enum {
 	SRV_NORMAL_DELEGATE = 1
 } srv_deleg_policy_t;
 
-extern srv_deleg_policy_t rfs4_deleg_policy;
-extern kmutex_t rfs4_deleg_lock;
 extern void rfs4_disable_delegation(void), rfs4_enable_delegation(void);
 
 /*
- * Request types for delegation. These correspond with
- * open_delegation_type4 with the addition of a new value, DELEG_ANY,
- * to reqequest any delegation.
+ * Delegation want type.  The values DELEG_WANT_NO_PREF through
+ * DELEG_WANT_CANCEL correspond to the OPEN4_SHARE_WANT_* wire flags
+ * (see nfs4x_share_to_delegreq()).  DELEG_DISABLE is a server-side
+ * sentinel meaning "do not attempt a delegation at this call site"
+ * (e.g. CLAIM_DELEGATE_CUR, unconfirmed open owner).
  */
 typedef enum {
-	DELEG_NONE = 0,		/* Corresponds to OPEN_DELEG_NONE */
-	DELEG_READ = 1,		/* Corresponds to OPEN_DELEG_READ */
-	DELEG_WRITE = 2,	/* Corresponds to OPEN_DELEG_WRITE */
-	DELEG_ANY = -1		/* New value to request any delegation type */
+	DELEG_WANT_NO_PREF	= 0,	/* server chooses type freely */
+	DELEG_WANT_READ		= 1,	/* client prefers read delegation */
+	DELEG_WANT_WRITE	= 2,	/* client prefers write delegation */
+	DELEG_WANT_ANY		= 3,	/* client accepts any delegation */
+	DELEG_WANT_NONE		= 4,	/* client does not want a delegation */
+	DELEG_WANT_CANCEL	= 5,	/* client cancels a prior want */
+	DELEG_DISABLE		= -1	/* caller suppresses delegation */
 } delegreq_t;
 
-#define	NFS4_DELEG4TYPE2REQTYPE(x) (delegreq_t)(x)
+/*
+ * Zone global variables of NFSv4 server
+ */
+typedef struct nfs4_srv {
+	/* Unique write verifier */
+	verifier4	write4verf;
+	/* Delegation lock */
+	kmutex_t	deleg_lock;
+	/* Used to serialize create/destroy of nfs4_server_state database */
+	kmutex_t	state_lock;
+	rfs4_database_t *nfs4_server_state;
+	/* Used to manage access to server instance linked list */
+	kmutex_t	servinst_lock;
+	rfs4_servinst_t *nfs4_cur_servinst;
+	/* Used to manage access to nfs4_deleg_policy */
+	krwlock_t	deleg_policy_lock;
+	srv_deleg_policy_t nfs4_deleg_policy;
+	/* Allowed minors, nfs4 minors start from 0, which is always allowed */
+	nfs4_minor_t	nfs4_minor_max;
+	/* Set first time we see one */
+	int		seen_first_compound;
+	/*
+	 * Circular double-linked list of paths for currently-served RGs.
+	 * No locking required -- only changed on server start.
+	 * Managed with insque/remque.
+	 */
+	rfs4_dss_path_t	*dss_pathlist;
+	/* Duplicate request cache */
+	struct rfs4_drc	*nfs4_drc;
+	/* nfsv4 server start time */
+	time_t rfs4_start_time;
+	/* Used to serialize lookups of clientids */
+	krwlock_t rfs4_findclient_lock;
+
+	/* NFSv4 server state client tables */
+	/* table expiry times */
+	time_t rfs4_client_cache_time;
+	time_t rfs4_openowner_cache_time;
+	time_t rfs4_state_cache_time;
+	time_t rfs4_lo_state_cache_time;
+	time_t rfs4_lockowner_cache_time;
+	time_t rfs4_file_cache_time;
+	time_t rfs4_deleg_state_cache_time;
+	time_t rfs4_clntip_cache_time;
+	/* tables and indexes */
+	/* client table */
+	rfs4_table_t *rfs4_client_tab;
+	rfs4_index_t *rfs4_clientid_idx;
+	rfs4_index_t *rfs4_nfsclnt_idx;
+	/* client IP table */
+	rfs4_table_t *rfs4_clntip_tab;
+	rfs4_index_t *rfs4_clntip_idx;
+	/* Open Owner table */
+	rfs4_table_t *rfs4_openowner_tab;
+	rfs4_index_t *rfs4_openowner_idx;
+	/* Open State ID table */
+	rfs4_table_t *rfs4_state_tab;
+	rfs4_index_t *rfs4_state_idx;
+	rfs4_index_t *rfs4_state_owner_file_idx;
+	rfs4_index_t *rfs4_state_file_idx;
+	/* Lock State ID table */
+	rfs4_table_t *rfs4_lo_state_tab;
+	rfs4_index_t *rfs4_lo_state_idx;
+	rfs4_index_t *rfs4_lo_state_owner_idx;
+	/* Lock owner table */
+	rfs4_table_t *rfs4_lockowner_tab;
+	rfs4_index_t *rfs4_lockowner_idx;
+	rfs4_index_t *rfs4_lockowner_pid_idx;
+	/* File table */
+	rfs4_table_t *rfs4_file_tab;
+	rfs4_index_t *rfs4_file_idx;
+	/* Deleg State table */
+	rfs4_table_t *rfs4_deleg_state_tab;
+	rfs4_index_t *rfs4_deleg_idx;
+	rfs4_index_t *rfs4_deleg_state_idx;
+
+	/* nfs4.x */
+	rfs4_table_t	*rfs4_session_tab;
+	rfs4_index_t	*rfs4_session_idx;
+	rfs4_index_t	*rfs4_session_clid_idx;
+
+	/* client stable storage */
+	int rfs4_ss_enabled;
+} nfs4_srv_t;
+
+/*
+ * max length of the NFSv4 server database name
+ */
+#define	RFS4_MAX_MEM_CACHE_NAME 48
+
+/*
+ * global NFSv4 server kmem caches
+ * r_db_name - The name of the state database and the table that will use it
+ *             These tables are defined in nfs4_srv_t
+ * r_db_mem_cache - The kmem cache associated with the state database name
+ */
+typedef struct rfs4_db_mem_cache {
+	char		r_db_name[RFS4_MAX_MEM_CACHE_NAME];
+	kmem_cache_t	*r_db_mem_cache;
+} rfs4_db_mem_cache_t;
+
+#define	RFS4_DB_MEM_CACHE_NUM 9
+
+extern rfs4_db_mem_cache_t rfs4_db_mem_cache_table[RFS4_DB_MEM_CACHE_NUM];
+
+extern srv_deleg_policy_t nfs4_get_deleg_policy();
+
+extern void		rfs4_servinst_create(nfs4_srv_t *, int, int, char **);
+extern void		rfs4_servinst_destroy_all(nfs4_srv_t *);
+extern void		rfs4_servinst_assign(nfs4_srv_t *, rfs4_client_t *,
+			    rfs4_servinst_t *);
+extern rfs4_servinst_t	*rfs4_servinst(rfs4_client_t *);
+extern int		rfs4_clnt_in_grace(rfs4_client_t *);
+extern int		rfs4_servinst_in_grace(rfs4_servinst_t *);
+extern int		rfs4_servinst_grace_new(rfs4_servinst_t *);
+extern void		rfs4_grace_start(rfs4_servinst_t *);
+extern void		rfs4_grace_start_new(nfs4_srv_t *);
+extern void		rfs4_grace_reset_all(nfs4_srv_t *);
+extern void		rfs4_dss_readstate(nfs4_srv_t *, int, char **);
+extern rfs4_cbstate_t	rfs4_cbcheck(rfs4_state_t *);
 
 /*
  * Various interfaces to manipulate the state structures introduced
  * above
  */
-extern	kmutex_t	rfs4_state_lock;
-extern	void		rfs4_clean_state_exi(struct exportinfo *exi);
 extern	void		rfs4_free_reply(nfs_resop4 *);
 extern	void		rfs4_copy_reply(nfs_resop4 *, nfs_resop4 *);
 
@@ -843,16 +987,29 @@ extern	void		rfs4_file_rele(rfs4_file_t *);
 /* General collection of "get state" functions */
 extern	nfsstat4	rfs4_get_state(stateid4 *, rfs4_state_t **,
 					rfs4_dbsearch_type_t);
+extern nfsstat4		rfs4_get_state_nolock(stateid4 *, rfs4_state_t **,
+					rfs4_dbsearch_type_t);
+extern void rfs4_state_rele_nounlock(rfs4_state_t *);
+
+extern	nfsstat4	rfs4_get_deleg_any(stateid4 *,
+					rfs4_deleg_state_t **);
 extern	nfsstat4	rfs4_get_deleg_state(stateid4 *,
 					rfs4_deleg_state_t **);
 extern	nfsstat4	rfs4_get_lo_state(stateid4 *, rfs4_lo_state_t **,
 					bool_t);
+extern	nfsstat4	rfs4_get_all_state(stateid4 *, rfs4_state_t **,
+				rfs4_deleg_state_t **, rfs4_lo_state_t **);
+
+struct compound_state;
 extern	nfsstat4	rfs4_check_stateid(int, vnode_t *, stateid4 *,
 					bool_t, bool_t *, bool_t,
-					caller_context_t *);
-extern	int		rfs4_check_stateid_seqid(rfs4_state_t *, stateid4 *);
+					caller_context_t *,
+					struct compound_state *);
+extern	int		rfs4_check_stateid_seqid(rfs4_state_t *, stateid4 *,
+					const struct compound_state *);
 extern	int		rfs4_check_lo_stateid_seqid(rfs4_lo_state_t *,
-					stateid4 *);
+					stateid4 *,
+					const struct compound_state *);
 
 /* return values for rfs4_check_stateid_seqid() */
 #define	NFS4_CHECK_STATEID_OKAY	1
@@ -886,7 +1043,7 @@ extern	int		rfs4_get_deleg(rfs4_state_t *,  open_delegation_type4,
 			open_delegation_type4 (*policy)(rfs4_state_t *,
 				open_delegation_type4 dtype));
 extern	rfs4_deleg_state_t *rfs4_grant_delegation(delegreq_t, rfs4_state_t *,
-				int *);
+				rfs4_session_t *, int *, bool_t);
 extern	void		rfs4_set_deleg_response(rfs4_deleg_state_t *,
 				open_delegation4 *, nfsace4 *, int);
 extern	void		rfs4_return_deleg(rfs4_deleg_state_t *, bool_t);
@@ -895,6 +1052,15 @@ extern	void		rfs4_deleg_state_rele(rfs4_deleg_state_t *);
 extern	bool_t		rfs4_check_delegated_byfp(int, rfs4_file_t *,
 					bool_t, bool_t, bool_t, clientid4 *);
 extern	void		rfs4_clear_dont_grant(rfs4_file_t *);
+extern delegreq_t	nfs4x_share_to_delegreq(uint32_t);
+extern void		rfs4x_rs_erase(void *);
+extern void		rfs4x_rs_record(struct compound_state *,
+				rfs4_deleg_state_t *);
+extern bool_t		rfs4_find_write_deleg_byfp(rfs4_file_t *,
+				rfs4_deleg_state_t **);
+extern bool_t		rfs4_find_write_deleg(vnode_t *, rfs4_deleg_state_t **);
+extern void		rfs4_cb_getattr(rfs4_deleg_state_t *,
+				fattr4_change *, fattr4_size *);
 
 /*
  * nfs4 monitored operations.
@@ -934,7 +1100,10 @@ extern fem_t	*deleg_wrops;
 
 extern int rfs4_share(rfs4_state_t *, uint32_t, uint32_t);
 extern int rfs4_unshare(rfs4_state_t *);
-extern	void		rfs4_set_deleg_policy(srv_deleg_policy_t);
+extern void rfs4_set_deleg_policy(nfs4_srv_t *, srv_deleg_policy_t);
+extern void rfs4_hold_deleg_policy(nfs4_srv_t *);
+extern void rfs4_rele_deleg_policy(nfs4_srv_t *);
+
 #ifdef DEBUG
 #define	NFS4_DEBUG(var, args) if (var) cmn_err args
 
@@ -997,8 +1166,8 @@ struct nfs_fh4_fmt {
 #define	FH4_ATTRDIR	2
 
 #define	fh4_fsid	fh4_i.fhx_fsid
-#define	fh4_len		fh4_i.fhx_len 	/* fid length */
-#define	fh4_data	fh4_i.fhx_data 	/* fid bytes */
+#define	fh4_len		fh4_i.fhx_len	/* fid length */
+#define	fh4_data	fh4_i.fhx_data	/* fid bytes */
 #define	fh4_xlen	fh4_i.fhx_xlen
 #define	fh4_xdata	fh4_i.fhx_xdata
 typedef struct nfs_fh4_fmt nfs_fh4_fmt_t;
@@ -1030,10 +1199,11 @@ typedef struct nfs_fh4_fmt nfs_fh4_fmt_t;
 /*
  * A few definitions of repeatedly used constructs for nfsv4
  */
-#define	UTF8STRING_FREE(str)					\
+#define	UTF8STRING_FREE(str)	{				\
 	kmem_free((str).utf8string_val,	(str).utf8string_len);	\
 	(str).utf8string_val = NULL;				\
-	(str).utf8string_len = 0;
+	(str).utf8string_len = 0;				\
+}
 
 /*
  * NFS4_VOLATILE_FH yields non-zero if the filesystem uses non-persistent
@@ -1069,28 +1239,57 @@ typedef struct nfs_fh4_fmt nfs_fh4_fmt_t;
 struct compound_state {
 	struct exportinfo *exi;
 	struct exportinfo *saved_exi;	/* export struct for saved_vp */
-	cred_t 		*basecr;	/* UNIX cred:  only RPC request */
-	caddr_t 	principal;
-	int 		nfsflavor;
-	cred_t 		*cr;		/* UNIX cred: RPC request and */
+	cred_t		*basecr;	/* UNIX cred:  only RPC request */
+	caddr_t		principal;
+	int		nfsflavor;
+	cred_t		*cr;		/* UNIX cred: RPC request and */
 					/* target export */
-	bool_t  	cont;
-	uint_t 		access;		/* access perm on vp per request */
-	bool_t 		deleg;		/* TRUE if current fh has */
+	bool_t		cont;
+	uint_t		access;		/* access perm on vp per request */
+	bool_t		deleg;		/* TRUE if current fh has */
 					/* write delegated */
-	vnode_t 	*vp;		/* modified by PUTFH, and by ops that */
+	vnode_t		*vp;		/* modified by PUTFH, and by ops that */
 					/* input to GETFH */
-	bool_t 		mandlock;	/* Is mandatory locking in effect */
+	bool_t		mandlock;	/* Is mandatory locking in effect */
 					/* for vp */
-	vnode_t 	*saved_vp;	/* modified by SAVEFH, copied to */
+	vnode_t		*saved_vp;	/* modified by SAVEFH, copied to */
 					/* vp by RESTOREFH */
-	nfsstat4 	*statusp;
-	nfs_fh4 	fh;		/* ditto. valid only if vp != NULL */
-	nfs_fh4 	saved_fh;	/* ditto. valid only if */
-					/* 	saved_vp != NULL */
+	nfsstat4	*statusp;
+	nfs_fh4		fh;		/* ditto. valid only if vp != NULL */
+	nfs_fh4		saved_fh;	/* ditto. valid only if */
+					/*	saved_vp != NULL */
 	struct svc_req	*req;
-	char 		fhbuf[NFS4_FHSIZE];
+	char		fhbuf[NFS4_FHSIZE];
+
+	/* NFSv4.1 */
+	uint8_t		minorversion;	/* NFS4 minor version */
+	rfs4_session_t	*sp;		/* OP_SEQUENCE set it */
+	slotid4		slotno;
+	rfs4_slot_t	*slot;
+	rfs4_client_t	*client;
+	uint16_t	op_pos;
+	uint16_t	op_len;		/* number operations in compound req */
+#define	RFS4_DISPATCH_DONE	(1 << 0)
+#define	RFS4_CURRENT_STATEID	(1 << 1)
+#define	RFS4_SAVED_STATEID	(1 << 2)
+	uint8_t		cs_flags;
+	bool_t		cachethis;
+	COMPOUND4res	*cmpresp;
+	stateid4	current_stateid;
+	stateid4	save_stateid;
 };
+
+typedef struct compound_state compound_state_t;
+
+static inline bool_t
+rfs4_has_session(const compound_state_t *cs)
+{
+	return (cs->slot != NULL);
+}
+
+extern stateid4 invalid_stateid;
+
+#define	INVALID_STATEID(x) (!memcmp((x), &invalid_stateid, sizeof (stateid4))
 
 /*
  * Conversion commands for nfsv4 server attr checking
@@ -1109,14 +1308,15 @@ struct nfs4_svgetit_arg {
 	nfs4_attr_cmd_t op;		/* getit or setit */
 	struct compound_state *cs;
 	struct statvfs64 *sbp;
-	uint_t 		flag;		/* VOP_GETATTR/VOP_SETATTR flag */
-	uint_t 		xattr;		/* object is xattr */
-	bool_t 		rdattr_error_req; /* if readdir & client wants */
+	uint_t		flag;		/* VOP_GETATTR/VOP_SETATTR flag */
+	uint_t		xattr;		/* object is xattr */
+	bool_t		rdattr_error_req; /* if readdir & client wants */
 						/* rdattr_error */
 	nfsstat4	rdattr_error;	/* used for per-entry status */
 					/* (if rdattr_err) */
 	bool_t		is_referral;	/* because sometimes we tell lies */
 	bool_t		mntdfid_set;
+
 	fattr4_mounted_on_fileid
 			mounted_on_fileid;
 					/* readdir op can always return	*/
@@ -1129,22 +1329,22 @@ struct nfs4_svgetit_arg {
 };
 
 struct nfs4_ntov_map {
-	bitmap4		fbit; 		/* FATTR4_XXX_MASKY */
-	uint_t 		vbit; 		/* AT_XXX */
-	bool_t 		vfsstat;
-	bool_t 		mandatory; 	/* attribute mandatory to implement? */
-	uint_t 		nval;
+	bitmap4		fbit;		/* FATTR4_XXX_MASKY */
+	uint_t		vbit;		/* AT_XXX */
+	bool_t		vfsstat;
+	bool_t		mandatory;	/* attribute mandatory to implement? */
+	uint_t		nval;
 	int		xdr_size;	/* Size of XDR'd attr */
-	xdrproc_t 	xfunc;
+	xdrproc_t	xfunc;
 	int (*sv_getit)(nfs4_attr_cmd_t, struct nfs4_svgetit_arg *,
 		union nfs4_attr_u *);	/* subroutine for getting attr. */
-	char 		*prtstr;	/* string attr for printing */
+	char		*prtstr;	/* string attr for printing */
 };
 
 struct nfs4attr_to_vattr {
-	vnode_t 	*vp;
-	vattr_t 	*vap;
-	nfs_fh4   	*fhp;
+	vnode_t		*vp;
+	vattr_t		*vap;
+	nfs_fh4		*fhp;
 	nfsstat4	rdattr_error;
 	uint32_t	flag;
 	fattr4_change	change;
@@ -1212,13 +1412,13 @@ enum lkp4_attr_setup {
  */
 typedef struct lookup4_param {
 	enum lkp4_attr_setup l4_getattrs; /* (in) get attrs in the lookup? */
-	int 		header_len;	/* (in) num ops before first lookup  */
-	int 		trailer_len;	/* (in) num ops after last	*/
+	int		header_len;	/* (in) num ops before first lookup  */
+	int		trailer_len;	/* (in) num ops after last	*/
 					/*	Lookup/Getattr		*/
-	bitmap4 	ga_bits;	/* (in) Which attributes for Getattr */
+	bitmap4		ga_bits;	/* (in) Which attributes for Getattr */
 	COMPOUND4args_clnt *argsp;	/* (in/out) args for compound struct */
 	COMPOUND4res_clnt  *resp;	/* (in/out) res for compound  struct */
-	int 		arglen;		/* (out) argop buffer alloc'd length */
+	int		arglen;		/* (out) argop buffer alloc'd length */
 	struct mntinfo4 *mi;
 } lookup4_param_t;
 
@@ -1335,7 +1535,6 @@ extern vtype_t	nf4_to_vt[];
 extern struct nfs4_ntov_map nfs4_ntov_map[];
 extern uint_t nfs4_ntov_map_size;
 
-extern kstat_named_t	*rfsproccnt_v4_ptr;
 extern struct vfsops	*nfs4_vfsops;
 extern struct vnodeops	*nfs4_vnodeops;
 extern const struct	fs_operation_def nfs4_vnodeops_template[];
@@ -1361,18 +1560,49 @@ extern stateid4 clnt_special1;
 				stateid4_cmp(id, &clnt_special1))
 
 /*
+ * callers of CTO*SD macros MUST have cn_lock acquired
+ */
+#define	CTOBSD(c) ((sess_bcsd_t *)c->cn_csd)
+#define	SNTOBC(s) ((sess_channel_t *)(((rfs4_session_t *)(s))->sn_back))
+
+/* State's functions */
+extern void rfs4_ss_clid(nfs4_srv_t *nsrv4, rfs4_client_t *);
+extern void rfs4_ss_chkclid(nfs4_srv_t *nsrv4, rfs4_client_t *);
+
+/* Declarations for nfs4.x */
+nfsstat4 do_rfs4_op_secinfo(struct compound_state *, char *, SECINFO4res *);
+
+/*
  * The NFS Version 4 service procedures.
  */
 
+extern void	rfs4_do_server_start(int, int, nfs4_minor_t, int);
 extern void	rfs4_compound(COMPOUND4args *, COMPOUND4res *,
-			struct exportinfo *, struct svc_req *, cred_t *, int *);
-extern void	rfs4_compound_free(COMPOUND4res *);
-extern void	rfs4_compound_flagproc(COMPOUND4args *, int *);
+			compound_state_t *, struct svc_req *, int *);
+extern void rfs4_init_compound_state(struct compound_state *);
+extern void rfs4_fini_compound_state(struct compound_state *);
 
-extern int	rfs4_srvrinit(void);
+struct rpcdisp;
+extern int rfs4_dispatch(struct rpcdisp *, struct svc_req *, SVCXPRT *, char *);
+extern void	rfs4_compound_free(COMPOUND4res *);
+extern bool_t	rfs4_idempotent_req(const COMPOUND4args *);
+
+extern void	rfs4_srvrinit(void);
 extern void	rfs4_srvrfini(void);
-extern void	rfs4_state_init(void);
-extern void	rfs4_state_fini(void);
+extern void	rfs4_srv_zone_init(nfs_globals_t *);
+extern void	rfs4_srv_zone_fini(nfs_globals_t *);
+extern void	rfs4_state_g_init(void);
+extern void	rfs4_state_zone_init(nfs4_srv_t *);
+extern void	rfs4_state_g_fini(void);
+extern void	rfs4_state_zone_fini(void);
+extern nfs4_srv_t *nfs4_get_srv(void);
+extern CLIENT	*rfs4_cb_getch(rfs4_cbinfo_t *);
+extern CLIENT	*rfs4x_cb_getch(rfs4_session_t *);
+extern void	rfs4_cb_freech(rfs4_cbinfo_t *, CLIENT *, bool_t);
+extern void	rfs4x_cb_freech(rfs4_session_t *, CLIENT *);
+
+void put_stateid4(struct compound_state *, stateid4 *);
+void get_stateid4(struct compound_state *, stateid4 *);
 
 #endif
 #ifdef	__cplusplus

@@ -22,20 +22,24 @@
 # Copyright 2007 Sun Microsystems, Inc.  All rights reserved.
 # Use is subject to license terms.
 #
+# Copyright (c) 2018, Joyent, Inc.
 
 PROG= dc
 XPG6PROG= dc
 XD= exobjs.xpg6
 EXOBJS= dc.o
-XPG6EXOBJS= exobjs.xpg6/dc.o 
+XPG6EXOBJS= exobjs.xpg6/dc.o
 
 include ../Makefile.cmd
 
-LDFLAGS += $(MAPFILE.NGB:%=-M%)
+LDFLAGS += $(MAPFILE.NGB:%=-Wl,-M%)
 CERRWARN += -_gcc=-Wno-implicit-function-declaration
 CERRWARN += -_gcc=-Wno-unused-value
 CERRWARN += -_gcc=-Wno-parentheses
-CERRWARN += -_gcc=-Wno-uninitialized
+CERRWARN += $(CNOWARN_UNINIT)
+
+# not linted
+SMATCH=off
 
 .KEEP_STATE:
 
@@ -55,8 +59,6 @@ install: all $(ROOTPROG) $(ROOTXPG6PROG)
 
 clean:
 	-@rm -rf $(EXOBJS) $(XD) $(PROG) $(XPG6)
-
-lint:	lint_PROG
 
 $(XPG6EXOBJS): $(XD)
 

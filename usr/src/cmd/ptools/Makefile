@@ -54,7 +54,8 @@ NEW_SUBDIRS =	\
 	plgrp	\
 	pmadvise \
 	ppriv	\
-	preap
+	preap	\
+	psecflags
 
 SUBDIRS = $(LEGACY_SUBDIRS) $(NEW_SUBDIRS)
 
@@ -62,7 +63,6 @@ all	:=	TARGET = all
 install	:=	TARGET = install
 clean	:=	TARGET = clean
 clobber	:=	TARGET = clobber
-lint	:=	TARGET = lint
 _msg	:=	TARGET = _msg
 
 
@@ -73,17 +73,15 @@ pmadvise/pmadvise.po :=	CPPFLAGS +=	-I$(PMAP)
 #
 # Commands with messages support
 #
-POFILES = plgrp/plgrp.po pmadvise/pmadvise.po
+POFILES = plgrp/plgrp.po pmadvise/pmadvise.po psecflags/psecflags.po
 POFILE = ptools.po
 
 .KEEP_STATE:
 
 .PARALLEL: $(SUBDIRS)
 
-all install clean lint: $(SUBDIRS)
-clobber: $(SUBDIRS) clobber_local
-clobber_local:
-	$(RM) $(CLOBBERFILES)
+all install clean: $(SUBDIRS)
+clobber: $(SUBDIRS)
 
 $(NEW_SUBDIRS): FRC
 	@cd $@; pwd; $(MAKE) PTOOL_TYPE=NEW -f ../Makefile.ptool $(TARGET)
@@ -95,10 +93,12 @@ $(LEGACY_SUBDIRS): FRC
 # Combine all messages files into a single file and copy it to
 # MSGDOMAIN directory
 #
-_msg: ${POFILES}
+_msg: $(MSGDOMAIN) $(POFILES)
 	$(RM) $(POFILE)
 	$(CAT) $(POFILES) > $(POFILE)
 	$(RM)  $(MSGDOMAIN)/$(POFILE)
 	$(CP) $(POFILE) $(MSGDOMAIN)
 
 FRC:
+
+include $(SRC)/Makefile.msg.targ

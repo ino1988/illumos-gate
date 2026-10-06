@@ -24,6 +24,10 @@
  * Use is subject to license terms.
  */
 
+/*
+ * Copyright (c) 2015, Joyent, Inc. All rights reserved.
+ */
+
 #include <assert.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -206,14 +210,14 @@ static char shstr[] =
 #endif
 
 #ifdef _ELF64
-Elf *
-fake_elf64(struct ps_prochandle *P, file_info_t *fptr, uintptr_t addr,
-    Ehdr *ehdr, uint_t phnum, Phdr *phdr)
+#define	fake_elf	fake_elf64
 #else
-Elf *
-fake_elf32(struct ps_prochandle *P, file_info_t *fptr, uintptr_t addr,
-    Ehdr *ehdr, uint_t phnum, Phdr *phdr)
+#define	fake_elf	fake_elf32
 #endif
+
+Elf *
+fake_elf(struct ps_prochandle *P, file_info_t *fptr, uintptr_t addr,
+    Ehdr *ehdr, uint_t phnum, Phdr *phdr)
 {
 	enum {
 		DI_PLTGOT,
@@ -239,8 +243,8 @@ fake_elf32(struct ps_prochandle *P, file_info_t *fptr, uintptr_t addr,
 	 * need be. The DI_SUNW_SYM* items are completely optional, so
 	 * we use them if they are present and ignore them otherwise.
 	 */
-	const int di_req_mask = (1 << DI_SYMTAB) | (1 << DI_HASH) |
-		(1 << DI_SYMENT) | (1 << DI_STRTAB) | (1 << DI_STRSZ);
+	const int di_req_mask = (1 << DI_SYMTAB) |
+	    (1 << DI_SYMENT) | (1 << DI_STRTAB) | (1 << DI_STRSZ);
 	int di_mask = 0;
 	size_t size = 0;
 	caddr_t elfdata = NULL;
@@ -249,13 +253,13 @@ fake_elf32(struct ps_prochandle *P, file_info_t *fptr, uintptr_t addr,
 	int dynstr_shndx;
 	Ehdr *ep;
 	Shdr *sp;
-	Dyn *dp;
+	Dyn *dp = NULL;
 	Dyn *d[DI_NENT] = { 0 };
 	uint_t i;
 	Off off;
 	size_t pltsz = 0, pltentries = 0;
-	uintptr_t hptr = NULL;
-	Word hnchains, hnbuckets;
+	uintptr_t hptr = (uintptr_t)NULL;
+	Word hnchains = 0, hnbuckets = 0;
 
 	if (ehdr->e_type == ET_DYN)
 		phdr->p_vaddr += addr;
@@ -325,7 +329,8 @@ fake_elf32(struct ps_prochandle *P, file_info_t *fptr, uintptr_t addr,
 
 	/* Ensure all required entries were collected */
 	if ((di_mask & di_req_mask) != di_req_mask) {
-		dprintf("text section missing required dynamic entries\n");
+		Pdprintf("text section missing required dynamic entries: "
+		    "required 0x%x, found 0x%x\n", di_req_mask, di_mask);
 		goto bad;
 	}
 
@@ -357,7 +362,7 @@ fake_elf32(struct ps_prochandle *P, file_info_t *fptr, uintptr_t addr,
 			hptr += addr;
 
 		if (Pread(P, hash, sizeof (hash), hptr) != sizeof (hash)) {
-			dprintf("Pread of .hash at %lx failed\n",
+			Pdprintf("Pread of .hash at %lx failed\n",
 			    (long)(hptr));
 			goto bad;
 		}
@@ -408,15 +413,15 @@ fake_elf32(struct ps_prochandle *P, file_info_t *fptr, uintptr_t addr,
 			/* fall back to the platform default */
 #if ((defined(__i386) || defined(__amd64)) && !defined(_ELF64))
 			pltentries = pltrelsz / sizeof (Rel);
-			dprintf("DI_PLTREL not found, defaulting to Rel");
+			Pdprintf("DI_PLTREL not found, defaulting to Rel");
 #else /* (!(__i386 || __amd64)) || _ELF64 */
 			pltentries = pltrelsz / sizeof (Rela);
-			dprintf("DI_PLTREL not found, defaulting to Rela");
+			Pdprintf("DI_PLTREL not found, defaulting to Rela");
 #endif /* (!(__i386 || __amd64) || _ELF64 */
 		}
 
 		if (pltentries < PLTREL_MIN_ENTRIES) {
-			dprintf("too few PLT relocation entries "
+			Pdprintf("too few PLT relocation entries "
 			    "(found %lu, expected at least %d)\n",
 			    (long)pltentries, PLTREL_MIN_ENTRIES);
 			goto bad;
@@ -439,8 +444,10 @@ fake_elf32(struct ps_prochandle *P, file_info_t *fptr, uintptr_t addr,
 	}
 done_with_plt:
 
-	if ((elfdata = calloc(1, size)) == NULL)
+	if ((elfdata = calloc(1, size)) == NULL) {
+		Pdprintf("failed to allocate size %ld\n", (long)size);
 		goto bad;
+	}
 
 	/* LINTED - alignment */
 	ep = (Ehdr *)elfdata;
@@ -471,7 +478,7 @@ done_with_plt:
 	 */
 	if (Pread(P, &elfdata[ep->e_phoff], phnum * ep->e_phentsize,
 	    addr + ehdr->e_phoff) != phnum * ep->e_phentsize) {
-		dprintf("failed to read program headers\n");
+		Pdprintf("failed to read program headers\n");
 		goto bad;
 	}
 
@@ -518,7 +525,7 @@ done_with_plt:
 
 		if (Pread(P, &elfdata[off], sp->sh_size,
 		    sp->sh_addr) != sp->sh_size) {
-			dprintf("failed to read .SUNW_ldynsym at %lx\n",
+			Pdprintf("failed to read .SUNW_ldynsym at %lx\n",
 			    (long)sp->sh_addr);
 			goto bad;
 		}
@@ -545,7 +552,7 @@ done_with_plt:
 
 	if (Pread(P, &elfdata[off], sp->sh_size,
 	    sp->sh_addr) != sp->sh_size) {
-		dprintf("failed to read .dynsym at %lx\n",
+		Pdprintf("failed to read .dynsym at %lx\n",
 		    (long)sp->sh_addr);
 		goto bad;
 	}
@@ -571,7 +578,7 @@ done_with_plt:
 
 	if (Pread(P, &elfdata[off], sp->sh_size,
 	    sp->sh_addr) != sp->sh_size) {
-		dprintf("failed to read .dynstr\n");
+		Pdprintf("failed to read .dynstr\n");
 		goto bad;
 	}
 	off += roundup(sp->sh_size, SH_ADDRALIGN);
@@ -621,6 +628,12 @@ done_with_plt:
 			symtabptr = (Sym*)((uintptr_t)symtabptr + addr);
 		}
 
+		if ((hptr == (uintptr_t)NULL) || (hnbuckets == 0) ||
+		    (hnchains == 0)) {
+			Pdprintf("empty or missing .hash\n");
+			goto badplt;
+		}
+
 		/* find the .hash bucket address for this symbol */
 		plt_symhash = elf_hash("_PROCEDURE_LINKAGE_TABLE_");
 		htmp = plt_symhash % hnbuckets;
@@ -629,24 +642,24 @@ done_with_plt:
 		/* read the elf hash bucket index */
 		if (Pread(P, &ndx, sizeof (ndx), (uintptr_t)hash) !=
 		    sizeof (ndx)) {
-			dprintf("Pread of .hash at %lx failed\n", (long)hash);
-			goto bad;
+			Pdprintf("Pread of .hash at %lx failed\n", (long)hash);
+			goto badplt;
 		}
 
 		while (ndx) {
 			if (Pread(P, &sym, sizeof (sym),
 			    (uintptr_t)&symtabptr[ndx]) != sizeof (sym)) {
-				dprintf("Pread of .symtab at %lx failed\n",
+				Pdprintf("Pread of .symtab at %lx failed\n",
 				    (long)&symtabptr[ndx]);
-				goto bad;
+				goto badplt;
 			}
 
 			strtabname = strtabptr + sym.st_name;
 			if (Pread_string(P, strbuf, sizeof (strbuf),
 			    strtabname) < 0) {
-				dprintf("Pread of .strtab at %lx failed\n",
+				Pdprintf("Pread of .strtab at %lx failed\n",
 				    (long)strtabname);
-				goto bad;
+				goto badplt;
 			}
 
 			if (strcmp("_PROCEDURE_LINKAGE_TABLE_", strbuf) == 0)
@@ -655,15 +668,15 @@ done_with_plt:
 			hash = &((uint_t *)hptr)[2 + hnbuckets + ndx];
 			if (Pread(P, &ndx, sizeof (ndx), (uintptr_t)hash) !=
 			    sizeof (ndx)) {
-				dprintf("Pread of .hash at %lx failed\n",
+				Pdprintf("Pread of .hash at %lx failed\n",
 				    (long)hash);
-				goto bad;
+				goto badplt;
 			}
 		}
 
 #if defined(__sparc)
 		if (sym.st_value != d[DI_PLTGOT]->d_un.d_ptr) {
-			dprintf("warning: DI_PLTGOT (%lx) doesn't match "
+			Pdprintf("warning: DI_PLTGOT (%lx) doesn't match "
 			    ".plt symbol pointer (%lx)",
 			    (long)d[DI_PLTGOT]->d_un.d_ptr,
 			    (long)sym.st_value);
@@ -671,9 +684,9 @@ done_with_plt:
 #endif /* __sparc */
 
 		if (ndx == 0) {
-			dprintf(
+			Pdprintf(
 			    "Failed to find \"_PROCEDURE_LINKAGE_TABLE_\"\n");
-			goto bad;
+			goto badplt;
 		}
 
 		sp->sh_name = SHSTR_NDX_plt;
@@ -691,20 +704,23 @@ done_with_plt:
 
 		if (Pread(P, &elfdata[off], sp->sh_size, sp->sh_addr) !=
 		    sp->sh_size) {
-			dprintf("failed to read .plt at %lx\n",
+			Pdprintf("failed to read .plt at %lx\n",
 			    (long)sp->sh_addr);
-			goto bad;
+			goto badplt;
 		}
 		off += roundup(sp->sh_size, SH_ADDRALIGN);
 		sp++;
 	}
 
+badplt:
 	/* make sure we didn't write past the end of allocated memory */
 	sp++;
 	assert(((uintptr_t)(sp) - 1) < ((uintptr_t)elfdata + size));
 
 	free(dp);
 	if ((elf = elf_memory(elfdata, size)) == NULL) {
+		Pdprintf("failed to create ELF object "
+		    "in memory for size %ld\n", (long)size);
 		free(elfdata);
 		return (NULL);
 	}

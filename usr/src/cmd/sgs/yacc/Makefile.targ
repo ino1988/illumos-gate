@@ -19,10 +19,11 @@
 # CDDL HEADER END
 #
 #
+# Copyright 2015 Gary Mills
 # Copyright 2008 Sun Microsystems, Inc.  All rights reserved.
 # Use is subject to license terms.
 #
-# ident	"%Z%%M%	%I%	%E% SMI"
+# Copyright 2019 OmniOS Community Edition (OmniOSce) Association.
 #
 
 $(PROG): objs .WAIT $(POBJS)
@@ -59,10 +60,6 @@ $(ROOTLIBDIR64)/$(LIBLINKSCCC): $(ROOTLIBDIR64)/$(LIBLINKSCCC)$(VERS)
 objs pics:
 	-@mkdir -p $@
 
-$(LIBRARY): objs .WAIT $$(OBJS)
-	$(BUILD.AR)
-	$(POST_PROCESS_A)
-
 $(DYNLIB): pics .WAIT $$(PICS)
 	$(BUILD.SO)
 	$(POST_PROCESS_SO)
@@ -75,29 +72,11 @@ objs/%.o pics/%.o:	../common/%.c
 	$(COMPILE.c) -o $@ $<
 	$(POST_PROCESS_O)
 
-# install rule for lint library target
-$(ROOTLINTDIR)/%: ../common/%
-	$(INS.file)
-
 $(DYNLINKLIBDIR)/%: %$(VERS)
 	$(INS.liblink)
 
+$(ROOTCOMPATLINKS) $(ROOTCOMPATLINKS64):
+	$(RM) $@; $(SYMLINK) $(COMPATLINKTARGET) $@
+
 clean:
 		$(RM) $(POBJS) $(OBJS) $(PICS) $(CLEANFILES)
-
-lint:		$(LINTPOUT) $(LINTLIB)
-
-
-LINT_HDR=	perl ../../tools/lint_hdr.pl
-
-$(LINTPOUT):	$(SRCS)
-	$(LINT_HDR) $(PROG)			 > $(LINTPOUT)
-	$(LINT_HDR) -s yacc			>> $(LINTPOUT)
-	$(LINT.c) $(COMSRCS) $(LDLIBS)		2>&1 | tee -a $(LINTPOUT)
-
-	$(LINT_HDR) -s liby.so.1		>> $(LINTPOUT)
-	$(LINT.c) $(LIBSRCS) $(LDLIBS)		2>&1 | tee -a $(LINTPOUT)
-
-
-$(LINTLIB):	$(LINTSRCS)
-		$(LINT.c) -o $(LIBNAME) $(LINTSRCS)

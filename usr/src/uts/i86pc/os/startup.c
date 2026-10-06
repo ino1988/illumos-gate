@@ -18,10 +18,16 @@
  *
  * CDDL HEADER END
  */
+
 /*
  * Copyright (c) 1993, 2010, Oracle and/or its affiliates. All rights reserved.
  * Copyright 2012 DEY Storage Systems, Inc.  All rights reserved.
- * Copyright 2013 Nexenta Systems, Inc. All rights reserved.
+ * Copyright 2017 Nexenta Systems, Inc.
+ * Copyright 2020 Joyent, Inc.
+ * Copyright (c) 2015 by Delphix. All rights reserved.
+ * Copyright (c) 2020 Carlos Neira <cneirabustos@gmail.com>
+ * Copyright 2025 Oxide Computer Company
+ * Copyright 2025 Edgecast Cloud LLC.
  */
 /*
  * Copyright (c) 2010, Intel Corporation.
@@ -71,6 +77,7 @@
 #include <sys/memlist_plat.h>
 #include <sys/varargs.h>
 #include <sys/promif.h>
+#include <sys/prom_debug.h>
 #include <sys/modctl.h>
 
 #include <sys/sunddi.h>
@@ -121,6 +128,9 @@
 #include <sys/ddi_periodic.h>
 #include <sys/systeminfo.h>
 #include <sys/multiboot.h>
+#include <sys/ramdisk.h>
+#include <sys/tsc.h>
+#include <sys/clock.h>
 
 #ifdef	__xpv
 
@@ -146,12 +156,11 @@ extern void progressbar_init(void);
 extern void brand_init(void);
 extern void pcf_init(void);
 extern void pg_init(void);
+extern void ssp_init(void);
 
 extern int size_pse_array(pgcnt_t, int);
 
 #if defined(_SOFT_HOSTID)
-
-#include <sys/rtc.h>
 
 static int32_t set_soft_hostid(void);
 static char hostid_file[] = "/etc/hostid";
@@ -160,7 +169,7 @@ static char hostid_file[] = "/etc/hostid";
 
 void *gfx_devinfo_list;
 
-#if defined(__amd64) && !defined(__xpv)
+#if !defined(__xpv)
 extern void immu_startup(void);
 #endif
 
@@ -181,35 +190,17 @@ static void startup_memlist(void);
 static void startup_kmem(void);
 static void startup_modules(void);
 static void startup_vm(void);
+#ifndef __xpv
+static void startup_tsc(void);
+#endif
 static void startup_end(void);
 static void layout_kernel_va(void);
+static void setx86isalist(void);
+
 
 /*
  * Declare these as initialized data so we can patch them.
  */
-#ifdef __i386
-
-/*
- * Due to virtual address space limitations running in 32 bit mode, restrict
- * the amount of physical memory configured to a max of PHYSMEM pages (16g).
- *
- * If the physical max memory size of 64g were allowed to be configured, the
- * size of user virtual address space will be less than 1g. A limited user
- * address space greatly reduces the range of applications that can run.
- *
- * If more physical memory than PHYSMEM is required, users should preferably
- * run in 64 bit mode which has far looser virtual address space limitations.
- *
- * If 64 bit mode is not available (as in IA32) and/or more physical memory
- * than PHYSMEM is required in 32 bit mode, physmem can be set to the desired
- * value or to 0 (to configure all available memory) via eeprom(1M). kernelbase
- * should also be carefully tuned to balance out the need of the user
- * application while minimizing the risk of kernel heap exhaustion due to
- * kernelbase being set too high.
- */
-#define	PHYSMEM	0x400000
-
-#else /* __amd64 */
 
 /*
  * For now we can handle memory with physical addresses up to about
@@ -223,13 +214,12 @@ static void layout_kernel_va(void);
 #define	PHYSMEM			PHYSMEM_MAX64
 #define	AMD64_VA_HOLE_END	0xFFFF800000000000ul
 
-#endif /* __amd64 */
 
 pgcnt_t physmem = PHYSMEM;
 pgcnt_t obp_pages;	/* Memory used by PROM for its text and data */
 
-char *kobj_file_buf;
-int kobj_file_bufsize;	/* set in /etc/system */
+extern char *kobj_file_buf;
+extern int kobj_file_bufsize;	/* set in /etc/system */
 
 /* Global variables for MP support. Used in mp_startup */
 caddr_t	rm_platter_va = 0;
@@ -248,9 +238,7 @@ uintptr_t hole_start, hole_end;
 caddr_t kpm_vbase;
 size_t  kpm_size;
 static int kpm_desired;
-#ifdef __amd64
 static uintptr_t segkpm_base = (uintptr_t)SEGKPM_BASE;
-#endif
 
 /*
  * Configuration parameters set at boot time.
@@ -274,11 +262,13 @@ char kern_bootfile[OBP_MAXPATHLEN];
  * heap.  The optimization of allocating zio buffers from their own segment is
  * only valid on 64-bit kernels.
  */
-#if defined(__amd64)
 int segzio_fromheap = 0;
-#else
-int segzio_fromheap = 1;
-#endif
+
+/*
+ * Give folks an escape hatch for disabling SMAP via kmdb. Doesn't work
+ * post-boot.
+ */
+int disable_smap = 0;
 
 /*
  * new memory fragmentations are possible in startup() due to BOP_ALLOCs. this
@@ -308,22 +298,16 @@ static struct seg *segmap = &kmapseg;	/* easier to use name for in here */
 
 struct seg *segkp = &kpseg;	/* Pageable kernel virtual memory segment */
 
-#if defined(__amd64)
-struct seg kvseg_core;		/* Segment used for the core heap */
+extern struct seg kvseg_core;		/* Segment used for the core heap */
 struct seg kpmseg;		/* Segment used for physical mapping */
 struct seg *segkpm = &kpmseg;	/* 64bit kernel physical mapping segment */
-#else
-struct seg *segkpm = NULL;	/* Unused on IA32 */
-#endif
 
 caddr_t segkp_base;		/* Base address of segkp */
 caddr_t segzio_base;		/* Base address of segzio */
-#if defined(__amd64)
-pgcnt_t segkpsize = btop(SEGKPDEFSIZE);	/* size of segkp segment in pages */
-#else
-pgcnt_t segkpsize = 0;
-#endif
-pgcnt_t segziosize = 0;		/* size of zio segment in pages */
+pgcnt_t segkpsize;		/* size of segkp segment in pages */
+caddr_t segkvmm_base;
+pgcnt_t segkvmmsize;
+pgcnt_t segziosize;
 
 /*
  * A static DR page_t VA map is reserved that can map the page structures
@@ -382,92 +366,60 @@ static pgcnt_t kphysm_init(page_t *, pgcnt_t);
 	((uintptr_t)P2ROUNDUP((uintptr_t)(x), mmu.level_size[mmu.max_level]))
 
 /*
- *	32-bit Kernel's Virtual memory layout.
- *		+-----------------------+
- *		|			|
- * 0xFFC00000  -|-----------------------|- ARGSBASE
- *		|	debugger	|
- * 0xFF800000  -|-----------------------|- SEGDEBUGBASE
- *		|      Kernel Data	|
- * 0xFEC00000  -|-----------------------|
- *              |      Kernel Text	|
- * 0xFE800000  -|-----------------------|- KERNEL_TEXT (0xFB400000 on Xen)
- *		|---       GDT       ---|- GDT page (GDT_VA)
- *		|---    debug info   ---|- debug info (DEBUG_INFO_VA)
- *		|			|
- * 		|   page_t structures	|
- * 		|   memsegs, memlists, 	|
- * 		|   page hash, etc.	|
- * ---	       -|-----------------------|- ekernelheap, valloc_base (floating)
- *		|			|  (segkp is just an arena in the heap)
- *		|			|
- *		|	kvseg		|
- *		|			|
- *		|			|
- * ---         -|-----------------------|- kernelheap (floating)
- * 		|        Segkmap	|
- * 0xC3002000  -|-----------------------|- segmap_start (floating)
- *		|	Red Zone	|
- * 0xC3000000  -|-----------------------|- kernelbase / userlimit (floating)
- *		|			|			||
- *		|     Shared objects	|			\/
- *		|			|
- *		:			:
- *		|	user data	|
- *		|-----------------------|
- *		|	user text	|
- * 0x08048000  -|-----------------------|
- *		|	user stack	|
- *		:			:
- *		|	invalid		|
- * 0x00000000	+-----------------------+
- *
- *
  *		64-bit Kernel's Virtual memory layout. (assuming 64 bit app)
  *			+-----------------------+
- *			|			|
- * 0xFFFFFFFF.FFC00000  |-----------------------|- ARGSBASE
  *			|	debugger (?)	|
  * 0xFFFFFFFF.FF800000  |-----------------------|- SEGDEBUGBASE
- *			|      unused    	|
+ *			|      unused		|
  *			+-----------------------+
  *			|      Kernel Data	|
  * 0xFFFFFFFF.FBC00000  |-----------------------|
  *			|      Kernel Text	|
  * 0xFFFFFFFF.FB800000  |-----------------------|- KERNEL_TEXT
- *			|---       GDT       ---|- GDT page (GDT_VA)
  *			|---    debug info   ---|- debug info (DEBUG_INFO_VA)
+ *			|---       GDT       ---|- GDT page (GDT_VA)
+ *			|---       IDT       ---|- IDT page (IDT_VA)
+ *			|---       LDT       ---|- LDT pages (LDT_VA)
  *			|			|
- * 			|      Core heap	| (used for loadable modules)
+ *			|      Core heap	| (used for loadable modules)
  * 0xFFFFFFFF.C0000000  |-----------------------|- core_base / ekernelheap
  *			|	 Kernel		|
  *			|	  heap		|
+ *			|			|
+ *			|			|
  * 0xFFFFFXXX.XXX00000  |-----------------------|- kernelheap (floating)
  *			|	 segmap		|
  * 0xFFFFFXXX.XXX00000  |-----------------------|- segmap_start (floating)
  *			|    device mappings	|
  * 0xFFFFFXXX.XXX00000  |-----------------------|- toxic_addr (floating)
- *			|	  segzio	|
+ *			|	 segzio		|
  * 0xFFFFFXXX.XXX00000  |-----------------------|- segzio_base (floating)
- *			|	  segkp		|
- * ---                  |-----------------------|- segkp_base (floating)
- * 			|   page_t structures	|  valloc_base + valloc_sz
- * 			|   memsegs, memlists, 	|
- * 			|   page hash, etc.	|
- * 0xFFFFFF00.00000000  |-----------------------|- valloc_base (lower if > 1TB)
+ *			|        segkvmm	|
+ *			|			|
+ *			|			|
+ *			|			|
+ * 0xFFFFFXXX.XXX00000  |-----------------------|- segkvmm_base (floating)
+ *			|	 segkp		|
+ *			|-----------------------|- segkp_base (floating)
+ *			|   page_t structures	|  valloc_base + valloc_sz
+ *			|   memsegs, memlists,	|
+ *			|   page hash, etc.	|
+ * 0xFFFFFE00.00000000  |-----------------------|- valloc_base (lower if >256GB)
  *			|	 segkpm		|
- * 0xFFFFFE00.00000000  |-----------------------|
+ *			|			|
+ * 0xFFFFFD00.00000000  |-----------------------|- SEGKPM_BASE (lower if >256GB)
  *			|	Red Zone	|
- * 0xFFFFFD80.00000000  |-----------------------|- KERNELBASE (lower if > 1TB)
+ * 0xFFFFFC80.00000000  |-----------------------|- KERNELBASE (lower if >256GB)
+ * 0xFFFFFC7F.FFE00000  |-----------------------|- USERLIMIT (lower if >256GB)
  *			|     User stack	|- User space memory
- * 			|			|
- * 			| shared objects, etc	|	(grows downwards)
+ *			|			|
+ *			| shared objects, etc	|	(grows downwards)
  *			:			:
- * 			|			|
+ *			|			|
  * 0xFFFF8000.00000000  |-----------------------|
- * 			|			|
- * 			| VA Hole / unused	|
- * 			|			|
+ *			|			|
+ *			| VA Hole / unused	|
+ *			|			|
  * 0x00008000.00000000  |-----------------------|
  *			|			|
  *			|			|
@@ -594,33 +546,13 @@ static size_t	textrepl_min_gb = 10;
  * on 64 bit we use a predifined VA range for mapping devices in the kernel
  * on 32 bit the mappings are intermixed in the heap, so we use a bit map
  */
-#ifdef __amd64
 
 vmem_t		*device_arena;
 uintptr_t	toxic_addr = (uintptr_t)NULL;
 size_t		toxic_size = 1024 * 1024 * 1024; /* Sparc uses 1 gig too */
 
-#else	/* __i386 */
-
-ulong_t		*toxic_bit_map;	/* one bit for each 4k of VA in heap_arena */
-size_t		toxic_bit_map_len = 0;	/* in bits */
-
-#endif	/* __i386 */
-
-/*
- * Simple boot time debug facilities
- */
-static char *prm_dbg_str[] = {
-	"%s:%d: '%s' is 0x%x\n",
-	"%s:%d: '%s' is 0x%llx\n"
-};
 
 int prom_debug;
-
-#define	PRM_DEBUG(q)	if (prom_debug) 	\
-	prom_printf(prm_dbg_str[sizeof (q) >> 3], "startup.c", __LINE__, #q, q);
-#define	PRM_POINT(q)	if (prom_debug) 	\
-	prom_printf("%s:%d: %s\n", "startup.c", __LINE__, q);
 
 /*
  * This structure is used to keep track of the intial allocations
@@ -637,13 +569,13 @@ size_t valloc_sz = 0;
 uintptr_t valloc_base;
 
 #define	ADD_TO_ALLOCATIONS(ptr, size) {					\
-		size = ROUND_UP_PAGE(size);		 		\
+		size = ROUND_UP_PAGE(size);				\
 		if (num_allocations == NUM_ALLOCATIONS)			\
 			panic("too many ADD_TO_ALLOCATIONS()");		\
 		allocations[num_allocations].al_ptr = (void**)&ptr;	\
 		allocations[num_allocations].al_size = size;		\
 		valloc_sz += size;					\
-		++num_allocations;				 	\
+		++num_allocations;					\
 	}
 
 /*
@@ -667,6 +599,68 @@ perform_allocations(void)
 		*allocations[i].al_ptr = (void *)mem;
 		mem += allocations[i].al_size;
 	}
+}
+
+/*
+ * Set up and enable SMAP now before we start other CPUs, but after the kernel's
+ * VM has been set up so we can use hot_patch_kernel_text().
+ *
+ * We can only patch 1, 2, or 4 bytes, but not three bytes. So instead, we
+ * replace the four byte word at the patch point. See uts/intel/ml/copy.s
+ * for more information on what's going on here.
+ */
+static void
+startup_smap(void)
+{
+	int i;
+	uint32_t inst;
+	uint8_t *instp;
+	char sym[128];
+	struct modctl *modp;
+
+	extern int _smap_enable_patch_count;
+	extern int _smap_disable_patch_count;
+
+	if (disable_smap != 0)
+		remove_x86_feature(x86_featureset, X86FSET_SMAP);
+
+	if (is_x86_feature(x86_featureset, X86FSET_SMAP) == B_FALSE)
+		return;
+
+	for (i = 0; i < _smap_enable_patch_count; i++) {
+		int sizep;
+
+		VERIFY3U(i, <, _smap_enable_patch_count);
+		VERIFY(snprintf(sym, sizeof (sym), "_smap_enable_patch_%d", i) <
+		    sizeof (sym));
+		instp = (uint8_t *)(void *)kobj_getelfsym(sym, NULL, &sizep);
+		VERIFY(instp != 0);
+		inst = (instp[3] << 24) | (SMAP_CLAC_INSTR & 0x00ffffff);
+		hot_patch_kernel_text((caddr_t)instp, inst, 4);
+	}
+
+	for (i = 0; i < _smap_disable_patch_count; i++) {
+		int sizep;
+
+		VERIFY(snprintf(sym, sizeof (sym), "_smap_disable_patch_%d",
+		    i) < sizeof (sym));
+		instp = (uint8_t *)(void *)kobj_getelfsym(sym, NULL, &sizep);
+		VERIFY(instp != 0);
+		inst = (instp[3] << 24) | (SMAP_STAC_INSTR & 0x00ffffff);
+		hot_patch_kernel_text((caddr_t)instp, inst, 4);
+	}
+
+	/*
+	 * Hotinline calls to smap_enable and smap_disable within
+	 * unix module. Hotinlines in other modules are done on
+	 * mod_load().
+	 */
+	modp = mod_hold_by_name("unix");
+	do_hotinlines(modp->mod_mp);
+	mod_release_mod(modp);
+
+	setcr4(getcr4() | CR4_SMAP);
+	smap_enable();
 }
 
 /*
@@ -697,9 +691,7 @@ startup(void)
 	 * Make sure that nobody tries to use sekpm until we have
 	 * initialized it properly.
 	 */
-#if defined(__amd64)
 	kpm_desired = 1;
-#endif
 	kpm_enable = 0;
 	CPUSET_ONLY(cpu_ready_set, 0);	/* cpu 0 is boot cpu */
 
@@ -709,6 +701,7 @@ startup(void)
 		segvn_use_regions = 0;
 	}
 #endif
+	ssp_init();
 	progressbar_init();
 	startup_init();
 #if defined(__xpv)
@@ -719,10 +712,22 @@ startup(void)
 	startup_vm();
 #if !defined(__xpv)
 	/*
+	 * Up until this point, we cannot use any time delay functions
+	 * (e.g. tenmicrosec()). Once the TSC is setup, we can. This is
+	 * purposely done after the VM system as been setup to allow
+	 * calibration sources which might require mapping for access
+	 * (e.g. the HPET), but still early enough to allow the rest of
+	 * the startup code to make use of the TSC (via tenmicrosec() or
+	 * the default TSC-based gethrtime()) as required.
+	 */
+	startup_tsc();
+
+	/*
 	 * Note we need to do this even on fast reboot in order to access
 	 * the irq routing table (used for pci labels).
 	 */
 	startup_pci_bios();
+	startup_smap();
 #endif
 #if defined(__xpv)
 	startup_xen_mca();
@@ -740,7 +745,7 @@ startup_init()
 	/*
 	 * Complete the extraction of cpuid data
 	 */
-	cpuid_pass2(CPU);
+	cpuid_execpass(CPU, CPUID_PASS_EXTENDED, NULL);
 
 	(void) check_boot_version(BOP_GETVERSION(bootops));
 
@@ -884,6 +889,17 @@ kpm_init()
 		panic("segkpm_create segkpm");
 
 	rw_exit(&kas.a_lock);
+
+	kpm_enable = 1;
+
+	/*
+	 * As the KPM was disabled while setting up the system, go back and fix
+	 * CPU zero's access to its user page table. This is a bit gross, but
+	 * we have a chicken and egg problem otherwise.
+	 */
+	ASSERT(CPU->cpu_hat_info->hci_user_l3ptes == NULL);
+	CPU->cpu_hat_info->hci_user_l3ptes =
+	    (x86pte_t *)hat_kpm_mapin_pfn(CPU->cpu_hat_info->hci_user_l3pfn);
 }
 
 /*
@@ -947,11 +963,6 @@ startup_memlist(void)
 	size_t page_ctrs_size;
 	size_t pse_table_alloc_size;
 	struct memlist *current;
-	extern void startup_build_mem_nodes(struct memlist *);
-
-	/* XX64 fix these - they should be in include files */
-	extern size_t page_coloring_init(uint_t, int, int);
-	extern void page_coloring_setup(caddr_t);
 
 	PRM_POINT("startup_memlist() starting...");
 
@@ -996,22 +1007,9 @@ startup_memlist(void)
 	PRM_DEBUG(memblocks);
 
 	/*
-	 * Compute maximum physical address for memory DR operations.
-	 * Memory DR operations are unsupported on xpv or 32bit OSes.
+	 * We no longer support any form of memory DR.
 	 */
-#ifdef	__amd64
-	if (plat_dr_support_memory()) {
-		if (plat_dr_physmax == 0) {
-			uint_t pabits = UINT_MAX;
-
-			cpuid_get_addrsize(CPU, &pabits, NULL);
-			plat_dr_physmax = btop(1ULL << pabits);
-		}
-		if (plat_dr_physmax > PHYSMEM_MAX64)
-			plat_dr_physmax = PHYSMEM_MAX64;
-	} else
-#endif
-		plat_dr_physmax = 0;
+	plat_dr_physmax = 0;
 
 	/*
 	 * Examine the bios reserved memory to find out:
@@ -1035,23 +1033,6 @@ startup_memlist(void)
 	 */
 	mmu_init();
 
-#ifdef	__i386
-	/*
-	 * physmax is lowered if there is more memory than can be
-	 * physically addressed in 32 bit (PAE/non-PAE) modes.
-	 */
-	if (mmu.pae_hat) {
-		if (PFN_ABOVE64G(physmax)) {
-			physinstalled -= (physmax - (PFN_64G - 1));
-			physmax = PFN_64G - 1;
-		}
-	} else {
-		if (PFN_ABOVE4G(physmax)) {
-			physinstalled -= (physmax - (PFN_4G - 1));
-			physmax = PFN_4G - 1;
-		}
-	}
-#endif
 
 	startup_build_mem_nodes(bootops->boot_mem->physinstalled);
 
@@ -1172,43 +1153,55 @@ startup_memlist(void)
 	pse_table_alloc_size = pse_table_size * sizeof (pad_mutex_t);
 	ADD_TO_ALLOCATIONS(pse_mutex, pse_table_alloc_size);
 
-#if defined(__amd64)
 	valloc_sz = ROUND_UP_LPAGE(valloc_sz);
 	valloc_base = VALLOC_BASE;
 
 	/*
-	 * The default values of VALLOC_BASE and SEGKPM_BASE should work
-	 * for values of physmax up to 1 Terabyte. They need adjusting when
-	 * memory is at addresses above 1 TB. When adjusted, segkpm_base must
-	 * be aligned on KERNEL_REDZONE_SIZE boundary (span of top level pte).
+	 * The signicant memory-sized regions are roughly sized as follows in
+	 * the default layout with max physmem:
+	 *  segkpm: 1x physmem allocated (but 1Tb room, below VALLOC_BASE)
+	 *  segzio: 1.5x physmem
+	 *  segkvmm: 4x physmem
+	 *  heap: whatever's left up to COREHEAP_BASE, at least 1.5x physmem
+	 *
+	 * The idea is that we leave enough room to avoid fragmentation issues,
+	 * so we would like the VA arenas to have some extra.
+	 *
+	 * Ignoring the loose change of segkp, valloc, and such, this means that
+	 * as COREHEAP_BASE-VALLOC_BASE=2Tb, we can accommodate a physmem up to
+	 * about (2Tb / 7.0), rounded down to 256Gb in the check below.
+	 *
+	 * Note that KPM lives below VALLOC_BASE, but we want to include it in
+	 * adjustments, hence the 8 below.
+	 *
+	 * Beyond 256Gb, we push segkpm_base (and hence kernelbase and
+	 * _userlimit) down to accommodate the VA requirements above.
 	 */
-	if (physmax + 1 > mmu_btop(TERABYTE) ||
-	    plat_dr_physmax > mmu_btop(TERABYTE)) {
-		uint64_t kpm_resv_amount = mmu_ptob(physmax + 1);
+	if (physmax + 1 > mmu_btop(TERABYTE / 4)) {
+		uint64_t physmem_bytes = mmu_ptob(physmax + 1);
+		uint64_t adjustment = 8 * (physmem_bytes - (TERABYTE / 4));
 
-		if (kpm_resv_amount < mmu_ptob(plat_dr_physmax)) {
-			kpm_resv_amount = mmu_ptob(plat_dr_physmax);
-		}
+		PRM_DEBUG(adjustment);
 
-		segkpm_base = -(P2ROUNDUP((2 * kpm_resv_amount),
-		    KERNEL_REDZONE_SIZE));	/* down from top VA */
+		/*
+		 * segkpm_base is always aligned on a L3 PTE boundary.
+		 */
+		segkpm_base -= P2ROUNDUP(adjustment, KERNEL_REDZONE_SIZE);
 
-		/* make sure we leave some space for user apps above hole */
+		/*
+		 * But make sure we leave some space for user apps above hole.
+		 */
 		segkpm_base = MAX(segkpm_base, AMD64_VA_HOLE_END + TERABYTE);
-		if (segkpm_base > SEGKPM_BASE)
-			segkpm_base = SEGKPM_BASE;
-		PRM_DEBUG(segkpm_base);
 
-		valloc_base = segkpm_base + P2ROUNDUP(kpm_resv_amount, ONE_GIG);
+		ASSERT(segkpm_base <= SEGKPM_BASE);
+
+		valloc_base = segkpm_base + P2ROUNDUP(physmem_bytes, ONE_GIG);
 		if (valloc_base < segkpm_base)
 			panic("not enough kernel VA to support memory size");
-		PRM_DEBUG(valloc_base);
 	}
-#else	/* __i386 */
-	valloc_base = (uintptr_t)(MISC_VA_BASE - valloc_sz);
-	valloc_base = P2ALIGN(valloc_base, mmu.level_size[1]);
+
+	PRM_DEBUG(segkpm_base);
 	PRM_DEBUG(valloc_base);
-#endif	/* __i386 */
 
 	/*
 	 * do all the initial allocations
@@ -1306,13 +1299,11 @@ startup_memlist(void)
 
 	PRM_DEBUG(valloc_sz);
 
-#if defined(__amd64)
 	if ((availrmem >> (30 - MMU_PAGESHIFT)) >=
 	    textrepl_min_gb && l2cache_sz <= 2 << 20) {
 		extern size_t textrepl_size_thresh;
 		textrepl_size_thresh = (16 << 20) - 1;
 	}
-#endif
 }
 
 /*
@@ -1321,50 +1312,22 @@ startup_memlist(void)
 static void
 startup_kmem(void)
 {
-	extern void page_set_colorequiv_arr(void);
+#if !defined(__xpv)
+	extern uint64_t kpti_kbase;
+#endif
 
 	PRM_POINT("startup_kmem() starting...");
 
-#if defined(__amd64)
 	if (eprom_kernelbase && eprom_kernelbase != KERNELBASE)
 		cmn_err(CE_NOTE, "!kernelbase cannot be changed on 64-bit "
 		    "systems.");
 	kernelbase = segkpm_base - KERNEL_REDZONE_SIZE;
 	core_base = (uintptr_t)COREHEAP_BASE;
 	core_size = (size_t)MISC_VA_BASE - COREHEAP_BASE;
-#else	/* __i386 */
-	/*
-	 * We configure kernelbase based on:
-	 *
-	 * 1. user specified kernelbase via eeprom command. Value cannot exceed
-	 *    KERNELBASE_MAX. we large page align eprom_kernelbase
-	 *
-	 * 2. Default to KERNELBASE and adjust to 2X less the size for page_t.
-	 *    On large memory systems we must lower kernelbase to allow
-	 *    enough room for page_t's for all of memory.
-	 *
-	 * The value set here, might be changed a little later.
-	 */
-	if (eprom_kernelbase) {
-		kernelbase = eprom_kernelbase & mmu.level_mask[1];
-		if (kernelbase > KERNELBASE_MAX)
-			kernelbase = KERNELBASE_MAX;
-	} else {
-		kernelbase = (uintptr_t)KERNELBASE;
-		kernelbase -= ROUND_UP_4MEG(2 * valloc_sz);
-	}
-	ASSERT((kernelbase & mmu.level_offset[1]) == 0);
-	core_base = valloc_base;
-	core_size = 0;
-#endif	/* __i386 */
 
 	PRM_DEBUG(core_base);
 	PRM_DEBUG(core_size);
 	PRM_DEBUG(kernelbase);
-
-#if defined(__i386)
-	segkp_fromheap = 1;
-#endif	/* __i386 */
 
 	ekernelheap = (char *)core_base;
 	PRM_DEBUG(ekernelheap);
@@ -1382,27 +1345,18 @@ startup_kmem(void)
 
 	*(uintptr_t *)&_kernelbase = kernelbase;
 	*(uintptr_t *)&_userlimit = kernelbase;
-#if defined(__amd64)
 	*(uintptr_t *)&_userlimit -= KERNELBASE - USERLIMIT;
-#else
-	*(uintptr_t *)&_userlimit32 = _userlimit;
+#if !defined(__xpv)
+	kpti_kbase = kernelbase;
 #endif
 	PRM_DEBUG(_kernelbase);
 	PRM_DEBUG(_userlimit);
 	PRM_DEBUG(_userlimit32);
 
-	layout_kernel_va();
+	/* We have to re-do this now that we've modified _userlimit. */
+	mmu_calc_user_slots();
 
-#if defined(__i386)
-	/*
-	 * If segmap is too large we can push the bottom of the kernel heap
-	 * higher than the base.  Or worse, it could exceed the top of the
-	 * VA space entirely, causing it to wrap around.
-	 */
-	if (kernelheap >= ekernelheap || (uintptr_t)kernelheap < kernelbase)
-		panic("too little address space available for kernelheap,"
-		    " use eeprom for lower kernelbase or smaller segmapsize");
-#endif	/* __i386 */
+	layout_kernel_va();
 
 	/*
 	 * Initialize the kernel heap. Note 3rd argument must be > 1st.
@@ -1446,12 +1400,6 @@ startup_kmem(void)
 		    (npages == PHYSMEM ? "Due to virtual address space " : ""),
 		    npages, orig_npages);
 	}
-#if defined(__i386)
-	if (eprom_kernelbase && (eprom_kernelbase != kernelbase))
-		cmn_err(CE_WARN, "kernelbase value, User specified 0x%lx, "
-		    "System using 0x%lx",
-		    (uintptr_t)eprom_kernelbase, (uintptr_t)kernelbase);
-#endif
 
 #ifdef	KERNELBASE_ABI_MIN
 	if (kernelbase < (uintptr_t)KERNELBASE_ABI_MIN) {
@@ -1527,14 +1475,6 @@ startup_modules(void)
 	PRM_POINT("startup_modules() starting...");
 
 #ifndef __xpv
-	/*
-	 * Initialize ten-micro second timer so that drivers will
-	 * not get short changed in their init phase. This was
-	 * not getting called until clkinit which, on fast cpu's
-	 * caused the drv_usecwait to be way too short.
-	 */
-	microfind();
-
 	if ((get_hwenv() & HW_XEN_HVM) != 0)
 		update_default_path();
 #endif
@@ -1607,11 +1547,34 @@ startup_modules(void)
 	if (DOMAIN_IS_INITDOMAIN(xen_info))
 #endif
 	{
+		id_t smid;
+		smbios_system_t smsys;
+		smbios_info_t sminfo;
+		char *mfg;
 		/*
 		 * Load the System Management BIOS into the global ksmbios
 		 * handle, if an SMBIOS is present on this system.
+		 * Also set "si-hw-provider" property, if not already set.
 		 */
 		ksmbios = smbios_open(NULL, SMB_VERSION, ksmbios_flags, NULL);
+		if (ksmbios != NULL &&
+		    ((smid = smbios_info_system(ksmbios, &smsys)) != SMB_ERR) &&
+		    (smbios_info_common(ksmbios, smid, &sminfo)) != SMB_ERR) {
+			mfg = (char *)sminfo.smbi_manufacturer;
+			if (BOP_GETPROPLEN(bootops, "si-hw-provider") < 0) {
+				extern char hw_provider[];
+				int i;
+				for (i = 0; i < SYS_NMLN; i++) {
+					if (isprint(mfg[i]))
+						hw_provider[i] = mfg[i];
+					else {
+						hw_provider[i] = '\0';
+						break;
+					}
+				}
+				hw_provider[SYS_NMLN - 1] = '\0';
+			}
+		}
 	}
 
 
@@ -1662,14 +1625,13 @@ startup_modules(void)
 #else
 	/*
 	 * Initialize a handle for the boot cpu - others will initialize
-	 * as they startup.  Do not do this if we know we are in an HVM domU.
+	 * as they startup.
 	 */
-	if ((get_hwenv() & HW_XEN_HVM) == 0 &&
-	    (hdl = cmi_init(CMI_HDL_NATIVE, cmi_ntv_hwchipid(CPU),
-	    cmi_ntv_hwcoreid(CPU), cmi_ntv_hwstrandid(CPU))) != NULL &&
-	    is_x86_feature(x86_featureset, X86FSET_MCA)) {
+	if ((hdl = cmi_init(CMI_HDL_NATIVE, cmi_ntv_hwchipid(CPU),
+	    cmi_ntv_hwcoreid(CPU), cmi_ntv_hwstrandid(CPU))) != NULL) {
+		if (is_x86_feature(x86_featureset, X86FSET_MCA))
 			cmi_mca_init(hdl);
-			CPU->cpu_m.mcpu_cmi_hdl = hdl;
+		CPU->cpu_m.mcpu_cmi_hdl = hdl;
 	}
 #endif	/* __xpv */
 
@@ -1765,77 +1727,69 @@ protect_boot_range(uintptr_t low, uintptr_t high, int setaside)
 }
 
 /*
- *
+ * Establish the final size of the kernel's heap, size of segmap, segkp, etc.
  */
 static void
 layout_kernel_va(void)
 {
-	PRM_POINT("layout_kernel_va() starting...");
-	/*
-	 * Establish the final size of the kernel's heap, size of segmap,
-	 * segkp, etc.
-	 */
+	const size_t physmem_size = mmu_ptob(physmem);
+	size_t size;
 
-#if defined(__amd64)
+	PRM_POINT("layout_kernel_va() starting...");
 
 	kpm_vbase = (caddr_t)segkpm_base;
-	if (physmax + 1 < plat_dr_physmax) {
-		kpm_size = ROUND_UP_LPAGE(mmu_ptob(plat_dr_physmax));
-	} else {
-		kpm_size = ROUND_UP_LPAGE(mmu_ptob(physmax + 1));
-	}
+	kpm_size = ROUND_UP_LPAGE(mmu_ptob(physmax + 1));
 	if ((uintptr_t)kpm_vbase + kpm_size > (uintptr_t)valloc_base)
 		panic("not enough room for kpm!");
 	PRM_DEBUG(kpm_size);
 	PRM_DEBUG(kpm_vbase);
 
-	/*
-	 * By default we create a seg_kp in 64 bit kernels, it's a little
-	 * faster to access than embedding it in the heap.
-	 */
 	segkp_base = (caddr_t)valloc_base + valloc_sz;
 	if (!segkp_fromheap) {
-		size_t sz = mmu_ptob(segkpsize);
-
+		size = mmu_ptob(segkpsize);
 		/*
-		 * determine size of segkp
+		 * Determine size of segkp
+		 * Users can change segkpsize through eeprom.
 		 */
-		if (sz < SEGKPMINSIZE || sz > SEGKPMAXSIZE) {
-			sz = SEGKPDEFSIZE;
+		if (size < SEGKPMINSIZE || size > SEGKPMAXSIZE) {
+			size = SEGKPDEFSIZE;
 			cmn_err(CE_WARN, "!Illegal value for segkpsize. "
 			    "segkpsize has been reset to %ld pages",
-			    mmu_btop(sz));
+			    mmu_btop(size));
 		}
-		sz = MIN(sz, MAX(SEGKPMINSIZE, mmu_ptob(physmem)));
-
-		segkpsize = mmu_btop(ROUND_UP_LPAGE(sz));
+		size = MIN(size, MAX(SEGKPMINSIZE, physmem_size));
+		segkpsize = mmu_btop(ROUND_UP_LPAGE(size));
 	}
 	PRM_DEBUG(segkp_base);
 	PRM_DEBUG(segkpsize);
 
 	/*
-	 * segzio is used for ZFS cached data. It uses a distinct VA
-	 * segment (from kernel heap) so that we can easily tell not to
-	 * include it in kernel crash dumps on 64 bit kernels. The trick is
-	 * to give it lots of VA, but not constrain the kernel heap.
-	 * We scale the size of segzio linearly with physmem up to
-	 * SEGZIOMAXSIZE. Above that amount it scales at 50% of physmem.
+	 * segkvmm: backing for vmm guest memory. Like segzio, we have a
+	 * separate segment for two reasons: it makes it easy to skip our pages
+	 * on kernel crash dumps, and it helps avoid fragmentation.  With this
+	 * segment, we're expecting significantly-sized allocations only; we'll
+	 * default to 4x the size of physmem.
 	 */
-	segzio_base = segkp_base + mmu_ptob(segkpsize);
+	segkvmm_base = segkp_base + mmu_ptob(segkpsize);
+	size = segkvmmsize != 0 ? mmu_ptob(segkvmmsize) : (physmem_size * 4);
+
+	size = MAX(size, SEGVMMMINSIZE);
+	segkvmmsize = mmu_btop(ROUND_UP_LPAGE(size));
+
+	PRM_DEBUG(segkvmmsize);
+	PRM_DEBUG(segkvmm_base);
+
+	/*
+	 * segzio is used for ZFS cached data.  For segzio, we use 1.5x physmem.
+	 */
+	segzio_base = segkvmm_base + mmu_ptob(segkvmmsize);
 	if (segzio_fromheap) {
 		segziosize = 0;
 	} else {
-		size_t physmem_size = mmu_ptob(physmem);
-		size_t size = (segziosize == 0) ?
-		    physmem_size : mmu_ptob(segziosize);
+		size = (segziosize != 0) ? mmu_ptob(segziosize) :
+		    (physmem_size * 3) / 2;
 
-		if (size < SEGZIOMINSIZE)
-			size = SEGZIOMINSIZE;
-		if (size > SEGZIOMAXSIZE) {
-			size = SEGZIOMAXSIZE;
-			if (physmem_size > size)
-				size += (physmem_size - size) / 2;
-		}
+		size = MAX(size, SEGZIOMINSIZE);
 		segziosize = mmu_btop(ROUND_UP_LPAGE(size));
 	}
 	PRM_DEBUG(segziosize);
@@ -1849,10 +1803,6 @@ layout_kernel_va(void)
 	    ROUND_UP_LPAGE((uintptr_t)segzio_base + mmu_ptob(segziosize));
 	PRM_DEBUG(toxic_addr);
 	segmap_start = ROUND_UP_LPAGE(toxic_addr + toxic_size);
-#else /* __i386 */
-	segmap_start = ROUND_UP_LPAGE(kernelbase);
-#endif /* __i386 */
-	PRM_DEBUG(segmap_start);
 
 	/*
 	 * Users can change segmapsize through eeprom. If the variable
@@ -1860,16 +1810,6 @@ layout_kernel_va(void)
 	 * size of segmap.
 	 */
 	segmapsize = MAX(ROUND_UP_LPAGE(segmapsize), SEGMAPDEFAULT);
-
-#if defined(__i386)
-	/*
-	 * 32-bit systems don't have segkpm or segkp, so segmap appears at
-	 * the bottom of the kernel's address range.  Set aside space for a
-	 * small red zone just below the start of segmap.
-	 */
-	segmap_start += KERNEL_REDZONE_SIZE;
-	segmapsize -= KERNEL_REDZONE_SIZE;
-#endif
 
 	PRM_DEBUG(segmap_start);
 	PRM_DEBUG(segmapsize);
@@ -1979,9 +1919,7 @@ startup_vm(void)
 	/*
 	 * Mangle the brand string etc.
 	 */
-	cpuid_pass3(CPU);
-
-#if defined(__amd64)
+	cpuid_execpass(CPU, CPUID_PASS_DYNAMIC, NULL);
 
 	/*
 	 * Create the device arena for toxic (to dtrace/kmdb) mappings.
@@ -1989,53 +1927,12 @@ startup_vm(void)
 	device_arena = vmem_create("device", (void *)toxic_addr,
 	    toxic_size, MMU_PAGESIZE, NULL, NULL, NULL, 0, VM_SLEEP);
 
-#else	/* __i386 */
-
-	/*
-	 * allocate the bit map that tracks toxic pages
-	 */
-	toxic_bit_map_len = btop((ulong_t)(valloc_base - kernelbase));
-	PRM_DEBUG(toxic_bit_map_len);
-	toxic_bit_map =
-	    kmem_zalloc(BT_SIZEOFMAP(toxic_bit_map_len), KM_NOSLEEP);
-	ASSERT(toxic_bit_map != NULL);
-	PRM_DEBUG(toxic_bit_map);
-
-#endif	/* __i386 */
-
-
 	/*
 	 * Now that we've got more VA, as well as the ability to allocate from
 	 * it, tell the debugger.
 	 */
 	if (boothowto & RB_DEBUG)
 		kdi_dvec_memavail();
-
-	/*
-	 * The following code installs a special page fault handler (#pf)
-	 * to work around a pentium bug.
-	 */
-#if !defined(__amd64) && !defined(__xpv)
-	if (x86_type == X86_TYPE_P5) {
-		desctbr_t idtr;
-		gate_desc_t *newidt;
-
-		if ((newidt = kmem_zalloc(MMU_PAGESIZE, KM_NOSLEEP)) == NULL)
-			panic("failed to install pentium_pftrap");
-
-		bcopy(idt0, newidt, NIDT * sizeof (*idt0));
-		set_gatesegd(&newidt[T_PGFLT], &pentium_pftrap,
-		    KCS_SEL, SDT_SYSIGT, TRP_KPL, 0);
-
-		(void) as_setprot(&kas, (caddr_t)newidt, MMU_PAGESIZE,
-		    PROT_READ | PROT_EXEC);
-
-		CPU->cpu_idt = newidt;
-		idtr.dtr_base = (uintptr_t)CPU->cpu_idt;
-		idtr.dtr_limit = (NIDT * sizeof (*idt0)) - 1;
-		wr_idtr(&idtr);
-	}
-#endif	/* !__amd64 */
 
 #if !defined(__xpv)
 	/*
@@ -2099,10 +1996,8 @@ startup_vm(void)
 	 * kpm segment
 	 */
 	segmap_kpm = 0;
-	if (kpm_desired) {
+	if (kpm_desired)
 		kpm_init();
-		kpm_enable = 1;
-	}
 
 	/*
 	 * Now create segmap segment.
@@ -2143,11 +2038,25 @@ load_tod_module(char *todmod)
 		halt("Can't load TOD module");
 }
 
+#ifndef __xpv
+static void
+startup_tsc(void)
+{
+	uint64_t tsc_freq;
+
+	PRM_POINT("startup_tsc() starting...");
+
+	tsc_freq = tsc_calibrate();
+	PRM_DEBUG(tsc_freq);
+
+	tsc_hrtimeinit(tsc_freq);
+}
+#endif
+
 static void
 startup_end(void)
 {
 	int i;
-	extern void setx86isalist(void);
 	extern void cpu_event_init(void);
 
 	PRM_POINT("startup_end() starting...");
@@ -2169,9 +2078,9 @@ startup_end(void)
 	 */
 	cpu_event_init();
 
-#if defined(OPTERON_WORKAROUND_6323525)
-	if (opteron_workaround_6323525)
-		patch_workaround_6323525();
+#if defined(OPTERON_ERRATUM_147)
+	if (opteron_erratum_147)
+		patch_erratum_147();
 #endif
 	/*
 	 * If needed, load TOD module now so that ddi_get_time(9F) etc. work
@@ -2198,18 +2107,35 @@ startup_end(void)
 	PRM_POINT("configure() done");
 
 	/*
-	 * We can now setup for XSAVE because fpu_probe is done in configure().
+	 * configure() will have called fpu_probe() so we can now finish off
+	 * the last pieces.
 	 */
+
 	if (fp_save_mech == FP_XSAVE) {
+		PRM_POINT("xsave_setup_msr()");
 		xsave_setup_msr(CPU);
 	}
+
+	/*
+	 * Set up the kmem caches for FP saving AFTER we have determined the
+	 * final set of FPU features that we have enabled and programmed into
+	 * the CPU in xsave_setup_msr().
+	 */
+	fpu_save_cache_init();
+
+	/*
+	 * Set up the FPU save area for LWP0.
+	 */
+	lwp_fp_init(&lwp0);
 
 	/*
 	 * Set the isa_list string to the defined instruction sets we
 	 * support.
 	 */
 	setx86isalist();
+	PRM_POINT("cpu_intr_alloc()");
 	cpu_intr_alloc(CPU, NINTR_THREADS);
+	PRM_POINT("psm_install()");
 	psm_install();
 
 	/*
@@ -2225,12 +2151,18 @@ startup_end(void)
 	xs_domu_init();
 #endif
 
-#if defined(__amd64) && !defined(__xpv)
+#if !defined(__xpv)
 	/*
 	 * Intel IOMMU has been setup/initialized in ddi_impl.c
 	 * Start it up now.
 	 */
 	immu_startup();
+
+	/*
+	 * Now that we're no longer going to drop into real mode for a BIOS call
+	 * via bootops, we can enable PCID (which requires CR0.PG).
+	 */
+	enable_pcid();
 #endif
 
 	PRM_POINT("Enabling interrupts");
@@ -2250,7 +2182,7 @@ startup_end(void)
 	 */
 	for (i = DDI_IPL_1; i <= DDI_IPL_10; i++) {
 		(void) add_avsoftintr((void *)&softlevel_hdl[i-1], i,
-		    (avfunc)ddi_periodic_softintr, "ddi_periodic",
+		    (avfunc)(uintptr_t)ddi_periodic_softintr, "ddi_periodic",
 		    (caddr_t)(uintptr_t)i, NULL);
 	}
 
@@ -2259,7 +2191,7 @@ startup_end(void)
 		PRM_POINT("No AMD IOMMU present\n");
 	} else if (ddi_hold_installed_driver(ddi_name_to_major(
 	    "amd_iommu")) == NULL) {
-		prom_printf("ERROR: failed to attach AMD IOMMU\n");
+		PRM_POINT("AMD IOMMU failed to attach\n");
 	}
 #endif
 	post_startup_cpu_fixups();
@@ -2321,15 +2253,6 @@ post_startup(void)
 
 	(void) i_ddi_attach_hw_nodes("pit_beep");
 
-#if defined(__i386)
-	/*
-	 * Check for required functional Floating Point hardware,
-	 * unless FP hardware explicitly disabled.
-	 */
-	if (fpu_exists && (fpu_pentium_fdivbug || fp_kind == FP_NO))
-		halt("No working FP hardware found");
-#endif
-
 	maxmem = freemem;
 
 	cpu_event_init_cpu(CPU);
@@ -2346,6 +2269,20 @@ pp_in_range(page_t *pp, uint64_t low_addr, uint64_t high_addr)
 	    (pp->p_pagenum < btopr(high_addr)));
 }
 
+static int
+pp_in_module(page_t *pp, const rd_existing_t *modranges)
+{
+	uint_t i;
+
+	for (i = 0; modranges[i].phys != 0; i++) {
+		if (pp_in_range(pp, modranges[i].phys,
+		    modranges[i].phys + modranges[i].size))
+			return (1);
+	}
+
+	return (0);
+}
+
 void
 release_bootstrap(void)
 {
@@ -2353,9 +2290,39 @@ release_bootstrap(void)
 	page_t *pp;
 	extern void kobj_boot_unmountroot(void);
 	extern dev_t rootdev;
+	uint_t i;
+	char propname[32];
+	rd_existing_t *modranges;
 #if !defined(__xpv)
 	pfn_t	pfn;
 #endif
+
+	/*
+	 * Save the bootfs module ranges so that we can reserve them below
+	 * for the real bootfs.
+	 */
+	modranges = kmem_alloc(sizeof (rd_existing_t) * MAX_BOOT_MODULES,
+	    KM_SLEEP);
+	for (i = 0; ; i++) {
+		uint64_t start, size;
+
+		modranges[i].phys = 0;
+
+		(void) snprintf(propname, sizeof (propname),
+		    "module-addr-%u", i);
+		if (do_bsys_getproplen(NULL, propname) <= 0)
+			break;
+		(void) do_bsys_getprop(NULL, propname, &start);
+
+		(void) snprintf(propname, sizeof (propname),
+		    "module-size-%u", i);
+		if (do_bsys_getproplen(NULL, propname) <= 0)
+			break;
+		(void) do_bsys_getprop(NULL, propname, &size);
+
+		modranges[i].phys = start;
+		modranges[i].size = size;
+	}
 
 	/* unmount boot ramdisk and release kmem usage */
 	kobj_boot_unmountroot();
@@ -2397,9 +2364,8 @@ release_bootstrap(void)
 			continue;
 		}
 
-
-		if (root_is_ramdisk && pp_in_range(pp, ramdisk_start,
-		    ramdisk_end)) {
+		if ((root_is_ramdisk && pp_in_range(pp, ramdisk_start,
+		    ramdisk_end)) || pp_in_module(pp, modranges)) {
 			pp->p_next = rd_pages;
 			rd_pages = pp;
 			continue;
@@ -2410,6 +2376,8 @@ release_bootstrap(void)
 		page_free(pp, 1);
 	}
 	PRM_POINT("Boot pages released");
+
+	kmem_free(modranges, sizeof (rd_existing_t) * 99);
 
 #if !defined(__xpv)
 /* XXPV -- note this following bunch of code needs to be revisited in Xen 3.0 */
@@ -2455,9 +2423,7 @@ add_physmem_cb(page_t *pp, pfn_t pnum)
  * kphysm_init() initializes physical memory.
  */
 static pgcnt_t
-kphysm_init(
-	page_t *pp,
-	pgcnt_t npages)
+kphysm_init(page_t *pp, pgcnt_t npages)
 {
 	struct memlist	*pmem;
 	struct memseg	*cur_memseg;
@@ -2531,9 +2497,8 @@ kphysm_init(
 		 * of these large pages, configure the memsegs based on the
 		 * memory node ranges which had been made non-contiguous.
 		 */
+		end_pfn = base_pfn + num - 1;
 		if (mnode_xwa > 1) {
-
-			end_pfn = base_pfn + num - 1;
 			ms = PFN_2_MEM_NODE(base_pfn);
 			me = PFN_2_MEM_NODE(end_pfn);
 
@@ -2592,8 +2557,14 @@ kphysm_init(
 			/* process next memory node range */
 			ms++;
 			base_pfn = mem_node_config[ms].physbase;
-			num = MIN(mem_node_config[ms].physmax,
-			    end_pfn) - base_pfn + 1;
+
+			if (mnode_xwa > 1) {
+				num = MIN(mem_node_config[ms].physmax,
+				    end_pfn) - base_pfn + 1;
+			} else {
+				num = mem_node_config[ms].physmax -
+				    base_pfn + 1;
+			}
 		}
 	}
 
@@ -2635,11 +2606,16 @@ kvm_init(void)
 		(void) segkmem_create(&kvseg_core);
 	}
 
+	PRM_POINT("attaching segkvmm");
+	(void) seg_attach(&kas, segkvmm_base, mmu_ptob(segkvmmsize), &kvmmseg);
+	(void) segkmem_create(&kvmmseg);
+	segkmem_kvmm_init(segkvmm_base, mmu_ptob(segkvmmsize));
+
 	if (segziosize > 0) {
 		PRM_POINT("attaching segzio");
 		(void) seg_attach(&kas, segzio_base, mmu_ptob(segziosize),
 		    &kzioseg);
-		(void) segkmem_zio_create(&kzioseg);
+		(void) segkmem_create(&kzioseg);
 
 		/* create zio area covering new segment */
 		segkmem_zio_init(segzio_base, mmu_ptob(segziosize));
@@ -2734,7 +2710,6 @@ pat_sync(void)
  * (for license circumvention, etc), we store it in /etc/hostid
  * in rot47 format.
  */
-extern volatile unsigned long tenmicrodata;
 static int atoi(char *);
 
 /*
@@ -2810,7 +2785,6 @@ set_soft_hostid(void)
 	int i;
 	int32_t hostid = (int32_t)HW_INVALID_HOSTID;
 	unsigned char *c;
-	hrtime_t tsc;
 	smbios_system_t smsys;
 
 	/*
@@ -2818,10 +2792,7 @@ set_soft_hostid(void)
 	 * random number to use at the hostid.  A nice way to do this
 	 * is to read the real time clock.  To remain xen-compatible,
 	 * we can't poke the real hardware, so we use tsc_read() to
-	 * read the real time clock.  However, there is an ominous
-	 * warning in tsc_read that says it can return zero, so we
-	 * deal with that possibility by falling back to using the
-	 * (hopefully random enough) value in tenmicrodata.
+	 * read the real time clock.
 	 */
 
 	if ((file = kobj_open_file(hostid_file)) == (struct _buf *)-1) {
@@ -2854,11 +2825,7 @@ set_soft_hostid(void)
 		 * saved to a persistent /etc/hostid file.
 		 */
 		if (hostid == HW_INVALID_HOSTID) {
-			tsc = tsc_read();
-			if (tsc == 0)	/* tsc_read can return zero sometimes */
-				hostid = (int32_t)tenmicrodata & 0x0CFFFFF;
-			else
-				hostid = (int32_t)tsc & 0x0CFFFFF;
+			hostid = tsc_read() & 0x0CFFFFF;
 		}
 	} else {
 		/* hostid file found */
@@ -2958,7 +2925,7 @@ get_system_configuration(void)
 	if (BOP_GETPROPLEN(bootops, "kernelbase") > sizeof (prop) ||
 	    BOP_GETPROP(bootops, "kernelbase", prop) < 0 ||
 	    kobj_getvalue(prop, &lvalue) == -1)
-		eprom_kernelbase = NULL;
+		eprom_kernelbase = 0;
 	else
 		eprom_kernelbase = (uintptr_t)lvalue;
 
@@ -2975,6 +2942,13 @@ get_system_configuration(void)
 		segmapfreelists = 0;	/* use segmap driver default */
 	else
 		segmapfreelists = (int)lvalue;
+
+	if (BOP_GETPROPLEN(bootops, "segkpsize") > sizeof (prop) ||
+	    BOP_GETPROP(bootops, "segkpsize", prop) < 0 ||
+	    kobj_getvalue(prop, &lvalue) == -1)
+		segkpsize = mmu_btop(SEGKPDEFSIZE);
+	else
+		segkpsize = mmu_btop((size_t)lvalue);
 
 	/* physmem used to be here, but moved much earlier to fakebop.c */
 }
@@ -3069,7 +3043,7 @@ kobj_texthole_free(caddr_t addr, size_t size)
  *
  * So, we just leave this alone.
  */
-void
+static void
 setx86isalist(void)
 {
 	char *tp;
@@ -3081,13 +3055,12 @@ setx86isalist(void)
 	tp = kmem_alloc(TBUFSIZE, KM_SLEEP);
 	*tp = '\0';
 
-#if defined(__amd64)
 	(void) strcpy(tp, "amd64 ");
-#endif
 
 	switch (x86_vendor) {
 	case X86_VENDOR_Intel:
 	case X86_VENDOR_AMD:
+	case X86_VENDOR_HYGON:
 	case X86_VENDOR_TM:
 		if (is_x86_feature(x86_featureset, X86FSET_CMOV)) {
 			/*
@@ -3100,16 +3073,11 @@ setx86isalist(void)
 		}
 		/*FALLTHROUGH*/
 	case X86_VENDOR_Cyrix:
-		/*
-		 * The Cyrix 6x86 does not have any Pentium features
-		 * accessible while not at privilege level 0.
-		 */
-		if (is_x86_feature(x86_featureset, X86FSET_CPUID)) {
-			(void) strcat(tp, "pentium");
-			(void) strcat(tp,
-			    is_x86_feature(x86_featureset, X86FSET_MMX) ?
-			    "+mmx pentium " : " ");
-		}
+		ASSERT(is_x86_feature(x86_featureset, X86FSET_CPUID));
+		(void) strcat(tp, "pentium");
+		(void) strcat(tp,
+		    is_x86_feature(x86_featureset, X86FSET_MMX) ?
+		    "+mmx pentium " : " ");
 		break;
 	default:
 		break;
@@ -3122,9 +3090,6 @@ setx86isalist(void)
 #undef TBUFSIZE
 }
 
-
-#ifdef __amd64
-
 void *
 device_arena_alloc(size_t size, int vm_flag)
 {
@@ -3136,101 +3101,3 @@ device_arena_free(void *vaddr, size_t size)
 {
 	vmem_free(device_arena, vaddr, size);
 }
-
-#else /* __i386 */
-
-void *
-device_arena_alloc(size_t size, int vm_flag)
-{
-	caddr_t	vaddr;
-	uintptr_t v;
-	size_t	start;
-	size_t	end;
-
-	vaddr = vmem_alloc(heap_arena, size, vm_flag);
-	if (vaddr == NULL)
-		return (NULL);
-
-	v = (uintptr_t)vaddr;
-	ASSERT(v >= kernelbase);
-	ASSERT(v + size <= valloc_base);
-
-	start = btop(v - kernelbase);
-	end = btop(v + size - 1 - kernelbase);
-	ASSERT(start < toxic_bit_map_len);
-	ASSERT(end < toxic_bit_map_len);
-
-	while (start <= end) {
-		BT_ATOMIC_SET(toxic_bit_map, start);
-		++start;
-	}
-	return (vaddr);
-}
-
-void
-device_arena_free(void *vaddr, size_t size)
-{
-	uintptr_t v = (uintptr_t)vaddr;
-	size_t	start;
-	size_t	end;
-
-	ASSERT(v >= kernelbase);
-	ASSERT(v + size <= valloc_base);
-
-	start = btop(v - kernelbase);
-	end = btop(v + size - 1 - kernelbase);
-	ASSERT(start < toxic_bit_map_len);
-	ASSERT(end < toxic_bit_map_len);
-
-	while (start <= end) {
-		ASSERT(BT_TEST(toxic_bit_map, start) != 0);
-		BT_ATOMIC_CLEAR(toxic_bit_map, start);
-		++start;
-	}
-	vmem_free(heap_arena, vaddr, size);
-}
-
-/*
- * returns 1st address in range that is in device arena, or NULL
- * if len is not NULL it returns the length of the toxic range
- */
-void *
-device_arena_contains(void *vaddr, size_t size, size_t *len)
-{
-	uintptr_t v = (uintptr_t)vaddr;
-	uintptr_t eaddr = v + size;
-	size_t start;
-	size_t end;
-
-	/*
-	 * if called very early by kmdb, just return NULL
-	 */
-	if (toxic_bit_map == NULL)
-		return (NULL);
-
-	/*
-	 * First check if we're completely outside the bitmap range.
-	 */
-	if (v >= valloc_base || eaddr < kernelbase)
-		return (NULL);
-
-	/*
-	 * Trim ends of search to look at only what the bitmap covers.
-	 */
-	if (v < kernelbase)
-		v = kernelbase;
-	start = btop(v - kernelbase);
-	end = btop(eaddr - kernelbase);
-	if (end >= toxic_bit_map_len)
-		end = toxic_bit_map_len;
-
-	if (bt_range(toxic_bit_map, &start, &end, end) == 0)
-		return (NULL);
-
-	v = kernelbase + ptob(start);
-	if (len != NULL)
-		*len = ptob(end - start);
-	return ((void *)v);
-}
-
-#endif	/* __i386 */

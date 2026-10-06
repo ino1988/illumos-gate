@@ -5,6 +5,8 @@
  *
  * Copyright 2008 Sun Microsystems, Inc.  All rights reserved.
  * Use is subject to license terms.
+ *
+ * Copyright (c) 2014, Joyent, Inc.  All rights reserved.
  */
 
 #ifdef __FreeBSD__
@@ -55,7 +57,7 @@
 #ifdef STATETOP
 # include <ctype.h>
 # include <signal.h>
-# if SOLARIS || defined(__NetBSD__) || defined(_BSDI_VERSION) || \
+# if defined(SOLARIS) || defined(__NetBSD__) || defined(_BSDI_VERSION) || \
      defined(__sgi)
 #  ifdef ERR
 #   undef ERR
@@ -71,6 +73,7 @@
 #if defined(__NetBSD__) || (__OpenBSD__)
 # include <paths.h>
 #endif
+#include "ipfzone.h"
 
 #if !defined(lint)
 static const char sccsid[] = "@(#)fils.c	1.21 4/20/96 (C) 1993-2000 Darren Reed";
@@ -177,6 +180,7 @@ char *name;
 #else
 	fprintf(stderr, "       %s -t [-C] ", name);
 #endif
+	fprintf(stderr, "[-G|-z zonename] ");
 	fprintf(stderr, "[-D destination address] [-P protocol] [-S source address] [-T refresh time]\n");
 	exit(1);
 }
@@ -207,9 +211,9 @@ char *argv[];
 	u_32_t frf;
 
 #ifdef	USE_INET6
-	options = "6aACdfghIilnostvD:M:N:P:RS:T:";
+	options = "6aACdfgG:hIilnostvD:M:N:P:RS:T:z:";
 #else
-	options = "aACdfghIilnostvD:M:N:P:RS:T:";
+	options = "aACdfgG:hIilnostvD:M:N:P:RS:T:z:";
 #endif
 
 	saddr.in4.s_addr = INADDR_ANY; 	/* default any v4 source addr */
@@ -223,13 +227,16 @@ char *argv[];
 	opterr = 0;
 
 	/*
-	 * Parse these two arguments now lest there be any buffer overflows
+	 * Parse these four arguments now lest there be any buffer overflows
 	 * in the parsing of the rest.
 	 */
 	myoptind = optind;
 	while ((c = getopt(argc, argv, options)) != -1) {
 		switch (c)
 		{
+		case 'G' :
+			setzonename_global(optarg);
+			break;
 		case 'M' :
 			memf = optarg;
 			live_kernel = 0;
@@ -237,6 +244,9 @@ char *argv[];
 		case 'N' :
 			kern = optarg;
 			live_kernel = 0;
+			break;
+		case 'z' :
+			setzonename(optarg);
 			break;
 		}
 	}
@@ -247,9 +257,20 @@ char *argv[];
 			perror("open(IPSTATE_NAME)");
 			exit(-1);
 		}
+
+		if (setzone(state_fd) != 0) {
+			close(state_fd);
+			exit(-1);
+		}
+
 		if ((ipf_fd = open(device, O_RDONLY)) == -1) {
 			fprintf(stderr, "open(%s)", device);
 			perror("");
+			exit(-1);
+		}
+
+		if (setzone(ipf_fd) != 0) {
+			close(ipf_fd);
 			exit(-1);
 		}
 	}
@@ -297,6 +318,9 @@ char *argv[];
 			break;
 		case 'g' :
 			opts |= OPT_GROUPS;
+			break;
+		case 'G' :
+			/* Already handled by getzoneopt() above */
 			break;
 		case 'h' :
 			opts |= OPT_HITS;
@@ -359,6 +383,9 @@ char *argv[];
 		case 'v' :
 			opts |= OPT_VERBOSE;
 			opts |= OPT_UNDEF;
+			break;
+		case 'z' :
+			/* Already handled by getzoneopt() above */
 			break;
 		default :
 			usage(argv[0]);
@@ -461,7 +488,7 @@ u_32_t *frfp;
 		ipfo.ipfo_size = sizeof(ipfrstat_t);
 		ipfo.ipfo_ptr = (void *)*ifrstpp;
 		ipfo.ipfo_type = IPFOBJ_FRAGSTAT;
-	
+
 		if (ioctl(ipf_fd, SIOCGFRST, &ipfo) == -1) {
 			perror("ioctl(SIOCGFRST)");
 			exit(-1);
@@ -479,6 +506,11 @@ u_32_t *frfp;
 		device = IPAUTH_NAME;
 		if ((ipf_fd = open(device, O_RDONLY)) == -1) {
 			perror("open");
+			exit(-1);
+		}
+
+		if (setzone(ipf_fd) != 0) {
+			close(ipf_fd);
 			exit(-1);
 		}
 
@@ -783,6 +815,7 @@ char *group, *comment;
 	int n;
 	ipfruleiter_t rule;
 	ipfobj_t obj;
+	u_long array[1000];
 
 	fb.fr_next = fp;
 	n = 0;
@@ -806,8 +839,6 @@ char *group, *comment;
 	obj.ipfo_ptr = &rule;
 
 	do {
-		u_long array[1000];
-
 		memset(array, 0xff, sizeof(array));
 		fp = (frentry_t *)array;
 		rule.iri_rule = fp;
@@ -1424,14 +1455,14 @@ int topclosed;
 		printw("Src: %s, Dest: %s, Proto: %s, Sorted by: %s\n\n",
 		       str1, str2, str3, str4);
 
-		/* 
+		/*
 		 * For an IPv4 IP address we need at most 15 characters,
 		 * 4 tuples of 3 digits, separated by 3 dots. Enforce this
 		 * length, so the colums do not change positions based
 		 * on the size of the IP address. This length makes the
-		 * output fit in a 80 column terminal. 
+		 * output fit in a 80 column terminal.
 		 * We are lacking a good solution for IPv6 addresses (that
-		 * can be longer that 15 characters), so we do not enforce 
+		 * can be longer that 15 characters), so we do not enforce
 		 * a maximum on the IP field size.
 		 */
 		if (srclen < 15)

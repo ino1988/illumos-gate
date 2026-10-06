@@ -23,7 +23,8 @@
  * Use is subject to license terms.
  */
 /*
- * Copyright (c) 2012, Joyent, Inc.  All rights reserved.
+ * Copyright (c) 2018, Joyent, Inc.  All rights reserved.
+ * Copyright 2026 Oxide Computer Company
  */
 
 #ifndef	_MDB_TARGET_IMPL_H
@@ -104,7 +105,6 @@ typedef struct mdb_tgt_ops {
 	int (*t_run)(mdb_tgt_t *, int, const struct mdb_arg *);
 	int (*t_step)(mdb_tgt_t *, mdb_tgt_status_t *);
 	int (*t_step_out)(mdb_tgt_t *, uintptr_t *);
-	int (*t_step_branch)(mdb_tgt_t *);
 	int (*t_next)(mdb_tgt_t *, uintptr_t *);
 	int (*t_cont)(mdb_tgt_t *, mdb_tgt_status_t *);
 	int (*t_signal)(mdb_tgt_t *, int);
@@ -135,6 +135,8 @@ typedef struct mdb_tgt_ops {
 	    mdb_tgt_stack_f *, void *);
 
 	int (*t_auxv)(mdb_tgt_t *, const auxv_t **auxvp);
+
+	int (*t_thread_name)(mdb_tgt_t *, mdb_tgt_tid_t, char *, size_t);
 } mdb_tgt_ops_t;
 
 /*
@@ -284,6 +286,8 @@ extern int mdb_tgt_sym_match(const GElf_Sym *, uint_t);
 extern void mdb_tgt_elf_export(mdb_gelf_file_t *);
 
 extern int mdb_tgt_sespec_activate_one(mdb_tgt_t *t, mdb_sespec_t *);
+extern int mdb_tgt_sespec_activate_matching(mdb_tgt_t *t,
+    const mdb_se_ops_t *);
 extern int mdb_tgt_sespec_activate_all(mdb_tgt_t *t);
 
 extern void mdb_tgt_sespec_idle_one(mdb_tgt_t *t, mdb_sespec_t *, int);

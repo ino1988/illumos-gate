@@ -21,11 +21,12 @@
 
 /*
  * Copyright (c) 1989, 2010, Oracle and/or its affiliates. All rights reserved.
- * Copyright (c) 2011, Joyent Inc. All rights reserved.
+ * Copyright (c) 2016 by Delphix. All rights reserved.
+ * Copyright 2019 Joyent Inc.
  */
 
 /*	Copyright (c) 1984, 1986, 1987, 1988, 1989 AT&T	*/
-/*	  All Rights Reserved  	*/
+/*	  All Rights Reserved	*/
 
 #include <sys/param.h>
 #include <sys/types.h>
@@ -400,8 +401,8 @@ do_core(char *fp, int sig, enum core_types core_type, struct core_globals *cg)
 	 * For security reasons, we don't want root processes
 	 * to dump core through a symlink because that would
 	 * allow a malicious user to clobber any file on
-	 * the system if s/he could convince a root process,
-	 * perhaps a set-uid root process that s/he started,
+	 * the system if they could convince a root process,
+	 * perhaps a set-uid root process that they started,
 	 * to dump core in a directory writable by that user.
 	 * Similar security reasons apply to hard links.
 	 * For symmetry we do this unconditionally, not
@@ -792,13 +793,18 @@ clock_t	core_delay_usec = 10000;
  * using core_write() below, and so it has the same failure semantics.
  */
 int
-core_seg(proc_t *p, vnode_t *vp, offset_t offset, caddr_t addr, size_t size,
+core_seg(proc_t *p, vnode_t *vp, u_offset_t offset, caddr_t addr, size_t size,
     rlim64_t rlimit, cred_t *credp)
 {
 	caddr_t eaddr;
 	caddr_t base;
 	size_t len;
 	int err = 0;
+
+	if (offset > OFF_MAX || offset + size > OFF_MAX ||
+	    offset + size < offset) {
+		return (EOVERFLOW);
+	}
 
 	eaddr = addr + size;
 	for (base = addr; base < eaddr; base += len) {
@@ -840,15 +846,20 @@ core_seg(proc_t *p, vnode_t *vp, offset_t offset, caddr_t addr, size_t size,
  * unexpectedly returns zero but no progress has been made, we return ENOSPC.
  */
 int
-core_write(vnode_t *vp, enum uio_seg segflg, offset_t offset,
+core_write(vnode_t *vp, enum uio_seg segflg, u_offset_t offset,
     const void *buf, size_t len, rlim64_t rlimit, cred_t *credp)
 {
 	ssize_t resid = len;
 	int error = 0;
 
+	if (offset > OFF_MAX || offset + len > OFF_MAX ||
+	    offset + len < offset) {
+		return (EOVERFLOW);
+	}
+
 	while (len != 0) {
-		error = vn_rdwr(UIO_WRITE, vp, (caddr_t)buf, len, offset,
-		    segflg, 0, rlimit, credp, &resid);
+		error = vn_rdwr(UIO_WRITE, vp, (caddr_t)buf, len,
+		    (offset_t)offset, segflg, 0, rlimit, credp, &resid);
 
 		if (error != 0)
 			break;

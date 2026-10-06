@@ -4,7 +4,7 @@
 .\" The contents of this file are subject to the terms of the Common Development and Distribution License (the "License").  You may not use this file except in compliance with the License. You can obtain a copy of the license at usr/src/OPENSOLARIS.LICENSE or http://www.opensolaris.org/os/licensing.
 .\"  See the License for the specific language governing permissions and limitations under the License. When distributing Covered Code, include this CDDL HEADER in each file and include the License file at usr/src/OPENSOLARIS.LICENSE.  If applicable, add the following below this CDDL HEADER, with
 .\" the fields enclosed by brackets "[]" replaced with your own identifying information: Portions Copyright [yyyy] [name of copyright owner]
-.TH RPC_CLNT_CREATE 3NSL "Dec 16, 2013"
+.TH RPC_CLNT_CREATE 3NSL "Jul 25, 2015"
 .SH NAME
 rpc_clnt_create, clnt_control, clnt_create, clnt_create_timed,
 clnt_create_vers, clnt_create_vers_timed, clnt_destroy, clnt_dg_create,
@@ -29,8 +29,8 @@ of CLIENT handles
 .LP
 .nf
 \fBCLIENT *\fR\fBclnt_create_timed\fR(\fBconst char *\fR\fIhost\fR, \fBconst rpcprog_t\fR \fIprognum\fR,
-     \fBconst rpcvers_t\fR \fIversnum\fR, \fBconst\fR \fInettype\fR,
-     \fBconst struct timeval *\fR\fItimetout\fR);
+     \fBconst rpcvers_t\fR \fIversnum\fR, \fBconst char *\fR\fInettype\fR,
+     \fBconst struct timeval *\fR\fItimeout\fR);
 .fi
 
 .LP
@@ -120,7 +120,6 @@ of CLIENT handles
 .fi
 
 .SH DESCRIPTION
-.sp
 .LP
 \fBRPC\fR library routines allow  \fBC\fR language programs to make procedure
 calls on other machines across the network. First a \fBCLIENT\fR handle is
@@ -133,9 +132,8 @@ These routines are MT-Safe. In the case of multithreaded applications, the
 \fB-mt\fR option must be specified on the command line at compilation time.
 When the \fB-mt\fR option is specified, \fBrpc_createerr\fR becomes a macro
 that enables each thread to have its own \fBrpc_createerr\fR. See
-\fBthreads\fR(5).
+\fBthreads\fR(7).
 .SS "Routines"
-.sp
 .LP
 See \fBrpc\fR(3NSL) for the definition of the \fBCLIENT\fR data structure.
 .sp
@@ -459,7 +457,7 @@ Depending upon the type of the transport (connection-oriented or
 connectionless), \fBclnt_tli_create()\fR calls appropriate client creation
 routines. This routine returns \fINULL\fR if it fails. The
 \fBclnt_pcreateerror()\fR routine can be used to print the reason for failure.
-The remote \fBrpcbind\fR service (see \fBrpcbind\fR(1M)) is not consulted for
+The remote \fBrpcbind\fR service (see \fBrpcbind\fR(8)) is not consulted for
 the address of the remote service.
 .RE
 
@@ -547,9 +545,8 @@ value for \fBrpc_createerr\fR.
 .RE
 
 .SH ATTRIBUTES
-.sp
 .LP
-See \fBattributes\fR(5)  for descriptions of the following attributes:
+See \fBattributes\fR(7)  for descriptions of the following attributes:
 .sp
 
 .sp
@@ -567,8 +564,12 @@ MT-Level	MT-Safe
 .TE
 
 .SH SEE ALSO
-.sp
 .LP
-\fBrpcbind\fR(1M), \fBrpc\fR(3NSL), \fBrpc_clnt_auth\fR(3NSL),
-\fBrpc_clnt_calls\fR(3NSL), \fBrpc_svc_create\fR(3NSL),
-\fBsvc_raw_create\fR(3NSL), \fBthreads\fR(5), \fBattributes\fR(5)
+.BR rpc (3NSL),
+.BR rpc_clnt_auth (3NSL),
+.BR rpc_clnt_calls (3NSL),
+.BR rpc_svc_create (3NSL),
+.BR svc_raw_create (3NSL),
+.BR attributes (7),
+.BR threads (7),
+.BR rpcbind (8)

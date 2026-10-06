@@ -29,6 +29,7 @@
 /*
  * Copyright 2013 Nexenta Systems, Inc.  All rights reserved.
  * Copyright 2013 Pluribus Networks, Inc.
+ * Copyright 2019 Joyent, Inc.
  */
 
 #include <sys/processor.h>
@@ -66,6 +67,7 @@
 #include <sys/x_call.h>
 #include <sys/reboot.h>
 #include <sys/apix.h>
+#include <sys/smt.h>
 
 static int apix_get_avail_vector_oncpu(uint32_t, int, int);
 static apix_vector_t *apix_init_vector(processorid_t, uchar_t);
@@ -803,6 +805,9 @@ apix_insert_av(apix_vector_t *vecp, void *intr_id, avfunc f, caddr_t arg1,
 
 	vecp->v_share++;
 	vecp->v_pri = (ipl > vecp->v_pri) ? ipl : vecp->v_pri;
+
+	smt_intr_alloc_pil(vecp->v_pri);
+
 	if (vecp->v_autovect == NULL) {	/* Nothing on list - put it at head */
 		vecp->v_autovect = mem;
 		return;
@@ -949,7 +954,7 @@ apix_find_vector_by_avintr(void *intr_id, avfunc f)
 		if (!apix_is_cpu_enabled(n))
 			continue;
 
-		for (v = APIX_AVINTR_MIN; v <= APIX_AVINTR_MIN; v++) {
+		for (v = APIX_AVINTR_MIN; v <= APIX_AVINTR_MAX; v++) {
 			vecp = xv_vector(n, v);
 			if (vecp == NULL ||
 			    vecp->v_state <= APIX_STATE_OBSOLETED)
@@ -1408,7 +1413,6 @@ apix_bind_cpu(dev_info_t *dip)
 			if (*cptr++ == ',')
 				i++;
 		bind_cpu = stoi(&cptr);
-		kmem_free(prop_val, prop_len);
 		/* if specific cpu is bogus, then default to cpu 0 */
 		if (bind_cpu >= apic_nproc) {
 			cmn_err(CE_WARN, "apix: %s=%s: CPU %d not present",
@@ -1418,6 +1422,7 @@ apix_bind_cpu(dev_info_t *dip)
 			/* indicate that we are bound at user request */
 			bind_cpu |= IRQ_USER_BOUND;
 		}
+		kmem_free(prop_val, prop_len);
 		/*
 		 * no need to check apic_cpus[].aci_status, if specific cpu is
 		 * not up, then post_cpu_start will handle it.
@@ -1468,7 +1473,7 @@ apix_rebind(apix_vector_t *vecp, processorid_t newcpu, int count)
 	if (!apix_is_cpu_enabled(newcpu))
 		return (NULL);
 
-	if (vecp->v_cpuid == newcpu) 	/* rebind to the same cpu */
+	if (vecp->v_cpuid == newcpu)	/* rebind to the same cpu */
 		return (vecp);
 
 	APIX_ENTER_CPU_LOCK(oldcpu);

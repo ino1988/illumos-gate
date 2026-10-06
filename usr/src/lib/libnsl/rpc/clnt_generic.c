@@ -32,8 +32,6 @@
  * California.
  */
 
-#pragma ident	"%Z%%M%	%I%	%E% SMI"
-
 #include "mt.h"
 #include "rpc_mt.h"
 #include <stdio.h>
@@ -70,11 +68,11 @@ CLIENT *_clnt_tli_create_timed(int, const struct netconfig *, struct netbuf *,
  */
 CLIENT *
 clnt_create_vers(const char *hostname, const rpcprog_t prog,
-	rpcvers_t *vers_out, const rpcvers_t vers_low,
-	const rpcvers_t vers_high, const char *nettype)
+    rpcvers_t *vers_out, const rpcvers_t vers_low,
+    const rpcvers_t vers_high, const char *nettype)
 {
 	return (clnt_create_vers_timed(hostname, prog, vers_out, vers_low,
-				vers_high, nettype, NULL));
+	    vers_high, nettype, NULL));
 }
 
 /*
@@ -104,7 +102,7 @@ clnt_create_vers_timed(const char *hostname, const rpcprog_t prog,
 		to = *tp;
 
 	rpc_stat = clnt_call(clnt, NULLPROC, (xdrproc_t)xdr_void,
-			NULL, (xdrproc_t)xdr_void, NULL, to);
+	    NULL, (xdrproc_t)xdr_void, NULL, to);
 	if (rpc_stat == RPC_SUCCESS) {
 		*vers_out = vers_high;
 		return (clnt);
@@ -128,8 +126,7 @@ clnt_create_vers_timed(const char *hostname, const rpcprog_t prog,
 		}
 		CLNT_CONTROL(clnt, CLSET_VERS, (char *)&v_high);
 		rpc_stat = clnt_call(clnt, NULLPROC, (xdrproc_t)xdr_void,
-				NULL, (xdrproc_t)xdr_void,
-				NULL, to);
+		    NULL, (xdrproc_t)xdr_void, NULL, to);
 		if (rpc_stat == RPC_SUCCESS) {
 			*vers_out = v_high;
 			return (clnt);
@@ -252,7 +249,7 @@ clnt_create_timed(const char *hostname, const rpcprog_t prog,
 			 */
 			if (rpc_createerr.cf_stat == RPC_SYSTEMERROR) {
 				syslog(LOG_ERR, "clnt_create_timed: "
-					"RPC_SYSTEMERROR.");
+				    "RPC_SYSTEMERROR.");
 				break;
 			}
 
@@ -269,8 +266,8 @@ clnt_create_timed(const char *hostname, const rpcprog_t prog,
 	 *	translation failed'' or ``unknown host name''
 	 */
 	if ((rpc_createerr.cf_stat == RPC_N2AXLATEFAILURE ||
-				rpc_createerr.cf_stat == RPC_UNKNOWNHOST) &&
-					(save_cf_stat != RPC_SUCCESS)) {
+	    rpc_createerr.cf_stat == RPC_UNKNOWNHOST) &&
+	    (save_cf_stat != RPC_SUCCESS)) {
 		rpc_createerr.cf_stat = save_cf_stat;
 		rpc_createerr.cf_error = save_cf_error;
 	}
@@ -291,9 +288,9 @@ clnt_create_timed(const char *hostname, const rpcprog_t prog,
 
 CLIENT *
 clnt_create_service_timed(const char *host, const char *service,
-			const rpcprog_t prog, const rpcvers_t vers,
-			const ushort_t port, const char *netclass,
-			const struct timeval *tmout)
+    const rpcprog_t prog, const rpcvers_t vers,
+    const ushort_t port, const char *netclass,
+    const struct timeval *tmout)
 {
 	int fd;
 	void *handle;
@@ -401,7 +398,6 @@ clnt_create_service_timed(const char *host, const char *service,
 
 		__rpc_set_mac_options(fd, nconf, prog);
 
-		/* LINTED pointer cast */
 		if ((tbind = (struct t_bind *)t_alloc(fd, T_BIND, T_ADDR))
 		    == NULL) {
 			(void) t_close(fd);
@@ -425,18 +421,17 @@ clnt_create_service_timed(const char *host, const char *service,
 		netdir_free((void *)raddrs, ND_ADDRLIST);
 
 		if (port) {
-			if (strcmp(nconf->nc_protofmly, NC_INET) == NULL)
-				/* LINTED pointer alignment */
+			if (strcmp(nconf->nc_protofmly, NC_INET) == 0) {
 				((struct sockaddr_in *)
-				tbind->addr.buf)->sin_port = htons(port);
-			else if (strcmp(nconf->nc_protofmly, NC_INET6) == NULL)
-				/* LINTED pointer alignment */
+				    tbind->addr.buf)->sin_port = htons(port);
+			} else if (strcmp(nconf->nc_protofmly, NC_INET6) == 0) {
 				((struct sockaddr_in6 *)
-				tbind->addr.buf)->sin6_port = htons(port);
+				    tbind->addr.buf)->sin6_port = htons(port);
+			}
 		}
 
 		clnt = _clnt_tli_create_timed(fd, nconf, &tbind->addr,
-					    prog, vers, 0, 0, &to);
+		    prog, vers, 0, 0, &to);
 
 		if (clnt == NULL) {
 			if (tbind)
@@ -455,7 +450,7 @@ clnt_create_service_timed(const char *host, const char *service,
 		 */
 
 		rpc_createerr.cf_stat = clnt_call(clnt, NULLPROC,
-						xdr_void, 0, xdr_void, 0, to);
+		    xdr_void, 0, xdr_void, 0, to);
 
 		rpc_createerr.cf_error.re_errno = rpc_callerr.re_status;
 		rpc_createerr.cf_error.re_terrno = 0;
@@ -466,8 +461,9 @@ clnt_create_service_timed(const char *host, const char *service,
 			if (tbind)
 				(void) t_free((char *)tbind, T_BIND);
 			continue;
-		} else
+		} else {
 			break;
+		}
 	}
 
 	__rpc_endconf(handle);
@@ -522,15 +518,16 @@ clnt_tp_create_timed(const char *hostname, const rpcprog_t prog,
 	/*
 	 * Get the address of the server
 	 */
-	if ((svcaddr = __rpcb_findaddr_timed(prog, vers,
-			(struct netconfig *)nconf, (char *)hostname,
-			&cl, (struct timeval *)tp)) == NULL) {
+	svcaddr = __rpcb_findaddr_timed(prog, vers,
+	    (struct netconfig *)nconf, (char *)hostname,
+	    &cl, (struct timeval *)tp);
+	if (svcaddr == NULL) {
 		/* appropriate error number is set by rpcbind libraries */
 		return (NULL);
 	}
 	if (cl == NULL) {
 		cl = _clnt_tli_create_timed(RPC_ANYFD, nconf, svcaddr,
-					prog, vers, 0, 0, tp);
+		    prog, vers, 0, 0, tp);
 	} else {
 		/* Reuse the CLIENT handle and change the appropriate fields */
 		if (CLNT_CONTROL(cl, CLSET_SVC_ADDR, (void *)svcaddr) == TRUE) {
@@ -540,8 +537,8 @@ clnt_tp_create_timed(const char *hostname, const rpcprog_t prog,
 					netdir_free((char *)svcaddr, ND_ADDR);
 					rpc_createerr.cf_stat = RPC_SYSTEMERROR;
 					syslog(LOG_ERR,
-						"clnt_tp_create_timed: "
-						"strdup failed.");
+					    "clnt_tp_create_timed: "
+					    "strdup failed.");
 					return (NULL);
 				}
 			}
@@ -553,8 +550,8 @@ clnt_tp_create_timed(const char *hostname, const rpcprog_t prog,
 						free(cl->cl_netid);
 					rpc_createerr.cf_stat = RPC_SYSTEMERROR;
 					syslog(LOG_ERR,
-						"clnt_tp_create_timed: "
-						"strdup failed.");
+					    "clnt_tp_create_timed: "
+					    "strdup failed.");
 					return (NULL);
 				}
 			}
@@ -563,7 +560,7 @@ clnt_tp_create_timed(const char *hostname, const rpcprog_t prog,
 		} else {
 			CLNT_DESTROY(cl);
 			cl = _clnt_tli_create_timed(RPC_ANYFD, nconf, svcaddr,
-					prog, vers, 0, 0, tp);
+			    prog, vers, 0, 0, tp);
 		}
 	}
 	netdir_free((char *)svcaddr, ND_ADDR);
@@ -584,7 +581,7 @@ clnt_tli_create(const int fd, const struct netconfig *nconf,
     const uint_t sendsz, const uint_t recvsz)
 {
 	return (_clnt_tli_create_timed(fd, nconf, svcaddr, prog, vers, sendsz,
-		recvsz, NULL));
+	    recvsz, NULL));
 }
 
 /*
@@ -598,12 +595,12 @@ clnt_tli_create(const int fd, const struct netconfig *nconf,
  */
 CLIENT *
 _clnt_tli_create_timed(int fd, const struct netconfig *nconf,
-	struct netbuf *svcaddr, rpcprog_t prog, rpcvers_t vers, uint_t sendsz,
-	uint_t recvsz, const struct timeval *tp)
+    struct netbuf *svcaddr, rpcprog_t prog, rpcvers_t vers, uint_t sendsz,
+    uint_t recvsz, const struct timeval *tp)
 {
 	CLIENT *cl;			/* client handle */
 	struct t_info tinfo;		/* transport info */
-	bool_t madefd;			/* whether fd opened here */
+	bool_t madefd = FALSE;		/* whether fd opened here */
 	t_scalar_t servtype;
 	int retval;
 
@@ -649,13 +646,12 @@ _clnt_tli_create_timed(int fd, const struct netconfig *nconf,
 		    (t_getinfo(fd, &tinfo) == -1))
 			goto err;
 		servtype = tinfo.servtype;
-		madefd = FALSE;
 	}
 
 	switch (servtype) {
 	case T_COTS:
 		cl = _clnt_vc_create_timed(fd, svcaddr, prog, vers, sendsz,
-				recvsz, tp);
+		    recvsz, tp);
 		break;
 	case T_COTS_ORD:
 		if (nconf && ((strcmp(nconf->nc_protofmly, NC_INET) == 0) ||
@@ -665,7 +661,7 @@ _clnt_tli_create_timed(int fd, const struct netconfig *nconf,
 				goto err;
 		}
 		cl = _clnt_vc_create_timed(fd, svcaddr, prog, vers, sendsz,
-			recvsz, tp);
+		    recvsz, tp);
 		break;
 	case T_CLTS:
 		cl = clnt_dg_create(fd, svcaddr, prog, vers, sendsz, recvsz);
@@ -683,7 +679,7 @@ _clnt_tli_create_timed(int fd, const struct netconfig *nconf,
 			rpc_createerr.cf_error.re_errno = errno;
 			rpc_createerr.cf_error.re_terrno = 0;
 			syslog(LOG_ERR,
-				"clnt_tli_create: strdup failed");
+			    "clnt_tli_create: strdup failed");
 			goto err1;
 		}
 		cl->cl_tp = strdup(nconf->nc_device);
@@ -694,7 +690,7 @@ _clnt_tli_create_timed(int fd, const struct netconfig *nconf,
 			rpc_createerr.cf_error.re_errno = errno;
 			rpc_createerr.cf_error.re_terrno = 0;
 			syslog(LOG_ERR,
-				"clnt_tli_create: strdup failed");
+			    "clnt_tli_create: strdup failed");
 			goto err1;
 		}
 	} else {
@@ -708,8 +704,8 @@ _clnt_tli_create_timed(int fd, const struct netconfig *nconf,
 					rpc_createerr.cf_error.re_errno = errno;
 					rpc_createerr.cf_error.re_terrno = 0;
 					syslog(LOG_ERR,
-						"clnt_tli_create: "
-						"strdup failed");
+					    "clnt_tli_create: "
+					    "strdup failed");
 					goto err1;
 				}
 			}
@@ -722,8 +718,8 @@ _clnt_tli_create_timed(int fd, const struct netconfig *nconf,
 					rpc_createerr.cf_error.re_errno = errno;
 					rpc_createerr.cf_error.re_terrno = 0;
 					syslog(LOG_ERR,
-						"clnt_tli_create: "
-						"strdup failed");
+					    "clnt_tli_create: "
+					    "strdup failed");
 					goto err1;
 				}
 			}
@@ -772,7 +768,7 @@ __rpc_raise_fd(int fd)
 	if (t_close(fd) == -1) {
 		/* this is okay, we will syslog an error, then use the new fd */
 		(void) syslog(LOG_ERR,
-			"could not t_close() fd %d; mem & fd leak", fd);
+		    "could not t_close() fd %d; mem & fd leak", fd);
 	}
 
 	return (nfd);

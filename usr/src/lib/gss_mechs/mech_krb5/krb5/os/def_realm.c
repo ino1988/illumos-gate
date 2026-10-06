@@ -8,7 +8,7 @@
  *   require a specific license from the United States Government.
  *   It is the responsibility of any person or organization contemplating
  *   export to obtain such a license before exporting.
- * 
+ *
  * WITHIN THAT CONSTRAINT, permission to use, copy, modify, and
  * distribute this software and its documentation for any purpose and
  * without fee is hereby granted, provided that the above copyright
@@ -22,7 +22,7 @@
  * M.I.T. makes no representations about the suitability of
  * this software for any purpose.  It is provided "as is" without express
  * or implied warranty.
- * 
+ *
  *
  * krb5_get_default_realm(), krb5_set_default_realm(),
  * krb5_free_default_realm() functions.
@@ -31,19 +31,22 @@
 /*
  * Copyright 2008 Sun Microsystems, Inc.  All rights reserved.
  * Use is subject to license terms.
+ *
+ * Copyright 2014 Nexenta Systems, Inc.  All rights reserved.
+ * Copyright (c) 2016 by Delphix. All rights reserved.
  */
 
 #include "k5-int.h"
 #include "os-proto.h"
 #include <stdio.h>
 
-/* 
+/*
  * Solaris Kerberos:
  * For krb5int_foreach_localaddr()
  */
 #include "foreachaddr.h"
 
-#ifdef KRB5_DNS_LOOKUP	     
+#ifdef KRB5_DNS_LOOKUP
 #ifdef WSHELPER
 #include <wshelper.h>
 #else /* WSHELPER */
@@ -79,7 +82,7 @@ extern struct hostent *res_gethostbyaddr(const char *addr, int len, int type);
  * used as a callback for krb5int_foreach_localaddr().
  */
 static int krb5int_address_get_realm(void *data, struct sockaddr *addr) {
-	
+
 	krb5_context context = data;
 	struct hostent *he = NULL;
 
@@ -102,7 +105,7 @@ static int krb5int_address_get_realm(void *data, struct sockaddr *addr) {
 
 		/* If a realm was found return 1 to immediately halt
 		 * krb5int_foreach_localaddr()
-		 */ 
+		 */
 		if (context->default_realm != 0) {
 			return (1);
 		}
@@ -115,7 +118,7 @@ static int krb5int_address_get_realm(void *data, struct sockaddr *addr) {
  * Retrieves the default realm to be used if no user-specified realm is
  *  available.  [e.g. to interpret a user-typed principal name with the
  *  realm omitted for convenience]
- * 
+ *
  *  returns system errors, NOT_ENOUGH_SPACE, KV5M_CONTEXT
 */
 
@@ -135,8 +138,20 @@ krb5_get_default_realm(krb5_context context, char **lrealm)
 
     (void) memset(localhost, 0, sizeof(localhost));
 
-    if (!context || (context->magic != KV5M_CONTEXT)) 
+    if (!context || (context->magic != KV5M_CONTEXT))
 	    return KV5M_CONTEXT;
+
+    /*
+     * Solaris Kerberos: (illumos)
+     * Another way to provide the default realm.
+     */
+    if (!context->default_realm) {
+	if ((realm = getenv("KRB5_DEFAULT_REALM")) != NULL) {
+	    context->default_realm = strdup(realm);
+	    if (context->default_realm == NULL)
+		return ENOMEM;
+	}
+    }
 
     if (!context->default_realm) {
         context->default_realm = 0;
@@ -173,7 +188,7 @@ krb5_get_default_realm(krb5_context context, char **lrealm)
 		if ( localhost[0] ) {
 		    p = localhost;
 		    do {
-			retval = krb5_try_realm_txt_rr("_kerberos", p, 
+			retval = krb5_try_realm_txt_rr("_kerberos", p,
 						       &context->default_realm);
 			p = strchr(p,'.');
 			if (p)
@@ -181,10 +196,10 @@ krb5_get_default_realm(krb5_context context, char **lrealm)
 		    } while (retval && p && p[0]);
 
 		    if (retval)
-			retval = krb5_try_realm_txt_rr("_kerberos", "", 
+			retval = krb5_try_realm_txt_rr("_kerberos", "",
 						       &context->default_realm);
 		} else {
-		    retval = krb5_try_realm_txt_rr("_kerberos", "", 
+		    retval = krb5_try_realm_txt_rr("_kerberos", "",
 						   &context->default_realm);
 		}
 		if (retval) {
@@ -192,11 +207,13 @@ krb5_get_default_realm(krb5_context context, char **lrealm)
 		}
             } else
 #endif /* KRB5_DNS_LOOKUP */
-             {
+            if (getenv("MS_INTEROP") == NULL) {
 
 	/*
 	 * Solaris Kerberos:
-	 * Try to find a realm based on one of the local IP addresses
+	 * Try to find a realm based on one of the local IP addresses.
+	 * Don't do this for AD, which often does _not_ support any
+	 * DNS reverse lookup, making these queries take forever.
 	 */
 	(void) krb5int_foreach_localaddr(context,
 	    krb5int_address_get_realm, 0, 0);
@@ -215,7 +232,7 @@ krb5_get_default_realm(krb5_context context, char **lrealm)
 		if (res_ninit(&res) == 0) {
 			for (i = 0; res.dnsrch[i]; i++) {
 				krb5int_domain_get_realm(context,
-				    res.dnsrch[i], &context->default_realm); 
+				    res.dnsrch[i], &context->default_realm);
 
 				if (context->default_realm != 0)
 					break;
@@ -237,7 +254,7 @@ krb5_get_default_realm(krb5_context context, char **lrealm)
     }
 
     realm = context->default_realm;
-    
+
     /*LINTED*/
     if (!(*lrealm = cp = malloc((unsigned int) strlen(realm) + 1)))
         return ENOMEM;
@@ -248,7 +265,7 @@ krb5_get_default_realm(krb5_context context, char **lrealm)
 krb5_error_code KRB5_CALLCONV
 krb5_set_default_realm(krb5_context context, const char *lrealm)
 {
-    if (!context || (context->magic != KV5M_CONTEXT)) 
+    if (!context || (context->magic != KV5M_CONTEXT))
 	    return KV5M_CONTEXT;
 
     if (context->default_realm) {
@@ -256,7 +273,7 @@ krb5_set_default_realm(krb5_context context, const char *lrealm)
 	    context->default_realm = 0;
     }
 
-    /* Allow the user to clear the default realm setting by passing in 
+    /* Allow the user to clear the default realm setting by passing in
        NULL */
     if (!lrealm) return 0;
 

@@ -44,8 +44,8 @@ setpin_nss(KMF_HANDLE_T handle,
 	char *token_spec, char *dir, char *prefix)
 {
 	int rv = 0;
-	KMF_CREDENTIAL		oldcred = {NULL, 0};
-	KMF_CREDENTIAL		newpincred = {NULL, 0};
+	KMF_CREDENTIAL		oldcred = { NULL, 0 };
+	KMF_CREDENTIAL		newpincred = { NULL, 0 };
 	CK_UTF8CHAR_PTR		old_pin = NULL, new_pin = NULL;
 	CK_ULONG		old_pinlen = 0, new_pinlen = 0;
 	KMF_ATTRIBUTE		setpinattrs[6];
@@ -119,8 +119,8 @@ setpin_pkcs11(KMF_HANDLE_T handle, char *token_spec, boolean_t souser)
 	CK_RV			rv = CKR_OK;
 	char			*token_name = NULL;
 	CK_TOKEN_INFO		token_info;
-	KMF_CREDENTIAL		newpincred = {NULL, 0};
-	KMF_CREDENTIAL		oldcred = {NULL, 0};
+	KMF_CREDENTIAL		newpincred = { NULL, 0 };
+	KMF_CREDENTIAL		oldcred = { NULL, 0 };
 	KMF_KEYSTORE_TYPE	kstype = KMF_KEYSTORE_PK11TOKEN;
 	KMF_ATTRIBUTE		attrlist[6];
 	CK_USER_TYPE		user = CKU_USER;
@@ -154,7 +154,7 @@ setpin_pkcs11(KMF_HANDLE_T handle, char *token_spec, boolean_t souser)
 		if ((old_pin = (CK_UTF8CHAR_PTR) strdup(SOFT_DEFAULT_PIN)) ==
 		    NULL) {
 			cryptoerror(LOG_STDERR, "%s.", strerror(errno));
-			final_pk11(NULL);
+			final_pk11(0);
 			return (PK_ERR_PK11);
 		}
 		old_pinlen = strlen(SOFT_DEFAULT_PIN);
@@ -164,7 +164,7 @@ setpin_pkcs11(KMF_HANDLE_T handle, char *token_spec, boolean_t souser)
 			cryptoerror(LOG_STDERR,
 			    gettext("Unable to get token passphrase (%s)."),
 			    pkcs11_strerror(rv));
-			final_pk11(NULL);
+			final_pk11(0);
 			return (PK_ERR_PK11);
 		}
 	}
@@ -180,7 +180,7 @@ setpin_pkcs11(KMF_HANDLE_T handle, char *token_spec, boolean_t souser)
 			    "Unable to get and confirm new passphrase (%s)."),
 			    pkcs11_strerror(rv));
 		free(old_pin);
-		final_pk11(NULL);
+		final_pk11(0);
 		return (PK_ERR_PK11);
 	}
 

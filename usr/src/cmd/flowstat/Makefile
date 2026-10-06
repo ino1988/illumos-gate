@@ -22,8 +22,9 @@
 # Copyright 2010 Sun Microsystems, Inc.  All rights reserved.
 # Use is subject to license terms.
 #
+# Copyright (c) 2018, Joyent, Inc.
 
-PROG=flowstat 
+PROG=flowstat
 
 ROOTFS_PROG= $(PROG)
 
@@ -33,16 +34,19 @@ include ../Makefile.cmd
 
 XGETFLAGS += -a -x $(PROG).xcl
 LDLIBS += -L$(ROOT)/lib
-LDLIBS += -ldladm -linetutil
+LDLIBS += -ldladm -lofmt
 
 CERRWARN += -_gcc=-Wno-implicit-function-declaration
-CERRWARN += -_gcc=-Wno-uninitialized
+CERRWARN += $(CNOWARN_UNINIT)
+
+# not linted
+SMATCH=off
 
 ROOTCFGDIR=	$(ROOTETC)/dladm
 
 .KEEP_STATE:
 
-all: $(ROOTFS_PROG) 
+all: $(ROOTFS_PROG)
 
 #
 # Message catalog

@@ -23,7 +23,7 @@
  * Copyright 2014 Garrett D'Amore <garrett@damore.org>
  */
 /*	Copyright (c) 1984, 1986, 1987, 1988, 1989 AT&T	*/
-/*	  All Rights Reserved  	*/
+/*	  All Rights Reserved	*/
 
 #ifndef	_PKGINFO_H
 #define	_PKGINFO_H
@@ -32,7 +32,7 @@
 extern "C" {
 #endif
 
-#define	PI_INSTALLED 	0
+#define	PI_INSTALLED	0
 #define	PI_PARTIAL	1
 #define	PI_PRESVR4	2
 #define	PI_UNKNOWN	3

@@ -52,9 +52,9 @@
 #if defined(__sparc)
 
 #define	LIBM_ANSI_PRAGMA_WEAK(sym,stype) \
-	.weak sym; \
-	.type sym,#stype; \
-sym	= __/**/sym
+	.weak __##sym;		 \
+	.type __##sym,#stype;		 \
+__##sym	= sym
 
 #ifndef SET_FILE
 #define	SET_FILE(x) \
@@ -110,29 +110,29 @@ sym	= __/**/sym
 #define	MCOUNT_SIZE	(9*4)	/* 9 instructions */
 #define	MCOUNT(x) \
 	save	%sp, -SA(MINFRAME), %sp; \
-	sethi	%hh(.L_/**/x/**/1), %o0; \
-	sethi	%lm(.L_/**/x/**/1), %o1; \
-	or	%o0, %hm(.L_/**/x/**/1), %o0; \
-	or	%o1, %lo(.L_/**/x/**/1), %o1; \
+	sethi	%hh(.L_##x##1), %o0; \
+	sethi	%lm(.L_##x##1), %o1; \
+	or	%o0, %hm(.L_##x##1), %o0; \
+	or	%o1, %lo(.L_##x##1), %o1; \
 	sllx	%o0, 32, %o0; \
 	call	_mcount; \
 	or	%o0, %o1, %o0; \
 	restore; \
-	.common .L_/**/x/**/1, 8, 8
+	.common .L_##x##1, 8, 8
 #elif defined(PIC32)
 #define	MCOUNT_SIZE	(10*4)	/* 10 instructions */
 #define	MCOUNT(x) \
 	save	%sp,-SA(MINFRAME),%sp; \
 1:	call	.+8; \
 	sethi	%hi(_GLOBAL_OFFSET_TABLE_-(1b-.)),%o0; \
-	sethi	%hi(.L_/**/x/**/1),%o1; \
+	sethi	%hi(.L_##x##1),%o1; \
 	add	%o0,%lo(_GLOBAL_OFFSET_TABLE_-(1b-.)),%o0; \
-	add	%o1,%lo(.L_/**/x/**/1),%o1; \
+	add	%o1,%lo(.L_##x##1),%o1; \
 	add	%o0,%o7,%o0; \
 	call	_mcount; \
 	ldx	[%o0+%o1],%o0; \
 	restore; \
-	.common .L_/**/x/**/1,8,8
+	.common .L_##x##1,8,8
 #else	/* PIC13 */
 #define	MCOUNT_SIZE	(8*4)	/* 8 instructions */
 #define	MCOUNT(x) \
@@ -142,18 +142,18 @@ sym	= __/**/sym
 	add	%o0,%lo(_GLOBAL_OFFSET_TABLE_-(1b-.)),%o0; \
 	add	%o0,%o7,%o0; \
 	call	_mcount; \
-	ldx	[%o0+%lo(.L_/**/x/**/1)],%o0; \
+	ldx	[%o0+%lo(.L_##x##1)],%o0; \
 	restore; \
-	.common .L_/**/x/**/1,8,8
+	.common .L_##x##1,8,8
 #endif	/* !defined(PIC) */
 #endif /* defined(PROF) && defined(__sparcv9) */
 
 #elif defined(__x86)
 
 #define	LIBM_ANSI_PRAGMA_WEAK(sym,stype) \
-	.weak sym; \
-	.type sym,@stype; \
-sym	= __/**/sym
+	.weak __##sym;		 \
+	.type __##sym,@stype;		 \
+__##sym	= sym
 
 #ifdef PIC
 #if defined(__amd64)
@@ -168,9 +168,9 @@ sym	= __/**/sym
 #else
 #define	PIC_SETUP(label) \
 	pushl	%ebx; \
-	call	.label; \
-.label:	popl	%ebx; \
-	addl	$_GLOBAL_OFFSET_TABLE_+[.-.label],%ebx
+	call	.##label; \
+.##label:	popl	%ebx; \
+	addl	$_GLOBAL_OFFSET_TABLE_ + [. - .##label], %ebx
 #define	PIC_WRAPUP	popl	%ebx
 #define	PIC_F(x)	x@PLT
 #define	PIC_G(x)	x@GOT(%ebx)
@@ -196,7 +196,6 @@ sym	= __/**/sym
 #else	/* defined(_ASM) */
 
 #include "libm_macros.h"
-#include "libm_synonyms.h"
 #include "libm_protos.h"
 #include "libm_inlines.h"
 #include <math.h>

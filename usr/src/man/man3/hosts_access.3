@@ -1,4 +1,4 @@
-.TH HOSTS_ACCESS 3 "Sep 15, 2011"
+.TH HOSTS_ACCESS 3 "May 13, 2017"
 .SH NAME
 hosts_access, hosts_ctl, libwrap, request_init, request_set \- access control library
 .SH SYNOPSIS
@@ -24,7 +24,7 @@ char *client_addr;
 char *client_user;
 .fi
 .SH DESCRIPTION
-The routines described in this document are part of the \fIlibwrap.a\fR
+The routines described in this document are part of the \fIlibwrap\fR
 library. They implement a rule-based access control language with
 optional shell commands that are executed when a rule fires.
 .PP
@@ -56,7 +56,7 @@ The name of the daemon process running on the server host.
 The name of the user on whose behalf the client host makes the request.
 .PP
 hosts_access() consults the access control tables described in the
-\fIhosts_access(5)\fR manual page.  When internal endpoint information
+\fIhosts_access\fR(5) manual page.  When internal endpoint information
 is available, host names and client user names are looked up on demand,
 using the request structure as a cache.  hosts_access() returns zero if
 access should be denied.
@@ -88,6 +88,7 @@ with other code that relies on strtok().
 Wietse Venema (wietse@wzv.win.tue.nl)
 Department of Mathematics and Computing Science
 Eindhoven University of Technology
-Den Dolech 2, P.O. Box 513,
+Den Dolech 2, P.O. Box 513
 5600 MB Eindhoven, The Netherlands
-\" @(#) hosts_access.3 1.8 96/02/11 17:01:26
+.fi
+.\" @(#) hosts_access.3 1.8 96/02/11 17:01:26

@@ -51,9 +51,12 @@ typedef enum {
 	 * ONETIME properties are a sort of conglomeration of READONLY
 	 * and INHERIT.  They can be set only during object creation,
 	 * after that they are READONLY.  If not explicitly set during
-	 * creation, they can be inherited.
+	 * creation, they can be inherited. ONETIME_DEFAULT properties
+	 * work the same way, but they will default instead of
+	 * inheriting a value.
 	 */
-	PROP_ONETIME
+	PROP_ONETIME,
+	PROP_ONETIME_DEFAULT
 } zprop_attr_t;
 
 typedef struct zfs_index {
@@ -120,7 +123,7 @@ int zprop_index_to_string(int, uint64_t, const char **, zfs_type_t);
 uint64_t zprop_random_value(int, uint64_t, zfs_type_t);
 const char *zprop_values(int, zfs_type_t);
 size_t zprop_width(int, boolean_t *, zfs_type_t);
-boolean_t zprop_valid_for_type(int, zfs_type_t);
+boolean_t zprop_valid_for_type(int, zfs_type_t, boolean_t);
 
 #ifdef	__cplusplus
 }

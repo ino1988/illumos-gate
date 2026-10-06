@@ -24,8 +24,6 @@
  * Use is subject to license terms.
  */
 
-#pragma ident	"%Z%%M%	%I%	%E% SMI"
-
 #include <stdio.h>
 #include <stdlib.h>
 #include <unistd.h>
@@ -240,7 +238,7 @@ main(int argc, char *argv[])
 	if (errflg || argc <= 0) {
 		(void) fprintf(stderr, "usage:  %s pid ...\n", command);
 		(void) fprintf(stderr, "  (Reap a defunct process by forcing "
-		    "its parent to wait(2) for it)\n");
+		    "its parent to wait(3C) for it)\n");
 		exit(2);
 	}
 

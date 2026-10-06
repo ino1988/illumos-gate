@@ -19,12 +19,16 @@
  * CDDL HEADER END
  */
 /*	Copyright (c) 1984, 1986, 1987, 1988, 1989 AT&T	*/
-/*	  All Rights Reserved  	*/
+/*	  All Rights Reserved	*/
 
 
 /*
  * Copyright 2009 Sun Microsystems, Inc.  All rights reserved.
  * Use is subject to license terms.
+ *
+ * Copyright 2013 Nexenta Systems, Inc.  All rights reserved.
+ * Copyright 2016 Joyent, Inc.
+ * Copyright 2025 Oxide Computer Company
  */
 
 #ifndef _SYS_TYPES_H
@@ -45,11 +49,11 @@
  * required by any standard but constitute a useful, general purpose set
  * of type definitions which is namespace clean with respect to all standards.
  */
-#ifdef	_KERNEL
+#if defined(_KERNEL) || defined(_BOOT)
 #include <sys/inttypes.h>
-#else	/* _KERNEL */
+#else
 #include <sys/int_types.h>
-#endif	/* _KERNEL */
+#endif
 
 #if defined(_KERNEL) || defined(_SYSCALL32)
 #include <sys/types32.h>
@@ -84,13 +88,13 @@ typedef union {
  * to use them instead of int32_t and uint32_t because DEC had
  * shipped 64-bit wide.
  */
-#if defined(_LP64) || defined(_I32LPx)
+#if defined(_LP64)
 typedef int32_t		t_scalar_t;
 typedef uint32_t	t_uscalar_t;
 #else
 typedef long		t_scalar_t;	/* historical versions */
 typedef unsigned long	t_uscalar_t;
-#endif	/* defined(_LP64) || defined(_I32LPx) */
+#endif	/* defined(_LP64) */
 
 /*
  * POSIX Extensions
@@ -106,7 +110,7 @@ typedef	short		cnt_t;		/* ?<count> type */
 
 #if !defined(_PTRDIFF_T) || __cplusplus >= 199711L
 #define	_PTRDIFF_T
-#if defined(_LP64) || defined(_I32LPx)
+#if defined(_LP64)
 typedef	long	ptrdiff_t;		/* pointer difference */
 #else
 typedef	int	ptrdiff_t;		/* (historical version) */
@@ -185,15 +189,36 @@ typedef	int		blksize_t;	/* used for block sizes */
 typedef	long		blksize_t;	/* used for block sizes */
 #endif
 
-#if defined(__XOPEN_OR_POSIX)
+/*
+ * The boolean_t type has had a varied amount of exposure over the years in
+ * terms of how its enumeration constants have been exposed. In particular, it
+ * originally used the __XOPEN_OR_POSIX macro to determine whether to prefix the
+ * B_TRUE and B_FALSE with an underscore. This check never included the
+ * question of if we were in a strict ANSI C environment or whether extensions
+ * were defined.
+ *
+ * Compilers such as clang started defaulting to always including an
+ * XOPEN_SOURCE declaration on behalf of users, but also noted __EXTENSIONS__.
+ * This would lead most software that had used the non-underscore versions to
+ * need it. As such, we have adjusted the non-strict XOPEN environment to retain
+ * its old behavior so as to minimize namespace pollution; however, we instead
+ * include both variants of the definitions in the generally visible version
+ * allowing software written in either world to hopefully end up in a good
+ * place.
+ *
+ * This isn't perfect, but should hopefully minimize the pain for folks actually
+ * trying to build software.
+ */
+#if defined(__XOPEN_OR_POSIX) && !defined(__EXTENSIONS__)
 typedef enum { _B_FALSE, _B_TRUE } boolean_t;
 #else
-typedef enum { B_FALSE, B_TRUE } boolean_t;
+typedef enum { B_FALSE = 0, B_TRUE = 1, _B_FALSE = 0, _B_TRUE = 1 } boolean_t;
+#endif /* __XOPEN_OR_POSIX && !__EXTENSIONS__ */
+
 #ifdef _KERNEL
 #define	VALID_BOOLEAN(x)	(((x) == B_FALSE) || ((x) == B_TRUE))
 #define	VOID2BOOLEAN(x)		(((uintptr_t)(x) == 0) ? B_FALSE : B_TRUE)
 #endif /* _KERNEL */
-#endif /* defined(__XOPEN_OR_POSIX) */
 
 #ifdef _KERNEL
 #define	BOOLEAN2VOID(x)		((x) ? 1 : 0)
@@ -235,6 +260,16 @@ typedef union {
 	long double	_q;
 	uint32_t	_l[4];
 } upad128_t;
+
+typedef union {
+	long double	_q[2];
+	uint32_t	_l[8];
+} upad256_t;
+
+typedef union {
+	long double	_q[4];
+	uint32_t	_l[16];
+} upad512_t;
 
 typedef	longlong_t	offset_t;
 typedef	u_longlong_t	u_offset_t;
@@ -300,7 +335,7 @@ typedef uint_t k_fltset_t;	/* kernel fault set type */
  * a process id, process group id, session id, scheduling class id,
  * user id, group id, project id, task id or zone id.
  */
-#if defined(_LP64) || defined(_I32LPx)
+#if defined(_LP64)
 typedef int		id_t;
 #else
 typedef	long		id_t;		/* (historical version) */
@@ -322,7 +357,7 @@ typedef long	suseconds_t;	/* signed # of microseconds */
 /*
  * Typedefs for dev_t components.
  */
-#if defined(_LP64) || defined(_I32LPx)
+#if defined(_LP64)
 typedef uint_t	major_t;	/* major part of device number */
 typedef uint_t	minor_t;	/* minor part of device number */
 #else
@@ -365,7 +400,7 @@ typedef ushort_t o_ino_t;		/* old inode type	*/
  * POSIX and XOPEN Declarations
  */
 typedef	int	key_t;			/* IPC key type		*/
-#if defined(_LP64) || defined(_I32LPx)
+#if defined(_LP64)
 typedef	uint_t	mode_t;			/* file attribute type	*/
 #else
 typedef	ulong_t	mode_t;			/* (historical version) */
@@ -406,8 +441,8 @@ typedef	struct _pthread_mutex {		/* = mutex_t in synch.h */
 		uint16_t	__pthread_mutex_flag1;
 		uint8_t		__pthread_mutex_flag2;
 		uint8_t		__pthread_mutex_ceiling;
-		uint16_t 	__pthread_mutex_type;
-		uint16_t 	__pthread_mutex_magic;
+		uint16_t	__pthread_mutex_type;
+		uint16_t	__pthread_mutex_magic;
 	} __pthread_mutex_flags;
 	union {
 		struct {
@@ -425,8 +460,8 @@ typedef	struct _pthread_mutex {		/* = mutex_t in synch.h */
 typedef	struct _pthread_cond {		/* = cond_t in synch.h */
 	struct {
 		uint8_t		__pthread_cond_flag[4];
-		uint16_t 	__pthread_cond_type;
-		uint16_t 	__pthread_cond_magic;
+		uint16_t	__pthread_cond_type;
+		uint16_t	__pthread_cond_magic;
 	} __pthread_cond_flags;
 	upad64_t __pthread_cond_data;
 } pthread_cond_t;
@@ -503,7 +538,7 @@ typedef struct {
 
 typedef ulong_t	dev_t;			/* expanded device type */
 
-#if defined(_LP64) || defined(_I32LPx)
+#if defined(_LP64)
 typedef	uint_t nlink_t;			/* file link type	*/
 typedef int	pid_t;			/* process id type	*/
 #else
@@ -513,7 +548,7 @@ typedef	long	pid_t;			/* (historical version) */
 
 #if !defined(_SIZE_T) || __cplusplus >= 199711L
 #define	_SIZE_T
-#if defined(_LP64) || defined(_I32LPx)
+#if defined(_LP64)
 typedef	ulong_t	size_t;		/* size of something in bytes */
 #else
 typedef	uint_t	size_t;		/* (historical version) */
@@ -522,7 +557,7 @@ typedef	uint_t	size_t;		/* (historical version) */
 
 #ifndef _SSIZE_T
 #define	_SSIZE_T
-#if defined(_LP64) || defined(_I32LPx)
+#if defined(_LP64)
 typedef long	ssize_t;	/* size of something in bytes or -1 */
 #else
 typedef int	ssize_t;	/* (historical version) */
@@ -558,7 +593,22 @@ typedef	unsigned int	uint;
 typedef	unsigned long	ulong;
 /* END CSTYLED */
 
-#if defined(_KERNEL)
+#if defined(_KERNEL) || defined(_FAKE_KERNEL)
+
+#define	CHAR_BIT	8		/* max # of bits in a "char" */
+#define	SCHAR_MIN	(-128)		/* min value of a "signed char" */
+#define	SCHAR_MAX	127		/* max value of a "signed char" */
+#define	UCHAR_MAX	255		/* max value of an "unsigned char" */
+
+#if defined(_CHAR_IS_SIGNED)
+#define	CHAR_MIN	SCHAR_MIN	/* min value of a "char" */
+#define	CHAR_MAX	SCHAR_MAX	/* max value of a "char" */
+#elif defined(_CHAR_IS_UNSIGNED)
+#define	CHAR_MIN	0		/* min value of a "char" */
+#define	CHAR_MAX	UCHAR_MAX	/* max value of a "char" */
+#else
+#error "chars are signed or unsigned"
+#endif
 
 #define	SHRT_MIN	(-32768)	/* min value of a "short int" */
 #define	SHRT_MAX	32767		/* max value of a "short int" */
@@ -586,6 +636,14 @@ typedef	unsigned long	ulong;
 					/* max of "long long int" */
 #define	ULLONG_MAX	18446744073709551615ULL
 					/* max of "unsigned long long int" */
+
+#if defined(_LP64) || _FILE_OFFSET_BITS == 32
+#define	OFF_MIN		LONG_MIN
+#define	OFF_MAX		LONG_MAX
+#elif _FILE_OFFSET_BITS == 64
+#define	OFF_MIN		LLONG_MIN
+#define	OFF_MAX		LLONG_MAX
+#endif	/* _LP64 || _FILE_OFFSET_BITS == 32 */
 
 #endif	/* defined(_KERNEL) */
 

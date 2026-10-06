@@ -24,8 +24,6 @@
  * Use is subject to license terms.
  */
 
-#pragma ident	"%Z%%M%	%I%	%E% SMI"
-
 /*
  * This file contains a basic dictionary implementation which stores
  * arbitrary key-value mappings. It is used by libpool to store
@@ -126,9 +124,7 @@ static uint64_t		hash_addr(const void *);
 void
 bit_print_32(unsigned int v)
 {
-#pragma	error_messages(off, E_INTEGER_OVERFLOW_DETECTED)
 	int i, mask = 1 << 31;
-#pragma	error_messages(on, E_INTEGER_OVERFLOW_DETECTED)
 
 	for (i = 1; i <= 32; i++) {
 		(void) putchar(((v & mask) == 0) ? '0' : '1');
@@ -145,9 +141,7 @@ bit_print_32(unsigned int v)
 void
 bit_print_64(unsigned long long v)
 {
-#pragma	error_messages(off, E_INTEGER_OVERFLOW_DETECTED)
 	long long mask = 1ll << 63;
-#pragma	error_messages(on, E_INTEGER_OVERFLOW_DETECTED)
 	int i;
 
 	for (i = 1; i <= 64; i++) {

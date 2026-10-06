@@ -3,7 +3,7 @@
  */
 
 /*	Copyright (c) 1983, 1984, 1985, 1986, 1987, 1988, 1989 AT&T	*/
-/*	  All Rights Reserved  	*/
+/*	  All Rights Reserved	*/
 
 /*
  * Copyright (c) 1980, 1986, 1990 The Regents of the University of California.
@@ -50,6 +50,8 @@
 #include "fsck.h"
 #include <sys/lockfs.h>
 #include <locale.h>
+
+static struct bufarea bufhead;
 
 extern int32_t	verifytag(struct tag *, uint32_t, struct tag *, int);
 extern char	*tagerrs[];
@@ -145,6 +147,7 @@ printfree()
 	int i, startfree, endfree;
 
 	startfree = -1;
+	endfree = -1;
 	for (i = 0; i < part_len; i++) {
 		if (!testbusy(i)) {
 			if (startfree <= 0)
@@ -278,7 +281,6 @@ bufinit()
 		initbarea(bp);
 	}
 	bufhead.b_size = i;	/* save number of buffers */
-	pbp = pdirbp = NULL;
 }
 
 /*
@@ -364,7 +366,6 @@ ckfini()
 		free(bp->b_un.b_buf);
 		free((char *)bp);
 	}
-	pbp = pdirbp = NULL;
 	if (bufhead.b_size != cnt)
 		errexit(gettext("Panic: lost %d buffers\n"),
 		    bufhead.b_size - cnt);
@@ -521,7 +522,7 @@ mounted(char *name)
 		return (0);
 	}
 	blkname = unrawname(name);
-	while ((getmntent(mnttab, &mnt)) == NULL) {
+	while ((getmntent(mnttab, &mnt)) == 0) {
 		if (strcmp(mnt.mnt_fstype, MNTTYPE_UDFS) != 0) {
 			continue;
 		}
@@ -536,7 +537,7 @@ mounted(char *name)
 				if (hasmntopt(&mnt, MNTOPT_RO) != 0)
 					found = 2;	/* mounted as RO */
 				else
-					found = 1; 	/* mounted as R/W */
+					found = 1;	/* mounted as R/W */
 			}
 			break;
 		}

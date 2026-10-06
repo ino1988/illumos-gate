@@ -52,6 +52,7 @@
 #include <sys/stream.h>		/* required for MBLK* */
 #include <sys/strsun.h>		/* required for mionack() */
 #include <sys/byteorder.h>
+#include <sys/sysmacros.h>
 #include <sys/pci.h>
 #include <inet/common.h>
 #include <inet/led.h>
@@ -107,9 +108,6 @@ static int gem_debug = GEM_DEBUG_LEVEL;
 #define	GET_TXBUF(dp, sn)	\
 	&(dp)->tx_buf[SLOT((dp)->tx_slots_base + (sn), (dp)->gc.gc_tx_buf_size)]
 
-#ifndef offsetof
-#define	offsetof(t, m)	((long)&(((t *) 0)->m))
-#endif
 #define	TXFLAG_VTAG(flag)	\
 	(((flag) & GEM_TXFLAG_VTAG) >> GEM_TXFLAG_VTAG_SHIFT)
 
@@ -313,7 +311,7 @@ gem_dump_packet(struct gem_dev *dp, char *title, mblk_t *mp,
 
 	iphlen = (p[0] & 0xf) * 4;
 
-	/* cksum for psuedo header */
+	/* cksum for pseudo header */
 	cksum = *(uint16_t *)&p[12];
 	cksum += *(uint16_t *)&p[14];
 	cksum += *(uint16_t *)&p[16];
@@ -972,7 +970,6 @@ gem_txbuf_free_dma_resources(struct txbuf *tbp)
 	tbp->txb_nfrags = 0;
 	tbp->txb_flag = 0;
 }
-#pragma inline(gem_txbuf_free_dma_resources)
 
 /*
  * reclaim active tx buffers and reset positions in tx rings.
@@ -1206,15 +1203,13 @@ gem_reclaim_txbuf(struct gem_dev *dp)
 
 	return (err);
 }
-#pragma inline(gem_reclaim_txbuf)
-
 
 /*
  * Make tx descriptors in out-of-order manner
  */
 static void
 gem_tx_load_descs_oo(struct gem_dev *dp,
-	seqnum_t start_slot, seqnum_t end_slot, uint64_t flags)
+    seqnum_t start_slot, seqnum_t end_slot, uint64_t flags)
 {
 	seqnum_t	sn;
 	struct txbuf	*tbp;
@@ -1328,7 +1323,6 @@ gem_setup_txbuf_copy(struct gem_dev *dp, mblk_t *mp, struct txbuf *tbp)
 #endif
 	return (off);
 }
-#pragma inline(gem_setup_txbuf_copy)
 
 __INLINE__
 static void
@@ -1368,7 +1362,6 @@ gem_tx_start_unit(struct gem_dev *dp)
 	/* advance softq head and active tail */
 	dp->tx_softq_head = dp->tx_active_tail = tail;
 }
-#pragma inline(gem_tx_start_unit)
 
 #ifdef GEM_DEBUG_LEVEL
 static int gem_send_cnt[10];
@@ -1762,7 +1755,6 @@ gem_append_rxbuf(struct gem_dev *dp, struct rxbuf *rbp_head)
 		dp->rx_active_tail = tail = tail + 1;
 	}
 }
-#pragma inline(gem_append_rxbuf)
 
 mblk_t *
 gem_get_packet_default(struct gem_dev *dp, struct rxbuf *rbp, size_t len)
@@ -1808,7 +1800,7 @@ gem_receive(struct gem_dev *dp)
 	struct rxbuf	*newbufs;
 	struct rxbuf	**newbufs_tailp;
 	mblk_t		*rx_head;
-	mblk_t 		**rx_tailp;
+	mblk_t		**rx_tailp;
 	int		rx_ring_size = dp->gc.gc_rx_ring_size;
 	seqnum_t	active_head;
 	uint64_t	(*rx_desc_stat)(struct gem_dev *dp,
@@ -4734,8 +4726,8 @@ gem_read_conf(struct gem_dev *dp)
 
 struct gem_dev *
 gem_do_attach(dev_info_t *dip, int port,
-	struct gem_conf *gc, void *base, ddi_acc_handle_t *regs_handlep,
-	void *lp, int lmsize)
+    struct gem_conf *gc, void *base, ddi_acc_handle_t *regs_handlep,
+    void *lp, int lmsize)
 {
 	struct gem_dev		*dp;
 	int			i;
@@ -4764,6 +4756,7 @@ gem_do_attach(dev_info_t *dip, int port,
 	if ((macp = mac_alloc(MAC_VERSION)) == NULL) {
 		cmn_err(CE_WARN, "!gem%d: %s: mac_alloc failed",
 		    unit, __func__);
+		kmem_free(dp, GEM_LOCAL_DATA_SIZE(gc));
 		return (NULL);
 	}
 	/* ddi_set_driver_private(dip, dp); */
@@ -5015,7 +5008,6 @@ err_free_ring:
 	gem_free_memory(dp);
 err_free_regs:
 	ddi_regs_map_free(&dp->regs_handle);
-err_free_locks:
 	mutex_destroy(&dp->xmitlock);
 	mutex_destroy(&dp->intrlock);
 	cv_destroy(&dp->tx_drain_cv);
@@ -5272,7 +5264,7 @@ err:
  */
 uint8_t
 gem_search_pci_cap(dev_info_t *dip,
-		ddi_acc_handle_t conf_handle, uint8_t target)
+    ddi_acc_handle_t conf_handle, uint8_t target)
 {
 	uint8_t		pci_cap_ptr;
 	uint32_t	pci_cap;
@@ -5294,7 +5286,7 @@ gem_search_pci_cap(dev_info_t *dip,
 
 int
 gem_pci_set_power_state(dev_info_t *dip,
-		ddi_acc_handle_t conf_handle, uint_t new_mode)
+    ddi_acc_handle_t conf_handle, uint_t new_mode)
 {
 	uint8_t		pci_cap_ptr;
 	uint32_t	pmcsr;
@@ -5343,8 +5335,8 @@ gem_pci_set_power_state(dev_info_t *dip,
  */
 int
 gem_pci_regs_map_setup(dev_info_t *dip, uint32_t which, uint32_t mask,
-	struct ddi_device_acc_attr *attrp,
-	caddr_t *basep, ddi_acc_handle_t *hp)
+    struct ddi_device_acc_attr *attrp,
+    caddr_t *basep, ddi_acc_handle_t *hp)
 {
 	struct pci_phys_spec	*regs;
 	uint_t		len;

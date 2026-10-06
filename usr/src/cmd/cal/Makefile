@@ -24,20 +24,19 @@
 # Use is subject to license terms.
 #
 
-PROG= cal 
+PROG= cal
 
 include ../Makefile.cmd
 
-SED= sed
 DCFILE= $(PROG).dc
 
 CFLAGS += $(CCVERBOSE)
 CERRWARN += -_gcc=-Wno-parentheses
-CERRWARN += -_gcc=-Wno-uninitialized
+CERRWARN += $(CNOWARN_UNINIT)
 
 .KEEP_STATE:
 
-all: $(PROG) 
+all: $(PROG)
 
 install: all $(ROOTPROG)
 

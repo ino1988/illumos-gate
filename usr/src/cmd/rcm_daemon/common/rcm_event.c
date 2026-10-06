@@ -24,8 +24,6 @@
  * All rights reserved.
  */
 
-#pragma ident	"%Z%%M%	%I%	%E% SMI"
-
 #include <door.h>
 #include <assert.h>
 #include <sys/acl.h>
@@ -104,7 +102,6 @@ event_service(void **data, size_t *datalen)
 	 */
 	rcmd_thr_decr();
 
-out:
 	*data = ret;
 	*datalen = 0;
 }

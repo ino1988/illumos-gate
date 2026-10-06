@@ -27,10 +27,8 @@
 /*	Copyright (c) 1984 AT&T	*/
 /*	  All Rights Reserved  	*/
 
-
-#pragma ident	"%Z%%M%	%I%	%E% SMI"
-
 #include <stdio.h>
+#include <stdlib.h>
 #include <sys/types.h>
 #include <sys/stat.h>
 #include <fcntl.h>
@@ -591,7 +589,7 @@ command(union reptr *ipc)
 			hspend = p2 - 1;
 			break;
 
-		case YCOM: 
+		case YCOM:
 			p1 = linebuf;
 			p2 = ipc->r1.re1;
 			while(*p1 = p2[(unsigned char)*p1])	p1++;
@@ -667,7 +665,7 @@ char *ep;
 	return(p);
 }
 
-int
+void
 regerr(int err)
 {
 	switch(err) {
@@ -726,7 +724,6 @@ regerr(int err)
 		exit(2);
 		break;
 	}
-	return (0);
 }
 
 static void

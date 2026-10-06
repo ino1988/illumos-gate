@@ -24,7 +24,9 @@
  * Use is subject to license terms.
  */
 
-#pragma ident	"%Z%%M%	%I%	%E% SMI"
+/*
+ * Copyright 2017 Joyent, Inc.
+ */
 
 /*
  * av1394 asynchronous module
@@ -46,12 +48,6 @@ static void	av1394_async_putbq(av1394_queue_t *, mblk_t *);
 static int	av1394_ioctl_arq_get_ibuf_size(av1394_inst_t *, void *, int);
 static int	av1394_ioctl_arq_set_ibuf_size(av1394_inst_t *, void *, int);
 
-#define	AV1394_TNF_ENTER(func)	\
-	TNF_PROBE_0_DEBUG(func##_enter, AV1394_TNF_ASYNC_STACK, "");
-
-#define	AV1394_TNF_EXIT(func)	\
-	TNF_PROBE_0_DEBUG(func##_exit, AV1394_TNF_ASYNC_STACK, "");
-
 /* tunables */
 int av1394_ibuf_size_default = 64 * 1024;	/* default ibuf size */
 int av1394_ibuf_size_max = 1024 * 1024;		/* max ibuf size */
@@ -67,47 +63,36 @@ av1394_async_attach(av1394_inst_t *avp)
 	av1394_async_t	*ap = &avp->av_a;
 	ddi_iblock_cookie_t ibc = avp->av_attachinfo.iblock_cookie;
 
-	AV1394_TNF_ENTER(av1394_async_attach);
-
 	mutex_init(&ap->a_mutex, NULL, MUTEX_DRIVER, ibc);
 	av1394_initq(&ap->a_rq, ibc, av1394_ibuf_size_default);
 
 	if (av1394_fcp_attach(avp) != DDI_SUCCESS) {
 		av1394_async_cleanup(avp, 1);
-		AV1394_TNF_EXIT(av1394_async_attach);
 		return (DDI_FAILURE);
 	}
 
 	if (av1394_cfgrom_init(avp) != DDI_SUCCESS) {
 		av1394_async_cleanup(avp, 2);
-		AV1394_TNF_EXIT(av1394_async_attach);
 		return (DDI_FAILURE);
 	}
 
 	if (av1394_async_create_minor_node(avp) != DDI_SUCCESS) {
 		av1394_async_cleanup(avp, 3);
-		AV1394_TNF_EXIT(av1394_async_attach);
 		return (DDI_FAILURE);
 	}
 
 	if (av1394_async_update_targetinfo(avp) != DDI_SUCCESS) {
 		av1394_async_cleanup(avp, 4);
-		AV1394_TNF_EXIT(av1394_async_attach);
 		return (DDI_FAILURE);
 	}
 
-	AV1394_TNF_EXIT(av1394_async_attach);
 	return (DDI_SUCCESS);
 }
 
 void
 av1394_async_detach(av1394_inst_t *avp)
 {
-	AV1394_TNF_ENTER(av1394_async_detach);
-
 	av1394_async_cleanup(avp, AV1394_CLEANUP_LEVEL_MAX);
-
-	AV1394_TNF_EXIT(av1394_async_detach);
 }
 
 void
@@ -115,8 +100,6 @@ av1394_async_bus_reset(av1394_inst_t *avp)
 {
 	av1394_async_t	*ap = &avp->av_a;
 	mblk_t		*bp;
-
-	AV1394_TNF_ENTER(av1394_async_bus_reset);
 
 	(void) av1394_async_update_targetinfo(avp);
 
@@ -128,15 +111,10 @@ av1394_async_bus_reset(av1394_inst_t *avp)
 	mutex_exit(&ap->a_mutex);
 
 	/* queue up a bus reset message */
-	if ((bp = allocb(1, BPRI_HI)) == NULL) {
-		TNF_PROBE_0(av1394_async_bus_reset_error_allocb,
-		    AV1394_TNF_ASYNC_ERROR, "");
-	} else {
+	if ((bp = allocb(1, BPRI_HI)) != NULL) {
 		DB_TYPE(bp) = AV1394_M_BUS_RESET;
 		av1394_async_putq_rq(avp, bp);
 	}
-
-	AV1394_TNF_EXIT(av1394_async_bus_reset);
 }
 
 int
@@ -144,30 +122,21 @@ av1394_async_cpr_resume(av1394_inst_t *avp)
 {
 	int	ret;
 
-	AV1394_TNF_ENTER(av1394_async_cpr_resume);
-
 	ret = av1394_async_update_targetinfo(avp);
 
-	AV1394_TNF_EXIT(av1394_async_cpr_resume);
 	return (ret);
 }
 
 void
 av1394_async_reconnect(av1394_inst_t *avp)
 {
-	AV1394_TNF_ENTER(av1394_async_reconnect);
-
 	(void) av1394_async_update_targetinfo(avp);
-
-	AV1394_TNF_EXIT(av1394_async_reconnect);
 }
 
 int
 av1394_async_open(av1394_inst_t *avp, int flag)
 {
 	av1394_async_t	*ap = &avp->av_a;
-
-	AV1394_TNF_ENTER(av1394_async_open);
 
 	mutex_enter(&ap->a_mutex);
 	if (ap->a_nopen == 0) {
@@ -177,7 +146,6 @@ av1394_async_open(av1394_inst_t *avp, int flag)
 	ap->a_oflag = flag;
 	mutex_exit(&ap->a_mutex);
 
-	AV1394_TNF_EXIT(av1394_async_open);
 	return (0);
 }
 
@@ -186,8 +154,6 @@ int
 av1394_async_close(av1394_inst_t *avp, int flag)
 {
 	av1394_async_t	*ap = &avp->av_a;
-
-	AV1394_TNF_ENTER(av1394_async_close);
 
 	av1394_cfgrom_close(avp);
 
@@ -198,7 +164,6 @@ av1394_async_close(av1394_inst_t *avp, int flag)
 	ap->a_pollevents = 0;
 	mutex_exit(&ap->a_mutex);
 
-	AV1394_TNF_EXIT(av1394_async_close);
 	return (0);
 }
 
@@ -213,8 +178,6 @@ av1394_async_read(av1394_inst_t *avp, struct uio *uiop)
 	int		dbtype;
 	int		len;
 
-	AV1394_TNF_ENTER(av1394_async_read);
-
 	/* copyout as much as we can */
 	while ((uiop->uio_resid > 0) && (ret == 0)) {
 		/*
@@ -223,7 +186,6 @@ av1394_async_read(av1394_inst_t *avp, struct uio *uiop)
 		 */
 		if ((mp = av1394_getq(q)) == NULL) {
 			if (ap->a_oflag & FNDELAY) {
-				AV1394_TNF_EXIT(av1394_async_read);
 				return (EAGAIN);
 			}
 			if (av1394_qwait_sig(q) <= 0) {
@@ -283,7 +245,6 @@ av1394_async_read(av1394_inst_t *avp, struct uio *uiop)
 		}
 	}
 
-	AV1394_TNF_EXIT(av1394_async_read);
 	return (0);
 }
 
@@ -292,8 +253,6 @@ av1394_async_write(av1394_inst_t *avp, struct uio *uiop)
 {
 	iec61883_arq_t	arq;
 	int		ret;
-
-	AV1394_TNF_ENTER(av1394_async_write);
 
 	/* all data should arrive in ARQ format */
 	while (uiop->uio_resid >= sizeof (arq)) {
@@ -314,18 +273,15 @@ av1394_async_write(av1394_inst_t *avp, struct uio *uiop)
 		}
 	}
 
-	AV1394_TNF_EXIT(av1394_async_write);
 	return (ret);
 }
 
 /*ARGSUSED*/
 int
 av1394_async_ioctl(av1394_inst_t *avp, int cmd, intptr_t arg, int mode,
-		int *rvalp)
+    int *rvalp)
 {
 	int	ret = EINVAL;
-
-	AV1394_TNF_ENTER(av1394_async_ioctl);
 
 	switch (cmd) {
 	case IEC61883_ARQ_GET_IBUF_SIZE:
@@ -344,32 +300,31 @@ av1394_async_ioctl(av1394_inst_t *avp, int cmd, intptr_t arg, int mode,
 		ret = av1394_ioctl_node_get_text_leaf(avp, (void *)arg, mode);
 	}
 
-	AV1394_TNF_EXIT(av1394_async_ioctl);
 	return (ret);
 }
 
-/*ARGSUSED*/
 int
 av1394_async_poll(av1394_inst_t *avp, short events, int anyyet, short *reventsp,
-		struct pollhead **phpp)
+    struct pollhead **phpp)
 {
 	av1394_async_t	*ap = &avp->av_a;
 	av1394_queue_t	*rq = &ap->a_rq;
 
-	AV1394_TNF_ENTER(av1394_async_poll);
-
-	if (events & POLLIN) {
-		if (av1394_peekq(rq)) {
+	if (events & (POLLIN | POLLET)) {
+		if ((events & POLLIN) && av1394_peekq(rq)) {
 			*reventsp |= POLLIN;
-		} else if (!anyyet) {
+		}
+
+		if ((!*reventsp && !anyyet) || (events & POLLET)) {
 			mutex_enter(&ap->a_mutex);
-			ap->a_pollevents |= POLLIN;
+			if (events & POLLIN) {
+				ap->a_pollevents |= POLLIN;
+			}
 			*phpp = &ap->a_pollhead;
 			mutex_exit(&ap->a_mutex);
 		}
 	}
 
-	AV1394_TNF_EXIT(av1394_async_poll);
 	return (0);
 }
 
@@ -384,8 +339,6 @@ av1394_async_putq_rq(av1394_inst_t *avp, mblk_t *mp)
 
 	if (!av1394_putq(&ap->a_rq, mp)) {
 		freemsg(mp);
-		TNF_PROBE_0(av1394_async_putq_rq_error_putq,
-		    AV1394_TNF_ASYNC_ERROR, "");
 	} else {
 		mutex_enter(&ap->a_mutex);
 		if (ap->a_pollevents & POLLIN) {
@@ -438,12 +391,8 @@ av1394_async_create_minor_node(av1394_inst_t *avp)
 	int	ret;
 
 	ret = ddi_create_minor_node(avp->av_dip, "async",
-		S_IFCHR, AV1394_ASYNC_INST2MINOR(avp->av_instance),
-		DDI_NT_AV_ASYNC, NULL);
-	if (ret != DDI_SUCCESS) {
-		TNF_PROBE_0(av1394_async_create_minor_node_error,
-		    AV1394_TNF_ASYNC_ERROR, "");
-	}
+	    S_IFCHR, AV1394_ASYNC_INST2MINOR(avp->av_instance),
+	    DDI_NT_AV_ASYNC, 0);
 	return (ret);
 }
 
@@ -506,8 +455,6 @@ av1394_async_putbq(av1394_queue_t *q, mblk_t *mp)
 {
 	if (!av1394_putbq(q, mp)) {
 		freemsg(mp);
-		TNF_PROBE_0(av1394_async_putbq_error,
-		    AV1394_TNF_ASYNC_ERROR, "");
 	}
 }
 
@@ -519,15 +466,12 @@ av1394_ioctl_arq_get_ibuf_size(av1394_inst_t *avp, void *arg, int mode)
 	int		sz;
 	int		ret = 0;
 
-	AV1394_TNF_ENTER(av1394_ioctl_arq_get_ibuf_size);
-
 	sz = av1394_getmaxq(&ap->a_rq);
 
 	if (ddi_copyout(&sz, arg, sizeof (sz), mode) != 0) {
 		ret = EFAULT;
 	}
 
-	AV1394_TNF_EXIT(av1394_ioctl_arq_get_ibuf_size);
 	return (ret);
 }
 
@@ -539,8 +483,6 @@ av1394_ioctl_arq_set_ibuf_size(av1394_inst_t *avp, void *arg, int mode)
 	int		sz;
 	int		ret = 0;
 
-	AV1394_TNF_ENTER(av1394_ioctl_arq_set_ibuf_size);
-
 	sz = (int)(intptr_t)arg;
 
 	if ((sz < 0) || (sz > av1394_ibuf_size_max)) {
@@ -549,6 +491,5 @@ av1394_ioctl_arq_set_ibuf_size(av1394_inst_t *avp, void *arg, int mode)
 		av1394_setmaxq(&ap->a_rq, sz);
 	}
 
-	AV1394_TNF_EXIT(av1394_ioctl_arq_set_ibuf_size);
 	return (ret);
 }

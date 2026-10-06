@@ -24,10 +24,13 @@
  * Use is subject to license terms.
  */
 
-/*	Copyright (c) 1988 AT&T	*/
-/*	  All Rights Reserved  	*/
+/*
+ * Copyright 2020 OmniOS Community Edition (OmniOSce) Association.
+ * Copyright 2024 Oxide Computer Company
+ */
 
-#pragma ident	"%Z%%M%	%I%	%E% SMI"
+/*	Copyright (c) 1988 AT&T	*/
+/*	  All Rights Reserved	*/
 
 #pragma weak _ptsname = ptsname
 #pragma weak _grantpt = grantpt
@@ -60,8 +63,6 @@
 #define	PTLEN   32			/* slave name length */
 #define	DEFAULT_TTY_GROUP	"tty"	/* slave device group owner */
 
-static void itoa(int, char *);
-
 /*
  *  Check that fd argument is a file descriptor of an opened master.
  *  Do this by sending an ISPTM ioctl message down stream. Ioctl()
@@ -88,29 +89,52 @@ ptsdev(int fd)
 	return (minor(status.st_rdev));
 }
 
+int
+ptsname_r(int fd, char *name, size_t len)
+{
+	dev_t dev;
+
+	if (name == NULL)
+		return (EINVAL);
+
+	if ((dev = ptsdev(fd)) == NODEV)
+		return (errno);
+
+	if (snprintf(name, len, "%s%d", PTSNAME, dev) >= len)
+		return (ERANGE);
+
+	/*
+	 * This lookup will create the /dev/pts node (if the corresponding pty
+	 * exists). POSIX basically never really indicated whether or not
+	 * ptsname() was allowed to return errors or not, though we did. If we
+	 * played strictly by the book, this should probably be an EINVAL or
+	 * ENOTTY return; however, to help someone have a chance of debugging
+	 * this if something goes wrong we stick with our traditional behavior
+	 * and return a slightly broader errno set. If this causes portability
+	 * issues in practice, then it should be changed to just return EINVAL.
+	 */
+	if (access(name, F_OK) != 0)
+		return (errno);
+
+	return (0);
+}
+
 char *
 ptsname(int fd)
 {
-	dev_t dev;
+	int ret;
 	char *sname;
-
-	if ((dev = ptsdev(fd)) == NODEV)
-		return (NULL);
 
 	sname = tsdalloc(_T_PTSNAME, PTLEN, NULL);
 	if (sname == NULL)
 		return (NULL);
-	(void) strcpy(sname, PTSNAME);
-	itoa(dev, sname + strlen(PTSNAME));
 
-	/*
-	 * This lookup will create the /dev/pts node (if the corresponding
-	 * pty exists.
-	 */
-	if (access(sname, F_OK) ==  0)
-		return (sname);
+	if ((ret = ptsname_r(fd, sname, PTLEN)) != 0) {
+		errno = ret;
+		return (NULL);
+	}
 
-	return (NULL);
+	return (sname);
 }
 
 /*
@@ -131,6 +155,45 @@ unlockpt(int fd)
 		return (-1);
 
 	return (0);
+}
+
+/*
+ * XPG4v2 requires that open of a slave pseudo terminal device
+ * provides the process with an interface that is identical to
+ * the terminal interface.
+ *
+ * To satisfy this, in strict XPG4v2 mode, this routine also sends
+ * a message down the stream that sets a flag in the kernel module
+ * so that additional actions are performed when opening an
+ * associated slave PTY device. When this happens, modules are
+ * automatically pushed onto the stream to provide terminal
+ * semantics and those modules are then informed that they should
+ * behave in strict XPG4v2 mode which modifies their behaviour. In
+ * particular, in strict XPG4v2 mode, empty blocks will be sent up
+ * the master side of the stream rather than being suppressed.
+ *
+ * Most applications do not expect this behaviour so it is only
+ * enabled for programs compiled in strict XPG4v2 mode (see
+ * stdlib.h).
+ */
+int
+__unlockpt_xpg4(int fd)
+{
+	int ret;
+
+	if ((ret = unlockpt(fd)) == 0) {
+		struct strioctl istr;
+
+		istr.ic_cmd = PTSSTTY;
+		istr.ic_len = 0;
+		istr.ic_timout = 0;
+		istr.ic_dp = NULL;
+
+		if (ioctl(fd, I_STR, &istr) < 0)
+			ret = -1;
+	}
+
+	return (ret);
 }
 
 int
@@ -186,33 +249,11 @@ zonept(int fd, zoneid_t zoneid)
 }
 
 
-static void
-itoa(int i, char *ptr)
-{
-	int dig = 0;
-	int tempi;
-
-	tempi = i;
-	do {
-		dig++;
-		tempi /= 10;
-	} while (tempi);
-
-	ptr += dig;
-	*ptr = '\0';
-	while (--dig >= 0) {
-		*(--ptr) = i % 10 + '0';
-		i /= 10;
-	}
-}
-
-
 /*
  * added for SUSv3 standard
  *
  * Open a pseudo-terminal device.  External interface.
  */
-
 int
 posix_openpt(int oflag)
 {

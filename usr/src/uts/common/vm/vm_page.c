@@ -20,10 +20,15 @@
  */
 /*
  * Copyright (c) 1986, 2010, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2015, Josef 'Jeff' Sipek <jeffpc@josefsipek.net>
+ * Copyright (c) 2015, 2016 by Delphix. All rights reserved.
+ * Copyright 2018 Joyent, Inc.
+ * Copyright 2021 Oxide Computer Company
+ * Copyright 2024 MNX Cloud, Inc.
  */
 
-/*	Copyright (c) 1983, 1984, 1985, 1986, 1987, 1988, 1989  AT&T	*/
-/*	  All Rights Reserved  	*/
+/* Copyright (c) 1983, 1984, 1985, 1986, 1987, 1988, 1989  AT&T */
+/* All Rights Reserved */
 
 /*
  * University Copyright- Copyright (c) 1982, 1986, 1988
@@ -55,7 +60,6 @@
 #include <sys/cpuvar.h>
 #include <sys/callb.h>
 #include <sys/debug.h>
-#include <sys/tnf_probe.h>
 #include <sys/condvar_impl.h>
 #include <sys/mem_config.h>
 #include <sys/mem_cage.h>
@@ -79,10 +83,9 @@
 #include <sys/ddi.h>
 #include <sys/modctl.h>
 
-static int nopageage = 0;
-
 static pgcnt_t max_page_get;	/* max page_get request size in pages */
 pgcnt_t total_pages = 0;	/* total number of pages (used by /proc) */
+volatile uint64_t n_throttle = 0;
 
 /*
  * freemem_lock protects all freemem variables:
@@ -172,8 +175,8 @@ struct pcf {
 	kmutex_t	pcf_lock;	/* protects the structure */
 	uint_t		pcf_count;	/* page count */
 	uint_t		pcf_wait;	/* number of waiters */
-	uint_t		pcf_block; 	/* pcgs flag to page_free() */
-	uint_t		pcf_reserve; 	/* pages freed after pcf_block set */
+	uint_t		pcf_block;	/* pcgs flag to page_free() */
+	uint_t		pcf_reserve;	/* pages freed after pcf_block set */
 	uint_t		pcf_fill[10];	/* to line up on the caches */
 };
 
@@ -269,39 +272,29 @@ uint_t	alloc_pages[9];
 uint_t	page_exphcontg[19];
 uint_t  page_create_large_cnt[10];
 
-/*
- * Collects statistics.
- */
-#define	PAGE_HASH_SEARCH(index, pp, vp, off) { \
-	uint_t	mylen = 0; \
-			\
-	for ((pp) = page_hash[(index)]; (pp); (pp) = (pp)->p_hash, mylen++) { \
-		if ((pp)->p_vnode == (vp) && (pp)->p_offset == (off)) \
-			break; \
-	} \
-	if ((pp) != NULL) \
-		pagecnt.pc_find_hit++; \
-	else \
-		pagecnt.pc_find_miss++; \
-	if (mylen > PC_HASH_CNT) \
-		mylen = PC_HASH_CNT; \
-	pagecnt.pc_find_hashlen[mylen]++; \
+#endif
+
+static inline page_t *
+page_hash_search(ulong_t index, vnode_t *vnode, u_offset_t off)
+{
+	uint_t mylen = 0;
+	page_t *page;
+
+	for (page = page_hash[index]; page; page = page->p_hash, mylen++)
+		if (page->p_vnode == vnode && page->p_offset == off)
+			break;
+
+#ifdef	VM_STATS
+	if (page != NULL)
+		pagecnt.pc_find_hit++;
+	else
+		pagecnt.pc_find_miss++;
+
+	pagecnt.pc_find_hashlen[MIN(mylen, PC_HASH_CNT)]++;
+#endif
+
+	return (page);
 }
-
-#else	/* VM_STATS */
-
-/*
- * Don't collect statistics
- */
-#define	PAGE_HASH_SEARCH(index, pp, vp, off) { \
-	for ((pp) = page_hash[(index)]; (pp); (pp) = (pp)->p_hash) { \
-		if ((pp)->p_vnode == (vp) && (pp)->p_offset == (off)) \
-			break; \
-	} \
-}
-
-#endif	/* VM_STATS */
-
 
 
 #ifdef DEBUG
@@ -353,7 +346,6 @@ static void page_demote_vp_pages(page_t *);
 
 void
 pcf_init(void)
-
 {
 	if (boot_ncpus != -1) {
 		pcf_fanout = boot_ncpus;
@@ -451,10 +443,26 @@ init_pages_pp_maximum()
 	}
 }
 
+/*
+ * In the past, we limited the maximum pages that could be gotten to essentially
+ * 1/2 of the total pages on the system. However, this is too conservative for
+ * some cases. For example, if we want to host a large virtual machine which
+ * needs to use a significant portion of the system's memory. In practice,
+ * allowing more than 1/2 of the total pages is fine, but becomes problematic
+ * as we approach or exceed 75% of the pages on the system. Thus, we limit the
+ * maximum to 23/32 of the total pages, which is ~72%.
+ */
 void
 set_max_page_get(pgcnt_t target_total_pages)
 {
-	max_page_get = target_total_pages / 2;
+	max_page_get = (target_total_pages >> 5) * 23;
+	ASSERT3U(max_page_get, >, 0);
+}
+
+pgcnt_t
+get_max_page_get()
+{
+	return (max_page_get);
 }
 
 static pgcnt_t pending_delete;
@@ -752,7 +760,7 @@ page_lookup_create(
 	index = PAGE_HASH_FUNC(vp, off);
 	phm = NULL;
 top:
-	PAGE_HASH_SEARCH(index, pp, vp, off);
+	pp = page_hash_search(index, vp, off);
 	if (pp != NULL) {
 		VM_STAT_ADD(page_lookup_cnt[1]);
 		es = (newpp != NULL) ? 1 : 0;
@@ -786,8 +794,8 @@ top:
 		 * Reconfirm we locked the correct page.
 		 *
 		 * Both the p_vnode and p_offset *must* be cast volatile
-		 * to force a reload of their values: The PAGE_HASH_SEARCH
-		 * macro will have stuffed p_vnode and p_offset into
+		 * to force a reload of their values: The page_hash_search
+		 * function will have stuffed p_vnode and p_offset into
 		 * registers before calling page_trylock(); another thread,
 		 * actually holding the hash lock, could have changed the
 		 * page's identity in memory, but our registers would not
@@ -950,7 +958,7 @@ page_lookup_nowait(vnode_t *vp, u_offset_t off, se_t se)
 	VM_STAT_ADD(page_lookup_nowait_cnt[0]);
 
 	index = PAGE_HASH_FUNC(vp, off);
-	PAGE_HASH_SEARCH(index, pp, vp, off);
+	pp = page_hash_search(index, vp, off);
 	locked = 0;
 	if (pp == NULL) {
 top:
@@ -958,7 +966,7 @@ top:
 		locked = 1;
 		phm = PAGE_HASH_MUTEX(index);
 		mutex_enter(phm);
-		PAGE_HASH_SEARCH(index, pp, vp, off);
+		pp = page_hash_search(index, vp, off);
 	}
 
 	if (pp == NULL || PP_ISFREE(pp)) {
@@ -1020,7 +1028,7 @@ page_find(vnode_t *vp, u_offset_t off)
 	phm = PAGE_HASH_MUTEX(index);
 
 	mutex_enter(phm);
-	PAGE_HASH_SEARCH(index, pp, vp, off);
+	pp = page_hash_search(index, vp, off);
 	mutex_exit(phm);
 
 	ASSERT(pp == NULL || PAGE_LOCKED(pp) || panicstr);
@@ -1038,16 +1046,14 @@ page_find(vnode_t *vp, u_offset_t off)
 page_t *
 page_exists(vnode_t *vp, u_offset_t off)
 {
-	page_t	*pp;
 	ulong_t		index;
 
 	ASSERT(MUTEX_NOT_HELD(page_vnode_mutex(vp)));
 	VM_STAT_ADD(page_exists_cnt);
 
 	index = PAGE_HASH_FUNC(vp, off);
-	PAGE_HASH_SEARCH(index, pp, vp, off);
 
-	return (pp);
+	return (page_hash_search(index, vp, off));
 }
 
 /*
@@ -1094,7 +1100,7 @@ again:
 	phm = PAGE_HASH_MUTEX(index);
 
 	mutex_enter(phm);
-	PAGE_HASH_SEARCH(index, pp, vp, off);
+	pp = page_hash_search(index, vp, off);
 	mutex_exit(phm);
 
 	VM_STAT_ADD(page_exphcontg[1]);
@@ -1321,7 +1327,7 @@ page_exists_forreal(vnode_t *vp, u_offset_t off, uint_t *szc)
 	phm = PAGE_HASH_MUTEX(index);
 
 	mutex_enter(phm);
-	PAGE_HASH_SEARCH(index, pp, vp, off);
+	pp = page_hash_search(index, vp, off);
 	if (pp != NULL) {
 		*szc = pp->p_szc;
 		rc = 1;
@@ -1349,7 +1355,7 @@ wakeup_pcgs(void)
  * clock() on each TICK.
  */
 void
-set_freemem()
+set_freemem(void)
 {
 	struct pcf	*p;
 	ulong_t		t;
@@ -1473,6 +1479,8 @@ page_create_throttle(pgcnt_t npages, int flags)
 	uint_t	i;
 	pgcnt_t tf;	/* effective value of throttlefree */
 
+	atomic_inc_64(&n_throttle);
+
 	/*
 	 * Normal priority allocations.
 	 */
@@ -1505,7 +1513,7 @@ page_create_throttle(pgcnt_t npages, int flags)
 	tf = throttlefree -
 	    ((flags & PG_PUSHPAGE) ? pageout_reserve : 0);
 
-	cv_signal(&proc_pageout->p_cv);
+	WAKE_PAGEOUT_SCANNER(page__create__throttle);
 
 	for (;;) {
 		fm = 0;
@@ -1592,7 +1600,7 @@ checkagain:
 	}
 
 	ASSERT(proc_pageout != NULL);
-	cv_signal(&proc_pageout->p_cv);
+	WAKE_PAGEOUT_SCANNER(page__create__wait);
 
 	TRACE_2(TR_FAC_VM, TR_PAGE_CREATE_SLEEP_START,
 	    "page_create_sleep_start: freemem %ld needfree %ld",
@@ -1852,7 +1860,7 @@ page_create_get_something(vnode_t *vp, u_offset_t off, struct seg *seg,
 
 	flags &= ~PG_MATCH_COLOR;
 	locked = 0;
-#if defined(__i386) || defined(__amd64)
+#if defined(__x86)
 	flags = page_create_update_flags_x86(flags);
 #endif
 
@@ -2030,7 +2038,7 @@ page_alloc_pages(struct vnode *vp, struct seg *seg, caddr_t addr,
 	ASSERT(basepp != NULL || ppa != NULL);
 	ASSERT(basepp == NULL || ppa == NULL);
 
-#if defined(__i386) || defined(__amd64)
+#if defined(__x86)
 	while (page_chk_freelist(szc) == 0) {
 		VM_STAT_ADD(alloc_pages[8]);
 		if (anypgsz == 0 || --szc == 0)
@@ -2239,7 +2247,7 @@ page_create_va_large(vnode_t *vp, u_offset_t off, size_t bytes, uint_t flags,
 	if (nscan < desscan && freemem < minfree) {
 		TRACE_1(TR_FAC_VM, TR_PAGEOUT_CV_SIGNAL,
 		    "pageout_cv_signal:freemem %ld", freemem);
-		cv_signal(&proc_pageout->p_cv);
+		WAKE_PAGEOUT_SCANNER(va__large);
 	}
 
 	pp = rootpp;
@@ -2368,7 +2376,7 @@ page_create_va(vnode_t *vp, u_offset_t off, size_t bytes, uint_t flags,
 	if (nscan < desscan && freemem < minfree) {
 		TRACE_1(TR_FAC_VM, TR_PAGEOUT_CV_SIGNAL,
 		    "pageout_cv_signal:freemem %ld", freemem);
-		cv_signal(&proc_pageout->p_cv);
+		WAKE_PAGEOUT_SCANNER(va);
 	}
 
 	/*
@@ -2449,7 +2457,7 @@ top:
 		 */
 		phm = PAGE_HASH_MUTEX(index);
 		mutex_enter(phm);
-		PAGE_HASH_SEARCH(index, pp, vp, off);
+		pp = page_hash_search(index, vp, off);
 		if (pp == NULL) {
 			VM_STAT_ADD(page_create_new);
 			pp = npp;
@@ -2691,7 +2699,7 @@ page_free(page_t *pp, int dontneed)
 	} else {
 		PP_CLRAGED(pp);
 
-		if (!dontneed || nopageage) {
+		if (!dontneed) {
 			/* move it to the tail of the list */
 			page_list_add(pp, PG_CACHE_LIST | PG_LIST_TAIL);
 
@@ -3279,7 +3287,7 @@ top:
 	 * lock, again preventing another page from being created with
 	 * this identity.
 	 */
-	PAGE_HASH_SEARCH(index, pp, vp, off);
+	pp = page_hash_search(index, vp, off);
 	if (pp != NULL) {
 		VM_STAT_ADD(page_rename_exists);
 
@@ -3564,11 +3572,6 @@ page_hashout(page_t *pp, kmutex_t *phm)
 	TRACE_2(TR_FAC_VM, TR_PAGE_HASHOUT,
 	    "page_hashout:pp %p vp %p", pp, vp);
 
-	/* Kernel probe */
-	TNF_PROBE_2(page_unmap, "vm pagefault", /* CSTYLED */,
-	    tnf_opaque, vnode, vp,
-	    tnf_offset, offset, pp->p_offset);
-
 	/*
 	 *
 	 */
@@ -3649,7 +3652,7 @@ page_add_common(page_t **ppp, page_t *pp)
 void
 page_sub(page_t **ppp, page_t *pp)
 {
-	ASSERT((PP_ISFREE(pp)) ? 1 :
+	ASSERT(pp != NULL && (PP_ISFREE(pp)) ? 1 :
 	    (PAGE_EXCL(pp)) || (PAGE_SHARED(pp) && page_iolock_assert(pp)));
 
 	if (*ppp == NULL || pp == NULL) {
@@ -3915,29 +3918,68 @@ page_pp_unlock(
 }
 
 /*
+ * This routine reserves availrmem for npages.
+ * It returns 1 on success or 0 on failure.
+ *
+ * flags: KM_NOSLEEP or KM_SLEEP
+ * cb_wait: called to induce delay when KM_SLEEP reservation requires kmem
+ *     reaping to potentially succeed.  If the callback returns 0, the
+ *     reservation attempts will cease to repeat and page_xresv() may
+ *     report a failure.  If cb_wait is NULL, the traditional delay(hz/2)
+ *     behavior will be used while waiting for a reap.
+ */
+int
+page_xresv(pgcnt_t npages, uint_t flags, int (*cb_wait)(void))
+{
+	mutex_enter(&freemem_lock);
+	if (availrmem >= tune.t_minarmem + npages) {
+		availrmem -= npages;
+		mutex_exit(&freemem_lock);
+		return (1);
+	} else if ((flags & KM_NOSLEEP) != 0) {
+		mutex_exit(&freemem_lock);
+		return (0);
+	}
+	mutex_exit(&freemem_lock);
+
+	/*
+	 * We signal memory pressure to the system by elevating 'needfree'.
+	 * Processes such as kmem reaping, pageout, and ZFS ARC shrinking can
+	 * then respond to said pressure by freeing pages.
+	 */
+	page_needfree(npages);
+	int nobail = 1;
+	do {
+		kmem_reap();
+		if (cb_wait == NULL) {
+			delay(hz >> 2);
+		} else {
+			nobail = cb_wait();
+		}
+
+		mutex_enter(&freemem_lock);
+		if (availrmem >= tune.t_minarmem + npages) {
+			availrmem -= npages;
+			mutex_exit(&freemem_lock);
+			page_needfree(-(spgcnt_t)npages);
+			return (1);
+		}
+		mutex_exit(&freemem_lock);
+	} while (nobail != 0);
+	page_needfree(-(spgcnt_t)npages);
+
+	return (0);
+}
+
+/*
  * This routine reserves availrmem for npages;
- * 	flags: KM_NOSLEEP or KM_SLEEP
- * 	returns 1 on success or 0 on failure
+ *	flags: KM_NOSLEEP or KM_SLEEP
+ *	returns 1 on success or 0 on failure
  */
 int
 page_resv(pgcnt_t npages, uint_t flags)
 {
-	mutex_enter(&freemem_lock);
-	while (availrmem < tune.t_minarmem + npages) {
-		if (flags & KM_NOSLEEP) {
-			mutex_exit(&freemem_lock);
-			return (0);
-		}
-		mutex_exit(&freemem_lock);
-		page_needfree(npages);
-		kmem_reap();
-		delay(hz >> 2);
-		page_needfree(-(spgcnt_t)npages);
-		mutex_enter(&freemem_lock);
-	}
-	availrmem -= npages;
-	mutex_exit(&freemem_lock);
-	return (1);
+	return (page_xresv(npages, flags, NULL));
 }
 
 /*
@@ -3974,7 +4016,7 @@ void
 page_pp_useclaim(
 	page_t *opp,		/* original page frame losing lock */
 	page_t *npp,		/* new page frame gaining lock */
-	uint_t	write_perm) 	/* set if vpage has PROT_WRITE */
+	uint_t write_perm)	/* set if vpage has PROT_WRITE */
 {
 	int payback = 0;
 	int nidx, oidx;
@@ -4312,8 +4354,6 @@ retry:
 	return (pp);
 }
 
-#define	SYNC_PROGRESS_NPAGES	1000
-
 /*
  * Returns a count of dirty pages that are in the process
  * of being written out.  If 'cleanit' is set, try to push the page.
@@ -4324,21 +4364,10 @@ page_busy(int cleanit)
 	page_t *page0 = page_first();
 	page_t *pp = page0;
 	pgcnt_t nppbusy = 0;
-	int counter = 0;
 	u_offset_t off;
 
 	do {
 		vnode_t *vp = pp->p_vnode;
-
-		/*
-		 * Reset the sync timeout. The page list is very long
-		 * on large memory systems.
-		 */
-		if (++counter > SYNC_PROGRESS_NPAGES) {
-			counter = 0;
-			vfs_syncprogress();
-		}
-
 		/*
 		 * A page is a candidate for syncing if it is:
 		 *
@@ -4378,7 +4407,6 @@ page_busy(int cleanit)
 		}
 	} while ((pp = page_next(pp)) != page0);
 
-	vfs_syncprogress();
 	return (nppbusy);
 }
 
@@ -4742,7 +4770,7 @@ group_page_unlock(page_t *pp)
 
 /*
  * returns
- * 0 		: on success and *nrelocp is number of relocated PAGESIZE pages
+ * 0		: on success and *nrelocp is number of relocated PAGESIZE pages
  * ERANGE	: this is not a base page
  * EBUSY	: failure to get locks on the page/pages
  * ENOMEM	: failure to obtain replacement pages
@@ -4766,7 +4794,7 @@ do_page_relocate(
 	page_t *targ;
 	page_t *pl = NULL;
 	uint_t ppattr;
-	pfn_t   pfn, repl_pfn;
+	pfn_t   pfn, repl_pfn = 0;
 	uint_t	szc;
 	spgcnt_t npgs, i;
 	int repl_contig = 0;
@@ -4883,10 +4911,6 @@ do_page_relocate(
 		VM_STAT_ADD(vmm_vmstats.ppr_relocok[szc]);
 		return (0);
 	}
-#else
-#if defined(lint)
-	dofree = dofree;
-#endif
 #endif
 
 	first_repl = repl;
@@ -5394,7 +5418,7 @@ page_mark_migrate(struct seg *seg, caddr_t addr, size_t len,
 	ulong_t		an_idx;
 	anon_sync_obj_t	cookie;
 
-	ASSERT(seg->s_as && AS_LOCK_HELD(seg->s_as, &seg->s_as->a_lock));
+	ASSERT(seg->s_as && AS_LOCK_HELD(seg->s_as));
 
 	/*
 	 * Don't do anything if don't need to do lgroup optimizations
@@ -5572,7 +5596,7 @@ page_migrate(
 	spgcnt_t	i;
 	uint_t		pszc;
 
-	ASSERT(seg->s_as && AS_LOCK_HELD(seg->s_as, &seg->s_as->a_lock));
+	ASSERT(seg->s_as && AS_LOCK_HELD(seg->s_as));
 
 	while (npages > 0) {
 		pp = *ppa;
@@ -5698,7 +5722,8 @@ next:
 	}
 }
 
-#define	MAX_CNT	60	/* max num of iterations */
+uint_t page_reclaim_maxcnt = 60; /* max total iterations */
+uint_t page_reclaim_nofree_maxcnt = 3; /* max iterations without progress */
 /*
  * Reclaim/reserve availrmem for npages.
  * If there is not enough memory start reaping seg, kmem caches.
@@ -5714,15 +5739,22 @@ int
 page_reclaim_mem(pgcnt_t npages, pgcnt_t epages, int adjust)
 {
 	int	i = 0;
+	int	i_nofree = 0;
 	int	ret = 0;
 	pgcnt_t	deficit;
-	pgcnt_t old_availrmem;
+	pgcnt_t old_availrmem = 0;
 
 	mutex_enter(&freemem_lock);
-	old_availrmem = availrmem - 1;
-	while ((availrmem < tune.t_minarmem + npages + epages) &&
-	    (old_availrmem < availrmem) && (i++ < MAX_CNT)) {
-		old_availrmem = availrmem;
+	while (availrmem < tune.t_minarmem + npages + epages &&
+	    i++ < page_reclaim_maxcnt) {
+		/* ensure we made some progress in the last few iterations */
+		if (old_availrmem < availrmem) {
+			old_availrmem = availrmem;
+			i_nofree = 0;
+		} else if (i_nofree++ >= page_reclaim_nofree_maxcnt) {
+			break;
+		}
+
 		deficit = tune.t_minarmem + npages + epages - availrmem;
 		mutex_exit(&freemem_lock);
 		page_needfree(deficit);

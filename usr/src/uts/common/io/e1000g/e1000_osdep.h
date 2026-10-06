@@ -21,6 +21,8 @@
 /*
  * Copyright 2010 Sun Microsystems, Inc.  All rights reserved.
  * Use is subject to license terms of the CDDLv1.
+ *
+ * Copyright 2016 Joyent, Inc.
  */
 
 #ifndef _E1000_OSDEP_H
@@ -48,9 +50,11 @@ extern "C" {
 #include <sys/note.h>
 #include <sys/mutex.h>
 #include <sys/pci_cap.h>
+#include <sys/stdbool.h>
 #include "e1000g_debug.h"
 
 #define	usec_delay(x)		drv_usecwait(x)
+#define	usec_delay_irq		usec_delay
 #define	msec_delay(x)		drv_usecwait(x * 1000)
 #define	msec_delay_irq		msec_delay
 
@@ -75,8 +79,6 @@ extern "C" {
 
 #define	OS_DEP(hw)		((struct e1000g_osdep *)((hw)->back))
 
-#define	false		0
-#define	true		1
 #define	FALSE		false
 #define	TRUE		true
 
@@ -102,8 +104,23 @@ extern "C" {
  */
 #define	E1000_WRITE_FLUSH(a)	(void)E1000_READ_REG(a, E1000_STATUS)
 
+/*
+ * Note, for all of the following register defines, it's important that these be
+ * in do {} while loops that only run a single time. Previously they were formed
+ * as normal blocks. Unfortunately this would fail in the following form which
+ * is used in the common code:
+ *
+ * if (cond)
+ *	E1000_WRITE_REG
+ * else
+ *	...
+ *
+ * When the E1000_WRITE_REG macros was missing the do keyword, the compiler
+ * would end up associating the outer brace of the block with the if statement
+ * and thus the else clause would get left behind.
+ */
 #define	E1000_WRITE_REG(hw, reg, value)	\
-{\
+do { \
 	if ((hw)->mac.type != e1000_82542) \
 		ddi_put32((OS_DEP(hw))->reg_handle, \
 		    (uint32_t *)((uintptr_t)(hw)->hw_addr + reg), \
@@ -113,7 +130,7 @@ extern "C" {
 		    (uint32_t *)((uintptr_t)(hw)->hw_addr + \
 		    e1000_translate_register_82542(reg)), \
 		    value); \
-}
+} while (0)
 
 #define	E1000_READ_REG(hw, reg) (\
 	((hw)->mac.type != e1000_82542) ? \
@@ -124,7 +141,7 @@ extern "C" {
 		e1000_translate_register_82542(reg))))
 
 #define	E1000_WRITE_REG_ARRAY(hw, reg, offset, value) \
-{\
+do {\
 	if ((hw)->mac.type != e1000_82542) \
 		ddi_put32((OS_DEP(hw))->reg_handle, \
 		    (uint32_t *)((uintptr_t)(hw)->hw_addr + \
@@ -135,7 +152,7 @@ extern "C" {
 		    (uint32_t *)((uintptr_t)(hw)->hw_addr + \
 		    e1000_translate_register_82542(reg) + \
 		    ((offset) << 2)), value); \
-}
+} while (0)
 
 #define	E1000_READ_REG_ARRAY(hw, reg, offset) (\
 	((hw)->mac.type != e1000_82542) ? \
@@ -185,7 +202,6 @@ typedef	uint8_t		u8;
 typedef	uint16_t	u16;
 typedef	uint32_t	u32;
 typedef	uint64_t	u64;
-typedef boolean_t	bool;
 
 #define	__le16 u16
 #define	__le32 u32

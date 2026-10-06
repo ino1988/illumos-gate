@@ -9,24 +9,24 @@
 # http://www.illumos.org/license/CDDL.
 #
 #
-# Copyright (c) 2014 Racktop Systems.
+# Copyright 2014, OmniTI Computer Consulting, Inc. All rights reserved.
+# Copyright 2016 RackTop Systems.
 #
 
-MODULE = Intrs
+include $(SRC)/Makefile.master
 
-include $(SRC)/cmd/perl/Makefile.perl
+SUBDIRS=
+$(BUILDPERL32)SUBDIRS += $(MACH)
+$(BUILDPERL64)SUBDIRS += $(MACH64)
 
-CERRWARN += -_gcc=-Wno-unused-variable
+all :=		TARGET = all
+install :=	TARGET = install
+clean :=	TARGET = clean
+clobber :=	TARGET = clobber
 
-MAPFILES = mapfile-vers
+all install clean clobber: $(SUBDIRS)
 
-include $(SRC)/cmd/perl/Makefile.targ
+$(SUBDIRS): FRC
+	@cd $@; pwd; $(MAKE) $(TARGET)
 
-.KEEP_STATE:
-
-all: $(PERLEXT) $(PERLMOD)
-
-install: $(ROOTPERLEXT) $(ROOTPERLMOD)
-
-clean clobber:
-	$(RM) -r $(MACH)
+FRC:

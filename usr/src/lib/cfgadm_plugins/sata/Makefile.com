@@ -37,15 +37,13 @@ ROOTLIBDIR64=	$(ROOTLIBDIR)/$(MACH64)
 
 LIBS=	$(DYNLIB)
 
-LINTFLAGS +=	-DDEBUG
-LINTFLAGS64 +=	-DDEBUG
 
 CFLAGS +=	$(CCVERBOSE)
 CFLAGS64 +=	$(CCVERBOSE)
 
 CERRWARN +=	-_gcc=-Wno-parentheses
 CERRWARN +=	-_gcc=-Wno-char-subscripts
-CERRWARN +=	-_gcc=-Wno-uninitialized
+CERRWARN +=	$(CNOWARN_UNINIT)
 
 LDLIBS +=	-lc -ldevice -ldevinfo -lrcm -lnvpair
 
@@ -53,7 +51,6 @@ LDLIBS +=	-lc -ldevice -ldevinfo -lrcm -lnvpair
 
 all:	$(LIBS)
 
-lint:	lintcheck
 
 # Install rules
 

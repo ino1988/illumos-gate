@@ -27,7 +27,7 @@
  */
 
 /*	Copyright (c) 1983, 1984, 1985, 1986, 1987, 1988, 1989 AT&T	*/
-/*	  All Rights Reserved  	*/
+/*	  All Rights Reserved	*/
 
 /*
  * University Copyright- Copyright (c) 1982, 1986, 1988
@@ -54,7 +54,7 @@ extern "C" {
 
 /*
  * Note this structure will need to be expanded to handle data
- * related to connection orientated transports.
+ * related to connection oriented transports.
  */
 typedef struct tiuser {
 	struct	file *fp;
@@ -98,6 +98,7 @@ extern int	t_kconnect(TIUSER *, struct t_call *, struct t_call *);
 extern int	t_kfree(TIUSER *, char *, int);
 extern int	t_kgetstate(TIUSER *, int *);
 extern int	t_kopen(struct file *, dev_t, int, TIUSER **, struct cred *);
+extern int	t_koptmgmt(TIUSER *, struct t_optmgmt *, struct t_optmgmt *);
 extern int	t_krcvudata(TIUSER *, struct t_kunitdata *, int *, int *);
 extern int	t_ksndudata(TIUSER *, struct t_kunitdata *, frtn_t *);
 extern int	t_kspoll(TIUSER *, int, int, int *);

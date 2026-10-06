@@ -21,10 +21,12 @@
 
 /*
  * Copyright (c) 1988, 2010, Oracle and/or its affiliates. All rights reserved.
+ * Copyright 2021 Joyent, Inc.
+ * Copyright 2026 Oxide Computer Company
  */
 
 /*	Copyright (c) 1984, 1986, 1987, 1988, 1989 AT&T	*/
-/*	  All Rights Reserved  	*/
+/*	  All Rights Reserved	*/
 
 #ifndef _SYS_PROC_H
 #define	_SYS_PROC_H
@@ -47,6 +49,8 @@
 #include <sys/list.h>
 #include <sys/avl.h>
 #include <sys/door_impl.h>
+#include <sys/signalfd.h>
+#include <sys/secflags.h>
 
 #ifdef	__cplusplus
 extern "C" {
@@ -150,7 +154,7 @@ typedef struct	proc {
 	char	p_stat;			/* status of process */
 	char	p_wcode;		/* current wait code */
 	ushort_t p_pidflag;		/* flags protected only by pidlock */
-	int 	p_wdata;		/* current wait return value */
+	int	p_wdata;		/* current wait return value */
 	pid_t	p_ppid;			/* process id of parent */
 	struct	proc	*p_link;	/* forward link */
 	struct	proc	*p_parent;	/* ptr to parent process */
@@ -159,16 +163,16 @@ typedef struct	proc {
 	struct	proc	*p_psibling;	/* ptr to prev sibling proc on chain */
 	struct	proc	*p_sibling_ns;	/* prt to siblings with new state */
 	struct	proc	*p_child_ns;	/* prt to children with new state */
-	struct	proc 	*p_next;	/* active chain link next */
-	struct	proc 	*p_prev;	/* active chain link prev */
-	struct	proc 	*p_nextofkin;	/* gets accounting info at exit */
-	struct	proc 	*p_orphan;
-	struct	proc 	*p_nextorph;
+	struct	proc	*p_next;	/* active chain link next */
+	struct	proc	*p_prev;	/* active chain link prev */
+	struct	proc	*p_nextofkin;	/* gets accounting info at exit */
+	struct	proc	*p_orphan;
+	struct	proc	*p_nextorph;
 	struct	proc	*p_pglink;	/* process group hash chain link next */
 	struct	proc	*p_ppglink;	/* process group hash chain link prev */
 	struct	sess	*p_sessp;	/* session information */
-	struct	pid 	*p_pidp;	/* process ID info */
-	struct	pid 	*p_pgidp;	/* process group ID info */
+	struct	pid	*p_pidp;	/* process ID info */
+	struct	pid	*p_pgidp;	/* process group ID info */
 	/*
 	 * Fields protected by p_lock
 	 */
@@ -197,6 +201,7 @@ typedef struct	proc {
 	k_sigset_t p_extsig;		/* signals sent from another contract */
 	k_sigset_t p_ignore;		/* ignore when generated */
 	k_sigset_t p_siginfo;		/* gets signal info with signal */
+	void *p_sigfd;			/* signalfd support state */
 	struct sigqueue *p_sigqueue;	/* queued siginfo structures */
 	struct sigqhdr *p_sigqhdr;	/* hdr to sigqueue structure pool */
 	struct sigqhdr *p_signhdr;	/* hdr to signotify structure pool */
@@ -212,7 +217,7 @@ typedef struct	proc {
 	 * Per process lwp and kernel thread stuff
 	 */
 	id_t	p_lwpid;		/* most recently allocated lwpid */
-	int 	p_lwpcnt;		/* number of lwps in this process */
+	int	p_lwpcnt;		/* number of lwps in this process */
 	int	p_lwprcnt;		/* number of not stopped lwps */
 	int	p_lwpdaemon;		/* number of TP_DAEMON lwps */
 	int	p_lwpwait;		/* number of lwps in lwp_wait() */
@@ -247,8 +252,15 @@ typedef struct	proc {
 	kmutex_t p_maplock;		/* lock for pr_mappage() */
 	struct	proc  *p_rlink;		/* linked list for server */
 	kcondvar_t p_srwchan_cv;
-	size_t	p_stksize;		/* process stack size in bytes */
-	uint_t	p_stkpageszc;		/* preferred stack max page size code */
+
+	/*
+	 * Stack sizing and guard information.
+	 * Generally protected by as_rangelock()
+	 */
+	size_t		p_stksize;	/* process stack size in bytes */
+	uint_t		p_stkpageszc;	/* preferred stack max page size code */
+	uintptr_t	p_stkg_start;	/* start of stack guard */
+	uintptr_t	p_stkg_end;	/* end of stack guard */
 
 	/*
 	 * Microstate accounting, resource usage, and real-time profiling
@@ -280,11 +292,6 @@ typedef struct	proc {
 	char			p_unref_thread;	/* unref thread created */
 
 	/*
-	 * Kernel probes
-	 */
-	uchar_t			p_tnf_flags;
-
-	/*
 	 * Solaris Audit
 	 */
 	struct p_audit_data	*p_audit_data; /* per process audit structure */
@@ -297,12 +304,14 @@ typedef struct	proc {
 	 */
 	kmutex_t	p_ldtlock;	/* protects the following fields */
 	user_desc_t	*p_ldt;		/* Pointer to private LDT */
-	system_desc_t	p_ldt_desc;	/* segment descriptor for private LDT */
+	uint64_t	p_unused1;	/* no longer used */
+	uint64_t	p_unused2;	/* no longer used */
 	ushort_t	p_ldtlimit;	/* highest selector used */
 #endif
 	size_t p_swrss;			/* resident set size before last swap */
 	struct aio	*p_aio;		/* pointer to async I/O struct */
 	struct itimer	**p_itimer;	/* interval timers */
+	uint_t		p_itimer_sz;	/* max allocated interval timers */
 	timeout_id_t	p_alarmid;	/* alarm's timeout id */
 	caddr_t		p_usrstack;	/* top of the process stack */
 	uint_t		p_stkprot;	/* stack memory protection */
@@ -342,11 +351,14 @@ typedef struct	proc {
 	kcondvar_t	p_poolcv;	/* synchronization with pools */
 	uint_t		p_poolcnt;	/* # threads inside pool barrier */
 	uint_t		p_poolflag;	/* pool-related flags (see below) */
+	uint_t		p_upanicflag;	/* upanic-related flags (see below) */
+	void		*p_upanic;	/* optional upanic data */
 	uintptr_t	p_portcnt;	/* event ports counter */
 	struct zone	*p_zone;	/* zone in which process lives */
 	struct vnode	*p_execdir;	/* directory that p_exec came from */
 	struct brand	*p_brand;	/* process's brand  */
 	void		*p_brand_data;	/* per-process brand state */
+	psecflags_t	p_secflags;	/* per-process security flags */
 
 	/* additional lock to protect p_sessp (but not its contents) */
 	kmutex_t p_splock;
@@ -355,6 +367,13 @@ typedef struct	proc {
 	rctl_qty_t	p_crypto_mem;	/* /dev/crypto memory charged to proc */
 					/* protected by p_lock */
 	clock_t	p_ttime;		/* buffered task time */
+
+	/*
+	 * Spawn handshake parameters; set at creation for a spawn(2) child
+	 * and cleared by the child once it has reported back to the parent.
+	 * Only ever accessed by the child's single LWP thereafter.
+	 */
+	struct kspawn_param *p_spawn_ksp;
 
 	/*
 	 * The user structure
@@ -453,6 +472,7 @@ extern struct pid pid0;		/* p0's pid */
 #define	CLDCONT		0x0002	/* child has notified parent of CLD_CONTINUED */
 #define	CLDNOSIGCHLD	0x0004	/* do not post SIGCHLD when child terminates */
 #define	CLDWAITPID	0x0008	/* only waitid(P_PID, pid) can reap the child */
+#define	CLDEVAPORATE	0x0010	/* disappear on exit; no SIGCHLD, no zombie */
 
 /* p_proc_flag codes -- these flags are mostly private to /proc */
 #define	P_PR_TRACE	0x0001	/* signal, fault or syscall tracing via /proc */
@@ -485,6 +505,7 @@ extern struct pid pid0;		/* p0's pid */
 #define	SEXTKILLED 0x00000800	/* SKILLED is from another contract */
 #define	SUGID	   0x00002000	/* process was result of set[ug]id exec */
 #define	SEXECED	   0x00004000	/* this process has execed */
+#define	SSPAWNING  0x00008000	/* spawn(2) child that has not yet exec'd */
 #define	SJCTL	   0x00010000	/* SIGCHLD sent when children stop/continue */
 #define	SNOWAIT    0x00020000	/* children never become zombies */
 #define	SVFORK	   0x00040000	/* child of vfork that has not yet exec'd */
@@ -509,6 +530,14 @@ extern struct pid pid0;		/* p0's pid */
  */
 #define	PBWAIT		0x0001  /* process should wait outside fork/exec/exit */
 #define	PEXITED		0x0002  /* process exited and about to become zombie */
+
+/*
+ * p_upanicflag codes
+ */
+#define	P_UPF_PANICKED	0x0001
+#define	P_UPF_HAVEMSG	0x0002
+#define	P_UPF_TRUNCMSG	0x0004
+#define	P_UPF_INVALMSG	0x0008
 
 /* Macro to convert proc pointer to a user block pointer */
 #define	PTOU(p)		(&(p)->p_user)
@@ -685,7 +714,7 @@ extern	kthread_t	*thread_create(
 	void		(*proc)(),
 	void		*arg,
 	size_t		len,
-	proc_t 		*pp,
+	proc_t		*pp,
 	int		state,
 	pri_t		pri);
 extern	void	thread_exit(void) __NORETURN;
@@ -693,10 +722,27 @@ extern	void	thread_free(kthread_t *);
 extern	void	thread_rele(kthread_t *);
 extern	void	thread_join(kt_did_t);
 extern	int	reaper(void);
-extern	void	installctx(kthread_t *, void *, void (*)(), void (*)(),
-    void (*)(), void (*)(), void (*)(), void (*)());
-extern	int	removectx(kthread_t *, void *, void (*)(), void (*)(),
-    void (*)(), void (*)(), void (*)(), void (*)());
+
+#define	CTXOP_TPL_REV	1
+
+struct ctxop_template {
+	uint32_t	ct_rev;
+	uint32_t	ct_pad;
+	void		(*ct_save)(void *);
+	void		(*ct_restore)(void *);
+	void		(*ct_fork)(void *, void *);
+	void		(*ct_lwp_create)(void *, void *);
+	void		(*ct_exit)(void *);
+	void		(*ct_free)(void *, int);
+};
+
+extern struct ctxop *ctxop_allocate(const struct ctxop_template *, void *);
+extern void ctxop_free(struct ctxop *);
+extern void ctxop_attach(kthread_t *, struct ctxop *);
+extern void ctxop_detach(kthread_t *, struct ctxop *);
+extern void ctxop_install(kthread_t *, const struct ctxop_template *, void *);
+extern int ctxop_remove(kthread_t *, const struct ctxop_template *, void *);
+
 extern	void	savectx(kthread_t *);
 extern	void	restorectx(kthread_t *);
 extern	void	forkctx(kthread_t *, kthread_t *);
@@ -728,7 +774,7 @@ extern	int	tsd_agent_set(kthread_t *, uint_t, void *);
 /* lwp function prototypes */
 
 extern kthread_t *lwp_kernel_create(proc_t *, void (*)(), void *, int, pri_t);
-extern	klwp_t 		*lwp_create(
+extern	klwp_t		*lwp_create(
 	void		(*proc)(),
 	caddr_t		arg,
 	size_t		len,
@@ -754,6 +800,7 @@ extern	void	stoplwp(void);
 extern	int	holdlwps(int);
 extern	int	holdwatch(void);
 extern	void	pokelwps(proc_t *);
+extern	void	runlwps(proc_t *, ushort_t);
 extern	void	continuelwps(proc_t *);
 extern	int	exitlwps(int);
 extern	void	lwp_ctmpl_copy(klwp_t *, klwp_t *);
@@ -766,6 +813,7 @@ extern	void	lwp_freeregs(klwp_t *, int);
 extern	caddr_t	lwp_stk_init(klwp_t *, caddr_t);
 extern	void	lwp_stk_cache_init(void);
 extern	void	lwp_stk_fini(klwp_t *);
+extern	void	lwp_fp_init(klwp_t *);
 extern	void	lwp_installctx(klwp_t *);
 extern	void	lwp_rtt(void);
 extern	void	lwp_rtt_initial(void);

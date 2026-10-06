@@ -22,6 +22,7 @@
 # Copyright 2008 Sun Microsystems, Inc.  All rights reserved.
 # Use is subject to license terms.
 #
+# Copyright (c) 2018, Joyent, Inc.
 
 LIBRARY= db2.a
 VERS= .1
@@ -36,7 +37,7 @@ DB2_OBJS= \
 	kdb_db2.o \
 	kdb_xdr.o \
 	pol_xdr.o
- 
+
 OBJECTS= $(DB2_OBJS)
 
 # include library definitions
@@ -53,7 +54,7 @@ POFILES = generic.po
 #override liblink
 INS.liblink=	-$(RM) $@; $(SYMLINK) $(LIBLINKS)$(VERS) $@
 
-CPPFLAGS += 	-DHAVE_CONFIG_H -DHAVE_BT_RSEQ \
+CPPFLAGS +=	-DHAVE_CONFIG_H -DHAVE_BT_RSEQ \
 		-I$(SRC)/cmd/krb5/iprop \
 		-I$(SRC)/lib/krb5 \
 		-I$(SRC)/lib/krb5/kdb \
@@ -67,7 +68,10 @@ CFLAGS +=	$(CCVERBOSE)
 CERRWARN +=	-_gcc=-Wno-unused-variable
 CERRWARN +=	-_gcc=-Wno-unused-function
 CERRWARN +=	-_gcc=-Wno-parentheses
-CERRWARN +=	-_gcc=-Wno-uninitialized
+CERRWARN +=	$(CNOWARN_UNINIT)
+
+# not linted
+SMATCH=off
 
 DYNFLAGS +=	$(KRUNPATH) $(KERBRUNPATH) $(KMECHLIB)
 LDLIBS +=	-L $(ROOTLIBDIR) -ldb2 -lkdb -lkadm5srv -lc -lnsl
@@ -76,7 +80,6 @@ LDLIBS +=	-L $(ROOTLIBDIR) -ldb2 -lkdb -lkadm5srv -lc -lnsl
 
 all:	$(LIBS)
 
-lint:	lintcheck
 
 # include library targets
 include $(SRC)/lib/krb5/Makefile.targ

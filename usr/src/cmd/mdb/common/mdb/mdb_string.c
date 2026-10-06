@@ -22,9 +22,8 @@
 /*
  * Copyright 2005 Sun Microsystems, Inc.  All rights reserved.
  * Use is subject to license terms.
+ * Copyright 2021 Oxide Computer Company
  */
-
-#pragma ident	"%Z%%M%	%I%	%E% SMI"
 
 #include <netinet/in.h>
 #include <limits.h>
@@ -110,7 +109,7 @@ numtostr(uintmax_t uvalue, int base, uint_t flags)
  * error message and longjmp back to the main loop using yyerror().
  */
 uintmax_t
-strtonum(const char *s, int base)
+mdb_strtonum(const char *s, int base)
 {
 	uintmax_t multmax = (uintmax_t)ULLONG_MAX / (uintmax_t)(uint_t)base;
 	uintmax_t val = 0;
@@ -133,6 +132,9 @@ strtonum(const char *s, int base)
 	for (c = *++s; c != '\0'; c = *++s) {
 		if (val > multmax)
 			goto oflow;
+
+		if (c == '_')
+			continue;
 
 		if ((i = CTOI(c)) >= base)
 			yyerror("digit '%c' is invalid in current base\n", c);

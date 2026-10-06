@@ -24,6 +24,9 @@
  * Use is subject to license terms.
  *
  * Copyright 2011 Nexenta Systems, Inc.  All rights reserved.
+ * Copyright 2021 Joyent, Inc.
+ * Copyright 2025 Oxide Computer Company
+ * Copyright 2023 RackTop Systems, Inc.
  */
 
 #ifndef	_SNOOP_H
@@ -69,6 +72,19 @@ extern "C" {
 #define	MAXLINE		(1088)		/* max len of detail line */
 
 /*
+ * Transient port structure. See TFTP interpreter.
+ */
+struct ttable {
+	int t_port;
+	int blksize;
+	int (*t_proc)(int, void *, int);
+};
+
+extern int add_transient(int port, int (*proc)(int, void *, int));
+extern struct ttable *is_transient(int port);
+extern void del_transient(int port);
+
+/*
  * The RPC XID cache structure.
  * When analyzing RPC protocols we
  * have to cache the xid of the RPC
@@ -87,7 +103,7 @@ extern "C" {
  * argument is interpreted.
  */
 #define	XID_CACHE_SIZE 256
-struct cache_struct {
+extern struct cache_struct {
 	int xid_num;	/* RPC transaction id */
 	int xid_frame;	/* Packet number */
 	int xid_prog;	/* RPC program number */
@@ -97,6 +113,26 @@ struct cache_struct {
 	int xid_gss_service; /* none, integ, priv */
 } xid_cache[XID_CACHE_SIZE];
 
+extern char *tkp, *sav_tkp;
+extern char *token;
+extern enum tokentype {
+	EOL,
+	ALPHA,
+	NUMBER,
+	FIELD,
+	ADDR_IP,
+	ADDR_ETHER,
+	SPECIAL,
+	ADDR_IP6,
+	ADDR_AT
+} tokentype;
+extern uint_t tokenval;
+
+enum direction { ANY, TO, FROM };
+extern enum direction dir;
+
+extern int eaddr;	/* need ethernet addr */
+extern int opstack;	/* operand stack depth */
 
 /*
  * The following macros advance the pointer passed to them.  They
@@ -180,11 +216,12 @@ extern void load_names(char *);
 extern void cap_write(struct sb_hdr *, char *, int, int);
 extern void cap_open_read(const char *);
 extern void cap_open_write(const char *);
+extern void cap_open_wr_multi(const char *, size_t, off_t);
 extern void cap_read(int, int, int, void (*)(), int);
 extern void cap_close(void);
 extern boolean_t open_datalink(dlpi_handle_t *, const char *);
 extern void init_datalink(dlpi_handle_t, ulong_t, ulong_t, struct timeval *,
-    struct Pf_ext_packetfilt *);
+    struct Pf_ext_packetfilt *, int direction);
 extern void net_read(dlpi_handle_t, size_t, int, void (*)(), int);
 extern void click(int);
 extern void show_pktinfo(int, int, char *, char *, struct timeval *,
@@ -243,14 +280,14 @@ struct dhcp;
 extern int interpret_dhcp(int, struct dhcp *, int);
 extern int interpret_dhcpv6(int, const uint8_t *, int);
 struct tftphdr;
-extern int interpret_tftp(int, struct tftphdr *, int);
+extern int interpret_tftp(int, void *, int);
 extern int interpret_http(int, char *, int);
 struct ntpdata;
 extern int interpret_ntp(int, struct ntpdata *, int);
 extern void interpret_netbios_ns(int, uchar_t *, int);
 extern void interpret_netbios_datagram(int, uchar_t *, int);
 extern void interpret_netbios_ses(int, uchar_t *, int);
-extern void interpret_slp(int, char *, int);
+extern int interpret_slp(int, void *, int);
 struct rip;
 extern int interpret_rip(int, struct rip *, int);
 struct rip6;
@@ -260,6 +297,7 @@ extern int interpret_socks_reply(int, char *, int);
 extern int interpret_trill(int, struct ether_header **, char *, int *);
 extern int interpret_isis(int, char *, int, boolean_t);
 extern int interpret_bpdu(int, char *, int);
+extern int interpret_vxlan(int, char *, int);
 extern void init_ldap(void);
 extern boolean_t arp_for_ether(char *, struct ether_addr *);
 extern char *ether_ouiname(uint32_t);
@@ -293,7 +331,7 @@ typedef uint_t (headerlen_fn_t)(char *, size_t);
 typedef struct interface {
 	uint_t		mac_type;
 	uint_t		mtu_size;
-	uint_t  	network_type_offset;
+	uint_t		network_type_offset;
 	size_t		network_type_len;
 	uint_t		network_type_ip;
 	uint_t		network_type_ipv6;
@@ -313,7 +351,12 @@ extern char *prot_title;
 extern unsigned int encap_levels, total_encap_levels;
 
 extern int quitting;
-extern boolean_t Iflg, Pflg, rflg;
+extern boolean_t Iflg, Pflg, fflg, rflg;
+
+/* Packet capture direction. */
+#define	DIR_INOUT	0
+#define	DIR_IN		1
+#define	DIR_OUT		2
 
 /*
  * Global error recovery routine: used to reset snoop variables after

@@ -25,6 +25,10 @@
  * Copyright (c) 2011 Bayard G. Bell. All rights reserved.
  */
 
+/*
+ * Copyright 2023 Oxide Computer Company
+ */
+
 
 #include <sys/types.h>
 #include <sys/conf.h>
@@ -806,7 +810,7 @@ sysctrl_attach(dev_info_t *devi, ddi_attach_cmd_t cmd)
 	 * perform initialization to allow setting of powerfail-time
 	 */
 	if ((dip = ddi_find_devinfo("options", -1, 0)) == NULL)
-		softsp->options_nodeid = (pnode_t)NULL;
+		softsp->options_nodeid = (pnode_t)0;
 	else
 		softsp->options_nodeid = (pnode_t)ddi_get_nodeid(dip);
 
@@ -1015,9 +1019,9 @@ sysctrl_detach(dev_info_t *devi, ddi_detach_cmd_t cmd)
 
 	rdip = ddi_root_node();
 
-	ndi_devi_enter(rdip, &circ);
+	ndi_devi_enter(rdip);
 	ddi_walk_devs(ddi_get_child(rdip), sysctrl_hold_rele_branches, &arg);
-	ndi_devi_exit(rdip, circ);
+	ndi_devi_exit(rdip);
 
 	sysctrl_ddi_branch_init = 0;
 
@@ -1034,7 +1038,6 @@ sysctrl_open(dev_t *devp, int flag, int otyp, cred_t *credp)
 	int		instance;
 	int		slot;
 	dev_t		dev;
-	int		circ;
 	dev_info_t	*rdip;
 	struct sysc_hold arg = {0};
 	struct sysctrl_soft_state *softsp;
@@ -1081,10 +1084,10 @@ sysctrl_open(dev_t *devp, int flag, int otyp, cred_t *credp)
 
 		rdip = ddi_root_node();
 
-		ndi_devi_enter(rdip, &circ);
+		ndi_devi_enter(rdip);
 		ddi_walk_devs(ddi_get_child(rdip), sysctrl_hold_rele_branches,
 		    &arg);
-		ndi_devi_exit(rdip, circ);
+		ndi_devi_exit(rdip);
 	}
 	mutex_exit(&sysctrl_branch_mutex);
 
@@ -1218,7 +1221,7 @@ sysc_pkt_fini(sysc_cfga_pkt_t *pkt, intptr_t arg, int flag)
 /* ARGSUSED */
 static int
 sysctrl_ioctl(dev_t devt, int cmd, intptr_t arg, int flag, cred_t *cred_p,
-		int *rval_p)
+    int *rval_p)
 {
 	struct sysctrl_soft_state *softsp;
 	sysc_cfga_pkt_t sysc_pkt;

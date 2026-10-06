@@ -52,7 +52,7 @@
  *      Similarly, bus_fm_fini() is called by child drivers and should
  *      clean-up any resources allocated during bus_fm_init().
  *      These functions are called from passive kernel context, typically from
- *      driver attach(9F) and detach(9F) entry points.
+ *      driver attach(9E) and detach(9E) entry points.
  *
  * Error Handler Dispatching
  *
@@ -226,20 +226,21 @@ ndi_fmc_insert(dev_info_t *dip, int flag, void *resource, void *bus_specific)
 	struct i_ddi_fmhdl *fmhdl;
 
 	ASSERT(devi);
-	ASSERT(flag == DMA_HANDLE || flag == ACC_HANDLE);
 
 	fmhdl = devi->devi_fmhdl;
 	if (fmhdl == NULL) {
 		return;
 	}
 
-	if (flag == DMA_HANDLE) {
+	switch (flag) {
+	case DMA_HANDLE:
 		if (!DDI_FM_DMA_ERR_CAP(fmhdl->fh_cap)) {
 			return;
 		}
 		fcp = fmhdl->fh_dma_cache;
 		fpp = &((ddi_dma_impl_t *)resource)->dmai_error.err_fep;
-	} else if (flag == ACC_HANDLE) {
+		break;
+	case ACC_HANDLE:
 		if (!DDI_FM_ACC_ERR_CAP(fmhdl->fh_cap)) {
 			i_ddi_drv_ereport_post(dip, DVR_EFMCAP, NULL,
 			    DDI_NOSLEEP);
@@ -247,6 +248,10 @@ ndi_fmc_insert(dev_info_t *dip, int flag, void *resource, void *bus_specific)
 		}
 		fcp = fmhdl->fh_acc_cache;
 		fpp = &((ddi_acc_impl_t *)resource)->ahi_err->err_fep;
+		break;
+	default:
+		ASSERT(0);
+		return;
 	}
 
 	fep = kmem_cache_alloc(ndi_fm_entry_cache, KM_NOSLEEP);
@@ -664,7 +669,7 @@ ndi_fm_dma_err_set(ddi_dma_handle_t handle, ddi_fm_error_t *dfe)
 /*
  * Call parent busop fm initialization routine.
  *
- * Called during driver attach(1M)
+ * Called during driver attach(9E)
  */
 int
 i_ndi_busop_fm_init(dev_info_t *dip, int tcap, ddi_iblock_cookie_t *ibc)
@@ -691,7 +696,7 @@ i_ndi_busop_fm_init(dev_info_t *dip, int tcap, ddi_iblock_cookie_t *ibc)
 /*
  * Call parent busop fm clean-up routine.
  *
- * Called during driver detach(1M)
+ * Called during driver detach(9E)
  */
 void
 i_ndi_busop_fm_fini(dev_info_t *dip)

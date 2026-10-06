@@ -22,7 +22,9 @@
  * Copyright (c) 2003, 2010, Oracle and/or its affiliates. All rights reserved.
  * Copyright 2013 DEY Storage Systems, Inc.
  * Copyright (c) 2014 Gary Mills
- * Copyright 2014 Nexenta Systems, Inc. All rights reserved.
+ * Copyright 2015 Nexenta Systems, Inc. All rights reserved.
+ * Copyright 2019 Joyent, Inc.
+ * Copyright 2020 OmniOS Community Edition (OmniOSce) Association.
  */
 
 /*
@@ -37,7 +39,7 @@
  *   "already authenticated") is employed to take care of the initialization
  *   of the user's session.
  *
- * - "non-interactive login" is similar to su(1M); the user could issue
+ * - "non-interactive login" is similar to su(8); the user could issue
  *   'zlogin my-zone ls -l' and the command would be run as specified.
  *   In this mode, zlogin sets up pipes as the communication channel, and
  *   'su' is used to do the login setup work.
@@ -104,6 +106,7 @@ static priv_set_t *dropprivs;
 
 static int nocmdchar = 0;
 static int failsafe = 0;
+static int disconnect = 0;
 static char cmdchar = '~';
 static int quiet = 0;
 
@@ -152,7 +155,7 @@ static boolean_t forced_login = B_FALSE;
 static void
 usage(void)
 {
-	(void) fprintf(stderr, gettext("usage: %s [ -nQCES ] [ -e cmdchar ] "
+	(void) fprintf(stderr, gettext("usage: %s [ -dnQCES ] [ -e cmdchar ] "
 	    "[-l user] zonename [command [args ...] ]\n"), pname);
 	exit(2);
 }
@@ -278,8 +281,8 @@ get_console_master(const char *zname)
 	}
 	masterfd = sockfd;
 
-	msglen = snprintf(clientid, sizeof (clientid), "IDENT %lu %s\n",
-	    getpid(), setlocale(LC_MESSAGES, NULL));
+	msglen = snprintf(clientid, sizeof (clientid), "IDENT %lu %s %d\n",
+	    getpid(), setlocale(LC_MESSAGES, NULL), disconnect);
 
 	if (msglen >= sizeof (clientid) || msglen < 0) {
 		zerror("protocol error");
@@ -611,7 +614,6 @@ process_user_input(int outfd, int infd)
 	char ibuf[ZLOGIN_BUFSIZ];
 	int nbytes;
 	char *buf = ibuf;
-	char c = *buf;
 
 	nbytes = read(STDIN_FILENO, ibuf, ZLOGIN_RDBUFSIZ);
 	if (nbytes == -1 && (errno != EINTR || dead))
@@ -624,7 +626,7 @@ process_user_input(int outfd, int infd)
 	if (nbytes == 0)
 		return (1);
 
-	for (c = *buf; nbytes > 0; c = *buf, --nbytes) {
+	for (char c = *buf; nbytes > 0; c = *buf, --nbytes) {
 		buf++;
 		if (beginning_of_line && !nocmdchar) {
 			beginning_of_line = B_FALSE;
@@ -766,8 +768,8 @@ process_output(int in_fd, int out_fd)
 	cc = read(in_fd, ibuf, ZLOGIN_BUFSIZ);
 	if (cc == -1 && (errno != EINTR || dead))
 		return (-1);
-	if (cc == 0)	/* EOF */
-		return (-1);
+	if (cc == 0)
+		return (-1);	/* EOF */
 	if (cc == -1)	/* The read was interrupted. */
 		return (0);
 
@@ -787,10 +789,10 @@ process_output(int in_fd, int out_fd)
 /*
  * This is the main I/O loop, and is shared across all zlogin modes.
  * Parameters:
- * 	stdin_fd:  The fd representing 'stdin' for the slave side; input to
+ *	stdin_fd:  The fd representing 'stdin' for the slave side; input to
  *		   the zone will be written here.
  *
- * 	appin_fd:  The fd representing the other end of the 'stdin' pipe (when
+ *	appin_fd:  The fd representing the other end of the 'stdin' pipe (when
  *		   we're running non-interactive); used in process_raw_input
  *		   to ensure we don't fill up the application's stdin pipe.
  *
@@ -970,7 +972,7 @@ retry:
 }
 
 /*
- * Fetch the user_cmd brand hook for getting a user's passwd(4) entry.
+ * Fetch the user_cmd brand hook for getting a user's passwd(5) entry.
  */
 static const char *
 zone_get_user_cmd(brand_handle_t bh, const char *login, char *user_cmd,
@@ -1092,7 +1094,7 @@ zone_login_cmd(brand_handle_t bh, const char *login)
 
 /*
  * Prepare argv array for exec'd process; if we're passing commands to the
- * new process, then use su(1M) to do the invocation.  Otherwise, use
+ * new process, then use su(8) to do the invocation.  Otherwise, use
  * 'login -z <from_zonename> -f' (-z is an undocumented option which tells
  * login that we're coming from another zone, and to disregard its CONSOLE
  * checks).
@@ -1551,7 +1553,7 @@ noninteractive_login(char *zonename, const char *user_cmd, zoneid_t zoneid,
 	 * When the user types ^D, we get a zero length message on STDIN.
 	 * We need to echo that down the pipe to send it to the other side;
 	 * but by default, pipes don't propagate zero-length messages.  We
-	 * toggle that behavior off using I_SWROPT.  See streamio(7i).
+	 * toggle that behavior off using I_SWROPT.  See streamio(4I).
 	 */
 	if (ioctl(stdin_pipe[0], I_SWROPT, SNDZERO) != 0) {
 		zperror(gettext("could not configure STDIN pipe"));
@@ -1753,7 +1755,7 @@ main(int argc, char **argv)
 	(void) getpname(argv[0]);
 	username = get_username();
 
-	while ((arg = getopt(argc, argv, "nECR:Se:l:Q")) != EOF) {
+	while ((arg = getopt(argc, argv, "dnECR:Se:l:Q")) != EOF) {
 		switch (arg) {
 		case 'C':
 			console = 1;
@@ -1778,6 +1780,9 @@ main(int argc, char **argv)
 			break;
 		case 'S':
 			failsafe = 1;
+			break;
+		case 'd':
+			disconnect = 1;
 			break;
 		case 'e':
 			set_cmdchar(optarg);
@@ -1824,6 +1829,12 @@ main(int argc, char **argv)
 
 	if (failsafe != 0 && lflag != 0) {
 		zerror(gettext("-l may not be specified for failsafe login"));
+		usage();
+	}
+
+	if (!console && disconnect != 0) {
+		zerror(gettext(
+		    "-d may only be specified with console login"));
 		usage();
 	}
 
@@ -2048,7 +2059,7 @@ main(int argc, char **argv)
 	}
 	/*
 	 * Get the brand specific user_cmd.  This command is used to get
-	 * a passwd(4) entry for login.
+	 * a passwd(5) entry for login.
 	 */
 	if (!interactive && !failsafe) {
 		if (zone_get_user_cmd(bh, login, user_cmd,

@@ -20,6 +20,8 @@
  */
 
 /*
+ * Copyright 2019, Joyent, Inc.
+ * Copyright 2016 Nexenta Systems, Inc.  All rights reserved.
  * Copyright 2009 Sun Microsystems, Inc.  All rights reserved.
  * Use is subject to license terms.
  */
@@ -58,9 +60,10 @@ static int	pci_cfg_creat_cb(di_minor_t minor, di_node_t node);
 static int	ib_cfg_creat_cb(di_minor_t minor, di_node_t node);
 static int	sata_cfg_creat_cb(di_minor_t minor, di_node_t node);
 static int	sdcard_cfg_creat_cb(di_minor_t minor, di_node_t node);
+static int	ccid_cfg_creat_cb(di_minor_t minor, di_node_t node);
 
 static di_node_t	pci_cfg_chassis_node(di_node_t, di_prom_handle_t);
-static char 	*pci_cfg_slotname(di_node_t, di_prom_handle_t, minor_t);
+static char	*pci_cfg_slotname(di_node_t, di_prom_handle_t, minor_t);
 static int	pci_cfg_ap_node(minor_t, di_node_t, di_prom_handle_t,
 		    char *, int, int);
 static int	pci_cfg_iob_name(di_minor_t, di_node_t, di_prom_handle_t,
@@ -68,7 +71,7 @@ static int	pci_cfg_iob_name(di_minor_t, di_node_t, di_prom_handle_t,
 static minor_t	pci_cfg_pcidev(di_node_t, di_prom_handle_t);
 static int	pci_cfg_ap_path(di_minor_t, di_node_t, di_prom_handle_t,
 		    char *, int, char **);
-static char 	*pci_cfg_info_data(char *);
+static char	*pci_cfg_info_data(char *);
 static int	pci_cfg_is_ap_path(di_node_t, di_prom_handle_t);
 static int	pci_cfg_ap_legacy(di_minor_t, di_node_t, di_prom_handle_t,
 		    char *, int);
@@ -86,7 +89,7 @@ static int	di_propall_lookup_ints(di_prom_handle_t, int,
 		    dev_t, di_node_t, const char *, int **);
 static int	di_propall_lookup_strings(di_prom_handle_t, int,
 		    dev_t, di_node_t, const char *, char **);
-static int 	serid_printable(uint64_t *seridp);
+static int	serid_printable(uint64_t *seridp);
 static int	di_propall_lookup_slot_names(di_prom_handle_t, int,
 		    dev_t, di_node_t, di_slot_name_t **);
 
@@ -119,6 +122,9 @@ static devfsadm_create_t cfg_create_cbt[] = {
 	},
 	{ "attachment-point", DDI_NT_SDCARD_ATTACHMENT_POINT, NULL,
 	    TYPE_EXACT, ILEVEL_0, sdcard_cfg_creat_cb
+	},
+	{ "attachment-point", DDI_NT_CCID_ATTACHMENT_POINT, NULL,
+	    TYPE_EXACT, ILEVEL_0, ccid_cfg_creat_cb
 	}
 };
 
@@ -152,6 +158,9 @@ static devfsadm_remove_t cfg_remove_cbt[] = {
 	{ "attachment-point", SDCARD_CFG_LINK_RE, RM_POST|RM_HOT|RM_ALWAYS,
 	    ILEVEL_0, devfsadm_rm_all
 	},
+	{ "attachment-point", CCID_CFG_LINK_RE, RM_POST|RM_HOT|RM_ALWAYS,
+	    ILEVEL_0, devfsadm_rm_all
+	}
 };
 
 DEVFSADM_REMOVE_INIT_V0(cfg_remove_cbt);
@@ -177,7 +186,7 @@ scsi_cfg_creat_cb(di_minor_t minor, di_node_t node)
 	(void) strcat(path, mn);
 	di_devfs_path_free(devfs_path);
 
-	if (devfsadm_enumerate_int(path, 1, &c_num, rules, 3)
+	if (ctrl_enumerate_int(path, 1, &c_num, rules, 3, 0, B_FALSE)
 	    == DEVFSADM_FAILURE) {
 		/*
 		 * Unlike the disks module we don't retry on failure.
@@ -226,7 +235,7 @@ usb_cfg_creat_cb(di_minor_t minor, di_node_t node)
 	(void) snprintf(path, sizeof (path), "%s:%s", cp, di_minor_name(minor));
 	di_devfs_path_free(cp);
 
-	if (devfsadm_enumerate_int(path, 0, &cp, rules, 1)) {
+	if (ctrl_enumerate_int(path, 0, &cp, rules, 1, 0, B_FALSE)) {
 		return (DEVFSADM_CONTINUE);
 	}
 
@@ -263,7 +272,7 @@ sata_cfg_creat_cb(di_minor_t minor, di_node_t node)
 	di_devfs_path_free(devfspath);
 
 	/* build the physical path from the components */
-	if (devfsadm_enumerate_int(path, 0, &buf, rules, 1) ==
+	if (ctrl_enumerate_int(path, 0, &buf, rules, 1, 0, B_FALSE) ==
 	    DEVFSADM_FAILURE) {
 		return (DEVFSADM_CONTINUE);
 	}
@@ -297,7 +306,7 @@ sdcard_cfg_creat_cb(di_minor_t minor, di_node_t node)
 	di_devfs_path_free(devfspath);
 
 	/* build the physical path from the components */
-	if (devfsadm_enumerate_int(path, 0, &buf, rules, 1) ==
+	if (ctrl_enumerate_int(path, 0, &buf, rules, 1, 0, B_FALSE) ==
 	    DEVFSADM_FAILURE) {
 		return (DEVFSADM_CONTINUE);
 	}
@@ -726,7 +735,7 @@ pci_cfg_ap_path(di_minor_t minor, di_node_t node, di_prom_handle_t ph,
 			bufsz -= len - 1;
 
 			/* set chasflag when the leaf node is within an iob */
-			if ((curnode == node) != NULL)
+			if (curnode == node)
 				chasflag = 1;
 		}
 		rv = pci_cfg_ap_node(pci_dev, curnode, ph, bufptr, bufsz, 0);
@@ -1244,4 +1253,25 @@ serid_printable(uint64_t *seridp)
 
 	return (1);
 
+}
+
+/*
+ * Create a link for cfgadm that points back to the normal ccid links in
+ * /dev/ccid.
+ */
+static int
+ccid_cfg_creat_cb(di_minor_t minor, di_node_t node)
+{
+	const char *minor_nm;
+	char cfg_path[MAXPATHLEN];
+
+	if ((minor_nm = di_minor_name(minor)) == NULL) {
+		return (DEVFSADM_CONTINUE);
+	}
+
+	(void) snprintf(cfg_path, sizeof (cfg_path), "%s/ccid%d/%s",
+	    CFG_DIRNAME, di_instance(node),  minor_nm);
+
+	(void) devfsadm_mklink(cfg_path, node, minor, 0);
+	return (DEVFSADM_CONTINUE);
 }

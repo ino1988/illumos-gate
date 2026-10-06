@@ -74,7 +74,7 @@ wchar_t	*headnames[] = {
 enum hdr_type {
 	off,		/* mail header processing is off */
 	not_in_hdr,	/* not currently processing a mail header */
-	in_hdr, 	/* currently filling hdrbuf with potential hdr lines */
+	in_hdr,		/* currently filling hdrbuf with potential hdr lines */
 	flush_hdr,	/* flush hdrbuf; not a header, no special processing */
 	do_hdr		/* process hdrbuf as a mail header */
 };
@@ -82,11 +82,11 @@ enum hdr_type {
 enum hdr_type	hdr_state = not_in_hdr;
 
 wchar_t *hdrbuf[MAXLINES];	/* buffer to hold potential mail header lines */
-int 	h_lines;		/* index into lines of hdrbuf */
+int	h_lines;		/* index into lines of hdrbuf */
 
 void (*(split))(wchar_t []);
 extern int scrwidth(wchar_t);
-extern int ishead(char []);
+extern boolean_t is_headline(const char *);
 
 
 static void fill_hdrbuf(wchar_t []);
@@ -121,7 +121,7 @@ main(int argc, char **argv)
 	outp = NOSTR;
 	setbuf(stdout, sobuf);
 	setlocale(LC_ALL, "");
-	locale = setlocale(LC_CTYPE, "");
+	locale = setlocale(LC_CTYPE, NULL);
 	if (strcmp(locale, "C") == 0) {
 		split = csplit;
 	} else {
@@ -233,6 +233,7 @@ fmt(FILE *fi)
 		switch (hdr_state) {
 		case off:
 			prefix(canonb);
+			/* FALLTHROUGH */
 		case not_in_hdr:
 			/* look for an initial mail header line */
 			/* skip initial blanks */
@@ -240,13 +241,13 @@ fmt(FILE *fi)
 			}
 			/*
 			 * Need to convert string from wchar_t to char,
-			 * since this is what ishead() expects.  Since we
+			 * since this is what is_headline() expects.  Since we
 			 * only want to make sure cp points to a "From" line
 			 * of the email, we don't have to alloc
 			 * BUFSIZ * MB_LEN_MAX to cbuf.
 			 */
 			wcstombs(cbuf, cp, (BUFSIZ - 1));
-			if (ishead(cbuf)) {
+			if (is_headline(cbuf) == B_TRUE) {
 				hdr_state = in_hdr;
 				fill_hdrbuf(canonb);
 			} else {
@@ -732,8 +733,8 @@ _wckind_c_locale(wchar_t wc)
 static void
 header_chk(void)
 {
-	wchar_t  *cp; 		/* ptr to current char of line */
-	wchar_t **hp; 		/* ptr to current char of a valid */
+	wchar_t  *cp;		/* ptr to current char of line */
+	wchar_t **hp;		/* ptr to current char of a valid */
 				/* mail header string */
 	int	  l;		/* index */
 				/*

@@ -20,12 +20,15 @@
  */
 /*
  * Copyright (c) 1999, 2010, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2016-2017, Chris Fraire <cfraire@me.com>.
+ * Copyright 2019 Joshua M. Clulow <josh@sysmgr.org>
  */
 
 #ifndef	UTIL_H
 #define	UTIL_H
 
 #include <sys/types.h>
+#include <sys/avl.h>
 #include <netinet/in.h>
 #include <netinet/dhcp.h>
 #include <netinet/dhcp6.h>
@@ -33,6 +36,7 @@
 #include <dhcpagent_ipc.h>
 
 #include "common.h"
+#include "packet.h"
 
 /*
  * general utility functions which have no better home.  see util.c
@@ -47,6 +51,21 @@ struct dhcp_timer_s {
 	iu_timer_id_t	dt_id;
 	lease_t		dt_start;		/* Initial timer value */
 };
+
+typedef enum dhcp_route_source {
+	DHR_SRC_CLASSLESS_ROUTES =	(1ULL << 0),
+	DHR_SRC_DEFAULT_GATEWAY =	(1ULL << 1),
+} dhcp_route_source_t;
+
+typedef struct dhcp_route_s {
+	uint8_t			dhr_prefix;
+	struct in_addr		dhr_network;
+	struct in_addr		dhr_nexthop;
+	avl_node_t		dhr_node;
+	boolean_t		dhr_installed;
+	boolean_t		dhr_interface;
+	dhcp_route_source_t	dhr_source;
+} dhcp_route_t;
 
 /* conversion functions */
 const char	*pkt_type_to_string(uchar_t, boolean_t);
@@ -64,8 +83,8 @@ boolean_t	cancel_timer(dhcp_timer_t *);
 boolean_t	schedule_timer(dhcp_timer_t *, iu_tq_callback_t *, void *);
 
 /* miscellaneous */
-boolean_t	add_default_route(uint32_t, struct in_addr *);
-boolean_t	del_default_route(uint32_t, struct in_addr *);
+boolean_t	add_route(uint32_t, dhcp_route_t *);
+boolean_t	del_route(uint32_t, dhcp_route_t *);
 int		daemonize(void);
 monosec_t	monosec(void);
 void		print_server_msg(dhcp_smach_t *, const char *, uint_t);
@@ -75,6 +94,9 @@ const char	*iffile_to_hostname(const char *);
 int		dhcpv6_status_code(const dhcpv6_option_t *, uint_t,
     const char **, const char **, uint_t *);
 void		write_lease_to_hostconf(dhcp_smach_t *);
+boolean_t	dhcp_add_hostname_opt(dhcp_pkt_t *, dhcp_smach_t *);
+boolean_t	dhcp_add_fqdn_opt(dhcp_pkt_t *, dhcp_smach_t *);
+void		save_domainname(dhcp_smach_t *, PKT_LIST *);
 
 #ifdef	__cplusplus
 }
